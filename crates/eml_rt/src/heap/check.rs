@@ -1,9 +1,6 @@
 //! 検査モードの前置きと検査 (docs/spec/object-model.md の「前置き」と「報告する
 //! 誤り」)。前置きは検査モードのブロックにだけあるので、前置きを読む関数は `M::CHECKED` のときだけ働く。
 
-#[cfg(test)]
-use std::ptr::NonNull;
-
 use super::Heap;
 #[cfg(verus_only)]
 use super::chain_err;
@@ -370,18 +367,6 @@ fn too_many_acquires() -> ! {
 
 const _: () = assert!(PREFIX_WORDS == size_of::<Prefix>().div_ceil(8));
 const _: () = assert!(UNCOUNTED == u32::MAX);
-
-/// # Safety
-/// `h` は検査モードのヒープが確保したブロックのヘッダを指す。
-#[cfg(test)]
-pub(crate) unsafe fn prefix<'a>(h: NonNull<Header>) -> &'a Prefix {
-    unsafe {
-        &*h.as_ptr()
-            .cast::<u8>()
-            .sub(PREFIX_WORDS * 8)
-            .cast::<Prefix>()
-    }
-}
 
 verus! {
 

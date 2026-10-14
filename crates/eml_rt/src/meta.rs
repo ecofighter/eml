@@ -1,11 +1,8 @@
 //! 物体のヘッダと種類 (docs/spec/object-model.md の「ヘッダ」と「種類」)。
 
 use std::fmt;
-use std::ptr::NonNull;
 
 use crate::word::Word;
-#[cfg(test)]
-use std::sync::atomic::AtomicI32;
 use vstd::prelude::*;
 use vstd::raw_ptr::PointsTo;
 #[cfg(verus_only)]
@@ -717,32 +714,6 @@ impl BlockPerm {
 } // verus!
 
 const _: () = assert!(HEADER_WORDS * 8 == size_of::<Header>());
-
-// まだ検証していないヒープのコードが使う生のポインタの関数。ヘッダとペイロードの権限の上で書き直すまで、`verus!` の外に置く
-
-/// # Safety
-/// `h` は初期化したヘッダを指す。
-#[cfg(test)]
-#[inline]
-pub(crate) unsafe fn rc<'a>(h: NonNull<Header>) -> &'a AtomicI32 {
-    unsafe { AtomicI32::from_ptr(&raw mut (*h.as_ptr()).rc) }
-}
-
-/// # Safety
-/// `h` は初期化したヘッダを指す。
-#[inline]
-pub(crate) unsafe fn meta(h: NonNull<Header>) -> Meta {
-    unsafe { Meta((&raw const (*h.as_ptr()).meta).read()) }
-}
-
-/// ペイロードの物理的な i 語目の位置。
-///
-/// # Safety
-/// `h` はペイロードが i + 1 語以上あるブロックのヘッダを指す。
-#[inline]
-pub(crate) unsafe fn slot(h: NonNull<Header>, i: usize) -> *mut Word {
-    unsafe { h.as_ptr().cast::<Word>().add(HEADER_WORDS + i) }
-}
 
 #[cfg(test)]
 mod tests {

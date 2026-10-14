@@ -77,6 +77,15 @@ const TRUSTED: &[(&str, &str)] = &[
     ("alloc.rs: external_body too_many_words", "T5"),
     ("alloc.rs: external_body bad_page_layout", "T5"),
     ("heap/check.rs: external_body too_many_acquires", "T5"),
+    ("foreign.rs: verifier::external VTable", "T3"),
+    ("foreign.rs: verifier::external Table", "T3"),
+    ("foreign.rs: verifier::external drop_value", "T3"),
+    ("foreign.rs: external_body value_words", "T3"),
+    ("foreign.rs: external_body write", "T3"),
+    ("foreign.rs: external_body value", "T3"),
+    ("foreign.rs: external_body Finalizer", "T3"),
+    ("foreign.rs: external_body finalizer_of", "T3"),
+    ("foreign.rs: external_body run_finalizer", "T3"),
     ("cell.rs: external_body rc_load", "T2"),
     ("cell.rs: external_body rc_store", "T2"),
     ("cell.rs: external_body rc_dup_shared", "T2"),
@@ -84,22 +93,6 @@ const TRUSTED: &[(&str, &str)] = &[
     ("cell.rs: external_body rc_is_last", "T2"),
     ("cell.rs: external_body u32_load", "T2"),
     ("cell.rs: external_body u32_store", "T2"),
-];
-
-/// まだ証明していないので一時に `external_body` にした項目。S9v の終わりに空にする。
-const UNPROVED: &[&str] = &[
-    "foreign.rs: external_body FinalizerV",
-    "foreign.rs: external_body finalizer_of",
-    "foreign.rs: external_body run_finalizer",
-];
-
-/// まだ `verus!` に入れていない `unsafe` を持つファイル。S9v の終わりに空にする。
-const OUTSIDE: &[&str] = &[
-    "foreign.rs",
-    "meta.rs",
-    "word.rs",
-    "heap/mod.rs",
-    "heap/check.rs",
 ];
 
 /// `verus!` の外でも書いてよい `unsafe` の始まり。`Send` と `Sync` の宣言と、検証した関数を呼ぶだけの `Drop` である。
@@ -372,11 +365,7 @@ fn the_trust_list_is_exactly_the_trusted_items() {
     // 1つの関数に同じ項目が2回現れても、一覧には1回だけ載せる
     found.sort();
     found.dedup();
-    let mut listed: Vec<String> = TRUSTED
-        .iter()
-        .map(|(item, _)| item.to_string())
-        .chain(UNPROVED.iter().map(|item| item.to_string()))
-        .collect();
+    let mut listed: Vec<String> = TRUSTED.iter().map(|(item, _)| item.to_string()).collect();
     listed.sort();
     assert_eq!(
         found, listed,
@@ -393,15 +382,11 @@ fn the_trust_list_is_exactly_the_trusted_items() {
 #[test]
 fn no_unsafe_outside_verus() {
     for (file, text) in FILES {
-        let count = unsafe_outside_verus(text);
-        if OUTSIDE.contains(file) {
-            assert!(
-                count > 0,
-                "{file} has no unsafe outside verus!; remove it from OUTSIDE"
-            );
-        } else {
-            assert_eq!(count, 0, "{file} has unsafe outside verus!");
-        }
+        assert_eq!(
+            unsafe_outside_verus(text),
+            0,
+            "{file} has unsafe outside verus!"
+        );
     }
 }
 

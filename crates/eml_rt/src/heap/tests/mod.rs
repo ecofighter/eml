@@ -20,6 +20,7 @@ macro_rules! both_modes {
 
 mod basics;
 mod checked;
+mod raw;
 mod reuse;
 mod share;
 

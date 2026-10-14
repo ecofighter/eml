@@ -2670,7 +2670,6 @@ impl Drop for Pages {
 
 #[cfg(test)]
 mod tests {
-    use std::ptr::NonNull;
 
     use super::*;
     use crate::meta::{self, Kind, Meta};
@@ -2724,7 +2723,7 @@ mod tests {
         init(alloc(&mut pages, 2));
         free(&mut pages, a);
         assert_eq!(
-            unsafe { meta::meta(NonNull::new(a).unwrap()) }.kind(),
+            Meta::from_bits(unsafe { meta::meta_ptr(a).read() }).kind(),
             Kind::Free
         );
         assert_eq!(alloc(&mut pages, 2), a);

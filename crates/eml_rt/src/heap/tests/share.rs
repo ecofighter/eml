@@ -1,12 +1,11 @@
 use std::sync::atomic::Ordering;
 
+use super::raw;
 use super::{LONG, list, mortal, probe};
-use crate::meta;
 use crate::{Checked, Heap, HeapError, Kind, Meta, Mode, Word};
-use std::sync::atomic::Ordering as AtomicOrdering;
 
 fn rc<M: Mode>(_heap: &Heap<M>, w: Word) -> i32 {
-    unsafe { meta::rc(w.header()) }.load(AtomicOrdering::Relaxed)
+    unsafe { raw::rc(w) }
 }
 
 fn sharing_a_list_marks_every_cell<M: Mode>() {
@@ -85,9 +84,7 @@ fn a_lin_object_moves_to_the_receiver_and_its_children_are_shared<M: Mode>() {
         assert_eq!(rc(&heap, lin), 1);
         assert_eq!(rc(&heap, child), -1);
         if M::CHECKED {
-            let owner = crate::heap::check::prefix(lin.header())
-                .first
-                .load(AtomicOrdering::Relaxed);
+            let owner = raw::prefix_first(lin);
             assert_eq!(owner, 7);
         }
         heap.set_worker(7);
@@ -277,10 +274,10 @@ fn a_lin_object_on_the_shared_side_is_an_error() {
     unsafe {
         heap.share(x, 0).unwrap();
         // share は lin の物体に印を付けないので、この形は印付けの誤りでしか起きない
-        let m = meta::meta(x.header());
-        meta::meta_ptr(x.as_ptr()).write(m.with_lin(true).bits());
+        let m = raw::meta(x);
+        raw::set_meta(x, m.with_lin(true));
         assert_eq!(heap.decref(x), Err(HeapError::LinShared));
-        meta::meta_ptr(x.as_ptr()).write(m.bits());
+        raw::set_meta(x, m);
         heap.decref(x).unwrap();
     }
 }
@@ -336,9 +333,7 @@ fn share_leaves_an_immortal_lin_object_alone() {
         heap.set_field(parent, 0, immortal).unwrap();
         heap.share(parent, 7).unwrap();
         assert_eq!(rc(&heap, immortal), 0);
-        let count = crate::heap::check::prefix(immortal.header())
-            .first
-            .load(AtomicOrdering::Relaxed);
+        let count = raw::prefix_first(immortal);
         assert_eq!(count, 1);
         heap.set_field(parent, 0, Word::UNIT).unwrap();
         heap.decref(parent).unwrap();
@@ -354,12 +349,12 @@ fn a_shared_lin_object_reached_by_share_is_an_error() {
     unsafe {
         heap.share(x, 0).unwrap();
         // share は lin の物体に印を付けないので、この形は印付けの誤りでしか起きない
-        let m = meta::meta(x.header());
-        meta::meta_ptr(x.as_ptr()).write(m.with_lin(true).bits());
+        let m = raw::meta(x);
+        raw::set_meta(x, m.with_lin(true));
         heap.set_field(parent, 0, x).unwrap();
         assert_eq!(heap.share(parent, 0), Err(HeapError::LinShared));
         heap.set_field(parent, 0, Word::UNIT).unwrap();
-        meta::meta_ptr(x.as_ptr()).write(m.bits());
+        raw::set_meta(x, m);
         heap.decref(x).unwrap();
         heap.decref(parent).unwrap();
     }

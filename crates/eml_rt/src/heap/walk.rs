@@ -2,7 +2,6 @@
 //! (docs/spec/object-model.md の「生存の列挙」)。
 
 use std::collections::BTreeMap;
-use std::ptr::NonNull;
 
 use vstd::prelude::*;
 
@@ -16,10 +15,10 @@ use super::inv::{p_owner, p_word};
 use super::model::BlockState;
 use crate::alloc::FREE_META;
 use crate::error::HeapError;
-use crate::foreign;
+use crate::foreign::{finalizer_of, run_finalizer};
 #[cfg(verus_only)]
 use crate::meta::bits_kind;
-use crate::meta::{self, Header, Kind};
+use crate::meta::{Header, Kind};
 use crate::mode::{Checked, Mode};
 use crate::word::Word;
 
@@ -140,6 +139,39 @@ impl<M: Mode> Heap<M> {
             }
         }
         live
+    }
+
+    /// 生きている `Foreign` の物体 (空ける途中の物体を含む) の破棄処理を、1回ずつ呼ぶ。`Heap` を落とすときだけに使う。
+    /// Rust の値が持つメモリを漏らさないためである。
+    pub(super) fn finalize_all(&self)
+        requires
+            self.wf(),
+    {
+        let blocks = self.core.pages.blocks();
+        let mut k: usize = 0;
+        while k < blocks.len()
+            invariant
+                self.wf(),
+                k <= blocks@.len(),
+                forall|i: int|
+                    0 <= i < blocks@.len() ==> self.core.pages.carved_block(
+                        #[trigger] blocks@[i]@.addr,
+                    ) && blocks@[i] == self.core.pages.block_ptr(blocks@[i]@.addr),
+            decreases blocks.len() - k,
+        {
+            let h = blocks[k];
+            if self.is_live_block(h) {
+                proof {
+                    self.core.lemma_shape(h@.addr);
+                }
+                if self.core.meta_get(h).kind().has_finalizer() {
+                    let tracked p = self.core.perms.borrow().tracked_borrow(h@.addr);
+                    let f = finalizer_of(h, Tracked(p));
+                    run_finalizer(f, Tracked(p));
+                }
+            }
+            k += 1;
+        }
     }
 
     /// 生きている箱ごとの、リークの件数。種類が `None` なら token の箱である。不死の物体は外に出ている参照の数を
@@ -370,20 +402,7 @@ impl Heap<Checked> {
 }
 
 impl<M: Mode> Drop for Heap<M> {
-    /// Rust の値が持つメモリを漏らさないように、生きている `Foreign` の破棄処理を呼んでからページを返す。
     fn drop(&mut self) {
-        let mut finalizable = Vec::new();
-        for h in self.core.pages.blocks() {
-            if self.is_live_block(h) {
-                // 切り出したブロックはページの中にあるので、null にならない
-                let h = unsafe { NonNull::new_unchecked(h) };
-                if unsafe { meta::meta(h) }.kind() == Kind::Foreign {
-                    finalizable.push(h);
-                }
-            }
-        }
-        for h in finalizable {
-            unsafe { foreign::finalizer(h).run() };
-        }
+        self.finalize_all();
     }
 }

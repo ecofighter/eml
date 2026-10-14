@@ -5,7 +5,7 @@
 #![allow(unused_braces)]
 
 use std::fmt;
-use std::ptr::{self, NonNull};
+use std::ptr;
 
 use crate::meta::Header;
 #[cfg(verus_only)]
@@ -342,21 +342,6 @@ pub proof fn lemma_imm_and_ptr_are_disjoint(bits: usize)
 // 語は値で、スレッドをまたいでよいかは型でなく `share` の規約が守る
 unsafe impl Send for Word {}
 unsafe impl Sync for Word {}
-
-// `NonNull` は vstd に約束がないので、ヘッダとの変換はまだ `verus!` の外に置く
-impl Word {
-    #[inline]
-    pub(crate) fn from_header(h: NonNull<Header>) -> Word {
-        Word(h.as_ptr().cast())
-    }
-
-    #[inline]
-    pub(crate) fn header(self) -> NonNull<Header> {
-        debug_assert!(self.is_ptr());
-        // ポインタの語は確保したヘッダから作るので、null にならない
-        unsafe { NonNull::new_unchecked(self.0.cast()) }
-    }
-}
 
 impl fmt::Debug for Word {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {

@@ -25,7 +25,6 @@ mod tests;
 
 use std::marker::PhantomData;
 use std::mem;
-use std::ptr::NonNull;
 
 use crate::alloc::FREE_META;
 use crate::alloc::{Pages, too_large};
@@ -57,7 +56,9 @@ use field::field_edges;
 #[cfg(verus_only)]
 use handover::handover;
 #[cfg(verus_only)]
-use inv::{p_count, p_first, p_init, p_owner, p_scanned, p_word};
+use inv::{
+    p_code, p_count, p_first, p_init, p_kind, p_meta, p_owner, p_scanned, p_word, state_code,
+};
 #[cfg(verus_only)]
 use model::BlockState;
 use model::{Model, Pos};
@@ -983,31 +984,6 @@ impl<M: Mode> Default for Heap<M> {
 
 // `Heap` は worker ごとに1つ持ち、worker のスレッドに移せる。`Sync` にはしない (docs/spec/object-model.md の「語」)
 unsafe impl<M: Mode> Send for Heap<M> {}
-
-impl<M: Mode> Heap<M> {
-    /// 使っているメモリのバイト数 (docs/spec/object-model.md の「確保と解放」)。検査モードでは隔離したブロックを引く。
-    pub fn bytes_in_use(&self) -> usize {
-        self.core.pages.bytes() - self.quarantined
-    }
-
-    pub fn alloc_foreign<T: Send + 'static>(&mut self, value: T, lin: bool) -> Word {
-        const {
-            assert!(
-                align_of::<T>() <= 8,
-                "a foreign value must be at most word-aligned"
-            )
-        };
-        let (h, _) = self.alloc_header(
-            1 + size_of::<T>().div_ceil(8),
-            1,
-            Meta::new(0, 0, Kind::Foreign, lin),
-        );
-        // 確保したブロックはページの中にあるので、null にならない
-        let h = unsafe { NonNull::new_unchecked(h) };
-        unsafe { foreign::write(h, value) };
-        Word::from_header(h)
-    }
-}
 
 verus! {
 
@@ -2013,7 +1989,11 @@ impl<M: Mode> Heap<M> {
         let ghost s0 = self.core;
         let meta = self.core.meta_get(h);
         let finalizer = if meta.kind().has_finalizer() {
-            Some(finalizer_of(h))
+            let tracked p = self.core.perms.borrow().tracked_borrow(h@.addr);
+            proof {
+                s0.lemma_shape(h@.addr);
+            }
+            Some(finalizer_of(h, Tracked(p)))
         } else {
             None
         };
@@ -2038,7 +2018,7 @@ impl<M: Mode> Heap<M> {
             ptr_mut_write(meta_ptr(h), Tracked(&mut perm.meta), FREE_META);
         }
         if let Some(f) = finalizer {
-            run_finalizer(f);
+            run_finalizer(f, Tracked(&perm));
         }
         if !M::CHECKED {
             proof {
@@ -2590,6 +2570,92 @@ impl<M: Mode> Heap<M> {
         Ok(self.core.slot_get(h, first + i))
     }
 
+    /// 使っているメモリのバイト数 (docs/spec/object-model.md の「確保と解放」)。検査モードでは隔離したブロックを引く。
+    pub fn bytes_in_use(&self) -> usize {
+        // 隔離したブロックは確保したページの一部なので、引き算は桁を下回らない。この関係はまだ証明していないので、
+        // 下回ったら 0 にする
+        self.core.pages.bytes().saturating_sub(self.quarantined)
+    }
+
+    /// `T` の値を持つ `Foreign` の物体を作る。値の破棄処理は、物体を空けるときか `Heap` を落とすときに1回だけ呼ぶ。
+    pub fn alloc_foreign<T: Send + 'static>(&mut self, value: T, lin: bool) -> (w: Word)
+        requires
+            old(self).wf(),
+            old(self).safe_settleable(),
+            !M::CHECKED ==> old(self).settleable(),
+        ensures
+            final(self).made(*old(self), w),
+            final(self).kind_of(w) == Kind::Foreign,
+    {
+        let n = foreign::value_words::<T>();
+        self.settle();
+        let ghost s1 = *self;
+        let (h, Tracked(perm)) = self.alloc_header(1 + n, 1, Meta::new(0, 0, Kind::Foreign, lin));
+        let tracked mut perm = perm;
+        proof {
+            self.core.pages.lemma_block_bounds(h@.addr);
+        }
+        let cap = self.core.pages.cap_of(h);
+        foreign::write(h, cap, value, Tracked(&mut perm));
+        let ghost mid = self.core;
+        proof {
+            check::lemma_alive_code();
+            let c = self.core;
+            let a = h@.addr;
+            assert(perm.wf(c.block(a), c.cap(a), c.checked@));
+            assert(perm.prefix matches Some(q) ==> q.first.is_init() && q.state.is_init());
+            assert(perm.prefix is Some ==> p_code(perm) == state_code(BlockState::Live));
+            assert(perm.prefix is Some && perm.rc.value() > 0 ==> p_owner(perm) == self.worker);
+            assert(bits_wf(p_meta(perm)));
+            assert(p_kind(perm) != Kind::Free);
+            assert(p_first(perm) + p_count(perm) <= c.cap(a));
+            assert(c.perm_wf(perm, a, BlockState::Live, Set::empty(), self.worker));
+        }
+        self.core.publish(Ghost(h), Tracked(perm), Ghost(BlockState::Live), Ghost(self.worker));
+        let w = Word::from_ptr(h);
+        proof {
+            if old(self).consistent() && old(self).settleable() {
+                self.lemma_dummy_kept(s1);
+                self.core.lemma_frame_chain(mid, s1.core, old(self).core);
+            } else {
+                self.lemma_published_safe(s1);
+            }
+            crate::word::lemma_aligned_is_ptr(h@.addr);
+        }
+        w
+    }
+
+    /// `Foreign` の物体の Rust の値の位置。物体が `Foreign` でないか、値が `T` でなければ `WrongKind` を返す。この照らし
+    /// 合わせは、速いモードでも行う (docs/spec/object-model.md の「核の操作」)。
+    ///
+    /// # Safety
+    /// `w` はこのヒープの生きている物体を指す。
+    pub unsafe fn foreign<T: 'static>(&self, w: Word) -> (r: Result<*mut T, HeapError>)
+        requires
+            self.wf(),
+            w.is_ptr_spec(),
+            self.word_in(w),
+            !M::CHECKED ==> self.settleable() && self.readable(w),
+        ensures
+            r is Err ==> M::CHECKED || r == Err::<*mut T, HeapError>(HeapError::WrongKind),
+    {
+        let h = self.header_of(w);
+        proof {
+            if self.consistent() && self.settleable() && self.readable(w) {
+                self.core.lemma_readable(w);
+            }
+        }
+        self.checked_live(h)?;
+        if self.core.meta_get(h).kind() != Kind::Foreign {
+            return Err(HeapError::WrongKind);
+        }
+        let tracked p = self.core.perms.borrow().tracked_borrow(h@.addr);
+        match foreign::value::<T>(h, Tracked(p)) {
+            Some(v) => Ok(v),
+            None => Err(HeapError::WrongKind),
+        }
+    }
+
     /// `tobj` の `Int` を読む。即値なら右シフトし、物体なら `BigInt` の中身を読む。
     ///
     /// # Safety
@@ -2634,19 +2700,3 @@ impl<M: Mode> Heap<M> {
 }
 
 } // verus!
-
-impl<M: Mode> Heap<M> {
-    /// `Foreign` の物体の Rust の値の位置。物体が `Foreign` でないか、値が `T` でなければ `WrongKind` を返す。この照らし
-    /// 合わせは、速いモードでも行う (docs/spec/object-model.md の「核の操作」)。
-    ///
-    /// # Safety
-    /// `w` はこのヒープの生きている物体を指す。
-    pub unsafe fn foreign<T: 'static>(&self, w: Word) -> Result<*mut T, HeapError> {
-        let h = w.header();
-        self.checked_live(h.as_ptr())?;
-        if unsafe { meta::meta(h) }.kind() != Kind::Foreign {
-            return Err(HeapError::WrongKind);
-        }
-        unsafe { foreign::value::<T>(h) }.ok_or(HeapError::WrongKind)
-    }
-}
