@@ -632,6 +632,7 @@ impl<M: Mode> Heap<M> {
     /// 文字列の参照を返す。left が一意で容量が足りればその場で書き、足りなければ容量を倍にして作り直す。一意でなければ
     /// 和の長さで写す。どちらの写しも left を手放す前に済ませる。速いモードでは、大きい物体のページを箱の解放がすぐに
     /// 返すためである。
+    // 速いモードは rc 0 の物体のページの頭を読まないので、容量は一意な left でだけ読む (docs/spec/object-model.md の「文字列」)。
     fn push_unchecked(&mut self, left: Word, t: Tail, Ghost(c): Ghost<bool>) -> (w: Word)
         requires
             old(self).wf(),
@@ -682,13 +683,21 @@ impl<M: Mode> Heap<M> {
             s0.core.lemma_shape(h@.addr);
         }
         let len = self.core.slot_get(h, 0).bits();
-        let cap = self.core.cap_get(h);
-        let room = 8 * (cap - 1);
         let need = match len.checked_add(self.core.tail_len(&t)) {
             Some(n) => n,
             None => too_large(),
         };
         let unique = self.core.rc_get(h) == 1;
+        let cap = if unique {
+            self.core.cap_get(h)
+        } else {
+            0
+        };
+        let room = if unique {
+            8 * (cap - 1)
+        } else {
+            0
+        };
         if unique && need <= room {
             let tracked mut perm = self.core.perms.borrow_mut().tracked_remove(h@.addr);
             proof {
@@ -734,6 +743,7 @@ impl<M: Mode> Heap<M> {
             need
         };
         proof {
+            let cap = s0.core.cap(h@.addr);
             assert((len + 7) / 8 <= cap - 1) by (nonlinear_arith)
                 requires
                     len <= 8 * (cap - 1),

@@ -168,6 +168,17 @@ fn immortal_left_is_copied<M: Mode>() {
     }
 }
 
+fn push_onto_a_literal_copies_without_reading_capacity<M: Mode>() {
+    let mut heap = Heap::<M>::new();
+    let lit = heap.alloc_string_immortal("literal");
+    unsafe { heap.acquire_immortal(lit) }.unwrap();
+    let r = unsafe { heap.string_push(lit, " + tail") }.unwrap();
+    assert_ne!(r, lit);
+    assert_eq!(text(&heap, r), "literal + tail");
+    assert_eq!(text(&heap, lit), "literal");
+    unsafe { heap.decref(r) }.unwrap();
+}
+
 fn large_strings_grow_across_pages<M: Mode>() {
     let mut heap = Heap::<M>::new();
     let chunk = "z".repeat(50_000);
@@ -376,6 +387,7 @@ both_modes!(
     regrowth_is_logarithmic,
     shared_left_is_copied,
     immortal_left_is_copied,
+    push_onto_a_literal_copies_without_reading_capacity,
     large_strings_grow_across_pages,
     concat_consumes_both_sides,
     concat_of_a_string_with_itself,
