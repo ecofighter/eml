@@ -155,10 +155,9 @@ impl<M: Mode> Heap<M> {
                 if self.core.rc_get(h) != 0 {
                     return Err(HeapError::NotImmortal);
                 }
-                // `Foreign` の物体は rc 1 で作るので rc の確かめで断るが、塊は値をスレッドの間で共有するので、
-                // 種類でも断る
-
                 if matches!(self.core.meta_get(h).kind(), Kind::Foreign) {
+                    // `Foreign` の物体は rc 1 で作るので rc の確かめで断るが、塊は値をスレッドの間で共有するので、
+                    // 種類でも断る
                     return Err(HeapError::NotImmortal);
                 }
                 if M::CHECKED {

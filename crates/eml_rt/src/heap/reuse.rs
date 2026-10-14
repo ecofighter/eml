@@ -253,9 +253,8 @@ impl<M: Mode> Heap<M> {
             if M::CHECKED {
                 reveal(Core::building_wf);
             }
-            // 一意な物体 (rc 1) は、塊の物体でない
-
             if !s0.dom().contains(a) {
+                // 一意な物体 (rc 1) は、塊の物体でない
                 s0.lemma_region_at(a);
             }
             if c {
@@ -299,6 +298,7 @@ impl<M: Mode> Heap<M> {
             old(self).wf(),
             !M::CHECKED ==> old(self).token_ok(token),
         ensures
+            final(self).building == old(self).building,
             r is Err ==> *final(self) == *old(self),
             !M::CHECKED ==> *final(self) == *old(self),
             final(self).taken(*old(self)),
@@ -361,6 +361,7 @@ impl<M: Mode> Heap<M> {
             old(self).wf(),
             token.word_spec().bits_spec() != 0,
         ensures
+            final(self).building == old(self).building,
             r is Err ==> *final(self) == *old(self),
             final(self).taken(*old(self)),
             old(self).token_ok(token) ==> r is Ok,
@@ -531,6 +532,9 @@ impl<M: Mode> Heap<M> {
         }
         self.core.token_build(h, Some(meta), self.worker, M::CHECKED, Ghost(c));
         let w = Word::from_ptr(h);
+        if M::CHECKED {
+            self.building = w.bits();
+        }
         proof {
             crate::word::lemma_aligned_is_ptr(h@.addr);
             if c {
@@ -603,6 +607,9 @@ impl<M: Mode> Heap<M> {
         }
         self.core.token_build(h, None, self.worker, M::CHECKED, Ghost(c));
         let w = Word::from_ptr(h);
+        if M::CHECKED {
+            self.building = w.bits();
+        }
         proof {
             crate::word::lemma_aligned_is_ptr(h@.addr);
             if c {
@@ -618,6 +625,7 @@ impl<M: Mode> Heap<M> {
     /// `con_at` と `reuse_in_place` の後の状態。
     proof fn lemma_rebuilt(&self, s0: Heap<M>, h: *mut Header, w: Word, meta: Option<Meta>)
         requires
+            self.building_tied(),
             self.tokens@ == self.core.model@.tokens,
             s0.wf(),
             s0.consistent(),

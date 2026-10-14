@@ -4,7 +4,7 @@
 use std::sync::atomic::{AtomicI32, AtomicU32, Ordering};
 
 use crate::Word;
-use crate::meta::{Meta, meta_ptr};
+use crate::meta::{Meta, meta_ptr, slot_ptr};
 
 /// rc の欄。
 pub(super) unsafe fn rc(w: Word) -> i32 {
@@ -19,6 +19,11 @@ pub(super) unsafe fn meta(w: Word) -> Meta {
 /// ヘッダの `meta` を書き換える。
 pub(super) unsafe fn set_meta(w: Word, m: Meta) {
     unsafe { meta_ptr(w.as_ptr()).write(m.bits()) }
+}
+
+/// ペイロードの i 語目を書き換える。`set_field` は共有の物体に書けないので、共有の物体の輪を切るのに使う。
+pub(super) unsafe fn set_slot(w: Word, i: usize, v: Word) {
+    unsafe { slot_ptr(w.as_ptr(), i).write(v) }
 }
 
 /// 検査モードの前置きの `first` の欄 (所有者 ID か不死の物体の数)。

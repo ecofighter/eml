@@ -2176,6 +2176,7 @@ impl<M: Mode> Heap<M> {
         c: bool,
     )
         requires
+            self.building_tied(),
             self.tokens@ == self.core.model@.tokens,
             old.wf(),
             !M::CHECKED ==> c,

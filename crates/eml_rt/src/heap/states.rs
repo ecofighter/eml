@@ -517,9 +517,8 @@ impl Core {
                 assert(self.perms@.dom() =~= s0.perms@.dom());
             }
         }
-        // 使い回した箱は、今の worker の新しい物体である
-
         if checked {
+            // 使い回した箱は、今の worker の新しい物体である
             proof {
                 lemma_set_code(v, 1);
             }

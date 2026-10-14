@@ -1169,9 +1169,8 @@ impl Core {
                 if up {
                     assert(self.model@.state =~= s0.model@.state);
                 }
-                // 正の rc は、正の rc から動いたものだけである
-
                 if self.rc_of(h) > 0 {
+                    // 正の rc は、正の rc から動いたものだけである
                     assert(rc > 0);
                 }
                 self.lemma_count_step(s1, h, dying);

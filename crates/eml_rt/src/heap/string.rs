@@ -644,8 +644,8 @@ impl<M: Mode> Heap<M> {
     /// `string_push` と `string_concat` の本体。検査はみな済んでいる。left の参照を1つ受け取り、`t` を後ろに足した
     /// 文字列の参照を返す。left が一意で容量が足りればその場で書き、足りなければ容量を倍にして作り直す。一意でなければ
     /// 和の長さで写す。どちらの写しも left を手放す前に済ませる。速いモードでは、大きい物体のページを箱の解放がすぐに
-    /// 返すためである。
-    // 速いモードは rc 0 の物体のページの頭を読まないので、容量は一意な left でだけ読む (docs/spec/object-model.md の「文字列」)。
+    /// 返すためである。速いモードは rc 0 の物体のページの頭を読まないので、容量は一意な left でだけ読む
+    /// (docs/spec/object-model.md の「文字列」)。
     fn push_unchecked(&mut self, left: Word, t: Tail, Ghost(c): Ghost<bool>) -> (w: Word)
         requires
             old(self).wf(),

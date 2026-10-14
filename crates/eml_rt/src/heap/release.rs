@@ -467,6 +467,7 @@ impl<M: Mode> Heap<M> {
             to_token ==> old(self).core.kind(h@.addr) == Kind::Data && old(self).core.rc_of(h@.addr)
                 == 1,
         ensures
+            final(self).building == old(self).building,
             M::CHECKED ==> final(self).core.pages == old(self).core.pages,
             M::CHECKED ==> final(self).core.dom() == old(self).core.dom(),
             final(self).core.model@.tokens == old(self).core.model@.tokens,
@@ -506,6 +507,7 @@ impl<M: Mode> Heap<M> {
                 !M::CHECKED ==> c,
                 M::CHECKED ==> self.core.pages == old(self).core.pages,
                 M::CHECKED ==> self.core.dom() == old(self).core.dom(),
+                self.building == old(self).building,
                 self.tokens == old(self).tokens,
                 self.core.model@.tokens == old(self).core.model@.tokens,
                 c ==> self.core.full(),
@@ -700,9 +702,8 @@ impl<M: Mode> Heap<M> {
             if M::CHECKED {
                 reveal(Core::building_wf);
             }
-            // 最後の参照を持つ物体は rc が 1 か -1 なので、塊の物体でない
-
             if !s0.dom().contains(a) {
+                // 最後の参照を持つ物体は rc が 1 か -1 なので、塊の物体でない
                 s0.lemma_region_at(a);
             }
             if c {

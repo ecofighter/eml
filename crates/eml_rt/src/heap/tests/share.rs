@@ -67,7 +67,7 @@ fn share_walks_a_cycle_once<M: Mode>() {
         heap.share(a, 0).unwrap();
         assert_eq!((rc(&heap, a), rc(&heap, b)), (-2, -1));
         // 輪を切ってから手放す
-        heap.set_field(b, 0, Word::UNIT).unwrap();
+        raw::set_slot(b, 0, Word::UNIT);
         heap.decref(a).unwrap();
         heap.decref(a).unwrap();
     }
@@ -229,9 +229,9 @@ fn a_shared_object_reaching_a_local_one_breaks_the_invariant() {
     let c = list(&mut heap, 1);
     unsafe {
         heap.share(p, 0).unwrap();
-        heap.set_field(p, 0, c).unwrap();
+        raw::set_slot(p, 0, c);
         assert_eq!(heap.check_invariants(), Err(HeapError::SharedReachesLocal));
-        heap.set_field(p, 0, Word::UNIT).unwrap();
+        raw::set_slot(p, 0, Word::UNIT);
         heap.decref(c).unwrap();
         heap.decref(p).unwrap();
     }
@@ -241,8 +241,9 @@ fn a_shared_object_reaching_a_local_one_breaks_the_invariant() {
 #[test]
 fn an_immortal_object_reaching_a_mortal_one_breaks_the_invariant() {
     let mut heap = H::new();
-    let p = unsafe { heap.alloc_immortal(1, Meta::new(0, 1, Kind::Data, false)) };
     let c = list(&mut heap, 1);
+    // 書けるのは構築中の間だけなので、子を先に作る
+    let p = unsafe { heap.alloc_immortal(1, Meta::new(0, 1, Kind::Data, false)) };
     unsafe {
         heap.set_field(p, 0, c).unwrap();
         assert_eq!(
@@ -318,9 +319,9 @@ fn sharing_reaches_no_freed_object() {
         // 解放した c を古い語のまま置く。rc は検査モードでは 1 のままで、前置きだけが解放を示す
         heap.set_field(p, 0, c).unwrap();
         assert_eq!(heap.share(p, 0), Err(HeapError::UseAfterFree));
-        heap.set_field(p, 0, Word::UNIT).unwrap();
-        heap.decref(p).unwrap();
     }
+    // share が状態を変えた後の Err なので、ヒープは落とすだけにする (docs/spec/object-model.md の「検査モードの約束」)
+    drop(heap);
 }
 
 #[test]
@@ -335,9 +336,9 @@ fn share_leaves_an_immortal_lin_object_alone() {
         assert_eq!(rc(&heap, immortal), 0);
         let count = raw::prefix_first(immortal);
         assert_eq!(count, 1);
-        heap.set_field(parent, 0, Word::UNIT).unwrap();
+        // 共有の parent を空けると、子の不死の物体の参照も手放す
         heap.decref(parent).unwrap();
-        heap.decref(immortal).unwrap();
+        assert_eq!(raw::prefix_first(immortal), 0);
     }
 }
 
@@ -353,9 +354,8 @@ fn a_shared_lin_object_reached_by_share_is_an_error() {
         raw::set_meta(x, m.with_lin(true));
         heap.set_field(parent, 0, x).unwrap();
         assert_eq!(heap.share(parent, 0), Err(HeapError::LinShared));
-        heap.set_field(parent, 0, Word::UNIT).unwrap();
         raw::set_meta(x, m);
-        heap.decref(x).unwrap();
-        heap.decref(parent).unwrap();
     }
+    // share が状態を変えた後の Err なので、ヒープは落とすだけにする (docs/spec/object-model.md の「検査モードの約束」)
+    drop(heap);
 }

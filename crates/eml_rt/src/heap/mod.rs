@@ -146,6 +146,10 @@ pub struct Heap<M: Mode> {
     // なったためである (docs/implementation/benchmarks.md の「S9b-2a (凍結した領域)」)
     region: ManuallyDrop<Option<Arc<Frozen<M>>>>,
     worker: u32,
+    /// 検査モードの構築中の物体のブロックの番地。なければ 0 で、速いモードではいつも 0 である。
+    // 検査モードの前置きの状態は構築中と生存を分けないので、`set_field` と `set_raw` が、構築中でない rc 0 以下の物体
+    // (不死の物体と共有の物体) を断るのに使う (docs/spec/object-model.md の「核の操作」)
+    building: usize,
     /// 解放の連鎖の作業リスト。使い回して、解放のたびに確保しない。
     work: Vec<Word>,
     /// `share` のたどりのスタック。使い回す。
@@ -231,6 +235,19 @@ impl<M: Mode> Heap<M> {
             self.dummy,
         ) && self.core.dom().contains(self.dummy.bits_spec())
         &&& !M::CHECKED ==> self.consistent()
+        &&& self.building_tied()
+    }
+
+    /// 構築中の物体の番地の欄は、検査モードではモデルの構築中の物体を表す。
+    pub(crate) closed spec fn building_tied(&self) -> bool {
+        self.building == if M::CHECKED {
+            match self.core.model@.building {
+                Some(b) => b,
+                None => 0,
+            }
+        } else {
+            0
+        }
     }
 
     /// `core` の塊の権限の写しは、付けた塊の `Arc` が指す塊の権限である。写しは `Arc` が生かすメモリを読むので、写しを
@@ -324,7 +341,7 @@ impl<M: Mode> Heap<M> {
     /// 構築中の物体を生きている物体にしただけのヒープ。`settle` は実行の時には何もしないので、物体を受ける操作が状態を
     /// 変える前に `Err` を返すと、ヒープはこれになる。
     pub closed spec fn settled_heap(&self) -> Heap<M> {
-        Heap { core: self.core.settled_view(), ..*self }
+        Heap { core: self.core.settled_view(), building: 0, ..*self }
     }
 
     /// token の表は変わらない。
@@ -345,8 +362,8 @@ impl<M: Mode> Heap<M> {
         self.core.readable(w)
     }
 
-    /// `w` の物体が生きているなら、局所の物体である (rc が正)。ほかのスレッドが読めない物体にだけ書くための安全の前提で、
-    /// 構築中の物体と、生きていない物体 (検査モードが書く前に断る) もこれを満たす。
+    /// `w` の物体が生きているなら、局所の物体である (rc が正)。ほかのスレッドが読めない物体にだけ書くための前提で、
+    /// 構築中の物体と、生きていない物体 (検査モードが書く前に断る) もこれを満たす。検査モードは `NotWritable` で確かめる。
     pub closed spec fn unshared(&self, w: Word) -> bool {
         self.core.state(w.bits_spec()) == BlockState::Live ==> self.core.rc_of(w.bits_spec()) > 0
     }
@@ -460,6 +477,7 @@ impl<M: Mode> Heap<M> {
             core: Self::empty_core(),
             region: ManuallyDrop::new(None),
             worker: 0,
+            building: 0,
             work: Vec::new(),
             share_stack: Vec::new(),
             visited_lin: Vec::new(),
@@ -531,6 +549,7 @@ impl<M: Mode> Heap<M> {
             old(self).core.model@.building is None,
             old(self).tokens@ == old(self).core.model@.tokens,
             old(self).region_tied(),
+            old(self).building == 0,
         ensures
             final(self).wf(),
             final(self).consistent(),
@@ -626,6 +645,9 @@ impl<M: Mode> Heap<M> {
             }
         }
         self.core.settle();
+        if M::CHECKED {
+            self.building = 0;
+        }
         proof {
             if c {
                 assert forall|b: usize| #[trigger]
@@ -650,6 +672,7 @@ impl<M: Mode> Heap<M> {
             old(self).core.checked() == M::CHECKED,
             meta.kind_spec() != Kind::Free,
         ensures
+            final(self).building == old(self).building,
             final(self).core.model@.tokens == old(self).core.model@.tokens,
             final(self).tokens == old(self).tokens,
             old(self).core.full() ==> final(self).core.pending(r.0@.addr),
@@ -792,6 +815,9 @@ impl<M: Mode> Heap<M> {
         }
         self.core.publish(Ghost(h), Tracked(perm), Ghost(BlockState::Building), Ghost(self.worker));
         let w = Word::from_ptr(h);
+        if M::CHECKED {
+            self.building = w.bits();
+        }
         proof {
             if old(self).consistent() && old(self).settleable() {
                 self.lemma_dummy_kept(s1);
@@ -807,6 +833,7 @@ impl<M: Mode> Heap<M> {
     /// 検査モードで新しいブロックを入れた後も、安全の条件とダミーの語は保たれる。
     proof fn lemma_published_safe(&self, s1: Heap<M>)
         requires
+            self.building_tied(),
             M::CHECKED,
             s1.wf(),
             self.core.safe_wf(),
@@ -825,6 +852,7 @@ impl<M: Mode> Heap<M> {
     /// 検査モードで、ブロックの集まりと確保器を変えない操作の後も、安全の条件とダミーの語は保たれる。
     proof fn lemma_safe_frame(&self, s1: Heap<M>)
         requires
+            self.building_tied(),
             M::CHECKED,
             s1.wf(),
             self.core.safe_wf(),
@@ -842,6 +870,7 @@ impl<M: Mode> Heap<M> {
     /// 新しいブロックを入れた後も、ダミーは変わらない。
     proof fn lemma_dummy_kept(&self, s1: Heap<M>)
         requires
+            self.building_tied(),
             self.tokens@ == self.core.model@.tokens,
             s1.wf(),
             s1.consistent(),
@@ -1224,8 +1253,9 @@ impl<M: Mode> Heap<M> {
 
     /// 作り手のヒープを凍結した塊にする。生きているブロックがどれも rc 0 の不死の物体で、token の箱と `Foreign` の
     /// 物体がないことを、実行時に確かめる (docs/spec/object-model.md の「凍結した領域」)。そうでなければ
-    /// `NotImmortal` を返す。検査モードでは、走査する語が空けたブロックを指していれば `UseAfterFree` を返す。誤りなら、
-    /// 作り手のヒープは普通に落ちる。
+    /// `NotImmortal` を返す。検査モードでは、前置きの状態が生存でない箱 (token の箱と空ける途中の物体) も `NotImmortal`
+    /// で断り、走査する語が生存でないブロックを指していれば、それが空けたブロックなら `UseAfterFree` を、そうでなければ
+    /// `NotImmortal` を返す。誤りなら、作り手のヒープは普通に落ちる。
     pub fn freeze(self) -> (r: Result<Frozen<M>, HeapError>)
         requires
             self.wf(),
@@ -1484,6 +1514,7 @@ impl<M: Mode> Heap<M> {
     /// 数を1つ動かした後。`s0` は `settle` の後の状態である。
     proof fn lemma_after_step(&self, old: Heap<M>, s0: Core, h: usize, w: Word, delta: int)
         requires
+            self.building_tied(),
             self.tokens@ == self.core.model@.tokens,
             old.dummy_wf(),
             old.region_tied(),
@@ -1510,6 +1541,7 @@ impl<M: Mode> Heap<M> {
     /// 不死の物体の数を替えても、ヒープの不変条件は保たれる。
     proof fn lemma_recounted_heap(&self, old: Heap<M>)
         requires
+            self.building_tied(),
             self.tokens@ == self.core.model@.tokens,
             old.wf(),
             self.core.recounted(old.core),
@@ -1531,6 +1563,7 @@ impl<M: Mode> Heap<M> {
     /// `dup` の後に不死の物体 `w` の数を増やしても、`dup` の後の状態のままである。
     proof fn lemma_recounted_dup(&self, mid: Heap<M>, old: Heap<M>, w: Word)
         requires
+            self.building_tied(),
             M::CHECKED,
             self.tokens == mid.tokens,
             self.tokens@ == self.core.model@.tokens,
@@ -1563,6 +1596,7 @@ impl<M: Mode> Heap<M> {
     /// 最後の参照を手放して解放の連鎖を走らせた後。`s1` は `h` を空ける途中にした状態である。
     proof fn lemma_after_chain(&self, old: Heap<M>, s0: Core, s1: Core, h: usize, w: Word)
         requires
+            self.building_tied(),
             self.tokens@ == self.core.model@.tokens,
             old.dummy_wf(),
             old.region_tied(),
@@ -1735,9 +1769,8 @@ impl<M: Mode> Heap<M> {
                 reveal(Core::building_wf);
                 assert(s0.state(h@.addr) == BlockState::Live);
             }
-            // 塊の物体は rc 0 なので、書き込む道に進むのはこのヒープの物体だけである
-
             if !s0.dom().contains(h@.addr) {
+                // 塊の物体は rc 0 なので、書き込む道に進むのはこのヒープの物体だけである
                 s0.lemma_region_at(h@.addr);
             }
         }
@@ -1968,6 +2001,7 @@ impl<M: Mode> Heap<M> {
                 h@.addr,
             ) >= 1),
         ensures
+            final(self).building == old(self).building,
             c ==> r is Ok || chain_err(r),
             final(self).core.pages == old(self).core.pages,
             final(self).core.model@.tokens == old(self).core.model@.tokens,
@@ -2021,9 +2055,8 @@ impl<M: Mode> Heap<M> {
                 assert(s0.state(h@.addr) == BlockState::Live);
                 s0.lemma_code_state(h@.addr);
             }
-            // 塊の物体は rc 0 なので、書き込む道に進むのはこのヒープの物体だけである
-
             if !s0.dom().contains(h@.addr) {
+                // 塊の物体は rc 0 なので、書き込む道に進むのはこのヒープの物体だけである
                 s0.lemma_region_at(h@.addr);
             }
         }
@@ -2108,6 +2141,7 @@ impl<M: Mode> Heap<M> {
                     != BlockState::Dying,
             old(self).core.model@.building is None,
         ensures
+            final(self).building == old(self).building,
             M::CHECKED ==> final(self).core.dom() == old(self).core.dom(),
             M::CHECKED ==> final(self).core.pages == old(self).core.pages,
             final(self).core.model@.tokens == old(self).core.model@.tokens,
@@ -2165,6 +2199,7 @@ impl<M: Mode> Heap<M> {
             old(self).core.checked() == M::CHECKED,
             old(self).core.model@.building is None,
         ensures
+            final(self).building == old(self).building,
             M::CHECKED ==> final(self).core.dom() == old(self).core.dom(),
             M::CHECKED ==> final(self).core.pages == old(self).core.pages,
             final(self).core.model@.tokens == old(self).core.model@.tokens,
@@ -2197,6 +2232,7 @@ impl<M: Mode> Heap<M> {
                 !M::CHECKED ==> c,
                 M::CHECKED ==> self.core.dom() == old(self).core.dom(),
                 M::CHECKED ==> self.core.pages == old(self).core.pages,
+                self.building == old(self).building,
                 self.tokens == old(self).tokens,
                 self.core.model@.tokens == old(self).core.model@.tokens,
                 c ==> self.core.full(),
@@ -2246,6 +2282,7 @@ impl<M: Mode> Heap<M> {
                     !M::CHECKED ==> c,
                     M::CHECKED ==> self.core.dom() == old(self).core.dom(),
                     M::CHECKED ==> self.core.pages == old(self).core.pages,
+                    self.building == old(self).building,
                     self.tokens == old(self).tokens,
                     self.core.model@.tokens == old(self).core.model@.tokens,
                     c ==> self.core.full(),
@@ -2373,6 +2410,7 @@ impl<M: Mode> Heap<M> {
             h == old(self).core.block(h@.addr),
             old(self).core.state(h@.addr) == BlockState::Dying,
         ensures
+            final(self).building == old(self).building,
             M::CHECKED ==> final(self).core.pages == old(self).core.pages,
             final(self).core.model@.tokens == old(self).core.model@.tokens,
             final(self).tokens == old(self).tokens,
@@ -2665,6 +2703,39 @@ impl<M: Mode> Heap<M> {
         Ok(self.core.meta_get(h))
     }
 
+    /// 検査モードで、`set_field` と `set_raw` が書く物体を確かめる。rc が正なら持ち主が今の worker でなければ
+    /// `WrongOwner` を、rc が 0 以下で構築中でなければ `NotWritable` を返す。
+    // 呼ぶ側は `M::CHECKED` の枝の中で呼ぶ。速いモードでも呼んで中ですぐ戻る形にすると、計測のプログラムで
+    // `string_push`、`make_text`、`release` が呼ぶ側に展開されなくなり、`append` の命令の数が2.5倍になったためである
+    // (docs/implementation/benchmarks.md の「S9b-2a (凍結した領域)」)
+    #[inline]
+    fn checked_unshared(&self, w: Word, h: *mut Header) -> (r: Result<(), HeapError>)
+        requires
+            M::CHECKED,
+            self.wf(),
+            w.is_ptr_spec(),
+            self.core.word_ok(w),
+            h@.addr == w.bits_spec(),
+            h == self.core.block(h@.addr),
+            self.core.state(h@.addr) == BlockState::Live || self.core.state(h@.addr)
+                == BlockState::Building,
+        ensures
+            r is Ok ==> self.unshared(w),
+            self.consistent() && self.writable(w) && self.owned(w) ==> r is Ok,
+    {
+        let rc = self.core.rc_get(h);
+        proof {
+            reveal(Core::building_wf);
+            self.lemma_checks_pass(w);
+        }
+        // 構築中の物体は一度に1つまでなので、番地と比べれば構築中かが分かる。rc 0 以下の構築中の物体は、
+        // `alloc_immortal` が作ったものだけである
+        if rc <= 0 && w.bits() != self.building {
+            return Err(HeapError::NotWritable);
+        }
+        self.checked_owner(h, rc)
+    }
+
     /// i が走査する語の物理的な添字でなければ `OutOfBounds` を返す。速いモードでは何も確かめない。
     #[inline]
     fn scanned_check(&self, h: *mut Header, i: usize) -> (r: Result<(), HeapError>)
@@ -2777,7 +2848,6 @@ impl<M: Mode> Heap<M> {
             old(self).wf(),
             w.is_ptr_spec(),
             old(self).word_in(w),
-            old(self).unshared(w),
             old(self).word_in(v),
             !M::CHECKED ==> old(self).writable(w) && old(self).holds(v) && old(self).scanned_at(
                 w,
@@ -2786,6 +2856,7 @@ impl<M: Mode> Heap<M> {
         ensures
             final(self).wf(),
             r is Err ==> *final(self) == *old(self),
+            r is Ok ==> old(self).unshared(w),
             r is Ok ==> final(self).field_set(*old(self), w, i as int, v),
             old(self).consistent() && old(self).writable(w) && old(self).holds(v) && old(
                 self,
@@ -2802,8 +2873,7 @@ impl<M: Mode> Heap<M> {
         self.checked_live(h)?;
         self.scanned_check(h, i)?;
         if M::CHECKED {
-            let rc = self.core.rc_get(h);
-            self.checked_owner(h, rc)?;
+            self.checked_unshared(w, h)?;
         }
         let ghost s0 = self.core;
         proof {
@@ -2883,13 +2953,13 @@ impl<M: Mode> Heap<M> {
             old(self).wf(),
             w.is_ptr_spec(),
             old(self).word_in(w),
-            old(self).unshared(w),
             !M::CHECKED ==> old(self).writable(w) && old(self).raw_at(w, i as int) && old(
                 self,
             ).owned(w),
         ensures
             final(self).wf(),
             r is Err ==> *final(self) == *old(self),
+            r is Ok ==> old(self).unshared(w),
             r is Ok ==> final(self).raw_set(*old(self), w, i as int, v),
             old(self).consistent() && old(self).writable(w) && old(self).raw_at(w, i as int) && old(
                 self,
@@ -2904,8 +2974,7 @@ impl<M: Mode> Heap<M> {
         self.checked_live(h)?;
         self.raw_check(h, i)?;
         if M::CHECKED {
-            let rc = self.core.rc_get(h);
-            self.checked_owner(h, rc)?;
+            self.checked_unshared(w, h)?;
         }
         let ghost s0 = self.core;
         proof {

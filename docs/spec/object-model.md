@@ -132,7 +132,7 @@ meta: u32         tag (16 ビット) | scan (8 ビット) | info (8 ビット)
 - evidence の tag もエフェクトの番号である。`evv_push` は、引数の evidence の tag を1回読んで節点の tag に写す。入口の表の tag は読まないので 0 にする
 - エフェクトの数の上限は、コンストラクタと同じ 65536 になる
 - 3つの物体を別の種類にしない。速いモードの振る舞いは `Data` と同じで、分けて得られるのは、リークの報告の名前と検査モードの種類の検査だけだからである。リークの報告では、クロージャと evidence の物体も `Data` と数える
-- `ev_set_state` と `ev_take_state` は、状態の欄を `set_field` でその場で書き換える。`set_field` の安全の前提 (ほかのスレッドが読めない) は、S10 のシングルスレッドの VM では成り立つ。`par` を入れるときは、evidence を共有の印の付いた物体にしない (子のタスクに渡さない) か、状態の欄の書き換えを見直す
+- `ev_set_state` と `ev_take_state` は、状態の欄を `set_field` でその場で書き換える。`set_field` の前提 (ほかのスレッドが読めない) は、S10 のシングルスレッドの VM では成り立つ。`par` を入れるときは、evidence を共有の印の付いた物体にしない (子のタスクに渡さない) か、状態の欄の書き換えを見直す
 - evidence は `CodeBase` の不死の定数にしない。空の `evv` は即値の `()` である
 
 ## 確保器
@@ -254,9 +254,9 @@ RC の遷移は、rc の値だけを受け取って次の状態を返す純粋�
 | どの操作も | 語は即値か、このヒープのブロックか、このヒープに付けた塊とその祖先のブロックである。構築中の物体は書き終えている (`set_field` と `set_raw` を除く) | 読むだけの操作の語は、モデルで生きている物体 (参照の数が正か、不死) を指す | 物体は生きている (`UseAfterFree`)。rc が正の物体を書き換えるか rc を読んで判定するなら、持ち主は今の worker である (`WrongOwner`) |
 | 物体を受ける操作 (`meta`、`field`、`set_field`、`raw`、`set_raw`、`scanned_len`、`scanned`、`free_block`、`release`、`release_reuse`、`into_token`、`foreign`、`string`、`string_push`、`string_concat`) | 語はポインタである (即値でも `Word::EMPTY` でもない) | | |
 | `alloc` / `alloc_immortal` / `con_at` | `meta` の種類は `Foreign`、`String`、`Free` のどれでもない。`scan` は 255 でなく、走査する語はペイロードに収まる | | |
-| `field` / `set_field` | `set_field` の物体は、ほかのスレッドが読めない (局所か、構築中) | `set_field` が書く語は、呼ぶ側が数えた参照を持つ | i 語目は走査する語である (`OutOfBounds`) |
+| `field` / `set_field` | | `set_field` が書く語は、呼ぶ側が数えた参照を持つ | i 語目は走査する語である (`OutOfBounds`)。`set_field` の物体は、ほかのスレッドが読めない (局所か、構築中。`NotWritable`) |
 | `scanned` | | | i は `scanned_len` より小さい (`OutOfBounds`) |
-| `raw` / `set_raw` | `raw` で読む語は先に書いてある。`alloc_data` は生の語を書かず、新しいページのメモリは初期化されていないためである。`set_raw` の物体は、ほかのスレッドが読めない | | 物体のペイロードは不透明でない (`WrongKind`。上の「種類」)。i 語目は、走査する語の後のブロックの中の語である (`OutOfBounds`)。`alloc_immortal` で作る `BigInt` の値の語も `set_raw` で書く |
+| `raw` / `set_raw` | `raw` で読む語は先に書いてある。`alloc_data` は生の語を書かず、新しいページのメモリは初期化されていないためである | | 物体のペイロードは不透明でない (`WrongKind`。上の「種類」)。i 語目は、走査する語の後のブロックの中の語である (`OutOfBounds`)。`set_raw` の物体は、ほかのスレッドが読めない (`NotWritable`)。`alloc_immortal` で作る `BigInt` の値の語も `set_raw` で書く |
 | `unbox_int` | | | 物体は `BigInt` である (`WrongKind`) |
 | `dup` | | 呼ぶ側が参照を持つか、借りている | 物体は `lin` ビットを持たない (`LinDup`) |
 | `decref` / `release` / `release_reuse` | | 呼ぶ側が参照を1つ持つ。残さない子は呼ぶ側の参照と数える | 不死の物体の参照は `acquire_immortal` か `dup` で作った (`ImmortalOverRelease`)。共有の物体は `lin` ビットを持たない (`LinShared`)。`release` と `release_reuse` の物体はデータで、tag と走査する語の数が名指したものである (`WrongLayout`)。残さない子は `decref` の、`is_last` が偽のときの残す子は `dup` の検査する前提を満たす |
@@ -415,7 +415,7 @@ left が一意 (is_unique)
 ### スレッドの性質
 
 - `Frozen<M>` は `Send` と `Sync` である。型の assert で固定する。凍結した後は、どの操作も塊のメモリに書き込まないので、複数のスレッドが同時に読んでも安全である (下の「`unsafe` の核」の T0)
-- 書き込まないことは、操作ごとに次のように守る。速いモードの `dup` と `decref` は rc 0 を読んで何もせず、`share` と解放の連鎖も rc 0 の物体に書き込まない。`set_field` と `set_raw` は、ほかのスレッドが読めない物体にだけ書く。`string_push` は、不死の left を写す道に進む。検査モードも、下の「検査モードでは数えない」により書き込まない
+- 書き込まないことは、操作ごとに次のように守る。速いモードの `dup` と `decref` は rc 0 を読んで何もせず、`share` と解放の連鎖も rc 0 の物体に書き込まない。`set_field` と `set_raw` は、ほかのスレッドが読めない物体 (局所か、構築中) にだけ書く。速いモードではこれを前提にし、検査モードは塊の物体への書き込みを `NotWritable` で断る。`string_push` は、不死の left を写す道に進む。検査モードも、下の「検査モードでは数えない」により書き込まない
 - 速いモードの操作は、rc 0 の物体のページの頭を読まない (上の「文字列」)。検査モードの範囲の確かめは、領域のブロックでもページの頭を読むので、塊はページの頭の読む権限も持つ
 - [マルチコア対応の設計](../future/multicore.md) の「VM の並列化の備え」の制約2 (`CodeBase` は `Sync`) は、この性質に頼る
 
@@ -512,6 +512,7 @@ token (`Token`) はどちらのモードでも1語である。S10 の VM のレ�
 - `lin` ビットの立った共有の物体の `release` と `decref` (`LinShared`)。`share` は `lin` の物体に印を付けないので、これは印付けの誤りである。`share` のたどりが、すでに共有の `lin` の物体に届いたときも同じ誤りにする
 - `share` のたどりで、同じ `lin` の物体に2回届くこと (`LinReachedTwice`)
 - 所有者の不一致 (`WrongOwner`)。正の rc の物体への `dup`、`decref`、`set_field`、`set_raw`、`is_unique`、`is_last`、`free_block`、`into_token`、`release`、`release_reuse`、`string_push`、`string_concat` が、今の worker ID と違う所有者の物体に対して行われたとき
+- ほかのスレッドが読みうる物体への書き込み (`NotWritable`)。`set_field` と `set_raw` は、rc が 0 以下 (不死か共有) で構築中でない物体を断る。凍結した塊の物体と、書き終えたヒープ自身の不死の物体もこれに当たる。前置きの状態は構築中と生存を分けないので、検査モードのヒープは構築中の物体の番地を持ち、それと比べて見分ける
 - token の誤り。token にできない種類の `into_token` (`NotTokenable`)、一意でない物体の `into_token` (`NotUnique`)、空けた表の項目の使用、箱の状態が token でないこと、世代の番号の不一致 (`StaleToken`。token を受ける操作が断る。同じ token の2回の使用と ABA の形)、級の合わない `con_at` (`WrongClass`)、`reuse_in_place` の `meta` の tag と scan と種類が箱と違うこと (`WrongMeta`)、`reuse_in_place` で箱が `lin` ビットを持ち新しい `meta` が持たないこと (`LinBitKept`)
 - `free_block` を、破棄処理を持つ種類の物体に使うこと (`FinalizerSkipped`) と、最後の参照でない物体に使うこと (`NotLast`)
 - `release` と `release_reuse` で、物体がデータでないか、タグと走査する語の数が名指したものと違うこと (`WrongLayout`)

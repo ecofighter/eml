@@ -241,6 +241,7 @@ impl<M: Mode> Heap<M> {
             up ==> p_owner(old(self).core.perm(h@.addr)) < UNCOUNTED - 1,
             !up ==> p_owner(old(self).core.perm(h@.addr)) != 0,
         ensures
+            final(self).building == old(self).building,
             final(self).tokens == old(self).tokens,
             old(self).core.full() ==> final(self).core.full(),
             final(self).core.safe_wf(),

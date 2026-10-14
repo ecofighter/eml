@@ -145,10 +145,10 @@ fn chains_hold_constants_that_point_into_ancestors<M: Mode>() {
     let r1 = Arc::new(b1.freeze().unwrap());
     let mut b2 = Heap::<M>::new();
     b2.attach(r1.clone());
+    // set_field は呼ぶ側が数えた参照を1つ渡す。構築中の物体に使えるのは set_field と set_raw だけなので、作る前に取る
+    unsafe { b2.acquire_immortal(s1) }.unwrap();
     // 祖先の定数を指す定数 (Some s1 の形)
     let some = unsafe { b2.alloc_immortal(1, Meta::new(1, 1, Kind::Data, false)) };
-    // set_field は呼ぶ側が数えた参照を1つ渡す
-    unsafe { b2.acquire_immortal(s1) }.unwrap();
     unsafe { b2.set_field(some, 0, s1) }.unwrap();
     let r2 = Arc::new(b2.freeze().unwrap());
     drop(r1);
@@ -156,10 +156,23 @@ fn chains_hold_constants_that_point_into_ancestors<M: Mode>() {
     heap.attach(r2.clone());
     let inner = unsafe { heap.field(some, 0) }.unwrap();
     assert_eq!(text(&heap, inner), "constant");
+    assert_eq!(unsafe { heap.scanned(some, 0) }, Ok(inner));
+    // 一意な自分の物体の release は、領域の子を手放すものと残すものの両方を通す
+    let pair = heap.alloc_data(1, 2, 0, false);
+    unsafe {
+        heap.acquire_immortal(some).unwrap();
+        heap.acquire_immortal(inner).unwrap();
+        heap.set_field(pair, 0, some).unwrap();
+        heap.set_field(pair, 1, inner).unwrap();
+        heap.release(pair, 1, &[false, true]).unwrap();
+        heap.decref(inner).unwrap();
+    }
+    assert_eq!(super::mortal(&heap), 0);
+    assert_eq!(text(&heap, inner), "constant");
 }
 
 fn attach_moves_to_a_descendant<M: Mode>() {
-    let (b1, _, _) = builder::<M>();
+    let (b1, s1, _) = builder::<M>();
     let r1 = Arc::new(b1.freeze().unwrap());
     let mut b2 = Heap::<M>::new();
     b2.attach(r1.clone());
@@ -167,8 +180,30 @@ fn attach_moves_to_a_descendant<M: Mode>() {
     let r2 = Arc::new(b2.freeze().unwrap());
     let mut heap = Heap::<M>::new();
     heap.attach(r1.clone());
+    // 付け替えの前に作った自分の物体が、前の塊の定数を指す
+    let cell = heap.alloc_data(0, 1, 0, false);
+    unsafe {
+        heap.acquire_immortal(s1).unwrap();
+        heap.set_field(cell, 0, s1).unwrap();
+    }
     heap.attach(r2.clone());
     assert_eq!(text(&heap, s2), "second");
+    assert_eq!(text(&heap, s1), "constant");
+    let held = unsafe { heap.field(cell, 0) }.unwrap();
+    assert_eq!(text(&heap, held), "constant");
+    unsafe { heap.decref(cell) }.unwrap();
+    assert_eq!(super::mortal(&heap), 0);
+}
+
+fn attaching_an_ancestor_panics<M: Mode>() {
+    let (b1, _, _) = builder::<M>();
+    let r1 = Arc::new(b1.freeze().unwrap());
+    let mut b2 = Heap::<M>::new();
+    b2.attach(r1.clone());
+    let r2 = Arc::new(b2.freeze().unwrap());
+    let mut heap = Heap::<M>::new();
+    heap.attach(r2);
+    heap.attach(r1);
 }
 
 fn attaching_a_non_descendant_panics<M: Mode>() {
@@ -183,15 +218,27 @@ fn attaching_a_non_descendant_panics<M: Mode>() {
 
 // `both_modes!` は `#[should_panic]` を付けた関数を受けないので、モードごとに書く
 #[test]
-#[should_panic]
+#[should_panic(expected = "the attached region is not a descendant of the current one")]
 fn attaching_a_non_descendant_panics_fast() {
     attaching_a_non_descendant_panics::<crate::Fast>();
 }
 
 #[test]
-#[should_panic]
+#[should_panic(expected = "the attached region is not a descendant of the current one")]
 fn attaching_a_non_descendant_panics_checked() {
     attaching_a_non_descendant_panics::<crate::Checked>();
+}
+
+#[test]
+#[should_panic(expected = "the attached region is not a descendant of the current one")]
+fn attaching_an_ancestor_panics_fast() {
+    attaching_an_ancestor_panics::<crate::Fast>();
+}
+
+#[test]
+#[should_panic(expected = "the attached region is not a descendant of the current one")]
+fn attaching_an_ancestor_panics_checked() {
+    attaching_an_ancestor_panics::<crate::Checked>();
 }
 
 fn drop_order_does_not_matter<M: Mode>() {

@@ -225,9 +225,10 @@ fn every_core_operation_once<M: Mode>() {
     let a = heap.alloc_data(0, 1, 1, false);
     let n = heap.alloc_int(i64::MAX);
     let imm = unsafe { heap.alloc_immortal(1, Meta::new(0, 0, Kind::BigInt, false)) };
+    // 不死の物体に書けるのは構築中の間だけ
+    unsafe { heap.set_raw(imm, 0, 9) }.unwrap();
     let f = heap.alloc_foreign(5u64, false);
     unsafe {
-        heap.set_raw(imm, 0, 9).unwrap();
         heap.acquire_immortal(imm).unwrap();
         let raw_cell = heap.alloc(2, META);
         heap.set_field(raw_cell, 0, Word::imm(1)).unwrap();
@@ -423,25 +424,36 @@ fn two_threads_read_one_region<M: Mode>() {
 }
 
 fn chains_drop_in_any_order<M: Mode>() {
-    for child_first in [true, false] {
+    // 最初に落とすのは、子の塊、親の塊、付けたヒープのどれか
+    for first in ["child", "parent", "heap"] {
         let (b1, s1, _) = super::frozen::builder::<M>();
         let r1 = Arc::new(b1.freeze().unwrap());
         let mut b2 = Heap::<M>::new();
         b2.attach(r1.clone());
+        unsafe { b2.acquire_immortal(s1) }.unwrap();
         let some = unsafe { b2.alloc_immortal(1, Meta::new(1, 1, Kind::Data, false)) };
-        unsafe {
-            b2.acquire_immortal(s1).unwrap();
-            b2.set_field(some, 0, s1).unwrap();
-        }
+        unsafe { b2.set_field(some, 0, s1) }.unwrap();
         let r2 = Arc::new(b2.freeze().unwrap());
         let mut heap = Heap::<M>::new();
         heap.attach(r2.clone());
-        if child_first {
-            drop(r2);
-            drop(r1);
-        } else {
-            drop(r1);
-            drop(r2);
+        match first {
+            "child" => {
+                drop(r2);
+                drop(r1);
+            }
+            "parent" => {
+                drop(r1);
+                drop(r2);
+            }
+            _ => {
+                let inner = unsafe { heap.field(some, 0) }.unwrap();
+                assert_eq!(text(&heap, inner), "constant");
+                drop(heap);
+                // 子の塊の親への `Arc` が、親の塊を生かす
+                drop(r1);
+                drop(r2);
+                continue;
+            }
         }
         // 付けたヒープの `Arc` だけが鎖を生かす
         let inner = unsafe { heap.field(some, 0) }.unwrap();

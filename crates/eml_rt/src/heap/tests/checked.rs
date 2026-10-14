@@ -214,3 +214,78 @@ fn free_block_refuses_a_finalizer_and_a_shared_count() {
         heap.decref(f).unwrap();
     }
 }
+
+/// 走査する語を1つと生の語を1つ持つ不死の物体を書き終えて返す。
+fn immortal_cell(heap: &mut H) -> Word {
+    let c = unsafe { heap.alloc_immortal(2, Meta::new(0, 1, Kind::Data, false)) };
+    unsafe {
+        heap.set_field(c, 0, Word::imm(1)).unwrap();
+        heap.set_raw(c, 1, 2).unwrap();
+    }
+    c
+}
+
+#[test]
+fn writing_a_region_constant_is_an_error() {
+    let mut b = H::new();
+    let c = immortal_cell(&mut b);
+    let region = std::sync::Arc::new(b.freeze().unwrap());
+    let mut heap = H::new();
+    heap.attach(region);
+    unsafe {
+        assert_eq!(
+            heap.set_field(c, 0, Word::imm(3)),
+            Err(HeapError::NotWritable)
+        );
+        assert_eq!(heap.set_raw(c, 1, 4), Err(HeapError::NotWritable));
+        assert_eq!(heap.field(c, 0), Ok(Word::imm(1)));
+        assert_eq!(heap.raw(c, 1), Ok(2));
+    }
+}
+
+#[test]
+fn writing_an_own_immortal_after_it_is_built_is_an_error() {
+    let mut heap = H::new();
+    let c = immortal_cell(&mut heap);
+    // 次の物体を作ると、c は構築中でなくなる。作っている物体には書ける
+    let d = immortal_cell(&mut heap);
+    unsafe {
+        assert_eq!(
+            heap.set_field(c, 0, Word::imm(3)),
+            Err(HeapError::NotWritable)
+        );
+        assert_eq!(heap.set_raw(c, 1, 4), Err(HeapError::NotWritable));
+        heap.set_field(d, 0, Word::imm(5)).unwrap();
+        assert_eq!(heap.field(c, 0), Ok(Word::imm(1)));
+        assert_eq!(heap.raw(c, 1), Ok(2));
+    }
+}
+
+#[test]
+fn writing_a_shared_object_is_an_error() {
+    let mut heap = H::new();
+    let x = heap.alloc_data(0, 1, 1, false);
+    unsafe {
+        heap.set_raw(x, 1, 2).unwrap();
+        heap.share(x, 1).unwrap();
+        assert_eq!(
+            heap.set_field(x, 0, Word::imm(3)),
+            Err(HeapError::NotWritable)
+        );
+        assert_eq!(heap.set_raw(x, 1, 4), Err(HeapError::NotWritable));
+        heap.decref(x).unwrap();
+    }
+}
+
+#[test]
+fn freezing_a_constant_that_holds_a_freed_object_is_an_error() {
+    let mut b = H::new();
+    let s = b.alloc_string("mortal");
+    let cell = unsafe { b.alloc_immortal(1, Meta::new(0, 1, Kind::Data, false)) };
+    unsafe {
+        b.set_field(cell, 0, s).unwrap();
+        // cell に移した参照を、もう一度手放す。s は空けて隔離したブロックになる
+        b.decref(s).unwrap();
+    }
+    assert_eq!(b.freeze().unwrap_err(), HeapError::UseAfterFree);
+}
