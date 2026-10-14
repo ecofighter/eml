@@ -68,6 +68,5 @@ mod tests {
         send::<Heap<Checked>>();
         send::<Ctx<Fast>>();
         send::<Ctx<Checked>>();
-        send_and_sync::<Control>();
     }
 }

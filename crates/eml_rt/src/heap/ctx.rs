@@ -92,7 +92,7 @@ spec fn points_in(ws: Seq<Word>, b: usize) -> int
     }
 }
 
-/// `b` は生きているブロック (書き終えた構築中の物体を含む) である。
+/// 書き終えた構築中の物体も、生きているブロックに含める。
 spec fn live<M: Mode>(h: Heap<M>, b: usize) -> bool {
     h.core.has(b) && h.core.settled_state(b) == BlockState::Live
 }
@@ -261,6 +261,19 @@ spec fn effect_tag(effect: u16) -> u16 {
         0
     } else {
         (effect + 1) as u16
+    }
+}
+
+/// `effect_tag` を計算する。`ev_lookup` と mask が同じ対応を使うよう、1か所に置く。
+#[inline]
+fn tag_of_effect(effect: u16) -> (t: u16)
+    ensures
+        t == effect_tag(effect),
+{
+    if effect == u16::MAX {
+        0
+    } else {
+        effect + 1
     }
 }
 
@@ -496,11 +509,7 @@ fn count_effect(effects: &[u16], t: u16) -> (r: usize)
         decreases effects.len() - j,
     {
         let e = effects[j];
-        let et: u16 = if e == u16::MAX {
-            0
-        } else {
-            e + 1
-        };
+        let et = tag_of_effect(e);
         proof {
             assert(effects@.subrange(0, j + 1).drop_last() =~= effects@.subrange(0, j as int));
             assert(effects@.subrange(0, j + 1).last() == e);
@@ -516,9 +525,17 @@ fn count_effect(effects: &[u16], t: u16) -> (r: usize)
     n
 }
 
-/// `w` から先頭の `i` 個の節点のうち、tag が `t` のものを数える。節点と tag は `hs` のものと同じである。
-fn count_tag<M: Mode>(h: &Heap<M>, Ghost(hs): Ghost<Heap<M>>, w: Word, i: usize, t: u16) -> (r:
-    Result<usize, HeapError>)
+/// `w` から先頭の `i` 個の節点のうち、tag が `t` のものが `occ` 個以上あるかを返す。節点と tag は `hs` のものと同じ
+/// である。mask は除いた数を配列にも `Vec` にも持たないので、節点ごとに先頭からたどり直す。たどり直しは、tag が `t`
+/// の節点を `occ` 個見つけた所で止める。
+fn seen_at_least<M: Mode>(
+    h: &Heap<M>,
+    Ghost(hs): Ghost<Heap<M>>,
+    w: Word,
+    i: usize,
+    t: u16,
+    occ: usize,
+) -> (r: Result<bool, HeapError>)
     requires
         h.wf(),
         h.safe_settleable(),
@@ -526,7 +543,7 @@ fn count_tag<M: Mode>(h: &Heap<M>, Ghost(hs): Ghost<Heap<M>>, w: Word, i: usize,
         walkable(*h, w, i as nat),
         agree(*h, hs, w, i as nat),
     ensures
-        r matches Ok(n) && n as int == wseen(hs, w, i as nat, t),
+        r matches Ok(b) && b == (wseen(hs, w, i as nat, t) >= occ),
 {
     let mut n = w;
     let mut j: usize = 0;
@@ -544,6 +561,12 @@ fn count_tag<M: Mode>(h: &Heap<M>, Ghost(hs): Ghost<Heap<M>>, w: Word, i: usize,
             count as int == wseen(hs, w, j as nat, t),
         decreases i - j,
     {
+        if count >= occ {
+            proof {
+                lemma_wseen_mono(hs, w, j as nat, i as nat, t);
+            }
+            return Ok(true);
+        }
         proof {
             assert(walk_node(*h, nth(*h, w, j as nat)));
             lemma_unextended(*h, n);
@@ -559,7 +582,7 @@ fn count_tag<M: Mode>(h: &Heap<M>, Ghost(hs): Ghost<Heap<M>>, w: Word, i: usize,
         n = (unsafe { h.field(n, 1) })?;
         j += 1;
     }
-    Ok(count)
+    Ok(count >= occ)
 }
 
 /// 実行文脈。VM はこれだけを持ち回す。`evv` と yield の状態の語は、`Ctx` が持つ数えた参照である。`Ctx` を落としても
@@ -649,7 +672,6 @@ impl<M: Mode> Ctx<M> {
         self.heap.scanned_word(e, 2)
     }
 
-    /// 入口の数。
     pub closed spec fn ev_ops(&self, e: Word) -> int {
         self.heap.count_of(self.ev_table(e))
     }
@@ -755,7 +777,8 @@ impl<M: Mode> Ctx<M> {
 
     /// # Safety
     /// ヒープを入れ替えない。`Ctx` が持つ語 (`evv` と yield の状態) を手放したり書き換えたりせず、それらの語からたどれる
-    /// 物体 (`evv` の節点、evidence、入口の表) も書き換えない。`Ctx` のメソッドを次に呼ぶ前に、作っている物体を
+    /// 物体 (`evv` の節点、evidence、入口の表) も書き換えない。`set_worker` を呼ばず、それらの物体を `share` しない。
+    /// 基本操作が頼る、物体の持ち主と rc の符号が変わるためである。`Ctx` のメソッドを次に呼ぶ前に、作っている物体を
     /// 書き終える。
     pub unsafe fn heap_mut(&mut self) -> &mut Heap<M> {
         &mut self.heap
@@ -1695,8 +1718,8 @@ impl<M: Mode> Ctx<M> {
     ///
     /// # Safety
     /// `heap_mut` の前提を守っている。`ev` と `c` は即値か、このヒープか付けた塊の生きている物体を指し、呼ぶ側が `c`
-    /// の参照を1つ持つ。`c` は `lin` ビットを持たない。速いモードでは、`ev` は evidence で、`op` は入口の数より小さく、
-    /// 欄はまだ `()` で、入口の表はほかのスレッドが読めない局所の物体である (検査モードは確かめ、違えば `BadEvidence`
+    /// の参照を1つ持つ。速いモードでは、`ev` は evidence で、`op` は入口の数より小さく、欄はまだ `()` で、`c` は `lin`
+    /// ビットを持たず、入口の表はほかのスレッドが読めない局所の物体である (検査モードは確かめ、違えば `BadEvidence`
     /// を、書けない表には `NotWritable` を返す)。
     pub unsafe fn ev_set_clause(&mut self, ev: Word, op: usize, c: Word) -> (r: Result<
         (),
@@ -1745,9 +1768,12 @@ impl<M: Mode> Ctx<M> {
             },
             M::CHECKED && old(self).held_ok() && old(self).ev_shape(ev) && (op >= old(self).ev_ops(
                 ev,
-            ) || old(self).ev_entry(ev, op as int).bits_spec() != 1) ==> r == Err::<(), HeapError>(
-                HeapError::BadEvidence,
-            ),
+            ) || old(self).ev_entry(ev, op as int).bits_spec() != 1 || (c.is_ptr_spec() && old(
+                self,
+            ).heap_spec().readable(c) && old(self).heap_spec().lin_of(c))) ==> r == Err::<
+                (),
+                HeapError,
+            >(HeapError::BadEvidence),
     {
         let ghost s0 = *self;
         let ghost k = s0.held_ok() && s0.ev_shape(ev) && op < s0.ev_ops(ev) && s0.ev_entry(
@@ -1770,6 +1796,17 @@ impl<M: Mode> Ctx<M> {
             let cur = (unsafe { self.heap.scanned(t, op) })?;
             if cur.bits() != 1 {
                 return Err(HeapError::BadEvidence);
+            }
+            // `ev_clause` が節を dup するので、`lin` の節は後で `LinDup` になる。入れる時点で断り、誤りを起こした呼び出しで報告する
+
+            if c.is_ptr() {
+                let cm = (unsafe { self.heap.meta(c) })?;
+                proof {
+                    cm.lemma_fields();
+                }
+                if cm.lin() {
+                    return Err(HeapError::BadEvidence);
+                }
             }
             t
         } else {
@@ -1989,11 +2026,7 @@ impl<M: Mode> Ctx<M> {
     {
         let ghost s0 = *self;
         let ghost c = s0.held_ok();
-        let tag: u16 = if effect == u16::MAX {
-            0
-        } else {
-            effect + 1
-        };
+        let tag = tag_of_effect(effect);
         let want = Meta::new(tag, 2, Kind::Data, false);
         proof {
             want.lemma_fields();
@@ -2299,15 +2332,9 @@ impl<M: Mode> Ctx<M> {
             let t = mt.tag();
             proof {
                 assert(t == hs.tag_of(node));
-                lemma_wseen_bounds(hs, w, i as nat, t);
             }
             let occ = count_effect(effects, t);
-            let keep = if occ == 0 {
-                true
-            } else {
-                let n = count_tag(&self.heap, Ghost(hs), w, i, t)?;
-                n >= occ
-            };
+            let keep = seen_at_least(&self.heap, Ghost(hs), w, i, t, occ)?;
             proof {
                 assert(keep == wkept(effects@, hs, w, i as nat));
                 if c {
@@ -2637,15 +2664,9 @@ impl<M: Mode> Ctx<M> {
                     }
                 }
                 lemma_agree_refl(h, w, k as nat);
-                lemma_wseen_bounds(h, w, k as nat, t);
             }
             let occ = count_effect(effects, t);
-            let keep = if occ == 0 {
-                true
-            } else {
-                let n = count_tag(&self.heap, Ghost(h), w, k, t)?;
-                n >= occ
-            };
+            let keep = seen_at_least(&self.heap, Ghost(h), w, k, t, occ)?;
             proof {
                 assert(keep == wkept(effects@, h, w, k as nat));
                 if c {

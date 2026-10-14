@@ -2607,13 +2607,15 @@ pub(super) proof fn lemma_copies_path<M: Mode>(
     assert(ev_ok(h, out[k].1));
 }
 
-pub(super) proof fn lemma_wseen_bounds<M: Mode>(h: Heap<M>, w: Word, i: nat, t: u16)
+pub(super) proof fn lemma_wseen_mono<M: Mode>(h: Heap<M>, w: Word, j: nat, i: nat, t: u16)
+    requires
+        j <= i,
     ensures
-        0 <= wseen(h, w, i, t) <= i,
+        wseen(h, w, j, t) <= wseen(h, w, i, t),
     decreases i,
 {
-    if i > 0 {
-        lemma_wseen_bounds(h, w, (i - 1) as nat, t);
+    if j < i {
+        lemma_wseen_mono(h, w, j, (i - 1) as nat, t);
     }
 }
 

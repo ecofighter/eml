@@ -296,15 +296,25 @@ fn every_primitive_once<M: Mode>() {
         let renewed = ctx.ev_renew(found, UNIT).unwrap();
         ctx.heap_mut().decref(found).unwrap();
         let list = ctx.evv_get().unwrap();
-        let masked = ctx.evv_mask(&[1], list).unwrap();
+        // e0 を除き、e1 の節点を写す
+        let masked = ctx.evv_mask(&[0], list).unwrap();
+        assert_ne!(masked, list);
+        assert_eq!(ctx.heap().field(masked, 0), Ok(e1));
         for w in [masked, list] {
             ctx.heap_mut().decref(w).unwrap();
         }
         // yield の1往復
         ctx.yield_to(renewed, UNIT, Word::imm(1)).unwrap();
+        assert_eq!(ctx.yielding(), 1);
+        assert_eq!(ctx.yield_status(renewed), 1);
         let k = ctx.yield_cont_take().unwrap();
         ctx.yield_cont_set(k).unwrap();
         assert_eq!(ctx.yield_cont_take(), Ok(Word::imm(1)));
+        assert_eq!(ctx.yield_finish(), Ok(UNIT));
+        // 中断の1往復
+        ctx.heap_mut().dup(e1).unwrap();
+        ctx.yield_abort(e1, UNIT, UNIT).unwrap();
+        assert_eq!(ctx.yield_status(e1), 2);
         assert_eq!(ctx.yield_finish(), Ok(UNIT));
         assert_eq!(ctx.poll(0), Ok(()));
         for e in [e0, e1] {
@@ -553,18 +563,21 @@ fn two_threads_share_one_control<M: Mode>() {
     assert_eq!(control.bytes(), 0);
 }
 
-// 別のスレッドが立てた止める語を読む
+// 別のスレッドが立てている間の止める語を読む。join の後だけ読むと、並んだ読み書きを通らない
 #[test]
 fn an_interrupt_from_another_thread_is_seen() {
     let control = Arc::new(Control::new(Limits::default()));
+    let ctx = Ctx::<Fast>::new(control.clone());
     let setter = {
         let control = control.clone();
         std::thread::spawn(move || control.interrupt())
     };
+    while ctx.poll(0).is_ok() {
+        std::thread::yield_now();
+    }
+    assert_eq!(ctx.poll(0), Err(crate::Stop::Interrupted));
     setter.join().unwrap();
     assert_eq!(control.stop_bits(), Control::INTERRUPT);
-    let ctx = Ctx::<Fast>::new(control);
-    assert_eq!(ctx.poll(0), Err(crate::Stop::Interrupted));
 }
 
 both_modes!(

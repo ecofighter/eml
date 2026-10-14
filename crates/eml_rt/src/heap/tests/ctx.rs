@@ -261,6 +261,15 @@ fn bad_evidence_is_reported_in_checked_mode<M: Mode>() {
             ctx.ev_set_clause(ev, 0, c2).unwrap_err(),
             HeapError::BadEvidence
         );
+        // lin の節の本体 (ev_clause が dup するので、入れる前に断る)
+        let ev2 = push(&mut ctx, 1, 1);
+        let lin = ctx.heap_mut().alloc_data(0, 1, 0, true);
+        assert_eq!(
+            ctx.ev_set_clause(ev2, 0, lin).unwrap_err(),
+            HeapError::BadEvidence
+        );
+        assert_eq!(ctx.ev_clause(ev2, 0).unwrap(), UNIT);
+        ctx.heap_mut().decref(lin).unwrap();
         // エフェクトの番号の上限 (tag は番号 + 1 なので 65535 は作れない)
         assert_eq!(
             ctx.ev_new(u16::MAX, 1, UNIT, UNIT).unwrap_err(),
@@ -374,14 +383,18 @@ fn a_mask_that_skips_more_evidence_than_the_list_holds<M: Mode>() {
     let _e1 = push(&mut ctx, 1, 1);
     unsafe {
         let list = ctx.evv_get().unwrap();
+        let before = super::mortal(ctx.heap());
         assert_eq!(
             ctx.evv_mask(&[1, 1], list).unwrap_err(),
             HeapError::NoHandler
         );
+        // 確保の前に断るので、写しは残らず、たどった数も数えない
+        assert_eq!(super::mortal(ctx.heap()), before);
+        assert_eq!(ctx.stats().evidence_steps, 0);
     }
 }
 
-/// 輪になった evv は、小さい上限で BadEvidence になって止まる。
+/// 輪になった evv をたどる `ev_lookup` と `evv_mask` は、小さい上限で BadEvidence になって止まる。
 fn a_cyclic_evv_stops_at_the_limit<M: Mode>() {
     if !M::CHECKED {
         return;
@@ -398,6 +411,11 @@ fn a_cyclic_evv_stops_at_the_limit<M: Mode>() {
         super::raw::set_slot(list, 1, list);
         ctx.heap_mut().decref(list).unwrap();
         assert_eq!(ctx.ev_lookup(5).unwrap_err(), HeapError::BadEvidence);
+        let list = ctx.evv_get().unwrap();
+        assert_eq!(
+            ctx.evv_mask(&[5], list).unwrap_err(),
+            HeapError::BadEvidence
+        );
     }
 }
 
@@ -530,7 +548,7 @@ fn a_refused_push_keeps_its_arguments<M: Mode>() {
     assert_eq!(super::mortal(ctx.heap()), 0);
 }
 
-/// 共有にした evidence の状態の欄は書けない (docs/spec/lir.md の「evidence」)。欄は元の値のままである。
+/// 共有にした evidence の状態の欄は書けない (docs/spec/lir.md の「evidence」)。欄は元の値のままで、物体も増減しない。
 fn the_state_of_a_shared_evidence_is_not_writable<M: Mode>() {
     if !M::CHECKED {
         return;
@@ -540,6 +558,7 @@ fn the_state_of_a_shared_evidence_is_not_writable<M: Mode>() {
     unsafe {
         ctx.ev_set_state(ev, Word::imm(5)).unwrap();
         ctx.heap_mut().share(ev, 1).unwrap();
+        let before = super::mortal(ctx.heap());
         assert_eq!(ctx.ev_take_state(ev).unwrap_err(), HeapError::NotWritable);
         assert_eq!(ctx.heap().field(ev, 1), Ok(Word::imm(5)));
         assert_eq!(
@@ -547,6 +566,7 @@ fn the_state_of_a_shared_evidence_is_not_writable<M: Mode>() {
             HeapError::NotWritable
         );
         assert_eq!(ctx.heap().field(ev, 1), Ok(Word::imm(5)));
+        assert_eq!(super::mortal(ctx.heap()), before);
     }
 }
 
