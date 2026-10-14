@@ -777,7 +777,7 @@ fn the_externs_match_the_table<M: Mode>() {
         for w in args.release {
             unsafe { ctx.heap_mut().decref(w) }.unwrap();
         }
-        assert_eq!(got, case.outcome, "{}", table::line(&case));
+        assert_eq!(table::digest(got), case.outcome, "{}", table::line(&case));
         assert_eq!(mortal(ctx.heap()), args.immortals, "{}", table::line(&case));
     }
     std::fs::remove_dir_all(&root).ok();

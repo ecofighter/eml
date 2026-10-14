@@ -314,7 +314,7 @@ fn the_interpreter_matches_the_table() {
             continue;
         }
         assert_eq!(
-            outcome(&case.name, &case.args, &root),
+            table::digest(outcome(&case.name, &case.args, &root)),
             case.outcome,
             "{}",
             table::line(&case)

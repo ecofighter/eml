@@ -29,6 +29,33 @@ pub enum Outcome {
     Out(String),
     /// 位置を除いた誤りの文言
     Err(String),
+    /// `HASHED_OVER` バイトより長い文字列の結果 (`Str` か `Out`) のバイト数と FNV-1a の値。1 MiB の中身をそのまま
+    /// 書くと、表が読めない大きさになる
+    Hashed {
+        len: usize,
+        hash: u64,
+    },
+}
+
+/// これより長い文字列の結果は、長さと FNV-1a の値で比べる
+pub const HASHED_OVER: usize = 4096;
+
+/// 長い文字列の結果を `Hashed` にする。表と比べる前に、両方の側が結果をこれに通す
+pub fn digest(outcome: Outcome) -> Outcome {
+    match outcome {
+        Outcome::Str(s) | Outcome::Out(s) if s.len() > HASHED_OVER => Outcome::Hashed {
+            len: s.len(),
+            hash: fnv1a(s.as_bytes()),
+        },
+        other => other,
+    }
+}
+
+/// 64 ビットの FNV-1a
+fn fnv1a(bytes: &[u8]) -> u64 {
+    bytes.iter().fold(0xcbf2_9ce4_8422_2325, |h, &b| {
+        (h ^ b as u64).wrapping_mul(0x0000_0100_0000_01b3)
+    })
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -207,6 +234,15 @@ fn parse_outcome(text: &str) -> Result<Outcome, String> {
         "s" => Outcome::Str(quoted(value)?),
         "out" => Outcome::Out(quoted(value)?),
         "err" => Outcome::Err(quoted(value)?),
+        "h" => {
+            let (len, hash) = value
+                .split_once(':')
+                .ok_or_else(|| format!("a hashed result without a hash: {text}"))?;
+            Outcome::Hashed {
+                len: len.parse().map_err(|_| format!("not a length: {len}"))?,
+                hash: u64::from_str_radix(hash, 16).map_err(|_| format!("not a hash: {hash}"))?,
+            }
+        }
         _ => return Err(format!("an unknown result kind: {text}")),
     })
 }
@@ -242,13 +278,14 @@ pub fn line(case: &Case) -> String {
         Arg::Rel(s) => format!("f:{s:?}"),
         Arg::Abs(s) => format!("a:{s:?}"),
     }));
-    let outcome = match &case.outcome {
+    let outcome = match &digest(case.outcome.clone()) {
         Outcome::Int(v) => format!("i:{v}"),
         Outcome::Bool(b) => format!("b:{}", bool_name(*b)),
         Outcome::Order(o) => format!("o:{o}"),
         Outcome::Str(s) => format!("s:{s:?}"),
         Outcome::Out(s) => format!("out:{s:?}"),
         Outcome::Err(s) => format!("err:{s:?}"),
+        Outcome::Hashed { len, hash } => format!("h:{len}:{hash:016x}"),
     };
     fields.push(format!("=> {outcome}"));
     fields.join("\t")
