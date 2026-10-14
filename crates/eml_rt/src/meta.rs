@@ -285,6 +285,19 @@ impl Meta {
     }
 }
 
+impl Meta {
+    /// `meta` の値の欄は、それぞれの欄の spec と同じである。ヒープの述語 (値の言葉) と `Meta` のメソッドの約束
+    /// (欄の spec の言葉) をつなぐ。
+    pub(crate) proof fn lemma_fields(self)
+        ensures
+            bits_tag(self.bits_spec()) == self.tag_spec(),
+            bits_scan(self.bits_spec()) == self.scan_spec(),
+            bits_kind(self.bits_spec()) == self.kind_spec(),
+            bits_lin(self.bits_spec()) == self.lin_spec(),
+    {
+    }
+}
+
 /// ヘッダの `meta` の欄の値 (整数) の仕様。ヒープの不変条件は、メモリの値をこの言葉で書く。
 pub(crate) open spec fn bits_wf(bits: u32) -> bool {
     known_kind((bits >> 24) & 0xF) && bits & 0x7000_0000 == 0

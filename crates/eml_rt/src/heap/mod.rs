@@ -223,6 +223,9 @@ proof fn lemma_unit_filled_extend(before: BlockPerm, after: BlockPerm, lo: int, 
         && p_word(after, j).bits_spec() == 1 by {
         if j != hi {
             assert(p_init(before, j));
+            assert(after.slots[j] == before.slots[j]);
+        } else {
+            assert(after.slots.contains_key(hi));
         }
     }
 }
@@ -935,7 +938,13 @@ impl<M: Mode> Heap<M> {
             final(self).kind_of(w) == Kind::Data,
             final(self).count_of(w) == scanned,
             final(self).tag_of(w) == tag,
+            final(self).scan_of(w) == if scanned >= 255 {
+                255u8
+            } else {
+                scanned as u8
+            },
             final(self).lin_of(w) == lin,
+            final(self).owned(w),
             forall|i: int|
                 0 <= i < scanned ==> (#[trigger] final(self).scanned_word(w, i)).bits_spec() == 1,
             M::CHECKED ==> final(self).words_kept(*old(self)),
@@ -2657,6 +2666,11 @@ impl<M: Mode> Heap<M> {
     /// `w` の物体の tag。
     pub closed spec fn tag_of(&self, w: Word) -> u16 {
         bits_tag(self.core.meta_bits(w.bits_spec()))
+    }
+
+    /// `w` の物体の `meta` の `scan`。255 なら、走査する語の数はペイロードの先頭の語にある。
+    pub closed spec fn scan_of(&self, w: Word) -> u8 {
+        bits_scan(self.core.meta_bits(w.bits_spec()))
     }
 
     /// 呼ぶ前と後の両方で生きているブロックは、`meta`、走査する語、生の語、文字列のバイト、rc の符号、持ち主を変えない。

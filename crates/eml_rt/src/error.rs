@@ -30,6 +30,8 @@ pub enum HeapError {
     SharedReachesLocal,
     ImmortalReachesMortal,
     YieldMisuse,
+    BadEvidence,
+    NoHandler,
 }
 
 } // verus!
@@ -78,6 +80,10 @@ impl fmt::Display for HeapError {
             HeapError::YieldMisuse => {
                 f.write_str("an evidence-passing primitive breaks the yield state")
             }
+            HeapError::BadEvidence => f.write_str(
+                "an evidence-passing primitive reads something that is not an evidence, an evv node or an entry table",
+            ),
+            HeapError::NoHandler => f.write_str("no evidence of the effect is in the evv"),
         }
     }
 }

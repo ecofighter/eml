@@ -598,6 +598,7 @@ impl Core {
                 0nat
             },
             final(self).model@.written[h@.addr] == Set::<int>::empty(),
+            final(self).model@.owner[h@.addr] == owner,
             final(self).model@.building == if st == BlockState::Building {
                 Some(h@.addr)
             } else {

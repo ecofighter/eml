@@ -10,13 +10,27 @@ pub(super) fn ctx<M: Mode>() -> Ctx<M> {
     Ctx::new(Arc::new(Control::new(Limits::default())))
 }
 
-/// エフェクト 0、操作1つの evidence を、基本操作を使わずにヒープに作る。
+/// エフェクト 0、操作1つの evidence を作る。外側の evv は空である。
 pub(super) fn ctx_evidence<M: Mode>(ctx: &mut Ctx<M>) -> Word {
-    let heap = unsafe { ctx.heap_mut() };
-    let table = heap.alloc_data(0, 1, 0, false);
-    let ev = heap.alloc_data(1, 3, 0, false);
-    unsafe { heap.set_field(ev, 0, table) }.unwrap();
-    ev
+    unsafe { ctx.ev_new(0, 1, UNIT, UNIT) }.unwrap()
+}
+
+/// 今の evv の先頭に、エフェクト `effect` の新しい evidence を足し、その evidence を返す (呼ぶ側が1つ参照を持つ)。
+pub(super) fn push<M: Mode>(ctx: &mut Ctx<M>, effect: u16, n_ops: usize) -> Word {
+    unsafe {
+        let outer = ctx.evv_get().unwrap();
+        let ev = ctx.ev_new(effect, n_ops, UNIT, outer).unwrap();
+        ctx.heap_mut().dup(ev).unwrap();
+        let list = ctx.evv_get().unwrap();
+        let list = ctx.evv_push(list, ev).unwrap();
+        ctx.evv_set(list).unwrap();
+        ev
+    }
+}
+
+/// 今の evv を空にする。
+pub(super) fn clear<M: Mode>(ctx: &mut Ctx<M>) {
+    unsafe { ctx.evv_set(UNIT) }.unwrap();
 }
 
 fn a_new_ctx_is_finished<M: Mode>() {
@@ -128,6 +142,135 @@ fn dropping_a_ctx_mid_yield<M: Mode>() {
     drop(ctx);
 }
 
+fn lookup_finds_the_innermost_evidence<M: Mode>() {
+    let mut ctx = ctx::<M>();
+    let e0 = push(&mut ctx, 0, 1);
+    let e1 = push(&mut ctx, 1, 1);
+    let e0_inner = push(&mut ctx, 0, 1);
+    unsafe {
+        let found = ctx.ev_lookup(0).unwrap();
+        assert_eq!(found, e0_inner);
+        ctx.heap_mut().decref(found).unwrap();
+        let found = ctx.ev_lookup(1).unwrap();
+        assert_eq!(found, e1);
+        ctx.heap_mut().decref(found).unwrap();
+        for e in [e0, e1, e0_inner] {
+            ctx.heap_mut().decref(e).unwrap();
+        }
+    }
+    clear(&mut ctx);
+    assert!(ctx.check_finished());
+}
+
+fn clauses_states_and_outer_lists<M: Mode>() {
+    let mut ctx = ctx::<M>();
+    let ev = push(&mut ctx, 0, 2);
+    unsafe {
+        let clause = ctx.heap_mut().alloc_data(0, 1, 0, false);
+        ctx.ev_set_clause(ev, 1, clause).unwrap();
+        let got = ctx.ev_clause(ev, 1).unwrap();
+        assert_eq!(got, clause);
+        ctx.heap_mut().decref(got).unwrap();
+        assert_eq!(ctx.ev_clause(ev, 0).unwrap(), UNIT);
+        // 状態の出し入れ
+        let s = ctx.heap_mut().alloc_string("state");
+        ctx.ev_set_state(ev, s).unwrap();
+        let taken = ctx.ev_take_state(ev).unwrap();
+        assert_eq!(taken, s);
+        assert_eq!(ctx.ev_take_state(ev).unwrap(), UNIT);
+        ctx.heap_mut().decref(taken).unwrap();
+        // 外側の evv は、作ったときの evv (空) である
+        assert_eq!(ctx.ev_evv(ev).unwrap(), UNIT);
+        // renew は同じ入口の表を指し、外側を今の evv にする
+        let renewed = ctx.ev_renew(ev, UNIT).unwrap();
+        let got = ctx.ev_clause(renewed, 1).unwrap();
+        assert_eq!(got, clause);
+        ctx.heap_mut().decref(got).unwrap();
+        let outer = ctx.ev_evv(renewed).unwrap();
+        let now = ctx.evv_get().unwrap();
+        assert_eq!(outer, now);
+        for w in [outer, now, renewed, ev] {
+            ctx.heap_mut().decref(w).unwrap();
+        }
+    }
+    clear(&mut ctx);
+    assert!(ctx.check_finished());
+    assert_eq!(super::mortal(ctx.heap()), 0);
+}
+
+/// 操作が 255 個以上のエフェクトの入口の表は、先頭に数の語を持つ (docs/spec/object-model.md の「物体の形」)。
+fn entry_tables_with_a_count_word<M: Mode>() {
+    let mut ctx = ctx::<M>();
+    let ev = push(&mut ctx, 0, 300);
+    unsafe {
+        let clause = ctx.heap_mut().alloc_data(0, 1, 0, false);
+        ctx.ev_set_clause(ev, 299, clause).unwrap();
+        assert_eq!(ctx.ev_clause(ev, 0).unwrap(), UNIT);
+        let got = ctx.ev_clause(ev, 299).unwrap();
+        assert_eq!(got, clause);
+        ctx.heap_mut().decref(got).unwrap();
+        ctx.heap_mut().decref(ev).unwrap();
+    }
+    clear(&mut ctx);
+    assert_eq!(super::mortal(ctx.heap()), 0);
+}
+
+/// 状態の欄を通る輪 (docs/spec/lir.md の「evidence」): 状態が ev を指す物体を持っていても、ev を呼ぶ側が
+/// 持っている限り、元の状態を手放しても ev は生き残る。
+fn replacing_a_state_that_reaches_its_evidence<M: Mode>() {
+    let mut ctx = ctx::<M>();
+    let ev = push(&mut ctx, 0, 1);
+    unsafe {
+        let holder = ctx.heap_mut().alloc_data(0, 1, 0, false);
+        ctx.heap_mut().dup(ev).unwrap();
+        ctx.heap_mut().set_field(holder, 0, ev).unwrap();
+        ctx.ev_set_state(ev, holder).unwrap();
+        ctx.ev_set_state(ev, UNIT).unwrap();
+        // ev はまだ読める
+        assert_eq!(ctx.ev_take_state(ev).unwrap(), UNIT);
+        ctx.heap_mut().decref(ev).unwrap();
+    }
+    clear(&mut ctx);
+    assert_eq!(super::mortal(ctx.heap()), 0);
+}
+
+fn bad_evidence_is_reported_in_checked_mode<M: Mode>() {
+    if !M::CHECKED {
+        return;
+    }
+    let mut ctx = ctx::<M>();
+    unsafe {
+        // evidence でない物体 (tag 0 のクロージャ)
+        let closure = ctx.heap_mut().alloc_data(0, 3, 0, false);
+        assert_eq!(
+            ctx.ev_clause(closure, 0).unwrap_err(),
+            HeapError::BadEvidence
+        );
+        assert_eq!(
+            ctx.ev_take_state(closure).unwrap_err(),
+            HeapError::BadEvidence
+        );
+        // 範囲の外の操作
+        let ev = push(&mut ctx, 0, 1);
+        assert_eq!(ctx.ev_clause(ev, 1).unwrap_err(), HeapError::BadEvidence);
+        // 入口の欄に2回入れる
+        let c = ctx.heap_mut().alloc_data(0, 1, 0, false);
+        ctx.ev_set_clause(ev, 0, c).unwrap();
+        let c2 = ctx.heap_mut().alloc_data(0, 1, 0, false);
+        assert_eq!(
+            ctx.ev_set_clause(ev, 0, c2).unwrap_err(),
+            HeapError::BadEvidence
+        );
+        // エフェクトの番号の上限 (tag は番号 + 1 なので 65535 は作れない)
+        assert_eq!(
+            ctx.ev_new(u16::MAX, 1, UNIT, UNIT).unwrap_err(),
+            HeapError::BadEvidence
+        );
+        // 合う evidence がない
+        assert_eq!(ctx.ev_lookup(7).unwrap_err(), HeapError::NoHandler);
+    }
+}
+
 both_modes!(
     a_new_ctx_is_finished,
     poll_reports_each_stop,
@@ -136,4 +279,9 @@ both_modes!(
     misused_yields_are_reported_in_checked_mode,
     evv_get_and_set_swap_the_list,
     dropping_a_ctx_mid_yield,
+    lookup_finds_the_innermost_evidence,
+    clauses_states_and_outer_lists,
+    entry_tables_with_a_count_word,
+    replacing_a_state_that_reaches_its_evidence,
+    bad_evidence_is_reported_in_checked_mode,
 );
