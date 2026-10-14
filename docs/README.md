@@ -35,6 +35,7 @@ eml を実装するエージェントとプログラマのための文書群で�
 | [future/roadmap.md](future/roadmap.md) | 将来の設計 | 再設計の段 (S8〜S13)、その後の言語の項目と処理系の項目 |
 | [future/multicore.md](future/multicore.md) | 将来の設計 | マルチコア対応の設計 (共有の印方式の RC、`par`、並行処理、継続の移動) |
 | [future/stdlib.md](future/stdlib.md) | 将来の設計 | 標準ライブラリ spec への申し送り |
+| [future/verification.md](future/verification.md) | 将来の設計 | Verus で検証する範囲 (Kind 推論の解く部分を証明する方針、型検査と evidence passing を扱わない理由) |
 | **reports/** | 調査 | 実装の方針を決めるための調査レポート。書いた時点のコミットに基づき、後から更新しない |
 | [reports/eml/](reports/eml/) | 調査 | VM のマルチコア対応 (2026-10-10) |
 
