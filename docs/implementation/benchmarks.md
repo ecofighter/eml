@@ -44,7 +44,7 @@ valgrind が arm64 の macOS で動かないので、callgrind は使わない�
 
 段の終わりに `bench/run.sh` を流し、出力の環境と表を、下の「記録」に段の見出しを付けて足す。
 
-`bench/rt.sh` は、`eml_rt` の速いモードを測る ([オブジェクトモデル](../spec/object-model.md))。`crates/eml_rt/examples/rt_bench.rs` を release ビルドにし、次の8つの計測を `bench/run.sh` と同じ方法で3回ずつ走らせて、同じ形の表を出す。`eml_rt` はまだ `eml run` から使わないので、`bench/` のプログラムでなく、ヒープの操作を直接呼ぶ。
+`bench/rt.sh` は、`eml_rt` の速いモードを測る ([オブジェクトモデル](../spec/object-model.md))。`crates/eml_rt/examples/rt_bench.rs` を release ビルドにし、次の14の計測を `bench/run.sh` と同じ方法で3回ずつ走らせて、同じ形の表を出す。`eml_rt` はまだ `eml run` から使わないので、`bench/` のプログラムでなく、ヒープの操作を直接呼ぶ。
 
 | 計測 | 中身 |
 |---|---|
@@ -56,6 +56,12 @@ valgrind が arm64 の macOS で動かないので、callgrind は使わない�
 | `map` | 1,000,000 個のリストを作り、`map (+1)` に当たる作り直しを10回行う。古いセルは `release` で空け、新しいセルは `alloc` で取る |
 | `map-reuse` | `map` と同じ作り直しを、`release_reuse` と `con_at` で行う。reuse analysis はまだないので、列は手で組む。reuse の効果の見込みを、パスを作る前に数字で持つためである |
 | `append` | 空の文字列から始め、一意な文字列に `string_push` で 1 バイトずつ足すことを、10,000,000 回繰り返す。その場の追記と、倍の容量での作り直しの費用である |
+| `perform` | evidence が1つの `evv` で、`ev_lookup` と `ev_clause` を呼んで結果を手放すことを、10,000,000 回繰り返す。handler の中で `perform` してその場で戻る道である |
+| `perform-deep` | 同じことを、8つの evidence の `evv` の最も奥の evidence に対して行う |
+| `handle` | handler を `evv_get`、`ev_new`、`ev_set_clause`、`evv_push`、`evv_set` で設け、`ev_evv` と `evv_set` で外すことを、1,000,000 回繰り返す |
+| `yield` | yield を始め、κ を取り出して入れ直し、yield を終える1往復を、10,000,000 回繰り返す |
+| `mask` | 4つの evidence の `evv` で、2つ目の evidence を飛ばす `evv_mask` を呼び、結果を手放すことを、10,000,000 回繰り返す |
+| `poll` | 安全点の確かめ `Ctx::poll` を、100,000,000 回繰り返す |
 
 ## 記録
 
@@ -392,8 +398,68 @@ S9b-1 との差は次のとおりで、どれも 0.5% を超えて増えてい�
 
 速い道で変えたのは、`string_push` が容量を読む位置 (一意な左辺の枝の中に移した) と、`Heap` の付けた塊の欄と、検査モードだけが使う構築中の物体の番地の欄だけである。呼ぶ側に展開されずに残る `eml_rt` の関数の集まりは S9b-1 と同じで、増えたのは塊を手放す関数 (`release_region` と、`Frozen` と `Pages` の後始末) だけである。構築中の物体の番地の欄を足す前は `map-reuse` が 575793574 (-3.36%) で、fd26d0d で測り直しても同じだったが、欄を足すと S9b-1 の値に戻った。欄の書き込みを除いても戻ったままで、展開されない関数の集まりも変わらなかったので、`Heap` の欄の配置による差と見ている。減った理由と戻った理由は調べていない。
 
-`Heap` の欄を初めは `Option<Arc<Frozen<M>>>` のまま持ったところ、`list` が +2.3%、`free` が +2.6%、`map` が +1.6%、`map-reuse` が +46%、`append` が +152% 増えた。`string_push`、文字列を作る `make_text`、`release` が呼ぶ側に展開されなくなっていた。原因は、`Heap` の後始末に `Arc` を手放す処理が加わったことで、欄を `ManuallyDrop` にして手放さないと元に戻った。そこで欄を `ManuallyDrop` にし、`Heap` の `Drop` が後始末の後で `#[inline(never)]` の関数 `release_region` に渡して手放す形にした。S9b-1 と同じく、計測のプログラムの形でなく、`eml_rt` の関数の展開の判断の問題である。
+`Heap` の欄を初めは `Option<Arc<Frozen<M>>>` のまま持ったところ、`list` が +2.3%、`free` が +2.6%、`map` が +1.6%、`map-reuse` が +46%、`append` が +152% 増えた。`string_push`、文字列を作る `make_text`、`release` が呼ぶ側に展開されなくなっていた。欄を `ManuallyDrop` にして手放さないと元に戻ったので、欄を `ManuallyDrop` にし、`Heap` の `Drop` が後始末の後で `#[inline(never)]` の関数 `release_region` に渡して手放す形にした。原因は、後始末の処理の費用ではない。S9b-2b で inline の判断の注釈 (`-C remark=inline`) を見ると、展開されなかった理由は「definition is unavailable」だった。計測のプログラムの中の総称な関数の実体をコード生成単位に分ける分け方が変わり、速い道の関数が呼ぶ側と別の単位に入っていた (下の「S9b-2b (実行文脈)」)。`Heap` の後始末を変えると、この分け方が変わる。
 
 検査モードの `set_field` と `set_raw` に、構築中でない rc 0 以下の物体を断る確かめを足したときも、同じ増え方が起きた。確かめを関数 `checked_unshared` に分け、速いモードでも呼んで中ですぐ戻る形にしたところ、`list` が +2.4%、`free` が +2.6%、`map` が +1.6%、`map-reuse` が +49%、`append` が +152% 増え、`string_push`、`make_text`、`release` が呼ぶ側に展開されなくなっていた。呼ぶ側の `M::CHECKED` の枝の中で呼ぶ形にすると元に戻った。
+
+`eml_rt` は `eml run` から使わないので、`bench/run.sh` の表は測らない。`RunStats` と `crates/eml_interp/tests/bench.rs` のスナップショットも変わらない。
+
+### S9b-2b (実行文脈)
+
+`bench/rt.sh` の記録である。
+
+- 機種: Mac16,1 (Apple M4)
+- OS: macOS 27.0.1 (26A434)
+- rustc: rustc 1.98.1 (48a229cea 2026-09-01)
+- コミット: 5d0dd2b
+
+| 計測 | instructions retired | 実時間 (s) |
+|---|---:|---:|
+| `empty` | 15125902 | 0.00 |
+| `list` | 940357611 | 0.03 |
+| `box-list` | 3074194925 | 0.10 |
+| `dup` | 275211874 | 0.01 |
+| `free` | 1535192207 | 0.05 |
+| `map` | 1488193150 | 0.05 |
+| `map-reuse` | 568325751 | 0.02 |
+| `append` | 276042224 | 0.01 |
+| `perform` | 515175884 | 0.01 |
+| `perform-deep` | 865218390 | 0.03 |
+| `handle` | 523189165 | 0.01 |
+| `yield` | 345292845 | 0.08 |
+| `mask` | 3135270316 | 0.09 |
+| `poll` | 1415199807 | 0.06 |
+
+今ある8つの計測の S9b-2a との差は次のとおりで、どれも 0.5% を超えて増えていない。2回目の実行は、`empty` が 15158599 (+0.16%) で、ほかの計測は1回目と 0.08 ポイント以内しか違わなかった。`box-list` は `eml_rt` を使わない。
+
+| 計測 | S9b-2a | S9b-2b | 差 |
+|---|---:|---:|---:|
+| `empty` | 15134844 | 15125902 | -0.06% |
+| `list` | 937799959 | 940357611 | +0.27% |
+| `box-list` | 3063230842 | 3074194925 | +0.36% |
+| `dup` | 275136848 | 275211874 | +0.03% |
+| `free` | 1545213697 | 1535192207 | -0.65% |
+| `map` | 1495815918 | 1488193150 | -0.51% |
+| `map-reuse` | 595795967 | 568325751 | -4.61% |
+| `append` | 295555287 | 276042224 | -6.60% |
+
+新しい6つの計測は、S9b-2b の基準である。`empty` の値を引くと、1回あたりの命令の数は次のとおりである。
+
+| 計測 | 1回あたり |
+|---|---:|
+| `perform` | 約50 |
+| `perform-deep` | 約85 |
+| `handle` | 約508 |
+| `yield` | 約33 |
+| `mask` | 約312 (写した節点1つを手放す分を含む) |
+| `poll` | 約14 |
+
+`perform` と `perform-deep` の差から、`ev_lookup` が節点を1つ進む費用は約5命令である。
+
+S9b-2a と同じ増え方が2回起きた。`Heap` に `Control` の欄を足したときは、`map-reuse` が約 +46%、`append` が約 +152% 増えた。計測のプログラムで `Ctx` を使い始めたときは、`list` が +2.4%、`free` が +2.6%、`map-reuse` が +85%、`append` が +152% 増えた。どちらも、`string_push` や `make_text` などが呼ぶ側に展開されなくなっていた。2回目は、`Ctx` を作って `poll` を呼んで落とすだけの計測を1つ足しても起きた。inline の判断の注釈 (`-C remark=inline`) を見ると、どれも理由は「definition is unavailable」だった。総称な関数の実体は、使う側のバイナリのコード生成単位の1つにしかできず、ほかの単位からは展開できない。`Ctx` の写しが足されて、計測のプログラムを単位に分ける分け方が変わり、速い道の関数が呼ぶ側と別の単位に入っていた。`eml_rt` の変更そのものの費用ではない。`Ctx` を使う計測を足す前の計測のプログラムを新しい `eml_rt` で組むと、今ある計測は S9b-2a から 0.5% 以内の値だった。
+
+`Control` の欄は、`Pages` の `ManuallyDrop` の欄にし、上限のない `Control` を作る関数をモードによらない関数に置くと元に戻った (`crates/eml_rt/src/alloc.rs` と `control.rs` の注釈)。`Ctx` を使う計測のほうは、`Heap::set_field`、`Heap::field`、`Heap::string_push`、`push_unchecked`、`release_unkept` に `#[inline]` を付けて、使う側の単位ごとに写しを作らせると元に戻った。上の表はこの後のものである。`append` が S9b-2a より 6.6% 少なくなったのは、`#[inline]` を足した後からである。足す前に、`Ctx` を使う計測のない計測のプログラムで組んだ値は 296453649 (+0.30%) だった。
+
+この戻し方は脆い。`release_children` は展開の費用の閾値の近くにあり、`release_unkept` を展開すると、`release_reuse` の中の `release_children` が閾値を超えることがある。`field` を除いた4つの関数に `#[inline]` を付けた形では、同じ設定のビルドを繰り返すと `map-reuse` が約566M命令と約1058M命令の間で変わった。`field` を足すと、3回の別々のビルドで約568M命令に留まった。後の変更で `release_children` が大きくなるか、コードが単位の間を移ると、また起きうる。そのときは `-C remark=inline` の「definition is unavailable」を先に確かめる。なお、コード生成単位を1つにしたビルド (`CARGO_PROFILE_RELEASE_CODEGEN_UNITS=1`) では、`#[inline]` を足す前でも `list`、`free`、`map`、`append` は元の値に戻ったが、`map-reuse` は約1056M命令のままだった。
 
 `eml_rt` は `eml run` から使わないので、`bench/run.sh` の表は測らない。`RunStats` と `crates/eml_interp/tests/bench.rs` のスナップショットも変わらない。

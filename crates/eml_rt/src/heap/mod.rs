@@ -3134,6 +3134,7 @@ impl<M: Mode> Heap<M> {
     // 汎用の関数の実体は、使う側のバイナリの codegen unit の1つにしかできず、ほかの unit からは展開できない。
     // `#[inline]` で unit ごとに写しを作らせる。付けないと、`Ctx` を同じバイナリで使ったときに `map-reuse` と `append` の
     // 命令の数が倍ほどになった。`field`、`string_push`、`push_unchecked`、`release_unkept` も同じ理由で付ける
+    // (docs/implementation/benchmarks.md の「S9b-2b (実行文脈)」)
     #[inline]
     pub unsafe fn set_field(&mut self, w: Word, i: usize, v: Word) -> (r: Result<(), HeapError>)
         requires

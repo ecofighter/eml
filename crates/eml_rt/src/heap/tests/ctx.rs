@@ -1,4 +1,4 @@
-//! 実行文脈と基本操作 (docs/spec/lir.md の「基本操作」)。
+//! 実行文脈と基本操作 (docs/spec/object-model.md の「実行文脈 `Ctx`」)。
 
 use std::sync::Arc;
 
@@ -271,7 +271,7 @@ fn bad_evidence_is_reported_in_checked_mode<M: Mode>() {
     }
 }
 
-/// `evv` の長さの上限が 0 なら、空のリストにも節点を足せない (docs/spec/lir.md の「実行の文脈」)。
+/// `evv` の長さの上限が 0 なら、空のリストにも節点を足せない (docs/spec/object-model.md の「実行文脈 `Ctx`」)。
 fn a_push_past_the_evv_limit_is_bad_evidence<M: Mode>() {
     if !M::CHECKED {
         return;

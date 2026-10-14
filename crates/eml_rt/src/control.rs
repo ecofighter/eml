@@ -1,5 +1,5 @@
 //! 実行の制御。セッションに1つあり、CLI と、どの worker のヒープも `Arc` で同じものを見る。実行を止める理由の語と、
-//! セッションのヒープが OS から取ったページのバイト数と、上限を持つ (docs/spec/object-model.md の「確保と解放」)。
+//! セッションのヒープが OS から取ったページのバイト数と、上限を持つ (docs/spec/object-model.md の「実行の制御」)。
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU32, AtomicUsize, Ordering};

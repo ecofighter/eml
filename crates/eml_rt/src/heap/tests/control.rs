@@ -1,4 +1,4 @@
-//! 実行の制御 (docs/spec/object-model.md の「確保と解放」)。
+//! 実行の制御 (docs/spec/object-model.md の「実行の制御」)。
 
 use std::sync::Arc;
 

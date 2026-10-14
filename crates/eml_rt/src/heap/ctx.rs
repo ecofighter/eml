@@ -1,5 +1,5 @@
-//! 実行文脈 `Ctx` (docs/spec/lir.md の「実行の文脈」)。ヒープと、今の `evv` と、yield の状態を持ち、基本操作
-//! (docs/spec/lir.md の「基本操作」) をメソッドにする。ヒープの spec の関数の中を開けるため、`heap` の子に置く。
+//! 実行文脈 `Ctx` (docs/spec/object-model.md の「実行文脈 `Ctx`」)。ヒープと、今の `evv` と、yield の状態を持ち、
+//! 基本操作 (docs/spec/lir.md の「基本操作」) をメソッドにする。ヒープの spec の関数の中を開けるため、`heap` の子に置く。
 //!
 //! `Ctx` は ghost の状態を持たず、`evv` のリストや evidence をヒープの上の spec の関数で表す。VM は検証しないコードで、
 //! 基本操作の合間にヒープを変えるので、ghost のリストを保ち続けられないためである。
@@ -2760,8 +2760,8 @@ impl<M: Mode> Ctx<M> {
 }
 
 } // verus!
-// 安全点の確かめは何も約束しないので、`verus!` の外に書く (docs/spec/lir.md の「実行の文脈」)。止める語は「止めよ」の
-// ビットだけを伝えるので、Relaxed で読む
+// 安全点の確かめは何も約束しないので、`verus!` の外に書く (docs/spec/object-model.md の「実行の制御」)。止める語は
+// 「止めよ」のビットだけを伝えるので、Relaxed で読む
 impl<M: Mode> Ctx<M> {
     /// 安全点の確かめ。`depth` は VM のタスクのスタックの語の数である。
     #[inline]
