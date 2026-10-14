@@ -195,7 +195,8 @@ fn the_same_string_on_both_sides<M: Mode>() {
     assert_eq!(mortal(ctx.heap()), 0);
 }
 
-/// 写すバイトを数える。その場で足せば右の長さ、作り直せば両方の長さ (今のインタプリタと同じ)。
+/// 写すバイトを数える。一意な左なら、その場で足しても作り直しても右の長さを、共有か不死の左なら両辺の長さを数える
+/// (今のインタプリタと同じ)。
 fn appending_counts_the_bytes_it_copies<M: Mode>() {
     let mut ctx = ctx::<M>();
     unsafe {
@@ -203,13 +204,9 @@ fn appending_counts_the_bytes_it_copies<M: Mode>() {
         let b = s(&mut ctx, "cde");
         let before = ctx.stats().string_bytes_copied;
         let w = ctx.string_append(a, b).unwrap();
-        let in_place = w == a;
         assert_eq!(text(ctx.heap(), w), "abcde");
         if M::CHECKED {
-            assert_eq!(
-                ctx.stats().string_bytes_copied - before,
-                if in_place { 3 } else { 5 }
-            );
+            assert_eq!(ctx.stats().string_bytes_copied - before, 3);
         }
         // 共有した左は作り直す
         ctx.heap_mut().dup(w).unwrap();
@@ -233,6 +230,27 @@ fn appending_counts_the_bytes_it_copies<M: Mode>() {
     }
     // 不死の `k` だけが残る
     assert_eq!(mortal(ctx.heap()), 1);
+}
+
+/// `Int.show` と `String.show` は、作った文字列の長さを数える。
+fn shows_count_the_bytes_they_write<M: Mode>() {
+    if !M::CHECKED {
+        return;
+    }
+    let mut ctx = ctx::<M>();
+    let before = ctx.stats().string_bytes_copied;
+    let w = ctx.int_show(-12);
+    assert_eq!(ctx.stats().string_bytes_copied - before, 3);
+    unsafe {
+        ctx.heap_mut().decref(w).unwrap();
+        let a = s(&mut ctx, "a\n日");
+        let before = ctx.stats().string_bytes_copied;
+        let w = ctx.string_show(a).unwrap();
+        assert_eq!(text(ctx.heap(), w), "\"a\\n日\"");
+        assert_eq!(ctx.stats().string_bytes_copied - before, 8);
+        ctx.heap_mut().decref(w).unwrap();
+    }
+    assert_eq!(mortal(ctx.heap()), 0);
 }
 
 fn ints_show_in_decimal<M: Mode>() {
@@ -306,6 +324,7 @@ both_modes!(
     the_same_string_on_both_sides,
     appending_counts_the_bytes_it_copies,
     ints_show_in_decimal,
+    shows_count_the_bytes_they_write,
     strings_show_with_the_interpreters_escapes,
     a_string_extern_refuses_a_non_string,
 );

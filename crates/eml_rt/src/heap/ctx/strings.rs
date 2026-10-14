@@ -368,6 +368,28 @@ fn escape_into(c: u8, buf: &mut [u8; 6]) -> (k: usize)
     }
 }
 
+/// `escape_byte(c)` の長さ。
+fn escape_len(c: u8) -> (k: usize)
+    ensures
+        k == escape_byte(c).len(),
+{
+    if c == b'"' || c == b'\\' || c == b'\n' || c == b'\t' || c == b'\r' || c == 0 {
+        2
+    } else if c < 0x10 {
+        proof {
+            assert(hex(c as nat) == seq![hex_digit(c as nat)]);
+        }
+        5
+    } else if c < 0x20 || c == 0x7f {
+        proof {
+            reveal_with_fuel(hex, 2);
+        }
+        6
+    } else {
+        1
+    }
+}
+
 /// `bytes[from..]` で最初にエスケープするバイトの位置 (なければ長さ) と、そのエスケープを `buf` に書いた長さを返す。
 fn next_escape(bytes: &[u8], from: usize, buf: &mut [u8; 6]) -> (r: (usize, usize))
     requires
@@ -489,7 +511,7 @@ fn write_escaped<M: Mode>(
             lemma_escape_len(text, i as int, len as int);
         }
         if i > from {
-            heap.append_in_place(w, "", Some(s), from, i);
+            heap.append_part(w, s, from, i);
             proof {
                 lemma_text_trans(heap.core, before.core, h2.core, w.bits_spec());
                 assert(heap.text_of(s) == before.text_of(s));
@@ -505,7 +527,7 @@ fn write_escaped<M: Mode>(
                 lemma_escape_step(text, i as int);
                 lemma_escape_len(text, i + 1, len as int);
             }
-            heap.append_in_place(w, e, None, 0, 0);
+            heap.append_str(w, e);
             proof {
                 lemma_text_trans(heap.core, mid.core, h2.core, w.bits_spec());
                 assert(heap.text_of(s) == mid.text_of(s));
@@ -869,9 +891,9 @@ impl<M: Mode> Ctx<M> {
         if M::CHECKED && !(a.is_ptr() && b.is_ptr()) {
             return Err(Fault::Heap(HeapError::WrongKind));
         }
-        // 写すバイトを数えるために、両辺の長さを先に読む。読む前に、検査モードの検査を済ませる
+        // 写すバイトを数えるために、左が一意かと両辺の長さを先に読む。読む前に、検査モードの検査を済ませる
 
-        let (la, lb) = if M::CHECKED {
+        let copied = if M::CHECKED {
             self.heap.settle();
             proof {
                 lemma_settled_twice(s0.heap);
@@ -886,9 +908,17 @@ impl<M: Mode> Ctx<M> {
                 }
                 return Err(Fault::Heap(e));
             }
-            (self.heap.string_text(a).len(), self.heap.string_text(b).len())
+            let ha = self.heap.header_of(a);
+            let right = self.heap.string_text(b).len() as u64;
+            // 一意な左には、その場で足すか作り直すかによらず右の長さだけを数え、共有か不死の左には両辺を数える。今の
+            // インタプリタの数え方で、S10 で固定した `RunStats` を変えないためである
+            if self.heap.core.rc_get(ha) == 1 {
+                right
+            } else {
+                (self.heap.string_text(a).len() as u64).wrapping_add(right)
+            }
         } else {
-            (0, 0)
+            0
         };
         let ghost h1 = self.heap;
         proof {
@@ -911,12 +941,6 @@ impl<M: Mode> Ctx<M> {
             },
         };
         if M::CHECKED {
-            // その場で足せば右だけを、作り直せば両辺を写した
-            let copied = if w.bits() == a.bits() {
-                lb as u64
-            } else {
-                (la as u64).wrapping_add(lb as u64)
-            };
             self.stats.string_bytes_copied = self.stats.string_bytes_copied.wrapping_add(copied);
         }
         proof {
@@ -1079,7 +1103,6 @@ impl<M: Mode> Ctx<M> {
             return Err(Fault::Heap(e));
         }
         let ghost text = h1.text_of(s);
-        let mut buf = [0u8;6];
         // 1回目の走査。囲みの `"` の2バイトと、バイトごとの長さを足す
         let (len, n) = {
             let t = self.heap.string_text(s);
@@ -1096,14 +1119,8 @@ impl<M: Mode> Ctx<M> {
                     n == 2 + escape_body(text.subrange(0, i as int)).len(),
                 decreases bytes@.len() - i,
             {
-                let k = escape_into(bytes[i], &mut buf);
-                let step = if k == 0 {
-                    1
-                } else {
-                    k
-                };
                 n =
-                match n.checked_add(step) {
+                match n.checked_add(escape_len(bytes[i])) {
                     Some(m) => m,
                     None => too_large(),
                 };
@@ -1125,14 +1142,14 @@ impl<M: Mode> Ctx<M> {
         }
         let quote = [b'"';1];
         let q = ascii_str(quote.as_slice());
-        self.heap.append_in_place(w, q, None, 0, 0);
+        self.heap.append_str(w, q);
         proof {
             assert(self.heap.text_of(s) == text);
             assert(self.heap.text_of(w) =~= seq![b'"']);
         }
         write_escaped(&mut self.heap, w, s, len, Ghost(h2), Ghost(text), Ghost(c));
         let ghost before = self.heap;
-        self.heap.append_in_place(w, q, None, 0, 0);
+        self.heap.append_str(w, q);
         let ghost h3 = self.heap;
         proof {
             lemma_text_trans(h3.core, before.core, h2.core, w.bits_spec());

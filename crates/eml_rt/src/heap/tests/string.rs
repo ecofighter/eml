@@ -392,53 +392,6 @@ fn a_room_string_takes_pushes_in_place<M: Mode>() {
     assert_eq!(super::mortal(&heap), 0);
 }
 
-fn a_part_of_another_string_is_pushed<M: Mode>() {
-    let mut heap = Heap::<M>::new();
-    // a (1 バイト)、é (2 バイト)、日 (3 バイト)、b (1 バイト)
-    let src = heap.alloc_string("aé日b");
-    let left = heap.alloc_string_room(8);
-    unsafe {
-        let w = heap.string_push_part(left, src, 1, 6).unwrap();
-        assert_eq!(text(&heap, w), "é日");
-        let w = heap.string_push_part(w, src, 0, 0).unwrap();
-        assert_eq!(text(&heap, w), "é日");
-        let w = heap.string_push_part(w, src, 6, 7).unwrap();
-        assert_eq!(text(&heap, w), "é日b");
-        assert_eq!(text(&heap, src), "aé日b");
-        heap.decref(w).unwrap();
-        heap.decref(src).unwrap();
-    }
-    assert_eq!(super::mortal(&heap), 0);
-}
-
-/// 文字の境目でない範囲と、長さを超える範囲は、検査モードで断る。断ったときは何も変えない。
-fn a_part_off_a_char_boundary_is_refused<M: Mode>() {
-    if !M::CHECKED {
-        return;
-    }
-    let mut heap = Heap::<M>::new();
-    let src = heap.alloc_string("é");
-    let left = heap.alloc_string("x");
-    unsafe {
-        assert_eq!(
-            heap.string_push_part(left, src, 0, 1),
-            Err(HeapError::OutOfBounds)
-        );
-        assert_eq!(
-            heap.string_push_part(left, src, 1, 2),
-            Err(HeapError::OutOfBounds)
-        );
-        assert_eq!(
-            heap.string_push_part(left, src, 0, 3),
-            Err(HeapError::OutOfBounds)
-        );
-        assert_eq!(text(&heap, left), "x");
-        heap.decref(left).unwrap();
-        heap.decref(src).unwrap();
-    }
-    assert_eq!(super::mortal(&heap), 0);
-}
-
 fn a_unique_foreign_value_can_be_written<M: Mode>() {
     let mut heap = Heap::<M>::new();
     let f = heap.alloc_foreign(vec![1u8], true);
@@ -498,8 +451,6 @@ both_modes!(
     concat_of_an_immortal_with_itself_needs_two_references,
     another_worker_cannot_push_to_a_local_left,
     a_room_string_takes_pushes_in_place,
-    a_part_of_another_string_is_pushed,
-    a_part_off_a_char_boundary_is_refused,
     a_unique_foreign_value_can_be_written,
     a_shared_or_foreign_workers_value_is_not_written,
 );

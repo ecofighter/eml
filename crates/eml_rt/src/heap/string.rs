@@ -1,6 +1,6 @@
 //! 文字列の物体 (docs/spec/object-model.md の「文字列」)。種類 `String` の物体は、ここの操作だけが作り、書く。
 //! 長さの語は生の 0 語目で、バイト列はその後ろにあり、ghost のバイト列 `text` に等しい。バイト列を書くのは、作るときと
-//! 後ろに足すとき (`string_push` などと、`String.show` の `append_in_place`) だけである。
+//! 後ろに足すとき (`string_push` などと、`String.show` の `append_str` と `append_part`) だけである。
 
 use vstd::prelude::*;
 #[cfg(verus_only)]
@@ -23,7 +23,7 @@ verus! {
 /// 文字列の後ろに写すバイト列。`Str` は呼ぶ側の `&str`、`Text(h, len, from, to)` はこのヒープか付けた塊の文字列の
 /// 物体 (ヘッダと長さ) のバイトの範囲 `[from, to)` である。`string_concat` の右辺はヒープの権限から借りて読むので、
 /// `&mut self` を取る操作に `&str` として渡せない。そのため、右辺の権限は写す直前に `Core::write_tail` の中で借りる。
-pub(super) enum Tail<'a> {
+enum Tail<'a> {
     Str(&'a str),
     Text(*mut Header, usize, usize, usize),
 }
@@ -54,7 +54,7 @@ proof fn lemma_boundary_in_prefix(bytes: Seq<u8>, from: int, to: int)
 }
 
 impl Core {
-    pub(super) open spec fn tail_bytes(&self, t: Tail) -> Seq<u8> {
+    spec fn tail_bytes(&self, t: Tail) -> Seq<u8> {
         match t {
             Tail::Str(s) => s.spec_bytes(),
             Tail::Text(r, _, from, to) => self.perm(r@.addr).text().subrange(
@@ -66,7 +66,7 @@ impl Core {
 
     /// `t` を読める。`Text` なら、このヒープか付けた塊の文字列のブロックで、長さはバイト列の長さに等しく、範囲の両端は
     /// 文字の境目である。
-    pub(super) open spec fn tail_ok(&self, t: Tail) -> bool {
+    spec fn tail_ok(&self, t: Tail) -> bool {
         match t {
             Tail::Str(_) => true,
             Tail::Text(r, n, from, to) => {
@@ -79,7 +79,7 @@ impl Core {
     }
 
     /// `r` はこのヒープか付けた塊の文字列のブロックで、長さ `n` はバイト列の長さに等しい。
-    pub(super) open spec fn text_ok(&self, r: *mut Header, n: usize) -> bool {
+    spec fn text_ok(&self, r: *mut Header, n: usize) -> bool {
         &&& self.has(r@.addr)
         &&& self.region_wf()
         &&& self.perm(r@.addr).holds_text(r, n as int)
@@ -634,17 +634,6 @@ impl<M: Mode> Heap<M> {
         &&& self.is_string(left)
     }
 
-    /// `string_push_part` の前提がみな成り立ち、モデルが合っている。left は `string_push` の前提を満たし、src は読める
-    /// 文字列で、範囲 `[from, to)` は長さに収まり、両端が文字の境目である。
-    pub closed spec fn part_ok(&self, left: Word, src: Word, from: usize, to: usize) -> bool {
-        &&& self.push_ok(left)
-        &&& self.readable(src)
-        &&& self.is_string(src)
-        &&& from <= to <= self.text_of(src).len()
-        &&& is_char_boundary(self.text_of(src), from as int)
-        &&& is_char_boundary(self.text_of(src), to as int)
-    }
-
     /// `string_concat` の前提がみな成り立ち、モデルが合っている。両辺が `decref` の前提を満たす文字列で、同じ物体なら
     /// 呼ぶ側がその数えた参照を2つ持つ。
     pub closed spec fn concat_ok(&self, left: Word, right: Word) -> bool {
@@ -888,54 +877,98 @@ impl<M: Mode> Heap<M> {
         &&& self.core.rc_of(h) == 1
     }
 
-    /// 書き足せる文字列 `w` の後ろに、`src` が `Some` ならその文字列のバイトの範囲 `[from, to)` を、そうでなければ `s`
-    /// を写す。容量は足りている。`w` の長さの語とバイト列のほかは変えない。`String.show` が使う。
-    pub(super) fn append_in_place(
-        &mut self,
-        w: Word,
-        s: &str,
-        src: Option<Word>,
-        from: usize,
-        to: usize,
-    )
+    /// `old` の書き足せる文字列 `w` の後ろに、その場で書き足した後の状態。`w` の長さの語とバイト列のほかは変わらず、
+    /// ほかの文字列は同じバイト列のまま読める。
+    pub(super) open spec fn appended(&self, old: Heap<M>, w: Word) -> bool {
+        &&& self.wf()
+        &&& self.same_tokens(old)
+        &&& self.dummy == old.dummy
+        &&& self.region == old.region
+        &&& self.worker == old.worker
+        &&& self.core.text_changed(old.core, w.bits_spec())
+        &&& self.appendable(w)
+        &&& self.is_string(w)
+        &&& self.capacity(w) == old.capacity(w)
+        &&& old.consistent() ==> self.consistent()
+        &&& forall|x: Word| #[trigger] self.core.word_ok(x) == old.core.word_ok(x)
+        &&& forall|x: Word|
+            x.bits_spec() != w.bits_spec() ==> (old.text_readable(x) ==> self.text_readable(x))
+                && #[trigger] self.text_of(x) == old.text_of(x)
+    }
+
+    /// 書き足せる文字列 `w` の後ろに `s` を写す。容量は足りている。`String.show` がエスケープと囲みの `"` を書く。
+    pub(super) fn append_str(&mut self, w: Word, s: &str)
         requires
             old(self).wf(),
             old(self).core.model@.building is None,
             old(self).appendable(w),
-            src matches Some(x) ==> {
-                &&& old(self).text_readable(x)
-                &&& x.bits_spec() != w.bits_spec()
-                &&& from <= to <= old(self).text_of(x).len()
-                &&& is_char_boundary(old(self).text_of(x), from as int)
-                &&& is_char_boundary(old(self).text_of(x), to as int)
-            },
-            old(self).text_of(w).len() + (if let Some(x) = src {
-                to - from
-            } else {
-                s.spec_bytes().len() as int
-            }) <= old(self).capacity(w),
+            old(self).text_of(w).len() + s.spec_bytes().len() <= old(self).capacity(w),
         ensures
-            final(self).wf(),
-            final(self).same_tokens(*old(self)),
-            final(self).dummy == old(self).dummy,
-            final(self).region == old(self).region,
-            final(self).worker == old(self).worker,
-            final(self).core.text_changed(old(self).core, w.bits_spec()),
-            final(self).appendable(w),
-            final(self).is_string(w),
-            final(self).capacity(w) == old(self).capacity(w),
-            final(self).text_of(w) == old(self).text_of(w) + if let Some(x) = src {
-                old(self).text_of(x).subrange(from as int, to as int)
+            final(self).appended(*old(self), w),
+            final(self).text_of(w) == old(self).text_of(w) + s.spec_bytes(),
+    {
+        self.append_tail(w, Tail::Str(s));
+    }
+
+    /// 書き足せる文字列 `w` の後ろに、別の文字列 `src` のバイトの範囲 `[from, to)` を写す。容量は足りている。
+    /// `String.show` が、エスケープしないバイトの区間をまとめて写す。
+    pub(super) fn append_part(&mut self, w: Word, src: Word, from: usize, to: usize)
+        requires
+            old(self).wf(),
+            old(self).core.model@.building is None,
+            old(self).appendable(w),
+            old(self).text_readable(src),
+            src.bits_spec() != w.bits_spec(),
+            from <= to <= old(self).text_of(src).len(),
+            is_char_boundary(old(self).text_of(src), from as int),
+            is_char_boundary(old(self).text_of(src), to as int),
+            old(self).text_of(w).len() + (to - from) <= old(self).capacity(w),
+        ensures
+            final(self).appended(*old(self), w),
+            final(self).text_of(w) == old(self).text_of(w) + old(self).text_of(src).subrange(
+                from as int,
+                to as int,
+            ),
+    {
+        let h = self.header_of(src);
+        proof {
+            self.core.lemma_shape(h@.addr);
+            if M::CHECKED {
+                if self.core.dom().contains(h@.addr) {
+                    self.core.lemma_safe_at(h@.addr);
+                }
             } else {
-                s.spec_bytes()
-            },
-            old(self).consistent() ==> final(self).consistent(),
-            forall|x: Word| #[trigger] final(self).core.word_ok(x) == old(self).core.word_ok(x),
-            forall|x: Word|
-                x.bits_spec() != w.bits_spec() ==> (old(self).text_readable(x)
-                    ==> final(self).text_readable(x)) && #[trigger] final(self).text_of(x) == old(
-                    self,
-                ).text_of(x),
+                self.core.lemma_readable(src);
+                reveal(Core::building_wf);
+                self.core.lemma_live_block(h@.addr);
+            }
+        }
+        let n = self.core.slot_get(h, 0).bits();
+        proof {
+            let c = self.core.cap(h@.addr);
+            assert((n + 7) / 8 <= c - 1) by (nonlinear_arith)
+                requires
+                    n <= 8 * (c - 1),
+                    c >= 1,
+            ;
+        }
+        self.append_tail(w, Tail::Text(h, n, from, to));
+    }
+
+    /// `append_str` と `append_part` の本体。
+    fn append_tail(&mut self, w: Word, t: Tail)
+        requires
+            old(self).wf(),
+            old(self).core.model@.building is None,
+            old(self).appendable(w),
+            old(self).core.tail_ok(t),
+            t matches Tail::Text(r, _, _, _) ==> r@.addr != w.bits_spec(),
+            old(self).text_of(w).len() + old(self).core.tail_bytes(t).len() <= old(self).capacity(
+                w,
+            ),
+        ensures
+            final(self).appended(*old(self), w),
+            final(self).text_of(w) == old(self).text_of(w) + old(self).core.tail_bytes(t),
     {
         let h = self.header_of(w);
         proof {
@@ -949,34 +982,6 @@ impl<M: Mode> Heap<M> {
         }
         let len = self.core.slot_get(h, 0).bits();
         let cap = self.core.cap_get(h);
-        let t = match src {
-            Some(x) => {
-                let hx = self.header_of(x);
-                proof {
-                    self.core.lemma_shape(hx@.addr);
-                    if M::CHECKED {
-                        if self.core.dom().contains(hx@.addr) {
-                            self.core.lemma_safe_at(hx@.addr);
-                        }
-                    } else {
-                        self.core.lemma_readable(x);
-                        reveal(Core::building_wf);
-                        self.core.lemma_live_block(hx@.addr);
-                    }
-                }
-                let n = self.core.slot_get(hx, 0).bits();
-                proof {
-                    let c = self.core.cap(hx@.addr);
-                    assert((n + 7) / 8 <= c - 1) by (nonlinear_arith)
-                        requires
-                            n <= 8 * (c - 1),
-                            c >= 1,
-                    ;
-                }
-                Tail::Text(hx, n, from, to)
-            },
-            None => Tail::Str(s),
-        };
         let ghost s0 = *self;
         self.write_in_place(h, len, cap, &t);
         proof {
@@ -1237,7 +1242,7 @@ impl<M: Mode> Heap<M> {
     /// 返すためである。速いモードは rc 0 の物体のページの頭を読まないので、容量は一意な left でだけ読む
     /// (docs/spec/object-model.md の「文字列」)。
     #[inline]
-    pub(super) fn push_unchecked(&mut self, left: Word, t: Tail, Ghost(c): Ghost<bool>) -> (w: Word)
+    fn push_unchecked(&mut self, left: Word, t: Tail, Ghost(c): Ghost<bool>) -> (w: Word)
         requires
             old(self).wf(),
             old(self).core.model@.building is None,
@@ -1434,88 +1439,6 @@ impl<M: Mode> Heap<M> {
         self.checked_string(h)?;
         let ghost s1 = *self;
         let w = self.push_unchecked(left, Tail::Str(s), Ghost(c));
-        proof {
-            assert(old(self).core.settled_view() == s1.core);
-        }
-        Ok(w)
-    }
-
-    /// `left` の後ろに `src` のバイトの範囲 `[from, to)` を足す。`left` を消費し、`src` は借りる。どの誤りも最初の確保
-    /// より前に返す。
-    ///
-    /// # Safety
-    ///
-    /// 速いモードでは、`left` について `string_push` と同じ前提 (`push_ok`) を、`src` について読める文字列で
-    /// あることと、`from <= to <= len` で両端が文字の境目であることを前提にする。`left` と `src` は違う物体で
-    /// なければならない (`left` を作り直すと `src` の中身を指す位置が古くなるため)。
-    pub unsafe fn string_push_part(&mut self, left: Word, src: Word, from: usize, to: usize) -> (r:
-        Result<Word, HeapError>)
-        requires
-            old(self).wf(),
-            old(self).safe_settleable(),
-            left.is_ptr_spec(),
-            src.is_ptr_spec(),
-            left != src,
-            old(self).word_in(left),
-            old(self).word_in(src),
-            !M::CHECKED ==> old(self).part_ok(left, src, from, to),
-        ensures
-            final(self).wf(),
-            final(self).same_tokens(*old(self)),
-            r is Err ==> *final(self) == old(self).settled_heap(),
-            !M::CHECKED ==> r is Ok,
-            r matches Ok(w) ==> final(self).is_string(w) && final(self).text_of(w) == old(
-                self,
-            ).text_of(left) + old(self).text_of(src).subrange(from as int, to as int),
-            old(self).part_ok(left, src, from, to) ==> r is Ok || chain_err(r),
-            r matches Ok(w) ==> (old(self).part_ok(left, src, from, to) ==> final(self).consistent()
-                && final(self).pushed(*old(self), left, w)),
-            M::CHECKED ==> final(self).words_kept(*old(self)),
-    {
-        let ghost c = self.part_ok(left, src, from, to);
-        self.settle();
-        let hl = self.header_of(left);
-        let hs = self.header_of(src);
-        proof {
-            self.lemma_checks_pass(left);
-            self.lemma_checks_pass(src);
-            reveal(Core::building_wf);
-            if c {
-                self.core.lemma_readable(left);
-                self.core.lemma_readable(src);
-            }
-            if left.bits_spec() == src.bits_spec() {
-                // 同じ番地を指す読める語は provenance も同じなので、`left != src` ならこの枝に来ない
-                crate::word::lemma_same_ptr(left, src);
-            }
-        }
-        self.checked_string(hl)?;
-        self.checked_live(hs)?;
-        if M::CHECKED && !matches!(self.core.meta_get(hs).kind(), Kind::String) {
-            return Err(HeapError::WrongKind);
-        }
-        proof {
-            self.core.lemma_shape(hs@.addr);
-        }
-        let len = self.core.slot_get(hs, 0).bits();
-        proof {
-            let cap = self.core.cap(hs@.addr);
-            assert((len + 7) / 8 <= cap - 1) by (nonlinear_arith)
-                requires
-                    len <= 8 * (cap - 1),
-                    cap >= 1,
-            ;
-        }
-        if M::CHECKED {
-            let tracked p = self.core.tracked_perm(hs@.addr);
-            let s = text(hs, len, Tracked(p));
-            // `is_char_boundary` は長さを超える位置を偽とし、長さより前では続きのバイト (0x80..=0xBF) でないかを見る
-            if !(from <= to && s.is_char_boundary(from) && s.is_char_boundary(to)) {
-                return Err(HeapError::OutOfBounds);
-            }
-        }
-        let ghost s1 = *self;
-        let w = self.push_unchecked(left, Tail::Text(hs, len, from, to), Ghost(c));
         proof {
             assert(old(self).core.settled_view() == s1.core);
         }

@@ -39,8 +39,10 @@ pub struct CtxStats {
     pub evidence_steps: u64,
     pub yields: u64,
     pub yield_frames: u64,
-    /// extern がヒープの文字列に写したバイト数。検査モードだけで数える。数え方は今のインタプリタの
-    /// `RunStats::string_bytes_copied` と同じで、S10 の VM が引き継ぐ。
+    /// extern がヒープの文字列に写したバイト数。検査モードだけで数える。`Int.show` は数字の列の長さを、`String.show`
+    /// は結果の長さを数える。`++` は、左が一意 (rc 1 の局所の物体) なら右の長さだけを数え、容量が足りずに作り直しても
+    /// 同じである。左が共有か不死なら両辺の長さを数える。今のインタプリタの `RunStats::string_bytes_copied` と同じ
+    /// 数え方で、S10 の VM が引き継ぐ。
     pub string_bytes_copied: u64,
 }
 

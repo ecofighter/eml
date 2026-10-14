@@ -461,20 +461,25 @@ fn reading_then_appending<M: Mode>() {
     unsafe { heap.decref(w) }.unwrap();
 }
 
-/// `string_push_part` は、写す元の文字列の範囲を写す (T10 の写しを、先頭、途中、末尾、多バイトの文字の前後で通す)。
+/// `String.show` は、エスケープしない区間を写す元の文字列の範囲として写す (T10 の写しを、区間が先頭、途中、末尾に
+/// あり、多バイトの文字と接する場合で通す)。
 fn parts_of_a_string_are_copied<M: Mode>() {
-    let mut heap = Heap::<M>::new();
-    let src = heap.alloc_string("ab日本cd");
-    unsafe {
-        let mut w = heap.alloc_string_room(0);
-        for (from, to) in [(0, 1), (2, 5), (5, 8), (8, 10), (10, 10)] {
-            w = heap.string_push_part(w, src, from, to).unwrap();
+    let mut ctx = ctx_tests::ctx::<M>();
+    let cases = [
+        ("日\n本", "\"日\\n本\""),
+        ("\nab日", "\"\\nab日\""),
+        ("ab\"", "\"ab\\\"\""),
+        ("\u{1}é\u{7f}", "\"\\u{1}é\\u{7f}\""),
+    ];
+    for (input, shown) in cases {
+        unsafe {
+            let s = ctx.heap_mut().alloc_string(input);
+            let w = ctx.string_show(s).unwrap();
+            assert_eq!(text(ctx.heap(), w), shown);
+            ctx.heap_mut().decref(w).unwrap();
         }
-        assert_eq!(text(&heap, w), "a日本cd");
-        heap.decref(w).unwrap();
-        heap.decref(src).unwrap();
     }
-    assert_eq!(mortal(&heap), 0);
+    assert_eq!(mortal(ctx.heap()), 0);
 }
 
 // 凍結した領域

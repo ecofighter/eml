@@ -42,7 +42,7 @@ pub(crate) fn write_text(
 {
     debug_assert!(at + s.len() <= 8 * (cap - 1));
     // 生のポインタだけで写す。`copy_nonoverlapping` は、s が写す先と重ならないことを前提にする。このヒープの文字列から
-    // 写すとき (`string_concat` の右辺、`string_push_part` の src、作り直しの left) は、写す先がいつも別のブロック
+    // 写すとき (`string_concat` の右辺、`String.show` の写す元、作り直しの left) は、写す先がいつも別のブロック
     // である。呼ぶ側の `&str` は、`string_push` の Safety が left 自身の中身を指さないことを求める
     // (docs/spec/object-model.md の「文字列」)
     unsafe {
