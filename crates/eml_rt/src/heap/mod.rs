@@ -338,8 +338,8 @@ impl<M: Mode> Heap<M> {
         &&& self.owned(w)
     }
 
-    /// 構築中の物体を生きている物体にしただけのヒープ。`settle` は実行の時には何もしないので、物体を受ける操作が状態を
-    /// 変える前に `Err` を返すと、ヒープはこれになる。
+    /// 構築中の物体を生きている物体にしただけのヒープ。`settle` は速いモードでは実行の時に何もせず、検査モードでも構築中の
+    /// 物体の番地を消すだけなので、物体を受ける操作が状態を変える前に `Err` を返すと、ヒープはこれになる。
     pub closed spec fn settled_heap(&self) -> Heap<M> {
         Heap { core: self.core.settled_view(), building: 0, ..*self }
     }
@@ -613,7 +613,7 @@ impl<M: Mode> Heap<M> {
         self.stats
     }
 
-    /// 書き終えた構築中の物体を、生きている物体にする。実行の時には何もしない。
+    /// 書き終えた構築中の物体を、生きている物体にする。実行の時には、速いモードでは何もせず、検査モードでは構築中の物体の番地を消すだけである。
     #[inline(always)]
     fn settle(&mut self)
         requires
