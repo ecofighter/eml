@@ -107,7 +107,7 @@ pub(crate) open spec fn p_count(p: BlockPerm) -> int {
 
 /// `String` の物体のバイト列。
 pub(crate) open spec fn p_text(p: BlockPerm) -> Seq<u8> {
-    p.text
+    p.text()
 }
 
 /// `String` の物体の中身 (docs/spec/object-model.md の「種類」)。走査する語はなく、生の 0 語目にバイト長を持ち、
@@ -117,9 +117,9 @@ pub(crate) open spec fn string_wf(p: BlockPerm, cap: nat) -> bool {
     &&& !p_extended(p)
     &&& cap >= 1
     &&& p_init(p, 0)
-    &&& p_word(p, 0).bits_spec() == p.text.len()
-    &&& p.text.len() <= 8 * (cap - 1)
-    &&& valid_utf8(p.text)
+    &&& p_word(p, 0).bits_spec() == p.text().len()
+    &&& p.text().len() <= 8 * (cap - 1)
+    &&& valid_utf8(p.text())
 }
 
 /// i 語目は走査する語である。

@@ -1,6 +1,8 @@
 //! 文字列のバイト列 (docs/spec/object-model.md の「種類」)。Verus の権限は語の単位で、語の中のバイトの位置を
 //! 扱わないので、ここの関数は信頼の一覧の T10 である。どれも `String` のブロックの権限を受け、長さの語 (ペイロードの
 //! 0 語目) の後ろの容量の中だけを読み書きする。メモリのバイト列は、いつも権限の ghost のバイト列 `text` に等しい。
+//! この約束は、権限が渡したポインタの `String` のブロックのものであるとき (`BlockPerm::holds_text`) に限る。ghost の
+//! バイト列を変えるのは、ここの `write_text` と、確保のたびに列を空にする `BlockPerm::clear_text` だけである。
 
 use crate::meta::{BlockPerm, Header, slot_ptr};
 use vstd::prelude::*;
@@ -25,10 +27,11 @@ pub(crate) fn write_text(
     requires
         forall|i: int| #[trigger] old(perm).slots.contains_key(i) <==> 0 <= i < cap,
         cap >= 1,
-        at == old(perm).text.len(),
+        old(perm).holds_text(h, 8 * (cap - 1)),
+        at == old(perm).text().len(),
         at + s.spec_bytes().len() <= 8 * (cap - 1),
     ensures
-        final(perm).text == old(perm).text + s.spec_bytes(),
+        final(perm).text() == old(perm).text() + s.spec_bytes(),
         final(perm).rc == old(perm).rc,
         final(perm).meta == old(perm).meta,
         final(perm).prefix == old(perm).prefix,
@@ -51,10 +54,11 @@ pub(crate) fn write_text(
 #[inline]
 pub(crate) fn text(h: *mut Header, len: usize, Tracked(perm): Tracked<&BlockPerm>) -> (r: &str)
     requires
-        len == perm.text.len(),
-        valid_utf8(perm.text),
+        perm.holds_text(h, len as int),
+        len == perm.text().len(),
+        valid_utf8(perm.text()),
     ensures
-        r.spec_bytes() == perm.text,
+        r.spec_bytes() == perm.text(),
 {
     unsafe {
         std::str::from_utf8_unchecked(
@@ -69,8 +73,9 @@ pub(crate) fn text(h: *mut Header, len: usize, Tracked(perm): Tracked<&BlockPerm
 #[inline]
 pub(crate) fn text_ptr(h: *mut Header, len: usize, Tracked(perm): Tracked<&BlockPerm>) -> *const str
     requires
-        len == perm.text.len(),
-        valid_utf8(perm.text),
+        perm.holds_text(h, len as int),
+        len == perm.text().len(),
+        valid_utf8(perm.text()),
 {
     std::ptr::slice_from_raw_parts(slot_ptr(h, 1).cast::<u8>().cast_const(), len) as *const str
 }

@@ -563,6 +563,7 @@ impl<M: Mode> Heap<M> {
                 payload_words as int
             },
             r.1@.wf(r.0, final(self).core.cap(r.0@.addr), M::CHECKED),
+            r.1@.text() == Seq::<u8>::empty(),
             r.1@.rc.is_init() && r.1@.rc.value() == rc,
             r.1@.meta.is_init() && r.1@.meta.value() == meta.bits_spec(),
             bits_wf(meta.bits_spec()),
@@ -588,6 +589,10 @@ impl<M: Mode> Heap<M> {
             self.core.pages.lemma_block_bounds(h@.addr);
         }
         let tracked mut perm = perm;
+        proof {
+            // 確保器は前に使ったブロックの権限を渡すので、前の文字列のバイト列を捨てる (信頼の一覧の T10)
+            perm.clear_text();
+        }
         ptr_mut_write(rc_ptr(h), Tracked(&mut perm.rc), rc);
         ptr_mut_write(meta_ptr(h), Tracked(&mut perm.meta), meta.bits());
         if M::CHECKED {

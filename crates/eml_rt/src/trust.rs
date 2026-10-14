@@ -387,6 +387,22 @@ fn the_trust_list_is_exactly_the_trusted_items() {
     }
 }
 
+/// `BlockPerm` の ghost のバイト列に代入するのは meta.rs だけである (docs/spec/object-model.md の「`unsafe` の核」の
+/// T10)。`Text` は meta.rs の外では作れないが、ほかの権限の列を写して代入することはできてしまうためである。
+#[test]
+fn only_meta_assigns_the_ghost_text() {
+    for (file, text) in FILES {
+        if *file == "meta.rs" {
+            continue;
+        }
+        let code: String = text.chars().filter(|c| !c.is_whitespace()).collect();
+        let assigns = code
+            .match_indices(".text=")
+            .any(|(i, m)| !code[i + m.len()..].starts_with('='));
+        assert!(!assigns, "{file} assigns BlockPerm::text");
+    }
+}
+
 #[test]
 fn no_unsafe_outside_verus() {
     for (file, text) in FILES {

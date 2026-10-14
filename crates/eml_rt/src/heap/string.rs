@@ -21,7 +21,7 @@ impl<M: Mode> Heap<M> {
 
     /// 文字列のバイト列。
     pub closed spec fn text_of(&self, w: Word) -> Seq<u8> {
-        self.core.perm(w.bits_spec()).text
+        self.core.perm(w.bits_spec()).text()
     }
 
     /// `alloc_string_immortal` の後の状態。`w` は rc 0 の生きている物体で、検査モードの外に出ている参照の数は 0 である。
@@ -113,8 +113,6 @@ impl<M: Mode> Heap<M> {
                         1int
                     },
             ;
-            // 確保器が渡すブロックの ghost のバイト列は、前に使った物体のものでありうる。中身はまだ何も写していない
-            perm.text = Seq::empty();
         }
         let tracked mut slot = perm.slots.tracked_remove(0);
         ptr_mut_write(slot_ptr(h, 0), Tracked(&mut slot), Word::from_bits(bytes));
@@ -126,7 +124,7 @@ impl<M: Mode> Heap<M> {
         proof {
             check::lemma_alive_code();
             encode_utf8_valid_utf8(s@);
-            assert(perm.text =~= s.spec_bytes());
+            assert(perm.text() =~= s.spec_bytes());
             let c = self.core;
             let a = h@.addr;
             assert(string_wf(perm, c.cap(a)));
@@ -177,6 +175,15 @@ impl<M: Mode> Heap<M> {
             }
         }
         let len = self.core.slot_get(h, 0).bits();
+        proof {
+            self.core.lemma_shape(h@.addr);
+            let cap = self.core.cap(h@.addr);
+            assert((len + 7) / 8 <= cap - 1) by (nonlinear_arith)
+                requires
+                    len <= 8 * (cap - 1),
+                    cap >= 1,
+            ;
+        }
         let tracked p = self.core.perms.borrow().tracked_borrow(h@.addr);
         Ok(text_ptr(h, len, Tracked(p)))
     }

@@ -495,8 +495,22 @@ pub(crate) tracked struct BlockPerm {
     pub(crate) tracked meta: PointsTo<u32>,
     pub(crate) tracked slots: Map<int, PointsTo<Word>>,
     pub(crate) tracked prefix: Option<PrefixPerm>,
-    /// `String` の物体のバイト列。メモリのバイト列はこれに等しい (信頼の一覧の T10)。ほかの種類では意味を持たない。
-    pub(crate) ghost text: Seq<u8>,
+    /// `String` の物体のバイト列 (`text()`)。ほかの種類では意味を持たない。
+    pub(crate) ghost text: Text,
+}
+
+/// `String` の物体のバイト列。メモリのバイト列はこれに等しい (信頼の一覧の T10)。証明が好きな列を書けると T10 の約束が
+/// 崩れるので、欄を隠して、この module の外では作れないようにする。列を変えるのは `BlockPerm::clear_text` と
+/// `crate::text::write_text` だけである。
+#[cfg_attr(not(verus_keep_ghost), allow(dead_code))]
+pub(crate) ghost struct Text {
+    bytes: Seq<u8>,
+}
+
+impl Text {
+    pub(crate) closed spec fn view(self) -> Seq<u8> {
+        self.bytes
+    }
 }
 
 /// 語に揃った番地から、欄と語の揃えを導く。
@@ -593,7 +607,7 @@ impl BlockPerm {
         let tracked rc = rc_raw.into_typed::<i32>(h@.addr);
         let tracked meta = meta_raw.into_typed::<u32>((hs + 4) as usize);
         let tracked slots = Self::slots_from_raw(rest4, h, 0, cap);
-        BlockPerm { rc, meta, slots, prefix, text: Seq::empty() }
+        BlockPerm { rc, meta, slots, prefix, text: Text { bytes: Seq::empty() } }
     }
 
     /// ペイロードの `from` 語目から `cap` 語目の手前までの権限を作る。
@@ -713,6 +727,34 @@ impl BlockPerm {
 }
 
 impl BlockPerm {
+    pub(crate) open spec fn text(self) -> Seq<u8> {
+        self.text@
+    }
+
+    /// ghost のバイト列を空にする。確保したブロックの権限に前の物体のバイト列を残さないために、確保のたびに呼ぶ。
+    /// 空の列はメモリのどのバイトとも対応しないので、T10 の約束は保たれる。
+    pub(crate) proof fn clear_text(tracked &mut self)
+        ensures
+            final(self).text() == Seq::<u8>::empty(),
+            final(self).rc == old(self).rc,
+            final(self).meta == old(self).meta,
+            final(self).slots == old(self).slots,
+            final(self).prefix == old(self).prefix,
+    {
+        self.text = Text { bytes: Seq::empty() };
+    }
+
+    /// `String` のブロック `h` の権限で、長さの語と、その後ろの `n` バイトを覆う語の権限を持つ。T10 の関数は、権限と
+    /// ポインタがこの関係にあるときだけ、メモリのバイト列が ghost のバイト列に等しいことを約束する。
+    pub(crate) open spec fn holds_text(self, h: *mut Header, n: int) -> bool {
+        &&& self.meta.ptr() == field_ptr::<u32>(h, 4)
+        &&& self.meta.is_init()
+        &&& bits_kind(self.meta.value()) == Kind::String
+        &&& forall|i: int|
+            0 <= i <= (n + 7) / 8 ==> #[trigger] self.slots.contains_key(i) && self.slots[i].ptr()
+                == field_ptr::<Word>(h, slot_offset(i))
+    }
+
     /// `h` のヘッダを持ち、ペイロードが `cap` 語のブロックの権限である。`prefixed` なら前置きも持つ。
     pub(crate) open spec fn wf(self, h: *mut Header, cap: nat, prefixed: bool) -> bool {
         &&& self.rc.ptr() == field_ptr::<i32>(h, 0)
