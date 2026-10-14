@@ -48,8 +48,6 @@ pub(crate) fn write_text(
 }
 
 /// `h` の中身を `str` として借りる。借りている間、権限 (と同じブロック) は書き換えられない。
-// `string_push` と `string_concat` が使うまで、呼ぶ所がない
-#[allow(dead_code)]
 #[verifier::external_body]
 #[inline]
 pub(crate) fn text(h: *mut Header, len: usize, Tracked(perm): Tracked<&BlockPerm>) -> (r: &str)

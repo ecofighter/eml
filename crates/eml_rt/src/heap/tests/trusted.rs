@@ -309,6 +309,66 @@ fn multibyte_strings_are_read_back<M: Mode>() {
     unsafe { heap.decref(w) }.unwrap();
 }
 
+fn unaligned_appends_are_written<M: Mode>() {
+    let mut heap = Heap::<M>::new();
+    let mut w = heap.alloc_string("");
+    let mut expected = String::new();
+    // 1, 2, 3, ... バイトずつ足して、語の境目をまたぐ書き込みを作る
+    for n in 1..40 {
+        let piece = "q".repeat(n);
+        w = unsafe { heap.string_push(w, &piece) }.unwrap();
+        expected.push_str(&piece);
+    }
+    assert_eq!(text(&heap, w), expected);
+    unsafe { heap.decref(w) }.unwrap();
+}
+
+fn large_strings_cross_pages<M: Mode>() {
+    let mut heap = Heap::<M>::new();
+    let big = "L".repeat(PAGE_BYTES + 10);
+    let w = heap.alloc_string(&big);
+    // 大きい左辺からの作り直し
+    let w = unsafe { heap.string_push(w, &big) }.unwrap();
+    assert_eq!(text(&heap, w).len(), 2 * big.len());
+    unsafe { heap.decref(w) }.unwrap();
+    assert_eq!(mortal(&heap), 0);
+}
+
+fn empty_strings_are_appended<M: Mode>() {
+    let mut heap = Heap::<M>::new();
+    let a = heap.alloc_string("");
+    let b = heap.alloc_string("");
+    let r = unsafe { heap.string_concat(a, b) }.unwrap();
+    assert_eq!(text(&heap, r), "");
+    let r = unsafe { heap.string_push(r, "") }.unwrap();
+    assert_eq!(text(&heap, r), "");
+    unsafe { heap.decref(r) }.unwrap();
+}
+
+fn self_concat_under_both_borrow_models<M: Mode>() {
+    let mut heap = Heap::<M>::new();
+    // 右辺の中身を読んで写した後で x を空ける。1ページの長さでは、そのときページを返す
+    for s in ["abc", "abcdefgh", &"m".repeat(PAGE_BYTES)] {
+        let x = heap.alloc_string(s);
+        unsafe { heap.dup(x) }.unwrap();
+        let r = unsafe { heap.string_concat(x, x) }.unwrap();
+        assert_eq!(text(&heap, r).len(), 2 * s.len());
+        unsafe { heap.decref(r) }.unwrap();
+    }
+    assert_eq!(mortal(&heap), 0);
+}
+
+fn reading_then_appending<M: Mode>() {
+    let mut heap = Heap::<M>::new();
+    let w = heap.alloc_string("first");
+    // 読んだ位置の使用を終えてから追記する
+    let seen = unsafe { &*heap.string(w).unwrap() }.to_string();
+    let w = unsafe { heap.string_push(w, "+second") }.unwrap();
+    assert_eq!(seen, "first");
+    assert_eq!(text(&heap, w), "first+second");
+    unsafe { heap.decref(w) }.unwrap();
+}
+
 both_modes!(
     pages_are_aligned_and_returned,
     large_objects_get_their_own_page,
@@ -322,4 +382,9 @@ both_modes!(
     a_panicking_finalizer_in_a_chain_leaks_the_rest,
     strings_of_every_length_are_read_back,
     multibyte_strings_are_read_back,
+    unaligned_appends_are_written,
+    large_strings_cross_pages,
+    empty_strings_are_appended,
+    self_concat_under_both_borrow_models,
+    reading_then_appending,
 );

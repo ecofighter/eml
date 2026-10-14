@@ -130,6 +130,26 @@ pub(crate) proof fn lemma_code(generation: u32, code: u32)
 
 // 検査モードの検査。速いモードでは何も確かめない
 impl<M: Mode> Heap<M> {
+    /// `checked_decref` が通る。物体は生きているか構築中で、不死なら外に出ている参照が残り、共有なら `lin` ビットを
+    /// 持たず、局所なら持ち主が今の worker である。
+    pub(super) open spec fn decref_passes(&self, h: usize) -> bool {
+        let p = self.core.perm(h);
+        let rc = self.core.rc_of(h);
+        &&& self.core.state(h) == BlockState::Live || self.core.state(h) == BlockState::Building
+        &&& p.prefix is Some
+        &&& rc == 0 ==> p_owner(p) != 0
+        &&& rc < 0 ==> !self.core.lin(h)
+        &&& rc > 0 ==> p_owner(p) == self.worker
+    }
+
+    /// `checked_decref` が続けて2回通る。1回目で最後の参照にならず (rc が 1 でも -1 でもない)、不死なら外に出ている
+    /// 参照が2つ以上ある。
+    pub(super) open spec fn decref_twice_passes(&self, h: usize) -> bool {
+        &&& self.decref_passes(h)
+        &&& self.core.rc_of(h) != 1 && self.core.rc_of(h) != -1
+        &&& self.core.rc_of(h) == 0 ==> p_owner(self.core.perm(h)) >= 2
+    }
+
     /// 前置きの状態が生存かを確かめる。解放した共有の物体は rc が 0 になっていて不死の物体と区別できないので、rc を
     /// 見る前に呼ぶ。
     #[inline]
@@ -227,6 +247,11 @@ impl<M: Mode> Heap<M> {
             final(self).core.recounted(old(self).core),
             forall|b: usize|
                 b != h@.addr ==> #[trigger] final(self).core.perms@[b] == old(self).core.perms@[b],
+            p_owner(final(self).core.perm(h@.addr)) == if up {
+                p_owner(old(self).core.perm(h@.addr)) + 1
+            } else {
+                p_owner(old(self).core.perm(h@.addr)) - 1
+            },
             final(self).dummy == old(self).dummy,
             final(self).worker == old(self).worker,
             final(self).stats == old(self).stats,
@@ -332,6 +357,7 @@ impl<M: Mode> Heap<M> {
                 &&& c == (p_owner(self.core.perm(h@.addr)) != UNCOUNTED)
                 &&& p_owner(self.core.perm(h@.addr)) != 0
             }),
+            M::CHECKED ==> (r is Ok <==> self.decref_passes(h@.addr)),
     {
         if !M::CHECKED {
             return Ok(false);
@@ -353,6 +379,40 @@ impl<M: Mode> Heap<M> {
         }
         self.checked_owner(h, rc)?;
         Ok(true)
+    }
+
+    /// `string_concat(x, x)` の2回の `decref` の検査。両方が通るなら `Ok` を返す。局所の数と共有の数は 2 以上、不死の
+    /// 物体の外に出ている参照の数も 2 以上でなければならない。足りなければ、2回目の `decref` が返す誤りを返す。
+    pub(super) fn checked_decref_twice(&self, h: *mut Header) -> (r: Result<(), HeapError>)
+        requires
+            self.core.sound(),
+            self.core.checked@ == M::CHECKED,
+            self.core.dom().contains(h@.addr),
+            h == self.core.block(h@.addr),
+        ensures
+            !M::CHECKED ==> r is Ok,
+            M::CHECKED ==> (r is Ok <==> self.decref_twice_passes(h@.addr)),
+            r is Err ==> chain_err(r) || r == Err::<(), HeapError>(HeapError::UseAfterFree) && (!(
+            self.core.state(h@.addr) == BlockState::Live || self.core.state(h@.addr)
+                == BlockState::Building) || self.core.rc_of(h@.addr) == 1 || self.core.rc_of(
+                h@.addr,
+            ) == -1),
+    {
+        if !M::CHECKED {
+            return Ok(());
+        }
+        self.checked_decref(h)?;
+        // 1回目で最後の参照になるなら、2回目は空けた物体の使用になる
+        let rc = self.core.rc_get(h);
+        if rc == 1 || rc == -1 {
+            return Err(HeapError::UseAfterFree);
+        }
+        // 数 0 は `checked_decref` が断ったので、ここで足りないのは数 1 だけである
+
+        if rc == 0 && self.core.prefix_first_get(h) == 1 {
+            return Err(HeapError::ImmortalOverRelease);
+        }
+        Ok(())
     }
 }
 

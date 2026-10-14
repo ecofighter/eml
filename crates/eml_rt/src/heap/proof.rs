@@ -465,6 +465,9 @@ impl Core {
             final(self).pages == old(self).pages,
             old(self).pending(h@.addr) ==> final(self).indeg(h@.addr) == 0,
             forall|w: Word| old(self).word_ok(w) ==> #[trigger] final(self).word_ok(w),
+            forall|b: usize|
+                b != h@.addr ==> #[trigger] final(self).perms@[b] == old(self).perms@[b],
+            forall|b: usize| b != h@.addr ==> #[trigger] final(self).state(b) == old(self).state(b),
     {
         proof {
             let s0 = *self;

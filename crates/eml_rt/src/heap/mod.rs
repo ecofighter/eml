@@ -1617,6 +1617,12 @@ impl<M: Mode> Heap<M> {
             } else {
                 BlockState::Live
             },
+            final(self).core.perm(h@.addr).meta == old(self).core.perm(h@.addr).meta,
+            M::CHECKED && old(self).decref_passes(h@.addr) ==> r is Ok,
+            M::CHECKED && old(self).decref_twice_passes(h@.addr) && r is Ok ==> r == Ok::<
+                bool,
+                HeapError,
+            >(false) && final(self).decref_passes(h@.addr),
     {
         let counted = self.checked_decref(h)?;
         let ghost s0 = self.core;
