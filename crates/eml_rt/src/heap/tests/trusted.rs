@@ -391,6 +391,14 @@ fn reading_then_appending<M: Mode>() {
     unsafe { heap.decref(w) }.unwrap();
 }
 
+// 凍結した領域
+fn frozen_pages_are_returned<M: Mode>() {
+    let (b, _, _) = super::frozen::builder::<M>();
+    let region = Arc::new(b.freeze().unwrap());
+    // Miri は返していないページを漏れとして誤りにする
+    drop(region);
+}
+
 both_modes!(
     pages_are_aligned_and_returned,
     large_objects_get_their_own_page,
@@ -410,4 +418,5 @@ both_modes!(
     self_concat_under_both_borrow_models,
     appending_the_text_of_another_string,
     reading_then_appending,
+    frozen_pages_are_returned,
 );

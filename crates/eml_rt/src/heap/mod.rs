@@ -10,7 +10,7 @@ pub(crate) mod check;
 mod core;
 mod field;
 mod handover;
-mod inv;
+pub(crate) mod inv;
 mod model;
 mod proof;
 mod release;
@@ -29,8 +29,13 @@ use std::mem;
 
 use crate::alloc::FREE_META;
 use crate::alloc::{Pages, too_large};
+#[cfg(verus_only)]
+use crate::alloc::{page_base, region_cap, region_ptr};
 use crate::error::HeapError;
 use crate::foreign;
+use crate::frozen::Frozen;
+#[cfg(verus_only)]
+use crate::frozen::RegionPerms;
 use crate::meta::{self, BlockPerm, HEADER_WORDS, Header, Kind, Meta, meta_ptr, rc_ptr, slot_ptr};
 #[cfg(verus_only)]
 use crate::meta::{bits_kind, bits_scan, bits_tag, bits_wf};
@@ -389,30 +394,7 @@ impl<M: Mode> Heap<M> {
             r.settled(),
     {
         let mut heap = Heap {
-            core: Core {
-                pages: Pages::new(
-                    if M::CHECKED {
-                        PREFIX_WORDS
-                    } else {
-                        0
-                    },
-                ),
-                perms: Tracked(Map::tracked_empty()),
-                model: Ghost(
-                    Model {
-                        state: Map::empty(),
-                        refs: Map::empty(),
-                        edges: Map::empty(),
-                        stuck: Map::empty(),
-                        owner: Map::empty(),
-                        written: Map::empty(),
-                        kept: Set::empty(),
-                        building: None,
-                        tokens: Seq::empty(),
-                    },
-                ),
-                checked: Ghost(M::CHECKED),
-            },
+            core: Self::empty_core(),
             worker: 0,
             work: Vec::new(),
             share_stack: Vec::new(),
@@ -429,12 +411,67 @@ impl<M: Mode> Heap<M> {
             },
             _mode: PhantomData,
         };
+        heap.put_dummy();
+        heap
+    }
+
+    /// ブロックを持たない `Core`。
+    fn empty_core() -> (r: Core)
+        ensures
+            r.full(),
+            r.safe_wf(),
+            r.dom() == Set::<usize>::empty(),
+            r.checked@ == M::CHECKED,
+            r.model@.building is None,
+            r.model@.tokens == Seq::<Option<(*mut Header, u32)>>::empty(),
+    {
+        let core = Core {
+            pages: Pages::new(
+                if M::CHECKED {
+                    PREFIX_WORDS
+                } else {
+                    0
+                },
+            ),
+            perms: Tracked(Map::tracked_empty()),
+            model: Ghost(
+                Model {
+                    state: Map::empty(),
+                    refs: Map::empty(),
+                    edges: Map::empty(),
+                    stuck: Map::empty(),
+                    owner: Map::empty(),
+                    written: Map::empty(),
+                    kept: Set::empty(),
+                    building: None,
+                    tokens: Seq::empty(),
+                },
+            ),
+            checked: Ghost(M::CHECKED),
+        };
         proof {
-            heap.core.lemma_empty();
-            heap.core.lemma_safe_empty();
+            core.lemma_empty();
+            core.lemma_safe_empty();
         }
+        core
+    }
+
+    /// ブロックを持たない中身に、ダミーを置く。
+    fn put_dummy(&mut self)
+        requires
+            old(self).core.full(),
+            old(self).core.safe_wf(),
+            old(self).core.dom() == Set::<usize>::empty(),
+            old(self).core.checked@ == M::CHECKED,
+            old(self).core.model@.building is None,
+            old(self).tokens@ == old(self).core.model@.tokens,
+        ensures
+            final(self).wf(),
+            final(self).consistent(),
+            final(self).settled(),
+    {
         // ダミーは値 0 の BigInt の不死の物体で、検査モードでも数えない (docs/spec/object-model.md の「ダミーの値」)
-        let (h, Tracked(perm)) = heap.alloc_header(1, 0, Meta::new(0, 0, Kind::BigInt, false));
+        let (h, Tracked(perm)) = self.alloc_header(1, 0, Meta::new(0, 0, Kind::BigInt, false));
         let tracked mut perm = perm;
         let tracked mut slot = perm.slots.tracked_remove(0);
         ptr_mut_write(slot_ptr(h, 0), Tracked(&mut slot), Word::from_bits(0));
@@ -451,14 +488,13 @@ impl<M: Mode> Heap<M> {
         proof {
             check::lemma_alive_code();
         }
-        heap.core.publish(Ghost(h), Tracked(perm), Ghost(BlockState::Live), Ghost(0));
-        heap.dummy = Word::from_ptr(h);
+        self.core.publish(Ghost(h), Tracked(perm), Ghost(BlockState::Live), Ghost(0));
+        self.dummy = Word::from_ptr(h);
         proof {
             crate::word::lemma_aligned_is_ptr(h@.addr);
-            assert(heap.core.word_ok(heap.dummy));
-            assert(heap.dummy_wf());
+            assert(self.core.word_ok(self.dummy));
+            assert(self.dummy_wf());
         }
-        heap
     }
 
     pub fn dummy(&self) -> (w: Word)
@@ -981,6 +1017,179 @@ impl<M: Mode> Heap<M> {
                 w
             },
         }
+    }
+}
+
+/// 凍結で、検査モードの前置きの数の欄を数えない印 (`UNCOUNTED`) に替えた権限。`q` から `first` の値だけが変わった。
+pub(crate) open spec fn marked_uncounted(p: BlockPerm, q: BlockPerm) -> bool {
+    &&& p.rc == q.rc
+    &&& p.meta == q.meta
+    &&& p.slots == q.slots
+    &&& p.text == q.text
+    &&& p.prefix is Some
+    &&& q.prefix is Some
+    &&& p.prefix->0.state == q.prefix->0.state
+    &&& p.prefix->0.first.ptr() == q.prefix->0.first.ptr()
+    &&& p.prefix->0.first.is_init()
+    &&& p.prefix->0.first.value() == UNCOUNTED
+}
+
+impl<M: Mode> Heap<M> {
+    /// 凍結する物体。生存の状態のブロックである。
+    closed spec fn frozen_blocks(&self) -> Set<usize> {
+        self.core.dom().filter(|h: usize| self.core.state(h) == BlockState::Live)
+    }
+
+    /// 凍結の確かめを通ったヒープの、凍結する物体 `h` は、凍結した塊のブロックの条件を満たす。`s1` は前置きの数の欄を
+    /// 数えない印に替えた後の中身で、`r` はその権限とページの頭の権限で作った塊の権限である。
+    proof fn lemma_frozen_block(&self, s1: Core, r: RegionPerms, h: usize)
+        requires
+            self.wf(),
+            self.core.model@.building is None,
+            forall|x: usize| #[trigger] self.live_block(x) ==> self.freezable_block(x),
+            r.parent is None,
+            r.blocks.dom() == self.frozen_blocks(),
+            forall|x: usize| #[trigger]
+                r.blocks.dom().contains(x) ==> r.blocks[x] == s1.perm(x) && if M::CHECKED {
+                    marked_uncounted(s1.perm(x), self.core.perm(x))
+                } else {
+                    s1.perm(x) == self.core.perm(x)
+                },
+            forall|x: usize| #[trigger]
+                self.core.pages.carved_block(x) ==> {
+                    &&& r.headers.contains_key(page_base(x))
+                    &&& region_ptr(r.headers, x) == self.core.pages.block_ptr(x)
+                    &&& region_cap(r.headers, x, M::CHECKED) == self.core.pages.cap(x)
+                },
+            r.blocks.dom().contains(h),
+        ensures
+            r.block_wf(h, M::CHECKED),
+    {
+        let s0 = self.core;
+        let p = r.blocks[h];
+        let q = s0.perm(h);
+        reveal(Core::building_wf);
+        reveal(Core::blocks_wf);
+        reveal(Core::edges_wf);
+        self.lemma_live_block(h);
+        s0.lemma_shape(h);
+        assert(self.freezable_block(h));
+        if M::CHECKED {
+            s0.lemma_code_state(h);
+        }
+        assert forall|i: int| #[trigger] p_scanned(p, i) implies p_init(p, i) && r.word_ok(
+            p_word(p, i),
+        ) by {
+            assert(s0.scanned(h, i));
+            let w = p_word(q, i);
+            if M::CHECKED {
+                s0.lemma_safe_live_slot(h, i);
+            } else {
+                s0.lemma_at(h);
+                assert(s0.slot_word(q, h, i));
+                if w.is_ptr_spec() {
+                    assert(s0.edge_wf((h, i)));
+                }
+            }
+            if w.is_ptr_spec() {
+                let t = w.bits_spec();
+                assert(s0.dom().contains(t));
+                s0.pages.lemma_in_use_carved(t);
+                assert(self.frozen_blocks().contains(t));
+                assert(r.blocks.dom().contains(t));
+                assert(r.owner(t) == r);
+            }
+        }
+    }
+
+    /// 作り手のヒープを凍結した塊にする。生きているブロックがどれも rc 0 の不死の物体で、token の箱と `Foreign` の
+    /// 物体がないことを、実行時に確かめる (docs/spec/object-model.md の「不死の物体の数え方」)。そうでなければ
+    /// `NotImmortal` を返す。検査モードでは、走査する語が空けたブロックを指していれば `UseAfterFree` を返す。誤りなら、
+    /// 作り手のヒープは普通に落ちる。
+    pub fn freeze(self) -> (r: Result<Frozen<M>, HeapError>)
+        requires
+            self.wf(),
+            self.safe_settleable(),
+            !M::CHECKED ==> self.settleable(),
+        ensures
+            r matches Ok(f) ==> f.inv(),
+    {
+        let mut b = self;
+        b.settle();
+        let live = b.freezable()?;
+        let ghost b0 = b;
+        let ghost s0 = b.core;
+        // 領域の物体は数えない (docs/spec/object-model.md の「不死の物体の数え方」)。ダミーと同じ印にする
+        if M::CHECKED {
+            let mut k: usize = 0;
+            while k < live.len()
+                invariant
+                    M::CHECKED,
+                    b0.wf(),
+                    b0.core == s0,
+                    k <= live@.len(),
+                    forall|i: int|
+                        0 <= i < live@.len() ==> b0.live_block(#[trigger] live@[i]@.addr)
+                            && live@[i] == s0.block(live@[i]@.addr),
+                    b.core.pages == s0.pages,
+                    b.core.checked == s0.checked,
+                    b.core.model == s0.model,
+                    b.core.perms@.dom() == s0.perms@.dom(),
+                    forall|x: usize| #[trigger]
+                        s0.dom().contains(x) ==> b.core.perm(x) == s0.perm(x) || marked_uncounted(
+                            b.core.perm(x),
+                            s0.perm(x),
+                        ),
+                    forall|j: int|
+                        0 <= j < k ==> marked_uncounted(
+                            b.core.perm(#[trigger] live@[j]@.addr),
+                            s0.perm(live@[j]@.addr),
+                        ),
+                decreases live.len() - k,
+            {
+                let h = live[k];
+                proof {
+                    b0.lemma_live_block(h@.addr);
+                    s0.lemma_shape(h@.addr);
+                }
+                b.core.prefix_first_put(h, UNCOUNTED);
+                k += 1;
+            }
+        }
+        let ghost s1 = b.core;
+        proof {
+            assert forall|x: usize| #[trigger]
+                b0.frozen_blocks().contains(x) implies if M::CHECKED {
+                marked_uncounted(s1.perm(x), s0.perm(x))
+            } else {
+                s1.perm(x) == s0.perm(x)
+            } by {
+                if M::CHECKED {
+                    b0.lemma_live_block(x);
+                    let i = choose|i: int| 0 <= i < live@.len() && #[trigger] live@[i]@.addr == x;
+                    assert(marked_uncounted(s1.perm(live@[i]@.addr), s0.perm(live@[i]@.addr)));
+                }
+            }
+        }
+        // `Heap` は `Drop` を持つので、中身を空の中身と入れ替えてから落とす。落とすときの後始末は、ダミーを持ち不変条件を
+        // 満たすヒープを求める
+        let mut core = Self::empty_core();
+        mem::swap(&mut b.core, &mut core);
+        b.tokens = Vec::new();
+        b.put_dummy();
+        let ghost frozen = b0.frozen_blocks();
+        let tracked blocks = core.perms.borrow_mut().tracked_remove_keys(frozen);
+        let mut pages = core.pages;
+        let Tracked(headers) = pages.take_headers();
+        let tracked perms = RegionPerms::new(blocks, headers);
+        proof {
+            assert(perms.blocks.dom() =~= frozen);
+            assert forall|h: usize| #[trigger]
+                perms.blocks.dom().contains(h) implies perms.block_wf(h, M::CHECKED) by {
+                b0.lemma_frozen_block(s1, perms, h);
+            }
+        }
+        Ok(Frozen::new(pages, Tracked(perms)))
     }
 }
 

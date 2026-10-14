@@ -8,7 +8,7 @@ use vstd::prelude::*;
 #[cfg(verus_only)]
 use super::Core;
 use super::Heap;
-use super::check::{FREED_STATE, UNCOUNTED};
+use super::check::{ALIVE_STATE, FREED_STATE, UNCOUNTED};
 #[cfg(verus_only)]
 use super::inv::{p_owner, p_word};
 #[cfg(verus_only)]
@@ -23,6 +23,11 @@ use crate::mode::{Checked, Mode};
 use crate::word::Word;
 
 verus! {
+
+/// `h` は、ヘッダの列 `live` のどれかのヘッダの番地である。
+pub(super) open spec fn headed(live: Seq<*mut Header>, h: usize) -> bool {
+    exists|i: int| #![trigger live[i]] 0 <= i < live.len() && live[i]@.addr == h
+}
 
 /// 前置きの状態の欄の、token の値。
 const TOKEN_STATE: u32 = 2;
@@ -67,6 +72,166 @@ impl<M: Mode> Heap<M> {
         } else {
             true
         }
+    }
+
+    /// 生きている箱はヒープのブロックで、生存の状態のブロックは生きている箱である。
+    pub(super) proof fn lemma_live_block(&self, h: usize)
+        ensures
+            self.live_block(h) ==> self.core.dom().contains(h),
+            self.core.dom().contains(h) && self.core.state(h) == BlockState::Live
+                ==> self.live_block(h),
+    {
+    }
+
+    /// 凍結の確かめを通るブロック。rc が 0 で、検査モードでは生存の状態で、走査する語の行き先も生存の状態である。
+    pub(super) open spec fn freezable_block(&self, h: usize) -> bool {
+        &&& self.core.rc_of(h) == 0
+        &&& M::CHECKED ==> {
+            &&& self.core.state(h) == BlockState::Live
+            &&& forall|i: int| #[trigger]
+                self.core.scanned(h, i) && p_word(self.core.perm(h), i).is_ptr_spec()
+                    ==> self.core.state(p_word(self.core.perm(h), i).bits_spec())
+                    == BlockState::Live
+        }
+    }
+
+    /// 凍結の確かめ (docs/spec/object-model.md の「不死の物体の数え方」)。生きている箱がどれも生存の状態 (空ける途中でも
+    /// token でもない) で rc 0 であることを確かめ、そのヘッダを返す。token の箱と `Foreign` の物体は rc 1 なので断る。
+    /// 検査モードでは、走査する語が空けたブロックを指していないことも確かめる。速いモードでは、モデルの辺がこれを保証する。
+    pub(super) fn freezable(&self) -> (r: Result<Vec<*mut Header>, HeapError>)
+        requires
+            self.wf(),
+            self.core.model@.building is None,
+        ensures
+            r matches Ok(live) ==> {
+                &&& forall|i: int|
+                    0 <= i < live@.len() ==> self.live_block(#[trigger] live@[i]@.addr) && live@[i]
+                        == self.core.block(live@[i]@.addr)
+                &&& forall|h: usize| #[trigger]
+                    self.live_block(h) ==> self.freezable_block(h) && headed(live@, h)
+            },
+    {
+        let blocks = self.core.pages.blocks();
+        let mut live: Vec<*mut Header> = Vec::new();
+        let mut k: usize = 0;
+        while k < blocks.len()
+            invariant
+                self.wf(),
+                self.core.model@.building is None,
+                k <= blocks@.len(),
+                forall|i: int|
+                    0 <= i < blocks@.len() ==> self.core.pages.carved_block(
+                        #[trigger] blocks@[i]@.addr,
+                    ) && blocks@[i] == self.core.pages.block_ptr(blocks@[i]@.addr),
+                forall|i: int|
+                    0 <= i < live@.len() ==> self.live_block(#[trigger] live@[i]@.addr) && live@[i]
+                        == self.core.block(live@[i]@.addr),
+                forall|j: int|
+                    0 <= j < k && self.live_block(#[trigger] blocks@[j]@.addr)
+                        ==> self.freezable_block(blocks@[j]@.addr) && headed(
+                        live@,
+                        blocks@[j]@.addr,
+                    ),
+            decreases blocks.len() - k,
+        {
+            let h = blocks[k];
+            let ghost a = h@.addr;
+            if self.is_live_block(h) {
+                proof {
+                    self.core.lemma_shape(a);
+                    reveal(Core::building_wf);
+                    if M::CHECKED {
+                        self.core.lemma_code_state(a);
+                    }
+                }
+                if M::CHECKED && self.core.prefix_state_get(h) & 3 != ALIVE_STATE {
+                    return Err(HeapError::NotImmortal);
+                }
+                if self.core.rc_get(h) != 0 {
+                    return Err(HeapError::NotImmortal);
+                }
+                if M::CHECKED {
+                    let (first, n) = self.core.scan_get(h);
+                    let mut i: usize = 0;
+                    while i < n
+                        invariant
+                            self.wf(),
+                            self.core.model@.building is None,
+                            M::CHECKED,
+                            self.live_block(a),
+                            self.core.state(a) == BlockState::Live,
+                            a == h@.addr,
+                            h == self.core.block(a),
+                            first == super::inv::p_first(self.core.perm(a)),
+                            n == super::inv::p_count(self.core.perm(a)),
+                            i <= n,
+                            forall|j: int|
+                                #![trigger p_word(self.core.perm(a), j)]
+                                first <= j < first + i && p_word(self.core.perm(a), j).is_ptr_spec()
+                                    ==> self.core.state(p_word(self.core.perm(a), j).bits_spec())
+                                    == BlockState::Live,
+                        decreases n - i,
+                    {
+                        proof {
+                            assert(self.core.scanned(a, (first + i) as int));
+                            self.core.lemma_safe_live_slot(a, (first + i) as int);
+                        }
+                        let child = self.core.slot_get(h, first + i);
+                        if child.is_ptr() {
+                            let c = self.header_of(child);
+                            proof {
+                                self.core.lemma_shape(c@.addr);
+                                self.core.lemma_code_state(c@.addr);
+                                reveal(Core::building_wf);
+                            }
+                            let cs = self.core.prefix_state_get(c) & 3;
+                            if cs != ALIVE_STATE {
+                                return Err(
+                                    if cs == FREED_STATE {
+                                        HeapError::UseAfterFree
+                                    } else {
+                                        HeapError::NotImmortal
+                                    },
+                                );
+                            }
+                        }
+                        i += 1;
+                    }
+                }
+                let ghost before = live@;
+                live.push(h);
+                proof {
+                    assert(self.freezable_block(a));
+                    assert forall|j: int|
+                        0 <= j < k + 1 && self.live_block(
+                            #[trigger] blocks@[j]@.addr,
+                        ) implies self.freezable_block(blocks@[j]@.addr) && headed(
+                        live@,
+                        blocks@[j]@.addr,
+                    ) by {
+                        if j == k {
+                            assert(live@[before.len() as int] == h);
+                            assert(headed(live@, a));
+                        } else {
+                            let i = choose|i: int|
+                                0 <= i < before.len() && #[trigger] before[i]@.addr
+                                    == blocks@[j]@.addr;
+                            assert(live@[i] == before[i]);
+                        }
+                    }
+                }
+            }
+            k += 1;
+        }
+        proof {
+            assert forall|h: usize| #[trigger] self.live_block(h) implies self.freezable_block(h)
+                && headed(live@, h) by {
+                self.core.pages.lemma_in_use_carved(h);
+                let j = choose|j: int| 0 <= j < blocks@.len() && #[trigger] blocks@[j]@.addr == h;
+                assert(self.live_block(blocks@[j]@.addr));
+            }
+        }
+        Ok(live)
     }
 
     /// 生きている物体 (token の箱、不死の物体、ダミーを含む) を列挙する。S11 の根からの走査が使う。

@@ -119,7 +119,7 @@ fn class_of(block_words: usize) -> (r: Option<usize>)
 
 #[repr(C)]
 #[derive(Clone, Copy)]
-struct PageHeader {
+pub(crate) struct PageHeader {
     class: u32,
     block_words: u32,
     /// `Pages::list` の中の添字。大きい物体のページを `swap_remove` で外すときに、移ってきたページの添字を直す。
@@ -203,6 +203,60 @@ proof fn lemma_page_base(a: usize, x: usize)
             a % 0x1_0000 == 0,
             a <= x < a + 0x1_0000,
     ;
+}
+
+/// 凍結した領域のページの頭の権限 `headers` から見た、ブロック `h` のヘッダを指すポインタ。provenance はページの確保の
+/// ものである。
+pub(crate) open spec fn region_ptr(
+    headers: Map<usize, PointsTo<PageHeader>>,
+    h: usize,
+) -> *mut Header {
+    vstd::raw_ptr::ptr_mut_from_data::<Header>(
+        vstd::raw_ptr::PtrData {
+            addr: h,
+            provenance: headers[page_base(h)].ptr()@.provenance,
+            metadata: (),
+        },
+    )
+}
+
+/// 凍結した領域のページの頭の権限 `headers` から見た、ブロック `h` のペイロードの語の数。`prefixed` なら前置きの1語を除く。
+pub(crate) closed spec fn region_cap(
+    headers: Map<usize, PointsTo<PageHeader>>,
+    h: usize,
+    prefixed: bool,
+) -> nat {
+    (headers[page_base(h)].value().block_words - (if prefixed {
+        1int
+    } else {
+        0int
+    }) - HEADER_WORDS) as nat
+}
+
+/// ページの頭の権限を `pages` から `keys` の分だけ取り出す。頭のほかの権限は、ページを返す信頼した `Drop` が要らないので捨てる。
+proof fn take_header_perms(
+    tracked pages: &mut Map<usize, PagePerm>,
+    keys: Set<usize>,
+) -> (tracked r: Map<usize, PointsTo<PageHeader>>)
+    requires
+        keys.subset_of(old(pages).dom()),
+    ensures
+        r.dom() == keys,
+        forall|a: usize| #[trigger] keys.contains(a) ==> r[a] == old(pages)[a].header,
+    decreases keys.len(),
+{
+    if keys.len() == 0 {
+        assert(keys =~= Set::<usize>::empty());
+        Map::tracked_empty()
+    } else {
+        let a = keys.choose();
+        let tracked page = pages.tracked_remove(a);
+        let tracked mut r = take_header_perms(pages, keys.remove(a));
+        let tracked PagePerm { header, dealloc, tail } = page;
+        r.tracked_insert(a, header);
+        assert(r.dom() =~= keys);
+        r
+    }
 }
 
 #[inline]
@@ -493,6 +547,16 @@ impl Pages {
         &&& self.carved_block(b)
     }
 
+    /// ページ `a` の頭の値 `hdr` は、級、ブロックの語の数、バイト数、一覧の添字が今のページの頭と同じで、切り出した
+    /// 終わりは今の位置である。凍結した領域のページの頭は、この形で自分のページを表す。
+    pub(crate) closed spec fn describes(&self, a: usize, hdr: PageHeader) -> bool {
+        &&& hdr.class == self.hdr(a).class
+        &&& hdr.block_words == self.hdr(a).block_words
+        &&& hdr.bytes == self.hdr(a).bytes
+        &&& hdr.index == self.hdr(a).index
+        &&& hdr.limit == self.limit_of(a)
+    }
+
     // 補題
     /// 切り出したブロックは、語に揃い、前置きとペイロードの全体がアドレス空間に収まる。
     pub(crate) proof fn lemma_block_bounds(&self, h: usize)
@@ -720,6 +784,95 @@ impl Pages {
             assert(r.count@.dom() =~= r.pages@.dom());
         }
         r
+    }
+
+    /// 各級の今のページの切り出しの位置をページの頭に書き戻してから、ページの頭の権限を取り出す。凍結した領域はブロックの
+    /// 位置と大きさをページの頭から読むためである。この後の `Pages` は、ページを返す `Drop` にだけ使う。
+    pub(crate) fn take_headers(&mut self) -> (r: Tracked<Map<usize, PointsTo<PageHeader>>>)
+        requires
+            old(self).wf(),
+        ensures
+            forall|h: usize| #[trigger]
+                old(self).carved_block(h) ==> {
+                    &&& r@.contains_key(page_base(h))
+                    &&& region_ptr(r@, h) == old(self).block_ptr(h)
+                    &&& region_cap(r@, h, old(self).prefixed()) == old(self).cap(h)
+                },
+            forall|a: usize| #[trigger]
+                r@.contains_key(a) ==> {
+                    &&& r@[a].ptr()@.addr == a
+                    &&& r@[a].is_init()
+                    &&& old(self).describes(a, r@[a].value())
+                },
+    {
+        let ghost s0 = *self;
+        proof {
+            reveal(Pages::pages_wf);
+            reveal(Pages::classes_wf);
+        }
+        let mut c: usize = 0;
+        while c < CLASSES
+            invariant
+                s0.wf(),
+                c <= CLASSES,
+                self.classes == s0.classes,
+                self.pages@.dom() == s0.pages@.dom(),
+                forall|a: usize| #[trigger]
+                    self.pages@.contains_key(a) ==> {
+                        let hdr = self.pages@[a].header.value();
+                        &&& self.pages@[a].header.ptr() == s0.pages@[a].header.ptr()
+                        &&& self.pages@[a].header.is_init()
+                        &&& hdr.class == s0.hdr(a).class
+                        &&& hdr.block_words == s0.hdr(a).block_words
+                        &&& hdr.bytes == s0.hdr(a).bytes
+                        &&& hdr.index == s0.hdr(a).index
+                        &&& hdr.limit == if (s0.hdr(a).class as int) < c && s0.classes[s0.hdr(
+                            a,
+                        ).class as int].page@.addr == a {
+                            s0.limit_of(a)
+                        } else {
+                            s0.hdr(a).limit as int
+                        }
+                    },
+            decreases CLASSES - c,
+        {
+            let st = self.classes[c];
+            proof {
+                reveal(Pages::pages_wf);
+                reveal(Pages::classes_wf);
+                assert(s0.class_wf(c as int));
+            }
+            if st.page.addr() != 0 {
+                let ghost a = st.page@.addr;
+                proof {
+                    assert(s0.page_wf(a));
+                }
+                let mut hdr = self.header_of(st.page);
+                hdr.limit = st.cursor.addr() - st.page.addr();
+                let tracked mut perm = self.pages.borrow_mut().tracked_remove(a);
+                ptr_mut_write(st.page, Tracked(&mut perm.header), hdr);
+                proof {
+                    self.pages.borrow_mut().tracked_insert(a, perm);
+                    assert(self.pages@.dom() =~= s0.pages@.dom());
+                }
+            }
+            c += 1;
+        }
+        proof {
+            assert forall|h: usize| #[trigger] s0.carved_block(h) implies s0.pages@.contains_key(
+                page_base(h),
+            ) && s0.page_wf(page_base(h)) by {
+                s0.lemma_block(h);
+            }
+            assert forall|a: usize| #[trigger]
+                s0.pages@.contains_key(a) implies self.pages@[a].header.value().limit
+                == s0.limit_of(a) by {
+                assert(s0.page_wf(a));
+            }
+        }
+        let ghost keys = self.pages@.dom();
+        let tracked headers = take_header_perms(self.pages.borrow_mut(), keys);
+        Tracked(headers)
     }
 
     /// OS から取ったページのバイト数。

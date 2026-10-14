@@ -12,6 +12,7 @@ mod alloc;
 mod cell;
 mod error;
 mod foreign;
+mod frozen;
 mod heap;
 mod meta;
 mod mode;
@@ -22,6 +23,7 @@ mod trust;
 mod word;
 
 pub use error::HeapError;
+pub use frozen::Frozen;
 pub use heap::{Heap, Stats, Token};
 pub use meta::{Kind, Meta};
 pub use mode::{Checked, Fast, Mode};
@@ -50,6 +52,8 @@ mod tests {
     #[test]
     fn words_cross_threads_and_heaps_move_to_one() {
         send_and_sync::<Word>();
+        send_and_sync::<Frozen<Fast>>();
+        send_and_sync::<Frozen<Checked>>();
         send::<Heap<Fast>>();
         send::<Heap<Checked>>();
     }

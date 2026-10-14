@@ -9,6 +9,7 @@ const FILES: &[(&str, &str)] = &[
     ("cell.rs", include_str!("cell.rs")),
     ("error.rs", include_str!("error.rs")),
     ("foreign.rs", include_str!("foreign.rs")),
+    ("frozen.rs", include_str!("frozen.rs")),
     ("meta.rs", include_str!("meta.rs")),
     ("mode.rs", include_str!("mode.rs")),
     ("rc.rs", include_str!("rc.rs")),
@@ -98,6 +99,9 @@ const TRUSTED: &[(&str, &str)] = &[
     ("text.rs: external_body write_text", "T10"),
     ("text.rs: external_body text", "T10"),
     ("text.rs: external_body text_ptr", "T10"),
+    ("alloc.rs: Drop for Pages", "T4"),
+    ("heap/walk.rs: Drop for Heap", "T4"),
+    ("frozen.rs: Drop for Frozen", "T4"),
 ];
 
 /// `verus!` の外でも書いてよい `unsafe` の始まり。`Send` と `Sync` の宣言と、検証した関数を呼ぶだけの `Drop` である。
@@ -105,6 +109,7 @@ const UNSAFE_OUTSIDE_ALLOWED: &[&str] = &[
     "unsafe impl Send for",
     "unsafe impl Sync for",
     "unsafe impl<M: Mode> Send for",
+    "unsafe impl<M: Mode> Sync for",
 ];
 
 fn is_ident(c: char) -> bool {
@@ -309,6 +314,13 @@ fn trusted_items(file: &str, text: &str) -> Vec<String> {
             };
             found.push(item);
         }
+    }
+    // `verus!` の外の `Drop` も、Verus が確かめない項目である (T4)
+    for (open, _) in drop_impl_ranges(&s) {
+        let header = squeeze(&s[..open]);
+        let after = &header[header.rfind("Drop for ").expect("a Drop impl") + "Drop for ".len()..];
+        let name: String = after.chars().take_while(|&c| is_ident(c)).collect();
+        found.push(format!("{file}: Drop for {name}"));
     }
     found
 }
@@ -534,6 +546,8 @@ fn comments_strings_and_test_modules_are_skipped() {
         ["f.rs: external_body f", "f.rs: assume( h"]
     );
     assert_eq!(unsafe_outside_verus(text), 1);
+    let text = "impl<M: Mode> Drop for Heap<M> {\n    fn drop(&mut self) {}\n}\n#[cfg(test)]\nmod tests {\n    impl Drop for Probe { fn drop(&mut self) {} }\n}\n";
+    assert_eq!(trusted_items("f.rs", text), ["f.rs: Drop for Heap"]);
     let text =
         "unsafe impl Send for W {}\nimpl Drop for Heap { fn drop(&mut self) { unsafe { f() } } }\n";
     assert_eq!(unsafe_outside_verus(text), 0);
