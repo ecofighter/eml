@@ -9,7 +9,7 @@ use vstd::prelude::Tracked;
 
 use super::ctx as ctx_tests;
 use super::string::text;
-use super::{CONS, cons, list, mortal, probe, raw};
+use super::{CONS, Probe, cons, list, mortal, probe, raw};
 use crate::cell::{rc_decref_shared, rc_dup_shared};
 use crate::{Checked, Control, Ctx, Fast, Heap, HeapError, Kind, Limits, Meta, Mode, Word};
 
@@ -201,6 +201,22 @@ fn a_panicking_finalizer_is_not_run_twice<M: Mode>() {
     assert!(result.is_err());
     drop(heap);
     assert_eq!(drops.load(Ordering::Relaxed), 1);
+}
+
+/// `foreign_unique` で借りて書き換えた値は、解放のときに1回だけ後始末される。
+fn a_foreign_value_written_in_place_is_finalized_once<M: Mode>() {
+    let (p, drops) = probe();
+    let mut heap = Heap::<M>::new();
+    let f = heap.alloc_foreign(Some(p), true);
+    unsafe {
+        let v = heap.foreign_unique::<Option<Probe>>(f).unwrap();
+        let (q, more) = probe();
+        let old = (*v).replace(q);
+        drop(old);
+        assert_eq!(drops.load(Ordering::Relaxed), 1);
+        heap.decref(f).unwrap();
+        assert_eq!(more.load(Ordering::Relaxed), 1);
+    }
 }
 
 // T7
@@ -445,6 +461,22 @@ fn reading_then_appending<M: Mode>() {
     unsafe { heap.decref(w) }.unwrap();
 }
 
+/// `string_push_part` は、写す元の文字列の範囲を写す (T10 の写しを、先頭、途中、末尾、多バイトの文字の前後で通す)。
+fn parts_of_a_string_are_copied<M: Mode>() {
+    let mut heap = Heap::<M>::new();
+    let src = heap.alloc_string("ab日本cd");
+    unsafe {
+        let mut w = heap.alloc_string_room(0);
+        for (from, to) in [(0, 1), (2, 5), (5, 8), (8, 10), (10, 10)] {
+            w = heap.string_push_part(w, src, from, to).unwrap();
+        }
+        assert_eq!(text(&heap, w), "a日本cd");
+        heap.decref(w).unwrap();
+        heap.decref(src).unwrap();
+    }
+    assert_eq!(mortal(&heap), 0);
+}
+
 // 凍結した領域
 fn frozen_pages_are_returned<M: Mode>() {
     let (b, _, _) = super::frozen::builder::<M>();
@@ -590,6 +622,7 @@ both_modes!(
     foreign_values_with_drop_are_finalized_once,
     a_zero_sized_foreign_value,
     a_panicking_finalizer_is_not_run_twice,
+    a_foreign_value_written_in_place_is_finalized_once,
     a_panicking_finalizer_in_a_chain_leaks_the_rest,
     strings_of_every_length_are_read_back,
     multibyte_strings_are_read_back,
@@ -599,6 +632,7 @@ both_modes!(
     self_concat_under_both_borrow_models,
     appending_the_text_of_another_string,
     reading_then_appending,
+    parts_of_a_string_are_copied,
     frozen_pages_are_returned,
     two_threads_read_one_region,
     chains_drop_in_any_order,

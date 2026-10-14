@@ -3458,6 +3458,37 @@ impl<M: Mode> Heap<M> {
         }
     }
 
+    /// 書き換えるために `Foreign` の値を借りる。`Fs.read_all` が `File` の読み手を進めるために使う。検査モードは、
+    /// 読めなければ `UseAfterFree` を、rc が 1 でなければ (共有の負の rc も) `NotUnique` を、持ち主が今の worker で
+    /// なければ `WrongOwner` を返す。型の照らし合わせは `foreign` と同じく速いモードでも行う。
+    ///
+    /// # Safety
+    ///
+    /// 速いモードでは、`w` が読める物体で、局所で rc が 1 で、今の worker が持つことを前提にする。返したポインタは、
+    /// 次にこの物体の参照を手放すか、ほかの参照を作るまでの間だけ使える。
+    pub unsafe fn foreign_unique<T: 'static>(&self, w: Word) -> (r: Result<*mut T, HeapError>)
+        requires
+            self.wf(),
+            w.is_ptr_spec(),
+            self.word_in(w),
+            !M::CHECKED ==> self.settleable() && self.readable(w) && self.owned(w) && self.rc_value(
+                w,
+            ) == 1,
+        ensures
+            r is Err ==> M::CHECKED || r == Err::<*mut T, HeapError>(HeapError::WrongKind),
+    {
+        if M::CHECKED {
+            let h = self.header_of(w);
+            self.checked_live(h)?;
+            let rc = self.core.rc_get(h);
+            if rc != 1 {
+                return Err(HeapError::NotUnique);
+            }
+            self.checked_owner(h, rc)?;
+        }
+        unsafe { self.foreign(w) }
+    }
+
     /// `tobj` の `Int` を読む。即値なら右シフトし、物体なら `BigInt` の中身を読む。
     ///
     /// # Safety

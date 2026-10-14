@@ -6,7 +6,10 @@ use vstd::prelude::*;
 #[cfg(verus_only)]
 use vstd::string::StringSliceAdditionalSpecFns;
 #[cfg(verus_only)]
-use vstd::utf8::{encode_utf8_valid_utf8, valid_utf8, valid_utf8_concat};
+use vstd::utf8::{
+    encode_utf8_valid_utf8, is_char_boundary, is_char_boundary_iff_not_is_continuation_byte,
+    is_char_boundary_start_end_of_seq, valid_utf8, valid_utf8_concat, valid_utf8_split,
+};
 
 use super::*;
 #[cfg(verus_only)]
@@ -17,34 +20,84 @@ use crate::text::{text, text_ptr, write_text};
 
 verus! {
 
-/// 文字列の後ろに写すバイト列。`Str` は呼ぶ側の `&str`、`Text` はこのヒープか付けた塊の文字列の物体 (ヘッダと長さ) である。
-/// `string_concat` の右辺はヒープの権限から借りて読むので、`&mut self` を取る操作に `&str` として渡せない。そのため、
-/// 右辺の権限は写す直前に `Core::write_tail` の中で借りる。
+/// 文字列の後ろに写すバイト列。`Str` は呼ぶ側の `&str`、`Text(h, len, from, to)` はこのヒープか付けた塊の文字列の
+/// 物体 (ヘッダと長さ) のバイトの範囲 `[from, to)` である。`string_concat` の右辺はヒープの権限から借りて読むので、
+/// `&mut self` を取る操作に `&str` として渡せない。そのため、右辺の権限は写す直前に `Core::write_tail` の中で借りる。
 enum Tail<'a> {
     Str(&'a str),
-    Text(*mut Header, usize),
+    Text(*mut Header, usize, usize, usize),
+}
+
+/// 妥当な UTF-8 の `to` までの前の部分でも、`to` より前の文字の境目 `from` は文字の境目である。
+proof fn lemma_boundary_in_prefix(bytes: Seq<u8>, from: int, to: int)
+    requires
+        valid_utf8(bytes),
+        0 <= from <= to <= bytes.len(),
+        is_char_boundary(bytes, from),
+        is_char_boundary(bytes, to),
+    ensures
+        valid_utf8(bytes.subrange(0, to)),
+        is_char_boundary(bytes.subrange(0, to), from),
+        valid_utf8(bytes.subrange(from, to)),
+{
+    valid_utf8_split(bytes, to);
+    let head = bytes.subrange(0, to);
+    assert(head =~= bytes[..to]);
+    if from == to {
+        is_char_boundary_start_end_of_seq(head);
+    } else {
+        is_char_boundary_iff_not_is_continuation_byte(bytes, from);
+        is_char_boundary_iff_not_is_continuation_byte(head, from);
+    }
+    valid_utf8_split(head, from);
+    assert(head[from..] =~= bytes.subrange(from, to));
 }
 
 impl Core {
     spec fn tail_bytes(&self, t: Tail) -> Seq<u8> {
         match t {
             Tail::Str(s) => s.spec_bytes(),
-            Tail::Text(r, _) => self.perm(r@.addr).text(),
+            Tail::Text(r, _, from, to) => self.perm(r@.addr).text().subrange(
+                from as int,
+                to as int,
+            ),
         }
     }
 
-    /// `t` を読める。`Text` なら、このヒープか付けた塊の文字列のブロックで、長さはバイト列の長さに等しい。
+    /// `t` を読める。`Text` なら、このヒープか付けた塊の文字列のブロックで、長さはバイト列の長さに等しく、範囲の両端は
+    /// 文字の境目である。
     spec fn tail_ok(&self, t: Tail) -> bool {
         match t {
             Tail::Str(_) => true,
-            Tail::Text(r, n) => {
-                &&& self.has(r@.addr)
-                &&& self.region_wf()
-                &&& self.perm(r@.addr).holds_text(r, n as int)
-                &&& n == self.perm(r@.addr).text().len()
-                &&& valid_utf8(self.perm(r@.addr).text())
+            Tail::Text(r, n, from, to) => {
+                &&& self.text_ok(r, n)
+                &&& from <= to <= n
+                &&& is_char_boundary(self.perm(r@.addr).text(), from as int)
+                &&& is_char_boundary(self.perm(r@.addr).text(), to as int)
             },
         }
+    }
+
+    /// `r` はこのヒープか付けた塊の文字列のブロックで、長さ `n` はバイト列の長さに等しい。
+    spec fn text_ok(&self, r: *mut Header, n: usize) -> bool {
+        &&& self.has(r@.addr)
+        &&& self.region_wf()
+        &&& self.perm(r@.addr).holds_text(r, n as int)
+        &&& n == self.perm(r@.addr).text().len()
+        &&& valid_utf8(self.perm(r@.addr).text())
+    }
+
+    /// 文字列の全体を写す `Text`。
+    proof fn lemma_whole(&self, r: *mut Header, n: usize)
+        requires
+            self.text_ok(r, n),
+        ensures
+            self.tail_ok(Tail::Text(r, n, 0, n)),
+            self.tail_bytes(Tail::Text(r, n, 0, n)) == self.perm(r@.addr).text(),
+    {
+        let t = self.perm(r@.addr).text();
+        is_char_boundary_start_end_of_seq(t);
+        assert(t.subrange(0, n as int) =~= t);
     }
 
     spec fn opt_bytes(&self, t: Option<Tail>) -> Seq<u8> {
@@ -67,8 +120,11 @@ impl Core {
         ensures
             valid_utf8(self.tail_bytes(t)),
     {
-        if let Tail::Str(s) = t {
-            encode_utf8_valid_utf8(s@);
+        match t {
+            Tail::Str(s) => encode_utf8_valid_utf8(s@),
+            Tail::Text(r, _, from, to) => {
+                lemma_boundary_in_prefix(self.perm(r@.addr).text(), from as int, to as int)
+            },
         }
     }
 
@@ -85,11 +141,14 @@ impl Core {
                 let n = s.as_bytes().len();
                 n
             },
-            Tail::Text(_, n) => *n,
+            Tail::Text(_, _, from, to) => *to - *from,
         }
     }
 
     /// `h` のペイロードの `at` バイト目から `t` を写す。`write_text` と同じ約束で、`Text` ならその物体の権限をここで借りる。
+    // 範囲を切り出す `Text` の道を足すと、Rust がほかのクレートに自動で展開する大きさを超え、計測の `append` の命令の
+    // 数が2.2倍になった。`string_push` の追記の道に展開させるために付ける
+    #[inline]
     fn write_tail(
         &self,
         h: *mut Header,
@@ -119,11 +178,33 @@ impl Core {
     {
         match t {
             Tail::Str(s) => write_text(h, cap, at, s, Tracked(perm)),
-            Tail::Text(r, n) => {
-                let tracked p = self.tracked_perm(r@.addr);
-                write_text(h, cap, at, text(*r, *n, Tracked(p)), Tracked(perm));
+            Tail::Text(r, n, from, to) => {
+                write_text(h, cap, at, self.text_part(*r, *n, *from, *to), Tracked(perm))
             },
         }
+    }
+
+    /// 文字列 `r` のバイトの範囲 `[from, to)` を、その物体の権限から借りる。範囲は vstd の `str::split_at` で切り出すので、
+    /// T10 の関数は文字列の全体を借りるだけでよい。
+    fn text_part(&self, r: *mut Header, n: usize, from: usize, to: usize) -> (s: &str)
+        requires
+            self.tail_ok(Tail::Text(r, n, from, to)),
+        ensures
+            s.spec_bytes() == self.tail_bytes(Tail::Text(r, n, from, to)),
+    {
+        let tracked p = self.tracked_perm(r@.addr);
+        proof {
+            lemma_boundary_in_prefix(p.text(), from as int, to as int);
+        }
+        let (head, _) = text(r, n, Tracked(p)).split_at(to);
+        proof {
+            assert(head.spec_bytes() =~= p.text().subrange(0, to as int));
+        }
+        let (_, part) = head.split_at(from);
+        proof {
+            assert(part.spec_bytes() =~= p.text().subrange(from as int, to as int));
+        }
+        part
     }
 
     /// `old` から、文字列 `h` の長さの語とバイト列だけが変わった (`string_push` のその場の追記)。
@@ -285,6 +366,31 @@ impl<M: Mode> Heap<M> {
             M::CHECKED ==> final(self).words_kept(*old(self)),
     {
         self.make_string(s, 1)
+    }
+
+    /// 容量が `room` バイト以上の空の文字列を作る。結果の長さを先に数えられる extern (`String.show`) が、追記の
+    /// たびの作り直しを避けるために使う。
+    pub fn alloc_string_room(&mut self, room: usize) -> (w: Word)
+        requires
+            old(self).wf(),
+            old(self).safe_settleable(),
+            !M::CHECKED ==> old(self).settleable(),
+        ensures
+            final(self).made(*old(self), w),
+            final(self).is_string(w),
+            final(self).text_of(w) == Seq::<u8>::empty(),
+            M::CHECKED ==> final(self).words_kept(*old(self)),
+    {
+        let empty = "";
+        proof {
+            reveal_strlit("");
+            assert(empty.spec_bytes() =~= Seq::<u8>::empty());
+        }
+        let w = self.make_text(room, Tail::Str(empty), None, 1);
+        proof {
+            assert(Seq::<u8>::empty() + Seq::<u8>::empty() =~= Seq::<u8>::empty());
+        }
+        w
     }
 
     /// `alloc_string` と同じで、rc 0 の不死の物体にする。`CodeBase` の文字列の定数が使う。
@@ -479,6 +585,17 @@ impl<M: Mode> Heap<M> {
         &&& self.is_string(left)
     }
 
+    /// `string_push_part` の前提がみな成り立ち、モデルが合っている。left は `string_push` の前提を満たし、src は読める
+    /// 文字列で、範囲 `[from, to)` は長さに収まり、両端が文字の境目である。
+    pub closed spec fn part_ok(&self, left: Word, src: Word, from: usize, to: usize) -> bool {
+        &&& self.push_ok(left)
+        &&& self.readable(src)
+        &&& self.is_string(src)
+        &&& from <= to <= self.text_of(src).len()
+        &&& is_char_boundary(self.text_of(src), from as int)
+        &&& is_char_boundary(self.text_of(src), to as int)
+    }
+
     /// `string_concat` の前提がみな成り立ち、モデルが合っている。両辺が `decref` の前提を満たす文字列で、同じ物体なら
     /// 呼ぶ側がその数えた参照を2つ持つ。
     pub closed spec fn concat_ok(&self, left: Word, right: Word) -> bool {
@@ -659,9 +776,9 @@ impl<M: Mode> Heap<M> {
             old(self).core.state(left.bits_spec()) == BlockState::Live,
             old(self).core.kind(left.bits_spec()) == Kind::String,
             old(self).core.tail_ok(t),
-            t matches Tail::Text(r, _) && r@.addr == left.bits_spec() ==> old(self).core.rc_of(
-                left.bits_spec(),
-            ) != 1,
+            t matches Tail::Text(r, _, _, _) && r@.addr == left.bits_spec() ==> old(
+                self,
+            ).core.rc_of(left.bits_spec()) != 1,
             !M::CHECKED ==> c,
             M::CHECKED ==> old(self).decref_passes(left.bits_spec()),
             c ==> old(self).consistent() && old(self).core.holds(left),
@@ -777,8 +894,9 @@ impl<M: Mode> Heap<M> {
                     len <= 8 * (cap - 1),
                     cap >= 1,
             ;
+            s0.core.lemma_whole(h, len);
         }
-        let w = self.make_text(want, Tail::Text(h, len), Some(t), 1);
+        let w = self.make_text(want, Tail::Text(h, len, 0, len), Some(t), 1);
         let ghost mid = *self;
         proof {
             // 塊の left は、新しい物体のブロックと重ならない
@@ -843,6 +961,88 @@ impl<M: Mode> Heap<M> {
         self.checked_string(h)?;
         let ghost s1 = *self;
         let w = self.push_unchecked(left, Tail::Str(s), Ghost(c));
+        proof {
+            assert(old(self).core.settled_view() == s1.core);
+        }
+        Ok(w)
+    }
+
+    /// `left` の後ろに `src` のバイトの範囲 `[from, to)` を足す。`left` を消費し、`src` は借りる。どの誤りも最初の確保
+    /// より前に返す。
+    ///
+    /// # Safety
+    ///
+    /// 速いモードでは、`left` について `string_push` と同じ前提 (`push_ok`) を、`src` について読める文字列で
+    /// あることと、`from <= to <= len` で両端が文字の境目であることを前提にする。`left` と `src` は違う物体で
+    /// なければならない (`left` を作り直すと `src` の中身を指す位置が古くなるため)。
+    pub unsafe fn string_push_part(&mut self, left: Word, src: Word, from: usize, to: usize) -> (r:
+        Result<Word, HeapError>)
+        requires
+            old(self).wf(),
+            old(self).safe_settleable(),
+            left.is_ptr_spec(),
+            src.is_ptr_spec(),
+            left != src,
+            old(self).word_in(left),
+            old(self).word_in(src),
+            !M::CHECKED ==> old(self).part_ok(left, src, from, to),
+        ensures
+            final(self).wf(),
+            final(self).same_tokens(*old(self)),
+            r is Err ==> *final(self) == old(self).settled_heap(),
+            !M::CHECKED ==> r is Ok,
+            r matches Ok(w) ==> final(self).is_string(w) && final(self).text_of(w) == old(
+                self,
+            ).text_of(left) + old(self).text_of(src).subrange(from as int, to as int),
+            old(self).part_ok(left, src, from, to) ==> r is Ok || chain_err(r),
+            r matches Ok(w) ==> (old(self).part_ok(left, src, from, to) ==> final(self).consistent()
+                && final(self).pushed(*old(self), left, w)),
+            M::CHECKED ==> final(self).words_kept(*old(self)),
+    {
+        let ghost c = self.part_ok(left, src, from, to);
+        self.settle();
+        let hl = self.header_of(left);
+        let hs = self.header_of(src);
+        proof {
+            self.lemma_checks_pass(left);
+            self.lemma_checks_pass(src);
+            reveal(Core::building_wf);
+            if c {
+                self.core.lemma_readable(left);
+                self.core.lemma_readable(src);
+            }
+            if left.bits_spec() == src.bits_spec() {
+                // 同じ番地を指す読める語は provenance も同じなので、`left != src` ならこの枝に来ない
+                crate::word::lemma_same_ptr(left, src);
+            }
+        }
+        self.checked_string(hl)?;
+        self.checked_live(hs)?;
+        if M::CHECKED && !matches!(self.core.meta_get(hs).kind(), Kind::String) {
+            return Err(HeapError::WrongKind);
+        }
+        proof {
+            self.core.lemma_shape(hs@.addr);
+        }
+        let len = self.core.slot_get(hs, 0).bits();
+        proof {
+            let cap = self.core.cap(hs@.addr);
+            assert((len + 7) / 8 <= cap - 1) by (nonlinear_arith)
+                requires
+                    len <= 8 * (cap - 1),
+                    cap >= 1,
+            ;
+        }
+        if M::CHECKED {
+            let tracked p = self.core.tracked_perm(hs@.addr);
+            let s = text(hs, len, Tracked(p));
+            // `is_char_boundary` は長さを超える位置を偽とし、長さより前では続きのバイト (0x80..=0xBF) でないかを見る
+            if !(from <= to && s.is_char_boundary(from) && s.is_char_boundary(to)) {
+                return Err(HeapError::OutOfBounds);
+            }
+        }
+        let ghost s1 = *self;
+        let w = self.push_unchecked(left, Tail::Text(hs, len, from, to), Ghost(c));
         proof {
             assert(old(self).core.settled_view() == s1.core);
         }
@@ -917,9 +1117,10 @@ impl<M: Mode> Heap<M> {
                     len <= 8 * (cap - 1),
                     cap >= 1,
             ;
+            self.core.lemma_whole(hr, len);
         }
         let ghost s1 = *self;
-        let w = self.push_unchecked(left, Tail::Text(hr, len), Ghost(c));
+        let w = self.push_unchecked(left, Tail::Text(hr, len, 0, len), Ghost(c));
         let ghost mid = *self;
         proof {
             assert(old(self).core.settled_view() == s1.core);

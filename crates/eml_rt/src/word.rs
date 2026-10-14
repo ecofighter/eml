@@ -338,6 +338,18 @@ pub proof fn lemma_imm_and_ptr_are_disjoint(bits: usize)
     assert(0usize & 1 == 0) by (bit_vector);
 }
 
+/// 番地と provenance が同じ語は、同じ語である
+pub(crate) proof fn lemma_same_ptr(a: Word, b: Word)
+    requires
+        a.bits_spec() == b.bits_spec(),
+        a.ptr_spec()@.provenance == b.ptr_spec()@.provenance,
+    ensures
+        a == b,
+{
+    assert(a.ptr_spec()@ == b.ptr_spec()@);
+    assert(a.ptr_spec() == b.ptr_spec());
+}
+
 } // verus!
 // 語は値で、スレッドをまたいでよいかは型でなく `share` の規約が守る
 unsafe impl Send for Word {}
