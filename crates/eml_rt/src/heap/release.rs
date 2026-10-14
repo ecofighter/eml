@@ -32,9 +32,9 @@ impl<M: Mode> Heap<M> {
     /// `keep` は走査する語ごとに、その子の参照を呼ぶ側に残すかを持つ。
     ///
     /// # Safety
-    /// `w` はこのヒープの生きている物体を指し、呼ぶ側がその参照を1つ持っている。物体は種類 `Data` で、tag が `tag`、
-    /// 走査する語の数が `keep.len()` である。共有の物体は `lin` ビットを持たない。rc が正なら、持ち主は今の worker である。
-    /// `is_last` が偽のときの残す子は `dup` の安全の条件を満たす。
+    /// `w` はこのヒープか付けた塊の生きている物体を指し、呼ぶ側がその参照を1つ持っている。物体は種類 `Data` で、tag が
+    /// `tag`、走査する語の数が `keep.len()` である。共有の物体は `lin` ビットを持たない。rc が正なら、持ち主は今の
+    /// worker である。`is_last` が偽のときの残す子は `dup` の安全の条件を満たす。
     #[inline]
     pub unsafe fn release(&mut self, w: Word, tag: u16, keep: &[bool]) -> (r: Result<(), HeapError>)
         requires

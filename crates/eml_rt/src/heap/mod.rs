@@ -2,7 +2,8 @@
 //! (docs/spec/object-model.md の「核の操作」)。語を受ける操作と、ペイロードを
 //! 呼ぶ側が書く `alloc` と `alloc_immortal` は `unsafe fn` で、安全の条件は docs/spec/object-model.md の「核の操作」にある。その条件の
 //! 「生きている物体」は、`meta` に合うペイロード (走査する語、`scan` が 255 なら数の語、`BigInt` なら値) をすべて書いた
-//! 物体を指す。データの生の語はこの条件に入らない。検査モードは、確かめられる違反を `Err` で返す。各メソッドの
+//! 物体を指す。データの生の語はこの条件に入らない。「付けた塊」は、ヒープに付けた凍結した塊とその祖先の塊である
+//! (docs/spec/object-model.md の「凍結した領域」)。検査モードは、確かめられる違反を `Err` で返す。各メソッドの
 //! `# Safety` には、速いモードが確かめず検査モードが `Err` にする条件も書く。
 
 mod chain;
@@ -142,7 +143,7 @@ pub struct Heap<M: Mode> {
     /// 付けた凍結した塊。`core` の塊の権限の写しは、この `Arc` が生かす塊から写す。
     // `Heap` を落とすときは、後始末の後で `release_region` に渡して手放す。欄の後始末として `Arc` を手放す処理が展開
     // されると、計測のプログラムで文字列の操作と `release` が呼ぶ側に展開されなくなり、`append` の命令の数が2.5倍に
-    // なったためである (docs/implementation/benchmarks.md の「S9b-1 (文字列)」と同じ、展開の判断の問題)
+    // なったためである (docs/implementation/benchmarks.md の「S9b-2a (凍結した領域)」)
     region: ManuallyDrop<Option<Arc<Frozen<M>>>>,
     worker: u32,
     /// 解放の連鎖の作業リスト。使い回して、解放のたびに確保しない。
@@ -350,7 +351,8 @@ impl<M: Mode> Heap<M> {
         self.core.state(w.bits_spec()) == BlockState::Live ==> self.core.rc_of(w.bits_spec()) > 0
     }
 
-    /// `w` は即値か、このヒープが確保したブロックを指す (安全の前提)。検査モードでは、空けたブロックも含む。
+    /// `w` は即値か、このヒープが確保したブロックか、付けた塊のブロックを指す (安全の前提)。検査モードでは、空けた
+    /// ブロックも含む。
     pub closed spec fn word_in(&self, w: Word) -> bool {
         self.core.word_ok(w)
     }
@@ -1186,7 +1188,7 @@ impl<M: Mode> Heap<M> {
     }
 
     /// 付けている塊を、その子孫の塊 `region` に替える。何も付けていなければ、そのまま付ける。子孫でなければ panic する
-    /// (docs/spec/object-model.md の「不死の物体の数え方」)。付けた後、このヒープは塊とその祖先のブロックを指す語を
+    /// (docs/spec/object-model.md の「凍結した領域」)。付けた後、このヒープは塊とその祖先のブロックを指す語を
     /// 受け付ける。
     pub fn attach(&mut self, region: Arc<Frozen<M>>)
         requires
@@ -1221,7 +1223,7 @@ impl<M: Mode> Heap<M> {
     }
 
     /// 作り手のヒープを凍結した塊にする。生きているブロックがどれも rc 0 の不死の物体で、token の箱と `Foreign` の
-    /// 物体がないことを、実行時に確かめる (docs/spec/object-model.md の「不死の物体の数え方」)。そうでなければ
+    /// 物体がないことを、実行時に確かめる (docs/spec/object-model.md の「凍結した領域」)。そうでなければ
     /// `NotImmortal` を返す。検査モードでは、走査する語が空けたブロックを指していれば `UseAfterFree` を返す。誤りなら、
     /// 作り手のヒープは普通に落ちる。
     pub fn freeze(self) -> (r: Result<Frozen<M>, HeapError>)
@@ -1237,7 +1239,7 @@ impl<M: Mode> Heap<M> {
         let live = b.freezable()?;
         let ghost b0 = b;
         let ghost s0 = b.core;
-        // 領域の物体は数えない (docs/spec/object-model.md の「不死の物体の数え方」)。ダミーと同じ印にする
+        // 領域の物体は数えない (docs/spec/object-model.md の「凍結した領域」)。ダミーと同じ印にする
         if M::CHECKED {
             let mut k: usize = 0;
             while k < live.len()
@@ -1606,8 +1608,8 @@ impl<M: Mode> Heap<M> {
     }
 
     /// # Safety
-    /// `w` は即値か、このヒープの生きている物体を指し、呼ぶ側が参照を持っているか、生きている持ち主から借りている。
-    /// 物体は `lin` ビットを持たない。rc が正なら、持ち主は今の worker である。
+    /// `w` は即値か、このヒープか付けた塊の生きている物体を指し、呼ぶ側が参照を持っているか、生きている持ち主から
+    /// 借りている。物体は `lin` ビットを持たない。rc が正なら、持ち主は今の worker である。
     #[inline]
     pub unsafe fn dup(&mut self, w: Word) -> (r: Result<(), HeapError>)
         requires
@@ -1785,8 +1787,9 @@ impl<M: Mode> Heap<M> {
     /// 参照を1つ手放す。LIR の `decref` と `drop` は、どちらもこれで実行する (docs/spec/object-model.md の「核の操作」)。
     ///
     /// # Safety
-    /// `w` は即値か、このヒープの生きている物体を指し、呼ぶ側がその参照を1つ持っている。不死の物体なら、その参照は
-    /// `acquire_immortal` か `dup` で作ったものである。共有の物体は `lin` ビットを持たない。rc が正なら、持ち主は今の worker である。
+    /// `w` は即値か、このヒープか付けた塊の生きている物体を指し、呼ぶ側がその参照を1つ持っている。不死の物体なら、その
+    /// 参照は `acquire_immortal` か `dup` で作ったものである。共有の物体は `lin` ビットを持たない。rc が正なら、
+    /// 持ち主は今の worker である。
     #[inline]
     pub unsafe fn decref(&mut self, w: Word) -> (r: Result<(), HeapError>)
         requires
@@ -2539,7 +2542,7 @@ impl<M: Mode> Heap<M> {
     /// 不死の物体の参照を1つ作る (docs/spec/object-model.md の「不死の物体の数え方」)。速いモードでは何もしない。
     ///
     /// # Safety
-    /// `w` は即値か、このヒープの生きている不死の物体 (rc 0) を指す。
+    /// `w` は即値か、このヒープか付けた塊の生きている不死の物体 (rc 0) を指す。
     pub unsafe fn acquire_immortal(&mut self, w: Word) -> (r: Result<(), HeapError>)
         requires
             old(self).wf(),
@@ -2587,7 +2590,7 @@ impl<M: Mode> Heap<M> {
     /// rc が 1 か。reuse とその場の書き換えに使う。共有、不死、張り付いた数は、この比較でみな偽になる。
     ///
     /// # Safety
-    /// `w` は即値か、このヒープの生きている物体を指す。rc が正なら、持ち主は今の worker である。
+    /// `w` は即値か、このヒープか付けた塊の生きている物体を指す。rc が正なら、持ち主は今の worker である。
     pub unsafe fn is_unique(&self, w: Word) -> (r: Result<bool, HeapError>)
         requires
             self.wf(),
@@ -2613,7 +2616,7 @@ impl<M: Mode> Heap<M> {
     /// 手放そうとしている参照が最後のものか (rc が 1 か -1)。フィールドを `dup` せずに受け取ってよいかに使う。
     ///
     /// # Safety
-    /// `w` は即値か、このヒープの生きている物体を指す。rc が正なら、持ち主は今の worker である。
+    /// `w` は即値か、このヒープか付けた塊の生きている物体を指す。rc が正なら、持ち主は今の worker である。
     pub unsafe fn is_last(&self, w: Word) -> (r: Result<bool, HeapError>)
         requires
             self.wf(),
@@ -2641,7 +2644,7 @@ impl<M: Mode> Heap<M> {
     }
 
     /// # Safety
-    /// `w` はこのヒープの生きている物体を指す。
+    /// `w` はこのヒープか付けた塊の生きている物体を指す。
     pub unsafe fn meta(&self, w: Word) -> (r: Result<Meta, HeapError>)
         requires
             self.wf(),
@@ -2724,7 +2727,7 @@ impl<M: Mode> Heap<M> {
     /// ペイロードの物理的な i 語目を読む。
     ///
     /// # Safety
-    /// `w` はこのヒープの生きている物体を指し、i 語目はペイロードの中の走査する語である。
+    /// `w` はこのヒープか付けた塊の生きている物体を指し、i 語目はペイロードの中の走査する語である。
     pub unsafe fn field(&self, w: Word, i: usize) -> (r: Result<Word, HeapError>)
         requires
             self.wf(),
@@ -2767,8 +2770,8 @@ impl<M: Mode> Heap<M> {
     ///
     /// # Safety
     /// `w` はこのヒープの生きている物体を指し、i 語目はペイロードの中の走査する語で、ほかのスレッドはその物体を読めない。
-    /// `v` は即値か、このヒープの生きている物体を指し、呼ぶ側がその参照を1つ持つ。その参照は `w` の i 語目に移る。
-    /// rc が正なら、持ち主は今の worker である。
+    /// `v` は即値か、このヒープか付けた塊の生きている物体を指し、呼ぶ側がその参照を1つ持つ。その参照は `w` の i 語目に
+    /// 移る。rc が正なら、持ち主は今の worker である。
     pub unsafe fn set_field(&mut self, w: Word, i: usize, v: Word) -> (r: Result<(), HeapError>)
         requires
             old(self).wf(),
@@ -2845,9 +2848,9 @@ impl<M: Mode> Heap<M> {
     }
 
     /// # Safety
-    /// `w` はこのヒープの生きている物体を指し、i 語目はペイロードの中の生の語で、すでに書いてある。`alloc_data` は生の
-    /// 語を書かず、新しいページのメモリは初期化されていないので、書く前に読むと未初期化の読み込みになる。この条件は
-    /// 検査モードも確かめない。
+    /// `w` はこのヒープか付けた塊の生きている物体を指し、i 語目はペイロードの中の生の語で、すでに書いてある。
+    /// `alloc_data` は生の語を書かず、新しいページのメモリは初期化されていないので、書く前に読むと未初期化の読み込みに
+    /// なる。この条件は検査モードも確かめない。
     pub unsafe fn raw(&self, w: Word, i: usize) -> (r: Result<u64, HeapError>)
         requires
             self.wf(),
@@ -2929,7 +2932,7 @@ impl<M: Mode> Heap<M> {
     /// 走査する語の数。形を知らない処理が使う。
     ///
     /// # Safety
-    /// `w` はこのヒープの生きている物体を指す。
+    /// `w` はこのヒープか付けた塊の生きている物体を指す。
     pub unsafe fn scanned_len(&self, w: Word) -> (r: Result<usize, HeapError>)
         requires
             self.wf(),
@@ -2960,7 +2963,7 @@ impl<M: Mode> Heap<M> {
     /// 走査する語の i 番目を読む。`scan` が 255 のときの数の語と、種類の走査の始まりを考える。
     ///
     /// # Safety
-    /// `w` はこのヒープの生きている物体を指し、i は `scanned_len(w)` より小さい。
+    /// `w` はこのヒープか付けた塊の生きている物体を指し、i は `scanned_len(w)` より小さい。
     pub unsafe fn scanned(&self, w: Word, i: usize) -> (r: Result<Word, HeapError>)
         requires
             self.wf(),
@@ -3056,7 +3059,7 @@ impl<M: Mode> Heap<M> {
     /// 合わせは、速いモードでも行う (docs/spec/object-model.md の「核の操作」)。
     ///
     /// # Safety
-    /// `w` はこのヒープの生きている物体を指す。
+    /// `w` はこのヒープか付けた塊の生きている物体を指す。
     pub unsafe fn foreign<T: 'static>(&self, w: Word) -> (r: Result<*mut T, HeapError>)
         requires
             self.wf(),
@@ -3086,7 +3089,7 @@ impl<M: Mode> Heap<M> {
     /// `tobj` の `Int` を読む。即値なら右シフトし、物体なら `BigInt` の中身を読む。
     ///
     /// # Safety
-    /// `w` は即値か、このヒープの生きている `BigInt` の物体 (ダミーを含む) を指す。
+    /// `w` は即値か、このヒープか付けた塊の生きている `BigInt` の物体 (ダミーを含む) を指す。
     pub unsafe fn unbox_int(&self, w: Word) -> (r: Result<i64, HeapError>)
         requires
             self.wf(),

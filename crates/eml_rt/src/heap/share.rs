@@ -2363,8 +2363,8 @@ impl<M: Mode> Heap<M> {
     /// w から届く物体を、`receiver` に渡すために共有にする。送り手のスレッドが、値を公開する前に呼ぶ。
     ///
     /// # Safety
-    /// `w` は即値か、このヒープの生きている物体を指し、そこから届く物体はどれも生きている。局所の `lin` の物体には
-    /// 1回だけ届き、共有の側の `lin` の物体には届かない。
+    /// `w` は即値か、このヒープか付けた塊の生きている物体を指し、そこから届く物体はどれも生きている。局所の `lin` の
+    /// 物体には1回だけ届き、共有の側の `lin` の物体には届かない。
     #[verifier::spinoff_prover]
     pub unsafe fn share(&mut self, w: Word, receiver: u32) -> (r: Result<(), HeapError>)
         requires

@@ -794,7 +794,7 @@ impl Core {
     }
 
     /// 塊の物体の参照を動かした後。塊の物体は数えないので、モデルは手放した辺を外すだけで、ヒープの物体はどれも変わらない
-    /// (docs/spec/object-model.md の「不死の物体の数え方」)。
+    /// (docs/spec/object-model.md の「凍結した領域」)。
     proof fn lemma_region_count(&self, s0: Core, h: usize, up: bool, edge: Option<Pos>, c: bool)
         requires
             c ==> s0.full(),

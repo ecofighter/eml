@@ -1,4 +1,4 @@
-//! 凍結した領域 (docs/spec/object-model.md の「不死の物体の数え方」)。不死の定数を、どのヒープにも属さない読み出し
+//! 凍結した領域 (docs/spec/object-model.md の「凍結した領域」)。不死の定数を、どのヒープにも属さない読み出し
 //! 専用の塊に置く。塊は親の塊への `Arc` を持ち、鎖になる。凍結した後はどの操作も書き込まないので、権限は vstd の
 //! `Shared` で読むだけの形にして、付けたヒープに写す。
 
@@ -109,7 +109,7 @@ impl RegionPerms {
     }
 
     /// この塊のブロック `h` は、生存の rc 0 の物体で、形がヒープのブロックと同じ (`Core::block_shape`) である。検査
-    /// モードの前置きは生存の状態で、数えない印を持つ (docs/spec/object-model.md の「不死の物体の数え方」)。`Foreign`
+    /// モードの前置きは生存の状態で、数えない印を持つ (docs/spec/object-model.md の「凍結した領域」)。`Foreign`
     /// の物体はない。塊はスレッドの間で共有するが、`Foreign` の値は `Send` しか求めないからである。
     pub(crate) open spec fn block_wf(self, h: usize, prefixed: bool) -> bool {
         let p = self.blocks[h];
@@ -349,7 +349,7 @@ impl RegionPerms {
 }
 
 /// 凍結した塊。不死の定数のブロックを持つページと、親の塊への `Arc` を持つ (docs/spec/object-model.md の
-/// 「不死の物体の数え方」)。
+/// 「凍結した領域」)。
 pub struct Frozen<M: Mode> {
     // `Drop` が返すページの一覧。凍結の後は `Drop` だけが読むので、コンパイラには読まない欄に見える
     #[allow(dead_code)]
@@ -515,6 +515,6 @@ impl<M: Mode> Drop for Frozen<M> {
 }
 
 // 凍結した後は、どの操作も塊のメモリに書き込まず、どのスレッドも読むだけである (docs/spec/object-model.md の
-// 「`unsafe` の核」の T0 の改め)。ページの一覧の生のポインタは、最後の `Arc` を落とした `Drop` だけが使う
+// 「`unsafe` の核」の T0)。ページの一覧の生のポインタは、最後の `Arc` を落とした `Drop` だけが使う
 unsafe impl<M: Mode> Send for Frozen<M> {}
 unsafe impl<M: Mode> Sync for Frozen<M> {}

@@ -421,8 +421,8 @@ impl<M: Mode> Heap<M> {
     }
 
     /// # Safety
-    /// `w` はこのヒープの生きている文字列の物体を指す。返す位置を読めるのは、物体が生きていて、`string_push` か
-    /// `string_concat` でその物体を書き換えていない間だけである。
+    /// `w` はこのヒープか付けた塊の生きている文字列の物体を指す。返す位置を読めるのは、物体が生きていて、`string_push`
+    /// か `string_concat` でその物体を書き換えていない間だけである。
     pub unsafe fn string(&self, w: Word) -> (r: Result<*const str, HeapError>)
         requires
             self.wf(),
@@ -798,10 +798,11 @@ impl<M: Mode> Heap<M> {
     /// 前に返すので、`Err` のときヒープは変わらない (docs/spec/object-model.md の「文字列」)。
     ///
     /// # Safety
-    /// `left` はこのヒープの生きている文字列の物体を指し、呼ぶ側がその参照を1つ持つ (`decref` と同じ前提)。`s` は left
-    /// 自身の中身を指さない。一意な left を作り直すとこの呼び出しの中で left の箱を空け、大きい物体ならページも返すが、
-    /// 引数の `&str` が指すメモリを呼び出しの間に返すと未定義の動作になるためである。自分自身との連結は `dup` と
-    /// `string_concat(x, x)` で行う。`s` がほかの文字列の中身を指すときは、その物体はこの呼び出しの間生きている。
+    /// `left` はこのヒープか付けた塊の生きている文字列の物体を指し、呼ぶ側がその参照を1つ持つ (`decref` と同じ前提)。
+    /// `s` は left 自身の中身を指さない。一意な left を作り直すとこの呼び出しの中で left の箱を空け、大きい物体なら
+    /// ページも返すが、引数の `&str` が指すメモリを呼び出しの間に返すと未定義の動作になるためである。自分自身との連結
+    /// は `dup` と `string_concat(x, x)` で行う。`s` がほかの文字列の中身を指すときは、その物体はこの呼び出しの間
+    /// 生きている。
     pub unsafe fn string_push(&mut self, left: Word, s: &str) -> (r: Result<Word, HeapError>)
         requires
             old(self).wf(),
@@ -844,8 +845,8 @@ impl<M: Mode> Heap<M> {
     /// 最初の確保より前に返す (docs/spec/object-model.md の「文字列」)。
     ///
     /// # Safety
-    /// `left` と `right` はこのヒープの生きている文字列の物体を指し、呼ぶ側がそれぞれの参照を1つずつ持つ (同じ物体なら
-    /// 2つ持つ)。
+    /// `left` と `right` はこのヒープか付けた塊の生きている文字列の物体を指し、呼ぶ側がそれぞれの参照を1つずつ持つ
+    /// (同じ物体なら2つ持つ)。
     pub unsafe fn string_concat(&mut self, left: Word, right: Word) -> (r: Result<Word, HeapError>)
         requires
             old(self).wf(),

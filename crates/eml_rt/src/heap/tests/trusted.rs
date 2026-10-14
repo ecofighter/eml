@@ -399,6 +399,85 @@ fn frozen_pages_are_returned<M: Mode>() {
     drop(region);
 }
 
+fn two_threads_read_one_region<M: Mode>() {
+    let (b, s, _) = super::frozen::builder::<M>();
+    let region = Arc::new(b.freeze().unwrap());
+    let threads: Vec<_> = (0..2)
+        .map(|_| {
+            let region = region.clone();
+            std::thread::spawn(move || {
+                let mut heap = Heap::<M>::new();
+                heap.attach(region);
+                // 領域の物体には、どちらのモードの dup と decref も書き込まない
+                for _ in 0..100 {
+                    unsafe { heap.dup(s) }.unwrap();
+                    unsafe { heap.decref(s) }.unwrap();
+                }
+                text(&heap, s)
+            })
+        })
+        .collect();
+    for t in threads {
+        assert_eq!(t.join().unwrap(), "constant");
+    }
+}
+
+fn chains_drop_in_any_order<M: Mode>() {
+    for child_first in [true, false] {
+        let (b1, s1, _) = super::frozen::builder::<M>();
+        let r1 = Arc::new(b1.freeze().unwrap());
+        let mut b2 = Heap::<M>::new();
+        b2.attach(r1.clone());
+        let some = unsafe { b2.alloc_immortal(1, Meta::new(1, 1, Kind::Data, false)) };
+        unsafe {
+            b2.acquire_immortal(s1).unwrap();
+            b2.set_field(some, 0, s1).unwrap();
+        }
+        let r2 = Arc::new(b2.freeze().unwrap());
+        let mut heap = Heap::<M>::new();
+        heap.attach(r2.clone());
+        if child_first {
+            drop(r2);
+            drop(r1);
+        } else {
+            drop(r1);
+            drop(r2);
+        }
+        // 付けたヒープの `Arc` だけが鎖を生かす
+        let inner = unsafe { heap.field(some, 0) }.unwrap();
+        assert_eq!(text(&heap, inner), "constant");
+        drop(heap);
+    }
+}
+
+fn own_objects_read_region_words<M: Mode>() {
+    let (b, s, big) = super::frozen::builder::<M>();
+    let region = Arc::new(b.freeze().unwrap());
+    let mut heap = Heap::<M>::new();
+    heap.attach(region);
+    let pair = heap.alloc_data(0, 2, 0, false);
+    unsafe {
+        heap.acquire_immortal(s).unwrap();
+        heap.acquire_immortal(big).unwrap();
+        heap.set_field(pair, 0, s).unwrap();
+        heap.set_field(pair, 1, big).unwrap();
+        let n = heap.field(pair, 1).unwrap();
+        assert_eq!(heap.unbox_int(n).unwrap(), i64::MAX);
+        // 領域の左辺から写して、自分の文字列にする
+        heap.dup(s).unwrap();
+        heap.dup(s).unwrap();
+        let r = heap.string_push(s, "!").unwrap();
+        let c = heap.string_concat(r, s).unwrap();
+        assert_eq!(text(&heap, c), "constant!constant");
+        heap.decref(c).unwrap();
+        // share は領域の子でたどりを止め、共有の親を手放す連鎖は領域の子に書き込まない
+        heap.share(pair, 1).unwrap();
+        heap.decref(pair).unwrap();
+    }
+    assert_eq!(text(&heap, s), "constant");
+    assert_eq!(mortal(&heap), 0);
+}
+
 both_modes!(
     pages_are_aligned_and_returned,
     large_objects_get_their_own_page,
@@ -419,4 +498,7 @@ both_modes!(
     appending_the_text_of_another_string,
     reading_then_appending,
     frozen_pages_are_returned,
+    two_threads_read_one_region,
+    chains_drop_in_any_order,
+    own_objects_read_region_words,
 );

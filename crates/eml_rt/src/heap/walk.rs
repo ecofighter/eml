@@ -100,7 +100,7 @@ impl<M: Mode> Heap<M> {
         }
     }
 
-    /// 凍結の確かめ (docs/spec/object-model.md の「不死の物体の数え方」)。生きている箱がどれも生存の状態 (空ける途中でも
+    /// 凍結の確かめ (docs/spec/object-model.md の「凍結した領域」)。生きている箱がどれも生存の状態 (空ける途中でも
     /// token でもない) で rc 0 であることを確かめ、そのヘッダを返す。token の箱と `Foreign` の物体は rc 1 なので断る。
     /// 検査モードでは、走査する語が空けたブロックを指していないことも確かめる。速いモードでは、モデルの辺がこれを保証する。
     pub(super) fn freezable(&self) -> (r: Result<Vec<*mut Header>, HeapError>)

@@ -1,4 +1,4 @@
-//! 凍結した領域 (docs/spec/object-model.md の「不死の物体の数え方」)。
+//! 凍結した領域 (docs/spec/object-model.md の「凍結した領域」)。
 
 use std::sync::Arc;
 
