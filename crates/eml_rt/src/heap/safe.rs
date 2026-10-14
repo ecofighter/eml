@@ -986,7 +986,7 @@ impl Core {
             self.safe_wf(),
             self.safe_settleable(),
             self.dom().contains(h),
-            self.state(h) == BlockState::Live || self.state(h) == BlockState::Building,
+            self.state(h) != BlockState::Freed,
             self.scanned(h, i),
         ensures
             self.safe_slot(self.perm(h), i),

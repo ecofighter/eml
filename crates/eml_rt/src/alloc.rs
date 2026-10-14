@@ -12,6 +12,8 @@ use vstd::prelude::*;
 use vstd::raw_ptr::{Dealloc, PointsTo, PointsToRaw, ptr_mut_write, ptr_ref};
 
 use crate::heap::TOO_LARGE;
+#[cfg(verus_only)]
+use crate::meta::field_ptr;
 use crate::meta::{BlockPerm, HEADER_WORDS, Header, meta_ptr, slot_ptr};
 use crate::word::Word;
 
@@ -2319,6 +2321,54 @@ impl Pages {
         ) by {
             assert(s0.carved@.contains(b));
         }
+    }
+
+    /// 渡したブロックは、切り出したブロックである。
+    pub(crate) proof fn lemma_in_use_carved(&self, h: usize)
+        requires
+            self.wf(),
+            self.in_use().contains(h),
+        ensures
+            self.carved_block(h),
+    {
+        reveal(Pages::carved_wf);
+    }
+
+    /// 切り出したブロック `h` のヘッダの `meta` を読む。渡したブロックなら持ち主の権限 `held` で読み、渡していない
+    /// ブロックなら空きリストにあるので、確保器の権限で読む。値は空いた印である。
+    #[inline]
+    pub(crate) fn read_meta(
+        &self,
+        h: *mut Header,
+        Tracked(held): Tracked<Option<&BlockPerm>>,
+    ) -> (r: u32)
+        requires
+            self.wf(),
+            self.carved_block(h@.addr),
+            h == self.block_ptr(h@.addr),
+            held is Some <==> self.in_use().contains(h@.addr),
+            held matches Some(p) ==> p.meta.ptr() == field_ptr::<u32>(h, 4) && p.meta.is_init(),
+        ensures
+            held matches Some(p) ==> r == p.meta.value(),
+            held is None ==> r == FREE_META,
+    {
+        proof {
+            self.lemma_block_bounds(h@.addr);
+            reveal(Pages::carved_wf);
+            reveal(Pages::free_wf);
+            if held is None {
+                assert(self.carved@.contains(h@.addr));
+                assert(self.on_free_list(h@.addr));
+                let c = self.hdr(page_base(h@.addr)).class as int;
+                let i = self.free@[c].index_of(h@.addr);
+                assert(self.free_entry(c, i));
+            }
+        }
+        let tracked p = match held {
+            Some(p) => p,
+            None => self.free_perms.borrow().tracked_borrow(h@.addr),
+        };
+        *ptr_ref(meta_ptr(h), Tracked(&p.meta))
     }
 
     /// 切り出したすべてのブロックのヘッダの位置。空いたブロックも含むので、見分けるのは呼ぶ側である。各級の今のページ

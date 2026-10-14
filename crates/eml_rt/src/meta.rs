@@ -4,6 +4,7 @@ use std::fmt;
 use std::ptr::NonNull;
 
 use crate::word::Word;
+#[cfg(test)]
 use std::sync::atomic::AtomicI32;
 use vstd::prelude::*;
 use vstd::raw_ptr::PointsTo;
@@ -67,18 +68,6 @@ impl Kind {
             Kind::BigInt => "BigInt",
             Kind::Foreign => "Foreign",
             Kind::Free => "Free",
-        }
-    }
-
-    /// 走査する語 (`scan` が 255 なら数の語) がペイロードの何語目から始まるか。種類を足すときに決め忘れないように、
-    /// 種類ごとに書く。
-    #[inline]
-    pub(crate) fn scan_start(self) -> (r: usize)
-        ensures
-            r == 0,
-    {
-        match self {
-            Kind::Data | Kind::BigInt | Kind::Foreign | Kind::Free => 0,
         }
     }
 
@@ -733,6 +722,7 @@ const _: () = assert!(HEADER_WORDS * 8 == size_of::<Header>());
 
 /// # Safety
 /// `h` は初期化したヘッダを指す。
+#[cfg(test)]
 #[inline]
 pub(crate) unsafe fn rc<'a>(h: NonNull<Header>) -> &'a AtomicI32 {
     unsafe { AtomicI32::from_ptr(&raw mut (*h.as_ptr()).rc) }
@@ -787,7 +777,6 @@ mod tests {
         for kind in [Kind::Data, Kind::BigInt, Kind::Foreign, Kind::Free] {
             assert_eq!(kind.tokenable(), kind == Kind::Data);
             assert_eq!(kind.has_finalizer(), kind == Kind::Foreign);
-            assert_eq!(kind.scan_start(), 0);
         }
     }
 

@@ -984,25 +984,6 @@ impl<M: Mode> Default for Heap<M> {
 // `Heap` は worker ごとに1つ持ち、worker のスレッドに移せる。`Sync` にはしない (docs/spec/object-model.md の「語」)
 unsafe impl<M: Mode> Send for Heap<M> {}
 
-/// 走査する語の数。`scan` が 255 なら、走査の始まりの生の語が数を持つ。
-#[inline]
-unsafe fn scan_count(h: NonNull<Header>) -> usize {
-    let m = unsafe { meta::meta(h) };
-    if m.scan() == Meta::EXTENDED_SCAN {
-        unsafe { meta::slot(h, m.kind().scan_start()).cast::<u64>().read() as usize }
-    } else {
-        usize::from(m.scan())
-    }
-}
-
-/// 走査する語の i 番目の位置。
-#[inline]
-unsafe fn scan_slot(h: NonNull<Header>, i: usize) -> *mut Word {
-    let m = unsafe { meta::meta(h) };
-    let start = m.kind().scan_start() + usize::from(m.scan() == Meta::EXTENDED_SCAN);
-    unsafe { meta::slot(h, start + i) }
-}
-
 impl<M: Mode> Heap<M> {
     /// 使っているメモリのバイト数 (docs/spec/object-model.md の「確保と解放」)。検査モードでは隔離したブロックを引く。
     pub fn bytes_in_use(&self) -> usize {

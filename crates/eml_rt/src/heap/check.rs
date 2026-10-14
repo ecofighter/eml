@@ -1,6 +1,7 @@
 //! 検査モードの前置きと検査 (docs/spec/object-model.md の「前置き」と「報告する
 //! 誤り」)。前置きは検査モードのブロックにだけあるので、前置きを読む関数は `M::CHECKED` のときだけ働く。
 
+#[cfg(test)]
 use std::ptr::NonNull;
 
 use super::Heap;
@@ -18,7 +19,7 @@ use crate::meta::field_ptr;
 use crate::meta::same_fields;
 use crate::meta::{Header, Kind, Meta, PrefixPerm, prefix_first_ptr, prefix_state_ptr};
 use crate::mode::Mode;
-use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::atomic::AtomicU32;
 use vstd::prelude::*;
 use vstd::raw_ptr::ptr_mut_write;
 
@@ -367,41 +368,12 @@ fn too_many_acquires() -> ! {
 
 } // verus!
 
-const _: () = assert!(FREED_STATE == State::Freed as u32);
 const _: () = assert!(PREFIX_WORDS == size_of::<Prefix>().div_ceil(8));
 const _: () = assert!(UNCOUNTED == u32::MAX);
-const _: () = assert!(ALIVE_STATE == State::Alive as u32);
-
-#[repr(u32)]
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum State {
-    /// 最後の参照を手放すと決めて、まだ空けていない。生存の列挙とリークでは生存と同じに扱う。
-    Dying = 0,
-    Alive = 1,
-    Token = 2,
-    Freed = 3,
-}
-
-impl State {
-    /// 生存と空ける途中の物体は、生存の列挙、不変条件の検査、リークで生きている物体に数える。
-    pub(crate) fn is_live(self) -> bool {
-        matches!(self, State::Alive | State::Dying)
-    }
-}
-
-impl Prefix {
-    pub(crate) fn state(&self) -> State {
-        match self.state.load(Ordering::Relaxed) & 3 {
-            0 => State::Dying,
-            1 => State::Alive,
-            2 => State::Token,
-            _ => State::Freed,
-        }
-    }
-}
 
 /// # Safety
 /// `h` は検査モードのヒープが確保したブロックのヘッダを指す。
+#[cfg(test)]
 pub(crate) unsafe fn prefix<'a>(h: NonNull<Header>) -> &'a Prefix {
     unsafe {
         &*h.as_ptr()

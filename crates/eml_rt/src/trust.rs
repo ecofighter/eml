@@ -100,7 +100,6 @@ const OUTSIDE: &[&str] = &[
     "word.rs",
     "heap/mod.rs",
     "heap/check.rs",
-    "heap/walk.rs",
 ];
 
 /// `verus!` の外でも書いてよい `unsafe` の始まり。`Send` と `Sync` の宣言と、検証した関数を呼ぶだけの `Drop` である。

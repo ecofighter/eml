@@ -12,6 +12,8 @@ use super::inv::{
 use super::model::Pos;
 #[cfg(verus_only)]
 use super::model::{BlockState, Model, lemma_indeg_pos};
+#[cfg(verus_only)]
+use crate::alloc::FREE_META;
 use crate::cell::{
     rc_decref_shared, rc_dup_shared, rc_is_last, rc_load, rc_store, u32_load, u32_store,
 };
@@ -80,6 +82,30 @@ impl Core {
         let tracked p = self.perms.borrow().tracked_borrow(h@.addr);
         let bits = *ptr_ref(meta_ptr(h), Tracked(&p.meta));
         Meta::from_bits(bits)
+    }
+
+    /// 切り出したブロック `h` のヘッダの `meta`。ヒープのブロックでなければ空きリストにあるので、空いた印である。
+    #[inline]
+    pub(crate) fn carved_meta(&self, h: *mut Header) -> (r: u32)
+        requires
+            self.sound(),
+            self.pages.carved_block(h@.addr),
+            h == self.block(h@.addr),
+        ensures
+            self.dom().contains(h@.addr) ==> r == self.meta_bits(h@.addr),
+            !self.dom().contains(h@.addr) ==> r == FREE_META,
+    {
+        proof {
+            if self.dom().contains(h@.addr) {
+                self.lemma_shape(h@.addr);
+            }
+        }
+        let tracked held = if self.dom().contains(h@.addr) {
+            Some(self.perms.borrow().tracked_borrow(h@.addr))
+        } else {
+            None
+        };
+        self.pages.read_meta(h, Tracked(held))
     }
 
     /// 語を読む。
