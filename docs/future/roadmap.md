@@ -169,6 +169,7 @@ S9b-2b で閉じた論点は次のとおりである。
 ### 論点
 
 - 比較と分岐の融合命令の有無。試作で実行命令数を測って決める
+- release のプロファイルの `codegen-units`。VM の命令の分岐ループでインライン化の注釈 (`-C remark=inline`) を見てから決める。それまでは、注釈が「definition is unavailable」と示した関数に `#[inline]` を付けて直す ([計測の基準](../implementation/benchmarks.md) の「S9b-2b (実行文脈)」)
 - `RunStats` の各項目の VM での意味。不死の物体の参照の数え方 (`rc_increments`) を CEK と比べられる形にすることも含む
 - 定数の表: 定数の番号から語への表の形と、LIR からそれを組み立てること。`CodeBase` は、凍結した領域の鎖の先頭の塊と定数の語を持つ ([オブジェクトモデル](../spec/object-model.md) の「凍結した領域」)
 
