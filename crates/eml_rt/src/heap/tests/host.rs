@@ -1,7 +1,7 @@
 //! テストの Host。出力をメモリに受け、ファイルをメモリから読ませる。Miri でも動くように、OS に触れない。
 
 use std::collections::HashMap;
-use std::io::{self, BufRead, BufReader, Read};
+use std::io::{self, BufRead, BufReader, Read, Write};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
@@ -133,38 +133,38 @@ pub(super) fn host(memory: &Arc<MemoryHost>) -> HostRef {
     HostRef::new(memory.clone())
 }
 
+/// 書いた中身を外から見られる書き込み先。`StdHost` に渡す。2つ目の欄が立っていれば、次の書き込みで1回 panic する
+#[derive(Clone, Default)]
+pub(super) struct Shared(Arc<Mutex<Vec<u8>>>, Arc<Mutex<bool>>);
+
+impl Shared {
+    pub(super) fn text(&self) -> String {
+        String::from_utf8(self.0.lock().unwrap().clone()).unwrap()
+    }
+}
+
+impl Write for Shared {
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        // 旗のロックを放してから panic する。持ったままだと、旗のロックまで毒されて次の書き込みが止まる
+        let panic_now = std::mem::take(&mut *self.1.lock().unwrap());
+        if panic_now {
+            panic!("a writer that panics once");
+        }
+        self.0.lock().unwrap().extend_from_slice(buf);
+        Ok(buf.len())
+    }
+    fn flush(&mut self) -> io::Result<()> {
+        Ok(())
+    }
+}
+
 mod std_host {
-    use std::io::{self, Read, Write};
+    use std::io::{self, Read};
     use std::panic::{AssertUnwindSafe, catch_unwind};
     use std::path::PathBuf;
-    use std::sync::{Arc, Mutex};
 
+    use super::Shared;
     use crate::{Buffering, Host, StdHost, Stream};
-
-    /// 書いた中身を外から見られる書き込み先
-    #[derive(Clone, Default)]
-    struct Shared(Arc<Mutex<Vec<u8>>>, Arc<Mutex<bool>>);
-
-    impl Shared {
-        fn text(&self) -> String {
-            String::from_utf8(self.0.lock().unwrap().clone()).unwrap()
-        }
-    }
-
-    impl Write for Shared {
-        fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
-            // 旗のロックを放してから panic する。持ったままだと、旗のロックまで毒されて次の書き込みが止まる
-            let panic_now = std::mem::take(&mut *self.1.lock().unwrap());
-            if panic_now {
-                panic!("a writer that panics once");
-            }
-            self.0.lock().unwrap().extend_from_slice(buf);
-            Ok(buf.len())
-        }
-        fn flush(&mut self) -> io::Result<()> {
-            Ok(())
-        }
-    }
 
     fn std_host(mode: Buffering) -> (StdHost, Shared, Shared) {
         let (out, err) = (Shared::default(), Shared::default());

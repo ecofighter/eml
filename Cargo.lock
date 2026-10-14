@@ -222,6 +222,7 @@ version = "0.1.0"
 dependencies = [
  "eml_extern",
  "eml_lir",
+ "eml_rt",
  "eml_runtime",
  "eml_test_support",
  "insta",

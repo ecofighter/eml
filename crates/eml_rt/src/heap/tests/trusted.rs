@@ -673,7 +673,8 @@ fn files_go_through_the_host<M: Mode>() {
             ..MemoryFile::default()
         },
     );
-    let mut ctx = ctx_tests::ctx_with::<M>(&memory);
+    let control = Arc::new(Control::new(Limits::default()));
+    let mut ctx = Ctx::<M>::new(control.clone(), host(&memory));
     unsafe {
         let p = ctx.heap_mut().alloc_string("big.txt");
         let f = ctx.fs_open(p).unwrap();
@@ -689,6 +690,15 @@ fn files_go_through_the_host<M: Mode>() {
         let p = ctx.heap_mut().alloc_string("big.txt");
         let f = ctx.fs_open(p).unwrap();
         ctx.fs_close(f).unwrap();
+        let before = mortal(ctx.heap());
+        let p = ctx.heap_mut().alloc_string("big.txt");
+        let f = ctx.fs_open(p).unwrap();
+        control.interrupt();
+        assert_eq!(
+            ctx.fs_read_all(f),
+            Err(crate::Fault::Stopped(crate::Stop::Interrupted))
+        );
+        assert_eq!(mortal(ctx.heap()), before);
     }
     assert_eq!(mortal(ctx.heap()), 0);
 }

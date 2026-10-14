@@ -1,31 +1,18 @@
 //! extern の単体テスト。結果は spec のとおりで、今の実装と同じ文言で誤りを返すことを確かめる。
 
 use std::cmp::Ordering as Order;
+use std::io;
+use std::path::Path;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use super::ctx::{ctx, ctx_with};
-use super::host::{MemoryFile, MemoryHost, host};
+use super::host::{MemoryFile, MemoryHost, Shared, host};
 use super::mortal;
 use super::string::text;
+use super::table::{self, Arg, Case, EDGES, Outcome};
 use crate::externs::*;
-use crate::{Control, HeapError, Limits, Mode, Stop, Word};
-
-const EDGES: [i64; 13] = [
-    0,
-    1,
-    -1,
-    2,
-    -2,
-    i64::MIN,
-    i64::MIN + 1,
-    i64::MAX,
-    i64::MAX - 1,
-    1 << 31,
-    -(1 << 31),
-    1 << 62,
-    -(1 << 62),
-];
+use crate::{Buffering, Control, HeapError, HostRef, Limits, Mode, StdHost, Stop, Word};
 
 fn ordering(o: Order) -> i64 {
     match o {
@@ -366,7 +353,7 @@ fn println_refuses_a_non_string<M: Mode>() {
     }
 }
 
-/// 開いて、全部読み、組から取り出す。組は `lin` ビットを持ち、File の参照を持つ。
+/// 開いて、全部読み、組から取り出す。
 unsafe fn open_and_read<M: Mode>(
     ctx: &mut crate::Ctx<M>,
     path: &str,
@@ -374,6 +361,13 @@ unsafe fn open_and_read<M: Mode>(
     unsafe {
         let p = s(ctx, path);
         let f = ctx.fs_open(p)?;
+        read_once(ctx, f)
+    }
+}
+
+/// 全部読み、組から File と読んだ中身を取り出す。組は `lin` ビットを持ち、File の参照を持つ。
+unsafe fn read_once<M: Mode>(ctx: &mut crate::Ctx<M>, f: Word) -> Result<(Word, String), Fault> {
+    unsafe {
         let t = ctx.fs_read_all(f)?;
         assert!(ctx.heap().meta(t).unwrap().lin());
         let file = ctx.heap().field(t, 0).unwrap();
@@ -593,6 +587,202 @@ fn read_all_refuses_a_non_file_or_a_shared_file<M: Mode>() {
     assert_eq!(mortal(ctx.heap()), 0);
 }
 
+/// 表の場合を `eml_rt` の extern で動かすときの引数。共有した文字列の残った参照と、作った不死の物体の数を持つ
+#[derive(Default)]
+struct Args {
+    release: Vec<Word>,
+    immortals: usize,
+}
+
+impl Args {
+    fn int(arg: &Arg) -> i64 {
+        match arg {
+            Arg::Int(v) => *v,
+            Arg::Bool(true) => TRUE,
+            Arg::Bool(false) => FALSE,
+            _ => panic!("not a scalar argument: {arg:?}"),
+        }
+    }
+
+    /// 文字列の引数の参照を1つ作る。定数は今の実装の `const` と同じく不死の物体にする
+    unsafe fn string<M: Mode>(&mut self, ctx: &mut crate::Ctx<M>, arg: &Arg, root: &Path) -> Word {
+        unsafe {
+            match arg {
+                Arg::Const(x) | Arg::Rel(x) => {
+                    let w = ctx.heap_mut().alloc_string_immortal(x);
+                    ctx.heap_mut().acquire_immortal(w).unwrap();
+                    self.immortals += 1;
+                    w
+                }
+                Arg::Abs(x) => {
+                    let path = Arg::Const(root.join(x).to_str().unwrap().to_string());
+                    self.string(ctx, &path, root)
+                }
+                Arg::Unique(x) => s(ctx, x),
+                Arg::Shared(x) => {
+                    let w = s(ctx, x);
+                    ctx.heap_mut().dup(w).unwrap();
+                    self.release.push(w);
+                    w
+                }
+                _ => panic!("not a string argument: {arg:?}"),
+            }
+        }
+    }
+}
+
+fn tag_bool(tag: i64) -> Outcome {
+    match tag {
+        TRUE => Outcome::Bool(true),
+        FALSE => Outcome::Bool(false),
+        _ => panic!("not a Bool tag: {tag}"),
+    }
+}
+
+fn tag_order(tag: i64) -> Outcome {
+    Outcome::Order(match tag {
+        LT => "LT",
+        EQ => "EQ",
+        GT => "GT",
+        _ => panic!("not an Ordering tag: {tag}"),
+    })
+}
+
+/// 文字列の結果を読み、手放す
+unsafe fn take_text<M: Mode>(ctx: &mut crate::Ctx<M>, w: Word) -> Outcome {
+    let read = text(ctx.heap(), w);
+    unsafe { ctx.heap_mut().decref(w) }.unwrap();
+    Outcome::Str(read)
+}
+
+/// 表の1行の extern を呼び、結果を表の形に戻す
+unsafe fn call<M: Mode>(
+    ctx: &mut crate::Ctx<M>,
+    case: &Case,
+    args: &mut Args,
+    root: &Path,
+    out: &Shared,
+) -> Result<Outcome, Fault> {
+    let int = |i: usize| Args::int(&case.args[i]);
+    let arith = |f: fn(i64, i64) -> Result<i64, ArithFault>| -> Result<Outcome, Fault> {
+        Ok(Outcome::Int(f(int(0), int(1))?))
+    };
+    let compare = |f: fn(i64, i64) -> i64| tag_bool(f(int(0), int(1)));
+    unsafe {
+        let strings = |ctx: &mut crate::Ctx<M>, args: &mut Args| {
+            let a = args.string(ctx, &case.args[0], root);
+            match case.args.get(1) {
+                Some(b) => (a, args.string(ctx, b, root)),
+                None => (a, Word::imm(0)),
+            }
+        };
+        Ok(match case.name.as_str() {
+            "Prelude.+" => arith(int_add)?,
+            "Prelude.-" => arith(int_sub)?,
+            "Prelude.*" => arith(int_mul)?,
+            "Prelude./" => arith(int_div)?,
+            "Prelude.%" => arith(int_rem)?,
+            "Prelude.negate" => Outcome::Int(int_negate(int(0))?),
+            "Prelude.Eq Int.==" => compare(int_eq),
+            "Prelude.Eq Int.!=" => compare(int_ne),
+            "Prelude.Ord Int.<" => compare(int_lt),
+            "Prelude.Ord Int.<=" => compare(int_le),
+            "Prelude.Ord Int.>" => compare(int_gt),
+            "Prelude.Ord Int.>=" => compare(int_ge),
+            "Prelude.Ord Int.compare" => tag_order(int_compare(int(0), int(1))),
+            "Prelude.Eq Bool.==" => compare(bool_eq),
+            "Prelude.Eq Bool.!=" => compare(bool_ne),
+            "Prelude.Show Int.show" => {
+                let w = ctx.int_show(int(0));
+                take_text(ctx, w)
+            }
+            "Prelude.Eq String.==" => {
+                let (a, b) = strings(ctx, args);
+                tag_bool(ctx.string_eq(a, b)?)
+            }
+            "Prelude.Eq String.!=" => {
+                let (a, b) = strings(ctx, args);
+                tag_bool(ctx.string_ne(a, b)?)
+            }
+            "Prelude.Ord String.compare" => {
+                let (a, b) = strings(ctx, args);
+                tag_order(ctx.string_compare(a, b)?)
+            }
+            "Prelude.++" => {
+                let (a, b) = strings(ctx, args);
+                let w = ctx.string_append(a, b)?;
+                take_text(ctx, w)
+            }
+            "Prelude.Show String.show" => {
+                let (a, _) = strings(ctx, args);
+                let w = ctx.string_show(a)?;
+                take_text(ctx, w)
+            }
+            "Prelude.println" => {
+                let (a, _) = strings(ctx, args);
+                ctx.println(a)?;
+                ctx.flush()?;
+                Outcome::Out(out.text())
+            }
+            "Std.Fs.read_all" | "Std.Fs.read_all2" => {
+                let (p, _) = strings(ctx, args);
+                let f = ctx.fs_open(p)?;
+                let (mut f, mut read) = read_once(ctx, f)?;
+                if case.name == "Std.Fs.read_all2" {
+                    (f, read) = read_once(ctx, f)?;
+                }
+                ctx.fs_close(f)?;
+                Outcome::Str(read)
+            }
+            name => panic!("an extern the table does not know: {name}"),
+        })
+    }
+}
+
+/// `eml_rt` の extern が、期待値の表のどの場合も同じ結果を返し、物体を残さない。引数の定数の不死の物体だけが残る
+fn the_externs_match_the_table<M: Mode>() {
+    let root = std::env::temp_dir().join(format!(
+        "eml_rt-table-{}-{}",
+        std::process::id(),
+        M::CHECKED
+    ));
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).unwrap();
+    let locked = table::fixtures(&root);
+    let cases = table::cases();
+    assert!(!cases.is_empty());
+    for case in cases {
+        if !locked
+            && case
+                .args
+                .iter()
+                .any(|a| matches!(a, Arg::Rel(p) if p == "locked.txt"))
+        {
+            continue;
+        }
+        let out = Shared::default();
+        let host = StdHost::new(
+            Box::new(out.clone()),
+            Box::new(io::sink()),
+            root.clone(),
+            Buffering::Line,
+        );
+        let mut ctx = crate::Ctx::<M>::new(
+            Arc::new(Control::new(Limits::default())),
+            HostRef::new(Arc::new(host)),
+        );
+        let mut args = Args::default();
+        let got = unsafe { call(&mut ctx, &case, &mut args, &root, &out) }
+            .unwrap_or_else(|fault| Outcome::Err(fault.to_string()));
+        for w in args.release {
+            unsafe { ctx.heap_mut().decref(w) }.unwrap();
+        }
+        assert_eq!(got, case.outcome, "{}", table::line(&case));
+        assert_eq!(mortal(ctx.heap()), args.immortals, "{}", table::line(&case));
+    }
+    std::fs::remove_dir_all(&root).ok();
+}
+
 both_modes!(
     strings_compare_by_bytes,
     the_same_string_on_both_sides,
@@ -613,4 +803,5 @@ both_modes!(
     a_read_stops_on_an_interrupt,
     a_read_past_the_memory_limit_stops,
     read_all_refuses_a_non_file_or_a_shared_file,
+    the_externs_match_the_table,
 );
