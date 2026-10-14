@@ -24,6 +24,7 @@ mod control;
 mod ctx;
 mod externs;
 mod frozen;
+mod host;
 mod raw;
 mod reuse;
 mod share;

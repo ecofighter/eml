@@ -2,6 +2,7 @@
 
 use std::sync::Arc;
 
+use super::host::host;
 use crate::{Control, Ctx, Heap, Limits, Mode, Stop};
 
 const PAGE_BYTES: usize = 0x1_0000;
@@ -27,7 +28,7 @@ fn memory_limit_sets_the_stop_bit<M: Mode>() {
         ..Limits::default()
     }));
     let mut heap = Heap::<M>::with_control(control.clone());
-    let ctx = Ctx::<M>::new(control.clone());
+    let ctx = Ctx::<M>::new(control.clone(), host(&Arc::default()));
     assert_eq!(control.stop_bits(), 0);
     assert_eq!(ctx.poll(0), Ok(()));
     // 大きい物体を1つずつ取り、上限を超えるまでページを足す。1つで1ページを超えるので、数回で上限に届く

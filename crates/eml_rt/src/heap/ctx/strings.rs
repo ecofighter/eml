@@ -1181,7 +1181,7 @@ impl<M: Mode> Ctx<M> {
     }
 
     /// 文字列を1つ受ける extern の前提から、`settle` の後のヒープ `h1` で、`s` を読めて手放せることを言う。
-    proof fn lemma_settled_string(&self, h1: Heap<M>, s: Word)
+    pub(super) proof fn lemma_settled_string(&self, h1: Heap<M>, s: Word)
         requires
             self.held_ok(),
             self.is_string(s),

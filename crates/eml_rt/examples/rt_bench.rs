@@ -2,9 +2,11 @@
 //! 測る。reuse analysis はまだないので、reuse の列は手で組む。reuse の効果の見込みを、パスを作る前に数字で持つためである。
 
 use std::hint::black_box;
+use std::io;
+use std::path::PathBuf;
 use std::sync::Arc;
 
-use eml_rt::{Control, Ctx, Fast, Heap, Kind, Limits, Meta, Word};
+use eml_rt::{Buffering, Control, Ctx, Fast, Heap, HostRef, Kind, Limits, Meta, StdHost, Word};
 
 const CONS: Meta = Meta::new(1, 2, Kind::Data, false);
 const CELLS: usize = 1_000_000;
@@ -166,7 +168,16 @@ fn append() {
 }
 
 fn ctx() -> Ctx<Fast> {
-    Ctx::new(Arc::new(Control::new(Limits::default())))
+    let host = StdHost::new(
+        Box::new(io::sink()),
+        Box::new(io::sink()),
+        PathBuf::new(),
+        Buffering::Block,
+    );
+    Ctx::new(
+        Arc::new(Control::new(Limits::default())),
+        HostRef::new(Arc::new(host)),
+    )
 }
 
 /// `evv` の先頭に、エフェクト `effect` の操作1つの evidence を足す。入口は関数の値 (即値) である。

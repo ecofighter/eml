@@ -8,6 +8,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use vstd::prelude::Tracked;
 
 use super::ctx as ctx_tests;
+use super::host::{MemoryHost, host};
 use super::string::text;
 use super::{CONS, Probe, cons, list, mortal, probe, raw};
 use crate::cell::{rc_decref_shared, rc_dup_shared};
@@ -294,7 +295,7 @@ fn every_core_operation_once<M: Mode>() {
 /// 実行文脈の基本操作を1回ずつ通す。
 fn every_primitive_once<M: Mode>() {
     const UNIT: Word = Word::imm(0);
-    let mut ctx = Ctx::<M>::new(Arc::new(Control::new(Limits::default())));
+    let mut ctx = ctx_tests::ctx::<M>();
     let e0 = ctx_tests::push(&mut ctx, 0, 1);
     let e1 = ctx_tests::push(&mut ctx, 1, 1);
     unsafe {
@@ -604,7 +605,7 @@ fn two_threads_share_one_control<M: Mode>() {
 #[test]
 fn an_interrupt_from_another_thread_is_seen() {
     let control = Arc::new(Control::new(Limits::default()));
-    let ctx = Ctx::<Fast>::new(control.clone());
+    let ctx = Ctx::<Fast>::new(control.clone(), host(&Arc::default()));
     let setter = {
         let control = control.clone();
         std::thread::spawn(move || control.interrupt())
@@ -615,6 +616,21 @@ fn an_interrupt_from_another_thread_is_seen() {
     assert_eq!(ctx.poll(0), Err(crate::Stop::Interrupted));
     setter.join().unwrap();
     assert_eq!(control.stop_bits(), Control::INTERRUPT);
+}
+
+// T11
+
+/// Host を通る書き込み。メモリの Host で、`println` と `flush` を通す。
+fn println_goes_through_the_host<M: Mode>() {
+    let memory = Arc::new(MemoryHost::default());
+    let mut ctx = ctx_tests::ctx_with::<M>(&memory);
+    unsafe {
+        let a = ctx.heap_mut().alloc_string("日本");
+        ctx.println(a).unwrap();
+    }
+    ctx.flush().unwrap();
+    assert_eq!(memory.out(), "日本\n");
+    assert_eq!(mortal(ctx.heap()), 0);
 }
 
 both_modes!(
@@ -643,4 +659,5 @@ both_modes!(
     chains_drop_in_any_order,
     own_objects_read_region_words,
     two_threads_share_one_control,
+    println_goes_through_the_host,
 );

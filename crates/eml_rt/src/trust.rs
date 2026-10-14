@@ -12,6 +12,7 @@ const FILES: &[(&str, &str)] = &[
     ("externs.rs", include_str!("externs.rs")),
     ("foreign.rs", include_str!("foreign.rs")),
     ("frozen.rs", include_str!("frozen.rs")),
+    ("host.rs", include_str!("host.rs")),
     ("meta.rs", include_str!("meta.rs")),
     ("mode.rs", include_str!("mode.rs")),
     ("rc.rs", include_str!("rc.rs")),
@@ -22,6 +23,7 @@ const FILES: &[(&str, &str)] = &[
     ("heap/check.rs", include_str!("heap/check.rs")),
     ("heap/core.rs", include_str!("heap/core.rs")),
     ("heap/ctx.rs", include_str!("heap/ctx.rs")),
+    ("heap/ctx/io.rs", include_str!("heap/ctx/io.rs")),
     ("heap/ctx/proof.rs", include_str!("heap/ctx/proof.rs")),
     ("heap/ctx/strings.rs", include_str!("heap/ctx/strings.rs")),
     ("heap/field.rs", include_str!("heap/field.rs")),
@@ -109,9 +111,14 @@ const TRUSTED: &[(&str, &str)] = &[
     ("text.rs: external_body write_text", "T10"),
     ("text.rs: external_body text", "T10"),
     ("text.rs: external_body text_ptr", "T10"),
+    ("host.rs: external_body HostRef", "T11"),
+    ("host.rs: external_body clone", "T11"),
+    ("host.rs: external_body host_write_line", "T11"),
+    ("host.rs: external_body host_flush", "T11"),
     ("alloc.rs: Drop for Pages", "T4"),
     ("heap/walk.rs: Drop for Heap", "T4"),
     ("frozen.rs: Drop for Frozen", "T4"),
+    ("host.rs: Drop for HostRef", "T4"),
 ];
 
 /// `verus!` の外でも書いてよい `unsafe` の始まり。`Send` と `Sync` の宣言と、検証した関数を呼ぶだけの `Drop` である。
@@ -401,7 +408,7 @@ fn the_trust_list_is_exactly_the_trusted_items() {
     for (item, number) in TRUSTED {
         assert!(
             [
-                "T0", "T1", "T2", "T3", "T4", "T5", "T6", "T7", "T8", "T9", "T10"
+                "T0", "T1", "T2", "T3", "T4", "T5", "T6", "T7", "T8", "T9", "T10", "T11"
             ]
             .contains(number),
             "{item} has no trust row"

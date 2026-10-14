@@ -1,8 +1,10 @@
 //! extern の単体テスト。結果は spec のとおりで、今の実装と同じ文言で誤りを返すことを確かめる。
 
 use std::cmp::Ordering as Order;
+use std::sync::Arc;
 
-use super::ctx::ctx;
+use super::ctx::{ctx, ctx_with};
+use super::host::MemoryHost;
 use super::mortal;
 use super::string::text;
 use crate::externs::*;
@@ -319,6 +321,46 @@ fn a_string_extern_refuses_a_non_string<M: Mode>() {
     assert_eq!(mortal(ctx.heap()), 0);
 }
 
+fn println_writes_a_line_and_releases_its_text<M: Mode>() {
+    let memory = Arc::new(MemoryHost::default());
+    let mut ctx = ctx_with::<M>(&memory);
+    unsafe {
+        let a = s(&mut ctx, "héllo");
+        ctx.println(a).unwrap();
+        let e = s(&mut ctx, "");
+        ctx.println(e).unwrap();
+    }
+    ctx.flush().unwrap();
+    assert_eq!(memory.out(), "héllo\n\n");
+    assert_eq!(memory.err(), "");
+    assert_eq!(mortal(ctx.heap()), 0);
+}
+
+/// 書けなくても文字列は手放す (今の実装と同じ)。
+fn a_failed_write_still_releases_the_text<M: Mode>() {
+    let memory = Arc::new(MemoryHost::failing("disk full"));
+    let mut ctx = ctx_with::<M>(&memory);
+    unsafe {
+        let a = s(&mut ctx, "x");
+        assert_eq!(ctx.println(a), Err(Fault::Output("disk full".into())));
+    }
+    assert_eq!(mortal(ctx.heap()), 0);
+}
+
+fn println_refuses_a_non_string<M: Mode>() {
+    if !M::CHECKED {
+        return;
+    }
+    let memory = Arc::new(MemoryHost::default());
+    let mut ctx = ctx_with::<M>(&memory);
+    unsafe {
+        let d = ctx.heap_mut().alloc_data(0, 0, 1, false);
+        assert_eq!(ctx.println(d), Err(Fault::Heap(HeapError::WrongKind)));
+        assert_eq!(memory.out(), "");
+        ctx.heap_mut().decref(d).unwrap();
+    }
+}
+
 both_modes!(
     strings_compare_by_bytes,
     the_same_string_on_both_sides,
@@ -327,4 +369,7 @@ both_modes!(
     shows_count_the_bytes_they_write,
     strings_show_with_the_interpreters_escapes,
     a_string_extern_refuses_a_non_string,
+    println_writes_a_line_and_releases_its_text,
+    a_failed_write_still_releases_the_text,
+    println_refuses_a_non_string,
 );

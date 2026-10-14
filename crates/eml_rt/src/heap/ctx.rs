@@ -15,6 +15,7 @@ use super::chain_err;
 use super::model::BlockState;
 use crate::control::{Control, Stop};
 use crate::error::HeapError;
+use crate::host::HostRef;
 use crate::meta::{Kind, Meta};
 #[cfg(verus_only)]
 use crate::meta::{bits_kind, bits_lin, bits_scan, bits_tag, bits_wf};
@@ -25,6 +26,7 @@ use crate::word::lemma_unit_bits;
 #[cfg(verus_only)]
 use proof::*;
 
+mod io;
 // 証明の部品だけを置くので、検証のときだけ読む
 #[cfg(verus_only)]
 mod proof;
@@ -592,7 +594,7 @@ fn seen_at_least<M: Mode>(
 }
 
 /// 実行文脈。VM はこれだけを持ち回す。`evv` と yield の状態の語は、`Ctx` が持つ数えた参照である。`Ctx` を落としても
-/// これらの語には触れず、ヒープと一緒に消える。
+/// これらの語には触れず、ヒープと一緒に消える。Host はセッションに1つで、`par` の子の `Ctx` は同じ Host を写して持つ。
 pub struct Ctx<M: Mode> {
     heap: Heap<M>,
     evv: Word,
@@ -603,6 +605,7 @@ pub struct Ctx<M: Mode> {
     /// `evv` の長さの上限。リストをたどるループは、これを超えたら止まる。
     max_evv: usize,
     stats: CtxStats,
+    host: HostRef,
 }
 
 impl<M: Mode> Ctx<M> {
@@ -745,8 +748,8 @@ impl<M: Mode> Ctx<M> {
         &&& !M::CHECKED ==> self.held_ok()
     }
 
-    /// `evv` が空で、yield していない文脈。ページはセッションの `control` に数える。
-    pub fn new(control: Arc<Control>) -> (r: Ctx<M>)
+    /// `evv` が空で、yield していない文脈。ページはセッションの `control` に数え、出力とファイルは `host` を通す。
+    pub fn new(control: Arc<Control>, host: HostRef) -> (r: Ctx<M>)
         ensures
             r.wf(),
             r.held_ok(),
@@ -767,6 +770,7 @@ impl<M: Mode> Ctx<M> {
                 yield_frames: 0,
                 string_bytes_copied: 0,
             },
+            host,
         };
         proof {
             lemma_unit_bits();

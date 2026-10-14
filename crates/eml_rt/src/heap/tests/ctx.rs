@@ -2,12 +2,17 @@
 
 use std::sync::Arc;
 
+use super::host::{MemoryHost, host};
 use crate::{Control, Ctx, HeapError, Limits, Mode, Stop, Word};
 
 pub(super) const UNIT: Word = Word::imm(0);
 
 pub(super) fn ctx<M: Mode>() -> Ctx<M> {
-    Ctx::new(Arc::new(Control::new(Limits::default())))
+    ctx_with(&Arc::new(MemoryHost::default()))
+}
+
+pub(super) fn ctx_with<M: Mode>(memory: &Arc<MemoryHost>) -> Ctx<M> {
+    Ctx::new(Arc::new(Control::new(Limits::default())), host(memory))
 }
 
 /// エフェクト 0、操作1つの evidence を作る。外側の evv は空である。
@@ -45,7 +50,7 @@ fn poll_reports_each_stop<M: Mode>() {
         max_depth: 100,
         ..Limits::default()
     }));
-    let ctx = Ctx::<M>::new(control.clone());
+    let ctx = Ctx::<M>::new(control.clone(), host(&Arc::default()));
     assert_eq!(ctx.poll(100), Ok(()));
     assert_eq!(ctx.poll(101), Err(Stop::DepthLimit));
     control.interrupt();
@@ -289,7 +294,7 @@ fn a_push_past_the_evv_limit_is_bad_evidence<M: Mode>() {
         max_evv: 0,
         ..Limits::default()
     }));
-    let mut ctx = Ctx::<M>::new(control);
+    let mut ctx = Ctx::<M>::new(control, host(&Arc::default()));
     unsafe {
         let ev = ctx.ev_new(0, 1, UNIT, UNIT).unwrap();
         assert_eq!(ctx.evv_push(UNIT, ev).unwrap_err(), HeapError::BadEvidence);
@@ -403,7 +408,7 @@ fn a_cyclic_evv_stops_at_the_limit<M: Mode>() {
         max_evv: 8,
         ..Limits::default()
     }));
-    let mut ctx = Ctx::<M>::new(control);
+    let mut ctx = Ctx::<M>::new(control, host(&Arc::default()));
     let _e0 = push(&mut ctx, 0, 1);
     unsafe {
         let list = ctx.evv_get().unwrap();
@@ -529,7 +534,7 @@ fn a_refused_push_keeps_its_arguments<M: Mode>() {
         max_evv: 1,
         ..Limits::default()
     }));
-    let mut ctx = Ctx::<M>::new(control);
+    let mut ctx = Ctx::<M>::new(control, host(&Arc::default()));
     let ev = push(&mut ctx, 0, 1);
     unsafe {
         let closure = ctx.heap_mut().alloc_data(0, 3, 0, false);
