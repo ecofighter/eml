@@ -251,7 +251,6 @@ fn outcome(name: &str, args: &[Arg], root: &Path) -> Outcome {
     }
 }
 
-/// 作り直した一時ディレクトリ
 /// 表を作る。表を変えるときだけ、`cargo test -p eml_interp rt_externs -- --ignored` で流す
 #[test]
 #[ignore = "writes expected.txt"]
