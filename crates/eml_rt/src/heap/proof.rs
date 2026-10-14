@@ -26,7 +26,7 @@ impl Core {
     /// `old` の生きている物体のうち、不死か、外の参照を持ち続けるものは、同じ中身で生きている。外の参照の数は、`w` だけ
     /// `delta` 変わる。
     pub(crate) open spec fn evolved(&self, old: Core, w: usize, delta: int) -> bool {
-        &&& self.checked == old.checked
+        &&& self.env == old.env
         &&& forall|b: usize|
             #![trigger old.dom().contains(b)]
             old.dom().contains(b) && old.settled_state(b) == BlockState::Live && (old.rc_of(b) == 0
@@ -106,7 +106,7 @@ impl Core {
             }
         &&& self.model@.edges == v.model@.edges
         &&& self.model@.kept == v.model@.kept
-        &&& self.checked == old.checked
+        &&& self.env == old.env
     }
 
     /// 枠をつなぐ。`settle` の後 (`s1`)、確保器からブロックを取った後 (`mid`)、そのブロックを入れた後 (`self`) の3つの変化を
@@ -118,7 +118,7 @@ impl Core {
             s1.model@.building is None,
             mid.perms == s1.perms,
             mid.model == s1.model,
-            mid.checked == s1.checked,
+            mid.env == s1.env,
             forall|b: usize| #[trigger]
                 s1.dom().contains(b) ==> mid.block(b) == s1.block(b) && mid.cap(b) == s1.cap(b),
             self.frame(mid),
@@ -146,9 +146,10 @@ impl Core {
             s0.rest_wf(),
             self.perms == s0.perms,
             self.model == s0.model,
-            self.checked == s0.checked,
+            self.env == s0.env,
             self.pages.wf(),
             self.pages.prefixed() == s0.pages.prefixed(),
+            self.env_wf(),
             forall|b: usize| #[trigger]
                 s0.dom().contains(b) ==> self.block(b) == s0.block(b) && self.cap(b) == s0.cap(b)
                     && self.pages.carved_block(b),
@@ -187,7 +188,7 @@ impl Core {
     pub(crate) proof fn lemma_empty(&self)
         requires
             self.pages.wf(),
-            self.pages.prefixed() == self.checked@,
+            self.pages.prefixed() == self.checked(),
             self.pages.in_use() == Set::<usize>::empty(),
             self.perms@ == Map::<usize, BlockPerm>::empty(),
             self.model@.state == Map::<usize, BlockState>::empty(),
@@ -198,6 +199,7 @@ impl Core {
             self.model@.written == Map::<usize, Set<int>>::empty(),
             self.model@.kept == Set::<Pos>::empty(),
             self.model@.building is None,
+            self.env@.region is None,
         ensures
             self.full(),
     {
@@ -213,17 +215,18 @@ impl Core {
         requires
             s0.dom() == s0.pages.in_use(),
             s0.pages.wf(),
-            s0.pages.prefixed() == s0.checked@,
+            s0.pages.prefixed() == s0.checked(),
             self.perms == s0.perms,
             self.model == s0.model,
-            self.checked == s0.checked,
+            self.env == s0.env,
             self.pages.alloc_post(s0.pages, words, h, perm),
+            !s0.region_has(h@.addr),
         ensures
             s0.full() ==> self.pending(h@.addr),
             s0.safe_wf() ==> self.safe_pending(h@.addr),
             h == self.block(h@.addr),
             self.pages.carved_block(h@.addr),
-            perm.wf(h, self.cap(h@.addr), self.checked@),
+            perm.wf(h, self.cap(h@.addr), self.checked()),
             self.cap(h@.addr) + HEADER_WORDS >= words,
             forall|b: usize| #[trigger]
                 s0.dom().contains(b) ==> self.block(b) == s0.block(b) && self.cap(b) == s0.cap(b)
@@ -239,6 +242,12 @@ impl Core {
                 assert(self.block(w.bits_spec()) == s0.block(w.bits_spec()));
             }
         }
+        if s0.full() || s0.safe_wf() {
+            assert forall|x: usize|
+                self.region_has(x) implies !#[trigger] self.pages.in_use().contains(x) by {
+                assert(s0.region_has(x));
+            }
+        }
         if s0.full() {
             self.lemma_pages_frame(s0);
         }
@@ -252,12 +261,12 @@ impl Core {
     #[inline(always)]
     pub(crate) fn settle(&mut self)
         requires
-            (old(self).full() && old(self).settleable()) || (old(self).checked@ && old(
+            (old(self).full() && old(self).settleable()) || (old(self).checked() && old(
                 self,
             ).safe_wf() && old(self).safe_settleable()),
         ensures
             old(self).full() && old(self).settleable() ==> final(self).full(),
-            old(self).checked@ && old(self).safe_wf() && old(self).safe_settleable()
+            old(self).checked() && old(self).safe_wf() && old(self).safe_settleable()
                 ==> final(self).safe_wf(),
             final(self).model@.building is None,
             final(self).frame(*old(self)),
@@ -275,7 +284,7 @@ impl Core {
                 if s0.full() && s0.settleable() {
                     self.lemma_settle(s0, b);
                 }
-                if s0.checked@ && s0.safe_wf() && s0.safe_settleable() {
+                if s0.checked() && s0.safe_wf() && s0.safe_settleable() {
                     self.lemma_safe_settle(s0, b);
                 }
             }
@@ -324,7 +333,7 @@ impl Core {
             s0.model@.building == Some(b),
             self.perms == s0.perms,
             self.pages == s0.pages,
-            self.checked == s0.checked,
+            self.env == s0.env,
             self.model == s0.settled_view().model,
         ensures
             self.full(),
@@ -434,8 +443,8 @@ impl Core {
         Ghost(owner): Ghost<u32>,
     )
         requires
-            old(self).pending(h@.addr) || old(self).checked@,
-            old(self).checked@ ==> old(self).safe_pending(h@.addr),
+            old(self).pending(h@.addr) || old(self).checked(),
+            old(self).checked() ==> old(self).safe_pending(h@.addr),
             old(self).model@.building is None,
             h == old(self).block(h@.addr),
             old(self).pages.carved_block(h@.addr),
@@ -445,8 +454,8 @@ impl Core {
         ensures
             final(self).model@.tokens == old(self).model@.tokens,
             old(self).pending(h@.addr) ==> final(self).full(),
-            final(self).checked@ ==> final(self).safe_wf(),
-            final(self).checked == old(self).checked,
+            final(self).checked() ==> final(self).safe_wf(),
+            final(self).env == old(self).env,
             final(self).dom() == old(self).dom().insert(h@.addr),
             final(self).perm(h@.addr) == perm,
             final(self).state(h@.addr) == st,
@@ -495,11 +504,14 @@ impl Core {
                     ..self.model@
                 },
             );
+            // 確保器が渡したブロックは、付けた塊のブロックでない
+            assert(s0.pages.in_use().contains(hs));
+            assert(!s0.region_has(hs));
             if s0.pending(hs) {
                 self.lemma_publish(s0, hs);
             }
             assert forall|w: Word| s0.word_ok(w) implies #[trigger] self.word_ok(w) by {}
-            if self.checked@ {
+            if self.checked() {
                 self.lemma_perm_safe(s0, perm, hs, st, owner);
                 reveal(Core::building_wf);
                 reveal(Core::safe_blocks_wf);
@@ -519,10 +531,11 @@ impl Core {
     proof fn lemma_publish(&self, s0: Core, h: usize)
         requires
             s0.pending(h),
+            !s0.region_has(h),
             s0.model@.building is None,
             s0.pages.carved_block(h),
             self.pages == s0.pages,
-            self.checked == s0.checked,
+            self.env == s0.env,
             self.perms@ == s0.perms@.insert(h, self.perm(h)),
             s0.perm_wf(self.perm(h), h, self.state(h), Set::empty(), self.model@.owner[h]),
             self.state(h) == BlockState::Live || self.state(h) == BlockState::Building,
@@ -611,7 +624,7 @@ impl Core {
             s0.dom().contains(h),
             s0.state(h) == BlockState::Live,
             self.pages == s0.pages,
-            self.checked == s0.checked,
+            self.env == s0.env,
             self.perms@.dom() == s0.perms@.dom(),
             forall|b: usize| b != h ==> #[trigger] self.perms@[b] == s0.perms@[b],
             self.perm(h).meta == s0.perm(h).meta,
@@ -697,7 +710,7 @@ impl Core {
             s0.model@.edges.dom().contains(e),
             s0.state(e.0) == BlockState::Dying,
             self.pages == s0.pages,
-            self.checked == s0.checked,
+            self.env == s0.env,
             self.perms == s0.perms,
             self.model@ == (Model { edges: s0.model@.edges.remove(e), ..s0.model@ }),
         ensures
@@ -753,7 +766,7 @@ impl Core {
             s0.state(h) == BlockState::Dying,
             s0.indeg(h) == 0,
             forall|j: int| !(#[trigger] s0.model@.edges.dom().contains((h, j))),
-            self.checked == s0.checked,
+            self.env == s0.env,
             self.perms@ == s0.perms@.remove(h),
             self.model@ == (Model {
                 state: s0.model@.state.remove(h),
@@ -792,7 +805,7 @@ impl Core {
         assert forall|w: Word|
             s0.word_ok(w) && (w.is_ptr_spec() ==> w.bits_spec()
                 != h) implies #[trigger] self.word_ok(w) by {
-            if w.is_ptr_spec() {
+            if w.is_ptr_spec() && s0.dom().contains(w.bits_spec()) {
                 assert(self.pages.in_use().contains(w.bits_spec()));
             }
         }
@@ -839,7 +852,9 @@ impl Core {
         assert forall|e: (usize, int)| #[trigger]
             self.model@.edges.dom().contains(e) implies self.edge_wf(e) by {
             assert(s0.edge_wf(e));
-            assert(self.pages.in_use().contains(s0.model@.edges[e]));
+            if s0.dom().contains(s0.model@.edges[e]) {
+                assert(self.pages.in_use().contains(s0.model@.edges[e]));
+            }
         }
         assert forall|b: usize| #[trigger] self.dom().contains(b) implies self.counted_wf(b) by {
             assert(s0.counted_wf(b));
@@ -854,11 +869,11 @@ impl Core {
             s0.state(h) == BlockState::Dying,
             s0.indeg(h) == 0,
             forall|j: int| !(#[trigger] s0.model@.edges.dom().contains((h, j))),
-            self.checked == s0.checked,
+            self.env == s0.env,
             self.pages == s0.pages,
             self.perms@.dom() == s0.perms@.dom(),
             forall|b: usize| b != h ==> #[trigger] self.perms@[b] == s0.perms@[b],
-            self.perm(h).wf(self.block(h), self.cap(h), self.checked@),
+            self.perm(h).wf(self.block(h), self.cap(h), self.checked()),
             self.perm(h).prefix matches Some(q) ==> q.first.is_init() && q.state.is_init(),
             self.perm(h).prefix is Some ==> p_code(self.perm(h)) == 3,
             self.perm(h).rc.is_init(),

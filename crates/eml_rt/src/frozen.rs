@@ -13,7 +13,9 @@ use vstd::shared::Shared;
 
 use crate::alloc::{PageHeader, Pages};
 #[cfg(verus_only)]
-use crate::alloc::{page_base, region_cap, region_ptr};
+use crate::alloc::{header_ok, lemma_header_size, page_base, region_cap, region_ptr};
+#[cfg(verus_only)]
+use crate::heap::Env;
 #[cfg(verus_only)]
 use crate::heap::check::UNCOUNTED;
 #[cfg(verus_only)]
@@ -44,18 +46,28 @@ pub(crate) tracked struct RegionPerms {
 }
 
 impl RegionPerms {
-    /// 親のない塊の権限。
+    /// 作り手の権限で塊の権限を作る。親は、作り手が付けていた塊の権限の写し (`env` の `region`) である。
     pub(crate) proof fn new(
         tracked blocks: Map<usize, BlockPerm>,
         tracked headers: Map<usize, PointsTo<PageHeader>>,
+        tracked env: Env,
     ) -> (tracked r: RegionPerms)
         ensures
             r.blocks == blocks,
             r.headers == headers,
-            r.parent is None,
-            r.depth == 0,
+            r.parent == env.region,
+            r.depth == match env.region {
+                None => 0,
+                Some(p) => p@.depth + 1,
+            },
     {
-        RegionPerms { blocks, headers, parent: None, depth: 0 }
+        let tracked Env { region, .. } = env;
+        let ghost depth: nat = if region is Some {
+            region->0@.depth + 1
+        } else {
+            0
+        };
+        RegionPerms { blocks, headers, parent: region, depth }
     }
 
     /// `h` は、この塊か祖先の塊のブロックである。
@@ -97,7 +109,8 @@ impl RegionPerms {
     }
 
     /// この塊のブロック `h` は、生存の rc 0 の物体で、形がヒープのブロックと同じ (`Core::block_shape`) である。検査
-    /// モードの前置きは生存の状態で、数えない印を持つ (docs/spec/object-model.md の「不死の物体の数え方」)。
+    /// モードの前置きは生存の状態で、数えない印を持つ (docs/spec/object-model.md の「不死の物体の数え方」)。`Foreign`
+    /// の物体はない。塊はスレッドの間で共有するが、`Foreign` の値は `Send` しか求めないからである。
     pub(crate) open spec fn block_wf(self, h: usize, prefixed: bool) -> bool {
         let p = self.blocks[h];
         let ptr = region_ptr(self.headers, h);
@@ -113,6 +126,7 @@ impl RegionPerms {
         &&& p.meta.is_init()
         &&& bits_wf(p_meta(p))
         &&& p_kind(p) != Kind::Free
+        &&& p_kind(p) != Kind::Foreign
         &&& p_extended(p) ==> cap >= 1 && p_init(p, 0)
         &&& p_first(p) + p_count(p) <= cap
         &&& p_kind(p) == Kind::BigInt ==> cap >= 1 && p_init(p, 0)
@@ -122,13 +136,206 @@ impl RegionPerms {
         &&& forall|i: int| #[trigger] p_scanned(p, i) ==> p_init(p, i) && self.word_ok(p_word(p, i))
     }
 
+    /// `a` は、この塊か祖先の塊の権限である。
+    pub(crate) open spec fn reaches(self, a: RegionPerms) -> bool
+        decreases self.depth,
+    {
+        ||| self == a
+        ||| self.parent matches Some(p) && p@.depth < self.depth && p@.reaches(a)
+    }
+
+    /// ページの頭 `a` は、この塊か祖先の塊のページの頭である。
+    pub(crate) open spec fn has_page(self, a: usize) -> bool
+        decreases self.depth,
+    {
+        ||| self.headers.contains_key(a)
+        ||| self.parent matches Some(p) && p@.depth < self.depth && p@.has_page(a)
+    }
+
+    /// 鎖のブロックの集合。
+    pub(crate) open spec fn block_set(self) -> Set<usize>
+        decreases self.depth,
+    {
+        match self.parent {
+            Some(p) if p@.depth < self.depth => self.blocks.dom().union(p@.block_set()),
+            _ => self.blocks.dom(),
+        }
+    }
+
+    /// 鎖のブロックの集合は、鎖のブロック (`has`) からちょうどなる。
+    pub(crate) proof fn lemma_block_set(self)
+        ensures
+            forall|h: usize| #[trigger] self.block_set().contains(h) == self.has(h),
+        decreases self.depth,
+    {
+        if let Some(p) = self.parent {
+            if p@.depth < self.depth {
+                p@.lemma_block_set();
+                assert forall|h: usize| #[trigger] self.block_set().contains(h) == self.has(h) by {
+                    assert(p@.block_set().contains(h) == p@.has(h));
+                }
+            }
+        }
+    }
+
+    /// 祖先の塊のブロックとページは、この塊から見ても同じ塊のものである。鎖の塊のブロックは重ならないからである。
+    pub(crate) proof fn lemma_reaches(self, a: RegionPerms, prefixed: bool)
+        requires
+            self.wf(prefixed),
+            self.reaches(a),
+        ensures
+            a.wf(prefixed),
+            forall|t: usize| #[trigger] a.has(t) ==> self.has(t) && self.owner(t) == a.owner(t),
+            forall|x: usize| #[trigger] a.has_page(x) ==> self.has_page(x),
+        decreases self.depth,
+    {
+        if self != a {
+            let p = self.parent->0@;
+            p.lemma_reaches(a, prefixed);
+            assert forall|t: usize| #[trigger] a.has(t) implies self.has(t) && self.owner(t)
+                == a.owner(t) by {
+                assert(p.has(t));
+                assert(!self.blocks.dom().contains(t));
+            }
+            assert forall|x: usize| #[trigger] a.has_page(x) implies self.has_page(x) by {
+                assert(p.has_page(x));
+            }
+        }
+    }
+
+    /// この塊から祖先の塊 `mid` に届き、`mid` に親があれば、その親にも届く。
+    pub(crate) proof fn lemma_reaches_parent(self, mid: RegionPerms, prefixed: bool)
+        requires
+            self.wf(prefixed),
+            self.reaches(mid),
+            mid.parent is Some,
+        ensures
+            self.reaches(mid.parent->0@),
+            mid.parent->0@.depth < mid.depth,
+        decreases self.depth,
+    {
+        self.lemma_reaches(mid, prefixed);
+        if self == mid {
+            assert(self.parent->0@.reaches(self.parent->0@));
+        } else {
+            let p = self.parent->0@;
+            p.lemma_reaches_parent(mid, prefixed);
+        }
+    }
+
+    /// ブロック `h` を持つ塊は、この塊か祖先の塊で、`h` をそのブロックに持つ。
+    pub(crate) proof fn lemma_owner(self, h: usize, prefixed: bool)
+        requires
+            self.wf(prefixed),
+            self.has(h),
+        ensures
+            self.reaches(self.owner(h)),
+            self.owner(h).wf(prefixed),
+            self.owner(h).blocks.dom().contains(h),
+        decreases self.depth,
+    {
+        if !self.blocks.dom().contains(h) {
+            self.parent->0@.lemma_owner(h, prefixed);
+        }
+    }
+
+    /// 鎖のブロック `h` の形。ブロックの条件はそれを持つ塊から読み、走査する語は、この塊から見ても鎖のブロックを指す。
+    pub(crate) proof fn lemma_block(self, h: usize, prefixed: bool)
+        requires
+            self.wf(prefixed),
+            self.has(h),
+        ensures
+            self.owner(h).block_wf(h, prefixed),
+            self.owner(h).blocks[h] == self.perm(h),
+            region_ptr(self.owner(h).headers, h) == self.block(h),
+            region_cap(self.owner(h).headers, h, prefixed) == self.cap(h, prefixed),
+            self.has_page(page_base(h)),
+            forall|i: int| #[trigger]
+                p_scanned(self.perm(h), i) ==> p_init(self.perm(h), i) && self.word_ok(
+                    p_word(self.perm(h), i),
+                ),
+    {
+        self.lemma_owner(h, prefixed);
+        let o = self.owner(h);
+        assert(o.block_wf(h, prefixed));
+        self.lemma_reaches(o, prefixed);
+        assert(o.has_page(page_base(h)));
+        assert forall|i: int| #[trigger] p_scanned(self.perm(h), i) implies p_init(self.perm(h), i)
+            && self.word_ok(p_word(self.perm(h), i)) by {
+            let w = p_word(o.blocks[h], i);
+            assert(o.word_ok(w));
+            if w.is_ptr_spec() {
+                assert(o.has(w.bits_spec()));
+            }
+        }
+    }
+
+    /// ブロック `h` の権限を、それを持つ塊から借りる。
+    pub(crate) proof fn tracked_perm(tracked &self, h: usize, prefixed: bool) -> (tracked p:
+        &BlockPerm)
+        requires
+            self.wf(prefixed),
+            self.has(h),
+        ensures
+            *p == self.perm(h),
+        decreases self.depth,
+    {
+        if self.blocks.dom().contains(h) {
+            self.blocks.tracked_borrow(h)
+        } else {
+            self.parent.tracked_borrow().borrow().tracked_perm(h, prefixed)
+        }
+    }
+
+    /// ブロック `h` のページの頭の権限を、それを持つ塊から借りる。
+    pub(crate) proof fn tracked_header(tracked &self, h: usize, prefixed: bool) -> (tracked r:
+        &PointsTo<PageHeader>)
+        requires
+            self.wf(prefixed),
+            self.has(h),
+        ensures
+            *r == self.owner(h).headers[page_base(h)],
+        decreases self.depth,
+    {
+        if self.blocks.dom().contains(h) {
+            assert(self.block_wf(h, prefixed));
+            self.headers.tracked_borrow(page_base(h))
+        } else {
+            self.parent.tracked_borrow().borrow().tracked_header(h, prefixed)
+        }
+    }
+
+    /// 持っているページの頭の権限 `hdr` のページは、鎖のページでない。
+    pub(crate) proof fn lemma_apart(
+        tracked &self,
+        tracked hdr: &mut PointsTo<PageHeader>,
+        prefixed: bool,
+    )
+        requires
+            self.wf(prefixed),
+        ensures
+            *final(hdr) == *old(hdr),
+            !self.has_page(old(hdr).ptr()@.addr),
+        decreases self.depth,
+    {
+        let a = hdr.ptr()@.addr;
+        lemma_header_size();
+        if self.headers.contains_key(a) {
+            hdr.is_disjoint(self.headers.tracked_borrow(a));
+        }
+        if self.parent is Some {
+            let tracked p = self.parent.tracked_borrow().borrow();
+            p.lemma_apart(hdr, prefixed);
+        }
+    }
+
     /// 塊とその祖先の不変条件。この塊のブロックは祖先のブロックと重ならない。
     pub(crate) open spec fn wf(self, prefixed: bool) -> bool
         decreases self.depth,
     {
         &&& forall|a: usize| #[trigger]
             self.headers.contains_key(a) ==> self.headers[a].ptr()@.addr == a
-                && self.headers[a].is_init()
+                && self.headers[a].is_init() && header_ok(self.headers[a].value(), prefixed)
         &&& forall|h: usize| #[trigger] self.blocks.dom().contains(h) ==> self.block_wf(h, prefixed)
         &&& match self.parent {
             None => self.depth == 0,
@@ -174,26 +381,118 @@ impl<M: Mode> Frozen<M> {
         self.perms@@.depth
     }
 
-    /// 作り手から移したページとブロックの権限で、親のない塊を作る。
-    pub(crate) fn new(pages: Pages, Tracked(perms): Tracked<RegionPerms>) -> (r: Frozen<M>)
+    /// 塊とその祖先の権限。
+    pub(crate) closed spec fn view_perms(&self) -> RegionPerms {
+        self.perms@@
+    }
+
+    /// 作り手から移したページとブロックの権限で塊を作る。`parent` は、作り手が付けていた塊である。
+    pub(crate) fn new(
+        pages: Pages,
+        parent: Option<Arc<Frozen<M>>>,
+        Tracked(perms): Tracked<RegionPerms>,
+    ) -> (r: Frozen<M>)
         requires
             perms.wf(M::CHECKED),
-            perms.parent is None,
+            match parent {
+                None => perms.parent is None,
+                Some(p) => perms.parent matches Some(s) && s@ == p.view_perms(),
+            },
         ensures
             r.inv(),
-            r.depth() == 0,
-            forall|h: usize| #[trigger] r.has(h) <==> perms.blocks.dom().contains(h),
+            r.view_perms() == perms,
     {
         #[cfg(verus_keep_ghost)]
         let tracked shared = Shared::new(perms);
         Frozen {
             pages,
-            parent: None,
+            parent,
             #[cfg(verus_keep_ghost)]
             perms: Tracked(shared),
             _mode: PhantomData,
         }
     }
+
+    /// 塊の権限は、塊とその祖先の不変条件を満たす。
+    pub(crate) proof fn lemma_wf(tracked &self)
+        ensures
+            self.view_perms().wf(M::CHECKED),
+    {
+        use_type_invariant(self);
+    }
+
+    /// 塊の権限を借りる。
+    pub(crate) proof fn tracked_perms(tracked &self) -> (tracked r: &RegionPerms)
+        ensures
+            *r == self.view_perms(),
+    {
+        self.perms.borrow().borrow()
+    }
+
+    /// この塊を付けたヒープの `Env`。塊の権限の写しを持つ。写しは `Arc` が生かす塊のメモリを読むので、ヒープは写しと
+    /// 一緒に `Arc` を持つ。
+    pub(crate) proof fn env(tracked &self) -> (tracked e: Env)
+        ensures
+            e.checked == M::CHECKED,
+            e.region matches Some(s) && s@ == self.view_perms(),
+    {
+        Env {
+            checked: M::CHECKED,
+            #[cfg(verus_keep_ghost)]
+            region: Some(self.perms.borrow().clone()),
+        }
+    }
+
+    /// `anc` は、この塊か祖先の塊である。親の `Arc` をたどり、塊の番地で比べる。
+    pub(crate) fn descends_from(&self, anc: &Frozen<M>) -> (r: bool)
+        ensures
+            r ==> self.view_perms().reaches(anc.view_perms()),
+    {
+        let mut cur: &Frozen<M> = self;
+        proof {
+            use_type_invariant(self);
+        }
+        loop
+            invariant
+                self.view_perms().wf(M::CHECKED),
+                self.view_perms().reaches(cur.view_perms()),
+            decreases cur.view_perms().depth,
+        {
+            if same_chunk(cur, anc) {
+                return true;
+            }
+            proof {
+                use_type_invariant(cur);
+            }
+            match &cur.parent {
+                None => return false,
+                Some(p) => {
+                    proof {
+                        self.view_perms().lemma_reaches_parent(cur.view_perms(), M::CHECKED);
+                    }
+                    cur = &**p;
+                },
+            }
+        }
+    }
+}
+
+/// 2つの塊が同じ塊か。番地で比べる。vstd は `Arc` の番地の比較に約束を持たない (信頼の一覧の T5)。同じ番地の塊は
+/// 同じ値である。
+#[verifier::external_body]
+fn same_chunk<M: Mode>(a: &Frozen<M>, b: &Frozen<M>) -> (r: bool)
+    ensures
+        r ==> *a == *b,
+{
+    std::ptr::eq(a, b)
+}
+
+/// 付けている塊の子孫でない塊を付けようとした。重ならないことを示せるのは鎖でつながる塊のブロックだけなので、
+/// 誤った使い方として止める (信頼の一覧の T5)。状態を変える前に呼ぶ (T7)。
+#[verifier::external_body]
+#[cold]
+pub(crate) fn not_a_descendant() -> ! {
+    panic!("the attached region is not a descendant of the current one")
 }
 
 } // verus!

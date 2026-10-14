@@ -2,6 +2,8 @@
 //! (docs/spec/object-model.md の「生存の列挙」)。
 
 use std::collections::BTreeMap;
+use std::mem::{self, ManuallyDrop};
+use std::sync::Arc;
 
 use vstd::prelude::*;
 
@@ -16,6 +18,7 @@ use super::model::BlockState;
 use crate::alloc::FREE_META;
 use crate::error::HeapError;
 use crate::foreign::{finalizer_of, run_finalizer};
+use crate::frozen::Frozen;
 #[cfg(verus_only)]
 use crate::meta::bits_kind;
 use crate::meta::{Header, Kind};
@@ -51,7 +54,7 @@ impl<M: Mode> Heap<M> {
         requires
             self.wf(),
             self.core.pages.carved_block(h@.addr),
-            h == self.core.block(h@.addr),
+            h == self.core.pages.block_ptr(h@.addr),
         ensures
             r == self.live_block(h@.addr),
     {
@@ -83,9 +86,11 @@ impl<M: Mode> Heap<M> {
     {
     }
 
-    /// 凍結の確かめを通るブロック。rc が 0 で、検査モードでは生存の状態で、走査する語の行き先も生存の状態である。
+    /// 凍結の確かめを通るブロック。rc が 0 の `Foreign` でない物体で、検査モードでは生存の状態で、走査する語の行き先も
+    /// 生存の状態である。
     pub(super) open spec fn freezable_block(&self, h: usize) -> bool {
         &&& self.core.rc_of(h) == 0
+        &&& self.core.kind(h) != Kind::Foreign
         &&& M::CHECKED ==> {
             &&& self.core.state(h) == BlockState::Live
             &&& forall|i: int| #[trigger]
@@ -148,6 +153,12 @@ impl<M: Mode> Heap<M> {
                     return Err(HeapError::NotImmortal);
                 }
                 if self.core.rc_get(h) != 0 {
+                    return Err(HeapError::NotImmortal);
+                }
+                // `Foreign` の物体は rc 1 で作るので rc の確かめで断るが、塊は値をスレッドの間で共有するので、
+                // 種類でも断る
+
+                if matches!(self.core.meta_get(h).kind(), Kind::Foreign) {
                     return Err(HeapError::NotImmortal);
                 }
                 if M::CHECKED {
@@ -396,12 +407,12 @@ impl<M: Mode> Heap<M> {
         &&& self.core.state(h) != BlockState::Token
     }
 
-    /// 生きている物体 `b` の i 語目の子は、生存の列挙の不変条件を満たす。
+    /// 生きている物体 `b` の i 語目の子は、生存の列挙の不変条件を満たす。子は、生きている物体か付けた塊の物体である。
     closed spec fn child_ok(&self, b: usize, i: int) -> bool {
         let w = p_word(self.core.perm(b), i);
         let c = w.bits_spec();
         w.is_ptr_spec() ==> {
-            &&& self.alive(c)
+            &&& self.alive(c) || self.core.in_region(c)
             &&& self.core.rc_of(b) == 0 ==> self.core.rc_of(c) == 0
             &&& self.core.rc_of(b) < 0 && self.core.rc_of(c) > 0 ==> self.core.lin(c)
         }
@@ -497,6 +508,9 @@ impl<M: Mode> Heap<M> {
                                 proof {
                                     self.core.lemma_shape(b);
                                     self.core.lemma_code_state(b);
+                                    if !self.core.dom().contains(b) {
+                                        self.core.lemma_region_at(b);
+                                    }
                                 }
                                 let cs = self.core.prefix_state_get(c) & 3;
                                 if cs == FREED_STATE || cs == TOKEN_STATE {
@@ -545,6 +559,13 @@ impl<M: Mode> Heap<M> {
     }
 }
 
+/// 付けていた塊の `Arc` を手放す。`Heap` を落とすときに、後始末の後で呼ぶ。
+// 呼ぶ側に展開させない理由は、`Heap` の `region` の欄の注釈にある
+#[inline(never)]
+pub(super) fn release_region<M: Mode>(region: Option<Arc<Frozen<M>>>) {
+    let _ = region;
+}
+
 } // verus!
 
 impl Heap<Checked> {
@@ -569,5 +590,9 @@ impl Heap<Checked> {
 impl<M: Mode> Drop for Heap<M> {
     fn drop(&mut self) {
         self.finalize_all();
+        release_region(ManuallyDrop::into_inner(mem::replace(
+            &mut self.region,
+            ManuallyDrop::new(None),
+        )));
     }
 }

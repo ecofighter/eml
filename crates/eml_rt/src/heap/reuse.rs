@@ -133,6 +133,7 @@ impl<M: Mode> Heap<M> {
     /// 生きている物体はどれも、同じ中身と数で生きている。
     pub closed spec fn kept_live(&self, old: Heap<M>) -> bool {
         &&& self.dummy == old.dummy
+        &&& self.region == old.region
         &&& self.worker == old.worker
         &&& self.core.evolved(old.core.settled_view(), 0, 0)
     }
@@ -142,6 +143,7 @@ impl<M: Mode> Heap<M> {
         let v = old.core.settled_view();
         let h = w.bits_spec();
         &&& self.dummy == old.dummy
+        &&& self.region == old.region
         &&& self.worker == old.worker
         &&& self.token_box(t) == Some(h)
         &&& self.core.state(h) == BlockState::Token
@@ -156,6 +158,7 @@ impl<M: Mode> Heap<M> {
         &&& self.wf()
         &&& self.consistent()
         &&& self.dummy == old.dummy
+        &&& self.region == old.region
         &&& self.worker == old.worker
         &&& w.is_ptr_spec()
         &&& self.core.word_ok(w)
@@ -250,6 +253,11 @@ impl<M: Mode> Heap<M> {
             if M::CHECKED {
                 reveal(Core::building_wf);
             }
+            // 一意な物体 (rc 1) は、塊の物体でない
+
+            if !s0.dom().contains(a) {
+                s0.lemma_region_at(a);
+            }
             if c {
                 s0.lemma_last_ref(a);
                 assert(s0.model@.edges.restrict(ps) == s0.out_edges(a));
@@ -326,10 +334,11 @@ impl<M: Mode> Heap<M> {
     pub closed spec fn taken(&self, old: Heap<M>) -> bool {
         &&& self.core.pages == old.core.pages
         &&& self.core.perms == old.core.perms
-        &&& self.core.checked == old.core.checked
+        &&& self.core.env == old.core.env
         &&& self.core.model@ == (Model { tokens: self.core.model@.tokens, ..old.core.model@ })
         &&& self.tokens@ == self.core.model@.tokens
         &&& self.dummy == old.dummy
+        &&& self.region == old.region
         &&& self.worker == old.worker
         &&& self.wf()
         &&& old.consistent() ==> self.consistent()
@@ -420,12 +429,13 @@ impl<M: Mode> Heap<M> {
             old(self).consistent() ==> final(self).consistent(),
             final(self).core.pages == old(self).core.pages,
             final(self).core.perms == old(self).core.perms,
-            final(self).core.checked == old(self).core.checked,
+            final(self).core.env == old(self).core.env,
             final(self).core.model@ == (Model {
                 tokens: final(self).core.model@.tokens,
                 ..old(self).core.model@
             }),
             final(self).dummy == old(self).dummy,
+            final(self).region == old(self).region,
             final(self).worker == old(self).worker,
             final(self).token_box(t) == Some(h@.addr),
     {
@@ -616,10 +626,11 @@ impl<M: Mode> Heap<M> {
             h == s0.core.block(h@.addr),
             s0.core.state(h@.addr) == BlockState::Token,
             self.dummy == s0.dummy,
+            self.region == s0.region,
             self.worker == s0.worker,
             self.core.full(),
             M::CHECKED ==> self.core.safe_wf(),
-            self.core.checked == s0.core.checked,
+            self.core.env == s0.core.env,
             self.core.pages == s0.core.pages,
             self.core.dom() == s0.core.dom(),
             forall|b: usize| b != h@.addr ==> #[trigger] self.core.perms@[b] == s0.core.perms@[b],
@@ -755,6 +766,10 @@ impl<M: Mode> Heap<M> {
             self.settle();
             let h = self.header_of(w);
             proof {
+                // 一意な物体 (rc 1) は、塊の物体でない
+                if !self.core.dom().contains(h@.addr) {
+                    self.core.lemma_region_at(h@.addr);
+                }
                 if c {
                     self.core.lemma_readable(w);
                     self.lemma_checks_pass(w);

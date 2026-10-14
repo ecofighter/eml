@@ -17,7 +17,7 @@ use crate::text::{text, text_ptr, write_text};
 
 verus! {
 
-/// 文字列の後ろに写すバイト列。`Str` は呼ぶ側の `&str`、`Text` はこのヒープの文字列の物体 (ヘッダと長さ) である。
+/// 文字列の後ろに写すバイト列。`Str` は呼ぶ側の `&str`、`Text` はこのヒープか付けた塊の文字列の物体 (ヘッダと長さ) である。
 /// `string_concat` の右辺はヒープの権限から借りて読むので、`&mut self` を取る操作に `&str` として渡せない。そのため、
 /// 右辺の権限は写す直前に `Core::write_tail` の中で借りる。
 enum Tail<'a> {
@@ -33,12 +33,13 @@ impl Core {
         }
     }
 
-    /// `t` を読める。`Text` なら、このヒープの文字列のブロックで、長さはバイト列の長さに等しい。
+    /// `t` を読める。`Text` なら、このヒープか付けた塊の文字列のブロックで、長さはバイト列の長さに等しい。
     spec fn tail_ok(&self, t: Tail) -> bool {
         match t {
             Tail::Str(_) => true,
             Tail::Text(r, n) => {
-                &&& self.perms@.contains_key(r@.addr)
+                &&& self.has(r@.addr)
+                &&& self.region_wf()
                 &&& self.perm(r@.addr).holds_text(r, n as int)
                 &&& n == self.perm(r@.addr).text().len()
                 &&& valid_utf8(self.perm(r@.addr).text())
@@ -119,7 +120,7 @@ impl Core {
         match t {
             Tail::Str(s) => write_text(h, cap, at, s, Tracked(perm)),
             Tail::Text(r, n) => {
-                let tracked p = self.perms.borrow().tracked_borrow(r@.addr);
+                let tracked p = self.tracked_perm(r@.addr);
                 write_text(h, cap, at, text(*r, *n, Tracked(p)), Tracked(perm));
             },
         }
@@ -128,7 +129,7 @@ impl Core {
     /// `old` から、文字列 `h` の長さの語とバイト列だけが変わった (`string_push` のその場の追記)。
     pub(crate) open spec fn text_changed(&self, old: Core, h: usize) -> bool {
         &&& self.pages == old.pages
-        &&& self.checked == old.checked
+        &&& self.env == old.env
         &&& self.model == old.model
         &&& self.perms@.dom() == old.perms@.dom()
         &&& forall|b: usize| b != h ==> #[trigger] self.perms@[b] == old.perms@[b]
@@ -255,6 +256,7 @@ impl<M: Mode> Heap<M> {
         let h = w.bits_spec();
         &&& self.wf()
         &&& self.dummy == old.dummy
+        &&& self.region == old.region
         &&& self.worker == old.worker
         &&& self.core.model@.building is None
         &&& w.is_ptr_spec()
@@ -335,6 +337,7 @@ impl<M: Mode> Heap<M> {
             rc == 1 ==> final(self).made(*old(self), w),
             rc == 0 ==> final(self).made_immortal(*old(self), w),
             final(self).same_tokens(*old(self)),
+            final(self).core.env == old(self).core.env,
             final(self).is_string(w),
             final(self).text_of(w) == old(self).core.tail_bytes(head) + old(self).core.opt_bytes(
                 tail,
@@ -442,7 +445,10 @@ impl<M: Mode> Heap<M> {
         }
         proof {
             if M::CHECKED {
-                self.core.lemma_safe_at(h@.addr);
+                self.core.lemma_shape(h@.addr);
+                if self.core.dom().contains(h@.addr) {
+                    self.core.lemma_safe_at(h@.addr);
+                }
             } else {
                 self.core.lemma_live_block(h@.addr);
             }
@@ -457,7 +463,7 @@ impl<M: Mode> Heap<M> {
                     cap >= 1,
             ;
         }
-        let tracked p = self.core.perms.borrow().tracked_borrow(h@.addr);
+        let tracked p = self.core.tracked_perm(h@.addr);
         Ok(text_ptr(h, len, Tracked(p)))
     }
 
@@ -487,6 +493,7 @@ impl<M: Mode> Heap<M> {
         let v = old.core.settled_view();
         let h = w.bits_spec();
         &&& self.dummy == old.dummy
+        &&& self.region == old.region
         &&& self.worker == old.worker
         &&& w.is_ptr_spec()
         &&& self.core.word_ok(w)
@@ -515,8 +522,8 @@ impl<M: Mode> Heap<M> {
     fn checked_string(&self, h: *mut Header) -> (r: Result<(), HeapError>)
         requires
             self.core.sound(),
-            self.core.checked@ == M::CHECKED,
-            self.core.dom().contains(h@.addr),
+            self.core.checked() == M::CHECKED,
+            self.core.has(h@.addr),
             h == self.core.block(h@.addr),
         ensures
             !M::CHECKED ==> r is Ok,
@@ -547,7 +554,7 @@ impl<M: Mode> Heap<M> {
             old(self).wf(),
             old(self).core.model@.building is None,
             w.is_ptr_spec() && w.bits_spec() == h@.addr,
-            old(self).core.dom().contains(h@.addr),
+            old(self).core.has(h@.addr),
             h == old(self).core.block(h@.addr),
             old(self).core.kind(h@.addr) == Kind::String,
             !M::CHECKED ==> c,
@@ -557,8 +564,10 @@ impl<M: Mode> Heap<M> {
         ensures
             final(self).wf(),
             final(self).same_tokens(*old(self)),
+            final(self).core.env == old(self).core.env,
             final(self).core.model@.building is None,
             final(self).dummy == old(self).dummy,
+            final(self).region == old(self).region,
             final(self).worker == old(self).worker,
             c ==> final(self).consistent() && final(self).evolved(*old(self), w, -1),
             forall|b: usize| #[trigger]
@@ -595,6 +604,10 @@ impl<M: Mode> Heap<M> {
         let ghost s1 = self.core;
         if last {
             proof {
+                // 最後の参照になる物体は rc が 0 でないので、塊の物体でない
+                if !s0.dom().contains(h@.addr) {
+                    s0.lemma_region_at(h@.addr);
+                }
                 if c {
                     s1.lemma_at(h@.addr);
                     reveal(Core::edges_wf);
@@ -651,11 +664,14 @@ impl<M: Mode> Heap<M> {
         ensures
             final(self).wf(),
             final(self).same_tokens(*old(self)),
+            final(self).core.env == old(self).core.env,
             final(self).core.model@.building is None,
             final(self).dummy == old(self).dummy,
+            final(self).region == old(self).region,
             final(self).worker == old(self).worker,
             w.is_ptr_spec(),
             final(self).core.word_ok(w),
+            final(self).core.dom().contains(w.bits_spec()),
             final(self).is_string(w),
             final(self).text_of(w) == old(self).text_of(left) + old(self).core.tail_bytes(t),
             w != left ==> !old(self).core.dom().contains(w.bits_spec()),
@@ -669,7 +685,7 @@ impl<M: Mode> Heap<M> {
                     &&& final(self).core.block(b) == old(self).core.block(b)
                 },
             M::CHECKED && old(self).decref_twice_passes(left.bits_spec()) ==> {
-                &&& final(self).core.dom().contains(left.bits_spec())
+                &&& final(self).core.has(left.bits_spec())
                 &&& final(self).core.block(left.bits_spec()) == old(self).core.block(
                     left.bits_spec(),
                 )
@@ -699,6 +715,12 @@ impl<M: Mode> Heap<M> {
             0
         };
         if unique && need <= room {
+            proof {
+                // 一意な物体 (rc 1) は、塊の物体でない
+                if !s0.core.dom().contains(h@.addr) {
+                    s0.core.lemma_region_at(h@.addr);
+                }
+            }
             let tracked mut perm = self.core.perms.borrow_mut().tracked_remove(h@.addr);
             proof {
                 assert((8 * (cap - 1) + 7) / 8 == cap - 1);
@@ -752,6 +774,14 @@ impl<M: Mode> Heap<M> {
         }
         let w = self.make_text(want, Tail::Text(h, len), Some(t), 1);
         let ghost mid = *self;
+        proof {
+            // 塊の left は、新しい物体のブロックと重ならない
+            if !s0.core.dom().contains(h@.addr) {
+                s0.core.lemma_region_at(h@.addr);
+                assert(mid.core.region_has(h@.addr));
+                assert(!mid.core.pages.in_use().contains(h@.addr));
+            }
+        }
         self.release_text(h, Ghost(left), Ghost(c));
         proof {
             let a = h@.addr;
@@ -854,10 +884,13 @@ impl<M: Mode> Heap<M> {
         self.checked_string(hr)?;
         let same = left.bits() == right.bits();
         proof {
-            if c && same {
+            if c && same && self.core.dom().contains(hl@.addr) {
                 reveal(Core::refs_wf);
                 self.core.lemma_at(hl@.addr);
                 assert(self.core.counted_wf(hl@.addr));
+            }
+            if !self.core.dom().contains(hl@.addr) {
+                self.core.lemma_region_at(hl@.addr);
             }
         }
         if same {
@@ -880,6 +913,12 @@ impl<M: Mode> Heap<M> {
         let ghost mid = *self;
         proof {
             assert(old(self).core.settled_view() == s1.core);
+            // 塊の right は、新しい物体のブロックと重ならない
+            if !s1.core.dom().contains(hr@.addr) {
+                s1.core.lemma_region_at(hr@.addr);
+                assert(mid.core.region_has(hr@.addr));
+                assert(!mid.core.pages.in_use().contains(hr@.addr));
+            }
         }
         self.release_text(hr, Ghost(right), Ghost(c));
         proof {

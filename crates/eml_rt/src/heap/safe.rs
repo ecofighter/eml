@@ -6,9 +6,11 @@ use vstd::prelude::*;
 
 use super::Core;
 #[cfg(verus_only)]
+use super::check::UNCOUNTED;
+#[cfg(verus_only)]
 use super::inv::{
-    p_code, p_count, p_extended, p_first, p_gen, p_init, p_kind, p_meta, p_scanned, p_word,
-    prefix_kept, prefix_recounted, state_code, string_wf,
+    p_code, p_count, p_extended, p_first, p_gen, p_init, p_kind, p_meta, p_owner, p_scanned,
+    p_word, prefix_kept, prefix_recounted, state_code, string_wf,
 };
 #[cfg(verus_only)]
 use super::model::{BlockState, Model, Pos};
@@ -34,7 +36,8 @@ impl Core {
 
     pub(crate) open spec fn safe_rest(&self) -> bool {
         &&& self.pages.wf()
-        &&& self.pages.prefixed() == self.checked@
+        &&& self.pages.prefixed() == self.checked()
+        &&& self.env_wf()
         &&& self.safe_blocks_wf()
         &&& self.building_wf()
         &&& self.safe_tokens_wf()
@@ -117,7 +120,7 @@ impl Core {
         st: BlockState,
         written: Set<int>,
     ) -> bool {
-        &&& p.wf(self.block(h), self.cap(h), self.checked@)
+        &&& p.wf(self.block(h), self.cap(h), self.checked())
         &&& p.prefix matches Some(q) ==> q.first.is_init() && q.state.is_init()
         &&& p.prefix is Some ==> p_code(p) == state_code(st)
         &&& p.rc.is_init()
@@ -145,7 +148,7 @@ impl Core {
     /// `old` から、ブロック `h` の権限と状態と書いた語と「残した」語だけが変わった。ほかのブロックとページは同じである。
     pub(crate) open spec fn safe_step(&self, old: Core, h: usize) -> bool {
         &&& self.pages == old.pages
-        &&& self.checked == old.checked
+        &&& self.env == old.env
         &&& self.perms@.dom() == old.perms@.dom()
         &&& old.dom().contains(h)
         &&& forall|b: usize| b != h ==> #[trigger] self.perms@[b] == old.perms@[b]
@@ -222,9 +225,10 @@ impl Core {
             s0.safe_rest(),
             self.perms == s0.perms,
             self.model == s0.model,
-            self.checked == s0.checked,
+            self.env == s0.env,
             self.pages.wf(),
             self.pages.prefixed() == s0.pages.prefixed(),
+            self.env_wf(),
             forall|b: usize| #[trigger]
                 s0.dom().contains(b) ==> self.block(b) == s0.block(b) && self.cap(b) == s0.cap(b)
                     && self.pages.carved_block(b),
@@ -314,7 +318,7 @@ impl Core {
         requires
             s0.safe_pending(h),
             self.pages == s0.pages,
-            self.checked == s0.checked,
+            self.env == s0.env,
             self.perms@ == s0.perms@.insert(h, self.perm(h)),
             self.model@.state == s0.model@.state.insert(h, self.state(h)),
             self.model@.written == s0.model@.written.insert(h, self.model@.written[h]),
@@ -367,7 +371,7 @@ impl Core {
     pub(crate) proof fn lemma_safe_empty(&self)
         requires
             self.pages.wf(),
-            self.pages.prefixed() == self.checked@,
+            self.pages.prefixed() == self.checked(),
             self.pages.in_use() == Set::<usize>::empty(),
             self.perms@ == Map::<usize, BlockPerm>::empty(),
             self.model@.state == Map::<usize, BlockState>::empty(),
@@ -375,6 +379,7 @@ impl Core {
             self.model@.kept == Set::<Pos>::empty(),
             self.model@.building is None,
             self.model@.tokens == Seq::<Option<(*mut Header, u32)>>::empty(),
+            self.env@.region is None,
         ensures
             self.safe_wf(),
     {
@@ -422,7 +427,7 @@ impl Core {
     /// `old` から、rc と前置きの `first` の欄の値だけが変わった (`share` と不死の物体の数)。
     pub(crate) open spec fn values_changed(&self, old: Core) -> bool {
         &&& self.pages == old.pages
-        &&& self.checked == old.checked
+        &&& self.env == old.env
         &&& self.model@.state == old.model@.state
         &&& self.model@.written == old.model@.written
         &&& self.model@.kept == old.model@.kept
@@ -464,7 +469,7 @@ impl Core {
             s0.dom().contains(h),
             s0.state(h) == BlockState::Dying,
             self.pages == s0.pages,
-            self.checked == s0.checked,
+            self.env == s0.env,
             self.perms@.dom() == s0.perms@.dom(),
             forall|b: usize| b != h ==> #[trigger] self.perms@[b] == s0.perms@[b],
             self.perm(h).rc == s0.perm(h).rc,
@@ -569,7 +574,7 @@ impl Core {
                 assert(p_scanned(q, i));
             }
         }
-        assert(p.wf(self.block(h), self.cap(h), self.checked@));
+        assert(p.wf(self.block(h), self.cap(h), self.checked()));
         assert(self.safe_perm_wf(p, h, self.state(h), self.model@.written[h]));
         assert(self.safe_block_wf(h));
         self.lemma_safe_step(s0, h);
@@ -702,14 +707,18 @@ impl Core {
     pub(crate) proof fn lemma_values_rc(&self, mid: Core, old: Core, h: usize)
         requires
             old.sound(),
-            old.dom().contains(h),
+            old.has(h),
             old.state(h) == BlockState::Live,
             mid.rc_changed(old, h),
             mid.perm(h).prefix == old.perm(h).prefix,
             self.perms == mid.perms,
             self.pages == old.pages,
-            self.checked == old.checked,
-            self.model@.state == old.model@.state.insert(h, BlockState::Live),
+            self.env == old.env,
+            self.model@.state == if old.dom().contains(h) {
+                old.model@.state.insert(h, BlockState::Live)
+            } else {
+                old.model@.state
+            },
             self.model@.written == old.model@.written,
             self.model@.kept == old.model@.kept,
             self.model@.building == old.model@.building,
@@ -783,7 +792,7 @@ impl Core {
         requires
             self.pages == old.pages,
             self.perms == old.perms,
-            self.checked == old.checked,
+            self.env == old.env,
             self.model@ == (Model { tokens: self.model@.tokens, ..old.model@ }),
         ensures
             old.full() ==> self.full(),
@@ -838,7 +847,7 @@ impl Core {
             old.model@.tokens[i] is Some,
             self.pages == old.pages,
             self.perms == old.perms,
-            self.checked == old.checked,
+            self.env == old.env,
             self.model@ == (Model { tokens: old.model@.tokens.update(i, None), ..old.model@ }),
         ensures
             self.safe_tokens_wf(),
@@ -873,7 +882,7 @@ impl Core {
             !old.registered(h@.addr),
             self.pages == old.pages,
             self.perms == old.perms,
-            self.checked == old.checked,
+            self.env == old.env,
             self.model@ == (Model { tokens: old.model@.tokens.push(Some((h, g))), ..old.model@ }),
         ensures
             self.safe_tokens_wf(),
@@ -911,7 +920,7 @@ impl Core {
             s0.dom().contains(h),
             s0.state(h) == BlockState::Live,
             self.pages == s0.pages,
-            self.checked == s0.checked,
+            self.env == s0.env,
             self.perms@.dom() == s0.perms@.dom(),
             forall|b: usize| b != h ==> #[trigger] self.perms@[b] == s0.perms@[b],
             self.perm(h).meta == s0.perm(h).meta,
@@ -976,7 +985,7 @@ impl Core {
         requires
             self.safe_wf(),
             self.safe_settleable(),
-            self.dom().contains(h),
+            self.has(h),
             self.state(h) == BlockState::Live || self.state(h) == BlockState::Building,
         ensures
             p_extended(self.perm(h)) ==> p_init(self.perm(h), 0),
@@ -984,6 +993,10 @@ impl Core {
             p_kind(self.perm(h)) == Kind::String ==> string_wf(self.perm(h), self.cap(h)),
             p_first(self.perm(h)) + p_count(self.perm(h)) <= self.cap(h),
     {
+        if !self.dom().contains(h) {
+            self.lemma_region_at(h);
+            return;
+        }
         reveal(Core::building_wf);
         self.lemma_safe_at(h);
         if p_kind(self.perm(h)) == Kind::BigInt {
@@ -996,12 +1009,16 @@ impl Core {
         requires
             self.safe_wf(),
             self.safe_settleable(),
-            self.dom().contains(h),
+            self.has(h),
             self.state(h) != BlockState::Freed,
             self.scanned(h, i),
         ensures
             self.safe_slot(self.perm(h), i),
     {
+        if !self.dom().contains(h) {
+            self.lemma_region_at(h);
+            return;
+        }
         reveal(Core::building_wf);
         reveal(Core::safe_blocks_wf);
         self.lemma_safe_at(h);
@@ -1025,8 +1042,9 @@ impl Core {
             s0.perm_wf(perm, h, st, Set::empty(), owner),
             st == BlockState::Live || st == BlockState::Building,
             s0.pages.carved_block(h),
+            !s0.region_has(h),
             self.pages == s0.pages,
-            self.checked == s0.checked,
+            self.env == s0.env,
             self.perm(h) == perm,
             self.state(h) == st,
             self.model@.written[h] == Set::<int>::empty(),
@@ -1061,8 +1079,8 @@ impl Core {
     pub(crate) open spec fn block_shape(&self, h: usize) -> bool {
         let p = self.perm(h);
         let st = self.state(h);
-        &&& self.pages.carved_block(h)
-        &&& p.wf(self.block(h), self.cap(h), self.checked@)
+        &&& self.dom().contains(h) ==> self.pages.carved_block(h)
+        &&& p.wf(self.block(h), self.cap(h), self.checked())
         &&& p.prefix matches Some(q) ==> q.first.is_init() && q.state.is_init()
         &&& p.prefix is Some ==> p_code(p) == state_code(st)
         &&& p.rc.is_init()
@@ -1084,19 +1102,212 @@ impl Core {
     pub(crate) proof fn lemma_shape(&self, h: usize)
         requires
             self.sound(),
-            self.dom().contains(h),
+            self.has(h),
         ensures
             self.block_shape(h),
-            self.pages.carved_block(h),
+            self.dom().contains(h) ==> self.pages.carved_block(h),
             self.block(h)@.addr == h,
             h % 8 == 0,
             h >= 8,
             h + 8 * (1 + self.cap(h)) <= usize::MAX,
     {
-        if self.full() {
+        if !self.dom().contains(h) {
+            self.lemma_region_at(h);
+        } else if self.full() {
             self.lemma_at(h);
         } else {
             self.lemma_safe_at(h);
+        }
+    }
+
+    /// 付けた塊のブロックは、このヒープのブロックでない。
+    pub(crate) proof fn lemma_apart(&self, h: usize)
+        requires
+            self.sound(),
+            self.region_has(h),
+        ensures
+            !self.dom().contains(h),
+            self.in_region(h),
+    {
+    }
+
+    /// 付けた塊を、その子孫の塊に替えた後 (`Heap::attach`)。ヒープのブロックと前の塊のブロックは、同じ権限と形のまま
+    /// 読めるので、不変条件は保たれる。新しく見えるブロックは、ヒープのページと別のページにある。
+    pub(crate) proof fn lemma_attached(&self, s0: Core)
+        requires
+            s0.full() || s0.safe_wf(),
+            self.pages == s0.pages,
+            self.perms == s0.perms,
+            self.model == s0.model,
+            self.checked() == s0.checked(),
+            self.env@.region is Some,
+            self.region_wf(),
+            s0.env@.region matches Some(o) ==> self.region().reaches(o@),
+            forall|a: usize| #[trigger] self.pages.has_page(a) ==> !self.region().has_page(a),
+        ensures
+            s0.full() ==> self.full(),
+            s0.safe_wf() ==> self.safe_wf(),
+            forall|w: Word| #[trigger] s0.word_ok(w) ==> self.word_ok(w),
+            forall|b: usize| #[trigger]
+                s0.has(b) ==> {
+                    &&& self.has(b)
+                    &&& self.perm(b) == s0.perm(b)
+                    &&& self.state(b) == s0.state(b)
+                    &&& self.block(b) == s0.block(b)
+                    &&& self.cap(b) == s0.cap(b)
+                },
+    {
+        let r = self.region();
+        let prefixed = self.checked();
+        if let Some(o) = s0.env@.region {
+            r.lemma_reaches(o@, prefixed);
+        }
+        assert forall|h: usize|
+            #![trigger self.region_has(h)]
+            #![trigger self.pages.in_use().contains(h)]
+            self.region_has(h) implies !self.pages.in_use().contains(h) by {
+            if self.pages.in_use().contains(h) {
+                self.pages.lemma_in_use_carved(h);
+                self.pages.lemma_carved_page(h);
+                r.lemma_block(h, prefixed);
+            }
+        }
+        assert(self.env_wf());
+        assert forall|b: usize| #[trigger] s0.has(b) implies {
+            &&& self.has(b)
+            &&& self.perm(b) == s0.perm(b)
+            &&& self.state(b) == s0.state(b)
+            &&& self.block(b) == s0.block(b)
+            &&& self.cap(b) == s0.cap(b)
+        } by {
+            if !s0.dom().contains(b) {
+                assert(s0.region_has(b));
+            }
+        }
+        assert forall|w: Word| #[trigger] s0.word_ok(w) implies self.word_ok(w) by {
+            if w.is_ptr_spec() {
+                assert(s0.has(w.bits_spec()));
+            }
+        }
+        if s0.full() {
+            reveal(Core::blocks_wf);
+            reveal(Core::edges_wf);
+            reveal(Core::refs_wf);
+            reveal(Core::building_wf);
+            assert forall|h: usize| #[trigger] self.dom().contains(h) implies self.block_wf(h) by {
+                assert(s0.block_wf(h));
+                let p = self.perm(h);
+                assert forall|i: int| #[trigger]
+                    p_scanned(p, i) && s0.slot_word(p, h, i) implies self.slot_word(p, h, i) by {
+                    assert(s0.word_ok(p_word(p, i)));
+                }
+                assert forall|i: int| #[trigger]
+                    self.model@.written[h].contains(i) && s0.slot_word(
+                        p,
+                        h,
+                        i,
+                    ) implies self.slot_word(p, h, i) by {
+                    assert(s0.word_ok(p_word(p, i)));
+                }
+            }
+            assert forall|e: Pos| #[trigger] self.model@.kept.contains(e) implies self.kept_wf(
+                e,
+            ) by {
+                assert(s0.kept_wf(e));
+            }
+            assert forall|e: Pos| #[trigger]
+                self.model@.edges.dom().contains(e) implies self.edge_wf(e) by {
+                assert(s0.edge_wf(e));
+                assert(s0.has(self.model@.edges[e]));
+            }
+            assert forall|h: usize| #[trigger] self.dom().contains(h) implies self.counted_wf(
+                h,
+            ) by {
+                assert(s0.counted_wf(h));
+            }
+        }
+        if s0.safe_wf() {
+            reveal(Core::safe_blocks_wf);
+            reveal(Core::building_wf);
+            reveal(Core::safe_tokens_wf);
+            assert forall|h: usize| #[trigger] self.dom().contains(h) implies self.safe_block_wf(
+                h,
+            ) by {
+                assert(s0.safe_block_wf(h));
+                let p = self.perm(h);
+                assert forall|i: int| #[trigger]
+                    p_scanned(p, i) && s0.safe_slot(p, i) implies self.safe_slot(p, i) by {
+                    assert(s0.word_ok(p_word(p, i)));
+                }
+                assert forall|i: int| #[trigger]
+                    self.model@.written[h].contains(i) && s0.safe_slot(p, i) implies self.safe_slot(
+                    p,
+                    i,
+                ) by {
+                    assert(s0.word_ok(p_word(p, i)));
+                }
+            }
+            assert forall|e: Pos| #[trigger] self.model@.kept.contains(e) implies self.safe_kept_wf(
+                e,
+            ) by {
+                assert(s0.safe_kept_wf(e));
+                assert(s0.word_ok(p_word(s0.perm(e.0), e.1)));
+            }
+            assert forall|i: int|
+                0 <= i < self.model@.tokens.len() && (
+                #[trigger] self.model@.tokens[i]) is Some implies self.token_entry(
+                self.model@.tokens[i]->0,
+            ) by {
+                assert(s0.token_entry(self.model@.tokens[i]->0));
+            }
+        }
+    }
+
+    /// 付けた塊の物体は rc 0 で、検査モードの前置きは生存の状態である。
+    pub(crate) proof fn lemma_region_rc(&self, h: usize)
+        requires
+            self.region_wf(),
+            self.in_region(h),
+        ensures
+            self.rc_of(h) == 0,
+            self.perm(h).prefix is Some ==> p_code(self.perm(h)) == 1,
+    {
+        self.region().lemma_block(h, self.checked());
+    }
+
+    /// 付けた塊のブロック `h` の形。生存の rc 0 の物体で、`Foreign` でなく、検査モードの前置きは数えない印を持つ。走査する
+    /// 語は書いてあり、即値か、付けた塊のブロックを指す。
+    pub(crate) proof fn lemma_region_at(&self, h: usize)
+        requires
+            self.sound(),
+            self.in_region(h),
+        ensures
+            self.block_shape(h),
+            self.block(h)@.addr == h,
+            h % 8 == 0,
+            h >= 8,
+            h + 8 * (1 + self.cap(h)) <= usize::MAX,
+            self.state(h) == BlockState::Live,
+            self.rc_of(h) == 0,
+            p_kind(self.perm(h)) != Kind::Foreign,
+            self.checked() ==> self.perm(h).prefix is Some && p_owner(self.perm(h)) == UNCOUNTED,
+            forall|i: int| #[trigger]
+                p_scanned(self.perm(h), i) ==> p_init(self.perm(h), i) && self.word_ok(
+                    p_word(self.perm(h), i),
+                ) && (p_word(self.perm(h), i).is_ptr_spec() ==> self.in_region(
+                    p_word(self.perm(h), i).bits_spec(),
+                )),
+    {
+        let r = self.region();
+        r.lemma_block(h, self.checked());
+        assert forall|i: int| #[trigger] p_scanned(self.perm(h), i) implies p_init(self.perm(h), i)
+            && self.word_ok(p_word(self.perm(h), i)) && (p_word(self.perm(h), i).is_ptr_spec()
+            ==> self.in_region(p_word(self.perm(h), i).bits_spec())) by {
+            let w = p_word(self.perm(h), i);
+            assert(r.word_ok(w));
+            if w.is_ptr_spec() {
+                self.lemma_apart(w.bits_spec());
+            }
         }
     }
 

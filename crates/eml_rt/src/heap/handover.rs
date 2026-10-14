@@ -91,7 +91,7 @@ impl Core {
 
     /// `evolved` の、物体ごとに数の変化 `d(b)` が違う形。
     pub(crate) open spec fn evolved_by(&self, old: Core, d: spec_fn(usize) -> int) -> bool {
-        &&& self.checked == old.checked
+        &&& self.env == old.env
         &&& forall|b: usize|
             #![trigger old.dom().contains(b)]
             old.dom().contains(b) && old.settled_state(b) == BlockState::Live && (old.rc_of(b) == 0
@@ -112,7 +112,7 @@ impl Core {
     /// `dup` の後の状態。`h` の rc と数だけが動く (不死の物体なら数も動かない)。
     pub(crate) open spec fn bumped(&self, old: Core, h: usize) -> bool {
         &&& self.pages == old.pages
-        &&& self.checked == old.checked
+        &&& self.env == old.env
         &&& self.perms@.dom() == old.perms@.dom()
         &&& forall|b: usize| b != h ==> #[trigger] self.perms@[b] == old.perms@[b]
         &&& old.dom().contains(h) ==> {
@@ -142,7 +142,7 @@ impl Core {
     /// `old` から、辺 `k` の行き先ごとに1つずつ `dup` した状態。
     pub(crate) open spec fn dupped(&self, old: Core, k: Map<Pos, usize>) -> bool {
         &&& self.pages == old.pages
-        &&& self.checked == old.checked
+        &&& self.env == old.env
         &&& self.perms@.dom() == old.perms@.dom()
         &&& forall|b: usize| #[trigger]
             old.dom().contains(b) ==> {
@@ -218,7 +218,7 @@ impl Core {
             s0.model@.refs[h] == 1,
             self.prefix_moved(s0, h),
             self.pages == s0.pages,
-            self.checked == s0.checked,
+            self.env == s0.env,
             self.model@ == (Model {
                 state: s0.model@.state.insert(h, BlockState::Dying),
                 edges: s0.model@.edges.remove_keys(ps),
@@ -393,7 +393,6 @@ impl Core {
             mid.dupped(s0, k),
             self.bumped(mid, c),
             !k.dom().contains(p),
-            s0.dom().contains(c),
         ensures
             self.dupped(s0, k.insert(p, c)),
     {
@@ -513,7 +512,7 @@ impl Core {
             pre.model@.building is None,
             self.prefix_moved(pre, h@.addr),
             self.pages == pre.pages,
-            self.checked == pre.checked,
+            self.env == pre.env,
             self.model@.state == pre.model@.state.insert(h@.addr, BlockState::Token),
             self.model@.edges == pre.model@.edges,
             self.model@.refs == pre.model@.refs,

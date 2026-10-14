@@ -88,7 +88,7 @@ impl Core {
         last: bool,
     ) -> bool {
         &&& self.pages == old.pages
-        &&& self.checked == old.checked
+        &&& self.env == old.env
         &&& self.dom() == old.dom()
         &&& forall|w: Word| #[trigger] self.word_ok(w) == old.word_ok(w)
         &&& forall|b: usize| b != h ==> #[trigger] self.perms@[b] == old.perms@[b]
@@ -121,7 +121,7 @@ impl Core {
 
     /// 空ける途中の `h` の箱を空けた後の状態 (`Heap::free_box`)。
     pub(crate) open spec fn boxed_off(&self, old: Core, h: usize) -> bool {
-        &&& self.checked == old.checked
+        &&& self.env == old.env
         &&& self.model@.edges == old.model@.edges
         &&& self.model@.building == old.model@.building
         &&& self.active() == old.active().remove(h)
@@ -491,7 +491,7 @@ impl Core {
                 let c = p_word(self.perm(h@.addr), first + i).bits_spec();
                 &&& self.model@.edges.dom().contains((h@.addr, first + i))
                 &&& self.model@.edges[(h@.addr, first + i)] == c
-                &&& self.dom().contains(c)
+                &&& self.has(c)
                 &&& self.state(c) == BlockState::Live
                 &&& c != h@.addr
             },

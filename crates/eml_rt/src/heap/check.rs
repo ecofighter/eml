@@ -156,8 +156,8 @@ impl<M: Mode> Heap<M> {
     pub(super) fn checked_live(&self, h: *mut Header) -> (r: Result<(), HeapError>)
         requires
             self.core.sound(),
-            self.core.checked@ == M::CHECKED,
-            self.core.dom().contains(h@.addr),
+            self.core.checked() == M::CHECKED,
+            self.core.has(h@.addr),
             h == self.core.block(h@.addr),
         ensures
             !M::CHECKED ==> r is Ok,
@@ -184,8 +184,8 @@ impl<M: Mode> Heap<M> {
     pub(super) fn checked_owner(&self, h: *mut Header, rc: i32) -> (r: Result<(), HeapError>)
         requires
             self.core.sound(),
-            self.core.checked@ == M::CHECKED,
-            self.core.dom().contains(h@.addr),
+            self.core.checked() == M::CHECKED,
+            self.core.has(h@.addr),
             h == self.core.block(h@.addr),
         ensures
             r is Err ==> r matches Err(HeapError::WrongOwner { .. }),
@@ -209,8 +209,8 @@ impl<M: Mode> Heap<M> {
     pub(super) fn immortal_counted(&self, h: *mut Header) -> (r: bool)
         requires
             self.core.sound(),
-            self.core.checked@,
-            self.core.dom().contains(h@.addr),
+            self.core.checked(),
+            self.core.has(h@.addr),
             h == self.core.block(h@.addr),
         ensures
             self.core.perm(h@.addr).prefix is Some,
@@ -232,7 +232,7 @@ impl<M: Mode> Heap<M> {
     pub(super) fn count_immortal(&mut self, h: *mut Header, up: bool)
         requires
             old(self).core.safe_wf(),
-            old(self).core.checked@,
+            old(self).core.checked(),
             old(self).core.dom().contains(h@.addr),
             h == old(self).core.block(h@.addr),
             old(self).core.rc_of(h@.addr) == 0,
@@ -253,6 +253,7 @@ impl<M: Mode> Heap<M> {
                 p_owner(old(self).core.perm(h@.addr)) - 1
             },
             final(self).dummy == old(self).dummy,
+            final(self).region == old(self).region,
             final(self).worker == old(self).worker,
             final(self).stats == old(self).stats,
     {
@@ -294,8 +295,8 @@ impl<M: Mode> Heap<M> {
     pub(super) fn checked_dup(&self, h: *mut Header) -> (r: Result<bool, HeapError>)
         requires
             self.core.sound(),
-            self.core.checked@ == M::CHECKED,
-            self.core.dom().contains(h@.addr),
+            self.core.checked() == M::CHECKED,
+            self.core.has(h@.addr),
             h == self.core.block(h@.addr),
         ensures
             r == Err::<bool, HeapError>(HeapError::UseAfterFree) ==> !(self.core.state(h@.addr)
@@ -341,8 +342,8 @@ impl<M: Mode> Heap<M> {
     pub(super) fn checked_decref(&self, h: *mut Header) -> (r: Result<bool, HeapError>)
         requires
             self.core.sound(),
-            self.core.checked@ == M::CHECKED,
-            self.core.dom().contains(h@.addr),
+            self.core.checked() == M::CHECKED,
+            self.core.has(h@.addr),
             h == self.core.block(h@.addr),
         ensures
             r is Err ==> chain_err(r) || r == Err::<bool, HeapError>(HeapError::UseAfterFree) && !(
@@ -386,8 +387,8 @@ impl<M: Mode> Heap<M> {
     pub(super) fn checked_decref_twice(&self, h: *mut Header) -> (r: Result<(), HeapError>)
         requires
             self.core.sound(),
-            self.core.checked@ == M::CHECKED,
-            self.core.dom().contains(h@.addr),
+            self.core.checked() == M::CHECKED,
+            self.core.has(h@.addr),
             h == self.core.block(h@.addr),
         ensures
             !M::CHECKED ==> r is Ok,

@@ -1,6 +1,8 @@
 //! ヒープの証明の部分 (`Core`) の読み書き。ブロックの欄を権限の上で読み書きし、RC の遷移のモデルの側を更新する。
 
 use vstd::prelude::*;
+#[cfg(verus_only)]
+use vstd::raw_ptr::PointsTo;
 use vstd::raw_ptr::{ptr_mut_write, ptr_ref};
 
 use super::Core;
@@ -13,12 +15,12 @@ use super::model::Pos;
 #[cfg(verus_only)]
 use super::model::{BlockState, Model, lemma_indeg_pos};
 #[cfg(verus_only)]
-use crate::alloc::FREE_META;
+use crate::alloc::{FREE_META, PageHeader, header_cap, header_ok, page_base};
 use crate::cell::{
     rc_decref_shared, rc_dup_shared, rc_is_last, rc_load, rc_store, u32_load, u32_store,
 };
 #[cfg(verus_only)]
-use crate::meta::field_ptr;
+use crate::meta::{BlockPerm, field_ptr};
 use crate::meta::{Header, Meta, meta_ptr, prefix_first_ptr, prefix_state_ptr, rc_ptr, slot_ptr};
 #[cfg(verus_only)]
 use crate::meta::{bits_kind, bits_scan, bits_tag};
@@ -47,11 +49,48 @@ impl Core {
         self.pages.lemma_block_bounds(h);
     }
 
+    /// ブロック `h` の権限を借りる。このヒープのブロックなら自分の権限から、塊のブロックなら塊の権限の写しから借りる。
+    /// どちらから借りるかは ghost の条件で決まるので、実行の時の分岐はない。塊の権限からは読むことしかできない。
+    pub(crate) proof fn tracked_perm(tracked &self, h: usize) -> (tracked p: &BlockPerm)
+        requires
+            self.region_wf(),
+            self.has(h),
+        ensures
+            *p == self.perm(h),
+    {
+        if self.dom().contains(h) {
+            self.perms.borrow().tracked_borrow(h)
+        } else {
+            self.env.borrow().tracked_region().tracked_perm(h, self.checked())
+        }
+    }
+
+    /// 確保器が切り出したブロック `h` は、付けた塊のブロックでない。`h` のページの頭の権限は確保器が持ち、塊のページの頭の
+    /// 権限とは別のものだからである。
+    pub(crate) proof fn lemma_not_region(tracked &mut self, h: usize)
+        requires
+            old(self).pages.wf(),
+            old(self).pages.carved_block(h),
+            old(self).region_wf(),
+        ensures
+            *final(self) == *old(self),
+            !final(self).region_has(h),
+    {
+        if self.env@.region is Some {
+            self.pages.lemma_carved_page(h);
+            let tracked r = self.env.borrow().tracked_region();
+            self.pages.lemma_page_apart(page_base(h), r, self.checked());
+            if r.has(h) {
+                r.lemma_block(h, self.checked());
+            }
+        }
+    }
+
     #[inline]
     pub(crate) fn rc_get(&self, h: *mut Header) -> (r: i32)
         requires
             self.sound(),
-            self.dom().contains(h@.addr),
+            self.has(h@.addr),
             h == self.block(h@.addr),
         ensures
             r == self.rc_of(h@.addr),
@@ -59,7 +98,7 @@ impl Core {
         proof {
             self.lemma_shape(h@.addr);
         }
-        let tracked p = self.perms.borrow().tracked_borrow(h@.addr);
+        let tracked p = self.tracked_perm(h@.addr);
         rc_load(rc_ptr(h), Tracked(&p.rc))
     }
 
@@ -67,7 +106,7 @@ impl Core {
     pub(crate) fn meta_get(&self, h: *mut Header) -> (r: Meta)
         requires
             self.sound(),
-            self.dom().contains(h@.addr),
+            self.has(h@.addr),
             h == self.block(h@.addr),
         ensures
             r.bits_spec() == self.meta_bits(h@.addr),
@@ -79,7 +118,7 @@ impl Core {
         proof {
             self.lemma_shape(h@.addr);
         }
-        let tracked p = self.perms.borrow().tracked_borrow(h@.addr);
+        let tracked p = self.tracked_perm(h@.addr);
         let bits = *ptr_ref(meta_ptr(h), Tracked(&p.meta));
         Meta::from_bits(bits)
     }
@@ -90,7 +129,7 @@ impl Core {
         requires
             self.sound(),
             self.pages.carved_block(h@.addr),
-            h == self.block(h@.addr),
+            h == self.pages.block_ptr(h@.addr),
         ensures
             self.dom().contains(h@.addr) ==> r == self.meta_bits(h@.addr),
             !self.dom().contains(h@.addr) ==> r == FREE_META,
@@ -113,7 +152,7 @@ impl Core {
     pub(crate) fn slot_get(&self, h: *mut Header, i: usize) -> (r: Word)
         requires
             self.sound(),
-            self.dom().contains(h@.addr),
+            self.has(h@.addr),
             h == self.block(h@.addr),
             p_init(self.perm(h@.addr), i as int),
         ensures
@@ -123,7 +162,7 @@ impl Core {
             self.lemma_shape(h@.addr);
             assert(self.perm(h@.addr).slots.contains_key(i as int));
         }
-        let tracked p = self.perms.borrow().tracked_borrow(h@.addr);
+        let tracked p = self.tracked_perm(h@.addr);
         *ptr_ref(slot_ptr(h, i), Tracked(p.slots.tracked_borrow(i as int)))
     }
 
@@ -132,7 +171,7 @@ impl Core {
     pub(crate) fn scan_get(&self, h: *mut Header) -> (r: (usize, usize))
         requires
             self.sound(),
-            self.dom().contains(h@.addr),
+            self.has(h@.addr),
             h == self.block(h@.addr),
             self.state(h@.addr) != BlockState::Freed,
         ensures
@@ -156,7 +195,7 @@ impl Core {
     pub(crate) fn rc_last(&self, h: *mut Header) -> (r: bool)
         requires
             self.sound(),
-            self.dom().contains(h@.addr),
+            self.has(h@.addr),
             h == self.block(h@.addr),
         ensures
             r == (self.rc_of(h@.addr) == 1 || self.rc_of(h@.addr) == -1),
@@ -164,8 +203,34 @@ impl Core {
         proof {
             self.lemma_shape(h@.addr);
         }
-        let tracked p = self.perms.borrow().tracked_borrow(h@.addr);
+        let tracked p = self.tracked_perm(h@.addr);
         rc_is_last(rc_ptr(h), Tracked(&p.rc))
+    }
+
+    /// ブロック `h` のページの頭の権限を借りる。`tracked_perm` と同じく、借りる先を ghost の条件で選ぶ。
+    pub(crate) proof fn tracked_header(tracked &self, h: usize) -> (tracked r: &PointsTo<
+        PageHeader,
+    >)
+        requires
+            self.sound(),
+            self.has(h),
+        ensures
+            r.ptr()@.addr == page_base(h),
+            r.ptr()@.provenance == self.block(h)@.provenance,
+            r.is_init(),
+            header_ok(r.value(), self.pages.prefixed()),
+            header_cap(r.value(), self.pages.prefixed()) == self.cap(h),
+    {
+        self.lemma_shape(h);
+        if self.in_region(h) {
+            let tracked r = self.env.borrow().tracked_region();
+            r.lemma_block(h, self.checked());
+            r.lemma_owner(h, self.checked());
+            assert(r.owner(h).headers.contains_key(page_base(h)));
+            r.tracked_header(h, self.checked())
+        } else {
+            self.pages.tracked_block_header(h)
+        }
     }
 
     /// ペイロードの語の数。
@@ -173,15 +238,13 @@ impl Core {
     pub(crate) fn cap_get(&self, h: *mut Header) -> (r: usize)
         requires
             self.sound(),
-            self.dom().contains(h@.addr),
+            self.has(h@.addr),
             h == self.block(h@.addr),
         ensures
             r == self.cap(h@.addr),
     {
-        proof {
-            self.lemma_shape(h@.addr);
-        }
-        self.pages.cap_of(h)
+        let tracked hdr = self.tracked_header(h@.addr);
+        self.pages.cap_in(h, Tracked(hdr))
     }
 
     /// i 語目に `v` を書く。モデルはまだ替えない。
@@ -217,9 +280,9 @@ impl Core {
     pub(crate) fn prefix_state_get(&self, h: *mut Header) -> (r: u32)
         requires
             self.sound(),
-            self.dom().contains(h@.addr),
+            self.has(h@.addr),
             h == self.block(h@.addr),
-            self.checked@,
+            self.checked(),
         ensures
             self.perm(h@.addr).prefix is Some,
             r == self.perm(h@.addr).prefix->0.state.value(),
@@ -227,7 +290,7 @@ impl Core {
         proof {
             self.lemma_shape(h@.addr);
         }
-        let tracked p = self.perms.borrow().tracked_borrow(h@.addr);
+        let tracked p = self.tracked_perm(h@.addr);
         let tracked q = p.prefix.tracked_borrow();
         u32_load(prefix_state_ptr(h), Tracked(&q.state))
     }
@@ -237,9 +300,9 @@ impl Core {
     pub(crate) fn prefix_first_get(&self, h: *mut Header) -> (r: u32)
         requires
             self.sound(),
-            self.dom().contains(h@.addr),
+            self.has(h@.addr),
             h == self.block(h@.addr),
-            self.checked@,
+            self.checked(),
         ensures
             self.perm(h@.addr).prefix is Some,
             r == p_owner(self.perm(h@.addr)),
@@ -247,7 +310,7 @@ impl Core {
         proof {
             self.lemma_shape(h@.addr);
         }
-        let tracked p = self.perms.borrow().tracked_borrow(h@.addr);
+        let tracked p = self.tracked_perm(h@.addr);
         let tracked q = p.prefix.tracked_borrow();
         u32_load(prefix_first_ptr(h), Tracked(&q.first))
     }
@@ -256,8 +319,8 @@ impl Core {
     pub(crate) proof fn lemma_code_state(&self, h: usize)
         requires
             self.sound(),
-            self.dom().contains(h),
-            self.checked@,
+            self.has(h),
+            self.checked(),
         ensures
             self.perm(h).prefix is Some,
             p_code(self.perm(h)) == state_code(self.state(h)),
@@ -266,7 +329,9 @@ impl Core {
                 == self.model@.owner[h],
     {
         self.lemma_shape(h);
-        if self.full() {
+        if !self.dom().contains(h) {
+            self.lemma_region_at(h);
+        } else if self.full() {
             self.lemma_at(h);
         }
     }
@@ -274,7 +339,7 @@ impl Core {
     /// 不死の物体の外に出ている参照の数 (前置きの `first` の欄) のほかは変わらない。
     pub(crate) open spec fn recounted(&self, old: Core) -> bool {
         &&& self.pages == old.pages
-        &&& self.checked == old.checked
+        &&& self.env == old.env
         &&& self.model == old.model
         &&& self.perms@.dom() == old.perms@.dom()
         &&& forall|b: usize| #[trigger]
@@ -449,7 +514,7 @@ impl Core {
             h@.addr >= 8,
         ensures
             final(self).pages == old(self).pages,
-            final(self).checked == old(self).checked,
+            final(self).env == old(self).env,
             final(self).model == old(self).model,
             final(self).perms@.dom() == old(self).perms@.dom(),
             forall|b: usize|
@@ -487,7 +552,7 @@ impl Core {
             h@.addr >= 8,
         ensures
             final(self).pages == old(self).pages,
-            final(self).checked == old(self).checked,
+            final(self).env == old(self).env,
             final(self).model == old(self).model,
             final(self).perms@.dom() == old(self).perms@.dom(),
             forall|b: usize|
@@ -588,7 +653,7 @@ impl Core {
     /// `old` から、ブロック `h` の rc の値だけが変わった。
     pub(crate) open spec fn rc_changed(&self, old: Core, h: usize) -> bool {
         &&& self.pages == old.pages
-        &&& self.checked == old.checked
+        &&& self.env == old.env
         &&& self.model == old.model
         &&& self.perms@.dom() == old.perms@.dom()
         &&& forall|b: usize| b != h ==> #[trigger] self.perms@[b] == old.perms@[b]
@@ -623,14 +688,15 @@ impl Core {
     )
         requires
             c ==> s0.full(),
-            !c ==> s0.checked@,
-            s0.checked@ ==> s0.safe_wf(),
-            s0.dom().contains(h),
+            !c ==> s0.checked(),
+            s0.checked() ==> s0.safe_wf(),
+            s0.has(h),
             s0.state(h) == BlockState::Live,
             s0.model@.building is None,
             old(self).rc_changed(s0, h),
             up ==> edge is None,
             up ==> !dying,
+            s0.rc_of(h) == 0 ==> !dying,
             c ==> dying == s0.last_by_model(h, up),
             c ==> (edge matches Some(e) ==> s0.model@.edges.dom().contains(e) && s0.model@.edges[e]
                 == h && s0.state(e.0) == BlockState::Dying),
@@ -654,9 +720,9 @@ impl Core {
         ensures
             final(self).model@.tokens == s0.model@.tokens,
             c ==> final(self).full(),
-            final(self).checked@ ==> final(self).safe_wf(),
+            final(self).checked() ==> final(self).safe_wf(),
             final(self).pages == s0.pages,
-            final(self).checked == s0.checked,
+            final(self).env == s0.env,
             final(self).perms == old(self).perms,
             final(self).dom() == s0.dom(),
             forall|w: Word| #[trigger] final(self).word_ok(w) == s0.word_ok(w),
@@ -672,14 +738,18 @@ impl Core {
                 Some(e) => s0.model@.edges.remove(e),
                 None => s0.model@.edges,
             },
-            final(self).model@.state == s0.model@.state.insert(
-                h,
-                if dying {
-                    BlockState::Dying
-                } else {
-                    BlockState::Live
-                },
-            ),
+            final(self).model@.state == if s0.dom().contains(h) {
+                s0.model@.state.insert(
+                    h,
+                    if dying {
+                        BlockState::Dying
+                    } else {
+                        BlockState::Live
+                    },
+                )
+            } else {
+                s0.model@.state
+            },
             final(self).model@.building == s0.model@.building,
             final(self).model@.written == s0.model@.written,
             final(self).model@.kept == s0.model@.kept,
@@ -698,7 +768,10 @@ impl Core {
     {
         self.count_model(Ghost(s0), Ghost(h), Ghost(up), Ghost(edge), Ghost(c), Ghost(dying));
         proof {
-            if c {
+            if !s0.dom().contains(h) {
+                s0.lemma_region_at(h);
+                self.lemma_region_count(s0, h, up, edge, c);
+            } else if c {
                 if up {
                     s0.lemma_at(h);
                 }
@@ -714,8 +787,82 @@ impl Core {
                     lemma_dup(s);
                 }
             }
-            if self.checked@ {
+            if self.checked() && s0.dom().contains(h) {
                 self.lemma_safe_counted(s0, h, dying);
+            }
+        }
+    }
+
+    /// 塊の物体の参照を動かした後。塊の物体は数えないので、モデルは手放した辺を外すだけで、ヒープの物体はどれも変わらない
+    /// (docs/spec/object-model.md の「不死の物体の数え方」)。
+    proof fn lemma_region_count(&self, s0: Core, h: usize, up: bool, edge: Option<Pos>, c: bool)
+        requires
+            c ==> s0.full(),
+            !c ==> s0.checked(),
+            s0.checked() ==> s0.safe_wf(),
+            s0.in_region(h),
+            s0.model@.building is None,
+            up ==> edge is None,
+            c ==> (edge matches Some(e) ==> s0.model@.edges.dom().contains(e) && s0.model@.edges[e]
+                == h && s0.state(e.0) == BlockState::Dying),
+            self.pages == s0.pages,
+            self.env == s0.env,
+            self.perms@.dom() == s0.perms@.dom(),
+            forall|b: usize| b != h ==> #[trigger] self.perms@[b] == s0.perms@[b],
+            c ==> self.model@ == match edge {
+                Some(e) => Model { edges: s0.model@.edges.remove(e), ..s0.model@ },
+                None => s0.model@,
+            },
+            !c ==> self.model == s0.model,
+        ensures
+            c ==> self.full(),
+            self.checked() ==> self.safe_wf(),
+            c && s0.quiet() ==> self.quiet(),
+            c ==> self.evolved(
+                s0,
+                h,
+                if up {
+                    1int
+                } else if edge is None {
+                    -1int
+                } else {
+                    0int
+                },
+            ),
+            c && up ==> self.bumped(s0, h),
+    {
+        assert(self.perms@ =~= s0.perms@);
+        let s1 = Core { model: self.model, ..s0 };
+        assert(*self == s1);
+        if c {
+            if let Some(e) = edge {
+                s1.lemma_edge_removed(s0, e);
+            }
+        }
+        if self.checked() {
+            reveal(Core::safe_blocks_wf);
+            reveal(Core::safe_tokens_wf);
+            reveal(Core::building_wf);
+            assert forall|b: usize| #[trigger] s1.dom().contains(b) implies s1.safe_block_wf(b) by {
+                assert(s0.safe_block_wf(b));
+            }
+            assert forall|e: Pos| #[trigger] s1.model@.kept.contains(e) implies s1.safe_kept_wf(
+                e,
+            ) by {
+                assert(s0.safe_kept_wf(e));
+            }
+            assert forall|i: int|
+                0 <= i < s1.model@.tokens.len() && (
+                #[trigger] s1.model@.tokens[i]) is Some implies s1.token_entry(
+                s1.model@.tokens[i]->0,
+            ) by {
+                assert(s0.token_entry(s0.model@.tokens[i]->0));
+            }
+        }
+        if c && s0.quiet() {
+            assert forall|b: usize| #[trigger] s1.dom().contains(b) implies s1.state(b)
+                != BlockState::Dying by {
+                assert(s0.dom().contains(b));
             }
         }
     }
@@ -727,7 +874,7 @@ impl Core {
             s0.state(h) == BlockState::Live,
             s0.model@.building is None,
             self.pages == s0.pages,
-            self.checked == s0.checked,
+            self.env == s0.env,
             self.perms@.dom() == s0.perms@.dom(),
             forall|b: usize| b != h ==> #[trigger] self.perms@[b] == s0.perms@[b],
             self.perm(h).meta == s0.perm(h).meta,
@@ -877,7 +1024,7 @@ impl Core {
     )
         requires
             c ==> s0.full(),
-            s0.dom().contains(h),
+            s0.has(h),
             s0.state(h) == BlockState::Live,
             s0.model@.building is None,
             old(self).rc_changed(s0, h),
@@ -907,16 +1054,20 @@ impl Core {
             final(self).pages == s0.pages,
             final(self).perms == old(self).perms,
             final(self).dom() == s0.dom(),
-            final(self).checked == s0.checked,
+            final(self).env == s0.env,
             forall|w: Word| #[trigger] final(self).word_ok(w) == s0.word_ok(w),
-            final(self).model@.state == s0.model@.state.insert(
-                h,
-                if dying {
-                    BlockState::Dying
-                } else {
-                    BlockState::Live
-                },
-            ),
+            final(self).model@.state == if s0.dom().contains(h) {
+                s0.model@.state.insert(
+                    h,
+                    if dying {
+                        BlockState::Dying
+                    } else {
+                        BlockState::Live
+                    },
+                )
+            } else {
+                s0.model@.state
+            },
             final(self).model@.written == s0.model@.written,
             final(self).model@.kept == s0.model@.kept,
             final(self).model@.building == s0.model@.building,
@@ -948,9 +1099,32 @@ impl Core {
                 Some(e) => s0.model@.edges.remove(e),
                 None => s0.model@.edges,
             },
+            !s0.dom().contains(h) && c ==> final(self).model@ == match edge {
+                Some(e) => Model { edges: s0.model@.edges.remove(e), ..s0.model@ },
+                None => s0.model@,
+            },
+            !s0.dom().contains(h) && !c ==> final(self).model == s0.model,
     {
         proof {
-            if c {
+            if !s0.dom().contains(h) {
+                // 塊の物体は数えないので、辺を外すほかはモデルを変えない
+                if c {
+                    s0.lemma_region_at(h);
+                    if let Some(e) = edge {
+                        self.model = Ghost(Model { edges: s0.model@.edges.remove(e), ..s0.model@ });
+                        let s1 = Core { model: self.model, ..s0 };
+                        s1.lemma_edge_removed(s0, e);
+                        assert(self.perms@ =~= s0.perms@);
+                        assert(*self == s1);
+                    } else {
+                        self.model = Ghost(s0.model@);
+                        assert(self.perms@ =~= s0.perms@);
+                        assert(*self == s0);
+                    }
+                } else {
+                    self.model = Ghost(s0.model@);
+                }
+            } else if c {
                 let s1 = match edge {
                     Some(e) => Core {
                         model: Ghost(Model { edges: s0.model@.edges.remove(e), ..s0.model@ }),

@@ -70,6 +70,10 @@ impl<M: Mode> Heap<M> {
         }
         if self.core.rc_last(h) {
             proof {
+                // 最後の参照を持つ物体は rc が 1 か -1 なので、塊の物体でない
+                if !self.core.dom().contains(h@.addr) {
+                    self.core.lemma_region_at(h@.addr);
+                }
                 if c {
                     self.core.lemma_last_ref(h@.addr);
                 }
@@ -92,8 +96,8 @@ impl<M: Mode> Heap<M> {
     >)
         requires
             self.core.sound(),
-            self.core.checked@ == M::CHECKED,
-            self.core.dom().contains(h@.addr),
+            self.core.checked() == M::CHECKED,
+            self.core.has(h@.addr),
             h == self.core.block(h@.addr),
         ensures
             !M::CHECKED ==> r is Ok,
@@ -147,7 +151,7 @@ impl<M: Mode> Heap<M> {
             w.bits_spec() == h@.addr,
             old(self).core.word_ok(w),
             h == old(self).core.block(h@.addr),
-            old(self).core.dom().contains(h@.addr),
+            old(self).core.has(h@.addr),
             old(self).core.state(h@.addr) == BlockState::Live,
             old(self).core.count(h@.addr) == keep@.len(),
             !M::CHECKED ==> c,
@@ -171,7 +175,8 @@ impl<M: Mode> Heap<M> {
             c && r is Ok ==> final(self).consistent() && final(self).core.evolved_by(
                 old(self).core,
                 handover(old(self).core.kept_out(h@.addr, keep@), h@.addr),
-            ) && final(self).dummy == old(self).dummy && final(self).worker == old(self).worker,
+            ) && final(self).dummy == old(self).dummy && final(self).region == old(self).region
+                && final(self).worker == old(self).worker,
     {
         let ghost s0 = self.core;
         let ghost a = h@.addr;
@@ -180,7 +185,7 @@ impl<M: Mode> Heap<M> {
             if M::CHECKED {
                 s0.lemma_safe_live_block(a);
             }
-            if c {
+            if c && s0.dom().contains(a) {
                 s0.lemma_at(a);
             }
         }
@@ -220,7 +225,7 @@ impl<M: Mode> Heap<M> {
                 s0.word_ok(w),
                 c ==> (old(self).core.rc_of(a) != 0 ==> old(self).core.ext(a) >= 1),
                 s0.model@.building is None,
-                s0.dom().contains(a),
+                s0.has(a),
                 s0.state(a) == BlockState::Live,
                 h == s0.block(a),
                 first == p_first(s0.perm(a)),
@@ -229,6 +234,7 @@ impl<M: Mode> Heap<M> {
                 first + n <= s0.cap(a),
                 i <= n,
                 self.dummy == old(self).dummy,
+                self.region == old(self).region,
                 self.worker == old(self).worker,
                 c ==> forall|j: int|
                     #![trigger keep@[j]]
@@ -244,7 +250,7 @@ impl<M: Mode> Heap<M> {
                 pos_set(a, kept_set(first as int, keep@, i as int)),
             );
             assert(s1.dom() == s0.dom());
-            assert(s1.dom().contains(a));
+            assert(s1.has(a));
             assert(s1.state(a) == BlockState::Live);
             assert(s1.perm(a).slots == s0.perm(a).slots);
             assert(s1.perm(a).meta == s0.perm(a).meta);
@@ -259,10 +265,14 @@ impl<M: Mode> Heap<M> {
                         s1.lemma_live_slot(a, (first + i) as int);
                         s0.lemma_live_slot(a, (first + i) as int);
                         reveal(Core::blocks_wf);
-                        assert(s0.block_wf(a));
-                        assert(s0.scanned(a, (first + i) as int));
-                        assert(s0.slot_word(s0.perm(a), a, (first + i) as int));
                         reveal(Core::edges_wf);
+                        if s0.dom().contains(a) {
+                            assert(s0.block_wf(a));
+                            assert(s0.scanned(a, (first + i) as int));
+                            assert(s0.slot_word(s0.perm(a), a, (first + i) as int));
+                        } else {
+                            s0.lemma_region_at(a);
+                        }
                     }
                     if M::CHECKED {
                         s0.lemma_safe_live_slot(a, (first + i) as int);
@@ -278,7 +288,20 @@ impl<M: Mode> Heap<M> {
                 proof {
                     self.core.lemma_values_trans(mid.core, s0);
                     if c {
-                        if child.is_ptr_spec() {
+                        if !s0.dom().contains(a) {
+                            // 塊の物体から出る辺はない。子も塊の物体なので、数えない
+                            assert(s0.scanned(a, (first + i) as int));
+                            if !child.is_ptr_spec() && s0.dom().contains(child.bits_spec()) {
+                                s0.lemma_at(child.bits_spec());
+                                crate::word::lemma_aligned_is_ptr(child.bits_spec());
+                            }
+                            self.core.lemma_dupped_skip(s0, s1, k0, child.bits_spec());
+                            assert(!s0.model@.edges.dom().contains((a, (first + i) as int))) by {
+                                if s0.model@.edges.dom().contains((a, (first + i) as int)) {
+                                    assert(s0.edge_wf((a, (first + i) as int)));
+                                }
+                            }
+                        } else if child.is_ptr_spec() {
                             assert(s0.edge_wf((a, (first + i) as int)));
                             self.core.lemma_dupped_step(
                                 s0,
@@ -310,6 +333,10 @@ impl<M: Mode> Heap<M> {
                 pos_set(a, kept_set(first as int, keep@, n as int)),
             ));
             assert(self.core.word_ok(w) == s0.word_ok(w));
+            // 塊の物体は rc 0 なので、外の参照を数えない
+            if !s0.dom().contains(a) {
+                s0.lemma_region_at(a);
+            }
         }
         let r = unsafe { self.decref(w) };
         proof {
@@ -353,6 +380,7 @@ impl<M: Mode> Heap<M> {
             final(self).core.model@.tokens == old(self).core.model@.tokens,
             final(self).tokens == old(self).tokens,
             final(self).dummy == old(self).dummy,
+            final(self).region == old(self).region,
             final(self).worker == old(self).worker,
             !M::CHECKED ==> r is Ok,
             c ==> r is Ok || chain_err(r),
@@ -428,7 +456,7 @@ impl<M: Mode> Heap<M> {
             ),
             M::CHECKED ==> old(self).core.safe_wf(),
             M::CHECKED ==> old(self).core.safe_work(old(work)@, Some(h@.addr)),
-            old(self).core.checked@ == M::CHECKED,
+            old(self).core.checked() == M::CHECKED,
             old(self).core.model@.building is None,
             old(self).core.dom().contains(h@.addr),
             h == old(self).core.block(h@.addr),
@@ -447,7 +475,7 @@ impl<M: Mode> Heap<M> {
             c ==> r is Ok || chain_err(r),
             c ==> final(self).core.full(),
             M::CHECKED ==> final(self).core.safe_wf(),
-            final(self).core.checked@ == M::CHECKED,
+            final(self).core.env == old(self).core.env,
             final(self).core.model@.building is None,
             c && r is Ok ==> final(self).core.quiet() && final(self).core.evolved(
                 old(self).core,
@@ -460,6 +488,7 @@ impl<M: Mode> Heap<M> {
                 &&& M::CHECKED ==> !final(self).core.registered(h@.addr)
             },
             final(self).dummy == old(self).dummy,
+            final(self).region == old(self).region,
             final(self).worker == old(self).worker,
     {
         let ghost skip = kept_set(first as int, keep@, keep@.len() as int);
@@ -481,7 +510,8 @@ impl<M: Mode> Heap<M> {
                 self.core.model@.tokens == old(self).core.model@.tokens,
                 c ==> self.core.full(),
                 M::CHECKED ==> self.core.safe_wf(),
-                self.core.checked@ == M::CHECKED,
+                self.core.checked() == M::CHECKED,
+                self.core.env == old(self).core.env,
                 c ==> self.core.draining(h, first as int, i as int, skip, work@),
                 M::CHECKED ==> self.core.safe_work(work@, Some(h@.addr)),
                 self.core.dom().contains(h@.addr),
@@ -499,6 +529,7 @@ impl<M: Mode> Heap<M> {
                 c ==> self.core.evolved(s1, 0, 0),
                 self.core.model@.building is None,
                 self.dummy == old(self).dummy,
+                self.region == old(self).region,
                 self.worker == old(self).worker,
                 to_token ==> s1.kind(h@.addr) == Kind::Data && s1.rc_of(h@.addr) == 1,
                 c ==> s1.full(),
@@ -668,6 +699,11 @@ impl<M: Mode> Heap<M> {
         proof {
             if M::CHECKED {
                 reveal(Core::building_wf);
+            }
+            // 最後の参照を持つ物体は rc が 1 か -1 なので、塊の物体でない
+
+            if !s0.dom().contains(a) {
+                s0.lemma_region_at(a);
             }
             if c {
                 s0.lemma_last_ref(a);

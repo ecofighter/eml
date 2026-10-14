@@ -31,7 +31,7 @@ impl Core {
     /// `old` から、ブロック `h` の i 語目の値だけが変わった。
     pub(crate) open spec fn slot_changed(&self, old: Core, h: usize, i: int) -> bool {
         &&& self.pages == old.pages
-        &&& self.checked == old.checked
+        &&& self.env == old.env
         &&& self.perms@.dom() == old.perms@.dom()
         &&& forall|b: usize| b != h ==> #[trigger] self.perms@[b] == old.perms@[b]
         &&& self.perm(h).rc == old.perm(h).rc
@@ -69,7 +69,7 @@ impl Core {
             self.settled_view().full(),
             self.settled_view().perms == self.perms,
             self.settled_view().pages == self.pages,
-            self.settled_view().checked == self.checked,
+            self.settled_view().env == self.env,
             self.settled_view().model@.building is None,
             forall|b: usize| #[trigger] self.settled_view().state(b) == self.settled_state(b),
     {
@@ -96,7 +96,7 @@ impl Core {
         requires
             self.full(),
             self.settleable(),
-            self.dom().contains(h),
+            self.has(h),
             self.settled_state(h) == BlockState::Live,
         ensures
             p_extended(self.perm(h)) ==> p_init(self.perm(h), 0),
@@ -104,6 +104,10 @@ impl Core {
             p_kind(self.perm(h)) == Kind::String ==> string_wf(self.perm(h), self.cap(h)),
             p_first(self.perm(h)) + p_count(self.perm(h)) <= self.cap(h),
     {
+        if !self.dom().contains(h) {
+            self.lemma_region_at(h);
+            return;
+        }
         self.lemma_settled_view();
         let c = self.settled_view();
         reveal(Core::blocks_wf);
@@ -115,13 +119,17 @@ impl Core {
         requires
             self.full(),
             self.settleable(),
-            self.dom().contains(h),
+            self.has(h),
             self.settled_state(h) == BlockState::Live,
             self.scanned(h, i),
         ensures
             p_init(self.perm(h), i),
             self.readable(p_word(self.perm(h), i)),
     {
+        if !self.dom().contains(h) {
+            self.lemma_region_at(h);
+            return;
+        }
         self.lemma_settled_view();
         let c = self.settled_view();
         reveal(Core::blocks_wf);

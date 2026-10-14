@@ -8,6 +8,8 @@ use super::Core;
 #[cfg(verus_only)]
 use super::model::{BlockState, Pos, indeg};
 #[cfg(verus_only)]
+use crate::frozen::RegionPerms;
+#[cfg(verus_only)]
 use crate::meta::{BlockPerm, Header, Kind, bits_kind, bits_lin, bits_scan, bits_wf};
 #[cfg(verus_only)]
 use crate::rc::{magnitude, pinned};
@@ -128,29 +130,89 @@ pub(crate) open spec fn p_scanned(p: BlockPerm, i: int) -> bool {
 }
 
 impl Core {
+    /// 検査モードか。
+    pub(crate) open spec fn checked(&self) -> bool {
+        self.env@.checked
+    }
+
     // ブロックの読み取り
     pub(crate) open spec fn dom(&self) -> Set<usize> {
         self.perms@.dom()
     }
 
-    pub(crate) open spec fn perm(&self, h: usize) -> BlockPerm {
-        self.perms@[h]
+    /// 付けた塊の権限。塊を付けていなければ意味を持たない。
+    pub(crate) open spec fn region(&self) -> RegionPerms {
+        self.env@.region->0@
     }
 
+    /// `h` は、付けた塊か祖先の塊のブロックである。
+    pub(crate) open spec fn region_has(&self, h: usize) -> bool {
+        self.env@.region matches Some(r) && r@.has(h)
+    }
+
+    /// 付けた塊とその祖先のブロックの集合。
+    pub(crate) open spec fn region_blocks(&self) -> Set<usize> {
+        match self.env@.region {
+            Some(r) => r@.block_set(),
+            None => Set::empty(),
+        }
+    }
+
+    /// 付けた塊のブロックの集合は、付けた塊のブロック (`region_has`) からちょうどなる。
+    pub(crate) proof fn lemma_region_blocks(&self)
+        ensures
+            forall|h: usize| #[trigger] self.region_blocks().contains(h) == self.region_has(h),
+    {
+        if let Some(r) = self.env@.region {
+            r@.lemma_block_set();
+        }
+    }
+
+    /// `h` は塊のブロックで、このヒープのブロックでない。このときブロックの読み取りは、塊の権限を読む。
+    pub(crate) open spec fn in_region(&self, h: usize) -> bool {
+        !self.dom().contains(h) && self.region_has(h)
+    }
+
+    /// `h` は、このヒープのブロックか、付けた塊とその祖先のブロックである。
+    pub(crate) open spec fn has(&self, h: usize) -> bool {
+        self.dom().contains(h) || self.region_has(h)
+    }
+
+    pub(crate) open spec fn perm(&self, h: usize) -> BlockPerm {
+        if self.in_region(h) {
+            self.region().perm(h)
+        } else {
+            self.perms@[h]
+        }
+    }
+
+    /// 塊のブロックは、いつも生きている物体である。
     pub(crate) open spec fn state(&self, h: usize) -> BlockState {
-        self.model@.state[h]
+        if self.in_region(h) {
+            BlockState::Live
+        } else {
+            self.model@.state[h]
+        }
     }
 
     pub(crate) open spec fn block(&self, h: usize) -> *mut Header {
-        self.pages.block_ptr(h)
+        if self.in_region(h) {
+            self.region().block(h)
+        } else {
+            self.pages.block_ptr(h)
+        }
     }
 
     pub(crate) open spec fn cap(&self, h: usize) -> nat {
-        self.pages.cap(h)
+        if self.in_region(h) {
+            self.region().cap(h, self.checked())
+        } else {
+            self.pages.cap(h)
+        }
     }
 
     pub(crate) open spec fn rc_of(&self, h: usize) -> i32 {
-        self.perms@[h].rc.value()
+        self.perm(h).rc.value()
     }
 
     pub(crate) open spec fn meta_bits(&self, h: usize) -> u32 {
@@ -173,10 +235,10 @@ impl Core {
         p_scanned(self.perm(h), i)
     }
 
-    /// 語 `w` は即値か、このヒープのブロックを、そのブロックの provenance で指す。
+    /// 語 `w` は即値か、このヒープか付けた塊のブロックを、そのブロックの provenance で指す。
     pub(crate) open spec fn word_ok(&self, w: Word) -> bool {
         w.is_ptr_spec() ==> {
-            &&& self.dom().contains(w.bits_spec())
+            &&& self.has(w.bits_spec())
             &&& w.ptr_spec()@.provenance == self.block(w.bits_spec())@.provenance
         }
     }
@@ -266,11 +328,26 @@ impl Core {
 
     pub(crate) open spec fn rest_wf(&self) -> bool {
         &&& self.pages.wf()
-        &&& self.pages.prefixed() == self.checked@
+        &&& self.pages.prefixed() == self.checked()
+        &&& self.env_wf()
         &&& self.blocks_wf()
         &&& self.edges_wf()
         &&& self.refs_wf()
         &&& self.building_wf()
+    }
+
+    /// 付けた塊は、塊とその祖先の不変条件を満たす。
+    pub(crate) open spec fn region_wf(&self) -> bool {
+        self.env@.region matches Some(r) ==> r@.wf(self.checked())
+    }
+
+    /// 付けた塊は不変条件を満たし、そのブロックは確保器が渡したブロックと重ならない。
+    pub(crate) open spec fn env_wf(&self) -> bool {
+        &&& self.region_wf()
+        &&& forall|h: usize|
+            #![trigger self.region_has(h)]
+            #![trigger self.pages.in_use().contains(h)]
+            self.region_has(h) ==> !self.pages.in_use().contains(h)
     }
 
     #[verifier::opaque]
@@ -313,7 +390,7 @@ impl Core {
         written: Set<int>,
         owner: u32,
     ) -> bool {
-        &&& p.wf(self.block(h), self.cap(h), self.checked@)
+        &&& p.wf(self.block(h), self.cap(h), self.checked())
         &&& p.prefix matches Some(q) ==> q.first.is_init() && q.state.is_init()
         &&& p.prefix is Some ==> p_code(p) == state_code(st)
         &&& p.prefix is Some && (st == BlockState::Live || st == BlockState::Building)
@@ -341,7 +418,7 @@ impl Core {
         &&& st == BlockState::Token ==> forall|i: int| #[trigger] p_scanned(p, i) ==> p_init(p, i)
     }
 
-    /// i 語目は書いてあり、値は即値か、このヒープのブロックを指す。ポインタなら辺である。
+    /// i 語目は書いてあり、値は即値か、このヒープか付けた塊のブロックを指す。ポインタなら辺である。
     pub(crate) open spec fn slot_word(&self, p: BlockPerm, h: usize, i: int) -> bool {
         &&& p_init(p, i)
         &&& self.word_ok(p_word(p, i))
@@ -353,7 +430,8 @@ impl Core {
         forall|e: Pos| #[trigger] self.model@.edges.dom().contains(e) ==> self.edge_wf(e)
     }
 
-    /// 辺は、生きている物体、構築中の物体の書いた語、空ける途中の物体のまだ手放していない語から出る。
+    /// 辺は、生きている物体、構築中の物体の書いた語、空ける途中の物体のまだ手放していない語から出る。行き先は、このヒープか
+    /// 付けた塊の、生きている物体か構築中の物体である。
     pub(crate) open spec fn edge_wf(&self, e: Pos) -> bool {
         let (h, i) = e;
         let t = self.model@.edges[e];
@@ -366,7 +444,7 @@ impl Core {
         &&& p_word(self.perm(h), i).is_ptr_spec()
         &&& p_word(self.perm(h), i).bits_spec() == t
         &&& p_word(self.perm(h), i).ptr_spec()@.provenance == self.block(t)@.provenance
-        &&& self.dom().contains(t)
+        &&& self.has(t)
         &&& (self.state(t) == BlockState::Live || self.state(t) == BlockState::Building)
     }
 
