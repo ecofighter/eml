@@ -113,7 +113,7 @@ fn help_lists_the_commands() {
     );
 }
 
-/// Review Focus 2。
+/// CRLF の行末は、`\r` を除いて読む (docs/spec/repl.md の「行の編集」)。
 #[test]
 fn repl_reads_crlf_input() {
     let output = repl("inc : Int -> Int\r\ninc x = x + 1\r\n\r\ninc 1\r\n");
@@ -121,7 +121,7 @@ fn repl_reads_crlf_input() {
     assert_eq!(stdout(&output), "2\n");
 }
 
-/// Review Focus 3。読めない行は、panic せずに `close` を呼んで 1 で終わる。
+/// 読めない行は、panic せずに `close` を呼んで 1 で終わる。
 #[test]
 fn repl_ends_with_one_on_unreadable_input() {
     let output = repl_with(&[], b"1 + 1\n\xff\xfe\n2\n");
@@ -134,7 +134,7 @@ fn repl_ends_with_one_on_unreadable_input() {
     );
 }
 
-/// Review Focus 4。空行のない最後の定義も評価し、その診断を見せる。
+/// 空行のない最後の定義も評価し、その診断を見せる。
 #[test]
 fn repl_evaluates_an_unfinished_input_at_eof() {
     let output = repl("bad : Int -> Int\nbad x = x + \"s\"");
@@ -278,7 +278,7 @@ mod interrupts {
     }
 
     /// 読みの中で待つ入力も SIGINT で止まり、セッションは続く。検査モードで流すので、`:quit` の 0 は、割り込んだ
-    /// 後の `close` がリークを報告しないことも確かめる (Review Focus 5)。
+    /// 後の `close` がリークを報告しないことも確かめる。
     #[test]
     fn an_interrupt_stops_a_repl_input_waiting_in_a_read() {
         let dir = temp_project("cli-repl-sigint-fifo", &[]);

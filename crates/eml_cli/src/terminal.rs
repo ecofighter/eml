@@ -49,7 +49,7 @@ pub fn run(debug_heap: bool) -> ExitCode {
                 Flow::Continue
             }
             Read::Eof => match steps(&mut repl, lines.end()) {
-                Flow::Continue => Flow::Quit,
+                Flow::Continue | Flow::Interrupted => Flow::Quit,
                 flow => flow,
             },
             Read::Failed(error) => {
@@ -59,6 +59,8 @@ pub fn run(debug_heap: bool) -> ExitCode {
         };
         match flow {
             Flow::Continue => {}
+            // 同じ読みで届いた残りの行は、`steps` が捨てている
+            Flow::Interrupted => lines.interrupt(),
             Flow::Quit => return close(repl, ExitCode::SUCCESS),
             // 続けられない誤りの後はヒープを信用できないので、`close` を呼ばない (docs/spec/repl.md の「結果の表示」)
             Flow::Broken => return ExitCode::from(1),
@@ -70,9 +72,12 @@ enum Flow {
     Continue,
     Quit,
     Broken,
+    /// 入力を割り込みで止めた。
+    Interrupted,
 }
 
-/// 結果を順に処理する。`:quit` か続けられない誤りで止まれば、残りは捨てる。
+/// 結果を順に処理する。`:quit`、続けられない誤り、割り込みで止まれば、残りは捨てる。貼り付けた行を読んだ後の
+/// Ctrl-C は、残りの行も止める (docs/spec/repl.md の「割り込み」)。
 fn steps(repl: &mut Repl, steps: impl IntoIterator<Item = Step>) -> Flow {
     for step in steps {
         let flow = match step {
@@ -102,8 +107,14 @@ fn eval(repl: &mut Repl, text: &str) -> Flow {
         Outcome::Empty | Outcome::Accepted | Outcome::Rejected => {}
         // 止まった所の関数の名前は利用者が書いた名前でないので、割り込みは場所を書かない (docs/spec/repl.md の
         // 「結果の表示」)
-        Outcome::Interrupted => eprintln!("interrupted"),
-        Outcome::Failed(error) if error.interrupted() => eprintln!("interrupted"),
+        Outcome::Interrupted => {
+            eprintln!("interrupted");
+            return Flow::Interrupted;
+        }
+        Outcome::Failed(error) if error.interrupted() => {
+            eprintln!("interrupted");
+            return Flow::Interrupted;
+        }
         Outcome::Failed(error) => eprintln!("runtime error: {error}"),
         Outcome::Broken(error) => {
             eprintln!("runtime error: {error}");
@@ -184,7 +195,9 @@ impl Reader {
 /// (docs/spec/repl.md の「割り込み」)。
 fn interrupted(error: &ReadlineError) -> bool {
     match error {
-        ReadlineError::Interrupted | ReadlineError::Signal(_) => true,
+        ReadlineError::Interrupted => true,
+        #[cfg(unix)]
+        ReadlineError::Signal(rustyline::error::Signal::Interrupt) => true,
         ReadlineError::Io(error) => error.kind() == io::ErrorKind::Interrupted,
         #[cfg(unix)]
         ReadlineError::Errno(errno) => *errno as i32 == libc::EINTR,

@@ -164,7 +164,7 @@ fn eof_inside_a_block_is_an_error() {
 }
 
 /// 端末の bracketed paste は、貼り付けた複数行を1つの文字列で返す。行に分けるので、空行で区切った定義と式は別の
-/// 入力になり、CRLF の行末の `\r` も除く (Review Focus 1 と 2)。
+/// 入力になり、CRLF の行末の `\r` も除く (docs/spec/repl.md の「行の編集」)。
 #[test]
 fn pasted_text_is_split_into_lines() {
     let mut lines = Lines::new();
@@ -181,5 +181,19 @@ fn pasted_text_is_split_into_lines() {
     assert_eq!(
         lines.push_text(":{\r\n1\r\n:}\r"),
         [Step::Read, Step::Read, eval("1")]
+    );
+}
+
+/// 定義の貼り付けが `\n` で終わるとき、末尾の空行が定義を終わらせる。
+#[test]
+fn a_pasted_definition_ending_with_a_newline_is_evaluated() {
+    let mut lines = Lines::new();
+    assert_eq!(
+        lines.push_text("inc : Int -> Int\ninc x = x + 1\n"),
+        [
+            Step::Read,
+            Step::Read,
+            eval("inc : Int -> Int\ninc x = x + 1")
+        ]
     );
 }
