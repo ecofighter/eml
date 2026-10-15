@@ -34,7 +34,7 @@
 |---|---|---|
 | 1 | 機能ごとの代表的なプログラムを `eml check` / `eml run` にかけたときにユーザーが見るもの。stdout、実行時エラー、プログラム全体が通るか落ちるか、代表的な診断の表示 | UI テスト (`tests/ui/`) |
 | 2 | 1つの段階の出力 (CST、HIR、推論したシグネチャ、Core IR、LIR) と、その段階の診断の細部 (位置、回復、端のケース) | その段階の crate の結合テスト (`crates/<段階>/tests/`)。ソースから `eml_test_support` で組み立てる |
-| 3 | フロントエンドからは作れない状態 (壊れた IR、`decref` の抜けた IR など) と、テストの中で生成した大きなソース | `eml_lir/tests/`、`eml_core_ir/tests/verify.rs`、`eml_interp/tests/`、`eml_vm/tests/`。LIR は IR のテキストで書いて `eml_lir::parse` で読み、Core IR は `eml_core_ir::parse` で読む |
+| 3 | フロントエンドからは作れない状態 (壊れた IR、`decref` の抜けた IR など) と、テストの中で生成した大きなソース | `eml_lir/tests/`、`eml_core_ir/tests/verify.rs`、`eml_vm/tests/`。LIR は IR のテキストで書いて `eml_lir::parse` で読み、Core IR は `eml_core_ir::parse` で読む |
 | 4 | 公開の API から届かないか、内部の状態を直接組まないと確かめにくい部品の振る舞い。レイアウト段、パーサのマーカー、単一化の表、Kind の制約の解消、ヒープなど | `src/` の単体テスト |
 | 5 | lib API の流れ、CLI の終了コード、テスト補助そのもの | `eml_cli/tests/api.rs`、`eml_cli/tests/cli.rs`、`eml_test_support/tests/` |
 
@@ -50,8 +50,8 @@
 - crate の結合テストが使う表示の関数は `tests/common/mod.rs` に置き、`tests/main.rs` で1回だけ宣言して、各ファイルから `crate::common` で使う。複数の crate で使う部品は `eml_test_support` に置く
 - IR の結合テストは、確かめるパスごとのファイルに置く。LIR のパスと verifier のテストのうち、手で書いた LIR を入力にするものは `crates/eml_lir/tests` (`boxing.rs`、`contract.rs`、`perceus.rs`、`verify.rs`、`text.rs`) に置き、`boxing`、`contract`、`perceus` を直接呼ぶ。`eml_lir` の dev-dependency にフロントエンドを入れないためである。そのパスだけをかける補助は、各ファイルの `boxing_text`、`contract_text`、`perceus_text` である。`boxing_text` は入力を入口の段 (`verify_lowered`) で、`contract_text` と `perceus_text` は範囲の段 (`verify_scopes`) で確かめる。生存解析のテストは `perceus.rs` に置く。ソースからパイプラインを通すテストは、パイプラインをつなぐ `eml_core_ir` の `crates/eml_core_ir/tests` (`translate.rs`、`evidence.rs`、`boxing.rs`、`contract.rs`、`perceus.rs`、`verify.rs`、`text.rs`) に置く。translate のテストはほとんどが `Pass::Translate` の直後の Core IR を、box の挿入のテストはほとんどが `eml_lir::Pass::Boxing` の直後の LIR を見る。`tests/common/mod.rs` の `core_text` は `core_until` で Core IR の段で止め、`lir_text` は `lir_until` で LIR の段で止める。どちらも表示を `parse` で読み戻し、止めたパスに合う段の verifier にかける。`Pass::Translate` は変換の段 (`verify_translated`)、`Pass::Evidence` は EP の段 (`verify_evidence`)、`eml_lir::Pass::Boxing` と `Contract` は範囲の段 (`verify_scopes`)、`Perceus` は所有の段 (`verify`) である。パスごとに見るのは、後のパスの書き換えや RC の命令を、確かめたいことと一緒に期待値に入れないためである。Core IR の verifier の段と、Core IR だけの命令 (`handle`、`perform`、`resume`、`mask`) のテストは `eml_core_ir` に、LIR の段と LIR だけの命令 (`tail`、`box`、`unbox`、RC の命令) のテストは `eml_lir` に置く。2つの IR に共通する文法だけのテキスト形式のテストは `eml_lir` に置く。EP の後の Core IR の表示と、それを `to_lir` で写した LIR の表示が同じ文字列であることは、UI テストのすべてのプログラムで `lowering.rs` が確かめる (UI テストのプログラムを集めるのは `tests/common/programs.rs`)。extern の表との結び付けは `externs.rs` で確かめる。単相化の instance の数と名前は `instances.rs` で確かめる。一様な位置そのものは型検査が計算するので、位置の集合と E2012 は `eml_types` の `uniform.rs` で確かめる。メソッドの解決の行き先と生成した関数の Core IR は、`translate.rs` で確かめる。instance ごとに Repr が決まることと、持ち上げた関数と `f$boxed` の名前が instance の名前を根にすることは、`translate.rs` (`instances_of_one_function_get_their_own_reprs`、`lifted_functions_are_named_after_their_instance`、`a_boxed_wrapper_is_named_after_its_instance`) で確かめる
 - 単体テストは、ファイルの末尾の `#[cfg(test)] mod tests` に置く。テストが300行を超え、ファイルの半分ほどを占めるようになったら、`eml_types/src/table/tests.rs` のように隣の `tests.rs` に分ける
-- `crates/eml_test_support/` は、結合テストのためにパイプラインを組む関数 (`parse`、`def_map`、`lower`、`check`、`core_until`、`lir`、`lir_until`、`run`、`run_stats`、`execute`、`run_vm`、`run_stats_vm`、`execute_vm`) と、診断のないことを確かめて組む関数 (`parse_clean`、`lower_clean`)、診断を文字列にする関数 (`short`、`short_text`、`full`) と fix を文字列にする関数 (`fixes`)、段階の表示に診断を足す関数 (`with_diagnostics`) を持つ。開発専用の crate で、各 crate の `tests/` からだけ使う。`src/` の `#[cfg(test)]` から使うと、テストする crate が2つ別々にリンクされて型が合わなくなる。同じ理由で `eml_types` の単体テストは `eml_cli::Session` も使えないので、`src/lib.rs` の `#[cfg(test)]` の関数 `test_program_with_files` が、読み込み、def_map、lower の段を直接つなぐ
-- `parse` は構文の段 (`eml_syntax::parse`) だけを呼び、feature によらない。ほかの組む関数は、メモリ上の `(パス, 本文)` の並びを読む `MemorySource` から `eml_cli::Session` を作り、対応するメソッドを呼ぶ薄い包みである。CLI と同じ経路で段階をつなぎ、同じ診断を集めるためである。結果の診断は、読み込みの段からその段階までのすべての診断である。`def_map` と `def_map_files` は、`DefMap` と、読み込みの段と def_map の段の診断を返す。`Lowered` と `Checked` は HIR の `Program` と `Session` を持ち、ファイルを `files()` と `file()` で出す。`SourceFiles` は Clone できないためである。`core_until`、`lir`、`lir_until` は、診断にエラーがないことを確かめて IR を返す。`core_until(text, eml_core_ir::Pass)` は Core IR を、`lir` は最終の LIR を、`lir_until(text, eml_lir::Pass)` は途中の LIR を返す。`eml run` と同じく、`main` がないこともエラーである。`run` は `compile` の結果を `eml_cli::execute` に渡し、手で書いた LIR を受け取る `execute` と、`run_stats` も同じ関数を通す。`run_stats` は、出力と、`eml_interp::RunStats` か実行時エラーを返す。`run`、`run_files`、`execute` は `RunStats` を捨てる。`run_vm`、`run_stats_vm`、`execute_vm` は、同じ入力を VM で実行する。`run_vm` と `run_stats_vm` は検査モードで走らせ、`execute_vm` は手で書いた LIR とモードを受け取る。出力はメモリの Host (`eml_vm::capture_host`) で受ける。`RunConfig` と出力の受け口は、`eml_test_support` の1か所で組み立てる。複数のファイルのテストには `*_files` の関数 (`lower_files`、`def_map_files`、`check_files`、`core_until_files`、`lir_files`、`lir_until_files`、`run_files`) を使う。入口の本文と、根からの相対パス (`Report/Csv.em`) と本文の組の並びを受け取る。1つのテキストの関数は、並びが空の `*_files` と同じ経路を通る。入口の表示のパスは `ENTRY_PATH` (`test.em`) である。標準ライブラリを差し替えたプログラムは、`lower_with_std` と `check_with_std` で変換する。標準ライブラリの並び (`(パス, 本文)`) を `Session::load_with_std` に渡し、標準ライブラリの中の item の扱いを確かめるテスト (`eml_hir` の `structure.rs`、`eml_types` の `modules.rs`) が使う。並びは `Prelude.em` と本物の `Fs.em` (または同じ extern の宣言を持つもの) を含める。extern の索引が両方を引き、足りなければ panic するためである
+- `crates/eml_test_support/` は、結合テストのためにパイプラインを組む関数 (`parse`、`def_map`、`lower`、`check`、`core_until`、`lir`、`lir_until`、`run`、`run_stats`、`execute`) と、診断のないことを確かめて組む関数 (`parse_clean`、`lower_clean`)、診断を文字列にする関数 (`short`、`short_text`、`full`) と fix を文字列にする関数 (`fixes`)、段階の表示に診断を足す関数 (`with_diagnostics`) を持つ。開発専用の crate で、各 crate の `tests/` からだけ使う。`src/` の `#[cfg(test)]` から使うと、テストする crate が2つ別々にリンクされて型が合わなくなる。同じ理由で `eml_types` の単体テストは `eml_cli::Session` も使えないので、`src/lib.rs` の `#[cfg(test)]` の関数 `test_program_with_files` が、読み込み、def_map、lower の段を直接つなぐ
+- `parse` は構文の段 (`eml_syntax::parse`) だけを呼び、feature によらない。ほかの組む関数は、メモリ上の `(パス, 本文)` の並びを読む `MemorySource` から `eml_cli::Session` を作り、対応するメソッドを呼ぶ薄い包みである。CLI と同じ経路で段階をつなぎ、同じ診断を集めるためである。結果の診断は、読み込みの段からその段階までのすべての診断である。`def_map` と `def_map_files` は、`DefMap` と、読み込みの段と def_map の段の診断を返す。`Lowered` と `Checked` は HIR の `Program` と `Session` を持ち、ファイルを `files()` と `file()` で出す。`SourceFiles` は Clone できないためである。`core_until`、`lir`、`lir_until` は、診断にエラーがないことを確かめて IR を返す。`core_until(text, eml_core_ir::Pass)` は Core IR を、`lir` は最終の LIR を、`lir_until(text, eml_lir::Pass)` は途中の LIR を返す。`eml run` と同じく、`main` がないこともエラーである。`run` は `compile` の結果を `eml_cli::execute` で VM に渡す。手で書いた LIR と `RunConfig` を受け取る `execute` と、`run_stats` も同じ関数を通す。`run`、`run_files`、`run_stats` は検査モードで、上限のない新しい `Control` を持つ `RunConfig` で走らせる。上限の値に頼るテストは、`RunConfig` を自分で作って `execute` に渡す。`run_stats` と `execute` は、出力と、`RunStats` か実行時エラー (`RuntimeError`) を返す。`run` と `run_files` は `RunStats` を捨てる。出力はメモリの Host (`capture_host`) で受け、`file_root` は空のパス (カレントディレクトリ) である。出力の受け口は、`eml_test_support` の1か所で組み立てる。複数のファイルのテストには `*_files` の関数 (`lower_files`、`def_map_files`、`check_files`、`core_until_files`、`lir_files`、`lir_until_files`、`run_files`) を使う。入口の本文と、根からの相対パス (`Report/Csv.em`) と本文の組の並びを受け取る。1つのテキストの関数は、並びが空の `*_files` と同じ経路を通る。入口の表示のパスは `ENTRY_PATH` (`test.em`) である。標準ライブラリを差し替えたプログラムは、`lower_with_std` と `check_with_std` で変換する。標準ライブラリの並び (`(パス, 本文)`) を `Session::load_with_std` に渡し、標準ライブラリの中の item の扱いを確かめるテスト (`eml_hir` の `structure.rs`、`eml_types` の `modules.rs`) が使う。並びは `Prelude.em` と本物の `Fs.em` (または同じ extern の宣言を持つもの) を含める。extern の索引が両方を引き、足りなければ panic するためである
 - 段階は feature (`hir` < `types` < `core` < `run`) で選ぶ。各 feature は `eml_cli` の同じ段階までの feature を有効にし、各 crate は自分の段階までを有効にする。下流の crate がまだ組み立たなくても、上流の段階のテストを流せるようにするためである。段階の API そのものを確かめるテストは、`eml_test_support` を通さずに段階の関数を直接呼ぶ。`eml_hir` の `load.rs` と `def_map.rs` の読み込みのテスト、`item_tree.rs` の `item_tree` を直接呼ぶテスト、`eml_types` の `scaling.rs`、`eml_core_ir` の `translate.rs` と `instances.rs` の入口を選ぶテスト、`instances.rs` のコンパイル時間のテストである
 - HIR と型のダンプは、Prelude だけでなく標準ライブラリのモジュールをすべて飛ばす。標準ライブラリの本文はダンプに加わらない。`println` などの extern の関数への参照は、普通の関数として表示する。ユーザーのモジュールの extern の宣言は、型、エフェクト、関数のどれも `extern` を付けて表示する (`extern data T`、`extern effect E`、`extern f : Int -> Int`)
 - `eml_hir` の結合テストが、`eml_extern` の表と `std/` を照らし合わせる。表のどの行も、`std/` の種類の合う extern の宣言か、instance の中の `extern` の行の、ちょうど1つから指されること、`std/` の extern の宣言と instance の `extern` の行がどれも1つの行を指すこと、シグネチャの矢印の数が行の引数の数と等しいこと、`Effectful` の行だけが最後の矢印の row に extern のエフェクトを持つことを確かめる。instance の `extern` の行のシグネチャは、クラスのメソッドのシグネチャである。埋め込んだ `eml_hir::STD` が `std/` のファイルと一致することも、同じ場所で確かめる
@@ -67,17 +67,17 @@
 | 型推論 | 推論したシグネチャ (Kind と row を含む) のスナップショット |
 | Core IR | Core IR の pretty printer で、translate と EP の後をダンプしたスナップショット |
 | LIR | LIR の pretty printer で、`box` と `unbox`、`tail`、`dup` / `decref` / `release` の位置を含めてダンプしたスナップショット |
-| ランタイム | ヒープの単体テスト (確保と解放、世代番号による解放済みアクセスの検出、リークの数え方、長い連鎖の解放、不死の物体の数え方と数が 0 のときの誤り、文字列のその場の連結、`release_fields` の一意と共有の側と形の誤り、参照の数の書き込みの数え方、`take_or_copy` がクロージャだけを扱うこと、evidence と `evv` の物体の解放と種類ごとの数え方、evidence をクロージャのように写さないこと) |
 | 診断 | 表示した診断テキストのスナップショット |
 | 線形性 | 線形な値 (`once` の操作の `k` など) を1回でなく使う不正なプログラム (E3001) と、正しく通るべきプログラムの対 |
 | 全体 (UI テスト) | 下の「UI テスト」 |
 | CLI | `eml run` / `eml check` の終了コードと引数の誤りを数件確認する |
-| RC | すべての実行テストで `debug_heap` を有効にする。違反があればテストを失敗させる |
-| ランタイムの核 (`eml_rt`) | 下の「`eml_rt` の検証」 |
+| RC | すべての実行テストを検査モードで流す。違反があればテストを失敗させる |
+| ランタイム (`eml_rt`) | 下の「`eml_rt` の検証」 |
+| VM | 下の「`eml_vm` のテスト」 |
 
 ## `eml_rt` の検証
 
-`eml_rt` ([オブジェクトモデル](../spec/object-model.md)) は、Verus、単体テスト、期待値の表、Miri で確かめる。既定の `eml run` はまだ CEK なので、`eml_rt` を実際のプログラムで通すのは VM のテストである。ソースのプログラムを VM で流すのは、UI テスト (下の「VM でも流す」)、`crates/eml_vm/tests/bench.rs`、`crates/eml_cli/tests/cli.rs` の `eml run --vm` のテストである。メモリの安全と核の正しさは Verus の証明が受け持ち、単体テストは動作を、期待値の表は extern の結果が変わらないことを、Miri は Verus で確かめない部分 (信頼の一覧) を確かめる。速いモードの命令の数は `bench/rt.sh` で測る ([計測の基準](benchmarks.md) の「命令の数の測り方」)。
+`eml_rt` ([オブジェクトモデル](../spec/object-model.md)) は、Verus、単体テスト、期待値の表、Miri で確かめる。`eml run` は `eml_rt` の上の VM で動くので、ソースのプログラムで `eml_rt` を通すのは、UI テスト (下の「2つのモードで流す」)、`crates/eml_vm/tests/bench.rs` と `scaling.rs`、`crates/eml_cli/tests/cli.rs` の `eml run` のテストである。メモリの安全と核の正しさは Verus の証明が受け持ち、単体テストは動作を、期待値の表は extern の結果が変わらないことを、Miri は Verus で確かめない部分 (信頼の一覧) を確かめる。速いモードの命令の数は `bench/rt.sh` で測る ([計測の基準](benchmarks.md) の「命令の数の測り方」)。
 
 ### Verus
 
@@ -124,7 +124,7 @@ rustfmt は `verus!` の中を整えないので、`eml_rt` の `verus!` の中�
   - 文字列: 空の文字列、級の境目と 128 語の境目をまたぐ長さ、一意な左辺のその場の追記、容量が足りないときの作り直し、共有と不死の左辺、容量に収まる長さと語を埋める長さの `x ++ x`、`Err` の後にヒープが変わっていないこと。一意な左辺へ 1 バイトずつ n 回足すループで、作り直しの回数 (`string_push` が返す語が左辺と違った回数) が log n で抑えられることも確かめる。容量を読む操作やテストのためだけの欄は足さない
   - 凍結した領域: 凍結が通る場合 (文字列、`BigInt`、前の塊の定数を指す定数) と断る場合 (rc が正の物体、token、`Foreign`。検査モードでは、空けた物体を指す定数の `UseAfterFree` も)、付けた後の領域の語での核の操作 (領域の中身と前置きは変わらない)、ヒープの物体のフィールドに置いた領域の語と、それを子に持つ一意な物体の `release`、子孫の塊への付け替え (付け替えの前に作った物体が前の塊の語を持ち続けること) と、子孫でない塊と祖先の塊の `attach` の panic、10,000 個の塊の鎖を落とすこと、`Arc` を落とす順によらず漏れないこと、`Frozen` の `Send` と `Sync` の型の assert ([オブジェクトモデル](../spec/object-model.md) の「凍結した領域」)
   - 検査モードの誤り: [オブジェクトモデル](../spec/object-model.md) の「報告する誤り」の各項目。token の ABA の形、解放した共有の物体の使用、強めた範囲の検査 (`field` と `set_field` の生の語、`raw` と `set_raw` の走査する語と、ペイロードが不透明な `Foreign` と `String` の物体)、塊の物体、書き終えた不死の物体、共有の物体への `set_field` と `set_raw` の `NotWritable`、`string`、`string_push`、`string_concat` の `WrongKind` を含む
-  - 実行文脈 (`heap/tests/ctx.rs`): 19個の基本操作のそれぞれ、EP が出す形を並べた筋書き (handle の中で `perform` してその場で戻る、`mask` が合う evidence を飛ばす、yield して継続を組み立てて再開する1往復。`perform` と yield の筋書きは終わりに `check_finished` が通ることを、`mask` の筋書きは生きている物体が残らないことを確かめる)、検査モードの `BadEvidence`、`NoHandler`、`YieldMisuse` と、断った操作が引数と yield の状態を変えないこと、共有にした evidence の状態の欄への `NotWritable`、輪になった `evv` が小さい `max_evv` で `BadEvidence` になって止まること、入口の欄が 255 個以上の表、`eml_interp` から写した仕事の回数のテスト3つ ([オブジェクトモデル](../spec/object-model.md) の「実行文脈 `Ctx`」)。空でない κ と入口には、物体か `Word::imm(1)` 以上の即値を使う。関数 0 の値は `()` と同じ語になるためである
+  - 実行文脈 (`heap/tests/ctx.rs`): 19個の基本操作のそれぞれ、EP が出す形を並べた筋書き (handle の中で `perform` してその場で戻る、`mask` が合う evidence を飛ばす、yield して継続を組み立てて再開する1往復。`perform` と yield の筋書きは終わりに `check_finished` が通ることを、`mask` の筋書きは生きている物体が残らないことを確かめる)、検査モードの `BadEvidence`、`NoHandler`、`YieldMisuse` と、断った操作が引数と yield の状態を変えないこと、共有にした evidence の状態の欄への `NotWritable`、輪になった `evv` が小さい `max_evv` で `BadEvidence` になって止まること、入口の欄が 255 個以上の表、S10b で消したインタプリタから写した仕事の回数のテスト3つ ([オブジェクトモデル](../spec/object-model.md) の「実行文脈 `Ctx`」)。空でない κ と入口には、物体か `Word::imm(1)` 以上の即値を使う。関数 0 の値は `()` と同じ語になるためである
   - extern (`heap/tests/externs.rs` と `host.rs`): 整数の端の値、文字列の比較と `++` と `show` の端の場合、検査モードの誤り (`WrongKind`、`Fs.read_all` の `NotUnique` と `WrongOwner`)、物体が残らないこと。誤りのときの所有も確かめる。`Fs.read_all` が読みの誤りか UTF-8 でない中身で `File` を手放して破棄処理が走ること、`println` が書き込みの誤りでも文字列を手放すこと、検査モードの `Heap(_)` でヒープが変わらないことである。ほかに、止める語を立てた `Control` と小さい `max_bytes` での `Fs.read_all` の `Stopped` (長さの見込みがある読み手、確保できないほど大きい見込み、見込みのない読み手)、仕事の回数 `string_bytes_copied`、`StdHost` の `Line` と `Block` の書き方、`flush`、毒されたロック、標準エラー、`file_root` と絶対パスを確かめる。Host を通るテストは、メモリの Host (`heap/tests/host.rs` の `MemoryHost`) を使う
   - 実行の制御 (`heap/tests/control.rs` と `ctx.rs`): `poll` が割り込み、深さの上限、確保量の上限のそれぞれで `Stop` を返すことと、重なったときに割り込み、確保量、深さの順に報告すること、確保量が上限にちょうど等しいときはビットを立てないこと、`Control::clear` で戻ること、2つのヒープのページが1つの `Control` に足し合わされること、凍結した塊のページが塊を落とすまで数に残ること。`Ctx` が `Send` で `Sync` でないことと、`Control` が `Send` と `Sync` であることは、型の assert で固定する
 - `is_last` の2回の読み込みとその順序は、Verus では確かめない (T2)。単体テストと Miri で確かめる
@@ -158,16 +158,16 @@ extern の結果を1つの期待値の表に固定し、`eml_rt` の回帰を防
 
 ## `eml_vm` のテスト
 
-`eml_vm` ([VM](../spec/vm.md)) の結合テストは、手で書いた LIR を `eml_lir::parse` で読んで確かめる。ソースのプログラムを VM で流すテストは、UI テスト (下の「VM でも流す」)、`bench.rs`、`crates/eml_cli/tests/cli.rs` の `eml run --vm` のテストである。
+`eml_vm` ([VM](../spec/vm.md)) の結合テストは、手で書いた LIR を `eml_lir::parse` で読んで確かめる。ソースのプログラムを VM で流すテストは、UI テスト (下の「2つのモードで流す」)、`bench.rs`、`scaling.rs`、`crates/eml_cli/tests/cli.rs` の `eml run` のテストである。
 
 - コード生成 (`codegen.rs`): 手書きの LIR を `CodeBase` に変換し、逆アセンブラの出力をインラインスナップショットで固定する。スロットの割り当て (重ならない値のスロットの共有、使われない呼び出しの結果、scrutinee とフィールドの干渉)、入れ替えになるブロック引数の作業用のスロット、`jump` の定数の読み込みの順、`#N` の行き先の `decref` を出さないこと、`release` の展開、同じ広い定数を表に1つだけ置くこと、3つの `switch` (`switch_enum`、`switch_int`、`switch_string`) の表、case のない `switch` を `goto` にすることを確かめる。番号 65535 のエフェクトをコード生成が panic で断ることは、`src/compile/emit.rs` の単体テストで確かめる。そのエフェクトを持つプログラムは 65536 個のエフェクトを宣言するので、統合テストでは遅いためである
-- 実行 (`run.rs`、`calls.rs`、`data.rs`、`evidence.rs`): 手書きの LIR を `eml_lir::verify` に通してから、検査モードで実行する。期待どおりに通ったときだけ、速いモードでも実行して出力が同じことを確かめる。速いモードは前提を確かめないので、検査モードが通らなかった IR では走らせない。`run.rs` は定数、extern、直接の呼び出しと末尾呼び出し、誤りの位置と flush、終わりの処理とリークを、`calls.rs` は部分適用、ちょうどの適用、余った引数の `ApplyRest`、末尾の位置の適用、`clause`、自己末尾呼び出しの深さと割り込み、深さの上限を、`data.rs` は `con`、Repr ごとの `switch`、`unpack`、`release` の両方の枝、`box` と `unbox` を、`evidence.rs` は基本操作と節の呼び出しを確かめる
+- 実行 (`run.rs`、`calls.rs`、`data.rs`、`evidence.rs`): 手書きの LIR を `eml_lir::verify` に通してから、検査モードで実行する。期待どおりに通ったときだけ、速いモードでも実行して出力が同じことを確かめる。速いモードは前提を確かめないので、検査モードが通らなかった IR では走らせない。`run.rs` は定数、extern、直接の呼び出しと末尾呼び出し、入口でないブロックの中の呼び出し、誤りの位置 (ヒープの誤りの位置と、位置のない誤りを含む) と flush、`File` の `dup`、終わりの処理とリーク (種類が2つ以上のリークの表示を含む) を、`calls.rs` は部分適用、ちょうどの適用、余った引数の `ApplyRest`、末尾の位置の適用、`clause`、自己末尾呼び出しの深さと割り込み、深さの上限、確保量の上限を、`data.rs` は `con`、Repr ごとの `switch`、`unpack`、`release` の両方の枝、`box` と `unbox` を、`evidence.rs` は基本操作と節の呼び出しを確かめる
 - verifier が拒む LIR は、VM 自身の見張り (内部の誤り) を確かめるテストだけで使う。`run_unverified` で検査モードだけで走らせ、そのことをテストの doc コメントに書く。verifier が拒んだら、verifier でなくテストの LIR を直す
 - `tags.rs` は、`Bool`、`Ordering`、組のタグの定数が `eml_rt::externs` と `eml_lir` で同じであることを確かめる
-- `api.rs` は、`CodeBase<M>: Sync` と `Task: Send` を型の assert で固定する ([マルチコア対応の設計](../future/multicore.md) の「VM の並列化の備え」の制約1と2)
-- `bench.rs` は、基準のプログラムの VM の `RunStats` を固定する (下の「性能のテスト」)
+- `api.rs` は、`CodeBase<M>: Sync` と `Task: Send` を型の assert で固定する ([マルチコア対応の設計](../future/multicore.md) の「VM の並列化の備え」の制約1と2)。`RunConfig` の組み立て (`with_debug_heap`、`with_control`) と、割り込みの扱いも確かめる
+- `bench.rs` は、基準のプログラムの VM の `RunStats` を固定する。`scaling.rs` は、仕事の回数と物体とスタックの語の数を上限と比べる (どちらも下の「性能のテスト」)
 - `miri.rs` は、Miri で流す小さい実行のテストである (上の「Miri」)
-- `crates/eml_cli/tests/cli.rs` は、`eml run --vm` の成功と実行時エラーの終了コードを確かめる
+- `crates/eml_cli/tests/cli.rs` は、速いモードの `eml run` の成功と実行時エラーの終了コード、SIGINT で止めたときの終了コード 130 を確かめる (下の「CLI のテスト」)
 
 ## LIR のテキストの形
 
@@ -236,7 +236,7 @@ Core IR のテキストは `eml_core_ir::pretty` が書き、`eml_core_ir::parse
 - `tests/ui/run/**/*.em` は、診断のエラーなしで実行が正常に終了することを確認し、stdout と stderr をスナップショットにする
 - `tests/ui/check-fail/**/*.em` は、診断のエラーが1件以上出ることを確認し、診断の表示をスナップショットにする
 - `tests/ui/run-fail/**/*.em` は、診断のエラーなしでコンパイルでき、実行が実行時エラーで終わることを確認する。エラーまでの出力と実行時エラーのメッセージをスナップショットにする
-- テストは `crates/eml_cli/tests/ui.rs` に置き、`insta::glob!` で `tests/ui/` 以下の `.em` を走査する。`eml_cli` の lib API をプロセス内で呼び、`debug_heap` を有効にした `RunConfig` で実行する
+- テストは `crates/eml_cli/tests/ui.rs` に置き、`insta::glob!` で `tests/ui/` 以下の `.em` を走査する。`eml_cli` の lib API をプロセス内で呼び、検査モードと速いモードの2つで実行する (下の「2つのモードで流す」)
 - テストは1つのファイル (`<最上位>/<分類>/<名前>.em`) か、1つのディレクトリ (`<最上位>/<分類>/<名前>/main.em`) である。ディレクトリのテストでは `main.em` が入口で、そのディレクトリが根になる。ディレクトリの中のほかの `.em` は `main.em` から import するモジュールで、単独のテストにしない。1つのファイルのテストはユーザーのモジュールを import しない。根が分類のディレクトリなので、import すると隣のテストのファイルをモジュールとして読んでしまう。ハーネスは、ユーザーのモジュールが入口だけであることを `Session::user_module_names` で確かめ、依存先のユーザーのモジュールを読み込んだ1つのファイルのテストを失敗にする。標準ライブラリのモジュールはいつも読み込まれるので数えず、1つのファイルのテストでも `Fs.open` や `import Fs` を使ってよい
 - 成功すべきか失敗すべきかは最上位のディレクトリで決める。そのため、スナップショットの承認を誤っても、成功と失敗の入れ替わりは検出できる
 - スナップショットの中のパスは `tests/ui` からの相対パスにして、実行する環境に依存しないようにする。依存先のファイルのパスも同じく `tests/ui` からの相対パスになる (`check-fail/names/import_cycle/B.em`)
@@ -262,12 +262,13 @@ Core IR のテキストは `eml_core_ir::pretty` が書き、`eml_core_ir::parse
 - サブディレクトリの名前は、親の `check-fail` と同じくケバブケースにする
 - スナップショットの名前は、最上位のディレクトリからの相対パスで固定する (`run/basics/hello.em` は `integration__ui__run@basics__hello.em.snap`。頭の `integration__ui__` は、insta が付けるテストのバイナリとモジュールの名前である)。insta の既定では、分類が1つしかないディレクトリの名前に分類が入らず、分類が増えたときに名前が変わるためである。ディレクトリのテストの名前はディレクトリのパスで、`check-fail/names/import_cycle/` は `integration__ui__check_fail@names__import_cycle.snap` になる。テストのパスが名前になるので、UI テストを移動するとスナップショットの名前が変わる。成否を変えない移動は期待値の変更で、最上位のディレクトリをまたぐ移動は成否の変更である (「テストの変更の運用」)
 
-### VM でも流す
+### 2つのモードで流す
 
-- `run` と `run-fail` のテストは、CEK で実行した後に、同じ LIR を VM の検査モードで実行する。標準出力は CEK と同じでなければならない。CEK が成功したなら VM も成功し、CEK が実行時エラーで終わったなら VM も同じ文言の誤りで終わる。スナップショットは CEK と共有し、VM 用のものは作らない
-- 検査モードの VM の `RunStats` のうち、`evidence_steps`、`yields`、`yield_frames`、`string_bytes_copied`、`boxes`、`unboxes` の6つは、CEK の値と等しいことを確かめる。どれも同じ LIR の上で同じ定義を持つためである。`rc_increments`、`rc_decrements`、`peak_objects` は比べない ([VM](../spec/vm.md) の「`RunStats`」)
-- 検査モードの VM が CEK と一致したときだけ、速いモードでも実行し、出力と、終わり方 (成功か、誤りの文言) が検査モードと同じことを確かめる。速いモードは前提を確かめないので、VM の誤りがあると未定義の動作になり、1つのテストの失敗が glob のテスト全体を壊しうるためである。検査モードの誤り (リーク、解放の後の使用、`lin` の物体の `dup`) は、検査モードの実行が見つける
-- VM の出力は、`eml_vm::capture_host` (メモリの書き込み先、そのテストのディレクトリの `file_root`、`Buffering::Block` の `StdHost`) で捕まえる。`run-fail/files` のテストは `file_root` に頼る
+- `run` と `run-fail` のテストは、まず VM の検査モード (`debug_heap`) で、`Control::new(default_limits())` を持つ新しい `RunConfig` で実行する。`default_limits()` は `eml run` と同じ既定の上限である。標準出力と誤りの文言は、スナップショットと比べる。`run` のテストは、実行が成功することも確かめる。`file_root` はテストのディレクトリである
+- その後で、新しい `Control` を持つ別の `RunConfig` で、速いモードでも実行する。標準出力と、終わり方 (成功か、誤りの文言) が検査モードと同じことを確かめる。速いモードを後に流すのは、速いモードは前提を確かめないので、VM の誤りがあると未定義の動作になり、1つのテストの失敗が glob のテスト全体を壊しうるためである
+- `run-fail` のテストは、検査モードの誤りが `fast_mode_reports` を満たすときだけ、速いモードで流す。満たさないのは、リーク、VM の内部の誤り (`VmFault::Internal`)、extern のヒープの誤り (`VmFault::Extern(Fault::Heap(_))`) である。どれも検査モードだけが見つけるので、VM 自身の誤りを意味し、速いモードで流すとメモリを壊すことがある。それ以外の誤り (算術、出力、入出力、UTF-8) は両方のモードが同じ文言で報告する
+- 実行ごとに新しい `RunConfig` を作るのは、止める理由のビットが `Control::clear` でしか下りないためである。使い回すと、前の実行で立ったビットで次の実行がすぐ止まる ([VM](../spec/vm.md) の「上限と割り込み」)
+- 出力は `capture_host` (メモリの書き込み先、そのテストのディレクトリの `file_root`、`Buffering::Block` の `StdHost`) で捕まえる。`run-fail/files` のテストは `file_root` に頼る
 
 ## 文書の引用の検査
 
@@ -280,7 +281,14 @@ Core IR のテキストは `eml_core_ir::pretty` が書き、`eml_core_ir::parse
 
 ## CLI のテスト
 
-`crates/eml_cli/tests/cli.rs` は `eml` バイナリを起動し、終了コードが [コンパイラの構成](architecture.md) の「CLI と lib API」の定めに合うことを確認する。
+`crates/eml_cli/tests/cli.rs` は `eml` バイナリを起動し、終了コードが [コンパイラの構成](architecture.md) の「CLI と lib API」の定めに合うことを確認する。`run` のテストのうち、速いモード (`--debug-heap` なし) で走るのは、成功と実行時エラーの2本である。
+
+SIGINT のテストは `cfg(unix)` で2本ある。どちらも `libc::kill` で SIGINT を送り、10 秒の締め切りを持ち、過ぎたら子を殺して失敗にする。テストが止まらずに CI を待たせないためである。
+
+- 止まらない自己末尾呼び出しのループで行を出し続けるプログラムに、最初の行が届いたら SIGINT を1回送り、終了コード 130 と、標準エラーに `interrupted` が含まれることを確かめる。標準出力はパイプなので 64 KiB ごとにしか書かれない。テストは別のスレッドで標準出力を読み続ける。パイプが詰まると子が `write` の中で止まり、安全点に来なくなるためである
+- `mkfifo` で作った名前付きのパイプを `Fs.read_all` で読むプログラムに、100 ms ごとに SIGINT を送り続け、終了コード 130 で終わることを確かめる。プログラムは読み込みの中で止まり、安全点に来ないので、2回目以降の SIGINT でハンドラが終わらせる。送り続けるのは、続けて届いた2つの SIGINT が1つにまとまることがあるためである
+
+`default_limits()` のテストは `crates/eml_cli/tests/api.rs` にある。`max_depth` が 2^27 であることと、`max_bytes` の既定の値を確かめる。既定の上限まで実際に再帰するテストは、1 GiB を使うので置かない。
 
 ## 性能のテスト
 
@@ -290,9 +298,22 @@ Core IR のテキストは `eml_core_ir::pretty` が書き、`eml_core_ir::parse
 
 `crates/eml_hir/tests/scaling.rs` は、名前の違う `data` と `effect` の宣言の数を 4000 から 16000 にしたときの、構文解析から `DefMap` までの時間の比を確かめる。比が6以下なら通る。`DefMap` の重複の判定を変えたときに流す。
 
-`crates/eml_interp/tests/scaling.rs` は、時間ではなく、インタプリタの仕事の回数と、同時に生きていたヒープの物体の数の最大 (`RunStats`) を上限と比べる。handler の下の非末尾の再帰 (handler が1つ、内側に別のエフェクトの handler が1つ、`mask` 付きのコールバックの中) は `evidence_steps` を、リテラルから始めて `acc ++ "x"` を n 回つなぐ連結は `string_bytes_copied` を、n = 2000 で n の定数倍の上限と比べる。2乗の実装では上限を超える。64 バイトのリテラルを n 回評価するテストは、`string_bytes_copied` が 64 未満であること (1回でも写せば超える) を確かめる。リストをたどるテストは `rc_increments` を確かめる。一意なリストを長さ 1000 と 2000 でたどったときに数が同じであること (セルごとの `dup` がない) と、共有されたリストを長さ n でたどったときに数が n + 2 以下であること (セルごとの `dup` は1回まで) である。ループの形ごとに、`peak_objects` を n = 1000 と n = 2000 で比べるテストもある。`Int`、`Bool`、`Unit` を返す関数の値を通るループ、呼び出しと結果の間に使われない `let` があるループ、節が末尾で再開する操作のループ、handler の下で yield しうる関数の値を通るループ、直接の自己末尾呼び出しは、2つの n で同じであることを確かめる。末尾呼び出しを失うと、フレームが反復の数に比例して増えるためである。深さ n の非末尾の再帰の各段ですぐに再開する操作を行うテストは、n = 2000 の値が n = 1000 の値の2倍と定数以下であることを確かめる。操作が継続を組み立てると、各段で深さに比例する物体が増えるためである。ラムダからラムダへの末尾の `apply` は、反復ごとにクロージャが1つ残るので、n = 2000 の値が n = 1000 の値 + 1000 以下であることを確かめる。このテストはクロージャの鎖を2回使い、戻る間も鎖を共有にしておく。一意なクロージャは `apply` で手放され、そのスロットを積んだフレームが使い回すので、末尾の `apply` を失っても `peak_objects` が増えないためである。Prelude のリストには3つのテストがある。長さ 1000 と 2000 のリストの `show` の `string_bytes_copied` の比が 2.5 以下であること、要素が10000個のリストの導出した `==` と `compare` が通り、`peak_objects` がリストの長さの3倍以下であること、要素が10000個のリテラルを持つプログラムが `run` で通ることである。evidence passing の性質を確かめるテストが2つある。末尾でない再帰の深さ 10 と 1000 の底で、すぐに再開する操作 (状態の `get` と `put`) を同じ回数行うと、`evidence_steps` が同じで、`yields` と `yield_frames` が 0 であること (費用が深さによらない)。同じ深さの底で再開する操作を1回行うと、`yield_frames` が深さに比例すること (方式の性質で、上限ではない)。ほかに、数え方そのものを確かめるテストがある (操作も文字列もなければ `evidence_steps`、`yields`、`yield_frames`、`string_bytes_copied`、`rc_increments`、`rc_decrements` は 0 で `peak_objects` は `Frame::Root` の 1、操作はどれも少なくとも1つの evidence を調べる、`"ab" ++ "cd"` は少なくとも4バイトを書く、型変数のフィールドに `Int` を入れて取り出すと `boxes` と `unboxes` が1以上になり、スカラーの位置だけのプログラムでは 0 になる)。各テストはソースをテストの中で作り、`eml_test_support::run_stats` で実行する。回数は機械の速さに左右されないので、`#[ignore]` を付けず、ふだんの `cargo test` で流す。
+`crates/eml_vm/tests/scaling.rs` は、時間ではなく、VM の仕事の回数と、同時に生きていたヒープの物体の数 (`peak_objects`) とスタックの語の数 (`peak_stack`) の最大 (`RunStats`) を、検査モードで上限と比べる。handler の下の非末尾の再帰 (handler が1つ、内側に別のエフェクトの handler が1つ、`mask` 付きのコールバックの中) は `evidence_steps` を、n = 2000 でそれぞれ n 以下、2n 以下、n + 8 以下と比べる。リテラルから始めて一意な左辺に `"x"` を n 回つなぐ連結は `string_bytes_copied` を 4n 以下と比べる。2乗の実装では上限を超える。64 バイトのリテラルを n 回評価するテストは、`string_bytes_copied` が 64 未満であること (1回でも写せば超える) を確かめる。リストをたどるテストは `rc_increments` を確かめる。一意なリストを長さ 1000 と 2000 でたどったときに数が同じであること (セルごとの `dup` がない) と、共有されたリストを長さ n でたどったときに数が n + 2 以下であること (セルごとの `dup` は1回まで) である。
 
-`crates/eml_interp/tests/bench.rs` は、基準のプログラム (リポジトリの `bench/`) を `debug_heap` 付きで走らせ、出力を確かめ、`RunStats` の全項目をインラインスナップショットで固定する。プログラムごとに1つのテストにして、並列に走らせる。`bench/` のファイルの一覧とテストのプログラムの一覧が一致することも確かめる。回数は決定的なので、段の前後の回数はこのスナップショットの差分で残る。回数を変える変更は、その段の spec に期待値の変更として書く。プログラムの中身と命令の数の測り方は [計測の基準](benchmarks.md) にある。`crates/eml_vm/tests/bench.rs` は、同じプログラムを VM の検査モードで走らせ、VM の `RunStats` を同じ形で固定する。CEK の値とは `rc_increments`、`rc_decrements`、`peak_objects` が違いうる ([VM](../spec/vm.md) の「`RunStats`」)。今の `bench/` では、違うのは `peak_objects` と `tree` の `rc_increments` だけである ([計測の基準](benchmarks.md) の「S10a (VM)」)。S10b で CEK を消すときに、CEK のテストをこちらに替える。
+ループの形ごとに、n = 1000 と n = 2000 の `peak_stack` と `peak_objects` が同じであることを確かめるテストがある。`Int`、`Bool`、`Unit` を返す関数の値を通るループ、呼び出しと結果の間に使われない `let` があるループ、節が末尾で再開する操作のループ、handler の下で yield しうる関数の値を通るループ、直接の自己末尾呼び出しである。末尾呼び出しを失うと、スタックの語が反復の数に比例して増え、反復ごとに物体を残すとヒープが伸びるためである。次の形は、同じではなく伸びの大きさを確かめる。
+
+- 深さ n の非末尾の再帰の各段ですぐに再開する操作を行うと、`peak_stack` は n に比例して伸び、1段あたりの語の数は一定である (n = 1000、2000、3000 の差が等しい)。`peak_objects` は定数しか増えない
+- ラムダからラムダへの末尾の `apply` は、反復ごとにクロージャが1つ残るので、n = 2000 の `peak_objects` が n = 1000 の値 + 1000 以下であり、`peak_stack` は伸びない
+- すぐに再開しない操作は handler まで yield し、継続を組み立てるので、深さ 10 と 1000 で `yield_frames` と `peak_objects` が深さの差に比例して増える (方式の性質で、上限ではない)。すぐに再開する操作を同じ回数行うと、`evidence_steps` が深さによらず同じで、`yields` と `yield_frames` が 0 である
+- 持ち主を呼び出しをまたいで残さないこと ([LIR](../spec/lir.md) の「所有を取る時点」) は、分解した値の1つのフィールドだけを使う非末尾の再帰で、n を 1000 から 2000 にしたときの `peak_objects` の伸びが n の差の2倍以下に収まることで確かめる (`a_retained_owner_does_not_cross_a_call`)
+
+Prelude のリストには4つのテストがある。長さ 1000 と 2000 のリストの `show` の `string_bytes_copied` の比が 2.5 以下であること、要素が10000個のリストの導出した `==` と `compare` が、リストを持つだけのプログラムより `peak_stack` と `peak_objects` を 16 しか増やさないこと (末尾呼び出しで進む)、要素が10000個のリテラルを持つプログラムが通ること、文字列補間の `string_bytes_copied` が長さの 2.5 倍以下で伸びることである。
+
+ほかに、数え方そのものを確かめるテストがある。操作も文字列もなければ `evidence_steps`、`yields`、`yield_frames`、`string_bytes_copied`、`rc_increments`、`rc_decrements` は 0 で、`peak_objects` はダミーの物体の 1 である。操作はどれも少なくとも1つの evidence を調べる。`"ab" ++ "cd"` は少なくとも4バイトを書く。型変数のフィールドに `Int` を入れて取り出すと `boxes` と `unboxes` が1以上になり、スカラーの位置だけのプログラムでは 0 になる。
+
+コード生成とパスがブロックの列を再帰でたどらないことも、ここで確かめる。5000 個の文の列、5000 個の `if` 文の列 (`switch` のブロックが 5000 個できる)、1000 個のリテラルの腕を持つ `match`、1000 個の共有された腕を持つ `match` である。各テストはソースをテストの中で作り、`eml_test_support::run_stats` で実行する。回数は機械の速さに左右されないので、`#[ignore]` を付けず、ふだんの `cargo test` で流す。
+
+`crates/eml_vm/tests/bench.rs` は、基準のプログラム (リポジトリの `bench/`) を VM の検査モードで走らせ、出力を確かめ、`RunStats` の全項目をインラインスナップショットで固定する。プログラムごとに1つのテストにして、並列に走らせる。`bench/` のファイルの一覧とテストのプログラムの一覧が一致することも確かめる。回数は決定的なので、段の前後の回数はこのスナップショットの差分で残る。回数を変える変更は、その段の spec に期待値の変更として書く。プログラムの中身と命令の数の測り方は [計測の基準](benchmarks.md) にある。
 
 `SourceFiles::line_col` の表のテスト (`eml_diagnostics` の `source.rs`)、verifier の大きな IR のテスト (`eml_lir` の `tests/verify.rs` の、長い `switch` の連鎖、借りたフィールドへの長い `switch` の連鎖、1つのブロックに深さの違う辺が多く合流する形と、`eml_core_ir` の `tests/verify.rs` の、長い文の `if` の列)、T3 の時間のテスト (`eml_lir` の `tests/boxing.rs` の、N = 30,000 の関数の鎖を IR のテキストで作り、`boxing` の時間だけを測るテスト) は、数えられる仕事の回数がないので時間を測る。2乗の実装だけが超える緩い上限 (5 秒と 10 秒) を置き、`#[ignore]` を付けずに debug ビルドのふだんの `cargo test` で流す。
 
@@ -311,9 +332,8 @@ cargo clippy --all-targets && cargo fmt
 cargo test --release -p eml_types --test integration scaling:: -- --ignored   # 型検査の時間の伸び (性能のテスト)
 cargo test --release -p eml_hir --test integration scaling:: -- --ignored     # 名前の表を作る時間の伸び (性能のテスト)
 cargo test --release -p eml_core_ir --test integration instances::lowering -- --ignored   # 単相化の lower の時間の伸び (性能のテスト)
-cargo test -p eml_interp --test integration scaling::                          # インタプリタの仕事の回数 (ふだんの cargo test にも入る)
-cargo test -p eml_interp --test integration bench::                            # 基準のプログラムの回数 (ふだんの cargo test にも入る)
-cargo test -p eml_vm --test integration bench::                                # 基準のプログラムの VM での回数 (同上)
+cargo test -p eml_vm --test integration scaling::                              # VM の仕事の回数とスタックの語の数 (ふだんの cargo test にも入る)
+cargo test -p eml_vm --test integration bench::                                # 基準のプログラムの回数 (同上)
 bench/run.sh                                                                   # 基準のプログラムの命令の数 (macOS、release)
 nix develop .#miri -c env MIRIFLAGS="-Zmiri-strict-provenance" cargo miri test -p eml_rt trusted::   # Miri (Tree Borrows は -Zmiri-tree-borrows を足す)
 nix develop .#miri -c env MIRIFLAGS="-Zmiri-strict-provenance" cargo miri test -p eml_vm --test integration miri::   # VM の Miri (同上)

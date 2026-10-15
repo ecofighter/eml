@@ -156,7 +156,7 @@ S10 を、S10a と S10b の2つの作業に分けて順に進める。段の列�
 
 | 作業 | 中身 | 状態 |
 |---|---|---|
-| S10a | VM の本体を CEK と並べて作る。LIR から `CodeBase` を作るコード生成、`eml_rt` の `Ctx` の上で動く VM、逆アセンブラ、命令の位置から源の位置への表。`eml run --vm` と、`run` と `run-fail` の UI テストを VM でも流すこと | 終えた。決めたことは [VM](../spec/vm.md) と、[オブジェクトモデル](../spec/object-model.md) の「語」、「ペイロード」、「`lin` ビット」、「凍結した領域」、[LIR](../spec/lir.md) の「一様な関数」と「生存解析」、[テスト戦略](../implementation/testing.md) の「`eml_vm` のテスト」、「VM でも流す」、「Miri」に移した。既定の `eml run` は CEK のままなので、UI テストの出力と CEK の `bench/` の仕事の回数は変わらない。VM の実行の分の命令の数は、`bench/` のどのプログラムでも CEK の約 0.10〜0.17 倍だった ([計測の基準](../implementation/benchmarks.md) の「S10a (VM)」) |
+| S10a | VM の本体を CEK と並べて作る。LIR から `CodeBase` を作るコード生成、`eml_rt` の `Ctx` の上で動く VM、逆アセンブラ、命令の位置から源の位置への表。`eml run --vm` と、`run` と `run-fail` の UI テストを VM でも流すこと | 終えた。決めたことは [VM](../spec/vm.md) と、[オブジェクトモデル](../spec/object-model.md) の「語」、「ペイロード」、「`lin` ビット」、「凍結した領域」、[LIR](../spec/lir.md) の「一様な関数」と「生存解析」、[テスト戦略](../implementation/testing.md) の「`eml_vm` のテスト」、「2つのモードで流す」、「Miri」に移した。既定の `eml run` は CEK のままなので、UI テストの出力と CEK の `bench/` の仕事の回数は変わらない。VM の実行の分の命令の数は、`bench/` のどのプログラムでも CEK の約 0.10〜0.17 倍だった ([計測の基準](../implementation/benchmarks.md) の「S10a (VM)」) |
 | S10b | `eml run` を VM に切り替え、SIGINT のハンドラと上限を入れ、CEK、`eml_runtime`、`saved` を消し、spec を書き直す | まだ |
 
 S10a では、この節で決めていた次の3つを変えた。

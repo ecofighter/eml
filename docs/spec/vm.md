@@ -2,7 +2,7 @@
 
 位置づけ: 規範。
 
-VM は、LIR をレジスタ型のバイトコードに変換し、`eml_rt` の `Ctx` の上で実行する。`eml run` は VM で動く。LIR の命令と規則は [LIR](lir.md) に、物体の形と `Ctx` の基本操作は [オブジェクトモデル](object-model.md) にある。ここでは、実行の API、バイトコードの形、フレーム、呼び出しの規約、命令ごとの実行、誤りと終わりの処理、上限と割り込み、`RunStats` の意味と数え方を定める。テストは [テスト戦略](../implementation/testing.md) の「`eml_vm` のテスト」と「VM でも流す」に、計測は [計測の基準](../implementation/benchmarks.md) にある。
+VM は、LIR をレジスタ型のバイトコードに変換し、`eml_rt` の `Ctx` の上で実行する。`eml run` は VM で動く。LIR の命令と規則は [LIR](lir.md) に、物体の形と `Ctx` の基本操作は [オブジェクトモデル](object-model.md) にある。ここでは、実行の API、バイトコードの形、フレーム、呼び出しの規約、命令ごとの実行、誤りと終わりの処理、上限と割り込み、`RunStats` の意味と数え方を定める。テストは [テスト戦略](../implementation/testing.md) の「`eml_vm` のテスト」と「2つのモードで流す」に、計測は [計測の基準](../implementation/benchmarks.md) にある。
 
 判断の基準は、簡潔で洗練された実装を第一に、次に性能である。性能のための工夫は、計測で要ると分かったものだけを入れる。後のマルチコア対応 (VM の並列化と、スレッドをまたぐキュー) を妨げないことも、設計の条件に含める (「並列化への備え」)。
 
@@ -23,7 +23,7 @@ VM は、LIR をレジスタ型のバイトコードに変換し、`eml_rt` の 
 - `RunConfig` に `Control` を持たせるのは、CLI が SIGINT のハンドラに同じ `Control` を渡すためである。上限は `Control` が持つので、`RunConfig` に上限の欄は作らない ([オブジェクトモデル](object-model.md) の「実行の制御」)
 - `eml_vm` は、`eml_rt` の `Control`、`Limits`、`Stop` を再公開する。`eml_cli` は `eml_rt` に依存せず、これらの名前を `eml_vm` から受け取る
 - `eml_cli` は、`run` の feature で `eml_vm` に依存する。`RunConfig`、`RunStats`、`RuntimeError`、`VmFault`、`SourceLocation`、`Control`、`Limits`、`Stop`、`HostRef`、`Capture`、`capture_host`、`stdio_host` を `eml_vm` から再公開し、`execute` を同じ名前で公開する
-- `eml run` は速いモードで動き、`--debug-heap` を付けると検査モードになる。UI テストは、いつも検査モードで流してから速いモードでも流す ([テスト戦略](../implementation/testing.md) の「VM でも流す」)。Host は `stdio_host(PathBuf::new())` で、相対パスはカレントディレクトリを基準にする
+- `eml run` は速いモードで動き、`--debug-heap` を付けると検査モードになる。UI テストは、いつも検査モードで流してから速いモードでも流す ([テスト戦略](../implementation/testing.md) の「2つのモードで流す」)。Host は `stdio_host(PathBuf::new())` で、相対パスはカレントディレクトリを基準にする
 
 ## `CodeBase` と `FnEntry`
 

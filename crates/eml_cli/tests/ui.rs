@@ -149,7 +149,7 @@ fn execute_in(
 /// 検査モードの結果をスナップショットと比べた後で、速いモードでも流し、同じ出力と同じ結果になることを確かめる。
 /// 速いモードは前提を確かめないので、VM の誤りが未定義の動作になって glob のテスト全体を壊しうる。そのため検査モードの
 /// 後に流し、検査モードが VM の誤りを見つけたときは流さない (`fast_mode_reports`。docs/implementation/testing.md の
-/// 「VM でも流す」)。
+/// 「2つのモードで流す」)。
 fn assert_fast_mode_agrees(
     suffix: &str,
     program: &eml_lir::Program,
