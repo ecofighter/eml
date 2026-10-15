@@ -98,7 +98,7 @@ impl Lines {
 
 ### 端末の繰り返し
 
-- 標準入力が端末のときだけ `rustyline` (18.0.1、`default-features = false`) を使う。端末でなければ、標準入力の `BufRead::read_line` で1行ずつ読み、プロンプトは書かない。`rustyline` は `TERM` が `dumb` などのときに、標準入力がパイプでもプロンプトを標準出力に書くので、パイプのときの動きを `TERM` によらず決めるためである
+- 標準入力が端末のときだけ `rustyline` (18.0.1、`default-features = false`、feature は `buffer-redux` だけ) を使う。端末でなければ、標準入力の `BufRead::read_line` で1行ずつ読み、プロンプトは書かない。`rustyline` は `TERM` が `dumb` などのときに、標準入力がパイプでもプロンプトを標準出力に書くので、パイプのときの動きを `TERM` によらず決めるためである。`buffer-redux` は、読みのたびに作る読み手のバッファに残った入力 (評価の間に打った行、bracketed paste でない速い入力) を次の読みに渡すために入れる
 - `rustyline` の設定は、`Behavior::PreferTerm` (標準出力をリダイレクトしても、プロンプトと編集の表示を端末に書く) のほかは既定の値である。履歴は既定の `MemHistory` で、読んだ行ごとに `add_history_entry` で足す。既定の設定では、空の行と、直前と同じ行は足さず、100 行まで持つ。GHCi と同じく、行ごとの履歴である
 - 1回の `readline` が複数の行を返すことがある。既定の設定で bracketed paste が有効なので、貼り付けた複数行が1つの文字列で返るためである。繰り返しは、返った文字列を `Lines::push_text` に渡し、返った `Step` を順に処理する。`:quit` か続けられない誤りで止まれば、残りは捨てる。`Lines` の状態は評価の結果によらないので、先にすべての行を渡してよい。パイプから読んだ行も同じ道を通るので、行末の `\r` (CRLF の入力) も除く
 - `ReadlineError::Interrupted` (編集中の Ctrl-C) と、`EINTR` で戻った誤り (`ReadlineError::Errno(EINTR)` と、`Io` で種類が `Interrupted` のもの) は、どちらも `Lines::interrupt` に渡して次の行を読む。`rustyline` は、端末を raw にする `tcsetattr` を、自分のハンドラを入れる前に `ISIG` が立ったまま呼ぶ。この間の Ctrl-C で下のハンドラが動き、`SA_RESTART` がないので `EINTR` が返りうる。このときも REPL は終わらない

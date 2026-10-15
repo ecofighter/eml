@@ -125,7 +125,7 @@ fn close(repl: Repl, code: ExitCode) -> ExitCode {
 }
 
 enum Reader {
-    Edited(DefaultEditor),
+    Edited(Box<DefaultEditor>),
     Piped(StdinLock<'static>),
 }
 
@@ -144,7 +144,9 @@ impl Reader {
             return Ok(Reader::Piped(io::stdin().lock()));
         }
         let config = Config::builder().behavior(Behavior::PreferTerm).build();
-        Ok(Reader::Edited(DefaultEditor::with_config(config)?))
+        Ok(Reader::Edited(Box::new(DefaultEditor::with_config(
+            config,
+        )?)))
     }
 
     fn read(&mut self, prompt: &str) -> Read {

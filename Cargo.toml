@@ -25,6 +25,6 @@ insta = { version = "1.49", features = ["glob"] }
 la-arena = "0.3"
 libc = "0.2"
 logos = "0.16"
-rustyline = { version = "18.0.1", default-features = false }
+rustyline = { version = "18.0.1", default-features = false, features = ["buffer-redux"] }
 rowan = "0.16"
 text-size = "1.1"
