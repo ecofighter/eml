@@ -12,7 +12,7 @@ use crate::codes;
 use crate::hir::{ExternIndex, LangItems};
 use crate::item_tree::{Fixity, ImportName, ItemTree, duplicate};
 use crate::load::{ImportTarget, LoadedModule, STD_ROOT};
-use crate::names::DisplayNames;
+use crate::names::{Definer, DisplayNames};
 use crate::program::{
     ClassId, ConstructorId, EffectId, FunctionId, ItemId, MethodId, ModuleId, ModuleOrigin,
     OperationId, TypeDefId, TypeItem, ValueItem,
@@ -32,8 +32,8 @@ pub enum Resolved<T> {
     /// 診断を出さずに誤りにする。理由は fixity の求め方だけが見分ける (`Resolver::fixity_of`)。
     Silent(Silence),
     NotFound,
-    /// E1028。候補の定義を持ち込んだ import の位置 (自分のモジュールのファイル)。
-    Ambiguous(Vec<TextRange>),
+    /// E1028。候補の定義を持ち込んだ import の (ファイル、位置)。セッションでは前の入力の import でありうる。
+    Ambiguous(Vec<(FileId, TextRange)>),
     /// E1029。ユーザーのモジュールの `pub` でない定義 (ファイル、位置)。
     Private(FileId, TextRange),
     /// E1031。
@@ -557,13 +557,20 @@ impl ModuleScope {
                         .or_else(|| definitions.first())
                 });
                 let Some(definition) = found else {
+                    // セッションでは利用者に入力が見え、モジュールは見えない
+                    let place = match self.origin {
+                        ModuleOrigin::Session(_) => "input",
+                        ModuleOrigin::Std | ModuleOrigin::User => "module",
+                    };
                     diagnostics.push(Diagnostic::error(
                         codes::FIXITY_WITHOUT_DEFINITION,
-                        format!("`{name}` is not defined in this module"),
+                        format!("`{name}` is not defined in this {place}"),
                         Label::new(
                             file,
                             *range,
-                            "a fixity declaration needs a definition of its operator in the same module",
+                            format!(
+                                "a fixity declaration needs a definition of its operator in the same {place}"
+                            ),
                         ),
                     ));
                     continue;
@@ -779,8 +786,11 @@ fn push_source<T>(
         .push(Source { item, import });
 }
 
+/// import の (ファイル、位置)。
+type ImportAt = Option<(FileId, TextRange)>;
+
 /// 同じ定義は、いくつの import が持ち込んでも1つと数える (docs/spec/modules.md の「名前の解決」)。
-fn add<T: PartialEq>(found: &mut Vec<(T, Option<TextRange>)>, item: T, import: Option<TextRange>) {
+fn add<T: PartialEq>(found: &mut Vec<(T, ImportAt)>, item: T, import: ImportAt) {
     if !found.iter().any(|(seen, _)| *seen == item) {
         found.push((item, import));
     }
@@ -788,7 +798,7 @@ fn add<T: PartialEq>(found: &mut Vec<(T, Option<TextRange>)>, item: T, import: O
 
 /// 壊れていない定義がちょうど1つならそれを使い、2つ以上なら曖昧にする。1つもなく壊れた import があれば、診断を出さずに
 /// 誤りにする (docs/implementation/architecture.md の「名前解決の回復」)。どれでもなければ `None` で、呼ぶ側が次を引く。
-fn decide<T>(mut found: Vec<(T, Option<TextRange>)>, broken: bool) -> Option<Resolved<T>> {
+fn decide<T>(mut found: Vec<(T, ImportAt)>, broken: bool) -> Option<Resolved<T>> {
     match found.len() {
         0 if broken => Some(Resolved::Silent(Silence::Broken)),
         0 => None,
@@ -990,7 +1000,10 @@ fn display_names(scopes: &[ModuleScope], unit: TypeDefId) -> DisplayNames {
     let mut constructors = Vec::new();
     let mut classes = Vec::new();
     for scope in scopes {
-        let module = scope.name.as_str();
+        let module = match scope.origin {
+            ModuleOrigin::Session(number) => Definer::Session(number),
+            ModuleOrigin::Std | ModuleOrigin::User => Definer::Module(&scope.name),
+        };
         for (name, definitions) in &scope.types {
             for definition in definitions {
                 match definition.item {
@@ -1026,6 +1039,13 @@ impl DefMap {
 
     pub fn origin(&self, module: ModuleId) -> ModuleOrigin {
         self.scope(module).origin
+    }
+
+    /// 2つのモジュールを、orphan 規則と fixity で同じモジュールとみなすか。セッションのモジュールどうしは、1つの
+    /// モジュールとみなす (docs/superpowers/specs/2026-10-15-s11a-repl-session-design.md の「セッションを1つの
+    /// モジュールとして扱う所」)。
+    pub fn same_scope(&self, a: ModuleId, b: ModuleId) -> bool {
+        a == b || (self.origin(a).session().is_some() && self.origin(b).session().is_some())
     }
 
     pub fn lang(&self) -> LangItems {
@@ -1159,6 +1179,10 @@ impl<'a> Resolver<'a> {
     /// (docs/spec/modules.md の「公開の範囲」)。ほかのモジュールの `pub` でない定義は名前で引けないので、自分の
     /// モジュールだけを見ればよい。
     pub fn private_type_item(&self, item: TypeItem) -> Option<(&'a str, TextRange)> {
+        // セッションのモジュールはどこからも import されないので、公開の範囲を検査しない
+        if self.own().origin.session().is_some() {
+            return None;
+        }
         self.own().types.iter().find_map(|(name, definitions)| {
             definitions
                 .iter()
@@ -1186,6 +1210,7 @@ impl<'a> Resolver<'a> {
     }
 
     /// 組み直しに使う fixity。名前を解決した先の定義に付き、別のモジュールの定義の fixity は宣言が `pub` のときだけ効く。
+    /// セッションのモジュールどうしは同じモジュールとみなす (`DefMap::same_scope`)。
     /// 宣言がなければ `infixl 9` である (docs/spec/declarations.md の「fixity」)。重複した宣言の部品と、引けなかった名前も
     /// `infixl 9` で組む。曖昧な演算子と壊れた import から来た演算子は `None` で、組み直さない
     /// (docs/implementation/architecture.md の「名前解決の回復」)。
@@ -1200,7 +1225,11 @@ impl<'a> Resolver<'a> {
         };
         let module = item.module();
         match self.def_map.scope(module).fixities.get(&item) {
-            Some((fixity, public, _)) if module == self.module || *public => Some(*fixity),
+            Some((fixity, public, _))
+                if self.def_map.same_scope(module, self.module) || *public =>
+            {
+                Some(*fixity)
+            }
             _ => Some(Fixity::DEFAULT),
         }
     }
@@ -1229,7 +1258,10 @@ impl<'a> Resolver<'a> {
     /// パス全体を書いた修飾子の代わりに使える修飾子を示すのに使う (docs/spec/modules.md の「import」)。
     pub fn qualifiers_of(&self, module: &str) -> Vec<&'a str> {
         let mut names: Vec<&'a str> = Vec::new();
-        for bound in &self.own().imports.qualifiers {
+        let bounds = self
+            .import_scopes()
+            .flat_map(|scope| &scope.imports.qualifiers);
+        for bound in bounds {
             let ImportTarget::Module(target) = bound.target else {
                 continue;
             };
@@ -1307,17 +1339,34 @@ impl<'a> Resolver<'a> {
         if unusable {
             return Resolved::Silent(Silence::Unusable);
         }
-        let mut found = Vec::new();
-        let mut broken = false;
-        for source in V::imported(&own.imports).get(name).into_iter().flatten() {
-            match source.item.map(&kind) {
-                None => broken = true,
-                Some(None) => {}
-                Some(Some(item)) => add(&mut found, item, Some(source.import)),
-            }
+        // 前の入力のトップレベルは、新しい入力から順に引き、その名前を定義する最も新しいモジュールで止まる。種類で
+        // 絞って古い版まで探すと、定義し直した名前の古い版が戻ってくるためである
+        // (docs/superpowers/specs/2026-10-15-s11a-repl-session-design.md の「名前解決」)
+        for scope in self.earlier_sessions() {
+            let Some(definitions) = V::definitions(scope).get(name) else {
+                continue;
+            };
+            return match definitions.iter().find(|definition| definition.usable) {
+                Some(definition) => {
+                    kind(definition.item).map_or(Resolved::NotFound, Resolved::Found)
+                }
+                None => Resolved::Silent(Silence::Unusable),
+            };
         }
-        if let Some(resolved) = decide(found, broken) {
-            return resolved;
+        // import の並びの名前は入力ごとに引く。曖昧さは1つの入力の import の中でだけ数える
+        for scope in self.import_scopes() {
+            let mut found = Vec::new();
+            let mut broken = false;
+            for source in V::imported(&scope.imports).get(name).into_iter().flatten() {
+                match source.item.map(&kind) {
+                    None => broken = true,
+                    Some(None) => {}
+                    Some(Some(item)) => add(&mut found, item, Some((scope.file, source.import))),
+                }
+            }
+            if let Some(resolved) = decide(found, broken) {
+                return resolved;
+            }
         }
         let from_prelude = self.prelude().and_then(|prelude| {
             V::definitions(prelude)
@@ -1330,9 +1379,31 @@ impl<'a> Resolver<'a> {
         match from_prelude {
             Some(item) => Resolved::Found(item),
             // 部品の分からない `T(..)` は Prelude の名前を隠さない。名前を知らないので、どの名前を隠すかも決まらない
-            None if V::unknown(&own.imports) => Resolved::Silent(Silence::Broken),
+            None if self.import_scopes().any(|scope| V::unknown(&scope.imports)) => {
+                Resolved::Silent(Silence::Broken)
+            }
             None => Resolved::NotFound,
         }
+    }
+
+    /// 自分より前のセッションのモジュールを、新しい入力から順に並べる。セッションのモジュールは番号 1 から入力の順に
+    /// 並ぶ (`Loaded::modules`)。自分がセッションのモジュールでなければ空である。
+    fn earlier_sessions(&self) -> impl Iterator<Item = &'a ModuleScope> + 'a {
+        let def_map = self.def_map;
+        let start = if self.own().origin.session().is_some() {
+            index(self.module)
+        } else {
+            0
+        };
+        (1..start)
+            .rev()
+            .map(move |module| &def_map.modules[module])
+            .take_while(|scope| scope.origin.session().is_some())
+    }
+
+    /// import を引くモジュール。自分と、自分より前のセッションのモジュールを、新しい入力から順に並べる。
+    fn import_scopes(&self) -> impl Iterator<Item = &'a ModuleScope> + 'a {
+        std::iter::once(self.own()).chain(self.earlier_sessions())
     }
 
     /// 修飾子のモジュールだけを引く。合流した修飾子では、すべてのモジュールを合わせて引く (docs/spec/modules.md の
@@ -1388,15 +1459,21 @@ impl<'a> Resolver<'a> {
     /// 持たない (docs/spec/modules.md の「Prelude」)。どの import も作らない修飾子は、ユーザーのモジュールでだけ、同じ
     /// 短い名前の標準ライブラリのモジュールを指す (docs/spec/modules.md の「名前の解決」と「標準ライブラリ」)。import していないユーザーのモジュールは、修飾子にならない。標準ライブラリの
     /// モジュールどうしは import で明示して使い、依存がすべて import に現れるようにする (循環の検査 E1027 のため)。
-    fn targets(&self, qualifier: &str) -> Vec<(ImportTarget, Option<TextRange>)> {
-        let mut targets: Vec<(ImportTarget, Option<TextRange>)> = self
-            .own()
-            .imports
-            .qualifiers
-            .iter()
-            .filter(|bound| bound.name == qualifier)
-            .map(|bound| (bound.target, Some(bound.import)))
-            .collect();
+    fn targets(&self, qualifier: &str) -> Vec<(ImportTarget, ImportAt)> {
+        // セッションでは、その修飾子を与える最も新しい入力の import だけを使う
+        let mut targets: Vec<(ImportTarget, ImportAt)> = self
+            .import_scopes()
+            .map(|scope| {
+                scope
+                    .imports
+                    .qualifiers
+                    .iter()
+                    .filter(|bound| bound.name == qualifier)
+                    .map(|bound| (bound.target, Some((scope.file, bound.import))))
+                    .collect::<Vec<_>>()
+            })
+            .find(|targets| !targets.is_empty())
+            .unwrap_or_default();
         if self
             .prelude()
             .is_some_and(|prelude| prelude.name == qualifier)

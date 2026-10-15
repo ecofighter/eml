@@ -8,6 +8,10 @@ use crate::program::{ClassId, ConstructorId, EffectId, TypeDefId};
 /// ID から表示名を引く表。2つ以上のモジュールが定義する名前だけを、`Prelude.Bool` のようにモジュール名で修飾する。
 /// 標準ライブラリのモジュールの名前は正式な名前 (`Std.Fs`) なので、短い名前の修飾子とは違う `Std.Fs.File` になる。
 /// ユーザーのモジュールの `Fs` と見分けるため。
+///
+/// REPL のセッションは1つの定義元と数え、セッションの item は修飾しない。定義し直された item の古い版には、定義した
+/// 入力の番号を付ける (`T#1`)。最新の版には付けない。利用者が今その名前で書けるものを、印なしで見せるためである
+/// (docs/superpowers/specs/2026-10-15-s11a-repl-session-design.md の「版」)。
 #[derive(Debug, Clone)]
 pub struct DisplayNames {
     types: HashMap<TypeDefId, String>,
@@ -18,46 +22,58 @@ pub struct DisplayNames {
     unit: String,
 }
 
+/// item を定義したもの。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub(crate) enum Definer<'a> {
+    /// モジュールの名前。
+    Module(&'a str),
+    /// セッションの入力の番号。
+    Session(u32),
+}
+
 impl DisplayNames {
-    /// `(ID, 定義したモジュールの名前, 名前)` の並びから作る。`def_map` もプログラムを作らない単体テストも、この作り方を使う。
-    pub fn new<'a>(
-        types: impl IntoIterator<Item = (TypeDefId, &'a str, &'a str)>,
-        effects: impl IntoIterator<Item = (EffectId, &'a str, &'a str)>,
-        constructors: impl IntoIterator<Item = (ConstructorId, &'a str, &'a str)>,
-        classes: impl IntoIterator<Item = (ClassId, &'a str, &'a str)>,
+    /// `(ID, 定義したもの, 名前)` の並びから作る。
+    pub(crate) fn new<'a>(
+        types: impl IntoIterator<Item = (TypeDefId, Definer<'a>, &'a str)>,
+        effects: impl IntoIterator<Item = (EffectId, Definer<'a>, &'a str)>,
+        constructors: impl IntoIterator<Item = (ConstructorId, Definer<'a>, &'a str)>,
+        classes: impl IntoIterator<Item = (ClassId, Definer<'a>, &'a str)>,
         unit: TypeDefId,
     ) -> DisplayNames {
-        let types: Vec<(TypeDefId, &str, &str)> = types.into_iter().collect();
-        let effects: Vec<(EffectId, &str, &str)> = effects.into_iter().collect();
-        let constructors: Vec<(ConstructorId, &str, &str)> = constructors.into_iter().collect();
-        let classes: Vec<(ClassId, &str, &str)> = classes.into_iter().collect();
+        let types: Vec<(TypeDefId, Definer, &str)> = types.into_iter().collect();
+        let effects: Vec<(EffectId, Definer, &str)> = effects.into_iter().collect();
+        let constructors: Vec<(ConstructorId, Definer, &str)> = constructors.into_iter().collect();
+        let classes: Vec<(ClassId, Definer, &str)> = classes.into_iter().collect();
         // 型、エフェクト、クラスは同じ名前空間にあるので合わせて数える (docs/spec/modules.md の「名前空間」)
-        let type_definers = definers(
+        let type_definers = Definers::new(
             types
                 .iter()
-                .map(|&(_, module, name)| (module, name))
-                .chain(effects.iter().map(|&(_, module, name)| (module, name)))
-                .chain(classes.iter().map(|&(_, module, name)| (module, name))),
+                .map(|&(_, definer, name)| (definer, name))
+                .chain(effects.iter().map(|&(_, definer, name)| (definer, name)))
+                .chain(classes.iter().map(|&(_, definer, name)| (definer, name))),
         );
-        let constructor_definers =
-            definers(constructors.iter().map(|&(_, module, name)| (module, name)));
+        let constructor_definers = Definers::new(
+            constructors
+                .iter()
+                .map(|&(_, definer, name)| (definer, name)),
+        );
         let types: HashMap<TypeDefId, String> = types
             .iter()
-            .map(|&(id, module, name)| (id, shown(&type_definers, module, name)))
+            .map(|&(id, definer, name)| (id, type_definers.shown(definer, name)))
             .collect();
         let unit = types[&unit].clone();
         DisplayNames {
             effects: effects
                 .iter()
-                .map(|&(id, module, name)| (id, shown(&type_definers, module, name)))
+                .map(|&(id, definer, name)| (id, type_definers.shown(definer, name)))
                 .collect(),
             constructors: constructors
                 .iter()
-                .map(|&(id, module, name)| (id, shown(&constructor_definers, module, name)))
+                .map(|&(id, definer, name)| (id, constructor_definers.shown(definer, name)))
                 .collect(),
             classes: classes
                 .iter()
-                .map(|&(id, module, name)| (id, shown(&type_definers, module, name)))
+                .map(|&(id, definer, name)| (id, type_definers.shown(definer, name)))
                 .collect(),
             types,
             unit,
@@ -86,21 +102,39 @@ impl DisplayNames {
     }
 }
 
-/// 名前ごとの、その名前を定義するモジュール。同じモジュールの中の重複 (E1003) は1つと数える。
-fn definers<'a>(
-    items: impl Iterator<Item = (&'a str, &'a str)>,
-) -> HashMap<&'a str, HashSet<&'a str>> {
-    let mut definers: HashMap<&str, HashSet<&str>> = HashMap::new();
-    for (module, name) in items {
-        definers.entry(name).or_default().insert(module);
-    }
-    definers
+/// 1つの名前空間の、名前ごとの定義元。
+struct Definers<'a> {
+    /// 名前を定義するモジュール。セッションは `None` の1つと数える。同じモジュールの中の重複 (E1003) も1つと数える。
+    modules: HashMap<&'a str, HashSet<Option<&'a str>>>,
+    /// 名前を定義するセッションの入力の、最も新しい番号。
+    latest: HashMap<&'a str, u32>,
 }
 
-fn shown(definers: &HashMap<&str, HashSet<&str>>, module: &str, name: &str) -> String {
-    if definers[name].len() > 1 {
-        format!("{module}.{name}")
-    } else {
-        name.to_string()
+impl<'a> Definers<'a> {
+    fn new(items: impl Iterator<Item = (Definer<'a>, &'a str)>) -> Definers<'a> {
+        let mut modules: HashMap<&str, HashSet<Option<&str>>> = HashMap::new();
+        let mut latest: HashMap<&str, u32> = HashMap::new();
+        for (definer, name) in items {
+            match definer {
+                Definer::Module(module) => {
+                    modules.entry(name).or_default().insert(Some(module));
+                }
+                Definer::Session(number) => {
+                    modules.entry(name).or_default().insert(None);
+                    let newest = latest.entry(name).or_insert(number);
+                    *newest = (*newest).max(number);
+                }
+            }
+        }
+        Definers { modules, latest }
+    }
+
+    fn shown(&self, definer: Definer, name: &str) -> String {
+        match definer {
+            Definer::Session(number) if number < self.latest[name] => format!("{name}#{number}"),
+            Definer::Session(_) => name.to_string(),
+            Definer::Module(module) if self.modules[name].len() > 1 => format!("{module}.{name}"),
+            Definer::Module(_) => name.to_string(),
+        }
     }
 }

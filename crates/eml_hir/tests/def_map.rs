@@ -272,7 +272,7 @@ fn merged_qualifiers_and_imported_names_count_distinct_definitions() {
         panic!("`z` is ambiguous");
     };
     assert_eq!(imports.len(), 2);
-    assert!(imports[0].start() < imports[1].start());
+    assert!(imports[0].1.start() < imports[1].1.start());
     assert_eq!(resolver.qualifier_modules("Q"), ["A", "B"]);
 }
 

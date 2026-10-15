@@ -619,7 +619,12 @@ fn unknown_qualifier(
 }
 
 /// E1028。secondary は、別々の定義をそれぞれ持ち込んだ import である (docs/spec/modules.md の「名前の解決」)。
-pub(super) fn ambiguous(file: FileId, at: &NameUse<'_>, imports: &[TextRange]) -> Diagnostic {
+/// セッションでは前の入力の import を指しうるので、import はファイルと組で受け取る。
+pub(super) fn ambiguous(
+    file: FileId,
+    at: &NameUse<'_>,
+    imports: &[(FileId, TextRange)],
+) -> Diagnostic {
     let diagnostic = Diagnostic::error(
         codes::AMBIGUOUS_NAME,
         format!("`{}` is ambiguous", at.written()),
@@ -629,11 +634,13 @@ pub(super) fn ambiguous(file: FileId, at: &NameUse<'_>, imports: &[TextRange]) -
             "this name refers to more than one definition",
         ),
     );
-    imports.iter().fold(diagnostic, |diagnostic, &import| {
-        diagnostic.with_secondary(Label::new(
-            file,
-            import,
-            "one of the definitions is imported here",
-        ))
-    })
+    imports
+        .iter()
+        .fold(diagnostic, |diagnostic, &(import_file, import)| {
+            diagnostic.with_secondary(Label::new(
+                import_file,
+                import,
+                "one of the definitions is imported here",
+            ))
+        })
 }

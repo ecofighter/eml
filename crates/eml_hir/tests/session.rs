@@ -3,10 +3,11 @@
 
 use eml_diagnostics::sort_diagnostics;
 use eml_hir::{
-    DefMap, ImportCache, ImportTarget, Loaded, ModuleId, ModuleOrigin, ModulePath, Program,
-    SessionInput,
+    Assoc, ConstructorId, DefMap, Fixity, ImportCache, ImportTarget, Loaded, ModuleId,
+    ModuleOrigin, ModulePath, NameRef, Program, Resolved, SessionInput, TypeDefId,
 };
-use eml_test_support::{MemorySource, located};
+use eml_test_support::{MemorySource, full_with_paths, located};
+use la_arena::{Idx, RawIdx};
 
 /// 入力は (入力の番号, テキスト)。
 fn inputs<'a>(texts: &[(u32, &'a str)]) -> Vec<SessionInput<'a>> {
@@ -75,6 +76,8 @@ struct Lowered {
     def_map: DefMap,
     program: Program,
     diagnostics: Vec<String>,
+    /// ラベル、note、help まで、位置に表示のパスを付けた診断。
+    report: String,
 }
 
 fn lower(texts: &[(u32, &str)], modules: &[(&str, &str)]) -> Lowered {
@@ -90,6 +93,7 @@ fn lower(texts: &[(u32, &str)], modules: &[(&str, &str)]) -> Lowered {
     let (program, stage) = eml_hir::lower(&def_map, &loaded.modules);
     diagnostics.extend(stage);
     sort_diagnostics(&mut diagnostics);
+    let report = full_with_paths(&loaded.files, &diagnostics);
     let diagnostics = diagnostics
         .iter()
         .map(|d| {
@@ -106,6 +110,36 @@ fn lower(texts: &[(u32, &str)], modules: &[(&str, &str)]) -> Lowered {
         def_map,
         program,
         diagnostics,
+        report,
+    }
+}
+
+impl Lowered {
+    fn module(&self, name: &str) -> ModuleId {
+        module_named(&self.loaded, name)
+    }
+
+    /// `module` で修飾しない値の名前を引き、見つかった item を定義したモジュールの名前を返す。
+    fn value_in(&self, module: &str, name: &str) -> Option<&str> {
+        let Resolved::Found(item) = self
+            .def_map
+            .resolver(self.module(module))
+            .value(NameRef::Plain(name))
+        else {
+            return None;
+        };
+        Some(self.def_map.module_name(item.module()))
+    }
+
+    /// `module` の `index` 番の型の表示名。
+    fn type_name(&self, module: &str, index: u32) -> &str {
+        let id = TypeDefId::new(self.module(module), Idx::from_raw(RawIdx::from(index)));
+        self.program.names.ty(id)
+    }
+
+    fn constructor_name(&self, module: &str, index: u32) -> &str {
+        let id = ConstructorId::new(self.module(module), Idx::from_raw(RawIdx::from(index)));
+        self.program.names.constructor(id)
     }
 }
 
@@ -217,4 +251,225 @@ fn a_session_has_no_main() {
     assert_eq!(lowered.program.entry, lowered.def_map.entry());
     // セッションでは `check_main` を当てないので、`main` を入口の関数として探さない
     assert_eq!(lowered.program.main(), None);
+}
+
+const A_AND_B: &[(&str, &str)] = &[
+    ("A.em", "pub x : Int\nx = 1"),
+    ("B.em", "pub x : Int\nx = 2"),
+];
+
+#[test]
+fn later_inputs_see_earlier_definitions_without_pub() {
+    let lowered = lower(&[(1, "f : Int\nf = 1"), (2, "g : Int\ng = f")], &[]);
+    assert!(lowered.diagnostics.is_empty(), "{:?}", lowered.diagnostics);
+    assert_eq!(lowered.value_in("<input 2>", "f"), Some("<input 1>"));
+}
+
+#[test]
+fn the_newest_version_wins_and_is_not_a_duplicate() {
+    let lowered = lower(
+        &[
+            (1, "f : Int\nf = 1"),
+            (2, "f : Int\nf = 2"),
+            (3, "g : Int\ng = f"),
+        ],
+        &[],
+    );
+    assert!(lowered.diagnostics.is_empty(), "{:?}", lowered.diagnostics);
+    assert_eq!(lowered.value_in("<input 3>", "f"), Some("<input 2>"));
+    // 1つの入力の中の重複は、今と同じく E1003 である
+    let lowered = lower(&[(1, "data T = | A\ndata T = | B")], &[]);
+    assert_eq!(
+        lowered.diagnostics,
+        ["<input 1> 2:6 E1003 `T` is defined more than once"]
+    );
+}
+
+#[test]
+fn earlier_inputs_do_not_see_later_ones() {
+    let lowered = lower(&[(1, "g : Int\ng = h"), (2, "h : Int\nh = 1")], &[]);
+    assert_eq!(
+        lowered.diagnostics,
+        ["<input 1> 2:5 E1001 cannot find value `h`"]
+    );
+}
+
+#[test]
+fn the_newest_definer_stops_the_lookup_whatever_its_kind() {
+    // 操作 `ask` を関数に定義し直した後の handler の節は、古い操作を見つけない
+    let lowered = lower(
+        &[
+            (1, "effect Ask where\n  ask : Unit -> Int"),
+            (2, "ask : Int -> Int\nask x = x"),
+            (
+                3,
+                "f : Unit -> Int\nf () = handle 1 with\n  | ask () k -> k 1",
+            ),
+        ],
+        &[],
+    );
+    insta::assert_snapshot!(lowered.diagnostics.join("\n"), @"<input 3> 3:5 E1001 cannot find effect operation `ask`");
+    // クラス `C` を型に定義し直した後の instance の頭は、古いクラスを見つけない
+    let lowered = lower(
+        &[
+            (1, "class C a where\n  m : a -> Int"),
+            (2, "data C = | C1"),
+            (3, "instance C Int where\n  m _ = 1"),
+        ],
+        &[],
+    );
+    insta::assert_snapshot!(lowered.diagnostics.join("\n"), @"<input 3> 1:10 E1041 `C` is not a class");
+}
+
+#[test]
+fn imports_are_looked_up_per_input_newest_first() {
+    let lowered = lower(
+        &[
+            (1, "import A (x)"),
+            (2, "import B (x)"),
+            (3, "y : Int\ny = x"),
+        ],
+        A_AND_B,
+    );
+    assert!(lowered.diagnostics.is_empty(), "{:?}", lowered.diagnostics);
+    assert_eq!(lowered.value_in("<input 3>", "x"), Some("B"));
+}
+
+#[test]
+fn an_ambiguity_is_counted_within_one_input_and_points_into_its_file() {
+    let lowered = lower(
+        &[(1, "import A (x)\nimport B (x)"), (2, "y : Int\ny = x")],
+        A_AND_B,
+    );
+    insta::assert_snapshot!(lowered.report, @"
+    E1028 <input 2> 2:5 `x` is ambiguous
+      <input 2> 2:5 this name refers to more than one definition
+      <input 1> 1:1 one of the definitions is imported here
+      <input 1> 2:1 one of the definitions is imported here
+    ");
+}
+
+#[test]
+fn session_definitions_hide_imports_whatever_the_order() {
+    let lowered = lower(
+        &[
+            (1, "x : Int\nx = 0"),
+            (2, "import A (x)"),
+            (3, "y : Int\ny = x"),
+        ],
+        A_AND_B,
+    );
+    assert!(lowered.diagnostics.is_empty(), "{:?}", lowered.diagnostics);
+    assert_eq!(lowered.value_in("<input 3>", "x"), Some("<input 1>"));
+}
+
+#[test]
+fn qualifiers_come_from_the_imports_of_earlier_inputs() {
+    let lowered = lower(
+        &[
+            (1, "import A"),
+            (2, "import B as Q"),
+            (3, "y : Int\ny = A.x\n\nz : Int\nz = Q.x"),
+        ],
+        A_AND_B,
+    );
+    assert!(lowered.diagnostics.is_empty(), "{:?}", lowered.diagnostics);
+}
+
+#[test]
+fn fixities_apply_across_inputs_without_pub() {
+    let lowered = lower(
+        &[
+            (1, "infixl 6 <+>\n(<+>) : Int -> Int -> Int\na <+> b = a"),
+            (2, "y : Int\ny = 1"),
+        ],
+        &[],
+    );
+    assert!(lowered.diagnostics.is_empty(), "{:?}", lowered.diagnostics);
+    let fixity = lowered
+        .def_map
+        .resolver(lowered.module("<input 2>"))
+        .fixity(NameRef::Plain("<+>"));
+    assert_eq!(
+        fixity,
+        Some(Fixity {
+            precedence: 6,
+            assoc: Assoc::Left
+        })
+    );
+}
+
+#[test]
+fn a_fixity_needs_its_operator_in_the_same_input() {
+    let lowered = lower(
+        &[
+            (1, "(<+>) : Int -> Int -> Int\na <+> b = a"),
+            (2, "infixl 6 <+>"),
+        ],
+        &[],
+    );
+    assert_eq!(
+        lowered.diagnostics,
+        ["<input 2> 1:10 E1022 `<+>` is not defined in this input"]
+    );
+}
+
+#[test]
+fn the_orphan_rule_counts_the_session_as_one_module() {
+    let lowered = lower(
+        &[
+            (1, "class C a where\n  m : a -> Int"),
+            (2, "data T = | T"),
+            (3, "instance C T where\n  m _ = 1"),
+        ],
+        &[],
+    );
+    assert!(lowered.diagnostics.is_empty(), "{:?}", lowered.diagnostics);
+    // Prelude のクラスと Prelude の型の instance は、セッションでも orphan である
+    let lowered = lower(&[(1, "instance Show Int where\n  show _ = \"\"")], &[]);
+    insta::assert_snapshot!(lowered.diagnostics.join("\n"), @"<input 1> 1:15 E1034 an instance of `Show` for `Int` must be in the module of `Show` or of `Int`");
+}
+
+#[test]
+fn an_instance_is_not_redefined_in_a_later_input() {
+    let lowered = lower(
+        &[
+            (1, "data T = | T deriving (Show)"),
+            (2, "instance Show T where\n  show _ = \"t\""),
+        ],
+        &[],
+    );
+    insta::assert_snapshot!(lowered.diagnostics.join("\n"), @"<input 2> 1:15 E1035 `T` already has an instance of `Show`");
+}
+
+#[test]
+fn public_items_may_use_private_types_in_a_session() {
+    let lowered = lower(&[(1, "data P = | P\npub f : P -> Int\nf _ = 1")], &[]);
+    assert!(lowered.diagnostics.is_empty(), "{:?}", lowered.diagnostics);
+}
+
+#[test]
+fn old_versions_are_shown_with_their_input_number() {
+    let lowered = lower(
+        &[
+            (1, "data T = | A"),
+            (2, "data T = | B"),
+            (3, "data U = | A"),
+        ],
+        &[],
+    );
+    assert!(lowered.diagnostics.is_empty(), "{:?}", lowered.diagnostics);
+    assert_eq!(lowered.type_name("<input 1>", 0), "T#1");
+    assert_eq!(lowered.type_name("<input 2>", 0), "T");
+    assert_eq!(lowered.constructor_name("<input 1>", 0), "A#1");
+    assert_eq!(lowered.constructor_name("<input 3>", 0), "A");
+}
+
+#[test]
+fn a_session_name_is_unqualified_and_the_other_module_is_qualified() {
+    let lowered = lower(&[(1, "data Bool = | Yes")], &[]);
+    assert!(lowered.diagnostics.is_empty(), "{:?}", lowered.diagnostics);
+    assert_eq!(lowered.type_name("<input 1>", 0), "Bool");
+    let prelude_bool = lowered.program.lang.bool;
+    assert_eq!(lowered.program.names.ty(prelude_bool), "Prelude.Bool");
 }

@@ -101,7 +101,10 @@ impl ItemLowering<'_> {
         let context = self.lower_context(node.context(), &generics, ContextScope::Instance, None);
         let names = self.def_map.display_names();
         let (class_name, ty_name) = (names.class(class), names.ty(head.ty));
-        if class.module != self.module && head.ty.module != self.module {
+        // セッションのモジュールどうしは同じモジュールとみなす (`DefMap::same_scope`)
+        if !self.def_map.same_scope(class.module, self.module)
+            && !self.def_map.same_scope(head.ty.module, self.module)
+        {
             self.diagnostics.push(Diagnostic::error(
                 codes::ORPHAN_INSTANCE,
                 format!(
