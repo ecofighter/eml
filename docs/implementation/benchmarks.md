@@ -36,7 +36,7 @@
 bench/run.sh
 ```
 
-`bench/run.sh` は、release ビルドの `eml run` で各プログラムを3回走らせ、`instructions retired` と実時間の中央値を Markdown の表で出す。表の前に、測定の環境 (機種と CPU、macOS の版、`rustc -V`、コミット) を出す。コミットしていない変更があれば、コミットの後に `-dirty` が付く。プログラムが実行時エラーで止まったときと、`time -l` の出力から命令の数か実時間を読めなかったときは、その出力を見せて止まる。macOS でだけ動く。
+`bench/run.sh` は、release ビルドの CEK (`eml run`) と VM (`eml run --vm`) で各プログラムを3回ずつ走らせ、エンジンごとに `instructions retired` と実時間の中央値を Markdown の表で出す。終わりに、2つのエンジンの実行の分 (各プログラムの命令の数から `empty` の命令の数を引いた値) を比べる表を出す ([VM](../spec/vm.md) の「計測」)。表の前に、測定の環境 (機種と CPU、macOS の版、`rustc -V`、コミット) を出す。コミットしていない変更があれば、コミットの後に `-dirty` が付く。プログラムが実行時エラーで止まったときと、`time -l` の出力から命令の数か実時間を読めなかったときは、その出力を見せて止まる。macOS でだけ動く。連想配列を使うので、bash 4.3 以上 (devShell の bash) が要る。
 
 valgrind が arm64 の macOS で動かないので、callgrind は使わない。`instructions retired` は callgrind ほど決定的ではないが、S4a の設計のときに release ビルドの `fib 30` を3回測った揺れは約0.1%だった。arm64 の命令の数なので、過去の調査で x86_64 の callgrind を使って測った値とは直接比べない。
 
@@ -576,3 +576,69 @@ extern の12の計測は、S9b-3 の基準である。
 | `Vec` をそのままヒープの文字列にする | 文字列の物体に外のバッファを指す2つ目の形が要り、文字列のすべての操作が2つに分かれる |
 
 `eml_rt` は `eml run` から使わないので、`bench/run.sh` の表は測らない。`RunStats` と `crates/eml_interp/tests/bench.rs` のスナップショットも変わらない。
+
+### S10a (VM)
+
+`bench/run.sh` の記録である。S10a から、同じコミットの CEK と VM を並べて測る。
+
+- 機種: Mac16,1 (Apple M4)
+- OS: macOS 27.0.1 (26A434)
+- rustc: rustc 1.98.1 (48a229cea 2026-09-01)
+- コミット: 73e31d1
+
+CEK
+
+| プログラム | instructions retired | 実時間 (s) |
+|---|---:|---:|
+| `empty` | 29372158 | 0.00 |
+| `fib` | 862417037 | 0.03 |
+| `list` | 1602287056 | 0.06 |
+| `loop` | 1352770652 | 0.05 |
+| `state` | 1415991643 | 0.06 |
+| `tree` | 1424293454 | 0.07 |
+
+VM (S10a の間は `eml run --vm`)
+
+| プログラム | instructions retired | 実時間 (s) |
+|---|---:|---:|
+| `empty` | 29418545 | 0.00 |
+| `fib` | 114549107 | 0.00 |
+| `list` | 298780003 | 0.01 |
+| `loop` | 201877307 | 0.00 |
+| `state` | 238777235 | 0.00 |
+| `tree` | 265049017 | 0.01 |
+
+| プログラム | CEK の実行の分 | VM の実行の分 | VM / CEK |
+|---|---:|---:|---:|
+| `fib` | 833044879 | 85130562 | 0.102 |
+| `list` | 1572914898 | 269361458 | 0.171 |
+| `loop` | 1323398494 | 172458762 | 0.130 |
+| `state` | 1386619485 | 209358690 | 0.151 |
+| `tree` | 1394921296 | 235630472 | 0.169 |
+
+`empty` を除くどのプログラムでも、VM の実行の分は CEK の約 0.10〜0.17 倍で、[VM](../spec/vm.md) の「計測」の基準を満たす。`bench/run.sh` は3回流した。1回目は `bench/run.sh` の変更をコミットする前の木で、Rust のコードは同じである。`VM / CEK` の値は、3回とも小数3桁まで同じだった。この表と2回目の実行との命令の数の違いは、CEK で最大 0.22% (`tree`)、VM で最大 0.05% (`fib`) だった。
+
+`empty` は、VM が CEK より約9万命令 (約0.3%) 多い。上の2回の実行では差が約4.6万と約12.1万に振れたので、`empty` だけを2つのエンジンで交互に15回ずつ走らせた。中央値は CEK が 29378424、VM が 29471640 で、差は 93216 である。VM は、フロントエンドの後で LIR を `CodeBase` に変換するコード生成と、定数を作業用のヒープに作って凍結する費用と、`Ctx` を作る費用を払う。差は、これらの費用から、CEK が実行の前にインタプリタの状態を作る費用を引いた値で、内訳は分けて測っていない。
+
+`RunStats` は、`crates/eml_vm/tests/bench.rs` (VM の検査モード) と `crates/eml_interp/tests/bench.rs` (CEK) のスナップショットで比べる。`evidence_steps`、`yields`、`yield_frames`、`string_bytes_copied`、`boxes`、`unboxes` は、6つのプログラムのすべてで等しい。`rc_decrements` も6つのすべてで等しく、違うのは次の値だけである。
+
+| プログラム | 項目 | CEK | VM |
+|---|---|---:|---:|
+| `fib` | `peak_objects` | 26 | 2 |
+| `list` | `peak_objects` | 100002 | 100001 |
+| `state` | `peak_objects` | 7 | 4 |
+| `tree` | `rc_increments` | 14899 | 14898 |
+| `tree` | `peak_objects` | 14935 | 14900 |
+
+差の理由は、[VM](../spec/vm.md) の「`RunStats`」に挙げた4つである。
+
+- `peak_objects`: CEK はヒープの物体にしたフレームと、文字列のリテラルの物体を数える。VM のフレームはスタックにあり、リテラルは凍結した領域にあるので、どちらも数えない。代わりに、`eml_rt` の `peak_live` はヒープごとのダミーの物体を1つ含む。再帰の深さの分だけフレームが同時に生きるので、`fib` の差の大部分はフレームの分である
+- `tree` の `rc_increments`: 出力の `" "` のリテラルの参照である。CEK は `acquire_immortal` を1回数え、VM は凍結した領域の物体を数えない
+- `tree` の `rc_decrements`: 等しいのは、2つの差が打ち消し合った結果である。リテラルを除いて `size` と `fold` の結果だけを出す形に `main` を書き換えると、CEK が 266463、VM が 266464 になった。CEK はリテラルの `decref` を1回多く数え、VM はリテラルのない形でも1回多く数える。VM の1回は、`eml_rt` の `release` と `free_block` が持ち主を空けるときに数える分 (4つ目の理由) と見ているが、どの文で起きるかは確かめていない
+
+性能の調整は、基準を最初の計測で満たしたので、入れなかった。決めたことは次のとおりである。
+
+- `#[inline]`: `RUSTFLAGS="-C remark=inline"` の release ビルドで、`eml_vm` の関数に `eml_rt` の関数が「definition is unavailable」で展開されなかった所を集めた。出てきた20の関数は、どれも実行の繰り返しの外か冷えた道にある。panic で止める関数 (`too_large`、`not_an_immediate`、`not_a_descendant`、`too_many_acquires`)、Host の入出力 (`host_write_line`、`host_flush`、`host_open`、`read_text`、`StdHost::new`、`StdHost::stdio`)、`Fault` と `Stop` の表示、検査モードの走査 (`leaks`、`check_invariants`、`Pages::blocks`)、終わりの解放 (`Pages`、`HostRef`、`Arc<Control>` の `Drop`)、`Vec` の伸長、`String.show` のエスケープを探す `next_escape` である。`bench/` のプログラムの繰り返しで呼ぶ関数はないので、`eml_rt` は変えていない。そのため `bench/rt.sh` は流していない
+- ブロック引数の合併: 入れていない。[VM](../spec/vm.md) の「スロットの割り当て」が、計測しながら入れる工夫としているものである
+- 比較と分岐を1つにした命令: 入れていない。基準は大きな余裕で満たしており、命令を足すと、`Op` の種類、コード生成の形の照合、逆アセンブラ、テストが増えるためである。判断の基準 (簡潔な実装が先で、性能はその次) に従った
+- `codegen-units`: `[profile.release]` に足さず、既定の値のままにした。`codegen-units = 1` を `CARGO_PROFILE_RELEASE_CODEGEN_UNITS=1` で測ると、VM の実行の分は `state` で 14.2%、`tree` で 6.1%、`list` で 4.6%、`loop` で 1.1% 減り、`fib` で 2.5% 増えた。CEK の実行の分も 3.7〜7.8% 減った。基準は既定の値で満たしており、結果がプログラムによって違ううえ、CEK の記録との比べ方も変わるためである
