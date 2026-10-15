@@ -515,6 +515,9 @@ impl Lexer<'_> {
                 start + 2,
                 "missing closing `-}`",
             );
+            // 穴の外のコメントは行をまたげるので、閉じずに終わった入力を REPL で続ける (docs/spec/layout.md の
+            // 「REPL の入力の終わり」)。穴の中のコメントは改行の手前で止まり、穴と一緒に閉じる
+            self.open_at_end |= !in_hole;
         }
         self.push(BLOCK_COMMENT, i);
         if in_hole && depth > 0 {

@@ -233,6 +233,18 @@ fn single_line_strings_and_holes_do_not_continue() {
     complete("\"a \\{x");
 }
 
+/// 規則 1。穴の外のブロックコメントは行をまたげるので、閉じていなければ空行が来ても続く。穴の中のコメントは改行の
+/// 手前で止まって穴と一緒に閉じるので、続けない (docs/spec/lexical.md の「改行での回復」)。
+#[test]
+fn an_open_block_comment_continues() {
+    for text in ["{- a note", "{- a\n\n", "f x {- {- nested -}", "1 + 1\n{-"] {
+        incomplete(text);
+    }
+    complete("{- a\n  b -}");
+    complete("{- a -} 1 + 1");
+    complete("\"a \\{x {- note");
+}
+
 /// 規則 2。
 #[test]
 fn a_block_opening_last_token_continues() {
