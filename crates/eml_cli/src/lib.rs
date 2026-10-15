@@ -5,6 +5,7 @@
 //! 段階を選ぶので、各 crate のテストは自分より下流の crate を組み立てない (docs/implementation/testing.md)。
 
 mod fs_provider;
+pub mod lines;
 #[cfg(feature = "run")]
 mod repl;
 
