@@ -64,6 +64,13 @@ mod tests {
     fn send<T: Send>() {}
 
     #[test]
+    fn raw_bits_round_trip_through_a_word() {
+        for n in [0i64, 1, 2, -1, i64::MIN, i64::MAX] {
+            assert_eq!(Word::from_bits(n as usize).bits() as i64, n);
+        }
+    }
+
+    #[test]
     fn words_cross_threads_and_heaps_move_to_one() {
         send_and_sync::<Word>();
         send_and_sync::<Frozen<Fast>>();

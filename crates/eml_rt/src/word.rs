@@ -159,9 +159,11 @@ impl Word {
         imm_value_bits(self.0.addr())
     }
 
-    /// 整数のビット列を入れた語。数の語、`BigInt` の値、生の語をペイロードに書くときに使う。provenance は持たない。
+    /// 整数のビット列を入れた語。数の語、`BigInt` の値、生の語をペイロードに書くときと、VM が生の `int` と `enum` の値を
+    /// スロットに置くときに使う。provenance を持たないので、ポインタとして使えない
+    /// (docs/spec/vm.md の「スロットとスタック」)。
     #[inline]
-    pub(crate) const fn from_bits(bits: usize) -> (w: Word)
+    pub const fn from_bits(bits: usize) -> (w: Word)
         ensures
             w.bits_spec() == bits,
             w.ptr_spec()@.provenance == vstd::raw_ptr::Provenance::null(),
@@ -170,7 +172,7 @@ impl Word {
     }
 
     /// 語のポインタ。provenance を含む。
-    pub(crate) closed spec fn ptr_spec(self) -> *mut () {
+    pub closed spec fn ptr_spec(self) -> *mut () {
         self.0
     }
 

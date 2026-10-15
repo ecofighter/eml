@@ -445,6 +445,43 @@ impl Layout {
     }
 }
 
+/// コンストラクタのフィールドの物理的な形 (docs/spec/object-model.md の「ペイロード」)。走査する語 (`obj` と `tobj`)
+/// を宣言の順に並べ、その後に残りを宣言の順に並べる。VM と後の reuse analysis が同じ規則を使うように、規則はここに
+/// 1つだけ置く。走査する語が 255 個以上のときにペイロードの先頭に置く数の語は `eml_rt` の形なので、ここでは数えない。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Shape {
+    /// 宣言の位置ごとの、ペイロードの中の位置。
+    pub positions: Vec<u32>,
+    pub scanned: u32,
+    pub raw: u32,
+}
+
+impl LayoutCtor {
+    pub fn shape(&self) -> Shape {
+        let scanned = self.fields.iter().filter(|repr| repr.is_rc()).count() as u32;
+        let (mut next_scanned, mut next_raw) = (0, scanned);
+        let positions = self
+            .fields
+            .iter()
+            .map(|repr| {
+                let next = if repr.is_rc() {
+                    &mut next_scanned
+                } else {
+                    &mut next_raw
+                };
+                let position = *next;
+                *next += 1;
+                position
+            })
+            .collect();
+        Shape {
+            positions,
+            scanned,
+            raw: self.fields.len() as u32 - scanned,
+        }
+    }
+}
+
 /// data の値の Repr。フィールドのないコンストラクタだけなら `enum`、どれもフィールドを持てば `obj`、混ざれば `tobj`
 /// である。コンストラクタのない型は `enum` になる。
 pub fn data_repr(arities: impl IntoIterator<Item = usize>) -> Repr {

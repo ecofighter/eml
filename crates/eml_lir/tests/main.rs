@@ -6,5 +6,6 @@ mod common;
 mod boxing;
 mod contract;
 mod perceus;
+mod shape;
 mod text;
 mod verify;

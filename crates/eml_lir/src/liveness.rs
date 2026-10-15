@@ -24,11 +24,7 @@ pub fn live_in(function: &LirFn) -> Vec<Vec<VarId>> {
 
 /// 終端の後で生きている変数。終端そのものが使う変数は入らない。`return` と `tail` の後には何も残らない。`jump` は
 /// (行き先の入口 − 行き先の引数)、`switch` は各 case の (行き先の入口 − フィールド) と default の入口の和である。
-pub(crate) fn live_after_term(
-    function: &LirFn,
-    term: &Term,
-    live_in: &[Vec<VarId>],
-) -> BTreeSet<VarId> {
+pub fn live_after_term(function: &LirFn, term: &Term, live_in: &[Vec<VarId>]) -> BTreeSet<VarId> {
     let mut live = BTreeSet::new();
     let mut add = |target: BlockId, bound: &[VarId]| {
         live.extend(
@@ -59,8 +55,8 @@ pub(crate) fn live_after_term(
 }
 
 /// 文の前で生きている変数に更新する。`dup`、`decref`、`release` も変数を使うものとして数え、Perceus の後の IR にも
-/// 使えるようにする。
-pub(crate) fn step_back(stmt: &Stmt, live: &mut BTreeSet<VarId>) {
+/// 使えるようにする。VM のスロットの割り当てが、文の単位の干渉を作るのに使う (docs/spec/vm.md の「スロットの割り当て」)。
+pub fn step_back(stmt: &Stmt, live: &mut BTreeSet<VarId>) {
     for var in stmt.defs() {
         live.remove(var);
     }
@@ -85,7 +81,7 @@ pub(crate) fn step_back(stmt: &Stmt, live: &mut BTreeSet<VarId>) {
     }
 }
 
-pub(crate) fn insert_var(live: &mut BTreeSet<VarId>, atom: Atom) {
+pub fn insert_var(live: &mut BTreeSet<VarId>, atom: Atom) {
     if let Atom::Var(var) = atom {
         live.insert(var);
     }
