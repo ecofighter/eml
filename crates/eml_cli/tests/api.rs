@@ -414,9 +414,10 @@ fn each_input_clears_the_stop_bits() {
 }
 
 /// 確保量の上限で止まると `MEMORY` のビットが残る。`()` は何も確保しないが、`entry$` の呼び出しの安全点を通るので、
-/// ビットが残っていれば止まる。
+/// ビットが残っていれば止まる。失敗した実行が残したページは確保量に数えられたままなので、大きな確保をする入力は、
+/// S11b の回復までまた止まる (docs/spec/object-model.md の「実行の制御」)。
 #[test]
-fn the_session_continues_after_the_memory_limit() {
+fn the_memory_stop_bit_is_cleared_for_the_next_input() {
     for debug_heap in [true, false] {
         let control = Arc::new(Control::new(Limits {
             max_bytes: 1 << 22,
@@ -538,9 +539,11 @@ fn a_runtime_error_inside_a_handler_leaves_no_handler_behind() {
         assert_eq!(outcome, Outcome::Accepted, "{codes:?}");
         let (outcome, _, _) = console.eval("handle 1 / (tick () - 5) with\n  | tick () k -> k 5");
         assert!(matches!(outcome, Outcome::Failed(_)), "{outcome:?}");
-        let (_, output, codes) =
+        // evv が残っていれば、表示の後の終わりの確かめで `Broken` になる
+        let (outcome, output, codes) =
             console.eval("handle tick () + tick () with\n  | tick () k -> k 2");
-        assert_eq!(output, "4\n", "{codes:?}");
+        assert_eq!(outcome, Outcome::Accepted, "{codes:?}");
+        assert_eq!(output, "4\n");
     }
 }
 
