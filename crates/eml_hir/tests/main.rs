@@ -16,6 +16,7 @@ mod lower;
 mod operators;
 mod records;
 mod scaling;
+mod session;
 mod strings;
 mod structure;
 mod tuples;

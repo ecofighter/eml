@@ -3,7 +3,7 @@
 use std::fmt::Write;
 
 use crate::hir::*;
-use crate::program::{Module, ModuleId, ModuleOrigin, Program};
+use crate::program::{Module, ModuleId, Program};
 
 /// ユーザーのモジュールを番号の順に表示する。標準ライブラリのモジュールはどのプログラムにもあるので、テストの表示に
 /// 出さない。見出しはモジュールが2つ以上のときだけ付け、1ファイルのテストの表示を変えない。
@@ -11,7 +11,7 @@ pub fn pretty(program: &Program) -> String {
     let modules: Vec<&Module> = program
         .modules
         .iter()
-        .filter(|&(_, module)| module.origin == ModuleOrigin::User)
+        .filter(|&(_, module)| !module.origin.is_std())
         .map(|(_, module)| module)
         .collect();
     let mut out = String::new();

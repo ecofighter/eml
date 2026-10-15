@@ -167,9 +167,14 @@ pub struct DefMap {
     names: DisplayNames,
 }
 
-/// モジュール 0 を Prelude、1 を入口として読む。値と型の名前空間の重複 (E1003)、fixity の重複 (E1021)、このモジュールに
-/// ない演算子の fixity (E1022)、import の並びの名前 (E1001、E1002、E1029)、import の循環 (E1027) を出す。
+/// モジュール 0 を Prelude として読む。入口は、セッションでは最後のセッションのモジュール (今の入力)、ファイルでは 1 である
+/// (`Loaded::modules`)。値と型の名前空間の重複 (E1003)、fixity の重複 (E1021)、このモジュールにない演算子の fixity
+/// (E1022)、import の並びの名前 (E1001、E1002、E1029)、import の循環 (E1027) を出す。
 pub fn def_map(modules: &[LoadedModule]) -> (DefMap, Vec<Diagnostic>) {
+    let entry = modules
+        .iter()
+        .rposition(|module| module.origin.session().is_some())
+        .unwrap_or(1);
     let mut diagnostics = Vec::new();
     let mut scopes: Vec<ModuleScope> = modules
         .iter()
@@ -206,7 +211,7 @@ pub fn def_map(modules: &[LoadedModule]) -> (DefMap, Vec<Diagnostic>) {
         DefMap {
             modules: scopes,
             prelude: module_id(0),
-            entry: module_id(1),
+            entry: module_id(entry),
             std_short_names,
             lang,
             externs,
@@ -645,7 +650,7 @@ impl ModuleScope {
             .types
             .get(name)
             .and_then(|names| names.first())
-            .filter(|definition| definition.public || self.origin == ModuleOrigin::User)
+            .filter(|definition| definition.public || !self.origin.is_std())
         else {
             let diagnostic = not_in_module(
                 codes::UNDEFINED_TYPE,
@@ -1399,7 +1404,7 @@ impl<'a> Resolver<'a> {
             targets.push((ImportTarget::Module(self.def_map.prelude), None));
         }
         if targets.is_empty()
-            && self.own().origin == ModuleOrigin::User
+            && !self.own().origin.is_std()
             && let Some(&module) = self.def_map.std_short_names.get(qualifier)
         {
             targets.push((ImportTarget::Module(module), None));

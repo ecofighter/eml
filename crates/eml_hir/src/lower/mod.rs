@@ -273,7 +273,7 @@ impl<'a> ItemLowering<'a> {
                     .unwrap_or_else(|| panic!("`{canonical}` is not in the extern table"));
                 Some(row)
             }
-            ModuleOrigin::User => {
+            ModuleOrigin::User | ModuleOrigin::Session(_) => {
                 self.diagnostics
                     .push(extern_outside_std(self.file, keyword));
                 None

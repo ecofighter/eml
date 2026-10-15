@@ -56,8 +56,48 @@ pub struct Loaded {
     pub prelude: FileId,
     pub entry: FileId,
     /// 番号が `ModuleId` で、`FileId` の番号とも一致する。0 が Prelude、1 が入口、2 から Prelude を除く標準ライブラリの
-    /// モジュールが埋め込んだ並びの順に続き、その後にユーザーの import を見つけた順に並ぶ。
+    /// モジュールが埋め込んだ並びの順に続き、その後にユーザーの import を見つけた順に並ぶ。セッション (`load_session`)
+    /// では、1 からセッションのモジュールが入力の順に並び、最後の今の入力が入口である。その後に Prelude を除く標準
+    /// ライブラリ、import を見つけた順のモジュールが続く。
     pub modules: Vec<LoadedModule>,
+}
+
+/// REPL のセッションの1つの入力。
+#[derive(Debug, Clone, Copy)]
+pub struct SessionInput<'a> {
+    pub number: u32,
+    pub text: &'a str,
+}
+
+/// セッションの import が解決した先と本文。後の入力でも同じモジュールを読むために持つ。ディスクのファイルが変わっても
+/// セッションの中のモジュールは変わらない。読み直すと、同じ名前の関数が違うコードになるためである
+/// (docs/superpowers/specs/2026-10-15-s11a-repl-session-design.md の「並びと読み込み」)。
+#[derive(Debug, Clone, Default)]
+pub struct ImportCache {
+    entries: HashMap<ModulePath, Cached>,
+}
+
+#[derive(Debug, Clone)]
+enum Cached {
+    /// ユーザーの根のファイルの本文。
+    User(String),
+    /// ユーザーの根にファイルがなく (`NotFound`)、同じ名前の標準ライブラリのモジュールに落ちた。
+    Std,
+}
+
+impl ImportCache {
+    /// `other` の項目を足す。REPL は、入力を受け付けたときにだけ、その入力で読んだものを足す。
+    pub fn extend(&mut self, other: ImportCache) {
+        self.entries.extend(other.entries);
+    }
+
+    pub fn contains(&self, path: &ModulePath) -> bool {
+        self.entries.contains_key(path)
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.entries.is_empty()
+    }
 }
 
 /// 埋め込んだ標準ライブラリ (`STD`) で `load_with_std` を呼ぶ。診断は構文解析、`ItemTree`、E1026、E1030 のもの。
@@ -82,52 +122,38 @@ pub fn load_with_std(
         Some(slash) => entry_path.split_at(slash + 1),
         None => ("", entry_path),
     };
-    let mut loader = Loader {
-        root,
-        entry_file,
-        source,
-        files: SourceFiles::new(),
-        modules: Vec::new(),
-        by_path: HashMap::new(),
-        diagnostics: Vec::new(),
-    };
-    let prelude_text = std
-        .iter()
-        .find(|&&(file, _)| file == PRELUDE_FILE)
-        .map(|&(_, text)| text)
-        .expect("the standard library has Prelude.em");
-    let prelude = loader.add_std(
-        PRELUDE_FILE,
-        PRELUDE,
-        PRELUDE_PATH.to_string(),
-        prelude_text,
-    );
+    let cache = ImportCache::default();
+    let mut loader = Loader::new(root, entry_file, source, &cache);
+    let prelude = loader.add_prelude(std);
     let entry = loader.add(MAIN, entry_path.to_string(), entry_text, ModuleOrigin::User);
-    for &(file, text) in std.iter().filter(|&&(file, _)| file != PRELUDE_FILE) {
-        let name = format!("{STD_ROOT}.{}", std_path(file).dotted());
-        loader.add_std(file, &name, std_shown(file), text);
+    loader.add_std_modules(std);
+    let (loaded, diagnostics, _) = loader.finish(prelude, entry);
+    (loaded, diagnostics)
+}
+
+/// REPL のセッションを読む。受け付けた入力と今の入力 (最後) をセッションのモジュールにし、今の入力を入口にする
+/// (docs/superpowers/specs/2026-10-15-s11a-repl-session-design.md の「並びと読み込み」)。`root` は import の表示の
+/// パスの前に付けるディレクトリ (`/` で終わるか空) である。ユーザーの import は、`cache` にあればその先と本文を使い、
+/// なければ `source` から読む。返す `ImportCache` は、この呼び出しで新しく読んだものだけを持つ。
+pub fn load_session(
+    std: &[(&str, &str)],
+    inputs: &[SessionInput<'_>],
+    root: &str,
+    source: &dyn ModuleSource,
+    cache: &ImportCache,
+) -> (Loaded, Vec<Diagnostic>, ImportCache) {
+    // セッションには入口のファイルがないので、入口を import する誤り (E1030 の `Entry`) は起きない
+    let mut loader = Loader::new(root, "", source, cache);
+    let prelude = loader.add_prelude(std);
+    let mut entry = None;
+    for input in inputs {
+        let name = format!("<input {}>", input.number);
+        let origin = ModuleOrigin::Session(input.number);
+        entry = Some(loader.add(&name, name.clone(), input.text, origin));
     }
-    // 見つけたモジュールを `modules` の末尾に足すので、前から順に処理すれば幅優先になる
-    let mut next = 0;
-    while next < loader.modules.len() {
-        loader.resolve_imports(next);
-        next += 1;
-    }
-    let Loader {
-        files,
-        modules,
-        diagnostics,
-        ..
-    } = loader;
-    (
-        Loaded {
-            files,
-            prelude,
-            entry,
-            modules,
-        },
-        diagnostics,
-    )
+    let entry = entry.expect("a session has the current input");
+    loader.add_std_modules(std);
+    loader.finish(prelude, entry)
 }
 
 /// 標準ライブラリのファイル名 (`Fs.em`) を、`std/` からのモジュールのパスにする。
@@ -156,6 +182,10 @@ struct Loader<'a> {
     /// モジュールを入れる。同じパスでユーザーの根を何度も探さないためである (docs/spec/modules.md の「標準ライブラリ」)。
     by_path: HashMap<(ModuleOrigin, ModulePath), ModuleId>,
     diagnostics: Vec<Diagnostic>,
+    /// セッションの前の入力までに読んだ import。ファイルの読み込みでは空である。
+    cache: &'a ImportCache,
+    /// この読み込みで新しく読んだ import。
+    read: ImportCache,
 }
 
 /// import できないモジュール。
@@ -171,7 +201,66 @@ enum Reserved {
     Entry,
 }
 
-impl Loader<'_> {
+impl<'a> Loader<'a> {
+    fn new(
+        root: &'a str,
+        entry_file: &'a str,
+        source: &'a dyn ModuleSource,
+        cache: &'a ImportCache,
+    ) -> Loader<'a> {
+        Loader {
+            root,
+            entry_file,
+            source,
+            files: SourceFiles::new(),
+            modules: Vec::new(),
+            by_path: HashMap::new(),
+            diagnostics: Vec::new(),
+            cache,
+            read: ImportCache::default(),
+        }
+    }
+
+    fn add_prelude(&mut self, std: &[(&str, &str)]) -> FileId {
+        let text = std
+            .iter()
+            .find(|&&(file, _)| file == PRELUDE_FILE)
+            .map(|&(_, text)| text)
+            .expect("the standard library has Prelude.em");
+        self.add_std(PRELUDE_FILE, PRELUDE, PRELUDE_PATH.to_string(), text)
+    }
+
+    fn add_std_modules(&mut self, std: &[(&str, &str)]) {
+        for &(file, text) in std.iter().filter(|&&(file, _)| file != PRELUDE_FILE) {
+            let name = format!("{STD_ROOT}.{}", std_path(file).dotted());
+            self.add_std(file, &name, std_shown(file), text);
+        }
+    }
+
+    /// import をたどり終えて、読み込みの結果にする。
+    fn finish(mut self, prelude: FileId, entry: FileId) -> (Loaded, Vec<Diagnostic>, ImportCache) {
+        // 見つけたモジュールを `modules` の末尾に足すので、前から順に処理すれば幅優先になる
+        let mut next = 0;
+        while next < self.modules.len() {
+            self.resolve_imports(next);
+            next += 1;
+        }
+        let Loader {
+            files,
+            modules,
+            diagnostics,
+            read,
+            ..
+        } = self;
+        let loaded = Loaded {
+            files,
+            prelude,
+            entry,
+            modules,
+        };
+        (loaded, diagnostics, read)
+    }
+
     fn add(&mut self, name: &str, path: String, text: &str, origin: ModuleOrigin) -> FileId {
         let file = self.files.add(path, text);
         let (parse, errors) = eml_syntax::parse(file, self.files.text(file));
@@ -225,7 +314,7 @@ impl Loader<'_> {
             // 標準ライブラリはユーザーの根に左右されないよう、`std/` だけを探す。`import Fs` と `import Std.Fs` の
             // どちらでも書ける (docs/spec/modules.md の「標準ライブラリ」)
             (ModuleOrigin::Std, None) => self.std_target(file, import, &import.path),
-            (ModuleOrigin::User, None) => self.user_target(file, import),
+            (ModuleOrigin::User | ModuleOrigin::Session(_), None) => self.user_target(file, import),
         }
     }
 
@@ -238,10 +327,11 @@ impl Loader<'_> {
         if let Some(&id) = self.by_path.get(&key) {
             return ImportTarget::Module(id);
         }
-        match self.source.read(&import.path) {
+        match self.read_user(&import.path) {
             Ok(text) => {
                 let id = module_id(self.modules.len());
                 self.by_path.insert(key, id);
+                self.remember(&import.path, Cached::User(text.clone()));
                 self.add(&import.path.dotted(), shown, &text, ModuleOrigin::User);
                 ImportTarget::Module(id)
             }
@@ -250,6 +340,7 @@ impl Loader<'_> {
                     Some(&id) => {
                         // 同じパスを import するほかのモジュールが、ユーザーの根を読み直さないようにする
                         self.by_path.insert(key, id);
+                        self.remember(&import.path, Cached::Std);
                         ImportTarget::Module(id)
                     }
                     None => {
@@ -268,6 +359,23 @@ impl Loader<'_> {
                     .push(unreadable(file, import, &error, &shown));
                 ImportTarget::Broken
             }
+        }
+    }
+
+    /// セッションの前の入力までに読んだものがあればそれを使い、なければ `source` から読む。標準ライブラリに落ちた
+    /// ものは `NotFound` として返し、同じ標準ライブラリのモジュールに落とし直す。
+    fn read_user(&self, path: &ModulePath) -> Result<String, ReadError> {
+        match self.cache.entries.get(path) {
+            Some(Cached::User(text)) => Ok(text.clone()),
+            Some(Cached::Std) => Err(ReadError::NotFound),
+            None => self.source.read(path),
+        }
+    }
+
+    /// 前の入力までのキャッシュにない import だけを、この読み込みで新しく読んだものとして覚える。
+    fn remember(&mut self, path: &ModulePath, cached: Cached) {
+        if !self.cache.contains(path) {
+            self.read.entries.insert(path.clone(), cached);
         }
     }
 
@@ -295,7 +403,7 @@ impl Loader<'_> {
             Some(Reserved::PreludeQualifier)
         } else if name == STD_ROOT {
             Some(Reserved::StdRoot)
-        } else if origin == ModuleOrigin::User && import.path.file_path() == self.entry_file {
+        } else if !origin.is_std() && import.path.file_path() == self.entry_file {
             Some(Reserved::Entry)
         } else {
             None

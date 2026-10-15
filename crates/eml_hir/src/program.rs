@@ -27,6 +27,23 @@ pub enum ModuleOrigin {
     /// 埋め込んだ `std/` のモジュール。Prelude を含む。
     Std,
     User,
+    /// REPL のセッションの入力のモジュール。値は入力の番号である
+    /// (docs/superpowers/specs/2026-10-15-s11a-repl-session-design.md の「セッションのモジュール」)。
+    Session(u32),
+}
+
+impl ModuleOrigin {
+    pub fn is_std(self) -> bool {
+        self == ModuleOrigin::Std
+    }
+
+    /// REPL のセッションの入力のモジュールなら、その入力の番号。
+    pub fn session(self) -> Option<u32> {
+        match self {
+            ModuleOrigin::Session(number) => Some(number),
+            ModuleOrigin::Std | ModuleOrigin::User => None,
+        }
+    }
 }
 
 /// item の ID。モジュールと、モジュールの中の番号の組で、プログラム全体で一意である。
@@ -401,7 +418,11 @@ impl Program {
 
     /// `eml run` が実行を始める関数。入口のモジュールだけから探し、Prelude には置かない
     /// (docs/implementation/architecture.md の「CLI と lib API」)。同じ名前の関数が重複したときは、最初の定義である。
+    /// REPL のセッションは `main` から始めないので、入口がセッションのモジュールなら `None` である。
     pub fn main(&self) -> Option<FunctionId> {
+        if self.origin(self.entry).session().is_some() {
+            return None;
+        }
         self.modules[self.entry]
             .items
             .functions

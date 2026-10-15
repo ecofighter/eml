@@ -2,7 +2,7 @@
 
 use std::fmt::Write;
 
-use eml_hir::{DisplayNames, ModuleId, ModuleOrigin, Program, ValueItem};
+use eml_hir::{DisplayNames, ModuleId, Program, ValueItem};
 
 use crate::kind::Bound;
 use crate::kind::problem::KindScheme;
@@ -33,7 +33,7 @@ fn write_dump(program: &Program, typed: &TypedProgram, linear: bool) -> String {
         .modules
         .iter()
         .map(|(id, _)| id)
-        .filter(|&id| program.origin(id) == ModuleOrigin::User)
+        .filter(|&id| !program.origin(id).is_std())
         .collect();
     let mut out = String::new();
     for &module in &modules {

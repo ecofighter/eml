@@ -1,7 +1,7 @@
 use eml_diagnostics::{Diagnostic, FileId, Label, SourceFiles, TextEdit, TextRange, TextSize};
 use eml_hir::{
-    Body, ConstructorId, ExprId, ExprKind, FunctionKind, ModuleOrigin, OperationId, PatId, Program,
-    Res, RowRef, Signature, TypeRefKind,
+    Body, ConstructorId, ExprId, ExprKind, FunctionKind, OperationId, PatId, Program, Res, RowRef,
+    Signature, TypeRefKind,
 };
 
 use crate::codes;
@@ -282,7 +282,7 @@ impl BodyCheck<'_, '_> {
                                 ))
                             }
                             None => (method.signature.arity() > 0
-                                && self.program.origin(method.class.module) == ModuleOrigin::User)
+                                && !self.program.origin(method.class.module).is_std())
                                 .then(|| {
                                     format!(
                                         "the signature of `{}` comes from the class `{}`; add {quoted} to its row there, as in `-> <{}> ...`",
