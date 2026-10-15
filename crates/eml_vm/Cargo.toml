@@ -6,9 +6,7 @@ license.workspace = true
 # 結合テストは1つのバイナリにまとめる (docs/implementation/testing.md の「crate の中の置き方」)
 autotests = false
 
-# 単体テストがないので、空のテストのバイナリを作らない。Task 3 で単体テストを足すときに `test = false` を外す
 [lib]
-test = false
 doctest = false
 
 [dependencies]

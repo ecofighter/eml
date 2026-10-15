@@ -149,3 +149,37 @@ fn extern_all_follows_the_declaration_order() {
             .all(|(i, &e)| e as usize == i)
     );
 }
+
+#[test]
+fn an_unused_call_result_does_not_overwrite_a_live_value() {
+    let text = "\
+fn main() -> unit {
+  let k.0: int = extern \"Prelude.+\"(1, 2)
+  let r.1: int = call one() save [k.0]
+  let s.2: obj = extern \"Prelude.Show Int.show\"(k.0)
+  let u.3: unit = extern Prelude.println(s.2)
+  return u.3
+}
+fn one() -> int {
+  return 1
+}
+";
+    assert_eq!(run_lir(text), ("3\n".to_string(), Ok(())));
+}
+
+#[test]
+fn swapped_block_arguments_arrive_swapped() {
+    let text = "\
+fn main() -> unit {
+  let x.0: int = extern \"Prelude.+\"(1, 0)
+  let y.1: int = extern \"Prelude.+\"(2, 0)
+  jump b1(y.1, x.0)
+b1(p.2: int, q.3: int):
+  let d.4: int = extern \"Prelude.-\"(p.2, q.3)
+  let s.5: obj = extern \"Prelude.Show Int.show\"(d.4)
+  let u.6: unit = extern Prelude.println(s.5)
+  return u.6
+}
+";
+    assert_eq!(run_lir(text), ("1\n".to_string(), Ok(())));
+}

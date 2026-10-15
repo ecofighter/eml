@@ -40,7 +40,6 @@ pub fn disasm(text: &str) -> String {
 }
 
 /// verifier を通さない逆アセンブル。コード生成だけを確かめるテストのためである。
-#[allow(dead_code)]
 pub fn disasm_unverified(text: &str) -> String {
     disasm_unverified_program(&parse(text))
 }

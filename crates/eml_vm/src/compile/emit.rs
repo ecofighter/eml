@@ -248,21 +248,25 @@ impl<M: Mode> Emitter<'_, M> {
         }
     }
 
-    /// ブロック引数への代入と、行き先への `Goto`。次のブロックへ進むだけなら `Goto` を出さない。
+    /// ブロック引数への並列な代入と、行き先への `Goto`。変数の代入を先に並べ、定数はその後に書く。定数の書き込み先が、
+    /// ほかの代入がまだ読む値のスロットでありうるためである。次のブロックへ進むだけなら `Goto` を出さない。
     pub(crate) fn jump(&mut self, from: BlockId, target: BlockId, args: &[Atom]) {
-        let params = &self.function.block(target).params;
-        // 並べるだけの割り当てでは、行き先の引数のスロットと実引数のスロットが重ならないので、順に写してよい。
-        // Task 3 の色塗りで重なるようになるので、並列な代入として直す
+        let params = self.function.block(target).params.clone();
+        let mut moves = Vec::new();
+        let mut constants = Vec::new();
         for (&param, &arg) in params.iter().zip(args) {
             let dst = self.slot(param);
             match arg {
-                Atom::Var(var) if self.slot(var) == dst => {}
-                Atom::Var(var) => {
-                    let src = self.slot(var);
-                    self.out.push(Op::Move { dst, src });
-                }
-                constant => self.load(dst, constant, self.repr(param)),
+                Atom::Var(var) => moves.push((dst, self.slot(var))),
+                constant => constants.push((dst, constant, self.repr(param))),
             }
+        }
+        let scratch = self.temp();
+        for (dst, src) in super::moves::sequentialize(&moves, scratch) {
+            self.out.push(Op::Move { dst, src });
+        }
+        for (dst, constant, repr) in constants {
+            self.load(dst, constant, repr);
         }
         self.goto(from, target);
     }

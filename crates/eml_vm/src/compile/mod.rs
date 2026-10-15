@@ -2,6 +2,7 @@
 
 mod constants;
 mod emit;
+mod moves;
 mod slots;
 
 use std::sync::Arc;
