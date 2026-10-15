@@ -741,6 +741,16 @@ fn arithmetic(ext: Extern, dst: Slot, args: &[Slot]) -> Option<Op> {
         Extern::IntCompare => Op::IntCompare { dst, a, b },
         Extern::BoolEq => Op::BoolEq { dst, a, b },
         Extern::BoolNe => Op::BoolNe { dst, a, b },
-        _ => return None,
+        Extern::Println
+        | Extern::Open
+        | Extern::ReadAll
+        | Extern::Close
+        | Extern::IntShow
+        | Extern::IntNeg
+        | Extern::StrConcat
+        | Extern::StrEq
+        | Extern::StrNe
+        | Extern::StrCompare
+        | Extern::StrShow => return None,
     })
 }

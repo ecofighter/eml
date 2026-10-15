@@ -67,6 +67,14 @@ impl<M: Mode> CodeBase<M> {
         Some(self.locations[index].1)
     }
 
+    /// 命令の位置の関数の名前。どの関数にも属さない位置には、入口の関数の名前を返す。
+    pub(crate) fn function_name(&self, pc: Pc) -> String {
+        self.function_at(pc)
+            .unwrap_or(&self.functions[self.entry as usize])
+            .name
+            .clone()
+    }
+
     /// 誤りに関数の名前と位置を付ける。組み込みの命令で起きた誤りには、最後に戻った関数の名前を付ける
     /// (docs/spec/vm.md の「誤り、止めること、終わり」)。
     pub(crate) fn error(&self, Failure { fault, pc }: Failure, task: &Task) -> VmError {

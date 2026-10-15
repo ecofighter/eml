@@ -259,6 +259,7 @@ fn step<M: Mode>(
         }
         Op::SwitchObj { src, at } => {
             let w = task.get(src);
+            // scrutinee の Repr は `obj` なので、語はポインタである (docs/spec/vm.md の「switch」)
             let tag = unsafe { ctx.heap().meta(w) }?.tag();
             data::switch_tag(code, ctx, task, w, tag.into(), at)?
         }
@@ -267,6 +268,7 @@ fn step<M: Mode>(
             let tag = if w.is_imm() {
                 w.imm_value()
             } else {
+                // `is_imm()` の枝を先に取ったので、ここでは語はポインタである (docs/spec/vm.md の「switch」)
                 unsafe { ctx.heap().meta(w) }?.tag().into()
             };
             data::switch_tag(code, ctx, task, w, tag, at)?
@@ -401,7 +403,21 @@ fn extern_call<M: Mode>(
                 let w = ctx.string_show(task.get(arg(0)))?;
                 task.set(dst, w);
             }
-            _ => {
+            Extern::IntNeg
+            | Extern::IntAdd
+            | Extern::IntSub
+            | Extern::IntMul
+            | Extern::IntDiv
+            | Extern::IntMod
+            | Extern::IntEq
+            | Extern::IntNe
+            | Extern::IntCompare
+            | Extern::IntLt
+            | Extern::IntLe
+            | Extern::IntGt
+            | Extern::IntGe
+            | Extern::BoolEq
+            | Extern::BoolNe => {
                 return Err(VmFault::Internal(
                     "an arithmetic extern reached the generic extern instruction",
                 ));

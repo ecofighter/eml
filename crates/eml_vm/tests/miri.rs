@@ -71,9 +71,9 @@ fn first3(a.0: tobj, b.1: tobj, c.2: tobj) -> tobj {
     assert_eq!(run_both(text), "10\n");
 }
 
-/// 末尾の位置で、引数が2段余る。
+/// 引数が2段余る。`main` の `apply` は末尾ではなく、入れ子は `ApplyRest` の末尾の適用の中で起きる。
 #[test]
-fn over_application_in_tail_position_nests() {
+fn over_application_nests_through_apply_rest() {
     let text = "\
 fn main() -> unit {
   let a.0: tobj = box 1

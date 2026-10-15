@@ -618,3 +618,32 @@ b2:
 ";
     assert_eq!(run_lir(text), ("square\n".to_string(), Ok(())));
 }
+
+/// `codegen.rs` の同名のテストと同じ LIR を実行する。死んだ scrutinee のスロットを case のフィールドが共有すると、
+/// 2つ目のフィールドを読み違える。
+#[test]
+fn a_dead_switch_scrutinee_leaves_the_case_fields_readable() {
+    let text = "\
+layout Inner { Inner(obj, obj) }
+layout Outer { Outer(obj) }
+fn main() -> unit {
+  let a.0: obj = const \"a\"
+  let b.1: obj = const \"b\"
+  let i.2: obj = con Inner #0(a.0, b.1)
+  let o.3: obj = con Outer #0(i.2)
+  tail call go(o.3)
+}
+fn go(o.0: obj) -> unit {
+  unpack o.0 Outer #0(f.1: obj)
+  switch f.1 Inner { #0(a.2: obj, b.3: obj) -> b1 }
+b1:
+  dup a.2
+  dup b.3
+  decref o.0
+  let u.4: unit = extern Prelude.println(a.2)
+  let v.5: unit = extern Prelude.println(b.3)
+  return v.5
+}
+";
+    assert_eq!(run_lir(text), ("a\nb\n".to_string(), Ok(())));
+}

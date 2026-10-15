@@ -166,9 +166,9 @@ fn pair(f.0: tobj) -> unit {{
     assert_eq!(run_lir(&text), ("ok\n".to_string(), Ok(())));
 }
 
-/// `make` はクロージャを返し、そのクロージャはまた関数を返す。末尾の位置で、引数が2段余る。
+/// `make` はクロージャを返し、そのクロージャはまた関数を返す。引数が2段余る。`main` の `apply` は末尾ではなく、入れ子は `ApplyRest` の末尾の適用の中で起きる。
 #[test]
-fn over_application_in_tail_position_nests() {
+fn over_application_nests_through_apply_rest() {
     let text = "\
 fn main() -> unit {
   let a.0: tobj = box 1

@@ -68,7 +68,7 @@ pub fn execute_with(
     if debug_heap {
         run::<Checked>(program, host, control, check_heap)
     } else {
-        run::<Fast>(program, host, control, |_| Ok(()))
+        run::<Fast>(program, host, control, |_, _| Ok(()))
     }
 }
 
@@ -76,7 +76,7 @@ fn run<M: Mode>(
     program: &Program,
     host: HostRef,
     control: Arc<Control>,
-    check: fn(&Ctx<M>) -> Result<(), VmError>,
+    check: fn(&Ctx<M>, String) -> Result<(), VmError>,
 ) -> Result<RunStats, VmError> {
     let code =
         compile::<M>(program, control.clone()).map_err(|error| compile_error(program, error))?;
@@ -107,7 +107,7 @@ fn run<M: Mode>(
             &task,
         ));
     }
-    check(&ctx)?;
+    check(&ctx, code.function_name(task.last_ret))?;
     let (c, h) = (ctx.stats(), ctx.heap().stats());
     Ok(RunStats {
         evidence_steps: c.evidence_steps,
@@ -122,11 +122,12 @@ fn run<M: Mode>(
     })
 }
 
-fn check_heap(ctx: &Ctx<Checked>) -> Result<(), VmError> {
+/// ヒープの不変条件の誤りには、最後に戻った関数の名前を付ける (docs/spec/vm.md の「誤り、止めること、終わり」)。
+fn check_heap(ctx: &Ctx<Checked>, last_function: String) -> Result<(), VmError> {
     let heap = ctx.heap();
     heap.check_invariants().map_err(|error| VmError::Fault {
         fault: error.into(),
-        function: String::new(),
+        function: last_function,
         at: None,
     })?;
     let leaks = heap.leaks();

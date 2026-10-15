@@ -286,3 +286,47 @@ fn main() -> unit {
     );
     disasm_unverified(&text);
 }
+
+/// 死んでいる scrutinee (借りたフィールド `f`) のスロットも、case のフィールドのスロットとは違う。干渉の辺がないと、
+/// 先に色を取る `a.2` が `f.1` のスロットを取り、switch が `a` を書いた後で `b` を読めなくなる (docs/spec/vm.md の「スロットの割り当て」)。
+#[test]
+fn a_dead_switch_scrutinee_does_not_share_a_slot_with_the_case_fields() {
+    insta::assert_snapshot!(disasm("\
+layout Inner { Inner(obj, obj) }
+layout Outer { Outer(obj) }
+fn main() -> unit {
+  let a.0: obj = const \"a\"
+  let b.1: obj = const \"b\"
+  let i.2: obj = con Inner #0(a.0, b.1)
+  let o.3: obj = con Outer #0(i.2)
+  tail call go(o.3)
+}
+fn go(o.0: obj) -> unit {
+  unpack o.0 Outer #0(f.1: obj)
+  switch f.1 Inner { #0(a.2: obj, b.3: obj) -> b1 }
+b1:
+  dup a.2
+  dup b.3
+  decref o.0
+  let u.4: unit = extern Prelude.println(a.2)
+  let v.5: unit = extern Prelude.println(b.3)
+  return v.5
+}
+"), @"
+    fn main (arity 0, frame 2)
+         2  load_const s0, c0
+         3  load_const s1, c1
+         4  con s0 = #0 (2 scanned, 0 raw) [@0 -> s0, @1 -> s1]
+         5  con s0 = #0 (1 scanned, 0 raw) [@0 -> s0]
+         6  tail_call go(s0)
+    fn go (arity 1, frame 4)
+         7  unpack s0 #0 [@0 -> s1]
+         8  switch_obj s1 { #0 -> 9 [@0 -> s2, @1 -> s3] }
+         9  dup s2
+        10  dup s3
+        11  decref s0
+        12  extern s0 = Prelude.println(s2)
+        13  extern s0 = Prelude.println(s3)
+        14  ret s0
+    ");
+}
