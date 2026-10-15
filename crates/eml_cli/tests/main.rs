@@ -8,4 +8,5 @@ mod citations;
 mod cli;
 mod lines;
 mod repl;
+mod terminal;
 mod ui;

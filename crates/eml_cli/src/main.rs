@@ -9,6 +9,7 @@ use eml_diagnostics::{has_errors, render};
 
 #[cfg(unix)]
 mod sigint;
+mod terminal;
 
 #[derive(Parser)]
 #[command(name = "eml", version, about = "The eml programming language")]
@@ -28,6 +29,12 @@ enum Command {
         debug_heap: bool,
         file: PathBuf,
     },
+    /// Start an interactive session
+    Repl {
+        /// Detect reference-count leaks and use-after-free
+        #[arg(long)]
+        debug_heap: bool,
+    },
 }
 
 /// 使い方の誤りに 2 を使うのは、clap が引数の誤りで返す値に合わせるため (docs/implementation/architecture.md)。
@@ -46,6 +53,7 @@ fn main() -> ExitCode {
                 ExitCode::SUCCESS
             }
         }
+        Command::Repl { debug_heap } => terminal::run(debug_heap),
         Command::Run { debug_heap, file } => {
             // 読み込みとコンパイルの間の Ctrl-C も、シグナルで殺されずにこのハンドラが受ける。そこで立てたビットは、
             // 実行の最初の安全点で読まれる

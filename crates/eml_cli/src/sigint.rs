@@ -13,11 +13,10 @@ static CONTROL: OnceLock<Arc<Control>> = OnceLock::new();
 /// 止める語が立った後の SIGINT でプロセスを終わらせるか。
 static EXIT_ON_REPEAT: AtomicBool = AtomicBool::new(false);
 
+/// SIGINT を受けたときの動き方。
 pub enum Mode {
     /// 2回目の SIGINT でその場で終わる。安全点に来ない処理から抜ける道である。
     Run,
-    // `eml repl` (S11c-1 の Task 6) が使うまで未使用である
-    #[allow(dead_code)]
     /// SIGINT で終わらない。抜けられない処理からは Ctrl-\ で抜ける (docs/spec/repl.md の「残る制限」)。
     Repl,
 }

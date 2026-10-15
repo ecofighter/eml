@@ -224,7 +224,7 @@ main () =
 
 /// テストが止まらずに CI を待たせないための締め切り。
 #[cfg(unix)]
-const DEADLINE: std::time::Duration = std::time::Duration::from_secs(10);
+pub(crate) const DEADLINE: std::time::Duration = std::time::Duration::from_secs(10);
 
 #[cfg(unix)]
 fn spawn_run(dir: &Path, stdout: std::process::Stdio) -> std::process::Child {
@@ -238,7 +238,7 @@ fn spawn_run(dir: &Path, stdout: std::process::Stdio) -> std::process::Child {
 }
 
 #[cfg(unix)]
-fn sigint(child: &std::process::Child) {
+pub(crate) fn sigint(child: &std::process::Child) {
     let pid = libc::pid_t::try_from(child.id()).unwrap();
     // 子はまだ待っていないので、終わっていても pid はほかのプロセスに使い回されていない
     assert_eq!(unsafe { libc::kill(pid, libc::SIGINT) }, 0);
@@ -246,7 +246,7 @@ fn sigint(child: &std::process::Child) {
 
 /// 締め切りを過ぎたら子を殺して、テストを失敗にする。
 #[cfg(unix)]
-fn kill_after_deadline(child: &mut std::process::Child, what: &str) -> ! {
+pub(crate) fn kill_after_deadline(child: &mut std::process::Child, what: &str) -> ! {
     let _ = child.kill();
     let _ = child.wait();
     panic!("{what} within {DEADLINE:?}");
