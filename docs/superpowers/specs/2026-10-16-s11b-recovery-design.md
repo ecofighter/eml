@@ -122,10 +122,10 @@ pub unsafe fn recover(&mut self) -> Result<(), HeapError>
   - 割り込みのビットを立ててから `load` をし、その後で `run` をすると、`load` は成功し、実行は最初の安全点で止まる。`load` の後で立てた場合と同じ結果になる
   - 続けられる誤りの後、検査モードでも `close` がリークを報告しない。今の `a_continuable_error_empties_the_evv_for_the_next_run` の名前を、回復を表す名前に替える
   - 回復の仕事を `RunStats` に数えないこと
-  - `RuntimeError::Unrecovered` が `is_broken` で、表示が元の誤りを含むこと
+  - `RuntimeError::Unrecovered` が `is_broken` で、表示が元の誤りを含むこと。根の値は `Unr` なので、検証を通るプログラムでは回復は失敗しない。テストは、根に `File` を置く LIR を手で書き、検証を通さずに `Machine::load` に渡して起こす。回復の後の `check_invariants` の失敗は、壊れたヒープが要るのでテストしない
 - **`eml_cli`** (api テスト)
   - 割り込みを1回だけ立てられる `Host` で、出力し続ける入力を流す。その入力は割り込まれた `Failed` になり、次の入力は普通に動き、検査モードの `close` はリークを報告しない
-  - `open` が割り込みを立て、手放された回数を数える読み手を返す `Host` で、`Fs.read_all` を流す。読み込みは割り込みで止まり、`eval` から戻った時点で読み手が手放されていて (`File` が閉じている)、`close` はリークを報告しない。`Foreign` の破棄処理、`Extern(Fault::Stopped)` の道、古いヒープの lin の物体を確かめる
+  - `open` が割り込みを立て、手放された回数を数える読み手を返す `Host` で、`Fs.read_all` を流す。読み込みは割り込みで止まり、`eval` から戻った時点で読み手が手放されていて (`File` が閉じている)、`close` はリークを報告しない。`read_all` は読み込みの誤りで `File` を自分で手放す (`Stopped` も含む) ので、この道は回復の有無によらず `File` を閉じる。そのため、`File` を呼び出しに渡す入力でも止め、スタックに残った `File` を古いヒープの破棄で閉じることも確かめる。`Foreign` の破棄処理、`Extern(Fault::Stopped)` の道、古いヒープの lin の物体を確かめる
   - 確保量の上限で止まった後に、大きな確保をする入力が成功する (ページが戻る)。今の `the_memory_stop_bit_is_cleared_for_the_next_input` をこの確かめに広げ、名前を `the_session_continues_after_the_memory_limit` に戻す
 - **テストの変更**
   - 成否の変更: `eml_rt` の単体テスト `abandon_forgets_the_evv_and_the_yield_state` を消す。`abandon` を消すためで、回復のテストが代わる
