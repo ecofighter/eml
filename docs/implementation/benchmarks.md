@@ -752,3 +752,27 @@ VM (S10a の間は `eml run --vm`)
 どのプログラムでも、切り替えの前の VM との差は 2% 以内だった。
 
 `RunStats` の切り替えの前後の差は、`crates/eml_vm/tests/bench.rs` のスナップショットの差分で残る。
+
+### S11c-1
+
+`Fs.read_all` の読み手を `StopOnInterrupt` で包んだので、`read_to_end` が空き領域を 0 で埋めてから読むようになった ([オブジェクトモデル](../spec/object-model.md) の「`File`」)。その費用を `bench/rt.sh` で測った。
+
+- 機種: Mac16,1 (Apple M4)
+- OS: macOS 27.0.1 (26A434)
+- rustc: rustc 1.98.1 (48a229cea 2026-09-01)
+
+変える前 (コミット 1f36698)。
+
+| 計測 | instructions retired | 実時間 (s) |
+|---|---:|---:|
+| `read-all` | 110571536 | 0.00 |
+| `read-all-unsized` | 123386642 | 0.00 |
+
+変えた後 (コミット 223d52f)。
+
+| 計測 | instructions retired | 実時間 (s) |
+|---|---:|---:|
+| `read-all` | 123963849 | 0.00 |
+| `read-all-unsized` | 135706677 | 0.00 |
+
+命令の数は、`read-all` で 12.1%、`read-all-unsized` で 10.0% 増えた。
