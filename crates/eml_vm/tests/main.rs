@@ -3,9 +3,12 @@
 
 mod common;
 
+mod api;
+mod bench;
 mod calls;
 mod codegen;
 mod data;
 mod evidence;
+mod miri;
 mod run;
 mod tags;

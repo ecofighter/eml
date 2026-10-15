@@ -1,0 +1,153 @@
+//! 基準のプログラム (`bench/`) の、VM での実行の仕事の回数を固定する。CEK の回数 (`crates/eml_interp/tests/bench.rs`)
+//! とは `rc_*` と `peak_objects` が違う。理由は docs/spec/vm.md の「`RunStats`」にある。S10b で CEK を消すときに、
+//! このテストが CEK のテストに替わる。
+
+use std::path::{Path, PathBuf};
+
+use eml_test_support::run_stats_vm;
+use eml_vm::RunStats;
+
+/// テストを持つ基準のプログラム。`bench/` にプログラムを足したら、ここと下のテストの関数の両方に足す。
+const PROGRAMS: [&str; 6] = ["empty", "fib", "list", "loop", "state", "tree"];
+
+fn bench_dir() -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("../../bench")
+}
+
+/// `debug_heap` 付きで走らせ、出力を確かめてから回数を返す。リークと実行時エラーは panic にする。
+fn stats(name: &str, expected: &str) -> RunStats {
+    let path = bench_dir().join(format!("{name}.em"));
+    let text = std::fs::read_to_string(&path)
+        .unwrap_or_else(|error| panic!("{}: {error}", path.display()));
+    let (out, result) = run_stats_vm(&text);
+    // 実行時エラーやリークで止まると出力も欠けるので、出力の差だけでなく止まった理由も見せる
+    assert_eq!(out, expected, "{result:?}");
+    result.unwrap_or_else(|error| panic!("{error}"))
+}
+
+#[test]
+fn every_program_in_bench_has_a_test() {
+    let mut names: Vec<String> = std::fs::read_dir(bench_dir())
+        .expect("bench/ exists")
+        .map(|entry| entry.expect("a readable entry").path())
+        .filter(|path| path.extension().is_some_and(|extension| extension == "em"))
+        .map(|path| {
+            path.file_stem()
+                .expect("a file name")
+                .to_string_lossy()
+                .into_owned()
+        })
+        .collect();
+    names.sort();
+    assert_eq!(names, PROGRAMS);
+    // 一覧に足しただけでテストの関数を書かないと、そのプログラムの回数が固定されないまま通る
+    let source = include_str!("bench.rs");
+    for name in PROGRAMS {
+        assert!(
+            source.contains(&format!("stats(\"{name}\"")),
+            "`{name}` has no test function"
+        );
+    }
+}
+
+#[test]
+fn empty() {
+    insta::assert_debug_snapshot!(stats("empty", ""), @"
+    RunStats {
+        evidence_steps: 0,
+        yields: 0,
+        yield_frames: 0,
+        string_bytes_copied: 0,
+        rc_increments: 0,
+        rc_decrements: 0,
+        boxes: 0,
+        unboxes: 0,
+        peak_objects: 1,
+    }
+    ");
+}
+
+#[test]
+fn fib() {
+    insta::assert_debug_snapshot!(stats("fib", "75025\n"), @"
+    RunStats {
+        evidence_steps: 0,
+        yields: 0,
+        yield_frames: 0,
+        string_bytes_copied: 5,
+        rc_increments: 0,
+        rc_decrements: 1,
+        boxes: 0,
+        unboxes: 0,
+        peak_objects: 2,
+    }
+    ");
+}
+
+#[test]
+fn list() {
+    insta::assert_debug_snapshot!(stats("list", "10000100000\n"), @"
+    RunStats {
+        evidence_steps: 0,
+        yields: 0,
+        yield_frames: 0,
+        string_bytes_copied: 11,
+        rc_increments: 0,
+        rc_decrements: 200001,
+        boxes: 400000,
+        unboxes: 400000,
+        peak_objects: 100001,
+    }
+    ");
+}
+
+#[test]
+fn loop_() {
+    insta::assert_debug_snapshot!(stats("loop", "125000250000\n"), @"
+    RunStats {
+        evidence_steps: 0,
+        yields: 0,
+        yield_frames: 0,
+        string_bytes_copied: 12,
+        rc_increments: 0,
+        rc_decrements: 1,
+        boxes: 0,
+        unboxes: 0,
+        peak_objects: 2,
+    }
+    ");
+}
+
+#[test]
+fn state() {
+    insta::assert_debug_snapshot!(stats("state", "100000\n"), @"
+    RunStats {
+        evidence_steps: 200000,
+        yields: 0,
+        yield_frames: 0,
+        string_bytes_copied: 6,
+        rc_increments: 200001,
+        rc_decrements: 200006,
+        boxes: 100002,
+        unboxes: 100001,
+        peak_objects: 4,
+    }
+    ");
+}
+
+#[test]
+fn tree() {
+    insta::assert_debug_snapshot!(stats("tree", "14898 7454478318\n"), @"
+    RunStats {
+        evidence_steps: 0,
+        yields: 0,
+        yield_frames: 0,
+        string_bytes_copied: 37,
+        rc_increments: 14898,
+        rc_decrements: 266465,
+        boxes: 44694,
+        unboxes: 281359,
+        peak_objects: 14900,
+    }
+    ");
+}
