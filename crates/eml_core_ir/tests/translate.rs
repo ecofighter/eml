@@ -892,7 +892,7 @@ fn effect_numbers_skip_the_extern_effects() {
 #[test]
 fn the_entry_function_is_chosen_by_the_caller() {
     // REPL は、`main` の代わりにその回の式から作った関数を入口にする
-    // (docs/implementation/architecture.md の「`eml_core_ir`、`eml_lir`、`eml_runtime`、`eml_interp` の内部」)
+    // (docs/implementation/architecture.md の「`eml_core_ir`、`eml_lir`、`eml_vm` の内部」)
     let text = "main : Unit -> <IO> Unit\nmain () = println \"main\"\n\nalt : Unit -> <IO> Unit\nalt () = println \"alt\"";
     let checked = eml_test_support::check(text);
     let alt = checked

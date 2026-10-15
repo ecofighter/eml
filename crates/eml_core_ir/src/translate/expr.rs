@@ -29,7 +29,7 @@ pub(super) fn extern_row(hir: &HirProgram, function: FunctionId) -> Option<Exter
 }
 
 /// 既知の呼ばれる式の種類。`saturate` は、引数の数、足りないときの包む関数、ちょうどのときの命令を、この種類から決める
-/// (docs/implementation/architecture.md の「`eml_core_ir`、`eml_lir`、`eml_runtime`、`eml_interp` の内部」)。
+/// (docs/implementation/architecture.md の「`eml_core_ir`、`eml_lir`、`eml_vm` の内部」)。
 #[derive(Clone, Copy)]
 enum Callee {
     /// 本体のある関数。足りないときの包む関数は、その関数自身である。

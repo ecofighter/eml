@@ -7,7 +7,7 @@ eml の処理系をどの crate に分け、各段階がどんな規律に従う
 ## 全体の方針
 
 - 処理系はバッチ型のパイプラインである。各段階を純粋な関数とし、Arena と ID で表現して、後でクエリ化 (salsa など) できるようにしておく
-- 実行系は、2つの層の IR と CEK 風のインタプリタからなる。型付き Core IR (前向きの辺だけを持つ基本ブロックの列で、中間値に名前を付け、エフェクトを明示する) は意味の層で、EP の後に LIR (エフェクトの命令を持たず、box、RC、末尾呼び出しを明示する) に写す。インタプリタは LIR を実行し、後の VM とネイティブ化も Perceus の後の LIR を入力にする。バックエンドは未定である。ヒープと RC は `eml_runtime` に分離する
+- 実行系は、2つの層の IR と、レジスタ型のバイトコードの VM からなる。型付き Core IR (前向きの辺だけを持つ基本ブロックの列で、中間値に名前を付け、エフェクトを明示する) は意味の層で、EP の後に LIR (エフェクトの命令を持たず、box、RC、末尾呼び出しを明示する) に写す。VM は Perceus の後の LIR をバイトコードに変換して実行し、後のネイティブ化も同じ LIR を入力にする。ネイティブのバックエンドは未定である。物体の形、ヒープ、RC は、VM とネイティブで共有するランタイム `eml_rt` に置く
 - 構文木には rowan (Red-Green Tree) を使い、その上にリッチな診断と LSP を整える
 
 ## プログラム全体の構成
@@ -22,11 +22,11 @@ eml の処理系をどの crate に分け、各段階がどんな規律に従う
 採らなかった形は次のとおり。
 
 - salsa を今入れること。段階をクエリの形にしてあるので、後で載せ替えられる。LSP を作るまでは手間が大きい
-- モジュールごとに Core IR を作ってリンクすること。インタプリタでは得るものがない
+- モジュールごとに Core IR を作ってリンクすること。VM では得るものがない
 - HIR の位置を今 source map に移すこと。利点が出るのはクエリ化した後である ([ロードマップ](../future/roadmap.md))
 - プログラム全体の item を1つのアリーナに置くこと。モジュールの変換が共有のアリーナを書き換えるので、段階が純粋な関数でなくなる
 - どの item も Core IR の関数にして、書き換えのパスで命令に戻し、使わない関数を取り除くパスで消すこと。変換が満ちた呼び出しをすでに命令にしているので、飽和の場合分けを `saturate` にまとめれば足りる
-- `Bool` のタグをインタプリタまで運ぶこと。タグは Prelude の宣言の順で決まるので、定数 `FALSE` と `TRUE` をテストで照らし合わせれば足りる
+- `Bool` のタグを VM まで運ぶこと。タグは Prelude の宣言の順で決まるので、定数 `FALSE` と `TRUE` をテストで照らし合わせれば足りる
 
 ## リポジトリ
 
@@ -41,9 +41,8 @@ eml/
     eml_types/
     eml_core_ir/
     eml_lir/            # LIR とそのパス。eml_extern だけに依存する
-    eml_runtime/
-    eml_rt/             # VM とネイティブで共有するランタイムの核。vstd だけに依存し、Verus で検証する。パイプラインの crate からはまだ使わない (`eml_interp` の期待値の表のテストが dev-dependency で使う)
-    eml_interp/
+    eml_rt/             # VM とネイティブで共有するランタイムの核。vstd だけに依存し、Verus で検証する
+    eml_vm/             # LIR のレジスタ型のバイトコード VM。eml_lir、eml_rt、eml_extern だけに依存する
     eml_cli/            # lib + バイナリ (バイナリ名 `eml`)
     eml_test_support/   # 開発専用。結合テストのパイプラインと診断の文字列
   std/                  # 標準ライブラリ (Prelude.em、Fs.em)。eml_hir がバイナリに埋め込む
@@ -61,7 +60,7 @@ eml/
 - `flake.nix` は、workspace のルートの `Cargo.lock` を使って `eml_cli` だけを組み立て、`eml` バイナリを作る
 - nixpkgs は nixos-unstable を追う。Rust の toolchain は、stable も nightly も flake が fenix から取る。stable は Verus が求める版 (今は 1.98.1) に揃え、ふだんの devShell、`nix build`、Verus が同じ版を使う。nightly は Miri の devShell (`nix develop .#miri`) だけが使う ([テスト戦略](testing.md) の「Miri」)
 - Verus と verusfmt は、release の archive を flake の input にし、`nix/verus.nix` と `nix/verusfmt.nix` が展開してふだんの devShell に入れる ([テスト戦略](testing.md) の「Verus」)
-- `eml_rt` は vstd に依存するので、`Cargo.lock` に vstd とその依存が入る。`eml_cli` は `eml_rt` に依存しないので `eml` バイナリには入らないが、`nix build` は lock の crate をすべて取る。`eml_rt` の `verus!` の中は verusfmt で、外は `cargo fmt` で整える
+- `eml_rt` は vstd に依存するので、`Cargo.lock` に vstd とその依存が入る。`eml_cli` は `eml_vm` を通して `eml_rt` に依存するので、vstd は `eml` バイナリにも入る。`eml_rt` の `verus!` の中は verusfmt で、外は `cargo fmt` で整える
 - 2つの devShell の shellHook は、`CARGO_HOME` を `${XDG_CACHE_HOME:-$HOME/.cache}/eml-cargo-home` にする。cargo は外部のサブコマンドを PATH より先に `$CARGO_HOME/bin` から探すので、rustup が入っていると `~/.cargo/bin` の `cargo-clippy` や `cargo-miri` (rustup のプロキシ) が fenix のものより先に当たるためである。そのため、devShell は crate の取得の置き場所を別に持ち、最初の1回は crate を取り直す
 
 ## crate の依存関係
@@ -70,22 +69,22 @@ eml/
 
 ```
 eml_cli          check / run コマンド。パイプラインを組む唯一の場所 (Session)。テストから呼べる lib API を公開する
-eml_interp       LIR を CEK 機械で実行する
-eml_runtime      オブジェクトのモデル、ヒープ、参照カウント、debug_heap の検査、OutputSink
+eml_vm           LIR → レジスタ型のバイトコード (CodeBase)。eml_rt の Ctx の上で実行する
+eml_rt           VM とネイティブで共有するランタイムの核 (語、物体、確保器、RC、検査モード、Ctx、extern)。vstd だけに依存する
 eml_core_ir      型付き HIR → Core IR (基本ブロックの列)。evidence passing のパスと、LIR への変換
 eml_lir          LIR (box、RC、末尾呼び出しを明示する基本ブロックの列)。box/unbox の挿入、縮約、dup/decref/release の挿入のパス
 eml_types        Kind・型・row の推論、線形性・多重度の検査、match の網羅性検査
 eml_hir          モジュールの読み込み、CST → HIR の変換、名前解決、脱糖
 eml_syntax       SyntaxKind、lexer、レイアウト段、イベント方式のパーサ、rowan、型付き AST ラッパ
 eml_diagnostics  Diagnostic 型、FileId と SourceFiles、行と列、ariadne による表示
-eml_extern       extern の表 (型、エフェクト、関数)。依存を持たず、HIR、型検査、Core IR、LIR、インタプリタが引く
+eml_extern       extern の表 (型、エフェクト、関数)。依存を持たず、HIR、型検査、Core IR、LIR、VM が引く
 ```
 
-- 段階の連なりに `eml_runtime` は入らず、`eml_interp` だけが依存する
-- `eml_lir` は `eml_extern` だけに依存する葉の crate である。`eml_core_ir` (LIR への変換とパスの順番のため)、`eml_interp`、`eml_cli` が依存する。`eml_interp` が読む IR は `eml_lir` だけなので、フロントエンドなしにビルドできる。後の VM も同じである。2つの IR が共有する型 (`Atom`、`VarInfo`、`Layout`、`Prim`、`EffectInfo` など) と定数、テキスト形式と verifier の共通の部品も `eml_lir` に置き、`eml_core_ir` は再公開しない。使う側は `eml_lir` から読む。`Repr` も `eml_lir` が再公開するものを使う
-- `eml_diagnostics` は、診断を出す crate のすべてから使う。今は `eml_core_ir`、`eml_lir`、`eml_runtime`、`eml_interp` が診断を出さず、`eml_extern` は何にも依存しない。`eml_core_ir` だけは、extern の呼び出しの位置を行と列にするために `SourceFiles` を使うので依存する。残りの4つは依存しない
-- `eml_extern` は表だけを持つ。`eml_hir`、`eml_types`、`eml_core_ir`、`eml_lir`、`eml_interp` が引く。`eml_extern` を一番下に置くのは、どの段階も実装を表の行で引くようにして、名前の文字列で実装を探す処理をなくすためである
-- `eml_cli` は `eml_diagnostics` と `eml_hir` に常に依存し、下流の段階を feature で足す。`types` は `eml_types`、`core` は `eml_core_ir` と `eml_lir`、`run` は `eml_interp` と `eml_runtime` を足す。`eml_lir` はフロントエンドに依存しないので、段階の feature は増やさない。既定は `run` で、バイナリ `eml` は `run` がなければ作らない (`required-features`)。ワークスペースの `eml_cli` の依存は既定の feature を外してあり、依存する側が段階を選ぶ
+- 段階の連なりに `eml_rt` は入らず、`eml_vm` だけが依存する。`eml_rt` は workspace のほかの crate に依存しない
+- `eml_lir` は `eml_extern` だけに依存する葉の crate である。`eml_core_ir` (LIR への変換とパスの順番のため)、`eml_vm`、`eml_cli` が依存する。`eml_vm` が読む IR は `eml_lir` だけなので、フロントエンドなしにビルドできる。2つの IR が共有する型 (`Atom`、`VarInfo`、`Layout`、`Prim`、`EffectInfo` など) と定数、テキスト形式と verifier の共通の部品も `eml_lir` に置き、`eml_core_ir` は再公開しない。使う側は `eml_lir` から読む。`Repr` も `eml_lir` が再公開するものを使う
+- `eml_diagnostics` は、診断を出す crate のすべてから使う。今は `eml_core_ir`、`eml_lir`、`eml_vm`、`eml_rt` が診断を出さず、`eml_extern` は何にも依存しない。`eml_core_ir` だけは、extern の呼び出しの位置を行と列にするために `SourceFiles` を使うので依存する。残りの4つは依存しない
+- `eml_extern` は表だけを持つ。`eml_hir`、`eml_types`、`eml_core_ir`、`eml_lir`、`eml_vm` が引く。`eml_extern` を一番下に置くのは、どの段階も実装を表の行で引くようにして、名前の文字列で実装を探す処理をなくすためである
+- `eml_cli` は `eml_diagnostics` と `eml_hir` に常に依存し、下流の段階を feature で足す。`types` は `eml_types`、`core` は `eml_core_ir` と `eml_lir`、`run` は `eml_vm` と、SIGINT のハンドラの `ctrlc` と、物理メモリを読む `libc` を足す。`eml_lir` はフロントエンドに依存しないので、段階の feature は増やさない。既定は `run` で、バイナリ `eml` は `run` がなければ作らない (`required-features`)。ワークスペースの `eml_cli` の依存は既定の feature を外してあり、依存する側が段階を選ぶ
 - `eml_test_support` は開発専用の crate で、パイプラインに入らない。各 crate の結合テストが dev-dependency として使う。パイプラインは `eml_cli::Session` で組み、段階を feature (`hir` < `types` < `core` < `run`) で選ぶ。各 feature は、`eml_cli` の同じ段階までの feature を有効にする。各 crate は自分の段階までを有効にする。破壊的な変更の途中で下流の crate がまだ組み立たなくても、変更している段階のテストを流せるようにするため ([テスト戦略](testing.md))
 
 ## 各段階の規律
@@ -105,7 +104,7 @@ eml_extern       extern の表 (型、エフェクト、関数)。依存を持�
 | `eml_types` | `check(&Program, &SourceFiles) -> (TypedProgram, Vec<Diagnostic>)`。`SourceFiles` は E3003 の fix の字下げを求めるのに使う |
 | `eml_core_ir` | `lower(&hir::Program, &TypedProgram, FunctionId, &SourceFiles) -> eml_lir::Program`。translate、EP、LIR への変換 (`to_lir`)、LIR のパス (`eml_lir::passes_until`) の順に呼ぶ。LIR のパスの途中で止める `lower_until(.., eml_lir::Pass)` と、Core IR の段で止める `core_until(.., Pass) -> Program` もある。入口の関数は呼ぶ側が渡す。`SourceFiles` は extern の呼び出しの位置を行と列にするのに使う |
 | `eml_lir` | `passes_until(&mut Program, Pass)`。変換の直後の LIR に、box の挿入から指定したパスまでをかける |
-| `eml_interp` | `run(&eml_lir::Program, &RunConfig, &OutputSink) -> Result<RunStats, RuntimeError>` |
+| `eml_vm` | `execute(&eml_lir::Program, &RunConfig, HostRef) -> Result<RunStats, RuntimeError>`。`compile::<M>(&eml_lir::Program, Arc<Control>) -> Result<CodeBase<M>, CompileError>` でバイトコードを作り、`Ctx<M>` の上で実行する |
 
 ## エラーが出ても止まらない
 
@@ -261,9 +260,9 @@ HIR への変換では、名前解決に加えて、名前の重複と未定義�
 - 単一化はこの規則の外にある。`unify` は、1回の呼び出しの中で単一化を終えた複合の型 (型構成子、タプル、関数型) の代表の組を覚え (`Unified`)、同じ組はすぐに終える。row のラベルの型引数の単一化にも同じ記録を渡す。もう一度たどっても同じ Kind の制約を同じ由来で出すだけなので、飛ばしても結果は変わらない。記録は呼び出しの中だけなので、同じ大きな型の組を何度も単一化すると、そのたびに表の大きさに比例する時間がかかる ([実装の現在地](status.md) の「深さと性能」)
 - `TypeKind::Con` と `EffectLabel` は ID だけを持ち、名前を持たない。表示は `TypeStore::display` と `EffectLabel::display` で、`eml_hir` の `DisplayNames` を引く。同じ名前の型やエフェクトを、名前を定義するモジュールが2つ以上あるときだけモジュール名で修飾して表示するためである。名前の表がモジュールの文脈によらないので、HIR の診断、型検査の診断、`dump`、`pretty` が同じ表を引ける
 
-## `eml_core_ir`、`eml_lir`、`eml_runtime`、`eml_interp` の内部
+## `eml_core_ir`、`eml_lir`、`eml_vm` の内部
 
-- Core IR の構成と translate、EP の規則は [Core IR](../spec/core-ir.md) が、2つの IR に共通する規則、LIR のパス、評価と所有権の意味、パスの境界の不変条件は [LIR](../spec/lir.md) が、ヒープと RC は [ランタイム](../spec/runtime.md) が定める。translate の組み立てと、継続と evidence の実行時の表し方は、下の「translate の組み立て」と「継続と evidence」に書く
+- Core IR の構成と translate、EP の規則は [Core IR](../spec/core-ir.md) が、2つの IR に共通する規則、LIR のパス、実行の意味、パスの境界の不変条件は [LIR](../spec/lir.md) が、バイトコードと VM は [VM](../spec/vm.md) が、物体の形とヒープと RC は [オブジェクトモデル](../spec/object-model.md) が定める。translate の組み立てと、継続と evidence の実行時の表し方は、下の「translate の組み立て」と「継続と evidence」に書く
 - Core IR の関数 (`CoreFn`) と LIR の関数 (`LirFn`) は、前向きの辺だけを持つ基本ブロックの列 (`blocks`) である。2つの IR は別の型を持つ。Core IR の型は RC の命令、`box`、`unbox`、`tail` を持たず、LIR の型はエフェクトの命令と `mask` を持たない。命令ごとの表示、読み込み、検査、命令の列をたどる部分は IR ごとに書き、重なる部品 (共有する型、`syntax` のテキスト形式の部品、`check` の verifier の部品) は `eml_lir` から借りる。骨格を `Function<D: Dialect>` のように generic にすると、ジェネリクスとフックがすべてのパスと verifier に広がるので採らない。命令の位置はブロックの番号 (`BlockId`) と文の番号で表せるので、式のアリーナ、式ごとの ID、join point の索引は持たない。パスの間で古くなる情報 (生存集合など) も IR に書かず、要るパスがその場で求める
 - パスの順番は、各 crate の `pipeline.rs` だけが持つ。`eml_core_ir` の `pipeline.rs` は translate と evidence passing (`Pass::{Translate, Evidence}`、`core_until`) と、LIR へのつなぎ (`lower`、`lower_until`) を持つ。`eml_lir` の `pipeline.rs` は box の挿入、縮約、Perceus (`Pass::{Boxing, Contract, Perceus}`、`passes_until`) を持つ。verifier はデバッグビルドだけでかける。Core IR では translate の後に変換の段 (`verify_translated`)、EP の後に EP の段 (`verify_evidence`) を、LIR では `passes_until` の入口で入口の段 (`verify_lowered`)、box の挿入と縮約の後に範囲の段 (`verify_scopes`)、Perceus の後に所有の段 (`verify`) を通す。LIR の段は `eml_lir` の `verify.rs` の `Level` (`Lowered < Scopes < Ownership`) で、境界の検査は範囲の段から走る。関数の値の対象が一様かは、`verify_at` が関数ごとに1回求めた表 (`FnSummary::non_uniform`) を引く。2つの verifier が共有する部品 (辺の検査と支配木、R7 と R8、基本操作と `clause` の検査) は `eml_lir::check` にある
 - box の挿入 (`eml_lir` の `boxing.rs`) は、分類、T3、一様化と `f$boxed`、変換を、プログラム全体に1回ずつ行う ([LIR](../spec/lir.md) の「box の挿入」)。T3 は逆の表と作業の列を使い、関数の数と末尾の辺の数に比例する時間で済ませる。変換 (`Converter`) は関数ごとにブロックを番号の順に見て、case のフィールドの受け直しを行き先のブロックの先頭に置く。覗き穴の表 (`unboxed_from`、`boxed_from`) は、パスが作った定義からだけ作る。`never` の操作の `clause` の束縛は、`Converter` と verifier が関数ごとに変数の番号の表で覚え、その使いを変換せず、互換の位置で比べない。`clause` の印の関数は `conform_clause` が操作の ABI に合わせる。末尾の位置の呼び出しは `tail_position_call` で形から決め、T3 と縮約が使う。EP は `eml_core_ir` の `tail.rs` にある Core IR の上の写しを使う ([LIR](../spec/lir.md) の「末尾の位置の呼び出し」)。生存解析も、`eml_lir` の `liveness.rs` と、EP のための `eml_core_ir` の `liveness.rs` の2つの写しがある。箱を要するスカラーは `Repr::needs_box` (`Repr::BOXED_SCALARS`)、互換は `Repr::compatible` の1か所で決め、box の挿入、縮約、verifier が同じ関数を使う
@@ -279,20 +278,19 @@ HIR への変換では、名前解決に加えて、名前の重複と未定義�
 - 持ち上げた関数の名前は、ラムダが `外側の名前$lambdaN`、handle の本体と節が `外側の名前$handleN` (と `$操作名`、`$return`)、値として使う extern を包む関数が `外側の名前$externN`、コンストラクタと操作を包む関数が `con$` と `op$`、継続を包む関数が `cont$` (状態のない handler 用) と `cont$state` (状態のある handler 用) である。入口以外のモジュールの関数、`con$` と `op$` の後ろの名前、エフェクトの表の名前には、`モジュール名.` を付ける (`Report.Csv.parse`、`con$Report.Csv.Row`)。ラムダ、handle、extern を包む関数は外側の名前を前に付けるので、同じく修飾される ([Core IR](../spec/core-ir.md))。型変数を持つ関数では、外側の名前は instance の名前 (`twice@[Int]`) なので、持ち上げた関数の名前も instance の名前を根にする (`twice@[Int]$lambda0`)。box の挿入が足す `f$boxed` も、instance の名前に `$boxed` を付ける (`inc@[Unit]$boxed`)。instance のメソッドの関数、既定のメソッドの関数、生成した関数、`tag$` の名前は、[Core IR](../spec/core-ir.md) の「メソッドの解決」にある。N は、本体を変換する前に HIR を1回たどって、式の ID の順に振る (`numbering`)。変換の順で番号が変わらないようにするためである。Core IR のエフェクトの番号は `eml_hir::Program::effects` の順から、extern のエフェクトを飛ばして数える。この数え方は `effect_index` と `effect_table` が同じ補助関数を使う。`IO` は Prelude の最初のエフェクトなので、表からだけ外すと、ユーザーのエフェクトの番号がすべて1つずれるためである
 - extern を値として使うときは、参照する場所ごとに包む関数を作り、その `extern` 命令に参照した場所の位置を持たせる。extern ごとに1つの共有の包みにすると、実行時エラーが包む関数の中を指し、どこで使った extern かが分からなくなるためである
 - `lower` と `core_until` は `SourceFiles` を受け取り、extern の呼び出しの位置 (`Loc`) を `SourceFiles::line_col` で行と列にする。`Program.files` には、位置に使った表示用のパスを使った順に入れる。`eml_core_ir` が `eml_diagnostics` に依存するのはこのためで、診断は出さない。`line_col` は、`SourceFiles::add` が作った行の先頭の表を二分探索し、その行の中だけ文字を数える
-- 文と終端の値と行き先をたどる処理 (生存解析、Perceus、verifier、縮約、`pretty`、LIR への変換、インタプリタ) は、`Stmt::for_each_atom`、`Term::successors` などの visitor を通すか、`..` を使わずに欄をすべて名前で受ける `match` で分解する。欄を IR に足したときに、たどる処理のすべてがコンパイルエラーになるようにするため
+- 文と終端の値と行き先をたどる処理 (生存解析、Perceus、verifier、縮約、`pretty`、LIR への変換、VM のコード生成) は、`Stmt::for_each_atom`、`Term::successors` などの visitor を通すか、`..` を使わずに欄をすべて名前で受ける `match` で分解する。欄を IR に足したときに、たどる処理のすべてがコンパイルエラーになるようにするため
 - アトムの使い方は「消費」と「読む」に分かれる ([LIR](../spec/lir.md) の「ブロックの列」)。`for_each_atom` は両方を返し、`Rhs::for_each_consumed`、`Stmt::for_each_consumed`、`Term::for_each_consumed` は消費だけを返す (`unpack` の値、`switch` の scrutinee、`unbox` のオペランド、`prim` の借用の引数を除く)。`prim` の引数が借用かは、基本操作の表の `PrimRow::borrowed` で決まる。生存解析と縮約は前者を使い、Perceus は後者で所有を取る変数と `dup` の数を決める。Perceus と verifier は、この分類を共有する。verifier は、読む使いを `Unpack`、`Dup`、`Switch`、`Unbox` の腕と、`Prim` の腕の借用の引数で直接確かめる
 - Perceus (`eml_lir` の `perceus.rs`) は、ブロックを番号の順に1回たどり、各ブロックで2つのループを回す ([LIR](../spec/lir.md) の「Perceus」)。命令が前からの状態 (所有と保持) に依るので、後ろからたどるループで各文で死ぬ変数と定義して後で使う変数を記録し (`deaths`)、前からたどるループで状態を持って命令を足す。文ごとに生存集合を写さないのは、長いブロックで時間が文の数と生存集合の大きさの積になるためである
   - 関数全体の表 (`Fields`) は、変数ごとの RC の対象かの印、親とスロット (`Parent`)、束縛の時点の持ち主を持つ。経路ごとの状態 (`State`) は、所有の集合と、持ち主ごとのそれに属する生きている変数 (`lent`) だけである。保持は「所有していて生きていないが、`lent` が空でない」ことから決まり、別には持たない
   - `switch` の行き先の状態 (`switch_entries`) は、`switch` のブロックを前からたどり終えた後に、行き先ごとに状態を写し、case のフィールドを借りた変数として加えて作る。行き先に着いたときに取り出す
   - 文の前の命令は `stmt` が、終端の前の命令は `term` が置く。どちらも、所有を取る変数を集めて `take` に渡し、その後に消費の数の `dup` を置く。`term` は、`return`、`tail`、`jump` の実引数と、`jump` の行き先で生きている借りた変数の所有を取り、保持している変数を手放す。`take` は、持ち主がその命令で必要なら `dup` し、そうでなければ `resolve` で持ち主を解く。`resolve` は、属する変数から親をたどって道と代表を決め、`release` を作業リストで親から子の順に置く。深い入れ子で Rust のスタックを使わないためである
   - タグの case を持つのに配置のない `switch` を見たら、その `switch` の所でパニックする (`a_tag_switch_without_a_layout_stops_perceus` が確かめる)
-- パス、verifier、`pretty`、`parse`、インタプリタは、ブロックと文の並びをループでたどり、IR の大きさに比例して再帰しない。生存解析は、ブロックを後ろからたどる1回のループで、ブロックごとの入口の生存集合を側の表 (`liveness::live_in`) に返す。辺がすべて前向きなので、不動点の計算は要らない
+- パス、verifier、`pretty`、`parse`、VM のコード生成は、ブロックと文の並びをループでたどり、IR の大きさに比例して再帰しない。生存解析は、ブロックを後ろからたどる1回のループで、ブロックごとの入口の生存集合を側の表 (`liveness::live_in`) に返す。辺がすべて前向きなので、不動点の計算は要らない
 - 縮約 (`eml_lir` の `contract.rs`) は、使われない純粋な `let` を消し、その後ですべてのブロックに末尾呼び出しの規則を当てるパスである。末尾呼び出しを作るのは縮約だけで、呼び出しの結果が関数の `ret` と互換なときだけ `tail` にする。S3b-1 までの `simplify` の書き換え (合流の畳み込み、値が分かっているコンストラクタへの `switch`、case-of-case、末尾呼び出し) は、translate が組み立てるときに行う。`simplify` は書き換えのたびに枝の部分木を置き換えたので、長い `else if` の連鎖で2乗の時間がかかり、続きを `switch` の枝の中へ移して入れ子を深くした
-- インタプリタの環境 (`Env`) のスロットは値だけを持ち、読み出しはスロットを書き換えない。参照の所有は LIR の命令が表し、verifier が釣り合いを確かめる。`Payload` は `Clone` を導出しないので、`ObjRef` を `dup` せずに複製できない
-- `eml_interp` は `eml_lir` の `Program` を読む。関心ごとにファイル (`machine.rs`、`runtime.rs`、`prims.rs`、`externs.rs`、`error.rs`) を分ける。`machine.rs` は IR の形に依る部分 (制御 (関数、ブロック、文の番号)、`jump`、`switch`、`unpack`、`release`、関数への入り方、再開の番地の作り方と読み方) だけを持つ。IR の形に依らない部分 (ヒープ、継続、`evv` と yield の状態、不死のリテラル、関数値の適用、戻り、extern) は `runtime.rs` の `Runtime` が持ち、基本操作は `prims.rs` が `Runtime` のメソッドとして実行する。`Runtime` は呼び出しと戻りの行き先を `Transfer` で機械に返す。将来のバイトコード VM が `Runtime` を使い回せるようにするためである。`externs.rs` の `call_extern` が `Extern` のすべての行を、既定の腕のない `match` で実行する (行を足して実装を忘れるとコンパイルが通らない)
-- 戻りのフレーム (`Frame::Return`) は、関数の番号、再開の番地 (`resume: u64`)、退避した値 (`saved`)、次のフレームを持つ。再開の番地と `saved` の鍵 (スロットの番号) の意味は実行する側が決め、`eml_runtime` は中身を解釈しない。インタプリタは、呼び出しの文のブロックの番号を上位の32ビットに、文の番号を下位の32ビットに入れる。戻ったら、その文が `Rhs::Call` の `let` であることを確かめ、その変数に結果を入れて次の文から続ける。番地を `u64` にしたのは、将来のバイトコード VM が自分の `pc` をそのまま入れられるようにするためである
-- 機械は、位置を持つ `Rhs::Extern` の `call_extern` が返した誤りにだけ、`Program.files` のパスと行と列 (`SourceLocation`) を付ける ([LIR](../spec/lir.md) の「実行時エラー」)
-- `RunStats` の `evidence_steps`、`yields`、`yield_frames` は `prims.rs` の基本操作が、`boxes` と `unboxes` は機械が `box` と `unbox` の文を実行するときに数え、ほかの4つはヒープが数える (`Heap::string_bytes_written`、`Heap::rc_increments`、`Heap::rc_decrements`、`Heap::peak_objects`)。文字列の物体の中身を書くのは、ヒープの確保と `append_str` だけで、ヒープはそこで書いた長さを足す。`alloc_immortal` が作る不死のリテラルは数えない。参照の数を書き換えるのは `dup`、`decref`、`acquire_immortal`、`release_fields` だけで、ヒープはそこで数える。`peak_objects` はスロットの数である。`insert` は空いたスロットを先に使うので、スロットの数が同時に生きていた物体の数の最大になる。インタプリタの `box` と `unbox` は値をそのまま渡すので、ヒープの数える回数は変えない
+- `eml_vm` は、コード生成 (`compile/`) と実行に分かれる。`compile/` では、`slots.rs` が文の単位の生存から干渉グラフを作ってスロットを塗り、`moves.rs` がブロック引数への並列な代入を `Move` の列に直し、`emit.rs` が関数ごとに命令を出し、`constants.rs` が定数を作業用のヒープに作って凍結する ([VM](../spec/vm.md) の「スロットの割り当て」と「`CodeBase` と `FnEntry`」)。実行は `vm.rs` の、命令を `match` で分ける1つのループである。関数の値の適用は `apply.rs`、データの命令は `data.rs` にあり、基本操作の命令も `vm.rs` の `match` の腕で `Ctx` のメソッドを呼ぶ。逆アセンブラは `disasm.rs` である
+- VM は状態を `Ctx` と `Task` だけに置き、Rust の再帰を使わない。呼び出しのスタックは `Task` のデータである ([マルチコア対応の設計](../future/multicore.md) の「VM の並列化の備え」の制約5)
+- 位置を持つ `extern` 命令から作った命令にだけ、`CodeBase::locations` で源の位置 (`SourceLocation`) を付ける ([LIR](../spec/lir.md) の「実行時エラー」)
+- `RunStats` の回数は、`Ctx` の `CtxStats` とヒープの `Stats` が検査モードで数える。`boxes` と `unboxes` は VM が数え、`peak_stack` は実行の終わりのスタックの長さである ([VM](../spec/vm.md) の「`RunStats`」)
 
 ### translate の組み立て
 
@@ -315,15 +313,14 @@ HIR への変換では、名前解決に加えて、名前の重複と未定義�
 
 ### 継続と evidence
 
-- 継続は、ヒープ上のフレームの連結リストで表す。フレームは、戻りのフレーム (`Frame::Return`)、余った引数を適用するフレーム (`Frame::Apply`)、最下部の `Frame::Root` の3種類である。フレームはつねに一意で、戻りで1回だけ取り出す。値が `Frame::Root` に届けば実行が終わる
-- エフェクトは EP が普通の呼び出しと基本操作に変えているので ([Core IR](../spec/core-ir.md) の「evidence passing」)、機械は handler を探さず、継続も切り出さない。エフェクトの継続 κ は EP が組み立てるクロージャで、`multi` の再開は共有されたクロージャへの `apply` として捕獲だけを写す。LIR は `handle`、`perform`、`resume`、`mask` を型に持たないので、機械に届くことはない
-- `Runtime` は、実行の文脈として `evv` (`Value`。空のリストは `Value::Unit`) と yield の状態 (`YieldState`) を持つ。`YieldState::Yielding` は宛先の evidence、節の本体、組み立て中の κ を所有し、中断かどうか (`abort`) を持つ。κ は `yield_cont_take` で取り出している間 `Value::Unit` である
-- 基本操作は `prims.rs` にまとめる。借用の引数 (`PrimRow::borrowed`) は手放さず、ほかの引数は所有した参照として受け取り、結果に残さないものは手放す ([LIR](../spec/lir.md) の「基本操作」)。evidence、入口の表、`evv` の節点は `eml_runtime` の `Payload::{EvTable, Evidence, Evv}` である ([ランタイム](../spec/runtime.md) の「evidence と `evv` の物体」)
-- `Call::Clause` は `Call::Apply` と同じく `apply_and_continue` で関数値を適用する
+- 関数の呼び出しの継続は、VM のタスクのスタックの枠の列で表す。枠は見出しに戻り先の命令の位置、結果を書くスロット、呼び出し元の枠の位置と大きさを持つ ([VM](../spec/vm.md) の「フレーム」)。いちばん下の枠は入口の関数の結果を受け、その戻り先は `Finish` である
+- エフェクトは EP が普通の呼び出しと基本操作に変えているので ([Core IR](../spec/core-ir.md) の「evidence passing」)、VM は handler を探さず、継続も切り出さない。エフェクトの継続 κ は EP が組み立てるクロージャで、`multi` の再開は共有されたクロージャへの `apply` として捕獲だけを写す。LIR は `handle`、`perform`、`resume`、`mask` を型に持たないので、VM に届くことはない
+- 実行の文脈 (`evv` と yield の状態) は `eml_rt` の `Ctx` が持ち、基本操作は `Ctx` のメソッドである ([オブジェクトモデル](../spec/object-model.md) の「実行文脈 `Ctx`」)。借用の引数 (`PrimRow::borrowed`) は手放さず、ほかの引数は所有した参照として受け取り、結果に残さないものは手放す ([LIR](../spec/lir.md) の「基本操作」)
+- `Call::Clause` は `Call::Apply` と同じく関数の値を適用する。ただし引数の数は、いつも入口の関数の引数の数と等しい ([VM](../spec/vm.md) の「呼び出しと戻り」)
 - EP が足す変数の印は `evidence/` が決める。EP が作るクロージャ (`f$kN`、作り直す `compose$`、`yielding_entry` の `g`) は `captured_mark` で捕まえた値の印の結びにし、補助の関数 (`helpers.rs`) の κ、状態、値は `poly`、evidence は `unr` にする。遅い道と `prompt$` の経路の `drop` は、結果の Repr が RC の対象で印が `unr` でないときだけ出す ([Core IR](../spec/core-ir.md) の「EP の明示の `drop`」)
-- `prim dummy()` は `Value::Dummy` を返す。ヒープの物体でないので、`dup`、`decref`、`drop` は何もせず、機械の `box` と `unbox` もそのまま通す
-- 正しく終わった実行では、`finish` が `check_context` で `evv` が空で yield の状態がなしであることを確かめてから、`debug_heap` のリークを数える。残った evidence がリークに見えないように、この検査は `debug_heap` によらず行う
-- `drop k` と `never` の操作による中断は、継続のクロージャを解放する。物体は捕まえた値だけを所有するので、子をたどる解放が、捕まっていた値を1回ずつ解放する。`Lin` の値の破棄処理はオブジェクトの解放そのものなので、捕まっていた `File` は、この解放で読み出し口が捨てられて閉じる ([ランタイム](../spec/runtime.md))
+- `prim dummy()` は、ヒープごとに1つ確保する不死の物体 (値 0 の `BigInt`) を指す語である。`dup`、`decref`、`drop` は何もせず、`unbox` は 0 を読む ([オブジェクトモデル](../spec/object-model.md) の「ダミーの値」)
+- 正しく終わった実行では、`Ctx::check_finished` で `evv` が空で yield の状態がなしであることを確かめてから、検査モードのリークを数える。残った evidence がリークに見えないように、この検査はモードによらず行う
+- `drop k` と `never` の操作による中断は、継続のクロージャを解放する。物体は捕まえた値だけを所有するので、子をたどる解放が、捕まっていた値を1回ずつ解放する。捕まっていた `File` は `Foreign` の物体で、この解放で読み出し口が捨てられて閉じる ([オブジェクトモデル](../spec/object-model.md) の「`File`」)
 - `extern` 命令は、フレームを積まずにその場で実行して値を返す。extern は eml のコードを呼び返さないので、継続を組み立てる必要がないためである
 
 ## ソースファイルと位置
@@ -337,20 +334,22 @@ HIR への変換では、名前解決に加えて、名前の重複と未定義�
 
 - 引数の解析は `clap` (derive) を使う
 - `eml check <file>` は、診断を stderr に表示する。`eml run <file>` は、診断 (警告を含む) を先に stderr に表示し、エラーがなければ実行する。警告がプログラムの出力の後に出ないようにするため
-- `eml run --debug-heap` は、RC のリーク検出と解放済みアクセスの検出を有効にする
-- 終了コードは、0 = 成功、1 = 診断のエラーあり、または実行時エラー、2 = 使い方の誤り (引数の誤り、入口のファイルが読めない) とする。2 は、clap が引数の誤りで返す値に合わせた。import したモジュールが見つからないことは診断 (E1026) なので 1 である
+- `eml run` は VM の速いモードで実行し、`eml run --debug-heap` は検査モードで実行する。検査モードは、RC のリーク、解放済みの物体の使用、`lin` の物体の `dup` などを見つける ([オブジェクトモデル](../spec/object-model.md) の「報告する誤り」)
+- `eml run` は、ファイルを読む前に SIGINT のハンドラを入れ、`default_limits()` の上限で実行する ([VM](../spec/vm.md) の「上限と割り込み」)
+- 終了コードは、0 = 成功、1 = 診断のエラーあり、または実行時エラー、2 = 使い方の誤り (引数の誤り、入口のファイルが読めない)、130 = 割り込みで止まった、とする。2 は、clap が引数の誤りで返す値に合わせた。130 は、シェルが SIGINT で終わった子に報告する値と同じである。import したモジュールが見つからないことは診断 (E1026) なので 1 である
 
-`eml_cli` の lib は次の API を公開する。`Session` はパイプラインを組む唯一の場所で、CLI、UI テスト、`eml_test_support` がこれを通す。UI テストはこれをプロセス内で呼ぶ。どのメソッドも読み込みの結果から計算し直し、途中の結果を持たない。途中の結果を使い回すのは、salsa でクエリ化するときに考える。`Session` は `Send + Sync` で、`crates/eml_cli/tests/api.rs` が確かめる。salsa への載せ替えと、フロントエンドの並列のコンパイルに備えるためで、インタプリタとは関係ない。読み込みの結果が持つのは緑の木 (green tree) と `AstPtr` だけで、ノードを持たないので `Send + Sync` にできる。
+`eml_cli` の lib は次の API を公開する。`Session` はパイプラインを組む唯一の場所で、CLI、UI テスト、`eml_test_support` がこれを通す。UI テストはこれをプロセス内で呼ぶ。どのメソッドも読み込みの結果から計算し直し、途中の結果を持たない。途中の結果を使い回すのは、salsa でクエリ化するときに考える。`Session` は `Send + Sync` で、`crates/eml_cli/tests/api.rs` が確かめる。salsa への載せ替えと、フロントエンドの並列のコンパイルに備えるためで、実行とは関係ない。読み込みの結果が持つのは緑の木 (green tree) と `AstPtr` だけで、ノードを持たないので `Send + Sync` にできる。
 
 - `Session::load(entry_path, entry_text, &dyn ModuleSource) -> Session` は、入口の表示のパスと本文を受け取り、読み込みの段で標準ライブラリ全体と import したモジュールを読む。`Session::user_module_names` は出どころがユーザーのモジュールの名前を返し、UI テストの harness が1ファイルのテストの import を確かめるのに使う。`Session` は1回の検査や実行で読むソースの集まりである。入口のファイルは `main.rs` が読み、読めなければ終了コード 2 にする。ファイルシステムから読む `ModuleSource` は `FsProvider` で、パスの各段の名前がディレクトリの一覧と大文字小文字まで一致することを確かめる。macOS のように大文字小文字を区別しないファイルシステムで、`import Report.Csv` が `report/Csv.em` に当たらないようにするためである。大文字小文字だけが違う名前があれば、実際の名前を読めない理由として返す (E1026)。`main.rs` は、入口のファイル名をディレクトリの一覧にある綴りに直してから `Session::load` に渡す。`t/server.em` で `t/Server.em` を開けたときも、依存先の `import Server` が入口を指すと分かるようにするためである。実行を始める `main` は入口のモジュールからだけ探し (`hir::Program::main`)、Prelude には置かない
 - `Session::def_map() -> DefMapped`、`Session::lower() -> Lowered`、`Session::check() -> Checked` (feature `types`)。結果は段階の出力 (`DefMap`、HIR の `Program`、`TypedProgram`) と診断を持つ。診断は読み込みの段からその段階までのすべてで、`sort_diagnostics` で並べて返す。各段階は診断の順を約束しない。`eml check` は `check().diagnostics` を表示する
 - `Session::compile() -> Compiled<eml_lir::Program>` (feature `core`)。`Compiled<P>` は、検査で出た診断 (警告を含む) と、エラーがなければ IR (`program: Option<P>`) を持つ。`compile` は Perceus の後の LIR を返す。`main` がないこと (E2003) は `compile` だけが検査する ([型と Kind](../spec/types.md) の「推論」)
 - テストのための口が3つある。`Session::load_with_std(std, entry_path, entry_text, source)` は標準ライブラリを `(ファイル名, 本文)` の並びに差し替えて読む。`Session::compile_until(last: eml_lir::Pass) -> Compiled<eml_lir::Program>` は LIR を `last` のパスの直後で止め、`Session::compile_core_until(last: eml_core_ir::Pass) -> Compiled<eml_core_ir::Program>` は Core IR を `last` のパスの直後で止める。`eml_hir` の `load` / `load_with_std` と、`eml_core_ir` の `lower` / `lower_until` / `core_until` の組に合わせて置く。パスの順番は `eml_core_ir` と `eml_lir` だけが知るので、`compile_with` は IR を作る関数を受け取る
-- `execute(&eml_lir::Program, &RunConfig, stdout: OutputSink) -> Result<RunStats, RuntimeError>` (feature `run`)。`RunStats` は実行の仕事の回数と、同時に生きていたヒープの物体の数の最大で、CLI は使わない。テストが2乗の時間にならないことと、ループがフレームを積まないことを確かめるのに使う
+- `execute(&eml_lir::Program, &RunConfig, HostRef) -> Result<RunStats, RuntimeError>` (feature `run`)。VM で実行する。`RunStats` は実行の仕事の回数と、同時に生きていたヒープの物体の数とスタックの語の数の最大で、CLI は使わない。テストが2乗の時間にならないことと、ループがフレームを積まないことを確かめるのに使う
+- `default_limits() -> Limits` (feature `run`)。`eml run` の既定の上限を作る ([VM](../spec/vm.md) の「上限と割り込み」)
 
 検査と実行を別の関数に分けるのは、呼び出し側が実行の前に診断を表示できるようにするためである。CLI と UI テストは、`compile` の診断を表示してから `execute` を呼ぶ。
 
-`RunConfig` と `RunStats` は `eml_interp` で定義し、`eml_cli` が再公開する。`RunConfig` は `#[non_exhaustive]` にしてあり、`RunConfig::default()` から作ってフィールドを代入する。`OutputSink` と `RunStats` の定めは [ランタイム](../spec/runtime.md) の「実行の API」にある。
+`RunConfig`、`RunStats`、`RuntimeError` などは `eml_vm` で定義し、`eml_cli` が再公開する ([VM](../spec/vm.md) の「置き場所」)。`RunConfig` は `#[non_exhaustive]` にしてあり、`RunConfig::default()` から `with_debug_heap` と `with_control` で作る。`RunStats` の定めは [VM](../spec/vm.md) の「`RunStats`」にある。
 
 ## 外部 crate
 
@@ -363,3 +362,5 @@ HIR への変換では、名前解決に加えて、名前の重複と未定義�
 | `clap` | 4.6 (`derive`) | CLI の引数 |
 | `insta` | 1.49 (`glob`) | スナップショットテスト |
 | `la-arena` | 0.3 | HIR の ID とアリーナ、型検査の別テーブル (`ArenaMap`) |
+| `ctrlc` | 3.5 | SIGINT のハンドラ (`eml run`) |
+| `libc` | 0.2 | 物理メモリの大きさ (`default_limits`) |
