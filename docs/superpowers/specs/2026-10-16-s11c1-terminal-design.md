@@ -72,6 +72,8 @@ pub enum Command { Quit, Help }
 impl Lines {
     /// 1行を渡す。`line` は `\n` を含まない。
     pub fn push(&mut self, line: &str) -> Step;
+    /// 1回の読みが返した文字列を `\n` で行に分け、行末の `\r` を除いて順に `push` し、各行の結果を返す。
+    pub fn push_text(&mut self, text: &str) -> Vec<Step>;
     /// Ctrl-C。読みかけの入力と `:{` の状態を捨て、入力の始めに戻す。
     pub fn interrupt(&mut self);
     /// EOF。読みかけの入力がなければ `None` を返す。
@@ -98,7 +100,7 @@ impl Lines {
 
 - 標準入力が端末のときだけ `rustyline` (18.0.1、`default-features = false`) を使う。端末でなければ、標準入力の `BufRead::read_line` で1行ずつ読み、プロンプトは書かない。`rustyline` は `TERM` が `dumb` などのときに、標準入力がパイプでもプロンプトを標準出力に書くので、パイプのときの動きを `TERM` によらず決めるためである
 - `rustyline` の設定は、`Behavior::PreferTerm` (標準出力をリダイレクトしても、プロンプトと編集の表示を端末に書く) のほかは既定の値である。履歴は既定の `MemHistory` で、読んだ行ごとに `add_history_entry` で足す。既定の設定では、空の行と、直前と同じ行は足さず、100 行まで持つ。GHCi と同じく、行ごとの履歴である
-- 1回の `readline` が複数の行を返すことがある。既定の設定で bracketed paste が有効なので、貼り付けた複数行が1つの文字列で返るためである。繰り返しは、返った文字列を `\n` で分け、1行ずつ `Lines::push` に渡す。途中で `Eval` や `Command` が返れば、それを処理してから残りの行を渡す
+- 1回の `readline` が複数の行を返すことがある。既定の設定で bracketed paste が有効なので、貼り付けた複数行が1つの文字列で返るためである。繰り返しは、返った文字列を `Lines::push_text` に渡し、返った `Step` を順に処理する。`:quit` か続けられない誤りで止まれば、残りは捨てる。`Lines` の状態は評価の結果によらないので、先にすべての行を渡してよい。パイプから読んだ行も同じ道を通るので、行末の `\r` (CRLF の入力) も除く
 - `ReadlineError::Interrupted` (編集中の Ctrl-C) と、`EINTR` で戻った誤り (`ReadlineError::Errno(EINTR)` と、`Io` で種類が `Interrupted` のもの) は、どちらも `Lines::interrupt` に渡して次の行を読む。`rustyline` は、端末を raw にする `tcsetattr` を、自分のハンドラを入れる前に `ISIG` が立ったまま呼ぶ。この間の Ctrl-C で下のハンドラが動き、`SA_RESTART` がないので `EINTR` が返りうる。このときも REPL は終わらない
 - `ReadlineError::Eof` は `Lines::end` に渡す。ほかの誤りは上の「終わり方」のとおりである
 - `rustyline` は行を編集する間だけ端末の `ISIG` を外す。そのため、編集中の Ctrl-C は SIGINT にならず、キーとして `Interrupted` になる。標準出力が端末なら、`rustyline` は編集する間だけ SIGINT と SIGWINCH のハンドラを自分のものに替え、編集を終えると元のハンドラ (下の REPL のハンドラ) を、フラグも含めて戻す
@@ -175,10 +177,10 @@ Ctrl-C で REPL から抜けられない処理が残る。`eml run` は2回目�
   - `interrupt` で読みかけを捨てること、EOF での読みかけの評価、読みかけがないときの `end` の `None`、各段階の後の `prompt()`
 - `Repl` の `Interrupted` (`crates/eml_cli/tests/api.rs`)
   - `read` の中で `Control::interrupt()` を呼ぶ `ModuleSource` を使う。`import Util` と関数の定義を持つ入力が `Interrupted` になり、次の入力でその関数を参照すると E1001 になる
-  - 同じ仕組みで、`import Util` と `println` を持つ式の入力が `Interrupted` になり、何も書かない
+  - 止める語を読むのは、前端の検査と lowering の後、`load` の前の1か所で、入力の種類によらない。式の入力は import を持てず、前端の検査の間に割り込みを立てる決まった道がないので、この1か所を定義の入力で確かめる
   - `repl_limits()` が深さと確保量を抑えること (`default_limits_bound_the_depth_and_the_memory` と同じ形)
-- プロセスのテスト (`crates/eml_cli/tests/cli.rs`、標準入力をパイプにする): 式の値、定義と後の入力での使用、標準エラーの診断、実行時エラーの後も続くこと、`:quit` と EOF で 0 で終わること、`--debug-heap` でリークがなく 0 で終わること、知らないコマンド、`:{ … :}`、`:help`、パイプのときプロンプトを書かないこと
-- SIGINT のテスト (`cfg(unix)`、`cli.rs`)。どのテストも、標準入力を開いたままにし、最初に `1` を評価して標準出力に `1` が出るのを待ってから SIGINT を送る。ハンドラを入れる前の SIGINT は、既定の動作でプロセスを終わらせるためである。標準出力は別のスレッドで読み続ける。パイプが詰まると、子が書き込みの中で止まって安全点に来ないためである
+- プロセスのテスト (新しいファイル `crates/eml_cli/tests/terminal.rs`、標準入力をパイプにする): 式の値、定義と後の入力での使用、標準エラーの診断、実行時エラーの後も続くこと、`:quit` と EOF で 0 で終わること、`--debug-heap` でリークがなく 0 で終わること、知らないコマンド、`:{ … :}`、`:help`、パイプのときプロンプトを書かないこと
+- SIGINT のテスト (`cfg(unix)`、`terminal.rs`。`cli.rs` の `sigint`、`kill_after_deadline`、`DEADLINE` を `pub(crate)` にして使う)。どのテストも、標準入力を開いたままにし、最初に `1` を評価して標準出力に `1` が出るのを待ってから SIGINT を送る。ハンドラを入れる前の SIGINT は、既定の動作でプロセスを終わらせるためである。標準出力は別のスレッドで読み続ける。パイプが詰まると、子が書き込みの中で止まって安全点に来ないためである
   1. 終わらないループを実行する入力を書き、`interrupted` が標準エラーに出るまで 100 ms ごとに SIGINT を送る。出たら送るのをやめてから `1 + 1` を書き、`2` が出ることを確かめる。REPL では SIGINT を何回送っても終わらないので、上の「残る制限」の 5 の競合があっても揺れない
   2. 書き手が開いたまま何も書かない FIFO を `Fs.read_all` で読む入力を書き、1 と同じく SIGINT を送る。`interrupted` の後もセッションが続く
   3. 入力を待つ間に SIGINT を何回か送った後の `:quit` で、0 で終わる
