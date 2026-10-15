@@ -46,7 +46,7 @@ S13 の後は、言語の項目を次の順に並べる。
 - S8 を S9 と S10 より前に置くのは、S10 で VM と一緒に作る関数表 `FnEntry` と `CodeBase` が、LIR の関数の集合を前提にするためである。関数の集合は、box の挿入が `f$boxed` を足して初めて決まる
 - S9 を S6 の後に置いたのは、データの表現を、実際のリスト、文字列、レコードで測って決めるためである。S11 が要る仕組みのうち、生存の列挙と RC の上限は S9 で、`CodeBase` は S10 で入れる。後から差し込むと作り直しになるためである
 - VM はシングルスレッドで出し (S10)、後から並列にできる制約を S9 と S10 で守る。VM の並列化は、ネイティブ化とは別の項目にする (下の「マルチコア対応」)。並列化を S10 で行わないのは、VM の最初の版で並列化と性能の両方を詰めることになるためである
-- CEK の確保を除くことと、CEK の上に REPL を作ることは行わない。どちらも、S10 で消す CEK への投資になるためである。調査の測定では、`fib 22` の実行命令の約53%が確保と解放、引数と退避の `Vec` の組み立てだった。VM とランタイムは、この費用を持たない形で作る
+- CEK の確保を除くことと、CEK の上に REPL を作ることは行わなかった。どちらも、S10 で消す CEK への投資になるためである。調査の測定では、`fib 22` の実行命令の約53%が確保と解放、引数と退避の `Vec` の組み立てだった。VM とランタイムは、この費用を持たない形で作る
 - `Float`、`Char`、`Num` を型クラス (S5) の後に置いたのは、`Num` をクラスとして入れ、型ごとの多重定義を別に作らないためである
 - バイト列と `Array` を `Num` の後に置くのは、`Byte` と `Int` で演算子を共有するためである
 
@@ -59,15 +59,15 @@ S8 を、S8a から S8d の4つの作業に分けて順に進める。段の列�
 | 作業 | 中身 | 状態 |
 |---|---|---|
 | S8a | LIR の型、テキスト形式、パーサ、verifier、Core IR から LIR への変換。box の挿入、縮約、Perceus を LIR に移し、CEK が LIR を読む | 終えた。決めたことは [Core IR](../spec/core-ir.md) と [LIR](../spec/lir.md) に移した。移す作業の前後で、EP、box の挿入、縮約、Perceus の後のダンプは、UI テストと `bench/` のすべてのプログラムでバイト単位で一致した |
-| S8b | Perceus の所有の形 (フィールドを借りたまま使い、所有が要る所でだけ所有を取る形)、基本操作の引数の借用、`File` の実行時の検査 | 終えた。決めたことは [LIR](../spec/lir.md) の「値の表現」、「基本操作」、「Perceus」と、[ランタイム](../spec/runtime.md) の「`File` の参照の検査」に移した。`bench/` の仕事の回数で変わったのは `state` の RC の増減だけである ([計測の基準](../implementation/benchmarks.md) の「S8b (所有の形と基本操作の借用)」) |
+| S8b | Perceus の所有の形 (フィールドを借りたまま使い、所有が要る所でだけ所有を取る形)、基本操作の引数の借用、`File` の実行時の検査 | 終えた。決めたことは [LIR](../spec/lir.md) の「値の表現」、「基本操作」、「Perceus」と、`runtime.md` の「`File` の参照の検査」に移した。`bench/` の仕事の回数で変わったのは `state` の RC の増減だけである ([計測の基準](../implementation/benchmarks.md) の「S8b (所有の形と基本操作の借用)」) |
 | S8c | 書き出す型の線形性 (`Lin`、`Flexible(Lin)`、`OpVar(_, Lin)`)、SCC ごとに解いてから書き出す型検査の順、instance での Kind の評価 (`kind_values`)、型の線形性 (`linearity`)、instance の名前の `%1` / `%m`、debug ビルドの食い違いの検査 | 終えた。決めたことは [型と Kind](../spec/types.md) の「Kind の書き出し」、[Core IR](../spec/core-ir.md) の「変換の規則」と「食い違いがないことの検査」、[コンパイラの構成](../implementation/architecture.md) の「`eml_types` の内部」に移した。UI テストの出力、診断の文字列、`bench/` の仕事の回数は変わらない |
-| S8d | translate と EP と box の挿入の Kind の印、EP の明示の drop、extern の行の Kind の列、V1 と V2、テキストの形の印 | 終えた。決めたことは [Core IR](../spec/core-ir.md) の「Kind の印」、[LIR](../spec/lir.md) の「Kind の印」と「Kind の印の検査」、[ランタイム](../spec/runtime.md) の「`File` の参照の検査」に移した。UI テストの出力と `bench/` の仕事の回数は変わらない ([計測の基準](../implementation/benchmarks.md) の「S8d (Kind の印と明示の drop)」) |
+| S8d | translate と EP と box の挿入の Kind の印、EP の明示の drop、extern の行の Kind の列、V1 と V2、テキストの形の印 | 終えた。決めたことは [Core IR](../spec/core-ir.md) の「Kind の印」、[LIR](../spec/lir.md) の「Kind の印」と「Kind の印の検査」、`runtime.md` の「`File` の参照の検査」に移した。UI テストの出力と `bench/` の仕事の回数は変わらない ([計測の基準](../implementation/benchmarks.md) の「S8d (Kind の印と明示の drop)」) |
 
 Kind の印を S8d に分け、書き出しを S8c にした理由は次のとおりである。
 
 - 型だけから印を決める案は採れない。`tests/ui/run/files/file_in_return_clause_on_abort.em` では、使われない `return x ->` の `x` は型が `_` で、使用回数のパスが `x` の Kind を `Unr` に決めている。型だけから決めると `x` は `poly` になり、今ある `decref x` を V1 が拒む。解いた Kind を型に持たせて書き出す必要があり、これは `eml_types` の段の組み替えを伴う
 - S8c は S8d がなくても検査できる。書き出した型と評価の結果は `eml_types` の単体テストで、instance の分かれ方は `eml_core_ir` のテストで確かめる
-- 「`Lin` の物体の RC は 1」([LIR](../spec/lir.md) の「値の表現」) のうち `File` の物体そのものは、V1 がなくても実行時に確かめられる ([ランタイム](../spec/runtime.md) の「`File` の参照の検査」)。`File` を含む `Lin` のデータとクロージャは、S8d の V1 で静的に覆った
+- 「`Lin` の物体の RC は 1」([LIR](../spec/lir.md) の「値の表現」) のうち `File` の物体そのものは、V1 がなくても実行時に確かめられる (`runtime.md` の「`File` の参照の検査」)。`File` を含む `Lin` のデータとクロージャは、S8d の V1 で静的に覆った
 
 ### 決めたこと
 
@@ -94,7 +94,7 @@ S8d で閉じた論点は次のとおりである。
 
 前提: S8。
 
-S9 を、S9a、S9v、S9b-1、S9b-2a、S9b-2b、S9b-3 の6つの作業に分けて順に進め、すべて終えた。段の列では S9 の1行のままにする。S9 の間、`eml_rt` はパイプラインから使わない。Verus、単体テスト、Miri、extern の期待値の表 (S9b-3) で確かめ、実際のプログラムで通すのは S10 の VM からである。CEK と `eml_runtime` は S10 まで変えない。S10 で消す CEK に投資しないためである (上の「段の列」)。
+S9 を、S9a、S9v、S9b-1、S9b-2a、S9b-2b、S9b-3 の6つの作業に分けて順に進め、すべて終えた。段の列では S9 の1行のままにする。S9 の間、`eml_rt` はパイプラインから使わない。Verus、単体テスト、Miri、extern の期待値の表 (S9b-3) で確かめ、実際のプログラムで通すのは S10 の VM からである。CEK と `eml_runtime` は S10 まで変えなかった。S10 で消す CEK に投資しないためである (上の「段の列」)。
 
 | 作業 | 中身 | 状態 |
 |---|---|---|
@@ -157,7 +157,7 @@ S10 を、S10a と S10b の2つの作業に分けて順に進める。段の列�
 | 作業 | 中身 | 状態 |
 |---|---|---|
 | S10a | VM の本体を CEK と並べて作る。LIR から `CodeBase` を作るコード生成、`eml_rt` の `Ctx` の上で動く VM、逆アセンブラ、命令の位置から源の位置への表。`eml run --vm` と、`run` と `run-fail` の UI テストを VM でも流すこと | 終えた。決めたことは [VM](../spec/vm.md) と、[オブジェクトモデル](../spec/object-model.md) の「語」、「ペイロード」、「`lin` ビット」、「凍結した領域」、[LIR](../spec/lir.md) の「一様な関数」と「生存解析」、[テスト戦略](../implementation/testing.md) の「`eml_vm` のテスト」、「2つのモードで流す」、「Miri」に移した。既定の `eml run` は CEK のままなので、UI テストの出力と CEK の `bench/` の仕事の回数は変わらない。VM の実行の分の命令の数は、`bench/` のどのプログラムでも CEK の約 0.10〜0.17 倍だった ([計測の基準](../implementation/benchmarks.md) の「S10a (VM)」) |
-| S10b | `eml run` を VM に切り替え、SIGINT のハンドラと上限を入れ、CEK、`eml_runtime`、`saved` を消し、spec を書き直す | まだ |
+| S10b | `eml run` を VM に切り替え、SIGINT のハンドラと上限を入れ、CEK、`eml_runtime`、`saved` を消し、spec を書き直す | 終えた。決めたことは [VM](../spec/vm.md) の「置き場所」、「スロットとスタック」、「上限と割り込み」、「`RunStats`」、「並列化への備え」と、[オブジェクトモデル](../spec/object-model.md) の「実行の制御」、[LIR](../spec/lir.md) の「値の表現」、「所有を取る時点」、「持ち主を手放す時点」、「実行の意味」、「実行時エラー」、[テスト戦略](../implementation/testing.md) の「期待値の表」、「2つのモードで流す」、「性能のテスト」、「CLI のテスト」に移した。`runtime.md` は消した。UI テストの出力は変わらなかった。`bench/` の数は [計測の基準](../implementation/benchmarks.md) の「S10b」にある |
 
 S10a では、この節で決めていた次の3つを変えた。
 
@@ -174,16 +174,12 @@ S10a で閉じた論点は次のとおりである。
 
 ### 決めたこと
 
-S10a で決めたことは spec に移した。残りは S10b で行うことである。
+S10a と S10b で決めたことは spec に移した。S10b では、この節で決めていた次の4つを変えた。
 
-- `eml run` を VM に切り替え、`--vm` を消す
-- SIGINT のハンドラは、`eml_cli` が ctrlc crate で入れ、`Control::interrupt()` を呼ぶ。`eml run` では、`INTERRUPT` のビットがすでに立っていれば (2回目の Ctrl-C)、その場で終了コード 130 で終わる。CEK は止める語を見ないので、ハンドラは VM に切り替える S10b で入れる。CEK のうちに入れると、Ctrl-C で止まらなくなるためである。ネイティブでは、生成したプログラムの始めで同じ形で入れる ([オブジェクトモデル](../spec/object-model.md) の「実行の制御」)
-- 上限 (`Limits` の確保量、深さ、`evv` の長さ) の既定の値と、`RunConfig` での指定を決める
-- 期待値の変更として扱うもの: `crates/eml_interp/tests/bench.rs` の `RunStats` のスナップショットを VM のもの (`crates/eml_vm/tests/bench.rs`) に替えること、切り替えで変わる `Heap(_)` の誤りの文言 (`eml_rt::HeapError` の表示)、今の `Fault::Internal` がなくなること ([オブジェクトモデル](../spec/object-model.md) の「extern」の「誤り」)
-- [LIR](../spec/lir.md) の「実行時エラー」を書き直す。解放の後の使用と `a Lin object is shared` は、検査モード (`--debug-heap`) でだけ見つかるようになる ([オブジェクトモデル](../spec/object-model.md) の「受け入れる制約」)。S10a の `--vm` も、`--debug-heap` なしではすでにそう動く
-- CEK (`eml_interp` の機械)、`eml_runtime`、LIR の `saved` と Perceus でそれを埋める処理を消す。あわせて、`eml_interp` の側の期待値の表のテスト (`crates/eml_interp/tests/rt_externs.rs`) とタグの定数のテストを消し (`eml_rt` の側の表のテストと、`eml_vm` のタグの定数のテストは残す)、`scaling.rs` などの CEK のテストを VM へ移し、`eml_test_support` の実行の関数を VM に替え、`eml_cli` が公開する `RunStats` と誤りの型を `eml_vm` のものに替える
-- CEK を消す直前に、`bench/` で CEK と VM の差をもう一度記録する
-- spec を改める。`runtime.md`、`lir.md` のインタプリタの節、`core-ir.md`、`multicore.md`、`testing.md` である。段の終わりに `status.md` と `architecture.md` を直す
+- 上限の既定の値と、`RunConfig` での指定を決める、としていた。上限は `Control` が持ち、`RunConfig` は `Control` を持つ形にした。CLI が SIGINT のハンドラと実行に同じ `Control` を渡すためである ([VM](../spec/vm.md) の「置き場所」)
+- `crates/eml_interp/tests/bench.rs` のスナップショットを VM のものに替えることを、期待値の変更としていた。VM のスナップショットは S10a で `crates/eml_vm/tests/bench.rs` にあったので、CEK の `bench.rs` は消した (成否の変更)
+- `saved` と、Perceus でそれを埋める処理を消す、としていた。`saved` に結びついた規則 R7 も消し、Perceus の「所有を取る時点」の 2 のうち、呼び出しの後で生きる借りた変数を `dup` する枝も消した。どちらも、フレームが借りた値を持てない CEK のための規則だったためである。保持されている持ち主を呼び出しの前に解く枝は、空間のために残した ([LIR](../spec/lir.md) の「持ち主を手放す時点」)
+- 期待値の表を `eml_rt` と CEK の両方と照らす形にしていた。CEK を消したので、表は `eml_rt` の回帰の表にした ([テスト戦略](../implementation/testing.md) の「期待値の表」)
 
 ## S11 REPL
 
@@ -203,7 +199,7 @@ Prelude と `std/` の標準ライブラリと、指定したモジュールを�
   - 後の定義によって変わる ABI は、`f$boxed` を足すかどうかだけである。`f$boxed` は足すだけで、元の関数もそれまでの参照も変えない。ある関数への最初の値の参照が現れた入力で `f$boxed` を足せばよい
   - 内部の関数の一様化は、それを作った定義の中で決まる
   - T3 は、関数の本体と、それが末尾の位置で直接呼ぶ関数の `ret` だけで決まる。呼ぶ関数は前の入力か同じ再帰の組で定義されるので、新しい定義が古い定義の `ret` を変えることはない
-- 異常終了と割り込みからは、根からの走査で回復する。根から届くものを残し、届かないものを解放し、RC を数え直す。実行時エラーと割り込みは Perceus の規則の外の中断なので、RC の規則だけでは回復できないためである (調査の実験では、CEK で実行時エラーの後に局所変数が残った)
+- 異常終了と割り込みからは、根からの走査で回復する。根から届くものを残し、届かないものを解放し、RC を数え直す。実行時エラーと割り込みは Perceus の規則の外の中断なので、RC の規則だけでは回復できないためである (調査の実験では、S10b で消したインタプリタで、実行時エラーの後に局所変数が残った)
 - コード表を更新する区間では、割り込みを保留する
 - 入力の始めに `Control::clear` を呼び、前の入力で立った止める理由のビットを下ろす。2回目の Ctrl-C でも REPL は終わらない。`eml run` と違うこの扱いは、`eml_cli` のハンドラの設定で分ける (上の「S10 VM と切り替え」)
 - 結果は `Show` で表示する。表示のクラスを持たない型 (関数、継続) には、型に従う表示器を使う。表示器は深さと要素の数の上限を持ち、表示中も割り込みを見る

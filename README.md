@@ -10,7 +10,7 @@ eml は「線形型 × 代数的エフェクト」の組み合わせを試す、
 - 線形性を Kind で区別する。線形な値 (ファイルや `once` 操作の継続など) は、ちょうど1回使わなければならない。値を捨てるときは `drop` を明示する。
 - エフェクトは Koka 方式の Row 多相で扱う。操作ごとに継続の多重度 (`never` / `once` / `multi`) を宣言する。
 - 副作用は組み込みの `IO` エフェクトとして管理する。`IO` は操作のないラベルで、`println` やファイルの操作 (`Fs.open` など) は `extern` の関数である。
-- 型付きの Core IR を CEK 機械で実行する。メモリは Perceus 方式の参照カウントで管理する。
+- 型付きの Core IR を LIR に写し、レジスタ型のバイトコードの VM で実行する。メモリは Perceus 方式の参照カウントで管理する。
 - 1回の検査で、構文・名前解決・型・線形性・網羅性の誤りをまとめて報告する。
 
 ## 例
@@ -79,7 +79,7 @@ cargo run -p eml_cli -- run <file.em>        # 実行する (--debug-heap でヒ
 nix build                                    # eml のバイナリをビルドする
 ```
 
-`eml` の終了コードは、成功で 0、診断または実行時エラーで 1、使い方の誤りで 2 である。
+`eml` の終了コードは、成功で 0、診断または実行時エラーで 1、使い方の誤りで 2、Ctrl-C で止めたときは 130 である。
 
 ## リポジトリの構成
 
@@ -88,13 +88,15 @@ nix build                                    # eml のバイナリをビルド�
 | crate | 役割 |
 |---|---|
 | `eml_cli` | `check` / `run` のコマンド。各段階をつなぐ |
-| `eml_interp` | Core IR を CEK 機械で実行する |
-| `eml_runtime` | オブジェクトモデル、ヒープ、参照カウント、`debug_heap` の検査 |
-| `eml_core_ir` | 型付き HIR から Core IR (基本ブロックの列) への変換と、`box` / `unbox` の挿入、縮約、`dup` / `decref` / `release` の挿入 |
+| `eml_vm` | LIR をレジスタ型のバイトコードに変換し、`eml_rt` の上で実行する |
+| `eml_rt` | VM とネイティブで共有するランタイムの核 (物体、ヒープ、参照カウント、検査モード、extern)。Verus で検証する |
+| `eml_core_ir` | 型付き HIR から Core IR (基本ブロックの列) への変換、evidence passing、LIR への変換 |
+| `eml_lir` | LIR と、`box` / `unbox` の挿入、縮約、`dup` / `decref` / `release` の挿入 |
 | `eml_types` | Kind、型、row の推論と、線形性、多重度、網羅性の検査 |
 | `eml_hir` | CST から HIR への変換と名前解決 |
 | `eml_syntax` | lexer、レイアウト段、パーサ、rowan の CST |
 | `eml_diagnostics` | 診断のデータ構造と表示 |
+| `eml_extern` | 標準ライブラリの extern の表 |
 | `eml_test_support` | 統合テスト用の補助 (開発時のみ) |
 
 UI テストは [tests/ui/](tests/ui/) に置いている。`run/` は最後まで実行できるプログラム、`run-fail/` は実行時エラーで終わるプログラム、`check-fail/` は検査でエラーになるプログラムである。
