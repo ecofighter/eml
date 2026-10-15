@@ -141,8 +141,9 @@ impl Task {
     }
 }
 
-/// スタックの容量の上限。深さが `max_depth` を超えると次の安全点で止まり、安全点の前に積むのは1つの枠と見出し
-/// (`u16::MAX + 2` 語) までなので、それより大きい容量は要らない (docs/spec/vm.md の「スロットとスタック」)。
+/// スタックの容量の上限。深さが `max_depth` を超えると次の安全点で止まり、安全点の前には通常、1つの枠と見出し
+/// (`u16::MAX + 2` 語) までを積むので、それより大きい容量は見込まない。余る引数の適用は2つ積みうるが、`reserve` は
+/// 求める長さを下回らない (docs/spec/vm.md の「スロットとスタック」)。
 fn stack_limit(max_depth: usize) -> usize {
     max_depth.saturating_add(usize::from(u16::MAX) + 2)
 }
@@ -459,7 +460,7 @@ fn call<M: Mode>(code: &CodeBase<M>, task: &mut Task, dst: Slot, at: u32) {
     task.pc = entry.start;
 }
 
-/// 入口の関数の結果を手放す。CEK のいちばん下のフレームも、結果を手放してから終わる。
+/// 入口の関数の結果を手放す (docs/spec/vm.md の「誤り、止めること、終わり」)。
 fn finish<M: Mode>(code: &CodeBase<M>, ctx: &mut Ctx<M>, task: &Task) -> Result<(), VmFault> {
     if code.entry_ret_rc {
         // 結果は入口の関数が返した、VM の持つ参照である

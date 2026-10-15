@@ -542,7 +542,7 @@ impl FnLowering<'_> {
                 // 状態のある handler は HIR の節の引数が状態を含む。状態のない handler だけ、
                 // 状態を `()` にして最後の引数で受ける (docs/spec/core-ir.md)
                 let stateless = init.is_none();
-                // 節はエフェクトの操作の順に並べる。インタプリタは操作の番号で節を引く
+                // 節はエフェクトの操作の順に並べる。evidence の入口の表は操作の番号で引く
                 let operations = self.ctx.hir[effect].operations.clone();
                 let mut closures = Vec::new();
                 for op in operations {

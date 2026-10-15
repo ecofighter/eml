@@ -170,7 +170,7 @@ fn main() -> unit {{
 }
 
 /// handler の下で継続を再開するときの形。`ev_renew` は入口の表を共有し、状態を差し替え、今の `evv` を外側の `evv`
-/// にした evidence を作る (docs/spec/runtime.md の「evidence と `evv` の物体」)。元の evidence の外側の `evv` は空なので、
+/// にした evidence を作る (docs/spec/object-model.md の「evidence の3つの物体」)。元の evidence の外側の `evv` は空なので、
 /// `ev_evv` が元の外側を返せば `ev_lookup` は evidence を見つけられない。
 #[test]
 fn a_renewed_evidence_has_its_own_state_and_the_current_evv_outside() {
@@ -251,7 +251,7 @@ fn internal_error(what: &'static str) -> RuntimeError {
     fault(VmFault::Internal(what))
 }
 
-/// 終わりに残る `evv` や yield は VM が `Ctx::check_finished` で見つけ、CEK のように誤りの種類は分けない。
+/// 終わりに残る `evv` や yield は VM が `Ctx::check_finished` で見つけ、誤りの種類は分けない。
 #[test]
 fn a_program_that_ends_with_a_nonempty_evidence_list_is_an_error() {
     let text = format!(
@@ -275,7 +275,7 @@ fn main() -> unit {{
     );
 }
 
-/// 終わりに残る `evv` や yield は VM が `Ctx::check_finished` で見つけ、CEK のように誤りの種類は分けない。
+/// 終わりに残る `evv` や yield は VM が `Ctx::check_finished` で見つけ、誤りの種類は分けない。
 #[test]
 fn a_program_that_ends_during_a_yield_is_an_error() {
     let text = format!(

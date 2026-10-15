@@ -739,7 +739,7 @@ token の表の項目は、`into_token` と `release_reuse` が添字を使い�
 
 - `fs_read_all` と `fs_close` の `Heap(_)` は、ヒープが変わらないか、`File` を手放す解放の連鎖で起きたモデルが照らさない誤り (上の「検査モードの約束」) である。モデルは `Foreign` の物体が走査する語を持たないことを知らないので、約束はこの形になる。基本操作の `evv_set`、`ev_set_state`、`yield_finish` と同じく、その後は `Ctx` を落とすことしかできない
 - `foreign` と `foreign_unique` は速いモードでも型の違いを `WrongKind` で返すので、`fs_read_all` と `fs_close` は速いモードでも `Err(Heap(WrongKind))` を返しうる。この2つは、即値の引数もどちらのモードでも `WrongKind` にする。このときヒープは変わらない
-- 今の実装でも、`println` は書けなくても文字列を手放し、`open` は開けなくてもパスを手放し、`read_all` は誤りのときに `File` を手放す。上の約束はこれと同じである
+- `println` は書けなくても文字列を手放し、`open` は開けなくてもパスを手放し、`read_all` は誤りのときに `File` を手放す。上の約束はこの規則に従う
 
 ### 証明すること
 
@@ -747,18 +747,18 @@ token の表の項目は、`into_token` と `release_reuse` が添字を使い�
 
 - `+`、`-`、`*` は、vstd の `checked_add`、`checked_sub`、`checked_mul` の spec で約束する。収まらなければ `IntegerOverflow` である
 - `negate` は `0.checked_sub(a)` で作る。vstd に `checked_neg` の spec がないためである
-- `/` と `%` は、`rust_div` と `rust_rem` の spec (0 の方向に切り捨て、余りの符号は割られる数に合わせる) で約束する。0 で割れば `DivisionByZero`、`MIN / -1` と `MIN % -1` は `IntegerOverflow` である。今の実装と同じである
+- `/` と `%` は、`rust_div` と `rust_rem` の spec (0 の方向に切り捨て、余りの符号は割られる数に合わせる) で約束する。0 で割れば `DivisionByZero`、`MIN / -1` と `MIN % -1` は `IntegerOverflow` である
 - 比較の6つと `compare`、`Bool` の `==` と `!=` は、タグの値で約束する。`Bool` の引数には前提を置かず、タグの値の等しさで比べる
 
 文字列の extern は、結果を ghost のバイト列の spec で約束する。文字列のバイト列は、T10 の「ペイロードを `str` として借りる関数」で借りて読む。
 
 - `==` と `!=` は、長さが違えば先に返し、同じなら slice の `==` で比べる。slice の `==` は vstd に spec があるので、信頼は要らない
-- `compare` は、辞書式の順序 (バイトの順。今と同じ) の spec `lex(a, b)` に一致することを約束する。比べるのは `<[u8] as Ord>::cmp` を1回呼ぶ包み `bytes_cmp` で、その結果が `lex` に一致することを T5 で信頼する。長さで先に返す近道は使わない (`"b" > "ab"` のため)
+- `compare` は、辞書式の順序 (バイトの順) の spec `lex(a, b)` に一致することを約束する。比べるのは `<[u8] as Ord>::cmp` を1回呼ぶ包み `bytes_cmp` で、その結果が `lex` に一致することを T5 で信頼する。長さで先に返す近道は使わない (`"b" > "ab"` のため)
 - `++` は、`string_concat` の約束 (上の「文字列」) をそのまま使う。左が一意ならその場で連結する
 - `Int.show` は、ghost のバイト列が spec `decimal(i)` (負なら `-`、続けて先頭に 0 のない10進の数字。0 は `"0"`) に等しいことを証明する。数字は `u64` の絶対値から作る (`-i64::MIN` は溢れるため)。20 バイトの作業領域 (`"-9223372036854775808"` がちょうど 20 バイト) に後ろから書き、ASCII なら UTF-8 であることを証明して `from_utf8_unchecked` で `&str` にし、`alloc_string` で作る
 - `String.show` は、ghost のバイト列がバイトの単位の spec `escape(bytes)` に等しいことを証明する
   - 全体を `"` で囲む。`"` と `\` には `\` を前に付ける。`\n`、`\t`、`\r`、`\0` は名前付きのエスケープにする。そのほかの制御文字 (0x01〜0x1F と 0x7F) は `\u{16進の小文字、桁埋めなし}` にする。それ以外のバイトは、0x80 以上も含めてそのまま写す
-  - 今の実装は文字の単位で同じ規則を使い、C1 の制御文字 (U+0080〜U+009F) もそのまま写す。UTF-8 の先頭と続きのバイトはどれも 0x80 以上なので、バイトの単位の規則は、正しい UTF-8 のすべてで今の実装と同じ結果になる
+  - C1 の制御文字 (U+0080〜U+009F) もそのまま写す。UTF-8 の先頭と続きのバイトはどれも 0x80 以上なので、バイトの単位の規則は、文字の単位の規則と同じ結果になる
   - 1回目の走査で結果の長さを数え (桁あふれは `checked_add` で確かめる)、`alloc_string_room` でその容量の空の文字列を1回だけ確保する。2回目の走査で、エスケープのない区間はまとめて写し、エスケープは短い ASCII の列を足す。どれも容量に収まるので、作り直しは起きない
   - 足すのは、`string_push` と同じ道の内部の関数 (`append_str` と `append_part`) である。公開の `string_push` は検査モードで確かめ直し、その場で足すことを約束しないので使わない
   - 区間を写すときは、写す元の文字列を T10 で借りた `&str` を、vstd の `str::split_at` で `[from, to)` に切って渡す。そのため T10 の関数は変わらない。切る位置が文字の境目であることは、「正しい UTF-8 の列で、ASCII のバイトの直前と直後は文字の境目である」という補題で示す。結果が UTF-8 であることは `valid_utf8_concat` から出る
@@ -800,7 +800,7 @@ pub struct Opened {
 - まとめて書くと、行ごとに flush する今の書き方より約 65〜160 倍速い ([計測の基準](../implementation/benchmarks.md) の「S9b-3 (extern)」)
 - ストリームごとに `Mutex` を1つ持ち、ロックの中で本文と `\n` を書く。ロックが毒されていたら、`PoisonError::into_inner` で取り出して続ける。中身は書き込みのバッファだけで、続けても壊れないためである
 - `StdHost` を落とすときは、`BufWriter` の `Drop` がまだ書いていない出力を書く (unwind のときも同じ)。誤りは捨てる
-- `StdHost::open` は、`file_root` に `path` をつないで開く。`path` が絶対パスなら、そのパスを開く。長さの見込みは、ふつうのファイルにだけ返す。ディレクトリも今と同じく開け、読むときに `I/O error` になる
+- `StdHost::open` は、`file_root` に `path` をつないで開く。`path` が絶対パスなら、そのパスを開く。長さの見込みは、ふつうのファイルにだけ返す。ディレクトリも開け、読むときに `I/O error` になる
 - `Ctx::flush() -> Result<(), Fault>` は、Host の `flush` を呼ぶ。ヒープには触れない。VM は次の所で呼ぶ
   - プログラムの終わり
   - 実行時エラーを出す前。`> out 2>&1` のときに、出力と誤りの順を保つためである
@@ -824,7 +824,7 @@ pub struct Opened {
   4. 各区切りは `take(64 KiB).read_to_end(&mut vec)` で読み、0 バイトなら終わる。std が、`Interrupted` を受けたときの読み直し、短い読み、空き領域を 0 で埋めないこと、終わりを小さな読みで確かめることを受け持つ
   5. 読み終えたら `String::from_utf8` で確かめ、`alloc_string(&str)` でヒープへ写し、`Vec` を手放す
   6. 結果は組 `(File, String)` で、`alloc_data(TUPLE, 2, 0, lin = true)` で作り、`File` の参照を組に移す。行の `ret_kind` が `Lin` なので `lin` ビットを立てる
-  - 読みの誤りなら `Io { op: Read, .. }`、UTF-8 でなければ `NotUtf8`、止めたら `Stopped` を返す。どのときも `Vec` と `File` を手放す。`File` を手放すことで閉じる (今と同じ)
+  - 読みの誤りなら `Io { op: Read, .. }`、UTF-8 でなければ `NotUtf8`、止めたら `Stopped` を返す。どのときも `Vec` と `File` を手放す。`File` を手放すことで閉じる
 - ヒープに直接読む形、mmap で読む形、`Vec` をそのままヒープの文字列にする形は採らない。計測と理由は [計測の基準](../implementation/benchmarks.md) の「S9b-3 (extern)」にある
 - 読む途中で止める語を見るのは `Fs.read_all` だけである。ほかの extern は短い時間で終わるので、安全点を通らない
 

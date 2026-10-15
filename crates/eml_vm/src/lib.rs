@@ -24,8 +24,8 @@ pub use eml_rt::{Control, HostRef, Limits, Stop};
 pub use error::{RuntimeError, SourceLocation, VmFault};
 pub use vm::Task;
 
-/// 実行の仕事の回数と、同時に生きていたヒープの物体の数の最大。検査モードだけで数える。欄は `eml_interp::RunStats`
-/// と同じで、出どころは docs/spec/vm.md の「`RunStats`」にある。
+/// 実行の仕事の回数と、同時に生きていたヒープの物体の数とスタックの語の数の最大。検査モードだけで数える。
+/// 各欄の意味と出どころは docs/spec/vm.md の「`RunStats`」にある。
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 #[non_exhaustive]
 pub struct RunStats {

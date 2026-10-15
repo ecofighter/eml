@@ -131,7 +131,7 @@ instance Show a => Show (List a) where
   show Nil = "[]"
   show (x :: rest) = show_rest ("[" ++ show x) rest
 
--- 左辺を一意な文字列として伸ばすので、長さに比例する時間で済む (docs/spec/runtime.md の「文字列の連結」)
+-- 左辺を一意な文字列として伸ばすので、長さに比例する時間で済む (docs/spec/object-model.md の「文字列の操作」)
 show_rest : Show a => String -> List a -> String
 show_rest acc Nil = acc ++ "]"
 show_rest acc (x :: rest) = show_rest (acc ++ ", " ++ show x) rest

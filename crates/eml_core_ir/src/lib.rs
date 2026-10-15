@@ -32,8 +32,8 @@ pub struct Program {
     pub functions: Vec<CoreFn>,
     /// 実行の入口。`main` を `()` で呼ぶ、引数のない関数 (docs/spec/core-ir.md)。
     pub entry: FnIdx,
-    /// 文字列リテラルの定数表。`ConstString` と `CasePattern::String` が添字で引く。インタプリタは項目ごとに不死の
-    /// 物体を1つ作り、`ConstString` はその物体の参照を1つ作る (docs/spec/runtime.md の「不死の物体」)。
+    /// 文字列リテラルの定数表。`ConstString` と `CasePattern::String` が添字で引く。VM のコード生成は項目ごとに
+    /// 凍結した領域の物体を1つ作り、`ConstString` はその物体の参照を1つ作る (docs/spec/vm.md の「値と定数」)。
     pub strings: Vec<String>,
     /// データの配置の表。`con`、`switch`、`unpack` (LIR では `release` も) が `LayoutId` で引く。translate は最初に
     /// 使った順に入れる (docs/spec/core-ir.md の「translate の配置」)。
@@ -222,7 +222,7 @@ pub enum Rhs {
         at: Option<Loc>,
     },
     /// 文字列リテラルの参照を1つ作る。リテラルは不死の物体だが、LIR の `dup` と `decref` は釣り合いを保つ
-    /// (docs/spec/runtime.md)。
+    /// (docs/spec/lir.md の「値の表現」)。
     ConstString(u32),
     /// 引数を持つコンストラクタの値を作る。`args` の所有権は値に移る。引数のないコンストラクタの値は `Atom::Tag` で
     /// ある (docs/spec/core-ir.md)。

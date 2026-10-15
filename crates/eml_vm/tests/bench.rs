@@ -1,6 +1,5 @@
-//! 基準のプログラム (`bench/`) の、VM での実行の仕事の回数を固定する。CEK の回数 (`crates/eml_interp/tests/bench.rs`)
-//! とは `rc_*` と `peak_objects` が違う。理由は docs/spec/vm.md の「`RunStats`」にある。S10b で CEK を消すときに、
-//! このテストが CEK のテストに替わる。
+//! 基準のプログラム (`bench/`) の実行の仕事の回数を、VM の検査モードで固定する
+//! (docs/implementation/benchmarks.md の「回数のテスト」)。
 
 use std::path::{Path, PathBuf};
 

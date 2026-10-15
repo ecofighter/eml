@@ -1,5 +1,5 @@
-//! 実行時エラー。表示は CEK (`eml_interp::RuntimeError`) と1文字も違わない形にする。S10b で CEK を消すときに、
-//! `eml_cli` が公開する誤りの型をこちらに替える (docs/spec/vm.md の「置き場所」)。
+//! 実行時エラー (docs/spec/lir.md の「実行時エラー」)。表示は CLI と UI テストが使う文言である。`eml_cli` はこの型を
+//! 再公開する (docs/spec/vm.md の「置き場所」)。
 
 use std::fmt;
 
