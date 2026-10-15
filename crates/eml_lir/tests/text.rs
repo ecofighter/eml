@@ -1470,3 +1470,33 @@ fn marks_have_a_join_a_compatibility_and_an_order() {
     assert!(Poly.compatible(Lin) && Poly.compatible(Unr) && Lin.compatible(Lin));
     assert!(Lin.at_least(Poly) && Poly.at_least(Unr) && !Unr.at_least(Poly));
 }
+
+/// 根の基本操作は、根の番号を即値に書く (docs/spec/lir.md の「基本操作」)。
+#[test]
+fn root_primitives_round_trip() {
+    round_trip(
+        "fn f(x.0: tobj) -> tobj {\n  let u.1: unit = prim root_set[0](x.0)\n  let y.2: tobj = prim root_get[4294967295]()\n  return y.2\n}\n",
+    );
+}
+
+#[test]
+fn a_root_primitive_takes_one_root_number() {
+    let prim = |rhs: &str| {
+        parse_error(&format!(
+            "fn f(x.0: tobj) -> tobj {{\n  let y.1: tobj = prim {rhs}\n  return y.1\n}}\n"
+        ))
+        .to_string()
+    };
+    assert_eq!(
+        prim("root_get()"),
+        "line 2: `root_get` needs an immediate `[Root]`"
+    );
+    assert_eq!(
+        prim("root_get[0, 1]()"),
+        "line 2: `root_get` takes one root"
+    );
+    assert_eq!(
+        prim("root_set[x](x.0)"),
+        "line 2: expected a root number, found `x`"
+    );
+}

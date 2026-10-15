@@ -11,6 +11,7 @@ mod data;
 mod evidence;
 mod machine;
 mod miri;
+mod roots;
 mod run;
 mod scaling;
 mod tags;

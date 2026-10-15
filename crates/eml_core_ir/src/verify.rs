@@ -526,7 +526,10 @@ impl<'a> Checker<'a> {
             }
             Rhs::Extern { ext, args, at: _ } => self.cx.check_extern(var, *ext, args)?,
             Rhs::Prim(prim, args) => {
-                if self.level == Level::Translated {
+                // 根の基本操作は translate が作る (docs/spec/lir.md の「基本操作」)
+                if self.level == Level::Translated
+                    && !matches!(prim, Prim::RootGet(_) | Prim::RootSet(_))
+                {
                     return Err(format!(
                         "`prim {}` is used before the evidence pass",
                         prim_text(&self.program.effects, prim)

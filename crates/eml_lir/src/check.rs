@@ -810,9 +810,9 @@ impl<'a> Context<'a> {
         ))
     }
 
-    /// 基本操作は EP だけが作る。即値は表にあり、`evv_mask` の多重集合は呼び出しの `mask` と同じく空でなく昇順に
-    /// 並び、引数の数は表の行と同じである。範囲の段と所有の段では、引数と結果を直接の呼び出しと同じく互換の位置として
-    /// 比べる (docs/spec/lir.md の「基本操作」)。
+    /// 根の基本操作は translate が、ほかの基本操作は EP が作る。エフェクトの即値は表にあり、`evv_mask` の多重集合は
+    /// 呼び出しの `mask` と同じく空でなく昇順に並び、引数の数は表の行と同じである。根の番号は表を持たないので確かめない。
+    /// 範囲の段と所有の段では、引数と結果を直接の呼び出しと同じく互換の位置として比べる (docs/spec/lir.md の「基本操作」)。
     pub fn check_prim(&self, var: VarId, prim: &Prim, args: &[Atom]) -> Result<(), String> {
         let row = prim.row();
         let name = &prim_text(self.tables.effects, prim);
@@ -822,6 +822,7 @@ impl<'a> Context<'a> {
             Immediates::Effects(effects) => (*effects, None),
             Immediates::Effect(effect) => (std::slice::from_ref(effect), None),
             Immediates::Operation { effect, op } => (std::slice::from_ref(effect), Some(*op)),
+            Immediates::Root(_) => (&[][..], None),
         };
         for &effect in effects {
             let Some(info) = self.tables.effects.get(effect as usize) else {

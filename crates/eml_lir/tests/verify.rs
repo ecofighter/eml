@@ -2899,3 +2899,22 @@ fn v2_runs_only_on_jump_and_return_at_the_lowered_level() {
         Err("`s.0` (unr) is returned from a function that returns lin in `f`".to_string())
     );
 }
+
+/// 根の基本操作は表の行のとおりに `tobj` を出し入れする。`root_set` は値を消費し、`root_get` の結果は持ち主が手放す。
+#[test]
+fn root_primitives_move_tobj_values() {
+    let text = "fn f(x.0: tobj) -> unit {\n  let u.1: unit = prim root_set[0](x.0)\n  let y.2: tobj = prim root_get[0]()\n  decref y.2\n  return u.1\n}\n";
+    assert_eq!(check(text), Ok(()));
+    assert_eq!(
+        rejected_at_both_levels(
+            "fn f(n.0: int) -> unit {\n  let u.1: unit = prim root_set[0](n.0)\n  return u.1\n}\n"
+        ),
+        "argument 0 of `prim root_set[0]` is `n.0` (int), but the primitive takes tobj in `f`"
+    );
+    assert_eq!(
+        rejected_at_both_levels(
+            "fn f() -> unit {\n  let n.0: int = prim root_get[0]()\n  return ()\n}\n"
+        ),
+        "`n.0` (int) is bound to `prim root_get[0]`, which returns tobj in `f`"
+    );
+}

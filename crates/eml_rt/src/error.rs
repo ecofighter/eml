@@ -1,5 +1,6 @@
 //! 検査モードが報告する誤り (docs/spec/object-model.md の「報告する誤り」)。速いモードが返すのは、`foreign` の
-//! `WrongKind` と、空の token を受けた `reuse_in_place` の `StaleToken` だけである (docs/spec/object-model.md の「核の操作」)。
+//! `WrongKind`、空の token を受けた `reuse_in_place` の `StaleToken`、根の読み書きの `RootMisuse` だけである
+//! (docs/spec/object-model.md の「核の操作」)。
 
 use std::fmt;
 use vstd::prelude::*;
@@ -32,6 +33,7 @@ pub enum HeapError {
     YieldMisuse,
     BadEvidence,
     NoHandler,
+    RootMisuse,
 }
 
 } // verus!
@@ -82,6 +84,7 @@ impl fmt::Display for HeapError {
                 "an evidence-passing primitive reads something that is not an evidence, an evv node or an entry table",
             ),
             HeapError::NoHandler => f.write_str("no evidence of the effect is in the evv"),
+            HeapError::RootMisuse => f.write_str("a session root is read while empty or set twice"),
         }
     }
 }

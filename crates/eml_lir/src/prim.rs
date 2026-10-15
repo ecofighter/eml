@@ -1,10 +1,11 @@
-//! evidence passing の基本操作 (docs/spec/lir.md の「基本操作」)。
+//! evidence passing の基本操作と、REPL のセッションの根を読み書きする基本操作 (docs/spec/lir.md の「基本操作」)。
 //! 表は `eml_extern` に置かない。`eml_extern` の表は `std/` と1対1に結び付くが、基本操作はソースに現れないためである。
 
 use crate::{Mark, Repr};
 
 /// 基本操作の種類と即値。エフェクトと操作は `Program.effects` の番号である。`EvSetClause` と `EvClause` は、
-/// テキストの形で操作の名前をエフェクトで修飾するために、操作だけでなくエフェクトも持つ。
+/// テキストの形で操作の名前をエフェクトで修飾するために、操作だけでなくエフェクトも持つ。`RootGet` と `RootSet` の
+/// 即値は根の番号である。
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum Prim {
     EvvGet,
@@ -34,6 +35,8 @@ pub enum Prim {
     YieldContSet,
     YieldFinish,
     Dummy,
+    RootGet(u32),
+    RootSet(u32),
 }
 
 /// 基本操作の引数と結果の Repr。引数と結果は、直接の呼び出しと同じく互換の位置である。
@@ -60,6 +63,7 @@ pub enum Immediates<'a> {
     Effects(&'a [u32]),
     Effect(u32),
     Operation { effect: u32, op: u32 },
+    Root(u32),
 }
 
 /// 種類ごとの型、名前、見本 (即値を空か 0 にしたもの) の並びから、`KINDS` と `Prim::name` の網羅的な `match` を
@@ -101,6 +105,8 @@ kinds! {
     Prim::YieldContSet => "yield_cont_set", Prim::YieldContSet;
     Prim::YieldFinish => "yield_finish", Prim::YieldFinish;
     Prim::Dummy => "dummy", Prim::Dummy;
+    Prim::RootGet(_) => "root_get", Prim::RootGet(0);
+    Prim::RootSet(_) => "root_set", Prim::RootSet(0);
 }
 
 impl Prim {
@@ -119,6 +125,7 @@ impl Prim {
                     op: *op,
                 }
             }
+            Prim::RootGet(root) | Prim::RootSet(root) => Immediates::Root(*root),
             Prim::EvvGet
             | Prim::EvvSet
             | Prim::EvvPush
@@ -181,6 +188,9 @@ impl Prim {
             Prim::YieldContSet => (&[TObj], &[false], Unit, &[Poly], Unr),
             Prim::YieldFinish => (&[], NONE, TObj, NO_MARKS, Poly),
             Prim::Dummy => (&[], NONE, Obj, NO_MARKS, Poly),
+            // 根に置くのは `Unr` の値だけなので、どちらの位置も `unr` である
+            Prim::RootGet(_) => (&[], NONE, TObj, NO_MARKS, Unr),
+            Prim::RootSet(_) => (&[TObj], &[false], Unit, &[Unr], Unr),
         };
         PrimRow {
             params,
@@ -191,9 +201,10 @@ impl Prim {
         }
     }
 
-    /// 基本操作はどれも実行の文脈か evidence を読み書きするので、縮約は消さない。
+    /// `root_get` は根を読んで `dup` するだけなので、結果が使われなければ縮約が消してよい。ほかの基本操作は実行の
+    /// 文脈か evidence か根を書き換えるので消さない。
     pub fn pure(&self) -> bool {
-        false
+        matches!(self, Prim::RootGet(_))
     }
 }
 
@@ -230,12 +241,12 @@ mod tests {
         }
     }
 
-    /// 状態、κ、節の本体の位置だけが `poly` で、ほかは `unr` である
+    /// 状態、κ、節の本体の位置だけが `poly` で、ほかは `unr` である。根の位置も `unr` である
     /// (docs/spec/lir.md の「基本操作」)。
     #[test]
     fn the_marks_of_the_primitives_follow_the_spec_table() {
         use Mark::{Poly, Unr};
-        let table: [(&str, &[Mark], Mark); 20] = [
+        let table: [(&str, &[Mark], Mark); 22] = [
             ("evv_get", &[], Unr),
             ("evv_set", &[Unr], Unr),
             ("evv_push", &[Unr, Unr], Unr),
@@ -256,6 +267,8 @@ mod tests {
             ("yield_cont_set", &[Poly], Unr),
             ("yield_finish", &[], Poly),
             ("dummy", &[], Poly),
+            ("root_get", &[], Unr),
+            ("root_set", &[Unr], Unr),
         ];
         assert_eq!(table.len(), KINDS.len());
         for (name, params, ret) in table {

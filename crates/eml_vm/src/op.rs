@@ -293,6 +293,15 @@ pub enum Op {
     Dummy {
         dst: Slot,
     },
+    RootGet {
+        dst: Slot,
+        root: u32,
+    },
+    /// `operands[at..]` は [根の番号, 値のスロット]。
+    RootSet {
+        dst: Slot,
+        at: u32,
+    },
 }
 
 /// 行き先がないことを表すオペランド (switch の `default`、確かめない走査する語の数)。

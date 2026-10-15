@@ -615,6 +615,14 @@ fn the_translated_level_rejects_prims_and_clauses() {
     );
 }
 
+/// 根の基本操作は translate が作るので、evidence passing の前の段でも受け入れる (docs/spec/lir.md の「基本操作」)。
+#[test]
+fn the_translated_level_accepts_root_prims() {
+    let text = "fn f(x.0: tobj) -> tobj {\n  let u.1: unit = prim root_set[0](x.0)\n  let y.2: tobj = prim root_get[0]()\n  return y.2\n}\n";
+    assert_eq!(check_translated(text), Ok(()));
+    assert_eq!(check_evidence(text), Ok(()));
+}
+
 #[test]
 fn a_prim_takes_its_arguments() {
     assert_eq!(

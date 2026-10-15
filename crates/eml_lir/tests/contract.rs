@@ -306,3 +306,21 @@ fn k(c.0: tobj) -> tobj lin {
     }
     ");
 }
+
+/// 根を読むだけの `root_get` は、結果が使われなければ消す。根に置く `root_set` は消さない。
+#[test]
+fn an_unused_root_get_is_removed_and_a_root_set_is_kept() {
+    let text = "\
+fn f(x.0: tobj) -> unit {
+  let y.1: tobj = prim root_get[0]()
+  let u.2: unit = prim root_set[1](x.0)
+  return ()
+}
+";
+    insta::assert_snapshot!(contract_text(text), @"
+    fn f(x.0: tobj) -> unit {
+      let u.2: unit = prim root_set[1](x.0)
+      return ()
+    }
+    ");
+}

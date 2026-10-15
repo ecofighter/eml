@@ -265,6 +265,11 @@ impl<'a> View<'a> {
             Op::YieldContSet { dst, k } => format!("yield_cont_set s{dst}, s{k}"),
             Op::YieldFinish { dst } => format!("yield_finish s{dst}"),
             Op::Dummy { dst } => format!("dummy s{dst}"),
+            Op::RootGet { dst, root } => format!("root_get s{dst}, r{root}"),
+            Op::RootSet { dst, at } => {
+                let o = ops(at);
+                format!("root_set s{dst}, r{}, s{}", o[0], o[1])
+            }
             Op::Extern { dst, at } => format!(
                 "extern s{dst} = {}({})",
                 Extern::ALL[ops(at)[0] as usize].row().name,

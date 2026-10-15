@@ -503,6 +503,11 @@ impl<'a, M: Mode> Emitter<'a, '_, M> {
             Prim::YieldContSet => Op::YieldContSet { dst, k: a[0] },
             Prim::YieldFinish => Op::YieldFinish { dst },
             Prim::Dummy => Op::Dummy { dst },
+            Prim::RootGet(root) => Op::RootGet { dst, root: *root },
+            Prim::RootSet(root) => {
+                let at = self.out.operands([*root, u32::from(a[0])]);
+                Op::RootSet { dst, at }
+            }
         }
     }
 

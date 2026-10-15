@@ -57,6 +57,7 @@ pub fn prim_text(effects: &[EffectInfo], prim: &Prim) -> String {
         Immediates::Operation { effect, op } => {
             format!("{name}[{}]", operation_text(effects, effect, op))
         }
+        Immediates::Root(root) => format!("{name}[{root}]"),
     }
 }
 
@@ -204,7 +205,7 @@ fn block_number(word: &str) -> Option<u32> {
     number(word.strip_prefix('b')?)
 }
 
-/// 変数、タグ、ブロック、操作の番号。`u32::from_str` は先頭の `+` も読むので、数字の並びだけを読む。
+/// 変数、タグ、ブロック、操作、根の番号。`u32::from_str` は先頭の `+` も読むので、数字の並びだけを読む。
 fn number(digits: &str) -> Option<u32> {
     if !is_digits(digits) {
         return None;
@@ -832,6 +833,17 @@ impl<'t> Reader<'t> {
                     Prim::EvSetClause { effect, op }
                 } else {
                     Prim::EvClause { effect, op }
+                })
+            }
+            Immediates::Root(_) => {
+                let (line, word) = one(immediates, "Root", "root")?;
+                let root = number(&word).ok_or_else(|| {
+                    error(line, format!("expected a root number, found `{word}`"))
+                })?;
+                Ok(if matches!(kind, Prim::RootGet(_)) {
+                    Prim::RootGet(root)
+                } else {
+                    Prim::RootSet(root)
                 })
             }
             Immediates::None => {

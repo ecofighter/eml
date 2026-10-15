@@ -161,7 +161,19 @@ impl<M: Mode> Machine<M> {
     }
 
     /// 入口の関数を `()` で実行する。統計は `Machine` を作ってからの積算で、`peak_stack` だけがこの実行の値である。
+    /// 根は手放さず、次の実行に残す。続けられる誤りの後は evv と yield の状態を空に戻す。スタックと evv に残った語は
+    /// 手放さずにヒープに残る (docs/spec/vm.md の「追記」)。
     pub fn run(&mut self, entry: u32) -> Result<RunStats, RuntimeError> {
+        let result = self.run_entry(entry);
+        if let Err(error) = &result
+            && !error.is_broken()
+        {
+            self.ctx.abandon();
+        }
+        result
+    }
+
+    fn run_entry(&mut self, entry: u32) -> Result<RunStats, RuntimeError> {
         let (code, ctx) = (&self.code, &mut self.ctx);
         let mut task = Task::new(code, entry, self.max_depth);
         let mut counts = RunCounts::default();
@@ -208,8 +220,19 @@ impl<M: Mode> Machine<M> {
         })
     }
 
-    /// 実行の状態を閉じる。検査モードでは、残った物体をリークとして返す。
-    pub fn close(self) -> Result<(), RuntimeError> {
+    /// 実行の状態を閉じる。根の参照は VM が持つので先に手放す。検査モードでは、その後にヒープの不変条件を確かめ、
+    /// 残った物体をリークとして返す。
+    pub fn close(mut self) -> Result<(), RuntimeError> {
+        let close_error = |error: eml_rt::HeapError| RuntimeError::Fault {
+            fault: VmFault::Extern(error.into()),
+            function: "<close>".to_string(),
+            at: None,
+        };
+        for root in self.ctx.take_roots().into_iter().flatten() {
+            // 根の語は根が持つ参照で、ほかの語には触れないので、`heap_mut` の前提を崩さない
+            unsafe { self.ctx.heap_mut().decref(root) }.map_err(close_error)?;
+        }
+        (self.after_run)(&self.ctx, "<close>".to_string())?;
         (self.at_close)(&self.ctx)
     }
 }

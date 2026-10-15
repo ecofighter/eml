@@ -267,3 +267,68 @@ fn a_broken_error_is_a_heap_or_internal_fault() {
     assert!(!fault(VmFault::Extern(Fault::Arith(ArithFault::DivisionByZero))).is_broken());
     assert!(!RuntimeError::Leak(Vec::new()).is_broken());
 }
+
+/// 根に置いた値は実行をまたいで残り、`close` で手放す。検査モードでも、閉じた後にリークは残らない。
+#[test]
+fn a_root_outlives_its_run_and_is_released_at_close() {
+    let first = "\
+fn main() -> unit {
+  let s.0: obj = const \"kept\"
+  let u.1: unit = prim root_set[1](s.0)
+  return u.1
+}
+";
+    let second = "\
+fn second() -> unit {
+  let t.0: obj = prim root_get[1]()
+  let u.1: unit = extern Prelude.println(t.0)
+  return u.1
+}
+";
+    assert_eq!(run_two(first, second), "kept\n");
+}
+
+/// 続けられる誤りの後は、evv と yield の状態を空に戻すので、次の実行は終わりの確かめを通る。スタックと evv に
+/// 残った物体はヒープに残り、検査モードでは閉じるときにリークとして数える (S11b の根からの走査が回収する)。
+#[test]
+fn a_continuable_error_empties_the_evv_for_the_next_run() {
+    let first = "\
+effect A { a(unit) -> unit }
+fn main() -> unit {
+  let w.0: tobj = prim evv_get()
+  dup w.0
+  let e.1: obj = prim ev_new[A]((), w.0)
+  let w.2: tobj = prim evv_push(w.0, e.1)
+  let u.3: unit = prim evv_set(w.2)
+  let n.4: int = extern \"Prelude.%\"(1, 0)
+  return ()
+}
+";
+    let second = "\
+fn second() -> unit {
+  let s.0: obj = const \"after\"
+  let u.1: unit = extern Prelude.println(s.0)
+  return u.1
+}
+";
+    for debug_heap in [true, false] {
+        let (host, out) = capture_host(Default::default());
+        let config = RunConfig::default().with_debug_heap(debug_heap);
+        let mut machine = AnyMachine::new(&config, host);
+        let first = machine.load(&parse(first)).unwrap();
+        let error = machine.run(first.entry).unwrap_err();
+        assert_eq!(error.to_string(), "division by zero in `main`");
+        assert!(!error.is_broken());
+        let second = machine.load(&parse(second)).unwrap();
+        machine
+            .run(second.entry)
+            .unwrap_or_else(|error| panic!("{error}"));
+        assert_eq!(out.contents(), "after\n");
+        let closed = machine.close();
+        assert_eq!(
+            matches!(closed, Err(RuntimeError::Leak(_))),
+            debug_heap,
+            "{closed:?}"
+        );
+    }
+}

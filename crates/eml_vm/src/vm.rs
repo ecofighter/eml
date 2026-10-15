@@ -418,6 +418,15 @@ fn step<M: Mode>(
             let w = ctx.heap().dummy();
             task.set(dst, w);
         }
+        Op::RootGet { dst, root } => {
+            let w = unsafe { ctx.root_get(root) }?;
+            task.set(dst, w);
+        }
+        Op::RootSet { dst, at } => {
+            let o = ops(at);
+            unsafe { ctx.root_set(o[0], task.get(o[1] as Slot)) }?;
+            task.set(dst, Word::UNIT);
+        }
     }
     Ok(true)
 }

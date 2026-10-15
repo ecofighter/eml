@@ -81,8 +81,8 @@ impl RuntimeError {
         )
     }
 
-    /// 続けて実行できない誤りか。検査モードのヒープの誤りと内部の誤りの後は、ヒープを信用できない。REPL はこの後の
-    /// 入力を受け付けない (docs/spec/vm.md の「追記」)。
+    /// 続けて実行できない誤りか。ヒープの誤り (根の誤った読み書き `RootMisuse` を含む) と内部の誤りの後は、ヒープを
+    /// 信用できない。REPL はこの後の入力を受け付けない (docs/spec/vm.md の「追記」)。
     pub fn is_broken(&self) -> bool {
         matches!(
             self,

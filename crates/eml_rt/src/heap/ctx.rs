@@ -30,6 +30,7 @@ mod io;
 // 証明の部品だけを置くので、検証のときだけ読む
 #[cfg(verus_only)]
 mod proof;
+mod roots;
 mod strings;
 
 verus! {
@@ -598,6 +599,8 @@ pub struct Ctx<M: Mode> {
     heap: Heap<M>,
     evv: Word,
     yielding: YieldState,
+    /// セッションの根 (`roots.rs`)。空の根は `None` である。
+    roots: Vec<Option<Word>>,
     /// 安全点の確かめがヒープの中をたどらずに読めるよう、ヒープとは別に持つ。
     control: Arc<Control>,
     max_depth: usize,
@@ -760,6 +763,7 @@ impl<M: Mode> Ctx<M> {
             heap,
             evv: Word::UNIT,
             yielding: YieldState::none(),
+            roots: Vec::new(),
             control,
             max_depth: limits.max_depth,
             max_evv: limits.max_evv,
@@ -2586,7 +2590,9 @@ impl<M: Mode> Ctx<M> {
     /// mask が除く組を、写す前に数える。節点ごとに形を確かめ、上限の歩数で止まり、除く組が足りなければ
     /// `NoHandler` を返す。写しに要る `dup` もここで確かめるので、写す間は `Err` を返さない。返すのはたどった節点の
     /// 数である。
+    // 根の表の欄を `Ctx` に足すと、ループの不変条件の `self.wf()` を解く量が既定の上限 (10) を少し超えた
     #[verifier::spinoff_prover]
+    #[verifier::rlimit(20)]
     fn checked_mask(&self, effects: &[u16], w: Word) -> (r: Result<usize, HeapError>)
         requires
             M::CHECKED,
