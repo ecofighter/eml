@@ -6,7 +6,7 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex, PoisonError};
 
 use eml_lir::Program;
-use eml_rt::{Buffering, Checked, Control, Ctx, Fast, Limits, Mode, StdHost};
+use eml_rt::{Buffering, Checked, Ctx, Fast, Mode, StdHost};
 
 mod apply;
 mod code;
@@ -20,8 +20,8 @@ mod vm;
 pub use code::{CodeBase, CompileError, FnEntry};
 pub use compile::compile;
 pub use disasm::disassemble;
-pub use eml_rt::HostRef;
-pub use error::{SourceLocation, VmError, VmFault};
+pub use eml_rt::{Control, HostRef, Limits, Stop};
+pub use error::{RuntimeError, SourceLocation, VmFault};
 pub use vm::Task;
 
 /// 実行の仕事の回数と、同時に生きていたヒープの物体の数の最大。検査モードだけで数える。欄は `eml_interp::RunStats`
@@ -49,24 +49,46 @@ pub(crate) struct RunCounts {
     pub(crate) unboxes: u64,
 }
 
-/// 上限のない `Control` で実行する。上限の指定は S10b で `RunConfig` から渡す。
-pub fn execute(program: &Program, debug_heap: bool, host: HostRef) -> Result<RunStats, VmError> {
-    execute_with(
-        program,
-        debug_heap,
-        host,
-        Arc::new(Control::new(Limits::default())),
-    )
+/// 実行の設定。上限は `Control` が持つので、ここに上限の欄は置かない。`file_root` は Host が持つ
+/// (docs/spec/vm.md の「置き場所」)。
+#[derive(Clone)]
+#[non_exhaustive]
+pub struct RunConfig {
+    pub debug_heap: bool,
+    /// 止める理由のビットは `Control::clear` でしか下りないので、1つの `Control` は1回の実行にだけ使う。`clone` した
+    /// 設定は同じ `Control` を指す。
+    pub control: Arc<Control>,
 }
 
-/// セッションの `Control` を渡して実行する。割り込みと上限のテストが使う。
-pub fn execute_with(
+// `Control` は `Default` を持たないので、手で書く
+impl Default for RunConfig {
+    fn default() -> RunConfig {
+        RunConfig {
+            debug_heap: false,
+            control: Arc::new(Control::new(Limits::default())),
+        }
+    }
+}
+
+impl RunConfig {
+    pub fn with_debug_heap(mut self, debug_heap: bool) -> RunConfig {
+        self.debug_heap = debug_heap;
+        self
+    }
+
+    pub fn with_control(mut self, control: Arc<Control>) -> RunConfig {
+        self.control = control;
+        self
+    }
+}
+
+pub fn execute(
     program: &Program,
-    debug_heap: bool,
+    config: &RunConfig,
     host: HostRef,
-    control: Arc<Control>,
-) -> Result<RunStats, VmError> {
-    if debug_heap {
+) -> Result<RunStats, RuntimeError> {
+    let control = Arc::clone(&config.control);
+    if config.debug_heap {
         run::<Checked>(program, host, control, check_heap)
     } else {
         run::<Fast>(program, host, control, |_, _| Ok(()))
@@ -77,8 +99,8 @@ fn run<M: Mode>(
     program: &Program,
     host: HostRef,
     control: Arc<Control>,
-    check: fn(&Ctx<M>, String) -> Result<(), VmError>,
-) -> Result<RunStats, VmError> {
+    check: fn(&Ctx<M>, String) -> Result<(), RuntimeError>,
+) -> Result<RunStats, RuntimeError> {
     let code =
         compile::<M>(program, control.clone()).map_err(|error| compile_error(program, error))?;
     let max_depth = control.limits().max_depth;
@@ -131,18 +153,19 @@ fn run<M: Mode>(
 }
 
 /// ヒープの不変条件の誤りには、最後に戻った関数の名前を付ける (docs/spec/vm.md の「誤り、止めること、終わり」)。
-fn check_heap(ctx: &Ctx<Checked>, last_function: String) -> Result<(), VmError> {
+fn check_heap(ctx: &Ctx<Checked>, last_function: String) -> Result<(), RuntimeError> {
     let heap = ctx.heap();
-    heap.check_invariants().map_err(|error| VmError::Fault {
-        fault: error.into(),
-        function: last_function,
-        at: None,
-    })?;
+    heap.check_invariants()
+        .map_err(|error| RuntimeError::Fault {
+            fault: error.into(),
+            function: last_function,
+            at: None,
+        })?;
     let leaks = heap.leaks();
     if leaks.is_empty() {
         Ok(())
     } else {
-        Err(VmError::Leak(
+        Err(RuntimeError::Leak(
             leaks
                 .into_iter()
                 .map(|(name, n)| (name.to_string(), n))
@@ -152,7 +175,7 @@ fn check_heap(ctx: &Ctx<Checked>, last_function: String) -> Result<(), VmError> 
 }
 
 /// コード生成の誤りは、正しいプログラムでは起きない内部の誤りである。
-fn compile_error(program: &Program, error: CompileError) -> VmError {
+fn compile_error(program: &Program, error: CompileError) -> RuntimeError {
     let (what, function) = match error {
         CompileError::TooManySlots { function } => {
             ("a function needs more than 65535 slots", function)
@@ -162,7 +185,7 @@ fn compile_error(program: &Program, error: CompileError) -> VmError {
             program.function(program.entry).name.clone(),
         ),
     };
-    VmError::Fault {
+    RuntimeError::Fault {
         fault: VmFault::Internal(what),
         function,
         at: None,

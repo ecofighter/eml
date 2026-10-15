@@ -5,7 +5,7 @@ use std::sync::Arc;
 use eml_lir::Loc;
 use eml_rt::{Frozen, HeapError, Mode, Word};
 
-use crate::error::{SourceLocation, VmError};
+use crate::error::{RuntimeError, SourceLocation};
 use crate::op::{BUILTINS, Op, Pc};
 use crate::vm::{Failure, Task};
 
@@ -77,7 +77,7 @@ impl<M: Mode> CodeBase<M> {
 
     /// 誤りに関数の名前と位置を付ける。組み込みの命令で起きた誤りには、最後に戻った関数の名前を付ける
     /// (docs/spec/vm.md の「誤り、止めること、終わり」)。
-    pub(crate) fn error(&self, Failure { fault, pc }: Failure, task: &Task) -> VmError {
+    pub(crate) fn error(&self, Failure { fault, pc }: Failure, task: &Task) -> RuntimeError {
         let function = self
             .function_at(pc)
             .or_else(|| self.function_at(task.last_ret))
@@ -89,7 +89,7 @@ impl<M: Mode> CodeBase<M> {
             line: loc.line,
             column: loc.column,
         });
-        VmError::Fault {
+        RuntimeError::Fault {
             fault,
             function,
             at,

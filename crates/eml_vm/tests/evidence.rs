@@ -2,7 +2,7 @@
 //! (docs/spec/core-ir.md の「evidence passing」と docs/spec/lir.md の「基本操作」)。
 
 use eml_rt::{Fault, HeapError};
-use eml_vm::{VmError, VmFault};
+use eml_vm::{RuntimeError, VmFault};
 
 use crate::common::run_lir;
 
@@ -233,8 +233,8 @@ fn a_dummy_passes_through_box_unbox_dup_and_decref() {
     assert_eq!(run_lir(DUMMY), (String::new(), Ok(())));
 }
 
-fn fault(fault: VmFault) -> VmError {
-    VmError::Fault {
+fn fault(fault: VmFault) -> RuntimeError {
+    RuntimeError::Fault {
         fault,
         function: "main".to_string(),
         at: None,
@@ -243,11 +243,11 @@ fn fault(fault: VmFault) -> VmError {
 
 const LEFT_AT_END: &str = "the evidence list or a yield is left at the end";
 
-fn heap_fault(error: HeapError) -> VmError {
+fn heap_fault(error: HeapError) -> RuntimeError {
     fault(VmFault::Extern(Fault::Heap(error)))
 }
 
-fn internal_error(what: &'static str) -> VmError {
+fn internal_error(what: &'static str) -> RuntimeError {
     fault(VmFault::Internal(what))
 }
 

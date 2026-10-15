@@ -7,8 +7,8 @@ use std::path::{Path, PathBuf};
 use std::sync::{Mutex, MutexGuard, PoisonError};
 
 use eml_cli::{
-    FsProvider, OutputSink, RunConfig, RunStats, RuntimeError, Session, VmRunStats, capture_host,
-    execute_vm,
+    FsProvider, OutputSink, RunConfig, RunStats, RuntimeError, Session, VmRunConfig, VmRunStats,
+    capture_host, execute_vm,
 };
 use eml_diagnostics::{has_errors, render};
 
@@ -149,7 +149,8 @@ fn check_on_vm(
 ) {
     let run = |debug_heap| {
         let (host, out) = capture_host(root.to_path_buf());
-        let result = execute_vm(program, debug_heap, host);
+        let config = VmRunConfig::default().with_debug_heap(debug_heap);
+        let result = execute_vm(program, &config, host);
         (out.contents(), result)
     };
     let (vm_stdout, vm) = run(true);

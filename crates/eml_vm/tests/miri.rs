@@ -3,7 +3,7 @@
 //! 確かめる道: 直接の呼び出しと戻り、`con` と `switch` と `release`、部分適用と余った引数、基本操作 (evidence を作って
 //! 引く)、ヒープの文字列の extern、両方のモード。
 
-use eml_vm::{capture_host, execute};
+use eml_vm::{RunConfig, capture_host, execute};
 
 fn run_both(text: &str) -> String {
     let program = eml_lir::parse(text).unwrap_or_else(|error| panic!("{error}"));
@@ -11,7 +11,8 @@ fn run_both(text: &str) -> String {
     let mut outputs = Vec::new();
     for debug_heap in [true, false] {
         let (host, out) = capture_host(Default::default());
-        execute(&program, debug_heap, host).unwrap_or_else(|error| panic!("{error}"));
+        let config = RunConfig::default().with_debug_heap(debug_heap);
+        execute(&program, &config, host).unwrap_or_else(|error| panic!("{error}"));
         outputs.push(out.contents());
     }
     assert_eq!(outputs[0], outputs[1]);

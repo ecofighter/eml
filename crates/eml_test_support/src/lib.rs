@@ -314,24 +314,28 @@ fn without_stats(
 #[cfg(feature = "run")]
 pub fn execute_vm(
     program: &eml_lir::Program,
-    debug_heap: bool,
-) -> (String, Result<eml_vm::RunStats, eml_vm::VmError>) {
+    config: &eml_vm::RunConfig,
+) -> (String, Result<eml_vm::RunStats, eml_vm::RuntimeError>) {
     let (host, out) = eml_vm::capture_host(std::path::PathBuf::new());
-    let result = eml_vm::execute(program, debug_heap, host);
+    let result = eml_vm::execute(program, config, host);
     (out.contents(), result)
 }
 
 /// ソースを VM の検査モードで実行する。
 #[cfg(feature = "run")]
-pub fn run_vm(text: &str) -> (String, Result<(), eml_vm::VmError>) {
-    let (out, result) = execute_vm(&lir(text), true);
+pub fn run_vm(text: &str) -> (String, Result<(), eml_vm::RuntimeError>) {
+    let (out, result) = run_stats_vm(text);
     (out, result.map(|_| ()))
 }
 
-/// `RunStats` も返す。VM の数を固定するテストのために使う。
+/// `RunStats` も返す。VM の数を固定するテストのために使う。止める理由のビットは前の実行から持ち越されるので、実行
+/// ごとに新しい `Control` を持つ設定を作る。
 #[cfg(feature = "run")]
-pub fn run_stats_vm(text: &str) -> (String, Result<eml_vm::RunStats, eml_vm::VmError>) {
-    execute_vm(&lir(text), true)
+pub fn run_stats_vm(text: &str) -> (String, Result<eml_vm::RunStats, eml_vm::RuntimeError>) {
+    execute_vm(
+        &lir(text),
+        &eml_vm::RunConfig::default().with_debug_heap(true),
+    )
 }
 
 /// 1件を `E0001 1:2 message` の1行にする。期待値を読みやすくするため、位置はバイトではなく行と列にする。

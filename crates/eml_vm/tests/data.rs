@@ -2,7 +2,7 @@
 //! (docs/spec/lir.md)。共有された値の分解や、`tobj` の変数に入った引数のないコンストラクタは、ソースの `match`
 //! からは狙って作りにくいので、ここで書く。
 
-use eml_vm::{VmError, VmFault};
+use eml_vm::{RuntimeError, VmFault};
 
 use crate::common::{run_lir, run_unverified};
 
@@ -46,7 +46,7 @@ b2:
 ";
     assert_eq!(
         run_unverified(text).1,
-        Err(VmError::Fault {
+        Err(RuntimeError::Fault {
             fault: VmFault::Internal(
                 "a switch case binds a different number of fields than the value has"
             ),
@@ -79,7 +79,7 @@ b2:
 ";
     assert_eq!(
         run_lir(text).1,
-        Err(VmError::Fault {
+        Err(RuntimeError::Fault {
             fault: VmFault::Internal(
                 "a switch case binds a different number of fields than the value has"
             ),
@@ -189,7 +189,7 @@ fn an_unpack_reads_the_fields_without_taking_the_box() {
 /// 誤りになる。verifier は値を作った配置を追わないので、この誤りは verifier を通った IR でも起きうる
 /// (`a_value_read_with_another_layout_passes_the_verifier_and_faults`)。ここの IR は `tobj` の配置の値を `obj` に
 /// 束縛して `unpack` するので verifier が拒み、通さずに実行する。
-fn unpack_of_tag_one(unpack: &str) -> Result<(), VmError> {
+fn unpack_of_tag_one(unpack: &str) -> Result<(), RuntimeError> {
     let text = format!(
         "\
 layout Option {{ None, Some(tobj) }}
@@ -208,7 +208,7 @@ fn main() -> unit {{
 fn an_unpack_with_a_different_tag_is_an_internal_error() {
     assert_eq!(
         unpack_of_tag_one("unpack p.1 Option #0(a.2: obj)"),
-        Err(VmError::Fault {
+        Err(RuntimeError::Fault {
             fault: VmFault::Internal(
                 "an unpack names a tag and number of fields the value does not have"
             ),
@@ -231,7 +231,7 @@ fn main() -> unit {
 ";
     assert_eq!(
         run_unverified(text).1,
-        Err(VmError::Fault {
+        Err(RuntimeError::Fault {
             fault: VmFault::Internal(
                 "an unpack names a tag and number of fields the value does not have"
             ),
@@ -254,7 +254,7 @@ fn main() -> unit {
 ";
     assert_eq!(
         run_unverified(text).1,
-        Err(VmError::Fault {
+        Err(RuntimeError::Fault {
             fault: VmFault::Internal(
                 "an unpack names a tag and number of fields the value does not have"
             ),
@@ -330,7 +330,7 @@ fn main() -> unit {
 
 /// `#1` の箱を `release` で手放す。タグとフィールドの数の違いは、`unpack` と同じく実行して初めて分かり、verifier
 /// を通った IR でも起きうる。ここの形はどれも verifier が拒むので、通さずに実行する。
-fn release_of_tag_one(release: &str) -> Result<(), VmError> {
+fn release_of_tag_one(release: &str) -> Result<(), RuntimeError> {
     let text = format!(
         "\
 layout Option {{ None, Some(tobj) }}
@@ -347,7 +347,7 @@ fn main() -> unit {{
 
 #[test]
 fn a_release_of_another_layout_is_an_internal_error() {
-    let fault = Err(VmError::Fault {
+    let fault = Err(RuntimeError::Fault {
         fault: VmFault::Internal(
             "a release names a tag and number of fields the value does not have",
         ),
@@ -371,7 +371,7 @@ fn main() -> unit {
 ";
     assert_eq!(
         run_unverified(text).1,
-        Err(VmError::Fault {
+        Err(RuntimeError::Fault {
             fault: VmFault::Internal(
                 "a release names a tag and number of fields the value does not have"
             ),
@@ -530,7 +530,7 @@ fn main() -> unit {
     let (_, result) = run_unverified(text);
     assert!(matches!(
         result,
-        Err(VmError::Fault {
+        Err(RuntimeError::Fault {
             fault: VmFault::Extern(eml_rt::Fault::Heap(eml_rt::HeapError::WrongKind)),
             ..
         })

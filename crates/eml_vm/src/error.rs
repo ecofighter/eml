@@ -57,7 +57,7 @@ pub struct SourceLocation {
 }
 
 #[derive(Debug, PartialEq, Eq)]
-pub enum VmError {
+pub enum RuntimeError {
     Fault {
         fault: VmFault,
         function: String,
@@ -67,20 +67,35 @@ pub enum VmError {
     Leak(Vec<(String, u64)>),
 }
 
-impl fmt::Display for VmError {
+impl RuntimeError {
+    /// 割り込みで止まったか。安全点で止めたときと、`Fs.read_all` の中で止めたときの両方で真になる。CLI が終了コードを
+    /// 決めるために使う。
+    pub fn interrupted(&self) -> bool {
+        matches!(
+            self,
+            RuntimeError::Fault {
+                fault: VmFault::Stopped(Stop::Interrupted)
+                    | VmFault::Extern(Fault::Stopped(Stop::Interrupted)),
+                ..
+            }
+        )
+    }
+}
+
+impl fmt::Display for RuntimeError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            VmError::Fault {
+            RuntimeError::Fault {
                 fault,
                 function: _,
                 at: Some(at),
             } => write!(f, "{fault}\n  at {}:{}:{}", at.path, at.line, at.column),
-            VmError::Fault {
+            RuntimeError::Fault {
                 fault,
                 function,
                 at: None,
             } => write!(f, "{fault} in `{function}`"),
-            VmError::Leak(live) => {
+            RuntimeError::Leak(live) => {
                 let parts: Vec<String> =
                     live.iter().map(|(name, n)| format!("{n} {name}")).collect();
                 write!(
@@ -93,4 +108,4 @@ impl fmt::Display for VmError {
     }
 }
 
-impl std::error::Error for VmError {}
+impl std::error::Error for RuntimeError {}

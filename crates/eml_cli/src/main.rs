@@ -63,7 +63,8 @@ fn main() -> ExitCode {
             let result = if vm {
                 // 相対パスは CEK と同じくカレントディレクトリを基準にする
                 let host = eml_cli::stdio_host(PathBuf::new());
-                eml_cli::execute_vm(&program, debug_heap, host)
+                let config = eml_cli::VmRunConfig::default().with_debug_heap(debug_heap);
+                eml_cli::execute_vm(&program, &config, host)
                     .map(drop)
                     .map_err(|e| e.to_string())
             } else {

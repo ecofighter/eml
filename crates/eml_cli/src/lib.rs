@@ -230,13 +230,15 @@ pub fn execute(
 #[cfg(feature = "run")]
 pub fn execute_vm(
     program: &eml_lir::Program,
-    debug_heap: bool,
+    config: &VmRunConfig,
     host: HostRef,
-) -> Result<VmRunStats, VmError> {
-    eml_vm::execute(program, debug_heap, host)
+) -> Result<VmRunStats, VmRuntimeError> {
+    eml_vm::execute(program, config, host)
 }
 
+// CEK の `RunConfig`、`RunStats`、`RuntimeError` と名前がぶつかるので、切り替えまで別の名前で公開する
 #[cfg(feature = "run")]
 pub use eml_vm::{
-    Capture, HostRef, RunStats as VmRunStats, VmError, VmFault, capture_host, stdio_host,
+    Capture, HostRef, RunConfig as VmRunConfig, RunStats as VmRunStats,
+    RuntimeError as VmRuntimeError, VmFault, capture_host, stdio_host,
 };

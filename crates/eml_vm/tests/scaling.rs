@@ -732,7 +732,10 @@ fn long_sequence_of_if_statements_does_not_overflow_the_stack() {
         .filter(|block| matches!(block.term, eml_lir::Term::Switch { .. }))
         .count();
     assert_eq!(switches, COUNT);
-    let (out, result) = execute_vm(&program, true);
+    let (out, result) = execute_vm(
+        &program,
+        &eml_vm::RunConfig::default().with_debug_heap(true),
+    );
     assert_eq!(out, format!("{}done\n", "x\n".repeat(COUNT)));
     assert_eq!(result.map(|_| ()), Ok(()));
 }

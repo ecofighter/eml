@@ -3,7 +3,7 @@
 
 use eml_rt::{ArithFault, Fault, HeapError};
 use eml_test_support::execute_vm;
-use eml_vm::{SourceLocation, VmError, VmFault};
+use eml_vm::{RuntimeError, SourceLocation, VmFault};
 
 use crate::common::{parse, run_lir, run_unverified};
 
@@ -78,7 +78,7 @@ fn main() -> unit {
     let error = result.unwrap_err();
     assert_eq!(
         error,
-        VmError::Fault {
+        RuntimeError::Fault {
             fault: VmFault::Extern(Fault::Arith(ArithFault::DivisionByZero)),
             function: "main".to_string(),
             at: Some(SourceLocation {
@@ -133,13 +133,16 @@ fn main() -> unit {
 ";
     let (_, result) = run_unverified(text);
     let error = result.unwrap_err();
-    assert_eq!(error, VmError::Leak(vec![("String".to_string(), 1)]));
+    assert_eq!(error, RuntimeError::Leak(vec![("String".to_string(), 1)]));
     assert_eq!(
         error.to_string(),
         "memory leak: objects were not freed: 1 String"
     );
     // 速いモードはリークを確かめないので、同じ IR が成功で終わる
-    let (_, fast) = execute_vm(&parse(text), false);
+    let (_, fast) = execute_vm(
+        &parse(text),
+        &eml_vm::RunConfig::default().with_debug_heap(false),
+    );
     assert_eq!(fast.map(|_| ()), Ok(()));
 }
 
@@ -236,7 +239,7 @@ fn main() -> unit {
     let (_, result) = run_unverified(text);
     assert_eq!(
         result,
-        Err(VmError::Fault {
+        Err(RuntimeError::Fault {
             fault: VmFault::Extern(Fault::Heap(HeapError::UseAfterFree)),
             function: "main".to_string(),
             at: None,
@@ -260,7 +263,7 @@ fn main() -> unit {
     let error = result.unwrap_err();
     assert_eq!(
         error,
-        VmError::Fault {
+        RuntimeError::Fault {
             fault: VmFault::Extern(Fault::Heap(HeapError::UseAfterFree)),
             function: "main".to_string(),
             at: Some(SourceLocation {
@@ -303,7 +306,7 @@ fn f(p.0: obj) -> unit {{
     let error = result.unwrap_err();
     assert_eq!(
         error,
-        VmError::Fault {
+        RuntimeError::Fault {
             fault: VmFault::Extern(Fault::Heap(HeapError::LinDup)),
             function: "f".to_string(),
             at: None,
@@ -315,7 +318,7 @@ fn f(p.0: obj) -> unit {{
 /// 種類が2つ以上のリークは、種類ごとの数を `, ` でつないで表示する。
 #[test]
 fn leaks_are_displayed_with_the_object_counts() {
-    let leak = VmError::Leak(vec![("Closure".to_string(), 2), ("String".to_string(), 1)]);
+    let leak = RuntimeError::Leak(vec![("Closure".to_string(), 2), ("String".to_string(), 1)]);
     assert_eq!(
         leak.to_string(),
         "memory leak: objects were not freed: 2 Closure, 1 String"

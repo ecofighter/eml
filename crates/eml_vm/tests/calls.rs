@@ -4,7 +4,7 @@
 use std::sync::Arc;
 
 use eml_rt::{Control, Limits, Stop};
-use eml_vm::{VmError, VmFault};
+use eml_vm::{RuntimeError, VmFault};
 
 use crate::common::{parse, run_lir, run_unverified};
 
@@ -248,7 +248,13 @@ fn a_self_tail_loop_runs_in_constant_depth() {
         ..Limits::default()
     }));
     let (host, _) = eml_vm::capture_host(Default::default());
-    let result = eml_vm::execute_with(&parse(COUNT), true, host, control);
+    let result = eml_vm::execute(
+        &parse(COUNT),
+        &eml_vm::RunConfig::default()
+            .with_debug_heap(true)
+            .with_control(control),
+        host,
+    );
     assert!(result.is_ok(), "{result:?}");
 }
 
@@ -258,10 +264,16 @@ fn a_self_tail_loop_stops_on_an_interrupt() {
     let control = Arc::new(Control::new(Limits::default()));
     control.interrupt();
     let (host, _) = eml_vm::capture_host(Default::default());
-    let result = eml_vm::execute_with(&parse(COUNT), true, host, control);
+    let result = eml_vm::execute(
+        &parse(COUNT),
+        &eml_vm::RunConfig::default()
+            .with_debug_heap(true)
+            .with_control(control),
+        host,
+    );
     assert!(matches!(
         result,
-        Err(VmError::Fault {
+        Err(RuntimeError::Fault {
             fault: VmFault::Stopped(Stop::Interrupted),
             ..
         })
@@ -292,7 +304,13 @@ b2:
         ..Limits::default()
     }));
     let (host, _) = eml_vm::capture_host(Default::default());
-    let result = eml_vm::execute_with(&parse(text), true, host, control);
+    let result = eml_vm::execute(
+        &parse(text),
+        &eml_vm::RunConfig::default()
+            .with_debug_heap(true)
+            .with_control(control),
+        host,
+    );
     assert_eq!(
         result.unwrap_err().to_string(),
         "the call depth limit is exceeded in `down`"
@@ -502,7 +520,13 @@ fn a_growing_heap_hits_the_memory_limit() {
                 ..Limits::default()
             }));
             let (host, _) = eml_vm::capture_host(Default::default());
-            eml_vm::execute_with(&parse(&cons_loop(n)), debug_heap, host, control)
+            eml_vm::execute(
+                &parse(&cons_loop(n)),
+                &eml_vm::RunConfig::default()
+                    .with_debug_heap(debug_heap)
+                    .with_control(control),
+                host,
+            )
         };
         assert!(run(100).is_ok(), "debug_heap = {debug_heap}");
         assert_eq!(
