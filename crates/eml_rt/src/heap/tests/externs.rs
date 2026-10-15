@@ -549,6 +549,31 @@ fn a_read_stops_on_an_interrupt<M: Mode>() {
     assert_eq!(mortal(ctx.heap()), 0);
 }
 
+/// 読みが `EINTR` で戻ったとき、止める語が立っていれば読み直さずに止め、File を手放す。REPL の SIGINT のハンドラは
+/// `SA_RESTART` を外して入れるので、待っている読みはこの形で戻る (docs/spec/object-model.md の「`File`」)。読み直すと、
+/// テストの読み手は 100 回の後に読みの誤りを返すので、`Io` の誤りになる。
+fn an_interrupted_read_stops_when_the_stop_word_is_set<M: Mode>() {
+    let memory = Arc::new(MemoryHost::default());
+    let control = Arc::new(Control::new(Limits::default()));
+    let drops = Arc::new(AtomicUsize::new(0));
+    memory.add(
+        "fifo",
+        MemoryFile {
+            interrupt_with: Some(control.clone()),
+            drops: Some(drops.clone()),
+            ..MemoryFile::text("abc")
+        },
+    );
+    let mut ctx = crate::Ctx::<M>::new(control, host(&memory));
+    unsafe {
+        let p = s(&mut ctx, "fifo");
+        let f = ctx.fs_open(p).unwrap();
+        assert_eq!(ctx.fs_read_all(f), Err(Fault::Stopped(Stop::Interrupted)));
+    }
+    assert_eq!(drops.load(Ordering::Relaxed), 1);
+    assert_eq!(mortal(ctx.heap()), 0);
+}
+
 /// ヒープの外の読みの領域も、確保量の上限に数える。長さの見込みがあれば確保する前に比べるので、確保できないほど
 /// 大きい見込みも I/O の誤りでなく上限で止まる。見込みがなければ、1回読むごとに比べる。
 fn a_read_past_the_memory_limit_stops<M: Mode>() {
@@ -877,6 +902,7 @@ both_modes!(
     a_missing_file_is_a_fault_naming_its_path,
     a_failed_read_closes_the_file,
     a_read_stops_on_an_interrupt,
+    an_interrupted_read_stops_when_the_stop_word_is_set,
     a_read_past_the_memory_limit_stops,
     read_all_refuses_a_non_file_or_a_shared_file,
     the_externs_match_the_table,

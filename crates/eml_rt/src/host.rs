@@ -113,17 +113,50 @@ pub(crate) unsafe fn read_text(file: *mut File, control: &Control) -> Result<Str
     }
     loop {
         check(bytes.capacity())?;
-        // `read_to_end` が、`Interrupted` の読み直しと短い読みを受け持つ
-        match (&mut file.reader).take(READ_CHUNK).read_to_end(&mut bytes) {
+        let mut reader = StopOnInterrupt { reader: &mut *file.reader, control };
+        // `read_to_end` が、止める語の立っていない `Interrupted` の読み直し、短い読み、終わりを小さな読みで確かめることを
+        // 受け持つ
+        match (&mut reader).take(READ_CHUNK).read_to_end(&mut bytes) {
             Ok(0) => break,
             Ok(_) => {},
-            Err(e) => return Err(ReadError::Io(file.path.clone(), io_reason(&e))),
+            Err(e) => {
+                // 止める語が立っていれば、読みの誤りより止めたことを報告する。`StopOnInterrupt` が返した誤りもここに来る
+                let bits = control.stop_bits();
+                return Err(
+                    if bits != 0 {
+                        ReadError::Stopped(stop_reason(bits))
+                    } else {
+                        ReadError::Io(file.path.clone(), io_reason(&e))
+                    },
+                );
+            },
         }
     }
     String::from_utf8(bytes).map_err(|_| ReadError::NotUtf8(file.path.clone()))
 }
 
 } // verus!
+
+/// 止める語が立った後の `Interrupted` を、`read_to_end` が読み直さない誤りに変える読み手 (docs/spec/object-model.md の
+/// 「`File`」)。SIGINT のハンドラは `SA_RESTART` を外して入れるので、待っている読みは `EINTR` で戻る。止める語が
+/// 立っていなければ `Interrupted` のまま返し、`read_to_end` に読み直させる。`read_buf` は stable では実装できないので、
+/// `read_to_end` は空き領域を 0 で埋めてから読む。
+struct StopOnInterrupt<'a> {
+    reader: &'a mut (dyn BufRead + Send),
+    control: &'a Control,
+}
+
+impl Read for StopOnInterrupt<'_> {
+    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+        match self.reader.read(buf) {
+            Err(e) if e.kind() == io::ErrorKind::Interrupted && self.control.stop_bits() != 0 => {
+                Err(io::Error::other("stopped while reading"))
+            }
+            result => result,
+        }
+    }
+}
+
 impl HostRef {
     pub fn new(host: Arc<dyn Host>) -> HostRef {
         HostRef {
@@ -265,7 +298,7 @@ impl Host for StdHost {
     }
 }
 
-/// I/O の誤りの理由。`Interrupted` は `read_to_end` が読み直すので、ここに届かない。
+/// I/O の誤りの理由。止める語の立っていない `Interrupted` は `read_to_end` が読み直し、立っていれば `read_text` が止めたことにするので、ここに届かない。
 fn io_reason(e: &io::Error) -> IoReason {
     match e.kind() {
         io::ErrorKind::NotFound => IoReason::NotFound,

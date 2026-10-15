@@ -649,6 +649,7 @@ fn println_goes_through_the_host<M: Mode>() {
 /// 止める語、閉じることを通す。
 fn files_go_through_the_host<M: Mode>() {
     let memory = Arc::new(MemoryHost::default());
+    let control = Arc::new(Control::new(Limits::default()));
     let body = "0123456789".repeat(7000);
     memory.add(
         "big.txt",
@@ -673,7 +674,13 @@ fn files_go_through_the_host<M: Mode>() {
             ..MemoryFile::default()
         },
     );
-    let control = Arc::new(Control::new(Limits::default()));
+    memory.add(
+        "fifo",
+        MemoryFile {
+            interrupt_with: Some(control.clone()),
+            ..MemoryFile::text("abc")
+        },
+    );
     let mut ctx = Ctx::<M>::new(control.clone(), host(&memory));
     unsafe {
         let p = ctx.heap_mut().alloc_string("big.txt");
@@ -690,6 +697,14 @@ fn files_go_through_the_host<M: Mode>() {
         let p = ctx.heap_mut().alloc_string("big.txt");
         let f = ctx.fs_open(p).unwrap();
         ctx.fs_close(f).unwrap();
+        // 止める語が立った後の `Interrupted` で止まる (T11)
+        let p = ctx.heap_mut().alloc_string("fifo");
+        let f = ctx.fs_open(p).unwrap();
+        assert_eq!(
+            ctx.fs_read_all(f),
+            Err(crate::Fault::Stopped(crate::Stop::Interrupted))
+        );
+        control.clear();
         let before = mortal(ctx.heap());
         let p = ctx.heap_mut().alloc_string("big.txt");
         let f = ctx.fs_open(p).unwrap();

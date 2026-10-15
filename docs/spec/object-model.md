@@ -870,7 +870,7 @@ pub struct Opened {
   3. 64 KiB ずつ読む。区切りの前ごとに、`Vec` の容量で次の確かめをする
      - 止める語が立っていれば、`Stopped` で止める。理由は `Ctx::poll` と同じ関数 `stop_reason` で決める (`INTERRUPT` なら `Interrupted`、`MEMORY` なら `MemoryLimit`)
      - 次に、領域の大きさと `Control` の確保量の和を上限 `max_bytes` と比べ、超えれば `Stopped(MemoryLimit)` で止める。`Vec` はヒープの外にあり、そのままでは上限に数えられないためである
-  4. 各区切りは `take(64 KiB).read_to_end(&mut vec)` で読み、0 バイトなら終わる。std が、`Interrupted` を受けたときの読み直し、短い読み、空き領域を 0 で埋めないこと、終わりを小さな読みで確かめることを受け持つ
+  4. 各区切りは `take(64 KiB).read_to_end(&mut vec)` で読み、0 バイトなら終わる。std が、短い読みと、終わりを小さな読みで確かめることを受け持つ。読み手は `StopOnInterrupt` で包む。中の読み手が `Interrupted` を返したとき、止める語が立っていれば `Interrupted` でない誤りに変えて返し、立っていなければそのまま返して `read_to_end` に読み直させる。区切りの読みが誤りを返したとき、止める語が立っていれば `Stopped` で止め、立っていなければ `Io` の誤りにする。SIGINT のハンドラが `SA_RESTART` を外して入れるので ([VM](vm.md) の「上限と割り込み」)、待っている読みは `EINTR` で戻り、この道で止まる。`StopOnInterrupt` は `read_buf` を実装できない (stable の Rust) ので、`read_to_end` は空き領域を各バイトにつき1回 0 で埋めてから読む。測った費用は [計測の基準](../implementation/benchmarks.md) の「S11c-1」にある
   5. 読み終えたら `String::from_utf8` で確かめ、`alloc_string(&str)` でヒープへ写し、`Vec` を手放す
   6. 結果は組 `(File, String)` で、`alloc_data(TUPLE, 2, 0, lin = true)` で作り、`File` の参照を組に移す。行の `ret_kind` が `Lin` なので `lin` ビットを立てる
   - 読みの誤りなら `Io { op: Read, .. }`、UTF-8 でなければ `NotUtf8`、止めたら `Stopped` を返す。どのときも `Vec` と `File` を手放す。`File` を手放すことで閉じる
@@ -893,7 +893,7 @@ pub struct Opened {
 - `eml_rt` のコードは、核を含めて Verus の `verus!` の中に書き、`cargo verus verify -p eml_rt` が crate 全体を検証する ([テスト戦略](../implementation/testing.md) の「Verus」)。生のポインタの読み書きは、どれも Verus の権限 (`PointsTo`) の上で行う。証明するのは、公開の操作の前提 (上の「核の操作」の表) の下でのメモリの安全、ヒープの形の不変条件、RC と抽象のモデルの対応、`share` と `release` と reuse の遷移、上の「検査モードの約束」の性質である
 - 確保と atomic の操作は、std の関数を薄い関数で包み、その関数の約束を信頼する (下の表の T1 と T2)。vstd の確保は失敗すると `process::abort` を呼び、vstd の atomic は SeqCst だけを扱うので、使わない。包みは std の関数を1回呼ぶだけで、型を差し替える層ではない
 
-Verus で確かめない部分は、次の信頼の一覧にまとめる。`external_body`、`assume_specification` などの信頼の項目は、どれもこの表のどれかに属する。`eml_rt` の `trust.rs` のテストが、テストでないコードの項目を探し、表の番号を付けた一覧と同じであることを確かめる。`verus!` の外に置くのは、`fmt` と `Default` の実装、T4 の `Drop`、`unsafe impl Send` と `Sync`、`Sync` でないことの型の assert と配置を確かめるコンパイル時の assert、`leaks` の `BTreeMap` を組む安全な関数と `check_invariants`、前置きの構造体 `Prefix` の宣言、panic の文言の `const`、`Foreign` の表の `const` (T3)、`Control` の止める語と確保量を読み書きする安全な関数と `Ctx::poll` (上の「実行の制御」)、Host の trait と `Opened`、`Buffering`、`StdHost`、`HostRef::new` と `HostRef` の `Drop` (T4)、`Fault`、`ArithFault`、`IoReason`、`Stop` の `Display`、`io::Error` を `IoReason` に写す関数 `io_reason` (上の「extern」)、テストだけである。
+Verus で確かめない部分は、次の信頼の一覧にまとめる。`external_body`、`assume_specification` などの信頼の項目は、どれもこの表のどれかに属する。`eml_rt` の `trust.rs` のテストが、テストでないコードの項目を探し、表の番号を付けた一覧と同じであることを確かめる。`verus!` の外に置くのは、`fmt` と `Default` の実装、T4 の `Drop`、`unsafe impl Send` と `Sync`、`Sync` でないことの型の assert と配置を確かめるコンパイル時の assert、`leaks` の `BTreeMap` を組む安全な関数と `check_invariants`、前置きの構造体 `Prefix` の宣言、panic の文言の `const`、`Foreign` の表の `const` (T3)、`Control` の止める語と確保量を読み書きする安全な関数と `Ctx::poll` (上の「実行の制御」)、Host の trait と `Opened`、`Buffering`、`StdHost`、`HostRef::new` と `HostRef` の `Drop` (T4)、`Fault`、`ArithFault`、`IoReason`、`Stop` の `Display`、`io::Error` を `IoReason` に写す関数 `io_reason` (上の「extern」)、止める語が立った後の `Interrupted` を変える読み手 `StopOnInterrupt` (上の「`File`」)、テストだけである。
 
 | # | 中身 | 理由 | Miri で確かめること |
 |---|---|---|---|
@@ -908,7 +908,7 @@ Verus で確かめない部分は、次の信頼の一覧にまとめる。`exte
 | T8 | 借用の規則 (Stacked Borrows と Tree Borrows) | vstd の権限のモデルは、参照と生のポインタの借用の規則を表さない | 核の各操作を両方のモードで1回ずつ通す小さいテスト。ヒープの物体のフィールドに置いた領域の語を読み、領域の文字列から写し、`share` と解放の連鎖が領域の子で止まること。実行文脈の基本操作を1回ずつ通すこと |
 | T9 | Verus、Z3、rustc、vstd (その std の約束を含む) | 道具そのもの | なし |
 | T10 | 文字列のバイトの読み書き。`String` のブロックの権限を受けてペイロードにバイトを写す関数と、ペイロードを `str` として借りる関数と、その位置を返す関数。約束は、権限が渡したポインタの `String` のブロックのもので、長さの語とバイト列の語を持つとき、メモリのバイト列が権限の ghost のバイト列に等しいこと、写すのは長さの語の後ろの容量の中だけで、長さの語の値と権限の位置を変えないこと。写す元のバイト列が写す先と重ならないことを前提にする。このヒープの文字列から写すときは写す先がいつも別のブロックで、`string_push` の `s` は、呼ぶ側の約束により left 自身の中身を指さない | Verus の権限は語の単位で、語の中のバイトの位置を扱わない | 語に揃わない位置への追記、大きい物体のページをまたぐ長さ、大きい左辺からの作り直し、空の文字列、多バイトの文字、1ページの長さを含む自分自身との連結 (`x ++ x`)、ほかの文字列の中身を指す `s` の追記、`string` で読んだ位置の使用が終わった後の追記、`String.show` が区間を写すこと (区間が先頭、途中、末尾にあり、多バイトの文字と接する場合)、2つの借用の規則での読み書き |
-| T11 | Host の実装と、それを呼ぶ関数。`HostRef` とその `Clone`、Host の `write_line` と `flush` を呼ぶ関数、不透明な `File`、Host の `open` を呼ぶ関数、`File` を区切りごとに読んで UTF-8 を確かめる関数 `read_text`。何も約束しない (書いた中身、読めた中身、返した値のどれも)。`read_text` の `File` を借りる前提は、`foreign_unique` で確かめる (上の「extern」) | Verus は `dyn Host`、`io::Error`、`dyn BufRead` を扱わず、OS とのやりとりの中身は証明の外にある。中身は期待値の表で確かめる ([テスト戦略](../implementation/testing.md) の「期待値の表」) | メモリの Host を通る `println` と `flush`、`open`、`read_all` (区切りをまたぐ長さ、長さの見込みのない読み手、短い読み、途中の読みの誤り、UTF-8 でない中身、止める語)、`close` |
+| T11 | Host の実装と、それを呼ぶ関数。`HostRef` とその `Clone`、Host の `write_line` と `flush` を呼ぶ関数、不透明な `File`、Host の `open` を呼ぶ関数、`File` を区切りごとに読んで UTF-8 を確かめる関数 `read_text`。何も約束しない (書いた中身、読めた中身、返した値のどれも)。`read_text` の `File` を借りる前提は、`foreign_unique` で確かめる (上の「extern」) | Verus は `dyn Host`、`io::Error`、`dyn BufRead` を扱わず、OS とのやりとりの中身は証明の外にある。中身は期待値の表で確かめる ([テスト戦略](../implementation/testing.md) の「期待値の表」) | メモリの Host を通る `println` と `flush`、`open`、`read_all` (区切りをまたぐ長さ、長さの見込みのない読み手、短い読み、途中の読みの誤り、UTF-8 でない中身、止める語 (区切りの前と、止める語が立った後の `Interrupted`))、`close` |
 
 T10 の約束は、関数そのものの外の次の2つにも頼る。
 
