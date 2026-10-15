@@ -1,5 +1,8 @@
+use std::sync::{Arc, Mutex, PoisonError};
+
 use eml_cli::{
-    FsProvider, ModulePath, ModuleSource, ReadError, RunConfig, Session, capture_host, execute,
+    Capture, Control, FsProvider, Limits, ModulePath, ModuleSource, Outcome, ReadError, Repl,
+    RunConfig, Session, capture_host, execute,
 };
 use eml_diagnostics::{Diagnostic, has_errors};
 use eml_test_support::MemorySource;
@@ -292,4 +295,286 @@ fn default_limits_bound_the_depth_and_the_memory() {
         assert!(limits.max_bytes > 0);
         assert!(limits.max_bytes < usize::MAX);
     }
+}
+
+/// 入力ごとの表示を読むための、`Repl` と出力の組。
+struct Console {
+    repl: Repl,
+    out: Capture,
+    read: usize,
+}
+
+impl Console {
+    fn new(config: &RunConfig) -> Console {
+        Console::with_source(config, Box::new(MemorySource(&[])))
+    }
+
+    fn with_source(config: &RunConfig, source: Box<dyn ModuleSource + Send>) -> Console {
+        let (host, out) = capture_host(Default::default());
+        Console {
+            repl: Repl::new(config, source, "", host),
+            out,
+            read: 0,
+        }
+    }
+
+    /// 入力を評価し、結果と、その入力の表示と、診断の番号を返す。
+    fn eval(&mut self, text: &str) -> (Outcome, String, Vec<String>) {
+        let evaluated = self.repl.eval(text);
+        let all = self.out.contents();
+        let output = all[self.read..].to_string();
+        self.read = all.len();
+        (evaluated.outcome, output, codes(&evaluated.diagnostics))
+    }
+}
+
+/// `Session` と同じく、後で並列のコンパイルやクエリに載せる妨げにしない (docs/superpowers/specs/2026-10-15-s11a-repl-session-design.md の「API」)。
+#[test]
+fn a_repl_is_send() {
+    fn assert_send<T: Send>() {}
+    assert_send::<Repl>();
+}
+
+#[test]
+fn an_expression_prints_its_value() {
+    let mut console = Console::new(&RunConfig::default());
+    assert_eq!(
+        console.eval("1 + 2"),
+        (Outcome::Accepted, "3\n".to_string(), vec![])
+    );
+}
+
+#[test]
+fn a_definition_is_kept_for_later_inputs() {
+    let mut console = Console::new(&RunConfig::default());
+    assert_eq!(
+        console.eval("inc : Int -> Int\ninc x = x + 1"),
+        (Outcome::Accepted, String::new(), vec![])
+    );
+    assert_eq!(console.eval("inc 41").1, "42\n");
+}
+
+#[test]
+fn a_rejected_input_leaves_the_session_unchanged() {
+    let mut console = Console::new(&RunConfig::default());
+    assert_eq!(
+        console.eval("bad : Int -> Int\nbad x = x + \"s\""),
+        (Outcome::Rejected, String::new(), vec!["E2001".to_string()])
+    );
+    assert_eq!(console.eval("bad 1").2, ["E1001"]);
+}
+
+#[test]
+fn diagnostics_point_into_the_files_of_their_evaluation() {
+    let (host, _) = capture_host(Default::default());
+    let mut repl = Repl::new(&RunConfig::default(), Box::new(MemorySource(&[])), "", host);
+    assert_eq!(repl.eval("1 + 1").outcome, Outcome::Accepted);
+    let evaluated = repl.eval("nope");
+    let primary = &evaluated.diagnostics[0].primary;
+    assert_eq!(evaluated.files.path(primary.file), "<input 2>");
+}
+
+#[test]
+fn an_input_of_only_comments_does_nothing() {
+    let (host, _) = capture_host(Default::default());
+    let mut repl = Repl::new(&RunConfig::default(), Box::new(MemorySource(&[])), "", host);
+    assert_eq!(repl.eval("").outcome, Outcome::Empty);
+    assert_eq!(repl.eval("-- a note").outcome, Outcome::Empty);
+    // 空の入力は番号を進めないので、次の入力が1番になる
+    let evaluated = repl.eval("nope");
+    let primary = &evaluated.diagnostics[0].primary;
+    assert_eq!(evaluated.files.path(primary.file), "<input 1>");
+}
+
+#[test]
+fn a_runtime_error_does_not_end_the_session() {
+    let mut console = Console::new(&RunConfig::default());
+    let (outcome, _, _) = console.eval("1 / 0");
+    assert!(matches!(outcome, Outcome::Failed(_)), "{outcome:?}");
+    assert_eq!(console.eval("let x = 5").0, Outcome::Accepted);
+    assert_eq!(console.eval("x * 2").1, "10\n");
+}
+
+#[test]
+fn a_failed_let_binds_nothing() {
+    let mut console = Console::new(&RunConfig::default());
+    let (outcome, _, _) = console.eval("let y = 1 / 0");
+    assert!(matches!(outcome, Outcome::Failed(_)), "{outcome:?}");
+    assert_eq!(console.eval("y").2, ["E1001"]);
+}
+
+/// 止める理由のビットは `eval` の始めに下りる (docs/superpowers/specs/2026-10-15-s11a-repl-session-design.md の「実行と表示」)。
+#[test]
+fn each_input_clears_the_stop_bits() {
+    let control = Arc::new(Control::new(Limits::default()));
+    let config = RunConfig::default().with_control(Arc::clone(&control));
+    let mut console = Console::new(&config);
+    control.interrupt();
+    assert_eq!(console.eval("1 + 2").1, "3\n");
+}
+
+/// 確保量の上限で止まると `MEMORY` のビットが残る。`()` は何も確保しないが、`entry$` の呼び出しの安全点を通るので、
+/// ビットが残っていれば止まる。
+#[test]
+fn the_session_continues_after_the_memory_limit() {
+    for debug_heap in [true, false] {
+        let control = Arc::new(Control::new(Limits {
+            max_bytes: 1 << 22,
+            ..Limits::default()
+        }));
+        let config = RunConfig::default()
+            .with_debug_heap(debug_heap)
+            .with_control(control);
+        let mut console = Console::new(&config);
+        let build = "build : Int -> List Int -> List Int\n\
+                     build n acc = if n == 0 then acc else build (n - 1) (n :: acc)";
+        assert_eq!(console.eval(build).0, Outcome::Accepted);
+        let (outcome, _, _) = console.eval("let big = build 1000000 []");
+        let Outcome::Failed(error) = outcome else {
+            panic!("expected the memory limit, got {outcome:?} (debug_heap = {debug_heap})");
+        };
+        assert!(
+            error
+                .to_string()
+                .starts_with("the memory limit is exceeded"),
+            "{error}"
+        );
+        assert_eq!(
+            console.eval("()").0,
+            Outcome::Accepted,
+            "debug_heap = {debug_heap}"
+        );
+    }
+}
+
+#[test]
+fn close_finds_no_leaks_after_clean_inputs() {
+    let mut console = Console::new(&RunConfig::default().with_debug_heap(true));
+    for input in [
+        "pair : Int -> (Int, String)\npair n = (n, \"x\")",
+        "let p = pair 1",
+        "p",
+        "let q = [p, p]",
+        "q",
+    ] {
+        assert_eq!(console.eval(input).0, Outcome::Accepted, "{input}");
+    }
+    assert_eq!(console.repl.close().leaks, None);
+}
+
+/// テストの間に中身を書き換えられる `ModuleSource`。
+#[derive(Clone, Default)]
+struct Changing(Arc<Mutex<Vec<(String, String)>>>);
+
+impl Changing {
+    fn set(&self, path: &str, text: &str) {
+        let mut files = self.0.lock().unwrap_or_else(PoisonError::into_inner);
+        files.retain(|(file, _)| file != path);
+        files.push((path.to_string(), text.to_string()));
+    }
+}
+
+impl ModuleSource for Changing {
+    fn read(&self, path: &ModulePath) -> Result<String, ReadError> {
+        let files = self.0.lock().unwrap_or_else(PoisonError::into_inner);
+        files
+            .iter()
+            .find(|(file, _)| *file == path.file_path())
+            .map(|(_, text)| text.clone())
+            .ok_or(ReadError::NotFound)
+    }
+}
+
+/// 読み直すと、同じ名前の関数が違うコードになるので、最初に読んだテキストを使い続ける
+/// (docs/superpowers/specs/2026-10-15-s11a-repl-session-design.md の「並びと読み込み」)。
+#[test]
+fn an_imported_module_keeps_the_text_read_first() {
+    let source = Changing::default();
+    source.set("Util.em", "pub v : Int\nv = 1");
+    let mut console = Console::with_source(&RunConfig::default(), Box::new(source.clone()));
+    assert_eq!(console.eval("import Util").0, Outcome::Accepted);
+    assert_eq!(console.eval("Util.v").1, "1\n");
+    source.set("Util.em", "pub v : Int\nv = 2");
+    assert_eq!(console.eval("Util.v").1, "1\n");
+}
+
+/// 受け付けなかった入力が読んだものは、キャッシュに残さない。
+#[test]
+fn a_rejected_import_reads_the_module_again() {
+    let source = Changing::default();
+    let mut console = Console::with_source(&RunConfig::default(), Box::new(source.clone()));
+    assert_eq!(console.eval("import Later").2, ["E1026"]);
+    source.set("Later.em", "pub w : Int\nw = 7");
+    assert_eq!(console.eval("import Later").0, Outcome::Accepted);
+    assert_eq!(console.eval("Later.w").1, "7\n");
+}
+
+/// 警告は、受け付けたときに一度だけ返す。セッション全体を入力ごとに検査し直すので、前の入力の警告も毎回出るため。
+#[test]
+fn a_warning_is_reported_once() {
+    let mut console = Console::new(&RunConfig::default());
+    let (outcome, _, codes) =
+        console.eval("f : Int -> Int\nf x = match x with\n  | _ -> 0\n  | 1 -> 1");
+    assert_eq!(
+        (outcome, codes),
+        (Outcome::Accepted, vec!["E4004".to_string()])
+    );
+    assert_eq!(
+        console.eval("f 3"),
+        (Outcome::Accepted, "0\n".to_string(), vec![])
+    );
+}
+
+/// handler の中で実行時エラーが起きても、evv が空に戻り、次の入力のエフェクトが正しく動く
+/// (docs/superpowers/specs/2026-10-15-s11a-repl-session-design.md の「エラー」)。
+#[test]
+fn a_runtime_error_inside_a_handler_leaves_no_handler_behind() {
+    for config in [
+        RunConfig::default(),
+        RunConfig::default().with_debug_heap(true),
+    ] {
+        let mut console = Console::new(&config);
+        let (outcome, _, codes) = console.eval("effect Counter where\n  tick : Unit -> Int");
+        assert_eq!(outcome, Outcome::Accepted, "{codes:?}");
+        let (outcome, _, _) = console.eval("handle 1 / (tick () - 5) with\n  | tick () k -> k 5");
+        assert!(matches!(outcome, Outcome::Failed(_)), "{outcome:?}");
+        let (_, output, codes) =
+            console.eval("handle tick () + tick () with\n  | tick () k -> k 2");
+        assert_eq!(output, "4\n", "{codes:?}");
+    }
+}
+
+/// 実行時エラーの前に書いた表示は、エラーより前に host に届く。
+#[test]
+fn output_before_a_runtime_error_is_flushed() {
+    let mut console = Console::new(&RunConfig::default());
+    let (outcome, _, codes) =
+        console.eval("boom : Unit -> <IO> Int\nboom () =\n  println \"before\"\n  1 / 0");
+    assert_eq!(outcome, Outcome::Accepted, "{codes:?}");
+    let (outcome, output, _) = console.eval("boom ()");
+    assert!(matches!(outcome, Outcome::Failed(_)), "{outcome:?}");
+    assert_eq!(output, "before\n");
+}
+
+/// 入力を 100 個重ねても、どの入力も前の束縛を正しく読む。入力ごとに全体を検査し直す費用の目安でもある。
+#[test]
+fn a_hundred_inputs_keep_every_binding() {
+    let mut console = Console::new(&RunConfig::default());
+    for n in 1..=100 {
+        let (outcome, _, codes) = console.eval(&format!("let x{n} = {n}"));
+        assert_eq!(outcome, Outcome::Accepted, "{codes:?}");
+    }
+    let sum = (1..=100)
+        .map(|n| format!("x{n}"))
+        .collect::<Vec<_>>()
+        .join(" + ");
+    assert_eq!(console.eval(&sum).1, "5050\n");
+}
+
+/// 多バイトの文字を含む文字列を束縛し、表示できる。
+#[test]
+fn multibyte_text_round_trips() {
+    let mut console = Console::new(&RunConfig::default());
+    assert_eq!(console.eval("let s = \"日本語\"").0, Outcome::Accepted);
+    assert_eq!(console.eval("s").1, "\"日本語\"\n");
 }

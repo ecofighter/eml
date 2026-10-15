@@ -5,18 +5,23 @@
 //! 段階を選ぶので、各 crate のテストは自分より下流の crate を組み立てない (docs/implementation/testing.md)。
 
 mod fs_provider;
+#[cfg(feature = "run")]
+mod repl;
 
 #[cfg(feature = "core")]
 use eml_diagnostics::has_errors;
 use eml_diagnostics::{Diagnostic, FileId, SourceFiles, sort_diagnostics};
 
 pub use eml_hir::{ModulePath, ModuleSource, ReadError};
+pub use eml_syntax::{InputStatus, input_status};
 #[cfg(feature = "run")]
 pub use eml_vm::{
     Capture, Control, HostRef, Limits, RunConfig, RunStats, RuntimeError, SourceLocation, Stop,
     VmFault, capture_host, stdio_host,
 };
 pub use fs_provider::FsProvider;
+#[cfg(feature = "run")]
+pub use repl::{Closed, Evaluated, Outcome, Repl};
 
 /// `DefMap` と、読み込みの段と def_map の段の診断。
 pub struct DefMapped {
@@ -75,6 +80,20 @@ impl Session {
         Session::new(eml_hir::load_with_std(std, entry_path, entry_text, source))
     }
 
+    /// REPL の受け付けた入力と今の入力を、入力ごとのモジュールとして読む
+    /// (docs/superpowers/specs/2026-10-15-s11a-repl-session-design.md の「並びと読み込み」)。返す `ImportCache` は、この
+    /// 読み込みで新しく読んだモジュールで、`Repl` が入力を受け付けたときにだけ足す。
+    pub fn load_session(
+        inputs: &[eml_hir::SessionInput],
+        root: &str,
+        source: &dyn ModuleSource,
+        cache: &eml_hir::ImportCache,
+    ) -> (Session, eml_hir::ImportCache) {
+        let (loaded, diagnostics, read) =
+            eml_hir::load_session(eml_hir::STD, inputs, root, source, cache);
+        (Session::new((loaded, diagnostics)), read)
+    }
+
     fn new((loaded, load_diagnostics): (eml_hir::Loaded, Vec<Diagnostic>)) -> Session {
         Session {
             loaded,
@@ -85,6 +104,12 @@ impl Session {
     /// 診断の表示に使う。
     pub fn files(&self) -> &SourceFiles {
         &self.loaded.files
+    }
+
+    /// 診断を表示するファイルを、セッションを手放して返す。`Repl` は入力ごとにセッションを作り直すので、その入力の診断と
+    /// 一緒に渡す。
+    pub fn into_files(self) -> SourceFiles {
+        self.loaded.files
     }
 
     /// Prelude の番号。Prelude の範囲を指す診断を確かめるのに使う。

@@ -30,6 +30,17 @@ impl Uniform {
     pub fn instance(&self, node: InstanceNode, position: usize) -> bool {
         self.instances.contains(&(node, position))
     }
+
+    /// 一様な (関数, 位置) の組。REPL が、後の入力で前の関数の一様な位置が変わらないことを確かめるのに使う
+    /// (docs/superpowers/specs/2026-10-15-s11a-repl-session-design.md の「定義し直しの決まり」)。
+    pub fn functions(&self) -> impl Iterator<Item = (FunctionId, usize)> + '_ {
+        self.functions.iter().copied()
+    }
+
+    /// 一様な (instance の節点, 位置) の組。
+    pub fn instances(&self) -> impl Iterator<Item = (InstanceNode, usize)> + '_ {
+        self.instances.iter().copied()
+    }
 }
 
 /// 一様な位置のグラフの instance の節点。生成する関数 (導出とタプル) の鍵の位置もこれで決まる。

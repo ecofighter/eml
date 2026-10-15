@@ -66,6 +66,11 @@ impl SourceFiles {
         &self.files[id.0 as usize].text
     }
 
+    /// 登録した順のパス。REPL が、前の入力で表示したファイルを覚えるのに使う。
+    pub fn paths(&self) -> impl Iterator<Item = &str> {
+        self.files.iter().map(|file| file.path.as_str())
+    }
+
     /// 位置を行と列にする。`offset` は、このファイルのテキストの中の文字の境界でなければならない。
     pub fn line_col(&self, id: FileId, offset: TextSize) -> LineCol {
         let file = &self.files[id.0 as usize];

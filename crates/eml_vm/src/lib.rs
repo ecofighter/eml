@@ -300,8 +300,8 @@ fn check_leaks(ctx: &Ctx<Checked>) -> Result<(), RuntimeError> {
     }
 }
 
-/// コード生成の誤りは、正しいプログラムでは起きない内部の誤りである。
-fn compile_error(program: &Program, error: CompileError) -> RuntimeError {
+/// コード生成の誤りは、正しいプログラムでは起きない内部の誤りである。REPL は `Machine::load` の誤りをこれで報告する。
+pub fn compile_error(program: &Program, error: CompileError) -> RuntimeError {
     let (what, function) = match error {
         CompileError::TooManySlots { function } => {
             ("a function needs more than 65535 slots", function)

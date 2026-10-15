@@ -18,7 +18,7 @@ mod usage;
 
 use std::collections::HashMap;
 
-use eml_diagnostics::{Diagnostic, FileId, Label, SourceFiles, TextRange};
+use eml_diagnostics::{Diagnostic, FileId, Label, SourceFiles, TextRange, TextSize};
 use eml_hir::{
     ConstructorId, EffectId, ExprId, Function, FunctionId, ItemMap, LocalId, PatId, Program,
     ValueItem,
@@ -59,6 +59,7 @@ pub mod codes {
     pub const INPUT_EFFECT: ErrorCode = ErrorCode(2015);
     pub const INPUT_LINEAR: ErrorCode = ErrorCode(2016);
     pub const BINDING_AMBIGUOUS: ErrorCode = ErrorCode(2017);
+    pub const INPUT_CHANGES_UNIFORM: ErrorCode = ErrorCode(2018);
     pub const NON_EXHAUSTIVE_MATCH: ErrorCode = ErrorCode(4001);
     pub const NON_EXHAUSTIVE_EQUATION: ErrorCode = ErrorCode(4002);
     pub const REFUTABLE_PATTERN: ErrorCode = ErrorCode(4003);
@@ -276,6 +277,26 @@ pub fn missing_main(file: FileId) -> Diagnostic {
         ),
     )
     .with_help("add `main : Unit -> <IO> Unit` and an equation `main () = ...`")
+}
+
+/// REPL の入力が、前の入力の関数か instance の一様な位置を変えたこと。前の入力の関数は、すでに型引数を決めたコードとして
+/// `CodeBase` にあり、同じ名前で違うコードを足せないので、入力を受け付けない
+/// (docs/superpowers/specs/2026-10-15-s11a-repl-session-design.md の「定義し直しの決まり」)。REPL だけが前の入力の位置を
+/// 知っているので、`eml_cli` がこの関数で作る。
+pub fn input_changes_uniform(file: FileId, len: TextSize, name: &str) -> Diagnostic {
+    Diagnostic::error(
+        codes::INPUT_CHANGES_UNIFORM,
+        format!("this input changes how `{name}` from an earlier input is compiled"),
+        Label::new(
+            file,
+            TextRange::up_to(len),
+            "this input makes a type variable of it grow without bound",
+        ),
+    )
+    .with_note(
+        "a class instance in this input adds a polymorphic recursion that passes through the earlier definition",
+    )
+    .with_help("start a new session to use this input")
 }
 
 /// 単体テストのための `Program`。Prelude と、`text` を入口にしたモジュールを変換する。
