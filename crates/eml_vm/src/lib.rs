@@ -161,14 +161,21 @@ impl<M: Mode> Machine<M> {
     }
 
     /// 入口の関数を `()` で実行する。統計は `Machine` を作ってからの積算で、`peak_stack` だけがこの実行の値である。
-    /// 根は手放さず、次の実行に残す。続けられる誤りの後は evv と yield の状態を空に戻す。スタックと evv に残った語は
-    /// 手放さずにヒープに残る (docs/spec/vm.md の「追記」)。
+    /// 根は手放さず、次の実行に残す。続けられる誤りの後は、根から届く物体を新しいヒープに写して古いヒープを捨てる
+    /// (docs/superpowers/specs/2026-10-16-s11b-recovery-design.md の「回復」)。
     pub fn run(&mut self, entry: u32) -> Result<RunStats, RuntimeError> {
         let result = self.run_entry(entry);
         if let Err(error) = &result
             && !error.is_broken()
         {
-            self.ctx.abandon();
+            // 根の語は根が持つ参照で、根から届く物体は失敗した実行が書き換えないので、`recover` の前提を守る
+            if let Err(e) = unsafe { self.ctx.recover() } {
+                return Err(RuntimeError::Fault {
+                    fault: VmFault::Extern(e.into()),
+                    function: "<recover>".to_string(),
+                    at: None,
+                });
+            }
         }
         result
     }

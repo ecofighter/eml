@@ -288,10 +288,11 @@ fn second() -> unit {
     assert_eq!(run_two(first, second), "kept\n");
 }
 
-/// 続けられる誤りの後は、evv と yield の状態を空に戻すので、次の実行は終わりの確かめを通る。スタックと evv に
-/// 残った物体はヒープに残り、検査モードでは閉じるときにリークとして数える (S11b の根からの走査が回収する)。
+/// 続けられる誤りの後は、根から届く物体を新しいヒープに写して古いヒープを捨てる。evv と yield の状態は空に戻るので、
+/// 次の実行は終わりの確かめを通り、スタックと evv に残った物体も消えるので、閉じるときのリークの検査も通る
+/// (docs/superpowers/specs/2026-10-16-s11b-recovery-design.md の「回復」)。
 #[test]
-fn a_continuable_error_empties_the_evv_for_the_next_run() {
+fn a_continuable_error_recovers_the_heap_for_the_next_run() {
     let first = "\
 effect A { a(unit) -> unit }
 fn main() -> unit {
@@ -324,11 +325,6 @@ fn second() -> unit {
             .run(second.entry)
             .unwrap_or_else(|error| panic!("{error}"));
         assert_eq!(out.contents(), "after\n");
-        let closed = machine.close();
-        assert_eq!(
-            matches!(closed, Err(RuntimeError::Leak(_))),
-            debug_heap,
-            "{closed:?}"
-        );
+        machine.close().unwrap_or_else(|error| panic!("{error}"));
     }
 }

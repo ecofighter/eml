@@ -1,4 +1,4 @@
-//! セッションの根と、実行時エラーの後の後始末 (docs/spec/object-model.md の「実行文脈 `Ctx`」)。
+//! セッションの根 (docs/spec/object-model.md の「実行文脈 `Ctx`」)。
 //!
 //! 根は REPL の `let` の束縛の値を入力をまたいで持つ。根の語は、VM のスタックの語と同じく、呼ぶ側 (VM) が参照を
 //! 持つと約束する数えた参照である。根を `Ctx` の不変条件 (`wf`、`held_ok`) に入れないのは、根を読み書きしない
@@ -23,6 +23,19 @@ impl<M: Mode> Ctx<M> {
     /// 根の表の長さ。
     pub closed spec fn root_len(&self) -> int {
         self.roots@.len() as int
+    }
+
+    /// 根の表の読み取りの中身。回復 (`recover.rs`) が根の表を写すのに使う。
+    pub(super) proof fn lemma_root_spec(&self)
+        ensures
+            self.root_len() == self.roots@.len(),
+            forall|j: int| #[trigger]
+                self.root_spec(j) == if 0 <= j < self.roots@.len() {
+                    self.roots@[j]
+                } else {
+                    None
+                },
+    {
     }
 
     /// 根の表だけを変えた文脈は、不変条件を保つ。`wf` は根を見ないが、`holds_args` の量化子は文脈ごとの `need` で
@@ -175,37 +188,6 @@ impl<M: Mode> Ctx<M> {
             self.lemma_roots_frame(*old(self));
         }
         taken
-    }
-
-    /// `evv` と yield の状態を空にする。持っていた語は手放さず、物体はヒープに残る。VM が実行時エラーで実行を
-    /// 打ち切った後、次の実行のために呼ぶ。残った物体は、根からの走査で回収する (docs/future/roadmap.md の「S11
-    /// REPL」)。語を手放さないだけなので安全な関数にする。根は変えない。
-    pub fn abandon(&mut self)
-        requires
-            old(self).wf(),
-        ensures
-            final(self).wf(),
-            final(self).finished(),
-            final(self).heap_spec() == old(self).heap_spec(),
-            forall|j: int| #[trigger] final(self).root_spec(j) == old(self).root_spec(j),
-    {
-        self.evv = Word::UNIT;
-        self.yielding = YieldState::none();
-        proof {
-            lemma_unit_bits();
-            self.lemma_unit_listed(self.evv);
-            if !M::CHECKED {
-                let s0 = *old(self);
-                lemma_moved_refl(self.heap);
-                assert forall|b: usize| #[trigger] self.need(seq![], b) > 0 implies s0.need(
-                    seq![],
-                    b,
-                ) + 0 >= self.need(seq![], b) by {
-                    lemma_points_in(seq![], b);
-                }
-                self.lemma_holds_moved(s0, seq![], seq![], |b: usize| 0int, Set::empty());
-            }
-        }
     }
 }
 

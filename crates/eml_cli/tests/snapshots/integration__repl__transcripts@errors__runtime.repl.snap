@@ -32,4 +32,4 @@ runtime error: division by zero
 > check (build 3 []) 50
 5
 --- close ---
-memory leak: objects were not freed: 3 Data
+no leaks

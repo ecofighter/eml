@@ -26,6 +26,7 @@ mod externs;
 mod frozen;
 mod host;
 mod raw;
+mod recover;
 mod reuse;
 mod roots;
 mod share;

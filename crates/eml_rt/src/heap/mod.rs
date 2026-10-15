@@ -15,6 +15,7 @@ mod handover;
 pub(crate) mod inv;
 mod model;
 mod proof;
+mod recover;
 mod release;
 mod reuse;
 mod safe;
@@ -296,6 +297,21 @@ proof fn lemma_unit_filled_extend(before: BlockPerm, after: BlockPerm, lo: int, 
 }
 
 impl<M: Mode> Heap<M> {
+    /// 付けた塊。
+    pub closed spec fn region_spec(&self) -> Option<Arc<Frozen<M>>> {
+        self.region@
+    }
+
+    /// 今の worker の番号。
+    pub closed spec fn worker_spec(&self) -> u32 {
+        self.worker
+    }
+
+    /// まだ何も確保していない。ブロックは rc 0 のダミーだけである。
+    pub closed spec fn unused(&self) -> bool {
+        forall|b: usize| #[trigger] self.core.dom().contains(b) ==> self.core.rc_of(b) == 0
+    }
+
     /// ヒープの不変条件。検査モードでは安全の条件 (`safe_wf`) で、速いモードではモデルが合っていること
     /// (`consistent`) である (docs/spec/object-model.md の「検査モードの約束」)。
     pub closed spec fn wf(&self) -> bool {
@@ -553,6 +569,9 @@ impl<M: Mode> Heap<M> {
             r.wf(),
             r.consistent(),
             r.settled(),
+            r.region_spec() is None,
+            r.worker_spec() == 0,
+            r.unused(),
     {
         let mut heap = Heap {
             core: Self::empty_core(control),
@@ -637,6 +656,8 @@ impl<M: Mode> Heap<M> {
             final(self).consistent(),
             final(self).settled(),
             final(self).region == old(self).region,
+            final(self).worker == old(self).worker,
+            final(self).unused(),
     {
         // ダミーは値 0 の BigInt の不死の物体で、検査モードでも数えない (docs/spec/object-model.md の「ダミーの値」)
         let (h, Tracked(perm)) = self.alloc_header(1, 0, Meta::new(0, 0, Kind::BigInt, false));
@@ -662,6 +683,11 @@ impl<M: Mode> Heap<M> {
             crate::word::lemma_aligned_is_ptr(h@.addr);
             assert(self.core.word_ok(self.dummy));
             assert(self.dummy_wf());
+            assert forall|b: usize| #[trigger] self.core.dom().contains(b) implies self.core.rc_of(
+                b,
+            ) == 0 by {
+                assert(b == h@.addr);
+            }
         }
     }
 
@@ -676,8 +702,40 @@ impl<M: Mode> Heap<M> {
         self.core.pages.control()
     }
 
-    pub fn worker(&self) -> u32 {
+    pub fn worker(&self) -> (r: u32)
+        ensures
+            r == self.worker_spec(),
+    {
         self.worker
+    }
+
+    /// `self` と `other` は、同じ塊の権限を付けている。
+    pub(crate) closed spec fn same_region(&self, other: Heap<M>) -> bool {
+        &&& (self.core.env@.region is None) == (other.core.env@.region is None)
+        &&& self.core.env@.region matches Some(s) ==> s@ == other.core.env@.region->0@
+    }
+
+    /// 同じ `Control`、worker、付けた塊を持つ空のヒープ。回復が写し先にする
+    /// (docs/superpowers/specs/2026-10-16-s11b-recovery-design.md の「`Ctx::recover`」)。
+    pub(crate) fn fresh(&self) -> (r: Heap<M>)
+        requires
+            self.wf(),
+        ensures
+            r.wf(),
+            r.consistent(),
+            r.settled(),
+            r.unused(),
+            r.worker_spec() == self.worker_spec(),
+            r.same_region(*self),
+    {
+        let mut r = Heap::with_control(self.control().clone());
+        r.set_worker(self.worker);
+        if let Some(a) = &*self.region {
+            let c = a.clone();
+            assert(*c == **a);
+            r.attach(c);
+        }
+        r
     }
 
     /// 論理的な worker ID を替える。これから確保する物体の所有者と、所有者の検査の相手になる。
@@ -686,6 +744,10 @@ impl<M: Mode> Heap<M> {
             old(self).wf(),
         ensures
             final(self).wf(),
+            final(self).worker_spec() == worker,
+            final(self).region_spec() == old(self).region_spec(),
+            old(self).unused() ==> final(self).unused(),
+            old(self).settled() ==> final(self).settled(),
             old(self).consistent() ==> final(self).consistent(),
             final(self).same_objects(*old(self)),
             M::CHECKED ==> final(self).words_kept(*old(self)),
@@ -1033,6 +1095,16 @@ impl<M: Mode> Heap<M> {
             },
             final(self).lin_of(w) == lin,
             final(self).owned(w),
+            forall|i: int|
+                (if scanned >= 255 {
+                    1int
+                } else {
+                    0int
+                }) + scanned <= i < (if scanned >= 255 {
+                    1int
+                } else {
+                    0int
+                }) + scanned + raw ==> #[trigger] final(self).raw_at(w, i),
             M::CHECKED ==> forall|i: int| #[trigger]
                 final(self).scanned_at(w, i) ==> final(self).set_passes(w, i),
             forall|i: int|
@@ -1282,7 +1354,7 @@ impl<M: Mode> Heap<M> {
         ensures
             w.is_imm_spec() ==> *final(self) == *old(self),
             !w.is_imm_spec() ==> final(self).made(*old(self), w) && final(self).kind_of(w)
-                == Kind::BigInt,
+                == Kind::BigInt && !final(self).lin_of(w) && final(self).owned(w),
             M::CHECKED ==> final(self).words_kept(*old(self)),
     {
         match Word::int(n) {
@@ -1434,6 +1506,10 @@ impl<M: Mode> Heap<M> {
             final(self).wf(),
             old(self).consistent() ==> final(self).consistent(),
             M::CHECKED ==> final(self).words_kept(*old(self)),
+            final(self).region_spec() == Some(region),
+            final(self).worker_spec() == old(self).worker_spec(),
+            old(self).unused() ==> final(self).unused(),
+            old(self).settled() ==> final(self).settled(),
     {
         // 塊のブロックが重ならないことは、子の塊を凍結した作り手の確保から出る。鎖でつながらない2つの塊には、それを
         // 示すものがない

@@ -30,6 +30,7 @@ mod io;
 // 証明の部品だけを置くので、検証のときだけ読む
 #[cfg(verus_only)]
 mod proof;
+mod recover;
 mod roots;
 mod strings;
 
