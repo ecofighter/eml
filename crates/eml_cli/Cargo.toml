@@ -35,6 +35,7 @@ eml_types = { workspace = true, optional = true }
 eml_vm = { workspace = true, optional = true }
 
 [dev-dependencies]
+eml_rt.workspace = true
 eml_test_support = { workspace = true, features = ["hir"] }
 insta.workspace = true
 

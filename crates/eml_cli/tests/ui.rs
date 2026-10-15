@@ -6,8 +6,9 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, MutexGuard, PoisonError};
 
-use eml_cli::{FsProvider, RunConfig, RuntimeError, Session, capture_host, execute};
+use eml_cli::{FsProvider, RunConfig, RuntimeError, Session, VmFault, capture_host, execute};
 use eml_diagnostics::{has_errors, render};
+use eml_rt::Fault;
 
 /// insta の `glob!` は、失敗の数をすべてのスレッドで共有する1つのスタックの一番上に数え、終わりにも一番上を取り出す
 /// (insta 1.49 の `glob.rs` と `runtime.rs` の `GLOB_STACK`)。そのため、glob のテストが並んで走ると、ほかのテストの
@@ -142,7 +143,8 @@ fn execute_in(
 
 /// 検査モードの結果をスナップショットと比べた後で、速いモードでも流し、同じ出力と同じ結果になることを確かめる。
 /// 速いモードは前提を確かめないので、VM の誤りが未定義の動作になって glob のテスト全体を壊しうる。そのため検査モードの
-/// 後に流す (docs/implementation/testing.md の「VM でも流す」)。
+/// 後に流し、検査モードが VM の誤りを見つけたときは流さない (`fast_mode_reports`。docs/implementation/testing.md の
+/// 「VM でも流す」)。
 fn assert_fast_mode_agrees(
     suffix: &str,
     program: &eml_lir::Program,
@@ -160,6 +162,19 @@ fn assert_fast_mode_agrees(
         result.as_ref().map(|_| ()).map_err(ToString::to_string),
         "{suffix}: the fast mode ended otherwise"
     );
+}
+
+/// 速いモードも同じ誤りを報告するか。漏れ、内部の誤り、ヒープの誤りは検査モードだけが見つける。これらは VM 自身の
+/// 誤りを意味するので、速いモードで流すとメモリを壊すことがある。
+fn fast_mode_reports(error: &RuntimeError) -> bool {
+    !matches!(
+        error,
+        RuntimeError::Leak(_)
+            | RuntimeError::Fault {
+                fault: VmFault::Internal(_) | VmFault::Extern(Fault::Heap(_)),
+                ..
+            }
+    )
 }
 
 #[test]
@@ -196,7 +211,9 @@ fn run_fail() {
                 "--- stdout ---\n{stdout}--- runtime error ---\n{error}\n"
             ));
         });
-        assert_fast_mode_agrees(&suffix, &program, &root, &stdout, &result);
+        if fast_mode_reports(error) {
+            assert_fast_mode_agrees(&suffix, &program, &root, &stdout, &result);
+        }
     });
 }
 
