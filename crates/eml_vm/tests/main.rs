@@ -4,4 +4,5 @@
 mod common;
 
 mod codegen;
+mod data;
 mod run;

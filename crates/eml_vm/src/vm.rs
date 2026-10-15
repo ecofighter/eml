@@ -7,6 +7,7 @@ use eml_rt::{Ctx, Mode, Word, externs};
 
 use crate::RunCounts;
 use crate::code::CodeBase;
+use crate::data;
 use crate::error::VmFault;
 use crate::op::{FINISH, Op, Pc, Slot};
 
@@ -152,7 +153,6 @@ fn step<M: Mode>(
     counts: &mut RunCounts,
     pc: Pc,
 ) -> Result<bool, VmFault> {
-    let _ = &counts;
     task.pc = pc + 1;
     match code.code[pc as usize] {
         Op::Move { dst, src } => task.set(dst, task.get(src)),
@@ -204,6 +204,54 @@ fn step<M: Mode>(
         }
         Op::BoolEq { dst, a, b } => task.set_raw(dst, externs::bool_eq(task.raw(a), task.raw(b))),
         Op::BoolNe { dst, a, b } => task.set_raw(dst, externs::bool_ne(task.raw(a), task.raw(b))),
+        Op::SwitchEnum { src, at } => {
+            data::switch_tag(code, ctx, task, task.get(src), task.raw(src), at)?
+        }
+        Op::SwitchObj { src, at } => {
+            let w = task.get(src);
+            let tag = unsafe { ctx.heap().meta(w) }?.tag();
+            data::switch_tag(code, ctx, task, w, tag.into(), at)?
+        }
+        Op::SwitchTObj { src, at } => {
+            let w = task.get(src);
+            let tag = if w.is_imm() {
+                w.imm_value()
+            } else {
+                unsafe { ctx.heap().meta(w) }?.tag().into()
+            };
+            data::switch_tag(code, ctx, task, w, tag, at)?
+        }
+        Op::SwitchInt { src, at } => data::switch_int(code, task, task.raw(src), at)?,
+        Op::SwitchString { src, at } => data::switch_string(code, ctx, task, task.get(src), at)?,
+        Op::Unpack { src, at } => data::unpack(code, ctx, task, src, at)?,
+        // RC の命令は Repr が `obj` か `tobj` の変数にだけ出す。VM はその参照を持つか借りている
+        Op::Dup { src } => unsafe { ctx.heap_mut().dup(task.get(src)) }?,
+        Op::Decref { src } => unsafe { ctx.heap_mut().decref(task.get(src)) }?,
+        Op::Release { src, at } => data::release(code, ctx, task, src, at)?,
+        Op::Con { dst, at } => data::con(code, ctx, task, dst, at)?,
+        Op::BoxInt { dst, src } => {
+            if M::CHECKED {
+                counts.boxes += 1;
+            }
+            let w = unsafe { ctx.heap_mut() }.alloc_int(task.raw(src));
+            task.set(dst, w);
+        }
+        Op::BoxEnum { dst, src } => {
+            if M::CHECKED {
+                counts.boxes += 1;
+            }
+            task.set(dst, Word::imm(task.raw(src)));
+        }
+        Op::BoxConst { dst, index } => {
+            if M::CHECKED {
+                counts.boxes += 1;
+            }
+            task.set(dst, code.constants[index as usize]);
+        }
+        Op::Unbox { dst, src } => {
+            let n = data::unbox(ctx, task.get(src), counts)?;
+            task.set_raw(dst, n);
+        }
         Op::Extern { dst, at } => extern_call(code, ctx, task, dst, at)?,
     }
     Ok(true)

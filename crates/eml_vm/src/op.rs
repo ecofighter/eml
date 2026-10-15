@@ -125,12 +125,76 @@ pub enum Op {
         a: Slot,
         b: Slot,
     },
+    /// タグの switch。scrutinee の Repr で読み方を分ける。語の形では分けない。生の `enum` の値は即値にもポインタにも
+    /// 見えるためである (docs/spec/vm.md の「switch」)。
+    SwitchEnum {
+        src: Slot,
+        at: u32,
+    },
+    SwitchObj {
+        src: Slot,
+        at: u32,
+    },
+    SwitchTObj {
+        src: Slot,
+        at: u32,
+    },
+    SwitchInt {
+        src: Slot,
+        at: u32,
+    },
+    SwitchString {
+        src: Slot,
+        at: u32,
+    },
+    Unpack {
+        src: Slot,
+        at: u32,
+    },
+    Dup {
+        src: Slot,
+    },
+    Decref {
+        src: Slot,
+    },
+    Release {
+        src: Slot,
+        at: u32,
+    },
+    Con {
+        dst: Slot,
+        at: u32,
+    },
+    BoxInt {
+        dst: Slot,
+        src: Slot,
+    },
+    BoxEnum {
+        dst: Slot,
+        src: Slot,
+    },
+    /// 定数の `box`。値はコード生成の時点で即値か不死の `BigInt` にしてある。
+    BoxConst {
+        dst: Slot,
+        index: u32,
+    },
+    Unbox {
+        dst: Slot,
+        src: Slot,
+    },
     /// 算術と比較以外の extern。`operands[at..]` は [行の番号, 引数の数, 引数のスロット…]。
     Extern {
         dst: Slot,
         at: u32,
     },
 }
+
+/// 行き先がないことを表すオペランド (switch の `default`、確かめない走査する語の数)。
+pub const NONE: u32 = u32::MAX;
+/// フィールドの位置のうち、生の語であることを表すビット。
+pub const RAW: u32 = 1 << 31;
+/// `release` のフィールドの位置のうち、残すフィールドであることを表すビット。
+pub const KEEP: u32 = 1 << 31;
 
 // 命令の列を密に保ち、1回の読み込みで命令を取れるようにする
 const _: () = assert!(std::mem::size_of::<Op>() == 8);

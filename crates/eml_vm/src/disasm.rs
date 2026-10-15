@@ -6,7 +6,7 @@ use eml_extern::Extern;
 use eml_rt::Mode;
 
 use crate::code::CodeBase;
-use crate::op::{Op, Pc};
+use crate::op::{KEEP, NONE, Op, Pc, RAW};
 
 pub fn disassemble<M: Mode>(code: &CodeBase<M>) -> String {
     let mut out = String::new();
@@ -29,6 +29,56 @@ fn slots(list: &[u32]) -> String {
         .map(|slot| format!("s{slot}"))
         .collect::<Vec<_>>()
         .join(", ")
+}
+
+/// [位置 | RAW, スロット] の並び。
+fn fields(items: &[u32]) -> String {
+    items
+        .as_chunks::<2>()
+        .0
+        .iter()
+        .map(|pair| {
+            let raw = if pair[0] & RAW != 0 { "raw " } else { "" };
+            format!("{raw}@{} -> s{}", pair[0] & !RAW, pair[1])
+        })
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+/// タグの switch の飛び先の表を、case のあるタグだけ並べる。
+fn tag_cases<M: Mode>(code: &CodeBase<M>, at: u32) -> String {
+    let o = &code.operands[at as usize..];
+    let (m, default) = (o[0] as usize, o[1]);
+    let mut parts = Vec::new();
+    for tag in 0..m {
+        let record = o[2 + tag];
+        if record == NONE {
+            continue;
+        }
+        let r = &o[record as usize..];
+        let bound = fields(&r[3..3 + 2 * r[2] as usize]);
+        parts.push(format!("#{tag} -> {} [{bound}]", r[0]));
+    }
+    if default != NONE {
+        parts.push(format!("_ -> {default}"));
+    }
+    format!("{{ {} }}", parts.join(", "))
+}
+
+fn key_cases<M: Mode>(code: &CodeBase<M>, at: u32) -> String {
+    let o = &code.operands[at as usize..];
+    let (n, default) = (o[0] as usize, o[1]);
+    let mut parts: Vec<String> = (0..n)
+        .map(|case| {
+            let i = 2 + 3 * case;
+            let key = i64::from(o[i]) | (i64::from(o[i + 1]) << 32);
+            format!("{key} -> {}", o[i + 2])
+        })
+        .collect();
+    if default != NONE {
+        parts.push(format!("_ -> {default}"));
+    }
+    format!("{{ {} }}", parts.join(", "))
 }
 
 fn line<M: Mode>(code: &CodeBase<M>, pc: Pc) -> String {
@@ -66,6 +116,47 @@ fn line<M: Mode>(code: &CodeBase<M>, pc: Pc) -> String {
         Op::IntCompare { dst, a, b } => bin("int_compare", dst, a, b),
         Op::BoolEq { dst, a, b } => bin("bool_eq", dst, a, b),
         Op::BoolNe { dst, a, b } => bin("bool_ne", dst, a, b),
+        Op::SwitchEnum { src, at } => format!("switch_enum s{src} {}", tag_cases(code, at)),
+        Op::SwitchObj { src, at } => format!("switch_obj s{src} {}", tag_cases(code, at)),
+        Op::SwitchTObj { src, at } => format!("switch_tobj s{src} {}", tag_cases(code, at)),
+        Op::SwitchInt { src, at } => format!("switch_int s{src} {}", key_cases(code, at)),
+        Op::SwitchString { src, at } => format!("switch_string s{src} {}", key_cases(code, at)),
+        Op::Unpack { src, at } => {
+            let o = ops(at);
+            format!(
+                "unpack s{src} #{} [{}]",
+                o[0],
+                fields(&o[3..3 + 2 * o[2] as usize])
+            )
+        }
+        Op::Dup { src } => format!("dup s{src}"),
+        Op::Decref { src } => format!("decref s{src}"),
+        Op::Release { src, at } => {
+            let o = ops(at);
+            let entries: Vec<String> = o[3..3 + o[2] as usize]
+                .iter()
+                .map(|&e| {
+                    let keep = if e & KEEP != 0 { "keep " } else { "" };
+                    format!("{keep}@{}", e & !KEEP)
+                })
+                .collect();
+            format!("release s{src} #{} [{}]", o[0], entries.join(", "))
+        }
+        Op::Con { dst, at } => {
+            let o = ops(at);
+            let lin = if o[3] != 0 { " lin" } else { "" };
+            format!(
+                "con s{dst} = #{} ({} scanned, {} raw{lin}) [{}]",
+                o[0],
+                o[1],
+                o[2],
+                fields(&o[5..5 + 2 * o[4] as usize])
+            )
+        }
+        Op::BoxInt { dst, src } => format!("box_int s{dst}, s{src}"),
+        Op::BoxEnum { dst, src } => format!("box_enum s{dst}, s{src}"),
+        Op::BoxConst { dst, index } => format!("box_const s{dst}, c{index}"),
+        Op::Unbox { dst, src } => format!("unbox s{dst}, s{src}"),
         Op::Extern { dst, at } => format!(
             "extern s{dst} = {}({})",
             Extern::ALL[ops(at)[0] as usize].row().name,

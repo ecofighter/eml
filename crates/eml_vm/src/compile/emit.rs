@@ -8,7 +8,7 @@ use super::Out;
 use super::constants::Constants;
 use super::slots::{Slots, allocate};
 use crate::code::{CompileError, FnEntry};
-use crate::op::{Op, Pc, Slot};
+use crate::op::{KEEP, NONE, Op, Pc, RAW, Slot};
 
 pub(crate) fn function<M: Mode>(
     program: &Program,
@@ -32,6 +32,7 @@ pub(crate) fn function<M: Mode>(
         goto_patches: Vec::new(),
         operand_patches: Vec::new(),
         used: used_vars(function),
+        elided: elided_decrefs(function),
     };
     for index in 0..function.blocks.len() {
         emitter.block_pcs[index] = emitter.out.pc();
@@ -81,6 +82,35 @@ fn used_vars(function: &LirFn) -> Vec<bool> {
     used
 }
 
+/// フィールドのない `#N` の行き先にだけ入るブロックと、そこで `decref` を出さない scrutinee。行き先では scrutinee は
+/// 即値と分かるので、`decref` は何もしない (docs/spec/vm.md の「RC」)。
+fn elided_decrefs(function: &LirFn) -> Vec<Option<VarId>> {
+    let mut preds = vec![0usize; function.blocks.len()];
+    for block in &function.blocks {
+        for target in block.term.successors() {
+            preds[target.0 as usize] += 1;
+        }
+    }
+    let mut elided = vec![None; function.blocks.len()];
+    for block in &function.blocks {
+        if let Term::Switch {
+            scrutinee: Atom::Var(var),
+            layout: Some(_),
+            cases,
+            default: _,
+        } = &block.term
+            && function.repr(*var) == Repr::TObj
+        {
+            for case in cases {
+                if case.fields.is_empty() && preds[case.target.0 as usize] == 1 {
+                    elided[case.target.0 as usize] = Some(*var);
+                }
+            }
+        }
+    }
+    elided
+}
+
 pub(crate) struct Emitter<'a, M: Mode> {
     pub(crate) program: &'a Program,
     pub(crate) function: &'a LirFn,
@@ -96,9 +126,10 @@ pub(crate) struct Emitter<'a, M: Mode> {
     pub(crate) goto_patches: Vec<(Pc, BlockId)>,
     /// 行き先のブロックを後で書くオペランドの位置。
     pub(crate) operand_patches: Vec<(usize, BlockId)>,
-    /// Task 4 のフィールドの読み込みが使う
-    #[allow(dead_code)]
+    /// どこかで使う変数 (`used_vars`)。
     pub(crate) used: Vec<bool>,
+    /// ブロックごとの、`decref` を出さない scrutinee (`elided_decrefs`)。
+    pub(crate) elided: Vec<Option<VarId>>,
 }
 
 impl<M: Mode> Emitter<'_, M> {
@@ -170,12 +201,82 @@ impl<M: Mode> Emitter<'_, M> {
         self.term(id, &block.term);
     }
 
-    fn stmt(&mut self, _block: BlockId, stmt: &Stmt) {
+    fn stmt(&mut self, block: BlockId, stmt: &Stmt) {
         match stmt {
             Stmt::Let { var, rhs } => self.rhs(*var, rhs),
-            // Task 4 と Task 5 で足し、Task 6 でこの腕を消す
-            other => panic!("the VM does not compile {other:?} yet"),
+            Stmt::Dup(var) => {
+                let src = self.slot(*var);
+                self.out.push(Op::Dup { src });
+            }
+            Stmt::Decref(var) => {
+                if self.elided[block.0 as usize] != Some(*var) {
+                    let src = self.slot(*var);
+                    self.out.push(Op::Decref { src });
+                }
+            }
+            Stmt::Unpack {
+                value,
+                ctor,
+                fields,
+            } => {
+                let shape = self.program.layouts[ctor.layout.0 as usize].constructors
+                    [ctor.tag as usize]
+                    .shape();
+                let bound = self.field_operands(*ctor, fields);
+                let at = self.out.operands(
+                    [ctor.tag, shape.scanned, (bound.len() / 2) as u32]
+                        .into_iter()
+                        .chain(bound),
+                );
+                let src = self.slot(*value);
+                self.out.push(Op::Unpack { src, at });
+            }
+            Stmt::Release {
+                value,
+                ctor,
+                fields,
+            } => {
+                let layout_ctor =
+                    &self.program.layouts[ctor.layout.0 as usize].constructors[ctor.tag as usize];
+                let shape = layout_ctor.shape();
+                let offset = crate::data::count_word(shape.scanned);
+                let entries: Vec<u32> = fields
+                    .iter()
+                    .zip(&shape.positions)
+                    .zip(&layout_ctor.fields)
+                    .filter(|(_, repr)| repr.is_rc())
+                    .map(|((field, &position), _)| {
+                        (position + offset) | if field.is_some() { KEEP } else { 0 }
+                    })
+                    .collect();
+                let at = self.out.operands(
+                    [ctor.tag, shape.scanned, entries.len() as u32]
+                        .into_iter()
+                        .chain(entries),
+                );
+                let src = self.slot(*value);
+                self.out.push(Op::Release { src, at });
+            }
         }
+    }
+
+    /// 使うフィールドの [位置 | RAW, スロット] の並び。死んでいるフィールドは読まない。
+    fn field_operands(&self, ctor: eml_lir::Ctor, fields: &[VarId]) -> Vec<u32> {
+        let layout_ctor =
+            &self.program.layouts[ctor.layout.0 as usize].constructors[ctor.tag as usize];
+        let shape = layout_ctor.shape();
+        let offset = crate::data::count_word(shape.scanned);
+        let mut items = Vec::new();
+        for ((&field, &position), &repr) in
+            fields.iter().zip(&shape.positions).zip(&layout_ctor.fields)
+        {
+            if self.used[field.0 as usize] {
+                let raw = if repr.is_rc() { 0 } else { RAW };
+                items.push((position + offset) | raw);
+                items.push(u32::from(self.slot(field)));
+            }
+        }
+        items
     }
 
     fn rhs(&mut self, var: VarId, rhs: &Rhs) {
@@ -212,7 +313,67 @@ impl<M: Mode> Emitter<'_, M> {
                 let index = self.strings[*index as usize];
                 self.out.push(Op::LoadConst { dst, index });
             }
-            // Task 4 と Task 5 で足し、Task 6 でこの腕を消す
+            Rhs::Con { ctor, args } => {
+                let layout_ctor =
+                    &self.program.layouts[ctor.layout.0 as usize].constructors[ctor.tag as usize];
+                let shape = layout_ctor.shape();
+                let offset = crate::data::count_word(shape.scanned);
+                let lin = self.function.mark(var) == eml_lir::Mark::Lin;
+                let mut items = vec![
+                    ctor.tag,
+                    shape.scanned,
+                    shape.raw,
+                    u32::from(lin),
+                    args.len() as u32,
+                ];
+                for ((&arg, &position), &repr) in
+                    args.iter().zip(&shape.positions).zip(&layout_ctor.fields)
+                {
+                    let slot = self.atom(arg, repr);
+                    let raw = if repr.is_rc() { 0 } else { RAW };
+                    items.push((position + offset) | raw);
+                    items.push(u32::from(slot));
+                }
+                let at = self.out.operands(items);
+                self.out.push(Op::Con { dst, at });
+            }
+            Rhs::Drop(atom) => {
+                if let Atom::Var(v) = atom
+                    && self.repr(*v).is_rc()
+                {
+                    let src = self.slot(*v);
+                    self.out.push(Op::Decref { src });
+                }
+                if self.used[var.0 as usize] {
+                    self.out.push(Op::LoadImm { dst, value: 0 });
+                }
+            }
+            Rhs::Box(atom) => {
+                let op = match *atom {
+                    Atom::Int(n) => Op::BoxConst {
+                        dst,
+                        index: self.constants.boxed_int(n),
+                    },
+                    Atom::Var(v) if self.repr(v) == Repr::Enum => Op::BoxEnum {
+                        dst,
+                        src: self.slot(v),
+                    },
+                    Atom::Var(v) => Op::BoxInt {
+                        dst,
+                        src: self.slot(v),
+                    },
+                    other => panic!("a box of {other:?} does not pass the verifier"),
+                };
+                self.out.push(op);
+            }
+            Rhs::Unbox(atom) => {
+                let Atom::Var(v) = atom else {
+                    panic!("an unbox of a constant does not pass the verifier")
+                };
+                let src = self.slot(*v);
+                self.out.push(Op::Unbox { dst, src });
+            }
+            // Task 5 で足し、Task 6 でこの腕を消す
             other => panic!("the VM does not compile {other:?} yet"),
         }
     }
@@ -243,7 +404,13 @@ impl<M: Mode> Emitter<'_, M> {
                 self.out.push(Op::TailCall { at });
             }
             Term::Jump { target, args } => self.jump(block, *target, args),
-            // Task 4 と Task 5 で足し、Task 6 でこの腕を消す
+            Term::Switch {
+                scrutinee,
+                layout,
+                cases,
+                default,
+            } => self.switch(block, *scrutinee, *layout, cases, *default),
+            // Task 5 で足し、Task 6 でこの腕を消す
             other => panic!("the VM does not compile {other:?} yet"),
         }
     }
@@ -269,6 +436,102 @@ impl<M: Mode> Emitter<'_, M> {
             self.load(dst, constant, repr);
         }
         self.goto(from, target);
+    }
+
+    fn switch(
+        &mut self,
+        block: BlockId,
+        scrutinee: Atom,
+        layout: Option<eml_lir::LayoutId>,
+        cases: &[eml_lir::Case],
+        default: Option<BlockId>,
+    ) {
+        use eml_lir::CasePattern;
+        let Atom::Var(var) = scrutinee else {
+            // 定数の scrutinee は、コード生成の時点で行き先を決める
+            let target = cases
+                .iter()
+                .find(|case| match (case.pattern, scrutinee) {
+                    (CasePattern::Tag(t), Atom::Tag(n)) => t == n,
+                    (CasePattern::Int(k), Atom::Int(n)) => k == n,
+                    _ => false,
+                })
+                .map(|case| case.target)
+                .or(default)
+                .expect("a constant switch has a matching case or a default");
+            self.goto(block, target);
+            return;
+        };
+        let base = self.out.operands.len();
+        let mut patches = Vec::new();
+        if let Some(default) = default {
+            patches.push((1, default));
+        }
+        let src = self.slot(var);
+        let (items, op) = match (cases.first().map(|case| case.pattern), layout) {
+            (Some(CasePattern::Int(_) | CasePattern::String(_)), _) | (None, None) => {
+                let mut items = vec![cases.len() as u32, NONE];
+                for case in cases {
+                    let (lo, hi) = match case.pattern {
+                        CasePattern::Int(n) => (n as u32, (n >> 32) as u32),
+                        CasePattern::String(index) => (self.strings[index as usize], 0),
+                        CasePattern::Tag(_) => unreachable!("one switch compares one kind of case"),
+                    };
+                    patches.push((items.len() + 2, case.target));
+                    items.extend([lo, hi, 0]);
+                }
+                let at = base as u32;
+                let op = if matches!(
+                    cases.first().map(|c| c.pattern),
+                    Some(CasePattern::String(_))
+                ) {
+                    Op::SwitchString { src, at }
+                } else {
+                    Op::SwitchInt { src, at }
+                };
+                (items, op)
+            }
+            (_, Some(layout)) => {
+                // 配置のタグは 0 から m - 1 に収まるので、飛び先の表はいつも密である
+                let ctors = &self.program.layouts[layout.0 as usize].constructors;
+                let m = ctors.len();
+                let mut items = vec![m as u32, NONE];
+                items.extend(std::iter::repeat_n(NONE, m));
+                for case in cases {
+                    let CasePattern::Tag(tag) = case.pattern else {
+                        unreachable!("one switch compares one kind of case")
+                    };
+                    let (check, fields) = if case.fields.is_empty() {
+                        (NONE, Vec::new())
+                    } else {
+                        let ctor = eml_lir::Ctor { layout, tag };
+                        (
+                            ctors[tag as usize].shape().scanned,
+                            self.field_operands(ctor, &case.fields),
+                        )
+                    };
+                    items[2 + tag as usize] = items.len() as u32;
+                    patches.push((items.len(), case.target));
+                    items.extend([0, check, (fields.len() / 2) as u32]);
+                    items.extend(fields);
+                }
+                let at = base as u32;
+                let op = match self.repr(var) {
+                    Repr::Enum => Op::SwitchEnum { src, at },
+                    Repr::Obj => Op::SwitchObj { src, at },
+                    _ => Op::SwitchTObj { src, at },
+                };
+                (items, op)
+            }
+            (Some(CasePattern::Tag(_)), None) => {
+                unreachable!("a switch with tag cases names its layout (docs/spec/lir.md)")
+            }
+        };
+        for (offset, target) in patches {
+            self.operand_patches.push((base + offset, target));
+        }
+        self.out.operands(items);
+        self.out.push(op);
     }
 
     pub(crate) fn goto(&mut self, from: BlockId, target: BlockId) {

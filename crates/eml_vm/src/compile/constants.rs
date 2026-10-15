@@ -37,8 +37,6 @@ impl<M: Mode> Constants<M> {
     }
 
     /// `tobj` の `Int`。63 ビットに収まれば即値、収まらなければ不死の `BigInt` にする。
-    /// Task 4 の `box` が使う
-    #[allow(dead_code)]
     pub(crate) fn boxed_int(&mut self, n: i64) -> u32 {
         let w = match Word::int(n) {
             Some(w) => w,

@@ -116,3 +116,151 @@ b1(p.2: int, q.3: int):
         14  ret s0
     ");
 }
+
+/// フィールドのない `#N` の行き先にだけ入るブロックでは、scrutinee は即値なので `decref` を出さない
+/// (docs/spec/vm.md の「RC」)。`#1` の行き先の `decref` は残る。
+#[test]
+fn a_field_less_case_drops_the_decref_of_its_immediate_scrutinee() {
+    insta::assert_snapshot!(disasm("\
+layout Option { None, Some(tobj) }
+fn main() -> unit {
+  tail call show(#0)
+}
+fn show(d.0: tobj) -> unit {
+  switch d.0 Option { #0 -> b1, #1(x.1: obj) -> b2 }
+b1:
+  decref d.0
+  let s.2: obj = const \"none\"
+  let o.3: unit = extern Prelude.println(s.2)
+  return o.3
+b2:
+  decref d.0
+  return ()
+}
+"), @"
+    fn main (arity 0, frame 1)
+         2  load_imm s0, 0
+         3  tail_call show(s0)
+    fn show (arity 1, frame 3)
+         4  switch_tobj s0 { #0 -> 5 [], #1 -> 8 [] }
+         5  load_const s0, c0
+         6  extern s0 = Prelude.println(s0)
+         7  ret s0
+         8  decref s0
+         9  load_imm s2, 0
+        10  ret s2
+    ");
+}
+
+#[test]
+fn a_release_keeps_the_named_fields() {
+    insta::assert_snapshot!(disasm("\
+layout Pair { Pair(tobj, int) }
+fn main() -> unit {
+  let s.0: obj = const \"kept\"
+  let p.1: obj = con Pair #0(s.0, 7)
+  unpack p.1 Pair #0(a.2: obj, n.3: int)
+  release p.1 Pair #0(a.2, _)
+  let u.4: unit = extern Prelude.println(a.2)
+  return u.4
+}
+"), @"
+    fn main (arity 0, frame 4)
+         2  load_const s0, c0
+         3  load_raw s3, 7
+         4  con s0 = #0 (1 scanned, 1 raw) [@0 -> s0, raw @1 -> s3]
+         5  unpack s0 #0 [@0 -> s1]
+         6  release s0 #0 [keep @0]
+         7  extern s0 = Prelude.println(s1)
+         8  ret s0
+    ");
+}
+
+/// case のフィールドを読む間、scrutinee のスロットはどのフィールドのスロットとも違う。
+#[test]
+fn a_switch_case_binds_fields_apart_from_its_scrutinee() {
+    insta::assert_snapshot!(disasm("\
+layout Pair { Pair(obj, obj) }
+fn main() -> unit {
+  let a.0: obj = const \"a\"
+  let b.1: obj = const \"b\"
+  let p.2: obj = con Pair #0(a.0, b.1)
+  tail call first(p.2)
+}
+fn first(p.0: obj) -> unit {
+  switch p.0 Pair { #0(x.1: obj, y.2: obj) -> b1 }
+b1:
+  release p.0 Pair #0(x.1, y.2)
+  decref y.2
+  let u.3: unit = extern Prelude.println(x.1)
+  return u.3
+}
+"), @"
+    fn main (arity 0, frame 2)
+         2  load_const s0, c0
+         3  load_const s1, c1
+         4  con s0 = #0 (2 scanned, 0 raw) [@0 -> s0, @1 -> s1]
+         5  tail_call first(s0)
+    fn first (arity 1, frame 3)
+         6  switch_obj s0 { #0 -> 7 [@0 -> s1, @1 -> s2] }
+         7  release s0 #0 [keep @0, keep @1]
+         8  decref s2
+         9  extern s0 = Prelude.println(s1)
+        10  ret s0
+    ");
+}
+
+#[test]
+fn an_unpack_binds_fields_apart_from_its_scrutinee() {
+    insta::assert_snapshot!(disasm("\
+layout Pair { Pair(obj, obj) }
+fn main() -> unit {
+  let a.0: obj = const \"a\"
+  let b.1: obj = const \"b\"
+  let p.2: obj = con Pair #0(a.0, b.1)
+  unpack p.2 Pair #0(x.3: obj, y.4: obj)
+  release p.2 Pair #0(x.3, y.4)
+  decref y.4
+  let u.5: unit = extern Prelude.println(x.3)
+  return u.5
+}
+"), @"
+    fn main (arity 0, frame 3)
+         2  load_const s0, c0
+         3  load_const s1, c1
+         4  con s0 = #0 (2 scanned, 0 raw) [@0 -> s0, @1 -> s1]
+         5  unpack s0 #0 [@0 -> s1, @1 -> s2]
+         6  release s0 #0 [keep @0, keep @1]
+         7  decref s2
+         8  extern s0 = Prelude.println(s1)
+         9  ret s0
+    ");
+}
+
+/// ブロック引数への代入は、変数の移動を先に並べ、定数の読み込みを後に置く。`x.0` が飛ぶ文で死ぬので、定数の
+/// 書き込み先が `x.0` のスロットになってもよい。
+#[test]
+fn a_jump_loads_constants_after_moving_variables() {
+    insta::assert_snapshot!(disasm("\
+fn main() -> unit {
+  let x.0: int = extern \"Prelude.+\"(1, 2)
+  jump b1(5, x.0)
+b1(a.1: int, b.2: int):
+  let c.3: int = extern \"Prelude.+\"(a.1, b.2)
+  let s.4: obj = extern \"Prelude.Show Int.show\"(c.3)
+  let u.5: unit = extern Prelude.println(s.4)
+  return u.5
+}
+"), @"
+    fn main (arity 0, frame 4)
+         2  load_raw s2, 1
+         3  load_raw s3, 2
+         4  int_add s0, s2, s3
+         5  move s1, s0
+         6  load_raw s0, 5
+         7  int_add s0, s0, s1
+         8  extern s0 = Prelude.Show Int.show(s0)
+         9  extern s0 = Prelude.println(s0)
+        10  ret s0
+    ");
+}

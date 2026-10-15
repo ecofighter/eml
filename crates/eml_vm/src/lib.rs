@@ -10,6 +10,7 @@ use eml_rt::{Buffering, Checked, Control, Ctx, Fast, Limits, Mode, StdHost};
 
 mod code;
 mod compile;
+mod data;
 mod disasm;
 mod error;
 mod op;
