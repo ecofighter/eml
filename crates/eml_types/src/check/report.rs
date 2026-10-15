@@ -264,7 +264,9 @@ impl BodyCheck<'_, '_> {
                 let method = match self.function.kind {
                     FunctionKind::InstanceMethod(_, method)
                     | FunctionKind::DefaultMethod(method) => Some(&self.program[method]),
-                    FunctionKind::Defined | FunctionKind::Extern(_) => None,
+                    FunctionKind::Defined | FunctionKind::Extern(_) | FunctionKind::Input(_) => {
+                        None
+                    }
                 };
                 let help = match method {
                     // メソッドのシグネチャはクラスが決めるので、`()` を取る関数に変えられない。クラスの row が

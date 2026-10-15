@@ -10,12 +10,12 @@ use la_arena::{Idx, RawIdx};
 
 use crate::codes;
 use crate::hir::{ExternIndex, LangItems};
-use crate::item_tree::{Fixity, ImportName, ItemTree, duplicate};
+use crate::item_tree::{Fixity, ImportName, InputItemKind, ItemTree, duplicate};
 use crate::load::{ImportTarget, LoadedModule, STD_ROOT};
 use crate::names::{Definer, DisplayNames};
 use crate::program::{
-    ClassId, ConstructorId, EffectId, FunctionId, ItemId, MethodId, ModuleId, ModuleOrigin,
-    OperationId, TypeDefId, TypeItem, ValueItem,
+    BindingId, ClassId, ConstructorId, EffectId, FunctionId, ItemId, MethodId, ModuleId,
+    ModuleOrigin, OperationId, TypeDefId, TypeItem, ValueItem,
 };
 
 /// 名前の参照。修飾子は1つのセグメントとは限らない (2つ以上は E1031)。
@@ -94,6 +94,11 @@ trait Namespace: Copy {
     fn imported(imports: &Imports) -> &HashMap<String, Vec<Source<Self>>>;
     /// どこにも見つからない名前を、診断を出さずに誤りにするか。
     fn unknown(imports: &Imports) -> bool;
+    /// REPL の `let` の束縛か。束縛は、束縛した入力のモジュールからは引かない。右辺の同じ名前は前の版を指すため
+    /// である。
+    fn is_binding(self) -> bool {
+        false
+    }
 }
 
 impl Namespace for ValueItem {
@@ -107,6 +112,10 @@ impl Namespace for ValueItem {
 
     fn unknown(imports: &Imports) -> bool {
         imports.unknown_parts
+    }
+
+    fn is_binding(self) -> bool {
+        matches!(self, ValueItem::Binding(_))
     }
 }
 
@@ -147,6 +156,10 @@ struct ModuleScope {
     operations: Vec<Vec<OperationId>>,
     class_ids: Vec<ClassId>,
     method_ids: Vec<Vec<MethodId>>,
+    /// REPL の `let` の束縛か式の入力を実行する関数 `input$N`。`ItemTree` の関数の後ろに置く。
+    input_function: Option<FunctionId>,
+    /// REPL の `let` の束縛。
+    binding: Option<BindingId>,
     /// `T(..)`、`E(..)`、`C(..)` が取り込む部品。型にはコンストラクタ、エフェクトには操作、クラスにはメソッドを、
     /// 宣言の順に並べる。
     parts: HashMap<TypeItem, Vec<(String, ValueItem)>>,
@@ -360,6 +373,14 @@ impl ModuleScope {
                     .collect()
             })
             .collect();
+        let input_function = tree
+            .input
+            .as_ref()
+            .map(|_| item_id(module, tree.functions.len()));
+        let binding = tree.input.as_ref().and_then(|input| match &input.kind {
+            InputItemKind::Let { name: Some(_), .. } => Some(item_id(module, 0)),
+            InputItemKind::Let { name: None, .. } | InputItemKind::Expr(_) => None,
+        });
         let mut scope = ModuleScope {
             name: loaded.name.clone(),
             origin: loaded.origin,
@@ -377,6 +398,8 @@ impl ModuleScope {
             operations,
             class_ids,
             method_ids,
+            input_function,
+            binding,
             parts: HashMap::new(),
             imports: Imports::default(),
         };
@@ -505,6 +528,21 @@ impl ModuleScope {
                     .or_default()
                     .push((method.name.clone(), ValueItem::Method(id)));
             }
+        }
+        if let (Some(binding), Some(input)) = (self.binding, &tree.input)
+            && let InputItemKind::Let {
+                name: Some((name, range)),
+                ..
+            } = &input.kind
+        {
+            push(
+                &mut self.values,
+                name,
+                ValueItem::Binding(binding),
+                *range,
+                false,
+                true,
+            );
         }
         for names in self.values.values_mut() {
             names.sort_by_key(|definition| definition.range.start());
@@ -985,7 +1023,10 @@ fn extern_index(scopes: &[ModuleScope]) -> ExternIndex {
         |scope| &scope.values,
         |item| match item {
             ValueItem::Function(id) => Some(id),
-            ValueItem::Operation(_) | ValueItem::Constructor(_) | ValueItem::Method(_) => None,
+            ValueItem::Operation(_)
+            | ValueItem::Constructor(_)
+            | ValueItem::Method(_)
+            | ValueItem::Binding(_) => None,
         },
     )
     .unwrap_or_else(|| panic!("the standard library does not declare the function `{canonical}`"));
@@ -1097,13 +1138,33 @@ impl DefMap {
         self.scope(module).method_ids[class][k]
     }
 
+    /// REPL の入力を実行する関数 `input$N` の ID。
+    pub fn input_function(&self, module: ModuleId) -> Option<FunctionId> {
+        self.scope(module).input_function
+    }
+
+    /// REPL の `let` の束縛の ID と根の番号。根の番号は入力の番号である
+    /// (docs/superpowers/specs/2026-10-15-s11a-repl-session-design.md の「根」)。
+    pub fn binding(&self, module: ModuleId) -> Option<(BindingId, u32)> {
+        let scope = self.scope(module);
+        scope.binding.map(|binding| {
+            let root = scope
+                .origin
+                .session()
+                .expect("a let input is a session input");
+            (binding, root)
+        })
+    }
+
     fn scope(&self, module: ModuleId) -> &ModuleScope {
         &self.modules[index(module)]
     }
 }
 
 /// モジュールの中から名前を引く口。修飾しない名前は「自分のモジュール → import の並びの名前 → Prelude の `pub` の名前」
-/// の順に引き、修飾した名前は修飾子のモジュールだけを引く (docs/spec/modules.md の「名前の解決」)。
+/// の順に引き、修飾した名前は修飾子のモジュールだけを引く (docs/spec/modules.md の「名前の解決」)。セッションの
+/// モジュールでは、自分のモジュールの次に前の入力のトップレベルを引き、import は入力ごとに新しい入力から順に引く
+/// (docs/superpowers/specs/2026-10-15-s11a-repl-session-design.md の「名前解決」)。
 #[derive(Clone, Copy)]
 pub struct Resolver<'a> {
     def_map: &'a DefMap,
@@ -1326,6 +1387,9 @@ impl<'a> Resolver<'a> {
         let own = self.own();
         let mut unusable = false;
         for definition in V::definitions(own).get(name).into_iter().flatten() {
+            if definition.item.is_binding() {
+                continue;
+            }
             let Some(item) = kind(definition.item) else {
                 continue;
             };

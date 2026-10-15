@@ -24,7 +24,8 @@ pub(super) fn extern_row(hir: &HirProgram, function: FunctionId) -> Option<Exter
         }
         FunctionKind::Defined
         | FunctionKind::DefaultMethod(_)
-        | FunctionKind::InstanceMethod(..) => None,
+        | FunctionKind::InstanceMethod(..)
+        | FunctionKind::Input(_) => None,
     }
 }
 
@@ -471,6 +472,10 @@ impl FnLowering<'_> {
                 }
                 let name = self.ctx.hir[*method].name.clone();
                 self.function_value(id, &name)
+            }
+            // REPL の `let` の束縛の参照は Task 10 で根を読む命令にする
+            ExprKind::Path(Res::Item(ValueItem::Binding(_))) => {
+                unreachable!("translate reads bindings from roots after Task 10")
             }
             ExprKind::Path(Res::Item(ValueItem::Operation(op))) => Atom::Fn(
                 self.program

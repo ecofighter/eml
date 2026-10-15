@@ -25,6 +25,27 @@ pub struct ItemTree {
     pub fixities: Vec<FixityItem>,
     pub classes: Vec<ClassItem>,
     pub instances: Vec<InstanceItem>,
+    /// REPL の入力が `let` の束縛か式なら、その入力。item の並びの入力とファイルは `None` である
+    /// (docs/superpowers/specs/2026-10-15-s11a-repl-session-design.md の「item の種類」)。
+    pub input: Option<InputItem>,
+}
+
+/// `let` の束縛か式の、REPL の入力。
+#[derive(Debug)]
+pub struct InputItem {
+    pub kind: InputItemKind,
+    /// 入力の全体。
+    pub range: TextRange,
+}
+
+#[derive(Debug)]
+pub enum InputItemKind {
+    Expr(AstPtr<ast::Expr>),
+    /// `let x = e` と `let x : T = e`。束縛する名前が1つでない `let` は、パーサが報告して `name` が `None` になる。
+    Let {
+        name: Option<(String, TextRange)>,
+        ptr: AstPtr<ast::LetStmt>,
+    },
 }
 
 /// 同じ名前のシグネチャと等式をまとめたもの。名前で対応づけてから並び方を検査する (docs/spec/declarations.md)。
@@ -288,6 +309,34 @@ impl Definitions {
 /// `Parse` を受け取る。
 pub fn item_tree(file: FileId, parse: &Parse) -> (ItemTree, Vec<Diagnostic>) {
     let mut diagnostics = Vec::new();
+    // REPL の入力の木は、item の並びか、`let` の束縛か式を1つ持つ
+    let (items, input): (Vec<ast::Item>, Option<InputItem>) = match parse.syntax().kind() {
+        SyntaxKind::SOURCE_FILE => (parse.tree().items().collect(), None),
+        _ => {
+            let range = parse.syntax().text_range();
+            // `let` の文や式がなければ、パーサが報告済み
+            match parse.repl_input() {
+                ast::ReplInput::ReplItems(items) => (items.items().collect(), None),
+                ast::ReplInput::ReplLet(input) => {
+                    let input = input.stmt().map(|stmt| {
+                        let kind = InputItemKind::Let {
+                            name: let_name(&stmt),
+                            ptr: AstPtr::new(&stmt),
+                        };
+                        InputItem { kind, range }
+                    });
+                    (Vec::new(), input)
+                }
+                ast::ReplInput::ReplExpr(input) => {
+                    let input = input.expr().map(|expr| InputItem {
+                        kind: InputItemKind::Expr(AstPtr::new(&expr)),
+                        range,
+                    });
+                    (Vec::new(), input)
+                }
+            }
+        }
+    };
     let mut definitions = Definitions::default();
     let mut data = Vec::new();
     let mut effects = Vec::new();
@@ -295,7 +344,7 @@ pub fn item_tree(file: FileId, parse: &Parse) -> (ItemTree, Vec<Diagnostic>) {
     let mut imports = Vec::new();
     let mut classes = Vec::new();
     let mut instances = Vec::new();
-    for (index, item) in parse.tree().items().enumerate() {
+    for (index, item) in items.into_iter().enumerate() {
         let public = item.pub_keyword().is_some();
         match item {
             ast::Item::Signature(signature) => {
@@ -407,9 +456,20 @@ pub fn item_tree(file: FileId, parse: &Parse) -> (ItemTree, Vec<Diagnostic>) {
             fixities,
             classes,
             instances,
+            input,
         },
         diagnostics,
     )
+}
+
+/// REPL の `let` の入力が束縛する名前。名前1つでないパターンはパーサが E0011 で報告済みなので、`None` にする
+/// (docs/superpowers/specs/2026-10-15-s11a-repl-session-design.md の「入力の種類」)。
+fn let_name(stmt: &ast::LetStmt) -> Option<(String, TextRange)> {
+    let ast::Pat::BindPat(bind) = stmt.pat()? else {
+        return None;
+    };
+    let token = bind.name()?.token();
+    Some((token.text().to_string(), token.text_range()))
 }
 
 /// クラスの名前か型変数がなければ、パーサが報告済みなので集めない。`DefMap` と `lower` が同じ並びから番号を振るので、

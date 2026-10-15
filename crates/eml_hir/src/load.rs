@@ -263,7 +263,13 @@ impl<'a> Loader<'a> {
 
     fn add(&mut self, name: &str, path: String, text: &str, origin: ModuleOrigin) -> FileId {
         let file = self.files.add(path, text);
-        let (parse, errors) = eml_syntax::parse(file, self.files.text(file));
+        // セッションの入力は、`let` の束縛と式も受ける REPL の入口で読む
+        let (parse, errors) = match origin {
+            ModuleOrigin::Session(_) => eml_syntax::parse_input(file, self.files.text(file)),
+            ModuleOrigin::Std | ModuleOrigin::User => {
+                eml_syntax::parse(file, self.files.text(file))
+            }
+        };
         self.diagnostics.extend(errors);
         let (tree, stage) = item_tree(file, &parse);
         self.diagnostics.extend(stage);

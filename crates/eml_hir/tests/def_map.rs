@@ -14,13 +14,7 @@ fn found_in(map: &DefMap, resolved: Resolved<ValueItem>) -> Option<&str> {
     let Resolved::Found(item) = resolved else {
         return None;
     };
-    let module = match item {
-        ValueItem::Function(id) => id.module,
-        ValueItem::Operation(id) => id.module,
-        ValueItem::Constructor(id) => id.module,
-        ValueItem::Method(id) => id.module,
-    };
-    Some(map.module_name(module))
+    Some(map.module_name(item.module()))
 }
 
 #[test]

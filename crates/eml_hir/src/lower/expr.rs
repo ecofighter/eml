@@ -99,6 +99,32 @@ impl<'a> BodyLowering<'a> {
             }
             _ => self.lower_equation_match(equations),
         };
+        self.finish(params, root, reported)
+    }
+
+    /// REPL の入力の本体。引数 `()` を1つ受ける。`let x : T = e` の型の明示は、右辺 `e` の注釈にする
+    /// (docs/superpowers/specs/2026-10-15-s11a-repl-session-design.md の「型検査」)。
+    pub(super) fn lower_input(
+        mut self,
+        expr: Option<ast::Expr>,
+        ty: Option<ast::Type>,
+        range: TextRange,
+    ) -> Body {
+        let reported = self.diagnostics.len();
+        let param = self.pats.alloc(Pat {
+            kind: PatKind::Unit,
+            range,
+        });
+        let mut root = self.lower_expr(expr, range);
+        if let Some(ty) = ty {
+            let ty = self.lower_type(Some(ty), range);
+            root = self.alloc(ExprKind::Annot { expr: root, ty }, range);
+        }
+        self.finish(vec![param], root, reported)
+    }
+
+    /// `reported` は、本体の変換を始めたときの診断の数である。
+    fn finish(self, params: Vec<PatId>, root: ExprId, reported: usize) -> Body {
         Body {
             params,
             root,

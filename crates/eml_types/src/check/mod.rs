@@ -51,6 +51,8 @@ impl Signatures {
             ValueItem::Operation(id) => self.operations.get(id),
             ValueItem::Constructor(id) => self.constructors.get(id),
             ValueItem::Method(id) => self.methods.get(id),
+            // REPL の `let` の束縛の型は Task 9 で検査する
+            ValueItem::Binding(_) => None,
         }
     }
 }
@@ -371,7 +373,9 @@ pub(crate) fn signatures(program: &Program, context: &Context) -> Signatures {
             let signature = function.signature.as_ref()?;
             let arrows = match function.kind {
                 FunctionKind::DefaultMethod(_) | FunctionKind::InstanceMethod(..) => METHOD_ARROWS,
-                FunctionKind::Defined | FunctionKind::Extern(_) => Arrows::OutermostUnr,
+                FunctionKind::Defined | FunctionKind::Extern(_) | FunctionKind::Input(_) => {
+                    Arrows::OutermostUnr
+                }
             };
             Some((id, signature_shape(context, signature, arrows)))
         })
@@ -571,7 +575,7 @@ fn unrestricted_vars(
     let class_side = match function.kind {
         FunctionKind::InstanceMethod(instance, _) => program[instance].generics.type_vars.len(),
         FunctionKind::DefaultMethod(_) => 1,
-        FunctionKind::Defined | FunctionKind::Extern(_) => 0,
+        FunctionKind::Defined | FunctionKind::Extern(_) | FunctionKind::Input(_) => 0,
     };
     let mut vars: Vec<TypeVarId> = signature
         .generics
@@ -715,7 +719,7 @@ fn check_method_kinds(
         let (instance, method) = match function.kind {
             FunctionKind::InstanceMethod(instance, method) => (Some(instance), method),
             FunctionKind::DefaultMethod(method) => (None, method),
-            FunctionKind::Defined | FunctionKind::Extern(_) => continue,
+            FunctionKind::Defined | FunctionKind::Extern(_) | FunctionKind::Input(_) => continue,
         };
         if unreliable.contains(&id) || !checked.contains(&id) {
             continue;
@@ -841,9 +845,10 @@ fn typed_program(
                 .expect("every declaration has a Kind scheme");
             let joins = match decl {
                 ValueItem::Function(id) => joins.remove(&id).unwrap_or_default(),
-                ValueItem::Operation(_) | ValueItem::Constructor(_) | ValueItem::Method(_) => {
-                    Vec::new()
-                }
+                ValueItem::Operation(_)
+                | ValueItem::Constructor(_)
+                | ValueItem::Method(_)
+                | ValueItem::Binding(_) => Vec::new(),
             };
             let facts = scheme_facts(&kinds, shape.lin_vars);
             let declared = DeclType {

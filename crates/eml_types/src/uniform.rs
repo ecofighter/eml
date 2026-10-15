@@ -351,7 +351,8 @@ impl<'a> Graph<'a> {
                     self.method_reference(&mut flow, m, args, &mut wanted);
                     wanted.constraints(Some(&program[m].signature), args);
                 }
-                ValueItem::Operation(_) | ValueItem::Constructor(_) => {}
+                // REPL の `let` の束縛は単相で、型引数を持たない
+                ValueItem::Operation(_) | ValueItem::Constructor(_) | ValueItem::Binding(_) => {}
             }
         }
         self.resolve_wanted(&mut flow, wanted);
@@ -523,6 +524,9 @@ impl<'a> Graph<'a> {
                     }
                     FunctionKind::Extern(_) => {
                         unreachable!("an extern function has no equations, so it has no nodes")
+                    }
+                    FunctionKind::Input(_) => {
+                        unreachable!("an input function has no signature, so it has no constraints")
                     }
                     // 既定のメソッドは Prelude にあることが多く、そこを指しても直す場所が分からないので、この位置を
                     // 含む成分の中で既定のメソッドへの辺を引いた instance の頭を指す

@@ -98,6 +98,15 @@ fn items(program: &Program, module: &Module, out: &mut String) {
             .map_or(&no_generics, |signature| &signature.generics);
         Printer { program, generics }.function(function, module.bodies.get(local), out);
     }
+    for (_, binding) in items.bindings.iter() {
+        let input = &program[binding.input].name;
+        writeln!(
+            out,
+            "let {} = root {} <- {input}",
+            binding.name, binding.root
+        )
+        .unwrap();
+    }
 }
 
 struct Printer<'a> {
@@ -454,6 +463,9 @@ impl Printer<'_> {
             }
             Res::Item(ValueItem::Constructor(id)) => {
                 self.qualified(id.module, &self.program[id].name)
+            }
+            Res::Item(ValueItem::Binding(id)) => {
+                format!("@{}", self.qualified(id.module, &self.program[id].name))
             }
         }
     }

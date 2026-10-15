@@ -7,8 +7,8 @@ use la_arena::{Arena, ArenaMap, Idx};
 use crate::item_tree::Fixity;
 
 pub use crate::program::{
-    ClassId, ConstructorId, EffectId, FunctionId, InstanceId, ItemId, MethodId, ModuleId,
-    OperationId, TypeDefId, ValueItem,
+    BindingId, ClassId, ConstructorId, EffectId, FunctionId, InstanceId, ItemId, MethodId,
+    ModuleId, OperationId, TypeDefId, ValueItem,
 };
 
 pub type ExprId = Idx<Expr>;
@@ -185,6 +185,30 @@ pub enum FunctionKind {
     DefaultMethod(MethodId),
     /// instance のメソッド。等式で定義し、名前の表には入らない。
     InstanceMethod(InstanceId, MethodId),
+    /// REPL の `let` の束縛か式の入力を実行する関数 `input$N`。シグネチャを持たず、引数 `()` を1つ受ける。名前の表には
+    /// 入らない (docs/superpowers/specs/2026-10-15-s11a-repl-session-design.md の「item の種類」)。
+    Input(InputKind),
+}
+
+/// REPL の入力の種類。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum InputKind {
+    /// 式。値を表示する。
+    Expr,
+    /// `let` の束縛。値を束縛の根に置く。
+    Let(BindingId),
+}
+
+/// REPL の `let` の束縛。値の名前空間に置くトップレベルの値で、値は根に置く。束縛した入力のモジュールからは見えない。
+/// 右辺の同じ名前は前の版を指すためである。
+#[derive(Debug)]
+pub struct Binding {
+    pub name: String,
+    pub name_range: TextRange,
+    /// 値を置く根の番号。
+    pub root: u32,
+    /// 右辺を評価して根に置く関数。
+    pub input: FunctionId,
 }
 
 impl FunctionKind {

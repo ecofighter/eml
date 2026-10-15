@@ -3,8 +3,9 @@
 
 use eml_diagnostics::sort_diagnostics;
 use eml_hir::{
-    Assoc, ConstructorId, DefMap, Fixity, ImportCache, ImportTarget, Loaded, ModuleId,
-    ModuleOrigin, ModulePath, NameRef, Program, Resolved, SessionInput, TypeDefId,
+    Assoc, ConstructorId, DefMap, Fixity, FunctionKind, ImportCache, ImportTarget, InputKind,
+    Loaded, ModuleId, ModuleOrigin, ModulePath, NameRef, Program, Resolved, SessionInput,
+    TypeDefId,
 };
 use eml_test_support::{MemorySource, full_with_paths, located};
 use la_arena::{Idx, RawIdx};
@@ -472,4 +473,120 @@ fn a_session_name_is_unqualified_and_the_other_module_is_qualified() {
     assert_eq!(lowered.type_name("<input 1>", 0), "Bool");
     let prelude_bool = lowered.program.lang.bool;
     assert_eq!(lowered.program.names.ty(prelude_bool), "Prelude.Bool");
+}
+
+#[test]
+fn an_expression_input_becomes_an_input_function() {
+    let lowered = lower(&[(1, "1 + 2")], &[]);
+    assert!(lowered.diagnostics.is_empty(), "{:?}", lowered.diagnostics);
+    let input = lowered
+        .program
+        .input()
+        .expect("the entry has an input function");
+    assert_eq!(input.module, lowered.module("<input 1>"));
+    let function = &lowered.program[input];
+    assert_eq!(function.kind, FunctionKind::Input(InputKind::Expr));
+    assert!(function.signature.is_none());
+    insta::assert_snapshot!(eml_hir::pretty(&lowered.program), @"
+    input$1 : <no signature>
+    input$1 () = (+ 1 2)
+    ");
+}
+
+#[test]
+fn a_let_input_binds_a_name_to_its_root() {
+    let lowered = lower(&[(1, "let x = 1 + 2")], &[]);
+    assert!(lowered.diagnostics.is_empty(), "{:?}", lowered.diagnostics);
+    let input = lowered
+        .program
+        .input()
+        .expect("the entry has an input function");
+    let FunctionKind::Input(InputKind::Let(binding)) = lowered.program[input].kind else {
+        panic!("a let input");
+    };
+    let binding = &lowered.program[binding];
+    assert_eq!(
+        (binding.name.as_str(), binding.root, binding.input),
+        ("x", 1, input)
+    );
+    insta::assert_snapshot!(eml_hir::pretty(&lowered.program), @"
+    input$1 : <no signature>
+    input$1 () = (+ 1 2)
+    let x = root 1 <- input$1
+    ");
+}
+
+#[test]
+fn a_let_input_keeps_its_type_annotation() {
+    let lowered = lower(&[(1, "let xs : List Int = []")], &[]);
+    assert!(lowered.diagnostics.is_empty(), "{:?}", lowered.diagnostics);
+    insta::assert_snapshot!(eml_hir::pretty(&lowered.program), @"
+    input$1 : <no signature>
+    input$1 () = ([] : List Int)
+    let xs = root 1 <- input$1
+    ");
+}
+
+#[test]
+fn later_inputs_and_functions_refer_to_a_binding() {
+    let lowered = lower(
+        &[
+            (1, "let n = 3"),
+            (2, "f : Int -> Int\nf x = x + n"),
+            (3, "f n"),
+        ],
+        &[],
+    );
+    assert!(lowered.diagnostics.is_empty(), "{:?}", lowered.diagnostics);
+    assert_eq!(lowered.value_in("<input 3>", "n"), Some("<input 1>"));
+    insta::assert_snapshot!(eml_hir::pretty(&lowered.program), @"
+    -- <input 1>
+    input$1 : <no signature>
+    input$1 () = 3
+    let n = root 1 <- input$1
+    -- <input 2>
+    f : Int -> Int
+    f x#0 = (+ x#0 @<input 1>.n)
+    -- <input 3>
+    input$3 : <no signature>
+    input$3 () = (@<input 2>.f @<input 1>.n)
+    ");
+}
+
+#[test]
+fn a_binding_does_not_see_itself() {
+    // 右辺の `x` は前の版の `x` である
+    let lowered = lower(&[(1, "let x = 1"), (2, "let x = x + 1")], &[]);
+    assert!(lowered.diagnostics.is_empty(), "{:?}", lowered.diagnostics);
+    insta::assert_snapshot!(eml_hir::pretty(&lowered.program), @"
+    -- <input 1>
+    input$1 : <no signature>
+    input$1 () = 1
+    let x = root 1 <- input$1
+    -- <input 2>
+    input$2 : <no signature>
+    input$2 () = (+ @<input 1>.x 1)
+    let x = root 2 <- input$2
+    ");
+    let lowered = lower(&[(1, "let y = y")], &[]);
+    assert_eq!(
+        lowered.diagnostics,
+        ["<input 1> 1:9 E1001 cannot find value `y`"]
+    );
+}
+
+/// 名前1つでない `let` の入力はパーサが E0011 で報告する。HIR は診断を重ねない。
+#[test]
+fn a_let_input_binds_one_name() {
+    let lowered = lower(&[(1, "let (a, b) = (1, 2)")], &[]);
+    insta::assert_snapshot!(lowered.report, @"
+    E0011 <input 1> 1:5 a `let` input binds one name
+      <input 1> 1:5 write `let name = …` and take the value apart in a later input
+    ");
+}
+
+#[test]
+fn a_file_has_no_input_function() {
+    let lowered = eml_test_support::lower("main : Unit -> Unit\nmain () = ()");
+    assert_eq!(lowered.program.input(), None);
 }

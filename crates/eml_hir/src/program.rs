@@ -13,8 +13,8 @@ use la_arena::{Arena, ArenaMap, Idx, RawIdx};
 use eml_extern::ExternType;
 
 use crate::hir::{
-    Body, ClassDef, Constructor, EffectDef, ExternIndex, Function, FunctionKind, InstanceDef,
-    LangItems, Method, Operation, Signature, TypeDef,
+    Binding, Body, ClassDef, Constructor, EffectDef, ExternIndex, Function, FunctionKind,
+    InstanceDef, LangItems, Method, Operation, Signature, TypeDef,
 };
 use crate::names::DisplayNames;
 
@@ -113,6 +113,7 @@ pub type OperationId = ItemId<Operation>;
 pub type ClassId = ItemId<ClassDef>;
 pub type MethodId = ItemId<Method>;
 pub type InstanceId = ItemId<InstanceDef>;
+pub type BindingId = ItemId<Binding>;
 
 /// 値の名前空間の item (docs/spec/modules.md の「名前空間」)。名前解決の結果、HIR の参照 (`Res::Item`)、型検査の
 /// 宣言ごとの表のキーが、同じ型を使う。
@@ -122,6 +123,8 @@ pub enum ValueItem {
     Operation(OperationId),
     Constructor(ConstructorId),
     Method(MethodId),
+    /// REPL の `let` の束縛。
+    Binding(BindingId),
 }
 
 impl ValueItem {
@@ -131,6 +134,7 @@ impl ValueItem {
             ValueItem::Operation(id) => id.module,
             ValueItem::Constructor(id) => id.module,
             ValueItem::Method(id) => id.module,
+            ValueItem::Binding(id) => id.module,
         }
     }
 }
@@ -282,6 +286,8 @@ pub struct Items {
     /// クラスのメソッド。値の名前空間に置くトップレベルの値である。
     pub methods: Arena<Method>,
     pub instances: Arena<InstanceDef>,
+    /// REPL の `let` の束縛。セッションの `let` の入力のモジュールだけが1つ持つ。
+    pub bindings: Arena<Binding>,
 }
 
 impl Program {
@@ -329,6 +335,10 @@ impl Program {
         self.items(|items| &items.instances)
     }
 
+    pub fn bindings(&self) -> impl Iterator<Item = (BindingId, &Binding)> {
+        self.items(|items| &items.bindings)
+    }
+
     pub fn instance(&self, class: ClassId, head: TypeDefId) -> Option<InstanceId> {
         self.instance_index.get(&(class, head)).copied()
     }
@@ -374,6 +384,7 @@ impl Program {
             ValueItem::Operation(id) => &self[id].name,
             ValueItem::Constructor(id) => &self[id].name,
             ValueItem::Method(id) => &self[id].name,
+            ValueItem::Binding(id) => &self[id].name,
         }
     }
 
@@ -389,7 +400,8 @@ impl Program {
             FunctionKind::Extern(_) => function.signature.as_ref().map(Signature::arity),
             FunctionKind::Defined
             | FunctionKind::DefaultMethod(_)
-            | FunctionKind::InstanceMethod(..) => self.body(id).map(|body| body.params.len()),
+            | FunctionKind::InstanceMethod(..)
+            | FunctionKind::Input(_) => self.body(id).map(|body| body.params.len()),
         }
     }
 
@@ -430,6 +442,16 @@ impl Program {
             .find(|(_, function)| function.name == "main")
             .map(|(local, _)| ItemId::new(self.entry, local))
     }
+
+    /// REPL が実行する関数。入口のモジュール (今の入力) の `input$N` で、item の並びの入力とファイルは持たない。
+    pub fn input(&self) -> Option<FunctionId> {
+        self.modules[self.entry]
+            .items
+            .functions
+            .iter()
+            .find(|(_, function)| matches!(function.kind, FunctionKind::Input(_)))
+            .map(|(local, _)| ItemId::new(self.entry, local))
+    }
 }
 
 macro_rules! program_index {
@@ -453,6 +475,7 @@ program_index! {
     ClassDef => classes,
     Method => methods,
     InstanceDef => instances,
+    Binding => bindings,
 }
 
 /// 処理系が本体を生成する、Prelude の `Eq`、`Ord`、`Show` の中心のメソッド。

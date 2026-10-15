@@ -107,7 +107,10 @@ impl BodyCheck<'_, '_> {
                 let method = &self.program[id];
                 (Some((method.class, args[0])), Some(&method.signature))
             }
-            ValueItem::Operation(_) | ValueItem::Constructor(_) => return Vec::new(),
+            // REPL の `let` の束縛は単相で、制約を持たない
+            ValueItem::Operation(_) | ValueItem::Constructor(_) | ValueItem::Binding(_) => {
+                return Vec::new();
+            }
         };
         let constraints = signature
             .into_iter()

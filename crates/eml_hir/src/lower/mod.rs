@@ -19,7 +19,7 @@ use la_arena::{Arena, ArenaMap, Idx};
 use crate::codes;
 use crate::def_map::{DefMap, NameRef, Resolved, Resolver, module_id, not_in_module, private_name};
 use crate::hir::*;
-use crate::item_tree::{FunctionItem, ItemTree};
+use crate::item_tree::{FunctionItem, InputItemKind, ItemTree};
 use crate::load::LoadedModule;
 use crate::program::{ItemId, Items, Module, ModuleId, ModuleOrigin, Program};
 use class::ContextScope;
@@ -168,7 +168,57 @@ impl<'a> ItemLowering<'a> {
         self.lower_operations(&tree.effects, items);
         self.lower_constructors(&tree.data, &mut items.types, &mut items.constructors);
         self.lower_functions(&tree.functions, &mut items.functions);
+        // `input$N` は `ItemTree` の関数の直後に置く。入力のモジュールはクラスを持たないので、既定のメソッドとは並ばない
+        self.lower_input(tree, items);
         self.lower_classes(&tree.classes, items, pending);
+    }
+
+    /// REPL の `let` の束縛か式の入力を実行する関数 `input$N` と、`let` の束縛を置く。
+    fn lower_input(&mut self, tree: &ItemTree, items: &mut Items) {
+        let Some(input) = &tree.input else {
+            return;
+        };
+        let number = self
+            .def_map
+            .origin(self.module)
+            .session()
+            .expect("an input is a session module");
+        let binding = self.def_map.binding(self.module);
+        let kind = match binding {
+            Some((binding, _)) => InputKind::Let(binding),
+            None => InputKind::Expr,
+        };
+        let function = ItemId::new(
+            self.module,
+            items.functions.alloc(Function {
+                name: format!("input${number}"),
+                name_range: input.range,
+                signature_name_range: None,
+                equation_ranges: Vec::new(),
+                signature: None,
+                kind: FunctionKind::Input(kind),
+            }),
+        );
+        debug_assert_eq!(Some(function), self.def_map.input_function(self.module));
+        if let (
+            Some((binding, root)),
+            InputItemKind::Let {
+                name: Some((name, range)),
+                ..
+            },
+        ) = (binding, &input.kind)
+        {
+            let id = ItemId::new(
+                self.module,
+                items.bindings.alloc(Binding {
+                    name: name.clone(),
+                    name_range: *range,
+                    root,
+                    input: function,
+                }),
+            );
+            debug_assert_eq!(id, binding);
+        }
     }
 
     fn lower_functions(&mut self, items: &[FunctionItem], functions: &mut Arena<Function>) {
@@ -355,6 +405,27 @@ fn lower_bodies(
         if let Some(signature) = &mut modules[module].items.functions[id.local].signature {
             signature.generics = hidden.unwrap_or(generics);
         }
+        bodies.insert(id.local, body);
+    }
+    if let (Some(input), Some(id)) = (&tree.input, def_map.input_function(module)) {
+        let (expr, ty) = match &input.kind {
+            InputItemKind::Expr(ptr) => (Some(ptr.to_node(root)), None),
+            InputItemKind::Let { ptr, .. } => {
+                let stmt = ptr.to_node(root);
+                (stmt.body(), stmt.ty())
+            }
+        };
+        let mut generics = Generics::default();
+        let body = BodyLowering::new(
+            tree.file,
+            def_map.resolver(module),
+            modules,
+            def_map.lang(),
+            def_map.externs().negate,
+            &mut generics,
+            diagnostics,
+        )
+        .lower_input(expr, ty, input.range);
         bodies.insert(id.local, body);
     }
     for body in pending {

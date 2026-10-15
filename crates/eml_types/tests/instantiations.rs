@@ -217,6 +217,8 @@ fn every_reference_to_an_item_with_a_signature_is_recorded() {
                 ValueItem::Operation(id) => program[id].signature.generics.type_vars.len(),
                 ValueItem::Constructor(id) => program[program[id].ty].generics.type_vars.len(),
                 ValueItem::Method(id) => program[id].signature.generics.type_vars.len(),
+                // REPL の `let` の束縛は単相である
+                ValueItem::Binding(_) => 0,
             };
             assert_eq!(instantiation.args.len(), rigids, "{decl:?}");
         }
