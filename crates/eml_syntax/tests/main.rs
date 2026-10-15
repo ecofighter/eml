@@ -16,5 +16,6 @@ mod nesting;
 mod operators;
 mod parser;
 mod records;
+mod repl;
 mod strings;
 mod types;

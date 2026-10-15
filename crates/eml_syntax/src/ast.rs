@@ -87,6 +87,9 @@ macro_rules! ast_enum {
 
 ast_node! {
     SourceFile => SOURCE_FILE,
+    ReplItems => REPL_ITEMS,
+    ReplLet => REPL_LET,
+    ReplExpr => REPL_EXPR,
     Name => NAME,
     NameRef => NAME_REF,
     Path => PATH,
@@ -162,6 +165,11 @@ ast_node! {
     TupleType => TUPLE_TYPE,
     EffectRow => EFFECT_ROW,
     Effect => EFFECT,
+}
+
+ast_enum! {
+    /// REPL の入力の根 (`eml_syntax::parse_input`)。
+    ReplInput { ReplItems, ReplLet, ReplExpr }
 }
 
 ast_enum! {
@@ -281,6 +289,24 @@ impl VarType {
 impl SourceFile {
     pub fn items(&self) -> AstChildren<Item> {
         support::children(&self.syntax)
+    }
+}
+
+impl ReplItems {
+    pub fn items(&self) -> AstChildren<Item> {
+        support::children(&self.syntax)
+    }
+}
+
+impl ReplLet {
+    pub fn stmt(&self) -> Option<LetStmt> {
+        support::child(&self.syntax)
+    }
+}
+
+impl ReplExpr {
+    pub fn expr(&self) -> Option<Expr> {
+        support::child(&self.syntax)
     }
 }
 

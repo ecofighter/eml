@@ -103,6 +103,11 @@ pub enum SyntaxKind {
     EOF,
 
     SOURCE_FILE,
+    /// REPL の入力の根。item の並び、`let` の束縛 (子は `LET_STMT`)、式 (子は式のノード) の3つで、trivia だけの入力は
+    /// 子のない `REPL_ITEMS` になる (docs/superpowers/specs/2026-10-15-s11a-repl-session-design.md の「入力の種類」)。
+    REPL_ITEMS,
+    REPL_LET,
+    REPL_EXPR,
     ERROR,
     /// 入れ子の上限 (E0013) で読み飛ばした部分。`ERROR` と分けるのは、これを含む等式の本体を HIR が誤りの式に
     /// して、その項目の中の連鎖する診断を後の段階でも出さないため (docs/spec/grammar.md)。

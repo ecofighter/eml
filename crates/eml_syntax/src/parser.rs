@@ -276,6 +276,27 @@ impl<'t> Parser<'t> {
         self.push_error(range, code, message, label);
     }
 
+    /// 今の位置より前のトークンを指す。`let` の入力のパターンのように、後ろを読んで初めて誤りとわかる構文のため。
+    /// `pos` は `position` で覚えた位置である。
+    pub(crate) fn error_at(
+        &mut self,
+        pos: usize,
+        code: ErrorCode,
+        message: impl Into<String>,
+        label: impl Into<String>,
+    ) {
+        if self.too_deep {
+            return;
+        }
+        let range = self.tokens[pos].range;
+        self.push_error(range, code, message, label);
+    }
+
+    /// 今のトークンの位置。`error_at` に渡す。
+    pub(crate) fn position(&self) -> usize {
+        self.pos
+    }
+
     fn push_error(
         &mut self,
         range: TextRange,

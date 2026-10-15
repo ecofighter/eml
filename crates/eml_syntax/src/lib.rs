@@ -9,7 +9,7 @@ mod sink;
 mod syntax_kind;
 mod token_set;
 
-use eml_diagnostics::{Diagnostic, FileId};
+use eml_diagnostics::{Diagnostic, FileId, SourceFiles};
 use rowan::GreenNode;
 use rowan::ast::AstNode;
 
@@ -52,16 +52,84 @@ impl Parse {
     pub fn tree(&self) -> ast::SourceFile {
         ast::SourceFile::cast(self.syntax()).expect("the root is always SOURCE_FILE")
     }
+
+    /// `parse_input` の木の根。
+    pub fn repl_input(&self) -> ast::ReplInput {
+        ast::ReplInput::cast(self.syntax()).expect("the root of `parse_input` is a REPL input")
+    }
 }
 
 pub fn parse(file: FileId, text: &str) -> (Parse, Vec<Diagnostic>) {
+    parse_with(file, text, grammar::source_file)
+}
+
+/// REPL の入力を読む。根は `REPL_ITEMS`、`REPL_LET`、`REPL_EXPR` のどれかである
+/// (docs/superpowers/specs/2026-10-15-s11a-repl-session-design.md の「入力の種類」)。
+pub fn parse_input(file: FileId, text: &str) -> (Parse, Vec<Diagnostic>) {
+    parse_with(file, text, grammar::repl_input)
+}
+
+fn parse_with(file: FileId, text: &str, rule: fn(&mut parser::Parser)) -> (Parse, Vec<Diagnostic>) {
     let (tokens, mut diagnostics) = lex(file, text);
     let (input, layout_diagnostics) = layout::layout(file, text, &tokens);
     diagnostics.extend(layout_diagnostics);
     let mut parser = parser::Parser::new(file, text, input);
-    grammar::source_file(&mut parser);
+    rule(&mut parser);
     let (events, parse_diagnostics) = parser.finish();
     diagnostics.extend(parse_diagnostics);
     let green = sink::build_tree(text, &tokens, events);
     (Parse { green }, diagnostics)
+}
+
+/// REPL の入力が終わったか。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum InputStatus {
+    Complete,
+    Incomplete,
+}
+
+/// 端末が行を読むたびに、それまでの行を改行でつないだテキストを渡す。字句とレイアウト段の状態と、`parse_input` と
+/// 同じ入力の種類の判定だけを見る (docs/superpowers/specs/2026-10-15-s11a-repl-session-design.md の「入力の終わり」)。
+pub fn input_status(text: &str) -> InputStatus {
+    // 診断は捨てるので、ファイルの番号は字句解析と構文解析に渡す印にすぎない
+    let file = SourceFiles::new().add("<input>", "");
+    let (tokens, _, open_literal) = lexer::lex_to_end(file, text);
+    let (_, _, end) = layout::layout_to_end(file, text, &tokens);
+    // 規則 1
+    if open_literal || end.open_bracket {
+        return InputStatus::Incomplete;
+    }
+    let Some(last) = tokens.iter().rev().find(|token| !token.kind.is_trivia()) else {
+        return InputStatus::Complete;
+    };
+    // 規則 2
+    if layout::BLOCK_STARTERS.contains(&last.kind) {
+        return InputStatus::Incomplete;
+    }
+    // 規則 3
+    if ends_with_blank_line(&text[last.range.end().into()..]) {
+        return InputStatus::Complete;
+    }
+    if end.in_block || ends_with_definition(file, text) {
+        InputStatus::Incomplete
+    } else {
+        InputStatus::Complete
+    }
+}
+
+/// 最後のトークンの後ろ (trivia だけ) が、空白だけの行で終わっているか。
+fn ends_with_blank_line(rest: &str) -> bool {
+    rest.rsplit_once('\n')
+        .is_some_and(|(_, last_line)| last_line.trim().is_empty())
+}
+
+/// item の並びで、最後の項目がシグネチャか等式か。等式を何本も続けられるようにするため。
+fn ends_with_definition(file: FileId, text: &str) -> bool {
+    let (parse, _) = parse_input(file, text);
+    let root = parse.syntax();
+    root.kind() == SyntaxKind::REPL_ITEMS
+        && root
+            .children()
+            .last()
+            .is_some_and(|item| matches!(item.kind(), SyntaxKind::SIGNATURE | SyntaxKind::EQUATION))
 }

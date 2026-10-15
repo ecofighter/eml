@@ -29,7 +29,8 @@ enum BracketKind {
 }
 
 /// 規則 3 の開始トークン。
-const BLOCK_STARTERS: [SyntaxKind; 6] = [EQ, THIN_ARROW, WITH_KW, THEN_KW, ELSE_KW, WHERE_KW];
+pub(crate) const BLOCK_STARTERS: [SyntaxKind; 6] =
+    [EQ, THIN_ARROW, WITH_KW, THEN_KW, ELSE_KW, WHERE_KW];
 
 /// 列はバイトではなく、0 始まりの文字数で数える。
 struct Item {
@@ -49,6 +50,25 @@ struct CommaClosed {
 }
 
 pub(crate) fn layout(file: FileId, text: &str, tokens: &[Token]) -> (Vec<Token>, Vec<Diagnostic>) {
+    let (out, diagnostics, _) = layout_to_end(file, text, tokens);
+    (out, diagnostics)
+}
+
+/// テキストの終わりのレイアウトの状態。REPL の入力の終わりの判定 (`input_status`) が使う。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct LayoutEnd {
+    /// 括弧か row が閉じていない。規則 6 で閉じる前の状態である。
+    pub(crate) open_bracket: bool,
+    /// ファイル全体のブロックの中に、規則 3 で開いたブロックが残っている。最後の行がそのブロックの中にある。
+    pub(crate) in_block: bool,
+}
+
+/// `layout` と同じだが、テキストの終わりの状態も返す。
+pub(crate) fn layout_to_end(
+    file: FileId,
+    text: &str,
+    tokens: &[Token],
+) -> (Vec<Token>, Vec<Diagnostic>, LayoutEnd) {
     let mut diagnostics = Vec::new();
     let items = scan_lines(file, text, tokens, &mut diagnostics);
     let mut out = Vec::with_capacity(items.len() * 2);
@@ -241,6 +261,13 @@ pub(crate) fn layout(file: FileId, text: &str, tokens: &[Token]) -> (Vec<Token>,
         }
         at_block_start = false;
     }
+    let end = LayoutEnd {
+        open_bracket: stack.iter().any(is_bracket),
+        in_block: stack
+            .iter()
+            .skip(1)
+            .any(|context| matches!(context, Context::Block { .. })),
+    };
     let eof = TextSize::of(text);
     if let Some(last) = items.last()
         && BLOCK_STARTERS.contains(&last.token.kind)
@@ -267,7 +294,7 @@ pub(crate) fn layout(file: FileId, text: &str, tokens: &[Token]) -> (Vec<Token>,
             out.push(virtual_token(LAYOUT_CLOSE, eof));
         }
     }
-    (out, diagnostics)
+    (out, diagnostics, end)
 }
 
 /// 閉じる側のトークン (docs/spec/layout.md の「文脈のスタック」)。`>` は row を閉じるときだけである。

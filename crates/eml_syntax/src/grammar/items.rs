@@ -45,6 +45,38 @@ pub(super) fn at_item_start(p: &Parser) -> bool {
     p.at(PUB_KW) || p.at(EXTERN_KW) || item_kind(p).is_some()
 }
 
+/// REPL の入力が item の並びで始まるか。等式の形 (`f x …`、`a + b …`) は、最初の項目の中で括弧の外にあり、ブロックが
+/// 開く前にある `=` を持つときだけ item とみなす。`f x` や `1 + 2` を式として読み、`fn () ->` の後のブロックの中の
+/// `let y = 1` を等式と取り違えないため (docs/superpowers/specs/2026-10-15-s11a-repl-session-design.md の
+/// 「入力の種類」)。
+pub(super) fn at_items_input(p: &Parser) -> bool {
+    if p.at(PUB_KW) || p.at(EXTERN_KW) {
+        return true;
+    }
+    match item_kind(p) {
+        None => false,
+        Some(ItemKind::Equation | ItemKind::OperatorEquation) => has_top_level_eq(p),
+        Some(_) => true,
+    }
+}
+
+/// 最初の項目の終わり (ブロックの外の区切り) か、ブロックの開きまでに、括弧と補間の穴の外の `=` があるか。
+fn has_top_level_eq(p: &Parser) -> bool {
+    let mut nesting = Nesting::default();
+    let mut n = 0;
+    loop {
+        let kind = p.peek(n);
+        if nesting.ends(kind) || kind == LAYOUT_OPEN || (kind == SEMICOLON && nesting.at_top()) {
+            return false;
+        }
+        if kind == EQ && nesting.at_top() {
+            return true;
+        }
+        nesting.step(kind);
+        n += 1;
+    }
+}
+
 /// `LIDENT` の直後が `-` なら、演算子の定義 (`a - b = ...`) とみなす。関数の定義とは2トークンの先読みで区別する。
 fn at_equation(p: &Parser) -> bool {
     p.at(LIDENT) && (p.nth(1) == EQ || (p.nth(1) != MINUS && patterns::at_apat_start_at(p, 1)))
@@ -55,7 +87,13 @@ fn at_operator_equation(p: &Parser) -> bool {
     patterns::apat_len(p).is_some_and(|len| matches!(p.nth(len), OP | MINUS | CONOP | EQ))
 }
 
+/// `:` まで見るのは、REPL の式の入力 `(+) 1 2` をシグネチャと読まないため。
 fn at_operator_signature(p: &Parser) -> bool {
+    at_operator_name(p) && p.nth(3) == COLON
+}
+
+/// `(+)` の形の名前。
+fn at_operator_name(p: &Parser) -> bool {
     p.at(L_PAREN) && matches!(p.nth(1), OP | MINUS) && p.nth(2) == R_PAREN
 }
 
@@ -604,7 +642,7 @@ fn instance_member(p: &mut Parser) -> bool {
     if p.eat(EXTERN_KW) {
         if p.at(LIDENT) {
             name(p);
-        } else if at_operator_signature(p) {
+        } else if at_operator_name(p) {
             let n = p.start();
             p.bump(L_PAREN);
             p.bump_any();

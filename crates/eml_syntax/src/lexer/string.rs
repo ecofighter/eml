@@ -227,6 +227,8 @@ impl Lexer<'_> {
                 );
                 let end = start + open_len + limit;
                 self.push(RAW_STRING, end);
+                // 穴の中の raw 文字列は改行の手前で止まるので、行をまたげるのは穴の外のものだけである
+                self.open_at_end |= !in_hole;
                 if in_hole {
                     self.close_layers(true, end == text.len());
                 }

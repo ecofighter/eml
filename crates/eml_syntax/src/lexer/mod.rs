@@ -17,6 +17,13 @@ pub struct Token {
 }
 
 pub fn lex(file: FileId, text: &str) -> (Vec<Token>, Vec<Diagnostic>) {
+    let (tokens, diagnostics, _) = lex_to_end(file, text);
+    (tokens, diagnostics)
+}
+
+/// `lex` と同じだが、テキストの終わりで行をまたげる文字列 (複数行の文字列と raw 文字列) が閉じていなかったかも返す。
+/// REPL の入力の終わりの判定 (`input_status`) が使う。
+pub(crate) fn lex_to_end(file: FileId, text: &str) -> (Vec<Token>, Vec<Diagnostic>, bool) {
     let mut lexer = Lexer {
         file,
         text,
@@ -27,11 +34,13 @@ pub fn lex(file: FileId, text: &str) -> (Vec<Token>, Vec<Diagnostic>) {
         }],
         tokens: Vec::new(),
         diagnostics: Vec::new(),
+        open_at_end: false,
     };
     lexer.run();
     let Lexer {
         tokens,
         mut diagnostics,
+        open_at_end,
         ..
     } = lexer;
     for token in tokens.iter().filter(|token| token.kind == ERROR_TOKEN) {
@@ -41,7 +50,7 @@ pub fn lex(file: FileId, text: &str) -> (Vec<Token>, Vec<Diagnostic>) {
             Label::new(file, token.range, "not valid in eml source"),
         ));
     }
-    (tokens, diagnostics)
+    (tokens, diagnostics, open_at_end)
 }
 
 pub(crate) fn operator_kind(op: &str) -> SyntaxKind {
@@ -127,6 +136,8 @@ struct Lexer<'a> {
     modes: Vec<Mode>,
     tokens: Vec<Token>,
     diagnostics: Vec<Diagnostic>,
+    /// テキストの終わりで、行をまたげる文字列が閉じていなかったか。
+    open_at_end: bool,
 }
 
 impl Lexer<'_> {
@@ -139,6 +150,17 @@ impl Lexer<'_> {
                 Mode::Command { .. } => self.command_body(),
             }
         }
+        // 穴の中の `"""` は単一行の文字列として読むので、ここに残る複数行の文字列はどれも行をまたげる
+        // (docs/spec/lexical.md の「改行での回復」)
+        self.open_at_end |= self.modes.iter().any(|mode| {
+            matches!(
+                mode,
+                Mode::String {
+                    multiline: true,
+                    ..
+                }
+            )
+        });
         self.close_layers(false, true);
     }
 

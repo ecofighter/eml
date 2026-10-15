@@ -19,6 +19,46 @@ use scan::Nesting;
 
 pub(crate) fn source_file(p: &mut Parser) {
     let m = p.start();
+    items_to_end(p);
+    m.complete(p, SOURCE_FILE);
+}
+
+/// REPL の入力を1つ読む。最初の項目で、item の並び、`let` の束縛、式のどれかを決める
+/// (docs/superpowers/specs/2026-10-15-s11a-repl-session-design.md の「入力の種類」)。
+pub(crate) fn repl_input(p: &mut Parser) {
+    let m = p.start();
+    if p.at_eof() || items::at_items_input(p) {
+        items_to_end(p);
+        m.complete(p, REPL_ITEMS);
+        return;
+    }
+    let kind = expressions::let_or_expr_input(p);
+    only_one_item(p);
+    m.complete(p, kind);
+}
+
+/// `let` の束縛と式の入力は1つの項目だけを持つ。2つ目の項目を、1件の診断とともに `ERROR` にする。
+fn only_one_item(p: &mut Parser) {
+    while p.at_sep() || p.at(LAYOUT_CLOSE) {
+        p.bump_any();
+    }
+    if p.at_eof() {
+        return;
+    }
+    p.error(
+        codes::SYNTAX_ERROR,
+        "an input holds only one `let` or expression",
+        "start a new input here",
+    );
+    let m = p.start();
+    while !p.at_eof() {
+        p.bump_any();
+    }
+    m.complete(p, ERROR);
+}
+
+/// テキストの終わりまで項目を読む。
+fn items_to_end(p: &mut Parser) {
     let mut declared = false;
     loop {
         while p.at_sep() {
@@ -40,7 +80,6 @@ pub(crate) fn source_file(p: &mut Parser) {
         }
         end_of_item(p);
     }
-    m.complete(p, SOURCE_FILE);
 }
 
 /// 項目の後ろに読み残したトークンを、1件の診断とともに `ERROR` にする。
