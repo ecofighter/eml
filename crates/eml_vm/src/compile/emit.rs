@@ -1,7 +1,10 @@
 //! 関数ごとの命令の生成 (docs/spec/vm.md の「命令ごとの実行」)。定数の atom は、命令の前に一時のスロットへ読み込む。
 
 use eml_extern::Extern;
-use eml_lir::{Atom, BlockId, Call, FnIdx, LirFn, Program, Repr, Rhs, Stmt, Term, VarId};
+use eml_lir::{
+    Atom, BlockId, Call, Ctor, FnIdx, LayoutCtor, LirFn, Program, Repr, Rhs, Shape, Stmt, Term,
+    VarId,
+};
 use eml_rt::Mode;
 
 use super::Out;
@@ -142,7 +145,7 @@ pub(crate) struct Emitter<'a, M: Mode> {
     pub(crate) elided: Vec<Option<VarId>>,
 }
 
-impl<M: Mode> Emitter<'_, M> {
+impl<'a, M: Mode> Emitter<'a, M> {
     pub(crate) fn slot(&self, var: VarId) -> Slot {
         self.slots.of[var.0 as usize]
     }
@@ -229,10 +232,9 @@ impl<M: Mode> Emitter<'_, M> {
                 ctor,
                 fields,
             } => {
-                let shape = self.program.layouts[ctor.layout.0 as usize].constructors
-                    [ctor.tag as usize]
-                    .shape();
-                let bound = self.field_operands(*ctor, fields);
+                let layout_ctor = self.layout_ctor(*ctor);
+                let shape = layout_ctor.shape();
+                let bound = self.field_operands(layout_ctor, &shape, fields);
                 let at = self.out.operands(
                     [ctor.tag, shape.scanned, (bound.len() / 2) as u32]
                         .into_iter()
@@ -246,8 +248,7 @@ impl<M: Mode> Emitter<'_, M> {
                 ctor,
                 fields,
             } => {
-                let layout_ctor =
-                    &self.program.layouts[ctor.layout.0 as usize].constructors[ctor.tag as usize];
+                let layout_ctor = self.layout_ctor(*ctor);
                 let shape = layout_ctor.shape();
                 let offset = crate::data::count_word(shape.scanned);
                 let entries: Vec<u32> = fields
@@ -270,11 +271,18 @@ impl<M: Mode> Emitter<'_, M> {
         }
     }
 
+    /// コンストラクタの配置。命令ごとに1回引き、形 (`LayoutCtor::shape`) とともに使い回す。
+    fn layout_ctor(&self, ctor: Ctor) -> &'a LayoutCtor {
+        &self.program.layouts[ctor.layout.0 as usize].constructors[ctor.tag as usize]
+    }
+
     /// 使うフィールドの [位置 | RAW, スロット] の並び。死んでいるフィールドは読まない。
-    fn field_operands(&self, ctor: eml_lir::Ctor, fields: &[VarId]) -> Vec<u32> {
-        let layout_ctor =
-            &self.program.layouts[ctor.layout.0 as usize].constructors[ctor.tag as usize];
-        let shape = layout_ctor.shape();
+    fn field_operands(
+        &self,
+        layout_ctor: &LayoutCtor,
+        shape: &Shape,
+        fields: &[VarId],
+    ) -> Vec<u32> {
         let offset = crate::data::count_word(shape.scanned);
         let mut items = Vec::new();
         for ((&field, &position), &repr) in
@@ -324,8 +332,7 @@ impl<M: Mode> Emitter<'_, M> {
                 self.out.push(Op::LoadConst { dst, index });
             }
             Rhs::Con { ctor, args } => {
-                let layout_ctor =
-                    &self.program.layouts[ctor.layout.0 as usize].constructors[ctor.tag as usize];
+                let layout_ctor = self.layout_ctor(*ctor);
                 let shape = layout_ctor.shape();
                 let offset = crate::data::count_word(shape.scanned);
                 let lin = self.function.mark(var) == eml_lir::Mark::Lin;
@@ -585,7 +592,8 @@ impl<M: Mode> Emitter<'_, M> {
     /// ブロック引数への並列な代入と、行き先への `Goto`。変数の代入を先に並べ、定数はその後に書く。定数の書き込み先が、
     /// ほかの代入がまだ読む値のスロットでありうるためである。次のブロックへ進むだけなら `Goto` を出さない。
     pub(crate) fn jump(&mut self, from: BlockId, target: BlockId, args: &[Atom]) {
-        let params = self.function.block(target).params.clone();
+        let function = self.function;
+        let params = &function.block(target).params;
         let mut moves = Vec::new();
         let mut constants = Vec::new();
         for (&param, &arg) in params.iter().zip(args) {
@@ -595,8 +603,9 @@ impl<M: Mode> Emitter<'_, M> {
                 constant => constants.push((dst, constant, self.repr(param))),
             }
         }
-        let scratch = self.temp();
-        for (dst, src) in super::moves::sequentialize(&moves, scratch) {
+        // 作業用のスロットは、代入が輪になるときだけ取る
+        let ordered = super::moves::sequentialize(&moves, || self.temp());
+        for (dst, src) in ordered {
             self.out.push(Op::Move { dst, src });
         }
         for (dst, constant, repr) in constants {
@@ -629,14 +638,20 @@ impl<M: Mode> Emitter<'_, M> {
             self.goto(block, target);
             return;
         };
+        // case のない `switch` は値を比べずに `default` へ進むので、キーのない表を作らない
+        let Some(first) = cases.first().map(|case| case.pattern) else {
+            let target = default.expect("a switch without cases has a default");
+            self.goto(block, target);
+            return;
+        };
         let base = self.out.operands.len();
         let mut patches = Vec::new();
         if let Some(default) = default {
             patches.push((1, default));
         }
         let src = self.slot(var);
-        let (items, op) = match (cases.first().map(|case| case.pattern), layout) {
-            (Some(CasePattern::Int(_) | CasePattern::String(_)), _) | (None, None) => {
+        let (items, op) = match (first, layout) {
+            (CasePattern::Int(_) | CasePattern::String(_), _) => {
                 let mut items = vec![cases.len() as u32, NONE];
                 for case in cases {
                     let (lo, hi) = match case.pattern {
@@ -648,17 +663,14 @@ impl<M: Mode> Emitter<'_, M> {
                     items.extend([lo, hi, 0]);
                 }
                 let at = base as u32;
-                let op = if matches!(
-                    cases.first().map(|c| c.pattern),
-                    Some(CasePattern::String(_))
-                ) {
+                let op = if matches!(first, CasePattern::String(_)) {
                     Op::SwitchString { src, at }
                 } else {
                     Op::SwitchInt { src, at }
                 };
                 (items, op)
             }
-            (_, Some(layout)) => {
+            (CasePattern::Tag(_), Some(layout)) => {
                 // 配置のタグは 0 から m - 1 に収まるので、飛び先の表はいつも密である
                 let ctors = &self.program.layouts[layout.0 as usize].constructors;
                 let m = ctors.len();
@@ -671,11 +683,10 @@ impl<M: Mode> Emitter<'_, M> {
                     let (check, fields) = if case.fields.is_empty() {
                         (NONE, Vec::new())
                     } else {
-                        let ctor = eml_lir::Ctor { layout, tag };
-                        (
-                            ctors[tag as usize].shape().scanned,
-                            self.field_operands(ctor, &case.fields),
-                        )
+                        let layout_ctor = &ctors[tag as usize];
+                        let shape = layout_ctor.shape();
+                        let fields = self.field_operands(layout_ctor, &shape, &case.fields);
+                        (shape.scanned, fields)
                     };
                     items[2 + tag as usize] = items.len() as u32;
                     patches.push((items.len(), case.target));
@@ -690,7 +701,7 @@ impl<M: Mode> Emitter<'_, M> {
                 };
                 (items, op)
             }
-            (Some(CasePattern::Tag(_)), None) => {
+            (CasePattern::Tag(_), None) => {
                 unreachable!("a switch with tag cases names its layout (docs/spec/lir.md)")
             }
         };

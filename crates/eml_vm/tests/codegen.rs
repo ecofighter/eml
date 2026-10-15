@@ -330,3 +330,62 @@ b1:
         14  ret s0
     ");
 }
+
+/// `i32` に収まらない同じ値の定数は、定数の表に1つだけ置く。
+#[test]
+fn a_wide_constant_is_stored_once() {
+    insta::assert_snapshot!(disasm("\
+fn main() -> unit {
+  let a.0: int = extern \"Prelude.+\"(5000000000, 1)
+  let b.1: int = extern \"Prelude.+\"(a.0, 5000000000)
+  let s.2: obj = extern \"Prelude.Show Int.show\"(b.1)
+  let u.3: unit = extern Prelude.println(s.2)
+  return u.3
+}
+"), @"
+    fn main (arity 0, frame 3)
+         2  load_const s1, c0
+         3  load_raw s2, 1
+         4  int_add s0, s1, s2
+         5  load_const s1, c0
+         6  int_add s0, s0, s1
+         7  extern s0 = Prelude.Show Int.show(s0)
+         8  extern s0 = Prelude.println(s0)
+         9  ret s0
+    ");
+}
+
+/// case のない `switch` は、値を比べずに `default` へ進むので、`goto` になる。
+#[test]
+fn a_switch_without_cases_is_a_goto() {
+    insta::assert_snapshot!(disasm("\
+layout Bool { False, True }
+fn main() -> unit {
+  let n.0: int = extern \"Prelude.+\"(1, 2)
+  let d.1: enum = extern \"Prelude.Eq Int.==\"(n.0, 3)
+  switch d.1 Bool { #0 -> b2, #1 -> b1 }
+b1:
+  switch n.0 { _ -> b3 }
+b2:
+  return ()
+b3:
+  let s.2: obj = extern \"Prelude.Show Int.show\"(n.0)
+  let u.3: unit = extern Prelude.println(s.2)
+  return u.3
+}
+"), @"
+    fn main (arity 0, frame 4)
+         2  load_raw s2, 1
+         3  load_raw s3, 2
+         4  int_add s0, s2, s3
+         5  load_raw s2, 3
+         6  int_eq s1, s0, s2
+         7  switch_enum s1 { #0 -> 9 [], #1 -> 8 [] }
+         8  goto 11
+         9  load_imm s2, 0
+        10  ret s2
+        11  extern s0 = Prelude.Show Int.show(s0)
+        12  extern s0 = Prelude.println(s0)
+        13  ret s0
+    ");
+}

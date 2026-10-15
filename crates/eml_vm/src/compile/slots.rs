@@ -59,9 +59,8 @@ fn interference(function: &LirFn) -> Vec<BTreeSet<usize>> {
     let live_in = live_in(function);
     for (index, block) in function.blocks.iter().enumerate() {
         // ブロックの引数は入口で同時に書くので、互いと、入口で生きている変数と干渉する
-        let entry: Vec<VarId> = live_in[index].clone();
         for &param in &block.params {
-            for &other in block.params.iter().chain(&entry) {
+            for &other in block.params.iter().chain(&live_in[index]) {
                 edge(param, other);
             }
         }

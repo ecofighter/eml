@@ -1,6 +1,7 @@
 //! 定数を作業用のヒープに不死の物体として作り、凍結する (docs/spec/vm.md の「`CodeBase` と `FnEntry`」)。塊の物体は
 //! 検査モードでも参照を数えないので、VM は定数の語を写すだけで使える。
 
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use eml_rt::{Control, Frozen, Heap, Kind, Meta, Mode, Word};
@@ -10,6 +11,8 @@ use crate::code::CompileError;
 pub(crate) struct Constants<M: Mode> {
     heap: Heap<M>,
     words: Vec<Word>,
+    /// 生の整数の値ごとの番号。同じ値を表に2度置かない。
+    raws: HashMap<i64, u32>,
 }
 
 impl<M: Mode> Constants<M> {
@@ -18,6 +21,7 @@ impl<M: Mode> Constants<M> {
         Constants {
             heap: Heap::with_control(control),
             words: Vec::new(),
+            raws: HashMap::new(),
         }
     }
 
@@ -33,7 +37,12 @@ impl<M: Mode> Constants<M> {
 
     /// 生の整数。`LoadRaw` の `i32` に収まらない `Int` の定数に使う。
     pub(crate) fn raw(&mut self, n: i64) -> u32 {
-        self.push(Word::from_bits(n as usize))
+        if let Some(&index) = self.raws.get(&n) {
+            return index;
+        }
+        let index = self.push(Word::from_bits(n as usize));
+        self.raws.insert(n, index);
+        index
     }
 
     /// `tobj` の `Int`。63 ビットに収まれば即値、収まらなければ不死の `BigInt` にする。
