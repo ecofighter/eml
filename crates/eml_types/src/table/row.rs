@@ -32,6 +32,16 @@ impl Table<'_> {
         Row { labels, tail }
     }
 
+    /// 束縛されていない rigid でない row 変数を、閉じた空の row `<>` に束縛する。REPL の入力で、決まらずに残った
+    /// row を決める (docs/superpowers/specs/2026-10-15-s11a-repl-session-design.md の「型検査」)。
+    pub fn close_row(&mut self, var: RowVar) -> Result<(), UnifyError> {
+        let open = Row {
+            labels: Vec::new(),
+            tail: Tail::Var(var),
+        };
+        self.unify_row(&open, &Row::pure())
+    }
+
     /// Leijen の scoped labels の書き換えで単一化する (docs/spec/types.md)。
     pub fn unify_row(&mut self, a: &Row, b: &Row) -> Result<(), UnifyError> {
         self.unify_row_in(a, b, &mut Unified::new())

@@ -74,16 +74,22 @@ pub(crate) fn components(program: &Program) -> Vec<Vec<FunctionId>> {
     out
 }
 
-/// 本体で参照するトップレベルの関数。呼び出しと値としての参照の両方を数える。
+/// 本体で参照するトップレベルの関数。呼び出しと値としての参照の両方を数える。`let` の束縛の参照は、束縛を作った入力の
+/// 関数への参照として数える。
 fn callees(program: &Program, id: FunctionId) -> Vec<FunctionId> {
     let Some(body) = program.body(id) else {
         return Vec::new();
     };
     let mut out = Vec::new();
     for (_, expr) in body.exprs.iter() {
-        if let ExprKind::Path(Res::Item(ValueItem::Function(callee))) = expr.kind
-            && !out.contains(&callee)
-        {
+        // `let` の束縛の型は、束縛を作った入力の関数を書き出して決まるので、その入力の関数を先に検査する
+        // (docs/superpowers/specs/2026-10-15-s11a-repl-session-design.md の「型検査」)
+        let callee = match expr.kind {
+            ExprKind::Path(Res::Item(ValueItem::Function(callee))) => callee,
+            ExprKind::Path(Res::Item(ValueItem::Binding(binding))) => program[binding].input,
+            _ => continue,
+        };
+        if !out.contains(&callee) {
             out.push(callee);
         }
     }

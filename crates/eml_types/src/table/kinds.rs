@@ -155,6 +155,43 @@ impl Table<'_> {
         }
     }
 
+    /// `roots` の型に現れる、束縛されていない型変数の代表と、束縛されていない rigid でない row 変数を、現れた順に
+    /// 重複なく返す。REPL の入力が、決まらずに残った変数を集めるのに使う
+    /// (docs/superpowers/specs/2026-10-15-s11a-repl-session-design.md の「型検査」)。
+    pub fn unsolved(&self, roots: impl IntoIterator<Item = Ty>) -> (Vec<Ty>, Vec<RowVar>) {
+        let mut vars = Vec::new();
+        let mut rows = Vec::new();
+        let mut seen_rows = HashSet::new();
+        let mut work: Vec<Ty> = roots.into_iter().collect();
+        let _walk = self.start_walk();
+        while let Some(ty) = work.pop() {
+            let ty = self.resolve(ty);
+            if !self.first_visit(ty) {
+                continue;
+            }
+            let shape = &self.shapes[ty.0 as usize];
+            if let TyShape::Var(_) = shape {
+                vars.push(ty);
+            }
+            shape.for_each_child(|child| match child {
+                Child::Ty(child) => work.push(child),
+                Child::Row(row) => {
+                    let row = self.resolve_row(row);
+                    if let Tail::Var(tail) = row.tail
+                        && !self.is_rigid_row(tail)
+                        && seen_rows.insert(tail)
+                    {
+                        rows.push(tail);
+                    }
+                    for label in row.labels {
+                        work.extend(label.args);
+                    }
+                }
+            });
+        }
+        (vars, rows)
+    }
+
     /// 型に現れる Kind 変数。線形性 (rigid 変数の `μ` と矢印の `m`) と多重度 (rigid な row 変数の `σ`) に分けて、
     /// 現れた順に重複なく返す。`unrestricted` が `Unr` に固定する変数を集めるのに使う。
     /// `Shape` の番号がこの順に従うことを確かめるテストも使う。

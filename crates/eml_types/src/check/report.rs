@@ -63,6 +63,9 @@ pub(super) enum Origin {
 #[derive(Debug, Clone)]
 pub(super) enum AmbientSource {
     Signature,
+    /// REPL の入力の本体。入力は `IO` だけを起こせる
+    /// (docs/superpowers/specs/2026-10-15-s11a-repl-session-design.md の「型検査」)。
+    Input,
     /// ラムダの最後の矢印の row。ラムダの期待する型の由来を持つ。
     Lambda(Origin),
 }
@@ -323,6 +326,14 @@ impl BodyCheck<'_, '_> {
                     None => diagnostic,
                 }
             }
+            AmbientSource::Input => Diagnostic::error(
+                codes::INPUT_EFFECT,
+                format!("{name} performs {quoted}, but an input may perform only `IO`"),
+                Label::new(file, range, format!("this call performs {quoted}")),
+            )
+            .with_help(format!(
+                "handle {quoted} inside the input, as in `handle … with …`"
+            )),
             AmbientSource::Lambda(origin) => {
                 let diagnostic = Diagnostic::error(
                     codes::EFFECT_NOT_IN_ROW,

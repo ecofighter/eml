@@ -34,7 +34,7 @@ impl BodyCheck<'_, '_> {
     ///
     /// instance とタプルで解いた節点の型引数には、参照を由来に `Unr` を求める (`solve`)。誤りになった参照には求めない。
     /// 誤りは報告済みで、線形性の診断を重ねないため。
-    pub(super) fn solve_constraints(&mut self) {
+    pub(super) fn solve_constraints(&mut self, defaulting: bool) {
         let body_has_error = self.diagnostics.iter().any(Diagnostic::is_error);
         let givens = self.givens();
         let references: Vec<(ExprId, ValueItem, Vec<Wanted>)> = self
@@ -49,7 +49,14 @@ impl BodyCheck<'_, '_> {
             let mut failed = None;
             // 決まらない型より、instance がないという決まった誤りを報告する (`solve` と同じ)
             for wanted in wanted {
-                match solve(self.program, self.table, wanted, &givens, body_has_error) {
+                match solve(
+                    self.program,
+                    self.table,
+                    wanted,
+                    &givens,
+                    body_has_error,
+                    defaulting,
+                ) {
                     Ok(args) => resolved.extend(args),
                     Err(failure @ Failure::NoInstance { .. }) => {
                         failed = Some(failure);
@@ -222,6 +229,10 @@ fn index(var: TypeVarId) -> usize {
 /// 解いても、解いた先の型にこの `Unr` を求めるからである
 /// (docs/spec/types.md の「`Unr` のクラス」)。
 ///
+/// `defaulting` は REPL の式の入力で立てる。決まらない型を `Unit` とみなし、タプルの構造的な instance を持つクラス
+/// だけを解けたとし、ほかのクラスは決めた型で解けないので E2009 にする
+/// (docs/superpowers/specs/2026-10-15-s11a-repl-session-design.md の「型検査」)。
+///
 /// 列には、同じクラスと同じ代表の組を1回だけ足す。推論の表は部分を共有するので、型を木としてたどると型の深さの
 /// 指数の時間がかかるためである (docs/implementation/architecture.md の「`eml_types` の内部」)。代表で比べるのは、
 /// `Pair a a` の2つの引数のように、別の変数が後で同じ節点に束縛されることがあるためである。
@@ -231,6 +242,7 @@ pub(super) fn solve(
     wanted: Wanted,
     givens: &[(ClassId, RigidVar)],
     body_has_error: bool,
+    defaulting: bool,
 ) -> Result<Vec<Ty>, Failure> {
     let root = wanted;
     let (class, ty) = wanted;
@@ -273,6 +285,7 @@ pub(super) fn solve(
             // 同じ本体に別の誤りがあるとき、決まらない型はその誤りの連鎖である。誤りを直せば型が決まるので、
             // E2009 を重ねない
             TyShape::Var(_) if body_has_error => {}
+            TyShape::Var(_) if defaulting && structural(program, class) => {}
             TyShape::Var(_) => {
                 ambiguous.get_or_insert(Failure::Ambiguous { root, class });
             }

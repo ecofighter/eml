@@ -56,6 +56,9 @@ pub mod codes {
     pub const CONSTRAINED_POLYMORPHIC_RECURSION: ErrorCode = ErrorCode(2012);
     pub const FIELD_NEEDS_KNOWN_TYPE: ErrorCode = ErrorCode(2013);
     pub const NO_SUCH_FIELD: ErrorCode = ErrorCode(2014);
+    pub const INPUT_EFFECT: ErrorCode = ErrorCode(2015);
+    pub const INPUT_LINEAR: ErrorCode = ErrorCode(2016);
+    pub const BINDING_AMBIGUOUS: ErrorCode = ErrorCode(2017);
     pub const NON_EXHAUSTIVE_MATCH: ErrorCode = ErrorCode(4001);
     pub const NON_EXHAUSTIVE_EQUATION: ErrorCode = ErrorCode(4002);
     pub const REFUTABLE_PATTERN: ErrorCode = ErrorCode(4003);
@@ -78,6 +81,29 @@ pub struct TypedProgram {
     pub bodies: ItemMap<Function, BodyTypes>,
     /// 単相化で一様にする型変数の位置。
     pub uniform: Uniform,
+    /// REPL の入力の関数ごとの結果。セッションのモジュールの入力の関数だけを含む。
+    pub inputs: ItemMap<Function, InputType>,
+}
+
+/// REPL の入力の関数の検査の結果
+/// (docs/superpowers/specs/2026-10-15-s11a-repl-session-design.md の「型検査」)。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct InputType {
+    /// 入力の式の型。入力の関数の型 `Unit -> <IO> T` の `T` である。
+    pub ty: TypeId,
+    /// 式の入力の結果の表示の仕方。`let` の入力は `Unit` である。
+    pub display: InputDisplay,
+}
+
+/// 式の入力の結果の表示の仕方 (docs/superpowers/specs/2026-10-15-s11a-repl-session-design.md の「表示」)。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum InputDisplay {
+    /// 何も表示しない。
+    Unit,
+    /// `Show` の `show` の結果を表示する。
+    Show,
+    /// 値の表示器がまだないので、型だけを表示する。中身は `_ : ` を除いた、診断と同じ形の型の表示である。
+    TypeOnly(String),
 }
 
 /// 1つの宣言の型検査の結果。
@@ -262,6 +288,26 @@ pub(crate) fn test_program(text: &str) -> eml_hir::Program {
 #[cfg(test)]
 pub(crate) fn test_program_with_files(text: &str) -> (eml_hir::Program, SourceFiles) {
     let (loaded, _) = eml_hir::load("test.em", text, &NoModules);
+    let (def_map, _) = eml_hir::def_map(&loaded.modules);
+    let program = eml_hir::lower(&def_map, &loaded.modules).0;
+    (program, loaded.files)
+}
+
+/// 単体テストのための REPL のセッションの `Program`。`inputs` を入力 1, 2, … として読む。
+#[cfg(test)]
+pub(crate) fn test_session(inputs: &[&str]) -> (eml_hir::Program, SourceFiles) {
+    let inputs: Vec<eml_hir::SessionInput> = inputs
+        .iter()
+        .zip(1..)
+        .map(|(&text, number)| eml_hir::SessionInput { number, text })
+        .collect();
+    let (loaded, _, _) = eml_hir::load_session(
+        eml_hir::STD,
+        &inputs,
+        "",
+        &NoModules,
+        &eml_hir::ImportCache::default(),
+    );
     let (def_map, _) = eml_hir::def_map(&loaded.modules);
     let program = eml_hir::lower(&def_map, &loaded.modules).0;
     (program, loaded.files)

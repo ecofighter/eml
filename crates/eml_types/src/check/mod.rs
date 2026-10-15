@@ -2,9 +2,9 @@ use std::collections::{HashMap, HashSet};
 
 use eml_diagnostics::{Diagnostic, Label, SourceFiles};
 use eml_hir::{
-    ClassId, Constructor, Function, FunctionId, FunctionKind, Generics, InstanceId, InstanceOrigin,
-    ItemMap, Method, Operation, Program, RowRef, Signature, TypeDefKind, TypeRef, TypeRefId,
-    TypeRefKind, TypeVarId, ValueItem,
+    Binding, ClassId, Constructor, Function, FunctionId, FunctionKind, Generics, InstanceId,
+    InstanceOrigin, ItemMap, Method, Operation, Program, RowRef, Signature, TypeDefKind, TypeRef,
+    TypeRefId, TypeRefKind, TypeVarId, ValueItem,
 };
 use la_arena::Arena;
 
@@ -20,8 +20,8 @@ use crate::store::{EffectLabel, Lin, TypeKind, TypeStore};
 use crate::table::{Exporter, RigidVar, Row, Table, TyShape};
 use crate::ty::Linearity;
 use crate::{
-    BodyTypes, DeclType, Instantiation, RowYield, TypedProgram, Uniform, Update, carry, codes,
-    exhaustive, scc, uniform, usage,
+    BodyTypes, DeclType, InputType, Instantiation, RowYield, TypedProgram, Uniform, Update, carry,
+    codes, exhaustive, scc, uniform, usage,
 };
 use constraints::{Failure, show_constraint, solve};
 
@@ -29,6 +29,7 @@ mod body;
 mod constraints;
 mod field;
 mod handle;
+mod input;
 mod report;
 
 use body::BodyCheck;
@@ -42,6 +43,8 @@ pub(crate) struct Signatures {
     pub operations: ItemMap<Operation, Shape>,
     pub constructors: ItemMap<Constructor, Shape>,
     pub methods: ItemMap<Method, Shape>,
+    /// REPL の `let` の束縛の型。束縛を作った入力の関数を書き出したときに入る (`input::finish_input`)。
+    pub bindings: ItemMap<Binding, Shape>,
 }
 
 impl Signatures {
@@ -51,8 +54,7 @@ impl Signatures {
             ValueItem::Operation(id) => self.operations.get(id),
             ValueItem::Constructor(id) => self.constructors.get(id),
             ValueItem::Method(id) => self.methods.get(id),
-            // REPL の `let` の束縛の型は Task 9 で検査する
-            ValueItem::Binding(_) => None,
+            ValueItem::Binding(id) => self.bindings.get(id),
         }
     }
 }
@@ -90,7 +92,7 @@ pub(crate) fn check_module(
     // (docs/implementation/architecture.md の「`eml_types` の内部」)
     let mut types = TypeStore::new(program);
     check_instances(program, &context, &mut types, &mut diagnostics);
-    let signatures = signatures(program, &context);
+    let mut signatures = signatures(program, &context);
     let mut schemes = declaration_schemes(program, &context, &signatures);
     let main = program.main();
     if let Some(id) = main {
@@ -110,11 +112,22 @@ pub(crate) fn check_module(
     let mut checked = HashSet::new();
     let mut unreliable = HashSet::new();
     let mut violated = Vec::new();
+    let mut inputs = ItemMap::default();
     for component in &scc::components(program) {
         let mut pending: Vec<(FunctionId, PendingBody<'_>)> = Vec::new();
         for &id in component {
-            if let Some((body, found)) = check_body(program, &context, &signatures, id, &mut types)
-            {
+            let result = match program[id].kind {
+                FunctionKind::Input(kind) => Some(input::check_input(
+                    program,
+                    &context,
+                    &signatures,
+                    id,
+                    kind,
+                    &mut types,
+                )),
+                _ => check_body(program, &context, &signatures, id, &mut types),
+            };
+            if let Some((body, found)) = result {
                 diagnostics.extend(found);
                 checked.insert(id);
                 if !body.reliable {
@@ -143,8 +156,26 @@ pub(crate) fn check_module(
         for (member, (id, body)) in pending.into_iter().enumerate() {
             // 宣言自身の変数の畳み込みは、この SCC の解が残した新しいスキームで決める
             let scheme = &schemes[&ValueItem::Function(id)];
-            let kinds = BodyKinds::new(&lin, member, scheme, signatures.functions[id].lin_vars);
+            // 入力の関数は宣言の型を持たず、宣言自身の Kind 変数もない
+            let lin_vars = signatures
+                .functions
+                .get(id)
+                .map_or(0, |shape| shape.lin_vars);
+            let kinds = BodyKinds::new(&lin, member, scheme, lin_vars);
             let (body_types, body_joins) = export_body(body, kinds, &mut types);
+            if let FunctionKind::Input(kind) = program[id].kind {
+                let input = input::finish_input(
+                    program,
+                    id,
+                    kind,
+                    &body_types,
+                    &mut types,
+                    &mut signatures,
+                    &mut schemes,
+                    &mut diagnostics,
+                );
+                inputs.insert(id, input);
+            }
             bodies.insert(id, body_types);
             joins.insert(id, body_joins);
         }
@@ -158,7 +189,7 @@ pub(crate) fn check_module(
         &schemes,
     ));
     diagnostics.extend(report_violations(program, files, &types, violated));
-    let mut typed = typed_program(&signatures, schemes, joins, bodies, types);
+    let mut typed = typed_program(&signatures, schemes, joins, bodies, inputs, types);
     let (uniform, found) = uniform::uniform(program, &typed.types, &typed.decls, &typed.bodies);
     typed.uniform = uniform;
     diagnostics.extend(found);
@@ -305,9 +336,14 @@ fn check_derived_fields(
                 break;
             };
             spine = ret;
-            let Err(Failure::NoInstance { root, leaf }) =
-                solve(program, &table, (instance.class, param), &givens, false)
-            else {
+            let Err(Failure::NoInstance { root, leaf }) = solve(
+                program,
+                &table,
+                (instance.class, param),
+                &givens,
+                false,
+                false,
+            ) else {
                 continue;
             };
             let mut exporter = Exporter::diagnostic(&table, types);
@@ -405,6 +441,7 @@ pub(crate) fn signatures(program: &Program, context: &Context) -> Signatures {
         operations,
         constructors,
         methods,
+        bindings: ItemMap::default(),
     }
 }
 
@@ -457,7 +494,7 @@ pub(crate) fn check_body<'c>(
         instances: Vec::new(),
     };
     checker.check_function(own.ty);
-    checker.solve_constraints();
+    checker.solve_constraints(false);
     let typing = checker.typing;
     let instances = checker.instances;
     // 頭が線形な instance (E2010) のメソッドは、頭の値を `Unr` とみなして書いた本体なので、線形性の診断を重ねない
@@ -814,6 +851,7 @@ fn typed_program(
     mut schemes: HashMap<ValueItem, KindScheme>,
     mut joins: HashMap<FunctionId, Vec<Vec<u32>>>,
     bodies: ItemMap<Function, BodyTypes>,
+    inputs: ItemMap<Function, InputType>,
     mut types: TypeStore,
 ) -> TypedProgram {
     let shapes = signatures
@@ -837,6 +875,12 @@ fn typed_program(
                 .methods
                 .iter()
                 .map(|(id, shape)| (ValueItem::Method(id), shape)),
+        )
+        .chain(
+            signatures
+                .bindings
+                .iter()
+                .map(|(id, shape)| (ValueItem::Binding(id), shape)),
         );
     let decls = shapes
         .map(|(decl, shape)| {
@@ -866,6 +910,7 @@ fn typed_program(
         decls,
         bodies,
         uniform: Uniform::default(),
+        inputs,
     }
 }
 

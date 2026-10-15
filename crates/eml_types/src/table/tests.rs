@@ -797,3 +797,37 @@ fn a_walk_cannot_start_inside_another() {
     let _outer = table.start_walk();
     let _inner = table.start_walk();
 }
+
+#[test]
+fn unsolved_lists_free_variables_and_open_rows_once() {
+    let context = test_context();
+    let mut table = Table::new(&context);
+    let a = table.fresh_var();
+    let b = table.fresh_var();
+    let tail = table.fresh_row_var();
+    let open = Row {
+        labels: Vec::new(),
+        tail: Tail::Var(tail),
+    };
+    let f = table.function(a, open, b);
+    let pair = table.tuple(vec![f, a]);
+    assert_eq!(table.unify(b, table.int), Ok(()));
+    let (vars, rows) = table.unsolved([pair, f]);
+    assert_eq!(vars, vec![table.resolve(a)]);
+    assert_eq!(rows, vec![tail]);
+}
+
+#[test]
+fn a_closed_row_variable_reads_as_the_empty_row() {
+    let context = test_context();
+    let mut table = Table::new(&context);
+    let tail = table.fresh_row_var();
+    let open = Row {
+        labels: Vec::new(),
+        tail: Tail::Var(tail),
+    };
+    let f = table.function(table.int, open, table.int);
+    assert_eq!(table.close_row(tail), Ok(()));
+    assert_eq!(shown(&table, f), "Int -> Int");
+    assert_eq!(table.unsolved([f]), (Vec::new(), Vec::new()));
+}

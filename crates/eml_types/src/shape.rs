@@ -449,6 +449,76 @@ pub(crate) fn constructor_shape(
     close(&table, ty, &rigids)
 }
 
+/// 書き出した閉じた型を、型変数も Kind 変数も持たない閉じた形にする。REPL の入力の関数と `let` の束縛は、推論で
+/// 決めた型を宣言の型にするので、後の入力の本体はこの形を参照する
+/// (docs/superpowers/specs/2026-10-15-s11a-repl-session-design.md の「型検査」)。入力の型は Kind を解いた後の
+/// 定数の矢印と閉じた row だけを持つ。型の表は部分を共有するが、閉じた形は木なので、共有された部分は展開する。
+pub(crate) fn closed_shape(types: &TypeStore, ty: TypeId) -> Shape {
+    Shape {
+        ty: closed_ty(types, ty),
+        rigids: Vec::new(),
+        rows: Vec::new(),
+        lin_vars: 0,
+        mult_vars: 0,
+    }
+}
+
+fn closed_ty(types: &TypeStore, ty: TypeId) -> ShapeTy {
+    match types.kind(ty) {
+        TypeKind::Con { id, args } => {
+            ShapeTy::Con(*id, args.iter().map(|&arg| closed_ty(types, arg)).collect())
+        }
+        TypeKind::Tuple(elements) => ShapeTy::Tuple(
+            elements
+                .iter()
+                .map(|&element| closed_ty(types, element))
+                .collect(),
+        ),
+        TypeKind::Fn {
+            param,
+            lin,
+            effects,
+            tail,
+            ret,
+        } => ShapeTy::Fn {
+            param: Box::new(closed_ty(types, *param)),
+            lin: ShapeLin::Known(match lin {
+                Lin::Unr => Linearity::Unr,
+                Lin::Lin => Linearity::Lin,
+                Lin::Poly | Lin::Var(_) => {
+                    unreachable!("an input's type has no Kind variables after solving")
+                }
+            }),
+            row: ShapeRow {
+                labels: effects
+                    .iter()
+                    .map(|label| {
+                        let args = label
+                            .args
+                            .iter()
+                            .map(|&arg| closed_ty(types, arg))
+                            .collect();
+                        (label.id, args)
+                    })
+                    .collect(),
+                tail: match tail {
+                    None => ShapeTail::Closed,
+                    Some(RowTail::Error) => ShapeTail::Error,
+                    Some(RowTail::Flexible | RowTail::Rigid(_)) => {
+                        unreachable!("an input closes its unsolved rows and has no row variables")
+                    }
+                },
+            },
+            ret: Box::new(closed_ty(types, *ret)),
+        },
+        // 決まらない型変数は、誤り (`let`) か `Unit` (式) にしてある。誤りの跡は `Error` として扱う
+        TypeKind::Flexible(_) | TypeKind::Error => ShapeTy::Error,
+        TypeKind::Rigid(_) | TypeKind::OpVar(_, _) => {
+            unreachable!("an input's type has no type variables of a signature or a clause")
+        }
+    }
+}
+
 /// 表に下ろした型を閉じた形にする。Kind 変数の番号は、`Table::kind_vars` と同じ順 (外側から、矢印の `m`、row の `σ`、
 /// 引数、ラベルの型引数、戻り値の順) にたどって、最初に現れた順に振る。型に現れない rigid 変数の Kind 変数は、その後に
 /// 振る。
