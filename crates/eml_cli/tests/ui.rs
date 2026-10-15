@@ -4,9 +4,12 @@
 
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::sync::{Mutex, MutexGuard, PoisonError};
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
-use eml_cli::{FsProvider, RunConfig, RuntimeError, Session, VmFault, capture_host, execute};
+use eml_cli::{
+    Control, FsProvider, RunConfig, RuntimeError, Session, VmFault, capture_host, default_limits,
+    execute,
+};
 use eml_diagnostics::{has_errors, render};
 use eml_rt::Fault;
 
@@ -128,15 +131,17 @@ fn compile(path: &Path, suffix: &str) -> (eml_lir::Program, PathBuf, String) {
     (program, root, stderr)
 }
 
-/// 止める理由のビットは `Control::clear` でしか下りないので、実行ごとに新しい `Control` を持つ設定を作る。使い回すと、
-/// 前の実行で立ったビットで次の実行がすぐ止まる。
+/// `eml run` と同じ既定の上限で流す。止める理由のビットは `Control::clear` でしか下りないので、実行ごとに新しい
+/// `Control` を持つ設定を作る。使い回すと、前の実行で立ったビットで次の実行がすぐ止まる。
 fn execute_in(
     program: &eml_lir::Program,
     root: &Path,
     debug_heap: bool,
 ) -> (String, Result<(), RuntimeError>) {
     let (host, out) = capture_host(root.to_path_buf());
-    let config = RunConfig::default().with_debug_heap(debug_heap);
+    let config = RunConfig::default()
+        .with_debug_heap(debug_heap)
+        .with_control(Arc::new(Control::new(default_limits())));
     let result = execute(program, &config, host).map(drop);
     (out.contents(), result)
 }

@@ -225,3 +225,36 @@ pub fn execute(
 ) -> Result<RunStats, RuntimeError> {
     eml_vm::execute(program, config, host)
 }
+
+/// `eml run` の既定の上限。深さは 2^27 語 (1 GiB 分のスタック) で、OCaml 5 のスタックの既定の上限と同じ量である。
+/// 確保量は物理メモリの 80% で、機械を使い切る前に分かる誤りで止める。物理メモリを読めない OS では上限を置かない。
+/// `evv` はヒープの物体なので、確保量の上限で抑えられる (docs/spec/object-model.md の「実行の制御」)。
+#[cfg(feature = "run")]
+pub fn default_limits() -> Limits {
+    Limits {
+        max_depth: 1 << 27,
+        max_bytes: physical_memory().map_or(usize::MAX, |bytes| bytes / 5 * 4),
+        ..Limits::default()
+    }
+}
+
+/// `eml_rt` は vstd だけに依存したままにするため、OS に問い合わせるのはここである。`src/` の `unsafe` の呼び出しは
+/// この関数の中だけに置く。
+#[cfg(all(feature = "run", unix))]
+fn physical_memory() -> Option<usize> {
+    // sysconf は名前のほかに前提を持たず、読めなければ -1 を返す
+    let (pages, page_size) = unsafe {
+        (
+            libc::sysconf(libc::_SC_PHYS_PAGES),
+            libc::sysconf(libc::_SC_PAGESIZE),
+        )
+    };
+    usize::try_from(pages)
+        .ok()?
+        .checked_mul(usize::try_from(page_size).ok()?)
+}
+
+#[cfg(all(feature = "run", not(unix)))]
+fn physical_memory() -> Option<usize> {
+    None
+}

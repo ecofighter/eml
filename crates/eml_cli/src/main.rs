@@ -1,9 +1,10 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
+use std::sync::Arc;
 
 use clap::{Parser, Subcommand};
-use eml_cli::{FsProvider, RunConfig, Session, stdio_host};
+use eml_cli::{Control, FsProvider, RunConfig, Session, default_limits, stdio_host};
 use eml_diagnostics::{has_errors, render};
 
 #[derive(Parser)]
@@ -43,10 +44,16 @@ fn main() -> ExitCode {
             }
         }
         Command::Run { debug_heap, file } => {
+            // 読み込みとコンパイルの間の Ctrl-C も、シグナルで殺されずにこのハンドラが受ける。そこで立てたビットは、
+            // 実行の最初の安全点で読まれる
+            let control = Arc::new(Control::new(default_limits()));
+            interrupt_on_sigint(Arc::clone(&control));
             let Some(session) = load(&file) else {
                 return ExitCode::from(2);
             };
-            let config = RunConfig::default().with_debug_heap(debug_heap);
+            let config = RunConfig::default()
+                .with_debug_heap(debug_heap)
+                .with_control(control);
             // 警告がプログラムの出力の後に出ないように、実行の前に表示する。
             let compiled = session.compile();
             eprint!("{}", render(&compiled.diagnostics, session.files()));
@@ -58,11 +65,27 @@ fn main() -> ExitCode {
                 Ok(_) => ExitCode::SUCCESS,
                 Err(error) => {
                     eprintln!("runtime error: {error}");
-                    ExitCode::from(1)
+                    // 130 は、シェルが SIGINT で終わった子に報告する値である
+                    ExitCode::from(if error.interrupted() { 130 } else { 1 })
                 }
             }
         }
     }
+}
+
+/// 1回目の SIGINT は `INTERRUPT` を立て、VM を次の安全点で止める。2回目はその場で終わり、まだ書いていない出力は
+/// 捨てる。安全点に来ないプログラム (入力を待つ `Fs.read_all` など) を止めるための道である。`ctrlc` はハンドラを専用の
+/// スレッドで順に呼ぶので、2つの SIGINT が同時にビットを読み書きすることはない (docs/spec/object-model.md の
+/// 「実行の制御」)。
+fn interrupt_on_sigint(control: Arc<Control>) {
+    ctrlc::set_handler(move || {
+        if control.stop_bits() & Control::INTERRUPT == 0 {
+            control.interrupt();
+        } else {
+            std::process::exit(130);
+        }
+    })
+    .expect("the SIGINT handler is installed once, before anything else");
 }
 
 /// 入口が読めないことは、読み込みの段に入る前に使い方の誤りとして報告する。依存先が読めないことは E1026 である。

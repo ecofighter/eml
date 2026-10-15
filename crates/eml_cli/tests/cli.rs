@@ -198,3 +198,163 @@ fn a_runtime_error_in_fast_mode_exits_with_one() {
         "{stderr}"
     );
 }
+
+/// 終わらない自己末尾呼び出しのループで、行を出力し続ける。
+#[cfg(unix)]
+const SPIN: &str = "\
+spin : Int -> <IO> Unit
+spin n =
+  println (show n)
+  spin (n + 1)
+
+main : Unit -> <IO> Unit
+main () = spin 0
+";
+
+/// 名前付きパイプ `fifo` を開いて全部読む。書き手が何も書かずに開いたままなら、読みの中で待ち続ける。
+#[cfg(unix)]
+const READ_FIFO: &str = "\
+main : Unit -> <IO> Unit
+main () =
+  let f = Fs.open \"fifo\"
+  let (f, text) = Fs.read_all f
+  Fs.close f
+  println text
+";
+
+/// テストが止まらずに CI を待たせないための締め切り。
+#[cfg(unix)]
+const DEADLINE: std::time::Duration = std::time::Duration::from_secs(10);
+
+#[cfg(unix)]
+fn spawn_run(dir: &Path, stdout: std::process::Stdio) -> std::process::Child {
+    Command::new(env!("CARGO_BIN_EXE_eml"))
+        .args(["run", "main.em"])
+        .current_dir(dir)
+        .stdout(stdout)
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .unwrap()
+}
+
+#[cfg(unix)]
+fn sigint(child: &std::process::Child) {
+    let pid = libc::pid_t::try_from(child.id()).unwrap();
+    // 子はまだ待っていないので、終わっていても pid はほかのプロセスに使い回されていない
+    assert_eq!(unsafe { libc::kill(pid, libc::SIGINT) }, 0);
+}
+
+/// 締め切りを過ぎたら子を殺して、テストを失敗にする。
+#[cfg(unix)]
+fn kill_after_deadline(child: &mut std::process::Child, what: &str) -> ! {
+    let _ = child.kill();
+    let _ = child.wait();
+    panic!("{what} within {DEADLINE:?}");
+}
+
+#[cfg(unix)]
+fn stderr_of(child: &mut std::process::Child) -> String {
+    use std::io::Read;
+    let mut stderr = String::new();
+    child
+        .stderr
+        .take()
+        .unwrap()
+        .read_to_string(&mut stderr)
+        .unwrap();
+    stderr
+}
+
+/// 1回目の SIGINT で、VM は次の安全点で止まり、終了コード 130 で終わる。標準出力はパイプなので 64 KiB ごとにしか
+/// 書かれない。パイプが詰まると子は `write` の中で止まって安全点に来ないので、別のスレッドで読み続ける。
+#[cfg(unix)]
+#[test]
+fn an_interrupt_stops_a_running_program_with_130() {
+    use std::io::Read;
+    use std::time::Instant;
+
+    let dir = temp_project("cli-sigint-loop", &[("main.em", SPIN)]);
+    let deadline = Instant::now() + DEADLINE;
+    let mut child = spawn_run(&dir, std::process::Stdio::piped());
+    let mut stdout = child.stdout.take().unwrap();
+    let (first_output, arrived) = std::sync::mpsc::channel();
+    let reader = std::thread::spawn(move || {
+        let mut buffer = vec![0; 64 * 1024];
+        while let Ok(n @ 1..) = stdout.read(&mut buffer) {
+            let _ = first_output.send(n);
+        }
+    });
+    if arrived
+        .recv_timeout(deadline.saturating_duration_since(Instant::now()))
+        .is_err()
+    {
+        kill_after_deadline(&mut child, "no output arrived");
+    }
+    sigint(&child);
+    let status = loop {
+        if let Some(status) = child.try_wait().unwrap() {
+            break status;
+        }
+        if Instant::now() >= deadline {
+            kill_after_deadline(&mut child, "the program did not stop");
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    };
+    reader.join().unwrap();
+    let stderr = stderr_of(&mut child);
+    std::fs::remove_dir_all(&dir).unwrap();
+    assert_eq!(status.code(), Some(130), "{stderr}");
+    assert!(stderr.contains("interrupted"), "{stderr}");
+}
+
+/// 読みの中で待つプログラムは安全点に来ない。2回目の SIGINT でハンドラがその場で終わらせ、終了コードは 130 である。
+/// 続けて届いた2つの SIGINT は1つにまとまることがあるので、終わるまで 100 ms ごとに送り続ける。
+#[cfg(unix)]
+#[test]
+fn repeated_interrupts_end_a_program_waiting_in_a_read_with_130() {
+    use std::os::unix::ffi::OsStrExt;
+    use std::os::unix::fs::OpenOptionsExt;
+    use std::time::{Duration, Instant};
+
+    let dir = temp_project("cli-sigint-fifo", &[("main.em", READ_FIFO)]);
+    let fifo = dir.join("fifo");
+    let path = std::ffi::CString::new(fifo.as_os_str().as_bytes()).unwrap();
+    assert_eq!(unsafe { libc::mkfifo(path.as_ptr(), 0o600) }, 0);
+    let deadline = Instant::now() + DEADLINE;
+    let mut child = spawn_run(&dir, std::process::Stdio::null());
+    // 子の `Fs.open` は書き手が開くまで待つ。読み手のいないパイプを書き込み用に非同期で開くと ENXIO なので、開けた
+    // 時点で子は実行を始めている。何も書かずに開いたままにして、子を読みの中で待たせる
+    let writer = loop {
+        match std::fs::OpenOptions::new()
+            .write(true)
+            .custom_flags(libc::O_NONBLOCK)
+            .open(&fifo)
+        {
+            Ok(writer) => break writer,
+            Err(error) if error.raw_os_error() == Some(libc::ENXIO) => {
+                if let Some(status) = child.try_wait().unwrap() {
+                    panic!("the program ended before it opened the pipe: {status}");
+                }
+                if Instant::now() >= deadline {
+                    kill_after_deadline(&mut child, "the program did not open the pipe");
+                }
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            Err(error) => panic!("{error}"),
+        }
+    };
+    let status = loop {
+        sigint(&child);
+        std::thread::sleep(Duration::from_millis(100));
+        if let Some(status) = child.try_wait().unwrap() {
+            break status;
+        }
+        if Instant::now() >= deadline {
+            kill_after_deadline(&mut child, "the program did not end");
+        }
+    };
+    drop(writer);
+    let stderr = stderr_of(&mut child);
+    std::fs::remove_dir_all(&dir).unwrap();
+    assert_eq!(status.code(), Some(130), "{stderr}");
+}
