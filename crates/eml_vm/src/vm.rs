@@ -11,7 +11,6 @@ use crate::code::CodeBase;
 use crate::data;
 use crate::error::VmFault;
 use crate::op::{FINISH, Op, Pc, Slot};
-use crate::prims;
 
 /// 1つのタスクの実行の状態。
 pub struct Task {
@@ -80,10 +79,17 @@ impl Task {
         }
     }
 
-    /// scratch の引数を今の base のスロット 0.. に書き、`f` の先頭へ進む。見出しはそのまま使う。
-    pub(crate) fn enter_in_place<M: Mode>(&mut self, code: &CodeBase<M>, f: u32) {
-        let entry = &code.functions[f as usize];
-        self.reserve(self.base + usize::from(entry.frame_size));
+    /// `slots` の語を scratch に読む。全部読んでから書くので、書き先が読んだスロットと重なってもよい。
+    pub(crate) fn load_scratch(&mut self, slots: impl IntoIterator<Item = Slot>) {
+        self.scratch.clear();
+        for slot in slots {
+            let w = self.get(slot);
+            self.scratch.push(w);
+        }
+    }
+
+    /// scratch の語を今の base のスロット 0.. に書き、scratch を空にする。
+    pub(crate) fn store_scratch(&mut self) {
         let Task {
             stack,
             scratch,
@@ -93,6 +99,13 @@ impl Task {
         for (i, w) in scratch.drain(..).enumerate() {
             stack[*base + i] = w;
         }
+    }
+
+    /// scratch の引数を今の base のスロット 0.. に書き、`f` の先頭へ進む。見出しはそのまま使う。
+    pub(crate) fn enter_in_place<M: Mode>(&mut self, code: &CodeBase<M>, f: u32) {
+        let entry = &code.functions[f as usize];
+        self.reserve(self.base + usize::from(entry.frame_size));
+        self.store_scratch();
         self.frame_size = usize::from(entry.frame_size);
         self.pc = entry.start;
     }
@@ -147,6 +160,9 @@ pub(crate) fn run<M: Mode>(
 }
 
 /// 命令を1つ実行する。`Finish` に着いたら `false` を返す。
+///
+/// 結果のスロットは引数のスロットと同じ色でありうるので (docs/spec/vm.md の「スロットの割り当て」)、どの腕も引数を
+/// 読み終えてから結果を書く。
 #[inline(always)]
 fn step<M: Mode>(
     code: &CodeBase<M>,
@@ -156,6 +172,7 @@ fn step<M: Mode>(
     pc: Pc,
 ) -> Result<bool, VmFault> {
     task.pc = pc + 1;
+    let ops = |at: u32| &code.operands[at as usize..];
     match code.code[pc as usize] {
         Op::Move { dst, src } => task.set(dst, task.get(src)),
         Op::LoadRaw { dst, value } => task.set_raw(dst, value.into()),
@@ -173,14 +190,9 @@ fn step<M: Mode>(
             ctx.poll(task.depth())?;
         }
         Op::TailCall { at } => {
-            let ops = &code.operands[at as usize..];
-            let n = ops[1] as usize;
-            task.scratch.clear();
-            for &slot in &ops[2..2 + n] {
-                let w = task.get(slot as Slot);
-                task.scratch.push(w);
-            }
-            task.enter_in_place(code, ops[0]);
+            let o = ops(at);
+            task.load_scratch(slots(&o[2..2 + o[1] as usize]));
+            task.enter_in_place(code, o[0]);
             ctx.poll(task.depth())?;
         }
         Op::Finish => {
@@ -192,48 +204,28 @@ fn step<M: Mode>(
             ctx.poll(task.depth())?;
         }
         Op::Closure { dst, at } => {
-            let ops = &code.operands[at as usize..];
-            let (f, lin, n) = (ops[0], ops[1] != 0, ops[2] as usize);
-            task.scratch.clear();
-            for &slot in &ops[3..3 + n] {
-                let w = task.get(slot as Slot);
-                task.scratch.push(w);
-            }
+            let o = ops(at);
+            let (f, lin, n) = (o[0], o[1] != 0, o[2] as usize);
+            task.load_scratch(slots(&o[3..3 + n]));
             let w = apply::make_closure(ctx, f, lin, &task.scratch)?;
             task.scratch.clear();
             task.set(dst, w);
         }
-        Op::Apply { dst, at } | Op::Clause { dst, at } => {
-            let clause = matches!(code.code[pc as usize], Op::Clause { .. });
-            let callee = load_args(code, task, at);
+        Op::Apply { dst, at } => {
             let target = apply::Target::Frame { ret: task.pc, dst };
-            apply::apply(code, ctx, task, callee, target, clause)?;
-            ctx.poll(task.depth())?;
+            apply_call(code, ctx, task, at, target, false)?;
         }
-        Op::TailApply { at } | Op::TailClause { at } => {
-            let clause = matches!(code.code[pc as usize], Op::TailClause { .. });
-            let callee = load_args(code, task, at);
-            apply::apply(code, ctx, task, callee, apply::Target::Tail, clause)?;
-            ctx.poll(task.depth())?;
+        Op::Clause { dst, at } => {
+            let target = apply::Target::Frame { ret: task.pc, dst };
+            apply_call(code, ctx, task, at, target, true)?;
         }
+        Op::TailApply { at } => apply_call(code, ctx, task, at, apply::Target::Tail, false)?,
+        Op::TailClause { at } => apply_call(code, ctx, task, at, apply::Target::Tail, true)?,
         Op::TailSelf { at } => {
-            let ops = &code.operands[at as usize..];
-            let n = ops[1] as usize;
-            task.scratch.clear();
-            for &slot in &ops[2..2 + n] {
-                let w = task.get(slot as Slot);
-                task.scratch.push(w);
-            }
-            let Task {
-                stack,
-                scratch,
-                base,
-                ..
-            } = task;
-            for (i, w) in scratch.drain(..).enumerate() {
-                stack[*base + i] = w;
-            }
-            task.pc = ops[0];
+            let o = ops(at);
+            task.load_scratch(slots(&o[2..2 + o[1] as usize]));
+            task.store_scratch();
+            task.pc = o[0];
             // バイトコードに後ろ向きの辺ができるので、ここも安全点にする (docs/spec/vm.md の「呼び出しと戻り」)
             ctx.poll(task.depth())?;
         }
@@ -305,26 +297,137 @@ fn step<M: Mode>(
             task.set_raw(dst, n);
         }
         Op::Extern { dst, at } => extern_call(code, ctx, task, dst, at)?,
-        other => {
-            if !prims::step(code, ctx, task, other)? {
-                unreachable!("every instruction has an arm");
-            }
+        // 基本操作 (docs/spec/lir.md の「基本操作」) は `Ctx` の同じ名前のメソッドを呼ぶ。引数の語は、LIR の所有の規則に
+        // より VM が持つ参照か借りた語で、基本操作の契約 (docs/spec/object-model.md の「基本操作の契約」) のとおりに
+        // 渡す。借用の引数は `Ctx` が手放さない。VM は基本操作の合間に `Ctx` の持つ語に触れない
+        Op::EvvGet { dst } => {
+            let w = unsafe { ctx.evv_get() }?;
+            task.set(dst, w);
+        }
+        Op::EvvSet { dst, l } => {
+            unsafe { ctx.evv_set(task.get(l)) }?;
+            task.set(dst, Word::UNIT);
+        }
+        Op::EvvPush { dst, l, e } => {
+            let w = unsafe { ctx.evv_push(task.get(l), task.get(e)) }?;
+            task.set(dst, w);
+        }
+        Op::EvvMask { dst, at } => {
+            let o = ops(at);
+            let list = &code.effect_lists[o[0] as usize..(o[0] + o[1]) as usize];
+            let w = unsafe { ctx.evv_mask(list, task.get(o[2] as Slot)) }?;
+            task.set(dst, w);
+        }
+        Op::EvNew { dst, at } => {
+            let o = ops(at);
+            let (state, outer) = (task.get(o[2] as Slot), task.get(o[3] as Slot));
+            let w = unsafe { ctx.ev_new(o[0] as u16, o[1] as usize, state, outer) }?;
+            task.set(dst, w);
+        }
+        Op::EvSetClause { dst, at } => {
+            let o = ops(at);
+            let (ev, entry) = (task.get(o[0] as Slot), task.get(o[2] as Slot));
+            unsafe { ctx.ev_set_clause(ev, o[1] as usize, entry) }?;
+            task.set(dst, Word::UNIT);
+        }
+        Op::EvRenew { dst, ev, state } => {
+            let w = unsafe { ctx.ev_renew(task.get(ev), task.get(state)) }?;
+            task.set(dst, w);
+        }
+        Op::EvLookup { dst, effect } => {
+            let w = unsafe { ctx.ev_lookup(effect) }?;
+            task.set(dst, w);
+        }
+        Op::EvClause { dst, ev, op } => {
+            let w = unsafe { ctx.ev_clause(task.get(ev), op.into()) }?;
+            task.set(dst, w);
+        }
+        Op::EvEvv { dst, ev } => {
+            let w = unsafe { ctx.ev_evv(task.get(ev)) }?;
+            task.set(dst, w);
+        }
+        Op::EvTakeState { dst, ev } => {
+            let w = unsafe { ctx.ev_take_state(task.get(ev)) }?;
+            task.set(dst, w);
+        }
+        Op::EvSetState { dst, ev, s } => {
+            unsafe { ctx.ev_set_state(task.get(ev), task.get(s)) }?;
+            task.set(dst, Word::UNIT);
+        }
+        Op::Yielding { dst } => {
+            let r = ctx.yielding();
+            task.set_raw(dst, r);
+        }
+        Op::YieldStatus { dst, ev } => {
+            let r = ctx.yield_status(task.get(ev));
+            task.set_raw(dst, r);
+        }
+        Op::YieldTo { dst, at } => {
+            let o = ops(at);
+            let (ev, clause, k) = (
+                task.get(o[0] as Slot),
+                task.get(o[1] as Slot),
+                task.get(o[2] as Slot),
+            );
+            unsafe { ctx.yield_to(ev, clause, k) }?;
+            task.set(dst, Word::UNIT);
+        }
+        Op::YieldAbort { dst, at } => {
+            let o = ops(at);
+            let (ev, clause, k) = (
+                task.get(o[0] as Slot),
+                task.get(o[1] as Slot),
+                task.get(o[2] as Slot),
+            );
+            unsafe { ctx.yield_abort(ev, clause, k) }?;
+            task.set(dst, Word::UNIT);
+        }
+        Op::YieldContTake { dst } => {
+            let w = ctx.yield_cont_take()?;
+            task.set(dst, w);
+        }
+        Op::YieldContSet { dst, k } => {
+            unsafe { ctx.yield_cont_set(task.get(k)) }?;
+            task.set(dst, Word::UNIT);
+        }
+        Op::YieldFinish { dst } => {
+            let w = unsafe { ctx.yield_finish() }?;
+            task.set(dst, w);
+        }
+        Op::Dummy { dst } => {
+            let w = ctx.heap().dummy();
+            task.set(dst, w);
         }
     }
     Ok(true)
 }
 
+/// オペランドの表のスロットの並び。
+fn slots(list: &[u32]) -> impl Iterator<Item = Slot> {
+    list.iter().map(|&slot| slot as Slot)
+}
+
+/// `apply` と `clause` の命令。`clause` は照合した命令の種類から受ける。
+fn apply_call<M: Mode>(
+    code: &CodeBase<M>,
+    ctx: &mut Ctx<M>,
+    task: &mut Task,
+    at: u32,
+    target: apply::Target,
+    clause: bool,
+) -> Result<(), VmFault> {
+    let callee = load_args(code, task, at);
+    apply::apply(code, ctx, task, callee, target, clause)?;
+    ctx.poll(task.depth())?;
+    Ok(())
+}
+
 /// `[呼ばれる値, n, 引数…]` から引数を scratch に移し、呼ばれる値を返す。全部読んでから書くので、結果のスロットが
 /// オペランドのスロットと同じ色でもよい (docs/spec/vm.md の「スロットの割り当て」)。
 fn load_args<M: Mode>(code: &CodeBase<M>, task: &mut Task, at: u32) -> Word {
-    let ops = &code.operands[at as usize..];
-    let n = ops[1] as usize;
-    task.scratch.clear();
-    for &slot in &ops[2..2 + n] {
-        let w = task.get(slot as Slot);
-        task.scratch.push(w);
-    }
-    task.get(ops[0] as Slot)
+    let o = &code.operands[at as usize..];
+    task.load_scratch(slots(&o[2..2 + o[1] as usize]));
+    task.get(o[0] as Slot)
 }
 
 /// 呼ぶ側の上に呼ばれる側のフレームを作り、引数を写して先頭へ進む。呼ぶ側のスロットはスタックに残るので、`saved` は

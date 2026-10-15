@@ -161,10 +161,6 @@ pub(crate) fn apply_rest<M: Mode>(
 ) -> Result<(), VmFault> {
     let callee = task.get(0);
     let n = task.get(1).bits();
-    task.scratch.clear();
-    for i in 0..n {
-        let w = task.get((2 + i) as Slot);
-        task.scratch.push(w);
-    }
+    task.load_scratch((2..2 + n).map(|i| i as Slot));
     apply(code, ctx, task, callee, Target::Tail, false)
 }
