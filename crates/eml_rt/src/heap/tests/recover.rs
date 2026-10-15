@@ -1,4 +1,4 @@
-//! 実行時エラーの後の回復 (docs/superpowers/specs/2026-10-16-s11b-recovery-design.md の「回復」)。根から届く物体を
+//! 実行時エラーの後の回復 (docs/spec/object-model.md の「回復」)。根から届く物体を
 //! 新しいヒープに写し、古いヒープを丸ごと捨てる。
 
 use std::sync::Arc;

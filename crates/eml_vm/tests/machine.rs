@@ -292,7 +292,7 @@ fn second() -> unit {
 
 /// 続けられる誤りの後は、根から届く物体を新しいヒープに写して古いヒープを捨てる。evv と yield の状態は空に戻るので、
 /// 次の実行は終わりの確かめを通り、スタックと evv に残った物体も消えるので、閉じるときのリークの検査も通る
-/// (docs/superpowers/specs/2026-10-16-s11b-recovery-design.md の「回復」)。
+/// (docs/spec/object-model.md の「回復」)。
 #[test]
 fn a_continuable_error_recovers_the_heap_for_the_next_run() {
     let first = "\

@@ -277,9 +277,9 @@ Core IR のテキストは `eml_core_ir::pretty` が書き、`eml_core_ir::parse
 - harness は、入力ごとに、最後の行より前の行までのテキストが `input_status` で `Incomplete`、全体が `Complete` であることを確かめる ([レイアウト規則](../spec/layout.md) の「REPL の入力の終わり」)。端末と同じ形で入力の終わりの規則を確かめるためである。入力を終える空行は含めずに `eval` に渡す
 - スナップショットは、入力ごとに、入力の行、表示、診断 (`eml_test_support::full_with_paths` の形)、実行時エラーを並べ、最後に `close` の結果を置く。名前は最上位のディレクトリからの相対パスで決まる (`basics/expressions.repl` は `integration__repl__transcripts@basics__expressions.repl.snap`)
 - 検査モードで流した後に速いモードでも流し、入力ごとの表示が同じことを確かめる。`close` のリークは検査モードだけが数えるので比べない。セッションを使えなくする誤り (`Outcome::Broken`) が出たトランスクリプトは、速いモードで流さない (上の「2つのモードで流す」)
-- 上限は `eml run` と同じ `default_limits()` で、1つの `Control` をトランスクリプト全体で使う。`Repl::eval` が入力ごとに止める理由のビットを下ろすためである。確保量の上限の後に続けられることは、上限を小さくする必要があるので、`crates/eml_cli/tests/api.rs` で確かめる。`api.rs` は、`Repl: Send`、空の入力、受け付けなかった入力の後にセッションが変わらないこと、import したモジュールのテキストを読み直さないこと、警告を一度だけ返すことも確かめる
+- 上限は `eml run` と同じ `default_limits()` で、1つの `Control` をトランスクリプト全体で使う。`Repl::eval` が入力ごとに止める理由のビットを下ろすためである。確保量の上限の後に続けられることは、上限を小さくする必要があるので、`crates/eml_cli/tests/api.rs` で確かめる。`api.rs` は、`Repl: Send`、空の入力、受け付けなかった入力の後にセッションが変わらないこと、import したモジュールのテキストを読み直さないこと、警告を一度だけ返すこと、割り込まれた入力の後に続けられること、割り込みで止まった入力が開いた `File` が `eval` から戻った時点で閉じていることも確かめる
 - insta の glob のテストは、UI テストとトランスクリプトのテストで1つのロック (`tests/common` の `glob_lock`) を共有し、1つずつ走らせる。insta の失敗の数はプロセスに1つで、並んで走ると、ほかのテストの失敗を自分の失敗として報告するためである
-- S11a は、実行時エラーの後に残った物体を回収しないので、そうしたトランスクリプトの `close` はリークを報告する。S11b の回復で 0 になる (期待値の変更)
+- 実行時エラーの後の回復が、失敗した実行の残した物体を捨てる ([オブジェクトモデル](../spec/object-model.md) の「回復」)。そのため、検査モードの `close` はどのトランスクリプトでもリークを報告せず、スナップショットの末尾は `no leaks` になる
 - 各段の REPL の単体のテストは、セッションの入力を並べて組み立てる。`eml_types` は `#[cfg(test)]` の `test_session` で、`eml_core_ir` は `tests/common` の `session_core_text` と `session_lir_text` で、`load_session` から順に段を呼ぶ
 
 ## 文書の引用の検査

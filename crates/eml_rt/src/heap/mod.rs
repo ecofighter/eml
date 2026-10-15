@@ -716,7 +716,7 @@ impl<M: Mode> Heap<M> {
     }
 
     /// 同じ `Control`、worker、付けた塊を持つ空のヒープ。回復が写し先にする
-    /// (docs/superpowers/specs/2026-10-16-s11b-recovery-design.md の「`Ctx::recover`」)。
+    /// (docs/spec/object-model.md の「回復」)。
     pub(crate) fn fresh(&self) -> (r: Heap<M>)
         requires
             self.wf(),
@@ -973,7 +973,7 @@ impl<M: Mode> Heap<M> {
             assert(!self.core.region_has(h@.addr));
         }
         // 呼ぶ側が書く前の語も初期化しておく。`Data` の語は容量の終わりまで書いてある不変条件のためである
-        // (docs/superpowers/specs/2026-10-16-s11b-recovery-design.md の「走査しない語」)
+        // (docs/spec/object-model.md の「確保と解放」)
         fill_zero(
             h,
             Tracked(&mut perm),

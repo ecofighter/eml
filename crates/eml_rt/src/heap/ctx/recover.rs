@@ -1,4 +1,4 @@
-//! 実行時エラーの後の回復 (docs/superpowers/specs/2026-10-16-s11b-recovery-design.md の「`Ctx::recover`」)。
+//! 実行時エラーの後の回復 (docs/spec/object-model.md の「回復」)。
 //!
 //! 根から届く物体を新しいヒープに写し、古いヒープを丸ごと捨てる。捨てたスタックと evv と yield の語、token の箱は
 //! 古いヒープと一緒に消え、届かない `Foreign` の物体は古いヒープの破棄で閉じ、ページはすべて `Control` に戻る。

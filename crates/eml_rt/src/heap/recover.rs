@@ -1,4 +1,4 @@
-//! 根から届く物体を新しいヒープに写す (docs/superpowers/specs/2026-10-16-s11b-recovery-design.md の「回復」)。
+//! 根から届く物体を新しいヒープに写す (docs/spec/object-model.md の「回復」)。
 //!
 //! 古いヒープは読むだけで、写し先は今ある確保と書き込みの操作だけで作る。そのため、写し先の不変条件は各操作の約束から
 //! 出る。証明するのは、古いヒープを安全に読むことと、写し先の各物体の外の参照の数が語のスタックと写し終えた根の中の
@@ -544,7 +544,7 @@ impl<M: Mode> Heap<M> {
 
     /// 写し元の語 `w` の写しを語のスタックに積むか (すぐ写せるとき)、`w` の物体を写している途中の物体として積む
     /// (まだ写していない `Data` のとき)。写せない物体は `Unrecoverable` にする
-    /// (docs/superpowers/specs/2026-10-16-s11b-recovery-design.md の「物体の種類と写し方」)。誤りのときも写し先の
+    /// (docs/spec/object-model.md の「種類」)。誤りのときも写し先の
     /// 不変条件は保ち、呼ぶ側は写し先を捨てる。
     #[expect(clippy::too_many_arguments, reason = "the parts of one copy")]
     fn resolve(

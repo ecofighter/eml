@@ -824,7 +824,7 @@ fn assert_failed(console: &mut Console, input: &str) {
 }
 
 /// 失敗する入力を続けても、前の束縛は正しく読め、確保量は増えない。回復が毎回古いヒープのページを `Control` に
-/// 戻す (docs/superpowers/specs/2026-10-16-s11b-recovery-design.md の「意味」)。
+/// 戻す (docs/spec/object-model.md の「回復」)。
 #[test]
 fn repeated_failures_keep_the_bindings_and_the_memory() {
     for (mut console, control, debug_heap) in
@@ -851,7 +851,7 @@ fn repeated_failures_keep_the_bindings_and_the_memory() {
 }
 
 /// 回復は根から届く物体を明示のスタックでたどるので、長いリストの根でも Rust のスタックが溢れない
-/// (docs/superpowers/specs/2026-10-16-s11b-recovery-design.md の「`Ctx::recover`」)。
+/// (docs/spec/object-model.md の「回復」)。
 #[test]
 fn a_long_list_survives_recovery() {
     for (mut console, _, debug_heap) in consoles_with(&[BUILD, TOTAL, "let xs = build 200000 []"]) {
@@ -870,7 +870,7 @@ fn a_long_list_survives_recovery() {
 }
 
 /// 2つの根が同じ物体を指していても、回復はそれを1つだけ写し、どちらの根からも同じ値が読める
-/// (docs/superpowers/specs/2026-10-16-s11b-recovery-design.md の「`Ctx::recover`」)。
+/// (docs/spec/object-model.md の「回復」)。
 #[test]
 fn objects_shared_between_roots_survive_recovery() {
     for (mut console, _, debug_heap) in

@@ -128,7 +128,7 @@ pub(crate) open spec fn string_wf(p: BlockPerm, cap: nat) -> bool {
 
 /// ペイロードの語は、容量の終わりまですべて書いてある。`Data` の物体は生の語の数を持たないので、回復が生の語を容量の
 /// 終わりまで写せるように、`Data` のブロックはいつもこの形にする
-/// (docs/superpowers/specs/2026-10-16-s11b-recovery-design.md の「走査しない語」)。
+/// (docs/spec/object-model.md の「確保と解放」)。
 pub(crate) open spec fn p_filled(p: BlockPerm, cap: nat) -> bool {
     slots_filled(p.slots, cap)
 }

@@ -244,7 +244,8 @@ impl<M: Mode> Heap<M> {
         Ok(live)
     }
 
-    /// 生きている物体 (token の箱、不死の物体、ダミーを含む) を列挙する。S11 の根からの走査が使う。
+    /// 生きている物体 (token の箱、不死の物体、ダミーを含む) を列挙する。テストと検査のための列挙で、回復は使わない
+    /// (docs/spec/object-model.md の「生存の列挙」)。
     pub fn live_objects(&self) -> (r: Vec<Word>)
         requires
             self.wf(),
