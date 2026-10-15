@@ -328,7 +328,7 @@ impl Console {
     }
 }
 
-/// `Session` と同じく、後で並列のコンパイルやクエリに載せる妨げにしない (docs/superpowers/specs/2026-10-15-s11a-repl-session-design.md の「API」)。
+/// `Session` と同じく、後で並列のコンパイルやクエリに載せる妨げにしない (docs/spec/modules.md の「REPL のセッション」)。
 #[test]
 fn a_repl_is_send() {
     fn assert_send<T: Send>() {}
@@ -403,7 +403,7 @@ fn a_failed_let_binds_nothing() {
     assert_eq!(console.eval("y").2, ["E1001"]);
 }
 
-/// 止める理由のビットは `eval` の始めに下りる (docs/superpowers/specs/2026-10-15-s11a-repl-session-design.md の「実行と表示」)。
+/// 止める理由のビットは `eval` の始めに下りる (docs/spec/object-model.md の「実行の制御」)。
 #[test]
 fn each_input_clears_the_stop_bits() {
     let control = Arc::new(Control::new(Limits::default()));
@@ -486,7 +486,7 @@ impl ModuleSource for Changing {
 }
 
 /// 読み直すと、同じ名前の関数が違うコードになるので、最初に読んだテキストを使い続ける
-/// (docs/superpowers/specs/2026-10-15-s11a-repl-session-design.md の「並びと読み込み」)。
+/// (docs/spec/modules.md の「REPL のセッション」)。
 #[test]
 fn an_imported_module_keeps_the_text_read_first() {
     let source = Changing::default();
@@ -526,7 +526,7 @@ fn a_warning_is_reported_once() {
 }
 
 /// handler の中で実行時エラーが起きても、evv が空に戻り、次の入力のエフェクトが正しく動く
-/// (docs/superpowers/specs/2026-10-15-s11a-repl-session-design.md の「エラー」)。
+/// (docs/spec/vm.md の「追記」)。
 #[test]
 fn a_runtime_error_inside_a_handler_leaves_no_handler_behind() {
     for config in [

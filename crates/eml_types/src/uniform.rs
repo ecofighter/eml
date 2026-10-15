@@ -32,7 +32,7 @@ impl Uniform {
     }
 
     /// 一様な (関数, 位置) の組。REPL が、後の入力で前の関数の一様な位置が変わらないことを確かめるのに使う
-    /// (docs/superpowers/specs/2026-10-15-s11a-repl-session-design.md の「定義し直しの決まり」)。
+    /// (docs/spec/modules.md の「REPL のセッション」)。
     pub fn functions(&self) -> impl Iterator<Item = (FunctionId, usize)> + '_ {
         self.functions.iter().copied()
     }

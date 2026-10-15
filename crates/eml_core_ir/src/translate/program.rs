@@ -487,7 +487,7 @@ impl ProgramBuilder {
 }
 
 /// 入口の関数が、入口の関数の結果をどう扱うか
-/// (docs/superpowers/specs/2026-10-15-s11a-repl-session-design.md の「実行と表示」)。
+/// (docs/spec/core-ir.md の「REPL の入力」)。
 pub(super) enum EntryAfter {
     /// `main` と、型が `Unit` の式の入力。結果をそのまま返す。
     Return,
@@ -566,7 +566,7 @@ pub(super) fn core_name(hir: &HirProgram, module: ModuleId, name: &str) -> Strin
     }
 }
 
-/// セッションの item の中段の名前 (docs/superpowers/specs/2026-10-15-s11a-repl-session-design.md の「名前」)。前の入力が
+/// セッションの item の中段の名前 (docs/spec/core-ir.md の「REPL の入力」)。前の入力が
 /// 同じ名前を定義していれば、定義した入力の番号を付けて `名前#N` にする。最初の版には付けない。前の入力は後の入力で
 /// 変わらないので、同じ定義はどの入力を処理し直しても同じ名前になる。セッションでないモジュールの名前は変えない。
 ///

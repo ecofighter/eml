@@ -33,7 +33,7 @@ impl Table<'_> {
     }
 
     /// 束縛されていない rigid でない row 変数を、閉じた空の row `<>` に束縛する。REPL の入力で、決まらずに残った
-    /// row を決める (docs/superpowers/specs/2026-10-15-s11a-repl-session-design.md の「型検査」)。
+    /// row を決める (docs/spec/types.md の「REPL の入力」)。
     pub fn close_row(&mut self, var: RowVar) -> Result<(), UnifyError> {
         let open = Row {
             labels: Vec::new(),

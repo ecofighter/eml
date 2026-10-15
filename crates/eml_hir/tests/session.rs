@@ -1,5 +1,4 @@
-//! REPL のセッションの読み込みと名前解決 (docs/superpowers/specs/2026-10-15-s11a-repl-session-design.md の
-//! 「セッションのモジュール」)。
+//! REPL のセッションの読み込みと名前解決 (docs/spec/modules.md の「REPL のセッション」)。
 
 use eml_diagnostics::sort_diagnostics;
 use eml_hir::{

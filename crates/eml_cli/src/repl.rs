@@ -1,5 +1,5 @@
 //! REPL のセッション。入力ごとにセッション全体を前端から検査し直し、新しい関数だけを、入力をまたいで持つ `Machine` の
-//! `CodeBase` に足す (docs/superpowers/specs/2026-10-15-s11a-repl-session-design.md の「API」)。診断は各段階が作り、
+//! `CodeBase` に足す (docs/spec/modules.md の「REPL のセッション」)。診断は各段階が作り、
 //! ここは段階をつなぐだけである。
 
 use std::collections::{BTreeMap, BTreeSet, HashSet};
@@ -97,7 +97,7 @@ impl Repl {
 
     pub fn eval(&mut self, text: &str) -> Evaluated {
         // 前の入力で立った止める理由のビットを下ろす。確保量の上限で止まると `MEMORY` のビットが残り、後の入力が
-        // すべて止まるため (docs/superpowers/specs/2026-10-15-s11a-repl-session-design.md の「実行と表示」)
+        // すべて止まるため (docs/spec/object-model.md の「実行の制御」)
         self.control.clear();
         if only_trivia(text) {
             return Evaluated::without_files(Outcome::Empty);

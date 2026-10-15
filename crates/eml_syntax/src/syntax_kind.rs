@@ -104,7 +104,7 @@ pub enum SyntaxKind {
 
     SOURCE_FILE,
     /// REPL の入力の根。item の並び、`let` の束縛 (子は `LET_STMT`)、式 (子は式のノード) の3つで、trivia だけの入力は
-    /// 子のない `REPL_ITEMS` になる (docs/superpowers/specs/2026-10-15-s11a-repl-session-design.md の「入力の種類」)。
+    /// 子のない `REPL_ITEMS` になる (docs/spec/grammar.md の「REPL の入力」)。
     REPL_ITEMS,
     REPL_LET,
     REPL_EXPR,

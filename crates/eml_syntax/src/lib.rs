@@ -64,7 +64,7 @@ pub fn parse(file: FileId, text: &str) -> (Parse, Vec<Diagnostic>) {
 }
 
 /// REPL の入力を読む。根は `REPL_ITEMS`、`REPL_LET`、`REPL_EXPR` のどれかである
-/// (docs/superpowers/specs/2026-10-15-s11a-repl-session-design.md の「入力の種類」)。
+/// (docs/spec/grammar.md の「REPL の入力」)。
 pub fn parse_input(file: FileId, text: &str) -> (Parse, Vec<Diagnostic>) {
     parse_with(file, text, grammar::repl_input)
 }
@@ -89,7 +89,7 @@ pub enum InputStatus {
 }
 
 /// 端末が行を読むたびに、それまでの行を改行でつないだテキストを渡す。字句とレイアウト段の状態と、`parse_input` と
-/// 同じ入力の種類の判定だけを見る (docs/superpowers/specs/2026-10-15-s11a-repl-session-design.md の「入力の終わり」)。
+/// 同じ入力の種類の判定だけを見る (docs/spec/layout.md の「REPL の入力の終わり」)。
 pub fn input_status(text: &str) -> InputStatus {
     // 診断は捨てるので、ファイルの番号は字句解析と構文解析に渡す印にすぎない
     let file = SourceFiles::new().add("<input>", "");

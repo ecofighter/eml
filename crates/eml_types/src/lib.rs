@@ -87,7 +87,7 @@ pub struct TypedProgram {
 }
 
 /// REPL の入力の関数の検査の結果
-/// (docs/superpowers/specs/2026-10-15-s11a-repl-session-design.md の「型検査」)。
+/// (docs/spec/types.md の「REPL の入力」)。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct InputType {
     /// 入力の式の型。入力の関数の型 `Unit -> <IO> T` の `T` である。
@@ -96,7 +96,7 @@ pub struct InputType {
     pub display: InputDisplay,
 }
 
-/// 式の入力の結果の表示の仕方 (docs/superpowers/specs/2026-10-15-s11a-repl-session-design.md の「表示」)。
+/// 式の入力の結果の表示の仕方 (docs/spec/core-ir.md の「REPL の入力」)。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum InputDisplay {
     /// 何も表示しない。
@@ -281,7 +281,7 @@ pub fn missing_main(file: FileId) -> Diagnostic {
 
 /// REPL の入力が、前の入力の関数か instance の一様な位置を変えたこと。前の入力の関数は、すでに型引数を決めたコードとして
 /// `CodeBase` にあり、同じ名前で違うコードを足せないので、入力を受け付けない
-/// (docs/superpowers/specs/2026-10-15-s11a-repl-session-design.md の「定義し直しの決まり」)。REPL だけが前の入力の位置を
+/// (docs/spec/modules.md の「REPL のセッション」)。REPL だけが前の入力の位置を
 /// 知っているので、`eml_cli` がこの関数で作る。
 pub fn input_changes_uniform(file: FileId, len: TextSize, name: &str) -> Diagnostic {
     Diagnostic::error(

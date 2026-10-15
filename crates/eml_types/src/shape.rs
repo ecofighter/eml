@@ -451,7 +451,7 @@ pub(crate) fn constructor_shape(
 
 /// 書き出した閉じた型を、型変数も Kind 変数も持たない閉じた形にする。REPL の入力の関数と `let` の束縛は、推論で
 /// 決めた型を宣言の型にするので、後の入力の本体はこの形を参照する
-/// (docs/superpowers/specs/2026-10-15-s11a-repl-session-design.md の「型検査」)。入力の型は Kind を解いた後の
+/// (docs/spec/types.md の「REPL の入力」)。入力の型は Kind を解いた後の
 /// 定数の矢印と閉じた row だけを持つ。型の表は部分を共有するが、閉じた形は木なので、共有された部分は展開する。
 pub(crate) fn closed_shape(types: &TypeStore, ty: TypeId) -> Shape {
     Shape {

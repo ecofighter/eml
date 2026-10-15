@@ -28,7 +28,7 @@ pub enum ModuleOrigin {
     Std,
     User,
     /// REPL のセッションの入力のモジュール。値は入力の番号である
-    /// (docs/superpowers/specs/2026-10-15-s11a-repl-session-design.md の「セッションのモジュール」)。
+    /// (docs/spec/modules.md の「REPL のセッション」)。
     Session(u32),
 }
 

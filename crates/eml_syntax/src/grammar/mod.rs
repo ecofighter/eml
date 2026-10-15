@@ -24,7 +24,7 @@ pub(crate) fn source_file(p: &mut Parser) {
 }
 
 /// REPL の入力を1つ読む。最初の項目で、item の並び、`let` の束縛、式のどれかを決める
-/// (docs/superpowers/specs/2026-10-15-s11a-repl-session-design.md の「入力の種類」)。
+/// (docs/spec/grammar.md の「REPL の入力」)。
 pub(crate) fn repl_input(p: &mut Parser) {
     let m = p.start();
     if p.at_eof() || items::at_items_input(p) {

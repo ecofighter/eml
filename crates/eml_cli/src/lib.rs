@@ -81,7 +81,7 @@ impl Session {
     }
 
     /// REPL の受け付けた入力と今の入力を、入力ごとのモジュールとして読む
-    /// (docs/superpowers/specs/2026-10-15-s11a-repl-session-design.md の「並びと読み込み」)。返す `ImportCache` は、この
+    /// (docs/spec/modules.md の「REPL のセッション」)。返す `ImportCache` は、この
     /// 読み込みで新しく読んだモジュールで、`Repl` が入力を受け付けたときにだけ足す。
     pub fn load_session(
         inputs: &[eml_hir::SessionInput],

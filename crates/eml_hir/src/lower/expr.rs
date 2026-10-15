@@ -103,7 +103,7 @@ impl<'a> BodyLowering<'a> {
     }
 
     /// REPL の入力の本体。引数 `()` を1つ受ける。`let x : T = e` の型の明示は、右辺 `e` の注釈にする
-    /// (docs/superpowers/specs/2026-10-15-s11a-repl-session-design.md の「型検査」)。
+    /// (docs/spec/types.md の「REPL の入力」)。
     pub(super) fn lower_input(
         mut self,
         expr: Option<ast::Expr>,

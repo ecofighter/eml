@@ -71,7 +71,7 @@ pub struct SessionInput<'a> {
 
 /// セッションの import が解決した先と本文。後の入力でも同じモジュールを読むために持つ。ディスクのファイルが変わっても
 /// セッションの中のモジュールは変わらない。読み直すと、同じ名前の関数が違うコードになるためである
-/// (docs/superpowers/specs/2026-10-15-s11a-repl-session-design.md の「並びと読み込み」)。
+/// (docs/spec/modules.md の「REPL のセッション」)。
 #[derive(Debug, Clone, Default)]
 pub struct ImportCache {
     entries: HashMap<ModulePath, Cached>,
@@ -132,7 +132,7 @@ pub fn load_with_std(
 }
 
 /// REPL のセッションを読む。受け付けた入力と今の入力 (最後) をセッションのモジュールにし、今の入力を入口にする
-/// (docs/superpowers/specs/2026-10-15-s11a-repl-session-design.md の「並びと読み込み」)。`root` は import の表示の
+/// (docs/spec/modules.md の「REPL のセッション」)。`root` は import の表示の
 /// パスの前に付けるディレクトリ (`/` で終わるか空) である。ユーザーの import は、`cache` にあればその先と本文を使い、
 /// なければ `source` から読む。返す `ImportCache` は、この呼び出しで新しく読んだものだけを持つ。
 pub fn load_session(

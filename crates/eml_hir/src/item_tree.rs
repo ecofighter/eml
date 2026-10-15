@@ -26,7 +26,7 @@ pub struct ItemTree {
     pub classes: Vec<ClassItem>,
     pub instances: Vec<InstanceItem>,
     /// REPL の入力が `let` の束縛か式なら、その入力。item の並びの入力とファイルは `None` である
-    /// (docs/superpowers/specs/2026-10-15-s11a-repl-session-design.md の「item の種類」)。
+    /// (docs/spec/modules.md の「REPL のセッション」)。
     pub input: Option<InputItem>,
 }
 
@@ -463,7 +463,7 @@ pub fn item_tree(file: FileId, parse: &Parse) -> (ItemTree, Vec<Diagnostic>) {
 }
 
 /// REPL の `let` の入力が束縛する名前。名前1つでないパターンはパーサが E0011 で報告済みなので、`None` にする
-/// (docs/superpowers/specs/2026-10-15-s11a-repl-session-design.md の「入力の種類」)。
+/// (docs/spec/grammar.md の「REPL の入力」)。
 fn let_name(stmt: &ast::LetStmt) -> Option<(String, TextRange)> {
     let ast::Pat::BindPat(bind) = stmt.pat()? else {
         return None;

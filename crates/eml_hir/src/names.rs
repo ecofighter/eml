@@ -11,7 +11,7 @@ use crate::program::{ClassId, ConstructorId, EffectId, TypeDefId};
 ///
 /// REPL のセッションは1つの定義元と数え、セッションの item は修飾しない。定義し直された item の古い版には、定義した
 /// 入力の番号を付ける (`T#1`)。最新の版には付けない。利用者が今その名前で書けるものを、印なしで見せるためである
-/// (docs/superpowers/specs/2026-10-15-s11a-repl-session-design.md の「版」)。
+/// (docs/spec/modules.md の「REPL のセッション」)。
 #[derive(Debug, Clone)]
 pub struct DisplayNames {
     types: HashMap<TypeDefId, String>,

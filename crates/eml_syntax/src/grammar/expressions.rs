@@ -102,7 +102,7 @@ fn let_head_and_body(p: &mut Parser) {
 
 /// REPL の `let` の束縛か式を1つ読み、根の種類 (`REPL_LET` か `REPL_EXPR`) を返す。`let` の後ろに `in` が続けば
 /// `let … in` の式である。束縛は名前を1つだけ束縛する。パターンで束縛すると、根に置く値が1つに決まらないため
-/// (docs/superpowers/specs/2026-10-15-s11a-repl-session-design.md の「入力の種類」)。
+/// (docs/spec/grammar.md の「REPL の入力」)。
 pub(super) fn let_or_expr_input(p: &mut Parser) -> SyntaxKind {
     if !p.at(LET_KW) {
         if !expr(p) {

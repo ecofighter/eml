@@ -86,7 +86,7 @@ struct Fix {
 | E1019 | `SIGNATURE_NOT_ADJACENT` | シグネチャと最初の等式が隣り合っていない |
 | E1020 | `EQUATION_ARITY_MISMATCH` | 等式ごとに引数の個数が違う |
 | E1021 | `DUPLICATE_FIXITY` | 同じ演算子への2回目の fixity の宣言。1つの宣言に同じ演算子を2回並べた場合を含む |
-| E1022 | `FIXITY_WITHOUT_DEFINITION` | このモジュールで定義していない演算子への fixity の宣言。標準ライブラリの演算子の fixity を変えようとした場合を含む |
+| E1022 | `FIXITY_WITHOUT_DEFINITION` | このモジュールで定義していない演算子への fixity の宣言。標準ライブラリの演算子の fixity を変えようとした場合を含む。REPL では、この入力で定義していない演算子への宣言で、文言も「この入力」と言う |
 | E1023 | `INVALID_SECTION` | 優先順位の合わないセクション (`(* a + b)` や `(+ a + b)`) |
 | E1024 | `USE_AT_END_OF_BLOCK` | ブロックの最後の文が `use` である (包む残りがない) |
 | E1025 | `MISSING_CONSTRUCTORS` | `data` にコンストラクタがない (`=` のない `data`)。`extern data` は対象にならない。どのモジュールでも同じである |
@@ -125,6 +125,10 @@ struct Fix {
 | E2012 | `CONSTRAINED_POLYMORPHIC_RECURSION` | 一様な位置の型変数が制約を持つ ([Core IR](core-ir.md) の「一様な位置と制約付きの多相再帰」) |
 | E2013 | `FIELD_NEEDS_KNOWN_TYPE` | 射影か更新の時点で、値の型が決まっていない ([型と Kind](types.md) の「フィールドの解決」) |
 | E2014 | `NO_SUCH_FIELD` | 射影か更新のフィールドが、その型にない。コンストラクタが2つ以上の型への射影と更新、タプルの更新を含む |
+| E2015 | `INPUT_EFFECT` | REPL の `let` の束縛か式の入力の row が `<IO>` に収まらない ([型と Kind](types.md) の「REPL の入力」) |
+| E2016 | `INPUT_LINEAR` | REPL の `let` の束縛か式の入力の型が `Unr` でない |
+| E2017 | `BINDING_AMBIGUOUS` | REPL の `let` の束縛の型に、決まらない型変数が残った |
+| E2018 | `INPUT_CHANGES_UNIFORM` | REPL の入力が、前の入力の関数か instance の一様な位置を変える。`eml_cli` の `Repl` が `eml_types::input_changes_uniform` で作る |
 | E3001 | `LINEAR_VALUE_MISUSED` | 線形な値の誤った使い方のうち、E3002〜E3005 に当たらないもの (関数への受け渡し、型の単一化、ラムダや節の捕獲、操作の型が節に求める制約) |
 | E3002 | `LINEAR_VALUE_USED_TWICE` | 線形な値を、ある経路で2回以上使った |
 | E3003 | `LINEAR_VALUE_NOT_CONSUMED` | 線形な値を、ある経路で使わなかった |

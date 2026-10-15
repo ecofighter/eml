@@ -1,4 +1,4 @@
-//! REPL のトランスクリプトのテスト (docs/superpowers/specs/2026-10-15-s11a-repl-session-design.md の「トランスクリプトの形」)。`tests/repl` の下の
+//! REPL のトランスクリプトのテスト (docs/implementation/testing.md の「REPL のトランスクリプト」)。`tests/repl` の下の
 //! トランスクリプトを1つずつ `Repl` に流し、入力ごとの表示、診断、実行時エラーと、`close` の結果をスナップショットに
 //! する。入力の終わりの規則は、端末と同じ形で行ごとに確かめる。
 
@@ -33,7 +33,7 @@ impl Input {
         self.lines[..count].join("\n")
     }
 
-    /// `eval` に渡すテキスト。入力を終える空行は含めない (docs/superpowers/specs/2026-10-15-s11a-repl-session-design.md の「入力の終わり」)。
+    /// `eval` に渡すテキスト。入力を終える空行は含めない (docs/spec/layout.md の「REPL の入力の終わり」)。
     fn submitted(&self) -> String {
         let end = match self.lines.last() {
             Some(last) if self.lines.len() > 1 && last.trim().is_empty() => self.lines.len() - 1,

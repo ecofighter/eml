@@ -83,7 +83,7 @@ fn callees(program: &Program, id: FunctionId) -> Vec<FunctionId> {
     let mut out = Vec::new();
     for (_, expr) in body.exprs.iter() {
         // `let` の束縛の型は、束縛を作った入力の関数を書き出して決まるので、その入力の関数を先に検査する
-        // (docs/superpowers/specs/2026-10-15-s11a-repl-session-design.md の「型検査」)
+        // (docs/spec/types.md の「REPL の入力」)
         let callee = match expr.kind {
             ExprKind::Path(Res::Item(ValueItem::Function(callee))) => callee,
             ExprKind::Path(Res::Item(ValueItem::Binding(binding))) => program[binding].input,

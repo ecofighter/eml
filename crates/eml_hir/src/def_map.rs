@@ -1084,8 +1084,7 @@ impl DefMap {
     }
 
     /// 2つのモジュールを、orphan 規則と fixity で同じモジュールとみなすか。セッションのモジュールどうしは、1つの
-    /// モジュールとみなす (docs/superpowers/specs/2026-10-15-s11a-repl-session-design.md の「セッションを1つの
-    /// モジュールとして扱う所」)。
+    /// モジュールとみなす (docs/spec/modules.md の「REPL のセッション」)。
     pub fn same_scope(&self, a: ModuleId, b: ModuleId) -> bool {
         a == b || (self.origin(a).session().is_some() && self.origin(b).session().is_some())
     }
@@ -1145,7 +1144,7 @@ impl DefMap {
     }
 
     /// REPL の `let` の束縛の ID と根の番号。根の番号は入力の番号である
-    /// (docs/superpowers/specs/2026-10-15-s11a-repl-session-design.md の「根」)。
+    /// (docs/spec/object-model.md の「セッションの根」)。
     pub fn binding(&self, module: ModuleId) -> Option<(BindingId, u32)> {
         let scope = self.scope(module);
         scope.binding.map(|binding| {
@@ -1165,7 +1164,7 @@ impl DefMap {
 /// モジュールの中から名前を引く口。修飾しない名前は「自分のモジュール → import の並びの名前 → Prelude の `pub` の名前」
 /// の順に引き、修飾した名前は修飾子のモジュールだけを引く (docs/spec/modules.md の「名前の解決」)。セッションの
 /// モジュールでは、自分のモジュールの次に前の入力のトップレベルを引き、import は入力ごとに新しい入力から順に引く
-/// (docs/superpowers/specs/2026-10-15-s11a-repl-session-design.md の「名前解決」)。
+/// (docs/spec/modules.md の「REPL のセッション」)。
 #[derive(Clone, Copy)]
 pub struct Resolver<'a> {
     def_map: &'a DefMap,
@@ -1406,7 +1405,7 @@ impl<'a> Resolver<'a> {
         }
         // 前の入力のトップレベルは、新しい入力から順に引き、その名前を定義する最も新しいモジュールで止まる。種類で
         // 絞って古い版まで探すと、定義し直した名前の古い版が戻ってくるためである
-        // (docs/superpowers/specs/2026-10-15-s11a-repl-session-design.md の「名前解決」)
+        // (docs/spec/modules.md の「REPL のセッション」)
         for scope in self.earlier_sessions() {
             let Some(definitions) = V::definitions(scope).get(name) else {
                 continue;

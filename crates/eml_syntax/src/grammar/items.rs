@@ -47,8 +47,7 @@ pub(super) fn at_item_start(p: &Parser) -> bool {
 
 /// REPL の入力が item の並びで始まるか。等式の形 (`f x …`、`a + b …`) は、最初の項目の中で括弧の外にあり、ブロックが
 /// 開く前にある `=` を持つときだけ item とみなす。`f x` や `1 + 2` を式として読み、`fn () ->` の後のブロックの中の
-/// `let y = 1` を等式と取り違えないため (docs/superpowers/specs/2026-10-15-s11a-repl-session-design.md の
-/// 「入力の種類」)。
+/// `let y = 1` を等式と取り違えないため (docs/spec/grammar.md の「REPL の入力」)。
 pub(super) fn at_items_input(p: &Parser) -> bool {
     if p.at(PUB_KW) || p.at(EXTERN_KW) {
         return true;

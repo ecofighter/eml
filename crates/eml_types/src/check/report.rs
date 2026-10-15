@@ -64,7 +64,7 @@ pub(super) enum Origin {
 pub(super) enum AmbientSource {
     Signature,
     /// REPL の入力の本体。入力は `IO` だけを起こせる
-    /// (docs/superpowers/specs/2026-10-15-s11a-repl-session-design.md の「型検査」)。
+    /// (docs/spec/types.md の「REPL の入力」)。
     Input,
     /// ラムダの最後の矢印の row。ラムダの期待する型の由来を持つ。
     Lambda(Origin),

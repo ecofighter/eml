@@ -1,5 +1,5 @@
-//! REPL の入力の読み分けと、入力の終わりの判定 (docs/superpowers/specs/2026-10-15-s11a-repl-session-design.md の
-//! 「入力の種類」と「入力の終わり」)。
+//! REPL の入力の読み分けと、入力の終わりの判定 (docs/spec/grammar.md の「REPL の入力」と、docs/spec/layout.md の
+//! 「REPL の入力の終わり」)。
 
 use eml_syntax::SyntaxKind::{self, REPL_EXPR, REPL_ITEMS, REPL_LET};
 use eml_syntax::{InputStatus, input_status, parse_input};

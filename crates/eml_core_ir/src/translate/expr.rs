@@ -474,7 +474,7 @@ impl FnLowering<'_> {
                 self.function_value(id, &name)
             }
             // `let` の束縛の値は根にあるので、参照するたびに根から読む。根は `tobj` なので、型の Repr への変換は
-            // box の挿入が入れる (docs/superpowers/specs/2026-10-15-s11a-repl-session-design.md の「根」)
+            // box の挿入が入れる (docs/spec/object-model.md の「セッションの根」)
             ExprKind::Path(Res::Item(ValueItem::Binding(binding))) => {
                 let root = self.ctx.hir[*binding].root;
                 let ty = self.ty(id);

@@ -156,7 +156,7 @@ pub struct LangItems {
     /// (docs/spec/expressions.md の「補間」)。
     pub display: MethodId,
     /// REPL が式の入力の結果を表示する `Show` の `show`。ユーザーが同じ名前を定義しても、Prelude のものを呼ぶ
-    /// (docs/superpowers/specs/2026-10-15-s11a-repl-session-design.md の「表示」)。
+    /// (docs/spec/core-ir.md の「REPL の入力」)。
     pub show_method: MethodId,
 }
 
@@ -189,7 +189,7 @@ pub enum FunctionKind {
     /// instance のメソッド。等式で定義し、名前の表には入らない。
     InstanceMethod(InstanceId, MethodId),
     /// REPL の `let` の束縛か式の入力を実行する関数 `input$N`。シグネチャを持たず、引数 `()` を1つ受ける。名前の表には
-    /// 入らない (docs/superpowers/specs/2026-10-15-s11a-repl-session-design.md の「item の種類」)。
+    /// 入らない (docs/spec/modules.md の「REPL のセッション」)。
     Input(InputKind),
 }
 

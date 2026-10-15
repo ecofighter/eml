@@ -1,4 +1,4 @@
-//! REPL の入力の関数の検査 (docs/superpowers/specs/2026-10-15-s11a-repl-session-design.md の「型検査」)。入力は
+//! REPL の入力の関数の検査 (docs/spec/types.md の「REPL の入力」)。入力は
 //! `Unit -> <IO> T` の関数で、`T` をシグネチャなしで、局所の `let` と同じく単相に推論する。入力の関数はほかの関数から
 //! 参照されないので、1つだけの SCC として、ほかの関数と同じ道で Kind を解いて書き出す。
 

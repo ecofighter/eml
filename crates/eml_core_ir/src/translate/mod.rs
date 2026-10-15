@@ -279,7 +279,7 @@ pub(crate) fn translate(
 }
 
 /// 入口の関数が入口の結果をどう扱うか。REPL の入力なら、`let` は根に置き、式は表示する
-/// (docs/superpowers/specs/2026-10-15-s11a-repl-session-design.md の「実行と表示」)。
+/// (docs/spec/core-ir.md の「REPL の入力」)。
 fn entry_after(
     hir: &HirProgram,
     typed: &TypedProgram,

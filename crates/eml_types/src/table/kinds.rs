@@ -157,7 +157,7 @@ impl Table<'_> {
 
     /// `roots` の型に現れる、束縛されていない型変数の代表と、束縛されていない rigid でない row 変数を、現れた順に
     /// 重複なく返す。REPL の入力が、決まらずに残った変数を集めるのに使う
-    /// (docs/superpowers/specs/2026-10-15-s11a-repl-session-design.md の「型検査」)。
+    /// (docs/spec/types.md の「REPL の入力」)。
     pub fn unsolved(&self, roots: impl IntoIterator<Item = Ty>) -> (Vec<Ty>, Vec<RowVar>) {
         let mut vars = Vec::new();
         let mut rows = Vec::new();

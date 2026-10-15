@@ -231,7 +231,7 @@ fn index(var: TypeVarId) -> usize {
 ///
 /// `defaulting` は REPL の式の入力で立てる。決まらない型を `Unit` とみなし、タプルの構造的な instance を持つクラス
 /// だけを解けたとし、ほかのクラスは決めた型で解けないので E2009 にする
-/// (docs/superpowers/specs/2026-10-15-s11a-repl-session-design.md の「型検査」)。
+/// (docs/spec/types.md の「REPL の入力」)。
 ///
 /// 列には、同じクラスと同じ代表の組を1回だけ足す。推論の表は部分を共有するので、型を木としてたどると型の深さの
 /// 指数の時間がかかるためである (docs/implementation/architecture.md の「`eml_types` の内部」)。代表で比べるのは、

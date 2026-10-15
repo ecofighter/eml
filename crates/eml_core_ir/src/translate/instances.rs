@@ -117,7 +117,7 @@ pub(super) struct Instances {
     pub(super) entry: InstanceId,
     /// 入口が `Show` を持つ型の式の入力なら、その型の `show` の行き先。入口の関数 `entry$` が結果の表示に使う。
     /// 入力の本体にない呼び出しなので、参照の行き先 (`targets`) とは別に持つ
-    /// (docs/superpowers/specs/2026-10-15-s11a-repl-session-design.md の「表示」)。
+    /// (docs/spec/core-ir.md の「REPL の入力」)。
     pub(super) show: Option<Target>,
     /// 型検査の型の表に、代入の結果を足した表。
     pub(super) store: TypeStore,
@@ -866,7 +866,7 @@ fn generated_base(hir: &HirProgram, names: &NameTable, generated: &Generated) ->
 /// HIR の関数の、鍵を付ける前の名前。セッションの instance のメソッドは、HIR の名前でなく、型とクラスの中段の名前で
 /// 書く。HIR の名前は利用者向けの表示名で、型を定義し直すと古い instance のメソッドの名前が `Show Color#1.show` に
 /// 変わり、新しい instance のメソッドが古い名前を受け継ぐためである
-/// (docs/superpowers/specs/2026-10-15-s11a-repl-session-design.md の「名前」)。
+/// (docs/spec/core-ir.md の「REPL の入力」)。
 fn function_base(hir: &HirProgram, names: &NameTable, function: FunctionId) -> String {
     let module = function.module;
     match hir[function].kind {

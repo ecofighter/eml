@@ -1,4 +1,4 @@
-//! REPL の入力の変換 (docs/superpowers/specs/2026-10-15-s11a-repl-session-design.md の「根」、「名前」、「実行と表示」)。
+//! REPL の入力の変換 (docs/spec/object-model.md の「セッションの根」、「名前」、「実行と表示」)。
 
 use crate::common::{
     function, session_core_text, session_core_text_with_positions, session_lir_text,
