@@ -1,0 +1,9 @@
+# 式の値は `show` で表示する。`String` は引用符付きで、`Unit` の式は何も表示しない
+> 1 + 2 * 3
+> "eml"
+> [1, 2, 3]
+> (1, "a")
+> Some 4
+> println "printed"
+> ()
+> let a = 2 in a * a

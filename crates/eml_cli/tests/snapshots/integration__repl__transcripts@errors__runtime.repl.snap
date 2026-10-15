@@ -1,0 +1,35 @@
+---
+source: crates/eml_cli/tests/repl.rs
+expression: checked.render()
+input_file: crates/eml_cli/tests/repl/errors/runtime.repl
+---
+> 10 / 0
+runtime error: division by zero
+  at <input 1>:1:4
+> let x = 1 / 0
+runtime error: division by zero
+  at <input 2>:1:11
+> x
+E1001 <input 3> 1:1 cannot find value `x`
+  <input 3> 1:1 not found in this scope
+> let y = 7
+> y * 6
+42
+> build : Int -> List Int -> List Int
+. build n acc = if n == 0 then acc else build (n - 1) (n :: acc)
+.
+> size : List Int -> Int
+. size xs = match xs with
+.   | [] -> 0
+.   | _ :: rest -> 1 + size rest
+.
+> check : List Int -> Int -> Int
+. check xs d = 100 / d + size xs
+.
+> check (build 3 []) 0
+runtime error: division by zero
+  at <input 8>:2:18
+> check (build 3 []) 50
+5
+--- close ---
+memory leak: objects were not freed: 3 Data

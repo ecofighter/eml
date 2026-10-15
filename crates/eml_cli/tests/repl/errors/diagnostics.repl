@@ -1,0 +1,16 @@
+# 診断のある入力は受け付けず、セッションは変わらない
+> bad : Int -> Int
+. bad x = x + "s"
+.
+> bad 1
+> 1 + "s"
+> nope
+> let file = Fs.open "missing.txt"
+> effect Ask where
+.   ask : Unit -> Int
+.
+> ask ()
+> fine : Unit -> <IO> Unit
+. fine () = println "ok"
+.
+> fine ()

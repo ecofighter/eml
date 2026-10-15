@@ -1,0 +1,15 @@
+---
+source: crates/eml_cli/tests/repl.rs
+expression: checked.render()
+input_file: crates/eml_cli/tests/repl/modules/user_module/main.repl
+---
+> import Util
+> Util.double 4
+8
+> import Util (double, (<+>))
+> double 5
+10
+> 1 <+> 2 * 3
+-5
+--- close ---
+no leaks

@@ -1,0 +1,20 @@
+# セッションで定義したクラスと instance。前の入力の型とクラスにも、後の入力で instance を書ける
+> class Describe a where
+.   describe : a -> String
+.
+> data Size = | Small | Large
+> instance Describe Size where
+.   describe Small = "small"
+.   describe Large = "large"
+.
+> describe Large
+> instance Describe Int where
+.   describe n = "int"
+.
+> describe 3
+> data Dir = | Up | Down
+> instance Show Dir where
+.   show Up = "^"
+.   show Down = "v"
+.
+> [Up, Down]

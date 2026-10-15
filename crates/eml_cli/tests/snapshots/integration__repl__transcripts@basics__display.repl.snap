@@ -1,0 +1,17 @@
+---
+source: crates/eml_cli/tests/repl.rs
+expression: checked.render()
+input_file: crates/eml_cli/tests/repl/basics/display.repl
+---
+> fn x -> x + 1
+_ : Int -> Int
+> inc : Int -> Int
+. inc x = x + 1
+.
+> inc
+_ : Int -> Int
+> data Box = | Box Int
+> Box 3
+_ : Box
+--- close ---
+no leaks

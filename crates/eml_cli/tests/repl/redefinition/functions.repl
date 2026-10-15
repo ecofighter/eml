@@ -1,0 +1,21 @@
+# 定義し直した後も、前の入力の関数と値は前の定義を使い続ける
+> f : Int -> Int
+. f x = x + 1
+.
+> g : Int -> Int
+. g x = f x * 10
+.
+> let h = f
+> f : Int -> Int
+. f x = x + 100
+.
+> f 1
+> g 1
+> h 1
+> let base = 1
+> add : Int -> Int
+. add x = x + base
+.
+> let base = 1000
+> add 1
+> base

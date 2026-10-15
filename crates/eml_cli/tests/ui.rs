@@ -4,7 +4,7 @@
 
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
+use std::sync::Arc;
 
 use eml_cli::{
     Control, FsProvider, RunConfig, RuntimeError, Session, VmFault, capture_host, default_limits,
@@ -13,15 +13,7 @@ use eml_cli::{
 use eml_diagnostics::{has_errors, render};
 use eml_rt::Fault;
 
-/// insta の `glob!` は、失敗の数をすべてのスレッドで共有する1つのスタックの一番上に数え、終わりにも一番上を取り出す
-/// (insta 1.49 の `glob.rs` と `runtime.rs` の `GLOB_STACK`)。そのため、glob のテストが並んで走ると、ほかのテストの
-/// スナップショットの失敗を自分の失敗として報告する。glob のテストは、このロックを持って1つずつ走らせる。
-static GLOB: Mutex<()> = Mutex::new(());
-
-/// 前に失敗したテストが毒したロックも使う。そのテストの失敗は、そのテスト自身が報告している。
-fn glob_lock() -> MutexGuard<'static, ()> {
-    GLOB.lock().unwrap_or_else(PoisonError::into_inner)
-}
+use crate::common::glob_lock;
 
 fn ui_root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))

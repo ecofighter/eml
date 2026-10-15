@@ -1,0 +1,8 @@
+# `Show` を持たない型は、値を評価して型だけを表示する
+> fn x -> x + 1
+> inc : Int -> Int
+. inc x = x + 1
+.
+> inc
+> data Box = | Box Int
+> Box 3

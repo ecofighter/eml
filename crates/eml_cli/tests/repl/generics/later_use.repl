@@ -1,0 +1,10 @@
+# 総称な定義は、使う入力で初めて instance になる
+> pick : a -> a -> a
+. pick x y = y
+.
+> pick 1 2
+> pick "a" "b"
+> wrap : a -> List a
+. wrap x = [x]
+.
+> wrap (pick True False)

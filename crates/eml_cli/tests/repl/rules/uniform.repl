@@ -1,0 +1,16 @@
+# 後の入力の instance が前の関数の一様な位置を変えると、その入力を受け付けない。`T` の instance の `walk` は
+# `stepper` を `(b, Unit)` で呼ぶので、`stepper` の `b` が呼ぶたびに大きくなる多相再帰になる
+> class Walk a where
+.   walk : a -> b -> b
+.
+> instance Walk Int where
+.   walk x y = y
+.
+> stepper : Walk a => a -> b -> b
+. stepper x y = walk x y
+.
+> stepper 1 "s"
+> instance Walk T where
+.   walk x y = (stepper x (y, ())).0
+. data T = | T
+> stepper 2 True

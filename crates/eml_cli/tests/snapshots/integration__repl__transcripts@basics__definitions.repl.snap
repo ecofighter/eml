@@ -1,0 +1,24 @@
+---
+source: crates/eml_cli/tests/repl.rs
+expression: checked.render()
+input_file: crates/eml_cli/tests/repl/basics/definitions.repl
+---
+> inc : Int -> Int
+. inc x = x + 1
+.
+> inc 41
+42
+> twice : (Int -> Int) -> Int -> Int
+. twice f x = f (f x)
+.
+> twice inc 0
+2
+> data Color =
+.   | Red
+.   | Green
+.   deriving (Show)
+.
+> Green
+Green
+--- close ---
+no leaks

@@ -1,0 +1,22 @@
+# 複数行の入力。字下げした本体、等式の並び、`;` で1行に書いた定義、閉じていない括弧と複数行の文字列
+> twice : Int -> Int
+. twice x =
+.   let y = x + x
+.   y
+.
+> twice 21
+> fact : Int -> Int
+. fact 0 = 1
+. fact n = n * fact (n - 1)
+.
+> fact 5
+> sq : Int -> Int; sq x = x * x
+.
+> sq 7
+> [1,
+.   2,
+. ]
+> """
+. one
+.   two
+. """

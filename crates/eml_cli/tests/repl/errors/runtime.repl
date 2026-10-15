@@ -1,0 +1,20 @@
+# 実行時エラーの後もセッションを続けられる。失敗した `let` は何も束縛しない。S11a は実行時エラーの後に残った物体を
+# 回収しないので、`close` はそれをリークとして数える (S11b の回復で消える)
+> 10 / 0
+> let x = 1 / 0
+> x
+> let y = 7
+> y * 6
+> build : Int -> List Int -> List Int
+. build n acc = if n == 0 then acc else build (n - 1) (n :: acc)
+.
+> size : List Int -> Int
+. size xs = match xs with
+.   | [] -> 0
+.   | _ :: rest -> 1 + size rest
+.
+> check : List Int -> Int -> Int
+. check xs d = 100 / d + size xs
+.
+> check (build 3 []) 0
+> check (build 3 []) 50

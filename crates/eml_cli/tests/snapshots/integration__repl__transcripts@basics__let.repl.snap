@@ -1,0 +1,28 @@
+---
+source: crates/eml_cli/tests/repl.rs
+expression: checked.render()
+input_file: crates/eml_cli/tests/repl/basics/let.repl
+---
+> let ten =
+.   println "evaluated"
+.   10
+.
+evaluated
+> ten + ten
+20
+> add_once : Int -> Int
+. add_once x = x + ten
+.
+> add_once 5
+15
+> let greeting : String = "hi"
+> greeting
+"hi"
+> let scale = fn x -> x * ten
+> scale 3
+30
+> let pair = (ten, greeting)
+> pair
+(10, "hi")
+--- close ---
+no leaks

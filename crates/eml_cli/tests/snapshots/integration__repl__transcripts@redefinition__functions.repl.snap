@@ -1,0 +1,32 @@
+---
+source: crates/eml_cli/tests/repl.rs
+expression: checked.render()
+input_file: crates/eml_cli/tests/repl/redefinition/functions.repl
+---
+> f : Int -> Int
+. f x = x + 1
+.
+> g : Int -> Int
+. g x = f x * 10
+.
+> let h = f
+> f : Int -> Int
+. f x = x + 100
+.
+> f 1
+101
+> g 1
+20
+> h 1
+2
+> let base = 1
+> add : Int -> Int
+. add x = x + base
+.
+> let base = 1000
+> add 1
+2
+> base
+1000
+--- close ---
+no leaks

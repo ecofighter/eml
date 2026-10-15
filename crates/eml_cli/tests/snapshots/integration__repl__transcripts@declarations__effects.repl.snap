@@ -1,0 +1,17 @@
+---
+source: crates/eml_cli/tests/repl.rs
+expression: checked.render()
+input_file: crates/eml_cli/tests/repl/declarations/effects.repl
+---
+> effect Counter where
+.   tick : Unit -> Int
+.
+> count : Unit -> <Counter> Int
+. count () = tick () + tick ()
+.
+> handle count () with
+.   | tick () k -> k 5
+.
+10
+--- close ---
+no leaks

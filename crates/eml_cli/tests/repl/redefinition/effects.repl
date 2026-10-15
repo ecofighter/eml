@@ -1,0 +1,22 @@
+# 定義し直したエフェクトは別のエフェクトで、その handler は古いエフェクトの操作を捕まえない
+> effect Ask where
+.   ask : Unit -> Int
+.
+> asker : Unit -> <Ask> Int
+. asker () = ask () + 1
+.
+> run_old : Unit -> Int
+. run_old () =
+.   handle asker () with
+.     | ask () k -> k 10
+.
+> effect Ask where
+.   ask : Unit -> Int
+.
+> run_old ()
+> handle asker () with
+.   | ask () k -> k 20
+.
+> handle ask () * 2 with
+.   | ask () k -> k 20
+.

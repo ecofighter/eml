@@ -1,0 +1,29 @@
+---
+source: crates/eml_cli/tests/repl.rs
+expression: checked.render()
+input_file: crates/eml_cli/tests/repl/declarations/classes.repl
+---
+> class Describe a where
+.   describe : a -> String
+.
+> data Size = | Small | Large
+> instance Describe Size where
+.   describe Small = "small"
+.   describe Large = "large"
+.
+> describe Large
+"large"
+> instance Describe Int where
+.   describe n = "int"
+.
+> describe 3
+"int"
+> data Dir = | Up | Down
+> instance Show Dir where
+.   show Up = "^"
+.   show Down = "v"
+.
+> [Up, Down]
+[^, v]
+--- close ---
+no leaks

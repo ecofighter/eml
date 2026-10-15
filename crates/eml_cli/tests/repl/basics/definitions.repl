@@ -1,0 +1,15 @@
+# 関数と型の定義は、後の入力から使える。定義の入力は何も表示しない
+> inc : Int -> Int
+. inc x = x + 1
+.
+> inc 41
+> twice : (Int -> Int) -> Int -> Int
+. twice f x = f (f x)
+.
+> twice inc 0
+> data Color =
+.   | Red
+.   | Green
+.   deriving (Show)
+.
+> Green

@@ -1,0 +1,20 @@
+---
+source: crates/eml_cli/tests/repl.rs
+expression: checked.render()
+input_file: crates/eml_cli/tests/repl/rules/fixity.repl
+---
+> (<->) : Int -> Int -> Int
+. a <-> b = a - b
+. infixl 6 <->
+> 1 <-> 2 * 3
+-5
+> (<+>) : Int -> Int -> Int
+. a <+> b = a - b
+.
+> infixl 6 <+>
+E1022 <input 4> 1:10 `<+>` is not defined in this input
+  <input 4> 1:10 a fixity declaration needs a definition of its operator in the same input
+> 1 <+> 2 * 3
+-3
+--- close ---
+no leaks

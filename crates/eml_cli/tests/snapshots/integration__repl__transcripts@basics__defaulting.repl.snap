@@ -1,0 +1,18 @@
+---
+source: crates/eml_cli/tests/repl.rs
+expression: checked.render()
+input_file: crates/eml_cli/tests/repl/basics/defaulting.repl
+---
+> []
+[]
+> show []
+"[]"
+> let empty = []
+E2017 <input 3> 1:5 the type of `empty` is not decided
+  <input 3> 1:5 its type is never decided
+  help: write the type of `empty`, as in `let empty : List Int = …`
+> let empty : List Int = []
+> empty
+[]
+--- close ---
+no leaks

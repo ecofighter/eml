@@ -1,0 +1,16 @@
+# `let` の束縛は1回だけ評価し、後の入力の式と関数の定義から読める
+> let ten =
+.   println "evaluated"
+.   10
+.
+> ten + ten
+> add_once : Int -> Int
+. add_once x = x + ten
+.
+> add_once 5
+> let greeting : String = "hi"
+> greeting
+> let scale = fn x -> x * ten
+> scale 3
+> let pair = (ten, greeting)
+> pair

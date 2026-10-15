@@ -1,0 +1,6 @@
+# 式の入力で決まらない型変数は `Unit` に決める。`let` では決めずに、型の明示を求める
+> []
+> show []
+> let empty = []
+> let empty : List Int = []
+> empty

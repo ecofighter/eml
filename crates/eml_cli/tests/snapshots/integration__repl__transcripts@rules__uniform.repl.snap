@@ -1,0 +1,27 @@
+---
+source: crates/eml_cli/tests/repl.rs
+expression: checked.render()
+input_file: crates/eml_cli/tests/repl/rules/uniform.repl
+---
+> class Walk a where
+.   walk : a -> b -> b
+.
+> instance Walk Int where
+.   walk x y = y
+.
+> stepper : Walk a => a -> b -> b
+. stepper x y = walk x y
+.
+> stepper 1 "s"
+"s"
+> instance Walk T where
+.   walk x y = (stepper x (y, ())).0
+. data T = | T
+E2018 <input 5> 1:1 this input changes how `stepper` from an earlier input is compiled
+  <input 5> 1:1 this input makes a type variable of it grow without bound
+  note: a class instance in this input adds a polymorphic recursion that passes through the earlier definition
+  help: start a new session to use this input
+> stepper 2 True
+True
+--- close ---
+no leaks

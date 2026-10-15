@@ -1,0 +1,6 @@
+# import したモジュールは、後の入力からも見える。`pub` の fixity も効く
+> import Util
+> Util.double 4
+> import Util (double, (<+>))
+> double 5
+> 1 <+> 2 * 3

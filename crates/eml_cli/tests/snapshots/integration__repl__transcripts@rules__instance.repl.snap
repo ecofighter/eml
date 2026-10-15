@@ -1,0 +1,27 @@
+---
+source: crates/eml_cli/tests/repl.rs
+expression: checked.render()
+input_file: crates/eml_cli/tests/repl/rules/instance.repl
+---
+> data Color = | Red | Green
+> instance Show Color where
+.   show c = "color"
+.
+> Red
+color
+> instance Show Color where
+.   show c = "again"
+.
+E1035 <input 4> 1:15 `Color` already has an instance of `Show`
+  <input 4> 1:15 defined again here
+  <input 2> 1:15 first defined here
+> data Color = | Blue
+> instance Show Color where
+.   show c = "blue"
+.
+> Blue
+blue
+> Red
+color
+--- close ---
+no leaks

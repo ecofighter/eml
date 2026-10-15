@@ -1,0 +1,19 @@
+---
+source: crates/eml_cli/tests/repl.rs
+expression: checked.render()
+input_file: crates/eml_cli/tests/repl/generics/later_use.repl
+---
+> pick : a -> a -> a
+. pick x y = y
+.
+> pick 1 2
+2
+> pick "a" "b"
+"b"
+> wrap : a -> List a
+. wrap x = [x]
+.
+> wrap (pick True False)
+[False]
+--- close ---
+no leaks
