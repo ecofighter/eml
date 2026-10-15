@@ -2,7 +2,7 @@
 
 位置づけ: 規範。
 
-VM は、LIR をレジスタ型のバイトコードに変換し、`eml_rt` の `Ctx` の上で実行する。S10a の間は CEK と並べて置き、既定の `eml run` は CEK のままで、`eml run --vm` のときだけ VM が動く。S10b で `eml run` を VM に切り替える。LIR の命令と規則は [LIR とインタプリタ](lir.md) に、物体の形と `Ctx` の基本操作は [オブジェクトモデル](object-model.md) にある。ここでは、バイトコードの形、フレーム、呼び出しの規約、命令ごとの実行、誤りと終わりの処理、`RunStats` の数え方を定める。テストは [テスト戦略](../implementation/testing.md) の「`eml_vm` のテスト」と「VM でも流す」に、計測は [計測の基準](../implementation/benchmarks.md) の「S10a (VM)」にある。
+VM は、LIR をレジスタ型のバイトコードに変換し、`eml_rt` の `Ctx` の上で実行する。`eml run` は VM で動く。LIR の命令と規則は [LIR](lir.md) に、物体の形と `Ctx` の基本操作は [オブジェクトモデル](object-model.md) にある。ここでは、実行の API、バイトコードの形、フレーム、呼び出しの規約、命令ごとの実行、誤りと終わりの処理、上限と割り込み、`RunStats` の意味と数え方を定める。テストは [テスト戦略](../implementation/testing.md) の「`eml_vm` のテスト」と「VM でも流す」に、計測は [計測の基準](../implementation/benchmarks.md) にある。
 
 判断の基準は、簡潔で洗練された実装を第一に、次に性能である。性能のための工夫は、計測で要ると分かったものだけを入れる。後のマルチコア対応 (VM の並列化と、スレッドをまたぐキュー) を妨げないことも、設計の条件に含める (「並列化への備え」)。
 
@@ -10,15 +10,20 @@ VM は、LIR をレジスタ型のバイトコードに変換し、`eml_rt` の 
 
 - バイトコードは LIR から直接作り、中間に別の IR は挟まない。命令列への変換は1回の走査で済むためである
 - crate `eml_vm` は、依存先を `eml_lir`、`eml_rt`、`eml_extern` だけにし、フロントエンドには依存しない。中身は、LIR のプログラムを `CodeBase<M>` に変換するコード生成 (`compile`) と、`CodeBase` を `Ctx<M>` の上で実行する VM の繰り返しの2つである
-- `eml_vm` は、自分の `RunStats` と実行時エラーの型 `VmError` を持ち、`eml_interp` には依存しない。`VmError` の表示は、`eml_interp::RuntimeError` と1文字も違わない形にする
+- `eml_vm` は、自分の `RunStats` と実行時エラーの型 `RuntimeError` を持つ。実行時エラーの型は1つだけなので、`RuntimeError` と呼ぶ。誤りの種類は `VmFault` と呼ぶ。`Fault` にすると、包んでいる `eml_rt::Fault` と名前がぶつかるためである
 - `eml_lir` は、データの物理的な形を決める関数 `LayoutCtor::shape` を持つ ([オブジェクトモデル](object-model.md) の「ペイロード」)
 - `eml_lir` は、文の単位の生存を公開の API にする ([LIR とインタプリタ](lir.md) の「生存解析」)。スロットの割り当て (「スロットの割り当て」) が文の単位の干渉を作るために使う
 - `eml_rt` は、`Word::from_bits` を公開する。生の `int` と `enum` の値をスロットに置くためである (「スロットとスタック」)
 - `eml_rt` の関数には、VM のために `#[inline]` を足していない。インライン化の注釈 (`-C remark=inline`) が「definition is unavailable」と示した `eml_rt` の関数は、どれも実行の繰り返しの外か冷えた道にあったためである。繰り返しの中で呼ぶ関数に同じ注釈が出たときに足し、前後に `bench/rt.sh` を流して [計測の基準](../implementation/benchmarks.md) に記録する。`#[inline]` の置き方によって `map-reuse` の命令の数がビルドごとに約2倍振れたことがあるためである
 - `eml_vm` の中の関数には、2つが分かったときだけ `#[inline]` を付ける。1つは、インライン化の注釈 (`-C remark=inline`) で、VM の繰り返し (`vm::run` と、そこに展開される関数) に「definition is unavailable」で展開されていないことである。もう1つは、付けると `bench/run.sh` で命令の数が減ることである。総称な関数の実体は、コード生成単位の1つにしかできず、ほかの単位からは展開できないためである。今は `data` の命令の関数 (`con`、`switch_tag`、`switch_int`、`switch_string`、`unpack`、`release`、`unbox`) と、`apply` の `make_closure` と `apply_rest` に付けている。測った数は [計測の基準](../implementation/benchmarks.md) の「S10b」にある
-- release のプロファイルの `codegen-units` は既定の値のままにする。1 にすると、VM の実行の分の命令の数はプログラムによって減ったり増えたりし (`state` で 14.2% 減、`fib` で 2.5% 増)、CEK の記録との比べ方も変わるためである ([計測の基準](../implementation/benchmarks.md) の「S10a (VM)」)
-- `eml_cli` は、`run` の feature で `eml_vm` に依存し、隠しフラグ `eml run --vm` のときだけ `eml_vm` を呼ぶ。`--vm` は速いモードで動き、`--debug-heap` を付けると検査モードになる。Host は `StdHost::stdio` で、SIGINT のハンドラはまだない。終了コードは CEK と同じである
-- 実行の関数は `eml_vm::execute(program: &eml_lir::Program, debug_heap: bool, host: HostRef) -> Result<RunStats, VmError>` である。`file_root` は Host が持つので、`RunConfig` は受け取らない。`Control` は上限のない既定の値で作る。割り込みと上限のテストのために、`Control` を受け取る `execute_with` もある。`eml_cli` は `execute` と同じ形の `execute_vm` を公開する
+- release のプロファイルの `codegen-units` は既定の値のままにする。1 にすると、VM の実行の分の命令の数はプログラムによって減ったり増えたりしたためである (`state` で 14.2% 減、`fib` で 2.5% 増。[計測の基準](../implementation/benchmarks.md) の「S10a (VM)」)
+- 実行の関数は `eml_vm::execute(program: &eml_lir::Program, config: &RunConfig, host: HostRef) -> Result<RunStats, RuntimeError>` の1つである。`RunConfig` は、検査モードかどうか (`debug_heap`) と、実行を止める情報 (`control: Arc<Control>`) を持つ。`file_root` は Host が持つので、`RunConfig` は持たない
+- `RunConfig` は `#[non_exhaustive]` にする。欄を足しても呼び出し側を壊さないためである。`RunConfig::default()` は、速いモードと、上限のない新しい `Control` (`Control::new(Limits::default())`) である。`Control` は `Default` を持たないので、`Default` は手で書く。`with_debug_heap(bool)` と `with_control(Arc<Control>)` で組み立てる
+- 1つの `Control` は1回の実行に使う。止める理由のビットは `Control::clear` でしか下りないので、使い回すと、前の実行で立ったビットで次の実行がすぐ止まるためである。`RunConfig` を `clone` すると `Control` を共有するので、UI テストの仕組みと `eml_test_support` は実行ごとに新しい `RunConfig` を作る
+- `RunConfig` に `Control` を持たせるのは、CLI が SIGINT のハンドラに同じ `Control` を渡すためである。上限は `Control` が持つので、`RunConfig` に上限の欄は作らない ([オブジェクトモデル](object-model.md) の「実行の制御」)
+- `eml_vm` は、`eml_rt` の `Control`、`Limits`、`Stop` を再公開する。`eml_cli` は `eml_rt` に依存せず、これらの名前を `eml_vm` から受け取る
+- `eml_cli` は、`run` の feature で `eml_vm` に依存する。`RunConfig`、`RunStats`、`RuntimeError`、`VmFault`、`SourceLocation`、`Control`、`Limits`、`Stop`、`HostRef`、`Capture`、`capture_host`、`stdio_host` を `eml_vm` から再公開し、`execute` を同じ名前で公開する
+- `eml run` は速いモードで動き、`--debug-heap` を付けると検査モードになる。UI テストは、いつも検査モードで流してから速いモードでも流す ([テスト戦略](../implementation/testing.md) の「VM でも流す」)。Host は `stdio_host(PathBuf::new())` で、相対パスはカレントディレクトリを基準にする
 
 ## `CodeBase` と `FnEntry`
 
@@ -52,6 +57,7 @@ VM は、LIR をレジスタ型のバイトコードに変換し、`eml_rt` の 
 - 生のビット列の語は、即値やポインタに見えることがある (偶数の値はポインタの形をしている)。そのため、VM は語の形でなく、コード生成が知っている Repr で値を扱う。RC の命令と、即値かどうかの判定は、Repr が `obj` か `tobj` の値にだけ使う (「RC」と「switch」)
 - 関数に入るときと、`ApplyRest` のフレームを積むときに、スタックを `base + frame_size` まで伸ばす。スタックは添字で指すので、`Vec` が伸びて場所が変わってもよい。スロットの読み書きは、境界を確かめる添字で行う。確かめない添字に替えるのは、計測で要ると分かったときだけにし、そのときは Miri のテストで覆う ([テスト戦略](../implementation/testing.md) の「Miri」)。`Vec` の容量は `Task::reserve` が倍に伸ばすが、`min(2 × 今の容量, max_depth + u16::MAX + 2)` 語で止める (`reserve_exact`)。深さが `max_depth` を超えると次の安全点で止まり、安全点の前に積むのは1つの枠と見出し (`u16::MAX + 2` 語) までなので、それより大きい容量は要らない。余る引数の適用は `ApplyRest` の枠と呼ばれる側の枠を同じ安全点の前に積むので、求める長さが上限を超えうる。そのときは容量をその長さちょうどにする
 - 深さはスタックの使っている語の数 (`base + frame_size`) で、`Ctx::poll` に渡す
+- スタックはヒープの外にあるので、確保量の上限 (`max_bytes`) には数えず、深さの上限 (`max_depth`) で抑える (「上限と割り込み」)
 
 ### フレーム
 
@@ -88,7 +94,7 @@ base + 0 .. base + frame_size: スロット
 - case と `unpack` のフィールドは、使われるものだけを読んで書く。SSA なので、使われないフィールドは死んでいる
 - Repr ごとにスロットを分けない。どの値も1語なので、分けても得るものがないためである。命令の位置ごとの割り当ては静的に決まるので、安全点ごとの「生きていて所有しているスロット」の表は後から作れる。表は生存解析だけでは決まらず、Perceus の所有の状態から作る (「並列化への備え」)
 - `jump` のブロック引数の並列な代入は、コンパイル時に `Move` の列へ直す。どの代入も、まだ読まれていない値を上書きしない順に並べ、輪になる代入は一時のスロットを1つ通して切る。変数の代入を先に並べ、定数の引数はその後に行き先のスロットへ直接読み込む。定数の書き込み先が、ほかの代入がまだ読む値のスロットでありうるためである
-- ブロック引数と実引数に同じ色を付けやすくする合併は行わない。移動の命令を減らす工夫だが、合併なしで VM の実行の分の命令の数が CEK の約 0.10〜0.17 倍に収まったので、簡潔さを先にした ([計測の基準](../implementation/benchmarks.md) の「S10a (VM)」)
+- ブロック引数と実引数に同じ色を付けやすくする合併は行わない。移動の命令を減らす工夫だが、合併なしで VM の実行の分の命令の数が、S10a で比べた前のインタプリタの約 0.10〜0.17 倍に収まったので、簡潔さを先にした ([計測の基準](../implementation/benchmarks.md) の「S10a (VM)」)
 - 呼ぶ側のスロットは、呼び出しの間もスタックに残る。そのため、呼び出しの後で使う変数を退避しない。借りた変数が呼び出しをまたぐときは、その持ち主もスロットに残るので、借りた変数は有効なままである ([LIR とインタプリタ](lir.md) の「所有を取る時点」)
 
 ## 呼び出しと戻り
@@ -154,8 +160,8 @@ base + 0 .. base + frame_size: スロット
 - フィールドのある case では、検査モードで、語の種類が `Data` で、tag と走査する語の数が case の配置のものであることを確かめ、違えば内部の誤りにする。verifier の R8 は値を作った配置を追わないので、verifier を通った IR でも外れうるためである ([LIR とインタプリタ](lir.md) の「構造の規則」)
 - フィールドは `field` と `raw` で物理的な位置から読み、スロットに書く (使われるものだけ)。読むだけなので、参照の数は変えない
 - `Int` の `switch` (`SwitchInt`) は、生の値を case の値と順に比べる。`String` の `switch` (`SwitchString`) は、scrutinee と定数を両方 `Heap::string` で借りて、バイト列を順に比べる。どちらも手放さない
-- 比較と分岐を1つにした命令は持たない。比較の命令が結果を生の `enum` の値としてスロットに書き、`SwitchEnum` がそれで分ける。融合の命令を足すと、`Op` の種類、コード生成の形の照合、逆アセンブラ、テストが増える。融合なしで VM の実行の分の命令の数が CEK の約 0.10〜0.17 倍に収まったので、簡潔さを先にした ([計測の基準](../implementation/benchmarks.md) の「S10a (VM)」)
-- `unpack` は、行き先が1つの `switch` と同じ読み方をする。検査モードでは、語がポインタで、種類が `Data` で、tag と走査する語の数が名指したものであることを確かめ、違えば内部の誤りにする (CEK の `unpack` の見張りと同じ)
+- 比較と分岐を1つにした命令は持たない。比較の命令が結果を生の `enum` の値としてスロットに書き、`SwitchEnum` がそれで分ける。融合の命令を足すと、`Op` の種類、コード生成の形の照合、逆アセンブラ、テストが増える。融合なしで VM の実行の分の命令の数が、S10a で比べた前のインタプリタの約 0.10〜0.17 倍に収まったので、簡潔さを先にした ([計測の基準](../implementation/benchmarks.md) の「S10a (VM)」)
+- `unpack` は、行き先が1つの `switch` と同じ読み方をする。検査モードでは、語がポインタで、種類が `Data` で、tag と走査する語の数が名指したものであることを確かめ、違えば内部の誤りにする
 
 ### 基本操作と extern
 
@@ -168,37 +174,63 @@ base + 0 .. base + frame_size: スロット
 
 ## 誤り、止めること、終わり
 
-- 実行時エラー `VmError` は、誤り (`VmFault`)、関数の名前、省略できる位置を持つ `Fault` と、検査モードのリークの `Leak` である。`VmFault` は、extern、基本操作、ヒープの操作の誤り (`Extern(Fault)`)、安全点で止めたこと (`Stopped(Stop)`)、verifier を通った IR では起きないはずの誤り (`Internal`) の3つである
-- 表示の形は CEK と同じである。位置があれば `{fault}\n  at path:line:column`、なければ ``{fault} in `function` ``、リークは `memory leak: objects were not freed: {n} {name}, …`、内部の誤りの `{fault}` は `internal error: {what}` である
-- 関数の名前は、命令の位置から `FnEntry` の範囲を二分探索して引く。`Finish` と `ApplyRest` はどの関数にも属さないので、そこで起きた誤りには、最後に戻った関数の名前を付ける。VM は `Ret` のたびにその位置を `Task::last_ret` に覚える。末尾の位置の部分適用が作ったクロージャを返すときも、関数の中で起きたなら同じく覚える。CEK も、最後に動いていた関数の名前を付けている
+- 実行時エラー `RuntimeError` は、誤り (`VmFault`)、関数の名前、省略できる位置を持つ `Fault` と、検査モードのリークの `Leak` である。`VmFault` は、extern、基本操作、ヒープの操作の誤り (`Extern(Fault)`)、安全点で止めたこと (`Stopped(Stop)`)、verifier を通った IR では起きないはずの誤り (`Internal`) の3つである
+- 表示の形は次のとおりである。位置があれば `{fault}\n  at path:line:column`、なければ ``{fault} in `function` ``、リークは `memory leak: objects were not freed: {n} {name}, …`、内部の誤りの `{fault}` は `internal error: {what}` である
+- 関数の名前は、命令の位置から `FnEntry` の範囲を二分探索して引く。`Finish` と `ApplyRest` はどの関数にも属さないので、そこで起きた誤りには、最後に戻った関数の名前を付ける。VM は `Ret` のたびにその位置を `Task::last_ret` に覚える。末尾の位置の部分適用が作ったクロージャを返すときも、関数の中で起きたなら同じく覚える
 - 位置は `locations` から命令の位置で引く。表に載せるのは、位置を持つ extern の呼び出しから作った命令である。専用の算術と比較の命令も含む。`run-fail` の UI テストの多くは `/` と `+` の誤りの位置を表示している
-- `Arith`、`Output`、`Io`、`NotUtf8` の文言は `eml_rt` のものを使う。CEK と1文字も違わないことは、`crates/eml_rt/src/heap/tests/expected.txt` の表で確かめてある ([テスト戦略](../implementation/testing.md) の「期待値の表」)。`Heap(_)` の文言は `eml_rt::HeapError` のものになる
+- `Arith`、`Output`、`Io`、`NotUtf8`、`Heap(_)` の文言は `eml_rt` のものを使う ([オブジェクトモデル](object-model.md) の「誤り」)。extern の結果と文言は、`crates/eml_rt/src/heap/tests/expected.txt` の表が固定する ([テスト戦略](../implementation/testing.md) の「期待値の表」)
 - 安全点の `Ctx::poll` が返す `Stop` と extern の `Fault::Stopped` は、どちらも `Stop` の文言で表示する。`Fs.read_all` の `Fault::Stopped` は extern の誤りなので位置を付け、安全点の `Stop` には付けない
+- 割り込みで止めたときの表示も、ほかの実行時エラーと同じ形である。安全点で止めたときは ``interrupted in `f` `` (`f` は止めたときの関数)、`Fs.read_all` の中で止めたときは位置付きの `interrupted` である。`RuntimeError::interrupted()` は、安全点の `Stopped(Stop::Interrupted)` と、`Fs.read_all` の中で止めた `Extern(Fault::Stopped(Stop::Interrupted))` の両方で真を返す。CLI が終了コードを決めるのに使う (「上限と割り込み」)
 - 繰り返しが誤りで終わっても、`Finish` に着いても、`execute` は `Ctx::flush` を呼んでから結果を返す。`> out 2>&1` のときに出力と誤りの順を保つためである
 - `Finish` に着いたら、次の順に処理する
-  1. 入口の関数の結果を手放す。Repr が `obj` か `tobj` のときだけ `decref` する。CEK のいちばん下のフレームも、結果を手放してから終わる
+  1. 入口の関数の結果を手放す。Repr が `obj` か `tobj` のときだけ `decref` する
   2. flush する。誤りなら、位置なしで返す
   3. `Ctx::check_finished` で、`evv` が空で yield の状態がなしであることを確かめる。モードによらず確かめ、満たさなければ内部の誤りにする
   4. 検査モードでは、`Heap::check_invariants` と `Heap::leaks` を確かめる。不変条件の誤りには、最後に戻った関数の名前を付ける。リークがあれば、種類の名前ごとの数を持つ誤りにする
 
+## 上限と割り込み
+
+`eml run` の既定の上限は、`eml_cli::default_limits() -> Limits` が作る。`eml_rt` を vstd だけに依存したままにするため、OS に問い合わせるコードは `eml_cli` に置く。
+
+| 上限 | 既定の値 | 理由 |
+|---|---|---|
+| `max_depth` | 2^27 語 (1 GiB 分のスタック) | OCaml 5 のスタックの既定の上限 (128M 語) と同じ量である。1段が 8 語なら、約 1600 万段まで入る |
+| `max_bytes` | 物理メモリの 80% | GHC がスタックの上限 (`-K`) の既定を物理メモリの 80% にしているのに倣う。ヒープの上限としての前例ではなく、「機械を使い切る前に、分かる誤りで止める」という考え方を借りる。物理メモリを読めない OS では上限なし (`usize::MAX`) にする |
+| `max_evv` | 上限なし | `evv` はヒープの物体なので、確保量の上限で抑えられる |
+
+- 物理メモリは `sysconf(_SC_PHYS_PAGES) * sysconf(_SC_PAGESIZE)` で読む。macOS と Linux のどちらもこの2つを持つ。`eml_cli` の `src/` の `unsafe` の呼び出しは、この関数の中だけに置く
+- Linux のコンテナでは、物理メモリは cgroup の上限を反映しない。上限が cgroup より大きくなり、分かる誤りの前に OOM で殺されうる。cgroup を読むのは要るときに足す
+- VM のスタックはヒープの外にあるので `max_bytes` に数えず、`max_depth` で抑える (「スロットとスタック」)
+- 検査モードは解放したブロックを使い回さないので、`--debug-heap` の長い実行は、速いモードより先に `max_bytes` に当たりうる。暴走を止める安全網という上限の役 ([オブジェクトモデル](object-model.md) の「確保と解放」) は変わらないので、受け入れる
+- CLI のフラグ (`--max-depth` など) は足さない。要るとき (REPL など) に足す
+- 深さか確保量の上限で止まったときは ``the call depth limit is exceeded in `f` `` か ``the memory limit is exceeded in `f` `` と表示し、終了コードは 1 である
+
+`eml run` は、ファイルを読む前に `Control::new(default_limits())` を作り、`ctrlc` crate で SIGINT のハンドラを入れる。読み込みとコンパイルの間の Ctrl-C も、既定の動作 (シグナルで殺される) でなく、このハンドラが受ける。ハンドラは実行の `Control` を持ち、次のように動く。
+
+- `control.stop_bits() & Control::INTERRUPT` が 0 なら、`control.interrupt()` を呼ぶ。VM は次の安全点で止まる。コンパイルの間に立ったビットは、実行の最初の安全点で読まれる
+- すでに立っていれば (2回目の Ctrl-C)、`std::process::exit(130)` でその場で終わる。まだ書いていない出力は捨てる。安全点に来ないプログラム (入力を待つ `Fs.read_all` など) を止めるための道だからである
+- `ctrlc` はハンドラを専用のスレッドで順に呼ぶので、2つの Ctrl-C が同時に読み書きすることはない。`eml_rt` の `Control` は変えない
+
+割り込みで止まったとき (`RuntimeError::interrupted`) は、1回目でも終了コードを 130 にする。130 は、シェルが SIGINT で終わった子に報告する値と同じである。ほかの実行時エラーは 1 である。
+
 ## `RunStats`
 
-VM の `RunStats` は、`eml_rt` の数え方に従い、検査モードだけで数える。欄は `eml_interp::RunStats` の欄に `peak_stack` を足したものである。
+`RunStats` は、実行の仕事の回数と、同時に生きていたヒープの物体の数と、スタックの語の数の最大である。検査モードだけで数え、速いモードの欄は 0 のままである。実行時エラーとリークのときは返さない。欄は次の10で、はじめの8つが仕事の回数である。
 
-| 項目 | VM での出どころ |
-|---|---|
-| `evidence_steps`、`yields`、`yield_frames`、`string_bytes_copied` | `Ctx` の `CtxStats` |
-| `rc_increments`、`rc_decrements` | `Heap` の `Stats` |
-| `peak_objects` | `Heap` の `Stats` の `peak_live` |
-| `boxes`、`unboxes` | VM が実行した `box` (`BoxInt`、`BoxEnum`、`BoxConst`) と `unbox` の数 |
-| `peak_stack` | 実行の終わりのタスクのスタックの長さ (`Task::stack.len()`)。長さは縮めないので、同時に使った語の数の最大になる。VM のフレームはスタックにあって `peak_objects` に表れないので、末尾呼び出しを失ったことはこの数で見つける |
+- `evidence_steps`: `ev_lookup` と `evv_mask` がたどった `evv` の節点の数。今有効な handler の数で決まり、呼び出しの深さにはよらない。検査モードの `evv_mask` は、合う evidence が足りずに誤りを返したときは数えない ([オブジェクトモデル](object-model.md) の「速いモードと検査モード」)。出どころは `Ctx` の `CtxStats` である
+- `yields`: `yield_to` と `yield_abort` を実行した回数。すぐに再開する操作は yield しないので数えない。出どころは `CtxStats` である
+- `yield_frames`: `yield_cont_set` を実行した回数。yield が handler まで戻る間に、継続 κ に足したフレームの数である。再開する操作では、操作と handler の間のフレームの数に比例する。これは方式の性質である。出どころは `CtxStats` である
+- `string_bytes_copied`: extern がヒープの文字列の物体に写したバイト数 ([オブジェクトモデル](object-model.md) の「仕事の回数」)。`++` では、新しい文字列を作る側が |左辺| + |右辺|、一意な左辺に足す側が |右辺| になる。出力への書き込みと、コード生成が定数を作る書き込みは数えない。出どころは `CtxStats` である
+- `rc_increments`: 参照の数を増やした回数。`dup`、共有の側の `release` が残すフィールド、基本操作が残す参照を数える。凍結した領域の物体とダミーは数えない ([オブジェクトモデル](object-model.md) の「検査モードでは数えない」)。出どころは `Heap` の `Stats` である
+- `rc_decrements`: 参照の数を減らした回数。`decref`、`drop`、解放の連鎖で子を手放した分を数える。`release` と `free_block` は、持ち主を空けるときにも1つ足す。出どころは `Heap` の `Stats` である
+- `boxes`: VM が実行した `box` (`BoxInt`、`BoxEnum`、`BoxConst`) の数。語の値の表現では確保しうる変換なので数える
+- `unboxes`: VM が実行した `unbox` の数。数える理由は `boxes` と同じである
+- `peak_objects`: 同時に生きていたヒープの物体の数の最大 (`Heap` の `Stats` の `peak_live`)。ヒープごとのダミーの物体を1つ含む。フレームはスタックにあり、凍結した領域の物体も数えないので、どちらも含まない
+- `peak_stack`: タスクのスタックで同時に使った語の数の最大。スタックの `Vec` の長さは縮めないので、`Task::reserve` が伸ばした長さがそのまま最大になり、VM は実行の終わりに `task.stack.len()` を読むだけで済む。フレームはスタックにあって `peak_objects` に表れないので、末尾呼び出しを失ったことはこの欄で見つける
 
-`evidence_steps`、`yields`、`yield_frames`、`string_bytes_copied`、`boxes`、`unboxes` の6つは、同じ LIR の上で同じ定義を持つので、CEK と等しい。`rc_*` と `peak_objects` は、次の4つの理由で CEK と違う値になる。差は [計測の基準](../implementation/benchmarks.md) の「S10a (VM)」に記録してあり、S10b でスナップショットを替えるときの理由にする。
+どの回数も時間ではなく、仕事か物体か語を数える。そのため、2乗の時間にならないことと、ループがフレームを積まないことを、ふだんのテストで確かめられる ([テスト戦略](../implementation/testing.md) の「性能のテスト」)。
 
-1. CEK はフレームをヒープの物体にしているので、フレームの分の RC と物体の数を数える。VM のフレームはスタックにあるので、この分を数えない
-2. CEK は文字列のリテラルの参照を数え、リテラルを物体の数に含める。VM は凍結した領域の物体を数えない ([オブジェクトモデル](object-model.md) の「検査モードでは数えない」)
-3. `eml_rt` の `peak_live` は、ヒープごとのダミーの物体を含む
-4. `eml_rt` の `free_block` と `release` は、持ち主を空けるときに `rc_decrements` を1つ足す。CEK は解放そのものを数えない
+S10a までの記録の `rc_increments`、`rc_decrements`、`peak_objects` は、S10b で消したインタプリタの数え方の値で、VM の値とは違う。違う理由は [計測の基準](../implementation/benchmarks.md) の「S10a (VM)」にある。
 
 ## 並列化への備え
 
