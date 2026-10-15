@@ -223,13 +223,16 @@ base + 0 .. base + frame_size: スロット
 - VM のスタックはヒープの外にあるので `max_bytes` に数えず、`max_depth` で抑える (「スロットとスタック」)
 - 検査モードは解放したブロックを使い回さないので、`--debug-heap` の長い実行は、速いモードより先に `max_bytes` に当たりうる。暴走を止める安全網という上限の役 ([オブジェクトモデル](object-model.md) の「確保と解放」) は変わらないので、受け入れる
 - CLI のフラグ (`--max-depth` など) は足さない。要るとき (REPL など) に足す
+- `eml repl` の上限は `eml_cli::repl_limits()` が作る。確保量だけが違い、物理メモリの 40% である ([REPL の端末](repl.md) の「コマンドライン」)
 - 深さか確保量の上限で止まったときは ``the call depth limit is exceeded in `f` `` か ``the memory limit is exceeded in `f` `` と表示し、終了コードは 1 である
 
-`eml run` は、ファイルを読む前に `Control::new(default_limits())` を作り、`ctrlc` crate で SIGINT のハンドラを入れる。読み込みとコンパイルの間の Ctrl-C も、既定の動作 (シグナルで殺される) でなく、このハンドラが受ける。ハンドラは実行の `Control` を持ち、次のように動く。
+`eml run` と `eml repl` は、`Control` を作った直後に、`eml_cli` の bin の `sigint` モジュールで SIGINT のハンドラを入れる。`eml run` はファイルを読む前に入れるので、読み込みとコンパイルの間の Ctrl-C も、既定の動作 (シグナルで殺される) でなく、このハンドラが受ける。`eml check` には入れない。ハンドラは unix だけで入れ、ほかの OS では Ctrl-C は OS の既定の動作でプロセスを終わらせる。
 
-- `control.stop_bits() & Control::INTERRUPT` が 0 なら、`control.interrupt()` を呼ぶ。VM は次の安全点で止まる。コンパイルの間に立ったビットは、実行の最初の安全点で読まれる
-- すでに立っていれば (2回目の Ctrl-C)、`std::process::exit(130)` でその場で終わる。まだ書いていない出力は捨てる。安全点に来ないプログラム (入力を待つ `Fs.read_all` など) を止めるための道だからである
-- `ctrlc` はハンドラを専用のスレッドで順に呼ぶので、2つの Ctrl-C が同時に読み書きすることはない。`eml_rt` の `Control` は変えない
+- `libc::sigaction` で入れ、`sa_flags` に `SA_RESTART` も `SA_NODEFER` も入れない。`SA_RESTART` を外すので、待っている読みは `EINTR` で戻り、`Fs.read_all` が止める語を読んで止まる ([オブジェクトモデル](object-model.md) の「`File`」)。`SA_NODEFER` を入れないので、ハンドラが動く間は同じ SIGINT が塞がれ、ハンドラは入れ子にならない
+- ハンドラは static に置いた `Control` と動き方だけを読み、アトミックな読み書きと `libc::_exit` だけをする。static は `sigaction` の前に置く
+- 止める語の `INTERRUPT` が 0 なら、`control.interrupt()` を呼ぶ。VM は次の安全点で止まる。コンパイルの間に立ったビットは、実行の最初の安全点で読まれる
+- `eml run` では、すでに立っていれば (2回目の Ctrl-C)、`libc::_exit(130)` でその場で終わる。まだ書いていない出力は捨てる。安全点に来ない処理から抜けるための道だからである。`eml repl` は終わらず、`interrupt()` を呼ぶだけである ([REPL の端末](repl.md) の「割り込み」)
+- プロセスはほかのスレッドを持たないので、SIGINT は読んでいるスレッドに届く。並列 VM で worker のスレッドを持つときは、読まないスレッドで SIGINT を塞ぐ ([マルチコア対応](../future/multicore.md))
 
 割り込みで止まったとき (`RuntimeError::interrupted`) は、1回目でも終了コードを 130 にする。130 は、シェルが SIGINT で終わった子に報告する値と同じである。ほかの実行時エラーは 1 である。
 

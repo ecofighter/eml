@@ -673,7 +673,7 @@ token の表の項目は、`into_token` と `release_reuse` が添字を使い�
 - `Control::interrupt()` は `INTERRUPT` を立て、`Control::clear()` はすべてのビットを下ろす。確保量が上限を下回ってもビットは下りないので、下ろすのは `clear` だけである。REPL (`eml_cli::Repl`) は、入力の始めに `clear` を呼ぶ。確保量の上限で止まった後も、`MEMORY` のビットで次の入力が止まらないようにするためである。`clear` は確保量を減らさない。確保量を戻すのは、続けられる誤りの後の回復である。回復は古いヒープのページをすべて `Control` に戻すので、上限で止まった後の入力も、新しいヒープの分から数える (上の「回復」)。回復は写す間に古いヒープと写しを同時に持つので、写すことで上限を超えることがある。そのとき立つ `MEMORY` のビットは、次の入力の始めの `clear` が下ろす
 - 止める語が伝えるのは「止めよ」のビットだけで、ほかのメモリへの書き込みを公開する役はない。そのため、どの読み書きも Relaxed で行う
 - `poll`、`interrupt`、`clear` と確保量の加減は、`verus!` の外の安全なコードで、値について何も約束しない。確保器が確保量を加減する関数は、信頼の一覧の T1 に入る (下の「`unsafe` の核」)
-- `eml_rt` は止める語だけを持ち、SIGINT のハンドラを持たない。vstd だけに依存したままにするためである。ハンドラは `eml_cli` が `ctrlc` crate で入れ、`Control::interrupt()` を呼ぶ ([VM](vm.md) の「上限と割り込み」)
+- `eml_rt` は止める語だけを持ち、SIGINT のハンドラを持たない。vstd だけに依存したままにするためである。ハンドラは `eml_cli` が `libc::sigaction` で入れ、`Control::interrupt()` を呼ぶ ([VM](vm.md) の「上限と割り込み」)
 - `eml run` の上限の既定の値は、`eml_cli::default_limits()` が決める ([VM](vm.md) の「上限と割り込み」)。上の表の既定の値 (`usize::MAX`) は `Limits::default()` のもので、`RunConfig::default()` とテストが使う
 
 ### 基本操作の契約

@@ -7,6 +7,9 @@ use clap::{Parser, Subcommand};
 use eml_cli::{Control, FsProvider, RunConfig, Session, default_limits, stdio_host};
 use eml_diagnostics::{has_errors, render};
 
+#[cfg(unix)]
+mod sigint;
+
 #[derive(Parser)]
 #[command(name = "eml", version, about = "The eml programming language")]
 struct Cli {
@@ -47,7 +50,8 @@ fn main() -> ExitCode {
             // 読み込みとコンパイルの間の Ctrl-C も、シグナルで殺されずにこのハンドラが受ける。そこで立てたビットは、
             // 実行の最初の安全点で読まれる
             let control = Arc::new(Control::new(default_limits()));
-            interrupt_on_sigint(Arc::clone(&control));
+            #[cfg(unix)]
+            sigint::install(Arc::clone(&control), sigint::Mode::Run);
             let Some(session) = load(&file) else {
                 return ExitCode::from(2);
             };
@@ -70,24 +74,6 @@ fn main() -> ExitCode {
                 }
             }
         }
-    }
-}
-
-/// 1回目の SIGINT は `INTERRUPT` を立て、VM を次の安全点で止める。2回目はその場で終わり、まだ書いていない出力は
-/// 捨てる。安全点に来ないプログラム (入力を待つ `Fs.read_all` など) を止めるための道である。`ctrlc` はハンドラを専用の
-/// スレッドで順に呼ぶので、2つの SIGINT が同時にビットを読み書きすることはない (docs/spec/object-model.md の
-/// 「実行の制御」)。
-fn interrupt_on_sigint(control: Arc<Control>) {
-    let installed = ctrlc::set_handler(move || {
-        if control.stop_bits() & Control::INTERRUPT == 0 {
-            control.interrupt();
-        } else {
-            std::process::exit(130);
-        }
-    });
-    // 入れられなくてもプログラムは実行できる。その場合 Ctrl-C は既定の動作でプロセスを終わらせる。
-    if let Err(error) = installed {
-        eprintln!("warning: cannot install the SIGINT handler: {error}");
     }
 }
 

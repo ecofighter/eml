@@ -23,11 +23,10 @@ required-features = ["run"]
 default = ["run"]
 types = ["dep:eml_types"]
 core = ["types", "dep:eml_core_ir", "dep:eml_lir"]
-run = ["core", "dep:eml_vm", "dep:ctrlc", "dep:libc"]
+run = ["core", "dep:eml_vm", "dep:libc"]
 
 [dependencies]
 clap.workspace = true
-ctrlc = { workspace = true, optional = true }
 eml_core_ir = { workspace = true, optional = true }
 eml_diagnostics.workspace = true
 eml_hir.workspace = true

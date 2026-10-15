@@ -307,8 +307,10 @@ fn an_interrupt_stops_a_running_program_with_130() {
     assert!(stderr.contains("interrupted"), "{stderr}");
 }
 
-/// 読みの中で待つプログラムは安全点に来ない。2回目の SIGINT でハンドラがその場で終わらせ、終了コードは 130 である。
-/// 続けて届いた2つの SIGINT は1つにまとまることがあるので、終わるまで 100 ms ごとに送り続ける。
+/// 読みの中で待つプログラムは、1回目の SIGINT で読みが `EINTR` で戻って止まり、終了コードは 130 である。読みに入る
+/// 直前に届いた SIGINT は読みを止めないが、2回目の SIGINT でハンドラがその場で終わらせ、終了コードは同じく 130 である
+/// (docs/spec/vm.md の「上限と割り込み」)。続けて届いた2つの SIGINT は1つにまとまることがあるので、終わるまで
+/// 100 ms ごとに送り続ける。
 #[cfg(unix)]
 #[test]
 fn repeated_interrupts_end_a_program_waiting_in_a_read_with_130() {
