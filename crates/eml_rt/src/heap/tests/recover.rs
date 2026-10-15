@@ -166,10 +166,75 @@ fn recovery_refuses_what_it_cannot_copy<M: Mode>() {
     }
 }
 
+/// 回復が一時に使うメモリは、根から届く物体の数で決まり、古いヒープの大きさによらない。回復は確保量の上限で止まった
+/// 直後にも走るので、古いヒープに比例するメモリを足すと、上限が機械を使い切る前に止める意味がなくなる
+/// (docs/spec/object-model.md の「回復」)。根がない `eml run` も同じである。
+fn recovery_needs_no_memory_in_proportion_to_the_old_heap<M: Mode>() {
+    for rooted in [true, false] {
+        let mut ctx = ctx::<M>();
+        unsafe {
+            let heap = ctx.heap_mut();
+            let _garbage = list(heap, 1_000_000);
+            if rooted {
+                let kept = list(heap, 10);
+                ctx.root_set(0, kept).unwrap();
+            }
+        }
+        let peak = counting::peak_during(|| unsafe { ctx.recover() }.unwrap());
+        assert!(peak < 1 << 20, "{peak} bytes (rooted = {rooted})");
+        release_roots(&mut ctx);
+    }
+}
+
+/// このスレッドが確保しているバイト数を数える確保器。並んで走るテストの確保を混ぜないよう、スレッドごとに数える。
+mod counting {
+    use std::alloc::{GlobalAlloc, Layout, System};
+    use std::cell::Cell;
+
+    struct Counting;
+
+    thread_local! {
+        static CURRENT: Cell<isize> = const { Cell::new(0) };
+        static PEAK: Cell<isize> = const { Cell::new(0) };
+    }
+
+    fn add(n: isize) {
+        let _ = CURRENT.try_with(|current| {
+            let now = current.get() + n;
+            current.set(now);
+            let _ = PEAK.try_with(|peak| peak.set(peak.get().max(now)));
+        });
+    }
+
+    unsafe impl GlobalAlloc for Counting {
+        unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
+            add(layout.size() as isize);
+            unsafe { System.alloc(layout) }
+        }
+
+        unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
+            add(-(layout.size() as isize));
+            unsafe { System.dealloc(ptr, layout) }
+        }
+    }
+
+    #[global_allocator]
+    static COUNTING: Counting = Counting;
+
+    /// `f` の間に、始めの量を超えて確保した量の最大。
+    pub(super) fn peak_during(f: impl FnOnce()) -> usize {
+        let start = CURRENT.with(Cell::get);
+        PEAK.with(|peak| peak.set(start));
+        f();
+        (PEAK.with(Cell::get) - start) as usize
+    }
+}
+
 both_modes!(
     recovery_keeps_only_what_the_roots_reach,
     recovery_empties_the_evv_and_the_yield_state,
     recovery_refuses_what_it_cannot_copy,
+    recovery_needs_no_memory_in_proportion_to_the_old_heap,
 );
 
 /// 検査モードでは、空けた物体と token の箱に届く根も断る。速いモードでは、根が生きていない物体を指すこと自体が

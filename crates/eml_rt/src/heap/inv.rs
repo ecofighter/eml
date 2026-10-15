@@ -211,6 +211,12 @@ impl Core {
         !self.dom().contains(h) && self.region_has(h)
     }
 
+    /// ヒープのページは、どれも付けた塊とその祖先のページでない。
+    pub(crate) open spec fn pages_apart(&self) -> bool {
+        self.env@.region matches Some(r) ==> forall|a: usize| #[trigger]
+            self.pages.has_page(a) ==> !r@.has_page(a)
+    }
+
     /// `h` は、このヒープのブロックか、付けた塊とその祖先のブロックである。
     pub(crate) open spec fn has(&self, h: usize) -> bool {
         self.dom().contains(h) || self.region_has(h)

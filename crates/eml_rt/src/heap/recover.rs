@@ -5,7 +5,6 @@
 //! 出現の数に等しいこと (速いモード) である。
 
 use vstd::hash_map::HashMapWithView;
-use vstd::hash_set::HashSetWithView;
 use vstd::prelude::*;
 
 use super::Core;
@@ -168,27 +167,18 @@ proof fn lemma_roots_absent(rs: Seq<Option<Word>>, b: usize)
 }
 
 impl Core {
-    /// 切り出したブロックは、どれも付けた塊のブロックでない。ページの頭の権限は1つしかないからである。
-    proof fn lemma_carved_apart(tracked &mut self)
+    /// ヒープのページは、どれも付けた塊のページでない。ページの頭の権限は1つしかないからである。
+    proof fn lemma_apart_from_region(tracked &mut self)
         requires
             old(self).pages.wf(),
             old(self).region_wf(),
         ensures
             *final(self) == *old(self),
-            forall|h: usize| #[trigger]
-                final(self).pages.carved_block(h) ==> !final(self).region_has(h),
+            final(self).pages_apart(),
     {
         if self.env@.region is Some {
             let tracked r = self.env.borrow().tracked_region();
             self.pages.lemma_pages_apart(r, self.checked());
-            assert forall|h: usize| #[trigger] self.pages.carved_block(h) implies !self.region_has(
-                h,
-            ) by {
-                self.pages.lemma_carved_page(h);
-                if r.has(h) {
-                    r.lemma_block(h, self.checked());
-                }
-            }
         }
     }
 }
@@ -546,11 +536,9 @@ impl<M: Mode> Heap<M> {
     /// (まだ写していない `Data` のとき)。写せない物体は `Unrecoverable` にする
     /// (docs/spec/object-model.md の「種類」)。誤りのときも写し先の
     /// 不変条件は保ち、呼ぶ側は写し先を捨てる。
-    #[expect(clippy::too_many_arguments, reason = "the parts of one copy")]
     fn resolve(
         &self,
         new: &mut Heap<M>,
-        set: &HashSetWithView<usize>,
         done: &mut HashMapWithView<usize, Option<Word>>,
         frames: &mut Vec<Frame>,
         words: &mut Vec<Word>,
@@ -558,7 +546,7 @@ impl<M: Mode> Heap<M> {
         Ghost(out): Ghost<Seq<Option<Word>>>,
     ) -> (r: Result<(), HeapError>)
         requires
-            self.source_ok(set@, old(done)@, old(frames)@),
+            self.source_ok(old(done)@, old(frames)@),
             old(new).target_ok(*self, old(words)@, out, old(done)@),
             self.source_word(w),
         ensures
@@ -566,7 +554,7 @@ impl<M: Mode> Heap<M> {
             final(new).settled(),
             final(new).worker == self.worker,
             r is Ok ==> {
-                &&& self.source_ok(set@, final(done)@, final(frames)@)
+                &&& self.source_ok(final(done)@, final(frames)@)
                 &&& final(new).target_ok(*self, final(words)@, out, final(done)@)
                 &&& old(done)@.dom().subset_of(final(done)@.dom())
                 &&& ({
@@ -590,13 +578,10 @@ impl<M: Mode> Heap<M> {
             return Ok(());
         }
         let a = w.bits();
-        if !set.contains(&a) {
-            // 切り出したブロックでなければ、付けた塊の物体である。写し先も同じ塊を付けているので、そのまま使う
+        let h = self.header_of(w);
+        if !self.core.in_heap(h) {
+            // 付けた塊の物体である。写し先も同じ塊を付けているので、そのまま使う
             proof {
-                assert(!self.core.pages.carved_block(a));
-                if self.core.dom().contains(a) {
-                    self.core.pages.lemma_in_use_carved(a);
-                }
                 assert(self.core.region_has(a));
                 assert(!new.core.dom().contains(a)) by {
                     if new.core.dom().contains(a) {
@@ -614,10 +599,7 @@ impl<M: Mode> Heap<M> {
             }
             return Ok(());
         }
-        let h = self.header_of(w);
         proof {
-            assert(self.core.pages.carved_block(a));
-            assert(!self.core.region_has(a));
             assert(self.core.dom().contains(a));
             if M::CHECKED {
                 self.core.lemma_safe_at(a);
@@ -703,7 +685,7 @@ impl<M: Mode> Heap<M> {
                     assert(done@.dom() =~= d0.dom().insert(a));
                     assert(frames@.drop_last() =~= old(frames)@);
                     assert(done@.dom().len() > d0.dom().len()) by {
-                        vstd::set_lib::lemma_len_subset(d0.dom(), set@);
+                        vstd::set_lib::lemma_len_subset(d0.dom(), self.core.dom());
                     }
                     assert(self.frame_ok(f, done@));
                     assert forall|i: int| 0 <= i < frames@.len() implies #[trigger] self.frame_ok(
@@ -751,7 +733,7 @@ impl<M: Mode> Heap<M> {
                 let nw = new.alloc_string(text);
                 proof {
                     new.lemma_target_made(n0, *self, ws0, out, d0, nw, a);
-                    self.lemma_source_insert(set@, d0, old(frames)@, a, Some(nw));
+                    self.lemma_source_insert(d0, old(frames)@, a, Some(nw));
                 }
                 done.insert(a, Some(nw));
                 words.push(nw);
@@ -770,7 +752,7 @@ impl<M: Mode> Heap<M> {
                     } else {
                         new.lemma_target_made(n0, *self, ws0, out, d0, nw, a);
                     }
-                    self.lemma_source_insert(set@, d0, old(frames)@, a, Some(nw));
+                    self.lemma_source_insert(d0, old(frames)@, a, Some(nw));
                 }
                 done.insert(a, Some(nw));
                 words.push(nw);
@@ -1277,19 +1259,17 @@ impl<M: Mode> Heap<M> {
 
     /// 写している途中の物体 `f` の写しを作る。走査する語の写しは語のスタックの上の `f.count` 個で、後ろからフィールドに
     /// 移す。作った写しは語のスタックに積み、写した表に入れる。
-    #[expect(clippy::too_many_arguments, reason = "the parts of one copy")]
     fn build(
         &self,
         new: &mut Heap<M>,
         done: &mut HashMapWithView<usize, Option<Word>>,
         words: &mut Vec<Word>,
         f: Frame,
-        Ghost(set): Ghost<Set<usize>>,
         Ghost(frames): Ghost<Seq<Frame>>,
         Ghost(out): Ghost<Seq<Option<Word>>>,
     ) -> (r: Result<(), HeapError>)
         requires
-            self.source_ok(set, old(done)@, frames),
+            self.source_ok(old(done)@, frames),
             self.frame_ok(f, old(done)@),
             forall|i: int| 0 <= i < frames.len() ==> #[trigger] frames[i].h@.addr != f.h@.addr,
             old(new).target_ok(*self, old(words)@, out, old(done)@),
@@ -1298,7 +1278,7 @@ impl<M: Mode> Heap<M> {
             final(new).settled(),
             final(new).worker == self.worker,
             r is Ok ==> {
-                &&& self.source_ok(set, final(done)@, frames)
+                &&& self.source_ok(final(done)@, frames)
                 &&& final(new).target_ok(*self, final(words)@, out, final(done)@)
                 &&& final(done)@.dom() == old(done)@.dom()
             },
@@ -1349,7 +1329,7 @@ impl<M: Mode> Heap<M> {
                     raw as int,
                     f.count as int,
                 ),
-                self.source_ok(set, d0, frames),
+                self.source_ok(d0, frames),
                 self.frame_ok(f, d0),
                 raw == f.cap - f.first - f.count,
                 nfirst <= 1,
@@ -1409,7 +1389,7 @@ impl<M: Mode> Heap<M> {
                     raw as int,
                     k as int,
                 ),
-                self.source_ok(set, d0, frames),
+                self.source_ok(d0, frames),
                 self.frame_ok(f, d0),
                 nfirst <= 1,
                 0 <= k <= f.count,
@@ -1502,14 +1482,13 @@ impl<M: Mode> Heap<M> {
     fn copy_frames(
         &self,
         new: &mut Heap<M>,
-        set: &HashSetWithView<usize>,
         done: &mut HashMapWithView<usize, Option<Word>>,
         frames: &mut Vec<Frame>,
         words: &mut Vec<Word>,
         Ghost(out): Ghost<Seq<Option<Word>>>,
     ) -> (r: Result<(), HeapError>)
         requires
-            self.source_ok(set@, old(done)@, old(frames)@),
+            self.source_ok(old(done)@, old(frames)@),
             old(new).target_ok(*self, old(words)@, out, old(done)@),
         ensures
             final(new).wf(),
@@ -1517,16 +1496,16 @@ impl<M: Mode> Heap<M> {
             final(new).worker == self.worker,
             r is Ok ==> {
                 &&& final(frames)@.len() == 0
-                &&& self.source_ok(set@, final(done)@, final(frames)@)
+                &&& self.source_ok(final(done)@, final(frames)@)
                 &&& final(new).target_ok(*self, final(words)@, out, final(done)@)
             },
     {
         while !frames.is_empty()
             invariant
-                self.source_ok(set@, done@, frames@),
+                self.source_ok(done@, frames@),
                 new.target_ok(*self, words@, out, done@),
             decreases
-                    set@.len() - done@.dom().len(),
+                    self.core.dom().len() - done@.dom().len(),
                     frames@.len(),
                     if frames@.len() > 0 {
                         frames@.last().count - frames@.last().next
@@ -1535,7 +1514,7 @@ impl<M: Mode> Heap<M> {
                     },
         {
             proof {
-                vstd::set_lib::lemma_len_subset(done@.dom(), set@);
+                vstd::set_lib::lemma_len_subset(done@.dom(), self.core.dom());
             }
             let top = frames.len() - 1;
             let f = frames[top];
@@ -1585,13 +1564,13 @@ impl<M: Mode> Heap<M> {
                 }
                 let ghost f1 = frames@;
                 let ghost d1 = done@.dom();
-                match self.resolve(new, set, done, frames, words, w, Ghost(out)) {
+                match self.resolve(new, done, frames, words, w, Ghost(out)) {
                     Ok(()) => {},
                     Err(e) => return Err(e),
                 }
                 proof {
                     vstd::set_lib::lemma_len_subset(d1, done@.dom());
-                    vstd::set_lib::lemma_len_subset(done@.dom(), set@);
+                    vstd::set_lib::lemma_len_subset(done@.dom(), self.core.dom());
                 }
             } else {
                 let ghost before = frames@;
@@ -1614,7 +1593,7 @@ impl<M: Mode> Heap<M> {
                         assert(f == before[top as int]);
                     }
                 }
-                match self.build(new, done, words, f, Ghost(set@), Ghost(frames@), Ghost(out)) {
+                match self.build(new, done, words, f, Ghost(frames@), Ghost(out)) {
                     Ok(()) => {},
                     Err(e) => return Err(e),
                 }
@@ -1659,40 +1638,7 @@ impl<M: Mode> Heap<M> {
             },
     {
         proof {
-            self.core.lemma_carved_apart();
-        }
-        let blocks = self.core.pages.blocks();
-        let mut set: HashSetWithView<usize> = HashSetWithView::new();
-        let mut i: usize = 0;
-        while i < blocks.len()
-            invariant
-                self.wf(),
-                0 <= i <= blocks@.len(),
-                forall|h: usize| #[trigger]
-                    set@.contains(h) <==> exists|k: int| 0 <= k < i && blocks@[k]@.addr == h,
-            decreases blocks.len() - i,
-        {
-            let a = blocks[i].addr();
-            set.insert(a);
-            proof {
-                assert forall|h: usize| #[trigger]
-                    set@.contains(h) <==> exists|k: int|
-                        0 <= k < i + 1 && blocks@[k]@.addr == h by {
-                    if h == a {
-                        assert(blocks@[i as int]@.addr == h);
-                    }
-                }
-            }
-            i += 1;
-        }
-        proof {
-            assert forall|h: usize| #[trigger]
-                set@.contains(h) == self.core.pages.carved_block(h) by {
-                if self.core.pages.carved_block(h) {
-                    let k = choose|k: int| 0 <= k < blocks@.len() && blocks@[k]@.addr == h;
-                    assert(blocks@[k]@.addr == h);
-                }
-            }
+            self.core.lemma_apart_from_region();
         }
         let mut done: HashMapWithView<usize, Option<Word>> = HashMapWithView::new();
         let mut frames: Vec<Frame> = Vec::new();
@@ -1711,14 +1657,14 @@ impl<M: Mode> Heap<M> {
                 } by {}
             }
             assert(new.target_ok(*self, words@, out@, done@));
-            assert(self.source_ok(set@, done@, frames@));
+            assert(self.source_ok(done@, frames@));
         }
         let mut j: usize = 0;
         while j < roots.len()
             invariant
                 self.wf(),
                 *self == *old(self),
-                self.source_ok(set@, done@, frames@),
+                self.source_ok(done@, frames@),
                 frames@.len() == 0,
                 words@.len() == 0,
                 new.target_ok(*self, words@, out@, done@),
@@ -1759,15 +1705,7 @@ impl<M: Mode> Heap<M> {
                     proof {
                         assert(self.source_word(w));
                     }
-                    match self.resolve(
-                        new,
-                        &set,
-                        &mut done,
-                        &mut frames,
-                        &mut words,
-                        w,
-                        Ghost(out@),
-                    ) {
+                    match self.resolve(new, &mut done, &mut frames, &mut words, w, Ghost(out@)) {
                         Ok(()) => {},
                         Err(e) => {
                             proof {
@@ -1776,14 +1714,7 @@ impl<M: Mode> Heap<M> {
                             return Err(e);
                         },
                     }
-                    match self.copy_frames(
-                        new,
-                        &set,
-                        &mut done,
-                        &mut frames,
-                        &mut words,
-                        Ghost(out@),
-                    ) {
+                    match self.copy_frames(new, &mut done, &mut frames, &mut words, Ghost(out@)) {
                         Ok(()) => {},
                         Err(e) => {
                             proof {
@@ -1884,19 +1815,17 @@ impl<M: Mode> Heap<M> {
             done.contains_key(k) ==> (done[k] matches Some(w) ==> self.dupable(w))
     }
 
-    /// 写し元 `self` の状態。`set` は切り出したブロックの番地の集合で、`frames` の物体はどれも写している途中である。
+    /// 写し元 `self` の状態。`frames` の物体はどれも写している途中である。
     pub(crate) closed spec fn source_ok(
         &self,
-        set: Set<usize>,
         done: Map<usize, Option<Word>>,
         frames: Seq<Frame>,
     ) -> bool {
         &&& self.wf()
         &&& self.settled()
         &&& !M::CHECKED ==> self.consistent()
-        &&& forall|h: usize| #[trigger] set.contains(h) == self.core.pages.carved_block(h)
-        &&& done.dom().subset_of(set)
-        &&& forall|h: usize| #[trigger] self.core.pages.carved_block(h) ==> !self.core.region_has(h)
+        &&& self.core.pages_apart()
+        &&& done.dom().subset_of(self.core.dom())
         &&& forall|i: int| 0 <= i < frames.len() ==> #[trigger] self.frame_ok(frames[i], done)
         &&& forall|i: int, j: int|
             0 <= i < frames.len() && 0 <= j < frames.len() && i != j ==> (
@@ -1921,18 +1850,17 @@ impl<M: Mode> Heap<M> {
     /// まだ写していないブロック `a` を写した表 (`done`) に入れても、写し元の状態は保たれる。
     proof fn lemma_source_insert(
         &self,
-        set: Set<usize>,
         done: Map<usize, Option<Word>>,
         frames: Seq<Frame>,
         a: usize,
         v: Option<Word>,
     )
         requires
-            self.source_ok(set, done, frames),
-            set.contains(a),
+            self.source_ok(done, frames),
+            self.core.dom().contains(a),
             !done.contains_key(a),
         ensures
-            self.source_ok(set, done.insert(a, v), frames),
+            self.source_ok(done.insert(a, v), frames),
     {
         assert forall|i: int| 0 <= i < frames.len() implies #[trigger] self.frame_ok(
             frames[i],

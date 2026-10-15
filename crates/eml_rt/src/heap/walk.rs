@@ -323,30 +323,43 @@ impl<M: Mode> Heap<M> {
         requires
             self.wf(),
     {
-        let blocks = self.core.pages.blocks();
-        let mut k: usize = 0;
-        while k < blocks.len()
+        // ページごとに読む。ヒープ全体のブロックの一覧を作ると、確保量の上限で止まった後の回復と後始末が、ヒープに
+        // 比例するメモリを足すからである (docs/spec/object-model.md の「回復」)
+        let pages = self.core.pages.pages_len();
+        let mut j: usize = 0;
+        while j < pages
             invariant
                 self.wf(),
-                k <= blocks@.len(),
-                forall|i: int|
-                    0 <= i < blocks@.len() ==> self.core.pages.carved_block(
-                        #[trigger] blocks@[i]@.addr,
-                    ) && blocks@[i] == self.core.pages.block_ptr(blocks@[i]@.addr),
-            decreases blocks.len() - k,
+                pages == self.core.pages.page_count(),
+                j <= pages,
+            decreases pages - j,
         {
-            let h = blocks[k];
-            if self.is_live_block(h) {
-                proof {
-                    self.core.lemma_shape(h@.addr);
+            let blocks = self.core.pages.blocks_in(j, j + 1);
+            let mut k: usize = 0;
+            while k < blocks.len()
+                invariant
+                    self.wf(),
+                    k <= blocks@.len(),
+                    forall|i: int|
+                        0 <= i < blocks@.len() ==> self.core.pages.carved_block(
+                            #[trigger] blocks@[i]@.addr,
+                        ) && blocks@[i] == self.core.pages.block_ptr(blocks@[i]@.addr),
+                decreases blocks.len() - k,
+            {
+                let h = blocks[k];
+                if self.is_live_block(h) {
+                    proof {
+                        self.core.lemma_shape(h@.addr);
+                    }
+                    if self.core.meta_get(h).has_finalizer() {
+                        let tracked p = self.core.perms.borrow().tracked_borrow(h@.addr);
+                        let f = finalizer_of(h, Tracked(p));
+                        run_finalizer(f, Tracked(p));
+                    }
                 }
-                if self.core.meta_get(h).has_finalizer() {
-                    let tracked p = self.core.perms.borrow().tracked_borrow(h@.addr);
-                    let f = finalizer_of(h, Tracked(p));
-                    run_finalizer(f, Tracked(p));
-                }
+                k += 1;
             }
-            k += 1;
+            j += 1;
         }
     }
 

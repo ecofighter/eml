@@ -1028,11 +1028,47 @@ impl Pages {
             r.ptr()@.addr == page_base(h),
             r.ptr()@.provenance == self.block_ptr(h)@.provenance,
             r.is_init(),
+            r.value() == self.page_header(page_base(h)),
             header_ok(r.value(), self.prefixed()),
             header_cap(r.value(), self.prefixed()) == self.cap(h),
     {
         self.lemma_block(h);
         &self.pages.borrow().tracked_borrow(page_base(h)).header
+    }
+
+    /// ページの頭 `hdr` のページ `page_base(h)` は、この確保器のページである。頭の `index` は持ち主の一覧の添字なので、
+    /// 一覧のその項がこのページならこの確保器のページである。凍結した塊のページの `index` は、塊を作ったヒープの一覧の
+    /// 添字なので、この一覧の項は別のページになる。ブロックを並べずに、ヒープのブロックと塊のブロックを見分けるのに使う。
+    #[inline]
+    pub(crate) fn owns(&self, h: *mut Header, Tracked(hdr): Tracked<&PointsTo<PageHeader>>) -> (r:
+        bool)
+        requires
+            self.wf(),
+            hdr.ptr()@.addr == page_base(h@.addr),
+            hdr.ptr()@.provenance == h@.provenance,
+            hdr.is_init(),
+        ensures
+            r ==> self.has_page(page_base(h@.addr)),
+            self.has_page(page_base(h@.addr)) && hdr.value() == self.page_header(page_base(h@.addr))
+                ==> r,
+    {
+        proof {
+            reveal(Pages::list_wf);
+        }
+        let page = page_of(h);
+        let i = ptr_ref(page, Tracked(hdr)).index;
+        let r = i < self.list.len() && self.list[i].addr() == page.addr();
+        proof {
+            let a = page_base(h@.addr);
+            if r {
+                assert(self.pages@.contains_key(self.list@[i as int]@.addr));
+            }
+            if self.has_page(a) && hdr.value() == self.page_header(a) {
+                assert(self.pages@.contains_key(a));
+                assert(self.list@[self.hdr(a).index as int]@.addr == a);
+            }
+        }
+        r
     }
 
     /// ページの頭の権限 `hdr` で、ブロック `h` のペイロードの語の数を読む。`hdr` はこの確保器のページの頭か、凍結した
@@ -2596,6 +2632,11 @@ impl Pages {
     }
 
     /// ページの頭 `a` の権限を持つ。
+    /// 持っているページ `a` の頭の値。
+    pub(crate) closed spec fn page_header(&self, a: usize) -> PageHeader {
+        self.hdr(a)
+    }
+
     pub(crate) closed spec fn has_page(&self, a: usize) -> bool {
         self.pages@.contains_key(a)
     }
@@ -2704,8 +2745,19 @@ impl Pages {
         *ptr_ref(meta_ptr(h), Tracked(&p.meta))
     }
 
-    /// 切り出したすべてのブロックのヘッダの位置。空いたブロックも含むので、見分けるのは呼ぶ側である。各級の今のページ
-    /// ではヒープの切り出しの位置を読み、まだ切り出していないメモリをブロックとして読まない。
+    /// 持っているページの数。
+    pub(crate) closed spec fn page_count(&self) -> nat {
+        self.list@.len()
+    }
+
+    pub(crate) fn pages_len(&self) -> (r: usize)
+        ensures
+            r == self.page_count(),
+    {
+        self.list.len()
+    }
+
+    /// 切り出したすべてのブロックのヘッダの位置。空いたブロックも含むので、見分けるのは呼ぶ側である。
     pub(crate) fn blocks(&self) -> (r: Vec<*mut Header>)
         requires
             self.wf(),
@@ -2714,6 +2766,23 @@ impl Pages {
                 0 <= i < r@.len() ==> self.carved_block(#[trigger] r@[i]@.addr) && r@[i]
                     == self.block_ptr(r@[i]@.addr),
             forall|h: usize| #[trigger]
+                self.carved_block(h) ==> exists|i: int| 0 <= i < r@.len() && r@[i]@.addr == h,
+    {
+        self.blocks_in(0, self.list.len())
+    }
+
+    /// 一覧の `lo` 番から `hi` 番の手前までのページの、切り出したブロックのヘッダの位置。各級の今のページではヒープの
+    /// 切り出しの位置を読み、まだ切り出していないメモリをブロックとして読まない。ページごとに読めば、ヒープ全体の
+    /// 一覧を作らずにすべてのブロックを見られる。
+    pub(crate) fn blocks_in(&self, lo: usize, hi: usize) -> (r: Vec<*mut Header>)
+        requires
+            self.wf(),
+            lo <= hi <= self.page_count(),
+        ensures
+            forall|i: int|
+                0 <= i < r@.len() ==> self.carved_block(#[trigger] r@[i]@.addr) && r@[i]
+                    == self.block_ptr(r@[i]@.addr),
+            lo == 0 && hi == self.page_count() ==> forall|h: usize| #[trigger]
                 self.carved_block(h) ==> exists|i: int| 0 <= i < r@.len() && r@[i]@.addr == h,
     {
         proof {
@@ -2735,8 +2804,8 @@ impl Pages {
         }
         let mut out: Vec<*mut Header> = Vec::new();
         let ghost mut pos: Map<usize, int> = Map::empty();
-        let mut pi: usize = 0;
-        while pi < self.list.len()
+        let mut pi: usize = lo;
+        while pi < hi
             invariant
                 self.wf(),
                 forall|j: int| 0 <= j < self.list@.len() ==> #[trigger] self.listed(j),
@@ -2744,19 +2813,20 @@ impl Pages {
                     self.pages@.contains_key(a) && 0 <= k < self.count@[a]
                         ==> self.carved@.contains(#[trigger] self.block_at(a, k)),
                 forall|c: int| 0 <= c < CLASSES ==> #[trigger] self.class_wf(c),
-                pi <= self.list@.len(),
+                lo <= pi <= hi,
+                hi <= self.list@.len(),
                 forall|i: int|
                     0 <= i < out@.len() ==> self.carved_block(#[trigger] out@[i]@.addr) && out@[i]
                         == self.block_ptr(out@[i]@.addr),
                 forall|j: int, k: int|
-                    0 <= j < pi && 0 <= k < self.count@[self.list@[j]@.addr] ==> pos.contains_key(
+                    lo <= j < pi && 0 <= k < self.count@[self.list@[j]@.addr] ==> pos.contains_key(
                         #[trigger] self.block_at(self.list@[j]@.addr, k),
                     ) && 0 <= pos[self.block_at(self.list@[j]@.addr, k)] < out@.len()
                         && out@[pos[self.block_at(self.list@[j]@.addr, k)]]@.addr == self.block_at(
                         self.list@[j]@.addr,
                         k,
                     ),
-            decreases self.list@.len() - pi,
+            decreases hi - pi,
         {
             let page = self.list[pi];
             let ghost a = page@.addr;
@@ -2801,7 +2871,9 @@ impl Pages {
                         self.pages@.contains_key(a) && 0 <= k < self.count@[a]
                             ==> self.carved@.contains(#[trigger] self.block_at(a, k)),
                     forall|c: int| 0 <= c < CLASSES ==> #[trigger] self.class_wf(c),
-                    pi < self.list@.len(),
+                    pi < hi,
+                    lo <= pi,
+                    hi <= self.list@.len(),
                     page == self.list@[pi as int],
                     a == page@.addr,
                     self.pages@.contains_key(a),
@@ -2820,7 +2892,7 @@ impl Pages {
                         0 <= i < out@.len() ==> self.carved_block(#[trigger] out@[i]@.addr)
                             && out@[i] == self.block_ptr(out@[i]@.addr),
                     forall|j: int, kk: int|
-                        0 <= j < pi && 0 <= kk < self.count@[self.list@[j]@.addr]
+                        lo <= j < pi && 0 <= kk < self.count@[self.list@[j]@.addr]
                             ==> pos.contains_key(#[trigger] self.block_at(self.list@[j]@.addr, kk))
                             && 0 <= pos[self.block_at(self.list@[j]@.addr, kk)] < out@.len()
                             && out@[pos[self.block_at(self.list@[j]@.addr, kk)]]@.addr
@@ -2862,7 +2934,7 @@ impl Pages {
                 proof {
                     pos = pos.insert(h@.addr, before.len() as int);
                     assert forall|j: int, kk: int|
-                        0 <= j < pi && 0 <= kk
+                        lo <= j < pi && 0 <= kk
                             < self.count@[self.list@[j]@.addr] implies pos.contains_key(
                         #[trigger] self.block_at(self.list@[j]@.addr, kk),
                     ) && 0 <= pos[self.block_at(self.list@[j]@.addr, kk)] < out@.len()
@@ -2903,7 +2975,9 @@ impl Pages {
             pi += 1;
         }
         proof {
-            assert forall|h: usize| #[trigger] self.carved_block(h) implies exists|i: int|
+            assert forall|h: usize|
+                #![trigger self.carved_block(h)]
+                lo == 0 && hi == self.list@.len() && self.carved_block(h) implies exists|i: int|
                 0 <= i < out@.len() && out@[i]@.addr == h by {
                 assert(self.located(h));
                 let a = page_base(h);

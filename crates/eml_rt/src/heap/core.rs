@@ -220,6 +220,7 @@ impl Core {
             r.is_init(),
             header_ok(r.value(), self.pages.prefixed()),
             header_cap(r.value(), self.pages.prefixed()) == self.cap(h),
+            !self.in_region(h) ==> r.value() == self.pages.page_header(page_base(h)),
     {
         self.lemma_shape(h);
         if self.in_region(h) {
@@ -231,6 +232,34 @@ impl Core {
         } else {
             self.pages.tracked_block_header(h)
         }
+    }
+
+    /// ブロック `h` は、付けた塊のブロックでなく、このヒープのブロックである。ヒープのページと塊のページは重ならない
+    /// ので、`h` のページがこのヒープのページかで見分ける。
+    #[inline]
+    pub(crate) fn in_heap(&self, h: *mut Header) -> (r: bool)
+        requires
+            self.sound(),
+            self.has(h@.addr),
+            h == self.block(h@.addr),
+            self.pages_apart(),
+        ensures
+            r == self.dom().contains(h@.addr),
+    {
+        let tracked hdr = self.tracked_header(h@.addr);
+        let r = self.pages.owns(h, Tracked(hdr));
+        proof {
+            let a = h@.addr;
+            self.lemma_shape(a);
+            if self.dom().contains(a) {
+                self.pages.lemma_in_use_carved(a);
+                self.pages.lemma_carved_page(a);
+            } else {
+                let rg = self.region();
+                rg.lemma_block(a, self.checked());
+            }
+        }
+        r
     }
 
     /// ペイロードの語の数。
