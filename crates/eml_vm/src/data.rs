@@ -63,6 +63,7 @@ fn check_data<M: Mode>(
 
 /// 物体を作り、フィールドをすべて書いてから `dst` に置く。`dst` は引数のスロットと同じ色でありうる
 /// (docs/spec/vm.md の「スロットの割り当て」)。
+#[inline]
 pub(crate) fn con<M: Mode>(
     code: &CodeBase<M>,
     ctx: &mut Ctx<M>,
@@ -88,6 +89,7 @@ pub(crate) fn con<M: Mode>(
 }
 
 /// タグの switch。`w` は scrutinee の語で、`tag` は Repr に従って読んだタグである。
+#[inline]
 pub(crate) fn switch_tag<M: Mode>(
     code: &CodeBase<M>,
     ctx: &Ctx<M>,
@@ -131,6 +133,7 @@ fn take_default(task: &mut Task, default: u32) -> Result<(), VmFault> {
     Ok(())
 }
 
+#[inline]
 pub(crate) fn switch_int<M: Mode>(
     code: &CodeBase<M>,
     task: &mut Task,
@@ -150,6 +153,7 @@ pub(crate) fn switch_int<M: Mode>(
     take_default(task, default)
 }
 
+#[inline]
 pub(crate) fn switch_string<M: Mode>(
     code: &CodeBase<M>,
     ctx: &Ctx<M>,
@@ -173,6 +177,7 @@ pub(crate) fn switch_string<M: Mode>(
     take_default(task, default)
 }
 
+#[inline]
 pub(crate) fn unpack<M: Mode>(
     code: &CodeBase<M>,
     ctx: &Ctx<M>,
@@ -195,6 +200,7 @@ pub(crate) fn unpack<M: Mode>(
 
 /// 形の分かっている `release` の展開 (docs/spec/object-model.md の「核の操作」)。残す変数はすでにスロットにあるので、
 /// 参照の数だけを動かす。
+#[inline]
 pub(crate) fn release<M: Mode>(
     code: &CodeBase<M>,
     ctx: &mut Ctx<M>,
@@ -233,6 +239,7 @@ pub(crate) fn release<M: Mode>(
     Ok(())
 }
 
+#[inline]
 pub(crate) fn unbox<M: Mode>(
     ctx: &Ctx<M>,
     w: Word,

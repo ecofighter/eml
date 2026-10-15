@@ -133,6 +133,7 @@ fn deliver<M: Mode>(code: &CodeBase<M>, task: &mut Task, target: Target, value: 
 }
 
 /// `f` と先頭の引数からクロージャを作る (docs/spec/object-model.md の「クロージャ」)。
+#[inline]
 pub(crate) fn make_closure<M: Mode>(
     ctx: &mut Ctx<M>,
     f: u32,
@@ -154,6 +155,7 @@ pub(crate) fn make_closure<M: Mode>(
 }
 
 /// `ApplyRest` のフレームから、結果に残りの引数を適用する。このフレームの見出しを引き継ぐ末尾の適用である。
+#[inline]
 pub(crate) fn apply_rest<M: Mode>(
     code: &CodeBase<M>,
     ctx: &mut Ctx<M>,
