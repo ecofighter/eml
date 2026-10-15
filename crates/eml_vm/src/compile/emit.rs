@@ -425,8 +425,14 @@ impl<M: Mode> Emitter<'_, M> {
 
     fn prim(&mut self, prim: &eml_lir::Prim, dst: Slot, a: &[Slot]) -> Op {
         use eml_lir::Prim;
-        let effect =
-            |e: u32| u16::try_from(e).expect("effects fit in 16 bits (docs/spec/object-model.md)");
+        // evidence の tag はエフェクトの番号 + 1 なので、番号は 65535 より小さい (docs/spec/object-model.md の
+        // 「evidence の3つの物体」)。速いモードの `ev_new` はこれを確かめない
+        let effect = |e: u32| {
+            u16::try_from(e)
+                .ok()
+                .filter(|&e| e < u16::MAX)
+                .expect("effect numbers are below 65535 (docs/spec/object-model.md)")
+        };
         let op_index = |o: u32| u16::try_from(o).expect("operations fit in 16 bits");
         match prim {
             Prim::EvvGet => Op::EvvGet { dst },
@@ -448,9 +454,9 @@ impl<M: Mode> Emitter<'_, M> {
             }
             Prim::EvNew(e) => {
                 let n_ops = self.program.effects[*e as usize].operations.len() as u32;
-                let at = self
-                    .out
-                    .operands([*e, n_ops, u32::from(a[0]), u32::from(a[1])]);
+                let at =
+                    self.out
+                        .operands([effect(*e).into(), n_ops, u32::from(a[0]), u32::from(a[1])]);
                 Op::EvNew { dst, at }
             }
             Prim::EvSetClause { effect: _, op } => {

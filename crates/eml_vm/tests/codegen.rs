@@ -264,3 +264,25 @@ b1(a.1: int, b.2: int):
         10  ret s0
     ");
 }
+
+/// evidence の tag はエフェクトの番号 + 1 なので、番号 65535 のエフェクトの evidence は作れない
+/// (docs/spec/object-model.md の「evidence の3つの物体」)。速いモードの `ev_new` はこれを確かめないので、コード生成で断る。
+#[test]
+#[should_panic(expected = "effect numbers are below 65535")]
+fn ev_new_of_effect_65535_is_rejected_by_the_code_generator() {
+    let mut text: String = (0..u16::MAX)
+        .map(|i| format!("effect E{i} {{ op(unit) -> unit }}\n"))
+        .collect();
+    text.push_str(
+        "\
+effect Last { op(unit) -> unit }
+fn main() -> unit {
+  let w.0: tobj = prim evv_get()
+  let e.1: obj = prim ev_new[Last]((), w.0)
+  decref e.1
+  return ()
+}
+",
+    );
+    disasm_unverified(&text);
+}
