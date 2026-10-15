@@ -3,6 +3,7 @@
 //! テストは `eml_lir` の tests/boxing.rs にある。
 
 use crate::common::{function, lir_text};
+use eml_lir::{Call, FnIdx, Rhs, Stmt, Term};
 
 const APPLY_TO: &str = "apply_to : (Int -> Int) -> Int -> Int\napply_to f x = f x\n\n";
 
@@ -20,6 +21,52 @@ fn a_lambda_used_only_as_a_value_is_made_uniform_in_place() {
       return t.3
     }
     ");
+}
+
+/// 複数の定義が値として使う、translate の共有の関数の名前の接頭辞。
+fn is_shared_wrapper(name: &str) -> bool {
+    ["op$", "con$", "cont$"]
+        .iter()
+        .any(|prefix| name.starts_with(prefix))
+}
+
+#[test]
+fn shared_wrappers_are_never_called_directly_and_become_uniform_in_place() {
+    // `op$`、`con$`、`cont$` は値と部分適用でだけ使われ、直接は呼ばれない。そのため box の挿入はいつもその場で一様にし、
+    // `f$boxed` を足さない。どのプログラムでも同じコードになるので、名前で照らす追記で使い回せる
+    // (docs/spec/lir.md の「位置の規則」)
+    let text = "data Pair = | P Int Int\n\neffect Ask where\n  ask : Int -> Int\n\npair_with : (Int -> Int -> Pair) -> Pair\npair_with f = f 1 2\n\nfirst : Pair -> Int\nfirst p = match p with\n  | P a _ -> a\n\nrun : Unit -> <Ask> Int\nrun () =\n  let g = ask\n  let h = P 3\n  first (pair_with P) + first (h 4) + g 1\n\nmain : Unit -> <IO> Unit\nmain () =\n  let r = handle run () with\n            | ask n k ->\n              let resume = k\n              resume (n + 1)\n  println (show r)";
+    let program = eml_test_support::lir(text);
+    let names: Vec<&str> = program
+        .functions
+        .iter()
+        .map(|function| function.name.as_str())
+        .filter(|name| is_shared_wrapper(name))
+        .collect();
+    assert_eq!(names, ["op$ask", "con$P", "cont$"]);
+    let shared = |target: &FnIdx| is_shared_wrapper(&program.functions[target.0 as usize].name);
+    for function in &program.functions {
+        for block in &function.blocks {
+            let calls = block.stmts.iter().filter_map(|stmt| match stmt {
+                Stmt::Let {
+                    rhs: Rhs::Call(Call::Direct(target, _)),
+                    ..
+                } => Some(target),
+                _ => None,
+            });
+            let tail = match &block.term {
+                Term::TailCall(Call::Direct(target, _)) => Some(target),
+                _ => None,
+            };
+            for target in calls.chain(tail) {
+                assert!(
+                    !shared(target),
+                    "`{}` calls a shared wrapper",
+                    function.name
+                );
+            }
+        }
+    }
 }
 
 #[test]
