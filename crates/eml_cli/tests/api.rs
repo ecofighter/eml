@@ -270,3 +270,12 @@ fn session_is_send_and_sync() {
     fn assert_send_sync<T: Send + Sync>() {}
     assert_send_sync::<Session>();
 }
+
+#[test]
+fn execute_vm_runs_a_compiled_program_and_counts_its_work() {
+    let program = single(TWICE).compile().program.unwrap();
+    let (host, output) = eml_cli::capture_host(std::path::PathBuf::new());
+    let stats: eml_cli::VmRunStats = eml_cli::execute_vm(&program, true, host).unwrap();
+    assert_eq!(output.contents(), "xx\n");
+    assert!(stats.string_bytes_copied > 0);
+}

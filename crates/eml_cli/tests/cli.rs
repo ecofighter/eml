@@ -183,7 +183,7 @@ fn a_miscased_entry_path_is_still_the_entry() {
 
 #[test]
 fn run_on_the_vm_prints_the_program_output() {
-    let output = eml(&["run", "--vm", "--debug-heap", "run/basics/hello.em"]);
+    let output = eml(&["run", "--vm", "run/basics/hello.em"]);
     assert_eq!(output.status.code(), Some(0), "{output:?}");
     assert_eq!(String::from_utf8_lossy(&output.stdout), "Hello, world!\n");
 }

@@ -60,19 +60,19 @@ fn main() -> ExitCode {
             let Some(program) = compiled.program else {
                 return ExitCode::from(1);
             };
-            if vm {
+            let result = if vm {
                 // 相対パスは CEK と同じくカレントディレクトリを基準にする
                 let host = eml_cli::stdio_host(PathBuf::new());
-                return match eml_cli::execute_vm(&program, debug_heap, host) {
-                    Ok(_) => ExitCode::SUCCESS,
-                    Err(error) => {
-                        eprintln!("runtime error: {error}");
-                        ExitCode::from(1)
-                    }
-                };
-            }
-            match eml_cli::execute(&program, &config, OutputSink::stdout()) {
-                Ok(_) => ExitCode::SUCCESS,
+                eml_cli::execute_vm(&program, debug_heap, host)
+                    .map(drop)
+                    .map_err(|e| e.to_string())
+            } else {
+                eml_cli::execute(&program, &config, OutputSink::stdout())
+                    .map(drop)
+                    .map_err(|e| e.to_string())
+            };
+            match result {
+                Ok(()) => ExitCode::SUCCESS,
                 Err(error) => {
                     eprintln!("runtime error: {error}");
                     ExitCode::from(1)
