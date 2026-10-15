@@ -58,16 +58,16 @@ S8 を、S8a から S8d の4つの作業に分けて順に進める。段の列�
 
 | 作業 | 中身 | 状態 |
 |---|---|---|
-| S8a | LIR の型、テキスト形式、パーサ、verifier、Core IR から LIR への変換。box の挿入、縮約、Perceus を LIR に移し、CEK が LIR を読む | 終えた。決めたことは [Core IR](../spec/core-ir.md) と [LIR とインタプリタ](../spec/lir.md) に移した。移す作業の前後で、EP、box の挿入、縮約、Perceus の後のダンプは、UI テストと `bench/` のすべてのプログラムでバイト単位で一致した |
-| S8b | Perceus の所有の形 (フィールドを借りたまま使い、所有が要る所でだけ所有を取る形)、基本操作の引数の借用、`File` の実行時の検査 | 終えた。決めたことは [LIR とインタプリタ](../spec/lir.md) の「値の表現」、「基本操作」、「Perceus」と、[ランタイム](../spec/runtime.md) の「`File` の参照の検査」に移した。`bench/` の仕事の回数で変わったのは `state` の RC の増減だけである ([計測の基準](../implementation/benchmarks.md) の「S8b (所有の形と基本操作の借用)」) |
+| S8a | LIR の型、テキスト形式、パーサ、verifier、Core IR から LIR への変換。box の挿入、縮約、Perceus を LIR に移し、CEK が LIR を読む | 終えた。決めたことは [Core IR](../spec/core-ir.md) と [LIR](../spec/lir.md) に移した。移す作業の前後で、EP、box の挿入、縮約、Perceus の後のダンプは、UI テストと `bench/` のすべてのプログラムでバイト単位で一致した |
+| S8b | Perceus の所有の形 (フィールドを借りたまま使い、所有が要る所でだけ所有を取る形)、基本操作の引数の借用、`File` の実行時の検査 | 終えた。決めたことは [LIR](../spec/lir.md) の「値の表現」、「基本操作」、「Perceus」と、[ランタイム](../spec/runtime.md) の「`File` の参照の検査」に移した。`bench/` の仕事の回数で変わったのは `state` の RC の増減だけである ([計測の基準](../implementation/benchmarks.md) の「S8b (所有の形と基本操作の借用)」) |
 | S8c | 書き出す型の線形性 (`Lin`、`Flexible(Lin)`、`OpVar(_, Lin)`)、SCC ごとに解いてから書き出す型検査の順、instance での Kind の評価 (`kind_values`)、型の線形性 (`linearity`)、instance の名前の `%1` / `%m`、debug ビルドの食い違いの検査 | 終えた。決めたことは [型と Kind](../spec/types.md) の「Kind の書き出し」、[Core IR](../spec/core-ir.md) の「変換の規則」と「食い違いがないことの検査」、[コンパイラの構成](../implementation/architecture.md) の「`eml_types` の内部」に移した。UI テストの出力、診断の文字列、`bench/` の仕事の回数は変わらない |
-| S8d | translate と EP と box の挿入の Kind の印、EP の明示の drop、extern の行の Kind の列、V1 と V2、テキストの形の印 | 終えた。決めたことは [Core IR](../spec/core-ir.md) の「Kind の印」、[LIR とインタプリタ](../spec/lir.md) の「Kind の印」と「Kind の印の検査」、[ランタイム](../spec/runtime.md) の「`File` の参照の検査」に移した。UI テストの出力と `bench/` の仕事の回数は変わらない ([計測の基準](../implementation/benchmarks.md) の「S8d (Kind の印と明示の drop)」) |
+| S8d | translate と EP と box の挿入の Kind の印、EP の明示の drop、extern の行の Kind の列、V1 と V2、テキストの形の印 | 終えた。決めたことは [Core IR](../spec/core-ir.md) の「Kind の印」、[LIR](../spec/lir.md) の「Kind の印」と「Kind の印の検査」、[ランタイム](../spec/runtime.md) の「`File` の参照の検査」に移した。UI テストの出力と `bench/` の仕事の回数は変わらない ([計測の基準](../implementation/benchmarks.md) の「S8d (Kind の印と明示の drop)」) |
 
 Kind の印を S8d に分け、書き出しを S8c にした理由は次のとおりである。
 
 - 型だけから印を決める案は採れない。`tests/ui/run/files/file_in_return_clause_on_abort.em` では、使われない `return x ->` の `x` は型が `_` で、使用回数のパスが `x` の Kind を `Unr` に決めている。型だけから決めると `x` は `poly` になり、今ある `decref x` を V1 が拒む。解いた Kind を型に持たせて書き出す必要があり、これは `eml_types` の段の組み替えを伴う
 - S8c は S8d がなくても検査できる。書き出した型と評価の結果は `eml_types` の単体テストで、instance の分かれ方は `eml_core_ir` のテストで確かめる
-- 「`Lin` の物体の RC は 1」([LIR とインタプリタ](../spec/lir.md) の「値の表現」) のうち `File` の物体そのものは、V1 がなくても実行時に確かめられる ([ランタイム](../spec/runtime.md) の「`File` の参照の検査」)。`File` を含む `Lin` のデータとクロージャは、S8d の V1 で静的に覆った
+- 「`Lin` の物体の RC は 1」([LIR](../spec/lir.md) の「値の表現」) のうち `File` の物体そのものは、V1 がなくても実行時に確かめられる ([ランタイム](../spec/runtime.md) の「`File` の参照の検査」)。`File` を含む `Lin` のデータとクロージャは、S8d の V1 で静的に覆った
 
 ### 決めたこと
 
@@ -81,7 +81,7 @@ Kind の印を S8d に分け、書き出しを S8c にした理由は次のと�
 
 #### Kind の印
 
-決めたことは spec に移した。変数と関数の戻り値が持つ印の意味と、V1、V2、作る所の検査は [LIR とインタプリタ](../spec/lir.md) の「Kind の印」と「Kind の印の検査」に、translate と EP と box の挿入が印をどう決めるか、EP と決定木の明示の `drop` は [Core IR](../spec/core-ir.md) の「Kind の印」にある。
+決めたことは spec に移した。変数と関数の戻り値が持つ印の意味と、V1、V2、作る所の検査は [LIR](../spec/lir.md) の「Kind の印」と「Kind の印の検査」に、translate と EP と box の挿入が印をどう決めるか、EP と決定木の明示の `drop` は [Core IR](../spec/core-ir.md) の「Kind の印」にある。
 
 S8d で閉じた論点は次のとおりである。
 
@@ -102,8 +102,8 @@ S9 を、S9a、S9v、S9b-1、S9b-2a、S9b-2b、S9b-3 の6つの作業に分け�
 | S9v | vstd への依存を受け入れ、`eml_rt` のコードを `verus!` の中に書いて、`unsafe` の核を含む crate 全体を Verus で検証する。Verus で確かめない部分を信頼の一覧にまとめ、Miri はそこを通るテストだけを流す。nixpkgs を nixos-unstable に上げ、Rust の toolchain を fenix から取り、Verus と verusfmt を flake の input にする | 終えた。決めたことは [オブジェクトモデル](../spec/object-model.md) の「`unsafe` の核」と [テスト戦略](../implementation/testing.md) の「`eml_rt` の検証」に移した。S9b の extern の語の ABI が FFI の最初の境界になるので、境界を信頼の一覧と Miri のテストに足す決まりを、S9b より前に決めておくために、S9a と S9b の間に置いた ([計測の基準](../implementation/benchmarks.md) の「S9v (`eml_rt` の検証)」) |
 | S9b-1 | 物体の種類ごとの中身。データの物理的な形の規則、クロージャ、evidence の3つの物体、文字列、`File` の表し方 | 終えた。決めたことは [オブジェクトモデル](../spec/object-model.md) の「種類」、「物体の形」、「文字列」、「`unsafe` の核」に移した。UI テストの出力と `bench/` の仕事の回数は変わらない ([計測の基準](../implementation/benchmarks.md) の「S9b-1 (文字列)」) |
 | S9b-2a | 不死の定数を置く凍結した領域。作る、凍結する、ヒープに付ける、寿命 | 終えた。決めたことは [オブジェクトモデル](../spec/object-model.md) の「凍結した領域」、「核の操作」、「文字列」、「不死の物体の数え方」、「報告する誤り」、「`unsafe` の核」に移した。UI テストの出力と `bench/` の仕事の回数は変わらない ([計測の基準](../implementation/benchmarks.md) の「S9b-2a (凍結した領域)」) |
-| S9b-2b | `Ctx`、基本操作、SIGINT | 終えた。決めたことは [オブジェクトモデル](../spec/object-model.md) の「実行文脈 `Ctx`」、「evidence の3つの物体」、「確保と解放」、「核の操作」、「報告する誤り」、「検査モードの約束」、「論理的な worker ID」、「`unsafe` の核」と、[LIR とインタプリタ](../spec/lir.md) の「実行の文脈」と「基本操作」に移した。UI テストの出力と `bench/` の仕事の回数は変わらない ([計測の基準](../implementation/benchmarks.md) の「S9b-2b (実行文脈)」) |
-| S9b-3 | 語の ABI の extern、`File` の物体の中身の型、今の実装との差分テスト、FFI の境界の信頼の一覧の行と Miri | 終えた。決めたことは [オブジェクトモデル](../spec/object-model.md) の「extern」、「種類」、「物体の形」、「`lin` ビット」、「核の操作」、「文字列」、「検査モード」、「実行文脈 `Ctx`」、「`unsafe` の核」と、[LIR とインタプリタ](../spec/lir.md) の「実行時エラー」、[テスト戦略](../implementation/testing.md) の「期待値の表」に移した。今の実装との差分テストは、2つの実装が同じ期待値の表を確かめる形にした。UI テストの出力と `bench/` の仕事の回数は変わらない ([計測の基準](../implementation/benchmarks.md) の「S9b-3 (extern)」) |
+| S9b-2b | `Ctx`、基本操作、SIGINT | 終えた。決めたことは [オブジェクトモデル](../spec/object-model.md) の「実行文脈 `Ctx`」、「evidence の3つの物体」、「確保と解放」、「核の操作」、「報告する誤り」、「検査モードの約束」、「論理的な worker ID」、「`unsafe` の核」と、[LIR](../spec/lir.md) の「実行の文脈」と「基本操作」に移した。UI テストの出力と `bench/` の仕事の回数は変わらない ([計測の基準](../implementation/benchmarks.md) の「S9b-2b (実行文脈)」) |
+| S9b-3 | 語の ABI の extern、`File` の物体の中身の型、今の実装との差分テスト、FFI の境界の信頼の一覧の行と Miri | 終えた。決めたことは [オブジェクトモデル](../spec/object-model.md) の「extern」、「種類」、「物体の形」、「`lin` ビット」、「核の操作」、「文字列」、「検査モード」、「実行文脈 `Ctx`」、「`unsafe` の核」と、[LIR](../spec/lir.md) の「実行時エラー」、[テスト戦略](../implementation/testing.md) の「期待値の表」に移した。今の実装との差分テストは、2つの実装が同じ期待値の表を確かめる形にした。UI テストの出力と `bench/` の仕事の回数は変わらない ([計測の基準](../implementation/benchmarks.md) の「S9b-3 (extern)」) |
 
 この順にしたのは、extern が文字列と `File` と出力先 (`Ctx`) を使い、凍結した領域の定数が文字列と物体の形を使うためである。S9b-2a を S9b-2b より前に置いたのは、核の操作の安全の前提を広げる作業を、基本操作の証明より前に独立して確かめるためである。
 
@@ -145,7 +145,7 @@ S9b-3 で閉じた論点は次のとおりである。
 - EP のダミーの値の約束を守る ([オブジェクトモデル](../spec/object-model.md) の「ダミーの値」)
 - `unsafe` は小さい核に閉じ、核を含む `eml_rt` 全体を Verus で検証する。Verus で確かめない部分は信頼の一覧にまとめ、Miri で検査する。FFI の境界を足すときは、一覧に行を足し、Miri のテストを足す ([オブジェクトモデル](../spec/object-model.md) の「`unsafe` の核」)
 - extern を語の ABI で1回だけ書く ([オブジェクトモデル](../spec/object-model.md) の「extern」)
-- 実行文脈 `Ctx` を持つ。ヒープ、yield の状態と `evv` ([LIR とインタプリタ](../spec/lir.md) の「実行の文脈」)、割り込みの旗と深さと確保量の上限を持つセッションの `Control` を置く ([オブジェクトモデル](../spec/object-model.md) の「実行文脈 `Ctx`」)。論理的な worker ID は `Heap` に置く ([オブジェクトモデル](../spec/object-model.md) の「論理的な worker ID」)。出力とファイルは `Ctx` が持つセッションの Host を通す ([オブジェクトモデル](../spec/object-model.md) の「extern」)。セッションの根は S11 で足す
+- 実行文脈 `Ctx` を持つ。ヒープ、yield の状態と `evv` ([LIR](../spec/lir.md) の「実行の文脈」)、割り込みの旗と深さと確保量の上限を持つセッションの `Control` を置く ([オブジェクトモデル](../spec/object-model.md) の「実行文脈 `Ctx`」)。論理的な worker ID は `Heap` に置く ([オブジェクトモデル](../spec/object-model.md) の「論理的な worker ID」)。出力とファイルは `Ctx` が持つセッションの Host を通す ([オブジェクトモデル](../spec/object-model.md) の「extern」)。セッションの根は S11 で足す
 - リスト、文字列、レコードの物理的な表現は、S9b-1 で決めた。データは、走査する語 (`obj` と `tobj` のフィールド) を宣言の順に並べ、その後に生の語を宣言の順に並べる。cons セルは [要素, 残り] になる。文字列は長さの語と UTF-8 のバイト列を持つ種類 `String` の物体で、一意なときはその場で連結する ([オブジェクトモデル](../spec/object-model.md) の「ペイロード」、「物体の形」、「文字列」)
 
 ## S10 VM と切り替え
@@ -156,14 +156,14 @@ S10 を、S10a と S10b の2つの作業に分けて順に進める。段の列�
 
 | 作業 | 中身 | 状態 |
 |---|---|---|
-| S10a | VM の本体を CEK と並べて作る。LIR から `CodeBase` を作るコード生成、`eml_rt` の `Ctx` の上で動く VM、逆アセンブラ、命令の位置から源の位置への表。`eml run --vm` と、`run` と `run-fail` の UI テストを VM でも流すこと | 終えた。決めたことは [VM](../spec/vm.md) と、[オブジェクトモデル](../spec/object-model.md) の「語」、「ペイロード」、「`lin` ビット」、「凍結した領域」、[LIR とインタプリタ](../spec/lir.md) の「一様な関数」と「生存解析」、[テスト戦略](../implementation/testing.md) の「`eml_vm` のテスト」、「VM でも流す」、「Miri」に移した。既定の `eml run` は CEK のままなので、UI テストの出力と CEK の `bench/` の仕事の回数は変わらない。VM の実行の分の命令の数は、`bench/` のどのプログラムでも CEK の約 0.10〜0.17 倍だった ([計測の基準](../implementation/benchmarks.md) の「S10a (VM)」) |
+| S10a | VM の本体を CEK と並べて作る。LIR から `CodeBase` を作るコード生成、`eml_rt` の `Ctx` の上で動く VM、逆アセンブラ、命令の位置から源の位置への表。`eml run --vm` と、`run` と `run-fail` の UI テストを VM でも流すこと | 終えた。決めたことは [VM](../spec/vm.md) と、[オブジェクトモデル](../spec/object-model.md) の「語」、「ペイロード」、「`lin` ビット」、「凍結した領域」、[LIR](../spec/lir.md) の「一様な関数」と「生存解析」、[テスト戦略](../implementation/testing.md) の「`eml_vm` のテスト」、「VM でも流す」、「Miri」に移した。既定の `eml run` は CEK のままなので、UI テストの出力と CEK の `bench/` の仕事の回数は変わらない。VM の実行の分の命令の数は、`bench/` のどのプログラムでも CEK の約 0.10〜0.17 倍だった ([計測の基準](../implementation/benchmarks.md) の「S10a (VM)」) |
 | S10b | `eml run` を VM に切り替え、SIGINT のハンドラと上限を入れ、CEK、`eml_runtime`、`saved` を消し、spec を書き直す | まだ |
 
 S10a では、この節で決めていた次の3つを変えた。
 
 - 算術と比較以外の extern は、「行の番号と引数のレジスタの範囲を持つ命令」にすると決めていた。S10a では、引数をオペランドの表のスロットの並びで渡す。レジスタの範囲にすると、引数を連続したスロットへ移す `Move` の命令が引数ごとに要り、色塗りでは連続を保証できないためである。直接の呼び出し、`apply`、`clause` も同じ形にそろえた ([VM](../spec/vm.md) の「呼び出しと戻り」)
 - 呼び出しと戻りを安全点にし、「LIR に後ろ向きの辺がないので、無限に走るプログラムも必ず安全点を通る」としていた。VM は自己末尾呼び出しを関数の入口へのジャンプにするので、バイトコードには後ろ向きの辺ができる。そのため、このジャンプも安全点にした。呼び出し、戻り、自己末尾呼び出しのジャンプのどれかを、無限に走るプログラムは必ず通る ([VM](../spec/vm.md) の「呼び出しと戻り」)
-- `f$boxed` の `yields` の指定は「S10 の VM が読む」としていた。evidence passing の後の LIR では、yield は普通の戻りと基本操作で表され、VM が `yields` で動作を変える所はない。VM は `yields` を読まない ([LIR とインタプリタ](../spec/lir.md) の「一様な関数」)
+- `f$boxed` の `yields` の指定は「S10 の VM が読む」としていた。evidence passing の後の LIR では、yield は普通の戻りと基本操作で表され、VM が `yields` で動作を変える所はない。VM は `yields` を読まない ([LIR](../spec/lir.md) の「一様な関数」)
 
 S10a で閉じた論点は次のとおりである。
 
@@ -180,7 +180,7 @@ S10a で決めたことは spec に移した。残りは S10b で行うことで
 - SIGINT のハンドラは、`eml_cli` が ctrlc crate で入れ、`Control::interrupt()` を呼ぶ。`eml run` では、`INTERRUPT` のビットがすでに立っていれば (2回目の Ctrl-C)、その場で終了コード 130 で終わる。CEK は止める語を見ないので、ハンドラは VM に切り替える S10b で入れる。CEK のうちに入れると、Ctrl-C で止まらなくなるためである。ネイティブでは、生成したプログラムの始めで同じ形で入れる ([オブジェクトモデル](../spec/object-model.md) の「実行の制御」)
 - 上限 (`Limits` の確保量、深さ、`evv` の長さ) の既定の値と、`RunConfig` での指定を決める
 - 期待値の変更として扱うもの: `crates/eml_interp/tests/bench.rs` の `RunStats` のスナップショットを VM のもの (`crates/eml_vm/tests/bench.rs`) に替えること、切り替えで変わる `Heap(_)` の誤りの文言 (`eml_rt::HeapError` の表示)、今の `Fault::Internal` がなくなること ([オブジェクトモデル](../spec/object-model.md) の「extern」の「誤り」)
-- [LIR とインタプリタ](../spec/lir.md) の「実行時エラー」を書き直す。解放の後の使用と `a Lin object is shared` は、検査モード (`--debug-heap`) でだけ見つかるようになる ([オブジェクトモデル](../spec/object-model.md) の「受け入れる制約」)。S10a の `--vm` も、`--debug-heap` なしではすでにそう動く
+- [LIR](../spec/lir.md) の「実行時エラー」を書き直す。解放の後の使用と `a Lin object is shared` は、検査モード (`--debug-heap`) でだけ見つかるようになる ([オブジェクトモデル](../spec/object-model.md) の「受け入れる制約」)。S10a の `--vm` も、`--debug-heap` なしではすでにそう動く
 - CEK (`eml_interp` の機械)、`eml_runtime`、LIR の `saved` と Perceus でそれを埋める処理を消す。あわせて、`eml_interp` の側の期待値の表のテスト (`crates/eml_interp/tests/rt_externs.rs`) とタグの定数のテストを消し (`eml_rt` の側の表のテストと、`eml_vm` のタグの定数のテストは残す)、`scaling.rs` などの CEK のテストを VM へ移し、`eml_test_support` の実行の関数を VM に替え、`eml_cli` が公開する `RunStats` と誤りの型を `eml_vm` のものに替える
 - CEK を消す直前に、`bench/` で CEK と VM の差をもう一度記録する
 - spec を改める。`runtime.md`、`lir.md` のインタプリタの節、`core-ir.md`、`multicore.md`、`testing.md` である。段の終わりに `status.md` と `architecture.md` を直す
@@ -199,7 +199,7 @@ Prelude と `std/` の標準ライブラリと、指定したモジュールを�
 - orphan 規則では、セッションを1つのモジュールとみなす。後の入力で定義し直すと、変わるのはそれより後の入力だけである。再定義は、新しい番号の関数と、名前から最新の番号への写像で表す。古いクロージャは古い定義を呼び続ける
 - 総称な定義は使われたときに変換し、(定義, 型引数) ごとの instance をキャッシュする
 - 定義ごとに IR を保存するので、配置の番号を translate のたどり方によらない正規の順にする。今は translate が最初に使った順に振る ([Core IR](../spec/core-ir.md) の「translate の配置」)
-- 定義ごとに IR を保存しても、box の挿入をプログラム全体に走らせ直さずに済む ([LIR とインタプリタ](../spec/lir.md) の「box の挿入」)
+- 定義ごとに IR を保存しても、box の挿入をプログラム全体に走らせ直さずに済む ([LIR](../spec/lir.md) の「box の挿入」)
   - 後の定義によって変わる ABI は、`f$boxed` を足すかどうかだけである。`f$boxed` は足すだけで、元の関数もそれまでの参照も変えない。ある関数への最初の値の参照が現れた入力で `f$boxed` を足せばよい
   - 内部の関数の一様化は、それを作った定義の中で決まる
   - T3 は、関数の本体と、それが末尾の位置で直接呼ぶ関数の `ret` だけで決まる。呼ぶ関数は前の入力か同じ再帰の組で定義されるので、新しい定義が古い定義の `ret` を変えることはない
@@ -230,7 +230,7 @@ Prelude と `std/` の標準ライブラリと、指定したモジュールを�
 
 - IO の失敗は中断として伝え、組み込みの `try_io : (Unit -> <IO | e> a) -> <IO | e> Result IOError a` で捕まえる。中断の途中で捕まっていた `Lin` の値は、`never` の操作の中断と同じく、S7 の中断の経路で後始末する。捕まえなければ、エラーを表示して終了コード 1 で止まる
 - `exit : Int -> <IO> a` は、同じ中断で `Lin` の値を後始末してから終了する。`<IO>` を持たせるのは、`par` の子から呼べないようにするためである。`try_io` は `exit` を捕まえない
-  - 戻らない extern (`exit`) の結果の Repr は、`never` の操作の `clause` の結果と同じ考え方で扱いを決める。値を返さないので位置として扱わず、box の挿入は受け直さず、T3 は見ず、verifier は比べない ([LIR とインタプリタ](../spec/lir.md) の「`never` の操作」)
+  - 戻らない extern (`exit`) の結果の Repr は、`never` の操作の `clause` の結果と同じ考え方で扱いを決める。値を返さないので位置として扱わず、box の挿入は受け直さず、T3 は見ず、verifier は比べない ([LIR](../spec/lir.md) の「`never` の操作」)
 - ローカルの再帰関数を入れる。`let (f, text) = Fs.read_all f` のような再束縛を壊さないように、引数を持つ関数の形のローカル定義だけを再帰的にする。単相で、lambda lifting する
 - Rust で実装した extern の標準ライブラリを入れる。`String` (lines、split、trim、contains、replace、join、to_int)、`Env` (引数、環境変数)、`Stdin`、`Fs` (すでにある `open` などに足す、ファイル全体の読み書き)、`Proc.run`、`eprintln` である。S9 の語の ABI で書く
 - CLI は `eml file.em args...` でスクリプトを直接起動できるようにする
@@ -371,7 +371,7 @@ UTF-8 の核の extern を入れ、標準ライブラリを広げる。`std/` �
 - 修飾した演算子の構文 (`Csv.(</>)`)
 - 接頭辞付きリテラルの一般化: `re"..."` のように、ユーザーが接頭辞付きのリテラルを定義できるようにする。穴の型付けにアドホック多相が要る
 - or パターン、ガード、as パターン: パターンを広げる。網羅性の検査 ([網羅性](../spec/exhaustiveness.md)) と決定木の変換を一緒に広げる
-  - ガードには所有の制約がある。今の Perceus が `Lin` のフィールドを `dup` しないのは、決定木の途中で、後の行が持ち主を使うフィールドを消費しないことに依る ([LIR とインタプリタ](../spec/lir.md) の「値の表現」)。ガードを入れると、ガードが呼び出しの引数として `Lin` のフィールドを渡し、後の行が持ち主を使う形ができる。フィールドを消費する時点で持ち主が必要なので、Perceus はそのフィールドを `dup` し ([LIR とインタプリタ](../spec/lir.md) の「所有を取る時点」)、`File` の `dup` をヒープの検査が止める。ガードを入れるときは、ガードが `Lin` のフィールドを消費しないという型の規則か、別の変換が要る
+  - ガードには所有の制約がある。今の Perceus が `Lin` のフィールドを `dup` しないのは、決定木の途中で、後の行が持ち主を使うフィールドを消費しないことに依る ([LIR](../spec/lir.md) の「値の表現」)。ガードを入れると、ガードが呼び出しの引数として `Lin` のフィールドを渡し、後の行が持ち主を使う形ができる。フィールドを消費する時点で持ち主が必要なので、Perceus はそのフィールドを `dup` し ([LIR](../spec/lir.md) の「所有を取る時点」)、`File` の `dup` をヒープの検査が止める。ガードを入れるときは、ガードが `Lin` のフィールドを消費しないという型の規則か、別の変換が要る
 - 仮置きの式: どの型にもなる仮置きの式 (typed hole)。入れるときに、網羅されていない `match` と等式の fix (E4001 の枝の追加、E4002 の等式の追加の提案) を一緒に入れる ([診断の出し方](../implementation/diagnostics.md) の「網羅性の診断」)
 
 ### 処理系
@@ -395,14 +395,14 @@ UTF-8 の核の extern を入れ、標準ライブラリを広げる。`std/` �
 - Perceus の最適化: reuse analysis (FBIP)、借用パラメータ。どちらも LIR の上のパスで、消費しない `switch` と `release` の上に、IR を作り直さずに足す。reuse の確保の API と検査モードでの扱いは S9 で入れてある。足すときは次の約束を守る
   - reuse は、`release` を `release_reuse` に、それが空けた箱を使う `con` を `con@token` に書き換えて入れる (Lorenzen と Leijen の drop-guided reuse と同じ方向)。共有の印の付いた物体は reuse しない (S9)。reuse のトークンは、継続が捕まえる値 (EP の後は継続のクロージャ) に入れない。入れると、複数回の再開が同じ箱に2つの値を作るためである
   - 借用パラメータ: 1つの呼び出しでは、所有の引数を消費した後で借用の引数を確かめる。継続のクロージャが捕まえる値に借用の部分を含めない。借用のブロック引数は持ち主 (同じブロックの引数か関数の入口) を宣言し、verifier は辺ごとに確かめる
-    - 所有の都合で `TailCall` を `let r = <呼び出し>` と `return r` に降格するのも、借用パラメータと一緒に入れる。今は `tail` の前に実引数をすべて所有にし、保持している変数をすべて手放す ([LIR とインタプリタ](../spec/lir.md) の「持ち主を手放す時点」) ので、借用パラメータを入れるまで降格は起きない。Perceus は、終端を文と新しい終端に置き換える編集をその場でできる形にしてある
-    - 降格は、末尾の位置の呼び出しの輪の上の `tail` には当てない ([LIR とインタプリタ](../spec/lir.md) の「末尾の位置の呼び出し」)。借用の推論は、輪の上の `tail` が渡す引数の仮引数を所有にして、降格を避ける (Lean の `ownParamsUsingArgs`)。降格してよいのは、輪の上にない末尾呼び出しだけである
+    - 所有の都合で `TailCall` を `let r = <呼び出し>` と `return r` に降格するのも、借用パラメータと一緒に入れる。今は `tail` の前に実引数をすべて所有にし、保持している変数をすべて手放す ([LIR](../spec/lir.md) の「持ち主を手放す時点」) ので、借用パラメータを入れるまで降格は起きない。Perceus は、終端を文と新しい終端に置き換える編集をその場でできる形にしてある
+    - 降格は、末尾の位置の呼び出しの輪の上の `tail` には当てない ([LIR](../spec/lir.md) の「末尾の位置の呼び出し」)。借用の推論は、輪の上の `tail` が渡す引数の仮引数を所有にして、降格を避ける (Lean の `ownParamsUsingArgs`)。降格してよいのは、輪の上にない末尾呼び出しだけである
     - extern の行に、引数ごとの所有と借用の列を足すのも、借用パラメータと一緒に入れる
     - 部分適用される関数は借用を持てないので、所有の版の包みが要る (Ullrich と de Moura)。`f$boxed` との合成を、借用を入れるときに決める
     - 借りたまま読む射影も、借用パラメータで扱う。S8b の所有の形では、射影で得たフィールドを読むだけなら RC の命令は出ない。しかし `f p.name` の後に `p` を使う形は、呼び出しがフィールドを消費するので、今と同じく `dup` する ([Core IR](../spec/core-ir.md) の「変換の規則」)。これを減らすには、`f` の引数を借用にする必要がある
   - 借用の推論では、同じ配置の `con` を作る行き先を持つ scrutinee を所有にする。reuse の機会を残すためである
   - FP² (Lorenzen、Leijen、Swierstra) の `fip` のような、確保なしで動くことの静的な検査を置くかは、`multi` の継続が同じ値を共有しうる点との相性を確かめてから決める
-- ループ化 (後ろ向きの辺): 自己末尾呼び出しを、関数の中のブロックへ戻る `jump` にする。トップレベルの関数を呼び出し元のブロックにする contification も同じ枠で扱う。今は辺がすべて番号の大きいブロックへ向かう ([LIR とインタプリタ](../spec/lir.md) の「構造の規則」の R2)
+- ループ化 (後ろ向きの辺): 自己末尾呼び出しを、関数の中のブロックへ戻る `jump` にする。トップレベルの関数を呼び出し元のブロックにする contification も同じ枠で扱う。今は辺がすべて番号の大きいブロックへ向かう ([LIR](../spec/lir.md) の「構造の規則」の R2)
   - 入れる時期: S10 の VM は、自己末尾呼び出しをバイトコードの出力で入口へのジャンプにするので、IR の R2 を緩めずに済む。R2 を緩めるのは、ループの中で変わらない値の移動や、ループの頭のブロックの引数を借用として扱う Perceus の拡張が要るときにする。借用パラメータかネイティブ化に着手するときに一緒に入れる
   - 残りの作業: R2 を、ループの頭への後ろ向きの辺だけを許す形に緩めることと、変換にループ化を足すこと。ブロックはすでに複数の引数を持てる
   - 生存解析、縮約、verifier は、辺がすべて前向きであることを使って1回のループで済ませている。ループ化では、ループの頭に印を付け、そこだけ不動点を計算する。支配木の計算も、後ろ向きの辺を含む形に広げる

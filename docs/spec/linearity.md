@@ -25,7 +25,7 @@
 
 通常の制御フローでは、暗黙の後始末を一切行わない。`Fs.File` などのリソースは明示的に `Fs.open` / `Fs.close` し、`Fs.close` を忘れれば線形性の検査が検出する。Python の `with` や Haskell の `bracket` に当たる構文は用意しない。
 
-中断時 (`drop k` や `never` 操作) だけ、捕まっていた `Lin` 値を、その型に宣言された破棄処理で drop する ([エフェクトと handler](effects.md)、[LIR とインタプリタ](lir.md) の「インタプリタ (CEK 機械)」)。
+中断時 (`drop k` や `never` 操作) だけ、捕まっていた `Lin` 値を、その型に宣言された破棄処理で drop する ([エフェクトと handler](effects.md)、[LIR](lir.md) の「実行の意味」)。
 
 ## レコードとタプル
 

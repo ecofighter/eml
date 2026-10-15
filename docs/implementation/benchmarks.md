@@ -240,7 +240,7 @@ S8a は命令の数を記録していないので、この表は S7 の記録と
 
 `crates/eml_interp/tests/bench.rs` のスナップショットで回数が変わったのは、`state` の `rc_increments` と `rc_decrements` だけである。`rc_increments` は 600005 から 200001 に、`rc_decrements` は 600010 から 200006 に減った。どちらも、200000 回の操作で1回あたり2回ずつ減り、ほかに1回だけの分が4回ずつ減った。S8a の前後では回数は変わっていない。
 
-- 1回の操作の RC の増減は、`ev_lookup` が作る evidence の参照1つと、入口の関数の終わりの `decref` 1つになった。S7 では、`ev_clause` と、入口の `ev_take_state` と `ev_set_state` が evidence を消費した。そのため、後でも evidence を使う `ev_clause` と `ev_take_state` の前に `dup` が1回ずつ要り、消費した3つの基本操作の中で `decref` が3回あった ([LIR とインタプリタ](../spec/lir.md) の「基本操作」)。
+- 1回の操作の RC の増減は、`ev_lookup` が作る evidence の参照1つと、入口の関数の終わりの `decref` 1つになった。S7 では、`ev_clause` と、入口の `ev_take_state` と `ev_set_state` が evidence を消費した。そのため、後でも evidence を使う `ev_clause` と `ev_take_state` の前に `dup` が1回ずつ要り、消費した3つの基本操作の中で `decref` が3回あった ([LIR](../spec/lir.md) の「基本操作」)。
 - 1回だけの4回は、handler を設ける所と `prompt$` の分である。`main` の2つの `ev_set_clause` と、`prompt$` の `ev_evv` と `yield_status` が evidence を借りるようになり、それぞれの `dup` と、基本操作の中の `decref` がなくなった。
 - `peak_objects` は 7 のまま変わらない。`bench/` のプログラムには `mask` がないので、`evv_mask` の借用はどの回数にも現れない。
 - Perceus の所有の形の変更 (フィールドを借りたまま使い、所有が要る所でだけ取る形) は、`bench/` のどのプログラムの回数も変えなかった。
