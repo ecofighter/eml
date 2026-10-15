@@ -1,5 +1,5 @@
 //! Core IR の不変条件の検査 (docs/spec/core-ir.md の「verifier」)。ブロックの列の形 (R1〜R4)、変数の定義と支配 (R5、R6)、
-//! `unpack` の Repr、`jump` と `return` の Repr の互換、extern の引数と結果の Repr (R8)、データの配置 (R9) と、
+//! `unpack` の Repr、`jump` と `return` の Repr の互換、extern の引数と結果の Repr (R7)、データの配置 (R8) と、
 //! 引き継いだ検査 (直接呼び出しと extern の引数の数、case の種類) を確かめる。境界 (呼び出しの引数と結果、関数の値の
 //! 対象が一様であること、`tobj` のフィールド) は、box の挿入の後の LIR の段だけで比べる。
 //! 段は2つある。translate の直後は、EP が作る基本操作、節の呼び出し、`clause` の印がまだないことと、エフェクトの
@@ -10,7 +10,7 @@
 //! 結び以上であることも確かめる (docs/spec/lir.md の「Kind の印の検査」)。
 //! LIR の verifier と共有する部品は `eml_lir::check` にある。
 //!
-//! R9 は、`con`、タグの `switch`、`unpack` を、その命令が指す配置と比べる。配置を持つ `switch` はタグの case を
+//! R8 は、`con`、タグの `switch`、`unpack` を、その命令が指す配置と比べる。配置を持つ `switch` はタグの case を
 //! 持つものだけで、リテラルの `switch` では scrutinee の Repr を比べる。値がどの配置で作られたかは追わない。それを
 //! 保証するのは translate の型なので、配置の違う値を読む IR もこの検査を通りうる (docs/spec/lir.md の
 //! 「データの配置」)。
@@ -405,7 +405,7 @@ impl<'a> Checker<'a> {
         }
     }
 
-    /// `jump` の実引数は、行き先の引数と Repr が互換で (R8)、印も互換である (V2)。Core IR の段では、印を比べるのは
+    /// `jump` の実引数は、行き先の引数と Repr が互換で (R7)、印も互換である (V2)。Core IR の段では、印を比べるのは
     /// `jump` と `return` だけである (docs/spec/lir.md の「Kind の印の検査」)。
     fn check_passed(&self, target: BlockId, arg: Atom, param: VarId) -> Result<(), String> {
         let expected = self.function.repr(param);

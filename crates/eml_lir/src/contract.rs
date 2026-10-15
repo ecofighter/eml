@@ -37,8 +37,7 @@ pub fn contract(program: &mut Program) {
 /// する。互換は推移的でないので、x を通してつながっていた2つの位置が、直接つないでも互換かを確かめる。結果は、直接の
 /// 呼び出しなら呼ばれる関数の `ret`、節の呼び出しなら操作の `ret`、関数値の適用なら `tobj` である。`never` の操作の
 /// 節の呼び出しは戻らないので、どの `ret` とも互換とする。印の互換も推移的でないので、結果の印 (関数値の適用なら
-/// `poly`) と関数の戻り値の印も同じく比べる (docs/spec/lir.md の「縮約」と「Kind の印」)。`saved` は Perceus が
-/// 決めるので、この時点では空である。
+/// `poly`) と関数の戻り値の印も同じく比べる (docs/spec/lir.md の「縮約」と「Kind の印」)。
 fn tail_call(
     block: &mut Block,
     (ret, ret_mark): (Repr, Mark),
@@ -50,7 +49,7 @@ fn tail_call(
     };
     let Some(Stmt::Let {
         var,
-        rhs: Rhs::Call { call, saved: _ },
+        rhs: Rhs::Call(call),
     }) = block.stmts.last()
     else {
         return;
@@ -81,7 +80,7 @@ fn tail_call(
     }
     let Some(Stmt::Let {
         var: _,
-        rhs: Rhs::Call { call, saved: _ },
+        rhs: Rhs::Call(call),
     }) = block.stmts.pop()
     else {
         unreachable!("the last statement was checked above");
@@ -149,6 +148,6 @@ pub(crate) fn pure(rhs: &Rhs) -> bool {
             at: _,
         } => ext.row().purity == Purity::Pure,
         Rhs::Prim(prim, _) => prim.pure(),
-        Rhs::Call { call: _, saved: _ } | Rhs::Drop(_) => false,
+        Rhs::Call(_) | Rhs::Drop(_) => false,
     }
 }

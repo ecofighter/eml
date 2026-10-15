@@ -540,7 +540,7 @@ impl FnLowering<'_> {
         attempt: Attempt,
     ) -> Decision {
         // フィールドを持つ値は定数にならない。パターンが型をその data かタプルに決めるので、値の Repr はつねに `obj`
-        // である。verifier は `obj` でない値の `unpack` を拒む (R8)
+        // である。verifier は `obj` でない値の `unpack` を拒む (R7)
         let Atom::Var(value) = value else {
             unreachable!("a value with fields is a variable")
         };

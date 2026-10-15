@@ -54,10 +54,7 @@ fn classify(program: &Program) -> (Vec<bool>, Vec<bool>) {
                 if let Stmt::Let { var: _, rhs } = stmt {
                     match rhs {
                         Rhs::MakeClosure(target, _) => note_value(Atom::Fn(*target)),
-                        Rhs::Call {
-                            call: Call::Direct(target, _),
-                            saved: _,
-                        } => direct[target.0 as usize] = true,
+                        Rhs::Call(Call::Direct(target, _)) => direct[target.0 as usize] = true,
                         _ => {}
                     }
                 }
@@ -130,7 +127,7 @@ fn tail_position_call(block: &Block) -> Option<(usize, &Call)> {
         };
         if *var == returned {
             return match rhs {
-                Rhs::Call { call, saved: _ } => Some((index, call)),
+                Rhs::Call(call) => Some((index, call)),
                 _ => None,
             };
         }
@@ -319,10 +316,10 @@ fn boxed(function: &LirFn, target: FnIdx) -> LirFn {
             params: params.clone(),
             stmts: vec![Stmt::Let {
                 var: result,
-                rhs: Rhs::Call {
-                    call: Call::Direct(target, params.into_iter().map(Atom::Var).collect()),
-                    saved: Vec::new(),
-                },
+                rhs: Rhs::Call(Call::Direct(
+                    target,
+                    params.into_iter().map(Atom::Var).collect(),
+                )),
             }],
             term: Term::Return(Atom::Var(result)),
         }],
@@ -502,7 +499,7 @@ impl Converter<'_> {
         match stmt {
             Stmt::Let { var, mut rhs } => {
                 let given = match &mut rhs {
-                    Rhs::Call { call, saved: _ } => {
+                    Rhs::Call(call) => {
                         let given = self.call(call, out);
                         // 結果を受け直さない呼び出しは、`never` の操作の節の呼び出しだけである
                         self.never[var.0 as usize] = given.is_none();

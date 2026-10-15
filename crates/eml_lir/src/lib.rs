@@ -111,7 +111,7 @@ pub enum Stmt {
     },
     /// コンストラクタが1つの型の値を分解する。行き先が「ブロックの残り」である1つの case の `switch` と同じ意味で、
     /// フィールドは `Case` のフィールドと同じ規則で束縛する。`ctor` の配置は、コンストラクタが1つで Repr が `obj`
-    /// である (docs/spec/lir.md の「構造の規則」の R9)。
+    /// である (docs/spec/lir.md の「構造の規則」の R8)。
     Unpack {
         value: VarId,
         ctor: Ctor,
@@ -261,9 +261,7 @@ impl Term {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Rhs {
-    /// `saved` は、呼び出しの後で生きている変数から結果の変数を除いたもので、Perceus が埋める
-    /// (docs/spec/lir.md)。
-    Call { call: Call, saved: Vec<VarId> },
+    Call(Call),
     /// 関数と先頭の引数の並びからクロージャを作る。ラムダの捕獲と部分適用は、どちらもこの形になる。
     MakeClosure(FnIdx, Vec<Atom>),
     /// extern の関数をその場で実行する。eml のコードを呼び返さず、継続のフレームも積まない。`at` を持つ呼び出しが
@@ -278,7 +276,10 @@ pub enum Rhs {
     ConstString(u32),
     /// 引数を持つコンストラクタの値を作る。`args` の所有権は値に移る。引数のないコンストラクタの値は `Atom::Tag` で
     /// ある (docs/spec/lir.md)。
-    Con { ctor: Ctor, args: Vec<Atom> },
+    Con {
+        ctor: Ctor,
+        args: Vec<Atom>,
+    },
     /// 値の所有権を受け取って捨てる。値は `()` である。
     Drop(Atom),
     /// 箱を要するスカラー (`Repr::BOXED_SCALARS`) の値か `Int` の定数を、`tobj` の値にする。オペランドを消費し、所有
@@ -296,7 +297,7 @@ impl Rhs {
     /// 右辺が使う値。消費する使いと読む使いの区別は `for_each_consumed` が決める。
     pub fn for_each_atom(&self, mut f: impl FnMut(Atom)) {
         match self {
-            Rhs::Call { call, saved: _ } => call.for_each_atom(f),
+            Rhs::Call(call) => call.for_each_atom(f),
             Rhs::MakeClosure(_, args)
             | Rhs::Extern {
                 ext: _,
@@ -329,7 +330,7 @@ impl Rhs {
 
     pub fn for_each_atom_mut(&mut self, mut f: impl FnMut(&mut Atom)) {
         match self {
-            Rhs::Call { call, saved: _ } => call.for_each_atom_mut(f),
+            Rhs::Call(call) => call.for_each_atom_mut(f),
             Rhs::MakeClosure(_, args)
             | Rhs::Extern {
                 ext: _,
@@ -652,7 +653,7 @@ pub enum Atom {
 }
 
 impl Atom {
-    /// 変数は Repr が同じとき、定数はその Repr の値になれるときに、`vars` の関数の中で `expected` の位置に収まる (R8)。
+    /// 変数は Repr が同じとき、定数はその Repr の値になれるときに、`vars` の関数の中で `expected` の位置に収まる (R7)。
     pub fn fits(self, vars: &[VarInfo], expected: Repr) -> bool {
         match self {
             Atom::Var(var) => vars[var.0 as usize].repr == expected,

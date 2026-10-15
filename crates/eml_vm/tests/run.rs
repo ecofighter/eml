@@ -162,7 +162,7 @@ fn an_unused_call_result_does_not_overwrite_a_live_value() {
     let text = "\
 fn main() -> unit {
   let k.0: int = extern \"Prelude.+\"(1, 2)
-  let r.1: int = call one() save [k.0]
+  let r.1: int = call one()
   let s.2: obj = extern \"Prelude.Show Int.show\"(k.0)
   let u.3: unit = extern Prelude.println(s.2)
   return u.3
@@ -205,8 +205,8 @@ fn main() -> unit {
 fn pick(n.0: int) -> int {
   switch n.0 { 1 -> b1, _ -> b2 }
 b1:
-  let a.1: int = call double(n.0) save [n.0]
-  let b.2: int = call double(a.1) save [n.0]
+  let a.1: int = call double(n.0)
+  let b.2: int = call double(a.1)
   jump b3(b.2)
 b2:
   jump b3(0)

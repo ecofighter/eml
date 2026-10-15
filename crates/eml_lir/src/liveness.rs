@@ -8,7 +8,8 @@ use crate::{Atom, BlockId, LirFn, Stmt, Term, VarId};
 
 /// ブロックごとの入口の生存集合。`BlockId` の番号で引き、各集合は昇順に並ぶ。入口は、ブロックの引数と case の
 /// フィールドを束縛した後の位置なので、使う引数とフィールドも集合に入る。RC の対象に限らず、すべての変数を持つ。
-/// Perceus が、呼び出しの後で生きている RC でない変数も `saved` に入れるためである。
+/// VM のスロットの割り当てが、文の単位の干渉を作るのに RC でない変数も数えるためである
+/// (docs/spec/vm.md の「スロットの割り当て」)。
 pub fn live_in(function: &LirFn) -> Vec<Vec<VarId>> {
     let mut live_in = vec![Vec::new(); function.blocks.len()];
     for (index, block) in function.blocks.iter().enumerate().rev() {

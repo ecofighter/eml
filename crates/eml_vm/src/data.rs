@@ -35,7 +35,7 @@ fn bind_fields<M: Mode>(
     Ok(())
 }
 
-/// 検査モードで、`w` がタグ `tag` で走査する語が `scanned` 個のデータであることを確かめる。verifier の R9 は値を
+/// 検査モードで、`w` がタグ `tag` で走査する語が `scanned` 個のデータであることを確かめる。verifier の R8 は値を
 /// 作った配置を追わないので、verifier を通った IR でも外れうる (docs/spec/lir.md の「構造の規則」)。
 fn check_data<M: Mode>(
     ctx: &Ctx<M>,

@@ -137,15 +137,7 @@ impl<'p> Printer<'p> {
         let w = &self.writer;
         let vars = &function.vars[..];
         match rhs {
-            Rhs::Call { call, saved } => {
-                let text = self.call(function, call);
-                if saved.is_empty() {
-                    text
-                } else {
-                    let names: Vec<String> = saved.iter().map(|&v| w.var(vars, v)).collect();
-                    format!("{text} save [{}]", names.join(", "))
-                }
-            }
+            Rhs::Call(call) => self.call(function, call),
             Rhs::MakeClosure(target, args) => {
                 format!("closure {}({})", w.callee(*target), w.atoms(vars, args))
             }

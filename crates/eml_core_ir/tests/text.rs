@@ -435,11 +435,6 @@ fn lir_instructions_are_not_core_ir() {
             2,
             "expected a right-hand side, found `box`",
         ),
-        (
-            "fn g(x.0: int) -> int {\n  let y.1: int = call g(1) save [x.0]\n  return y.1\n}\n",
-            2,
-            "expected a statement, found `save`",
-        ),
     ] {
         let error = parse_error(text);
         assert_eq!(

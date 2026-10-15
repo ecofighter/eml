@@ -386,31 +386,6 @@ b4:
 }
 
 #[test]
-fn a_call_with_saved_variables_round_trips() {
-    let program = round_trip(
-        "\
-fn f(c.0: tobj, s.1: obj) -> obj {
-  let t.2: int = call g(c.0) save [s.1]
-  return s.1
-}
-fn g(c.0: tobj) -> int {
-  return 1
-}
-",
-    );
-    assert_eq!(
-        program.functions[0].blocks[0].stmts[0],
-        Stmt::Let {
-            var: VarId(2),
-            rhs: Rhs::Call {
-                call: Call::Direct(FnIdx(1), vec![v(0)]),
-                saved: vec![VarId(1)],
-            },
-        }
-    );
-}
-
-#[test]
 fn a_closure_round_trips() {
     let program = round_trip(
         "\
@@ -672,14 +647,11 @@ fn f(c.0: tobj) -> int {
         f.blocks[0].stmts[0],
         Stmt::Let {
             var: VarId(1),
-            rhs: Rhs::Call {
-                call: Call::Apply {
-                    callee: v(0),
-                    args: vec![Atom::Int(1), Atom::Int(2)],
-                    yields: false,
-                },
-                saved: Vec::new(),
-            },
+            rhs: Rhs::Call(Call::Apply {
+                callee: v(0),
+                args: vec![Atom::Int(1), Atom::Int(2)],
+                yields: false,
+            }),
         }
     );
     assert_eq!(
@@ -860,16 +832,6 @@ fn integers_are_written_as_they_print() {
 }
 
 #[test]
-fn a_tail_call_with_save_is_an_error() {
-    let error = parse_error("fn f(x.0: int) -> int {\n  tail call f(x.0) save [x.0]\n}\n");
-    assert_eq!(error.line, 2);
-    assert_eq!(
-        error.message,
-        "a tail call saves nothing; `save` is only on `let`"
-    );
-}
-
-#[test]
 fn malformed_declarations_names_and_strings_are_errors_with_their_lines() {
     let cases = [
         (
@@ -1001,16 +963,6 @@ fn a_block_without_a_terminator_is_an_error() {
     );
     assert_eq!(error.line, 5);
     assert_eq!(error.message, "expected a statement, found `b2:`");
-}
-
-/// `pretty` は空の `save` を書かないので、読み直した表示が元と変わる形は読まない。
-#[test]
-fn an_empty_save_is_an_error() {
-    let error = parse_error(
-        "fn g(x.0: int) -> int {\n  let y.1: int = call g(1) save []\n  return y.1\n}\n",
-    );
-    assert_eq!(error.line, 2);
-    assert_eq!(error.message, "an empty save");
 }
 
 #[test]
@@ -1322,15 +1274,12 @@ fn prims_and_clauses_round_trip() {
         f.blocks[0].stmts[5],
         Stmt::Let {
             var: VarId(6),
-            rhs: Rhs::Call {
-                call: Call::Clause {
-                    effect: 0,
-                    op: 0,
-                    callee: v(5),
-                    args: vec![v(2), Atom::Unit],
-                },
-                saved: vec![],
-            },
+            rhs: Rhs::Call(Call::Clause {
+                effect: 0,
+                op: 0,
+                callee: v(5),
+                args: vec![v(2), Atom::Unit],
+            }),
         }
     );
     let g = &program.functions[1];

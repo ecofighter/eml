@@ -28,10 +28,10 @@
 | evidence passing の出力 | `prim` (基本操作)、`clause` (節の呼び出し) |
 
 - `perform`、`handle`、`resume`、呼び出しの `mask` は translate だけが出し、evidence passing (EP) が基本操作と節の呼び出しに置き換える (下の「evidence passing」)。`prim` と `clause` は EP だけが出す
-- LIR との違いは、RC の命令 (`dup`、`decref`、`release`)、`box` と `unbox`、末尾呼び出し `tail`、呼び出しの退避 (`saved`) を持たないことと、エフェクトの命令と `mask` を持つことである。RC の命令などは LIR のパスだけが入れる
+- LIR との違いは、RC の命令 (`dup`、`decref`、`release`)、`box` と `unbox`、末尾呼び出し `tail` を持たないことと、エフェクトの命令と `mask` を持つことである。RC の命令などは LIR のパスだけが入れる
 - 関数は、名前、内部の関数かどうかの印 (`internal`。[LIR とインタプリタ](lir.md) の「一様な関数」)、yield しうるかの印 (`yields`。下の「`yields` の印」)、入口の関数の印 (`clause`。[LIR とインタプリタ](lir.md) の「入口の関数の印」)、変数の表、`ret` と `ret_mark`、ブロックの列を持つ。プログラムは、関数、入口、文字列の表、配置の表、エフェクトの表、ファイルの表を持つ。どちらも LIR と同じ欄で、LIR への変換がそのまま写す (下の「Core IR から LIR への変換」)
-- ブロックの列の意味 (アトム、`con`、`jump`、`switch`、`unpack`、フィールドの束縛、消費と読む) は、LIR と同じである ([LIR とインタプリタ](lir.md) の「ブロックの列」)。RC の命令、`box`、`unbox`、`tail`、`saved` の項目は Core IR に当たらない。エフェクトの命令の引数は、ほかの呼び出しの引数と同じく消費である
-- Core IR は、[LIR とインタプリタ](lir.md) の「構造の規則」のうち印のない部分に従う。R1〜R5、R6 の支配の半分、R8 と R9 のうち境界の検査でない部分である。下の「verifier」の引き継ぐ検査も受ける。境界の検査に従わないのは、translate と EP の出力が、box の挿入より前には境界に合わないためである
+- ブロックの列の意味 (アトム、`con`、`jump`、`switch`、`unpack`、フィールドの束縛、消費と読む) は、LIR と同じである ([LIR とインタプリタ](lir.md) の「ブロックの列」)。RC の命令、`box`、`unbox`、`tail` の項目は Core IR に当たらない。エフェクトの命令の引数は、ほかの呼び出しの引数と同じく消費である
+- Core IR は、[LIR とインタプリタ](lir.md) の「構造の規則」のうち印のない部分に従う。R1〜R5、R6 の支配の半分、R7 と R8 のうち境界の検査でない部分である。下の「verifier」の引き継ぐ検査も受ける。境界の検査に従わないのは、translate と EP の出力が、box の挿入より前には境界に合わないためである
 - 値の表現、データの配置、位置の規則、末尾の位置の呼び出しの定義は、LIR と同じである ([LIR とインタプリタ](lir.md))。この文書は、translate がそれをどう決めるかを書く (下の「型の Repr」と「translate の配置」)
 
 ### 型の Repr
@@ -164,7 +164,7 @@ box の挿入が足す変数の印は、[LIR とインタプリタ](lir.md) の�
 - 更新 `{ e | f = v }` は、`e` を評価し、フィールドの式を書いた順に評価してから、`unpack` で古いフィールドを取り出し、置き換えるもの以外の古いフィールドと新しい値を宣言の順に並べて、新しい `con` を作る。`unpack` の変数の Repr は、残すフィールドの変数を、型引数で具体化したフィールドの型の Repr にする。作る式の `con` の引数と同じく、後の決定木はこの `con` の引数をパターンの変数にそのまま渡すためである。置き換えるフィールドの変数は、配置のフィールドの Repr のままにする。意味は写しで、残したフィールドは Perceus が所有にし、上書きされる古い値と元の値は手放す。一意な値をその場で書き換えるのは、Perceus の reuse ([ロードマップ](../future/roadmap.md) の「処理系」) に任せる
 - レコードの分解のパターンは、HIR がコンストラクタのパターンに組むので、決定木の規則は変わらない。フィールドのセクションは、ほかのラムダと同じく変換する
 - 穴のある文字列は、本文と穴を左から1つずつ処理する ([式](expressions.md) の「補間」)。最初の部分 (本文の文字列の定数か、穴の結果) を、組み立て中の文字列にする。それ以降の部分は、評価するたびに `extern` 命令の `Prelude.++` (`Extern::StrConcat`) で組み立て中の文字列につなぐ。部分が1つだけなら (`"\{x}"`)、連結はしない。連結の命令は、導出した `Show` と同じく表の行を直接指し、位置を持たない。ユーザーが自分の `++` を定義しても変わらない
-- 評価の途中でつなぐので、穴の呼び出しをまたいで退避するのは組み立て中の文字列だけである。リストのリテラルのように、すべての部分を評価してから組むと、退避の大きさの合計が部分の数の2乗になる
+- 評価の途中でつなぐので、穴の呼び出しをまたいで生きているのは組み立て中の文字列だけである。リストのリテラルのように、すべての部分を評価してから組むと、呼び出しをまたいで生きている変数の数の合計が部分の数の2乗になる
 - 最初の連結は、左辺が不死のリテラルか共有された文字列なら、写して新しい文字列を作る。2つ目からは、一意な左辺をその場で伸ばす ([ランタイム](runtime.md) の「文字列の連結」)。そのため、全体の長さに比例する時間で済む
 - コンストラクタを部分適用したときと関数値として使ったときは、コンストラクタの値を作るだけの関数 (`con$…`) で包む。
 - クラスのメソッドへの参照は、instance のメソッドの関数、既定のメソッドの関数、`extern` 命令、生成した関数のどれかに変換する (下の「メソッドの解決」)。
@@ -273,7 +273,7 @@ instance の代入をかけた後のメソッドの参照 `m@[T, U1, …]` (T �
 
 ### 導出とタプルの生成器
 
-translate は、導出した instance とタプルと `Unit` の instance の中心のメソッドを、(クラス, 型, 型引数) ごとに Core IR の関数として作る。フィールドの値は、`switch` の case の束縛か `unpack` で受ける (R9: `unpack` はコンストラクタが1つの配置にだけ使える)。フィールドの型のメソッドは、ほかの参照と同じく上の「メソッドの解決」で解いた行き先を呼ぶ。意味は [宣言](declarations.md) の「`deriving`」にある。
+translate は、導出した instance とタプルと `Unit` の instance の中心のメソッドを、(クラス, 型, 型引数) ごとに Core IR の関数として作る。フィールドの値は、`switch` の case の束縛か `unpack` で受ける (R8: `unpack` はコンストラクタが1つの配置にだけ使える)。フィールドの型のメソッドは、ほかの参照と同じく上の「メソッドの解決」で解いた行き先を呼ぶ。意味は [宣言](declarations.md) の「`deriving`」にある。
 
 - 生成するのは中心のメソッドだけである。`Eq` は `==`、`Ord` は `compare`、`Show` は `show_prec` と `show` (`show x = show_prec 0 x`) を作る。`!=`、`<`、`<=`、`>`、`>=`、`display` はクラスの既定のメソッドを通る
 - `==`: 左の値で `switch` し、コンストラクタ Ci の case で右の値を `switch` する。右の `switch` は Ci の case と `default` を持つ。Ci の case では、両方のフィールドの `==` を左から短絡して呼ぶ。`default` は `False` を返す。コンストラクタが1つの型 (タプルを含む) は、`switch` せずに両方を `unpack` する
@@ -551,7 +551,7 @@ b_fast:
 
 - `to_lir(eml_core_ir::Program) -> eml_lir::Program` は、関数、ブロック、変数の表、配置の表、文字列の表、エフェクトの表、ファイルの表を、番号と名前を変えずに写す。入口も同じ関数を指す。関数の印 (`internal`、`yields`、`clause`) と `extern` 命令の位置も写す
 - 写すだけで、命令を足しも消しもしない。`handle`、`perform`、`resume` か空でない `mask` が残っていれば、内部の誤りとしてパニックする。EP の段の verifier が先に拒む形なので、捨てて先へ進むことはしない
-- 配置の表は、変換で LIR に移る。変換の直後の LIR は、RC の命令、`box`、`unbox`、`tail`、`saved` を持たない。LIR のパスがそれを入れる ([LIR とインタプリタ](lir.md) の「パスの順番」)
+- 配置の表は、変換で LIR に移る。変換の直後の LIR は、RC の命令、`box`、`unbox`、`tail` を持たない。LIR のパスがそれを入れる ([LIR とインタプリタ](lir.md) の「パスの順番」)
 - 変数の名前と番号が変わらないので、EP の後の Core IR の表示と、それを写した LIR の表示は同じ文字列になる。2つのテキスト形式は、共通の命令を同じに書く ([テスト戦略](../implementation/testing.md) の「Core IR のテキストの形」)。`crates/eml_core_ir/tests/lowering.rs` が、UI テストのすべてのプログラムでこれを確かめる
 
 ## verifier
@@ -560,8 +560,8 @@ b_fast:
   - 変換の段 (`verify_translated`) は translate の後にかける。[LIR とインタプリタ](lir.md) の「構造の規則」の印のない部分と、引き継ぐ検査を確かめる。EP が作るもの (`prim`、`clause`、`clause` の印の関数) を拒む (`` `prim evv_get` is used before the evidence pass ``、`a clause call is used before the evidence pass`、``a clause of `Counter.get` is defined before the evidence pass``)
   - EP の段 (`verify_evidence`) は EP の後にかける。変換の段の検査から EP が作るものの拒否を除き、基本操作と `clause` の検査 ([LIR とインタプリタ](lir.md) の「verifier」) を足す。`handle`、`perform`、`resume` と、呼び出しの `mask` を拒む (``a perform remains after the evidence pass``。`a handler`、`a resume`、`a mask` も同じ形)
 - 印の検査は、Core IR の2つの段で、`jump` と `return` の V2 と、作る所の検査を行う。それ以外の受け渡しは、境界に合うようになってから LIR の範囲の段で比べる。`perform`、`handle`、`resume` の受け渡しは比べず、EP がそれらを `clause` と基本操作に置き換えた後の段で比べる。`never` の操作の `perform` (変換の段) と `clause` (EP の段) の結果を束縛する変数は、使いに制御が届かないので、V2 と作る所の検査の対象にしない。V1 は `dup` と `decref` が Core IR にないので走らない ([LIR とインタプリタ](lir.md) の「Kind の印の検査」)
-- RC の命令、`box`、`unbox`、`tail`、`saved` は Core IR の型にないので、verifier は確かめない。境界の検査もしない。translate と EP の出力は、box の挿入より前には境界に合わないためである。関数の値の対象が一様かも見ない ([LIR とインタプリタ](lir.md) の「値の表現」の定数の当てはめ)
-- R8 と R9 の文言、`jump` と `return` の文言、引数のない `con` の文言、2つの IR に共通する引き継ぐ検査、検査の順、支配木の求め方は、LIR の verifier と同じである ([LIR とインタプリタ](lir.md) の「verifier」)。文言と支配木の求め方などの部品は、2つの verifier が `eml_lir::check` で共有する。検査の順は共有する部品ではなく、2つの verifier で同じに保つ約束である
+- RC の命令、`box`、`unbox`、`tail` は Core IR の型にないので、verifier は確かめない。境界の検査もしない。translate と EP の出力は、box の挿入より前には境界に合わないためである。関数の値の対象が一様かも見ない ([LIR とインタプリタ](lir.md) の「値の表現」の定数の当てはめ)
+- R7 と R8 の文言、`jump` と `return` の文言、引数のない `con` の文言、2つの IR に共通する引き継ぐ検査、検査の順、支配木の求め方は、LIR の verifier と同じである ([LIR とインタプリタ](lir.md) の「verifier」)。文言と支配木の求め方などの部品は、2つの verifier が `eml_lir::check` で共有する。検査の順は共有する部品ではなく、2つの verifier で同じに保つ約束である
 - Core IR だけの引き継ぐ検査は次のとおりである。どれも変換の段にだけ現れる。EP の段は、これらの命令そのものを拒むためである
   - 呼び出しの `mask` は、エフェクトの番号がエフェクトの表にあり、昇順に並び、`handle`、`perform`、`clause` に付かない (上の「変換の規則」)
   - `perform` の `resumable` が、エフェクトの表と一致する

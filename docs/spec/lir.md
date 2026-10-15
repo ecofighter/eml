@@ -21,11 +21,10 @@ EP の後の Core IR から写す LIR と、それを実行する CEK 風のイ�
 
 - LIR は、EP の後の Core IR を写したものである ([Core IR](core-ir.md) の「Core IR から LIR への変換」)。Core IR との違いは次の2つである
   - エフェクトの命令 (`perform`、`handle`、`resume`) と、呼び出しの `mask` を持たない。LIR の型にないので、EP の後に残っていないことを verifier でなく型で保証する
-  - RC の命令 (`dup`、`decref`、`release`)、`box` と `unbox`、末尾呼び出し `tail`、呼び出しの退避 (`saved`) を持つ。どれも LIR のパス (box の挿入、縮約、Perceus) だけが入れる。変換の直後の LIR はこれらを持たず、`passes_until` の入口の verifier がそれを確かめる (下の「パスの順番」)
+  - RC の命令 (`dup`、`decref`、`release`)、`box` と `unbox`、末尾呼び出し `tail` を持つ。どれも LIR のパス (box の挿入、縮約、Perceus) だけが入れる。変換の直後の LIR はこれらを持たず、`passes_until` の入口の verifier がそれを確かめる (下の「パスの順番」)
 - 関数は、名前、内部の関数かどうかの印 (`internal`)、yield しうるかの印 (`yields`)、入口の関数の印 (`clause`)、変数の表、`ret` と `ret_mark`、ブロックの列を持つ。印は Core IR と同じ意味である ([Core IR](core-ir.md) の「`yields` の印」、下の「一様な関数」と「入口の関数の印」)。box の挿入が `internal` と `clause` を読み、`f$boxed` が `yields` を写す。VM は `yields` を読まない ([VM](vm.md) の「呼び出しと戻り」)
 - プログラムは、関数、入口、文字列の表、配置の表、エフェクトの表、ファイルの表を持つ。Core IR のプログラムと同じ欄である。エフェクトの表は、`clause` の ABI (操作の Repr) と、基本操作の即値のために持つ
-- 呼び出しの退避 (`saved`) は、CEK だけが使う (下の「インタプリタ (CEK 機械)」)。S10b で CEK を消すまで LIR に残す
-- 2つの IR は別の型を持つ。型を読むだけでどちらの IR か分かり、LIR にエフェクトの命令がないことと、Core IR に RC と box がないことを、verifier でなく型で保証できるためである。重なる部品 (共有する型、テキスト形式の字句解析と共通の命令の読み書き、verifier の支配木と R8 と R9 の検査、基本操作と `clause` の検査) は `eml_lir` に置き、`eml_core_ir` が借りる
+- 2つの IR は別の型を持つ。型を読むだけでどちらの IR か分かり、LIR にエフェクトの命令がないことと、Core IR に RC と box がないことを、verifier でなく型で保証できるためである。重なる部品 (共有する型、テキスト形式の字句解析と共通の命令の読み書き、verifier の支配木と R7 と R8 の検査、基本操作と `clause` の検査) は `eml_lir` に置き、`eml_core_ir` が借りる
 
 ### ブロックの列
 
@@ -54,7 +53,6 @@ EP の後の Core IR から写す LIR と、それを実行する CEK 風のイ�
 - `drop a` は、a の参照を1つ手放す。a を消費し、結果は `unit` である。意味は `decref` と同じ「参照を1つ手放す」で、「すぐに破棄する」ではない。`poly` の値は実は `Unr` で共有されていることがあり (多重の継続を2回再開して写した `resume$` のクロージャが捕まえる `ret` など)、手放した後に残りの参照が使われうるためである。a が `unr` でない変数でも、`drop` は消費なので、Perceus はその後に何も足さない。`unr` でない値を手放す命令は、`drop` と Perceus の `release` だけである (下の「verifier」の V1)。a がダミーかタグなら、何も起こらない (下の「ダミーの値」)
 - 値 (アトム) の使い方は「消費」と「読む」に分かれる。`switch` の scrutinee、`unpack` の値、`unbox` のオペランド、`prim` の借用の引数 (下の「基本操作」) だけが「読む」で、参照を受け取らない。ほかの使い方 (呼び出し、`apply`、`clause`、呼ばれる側、extern、`prim` の借用でない引数、`con`、`closure` の引数、`drop`、`box`、`return`、`tail`、`jump` の実引数) はすべて「消費」で、参照を1つ受け取る。Core IR のエフェクトの命令の引数も「消費」である
 - `tail <呼び出し>` (`TailCall`) は、縮約が作る末尾呼び出しの要求である。呼び出し元のフレームを積まずに呼ぶ。呼び出しの結果は、呼び出し元の `ret` と互換である (下の「縮約」)。LIR の呼び出しは `mask` を持たない。EP が `mask` を `evv_mask` の包みに置き換えている ([Core IR](core-ir.md) の「`mask` の包み」) ためである。所有の都合で `let r = <呼び出し>` と `return r` に戻す降格は、借用パラメータを入れるときに、末尾の位置の呼び出しの輪の上にない末尾呼び出しにだけ足す (下の「末尾の位置の呼び出し」、[ロードマップ](../future/roadmap.md) の「処理系」)
-- `let x = <呼び出し> save S` の S は、呼び出しの後で使う変数の並び (`saved`) である。Perceus が入れ、CEK がフレームに退避する (下の「Perceus」と「インタプリタ (CEK 機械)」)。`tail` は退避を持たない
 
 ### 構造の規則
 
@@ -66,14 +64,13 @@ EP の後の Core IR から写す LIR と、それを実行する CEK 風のイ�
 - R4: 入口と `switch` の行き先を除くブロックには、`jump` が1本以上入る。`jump` の実引数の数は、行き先の引数の数と同じである
 - R5: 変数は、関数の中で多くとも1回定義される。パスが消した変数のように、変数の表には定義のない番号が残ってよい。定義する位置は、ブロックの引数、`let`、`unpack` のフィールド、case のフィールドである
 - R6: 変数が見えるのは、その定義の位置が使う位置を支配するときだけである (同じブロックなら前の文)。[LIR だけ] 所有の検査の段では、合流するブロックに入るすべての `jump` で所有の多重集合が一致しなければならず、その集合が入口の所有になる
-- R7 [LIR だけ]: 所有の検査の段では、`let x = <呼び出し> save S` の後に見える変数は S と x だけである。S は呼び出しの前に見えていなければならず、S のうち RC の対象の部分は、所有の多重集合と一致する。呼び出しの後に定義した変数は、次の呼び出しまで見える。合流するブロックでは、入るすべての辺で見えている変数だけが見える
-- R8: Repr の規則 (下の「値の表現」と「位置の規則」)
+- R7: Repr の規則 (下の「値の表現」と「位置の規則」)
   - `extern` 命令の引数と、その結果を束縛する変数は、`eml_extern` の表の行の `params` と `ret` と Repr が同じである。定数の引数は、正確な位置の当てはめで行の Repr に収まる
   - `unpack` の値は Repr が `obj` の変数である
   - `jump` の実引数と行き先の引数、`return` の値と `ret` は、互換の関係で比べ、定数は互換の位置の当てはめで比べる
   - [LIR だけ、境界] 直接の呼び出しと `apply`、`clause`、`prim` の引数と結果、`closure` の引数、`tail` の結果は、互換の関係で比べ、定数は互換の位置の当てはめで比べる。`never` の操作の `clause` の結果と、その束縛の使いは比べない。関数の値として使う関数は一様である。`clause` の印の関数の引数と `ret` は、操作の表と互換である
   - [LIR だけ] `box` と `unbox` は「値の表現」の規則に従う
-- R9: 配置を指す命令は、その配置と合う (下の「データの配置」)
+- R8: 配置を指す命令は、その配置と合う (下の「データの配置」)
   - 命令が指す配置は表にあり、タグはその配置のコンストラクタの数より小さい
   - `switch` が配置を持つのは、タグの case を持つときだけである
   - `con` の引数の数と、case、`unpack`、`release` のフィールドの数は、コンストラクタのフィールドの数と同じである (`release` は LIR だけにある)
@@ -83,7 +80,7 @@ EP の後の Core IR から写す LIR と、それを実行する CEK 風のイ�
   - `con` で束縛する変数の Repr は、配置の Repr と同じである
   - 宣言した Repr が `tobj` でないフィールドでは、`con` の引数と、case と `unpack` のフィールドの Repr が、その Repr と同じである。定数の引数は、正確な位置の当てはめでその Repr に収まる
   - [LIR だけ、境界] 宣言した Repr が `tobj` のフィールドでは、`con` の引数と、case と `unpack` のフィールドの Repr が `tobj` と互換である。定数の引数は、互換の位置の当てはめで `tobj` に収まる
-  - R9 は、それぞれの命令を、その命令が指す配置と比べるだけである。値がどの配置で作られたかは追わない。それを保証するのは translate の型である。そのため、配置の違う値を読む IR も R9 を通りうる。タグかフィールドの数が違えば、インタプリタが内部の誤りとして止める。形が同じなら気付かない (下の「インタプリタ (CEK 機械)」)
+  - R8 は、それぞれの命令を、その命令が指す配置と比べるだけである。値がどの配置で作られたかは追わない。それを保証するのは translate の型である。そのため、配置の違う値を読む IR も R8 を通りうる。タグかフィールドの数が違えば、インタプリタが内部の誤りとして止める。形が同じなら気付かない (下の「インタプリタ (CEK 機械)」)
 
 R1 と R2 から、ブロックの番号の順は辺の向きに沿った順 (トポロジカル順) になり、ループはない。R3 から、`switch` の行き先の入口の状態は、その `switch` のブロックだけで決まる。
 
@@ -153,7 +150,7 @@ R1 と R2 から、ブロックの番号の順は辺の向きに沿った順 (�
 - 配置の Repr は表に持たない。data の Repr と同じく、コンストラクタのフィールドの数から決まる (`data_repr`)。フィールドのないコンストラクタだけなら `enum`、どれもフィールドを持てば `obj`、混ざれば `tobj` である
 - 配置の表は、Core IR から LIR に写る。LIR のパスは配置を足さない。配置はフィールドの Repr を持ち、Kind の印は持たない (上の「Kind の印」)
 - 宣言した Repr が `tobj` のフィールドは、互換の位置である (上の「値の表現」)。`obj` の値は変換なしで `tobj` のフィールドに置け、`tobj` のフィールドは `obj` の変数に束縛できる。`box` と `unbox` が要るのは、スカラーと参照の間だけである。ただし `unit` は、命令なしで `tobj` のフィールドと行き来する
-- verifier の R9 は、命令をその命令が指す配置と比べるだけで、値を作った配置を追わない。それを保証するのは translate の型である (上の「構造の規則」の R9)
+- verifier の R8 は、命令をその命令が指す配置と比べるだけで、値を作った配置を追わない。それを保証するのは translate の型である (上の「構造の規則」の R8)
 - 後のバイトコード VM はジャンプ表の大きさとポインタのフィールドを、ネイティブ化は物体の記述子を、reuse は同じ配置かどうかを、この表から知る ([ランタイム](runtime.md) の「オブジェクトのヘッダ」)
 
 ### 位置の規則
@@ -366,9 +363,9 @@ handle の実行と、継続の再開のたびに、新しい evidence を作る
 
 | パス | 受け取る IR | 渡す IR |
 |---|---|---|
-| box の挿入 (`boxing`) | 末尾呼び出し、`box` と `unbox`、RC の命令、`saved` のない LIR | 位置の規則を満たす LIR。一様にした関数と `f$boxed` を含む |
+| box の挿入 (`boxing`) | 末尾呼び出し、`box` と `unbox`、RC の命令のない LIR | 位置の規則を満たす LIR。一様にした関数と `f$boxed` を含む |
 | 縮約 (`contract`) | RC の命令のない LIR | 使われない純粋な `let` を消し、末尾呼び出しを作った LIR |
-| Perceus | RC の命令のない LIR | `dup` / `decref` / `release` と `saved` が入った LIR |
+| Perceus | RC の命令のない LIR | `dup` / `decref` / `release` が入った LIR |
 
 - どのパスの後でも、ブロックの列は上の「構造の規則」を満たす。パスの間で古くなる索引やキャッシュは IR に持たせない
 - reuse analysis と借用パラメータの最適化は後で追加する ([ロードマップ](../future/roadmap.md))。再帰の深さの決まりは、[Core IR](core-ir.md) の「パス」にある
@@ -417,7 +414,7 @@ handle の実行と、継続の再開のたびに、新しい evidence を作る
 - `switch` の出口の生存集合は、各 case の (行き先の入口 − case のフィールド) と `default` の行き先の入口の和に、scrutinee を足したものである
 - 使いは「消費」と「読む」の両方を数える
 - `jump` の出口の生存集合は、(行き先の入口 − 行き先の引数) に、実引数を足したものである
-- 生存集合はすべての変数を持つ。Perceus は RC の対象だけを見るが、`saved` は RC の対象でない変数も退避するためである
+- 生存集合はすべての変数を持つ。Perceus は RC の対象だけを見るが、VM のスロットの割り当ては RC の対象でない変数も干渉に数えるためである ([VM](vm.md) の「スロットの割り当て」)
 - EP は、同じ規則の Core IR の上の写しを使う ([Core IR](core-ir.md) の「継続の関数」)
 - 文の単位の生存も、`eml_lir::liveness` の公開の API にする。ブロックの入口の生存集合 `live_in`、終端の後で生きている変数の集合 `live_after_term` (終端そのものが使う変数は入らない)、生存集合を文の前へ1つさかのぼる `step_back` である。VM のスロットの割り当てが、文の単位の干渉を作るのに使う ([VM](vm.md) の「スロットの割り当て」)。`step_back` は `dup`、`decref`、`release` も使いとして数えるので、Perceus の後の LIR にも使える
 
@@ -427,7 +424,7 @@ Perceus は、`switch` と `unpack` のフィールドを借りたまま使い�
 
 - `drop` は消費なので、Perceus はそこに何も足さない。EP と translate が `drop` を出した後、Perceus が `unr` でない変数に出す命令は、分解のときの `release` だけになる (下の「verifier」の V1)
 - 入力は RC の命令を持たない。ブロックを番号の順に1回たどる。各ブロックでは、後ろからたどって各命令の後の生存を求め、前から状態 (下の「経路ごとの状態」) を持って命令を足す
-- EP の出力のための規則は足さない。`prim` の借用の引数は読む使いで、ほかの引数は extern と同じく消費する。結果は所有した値である (上の「基本操作」)。`clause` は呼び出しとして退避 (`saved`) を持つ
+- EP の出力のための規則は足さない。`prim` の借用の引数は読む使いで、ほかの引数は extern と同じく消費する。結果は所有した値である (上の「基本操作」)。`clause` は呼び出しとして扱う
 - 変数を消費することは所有権の移動である。読む使い (上の「ブロックの列」) は所有権を動かさない
 - タグの case を持つのに配置のない `switch` を見たら、Perceus はパニックする。verifier が拒む形なので、黙って飛ばさない
 
@@ -451,7 +448,7 @@ Perceus は、`switch` と `unpack` のフィールドを借りたまま使い�
 借りた変数 v の所有を取るのは、次のどれかに当たるときだけである。
 
 1. v を消費する
-2. v が呼び出し (`call`、`apply`、`clause`) の後で生きている。フレームは借りた値を持てないためである (R7)
+2. v が呼び出し (`call`、`apply`、`clause`) の後で生きている
 3. v が `jump` の行き先の入口で生きている。合流するブロックは所有だけで始まるためである
 4. v の持ち主 o の最後の所有の参照を、ある命令が消費し (o がその命令の後で生きていない)、v がその命令の後で生きている。たとえば `| Box s -> (Some b, s)` の `con Option #1(b)` は、b を消費した後に s を使う
 
@@ -489,7 +486,6 @@ Perceus は、`switch` と `unpack` のフィールドを借りたまま使い�
 - `jump` の前: 上の「所有を取る時点」の 3. のとおり、行き先で生きている借りた変数をすべて所有にした後で、行き先で生きていない所有の変数 (保持されている変数を含む) を `decref` する。合流するブロックに入るすべての辺で、所有の集合が入口の生存集合のうちの RC の対象と一致する
 - `return` と `tail` の前: 実引数の所有を取った後で、保持されている変数をすべて `decref` し、所有を残さない
 - 呼び出しの前: 上の「所有を取る時点」の 2. のとおり、呼び出しの後で生きている借りた変数をすべて所有にするので、保持されている変数が呼び出しをまたぐことはない
-- `saved` は、呼び出しの後で生きている変数から、結果の変数を除いたものである。借りた変数は呼び出しの前に所有になっているので、`saved` に入らない。そのために末尾呼び出しを降格することもない
 - 終端を、文と新しい終端に置き換える編集をその場でできる形にしておく。借用パラメータを入れるときに、末尾の位置の呼び出しの輪の上にない `TailCall` を降格するためである (上の「末尾の位置の呼び出し」)
 
 #### Perceus の時間
@@ -502,40 +498,39 @@ Perceus は、`switch` と `unpack` のフィールドを借りたまま使い�
 ### verifier
 
 - LIR の verifier は3つの段を持つ。段はパスの順に直線に並ぶので、境界の検査だけを切り替える別の旗は持たない
-  - 入口の段 (`verify_lowered`) は、`passes_until` が入力にかける (上の「パスの順番」)。構造の規則のうち境界と所有に関わらないもの (R1〜R5、R6 の支配、R8 と R9 のうち境界の検査を除くもの) と、下の引き継ぐ検査と、基本操作と `clause` の検査を確かめ、`tail`、`box`、`unbox`、`dup`、`decref`、`release`、空でない `saved` がないことを確かめる。box の挿入は末尾呼び出しと変換のない入力を前提にし、T3 は `let` と `return` の形から末尾の位置を見るためである。Perceus より前に `release` を拒むのと同じく、パスの入力の約束を verifier が確かめる
+  - 入口の段 (`verify_lowered`) は、`passes_until` が入力にかける (上の「パスの順番」)。構造の規則のうち境界と所有に関わらないもの (R1〜R5、R6 の支配、R7 と R8 のうち境界の検査を除くもの) と、下の引き継ぐ検査と、基本操作と `clause` の検査を確かめ、`tail`、`box`、`unbox`、`dup`、`decref`、`release` がないことを確かめる。box の挿入は末尾呼び出しと変換のない入力を前提にし、T3 は `let` と `return` の形から末尾の位置を見るためである。Perceus より前に `release` を拒むのと同じく、パスの入力の約束を verifier が確かめる
   - 範囲の段 (`verify_scopes`) は box の挿入と縮約の後にかける。入口の段から `tail`、`box`、`unbox` の拒否を除き、`box` と `unbox` の規則 (上の「値の表現」) と境界の検査を足す
-  - 所有の段 (`verify`) は Perceus の後にかけ、範囲の段に加えて、RC の対象の所有の多重集合 (R6、R7) と、呼び出しの後に見える変数 (R7) と、V1 を確かめる
+  - 所有の段 (`verify`) は Perceus の後にかけ、範囲の段に加えて、RC の対象の所有の多重集合 (R6) と、V1 を確かめる
 - Kind の印の検査 (V1、V2、作る所の検査) は、下の「Kind の印の検査」にある。V2 と作る所の検査は Repr を比べる所と同じ所で、V1 は所有の段で走る
 - Core IR の verifier の2つの段は、印のない構造の規則と同じ部品 (`eml_lir::check`) を使う ([Core IR](core-ir.md) の「verifier」)
-- 境界の検査は、R8 と R9 の検査のうち、`jump`、`return`、`box`、`unbox` を除くものである。直接の呼び出しの引数と結果、`closure` の引数、関数の値の対象が一様であること、`apply`、`clause`、`prim` のオペランドと結果、`clause` の印の関数の引数と `ret` が操作の表と互換であること、`tail` の結果、宣言した Repr が `tobj` のフィールドである。translate と EP の出力は、box の挿入より前には境界に合わないので、Core IR の verifier と LIR の入口の段は境界を見ない
+- 境界の検査は、R7 と R8 の検査のうち、`jump`、`return`、`box`、`unbox` を除くものである。直接の呼び出しの引数と結果、`closure` の引数、関数の値の対象が一様であること、`apply`、`clause`、`prim` のオペランドと結果、`clause` の印の関数の引数と `ret` が操作の表と互換であること、`tail` の結果、宣言した Repr が `tobj` のフィールドである。translate と EP の出力は、box の挿入より前には境界に合わないので、Core IR の verifier と LIR の入口の段は境界を見ない
 - 関数の値の対象が一様かは、verifier を始めるときに関数ごとに1回求めて表にし、`&g` と `closure g` では表を引くだけにする。参照ごとに引数をたどると、時間が参照の数と引数の数の積になるためである
-- 所有は、どの経路でも、関数の入口と束縛で得た参照と、`dup` と `release` で増やした参照が、消費と `decref` と `release` でちょうど使い切られることを確かめる。経路ごとに持つのは、RC の対象の変数ごとの所有の数だけである。呼び出しでは、退避する RC の対象の変数が、その時点で所有している変数とちょうど一致する (同じ変数を2回退避しない)。`return` と `tail` の時点では、所有が残らない
+- 所有は、どの経路でも、関数の入口と束縛で得た参照と、`dup` と `release` で増やした参照が、消費と `decref` と `release` でちょうど使い切られることを確かめる。経路ごとに持つのは、RC の対象の変数ごとの所有の数だけである。`return` と `tail` の時点では、所有が残らない
 - RC の対象のフィールドには、定義のとき (R5 で1回だけ) 持ち主と出どころを記録する
   - 持ち主: 分解した値 s が、束縛の時点で所有の数を1つ以上持っていれば s、そうでなければ s の持ち主
-  - 出どころ: `(s, Ctor, 位置)`。case の `Ctor` は、`switch` の配置と case のタグである。フィールドの数は R9 が配置で確かめるので、出どころに持たない
+  - 出どころ: `(s, Ctor, 位置)`。case の `Ctor` は、`switch` の配置と case のタグである。フィールドの数は R8 が配置で確かめるので、出どころに持たない
 - 変数 v が有効なのは、v の所有の数が1つ以上か、v の持ち主の所有の数が1つ以上のときである。1回の参照で決まるので、verifier は線形のままである。所有の数が正なら、その経路は実際の参照を持ち、物体は生きている。データは変更されないので、その下の物体もすべて生きている
 - 所有の段では、次の規則を確かめる
   - 分解 (case のフィールド、`unpack`): 値は見えて有効な RC の対象の変数である。RC の対象のフィールドは所有の数0で始まる。借りた変数への `switch` と `unpack` も受け入れる
   - 読む (`switch` の scrutinee、`unpack` の値、`unbox` のオペランド、`prim` の借用の引数、`dup` の対象): 見えて有効である。所有の数を変えない。ただし `dup v` は v の所有の数を1つ増やす。`prim` の借用の引数が変数でない値なら、消費と同じ検査 (関数の値の番号) だけを通す
   - 消費と `decref v`: 見えて、v の所有の数が1つ以上である。1つ減らす。1つの命令の中では左から順に当てる
   - `release x L #t(p1, .., pn)`: 名前が1つ以上ある。x の所有の数が1つ以上である。名前を書いた各 pi は見えて、Repr が RC の対象で、出どころが `(x, L #t, i)` である。その後、x を1つ減らし、各 pi を1つ増やす。1つの位置には1つの名前しか書けないので、同じフィールドを2つの変数が引き継ぐことはない
-  - 借りた変数 (所有の数0) は消費できず、`save` の所有の多重集合とも合わないので、呼び出しをまたいで保存されることも、`jump` で渡されることもない。定義が支配する合流のブロックでは見えたままで、持ち主がどの辺でも所有されていれば有効である
+  - 借りた変数 (所有の数0) は消費できないので、`jump` で渡されることはない。呼び出しの後も見えたままで、持ち主が所有されていれば有効である。持ち主を呼び出しの引数として消費すると、その後の借りた変数の使いは拒まれる。定義が支配する合流のブロックでも見えたままで、持ち主がどの辺でも所有されていれば有効である
   - 持ち主を手放した後は、間の変数を後で `dup` していても、借りた変数を拒む。保守的だが健全で、Perceus はその形を出さない。親をたどる規則に緩めることは、IR を変えずに後でできる
 - 引数のない `con` は、2つの IR のどの段でも拒む (`` a constructor value without fields is written as a tag `#N`, not `con` ``)
 - 入口の段だけの文言は次のとおりである
   - `tail`: ``a tail call is formed before contract``。`call` のほかは ``a tail apply``、``a tail clause`` を同じ形で使う
   - `box` と `unbox`: `` `n.1` is boxed before the boxing pass ``、``5 is boxed before the boxing pass``、`` `b.2` is unboxed before the boxing pass ``
-- 入口の段と範囲の段の文言は次のとおりである。Perceus より前の RC の命令と `saved` を拒む
+- 入口の段と範囲の段の文言は次のとおりである。Perceus より前の RC の命令を拒む
   - `` `s.0` is duplicated before Perceus ``、`` `s.0` is released before Perceus `` (`decref`)、`` `d.0` is released with its fields before Perceus `` (`release`)
-  - ``a call saves [s.0] before Perceus``
 - 所有の段の誤りの文言は次のとおりである
   - `` `x.1` is {used|released} but is only borrowed from `d.0` ``: 持ち主が所有されている間に、所有の数0の変数を消費したか、`decref` か `release` で手放した
   - `` `x.1` is {duplicated|switched on|unpacked|unboxed|lent to `prim ev_evv`} after its owner `d.0` was given up ``: 無効な変数を読んだ。`prim` の借用の引数では、基本操作をテキストの形 (即値を含む) で書く
   - `` `x.1` is not field 0 of `d.0` as `Option` #1 ``: `release` の名前の出どころが違う
   - `` a release of `d.0` keeps no field `` と `` `x.1` is kept but is not reference counted ``: `release` の名前の誤り
   - 持ち主のない変数を読むか消費するか手放したときと、持ち主も手放した変数を消費するか手放したときは、今までと同じく `` `x.1` is {used|released|duplicated|switched on|unpacked|unboxed|lent to `prim ev_evv`} after it was moved `` で報告する
-- R8 と R9 のうち境界の検査でないものは、2つの IR のすべての段で走り、どの段でも次の文言で報告する (`release` は LIR の所有の段にだけ現れる)。境界の検査と、`box` と `unbox` の規則は、範囲の段と所有の段で走る。どの文言の後にも、ほかの誤りと同じく `` in `f` `` が付く
-  - R8 の extern: ``argument 0 of `Prelude.+` is `s.0` (obj), but the extern takes int``、``argument 1 of `Prelude.+` is (), but the extern takes int``、`` `t.1` (obj) is bound to `Prelude.<`, which returns enum ``。引数の数を確かめた後で、引数を左から、最後に束縛する変数を比べる
+- R7 と R8 のうち境界の検査でないものは、2つの IR のすべての段で走り、どの段でも次の文言で報告する (`release` は LIR の所有の段にだけ現れる)。境界の検査と、`box` と `unbox` の規則は、範囲の段と所有の段で走る。どの文言の後にも、ほかの誤りと同じく `` in `f` `` が付く
+  - R7 の extern: ``argument 0 of `Prelude.+` is `s.0` (obj), but the extern takes int``、``argument 1 of `Prelude.+` is (), but the extern takes int``、`` `t.1` (obj) is bound to `Prelude.<`, which returns enum ``。引数の数を確かめた後で、引数を左から、最後に束縛する変数を比べる
   - 表にない配置: ``a con refers to the unknown layout #3`` (`a switch`、`an unpack`、`a release` も同じ形)
   - `switch` の配置の有無: `a switch with tag cases has no layout`、``a switch without tag cases has the layout `Prelude.Bool` ``
   - タグの範囲: ``a con names #2, but `Prelude.Bool` has 2 constructors`` (`a case`、`an unpack`、`a release` も同じ形)
@@ -559,7 +554,7 @@ Perceus は、`switch` と `unpack` のフィールドを借りたまま使い�
   - `clause` と `prim` の結果: `` `t.0` (int) is bound to a clause of `State.get`, which returns tobj ``、`` `w.0` (int) is bound to `prim evv_get`, which returns tobj ``
   - `clause` の印の関数: `` `g$entry` is a clause of `Counter.put`, but its parameter 2 is tobj ``、`` `g$entry` is a clause of `Counter.get`, but it returns tobj ``
   - `tail` の結果: ``a tail call to `g` returns int, but this function returns tobj``、``a tail apply returns tobj, but this function returns int``、``a tail clause of `Counter.get` returns int, but this function returns tobj``。呼び出し元を "this function" と書き、呼ばれる側を指す "the function" と分ける
-  - `tobj` のフィールド: R9 の文言を `tobj` に広げる。``field 0 of `Option` #1 is `x.3` (int), but the layout has tobj``、``argument 0 of a con of `Option` #1 is 5, but the layout has tobj``
+  - `tobj` のフィールド: R8 の文言を `tobj` に広げる。``field 0 of `Option` #1 is `x.3` (int), but the layout has tobj``、``argument 0 of a con of `Option` #1 is 5, but the layout has tobj``
 - 範囲の段と所有の段の `box` と `unbox` の文言は次のとおりである。`int and enum` と `int or enum` の部分は、箱を要するスカラーの定義から作る
   - `box` のオペランド: `` `u.1` (unit) is boxed, but only int and enum values and Int constants can be ``、``() is boxed, but only int and enum values and Int constants can be`` (`#1`、`&g` も同じ形)
   - `box` の束縛: `` `b.2` (int) is bound to a box, which is tobj ``
@@ -572,7 +567,7 @@ Perceus は、`switch` と `unpack` のフィールドを借りたまま使い�
   - `ev_set_clause[E.op]` に渡す値が `&g` か、同じ関数の中の `closure g(..)` なら、g の `clause` の印が op に合い、同じ関数の中で evidence を定義した `ev_new[E]` の E にも合う
   - `clause` の印の関数が、`ev_set_clause` の引数のほかで値として参照されず、直接も呼ばれない。印のエフェクトと操作が表にあり、捕獲の後に evidence と操作の引数を受ける
 - 検査の順
-  - それぞれの命令で、今ある形の検査を先に、R8 と R9 (境界の検査を含む) をその次に、範囲と所有の検査 (R5、R6、R7) を最後に行う。`return` だけは、値の範囲と所有を確かめてから `ret` と比べる
+  - それぞれの命令で、今ある形の検査を先に、R7 と R8 (境界の検査を含む) をその次に、範囲と所有の検査 (R5、R6) を最後に行う。`return` だけは、値の範囲と所有を確かめてから `ret` と比べる
   - 1つの呼び出しの中では、引数の数、引数の Repr (左から)、結果を束縛する変数の Repr の順に比べ、その後で範囲と所有を確かめる。`tail` では、引数の Repr の後で結果と呼び出し元の `ret` を比べる
   - `closure g(..)` では、引数の数の後で g が一様かを確かめ、その後で引数の Repr を比べる。そのため、`closure` の対象が一様でない誤りは、その引数の範囲の誤りより先に出る
   - `&g` は、互換の位置では、定数の当てはめの中で `tobj` に収まるかを確かめた後に g が一様かを確かめる。`extern` の引数では当てはめが通った後に、`drop &g` と case のない `switch` の scrutinee ではその命令の検査の中で確かめる。IR のどこにある `&g` も関数の値だからである
@@ -620,9 +615,9 @@ Perceus は、`switch` と `unpack` のフィールドを借りたまま使い�
 - `switch` は scrutinee を読むだけで、参照の数を変えない。case を選び、フィールドの値をフィールドの変数に書いてから、行き先の先頭へ進む。ヒープからは何も取り出さず、複製もしない。行き先は `switch` の前の所有をそのまま持って始まり、scrutinee を手放す `decref` か `release` と、フィールドの `dup` は、Perceus が所有の要る所に置く (上の「Perceus」)。実行時は、scrutinee が即値のタグならその case に入る。オブジェクトなら、そのタグの case に入り、合う case がなければ `default` に進む。`Int` と `String` は case の値と比べる。`String` の scrutinee も `switch` では手放さず、行き先が手放す。
 - `unpack` は、1つの case の `switch` と同じく値を読むだけで、フィールドの値をフィールドの変数に書く。値のタグが `unpack` のタグと違うとき、フィールドの数が違うときは、内部の誤りである。
 - `release` は、ヒープの `release_fields` で値を手放し、名前を書いた位置のフィールドの参照を残す ([ランタイム](runtime.md) の「ランタイムの API」)。値がオブジェクトでないとき、データでないとき、タグかフィールドの数が違うときは、内部の誤りである。
-- `box` と `unbox` は値をそのまま渡す。`Value` が自分の種類を持つためである。どちらも、値がヒープの物体 (`Value::Obj`) なら、内部の誤り (`internal error: a box of a heap object`、`internal error: an unbox of a heap object`) で止める。R9 は値を作った配置を追わないので、verifier を通った IR でも、`tobj` に入ったヒープの物体を `unbox` しうる。インタプリタは Repr を読まずに、この誤りを見つけられる
+- `box` と `unbox` は値をそのまま渡す。`Value` が自分の種類を持つためである。どちらも、値がヒープの物体 (`Value::Obj`) なら、内部の誤り (`internal error: a box of a heap object`、`internal error: an unbox of a heap object`) で止める。R8 は値を作った配置を追わないので、verifier を通った IR でも、`tobj` に入ったヒープの物体を `unbox` しうる。インタプリタは Repr を読まずに、この誤りを見つけられる
   - 本当の箱は確保しない。box の変数の RC の釣り合いは、所有の検査がすでに静的に確かめている。そのため、`box` と `unbox` は `RunStats` の参照の数の回数を変えず、`boxes` と `unboxes` だけを1つ増やす
-- 機械は配置の表を読まず、`Ctor` のタグだけを使う。`Payload::Data` は配置の ID を持たない。`unpack` のタグと数の検査、case のフィールドの数の検査、`release` の `WrongLayout` は、内部の誤りの見張りとして残す。R9 は値を作った配置を追わないので、verifier を通った IR でもこれらの誤りは起きうる (上の「構造の規則」の R9)
+- 機械は配置の表を読まず、`Ctor` のタグだけを使う。`Payload::Data` は配置の ID を持たない。`unpack` のタグと数の検査、case のフィールドの数の検査、`release` の `WrongLayout` は、内部の誤りの見張りとして残す。R8 は値を作った配置を追わないので、verifier を通った IR でもこれらの誤りは起きうる (上の「構造の規則」の R8)
 - 再帰の深さは Rust のスタックで制限されない。継続をヒープ上のフレームで表すためである ([コンパイラの構成](../implementation/architecture.md) の「継続と evidence」)。
 - 名前付きのレコードの実行時の表し方は、S9 で決める。タプルはコンストラクタが1つの `data` と同じオブジェクトで、位置で分解する ([直積型とレコード](records.md))。
 

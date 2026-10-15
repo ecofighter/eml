@@ -1,5 +1,5 @@
 //! Core IR の verifier と LIR の verifier が共有する部品 (docs/spec/lir.md の「verifier」)。ブロックの列の形
-//! (R1〜R4) と支配木、R8 と R9 の検査、印の検査 (V2 と作る所の検査)、基本操作と `clause` の検査を、2つの IR が
+//! (R1〜R4) と支配木、R7 と R8 の検査、印の検査 (V2 と作る所の検査)、基本操作と `clause` の検査を、2つの IR が
 //! 共有する型の上で書く。IR ごとに違うもの (ブロックの終端、関数の型) は、呼ぶ側が形を写して渡す。命令の列を
 //! たどる部分と所有の検査は、IR ごとの verifier が持つ。
 
@@ -540,7 +540,7 @@ impl<'a> Context<'a> {
         Ok((layout, self.tables.layout_reprs[id.0 as usize]))
     }
 
-    /// `con`、`unpack`、`release` のコンストラクタを配置の表で引く (R9)。
+    /// `con`、`unpack`、`release` のコンストラクタを配置の表で引く (R8)。
     pub fn ctor(
         &self,
         ctor: Ctor,
@@ -559,7 +559,7 @@ impl<'a> Context<'a> {
     }
 
     /// case と `unpack` のフィールドは、宣言した Repr が `tobj` でなければ、その Repr の変数である。`tobj` の
-    /// フィールドは、範囲の段と所有の段で、`tobj` と互換な変数である (R9)。
+    /// フィールドは、範囲の段と所有の段で、`tobj` と互換な変数である (R8)。
     pub fn field_reprs(
         &self,
         layout: &Layout,
@@ -587,7 +587,7 @@ impl<'a> Context<'a> {
         Ok(())
     }
 
-    /// `switch` の配置と scrutinee (R9)。タグの case を持つ `switch` だけが配置を持ち、その scrutinee は、Repr が
+    /// `switch` の配置と scrutinee (R8)。タグの case を持つ `switch` だけが配置を持ち、その scrutinee は、Repr が
     /// 配置の Repr と同じ変数である。case はコンストラクタのフィールドをすべて束縛し、`default` がなければ、どの
     /// コンストラクタにも case がある。リテラルの `switch` の scrutinee は、そのリテラルの型の Repr に収まる。
     pub fn switch_layout(
@@ -741,7 +741,7 @@ impl<'a> Context<'a> {
         }
     }
 
-    /// extern の引数の数と Repr は表の行と同じで、束縛する変数の Repr は行の結果と同じである (R8)。
+    /// extern の引数の数と Repr は表の行と同じで、束縛する変数の Repr は行の結果と同じである (R7)。
     pub fn check_extern(&self, var: VarId, ext: Extern, args: &[Atom]) -> Result<(), String> {
         let row = ext.row();
         if args.len() != row.params.len() {
@@ -946,7 +946,7 @@ impl<'a> Context<'a> {
 
     /// `con` のフィールドの数は、コンストラクタと同じである。束縛する変数の Repr は配置の Repr と同じで、宣言した
     /// Repr が `tobj` でないフィールドの値はその Repr に収まる。`tobj` のフィールドの値は、範囲の段と所有の段で、
-    /// 互換の位置として収まる (R9)。
+    /// 互換の位置として収まる (R8)。
     pub fn check_con(&self, var: VarId, ctor: Ctor, args: &[Atom]) -> Result<(), String> {
         // フィールドのないコンストラクタの値は、`#N` の1つの書き方にそろえる (docs/spec/lir.md の「ブロックの列」)
         if args.is_empty() {
@@ -1061,7 +1061,7 @@ pub fn boxed_scalars(conjunction: &str) -> String {
     }
 }
 
-/// フィールドの数の食い違いを、命令の言い方 (``a con of `L` #t`` など) を主語にして報告する (R9)。
+/// フィールドの数の食い違いを、命令の言い方 (``a con of `L` #t`` など) を主語にして報告する (R8)。
 pub fn field_count(subject: String, given: usize, constructor: &LayoutCtor) -> Result<(), String> {
     if given == constructor.fields.len() {
         return Ok(());

@@ -1,4 +1,4 @@
-//! 生存解析と Perceus の `dup` / `decref` / `release` の位置、呼び出しの `saved` (docs/spec/lir.md の「Perceus」)。
+//! 生存解析と Perceus の `dup` / `decref` / `release` の位置 (docs/spec/lir.md の「Perceus」)。
 //! IR のテキストを入力にするテストは、入力が scope の段の verifier を、出力が所有の段の verifier を通ることも
 //! 確かめる。ソースからパイプラインを通すテストは `eml_core_ir` の tests/perceus.rs にある。
 
@@ -20,7 +20,7 @@ fn perceus_text(text: &str) -> String {
 
 #[test]
 fn live_in_holds_every_variable_used_later() {
-    // RC の対象でない変数も入る。`saved` が使うためである。jump の引数と case のフィールドは行き先の入口で生きている
+    // RC の対象でない変数も入る。VM のスロットの割り当てが使うためである。jump の引数と case のフィールドは行き先の入口で生きている
     let program = parse(
         "\
 layout Prelude.Bool { False, True }
@@ -248,7 +248,7 @@ b2:
 
 #[test]
 fn a_field_used_after_a_call_is_owned_before_the_call_saves_it() {
-    // 借りたフィールドは `save` に入れられないので、呼び出しの前の `release` で所有にしてから退避する
+    // 借りたフィールドは呼び出しの前の `release` で所有にする
     let text = "\
 layout Option { None, Some(tobj) }
 fn keep(o.0: tobj) -> obj {
@@ -274,7 +274,7 @@ fn k(a.0: int) -> int {
       return e.2
     b2:
       release o.0 Option #1(s.1)
-      let n.3: int = call k(1) save [s.1]
+      let n.3: int = call k(1)
       return s.1
     }
     fn k(a.0: int) -> int {
@@ -284,8 +284,7 @@ fn k(a.0: int) -> int {
 }
 
 #[test]
-fn an_unused_call_result_is_released_and_calls_save_what_is_used_later() {
-    // `saved` は呼び出しの後で生きている変数から結果の変数を除いたもので、RC の対象でない `n.1` も入る
+fn an_unused_call_result_is_released() {
     let text = "\
 fn run(s.0: obj, n.1: int) -> int {
   let r.2: obj = call echo(s.0)
@@ -298,7 +297,7 @@ fn echo(s.0: obj) -> obj {
 ";
     insta::assert_snapshot!(perceus_text(text), @"
     fn run(s.0: obj, n.1: int) -> int {
-      let r.2: obj = call echo(s.0) save [n.1]
+      let r.2: obj = call echo(s.0)
       decref r.2
       let m.3: int = extern Prelude.+(n.1, 1)
       return m.3
@@ -310,7 +309,7 @@ fn echo(s.0: obj) -> obj {
 }
 
 #[test]
-fn an_argument_used_after_the_call_is_dupped_and_saved() {
+fn an_argument_used_after_the_call_is_dupped() {
     let text = "\
 fn around(s.0: obj) -> obj {
   let t.1: obj = call echo(s.0)
@@ -324,7 +323,7 @@ fn echo(s.0: obj) -> obj {
     insta::assert_snapshot!(perceus_text(text), @"
     fn around(s.0: obj) -> obj {
       dup s.0
-      let t.1: obj = call echo(s.0) save [s.0]
+      let t.1: obj = call echo(s.0)
       let u.2: obj = extern Prelude.++(t.1, s.0)
       return u.2
     }
@@ -701,7 +700,7 @@ fn f(b.0: obj) -> int {
 
 #[test]
 fn a_field_live_after_a_call_is_owned_before_it() {
-    // 持ち主が死んでいれば解き、生きていれば `dup` する。フレームは借りた値を持てない (R7)
+    // 持ち主が死んでいれば解き、生きていれば `dup` する
     let shown = perceus_text(
         "\
 layout Pair { Pair(obj, obj) }
@@ -729,7 +728,7 @@ fn live_owner(p.0: obj) -> obj {
     fn dead_owner(p.0: obj) -> obj {
       unpack p.0 Pair #0(a.1: obj, b.2: obj)
       release p.0 Pair #0(a.1, b.2)
-      let r.3: obj = call g(a.1) save [b.2]
+      let r.3: obj = call g(a.1)
       decref r.3
       return b.2
     }
@@ -737,7 +736,7 @@ fn live_owner(p.0: obj) -> obj {
       unpack p.0 Pair #0(a.1: obj, b.2: obj)
       dup a.1
       dup b.2
-      let r.3: obj = call g(a.1) save [p.0, b.2]
+      let r.3: obj = call g(a.1)
       decref r.3
       let q.4: obj = con Pair #0(p.0, b.2)
       return q.4

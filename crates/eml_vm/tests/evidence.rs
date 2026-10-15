@@ -30,10 +30,10 @@ fn main() -> unit {{
   let e.7: obj = prim ev_lookup[Counter]()
   let c.8: tobj = prim ev_clause[Counter.put](e.7)
   let f.9: tobj = box 5
-  let u.10: unit = clause Counter.put c.8(e.7, f.9) save [w.0]
+  let u.10: unit = clause Counter.put c.8(e.7, f.9)
   let e.11: obj = prim ev_lookup[Counter]()
   let c.12: tobj = prim ev_clause[Counter.get](e.11)
-  let r.13: tobj = clause Counter.get c.12(e.11, ()) save [w.0]
+  let r.13: tobj = clause Counter.get c.12(e.11, ())
   let u.14: unit = prim evv_set(w.0)
   let n.15: int = unbox r.13
   decref r.13
@@ -94,13 +94,13 @@ fn main() -> unit {{
   decref k.18
   let c.19: tobj = prim yield_finish()
   decref c.19
-  let p.20: unit = call show(a.3) save [y.7, b.8, d.9, c.13, f.14, z.15, g.17]
-  let p.21: unit = call show(y.7) save [b.8, d.9, c.13, f.14, z.15, g.17]
-  let p.22: unit = call show(b.8) save [d.9, c.13, f.14, z.15, g.17]
-  let p.23: unit = call show(d.9) save [c.13, f.14, z.15, g.17]
-  let p.24: unit = call show(f.14) save [c.13, z.15, g.17]
-  let p.25: unit = call show(z.15) save [c.13, g.17]
-  let p.26: unit = call show(g.17) save [c.13]
+  let p.20: unit = call show(a.3)
+  let p.21: unit = call show(y.7)
+  let p.22: unit = call show(b.8)
+  let p.23: unit = call show(d.9)
+  let p.24: unit = call show(f.14)
+  let p.25: unit = call show(z.15)
+  let p.26: unit = call show(g.17)
   tail call say(c.13)
 }}
 fn say(s.0: obj) -> unit {{
@@ -195,7 +195,7 @@ fn main() -> unit {{
   let b.12: tobj = prim ev_take_state(r.7)
   decref r.7
   let u.13: unit = prim evv_set(())
-  let p.14: unit = call show(a.11) save [b.12]
+  let p.14: unit = call show(a.11)
   tail call show(b.12)
 }}
 fn show(s.0: tobj) -> unit {{

@@ -106,7 +106,7 @@ pub enum Stmt {
     },
     /// コンストラクタが1つの型の値を分解する。行き先が「ブロックの残り」である1つの case の `switch` と同じ意味で、
     /// フィールドは `Case` のフィールドと同じ規則で束縛する。`ctor` の配置は、コンストラクタが1つで Repr が `obj`
-    /// である (docs/spec/lir.md の「構造の規則」の R9)。
+    /// である (docs/spec/lir.md の「構造の規則」の R8)。
     Unpack {
         value: VarId,
         ctor: Ctor,

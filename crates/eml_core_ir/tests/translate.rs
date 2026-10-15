@@ -376,7 +376,7 @@ fn a_continuation_passed_to_a_function_is_wrapped() {
 
 #[test]
 fn lower_until_stops_after_the_named_pass() {
-    // contract は使われない純粋な `let` を消し、Perceus は RC の命令と `save` を足す
+    // contract は使われない純粋な `let` を消し、Perceus は RC の命令を足す
     let text = "f : Int -> Int\nf x = x + 1\n\nmain : Unit -> <IO> Unit\nmain () =\n  let unused = \"unused\"\n  let s = \"used\"\n  let n = f 1\n  println s\n  println (s ++ show n)";
     insta::assert_snapshot!(function(&core_text(text, Pass::Translate), "main"), @r#"
     fn main(p.0: unit) -> unit {
@@ -404,7 +404,7 @@ fn lower_until_stops_after_the_named_pass() {
     insta::assert_snapshot!(function(&lir_text(text, eml_lir::Pass::Perceus), "main"), @r#"
     fn main(p.0: unit) -> unit {
       let s.2: obj = const "used"
-      let t.3: int = call f(1) save [s.2]
+      let t.3: int = call f(1)
       dup s.2
       let t.4: unit = extern Prelude.println(s.2)
       let t.5: obj = extern "Prelude.Show Int.show"(t.3)

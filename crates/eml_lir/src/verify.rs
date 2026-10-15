@@ -1,15 +1,14 @@
 //! LIR の不変条件の検査 (docs/spec/lir.md の「verifier」)。ブロックの列の形 (R1〜R4)、変数の定義と支配 (R5、R6)、
 //! `unpack` の Repr、`jump` と `return` の Repr の互換、extern の引数と結果の Repr、`box` と `unbox` のオペランドと
-//! 束縛の Repr (R8)、データの配置 (R9) と、引き継いだ検査 (直接呼び出しと extern の引数の数、case の種類)、基本操作と
-//! 節の呼び出しの形を確かめる (`verify_scopes`)。R8 と R9 には境界の検査も入る。呼び出しの引数と結果、`closure` の
+//! 束縛の Repr (R7)、データの配置 (R8) と、引き継いだ検査 (直接呼び出しと extern の引数の数、case の種類)、基本操作と
+//! 節の呼び出しの形を確かめる (`verify_scopes`)。R7 と R8 には境界の検査も入る。呼び出しの引数と結果、`closure` の
 //! 引数、関数の値の対象が一様であること、`tail` の結果、`tobj` のフィールドを比べる。box の挿入の前の入口の段では、
 //! 境界を確かめずに、`box`、`unbox`、`tail` と、Perceus が入れるものがまだないことを確かめる (`verify_lowered`)。
-//! Perceus の後は、RC の対象の所有の多重集合と、呼び出しの後に見える変数 (R6、R7) も確かめる (`verify`)。`switch`、
-//! `unpack`、`unbox` は値を読むだけである。`switch` と `unpack` のフィールドは値から借りて始まり、自分か持ち主が
-//! 所有を持つ間だけ有効である。段の分け方は docs/spec/lir.md の「verifier」
-//! による。Core IR の verifier と共有する部品は `check` にある。
+//! Perceus の後は、RC の対象の所有の多重集合 (R6) も確かめる (`verify`)。`switch`、`unpack`、`unbox` は値を読む
+//! だけである。`switch` と `unpack` のフィールドは値から借りて始まり、自分か持ち主が所有を持つ間だけ有効である。
+//! 段の分け方は docs/spec/lir.md の「verifier」による。Core IR の verifier と共有する部品は `check` にある。
 //!
-//! R9 は、`con`、タグの `switch`、`unpack`、`release` を、その命令が指す配置と比べる。配置を持つ `switch` はタグの
+//! R8 は、`con`、タグの `switch`、`unpack`、`release` を、その命令が指す配置と比べる。配置を持つ `switch` はタグの
 //! case を持つものだけで、リテラルの `switch` では scrutinee の Repr を比べる。値がどの配置で作られたかは
 //! 追わない。それを保証するのは translate の型なので、配置の違う値を読む IR もこの検査を通りうる
 //! (docs/spec/lir.md の「データの配置」)。
@@ -36,26 +35,25 @@ use crate::{
     Program, Repr, Rhs, Stmt, Term, VarId, VerifyError, operation,
 };
 
-/// Perceus の後の LIR を確かめる。形と範囲に加えて、RC の対象の変数の所有が釣り合うことと、呼び出しの後に見える
-/// 変数が退避したものと結果だけであることを確かめる。
+/// Perceus の後の LIR を確かめる。形と範囲に加えて、RC の対象の変数の所有が釣り合うことを確かめる。
 pub fn verify(program: &Program) -> Result<(), VerifyError> {
     verify_at(program, Level::Ownership)
 }
 
-/// Perceus より前の LIR を確かめる。形と範囲と境界を確かめ、RC の命令と `save` がまだないことを確かめる。
+/// Perceus より前の LIR を確かめる。形と範囲と境界を確かめ、RC の命令がまだないことを確かめる。
 pub fn verify_scopes(program: &Program) -> Result<(), VerifyError> {
     verify_at(program, Level::Scopes)
 }
 
 /// box の挿入の前の LIR を確かめる。範囲の段と同じ形と範囲を確かめ、境界は比べない。box の挿入と縮約が作るもの
-/// (`box`、`unbox`、`tail`) と、Perceus が入れるもの (`dup`、`decref`、`release`、`save`) がまだないことを確かめる。
+/// (`box`、`unbox`、`tail`) と、Perceus が入れるもの (`dup`、`decref`、`release`) がまだないことを確かめる。
 /// box の挿入は、末尾呼び出しと変換のない入力を前提にするためである (docs/spec/lir.md の「パスの順番」)。
 pub fn verify_lowered(program: &Program) -> Result<(), VerifyError> {
     verify_at(program, Level::Lowered)
 }
 
 /// 検査の段。段はパスの順に直線に並ぶ。入口の段の LIR には、box の挿入と縮約が作るものがまだない。Perceus より前の
-/// LIR には、所有を確かめる材料 (`dup`、`decref`、`release`、`save`) がまだない。
+/// LIR には、所有を確かめる材料 (`dup`、`decref`、`release`) がまだない。
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 enum Level {
     Lowered,
@@ -148,7 +146,7 @@ enum Receiver {
 }
 
 /// フィールドの出どころ。分解した値、コンストラクタ、位置である。`release` が名前を書いた変数を確かめるのに使う。
-/// フィールドの数は、分解と `release` のどちらも配置で確かめるので持たない (R9)。
+/// フィールドの数は、分解と `release` のどちらも配置で確かめるので持たない (R8)。
 #[derive(Clone, Copy, PartialEq, Eq)]
 struct Origin {
     value: VarId,
@@ -166,16 +164,6 @@ struct Site {
 /// RC の対象の変数ごとの、所有している参照の数。0 になった変数は除く。
 type Owned = BTreeMap<VarId, u32>;
 
-/// まだ着いていないブロックの入口の状態。`switch` の行き先は1本の辺から、合流するブロックは最初の `jump` から作る。
-struct Entry {
-    owned: Owned,
-    /// 入る辺の出どころのブロックと、その辺での区間。合流するブロックの区間を決めるのに使う。
-    incoming: Vec<(u32, u32)>,
-}
-
-/// 区間は、呼び出しで区切った IR の範囲である。呼び出しの後と、区間の違う辺が合流するブロックで新しい区間が始まる。
-/// 変数が見えるのは、定義の位置が使う位置を支配し、さらに定義した区間が今の区間と同じか、今の区間に入れ直した
-/// 変数であるときだけである (R7)。Perceus より前は呼び出しで区切らないので、区間は 0 だけである。
 struct Checker<'a> {
     program: &'a Program,
     function: &'a LirFn,
@@ -184,12 +172,10 @@ struct Checker<'a> {
     /// 所有にも命令の型にも関わらない検査の状態。
     cx: Context<'a>,
     defs: Vec<Option<Site>>,
-    def_epochs: Vec<u32>,
-    /// 区間ごとの、入れ直した変数 (昇順)。呼び出しの区間は `save` の変数、合流の区間は入るどの辺でも見える変数である。
-    epochs: Vec<Vec<VarId>>,
-    epoch: u32,
     at: Site,
-    pending: HashMap<u32, Entry>,
+    /// まだ着いていないブロックの入口の所有。`switch` の行き先は1本の辺から、合流するブロックは最初の `jump` から
+    /// 作る。
+    pending: HashMap<u32, Owned>,
     /// フィールドの持ち主と出どころ。持ち主は、分解した値が束縛の時点で所有を持っていればその値、なければその値の
     /// 持ち主である。変数は1回だけ定義されるので (R5)、経路ごとではなく関数に1つの表にする
     /// (docs/spec/lir.md の「verifier」)。
@@ -213,9 +199,6 @@ impl<'a> Checker<'a> {
             // 境界の検査は、box の挿入の後の段 (範囲の段と所有の段) だけで行う
             cx: Context::new(tables, &function.vars, level >= Level::Scopes),
             defs: vec![None; function.vars.len()],
-            def_epochs: vec![0; function.vars.len()],
-            epochs: vec![Vec::new()],
-            epoch: 0,
             at: Site {
                 block: 0,
                 index: -1,
@@ -234,7 +217,9 @@ impl<'a> Checker<'a> {
             let mut owned = if index == 0 {
                 Owned::new()
             } else {
-                self.enter(index)
+                self.pending
+                    .remove(&index)
+                    .expect("R3 and R4 give every block an edge from an earlier block")
             };
             self.at = Site {
                 block: index,
@@ -303,47 +288,6 @@ impl<'a> Checker<'a> {
         result
     }
 
-    /// ブロックの入口の状態を取り出し、区間を決める。区間の違う辺が合流するなら、入るどの辺でも見える変数を入れ直した
-    /// 新しい区間を始める。その変数は、どれかの辺の区間で入れ直した変数に限られる。ほかの変数は、区間の違う辺の
-    /// どれかで見えないからである。
-    fn enter(&mut self, block: u32) -> Owned {
-        let entry = self
-            .pending
-            .remove(&block)
-            .expect("R3 and R4 give every block an edge from an earlier block");
-        let first = entry.incoming[0].1;
-        if entry.incoming.iter().all(|&(_, epoch)| epoch == first) {
-            self.epoch = first;
-            return entry.owned;
-        }
-        let mut candidates: Vec<VarId> = entry
-            .incoming
-            .iter()
-            .flat_map(|&(_, epoch)| self.epochs[epoch as usize].iter().copied())
-            .collect();
-        candidates.sort();
-        candidates.dedup();
-        candidates.retain(|&var| {
-            entry
-                .incoming
-                .iter()
-                .all(|&(from, epoch)| self.visible_at_end(var, from, epoch))
-        });
-        self.epoch = self.epochs.len() as u32;
-        self.epochs.push(candidates);
-        entry.owned
-    }
-
-    /// `from` の終端の、区間 `epoch` の位置で `var` が見えるかどうか。
-    fn visible_at_end(&self, var: VarId, from: u32, epoch: u32) -> bool {
-        let Some(site) = self.defs[var.0 as usize] else {
-            return false;
-        };
-        self.dominators.dominates(site.block, from)
-            && (self.def_epochs[var.0 as usize] == epoch
-                || self.epochs[epoch as usize].binary_search(&var).is_ok())
-    }
-
     fn check_block(&mut self, index: u32, block: &Block, mut owned: Owned) -> Result<(), String> {
         for (at, stmt) in block.stmts.iter().enumerate() {
             self.at = Site {
@@ -356,7 +300,7 @@ impl<'a> Checker<'a> {
             block: index,
             index: block.stmts.len() as i64,
         };
-        self.check_term(index, owned, &block.term)
+        self.check_term(owned, &block.term)
     }
 
     fn check_stmt(&mut self, owned: &mut Owned, stmt: &Stmt) -> Result<(), String> {
@@ -364,10 +308,9 @@ impl<'a> Checker<'a> {
             Stmt::Let { var, rhs } => {
                 self.check_rhs(owned, *var, rhs)?;
                 match rhs {
-                    Rhs::Call { call, saved } => {
+                    Rhs::Call(call) => {
                         let never = self.never_returns(call);
                         self.cx.note_never(*var, never);
-                        self.after_call(owned, saved)?;
                     }
                     Rhs::MakeClosure(target, args) => {
                         self.cx.note_closure(*var, *target, args.len());
@@ -462,7 +405,7 @@ impl<'a> Checker<'a> {
         }
     }
 
-    fn check_term(&mut self, index: u32, mut owned: Owned, term: &Term) -> Result<(), String> {
+    fn check_term(&mut self, mut owned: Owned, term: &Term) -> Result<(), String> {
         match term {
             Term::Return(atom) => {
                 self.consume(&mut owned, *atom)?;
@@ -497,7 +440,7 @@ impl<'a> Checker<'a> {
                 for &arg in args {
                     self.consume(&mut owned, arg)?;
                 }
-                self.merge(index, *target, owned)
+                self.merge(*target, owned)
             }
             Term::Switch {
                 scrutinee,
@@ -534,22 +477,10 @@ impl<'a> Checker<'a> {
                         let ctor = Ctor { layout, tag };
                         self.bind_fields(&mut entry, value, ctor, &case.fields, site)?;
                     }
-                    self.pending.insert(
-                        case.target.0,
-                        Entry {
-                            owned: entry,
-                            incoming: vec![(index, self.epoch)],
-                        },
-                    );
+                    self.pending.insert(case.target.0, entry);
                 }
                 if let Some(default) = default {
-                    self.pending.insert(
-                        default.0,
-                        Entry {
-                            owned,
-                            incoming: vec![(index, self.epoch)],
-                        },
-                    );
+                    self.pending.insert(default.0, owned);
                 }
                 Ok(())
             }
@@ -557,35 +488,23 @@ impl<'a> Checker<'a> {
     }
 
     /// 合流するブロックに入る `jump` は、渡す値を除いて、どれも同じ多重集合を所有する。その集合が入口の所有になる (R6)。
-    fn merge(&mut self, from: u32, target: BlockId, owned: Owned) -> Result<(), String> {
-        let incoming = (from, self.epoch);
-        let Some(entry) = self.pending.get(&target.0) else {
-            self.pending.insert(
-                target.0,
-                Entry {
-                    owned,
-                    incoming: vec![incoming],
-                },
-            );
+    fn merge(&mut self, target: BlockId, owned: Owned) -> Result<(), String> {
+        let Some(first) = self.pending.get(&target.0) else {
+            self.pending.insert(target.0, owned);
             return Ok(());
         };
-        if entry.owned != owned {
+        if *first != owned {
             return Err(format!(
                 "a jump to b{} owns {} but an earlier jump to it owns {}",
                 target.0,
                 self.owned_names(&owned),
-                self.owned_names(&entry.owned)
+                self.owned_names(first)
             ));
         }
-        self.pending
-            .get_mut(&target.0)
-            .expect("the entry was just found")
-            .incoming
-            .push(incoming);
         Ok(())
     }
 
-    /// `jump` の実引数は、行き先の引数と Repr が互換で (R8)、印も互換である (V2)。
+    /// `jump` の実引数は、行き先の引数と Repr が互換で (R7)、印も互換である (V2)。
     fn check_passed(&self, target: BlockId, arg: Atom, param: VarId) -> Result<(), String> {
         let expected = self.function.repr(param);
         if self.cx.passes(arg, expected)? {
@@ -620,43 +539,6 @@ impl<'a> Checker<'a> {
         })
     }
 
-    /// 呼び出しの後に見える変数は、退避した変数と結果だけである。退避する変数は呼び出しの前に見えていて、RC の対象の
-    /// 部分は所有している多重集合とちょうど一致する。フレームがちょうど所有している参照だけを持つためである (R7)。
-    fn after_call(&mut self, owned: &Owned, saved: &[VarId]) -> Result<(), String> {
-        if self.level != Level::Ownership {
-            if saved.is_empty() {
-                return Ok(());
-            }
-            return Err(format!(
-                "a call saves {} before Perceus",
-                self.cx.names(saved)
-            ));
-        }
-        for &var in saved {
-            self.visible(var)?;
-        }
-        // 同じ変数を2回退避すると、解放や複製のときに所有していない参照まで数えるので、重なりも含めて比べる
-        let mut saved_rc: Vec<VarId> = saved
-            .iter()
-            .copied()
-            .filter(|&var| self.function.repr(var).is_rc())
-            .collect();
-        saved_rc.sort();
-        if flatten(owned) != saved_rc {
-            return Err(format!(
-                "a call saves {} but owns {}",
-                self.cx.names(&saved_rc),
-                self.owned_names(owned)
-            ));
-        }
-        let mut reentered = saved.to_vec();
-        reentered.sort();
-        reentered.dedup();
-        self.epoch = self.epochs.len() as u32;
-        self.epochs.push(reentered);
-        Ok(())
-    }
-
     /// 変数を多くとも1回定義し (R5)、RC の対象なら所有を1つ持つ。
     fn define(&mut self, owned: &mut Owned, var: VarId, site: Site) -> Result<(), String> {
         let slot = &mut self.defs[var.0 as usize];
@@ -664,14 +546,13 @@ impl<'a> Checker<'a> {
             return Err(format!("`{}` is defined twice", self.cx.name(var)));
         }
         *slot = Some(site);
-        self.def_epochs[var.0 as usize] = self.epoch;
         if self.level == Level::Ownership && self.function.repr(var).is_rc() {
             owned.insert(var, 1);
         }
         Ok(())
     }
 
-    /// 定義の位置が今の位置を支配し (R6)、所有の検査の段では、間の呼び出しがすべて退避している (R7)。
+    /// 定義の位置が今の位置を支配する (R6)。
     fn visible(&self, var: VarId) -> Result<(), String> {
         let dominated = self.defs[var.0 as usize].is_some_and(|site| {
             if site.block == self.at.block {
@@ -682,16 +563,6 @@ impl<'a> Checker<'a> {
         });
         if !dominated {
             return Err(format!("`{}` is used outside its scope", self.cx.name(var)));
-        }
-        if self.def_epochs[var.0 as usize] != self.epoch
-            && self.epochs[self.epoch as usize]
-                .binary_search(&var)
-                .is_err()
-        {
-            return Err(format!(
-                "`{}` is used after a call that does not save it",
-                self.cx.name(var)
-            ));
         }
         Ok(())
     }
@@ -892,7 +763,7 @@ impl<'a> Checker<'a> {
 
     fn check_rhs(&self, owned: &mut Owned, var: VarId, rhs: &Rhs) -> Result<(), String> {
         match rhs {
-            Rhs::Call { call, saved: _ } => {
+            Rhs::Call(call) => {
                 return self.check_call(owned, call, Receiver::Bound(var));
             }
             Rhs::MakeClosure(index, args) => {
@@ -1090,7 +961,7 @@ impl<'a> Checker<'a> {
         self.consume_all(owned, |f| call.for_each_atom(f))
     }
 
-    /// 呼び出しのオペランドを左から比べる (R8)。直接の呼び出しは、呼ばれる関数の引数と比べる。関数値の適用の
+    /// 呼び出しのオペランドを左から比べる (R7)。直接の呼び出しは、呼ばれる関数の引数と比べる。関数値の適用の
     /// オペランドは一様な位置なので、`tobj` と比べる。呼び出しの形は確かめてある。印も同じ所で比べる (V2)。関数値の
     /// 適用の位置の印はいつも `poly` なので、印を比べない。
     fn check_operands(&self, call: &Call) -> Result<(), String> {
@@ -1210,7 +1081,7 @@ impl<'a> Checker<'a> {
     }
 
     /// 呼び出しの結果 (直接の呼び出しなら呼ばれる関数の `ret`、節の呼び出しなら操作の `ret`、`apply` なら `tobj`) は、
-    /// 束縛する変数か、`tail` なら呼び出し元の `ret` と互換である (R8)。結果の印も同じく互換である (V2)。
+    /// 束縛する変数か、`tail` なら呼び出し元の `ret` と互換である (R7)。結果の印も同じく互換である (V2)。
     fn check_result(
         &self,
         call: &Call,

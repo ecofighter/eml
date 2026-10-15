@@ -99,7 +99,7 @@ fn main() -> unit {
   let c.1: tobj = closure first(s.0)
   dup c.1
   let n.2: tobj = box 1
-  let r.3: obj = apply c.1(n.2) save [c.1]
+  let r.3: obj = apply c.1(n.2)
   let t.4: unit = extern Prelude.println(r.3)
   let m.5: tobj = box 2
   let r.6: obj = apply c.1(m.5)
@@ -124,9 +124,9 @@ fn main() -> unit {{
 }}
 fn each(f.0: tobj, m.1: tobj) -> unit {{
   let a.2: tobj = box 10
-  let d.3: tobj = apply f.0(a.2) save [m.1]
+  let d.3: tobj = apply f.0(a.2)
   let b.4: tobj = box 20
-  let q.5: tobj = apply d.3(b.4) save [m.1]
+  let q.5: tobj = apply d.3(b.4)
   let r.6: int = unbox q.5
   decref q.5
   let s.7: obj = extern \"Prelude.Show Int.show\"(r.6)

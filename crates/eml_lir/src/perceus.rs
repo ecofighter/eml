@@ -1,6 +1,6 @@
-//! Perceus の `dup` / `decref` / `release` の挿入と、呼び出しの `saved` (docs/spec/lir.md の「Perceus」)。値を消費する
-//! 使いを所有権の移動として扱い、後でも使う変数を複製し、使わなくなった変数をできるだけ早く捨てる。対象は RC の対象
-//! (`Repr::is_rc`) の変数だけである。
+//! Perceus の `dup` / `decref` / `release` の挿入 (docs/spec/lir.md の「Perceus」)。値を消費する使いを所有権の移動
+//! として扱い、後でも使う変数を複製し、使わなくなった変数をできるだけ早く捨てる。対象は RC の対象 (`Repr::is_rc`) の
+//! 変数だけである。
 //!
 //! `switch` と `unpack` のフィールドは値から借りて始まり、読むだけなら借りたまま使う。所有を取るのは、消費するとき、
 //! 呼び出しの後や合流するブロックの入口で生きているとき、持ち主の最後の参照を消費した後も生きているときだけである。
@@ -214,24 +214,17 @@ impl Fields<'_> {
 
     /// 文の前に所有を取る命令と消費の数の `dup` を、文の後に死んだ所有の `decref` を置く。`live` は文の後で生きている
     /// 変数である。
-    fn stmt(
-        &mut self,
-        state: &mut State,
-        mut stmt: Stmt,
-        live: &BTreeSet<VarId>,
-        out: &mut Vec<Stmt>,
-    ) {
+    fn stmt(&mut self, state: &mut State, stmt: Stmt, live: &BTreeSet<VarId>, out: &mut Vec<Stmt>) {
         let used = vars(|f| stmt.for_each_atom(f));
         let consumed = self.consumed(|f| stmt.for_each_consumed(f));
         let need = Need { live, used: &used };
-        // 消費する変数のほかに、所有を取るのは次の変数である。フレームは借りた値を持てない (R7) ので、呼び出しの後で
-        // 生きている借りた変数。持ち主の最後の参照をこの文が消費した後も生きている、その持ち主に属する変数
-        // (docs/spec/lir.md の「所有を取る時点」)
+        // 消費する変数のほかに、所有を取るのは次の変数である。呼び出しの後で生きている借りた変数。持ち主の最後の参照を
+        // この文が消費した後も生きている、その持ち主に属する変数 (docs/spec/lir.md の「所有を取る時点」)
         let mut take = consumed.clone();
         if matches!(
             stmt,
             Stmt::Let {
-                rhs: Rhs::Call { .. },
+                rhs: Rhs::Call(_),
                 ..
             }
         ) {
@@ -259,14 +252,6 @@ impl Fields<'_> {
             if !live.contains(var) {
                 state.owned.remove(var);
             }
-        }
-        // 呼び出しは、その後で生きている変数のうち結果の変数以外を退避する。借りた変数は上で所有にしてある
-        if let Stmt::Let {
-            var,
-            rhs: Rhs::Call { call: _, saved },
-        } = &mut stmt
-        {
-            *saved = live.iter().copied().filter(|v| v != var).collect();
         }
         // この文で死んだ変数のうち、借りていたものを持ち主から除く。その持ち主は、属する変数が残らなければ手放せる
         let died: Vec<VarId> = used

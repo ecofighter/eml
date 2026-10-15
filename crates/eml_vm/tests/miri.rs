@@ -122,10 +122,10 @@ fn main() -> unit {
   let e.7: obj = prim ev_lookup[Counter]()
   let c.8: tobj = prim ev_clause[Counter.put](e.7)
   let f.9: tobj = box 5
-  let u.10: unit = clause Counter.put c.8(e.7, f.9) save [w.0]
+  let u.10: unit = clause Counter.put c.8(e.7, f.9)
   let e.11: obj = prim ev_lookup[Counter]()
   let c.12: tobj = prim ev_clause[Counter.get](e.11)
-  let r.13: tobj = clause Counter.get c.12(e.11, ()) save [w.0]
+  let r.13: tobj = clause Counter.get c.12(e.11, ())
   let u.14: unit = prim evv_set(w.0)
   let n.15: int = unbox r.13
   decref r.13

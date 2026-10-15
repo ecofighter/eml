@@ -446,8 +446,7 @@ fn load_args<M: Mode>(code: &CodeBase<M>, task: &mut Task, at: u32) -> Word {
     task.get(o[0] as Slot)
 }
 
-/// 呼ぶ側の上に呼ばれる側のフレームを作り、引数を写して先頭へ進む。呼ぶ側のスロットはスタックに残るので、`saved` は
-/// 読まない。
+/// 呼ぶ側の上に呼ばれる側のフレームを作り、引数を写して先頭へ進む。呼ぶ側のスロットはスタックに残る。
 fn call<M: Mode>(code: &CodeBase<M>, task: &mut Task, dst: Slot, at: u32) {
     let ops = &code.operands[at as usize..];
     let n = ops[1] as usize;

@@ -1,5 +1,5 @@
 //! Core IR のテキストで書いた IR で、verifier が正しいものを受け入れ、壊れたものを拒むことを確かめる (docs/spec/core-ir.md)。
-//! 構造の規則 R1 から R9 と、前の形の IR から引き継いだ検査を1つずつ確かめる。
+//! 構造の規則 R1 から R8 と、前の形の IR から引き継いだ検査を1つずつ確かめる。
 
 use eml_core_ir::{Program, Rhs, Stmt, parse, verify_evidence, verify_translated};
 use eml_lir::Prim;
@@ -46,7 +46,7 @@ fn main$handle0$return(x.0: tobj, s.1: unit) -> tobj {{
     )
 }
 
-// R8
+// R7
 
 /// `obj` の値と `unit` の値と `()` を、`tobj` の引数に渡す。
 fn compatible_jump() -> &'static str {

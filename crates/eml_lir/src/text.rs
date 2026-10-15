@@ -115,16 +115,7 @@ impl Parser<'_> {
                     });
                 }
                 "return" => break Term::Return(self.reader.atom(state)?),
-                "tail" => {
-                    let call = self.call(state)?;
-                    if self.reader.at_word("save") {
-                        return Err(error(
-                            line,
-                            "a tail call saves nothing; `save` is only on `let`",
-                        ));
-                    }
-                    break Term::TailCall(call);
-                }
+                "tail" => break Term::TailCall(self.call(state)?),
                 "jump" => {
                     let target = self.reader.target(state)?;
                     let args = self.reader.list('(', ')', |p| p.atom(state))?;
@@ -167,9 +158,7 @@ impl Parser<'_> {
             _ => return Err(self.reader.error_here("expected a right-hand side")),
         };
         if matches!(keyword, "call" | "yields" | "apply" | "clause") {
-            let call = self.call(state)?;
-            let saved = self.saved(state)?;
-            return Ok(Rhs::Call { call, saved });
+            return Ok(Rhs::Call(self.call(state)?));
         }
         self.reader.bump();
         let rhs = match keyword {
@@ -213,20 +202,6 @@ impl Parser<'_> {
             }
         };
         Ok(rhs)
-    }
-
-    /// `save [..]`。`pretty` は空の `save` を書かないので、`save []` は読まない。
-    fn saved(&mut self, state: &mut FnState) -> Result<Vec<VarId>, ParseError> {
-        if !self.reader.at_word("save") {
-            return Ok(Vec::new());
-        }
-        let line = self.reader.line();
-        self.reader.bump();
-        let saved = self.reader.list('[', ']', |p| p.var(state))?;
-        if saved.is_empty() {
-            return Err(error(line, "an empty save"));
-        }
-        Ok(saved)
     }
 
     /// `let` の右辺と `tail` の後の呼び出し。どれもキーワードで始まるので、関数の名前とぶつからない。

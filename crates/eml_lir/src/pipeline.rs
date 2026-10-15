@@ -23,8 +23,8 @@ impl Pass {
     }
 }
 
-/// 変換の直後の LIR に、box の挿入から `last` までをかける。入力の約束 (`tail`、`box`、`unbox`、RC の命令、`saved`
-/// がないこと) を入口で確かめるので、手で書いた LIR を渡すテストもこの検査を通る
+/// 変換の直後の LIR に、box の挿入から `last` までをかける。入力の約束 (`tail`、`box`、`unbox`、RC の命令が
+/// ないこと) を入口で確かめるので、手で書いた LIR を渡すテストもこの検査を通る
 /// (docs/spec/lir.md の「パスの順番」)。検査は debug ビルドでかける。
 pub fn passes_until(program: &mut Program, last: Pass) {
     if cfg!(debug_assertions)

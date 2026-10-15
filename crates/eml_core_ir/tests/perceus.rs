@@ -1,6 +1,10 @@
-//! Perceus の `dup` / `decref` / `release` の位置と、呼び出しの `saved` (docs/spec/lir.md の「Perceus」)。ソースから
-//! パイプラインを通した結果を見る。手で書いた LIR を入力にするテストと生存解析のテストは、`eml_lir` の
+//! Perceus の `dup` / `decref` / `release` の位置 (docs/spec/lir.md の「Perceus」)。ソースからパイプラインを通した
+//! 結果を見る。手で書いた LIR を入力にするテストと生存解析のテストは、`eml_lir` の
 //! tests/perceus.rs にある。
+
+use eml_extern::Extern;
+use eml_lir::liveness::{insert_var, live_after_term, live_in, step_back};
+use eml_lir::{Atom, Rhs, Stmt, VarId};
 
 use crate::common::{function, lir_text};
 
@@ -59,27 +63,6 @@ fn a_non_tail_if_keeps_strings_used_later() {
       return t.4
     }
     "#);
-}
-
-#[test]
-fn calls_save_the_variables_used_after_them() {
-    let text = "around : Int -> String -> String\naround n s =\n  let m = n + 1\n  let t = if n > 0 then twice s else s\n  t ++ show m\n\ntwice : String -> String\ntwice s = s ++ s\n\nmain : Unit -> <IO> Unit\nmain () = println (around 1 \"s\")";
-    insta::assert_snapshot!(function(&lir_text(text, eml_lir::Pass::Perceus), "around"), @"
-    fn around(n.0: int, s.1: obj) -> obj {
-      let t.2: int = extern Prelude.+(n.0, 1)
-      let t.3: enum = extern \"Prelude.Ord Int.>\"(n.0, 0)
-      switch t.3 Prelude.Bool { #0 -> b1, #1 -> b2 }
-    b1:
-      jump b3(s.1)
-    b2:
-      let t.4: obj = call twice(s.1) save [t.2]
-      jump b3(t.4)
-    b3(t.5: obj):
-      let t.6: obj = extern \"Prelude.Show Int.show\"(t.2)
-      let t.7: obj = extern Prelude.++(t.5, t.6)
-      return t.7
-    }
-    ");
 }
 
 #[test]
@@ -263,27 +246,56 @@ fn equations_allocate_no_tuple_for_their_arguments() {
     assert!(!f.contains("con #"), "{f}");
 }
 
-/// 補間は穴を評価するたびにつなぐので、穴の呼び出しをまたいで退避するのは組み立て中の文字列だけである
+/// 補間は穴を評価するたびにつなぐので、穴の呼び出しをまたいで生きているのは組み立て中の文字列だけである
 /// (docs/spec/core-ir.md の「変換の規則」)。`n` を最初の穴でだけ使い、ほかの穴の引数を定数にして、組み立て中の
-/// 文字列のほかに生きている変数をなくす。
+/// 文字列のほかに生きている変数をなくす。生存は、VM のスロットの割り当てと同じく、Perceus の後の LIR で文の単位に
+/// 求める。
 #[test]
-fn interpolation_saves_only_the_accumulator_across_holes() {
+fn interpolation_keeps_only_the_accumulator_live_across_holes() {
     let text = "g : Int -> <IO> Int\ng n =\n  println \"g\"\n  n\n\nf : Int -> <IO> String\nf n = \"a\\{g n}b\\{g 2}c\\{g 3}\"\n\nmain : Unit -> <IO> Unit\nmain () = println (f 1)";
-    let shown = function(&lir_text(text, eml_lir::Pass::Perceus), "f");
-    let lines: Vec<&str> = shown.lines().collect();
-    let mut saves = 0;
-    for (i, line) in lines.iter().enumerate() {
-        let Some((_, saved)) = line.split_once(" save [") else {
-            continue;
-        };
-        saves += 1;
-        // 退避した変数が、穴の値をつなぐ次の `++` の左の引数 (組み立て中の文字列) であることを確かめる
-        let accumulator = lines[i..]
-            .iter()
-            .find_map(|line| line.split_once("extern Prelude.++("))
-            .and_then(|(_, args)| args.split_once(", "))
-            .map(|(left, _)| left);
-        assert_eq!(Some(saved.trim_end_matches(']')), accumulator, "{shown}");
+    let program = eml_test_support::lir(text);
+    let shown = function(&eml_lir::pretty(&program), "f");
+    let f = program
+        .functions
+        .iter()
+        .find(|function| function.name == "f")
+        .expect("a function `f`");
+    let live_in = live_in(f);
+    let mut calls = 0;
+    for block in &f.blocks {
+        let mut live = live_after_term(f, &block.term, &live_in);
+        block.term.for_each_atom(|atom| insert_var(&mut live, atom));
+        // 後ろからたどるので、呼び出しに着いたときの `accumulator` は、その後で穴の値をつなぐ `++` の左の引数
+        // (組み立て中の文字列) である
+        let mut accumulator = None;
+        for stmt in block.stmts.iter().rev() {
+            match stmt {
+                Stmt::Let {
+                    var: _,
+                    rhs:
+                        Rhs::Extern {
+                            ext: Extern::StrConcat,
+                            args,
+                            at: _,
+                        },
+                } => {
+                    accumulator = match args[0] {
+                        Atom::Var(left) => Some(left),
+                        _ => None,
+                    }
+                }
+                Stmt::Let {
+                    var,
+                    rhs: Rhs::Call(_),
+                } => {
+                    calls += 1;
+                    let others: Vec<VarId> = live.iter().copied().filter(|v| v != var).collect();
+                    assert_eq!(others, Vec::from_iter(accumulator), "{shown}");
+                }
+                _ => {}
+            }
+            step_back(stmt, &mut live);
+        }
     }
-    assert_eq!(saves, 6, "two calls per hole: {shown}");
+    assert_eq!(calls, 6, "two calls per hole: {shown}");
 }

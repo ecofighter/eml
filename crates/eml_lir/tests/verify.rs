@@ -1,5 +1,5 @@
 //! LIR のテキストで書いた LIR で、verifier が正しいものを受け入れ、壊れたものを拒むことを確かめる (docs/spec/lir.md)。
-//! 構造の規則 R1 から R9 と、前の形の IR から引き継いだ検査を1つずつ確かめる。
+//! 構造の規則 R1 から R8 と、前の形の IR から引き継いだ検査を1つずつ確かめる。
 
 use eml_lir::{Prim, Program, Rhs, Stmt, parse, verify, verify_lowered, verify_scopes};
 
@@ -91,23 +91,17 @@ fn unpacking(body: &str) -> String {
     )
 }
 
-/// `n` を使う合流のブロックの前で、片方の経路だけが呼び出しをする。`saved` はその呼び出しの `save` の部分である。
-/// `call_first` が偽なら、呼び出しのない経路を先のブロックに置く。合流のブロックの区間が、先に着いた `jump` の区間
-/// で決まらないことを確かめるためである。
-fn call_on_one_path(saved: &str, call_first: bool) -> String {
-    let call = format!("  let t.2: int = call k(1){saved}\n  jump b3(t.2)\n");
-    let other = "  jump b3(1)\n";
-    let (first, second) = if call_first {
-        (call.as_str(), other)
-    } else {
-        (other, call.as_str())
-    };
+/// `n` を使う合流のブロックの前で、片方の経路だけが呼び出しをする。
+fn call_on_one_path() -> String {
     format!(
         "{BOOL}{K}fn f(n.0: int, c.1: enum) -> int {{
   switch c.1 Prelude.Bool {{ #0 -> b1, #1 -> b2 }}
 b1:
-{first}b2:
-{second}b3(r.3: int):
+  let t.2: int = call k(1)
+  jump b3(t.2)
+b2:
+  jump b3(1)
+b3(r.3: int):
   let u.4: int = extern Prelude.+(n.0, r.3)
   return u.4
 }}
@@ -486,96 +480,10 @@ b3(n.2: int):
     );
 }
 
-// R7
-
-#[test]
-fn a_call_that_does_not_save_an_owned_variable_is_rejected() {
-    let text = format!(
-        "{IDENTITY}fn f(s.0: obj) -> obj {{
-  dup s.0
-  let t.1: obj = call g(s.0)
-  let t.2: obj = extern Prelude.++(t.1, s.0)
-  return t.2
-}}
-"
-    );
-    assert_eq!(
-        check(&text),
-        Err("a call saves [] but owns [s.0] in `f`".to_string())
-    );
-}
-
-#[test]
-fn a_call_that_saves_a_variable_it_does_not_own_is_rejected() {
-    let text = format!(
-        "{IDENTITY}fn f(s.0: obj) -> obj {{\n  let t.1: obj = call g(s.0) save [s.0]\n  return t.1\n}}\n"
-    );
-    assert_eq!(
-        check(&text),
-        Err("a call saves [s.0] but owns [] in `f`".to_string())
-    );
-}
-
-#[test]
-fn a_call_that_saves_a_variable_twice_is_rejected() {
-    // 退避する変数が重なると、フレームが所有していない参照を、解放や複製のときに数えてしまう
-    let text = format!(
-        "{IDENTITY}fn f(s.0: obj) -> obj {{
-  dup s.0
-  let t.1: obj = call g(s.0) save [s.0, s.0]
-  let t.2: obj = extern Prelude.++(t.1, s.0)
-  return t.2
-}}
-"
-    );
-    assert_eq!(
-        check(&text),
-        Err("a call saves [s.0, s.0] but owns [s.0] in `f`".to_string())
-    );
-}
-
-#[test]
-fn a_call_that_saves_an_invisible_variable_is_rejected() {
-    let text =
-        format!("{K}fn f() -> int {{\n  let t.0: int = call k(1) save [n.1]\n  return t.0\n}}\n");
-    assert_eq!(
-        check(&text),
-        Err("`n.1` is used outside its scope in `f`".to_string())
-    );
-}
-
-#[test]
-fn a_non_rc_variable_not_saved_by_a_call_is_not_visible_after_it() {
-    let text = format!(
-        "{K}fn f(n.0: int) -> int {{
-  let t.1: int = call k(n.0)
-  let t.2: int = extern Prelude.+(n.0, t.1)
-  return t.2
-}}
-"
-    );
-    assert_eq!(
-        check(&text),
-        Err("`n.0` is used after a call that does not save it in `f`".to_string())
-    );
-    let saved = text.replace("call k(n.0)", "call k(n.0) save [n.0]");
-    assert_eq!(check(&saved), Ok(()));
-}
-
-#[test]
-fn a_merge_block_does_not_see_a_variable_that_one_path_did_not_save() {
-    for call_first in [true, false] {
-        assert_eq!(
-            check(&call_on_one_path("", call_first)),
-            Err("`n.0` is used after a call that does not save it in `f`".to_string())
-        );
-        assert_eq!(check(&call_on_one_path(" save [n.0]", call_first)), Ok(()));
-    }
-}
+// R6: 呼び出しの後
 
 #[test]
 fn scopes_keep_variables_in_scope_after_a_call() {
-    // `saved` は Perceus が決めるので、その前は呼び出しの後で見える変数を区切り直さない
     let text = format!(
         "{K}fn f(n.0: int) -> int {{
   let t.1: int = call k(n.0)
@@ -585,21 +493,10 @@ fn scopes_keep_variables_in_scope_after_a_call() {
 "
     );
     assert_eq!(check_scopes(&text), Ok(()));
-    assert_eq!(check_scopes(&call_on_one_path("", true)), Ok(()));
+    assert_eq!(check_scopes(&call_on_one_path()), Ok(()));
 }
 
-#[test]
-fn scopes_reject_a_saved_list() {
-    let text = format!(
-        "{IDENTITY}fn f(s.0: obj) -> obj {{\n  let t.1: obj = call g(s.0) save [s.0]\n  return t.1\n}}\n"
-    );
-    assert_eq!(
-        check_scopes(&text),
-        Err("a call saves [s.0] before Perceus in `f`".to_string())
-    );
-}
-
-// R8
+// R7
 
 #[test]
 fn a_jump_with_a_variable_of_another_repr_is_rejected() {
@@ -881,7 +778,7 @@ fn the_result_of_a_call_is_bound_to_a_compatible_variable() {
     let text = "\
 fn f() -> unit {
   let s.0: obj = call h()
-  let u.1: unit = call h() save [s.0]
+  let u.1: unit = call h()
   decref s.0
   return u.1
 }
@@ -1112,7 +1009,7 @@ fn the_result_of_a_tail_call_is_compatible_with_the_function() {
     }
 }
 
-// R9: データの配置
+// R8: データの配置
 
 /// どちらの段でも同じ誤りになることを確かめ、文言から末尾の `` in `f` `` を除いて返す。
 fn layout_error(text: &str) -> String {
@@ -1423,7 +1320,7 @@ fn a_borrowed_field_cannot_be_consumed() {
     let borrowed = "`x.2` is used but is only borrowed from `d.0` in `f`";
     for body in [
         "  return x.2\n",
-        "  let t.4: obj = call g(x.2) save [d.0, c.1]\n  return t.4\n",
+        "  let t.4: obj = call g(x.2)\n  return t.4\n",
         "  let t.4: obj = con Box #0(x.2)\n  return t.4\n",
         "  let t.4: obj = extern Prelude.++(x.2, x.2)\n  return t.4\n",
         "  let t.4: obj = apply c.1(x.2)\n  return t.4\n",
@@ -1460,16 +1357,6 @@ b3(r.3: obj):
     assert_eq!(
         check(text),
         Err("`x.1` is used but is only borrowed from `d.0` in `f`".to_string())
-    );
-}
-
-#[test]
-fn a_borrowed_field_cannot_be_saved() {
-    assert_eq!(
-        check(&borrowing_arm(
-            "  let t.4: int = call k(1) save [d.0, c.1, x.2]\n  return x.2\n"
-        )),
-        Err("a call saves [d.0, c.1, x.2] but owns [d.0, c.1] in `f`".to_string())
     );
 }
 
@@ -2136,13 +2023,6 @@ fn the_lowered_level_rejects_what_perceus_inserts() {
         check_lowered(dup),
         Err("`s.0` is duplicated before Perceus in `twice`".to_string())
     );
-    let saved = format!(
-        "{IDENTITY}fn f(s.0: obj) -> obj {{\n  let t.1: obj = call g(s.0) save [s.0]\n  return t.1\n}}\n"
-    );
-    assert_eq!(
-        check_lowered(&saved),
-        Err("a call saves [s.0] before Perceus in `f`".to_string())
-    );
 }
 
 #[test]
@@ -2330,15 +2210,15 @@ fn f(e.0: obj) -> tobj {
 // 大きさ
 
 /// `n` 個の `switch` が続き、片方の枝が呼び出しをして合流する関数。所有の検査の段では、合流のブロックの数だけ、
-/// 見える変数の集合を決め直す。`save` は呼び出しの `save` の部分で、Perceus より前の形では空にする。
-fn chain_of_switches(n: u32, save: &str) -> String {
+/// 入口の所有を比べる。
+fn chain_of_switches(n: u32) -> String {
     let mut text = format!(
         "{BOOL}{K}fn f(s.0: obj, n.1: int, c.2: enum) -> obj {{\n  switch c.2 Prelude.Bool {{ #0 -> b1, #1 -> b2 }}\n"
     );
     for i in 0..n {
         let (call, other, merge) = (3 * i + 1, 3 * i + 2, 3 * i + 3);
         text.push_str(&format!(
-            "b{call}:\n  let t.{}: int = call k(n.1){save}\n  jump b{merge}()\nb{other}:\n  jump b{merge}()\nb{merge}:\n",
+            "b{call}:\n  let t.{}: int = call k(n.1)\n  jump b{merge}()\nb{other}:\n  jump b{merge}()\nb{merge}:\n",
             i + 3
         ));
         if i + 1 < n {
@@ -2358,12 +2238,11 @@ fn chain_of_switches(n: u32, save: &str) -> String {
 #[test]
 fn a_long_chain_of_switches_is_verified_in_linear_time() {
     // `lower` は debug ビルドで毎回 verify するので、ブロックの数に比例する時間で終わらなければならない。合流の
-    // ブロックごとに所有や見える変数を関数の先頭から数え直すと、2乗の時間がかかる
-    let before = read(&chain_of_switches(20000, ""));
-    let after = read(&chain_of_switches(20000, " save [s.0, n.1, c.2]"));
+    // ブロックごとに所有を関数の先頭から数え直すと、2乗の時間がかかる
+    let program = read(&chain_of_switches(20000));
     let start = std::time::Instant::now();
-    assert_eq!(verify_scopes(&before), Ok(()));
-    assert_eq!(verify(&after), Ok(()));
+    assert_eq!(verify_scopes(&program), Ok(()));
+    assert_eq!(verify(&program), Ok(()));
     let elapsed = start.elapsed();
     assert!(
         elapsed < std::time::Duration::from_secs(10),

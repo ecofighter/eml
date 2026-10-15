@@ -96,7 +96,7 @@ fn main() -> unit {
   let s.0: obj = const \"a\"
   let n.1: int = call pick(s.0)
   let s.2: obj = const \"b\"
-  let n.3: int = call pick(s.2) save [n.1]
+  let n.3: int = call pick(s.2)
   let t.4: int = extern Prelude.+(n.1, n.3)
   let t.5: obj = extern \"Prelude.Show Int.show\"(t.4)
   let o.6: unit = extern Prelude.println(t.5)
@@ -220,7 +220,7 @@ fn an_unpack_with_a_different_tag_is_an_internal_error() {
 
 #[test]
 fn an_unpack_of_a_value_that_is_not_an_object_is_an_internal_error() {
-    // verifier は R8 で `obj` でない値の `unpack` を拒むので、通さずに実行する
+    // verifier は R7 で `obj` でない値の `unpack` を拒むので、通さずに実行する
     let text = "\
 layout Box { Box(tobj) }
 fn main() -> unit {

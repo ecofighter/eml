@@ -62,7 +62,7 @@ fn a_dead_call_result_takes_a_slot_of_its_own() {
     insta::assert_snapshot!(disasm_unverified("\
 fn main() -> unit {
   let k.0: int = extern \"Prelude.+\"(1, 2)
-  let r.1: int = call one() save [k.0]
+  let r.1: int = call one()
   let s.2: obj = extern \"Prelude.Show Int.show\"(k.0)
   let u.3: unit = extern Prelude.println(s.2)
   return u.3

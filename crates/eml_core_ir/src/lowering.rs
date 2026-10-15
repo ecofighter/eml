@@ -101,10 +101,7 @@ fn rhs(rhs: Rhs) -> eml_lir::Rhs {
                 mask.is_empty(),
                 "internal error: a mask reaches the lowering to LIR"
             );
-            eml_lir::Rhs::Call {
-                call: call(value),
-                saved: Vec::new(),
-            }
+            eml_lir::Rhs::Call(call(value))
         }
         Rhs::MakeClosure(function, args) => eml_lir::Rhs::MakeClosure(function, args),
         Rhs::Extern { ext, args, at } => eml_lir::Rhs::Extern { ext, args, at },

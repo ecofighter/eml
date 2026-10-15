@@ -20,7 +20,7 @@ yields fn "masked@[Unit]<e>"(f.0: tobj poly) -> unit {
   let w.2: tobj = prim evv_get()
   let w.3: tobj = prim evv_mask[Ask](w.2)
   let u.4: unit = prim evv_set(w.3)
-  let t.1: unit = yields apply f.0(()) save [w.2]
+  let t.1: unit = yields apply f.0(())
   let y.6: int = prim yielding()
   switch y.6 { 0 -> b2, _ -> b1 }
 b1:
@@ -42,7 +42,7 @@ fn rehandle(p.0: unit) -> unit {
   dup ev.3
   let w.5: tobj = prim evv_push(w.2, ev.3)
   let u.6: unit = prim evv_set(w.5)
-  let x.7: tobj poly = yields apply &rehandle$handle0(()) save [ev.3]
+  let x.7: tobj poly = yields apply &rehandle$handle0(())
   tail call prompt$(ev.3, &rehandle$handle0$return, x.7)
 }
 yields fn "resumer<e>"(body.0: tobj poly, after.1: tobj) -> unit {
@@ -55,7 +55,7 @@ yields fn "resumer<e>"(body.0: tobj poly, after.1: tobj) -> unit {
   dup ev.6
   let w.8: tobj = prim evv_push(w.5, ev.6)
   let u.9: unit = prim evv_set(w.8)
-  let x.10: tobj poly = yields apply c.2(()) save [ev.6]
+  let x.10: tobj poly = yields apply c.2(())
   tail call prompt$(ev.6, &"resumer<e>$handle1$return", x.10)
 }
 yields fn yielder(p.0: unit) -> unit {
@@ -110,7 +110,7 @@ fn main(p.0: unit) -> unit {
   dup ev.3
   let w.5: tobj = prim evv_push(w.2, ev.3)
   let u.6: unit = prim evv_set(w.5)
-  let x.7: tobj poly = yields apply &main$handle1(()) save [ev.3]
+  let x.7: tobj poly = yields apply &main$handle1(())
   tail call prompt$(ev.3, &main$handle1$return, x.7)
 }
 internal yields fn rehandle$handle0(p.0: unit) -> unit {
@@ -138,8 +138,8 @@ internal yields fn "resumer<e>$handle1$yield"(after.0: tobj, p.1: unit, k.2: tob
   dup ev.8
   let w.10: tobj = prim evv_push(w.7, ev.8)
   let u.11: unit = prim evv_set(w.10)
-  let x.12: tobj poly = yields apply c.4(()) save [after.0, ev.8]
-  let t.5: unit = call prompt$(ev.8, &"resumer<e>$handle0$return", x.12) save [after.0]
+  let x.12: tobj poly = yields apply c.4(())
+  let t.5: unit = call prompt$(ev.8, &"resumer<e>$handle0$return", x.12)
   let y.13: int = prim yielding()
   switch y.13 { 0 -> b2, _ -> b1 }
 b1:
@@ -155,7 +155,7 @@ internal yields fn "resumer<e>$handle0"(k.0: tobj lin, p.1: unit) -> unit {
   let w.3: tobj = prim evv_get()
   let w.4: tobj = prim evv_mask[Ask](w.3)
   let u.5: unit = prim evv_set(w.4)
-  let t.2: unit = yields apply k.0((), ()) save [w.3]
+  let t.2: unit = yields apply k.0((), ())
   let y.7: int = prim yielding()
   switch y.7 { 0 -> b2, _ -> b1 }
 b1:
@@ -190,7 +190,7 @@ internal yields fn main$handle1(p.0: unit) -> unit {
   dup ev.3
   let w.5: tobj = prim evv_push(w.2, ev.3)
   let u.6: unit = prim evv_set(w.5)
-  let x.7: tobj poly = yields apply &main$handle0(()) save [ev.3]
+  let x.7: tobj poly = yields apply &main$handle0(())
   tail call prompt$(ev.3, &main$handle0$return, x.7)
 }
 internal yields fn main$handle0(p.0: unit) -> unit {
@@ -232,7 +232,7 @@ internal yields fn asker$k0(t.1: obj) -> unit {
   return t.2
 }
 yields fn compose$(k.0: tobj poly, c.1: tobj poly, x.2: tobj poly) -> tobj poly {
-  let r.3: tobj poly = yields apply k.0(x.2) save [c.1]
+  let r.3: tobj poly = yields apply k.0(x.2)
   let y.4: int = prim yielding()
   switch y.4 { 0 -> b2, _ -> b1 }
 b1:
@@ -252,7 +252,7 @@ yields fn "mask$[Ask]"(k.0: tobj poly, v.1: tobj poly) -> tobj poly {
   let w.2: tobj = prim evv_get()
   let m.3: tobj = prim evv_mask[Ask](w.2)
   let u.4: unit = prim evv_set(m.3)
-  let r.5: tobj poly = yields apply k.0(v.1) save [w.2]
+  let r.5: tobj poly = yields apply k.0(v.1)
   let y.6: int = prim yielding()
   switch y.6 { 0 -> b2, _ -> b1 }
 b1:
@@ -308,7 +308,7 @@ yields fn resume$(ev.0: obj, ret.1: tobj poly, k.2: tobj poly, v.3: tobj poly, s
   dup e.5
   let w.7: tobj = prim evv_push(w.6, e.5)
   let u.8: unit = prim evv_set(w.7)
-  let x.9: tobj poly = yields apply k.2(v.3) save [ret.1, e.5]
+  let x.9: tobj poly = yields apply k.2(v.3)
   tail call prompt$(e.5, ret.1, x.9)
 }
 yields fn rewind$(ev.0: obj, ret.1: tobj poly, s.2: tobj poly, k.3: tobj poly, v.4: tobj poly) -> tobj poly {

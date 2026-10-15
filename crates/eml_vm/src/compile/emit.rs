@@ -300,10 +300,7 @@ impl<'a, M: Mode> Emitter<'a, M> {
     fn rhs(&mut self, var: VarId, rhs: &Rhs) {
         let dst = self.slot(var);
         match rhs {
-            Rhs::Call {
-                call: Call::Direct(f, args),
-                saved: _,
-            } => {
+            Rhs::Call(Call::Direct(f, args)) => {
                 let at = self.call_operands(*f, args);
                 self.out.push(Op::Call { dst, at });
             }
@@ -405,10 +402,7 @@ impl<'a, M: Mode> Emitter<'a, M> {
                 );
                 self.out.push(Op::Closure { dst, at });
             }
-            Rhs::Call {
-                call: call @ (Call::Apply { .. } | Call::Clause { .. }),
-                saved: _,
-            } => {
+            Rhs::Call(call @ (Call::Apply { .. } | Call::Clause { .. })) => {
                 let at = self.value_call_operands(call);
                 let op = if matches!(call, Call::Clause { .. }) {
                     Op::Clause { dst, at }
