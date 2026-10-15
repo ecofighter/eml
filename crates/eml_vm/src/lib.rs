@@ -6,7 +6,7 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex, PoisonError};
 
 use eml_lir::Program;
-use eml_rt::{Buffering, Checked, Ctx, Fast, Mode, StdHost};
+use eml_rt::{Buffering, Checked, Ctx, Fast, HeapError, Mode, Stats, StdHost};
 
 mod apply;
 mod code;
@@ -111,21 +111,30 @@ pub struct Machine<M: Mode> {
     code: CodeBase<M>,
     ctx: Ctx<M>,
     max_depth: usize,
-    /// 実行の後の確かめ。検査モードではヒープの不変条件を確かめる。
-    after_run: fn(&Ctx<M>, String) -> Result<(), RuntimeError>,
+    /// 実行と回復の後の確かめ。検査モードではヒープの不変条件を確かめる。
+    check_heap: fn(&Ctx<M>) -> Result<(), HeapError>,
     /// 閉じるときの確かめ。検査モードでは残った物体をリークとして返す。
     at_close: fn(&Ctx<M>) -> Result<(), RuntimeError>,
+    /// 回復で捨てたヒープが実行でした仕事。
+    earlier: HeapWork,
+    /// 今のヒープが回復で写すためにした仕事。`RunStats` は実行の仕事だけを数えるので引く。
+    copying: HeapWork,
 }
 
 impl Machine<Fast> {
     pub fn new(control: Arc<Control>, host: HostRef) -> Machine<Fast> {
-        Machine::with_checks(control, host, |_, _| Ok(()), |_| Ok(()))
+        Machine::with_checks(control, host, |_| Ok(()), |_| Ok(()))
     }
 }
 
 impl Machine<Checked> {
     pub fn new(control: Arc<Control>, host: HostRef) -> Machine<Checked> {
-        Machine::with_checks(control, host, check_invariants, check_leaks)
+        Machine::with_checks(
+            control,
+            host,
+            |ctx| ctx.heap().check_invariants(),
+            check_leaks,
+        )
     }
 }
 
@@ -133,15 +142,17 @@ impl<M: Mode> Machine<M> {
     fn with_checks(
         control: Arc<Control>,
         host: HostRef,
-        after_run: fn(&Ctx<M>, String) -> Result<(), RuntimeError>,
+        check_heap: fn(&Ctx<M>) -> Result<(), HeapError>,
         at_close: fn(&Ctx<M>) -> Result<(), RuntimeError>,
     ) -> Machine<M> {
         Machine {
             code: CodeBase::new(Arc::clone(&control)),
             max_depth: control.limits().max_depth,
             ctx: Ctx::new(control, host),
-            after_run,
+            check_heap,
             at_close,
+            earlier: HeapWork::default(),
+            copying: HeapWork::default(),
         }
     }
 
@@ -161,23 +172,40 @@ impl<M: Mode> Machine<M> {
     }
 
     /// 入口の関数を `()` で実行する。統計は `Machine` を作ってからの積算で、`peak_stack` だけがこの実行の値である。
-    /// 根は手放さず、次の実行に残す。続けられる誤りの後は、根から届く物体を新しいヒープに写して古いヒープを捨てる
-    /// (docs/superpowers/specs/2026-10-16-s11b-recovery-design.md の「回復」)。
+    /// 根は手放さず、次の実行に残す。続けられる誤りの後は、根から届く物体を新しいヒープに写して古いヒープを捨て、
+    /// 元の誤りを返す。回復が失敗したら `Unrecovered` を返す (docs/spec/vm.md の「追記」)。
     pub fn run(&mut self, entry: u32) -> Result<RunStats, RuntimeError> {
-        let result = self.run_entry(entry);
-        if let Err(error) = &result
-            && !error.is_broken()
-        {
-            // 根の語は根が持つ参照で、根から届く物体は失敗した実行が書き換えないので、`recover` の前提を守る
-            if let Err(e) = unsafe { self.ctx.recover() } {
-                return Err(RuntimeError::Fault {
-                    fault: VmFault::Extern(e.into()),
-                    function: "<recover>".to_string(),
-                    at: None,
-                });
-            }
+        match self.run_entry(entry) {
+            Err(cause) if !cause.is_broken() => Err(match self.recover() {
+                Ok(()) => cause,
+                Err(reason) => RuntimeError::Unrecovered {
+                    cause: Box::new(cause),
+                    reason,
+                },
+            }),
+            result => result,
         }
-        result
+    }
+
+    fn recover(&mut self) -> Result<(), HeapError> {
+        let old = self.heap_work();
+        // 根の語は根が持つ参照で、根から届く物体は失敗した実行が書き換えないので、`recover` の前提を守る
+        unsafe { self.ctx.recover() }?;
+        self.earlier = old;
+        self.copying = HeapWork::of(self.ctx.heap().stats());
+        (self.check_heap)(&self.ctx)
+    }
+
+    /// `Machine` を作ってからの、実行がヒープでした仕事。
+    fn heap_work(&self) -> HeapWork {
+        let now = HeapWork::of(self.ctx.heap().stats());
+        HeapWork {
+            rc_increments: self.earlier.rc_increments + now.rc_increments
+                - self.copying.rc_increments,
+            rc_decrements: self.earlier.rc_decrements + now.rc_decrements
+                - self.copying.rc_decrements,
+            peak_objects: self.earlier.peak_objects.max(now.peak_objects),
+        }
     }
 
     fn run_entry(&mut self, entry: u32) -> Result<RunStats, RuntimeError> {
@@ -206,8 +234,10 @@ impl<M: Mode> Machine<M> {
                 &task,
             ));
         }
-        (self.after_run)(ctx, code.function_name(task.last_ret, &task))?;
-        let (c, h) = (ctx.stats(), ctx.heap().stats());
+        (self.check_heap)(ctx)
+            .map_err(|error| heap_fault(error, code.function_name(task.last_ret, &task)))?;
+        let c = ctx.stats();
+        let h = self.heap_work();
         Ok(RunStats {
             evidence_steps: c.evidence_steps,
             yields: c.yields,
@@ -217,7 +247,7 @@ impl<M: Mode> Machine<M> {
             rc_decrements: h.rc_decrements,
             boxes: counts.boxes,
             unboxes: counts.unboxes,
-            peak_objects: h.peak_live,
+            peak_objects: h.peak_objects,
             // スタックの長さは縮めないので、長さがそのまま使った語の数の最大である。統計は検査モードだけで数える
             peak_stack: if M::CHECKED {
                 task.stack.len() as u64
@@ -230,17 +260,31 @@ impl<M: Mode> Machine<M> {
     /// 実行の状態を閉じる。根の参照は VM が持つので先に手放す。検査モードでは、その後にヒープの不変条件を確かめ、
     /// 残った物体をリークとして返す。
     pub fn close(mut self) -> Result<(), RuntimeError> {
-        let close_error = |error: eml_rt::HeapError| RuntimeError::Fault {
-            fault: VmFault::Extern(error.into()),
-            function: "<close>".to_string(),
-            at: None,
-        };
+        let close_error = |error| heap_fault(error, "<close>".to_string());
         for root in self.ctx.take_roots().into_iter().flatten() {
             // 根の語は根が持つ参照で、ほかの語には触れないので、`heap_mut` の前提を崩さない
             unsafe { self.ctx.heap_mut().decref(root) }.map_err(close_error)?;
         }
-        (self.after_run)(&self.ctx, "<close>".to_string())?;
+        (self.check_heap)(&self.ctx).map_err(close_error)?;
         (self.at_close)(&self.ctx)
+    }
+}
+
+/// `RunStats` に入るヒープの仕事の数 (docs/spec/vm.md の「`RunStats`」)。
+#[derive(Debug, Clone, Copy, Default)]
+struct HeapWork {
+    rc_increments: u64,
+    rc_decrements: u64,
+    peak_objects: u64,
+}
+
+impl HeapWork {
+    fn of(stats: Stats) -> HeapWork {
+        HeapWork {
+            rc_increments: stats.rc_increments,
+            rc_decrements: stats.rc_decrements,
+            peak_objects: stats.peak_live,
+        }
     }
 }
 
@@ -283,14 +327,12 @@ impl AnyMachine {
 }
 
 /// ヒープの不変条件の誤りには、最後に戻った関数の名前を付ける (docs/spec/vm.md の「誤り、止めること、終わり」)。
-fn check_invariants(ctx: &Ctx<Checked>, last_function: String) -> Result<(), RuntimeError> {
-    ctx.heap()
-        .check_invariants()
-        .map_err(|error| RuntimeError::Fault {
-            fault: error.into(),
-            function: last_function,
-            at: None,
-        })
+fn heap_fault(error: HeapError, last_function: String) -> RuntimeError {
+    RuntimeError::Fault {
+        fault: error.into(),
+        function: last_function,
+        at: None,
+    }
 }
 
 fn check_leaks(ctx: &Ctx<Checked>) -> Result<(), RuntimeError> {

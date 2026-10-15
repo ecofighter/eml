@@ -65,6 +65,12 @@ pub enum RuntimeError {
     },
     /// 検査モードで、終わったときに残っていた物体の種類の名前と数。
     Leak(Vec<(String, u64)>),
+    /// 続けられる誤り `cause` の後の回復が `reason` で失敗した。根から届く物体を写せなかったか、検査モードで回復の後の
+    /// ヒープの不変条件が崩れていた (docs/spec/vm.md の「追記」)。
+    Unrecovered {
+        cause: Box<RuntimeError>,
+        reason: HeapError,
+    },
 }
 
 impl RuntimeError {
@@ -81,15 +87,15 @@ impl RuntimeError {
         )
     }
 
-    /// 続けて実行できない誤りか。ヒープの誤り (根の誤った読み書き `RootMisuse` を含む) と内部の誤りの後は、ヒープを
-    /// 信用できない。REPL はこの後の入力を受け付けない (docs/spec/vm.md の「追記」)。
+    /// 続けて実行できない誤りか。ヒープの誤り (根の誤った読み書き `RootMisuse` を含む) と内部の誤りの後と、回復が
+    /// 失敗した後は、ヒープを信用できない。REPL はこの後の入力を受け付けない (docs/spec/vm.md の「追記」)。
     pub fn is_broken(&self) -> bool {
         matches!(
             self,
             RuntimeError::Fault {
                 fault: VmFault::Internal(_) | VmFault::Extern(Fault::Heap(_)),
                 ..
-            }
+            } | RuntimeError::Unrecovered { .. }
         )
     }
 }
@@ -115,6 +121,9 @@ impl fmt::Display for RuntimeError {
                     "memory leak: objects were not freed: {}",
                     parts.join(", ")
                 )
+            }
+            RuntimeError::Unrecovered { cause, reason } => {
+                write!(f, "{cause}\nrecovery failed: {reason}")
             }
         }
     }

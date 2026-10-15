@@ -1,10 +1,12 @@
 //! 入力をまたいで `CodeBase` と `Ctx` を持つ `Machine` (docs/spec/vm.md の「追記」)。手書きの LIR のプログラムを1つの
 //! `Machine` に続けて読み込み、名前で照らした関数の番号、定数、エフェクト、位置のファイルの引き直しを確かめる。
 
-use eml_rt::{ArithFault, Checked, Fast, Fault};
+use std::sync::Arc;
+
+use eml_rt::{ArithFault, Checked, Fast, Fault, HeapError};
 use eml_vm::{
-    AnyMachine, CompileError, Machine, RunConfig, RuntimeError, SourceLocation, VmFault,
-    capture_host, disassemble,
+    AnyMachine, CompileError, Control, Limits, Machine, RunConfig, RuntimeError, SourceLocation,
+    VmFault, capture_host, disassemble,
 };
 
 use crate::common::parse;
@@ -326,5 +328,155 @@ fn second() -> unit {
             .unwrap_or_else(|error| panic!("{error}"));
         assert_eq!(out.contents(), "after\n");
         machine.close().unwrap_or_else(|error| panic!("{error}"));
+    }
+}
+
+/// 数え終わってから表示するので、割り込みで止まれば何も表示しない。
+const COUNT_THEN_SAY: &str = "\
+layout Bool { False, True }
+fn main() -> unit {
+  tail call count(0)
+}
+fn count(n.0: int) -> unit {
+  let d.1: enum = extern \"Prelude.Eq Int.==\"(n.0, 100000)
+  switch d.1 Bool { #0 -> b1, #1 -> b2 }
+b1:
+  let m.2: int = extern \"Prelude.+\"(n.0, 1)
+  tail call count(m.2)
+b2:
+  let s.3: obj = const \"done\"
+  let u.4: unit = extern Prelude.println(s.3)
+  return u.4
+}
+";
+
+/// `load` は止める理由のビットを見ないので、`load` の前に立てた割り込みは、実行の最初の安全点まで保留される。`load`
+/// の後に立てたときと同じく、実行は何も表示せずに止まる (docs/spec/vm.md の「追記」)。
+#[test]
+fn an_interrupt_before_load_is_held_until_the_first_safe_point() {
+    for debug_heap in [true, false] {
+        for before_load in [true, false] {
+            let control = Arc::new(Control::new(Limits::default()));
+            let config = RunConfig::default()
+                .with_debug_heap(debug_heap)
+                .with_control(Arc::clone(&control));
+            let (host, out) = capture_host(Default::default());
+            let mut machine = AnyMachine::new(&config, host);
+            if before_load {
+                control.interrupt();
+            }
+            let loaded = machine.load(&parse(COUNT_THEN_SAY)).unwrap();
+            if !before_load {
+                control.interrupt();
+            }
+            let error = machine.run(loaded.entry).unwrap_err();
+            assert_eq!(error.to_string(), "interrupted in `main`");
+            assert_eq!(out.contents(), "");
+            machine.close().unwrap_or_else(|error| panic!("{error}"));
+        }
+    }
+}
+
+/// 回復の写しの確保と `dup` は `RunStats` に数えない。1つ目の実行は根に共有のある値を置き (写すと子に `dup` が要る)、
+/// 根に置かない物体も同時に作るので、物体の数の最大は回復の後のヒープより大きい。RC の仕事をしない実行で失敗させて
+/// 回復し、何もしない3つ目の実行の統計が1つ目と同じことを確かめる (docs/spec/vm.md の「`RunStats`」)。
+#[test]
+fn recovery_work_is_not_counted_in_run_stats() {
+    let first = "\
+layout (,) { (,)(tobj, tobj) }
+fn main() -> unit {
+  let s.0: obj = const \"leaf\"
+  dup s.0
+  dup s.0
+  dup s.0
+  let x.1: obj = con (,) #0(s.0, s.0)
+  dup x.1
+  let y.2: obj = con (,) #0(x.1, x.1)
+  let z.3: obj = con (,) #0(s.0, s.0)
+  decref z.3
+  let u.4: unit = prim root_set[1](y.2)
+  return u.4
+}
+";
+    let fail = "\
+fn fail() -> unit {
+  let n.0: int = extern \"Prelude.%\"(1, 0)
+  return ()
+}
+";
+    let third = "\
+fn third() -> unit {
+  return ()
+}
+";
+    let (host, _) = capture_host(Default::default());
+    let mut machine = Machine::<Checked>::new(RunConfig::default().control, host);
+    let mut run = |text: &str| {
+        let loaded = machine.load(&parse(text)).unwrap();
+        machine.run(loaded.entry)
+    };
+    let before = run(first).unwrap_or_else(|error| panic!("{error}"));
+    assert_eq!(before.peak_objects, 4, "{before:?}");
+    assert_eq!(
+        run(fail).unwrap_err().to_string(),
+        "division by zero in `fail`"
+    );
+    let after = run(third).unwrap_or_else(|error| panic!("{error}"));
+    // `peak_stack` だけはその実行の値である
+    let mut expected = before;
+    expected.peak_stack = after.peak_stack;
+    assert_eq!(after, expected);
+    machine.close().unwrap_or_else(|error| panic!("{error}"));
+}
+
+/// 根の値は `Unr` なので、検証を通ったプログラムの根は `File` に届かない。検証を通らない手書きの LIR で `File` を根に
+/// 置き、続けられる誤りで止めると、回復は `File` を写せずに失敗する。その誤りは元の誤りと回復できない理由を持ち、
+/// セッションを使えなくする (docs/spec/vm.md の「追記」)。
+#[test]
+fn a_failed_recovery_breaks_the_session() {
+    let root = std::env::temp_dir().join(format!("eml-vm-unrecovered-{}", std::process::id()));
+    std::fs::create_dir_all(&root).unwrap();
+    std::fs::write(root.join("a.txt"), "abc").unwrap();
+    let text = "\
+fn main() -> unit {
+  let p.0: obj = const \"a.txt\"
+  let h.1: obj lin = extern \"Std.Fs.open\"(p.0)
+  let u.2: unit = prim root_set[1](h.1)
+  let n.3: int = extern \"Prelude.%\"(1, 0)
+  return ()
+}
+";
+    let mut errors = Vec::new();
+    for debug_heap in [true, false] {
+        let (host, _) = capture_host(root.clone());
+        let config = RunConfig::default().with_debug_heap(debug_heap);
+        let mut machine = AnyMachine::new(&config, host);
+        let loaded = machine.load(&parse(text)).unwrap();
+        errors.push(machine.run(loaded.entry).unwrap_err());
+    }
+    std::fs::remove_dir_all(&root).unwrap();
+    for error in errors {
+        assert!(
+            matches!(
+                &error,
+                RuntimeError::Unrecovered {
+                    cause,
+                    reason: HeapError::Unrecoverable,
+                } if matches!(
+                    **cause,
+                    RuntimeError::Fault {
+                        fault: VmFault::Extern(Fault::Arith(ArithFault::DivisionByZero)),
+                        ..
+                    }
+                )
+            ),
+            "{error:?}"
+        );
+        assert!(error.is_broken());
+        assert_eq!(
+            error.to_string(),
+            "division by zero in `main`\n\
+             recovery failed: a session root reaches an object that recovery cannot copy"
+        );
     }
 }
