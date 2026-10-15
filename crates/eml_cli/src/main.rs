@@ -78,14 +78,17 @@ fn main() -> ExitCode {
 /// スレッドで順に呼ぶので、2つの SIGINT が同時にビットを読み書きすることはない (docs/spec/object-model.md の
 /// 「実行の制御」)。
 fn interrupt_on_sigint(control: Arc<Control>) {
-    ctrlc::set_handler(move || {
+    let installed = ctrlc::set_handler(move || {
         if control.stop_bits() & Control::INTERRUPT == 0 {
             control.interrupt();
         } else {
             std::process::exit(130);
         }
-    })
-    .expect("the SIGINT handler is installed once, before anything else");
+    });
+    // 入れられなくてもプログラムは実行できる。その場合 Ctrl-C は既定の動作でプロセスを終わらせる。
+    if let Err(error) = installed {
+        eprintln!("warning: cannot install the SIGINT handler: {error}");
+    }
 }
 
 /// 入口が読めないことは、読み込みの段に入る前に使い方の誤りとして報告する。依存先が読めないことは E1026 である。

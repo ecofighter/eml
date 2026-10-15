@@ -797,7 +797,7 @@ pub struct Opened {
 
 - `StdHost::stdio(file_root)` は、標準出力と標準エラーに書く。`StdHost::new(out, err, file_root, mode)` は、テストと組み込みのために書き込み先と書き方 (`Buffering` の `Line` か `Block`) を受ける
 - 出力の方針は C の stdio と同じにする。標準出力が端末なら、対話ですぐ見えるように行ごとに書く (`Line`)。端末でなければ、64 KiB の `BufWriter` でまとめて書く (`Block`)。標準エラーは、いつも行ごとに書く
-- まとめて書くと、行ごとに flush する今の書き方より約 65〜160 倍速い ([計測の基準](../implementation/benchmarks.md) の「S9b-3 (extern)」)
+- まとめて書くと、行ごとに flush する書き方より約 65〜160 倍速い ([計測の基準](../implementation/benchmarks.md) の「S9b-3 (extern)」)
 - ストリームごとに `Mutex` を1つ持ち、ロックの中で本文と `\n` を書く。ロックが毒されていたら、`PoisonError::into_inner` で取り出して続ける。中身は書き込みのバッファだけで、続けても壊れないためである
 - `StdHost` を落とすときは、`BufWriter` の `Drop` がまだ書いていない出力を書く (unwind のときも同じ)。誤りは捨てる
 - `StdHost::open` は、`file_root` に `path` をつないで開く。`path` が絶対パスなら、そのパスを開く。長さの見込みは、ふつうのファイルにだけ返す。ディレクトリも開け、読むときに `I/O error` になる

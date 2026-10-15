@@ -252,6 +252,7 @@ fn physical_memory() -> Option<usize> {
     usize::try_from(pages)
         .ok()?
         .checked_mul(usize::try_from(page_size).ok()?)
+        .filter(|&bytes| bytes > 0)
 }
 
 #[cfg(all(feature = "run", not(unix)))]
