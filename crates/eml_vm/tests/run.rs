@@ -2,7 +2,7 @@
 //! 終わりの処理 (docs/spec/vm.md の「呼び出しと戻り」と「誤り、止めること、終わり」)。
 
 use eml_rt::{ArithFault, Fault, HeapError};
-use eml_test_support::execute_vm;
+use eml_test_support::execute;
 use eml_vm::{RuntimeError, SourceLocation, VmFault};
 
 use crate::common::{parse, run_lir, run_unverified};
@@ -139,7 +139,7 @@ fn main() -> unit {
         "memory leak: objects were not freed: 1 String"
     );
     // 速いモードはリークを確かめないので、同じ IR が成功で終わる
-    let (_, fast) = execute_vm(
+    let (_, fast) = execute(
         &parse(text),
         &eml_vm::RunConfig::default().with_debug_heap(false),
     );

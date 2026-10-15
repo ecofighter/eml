@@ -6,10 +6,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, MutexGuard, PoisonError};
 
-use eml_cli::{
-    FsProvider, OutputSink, RunConfig, RunStats, RuntimeError, Session, VmRunConfig, VmRunStats,
-    capture_host, execute_vm,
-};
+use eml_cli::{FsProvider, RunConfig, RuntimeError, Session, capture_host, execute};
 use eml_diagnostics::{has_errors, render};
 
 /// insta の `glob!` は、失敗の数をすべてのスレッドで共有する1つのスタックの一番上に数え、終わりにも一番上を取り出す
@@ -114,90 +111,54 @@ fn snapshot_settings(suffix: &str) -> insta::Settings {
     settings
 }
 
-/// 診断のエラーなしでコンパイルし、`debug_heap` を有効にして CEK で実行する。同じプログラムを VM でも実行し、出力と
-/// 誤りの文言が CEK と同じであることを確かめる (docs/implementation/testing.md の「VM でも流す」)。
-fn compile_and_execute(path: &Path, suffix: &str) -> (String, String, Result<(), RuntimeError>) {
+/// 診断のエラーなしでコンパイルし、LIR と、入力のファイルを置くディレクトリと、診断の表示を返す。入力のファイルは
+/// テストの隣に置く (docs/implementation/testing.md の「UI テスト」)。
+fn compile(path: &Path, suffix: &str) -> (eml_lir::Program, PathBuf, String) {
     let session = load(path, suffix);
     let compiled = session.compile();
     let stderr = render(&compiled.diagnostics, session.files());
     let program = compiled
         .program
         .unwrap_or_else(|| panic!("unexpected errors:\n{stderr}"));
-    let (sink, captured) = OutputSink::capture();
-    // 入力のファイルはテストの隣に置く (docs/implementation/testing.md の「UI テスト」)
     let root = path
         .parent()
         .expect("a test file has a directory")
         .to_path_buf();
-    let config = RunConfig::default()
-        .with_debug_heap(true)
-        .with_file_root(root.clone());
-    let result = eml_cli::execute(&program, &config, sink);
-    let stdout = captured.contents();
-    check_on_vm(suffix, &program, &root, &stdout, &result);
-    (stdout, stderr, result.map(|_| ()))
+    (program, root, stderr)
 }
 
-/// VM の検査モードで実行して CEK と比べ、一致したときだけ速いモードでも実行する。速いモードは前提を確かめないので、
-/// VM の誤りが未定義の動作になって glob のテスト全体を壊しうるためである。
-fn check_on_vm(
+/// 止める理由のビットは `Control::clear` でしか下りないので、実行ごとに新しい `Control` を持つ設定を作る。使い回すと、
+/// 前の実行で立ったビットで次の実行がすぐ止まる。
+fn execute_in(
+    program: &eml_lir::Program,
+    root: &Path,
+    debug_heap: bool,
+) -> (String, Result<(), RuntimeError>) {
+    let (host, out) = capture_host(root.to_path_buf());
+    let config = RunConfig::default().with_debug_heap(debug_heap);
+    let result = execute(program, &config, host).map(drop);
+    (out.contents(), result)
+}
+
+/// 検査モードの結果をスナップショットと比べた後で、速いモードでも流し、同じ出力と同じ結果になることを確かめる。
+/// 速いモードは前提を確かめないので、VM の誤りが未定義の動作になって glob のテスト全体を壊しうる。そのため検査モードの
+/// 後に流す (docs/implementation/testing.md の「VM でも流す」)。
+fn assert_fast_mode_agrees(
     suffix: &str,
     program: &eml_lir::Program,
     root: &Path,
     stdout: &str,
-    cek: &Result<RunStats, RuntimeError>,
+    result: &Result<(), RuntimeError>,
 ) {
-    let run = |debug_heap| {
-        let (host, out) = capture_host(root.to_path_buf());
-        let config = VmRunConfig::default().with_debug_heap(debug_heap);
-        let result = execute_vm(program, &config, host);
-        (out.contents(), result)
-    };
-    let (vm_stdout, vm) = run(true);
-    assert_eq!(vm_stdout, stdout, "{suffix}: the VM printed something else");
-    match (cek, &vm) {
-        (Ok(cek), Ok(vm)) => assert_same_counts(suffix, cek, vm),
-        (Err(cek), Err(vm)) => assert_eq!(
-            vm.to_string(),
-            cek.to_string(),
-            "{suffix}: the VM failed otherwise"
-        ),
-        _ => panic!("{suffix}: the CEK gave {cek:?} but the VM gave {vm:?}"),
-    }
-    let (fast_stdout, fast) = run(false);
+    let (fast_stdout, fast) = execute_in(program, root, false);
     assert_eq!(
         fast_stdout, stdout,
-        "{suffix}: the fast VM printed something else"
+        "{suffix}: the fast mode printed something else"
     );
     assert_eq!(
-        fast.map(|_| ()).map_err(|error| error.to_string()),
-        vm.map(|_| ()).map_err(|error| error.to_string()),
-        "{suffix}: the fast VM ended otherwise"
-    );
-}
-
-/// 同じ LIR の上で同じ定義を持つ6つの回数は、CEK と等しい。`rc_*` と `peak_objects` は、フレームと凍結した領域の
-/// 数え方が違うので比べない (docs/spec/vm.md の「`RunStats`」)。
-fn assert_same_counts(suffix: &str, cek: &RunStats, vm: &VmRunStats) {
-    let pick_cek = (
-        cek.evidence_steps,
-        cek.yields,
-        cek.yield_frames,
-        cek.string_bytes_copied,
-        cek.boxes,
-        cek.unboxes,
-    );
-    let pick_vm = (
-        vm.evidence_steps,
-        vm.yields,
-        vm.yield_frames,
-        vm.string_bytes_copied,
-        vm.boxes,
-        vm.unboxes,
-    );
-    assert_eq!(
-        pick_vm, pick_cek,
-        "{suffix}: (evidence_steps, yields, yield_frames, string_bytes_copied, boxes, unboxes)"
+        fast.map_err(|error| error.to_string()),
+        result.as_ref().map(|_| ()).map_err(ToString::to_string),
+        "{suffix}: the fast mode ended otherwise"
     );
 }
 
@@ -208,11 +169,13 @@ fn run() {
         let Entry::Test(suffix) = classify(path, "run") else {
             return;
         };
-        let (stdout, stderr, result) = compile_and_execute(path, &suffix);
+        let (program, root, stderr) = compile(path, &suffix);
+        let (stdout, result) = execute_in(&program, &root, true);
         assert_eq!(result, Ok(()), "{stderr}");
         snapshot_settings(&suffix).bind(|| {
             insta::assert_snapshot!(format!("--- stdout ---\n{stdout}--- stderr ---\n{stderr}"));
         });
+        assert_fast_mode_agrees(&suffix, &program, &root, &stdout, &result);
     });
 }
 
@@ -223,8 +186,9 @@ fn run_fail() {
         let Entry::Test(suffix) = classify(path, "run-fail") else {
             return;
         };
-        let (stdout, _, result) = compile_and_execute(path, &suffix);
-        let Err(error) = result else {
+        let (program, root, _) = compile(path, &suffix);
+        let (stdout, result) = execute_in(&program, &root, true);
+        let Err(error) = &result else {
             panic!("expected a runtime error");
         };
         snapshot_settings(&suffix).bind(|| {
@@ -232,6 +196,7 @@ fn run_fail() {
                 "--- stdout ---\n{stdout}--- runtime error ---\n{error}\n"
             ));
         });
+        assert_fast_mode_agrees(&suffix, &program, &root, &stdout, &result);
     });
 }
 

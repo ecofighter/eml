@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use clap::{Parser, Subcommand};
-use eml_cli::{FsProvider, OutputSink, RunConfig, Session};
+use eml_cli::{FsProvider, RunConfig, Session, stdio_host};
 use eml_diagnostics::{has_errors, render};
 
 #[derive(Parser)]
@@ -22,9 +22,6 @@ enum Command {
         /// Detect reference-count leaks and use-after-free
         #[arg(long)]
         debug_heap: bool,
-        /// Run on the VM instead of the CEK interpreter (S10a only)
-        #[arg(long, hide = true)]
-        vm: bool,
         file: PathBuf,
     },
 }
@@ -45,11 +42,7 @@ fn main() -> ExitCode {
                 ExitCode::SUCCESS
             }
         }
-        Command::Run {
-            debug_heap,
-            vm,
-            file,
-        } => {
+        Command::Run { debug_heap, file } => {
             let Some(session) = load(&file) else {
                 return ExitCode::from(2);
             };
@@ -60,20 +53,9 @@ fn main() -> ExitCode {
             let Some(program) = compiled.program else {
                 return ExitCode::from(1);
             };
-            let result = if vm {
-                // 相対パスは CEK と同じくカレントディレクトリを基準にする
-                let host = eml_cli::stdio_host(PathBuf::new());
-                let config = eml_cli::VmRunConfig::default().with_debug_heap(debug_heap);
-                eml_cli::execute_vm(&program, &config, host)
-                    .map(drop)
-                    .map_err(|e| e.to_string())
-            } else {
-                eml_cli::execute(&program, &config, OutputSink::stdout())
-                    .map(drop)
-                    .map_err(|e| e.to_string())
-            };
-            match result {
-                Ok(()) => ExitCode::SUCCESS,
+            // 相対パスはカレントディレクトリを基準にする
+            match eml_cli::execute(&program, &config, stdio_host(PathBuf::new())) {
+                Ok(_) => ExitCode::SUCCESS,
                 Err(error) => {
                     eprintln!("runtime error: {error}");
                     ExitCode::from(1)

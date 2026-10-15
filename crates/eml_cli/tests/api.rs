@@ -1,5 +1,5 @@
 use eml_cli::{
-    FsProvider, ModulePath, ModuleSource, OutputSink, ReadError, RunConfig, Session, execute,
+    FsProvider, ModulePath, ModuleSource, ReadError, RunConfig, Session, capture_host, execute,
 };
 use eml_diagnostics::{Diagnostic, has_errors};
 use eml_test_support::MemorySource;
@@ -93,9 +93,9 @@ fn execute_runs_a_compiled_program() {
         .compile()
         .program
         .unwrap();
-    let (sink, _) = OutputSink::capture();
+    let (host, _) = capture_host(std::path::PathBuf::new());
     assert_eq!(
-        execute(&program, &RunConfig::default(), sink).map(|_| ()),
+        execute(&program, &RunConfig::default(), host).map(|_| ()),
         Ok(())
     );
 }
@@ -272,11 +272,11 @@ fn session_is_send_and_sync() {
 }
 
 #[test]
-fn execute_vm_runs_a_compiled_program_and_counts_its_work() {
+fn execute_counts_its_work() {
     let program = single(TWICE).compile().program.unwrap();
-    let (host, output) = eml_cli::capture_host(std::path::PathBuf::new());
-    let config = eml_cli::VmRunConfig::default().with_debug_heap(true);
-    let stats: eml_cli::VmRunStats = eml_cli::execute_vm(&program, &config, host).unwrap();
+    let (host, output) = capture_host(std::path::PathBuf::new());
+    let config = RunConfig::default().with_debug_heap(true);
+    let stats: eml_cli::RunStats = execute(&program, &config, host).unwrap();
     assert_eq!(output.contents(), "xx\n");
     assert!(stats.string_bytes_copied > 0);
 }

@@ -170,9 +170,7 @@ dependencies = [
  "eml_core_ir",
  "eml_diagnostics",
  "eml_hir",
- "eml_interp",
  "eml_lir",
- "eml_runtime",
  "eml_test_support",
  "eml_types",
  "eml_vm",
@@ -218,16 +216,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "eml_interp"
-version = "0.1.0"
-dependencies = [
- "eml_extern",
- "eml_lir",
- "eml_rt",
- "eml_runtime",
-]
-
-[[package]]
 name = "eml_lir"
 version = "0.1.0"
 dependencies = [
@@ -241,10 +229,6 @@ version = "0.1.0"
 dependencies = [
  "vstd",
 ]
-
-[[package]]
-name = "eml_runtime"
-version = "0.1.0"
 
 [[package]]
 name = "eml_syntax"
@@ -265,9 +249,7 @@ dependencies = [
  "eml_core_ir",
  "eml_diagnostics",
  "eml_hir",
- "eml_interp",
  "eml_lir",
- "eml_runtime",
  "eml_syntax",
  "eml_types",
  "eml_vm",

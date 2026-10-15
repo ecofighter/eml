@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use eml_lir::Program;
 use eml_rt::{Control, Fast, Limits};
-use eml_test_support::execute_vm;
+use eml_test_support::execute;
 use eml_vm::{RuntimeError, compile, disassemble};
 
 pub fn parse(text: &str) -> Program {
@@ -20,12 +20,12 @@ fn verified(text: &str) -> Program {
 /// (docs/implementation/testing.md の「`eml_vm` のテスト」)。
 pub fn run_lir(text: &str) -> (String, Result<(), RuntimeError>) {
     let program = verified(text);
-    let (out, result) = execute_vm(
+    let (out, result) = execute(
         &program,
         &eml_vm::RunConfig::default().with_debug_heap(true),
     );
     if result.is_ok() {
-        let (fast_out, fast) = execute_vm(
+        let (fast_out, fast) = execute(
             &program,
             &eml_vm::RunConfig::default().with_debug_heap(false),
         );
@@ -37,7 +37,7 @@ pub fn run_lir(text: &str) -> (String, Result<(), RuntimeError>) {
 
 /// verifier を通さずに、検査モードだけで実行する。verifier が拒む IR で、VM 自身の見張りを確かめるテストのためである。
 pub fn run_unverified(text: &str) -> (String, Result<(), RuntimeError>) {
-    let (out, result) = execute_vm(
+    let (out, result) = execute(
         &parse(text),
         &eml_vm::RunConfig::default().with_debug_heap(true),
     );

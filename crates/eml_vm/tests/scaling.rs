@@ -4,12 +4,12 @@
 
 use std::fmt::Write;
 
-use eml_test_support::{execute_vm, lir, run_stats_vm, run_vm};
+use eml_test_support::{execute, lir, run, run_stats};
 use eml_vm::RunStats;
 
 /// 正常に終わった実行の回数。生成したソースが意図どおりに走ったことを、出力でも確かめる。
 fn stats(text: &str, expected: &str) -> RunStats {
-    let (out, result) = run_stats_vm(text);
+    let (out, result) = run_stats(text);
     assert_eq!(out, expected);
     result.unwrap_or_else(|error| panic!("{error}"))
 }
@@ -641,7 +641,7 @@ fn list_program(n: u64, body: &str) -> String {
 #[test]
 fn showing_a_list_copies_bytes_in_proportion_to_its_length() {
     let copied = |n: u64| {
-        let (_, result) = run_stats_vm(&list_program(n, "println (show xs)"));
+        let (_, result) = run_stats(&list_program(n, "println (show xs)"));
         result
             .unwrap_or_else(|error| panic!("{error}"))
             .string_bytes_copied
@@ -708,7 +708,7 @@ fn long_statement_sequence_does_not_overflow_the_stack() {
     // 逐次の文は入れ子ではないので、後段とコード生成は長い文の列を再帰せずに処理しなければならない
     let mut body = "  let s = \"x\"\n".repeat(5000);
     body.push_str("  println s");
-    assert_eq!(run_vm(&main_with(&body)), ("x\n".to_string(), Ok(())));
+    assert_eq!(run(&main_with(&body)), ("x\n".to_string(), Ok(())));
 }
 
 #[test]
@@ -732,7 +732,7 @@ fn long_sequence_of_if_statements_does_not_overflow_the_stack() {
         .filter(|block| matches!(block.term, eml_lir::Term::Switch { .. }))
         .count();
     assert_eq!(switches, COUNT);
-    let (out, result) = execute_vm(
+    let (out, result) = execute(
         &program,
         &eml_vm::RunConfig::default().with_debug_heap(true),
     );
@@ -750,7 +750,7 @@ fn a_match_with_a_thousand_literals_runs_in_a_debug_build() {
     text.push_str(
         "    | _ -> 0\n\nmain : Unit -> <IO> Unit\nmain () = println (show (pick 999))\n",
     );
-    assert_eq!(run_vm(&text), ("1000\n".to_string(), Ok(())));
+    assert_eq!(run(&text), ("1000\n".to_string(), Ok(())));
 }
 
 #[test]
@@ -767,5 +767,5 @@ fn a_match_with_a_thousand_shared_arms_runs_in_a_debug_build() {
     text.push_str(
         "  | _ -> 0\n\nmain : Unit -> <IO> Unit\nmain () = println (show (pick B 999))\n",
     );
-    assert_eq!(run_vm(&text), ("999\n".to_string(), Ok(())));
+    assert_eq!(run(&text), ("999\n".to_string(), Ok(())));
 }

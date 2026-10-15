@@ -4,7 +4,7 @@
 
 use std::path::{Path, PathBuf};
 
-use eml_test_support::run_stats_vm;
+use eml_test_support::run_stats;
 use eml_vm::RunStats;
 
 /// テストを持つ基準のプログラム。`bench/` にプログラムを足したら、ここと下のテストの関数の両方に足す。
@@ -19,7 +19,7 @@ fn stats(name: &str, expected: &str) -> RunStats {
     let path = bench_dir().join(format!("{name}.em"));
     let text = std::fs::read_to_string(&path)
         .unwrap_or_else(|error| panic!("{}: {error}", path.display()));
-    let (out, result) = run_stats_vm(&text);
+    let (out, result) = run_stats(&text);
     // 実行時エラーやリークで止まると出力も欠けるので、出力の差だけでなく止まった理由も見せる
     assert_eq!(out, expected, "{result:?}");
     result.unwrap_or_else(|error| panic!("{error}"))

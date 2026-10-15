@@ -15,9 +15,7 @@ eml_hir = { path = "crates/eml_hir" }
 eml_types = { path = "crates/eml_types" }
 eml_core_ir = { path = "crates/eml_core_ir" }
 eml_lir = { path = "crates/eml_lir" }
-eml_runtime = { path = "crates/eml_runtime" }
 eml_rt = { path = "crates/eml_rt" }
-eml_interp = { path = "crates/eml_interp" }
 eml_vm = { path = "crates/eml_vm" }
 eml_cli = { path = "crates/eml_cli", default-features = false }
 eml_test_support = { path = "crates/eml_test_support", default-features = false }

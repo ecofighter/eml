@@ -13,9 +13,7 @@ use std::fmt::Write;
 use eml_cli::Session;
 use eml_diagnostics::{Diagnostic, FileId, Label, LineCol, SourceFiles, sort_diagnostics};
 #[cfg(feature = "run")]
-use eml_interp::{RunConfig, RunStats, RuntimeError};
-#[cfg(feature = "run")]
-use eml_runtime::OutputSink;
+use eml_vm::{RunConfig, RunStats, RuntimeError};
 
 pub struct Parsed {
     pub files: SourceFiles,
@@ -267,7 +265,7 @@ fn compiled<P>(compiled: eml_cli::Compiled<P>) -> P {
         .unwrap_or_else(|| panic!("{:#?}", compiled.diagnostics))
 }
 
-/// 実行のテストでは、つねに `debug_heap` を有効にする (docs/implementation/testing.md)。
+/// 実行のテストは、つねに検査モードで流す (docs/implementation/testing.md)。
 #[cfg(feature = "run")]
 pub fn run(text: &str) -> (String, Result<(), RuntimeError>) {
     run_files(text, &[])
@@ -275,67 +273,34 @@ pub fn run(text: &str) -> (String, Result<(), RuntimeError>) {
 
 #[cfg(feature = "run")]
 pub fn run_files(entry: &str, modules: &[(&str, &str)]) -> (String, Result<(), RuntimeError>) {
-    without_stats(run_program(&lir_files(entry, modules), true))
+    let (out, result) = execute(&lir_files(entry, modules), &checked());
+    (out, result.map(|_| ()))
 }
 
-/// `RunStats` (仕事の回数とヒープの物体の数の最大) も返す。数を比べるテスト (`eml_interp` の `scaling.rs`) のため。
+/// `RunStats` (仕事の回数と、ヒープの物体とスタックの語の数の最大) も返す。数を比べるテスト (`eml_vm` の
+/// `scaling.rs` と `bench.rs`) のため。
 #[cfg(feature = "run")]
 pub fn run_stats(text: &str) -> (String, Result<RunStats, RuntimeError>) {
-    run_program(&lir(text), true)
+    execute(&lir(text), &checked())
 }
 
-/// 手で書いた LIR を実行する。
+/// 上限のない新しい `Control` を持つ、検査モードの設定。止める理由のビットは `Control::clear` でしか下りないので、
+/// 設定を使い回すと前の実行で立ったビットで次の実行が止まる。そのため実行ごとに作る。
 #[cfg(feature = "run")]
-pub fn execute(program: eml_lir::Program, debug_heap: bool) -> (String, Result<(), RuntimeError>) {
-    without_stats(run_program(&program, debug_heap))
+fn checked() -> RunConfig {
+    RunConfig::default().with_debug_heap(true)
 }
 
-/// 実行の設定と出力の受け口は、ここだけで組み立てる。
+/// LIR を実行する。出力はメモリの Host に捕まえ、相対パスはカレントディレクトリを基準にする。上限の値に頼るテストは、
+/// `RunConfig` を自分で作って渡す。
 #[cfg(feature = "run")]
-fn run_program(
+pub fn execute(
     program: &eml_lir::Program,
-    debug_heap: bool,
+    config: &RunConfig,
 ) -> (String, Result<RunStats, RuntimeError>) {
-    let (sink, captured) = OutputSink::capture();
-    let config = RunConfig::default().with_debug_heap(debug_heap);
-    let result = eml_cli::execute(program, &config, sink);
-    (captured.contents(), result)
-}
-
-/// 回数を見ないテストの期待値を `Ok(())` のままにするため、回数を捨てる。
-#[cfg(feature = "run")]
-fn without_stats(
-    (out, result): (String, Result<RunStats, RuntimeError>),
-) -> (String, Result<(), RuntimeError>) {
-    (out, result.map(|_| ()))
-}
-
-/// 手で書いた LIR を VM で実行する。出力はメモリに捕まえる。
-#[cfg(feature = "run")]
-pub fn execute_vm(
-    program: &eml_lir::Program,
-    config: &eml_vm::RunConfig,
-) -> (String, Result<eml_vm::RunStats, eml_vm::RuntimeError>) {
-    let (host, out) = eml_vm::capture_host(std::path::PathBuf::new());
-    let result = eml_vm::execute(program, config, host);
+    let (host, out) = eml_cli::capture_host(std::path::PathBuf::new());
+    let result = eml_cli::execute(program, config, host);
     (out.contents(), result)
-}
-
-/// ソースを VM の検査モードで実行する。
-#[cfg(feature = "run")]
-pub fn run_vm(text: &str) -> (String, Result<(), eml_vm::RuntimeError>) {
-    let (out, result) = run_stats_vm(text);
-    (out, result.map(|_| ()))
-}
-
-/// `RunStats` も返す。VM の数を固定するテストのために使う。止める理由のビットは前の実行から持ち越されるので、実行
-/// ごとに新しい `Control` を持つ設定を作る。
-#[cfg(feature = "run")]
-pub fn run_stats_vm(text: &str) -> (String, Result<eml_vm::RunStats, eml_vm::RuntimeError>) {
-    execute_vm(
-        &lir(text),
-        &eml_vm::RunConfig::default().with_debug_heap(true),
-    )
 }
 
 /// 1件を `E0001 1:2 message` の1行にする。期待値を読みやすくするため、位置はバイトではなく行と列にする。

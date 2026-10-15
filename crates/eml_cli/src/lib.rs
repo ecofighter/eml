@@ -12,9 +12,10 @@ use eml_diagnostics::{Diagnostic, FileId, SourceFiles, sort_diagnostics};
 
 pub use eml_hir::{ModulePath, ModuleSource, ReadError};
 #[cfg(feature = "run")]
-pub use eml_interp::{RunConfig, RunStats, RuntimeError};
-#[cfg(feature = "run")]
-pub use eml_runtime::{Captured, OutputSink};
+pub use eml_vm::{
+    Capture, Control, HostRef, Limits, RunConfig, RunStats, RuntimeError, SourceLocation, Stop,
+    VmFault, capture_host, stdio_host,
+};
 pub use fs_provider::FsProvider;
 
 /// `DefMap` と、読み込みの段と def_map の段の診断。
@@ -220,25 +221,7 @@ impl Session {
 pub fn execute(
     program: &eml_lir::Program,
     config: &RunConfig,
-    stdout: OutputSink,
-) -> Result<RunStats, RuntimeError> {
-    eml_interp::run(program, config, &stdout)
-}
-
-/// VM で実行する。S10a の間は `eml run --vm` とテストだけが使い、既定の `eml run` は CEK のままである
-/// (docs/spec/vm.md の「置き場所」)。
-#[cfg(feature = "run")]
-pub fn execute_vm(
-    program: &eml_lir::Program,
-    config: &VmRunConfig,
     host: HostRef,
-) -> Result<VmRunStats, VmRuntimeError> {
+) -> Result<RunStats, RuntimeError> {
     eml_vm::execute(program, config, host)
 }
-
-// CEK の `RunConfig`、`RunStats`、`RuntimeError` と名前がぶつかるので、切り替えまで別の名前で公開する
-#[cfg(feature = "run")]
-pub use eml_vm::{
-    Capture, HostRef, RunConfig as VmRunConfig, RunStats as VmRunStats,
-    RuntimeError as VmRuntimeError, VmFault, capture_host, stdio_host,
-};
