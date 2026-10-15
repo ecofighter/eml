@@ -9,8 +9,8 @@ use super::Core;
 use super::check::UNCOUNTED;
 #[cfg(verus_only)]
 use super::inv::{
-    p_code, p_count, p_extended, p_first, p_gen, p_init, p_kind, p_meta, p_owner, p_scanned,
-    p_word, prefix_kept, prefix_recounted, state_code, string_wf,
+    p_code, p_count, p_extended, p_filled, p_first, p_gen, p_init, p_kind, p_meta, p_owner,
+    p_scanned, p_word, prefix_kept, prefix_recounted, state_code, string_wf,
 };
 #[cfg(verus_only)]
 use super::model::{BlockState, Model, Pos};
@@ -135,6 +135,7 @@ impl Core {
             ==> self.cap(h) >= 1 && p_init(p, 0))
         &&& st == BlockState::Live || st == BlockState::Dying ==> (p_kind(p) == Kind::String
             ==> string_wf(p, self.cap(h)))
+        &&& st != BlockState::Freed && p_kind(p) == Kind::Data ==> p_filled(p, self.cap(h))
         &&& st == BlockState::Building ==> p_kind(p) != Kind::String
         &&& st == BlockState::Live || st == BlockState::Dying || st == BlockState::Token ==> forall|
             i: int,
@@ -539,6 +540,7 @@ impl Core {
             self.state(h) == BlockState::Building ==> self.model@.written[h] == Set::<int>::empty(),
             self.state(h) == BlockState::Token ==> p_kind(self.perm(h)) == Kind::Data,
             self.state(h) == BlockState::Building ==> p_kind(self.perm(h)) != Kind::String,
+            p_kind(self.perm(h)) == Kind::Data ==> p_kind(s0.perm(h)) == Kind::Data,
             forall|i: int| #[trigger]
                 self.model@.kept.contains((h, i)) ==> p_scanned(self.perm(h), i) && p_scanned(
                     s0.perm(h),
@@ -575,6 +577,9 @@ impl Core {
             }
         }
         assert(p.wf(self.block(h), self.cap(h), self.checked()));
+        if p_kind(p) == Kind::Data {
+            assert(p_filled(q, s0.cap(h)));
+        }
         assert(self.safe_perm_wf(p, h, self.state(h), self.model@.written[h]));
         assert(self.safe_block_wf(h));
         self.lemma_safe_step(s0, h);

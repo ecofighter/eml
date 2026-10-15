@@ -2,6 +2,8 @@
 
 use vstd::prelude::*;
 #[cfg(verus_only)]
+use vstd::raw_ptr::PointsTo;
+#[cfg(verus_only)]
 use vstd::utf8::valid_utf8;
 
 use super::Core;
@@ -122,6 +124,42 @@ pub(crate) open spec fn string_wf(p: BlockPerm, cap: nat) -> bool {
     &&& p_word(p, 0).bits_spec() == p.text().len()
     &&& p.text().len() <= 8 * (cap - 1)
     &&& valid_utf8(p.text())
+}
+
+/// ペイロードの語は、容量の終わりまですべて書いてある。`Data` の物体は生の語の数を持たないので、回復が生の語を容量の
+/// 終わりまで写せるように、`Data` のブロックはいつもこの形にする
+/// (docs/superpowers/specs/2026-10-16-s11b-recovery-design.md の「走査しない語」)。
+pub(crate) open spec fn p_filled(p: BlockPerm, cap: nat) -> bool {
+    slots_filled(p.slots, cap)
+}
+
+/// 語の権限の表を引数に取るのは、表が同じなら `p_filled` も同じだと量化子を開かずに分かるようにするためである。
+pub(crate) open spec fn slots_filled(slots: Map<int, PointsTo<Word>>, cap: nat) -> bool {
+    forall|i: int| 0 <= i < cap ==> slots.contains_key(i) && (#[trigger] slots[i]).is_init()
+}
+
+/// どの語も書いてあれば、`p_filled` である。
+pub(crate) proof fn lemma_filled(p: BlockPerm, cap: nat)
+    requires
+        forall|i: int| 0 <= i < cap ==> #[trigger] p_init(p, i),
+    ensures
+        p_filled(p, cap),
+{
+    assert forall|i: int| 0 <= i < cap implies p.slots.contains_key(i) && (
+    #[trigger] p.slots[i]).is_init() by {
+        assert(p_init(p, i));
+    }
+}
+
+/// `p_filled` なら、容量の中のどの語も書いてある。
+pub(crate) proof fn lemma_filled_init(p: BlockPerm, cap: nat, i: int)
+    requires
+        p_filled(p, cap),
+        0 <= i < cap,
+    ensures
+        p_init(p, i),
+{
+    assert(p.slots.contains_key(i) && p.slots[i].is_init());
 }
 
 /// i 語目は走査する語である。
@@ -407,6 +445,7 @@ impl Core {
             ==> self.cap(h) >= 1 && p_init(p, 0))
         &&& st == BlockState::Live || st == BlockState::Dying ==> (p_kind(p) == Kind::String
             ==> string_wf(p, self.cap(h)))
+        &&& st != BlockState::Freed && p_kind(p) == Kind::Data ==> p_filled(p, self.cap(h))
         &&& st == BlockState::Building ==> p_kind(p) != Kind::String
         &&& st == BlockState::Live ==> forall|i: int| #[trigger]
             p_scanned(p, i) ==> self.slot_word(p, h, i)

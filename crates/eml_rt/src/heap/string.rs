@@ -311,6 +311,7 @@ impl Core {
             s0.safe_wf(),
             s0.dom().contains(h),
             s0.state(h) == BlockState::Live,
+            s0.kind(h) == Kind::String,
             self.text_changed(s0, h),
         ensures
             self.safe_wf(),

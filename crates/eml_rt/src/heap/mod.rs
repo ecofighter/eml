@@ -70,7 +70,8 @@ use field::field_edges;
 use handover::handover;
 #[cfg(verus_only)]
 use inv::{
-    p_code, p_count, p_first, p_init, p_kind, p_meta, p_owner, p_scanned, p_word, state_code,
+    p_code, p_count, p_filled, p_first, p_init, p_kind, p_meta, p_owner, p_scanned, p_word,
+    state_code,
 };
 #[cfg(verus_only)]
 use model::BlockState;
@@ -207,6 +208,68 @@ pub(crate) open spec fn unit_filled(p: BlockPerm, lo: int, hi: int) -> bool {
     forall|j: int|
         #![trigger p_init(p, j)]
         lo <= j < hi ==> p_init(p, j) && p_word(p, j).bits_spec() == 1
+}
+
+/// ブロック `h` のペイロードの [from, to) の語に 0 を書く。ほかの語と欄は変えない。
+fn fill_zero(
+    h: *mut Header,
+    Tracked(perm): Tracked<&mut BlockPerm>,
+    from: usize,
+    to: usize,
+    Ghost(cap): Ghost<nat>,
+    Ghost(prefixed): Ghost<bool>,
+)
+    requires
+        old(perm).wf(h, cap, prefixed),
+        from <= to <= cap,
+        h@.addr + 8 * (HEADER_WORDS + cap) <= usize::MAX,
+    ensures
+        final(perm).wf(h, cap, prefixed),
+        final(perm).rc == old(perm).rc,
+        final(perm).meta == old(perm).meta,
+        final(perm).prefix == old(perm).prefix,
+        final(perm).text == old(perm).text,
+        forall|j: int|
+            from <= j < to ==> #[trigger] p_init(*final(perm), j) && p_word(
+                *final(perm),
+                j,
+            ).bits_spec() == 0,
+        forall|j: int| !(from <= j < to) ==> #[trigger] final(perm).slots[j] == old(perm).slots[j],
+{
+    let ghost start = *perm;
+    let mut i = from;
+    while i < to
+        invariant
+            perm.wf(h, cap, prefixed),
+            perm.rc == start.rc,
+            perm.meta == start.meta,
+            perm.prefix == start.prefix,
+            perm.text == start.text,
+            from <= i <= to <= cap,
+            h@.addr + 8 * (HEADER_WORDS + cap) <= usize::MAX,
+            forall|j: int|
+                from <= j < i ==> #[trigger] p_init(*perm, j) && p_word(*perm, j).bits_spec() == 0,
+            forall|j: int| !(from <= j < i) ==> #[trigger] perm.slots[j] == start.slots[j],
+        decreases to - i,
+    {
+        let ghost before = *perm;
+        let zero = Word::from_bits(0);
+        let tracked mut slot = perm.slots.tracked_remove(i as int);
+        ptr_mut_write(slot_ptr(h, i), Tracked(&mut slot), zero);
+        proof {
+            perm.slots.tracked_insert(i as int, slot);
+            assert(perm.slots =~= before.slots.insert(i as int, slot));
+            assert forall|j: int| from <= j < i + 1 implies #[trigger] p_init(*perm, j) && p_word(
+                *perm,
+                j,
+            ).bits_spec() == 0 by {
+                if j != i {
+                    assert(p_init(before, j));
+                }
+            }
+        }
+        i += 1;
+    }
 }
 
 /// `()` を書いた範囲は、次の語に `()` を書くと1語伸びる。
@@ -838,6 +901,29 @@ impl<M: Mode> Heap<M> {
         self.settle();
         let ghost s1 = *self;
         let (h, Tracked(perm)) = self.alloc_header(payload_words, rc, meta);
+        let tracked mut perm = perm;
+        let cap_words = {
+            let tracked hdr = self.core.pages.tracked_block_header(h@.addr);
+            self.core.pages.cap_in(h, Tracked(hdr))
+        };
+        proof {
+            assert(self.core.pages.in_use().contains(h@.addr));
+            assert(!self.core.region_has(h@.addr));
+        }
+        // 呼ぶ側が書く前の語も初期化しておく。`Data` の語は容量の終わりまで書いてある不変条件のためである
+        // (docs/superpowers/specs/2026-10-16-s11b-recovery-design.md の「走査しない語」)
+        fill_zero(
+            h,
+            Tracked(&mut perm),
+            0,
+            cap_words,
+            Ghost(self.core.cap(h@.addr)),
+            Ghost(M::CHECKED),
+        );
+        proof {
+            assert(cap_words == self.core.cap(h@.addr));
+            inv::lemma_filled(perm, self.core.cap(h@.addr));
+        }
         let ghost mid = self.core;
         proof {
             check::lemma_alive_code();
@@ -1032,6 +1118,43 @@ impl<M: Mode> Heap<M> {
             }
             i += 1;
         }
+        let cap_words = {
+            let tracked hdr = self.core.pages.tracked_block_header(h@.addr);
+            self.core.pages.cap_in(h, Tracked(hdr))
+        };
+        proof {
+            // 確保器から取ったばかりのブロックは塊のブロックでないので、ペイロードの語の数は確保器のものである
+            assert(self.core.pages.in_use().contains(h@.addr));
+            assert(!self.core.region_has(h@.addr));
+            assert(cap_words == cap);
+        }
+        let ghost scanned_perm = perm;
+        fill_zero(h, Tracked(&mut perm), first + scanned, cap_words, Ghost(cap), Ghost(M::CHECKED));
+        proof {
+            assert(unit_filled(perm, first as int, first + scanned)) by {
+                assert forall|j: int|
+                    #![trigger p_init(perm, j)]
+                    first <= j < first + scanned implies p_init(perm, j) && p_word(
+                    perm,
+                    j,
+                ).bits_spec() == 1 by {
+                    assert(perm.slots[j] == scanned_perm.slots[j]);
+                    assert(p_init(scanned_perm, j));
+                }
+            }
+            if extended {
+                assert(perm.slots[0] == scanned_perm.slots[0]);
+            }
+            assert forall|j: int| 0 <= j < cap implies #[trigger] p_init(perm, j) by {
+                if j < first + scanned {
+                    assert(perm.slots[j] == scanned_perm.slots[j]);
+                    if j >= first {
+                        assert(p_init(scanned_perm, j));
+                    }
+                }
+            }
+            inv::lemma_filled(perm, cap);
+        }
         let ghost mid = self.core;
         proof {
             assert(i == scanned);
@@ -1126,6 +1249,7 @@ impl<M: Mode> Heap<M> {
             first + scanned <= self.core.cap(h@.addr),
             extended ==> p_init(perm, 0) && p_word(perm, 0).bits_spec() == scanned,
             unit_filled(perm, first as int, first + scanned),
+            p_filled(perm, self.core.cap(h@.addr)),
         ensures
             self.core.perm_wf(perm, h@.addr, BlockState::Live, Set::empty(), self.worker),
             p_count(perm) == scanned,

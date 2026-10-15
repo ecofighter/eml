@@ -271,7 +271,26 @@ fn a_wrapping_size_panics_before_allocating<M: Mode>() {
     }
 }
 
+/// `alloc_data` は生の語を容量の終わりまで 0 で埋める。速いモードは解放したブロックを使い回すので、前の物体の生の語が
+/// 残っていないことを確かめる。回復が生の語を写すのに使う。
+fn the_raw_words_of_new_data_read_zero<M: Mode>() {
+    let mut heap = Heap::<M>::new();
+    let a = heap.alloc_data(0, 1, 2, false);
+    unsafe {
+        heap.set_raw(a, 1, 0xdead).unwrap();
+        heap.set_raw(a, 2, 0xbeef).unwrap();
+        heap.decref(a).unwrap();
+    }
+    let b = heap.alloc_data(0, 1, 2, false);
+    let cap = heap.core.cap_get(b.as_ptr());
+    for i in 1..cap {
+        assert_eq!(unsafe { heap.raw(b, i) }, Ok(0), "raw word {i}");
+    }
+    unsafe { heap.decref(b) }.unwrap();
+}
+
 both_modes!(
+    the_raw_words_of_new_data_read_zero,
     a_wrapping_size_panics_before_allocating,
     a_cons_list_is_freed_by_one_decref,
     a_dupped_object_survives_one_decref,
