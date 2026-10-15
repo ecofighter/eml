@@ -550,8 +550,8 @@ fn a_read_stops_on_an_interrupt<M: Mode>() {
 }
 
 /// 読みが `EINTR` で戻ったとき、止める語が立っていれば読み直さずに止め、File を手放す。REPL の SIGINT のハンドラは
-/// `SA_RESTART` を外して入れるので、待っている読みはこの形で戻る (docs/spec/object-model.md の「`File`」)。読み直すと、
-/// テストの読み手は 100 回の後に読みの誤りを返すので、`Io` の誤りになる。
+/// `SA_RESTART` を外して入れるので、待っている読みはこの形で戻る (docs/spec/object-model.md の「`File`」)。読み直すと
+/// テストの読み手が panic するので、読みをすぐ止めなければテストが落ちる。
 fn an_interrupted_read_stops_when_the_stop_word_is_set<M: Mode>() {
     let memory = Arc::new(MemoryHost::default());
     let control = Arc::new(Control::new(Limits::default()));

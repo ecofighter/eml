@@ -21,9 +21,9 @@ pub(super) struct MemoryFile {
     pub(super) fail_after: Option<usize>,
     /// 最初の読みで `Interrupted` を1回返す
     pub(super) interrupt_once: bool,
-    /// 読むたびにこの `Control` に割り込みを立て、`Interrupted` を返す。SIGINT のハンドラが止める語を立てた後に、
-    /// 待っている読みが `EINTR` で戻ることを表す。100 回を超えると、読み直しが続いたことを `Interrupted` でない誤りで
-    /// 知らせる
+    /// 最初の読みでこの `Control` に割り込みを立て、`Interrupted` を返す。SIGINT のハンドラが止める語を立てた後に、
+    /// 待っている読みが `EINTR` で戻ることを表す。その後にもう一度読むと読み手が panic するので、すぐ止めなければ
+    /// テストが落ちる
     pub(super) interrupt_with: Option<Arc<crate::Control>>,
     /// 読み手が落ちた回数
     pub(super) drops: Option<Arc<AtomicUsize>>,
@@ -43,16 +43,13 @@ struct Reader {
     file: MemoryFile,
     at: usize,
     interrupted: bool,
-    interrupts: usize,
 }
 
 impl Read for Reader {
     fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
         if let Some(control) = &self.file.interrupt_with {
-            self.interrupts += 1;
-            if self.interrupts > 100 {
-                return Err(io::Error::other("the read kept being interrupted"));
-            }
+            assert!(!self.interrupted, "the read was retried after an interrupt");
+            self.interrupted = true;
             control.interrupt();
             return Err(io::Error::from(io::ErrorKind::Interrupted));
         }
@@ -140,7 +137,6 @@ impl Host for MemoryHost {
             file,
             at: 0,
             interrupted: false,
-            interrupts: 0,
         }));
         Ok(Opened { reader, size })
     }
