@@ -180,3 +180,26 @@ fn a_miscased_entry_path_is_still_the_entry() {
     assert!(!stderr.contains("[E1027]"), "{stderr}");
     assert!(stderr.contains("t/Server.em"), "{stderr}");
 }
+
+#[test]
+fn run_on_the_vm_prints_the_program_output() {
+    let output = eml(&["run", "--vm", "--debug-heap", "run/basics/hello.em"]);
+    assert_eq!(output.status.code(), Some(0), "{output:?}");
+    assert_eq!(String::from_utf8_lossy(&output.stdout), "Hello, world!\n");
+}
+
+#[test]
+fn a_runtime_error_on_the_vm_exits_with_one() {
+    let output = eml(&[
+        "run",
+        "--vm",
+        "--debug-heap",
+        "run-fail/basics/division_by_zero.em",
+    ]);
+    assert_eq!(output.status.code(), Some(1));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.starts_with("runtime error: division by zero\n  at "),
+        "{stderr}"
+    );
+}

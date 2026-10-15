@@ -321,6 +321,19 @@ pub fn execute_vm(
     (out.contents(), result)
 }
 
+/// ソースを VM の検査モードで実行する。
+#[cfg(feature = "run")]
+pub fn run_vm(text: &str) -> (String, Result<(), eml_vm::VmError>) {
+    let (out, result) = execute_vm(&lir(text), true);
+    (out, result.map(|_| ()))
+}
+
+/// `RunStats` も返す。VM の数を固定するテストのために使う。
+#[cfg(feature = "run")]
+pub fn run_stats_vm(text: &str) -> (String, Result<eml_vm::RunStats, eml_vm::VmError>) {
+    execute_vm(&lir(text), true)
+}
+
 /// 1件を `E0001 1:2 message` の1行にする。期待値を読みやすくするため、位置はバイトではなく行と列にする。
 pub fn short(files: &SourceFiles, diagnostics: &[Diagnostic]) -> Vec<String> {
     diagnostics

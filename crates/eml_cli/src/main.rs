@@ -22,6 +22,9 @@ enum Command {
         /// Detect reference-count leaks and use-after-free
         #[arg(long)]
         debug_heap: bool,
+        /// Run on the VM instead of the CEK interpreter (S10a only)
+        #[arg(long, hide = true)]
+        vm: bool,
         file: PathBuf,
     },
 }
@@ -42,7 +45,11 @@ fn main() -> ExitCode {
                 ExitCode::SUCCESS
             }
         }
-        Command::Run { debug_heap, file } => {
+        Command::Run {
+            debug_heap,
+            vm,
+            file,
+        } => {
             let Some(session) = load(&file) else {
                 return ExitCode::from(2);
             };
@@ -53,6 +60,17 @@ fn main() -> ExitCode {
             let Some(program) = compiled.program else {
                 return ExitCode::from(1);
             };
+            if vm {
+                // 相対パスは CEK と同じくカレントディレクトリを基準にする
+                let host = eml_cli::stdio_host(PathBuf::new());
+                return match eml_cli::execute_vm(&program, debug_heap, host) {
+                    Ok(_) => ExitCode::SUCCESS,
+                    Err(error) => {
+                        eprintln!("runtime error: {error}");
+                        ExitCode::from(1)
+                    }
+                };
+            }
             match eml_cli::execute(&program, &config, OutputSink::stdout()) {
                 Ok(_) => ExitCode::SUCCESS,
                 Err(error) => {

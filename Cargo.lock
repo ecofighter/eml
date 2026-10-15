@@ -175,6 +175,7 @@ dependencies = [
  "eml_runtime",
  "eml_test_support",
  "eml_types",
+ "eml_vm",
  "insta",
 ]
 

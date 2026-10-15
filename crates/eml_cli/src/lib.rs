@@ -224,3 +224,19 @@ pub fn execute(
 ) -> Result<RunStats, RuntimeError> {
     eml_interp::run(program, config, &stdout)
 }
+
+/// VM で実行する。S10a の間は `eml run --vm` とテストだけが使い、既定の `eml run` は CEK のままである
+/// (docs/spec/vm.md の「置き場所」)。
+#[cfg(feature = "run")]
+pub fn execute_vm(
+    program: &eml_lir::Program,
+    debug_heap: bool,
+    host: HostRef,
+) -> Result<VmRunStats, VmError> {
+    eml_vm::execute(program, debug_heap, host)
+}
+
+#[cfg(feature = "run")]
+pub use eml_vm::{
+    Capture, HostRef, RunStats as VmRunStats, VmError, VmFault, capture_host, stdio_host,
+};
