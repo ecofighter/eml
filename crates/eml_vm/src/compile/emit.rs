@@ -432,14 +432,6 @@ impl<'a, M: Mode> Emitter<'a, M> {
 
     fn prim(&mut self, prim: &eml_lir::Prim, dst: Slot, a: &[Slot]) -> Op {
         use eml_lir::Prim;
-        // evidence の tag はエフェクトの番号 + 1 なので、番号は 65535 より小さい (docs/spec/object-model.md の
-        // 「evidence の3つの物体」)。速いモードの `ev_new` はこれを確かめない
-        let effect = |e: u32| {
-            u16::try_from(e)
-                .ok()
-                .filter(|&e| e < u16::MAX)
-                .expect("effect numbers are below 65535 (docs/spec/object-model.md)")
-        };
         let op_index = |o: u32| u16::try_from(o).expect("operations fit in 16 bits");
         match prim {
             Prim::EvvGet => Op::EvvGet { dst },
@@ -453,7 +445,7 @@ impl<'a, M: Mode> Emitter<'a, M> {
                 let start = self.out.effect_lists.len() as u32;
                 self.out
                     .effect_lists
-                    .extend(effects.iter().map(|&e| effect(e)));
+                    .extend(effects.iter().map(|&e| effect_number(e)));
                 let at = self
                     .out
                     .operands([start, effects.len() as u32, u32::from(a[0])]);
@@ -461,9 +453,12 @@ impl<'a, M: Mode> Emitter<'a, M> {
             }
             Prim::EvNew(e) => {
                 let n_ops = self.program.effects[*e as usize].operations.len() as u32;
-                let at =
-                    self.out
-                        .operands([effect(*e).into(), n_ops, u32::from(a[0]), u32::from(a[1])]);
+                let at = self.out.operands([
+                    effect_number(*e).into(),
+                    n_ops,
+                    u32::from(a[0]),
+                    u32::from(a[1]),
+                ]);
                 Op::EvNew { dst, at }
             }
             Prim::EvSetClause { effect: _, op } => {
@@ -477,7 +472,7 @@ impl<'a, M: Mode> Emitter<'a, M> {
             },
             Prim::EvLookup(e) => Op::EvLookup {
                 dst,
-                effect: effect(*e),
+                effect: effect_number(*e),
             },
             Prim::EvClause { effect: _, op } => Op::EvClause {
                 dst,
@@ -731,6 +726,16 @@ impl<'a, M: Mode> Emitter<'a, M> {
     }
 }
 
+/// エフェクトの番号を命令の `u16` にする。evidence の tag はエフェクトの番号 + 1 なので、番号は 65535 より小さい
+/// (docs/spec/object-model.md の「evidence の3つの物体」)。速いモードの `ev_new` はこれを確かめないので、コード生成が
+/// panic で確かめる。
+fn effect_number(e: u32) -> u16 {
+    u16::try_from(e)
+        .ok()
+        .filter(|&e| e < u16::MAX)
+        .expect("effect numbers are below 65535 (docs/spec/object-model.md)")
+}
+
 /// 算術と比較の extern の専用の命令 (docs/spec/vm.md の「基本操作と extern」)。
 fn arithmetic(ext: Extern, dst: Slot, args: &[Slot]) -> Option<Op> {
     if let (Extern::IntNeg, [a]) = (ext, args) {
@@ -764,4 +769,18 @@ fn arithmetic(ext: Extern, dst: Slot, args: &[Slot]) -> Option<Op> {
         | Extern::StrCompare
         | Extern::StrShow => return None,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::effect_number;
+
+    /// 番号 65534 までは変換し、65535 はコード生成で断る。番号 65535 のエフェクトを持つプログラムを作る統合テストは
+    /// 遅いので、変換の関数を直に確かめる。
+    #[test]
+    #[should_panic(expected = "effect numbers are below 65535")]
+    fn effect_65535_is_rejected_by_the_code_generator() {
+        assert_eq!(effect_number(65534), 65534);
+        effect_number(65535);
+    }
 }

@@ -265,28 +265,6 @@ b1(a.1: int, b.2: int):
     ");
 }
 
-/// evidence の tag はエフェクトの番号 + 1 なので、番号 65535 のエフェクトの evidence は作れない
-/// (docs/spec/object-model.md の「evidence の3つの物体」)。速いモードの `ev_new` はこれを確かめないので、コード生成で断る。
-#[test]
-#[should_panic(expected = "effect numbers are below 65535")]
-fn ev_new_of_effect_65535_is_rejected_by_the_code_generator() {
-    let mut text: String = (0..u16::MAX)
-        .map(|i| format!("effect E{i} {{ op(unit) -> unit }}\n"))
-        .collect();
-    text.push_str(
-        "\
-effect Last { op(unit) -> unit }
-fn main() -> unit {
-  let w.0: tobj = prim evv_get()
-  let e.1: obj = prim ev_new[Last]((), w.0)
-  decref e.1
-  return ()
-}
-",
-    );
-    disasm_unverified(&text);
-}
-
 /// 死んでいる scrutinee (借りたフィールド `f`) のスロットも、case のフィールドのスロットとは違う。干渉の辺がないと、
 /// 先に色を取る `a.2` が `f.1` のスロットを取り、switch が `a` を書いた後で `b` を読めなくなる (docs/spec/vm.md の「スロットの割り当て」)。
 #[test]
@@ -387,5 +365,118 @@ b3:
         11  extern s0 = Prelude.Show Int.show(s0)
         12  extern s0 = Prelude.println(s0)
         13  ret s0
+    ");
+}
+
+/// `enum` の scrutinee の `switch` は、生の値をタグとして読む `switch_enum` になる。フィールドのない case だけなので、
+/// どの行き先にも束縛はない。
+#[test]
+fn a_switch_on_an_enum_is_switch_enum() {
+    insta::assert_snapshot!(disasm("\
+layout Bool { False, True }
+fn main() -> unit {
+  tail call pick(3)
+}
+fn pick(n.0: int) -> unit {
+  let d.1: enum = extern \"Prelude.Eq Int.==\"(n.0, 3)
+  switch d.1 Bool { #0 -> b1, #1 -> b2 }
+b1:
+  return ()
+b2:
+  let s.2: obj = const \"three\"
+  let u.3: unit = extern Prelude.println(s.2)
+  return u.3
+}
+"), @"
+    fn main (arity 0, frame 1)
+         2  load_raw s0, 3
+         3  tail_call pick(s0)
+    fn pick (arity 1, frame 2)
+         4  load_raw s1, 3
+         5  int_eq s0, s0, s1
+         6  switch_enum s0 { #0 -> 7 [], #1 -> 9 [] }
+         7  load_imm s1, 0
+         8  ret s1
+         9  load_const s0, c0
+        10  extern s0 = Prelude.println(s0)
+        11  ret s0
+    ");
+}
+
+/// `Int` の `switch` は、キーと行き先を表に並べる `switch_int` になる。`i32` に収まらないキーも表に入る。
+#[test]
+fn a_switch_on_an_int_is_switch_int() {
+    insta::assert_snapshot!(disasm("\
+fn main() -> unit {
+  tail call pick(2)
+}
+fn pick(n.0: int) -> unit {
+  switch n.0 { 1 -> b1, 5000000000 -> b2, _ -> b3 }
+b1:
+  let s.1: obj = const \"one\"
+  let u.2: unit = extern Prelude.println(s.1)
+  return u.2
+b2:
+  let s.3: obj = const \"big\"
+  let u.4: unit = extern Prelude.println(s.3)
+  return u.4
+b3:
+  return ()
+}
+"), @"
+    fn main (arity 0, frame 1)
+         2  load_raw s0, 2
+         3  tail_call pick(s0)
+    fn pick (arity 1, frame 2)
+         4  switch_int s0 { 1 -> 5, 5000000000 -> 8, _ -> 11 }
+         5  load_const s0, c0
+         6  extern s0 = Prelude.println(s0)
+         7  ret s0
+         8  load_const s0, c1
+         9  extern s0 = Prelude.println(s0)
+        10  ret s0
+        11  load_imm s1, 0
+        12  ret s1
+    ");
+}
+
+/// `String` の `switch` は、キーを定数の表の文字列で指す `switch_string` になる。
+#[test]
+fn a_switch_on_a_string_is_switch_string() {
+    insta::assert_snapshot!(disasm("\
+fn main() -> unit {
+  let s.0: obj = const \"a\"
+  let n.1: int = call pick(s.0)
+  return ()
+}
+fn pick(s.0: obj) -> int {
+  switch s.0 { \"a\" -> b1, \"b\" -> b2, _ -> b3 }
+b1:
+  decref s.0
+  return 1
+b2:
+  decref s.0
+  return 2
+b3:
+  decref s.0
+  return 3
+}
+"), @"
+    fn main (arity 0, frame 2)
+         2  load_const s0, c0
+         3  call s0 = pick(s0)
+         4  load_imm s1, 0
+         5  ret s1
+    fn pick (arity 1, frame 2)
+         6  switch_string s0 { 0 -> 7, 1 -> 10, _ -> 13 }
+         7  decref s0
+         8  load_raw s1, 1
+         9  ret s1
+        10  decref s0
+        11  load_raw s1, 2
+        12  ret s1
+        13  decref s0
+        14  load_raw s1, 3
+        15  ret s1
     ");
 }
