@@ -38,6 +38,8 @@ pub struct RunStats {
     pub boxes: u64,
     pub unboxes: u64,
     pub peak_objects: u64,
+    /// タスクのスタックで同時に使った語の数の最大。
+    pub peak_stack: u64,
 }
 
 /// VM だけが知る仕事の回数。検査モードだけで数える。
@@ -79,10 +81,11 @@ fn run<M: Mode>(
 ) -> Result<RunStats, VmError> {
     let code =
         compile::<M>(program, control.clone()).map_err(|error| compile_error(program, error))?;
+    let max_depth = control.limits().max_depth;
     let mut ctx = Ctx::<M>::new(control, host);
     // どの語も作る前に付けるので、`heap_mut` の前提 (Ctx の持つ語に触れない) を崩さない
     unsafe { ctx.heap_mut() }.attach(Arc::clone(&code.region));
-    let mut task = Task::new(&code);
+    let mut task = Task::new(&code, max_depth);
     let mut counts = RunCounts::default();
     let result = vm::run(&code, &mut ctx, &mut task, &mut counts);
     // 誤りを返す前にも書き出す。`> out 2>&1` のときに出力と誤りの順を保つためである
@@ -118,6 +121,12 @@ fn run<M: Mode>(
         boxes: counts.boxes,
         unboxes: counts.unboxes,
         peak_objects: h.peak_live,
+        // スタックの長さは縮めないので、長さがそのまま使った語の数の最大である。統計は検査モードだけで数える
+        peak_stack: if M::CHECKED {
+            task.stack.len() as u64
+        } else {
+            0
+        },
     })
 }
 

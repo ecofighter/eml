@@ -50,7 +50,7 @@ VM は、LIR をレジスタ型のバイトコードに変換し、`eml_rt` の 
 - フレームのスロットはどれも1語である。`obj` と `tobj` の値は語のまま置く。`int` と `enum` は provenance を持たない生のビット列 (`Word::from_bits`) にし、`bits()` で読む。`unit` は語の値 1 (`Word::UNIT`、値 0 の即値) にする
 - スタックを `Vec<u64>` にしないのは、ポインタを整数に戻すと provenance が失われ、Miri の strict provenance に反するためである
 - 生のビット列の語は、即値やポインタに見えることがある (偶数の値はポインタの形をしている)。そのため、VM は語の形でなく、コード生成が知っている Repr で値を扱う。RC の命令と、即値かどうかの判定は、Repr が `obj` か `tobj` の値にだけ使う (「RC」と「switch」)
-- 関数に入るときと、`ApplyRest` のフレームを積むときに、スタックを `base + frame_size` まで伸ばす。スタックは添字で指すので、`Vec` が伸びて場所が変わってもよい。スロットの読み書きは、境界を確かめる添字で行う。確かめない添字に替えるのは、計測で要ると分かったときだけにし、そのときは Miri のテストで覆う ([テスト戦略](../implementation/testing.md) の「Miri」)
+- 関数に入るときと、`ApplyRest` のフレームを積むときに、スタックを `base + frame_size` まで伸ばす。スタックは添字で指すので、`Vec` が伸びて場所が変わってもよい。スロットの読み書きは、境界を確かめる添字で行う。確かめない添字に替えるのは、計測で要ると分かったときだけにし、そのときは Miri のテストで覆う ([テスト戦略](../implementation/testing.md) の「Miri」)。`Vec` の容量は `Task::reserve` が倍に伸ばすが、`min(2 × 今の容量, max_depth + u16::MAX + 2)` 語で止める (`reserve_exact`)。深さが `max_depth` を超えると次の安全点で止まり、安全点の前に積むのは1つの枠と見出し (`u16::MAX + 2` 語) までなので、それより大きい容量は要らない。余る引数の適用は `ApplyRest` の枠と呼ばれる側の枠を同じ安全点の前に積むので、求める長さが上限を超えうる。そのときは容量をその長さちょうどにする
 - 深さはスタックの使っている語の数 (`base + frame_size`) で、`Ctx::poll` に渡す
 
 ### フレーム
@@ -183,7 +183,7 @@ base + 0 .. base + frame_size: スロット
 
 ## `RunStats`
 
-VM の `RunStats` は、`eml_rt` の数え方に従い、検査モードだけで数える。欄は `eml_interp::RunStats` と同じである。
+VM の `RunStats` は、`eml_rt` の数え方に従い、検査モードだけで数える。欄は `eml_interp::RunStats` の欄に `peak_stack` を足したものである。
 
 | 項目 | VM での出どころ |
 |---|---|
@@ -191,6 +191,7 @@ VM の `RunStats` は、`eml_rt` の数え方に従い、検査モードだけ�
 | `rc_increments`、`rc_decrements` | `Heap` の `Stats` |
 | `peak_objects` | `Heap` の `Stats` の `peak_live` |
 | `boxes`、`unboxes` | VM が実行した `box` (`BoxInt`、`BoxEnum`、`BoxConst`) と `unbox` の数 |
+| `peak_stack` | 実行の終わりのタスクのスタックの長さ (`Task::stack.len()`)。長さは縮めないので、同時に使った語の数の最大になる。VM のフレームはスタックにあって `peak_objects` に表れないので、末尾呼び出しを失ったことはこの数で見つける |
 
 `evidence_steps`、`yields`、`yield_frames`、`string_bytes_copied`、`boxes`、`unboxes` の6つは、同じ LIR の上で同じ定義を持つので、CEK と等しい。`rc_*` と `peak_objects` は、次の4つの理由で CEK と違う値になる。差は [計測の基準](../implementation/benchmarks.md) の「S10a (VM)」に記録してあり、S10b でスナップショットを替えるときの理由にする。
 

@@ -63,6 +63,7 @@ fn empty() {
         boxes: 0,
         unboxes: 0,
         peak_objects: 1,
+        peak_stack: 7,
     }
     ");
 }
@@ -80,6 +81,7 @@ fn fib() {
         boxes: 0,
         unboxes: 0,
         peak_objects: 2,
+        peak_stack: 132,
     }
     ");
 }
@@ -97,6 +99,7 @@ fn list() {
         boxes: 400000,
         unboxes: 400000,
         peak_objects: 100001,
+        peak_stack: 700015,
     }
     ");
 }
@@ -114,6 +117,7 @@ fn loop_() {
         boxes: 0,
         unboxes: 0,
         peak_objects: 2,
+        peak_stack: 14,
     }
     ");
 }
@@ -131,6 +135,7 @@ fn state() {
         boxes: 100002,
         unboxes: 100001,
         peak_objects: 4,
+        peak_stack: 27,
     }
     ");
 }
@@ -148,6 +153,7 @@ fn tree() {
         boxes: 44694,
         unboxes: 281359,
         peak_objects: 14900,
+        peak_stack: 392,
     }
     ");
 }

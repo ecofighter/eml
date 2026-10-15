@@ -22,6 +22,8 @@ pub struct Task {
     pub(crate) last_ret: Pc,
     /// 末尾の呼び出しと適用で、引数を今のフレームから新しいフレームへ移す間だけ置く所。
     pub(crate) scratch: Vec<Word>,
+    /// `reserve` がスタックの容量を伸ばす上限の語の数 (`stack_limit`)。
+    pub(crate) stack_limit: usize,
 }
 
 /// 誤りと、それが起きた命令の位置。
@@ -35,7 +37,7 @@ const ROOT_BASE: usize = 2;
 const ROOT_SIZE: usize = 1;
 
 impl Task {
-    pub(crate) fn new<M: Mode>(code: &CodeBase<M>) -> Task {
+    pub(crate) fn new<M: Mode>(code: &CodeBase<M>, max_depth: usize) -> Task {
         let entry = &code.functions[code.entry as usize];
         let base = ROOT_BASE + ROOT_SIZE + 2;
         let mut stack = vec![Word::UNIT; base + usize::from(entry.frame_size)];
@@ -48,6 +50,7 @@ impl Task {
             frame_size: usize::from(entry.frame_size),
             last_ret: FINISH,
             scratch: Vec::new(),
+            stack_limit: stack_limit(max_depth),
         }
     }
 
@@ -73,10 +76,17 @@ impl Task {
         self.base + self.frame_size
     }
 
+    /// スタックの長さを `end` 語まで伸ばす。容量は倍に伸ばすが、`stack_limit` で止める。`end` が上限を超えるときは、
+    /// 容量を `end` ちょうどにする。
     pub(crate) fn reserve(&mut self, end: usize) {
-        if self.stack.len() < end {
-            self.stack.resize(end, Word::UNIT);
+        if self.stack.len() >= end {
+            return;
         }
+        if end > self.stack.capacity() {
+            let capacity = (2 * self.stack.capacity()).min(self.stack_limit).max(end);
+            self.stack.reserve_exact(capacity - self.stack.len());
+        }
+        self.stack.resize(end, Word::UNIT);
     }
 
     /// `slots` の語を scratch に読む。全部読んでから書くので、書き先が読んだスロットと重なってもよい。
@@ -129,6 +139,12 @@ impl Task {
         self.pc = pc;
         self.set(dst, value);
     }
+}
+
+/// スタックの容量の上限。深さが `max_depth` を超えると次の安全点で止まり、安全点の前に積むのは1つの枠と見出し
+/// (`u16::MAX + 2` 語) までなので、それより大きい容量は要らない (docs/spec/vm.md の「スロットとスタック」)。
+fn stack_limit(max_depth: usize) -> usize {
+    max_depth.saturating_add(usize::from(u16::MAX) + 2)
 }
 
 /// 見出しの1語目。戻り先、結果を書くスロット、呼び出し元の枠の大きさを1つの生の語に詰める
@@ -528,4 +544,52 @@ fn extern_call<M: Mode>(
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn empty_task(max_depth: usize) -> Task {
+        Task {
+            stack: Vec::new(),
+            pc: FINISH,
+            base: 0,
+            frame_size: 0,
+            last_ret: FINISH,
+            scratch: Vec::new(),
+            stack_limit: stack_limit(max_depth),
+        }
+    }
+
+    #[test]
+    fn the_stack_limit_is_the_depth_limit_and_one_frame() {
+        assert_eq!(stack_limit(1000), 1000 + 65535 + 2);
+        assert_eq!(stack_limit(usize::MAX), usize::MAX);
+    }
+
+    /// 深さの上限で止まる実行でも、スタックの容量は上限と1つの枠の分を超えない。
+    #[test]
+    fn reserve_doubles_the_capacity_up_to_the_stack_limit() {
+        let mut task = empty_task(0);
+        let limit = task.stack_limit;
+        task.reserve(30_000);
+        assert_eq!(task.stack.capacity(), 30_000);
+        task.reserve(30_001);
+        assert_eq!(task.stack.capacity(), 60_000);
+        task.reserve(60_001);
+        assert_eq!((task.stack.len(), task.stack.capacity()), (60_001, limit));
+        task.reserve(limit);
+        assert_eq!((task.stack.len(), task.stack.capacity()), (limit, limit));
+    }
+
+    /// 上限を超える長さを求められたら、容量をその長さちょうどにする。`ApplyRest` の枠と呼ばれる側の枠を、同じ安全点の
+    /// 前に積むときに起きる。
+    #[test]
+    fn reserve_beyond_the_stack_limit_takes_exactly_the_length() {
+        let mut task = empty_task(0);
+        let end = task.stack_limit + 100;
+        task.reserve(end);
+        assert_eq!((task.stack.len(), task.stack.capacity()), (end, end));
+    }
 }

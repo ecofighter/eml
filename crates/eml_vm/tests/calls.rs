@@ -464,3 +464,51 @@ fn h(c.0: tobj, y.1: tobj, z.2: tobj, w.3: tobj) -> tobj {
 ";
     assert_eq!(run_lir(text), ("5\n".to_string(), Ok(())));
 }
+
+/// `n` 個の cons を作ってから捨てる。cons は自己末尾呼び出しのループで作るので、深さは伸びず、ヒープだけが伸びる。
+fn cons_loop(n: u32) -> String {
+    format!(
+        "\
+layout Bool {{ False, True }}
+layout List {{ Nil, Cons(tobj, tobj) }}
+fn main() -> unit {{
+  let r.0: unit = call build({n}, #0)
+  return r.0
+}}
+fn build(n.0: int, acc.1: tobj) -> unit {{
+  let d.2: enum = extern \"Prelude.Eq Int.==\"(n.0, 0)
+  switch d.2 Bool {{ #0 -> b1, #1 -> b2 }}
+b1:
+  let m.3: int = extern \"Prelude.-\"(n.0, 1)
+  let c.4: tobj = con List #1(#0, acc.1)
+  tail call build(m.3, c.4)
+b2:
+  decref acc.1
+  return ()
+}}
+"
+    )
+}
+
+/// 確保量の上限で、次の安全点で止まる。コード生成が作る定数の塊と、実行のヒープの最初のページも同じ `Control` に
+/// 数えるので、上限はその分より大きくし、小さいループは同じ上限の中で終わることも確かめる
+/// (docs/spec/object-model.md の「実行の制御」)。
+#[test]
+fn a_growing_heap_hits_the_memory_limit() {
+    for debug_heap in [true, false] {
+        let run = |n: u32| {
+            let control = Arc::new(Control::new(Limits {
+                max_bytes: 4 * 0x1_0000,
+                ..Limits::default()
+            }));
+            let (host, _) = eml_vm::capture_host(Default::default());
+            eml_vm::execute_with(&parse(&cons_loop(n)), debug_heap, host, control)
+        };
+        assert!(run(100).is_ok(), "debug_heap = {debug_heap}");
+        assert_eq!(
+            run(1_000_000).unwrap_err().to_string(),
+            "the memory limit is exceeded in `build`",
+            "debug_heap = {debug_heap}"
+        );
+    }
+}
