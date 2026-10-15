@@ -673,3 +673,50 @@ VM の整理の間に、`eml_vm` の関数のインライン化を測った。�
 - `prims::step`: S10a では、基本操作の命令を `vm::step` の外の関数 `prims::step` で実行していた。`-C remark=inline` は、`prims::step` を `vm::run` に展開しなかった理由を「definition is unavailable」と出していた。基本操作の分岐を `vm::step` の網羅的な `match` に移すと、この関数はなくなった。`state` の実行の分は約17% 減り、ほかのプログラムも 1〜4% 減った
 - 9つの関数: 分岐を移した後の注釈で、`vm::run` に「definition is unavailable」で展開されなかった `eml_vm` の関数は、`data` の `con`、`switch_tag`、`switch_int`、`switch_string`、`unpack`、`release`、`unbox` と、`apply` の `make_closure`、`apply_rest` の9つだった。9つに `#[inline]` を付けると、注釈からこの理由が消え、実行の分はどのプログラムでも減った (`tree` で約5.4%、`list` で約3.8%、`state` で約2.8%、`fib` と `loop` で約1.2〜1.3%)。そのため付けた
 - `apply::apply`: `vm::apply_call` にも同じ理由で展開されていなかった。付けて測ると、実行の分は 0.2% 以内でしか変わらず、`fib` は約0.2% 増えたので、付けていない
+
+#### 切り替えの前
+
+切り替えの前の記録である。VM の整理と `peak_stack` を入れた後、CEK を消す前に、同じコミットの CEK と VM を `bench/run.sh` で測った。
+
+- 機種: Mac16,1 (Apple M4)
+- OS: macOS 27.0.1 (26A434)
+- rustc: rustc 1.98.1 (48a229cea 2026-09-01)
+- コミット: 28b4075
+
+CEK
+
+| プログラム | instructions retired | 実時間 (s) |
+|---|---:|---:|
+| `empty` | 29416194 | 0.00 |
+| `fib` | 861975411 | 0.03 |
+| `list` | 1600965867 | 0.06 |
+| `loop` | 1351733277 | 0.04 |
+| `state` | 1407209227 | 0.05 |
+| `tree` | 1426080607 | 0.07 |
+
+VM (S10a の間は `eml run --vm`)
+
+| プログラム | instructions retired | 実時間 (s) |
+|---|---:|---:|
+| `empty` | 29494442 | 0.00 |
+| `fib` | 113848423 | 0.00 |
+| `list` | 288960989 | 0.01 |
+| `loop` | 193385406 | 0.00 |
+| `state` | 198923524 | 0.00 |
+| `tree` | 250860893 | 0.01 |
+
+| プログラム | CEK の実行の分 | VM の実行の分 | VM / CEK |
+|---|---:|---:|---:|
+| `fib` | 832559217 | 84353981 | 0.101 |
+| `list` | 1571549673 | 259466547 | 0.165 |
+| `loop` | 1322317083 | 163890964 | 0.124 |
+| `state` | 1377793033 | 169429082 | 0.123 |
+| `tree` | 1396664413 | 221366451 | 0.158 |
+
+`empty` を除くどのプログラムでも、VM の実行の分は CEK の約 0.10〜0.17 倍である。
+
+`RunStats` は、`crates/eml_vm/tests/bench.rs` (VM の検査モード) と `crates/eml_interp/tests/bench.rs` (CEK) のスナップショットで比べた。`peak_stack` は VM だけが持つ。ほかの欄の違いは「S10a (VM)」の表と同じである。
+
+`tree` の `rc_decrements` が等しい理由を確かめた。「S10a (VM)」で原因の分からなかった VM の1回は、`++` で左の文字列を作り直したときの `free_block` である。`main` は `show (size t) ++ (" " ++ show (fold …))` を作る。内側の `++` は左が凍結した領域のリテラルなので、両辺を写した新しい文字列を作る。外側の `++` の左 `"14898"` は一意だが、右の 11 バイトを足す容量がない。そのため `string_push` は大きい文字列を確保して写し、左の箱を `free_block` で空ける ([オブジェクトモデル](../spec/object-model.md) の「文字列の操作」)。`eml_rt` はこの `free_block` を `rc_decrements` に1回数える (「S10a (VM)」の4つ目の理由)。CEK の `append_str` は Rust の `String` をその場で伸ばし、数を書かない。VM の誤りではなく、数え方の違いである。CEK の側で1回多いのは、「S10a (VM)」のとおり、リテラル `" "` の `decref` である (2つ目の理由)。
+
+小さいプログラムでも確かめた。`println (show 12345 ++ show 1234)` は結果が 9 バイトで、左の文字列の容量に収まらない。`rc_decrements` は CEK が 2、VM が 3 である。結果が 8 バイトの `println (show 12345 ++ show 123)` はその場で足せるので、どちらも 2 になる。
