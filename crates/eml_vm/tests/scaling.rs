@@ -1,12 +1,15 @@
-//! 実行の仕事の回数と、同時に生きていたヒープの物体の数の最大 (`RunStats`) を比べるテスト。
+//! 実行の仕事の回数と、同時に使ったヒープの物体とスタックの語の数の最大 (`RunStats`) を比べるテスト。
 //! 時間ではなく数を比べるので、`#[ignore]` を付けずにふだんの `cargo test` で流す。ソースはテストの中で作る。
+//! 数は VM の検査モードで取る (docs/spec/vm.md の「`RunStats`」)。
 
-use eml_interp::RunStats;
-use eml_test_support::run_stats;
+use std::fmt::Write;
+
+use eml_test_support::{execute_vm, lir, run_stats_vm, run_vm};
+use eml_vm::RunStats;
 
 /// 正常に終わった実行の回数。生成したソースが意図どおりに走ったことを、出力でも確かめる。
 fn stats(text: &str, expected: &str) -> RunStats {
-    let (out, result) = run_stats(text);
+    let (out, result) = run_stats_vm(text);
     assert_eq!(out, expected);
     result.unwrap_or_else(|error| panic!("{error}"))
 }
@@ -26,7 +29,8 @@ fn a_program_without_operations_or_strings_does_no_counted_work() {
         (0, 0, 0, 0, 0, 0),
         "{stats:?}"
     );
-    // `peak_objects` は仕事の回数でなく物体の数の最大なので、`Frame::Root` のフレームの分だけ 0 にならない
+    // `peak_objects` は仕事の回数でなく物体の数の最大なので、ヒープごとのダミーの物体の分だけ 0 にならない
+    // (docs/spec/object-model.md の「ダミーの値」)
     assert_eq!(stats.peak_objects, 1, "{stats:?}");
 }
 
@@ -60,9 +64,9 @@ fn concatenation_writes_the_bytes_of_both_sides() {
 
 #[test]
 fn evaluating_a_literal_copies_nothing() {
-    // 文字列のリテラルは不死の物体で、`Rhs::ConstString` は中身を写さずに参照を1つ作る (docs/spec/runtime.md)。
-    // 64 バイトのリテラルを n 回評価して文字列の `Switch` で比べるので、1回でも写すと上限を超える。残る数は
-    // `show` の結果の分だけである
+    // 文字列のリテラルは凍結した領域の物体で、評価は中身を写さずに参照を1つ作る (docs/spec/object-model.md の
+    // 「凍結した領域」)。64 バイトのリテラルを n 回評価して文字列の `switch` で比べるので、1回でも写すと上限を
+    // 超える。残る数は `show` の結果の分だけである
     let literal = "x".repeat(64);
     let n = 2000;
     let source = format!(
@@ -73,9 +77,7 @@ fn evaluating_a_literal_copies_nothing() {
          main : Unit -> <IO> Unit\n\
          main () = println (show (count {n} 0))\n"
     );
-    let (out, stats) = eml_test_support::run_stats(&source);
-    assert_eq!(out, format!("{n}\n"));
-    let stats = stats.unwrap();
+    let stats = stats(&source, &format!("{n}\n"));
     assert!(
         stats.string_bytes_copied < literal.len() as u64,
         "{stats:?}"
@@ -96,12 +98,10 @@ fn growing_string(n: usize) -> String {
 
 #[test]
 fn appending_to_a_unique_string_copies_only_the_right_side() {
-    // 最初の `++` だけが不死のリテラル "s" を写し、残りは一意な左辺の後に 1 バイトずつ足す。左辺を毎回写すと、
-    // 2 + 3 + … + (n + 1) バイトになる
+    // 最初の `++` だけが凍結した領域のリテラル "s" を写し、残りは一意な左辺の後に 1 バイトずつ足す。左辺を毎回
+    // 写すと、2 + 3 + … + (n + 1) バイトになる
     let n = 2000;
-    let (out, result) = eml_test_support::run_stats(&growing_string(n));
-    let stats = result.unwrap_or_else(|error| panic!("{error}"));
-    assert_eq!(out, format!("s{}\n", "x".repeat(n)));
+    let stats = stats(&growing_string(n), &format!("s{}\n", "x".repeat(n)));
     assert!(stats.string_bytes_copied <= 4 * n as u64, "{stats:?}");
 }
 
@@ -118,10 +118,7 @@ count n = if n == 0 then 0 else ask () + count (n - 1)
 /// `ASK_RECURSION` の後に `rest` (`main` とその前の宣言) を置いて実行し、`evidence_steps` を返す。どの形でも
 /// `ask` は 1 を返す handler に届くので、出力は n である。
 fn evidence_steps(n: u64, rest: &str) -> u64 {
-    let (out, result) = run_stats(&format!("{ASK_RECURSION}\n{rest}"));
-    let stats = result.unwrap_or_else(|error| panic!("{error}"));
-    assert_eq!(out, format!("{n}\n"));
-    stats.evidence_steps
+    stats(&format!("{ASK_RECURSION}\n{rest}"), &format!("{n}\n")).evidence_steps
 }
 
 #[test]
@@ -187,7 +184,7 @@ main () =
 }
 
 /// すぐに再開する操作は、その場で節を呼ぶので、yield せず、継続も組み立てない。探す数は今有効な handler の数で
-/// 決まり、深さによらない (docs/spec/runtime.md の「実行の API」)。
+/// 決まり、深さによらない (docs/spec/vm.md の「`RunStats`」)。
 #[test]
 fn immediate_operations_cost_the_same_at_any_depth() {
     let at = |depth: u64| {
@@ -225,9 +222,9 @@ main () =
     assert_eq!((deep.yields, deep.yield_frames), (0, 0), "{deep:?}");
 }
 
-/// すぐに再開しない操作は handler まで yield し、戻る途中の各段が自分の続きを継続に足す。継続の大きさは間の
-/// フレームの数に比例する。これは方式の性質であり、上限ではない
-/// (docs/spec/runtime.md の「実行の API」)。
+/// すぐに再開しない操作は handler まで yield し、戻る途中の各段が自分の続きを継続に足す。VM のフレームはスタックに
+/// あるので、継続に足した続きはヒープのクロージャになり、`peak_objects` が段の数に比例して伸びる。これは方式の性質で
+/// あり、上限ではない (docs/spec/vm.md の「`RunStats`」)。
 #[test]
 fn a_resuming_operation_builds_a_frame_per_level() {
     let at = |depth: u64| {
@@ -251,6 +248,10 @@ main () =
     let (shallow, deep) = (at(10), at(1000));
     assert!(
         deep.yield_frames >= shallow.yield_frames + 990,
+        "{shallow:?} {deep:?}"
+    );
+    assert!(
+        deep.peak_objects >= shallow.peak_objects + 990,
         "{shallow:?} {deep:?}"
     );
 }
@@ -285,10 +286,7 @@ main () =
 
 /// `list_traversal` を実行して `rc_increments` を返す。
 fn rc_increments(n: u64, traverse: &str, expected: &str) -> u64 {
-    let (out, result) = run_stats(&list_traversal(n, traverse));
-    let stats = result.unwrap_or_else(|error| panic!("{error}"));
-    assert_eq!(out, expected);
-    stats.rc_increments
+    stats(&list_traversal(n, traverse), expected).rc_increments
 }
 
 #[test]
@@ -319,19 +317,30 @@ fn traversing_a_shared_list_dups_each_cell_at_most_once() {
 const PEAK_SHORT: u64 = 1000;
 const PEAK_LONG: u64 = 2 * PEAK_SHORT;
 
-/// n = `PEAK_SHORT` と n = `PEAK_LONG` で `program` を実行し、`peak_objects` の組を返す。`program` は n からソースと
-/// 期待する出力を作る。末尾呼び出しを失った形では、反復の数に比例してフレームが残るので、n を2倍にすると数も増える。
-fn peaks(program: impl Fn(u64) -> (String, String)) -> (u64, u64) {
-    let peak = |n| {
+/// n = `PEAK_SHORT` と n = `PEAK_LONG` で `program` を実行し、`RunStats` の組を返す。`program` は n からソースと
+/// 期待する出力を作る。末尾呼び出しを失った形では、反復の数に比例してフレームが残るので、n を2倍にすると
+/// `peak_stack` も増える。
+fn peaks(program: impl Fn(u64) -> (String, String)) -> (RunStats, RunStats) {
+    let run = |n| {
         let (source, expected) = program(n);
-        stats(&source, &expected).peak_objects
+        stats(&source, &expected)
     };
-    (peak(PEAK_SHORT), peak(PEAK_LONG))
+    (run(PEAK_SHORT), run(PEAK_LONG))
+}
+
+/// 反復の数を2倍にしても、スタックの語の数の最大もヒープの物体の数の最大も変わらないことを確かめる。末尾呼び出しを
+/// 失えばスタックが、反復ごとに物体を残せばヒープが伸びる。
+fn assert_flat((short, long): (RunStats, RunStats)) {
+    assert_eq!(
+        (short.peak_stack, short.peak_objects),
+        (long.peak_stack, long.peak_objects),
+        "{short:?} {long:?}"
+    );
 }
 
 #[test]
-fn a_loop_through_a_function_value_that_returns_int_keeps_the_heap_flat() {
-    let (short, long) = peaks(|n| {
+fn a_loop_through_a_function_value_that_returns_int_keeps_the_stack_and_heap_flat() {
+    assert_flat(peaks(|n| {
         (
             format!(
                 "loop : (Int -> Int) -> Int -> Int
@@ -346,14 +355,13 @@ main () = println (show (go {n}))
             ),
             "0\n".to_string(),
         )
-    });
-    assert_eq!(short, long);
+    }));
 }
 
 #[test]
-fn a_loop_through_a_function_value_that_returns_bool_keeps_the_heap_flat() {
+fn a_loop_through_a_function_value_that_returns_bool_keeps_the_stack_and_heap_flat() {
     // n が偶数なので、`is_odd n` は偽になる
-    let (short, long) = peaks(|n| {
+    assert_flat(peaks(|n| {
         (
             format!(
                 "is_even : (Int -> Bool) -> Int -> Bool
@@ -368,13 +376,12 @@ main () = if is_odd {n} then println \"odd\" else println \"even\"
             ),
             "even\n".to_string(),
         )
-    });
-    assert_eq!(short, long);
+    }));
 }
 
 #[test]
-fn a_loop_through_a_function_value_that_returns_unit_keeps_the_heap_flat() {
-    let (short, long) = peaks(|n| {
+fn a_loop_through_a_function_value_that_returns_unit_keeps_the_stack_and_heap_flat() {
+    assert_flat(peaks(|n| {
         (
             format!(
                 "tick : (Int -> <IO> Unit) -> Int -> <IO> Unit
@@ -389,15 +396,14 @@ main () = run {n}
             ),
             "done\n".to_string(),
         )
-    });
-    assert_eq!(short, long);
+    }));
 }
 
 #[test]
-fn a_loop_with_an_unused_let_between_the_call_and_its_result_keeps_the_heap_flat() {
+fn a_loop_with_an_unused_let_between_the_call_and_its_result_keeps_the_stack_and_heap_flat() {
     // translate は `let s` を呼び出しと `return r` の間に置く。使われない `let` を飛ばして末尾の位置を見なければ、
     // 反復ごとにフレームが残る
-    let (short, long) = peaks(|n| {
+    assert_flat(peaks(|n| {
         (
             format!(
                 "loop : (Int -> Int) -> Int -> Int
@@ -412,13 +418,12 @@ main () = println (show (go {n}))
             ),
             "0\n".to_string(),
         )
-    });
-    assert_eq!(short, long);
+    }));
 }
 
 #[test]
-fn a_loop_whose_clause_resumes_in_tail_position_keeps_the_heap_flat() {
-    let (short, long) = peaks(|n| {
+fn a_loop_whose_clause_resumes_in_tail_position_keeps_the_stack_and_heap_flat() {
+    assert_flat(peaks(|n| {
         (
             format!(
                 "effect Ask where
@@ -436,18 +441,18 @@ main () =
             ),
             format!("{}\n", 2 * n),
         )
-    });
-    assert_eq!(short, long);
+    }));
 }
 
-/// 深さ n の非末尾の再帰の各段で、すぐに再開する操作を行う。節はその場で走るので、残る物体は各段の戻りのフレーム
-/// だけである。n を増やすと、数は n の差と定数の余裕しか増えない。節が yield すると、戻る途中の各段が継続の
-/// クロージャを足すので、1段あたりの物体が増えてこの上限を超える (`k 1 + 0` で再開する節では n の差の3倍増える)。
+/// 深さ n の非末尾の再帰の各段で、すぐに再開する操作を行う。節はその場で走るので、段ごとに残るのはスタックの
+/// フレームだけである。`peak_stack` は n の差に比例して伸び、1段あたりの語の数は n によらない。ヒープの物体は
+/// 段の数で増えない。節が yield すると、戻る途中の各段が継続のクロージャを足すので、`peak_objects` が段の数に
+/// 比例して増える。
 #[test]
 fn immediate_operations_under_deep_recursion_keep_the_peak_linear() {
-    let (short, long) = peaks(|n| {
-        (
-            format!(
+    let run = |n: u64| {
+        stats(
+            &format!(
                 "{ASK_RECURSION}
 main : Unit -> <IO> Unit
 main () =
@@ -456,20 +461,38 @@ main () =
   println (show r)
 "
             ),
-            format!("{n}\n"),
+            &format!("{n}\n"),
         )
-    });
+    };
+    let (short, long, longer) = (
+        run(PEAK_SHORT),
+        run(PEAK_LONG),
+        run(PEAK_LONG + (PEAK_LONG - PEAK_SHORT)),
+    );
+    let per_level = (long.peak_stack - short.peak_stack) / (PEAK_LONG - PEAK_SHORT);
+    assert!(per_level > 0, "{short:?} {long:?}");
+    assert_eq!(
+        (
+            long.peak_stack - short.peak_stack,
+            longer.peak_stack - long.peak_stack
+        ),
+        (
+            per_level * (PEAK_LONG - PEAK_SHORT),
+            per_level * (PEAK_LONG - PEAK_SHORT)
+        ),
+        "{short:?} {long:?} {longer:?}"
+    );
     assert!(
-        long <= short + (PEAK_LONG - PEAK_SHORT) + 16,
-        "peak_objects: {short} -> {long}"
+        long.peak_objects <= short.peak_objects + 16,
+        "{short:?} {long:?}"
     );
 }
 
 /// yield しうる関数の値を通るループ。関数の値への末尾の `apply` は yield の地点にならず、末尾呼び出しのまま残る
 /// (docs/spec/core-ir.md の「yield の地点」)。
 #[test]
-fn a_function_value_loop_under_a_handler_keeps_the_heap_flat() {
-    let (short, long) = peaks(|n| {
+fn a_function_value_loop_under_a_handler_keeps_the_stack_and_heap_flat() {
+    assert_flat(peaks(|n| {
         (
             format!(
                 "effect Ask where
@@ -490,13 +513,12 @@ main () =
             ),
             "0\n".to_string(),
         )
-    });
-    assert_eq!(short, long);
+    }));
 }
 
 #[test]
-fn a_direct_self_tail_call_keeps_the_heap_flat() {
-    let (short, long) = peaks(|n| {
+fn a_direct_self_tail_call_keeps_the_stack_and_heap_flat() {
+    assert_flat(peaks(|n| {
         (
             format!(
                 "loop : Int -> Int -> Int
@@ -508,15 +530,13 @@ main () = println (show (loop {n} 0))
             ),
             format!("{n}\n"),
         )
-    });
-    assert_eq!(short, long);
+    }));
 }
 
 #[test]
 fn a_tail_apply_from_lambda_to_lambda_grows_the_heap_only_by_its_closures() {
-    // 反復ごとにクロージャが1つ生き残るので、数は n に比例して増える。`k` を2回使うのは、戻る間も鎖を共有にして
-    // おくためである。一意なクロージャは `apply` で解放され、空いたスロットを末尾でない呼び出しのフレームが使うので、
-    // 末尾の `apply` を失っても数が増えない。共有なら、失ったときに反復ごとにフレームが1つ増えて上限を超える
+    // 反復ごとにクロージャが1つ生き残るので、物体の数は n に比例して増える。`k` を2回使うのは、戻る間も鎖を共有に
+    // しておくためである。末尾の `apply` を失うと、反復ごとにスタックのフレームが1つ増えて `peak_stack` が伸びる
     let (short, long) = peaks(|n| {
         (
             format!(
@@ -531,8 +551,46 @@ main () = println (show (count_down {n} (fn m -> m)))
         )
     });
     assert!(
-        long <= short + (PEAK_LONG - PEAK_SHORT),
-        "peak_objects: {short} -> {long}"
+        long.peak_objects <= short.peak_objects + (PEAK_LONG - PEAK_SHORT),
+        "{short:?} {long:?}"
+    );
+    assert_eq!(short.peak_stack, long.peak_stack, "{short:?} {long:?}");
+}
+
+/// 非末尾の再帰の各段で、データ `P` を分解してフィールド `s` だけを呼び出しの後に使う。持ち主の `P` は呼び出しで
+/// 要らないので、Perceus は呼び出しの前に `release` で解き、使わない兄弟のリストを空ける。持ち主を呼び出しをまたいで
+/// 残すと、段ごとにリストの 50 個のセルが残り、`peak_objects` が n の差の約 50 倍伸びる
+/// (docs/spec/lir.md の「所有を取る時点」)。
+#[test]
+fn a_retained_owner_does_not_cross_a_call() {
+    let (short, long) = peaks(|n| {
+        (
+            format!(
+                "data P =
+  | P (List Int) String
+
+range : Int -> List Int
+range k = if k == 0 then [] else k :: range (k - 1)
+
+make : Int -> P
+make n = P (range 50) (show n)
+
+walk : Int -> String
+walk n = if n == 0 then \"\" else match make n with
+  | P _ s ->
+    let r = walk (n - 1)
+    r ++ s
+
+main : Unit -> <IO> Unit
+main () = println (walk {n})
+"
+            ),
+            format!("{}\n", (1..=n).map(|k| k.to_string()).collect::<String>()),
+        )
+    });
+    assert!(
+        long.peak_objects <= short.peak_objects + 2 * (PEAK_LONG - PEAK_SHORT),
+        "{short:?} {long:?}"
     );
 }
 
@@ -583,7 +641,7 @@ fn list_program(n: u64, body: &str) -> String {
 #[test]
 fn showing_a_list_copies_bytes_in_proportion_to_its_length() {
     let copied = |n: u64| {
-        let (_, result) = run_stats(&list_program(n, "println (show xs)"));
+        let (_, result) = run_stats_vm(&list_program(n, "println (show xs)"));
         result
             .unwrap_or_else(|error| panic!("{error}"))
             .string_bytes_copied
@@ -593,10 +651,10 @@ fn showing_a_list_copies_bytes_in_proportion_to_its_length() {
     assert!(large as f64 <= small as f64 * 2.5, "{small} {large}");
 }
 
-/// 導出した `==` と `compare` は末尾呼び出しで進むので、長いリストを比べても、生きている物体はリストを作って持つだけの
-/// プログラムより定数個しか増えない。
+/// 導出した `==` と `compare` は末尾呼び出しで進むので、長いリストを比べても、スタックの語と生きている物体は、
+/// リストを作って持つだけのプログラムより定数個しか増えない。
 #[test]
-fn derived_comparisons_walk_a_long_list_without_growing_the_heap() {
+fn derived_comparisons_walk_a_long_list_without_growing_the_stack_or_heap() {
     let compared = stats(
         &list_program(
             10000,
@@ -610,6 +668,10 @@ fn derived_comparisons_walk_a_long_list_without_growing_the_heap() {
     );
     assert!(
         compared.peak_objects <= baseline.peak_objects + 16,
+        "{compared:?} {baseline:?}"
+    );
+    assert!(
+        compared.peak_stack <= baseline.peak_stack + 16,
         "{compared:?} {baseline:?}"
     );
 }
@@ -635,4 +697,72 @@ fn interpolation_copies_bytes_in_proportion_to_its_length() {
     };
     let (small, large) = (copied(500), copied(1000));
     assert!(large as f64 <= small as f64 * 2.5, "{small} {large}");
+}
+
+fn main_with(body: &str) -> String {
+    format!("main : Unit -> <IO> Unit\nmain () =\n{body}")
+}
+
+#[test]
+fn long_statement_sequence_does_not_overflow_the_stack() {
+    // 逐次の文は入れ子ではないので、後段とコード生成は長い文の列を再帰せずに処理しなければならない
+    let mut body = "  let s = \"x\"\n".repeat(5000);
+    body.push_str("  println s");
+    assert_eq!(run_vm(&main_with(&body)), ("x\n".to_string(), Ok(())));
+}
+
+#[test]
+fn long_sequence_of_if_statements_does_not_overflow_the_stack() {
+    // 文の `if` はそれぞれ `switch` と合流するブロックになり、ブロックの列が文の数だけ長くなる。後段とコード生成は、
+    // この列を再帰せずに処理しなければならない。条件は引数にする。`if True` は translate がその場で枝を選び、
+    // `switch` を出さないためである
+    const COUNT: usize = 5000;
+    let mut text = String::from("step : Bool -> <IO> Unit\nstep b =\n");
+    text.push_str(&"  if b then println \"x\"\n".repeat(COUNT));
+    text.push_str("  println \"done\"\n\nmain : Unit -> <IO> Unit\nmain () = step True");
+    let program = lir(&text);
+    let step = program
+        .functions
+        .iter()
+        .find(|function| function.name == "step")
+        .expect("step");
+    let switches = step
+        .blocks
+        .iter()
+        .filter(|block| matches!(block.term, eml_lir::Term::Switch { .. }))
+        .count();
+    assert_eq!(switches, COUNT);
+    let (out, result) = execute_vm(&program, true);
+    assert_eq!(out, format!("{}done\n", "x\n".repeat(COUNT)));
+    assert_eq!(result.map(|_| ()), Ok(()));
+}
+
+#[test]
+fn a_match_with_a_thousand_literals_runs_in_a_debug_build() {
+    // 平らな `switch` は、リテラルの数だけ入れ子を深くしない (docs/spec/core-ir.md)
+    let mut text = String::from("pick : Int -> Int\npick n =\n  match n with\n");
+    for i in 0..1000 {
+        writeln!(text, "    | {i} -> {}", i + 1).unwrap();
+    }
+    text.push_str(
+        "    | _ -> 0\n\nmain : Unit -> <IO> Unit\nmain () = println (show (pick 999))\n",
+    );
+    assert_eq!(run_vm(&text), ("1000\n".to_string(), Ok(())));
+}
+
+#[test]
+fn a_match_with_a_thousand_shared_arms_runs_in_a_debug_build() {
+    // `(_, i)` の枝には、`A` の行き先と `default` の2つの葉が向かう。合流するブロックは入れ子にならないので、枝の数
+    // だけ後段のスタックを使わない。scrutinee は引数にする。リテラルのタプルを渡すと、translate がその場で枝を選ぶ
+    // ためである
+    let mut text = String::from(
+        "data AB =\n  | A\n  | B\n\npick : AB -> Int -> Int\npick t n = match (t, n) with\n  | (A, 0) -> 0\n",
+    );
+    for i in 1..=1000 {
+        writeln!(text, "  | (_, {i}) -> {i}").unwrap();
+    }
+    text.push_str(
+        "  | _ -> 0\n\nmain : Unit -> <IO> Unit\nmain () = println (show (pick B 999))\n",
+    );
+    assert_eq!(run_vm(&text), ("999\n".to_string(), Ok(())));
 }

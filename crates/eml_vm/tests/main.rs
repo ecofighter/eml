@@ -11,4 +11,5 @@ mod data;
 mod evidence;
 mod miri;
 mod run;
+mod scaling;
 mod tags;
