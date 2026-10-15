@@ -9,6 +9,7 @@ mod calls;
 mod codegen;
 mod data;
 mod evidence;
+mod machine;
 mod miri;
 mod run;
 mod scaling;

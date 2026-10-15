@@ -82,86 +82,189 @@ impl RunConfig {
     }
 }
 
+/// プログラムを1回だけ実行する。新しい `Machine` に読み込み、入口を実行し、閉じる。
 pub fn execute(
     program: &Program,
     config: &RunConfig,
     host: HostRef,
 ) -> Result<RunStats, RuntimeError> {
-    let control = Arc::clone(&config.control);
-    if config.debug_heap {
-        run::<Checked>(program, host, control, check_heap)
-    } else {
-        run::<Fast>(program, host, control, |_, _| Ok(()))
+    let mut machine = AnyMachine::new(config, host);
+    let loaded = machine
+        .load(program)
+        .map_err(|error| compile_error(program, error))?;
+    let stats = machine.run(loaded.entry)?;
+    machine.close()?;
+    Ok(stats)
+}
+
+/// `Machine::load` の結果。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Loaded {
+    /// 読み込んだプログラムの入口の関数の、`CodeBase` での番号。
+    pub entry: u32,
+}
+
+/// 入力をまたいで `CodeBase` と `Ctx` を持つ実行の状態 (docs/spec/vm.md の「追記」)。`load` でプログラムを追記し、
+/// `run` で入口の関数を実行する。モードごとの確かめは、作るときに `Machine<Fast>::new` と `Machine<Checked>::new` が
+/// 決める。
+pub struct Machine<M: Mode> {
+    code: CodeBase<M>,
+    ctx: Ctx<M>,
+    max_depth: usize,
+    /// 実行の後の確かめ。検査モードではヒープの不変条件を確かめる。
+    after_run: fn(&Ctx<M>, String) -> Result<(), RuntimeError>,
+    /// 閉じるときの確かめ。検査モードでは残った物体をリークとして返す。
+    at_close: fn(&Ctx<M>) -> Result<(), RuntimeError>,
+}
+
+impl Machine<Fast> {
+    pub fn new(control: Arc<Control>, host: HostRef) -> Machine<Fast> {
+        Machine::with_checks(control, host, |_, _| Ok(()), |_| Ok(()))
     }
 }
 
-fn run<M: Mode>(
-    program: &Program,
-    host: HostRef,
-    control: Arc<Control>,
-    check: fn(&Ctx<M>, String) -> Result<(), RuntimeError>,
-) -> Result<RunStats, RuntimeError> {
-    let code =
-        compile::<M>(program, control.clone()).map_err(|error| compile_error(program, error))?;
-    let max_depth = control.limits().max_depth;
-    let mut ctx = Ctx::<M>::new(control, host);
-    // どの語も作る前に付けるので、`heap_mut` の前提 (Ctx の持つ語に触れない) を崩さない
-    unsafe { ctx.heap_mut() }.attach(Arc::clone(&code.region));
-    let mut task = Task::new(&code, max_depth);
-    let mut counts = RunCounts::default();
-    let result = vm::run(&code, &mut ctx, &mut task, &mut counts);
-    // 誤りを返す前にも書き出す。`> out 2>&1` のときに出力と誤りの順を保つためである
-    let flushed = ctx.flush();
-    result.map_err(|failure| code.error(failure, &task))?;
-    flushed.map_err(|fault| {
-        code.error(
-            vm::Failure {
-                fault: fault.into(),
-                pc: task.last_ret,
-            },
-            &task,
-        )
-    })?;
-    if !ctx.check_finished() {
-        return Err(code.error(
-            vm::Failure {
-                fault: VmFault::Internal("the evidence list or a yield is left at the end"),
-                pc: task.last_ret,
-            },
-            &task,
-        ));
+impl Machine<Checked> {
+    pub fn new(control: Arc<Control>, host: HostRef) -> Machine<Checked> {
+        Machine::with_checks(control, host, check_invariants, check_leaks)
     }
-    check(&ctx, code.function_name(task.last_ret))?;
-    let (c, h) = (ctx.stats(), ctx.heap().stats());
-    Ok(RunStats {
-        evidence_steps: c.evidence_steps,
-        yields: c.yields,
-        yield_frames: c.yield_frames,
-        string_bytes_copied: c.string_bytes_copied,
-        rc_increments: h.rc_increments,
-        rc_decrements: h.rc_decrements,
-        boxes: counts.boxes,
-        unboxes: counts.unboxes,
-        peak_objects: h.peak_live,
-        // スタックの長さは縮めないので、長さがそのまま使った語の数の最大である。統計は検査モードだけで数える
-        peak_stack: if M::CHECKED {
-            task.stack.len() as u64
+}
+
+impl<M: Mode> Machine<M> {
+    fn with_checks(
+        control: Arc<Control>,
+        host: HostRef,
+        after_run: fn(&Ctx<M>, String) -> Result<(), RuntimeError>,
+        at_close: fn(&Ctx<M>) -> Result<(), RuntimeError>,
+    ) -> Machine<M> {
+        Machine {
+            code: CodeBase::new(Arc::clone(&control)),
+            max_depth: control.limits().max_depth,
+            ctx: Ctx::new(control, host),
+            after_run,
+            at_close,
+        }
+    }
+
+    pub fn code(&self) -> &CodeBase<M> {
+        &self.code
+    }
+
+    /// プログラムを追記する。誤りを返した後の `Machine` は使い続けない (`CodeBase::load`)。
+    pub fn load(&mut self, program: &Program) -> Result<Loaded, CompileError> {
+        let entry = self.code.load(program)?;
+        if let Some(region) = &self.code.region {
+            // 入力の境目で、Ctx の持つ語には触れずに塊を付け替えるだけなので、`heap_mut` の前提を崩さない。新しい塊は
+            // 前の塊の子孫である (docs/spec/object-model.md の「凍結した領域」)
+            unsafe { self.ctx.heap_mut() }.attach(Arc::clone(region));
+        }
+        Ok(Loaded { entry })
+    }
+
+    /// 入口の関数を `()` で実行する。統計は `Machine` を作ってからの積算で、`peak_stack` だけがこの実行の値である。
+    pub fn run(&mut self, entry: u32) -> Result<RunStats, RuntimeError> {
+        let (code, ctx) = (&self.code, &mut self.ctx);
+        let mut task = Task::new(code, entry, self.max_depth);
+        let mut counts = RunCounts::default();
+        let result = vm::run(code, ctx, &mut task, &mut counts);
+        // 誤りを返す前にも書き出す。`> out 2>&1` のときに出力と誤りの順を保つためである
+        let flushed = ctx.flush();
+        result.map_err(|failure| code.error(failure, &task))?;
+        flushed.map_err(|fault| {
+            code.error(
+                vm::Failure {
+                    fault: fault.into(),
+                    pc: task.last_ret,
+                },
+                &task,
+            )
+        })?;
+        if !ctx.check_finished() {
+            return Err(code.error(
+                vm::Failure {
+                    fault: VmFault::Internal("the evidence list or a yield is left at the end"),
+                    pc: task.last_ret,
+                },
+                &task,
+            ));
+        }
+        (self.after_run)(ctx, code.function_name(task.last_ret, &task))?;
+        let (c, h) = (ctx.stats(), ctx.heap().stats());
+        Ok(RunStats {
+            evidence_steps: c.evidence_steps,
+            yields: c.yields,
+            yield_frames: c.yield_frames,
+            string_bytes_copied: c.string_bytes_copied,
+            rc_increments: h.rc_increments,
+            rc_decrements: h.rc_decrements,
+            boxes: counts.boxes,
+            unboxes: counts.unboxes,
+            peak_objects: h.peak_live,
+            // スタックの長さは縮めないので、長さがそのまま使った語の数の最大である。統計は検査モードだけで数える
+            peak_stack: if M::CHECKED {
+                task.stack.len() as u64
+            } else {
+                0
+            },
+        })
+    }
+
+    /// 実行の状態を閉じる。検査モードでは、残った物体をリークとして返す。
+    pub fn close(self) -> Result<(), RuntimeError> {
+        (self.at_close)(&self.ctx)
+    }
+}
+
+/// 実行の前にモードを選ぶ呼び出し側のための `Machine`。
+pub enum AnyMachine {
+    Fast(Machine<Fast>),
+    Checked(Machine<Checked>),
+}
+
+impl AnyMachine {
+    pub fn new(config: &RunConfig, host: HostRef) -> AnyMachine {
+        let control = Arc::clone(&config.control);
+        if config.debug_heap {
+            AnyMachine::Checked(Machine::<Checked>::new(control, host))
         } else {
-            0
-        },
-    })
+            AnyMachine::Fast(Machine::<Fast>::new(control, host))
+        }
+    }
+
+    pub fn load(&mut self, program: &Program) -> Result<Loaded, CompileError> {
+        match self {
+            AnyMachine::Fast(machine) => machine.load(program),
+            AnyMachine::Checked(machine) => machine.load(program),
+        }
+    }
+
+    pub fn run(&mut self, entry: u32) -> Result<RunStats, RuntimeError> {
+        match self {
+            AnyMachine::Fast(machine) => machine.run(entry),
+            AnyMachine::Checked(machine) => machine.run(entry),
+        }
+    }
+
+    pub fn close(self) -> Result<(), RuntimeError> {
+        match self {
+            AnyMachine::Fast(machine) => machine.close(),
+            AnyMachine::Checked(machine) => machine.close(),
+        }
+    }
 }
 
 /// ヒープの不変条件の誤りには、最後に戻った関数の名前を付ける (docs/spec/vm.md の「誤り、止めること、終わり」)。
-fn check_heap(ctx: &Ctx<Checked>, last_function: String) -> Result<(), RuntimeError> {
-    let heap = ctx.heap();
-    heap.check_invariants()
+fn check_invariants(ctx: &Ctx<Checked>, last_function: String) -> Result<(), RuntimeError> {
+    ctx.heap()
+        .check_invariants()
         .map_err(|error| RuntimeError::Fault {
             fault: error.into(),
             function: last_function,
             at: None,
-        })?;
-    let leaks = heap.leaks();
+        })
+}
+
+fn check_leaks(ctx: &Ctx<Checked>) -> Result<(), RuntimeError> {
+    let leaks = ctx.heap().leaks();
     if leaks.is_empty() {
         Ok(())
     } else {
@@ -184,6 +287,9 @@ fn compile_error(program: &Program, error: CompileError) -> RuntimeError {
             "the constants cannot be frozen",
             program.function(program.entry).name.clone(),
         ),
+        CompileError::Mismatch { function } => {
+            ("a function with a known name has other code", function)
+        }
     };
     RuntimeError::Fault {
         fault: VmFault::Internal(what),

@@ -1,9 +1,10 @@
 //! Miri で流す小さい実行のテスト (docs/implementation/testing.md の「Miri」)。VM は検証していないコードから `eml_rt`
 //! の `unsafe fn` を呼ぶので、核の操作の前提を守っていることを確かめる。メモリの Host だけを使い、ファイルを開かない。
 //! 確かめる道: 直接の呼び出しと戻り、`con` と `switch` と `release`、部分適用と余った引数、基本操作 (evidence を作って
-//! 引く)、ヒープの文字列の extern、両方のモード。
+//! 引く)、ヒープの文字列の extern、2つのプログラムを1つの `Machine` に続けて読み込み、2つ目の塊を付け替えること、
+//! 両方のモード。
 
-use eml_vm::{RunConfig, capture_host, execute};
+use eml_vm::{AnyMachine, RunConfig, capture_host, execute};
 
 fn run_both(text: &str) -> String {
     let program = eml_lir::parse(text).unwrap_or_else(|error| panic!("{error}"));
@@ -147,4 +148,42 @@ internal yields clause Counter.put fn put(e.0: obj, n.1: tobj) -> unit {
 }
 ";
     assert_eq!(run_both(text), "5\n");
+}
+
+/// 2つ目のプログラムの新しい文字列は新しい塊に置き、実行のヒープはその塊に付け替える。1つ目の塊の文字列も読み続ける。
+#[test]
+fn a_second_load_attaches_a_new_chunk() {
+    let first = "\
+fn main() -> unit {
+  let s.0: obj = const \"one\"
+  let u.1: unit = extern Prelude.println(s.0)
+  return u.1
+}
+";
+    let second = "\
+fn second() -> unit {
+  let s.0: obj = const \"one\"
+  let t.1: obj = const \"two\"
+  let u.2: obj = extern \"Prelude.++\"(s.0, t.1)
+  let v.3: unit = extern Prelude.println(u.2)
+  return v.3
+}
+";
+    for debug_heap in [true, false] {
+        let (host, out) = capture_host(Default::default());
+        let config = RunConfig::default().with_debug_heap(debug_heap);
+        let mut machine = AnyMachine::new(&config, host);
+        for text in [first, second] {
+            let program = eml_lir::parse(text).unwrap_or_else(|error| panic!("{error}"));
+            eml_lir::verify(&program).unwrap_or_else(|error| panic!("{error}"));
+            let loaded = machine
+                .load(&program)
+                .unwrap_or_else(|error| panic!("{error:?}"));
+            machine
+                .run(loaded.entry)
+                .unwrap_or_else(|error| panic!("{error}"));
+        }
+        machine.close().unwrap_or_else(|error| panic!("{error}"));
+        assert_eq!(out.contents(), "one\nonetwo\n");
+    }
 }

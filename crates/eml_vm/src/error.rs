@@ -80,6 +80,18 @@ impl RuntimeError {
             }
         )
     }
+
+    /// 続けて実行できない誤りか。検査モードのヒープの誤りと内部の誤りの後は、ヒープを信用できない。REPL はこの後の
+    /// 入力を受け付けない (docs/spec/vm.md の「追記」)。
+    pub fn is_broken(&self) -> bool {
+        matches!(
+            self,
+            RuntimeError::Fault {
+                fault: VmFault::Internal(_) | VmFault::Extern(Fault::Heap(_)),
+                ..
+            }
+        )
+    }
 }
 
 impl fmt::Display for RuntimeError {

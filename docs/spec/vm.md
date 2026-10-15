@@ -17,7 +17,7 @@ VM は、LIR をレジスタ型のバイトコードに変換し、`eml_rt` の 
 - `eml_rt` の関数には、VM のために `#[inline]` を足していない。インライン化の注釈 (`-C remark=inline`) が「definition is unavailable」と示した `eml_rt` の関数は、どれも実行の繰り返しの外か冷えた道にあったためである。繰り返しの中で呼ぶ関数に同じ注釈が出たときに足し、前後に `bench/rt.sh` を流して [計測の基準](../implementation/benchmarks.md) に記録する。`#[inline]` の置き方によって `map-reuse` の命令の数がビルドごとに約2倍振れたことがあるためである
 - `eml_vm` の中の関数には、2つが分かったときだけ `#[inline]` を付ける。1つは、インライン化の注釈 (`-C remark=inline`) で、VM の繰り返し (`vm::run` と、そこに展開される関数) に「definition is unavailable」で展開されていないことである。もう1つは、付けると `bench/run.sh` で命令の数が減ることである。総称な関数の実体は、コード生成単位の1つにしかできず、ほかの単位からは展開できないためである。今は `data` の命令の関数 (`con`、`switch_tag`、`switch_int`、`switch_string`、`unpack`、`release`、`unbox`) と、`apply` の `make_closure` と `apply_rest` に付けている。測った数は [計測の基準](../implementation/benchmarks.md) の「S10b」にある
 - release のプロファイルの `codegen-units` は既定の値のままにする。1 にすると、VM の実行の分の命令の数はプログラムによって減ったり増えたりしたためである (`state` で 14.2% 減、`fib` で 2.5% 増。[計測の基準](../implementation/benchmarks.md) の「S10a (VM)」)
-- 実行の関数は `eml_vm::execute(program: &eml_lir::Program, config: &RunConfig, host: HostRef) -> Result<RunStats, RuntimeError>` の1つである。`RunConfig` は、検査モードかどうか (`debug_heap`) と、実行を止める情報 (`control: Arc<Control>`) を持つ。`file_root` は Host が持つので、`RunConfig` は持たない
+- 実行の関数は `eml_vm::execute(program: &eml_lir::Program, config: &RunConfig, host: HostRef) -> Result<RunStats, RuntimeError>` の1つである。`execute` は、新しい `Machine` にプログラムを読み込み、入口を実行して閉じる (「追記」)。`RunConfig` は、検査モードかどうか (`debug_heap`) と、実行を止める情報 (`control: Arc<Control>`) を持つ。`file_root` は Host が持つので、`RunConfig` は持たない
 - `RunConfig` は `#[non_exhaustive]` にする。欄を足しても呼び出し側を壊さないためである。`RunConfig::default()` は、速いモードと、上限のない新しい `Control` (`Control::new(Limits::default())`) である。`Control` は `Default` を持たないので、`Default` は手で書く。`with_debug_heap(bool)` と `with_control(Arc<Control>)` で組み立てる
 - 1つの `Control` は1回の実行に使う。止める理由のビットは `Control::clear` でしか下りないので、使い回すと、前の実行で立ったビットで次の実行がすぐ止まるためである。`RunConfig` を `clone` すると `Control` を共有するので、UI テストの仕組みと `eml_test_support` は実行ごとに新しい `RunConfig` を作る
 - `RunConfig` に `Control` を持たせるのは、CLI が SIGINT のハンドラに同じ `Control` を渡すためである。上限は `Control` が持つので、`RunConfig` に上限の欄は作らない ([オブジェクトモデル](object-model.md) の「実行の制御」)
@@ -27,7 +27,7 @@ VM は、LIR をレジスタ型のバイトコードに変換し、`eml_rt` の 
 
 ## `CodeBase` と `FnEntry`
 
-`compile::<M>(program: &eml_lir::Program, control: Arc<Control>) -> Result<CodeBase<M>, CompileError>` は、プログラム全体を一度に変換する。呼び出しは関数の番号で指し、VM が `FnEntry` から先頭の位置を引くので、関数の先頭の位置が決まる前に呼び出しを書ける。`CompileError` は、スロットが `u16` に収まらない関数 (`TooManySlots`) と、`Heap::freeze` の誤り (`Freeze`) である。どちらも正しいプログラムでは起きないので、`execute` は位置のない内部の誤り (`internal error: …`) として返す。
+`CodeBase::new(control)` は組み込みの命令だけを持つ空の表を作り、`CodeBase::load(&mut self, program: &eml_lir::Program) -> Result<u32, CompileError>` はプログラムを追記して入口の関数の番号を返す (「追記」)。`compile::<M>(program, control)` は、新しい表に1つのプログラムを読み込む。呼び出しは関数の番号で指し、VM が `FnEntry` から先頭の位置を引くので、関数の先頭の位置が決まる前に呼び出しを書ける。`CompileError` は、スロットが `u16` に収まらない関数 (`TooManySlots`)、`Heap::freeze` の誤り (`Freeze`)、debug ビルドの一致の確かめの食い違い (`Mismatch`) である。どれも正しいプログラムでは起きないので、`execute` は位置のない内部の誤り (`internal error: …`) として返す。
 
 | 欄 | 中身 |
 |---|---|
@@ -36,16 +36,33 @@ VM は、LIR をレジスタ型のバイトコードに変換し、`eml_rt` の 
 | `operands` | 長さの変わるオペランド (`u32` の並び)。呼び出しの関数の番号と引数のスロット、extern の行の番号と引数、`con` のフィールド、switch の表、`release` のフィールド、`ev_new` の操作の数など |
 | `effect_lists` | `evv_mask` のエフェクトの並び (`u16` の並び)。`Ctx::evv_mask` が `&[u16]` を受けるので、写さずに渡せるように分けて持つ |
 | `constants` | 定数の語。文字列のリテラル、`i32` に収まらない生の `Int` の定数、`box` の定数 (63 ビットに収まれば即値、収まらなければ不死の `BigInt`) |
-| `region` | 定数を置いた凍結した塊 `Arc<Frozen<M>>` |
+| `region` | 定数を置いた凍結した塊の鎖の先頭 `Option<Arc<Frozen<M>>>`。定数の物体をまだ作っていなければ `None` |
 | `locations` | 命令の位置から源の位置 (`Loc`) への表。命令の位置の昇順に並ぶ (「誤り、止めること、終わり」) |
-| `files` | 位置のファイルの表示用のパス。`Program.files` を写す |
-| `entry` | 入口の関数の番号 |
-| `entry_ret_rc` | 入口の関数の `ret` が `obj` か `tobj` か。`Finish` が入口の関数の結果を手放すかを決める (「誤り、止めること、終わり」) |
+| `files` | 位置のファイルの表示用のパス。読み込んだ `Program.files` のパスを、初めて現れた順に並べる |
+| `index` | 追記で番号を引き直す表。関数の名前、エフェクトの名前、ファイルのパス、文字列と整数の定数の中身から番号を引く (「追記」) |
+| `control` | 定数の塊のページを数える `Control`。実行のヒープと同じものである |
 
-- `FnEntry` は、名前、命令列の範囲 `[start, end)`、引数の数 (`arity`)、枠の大きさ (`frame_size`、スロットの数) を持つ。`apply` は引数の数を見て、部分適用か、ちょうどか、余るかを決める。ネイティブのコードを混ぜるときは、ここに入口の種類を足す
-- 定数は、`compile` が `Heap::with_control(control)` で作った作業用のヒープに不死の物体として作り、`freeze` で塊にする。文字列のリテラルは、`Program.strings` の順にすべて作る。塊のページは同じ `Control` の確保量に数える。実行のヒープは、どの語も作る前に `attach` でその塊を付ける ([オブジェクトモデル](object-model.md) の「凍結した領域」)
+- `FnEntry` は、名前、命令列の範囲 `[start, end)`、引数の数 (`arity`)、枠の大きさ (`frame_size`、スロットの数)、`ret` が `obj` か `tobj` か (`ret_rc`) を持つ。`ret_rc` は、その関数を入口として実行したときに、`Finish` が結果を手放すかを決める (「誤り、止めること、終わり」)。`apply` は引数の数を見て、部分適用か、ちょうどか、余るかを決める。ネイティブのコードを混ぜるときは、ここに入口の種類を足す
+- 定数は、`load` が `Heap::with_control(control)` で作った作業用のヒープに不死の物体として作り、`freeze` で塊にする。文字列のリテラルは、`Program.strings` の順にすべて引く。塊のページは同じ `Control` の確保量に数える。実行のヒープは、塊を付け替えてから次の入口を実行する ([オブジェクトモデル](object-model.md) の「凍結した領域」)
 - 塊の物体は、検査モードでも参照を数えない。そのため、文字列の定数を読む命令は `acquire_immortal` を呼ばず、語を写すだけにする
-- `CodeBase` は実行中は読むだけで、`CodeBase<M>: Sync` を型の assert で固定する。`CodeBase` は `M` ごとに作るので、検査モードと速いモードを両方動かすテストは2回変換する。追記の API は、使う段 (S11) で足す
+- `CodeBase` は実行中は読むだけで、`CodeBase<M>: Sync` を型の assert で固定する。書き換えるのは入力の境目の `load` だけである。`CodeBase` は `M` ごとに作るので、検査モードと速いモードを両方動かすテストは2回変換する
+
+### 追記
+
+REPL は入力ごとにプログラム全体を lowering し直し、同じ `CodeBase` に追記する。クロージャは関数の番号を物体の中に持つので、入力をまたいで関数の番号を変えない。
+
+- `Machine<M>` は、`CodeBase<M>` と `Ctx<M>` を入力をまたいで持つ。`Machine::<Fast>::new` と `Machine::<Checked>::new` は `Control` と Host を受け取り、モードごとの確かめを決める。`AnyMachine` は、実行の前にモードを選ぶ呼び出し側のための列挙である
+- `Machine::load(program)` は `CodeBase::load` を呼び、新しい塊があれば実行のヒープに付け替えて、入口の関数の番号を `Loaded { entry }` で返す。誤りを返した後の `Machine` は使い続けない
+- `Machine::run(entry)` は、入口の関数を `()` で実行する。統計は `Machine` を作ってからの積算で、`peak_stack` だけがその実行の値である。検査モードでは、実行の後にヒープの不変条件だけを確かめる
+- `Machine::close()` は実行の状態を閉じる。検査モードでは、残った物体をリークとして返す
+- 名前が同じ関数は、いつも同じコードになる。`load` はこの規則に頼って、関数を名前で照らす。すでにある名前の関数は前の番号を使い、ない名前の関数だけを変換して末尾に足す。新しいコードの中の番号は、次のように引き直す
+  - 関数の番号: 名前で引く
+  - 文字列の定数と、生の整数と `box` の整数の定数: 中身で引く。前に読み込んだ定数は同じ番号を使う。新しい物体があるときだけ、作業用のヒープに今の先頭の塊を付けてから物体を作り、凍結する。新しい塊は前の塊を親に持つので、鎖が伸びる。新しい物体のない入力では塊を作らない。塊は使う大きさの級ごとに少なくとも1ページを持つためである
+  - エフェクトの番号: 名前で引き、なければ次の番号を振る。`Program.effects` の添字は HIR の順で決まり、セッションにエフェクトを足すと後ろのエフェクトの添字がずれるためである。`evv_mask` のエフェクトの並びも引き直し、昇順に並べ直す
+  - 位置のファイルの番号: パスで引き、なければ `files` の末尾に足す
+  - 配置の番号は、命令列を作るときに形を引くだけで、命令列に残らないので引き直さない
+- debug ビルドでは、すでにある名前の関数も同じ引き直しで変換し直し、前の命令列と比べる。比べるのは、逆アセンブラと同じテキストにした命令の並びと、`arity`、`frame_size`、`ret_rc` である。テキストの命令の位置は関数の先頭からの位置で書き、オペランドは指す中身 (呼ぶ関数の名前、エフェクトの番号、定数の番号、位置のパス) で書く。一致しなければ `CompileError::Mismatch` を返す。比べた写しは消す
+- `RuntimeError::is_broken()` は、続けて実行できない誤り (検査モードのヒープの誤りと内部の誤り) で真を返す。この後のヒープは信用できないので、REPL は後の入力を受け付けない
 
 ## 命令とフレーム
 
@@ -181,12 +198,13 @@ base + 0 .. base + frame_size: スロット
 - `Arith`、`Output`、`Io`、`NotUtf8`、`Heap(_)` の文言は `eml_rt` のものを使う ([オブジェクトモデル](object-model.md) の「誤り」)。extern の結果と文言は、`crates/eml_rt/src/heap/tests/expected.txt` の表が固定する ([テスト戦略](../implementation/testing.md) の「期待値の表」)
 - 安全点の `Ctx::poll` が返す `Stop` と extern の `Fault::Stopped` は、どちらも `Stop` の文言で表示する。`Fs.read_all` の `Fault::Stopped` は extern の誤りなので位置を付け、安全点の `Stop` には付けない
 - 割り込みで止めたときの表示も、ほかの実行時エラーと同じ形である。安全点で止めたときは ``interrupted in `f` `` (`f` は止めたときの関数)、`Fs.read_all` の中で止めたときは位置付きの `interrupted` である。`RuntimeError::interrupted()` は、安全点の `Stopped(Stop::Interrupted)` と、`Fs.read_all` の中で止めた `Extern(Fault::Stopped(Stop::Interrupted))` の両方で真を返す。CLI が終了コードを決めるのに使う (「上限と割り込み」)
-- 繰り返しが誤りで終わっても、`Finish` に着いても、`execute` は `Ctx::flush` を呼んでから結果を返す。`> out 2>&1` のときに出力と誤りの順を保つためである
+- 繰り返しが誤りで終わっても、`Finish` に着いても、`Machine::run` は `Ctx::flush` を呼んでから結果を返す。`> out 2>&1` のときに出力と誤りの順を保つためである
 - `Finish` に着いたら、次の順に処理する
   1. 入口の関数の結果を手放す。Repr が `obj` か `tobj` のときだけ `decref` する
   2. flush する。誤りなら、位置なしで返す
   3. `Ctx::check_finished` で、`evv` が空で yield の状態がなしであることを確かめる。モードによらず確かめ、満たさなければ内部の誤りにする
-  4. 検査モードでは、`Heap::check_invariants` と `Heap::leaks` を確かめる。不変条件の誤りには、最後に戻った関数の名前を付ける。リークがあれば、種類の名前ごとの数を持つ誤りにする
+  4. 検査モードでは、`Heap::check_invariants` を確かめる。不変条件の誤りには、最後に戻った関数の名前を付ける
+- 検査モードの `Machine::close` は `Heap::leaks` を確かめる。リークがあれば、種類の名前ごとの数を持つ誤りにする。`execute` は実行の後に閉じるので、1回の実行の終わりにリークを確かめる
 
 ## 上限と割り込み
 

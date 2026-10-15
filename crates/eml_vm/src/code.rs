@@ -1,9 +1,10 @@
 //! 実行するコードの表 `CodeBase` と関数表 `FnEntry` (docs/spec/vm.md の「`CodeBase` と `FnEntry`」)。
 
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use eml_lir::Loc;
-use eml_rt::{Frozen, HeapError, Mode, Word};
+use eml_rt::{Control, Frozen, HeapError, Mode, Word};
 
 use crate::error::{RuntimeError, SourceLocation};
 use crate::op::{BUILTINS, Op, Pc};
@@ -17,10 +18,13 @@ pub struct FnEntry {
     pub end: Pc,
     pub arity: u16,
     pub frame_size: u16,
+    /// `ret` が RC の Repr か。入口の関数として呼んだとき、`Finish` が結果を手放すかを決める。
+    pub ret_rc: bool,
 }
 
 /// 実行中は読むだけの表。後の並列 VM の worker がそのまま共有できるように、`Sync` に保つ
-/// (docs/future/multicore.md の「VM の並列化の備え」の制約2)。
+/// (docs/future/multicore.md の「VM の並列化の備え」の制約2)。入力の境目では `load` で追記する
+/// (docs/spec/vm.md の「追記」)。
 pub struct CodeBase<M: Mode> {
     pub(crate) functions: Vec<FnEntry>,
     pub(crate) code: Vec<Op>,
@@ -28,13 +32,30 @@ pub struct CodeBase<M: Mode> {
     /// `EvvMask` が参照する、飛ばすエフェクトの並び。
     pub(crate) effect_lists: Vec<u16>,
     pub(crate) constants: Vec<Word>,
-    pub(crate) region: Arc<Frozen<M>>,
+    /// 定数を置いた凍結した塊の鎖の先頭。定数の物体をまだ作っていなければ `None`。
+    pub(crate) region: Option<Arc<Frozen<M>>>,
     /// 命令の位置の昇順。
     pub(crate) locations: Vec<(Pc, Loc)>,
     pub(crate) files: Vec<String>,
-    pub(crate) entry: u32,
-    /// 入口の関数の結果を `Finish` で手放すか。`ret` が RC の Repr のときである。
-    pub(crate) entry_ret_rc: bool,
+    /// 追記で番号を引き直す表。
+    pub(crate) index: Index,
+    /// 定数の塊のページを数える `Control`。実行のヒープと同じものである。
+    pub(crate) control: Arc<Control>,
+}
+
+/// 名前と中身から `CodeBase` の番号を引く表 (docs/spec/vm.md の「追記」)。
+#[derive(Default)]
+pub(crate) struct Index {
+    pub(crate) functions: HashMap<String, u32>,
+    /// エフェクトの名前から実行時の番号。番号は読み込んだ順に振る。
+    pub(crate) effects: HashMap<String, u16>,
+    pub(crate) files: HashMap<String, u32>,
+    /// 文字列の中身から定数の番号。
+    pub(crate) strings: HashMap<String, u32>,
+    /// 生の整数の値から定数の番号。
+    pub(crate) raws: HashMap<i64, u32>,
+    /// `tobj` の `Int` の値から定数の番号。
+    pub(crate) boxed: HashMap<i64, u32>,
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -43,6 +64,9 @@ pub enum CompileError {
     TooManySlots { function: String },
     /// 定数を凍結できなかった。
     Freeze(HeapError),
+    /// すでにある名前の関数を変換し直すと、前と違うコードになった。debug ビルドだけが確かめる
+    /// (docs/spec/vm.md の「追記」)。
+    Mismatch { function: String },
 }
 
 impl<M: Mode> CodeBase<M> {
@@ -67,10 +91,10 @@ impl<M: Mode> CodeBase<M> {
         Some(self.locations[index].1)
     }
 
-    /// 命令の位置の関数の名前。どの関数にも属さない位置には、入口の関数の名前を返す。
-    pub(crate) fn function_name(&self, pc: Pc) -> String {
+    /// 命令の位置の関数の名前。どの関数にも属さない位置には、タスクの入口の関数の名前を返す。
+    pub(crate) fn function_name(&self, pc: Pc, task: &Task) -> String {
         self.function_at(pc)
-            .unwrap_or(&self.functions[self.entry as usize])
+            .unwrap_or(&self.functions[task.entry as usize])
             .name
             .clone()
     }
@@ -81,7 +105,7 @@ impl<M: Mode> CodeBase<M> {
         let function = self
             .function_at(pc)
             .or_else(|| self.function_at(task.last_ret))
-            .unwrap_or(&self.functions[self.entry as usize])
+            .unwrap_or(&self.functions[task.entry as usize])
             .name
             .clone();
         let at = self.location(pc).map(|loc| SourceLocation {

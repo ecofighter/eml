@@ -24,6 +24,8 @@ pub struct Task {
     pub(crate) scratch: Vec<Word>,
     /// `reserve` がスタックの容量を伸ばす上限の語の数 (`stack_limit`)。
     pub(crate) stack_limit: usize,
+    /// 入口の関数の番号。どの関数にも属さない命令の誤りの名前と、`Finish` が結果を手放すかを決める。
+    pub(crate) entry: u32,
 }
 
 /// 誤りと、それが起きた命令の位置。
@@ -37,8 +39,8 @@ const ROOT_BASE: usize = 2;
 const ROOT_SIZE: usize = 1;
 
 impl Task {
-    pub(crate) fn new<M: Mode>(code: &CodeBase<M>, max_depth: usize) -> Task {
-        let entry = &code.functions[code.entry as usize];
+    pub(crate) fn new<M: Mode>(code: &CodeBase<M>, index: u32, max_depth: usize) -> Task {
+        let entry = &code.functions[index as usize];
         let base = ROOT_BASE + ROOT_SIZE + 2;
         let mut stack = vec![Word::UNIT; base + usize::from(entry.frame_size)];
         stack[base - 2] = header(FINISH, 0, ROOT_SIZE);
@@ -51,6 +53,7 @@ impl Task {
             last_ret: FINISH,
             scratch: Vec::new(),
             stack_limit: stack_limit(max_depth),
+            entry: index,
         }
     }
 
@@ -462,7 +465,7 @@ fn call<M: Mode>(code: &CodeBase<M>, task: &mut Task, dst: Slot, at: u32) {
 
 /// 入口の関数の結果を手放す (docs/spec/vm.md の「誤り、止めること、終わり」)。
 fn finish<M: Mode>(code: &CodeBase<M>, ctx: &mut Ctx<M>, task: &Task) -> Result<(), VmFault> {
-    if code.entry_ret_rc {
+    if code.functions[task.entry as usize].ret_rc {
         // 結果は入口の関数が返した、VM の持つ参照である
         unsafe { ctx.heap_mut().decref(task.get(0)) }?;
     }
@@ -559,6 +562,7 @@ mod tests {
             last_ret: FINISH,
             scratch: Vec::new(),
             stack_limit: stack_limit(max_depth),
+            entry: 0,
         }
     }
 

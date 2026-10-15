@@ -4,7 +4,9 @@
 use std::sync::Arc;
 
 use eml_rt::{Checked, Fast, Fault};
-use eml_vm::{CodeBase, Control, Limits, RunConfig, RuntimeError, Stop, Task, VmFault};
+use eml_vm::{
+    AnyMachine, CodeBase, Control, Limits, Machine, RunConfig, RuntimeError, Stop, Task, VmFault,
+};
 
 use crate::common::parse;
 
@@ -17,6 +19,14 @@ fn a_code_base_is_shared_and_a_task_moves() {
     sync::<CodeBase<Fast>>();
     sync::<CodeBase<Checked>>();
     send::<Task>();
+}
+
+/// REPL のセッションは `Machine` を持ち、`Session` と同じく `Send` にする (docs/spec/vm.md の「追記」)。
+#[test]
+fn a_machine_moves() {
+    send::<Machine<Fast>>();
+    send::<Machine<Checked>>();
+    send::<AnyMachine>();
 }
 
 #[test]

@@ -2,14 +2,14 @@
 
 use eml_extern::Extern;
 use eml_lir::{
-    Atom, BlockId, Call, Ctor, FnIdx, LayoutCtor, LirFn, Program, Repr, Rhs, Shape, Stmt, Term,
-    VarId,
+    Atom, BlockId, Call, Ctor, FnIdx, LayoutCtor, LirFn, Loc, Program, Repr, Rhs, Shape, Stmt,
+    Term, VarId,
 };
 use eml_rt::Mode;
 
-use super::Out;
 use super::constants::Constants;
 use super::slots::{Slots, allocate};
+use super::{Links, Out};
 use crate::code::{CompileError, FnEntry};
 use crate::op::{KEEP, NONE, Op, Pc, RAW, Slot};
 
@@ -17,8 +17,8 @@ pub(crate) fn function<M: Mode>(
     program: &Program,
     index: FnIdx,
     function: &LirFn,
-    strings: &[u32],
-    constants: &mut Constants<M>,
+    links: &Links,
+    constants: &mut Constants<'_, M>,
     out: &mut Out,
 ) -> Result<FnEntry, CompileError> {
     let slots = allocate(function)?;
@@ -27,7 +27,7 @@ pub(crate) fn function<M: Mode>(
         program,
         function,
         index,
-        strings,
+        links,
         constants,
         out,
         slots,
@@ -60,6 +60,7 @@ pub(crate) fn function<M: Mode>(
         end: emitter.out.pc(),
         arity: u16::try_from(function.params().len()).map_err(|_| too_many())?,
         frame_size,
+        ret_rc: function.ret.is_rc(),
     })
 }
 
@@ -120,13 +121,15 @@ fn elided_decrefs(function: &LirFn) -> Vec<Option<VarId>> {
     elided
 }
 
-pub(crate) struct Emitter<'a, M: Mode> {
+pub(crate) struct Emitter<'a, 'c, M: Mode> {
     pub(crate) program: &'a Program,
     pub(crate) function: &'a LirFn,
     /// 今の関数の番号。自己末尾呼び出しを見分ける。
     pub(crate) index: FnIdx,
-    pub(crate) strings: &'a [u32],
-    pub(crate) constants: &'a mut Constants<M>,
+    /// プログラムの番号から `CodeBase` の番号への写し。関数、文字列、エフェクト、ファイルの番号は、命令に書く前に
+    /// これで引き直す (docs/spec/vm.md の「追記」)。
+    pub(crate) links: &'a Links,
+    pub(crate) constants: &'a mut Constants<'c, M>,
     pub(crate) out: &'a mut Out,
     pub(crate) slots: Slots,
     /// 今の命令が使った一時のスロットの数。命令ごとに 0 に戻す。
@@ -145,7 +148,7 @@ pub(crate) struct Emitter<'a, M: Mode> {
     pub(crate) elided: Vec<Option<VarId>>,
 }
 
-impl<'a, M: Mode> Emitter<'a, M> {
+impl<'a, M: Mode> Emitter<'a, '_, M> {
     pub(crate) fn slot(&self, var: VarId) -> Slot {
         self.slots.of[var.0 as usize]
     }
@@ -182,7 +185,7 @@ impl<'a, M: Mode> Emitter<'a, M> {
             Atom::Unit => Op::LoadImm { dst, value: 0 },
             Atom::Fn(f) => Op::LoadImm {
                 dst,
-                value: small(f.0),
+                value: small(self.links.functions[f.0 as usize]),
             },
             Atom::Tag(n) if repr == Repr::TObj => Op::LoadImm {
                 dst,
@@ -321,11 +324,12 @@ impl<'a, M: Mode> Emitter<'a, M> {
                 });
                 let pc = self.out.push(op);
                 if let Some(loc) = at {
-                    self.out.locations.push((pc, *loc));
+                    let file = self.links.files[loc.file as usize];
+                    self.out.locations.push((pc, Loc { file, ..*loc }));
                 }
             }
             Rhs::ConstString(index) => {
-                let index = self.strings[*index as usize];
+                let index = self.links.strings[*index as usize];
                 self.out.push(Op::LoadConst { dst, index });
             }
             Rhs::Con { ctor, args } => {
@@ -396,9 +400,13 @@ impl<'a, M: Mode> Emitter<'a, M> {
                     .collect();
                 let lin = self.function.mark(var) == eml_lir::Mark::Lin;
                 let at = self.out.operands(
-                    [f.0, u32::from(lin), slots.len() as u32]
-                        .into_iter()
-                        .chain(slots.iter().map(|&s| u32::from(s))),
+                    [
+                        self.links.functions[f.0 as usize],
+                        u32::from(lin),
+                        slots.len() as u32,
+                    ]
+                    .into_iter()
+                    .chain(slots.iter().map(|&s| u32::from(s))),
                 );
                 self.out.push(Op::Closure { dst, at });
             }
@@ -437,9 +445,10 @@ impl<'a, M: Mode> Emitter<'a, M> {
             },
             Prim::EvvMask(effects) => {
                 let start = self.out.effect_lists.len() as u32;
-                self.out
-                    .effect_lists
-                    .extend(effects.iter().map(|&e| effect_number(e)));
+                // 引き直した番号でも昇順に保つ。基本操作の並びと同じ約束にするためである (docs/spec/lir.md の「基本操作」)
+                let mut numbers: Vec<u16> = effects.iter().map(|&e| self.effect(e)).collect();
+                numbers.sort_unstable();
+                self.out.effect_lists.extend(numbers);
                 let at = self
                     .out
                     .operands([start, effects.len() as u32, u32::from(a[0])]);
@@ -448,7 +457,7 @@ impl<'a, M: Mode> Emitter<'a, M> {
             Prim::EvNew(e) => {
                 let n_ops = self.program.effects[*e as usize].operations.len() as u32;
                 let at = self.out.operands([
-                    effect_number(*e).into(),
+                    self.effect(*e).into(),
                     n_ops,
                     u32::from(a[0]),
                     u32::from(a[1]),
@@ -466,7 +475,7 @@ impl<'a, M: Mode> Emitter<'a, M> {
             },
             Prim::EvLookup(e) => Op::EvLookup {
                 dst,
-                effect: effect_number(*e),
+                effect: self.effect(*e),
             },
             Prim::EvClause { effect: _, op } => Op::EvClause {
                 dst,
@@ -538,7 +547,7 @@ impl<'a, M: Mode> Emitter<'a, M> {
             .map(|(&arg, &param)| self.atom(arg, callee.repr(param)))
             .collect();
         self.out.operands(
-            [f.0, slots.len() as u32]
+            [self.links.functions[f.0 as usize], slots.len() as u32]
                 .into_iter()
                 .chain(slots.iter().map(|&s| u32::from(s))),
         )
@@ -645,7 +654,7 @@ impl<'a, M: Mode> Emitter<'a, M> {
                 for case in cases {
                     let (lo, hi) = match case.pattern {
                         CasePattern::Int(n) => (n as u32, (n >> 32) as u32),
-                        CasePattern::String(index) => (self.strings[index as usize], 0),
+                        CasePattern::String(index) => (self.links.strings[index as usize], 0),
                         CasePattern::Tag(_) => unreachable!("one switch compares one kind of case"),
                     };
                     patches.push((items.len() + 2, case.target));
@@ -701,6 +710,11 @@ impl<'a, M: Mode> Emitter<'a, M> {
         self.out.push(op);
     }
 
+    /// プログラムのエフェクトの番号から実行時の番号。
+    fn effect(&self, e: u32) -> u16 {
+        self.links.effects[e as usize]
+    }
+
     pub(crate) fn goto(&mut self, from: BlockId, target: BlockId) {
         if target.0 != from.0 + 1 {
             let pc = self.out.push(Op::Goto { target: 0 });
@@ -720,10 +734,10 @@ impl<'a, M: Mode> Emitter<'a, M> {
     }
 }
 
-/// エフェクトの番号を命令の `u16` にする。evidence の tag はエフェクトの番号 + 1 なので、番号は 65535 より小さい
-/// (docs/spec/object-model.md の「evidence の3つの物体」)。速いモードの `ev_new` はこれを確かめないので、コード生成が
-/// panic で確かめる。
-fn effect_number(e: u32) -> u16 {
+/// 実行時のエフェクトの番号を命令の `u16` にする。evidence の tag はエフェクトの番号 + 1 なので、番号は 65535 より
+/// 小さい (docs/spec/object-model.md の「evidence の3つの物体」)。速いモードの `ev_new` はこれを確かめないので、
+/// 番号を振る `CodeBase::load` が panic で確かめる。
+pub(crate) fn effect_number(e: u32) -> u16 {
     u16::try_from(e)
         .ok()
         .filter(|&e| e < u16::MAX)
