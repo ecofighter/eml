@@ -155,6 +155,9 @@ pub struct LangItems {
     /// 補間の穴が名前を引かずに呼ぶ `Show` のメソッド。ユーザーが同じ名前を定義しても、補間は Prelude のものを呼ぶ
     /// (docs/spec/expressions.md の「補間」)。
     pub display: MethodId,
+    /// REPL が式の入力の結果を表示する `Show` の `show`。ユーザーが同じ名前を定義しても、Prelude のものを呼ぶ
+    /// (docs/superpowers/specs/2026-10-15-s11a-repl-session-design.md の「表示」)。
+    pub show_method: MethodId,
 }
 
 /// extern の表の行から、標準ライブラリの宣言を引く索引。使い手のある行 (extern の型、`IO`、`negate`) だけを持つ。

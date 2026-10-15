@@ -4,7 +4,9 @@
 
 use std::collections::{HashMap, HashSet};
 
-use eml_hir::{ClassId, EffectId, ModuleId, Program as HirProgram, TypeDefId};
+use eml_hir::{ClassId, EffectId, ModuleId, ModuleOrigin, Program as HirProgram, TypeDefId};
+
+use super::program::versioned;
 use eml_types::{Lin, RowTail, TypeId, TypeKind, TypeNames, TypeStore};
 
 /// 型、エフェクト、クラスの名前の表。Prelude の item は修飾しない。入口のモジュールの item は修飾しないが、Prelude の
@@ -76,12 +78,22 @@ impl TypeNames for NameTable {
     }
 }
 
+/// REPL のセッションのモジュールは、入口と同じく修飾せず、版を付けた中段の名前で書く。Prelude の名前と重なれば
+/// `Main.` で修飾する。セッションのモジュールの名前 (`<input N>`) は入力の番号を含むので、修飾には使わない
+/// (docs/superpowers/specs/2026-10-15-s11a-repl-session-design.md の「名前」)。
 fn qualified(hir: &HirProgram, prelude: &HashSet<&str>, module: ModuleId, name: &str) -> String {
-    let bare = module == hir.prelude || (module == hir.entry && !prelude.contains(name));
-    if bare {
-        name.to_string()
+    if module == hir.prelude {
+        return name.to_string();
+    }
+    let session = matches!(hir.modules[module].origin, ModuleOrigin::Session(_));
+    if module != hir.entry && !session {
+        return format!("{}.{name}", hir.modules[module].name);
+    }
+    let local = versioned(hir, module, name);
+    if prelude.contains(name) {
+        format!("Main.{local}")
     } else {
-        format!("{}.{name}", hir.modules[module].name)
+        local
     }
 }
 

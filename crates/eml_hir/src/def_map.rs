@@ -962,6 +962,7 @@ fn lang_items(prelude: &ModuleScope) -> LangItems {
         nil: constructor("Nil"),
         cons: constructor("::"),
         display: method("display"),
+        show_method: method("show"),
     }
 }
 

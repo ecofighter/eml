@@ -4,15 +4,15 @@ use std::collections::HashMap;
 
 use eml_extern::{Extern, ExternType};
 use eml_hir::{
-    ConstructorId, EffectDef, EffectId, EffectKind, FunctionId, ModuleId, OpMultiplicity,
-    OperationId, Program as HirProgram, TypeDefId, TypeDefKind, ValueItem,
+    ConstructorId, EffectDef, EffectId, EffectKind, FunctionId, Items, ModuleId, ModuleOrigin,
+    OpMultiplicity, OperationId, Program as HirProgram, TypeDefId, TypeDefKind, ValueItem,
 };
 use eml_types::{TypeId, TypeStore, TypedProgram};
 
 use crate::{Call, CoreFn, Rhs, Stmt, Term};
 use eml_lir::{
     Atom, Ctor, EffectInfo, FnIdx, Layout, LayoutCtor, LayoutId, Loc, Mark, OpRet, OperationInfo,
-    Repr, VarInfo,
+    Prim, Repr, VarInfo,
 };
 
 use crate::builder::FnBuilder;
@@ -390,7 +390,9 @@ impl ProgramBuilder {
 
     /// 入口の関数を `()` で呼ぶ関数を作る。名前は `entry$` に入口の関数の名前を続ける。等式に引数のない
     /// `main = fn () -> ...` は関数値を返すので、返った値に `()` を適用する (docs/spec/core-ir.md)。`yields` は、入口の
-    /// 関数の宣言の型の最初の矢印が yield しうるかで、作る関数とその `apply` の印にする。
+    /// 関数の宣言の型の最初の矢印が yield しうるかで、作る関数とその `apply` の印にする。`after` は、REPL の入力の
+    /// 結果を根に置くか表示するかである。入力の関数は普通の関数のまま `T` を返し、入力ごとの扱いはここに置く。
+    #[expect(clippy::too_many_arguments, reason = "the parts of one entry function")]
     pub(super) fn entry(
         &mut self,
         hir: &HirProgram,
@@ -399,6 +401,7 @@ impl ProgramBuilder {
         target_id: FunctionId,
         target_type: TypeId,
         yields: bool,
+        after: EntryAfter,
     ) -> FnIdx {
         let function = self.reserve(0);
         let name = format!(
@@ -428,18 +431,98 @@ impl ProgramBuilder {
             var: result,
             rhs: plain_call(call),
         });
-        builder.terminate(Term::Return(Atom::Var(result)));
+        let value = Atom::Var(result);
+        let (returned, ret, ret_mark) = match after {
+            EntryAfter::Return => (
+                value,
+                repr(types, result_type, hir),
+                mark(types, result_type),
+            ),
+            EntryAfter::Store(root) => {
+                let stored = unit_var(&mut builder, Rhs::Prim(Prim::RootSet(root), vec![value]));
+                (stored, Repr::Unit, Mark::Unr)
+            }
+            EntryAfter::Show { show, at } => {
+                let shown = self.show(&mut builder, show, value);
+                (println(&mut builder, shown, at), Repr::Unit, Mark::Unr)
+            }
+            EntryAfter::TypeOnly { text, at } => {
+                let shown = builder.string(&mut self.strings, &format!("_ : {text}"));
+                (println(&mut builder, shown, at), Repr::Unit, Mark::Unr)
+            }
+        };
+        builder.terminate(Term::Return(returned));
         // 入口の関数は実行系が外から呼ぶので、内部の関数でない
-        let core = builder.finish(
-            name,
-            false,
-            yields,
-            repr(types, result_type, hir),
-            mark(types, result_type),
-        );
+        let core = builder.finish(name, false, yields, ret, ret_mark);
         self.finish(function, core);
         function
     }
+
+    /// `show` の行き先で `value` を文字列にする。instance のメソッドの等式が引数を持たなければ、返った関数値に適用する。
+    fn show(&mut self, builder: &mut FnBuilder, show: Shown, value: Atom) -> Atom {
+        let rhs = match show {
+            Shown::Extern(row) => Rhs::Extern {
+                ext: row,
+                args: vec![value],
+                at: None,
+            },
+            Shown::Function(target) if self.arity(target) == 1 => {
+                plain_call(Call::Direct(target, vec![value]))
+            }
+            Shown::Function(target) => {
+                let function = builder.var(named("f", Repr::TObj, Mark::Unr));
+                builder.emit(Stmt::Let {
+                    var: function,
+                    rhs: plain_call(Call::Direct(target, Vec::new())),
+                });
+                plain_call(Call::Apply {
+                    callee: Atom::Var(function),
+                    args: vec![value],
+                    yields: false,
+                })
+            }
+        };
+        builder.bind_string(rhs)
+    }
+}
+
+/// 入口の関数が、入口の関数の結果をどう扱うか
+/// (docs/superpowers/specs/2026-10-15-s11a-repl-session-design.md の「実行と表示」)。
+pub(super) enum EntryAfter {
+    /// `main` と、型が `Unit` の式の入力。結果をそのまま返す。
+    Return,
+    /// `let` の入力。結果をこの番号の根に置く。
+    Store(u32),
+    /// `Show` を持つ型の式の入力。`show` の結果を表示する。`at` は表示の失敗を報告する位置である。
+    Show { show: Shown, at: Loc },
+    /// `Show` を持たない型の式の入力。`_ : T` の形で型だけを表示する。`text` は `T` の表示である。
+    TypeOnly { text: String, at: Loc },
+}
+
+/// 式の入力の型の `show` の行き先。
+#[derive(Clone, Copy)]
+pub(super) enum Shown {
+    Function(FnIdx),
+    Extern(Extern),
+}
+
+/// `rhs` の結果を `unit` の新しい変数に束縛する。
+fn unit_var(builder: &mut FnBuilder, rhs: Rhs) -> Atom {
+    let var = builder.var(named("u", Repr::Unit, Mark::Unr));
+    builder.emit(Stmt::Let { var, rhs });
+    Atom::Var(var)
+}
+
+/// extern の `println` で文字列を表示する。ユーザーが定義した `println` によらない。
+fn println(builder: &mut FnBuilder, text: Atom, at: Loc) -> Atom {
+    unit_var(
+        builder,
+        Rhs::Extern {
+            ext: Extern::Println,
+            args: vec![text],
+            at: Some(at),
+        },
+    )
 }
 
 /// `mask` のない呼び出し。
@@ -474,12 +557,49 @@ pub(super) fn effect_index(hir: &HirProgram, effect: EffectId) -> u32 {
 
 /// Core IR の関数とエフェクトの名前。テキストの形は関数とエフェクトを名前で引くので、入口以外のモジュールの名前には
 /// `モジュール名.` を付け、モジュールをまたいで重ならないようにする。Prelude もこの規則に従う (docs/spec/core-ir.md)。
+/// REPL のセッションのモジュールは修飾せず、版を付ける (`versioned`)。
 pub(super) fn core_name(hir: &HirProgram, module: ModuleId, name: &str) -> String {
-    if module == hir.entry {
-        name.to_string()
-    } else {
-        format!("{}.{name}", hir.modules[module].name)
+    match hir.modules[module].origin {
+        ModuleOrigin::Session(_) => versioned(hir, module, name),
+        _ if module == hir.entry => name.to_string(),
+        _ => format!("{}.{name}", hir.modules[module].name),
     }
+}
+
+/// セッションの item の中段の名前 (docs/superpowers/specs/2026-10-15-s11a-repl-session-design.md の「名前」)。前の入力が
+/// 同じ名前を定義していれば、定義した入力の番号を付けて `名前#N` にする。最初の版には付けない。前の入力は後の入力で
+/// 変わらないので、同じ定義はどの入力を処理し直しても同じ名前になる。セッションでないモジュールの名前は変えない。
+///
+/// 中段では名前空間を分けずに数える。名前空間の違う同じ名前の item (型とそのコンストラクタ) は、中段では配置と関数の
+/// ように別の表に入るので、版がそろわなくても重ならない。前の入力の item を毎回たどるので、入力の数が増えて遅くなれば
+/// 名前ごとの索引を持つ。
+pub(super) fn versioned(hir: &HirProgram, module: ModuleId, name: &str) -> String {
+    let ModuleOrigin::Session(input) = hir.modules[module].origin else {
+        return name.to_string();
+    };
+    let defined_before = hir
+        .modules
+        .iter()
+        .take_while(|&(id, _)| id != module)
+        .filter(|(_, earlier)| matches!(earlier.origin, ModuleOrigin::Session(_)))
+        .any(|(_, earlier)| defines(&earlier.items, name));
+    if defined_before {
+        format!("{name}#{input}")
+    } else {
+        name.to_string()
+    }
+}
+
+/// モジュールの item のどれかが `name` という名前を持つか。
+fn defines(items: &Items, name: &str) -> bool {
+    items.functions.values().any(|item| item.name == name)
+        || items.types.values().any(|item| item.name == name)
+        || items.constructors.values().any(|item| item.name == name)
+        || items.effects.values().any(|item| item.name == name)
+        || items.operations.values().any(|item| item.name == name)
+        || items.classes.values().any(|item| item.name == name)
+        || items.methods.values().any(|item| item.name == name)
+        || items.bindings.values().any(|item| item.name == name)
 }
 
 /// 操作の呼び出し。操作の番号は、エフェクトの宣言の中の順番である。

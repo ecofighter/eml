@@ -6,12 +6,12 @@ use std::collections::{HashMap, HashSet, VecDeque};
 
 use eml_extern::Extern;
 use eml_hir::{
-    CoreMethod, ExprId, ExprKind, FunctionId, FunctionKind, InstanceOrigin, MethodId, MethodImpl,
-    Program as HirProgram, TypeDefKind, ValueItem,
+    CoreMethod, ExprId, ExprKind, FunctionId, FunctionKind, InputKind, InstanceOrigin, MethodId,
+    MethodImpl, ModuleOrigin, Program as HirProgram, TypeDefKind, ValueItem,
 };
 use eml_types::{
-    BodyTypes, InstanceNode, Instantiation, Lin, Resolution, RowYield, Substitution, TypeId,
-    TypeKind, TypeNames, TypeStore, TypedProgram, Update,
+    BodyTypes, InputDisplay, InstanceNode, Instantiation, Lin, Resolution, RowYield, Substitution,
+    TypeId, TypeKind, TypeNames, TypeStore, TypedProgram, Update,
 };
 use la_arena::ArenaMap;
 
@@ -115,6 +115,10 @@ impl From<CoreMethod> for GeneratedMethod {
 pub(super) struct Instances {
     pub(super) list: Vec<Instance>,
     pub(super) entry: InstanceId,
+    /// 入口が `Show` を持つ型の式の入力なら、その型の `show` の行き先。入口の関数 `entry$` が結果の表示に使う。
+    /// 入力の本体にない呼び出しなので、参照の行き先 (`targets`) とは別に持つ
+    /// (docs/superpowers/specs/2026-10-15-s11a-repl-session-design.md の「表示」)。
+    pub(super) show: Option<Target>,
     /// 型検査の型の表に、代入の結果を足した表。
     pub(super) store: TypeStore,
 }
@@ -702,6 +706,15 @@ pub(super) fn collect(hir: &HirProgram, typed: &TypedProgram, entry: FunctionId)
     // (docs/spec/core-ir.md の「row のビットと instance の鍵」)
     let entry_bits = vec![true; row_vars(hir, entry).len()];
     let entry_index = collector.add(entry, entry_args, entry_bits);
+    let show = match (hir[entry].kind, typed.inputs.get(entry)) {
+        (FunctionKind::Input(InputKind::Expr), Some(input))
+            if input.display == InputDisplay::Show =>
+        {
+            // `show` は row 変数を持たない
+            Some(collector.method_target(hir.lang.show_method, &[input.ty], Vec::new()))
+        }
+        _ => None,
+    };
     // 先に見つけた instance から順にたどる。番号の順と名前が変換の順によらないようにするため
     while let Some(index) = collector.queue.pop_front() {
         match collector.found[index] {
@@ -713,7 +726,7 @@ pub(super) fn collect(hir: &HirProgram, typed: &TypedProgram, entry: FunctionId)
     if cfg!(debug_assertions) {
         collector.check_linearity();
     }
-    order(hir, collector.found, entry_index, collector.store)
+    order(hir, collector.found, entry_index, show, collector.store)
 }
 
 /// 本体の型の表のどれかが Kind 変数 (`Var`) を含むか。
@@ -850,9 +863,37 @@ fn generated_base(hir: &HirProgram, names: &NameTable, generated: &Generated) ->
     }
 }
 
+/// HIR の関数の、鍵を付ける前の名前。セッションの instance のメソッドは、HIR の名前でなく、型とクラスの中段の名前で
+/// 書く。HIR の名前は利用者向けの表示名で、型を定義し直すと古い instance のメソッドの名前が `Show Color#1.show` に
+/// 変わり、新しい instance のメソッドが古い名前を受け継ぐためである
+/// (docs/superpowers/specs/2026-10-15-s11a-repl-session-design.md の「名前」)。
+fn function_base(hir: &HirProgram, names: &NameTable, function: FunctionId) -> String {
+    let module = function.module;
+    match hir[function].kind {
+        FunctionKind::InstanceMethod(instance, method)
+            if matches!(hir.modules[module].origin, ModuleOrigin::Session(_)) =>
+        {
+            let class = names.class(hir[instance].class);
+            let name = format!(
+                "{class} {}.{}",
+                names.ty(hir[instance].head),
+                hir[method].name
+            );
+            core_name(hir, module, &name)
+        }
+        _ => core_name(hir, module, &hir[function].name),
+    }
+}
+
 /// HIR の関数の instance を HIR の関数の順に並べ、同じ関数の instance は見つけた順に並べる。生成する関数は、その後に
 /// 見つけた順に並べる。`TypeId` の値の順には並べない。後の段階が `TypeId` の値に意味を持たせないためである。
-fn order(hir: &HirProgram, found: Vec<Found>, entry: usize, store: TypeStore) -> Instances {
+fn order(
+    hir: &HirProgram,
+    found: Vec<Found>,
+    entry: usize,
+    show: Option<FoundTarget>,
+    store: TypeStore,
+) -> Instances {
     let position: HashMap<FunctionId, usize> = hir
         .functions()
         .enumerate()
@@ -874,7 +915,7 @@ fn order(hir: &HirProgram, found: Vec<Found>, entry: usize, store: TypeStore) ->
         .map(
             |&old| match found[old].take().expect("each instance is taken once") {
                 Found::Function(found) => {
-                    let base = core_name(hir, found.function.module, &hir[found.function].name);
+                    let base = function_base(hir, &names, found.function);
                     let suffix = row_suffix(&row_vars(hir, found.function), &found.bits);
                     let name = if type_vars(hir, found.function).is_empty() {
                         format!("{base}{suffix}")
@@ -937,6 +978,7 @@ fn order(hir: &HirProgram, found: Vec<Found>, entry: usize, store: TypeStore) ->
     Instances {
         list,
         entry: InstanceId(renumbered[entry]),
+        show: show.map(|target| target.renumber(&renumbered)),
         store,
     }
 }

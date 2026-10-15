@@ -16,10 +16,10 @@ use std::collections::{HashMap, HashSet};
 use eml_diagnostics::{FileId, SourceFiles};
 use eml_extern::Extern;
 use eml_hir::{
-    Body, ExprId, ExprKind, FunctionId, LocalId, MatchArm, PatId, PatKind, Program as HirProgram,
-    Res, Stmt as HirStmt, ValueItem,
+    Body, ExprId, ExprKind, FunctionId, FunctionKind, InputKind, LocalId, MatchArm, PatId, PatKind,
+    Program as HirProgram, Res, Stmt as HirStmt, ValueItem,
 };
-use eml_types::{BodyTypes, RowYield, TypeId, TypeStore, TypedProgram};
+use eml_types::{BodyTypes, InputDisplay, RowYield, TypeId, TypeStore, TypedProgram};
 use la_arena::ArenaMap;
 
 use crate::{CoreFn, Program, Rhs, Term};
@@ -29,7 +29,7 @@ use crate::builder::{FnBuilder, Label};
 use expr::extern_row;
 use instances::{InstanceKind, Target};
 use pattern::{Known, MatchCtx, Occ, Scrutinee, destructures};
-use program::{ProgramBuilder, effect_table};
+use program::{EntryAfter, ProgramBuilder, Shown, effect_table};
 use types::{mark, named, repr, split_arrows, var_info};
 
 // extern の表の行と std の宣言を照らし合わせる結合テスト (tests/externs.rs) が、translate と同じ規則で型の Repr を決める
@@ -254,6 +254,7 @@ pub(crate) fn translate(
         .get(entry)
         .expect("every body is type-checked")
         .first_arrow_yield;
+    let after = entry_after(hir, typed, entry, &instances, &indices, &mut builder, files);
     let entry_fn = builder.entry(
         hir,
         store,
@@ -261,6 +262,7 @@ pub(crate) fn translate(
         entry,
         entry_instance.signature,
         instances::resolve(first_arrow, &entry_instance.bits),
+        after,
     );
     Program {
         functions: builder
@@ -273,6 +275,48 @@ pub(crate) fn translate(
         layouts: builder.layouts,
         effects: effect_table(hir, store, typed),
         files: builder.files.values,
+    }
+}
+
+/// 入口の関数が入口の結果をどう扱うか。REPL の入力なら、`let` は根に置き、式は表示する
+/// (docs/superpowers/specs/2026-10-15-s11a-repl-session-design.md の「実行と表示」)。
+fn entry_after(
+    hir: &HirProgram,
+    typed: &TypedProgram,
+    entry: FunctionId,
+    instances: &instances::Instances,
+    indices: &[FnIdx],
+    builder: &mut ProgramBuilder,
+    files: &SourceFiles,
+) -> EntryAfter {
+    let FunctionKind::Input(kind) = hir[entry].kind else {
+        return EntryAfter::Return;
+    };
+    // 表示の失敗 (書き出せないこと) は、入力の式の先頭の位置で報告する
+    let mut at = || {
+        let file_id = hir.modules[entry.module].file;
+        let body = hir.body(entry).expect("an input has a body");
+        let position = files.line_col(file_id, body.exprs[body.root].range.start());
+        Loc {
+            file: builder.files.intern(files.path(file_id)),
+            line: position.line,
+            column: position.column,
+        }
+    };
+    match (kind, &typed.inputs[entry].display) {
+        (InputKind::Let(binding), _) => EntryAfter::Store(hir[binding].root),
+        (InputKind::Expr, InputDisplay::Unit) => EntryAfter::Return,
+        (InputKind::Expr, InputDisplay::Show) => {
+            let show = match instances.show.expect("a shown input has a `show` target") {
+                Target::Function(instance) => Shown::Function(indices[instance.0]),
+                Target::Extern(row) => Shown::Extern(row),
+            };
+            EntryAfter::Show { show, at: at() }
+        }
+        (InputKind::Expr, InputDisplay::TypeOnly(text)) => EntryAfter::TypeOnly {
+            text: text.clone(),
+            at: at(),
+        },
     }
 }
 

@@ -9,7 +9,7 @@ use eml_hir::{
 use eml_types::{FieldTarget, Lin, TypeId, TypeKind};
 
 use crate::{Call, Rhs, Stmt};
-use eml_lir::{Atom, Ctor, FnIdx, Mark, Repr, TUPLE, VarId};
+use eml_lir::{Atom, Ctor, FnIdx, Mark, Prim, Repr, TUPLE, VarId};
 
 use super::pattern::Known;
 use super::program::{effect_index, perform_call, plain_call};
@@ -473,9 +473,12 @@ impl FnLowering<'_> {
                 let name = self.ctx.hir[*method].name.clone();
                 self.function_value(id, &name)
             }
-            // REPL の `let` の束縛の参照は Task 10 で根を読む命令にする
-            ExprKind::Path(Res::Item(ValueItem::Binding(_))) => {
-                unreachable!("translate reads bindings from roots after Task 10")
+            // `let` の束縛の値は根にあるので、参照するたびに根から読む。根は `tobj` なので、型の Repr への変換は
+            // box の挿入が入れる (docs/superpowers/specs/2026-10-15-s11a-repl-session-design.md の「根」)
+            ExprKind::Path(Res::Item(ValueItem::Binding(binding))) => {
+                let root = self.ctx.hir[*binding].root;
+                let ty = self.ty(id);
+                self.bind_typed("r", ty, Rhs::Prim(Prim::RootGet(root), Vec::new()))
             }
             ExprKind::Path(Res::Item(ValueItem::Operation(op))) => Atom::Fn(
                 self.program

@@ -10,6 +10,7 @@ mod externs;
 mod instances;
 mod lowering;
 mod perceus;
+mod session;
 mod text;
 mod translate;
 mod verify;
