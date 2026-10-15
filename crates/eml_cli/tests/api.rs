@@ -300,6 +300,20 @@ fn default_limits_bound_the_depth_and_the_memory() {
     }
 }
 
+/// REPL の確保量の上限は `eml run` の半分 (物理メモリの 40%) である。回復が古いヒープと写しを同時に持っても、
+/// `eml run` と同じ 80% に収めるため (docs/spec/repl.md の「コマンドライン」)。
+#[test]
+fn repl_limits_leave_room_for_recovery() {
+    let run = eml_cli::default_limits();
+    let repl = eml_cli::repl_limits();
+    assert_eq!(repl.max_depth, run.max_depth);
+    assert_eq!(repl.max_evv, usize::MAX);
+    if cfg!(any(target_os = "macos", target_os = "linux")) {
+        assert!(repl.max_bytes > 0);
+        assert_eq!(repl.max_bytes * 2, run.max_bytes);
+    }
+}
+
 /// 入力ごとの表示を読むための、`Repl` と出力の組。
 struct Console {
     repl: Repl,
@@ -784,6 +798,37 @@ fn a_file_left_open_by_an_interrupt_is_closed_by_recovery() {
         assert_eq!(drops.load(Ordering::SeqCst), 2, "debug_heap = {debug_heap}");
         assert_eq!(repl.close().leaks, None, "debug_heap = {debug_heap}");
     }
+}
+
+/// `read` で割り込みを立てる読み込み先。前端の検査の間に Ctrl-C が来たときを表す。
+struct InterruptingSource {
+    control: Arc<Control>,
+}
+
+impl ModuleSource for InterruptingSource {
+    fn read(&self, path: &ModulePath) -> Result<String, ReadError> {
+        self.control.interrupt();
+        if path.0 == ["Util"] {
+            Ok("pub two : Int -> Int\ntwo x = x + 2\n".to_string())
+        } else {
+            Err(ReadError::NotFound)
+        }
+    }
+}
+
+/// 実行を始める前に立った割り込みは、入力の種類によらず入力を取り消す。定義だけの入力も受け付けないので、後の入力から
+/// その関数は見えない (docs/spec/repl.md の「割り込み」)。止める語を読むのは `load` の前の1か所で、式の入力も同じ所を
+/// 通る。式の入力は import を持てず、前端の検査の間に割り込みを立てる決まった道がないので、定義の入力で確かめる。
+#[test]
+fn an_interrupt_before_the_run_cancels_the_input() {
+    let control = Arc::new(Control::new(Limits::default()));
+    let config = RunConfig::default().with_control(Arc::clone(&control));
+    let mut console = Console::with_source(&config, Box::new(InterruptingSource { control }));
+    assert_eq!(
+        console.eval("import Util\none : Int -> Int\none x = Util.two x - 1"),
+        (Outcome::Interrupted, String::new(), vec![])
+    );
+    assert_eq!(console.eval("one 1").2, ["E1001"]);
 }
 
 /// 下の回復のテストが使う定義。`build` も `total` も末尾呼び出しなので、長いリストでも VM のスタックが

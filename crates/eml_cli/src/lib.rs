@@ -264,6 +264,16 @@ pub fn default_limits() -> Limits {
     }
 }
 
+/// `eml repl` の上限。確保量は物理メモリの 40% で、深さは `default_limits()` と同じである。回復は写す間に古いヒープと
+/// 写しを同時に持つので、合わせて `eml run` と同じ 80% に収める (docs/spec/repl.md の「コマンドライン」)。
+#[cfg(feature = "run")]
+pub fn repl_limits() -> Limits {
+    Limits {
+        max_bytes: physical_memory().map_or(usize::MAX, |bytes| bytes / 5 * 2),
+        ..default_limits()
+    }
+}
+
 /// `eml_rt` は vstd だけに依存したままにするため、OS に問い合わせるのはここである。`src/` の `unsafe` の呼び出しは
 /// この関数の中だけに置く。
 #[cfg(all(feature = "run", unix))]

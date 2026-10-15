@@ -186,6 +186,7 @@ fn run(inputs: &[Input], root: &Path, debug_heap: bool) -> Transcript {
                 broken = true;
                 writeln!(block, "runtime error (the session is broken): {error}").unwrap();
             }
+            Outcome::Interrupted => writeln!(block, "interrupted").unwrap(),
             Outcome::Empty | Outcome::Accepted | Outcome::Rejected => {}
         }
         rendered.push(block);

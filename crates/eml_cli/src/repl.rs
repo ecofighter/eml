@@ -62,6 +62,8 @@ pub enum Outcome {
     Accepted,
     /// 診断に誤りがある。セッションは変わらない。
     Rejected,
+    /// 実行を始める前に割り込まれた。セッションは変わらない (docs/spec/repl.md の「割り込み」)。
+    Interrupted,
     /// 続けられる実行時エラー。`let` の束縛は作らない。
     Failed(RuntimeError),
     /// 続けられない誤り (ヒープの誤り、内部の誤り、`Machine::load` の誤り)。後の `eval` も実行しない。
@@ -139,14 +141,25 @@ impl Repl {
             FunctionKind::Input(kind) => kind,
             _ => unreachable!("`Program::input` is an input function"),
         });
-        let outcome = match input {
-            _ if has_errors(&diagnostics) => Outcome::Rejected,
-            None => Outcome::Accepted,
-            Some(entry) => {
-                let program =
-                    eml_core_ir::lower(&checked.program, &checked.typed, entry, session.files());
-                self.run(&program)
-            }
+        // 止める語は lowering の後、`load` の前に1回だけ読む。VM は入口では安全点を通らないので、ここで止めないと、
+        // 入口から最初の呼び出しまでの extern と `root_set` が動く (docs/spec/repl.md の「割り込み」)
+        let program = match input {
+            Some(entry) if !has_errors(&diagnostics) => Some(eml_core_ir::lower(
+                &checked.program,
+                &checked.typed,
+                entry,
+                session.files(),
+            )),
+            _ => None,
+        };
+        let outcome = if has_errors(&diagnostics) {
+            Outcome::Rejected
+        } else if self.control.stop_bits() & Control::INTERRUPT != 0 {
+            Outcome::Interrupted
+        } else if let Some(program) = program {
+            self.run(&program)
+        } else {
+            Outcome::Accepted
         };
         if outcome == Outcome::Accepted {
             self.cache.extend(read);
