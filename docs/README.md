@@ -23,6 +23,7 @@ eml を実装するエージェントとプログラマのための文書群で�
 | [spec/lir.md](spec/lir.md) | 規範 | LIR の命令、2つの IR に共通する規則 (ブロックの列と構造の規則、値の表現、データの配置、位置の規則、末尾の位置の呼び出し)、基本操作と実行の文脈、LIR のパス (box の挿入、縮約、Perceus) とその境界の不変条件、LIR の verifier、インタプリタ、実行時エラー |
 | [spec/runtime.md](spec/runtime.md) | 規範 | ヒープと参照カウント、オブジェクトのヘッダ、不死の物体、`eml_runtime` の API、evidence と `evv` の物体、文字列の連結、`debug_heap`、実行の API |
 | [spec/object-model.md](spec/object-model.md) | 規範 | `eml_rt` の核: 語、ヘッダと種類、物体の形、ページの確保器と生存の列挙、局所と共有の RC、`share`、`lin` ビット、核の操作、文字列、凍結した領域、reuse の部品、検査モード、実行文脈 `Ctx`、extern (語の ABI、誤り、Host と出力のバッファ、`File`)、受け入れる制約 |
+| [spec/vm.md](spec/vm.md) | 規範 | VM の置き場所、`CodeBase` と `FnEntry`、スロットとフレーム、命令の形、スロットの割り当て、呼び出しと戻り、命令ごとの実行、誤りと終わりの処理、並列化への備え、検証とテスト |
 | [spec/diagnostics.md](spec/diagnostics.md) | 規範 | 診断のデータ構造、診断の順、番号の範囲と各番号の意味、連鎖する診断の抑止 |
 | [spec/examples.md](spec/examples.md) | 説明 | まだ動かない、本番の構文で書いたプログラム例 |
 | **implementation/** | 手引き | どう作るか、今どこまでできているか |
