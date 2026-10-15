@@ -24,7 +24,7 @@ EP の後の Core IR から写す LIR と、それを実行する CEK 風のイ�
   - RC の命令 (`dup`、`decref`、`release`)、`box` と `unbox`、末尾呼び出し `tail`、呼び出しの退避 (`saved`) を持つ。どれも LIR のパス (box の挿入、縮約、Perceus) だけが入れる。変換の直後の LIR はこれらを持たず、`passes_until` の入口の verifier がそれを確かめる (下の「パスの順番」)
 - 関数は、名前、内部の関数かどうかの印 (`internal`)、yield しうるかの印 (`yields`)、入口の関数の印 (`clause`)、変数の表、`ret` と `ret_mark`、ブロックの列を持つ。印は Core IR と同じ意味である ([Core IR](core-ir.md) の「`yields` の印」、下の「一様な関数」と「入口の関数の印」)。box の挿入が `internal` と `clause` を読み、`f$boxed` が `yields` を写す。VM は `yields` を読まない ([VM](vm.md) の「呼び出しと戻り」)
 - プログラムは、関数、入口、文字列の表、配置の表、エフェクトの表、ファイルの表を持つ。Core IR のプログラムと同じ欄である。エフェクトの表は、`clause` の ABI (操作の Repr) と、基本操作の即値のために持つ
-- 呼び出しの退避 (`saved`) は、CEK だけが使う (下の「インタプリタ (CEK 機械)」)。S10 で CEK を消すまで LIR に残す
+- 呼び出しの退避 (`saved`) は、CEK だけが使う (下の「インタプリタ (CEK 機械)」)。S10b で CEK を消すまで LIR に残す
 - 2つの IR は別の型を持つ。型を読むだけでどちらの IR か分かり、LIR にエフェクトの命令がないことと、Core IR に RC と box がないことを、verifier でなく型で保証できるためである。重なる部品 (共有する型、テキスト形式の字句解析と共通の命令の読み書き、verifier の支配木と R8 と R9 の検査、基本操作と `clause` の検査) は `eml_lir` に置き、`eml_core_ir` が借りる
 
 ### ブロックの列

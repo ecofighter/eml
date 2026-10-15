@@ -45,6 +45,32 @@ fn add(a.0: int, b.1: int) -> int {
     assert_eq!(run_both(text), "42!\n");
 }
 
+/// 引数が足りない適用は、即値の関数からもクロージャからも新しいクロージャを作る (`make_closure`)。
+#[test]
+fn partial_application_makes_closures() {
+    let text = "\
+fn main() -> unit {
+  let a.0: tobj = box 10
+  let d.1: tobj = apply &first3(a.0)
+  let b.2: tobj = box 20
+  let e.3: tobj = apply d.1(b.2)
+  let c.4: tobj = box 30
+  let q.5: tobj = apply e.3(c.4)
+  let r.6: int = unbox q.5
+  decref q.5
+  let s.7: obj = extern \"Prelude.Show Int.show\"(r.6)
+  let t.8: unit = extern Prelude.println(s.7)
+  return t.8
+}
+fn first3(a.0: tobj, b.1: tobj, c.2: tobj) -> tobj {
+  decref b.1
+  decref c.2
+  return a.0
+}
+";
+    assert_eq!(run_both(text), "10\n");
+}
+
 /// 末尾の位置で、引数が2段余る。
 #[test]
 fn over_application_in_tail_position_nests() {
