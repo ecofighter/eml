@@ -16,7 +16,8 @@ fn verified(text: &str) -> Program {
 }
 
 /// 手書きの LIR を verifier に通し、検査モードで実行する。通ったときは速いモードでも実行し、出力が同じことを確かめる。
-/// 速いモードは前提を確かめないので、検査モードが通らなかった IR では走らせない (docs/spec/vm.md の「検証とテスト」)。
+/// 速いモードは前提を確かめないので、検査モードが通らなかった IR では走らせない
+/// (docs/implementation/testing.md の「`eml_vm` のテスト」)。
 pub fn run_lir(text: &str) -> (String, Result<(), VmError>) {
     let program = verified(text);
     let (out, result) = execute_vm(&program, true);

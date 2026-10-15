@@ -115,7 +115,7 @@ fn snapshot_settings(suffix: &str) -> insta::Settings {
 }
 
 /// 診断のエラーなしでコンパイルし、`debug_heap` を有効にして CEK で実行する。同じプログラムを VM でも実行し、出力と
-/// 誤りの文言が CEK と同じであることを確かめる (docs/spec/vm.md の「UI テストを2つのエンジンで流す」)。
+/// 誤りの文言が CEK と同じであることを確かめる (docs/implementation/testing.md の「VM でも流す」)。
 fn compile_and_execute(path: &Path, suffix: &str) -> (String, String, Result<(), RuntimeError>) {
     let session = load(path, suffix);
     let compiled = session.compile();

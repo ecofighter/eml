@@ -152,35 +152,38 @@ S9b-3 で閉じた論点は次のとおりである。
 
 前提: S9。
 
+S10 を、S10a と S10b の2つの作業に分けて順に進める。段の列では S10 の1行のままにする。CEK を差分の基準として残したまま VM を作り、命令の形を実際に動かしながら決めるためである。
+
+| 作業 | 中身 | 状態 |
+|---|---|---|
+| S10a | VM の本体を CEK と並べて作る。LIR から `CodeBase` を作るコード生成、`eml_rt` の `Ctx` の上で動く VM、逆アセンブラ、命令の位置から源の位置への表。`eml run --vm` と、`run` と `run-fail` の UI テストを VM でも流すこと | 終えた。決めたことは [VM](../spec/vm.md) と、[オブジェクトモデル](../spec/object-model.md) の「語」、「ペイロード」、「`lin` ビット」、「凍結した領域」、[LIR とインタプリタ](../spec/lir.md) の「一様な関数」と「生存解析」、[テスト戦略](../implementation/testing.md) の「`eml_vm` のテスト」、「VM でも流す」、「Miri」に移した。既定の `eml run` は CEK のままなので、UI テストの出力と CEK の `bench/` の仕事の回数は変わらない。VM の実行の分の命令の数は、`bench/` のどのプログラムでも CEK の約 0.10〜0.17 倍だった ([計測の基準](../implementation/benchmarks.md) の「S10a (VM)」) |
+| S10b | `eml run` を VM に切り替え、SIGINT のハンドラと上限を入れ、CEK、`eml_runtime`、`saved` を消し、spec を書き直す | まだ |
+
+S10a では、この節で決めていた次の3つを変えた。
+
+- 算術と比較以外の extern は、「行の番号と引数のレジスタの範囲を持つ命令」にすると決めていた。S10a では、引数をオペランドの表のスロットの並びで渡す。レジスタの範囲にすると、引数を連続したスロットへ移す `Move` の命令が引数ごとに要り、色塗りでは連続を保証できないためである。直接の呼び出し、`apply`、`clause` も同じ形にそろえた ([VM](../spec/vm.md) の「呼び出しと戻り」)
+- 呼び出しと戻りを安全点にし、「LIR に後ろ向きの辺がないので、無限に走るプログラムも必ず安全点を通る」としていた。VM は自己末尾呼び出しを関数の入口へのジャンプにするので、バイトコードには後ろ向きの辺ができる。そのため、このジャンプも安全点にした。呼び出し、戻り、自己末尾呼び出しのジャンプのどれかを、無限に走るプログラムは必ず通る ([VM](../spec/vm.md) の「呼び出しと戻り」)
+- `f$boxed` の `yields` の指定は「S10 の VM が読む」としていた。evidence passing の後の LIR では、yield は普通の戻りと基本操作で表され、VM が `yields` で動作を変える所はない。VM は `yields` を読まない ([LIR とインタプリタ](../spec/lir.md) の「一様な関数」)
+
+S10a で閉じた論点は次のとおりである。
+
+- 比較と分岐の融合命令は入れない。融合なしでも VM の実行の分の命令の数が CEK の約 0.10〜0.17 倍に収まり、命令を足すと `Op` の種類、コード生成の形の照合、逆アセンブラ、テストが増えるためである ([VM](../spec/vm.md) の「switch」)
+- release のプロファイルの `codegen-units` は既定の値のままにする。インライン化の注釈が「definition is unavailable」と示した `eml_rt` の関数は、どれも実行の繰り返しの外か冷えた道にあったので、`#[inline]` も足していない ([VM](../spec/vm.md) の「置き場所」)
+- `RunStats` の各項目の VM での意味は、[VM](../spec/vm.md) の「`RunStats`」に決めた。不死の物体の参照の数え方 (`rc_increments`) を CEK と比べられる形にする論点は、比べられる形にしないことで閉じた。凍結した領域の物体は検査モードでも数えない ([オブジェクトモデル](../spec/object-model.md) の「検査モードでは数えない」) ので、VM は文字列の定数の参照を数えない。CEK はリテラルの参照ごとに1つ数える。この差は `rc_increments` の期待値の違いとして記録し ([計測の基準](../implementation/benchmarks.md) の「S10a (VM)」)、S10b でスナップショットを替えるときの理由にする
+- 定数の表は、`CodeBase` の `constants` (定数の語) と `region` (凍結した塊) にした。コード生成が作業用のヒープで定数を作って凍結する ([VM](../spec/vm.md) の「`CodeBase` と `FnEntry`」)
+
 ### 決めたこと
 
-- LIR からレジスタ型のバイトコードを作る。中間に別の IR は挟まない。命令列への変換は1回の走査で済むためである
-- レジスタは関数ごとの連続した枠にし、生存区間の彩色でスロットに割り当てる。ブロック引数は並列な代入の `move` の列に展開する
-- 算術と比較は extern の行ごとに専用の命令にする。それ以外の extern は、行の番号と引数のレジスタの範囲を持つ命令にする
-- extern の命令は、行の番号の `match` で `eml_rt` の extern の関数を呼ぶ。算術と比較は `Ctx` を取らない `#[inline]` の関数で、専用の命令の中に展開される ([オブジェクトモデル](../spec/object-model.md) の「extern」)
-- `Ctx::flush` は、プログラムの終わり、実行時エラーを出す前、割り込みと上限で止めたときに呼ぶ。終わりの flush の誤りは位置なしで出す。extern の `Fault::Stopped` は、安全点の `Ctx::poll` が返す `Stop` と同じに扱う
-- `eml_interp` の側の期待値の表のテスト (`crates/eml_interp/tests/rt_externs.rs`) は、CEK と一緒に消す。`eml_rt` の側の表のテストは残す。`Bool`、`Ordering`、組のタグの定数が `eml_lir` と同じであることのテストは、VM の crate に移す ([テスト戦略](../implementation/testing.md) の「期待値の表」)
-- 切り替えで変わる `Heap(_)` の誤りの文言 (`eml_rt::HeapError` の表示) と、今の `Fault::Internal` がなくなることは、UI テストの期待値の変更として扱う ([オブジェクトモデル](../spec/object-model.md) の「extern」の「誤り」)
-- 自己の末尾呼び出しは、バイトコードの出力で関数の入口へのジャンプにする。LIR が Core IR から引き継ぐ R2 は緩めない
-- フィールドのない `#N` の行き先では、scrutinee が `tobj` でも即値と分かる。VM は `switch` の配置の ID を見て、その行き先の scrutinee の `decref` をその場で消す。IR の規則にはしない。IR の規則にすると、verifier に「即値と分かっている」という3つ目の状態が要るためである
-- 呼び出しと戻りを安全点にし、割り込み、深さの上限、確保量の上限を確かめる。LIR に後ろ向きの辺がないので、無限に走るプログラムも必ず安全点を通る
-- SIGINT のハンドラは、`eml_cli` が ctrlc crate で入れ、`Control::interrupt()` を呼ぶ。`eml run` では、`INTERRUPT` のビットがすでに立っていれば (2回目の Ctrl-C)、その場で終了コード 130 で終わる。今の CEK は止める語を見ないので、ハンドラは VM に切り替えるこの段で入れる。CEK のうちに入れると、Ctrl-C で止まらなくなるためである。ネイティブでは、生成したプログラムの始めで同じ形で入れる ([オブジェクトモデル](../spec/object-model.md) の「実行の制御」)
-- 上限 (`Limits` の確保量、深さ、`evv` の長さ) の既定の値と、`RunConfig` での指定は、VM と一緒にこの段で決める
-- `RunStats` の仕事の回数のうち `evidence_steps`、`yields`、`yield_frames`、`string_bytes_copied` は、`eml_rt` の検査モードの `CtxStats` の定義を引き継ぐ
-- エラー位置の表 (pc から位置) と逆アセンブラを作る
-- 関数表 `FnEntry` と、追記だけの `CodeBase` (関数、定数、配置、エフェクト) を、S8 の LIR の表をもとに VM と一緒に作る。S9 では `eml_rt` の側の部品 (語、物体の形、凍結した領域) までを作り、`FnEntry` と `CodeBase` は文書で形を決めるだけにする。クロージャは今と同じく関数の番号を持つので、位置に依存しない。`CodeBase` は定数を、凍結した領域の鎖の先頭の塊 `Arc<Frozen<M>>` と定数の語で持つ。祖先の塊は、親への `Arc` で生きている ([オブジェクトモデル](../spec/object-model.md) の「凍結した領域」)。`CodeBase` は実行中は読むだけにし (`Sync`)、後の並列 VM の worker がそのまま共有できるようにする。この性質は、`Session` の `Send + Sync` の試験 (`crates/eml_cli/tests/api.rs`) と同じ形の、型の assert で固定する
-- VM はシングルスレッドで出す。後から並列にできるように、次の2つを守る ([マルチコア対応の設計](multicore.md) の「VM の並列化の備え」)
-  - VM の状態は `Ctx` とレジスタの枠に置き、スレッドに局所的な大域変数を持たない。型の assert で固定する
-  - 呼び出しのスタックは、Rust の再帰でなく、タスクが持つデータにする。協調的マルチタスク (S13 の `par` の a1) と、後の並列 VM のためである。extern が閉包を呼び戻す入れ子の中では、タスクを切り替えない
-- `eml run` を VM に切り替え、CEK、今の `eml_runtime`、`saved` を消す
-- spec を改める。`runtime.md`、`core-ir.md` (インタプリタの節)、`multicore.md`、`architecture.md`、`testing.md` である
+S10a で決めたことは spec に移した。残りは S10b で行うことである。
 
-### 論点
-
-- 比較と分岐の融合命令の有無。試作で実行命令数を測って決める
-- release のプロファイルの `codegen-units`。VM の命令の分岐ループでインライン化の注釈 (`-C remark=inline`) を見てから決める。それまでは、注釈が「definition is unavailable」と示した関数に `#[inline]` を付けて直す ([計測の基準](../implementation/benchmarks.md) の「S9b-2b (実行文脈)」)
-- `RunStats` の各項目の VM での意味。不死の物体の参照の数え方 (`rc_increments`) を CEK と比べられる形にすることも含む
-- 定数の表: 定数の番号から語への表の形と、LIR からそれを組み立てること。`CodeBase` は、凍結した領域の鎖の先頭の塊と定数の語を持つ ([オブジェクトモデル](../spec/object-model.md) の「凍結した領域」)
+- `eml run` を VM に切り替え、`--vm` を消す
+- SIGINT のハンドラは、`eml_cli` が ctrlc crate で入れ、`Control::interrupt()` を呼ぶ。`eml run` では、`INTERRUPT` のビットがすでに立っていれば (2回目の Ctrl-C)、その場で終了コード 130 で終わる。CEK は止める語を見ないので、ハンドラは VM に切り替える S10b で入れる。CEK のうちに入れると、Ctrl-C で止まらなくなるためである。ネイティブでは、生成したプログラムの始めで同じ形で入れる ([オブジェクトモデル](../spec/object-model.md) の「実行の制御」)
+- 上限 (`Limits` の確保量、深さ、`evv` の長さ) の既定の値と、`RunConfig` での指定を決める
+- 期待値の変更として扱うもの: `crates/eml_interp/tests/bench.rs` の `RunStats` のスナップショットを VM のもの (`crates/eml_vm/tests/bench.rs`) に替えること、切り替えで変わる `Heap(_)` の誤りの文言 (`eml_rt::HeapError` の表示)、今の `Fault::Internal` がなくなること ([オブジェクトモデル](../spec/object-model.md) の「extern」の「誤り」)
+- [LIR とインタプリタ](../spec/lir.md) の「実行時エラー」を書き直す。解放の後の使用と `a Lin object is shared` は、検査モード (`--debug-heap`) でだけ見つかるようになる ([オブジェクトモデル](../spec/object-model.md) の「受け入れる制約」)。S10a の `--vm` も、`--debug-heap` なしではすでにそう動く
+- CEK (`eml_interp` の機械)、`eml_runtime`、LIR の `saved` と Perceus でそれを埋める処理を消す。あわせて、`eml_interp` の側の期待値の表のテスト (`crates/eml_interp/tests/rt_externs.rs`) とタグの定数のテストを消し (`eml_rt` の側の表のテストと、`eml_vm` のタグの定数のテストは残す)、`scaling.rs` などの CEK のテストを VM へ移し、`eml_test_support` の実行の関数を VM に替え、`eml_cli` が公開する `RunStats` と誤りの型を `eml_vm` のものに替える
+- CEK を消す直前に、`bench/` で CEK と VM の差をもう一度記録する
+- spec を改める。`runtime.md`、`lir.md` のインタプリタの節、`core-ir.md`、`multicore.md`、`testing.md` である。段の終わりに `status.md` と `architecture.md` を直す
 
 ## S11 REPL
 
@@ -237,7 +240,7 @@ Prelude と `std/` の標準ライブラリと、指定したモジュールを�
 
 - ローカルの再帰関数の構文
 - `Stdin` は入力全体と行を読む関数にとどめる。後の「バイト列と `Array`」の `Lin` のハンドルとの関係を決める
-- extern が閉包を呼び戻す形。`&mut Ctx` を受ける今の extern の形では書けないので、呼び戻しの引数を渡すか、VM の側で作る行にするかを、その extern を足すときに決める (上の「S10 VM と切り替え」の、呼び戻しの入れ子の中でタスクを切り替えない決まり)
+- extern が閉包を呼び戻す形。`&mut Ctx` を受ける今の extern の形では書けないので、呼び戻しの引数を渡すか、VM の側で作る行にするかを、その extern を足すときに決める ([マルチコア対応の設計](multicore.md) の「VM の並列化の備え」の制約5の、呼び戻しの入れ子の中でタスクを切り替えない決まり)
 - 多相な extern の行の Repr を、std のシグネチャの型とどう比べるか。今の結び付けのテスト ([テスト戦略](../implementation/testing.md)) は、型で選ぶ行を除いて、extern の行のシグネチャに型変数がないことを確かめている
 
 ## S13 実例による判断

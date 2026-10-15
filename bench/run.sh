@@ -76,7 +76,7 @@ echo "VM (S10a の間は \`eml run --vm\`)"
 echo
 measure "--vm" vm
 echo
-# 実行の分は `empty` (フロントエンドと起動の費用) を引いた値で比べる (docs/spec/vm.md の「計測」)
+# 実行の分は `empty` (フロントエンドと起動の費用) を引いた値で比べる (docs/implementation/benchmarks.md の「命令の数の測り方」)
 echo "| プログラム | CEK の実行の分 | VM の実行の分 | VM / CEK |"
 echo "|---|---:|---:|---:|"
 for name in "${!cek[@]}"; do
