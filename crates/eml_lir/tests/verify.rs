@@ -1584,6 +1584,35 @@ b2:
     assert_eq!(check(text), Ok(()));
 }
 
+/// `p` を分解し、`body` が `p` から借りたフィールド `a` と `b` を使う。`g` は呼び出す関数である。
+fn unpacking_around_a_call(body: &str) -> String {
+    format!(
+        "layout Pair {{ Pair(obj, obj) }}\n{IDENTITY}fn f(p.0: obj) -> obj {{\n  unpack p.0 Pair #0(a.1: obj, b.2: obj)\n{body}}}\n"
+    )
+}
+
+#[test]
+fn a_borrowed_field_stays_valid_across_a_call_while_its_owner_is_owned() {
+    // Perceus は、持ち主が呼び出しの後でも要るなら、フィールドを借りたまま呼び出しをまたがせる
+    // (docs/spec/lir.md の「所有を取る時点」)
+    assert_eq!(
+        check(&unpacking_around_a_call(
+            "  dup a.1\n  let r.3: obj = call g(a.1)\n  decref r.3\n  dup b.2\n  let q.4: obj = con Pair #0(p.0, b.2)\n  return q.4\n"
+        )),
+        Ok(())
+    );
+}
+
+#[test]
+fn a_field_cannot_be_read_after_a_call_consumed_its_owner() {
+    assert_eq!(
+        check(&unpacking_around_a_call(
+            "  let r.3: obj = call g(p.0)\n  dup b.2\n  let q.4: obj = con Pair #0(r.3, b.2)\n  return q.4\n"
+        )),
+        Err("`b.2` is duplicated after its owner `p.0` was given up in `f`".to_string())
+    );
+}
+
 #[test]
 fn a_value_owned_twice_is_still_owned_after_a_release() {
     // `release` が手放すのは参照1つなので、`p` は所有されたままで、残さなかった `b` も有効である

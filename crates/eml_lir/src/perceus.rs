@@ -3,9 +3,9 @@
 //! 変数だけである。
 //!
 //! `switch` と `unpack` のフィールドは値から借りて始まり、読むだけなら借りたまま使う。所有を取るのは、消費するとき、
-//! 呼び出しの後や合流するブロックの入口で生きているとき、持ち主の最後の参照を消費した後も生きているときだけである。
-//! 持ち主がその命令で要るならフィールドを `dup` し、要らないなら持ち主を `release` で解いてフィールドを受け取る
-//! (docs/spec/lir.md の「Perceus」)。こうすると、分解した後に使わない
+//! 合流するブロックの入口で生きているとき、持ち主の最後の参照を消費した後も生きているとき、保持されている持ち主に
+//! 属して呼び出しの後で生きているときだけである。持ち主がその命令で要るならフィールドを `dup` し、要らないなら
+//! 持ち主を `release` で解いてフィールドを受け取る (docs/spec/lir.md の「Perceus」)。こうすると、分解した後に使わない
 //! 持ち主のフィールドは `dup` されず、`Lin` の物体の参照は1つのまま保たれる。
 //!
 //! ブロックを番号の順に1回たどる。各ブロックでは、後ろからたどって各文で死ぬ変数を求め、前から所有の集合を持って
@@ -218,9 +218,19 @@ impl Fields<'_> {
         let used = vars(|f| stmt.for_each_atom(f));
         let consumed = self.consumed(|f| stmt.for_each_consumed(f));
         let need = Need { live, used: &used };
-        // 消費する変数のほかに、所有を取るのは次の変数である。呼び出しの後で生きている借りた変数。持ち主の最後の参照を
-        // この文が消費した後も生きている、その持ち主に属する変数 (docs/spec/lir.md の「所有を取る時点」)
+        // 消費する変数のほかに、所有を取るのは次の変数である。持ち主の最後の参照をこの文が消費した後も生きている、
+        // その持ち主に属する変数。呼び出しの後で生きている、保持されている持ち主に属する変数。後者は持ち主を呼び出しの
+        // 前に解く。保持されている持ち主が呼び出しをまたぐと、死んだ兄弟のフィールドも残り、末尾でない再帰で段ごとに
+        // 溜まるためである (docs/spec/lir.md の「所有を取る時点」)
         let mut take = consumed.clone();
+        for var in &consumed {
+            if state.owned.contains(var)
+                && !live.contains(var)
+                && let Some(vars) = state.lent.get(var)
+            {
+                take.extend(vars.iter().filter(|var| live.contains(var)));
+            }
+        }
         if matches!(
             stmt,
             Stmt::Let {
@@ -231,19 +241,11 @@ impl Fields<'_> {
             take.extend(
                 state
                     .lent
-                    .values()
-                    .flatten()
+                    .iter()
+                    .filter(|(owner, _)| !need.contains(**owner))
+                    .flat_map(|(_, vars)| vars.iter().copied())
                     .filter(|var| live.contains(var)),
             );
-        } else {
-            for var in &consumed {
-                if state.owned.contains(var)
-                    && !live.contains(var)
-                    && let Some(vars) = state.lent.get(var)
-                {
-                    take.extend(vars.iter().filter(|var| live.contains(var)));
-                }
-            }
         }
         self.take(state, take, &need, out);
         out.extend(dups(consumed.clone(), live).into_iter().map(Stmt::Dup));

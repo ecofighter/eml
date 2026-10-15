@@ -247,8 +247,8 @@ b2:
 }
 
 #[test]
-fn a_field_used_after_a_call_is_owned_before_the_call_saves_it() {
-    // 借りたフィールドは呼び出しの前の `release` で所有にする
+fn a_retained_owner_is_resolved_before_a_call() {
+    // `o.0` は呼び出しの後で使わず、`s.1` だけが生きているので、呼び出しの前に `o.0` を解いて `s.1` を受け取る
     let text = "\
 layout Option { None, Some(tobj) }
 fn keep(o.0: tobj) -> obj {
@@ -699,8 +699,9 @@ fn f(b.0: obj) -> int {
 }
 
 #[test]
-fn a_field_live_after_a_call_is_owned_before_it() {
-    // 持ち主が死んでいれば解き、生きていれば `dup` する
+fn a_field_stays_borrowed_across_a_call_while_its_owner_is_needed() {
+    // 持ち主が死んでいれば呼び出しの前に解く。生きていれば、フィールドは借りたまま呼び出しをまたぎ、消費する所で
+    // `dup` する
     let shown = perceus_text(
         "\
 layout Pair { Pair(obj, obj) }
@@ -735,9 +736,9 @@ fn live_owner(p.0: obj) -> obj {
     fn live_owner(p.0: obj) -> obj {
       unpack p.0 Pair #0(a.1: obj, b.2: obj)
       dup a.1
-      dup b.2
       let r.3: obj = call g(a.1)
       decref r.3
+      dup b.2
       let q.4: obj = con Pair #0(p.0, b.2)
       return q.4
     }
@@ -1152,4 +1153,71 @@ fn many_reads_of_one_owner_are_rewritten_in_linear_time() {
 #[test]
 fn many_owners_resolved_one_by_one_are_rewritten_in_linear_time() {
     assert_linear_in_live_variables(many_owners_resolved_one_by_one);
+}
+
+#[test]
+fn a_field_live_after_a_call_that_consumes_its_owner_is_dupped_before_it() {
+    // 呼び出しが持ち主の最後の参照を消費し、その後でフィールドを使う形 (docs/spec/lir.md の「所有を取る時点」の 4)
+    let shown = perceus_text(
+        "\
+layout Pair { Pair(obj, obj) }
+fn g(s.0: obj) -> obj {
+  return s.0
+}
+fn f(p.0: obj) -> obj {
+  unpack p.0 Pair #0(a.1: obj, b.2: obj)
+  let r.3: obj = call g(p.0)
+  let q.4: obj = con Pair #0(r.3, b.2)
+  return q.4
+}
+",
+    );
+    insta::assert_snapshot!(shown, @"
+    layout Pair { Pair(obj, obj) }
+    fn g(s.0: obj) -> obj {
+      return s.0
+    }
+    fn f(p.0: obj) -> obj {
+      unpack p.0 Pair #0(a.1: obj, b.2: obj)
+      dup b.2
+      let r.3: obj = call g(p.0)
+      let q.4: obj = con Pair #0(r.3, b.2)
+      return q.4
+    }
+    ");
+}
+
+#[test]
+fn a_field_live_after_a_call_that_consumes_its_parent_is_owned_by_resolving_the_owner() {
+    // 呼び出しが途中の親 `b.2` を消費し、その下のフィールド `d.4` を後で使う形。`d.4` の持ち主は `p.0` である
+    let shown = perceus_text(
+        "\
+layout Pair { Pair(obj, obj) }
+fn g(s.0: obj) -> obj {
+  return s.0
+}
+fn h(p.0: obj) -> obj {
+  unpack p.0 Pair #0(a.1: obj, b.2: obj)
+  unpack b.2 Pair #0(c.3: obj, d.4: obj)
+  let r.5: obj = call g(b.2)
+  let q.6: obj = con Pair #0(r.5, d.4)
+  return q.6
+}
+",
+    );
+    insta::assert_snapshot!(shown, @"
+    layout Pair { Pair(obj, obj) }
+    fn g(s.0: obj) -> obj {
+      return s.0
+    }
+    fn h(p.0: obj) -> obj {
+      unpack p.0 Pair #0(a.1: obj, b.2: obj)
+      unpack b.2 Pair #0(c.3: obj, d.4: obj)
+      dup d.4
+      release p.0 Pair #0(_, b.2)
+      let r.5: obj = call g(b.2)
+      let q.6: obj = con Pair #0(r.5, d.4)
+      return q.6
+    }
+    ");
 }
