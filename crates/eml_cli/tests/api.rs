@@ -1,10 +1,13 @@
+use std::io;
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
 
 use eml_cli::{
-    Capture, Control, FsProvider, Limits, ModulePath, ModuleSource, Outcome, ReadError, Repl,
-    RunConfig, Session, capture_host, execute,
+    Capture, Control, FsProvider, HostRef, Limits, ModulePath, ModuleSource, Outcome, ReadError,
+    Repl, RunConfig, RuntimeError, Session, Stop, VmFault, capture_host, execute,
 };
 use eml_diagnostics::{Diagnostic, has_errors};
+use eml_rt::{Fault, Host, Opened, Stream};
 use eml_test_support::MemorySource;
 
 use crate::common::temp_project;
@@ -414,10 +417,10 @@ fn each_input_clears_the_stop_bits() {
 }
 
 /// 確保量の上限で止まると `MEMORY` のビットが残る。`()` は何も確保しないが、`entry$` の呼び出しの安全点を通るので、
-/// ビットが残っていれば止まる。失敗した実行が残したページは確保量に数えられたままなので、大きな確保をする入力は、
-/// S11b の回復までまた止まる (docs/spec/object-model.md の「実行の制御」)。
+/// ビットが残っていれば止まる。回復が古いヒープのページを `Control` に戻すので、その後に新しいページの要る入力も
+/// 上限で止まらない (docs/spec/object-model.md の「実行の制御」)。
 #[test]
-fn the_memory_stop_bit_is_cleared_for_the_next_input() {
+fn the_session_continues_after_the_memory_limit() {
     for debug_heap in [true, false] {
         let control = Arc::new(Control::new(Limits {
             max_bytes: 1 << 22,
@@ -445,6 +448,12 @@ fn the_memory_stop_bit_is_cleared_for_the_next_input() {
             Outcome::Accepted,
             "debug_heap = {debug_heap}"
         );
+        assert_eq!(
+            console.eval("let kept = build 50000 []").0,
+            Outcome::Accepted,
+            "debug_heap = {debug_heap}"
+        );
+        assert_eq!(console.repl.close().leaks, None);
     }
 }
 
@@ -580,4 +589,338 @@ fn multibyte_text_round_trips() {
     let mut console = Console::new(&RunConfig::default());
     assert_eq!(console.eval("let s = \"日本語\"").0, Outcome::Accepted);
     assert_eq!(console.eval("s").1, "\"日本語\"\n");
+}
+
+/// 出力を集め、腕を立てた後の最初の行で割り込みを立てる Host。入力を流している途中に Ctrl-C が来たときを表す。
+struct Interrupting {
+    control: Arc<Control>,
+    armed: AtomicBool,
+    out: Mutex<String>,
+}
+
+impl Host for Interrupting {
+    fn write_line(&self, _: Stream, line: &str) -> io::Result<()> {
+        if self.armed.swap(false, Ordering::SeqCst) {
+            self.control.interrupt();
+        }
+        let mut out = self.out.lock().unwrap_or_else(PoisonError::into_inner);
+        out.push_str(line);
+        out.push('\n');
+        Ok(())
+    }
+
+    fn flush(&self) -> io::Result<()> {
+        Ok(())
+    }
+
+    fn open(&self, _: &str) -> io::Result<Opened> {
+        Err(io::ErrorKind::NotFound.into())
+    }
+}
+
+/// 出力し続ける入力を途中で割り込むと、その入力は割り込まれた `Failed` になる。回復が根の値を写し、スタックに
+/// 残った物体を捨てるので、前の束縛は読め、検査モードの `close` はリークを報告しない
+/// (docs/spec/vm.md の「追記」)。
+#[test]
+fn an_interrupted_input_fails_and_the_session_continues() {
+    for debug_heap in [true, false] {
+        let control = Arc::new(Control::new(Limits::default()));
+        let config = RunConfig::default()
+            .with_debug_heap(debug_heap)
+            .with_control(Arc::clone(&control));
+        let host = Arc::new(Interrupting {
+            control,
+            armed: AtomicBool::new(false),
+            out: Mutex::new(String::new()),
+        });
+        let mut repl = Repl::new(
+            &config,
+            Box::new(MemorySource(&[])),
+            "",
+            HostRef::new(host.clone()),
+        );
+        for input in [
+            "let kept = [1, 2, 3]",
+            "forever : List Int -> <IO> Unit\nforever xs =\n  println \"line\"\n  forever (1 :: xs)",
+        ] {
+            assert_eq!(repl.eval(input).outcome, Outcome::Accepted, "{input}");
+        }
+        host.armed.store(true, Ordering::SeqCst);
+        let outcome = repl.eval("forever []").outcome;
+        let Outcome::Failed(error) = outcome else {
+            panic!("expected an interrupt, got {outcome:?} (debug_heap = {debug_heap})");
+        };
+        assert!(error.interrupted(), "{error}");
+        host.out.lock().unwrap().clear();
+        assert_eq!(repl.eval("kept").outcome, Outcome::Accepted);
+        assert_eq!(*host.out.lock().unwrap(), "[1, 2, 3]\n");
+        assert_eq!(repl.close().leaks, None, "debug_heap = {debug_heap}");
+    }
+}
+
+/// 手放されると数を足す読み手。`File` が閉じたことを数で確かめる。
+struct CountedReader {
+    inner: io::Cursor<Vec<u8>>,
+    drops: Arc<AtomicUsize>,
+}
+
+impl io::Read for CountedReader {
+    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+        self.inner.read(buf)
+    }
+}
+
+impl io::BufRead for CountedReader {
+    fn fill_buf(&mut self) -> io::Result<&[u8]> {
+        self.inner.fill_buf()
+    }
+
+    fn consume(&mut self, n: usize) {
+        self.inner.consume(n)
+    }
+}
+
+impl Drop for CountedReader {
+    fn drop(&mut self) {
+        self.drops.fetch_add(1, Ordering::SeqCst);
+    }
+}
+
+/// `open` で割り込みを立て、手放された回数を数える読み手を返す Host。ファイルを開いた直後に Ctrl-C が来たときを表す。
+struct InterruptingOpen {
+    control: Arc<Control>,
+    drops: Arc<AtomicUsize>,
+}
+
+impl Host for InterruptingOpen {
+    fn write_line(&self, _: Stream, _: &str) -> io::Result<()> {
+        Ok(())
+    }
+
+    fn flush(&self) -> io::Result<()> {
+        Ok(())
+    }
+
+    fn open(&self, _: &str) -> io::Result<Opened> {
+        self.control.interrupt();
+        Ok(Opened {
+            reader: Box::new(CountedReader {
+                inner: io::Cursor::new(b"abc".to_vec()),
+                drops: Arc::clone(&self.drops),
+            }),
+            size: Some(3),
+        })
+    }
+}
+
+/// 割り込みで止まった入力が開いた `File` は、`eval` から戻った時点で閉じていて、検査モードの `close` もリークを
+/// 報告しない。`Fs.read_all` の中で止まったときは `read_all` が `File` を手放す (`Extern` の誤り)。`File` を渡す
+/// 呼び出しの安全点で止まったときは `File` が失敗した実行のスタックに残り、回復が古いヒープを捨てるときに破棄処理が
+/// 閉じる (docs/spec/object-model.md の「セッションの根」)。
+#[test]
+fn a_file_left_open_by_an_interrupt_is_closed_by_recovery() {
+    for debug_heap in [true, false] {
+        let control = Arc::new(Control::new(Limits::default()));
+        let config = RunConfig::default()
+            .with_debug_heap(debug_heap)
+            .with_control(Arc::clone(&control));
+        let drops = Arc::new(AtomicUsize::new(0));
+        let host = InterruptingOpen {
+            control,
+            drops: Arc::clone(&drops),
+        };
+        let mut repl = Repl::new(
+            &config,
+            Box::new(MemorySource(&[])),
+            "",
+            HostRef::new(Arc::new(host)),
+        );
+        for input in [
+            "keep : Fs.File -> Fs.File\nkeep f = f",
+            "read : Unit -> <IO> String\nread () =\n  let f = Fs.open \"a.txt\"\n  \
+             let (f, text) = Fs.read_all f\n  Fs.close f\n  text",
+            "read_kept : Unit -> <IO> String\nread_kept () =\n  let f = keep (Fs.open \"a.txt\")\n  \
+             let (f, text) = Fs.read_all f\n  Fs.close f\n  text",
+        ] {
+            let evaluated = repl.eval(input);
+            assert_eq!(
+                evaluated.outcome,
+                Outcome::Accepted,
+                "{input}: {:?}",
+                codes(&evaluated.diagnostics)
+            );
+        }
+        let mut interrupted = |input: &str| {
+            let outcome = repl.eval(input).outcome;
+            let Outcome::Failed(error) = outcome else {
+                panic!("expected an interrupt, got {outcome:?} (debug_heap = {debug_heap})");
+            };
+            assert!(error.interrupted(), "{error}");
+            error
+        };
+        let error = interrupted("read ()");
+        assert!(
+            matches!(
+                error,
+                RuntimeError::Fault {
+                    fault: VmFault::Extern(Fault::Stopped(Stop::Interrupted)),
+                    ..
+                }
+            ),
+            "{error:?}"
+        );
+        assert_eq!(drops.load(Ordering::SeqCst), 1, "debug_heap = {debug_heap}");
+        let error = interrupted("read_kept ()");
+        assert!(
+            matches!(
+                error,
+                RuntimeError::Fault {
+                    fault: VmFault::Stopped(Stop::Interrupted),
+                    ..
+                }
+            ),
+            "{error:?}"
+        );
+        assert_eq!(drops.load(Ordering::SeqCst), 2, "debug_heap = {debug_heap}");
+        assert_eq!(repl.close().leaks, None, "debug_heap = {debug_heap}");
+    }
+}
+
+/// 下の回復のテストが使う定義。`build` も `total` も末尾呼び出しなので、長いリストでも VM のスタックが
+/// 伸びない。
+const BUILD: &str = "build : Int -> List Int -> List Int\n\
+                     build n acc = if n == 0 then acc else build (n - 1) (n :: acc)";
+const TOTAL: &str = "total : List Int -> Int -> Int\n\
+                     total xs acc = match xs with\n  | [] -> acc\n  | x :: rest -> total rest (acc + x)";
+/// 引数を左から評価するので、`1 / 0` で止まるときに作ったリストがスタックに残る。回復しなければ検査モードの `close`
+/// がそれをリークとして報告する。
+const HOLDING: &str = "total (build 100 []) (1 / 0)";
+
+/// 2つのモードの `Console` に `inputs` を流し、どれも受け付けられることを確かめる。
+fn consoles_with(inputs: &[&str]) -> Vec<(Console, Arc<Control>, bool)> {
+    [true, false]
+        .into_iter()
+        .map(|debug_heap| {
+            let control = Arc::new(Control::new(Limits::default()));
+            let config = RunConfig::default()
+                .with_debug_heap(debug_heap)
+                .with_control(Arc::clone(&control));
+            let mut console = Console::new(&config);
+            for input in inputs {
+                let (outcome, _, codes) = console.eval(input);
+                assert_eq!(outcome, Outcome::Accepted, "{input}: {codes:?}");
+            }
+            (console, control, debug_heap)
+        })
+        .collect()
+}
+
+fn assert_failed(console: &mut Console, input: &str) {
+    let (outcome, _, _) = console.eval(input);
+    assert!(
+        matches!(outcome, Outcome::Failed(_)),
+        "{input}: {outcome:?}"
+    );
+}
+
+/// 失敗する入力を続けても、前の束縛は正しく読め、確保量は増えない。回復が毎回古いヒープのページを `Control` に
+/// 戻す (docs/superpowers/specs/2026-10-16-s11b-recovery-design.md の「意味」)。
+#[test]
+fn repeated_failures_keep_the_bindings_and_the_memory() {
+    for (mut console, control, debug_heap) in
+        consoles_with(&[BUILD, TOTAL, "let kept = build 1000 []"])
+    {
+        let fail = "total (build 20000 []) (1 / 0)";
+        assert_failed(&mut console, fail);
+        let after_first = control.bytes();
+        for _ in 0..30 {
+            assert_failed(&mut console, fail);
+        }
+        assert!(
+            control.bytes() <= after_first,
+            "{} > {after_first} (debug_heap = {debug_heap})",
+            control.bytes()
+        );
+        assert_eq!(console.eval("total kept 0").1, "500500\n");
+        assert_eq!(
+            console.repl.close().leaks,
+            None,
+            "debug_heap = {debug_heap}"
+        );
+    }
+}
+
+/// 回復は根から届く物体を明示のスタックでたどるので、長いリストの根でも Rust のスタックが溢れない
+/// (docs/superpowers/specs/2026-10-16-s11b-recovery-design.md の「`Ctx::recover`」)。
+#[test]
+fn a_long_list_survives_recovery() {
+    for (mut console, _, debug_heap) in consoles_with(&[BUILD, TOTAL, "let xs = build 200000 []"]) {
+        assert_failed(&mut console, HOLDING);
+        assert_eq!(
+            console.eval("total xs 0").1,
+            "20000100000\n",
+            "debug_heap = {debug_heap}"
+        );
+        assert_eq!(
+            console.repl.close().leaks,
+            None,
+            "debug_heap = {debug_heap}"
+        );
+    }
+}
+
+/// 2つの根が同じ物体を指していても、回復はそれを1つだけ写し、どちらの根からも同じ値が読める
+/// (docs/superpowers/specs/2026-10-16-s11b-recovery-design.md の「`Ctx::recover`」)。
+#[test]
+fn objects_shared_between_roots_survive_recovery() {
+    for (mut console, _, debug_heap) in
+        consoles_with(&[BUILD, TOTAL, "let a = [1, 2, 3]", "let b = (a, a)"])
+    {
+        assert_failed(&mut console, HOLDING);
+        assert_eq!(console.eval("b").1, "([1, 2, 3], [1, 2, 3])\n");
+        assert_eq!(console.eval("a").1, "[1, 2, 3]\n");
+        assert_eq!(
+            console.repl.close().leaks,
+            None,
+            "debug_heap = {debug_heap}"
+        );
+    }
+}
+
+/// 失敗した `let` の後も、同じ名前を束縛し直して読め、`close` はリークを報告しない
+/// (docs/spec/object-model.md の「セッションの根」)。
+#[test]
+fn a_failed_let_leaves_no_leak() {
+    for (mut console, _, debug_heap) in consoles_with(&[BUILD, TOTAL]) {
+        assert_failed(&mut console, "let x = total (build 10 []) (1 / 0)");
+        assert_failed(&mut console, "let x = 1 / 0");
+        assert_eq!(console.eval("let x = build 3 []").0, Outcome::Accepted);
+        assert_eq!(console.eval("x").1, "[1, 2, 3]\n");
+        assert_eq!(
+            console.repl.close().leaks,
+            None,
+            "debug_heap = {debug_heap}"
+        );
+    }
+}
+
+/// 余りの容量を持つ文字列 (補間が作る) と `BigInt` の根も、回復の後に同じ値が読める
+/// (docs/spec/object-model.md の「種類」)。
+#[test]
+fn strings_and_big_integers_survive_recovery() {
+    for (mut console, _, debug_heap) in consoles_with(&[
+        BUILD,
+        TOTAL,
+        "let n = 4611686018427387903 + 1",
+        "let s = \"日本語 \\{n} 文字\"",
+    ]) {
+        assert_failed(&mut console, HOLDING);
+        assert_eq!(console.eval("n").1, "4611686018427387904\n");
+        assert_eq!(console.eval("s").1, "\"日本語 4611686018427387904 文字\"\n");
+        assert_eq!(
+            console.repl.close().leaks,
+            None,
+            "debug_heap = {debug_heap}"
+        );
+    }
 }
