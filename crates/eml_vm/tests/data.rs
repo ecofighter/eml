@@ -560,3 +560,61 @@ fn a_constructor_with_many_scanned_fields_reads_its_last_field() {
     text += &format!("  return u.{}\n}}\n", 2 * n + 1);
     assert_eq!(run_lir(&text), (format!("{}\n", n - 1), Ok(())));
 }
+
+/// scrutinee が変数なので、行き先は実行時に決まる。負の鍵と 32 ビットを超える鍵は、オペランドの下位と上位の 2 語に
+/// 分けて置くので、それぞれの符号と桁を保って比べられることを確かめる。
+#[test]
+fn an_int_variable_switch_matches_negative_and_wide_keys() {
+    fn pick(n: i64) -> String {
+        let text = format!(
+            "\
+fn main() -> unit {{
+  let n.0: int = extern \"Prelude.+\"({n}, 0)
+  switch n.0 {{ -3 -> b1, 5000000000 -> b2, _ -> b3 }}
+b1:
+  let s.1: obj = const \"negative\"
+  let o.2: unit = extern Prelude.println(s.1)
+  return o.2
+b2:
+  let s.3: obj = const \"wide\"
+  let o.4: unit = extern Prelude.println(s.3)
+  return o.4
+b3:
+  let s.5: obj = const \"default\"
+  let o.6: unit = extern Prelude.println(s.5)
+  return o.6
+}}
+"
+        );
+        run_lir(&text).0
+    }
+    assert_eq!(pick(-3), "negative\n");
+    assert_eq!(pick(5_000_000_000), "wide\n");
+    assert_eq!(pick(3), "default\n");
+    assert_eq!(pick(5), "default\n");
+}
+
+/// `obj` の scrutinee は、レイアウトの全部のコンストラクタがフィールドを持つ。先頭でないケースを選び、フィールドを読む。
+#[test]
+fn an_obj_switch_takes_a_non_first_case_and_reads_its_field() {
+    let text = "\
+layout Shape { Circle(tobj), Square(tobj) }
+fn main() -> unit {
+  let s.0: obj = const \"square\"
+  let d.1: obj = con Shape #1(s.0)
+  tail call name(d.1)
+}
+fn name(d.0: obj) -> unit {
+  switch d.0 Shape { #0(a.1: obj) -> b1, #1(b.2: obj) -> b2 }
+b1:
+  release d.0 Shape #0(a.1)
+  let o.3: unit = extern Prelude.println(a.1)
+  return o.3
+b2:
+  release d.0 Shape #1(b.2)
+  let o.4: unit = extern Prelude.println(b.2)
+  return o.4
+}
+";
+    assert_eq!(run_lir(text), ("square\n".to_string(), Ok(())));
+}

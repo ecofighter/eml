@@ -101,6 +101,16 @@ fn line<M: Mode>(code: &CodeBase<M>, pc: Pc) -> String {
         Op::TailCall { at } => format!("tail_call {}({})", name(ops(at)[0]), args(at, 2)),
         Op::Finish => "finish".to_string(),
         Op::ApplyRest => "apply_rest".to_string(),
+        Op::Closure { dst, at } => {
+            let o = ops(at);
+            let lin = if o[1] != 0 { " lin" } else { "" };
+            format!("closure s{dst} = {}({}){lin}", name(o[0]), args(at, 3))
+        }
+        Op::Apply { dst, at } => format!("apply s{dst} = s{}({})", ops(at)[0], args(at, 2)),
+        Op::TailApply { at } => format!("tail_apply s{}({})", ops(at)[0], args(at, 2)),
+        Op::Clause { dst, at } => format!("clause s{dst} = s{}({})", ops(at)[0], args(at, 2)),
+        Op::TailClause { at } => format!("tail_clause s{}({})", ops(at)[0], args(at, 2)),
+        Op::TailSelf { at } => format!("tail_self {}({})", ops(at)[0], args(at, 2)),
         Op::IntAdd { dst, a, b } => bin("int_add", dst, a, b),
         Op::IntSub { dst, a, b } => bin("int_sub", dst, a, b),
         Op::IntMul { dst, a, b } => bin("int_mul", dst, a, b),

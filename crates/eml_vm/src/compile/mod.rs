@@ -7,7 +7,7 @@ mod slots;
 
 use std::sync::Arc;
 
-use eml_lir::{Loc, Program};
+use eml_lir::{FnIdx, Loc, Program};
 use eml_rt::{Control, Mode};
 
 use crate::code::{CodeBase, CompileError};
@@ -58,9 +58,10 @@ pub fn compile<M: Mode>(
     out.push(Op::Finish);
     out.push(Op::ApplyRest);
     let mut functions = Vec::with_capacity(program.functions.len());
-    for function in &program.functions {
+    for (index, function) in program.functions.iter().enumerate() {
         functions.push(emit::function(
             program,
+            FnIdx(index as u32),
             function,
             &strings,
             &mut constants,

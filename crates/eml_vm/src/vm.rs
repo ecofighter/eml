@@ -6,6 +6,7 @@ use eml_extern::Extern;
 use eml_rt::{Ctx, Mode, Word, externs};
 
 use crate::RunCounts;
+use crate::apply;
 use crate::code::CodeBase;
 use crate::data;
 use crate::error::VmFault;
@@ -185,8 +186,56 @@ fn step<M: Mode>(
             finish(code, ctx, task)?;
             return Ok(false);
         }
-        // Task 5 で中身を入れる。それまではこの命令へ戻るフレームを作る命令がない
-        Op::ApplyRest => return Err(VmFault::Internal("an apply-rest frame without an apply")),
+        Op::ApplyRest => {
+            apply::apply_rest(code, ctx, task)?;
+            ctx.poll(task.depth())?;
+        }
+        Op::Closure { dst, at } => {
+            let ops = &code.operands[at as usize..];
+            let (f, lin, n) = (ops[0], ops[1] != 0, ops[2] as usize);
+            task.scratch.clear();
+            for &slot in &ops[3..3 + n] {
+                let w = task.get(slot as Slot);
+                task.scratch.push(w);
+            }
+            let w = apply::make_closure(ctx, f, lin, &task.scratch)?;
+            task.scratch.clear();
+            task.set(dst, w);
+        }
+        Op::Apply { dst, at } | Op::Clause { dst, at } => {
+            let clause = matches!(code.code[pc as usize], Op::Clause { .. });
+            let callee = load_args(code, task, at);
+            let target = apply::Target::Frame { ret: task.pc, dst };
+            apply::apply(code, ctx, task, callee, target, clause)?;
+            ctx.poll(task.depth())?;
+        }
+        Op::TailApply { at } | Op::TailClause { at } => {
+            let clause = matches!(code.code[pc as usize], Op::TailClause { .. });
+            let callee = load_args(code, task, at);
+            apply::apply(code, ctx, task, callee, apply::Target::Tail, clause)?;
+            ctx.poll(task.depth())?;
+        }
+        Op::TailSelf { at } => {
+            let ops = &code.operands[at as usize..];
+            let n = ops[1] as usize;
+            task.scratch.clear();
+            for &slot in &ops[2..2 + n] {
+                let w = task.get(slot as Slot);
+                task.scratch.push(w);
+            }
+            let Task {
+                stack,
+                scratch,
+                base,
+                ..
+            } = task;
+            for (i, w) in scratch.drain(..).enumerate() {
+                stack[*base + i] = w;
+            }
+            task.pc = ops[0];
+            // バイトコードに後ろ向きの辺ができるので、ここも安全点にする (docs/spec/vm.md の「呼び出しと戻り」)
+            ctx.poll(task.depth())?;
+        }
         Op::IntAdd { dst, a, b } => task.set_raw(dst, externs::int_add(task.raw(a), task.raw(b))?),
         Op::IntSub { dst, a, b } => task.set_raw(dst, externs::int_sub(task.raw(a), task.raw(b))?),
         Op::IntMul { dst, a, b } => task.set_raw(dst, externs::int_mul(task.raw(a), task.raw(b))?),
@@ -255,6 +304,19 @@ fn step<M: Mode>(
         Op::Extern { dst, at } => extern_call(code, ctx, task, dst, at)?,
     }
     Ok(true)
+}
+
+/// `[呼ばれる値, n, 引数…]` から引数を scratch に移し、呼ばれる値を返す。全部読んでから書くので、結果のスロットが
+/// オペランドのスロットと同じ色でもよい (docs/spec/vm.md の「スロットの割り当て」)。
+fn load_args<M: Mode>(code: &CodeBase<M>, task: &mut Task, at: u32) -> Word {
+    let ops = &code.operands[at as usize..];
+    let n = ops[1] as usize;
+    task.scratch.clear();
+    for &slot in &ops[2..2 + n] {
+        let w = task.get(slot as Slot);
+        task.scratch.push(w);
+    }
+    task.get(ops[0] as Slot)
 }
 
 /// 呼ぶ側の上に呼ばれる側のフレームを作り、引数を写して先頭へ進む。呼ぶ側のスロットはスタックに残るので、`saved` は

@@ -8,6 +8,7 @@ use std::sync::{Arc, Mutex, PoisonError};
 use eml_lir::Program;
 use eml_rt::{Buffering, Checked, Control, Ctx, Fast, Limits, Mode, StdHost};
 
+mod apply;
 mod code;
 mod compile;
 mod data;

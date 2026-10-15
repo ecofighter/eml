@@ -8,8 +8,7 @@ pub type Pc = u32;
 
 /// いちばん下のフレームの戻り先。
 pub const FINISH: Pc = 0;
-/// 余った引数を適用する組み込みの命令 (Task 5 で中身を入れる)。
-#[allow(dead_code)]
+/// 余った引数を適用する組み込みの命令。
 pub const APPLY_REST: Pc = 1;
 /// 組み込みの命令の数。関数の命令はこの後に並ぶ。
 pub const BUILTINS: Pc = 2;
@@ -51,6 +50,30 @@ pub enum Op {
     },
     Finish,
     ApplyRest,
+    /// `operands[at..]` は [関数の番号, lin, 引数の数, 引数のスロット…]。
+    Closure {
+        dst: Slot,
+        at: u32,
+    },
+    /// `operands[at..]` は [呼ばれる値のスロット, 引数の数, 引数のスロット…]。
+    Apply {
+        dst: Slot,
+        at: u32,
+    },
+    TailApply {
+        at: u32,
+    },
+    Clause {
+        dst: Slot,
+        at: u32,
+    },
+    TailClause {
+        at: u32,
+    },
+    /// 自己末尾呼び出し。`operands[at..]` は [入口の命令の位置, 引数の数, 引数のスロット…]。
+    TailSelf {
+        at: u32,
+    },
     IntAdd {
         dst: Slot,
         a: Slot,

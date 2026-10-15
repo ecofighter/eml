@@ -1,7 +1,7 @@
 //! 関数ごとの命令の生成 (docs/spec/vm.md の「命令ごとの実行」)。定数の atom は、命令の前に一時のスロットへ読み込む。
 
 use eml_extern::Extern;
-use eml_lir::{Atom, BlockId, Call, LirFn, Program, Repr, Rhs, Stmt, Term, VarId};
+use eml_lir::{Atom, BlockId, Call, FnIdx, LirFn, Program, Repr, Rhs, Stmt, Term, VarId};
 use eml_rt::Mode;
 
 use super::Out;
@@ -12,6 +12,7 @@ use crate::op::{KEEP, NONE, Op, Pc, RAW, Slot};
 
 pub(crate) fn function<M: Mode>(
     program: &Program,
+    index: FnIdx,
     function: &LirFn,
     strings: &[u32],
     constants: &mut Constants<M>,
@@ -22,6 +23,7 @@ pub(crate) fn function<M: Mode>(
     let mut emitter = Emitter {
         program,
         function,
+        index,
         strings,
         constants,
         out,
@@ -31,14 +33,18 @@ pub(crate) fn function<M: Mode>(
         block_pcs: vec![0; function.blocks.len()],
         goto_patches: Vec::new(),
         operand_patches: Vec::new(),
+        self_tail_patches: Vec::new(),
         used: used_vars(function),
         elided: elided_decrefs(function),
     };
-    for index in 0..function.blocks.len() {
-        emitter.block_pcs[index] = emitter.out.pc();
-        emitter.block(BlockId(index as u32));
+    for block in 0..function.blocks.len() {
+        emitter.block_pcs[block] = emitter.out.pc();
+        emitter.block(BlockId(block as u32));
     }
     emitter.patch();
+    for &at in &emitter.self_tail_patches {
+        emitter.out.operands[at] = start;
+    }
     let too_many = || CompileError::TooManySlots {
         function: function.name.clone(),
     };
@@ -114,6 +120,8 @@ fn elided_decrefs(function: &LirFn) -> Vec<Option<VarId>> {
 pub(crate) struct Emitter<'a, M: Mode> {
     pub(crate) program: &'a Program,
     pub(crate) function: &'a LirFn,
+    /// 今の関数の番号。自己末尾呼び出しを見分ける。
+    pub(crate) index: FnIdx,
     pub(crate) strings: &'a [u32],
     pub(crate) constants: &'a mut Constants<M>,
     pub(crate) out: &'a mut Out,
@@ -126,6 +134,8 @@ pub(crate) struct Emitter<'a, M: Mode> {
     pub(crate) goto_patches: Vec<(Pc, BlockId)>,
     /// 行き先のブロックを後で書くオペランドの位置。
     pub(crate) operand_patches: Vec<(usize, BlockId)>,
+    /// 自己末尾呼び出しのオペランドの位置。先頭の関数の番号を、関数を書き終えた後で入口の命令の位置に書き換える。
+    pub(crate) self_tail_patches: Vec<usize>,
     /// どこかで使う変数 (`used_vars`)。
     pub(crate) used: Vec<bool>,
     /// ブロックごとの、`decref` を出さない scrutinee (`elided_decrefs`)。
@@ -373,9 +383,68 @@ impl<M: Mode> Emitter<'_, M> {
                 let src = self.slot(*v);
                 self.out.push(Op::Unbox { dst, src });
             }
-            // Task 5 で足し、Task 6 でこの腕を消す
+            Rhs::MakeClosure(f, args) => {
+                let callee = self.program.function(*f);
+                let slots: Vec<Slot> = args
+                    .iter()
+                    .zip(callee.params())
+                    .map(|(&arg, &param)| self.atom(arg, callee.repr(param)))
+                    .collect();
+                let lin = self.function.mark(var) == eml_lir::Mark::Lin;
+                let at = self.out.operands(
+                    [f.0, u32::from(lin), slots.len() as u32]
+                        .into_iter()
+                        .chain(slots.iter().map(|&s| u32::from(s))),
+                );
+                self.out.push(Op::Closure { dst, at });
+            }
+            Rhs::Call {
+                call: call @ (Call::Apply { .. } | Call::Clause { .. }),
+                saved: _,
+            } => {
+                let at = self.value_call_operands(call);
+                let op = if matches!(call, Call::Clause { .. }) {
+                    Op::Clause { dst, at }
+                } else {
+                    Op::Apply { dst, at }
+                };
+                self.out.push(op);
+            }
+            // 残りの命令は後で足す
             other => panic!("the VM does not compile {other:?} yet"),
         }
+    }
+
+    /// `apply` と `clause` のオペランド [呼ばれる値, n, 引数…]。`apply` の位置は一様 (`tobj`)、`clause` の引数は操作の
+    /// 表の Repr で、先頭の evidence は `obj` である (docs/spec/lir.md の「節の呼び出し」)。
+    fn value_call_operands(&mut self, call: &Call) -> u32 {
+        let (callee, args, reprs): (Atom, &[Atom], Vec<Repr>) = match call {
+            Call::Apply { callee, args, .. } => (*callee, args, vec![Repr::TObj; args.len()]),
+            Call::Clause {
+                effect,
+                op,
+                callee,
+                args,
+            } => {
+                let operation = eml_lir::operation(&self.program.effects, *effect, *op);
+                let reprs = std::iter::once(Repr::Obj)
+                    .chain(operation.params.iter().copied())
+                    .collect();
+                (*callee, args, reprs)
+            }
+            Call::Direct(..) => unreachable!("a direct call has its own instruction"),
+        };
+        let callee = self.atom(callee, Repr::TObj);
+        let slots: Vec<Slot> = args
+            .iter()
+            .zip(reprs)
+            .map(|(&arg, repr)| self.atom(arg, repr))
+            .collect();
+        self.out.operands(
+            [u32::from(callee), slots.len() as u32]
+                .into_iter()
+                .chain(slots.iter().map(|&s| u32::from(s))),
+        )
     }
 
     /// 直接の呼び出しのオペランド [関数の番号, 引数の数, 引数のスロット…]。
@@ -401,7 +470,21 @@ impl<M: Mode> Emitter<'_, M> {
             }
             Term::TailCall(Call::Direct(f, args)) => {
                 let at = self.call_operands(*f, args);
-                self.out.push(Op::TailCall { at });
+                if *f == self.index {
+                    self.self_tail_patches.push(at as usize);
+                    self.out.push(Op::TailSelf { at });
+                } else {
+                    self.out.push(Op::TailCall { at });
+                }
+            }
+            Term::TailCall(call) => {
+                let at = self.value_call_operands(call);
+                let op = if matches!(call, Call::Clause { .. }) {
+                    Op::TailClause { at }
+                } else {
+                    Op::TailApply { at }
+                };
+                self.out.push(op);
             }
             Term::Jump { target, args } => self.jump(block, *target, args),
             Term::Switch {
@@ -410,8 +493,6 @@ impl<M: Mode> Emitter<'_, M> {
                 cases,
                 default,
             } => self.switch(block, *scrutinee, *layout, cases, *default),
-            // Task 5 で足し、Task 6 でこの腕を消す
-            other => panic!("the VM does not compile {other:?} yet"),
         }
     }
 

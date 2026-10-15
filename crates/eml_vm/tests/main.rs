@@ -3,6 +3,7 @@
 
 mod common;
 
+mod calls;
 mod codegen;
 mod data;
 mod run;
