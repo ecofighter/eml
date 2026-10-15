@@ -11,10 +11,11 @@ use eml_hir::{
 };
 use eml_types::{
     BodyTypes, InstanceNode, Instantiation, Lin, Resolution, RowYield, Substitution, TypeId,
-    TypeKind, TypeStore, TypedProgram, Update,
+    TypeKind, TypeNames, TypeStore, TypedProgram, Update,
 };
 use la_arena::ArenaMap;
 
+use super::names::{NameTable, args_hash};
 use super::program::core_name;
 use super::types::split_arrows;
 
@@ -792,43 +793,36 @@ fn row_suffix(names: &[String], bits: &[bool]) -> String {
     }
 }
 
-/// `@[` と `]` の間の上限の文字数。部分を共有する型では表示が指数の長さになるので、超えたら順番の名前にする。
+/// `@[` と `]` の間の上限の文字数。部分を共有する型では表示が指数の長さになるので、超えたらハッシュの名前にする。
 const NAME_LIMIT: usize = 64;
 
-/// 型変数を持つ関数の instance の名前 (docs/spec/core-ir.md の「変換の規則」)。`ordinal` は、その関数の instance の
-/// 中の順番 (1 から数える) である。`suffix` は row のビットの部分 (`row_suffix`) で、どちらの形の名前にも付ける。
+/// 型変数を持つ関数の instance の名前 (docs/spec/core-ir.md の「変換の規則」)。名前は型引数だけで決め、ほかの
+/// instance の有無や見つけた順によらない。同じ名前の関数がいつも同じコードになるためである。`suffix` は row のビットの
+/// 部分 (`row_suffix`) で、どちらの形の名前にも付ける。
 fn instance_name(
     store: &TypeStore,
-    hir: &HirProgram,
+    names: &NameTable,
     base: &str,
     args: &[TypeId],
     suffix: &str,
-    ordinal: usize,
-    taken: &mut HashSet<String>,
 ) -> String {
     let shown: Option<Vec<String>> = args
         .iter()
-        .map(|&arg| store.display_linear_bounded(arg, &hir.names, NAME_LIMIT))
+        .map(|&arg| store.display_name_bounded(arg, names, NAME_LIMIT))
         .collect();
     let inner = shown
         .map(|shown| shown.join(", "))
         .filter(|inner| inner.chars().count() <= NAME_LIMIT);
-    if let Some(inner) = inner {
-        let name = format!("{base}@[{inner}]{suffix}");
-        // 異なる型が同じ表示になる (row の末尾の表示など) ときは、後の instance を順番の名前にする
-        if taken.insert(name.clone()) {
-            return name;
-        }
+    match inner {
+        Some(inner) => format!("{base}@[{inner}]{suffix}"),
+        None => format!("{base}@#{:016x}{suffix}", args_hash(store, names, args)),
     }
-    let name = format!("{base}@{ordinal}{suffix}");
-    taken.insert(name.clone());
-    name
 }
 
 /// 生成する関数の、鍵を付ける前の名前 (docs/spec/core-ir.md の「メソッドの解決」)。
 /// 手で書いた instance のメソッドと同じ形で、導出した instance は型を定義したモジュールで、タプルと `Unit` は
 /// Prelude で修飾する。補助の `tag$` は `con$` と同じ修飾の規則に従う。
-fn generated_base(hir: &HirProgram, generated: &Generated) -> String {
+fn generated_base(hir: &HirProgram, names: &NameTable, generated: &Generated) -> String {
     let (class, method) = match generated.method {
         GeneratedMethod::Eq => (hir.lang.eq, "=="),
         GeneratedMethod::Compare => (hir.lang.ord, "compare"),
@@ -842,11 +836,11 @@ fn generated_base(hir: &HirProgram, generated: &Generated) -> String {
             return format!("tag${}", core_name(hir, ty.module, &hir[ty].name));
         }
     };
-    let class = hir.names.class(class);
+    let class = names.class(class);
     match generated.node {
         InstanceNode::Declared(instance) => {
             let ty = hir[instance].head;
-            let name = format!("{class} {}.{method}", hir.names.ty(ty));
+            let name = format!("{class} {}.{method}", names.ty(ty));
             core_name(hir, ty.module, &name)
         }
         InstanceNode::Tuple(count) => {
@@ -873,31 +867,19 @@ fn order(hir: &HirProgram, found: Vec<Found>, entry: usize, store: TypeStore) ->
     for (new, &old) in sorted.iter().enumerate() {
         renumbered[old] = new;
     }
-    let mut ordinals: HashMap<FunctionId, usize> = HashMap::new();
-    let mut generated_ordinals: HashMap<(InstanceNode, GeneratedMethod), usize> = HashMap::new();
-    let mut taken = HashSet::new();
+    let names = NameTable::new(hir);
     let mut found: Vec<Option<Found>> = found.into_iter().map(Some).collect();
-    let list = sorted
+    let list: Vec<Instance> = sorted
         .iter()
         .map(
             |&old| match found[old].take().expect("each instance is taken once") {
                 Found::Function(found) => {
                     let base = core_name(hir, found.function.module, &hir[found.function].name);
-                    let ordinal = ordinals.entry(found.function).or_default();
-                    *ordinal += 1;
                     let suffix = row_suffix(&row_vars(hir, found.function), &found.bits);
                     let name = if type_vars(hir, found.function).is_empty() {
                         format!("{base}{suffix}")
                     } else {
-                        instance_name(
-                            &store,
-                            hir,
-                            &base,
-                            &found.args,
-                            &suffix,
-                            *ordinal,
-                            &mut taken,
-                        )
+                        instance_name(&store, &names, &base, &found.args, &suffix)
                     };
                     Instance {
                         name,
@@ -921,23 +903,11 @@ fn order(hir: &HirProgram, found: Vec<Found>, entry: usize, store: TypeStore) ->
                     tag,
                     fields,
                 } => {
-                    let base = generated_base(hir, &generated);
-                    let ordinal = generated_ordinals
-                        .entry((generated.node, generated.method))
-                        .or_default();
-                    *ordinal += 1;
+                    let base = generated_base(hir, &names, &generated);
                     let name = if generated.args.is_empty() {
                         base
                     } else {
-                        instance_name(
-                            &store,
-                            hir,
-                            &base,
-                            &generated.args,
-                            "",
-                            *ordinal,
-                            &mut taken,
-                        )
+                        instance_name(&store, &names, &base, &generated.args, "")
                     };
                     Instance {
                         name,
@@ -955,6 +925,15 @@ fn order(hir: &HirProgram, found: Vec<Found>, entry: usize, store: TypeStore) ->
             },
         )
         .collect();
+    // 名前は関数を照らす鍵なので、重なれば別の関数が同じコードとして扱われる (docs/spec/core-ir.md の「変換の規則」)
+    debug_assert!(
+        {
+            let mut seen = HashSet::new();
+            list.iter()
+                .all(|instance| seen.insert(instance.name.as_str()))
+        },
+        "two instances have the same name"
+    );
     Instances {
         list,
         entry: InstanceId(renumbered[entry]),

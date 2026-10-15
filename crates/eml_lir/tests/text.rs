@@ -408,6 +408,25 @@ fn g(x.0: int, y.1: int) -> int {
 }
 
 #[test]
+fn a_function_name_with_a_hash_sign_is_quoted() {
+    // 版の名前 (`f#3`) とハッシュの名前 (`f@#…`) は `#` を含む。`#` はタグの字なので、引用符で囲んで書く
+    // (docs/spec/core-ir.md の「変換の規則」)
+    let program = round_trip(
+        "\
+fn \"f#3\"(x.0: int) -> int {
+  let y.1: int = call \"g@#0123456789abcdef\"(x.0)
+  return y.1
+}
+fn \"g@#0123456789abcdef\"(x.0: int) -> int {
+  return x.0
+}
+",
+    );
+    assert_eq!(program.functions[0].name, "f#3");
+    assert_eq!(program.functions[1].name, "g@#0123456789abcdef");
+}
+
+#[test]
 fn quoted_function_names_round_trip() {
     // 単相化の instance の名前は空白と括弧を含むので、引用符で囲んで書く (docs/implementation/testing.md の
     // 「LIR のテキストの形」)

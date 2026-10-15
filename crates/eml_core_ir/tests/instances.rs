@@ -6,7 +6,12 @@ use eml_core_ir::Pass;
 
 /// `Pass::Translate` までの Core IR の、内部の印のない関数のうち、`name@` で始まる名前を並べる。
 fn instances_of(text: &str, name: &str) -> Vec<String> {
-    let program = eml_test_support::core_until(text, Pass::Translate);
+    instances_of_files(text, &[], name)
+}
+
+/// `instances_of` の、import するモジュールを持つ形。`modules` は根からの相対パスと本文の組である。
+fn instances_of_files(text: &str, modules: &[(&str, &str)], name: &str) -> Vec<String> {
+    let program = eml_test_support::core_until_files(text, modules, Pass::Translate);
     let prefix = format!("{name}@");
     program
         .functions
@@ -14,6 +19,18 @@ fn instances_of(text: &str, name: &str) -> Vec<String> {
         .filter(|function| !function.internal && function.name.starts_with(&prefix))
         .map(|function| function.name.clone())
         .collect()
+}
+
+/// `name@#` に16桁の小文字の16進数が続き、`suffix` で終わる名前か。
+fn is_hash_name(name: &str, base: &str, suffix: &str) -> bool {
+    name.strip_prefix(&format!("{base}@#"))
+        .and_then(|rest| rest.strip_suffix(suffix))
+        .is_some_and(|hex| {
+            hex.len() == 16
+                && hex
+                    .chars()
+                    .all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase())
+        })
 }
 
 #[test]
@@ -127,8 +144,8 @@ main () =
 }
 
 #[test]
-fn a_long_shared_type_argument_gets_an_ordinal_name() {
-    // `ident` の型引数は列の長さの指数の大きさで表示されるので、名前は順番の形になる
+fn a_long_shared_type_argument_gets_a_hash_name() {
+    // `ident` の型引数は列の長さの指数の大きさで表示されるので、名前は型の構造のハッシュの形になる
     let n = 64;
     let mut text = String::from(
         "ident : a -> a\nident x = x\n\nrun : Unit -> Int\nrun () =\n  let f0 = ident\n",
@@ -142,9 +159,7 @@ fn a_long_shared_type_argument_gets_an_ordinal_name() {
     let names = instances_of(&text, "ident");
     assert_eq!(names.len(), n + 1);
     assert!(
-        names
-            .iter()
-            .any(|name| name.starts_with("ident@") && !name.starts_with("ident@[")),
+        names.iter().any(|name| is_hash_name(name, "ident", "")),
         "{names:?}"
     );
 }
@@ -187,8 +202,8 @@ fn only_the_set_row_variables_are_named_in_signature_order() {
 }
 
 #[test]
-fn an_ordinal_name_keeps_its_row_bits() {
-    // `tap` の型引数 (f1 の型) は列の長さの指数の大きさで表示されるので、名前は順番の形になり、その後ろに立った
+fn a_hash_name_keeps_its_row_bits() {
+    // `tap` の型引数 (f1 の型) は列の長さの指数の大きさで表示されるので、名前はハッシュの形になり、その後ろに立った
     // ビットが付く
     let n = 64;
     let mut text = String::from(
@@ -200,7 +215,63 @@ fn an_ordinal_name_keeps_its_row_bits() {
     text.push_str(&format!(
         "  let _ = tap f1 ask\n  f{n} 5\n\nmain : Unit -> <IO> Unit\nmain () = println (show (handle run () with\n    | ask () k -> k 2))"
     ));
-    assert_eq!(instances_of(&text, "tap"), ["tap@1<e>"]);
+    assert_eq!(instances_of(&text, "tap"), ["tap@#56963963a7329f3e<e>"]);
+}
+
+/// `tap` を長い型引数で使うプログラム。`short` なら、その前に `Int` でも使う。
+fn tap_program(short: bool) -> String {
+    let n = 64;
+    let mut text = String::from(
+        "effect Ask where\n  ask : Unit -> Int\n\nident : a -> a\nident x = x\n\ntap : a -> (Unit -> <e> Int) -> <e> a\ntap x g =\n  let _ = g ()\n  x\n\nrun : Unit -> <Ask> Int\nrun () =\n  let f0 = ident\n",
+    );
+    if short {
+        text.push_str("  let _ = tap 1 ask\n");
+    }
+    for i in 1..=n {
+        text.push_str(&format!("  let f{i} = f{} ident\n", i - 1));
+    }
+    text.push_str(&format!(
+        "  let _ = tap f1 ask\n  f{n} 5\n\nmain : Unit -> <IO> Unit\nmain () = println (show (handle run () with\n    | ask () k -> k 2))"
+    ));
+    text
+}
+
+#[test]
+fn a_hash_name_does_not_depend_on_the_other_instances() {
+    // 順番の名前は、前に見つかった instance があると番号が変わった。名前は型引数だけで決まるので、同じ名前の関数が
+    // いつも同じコードになる (docs/spec/core-ir.md の「変換の規則」)
+    let alone = instances_of(&tap_program(false), "tap");
+    let with_short = instances_of(&tap_program(true), "tap");
+    assert_eq!(alone, ["tap@#56963963a7329f3e<e>"]);
+    assert_eq!(with_short, ["tap@[Int]<e>", "tap@#56963963a7329f3e<e>"]);
+}
+
+#[test]
+fn a_type_outside_the_prelude_and_the_entry_is_qualified_by_its_module() {
+    // 名前の型は、診断の表示名と違って、名前が重ならなくてもモジュールで修飾する。後の入力が同じ名前を定義しても
+    // 名前が変わらないようにするためである
+    let text = "id : a -> a\nid x = x\n\nmain : Unit -> <IO> Unit\nmain () =\n  let f = id (Fs.open \"x.txt\")\n  Fs.close f";
+    assert_eq!(instances_of(text, "id"), ["id@[Std.Fs.File]"]);
+    let modules = [("Shape.em", "pub data Shape = | Dot\n")];
+    let text = "import Shape (Shape(..))\n\nid : a -> a\nid x = x\n\nmain : Unit -> <IO> Unit\nmain () =\n  let _ = id Dot\n  ()";
+    assert_eq!(
+        instances_of_files(text, &modules, "id"),
+        ["id@[Shape.Shape]"]
+    );
+}
+
+#[test]
+fn a_prelude_type_is_not_qualified_even_when_another_module_shares_its_name() {
+    // 入口の `Bool` は Prelude の `Bool` と重なるので `Main.` で修飾する。Prelude の `Bool` は修飾しない
+    let text = "data Bool = | No | Yes\n\nid : a -> a\nid x = x\n\nmain : Unit -> <IO> Unit\nmain () =\n  let _ = id True\n  let _ = id No\n  ()";
+    assert_eq!(instances_of(text, "id"), ["id@[Bool]", "id@[Main.Bool]"]);
+    // import したモジュールが Prelude と同じ名前を定義しても、Prelude の型は修飾しない
+    let modules = [("Opt.em", "pub data Option a = | Nope\n")];
+    let text = "import Opt\n\nid : a -> a\nid x = x\n\nmain : Unit -> <IO> Unit\nmain () =\n  let _ = id (Some 1)\n  let _ = id Opt.Nope\n  ()";
+    assert_eq!(
+        instances_of_files(text, &modules, "id"),
+        ["id@[Option Int]", "id@[Opt.Option _]"]
+    );
 }
 
 #[test]
@@ -300,7 +371,7 @@ fn a_polymorphic_entry_is_uniform() {
         .iter()
         .map(|function| function.name.as_str())
         .collect();
-    assert_eq!(names, ["first@[_]", "entry$first"]);
+    assert_eq!(names, ["first@[_%m]", "entry$first"]);
 }
 
 /// `name` の関数を入口にして、`Pass::Translate` までの Core IR を表示する。
@@ -502,9 +573,9 @@ fn a_closure_with_a_file_passed_as_a_type_variable_lowers() {
 
 #[test]
 fn a_result_only_operation_variable_gives_one_uniform_key() {
-    // `mk` の `a` は結果の型にだけ現れるので、`ids` の鍵は一様な位置の `_` が1つになる。名前の `Flexible` は Kind によらず
-    // `_` と書く (docs/spec/types.md の「`Flexible` と `OpVar` の Kind」と、docs/spec/core-ir.md の「変換の規則」)。
+    // `mk` の `a` は結果の型にだけ現れるので、`ids` の鍵は一様な位置の `_` が1つになる。名前の `Flexible` は Kind の印を
+    // 付けて書く (docs/spec/types.md の「`Flexible` と `OpVar` の Kind」と、docs/spec/core-ir.md の「変換の規則」)。
     // `OpVar` が `Poly` の Kind を持つことは、eml_types の `kind_export::a_clause_in_main_keeps_its_operation_variable_kinds` が確かめる
     let text = "ids : List a -> List a\nids xs = xs\n\neffect Make where\n  mk : Unit -> List a\n\nbody : Unit -> <Make> Int\nbody () =\n  let xs = (mk () : List Int)\n  0\n\nmain : Unit -> <IO> Unit\nmain () =\n  let n = handle body () with\n            | mk () k -> k (ids [])\n  println (show n)";
-    assert_eq!(instances_of(text, "ids"), ["ids@[_]"]);
+    assert_eq!(instances_of(text, "ids"), ["ids@[_%m]"]);
 }

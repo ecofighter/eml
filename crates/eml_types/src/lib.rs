@@ -31,7 +31,7 @@ use crate::shape::Shape;
 
 pub use dump::{dump, dump_linear};
 pub use resolve::{Resolution, resolve};
-pub use store::{EffectLabel, Lin, RowTail, Substitution, TypeId, TypeKind, TypeStore};
+pub use store::{EffectLabel, Lin, RowTail, Substitution, TypeId, TypeKind, TypeNames, TypeStore};
 pub use uniform::{InstanceNode, Uniform};
 
 pub mod codes {

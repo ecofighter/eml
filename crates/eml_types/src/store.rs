@@ -526,16 +526,24 @@ impl TypeStore {
         self.bounded(self.display(id, names), limit)
     }
 
-    /// `display_bounded` と同じ上限つきの表示で、矢印の線形性を `%1` と `%m` で書く。`Unr` は書かない。
-    /// instance の名前が、線形性だけが違う具体化を区別するために使う (docs/spec/core-ir.md
-    /// の「変換の規則」)。
-    pub fn display_linear_bounded(
+    /// instance の名前に使う上限つきの表示。矢印の線形性に加えて、`Flexible` と `OpVar` の Kind も書く。Kind だけが
+    /// 違う型を同じ文字列にしないためである。item の名前は、後の入力で変わらない表 `names` から引く
+    /// (docs/spec/core-ir.md の「変換の規則」)。
+    pub fn display_name_bounded(
         &self,
         id: TypeId,
-        names: &DisplayNames,
+        names: &dyn TypeNames,
         limit: usize,
     ) -> Option<String> {
-        self.bounded(self.display_linear(id, names), limit)
+        self.bounded(
+            TypeDisplay {
+                id,
+                types: self,
+                names,
+                show: Show::Kinds,
+            },
+            limit,
+        )
     }
 
     /// 診断の表示と違い、矢印の線形性を書く。
@@ -610,14 +618,36 @@ impl TypeStore {
     }
 }
 
+/// 型の表示が型、エフェクト、`Unit` の名前を引く表。診断は `DisplayNames` を使い、instance の名前は、後の入力で
+/// 変わらない別の表を使う (docs/spec/core-ir.md の「変換の規則」)。
+pub trait TypeNames {
+    fn ty(&self, id: TypeDefId) -> &str;
+    fn effect(&self, id: EffectId) -> &str;
+    fn unit(&self) -> &str;
+}
+
+impl TypeNames for DisplayNames {
+    fn ty(&self, id: TypeDefId) -> &str {
+        DisplayNames::ty(self, id)
+    }
+
+    fn effect(&self, id: EffectId) -> &str {
+        DisplayNames::effect(self, id)
+    }
+
+    fn unit(&self) -> &str {
+        DisplayNames::unit(self)
+    }
+}
+
 /// 型の表示の方法。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Show {
     /// 診断の表示。表面の構文は線形性を書かないので、線形性を書かない。
     Plain,
-    /// 矢印の線形性を書く。instance の名前に使う。
+    /// 矢印の線形性を書く。
     Arrows,
-    /// 矢印に加えて、`Flexible` と `OpVar` の Kind も書く。
+    /// 矢印に加えて、`Flexible` と `OpVar` の Kind も書く。テストのダンプと instance の名前に使う。
     Kinds,
 }
 
@@ -634,7 +664,7 @@ fn mark(lin: Lin) -> String {
 struct LabelDisplay<'a> {
     label: &'a EffectLabel,
     types: &'a TypeStore,
-    names: &'a DisplayNames,
+    names: &'a dyn TypeNames,
     show: Show,
 }
 
@@ -651,7 +681,7 @@ impl fmt::Display for LabelDisplay<'_> {
 struct TypeDisplay<'a> {
     id: TypeId,
     types: &'a TypeStore,
-    names: &'a DisplayNames,
+    names: &'a dyn TypeNames,
     show: Show,
 }
 
@@ -747,7 +777,7 @@ impl fmt::Display for TypeDisplay<'_> {
 struct Atomic<'a> {
     id: TypeId,
     types: &'a TypeStore,
-    names: &'a DisplayNames,
+    names: &'a dyn TypeNames,
     show: Show,
 }
 
@@ -767,7 +797,12 @@ impl fmt::Display for Atomic<'_> {
     }
 }
 
-fn atomic<'a>(types: &'a TypeStore, id: TypeId, names: &'a DisplayNames, show: Show) -> Atomic<'a> {
+fn atomic<'a>(
+    types: &'a TypeStore,
+    id: TypeId,
+    names: &'a dyn TypeNames,
+    show: Show,
+) -> Atomic<'a> {
     Atomic {
         id,
         types,
@@ -1051,12 +1086,12 @@ mod tests {
     }
 
     #[test]
-    fn the_linear_display_marks_lin_and_poly_arrows() {
+    fn the_name_display_marks_arrows_and_kinds() {
         let program = program();
         let mut types = TypeStore::new(&program);
         let int = types.int();
         let names = &program.names;
-        let show = |types: &TypeStore, ty| types.display_linear_bounded(ty, names, 64).unwrap();
+        let show = |types: &TypeStore, ty| types.display_name_bounded(ty, names, 64).unwrap();
         let unr = arrow(&mut types, Lin::Unr, int, int);
         let lin = arrow(&mut types, Lin::Lin, int, int);
         let poly = arrow(&mut types, Lin::Poly, int, int);
@@ -1065,8 +1100,17 @@ mod tests {
         assert_eq!(show(&types, poly), "Int %m -> Int");
         let nested = arrow(&mut types, Lin::Unr, lin, int);
         assert_eq!(show(&types, nested), "(Int %1 -> Int) -> Int");
-        let flexible = types.flexible(Lin::Lin);
-        assert_eq!(show(&types, flexible), "_");
+        // Kind だけが違う型は、名前で別の文字列になる
+        let flexible_unr = types.flexible(Lin::Unr);
+        let flexible_lin = types.flexible(Lin::Lin);
+        let flexible_poly = types.flexible(Lin::Poly);
+        assert_eq!(show(&types, flexible_unr), "_");
+        assert_eq!(show(&types, flexible_lin), "_%1");
+        assert_eq!(show(&types, flexible_poly), "_%m");
+        let op = types.intern(TypeKind::OpVar("a".to_string(), Lin::Lin));
+        assert_eq!(show(&types, op), "a%1");
+        // 上限を超えた表示は `None` になる
+        assert_eq!(types.display_name_bounded(nested, names, 5), None);
         // 診断の表示は線形性を書かない
         assert_eq!(types.display(lin, names).to_string(), "Int -> Int");
     }

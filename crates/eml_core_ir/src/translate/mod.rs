@@ -6,6 +6,7 @@
 mod derive;
 mod expr;
 mod instances;
+mod names;
 mod pattern;
 mod program;
 mod types;
