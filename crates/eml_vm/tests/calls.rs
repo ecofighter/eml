@@ -1,5 +1,5 @@
-//! LIR のテキストで、クロージャの eval/apply と、handler をまたぐ再開を確かめる (docs/spec/core-ir.md)。VM では handler をまたぐ再開 (`multi_resume`) は evidence の命令が要るので、そこで確かめる。関数の
-//! 値として使う関数は一様なので、`Int` は `box` して渡し、結果は `unbox` して受ける。
+//! LIR のテキストで、クロージャの eval/apply を確かめる (docs/spec/core-ir.md)。handler をまたぐ再開は evidence の
+//! 命令が要るので、`evidence.rs` で確かめる。関数の値として使う関数は一様なので、`Int` は `box` して渡し、結果は `unbox` して受ける。
 
 use std::sync::Arc;
 
@@ -378,4 +378,56 @@ fn make(x.0: tobj) -> tobj {
         result.unwrap_err().to_string(),
         "internal error: applying a value that is not a function in `make`"
     );
+}
+
+/// 走査する語を持たない物体 (文字列) を適用すると、検査モードは走査する語の数を先に見て断る。数を見ずに 0 番目を読むと、
+/// ヒープの範囲外の誤りになってしまう。文字列は関数でないので、verifier が型の誤りは見ないが、VM 自身の見張りを確かめる
+/// ため通さずに実行する。
+#[test]
+fn applying_a_string_is_not_a_function() {
+    let text = "\
+fn main() -> unit {
+  let s.0: obj = const \"hello\"
+  let r.1: tobj = apply s.0(())
+  return ()
+}
+";
+    let (_, result) = run_unverified(text);
+    assert_eq!(
+        result.unwrap_err().to_string(),
+        "internal error: applying a value that is not a function in `main`"
+    );
+}
+
+/// 引数が余る末尾の `apply` は、呼ぶ側の枠より大きい枠に余りを預ける。`g` の枠は、余りの `2 + 3` 語より小さい。
+#[test]
+fn a_tail_apply_with_leftover_arguments_grows_a_small_frame() {
+    let text = "\
+fn main() -> unit {
+  let a.0: tobj = box 5
+  let r.1: tobj = call g(a.0)
+  let n.2: int = unbox r.1
+  decref r.1
+  let s.3: obj = extern \"Prelude.Show Int.show\"(n.2)
+  let u.4: unit = extern Prelude.println(s.3)
+  return u.4
+}
+fn g(x.0: tobj) -> tobj {
+  dup x.0
+  dup x.0
+  dup x.0
+  tail apply &f3(x.0, x.0, x.0, x.0)
+}
+fn f3(x.0: tobj) -> tobj {
+  let c.1: tobj = closure h(x.0)
+  return c.1
+}
+fn h(c.0: tobj, y.1: tobj, z.2: tobj, w.3: tobj) -> tobj {
+  decref y.1
+  decref z.2
+  decref w.3
+  return c.0
+}
+";
+    assert_eq!(run_lir(text), ("5\n".to_string(), Ok(())));
 }

@@ -36,8 +36,12 @@ pub(crate) fn apply<M: Mode>(
         unsafe {
             let lin = heap.meta(callee)?.lin();
             let len = heap.scanned_len(callee)?;
+            // 走査する語のない物体の0番目を読むと、断る誤りが範囲外の誤りになる
+            if M::CHECKED && len == 0 {
+                return Err(not_a_function);
+            }
             let function = heap.scanned(callee, 0)?;
-            if M::CHECKED && (len == 0 || !function.is_imm()) {
+            if M::CHECKED && !function.is_imm() {
                 return Err(not_a_function);
             }
             let captured: Result<Vec<Word>, _> =
@@ -116,7 +120,11 @@ fn deliver(task: &mut Task, target: Target, value: Word) {
             task.set(dst, value);
             task.pc = ret;
         }
-        Target::Tail => task.return_value(value),
+        Target::Tail => {
+            // `Ret` と同じく、どの関数にも属さない命令の誤りに名前を付けるため (`Task::last_ret`)
+            task.last_ret = task.pc - 1;
+            task.return_value(value);
+        }
     }
 }
 

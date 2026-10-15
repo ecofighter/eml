@@ -167,6 +167,48 @@ fn line<M: Mode>(code: &CodeBase<M>, pc: Pc) -> String {
         Op::BoxEnum { dst, src } => format!("box_enum s{dst}, s{src}"),
         Op::BoxConst { dst, index } => format!("box_const s{dst}, c{index}"),
         Op::Unbox { dst, src } => format!("unbox s{dst}, s{src}"),
+        Op::EvvGet { dst } => format!("evv_get s{dst}"),
+        Op::EvvSet { dst, l } => format!("evv_set s{dst}, s{l}"),
+        Op::EvvPush { dst, l, e } => bin("evv_push", dst, l, e),
+        Op::EvvMask { dst, at } => {
+            let o = ops(at);
+            let effects: Vec<String> = code.effect_lists[o[0] as usize..(o[0] + o[1]) as usize]
+                .iter()
+                .map(u16::to_string)
+                .collect();
+            format!("evv_mask s{dst}, [{}] s{}", effects.join(", "), o[2])
+        }
+        Op::EvNew { dst, at } => {
+            let o = ops(at);
+            format!(
+                "ev_new s{dst}, E{} ({} ops), s{}, s{}",
+                o[0], o[1], o[2], o[3]
+            )
+        }
+        Op::EvSetClause { dst, at } => {
+            let o = ops(at);
+            format!("ev_set_clause s{dst}, s{}, op{}, s{}", o[0], o[1], o[2])
+        }
+        Op::EvRenew { dst, ev, state } => bin("ev_renew", dst, ev, state),
+        Op::EvLookup { dst, effect } => format!("ev_lookup s{dst}, E{effect}"),
+        Op::EvClause { dst, ev, op } => format!("ev_clause s{dst}, s{ev}, op{op}"),
+        Op::EvEvv { dst, ev } => format!("ev_evv s{dst}, s{ev}"),
+        Op::EvTakeState { dst, ev } => format!("ev_take_state s{dst}, s{ev}"),
+        Op::EvSetState { dst, ev, s } => bin("ev_set_state", dst, ev, s),
+        Op::Yielding { dst } => format!("yielding s{dst}"),
+        Op::YieldStatus { dst, ev } => format!("yield_status s{dst}, s{ev}"),
+        Op::YieldTo { dst, at } => {
+            let o = ops(at);
+            format!("yield_to s{dst}, s{}, s{}, s{}", o[0], o[1], o[2])
+        }
+        Op::YieldAbort { dst, at } => {
+            let o = ops(at);
+            format!("yield_abort s{dst}, s{}, s{}, s{}", o[0], o[1], o[2])
+        }
+        Op::YieldContTake { dst } => format!("yield_cont_take s{dst}"),
+        Op::YieldContSet { dst, k } => format!("yield_cont_set s{dst}, s{k}"),
+        Op::YieldFinish { dst } => format!("yield_finish s{dst}"),
+        Op::Dummy { dst } => format!("dummy s{dst}"),
         Op::Extern { dst, at } => format!(
             "extern s{dst} = {}({})",
             Extern::ALL[ops(at)[0] as usize].row().name,

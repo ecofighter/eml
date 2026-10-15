@@ -25,8 +25,7 @@ pub struct CodeBase<M: Mode> {
     pub(crate) functions: Vec<FnEntry>,
     pub(crate) code: Vec<Op>,
     pub(crate) operands: Vec<u32>,
-    /// Task 7 のハンドラが使う
-    #[allow(dead_code)]
+    /// `EvvMask` が参照する、飛ばすエフェクトの並び。
     pub(crate) effect_lists: Vec<u16>,
     pub(crate) constants: Vec<Word>,
     pub(crate) region: Arc<Frozen<M>>,

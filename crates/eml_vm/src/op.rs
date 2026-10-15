@@ -210,6 +210,89 @@ pub enum Op {
         dst: Slot,
         at: u32,
     },
+    EvvGet {
+        dst: Slot,
+    },
+    EvvSet {
+        dst: Slot,
+        l: Slot,
+    },
+    EvvPush {
+        dst: Slot,
+        l: Slot,
+        e: Slot,
+    },
+    /// `operands[at..]` は [effect_lists の先頭, 長さ, リストのスロット]。
+    EvvMask {
+        dst: Slot,
+        at: u32,
+    },
+    /// `operands[at..]` は [エフェクト, 操作の数, 状態のスロット, 外側のスロット]。
+    EvNew {
+        dst: Slot,
+        at: u32,
+    },
+    /// `operands[at..]` は [evidence のスロット, 操作, 入口のスロット]。
+    EvSetClause {
+        dst: Slot,
+        at: u32,
+    },
+    EvRenew {
+        dst: Slot,
+        ev: Slot,
+        state: Slot,
+    },
+    EvLookup {
+        dst: Slot,
+        effect: u16,
+    },
+    EvClause {
+        dst: Slot,
+        ev: Slot,
+        op: u16,
+    },
+    EvEvv {
+        dst: Slot,
+        ev: Slot,
+    },
+    EvTakeState {
+        dst: Slot,
+        ev: Slot,
+    },
+    EvSetState {
+        dst: Slot,
+        ev: Slot,
+        s: Slot,
+    },
+    Yielding {
+        dst: Slot,
+    },
+    YieldStatus {
+        dst: Slot,
+        ev: Slot,
+    },
+    /// `operands[at..]` は [evidence, 節の本体, κ] のスロット。
+    YieldTo {
+        dst: Slot,
+        at: u32,
+    },
+    YieldAbort {
+        dst: Slot,
+        at: u32,
+    },
+    YieldContTake {
+        dst: Slot,
+    },
+    YieldContSet {
+        dst: Slot,
+        k: Slot,
+    },
+    YieldFinish {
+        dst: Slot,
+    },
+    Dummy {
+        dst: Slot,
+    },
 }
 
 /// 行き先がないことを表すオペランド (switch の `default`、確かめない走査する語の数)。

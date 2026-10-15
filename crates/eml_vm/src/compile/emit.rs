@@ -410,8 +410,88 @@ impl<M: Mode> Emitter<'_, M> {
                 };
                 self.out.push(op);
             }
-            // 残りの命令は後で足す
-            other => panic!("the VM does not compile {other:?} yet"),
+            Rhs::Prim(prim, args) => {
+                let row = prim.row();
+                let slots: Vec<Slot> = args
+                    .iter()
+                    .zip(row.params)
+                    .map(|(&arg, &repr)| self.atom(arg, repr))
+                    .collect();
+                let op = self.prim(prim, dst, &slots);
+                self.out.push(op);
+            }
+        }
+    }
+
+    fn prim(&mut self, prim: &eml_lir::Prim, dst: Slot, a: &[Slot]) -> Op {
+        use eml_lir::Prim;
+        let effect =
+            |e: u32| u16::try_from(e).expect("effects fit in 16 bits (docs/spec/object-model.md)");
+        let op_index = |o: u32| u16::try_from(o).expect("operations fit in 16 bits");
+        match prim {
+            Prim::EvvGet => Op::EvvGet { dst },
+            Prim::EvvSet => Op::EvvSet { dst, l: a[0] },
+            Prim::EvvPush => Op::EvvPush {
+                dst,
+                l: a[0],
+                e: a[1],
+            },
+            Prim::EvvMask(effects) => {
+                let start = self.out.effect_lists.len() as u32;
+                self.out
+                    .effect_lists
+                    .extend(effects.iter().map(|&e| effect(e)));
+                let at = self
+                    .out
+                    .operands([start, effects.len() as u32, u32::from(a[0])]);
+                Op::EvvMask { dst, at }
+            }
+            Prim::EvNew(e) => {
+                let n_ops = self.program.effects[*e as usize].operations.len() as u32;
+                let at = self
+                    .out
+                    .operands([*e, n_ops, u32::from(a[0]), u32::from(a[1])]);
+                Op::EvNew { dst, at }
+            }
+            Prim::EvSetClause { effect: _, op } => {
+                let at = self.out.operands([u32::from(a[0]), *op, u32::from(a[1])]);
+                Op::EvSetClause { dst, at }
+            }
+            Prim::EvRenew => Op::EvRenew {
+                dst,
+                ev: a[0],
+                state: a[1],
+            },
+            Prim::EvLookup(e) => Op::EvLookup {
+                dst,
+                effect: effect(*e),
+            },
+            Prim::EvClause { effect: _, op } => Op::EvClause {
+                dst,
+                ev: a[0],
+                op: op_index(*op),
+            },
+            Prim::EvEvv => Op::EvEvv { dst, ev: a[0] },
+            Prim::EvTakeState => Op::EvTakeState { dst, ev: a[0] },
+            Prim::EvSetState => Op::EvSetState {
+                dst,
+                ev: a[0],
+                s: a[1],
+            },
+            Prim::Yielding => Op::Yielding { dst },
+            Prim::YieldStatus => Op::YieldStatus { dst, ev: a[0] },
+            Prim::YieldTo | Prim::YieldAbort => {
+                let at = self.out.operands(a.iter().map(|&s| u32::from(s)));
+                if matches!(prim, Prim::YieldTo) {
+                    Op::YieldTo { dst, at }
+                } else {
+                    Op::YieldAbort { dst, at }
+                }
+            }
+            Prim::YieldContTake => Op::YieldContTake { dst },
+            Prim::YieldContSet => Op::YieldContSet { dst, k: a[0] },
+            Prim::YieldFinish => Op::YieldFinish { dst },
+            Prim::Dummy => Op::Dummy { dst },
         }
     }
 

@@ -15,6 +15,7 @@ mod data;
 mod disasm;
 mod error;
 mod op;
+mod prims;
 mod vm;
 
 pub use code::{CodeBase, CompileError, FnEntry};

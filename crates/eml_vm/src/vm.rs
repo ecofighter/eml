@@ -11,6 +11,7 @@ use crate::code::CodeBase;
 use crate::data;
 use crate::error::VmFault;
 use crate::op::{FINISH, Op, Pc, Slot};
+use crate::prims;
 
 /// 1つのタスクの実行の状態。
 pub struct Task {
@@ -302,6 +303,11 @@ fn step<M: Mode>(
             task.set_raw(dst, n);
         }
         Op::Extern { dst, at } => extern_call(code, ctx, task, dst, at)?,
+        other => {
+            if !prims::step(code, ctx, task, other)? {
+                unreachable!("every instruction has an arm");
+            }
+        }
     }
     Ok(true)
 }
