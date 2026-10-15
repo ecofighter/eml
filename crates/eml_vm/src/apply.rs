@@ -74,7 +74,7 @@ pub(crate) fn apply<M: Mode>(
         std::cmp::Ordering::Less => {
             let closure = make_closure(ctx, f, lin, &task.scratch)?;
             task.scratch.clear();
-            deliver(task, target, closure);
+            deliver(code, task, target, closure);
         }
         std::cmp::Ordering::Greater => {
             let n = total - arity;
@@ -114,15 +114,19 @@ fn enter<M: Mode>(code: &CodeBase<M>, task: &mut Task, f: u32, target: Target) {
     task.enter_in_place(code, f);
 }
 
-fn deliver(task: &mut Task, target: Target, value: Word) {
+fn deliver<M: Mode>(code: &CodeBase<M>, task: &mut Task, target: Target, value: Word) {
     match target {
         Target::Frame { ret, dst } => {
             task.set(dst, value);
             task.pc = ret;
         }
         Target::Tail => {
-            // `Ret` と同じく、どの関数にも属さない命令の誤りに名前を付けるため (`Task::last_ret`)
-            task.last_ret = task.pc - 1;
+            // `Ret` と同じく、どの関数にも属さない命令の誤りに名前を付けるため (`Task::last_ret`)。`ApplyRest` から
+            // 来たときは今の位置がどの関数にも属さないので、最後に戻った関数の位置をそのまま残す
+            let at = task.pc - 1;
+            if code.function_at(at).is_some() {
+                task.last_ret = at;
+            }
             task.return_value(value);
         }
     }
