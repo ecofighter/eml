@@ -1,4 +1,4 @@
-//! extern の単体テスト。結果は spec のとおりで、今の実装と同じ文言で誤りを返すことを確かめる。
+//! extern の単体テスト。結果と誤りの文言が spec のとおりであることを確かめる。
 
 use std::cmp::Ordering as Order;
 use std::io;
@@ -72,9 +72,9 @@ fn bools_compare_by_tag() {
     }
 }
 
-/// 文言は今の `eml_interp::Fault` と同じである (S10 で切り替えても UI テストの出力を変えないため)。
+/// 文言は docs/spec/lir.md の「実行時エラー」の一覧のとおりである。
 #[test]
-fn faults_print_as_the_interpreter_does() {
+fn faults_print_their_listed_texts() {
     let cases: [(Fault, &str); 9] = [
         (ArithFault::DivisionByZero.into(), "division by zero"),
         (ArithFault::IntegerOverflow.into(), "integer overflow"),
@@ -185,8 +185,7 @@ fn the_same_string_on_both_sides<M: Mode>() {
     assert_eq!(mortal(ctx.heap()), 0);
 }
 
-/// 写すバイトを数える。一意な左なら、その場で足しても作り直しても右の長さを、共有か不死の左なら両辺の長さを数える
-/// (今のインタプリタと同じ)。
+/// 写すバイトを数える。一意な左なら、その場で足しても作り直しても右の長さを、共有か不死の左なら両辺の長さを数える。
 fn appending_counts_the_bytes_it_copies<M: Mode>() {
     let mut ctx = ctx::<M>();
     unsafe {
@@ -267,8 +266,9 @@ fn ints_show_in_decimal<M: Mode>() {
     assert_eq!(mortal(ctx.heap()), 0);
 }
 
-/// エスケープの規則は今のインタプリタの `show_string` と同じである。C1 の制御文字 (U+0080〜U+009F) はそのまま写す。
-fn strings_show_with_the_interpreters_escapes<M: Mode>() {
+/// エスケープの規則は docs/spec/declarations.md の「Prelude のクラス」のとおりである。C1 の制御文字 (U+0080〜U+009F)
+/// はそのまま写す。
+fn strings_show_with_their_escapes<M: Mode>() {
     let cases = [
         ("", r#""""#),
         ("abc", r#""abc""#),
@@ -328,7 +328,7 @@ fn println_writes_a_line_and_releases_its_text<M: Mode>() {
     assert_eq!(mortal(ctx.heap()), 0);
 }
 
-/// 書けなくても文字列は手放す (今の実装と同じ)。
+/// 書けなくても文字列は手放す。
 fn a_failed_write_still_releases_the_text<M: Mode>() {
     let memory = Arc::new(MemoryHost::failing("disk full"));
     let mut ctx = ctx_with::<M>(&memory);
@@ -636,7 +636,7 @@ impl Args {
         }
     }
 
-    /// 文字列の引数の参照を1つ作る。定数は今の実装の `const` と同じく不死の物体にする
+    /// 文字列の引数の参照を1つ作る。定数は VM の `const` と同じく不死の物体にする
     unsafe fn string<M: Mode>(&mut self, ctx: &mut crate::Ctx<M>, arg: &Arg, root: &Path) -> Word {
         unsafe {
             match arg {
@@ -687,26 +687,27 @@ unsafe fn take_text<M: Mode>(ctx: &mut crate::Ctx<M>, w: Word) -> Outcome {
     Outcome::Str(read)
 }
 
-/// 表の1行の extern を呼び、結果を表の形に戻す
+/// 表の1つの場合の extern を呼び、結果を表の形に戻す
 unsafe fn call<M: Mode>(
     ctx: &mut crate::Ctx<M>,
-    case: &Case,
+    name: &str,
+    inputs: &[Arg],
     args: &mut Args,
     root: &Path,
     out: &Shared,
 ) -> Result<Outcome, Fault> {
-    let int = |i: usize| Args::int(&case.args[i]);
+    let int = |i: usize| Args::int(&inputs[i]);
     let arith = |f: fn(i64, i64) -> Result<i64, ArithFault>| -> Result<Outcome, Fault> {
         Ok(Outcome::Int(f(int(0), int(1))?))
     };
     let compare = |f: fn(i64, i64) -> i64| tag_bool(f(int(0), int(1)));
     unsafe {
-        let one = |ctx: &mut crate::Ctx<M>, args: &mut Args| args.string(ctx, &case.args[0], root);
+        let one = |ctx: &mut crate::Ctx<M>, args: &mut Args| args.string(ctx, &inputs[0], root);
         let two = |ctx: &mut crate::Ctx<M>, args: &mut Args| {
-            let a = args.string(ctx, &case.args[0], root);
-            (a, args.string(ctx, &case.args[1], root))
+            let a = args.string(ctx, &inputs[0], root);
+            (a, args.string(ctx, &inputs[1], root))
         };
-        Ok(match case.name.as_str() {
+        Ok(match name {
             "Prelude.+" => arith(int_add)?,
             "Prelude.-" => arith(int_sub)?,
             "Prelude.*" => arith(int_mul)?,
@@ -758,7 +759,7 @@ unsafe fn call<M: Mode>(
                 let p = one(ctx, args);
                 let f = ctx.fs_open(p)?;
                 let (mut f, mut read) = read_once(ctx, f)?;
-                if case.name == "Std.Fs.read_all2" {
+                if name == "Std.Fs.read_all2" {
                     (f, read) = read_once(ctx, f)?;
                 }
                 ctx.fs_close(f)?;
@@ -769,13 +770,48 @@ unsafe fn call<M: Mode>(
     }
 }
 
-/// `eml_rt` の extern が、期待値の表のどの場合も同じ結果を返し、物体を残さない。引数の定数の不死の物体だけが残る
+/// 表の1つの場合を新しい `Ctx` で動かし、結果を表の形に戻す。引数の定数の不死の物体のほかに、物体を残さないことも
+/// 確かめる
+fn outcome<M: Mode>(name: &str, inputs: &[Arg], root: &Path) -> Outcome {
+    let out = Shared::default();
+    let host = StdHost::new(
+        Box::new(out.clone()),
+        Box::new(io::sink()),
+        root.to_path_buf(),
+        Buffering::Line,
+    );
+    let mut ctx = crate::Ctx::<M>::new(
+        Arc::new(Control::new(Limits::default())),
+        HostRef::new(Arc::new(host)),
+    );
+    let mut args = Args::default();
+    let got = unsafe { call(&mut ctx, name, inputs, &mut args, root, &out) }
+        .unwrap_or_else(|fault| Outcome::Err(fault.to_string()));
+    for w in args.release {
+        unsafe { ctx.heap_mut().decref(w) }.unwrap();
+    }
+    assert_eq!(mortal(ctx.heap()), args.immortals, "{name} {inputs:?}");
+    got
+}
+
+/// `eml_rt` の extern が、期待値の表のどの場合も同じ結果を返し、物体を残さない。表の入力は `table::inputs` と同じで、
+/// 入力を変えて表を書き直していなければ落ちる
 fn the_externs_match_the_table<M: Mode>() {
     let scratch = Scratch::new(&format!("eml_rt-table-{}", M::CHECKED));
     let root = scratch.path();
     let locked = table::fixtures(root);
     let cases = table::cases();
-    assert!(!cases.is_empty());
+    let written: Vec<(String, Vec<Arg>)> = cases
+        .iter()
+        .map(|c| (c.name.clone(), c.args.clone()))
+        .collect();
+    let inputs = table::inputs();
+    assert!(
+        written == inputs,
+        "expected.txt is not written from the current inputs ({} cases, {} inputs)",
+        written.len(),
+        inputs.len()
+    );
     for case in cases {
         if !locked
             && case
@@ -785,26 +821,42 @@ fn the_externs_match_the_table<M: Mode>() {
         {
             continue;
         }
-        let out = Shared::default();
-        let host = StdHost::new(
-            Box::new(out.clone()),
-            Box::new(io::sink()),
-            root.to_path_buf(),
-            Buffering::Line,
+        assert_eq!(
+            table::digest(outcome::<M>(&case.name, &case.args, root)),
+            case.outcome,
+            "{}",
+            table::line(&case)
         );
-        let mut ctx = crate::Ctx::<M>::new(
-            Arc::new(Control::new(Limits::default())),
-            HostRef::new(Arc::new(host)),
-        );
-        let mut args = Args::default();
-        let got = unsafe { call(&mut ctx, &case, &mut args, root, &out) }
-            .unwrap_or_else(|fault| Outcome::Err(fault.to_string()));
-        for w in args.release {
-            unsafe { ctx.heap_mut().decref(w) }.unwrap();
-        }
-        assert_eq!(table::digest(got), case.outcome, "{}", table::line(&case));
-        assert_eq!(mortal(ctx.heap()), args.immortals, "{}", table::line(&case));
     }
+}
+
+/// 表を書く。行を足すか入力を変えたときだけ、`cargo test -p eml_rt the_table_can_be_written -- --ignored` で流し、
+/// 差分の結果の欄を人が確かめる (docs/implementation/testing.md の「期待値の表」)。結果は検査モードで作る
+#[test]
+#[ignore = "writes expected.txt"]
+fn the_table_can_be_written() {
+    let scratch = Scratch::new("eml_rt-table-write");
+    let root = scratch.path();
+    assert!(
+        table::fixtures(root),
+        "cannot make an unreadable locked.txt (running as root?), so its row would be wrong"
+    );
+    let mut text =
+        String::from("# eml_rt の extern の期待値の表。eml_rt の検査モードの結果から作った\n");
+    for (name, args) in table::inputs() {
+        let outcome = outcome::<crate::Checked>(&name, &args, root);
+        text.push_str(&table::line(&Case {
+            name,
+            args,
+            outcome,
+        }));
+        text.push('\n');
+    }
+    std::fs::write(
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("src/heap/tests/expected.txt"),
+        text,
+    )
+    .unwrap();
 }
 
 both_modes!(
@@ -813,7 +865,7 @@ both_modes!(
     appending_counts_the_bytes_it_copies,
     ints_show_in_decimal,
     shows_count_the_bytes_they_write,
-    strings_show_with_the_interpreters_escapes,
+    strings_show_with_their_escapes,
     a_string_extern_refuses_a_non_string,
     println_writes_a_line_and_releases_its_text,
     a_failed_write_still_releases_the_text,

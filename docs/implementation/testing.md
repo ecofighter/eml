@@ -77,7 +77,7 @@
 
 ## `eml_rt` の検証
 
-`eml_rt` ([オブジェクトモデル](../spec/object-model.md)) は、Verus、単体テスト、期待値の表、Miri で確かめる。既定の `eml run` はまだ CEK なので、`eml_rt` を実際のプログラムで通すのは VM のテストである。ソースのプログラムを VM で流すのは、UI テスト (下の「VM でも流す」)、`crates/eml_vm/tests/bench.rs`、`crates/eml_cli/tests/cli.rs` の `eml run --vm` のテストである。メモリの安全と核の正しさは Verus の証明が受け持ち、単体テストは動作を、期待値の表は extern が今の実装と同じ結果になることを、Miri は Verus で確かめない部分 (信頼の一覧) を確かめる。速いモードの命令の数は `bench/rt.sh` で測る ([計測の基準](benchmarks.md) の「命令の数の測り方」)。
+`eml_rt` ([オブジェクトモデル](../spec/object-model.md)) は、Verus、単体テスト、期待値の表、Miri で確かめる。既定の `eml run` はまだ CEK なので、`eml_rt` を実際のプログラムで通すのは VM のテストである。ソースのプログラムを VM で流すのは、UI テスト (下の「VM でも流す」)、`crates/eml_vm/tests/bench.rs`、`crates/eml_cli/tests/cli.rs` の `eml run --vm` のテストである。メモリの安全と核の正しさは Verus の証明が受け持ち、単体テストは動作を、期待値の表は extern の結果が変わらないことを、Miri は Verus で確かめない部分 (信頼の一覧) を確かめる。速いモードの命令の数は `bench/rt.sh` で測る ([計測の基準](benchmarks.md) の「命令の数の測り方」)。
 
 ### Verus
 
@@ -125,25 +125,23 @@ rustfmt は `verus!` の中を整えないので、`eml_rt` の `verus!` の中�
   - 凍結した領域: 凍結が通る場合 (文字列、`BigInt`、前の塊の定数を指す定数) と断る場合 (rc が正の物体、token、`Foreign`。検査モードでは、空けた物体を指す定数の `UseAfterFree` も)、付けた後の領域の語での核の操作 (領域の中身と前置きは変わらない)、ヒープの物体のフィールドに置いた領域の語と、それを子に持つ一意な物体の `release`、子孫の塊への付け替え (付け替えの前に作った物体が前の塊の語を持ち続けること) と、子孫でない塊と祖先の塊の `attach` の panic、10,000 個の塊の鎖を落とすこと、`Arc` を落とす順によらず漏れないこと、`Frozen` の `Send` と `Sync` の型の assert ([オブジェクトモデル](../spec/object-model.md) の「凍結した領域」)
   - 検査モードの誤り: [オブジェクトモデル](../spec/object-model.md) の「報告する誤り」の各項目。token の ABA の形、解放した共有の物体の使用、強めた範囲の検査 (`field` と `set_field` の生の語、`raw` と `set_raw` の走査する語と、ペイロードが不透明な `Foreign` と `String` の物体)、塊の物体、書き終えた不死の物体、共有の物体への `set_field` と `set_raw` の `NotWritable`、`string`、`string_push`、`string_concat` の `WrongKind` を含む
   - 実行文脈 (`heap/tests/ctx.rs`): 19個の基本操作のそれぞれ、EP が出す形を並べた筋書き (handle の中で `perform` してその場で戻る、`mask` が合う evidence を飛ばす、yield して継続を組み立てて再開する1往復。`perform` と yield の筋書きは終わりに `check_finished` が通ることを、`mask` の筋書きは生きている物体が残らないことを確かめる)、検査モードの `BadEvidence`、`NoHandler`、`YieldMisuse` と、断った操作が引数と yield の状態を変えないこと、共有にした evidence の状態の欄への `NotWritable`、輪になった `evv` が小さい `max_evv` で `BadEvidence` になって止まること、入口の欄が 255 個以上の表、`eml_interp` から写した仕事の回数のテスト3つ ([オブジェクトモデル](../spec/object-model.md) の「実行文脈 `Ctx`」)。空でない κ と入口には、物体か `Word::imm(1)` 以上の即値を使う。関数 0 の値は `()` と同じ語になるためである
-  - extern (`heap/tests/externs.rs` と `host.rs`): 整数の端の値、文字列の比較と `++` と `show` の端の場合、検査モードの誤り (`WrongKind`、`Fs.read_all` の `NotUnique` と `WrongOwner`)、物体が残らないこと。誤りのときの所有も確かめる。`Fs.read_all` が読みの誤りか UTF-8 でない中身で `File` を手放して破棄処理が走ること、`println` が書き込みの誤りでも文字列を手放すこと、検査モードの `Heap(_)` でヒープが変わらないことである。今のインタプリタは誤りの後に漏れを確かめないので、期待値の表では比べられないためである。ほかに、止める語を立てた `Control` と小さい `max_bytes` での `Fs.read_all` の `Stopped` (長さの見込みがある読み手、確保できないほど大きい見込み、見込みのない読み手)、仕事の回数 `string_bytes_copied`、`StdHost` の `Line` と `Block` の書き方、`flush`、毒されたロック、標準エラー、`file_root` と絶対パスを確かめる。Host を通るテストは、メモリの Host (`heap/tests/host.rs` の `MemoryHost`) を使う
+  - extern (`heap/tests/externs.rs` と `host.rs`): 整数の端の値、文字列の比較と `++` と `show` の端の場合、検査モードの誤り (`WrongKind`、`Fs.read_all` の `NotUnique` と `WrongOwner`)、物体が残らないこと。誤りのときの所有も確かめる。`Fs.read_all` が読みの誤りか UTF-8 でない中身で `File` を手放して破棄処理が走ること、`println` が書き込みの誤りでも文字列を手放すこと、検査モードの `Heap(_)` でヒープが変わらないことである。ほかに、止める語を立てた `Control` と小さい `max_bytes` での `Fs.read_all` の `Stopped` (長さの見込みがある読み手、確保できないほど大きい見込み、見込みのない読み手)、仕事の回数 `string_bytes_copied`、`StdHost` の `Line` と `Block` の書き方、`flush`、毒されたロック、標準エラー、`file_root` と絶対パスを確かめる。Host を通るテストは、メモリの Host (`heap/tests/host.rs` の `MemoryHost`) を使う
   - 実行の制御 (`heap/tests/control.rs` と `ctx.rs`): `poll` が割り込み、深さの上限、確保量の上限のそれぞれで `Stop` を返すことと、重なったときに割り込み、確保量、深さの順に報告すること、確保量が上限にちょうど等しいときはビットを立てないこと、`Control::clear` で戻ること、2つのヒープのページが1つの `Control` に足し合わされること、凍結した塊のページが塊を落とすまで数に残ること。`Ctx` が `Send` で `Sync` でないことと、`Control` が `Send` と `Sync` であることは、型の assert で固定する
 - `is_last` の2回の読み込みとその順序は、Verus では確かめない (T2)。単体テストと Miri で確かめる
 
 ### 期待値の表
 
-extern が今の実装 (`eml_interp` と `eml_runtime`) と同じ結果になることを、1つの期待値の表で確かめる。今の実装は S10 まで変わらないので、生きた2つの実装を毎回比べることは、一度作った表と比べることと同じである。
+extern の結果を1つの期待値の表に固定し、`eml_rt` の回帰を防ぐ。表は `eml_rt` 自身の結果から作る。比べる独立した実装はないので、行を足すか入力を変えたときは、差分の結果の欄を人が確かめる。
 
 - 表は `crates/eml_rt/src/heap/tests/expected.txt` で、1行が1つの場合である。タブで区切った extern の行の名前、引数、`=>` の後の期待する結果 (文字にした値か、位置を除いた誤りの文言) を持つ。今は 4025 の場合がある。4096 バイトを超える文字列の結果は、`h:<バイト長>:<FNV-1a 64 の16進>` と書く。表を小さく保つためである
-- 表の形と入力は `crates/eml_rt/src/heap/tests/table.rs` に置き、2つのテストが同じものを使う (`eml_interp` の側は `#[path]` で読む)。`std` だけを使う
+- 表の形と入力は `crates/eml_rt/src/heap/tests/table.rs` に置く。`std` だけを使う
 - 入力
   - 整数: 0、±1、±2、`MIN`、`MIN+1`、`MAX`、`MAX-1`、±2³¹、±2⁶² のすべての組み合わせと、種を固定した疑似乱数の組
   - 文字列: 空、ASCII、複数バイトの文字 (é、日本、絵文字)、制御文字、`"`、`\`、0x7F、U+0080、U+0085、U+009F、U+2028、NUL、互いに前置きになる組と、種を固定した疑似乱数の列
   - `++` の左: 一意なもの、`dup` で共有したもの、不死の定数
   - ファイル: 一時ディレクトリに作り、`file_root` からの相対パスで開く。ふつうのファイル、空のファイル、UTF-8 でないもの、ないもの、読めないもの (Unix の 000。root なら飛ばす)、ディレクトリ、NUL を含むパス、64 KiB の区切りをまたぐもの (1 MiB)、絶対パス、2回目の `Fs.read_all`
-- `eml_rt` のテスト `the_externs_match_the_table` (`heap/tests/externs.rs`) は、両方のモードで表のどの場合も同じ結果になり、引数の定数のほかに物体が残らないことを確かめる。このテストは S10 の後も残り、extern の回帰を防ぐ
-- `eml_interp` のテスト (`crates/eml_interp/tests/rt_externs.rs`) は、今の実装が表のどの場合も同じ結果になることを確かめる。場合ごとに1つの LIR のプログラムを作り、`eml_lir::verify` を通してから `debug_heap` 付きで `eml_interp::run` で動かす。結果は文字にして `println` で出し (整数は `Int.show`、`Bool` と `Ordering` は `switch` でタグの名前)、誤りは位置の部分を除いた文言で比べる。表の入力が `table.rs` の入力と違えば落ちるので、古い表は残らない。同じファイルで、書き込みの誤りの文言が両方で同じであることと、`Bool`、`Ordering`、組のタグの定数が `eml_lir` と同じであることも確かめる
-- 表は `eml_interp` の側の出力から作る。入力を変えたときは、`cargo test -p eml_interp --test integration rt_externs -- --ignored` で書き直す (`#[ignore]` のテスト `the_table_can_be_written_from_the_interpreter`)
-- S10b で CEK を消すとき、`eml_interp` の側のテストも消す。タグの定数のテストは、`eml_vm` の `tags.rs` にもある ([ロードマップ](../future/roadmap.md) の「S10 VM と切り替え」)
+- テスト `the_externs_match_the_table` (`heap/tests/externs.rs`) は、両方のモードで表のどの場合も同じ結果になり、引数の定数のほかに物体が残らないことを確かめる。表の入力が `table.rs` の入力と違えば落ちるので、古い表は残らない
+- 表は、同じファイルの `#[ignore]` のテスト `the_table_can_be_written` が、検査モードの結果で書く。入力を変えたときは `cargo test -p eml_rt the_table_can_be_written -- --ignored` で書き直し、`git diff --no-ext-diff` で結果の欄を確かめる
 
 ### Miri
 

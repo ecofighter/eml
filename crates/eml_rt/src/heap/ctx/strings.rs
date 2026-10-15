@@ -84,8 +84,8 @@ pub open spec fn hex(n: nat) -> Seq<u8>
     }
 }
 
-/// `String.show` が1バイトを書く形。今のインタプリタの `show_string` は文字の単位で同じ規則を使い、UTF-8 の先頭と
-/// 続きのバイトはどれも 0x80 以上なので、正しい UTF-8 ではバイトの単位でも同じ結果になる。
+/// `String.show` が1バイトを書く形。規則は文字の単位で決めてある (docs/spec/declarations.md の「Prelude のクラス」)。
+/// UTF-8 の先頭と続きのバイトはどれも 0x80 以上なので、正しい UTF-8 ではバイトの単位で書いても同じ結果になる。
 pub open spec fn escape_byte(c: u8) -> Seq<u8> {
     if c == b'"' {
         seq![b'\\', b'"']
@@ -910,8 +910,8 @@ impl<M: Mode> Ctx<M> {
             }
             let ha = self.heap.header_of(a);
             let right = self.heap.string_text(b).len() as u64;
-            // 一意な左には、その場で足すか作り直すかによらず右の長さだけを数え、共有か不死の左には両辺を数える。今の
-            // インタプリタの数え方で、S10 で固定した `RunStats` を変えないためである
+            // 一意な左には、その場で足すか作り直すかによらず右の長さだけを数え、共有か不死の左には両辺を数える
+            // (docs/spec/object-model.md の「仕事の回数」)
             if self.heap.core.rc_get(ha) == 1 {
                 right
             } else {

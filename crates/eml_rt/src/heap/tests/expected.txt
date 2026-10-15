@@ -1,4 +1,4 @@
-# eml_rt の extern の期待値の表。今の実装 (eml_interp) の出力から作った
+# eml_rt の extern の期待値の表。eml_rt の検査モードの結果から作った
 Prelude.+	i:0	i:0	=> i:0
 Prelude.+	i:0	i:1	=> i:1
 Prelude.+	i:0	i:-1	=> i:-1

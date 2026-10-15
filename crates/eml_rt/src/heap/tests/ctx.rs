@@ -59,9 +59,8 @@ fn poll_reports_each_stop<M: Mode>() {
     assert_eq!(ctx.poll(0), Ok(()));
 }
 
-/// yield して、継続を2回組み立て直し、終える。`eml_interp` の
-/// `yields_and_continuation_frames_are_counted` と同じ列で、同じ数になる。最初の κ は関数の値 (`Word::imm(1)`) で、
-/// 関数 0 の値は `()` と同じ語になるので使わない。
+/// yield して、継続を2回組み立て直し、終える。最初の κ は関数の値 (`Word::imm(1)`) で、関数 0 の値は `()` と同じ語に
+/// なるので使わない。
 fn yields_and_continuation_frames_are_counted<M: Mode>() {
     let mut ctx = ctx::<M>();
     let ev = ctx_evidence(&mut ctx);
@@ -316,7 +315,7 @@ fn nodes<M: Mode>(ctx: &Ctx<M>, mut list: Word) -> Vec<(Word, Word)> {
     nodes
 }
 
-/// `eml_interp` の同じ名前のテストと同じ列で、同じ数になる。
+/// `ev_lookup` と `evv_mask` は、たどった `evv` の節点を `evidence_steps` に数える。
 fn lookups_and_masks_count_the_list_nodes_they_visit<M: Mode>() {
     let mut ctx = ctx::<M>();
     let evs: Vec<Word> = [0, 1, 1]

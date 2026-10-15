@@ -29,8 +29,6 @@ mod raw;
 mod reuse;
 mod share;
 mod string;
-// `eml_interp` のテストと分け合うファイルなので、表を作るための項目はここでは使わない
-#[allow(dead_code)]
 mod table;
 mod trusted;
 

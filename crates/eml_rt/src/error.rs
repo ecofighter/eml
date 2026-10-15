@@ -43,7 +43,6 @@ impl fmt::Display for HeapError {
                 f.write_str("an immortal object is released more often than it was acquired")
             }
             HeapError::NotImmortal => f.write_str("an acquire of an object that is not immortal"),
-            // `eml_runtime` の `File` の検査と同じ文言にする
             HeapError::LinDup => f.write_str("a Lin object is shared"),
             HeapError::LinShared => f.write_str("a Lin object is on the shared side"),
             HeapError::LinReachedTwice => f.write_str("share reaches the same Lin object twice"),
@@ -67,7 +66,6 @@ impl fmt::Display for HeapError {
                 f.write_str("reuse_in_place keeps a lin bit the new object does not have")
             }
             HeapError::FinalizerSkipped => f.write_str("free_block on an object with a finalizer"),
-            // `eml_runtime` の `release_fields` と同じ文言にする
             HeapError::WrongLayout => {
                 f.write_str("an object does not have the tag and number of fields a release names")
             }

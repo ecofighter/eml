@@ -1,5 +1,5 @@
-//! 期待値の表の形。`eml_rt` のテストと `eml_interp` のテスト (`#[path]` で読む) が同じ表を使う。`std` だけを使う。
-//! 表は `eml_interp` の側の出力から作る (docs/implementation/testing.md の「期待値の表」)。
+//! 期待値の表の形と入力。`std` だけを使う。表は `eml_rt` の検査モードの結果から作る
+//! (docs/implementation/testing.md の「期待値の表」)。
 
 use std::path::{Path, PathBuf};
 
@@ -328,7 +328,7 @@ pub fn unquote(text: &str) -> String {
     out
 }
 
-/// 表を作るための入力。結果の欄は空で、`eml_interp` の側が埋める
+/// 表を作るための入力。結果の欄は `externs.rs` の書き手が埋める
 pub fn inputs() -> Vec<(String, Vec<Arg>)> {
     let mut inputs = Vec::new();
     let mut push = |name: &str, args: Vec<Arg>| inputs.push((name.to_string(), args));

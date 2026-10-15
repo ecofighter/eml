@@ -339,7 +339,7 @@ pub fn bool_ne(a: i64, b: i64) -> (r: i64)
 }
 
 } // verus!
-// 文言は今の `eml_interp::Fault` と1文字も違わないようにする。S10 で VM に切り替えても UI テストの出力が変わらない
+// 文言は docs/spec/lir.md の「実行時エラー」の一覧と1文字も違わないようにする
 impl fmt::Display for ArithFault {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(match self {
