@@ -1,0 +1,25 @@
+[package]
+name = "eml_vm"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+# 結合テストは1つのバイナリにまとめる (docs/implementation/testing.md の「crate の中の置き方」)
+autotests = false
+
+# 単体テストがないので、空のテストのバイナリを作らない。Task 3 で単体テストを足すときに `test = false` を外す
+[lib]
+test = false
+doctest = false
+
+[dependencies]
+eml_extern.workspace = true
+eml_lir.workspace = true
+eml_rt.workspace = true
+
+[dev-dependencies]
+eml_test_support = { workspace = true, features = ["run"] }
+insta.workspace = true
+
+[[test]]
+name = "integration"
+path = "tests/main.rs"

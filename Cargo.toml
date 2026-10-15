@@ -18,6 +18,7 @@ eml_lir = { path = "crates/eml_lir" }
 eml_runtime = { path = "crates/eml_runtime" }
 eml_rt = { path = "crates/eml_rt" }
 eml_interp = { path = "crates/eml_interp" }
+eml_vm = { path = "crates/eml_vm" }
 eml_cli = { path = "crates/eml_cli", default-features = false }
 eml_test_support = { path = "crates/eml_test_support", default-features = false }
 ariadne = "0.6"

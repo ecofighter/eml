@@ -21,7 +21,7 @@ default = ["run"]
 hir = ["dep:eml_hir", "dep:eml_cli"]
 types = ["hir", "dep:eml_types", "eml_cli/types"]
 core = ["types", "dep:eml_core_ir", "dep:eml_lir", "eml_cli/core"]
-run = ["core", "dep:eml_interp", "dep:eml_runtime", "eml_cli/run"]
+run = ["core", "dep:eml_interp", "dep:eml_runtime", "dep:eml_vm", "eml_cli/run"]
 
 [dependencies]
 eml_cli = { workspace = true, optional = true }
@@ -33,6 +33,7 @@ eml_lir = { workspace = true, optional = true }
 eml_runtime = { workspace = true, optional = true }
 eml_syntax.workspace = true
 eml_types = { workspace = true, optional = true }
+eml_vm = { workspace = true, optional = true }
 
 [[test]]
 name = "integration"

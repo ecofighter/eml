@@ -271,6 +271,7 @@ dependencies = [
  "eml_runtime",
  "eml_syntax",
  "eml_types",
+ "eml_vm",
 ]
 
 [[package]]
@@ -283,6 +284,17 @@ dependencies = [
  "eml_test_support",
  "insta",
  "la-arena",
+]
+
+[[package]]
+name = "eml_vm"
+version = "0.1.0"
+dependencies = [
+ "eml_extern",
+ "eml_lir",
+ "eml_rt",
+ "eml_test_support",
+ "insta",
 ]
 
 [[package]]

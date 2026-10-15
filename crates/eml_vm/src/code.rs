@@ -1,0 +1,91 @@
+//! 実行するコードの表 `CodeBase` と関数表 `FnEntry` (docs/spec/vm.md の「`CodeBase` と `FnEntry`」)。
+
+use std::sync::Arc;
+
+use eml_lir::Loc;
+use eml_rt::{Frozen, HeapError, Mode, Word};
+
+use crate::error::{SourceLocation, VmError};
+use crate::op::{BUILTINS, Op, Pc};
+use crate::vm::{Failure, Task};
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FnEntry {
+    pub name: String,
+    /// 命令列の範囲 `[start, end)`。
+    pub start: Pc,
+    pub end: Pc,
+    pub arity: u16,
+    pub frame_size: u16,
+}
+
+/// 実行中は読むだけの表。後の並列 VM の worker がそのまま共有できるように、`Sync` に保つ
+/// (docs/future/multicore.md の「VM の並列化の備え」の制約2)。
+pub struct CodeBase<M: Mode> {
+    pub(crate) functions: Vec<FnEntry>,
+    pub(crate) code: Vec<Op>,
+    pub(crate) operands: Vec<u32>,
+    /// Task 7 のハンドラが使う
+    #[allow(dead_code)]
+    pub(crate) effect_lists: Vec<u16>,
+    pub(crate) constants: Vec<Word>,
+    pub(crate) region: Arc<Frozen<M>>,
+    /// 命令の位置の昇順。
+    pub(crate) locations: Vec<(Pc, Loc)>,
+    pub(crate) files: Vec<String>,
+    pub(crate) entry: u32,
+    /// 入口の関数の結果を `Finish` で手放すか。`ret` が RC の Repr のときである。
+    pub(crate) entry_ret_rc: bool,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub enum CompileError {
+    /// 同時に要るスロットが `u16` に収まらない関数。
+    TooManySlots { function: String },
+    /// 定数を凍結できなかった。
+    Freeze(HeapError),
+}
+
+impl<M: Mode> CodeBase<M> {
+    pub fn functions(&self) -> &[FnEntry] {
+        &self.functions
+    }
+
+    /// 命令の位置を含む関数。組み込みの命令はどの関数にも属さない。関数は命令の位置の順に並ぶ。
+    pub(crate) fn function_at(&self, pc: Pc) -> Option<&FnEntry> {
+        if pc < BUILTINS {
+            return None;
+        }
+        let after = self.functions.partition_point(|f| f.start <= pc);
+        self.functions.get(after.checked_sub(1)?)
+    }
+
+    pub(crate) fn location(&self, pc: Pc) -> Option<Loc> {
+        let index = self
+            .locations
+            .binary_search_by_key(&pc, |&(at, _)| at)
+            .ok()?;
+        Some(self.locations[index].1)
+    }
+
+    /// 誤りに関数の名前と位置を付ける。組み込みの命令で起きた誤りには、最後に戻った関数の名前を付ける
+    /// (docs/spec/vm.md の「誤り、止めること、終わり」)。
+    pub(crate) fn error(&self, Failure { fault, pc }: Failure, task: &Task) -> VmError {
+        let function = self
+            .function_at(pc)
+            .or_else(|| self.function_at(task.last_ret))
+            .unwrap_or(&self.functions[self.entry as usize])
+            .name
+            .clone();
+        let at = self.location(pc).map(|loc| SourceLocation {
+            path: self.files[loc.file as usize].clone(),
+            line: loc.line,
+            column: loc.column,
+        });
+        VmError::Fault {
+            fault,
+            function,
+            at,
+        }
+    }
+}

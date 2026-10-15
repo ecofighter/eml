@@ -310,6 +310,17 @@ fn without_stats(
     (out, result.map(|_| ()))
 }
 
+/// 手で書いた LIR を VM で実行する。出力はメモリに捕まえる。
+#[cfg(feature = "run")]
+pub fn execute_vm(
+    program: &eml_lir::Program,
+    debug_heap: bool,
+) -> (String, Result<eml_vm::RunStats, eml_vm::VmError>) {
+    let (host, out) = eml_vm::capture_host(std::path::PathBuf::new());
+    let result = eml_vm::execute(program, debug_heap, host);
+    (out.contents(), result)
+}
+
 /// 1件を `E0001 1:2 message` の1行にする。期待値を読みやすくするため、位置はバイトではなく行と列にする。
 pub fn short(files: &SourceFiles, diagnostics: &[Diagnostic]) -> Vec<String> {
     diagnostics
