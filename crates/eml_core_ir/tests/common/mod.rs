@@ -94,23 +94,6 @@ pub fn session_core_text(inputs: &[&str], last: Pass) -> String {
     shown
 }
 
-/// `session_core_text` の、extern の呼び出しの位置も表示する形。
-pub fn session_core_text_with_positions(inputs: &[&str]) -> String {
-    let (program, typed, files) = session(inputs);
-    let entry = program
-        .input()
-        .expect("the last input is an input function");
-    let shown = pretty_with_positions(&eml_core_ir::core_until(
-        &program,
-        &typed,
-        entry,
-        &files,
-        Pass::Translate,
-    ));
-    read_back(&shown, Pass::Translate, pretty_with_positions);
-    shown
-}
-
 /// `session_core_text` の、Perceus の後の LIR の形。
 pub fn session_lir_text(inputs: &[&str]) -> String {
     let (program, typed, files) = session(inputs);

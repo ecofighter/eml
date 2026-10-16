@@ -12,11 +12,12 @@ use eml_types::{TypeId, TypeStore, TypedProgram};
 use crate::{Call, CoreFn, Rhs, Stmt, Term};
 use eml_lir::{
     Atom, Ctor, EffectInfo, FnIdx, Layout, LayoutCtor, LayoutId, Loc, Mark, OpRet, OperationInfo,
-    Prim, Repr, VarInfo,
+    Prim, Repr, TUPLE, VarInfo,
 };
 
 use crate::builder::FnBuilder;
 
+use super::display::BUDGET;
 use super::types::{declared_mark, declared_var_info, mark, named, repr, split_arrows, var_info};
 
 /// 文字列リテラルと表示用のパスの表。同じ文字列には同じ番号を返す。
@@ -391,7 +392,7 @@ impl ProgramBuilder {
     /// 入口の関数を `()` で呼ぶ関数を作る。名前は `entry$` に入口の関数の名前を続ける。等式に引数のない
     /// `main = fn () -> ...` は関数値を返すので、返った値に `()` を適用する (docs/spec/core-ir.md)。`yields` は、入口の
     /// 関数の宣言の型の最初の矢印が yield しうるかで、作る関数とその `apply` の印にする。`after` は、REPL の入力の
-    /// 結果を根に置くか表示するかである。入力の関数は普通の関数のまま `T` を返し、入力ごとの扱いはここに置く。
+    /// 結果を根に置くか、値を書いた文字列を返すかである。入力の関数は普通の関数のまま `T` を返し、入力ごとの扱いはここに置く。
     #[expect(clippy::too_many_arguments, reason = "the parts of one entry function")]
     pub(super) fn entry(
         &mut self,
@@ -442,13 +443,14 @@ impl ProgramBuilder {
                 let stored = unit_var(&mut builder, Rhs::Prim(Prim::RootSet(root), vec![value]));
                 (stored, Repr::Unit, Mark::Unr)
             }
-            EntryAfter::Show { show, at } => {
-                let shown = self.show(&mut builder, show, value);
-                (println(&mut builder, shown, at), Repr::Unit, Mark::Unr)
-            }
-            EntryAfter::TypeOnly { text, at } => {
-                let shown = builder.string(&mut self.strings, &format!("_ : {text}"));
-                (println(&mut builder, shown, at), Repr::Unit, Mark::Unr)
+            EntryAfter::Shown(shown) => {
+                let text = match shown {
+                    Shown::Display(display) => self.display(&mut builder, display, value),
+                    Shown::Show(show) => self.show(&mut builder, show, value),
+                    // 値は捨てる。入力の関数は呼んであるので、式の中の `println` は動いている
+                    Shown::Function => builder.string(&mut self.strings, "<fn>"),
+                };
+                (text, Repr::Obj, Mark::Unr)
             }
         };
         builder.terminate(Term::Return(returned));
@@ -458,18 +460,41 @@ impl ProgramBuilder {
         function
     }
 
+    /// 表示関数 `display$N$0` で `value` を書き、書いた文字列を返す。予算は値全体の上限 (`BUDGET`) から、段と優先度は
+    /// 0 から始める。
+    fn display(&mut self, builder: &mut FnBuilder, display: FnIdx, value: Atom) -> Atom {
+        let empty = builder.string(&mut self.strings, "");
+        let pair = builder.var(named("r", Repr::Obj, Mark::Unr));
+        let args = vec![empty, Atom::Int(BUDGET), Atom::Int(0), Atom::Int(0), value];
+        builder.emit(Stmt::Let {
+            var: pair,
+            rhs: plain_call(Call::Direct(display, args)),
+        });
+        let text = builder.var(named("s", Repr::Obj, Mark::Unr));
+        let budget = builder.var(named("n", Repr::Int, Mark::Unr));
+        builder.emit(Stmt::Unpack {
+            value: pair,
+            ctor: Ctor {
+                layout: self.tuple_layout(2),
+                tag: TUPLE,
+            },
+            fields: vec![text, budget],
+        });
+        Atom::Var(text)
+    }
+
     /// `show` の行き先で `value` を文字列にする。instance のメソッドの等式が引数を持たなければ、返った関数値に適用する。
-    fn show(&mut self, builder: &mut FnBuilder, show: Shown, value: Atom) -> Atom {
+    fn show(&mut self, builder: &mut FnBuilder, show: ShowTarget, value: Atom) -> Atom {
         let rhs = match show {
-            Shown::Extern(row) => Rhs::Extern {
+            ShowTarget::Extern(row) => Rhs::Extern {
                 ext: row,
                 args: vec![value],
                 at: None,
             },
-            Shown::Function(target) if self.arity(target) == 1 => {
+            ShowTarget::Function(target) if self.arity(target) == 1 => {
                 plain_call(Call::Direct(target, vec![value]))
             }
-            Shown::Function(target) => {
+            ShowTarget::Function(target) => {
                 let function = builder.var(named("f", Repr::TObj, Mark::Unr));
                 builder.emit(Stmt::Let {
                     var: function,
@@ -493,15 +518,24 @@ pub(super) enum EntryAfter {
     Return,
     /// `let` の入力。結果をこの番号の根に置く。
     Store(u32),
-    /// `Show` を持つ型の式の入力。`show` の結果を表示する。`at` は表示の失敗を報告する位置である。
-    Show { show: Shown, at: Loc },
-    /// `Show` を持たない型の式の入力。`_ : T` の形で型だけを表示する。`text` は `T` の表示である。
-    TypeOnly { text: String, at: Loc },
+    /// 値を書く式の入力。値を書いた文字列 (型の ` : T` を含まない) を返す。`Repl` がそれを整形して書く。
+    Shown(Shown),
 }
 
-/// 式の入力の型の `show` の行き先。
+/// 式の入力の値の書き方。
 #[derive(Clone, Copy)]
 pub(super) enum Shown {
+    /// 構造で書く。表示関数 `display$N$0` を呼ぶ。
+    Display(FnIdx),
+    /// `show` で書く。
+    Show(ShowTarget),
+    /// 関数の値。`<fn>` を返す。
+    Function,
+}
+
+/// `show` の行き先。
+#[derive(Clone, Copy)]
+pub(super) enum ShowTarget {
     Function(FnIdx),
     Extern(Extern),
 }
@@ -511,18 +545,6 @@ fn unit_var(builder: &mut FnBuilder, rhs: Rhs) -> Atom {
     let var = builder.var(named("u", Repr::Unit, Mark::Unr));
     builder.emit(Stmt::Let { var, rhs });
     Atom::Var(var)
-}
-
-/// extern の `println` で文字列を表示する。ユーザーが定義した `println` によらない。
-fn println(builder: &mut FnBuilder, text: Atom, at: Loc) -> Atom {
-    unit_var(
-        builder,
-        Rhs::Extern {
-            ext: Extern::Println,
-            args: vec![text],
-            at: Some(at),
-        },
-    )
 }
 
 /// `mask` のない呼び出し。

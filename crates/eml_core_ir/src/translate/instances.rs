@@ -7,7 +7,7 @@ use std::collections::{HashMap, HashSet, VecDeque};
 use eml_extern::Extern;
 use eml_hir::{
     CoreMethod, ExprId, ExprKind, FunctionId, FunctionKind, InputKind, InstanceOrigin, MethodId,
-    MethodImpl, ModuleOrigin, Program as HirProgram, TypeDefKind, ValueItem,
+    MethodImpl, ModuleOrigin, Program as HirProgram, TypeDefId, TypeDefKind, ValueItem,
 };
 use eml_types::{
     BodyTypes, InputDisplay, InstanceNode, Instantiation, Lin, Resolution, RowYield, Substitution,
@@ -15,6 +15,7 @@ use eml_types::{
 };
 use la_arena::ArenaMap;
 
+use super::display::{MAX_DEPTH, MAX_DISPLAYS};
 use super::names::{NameTable, args_hash};
 use super::program::core_name;
 use super::types::split_arrows;
@@ -41,6 +42,8 @@ pub(super) enum InstanceKind {
     Function(FunctionInstance),
     /// translate が Core IR を組む関数 (`derive.rs`)。
     Generated(GeneratedInstance),
+    /// REPL の式の入力の値を書く表示関数 (`display.rs`)。
+    Display(DisplayInstance),
 }
 
 pub(super) struct FunctionInstance {
@@ -71,6 +74,51 @@ pub(super) struct GeneratedInstance {
     pub(super) tag: Option<Target>,
     /// コンストラクタごとのフィールドの型。タプルは要素の型を持つ1つのコンストラクタで、`Unit` は空である。
     pub(super) fields: Vec<Vec<TypeId>>,
+}
+
+/// 表示関数が書く値の形 (docs/spec/core-ir.md の「表示関数」)。
+#[derive(Clone)]
+pub(super) enum DisplayForm {
+    /// タプルの要素の型。`()` は空である。
+    Tuple(Vec<TypeId>),
+    /// `data` の型と、コンストラクタの宣言の順のフィールドの型。
+    Data(TypeDefId, Vec<Vec<TypeId>>),
+    /// Prelude の `List`。`Nil` と `::` のフィールドの型で、要素の型は `::` の最初のフィールドである。背骨は補助の
+    /// 関数 `display$N$k$rest` がたどる。
+    List(Vec<Vec<TypeId>>),
+}
+
+/// 表示関数が部分を書く書き方。`I` は表示関数の指し方で、集める途中は `found` の位置、並べた後は `InstanceId` である。
+#[derive(Clone, Copy, Debug)]
+pub(super) enum Part<T = Target, I = InstanceId> {
+    /// `show_prec` で書く (リストの要素と入力の値そのものは `show`)。
+    Show(T),
+    /// 関数。`<fn>` と書く。
+    Function,
+    /// 表示関数を作らない型 (段と数の上限を超えた型)。`...` と書く。
+    Ellipsis,
+    /// 構造で書く。表示関数を呼ぶ。
+    Display(I),
+}
+
+type FoundPart = Part<FoundTarget, usize>;
+
+impl FoundPart {
+    fn renumber(self, renumbered: &[usize]) -> Part {
+        match self {
+            Part::Show(target) => Part::Show(target.renumber(renumbered)),
+            Part::Function => Part::Function,
+            Part::Ellipsis => Part::Ellipsis,
+            Part::Display(index) => Part::Display(InstanceId(renumbered[index])),
+        }
+    }
+}
+
+pub(super) struct DisplayInstance {
+    pub(super) form: DisplayForm,
+    /// 部分の書き方。タプルは要素の順に1列、`data` はコンストラクタの順、フィールドの順に並べ、`List` は要素の1つだけを
+    /// 持つ。
+    pub(super) parts: Vec<Vec<Part>>,
 }
 
 /// 生成する関数 (docs/spec/core-ir.md の「導出とタプルの生成器」)。
@@ -115,10 +163,9 @@ impl From<CoreMethod> for GeneratedMethod {
 pub(super) struct Instances {
     pub(super) list: Vec<Instance>,
     pub(super) entry: InstanceId,
-    /// 入口が `Show` を持つ型の式の入力なら、その型の `show` の行き先。入口の関数 `entry$` が結果の表示に使う。
-    /// 入力の本体にない呼び出しなので、参照の行き先 (`targets`) とは別に持つ
-    /// (docs/spec/core-ir.md の「REPL の入力」)。
-    pub(super) show: Option<Target>,
+    /// 入口が値を書く式の入力なら、その値の書き方。入口の関数 `entry$` が値の文字列を作るのに使う。入力の本体にない
+    /// 呼び出しなので、参照の行き先 (`targets`) とは別に持つ (docs/spec/core-ir.md の「REPL の入力」)。
+    pub(super) display: Option<Part>,
     /// 型検査の型の表に、代入の結果を足した表。
     pub(super) store: TypeStore,
 }
@@ -132,6 +179,14 @@ enum Found {
         tag: Option<FoundTarget>,
         fields: Vec<Vec<TypeId>>,
     },
+    Display {
+        /// 入力の中で見つけた順の番号 `k`。
+        number: usize,
+        /// 入口からの最小の段。
+        depth: u32,
+        form: DisplayForm,
+        parts: Vec<Vec<FoundPart>>,
+    },
 }
 
 struct FoundFunction {
@@ -144,7 +199,7 @@ struct FoundFunction {
 }
 
 /// `Target` の、番号を付け直す前の形。関数の行き先は `found` の位置で持つ。
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 enum FoundTarget {
     Function(usize),
     Extern(Extern),
@@ -167,6 +222,8 @@ struct Collector<'a> {
     found: Vec<Found>,
     keys: HashMap<(FunctionId, Vec<TypeId>, Vec<bool>), usize>,
     generated_keys: HashMap<Generated, usize>,
+    /// 表示関数を作った型から、`found` の位置。型の表は hash-consing なので、同じ型は同じ `TypeId` である。
+    display_keys: HashMap<TypeId, usize>,
     queue: VecDeque<usize>,
 }
 
@@ -469,19 +526,7 @@ impl Collector<'_> {
         };
         let generated = generated.clone();
         let fields = self.field_types(&generated);
-        let core = |core: CoreMethod| {
-            let lang = &hir.lang;
-            let class = match core {
-                CoreMethod::Eq => lang.eq,
-                CoreMethod::Compare => lang.ord,
-                CoreMethod::ShowPrec | CoreMethod::Show => lang.show,
-            };
-            *hir[class]
-                .methods
-                .iter()
-                .find(|&&method| hir.core_method(method) == Some(core))
-                .expect("the Prelude classes declare their core methods")
-        };
+        let core = |core| core_method(hir, core);
         let each_field = |collector: &mut Self, method: MethodId| -> Vec<FoundTarget> {
             fields
                 .iter()
@@ -527,35 +572,38 @@ impl Collector<'_> {
         *field_slot = fields;
     }
 
-    /// コンストラクタごとのフィールドの型。コンストラクタの宣言の型に、`data` の型引数の名前から `args` への代入を
-    /// かけて、矢印の引数として取り出す。型引数を鍵に持たない `Tag` は、足りない型引数を一様な型 (`Flexible(Poly)`) で埋める。
-    /// フィールドの型は Repr にしか使わないためである。
     fn field_types(&mut self, generated: &Generated) -> Vec<Vec<TypeId>> {
-        let hir = self.hir;
         let instance = match generated.node {
             InstanceNode::Tuple(0) => return Vec::new(),
             InstanceNode::Tuple(_) => return vec![generated.args.clone()],
             InstanceNode::Declared(instance) => instance,
         };
-        let ty = hir[instance].head;
-        let TypeDefKind::Data { constructors } = &hir[ty].kind else {
-            unreachable!("only data types derive instances")
-        };
-        let names = hir[ty]
-            .generics
-            .type_vars
-            .values()
-            .map(|var| var.name.clone());
-        let names: Vec<String> = names.collect();
+        let ty = self.hir[instance].head;
         // `Tag` は型引数を鍵に持たない。フィールドの型は Repr にしか使わないので、足りない分は一様な型で埋める
         let mut args = generated.args.clone();
         let uniform = self.store.flexible(Lin::Poly);
-        args.resize(names.len(), uniform);
+        args.resize(self.hir[ty].generics.type_vars.len(), uniform);
+        self.constructor_fields(ty, &args)
+    }
+
+    /// `data` の型 `ty` の型引数 `args` での、コンストラクタの宣言の順のフィールドの型。コンストラクタの宣言の型に、
+    /// 型引数の名前から `args` への代入をかけて、矢印の引数として取り出す。
+    fn constructor_fields(&mut self, ty: TypeDefId, args: &[TypeId]) -> Vec<Vec<TypeId>> {
+        let hir = self.hir;
+        let TypeDefKind::Data { constructors } = &hir[ty].kind else {
+            unreachable!("only data types have constructors")
+        };
+        let names: Vec<String> = hir[ty]
+            .generics
+            .type_vars
+            .values()
+            .map(|var| var.name.clone())
+            .collect();
         constructors
             .iter()
             .map(|&constructor| {
                 let item = ValueItem::Constructor(constructor);
-                let kinds = self.typed.kind_values(item, &args, &self.store);
+                let kinds = self.typed.kind_values(item, args, &self.store);
                 let mut subst =
                     Substitution::new(names.iter().cloned().zip(args.iter().copied()), kinds);
                 let declared = self.typed.decls[&item].ty;
@@ -563,6 +611,99 @@ impl Collector<'_> {
                 split_arrows(&self.store, ty, hir[constructor].fields.len()).0
             })
             .collect()
+    }
+
+    /// 表示器が部分の型 `ty` をどう書くか (docs/spec/core-ir.md の「表示関数」)。`depth` は部分の段、`method` は `Show` で
+    /// 書くときに呼ぶメソッド (`show_prec`。入力の値そのものとリストの要素は `show`) である。構造で書く型には、初めて
+    /// 見たときに表示関数を足す。段か数が上限に届けば、表示関数を作らずに `Ellipsis` にする。
+    fn display_part(&mut self, ty: TypeId, depth: u32, method: MethodId) -> FoundPart {
+        let hir = self.hir;
+        if matches!(self.store.kind(ty), TypeKind::Fn { .. }) {
+            return Part::Function;
+        }
+        // 文脈が型引数で解けない instance は、解決すると使えない instance を指すので、先に `satisfies` で分ける
+        let show = hir.lang.show;
+        let structural = !eml_types::satisfies(hir, &self.store, show, ty)
+            || match eml_types::resolve(hir, &self.store, show, ty) {
+                Resolution::Tuple(_) => true,
+                Resolution::Instance { instance, .. } => {
+                    matches!(hir[instance].origin, InstanceOrigin::Derived(_))
+                        || hir[instance].head == hir.lang.list
+                }
+                other @ (Resolution::Given | Resolution::Missing) => {
+                    unreachable!("a satisfied `Show` resolves, found {other:?}")
+                }
+            };
+        if !structural {
+            return Part::Show(self.method_target(method, &[ty], Vec::new()));
+        }
+        if let Some(&index) = self.display_keys.get(&ty) {
+            return Part::Display(index);
+        }
+        if depth >= MAX_DEPTH || self.display_keys.len() >= MAX_DISPLAYS {
+            return Part::Ellipsis;
+        }
+        let form = self.display_form(ty);
+        self.found.push(Found::Display {
+            number: self.display_keys.len(),
+            depth,
+            form,
+            parts: Vec::new(),
+        });
+        let index = self.found.len() - 1;
+        self.display_keys.insert(ty, index);
+        self.queue.push_back(index);
+        Part::Display(index)
+    }
+
+    fn display_form(&mut self, ty: TypeId) -> DisplayForm {
+        let hir = self.hir;
+        match self.store.kind(ty).clone() {
+            TypeKind::Tuple(elements) => DisplayForm::Tuple(elements),
+            TypeKind::Con { id, args } if id == hir.lang.list => {
+                DisplayForm::List(self.constructor_fields(id, &args))
+            }
+            TypeKind::Con { id, args } => match hir[id].kind {
+                TypeDefKind::Data { .. } => {
+                    DisplayForm::Data(id, self.constructor_fields(id, &args))
+                }
+                // `Show` を持たない extern の型は今は `File` だけで、式の入力の結果にならない (E2016)
+                TypeDefKind::Extern(_) => panic!(
+                    "internal error: the displayer reaches the extern type `{}` without `Show`",
+                    hir[id].name
+                ),
+            },
+            other => unreachable!("an input value has a closed type, found {other:?}"),
+        }
+    }
+
+    /// 表示関数の部分の書き方を、部分の段 (表示関数の段の次) で決める。
+    fn display_parts(&mut self, index: usize) {
+        let Found::Display { depth, form, .. } = &self.found[index] else {
+            unreachable!("called for a display function")
+        };
+        let (depth, form) = (depth + 1, form.clone());
+        let show_prec = core_method(self.hir, CoreMethod::ShowPrec);
+        let each = |collector: &mut Self, types: &[TypeId], method| -> Vec<FoundPart> {
+            types
+                .iter()
+                .map(|&ty| collector.display_part(ty, depth, method))
+                .collect()
+        };
+        let parts = match &form {
+            DisplayForm::Tuple(elements) => vec![each(self, elements, show_prec)],
+            DisplayForm::Data(_, fields) => fields
+                .iter()
+                .map(|types| each(self, types, show_prec))
+                .collect(),
+            DisplayForm::List(fields) => {
+                vec![each(self, &fields[1][..1], self.hir.lang.show_method)]
+            }
+        };
+        let Found::Display { parts: slot, .. } = &mut self.found[index] else {
+            unreachable!("checked above")
+        };
+        *slot = parts;
     }
 
     /// 関数の instance ごとに、参照の型と呼ばれる instance の型、`perform` の型と操作の宣言の型、節の型と操作の宣言の
@@ -693,6 +834,7 @@ pub(super) fn collect(hir: &HirProgram, typed: &TypedProgram, entry: FunctionId)
         found: Vec::new(),
         keys: HashMap::new(),
         generated_keys: HashMap::new(),
+        display_keys: HashMap::new(),
         queue: VecDeque::new(),
     };
     // 入口は呼び出し側が選ぶので、型変数を持つ関数なら、どの型でも動く一様な instance にする
@@ -706,12 +848,12 @@ pub(super) fn collect(hir: &HirProgram, typed: &TypedProgram, entry: FunctionId)
     // (docs/spec/core-ir.md の「row のビットと instance の鍵」)
     let entry_bits = vec![true; row_vars(hir, entry).len()];
     let entry_index = collector.add(entry, entry_args, entry_bits);
-    let show = match (hir[entry].kind, typed.inputs.get(entry)) {
+    // 入力の値そのものを `Show` で書くときは、今までどおり `show` を呼ぶ (docs/spec/core-ir.md の「REPL の入力」)
+    let display = match (hir[entry].kind, typed.inputs.get(entry)) {
         (FunctionKind::Input(InputKind::Expr), Some(input))
-            if input.display == InputDisplay::Value =>
+            if input.display != InputDisplay::Unit =>
         {
-            // `show` は row 変数を持たない
-            Some(collector.method_target(hir.lang.show_method, &[input.ty], Vec::new()))
+            Some(collector.display_part(input.ty, 0, hir.lang.show_method))
         }
         _ => None,
     };
@@ -720,13 +862,14 @@ pub(super) fn collect(hir: &HirProgram, typed: &TypedProgram, entry: FunctionId)
         match collector.found[index] {
             Found::Function(_) => collector.function_body(index),
             Found::Generated { .. } => collector.generated_calls(index),
+            Found::Display { .. } => collector.display_parts(index),
         }
     }
     // 呼ばれる instance の `signature` は、その本体をたどった後に代入をかけた型になるので、すべてたどり終えてから比べる
     if cfg!(debug_assertions) {
         collector.check_linearity();
     }
-    order(hir, collector.found, entry_index, show, collector.store)
+    order(hir, collector.found, entry_index, display, collector.store)
 }
 
 /// 本体の型の表のどれかが Kind 変数 (`Var`) を含むか。
@@ -885,13 +1028,13 @@ fn function_base(hir: &HirProgram, names: &NameTable, function: FunctionId) -> S
     }
 }
 
-/// HIR の関数の instance を HIR の関数の順に並べ、同じ関数の instance は見つけた順に並べる。生成する関数は、その後に
-/// 見つけた順に並べる。`TypeId` の値の順には並べない。後の段階が `TypeId` の値に意味を持たせないためである。
+/// HIR の関数の instance を HIR の関数の順に並べ、同じ関数の instance は見つけた順に並べる。生成する関数と表示関数は、
+/// その後に見つけた順に並べる。`TypeId` の値の順には並べない。後の段階が `TypeId` の値に意味を持たせないためである。
 fn order(
     hir: &HirProgram,
     found: Vec<Found>,
     entry: usize,
-    show: Option<FoundTarget>,
+    display: Option<FoundPart>,
     store: TypeStore,
 ) -> Instances {
     let position: HashMap<FunctionId, usize> = hir
@@ -903,12 +1046,19 @@ fn order(
     sorted.sort_by_key(|&index| match &found[index] {
         Found::Function(found) => (0, position[&found.function], index),
         Found::Generated { .. } => (1, 0, index),
+        Found::Display { .. } => (2, 0, index),
     });
     let mut renumbered = vec![0; found.len()];
     for (new, &old) in sorted.iter().enumerate() {
         renumbered[old] = new;
     }
     let names = NameTable::new(hir);
+    // 表示関数の名前は型でなく入力の番号から作る。後の入力の instance で同じ型の書き方が変わっても、名前が重ならない
+    // (docs/spec/core-ir.md の「表示関数」)
+    let input = match hir.modules[hir.entry].origin {
+        ModuleOrigin::Session(input) => input,
+        _ => 0,
+    };
     let mut found: Vec<Option<Found>> = found.into_iter().map(Some).collect();
     let list: Vec<Instance> = sorted
         .iter()
@@ -963,6 +1113,21 @@ fn order(
                         }),
                     }
                 }
+                Found::Display {
+                    number,
+                    form,
+                    parts,
+                    ..
+                } => Instance {
+                    name: format!("display${input}${number}"),
+                    kind: InstanceKind::Display(DisplayInstance {
+                        form,
+                        parts: parts
+                            .iter()
+                            .map(|row| row.iter().map(|part| part.renumber(&renumbered)).collect())
+                            .collect(),
+                    }),
+                },
             },
         )
         .collect();
@@ -978,7 +1143,22 @@ fn order(
     Instances {
         list,
         entry: InstanceId(renumbered[entry]),
-        show: show.map(|target| target.renumber(&renumbered)),
+        display: display.map(|part| part.renumber(&renumbered)),
         store,
     }
+}
+
+/// Prelude のクラスの中心のメソッド。
+fn core_method(hir: &HirProgram, core: CoreMethod) -> MethodId {
+    let lang = &hir.lang;
+    let class = match core {
+        CoreMethod::Eq => lang.eq,
+        CoreMethod::Compare => lang.ord,
+        CoreMethod::ShowPrec | CoreMethod::Show => lang.show,
+    };
+    *hir[class]
+        .methods
+        .iter()
+        .find(|&&method| hir.core_method(method) == Some(core))
+        .expect("the Prelude classes declare their core methods")
 }

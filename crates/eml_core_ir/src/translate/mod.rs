@@ -4,6 +4,7 @@
 //! `types.rs`、導出した instance とタプルの instance の生成器は `derive.rs` にある。
 
 mod derive;
+mod display;
 mod expr;
 mod instances;
 mod names;
@@ -27,9 +28,9 @@ use eml_lir::{Atom, Case, CasePattern, FALSE, FnIdx, Loc, Mark, Repr, TRUE, VarI
 
 use crate::builder::{FnBuilder, Label};
 use expr::extern_row;
-use instances::{InstanceKind, Target};
+use instances::{InstanceKind, Part, Target};
 use pattern::{Known, MatchCtx, Occ, Scrutinee, destructures};
-use program::{EntryAfter, ProgramBuilder, Shown, effect_table};
+use program::{EntryAfter, ProgramBuilder, ShowTarget, Shown, effect_table};
 use types::{mark, named, repr, split_arrows, var_info};
 
 // extern の表の行と std の宣言を照らし合わせる結合テスト (tests/externs.rs) が、translate と同じ規則で型の Repr を決める
@@ -182,6 +183,8 @@ pub(crate) fn translate(
             InstanceKind::Generated(generated) => {
                 builder.reserve(generated.generated.method.arity())
             }
+            // `(acc, budget, depth, prec, x)` (docs/spec/core-ir.md の「表示関数」)
+            InstanceKind::Display(_) => builder.reserve(5),
         })
         .collect();
     for (instance, &index) in instances.list.iter().zip(&indices) {
@@ -196,6 +199,12 @@ pub(crate) fn translate(
                     &instance.name,
                     generated,
                 );
+                builder.finish(index, core);
+                continue;
+            }
+            InstanceKind::Display(display) => {
+                let core =
+                    display::generate(hir, store, &mut builder, &indices, &instance.name, display);
                 builder.finish(index, core);
                 continue;
             }
@@ -254,7 +263,7 @@ pub(crate) fn translate(
         .get(entry)
         .expect("every body is type-checked")
         .first_arrow_yield;
-    let after = entry_after(hir, typed, entry, &instances, &indices, &mut builder, files);
+    let after = entry_after(hir, typed, entry, &instances, &indices);
     let entry_fn = builder.entry(
         hir,
         store,
@@ -278,7 +287,7 @@ pub(crate) fn translate(
     }
 }
 
-/// 入口の関数が入口の結果をどう扱うか。REPL の入力なら、`let` は根に置き、式は表示する
+/// 入口の関数が入口の結果をどう扱うか。REPL の入力なら、`let` は根に置き、式は値を書いた文字列を返す
 /// (docs/spec/core-ir.md の「REPL の入力」)。
 fn entry_after(
     hir: &HirProgram,
@@ -286,37 +295,25 @@ fn entry_after(
     entry: FunctionId,
     instances: &instances::Instances,
     indices: &[FnIdx],
-    builder: &mut ProgramBuilder,
-    files: &SourceFiles,
 ) -> EntryAfter {
     let FunctionKind::Input(kind) = hir[entry].kind else {
         return EntryAfter::Return;
     };
-    // 表示の失敗 (書き出せないこと) は、入力の式の先頭の位置で報告する
-    let mut at = || {
-        let file_id = hir.modules[entry.module].file;
-        let body = hir.body(entry).expect("an input has a body");
-        let position = files.line_col(file_id, body.exprs[body.root].range.start());
-        Loc {
-            file: builder.files.intern(files.path(file_id)),
-            line: position.line,
-            column: position.column,
-        }
-    };
     match (kind, &typed.inputs[entry].display) {
         (InputKind::Let(binding), _) => EntryAfter::Store(hir[binding].root),
         (InputKind::Expr, InputDisplay::Unit) => EntryAfter::Return,
-        (InputKind::Expr, InputDisplay::Value) => {
-            let show = match instances.show.expect("a shown input has a `show` target") {
-                Target::Function(instance) => Shown::Function(indices[instance.0]),
-                Target::Extern(row) => Shown::Extern(row),
+        (InputKind::Expr, InputDisplay::Value | InputDisplay::Typed(_)) => {
+            let shown = match instances.display.expect("a shown input has a display") {
+                Part::Display(instance) => Shown::Display(indices[instance.0]),
+                Part::Show(Target::Function(instance)) => {
+                    Shown::Show(ShowTarget::Function(indices[instance.0]))
+                }
+                Part::Show(Target::Extern(row)) => Shown::Show(ShowTarget::Extern(row)),
+                Part::Function => Shown::Function,
+                Part::Ellipsis => unreachable!("the value of an input is never cut"),
             };
-            EntryAfter::Show { show, at: at() }
+            EntryAfter::Shown(shown)
         }
-        (InputKind::Expr, InputDisplay::Typed(text)) => EntryAfter::TypeOnly {
-            text: text.clone(),
-            at: at(),
-        },
         (InputKind::Query, _) => unreachable!("a query is checked but never lowered"),
     }
 }

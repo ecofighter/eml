@@ -6,11 +6,16 @@ use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::sync::Arc;
 
 use eml_diagnostics::{Diagnostic, SourceFiles, TextSize, has_errors};
-use eml_hir::{FunctionKind, ImportCache, InputForm, InputKind, ModuleSource, SessionInput};
-use eml_types::{InstanceNode, TypedProgram};
-use eml_vm::{AnyMachine, Control, HostRef, RunConfig, RuntimeError, VmFault};
+use eml_hir::{
+    FunctionId, FunctionKind, ImportCache, InputForm, InputKind, ModuleSource, SessionInput,
+};
+use eml_types::{InputDisplay, InstanceNode, TypedProgram};
+use eml_vm::{AnyMachine, Control, HostRef, RunConfig, RuntimeError, SourceLocation, VmFault};
 
-use crate::Session;
+use crate::{Session, pretty};
+
+/// 結果を整形する既定の幅 (docs/spec/repl.md の「結果の表示」)。
+const DEFAULT_WIDTH: usize = 80;
 
 /// REPL のセッション。端末は `eml repl` で、`terminal.rs` が使う。
 pub struct Repl {
@@ -31,6 +36,8 @@ pub struct Repl {
     next_input: u32,
     /// 続けられない誤りの後は、ヒープを信用できないので実行しない。
     broken: bool,
+    /// 結果を整形する幅。
+    width: usize,
 }
 
 struct Accepted {
@@ -38,6 +45,14 @@ struct Accepted {
     text: String,
     /// `:load` のファイルの入力だけが `Some` で、ファイルの表示のパスを持つ。
     path: Option<String>,
+}
+
+/// 式の入力の結果の書き方。`Repl::run` が、実行の返した文字列を整形して書く (docs/spec/repl.md の「結果の表示」)。
+struct Shown {
+    /// `Show` を持たない型なら ` : T`、持つ型なら空。
+    suffix: String,
+    /// 書けなかったときの誤りの位置。入力の式の先頭である。
+    at: SourceLocation,
 }
 
 /// `evaluate` が読む入力の形。問い合わせは `type_of` が別に作る。
@@ -116,6 +131,7 @@ impl Repl {
             shown: HashSet::new(),
             next_input: 1,
             broken: false,
+            width: DEFAULT_WIDTH,
         }
     }
 
@@ -230,11 +246,9 @@ impl Repl {
         // 止める語は lowering の後、`load` の前に1回だけ読む。VM は入口では安全点を通らないので、ここで止めないと、
         // 入口から最初の呼び出しまでの extern と `root_set` が動く (docs/spec/repl.md の「割り込み」)
         let program = match input {
-            Some(entry) if !has_errors(&diagnostics) => Some(eml_core_ir::lower(
-                &checked.program,
-                &checked.typed,
-                entry,
-                session.files(),
+            Some(entry) if !has_errors(&diagnostics) => Some((
+                eml_core_ir::lower(&checked.program, &checked.typed, entry, session.files()),
+                shown(&checked.program, &checked.typed, entry, session.files()),
             )),
             _ => None,
         };
@@ -242,8 +256,8 @@ impl Repl {
             Outcome::Rejected
         } else if self.control.stop_bits() & Control::INTERRUPT != 0 {
             Outcome::Interrupted
-        } else if let Some(program) = program {
-            self.run(&program)
+        } else if let Some((program, shown)) = program {
+            self.run(&program, shown)
         } else {
             Outcome::Accepted
         };
@@ -314,7 +328,7 @@ impl Repl {
             .collect()
     }
 
-    fn run(&mut self, program: &eml_lir::Program) -> Outcome {
+    fn run(&mut self, program: &eml_lir::Program, shown: Option<Shown>) -> Outcome {
         let loaded = match self.machine.load(program) {
             Ok(loaded) => loaded,
             // コード生成の誤りは正しいプログラムでは起きない。`CodeBase` が途中まで書き換わっているかもしれないので、
@@ -324,15 +338,59 @@ impl Repl {
                 return Outcome::Broken(eml_vm::compile_error(program, error));
             }
         };
-        match self.machine.run(loaded.entry) {
-            Ok(_) => Outcome::Accepted,
-            Err(error) if error.is_broken() => {
+        let result = match &shown {
+            Some(_) => self
+                .machine
+                .run_shown(loaded.entry, pretty::LIMIT + 1)
+                .map(|(_, text)| Some(text)),
+            None => self.machine.run(loaded.entry).map(|_| None),
+        };
+        match (result, shown) {
+            (Ok(Some(text)), Some(shown)) => {
+                let line = pretty::format(&text, &shown.suffix, self.width);
+                match self.machine.write_line(&line) {
+                    Ok(()) => Outcome::Accepted,
+                    // 式の入力はセッションを変えないので、書けなくても続けられる
+                    Err(fault) => Outcome::Failed(RuntimeError::Fault {
+                        fault: VmFault::Extern(fault),
+                        function: "<repl>".to_string(),
+                        at: Some(shown.at),
+                    }),
+                }
+            }
+            (Ok(_), _) => Outcome::Accepted,
+            (Err(error), _) if error.is_broken() => {
                 self.broken = true;
                 Outcome::Broken(error)
             }
-            Err(error) => Outcome::Failed(error),
+            (Err(error), _) => Outcome::Failed(error),
         }
     }
+}
+
+/// 式の入力の結果の書き方。値を書かない入力 (`Unit` の式、`let`、定義) は `None` である。
+fn shown(
+    program: &eml_hir::Program,
+    typed: &TypedProgram,
+    entry: FunctionId,
+    files: &SourceFiles,
+) -> Option<Shown> {
+    let suffix = match &typed.inputs.get(entry)?.display {
+        InputDisplay::Unit => return None,
+        InputDisplay::Value => String::new(),
+        InputDisplay::Typed(ty) => format!(" : {ty}"),
+    };
+    let file = program.file(entry.module);
+    let body = program.body(entry).expect("an input has a body");
+    let position = files.line_col(file, body.exprs[body.root].range.start());
+    Some(Shown {
+        suffix,
+        at: SourceLocation {
+            path: files.path(file).to_string(),
+            line: position.line,
+            column: position.column,
+        },
+    })
 }
 
 /// `RuntimeError` は写せないので、続けられない誤りの後の入力には、そのことを言う内部の誤りを返す。
