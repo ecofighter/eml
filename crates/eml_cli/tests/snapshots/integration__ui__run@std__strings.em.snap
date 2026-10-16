@@ -1,6 +1,6 @@
 ---
 source: crates/eml_cli/tests/ui.rs
-expression: "format!(\"--- stdout ---\\n{stdout}--- stderr ---\\n{stderr}\")"
+expression: "format!(\"--- stdout ---\\n{stdout}--- stderr ---\\n{stderr}{written}\")"
 input_file: tests/ui/run/std/strings.em
 ---
 --- stdout ---
@@ -15,6 +15,7 @@ False
 True
 True
 False
+True
 ["a", "b", "", "c"]
 [""]
 ["abc"]
@@ -28,6 +29,7 @@ False
 x, y, z
 ""
 [two words]
+[]
 []
 Some 42
 Some 7

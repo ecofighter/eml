@@ -23,7 +23,8 @@ struct Cli {
 enum Command {
     /// Check a file and print diagnostics
     Check { file: PathBuf },
-    /// Check a file and run it if there are no errors (`eml FILE` does the same)
+    /// Check a file and run it if there are no errors (`eml FILE` does the same); the ARGS after FILE go to the script
+    #[command(override_usage = "eml run [OPTIONS] <FILE> [ARGS]...")]
     Run {
         /// Detect reference-count leaks and use-after-free
         #[arg(long)]

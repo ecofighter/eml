@@ -12,6 +12,7 @@ main () =
   println (show (String.starts_with "ab" "abc"))
   println (show (String.ends_with "日b" "a日b"))
   println (show (String.ends_with "abcd" "bcd"))
+  println (show (String.ends_with "" "abc"))
   println (show (String.split "," "a,b,,c"))
   println (show (String.split "," ""))
   println (show (String.split "" "abc"))
@@ -26,6 +27,7 @@ main () =
   println (show (String.join "-" []))
   println "[\{String.trim "\t  two words \r\n"}]"
   println "[\{String.trim "   "}]"
+  println "[\{String.trim ""}]"
   println (show (String.to_int "42"))
   println (show (String.to_int "+7"))
   println (show (String.to_int "007"))

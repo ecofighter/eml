@@ -193,6 +193,7 @@ pub(crate) fn host_run(host: &HostRef, control: &Control, program: &str, args: &
             }
         };
     stopped()?;
+    host.host.flush().map_err(|e| Fault::Output(e.to_string().into_boxed_str()))?;
     let run = ||
         {
             let mut fields = args.split_terminator('\0');
@@ -552,7 +553,9 @@ impl Host for StdHost {
     }
 }
 
-/// I/O の誤りの理由。止める語の立っていない `Interrupted` は `read_to_end` が読み直し、立っていれば `read_text` が止めたことにするので、ここに届かない。
+/// I/O の誤りの理由 (`read_text`、`write_file`、`run`、`stdin()` の失敗を `Fault` の理由にする)。止める語が立った後の
+/// `Interrupted` は `StopOnInterrupt::read_bytes` が止めたことにし、立っていない `Interrupted` は `read_to_end` が読み直す。
+/// 読み以外の `Interrupted` は止める語と関係なく、ここで `Other` になる。
 fn io_reason(e: &io::Error) -> IoReason {
     match e.kind() {
         io::ErrorKind::NotFound => IoReason::NotFound,

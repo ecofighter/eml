@@ -457,6 +457,35 @@ main () =
     assert_eq!(String::from_utf8_lossy(&output.stderr), "to stderr\n");
 }
 
+/// `Fs.write_text` は実際のディスクに書き、書けなければ `cannot write` の実行時エラーになる。
+#[test]
+fn a_script_writes_a_file_and_reports_a_failed_write() {
+    let write = "\
+main : Unit -> <IO> Unit
+main () =
+  Fs.write_text \"out.txt\" \"日本\\n\"
+  println (Fs.read_text \"out.txt\")
+";
+    let fail = "\
+main : Unit -> <IO> Unit
+main () = Fs.write_text \"missing-dir/x.txt\" \"x\"
+";
+    let dir = temp_project("cli-write", &[("write.em", write), ("fail.em", fail)]);
+    let ok = eml_in(&dir, &["write.em"]);
+    let bad = eml_in(&dir, &["fail.em"]);
+    let written = std::fs::read_to_string(dir.join("out.txt"));
+    std::fs::remove_dir_all(&dir).unwrap();
+    assert_eq!(ok.status.code(), Some(0));
+    assert_eq!(String::from_utf8_lossy(&ok.stdout), "日本\n\n");
+    assert_eq!(written.unwrap(), "日本\n");
+    assert_eq!(bad.status.code(), Some(1));
+    let stderr = String::from_utf8_lossy(&bad.stderr);
+    assert!(
+        stderr.starts_with("runtime error: cannot write `missing-dir/x.txt`: not found"),
+        "{stderr}"
+    );
+}
+
 /// 1行目が `#!/usr/bin/env eml` の実行できるファイルは、そのまま動かせる。
 #[cfg(unix)]
 #[test]
