@@ -708,7 +708,7 @@ pub(super) fn collect(hir: &HirProgram, typed: &TypedProgram, entry: FunctionId)
     let entry_index = collector.add(entry, entry_args, entry_bits);
     let show = match (hir[entry].kind, typed.inputs.get(entry)) {
         (FunctionKind::Input(InputKind::Expr), Some(input))
-            if input.display == InputDisplay::Show =>
+            if input.display == InputDisplay::Value =>
         {
             // `show` は row 変数を持たない
             Some(collector.method_target(hir.lang.show_method, &[input.ty], Vec::new()))

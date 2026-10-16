@@ -3,10 +3,10 @@
 //! 単相に推論する。入力の関数はほかの関数から参照されないので、1つだけの SCC として、ほかの関数と同じ道で Kind を解いて
 //! 書き出す。
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 
 use eml_diagnostics::{Diagnostic, Label};
-use eml_hir::{ClassId, FunctionId, Generics, InputKind, Program, ValueItem};
+use eml_hir::{FunctionId, Generics, InputKind, Program, ValueItem};
 
 use crate::context::Context;
 use crate::kind::problem::KindScheme;
@@ -15,7 +15,7 @@ use crate::shape::{Own, Rigids, closed_shape};
 use crate::store::{EffectLabel, Lin, TypeId, TypeKind, TypeStore};
 use crate::table::{ArrowLin, Label as RowLabel, Row, Table, Tail, Ty};
 use crate::ty::Linearity;
-use crate::{BodyTypes, InputDisplay, InputType, Resolution, carry, codes, resolve, usage};
+use crate::{BodyTypes, InputDisplay, InputType, carry, codes, satisfies, usage};
 
 use super::body::{BodyCheck, BodyTyping};
 use super::constraints::Defaulting;
@@ -193,8 +193,8 @@ pub(super) fn finish_input(
             InputDisplay::Unit
         }
         InputKind::Expr if ty == types.unit() => InputDisplay::Unit,
-        InputKind::Expr if satisfies(program, types, program.lang.show, ty) => InputDisplay::Show,
-        InputKind::Expr => InputDisplay::TypeOnly(types.display(ty, &program.names).to_string()),
+        InputKind::Expr if satisfies(program, types, program.lang.show, ty) => InputDisplay::Value,
+        InputKind::Expr => InputDisplay::Typed(types.display(ty, &program.names).to_string()),
     };
     Some(InputType { ty, display })
 }
@@ -230,31 +230,6 @@ fn linear_input(
         }
         InputKind::Query => unreachable!("a query reports no E2016"),
     }
-}
-
-/// 閉じた型 `ty` で `class` の制約が解けるか。型検査の `solve` と同じく、instance の文脈は頭の型引数へ写し、タプルは
-/// 要素へ進む。型の表は hash-consing なので、同じクラスと同じ型の組は1回だけ調べる。
-fn satisfies(program: &Program, types: &TypeStore, class: ClassId, ty: TypeId) -> bool {
-    let mut work = vec![(class, ty)];
-    let mut seen = HashSet::new();
-    while let Some((class, ty)) = work.pop() {
-        if !seen.insert((class, ty)) {
-            continue;
-        }
-        match resolve(program, types, class, ty) {
-            Resolution::Instance { instance, args } => {
-                for constraint in &program[instance].context {
-                    let index = u32::from(constraint.var.into_raw()) as usize;
-                    work.push((constraint.class, args[index]));
-                }
-            }
-            Resolution::Tuple(elements) => {
-                work.extend(elements.into_iter().map(|element| (class, element)));
-            }
-            Resolution::Given | Resolution::Missing => return false,
-        }
-    }
-    true
 }
 
 impl BodyCheck<'_, '_> {
@@ -299,10 +274,9 @@ mod tests {
     use eml_extern::ExternType;
     use eml_hir::{ItemId, Program, ValueItem};
 
-    use super::satisfies;
     use crate::shape::closed_shape;
     use crate::store::{EffectLabel, Lin, TypeKind, TypeStore};
-    use crate::{InputDisplay, InputType, TypedProgram};
+    use crate::{InputDisplay, InputType, TypedProgram, satisfies};
 
     #[test]
     fn show_is_satisfied_only_when_every_part_has_an_instance() {
@@ -417,7 +391,7 @@ mod tests {
         assert_eq!(binding_type(&program, &typed, "x"), "Int");
         assert_eq!(
             shown_input(&program, &typed),
-            ("Int".to_string(), InputDisplay::Show)
+            ("Int".to_string(), InputDisplay::Value)
         );
     }
 
@@ -438,7 +412,7 @@ mod tests {
         assert_eq!(diagnostics, Vec::<String>::new());
         assert_eq!(
             shown_input(&program, &typed),
-            ("List Unit".to_string(), InputDisplay::Show)
+            ("List Unit".to_string(), InputDisplay::Value)
         );
     }
 
@@ -449,8 +423,24 @@ mod tests {
         // `Show (List a)` があっても、要素の関数型が `Show` を持たないので型だけを表示する
         assert_eq!(
             shown_input(&program, &typed).1,
-            InputDisplay::TypeOnly("List (Int -> Int)".to_string())
+            InputDisplay::Typed("List (Int -> Int)".to_string())
         );
+    }
+
+    /// instance があっても、文脈が型引数で解けなければ `Show` を持たない (docs/spec/types.md の「REPL の入力」)。
+    #[test]
+    fn an_instance_with_an_unsolved_context_does_not_show() {
+        let wrap = "data Wrap a = | Wrap a";
+        let instance = "instance Show a => Show (Wrap a) where\n  show _ = \"w\"";
+        let (program, typed, diagnostics) = session(&[wrap, instance, "Wrap (fn x -> x + 1)"]);
+        assert_eq!(diagnostics, Vec::<String>::new());
+        assert_eq!(
+            shown_input(&program, &typed).1,
+            InputDisplay::Typed("Wrap (Int -> Int)".to_string())
+        );
+        let (program, typed, diagnostics) = session(&[wrap, instance, "Wrap 1"]);
+        assert_eq!(diagnostics, Vec::<String>::new());
+        assert_eq!(shown_input(&program, &typed).1, InputDisplay::Value);
     }
 
     #[test]
@@ -509,7 +499,7 @@ mod tests {
         assert_eq!(diagnostics, Vec::<String>::new());
         assert_eq!(binding_type(&program, &typed, "inc"), "Int -> Int");
         let input = last_input(&program, &typed);
-        assert_eq!(input.display, InputDisplay::Show);
+        assert_eq!(input.display, InputDisplay::Value);
     }
 
     #[test]
@@ -536,7 +526,7 @@ mod tests {
         assert_eq!(diagnostics, Vec::<String>::new());
         assert_eq!(
             shown_input(&program, &typed),
-            ("Int".to_string(), InputDisplay::Show)
+            ("Int".to_string(), InputDisplay::Value)
         );
     }
 

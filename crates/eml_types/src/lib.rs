@@ -30,7 +30,7 @@ use crate::kind::problem::KindScheme;
 use crate::shape::Shape;
 
 pub use dump::{dump, dump_linear};
-pub use resolve::{Resolution, resolve};
+pub use resolve::{Resolution, resolve, satisfies};
 pub use store::{EffectLabel, Lin, RowTail, Substitution, TypeId, TypeKind, TypeNames, TypeStore};
 pub use uniform::{InstanceNode, Uniform};
 
@@ -100,15 +100,15 @@ pub struct InputType {
     pub display: InputDisplay,
 }
 
-/// 式の入力の結果の表示の仕方 (docs/spec/core-ir.md の「REPL の入力」)。
+/// 式の入力の結果の表示の仕方 (docs/spec/types.md の「REPL の入力」)。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum InputDisplay {
     /// 何も表示しない。
     Unit,
-    /// `Show` の `show` の結果を表示する。
-    Show,
-    /// 値の表示器がまだないので、型だけを表示する。中身は `_ : ` を除いた、診断と同じ形の型の表示である。
-    TypeOnly(String),
+    /// 型が `Show` を持つ。値だけを書く。
+    Value,
+    /// 型が `Show` を持たない。値の後に ` : ` と型を書く。中身は診断と同じ形の型の表示である。
+    Typed(String),
 }
 
 /// 1つの宣言の型検査の結果。

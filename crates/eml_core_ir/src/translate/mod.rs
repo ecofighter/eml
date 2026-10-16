@@ -306,14 +306,14 @@ fn entry_after(
     match (kind, &typed.inputs[entry].display) {
         (InputKind::Let(binding), _) => EntryAfter::Store(hir[binding].root),
         (InputKind::Expr, InputDisplay::Unit) => EntryAfter::Return,
-        (InputKind::Expr, InputDisplay::Show) => {
+        (InputKind::Expr, InputDisplay::Value) => {
             let show = match instances.show.expect("a shown input has a `show` target") {
                 Target::Function(instance) => Shown::Function(indices[instance.0]),
                 Target::Extern(row) => Shown::Extern(row),
             };
             EntryAfter::Show { show, at: at() }
         }
-        (InputKind::Expr, InputDisplay::TypeOnly(text)) => EntryAfter::TypeOnly {
+        (InputKind::Expr, InputDisplay::Typed(text)) => EntryAfter::TypeOnly {
             text: text.clone(),
             at: at(),
         },
