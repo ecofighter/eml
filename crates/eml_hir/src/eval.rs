@@ -43,7 +43,15 @@ pub fn known_arity(program: &Program, body: &Body, callee: ExprId) -> Option<usi
         ExprKind::Path(Res::Item(ValueItem::Constructor(ctor))) => {
             Some(program[*ctor].fields.len())
         }
-        ExprKind::Path(Res::Local(local)) => body.continuations.get(*local).copied(),
+        ExprKind::Path(Res::Local(local)) => {
+            body.continuations.get(*local).copied().or_else(|| {
+                let lambda = *body.local_functions.get(*local)?;
+                match &body.exprs[lambda].kind {
+                    ExprKind::Lambda(closure) => Some(closure.params.len()),
+                    _ => None,
+                }
+            })
+        }
         _ => None,
     }
 }

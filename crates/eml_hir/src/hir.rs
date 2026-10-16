@@ -384,6 +384,11 @@ pub struct Body {
     /// 後に回すと、`use` のブロックの型の誤りが、書いていないラムダの中の誤りとして報告されるため
     /// (docs/spec/types.md の「引数のラムダを後で検査する」)。
     pub use_lambdas: HashSet<ExprId>,
+    /// 関数の形の `let` が定義するローカル関数の、名前の局所変数からラムダへの対応。呼び出しの引数の数を、名前だけから
+    /// 引くために使う (docs/spec/expressions.md の「ローカル関数」)。
+    pub local_functions: ArenaMap<LocalId, ExprId>,
+    /// `local_functions` の逆で、ラムダからそれを定義する名前への対応。ラムダの本体が自分を参照するかを調べるために使う。
+    pub defining: ArenaMap<ExprId, LocalId>,
 }
 
 impl Body {
@@ -412,6 +417,11 @@ impl Body {
                 for stmt in stmts {
                     match stmt {
                         Stmt::Let { init, .. } => f(*init),
+                        Stmt::Functions(functions) => {
+                            for function in functions {
+                                f(function.lambda);
+                            }
+                        }
                         Stmt::Expr(expr) => f(*expr),
                     }
                 }
@@ -516,8 +526,14 @@ impl Body {
                 }
                 ExprKind::Block { stmts, .. } => {
                     for stmt in stmts {
-                        if let Stmt::Let { pat, .. } = stmt {
-                            bound.extend(self.pat_bindings(*pat));
+                        match stmt {
+                            Stmt::Let { pat, .. } => bound.extend(self.pat_bindings(*pat)),
+                            Stmt::Functions(functions) => {
+                                for function in functions {
+                                    bound.extend(self.pat_bindings(function.pat));
+                                }
+                            }
+                            Stmt::Expr(_) => {}
                         }
                     }
                 }
@@ -755,7 +771,17 @@ pub enum Stmt {
         ty: Option<TypeRefId>,
         init: ExprId,
     },
+    /// 関数の形の `let`。名前は自分の本体と以降の文で見える (docs/spec/expressions.md の「ローカル関数」)。
+    Functions(Vec<LocalFunction>),
     Expr(ExprId),
+}
+
+/// ローカル関数。`pat` は名前を束縛する `PatKind::Bind`、`lambda` は引数と本体を持つ `ExprKind::Lambda` である。
+/// ラムダを式として持つのは、型検査と線形性の検査がラムダに使う規則をそのまま使うためである。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct LocalFunction {
+    pub pat: PatId,
+    pub lambda: ExprId,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

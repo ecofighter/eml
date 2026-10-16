@@ -181,6 +181,16 @@ impl<'a> Usage<'a, '_> {
                             bound.push(*pat);
                             self.expr(*init)
                         }
+                        // 自分の扱いは S12c の Task 5 で正す。それまでは `let` と同じに数える
+                        Stmt::Functions(functions) => {
+                            let mut uses = Uses::new();
+                            for function in functions {
+                                bound.push(function.pat);
+                                let next = self.expr(function.lambda);
+                                sequence(&mut uses, next);
+                            }
+                            uses
+                        }
                         Stmt::Expr(expr) => self.expr(*expr),
                     };
                     sequence(&mut uses, next);
@@ -575,6 +585,7 @@ impl<'a> Usage<'a, '_> {
             let last = tail.or_else(|| {
                 stmts.last().map(|stmt| match stmt {
                     Stmt::Let { init, .. } => *init,
+                    Stmt::Functions(functions) => functions.last().expect("a function").lambda,
                     Stmt::Expr(expr) => *expr,
                 })
             });

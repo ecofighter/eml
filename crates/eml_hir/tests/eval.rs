@@ -160,3 +160,25 @@ fn an_argument_beyond_the_continuation_arity_is_evaluated_before_the_resume() {
         ["eval k", "eval 1", "eval g ()", "arrow 0", "arrow 1"]
     );
 }
+
+#[test]
+fn a_local_function_has_a_known_arity() {
+    let lowered = lower_clean(&format!(
+        "{PRELUDE}t : Unit -> Int\nt () =\n  let go a b = a + b\n  go 1 2"
+    ));
+    let program = &lowered.program;
+    let (id, _) = program
+        .functions()
+        .find(|(_, function)| function.name == "t")
+        .unwrap();
+    let body = program.body(id).unwrap();
+    let callee = body
+        .exprs
+        .iter()
+        .find_map(|(_, expr)| match expr.kind {
+            ExprKind::Call { callee, .. } => Some(callee),
+            _ => None,
+        })
+        .unwrap();
+    assert_eq!(eml_hir::known_arity(program, body, callee), Some(2));
+}

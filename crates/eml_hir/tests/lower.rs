@@ -827,3 +827,73 @@ fn a_full_std_name_as_a_qualifier_points_to_the_short_name() {
       test.em 5:5 no import gives this qualifier
     ");
 }
+
+#[test]
+fn a_local_function_sees_itself() {
+    let text = "f : Int -> Int\nf n =\n  let go k = if k == 0 then 0 else go (k - 1)\n  go n";
+    insta::assert_snapshot!(lower_text(text), @"
+    f : Int -> Int
+    f n#0 = {
+      let go#1 k#2 = (if (@Prelude.== k#2 0) 0 (go#1 (- k#2 1)))
+      (go#1 n#0)
+    }
+    ");
+}
+
+#[test]
+fn a_parameter_hides_the_local_function() {
+    let text = "f : Int -> Int\nf n =\n  let go go = go + 1\n  go n";
+    insta::assert_snapshot!(lower_text(text), @"
+    f : Int -> Int
+    f n#0 = {
+      let go#1 go#2 = (+ go#2 1)
+      (go#1 n#0)
+    }
+    ");
+}
+
+#[test]
+fn a_pattern_let_after_a_local_function_sees_the_function() {
+    let text = "f : Int -> Int\nf n =\n  let go k = k + n\n  let go = go 1\n  go";
+    insta::assert_snapshot!(lower_text(text), @"
+    f : Int -> Int
+    f n#0 = {
+      let go#1 k#2 = (+ k#2 n#0)
+      let go#3 = (go#1 1)
+      go#3
+    }
+    ");
+}
+
+#[test]
+fn a_pattern_let_does_not_see_itself() {
+    let text = "f : Int -> Int\nf x =\n  let x = x + 1\n  x";
+    insta::assert_snapshot!(lower_text(text), @"
+    f : Int -> Int
+    f x#0 = {
+      let x#1 = (+ x#0 1)
+      x#1
+    }
+    ");
+}
+
+#[test]
+fn a_let_expression_can_define_a_local_function() {
+    let text = "f : Int -> Int\nf n = let go k = go k in go n";
+    insta::assert_snapshot!(lower_text(text), @"
+    f : Int -> Int
+    f n#0 = {
+      let go#1 k#2 = (go#1 k#2)
+      (go#1 n#0)
+    }
+    ");
+}
+
+#[test]
+fn local_function_parameters_are_one_group() {
+    let text = "f : Int -> Int\nf n =\n  let go a a = a\n  go n n";
+    assert_eq!(
+        diagnostics(text),
+        vec!["E1017 3:12 `a` is bound more than once"]
+    );
+}

@@ -289,3 +289,24 @@ fn a_main_in_the_prelude_is_not_the_entry_function() {
     );
     assert_eq!(program.main(), None);
 }
+
+#[test]
+fn a_local_function_captures_itself_and_its_free_variables() {
+    // 自分は束縛の外から見ると自由な変数なので、ラムダの捕まえる変数に入る。除くのは使う側の仕事である
+    let module = module("f : Int -> Int -> Int\nf a b =\n  let go k = go (k + a)\n  go b");
+    let body = body(&module, "f");
+    assert_eq!(
+        names(body, &body.closure_captures(lambda_closure(body, "k"))),
+        ["a", "go"]
+    );
+}
+
+#[test]
+fn a_local_function_is_registered_by_name_and_by_lambda() {
+    let module = module("f : Int -> Int\nf n =\n  let go k = k\n  go n");
+    let body = body(&module, "f");
+    let lambda = lambda(body, "k");
+    let name = body.defining[lambda];
+    assert_eq!(body.locals[name].name, "go");
+    assert_eq!(body.local_functions[name], lambda);
+}

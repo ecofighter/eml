@@ -34,6 +34,8 @@ pub(super) struct BodyLowering<'a> {
     pub(super) continuations: ArenaMap<LocalId, usize>,
     pub(super) omitted_fields: ArenaMap<PatId, (ConstructorId, u32)>,
     use_lambdas: HashSet<ExprId>,
+    local_functions: ArenaMap<LocalId, ExprId>,
+    defining: ArenaMap<ExprId, LocalId>,
     /// 内側の束縛ほど後ろにある。後の `let` が前の同じ名前を隠す (docs/spec/expressions.md)。
     pub(super) scope: Vec<(String, LocalId)>,
     /// 今変換しているパターンの組が `scope` に積み始めた位置。組の中で同じ名前を2回束縛したら E1017 にする。
@@ -81,6 +83,8 @@ impl<'a> BodyLowering<'a> {
             continuations: ArenaMap::default(),
             omitted_fields: ArenaMap::default(),
             use_lambdas: HashSet::new(),
+            local_functions: ArenaMap::default(),
+            defining: ArenaMap::default(),
             scope: Vec::new(),
             group_start: 0,
         }
@@ -136,6 +140,8 @@ impl<'a> BodyLowering<'a> {
             continuations: self.continuations,
             omitted_fields: self.omitted_fields,
             use_lambdas: self.use_lambdas,
+            local_functions: self.local_functions,
+            defining: self.defining,
         }
     }
 
@@ -331,14 +337,20 @@ impl<'a> BodyLowering<'a> {
             ast::Expr::LetExpr(e) => {
                 // ブロックの `let` と同じく右辺を先に変換し、束縛は `in` の後の式でだけ見える (docs/spec/expressions.md)
                 let mark = self.scope.len();
-                let init = self.lower_expr(e.init(), range);
-                let ty = e.ty().map(|ty| self.lower_type(Some(ty), range));
-                let pat = self.lower_pat(e.pat(), range);
+                let stmt = match e.params() {
+                    Some(params) => self.lower_local_function(e.pat(), params, e.init(), range),
+                    None => {
+                        let init = self.lower_expr(e.init(), range);
+                        let ty = e.ty().map(|ty| self.lower_type(Some(ty), range));
+                        let pat = self.lower_pat(e.pat(), range);
+                        Stmt::Let { pat, ty, init }
+                    }
+                };
                 let tail = self.lower_expr(e.body(), range);
                 self.scope.truncate(mark);
                 self.alloc(
                     ExprKind::Block {
-                        stmts: vec![Stmt::Let { pat, ty, init }],
+                        stmts: vec![stmt],
                         tail: Some(tail),
                         last_start: None,
                     },
@@ -478,6 +490,12 @@ impl<'a> BodyLowering<'a> {
                     }
                 }
                 ast::Stmt::LetStmt(stmt) => {
+                    if let Some(params) = stmt.params() {
+                        let function =
+                            self.lower_local_function(stmt.pat(), params, stmt.body(), stmt_range);
+                        stmts.push(function);
+                        continue;
+                    }
                     // 右辺を先に変換する。`let x = x + 1` の右辺の `x` は外側の `x` を指すため
                     let init = self.lower_expr(stmt.body(), stmt_range);
                     let ty = stmt.ty().map(|ty| self.lower_type(Some(ty), stmt_range));
@@ -501,6 +519,29 @@ impl<'a> BodyLowering<'a> {
             },
             range,
         )
+    }
+
+    /// 関数の形の `let f p1 … pn = e` を、名前を束縛する文とラムダにする。名前を先に束縛するので本体の `f` は自分を指し、
+    /// 引数は名前を隠せる。引数の有効範囲は本体で閉じ、名前は呼び出し側のスコープに残る
+    /// (docs/spec/expressions.md の「ローカル関数」)。
+    fn lower_local_function(
+        &mut self,
+        name: Option<ast::Pat>,
+        params: ast::ParamList,
+        body: Option<ast::Expr>,
+        range: TextRange,
+    ) -> Stmt {
+        let pat = self.lower_pat(name, range);
+        let mark = self.scope.len();
+        let params = self.lower_param_group(params.pats(), range);
+        let body = self.lower_expr(body, range);
+        self.scope.truncate(mark);
+        let lambda = self.alloc(ExprKind::Lambda(Closure { params, body }), range);
+        if let PatKind::Bind(local) = self.pats[pat].kind {
+            self.local_functions.insert(local, lambda);
+            self.defining.insert(lambda, local);
+        }
+        Stmt::Functions(vec![LocalFunction { pat, lambda }])
     }
 
     /// `use f a b` を `f a b (fn () -> 残り)` に、`use p <- f a b` を `f a b (fn p -> 残り)` にする。ラムダと残りの

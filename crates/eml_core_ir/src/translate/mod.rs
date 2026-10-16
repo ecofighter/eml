@@ -754,6 +754,7 @@ impl<'a> FnLowering<'a> {
                         self.bind_pat(*pat, value);
                     }
                 }
+                HirStmt::Functions(_) => unimplemented!("S12c: Task 4 / Task 6 で扱う"),
                 // 式文の値は `Unit` なので捨ててよい
                 HirStmt::Expr(expr) => {
                     self.atom(*expr);

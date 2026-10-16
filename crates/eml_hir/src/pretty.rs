@@ -256,6 +256,23 @@ impl Printer<'_> {
         writeln!(out, " = {}", self.expr(body, body.root, 0)).unwrap();
     }
 
+    /// ソースと同じ形 `let go acc ys = 本体` で書く。
+    fn local_function(&self, body: &Body, function: &LocalFunction, indent: usize) -> String {
+        let ExprKind::Lambda(Closure {
+            params,
+            body: lambda_body,
+        }) = &body.exprs[function.lambda].kind
+        else {
+            unreachable!("a local function holds a lambda");
+        };
+        let mut s = format!("let {}", self.pat_atom(body, function.pat));
+        for &param in params {
+            write!(s, " {}", self.pat_atom(body, param)).unwrap();
+        }
+        write!(s, " = {}", self.expr(body, *lambda_body, indent)).unwrap();
+        s
+    }
+
     fn expr(&self, body: &Body, id: ExprId, indent: usize) -> String {
         match &body.exprs[id].kind {
             ExprKind::Missing => "<missing>".to_string(),
@@ -301,6 +318,11 @@ impl Printer<'_> {
                                 None => format!("let {} = {init}", self.pat(body, *pat)),
                             }
                         }
+                        Stmt::Functions(functions) => functions
+                            .iter()
+                            .map(|function| self.local_function(body, function, indent + 1))
+                            .collect::<Vec<_>>()
+                            .join(&format!("\n{pad}")),
                         Stmt::Expr(e) => self.expr(body, *e, indent + 1),
                     };
                     writeln!(s, "{pad}{line}").unwrap();

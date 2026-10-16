@@ -142,6 +142,14 @@ impl Carrying<'_, '_> {
                             self.unbind(*pat, &mut live);
                             self.expr(*init, &live)
                         }
+                        // 自分の扱いは S12c の Task 5 で正す。それまでは `let` と同じに扱う
+                        Stmt::Functions(functions) => {
+                            for function in functions.iter().rev() {
+                                self.unbind(function.pat, &mut live);
+                                live = self.expr(function.lambda, &live);
+                            }
+                            live
+                        }
                         Stmt::Expr(expr) => self.expr(*expr, &live),
                     };
                 }

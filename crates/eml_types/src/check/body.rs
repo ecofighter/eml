@@ -512,6 +512,7 @@ impl BodyCheck<'_, '_> {
                     };
                     self.bind_pat(*pat, ty);
                 }
+                Stmt::Functions(_) => unimplemented!("S12c: Task 4 / Task 6 で扱う"),
                 Stmt::Expr(expr) => {
                     let unit = self.table.unit;
                     self.check_expr(*expr, unit, Origin::Statement);
