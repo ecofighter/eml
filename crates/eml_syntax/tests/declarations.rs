@@ -442,7 +442,7 @@ fn extern_declarations() {
     insta::assert_snapshot!(shape(&lines(&[
         "pub extern println : String -> <IO> Unit",
         "pub extern data Int",
-        "pub extern effect IO",
+        "pub extern effect IO where\n  never io_failed : Int -> a",
     ])), @r#"
     SOURCE_FILE
       SIGNATURE
@@ -480,6 +480,20 @@ fn extern_declarations() {
         EFFECT_KW "effect"
         NAME
           UIDENT "IO"
+        WHERE_KW "where"
+        OP_DECL
+          NEVER_KW "never"
+          NAME
+            LIDENT "io_failed"
+          COLON ":"
+          FN_TYPE
+            PATH_TYPE
+              PATH
+                NAME_REF
+                  UIDENT "Int"
+            THIN_ARROW "->"
+            VAR_TYPE
+              LIDENT "a"
     "#);
 }
 
@@ -503,9 +517,9 @@ fn extern_on_other_items_is_one_error_each() {
         "\"extern type T = Int\" => [\"E0011 1:1 `extern` cannot be written on this item\"]",
         "\"extern infixl 6 +\" => [\"E0011 1:1 `extern` cannot be written on this item\"]",
         "\"extern data T = | A\" => [\"E0011 1:15 `extern data` cannot have parameters, `=` or `where`\"]",
-        "\"extern effect E where\\n  op : Unit -> Unit\" => [\"E0011 1:17 `extern effect` cannot have parameters, `=` or `where`\"]",
+        "\"extern effect E where\\n  op : Unit -> Unit\" => []",
         "\"extern data T a\" => [\"E0011 1:15 `extern data` cannot have parameters, `=` or `where`\"]",
-        "\"extern effect E a\" => [\"E0011 1:17 `extern effect` cannot have parameters, `=` or `where`\"]",
+        "\"extern effect E a\" => [\"E0011 1:17 `extern effect` cannot have parameters or `=`\"]",
         "\"extern pub f : Int\" => [\"E0011 1:1 `extern` cannot be written before `pub`\"]",
         "\"extern f x = x\" => [\"E0011 1:1 `extern` cannot be written on this item\"]",
     ]

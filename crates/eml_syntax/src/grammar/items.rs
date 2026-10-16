@@ -143,7 +143,7 @@ pub(super) fn item(p: &mut Parser, declared: bool) -> bool {
             _ => {}
         }
     }
-    // `extern` は、等式のないシグネチャ、`=` のない `data`、`where` のない `effect` にだけ付く
+    // `extern` は、等式のないシグネチャ、`=` のない `data`、型引数のない `effect` にだけ付く
     // (docs/spec/grammar.md の `item`)
     if external
         && !misordered
@@ -160,7 +160,7 @@ pub(super) fn item(p: &mut Parser, declared: bool) -> bool {
         p.error_at_previous(
             codes::SYNTAX_ERROR,
             "`extern` cannot be written on this item",
-            "`extern` goes on a signature, a `data` without `=`, or an `effect` without `where`",
+            "`extern` goes on a signature, a `data` without `=`, or an `effect` without parameters",
         );
     }
     match kind {
@@ -245,14 +245,32 @@ fn extern_data(p: &mut Parser, m: Marker) {
     m.complete(p, DATA_ITEM);
 }
 
+/// `extern effect` は名前の後に `where` と操作を書ける。型引数と `=` は書けない (docs/spec/declarations.md の
+/// 「`extern`」)。誤って書いた型引数も名前として読む。
 fn extern_effect(p: &mut Parser, m: Marker) {
     p.bump(EFFECT_KW);
     expect_name(p, UIDENT);
-    reject_extern_tail(p, "effect");
+    if p.at(LIDENT) || p.at(EQ) || p.at(PIPE) {
+        p.error(
+            codes::SYNTAX_ERROR,
+            "`extern effect` cannot have parameters or `=`".to_string(),
+            "an extern effect is the name and its operations",
+        );
+        while p.at(LIDENT) {
+            name(p);
+        }
+        skip_to_sep(p, false);
+    } else if p.eat(WHERE_KW) {
+        if p.at(LAYOUT_OPEN) {
+            block_of(p, "an operation signature", op_decl);
+        } else {
+            expected(p, "the operations on indented lines after `where`");
+        }
+    }
     m.complete(p, EFFECT_ITEM);
 }
 
-/// extern の `data` / `effect` に型引数、`=`、`where` は書けない (docs/spec/declarations.md の「`extern`」)。
+/// extern の `data` に型引数、`=`、`where` は書けない (docs/spec/declarations.md の「`extern`」)。
 /// 誤って書いた型引数も名前として読む。使う位置の型引数の数 (E1015) が書いたとおりになり、誤りが連鎖しない。
 fn reject_extern_tail(p: &mut Parser, keyword: &str) {
     if p.at(LIDENT) || p.at(EQ) || p.at(PIPE) || p.at(WHERE_KW) {
