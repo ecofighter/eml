@@ -150,3 +150,54 @@ fn an_unresolved_variable_takes_the_least_value() {
       x#1 : _
     ");
 }
+
+#[test]
+fn std_public_functions_keep_their_schemes() {
+    // 補助関数をローカル関数に移しても、公開の関数の型は変わらない (docs/spec/stdlib.md)。標準ライブラリは `dump` に出ないので、
+    // 型を直接読む。
+    let checked = check(
+        "main : Unit -> <IO> Unit\nmain () = List.each (fn x -> println (String.join \",\" [\"a\"])) (String.lines \"a\")",
+    );
+    assert!(checked.diagnostics.is_empty());
+    let public = [
+        ("Std.List", "length"),
+        ("Std.List", "map"),
+        ("Std.List", "filter"),
+        ("Std.List", "filter_map"),
+        ("Std.String", "split"),
+        ("Std.String", "lines"),
+        ("Std.String", "join"),
+        ("Std.String", "trim"),
+        ("Std.String", "to_int"),
+        ("Std.String", "starts_with"),
+        ("Std.String", "ends_with"),
+    ];
+    let program = &checked.program;
+    let mut shown = String::new();
+    for (id, _) in program.functions() {
+        let item = eml_hir::ValueItem::Function(id);
+        let module = program.modules[id.module].name.to_string();
+        let name = program.value_name(item);
+        if !public.contains(&(module.as_str(), name)) {
+            continue;
+        }
+        let ty = checked.typed.decls[&item].ty;
+        shown.push_str(&format!(
+            "{module}.{name} : {}\n",
+            checked.typed.types.display(ty, &program.names)
+        ));
+    }
+    insta::assert_snapshot!(shown, @"
+    Std.List.length : List a -> Int
+    Std.List.map : (a -> <e> b) -> List a -> <e> List b
+    Std.List.filter : (a -> <e> Bool) -> List a -> <e> List a
+    Std.List.filter_map : (a -> <e> Option b) -> List a -> <e> List b
+    Std.String.starts_with : String -> String -> Bool
+    Std.String.ends_with : String -> String -> Bool
+    Std.String.split : String -> String -> List String
+    Std.String.lines : String -> List String
+    Std.String.join : String -> List String -> String
+    Std.String.trim : String -> String
+    Std.String.to_int : String -> Option Int
+    ");
+}
