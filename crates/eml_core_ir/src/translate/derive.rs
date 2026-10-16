@@ -4,7 +4,7 @@
 //! すべて `Unr` なので、写しと解放は Perceus に任せる。
 
 use eml_extern::Extern;
-use eml_hir::{Program as HirProgram, TypeDefKind};
+use eml_hir::{Program as HirProgram, TypeDefId, TypeDefKind};
 use eml_types::{InstanceNode, TypeId, TypeStore};
 
 use crate::{Call, CoreFn, Rhs, Stmt, Term};
@@ -26,23 +26,32 @@ fn named(name: &str, repr: Repr) -> VarInfo {
 }
 
 /// 値のコンストラクタ1つ。タプルは、コンストラクタが1つの配置として同じ規則を通る。
-struct Constructor {
-    tag: u32,
+pub(super) struct Constructor {
+    pub(super) tag: u32,
     /// 前置の名前か、中置の演算子。タプルでは使わない。
-    name: String,
+    pub(super) name: String,
     /// 中置のコンストラクタの優先度。
-    infix: Option<u8>,
+    pub(super) infix: Option<u8>,
     /// 名前付きのフィールドの名前。位置のコンストラクタとタプルは `None` である。
-    field_names: Option<Vec<String>>,
-    fields: Vec<Repr>,
+    pub(super) field_names: Option<Vec<String>>,
+    pub(super) fields: Vec<Repr>,
 }
 
-/// 生成する関数が受ける値の形。
-struct Shape {
-    repr: Repr,
+/// 生成する関数が受ける値の形。導出した instance の生成器と表示器 (`display.rs`) が共有する。
+pub(super) struct Shape {
+    pub(super) repr: Repr,
     /// コンストラクタの配置。`Unit` は配置を持たない。
-    layout: Option<LayoutId>,
-    constructors: Vec<Constructor>,
+    pub(super) layout: Option<LayoutId>,
+    pub(super) constructors: Vec<Constructor>,
+}
+
+/// 値の形の出どころ。表示器は instance のない型の値も書くので、instance でなく型とフィールドの型から形を作る。
+#[derive(Clone, Copy)]
+pub(super) enum ShapeOf<'a> {
+    /// タプルの要素の型。`Unit` は空である。
+    Tuple(&'a [TypeId]),
+    /// `data` の型と、コンストラクタの宣言の順のフィールドの型。
+    Data(TypeDefId, &'a [Vec<TypeId>]),
 }
 
 /// `instance` の関数を組む。`indices` は instance の番号から関数の番号への表で、`calls` の行き先を引く。
@@ -54,7 +63,13 @@ pub(super) fn generate(
     name: &str,
     instance: &GeneratedInstance,
 ) -> CoreFn {
-    let shape = shape(hir, store, program, instance);
+    let of = match instance.generated.node {
+        InstanceNode::Tuple(_) => {
+            ShapeOf::Tuple(instance.fields.first().map_or(&[], Vec::as_slice))
+        }
+        InstanceNode::Declared(id) => ShapeOf::Data(hir[id].head, &instance.fields),
+    };
+    let shape = shape(hir, store, program, of);
     let mut generator = Generator {
         hir,
         store,
@@ -80,11 +95,11 @@ pub(super) fn generate(
         .finish(name.to_string(), false, false, ret, Mark::Unr)
 }
 
-fn shape(
+pub(super) fn shape(
     hir: &HirProgram,
     store: &TypeStore,
     program: &mut ProgramBuilder,
-    instance: &GeneratedInstance,
+    of: ShapeOf<'_>,
 ) -> Shape {
     let reprs = |fields: &[TypeId]| -> Vec<Repr> {
         fields
@@ -92,31 +107,30 @@ fn shape(
             .map(|&field| repr(store, field, hir))
             .collect()
     };
-    match instance.generated.node {
-        InstanceNode::Tuple(0) => Shape {
+    match of {
+        ShapeOf::Tuple([]) => Shape {
             repr: Repr::Unit,
             layout: None,
             constructors: Vec::new(),
         },
-        InstanceNode::Tuple(count) => Shape {
+        ShapeOf::Tuple(elements) => Shape {
             repr: Repr::Obj,
-            layout: Some(program.tuple_layout(count)),
+            layout: Some(program.tuple_layout(elements.len())),
             constructors: vec![Constructor {
                 tag: TUPLE,
                 name: String::new(),
                 infix: None,
                 field_names: None,
-                fields: reprs(&instance.fields[0]),
+                fields: reprs(elements),
             }],
         },
-        InstanceNode::Declared(id) => {
-            let ty = hir[id].head;
+        ShapeOf::Data(ty, fields) => {
             let TypeDefKind::Data { constructors } = &hir[ty].kind else {
-                unreachable!("only data types derive instances")
+                unreachable!("only data types have constructors")
             };
             let constructors = constructors
                 .iter()
-                .zip(&instance.fields)
+                .zip(fields)
                 .map(|(&ctor, fields)| Constructor {
                     tag: hir[ctor].tag,
                     name: hir[ctor].name.clone(),
@@ -235,7 +249,7 @@ impl Generator<'_> {
         let x = self.builder.param(named("x", shape.repr));
         let layout = shape.layout.expect("only data types have tags");
         let all: Vec<&Constructor> = shape.constructors.iter().collect();
-        let (cases, _) = self.switch(x, layout, &all, "a", false);
+        let (cases, _) = self.builder.switch_on(x, layout, &all, "a", false);
         for (constructor, (_, block)) in all.iter().zip(cases) {
             self.builder.reopen(block);
             let tag = Atom::Int(i64::from(constructor.tag));
@@ -259,7 +273,7 @@ impl Generator<'_> {
             // プログラムの `data` にはコンストラクタがある
             [] => unreachable!("a checked data type has a constructor"),
             [only] => {
-                let fields = self.unpack(x, layout, only, "a");
+                let fields = self.builder.unpack_constructor(x, layout, only, "a");
                 if matches!(self.node, InstanceNode::Tuple(_)) {
                     self.show_tuple(&fields);
                 } else {
@@ -268,7 +282,7 @@ impl Generator<'_> {
             }
             all => {
                 let all: Vec<&Constructor> = all.iter().collect();
-                let (cases, _) = self.switch(x, layout, &all, "a", false);
+                let (cases, _) = self.builder.switch_on(x, layout, &all, "a", false);
                 for (constructor, (fields, block)) in all.iter().zip(cases) {
                     self.builder.reopen(block);
                     self.show_constructor(d, constructor, &fields);
@@ -396,16 +410,17 @@ impl Generator<'_> {
         match shape.constructors.as_slice() {
             [] => same(self, &[], &[]),
             [only] => {
-                let a = self.unpack(x, layout, only, "a");
-                let b = self.unpack(y, layout, only, "b");
+                let a = self.builder.unpack_constructor(x, layout, only, "a");
+                let b = self.builder.unpack_constructor(y, layout, only, "b");
                 same(self, &a, &b);
             }
             all => {
                 let all: Vec<&Constructor> = all.iter().collect();
-                let (cases, _) = self.switch(x, layout, &all, "a", false);
+                let (cases, _) = self.builder.switch_on(x, layout, &all, "a", false);
                 for (&constructor, (a, block)) in all.iter().zip(cases) {
                     self.builder.reopen(block);
-                    let (inner, other) = self.switch(y, layout, &[constructor], "b", true);
+                    let (inner, other) =
+                        self.builder.switch_on(y, layout, &[constructor], "b", true);
                     let [(b, matched)] = &inner[..] else {
                         unreachable!("one case for the constructor of `x`")
                     };
@@ -417,97 +432,6 @@ impl Generator<'_> {
                 }
             }
         }
-    }
-
-    /// `scrutinee` を `constructors` の case に分ける `switch` で、今のブロックを閉じる。case ごとにフィールドの変数と
-    /// 行き先のブロックを返す。`default` が真なら、ほかのコンストラクタの行き先も返す。
-    fn switch(
-        &mut self,
-        scrutinee: VarId,
-        layout: LayoutId,
-        constructors: &[&Constructor],
-        field: &str,
-        default: bool,
-    ) -> (Vec<(Vec<VarId>, BlockId)>, Option<BlockId>) {
-        let cases: Vec<(Vec<VarId>, BlockId)> = constructors
-            .iter()
-            .map(|constructor| {
-                let fields = self.field_vars(constructor, field);
-                (fields, self.builder.new_block())
-            })
-            .collect();
-        let default = default.then(|| self.builder.new_block());
-        self.builder.terminate(Term::Switch {
-            scrutinee: Atom::Var(scrutinee),
-            layout: Some(layout),
-            cases: constructors
-                .iter()
-                .zip(&cases)
-                .map(|(constructor, (fields, target))| Case {
-                    pattern: CasePattern::Tag(constructor.tag),
-                    fields: fields.clone(),
-                    target: *target,
-                })
-                .collect(),
-            default,
-        });
-        (cases, default)
-    }
-
-    /// コンストラクタが1つの値を分解する。フィールドがなければ読むものがないので `unpack` を置かない。
-    fn unpack(
-        &mut self,
-        value: VarId,
-        layout: LayoutId,
-        constructor: &Constructor,
-        field: &str,
-    ) -> Vec<VarId> {
-        let fields = self.field_vars(constructor, field);
-        if !fields.is_empty() {
-            self.builder.emit(Stmt::Unpack {
-                value,
-                ctor: Ctor {
-                    layout,
-                    tag: constructor.tag,
-                },
-                fields: fields.clone(),
-            });
-        }
-        fields
-    }
-
-    fn field_vars(&mut self, constructor: &Constructor, name: &str) -> Vec<VarId> {
-        constructor
-            .fields
-            .iter()
-            .map(|&repr| self.builder.var(named(name, repr)))
-            .collect()
-    }
-
-    /// 真偽値 `value` で分かれる `switch`。(`False` の行き先, `True` の行き先)。
-    fn branch_bool(&mut self, value: Atom) -> (BlockId, BlockId) {
-        let layout = self
-            .program
-            .data_layout(self.hir, self.store, self.hir.lang.bool);
-        let (on_false, on_true) = (self.builder.new_block(), self.builder.new_block());
-        self.builder.terminate(Term::Switch {
-            scrutinee: value,
-            layout: Some(layout),
-            cases: vec![
-                Case {
-                    pattern: CasePattern::Tag(FALSE),
-                    fields: Vec::new(),
-                    target: on_false,
-                },
-                Case {
-                    pattern: CasePattern::Tag(TRUE),
-                    fields: Vec::new(),
-                    target: on_true,
-                },
-            ],
-            default: None,
-        });
-        (on_false, on_true)
     }
 
     /// `compare` の結果 `value` で分かれる `switch`。(`EQ` の行き先, ほかの行き先)。
@@ -536,41 +460,6 @@ impl Generator<'_> {
         self.call_target(target, args, ret)
     }
 
-    /// 行き先の関数が受ける引数の数がメソッドの引数の数より少なければ (等式が引数を持たない instance のメソッド)、
-    /// 返った関数の値に残りを適用する。
-    fn call_target(&mut self, target: Target, mut args: Vec<Atom>, ret: Repr) -> Atom {
-        match target {
-            Target::Extern(row) => self.bind(
-                "t",
-                ret,
-                Rhs::Extern {
-                    ext: row,
-                    args,
-                    at: None,
-                },
-            ),
-            Target::Function(instance) => {
-                let function = self.indices[instance.0];
-                let arity = self.program.arity(function);
-                debug_assert!(arity <= args.len(), "a method takes all its arguments");
-                let rest = args.split_off(arity);
-                if rest.is_empty() {
-                    return self.bind("t", ret, plain_call(Call::Direct(function, args)));
-                }
-                let value = self.bind("t", Repr::TObj, plain_call(Call::Direct(function, args)));
-                self.bind(
-                    "t",
-                    ret,
-                    plain_call(Call::Apply {
-                        callee: value,
-                        args: rest,
-                        yields: false,
-                    }),
-                )
-            }
-        }
-    }
-
     fn string(&mut self, text: &str) -> Atom {
         self.builder.string(&mut self.program.strings, text)
     }
@@ -579,9 +468,164 @@ impl Generator<'_> {
         self.builder.concat(left, right)
     }
 
+    fn call_target(&mut self, target: Target, args: Vec<Atom>, ret: Repr) -> Atom {
+        call_target(
+            &mut self.builder,
+            self.program,
+            self.indices,
+            target,
+            args,
+            ret,
+        )
+    }
+
     fn bind(&mut self, name: &str, repr: Repr, rhs: Rhs) -> Atom {
-        let var = self.builder.var(named(name, repr));
-        self.builder.emit(Stmt::Let { var, rhs });
+        self.builder.bind_unr(name, repr, rhs)
+    }
+
+    fn branch_bool(&mut self, value: Atom) -> (BlockId, BlockId) {
+        let layout = self
+            .program
+            .data_layout(self.hir, self.store, self.hir.lang.bool);
+        self.builder.branch_bool(value, layout)
+    }
+}
+
+/// 生成器と表示器 (`display.rs`) が共有する、値を分けて読む命令。変数の印はどれも `unr` である。
+impl FnBuilder {
+    /// `scrutinee` を `constructors` の case に分ける `switch` で、今のブロックを閉じる。case ごとにフィールドの変数と
+    /// 行き先のブロックを返す。`default` が真なら、ほかのコンストラクタの行き先も返す。
+    pub(super) fn switch_on(
+        &mut self,
+        scrutinee: VarId,
+        layout: LayoutId,
+        constructors: &[&Constructor],
+        field: &str,
+        default: bool,
+    ) -> (Vec<(Vec<VarId>, BlockId)>, Option<BlockId>) {
+        let cases: Vec<(Vec<VarId>, BlockId)> = constructors
+            .iter()
+            .map(|constructor| {
+                let fields = self.field_vars(constructor, field);
+                (fields, self.new_block())
+            })
+            .collect();
+        let default = default.then(|| self.new_block());
+        self.terminate(Term::Switch {
+            scrutinee: Atom::Var(scrutinee),
+            layout: Some(layout),
+            cases: constructors
+                .iter()
+                .zip(&cases)
+                .map(|(constructor, (fields, target))| Case {
+                    pattern: CasePattern::Tag(constructor.tag),
+                    fields: fields.clone(),
+                    target: *target,
+                })
+                .collect(),
+            default,
+        });
+        (cases, default)
+    }
+
+    /// コンストラクタが1つの値を分解する。フィールドがなければ読むものがないので `unpack` を置かない。
+    pub(super) fn unpack_constructor(
+        &mut self,
+        value: VarId,
+        layout: LayoutId,
+        constructor: &Constructor,
+        field: &str,
+    ) -> Vec<VarId> {
+        let fields = self.field_vars(constructor, field);
+        if !fields.is_empty() {
+            self.emit(Stmt::Unpack {
+                value,
+                ctor: Ctor {
+                    layout,
+                    tag: constructor.tag,
+                },
+                fields: fields.clone(),
+            });
+        }
+        fields
+    }
+
+    fn field_vars(&mut self, constructor: &Constructor, name: &str) -> Vec<VarId> {
+        constructor
+            .fields
+            .iter()
+            .map(|&repr| self.var(named(name, repr)))
+            .collect()
+    }
+
+    /// 真偽値 `value` で分かれる `switch`。`layout` は `Bool` の配置である。(`False` の行き先, `True` の行き先)。
+    pub(super) fn branch_bool(&mut self, value: Atom, layout: LayoutId) -> (BlockId, BlockId) {
+        let (on_false, on_true) = (self.new_block(), self.new_block());
+        self.terminate(Term::Switch {
+            scrutinee: value,
+            layout: Some(layout),
+            cases: vec![
+                Case {
+                    pattern: CasePattern::Tag(FALSE),
+                    fields: Vec::new(),
+                    target: on_false,
+                },
+                Case {
+                    pattern: CasePattern::Tag(TRUE),
+                    fields: Vec::new(),
+                    target: on_true,
+                },
+            ],
+            default: None,
+        });
+        (on_false, on_true)
+    }
+
+    pub(super) fn bind_unr(&mut self, name: &str, repr: Repr, rhs: Rhs) -> Atom {
+        let var = self.var(named(name, repr));
+        self.emit(Stmt::Let { var, rhs });
         Atom::Var(var)
+    }
+}
+
+/// `target` を呼ぶ。行き先の関数が受ける引数の数がメソッドの引数の数より少なければ (等式が引数を持たない instance の
+/// メソッド)、返った関数の値に残りを適用する。
+pub(super) fn call_target(
+    builder: &mut FnBuilder,
+    program: &ProgramBuilder,
+    indices: &[FnIdx],
+    target: Target,
+    mut args: Vec<Atom>,
+    ret: Repr,
+) -> Atom {
+    match target {
+        Target::Extern(row) => builder.bind_unr(
+            "t",
+            ret,
+            Rhs::Extern {
+                ext: row,
+                args,
+                at: None,
+            },
+        ),
+        Target::Function(instance) => {
+            let function = indices[instance.0];
+            let arity = program.arity(function);
+            debug_assert!(arity <= args.len(), "a method takes all its arguments");
+            let rest = args.split_off(arity);
+            if rest.is_empty() {
+                return builder.bind_unr("t", ret, plain_call(Call::Direct(function, args)));
+            }
+            let value = builder.bind_unr("t", Repr::TObj, plain_call(Call::Direct(function, args)));
+            builder.bind_unr(
+                "t",
+                ret,
+                plain_call(Call::Apply {
+                    callee: value,
+                    args: rest,
+                    yields: false,
+                }),
+            )
+        }
     }
 }
