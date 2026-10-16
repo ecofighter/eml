@@ -250,22 +250,33 @@ S11a で閉じた論点は、シグネチャのない定義 (関数はシグネ�
 
 引き直す前のロードマップでスクリプトの MVP を型システムの実験より前に置いていたのは、線形型の負担 (`drop`、線形な値を返して受け渡すこと) が実用で許せるかを、機構を積む前に実際のスクリプトで確かめるためだった。S4a〜S11 を先に置いたので、この確かめは S12 と S13 で行う。
 
+S12 を、S12a、S12b、S12c、S12d の4つの作業に分けて順に進める。段の列では S12 の1行のままにする。S12a を先に置くのは、後の作業がどれも起動と標準ライブラリの核を使うためである。S12b の `IOError` と `Result` の値は、S12a の「extern は名前的なデータを作らず、std の eml が包む」方針で作る。5本のスクリプトは S13 の判断の材料なので、S12d で最後にまとめて書く。
+
+| 作業 | 中身 | 状態 |
+|---|---|---|
+| S12a | 起動と標準ライブラリの核。`eml file.em args...`、`Env`、`Stdin`、`Fs` の読み書き、`Proc.run`、`eprintln`、`String` の核の extern と eml で書く `String` と `List` の関数、使う std のモジュールだけを読み込むこと | 終えた。決めたことは [標準ライブラリ](../spec/stdlib.md)、[モジュールと名前解決](../spec/modules.md) の「標準ライブラリ」と「REPL のセッション」、[オブジェクトモデル](../spec/object-model.md) の「extern」と「`unsafe` の核」、[LIR](../spec/lir.md) の「実行時エラー」、[VM](../spec/vm.md) の「置き場所」と「上限と割り込み」、[Core IR](../spec/core-ir.md) の「translate の配置」、[REPL の端末](../spec/repl.md) の「コマンドライン」、[テスト戦略](../implementation/testing.md) の「UI テスト」と「CLI のテスト」に移した |
+| S12b | `try_io` と `exit`。中断の経路、`IOError` の値、戻らない extern | |
+| S12c | ローカルの再帰関数。構文、HIR、単相の推論、lambda lifting | |
+| S12d | 5本のスクリプト (wc、grep、ログの集計、CSV の変換、デプロイ手順) を UI テストとして書く | |
+
+S12a では、この節で決めていた次の2つを変えた。
+
+- std の extern が名前的なデータ (`List`、`Option`、`Result`) を作るときは、extern の行がその型の正規の名前を持ち、translate がその配置を表に入れる、としていた。S12a では、extern の境界ではスカラー、文字列、`Foreign` だけを受け渡し、`List` と `Option` は std の eml が包む。`eml_rt` がデータの配置を知らないで済み、新しい証明が文字列の核と Host の配線に限られるためである ([標準ライブラリ](../spec/stdlib.md) の「extern の境界」)
+- Rust で実装した extern の標準ライブラリとして、`String` の `lines`、`split`、`trim`、`contains`、`replace`、`join`、`to_int` を入れる、としていた。S12a では、Rust の extern を `String` の核の4つ (`byte_length`、`byte_at`、`slice`、`find_from`) にとどめ、ほかは eml で書いた。`replace` は入れていない
+
+S12a で閉じた論点は、`Stdin` の範囲 (入力全体と1行を読む関数にとどめる)、extern が閉包を呼び戻す形 (S12a の extern は閉包を受けないので要らない)、多相な extern の行 (S12a の extern はどれも単相なので要らない) の3つである。
+
 ### 決めたこと
 
-- IO の失敗は中断として伝え、組み込みの `try_io : (Unit -> <IO | e> a) -> <IO | e> Result IOError a` で捕まえる。中断の途中で捕まっていた `Lin` の値は、`never` の操作の中断と同じく、S7 の中断の経路で後始末する。捕まえなければ、エラーを表示して終了コード 1 で止まる
-- `exit : Int -> <IO> a` は、同じ中断で `Lin` の値を後始末してから終了する。`<IO>` を持たせるのは、`par` の子から呼べないようにするためである。`try_io` は `exit` を捕まえない
+- (S12b) IO の失敗は中断として伝え、組み込みの `try_io : (Unit -> <IO | e> a) -> <IO | e> Result IOError a` で捕まえる。中断の途中で捕まっていた `Lin` の値は、`never` の操作の中断と同じく、S7 の中断の経路で後始末する。捕まえなければ、エラーを表示して終了コード 1 で止まる
+- (S12b) `exit : Int -> <IO> a` は、同じ中断で `Lin` の値を後始末してから終了する。`<IO>` を持たせるのは、`par` の子から呼べないようにするためである。`try_io` は `exit` を捕まえない
   - 戻らない extern (`exit`) の結果の Repr は、`never` の操作の `clause` の結果と同じ考え方で扱いを決める。値を返さないので位置として扱わず、box の挿入は受け直さず、T3 は見ず、verifier は比べない ([LIR](../spec/lir.md) の「`never` の操作」)
-- ローカルの再帰関数を入れる。`let (f, text) = Fs.read_all f` のような再束縛を壊さないように、引数を持つ関数の形のローカル定義だけを再帰的にする。単相で、lambda lifting する
-- Rust で実装した extern の標準ライブラリを入れる。`String` (lines、split、trim、contains、replace、join、to_int)、`Env` (引数、環境変数)、`Stdin`、`Fs` (すでにある `open` などに足す、ファイル全体の読み書き)、`Proc.run`、`eprintln` である。S9 の語の ABI で書く
-- CLI は `eml file.em args...` でスクリプトを直接起動できるようにする
-- std の extern が名前的なデータ (`List`、`Option`、`Result`) を作るときは、extern の行がその型の正規の名前を持ち、translate がその配置を配置の表に入れる。今の extern が作るデータは、タグの決まった `Bool` と、大きさだけで配置が決まる `Fs.read_all` の組なので、行は配置を持たない ([Core IR](../spec/core-ir.md) の「translate の配置」)
+- (S12c) ローカルの再帰関数を入れる。`let (f, text) = Fs.read_all f` のような再束縛を壊さないように、引数を持つ関数の形のローカル定義だけを再帰的にする。単相で、lambda lifting する
 
 ### 論点
 
-- ローカルの再帰関数の構文
-- `Stdin` は入力全体と行を読む関数にとどめる。後の「バイト列と `Array`」の `Lin` のハンドルとの関係を決める
-- extern が閉包を呼び戻す形。`&mut Ctx` を受ける今の extern の形では書けないので、呼び戻しの引数を渡すか、VM の側で作る行にするかを、その extern を足すときに決める ([マルチコア対応の設計](multicore.md) の「VM の並列化の備え」の制約5の、呼び戻しの入れ子の中でタスクを切り替えない決まり)
-- 多相な extern の行の Repr を、std のシグネチャの型とどう比べるか。今の結び付けのテスト ([テスト戦略](../implementation/testing.md)) は、型で選ぶ行を除いて、extern の行のシグネチャに型変数がないことを確かめている
+- (S12c) ローカルの再帰関数の構文
+- (S12b) 標準ライブラリの関数の中の extern の誤りは、位置が `<std>/…` を指す ([標準ライブラリ](../spec/stdlib.md) の「実行時エラー」)。`try_io` を入れるときに、利用者の呼び出しの位置を見せるか決める
 
 ## S13 実例による判断
 
@@ -329,7 +340,7 @@ S12 で書いたスクリプトの書き心地を見て、次の項目を採る�
 - `Byte` の算術のオーバーフロー (実行時エラーか wrap か)
 - 範囲外の添字を実行時エラーにするか `Option` にするか
 - 中断のときに書き込みのハンドルを flush するか
-- `println` と `Stdout` のハンドルの関係。S12 の `Stdin` の関数との関係
+- `println` と `Stdout` のハンドルの関係。S12a の `Stdin` の関数との関係
 - `Lin` の要素を持つ `Array` の API
 - マルチコアでのハンドルの扱い
 
@@ -337,7 +348,7 @@ S12 で書いたスクリプトの書き心地を見て、次の項目を採る�
 
 前提: バイト列と `Array`。
 
-UTF-8 の核の extern を入れ、標準ライブラリを広げる。`std/` ツリーと最初のモジュール `Fs` はすでにあり、S12 で Rust で実装した extern のモジュールが入っている。
+UTF-8 の核の extern を入れ、標準ライブラリを広げる。`std/` ツリーと、S12a で入れたモジュール (`List`、`String`、`Env`、`Stdin`、`Proc`) はすでにある ([標準ライブラリ](../spec/stdlib.md))。
 
 #### 決めたこと
 
@@ -349,7 +360,7 @@ UTF-8 の核の extern を入れ、標準ライブラリを広げる。`std/` �
 
 #### 論点
 
-- S12 で Rust の extern として入れた `String` の関数 (分割、検索、反復など) を、eml で書き直すか
+- S12a の `String` の核 (バイトの位置で読む `byte_length`、`byte_at`、`slice`、`find_from`) を、`Char` と `Bytes` の核にどう置き換えるか
 - 位置の単位 (バイト位置を不透明な型にするか)
 - 不正な UTF-8 の扱い (エラーか置換か)
 - 大文字と小文字の変換など、Unicode の表が要る操作を extern にするか対象外にするか
@@ -358,7 +369,7 @@ UTF-8 の核の extern を入れ、標準ライブラリを広げる。`std/` �
 
 前提: UTF-8 と標準ライブラリ。
 
-コマンドリテラルの意味 (HIR から先) と、標準ライブラリの `Cmd` と `Proc` を入れる。字句と CST (`COMMAND_LIT`) は S6b で入れてあり、今は HIR が E0004 を出す。`Proc.run` は S12 で extern として先に入っている。
+コマンドリテラルの意味 (HIR から先) と、標準ライブラリの `Cmd` と `Proc` を入れる。字句と CST (`COMMAND_LIT`) は S6b で入れてあり、今は HIR が E0004 を出す。`Proc.run` は S12a で先に入っている。
 
 #### 決めたこと
 
