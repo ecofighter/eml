@@ -502,7 +502,10 @@ fn a_long_run_of_if_statements_is_verified_in_linear_time() {
     // 文の `if` が続くと、`switch` と合流するブロックが文の数だけ連なる。`lower` はデバッグビルドで毎回 verify するので、
     // 文の数に比例する時間で終わらなければならない。条件は引数にする。`if True` は translate がその場で枝を選び、
     // `switch` を出さないためである
-    const COUNT: usize = 20000;
+    // IO の extern の呼び出しは yield の地点なので (docs/spec/core-ir.md の「IO の extern」)、`println` ごとに
+    // yield の確認と遅い道が足される。文の数を 10000 にとどめ、並列に走るほかのテストで遅くなっても上限との間に余裕を残す。
+    // 2乗の verifier なら 10000 でも上限を大きく超える。時間の比 (2N と N) で確かめる形は、2回の計測がどちらも負荷で揺れるので採らない
+    const COUNT: usize = 10000;
     let mut text = String::from("step : Bool -> <IO> Unit\nstep b =\n  let s = \"keep\"\n");
     text.push_str(&"  if b then println \"x\"\n".repeat(COUNT));
     text.push_str("  println s\n\nmain : Unit -> <IO> Unit\nmain () = step True");

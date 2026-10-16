@@ -129,7 +129,8 @@ impl ExternType {
     }
 }
 
-/// 操作を持たないラベルのエフェクト。`Effectful` の extern の関数が起こす。
+/// extern のエフェクト。`Effectful` の extern の関数が起こす。`IO` の隠れた `never` の操作 `io_failed` は Prelude の
+/// 宣言が持ち、Prelude の `try_io` だけが handle する。表の行は名前だけを持つ (docs/spec/effects.md の「組み込みの `IO`」)。
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum ExternEffect {
     Io,

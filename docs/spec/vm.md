@@ -201,8 +201,9 @@ base + 0 .. base + frame_size: スロット
 - `Op::Extern` が `try_io` の捕まえる `Fault` ([標準ライブラリ](stdlib.md) の「`try_io`」) を返し、その行の `purity` が `Effectful` なら、`ctx.ev_find(IO)` で `IO` の evidence を探す
   - なければ、ほかの extern の誤りと同じ実行時エラー (`VmFault::Extern`) にする
   - あれば、`kind` のタグと `message` の文字列を作り、`ev_clause[IO.io_failed]` で節の入口を得て、`clause` の呼び出しと同じ形で `(ev, kind, message)` を渡して呼ぶ。結果は extern の行き先に入れ、戻り先は extern の次の命令にする
-  - `Effectful` でない行がこの `Fault` を返したら、実行時エラーにする。今の表にはそういう行はない
+  - `Effectful` でない行がこの `Fault` を返したら、実行時エラーにする。表にはそういう行はない
 - 入口は `never` の節の入口なので、`yield_abort` で中断を始めてダミーを返す。次の yield の確認が遅い道へ進み、中断が `try_io` の `prompt$` まで届く。`prompt$` が κ を落とすので、途中のフレームが持っていた値が後始末される
+- 節の入口を呼んだ後は、`clause` の呼び出しと同じく安全点で、`Ctx::poll` を呼ぶ。捕まえる失敗と同時に来た割り込み (Ctrl-C) を、ここで拾うためである。この安全点の誤りは extern の命令で起きた誤りになるので、例外として、失敗した extern の位置を付けて表示する (「誤り、止めること、終わり」)
 - extern の行き先は、行の `ret` が `int`、`enum`、`unit` でも、入口が返す `obj` のダミーを受ける。EP が `Effectful` の extern の直後に必ず yield の確認を置くので、この値を読むのは遅い道だけである。遅い道は、行き先が RC の対象で印が `unr` でないときに `drop` し、`unr` なら Perceus が `decref` する。どちらもダミーには何も起こさない。`int` などの行き先に `obj` のダミーが入る形は、`never` の操作の `clause` の束縛 ([LIR](lir.md) の「`never` の操作」) と同じで、`box` や `return` には届かない
 - 失敗した extern の引数は、[オブジェクトモデル](object-model.md) の「誤りのときの約束」のとおり、extern がすでに消費している
 - `CodeBase` は、`Prelude.IO` のエフェクトの番号を持つ。翻訳したプログラムでは `IO` はいつも表にある。手書きの IR で表に `IO` がなければ、いつも実行時エラーにする。`Machine` が入力を足すとき (REPL) は、エフェクトの番号の付け替えと同じく引き直す
@@ -225,7 +226,7 @@ base + 0 .. base + frame_size: スロット
 - 関数の名前は、命令の位置から `FnEntry` の範囲を二分探索して引く。`Finish` と `ApplyRest` はどの関数にも属さないので、そこで起きた誤りには、最後に戻った関数の名前を付ける。VM は `Ret` のたびにその位置を `Task::last_ret` に覚える。末尾の位置の部分適用が作ったクロージャを返すときも、関数の中で起きたなら同じく覚える
 - 位置は `locations` から命令の位置で引く。表に載せるのは、位置を持つ extern の呼び出しから作った命令である。専用の算術と比較の命令も含む。`run-fail` の UI テストの多くは `/` と `+` の誤りの位置を表示している
 - `Arith`、`Output`、`Io`、`NotUtf8`、`Heap(_)` の文言は `eml_rt` のものを使う ([オブジェクトモデル](object-model.md) の「誤り」)。extern の結果と文言は、`crates/eml_rt/src/heap/tests/expected.txt` の表が固定する ([テスト戦略](../implementation/testing.md) の「期待値の表」)
-- 安全点の `Ctx::poll` が返す `Stop` と extern の `Fault::Stopped` は、どちらも `Stop` の文言で表示する。`Fs.read_all`、標準入力の読み、`Proc.run` の `Fault::Stopped` は extern の誤りなので位置を付け、安全点の `Stop` には付けない
+- 安全点の `Ctx::poll` が返す `Stop` と extern の `Fault::Stopped` は、どちらも `Stop` の文言で表示する。`Fs.read_all`、標準入力の読み、`Proc.run` の `Fault::Stopped` は extern の誤りなので位置を付け、安全点の `Stop` には付けない。ただし、IO の失敗で `io_failed` の節の入口を呼んだ直後の安全点で止めたときは、失敗した extern の位置を付ける (「IO の失敗と `exit`」)
 - 割り込みで止めたときの表示も、ほかの実行時エラーと同じ形である。安全点で止めたときは ``interrupted in `f` `` (`f` は止めたときの関数)、extern (`Fs.read_all`、標準入力の読み、`Proc.run`) の中で止めたときは位置付きの `interrupted` である。`RuntimeError::interrupted()` は、安全点の `Stopped(Stop::Interrupted)` と、extern の中で止めた `Extern(Fault::Stopped(Stop::Interrupted))` の両方で真を返す。CLI が終了コードを決めるのに使う (「上限と割り込み」)
 - 繰り返しが誤りで終わっても、`Finish` に着いても、`Machine::run` は `Ctx::flush` を呼んでから結果を返す。`> out 2>&1` のときに出力と誤りの順を保つためである
 - `exit` で終わったときは、先に上の「IO の失敗と `exit`」の手順で中断を片付ける
