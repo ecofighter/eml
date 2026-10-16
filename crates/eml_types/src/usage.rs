@@ -181,7 +181,7 @@ impl<'a> Usage<'a, '_> {
                             bound.push(*pat);
                             self.expr(*init)
                         }
-                        // 自分の扱いは S12c の Task 5 で正す。それまでは `let` と同じに数える
+                        // 本体の中の自分への参照はラムダの腕が外すので、ここでは外からの使用だけを数える
                         Stmt::Functions(functions) => {
                             let mut uses = Uses::new();
                             for function in functions {
@@ -319,12 +319,33 @@ impl<'a> Usage<'a, '_> {
                     self.check_pat(param, &inner, *lambda_body);
                     remove_bound(body, param, &mut inner);
                 }
+                // ローカル関数の自分への参照は、捕まえた値ではない。自分を参照する関数は何度も呼ばれうるので、
+                // 回数を数えずに関数の型を `Unr` にする。捕まえた値は矢印の線形性以下なので、`Lin` の値を
+                // 捕まえると、この制約と矛盾する (docs/spec/linearity.md の「基本の規則」)
+                let own = body.defining.get(id).copied();
+                if let Some(own) = own
+                    && let Some(used) = inner.remove(&own)
+                    && let Some(&ty) = self.typing.locals.get(own)
+                {
+                    let first = used.first.expect("a used variable has a first use");
+                    let name = body.locals[own].name.clone();
+                    self.with_origin(first, KindReason::RecursiveLocal { name }, |table| {
+                        table.kind_at_most(ty, Bound::Const(Linearity::Unr))
+                    });
+                }
                 // 残りは捕まえた変数である。捕まえることは外から見て1回の使用で、本体の中で1回でなければ `Unr`
                 // にする。ラムダとその部分適用の線形性は、捕まえた値の Kind 以上になる (docs/spec/linearity.md)
                 let mut captured: Vec<LocalId> = inner.keys().copied().collect();
                 captured.sort();
-                // 捕まえた変数の集合は、Core IR の変換が使う `closure_captures` と同じでなければならない
-                debug_assert_eq!(captured, body.closure_captures(closure));
+                // 捕まえた変数の集合は、Core IR の変換が使う `closure_captures` から自分を除いたものと同じでなければ
+                // ならない
+                debug_assert_eq!(
+                    captured,
+                    body.closure_captures(closure)
+                        .into_iter()
+                        .filter(|&local| Some(local) != own)
+                        .collect::<Vec<_>>()
+                );
                 let mut captured_types = Vec::new();
                 for &local in &captured {
                     self.count(local, inner[&local], *lambda_body);

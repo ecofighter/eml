@@ -142,7 +142,6 @@ impl Carrying<'_, '_> {
                             self.unbind(*pat, &mut live);
                             self.expr(*init, &live)
                         }
-                        // 自分の扱いは S12c の Task 5 で正す。それまでは `let` と同じに扱う
                         Stmt::Functions(functions) => {
                             for function in functions.iter().rev() {
                                 self.unbind(function.pat, &mut live);
@@ -156,10 +155,17 @@ impl Carrying<'_, '_> {
                 live
             }
             ExprKind::Annot { expr, .. } => self.expr(*expr, after),
+            // ローカル関数の自分への参照は、定義の前から持つ値ではない (docs/spec/linearity.md の「基本の規則」)
             ExprKind::Lambda(closure) => {
                 self.function(closure.body);
+                let own = body.defining.get(id).copied();
                 let mut live = after.clone();
-                live.extend(body.closure_captures(closure).into_iter().map(Held::Local));
+                live.extend(
+                    body.closure_captures(closure)
+                        .into_iter()
+                        .filter(|&local| Some(local) != own)
+                        .map(Held::Local),
+                );
                 live
             }
             // handle の本体と節は、捕まえた変数を先頭の引数に持つ関数に持ち上げる (docs/spec/core-ir.md)。捕まえた変数は

@@ -719,6 +719,12 @@ pub(super) fn linear_misuse(
                 .to_string(),
             "this lambda".to_string(),
         ),
+        KindReason::RecursiveLocal { name } => misused(
+            origin,
+            "a local function that calls itself cannot capture a linear value".to_string(),
+            format!("`{name}` refers to itself here, so it may be called any number of times"),
+        )
+        .with_note("pass linear values to a recursive local function as arguments"),
         KindReason::Passed(name) => misused(
             origin,
             format!(

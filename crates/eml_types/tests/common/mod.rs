@@ -28,3 +28,9 @@ pub fn check_short(text: &str) -> Vec<String> {
     let checked = check(text);
     eml_test_support::short(checked.files(), &checked.diagnostics)
 }
+
+/// 型検査までの診断を、ラベル、note、help まで並べる。
+pub fn check_full(text: &str) -> String {
+    let checked = check(text);
+    full(checked.files(), &checked.diagnostics)
+}

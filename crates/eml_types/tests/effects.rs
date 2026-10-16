@@ -1,4 +1,4 @@
-use crate::common::check_text;
+use crate::common::{check_full, check_short, check_text};
 
 #[test]
 fn operations_have_the_row_of_their_effect() {
@@ -809,5 +809,26 @@ fn a_linear_closure_cannot_enter_an_arrow_in_both_directions_of_the_result() {
     E3001 12:14 a lambda that captures a linear value is used where it may be called any number of times
       12:14 this lambda
       note: linear values, such as files, the continuation of a `once` operation and closures that capture one, must be used exactly once
+    ");
+}
+
+/// 純粋なローカル関数は row を `<>` に閉じるので、`multi` の操作を起こす関数の中で呼んでも、その呼び出しは再開しない
+/// (docs/spec/types.md の「ローカル関数の推論」)。
+#[test]
+fn a_pure_local_call_inside_multi_keeps_a_file() {
+    let text = "effect Choice where\n  multi choose : Unit -> Bool\n\nheld : Unit -> <Choice, IO> Unit\nheld () =\n  let f = Fs.open \"a\"\n  let count n = if n == 0 then 0 else count (n - 1)\n  let x = count 3\n  Fs.close f\n  if choose () then println (show x) else ()";
+    assert_eq!(check_short(text), Vec::<String>::new());
+}
+
+#[test]
+fn a_linear_local_function_held_across_multi_is_e3006() {
+    let text = "effect Choice where\n  multi choose : Unit -> Bool\n\nheld : Unit -> <Choice, IO> Unit\nheld () =\n  let f = Fs.open \"a\"\n  let close () = Fs.close f\n  let b = choose ()\n  close ()";
+    insta::assert_snapshot!(check_full(text), @"
+    E3006 8:11 `close` must be used exactly once, but it is kept alive across a call that may resume more than once
+      8:11 this call may perform `choose`, a `multi` operation
+      7:7 `close` is bound here
+      2:9 `choose` is declared `multi` here
+      note: a continuation of a `multi` operation can be resumed more than once, and each resumption would use the value again
+      help: finish using `close` before this call
     ");
 }

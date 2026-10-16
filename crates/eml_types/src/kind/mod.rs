@@ -132,6 +132,9 @@ pub(crate) enum KindReason {
     CapturedByClause(String),
     /// ラムダが捕まえた値。
     CapturedByLambda,
+    /// 自分を参照するローカル関数の型。名前はローカル関数の名前で、由来の範囲は自分を最初に参照した位置である
+    /// (docs/implementation/diagnostics.md の「線形性の診断」)。
+    RecursiveLocal { name: String },
     /// トップレベルの関数、組み込み、操作のスキームから複写した制約。名前は参照した値の名前である。
     Passed(String),
     /// 操作の型が、その操作の節に求める制約。名前は操作の名前で、由来の範囲は節の頭 (操作の名前から最後の引数まで)
@@ -219,6 +222,7 @@ impl KindReason {
             KindReason::Discarded => (3, Vec::new()),
             KindReason::CapturedByClause(name) => (4, vec![text(name)]),
             KindReason::CapturedByLambda => (5, Vec::new()),
+            KindReason::RecursiveLocal { name } => (5, vec![text(name)]),
             KindReason::Passed(name) => (6, vec![text(name)]),
             KindReason::Unified => (7, Vec::new()),
             KindReason::CarriedAcross { value, multi, call } => {
@@ -532,6 +536,12 @@ mod tests {
             KindReason::Discarded,
             KindReason::CapturedByClause("f".to_string()),
             KindReason::CapturedByLambda,
+            KindReason::RecursiveLocal {
+                name: "go".to_string(),
+            },
+            KindReason::RecursiveLocal {
+                name: "loop".to_string(),
+            },
             KindReason::Unified,
             across(local("f", 1), None, CallKind::Call),
             across(local("f", 1), Some(op(0)), CallKind::Call),

@@ -2,6 +2,8 @@
 
 use eml_test_support::{check, fixes, full};
 
+use crate::common::{check_full, check_short};
+
 /// `once` の操作と、純粋な条件。どのテストも7行目から関数を書く。
 const HEADER: &str =
     "effect Ask where\n  ask : Unit -> Int\n\nflag : Unit -> Bool\nflag () = True\n\n";
@@ -926,4 +928,54 @@ fn a_user_file_type_and_the_std_file_are_told_apart_by_canonical_names() {
       4:9 expected `Main.File`, found `Std.Fs.File`
       3:7 expected because of the signature of `mix`
     ");
+}
+
+#[test]
+fn a_recursive_local_function_cannot_capture_a_file() {
+    let text = "main : Unit -> <IO> Unit\nmain () =\n  let f = Fs.open \"a\"\n  let go n = if n == 0 then Fs.close f else go (n - 1)\n  go 3";
+    insta::assert_snapshot!(check_full(text), @"
+    E3003 3:7 `f` must be used exactly once, but some paths do not use it
+      3:7 `f` is bound here
+      4:45 this branch does not use `f`
+      note: linear values, such as files, the continuation of a `once` operation and closures that capture one, must be used exactly once
+      help: pass `f` to `drop`
+    E3001 4:45 a local function that calls itself cannot capture a linear value
+      4:45 `go` refers to itself here, so it may be called any number of times
+      note: linear values, such as files, the continuation of a `once` operation and closures that capture one, must be used exactly once
+      note: pass linear values to a recursive local function as arguments
+    ");
+}
+
+#[test]
+fn a_recursive_local_function_passes_a_file_as_an_argument() {
+    let text = "main : Unit -> <IO> Unit\nmain () =\n  let go f n = if n == 0 then Fs.close f else go f (n - 1)\n  go (Fs.open \"a\") 3";
+    assert_eq!(check_short(text), Vec::<String>::new());
+}
+
+#[test]
+fn a_non_recursive_local_function_is_like_a_lambda() {
+    let ok = "main : Unit -> <IO> Unit\nmain () =\n  let f = Fs.open \"a\"\n  let close () = Fs.close f\n  close ()";
+    assert_eq!(check_short(ok), Vec::<String>::new());
+    let twice = "main : Unit -> <IO> Unit\nmain () =\n  let f = Fs.open \"a\"\n  let close () = Fs.close f\n  close ()\n  close ()";
+    insta::assert_snapshot!(check_full(twice), @"
+    E3002 6:3 `close` must be used exactly once, but it is used more than once
+      6:3 used again here
+      5:3 first used here
+      note: linear values, such as files, the continuation of a `once` operation and closures that capture one, must be used exactly once
+    ");
+    let never = "main : Unit -> <IO> Unit\nmain () =\n  let f = Fs.open \"a\"\n  let close () = Fs.close f\n  ()";
+    insta::assert_snapshot!(check_full(never), @"
+    E3003 4:7 `close` must be used exactly once, but it is not used
+      4:7 `close` is bound here
+      5:5 `close` is not used before the end of this scope
+      note: linear values, such as files, the continuation of a `once` operation and closures that capture one, must be used exactly once
+      help: pass `close` to `drop`
+    ");
+}
+
+#[test]
+fn a_captured_type_variable_becomes_unr() {
+    // 再帰するローカル関数が型変数の値を捕まえると、外側のスキームに `Unr` が残る
+    let text = "rep : a -> Int -> List a\nrep x n =\n  let go k acc = if k == 0 then acc else go (k - 1) (x :: acc)\n  go n []";
+    insta::assert_snapshot!(crate::common::kinds(text, "rep"), @"  kinds: a <= Unr");
 }
