@@ -46,6 +46,7 @@ impl ItemLowering<'_> {
                     data
                 }
             };
+            let lin = self.declared_lin(item);
             let id = ItemId::new(
                 self.module,
                 types.alloc(TypeDef {
@@ -53,9 +54,40 @@ impl ItemLowering<'_> {
                     generics,
                     types: Arena::new(),
                     kind,
+                    lin,
                 }),
             );
             debug_assert_eq!(id, self.def_map.type_id(self.module, k));
+        }
+    }
+
+    /// `data` に書いた Kind から `lin` を決める。宣言できるのは `Lin` だけで、`Unr` は既定と同じなので未対応にする
+    /// (docs/spec/types.md の「`Lin` の宣言」)。
+    fn declared_lin(&mut self, item: &DataItem) -> bool {
+        let Some((name, range)) = &item.kind else {
+            return false;
+        };
+        match name.as_str() {
+            "Lin" => true,
+            "Unr" => {
+                self.diagnostics.push(Diagnostic::not_yet_supported(
+                    self.file,
+                    *range,
+                    "declaring a type `Unr` is not supported yet",
+                ));
+                false
+            }
+            _ => {
+                self.diagnostics.push(
+                    Diagnostic::error(
+                        codes::UNKNOWN_KIND,
+                        format!("`{name}` is not a kind"),
+                        Label::new(self.file, *range, "a kind is expected here"),
+                    )
+                    .with_note("only `Lin` can be declared for a `data` type"),
+                );
+                false
+            }
         }
     }
 

@@ -1,6 +1,6 @@
 //! 型クラスの制約の解決 (docs/spec/types.md の「制約」)。
 
-use crate::common::check_text;
+use crate::common::{check_short, check_text};
 use eml_test_support::{check, short};
 
 const SAME: &str = "class Same a where\n  same : a -> a -> Bool\n  differ : a -> a -> Bool\n  differ x y = not (same x y)\n\n";
@@ -388,4 +388,16 @@ fn deriving_ord_needs_eq() {
     ");
     let text = "data Color =\n  | Red\n  | Green\n  deriving (Eq, Ord)";
     assert_eq!(lines(text), Vec::<String>::new());
+}
+
+#[test]
+fn a_lin_declared_type_cannot_have_instances() {
+    let text = "data Token : Lin =\n  | Token\n  deriving (Eq)\n\ndata Key : Lin =\n  | Key Int\n\ninstance Show Key where\n  show _ = \"key\"";
+    assert_eq!(
+        check_short(text)
+            .iter()
+            .map(|d| &d[..5])
+            .collect::<Vec<_>>(),
+        ["E2010", "E2010"]
+    );
 }

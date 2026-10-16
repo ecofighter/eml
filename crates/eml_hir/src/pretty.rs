@@ -39,10 +39,17 @@ fn items(program: &Program, module: &Module, out: &mut String) {
             TypeDefKind::Data { constructors } => ("data", constructors.as_slice()),
             TypeDefKind::Extern(_) => ("extern data", [].as_slice()),
         };
+        let annotation = if def.lin { " : Lin" } else { "" };
         if params.is_empty() {
-            writeln!(out, "{keyword} {}", def.name).unwrap();
+            writeln!(out, "{keyword} {}{annotation}", def.name).unwrap();
         } else {
-            writeln!(out, "{keyword} {} {}", def.name, params.join(" ")).unwrap();
+            writeln!(
+                out,
+                "{keyword} {} {}{annotation}",
+                def.name,
+                params.join(" ")
+            )
+            .unwrap();
         }
         let printer = Printer {
             program,

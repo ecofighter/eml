@@ -189,3 +189,15 @@ fn a_once_arrow_inside_another_function_does_not_count() {
         "data F =\n  | F (Unit -> once Unit -> Unit)\n\ntwice : F -> (F, F)\ntwice f = (f, f)";
     assert_eq!(check_short(text), Vec::<String>::new());
 }
+
+#[test]
+fn a_lin_declaration_makes_the_type_linear() {
+    let text = "data Token : Lin =\n  | Token\n\ndata Pair =\n  | Pair Token Int\n\ntwice : Token -> (Token, Token)\ntwice t = (t, t)\n\nlose : Pair -> Int\nlose _ = 0";
+    assert_eq!(
+        check_short(text)
+            .iter()
+            .map(|d| &d[..5])
+            .collect::<Vec<_>>(),
+        ["E3002", "E3004"]
+    );
+}

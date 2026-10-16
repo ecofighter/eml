@@ -80,6 +80,8 @@ pub struct DataItem {
     pub params: Vec<(String, TextRange)>,
     /// `=` か選択肢を書いたか (`ast::DataItem::has_constructors`)。
     pub has_constructors: bool,
+    /// `data T : Lin` の Kind の名前と位置。名前が書かれていない誤りはパーサが報告済みなので持たない。
+    pub kind: Option<(String, TextRange)>,
     /// 名前のある選択肢。ソースの順で、コンストラクタの局所の番号の順である。
     pub constructors: Vec<ConstructorItem>,
     /// `deriving` に書いたクラス (名前、位置)。書いた順で、重複 (E1035) もそのまま持つ。
@@ -401,6 +403,10 @@ pub fn item_tree(file: FileId, parse: &Parse) -> (ItemTree, Vec<Diagnostic>) {
                         &mut diagnostics,
                     ),
                     has_constructors: item.has_constructors(),
+                    kind: item.kind().and_then(|annot| annot.name_ref()).map(|name| {
+                        let token = name.token();
+                        (token.text().to_string(), token.text_range())
+                    }),
                     constructors,
                     deriving,
                 });

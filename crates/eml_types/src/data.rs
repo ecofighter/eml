@@ -58,7 +58,8 @@ pub(crate) fn data_kinds(program: &Program) -> ItemMap<TypeDef, DataKind> {
                 params: vec![false; arity],
                 lin: match def.kind {
                     TypeDefKind::Extern(Some(ty)) => ty.row().linearity == Linearity::Lin,
-                    TypeDefKind::Extern(None) | TypeDefKind::Data { constructors: _ } => false,
+                    TypeDefKind::Extern(None) => false,
+                    TypeDefKind::Data { constructors: _ } => def.lin,
                 },
                 // extern の型の型引数は誤り (E0011) の跡で、使われ方が分からないので、安全な側の両方向にする
                 variance: match def.kind {

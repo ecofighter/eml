@@ -207,3 +207,19 @@ fn only_the_prelude_declares_the_cons_constructor() {
         ["E1044 3:7 the constructor `::` is reserved for lists"]
     );
 }
+
+#[test]
+fn data_kind_annotations_are_lowered() {
+    insta::assert_snapshot!(lower_text("data Token : Lin =\n  | Token"), @"
+    data Token : Lin
+      | Token
+    ");
+    assert_eq!(
+        diagnostics("data A : Unr =\n  | A"),
+        ["E0004 1:10 declaring a type `Unr` is not supported yet"]
+    );
+    assert_eq!(
+        diagnostics("data B : Row =\n  | B"),
+        ["E1049 1:10 `Row` is not a kind"]
+    );
+}

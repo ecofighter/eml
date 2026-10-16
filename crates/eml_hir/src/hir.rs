@@ -24,6 +24,8 @@ pub struct TypeDef {
     /// フィールドの型の注釈。`Constructor::fields` が指す。
     pub types: Arena<TypeRef>,
     pub kind: TypeDefKind,
+    /// `data T : Lin` と宣言したか。フィールドによらず `Lin` の型になる (docs/spec/types.md の「`Lin` の宣言」)。
+    pub lin: bool,
 }
 
 #[derive(Debug)]
