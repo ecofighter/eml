@@ -73,3 +73,21 @@ fn calls_in_tail_position_are_tail_calls() {
     }
     ");
 }
+
+#[test]
+fn a_local_self_call_is_a_tail_call() {
+    // 持ち上げたローカル関数の自分への呼び出しも直接の呼び出しなので、トップレベルの関数と同じく末尾呼び出しになる
+    let text = "f : Int -> Int -> Int\nf base n =\n  let go k acc = if k == 0 then acc else go (k - 1) (acc + base)\n  go n 0\n\nmain : Unit -> <IO> Unit\nmain () = println (show (f 2 3))";
+    insta::assert_snapshot!(function(&lir_text(text, eml_lir::Pass::Contract), "f$let$go"), @r#"
+    internal fn f$let$go(base.0: int, k.1: int, acc.2: int) -> int {
+      let t.3: enum = extern "Prelude.Eq Int.=="(k.1, 0)
+      switch t.3 Prelude.Bool { #0 -> b1, #1 -> b2 }
+    b1:
+      let t.4: int = extern Prelude.-(k.1, 1)
+      let t.5: int = extern Prelude.+(acc.2, base.0)
+      tail call f$let$go(base.0, t.4, t.5)
+    b2:
+      return acc.2
+    }
+    "#);
+}

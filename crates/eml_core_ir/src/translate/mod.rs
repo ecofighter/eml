@@ -12,15 +12,17 @@ mod pattern;
 mod program;
 mod types;
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeSet, HashMap, HashSet};
 
 use eml_diagnostics::{FileId, SourceFiles};
 use eml_extern::Extern;
 use eml_hir::{
-    Body, ExprId, ExprKind, FunctionId, FunctionKind, InputKind, LocalId, MatchArm, PatId, PatKind,
-    Program as HirProgram, Res, Stmt as HirStmt, ValueItem,
+    Body, Closure, ExprId, ExprKind, FunctionId, FunctionKind, InputKind, LocalId, MatchArm, PatId,
+    PatKind, Program as HirProgram, Res, Stmt as HirStmt, ValueItem,
 };
-use eml_types::{BodyTypes, InputDisplay, RowYield, TypeId, TypeStore, TypedProgram};
+use eml_types::{
+    BodyTypes, InputDisplay, Lin, RowYield, TypeId, TypeKind, TypeStore, TypedProgram,
+};
 use la_arena::ArenaMap;
 
 use crate::{CoreFn, Program, Rhs, Term};
@@ -110,11 +112,15 @@ fn continuation_forms(body: &Body) -> ArenaMap<LocalId, ContinuationForm> {
 /// なら同じ名前になるように、本体を変換する前に式の ID の順で振る (docs/spec/core-ir.md)。extern で結んだメソッドの
 /// 参照は行き先が instance ごとに違うので、`$externN` の番号は同じ本体でも instance ごとに変わりうる。
 struct Numbering {
+    /// ローカル関数を定義するラムダは数えない。
     lambdas: ArenaMap<ExprId, u32>,
     handlers: ArenaMap<ExprId, u32>,
     /// 値として使う extern の参照 (引数をそろえて呼ぶ位置にない参照と、部分適用の呼ばれる式)。extern で結んだ
     /// メソッドの参照を含む。
     externs: ArenaMap<ExprId, u32>,
+    /// ローカル関数を定義するラムダから、持ち上げた関数の名前の接尾辞 (`let$go`、`let$go#2`) への表
+    /// (docs/spec/core-ir.md の「ローカル関数の持ち上げ」)。
+    local_functions: ArenaMap<ExprId, String>,
 }
 
 /// `targets` は、この instance の本体の中の参照の行き先である。
@@ -144,7 +150,7 @@ fn numbering(hir: &HirProgram, body: &Body, targets: &ArenaMap<ExprId, Target>) 
     let mut externs = Vec::new();
     for (id, expr) in body.exprs.iter() {
         match &expr.kind {
-            ExprKind::Lambda(_) => lambdas.push(id),
+            ExprKind::Lambda(_) if !body.defining.contains_idx(id) => lambdas.push(id),
             ExprKind::Handle { .. } => handlers.push(id),
             ExprKind::Path(Res::Item(_)) if extern_of(id).is_some() && !saturated.contains(&id) => {
                 externs.push(id)
@@ -152,11 +158,118 @@ fn numbering(hir: &HirProgram, body: &Body, targets: &ArenaMap<ExprId, Target>) 
             _ => {}
         }
     }
+    // 同じ名前の2つ目から `#2`、`#3` を付ける。`LocalId` の順は HIR の順である
+    let mut seen: HashMap<&str, u32> = HashMap::new();
+    let local_functions = body
+        .local_functions
+        .iter()
+        .map(|(local, &lambda)| {
+            let name = body.locals[local].name.as_str();
+            let count = seen.entry(name).or_insert(0);
+            *count += 1;
+            let suffix = match *count {
+                1 => format!("let${name}"),
+                n => format!("let${name}#{n}"),
+            };
+            (lambda, suffix)
+        })
+        .collect();
     let number = |ids: Vec<ExprId>| ids.into_iter().zip(0..).collect();
     Numbering {
         lambdas: number(lambdas),
         handlers: number(handlers),
         externs: number(externs),
+        local_functions,
+    }
+}
+
+/// 持ち上げたローカル関数。`captured` は持ち上げの捕まえる変数で、`LocalId` の順に並び、ローカル関数を含まない
+/// (docs/spec/core-ir.md の「ローカル関数の持ち上げ」)。
+struct Lifted {
+    target: FnIdx,
+    captured: Vec<LocalId>,
+}
+
+/// HIR の捕まえる変数 `captured` のうちローカル関数を、その持ち上げの捕まえる変数に置き換える。持ち上げの捕まえる
+/// 変数はローカル関数を含まないので、置き換えは1段で済む。
+fn lifted_captures(
+    lifted: &ArenaMap<LocalId, Lifted>,
+    captured: impl IntoIterator<Item = LocalId>,
+) -> Vec<LocalId> {
+    let mut locals = BTreeSet::new();
+    for local in captured {
+        match lifted.get(local) {
+            Some(function) => locals.extend(function.captured.iter().copied()),
+            None => {
+                locals.insert(local);
+            }
+        }
+    }
+    locals.into_iter().collect()
+}
+
+/// 本体のローカル関数の、関数の番号と持ち上げの捕まえる変数の表。自分への参照と、後で変換する入れ子の関数からの参照の
+/// ために、どのローカル関数を変換するより前に作る。ローカル関数が参照できるのは前に定義したローカル関数と自分だけ
+/// なので、`LocalId` の順に1回ずつ求めればよい (docs/spec/core-ir.md の「ローカル関数の持ち上げ」)。
+fn lifted_functions(body: &Body, program: &mut ProgramBuilder) -> ArenaMap<LocalId, Lifted> {
+    let mut lifted = ArenaMap::default();
+    for (local, &lambda) in body.local_functions.iter() {
+        let closure = local_closure(body, lambda);
+        let hir_captured = body
+            .closure_captures(closure)
+            .into_iter()
+            .filter(|&captured| captured != local);
+        let captured = lifted_captures(&lifted, hir_captured);
+        let target = program.reserve(captured.len() + closure.params.len());
+        lifted.insert(local, Lifted { target, captured });
+    }
+    lifted
+}
+
+/// ローカル関数を定義するラムダの中身。
+fn local_closure(body: &Body, lambda: ExprId) -> &Closure {
+    match &body.exprs[lambda].kind {
+        ExprKind::Lambda(closure) => closure,
+        _ => unreachable!("a local function is defined by a lambda"),
+    }
+}
+
+/// 表の各ローカル関数を、外側の instance の名前を根にした内部の関数に変換する。
+fn lower_local_functions(ctx: BodyCtx<'_>, program: &mut ProgramBuilder) {
+    for (local, function) in ctx.lifted.iter() {
+        let lambda = ctx.body.local_functions[local];
+        let closure = local_closure(ctx.body, lambda);
+        let name = format!(
+            "{}${}",
+            ctx.root_name, ctx.numbering.local_functions[lambda]
+        );
+        let lambda_ty = ctx.types.exprs[lambda];
+        if cfg!(debug_assertions) {
+            let captured: Vec<TypeId> = ctx
+                .body
+                .closure_captures(closure)
+                .iter()
+                .map(|&captured| ctx.types.locals[captured])
+                .collect();
+            ctx.check_captures(lambda_ty, &captured, "local function");
+        }
+        let (params, ret) = ctx.lambda_signature(lambda_ty, &closure.params);
+        let yields = ctx.resolve(
+            *ctx.types
+                .lambda_yields
+                .get(lambda)
+                .expect("every lambda has its row classified"),
+        );
+        let captured = ctx.typed_captures(&function.captured);
+        let core = FnLowering::new(ctx, program, yields).lower(
+            &name,
+            true,
+            &captured,
+            &params,
+            closure.body,
+            ret,
+        );
+        program.finish(function.target, core);
     }
 }
 
@@ -221,6 +334,7 @@ pub(crate) fn translate(
         let forms = continuation_forms(body);
         let references = references(body);
         let numbers = numbering(hir, body, &function.targets);
+        let lifted = lifted_functions(body, &mut builder);
         let types = function
             .types
             .as_deref()
@@ -237,11 +351,13 @@ pub(crate) fn translate(
             numbering: &numbers,
             continuation_forms: &forms,
             references: &references,
+            lifted: &lifted,
             source: Source {
                 files,
                 file_id: hir.modules[id.module].file,
             },
         };
+        lower_local_functions(ctx, &mut builder);
         let yields = ctx.resolve(types.body_yield);
         let core = FnLowering::new(ctx, &mut builder, yields).lower(
             &instance.name,
@@ -376,6 +492,8 @@ struct BodyCtx<'a> {
     continuation_forms: &'a ArenaMap<LocalId, ContinuationForm>,
     /// 局所変数ごとの参照の数 (`references`)。
     references: &'a ArenaMap<LocalId, u32>,
+    /// 本体のローカル関数ごとの持ち上げた関数 (`lifted_functions`)。
+    lifted: &'a ArenaMap<LocalId, Lifted>,
     source: Source<'a>,
 }
 
@@ -402,6 +520,57 @@ impl BodyCtx<'_> {
             Some(Target::Extern(row)) => Some(*row),
             Some(Target::Function(_)) | None => None,
         }
+    }
+
+    /// 作るクロージャの矢印 `closure_ty` が `Unr` なら、捕まえる値の型 `captured` がすべて `Unr` であることを
+    /// 確かめる。参照の検査と操作の検査は両側を比べるので、両側が同じに誤った印 (`Lin` の値を持つ `unr` の
+    /// クロージャ) には気づけないためである (docs/spec/core-ir.md の
+    /// 「食い違いがないことの検査」)。
+    fn check_captures(&self, closure_ty: TypeId, captured: &[TypeId], what: &str) {
+        let store = self.store;
+        let TypeKind::Fn { lin: Lin::Unr, .. } = store.kind(closure_ty) else {
+            return;
+        };
+        for &ty in captured {
+            let linearity = store.linearity(ty);
+            assert!(
+                linearity == Lin::Unr,
+                "internal error: in `{}`, an unr {what} of type `{}` captures a value of type `{}`, whose linearity is {:?}",
+                self.root_name,
+                store.display_linear(closure_ty, &self.hir.names),
+                store.display_linear(ty, &self.hir.names),
+                linearity,
+            );
+        }
+    }
+
+    /// 型が `lambda_ty` のラムダの引数と、本体の値の Repr と印。
+    fn lambda_signature(&self, lambda_ty: TypeId, pats: &[PatId]) -> (Vec<Param>, (Repr, Mark)) {
+        let (param_types, ret_ty) = split_arrows(self.store, lambda_ty, pats.len());
+        let params = pats
+            .iter()
+            .zip(&param_types)
+            .map(|(&pat, &ty)| {
+                (
+                    Some(pat),
+                    repr(self.store, ty, self.hir),
+                    mark(self.store, ty),
+                )
+            })
+            .collect();
+        let ret = (repr(self.store, ret_ty, self.hir), mark(self.store, ret_ty));
+        (params, ret)
+    }
+
+    /// 捕まえる変数と、その値の Repr と印。
+    fn typed_captures(&self, captured: &[LocalId]) -> Vec<(LocalId, Repr, Mark)> {
+        captured
+            .iter()
+            .map(|&local| {
+                let ty = *self.types.locals.get(local).expect("every local is typed");
+                (local, repr(self.store, ty, self.hir), mark(self.store, ty))
+            })
+            .collect()
     }
 }
 
@@ -498,7 +667,9 @@ impl<'a> FnLowering<'a> {
     }
 
     /// `root` を、捕まえた変数を先頭の引数に持つ関数に持ち上げ、そのクロージャを作る (docs/spec/core-ir.md)。ラムダと、
-    /// handle の本体と節に使う。関数の番号は持ち上げる前に取るので、入れ子の持ち上げは外側より後ろの番号になる。
+    /// handle の本体と節に使う。`captured` は HIR の捕まえる変数で、ローカル関数はその持ち上げの捕まえる変数に置き換えて
+    /// 受ける (docs/spec/core-ir.md の「ローカル関数の持ち上げ」)。関数の番号は持ち上げる前に取るので、入れ子の持ち上げは
+    /// 外側より後ろの番号になる。
     /// `yields` は持ち上げた関数の印である。クロージャの印は、型のあるラムダなら `typed` で、型のない handle の本体と
     /// 節では捕まえた値の印の結びにする
     /// (docs/spec/core-ir.md の「translate が決める印」)。
@@ -516,22 +687,9 @@ impl<'a> FnLowering<'a> {
         ret: (Repr, Mark),
         typed: Option<Mark>,
     ) -> Atom {
-        let captured: Vec<(LocalId, Repr, Mark)> = captured
-            .into_iter()
-            .map(|local| {
-                let ty = *self
-                    .ctx
-                    .types
-                    .locals
-                    .get(local)
-                    .expect("every local is typed");
-                (
-                    local,
-                    repr(self.ctx.store, ty, self.ctx.hir),
-                    mark(self.ctx.store, ty),
-                )
-            })
-            .collect();
+        let captured = self
+            .ctx
+            .typed_captures(&lifted_captures(self.ctx.lifted, captured));
         let function = self.program.reserve(captured.len() + params.len());
         let core = FnLowering::new(self.ctx, &mut *self.program, yields)
             .lower(&name, true, &captured, params, root, ret);
@@ -754,7 +912,9 @@ impl<'a> FnLowering<'a> {
                         self.bind_pat(*pat, value);
                     }
                 }
-                HirStmt::Functions(_) => unimplemented!("S12c: Task 4 / Task 6 で扱う"),
+                // 本体を変換する前に持ち上げてあるので、文の位置では何も出さない
+                // (docs/spec/core-ir.md の「ローカル関数の持ち上げ」)
+                HirStmt::Functions(_) => {}
                 // 式文の値は `Unit` なので捨ててよい
                 HirStmt::Expr(expr) => {
                     self.atom(*expr);

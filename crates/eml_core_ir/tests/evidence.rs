@@ -1010,3 +1010,20 @@ fn continuations_of_many_io_externs_stay_linear_in_size() {
         .sum();
     assert!(vars <= 16 * COUNT, "{vars} variables for {COUNT} calls");
 }
+
+#[test]
+fn clause_local_function_resumes_once() {
+    // 生の `k` を持ち上げたローカル関数の引数に渡すので、節の `return` は `k` の末尾の `resume` で終わらず、節は
+    // その場で動かない (docs/spec/core-ir.md の「ローカル関数の持ち上げ」)。実行した値は UI テストで確かめる
+    let text = format!(
+        "{ASK}main : Unit -> <IO> Unit\nmain () =\n  let r =\n    handle ask () + 1 with\n      | ask () k -> (let finish v = k v in finish 1)\n  println (show r)"
+    );
+    let shown = core_text(&text, Pass::Evidence);
+    insta::assert_snapshot!(function(&shown, "main$handle0$ask$entry"), @"
+    internal yields clause Ask.ask fn main$handle0$ask$entry(e.0: obj, p.1: unit) -> int {
+      let c.2: tobj = closure main$handle0$ask(p.1)
+      let u.3: unit = prim yield_to(e.0, c.2, &id$)
+      return 0
+    }
+    ");
+}

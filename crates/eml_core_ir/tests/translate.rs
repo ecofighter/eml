@@ -3209,3 +3209,100 @@ fn try_io_handles_the_io_effect() {
     "#);
     assert!(shown.contains("handle Prelude.IO("), "{shown}");
 }
+
+#[test]
+fn a_local_function_is_lifted_and_called_directly() {
+    let text = "f : Int -> Int -> Int\nf base n =\n  let go k acc = if k == 0 then acc else go (k - 1) (acc + base)\n  go n 0\n\nmain : Unit -> <IO> Unit\nmain () = println (show (f 2 3))";
+    let shown = core_text(text, Pass::Translate);
+    insta::assert_snapshot!(function(&shown, "f$let$go"), @r#"
+    internal fn f$let$go(base.0: int, k.1: int, acc.2: int) -> int {
+      let t.3: enum = extern "Prelude.Eq Int.=="(k.1, 0)
+      switch t.3 Prelude.Bool { #0 -> b1, #1 -> b2 }
+    b1:
+      let t.4: int = extern Prelude.-(k.1, 1)
+      let t.5: int = extern Prelude.+(acc.2, base.0)
+      let t.6: int = call f$let$go(base.0, t.4, t.5)
+      return t.6
+    b2:
+      return acc.2
+    }
+    "#);
+    insta::assert_snapshot!(function(&shown, "f"), @"
+    fn f(base.0: int, n.1: int) -> int {
+      let t.2: int = call f$let$go(base.0, n.1, 0)
+      return t.2
+    }
+    ");
+}
+
+#[test]
+fn local_function_names_do_not_collide_with_generated_names() {
+    let text = "main : Unit -> <IO> Unit\nmain () =\n  let boxed x = x + 1\n  let k0 x = x\n  let lambda0 x = x\n  let k0 x = x + 2\n  println (show (boxed (k0 (lambda0 1))))";
+    let shown = core_text(text, Pass::Translate);
+    for name in [
+        "main$let$boxed",
+        "main$let$k0",
+        "main$let$lambda0",
+        "\"main$let$k0#2\"",
+    ] {
+        assert!(shown.contains(&format!("fn {name}(")), "{name}\n{shown}");
+    }
+}
+
+#[test]
+fn a_lambda_calling_a_local_function_captures_its_captures() {
+    let text = "f : Int -> List Int -> List Int\nf base xs =\n  let add x = x + base\n  List.map (fn x -> add x) xs\n\nmain : Unit -> <IO> Unit\nmain () = println (show (f 1 [1]))";
+    let shown = core_text(text, Pass::Translate);
+    insta::assert_snapshot!(function(&shown, "f$lambda0"), @"
+    internal fn f$lambda0(base.0: int, x.1: int) -> int {
+      let t.2: int = call f$let$add(base.0, x.1)
+      return t.2
+    }
+    ");
+}
+
+#[test]
+fn a_local_function_value_becomes_a_closure() {
+    let text = "f : Int -> List Int -> List Int\nf base xs =\n  let add x = x + base\n  List.map add xs\n\nmain : Unit -> <IO> Unit\nmain () = println (show (f 1 [1]))";
+    insta::assert_snapshot!(function(&core_text(text, Pass::Translate), "f"), @r#"
+    fn f(base.0: int, xs.1: tobj) -> tobj {
+      let c.2: tobj = closure f$let$add(base.0)
+      let t.3: tobj = call "Std.List.map@[Int, Int]"(c.2, xs.1)
+      return t.3
+    }
+    "#);
+}
+
+#[test]
+fn nested_local_functions_pass_outer_captures() {
+    let text = "f : Int -> Int -> Int\nf a n =\n  let outer k =\n    let inner j = if j == 0 then a else outer (j - 1)\n    inner k\n  outer n\n\nmain : Unit -> <IO> Unit\nmain () = println (show (f 1 2))";
+    let shown = core_text(text, Pass::Translate);
+    insta::assert_snapshot!(function(&shown, "f$let$inner"), @r#"
+    internal fn f$let$inner(a.0: int, j.1: int) -> int {
+      let t.2: enum = extern "Prelude.Eq Int.=="(j.1, 0)
+      switch t.2 Prelude.Bool { #0 -> b1, #1 -> b2 }
+    b1:
+      let t.3: int = extern Prelude.-(j.1, 1)
+      let t.4: int = call f$let$outer(a.0, t.3)
+      return t.4
+    b2:
+      return a.0
+    }
+    "#);
+}
+
+#[test]
+fn a_local_function_passed_as_a_value_inside_use() {
+    // `List.each` は関数を先に受けるので、`use` で書けるようにリストを先に受ける補助関数を置く
+    let text = "for_each : List Int -> (Int -> <IO> Unit) -> <IO> Unit\nfor_each xs g = List.each g xs\n\nf : Int -> List Int -> <IO> Unit\nf base xs =\n  let add x = x + base\n  use x <- for_each xs\n  println (show (List.map add [x]))\n\nmain : Unit -> <IO> Unit\nmain () = f 1 [1, 2]";
+    insta::assert_snapshot!(function(&core_text(text, Pass::Translate), "f$lambda0"), @r#"
+    internal yields fn f$lambda0(base.0: int, x.1: int) -> unit {
+      let c.2: tobj = closure f$let$add(base.0)
+      let d.3: tobj = con Prelude.List #1(x.1, #0)
+      let t.4: tobj = call "Std.List.map@[Int, Int]<e>"(c.2, d.3)
+      let t.5: obj = call "Prelude.Show List.show@[Int]"(t.4)
+      let t.6: unit = extern Prelude.println(t.5)
+      return t.6
+    }
+    "#);
+}

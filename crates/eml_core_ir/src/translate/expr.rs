@@ -3,10 +3,10 @@
 use eml_extern::{Extern, ExternType};
 use eml_hir::EvalStep;
 use eml_hir::{
-    Closure, ConstructorId, ExprId, ExprKind, FunctionId, FunctionKind, Literal, OperationId,
-    Program as HirProgram, Res, Segment, ValueItem,
+    Closure, ConstructorId, ExprId, ExprKind, FunctionId, FunctionKind, Literal, LocalId,
+    OperationId, Program as HirProgram, Res, Segment, ValueItem,
 };
-use eml_types::{FieldTarget, Lin, TypeId, TypeKind};
+use eml_types::{FieldTarget, TypeId};
 
 use crate::{Call, Rhs, Stmt};
 use eml_lir::{Atom, Ctor, FnIdx, Mark, Prim, Repr, TUPLE, VarId};
@@ -45,6 +45,13 @@ enum Callee {
     /// 直接の形の節の `k`。`k` は生の継続で、`arity` は状態のない handler で1、状態のある handler で2である。
     Continuation {
         k: Atom,
+        arity: usize,
+    },
+    /// 持ち上げたローカル関数 `local`。`arity` は宣言した引数の数で、持ち上げの捕まえる変数は呼ぶ位置で先に足す
+    /// (docs/spec/core-ir.md の「ローカル関数の持ち上げ」)。
+    Local {
+        local: LocalId,
+        target: FnIdx,
         arity: usize,
     },
 }
@@ -151,13 +158,36 @@ impl FnLowering<'_> {
             // 確かめるのは、知っている関数と構成子の部分適用だけである。extern と操作の包む関数の矢印は宣言から決まり、
             // 継続の部分適用 `k v` は確かめない所に入る (docs/spec/core-ir.md の
             // 「食い違いがないことの検査」)
-            let (captured, closure_ty) = split_arrows(self.ctx.store, callee_ty, args.len());
-            if cfg!(debug_assertions)
-                && matches!(callee, Callee::Function(_) | Callee::Constructor(_))
-            {
-                self.check_captures(closure_ty, &captured, "partial application");
+            let (mut captured, closure_ty) = split_arrows(self.ctx.store, callee_ty, args.len());
+            if cfg!(debug_assertions) {
+                match callee {
+                    Callee::Function(_) | Callee::Constructor(_) => {
+                        self.ctx
+                            .check_captures(closure_ty, &captured, "partial application");
+                    }
+                    // 閉包は持ち上げの捕まえる変数を持つが、確かめるのは HIR の捕まえる変数である
+                    // (docs/spec/core-ir.md の「ローカル関数の持ち上げ」)
+                    Callee::Local { local, .. } => {
+                        let lambda = self.ctx.body.local_functions[local];
+                        let closure = super::local_closure(self.ctx.body, lambda);
+                        captured.extend(
+                            self.ctx
+                                .body
+                                .closure_captures(closure)
+                                .iter()
+                                .map(|&local| self.ctx.types.locals[local]),
+                        );
+                        self.ctx
+                            .check_captures(closure_ty, &captured, "partial application");
+                    }
+                    Callee::Extern { .. } | Callee::Operation(_) | Callee::Continuation { .. } => {}
+                }
             }
             let wrapper = self.callee_wrapper(callee);
+            let args = match callee {
+                Callee::Local { local, .. } => self.lifted_args(local, args),
+                _ => args,
+            };
             let closure_mark = mark(self.ctx.store, closure_ty);
             return self.closure(wrapper, args, closure_mark);
         }
@@ -250,7 +280,18 @@ impl FnLowering<'_> {
             Callee::Operation(op) => self.ctx.hir[op].arity,
             Callee::Constructor(ctor) => self.ctx.hir[ctor].fields.len(),
             Callee::Continuation { k: _, arity } => arity,
+            Callee::Local { arity, .. } => arity,
         }
+    }
+
+    /// 持ち上げたローカル関数 `local` に渡す引数。持ち上げの捕まえる変数を `args` の前に足す。
+    fn lifted_args(&self, local: LocalId, args: Vec<Atom>) -> Vec<Atom> {
+        self.ctx.lifted[local]
+            .captured
+            .iter()
+            .map(|&captured| self.locals[captured])
+            .chain(args)
+            .collect()
     }
 
     /// 引数が足りないときに、クロージャにする関数。
@@ -270,6 +311,7 @@ impl FnLowering<'_> {
             Callee::Continuation { k: _, arity: _ } => {
                 unreachable!("a continuation in the direct form is always saturated")
             }
+            Callee::Local { target, .. } => target,
         }
     }
 
@@ -285,8 +327,10 @@ impl FnLowering<'_> {
         // `Extern`、`Perform`、`Con` は `mask` を持てない (docs/spec/core-ir.md)。型検査が `mask` を記録するように
         // 変わると、ここで気づかないうちに落とすことになる
         debug_assert!(
-            matches!(callee, Callee::Function(_) | Callee::Continuation { .. })
-                || (0..args.len()).all(|arrow| self.mask(id, arrow).is_empty()),
+            matches!(
+                callee,
+                Callee::Function(_) | Callee::Continuation { .. } | Callee::Local { .. }
+            ) || (0..args.len()).all(|arrow| self.mask(id, arrow).is_empty()),
             "an extern, operation or constructor call has no recorded mask"
         );
         match callee {
@@ -298,6 +342,16 @@ impl FnLowering<'_> {
                     0 => Vec::new(),
                     n => self.mask(id, n - 1),
                 };
+                ("t", masked_call(Call::Direct(target, args), mask))
+            }
+            // ローカル関数は引数を1つ以上持つ。最後でない矢印の row は `<>` なので、最後の矢印の `mask` だけを使う
+            Callee::Local {
+                local,
+                target,
+                arity,
+            } => {
+                let mask = self.mask(id, arity - 1);
+                let args = self.lifted_args(local, args);
                 ("t", masked_call(Call::Direct(target, args), mask))
             }
             Callee::Extern { row, callee } => {
@@ -404,6 +458,14 @@ impl FnLowering<'_> {
             },
             ExprKind::Path(Res::Item(ValueItem::Operation(op))) => Callee::Operation(*op),
             ExprKind::Path(Res::Item(ValueItem::Constructor(ctor))) => Callee::Constructor(*ctor),
+            ExprKind::Path(Res::Local(local)) if self.ctx.lifted.contains_idx(*local) => {
+                let lifted = &self.ctx.lifted[*local];
+                Callee::Local {
+                    local: *local,
+                    target: lifted.target,
+                    arity: self.program.arity(lifted.target) - lifted.captured.len(),
+                }
+            }
             ExprKind::Path(Res::Local(local)) => {
                 let k = self.locals[*local];
                 match self.ctx.continuation_forms[*local] {
@@ -457,6 +519,13 @@ impl FnLowering<'_> {
                     Mark::Unr,
                     Rhs::ConstString(index),
                 )
+            }
+            // ローカル関数の値は、使う位置で閉包を作る (docs/spec/core-ir.md の「ローカル関数の持ち上げ」)
+            ExprKind::Path(Res::Local(local)) if self.ctx.lifted.contains_idx(*local) => {
+                let target = self.ctx.lifted[*local].target;
+                let args = self.lifted_args(*local, Vec::new());
+                let local_mark = mark(self.ctx.store, self.ctx.types.locals[*local]);
+                self.closure(target, args, local_mark)
             }
             ExprKind::Path(Res::Local(local)) => self.locals[*local],
             ExprKind::Path(Res::Item(ValueItem::Function(function))) => {
@@ -707,18 +776,7 @@ impl FnLowering<'_> {
                     body: lambda_body,
                 } = closure;
                 let lambda_ty = self.ty(id);
-                let (param_types, ret_ty) = split_arrows(self.ctx.store, lambda_ty, params.len());
-                let params: Vec<Param> = params
-                    .iter()
-                    .zip(&param_types)
-                    .map(|(&pat, &ty)| {
-                        (
-                            Some(pat),
-                            repr(self.ctx.store, ty, self.ctx.hir),
-                            mark(self.ctx.store, ty),
-                        )
-                    })
-                    .collect();
+                let (params, ret) = self.ctx.lambda_signature(lambda_ty, params);
                 let name = format!(
                     "{}$lambda{}",
                     self.ctx.root_name, self.ctx.numbering.lambdas[id]
@@ -729,12 +787,8 @@ impl FnLowering<'_> {
                         .iter()
                         .map(|&local| self.ctx.types.locals[local])
                         .collect();
-                    self.check_captures(lambda_ty, &captured, "lambda");
+                    self.ctx.check_captures(lambda_ty, &captured, "lambda");
                 }
-                let ret = (
-                    repr(self.ctx.store, ret_ty, self.ctx.hir),
-                    mark(self.ctx.store, ret_ty),
-                );
                 let yields = self.ctx.resolve(
                     *self
                         .ctx
@@ -754,28 +808,6 @@ impl FnLowering<'_> {
                     Some(lambda_mark),
                 )
             }
-        }
-    }
-
-    /// 作るクロージャの矢印 `closure_ty` が `Unr` なら、捕まえる値の型 `captured` がすべて `Unr` であることを
-    /// 確かめる。参照の検査と操作の検査は両側を比べるので、両側が同じに誤った印 (`Lin` の値を持つ `unr` の
-    /// クロージャ) には気づけないためである (docs/spec/core-ir.md の
-    /// 「食い違いがないことの検査」)。
-    fn check_captures(&self, closure_ty: TypeId, captured: &[TypeId], what: &str) {
-        let store = self.ctx.store;
-        let TypeKind::Fn { lin: Lin::Unr, .. } = store.kind(closure_ty) else {
-            return;
-        };
-        for &ty in captured {
-            let linearity = store.linearity(ty);
-            assert!(
-                linearity == Lin::Unr,
-                "internal error: in `{}`, an unr {what} of type `{}` captures a value of type `{}`, whose linearity is {:?}",
-                self.ctx.root_name,
-                store.display_linear(closure_ty, &self.ctx.hir.names),
-                store.display_linear(ty, &self.ctx.hir.names),
-                linearity,
-            );
         }
     }
 
