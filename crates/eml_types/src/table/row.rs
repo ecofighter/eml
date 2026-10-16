@@ -43,10 +43,12 @@ impl Table<'_> {
         self.unify_row(&open, &Row::pure())
     }
 
-    /// row の末尾が束縛のない rigid でない変数で、`keep` のどの型にも現れなければ、末尾を `<>` に閉じて `true` を返す。
-    /// ローカル関数の最後の矢印の row を閉じる。`keep` は捕まえた変数の型と、関数の引数と結果の型である。それらに現れる
-    /// 末尾は、外側の推論か引数のエフェクトとつながっているので閉じない (docs/spec/types.md の「ローカル関数の推論」)。
-    pub fn close_free_tail(&mut self, row: &Row, keep: &[Ty]) -> bool {
+    /// row の末尾が束縛のない rigid でない変数で、`keep` のどの型にも `keep_rows` のどの row にも現れなければ、末尾を
+    /// `<>` に閉じて `true` を返す。ローカル関数の最後の矢印の row を閉じる。`keep` は捕まえた変数の型と、関数の引数と
+    /// 結果の型である。`keep_rows` は、外側のローカル関数への呼び出しで後に回したものの、呼び出しの位置の今の row である。
+    /// それらに現れる末尾は、外側の推論か、引数のエフェクトか、まだ含めていない呼び出しとつながっているので閉じない
+    /// (docs/spec/types.md の「ローカル関数の推論」)。
+    pub fn close_free_tail(&mut self, row: &Row, keep: &[Ty], keep_rows: &[Row]) -> bool {
         let Tail::Var(var) = self.resolve_row(row).tail else {
             return false;
         };
@@ -56,6 +58,7 @@ impl Table<'_> {
         let shared = {
             let _walk = self.start_walk();
             keep.iter().any(|&ty| self.row_occurs_in(var, ty))
+                || keep_rows.iter().any(|row| self.row_occurs_within(var, row))
         };
         if shared {
             return false;

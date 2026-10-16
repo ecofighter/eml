@@ -637,3 +637,11 @@ fn a_higher_order_local_function_takes_the_effect_of_its_argument() {
     let text = "effect Ask where\n  ask : Unit -> Int\n\nmain : Unit -> <IO> Unit\nmain () =\n  let app f = f ()\n  let n = handle app (fn () -> ask ()) with | ask () k -> k 1\n  println (show n)";
     assert_eq!(check_short(text), Vec::<String>::new());
 }
+
+#[test]
+fn a_nested_local_function_calling_the_outer_one_keeps_its_row_open() {
+    // `each` の中の `walk` の呼び出しは、`walk` の row を閉じた後で `each` の row に含める。`each` の row を先に閉じると、
+    // `walk` の `IO` が入らない
+    let text = "main : Unit -> <IO> Unit\nmain () =\n  let walk n =\n    let each k = if k == 0 then () else walk (k - 1)\n    if n == 0 then println \"x\" else each n\n  walk 3";
+    assert_eq!(check_short(text), Vec::<String>::new());
+}

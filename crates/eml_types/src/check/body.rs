@@ -569,6 +569,17 @@ impl BodyCheck<'_, '_> {
             self.check_expr(function.lambda, ty, Origin::Inferred);
         }
         let group: Vec<LocalId> = checked.iter().map(|&(local, ..)| local).collect();
+        // 外側のローカル関数への呼び出しで後に回したものは、外側の row を閉じた後で、呼び出しの位置の今の row に含める。
+        // その今の row に現れる末尾を先に閉じると、外側の関数のエフェクトが入らなくなるので閉じない
+        let pending: Vec<Row> = self.local_frames[..base]
+            .iter()
+            .flat_map(|frame| {
+                frame
+                    .deferred
+                    .iter()
+                    .map(|deferred| deferred.ambient.clone())
+            })
+            .collect();
         for (local, closure, last_row, parts) in checked {
             let Some(last_row) = last_row else { continue };
             // 引数と結果の型に現れる末尾も閉じない。`let app f = f ()` のような高階のローカル関数のエフェクトは、
@@ -586,7 +597,7 @@ impl BodyCheck<'_, '_> {
                             .unwrap_or(self.table.error)
                     }),
             );
-            if self.table.close_free_tail(&last_row, &keep) {
+            if self.table.close_free_tail(&last_row, &keep, &pending) {
                 self.closed_locals.insert(local);
             }
         }
