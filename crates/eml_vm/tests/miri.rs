@@ -207,7 +207,7 @@ fn shown() -> obj {
         let mut machine = AnyMachine::new(&config, host);
         let loaded = machine.load(&program).unwrap();
         let (_, shown) = machine.run_shown(loaded.entry, 10).unwrap();
-        assert_eq!(shown, "é7");
+        assert_eq!(shown.as_deref(), Some("é7"));
         machine.close().unwrap_or_else(|error| panic!("{error}"));
     }
 }

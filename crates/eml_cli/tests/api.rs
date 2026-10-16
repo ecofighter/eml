@@ -282,7 +282,7 @@ fn execute_counts_its_work() {
     let program = single(TWICE).compile().program.unwrap();
     let (host, output) = capture_host(std::path::PathBuf::new());
     let config = RunConfig::default().with_debug_heap(true);
-    let stats: eml_cli::RunStats = execute(&program, &config, host).unwrap();
+    let stats: eml_cli::RunStats = execute(&program, &config, host).unwrap().stats;
     assert_eq!(output.contents(), "xx\n");
     assert!(stats.string_bytes_copied > 0);
 }

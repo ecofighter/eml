@@ -193,16 +193,18 @@ pub enum Extern {
     StdinReadLine,
     WriteText,
     ProcStatus,
+    Exit,
 }
 
 pub struct FunctionRow {
     pub name: &'static str,
     /// 引数の Repr。数はシグネチャの一番外側の `->` の数と等しい。
     pub params: &'static [Repr],
-    /// 結果の Repr。データを返す行は、比べる extern と `Std.Env.has` の `Bool`、`compare` の `Ordering`、`Std.Fs.read_all`
-    /// の組である。`Bool` と `Ordering` のタグは決まっていて、組の配置は大きさだけで決まるので、行は配置を持たない。
-    /// `List` や `Option` は extern が作らず、標準ライブラリの eml が包む (docs/spec/core-ir.md の「translate の配置」)。
-    pub ret: Repr,
+    /// 結果の Repr。`Never` は戻らない extern で、`ret_kind` は読まない。データを返す行は、比べる extern と
+    /// `Std.Env.has` の `Bool`、`compare` の `Ordering`、`Std.Fs.read_all` の組である。`Bool` と `Ordering` のタグは
+    /// 決まっていて、組の配置は大きさだけで決まるので、行は配置を持たない。`List` や `Option` は extern が作らず、
+    /// 標準ライブラリの eml が包む (docs/spec/core-ir.md の「translate の配置」)。
+    pub ret: OpRet,
     /// 引数ごとの Kind。長さは `params` と同じである。LIR の verifier が、呼び出しの引数と結果の印をこの列と比べる
     /// (docs/spec/core-ir.md の「表の印の列」)。
     pub param_kinds: &'static [Linearity],
@@ -250,6 +252,7 @@ impl Extern {
         Extern::StdinReadLine,
         Extern::WriteText,
         Extern::ProcStatus,
+        Extern::Exit,
     ];
 
     pub fn row(self) -> FunctionRow {
@@ -267,7 +270,7 @@ impl Extern {
             FunctionRow {
                 name,
                 params,
-                ret,
+                ret: OpRet::Repr(ret),
                 param_kinds,
                 ret_kind,
                 purity,
@@ -340,6 +343,15 @@ impl Extern {
             }
             Extern::WriteText => row("Std.Fs.write_text", &[Obj, Obj], Unit, Purity::Effectful),
             Extern::ProcStatus => row("Std.Proc.status", &[Obj, Obj], Int, Purity::Effectful),
+            // 戻らない extern。VM が実行の底まで中断する (docs/spec/vm.md の「IO の失敗と `exit`」)
+            Extern::Exit => FunctionRow {
+                name: "Prelude.exit",
+                params: &[Repr::Int],
+                ret: OpRet::Never,
+                param_kinds: &[Linearity::Unr],
+                ret_kind: Linearity::Unr,
+                purity: Purity::Effectful,
+            },
         }
     }
 

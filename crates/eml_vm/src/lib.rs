@@ -42,6 +42,13 @@ pub struct RunStats {
     pub peak_stack: u64,
 }
 
+/// 1回の実行の結果。`exit` で終わったら、その終了コードを持つ (docs/spec/vm.md の「`RunStats`」)。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Finished {
+    pub stats: RunStats,
+    pub exit: Option<i64>,
+}
+
 /// VM だけが知る仕事の回数。検査モードだけで数える。
 #[derive(Debug, Default)]
 pub(crate) struct RunCounts {
@@ -87,14 +94,14 @@ pub fn execute(
     program: &Program,
     config: &RunConfig,
     host: HostRef,
-) -> Result<RunStats, RuntimeError> {
+) -> Result<Finished, RuntimeError> {
     let mut machine = AnyMachine::new(config, host);
     let loaded = machine
         .load(program)
         .map_err(|error| compile_error(program, error))?;
-    let stats = machine.run(loaded.entry)?;
+    let finished = machine.run(loaded.entry)?;
     machine.close()?;
-    Ok(stats)
+    Ok(finished)
 }
 
 /// `Machine::load` の結果。
@@ -174,20 +181,21 @@ impl<M: Mode> Machine<M> {
     /// 入口の関数を `()` で実行する。統計は `Machine` を作ってからの積算で、`peak_stack` だけがこの実行の値である。
     /// 根は手放さず、次の実行に残す。続けられる誤りの後は、根から届く物体を新しいヒープに写して古いヒープを捨て、
     /// 元の誤りを返す。回復が失敗したら `Unrecovered` を返す (docs/spec/vm.md の「追記」)。
-    pub fn run(&mut self, entry: u32) -> Result<RunStats, RuntimeError> {
-        self.run_recovering(entry, None).map(|(stats, _)| stats)
+    pub fn run(&mut self, entry: u32) -> Result<Finished, RuntimeError> {
+        self.run_recovering(entry, None)
+            .map(|(finished, _)| finished)
     }
 
     /// 文字列を返す入口の関数を実行し、結果の文字列の先頭 `max_chars` 文字を写して返す。REPL が式の入力の値を書いた
     /// 文字列を受け取るのに使う。LIR は入口が文字列を返すことを印さないので、呼ぶ側が文字列を返す入口にだけ使う。誤りと
-    /// 回復は `run` と同じである (docs/spec/vm.md の「追記」)。
+    /// 回復は `run` と同じである。`exit` で終わった実行は結果を返さないので、文字列は `None` になる
+    /// (docs/spec/vm.md の「追記」)。
     pub fn run_shown(
         &mut self,
         entry: u32,
         max_chars: usize,
-    ) -> Result<(RunStats, String), RuntimeError> {
+    ) -> Result<(Finished, Option<String>), RuntimeError> {
         self.run_recovering(entry, Some(max_chars))
-            .map(|(stats, text)| (stats, text.expect("a shown run copies its result")))
     }
 
     /// `line` を Host の標準出力に1行として書き、書き出す。REPL が整形した結果を書くのに使う。
@@ -199,7 +207,7 @@ impl<M: Mode> Machine<M> {
         &mut self,
         entry: u32,
         shown: Option<usize>,
-    ) -> Result<(RunStats, Option<String>), RuntimeError> {
+    ) -> Result<(Finished, Option<String>), RuntimeError> {
         match self.run_entry(entry, shown) {
             Err(cause) if !cause.is_broken() => Err(match self.recover() {
                 Ok(()) => cause,
@@ -237,7 +245,7 @@ impl<M: Mode> Machine<M> {
         &mut self,
         entry: u32,
         shown: Option<usize>,
-    ) -> Result<(RunStats, Option<String>), RuntimeError> {
+    ) -> Result<(Finished, Option<String>), RuntimeError> {
         let (code, ctx) = (&self.code, &mut self.ctx);
         let mut task = Task::new(code, entry, self.max_depth);
         if shown.is_some() {
@@ -256,8 +264,11 @@ impl<M: Mode> Machine<M> {
         let result = vm::run(code, ctx, &mut task, &mut counts);
         // 結果は `Finish` が手放さずに残した、VM の持つ参照である。書き出しの前に写すので、写すときの誤りも
         // 書き出しの誤りより先に報告する (docs/spec/vm.md の「誤り、止めること、終わり」)
-        let copied = match (&result, shown) {
-            (Ok(()), Some(max_chars)) => Some(unsafe { ctx.copy_string(task.get(0), max_chars) }),
+        // `exit` で終わった実行の入口の結果はダミーなので写さない
+        let copied = match (&result, shown, task.exit) {
+            (Ok(()), Some(max_chars), None) => {
+                Some(unsafe { ctx.copy_string(task.get(0), max_chars) })
+            }
             _ => None,
         };
         // 誤りを返す前にも書き出す。`> out 2>&1` のときに出力と誤りの順を保つためである
@@ -311,7 +322,13 @@ impl<M: Mode> Machine<M> {
                 0
             },
         };
-        Ok((stats, text))
+        Ok((
+            Finished {
+                stats,
+                exit: task.exit,
+            },
+            text,
+        ))
     }
 
     /// 実行の状態を閉じる。根の参照は VM が持つので先に手放す。検査モードでは、その後にヒープの不変条件を確かめ、
@@ -368,7 +385,7 @@ impl AnyMachine {
         }
     }
 
-    pub fn run(&mut self, entry: u32) -> Result<RunStats, RuntimeError> {
+    pub fn run(&mut self, entry: u32) -> Result<Finished, RuntimeError> {
         match self {
             AnyMachine::Fast(machine) => machine.run(entry),
             AnyMachine::Checked(machine) => machine.run(entry),
@@ -379,7 +396,7 @@ impl AnyMachine {
         &mut self,
         entry: u32,
         max_chars: usize,
-    ) -> Result<(RunStats, String), RuntimeError> {
+    ) -> Result<(Finished, Option<String>), RuntimeError> {
         match self {
             AnyMachine::Fast(machine) => machine.run_shown(entry, max_chars),
             AnyMachine::Checked(machine) => machine.run_shown(entry, max_chars),

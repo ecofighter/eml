@@ -239,6 +239,19 @@ fn the_uses_of_a_never_clause_binder_are_not_converted() {
 }
 
 #[test]
+fn the_result_of_exit_is_not_converted() {
+    // 戻らない extern の `int` の束縛を `tobj` を返す `return` に渡しても、受け直さず `box` もしない
+    let text =
+        "fn f(n.0: int) -> tobj {\n  let t.1: int = extern Prelude.exit(n.0)\n  return t.1\n}\n";
+    insta::assert_snapshot!(function(&boxing_text(text), "f"), @"
+    fn f(n.0: int) -> tobj {
+      let t.1: int = extern Prelude.exit(n.0)
+      return t.1
+    }
+    ");
+}
+
+#[test]
 fn a_clause_function_unboxes_its_return_to_a_scalar_operation_result() {
     // `Counter.get` の結果は `int` なので、節の関数の `ret` を `int` にし、`tobj` の値を返す `return` の前で `unbox` する
     let text = "effect Counter { get(unit) -> int, put(int) -> unit }\ninternal yields clause Counter.get fn g(e.0: obj, u.1: unit) -> tobj {\n  let s.2: tobj = prim ev_take_state(e.0)\n  return s.2\n}\nfn main() -> unit {\n  let w.0: tobj = prim evv_get()\n  let e.1: obj = prim ev_new[Counter]((), w.0)\n  let u.2: unit = prim ev_set_clause[Counter.get](e.1, &g)\n  return ()\n}\n";

@@ -39,6 +39,10 @@ pub extern println : String -> <IO> Unit
 -- 標準エラーに1行を書く。C の stdio と同じく、標準出力は書き出さない
 pub extern eprintln : String -> <IO> Unit
 
+-- 途中のフレームが持っていた値を後始末して、引数を終了コードにして終わる。`try_io` は捕まえない
+-- (docs/spec/stdlib.md の「`exit`」)
+pub extern exit : Int -> <IO> a
+
 pub not : Bool -> Bool
 not True = False
 not False = True

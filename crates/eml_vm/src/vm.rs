@@ -29,6 +29,8 @@ pub struct Task {
     pub(crate) entry: u32,
     /// `Finish` が結果を手放さずに残す。`Machine::run_shown` が、実行の後に結果の文字列を写して手放す。
     pub(crate) keep_result: bool,
+    /// `exit` の終了コード。立っていれば、中断が `Finish` まで届く (docs/spec/vm.md の「IO の失敗と `exit`」)。
+    pub(crate) exit: Option<i64>,
 }
 
 /// 誤りと、それが起きた命令の位置。
@@ -58,6 +60,7 @@ impl Task {
             stack_limit: stack_limit(max_depth),
             entry: index,
             keep_result: false,
+            exit: None,
         }
     }
 
@@ -476,8 +479,19 @@ fn call<M: Mode>(code: &CodeBase<M>, task: &mut Task, dst: Slot, at: u32) {
     task.pc = entry.start;
 }
 
-/// 入口の関数の結果を手放す (docs/spec/vm.md の「誤り、止めること、終わり」)。
+/// 入口の関数の結果か、`exit` の中断を手放す (docs/spec/vm.md の「誤り、止めること、終わり」)。
 fn finish<M: Mode>(code: &CodeBase<M>, ctx: &mut Ctx<M>, task: &Task) -> Result<(), VmFault> {
+    if task.exit.is_some() {
+        // 中断の κ を手放すと、途中のフレームが持っていた値が解放の連鎖で後始末される。入口の結果はダミーなので
+        // 手放さない。中断の途中の `evv` には意味がないので、空に戻す (docs/spec/vm.md の「IO の失敗と `exit`」)
+        let k = ctx.yield_cont_take()?;
+        unsafe {
+            ctx.heap_mut().decref(k)?;
+            ctx.yield_finish()?;
+            ctx.evv_set(Word::UNIT)?;
+        }
+        return Ok(());
+    }
     if code.functions[task.entry as usize].ret_rc && !task.keep_result {
         // 結果は入口の関数が返した、VM の持つ参照である
         unsafe { ctx.heap_mut().decref(task.get(0)) }?;
@@ -647,6 +661,12 @@ fn run_extern<M: Mode>(
                 let code = ctx.proc_status(task.get(arg(0)), task.get(arg(1)))?;
                 task.set_raw(dst, code);
             }
+            Extern::Exit => {
+                task.exit = Some(task.raw(arg(0)));
+                ctx.exit_abort()?;
+                let dummy = ctx.heap().dummy();
+                task.set(dst, dummy);
+            }
             Extern::IntNeg
             | Extern::IntAdd
             | Extern::IntSub
@@ -686,6 +706,7 @@ mod tests {
             stack_limit: stack_limit(max_depth),
             entry: 0,
             keep_result: false,
+            exit: None,
         }
     }
 

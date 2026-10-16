@@ -299,7 +299,7 @@ pub fn execute(
     config: &RunConfig,
 ) -> (String, Result<RunStats, RuntimeError>) {
     let (host, out) = eml_cli::capture_host(std::path::PathBuf::new());
-    let result = eml_cli::execute(program, config, host);
+    let result = eml_cli::execute(program, config, host).map(|finished| finished.stats);
     (out.contents(), result)
 }
 

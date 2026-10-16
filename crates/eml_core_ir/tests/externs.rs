@@ -3,7 +3,7 @@
 //! extern が作る値のタグと、translate が作る配置も照らし合わせる。
 
 use eml_core_ir::type_repr;
-use eml_extern::{Extern, ExternType, Linearity};
+use eml_extern::{Extern, ExternType, Linearity, OpRet};
 use eml_hir::{Function, FunctionKind, MethodImpl, TypeDefId, ValueItem};
 use eml_lir::{FALSE, TRUE, TUPLE};
 use eml_test_support::Checked;
@@ -137,30 +137,35 @@ fn has_type_var(types: &TypeStore, ty: TypeId) -> bool {
 
 #[test]
 fn every_extern_function_row_has_the_reprs_of_its_std_signature() {
-    // 行の Repr は型変数の位置を `tobj` として比べる。多相な extern は S12 で入り、そこで比べ方を決め直す
-    // (docs/future/roadmap.md)
+    // 行の Repr は引数の型と結果の型から比べる。型変数を持てるのは、戻らない extern の結果だけである
+    // (docs/spec/lir.md の「戻らない extern」)
     let checked = checked();
     let mut store = checked.typed.types.clone();
     for &e in Extern::ALL {
         let row = e.row();
         let mut ty = row_type(&checked, &mut store, e);
         let types = &store;
-        assert!(!has_type_var(types, ty), "{}", row.name);
         let mut params = Vec::new();
         for _ in row.params {
             let TypeKind::Fn { param, ret, .. } = types.kind(ty) else {
                 panic!("`{}` has an arrow per parameter", row.name);
             };
+            assert!(!has_type_var(types, *param), "{}", row.name);
             params.push(type_repr(types, *param, &checked.program));
             ty = *ret;
         }
         assert_eq!(params, row.params, "{}", row.name);
-        assert_eq!(
-            type_repr(types, ty, &checked.program),
-            row.ret,
-            "{}",
-            row.name
-        );
+        match row.ret {
+            OpRet::Repr(ret) => {
+                assert!(!has_type_var(types, ty), "{}", row.name);
+                assert_eq!(type_repr(types, ty, &checked.program), ret, "{}", row.name);
+            }
+            OpRet::Never => assert!(
+                has_type_var(types, ty),
+                "`{}` never returns, so its result is a type variable",
+                row.name
+            ),
+        }
     }
 }
 
@@ -182,7 +187,9 @@ fn every_extern_function_row_has_the_kinds_of_its_std_signature() {
             ty = *ret;
         }
         assert_eq!(params, row.param_kinds, "{}", row.name);
-        assert_eq!(kind_of(types.linearity(ty)), row.ret_kind, "{}", row.name);
+        if let OpRet::Repr(_) = row.ret {
+            assert_eq!(kind_of(types.linearity(ty)), row.ret_kind, "{}", row.name);
+        }
     }
 }
 

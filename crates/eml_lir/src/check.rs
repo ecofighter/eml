@@ -390,8 +390,8 @@ pub struct Context<'a> {
     /// 境界 (呼び出しの引数と結果、`closure` の引数、関数の値の対象が一様であること、`tobj` のフィールド) を比べるか。
     /// box の挿入の後の段だけで比べる。extern、基本操作、`clause` の印も、この段だけで比べる。
     pub boundaries: bool,
-    /// 変数の番号ごとの、`never` の操作の `perform` か `clause` の束縛かどうか。束縛の使いには制御が届かないので、
-    /// 互換の位置で位置と比べない。
+    /// 変数の番号ごとの、`never` の操作の `perform` か `clause` の束縛か、戻らない extern の束縛かどうか。束縛の使いには
+    /// 制御が届かないので、互換の位置で位置と比べない。
     never: Vec<bool>,
     /// `closure` で束縛した変数の関数と、捕獲した値の数。`ev_set_clause` の入口の関数と、Core IR の `handle` の節の
     /// 引数の数を確かめるのに使う。
@@ -446,8 +446,9 @@ impl<'a> Context<'a> {
     }
 
     /// 互換の位置に収まる値。規則は box の挿入と同じ `Atom::fits_compatible` で、`never` の操作の `perform` と
-    /// `clause` の束縛は、それに加えて、どの位置にも収まる。範囲の段と所有の段では、収まった `&g` の g が一様でなければ誤りにする。
-    /// 境界を比べない段では見ない。translate は、一様でない g の `&g` を `jump` に渡しうるからである。
+    /// `clause` の束縛と、戻らない extern の束縛は、それに加えて、どの位置にも収まる。範囲の段と所有の段では、収まった
+    /// `&g` の g が一様でなければ誤りにする。境界を比べない段では見ない。translate は、一様でない g の `&g` を `jump` に
+    /// 渡しうるからである。
     pub fn passes(&self, atom: Atom, expected: Repr) -> Result<bool, String> {
         let passes = match atom {
             Atom::Var(var) if self.never[var.0 as usize] => true,
@@ -763,29 +764,36 @@ impl<'a> Context<'a> {
             }
             self.fn_atom(arg)?;
         }
+        if self.boundaries {
+            for (index, (&arg, &kind)) in args.iter().zip(row.param_kinds).enumerate() {
+                let expected = Mark::from(kind);
+                if !self.mark_passes(arg, expected) {
+                    return Err(format!(
+                        "argument {index} of `{}` is {}, but the extern takes {}",
+                        row.name,
+                        self.marked_atom_text(arg),
+                        expected.name()
+                    ));
+                }
+            }
+        }
+        // 戻らない extern の束縛は位置でなく、translate が具体化した型の Repr と印を持つ
+        // (docs/spec/lir.md の「戻らない extern」)
+        let OpRet::Repr(ret) = row.ret else {
+            return Ok(());
+        };
         let repr = self.repr(var);
-        if repr != row.ret {
+        if repr != ret {
             return Err(format!(
                 "`{}` ({}) is bound to `{}`, which returns {}",
                 self.name(var),
                 repr.name(),
                 row.name,
-                row.ret.name()
+                ret.name()
             ));
         }
         if !self.boundaries {
             return Ok(());
-        }
-        for (index, (&arg, &kind)) in args.iter().zip(row.param_kinds).enumerate() {
-            let expected = Mark::from(kind);
-            if !self.mark_passes(arg, expected) {
-                return Err(format!(
-                    "argument {index} of `{}` is {}, but the extern takes {}",
-                    row.name,
-                    self.marked_atom_text(arg),
-                    expected.name()
-                ));
-            }
         }
         self.bound_mark(var, Mark::from(row.ret_kind), || format!("`{}`", row.name))
     }

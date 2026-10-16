@@ -123,6 +123,20 @@ fn run_opens_an_absolute_path_as_is() {
 }
 
 #[test]
+fn exit_ends_with_its_code_modulo_256() {
+    let output = eml(&["run", "--debug-heap", "run/io/exit_code.em"]);
+    assert_eq!(output.status.code(), Some(3));
+    assert_eq!(String::from_utf8_lossy(&output.stdout), "before\n");
+    let dir = temp_project(
+        "cli-exit",
+        &[("main.em", "main : Unit -> <IO> Unit\nmain () = exit 259\n")],
+    );
+    let output = eml_in(&dir, &["main.em"]);
+    std::fs::remove_dir_all(&dir).unwrap();
+    assert_eq!(output.status.code(), Some(3));
+}
+
+#[test]
 fn a_missing_module_is_a_diagnostic_error() {
     let dir = temp_project("cli-missing", &[("main.em", "import Missing\n")]);
     let output = eml_in(&dir, &["check", "main.em"]);

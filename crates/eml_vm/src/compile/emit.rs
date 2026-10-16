@@ -793,7 +793,8 @@ fn arithmetic(ext: Extern, dst: Slot, args: &[Slot]) -> Option<Op> {
         | Extern::StdinReadAll
         | Extern::StdinReadLine
         | Extern::WriteText
-        | Extern::ProcStatus => return None,
+        | Extern::ProcStatus
+        | Extern::Exit => return None,
     })
 }
 

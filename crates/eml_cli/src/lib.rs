@@ -18,7 +18,7 @@ pub use eml_hir::{ModulePath, ModuleSource, ReadError};
 pub use eml_syntax::{InputStatus, input_status};
 #[cfg(feature = "run")]
 pub use eml_vm::{
-    Capture, CaptureHost, Control, HostRef, Limits, RunConfig, RunStats, RuntimeError,
+    Capture, CaptureHost, Control, Finished, HostRef, Limits, RunConfig, RunStats, RuntimeError,
     SourceLocation, Stop, VmFault, Written, capture_host, script_host, stdio_host,
 };
 pub use fs_provider::FsProvider;
@@ -244,13 +244,13 @@ impl Session {
     }
 }
 
-/// 仕事の回数 (`RunStats`) はテストが比べるためのもので、CLI は使わない。
+/// 結果の終了コードは CLI が使い、仕事の回数 (`RunStats`) はテストが比べるためのもので、CLI は使わない。
 #[cfg(feature = "run")]
 pub fn execute(
     program: &eml_lir::Program,
     config: &RunConfig,
     host: HostRef,
-) -> Result<RunStats, RuntimeError> {
+) -> Result<Finished, RuntimeError> {
     eml_vm::execute(program, config, host)
 }
 

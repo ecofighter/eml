@@ -82,7 +82,8 @@ fn main() -> ExitCode {
             };
             // 相対パスはカレントディレクトリを基準にする
             match eml_cli::execute(&program, &config, script_host(PathBuf::new(), script_args)) {
-                Ok(_) => ExitCode::SUCCESS,
+                // シェルと同じく、終了コードは下の 8 ビットである (docs/spec/stdlib.md の「`exit`」)
+                Ok(finished) => ExitCode::from(finished.exit.map_or(0, |code| (code & 255) as u8)),
                 Err(error) => {
                     eprintln!("runtime error: {error}");
                     // 130 は、シェルが SIGINT で終わった子に報告する値である

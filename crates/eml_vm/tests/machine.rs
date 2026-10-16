@@ -413,7 +413,7 @@ fn third() -> unit {
     let mut machine = Machine::<Checked>::new(RunConfig::default().control, host);
     let mut run = |text: &str| {
         let loaded = machine.load(&parse(text)).unwrap();
-        machine.run(loaded.entry)
+        machine.run(loaded.entry).map(|finished| finished.stats)
     };
     let before = run(first).unwrap_or_else(|error| panic!("{error}"));
     assert_eq!(before.peak_objects, 4, "{before:?}");
@@ -504,11 +504,11 @@ fn a_shown_entry_returns_its_text_after_the_output() {
         eml_lir::verify(&program).unwrap_or_else(|error| panic!("{error}"));
         let loaded = machine.load(&program).unwrap();
         let (_, text) = machine.run_shown(loaded.entry, 100).unwrap();
-        assert_eq!(text, "x = 42");
+        assert_eq!(text.as_deref(), Some("x = 42"));
         // 入口が書いた行は、結果を返す前に書き出してある
         assert_eq!(out.contents(), "printed\n");
         let (_, text) = machine.run_shown(loaded.entry, 3).unwrap();
-        assert_eq!(text, "x =");
+        assert_eq!(text.as_deref(), Some("x ="));
         machine.write_line("x = 42 : Int").unwrap();
         assert_eq!(out.contents(), "printed\nprinted\nx = 42 : Int\n");
         machine.close().unwrap_or_else(|error| panic!("{error}"));

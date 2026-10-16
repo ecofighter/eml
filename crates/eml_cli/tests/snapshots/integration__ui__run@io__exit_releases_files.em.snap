@@ -1,0 +1,8 @@
+---
+source: crates/eml_cli/tests/ui.rs
+expression: "format!(\"--- stdout ---\\n{stdout}--- stderr ---\\n{stderr}{written}{exit}\")"
+input_file: tests/ui/run/io/exit_releases_files.em
+---
+--- stdout ---
+--- stderr ---
+--- exit: 4 ---

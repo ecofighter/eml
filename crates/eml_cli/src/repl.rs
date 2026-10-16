@@ -353,7 +353,7 @@ impl Repl {
             Some(_) => self
                 .machine
                 .run_shown(loaded.entry, pretty::LIMIT + 1)
-                .map(|(_, text)| Some(text)),
+                .map(|(_, text)| text),
             None => self.machine.run(loaded.entry).map(|_| None),
         };
         match (result, shown) {

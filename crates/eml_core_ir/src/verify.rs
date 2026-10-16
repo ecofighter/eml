@@ -281,12 +281,14 @@ impl<'a> Checker<'a> {
                     Rhs::Prim(Prim::EvNew(effect), _) => {
                         self.cx.note_evidence(*var, *effect);
                     }
-                    Rhs::Prim(_, _)
-                    | Rhs::Extern {
-                        ext: _,
+                    Rhs::Extern {
+                        ext,
                         args: _,
                         at: _,
+                    } => {
+                        self.cx.note_never(*var, ext.row().ret == OpRet::Never);
                     }
+                    Rhs::Prim(_, _)
                     | Rhs::ConstString(_)
                     | Rhs::Con { ctor: _, args: _ }
                     | Rhs::Drop(_) => {}

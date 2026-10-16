@@ -124,11 +124,12 @@ fn compile(path: &Path, suffix: &str) -> (eml_lir::Program, PathBuf, String) {
     (program, root, stderr)
 }
 
-/// 実行の結果。`written` は `Fs.write_text` が書いたファイルを、スナップショットに足す形に並べたものである。
+/// 実行の結果。`written` は `Fs.write_text` が書いたファイルを、スナップショットに足す形に並べたものである。`result` の
+/// `Ok` は `exit` の終了コードである。
 struct Ran {
     stdout: String,
     written: String,
-    result: Result<(), RuntimeError>,
+    result: Result<Option<i64>, RuntimeError>,
 }
 
 /// テストの入力のファイル `<名前>.em` の隣にある付属のファイルから、テストの Host を作る。`.args` は1行に1つの引数、
@@ -171,7 +172,7 @@ fn execute_in(program: &eml_lir::Program, path: &Path, root: &Path, debug_heap: 
     let config = RunConfig::default()
         .with_debug_heap(debug_heap)
         .with_control(Arc::new(Control::new(default_limits())));
-    let result = execute(program, &config, host.into_ref()).map(drop);
+    let result = execute(program, &config, host.into_ref()).map(|finished| finished.exit);
     let written = files
         .files()
         .into_iter()
@@ -209,7 +210,7 @@ fn assert_fast_mode_agrees(
         checked
             .result
             .as_ref()
-            .map(|_| ())
+            .copied()
             .map_err(ToString::to_string),
         "{suffix}: the fast mode ended otherwise"
     );
@@ -237,11 +238,15 @@ fn run() {
         };
         let (program, root, stderr) = compile(path, &suffix);
         let ran = execute_in(&program, path, &root, true);
-        assert_eq!(ran.result, Ok(()), "{stderr}");
+        assert!(ran.result.is_ok(), "{:?}\n{stderr}", ran.result);
         let (stdout, written) = (&ran.stdout, &ran.written);
+        let exit = match ran.result {
+            Ok(Some(code)) => format!("--- exit: {code} ---\n"),
+            _ => String::new(),
+        };
         snapshot_settings(&suffix).bind(|| {
             insta::assert_snapshot!(format!(
-                "--- stdout ---\n{stdout}--- stderr ---\n{stderr}{written}"
+                "--- stdout ---\n{stdout}--- stderr ---\n{stderr}{written}{exit}"
             ));
         });
         assert_fast_mode_agrees(&suffix, &program, path, &root, &ran);

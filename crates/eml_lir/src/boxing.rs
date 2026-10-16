@@ -355,7 +355,8 @@ struct Converter<'a> {
     unboxed_from: HashMap<VarId, VarId>,
     /// `let v = box w` の v から w。v を w と同じ Repr のスカラーの位置へ渡すときは、`unbox` を作らずに w を渡す。
     boxed_from: HashMap<VarId, VarId>,
-    /// 変数の番号ごとの、`never` の操作の節の呼び出しの束縛かどうか。束縛の使いには制御が届かないので、変換しない。
+    /// 変数の番号ごとの、`never` の操作の `perform` か `clause` の束縛か、戻らない extern の束縛かどうか。束縛の使いには
+    /// 制御が届かないので、変換しない。
     never: Vec<bool>,
 }
 
@@ -540,16 +541,17 @@ impl Converter<'_> {
                         self.boxed_from.insert(var, *from);
                         None
                     }
-                    // extern の引数と結果は表の行と同じ Repr で、translate の出力ですでに合っている
+                    // extern の引数と結果は表の行と同じ Repr で、translate の出力ですでに合っている。戻らない extern の
+                    // 束縛には制御が届かないので、使う所も変換しない (docs/spec/lir.md の「戻らない extern」)
                     Rhs::Extern {
-                        ext: _,
+                        ext,
                         args: _,
                         at: _,
+                    } => {
+                        self.never[var.0 as usize] = ext.row().ret == OpRet::Never;
+                        None
                     }
-                    | Rhs::ConstString(_)
-                    | Rhs::Drop(_)
-                    | Rhs::Box(_)
-                    | Rhs::Unbox(_) => None,
+                    Rhs::ConstString(_) | Rhs::Drop(_) | Rhs::Box(_) | Rhs::Unbox(_) => None,
                 };
                 let mut after = Vec::new();
                 let bound = match given {
