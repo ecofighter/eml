@@ -48,11 +48,14 @@ pub fn run(debug_heap: bool, file: Option<PathBuf>) -> ExitCode {
     };
     // Host の相対パスは、`eml run` と同じくカレントディレクトリを基準にする
     let host = stdio_host(PathBuf::new());
-    let repl = empty_session(&config, &host);
+    // 端末の大きさの変更は追わない (docs/spec/repl.md の「結果の表示」)
+    let width = stdout_width();
+    let repl = empty_session(&config, &host, width);
     let mut terminal = Terminal {
         config,
         control,
         host,
+        width,
         repl,
         file: None,
         close_failed: false,
@@ -98,13 +101,41 @@ pub fn run(debug_heap: bool, file: Option<PathBuf>) -> ExitCode {
 }
 
 /// import の根はカレントディレクトリである (docs/spec/repl.md の「コマンドライン」)。
-fn empty_session(config: &RunConfig, host: &HostRef) -> Repl {
-    Repl::new(
+fn empty_session(config: &RunConfig, host: &HostRef, width: usize) -> Repl {
+    let mut repl = Repl::new(
         config,
         Box::new(FsProvider::new(Path::new(""))),
         "",
         host.clone(),
-    )
+    );
+    repl.set_width(width);
+    repl
+}
+
+/// 標準出力の端末の列の数。端末でないか、読めないか、0 なら 80 である (docs/spec/repl.md の「結果の表示」)。
+#[cfg(unix)]
+fn stdout_width() -> usize {
+    if !io::stdout().is_terminal() {
+        return 80;
+    }
+    let mut size = libc::winsize {
+        ws_row: 0,
+        ws_col: 0,
+        ws_xpixel: 0,
+        ws_ypixel: 0,
+    };
+    // TIOCGWINSZ は渡した `winsize` に書くだけで、ほかの前提を持たない。読めなければ -1 を返し、`size` は 0 のままである
+    let read = unsafe { libc::ioctl(libc::STDOUT_FILENO, libc::TIOCGWINSZ, &mut size) };
+    if read == 0 && size.ws_col > 0 {
+        usize::from(size.ws_col)
+    } else {
+        80
+    }
+}
+
+#[cfg(not(unix))]
+fn stdout_width() -> usize {
+    80
 }
 
 /// 端末のセッション。`:load` はセッションを作り直すので、作るのに要る `RunConfig` と `HostRef` を持つ
@@ -113,6 +144,8 @@ struct Terminal {
     config: RunConfig,
     control: Arc<Control>,
     host: HostRef,
+    /// 結果を整形する幅。`:load` で作り直すセッションにも渡す。
+    width: usize,
     repl: Repl,
     /// `:reload` で読み直すファイルの表示のパス。
     file: Option<String>,
@@ -145,13 +178,14 @@ impl Terminal {
             .parent()
             .filter(|dir| !dir.as_os_str().is_empty())
             .unwrap_or(Path::new(""));
-        let (repl, evaluated) = Repl::with_file(
+        let (mut repl, evaluated) = Repl::with_file(
             &self.config,
             shown,
             text,
             Box::new(FsProvider::new(dir)),
             self.host.clone(),
         );
+        repl.set_width(self.width);
         self.repl = repl;
         self.file = Some(shown.to_string());
         show(evaluated)
@@ -159,7 +193,10 @@ impl Terminal {
 
     /// 古いセッションを先に閉じるのは、閉じる誤りがファイルの診断より前に出るようにするためである。
     fn replace_with_empty(&mut self) {
-        let old = std::mem::replace(&mut self.repl, empty_session(&self.config, &self.host));
+        let old = std::mem::replace(
+            &mut self.repl,
+            empty_session(&self.config, &self.host, self.width),
+        );
         if let Some(error) = old.close().leaks {
             eprintln!("runtime error: {error}");
             self.close_failed = true;

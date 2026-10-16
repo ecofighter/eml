@@ -1282,3 +1282,21 @@ fn a_result_is_cut_after_ten_thousand_chars() {
         format!("({} ... : (Big, Int -> Int)\n", "x".repeat(9_999))
     );
 }
+
+/// `set_width` の幅で整形する。20 より狭い幅は 20 にする (docs/spec/repl.md の「結果の表示」)。
+#[test]
+fn set_width_formats_results_at_that_width() {
+    let mut console = Console::new(&RunConfig::default());
+    let numbers = "[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]";
+    assert_eq!(console.eval(numbers).1, format!("{numbers}\n"));
+    console.repl.set_width(30);
+    assert_eq!(
+        console.eval(numbers).1,
+        "[ 1, 2, 3, 4, 5, 6, 7, 8, 9\n, 10, 11, 12 ]\n"
+    );
+    console.repl.set_width(5);
+    assert_eq!(
+        console.eval(numbers).1,
+        "[ 1, 2, 3, 4, 5, 6\n, 7, 8, 9, 10, 11\n, 12 ]\n"
+    );
+}

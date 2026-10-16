@@ -331,6 +331,37 @@ fn repl_evaluates_an_unfinished_input_at_eof() {
     assert!(stderr(&output).contains("[E2001]"), "{}", stderr(&output));
 }
 
+/// 標準出力がパイプなら 80 列で整形する (docs/spec/repl.md の「結果の表示」)。
+#[test]
+fn a_piped_repl_formats_at_eighty_columns() {
+    let pairs = format!("[(1, \"{}\"), (2, \"{}\")]", "a".repeat(40), "b".repeat(40));
+    let output = repl(&format!("{pairs}\n"));
+    assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
+    assert_eq!(
+        stdout(&output),
+        format!(
+            "[ (1, \"{}\")\n, (2, \"{}\")\n]\n",
+            "a".repeat(40),
+            "b".repeat(40)
+        )
+    );
+}
+
+/// 結果は書いた後に書き出すので、パイプでも次の入力を読む前に届く。届かなければ `out_line` が待ち続ける。
+#[test]
+fn a_result_arrives_before_the_next_read() {
+    let dir = temp_project("result-flush", &[]);
+    let mut session = Session::start(&dir);
+    session.send("(1, fn x -> x + 1)\n");
+    assert_eq!(session.out_line(), "(1, <fn>) : (Int, Int -> Int)\n");
+    session.send("2 + 3\n");
+    assert_eq!(session.out_line(), "5\n");
+    let (out, err, code) = session.finish();
+    std::fs::remove_dir_all(&dir).unwrap();
+    assert_eq!(code, Some(0), "{err}");
+    assert_eq!(out, "");
+}
+
 #[cfg(unix)]
 mod interrupts {
     use std::io::{BufRead, BufReader, Read, Write};

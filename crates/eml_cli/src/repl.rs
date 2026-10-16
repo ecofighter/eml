@@ -14,8 +14,9 @@ use eml_vm::{AnyMachine, Control, HostRef, RunConfig, RuntimeError, SourceLocati
 
 use crate::{Session, pretty};
 
-/// 結果を整形する既定の幅 (docs/spec/repl.md の「結果の表示」)。
+/// 結果を整形する既定の幅と、いちばん狭い幅 (docs/spec/repl.md の「結果の表示」)。
 const DEFAULT_WIDTH: usize = 80;
+const MIN_WIDTH: usize = 20;
 
 /// REPL のセッション。端末は `eml repl` で、`terminal.rs` が使う。
 pub struct Repl {
@@ -151,6 +152,11 @@ impl Repl {
         repl.file = Some(path.to_string());
         let evaluated = repl.evaluate(text, Form::File);
         (repl, evaluated)
+    }
+
+    /// 結果を整形する幅を変える。20 より狭い幅は 20 にする。端末は列の数を渡す。
+    pub fn set_width(&mut self, width: usize) {
+        self.width = width.max(MIN_WIDTH);
     }
 
     pub fn eval(&mut self, text: &str) -> Evaluated {
