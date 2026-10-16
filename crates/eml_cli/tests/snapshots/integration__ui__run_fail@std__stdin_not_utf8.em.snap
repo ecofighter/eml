@@ -1,0 +1,9 @@
+---
+source: crates/eml_cli/tests/ui.rs
+expression: "format!(\"--- stdout ---\\n{stdout}--- runtime error ---\\n{error}\\n{written}\")"
+input_file: tests/ui/run-fail/std/stdin_not_utf8.em
+---
+--- stdout ---
+--- runtime error ---
+the standard input is not valid UTF-8
+  at run-fail/std/stdin_not_utf8.em:2:20

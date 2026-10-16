@@ -1,12 +1,10 @@
 //! LIR を実行するレジスタ型のバイトコード VM (docs/spec/vm.md)。`eml_rt` の `Ctx` の上で動き、フロントエンドに
 //! 依存しない。
 
-use std::io::{self, Write};
-use std::path::PathBuf;
-use std::sync::{Arc, Mutex, PoisonError};
+use std::sync::Arc;
 
 use eml_lir::Program;
-use eml_rt::{Buffering, Checked, Ctx, Fast, Fault, HeapError, Mode, Stats, StdHost};
+use eml_rt::{Checked, Ctx, Fast, Fault, HeapError, Mode, Stats};
 
 mod apply;
 mod code;
@@ -14,6 +12,7 @@ mod compile;
 mod data;
 mod disasm;
 mod error;
+mod hosts;
 mod op;
 mod vm;
 
@@ -22,6 +21,7 @@ pub use compile::compile;
 pub use disasm::disassemble;
 pub use eml_rt::{Control, HostRef, Limits, Stop};
 pub use error::{RuntimeError, SourceLocation, VmFault};
+pub use hosts::{Capture, CaptureHost, Written, capture_host, script_host, stdio_host};
 pub use vm::Task;
 
 /// 実行の仕事の回数と、同時に生きていたヒープの物体の数とスタックの語の数の最大。検査モードだけで数える。
@@ -443,46 +443,4 @@ pub fn compile_error(program: &Program, error: CompileError) -> RuntimeError {
         function,
         at: None,
     }
-}
-
-/// 書いたバイト列を覚える書き込み先。テストが出力を読むために使う。
-#[derive(Clone, Default)]
-pub struct Capture(Arc<Mutex<Vec<u8>>>);
-
-impl Capture {
-    pub fn contents(&self) -> String {
-        let bytes = self.0.lock().unwrap_or_else(PoisonError::into_inner);
-        String::from_utf8(bytes.clone()).expect("the output is UTF-8")
-    }
-}
-
-impl Write for Capture {
-    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
-        self.0
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .extend_from_slice(buf);
-        Ok(buf.len())
-    }
-
-    fn flush(&mut self) -> io::Result<()> {
-        Ok(())
-    }
-}
-
-/// 標準出力をメモリに捕まえる Host。`file_root` は `Fs.open` の相対パスの基準である。
-pub fn capture_host(file_root: PathBuf) -> (HostRef, Capture) {
-    let out = Capture::default();
-    let host = StdHost::new(
-        Box::new(out.clone()),
-        Box::new(io::sink()),
-        file_root,
-        Buffering::Block,
-    );
-    (HostRef::new(Arc::new(host)), out)
-}
-
-/// 標準出力と標準エラーに書く Host。
-pub fn stdio_host(file_root: PathBuf) -> HostRef {
-    HostRef::new(Arc::new(StdHost::stdio(file_root)))
 }

@@ -18,8 +18,8 @@ pub use eml_hir::{ModulePath, ModuleSource, ReadError};
 pub use eml_syntax::{InputStatus, input_status};
 #[cfg(feature = "run")]
 pub use eml_vm::{
-    Capture, Control, HostRef, Limits, RunConfig, RunStats, RuntimeError, SourceLocation, Stop,
-    VmFault, capture_host, stdio_host,
+    Capture, CaptureHost, Control, HostRef, Limits, RunConfig, RunStats, RuntimeError,
+    SourceLocation, Stop, VmFault, Written, capture_host, script_host, stdio_host,
 };
 pub use fs_provider::FsProvider;
 #[cfg(feature = "run")]

@@ -2,12 +2,13 @@
 //! 誤っても、成功と失敗の入れ替わりを検出できるようにするため。テストはその下の分類のサブディレクトリに置き、1つの
 //! ファイルか、`main.em` を入口とする1つのディレクトリである (docs/implementation/testing.md の「UI テスト」)。
 
+use std::ffi::OsString;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use eml_cli::{
-    Control, FsProvider, RunConfig, RuntimeError, Session, VmFault, capture_host, default_limits,
+    CaptureHost, Control, FsProvider, RunConfig, RuntimeError, Session, VmFault, default_limits,
     execute,
 };
 use eml_diagnostics::{has_errors, render};
@@ -123,19 +124,64 @@ fn compile(path: &Path, suffix: &str) -> (eml_lir::Program, PathBuf, String) {
     (program, root, stderr)
 }
 
+/// 実行の結果。`written` は `Fs.write_text` が書いたファイルを、スナップショットに足す形に並べたものである。
+struct Ran {
+    stdout: String,
+    written: String,
+    result: Result<(), RuntimeError>,
+}
+
+/// テストの入力のファイル `<名前>.em` の隣にある付属のファイルから、テストの Host を作る。`.args` は1行に1つの引数、
+/// `.stdin` はそのままのバイト列、`.env` は `KEY=VALUE` の行で、どれも省ける (docs/implementation/testing.md の
+/// 「UI テスト」)。
+fn host_for(path: &Path, root: &Path) -> CaptureHost {
+    let read = |extension: &str| fs::read(path.with_extension(extension)).ok();
+    let lines = |bytes: Vec<u8>| -> Vec<String> {
+        String::from_utf8(bytes)
+            .expect("a side file is UTF-8")
+            .lines()
+            .map(str::to_string)
+            .collect()
+    };
+    let mut host = CaptureHost::new(root.to_path_buf());
+    if let Some(args) = read("args") {
+        host = host.with_args(lines(args).into_iter().map(OsString::from).collect());
+    }
+    if let Some(stdin) = read("stdin") {
+        host = host.with_stdin(stdin);
+    }
+    if let Some(env) = read("env") {
+        let env = lines(env)
+            .into_iter()
+            .map(|line| {
+                let (key, value) = line.split_once('=').expect("a `.env` line is KEY=VALUE");
+                (key.to_string(), OsString::from(value))
+            })
+            .collect();
+        host = host.with_env(env);
+    }
+    host
+}
+
 /// `eml run` と同じ既定の上限で流す。止める理由のビットは `Control::clear` でしか下りないので、実行ごとに新しい
 /// `Control` を持つ設定を作る。使い回すと、前の実行で立ったビットで次の実行がすぐ止まる。
-fn execute_in(
-    program: &eml_lir::Program,
-    root: &Path,
-    debug_heap: bool,
-) -> (String, Result<(), RuntimeError>) {
-    let (host, out) = capture_host(root.to_path_buf());
+fn execute_in(program: &eml_lir::Program, path: &Path, root: &Path, debug_heap: bool) -> Ran {
+    let host = host_for(path, root);
+    let (out, files) = (host.output(), host.written());
     let config = RunConfig::default()
         .with_debug_heap(debug_heap)
         .with_control(Arc::new(Control::new(default_limits())));
-    let result = execute(program, &config, host).map(drop);
-    (out.contents(), result)
+    let result = execute(program, &config, host.into_ref()).map(drop);
+    let written = files
+        .files()
+        .into_iter()
+        .map(|(path, text)| format!("--- written: {path} ---\n{text}"))
+        .collect();
+    Ran {
+        stdout: out.contents(),
+        written,
+        result,
+    }
 }
 
 /// 検査モードの結果をスナップショットと比べた後で、速いモードでも流し、同じ出力と同じ結果になることを確かめる。
@@ -145,18 +191,26 @@ fn execute_in(
 fn assert_fast_mode_agrees(
     suffix: &str,
     program: &eml_lir::Program,
+    path: &Path,
     root: &Path,
-    stdout: &str,
-    result: &Result<(), RuntimeError>,
+    checked: &Ran,
 ) {
-    let (fast_stdout, fast) = execute_in(program, root, false);
+    let fast = execute_in(program, path, root, false);
     assert_eq!(
-        fast_stdout, stdout,
+        fast.stdout, checked.stdout,
         "{suffix}: the fast mode printed something else"
     );
     assert_eq!(
-        fast.map_err(|error| error.to_string()),
-        result.as_ref().map(|_| ()).map_err(ToString::to_string),
+        fast.written, checked.written,
+        "{suffix}: the fast mode wrote other files"
+    );
+    assert_eq!(
+        fast.result.map_err(|error| error.to_string()),
+        checked
+            .result
+            .as_ref()
+            .map(|_| ())
+            .map_err(ToString::to_string),
         "{suffix}: the fast mode ended otherwise"
     );
 }
@@ -182,12 +236,15 @@ fn run() {
             return;
         };
         let (program, root, stderr) = compile(path, &suffix);
-        let (stdout, result) = execute_in(&program, &root, true);
-        assert_eq!(result, Ok(()), "{stderr}");
+        let ran = execute_in(&program, path, &root, true);
+        assert_eq!(ran.result, Ok(()), "{stderr}");
+        let (stdout, written) = (&ran.stdout, &ran.written);
         snapshot_settings(&suffix).bind(|| {
-            insta::assert_snapshot!(format!("--- stdout ---\n{stdout}--- stderr ---\n{stderr}"));
+            insta::assert_snapshot!(format!(
+                "--- stdout ---\n{stdout}--- stderr ---\n{stderr}{written}"
+            ));
         });
-        assert_fast_mode_agrees(&suffix, &program, &root, &stdout, &result);
+        assert_fast_mode_agrees(&suffix, &program, path, &root, &ran);
     });
 }
 
@@ -199,17 +256,18 @@ fn run_fail() {
             return;
         };
         let (program, root, _) = compile(path, &suffix);
-        let (stdout, result) = execute_in(&program, &root, true);
-        let Err(error) = &result else {
+        let ran = execute_in(&program, path, &root, true);
+        let Err(error) = &ran.result else {
             panic!("expected a runtime error");
         };
+        let (stdout, written) = (&ran.stdout, &ran.written);
         snapshot_settings(&suffix).bind(|| {
             insta::assert_snapshot!(format!(
-                "--- stdout ---\n{stdout}--- runtime error ---\n{error}\n"
+                "--- stdout ---\n{stdout}--- runtime error ---\n{error}\n{written}"
             ));
         });
         if fast_mode_reports(error) {
-            assert_fast_mode_agrees(&suffix, &program, &root, &stdout, &result);
+            assert_fast_mode_agrees(&suffix, &program, path, &root, &ran);
         }
     });
 }

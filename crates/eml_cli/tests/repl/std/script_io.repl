@@ -1,0 +1,5 @@
+# REPL のプログラムは引数を持たず、標準入力は REPL 自身が読むので使えない。標準入力の誤りの後もセッションは続く
+> Env.args ()
+> Stdin.read_all ()
+> Stdin.read_line ()
+> 1 + 1

@@ -1,0 +1,17 @@
+---
+source: crates/eml_cli/tests/repl.rs
+expression: checked.render()
+input_file: crates/eml_cli/tests/repl/std/script_io.repl
+---
+> Env.args ()
+[]
+> Stdin.read_all ()
+runtime error: cannot read the standard input: not available
+  at <input 2>:1:1
+> Stdin.read_line ()
+runtime error: cannot read the standard input: not available
+  at <std>/Stdin.em:11:14
+> 1 + 1
+2
+--- close ---
+no leaks

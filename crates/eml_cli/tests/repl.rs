@@ -9,8 +9,8 @@ use std::sync::Arc;
 
 use eml_cli::lines::{Command, Lines, Step};
 use eml_cli::{
-    Control, Evaluated, FsProvider, HostRef, InputStatus, Outcome, Repl, RunConfig, RuntimeError,
-    capture_host, default_limits, input_status,
+    CaptureHost, Control, Evaluated, FsProvider, HostRef, InputStatus, Outcome, Repl, RunConfig,
+    RuntimeError, default_limits, input_status,
 };
 
 use crate::common::glob_lock;
@@ -294,7 +294,10 @@ impl Runner<'_> {
 /// `eml run` と同じ既定の上限で流す。止める理由のビットは `eval` が入力ごとに下ろすので、1つの `Control` を
 /// トランスクリプト全体で使う。`directory` は `<名前>/main.repl` の形のトランスクリプトかである。
 fn run(inputs: &[Input], root: &Path, directory: bool, debug_heap: bool) -> Transcript {
-    let (host, out) = capture_host(root.to_path_buf());
+    // REPL は標準入力から入力を読むので、プログラムには標準入力を渡さない (docs/spec/repl.md)
+    let host = CaptureHost::new(root.to_path_buf()).without_stdin();
+    let out = host.output();
+    let host = host.into_ref();
     let config = RunConfig::default()
         .with_debug_heap(debug_heap)
         .with_control(Arc::new(Control::new(default_limits())));

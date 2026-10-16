@@ -1,0 +1,11 @@
+---
+source: crates/eml_cli/tests/ui.rs
+expression: "format!(\"--- stdout ---\\n{stdout}--- stderr ---\\n{stderr}{written}\")"
+input_file: tests/ui/run/std/processes.em
+---
+--- stdout ---
+before
+child arg with space
+exit 3
+exit 0
+--- stderr ---

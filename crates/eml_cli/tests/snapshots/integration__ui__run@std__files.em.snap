@@ -1,0 +1,13 @@
+---
+source: crates/eml_cli/tests/ui.rs
+expression: "format!(\"--- stdout ---\\n{stdout}--- stderr ---\\n{stderr}{written}\")"
+input_file: tests/ui/run/std/files.em
+---
+--- stdout ---
+line 1
+line 2
+
+["again"]
+--- stderr ---
+--- written: report.txt ---
+again

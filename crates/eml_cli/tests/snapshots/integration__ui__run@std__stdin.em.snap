@@ -1,0 +1,12 @@
+---
+source: crates/eml_cli/tests/ui.rs
+expression: "format!(\"--- stdout ---\\n{stdout}--- stderr ---\\n{stderr}{written}\")"
+input_file: tests/ui/run/std/stdin.em
+---
+--- stdout ---
+Some "first"
+Some "second"
+"third\nlast"
+None
+""
+--- stderr ---

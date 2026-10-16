@@ -1,0 +1,11 @@
+---
+source: crates/eml_cli/tests/ui.rs
+expression: "format!(\"--- stdout ---\\n{stdout}--- stderr ---\\n{stderr}{written}\")"
+input_file: tests/ui/run/std/env.em
+---
+--- stdout ---
+["-l", "file name.txt", "--flag"]
+Some "hello world"
+Some ""
+None
+--- stderr ---
