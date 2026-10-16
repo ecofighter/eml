@@ -4,11 +4,11 @@ expression: rendered
 input_file: tests/ui/check-fail/linearity/once_continuation_through_effect_argument.em
 ---
 [E3001] Error: a linear value is used where an unrestricted value is expected
-    ╭─[ check-fail/linearity/once_continuation_through_effect_argument.em:21:38 ]
+    ╭─[ check-fail/linearity/once_continuation_through_effect_argument.em:23:42 ]
     │
- 21 │           handle seq (put inc) (seq (put (fn x -> k x)) 0) with
-    │                                      ────────┬────────  
-    │                                              ╰────────── this expression
+ 23 │               handle seq (put inc) (seq (put (fn x -> k x)) 0) with
+    │                                          ────────┬────────  
+    │                                                  ╰────────── this expression
     │ 
     │ Note: linear values, such as files, the continuation of a `once` operation and closures that capture one, must be used exactly once
 ────╯

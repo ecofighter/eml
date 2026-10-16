@@ -747,8 +747,10 @@ impl Collector<'_> {
                 let Found::Function(callee) = &list[index] else {
                     continue;
                 };
+                // 参照の一番外側の矢印は参照ごとの変数で、`once` の位置に置けばシグネチャの `Unr` と食い違うので比べない
+                // (docs/spec/types.md の「トップレベルの関数の参照」)
                 assert!(
-                    store.lin_compatible(types.exprs[expr], callee.signature),
+                    store.lin_compatible_inner(types.exprs[expr], callee.signature),
                     "internal error: in {}, a reference of type `{}` meets unr with lin in its callee `{}` at `{}`",
                     instance(store),
                     store.display_linear(types.exprs[expr], &hir.names),

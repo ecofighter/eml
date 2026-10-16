@@ -997,3 +997,27 @@ fn a_once_parameter_cannot_be_called_twice() {
         ["E3002"]
     );
 }
+
+#[test]
+fn top_level_functions_fit_once_positions() {
+    let text = "data Task =\n  | Task (once Unit -> <IO> Unit)\n\nwork : Unit -> <IO> Unit\nwork () = println \"work\"\n\ndata Box =\n  | Box Int\n\nwrap : (once Int -> Box) -> Box\nwrap f = f 1\n\nboth : Unit -> <IO> (Task, Unit -> <IO> Unit, Box)\nboth () = (Task work, work, wrap Box)";
+    assert_eq!(check_short(text), Vec::<String>::new());
+}
+
+#[test]
+fn an_unr_function_value_does_not_fit_a_once_field() {
+    let text = "data Task =\n  | Task (once Unit -> <IO> Unit)\n\ndata Job =\n  | Job (Unit -> <IO> Unit)\n\nmove : Job -> Task\nmove j =\n  match j with\n    | Job f -> Task f";
+    assert_eq!(check_short(text), ["E2001 10:21 mismatched types"]);
+}
+
+#[test]
+fn a_parameter_called_twice_does_not_fit_a_once_field() {
+    let text = "data Task =\n  | Task (once Unit -> <IO> Unit)\n\nmake : (Unit -> <IO> Unit) -> <IO> Task\nmake f =\n  f ()\n  Task f";
+    assert_eq!(
+        check_short(text)
+            .iter()
+            .map(|d| &d[..5])
+            .collect::<Vec<_>>(),
+        ["E3002"]
+    );
+}

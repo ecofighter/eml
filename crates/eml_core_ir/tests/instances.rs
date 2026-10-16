@@ -586,3 +586,18 @@ fn instance_names_show_row_arguments() {
     let text = "data Iter <e> a =\n  | Done\n  | More a (once Unit -> <e> Iter <e> a)\n\nid : a -> a\nid x = x\n\nempty : Iter <IO> Int\nempty = Done\n\nmain : Unit -> <IO> Unit\nmain () = drop (id empty)";
     assert_eq!(instances_of(text, "id"), ["id@[Iter <IO> Int]"]);
 }
+
+#[test]
+fn a_top_level_function_in_a_once_field_lowers() {
+    // `Task worker` の `worker` の型は一番外側の矢印が `once` で、`worker` のシグネチャの `Unr` と食い違う。参照の一番
+    // 外側の矢印は参照ごとの変数なので、translate の参照の検査はそこを比べない (docs/spec/types.md の「トップレベルの関数の参照」)
+    let text = "data Task =\n  | Task (once Unit -> <IO> Unit)\n\nworker : Unit -> <IO> Unit\nworker () = println \"work\"\n\nget_worker : Unit -> (Unit -> <IO> Unit)\nget_worker () = worker\n\nmain : Unit -> <IO> Unit\nmain () =\n  match Task worker with\n    | Task f -> f ()\n  get_worker () ()";
+    let program = eml_test_support::lir(text);
+    let names: Vec<&str> = program
+        .functions
+        .iter()
+        .filter(|function| !function.internal && !function.name.contains('$'))
+        .map(|function| function.name.as_str())
+        .collect();
+    assert_eq!(names, ["worker", "get_worker", "main"]);
+}

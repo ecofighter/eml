@@ -46,6 +46,22 @@ fn meets(a: Lin, b: Lin) -> bool {
     !matches!((a, b), (Lin::Unr, Lin::Lin) | (Lin::Lin, Lin::Unr))
 }
 
+/// `lin_compatible` が2つの矢印の下で比べる型の組。引数、結果、ラベルが並びで対応するときのエフェクトの型引数である。
+fn arrow_pairs(
+    (param, effects, ret): (TypeId, &[EffectLabel], TypeId),
+    (other_param, other_effects, other_ret): (TypeId, &[EffectLabel], TypeId),
+) -> Vec<(TypeId, TypeId)> {
+    let mut pairs = vec![(param, other_param), (ret, other_ret)];
+    if effects.len() == other_effects.len() {
+        for (label, other) in effects.iter().zip(other_effects) {
+            if label.id == other.id && label.args.len() == other.args.len() {
+                pairs.extend(label.args.iter().copied().zip(other.args.iter().copied()));
+            }
+        }
+    }
+    pairs
+}
+
 /// 型の表の ID。同じ ID は同じ型を指す。宣言に対して相対的な型 (値が `Rigid` か `Var` に依存する型) では、
 /// 同じ宣言の中で比べたときにだけ成り立つ (docs/implementation/architecture.md の「`eml_types` の内部」)。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -390,8 +406,36 @@ impl TypeStore {
     /// 所 (誤りの跡) は比べない (docs/spec/core-ir.md の「食い違いがないことの検査」)。row の型引数は Kind に効かないので
     /// 比べない。
     pub fn lin_compatible(&self, a: TypeId, b: TypeId) -> bool {
+        self.pairs_lin_compatible(vec![(a, b)])
+    }
+
+    /// 一番外側の矢印の線形性だけを比べない `lin_compatible`。トップレベルの関数の参照は、一番外側の矢印が参照ごとの
+    /// 変数で、呼ばれる側のシグネチャの `Unr` と違ってよいため (docs/spec/types.md の「トップレベルの関数の参照」)。
+    pub fn lin_compatible_inner(&self, reference: TypeId, callee: TypeId) -> bool {
+        match (self.kind(reference), self.kind(callee)) {
+            (
+                TypeKind::Fn {
+                    param,
+                    effects,
+                    ret,
+                    ..
+                },
+                TypeKind::Fn {
+                    param: other_param,
+                    effects: other_effects,
+                    ret: other_ret,
+                    ..
+                },
+            ) => self.pairs_lin_compatible(arrow_pairs(
+                (*param, effects, *ret),
+                (*other_param, other_effects, *other_ret),
+            )),
+            _ => self.lin_compatible(reference, callee),
+        }
+    }
+
+    fn pairs_lin_compatible(&self, mut stack: Vec<(TypeId, TypeId)>) -> bool {
         let mut seen = HashSet::new();
-        let mut stack = vec![(a, b)];
         while let Some((a, b)) = stack.pop() {
             if !seen.insert((a, b)) {
                 continue;
@@ -450,17 +494,10 @@ impl TypeStore {
                     if !meets(*lin, *other_lin) {
                         return false;
                     }
-                    let mut pairs = vec![(*param, *other_param), (*ret, *other_ret)];
-                    if effects.len() == other_effects.len() {
-                        for (label, other) in effects.iter().zip(other_effects) {
-                            if label.id == other.id && label.args.len() == other.args.len() {
-                                pairs.extend(
-                                    label.args.iter().copied().zip(other.args.iter().copied()),
-                                );
-                            }
-                        }
-                    }
-                    pairs
+                    arrow_pairs(
+                        (*param, effects, *ret),
+                        (*other_param, other_effects, *other_ret),
+                    )
                 }
                 _ => continue,
             };

@@ -360,6 +360,27 @@ impl Table<'_> {
         };
         self.function_with(param, lin, row, ret)
     }
+
+    /// 関数型の一番外側の矢印の線形性を、新しい Kind 変数に替える。何も捕まえない宣言の参照を `once` の位置にも
+    /// 置けるようにするため (docs/spec/types.md の「トップレベルの関数の参照」)。内側の矢印は変えない。
+    pub fn fresh_outer_lin(&mut self, ty: Ty) -> Ty {
+        let TyShape::Fn {
+            param,
+            lin,
+            row,
+            ret,
+        } = self.shape(ty).clone()
+        else {
+            return ty;
+        };
+        // 置き換えてよいのは、宣言で `Unr` に決まった矢印だけである。ほかの値を置き換えると、その矢印の制約が消える
+        debug_assert!(
+            matches!(lin, ArrowLin::Known(Linearity::Unr)),
+            "the outermost arrow of a declaration is unr"
+        );
+        let lin = self.fresh_arrow_lin();
+        self.function_with(param, lin, row, ret)
+    }
 }
 
 fn missing(labels: &[Label]) -> UnifyError {

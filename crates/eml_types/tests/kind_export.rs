@@ -202,3 +202,15 @@ fn std_public_functions_keep_their_schemes() {
     Std.String.to_int : String -> Option Int
     ");
 }
+
+#[test]
+fn a_returned_top_level_function_keeps_a_declaration_variable() {
+    // 参照の一番外側の矢印は参照ごとの変数で、戻り値の矢印 (宣言の変数) と等しくなる。制約がないので `Var(0)` のまま残る
+    // (docs/spec/types.md の「トップレベルの関数の参照」)
+    let text = "worker : Unit -> <IO> Unit\nworker () = println \"work\"\n\nget_worker : Unit -> (Unit -> <IO> Unit)\nget_worker () = worker\n\nmain : Unit -> <IO> Unit\nmain () = get_worker () ()";
+    insta::assert_snapshot!(exported(text), @"
+    worker : Unit -> <IO> Unit
+    get_worker : Unit -> poly0 Unit -> <IO> Unit
+    main : Unit -> <IO> Unit
+    ");
+}
