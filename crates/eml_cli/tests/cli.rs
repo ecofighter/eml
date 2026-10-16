@@ -393,6 +393,28 @@ fn a_file_runs_directly_with_its_arguments() {
     assert_eq!(check.status.code(), Some(2));
 }
 
+/// ファイルの直後の引数が `-` で始まっても、clap のフラグとして読まずにスクリプトへ渡す (docs/spec/stdlib.md の「起動」)。
+#[test]
+fn a_hyphen_led_first_argument_reaches_the_script() {
+    let dir = temp_project("cli-hyphen", &[("main.em", SHOW_ARGS)]);
+    let cases: [(&[&str], &str); 4] = [
+        (&["main.em", "--help"], "[\"--help\"]\n"),
+        (&["main.em", "--debug-heap"], "[\"--debug-heap\"]\n"),
+        (&["main.em", "--", "x"], "[\"--\", \"x\"]\n"),
+        (&["run", "--debug-heap", "main.em", "-h"], "[\"-h\"]\n"),
+    ];
+    let outputs: Vec<_> = cases.iter().map(|(args, _)| eml_in(&dir, args)).collect();
+    std::fs::remove_dir_all(&dir).unwrap();
+    for ((args, expected), output) in cases.iter().zip(&outputs) {
+        assert_eq!(output.status.code(), Some(0), "{args:?}: {output:?}");
+        assert_eq!(
+            String::from_utf8_lossy(&output.stdout),
+            *expected,
+            "{args:?}"
+        );
+    }
+}
+
 /// `-` で始まる最初の引数はフラグとして読むので、綴りを誤ったフラグは使い方の誤りである。
 #[test]
 fn a_misspelled_flag_is_a_usage_error() {

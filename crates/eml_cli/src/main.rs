@@ -29,9 +29,6 @@ enum Command {
         #[arg(long)]
         debug_heap: bool,
         file: PathBuf,
-        /// Arguments for the script
-        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
-        args: Vec<OsString>,
     },
     /// Start an interactive session
     Repl {
@@ -48,7 +45,8 @@ const SUBCOMMANDS: [&str; 4] = ["check", "run", "repl", "help"];
 
 /// 使い方の誤りに 2 を使うのは、clap が引数の誤りで返す値に合わせるため (docs/implementation/architecture.md)。
 fn main() -> ExitCode {
-    let cli = Cli::parse_from(with_run(std::env::args_os().collect()));
+    let (argv, script_args) = split_script_args(with_run(std::env::args_os().collect()));
+    let cli = Cli::parse_from(argv);
     match cli.command {
         Command::Check { file } => {
             let Some(session) = load(&file) else {
@@ -63,11 +61,7 @@ fn main() -> ExitCode {
             }
         }
         Command::Repl { debug_heap, file } => terminal::run(debug_heap, file),
-        Command::Run {
-            debug_heap,
-            file,
-            args,
-        } => {
+        Command::Run { debug_heap, file } => {
             // 読み込みとコンパイルの間の Ctrl-C も、シグナルで殺されずにこのハンドラが受ける。そこで立てたビットは、
             // 実行の最初の安全点で読まれる
             let control = Arc::new(Control::new(default_limits()));
@@ -86,7 +80,7 @@ fn main() -> ExitCode {
                 return ExitCode::from(1);
             };
             // 相対パスはカレントディレクトリを基準にする
-            match eml_cli::execute(&program, &config, script_host(PathBuf::new(), args)) {
+            match eml_cli::execute(&program, &config, script_host(PathBuf::new(), script_args)) {
                 Ok(_) => ExitCode::SUCCESS,
                 Err(error) => {
                     eprintln!("runtime error: {error}");
@@ -109,6 +103,20 @@ fn with_run(mut argv: Vec<OsString>) -> Vec<OsString> {
         argv.insert(1, OsString::from("run"));
     }
     argv
+}
+
+/// `run` のファイルより後ろの引数を clap に渡さずに切り離す (docs/spec/stdlib.md の「起動」)。clap に読ませると、ファイルの直後の
+/// `--debug-heap` や `--help` や `--` をスクリプトの引数にできない。ファイルは `run` の後の、`-` で始まらない最初の引数である。
+fn split_script_args(mut argv: Vec<OsString>) -> (Vec<OsString>, Vec<OsString>) {
+    if argv.get(1).is_none_or(|command| command != "run") {
+        return (argv, Vec::new());
+    }
+    let file = argv
+        .iter()
+        .skip(2)
+        .position(|arg| !arg.to_string_lossy().starts_with('-'));
+    let tail = file.map_or_else(Vec::new, |index| argv.split_off(index + 3));
+    (argv, tail)
 }
 
 /// 入口が読めないことは、読み込みの段に入る前に使い方の誤りとして報告する。依存先が読めないことは E1026 である。
