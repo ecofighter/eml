@@ -11,7 +11,21 @@ use crate::table::{Exporter, RowVar, Table, Tail, Ty, TyShape, VarNames};
 /// 書いた型の木の上で数えるので、共有した部分は現れるたびに数える。数える費用は書く文字列の長さに比例する。
 struct Occurrences {
     types: Vec<Ty>,
-    rows: Vec<(RowVar, usize)>,
+    rows: Vec<RowOccurrence>,
+}
+
+struct RowOccurrence {
+    var: RowVar,
+    count: usize,
+    negative: bool,
+}
+
+impl RowOccurrence {
+    /// 正の位置に1回だけ現れる row 変数は、閉じて書ける。負の位置で閉じると、本当の型が受け付ける引数を、書いた型が
+    /// 受け付けなくなる (docs/spec/types.md の「REPL の入力」)。
+    fn named(&self) -> bool {
+        self.count > 1 || self.negative
+    }
 }
 
 fn occurrences(table: &Table<'_>, ty: Ty) -> Occurrences {
@@ -19,11 +33,12 @@ fn occurrences(table: &Table<'_>, ty: Ty) -> Occurrences {
         types: Vec::new(),
         rows: Vec::new(),
     };
-    walk(table, ty, &mut found);
+    walk(table, ty, false, &mut found);
     found
 }
 
-fn walk(table: &Table<'_>, ty: Ty, found: &mut Occurrences) {
+/// `negative` は、`ty` が負の位置にあるかである。矢印の引数で反転し、データ型の引数では変性を調べずに保つ。
+fn walk(table: &Table<'_>, ty: Ty, negative: bool, found: &mut Occurrences) {
     let ty = table.resolve(ty);
     match table.shape(ty) {
         TyShape::Var(_) => {
@@ -31,25 +46,37 @@ fn walk(table: &Table<'_>, ty: Ty, found: &mut Occurrences) {
                 found.types.push(ty);
             }
         }
-        TyShape::Con(_, args) => args.iter().for_each(|&arg| walk(table, arg, found)),
+        TyShape::Con(_, args) => args
+            .iter()
+            .for_each(|&arg| walk(table, arg, negative, found)),
         TyShape::Tuple(elements) => elements
             .iter()
-            .for_each(|&element| walk(table, element, found)),
+            .for_each(|&element| walk(table, element, negative, found)),
         TyShape::Fn {
             param, row, ret, ..
         } => {
-            walk(table, *param, found);
+            walk(table, *param, !negative, found);
             let row = table.resolve_row(row);
             for label in &row.labels {
-                label.args.iter().for_each(|&arg| walk(table, arg, found));
+                label
+                    .args
+                    .iter()
+                    .for_each(|&arg| walk(table, arg, negative, found));
             }
             if let Tail::Var(var) = row.tail {
-                match found.rows.iter_mut().find(|(seen, _)| *seen == var) {
-                    Some((_, count)) => *count += 1,
-                    None => found.rows.push((var, 1)),
+                match found.rows.iter_mut().find(|seen| seen.var == var) {
+                    Some(seen) => {
+                        seen.count += 1;
+                        seen.negative |= negative;
+                    }
+                    None => found.rows.push(RowOccurrence {
+                        var,
+                        count: 1,
+                        negative,
+                    }),
                 }
             }
-            walk(table, *ret, found);
+            walk(table, *ret, negative, found);
         }
         TyShape::Rigid(_) | TyShape::Error => {}
     }
@@ -89,14 +116,9 @@ pub(super) fn render(
     for (index, &var) in found.types.iter().enumerate() {
         names.types.insert(var, type_var_name(index));
     }
-    // 1回だけ現れる row 変数は閉じた row として書く
-    for (index, &(var, _)) in found
-        .rows
-        .iter()
-        .filter(|(_, count)| *count > 1)
-        .enumerate()
-    {
-        names.rows.insert(var, row_var_name(index));
+    // 名前のない row 変数は閉じた row として書く
+    for (index, row) in found.rows.iter().filter(|row| row.named()).enumerate() {
+        names.rows.insert(row.var, row_var_name(index));
     }
     let mut types = TypeStore::new(program);
     let id = Exporter::named(table, &mut types, &names).export(ty);

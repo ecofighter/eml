@@ -1,6 +1,7 @@
 //! REPL の入力の関数の検査 (docs/spec/types.md の「REPL の入力」)。入力は
-//! `Unit -> <IO> T` の関数で、`T` をシグネチャなしで、局所の `let` と同じく単相に推論する。入力の関数はほかの関数から
-//! 参照されないので、1つだけの SCC として、ほかの関数と同じ道で Kind を解いて書き出す。
+//! `Unit -> <IO> T` の関数 (`:type` の問い合わせは `Unit -> <ρ> T`) で、`T` をシグネチャなしで、局所の `let` と同じく
+//! 単相に推論する。入力の関数はほかの関数から参照されないので、1つだけの SCC として、ほかの関数と同じ道で Kind を解いて
+//! 書き出す。
 
 use std::collections::{HashMap, HashSet};
 
@@ -78,7 +79,8 @@ pub(super) fn check_input<'c>(
     if let InputKind::Let(binding) = kind {
         checker.undecided_binding(binding, result);
     }
-    // 式の入力の決まらない型は、制約を解くときに `Unit` とみなす。`let` は決まらない型を誤りにしてあるので、決めない
+    // 式の入力の決まらない型は、制約を解くときに `Unit` とみなす。問い合わせは型変数に残った制約を返させ、下の
+    // `split_residuals` で文脈と `Unit` に分ける。`let` は決まらない型を誤りにしてあるので、決めない
     let defaulting = match kind {
         InputKind::Expr => Defaulting::Unit,
         InputKind::Query => Defaulting::Query,
@@ -94,7 +96,8 @@ pub(super) fn check_input<'c>(
     let typing = checker.typing;
     let instances = checker.instances;
     default_unsolved(&mut table, &typing, result, kind == InputKind::Expr);
-    // 本体の row と末尾を共有しなかった問い合わせの row は、ここで閉じる。書き出す型に開いた row を残さないため
+    // 問い合わせの row (ρ) が `default_unsolved` の後も開いていれば、ここで閉じる。`closed_shape` に開いた row を
+    // 渡さないため
     if let Tail::Var(var) = table.resolve_row(&ambient).tail {
         table
             .close_row(var)
@@ -599,6 +602,16 @@ mod tests {
             typed(&[ASK], "fn f -> ask (f ())"),
             "(Unit -> <Ask | e> Unit) -> <Ask | e> Int"
         );
+    }
+
+    /// 負の位置に1回だけ現れる row 変数は、閉じずに名前を付ける。閉じると、本当の型が受け付ける `ask` を、書いた型が
+    /// 受け付けなくなるためである。引数の引数は正の位置なので閉じる。
+    #[test]
+    fn a_lone_row_variable_in_an_argument_is_named() {
+        let ignore = "ignore_fn : (Unit -> <e> Int) -> Int\nignore_fn _ = 0";
+        assert_eq!(typed(&[ignore], "ignore_fn"), "(Unit -> <e> Int) -> Int");
+        let nested = "nested : ((Unit -> <e> Int) -> Int) -> Int\nnested _ = 0";
+        assert_eq!(typed(&[nested], "nested"), "((Unit -> Int) -> Int) -> Int");
     }
 
     /// 同じ節点を2回指す型でも、書いた型の上で数える。`(g, g)` の2つの要素は推論の表で同じ節点なので、ラムダの
