@@ -161,6 +161,7 @@ pub struct LangItems {
 }
 
 /// extern の表の行から、標準ライブラリの宣言を引く索引。使い手のある行 (extern の型、`IO`、`negate`) だけを持つ。
+/// 型は、読み込んだモジュールが宣言するものだけを持つ (docs/spec/modules.md の「標準ライブラリ」)。
 #[derive(Debug, Clone)]
 pub struct ExternIndex {
     pub(crate) types: HashMap<ExternType, TypeDefId>,
@@ -171,8 +172,9 @@ pub struct ExternIndex {
 }
 
 impl ExternIndex {
-    pub fn ty(&self, ty: ExternType) -> TypeDefId {
-        self.types[&ty]
+    /// 型を宣言したモジュールを読み込んでいなければ `None` である。Prelude の型はいつもある。
+    pub fn ty(&self, ty: ExternType) -> Option<TypeDefId> {
+        self.types.get(&ty).copied()
     }
 }
 

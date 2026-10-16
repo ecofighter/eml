@@ -210,7 +210,10 @@ pub fn def_map(modules: &[LoadedModule]) -> (DefMap, Vec<Diagnostic>) {
     check_cycles(modules, &mut diagnostics);
     let lang = lang_items(&scopes[0]);
     let externs = extern_index(&scopes);
-    let names = display_names(&scopes, externs.ty(ExternType::Unit));
+    let unit = externs
+        .ty(ExternType::Unit)
+        .expect("the Prelude declares `Unit`");
+    let names = display_names(&scopes, unit);
     let std_short_names = scopes
         .iter()
         .enumerate()
@@ -968,8 +971,9 @@ fn lang_items(prelude: &ModuleScope) -> LangItems {
     }
 }
 
-/// extern の表の行を、標準ライブラリのモジュールの正式な名前で引く。`std/` は処理系と一緒に配るソースなので、行の
-/// 宣言がなければ名前を添えて panic する。行と宣言の対応は `eml_hir` の結合テストが確かめる。
+/// extern の表の行を、標準ライブラリのモジュールの正式な名前で引く。標準ライブラリは使うモジュールだけを読むので、型の
+/// 行は読み込んだモジュールが宣言するものだけを持つ。`std/` は処理系と一緒に配るソースなので、Prelude の行の宣言が
+/// なければ名前を添えて panic する。行と宣言の対応は `eml_hir` の結合テストが確かめる。
 fn extern_index(scopes: &[ModuleScope]) -> ExternIndex {
     // 正式な名前を、モジュールの正式な名前と、そのモジュールの中の名前に分けて引く。演算子の名前は `.` を含みうるので、
     // 最後の `.` では分けない
@@ -991,7 +995,7 @@ fn extern_index(scopes: &[ModuleScope]) -> ExternIndex {
     }
     let types = ExternType::ALL
         .iter()
-        .map(|&ty| {
+        .filter_map(|&ty| {
             let canonical = ty.row().name;
             let id = find(
                 scopes,
@@ -1001,11 +1005,12 @@ fn extern_index(scopes: &[ModuleScope]) -> ExternIndex {
                     TypeItem::Type(id) => Some(id),
                     TypeItem::Effect(_) | TypeItem::Class(_) => None,
                 },
-            )
-            .unwrap_or_else(|| {
-                panic!("the standard library does not declare the type `{canonical}`")
-            });
-            (ty, id)
+            );
+            assert!(
+                id.is_some() || !canonical.starts_with("Prelude."),
+                "the standard library does not declare the type `{canonical}`"
+            );
+            Some((ty, id?))
         })
         .collect();
     let canonical = ExternEffect::Io.row().name;
@@ -1048,8 +1053,13 @@ fn display_names(scopes: &[ModuleScope], unit: TypeDefId) -> DisplayNames {
             ModuleOrigin::Session(number) => Definer::Session(number),
             ModuleOrigin::Std | ModuleOrigin::User => Definer::Module(&scope.name),
         };
+        let definer = |public: bool| match scope.origin {
+            ModuleOrigin::Std if !public => Definer::Hidden(&scope.name),
+            _ => module,
+        };
         for (name, definitions) in &scope.types {
             for definition in definitions {
+                let module = definer(definition.public);
                 match definition.item {
                     TypeItem::Type(id) => types.push((id, module, name.as_str())),
                     TypeItem::Effect(id) => effects.push((id, module, name.as_str())),
@@ -1060,7 +1070,7 @@ fn display_names(scopes: &[ModuleScope], unit: TypeDefId) -> DisplayNames {
         for (name, definitions) in &scope.values {
             for definition in definitions {
                 if let ValueItem::Constructor(id) = definition.item {
-                    constructors.push((id, module, name.as_str()));
+                    constructors.push((id, definer(definition.public), name.as_str()));
                 }
             }
         }

@@ -242,9 +242,12 @@ impl<'c> Table<'c> {
         std::mem::replace(&mut self.kind_origin, origin)
     }
 
-    /// extern の型を宣言した item。
+    /// extern の型を宣言した item。型を宣言したモジュールを読み込んでいなければ panic する。Prelude の型はいつもある。
     pub fn extern_type(&self, ty: ExternType) -> TypeDefId {
-        self.context.externs.ty(ty)
+        self.context
+            .externs
+            .ty(ty)
+            .unwrap_or_else(|| panic!("`{}` is not loaded", ty.row().name))
     }
 
     pub fn kind_origin(&self) -> Provenance {
@@ -301,9 +304,11 @@ impl<'c> Table<'c> {
             carries: Vec::new(),
             marks: RefCell::default(),
         };
-        let externs = &context.externs;
-        table.int = table.alloc(TyShape::Con(externs.ty(ExternType::Int), Vec::new()));
-        table.string = table.alloc(TyShape::Con(externs.ty(ExternType::String), Vec::new()));
+        table.int = table.alloc(TyShape::Con(table.extern_type(ExternType::Int), Vec::new()));
+        table.string = table.alloc(TyShape::Con(
+            table.extern_type(ExternType::String),
+            Vec::new(),
+        ));
         table.bool = table.alloc(TyShape::Con(lang.bool, Vec::new()));
         table.unit = table.alloc(TyShape::Tuple(Vec::new()));
         table.error = table.alloc(TyShape::Error);

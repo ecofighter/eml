@@ -157,17 +157,13 @@ fn session_modules_follow_the_prelude_in_input_order() {
         &ImportCache::default(),
     );
     assert!(diagnostics.is_empty(), "{diagnostics:?}");
-    assert_eq!(
-        names(&loaded),
-        ["Prelude", "<input 1>", "<input 3>", "Std.Fs"]
-    );
+    assert_eq!(names(&loaded), ["Prelude", "<input 1>", "<input 3>"]);
     assert_eq!(
         origins(&loaded),
         [
             ModuleOrigin::Std,
             ModuleOrigin::Session(1),
             ModuleOrigin::Session(3),
-            ModuleOrigin::Std
         ]
     );
     // 今の入力 (最後の入力) が入口である
@@ -175,16 +171,20 @@ fn session_modules_follow_the_prelude_in_input_order() {
 }
 
 #[test]
-fn imports_of_inputs_come_after_the_std_modules() {
+fn imports_of_inputs_follow_the_inputs_in_the_order_they_are_found() {
+    // 前の入力の修飾子も標準ライブラリのモジュールを読む (docs/spec/modules.md の「REPL のセッション」)
     let (loaded, diagnostics, _) = load(
-        &[(1, "import A"), (2, "import B")],
+        &[
+            (1, "import A\n\nf : String -> <IO> Fs.File\nf p = Fs.open p"),
+            (2, "import B"),
+        ],
         &[("A.em", ""), ("B.em", "")],
         &ImportCache::default(),
     );
     assert!(diagnostics.is_empty(), "{diagnostics:?}");
     assert_eq!(
         names(&loaded),
-        ["Prelude", "<input 1>", "<input 2>", "Std.Fs", "A", "B"]
+        ["Prelude", "<input 1>", "<input 2>", "A", "Std.Fs", "B"]
     );
 }
 

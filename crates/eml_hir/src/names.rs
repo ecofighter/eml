@@ -29,6 +29,9 @@ pub(crate) enum Definer<'a> {
     Module(&'a str),
     /// セッションの入力の番号。
     Session(u32),
+    /// 標準ライブラリのモジュールの `pub` でない item。利用者が書けないので名前の衝突に数えず、ほかの定義元と同じ名前
+    /// なら自分だけを修飾する (docs/spec/modules.md の「標準ライブラリ」)。
+    Hidden(&'a str),
 }
 
 impl DisplayNames {
@@ -124,6 +127,7 @@ impl<'a> Definers<'a> {
                     let newest = latest.entry(name).or_insert(number);
                     *newest = (*newest).max(number);
                 }
+                Definer::Hidden(_) => {}
             }
         }
         Definers { modules, latest }
@@ -135,6 +139,10 @@ impl<'a> Definers<'a> {
             Definer::Session(_) => name.to_string(),
             Definer::Module(module) if self.modules[name].len() > 1 => format!("{module}.{name}"),
             Definer::Module(_) => name.to_string(),
+            Definer::Hidden(module) if self.modules.contains_key(name) => {
+                format!("{module}.{name}")
+            }
+            Definer::Hidden(_) => name.to_string(),
         }
     }
 }

@@ -76,17 +76,13 @@ fn modules_are_numbered_in_breadth_first_order() {
         ],
     );
     assert!(diagnostics.is_empty(), "{diagnostics:?}");
-    assert_eq!(
-        names(&loaded),
-        ["Prelude", "Main", "Std.Fs", "B", "A.C", "D"]
-    );
+    assert_eq!(names(&loaded), ["Prelude", "Main", "B", "A.C", "D"]);
     // 表示のパスは、入口の表示のパスのディレクトリに根からの相対パスをつないだもの
     assert_eq!(
         paths(&loaded),
         [
             "<std>/Prelude.em",
             "app/main.em",
-            "<std>/Fs.em",
             "app/B.em",
             "app/A/C.em",
             "app/D.em"
@@ -95,28 +91,25 @@ fn modules_are_numbered_in_breadth_first_order() {
     assert_eq!(loaded.files.path(loaded.prelude), "<std>/Prelude.em");
     assert_eq!(loaded.files.path(loaded.entry), "app/main.em");
     assert_eq!(targets(&loaded, 0), Vec::<Option<u32>>::new());
-    assert_eq!(targets(&loaded, 1), [Some(3), Some(4)]);
-    assert_eq!(targets(&loaded, 3), [Some(5)]);
-    assert_eq!(targets(&loaded, 4), [Some(5), Some(3)]);
+    assert_eq!(targets(&loaded, 1), [Some(2), Some(3)]);
+    assert_eq!(targets(&loaded, 2), [Some(4)]);
+    assert_eq!(targets(&loaded, 3), [Some(4), Some(2)]);
 }
 
 #[test]
 fn an_entry_without_a_directory_uses_the_root_relative_path() {
     let (loaded, diagnostics) = load("import Report.Csv", &[("Report/Csv.em", "")]);
     assert!(diagnostics.is_empty(), "{diagnostics:?}");
-    assert_eq!(names(&loaded), ["Prelude", "Main", "Std.Fs", "Report.Csv"]);
-    assert_eq!(
-        &paths(&loaded)[1..],
-        ["test.em", "<std>/Fs.em", "Report/Csv.em"]
-    );
+    assert_eq!(names(&loaded), ["Prelude", "Main", "Report.Csv"]);
+    assert_eq!(&paths(&loaded)[1..], ["test.em", "Report/Csv.em"]);
 }
 
 #[test]
 fn a_module_imported_twice_is_loaded_once() {
     let (loaded, diagnostics) = load("import A\nimport A as X", &[("A.em", "")]);
     assert!(diagnostics.is_empty(), "{diagnostics:?}");
-    assert_eq!(names(&loaded), ["Prelude", "Main", "Std.Fs", "A"]);
-    assert_eq!(targets(&loaded, 1), [Some(3), Some(3)]);
+    assert_eq!(names(&loaded), ["Prelude", "Main", "A"]);
+    assert_eq!(targets(&loaded, 1), [Some(2), Some(2)]);
 }
 
 #[test]
@@ -124,8 +117,8 @@ fn a_cycle_loads_each_module_once() {
     // 循環の報告 (E1027) は `def_map` が行う。読み込みの段は止まればよい
     let (loaded, diagnostics) = load("import A", &[("A.em", "import B"), ("B.em", "import A")]);
     assert!(diagnostics.is_empty(), "{diagnostics:?}");
-    assert_eq!(names(&loaded), ["Prelude", "Main", "Std.Fs", "A", "B"]);
-    assert_eq!(targets(&loaded, 4), [Some(3)]);
+    assert_eq!(names(&loaded), ["Prelude", "Main", "A", "B"]);
+    assert_eq!(targets(&loaded, 3), [Some(2)]);
 }
 
 #[test]
@@ -142,7 +135,7 @@ fn a_missing_module_is_reported_at_its_path() {
     E1026 2:8 cannot find module `M`
       2:8 there is no file `app/M.em`
     ");
-    assert_eq!(names(&loaded), ["Prelude", "Main", "Std.Fs"]);
+    assert_eq!(names(&loaded), ["Prelude", "Main"]);
     assert_eq!(targets(&loaded, 1), [None, None]);
 }
 
@@ -200,7 +193,7 @@ fn reserved_modules_and_the_entry_cannot_be_imported() {
     E1030 8:1 the module `Std.Prelude` is reserved
       8:1 the Prelude is imported implicitly
     ");
-    assert_eq!(names(&loaded), ["Prelude", "Main", "Std.Fs"]);
+    assert_eq!(names(&loaded), ["Prelude", "Main"]);
     assert_eq!(targets(&loaded, 1), [None; 8]);
 }
 
@@ -211,7 +204,7 @@ fn a_dependency_cannot_import_the_entry() {
         diagnostics,
         ["app/A.em 1:1 E1030 the entry module cannot be imported"]
     );
-    assert_eq!(targets(&loaded, 3), [None]);
+    assert_eq!(targets(&loaded, 2), [None]);
 }
 
 #[test]
@@ -224,7 +217,7 @@ fn diagnostics_of_a_dependency_point_into_its_file() {
             "A.em 2:1 E1004 `h` has no type signature",
         ]
     );
-    assert_eq!(targets(&loaded, 3), [None]);
+    assert_eq!(targets(&loaded, 2), [None]);
 }
 
 #[test]
@@ -235,7 +228,7 @@ fn an_import_after_a_declaration_is_still_loaded() {
         diagnostics,
         ["test.em 3:1 E0011 imports must come before declarations"]
     );
-    assert_eq!(names(&loaded), ["Prelude", "Main", "Std.Fs", "A"]);
+    assert_eq!(names(&loaded), ["Prelude", "Main", "A"]);
 }
 
 #[test]
@@ -268,7 +261,7 @@ fn an_import_with_a_malformed_path_reads_no_module() {
         ("import Report (x\n", present),
     ] {
         let (loaded, diagnostics) = load(entry, modules);
-        assert_eq!(names(&loaded), ["Prelude", "Main", "Std.Fs"], "{entry}");
+        assert_eq!(names(&loaded), ["Prelude", "Main"], "{entry}");
         assert_eq!(targets(&loaded, 1), [None], "{entry}");
         assert_eq!(diagnostics.len(), 1, "{entry}: {diagnostics:?}");
         assert!(
@@ -284,7 +277,7 @@ fn an_infix_constructor_in_an_import_list_still_loads_the_module() {
     // (docs/implementation/architecture.md の「名前解決の回復」)
     let present: &[(&str, &str)] = &[("Report.em", "pub x : Int\nx = 1")];
     let (loaded, diagnostics) = load("import Report ((:+), x)\n", present);
-    assert_eq!(names(&loaded), ["Prelude", "Main", "Std.Fs", "Report"]);
+    assert_eq!(names(&loaded), ["Prelude", "Main", "Report"]);
     assert_eq!(diagnostics.len(), 1, "{diagnostics:?}");
     assert!(diagnostics[0].contains(" E0011 "), "{diagnostics:?}");
 }
@@ -395,29 +388,69 @@ fn origins(loaded: &Loaded) -> Vec<ModuleOrigin> {
 }
 
 #[test]
-fn std_modules_come_after_the_entry_and_before_user_imports() {
+fn std_modules_are_numbered_in_the_order_they_are_found() {
+    // import を先にたどり、その後で修飾子の標準ライブラリを読む (docs/spec/modules.md の「標準ライブラリ」)
     let (loaded, diagnostics) = eml_hir::load_with_std(
         &fake_std(),
         ENTRY_PATH,
-        "import Util",
+        "import Util
+
+f : Unit -> String
+f () = Fs.greet ()",
         &MemorySource(&[("Util.em", "")]),
     );
     assert!(diagnostics.is_empty(), "{diagnostics:?}");
-    assert_eq!(names(&loaded), ["Prelude", "Main", "Std.Fs", "Util"]);
+    assert_eq!(names(&loaded), ["Prelude", "Main", "Util", "Std.Fs"]);
     assert_eq!(
         paths(&loaded),
-        ["<std>/Prelude.em", "test.em", "<std>/Fs.em", "Util.em"]
+        ["<std>/Prelude.em", "test.em", "Util.em", "<std>/Fs.em"]
     );
     assert_eq!(
         origins(&loaded),
         [
             ModuleOrigin::Std,
             ModuleOrigin::User,
-            ModuleOrigin::Std,
-            ModuleOrigin::User
+            ModuleOrigin::User,
+            ModuleOrigin::Std
         ]
     );
-    assert_eq!(targets(&loaded, 1), [Some(3)]);
+    assert_eq!(targets(&loaded, 1), [Some(2)]);
+}
+
+/// 修飾子の位置を確かめるための標準ライブラリ。`Shapes` は Prelude と `Fs` のほかに足すモジュールである。
+const SHAPES: &str = "pub data Shape = | Circle Int\n\npub data P = | P { n : Int }\n\npub effect Ask where\n  ask : Unit -> Int\n\npub class Size a where\n  size : a -> Int\n\npub x : Int\nx = 1\n";
+
+#[test]
+fn a_qualifier_anywhere_loads_the_std_module() {
+    // 修飾子は名前解決より前に、位置によらず構文木から拾う (docs/spec/modules.md の「標準ライブラリ」)
+    let std = [
+        ("Prelude.em", eml_hir::PRELUDE_SOURCE),
+        ("Fs.em", eml_hir::STD[1].1),
+        ("Shapes.em", SHAPES),
+    ];
+    for entry in [
+        "y : Int\ny = Shapes.x",
+        "y : Int\ny = Std.Shapes.x",
+        "y : Shapes.Shape -> Int\ny _ = 1",
+        "y : Int -> Int\ny n = match Shapes.Circle n with\n  | Shapes.Circle m -> m",
+        "y : Unit -> <Shapes.Ask> Int\ny () = 1",
+        "y : Shapes.Size a => a -> Int\ny _ = 1",
+        "y : String\ny = \"\\{Shapes.x}\"",
+        "y : Int\ny = (Shapes.P { n = 1 }).n",
+        "y : Unit -> Int\ny () = handle 1 with\n  | Shapes.ask () k -> k 1",
+    ] {
+        let (loaded, _) = eml_hir::load_with_std(&std, ENTRY_PATH, entry, &MemorySource(&[]));
+        assert_eq!(names(&loaded), ["Prelude", "Main", "Std.Shapes"], "{entry}");
+    }
+    // 修飾子に現れない標準ライブラリのモジュールは読まない
+    for entry in [
+        "y : Int\ny = 1",
+        "y : Int\ny = Report.x",
+        "y : Int\ny = shapes",
+    ] {
+        let (loaded, _) = eml_hir::load_with_std(&std, ENTRY_PATH, entry, &MemorySource(&[]));
+        assert_eq!(names(&loaded), ["Prelude", "Main"], "{entry}");
+    }
 }
 
 #[test]
@@ -450,7 +483,8 @@ fn an_import_prefers_the_user_module_of_the_same_name() {
     let user = [("Fs.em", "pub greet : Unit -> String\ngreet () = \"user\"")];
     let lowered = lower_std(&fake_std(), entry, &MemorySource(&user));
     assert_eq!(lowered.diagnostics, Vec::<String>::new());
-    assert_eq!(names(&lowered.loaded), ["Prelude", "Main", "Std.Fs", "Fs"]);
+    // ユーザーのモジュールが勝っても、同じパスの標準ライブラリのモジュールを読む
+    assert_eq!(names(&lowered.loaded), ["Prelude", "Main", "Fs", "Std.Fs"]);
     assert_eq!(lowered.qualified_in("Main", "Fs", "greet"), Some("Fs"));
     // ユーザーのモジュールに名前がなくても、標準ライブラリへは進まない
     let lowered = lower_std(&fake_std(), entry, &MemorySource(&[("Fs.em", "")]));
@@ -503,7 +537,7 @@ fn a_qualifier_means_what_each_module_imports() {
     assert_eq!(lowered.diagnostics, Vec::<String>::new());
     assert_eq!(
         names(&lowered.loaded),
-        ["Prelude", "Main", "Std.Fs", "Fs", "B"]
+        ["Prelude", "Main", "Fs", "Std.Fs", "B"]
     );
     assert_eq!(lowered.qualified_in("Main", "Fs", "greet"), Some("Fs"));
     assert_eq!(lowered.qualified_in("B", "Fs", "greet"), Some("Std.Fs"));
@@ -567,7 +601,7 @@ fn the_std_root_is_reserved_for_user_imports() {
     E1030 4:1 the module `Std.Prelude` is reserved
       4:1 the Prelude is imported implicitly
     ");
-    assert_eq!(targets(&loaded, 1), [None, None, None, None, Some(3)]);
+    assert_eq!(targets(&loaded, 1), [None, None, None, None, Some(2)]);
     assert_eq!(source.read_paths(), ["Util.em"]);
 }
 
@@ -603,7 +637,8 @@ fn a_std_module_reaches_another_only_through_an_import() {
         ("Fs.em", &fs_after("pub f : Unit -> Int\nf () = Other.x\n")),
         ("Other.em", other),
     ];
-    let lowered = lower_std(&without, "", &MemorySource(&[]));
+    // 入口が `Fs` を使わないと、標準ライブラリの `Fs` を読まない
+    let lowered = lower_std(&without, "import Std.Fs", &MemorySource(&[]));
     assert_eq!(
         lowered.diagnostics,
         ["<std>/Fs.em 2:8 E1031 unknown module qualifier `Other`"]
@@ -618,7 +653,7 @@ fn a_std_module_reaches_another_only_through_an_import() {
     ];
     // 標準ライブラリのモジュールの import は、ユーザーの根を読まない
     let source = Recording::new(&[("Other.em", "")]);
-    let lowered = lower_std(&with, "", &source);
+    let lowered = lower_std(&with, "import Std.Fs", &source);
     assert_eq!(lowered.diagnostics, Vec::<String>::new());
     assert_eq!(
         names(&lowered.loaded),
@@ -640,7 +675,7 @@ fn a_std_module_reaches_another_by_its_canonical_name_too() {
         ("Other.em", other),
     ];
     let source = Recording::new(&[]);
-    let lowered = lower_std(&std, "", &source);
+    let lowered = lower_std(&std, "import Std.Fs", &source);
     assert_eq!(lowered.diagnostics, Vec::<String>::new());
     assert_eq!(targets(&lowered.loaded, 2), [Some(3)]);
     assert_eq!(source.read_paths(), Vec::<String>::new());
@@ -657,7 +692,7 @@ fn a_std_module_cannot_import_the_prelude() {
         ),
     ];
     let (loaded, mut diagnostics) =
-        eml_hir::load_with_std(&std, ENTRY_PATH, "", &MemorySource(&[]));
+        eml_hir::load_with_std(&std, ENTRY_PATH, "import Std.Fs", &MemorySource(&[]));
     sort_diagnostics(&mut diagnostics);
     insta::assert_snapshot!(full(&loaded.files, &diagnostics), @"
     E1030 1:1 the module `Prelude` is reserved

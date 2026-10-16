@@ -55,10 +55,10 @@ pub struct Loaded {
     pub files: SourceFiles,
     pub prelude: FileId,
     pub entry: FileId,
-    /// 番号が `ModuleId` で、`FileId` の番号とも一致する。0 が Prelude、1 が入口、2 から Prelude を除く標準ライブラリの
-    /// モジュールが埋め込んだ並びの順に続き、その後にユーザーの import を見つけた順に並ぶ。セッション (`load_session`)
-    /// では、1 からセッションのモジュールが入力の順に並び、最後の今の入力が入口である。その後に Prelude を除く標準
-    /// ライブラリ、import を見つけた順のモジュールが続く。
+    /// 番号が `ModuleId` で、`FileId` の番号とも一致する。0 が Prelude、1 が入口で、その後に import と修飾子をたどって
+    /// 見つけた順に、標準ライブラリのモジュールとユーザーのモジュールが並ぶ。セッション (`load_session`) では、1 から
+    /// セッションのモジュールが入力の順に並び、最後の今の入力が入口である。その後に、見つけた順のモジュールが続く
+    /// (docs/spec/modules.md の「標準ライブラリ」)。
     pub modules: Vec<LoadedModule>,
 }
 
@@ -121,8 +121,8 @@ pub fn load(
 }
 
 /// 標準ライブラリを `(ファイル名, 本文)` の並びで受け取る `load`。テストが標準ライブラリを差し替えられるようにするため。
-/// 並びは `Prelude.em` と、本物の `Fs.em` (または同じ extern の宣言を持つもの) を含める。extern の索引が両方を引くので、
-/// 足りないと `def_map` が panic する。標準ライブラリのモジュールは、使うかどうかによらずすべて読み込む。
+/// 並びは `Prelude.em` を含める。extern の索引が Prelude の行を引くので、足りないと `def_map` が panic する。標準
+/// ライブラリのモジュールは、使うものだけを読み込む (docs/spec/modules.md の「標準ライブラリ」)。
 pub fn load_with_std(
     std: &[(&str, &str)],
     entry_path: &str,
@@ -134,10 +134,9 @@ pub fn load_with_std(
         None => ("", entry_path),
     };
     let cache = ImportCache::default();
-    let mut loader = Loader::new(root, entry_file, source, &cache);
-    let prelude = loader.add_prelude(std);
+    let mut loader = Loader::new(std, root, entry_file, source, &cache);
+    let prelude = loader.add_prelude();
     let entry = loader.add(MAIN, entry_path.to_string(), entry_text, ModuleOrigin::User);
-    loader.add_std_modules(std);
     let (loaded, diagnostics, _) = loader.finish(prelude, entry);
     (loaded, diagnostics)
 }
@@ -156,8 +155,8 @@ pub fn load_session(
     cache: &ImportCache,
 ) -> (Loaded, Vec<Diagnostic>, ImportCache) {
     // 入口のファイルは `:load` のファイルで、なければ空である。依存先と後の入力がそれを import すると E1030 になる
-    let mut loader = Loader::new(root, entry_file, source, cache);
-    let prelude = loader.add_prelude(std);
+    let mut loader = Loader::new(std, root, entry_file, source, cache);
+    let prelude = loader.add_prelude();
     debug_assert!(
         inputs
             .iter()
@@ -176,7 +175,6 @@ pub fn load_session(
         entry = Some(loader.add_session(&name, path, input.text, origin, input.form));
     }
     let entry = entry.expect("a session has the current input");
-    loader.add_std_modules(std);
     loader.finish(prelude, entry)
 }
 
@@ -194,6 +192,8 @@ fn std_shown(file: &str) -> String {
 }
 
 struct Loader<'a> {
+    /// 埋め込んだ標準ライブラリ。モジュールは要るときに読む。
+    std: &'a [(&'a str, &'a str)],
     /// 入口の表示のパスのディレクトリ (`/` で終わるか空)。根は入口のファイルのディレクトリである
     /// (docs/spec/modules.md の「モジュール」)。
     root: &'a str,
@@ -227,12 +227,14 @@ enum Reserved {
 
 impl<'a> Loader<'a> {
     fn new(
+        std: &'a [(&'a str, &'a str)],
         root: &'a str,
         entry_file: &'a str,
         source: &'a dyn ModuleSource,
         cache: &'a ImportCache,
     ) -> Loader<'a> {
         Loader {
+            std,
             root,
             entry_file,
             source,
@@ -245,8 +247,9 @@ impl<'a> Loader<'a> {
         }
     }
 
-    fn add_prelude(&mut self, std: &[(&str, &str)]) -> FileId {
-        let text = std
+    fn add_prelude(&mut self) -> FileId {
+        let text = self
+            .std
             .iter()
             .find(|&&(file, _)| file == PRELUDE_FILE)
             .map(|&(_, text)| text)
@@ -254,10 +257,40 @@ impl<'a> Loader<'a> {
         self.add_std(PRELUDE_FILE, PRELUDE, PRELUDE_PATH.to_string(), text)
     }
 
-    fn add_std_modules(&mut self, std: &[(&str, &str)]) {
-        for &(file, text) in std.iter().filter(|&&(file, _)| file != PRELUDE_FILE) {
-            let name = format!("{STD_ROOT}.{}", std_path(file).dotted());
-            self.add_std(file, &name, std_shown(file), text);
+    /// `std/` からのパスが `path` の標準ライブラリのモジュール。まだ読んでいなければ、ここで読んで末尾に足す。
+    fn std_module(&mut self, path: &ModulePath) -> Option<ModuleId> {
+        if let Some(&id) = self.by_path.get(&(ModuleOrigin::Std, path.clone())) {
+            return Some(id);
+        }
+        let &(file, text) = self
+            .std
+            .iter()
+            .find(|&&(file, _)| std_path(file) == *path)?;
+        let id = module_id(self.modules.len());
+        let name = format!("{STD_ROOT}.{}", path.dotted());
+        self.add_std(file, &name, std_shown(file), text);
+        Some(id)
+    }
+
+    /// ユーザーのモジュールの構文に修飾子として現れる標準ライブラリのモジュールを読む。修飾子は名前解決より前に、
+    /// 位置によらず構文木の名前の経路のすべてから拾う。`Std.Fs` も数えるのは、E1031 の help が標準ライブラリの `Fs` を
+    /// 引くためである (docs/spec/modules.md の「標準ライブラリ」)。
+    fn load_qualified_std(&mut self, index: usize) {
+        let qualifiers: Vec<ModulePath> = self.modules[index]
+            .parse
+            .paths()
+            .filter_map(|path| {
+                let mut segments: Vec<String> = path
+                    .segments()
+                    .map(|segment| segment.text().to_string())
+                    .collect();
+                segments.pop();
+                (!segments.is_empty()).then_some(ModulePath(segments))
+            })
+            .collect();
+        for qualifier in qualifiers {
+            let path = std_relative(&qualifier).unwrap_or(qualifier);
+            self.std_module(&path);
         }
     }
 
@@ -267,6 +300,9 @@ impl<'a> Loader<'a> {
         let mut next = 0;
         while next < self.modules.len() {
             self.resolve_imports(next);
+            if !self.modules[next].origin.is_std() {
+                self.load_qualified_std(next);
+            }
             next += 1;
         }
         let Loader {
@@ -390,11 +426,14 @@ impl<'a> Loader<'a> {
                 self.by_path.insert(key, id);
                 self.remember(&import.path, Cached::User(text.clone()));
                 self.add(&import.path.dotted(), shown, &text, ModuleOrigin::User);
+                // ユーザーのモジュールが勝っても同じパスの標準ライブラリのモジュールを読むのは、そこにしかない名前を
+                // 引いたときに `import Std.X as F` の help を付けるためである
+                self.std_module(&import.path);
                 ImportTarget::Module(id)
             }
             Err(ReadError::NotFound) => {
-                match self.by_path.get(&(ModuleOrigin::Std, import.path.clone())) {
-                    Some(&id) => {
+                match self.std_module(&import.path) {
+                    Some(id) => {
                         // 同じパスを import するほかのモジュールが、ユーザーの根を読み直さないようにする
                         self.by_path.insert(key, id);
                         self.remember(&import.path, Cached::Std);
@@ -436,10 +475,10 @@ impl<'a> Loader<'a> {
         }
     }
 
-    /// `path` は `std/` からのパスである。標準ライブラリのモジュールはすべて読み込み済みなので、表から引くだけでよい。
+    /// `path` は `std/` からのパスである。
     fn std_target(&mut self, file: FileId, import: &ImportItem, path: &ModulePath) -> ImportTarget {
-        match self.by_path.get(&(ModuleOrigin::Std, path.clone())) {
-            Some(&id) => ImportTarget::Module(id),
+        match self.std_module(path) {
+            Some(id) => ImportTarget::Module(id),
             None => {
                 let shown = std_shown(&path.file_path());
                 self.diagnostics

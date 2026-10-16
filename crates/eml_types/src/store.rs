@@ -1117,7 +1117,7 @@ mod tests {
 
     #[test]
     fn linearity_joins_the_effective_arguments_and_fields() {
-        let program = crate::test_program("data Phantom a = Phantom Int");
+        let program = crate::test_program("import Std.Fs\n\ndata Phantom a = Phantom Int");
         let mut types = TypeStore::new(&program);
         let file = con(&mut types, program.extern_type(ExternType::File), vec![]);
         let (int, unit) = (types.int(), types.unit());
@@ -1158,7 +1158,7 @@ mod tests {
 
     #[test]
     fn linearity_or_poly_reads_a_relative_type_without_stopping() {
-        let program = crate::test_program("");
+        let program = crate::test_program("import Std.Fs");
         let mut types = TypeStore::new(&program);
         let file = con(&mut types, program.extern_type(ExternType::File), vec![]);
         let (int, unit) = (types.int(), types.unit());
@@ -1240,7 +1240,7 @@ mod tests {
 
     #[test]
     fn lin_compatible_rejects_only_unr_against_lin() {
-        let program = crate::test_program("");
+        let program = crate::test_program("import Std.Fs");
         let mut types = TypeStore::new(&program);
         let file = con(&mut types, program.extern_type(ExternType::File), vec![]);
         let int = types.int();

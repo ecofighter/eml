@@ -40,7 +40,7 @@ fn shown(files: &SourceFiles, label: &Label) -> String {
 #[test]
 fn a_linear_misuse_in_a_std_module_points_into_that_module() {
     let fs_extra = "pub held : Unit -> <Choice, IO> Unit\nheld () =\n  let f = open \"a.txt\"\n  let b = choose ()\n  close f\n";
-    insta::assert_snapshot!(check_with_std_extras(CHOICE, fs_extra, ""), @r#"
+    insta::assert_snapshot!(check_with_std_extras(CHOICE, fs_extra, "import Std.Fs"), @r#"
     E3006 `f` must be used exactly once, but it is kept alive across a call that may resume more than once
       <std>/Fs.em "choose ()" this call may perform `choose`, a `multi` operation
       <std>/Fs.em "f" `f` is bound here
@@ -64,7 +64,7 @@ fn a_carry_over_through_a_prelude_function_points_into_the_prelude() {
 #[test]
 fn linear_misuses_in_a_std_module_point_into_that_module() {
     let fs_extra = "pub twice : File -> <IO> Unit\ntwice f =\n  close f\n  close f\n\npub dropped : File -> <IO> Unit\ndropped f = ()\n\npub discarded : File -> <IO> Unit\ndiscarded _ = ()\n";
-    let shown = check_with_std_extras("", fs_extra, "");
+    let shown = check_with_std_extras("", fs_extra, "import Std.Fs");
     // どの診断も、すべてのラベルが Fs の中を指す
     for line in shown.lines().filter(|line| line.starts_with("  ")) {
         assert!(line.starts_with("  <std>/Fs.em "), "{shown}");

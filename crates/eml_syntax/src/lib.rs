@@ -58,6 +58,11 @@ impl Parse {
         ast::ReplInput::cast(self.syntax())
             .expect("the root of `parse_input` and `parse_query` is a REPL input")
     }
+
+    /// 木のすべての名前の経路。読み込みの段が、名前解決より前に修飾子を拾うのに使う。
+    pub fn paths(&self) -> impl Iterator<Item = ast::Path> {
+        self.syntax().descendants().filter_map(ast::Path::cast)
+    }
 }
 
 pub fn parse(file: FileId, text: &str) -> (Parse, Vec<Diagnostic>) {

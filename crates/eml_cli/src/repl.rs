@@ -285,6 +285,11 @@ impl Repl {
                     },
                 });
             }
+            // 標準ライブラリのモジュールは使う入力でだけ読み込むので、この入力が読まなかったモジュールの item は、前の
+            // 位置のまま覚えておく (docs/spec/modules.md の「REPL のセッション」)
+            for (key, positions) in std::mem::take(&mut self.uniform) {
+                uniform.entry(key).or_insert(positions);
+            }
             self.uniform = uniform;
         }
         Evaluated {
@@ -506,13 +511,17 @@ fn uniform_positions(
     positions
 }
 
-/// 前に受け付けた item のうち、一様な位置が変わった最初のものの名前。
+/// 前に受け付けた item のうち、一様な位置が変わった最初のものの名前。今の入力が読み込まなかった標準ライブラリの
+/// モジュールの item は、今のプログラムにないので比べない。
 fn first_change<'a>(
     before: &'a BTreeMap<UniformKey, Positions>,
     now: &BTreeMap<UniformKey, Positions>,
 ) -> Option<&'a str> {
     before
         .iter()
-        .find(|(key, positions)| now.get(*key).map(|now| &now.uniform) != Some(&positions.uniform))
+        .find(|(key, positions)| {
+            now.get(*key)
+                .is_some_and(|now| now.uniform != positions.uniform)
+        })
         .map(|(_, positions)| positions.name.as_str())
 }

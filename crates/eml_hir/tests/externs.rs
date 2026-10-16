@@ -7,11 +7,18 @@ use eml_hir::{
 
 use crate::common::{diagnostics, lower_text};
 
-/// 標準ライブラリだけのプログラム。入口は標準ライブラリを使うだけである。
+/// 標準ライブラリだけのプログラム。標準ライブラリは使うモジュールだけを読み込むので、入口がすべてのモジュールを
+/// import する。
 fn std_program() -> Program {
+    let imports: String = eml_hir::STD
+        .iter()
+        .filter_map(|(file, _)| file.strip_suffix(".em"))
+        .filter(|&name| name != "Prelude")
+        .map(|name| format!("import Std.{}\n", name.replace('/', ".")))
+        .collect();
     let lowered = eml_test_support::lower_with_std(
         eml_hir::STD,
-        "main : Unit -> <IO> Unit\nmain () = println \"x\"",
+        &format!("{imports}\nmain : Unit -> <IO> Unit\nmain () = println \"x\""),
     );
     assert!(
         lowered.diagnostics.is_empty(),

@@ -398,7 +398,7 @@ impl ItemLowering<'_> {
             }
         };
         // `Unit` は型の表で要素のないタプルなので、処理系の構造的な instance だけを持つ
-        if id == Some(self.def_map.externs().ty(ExternType::Unit)) {
+        if id.is_some() && id == self.def_map.externs().ty(ExternType::Unit) {
             self.invalid_head(range, "`Unit` has only built-in instances");
             valid = false;
         }

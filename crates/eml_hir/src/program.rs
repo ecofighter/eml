@@ -405,9 +405,11 @@ impl Program {
         }
     }
 
-    /// extern の型を宣言した item。
+    /// extern の型を宣言した item。型を宣言したモジュールを読み込んでいなければ panic する。Prelude の型はいつもある。
     pub fn extern_type(&self, ty: ExternType) -> TypeDefId {
-        self.externs.ty(ty)
+        self.externs
+            .ty(ty)
+            .unwrap_or_else(|| panic!("`{}` is not loaded", ty.row().name))
     }
 
     /// `IO` を宣言した item。

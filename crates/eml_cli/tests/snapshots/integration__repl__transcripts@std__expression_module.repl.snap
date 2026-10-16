@@ -1,0 +1,14 @@
+---
+source: crates/eml_cli/tests/repl.rs
+expression: checked.render()
+input_file: crates/eml_cli/tests/repl/std/expression_module.repl
+---
+> double : Int -> Int
+. double x = x * 2
+.
+> fn (path : String) -> Fs.open path
+<fn> : String -> <IO> File
+> double 21
+42
+--- close ---
+no leaks

@@ -244,7 +244,7 @@ fn imported_modules_follow_the_entry() {
         .iter()
         .map(|(_, module)| module.name.as_str())
         .collect();
-    assert_eq!(names, ["Prelude", "Main", "Std.Fs", "Report.Csv"]);
+    assert_eq!(names, ["Prelude", "Main", "Report.Csv"]);
     let g = function_id(program, "g");
     assert_eq!(
         lowered.files().path(program.file(g.module)),

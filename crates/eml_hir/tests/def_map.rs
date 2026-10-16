@@ -166,7 +166,7 @@ fn types_and_effects_share_the_type_namespace() {
     let resolver = map.resolver(map.entry());
     assert_eq!(
         resolver.type_item(Plain("Int")),
-        Resolved::Found(TypeItem::Type(map.externs().ty(ExternType::Int)))
+        Resolved::Found(TypeItem::Type(map.externs().ty(ExternType::Int).unwrap()))
     );
     assert_eq!(
         resolver.type_item(Plain("IO")),
@@ -515,7 +515,6 @@ fn names_defined_by_two_modules_are_qualified() {
         [
             "type Main.Bool -> Main.Bool",
             "type Main.Cont -> Cont",
-            "type Std.Fs.File -> File",
             "type Report.Row -> Report.Row",
             "type Report.Answer -> Answer",
             "effect Main.Log -> Main.Log",
@@ -545,7 +544,6 @@ fn a_duplicate_in_one_module_counts_once() {
         [
             "type Main.T -> T",
             "type Main.T -> T",
-            "type Std.Fs.File -> File",
             "constructor Main.A -> A",
             "constructor Main.B -> B",
         ]
@@ -557,23 +555,24 @@ fn a_user_unit_qualifies_the_empty_tuple() {
     let lowered = eml_test_support::lower("data Unit = | U");
     assert_eq!(
         shown_names(&lowered),
-        [
-            "type Main.Unit -> Main.Unit",
-            "type Std.Fs.File -> File",
-            "constructor Main.U -> U"
-        ]
+        ["type Main.Unit -> Main.Unit", "constructor Main.U -> U"]
     );
     assert_eq!(lowered.program.names.unit(), "Prelude.Unit");
 }
 
 #[test]
 fn a_std_name_defined_by_a_user_module_is_qualified_by_the_canonical_name() {
+    // 標準ライブラリの `pub` でない `Secret` は、利用者が書けないので衝突に数えず、自分だけを修飾する
     let fs = format!(
-        "{}\npub data Tag = | A\n\npub data Only = | O",
+        "{}\npub data Tag = | A\n\npub data Only = | O\n\ndata Secret = | Z",
         eml_hir::STD[1].1
     );
     let std = [("Prelude.em", eml_hir::PRELUDE_SOURCE), ("Fs.em", &fs)];
-    let lowered = eml_test_support::lower_with_std(&std, "data Tag = | B");
+    // 標準ライブラリの `Fs` は、使うときだけ読み込む
+    let lowered = eml_test_support::lower_with_std(
+        &std,
+        "import Std.Fs\n\ndata Tag = | B\n\ndata Secret = | S",
+    );
     assert_eq!(
         eml_test_support::short(lowered.files(), &lowered.diagnostics),
         Vec::<String>::new()
@@ -582,12 +581,16 @@ fn a_std_name_defined_by_a_user_module_is_qualified_by_the_canonical_name() {
         shown_names(&lowered),
         [
             "type Main.Tag -> Main.Tag",
+            "type Main.Secret -> Secret",
             "type Std.Fs.File -> File",
             "type Std.Fs.Tag -> Std.Fs.Tag",
             "type Std.Fs.Only -> Only",
+            "type Std.Fs.Secret -> Std.Fs.Secret",
             "constructor Main.B -> B",
+            "constructor Main.S -> S",
             "constructor Std.Fs.A -> A",
             "constructor Std.Fs.O -> O",
+            "constructor Std.Fs.Z -> Z",
         ]
     );
 }
