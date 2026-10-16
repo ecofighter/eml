@@ -259,6 +259,11 @@ main () =
   - エフェクトの表を書くダンプのスナップショット (`eml_core_ir` の translate のテスト、`eml_lir` のテスト、`eml_vm` の `codegen.rs` など)。`IO` のない利用者のプログラムでも `effect Prelude.IO` の行が足され、利用者のエフェクトの番号が1つずつずれる
 - `crates/eml_syntax/tests/declarations.rs` の `extern effect E a` の誤りの文言 (``` `extern effect` cannot have parameters or `=` ```)
 - `crates/eml_core_ir/tests/externs.rs` の比べ方: 型変数を許すのは `ret` が `Never` の行の結果だけにし、その行の `ret_kind` は比べない。`exit` を足したためである
+- 継続の関数の変数の表を詰めるようにしたことによるもの
+  - `f$kN` と `f$jJ` を書く Core IR と LIR のダンプのスナップショット (`crates/eml_core_ir/tests/evidence.rs`、`crates/eml_core_ir/src/evidence/tests.rs` など)。変数の番号を、その関数の本体に現れる変数だけで0から振り直す。IO の extern の呼び出しが yield の地点になったので、継続の関数の数が1つの関数の中の IO の呼び出しの数に比例する。そのため元の関数の変数の表を継続の関数ごとに丸ごと写すと、表の大きさの和が2乗になる ([Core IR](../../spec/core-ir.md) の「継続の関数」)
+- `switch` や `compose$` の数を数える4つのテストの数え方。IO の extern の後の yield の確認が `switch` と `compose$` を足すので、テストが確かめたいものだけを数える
+  - `crates/eml_vm/tests/scaling.rs` の `long_sequence_of_if_statements_does_not_overflow_the_stack`、`crates/eml_core_ir/tests/translate.rs` の `a_long_run_of_if_statements_is_translated_without_deep_recursion`、`crates/eml_core_ir/tests/verify.rs` の `a_long_run_of_if_statements_is_verified_in_linear_time` は、`prim yielding()` の結果で分ける `switch` を除いて数え、文の `if` ごとに `switch` が1つあることを確かめる
+  - `crates/eml_core_ir/tests/evidence.rs` の `closures_ep_builds_take_the_join_of_their_captures` は、`use_it$k0` のクロージャを足す `compose$` を選び、その印が `lin` であることを確かめる
 - Prelude に足す名前 (`IOError`、`IOErrorKind`、そのコンストラクタ、`try_io`、`exit`) と重なる型を、表示で `Main.` 付きに書くようになるスナップショット。今のテストには見当たらないが、見つかれば書き直す
 
 ### 機械的な追随 (種類 3)

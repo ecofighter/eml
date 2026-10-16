@@ -152,3 +152,32 @@ impl eml_hir::ModuleSource for NoModules {
         Err(eml_hir::ReadError::NotFound)
     }
 }
+
+/// 関数の `switch` のうち、EP が yield の地点の後に置く確認 (`prim yielding()` の結果での `switch`) を除いた数。
+/// IO の extern も yield の地点なので、文の `if` が作る `switch` だけを数えるときに使う
+/// (docs/spec/core-ir.md の「IO の extern」)。
+pub fn if_switches(function: &eml_lir::LirFn) -> usize {
+    let checks: std::collections::HashSet<eml_lir::VarId> = function
+        .blocks
+        .iter()
+        .flat_map(|block| &block.stmts)
+        .filter_map(|stmt| match stmt {
+            eml_lir::Stmt::Let {
+                var,
+                rhs: eml_lir::Rhs::Prim(eml_lir::Prim::Yielding, _),
+            } => Some(*var),
+            _ => None,
+        })
+        .collect();
+    function
+        .blocks
+        .iter()
+        .filter(|block| match &block.term {
+            eml_lir::Term::Switch {
+                scrutinee: eml_lir::Atom::Var(var),
+                ..
+            } => !checks.contains(var),
+            term => matches!(term, eml_lir::Term::Switch { .. }),
+        })
+        .count()
+}

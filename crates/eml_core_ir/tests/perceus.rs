@@ -22,10 +22,35 @@ fn strings_are_dupped_and_decreffed() {
       let s.1: obj = const "a"
       let t.2: obj = call twice(s.1)
       let t.3: unit = extern Prelude.println(t.2)
+      let y.4: int = prim yielding()
+      switch y.4 { 0 -> b2, _ -> b1 }
+    b1:
+      let k.5: tobj poly = prim yield_cont_take()
+      let k.6: tobj poly = closure compose$(k.5, &main$k0)
+      let u.7: unit = prim yield_cont_set(k.6)
+      return ()
+    b2:
       return t.3
     }
     yields fn entry$main() -> unit {
       tail call main(())
+    }
+    internal yields fn main$k0(t.0: unit) -> unit {
+      return t.0
+    }
+    yields fn compose$(k.0: tobj poly, c.1: tobj poly, x.2: tobj poly) -> tobj poly {
+      let r.3: tobj poly = yields apply k.0(x.2)
+      let y.4: int = prim yielding()
+      switch y.4 { 0 -> b2, _ -> b1 }
+    b1:
+      let u.5: unit = drop r.3
+      let k.6: tobj poly = prim yield_cont_take()
+      let k.7: tobj poly = closure compose$(k.6, c.1)
+      let u.8: unit = prim yield_cont_set(k.7)
+      let d.9: obj poly = prim dummy()
+      return d.9
+    b2:
+      tail yields apply c.1(r.3)
     }
     "#);
 }
@@ -40,10 +65,35 @@ fn shadowed_and_discarded_strings() {
       let s.2: obj = const "y"
       let t.3: obj = extern Prelude.++(s.1, s.2)
       let t.5: unit = extern Prelude.println(t.3)
+      let y.6: int = prim yielding()
+      switch y.6 { 0 -> b2, _ -> b1 }
+    b1:
+      let k.7: tobj poly = prim yield_cont_take()
+      let k.8: tobj poly = closure compose$(k.7, &main$k0)
+      let u.9: unit = prim yield_cont_set(k.8)
+      return ()
+    b2:
       return t.5
     }
     yields fn entry$main() -> unit {
       tail call main(())
+    }
+    internal yields fn main$k0(t.0: unit) -> unit {
+      return t.0
+    }
+    yields fn compose$(k.0: tobj poly, c.1: tobj poly, x.2: tobj poly) -> tobj poly {
+      let r.3: tobj poly = yields apply k.0(x.2)
+      let y.4: int = prim yielding()
+      switch y.4 { 0 -> b2, _ -> b1 }
+    b1:
+      let u.5: unit = drop r.3
+      let k.6: tobj poly = prim yield_cont_take()
+      let k.7: tobj poly = closure compose$(k.6, c.1)
+      let u.8: unit = prim yield_cont_set(k.7)
+      let d.9: obj poly = prim dummy()
+      return d.9
+    b2:
+      tail yields apply c.1(r.3)
     }
     "#);
 }
@@ -200,19 +250,73 @@ fn a_file_taken_out_of_a_tuple_is_neither_dupped_nor_decreffed() {
     yields fn main(p.0: unit) -> unit {
       let s.1: obj = const "input.txt"
       let t.2: obj lin = extern Std.Fs.open(s.1)
+      let y.16: int = prim yielding()
+      switch y.16 { 0 -> b2, _ -> b1 }
+    b1:
+      let u.17: unit = drop t.2
+      let k.18: tobj poly = prim yield_cont_take()
+      let k.19: tobj poly = closure compose$(k.18, &main$k0)
+      let u.20: unit = prim yield_cont_set(k.19)
+      return ()
+    b2:
       let t.3: obj lin = extern Std.Fs.read_all(t.2)
+      let y.21: int = prim yielding()
+      switch y.21 { 0 -> b4, _ -> b3 }
+    b3:
+      let u.22: unit = drop t.3
+      let k.23: tobj poly = prim yield_cont_take()
+      let k.24: tobj poly = closure compose$(k.23, &main$k1)
+      let u.25: unit = prim yield_cont_set(k.24)
+      return ()
+    b4:
       unpack t.3 (,) #0(f.4: obj lin, first.5: obj)
       release t.3 (,) #0(f.4, first.5)
       let t.6: obj lin = extern Std.Fs.read_all(f.4)
+      let y.26: int = prim yielding()
+      switch y.26 { 0 -> b6, _ -> b5 }
+    b5:
+      let u.27: unit = drop t.6
+      let k.28: tobj poly = prim yield_cont_take()
+      let c.29: tobj = closure main$k2(first.5)
+      let k.30: tobj poly = closure compose$(k.28, c.29)
+      let u.31: unit = prim yield_cont_set(k.30)
+      return ()
+    b6:
       unpack t.6 (,) #0(f.7: obj lin, rest.8: obj)
       release t.6 (,) #0(f.7, rest.8)
       let t.9: unit = extern Std.Fs.close(f.7)
+      let y.32: int = prim yielding()
+      switch y.32 { 0 -> b8, _ -> b7 }
+    b7:
+      let k.33: tobj poly = prim yield_cont_take()
+      let c.34: tobj = closure main$k3(first.5, rest.8)
+      let k.35: tobj poly = closure compose$(k.33, c.34)
+      let u.36: unit = prim yield_cont_set(k.35)
+      return ()
+    b8:
       let t.10: unit = extern Prelude.println(first.5)
+      let y.37: int = prim yielding()
+      switch y.37 { 0 -> b10, _ -> b9 }
+    b9:
+      let k.38: tobj poly = prim yield_cont_take()
+      let c.39: tobj = closure main$k4(rest.8)
+      let k.40: tobj poly = closure compose$(k.38, c.39)
+      let u.41: unit = prim yield_cont_set(k.40)
+      return ()
+    b10:
       let s.11: obj = const "["
       let s.12: obj = const "]"
       let t.13: obj = extern Prelude.++(rest.8, s.12)
       let t.14: obj = extern Prelude.++(s.11, t.13)
       let t.15: unit = extern Prelude.println(t.14)
+      let y.42: int = prim yielding()
+      switch y.42 { 0 -> b12, _ -> b11 }
+    b11:
+      let k.43: tobj poly = prim yield_cont_take()
+      let k.44: tobj poly = closure compose$(k.43, &main$k5)
+      let u.45: unit = prim yield_cont_set(k.44)
+      return ()
+    b12:
       return t.15
     }
     "#);
@@ -233,10 +337,35 @@ fn a_discarded_call_result_is_released() {
       decref t.1
       let s.2: obj = const "x"
       let t.3: unit = extern Prelude.println(s.2)
+      let y.4: int = prim yielding()
+      switch y.4 { 0 -> b2, _ -> b1 }
+    b1:
+      let k.5: tobj poly = prim yield_cont_take()
+      let k.6: tobj poly = closure compose$(k.5, &main$k0)
+      let u.7: unit = prim yield_cont_set(k.6)
+      return ()
+    b2:
       return t.3
     }
     yields fn entry$main() -> unit {
       tail call main(())
+    }
+    internal yields fn main$k0(t.0: unit) -> unit {
+      return t.0
+    }
+    yields fn compose$(k.0: tobj poly, c.1: tobj poly, x.2: tobj poly) -> tobj poly {
+      let r.3: tobj poly = yields apply k.0(x.2)
+      let y.4: int = prim yielding()
+      switch y.4 { 0 -> b2, _ -> b1 }
+    b1:
+      let u.5: unit = drop r.3
+      let k.6: tobj poly = prim yield_cont_take()
+      let k.7: tobj poly = closure compose$(k.6, c.1)
+      let u.8: unit = prim yield_cont_set(k.7)
+      let d.9: obj poly = prim dummy()
+      return d.9
+    b2:
+      tail yields apply c.1(r.3)
     }
     "#);
 }

@@ -10,6 +10,7 @@ use std::ops::Range;
 use crate::liveness::{insert_var, live_after_term, live_in, step_back};
 use crate::tail::tail_position_call;
 use crate::{Block, Call, CoreFn, Program, Rhs, Stmt, Term};
+use eml_extern::Purity;
 use eml_lir::{Atom, BlockId, FnIdx, Mark, Prim, Repr, VarId, VarInfo};
 
 use super::{Helpers, captured_mark, direct, dummy, named, reserve, yield_switch};
@@ -90,8 +91,7 @@ pub(crate) fn split(
         Mode::Whole,
     );
     let rewritten = &mut program.functions[function.0 as usize];
-    rewritten.vars = whole.vars;
-    rewritten.blocks = whole.blocks;
+    (rewritten.vars, rewritten.blocks) = whole.whole();
 
     for index in 0..splitter.points.len() {
         let point = &splitter.points[index];
@@ -124,27 +124,41 @@ fn yield_points(
     for (index, block) in function.blocks.iter().enumerate() {
         let id = BlockId(index as u32);
         let tail = tail_position_call(block).map(|(at, _)| at);
+        let first = points.len();
         for (at, stmt) in block.stmts.iter().enumerate() {
-            let Stmt::Let {
-                var,
-                rhs: Rhs::Call { call, mask: _ },
-            } = stmt
-            else {
-                continue;
+            let (var, yields) = match stmt {
+                Stmt::Let {
+                    var,
+                    rhs: Rhs::Call { call, mask: _ },
+                } => (
+                    var,
+                    match call {
+                        Call::Direct(target, _) => program.function(*target).yields,
+                        Call::Apply {
+                            callee: _,
+                            args: _,
+                            yields,
+                        } => *yields,
+                        Call::Clause { .. } => true,
+                        Call::Handle { .. } | Call::Perform { .. } | Call::Resume { .. } => false,
+                    },
+                ),
+                // `IO` を起こす extern は、失敗すると VM が `io_failed` の節を呼んで中断を始め、`exit` はいつも中断を
+                // 始める。extern は末尾呼び出しにならないので、末尾の例外はない (docs/spec/core-ir.md の「IO の extern」)
+                Stmt::Let {
+                    var,
+                    rhs:
+                        Rhs::Extern {
+                            ext,
+                            args: _,
+                            at: _,
+                        },
+                } => (var, ext.row().purity == Purity::Effectful),
+                _ => continue,
             };
             if tail == Some(at) || annotations.not_yield_points.contains(&(id, at)) {
                 continue;
             }
-            let yields = match call {
-                Call::Direct(target, _) => program.function(*target).yields,
-                Call::Apply {
-                    callee: _,
-                    args: _,
-                    yields,
-                } => *yields,
-                Call::Clause { .. } => true,
-                Call::Handle { .. } | Call::Perform { .. } | Call::Resume { .. } => false,
-            };
             if !yields && !annotations.forced.contains(&(id, at)) {
                 continue;
             }
@@ -160,35 +174,37 @@ fn yield_points(
                     ),
                 "a masked call is followed by `evv_set(w0)`"
             );
-            let resume = at + 1 + usize::from(mask.is_some());
-            let mut live = live_after(function, block, resume, live_in);
-            live.remove(var);
             points.push(Point {
                 block: id,
                 call: at,
-                resume,
+                resume: at + 1 + usize::from(mask.is_some()),
                 result: *var,
-                live: live.into_iter().collect(),
+                live: Vec::new(),
                 mask,
             });
         }
+        fill_live(function, block, live_in, &mut points[first..]);
     }
     points
 }
 
-/// `block` の `from` 番目の文の前で生きている変数。
-fn live_after(
-    function: &CoreFn,
-    block: &Block,
-    from: usize,
-    live_in: &[Vec<VarId>],
-) -> BTreeSet<VarId> {
+/// 1つのブロックの地点ごとに、続きの始めで生きている変数を決める。ブロックを後ろから1回だけたどる。地点ごとに
+/// ブロックの末尾からたどると、IO の extern が並ぶブロックでは文の数の2乗の手間になるためである。
+fn fill_live(function: &CoreFn, block: &Block, live_in: &[Vec<VarId>], points: &mut [Point]) {
     let mut live = live_after_term(function, &block.term, live_in);
     block.term.for_each_atom(|atom| insert_var(&mut live, atom));
-    for stmt in block.stmts[from..].iter().rev() {
-        step_back(stmt, &mut live);
+    let mut end = block.stmts.len();
+    for point in points.iter_mut().rev() {
+        for stmt in block.stmts[point.resume..end].iter().rev() {
+            step_back(stmt, &mut live);
+        }
+        end = point.resume;
+        point.live = live
+            .iter()
+            .copied()
+            .filter(|&var| var != point.result)
+            .collect();
     }
-    live
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -220,7 +236,7 @@ struct Splitter<'a> {
     pending: Vec<BlockId>,
 }
 
-impl Splitter<'_> {
+impl<'a> Splitter<'a> {
     fn points_of(&self, block: BlockId) -> Range<usize> {
         self.by_block[block.0 as usize].clone()
     }
@@ -283,20 +299,21 @@ impl Splitter<'_> {
     }
 
     fn continuation(&self, idx: FnIdx, program: &Program, body: Out) -> CoreFn {
+        let (vars, blocks) = body.compact();
         CoreFn {
             name: program.function(idx).name.clone(),
             internal: true,
             yields: true,
             clause: None,
-            vars: body.vars,
+            vars,
             ret: self.source.ret,
             ret_mark: self.source.ret_mark,
-            blocks: body.blocks,
+            blocks,
         }
     }
 
-    /// 部分を並べた順に関数の本体を作る。変数の表は元の関数を写し、変数の番号を変えない。新しい変数は表の末尾に
-    /// 足す。ブロックの番号は、部分ごとの数 (地点ごとに確認の後の遅い道と速い道の2つが増える) から先に決める。
+    /// 部分を並べた順に関数の本体を作る。写した文は元の関数の変数の番号をそのまま使い、新しい変数はその後ろの番号に
+    /// する。ブロックの番号は、部分ごとの数 (地点ごとに確認の後の遅い道と速い道の2つが増える) から先に決める。
     fn build(
         &mut self,
         program: &mut Program,
@@ -304,7 +321,7 @@ impl Splitter<'_> {
         segments: &[Segment],
         params: Vec<VarId>,
         mode: Mode,
-    ) -> Out {
+    ) -> Out<'a> {
         let mut starts = HashMap::new();
         let mut next = 0;
         for segment in segments {
@@ -314,7 +331,8 @@ impl Splitter<'_> {
         let mut out = Out {
             mode,
             starts,
-            vars: self.source.vars.clone(),
+            source: &self.source.vars,
+            added: Vec::new(),
             blocks: Vec::with_capacity(next as usize),
         };
         let mut params = Some(params);
@@ -332,7 +350,7 @@ impl Splitter<'_> {
         &mut self,
         program: &mut Program,
         helpers: &mut Helpers,
-        out: &mut Out,
+        out: &mut Out<'a>,
         segment: &Segment,
         mut params: Vec<VarId>,
     ) {
@@ -395,15 +413,51 @@ impl Splitter<'_> {
 }
 
 /// 作っている関数の本体。
-struct Out {
+struct Out<'a> {
     mode: Mode,
     /// 写す元のブロックごとの、最初の部分の新しい番号。
     starts: HashMap<BlockId, BlockId>,
-    vars: Vec<VarInfo>,
+    /// 元の関数の変数の表。関数ごとに写さず、番号の前の部分として読む。
+    source: &'a [VarInfo],
+    /// 新しく足した変数。番号は `source` の後ろに続く。
+    added: Vec<VarInfo>,
     blocks: Vec<Block>,
 }
 
-impl Out {
+impl Out<'_> {
+    fn info(&self, var: VarId) -> &VarInfo {
+        let index = var.0 as usize;
+        self.source
+            .get(index)
+            .unwrap_or_else(|| &self.added[index - self.source.len()])
+    }
+
+    /// 元の関数の本体。変数の番号は元のままで、足した変数を表の末尾に置く。
+    fn whole(self) -> (Vec<VarInfo>, Vec<Block>) {
+        let mut vars = self.source.to_vec();
+        vars.extend(self.added);
+        (vars, self.blocks)
+    }
+
+    /// 継続の関数と合流のブロックの関数の本体。変数の表を本体が使う変数だけにし、番号の順を保って詰める。元の関数の
+    /// 表を丸ごと写すと、地点の数だけ表が増え、写すコードを元の2倍ほどに収める見積もりが崩れるためである
+    /// (docs/spec/core-ir.md の「継続の関数」)。
+    fn compact(mut self) -> (Vec<VarInfo>, Vec<Block>) {
+        let mut used = Vec::new();
+        for block in &mut self.blocks {
+            for_each_var_mut(block, |var| used.push(*var));
+        }
+        used.sort_unstable();
+        used.dedup();
+        for block in &mut self.blocks {
+            for_each_var_mut(block, |var| {
+                *var = VarId(used.binary_search(var).expect("a used variable") as u32);
+            });
+        }
+        let vars = used.iter().map(|&var| self.info(var).clone()).collect();
+        (vars, self.blocks)
+    }
+
     fn bind(
         &mut self,
         stmts: &mut Vec<Stmt>,
@@ -412,8 +466,8 @@ impl Out {
         mark: Mark,
         rhs: Rhs,
     ) -> VarId {
-        self.vars.push(named(name, repr, mark));
-        let var = VarId(self.vars.len() as u32 - 1);
+        let var = VarId((self.source.len() + self.added.len()) as u32);
+        self.added.push(named(name, repr, mark));
         stmts.push(Stmt::Let { var, rhs });
         var
     }
@@ -439,7 +493,7 @@ impl Out {
         target: FnIdx,
         captures: Vec<Atom>,
     ) -> VarId {
-        let mark = captured_mark(|var| self.vars[var.0 as usize].mark, &captures);
+        let mark = captured_mark(|var| self.info(var).mark, &captures);
         self.bind(
             stmts,
             name,
@@ -463,7 +517,7 @@ fn slow_path(
     ret: Repr,
 ) -> Block {
     let mut stmts = Vec::new();
-    let result = &out.vars[point.result.0 as usize];
+    let result = out.info(point.result);
     if result.repr.is_rc() && result.mark != Mark::Unr {
         out.bind(
             &mut stmts,
@@ -501,5 +555,40 @@ fn slow_path(
         params: Vec::new(),
         stmts,
         term: Term::Return(value),
+    }
+}
+
+/// ブロックの中の変数の出現 (引数、束縛、使用、case のフィールド) をすべて訪れる。
+fn for_each_var_mut(block: &mut Block, mut f: impl FnMut(&mut VarId)) {
+    block.params.iter_mut().for_each(&mut f);
+    for stmt in &mut block.stmts {
+        match stmt {
+            Stmt::Let { var, rhs } => {
+                f(var);
+                rhs.for_each_atom_mut(|atom| {
+                    if let Atom::Var(var) = atom {
+                        f(var);
+                    }
+                });
+            }
+            Stmt::Unpack {
+                value,
+                ctor: _,
+                fields,
+            } => {
+                f(value);
+                fields.iter_mut().for_each(&mut f);
+            }
+        }
+    }
+    block.term.for_each_atom_mut(|atom| {
+        if let Atom::Var(var) = atom {
+            f(var);
+        }
+    });
+    if let Term::Switch { cases, .. } = &mut block.term {
+        for case in cases {
+            case.fields.iter_mut().for_each(&mut f);
+        }
     }
 }

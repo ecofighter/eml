@@ -206,6 +206,19 @@ impl Term {
             } => f(*scrutinee),
         }
     }
+
+    pub fn for_each_atom_mut(&mut self, mut f: impl FnMut(&mut Atom)) {
+        match self {
+            Term::Return(atom) => f(atom),
+            Term::Jump { target: _, args } => args.iter_mut().for_each(f),
+            Term::Switch {
+                scrutinee,
+                layout: _,
+                cases: _,
+                default: _,
+            } => f(scrutinee),
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -249,6 +262,22 @@ impl Rhs {
             | Rhs::Con { ctor: _, args }
             | Rhs::Prim(_, args) => args.iter().for_each(|&atom| f(atom)),
             Rhs::Drop(atom) => f(*atom),
+            Rhs::ConstString(_) => {}
+        }
+    }
+
+    pub fn for_each_atom_mut(&mut self, mut f: impl FnMut(&mut Atom)) {
+        match self {
+            Rhs::Call { call, mask: _ } => call.for_each_atom_mut(f),
+            Rhs::MakeClosure(_, args)
+            | Rhs::Extern {
+                ext: _,
+                args,
+                at: _,
+            }
+            | Rhs::Con { ctor: _, args }
+            | Rhs::Prim(_, args) => args.iter_mut().for_each(f),
+            Rhs::Drop(atom) => f(atom),
             Rhs::ConstString(_) => {}
         }
     }
@@ -342,6 +371,49 @@ impl Call {
                 f(*k);
                 f(*arg);
                 f(*state);
+            }
+        }
+    }
+
+    pub fn for_each_atom_mut(&mut self, mut f: impl FnMut(&mut Atom)) {
+        match self {
+            Call::Direct(_, args)
+            | Call::Perform {
+                effect: _,
+                op: _,
+                resumable: _,
+                args,
+            } => args.iter_mut().for_each(&mut f),
+            Call::Apply {
+                callee,
+                args,
+                yields: _,
+            }
+            | Call::Clause {
+                effect: _,
+                op: _,
+                callee,
+                args,
+            } => {
+                f(callee);
+                args.iter_mut().for_each(&mut f);
+            }
+            Call::Handle {
+                effect: _,
+                init,
+                body,
+                clauses,
+                ret,
+            } => {
+                f(init);
+                f(body);
+                clauses.iter_mut().for_each(&mut f);
+                f(ret);
+            }
+            Call::Resume { k, arg, state } => {
+                f(k);
+                f(arg);
+                f(state);
             }
         }
     }

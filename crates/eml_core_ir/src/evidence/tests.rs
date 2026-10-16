@@ -190,10 +190,10 @@ yields fn f(a.0: int, h.1: tobj) -> int {
       let s.8: int = extern Prelude.+(x.5, a.0)
       return s.8
     }
-    internal yields fn f$k0(a.0: int, h.1: tobj, x.5: int) -> int {
-      let r.7: tobj = yields apply h.1(())
-      let s.8: int = extern Prelude.+(x.5, a.0)
-      return s.8
+    internal yields fn f$k0(a.0: int, h.1: tobj, x.2: int) -> int {
+      let r.3: tobj = yields apply h.1(())
+      let s.4: int = extern Prelude.+(x.2, a.0)
+      return s.4
     }
     yields fn "mask$[State]"(k.0: tobj poly, v.1: tobj poly) -> tobj poly {
       let w.2: tobj = prim evv_get()

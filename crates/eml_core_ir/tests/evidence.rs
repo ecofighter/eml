@@ -119,23 +119,23 @@ yields fn f(a.0: int) -> int {
     insta::assert_snapshot!(function(&shown, "f$k0"), @"
     internal yields fn f$k0(a.0: int, x.1: int) -> int {
       let y.2: int = call g(x.1)
-      let y.4: int = prim yielding()
-      switch y.4 { 0 -> b2, _ -> b1 }
+      let y.3: int = prim yielding()
+      switch y.3 { 0 -> b2, _ -> b1 }
     b1:
-      let k.5: tobj poly = prim yield_cont_take()
-      let c.6: tobj = closure f$k1(a.0)
-      let k.7: tobj poly = closure compose$(k.5, c.6)
-      let u.8: unit = prim yield_cont_set(k.7)
+      let k.4: tobj poly = prim yield_cont_take()
+      let c.5: tobj = closure f$k1(a.0)
+      let k.6: tobj poly = closure compose$(k.4, c.5)
+      let u.7: unit = prim yield_cont_set(k.6)
       return 0
     b2:
-      let r.9: int = call f$k1(a.0, y.2)
-      return r.9
+      let r.8: int = call f$k1(a.0, y.2)
+      return r.8
     }
     ");
     insta::assert_snapshot!(function(&shown, "f$k1"), @"
-    internal yields fn f$k1(a.0: int, y.2: int) -> int {
-      let z.3: int = extern Prelude.+(y.2, a.0)
-      return z.3
+    internal yields fn f$k1(a.0: int, y.1: int) -> int {
+      let z.2: int = extern Prelude.+(y.1, a.0)
+      return z.2
     }
     ");
 }
@@ -176,23 +176,23 @@ b4:
       return a.1
     b4:
       let y.4: int = call g(v.3)
-      let y.6: int = prim yielding()
-      switch y.6 { 0 -> b6, _ -> b5 }
+      let y.5: int = prim yielding()
+      switch y.5 { 0 -> b6, _ -> b5 }
     b5:
-      let k.7: tobj poly = prim yield_cont_take()
-      let c.8: tobj = closure f$k1(x.2)
-      let k.9: tobj poly = closure compose$(k.7, c.8)
-      let u.10: unit = prim yield_cont_set(k.9)
+      let k.6: tobj poly = prim yield_cont_take()
+      let c.7: tobj = closure f$k1(x.2)
+      let k.8: tobj poly = closure compose$(k.6, c.7)
+      let u.9: unit = prim yield_cont_set(k.8)
       return 0
     b6:
-      let r.11: int = call f$k1(x.2, y.4)
-      return r.11
+      let r.10: int = call f$k1(x.2, y.4)
+      return r.10
     }
     ");
     insta::assert_snapshot!(function(&shown, "f$k1"), @"
-    internal yields fn f$k1(x.2: int, y.4: int) -> int {
-      let z.5: int = extern Prelude.+(y.4, x.2)
-      return z.5
+    internal yields fn f$k1(x.0: int, y.1: int) -> int {
+      let z.2: int = extern Prelude.+(y.1, x.0)
+      return z.2
     }
     ");
 }
@@ -247,17 +247,17 @@ b3(v.3: int):
       switch a.0 { 0 -> b1, _ -> b2 }
     b1:
       let p.2: int = extern Prelude.+(x.1, 1)
-      let r.5: int = call f$j3(a.0, p.2)
-      return r.5
+      let r.3: int = call f$j3(a.0, p.2)
+      return r.3
     b2:
-      let r.6: int = call f$j3(a.0, x.1)
-      return r.6
+      let r.4: int = call f$j3(a.0, x.1)
+      return r.4
     }
     ");
     insta::assert_snapshot!(function(&shown, "f$j3"), @"
-    internal yields fn f$j3(a.0: int, v.3: int) -> int {
-      let w.4: int = extern Prelude.+(v.3, a.0)
-      return w.4
+    internal yields fn f$j3(a.0: int, v.1: int) -> int {
+      let w.2: int = extern Prelude.+(v.1, a.0)
+      return w.2
     }
     ");
 }
@@ -287,33 +287,33 @@ b3(v.2: int):
     internal yields fn f$k0(a.0: int, x.1: int) -> int {
       switch a.0 { 0 -> b1, _ -> b2 }
     b1:
-      let r.5: int = call f$j3(x.1, x.1)
-      return r.5
+      let r.2: int = call f$j3(x.1, x.1)
+      return r.2
     b2:
-      let r.6: int = call f$j3(x.1, a.0)
-      return r.6
+      let r.3: int = call f$j3(x.1, a.0)
+      return r.3
     }
     ");
     insta::assert_snapshot!(function(&shown, "f$j3"), @"
-    internal yields fn f$j3(x.1: int, v.2: int) -> int {
-      let w.3: int = call g(v.2)
-      let y.5: int = prim yielding()
-      switch y.5 { 0 -> b2, _ -> b1 }
+    internal yields fn f$j3(x.0: int, v.1: int) -> int {
+      let w.2: int = call g(v.1)
+      let y.3: int = prim yielding()
+      switch y.3 { 0 -> b2, _ -> b1 }
     b1:
-      let k.6: tobj poly = prim yield_cont_take()
-      let c.7: tobj = closure f$k1(x.1)
-      let k.8: tobj poly = closure compose$(k.6, c.7)
-      let u.9: unit = prim yield_cont_set(k.8)
+      let k.4: tobj poly = prim yield_cont_take()
+      let c.5: tobj = closure f$k1(x.0)
+      let k.6: tobj poly = closure compose$(k.4, c.5)
+      let u.7: unit = prim yield_cont_set(k.6)
       return 0
     b2:
-      let r.10: int = call f$k1(x.1, w.3)
-      return r.10
+      let r.8: int = call f$k1(x.0, w.2)
+      return r.8
     }
     ");
     insta::assert_snapshot!(function(&shown, "f$k1"), @"
-    internal yields fn f$k1(x.1: int, w.3: int) -> int {
-      let z.4: int = extern Prelude.+(w.3, x.1)
-      return z.4
+    internal yields fn f$k1(x.0: int, w.1: int) -> int {
+      let z.2: int = extern Prelude.+(w.1, x.0)
+      return z.2
     }
     ");
 }
@@ -349,9 +349,9 @@ yields fn f(h.0: tobj, a.1: tobj) -> tobj {
     }
     ");
     insta::assert_snapshot!(function(&shown, "f$k0"), @"
-    internal yields fn f$k0(h.0: tobj, x.2: tobj, y.3: tobj) -> tobj {
-      let z.4: tobj = apply h.0(y.3)
-      return x.2
+    internal yields fn f$k0(h.0: tobj, x.1: tobj, y.2: tobj) -> tobj {
+      let z.3: tobj = apply h.0(y.2)
+      return x.1
     }
     ");
 }
@@ -541,6 +541,14 @@ fn a_handle_installs_evidence_and_calls_prompt() {
     b2:
       let t.2: obj = extern "Prelude.Show Int.show"(t.1)
       let t.3: unit = extern Prelude.println(t.2)
+      let y.14: int = prim yielding()
+      switch y.14 { 0 -> b4, _ -> b3 }
+    b3:
+      let k.15: tobj poly = prim yield_cont_take()
+      let k.16: tobj poly = closure compose$(k.15, &main$k1)
+      let u.17: unit = prim yield_cont_set(k.16)
+      return ()
+    b4:
       return t.3
     }
     "#);
@@ -733,10 +741,10 @@ fn a_masked_call_restores_the_evidence_list_and_wraps_the_continuation() {
     }
     "#);
     insta::assert_snapshot!(function(&shown, &format!("{run}$k1")), @r#"
-    internal yields fn "run<e>$k1"(t.1: int, t.2: obj) -> obj {
-      let t.3: obj = extern "Prelude.Show Int.show"(t.1)
-      let t.4: obj = extern Prelude.++(t.2, t.3)
-      return t.4
+    internal yields fn "run<e>$k1"(t.0: int, t.1: obj) -> obj {
+      let t.2: obj = extern "Prelude.Show Int.show"(t.0)
+      let t.3: obj = extern Prelude.++(t.1, t.2)
+      return t.3
     }
     "#);
 }
@@ -750,30 +758,30 @@ fn a_masked_call_in_a_continuation_restores_the_evidence_list_before_it_continue
     let run = instance_name(&shown, "run");
     insta::assert_snapshot!(function(&shown, &format!("{run}$k0")), @r#"
     internal yields fn "run<e>$k0"(cb.0: tobj, t.1: obj) -> obj {
-      let w.8: tobj = prim evv_get()
-      let w.9: tobj = prim evv_mask[State](w.8)
-      let u.10: unit = prim evv_set(w.9)
+      let w.3: tobj = prim evv_get()
+      let w.4: tobj = prim evv_mask[State](w.3)
+      let u.5: unit = prim evv_set(w.4)
       let t.2: obj = yields apply cb.0(())
-      let y.12: int = prim yielding()
-      switch y.12 { 0 -> b2, _ -> b1 }
+      let y.7: int = prim yielding()
+      switch y.7 { 0 -> b2, _ -> b1 }
     b1:
-      let k.13: tobj poly = prim yield_cont_take()
-      let k.14: tobj poly = closure "mask$[State]"(k.13)
-      let c.15: tobj = closure "run<e>$k1"(t.1)
-      let k.16: tobj poly = closure compose$(k.14, c.15)
-      let u.17: unit = prim yield_cont_set(k.16)
-      let d.18: obj poly = prim dummy()
-      return d.18
+      let k.8: tobj poly = prim yield_cont_take()
+      let k.9: tobj poly = closure "mask$[State]"(k.8)
+      let c.10: tobj = closure "run<e>$k1"(t.1)
+      let k.11: tobj poly = closure compose$(k.9, c.10)
+      let u.12: unit = prim yield_cont_set(k.11)
+      let d.13: obj poly = prim dummy()
+      return d.13
     b2:
-      let u.11: unit = prim evv_set(w.8)
-      let r.19: obj = call "run<e>$k1"(t.1, t.2)
-      return r.19
+      let u.6: unit = prim evv_set(w.3)
+      let r.14: obj = call "run<e>$k1"(t.1, t.2)
+      return r.14
     }
     "#);
     insta::assert_snapshot!(function(&shown, &format!("{run}$k1")), @r#"
-    internal yields fn "run<e>$k1"(t.1: obj, t.2: obj) -> obj {
-      let t.3: obj = extern Prelude.++(t.1, t.2)
-      return t.3
+    internal yields fn "run<e>$k1"(t.0: obj, t.1: obj) -> obj {
+      let t.2: obj = extern Prelude.++(t.0, t.1)
+      return t.2
     }
     "#);
 }
@@ -874,7 +882,11 @@ fn closures_ep_builds_take_the_join_of_their_captures() {
     let use_it = function(&shown, "use_it");
     let rest = let_line(&use_it, "closure use_it$k0(");
     assert_eq!(binding(rest), "tobj lin", "{use_it}");
-    let composed = let_line(&use_it, "closure compose$(");
+    // IO の extern の後の地点も κ に足すので、`use_it$k0` のクロージャを足す `compose$` を選ぶ
+    let (_, closure) = rest.trim_start().split_once(' ').unwrap();
+    let (closure, _) = closure.split_once(':').unwrap();
+    let composed = let_line(&use_it, &format!(", {closure})"));
+    assert!(composed.contains("closure compose$("), "{use_it}");
     assert_eq!(binding(composed), "tobj lin", "{use_it}");
     let count = function(&shown, "count");
     assert_eq!(
@@ -945,4 +957,56 @@ fn evidence_and_evv_are_unr_and_state_is_poly() {
     ] {
         assert!(seen.contains(prim), "no `{prim}`");
     }
+}
+
+#[test]
+fn an_io_extern_is_a_yield_point() {
+    let shown = core_text(
+        "main : Unit -> <IO> Unit\nmain () =\n  println \"a\"\n  println \"b\"",
+        Pass::Evidence,
+    );
+    insta::assert_snapshot!(function(&shown, "main"), @r#"
+    yields fn main(p.0: unit) -> unit {
+      let s.1: obj = const "a"
+      let t.2: unit = extern Prelude.println(s.1)
+      let y.5: int = prim yielding()
+      switch y.5 { 0 -> b2, _ -> b1 }
+    b1:
+      let k.6: tobj poly = prim yield_cont_take()
+      let k.7: tobj poly = closure compose$(k.6, &main$k0)
+      let u.8: unit = prim yield_cont_set(k.7)
+      return ()
+    b2:
+      let s.3: obj = const "b"
+      let t.4: unit = extern Prelude.println(s.3)
+      let y.9: int = prim yielding()
+      switch y.9 { 0 -> b4, _ -> b3 }
+    b3:
+      let k.10: tobj poly = prim yield_cont_take()
+      let k.11: tobj poly = closure compose$(k.10, &main$k1)
+      let u.12: unit = prim yield_cont_set(k.11)
+      return ()
+    b4:
+      return t.4
+    }
+    "#);
+}
+
+#[test]
+fn continuations_of_many_io_externs_stay_linear_in_size() {
+    // 継続の関数の大きさは元のコードの2倍ほどに収まる (docs/spec/core-ir.md の「継続の関数」)。`println` 1つにつき、
+    // `main` は呼び出しと確認と遅い道で6個ほど、継続の関数は引数を足して8個ほどの変数を持つので、合わせて14N 個ほど
+    // になる。継続の関数が元の関数の変数の表を丸ごと写すと、N^2 個ほどになる
+    const COUNT: usize = 2000;
+    let text = format!(
+        "main : Unit -> <IO> Unit\nmain () =\n{}",
+        "  println \"x\"\n".repeat(COUNT)
+    );
+    let program = eml_test_support::lir(&text);
+    let vars: usize = program
+        .functions
+        .iter()
+        .map(|function| function.vars.len())
+        .sum();
+    assert!(vars <= 16 * COUNT, "{vars} variables for {COUNT} calls");
 }

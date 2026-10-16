@@ -726,12 +726,7 @@ fn long_sequence_of_if_statements_does_not_overflow_the_stack() {
         .iter()
         .find(|function| function.name == "step")
         .expect("step");
-    let switches = step
-        .blocks
-        .iter()
-        .filter(|block| matches!(block.term, eml_lir::Term::Switch { .. }))
-        .count();
-    assert_eq!(switches, COUNT);
+    assert_eq!(if_switches(step), COUNT);
     let (out, result) = execute(
         &program,
         &eml_vm::RunConfig::default().with_debug_heap(true),
@@ -768,4 +763,33 @@ fn a_match_with_a_thousand_shared_arms_runs_in_a_debug_build() {
         "  | _ -> 0\n\nmain : Unit -> <IO> Unit\nmain () = println (show (pick B 999))\n",
     );
     assert_eq!(run(&text), ("999\n".to_string(), Ok(())));
+}
+
+/// 関数の `switch` のうち、EP が yield の地点の後に置く確認 (`prim yielding()` の結果での `switch`) を除いた数。
+/// IO の extern も yield の地点なので、文の `if` が作る `switch` だけを数えるときに使う
+/// (docs/spec/core-ir.md の「IO の extern」)。
+fn if_switches(function: &eml_lir::LirFn) -> usize {
+    let checks: std::collections::HashSet<eml_lir::VarId> = function
+        .blocks
+        .iter()
+        .flat_map(|block| &block.stmts)
+        .filter_map(|stmt| match stmt {
+            eml_lir::Stmt::Let {
+                var,
+                rhs: eml_lir::Rhs::Prim(eml_lir::Prim::Yielding, _),
+            } => Some(*var),
+            _ => None,
+        })
+        .collect();
+    function
+        .blocks
+        .iter()
+        .filter(|block| match &block.term {
+            eml_lir::Term::Switch {
+                scrutinee: eml_lir::Atom::Var(var),
+                ..
+            } => !checks.contains(var),
+            term => matches!(term, eml_lir::Term::Switch { .. }),
+        })
+        .count()
 }

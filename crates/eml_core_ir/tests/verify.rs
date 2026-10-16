@@ -519,12 +519,7 @@ fn a_long_run_of_if_statements_is_verified_in_linear_time() {
         .iter()
         .find(|function| function.name == "step")
         .expect("step");
-    let switches = step
-        .blocks
-        .iter()
-        .filter(|block| matches!(block.term, eml_lir::Term::Switch { .. }))
-        .count();
-    assert_eq!(switches, COUNT);
+    assert_eq!(crate::common::if_switches(step), COUNT);
 }
 
 // evidence の段と、基本操作と節の呼び出し

@@ -1,6 +1,8 @@
 //! 型付き HIR からブロックの列への変換 (docs/spec/core-ir.md)。translate の直後の形を見る。
 
-use crate::common::{core_text, core_text_files, core_text_with_positions, function, lir_text};
+use crate::common::{
+    core_text, core_text_files, core_text_with_positions, function, if_switches, lir_text,
+};
 use eml_core_ir::{Pass, parse, pretty_with_positions};
 use eml_lir::{Mark, Stmt, Term};
 
@@ -399,9 +401,27 @@ fn lower_until_stops_after_the_named_pass() {
       let s.2: obj = const "used"
       let t.3: int = call f(1)
       let t.4: unit = extern Prelude.println(s.2)
+      let y.8: int = prim yielding()
+      switch y.8 { 0 -> b2, _ -> b1 }
+    b1:
+      let k.9: tobj poly = prim yield_cont_take()
+      let t.17: tobj = box t.3
+      let c.10: tobj = closure main$k0(s.2, t.17)
+      let k.11: tobj poly = closure compose$(k.9, c.10)
+      let u.12: unit = prim yield_cont_set(k.11)
+      return ()
+    b2:
       let t.5: obj = extern "Prelude.Show Int.show"(t.3)
       let t.6: obj = extern Prelude.++(s.2, t.5)
       let t.7: unit = extern Prelude.println(t.6)
+      let y.13: int = prim yielding()
+      switch y.13 { 0 -> b4, _ -> b3 }
+    b3:
+      let k.14: tobj poly = prim yield_cont_take()
+      let k.15: tobj poly = closure compose$(k.14, &main$k1)
+      let u.16: unit = prim yield_cont_set(k.15)
+      return ()
+    b4:
       return t.7
     }
     "#);
@@ -411,9 +431,27 @@ fn lower_until_stops_after_the_named_pass() {
       let t.3: int = call f(1)
       dup s.2
       let t.4: unit = extern Prelude.println(s.2)
+      let y.8: int = prim yielding()
+      switch y.8 { 0 -> b2, _ -> b1 }
+    b1:
+      let k.9: tobj poly = prim yield_cont_take()
+      let t.17: tobj = box t.3
+      let c.10: tobj = closure main$k0(s.2, t.17)
+      let k.11: tobj poly = closure compose$(k.9, c.10)
+      let u.12: unit = prim yield_cont_set(k.11)
+      return ()
+    b2:
       let t.5: obj = extern "Prelude.Show Int.show"(t.3)
       let t.6: obj = extern Prelude.++(s.2, t.5)
       let t.7: unit = extern Prelude.println(t.6)
+      let y.13: int = prim yielding()
+      switch y.13 { 0 -> b4, _ -> b3 }
+    b3:
+      let k.14: tobj poly = prim yield_cont_take()
+      let k.15: tobj poly = closure compose$(k.14, &main$k1)
+      let u.16: unit = prim yield_cont_set(k.15)
+      return ()
+    b4:
       return t.7
     }
     "#);
@@ -435,12 +473,7 @@ fn a_long_run_of_if_statements_is_translated_without_deep_recursion() {
         .iter()
         .find(|function| function.name == "step")
         .expect("step");
-    let switches = step
-        .blocks
-        .iter()
-        .filter(|block| matches!(block.term, Term::Switch { .. }))
-        .count();
-    assert_eq!(switches, COUNT);
+    assert_eq!(if_switches(step), COUNT);
 }
 
 const OPTION: &str = "data Option a =\n  | None\n  | Some a\n\n";
@@ -638,6 +671,16 @@ fn a_constructor_bound_by_let_is_known_later() {
     yields fn unwrap(x.0: int) -> int {
       let s.2: obj = const "built"
       let t.3: unit = extern Prelude.println(s.2)
+      let y.5: int = prim yielding()
+      switch y.5 { 0 -> b2, _ -> b1 }
+    b1:
+      let k.6: tobj poly = prim yield_cont_take()
+      let x.11: tobj = box x.0
+      let c.7: tobj = closure unwrap$k0(x.11)
+      let k.8: tobj poly = closure compose$(k.6, c.7)
+      let u.9: unit = prim yield_cont_set(k.8)
+      return 0
+    b2:
       let t.4: int = extern Prelude.+(x.0, 1)
       return t.4
     }
@@ -2996,12 +3039,21 @@ fn a_linear_constructor_variable_received_by_an_arm_is_taken_apart() {
       let d.2: obj lin = con (,) #0(xs.0, ys.1)
       let s.3: obj = const "between"
       let t.4: unit = extern Prelude.println(s.3)
-      unpack d.2 (,) #0(x.5: tobj lin, b.6: tobj lin)
-      switch x.5 Prelude.List { #0 -> b1, _ -> b2 }
+      let y.9: int = prim yielding()
+      switch y.9 { 0 -> b2, _ -> b1 }
     b1:
+      let k.10: tobj poly = prim yield_cont_take()
+      let c.11: tobj lin = closure go$k0(d.2)
+      let k.12: tobj lin = closure compose$(k.10, c.11)
+      let u.13: unit = prim yield_cont_set(k.12)
+      return ()
+    b2:
+      unpack d.2 (,) #0(x.5: tobj lin, b.6: tobj lin)
+      switch x.5 Prelude.List { #0 -> b3, _ -> b4 }
+    b3:
       release d.2 (,) #0(_, b.6)
       tail call close_all(b.6)
-    b2:
+    b4:
       tail call take(d.2)
     }
     "#);
@@ -3076,17 +3128,35 @@ fn a_linear_constructor_variable_used_on_another_path_is_not_opened() {
       let d.2: tobj lin = con Prelude.Option #1(xs.1)
       let s.3: obj = const "between"
       let t.4: unit = extern Prelude.println(s.3)
-      switch c.0 Prelude.Bool { #0 -> b1, #1 -> b2 }
+      let y.11: int = prim yielding()
+      switch y.11 { 0 -> b2, _ -> b1 }
     b1:
-      tail call close_opt(d.2)
+      let k.12: tobj poly = prim yield_cont_take()
+      let c.20: tobj = box c.0
+      let c.13: tobj lin = closure go$k0(c.20, d.2)
+      let k.14: tobj lin = closure compose$(k.12, c.13)
+      let u.15: unit = prim yield_cont_set(k.14)
+      return ()
     b2:
-      switch d.2 Prelude.Option { #0 -> b3, #1(l.5: tobj lin) -> b4 }
+      switch c.0 Prelude.Bool { #0 -> b3, #1 -> b4 }
     b3:
+      tail call close_opt(d.2)
+    b4:
+      switch d.2 Prelude.Option { #0 -> b5, #1(l.5: tobj lin) -> b8 }
+    b5:
       let u.6: unit = drop d.2
       let s.8: obj = const "none"
       let t.9: unit = extern Prelude.println(s.8)
+      let y.16: int = prim yielding()
+      switch y.16 { 0 -> b7, _ -> b6 }
+    b6:
+      let k.17: tobj poly = prim yield_cont_take()
+      let k.18: tobj poly = closure compose$(k.17, &go$k1)
+      let u.19: unit = prim yield_cont_set(k.18)
+      return ()
+    b7:
       return t.9
-    b4:
+    b8:
       release d.2 Prelude.Option #1(l.5)
       tail call close_all(l.5)
     }

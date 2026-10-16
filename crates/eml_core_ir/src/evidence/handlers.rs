@@ -9,6 +9,7 @@ use std::mem;
 use crate::builder::FnBuilder;
 use crate::tail::tail_position_call;
 use crate::{Call, CoreFn, Program, Rhs, Stmt, Term};
+use eml_extern::Purity;
 use eml_lir::{
     Atom, BlockId, FnIdx, Mark, OpRet, OperationInfo, Prim, Repr, VarId, VarInfo, operation,
 };
@@ -268,26 +269,38 @@ fn runs_in_place(program: &Program, clause: &CoreFn, operation: &OperationInfo) 
         }
         let tail = tail.map(|(at, _)| at);
         for (at, stmt) in block.stmts.iter().enumerate() {
-            let Stmt::Let {
-                var: _,
-                rhs: Rhs::Call { call, mask },
-            } = stmt
-            else {
-                continue;
+            let yield_point = match stmt {
+                Stmt::Let {
+                    var: _,
+                    rhs: Rhs::Call { call, mask },
+                } => {
+                    !mask.is_empty()
+                        || match call {
+                            // 末尾の位置の `resume` は、上で `k` の再開だと確かめた
+                            Call::Resume { .. } => tail != Some(at),
+                            Call::Perform { .. } | Call::Clause { .. } => true,
+                            Call::Handle { .. } => clause.yields,
+                            Call::Direct(target, _) => program.function(*target).yields,
+                            Call::Apply {
+                                callee: _,
+                                args: _,
+                                yields,
+                            } => *yields,
+                        }
+                }
+                // in-place の節は `perform` の場所の `evv` で動くので、IO の extern を持つと、handle の本体の中の
+                // `try_io` が節の失敗を捕まえてしまう (docs/spec/core-ir.md の「IO の extern」)
+                Stmt::Let {
+                    var: _,
+                    rhs:
+                        Rhs::Extern {
+                            ext,
+                            args: _,
+                            at: _,
+                        },
+                } => ext.row().purity == Purity::Effectful,
+                _ => continue,
             };
-            let yield_point = !mask.is_empty()
-                || match call {
-                    // 末尾の位置の `resume` は、上で `k` の再開だと確かめた
-                    Call::Resume { .. } => tail != Some(at),
-                    Call::Perform { .. } | Call::Clause { .. } => true,
-                    Call::Handle { .. } => clause.yields,
-                    Call::Direct(target, _) => program.function(*target).yields,
-                    Call::Apply {
-                        callee: _,
-                        args: _,
-                        yields,
-                    } => *yields,
-                };
             if yield_point {
                 return false;
             }
