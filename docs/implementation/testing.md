@@ -305,6 +305,8 @@ Core IR のテキストは `eml_core_ir::pretty` が書き、`eml_core_ir::parse
 
 `eml repl` のテスト (`crates/eml_cli/tests/terminal.rs`) は、標準入力をパイプにして流す。パイプからの読みではプロンプトを書かないので、標準出力は値だけになる。入力を書き終えて標準入力を閉じ、EOF で終わらせる。SIGINT のテストは `cfg(unix)` で3本ある。どれも標準入力を開いたままにし、最初の入力の表示が出てから SIGINT を送る。ハンドラを入れる前の SIGINT は、既定の動作でプロセスを終わらせるためである。止めるテストは、標準エラーに `interrupted` が出るまで 100 ms ごとに送り続ける。REPL は SIGINT で終わらないので、何回送ってもよい。
 
+`:load` と `:reload` のテストは、カレントディレクトリを選んで `eml repl` を起動し、相対パスのファイルと、そのディレクトリを import の根にする様子を確かめる。
+
 行のまとめ方 (`eml_cli::lines`) は、端末に依存しない状態機械なので、`crates/eml_cli/tests/lines.rs` が行の並びを渡して確かめる。
 
 ## 性能のテスト
