@@ -589,3 +589,81 @@ fn deriving_may_be_written_with_leading_commas() {
     ]);
     assert_eq!(diagnostics(&text), Vec::<String>::new());
 }
+
+#[test]
+fn data_can_declare_row_parameters_and_a_kind() {
+    insta::assert_snapshot!(shape("data Iter <e> a : Lin =\n  | Done\n  | More a (once Unit -> <e> Iter <e> a)"), @r#"
+    SOURCE_FILE
+      DATA_ITEM
+        DATA_KW "data"
+        NAME
+          UIDENT "Iter"
+        ROW_PARAM
+          L_ANGLE "<"
+          NAME
+            LIDENT "e"
+          R_ANGLE ">"
+        NAME
+          LIDENT "a"
+        KIND_ANNOT
+          COLON ":"
+          NAME_REF
+            UIDENT "Lin"
+        EQ "="
+        ALT
+          PIPE "|"
+          NAME
+            UIDENT "Done"
+        ALT
+          PIPE "|"
+          NAME
+            UIDENT "More"
+          VAR_TYPE
+            LIDENT "a"
+          PAREN_TYPE
+            L_PAREN "("
+            FN_TYPE
+              ONCE_KW "once"
+              PATH_TYPE
+                PATH
+                  NAME_REF
+                    UIDENT "Unit"
+              THIN_ARROW "->"
+              EFFECT_ROW
+                L_ANGLE "<"
+                LIDENT "e"
+                R_ANGLE ">"
+              APP_TYPE
+                PATH
+                  NAME_REF
+                    UIDENT "Iter"
+                ROW_ARG
+                  EFFECT_ROW
+                    L_ANGLE "<"
+                    LIDENT "e"
+                    R_ANGLE ">"
+                VAR_TYPE
+                  LIDENT "a"
+            R_PAREN ")"
+    "#);
+}
+
+#[test]
+fn a_row_parameter_is_one_name() {
+    assert_eq!(
+        diagnostics("data T <IO> = | T"),
+        ["E0011 1:9 expected a row variable"]
+    );
+    assert_eq!(
+        diagnostics("data T <e | f> = | T"),
+        ["E0011 1:11 expected a row variable"]
+    );
+}
+
+#[test]
+fn extern_data_cannot_declare_a_kind() {
+    assert_eq!(
+        diagnostics("extern data File : Lin"),
+        ["E0011 1:18 `extern data` cannot have parameters, `=` or `where`"]
+    );
+}

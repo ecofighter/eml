@@ -167,6 +167,9 @@ ast_node! {
     TupleType => TUPLE_TYPE,
     EffectRow => EFFECT_ROW,
     Effect => EFFECT,
+    RowArg => ROW_ARG,
+    RowParam => ROW_PARAM,
+    KindAnnot => KIND_ANNOT,
 }
 
 ast_enum! {
@@ -717,6 +720,10 @@ impl ParenType {
 }
 
 impl FnType {
+    pub fn is_once(&self) -> bool {
+        support::token(&self.syntax, SyntaxKind::ONCE_KW).is_some()
+    }
+
     pub fn param(&self) -> Option<Type> {
         child_between(&self.syntax, None, Some(SyntaxKind::THIN_ARROW))
     }
@@ -750,6 +757,45 @@ impl Effect {
     pub fn args(&self) -> AstChildren<Type> {
         support::children(&self.syntax)
     }
+}
+
+impl AppType {
+    /// 型の引数だけ。row の引数を通すまでの HIR のつなぎ。
+    pub fn type_args(&self) -> AstChildren<Type> {
+        support::children(&self.syntax)
+    }
+}
+
+/// 型の適用の引数。row は `<…>` で書く。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum TypeArg {
+    Type(Type),
+    Row(RowArg),
+}
+
+impl RowArg {
+    pub fn row(&self) -> Option<EffectRow> {
+        support::child(&self.syntax)
+    }
+}
+
+impl RowParam {
+    pub fn name(&self) -> Option<Name> {
+        support::child(&self.syntax)
+    }
+}
+
+impl KindAnnot {
+    pub fn name_ref(&self) -> Option<NameRef> {
+        support::child(&self.syntax)
+    }
+}
+
+/// `data` の型引数。row は `<e>` で書く。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum TypeParam {
+    Type(Name),
+    Row(RowParam),
 }
 
 impl EffectItem {
@@ -882,9 +928,21 @@ impl DataItem {
             .find(|name| name.token().kind() == SyntaxKind::UIDENT)
     }
 
-    /// 型引数。名前が欠けた宣言でも取り違えないよう、小文字の名前だけを返す。
-    pub fn params(&self) -> impl Iterator<Item = Name> {
-        lowercase_names(&self.syntax)
+    /// 型引数。名前が欠けた宣言でも取り違えないよう、型引数の名前は小文字のものだけを返す。
+    pub fn type_params(&self) -> impl Iterator<Item = TypeParam> {
+        self.syntax.children().filter_map(|node| {
+            RowParam::cast(node.clone())
+                .map(TypeParam::Row)
+                .or_else(|| {
+                    Name::cast(node)
+                        .filter(|name| name.token().kind() == SyntaxKind::LIDENT)
+                        .map(TypeParam::Type)
+                })
+        })
+    }
+
+    pub fn kind(&self) -> Option<KindAnnot> {
+        support::child(&self.syntax)
     }
 
     pub fn alts(&self) -> AstChildren<Alt> {
@@ -1079,8 +1137,12 @@ impl AppType {
         support::child(&self.syntax)
     }
 
-    pub fn args(&self) -> AstChildren<Type> {
-        support::children(&self.syntax)
+    pub fn args(&self) -> impl Iterator<Item = TypeArg> {
+        self.syntax.children().filter_map(|node| {
+            RowArg::cast(node.clone())
+                .map(TypeArg::Row)
+                .or_else(|| Type::cast(node).map(TypeArg::Type))
+        })
     }
 }
 

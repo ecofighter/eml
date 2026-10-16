@@ -21,12 +21,20 @@ fn type_in(p: &mut Parser, in_type_block: bool) -> bool {
 
 fn type_in_inner(p: &mut Parser, in_type_block: bool) -> bool {
     let m = p.start();
+    let once = p.eat(ONCE_KW);
     if !btype(p) {
         m.abandon(p);
         expected(p, "a type");
         return false;
     }
-    if p.eat(THIN_ARROW) {
+    if once {
+        // `once` は後ろの関数型の一番外側の矢印に付くので、矢印がなくても節点は FN_TYPE にして `once` を残す
+        // (docs/spec/grammar.md の `type`)。
+        if expect(p, THIN_ARROW) {
+            arrow_result(p, in_type_block);
+        }
+        m.complete(p, FN_TYPE);
+    } else if p.eat(THIN_ARROW) {
         arrow_result(p, in_type_block);
         m.complete(p, FN_TYPE);
     } else {
@@ -80,8 +88,16 @@ pub(super) fn btype(p: &mut Parser) -> bool {
     let m = p.start();
     qcon(p);
     let mut args = 0;
-    while at_type_atom_start(p) {
-        type_atom(p);
+    loop {
+        if at_type_atom_start(p) {
+            type_atom(p);
+        } else if at_angle(p, '<') {
+            let n = p.start();
+            effect_row(p);
+            n.complete(p, ROW_ARG);
+        } else {
+            break;
+        }
         args += 1;
     }
     m.complete(p, if args == 0 { PATH_TYPE } else { APP_TYPE });
@@ -145,6 +161,27 @@ fn effect_row(p: &mut Parser) {
     m.complete(p, EFFECT_ROW);
 }
 
+/// `data` の row の型引数 `<e>`。row 変数は名前1つだけで、効果や `|` は書けない。
+pub(super) fn row_param(p: &mut Parser) {
+    let m = p.start();
+    eat_angle(p, '<', L_ANGLE);
+    let mut well_formed = p.at(LIDENT);
+    if well_formed {
+        name(p);
+    }
+    well_formed &= at_angle(p, '>');
+    if !well_formed {
+        expected(p, "a row variable");
+        while !at_angle(p, '>')
+            && !p.at_ts(TokenSet::new(&[EQ, COLON, LAYOUT_SEP, LAYOUT_CLOSE, EOF]))
+        {
+            p.bump_any();
+        }
+    }
+    eat_angle(p, '>', R_ANGLE);
+    m.complete(p, ROW_PARAM);
+}
+
 fn effect(p: &mut Parser) {
     if !p.at(UIDENT) {
         expected(p, "an effect");
@@ -159,7 +196,7 @@ fn effect(p: &mut Parser) {
 }
 
 /// 型の中では `<>` や `>->` を分けて読むので、演算子の先頭の文字だけを見る。
-fn at_angle(p: &Parser, c: char) -> bool {
+pub(super) fn at_angle(p: &Parser, c: char) -> bool {
     p.at(OP) && p.current_text().starts_with(c)
 }
 

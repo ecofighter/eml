@@ -330,7 +330,7 @@ fn constraint_parts(ty: &ast::Type) -> Option<(ast::Path, SyntaxToken)> {
     let ast::Type::AppType(app) = ty else {
         return None;
     };
-    let args: Vec<ast::Type> = app.args().collect();
+    let args: Vec<ast::Type> = app.type_args().collect();
     let [ast::Type::VarType(var)] = args.as_slice() else {
         return None;
     };

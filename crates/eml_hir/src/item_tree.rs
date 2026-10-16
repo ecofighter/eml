@@ -392,7 +392,14 @@ pub fn item_tree(file: FileId, parse: &Parse) -> (ItemTree, Vec<Diagnostic>) {
                     name_range: name.text_range(),
                     public,
                     extern_keyword: item.extern_keyword().map(|keyword| keyword.text_range()),
-                    params: params(file, item.params(), &mut diagnostics),
+                    params: params(
+                        file,
+                        item.type_params().filter_map(|param| match param {
+                            ast::TypeParam::Type(name) => Some(name),
+                            ast::TypeParam::Row(_) => None,
+                        }),
+                        &mut diagnostics,
+                    ),
                     has_constructors: item.has_constructors(),
                     constructors,
                     deriving,

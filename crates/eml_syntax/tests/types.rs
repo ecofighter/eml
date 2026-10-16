@@ -347,3 +347,109 @@ fn a_row_in_a_multi_line_signature_may_use_leading_commas() {
     let text = lines(&["f : A", "  -> <IO", "  , Log> B"]);
     assert_eq!(diagnostics(&text), Vec::<String>::new());
 }
+
+#[test]
+fn once_marks_the_outermost_arrow_of_the_following_function_type() {
+    insta::assert_snapshot!(shape("f : once Int -> Int -> Int"), @r#"
+    SOURCE_FILE
+      SIGNATURE
+        NAME
+          LIDENT "f"
+        COLON ":"
+        FN_TYPE
+          ONCE_KW "once"
+          PATH_TYPE
+            PATH
+              NAME_REF
+                UIDENT "Int"
+          THIN_ARROW "->"
+          FN_TYPE
+            PATH_TYPE
+              PATH
+                NAME_REF
+                  UIDENT "Int"
+            THIN_ARROW "->"
+            PATH_TYPE
+              PATH
+                NAME_REF
+                  UIDENT "Int"
+    "#);
+    insta::assert_snapshot!(shape("g : Int -> once Int -> Int"), @r#"
+    SOURCE_FILE
+      SIGNATURE
+        NAME
+          LIDENT "g"
+        COLON ":"
+        FN_TYPE
+          PATH_TYPE
+            PATH
+              NAME_REF
+                UIDENT "Int"
+          THIN_ARROW "->"
+          FN_TYPE
+            ONCE_KW "once"
+            PATH_TYPE
+              PATH
+                NAME_REF
+                  UIDENT "Int"
+            THIN_ARROW "->"
+            PATH_TYPE
+              PATH
+                NAME_REF
+                  UIDENT "Int"
+    "#);
+    insta::assert_snapshot!(shape("h : (once Unit -> <e> Unit) -> <e> Unit"), @r#"
+    SOURCE_FILE
+      SIGNATURE
+        NAME
+          LIDENT "h"
+        COLON ":"
+        FN_TYPE
+          PAREN_TYPE
+            L_PAREN "("
+            FN_TYPE
+              ONCE_KW "once"
+              PATH_TYPE
+                PATH
+                  NAME_REF
+                    UIDENT "Unit"
+              THIN_ARROW "->"
+              EFFECT_ROW
+                L_ANGLE "<"
+                LIDENT "e"
+                R_ANGLE ">"
+              PATH_TYPE
+                PATH
+                  NAME_REF
+                    UIDENT "Unit"
+            R_PAREN ")"
+          THIN_ARROW "->"
+          EFFECT_ROW
+            L_ANGLE "<"
+            LIDENT "e"
+            R_ANGLE ">"
+          PATH_TYPE
+            PATH
+              NAME_REF
+                UIDENT "Unit"
+    "#);
+}
+
+#[test]
+fn once_must_be_followed_by_a_function_type() {
+    assert_eq!(diagnostics("f : once Int"), ["E0011 1:13 expected `->`"]);
+}
+
+#[test]
+fn rows_can_be_type_arguments() {
+    for text in [
+        "x : Iter <IO> Int",
+        "x : Iter <> a",
+        "x : Iter <e> a",
+        "x : Iter <IO | e> a",
+        "x : Iter <IO> Int -> <IO> Unit",
+    ] {
+        assert_eq!(diagnostics(text), Vec::<String>::new(), "{text}");
+        assert!(shape(text).contains("ROW_ARG"), "{text}");
+    }
+}

@@ -70,7 +70,7 @@ impl TypeLowering<'_> {
             ast::Type::AppType(app) => {
                 // 型引数を先に変換し、型の名前が誤っていても型引数の中の誤りを報告する
                 let args = app
-                    .args()
+                    .type_args()
                     .map(|arg| {
                         let range = arg.range();
                         self.lower(Some(arg), range)

@@ -2,7 +2,7 @@ use eml_diagnostics::TextRange;
 use eml_syntax::SyntaxKind::{self, *};
 use eml_syntax::ast::{
     AppExpr, ClassMember, Clause, Expr, InstanceMember, Item, LiteralValue, OpSeqElement, Pat,
-    SourceFile, Stmt, Type,
+    SourceFile, Stmt, Type, TypeParam,
 };
 use rowan::ast::AstNode;
 
@@ -375,8 +375,11 @@ fn data_declaration_parts() {
     };
     assert_eq!(data.name().unwrap().text(), "List");
     let params: Vec<String> = data
-        .params()
-        .map(|token| token.text().to_string())
+        .type_params()
+        .filter_map(|param| match param {
+            TypeParam::Type(name) => Some(name.text().to_string()),
+            TypeParam::Row(_) => None,
+        })
         .collect();
     assert_eq!(params, ["a"]);
     let alts: Vec<(Option<String>, Option<String>, Vec<SyntaxKind>)> = data
@@ -449,7 +452,7 @@ fn type_application_parts() {
         .map(|segment| segment.text())
         .collect();
     assert_eq!(segments, ["Option"]);
-    let args: Vec<SyntaxKind> = app.args().map(|ty| ty.syntax().kind()).collect();
+    let args: Vec<SyntaxKind> = app.type_args().map(|ty| ty.syntax().kind()).collect();
     assert_eq!(args, [PAREN_TYPE]);
 }
 

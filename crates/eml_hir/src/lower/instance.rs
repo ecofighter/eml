@@ -354,7 +354,7 @@ impl ItemLowering<'_> {
         let range = ty.range();
         let (path, args): (Option<ast::Path>, Vec<ast::Type>) = match &ty {
             ast::Type::PathType(path) => (path.path(), Vec::new()),
-            ast::Type::AppType(app) => (app.path(), app.args().collect()),
+            ast::Type::AppType(app) => (app.path(), app.type_args().collect()),
             ast::Type::VarType(_) => {
                 self.invalid_head(range, "a type variable");
                 return None;
@@ -471,7 +471,7 @@ fn written_vars(head: Option<ast::Type>) -> Vec<String> {
                     vars.push(name);
                 }
             }
-            ast::Type::AppType(app) => work.extend(app.args()),
+            ast::Type::AppType(app) => work.extend(app.type_args()),
             ast::Type::ParenType(paren) => work.extend(paren.ty()),
             ast::Type::TupleType(tuple) => work.extend(tuple.elements()),
             ast::Type::FnType(function) => {

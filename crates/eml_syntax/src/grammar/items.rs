@@ -219,8 +219,22 @@ fn signature(p: &mut Parser, m: Marker) {
 fn data_item(p: &mut Parser, m: Marker) {
     p.bump(DATA_KW);
     expect_name(p, UIDENT);
-    while p.at(LIDENT) {
-        name(p);
+    while p.at(LIDENT) || types::at_angle(p, '<') {
+        if p.at(LIDENT) {
+            name(p);
+        } else {
+            types::row_param(p);
+        }
+    }
+    if p.at(COLON) {
+        let k = p.start();
+        p.bump(COLON);
+        if p.at(UIDENT) {
+            name_ref(p);
+        } else {
+            expected(p, token_name(UIDENT));
+        }
+        k.complete(p, KIND_ANNOT);
     }
     let mut clauses = 0;
     if p.eat(EQ) {
@@ -273,7 +287,7 @@ fn extern_effect(p: &mut Parser, m: Marker) {
 /// extern の `data` に型引数、`=`、`where` は書けない (docs/spec/declarations.md の「`extern`」)。
 /// 誤って書いた型引数も名前として読む。使う位置の型引数の数 (E1015) が書いたとおりになり、誤りが連鎖しない。
 fn reject_extern_tail(p: &mut Parser, keyword: &str) {
-    if p.at(LIDENT) || p.at(EQ) || p.at(PIPE) || p.at(WHERE_KW) {
+    if p.at(LIDENT) || p.at(COLON) || p.at(EQ) || p.at(PIPE) || p.at(WHERE_KW) {
         p.error(
             codes::SYNTAX_ERROR,
             format!("`extern {keyword}` cannot have parameters, `=` or `where`"),

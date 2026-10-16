@@ -204,6 +204,12 @@ pub enum SyntaxKind {
     TUPLE_TYPE,
     EFFECT_ROW,
     EFFECT,
+    /// 型の適用の引数の位置の row `Iter <IO> a`。子は `EFFECT_ROW`。
+    ROW_ARG,
+    /// `data` の row の型引数 `<e>`。
+    ROW_PARAM,
+    /// `data` の `: Lin`。
+    KIND_ANNOT,
 
     #[doc(hidden)]
     __LAST,
