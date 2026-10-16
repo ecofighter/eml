@@ -12,11 +12,13 @@ use eml_vm::{AnyMachine, Control, HostRef, RunConfig, RuntimeError, VmFault};
 
 use crate::Session;
 
-/// lib API だけで動く REPL のセッション。端末の REPL は S11c で足す。
+/// REPL のセッション。端末は `eml repl` で、`terminal.rs` が使う。
 pub struct Repl {
     control: Arc<Control>,
     source: Box<dyn ModuleSource + Send>,
     root: String,
+    /// `:load` のファイルの表示のパス。ファイルを受け付けたかによらず持つ。
+    file: Option<String>,
     machine: AnyMachine,
     /// 受け付けた定義と `let` の入力。式の入力は後の入力から参照されないので持たない。
     accepted: Vec<Accepted>,
@@ -34,6 +36,15 @@ pub struct Repl {
 struct Accepted {
     number: u32,
     text: String,
+    /// `:load` のファイルの入力だけが `Some` で、ファイルの表示のパスを持つ。
+    path: Option<String>,
+}
+
+/// `evaluate` が読む入力の形。問い合わせは `type_of` が別に作る。
+#[derive(Clone, Copy)]
+enum Form {
+    Typed,
+    File,
 }
 
 #[derive(Debug)]
@@ -43,6 +54,16 @@ pub struct Evaluated {
     /// `diagnostics` の位置を表示するためのファイル。番号は `eval` ごとに振り直す。
     pub files: SourceFiles,
     pub outcome: Outcome,
+}
+
+/// `:type` の結果。
+#[derive(Debug)]
+pub struct Typed {
+    /// 誤りと、受け付けた入力までに読んでいないファイルの警告。
+    pub diagnostics: Vec<Diagnostic>,
+    pub files: SourceFiles,
+    /// 誤りがなければ `Show a => a -> String` の形の型。
+    pub ty: Option<String>,
 }
 
 impl Evaluated {
@@ -87,6 +108,7 @@ impl Repl {
             control: Arc::clone(&config.control),
             source,
             root: root.to_string(),
+            file: None,
             machine: AnyMachine::new(config, host),
             accepted: Vec::new(),
             cache: ImportCache::default(),
@@ -97,7 +119,64 @@ impl Repl {
         }
     }
 
+    /// ファイルを最初の入力とする新しいセッションを作り、ファイルを評価する。`path` は表示のパスで、import の根はその
+    /// 最後の `/` までである。`source` はそのディレクトリを読む。ファイルを途中の入力として足す API は作らない。前の入力が
+    /// import したモジュールとファイルが同じになる場合や、根とファイルのディレクトリが食い違う場合が出るためである
+    /// (docs/spec/repl.md の「ファイルの読み込み」)。
+    pub fn with_file(
+        config: &RunConfig,
+        path: &str,
+        text: &str,
+        source: Box<dyn ModuleSource + Send>,
+        host: HostRef,
+    ) -> (Repl, Evaluated) {
+        let root = &path[..path.rfind('/').map_or(0, |at| at + 1)];
+        let mut repl = Repl::new(config, source, root, host);
+        repl.file = Some(path.to_string());
+        let evaluated = repl.evaluate(text, Form::File);
+        (repl, evaluated)
+    }
+
     pub fn eval(&mut self, text: &str) -> Evaluated {
+        self.evaluate(text, Form::Typed)
+    }
+
+    /// `text` を `:type` の問い合わせとしてセッションに対して検査する。lowering も実行もせず、入力を受け付けず、番号も
+    /// 進めない。番号は次の入力の番号を使う。問い合わせは `CodeBase` に入らないので、同じ番号の `input$N` と食い違わない。
+    /// 続けられない誤りの後のセッションでも検査する。前端だけを使い、ヒープに触れないためである
+    /// (docs/spec/repl.md の「型の表示」)。
+    pub fn type_of(&self, text: &str) -> Typed {
+        // 入力を待つ間に立った割り込みで止めないため、`eval` と同じく始めに下ろす
+        self.control.clear();
+        let mut inputs = self.session_inputs();
+        inputs.push(SessionInput {
+            number: self.next_input,
+            text,
+            form: InputForm::Query,
+        });
+        let (session, _) = Session::load_session(
+            &inputs,
+            &self.root,
+            self.entry_file(),
+            &*self.source,
+            &self.cache,
+        );
+        let checked = session.check();
+        let diagnostics = self.reported(checked.diagnostics, session.files());
+        // 線形性、網羅性、E2012 は型の文字列を作った後で報告するので、診断で決める
+        let ty = if has_errors(&diagnostics) {
+            None
+        } else {
+            checked.typed.query
+        };
+        Typed {
+            diagnostics,
+            files: session.into_files(),
+            ty,
+        }
+    }
+
+    fn evaluate(&mut self, text: &str, form: Form) -> Evaluated {
         // 前の入力で立った止める理由のビットを下ろす。確保量の上限で止まると `MEMORY` のビットが残り、後の入力が
         // すべて止まるため (docs/spec/object-model.md の「実行の制御」)
         self.control.clear();
@@ -111,22 +190,24 @@ impl Repl {
         // できるため。`let` の根の番号は入力の番号なので、根の番号も使い回さない
         let number = self.next_input;
         self.next_input += 1;
-        let mut inputs: Vec<SessionInput> = self
-            .accepted
-            .iter()
-            .map(|accepted| SessionInput {
-                number: accepted.number,
-                text: &accepted.text,
-                form: InputForm::Typed,
-            })
-            .collect();
+        let mut inputs = self.session_inputs();
         inputs.push(SessionInput {
             number,
             text,
-            form: InputForm::Typed,
+            form: match form {
+                Form::Typed => InputForm::Typed,
+                Form::File => InputForm::File {
+                    path: self.file.as_deref().expect("a file input has a path"),
+                },
+            },
         });
-        let (session, read) =
-            Session::load_session(&inputs, &self.root, "", &*self.source, &self.cache);
+        let (session, read) = Session::load_session(
+            &inputs,
+            &self.root,
+            self.entry_file(),
+            &*self.source,
+            &self.cache,
+        );
         let checked = session.check();
         let mut diagnostics = self.reported(checked.diagnostics, session.files());
         let mut uniform = BTreeMap::new();
@@ -178,6 +259,10 @@ impl Repl {
                 self.accepted.push(Accepted {
                     number,
                     text: text.to_string(),
+                    path: match form {
+                        Form::Typed => None,
+                        Form::File => self.file.clone(),
+                    },
                 });
             }
             self.uniform = uniform;
@@ -194,6 +279,30 @@ impl Repl {
         Closed {
             leaks: self.machine.close().err(),
         }
+    }
+
+    /// 受け付けた入力を、セッションを読み直す形にする。`:load` のファイルの入力は、ファイルとして読み直す。
+    /// ファイルの入力を `<input 1>` として読み直すと、診断の位置、E1030、警告の絞り込みが変わるためである
+    /// (docs/spec/modules.md の「REPL のセッション」)。
+    fn session_inputs(&self) -> Vec<SessionInput<'_>> {
+        self.accepted
+            .iter()
+            .map(|accepted| SessionInput {
+                number: accepted.number,
+                text: &accepted.text,
+                form: match &accepted.path {
+                    Some(path) => InputForm::File { path },
+                    None => InputForm::Typed,
+                },
+            })
+            .collect()
+    }
+
+    /// `:load` のファイルの名前。入口のファイルとして `load_session` に渡す。
+    fn entry_file(&self) -> &str {
+        self.file
+            .as_deref()
+            .map_or("", |path| &path[path.rfind('/').map_or(0, |at| at + 1)..])
     }
 
     /// 誤りはどのファイルのものも返す。警告は、前の入力を受け付けたときに一度返したので、この入力で初めて読んだファイルの

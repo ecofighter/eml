@@ -348,6 +348,7 @@ HIR への変換では、名前解決に加えて、名前の重複と未定義�
 - テストのための口が3つある。`Session::load_with_std(std, entry_path, entry_text, source)` は標準ライブラリを `(ファイル名, 本文)` の並びに差し替えて読む。`Session::compile_until(last: eml_lir::Pass) -> Compiled<eml_lir::Program>` は LIR を `last` のパスの直後で止め、`Session::compile_core_until(last: eml_core_ir::Pass) -> Compiled<eml_core_ir::Program>` は Core IR を `last` のパスの直後で止める。`eml_hir` の `load` / `load_with_std` と、`eml_core_ir` の `lower` / `lower_until` / `core_until` の組に合わせて置く。パスの順番は `eml_core_ir` と `eml_lir` だけが知るので、`compile_with` は IR を作る関数を受け取る
 - `execute(&eml_lir::Program, &RunConfig, HostRef) -> Result<RunStats, RuntimeError>` (feature `run`)。VM で実行する。`RunStats` は実行の仕事の回数と、同時に生きていたヒープの物体の数とスタックの語の数の最大で、CLI は使わない。テストが2乗の時間にならないことと、ループがフレームを積まないことを確かめるのに使う
 - `default_limits() -> Limits` (feature `run`)。`eml run` の既定の上限を作る ([VM](../spec/vm.md) の「上限と割り込み」)
+- `Repl` (feature `run`)。REPL のセッションで、`Repl::new` が空のセッションを作り、`Repl::eval` が入力を1つずつ評価する ([モジュールと名前解決](../spec/modules.md) の「REPL のセッション」)。`Repl::with_file` は `:load` のファイルを最初の入力とする新しいセッションを作り、`Repl::type_of` は `:type` の問い合わせを検査して型の文字列を返す。受け付けた入力はファイルの表示のパスも覚え、セッションを読み直すたびにファイルとして読む。セッションを空にするメソッドはなく、呼び出し側が新しい `Repl` を作って古いものを閉じる
 
 検査と実行を別の関数に分けるのは、呼び出し側が実行の前に診断を表示できるようにするためである。CLI と UI テストは、`compile` の診断を表示してから `execute` を呼ぶ。
 

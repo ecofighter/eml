@@ -969,3 +969,128 @@ fn strings_and_big_integers_survive_recovery() {
         );
     }
 }
+
+/// `:load` のファイルの診断は、ファイルのパスを指す (docs/spec/repl.md の「ファイルの読み込み」)。
+#[test]
+fn a_file_reports_its_errors_under_its_path() {
+    let (host, _) = capture_host(Default::default());
+    let (_, evaluated) = Repl::with_file(
+        &RunConfig::default(),
+        "app/main.em",
+        "f : Int\nf = nope\n",
+        Box::new(MemorySource(&[])),
+        host,
+    );
+    assert_eq!(evaluated.outcome, Outcome::Rejected);
+    let paths: Vec<&str> = evaluated
+        .diagnostics
+        .iter()
+        .map(|d| evaluated.files.path(d.primary.file))
+        .collect();
+    assert_eq!(paths, ["app/main.em"]);
+}
+
+#[test]
+fn an_empty_file_leaves_an_empty_session() {
+    let (host, _) = capture_host(Default::default());
+    let (_, evaluated) = Repl::with_file(
+        &RunConfig::default(),
+        "empty.em",
+        "-- nothing\n",
+        Box::new(MemorySource(&[])),
+        host,
+    );
+    assert_eq!(evaluated.outcome, Outcome::Empty);
+    assert!(evaluated.diagnostics.is_empty());
+}
+
+/// 2つ目以降の入力も、ファイルをファイルとして読み直す。ファイルの関数の実行時エラーはファイルのパスを指し、ファイルの
+/// 警告は繰り返さない (spec の C1)。
+#[test]
+fn later_inputs_keep_the_file_path_and_its_warnings_once() {
+    let file = "half : Int -> Int\nhalf n = match n with\n  | x -> 10 / x\n  | 0 -> 0\n";
+    let (host, _) = capture_host(Default::default());
+    let (mut repl, evaluated) = Repl::with_file(
+        &RunConfig::default(),
+        "lib/half.em",
+        file,
+        Box::new(MemorySource(&[])),
+        host,
+    );
+    assert_eq!(evaluated.outcome, Outcome::Accepted);
+    assert_eq!(codes(&evaluated.diagnostics), ["E4004"]);
+    let evaluated = repl.eval("half 0");
+    assert_eq!(codes(&evaluated.diagnostics), Vec::<String>::new());
+    let Outcome::Failed(error) = evaluated.outcome else {
+        panic!("a runtime error: {:?}", evaluated.outcome);
+    };
+    assert!(error.to_string().contains("lib/half.em:3:"), "{error}");
+}
+
+/// ファイルを受け付けなかったセッションでも、後の入力はファイルを import できない。
+#[test]
+fn a_rejected_file_still_cannot_be_imported() {
+    let (host, _) = capture_host(Default::default());
+    let (mut repl, evaluated) = Repl::with_file(
+        &RunConfig::default(),
+        "Tool.em",
+        "f : Int\nf = nope\n",
+        Box::new(MemorySource(&[("Tool.em", "pub g : Int\ng = 1\n")])),
+        host,
+    );
+    assert_eq!(evaluated.outcome, Outcome::Rejected);
+    assert!(codes(&repl.eval("import Tool").diagnostics).contains(&"E1030".to_string()));
+}
+
+/// import を読む間に割り込まれたファイルは受け付けず、セッションは空のままである。
+#[test]
+fn an_interrupted_file_is_not_accepted() {
+    let control = Arc::new(Control::new(Limits::default()));
+    let config = RunConfig::default().with_control(Arc::clone(&control));
+    let (host, _) = capture_host(Default::default());
+    let (mut repl, evaluated) = Repl::with_file(
+        &config,
+        "main.em",
+        "import Util\none : Int -> Int\none x = Util.two x - 1\n",
+        Box::new(InterruptingSource { control }),
+        host,
+    );
+    assert_eq!(evaluated.outcome, Outcome::Interrupted);
+    assert_eq!(codes(&repl.eval("one 1").diagnostics), ["E1001"]);
+}
+
+/// `:type` は入力を受け付けず、番号を進めない。後で定義し直した item の古い版の番号は、受け付けた入力の番号のままである。
+#[test]
+fn type_of_neither_accepts_nor_numbers_its_question() {
+    let mut console = Console::new(&RunConfig::default());
+    console.eval("data Shape = | Circle");
+    console.eval("let s = Circle");
+    let typed = console.repl.type_of("s");
+    assert_eq!(typed.ty.as_deref(), Some("Shape"));
+    assert_eq!(console.repl.type_of("data X = | X").ty, None);
+    console.eval("data Shape = | Square");
+    assert_eq!(console.repl.type_of("s").ty.as_deref(), Some("Shape#1"));
+    // 問い合わせは受け付けないので、名前は残らない
+    console.repl.type_of("let t = 1 in t");
+    assert_eq!(console.eval("t").2, ["E1001"]);
+}
+
+/// 後で報告する誤り (線形性) だけの問い合わせでも、型を返さない。
+#[test]
+fn type_of_returns_no_type_when_any_error_is_found() {
+    let console = Console::new(&RunConfig::default());
+    let typed = console.repl.type_of("let f = Fs.open \"x\" in (f, f)");
+    assert!(has_errors(&typed.diagnostics), "{:?}", typed.diagnostics);
+    assert_eq!(typed.ty, None);
+}
+
+/// 入力を待つ間に立った割り込みは、`:type` の始めに下ろす (docs/spec/repl.md の「割り込み」)。
+#[test]
+fn type_of_clears_a_stale_interrupt() {
+    let control = Arc::new(Control::new(Limits::default()));
+    let config = RunConfig::default().with_control(Arc::clone(&control));
+    let console = Console::new(&config);
+    control.interrupt();
+    assert_eq!(console.repl.type_of("1 + 1").ty.as_deref(), Some("Int"));
+    assert_eq!(control.stop_bits() & Control::INTERRUPT, 0);
+}

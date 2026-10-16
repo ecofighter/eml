@@ -22,7 +22,7 @@ pub use eml_vm::{
 };
 pub use fs_provider::FsProvider;
 #[cfg(feature = "run")]
-pub use repl::{Closed, Evaluated, Outcome, Repl};
+pub use repl::{Closed, Evaluated, Outcome, Repl, Typed};
 
 /// `DefMap` と、読み込みの段と def_map の段の診断。
 pub struct DefMapped {
