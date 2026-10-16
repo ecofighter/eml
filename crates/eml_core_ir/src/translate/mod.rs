@@ -1,7 +1,7 @@
 //! 型付き HIR から、前向きの辺だけを持つブロックの列への変換 (docs/spec/core-ir.md)。式の値の渡し先 (出口) と、
 //! 条件の分かれ方という制御の骨組みをここに置く。ブロックの組み立ては crate の `builder.rs`、式ごとの変換は `expr.rs`、
 //! パターンの決定木と case-of-case は `pattern.rs`、関数の表と包む関数は `program.rs`、型から決まる Repr は
-//! `types.rs`、導出した instance とタプルの instance の生成器は `derive.rs` にある。
+//! `types.rs`、導出した instance とタプルの instance の生成器は `derive.rs`、REPL の式の入力の値を書く表示関数の生成器は `display.rs` にある。
 
 mod derive;
 mod display;
