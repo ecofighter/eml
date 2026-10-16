@@ -2,7 +2,10 @@
 //! プロンプトは書かれない。
 
 use std::io::Write;
+use std::path::Path;
 use std::process::{Command, Output, Stdio};
+
+use crate::common::temp_project;
 
 fn repl_with(args: &[&str], input: &[u8]) -> Output {
     let mut child = Command::new(env!("CARGO_BIN_EXE_eml"))
@@ -111,6 +114,192 @@ fn help_lists_the_commands() {
         help.contains(":quit") && help.contains(":help") && help.contains(":{"),
         "{help}"
     );
+}
+
+fn repl_in(dir: &Path, args: &[&str], input: &str) -> Output {
+    let mut child = Command::new(env!("CARGO_BIN_EXE_eml"))
+        .current_dir(dir)
+        .arg("repl")
+        .args(args)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    child
+        .stdin
+        .take()
+        .unwrap()
+        .write_all(input.as_bytes())
+        .unwrap();
+    child.wait_with_output().unwrap()
+}
+
+const UTIL: &str = "pub two : Int -> Int\ntwo x = x + 2\n";
+
+/// import の根は `:load` のファイルのディレクトリである (docs/spec/repl.md の「ファイルの読み込み」)。
+#[test]
+fn load_reads_imports_next_to_the_file() {
+    let dir = temp_project(
+        "load-imports",
+        &[
+            (
+                "app/main.em",
+                "import Util\nfour : Int\nfour = Util.two 2\n",
+            ),
+            ("app/Util.em", UTIL),
+        ],
+    );
+    let output = repl_in(&dir, &[], ":load app/main.em\nfour\n");
+    std::fs::remove_dir_all(&dir).unwrap();
+    assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
+    assert_eq!(stdout(&output), "4\n");
+}
+
+/// 行を送り、出力を待ってからファイルを書き換えるための子のプロセス。
+struct Session {
+    child: std::process::Child,
+    stdin: std::process::ChildStdin,
+    stdout: std::io::BufReader<std::process::ChildStdout>,
+    stderr: std::io::BufReader<std::process::ChildStderr>,
+}
+
+impl Session {
+    fn start(dir: &Path) -> Session {
+        let mut child = Command::new(env!("CARGO_BIN_EXE_eml"))
+            .current_dir(dir)
+            .arg("repl")
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap();
+        let stdin = child.stdin.take().unwrap();
+        let stdout = std::io::BufReader::new(child.stdout.take().unwrap());
+        let stderr = std::io::BufReader::new(child.stderr.take().unwrap());
+        Session {
+            child,
+            stdin,
+            stdout,
+            stderr,
+        }
+    }
+
+    fn send(&mut self, text: &str) {
+        self.stdin.write_all(text.as_bytes()).unwrap();
+        self.stdin.flush().unwrap();
+    }
+
+    /// 標準出力の次の行。
+    fn out_line(&mut self) -> String {
+        let mut line = String::new();
+        std::io::BufRead::read_line(&mut self.stdout, &mut line).unwrap();
+        line
+    }
+
+    /// 標準エラーを、`needle` を含む行まで読む。
+    fn wait_err(&mut self, needle: &str) {
+        loop {
+            let mut line = String::new();
+            let read = std::io::BufRead::read_line(&mut self.stderr, &mut line).unwrap();
+            assert!(read > 0, "the REPL ended before printing {needle:?}");
+            if line.contains(needle) {
+                return;
+            }
+        }
+    }
+
+    /// 標準入力を閉じて終わりを待ち、残りの標準出力と標準エラーと終了コードを返す。
+    fn finish(mut self) -> (String, String, Option<i32>) {
+        drop(self.stdin);
+        let mut out = String::new();
+        let mut err = String::new();
+        std::io::Read::read_to_string(&mut self.stdout, &mut out).unwrap();
+        std::io::Read::read_to_string(&mut self.stderr, &mut err).unwrap();
+        let status = self.child.wait().unwrap();
+        (out, err, status.code())
+    }
+}
+
+/// `:reload` はファイルを読み直し、セッションを作り直すので `let` の束縛は消える。
+#[test]
+fn reload_reads_the_file_again_and_drops_bindings() {
+    let dir = temp_project("reload", &[("main.em", "n : Int\nn = 1\n")]);
+    let mut session = Session::start(&dir);
+    session.send(":load main.em\nlet k = 5\nn\n");
+    assert_eq!(session.out_line(), "1\n");
+    std::fs::write(dir.join("main.em"), "n : Int\nn = 2\n").unwrap();
+    session.send(":reload\nn\nk\n");
+    let (out, err, code) = session.finish();
+    std::fs::remove_dir_all(&dir).unwrap();
+    assert_eq!(code, Some(0), "{err}");
+    assert_eq!(out, "2\n");
+    assert!(err.contains("[E1001]"), "{err}");
+}
+
+/// 誤りのあるファイルも覚えるので、直してから `:reload` で読める。
+#[test]
+fn a_failed_load_is_remembered_for_reload() {
+    let dir = temp_project("load-fix", &[("main.em", "n : Int\nn = nope\n")]);
+    let mut session = Session::start(&dir);
+    session.send(":load main.em\n");
+    session.wait_err("E1001");
+    std::fs::write(dir.join("main.em"), "n : Int\nn = 4\n").unwrap();
+    session.send(":reload\nn\n");
+    let (out, err, code) = session.finish();
+    std::fs::remove_dir_all(&dir).unwrap();
+    assert_eq!(code, Some(0), "{err}");
+    assert_eq!(out, "4\n");
+}
+
+#[test]
+fn an_unreadable_load_keeps_the_session() {
+    let dir = temp_project("load-missing", &[]);
+    let output = repl_in(&dir, &[], "let k = 5\n:load missing.em\nk\n");
+    std::fs::remove_dir_all(&dir).unwrap();
+    assert_eq!(output.status.code(), Some(0));
+    assert_eq!(stdout(&output), "5\n");
+    assert!(
+        stderr(&output).contains("error: cannot read `missing.em`"),
+        "{}",
+        stderr(&output)
+    );
+}
+
+#[test]
+fn reload_without_a_file_is_an_error() {
+    let output = repl("let k = 5\n:reload\nk\n");
+    assert_eq!(output.status.code(), Some(0));
+    assert_eq!(stdout(&output), "5\n");
+    assert!(stderr(&output).contains("no file to reload; use ':load'"));
+}
+
+#[test]
+fn repl_starts_from_a_file_argument() {
+    let dir = temp_project("repl-file", &[("main.em", "n : Int\nn = 3\n")]);
+    let output = repl_in(&dir, &["main.em"], "n\n");
+    let missing = repl_in(&dir, &["missing.em"], "");
+    std::fs::remove_dir_all(&dir).unwrap();
+    assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
+    assert_eq!(stdout(&output), "3\n");
+    assert_eq!(missing.status.code(), Some(2));
+    assert!(stderr(&missing).contains("error: cannot read `missing.em`"));
+}
+
+#[test]
+fn type_prints_the_type_on_stdout() {
+    let output = repl(":type fn x -> show x\n:t nope\n");
+    assert_eq!(output.status.code(), Some(0));
+    assert_eq!(stdout(&output), "fn x -> show x : Show a => a -> String\n");
+    assert!(stderr(&output).contains("[E1001]"));
+}
+
+#[test]
+fn load_without_an_argument_empties_the_session() {
+    let output = repl("let k = 5\n:load\nk\n");
+    assert_eq!(output.status.code(), Some(0));
+    assert_eq!(stdout(&output), "");
+    assert!(stderr(&output).contains("[E1001]"));
 }
 
 /// CRLF の行末は、`\r` を除いて読む (docs/spec/repl.md の「行の編集」)。

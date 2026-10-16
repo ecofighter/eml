@@ -34,6 +34,8 @@ enum Command {
         /// Detect reference-count leaks and use-after-free
         #[arg(long)]
         debug_heap: bool,
+        /// A file to load first, as with `:load`
+        file: Option<PathBuf>,
     },
 }
 
@@ -53,7 +55,7 @@ fn main() -> ExitCode {
                 ExitCode::SUCCESS
             }
         }
-        Command::Repl { debug_heap } => terminal::run(debug_heap),
+        Command::Repl { debug_heap, file } => terminal::run(debug_heap, file),
         Command::Run { debug_heap, file } => {
             // 読み込みとコンパイルの間の Ctrl-C も、シグナルで殺されずにこのハンドラが受ける。そこで立てたビットは、
             // 実行の最初の安全点で読まれる
