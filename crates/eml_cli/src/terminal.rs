@@ -88,6 +88,11 @@ fn steps(repl: &mut Repl, steps: impl IntoIterator<Item = Step>) -> Flow {
                 println!("{HELP}");
                 Flow::Continue
             }
+            // Task 6 で端末の動作に替える
+            Step::Command(Command::Load(_) | Command::Reload | Command::Type(_)) => {
+                eprintln!("this command is not available yet");
+                Flow::Continue
+            }
             Step::Error(message) => {
                 eprintln!("{message}");
                 Flow::Continue

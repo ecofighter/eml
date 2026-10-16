@@ -197,3 +197,34 @@ fn a_pasted_definition_ending_with_a_newline_is_evaluated() {
         ]
     );
 }
+
+#[test]
+fn file_and_type_commands_take_their_argument() {
+    for (line, command) in [
+        (
+            ":load app/main.em",
+            Command::Load(Some("app/main.em".to_string())),
+        ),
+        (
+            ":l  my file.em  ",
+            Command::Load(Some("my file.em".to_string())),
+        ),
+        (":load", Command::Load(None)),
+        (":reload", Command::Reload),
+        (":r", Command::Reload),
+        (":type map", Command::Type("map".to_string())),
+        (":t   fn x -> x  ", Command::Type("fn x -> x".to_string())),
+    ] {
+        assert_eq!(steps(&[line]), [Step::Command(command)], "{line}");
+    }
+}
+
+#[test]
+fn file_and_type_commands_check_their_argument() {
+    assert_eq!(
+        steps(&[":reload x"]),
+        [error("':reload' takes no argument")]
+    );
+    assert_eq!(steps(&[":type"]), [error("':type' needs an expression")]);
+    assert_eq!(steps(&[":t   "]), [error("':type' needs an expression")]);
+}

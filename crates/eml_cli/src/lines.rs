@@ -14,14 +14,33 @@ pub enum Step {
     Error(String),
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Command {
     Quit,
     Help,
+    /// `None` は空のセッションに戻す。
+    Load(Option<String>),
+    Reload,
+    Type(String),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Name {
+    Quit,
+    Help,
+    Load,
+    Reload,
+    Type,
 }
 
 /// 名前の接頭辞で引くので、表の順が省略の選び方になる (docs/spec/repl.md の「コマンド」)。
-const COMMANDS: &[(&str, Command)] = &[("quit", Command::Quit), ("help", Command::Help)];
+const COMMANDS: &[(&str, Name)] = &[
+    ("quit", Name::Quit),
+    ("help", Name::Help),
+    ("load", Name::Load),
+    ("reload", Name::Reload),
+    ("type", Name::Type),
+];
 
 #[derive(Debug, Default)]
 pub struct Lines {
@@ -122,10 +141,18 @@ impl Lines {
             "}" => Step::Error("':}' without ':{'".to_string()),
             _ => match COMMANDS.iter().find(|(full, _)| full.starts_with(name)) {
                 None => Step::Error(format!("unknown command ':{name}'")),
-                Some((full, _)) if !argument.is_empty() => {
-                    Step::Error(format!("':{full}' takes no argument"))
-                }
-                Some((_, command)) => Step::Command(*command),
+                Some((full, name)) => match (name, argument) {
+                    (Name::Load, "") => Step::Command(Command::Load(None)),
+                    (Name::Load, path) => Step::Command(Command::Load(Some(path.to_string()))),
+                    (Name::Type, "") => Step::Error("':type' needs an expression".to_string()),
+                    (Name::Type, expr) => Step::Command(Command::Type(expr.to_string())),
+                    (_, argument) if !argument.is_empty() => {
+                        Step::Error(format!("':{full}' takes no argument"))
+                    }
+                    (Name::Quit, _) => Step::Command(Command::Quit),
+                    (Name::Help, _) => Step::Command(Command::Help),
+                    (Name::Reload, _) => Step::Command(Command::Reload),
+                },
             },
         }
     }
