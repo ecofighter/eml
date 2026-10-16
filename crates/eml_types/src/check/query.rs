@@ -1,0 +1,145 @@
+//! `:type` の問い合わせの型を書く (docs/spec/types.md の「REPL の入力」)。
+
+use std::collections::HashSet;
+
+use eml_hir::{ClassId, Program};
+
+use crate::store::TypeStore;
+use crate::table::{Exporter, RowVar, Table, Tail, Ty, TyShape, VarNames};
+
+/// 型を書く順 (矢印は引数、row のラベルの型引数、row の変数、結果) にたどった、型変数の代表と row 変数の現れ。
+/// 書いた型の木の上で数えるので、共有した部分は現れるたびに数える。数える費用は書く文字列の長さに比例する。
+struct Occurrences {
+    types: Vec<Ty>,
+    rows: Vec<(RowVar, usize)>,
+}
+
+fn occurrences(table: &Table<'_>, ty: Ty) -> Occurrences {
+    let mut found = Occurrences {
+        types: Vec::new(),
+        rows: Vec::new(),
+    };
+    walk(table, ty, &mut found);
+    found
+}
+
+fn walk(table: &Table<'_>, ty: Ty, found: &mut Occurrences) {
+    let ty = table.resolve(ty);
+    match table.shape(ty) {
+        TyShape::Var(_) => {
+            if !found.types.contains(&ty) {
+                found.types.push(ty);
+            }
+        }
+        TyShape::Con(_, args) => args.iter().for_each(|&arg| walk(table, arg, found)),
+        TyShape::Tuple(elements) => elements
+            .iter()
+            .for_each(|&element| walk(table, element, found)),
+        TyShape::Fn {
+            param, row, ret, ..
+        } => {
+            walk(table, *param, found);
+            let row = table.resolve_row(row);
+            for label in &row.labels {
+                label.args.iter().for_each(|&arg| walk(table, arg, found));
+            }
+            if let Tail::Var(var) = row.tail {
+                match found.rows.iter_mut().find(|(seen, _)| *seen == var) {
+                    Some((_, count)) => *count += 1,
+                    None => found.rows.push((var, 1)),
+                }
+            }
+            walk(table, *ret, found);
+        }
+        TyShape::Rigid(_) | TyShape::Error => {}
+    }
+}
+
+/// 書く型に現れる型変数の代表。問い合わせの残りの制約を、文脈と `Unit` に分けるのに使う。
+pub(super) fn shown_vars(table: &Table<'_>, ty: Ty) -> HashSet<Ty> {
+    occurrences(table, ty).types.into_iter().collect()
+}
+
+/// `a`、`b`、`c`、`d`、`f`、…、`z`、`a1`、`b1`、…。`e` で始まる名前は row 変数のために使わない。
+fn type_var_name(index: usize) -> String {
+    const LETTERS: &[u8] = b"abcdfghijklmnopqrstuvwxyz";
+    let letter = LETTERS[index % LETTERS.len()] as char;
+    match index / LETTERS.len() {
+        0 => letter.to_string(),
+        round => format!("{letter}{round}"),
+    }
+}
+
+fn row_var_name(index: usize) -> String {
+    match index {
+        0 => "e".to_string(),
+        _ => format!("e{index}"),
+    }
+}
+
+/// 問い合わせの型 `ty` と文脈 `context` (型変数への制約) を、`Show a => a -> String` の形に書く。
+pub(super) fn render(
+    program: &Program,
+    table: &Table<'_>,
+    ty: Ty,
+    context: &[(ClassId, Ty)],
+) -> String {
+    let found = occurrences(table, ty);
+    let mut names = VarNames::default();
+    for (index, &var) in found.types.iter().enumerate() {
+        names.types.insert(var, type_var_name(index));
+    }
+    // 1回だけ現れる row 変数は閉じた row として書く
+    for (index, &(var, _)) in found
+        .rows
+        .iter()
+        .filter(|(_, count)| *count > 1)
+        .enumerate()
+    {
+        names.rows.insert(var, row_var_name(index));
+    }
+    let mut types = TypeStore::new(program);
+    let id = Exporter::named(table, &mut types, &names).export(ty);
+    let shown = types.display(id, &program.names).to_string();
+    let constraints = context_text(program, table, &found.types, &names, context);
+    match constraints.as_slice() {
+        [] => shown,
+        [one] => format!("{one} => {shown}"),
+        many => format!("({}) => {shown}", many.join(", ")),
+    }
+}
+
+/// 文脈の制約を、型変数が現れた順、クラスの表示の名前の順 (同じなら定義の順) に並べる。同じ制約と、ほかの制約の上位
+/// クラスでたどれる制約は書かない。
+fn context_text(
+    program: &Program,
+    table: &Table<'_>,
+    order: &[Ty],
+    names: &VarNames,
+    context: &[(ClassId, Ty)],
+) -> Vec<String> {
+    let mut pairs: Vec<(ClassId, Ty)> = context
+        .iter()
+        .map(|&(class, var)| (class, table.resolve(var)))
+        .collect();
+    pairs.sort_by_key(|&(class, var)| (var, class));
+    pairs.dedup();
+    let implied = |&(class, var): &(ClassId, Ty)| {
+        pairs.iter().any(|&(other, other_var)| {
+            other_var == var && other != class && program.superclasses(other).contains(&class)
+        })
+    };
+    let mut kept: Vec<(usize, &str, ClassId, Ty)> = pairs
+        .iter()
+        .filter(|pair| !implied(pair))
+        .map(|&(class, var)| {
+            let position = order.iter().position(|&seen| seen == var);
+            let position = position.expect("a constraint of the context is on a shown variable");
+            (position, program.names.class(class), class, var)
+        })
+        .collect();
+    kept.sort();
+    kept.into_iter()
+        .map(|(_, class, _, var)| format!("{class} {}", names.types[&var]))
+        .collect()
+}

@@ -82,8 +82,12 @@ pub struct TypedProgram {
     pub bodies: ItemMap<Function, BodyTypes>,
     /// 単相化で一様にする型変数の位置。
     pub uniform: Uniform,
-    /// REPL の入力の関数ごとの結果。セッションのモジュールの入力の関数だけを含む。
+    /// REPL の入力の関数ごとの結果。セッションのモジュールの入力の関数だけを含む。問い合わせの入力は含まない。
     pub inputs: ItemMap<Function, InputType>,
+    /// `:type` の問い合わせの型 (`Show a => a -> String`)。問い合わせの検査が型の文字列まで届いたときだけ `Some` で、
+    /// 後で報告する誤り (線形性、網羅性、E2012) があっても `Some` になりうる。誤りの判断は呼び出し側が診断で行う
+    /// (docs/spec/types.md の「REPL の入力」)。
+    pub query: Option<String>,
 }
 
 /// REPL の入力の関数の検査の結果
@@ -329,6 +333,37 @@ pub(crate) fn test_session(inputs: &[&str]) -> (eml_hir::Program, SourceFiles) {
     let (loaded, _, _) = eml_hir::load_session(
         eml_hir::STD,
         &inputs,
+        "",
+        "",
+        &NoModules,
+        &eml_hir::ImportCache::default(),
+    );
+    let (def_map, _) = eml_hir::def_map(&loaded.modules);
+    let program = eml_hir::lower(&def_map, &loaded.modules).0;
+    (program, loaded.files)
+}
+
+/// 単体テストのための、最後に `:type` の問い合わせを置いたセッションの `Program`。
+#[cfg(test)]
+pub(crate) fn test_query(inputs: &[&str], query: &str) -> (eml_hir::Program, SourceFiles) {
+    let number = inputs.len() as u32 + 1;
+    let mut session: Vec<eml_hir::SessionInput> = inputs
+        .iter()
+        .zip(1..)
+        .map(|(&text, number)| eml_hir::SessionInput {
+            number,
+            text,
+            form: eml_hir::InputForm::Typed,
+        })
+        .collect();
+    session.push(eml_hir::SessionInput {
+        number,
+        text: query,
+        form: eml_hir::InputForm::Query,
+    });
+    let (loaded, _, _) = eml_hir::load_session(
+        eml_hir::STD,
+        &session,
         "",
         "",
         &NoModules,

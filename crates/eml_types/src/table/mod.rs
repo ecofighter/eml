@@ -16,9 +16,9 @@ mod tests;
 mod unify;
 mod yields;
 
-pub(crate) use export::Exporter;
+pub(crate) use export::{Exporter, VarNames};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub(crate) struct Ty(u32);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

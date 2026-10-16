@@ -23,13 +23,14 @@ use crate::{
     BodyTypes, DeclType, InputType, Instantiation, RowYield, TypedProgram, Uniform, Update, carry,
     codes, exhaustive, scc, uniform, usage,
 };
-use constraints::{Failure, show_constraint, solve};
+use constraints::{Defaulting, Failure, show_constraint, solve};
 
 mod body;
 mod constraints;
 mod field;
 mod handle;
 mod input;
+mod query;
 mod report;
 
 use body::BodyCheck;
@@ -68,6 +69,8 @@ pub(crate) struct PendingBody<'c> {
     instances: Vec<Instance>,
     /// 使った回数を正しく数えられる本体か (`usage::reliable`)。
     pub reliable: bool,
+    /// `:type` の問い合わせの型の文字列。
+    query: Option<String>,
 }
 
 impl PendingBody<'_> {
@@ -113,6 +116,7 @@ pub(crate) fn check_module(
     let mut unreliable = HashSet::new();
     let mut violated = Vec::new();
     let mut inputs = ItemMap::default();
+    let mut query = None;
     for component in &scc::components(program) {
         let mut pending: Vec<(FunctionId, PendingBody<'_>)> = Vec::new();
         for &id in component {
@@ -153,7 +157,7 @@ pub(crate) fn check_module(
             schemes.insert(decl, scheme);
         }
         violated.extend(found);
-        for (member, (id, body)) in pending.into_iter().enumerate() {
+        for (member, (id, mut body)) in pending.into_iter().enumerate() {
             // 宣言自身の変数の畳み込みは、この SCC の解が残した新しいスキームで決める
             let scheme = &schemes[&ValueItem::Function(id)];
             // 入力の関数は宣言の型を持たず、宣言自身の Kind 変数もない
@@ -162,9 +166,12 @@ pub(crate) fn check_module(
                 .get(id)
                 .map_or(0, |shape| shape.lin_vars);
             let kinds = BodyKinds::new(&lin, member, scheme, lin_vars);
+            if let Some(shown) = body.query.take() {
+                query = Some(shown);
+            }
             let (body_types, body_joins) = export_body(body, kinds, &mut types);
-            if let FunctionKind::Input(kind) = program[id].kind {
-                let input = input::finish_input(
+            if let FunctionKind::Input(kind) = program[id].kind
+                && let Some(input) = input::finish_input(
                     program,
                     id,
                     kind,
@@ -173,7 +180,8 @@ pub(crate) fn check_module(
                     &mut signatures,
                     &mut schemes,
                     &mut diagnostics,
-                );
+                )
+            {
                 inputs.insert(id, input);
             }
             bodies.insert(id, body_types);
@@ -190,6 +198,7 @@ pub(crate) fn check_module(
     ));
     diagnostics.extend(report_violations(program, files, &types, violated));
     let mut typed = typed_program(&signatures, schemes, joins, bodies, inputs, types);
+    typed.query = query;
     let (uniform, found) = uniform::uniform(program, &typed.types, &typed.decls, &typed.bodies);
     typed.uniform = uniform;
     diagnostics.extend(found);
@@ -342,7 +351,7 @@ fn check_derived_fields(
                 (instance.class, param),
                 &givens,
                 false,
-                false,
+                Defaulting::None,
             ) else {
                 continue;
             };
@@ -494,7 +503,7 @@ pub(crate) fn check_body<'c>(
         instances: Vec::new(),
     };
     checker.check_function(own.ty);
-    checker.solve_constraints(false);
+    checker.solve_constraints(Defaulting::None);
     let typing = checker.typing;
     let instances = checker.instances;
     // 頭が線形な instance (E2010) のメソッドは、頭の値を `Unr` とみなして書いた本体なので、線形性の診断を重ねない
@@ -511,6 +520,7 @@ pub(crate) fn check_body<'c>(
             own,
             instances,
             reliable,
+            query: None,
         },
         diagnostics,
     ))
@@ -911,6 +921,7 @@ fn typed_program(
         bodies,
         uniform: Uniform::default(),
         inputs,
+        query: None,
     }
 }
 

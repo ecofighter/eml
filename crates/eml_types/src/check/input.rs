@@ -12,13 +12,14 @@ use crate::kind::problem::KindScheme;
 use crate::kind::{Provenance, Span};
 use crate::shape::{Own, Rigids, closed_shape};
 use crate::store::{EffectLabel, Lin, TypeId, TypeKind, TypeStore};
-use crate::table::{ArrowLin, Label as RowLabel, Row, Table, Ty};
+use crate::table::{ArrowLin, Label as RowLabel, Row, Table, Tail, Ty};
 use crate::ty::Linearity;
 use crate::{BodyTypes, InputDisplay, InputType, Resolution, carry, codes, resolve, usage};
 
 use super::body::{BodyCheck, BodyTyping};
+use super::constraints::Defaulting;
 use super::report::AmbientSource;
-use super::{PendingBody, Signatures};
+use super::{PendingBody, Signatures, query};
 
 /// 入力の関数の本体を検査する。`check_body` と同じく、Kind の制約を持った本体を返す。
 pub(super) fn check_input<'c>(
@@ -33,12 +34,24 @@ pub(super) fn check_input<'c>(
     let body = program.body(id).expect("an input has a body");
     let mut table = Table::new(context);
     let result = table.fresh_var();
-    let io = Row::closed(vec![RowLabel {
-        effect: program.io(),
-        args: Vec::new(),
-    }]);
+    let ambient = match kind {
+        // 問い合わせは `IO` に閉じない。E2015 は起きない
+        InputKind::Query => Row {
+            labels: Vec::new(),
+            tail: Tail::Var(table.fresh_row_var()),
+        },
+        InputKind::Expr | InputKind::Let(_) => Row::closed(vec![RowLabel {
+            effect: program.io(),
+            args: Vec::new(),
+        }]),
+    };
     let unit = table.unit;
-    let own = table.function_with(unit, ArrowLin::Known(Linearity::Unr), io, result);
+    let own = table.function_with(
+        unit,
+        ArrowLin::Known(Linearity::Unr),
+        ambient.clone(),
+        result,
+    );
     let rigids = Rigids::new(&mut table, &Generics::default());
     let file = program.file(id.module);
     table.set_kind_origin(Provenance::Unattributed(Span {
@@ -66,10 +79,27 @@ pub(super) fn check_input<'c>(
         checker.undecided_binding(binding, result);
     }
     // 式の入力の決まらない型は、制約を解くときに `Unit` とみなす。`let` は決まらない型を誤りにしてあるので、決めない
-    checker.solve_constraints(kind == InputKind::Expr);
+    let defaulting = match kind {
+        InputKind::Expr => Defaulting::Unit,
+        InputKind::Query => Defaulting::Query,
+        InputKind::Let(_) => Defaulting::None,
+    };
+    let residuals = checker.solve_constraints(defaulting);
+    // 問い合わせの型の文字列は、変数を決める前の表で作る。書き出した型では、残った変数がすべて同じ `_` になるため
+    let query = (kind == InputKind::Query).then(|| {
+        let shown = query::shown_vars(checker.table, result);
+        let context = checker.split_residuals(residuals, &shown);
+        query::render(program, checker.table, result, &context)
+    });
     let typing = checker.typing;
     let instances = checker.instances;
     default_unsolved(&mut table, &typing, result, kind == InputKind::Expr);
+    // 本体の row と末尾を共有しなかった問い合わせの row は、ここで閉じる。書き出す型に開いた row を残さないため
+    if let Tail::Var(var) = table.resolve_row(&ambient).tail {
+        table
+            .close_row(var)
+            .expect("an unsolved row variable closes to `<>`");
+    }
     let reliable = usage::reliable(body, diagnostics.is_empty());
     usage::constrain(program, file, body, &typing, &mut table, types, reliable);
     carry::constrain(program, file, body, &typing, &mut table, reliable);
@@ -85,6 +115,7 @@ pub(super) fn check_input<'c>(
             },
             instances,
             reliable,
+            query,
         },
         diagnostics,
     )
@@ -118,7 +149,8 @@ fn default_unsolved(table: &mut Table<'_>, typing: &BodyTyping, result: Ty, type
 }
 
 /// 書き出した入力の関数の本体から、入力の結果をまとめる。入力の関数の型と、`let` の束縛の型を、閉じた形として
-/// `signatures` に入れる。後の入力は、それを宣言の型として参照する。
+/// `signatures` に入れる。後の入力は、それを宣言の型として参照する。問い合わせは結果を持たないので `None` を返す。
+/// 問い合わせの入力の関数の型も `signatures` に入れるのは、`typed_program` がすべての関数に型を求めるためである。
 #[expect(clippy::too_many_arguments, reason = "the tables an input adds to")]
 pub(super) fn finish_input(
     program: &Program,
@@ -129,10 +161,11 @@ pub(super) fn finish_input(
     signatures: &mut Signatures,
     schemes: &mut HashMap<ValueItem, KindScheme>,
     diagnostics: &mut Vec<Diagnostic>,
-) -> InputType {
+) -> Option<InputType> {
     let body = program.body(id).expect("an input has a body");
     let ty = body_types.exprs[body.root];
-    if !types.contains_error(ty) && types.linearity(ty) == Lin::Lin {
+    // 問い合わせは値を残さないので、`Lin` の型も書ける (docs/spec/types.md の「REPL の入力」)
+    if kind != InputKind::Query && !types.contains_error(ty) && types.linearity(ty) == Lin::Lin {
         diagnostics.push(linear_input(program, id, kind, ty, types));
     }
     let function_ty = types.intern(TypeKind::Fn {
@@ -149,6 +182,8 @@ pub(super) fn finish_input(
         .functions
         .insert(id, closed_shape(types, function_ty));
     let display = match kind {
+        // 表示を読むのは translate だけで、問い合わせは translate に渡らない
+        InputKind::Query => return None,
         InputKind::Let(binding) => {
             signatures.bindings.insert(binding, closed_shape(types, ty));
             schemes.insert(ValueItem::Binding(binding), KindScheme::default());
@@ -157,10 +192,8 @@ pub(super) fn finish_input(
         InputKind::Expr if ty == types.unit() => InputDisplay::Unit,
         InputKind::Expr if satisfies(program, types, program.lang.show, ty) => InputDisplay::Show,
         InputKind::Expr => InputDisplay::TypeOnly(types.display(ty, &program.names).to_string()),
-        // 表示を読むのは translate だけで、問い合わせは translate に渡らない
-        InputKind::Query => InputDisplay::Unit,
     };
-    InputType { ty, display }
+    Some(InputType { ty, display })
 }
 
 /// 入力の結果が `Lin` の値である。入力をまたいで残せず、表示もできない。
@@ -183,7 +216,7 @@ fn linear_input(
             )
             .with_note("only values that may be copied and dropped stay across inputs")
         }
-        InputKind::Expr | InputKind::Query => {
+        InputKind::Expr => {
             let body = program.body(id).expect("an input has a body");
             Diagnostic::error(
                 codes::INPUT_LINEAR,
@@ -192,6 +225,7 @@ fn linear_input(
             )
             .with_help("use up the value inside the input, as in `drop`")
         }
+        InputKind::Query => unreachable!("a query reports no E2016"),
     }
 }
 
@@ -507,5 +541,128 @@ mod tests {
     fn a_main_in_a_session_is_not_checked() {
         let (_, _, diagnostics) = session(&["main : Int\nmain = 1"]);
         assert_eq!(diagnostics, Vec::<String>::new());
+    }
+
+    /// 問い合わせの型と、診断 (`E2009 メッセージ` の形)。
+    fn query(inputs: &[&str], text: &str) -> (Option<String>, Vec<String>) {
+        let (program, files) = crate::test_query(inputs, text);
+        let (typed, diagnostics) = crate::check(&program, &files);
+        let shown = diagnostics
+            .iter()
+            .map(|d| format!("{} {}", d.code, d.message))
+            .collect();
+        (typed.query, shown)
+    }
+
+    fn typed(inputs: &[&str], text: &str) -> String {
+        let (ty, diagnostics) = query(inputs, text);
+        assert_eq!(diagnostics, Vec::<String>::new(), "{text}");
+        ty.unwrap_or_else(|| panic!("{text}: no type"))
+    }
+
+    const ASK: &str = "effect Ask where\n  ask : Unit -> Int";
+
+    #[test]
+    fn a_query_names_its_variables_in_order() {
+        assert_eq!(
+            typed(&[], "(>>)"),
+            "(a -> <e> b) -> (b -> <e> c) -> a -> <e> c"
+        );
+        assert_eq!(typed(&[], "[]"), "List a");
+        assert_eq!(typed(&[], "fn x -> x"), "a -> a");
+        // `e` で始まる名前は row 変数のために型変数に使わない
+        assert_eq!(
+            typed(&[], "fn a b c d f -> (a, b, c, d, f)"),
+            "a -> b -> c -> d -> f -> (a, b, c, d, f)"
+        );
+    }
+
+    #[test]
+    fn a_query_writes_constraints_on_its_variables_as_a_context() {
+        assert_eq!(typed(&[], "fn x -> show x"), "Show a => a -> String");
+        // `Ord` の上位クラスの `Eq` は書かない
+        assert_eq!(
+            typed(&[], "fn x y -> x < y && x == y"),
+            "Ord a => a -> a -> Bool"
+        );
+        assert_eq!(
+            typed(&[], "fn x y -> x == x && show y == \"\""),
+            "(Eq a, Show b) => a -> b -> Bool"
+        );
+    }
+
+    #[test]
+    fn a_query_writes_a_row_variable_only_when_it_is_shared() {
+        assert_eq!(typed(&[], "fn f -> f ()"), "(Unit -> <e> a) -> <e> a");
+        assert_eq!(typed(&[ASK], "fn u -> ask u"), "Unit -> <Ask> Int");
+        assert_eq!(
+            typed(&[ASK], "fn f -> ask (f ())"),
+            "(Unit -> <Ask | e> Unit) -> <Ask | e> Int"
+        );
+    }
+
+    /// 同じ節点を2回指す型でも、書いた型の上で数える。`(g, g)` の2つの要素は推論の表で同じ節点なので、ラムダの
+    /// row 変数は2回現れ、名前が付く。
+    #[test]
+    fn a_shared_function_type_counts_its_row_twice() {
+        assert_eq!(
+            typed(&[], "let g = fn x -> x in (g, g)"),
+            "(a -> <e> a, a -> <e> a)"
+        );
+        assert_eq!(
+            typed(&[], "fn f -> let g = fn u -> f u in (g, g)"),
+            "(a -> <e> b) -> (a -> <e> b, a -> <e> b)"
+        );
+    }
+
+    #[test]
+    fn a_query_lifts_the_rules_of_an_expression_input() {
+        assert_eq!(typed(&[ASK], "ask ()"), "Int");
+        assert_eq!(typed(&[], "Fs.open \"x\""), "File");
+        // Kind (矢印の線形性) は書かない
+        assert_eq!(
+            typed(&[], "fn f -> fn (u : Unit) -> Fs.close f"),
+            "File -> Unit -> <IO> Unit"
+        );
+        assert_eq!(typed(&["let n = 1"], "n"), "Int");
+    }
+
+    #[test]
+    fn a_variable_outside_the_type_is_decided_as_unit() {
+        assert_eq!(typed(&[], "show []"), "String");
+        let (_, diagnostics) = query(&[], "show (fn x -> x)");
+        assert!(
+            diagnostics.iter().any(|d| d.starts_with("E2006")),
+            "{diagnostics:?}"
+        );
+        let (_, diagnostics) = query(
+            &[
+                "class Named a where\n  name : a -> String",
+                "class Make a where\n  make : Unit -> a",
+            ],
+            "name (make ())",
+        );
+        assert_eq!(
+            diagnostics,
+            [
+                "E2009 cannot decide which instance of `Named` to use for `name`",
+                "E2009 cannot decide which instance of `Make` to use for `make`",
+            ]
+        );
+    }
+
+    #[test]
+    fn a_query_shows_an_old_version_with_its_input_number() {
+        assert_eq!(
+            typed(
+                &[
+                    "data Shape = | Circle",
+                    "let s = Circle",
+                    "data Shape = | Square"
+                ],
+                "s"
+            ),
+            "Shape#1"
+        );
     }
 }

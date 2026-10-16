@@ -18,6 +18,33 @@ use super::body::BodyCheck;
 /// 求める制約 `C T`。
 pub(super) type Wanted = (ClassId, Ty);
 
+/// 決まらない型変数に残った制約の扱い (docs/spec/types.md の「REPL の入力」)。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum Defaulting {
+    /// 決まらない型は E2009 にする。
+    None,
+    /// REPL の式の入力。決まらない型を `Unit` とみなす。
+    Unit,
+    /// `:type` の問い合わせ。決まらない型に残った制約を、残りの制約として返す。
+    Query,
+}
+
+/// `solve` が解いた結果。
+pub(super) struct Solved {
+    /// instance とタプルで解いた節点の型引数。呼び出し側が `Unr` を求める。
+    pub args: Vec<Ty>,
+    /// `Defaulting::Query` で、型変数に残った制約。
+    pub residual: Vec<Wanted>,
+}
+
+/// 問い合わせの参照のうち、型変数に残った制約を持つもの。
+pub(super) struct Residual {
+    expr: ExprId,
+    decl: ValueItem,
+    resolved: Vec<Ty>,
+    left: Vec<Wanted>,
+}
+
 /// 解けなかった制約。`root` は参照が求めた制約で、`leaf` は解いた先で解けなかった制約である。
 pub(super) enum Failure {
     NoInstance {
@@ -33,8 +60,9 @@ impl BodyCheck<'_, '_> {
     /// E2006 と E2009 を本体の誤りに数え、線形性の診断を連鎖させないためである。
     ///
     /// instance とタプルで解いた節点の型引数には、参照を由来に `Unr` を求める (`solve`)。誤りになった参照には求めない。
-    /// 誤りは報告済みで、線形性の診断を重ねないため。
-    pub(super) fn solve_constraints(&mut self, defaulting: bool) {
+    /// 誤りは報告済みで、線形性の診断を重ねないため。`Defaulting::Query` で型変数に制約が残った参照にも、ここでは
+    /// 求めない。残りの制約を `split_residuals` で分けるまで、その参照が誤りになるかが決まらないためである。
+    pub(super) fn solve_constraints(&mut self, defaulting: Defaulting) -> Vec<Residual> {
         let body_has_error = self.diagnostics.iter().any(Diagnostic::is_error);
         let givens = self.givens();
         let references: Vec<(ExprId, ValueItem, Vec<Wanted>)> = self
@@ -44,8 +72,10 @@ impl BodyCheck<'_, '_> {
             .map(|(expr, (decl, args, _))| (expr, *decl, self.wanted(*decl, args)))
             .collect();
         let mut found = Vec::new();
+        let mut residuals = Vec::new();
         for (expr, decl, wanted) in references {
             let mut resolved = Vec::new();
+            let mut left = Vec::new();
             let mut failed = None;
             // 決まらない型より、instance がないという決まった誤りを報告する (`solve` と同じ)
             for wanted in wanted {
@@ -57,7 +87,10 @@ impl BodyCheck<'_, '_> {
                     body_has_error,
                     defaulting,
                 ) {
-                    Ok(args) => resolved.extend(args),
+                    Ok(solved) => {
+                        resolved.extend(solved.args);
+                        left.extend(solved.residual);
+                    }
                     Err(failure @ Failure::NoInstance { .. }) => {
                         failed = Some(failure);
                         break;
@@ -70,17 +103,65 @@ impl BodyCheck<'_, '_> {
             match failed {
                 // 1つの参照から出た誤りは1つにまとめる
                 Some(failure) => found.push((expr, decl, failure)),
-                None if resolved.is_empty() => {}
-                None => {
-                    let range = self.body.exprs[expr].range;
-                    let name = self.program.value_name(decl).to_string();
-                    self.with_kind_origin(range, KindReason::Passed(name), |this| {
-                        this.table
-                            .kinds_at_most(&resolved, Bound::Const(Linearity::Unr));
+                None if left.is_empty() => self.bound_resolved(expr, decl, &resolved),
+                None => residuals.push(Residual {
+                    expr,
+                    decl,
+                    resolved,
+                    left,
+                }),
+            }
+        }
+        self.report_failures(found);
+        residuals
+    }
+
+    /// 問い合わせの残りの制約を分ける。`shown` (書く型に現れる型変数の代表) の型変数の制約は、文脈として返す。
+    /// ほかの型変数は式の入力と同じく `Unit` とみなし、構造的なクラスなら解けたとし、そうでなければ E2009 にする。
+    /// E2009 にならなかった参照だけに `Unr` を求める。誤りを出した参照に求めないのは `solve_constraints` と同じ理由
+    /// である (docs/spec/types.md の「REPL の入力」)。`usage::reliable` より前に呼ぶ。
+    pub(super) fn split_residuals(
+        &mut self,
+        residuals: Vec<Residual>,
+        shown: &HashSet<Ty>,
+    ) -> Vec<Wanted> {
+        let mut context = Vec::new();
+        let mut found = Vec::new();
+        for residual in residuals {
+            let mut failed = None;
+            for &(class, var) in &residual.left {
+                if shown.contains(&self.table.resolve(var)) {
+                    context.push((class, var));
+                } else if !structural(self.program, class) {
+                    failed.get_or_insert(Failure::Ambiguous {
+                        root: (class, var),
+                        class,
                     });
                 }
             }
+            match failed {
+                Some(failure) => found.push((residual.expr, residual.decl, failure)),
+                None => self.bound_resolved(residual.expr, residual.decl, &residual.resolved),
+            }
         }
+        self.report_failures(found);
+        context
+    }
+
+    /// 制約がすべて解けた参照の、解いた型引数に `Unr` を求める。
+    fn bound_resolved(&mut self, expr: ExprId, decl: ValueItem, resolved: &[Ty]) {
+        if resolved.is_empty() {
+            return;
+        }
+        let range = self.body.exprs[expr].range;
+        let name = self.program.value_name(decl).to_string();
+        self.with_kind_origin(range, KindReason::Passed(name), |this| {
+            this.table
+                .kinds_at_most(resolved, Bound::Const(Linearity::Unr));
+        });
+    }
+
+    fn report_failures(&mut self, found: Vec<(ExprId, ValueItem, Failure)>) {
         let diagnostics: Vec<Diagnostic> = found
             .into_iter()
             .filter_map(|(expr, decl, failure)| self.constraint_error(expr, decl, failure))
@@ -229,8 +310,9 @@ fn index(var: TypeVarId) -> usize {
 /// 解いても、解いた先の型にこの `Unr` を求めるからである
 /// (docs/spec/types.md の「`Unr` のクラス」)。
 ///
-/// `defaulting` は REPL の式の入力で立てる。決まらない型を `Unit` とみなし、タプルの構造的な instance を持つクラス
-/// だけを解けたとし、ほかのクラスは決めた型で解けないので E2009 にする
+/// `Defaulting::Unit` は REPL の式の入力で使う。決まらない型を `Unit` とみなし、タプルの構造的な instance を持つ
+/// クラスだけを解けたとし、ほかのクラスは決めた型で解けないので E2009 にする。`Defaulting::Query` は `:type` の
+/// 問い合わせで使い、決まらない型に残った制約を `Solved::residual` に入れて返す
 /// (docs/spec/types.md の「REPL の入力」)。
 ///
 /// 列には、同じクラスと同じ代表の組を1回だけ足す。推論の表は部分を共有するので、型を木としてたどると型の深さの
@@ -242,14 +324,15 @@ pub(super) fn solve(
     wanted: Wanted,
     givens: &[(ClassId, RigidVar)],
     body_has_error: bool,
-    defaulting: bool,
-) -> Result<Vec<Ty>, Failure> {
+    defaulting: Defaulting,
+) -> Result<Solved, Failure> {
     let root = wanted;
     let (class, ty) = wanted;
     let mut seen = HashSet::from([(class, table.resolve(ty))]);
     let mut work = vec![root];
     let mut next = 0;
     let mut resolved = Vec::new();
+    let mut residual = Vec::new();
     let mut ambiguous = None;
     let no_instance = |leaf| Failure::NoInstance { root, leaf };
     while let Some(&(class, ty)) = work.get(next) {
@@ -285,7 +368,8 @@ pub(super) fn solve(
             // 同じ本体に別の誤りがあるとき、決まらない型はその誤りの連鎖である。誤りを直せば型が決まるので、
             // E2009 を重ねない
             TyShape::Var(_) if body_has_error => {}
-            TyShape::Var(_) if defaulting && structural(program, class) => {}
+            TyShape::Var(_) if defaulting == Defaulting::Unit && structural(program, class) => {}
+            TyShape::Var(_) if defaulting == Defaulting::Query => residual.push((class, ty)),
             TyShape::Var(_) => {
                 ambiguous.get_or_insert(Failure::Ambiguous { root, class });
             }
@@ -296,7 +380,10 @@ pub(super) fn solve(
     }
     match ambiguous {
         Some(failure) => Err(failure),
-        None => Ok(resolved),
+        None => Ok(Solved {
+            args: resolved,
+            residual,
+        }),
     }
 }
 

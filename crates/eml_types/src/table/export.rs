@@ -20,6 +20,16 @@ pub(crate) struct Exporter<'t, 'c, 's, 'k> {
     done: HashMap<Ty, TypeId>,
     /// `None` は診断のための書き出しである。
     kinds: Option<BodyKinds<'k>>,
+    /// `:type` の問い合わせの型を書くときだけ持つ。
+    names: Option<&'k VarNames>,
+}
+
+/// `:type` の問い合わせの型を書くときの変数の名前 (docs/spec/types.md の「REPL の入力」)。型変数は代表の `Ty` で引く。
+/// 名前のない row 変数は、閉じた row として書く。
+#[derive(Debug, Default)]
+pub(crate) struct VarNames {
+    pub types: HashMap<Ty, String>,
+    pub rows: HashMap<RowVar, String>,
 }
 
 impl<'t, 'c, 's, 'k> Exporter<'t, 'c, 's, 'k> {
@@ -29,6 +39,7 @@ impl<'t, 'c, 's, 'k> Exporter<'t, 'c, 's, 'k> {
             types,
             done: HashMap::new(),
             kinds: None,
+            names: None,
         }
     }
 
@@ -42,6 +53,23 @@ impl<'t, 'c, 's, 'k> Exporter<'t, 'c, 's, 'k> {
             types,
             done: HashMap::new(),
             kinds: Some(kinds),
+            names: None,
+        }
+    }
+
+    /// 名前を付けた変数を `Rigid` に、名前のない row 変数を閉じた row にして書き出す。`:type` の型の文字列を、型の
+    /// 表示の処理 (`TypeStore::display`) で作るためである。
+    pub fn named(
+        table: &'t Table<'c>,
+        types: &'s mut TypeStore,
+        names: &'k VarNames,
+    ) -> Exporter<'t, 'c, 's, 'k> {
+        Exporter {
+            table,
+            types,
+            done: HashMap::new(),
+            kinds: None,
+            names: Some(names),
         }
     }
 
@@ -120,6 +148,9 @@ impl<'t, 'c, 's, 'k> Exporter<'t, 'c, 's, 'k> {
                 }
             }
             TyShape::Var(var) => {
+                if let Some(name) = self.names.and_then(|names| names.types.get(&rep)) {
+                    return self.types.intern(TypeKind::Rigid(name.clone()));
+                }
                 let kind = self.kind(table.ty_vars[var.0 as usize].linearity);
                 return self.types.flexible(kind);
             }
@@ -140,10 +171,16 @@ impl<'t, 'c, 's, 'k> Exporter<'t, 'c, 's, 'k> {
         let effects = row.labels.iter().map(|label| self.label(label)).collect();
         let tail = match row.tail {
             Tail::Closed => None,
-            Tail::Var(tail) => Some(match &self.table.row_vars[tail.0 as usize].rigid {
-                Some(name) => RowTail::Rigid(name.clone()),
-                None => RowTail::Flexible,
-            }),
+            Tail::Var(tail) => match self.names {
+                Some(names) => names
+                    .rows
+                    .get(&tail)
+                    .map(|name| RowTail::Rigid(name.clone())),
+                None => Some(match &self.table.row_vars[tail.0 as usize].rigid {
+                    Some(name) => RowTail::Rigid(name.clone()),
+                    None => RowTail::Flexible,
+                }),
+            },
             Tail::Error => Some(RowTail::Error),
         };
         (effects, tail)

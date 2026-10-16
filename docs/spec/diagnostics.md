@@ -94,7 +94,7 @@ struct Fix {
 | E1027 | `IMPORT_CYCLE` | import の循環 |
 | E1028 | `AMBIGUOUS_NAME` | 修飾しない名前、または合流した修飾子の名前が、別々の定義を指して曖昧である |
 | E1029 | `PRIVATE_NAME` | ユーザーのモジュールの `pub` でない名前を、修飾か import の並びで使った |
-| E1030 | `RESERVED_MODULE` | 修飾子が `Prelude` になる import、`import Main`、入口のファイルを指す import、`import Std` (標準ライブラリの根) |
+| E1030 | `RESERVED_MODULE` | 修飾子が `Prelude` になる import、`import Main`、入口のファイル (REPL では `:load` のファイル) を指す import、`import Std` (標準ライブラリの根) |
 | E1031 | `UNKNOWN_QUALIFIER` | 修飾子がどの import にも、標準ライブラリのモジュールにもない。2つ以上のセグメントの修飾子 (`Report.Csv.parse`) を含む |
 | E1032 | `PRIVATE_IN_PUBLIC` | `pub` の item の型に、同じモジュールの `pub` でない型かエフェクトが現れた ([モジュールと名前解決](modules.md) の「公開の範囲」) |
 | E1033 | `EXTERN_OUTSIDE_STD` | ユーザーのモジュールに `extern` を書いた。instance の中の `extern` の行を含む。標準ライブラリ (`std/`) のモジュールだけが書ける ([宣言](declarations.md) の「`extern`」) |
@@ -119,14 +119,14 @@ struct Fix {
 | E2005 | `INFINITE_TYPE` | 無限の型 (単一化の occurs check)。row のラベルの型引数を通して、型変数か row 変数が自分自身の中に現れる場合を含む |
 | E2006 | `NO_INSTANCE` | 制約 `C T` を満たす instance がない。上位クラスの instance がないこと、導出した instance のフィールドの型が instance を持たないことを含む ([型と Kind](types.md) の「制約の解決」) |
 | E2008 | `MASK_CONFLICT` | 呼び出し先が自分で起こすエフェクトを、同じ呼び出しで row 変数のために飛ばす必要がある |
-| E2009 | `AMBIGUOUS_CONSTRAINT` | 制約の型が最後まで決まらない |
+| E2009 | `AMBIGUOUS_CONSTRAINT` | 制約の型が最後まで決まらない。`:type` の問い合わせでは、型に現れない型変数を `Unit` とみなして解けないとき |
 | E2010 | `LINEAR_INSTANCE_HEAD` | `Unr` のクラスの instance の頭が `Unr` でない ([型と Kind](types.md) の「`Unr` のクラス」) |
 | E2011 | `METHOD_KIND_MISMATCH` | instance のメソッドか既定のメソッドが、クラスのシグネチャから導けない Kind の制約 (線形性と多重度の境界、持ち越しの制約) を持つ ([型と Kind](types.md) の「instance と既定のメソッドの検査」) |
 | E2012 | `CONSTRAINED_POLYMORPHIC_RECURSION` | 一様な位置の型変数が制約を持つ ([Core IR](core-ir.md) の「一様な位置と制約付きの多相再帰」) |
 | E2013 | `FIELD_NEEDS_KNOWN_TYPE` | 射影か更新の時点で、値の型が決まっていない ([型と Kind](types.md) の「フィールドの解決」) |
 | E2014 | `NO_SUCH_FIELD` | 射影か更新のフィールドが、その型にない。コンストラクタが2つ以上の型への射影と更新、タプルの更新を含む |
-| E2015 | `INPUT_EFFECT` | REPL の `let` の束縛か式の入力の row が `<IO>` に収まらない ([型と Kind](types.md) の「REPL の入力」) |
-| E2016 | `INPUT_LINEAR` | REPL の `let` の束縛か式の入力の型が `Unr` でない |
+| E2015 | `INPUT_EFFECT` | REPL の `let` の束縛か式の入力の row が `<IO>` に収まらない ([型と Kind](types.md) の「REPL の入力」)。`:type` の問い合わせには当てない |
+| E2016 | `INPUT_LINEAR` | REPL の `let` の束縛か式の入力の型が `Unr` でない。`:type` の問い合わせには当てない |
 | E2017 | `BINDING_AMBIGUOUS` | REPL の `let` の束縛の型に、決まらない型変数が残った |
 | E2018 | `INPUT_CHANGES_UNIFORM` | REPL の入力が、前の入力の関数か instance の一様な位置を変える。`eml_cli` の `Repl` が `eml_types::input_changes_uniform` で作る |
 | E3001 | `LINEAR_VALUE_MISUSED` | 線形な値の誤った使い方のうち、E3002〜E3005 に当たらないもの (関数への受け渡し、型の単一化、ラムダや節の捕獲、操作の型が節に求める制約) |
