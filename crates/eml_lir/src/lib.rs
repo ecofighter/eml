@@ -3,8 +3,8 @@
 
 use std::fmt;
 
-pub use eml_extern::Repr;
 use eml_extern::{Extern, Linearity};
+pub use eml_extern::{OpRet, Repr};
 
 mod boxing;
 pub mod check;
@@ -527,13 +527,6 @@ pub struct OperationInfo {
 /// `Program` でなく表だけを借りる。
 pub fn operation(effects: &[EffectInfo], effect: u32, op: u32) -> &OperationInfo {
     &effects[effect as usize].operations[op as usize]
-}
-
-/// 操作の結果。`never` の操作は戻らないので、結果を呼び出した側の位置と比べない。
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum OpRet {
-    Repr(Repr),
-    Never,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]

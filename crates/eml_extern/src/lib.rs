@@ -78,6 +78,14 @@ impl Repr {
     }
 }
 
+/// 操作と extern の関数の結果。`never` の操作と戻らない extern (`exit`) は戻らないので、結果を呼び出した側の位置と比べない
+/// (docs/spec/lir.md の「戻らない extern」)。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OpRet {
+    Repr(Repr),
+    Never,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum ExternType {
     Int,
