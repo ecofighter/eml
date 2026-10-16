@@ -293,3 +293,32 @@ fn the_ordering_tags_match_the_prelude_declaration() {
         ]
     );
 }
+
+/// VM は `try_io` の `io_failed` の節に `IOErrorKind` のタグを渡す。そのタグが Prelude の宣言の順と一致することを
+/// 確かめる (docs/spec/stdlib.md の「`try_io`」)。
+#[test]
+fn the_io_error_kind_tags_match_the_prelude_declaration() {
+    let lowered = eml_test_support::lower("");
+    let program = &lowered.program;
+    let (_, kind) = program
+        .types()
+        .find(|(id, def)| program.modules[id.module].name == "Prelude" && def.name == "IOErrorKind")
+        .expect("the Prelude declares `IOErrorKind`");
+    let eml_hir::TypeDefKind::Data { constructors } = &kind.kind else {
+        panic!("`IOErrorKind` is a data type");
+    };
+    let names: Vec<(&str, u32)> = constructors
+        .iter()
+        .map(|&c| (program[c].name.as_str(), program[c].tag))
+        .collect();
+    assert_eq!(
+        names,
+        [
+            ("NotFound", eml_lir::IO_NOT_FOUND),
+            ("PermissionDenied", eml_lir::IO_PERMISSION_DENIED),
+            ("NotAvailable", eml_lir::IO_NOT_AVAILABLE),
+            ("NotUtf8", eml_lir::IO_NOT_UTF8),
+            ("Other", eml_lir::IO_OTHER)
+        ]
+    );
+}

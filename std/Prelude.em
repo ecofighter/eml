@@ -30,9 +30,11 @@ pub data Ordering =
   | GT
   deriving (Eq, Ord, Show)
 
--- 組み込みの `IO`。操作のないラベルで、下の extern の関数がこのエフェクトを起こす。extern の関数は handler を
--- 通らずにその場で実行するので、ユーザーは handle できない (docs/spec/effects.md の「組み込みの `IO`」)
-pub extern effect IO
+-- 組み込みの `IO`。下の extern の関数がこのエフェクトを起こし、handler を通らずにその場で実行する。操作の
+-- `io_failed` は Prelude の外から見えず、`try_io` だけが handle する。IO の失敗は、VM がこの操作の節を呼んで
+-- `try_io` まで中断する (docs/spec/effects.md の「組み込みの `IO`」)
+pub extern effect IO where
+  never io_failed : IOErrorKind -> String -> a
 pub extern println : String -> <IO> Unit
 -- 標準エラーに1行を書く。C の stdio と同じく、標準出力は書き出さない
 pub extern eprintln : String -> <IO> Unit
@@ -128,6 +130,30 @@ pub data Result e a =
   | Err e
   | Ok a
   deriving (Eq, Ord, Show)
+
+-- `try_io` が捕まえる IO の失敗の種類。VM は宣言の順のタグで渡す (docs/spec/stdlib.md の「`try_io`」)
+pub data IOErrorKind =
+  | NotFound
+  | PermissionDenied
+  | NotAvailable
+  | NotUtf8
+  | Other
+  deriving (Eq, Show)
+
+pub data IOError =
+  | IOError { kind : IOErrorKind, message : String }
+
+-- `show` は導出した `Show` のレコードと同じ形で、`display` は文言だけを返す。導出では `display` を上書きできない
+instance Show IOError where
+  show e = "IOError { kind = \{show e.kind}, message = \{show e.message} }"
+  display e = e.message
+
+-- IO の失敗を `Err` にする。捕まえるのは実行の時点で最も近い `try_io` である (docs/spec/stdlib.md の「`try_io`」)
+pub try_io : (Unit -> <IO | e> a) -> <IO | e> Result IOError a
+try_io action =
+  handle action () with
+    | io_failed kind message -> Err (IOError { kind = kind, message = message })
+    | return x -> Ok x
 
 instance Show a => Show (List a) where
   show Nil = "[]"

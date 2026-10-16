@@ -203,6 +203,8 @@ fn every_reference_to_an_item_with_a_signature_is_recorded() {
         for (expr, instantiation) in types.instantiations.iter() {
             let decl = match body.exprs[expr].kind {
                 ExprKind::Path(Res::Item(item)) => item,
+                // レコードを作る式は、その式をキーにしてコンストラクタの具体化を記録する (check/body.rs の `record`)
+                ExprKind::Record { ctor, .. } => ValueItem::Constructor(ctor),
                 ref kind => panic!("a record is keyed by a reference to an item, not {kind:?}"),
             };
             assert_eq!(instantiation.decl, decl);

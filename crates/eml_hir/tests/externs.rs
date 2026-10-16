@@ -162,7 +162,6 @@ fn every_extern_effect_is_declared_once_in_std() {
         assert_eq!(found.len(), 1, "{}", row.name);
         let (id, def) = found[0];
         assert_eq!(def.kind, EffectKind::Extern(Some(e)), "{}", row.name);
-        assert!(def.operations.is_empty(), "{}", row.name);
         assert!(def.generics.type_vars.is_empty(), "{}", row.name);
         let indexed = match e {
             ExternEffect::Io => program.io(),

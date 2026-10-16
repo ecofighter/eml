@@ -1,0 +1,26 @@
+---
+source: crates/eml_cli/tests/ui.rs
+expression: rendered
+input_file: tests/ui/check-fail/names/io_failed_is_hidden.em
+---
+[E1001] Error: cannot find value `io_failed`
+   ╭─[ check-fail/names/io_failed_is_hidden.em:3:8 ]
+   │
+ 3 │ f () = io_failed NotFound "x"
+   │        ────┬────  
+   │            ╰────── not found in this scope
+───╯
+[E1001] Error: cannot find value `io_failed` in module `Prelude`
+   ╭─[ check-fail/names/io_failed_is_hidden.em:6:8 ]
+   │
+ 6 │ g () = Prelude.io_failed NotFound "x"
+   │        ────────┬────────  
+   │                ╰────────── not found in this module
+───╯
+[E1001] Error: cannot find effect operation `io_failed`
+    ╭─[ check-fail/names/io_failed_is_hidden.em:11:7 ]
+    │
+ 11 │     | io_failed kind message -> 0
+    │       ────┬────  
+    │           ╰────── not an operation of any effect
+────╯

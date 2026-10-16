@@ -90,6 +90,12 @@ fn the_entry_sees_only_public_prelude_names() {
     // `negate` は `pub` でないので名前で引けない。extern の索引からは引ける
     assert_eq!(resolver.value(Plain("negate")), Resolved::NotFound);
     assert_eq!(map.externs().negate.module, map.prelude());
+    assert_eq!(resolver.value(Plain("io_failed")), Resolved::NotFound);
+    assert_eq!(resolver.operation(Plain("io_failed")), Resolved::NotFound);
+    assert_eq!(
+        resolver.value(qualified("Prelude", "io_failed")),
+        Resolved::NotFound
+    );
 }
 
 #[test]

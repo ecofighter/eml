@@ -91,7 +91,7 @@ pub struct EffectDef {
     pub name: String,
     /// 宣言の型引数。エフェクトの引数は型だけで、row 変数は持たない (docs/spec/declarations.md の「`effect`」)。
     pub generics: Generics,
-    /// 宣言した順の操作。extern のエフェクトは操作を持たず、空である。
+    /// 宣言した順の操作。extern のエフェクトは Prelude の `IO` の `io_failed` のように操作を持てる。
     pub operations: Vec<OperationId>,
     pub kind: EffectKind,
 }
@@ -101,8 +101,8 @@ pub struct EffectDef {
 pub enum EffectKind {
     /// `where` と操作を持つ `effect` の宣言。
     Defined,
-    /// `extern effect`。extern の関数だけが起こすラベルで、handle できない。ユーザーのモジュールの extern (E1033) は
-    /// 行を持たない。
+    /// `extern effect`。extern の関数が起こすラベルで、操作は宣言したモジュールの外から見えない。ユーザーのモジュールの
+    /// extern (E1033) は行を持たない。
     Extern(Option<ExternEffect>),
 }
 

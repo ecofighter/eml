@@ -494,6 +494,9 @@ impl ModuleScope {
         }
         for (k, effect) in tree.effects.iter().enumerate() {
             let usable = !duplicates.contains(&TypeItem::Effect(self.effects[k]));
+            // extern のエフェクトの操作 (Prelude の `io_failed`) は、宣言したモジュールの外から見せない
+            // (docs/spec/modules.md の「標準ライブラリ」)
+            let public = effect.public && effect.extern_keyword.is_none();
             for (j, operation) in effect.operations.iter().enumerate() {
                 let id = self.operations[k][j];
                 push(
@@ -501,7 +504,7 @@ impl ModuleScope {
                     &operation.name,
                     ValueItem::Operation(id),
                     operation.name_range,
-                    effect.public,
+                    public,
                     usable,
                 );
                 self.parts

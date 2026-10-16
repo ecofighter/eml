@@ -180,3 +180,14 @@ fn each_module_reads_its_own_syntax() {
     let checked = eml_test_support::check_files(entry, &[("A.em", module)]);
     assert!(checked.diagnostics.is_empty(), "{:?}", checked.diagnostics);
 }
+
+#[test]
+fn try_io_wraps_an_io_action() {
+    let checked = eml_test_support::check(
+        "f : Unit -> <IO> Result IOError String\nf () = try_io (fn () -> Fs.read_text \"x\")",
+    );
+    assert_eq!(
+        eml_test_support::short_text(checked.files(), &checked.diagnostics),
+        ""
+    );
+}

@@ -217,8 +217,8 @@ impl BodyLowering<'_> {
     }
 
     /// 操作として見つからなかった節の先頭が、extern のエフェクトを起こす extern の関数なら E1009 を出して `true` を
-    /// 返す。extern のエフェクトは操作を持たないので、名前を書けるのはそれを起こす extern の関数である。extern の関数は
-    /// handler を通らずにその場で実行するので、節を書いても使われない (docs/spec/effects.md の「組み込みの `IO`」)。
+    /// 返す。extern のエフェクトの操作は外から見えないので、名前を書けるのはそれを起こす extern の関数である。extern の
+    /// 関数は handler を通らずにその場で実行するので、節を書いても使われない (docs/spec/effects.md の「組み込みの `IO`」)。
     fn unhandleable_clause(&mut self, at: &NameUse<'_>, name_range: TextRange) -> bool {
         let Resolved::Found(function) = self.items.extern_function(at.name) else {
             return false;
