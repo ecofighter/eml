@@ -1,0 +1,12 @@
+---
+source: crates/eml_cli/tests/ui.rs
+expression: "format!(\"--- stdout ---\\n{stdout}--- stderr ---\\n{diagnostics}{stderr}{written}{exit}\")"
+input_file: tests/ui/run/scripts/wc/main.em
+---
+--- stdout ---
+3 8 106 a.txt
+4 5 33 -
+7 13 139 total
+--- stderr ---
+wc: cannot open `missing.txt`: not found
+--- exit: 1 ---
