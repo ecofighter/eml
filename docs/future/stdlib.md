@@ -10,7 +10,7 @@
 - `Cmd` 型: コマンドリテラルの結果。`run : Cmd -> <IO> Int`、`read : Cmd -> <IO> String`、`spawn : Cmd -> <IO> Child`、パイプ (`.|` などの演算子)、リダイレクト、環境変数、作業ディレクトリの設定を用意する ([字句](../spec/lexical.md) の「コマンドリテラル」)
 - 標準入出力のハンドル: `Stdin` / `Stdout` / `Stderr` は別の型にして、取り違えを防ぐ。ハンドルは `Lin` で、バッファ付きの読み書きもハンドルにする。extern はハンドルに対する read/write の操作にとどめ、「行を流す」などのストリーム処理は標準ライブラリにエフェクトとして書く ([ロードマップ](roadmap.md) の「バイト列と `Array`」)
 - `Task a` を `Lin` にする: `Async.start` が返すタスクを、必ず `await` するか `drop` (キャンセル) させる。構造化された並行処理にする
-- `exit`: `exit : Int -> <IO> a` の組み込みにする。`never` の操作の中断と同じく `Lin` の値を後始末してから終了し、`try_io` は捕まえない。終了コードはこれで扱う ([ロードマップ](roadmap.md) の「S12 スクリプトの MVP」)
+- `exit`: S12b で入れた ([標準ライブラリ](../spec/stdlib.md) の「`exit`」)
 - S12a で入れた標準ライブラリ (`Fs` の読み書き、`List`、`String`、`Env`、`Stdin`、`Proc.run`、`eprintln`) と extern の境界の方針は、[標準ライブラリ](../spec/stdlib.md) にある。S12a は、extern を小さい核にとどめ、どのスクリプトも使う少数の関数だけを eml で書いた。`replace`、並べ替え、`Option` と `Result` の補助関数、`Map` は、S12 のスクリプトの書き心地を見て S13 で決める
 - `Prelude` の範囲: 今は `Bool`、`Ordering`、`List`、`Option`、`Result`、`println`、`eprintln`、`not`、`|>` などの標準の演算子と fixity ([宣言](../spec/declarations.md) の標準の演算子の表)、型クラス `Eq`、`Ord`、`Show` ([宣言](../spec/declarations.md) の「Prelude のクラス」) を持つ。`Float`、`Char`、`Num` の段で `Num` が入る
 - モジュールの候補: `Fs`、`Path`、`Proc`、`Env`、`String`、`List`、`Map`、`Json`、`Csv`、`Toml`、`Regex`、`Http`、`Async`

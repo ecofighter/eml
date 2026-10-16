@@ -461,7 +461,7 @@ impl<'a> Context<'a> {
     }
 
     /// 印が `expected` の受け手に渡せる値 (V2)。定数はどの印とも合う。`None` を `lin` の引数に渡すことがあるためである。
-    /// `never` の操作の `perform` と `clause` の束縛は、Repr と同じく、どの受け手にも渡せる
+    /// `never` の操作の `perform` と `clause` の束縛と、戻らない extern の束縛は、Repr と同じく、どの受け手にも渡せる
     /// (docs/spec/lir.md の「Kind の印の検査」)。
     pub fn mark_passes(&self, atom: Atom, expected: Mark) -> bool {
         match atom {

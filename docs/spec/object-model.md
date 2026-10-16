@@ -609,7 +609,7 @@ token の表の項目は、`into_token` と `release_reuse` が添字を使い�
 - `Ctx` は `Drop` を実装しない。`evv` と yield の状態の参照は個別に手放さず、ヒープと一緒に消える。そのため、基本操作の中の `decref` で破棄処理が panic しても、`Ctx` を落とすことは安全である (下の「`unsafe` の核」の T7)
 - `check_finished()` は、`evv` が空で yield の状態がなしであることを確かめる。VM がリークの検査の前に呼ぶ ([LIR](lir.md) の「`evv` の不変条件」の最後の項)
 - `copy_string(s, max_chars) -> Result<String, Fault>` は、文字列の参照 `s` を1つ受けて手放し、中身の先頭 `max_chars` 文字を Rust の `String` に写して返す。VM が、文字列を返す入口の結果を受け取るのに使う ([VM](vm.md) の「追記」)。`unsafe fn` で、前提と事後条件 (`held_ok`、`evolved_by`) は `println` と同じである。検査モードは種類を確かめ、文字列でなければ何も写さずに `Fault::Heap(WrongKind)` を返す。写す長さを切るのは、利用者の `show` が巨大な文字列を返しても、確保量の上限の外で同じ大きさを写さないためである。文字の始まりは `str::is_char_boundary` で数え、写すのは `str::to_owned` である。どちらも vstd が仕様を持つので、下の「`unsafe` の核」の信頼の一覧は増えない
-- `ev_find(effect)` は `ev_lookup` と同じく `evv` をたどり、見つからなければ `None` を返す。`evidence_steps` は検査モードでたどった節点ごとに数える。`exit_abort` は、宛先を不死のダミーの物体、節と κ を `()` にした中断を始める。`fresh_string` は文言から文字列を作る
+- `ev_find(effect)` は `ev_lookup` と同じく `evv` をたどり、見つけた evidence を `dup` して返す。見つからなければ `None` を返す。検査モードでは、形の違う節点に `BadEvidence` を返す。`evidence_steps` は検査モードでたどった節点ごとに数える。`exit_abort` は、宛先を不死のダミーの物体、節と κ を `()` にした中断を始める。`fresh_string` は文言から文字列を作る
 
 ### セッションの根
 

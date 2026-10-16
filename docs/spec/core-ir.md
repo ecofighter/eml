@@ -127,7 +127,7 @@ box の挿入が足す変数の印は、[LIR](lir.md) の「box の挿入」に�
 
 #### 表の印の列
 
-- extern の行 (`eml_extern::FunctionRow`) は、`params` と `ret` と並べて `param_kinds: &'static [Linearity]` と `ret_kind: Linearity` を持つ。extern の関数は多相でないので、2値の `Linearity` で足りる
+- extern の行 (`eml_extern::FunctionRow`) は、`params` と `ret` と並べて `param_kinds: &'static [Linearity]` と `ret_kind: Linearity` を持つ。extern の関数は、戻らない extern (`exit`) の結果を除いて多相でないので、2値の `Linearity` で足りる。`exit` の結果の印は、行の `ret_kind` でなく、translate が具体化した結果の型から決める ([LIR](lir.md) の「戻らない extern」)
 
   | 行 | 引数 | 結果 |
   |---|---|---|
@@ -136,7 +136,7 @@ box の挿入が足す変数の印は、[LIR](lir.md) の「box の挿入」に�
   | `Std.Fs.close` | `Lin` | `Unr` |
   | ほかのすべての行 | すべて `Unr` | `Unr` |
 
-  `std/` のシグネチャとの結び付けは、Repr と同じテスト (`crates/eml_core_ir/tests/externs.rs`) で、`TypeStore::linearity` を使って確かめる。行の型は型変数を含まないので、相対的な型は現れない
+  `std/` のシグネチャとの結び付けは、Repr と同じテスト (`crates/eml_core_ir/tests/externs.rs`) で、`TypeStore::linearity` を使って確かめる。行の型は、戻らない extern の結果を除いて型変数を含まないので、相対的な型は現れない。戻らない extern の結果は、テストも行と比べない ([LIR](lir.md) の「戻らない extern」)
 - 基本操作の表の印の列は [LIR](lir.md) の「基本操作」にある。EP が自分の変数に付ける印と同じなので、`prim` の V2 が EP 自身を確かめる
 - 操作の表 (`OperationInfo`) は、Repr の `params` と `ret` と並べて、引数と戻り値の印の列 (`param_marks`、`ret_mark`) を持つ。操作の宣言の型を、相対的な型も読める読み方で読み、`Rigid` と `Var` に依存する値を `poly` にする。呼ぶ側から節へ渡る位置の矢印は宣言で `Unr` に固定されている ([エフェクトと handler](effects.md) の「handler の意味」) ので `unr` になる。V2 は `clause` の呼び出しと、`clause` の印の付いた関数の引数と戻り値を、この列と比べる。テキストの形では、効果の宣言が列を書く ([テスト戦略](../implementation/testing.md) の「LIR のテキストの形」)
 
@@ -151,7 +151,7 @@ box の挿入が足す変数の印は、[LIR](lir.md) の「box の挿入」に�
 
 ### 変換の規則
 
-- extern の関数の引数のそろった呼び出しは、`extern` 命令 (`Rhs::Extern`) にする。extern は、その場で実行して値を返す1階の命令で、eml のコードを呼び返さず、継続のフレームも積まない。`mask` は持たない。引数の所有権は、コンストラクタの呼び出しと同じく命令に移る。どの extern があり、引数と結果の Repr が何で、純粋かどうかは処理系の表 (`eml_extern`) が決める。
+- extern の関数の引数のそろった呼び出しは、`extern` 命令 (`Rhs::Extern`) にする。extern は、その場で実行して値を返す1階の命令で、eml のコードを呼び返さず、継続のフレームも積まない。ただし、`try_io` が捕まえる種類の誤りで失敗すると VM が `io_failed` の節の入口を呼び、`exit` は中断を始める ([VM](vm.md) の「IO の失敗と `exit`」)。`mask` は持たない。引数の所有権は、コンストラクタの呼び出しと同じく命令に移る。どの extern があり、引数と結果の Repr が何で、純粋かどうかは処理系の表 (`eml_extern`) が決める。
 - 表面の構文には `perform` はない。HIR から Core IR への変換で、操作の呼び出しを `perform` 命令に変える。
 - クロージャは「関数 + すでに渡された先頭の引数の並び」で表す。ラムダは、捕まえた変数を先頭の引数に持つ関数に持ち上げる。ラムダの捕獲と部分適用は、どちらもこの形のクロージャになる。
 - 関数値の呼び出しは、実行時に引数の個数を比べる eval/apply 方式で行う。個数が揃えば呼び、足りなければ引数を足した新しいクロージャを作り、余れば先頭の分で呼んだ結果に残りを適用する。呼ぶ相手が分かっている呼び出しは、変換の時点で同じ場合分けをする。

@@ -255,7 +255,7 @@ S12 を、S12a、S12b、S12c、S12d の4つの作業に分けて順に進める�
 | 作業 | 中身 | 状態 |
 |---|---|---|
 | S12a | 起動と標準ライブラリの核。`eml file.em args...`、`Env`、`Stdin`、`Fs` の読み書き、`Proc.run`、`eprintln`、`String` の核の extern と eml で書く `String` と `List` の関数、使う std のモジュールだけを読み込むこと | 終えた。決めたことは [標準ライブラリ](../spec/stdlib.md)、[モジュールと名前解決](../spec/modules.md) の「標準ライブラリ」と「REPL のセッション」、[オブジェクトモデル](../spec/object-model.md) の「extern」と「`unsafe` の核」、[LIR](../spec/lir.md) の「実行時エラー」、[VM](../spec/vm.md) の「置き場所」と「上限と割り込み」、[Core IR](../spec/core-ir.md) の「translate の配置」、[REPL の端末](../spec/repl.md) の「コマンドライン」、[テスト戦略](../implementation/testing.md) の「UI テスト」と「CLI のテスト」に移した |
-| S12b | `try_io` と `exit`。中断の経路、`IOError` の値、戻らない extern | |
+| S12b | `try_io` と `exit`。中断の経路、`IOError` の値、戻らない extern | 終えた。決めたことは [標準ライブラリ](../spec/stdlib.md) の「`try_io`」と「`exit`」、[エフェクトと handler](../spec/effects.md) の「組み込みの `IO`」と「健全性」、[型と Kind](../spec/types.md) の「row の具体化の記録」、[Core IR](../spec/core-ir.md) の「IO の extern」、[LIR](../spec/lir.md) の「戻らない extern」、[VM](../spec/vm.md) の「IO の失敗と `exit`」、[REPL の端末](../spec/repl.md) の「割り込みと実行時エラー」、[テスト戦略](../implementation/testing.md) の「UI テスト」に移した |
 | S12c | ローカルの再帰関数。構文、HIR、単相の推論、lambda lifting | |
 | S12d | 5本のスクリプト (wc、grep、ログの集計、CSV の変換、デプロイ手順) を UI テストとして書く | |
 
@@ -264,19 +264,17 @@ S12a では、この節で決めていた次の2つを変えた。
 - std の extern が名前的なデータ (`List`、`Option`、`Result`) を作るときは、extern の行がその型の正規の名前を持ち、translate がその配置を表に入れる、としていた。S12a では、extern の境界ではスカラー、文字列、`Foreign` だけを受け渡し、`List` と `Option` は std の eml が包む。`eml_rt` がデータの配置を知らないで済み、新しい証明が文字列の核と Host の配線に限られるためである ([標準ライブラリ](../spec/stdlib.md) の「extern の境界」)
 - Rust で実装した extern の標準ライブラリとして、`String` の `lines`、`split`、`trim`、`contains`、`replace`、`join`、`to_int` を入れる、としていた。S12a では、Rust の extern を `String` の核の4つ (`byte_length`、`byte_at`、`slice`、`find_from`) にとどめ、ほかは eml で書いた。`replace` は入れていない
 
-S12a で閉じた論点は、`Stdin` の範囲 (入力全体と1行を読む関数にとどめる)、extern が閉包を呼び戻す形 (S12a の extern は閉包を受けないので要らない)、多相な extern の行 (S12a の extern はどれも単相なので要らない) の3つである。
+S12a で閉じた論点は、`Stdin` の範囲 (入力全体と1行を読む関数にとどめる)、extern が閉包を呼び戻す形 (S12a の extern は閉包を受けないので要らない)、多相な extern の行 (S12a の extern はどれも単相なので要らない。S12b の `exit` は結果だけが多相で、戻らない extern として扱った) の3つである。
+
+S12b では、標準ライブラリの関数の中の extern の誤りの位置を今のまま `<std>/…` にした。困れば S13 で利用者の呼び出しの位置を足す。
 
 ### 決めたこと
 
-- (S12b) IO の失敗は中断として伝え、組み込みの `try_io : (Unit -> <IO | e> a) -> <IO | e> Result IOError a` で捕まえる。中断の途中で捕まっていた `Lin` の値は、`never` の操作の中断と同じく、S7 の中断の経路で後始末する。捕まえなければ、エラーを表示して終了コード 1 で止まる
-- (S12b) `exit : Int -> <IO> a` は、同じ中断で `Lin` の値を後始末してから終了する。`<IO>` を持たせるのは、`par` の子から呼べないようにするためである。`try_io` は `exit` を捕まえない
-  - 戻らない extern (`exit`) の結果の Repr は、`never` の操作の `clause` の結果と同じ考え方で扱いを決める。値を返さないので位置として扱わず、box の挿入は受け直さず、T3 は見ず、verifier は比べない ([LIR](../spec/lir.md) の「`never` の操作」)
 - (S12c) ローカルの再帰関数を入れる。`let (f, text) = Fs.read_all f` のような再束縛を壊さないように、引数を持つ関数の形のローカル定義だけを再帰的にする。単相で、lambda lifting する
 
 ### 論点
 
 - (S12c) ローカルの再帰関数の構文
-- (S12b) 標準ライブラリの関数の中の extern の誤りは、位置が `<std>/…` を指す ([標準ライブラリ](../spec/stdlib.md) の「実行時エラー」)。`try_io` を入れるときに、利用者の呼び出しの位置を見せるか決める
 
 ## S13 実例による判断
 

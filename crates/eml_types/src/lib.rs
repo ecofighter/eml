@@ -190,8 +190,9 @@ pub struct BodyTypes {
     /// どれも入る。ラムダの引数の外側にある注釈のパターンは入らない (check/body.rs の `bind_param`)。Core IR が、
     /// handler の節の引数の変数と、`unpack` と `switch` で作るフィールドの変数の Repr を決めるのに使う。
     pub pats: ArenaMap<PatId, TypeId>,
-    /// 式の中のトップレベルの item への参照ごとの具体化。キーは参照を表す `ExprKind::Path` の式である。局所変数の参照、
-    /// パターンのコンストラクタ、handler の節の操作、シグネチャのない参照は記録しない
+    /// 式の中のトップレベルの item への参照ごとの具体化。キーは参照を表す `ExprKind::Path` の式と、コンストラクタを指す
+    /// レコードの構築 (`ExprKind::Record`) の式である。局所変数の参照、パターンのコンストラクタ、handler の節の操作、
+    /// シグネチャのない参照は記録しない
     /// (docs/implementation/architecture.md の「`eml_types` の内部」)。
     pub instantiations: ArenaMap<ExprId, Instantiation>,
     /// 呼び出しの矢印ごとの `mask` (docs/spec/types.md の「推論」)。キーは呼び出しの式と矢印の番号である。

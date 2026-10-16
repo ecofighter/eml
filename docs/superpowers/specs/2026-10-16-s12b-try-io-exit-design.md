@@ -264,6 +264,9 @@ main () =
 - `switch` や `compose$` の数を数える4つのテストの数え方。IO の extern の後の yield の確認が `switch` と `compose$` を足すので、テストが確かめたいものだけを数える
   - `crates/eml_vm/tests/scaling.rs` の `long_sequence_of_if_statements_does_not_overflow_the_stack`、`crates/eml_core_ir/tests/translate.rs` の `a_long_run_of_if_statements_is_translated_without_deep_recursion`、`crates/eml_core_ir/tests/verify.rs` の `a_long_run_of_if_statements_is_verified_in_linear_time` は、`prim yielding()` の結果で分ける `switch` を除いて数え、文の `if` ごとに `switch` が1つあることを確かめる
   - `crates/eml_core_ir/tests/evidence.rs` の `closures_ep_builds_take_the_join_of_their_captures` は、`use_it$k0` のクロージャを足す `compose$` を選び、その印が `lin` であることを確かめる
+- `IO` が yield するようになったため、純粋な関数の形を確かめる4つのテストの入力を書き直したもの
+  - `crates/eml_core_ir/tests/evidence.rs` の `a_pure_instance_of_a_row_polymorphic_function_has_no_yield_check` と、`crates/eml_core_ir/tests/instances.rs` の `a_row_polymorphic_function_has_an_instance_per_row_bit` と `a_method_reference_passes_its_row_bits_to_the_method_function` は、純粋な関数を `main` でなく純粋な補助の関数 `pure` から呼ぶ
+  - `crates/eml_core_ir/tests/perceus.rs` の `interpolation_keeps_only_the_accumulator_live_across_holes` は、純粋な `g` を使う
 - Prelude に足す名前 (`IOError`、`IOErrorKind`、そのコンストラクタ、`try_io`、`exit`) と重なる型を、表示で `Main.` 付きに書くようになるスナップショット。今のテストには見当たらないが、見つかれば書き直す
 
 ### 機械的な追随 (種類 3)

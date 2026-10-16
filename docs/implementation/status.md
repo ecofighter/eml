@@ -18,7 +18,8 @@ M1 (言語の全体を一通り通す vertical slice と、本番の構文の最
 - fixity の宣言とユーザー定義の演算子、演算子のセクション、`use`
 - `drop` キーワード
 - エフェクトの宣言 (`never` / `once` / `multi`、型引数)、`handle` (deep)、`k` の呼び出しによる再開、`drop k`、パラメータ付き handler (`handle ... from ... with`)
-- `extern` の宣言と `eml_extern` の表。`Int`、`String`、`Unit`、`IO`、`println`、算術の演算子などは Prelude の `extern` である。`Int`、`String`、`Bool` の比較と表示のメソッドは、instance の中の `extern` で表の行に結ぶ。操作を持たないラベルだけの `IO` を、`println` と標準ライブラリのモジュール `Fs` の `open`、`read_all`、`close` が起こし、`Fs.File` は線形型である。ユーザーは `IO` を handle できず、`extern` を書けない (E1033) ([エフェクトと handler](../spec/effects.md) の「組み込みの `IO`」)
+- `extern` の宣言と `eml_extern` の表。`Int`、`String`、`Unit`、`IO`、`println`、算術の演算子などは Prelude の `extern` である。`Int`、`String`、`Bool` の比較と表示のメソッドは、instance の中の `extern` で表の行に結ぶ。`IO` を、`println` と標準ライブラリのモジュール `Fs` の `open`、`read_all`、`close` などが起こし、`Fs.File` は線形型である。ユーザーは `IO` を handle できず (Prelude の `try_io` だけが handle する)、`extern` を書けない (E1033) ([エフェクトと handler](../spec/effects.md) の「組み込みの `IO`」)
+- IO の失敗と終了: Prelude の `try_io : (Unit -> <IO | e> a) -> <IO | e> Result IOError a` が、IO の extern の失敗 (書き出しの失敗を除く) を `IOError { kind, message }` の値にする。`exit : Int -> <IO> a` は途中のフレームの値を後始末し、終了コード `n & 255` で終わる。REPL では入力を終えるだけである ([標準ライブラリ](../spec/stdlib.md) の「`try_io`」と「`exit`」)
 - 標準ライブラリのツリー: リポジトリの `std/` (`Prelude.em`、`Fs.em`) をバイナリに埋め込み、いつもすべて読み込む。`Fs.open` のように import なしで修飾付きで使え、`import Std.Fs` でも読める。予約した根は `Std` である ([モジュールと名前解決](../spec/modules.md) の「標準ライブラリ」)
 - 線形性、持ち越し規則、網羅性の検査
 - 型クラス: `class` (上位クラス、既定のメソッド、メソッド自身の型変数と制約)、`instance` (文脈、標準ライブラリの中の `extern`)、シグネチャの制約 `Eq a =>`、`deriving (Eq, Ord, Show)`、Prelude のクラス `Eq`、`Ord`、`Show` と `Ordering`、タプルと `Unit` の構造的な instance。証拠は単相化で決め、実行時の辞書は持たない ([宣言](../spec/declarations.md) の「クラスと instance」、[型と Kind](../spec/types.md) の「制約」)
