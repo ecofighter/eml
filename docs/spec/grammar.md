@@ -50,6 +50,7 @@ modpath     ::= UIDENT ('.' UIDENT)*
 import_name ::= LIDENT | '(' OP ')' | UIDENT ('(' '..' ')')?
 
 stmt        ::= 'let' pat (':' type)? '=' body
+              | 'let' LIDENT apat+ '=' body                -- ローカル関数
               | 'use' (pat '<-')? expr
               | expr
 
@@ -58,6 +59,7 @@ expr        ::= 'if' expr 'then' body ('else' body)?
               | 'handle' expr ('from' expr)? 'with' clauses
               | 'fn' apat+ '->' body
               | 'let' pat (':' type)? '=' body 'in' expr
+              | 'let' LIDENT apat+ '=' body 'in' expr      -- ローカル関数
               | op_expr
 arms        ::= block(arm) | arm+
 arm         ::= '|' pat '->' body
@@ -146,6 +148,11 @@ command     ::= CMD_START (CMD_TEXT | ESCAPE | '\{' '..'? expr INTERP_END)* CMD_
 - 式の形は `expr`、`operand`、`postfix` の3つの層に分かれる。上の層の形を下の層の位置に括弧なしで書くと E0012 にする
   - `if`、`match`、`handle`、`fn`、`let ... in` は `expr` の層の形で、末尾の本体が右へできるだけ伸びる。関数の引数や演算の項にするときは括弧で囲む。これにより、`match e with` の `e` は `with` の手前で終わる
   - `drop` の適用は `operand` の層の形で、引数が atom なので右へ伸びない。演算の項には書けるが、関数の引数にするときは括弧で囲む
+- `let` が関数の形かどうかは、`let` の後の2つのトークンで決める。`let` の次が `LIDENT` で、その次が `LIDENT`、`_`、`UIDENT`、整数、文字列の始まり (`STRING_START`、`RAW_STRING`)、文字、`(`、`[` のどれかなら、ローカル関数である。`-` は含めない。`apat` は `'-' INT` を含むが、トップレベルで `LIDENT OP` を演算子の定義として先に読むのと揃えるためである。次の形はパターンの束縛のまま読む
+  - `let x = e` と `let x : T = e` (名前の次が `=` か `:`)
+  - `let (f, text) = e`、`let Some x = e`、`let P { name = n } = e` (最初がパターン)
+  - `let x :: rest = e` (名前の次が演算子)
+- ローカル関数の引数の後に `:` が来たら、``a local function cannot declare its result type`` (help は ``annotate a parameter instead, as in `(x : Int)` ``) の E0011 にする
 - トップレベルでパターンによる束縛 (`(a, b) = ...`) は書けない。トップレベルの値は、関数と同じく `LIDENT apat* '='` (引数 0 個) で定義する
 - 等式が `LIDENT OP` で始まる場合は演算子の定義、`LIDENT` の後に `=` か `apat` が続く場合は関数の定義である。2トークンの先読みで区別する
 - `A -> <E> B -> C` の row `<E>` は最初の `->` に付き、`A -> <E> (B -> C)` と読む。内側の `B -> C` の row は省略扱いとする
@@ -165,7 +172,7 @@ command     ::= CMD_START (CMD_TEXT | ESCAPE | '\{' '..'? expr INTERP_END)* CMD_
 REPL の入力は、ファイルの文法でなく、入力の入口 (`eml_syntax::parse_input`) で読む。入力は、item の並び、`let` の束縛、式のどれかで、構文木の根の種類 (`REPL_ITEMS`、`REPL_LET`、`REPL_EXPR`) で区別する。
 
 - 最初の項目を、ファイルと同じ先読みで item と判定できれば、item の並びとして読む。並びの規則はファイルと同じである。ただし等式の形 (`f x …`、`a <+> b …`) は、最初の項目の中で、括弧の外にあり、かつレイアウトのブロックが開く前に `=` があるときだけ item とみなす。そのため、`f x` と `1 + 2` は式である。演算子のシグネチャは、`(` 演算子 `)` の後に `:` が続く形である。ファイルでも同じで、`(+) 1 2` の形はシグネチャとして読まない
-- `let` で始まり、束縛の後ろに `in` が続かなければ、`let` の束縛である。局所の `let` の文と同じ文法で読むので、型の明示 (`let x : T = e`) と、行末の `=` の後のブロックを書ける。名前でないパターンによる束縛は E0011 にする
+- `let` で始まり、束縛の後ろに `in` が続かなければ、`let` の束縛である。局所の `let` の文と同じ文法で読むので、型の明示 (`let x : T = e`) と、行末の `=` の後のブロックを書ける。名前でないパターンによる束縛は E0011 にする。関数の形 (`let f x = 1`) は、``a `let` input cannot define a function`` (help は ``write a signature and an equation``) の E0011 を1件だけ出す。ローカル関数は、入力の中のブロックと `let … in` の式なら書ける
 - どれでもなければ式である。`let … in …` も式である
 - `let` の束縛と式は、ちょうど1つの項目でなければならない。列 0 の `SEP` か `;` で2つ目の項目を続けたら、構文の誤り (E0011) にする
 - trivia だけの入力 (空、コメントだけ) は、要素のない `REPL_ITEMS` になる。REPL は何もせず、入力の番号も進めない

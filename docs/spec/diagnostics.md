@@ -81,7 +81,7 @@ struct Fix {
 | E1014 | `DUPLICATE_CLAUSE` | 同じ操作の節、または `return` の節が2つある |
 | E1015 | `TYPE_ARGUMENT_COUNT` | `data` の型の適用や row の中のエフェクトの型引数の個数が、宣言と違う |
 | E1016 | `CONSTRUCTOR_ARITY` | パターンのコンストラクタの引数の個数が、宣言のフィールドの数と違う |
-| E1017 | `DUPLICATE_BINDING` | 1つのパターン、または1つの等式の引数の並び、ラムダの引数の並び、あるいは handler の節の引数の並び (操作の引数と `k`) の中で、同じ変数名を2回束縛した |
+| E1017 | `DUPLICATE_BINDING` | 1つのパターン、または1つの等式の引数の並び、ラムダの引数の並び、ローカル関数の引数の並び、あるいは handler の節の引数の並び (操作の引数と `k`) の中で、同じ変数名を2回束縛した |
 | E1018 | `NON_CONSECUTIVE_EQUATIONS` | 同じ名前の等式が連続していない (間に別の item がある) |
 | E1019 | `SIGNATURE_NOT_ADJACENT` | シグネチャと最初の等式が隣り合っていない |
 | E1020 | `EQUATION_ARITY_MISMATCH` | 等式ごとに引数の個数が違う |
@@ -129,7 +129,7 @@ struct Fix {
 | E2016 | `INPUT_LINEAR` | REPL の `let` の束縛か式の入力の型が `Unr` でない。`:type` の問い合わせには当てない |
 | E2017 | `BINDING_AMBIGUOUS` | REPL の `let` の束縛の型に、決まらない型変数が残った |
 | E2018 | `INPUT_CHANGES_UNIFORM` | REPL の入力が、前の入力の関数か instance の一様な位置を変える。`eml_cli` の `Repl` が `eml_types::input_changes_uniform` で作る |
-| E3001 | `LINEAR_VALUE_MISUSED` | 線形な値の誤った使い方のうち、E3002〜E3005 に当たらないもの (関数への受け渡し、型の単一化、ラムダや節の捕獲、操作の型が節に求める制約) |
+| E3001 | `LINEAR_VALUE_MISUSED` | 線形な値の誤った使い方のうち、E3002〜E3005 に当たらないもの (関数への受け渡し、型の単一化、ラムダや節の捕獲、再帰するローカル関数の捕獲、操作の型が節に求める制約) |
 | E3002 | `LINEAR_VALUE_USED_TWICE` | 線形な値を、ある経路で2回以上使った |
 | E3003 | `LINEAR_VALUE_NOT_CONSUMED` | 線形な値を、ある経路で使わなかった |
 | E3004 | `LINEAR_VALUE_DISCARDED` | 線形な値を `_` で受けた。状態のある handler で省いた `return` の節が `Lin` の状態を捨てた場合、分解のパターンに書かないフィールド、射影で取り出さない残りのフィールド、更新で上書きされる古い値が線形な場合を含む |
@@ -137,7 +137,7 @@ struct Fix {
 | E3006 | `LINEAR_VALUE_KEPT_ACROSS_MULTI` | 線形な値を持ったまま、`multi` の操作を起こしうる呼び出し、`handle` をまたいだ (持ち越し規則)。呼んだ関数のスキームを通る持ち越しを含む |
 | E4001 | `NON_EXHAUSTIVE_MATCH` | 網羅されていない `match` |
 | E4002 | `NON_EXHAUSTIVE_EQUATION` | 網羅されていない等式 |
-| E4003 | `REFUTABLE_PATTERN` | 反駁可能な `let` の左辺、ラムダの引数、handler の節の引数と `return` の節の引数のパターン |
+| E4003 | `REFUTABLE_PATTERN` | 反駁可能な `let` の左辺、ラムダの引数、ローカル関数の引数、handler の節の引数と `return` の節の引数のパターン |
 | E4004 | `UNREACHABLE_ARM` | 到達しない枝 (Warning) |
 | E4005 | `UNREACHABLE_EQUATION` | 到達しない等式 (Warning) |
 
