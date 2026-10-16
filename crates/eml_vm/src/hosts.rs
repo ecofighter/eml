@@ -54,14 +54,15 @@ impl Written {
     }
 }
 
-/// テストの Host。標準出力をメモリに捕まえ、標準エラーは捨てる。引数、標準入力、環境変数は与えたものだけで、本物の
+/// テストの Host。標準出力と標準エラーを、それぞれメモリに捕まえる。引数、標準入力、環境変数は与えたものだけで、本物の
 /// 環境は読まない。テストの結果を実行する場所によらないものにするためである。`Fs.write_text` はディスクに書かずに
 /// 覚え、同じパスの `Fs.open` はそれを読む。リポジトリの中にファイルを作らないためである。子のプロセスは本物を起動し、
-/// その標準出力も捕まえる (docs/implementation/testing.md の「UI テスト」)。
+/// その標準出力と標準エラーも捕まえる (docs/implementation/testing.md の「UI テスト」)。
 pub struct CaptureHost {
     // 出力とファイルの読みは `eml run` と同じ `StdHost` に任せ、出力のまとめ方も同じにする
     inner: StdHost,
     out: Capture,
+    err: Capture,
     written: Written,
     file_root: PathBuf,
     args: Vec<OsString>,
@@ -73,16 +74,17 @@ pub struct CaptureHost {
 impl CaptureHost {
     /// 引数なし、空の標準入力、空の環境で始める。`file_root` は `Fs.open` の相対パスと子の作業ディレクトリの基準である。
     pub fn new(file_root: PathBuf) -> CaptureHost {
-        let out = Capture::default();
+        let (out, err) = (Capture::default(), Capture::default());
         let inner = StdHost::new(
             Box::new(out.clone()),
-            Box::new(io::sink()),
+            Box::new(err.clone()),
             file_root.clone(),
             Buffering::Block,
         );
         CaptureHost {
             inner,
             out,
+            err,
             written: Written::default(),
             file_root,
             args: Vec::new(),
@@ -116,6 +118,10 @@ impl CaptureHost {
 
     pub fn output(&self) -> Capture {
         self.out.clone()
+    }
+
+    pub fn errors(&self) -> Capture {
+        self.err.clone()
     }
 
     pub fn written(&self) -> Written {
@@ -177,8 +183,8 @@ impl Host for CaptureHost {
         Ok(())
     }
 
-    /// 子の環境は与えた表に本物の `PATH` を足したもので、標準入力は空である。子の標準出力は、それまでの出力を書き出した
-    /// 後で、捕まえた出力に足す。
+    /// 子の環境は与えた表に本物の `PATH` を足したもので、標準入力は空である。子の標準出力と標準エラーは、それまでの
+    /// 出力を書き出した後で、捕まえたそれぞれの出力に足す。
     fn run(&self, program: &str, args: &[&str]) -> io::Result<i32> {
         self.inner.flush()?;
         let mut command = Command::new(program);
@@ -186,8 +192,7 @@ impl Host for CaptureHost {
             .args(args)
             .env_clear()
             .envs(self.env.iter().map(|(key, value)| (key, value)))
-            .stdin(Stdio::null())
-            .stderr(Stdio::null());
+            .stdin(Stdio::null());
         if let Some(path) = std::env::var_os("PATH") {
             command.env("PATH", path);
         }
@@ -196,6 +201,7 @@ impl Host for CaptureHost {
         }
         let output = command.output()?;
         self.out.clone().write_all(&output.stdout)?;
+        self.err.clone().write_all(&output.stderr)?;
         Ok(exit_code(output.status))
     }
 }

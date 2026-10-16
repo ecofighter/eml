@@ -1,9 +1,10 @@
 ---
 source: crates/eml_cli/tests/ui.rs
-expression: "format!(\"--- stdout ---\\n{stdout}--- runtime error ---\\n{error}\\n\")"
+expression: "format!(\"--- stdout ---\\n{stdout}--- stderr ---\\n{diagnostics}{stderr}--- runtime error ---\\n{error}\\n{written}\")"
 input_file: tests/ui/run-fail/std/byte_at_out_of_range.em
 ---
 --- stdout ---
+--- stderr ---
 --- runtime error ---
 string index 3 is out of range for length 3
   at run-fail/std/byte_at_out_of_range.em:2:26

@@ -24,7 +24,7 @@ VM は、LIR をレジスタ型のバイトコードに変換し、`eml_rt` の 
 - `eml_vm` は、`eml_rt` の `Control`、`Limits`、`Stop` を再公開する。`eml_cli` の lib と bin は `eml_rt` に直接は依存せず (テストは依存する)、これらの名前を `eml_vm` から受け取る
 - `eml_cli` は、`run` の feature で `eml_vm` に依存する。`RunConfig`、`RunStats`、`RuntimeError`、`VmFault`、`SourceLocation`、`Control`、`Limits`、`Stop`、`HostRef`、`Capture`、`CaptureHost`、`Written`、`capture_host`、`stdio_host`、`script_host` を `eml_vm` から再公開し、`execute` を同じ名前で公開する
 - `eml run` は速いモードで動き、`--debug-heap` を付けると検査モードになる。UI テストは、いつも検査モードで流してから速いモードでも流す ([テスト戦略](../implementation/testing.md) の「2つのモードで流す」)。Host は `script_host(PathBuf::new(), args)` で、スクリプトの引数と標準入力を持ち、相対パスはカレントディレクトリを基準にする。REPL の Host は `stdio_host(PathBuf::new())` で、引数と標準入力を持たない ([標準ライブラリ](stdlib.md) の「`Stdin`」)
-- テストの Host は `CaptureHost` である。標準出力をメモリに捕まえ、標準エラーは捨てる。引数、標準入力、環境変数は与えたものだけで (既定は、引数なし、空の標準入力、空の環境)、本物の環境は読まない。`Fs.write_text` はディスクに書かずにメモリに覚え (`Written`)、同じパスの `Fs.open` はそれを読む。子のプロセスは本物を起動し、子の環境は与えた表に本物の `PATH` を足したもの、標準入力は空、作業ディレクトリはファイルの根で、子の標準出力も捕まえる。`capture_host(file_root)` は既定の `CaptureHost` と、捕まえた出力を返す
+- テストの Host は `CaptureHost` である。標準出力と標準エラーを、それぞれメモリに捕まえる (`output`、`errors`)。引数、標準入力、環境変数は与えたものだけで (既定は、引数なし、空の標準入力、空の環境)、本物の環境は読まない。`Fs.write_text` はディスクに書かずにメモリに覚え (`Written`)、同じパスの `Fs.open` はそれを読む。子のプロセスは本物を起動し、子の環境は与えた表に本物の `PATH` を足したもの、標準入力は空、作業ディレクトリはファイルの根で、子の標準出力と標準エラーも、それまでの出力を書き出した後で捕まえる。`capture_host(file_root)` は既定の `CaptureHost` と、捕まえた出力を返す
 
 ## `CodeBase` と `FnEntry`
 

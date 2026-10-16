@@ -1,10 +1,11 @@
 ---
 source: crates/eml_cli/tests/ui.rs
-expression: "format!(\"--- stdout ---\\n{stdout}--- runtime error ---\\n{error}\\n{written}\")"
+expression: "format!(\"--- stdout ---\\n{stdout}--- stderr ---\\n{diagnostics}{stderr}--- runtime error ---\\n{error}\\n{written}\")"
 input_file: tests/ui/run-fail/std/missing_program.em
 ---
 --- stdout ---
 before
+--- stderr ---
 --- runtime error ---
 cannot run `eml-no-such-program`: not found
   at <std>/Proc.em:11:20

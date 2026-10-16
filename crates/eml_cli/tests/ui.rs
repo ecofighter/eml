@@ -124,10 +124,11 @@ fn compile(path: &Path, suffix: &str) -> (eml_lir::Program, PathBuf, String) {
     (program, root, stderr)
 }
 
-/// 実行の結果。`written` は `Fs.write_text` が書いたファイルを、スナップショットに足す形に並べたものである。`result` の
-/// `Ok` は `exit` の終了コードである。
+/// 実行の結果。`stderr` はプログラムと子のプロセスが標準エラーに書いたものである。`written` は `Fs.write_text` が
+/// 書いたファイルを、スナップショットに足す形に並べたものである。`result` の `Ok` は `exit` の終了コードである。
 struct Ran {
     stdout: String,
+    stderr: String,
     written: String,
     result: Result<Option<i64>, RuntimeError>,
 }
@@ -168,7 +169,7 @@ fn host_for(path: &Path, root: &Path) -> CaptureHost {
 /// `Control` を持つ設定を作る。使い回すと、前の実行で立ったビットで次の実行がすぐ止まる。
 fn execute_in(program: &eml_lir::Program, path: &Path, root: &Path, debug_heap: bool) -> Ran {
     let host = host_for(path, root);
-    let (out, files) = (host.output(), host.written());
+    let (out, err, files) = (host.output(), host.errors(), host.written());
     let config = RunConfig::default()
         .with_debug_heap(debug_heap)
         .with_control(Arc::new(Control::new(default_limits())));
@@ -180,6 +181,7 @@ fn execute_in(program: &eml_lir::Program, path: &Path, root: &Path, debug_heap: 
         .collect();
     Ran {
         stdout: out.contents(),
+        stderr: err.contents(),
         written,
         result,
     }
@@ -200,6 +202,10 @@ fn assert_fast_mode_agrees(
     assert_eq!(
         fast.stdout, checked.stdout,
         "{suffix}: the fast mode printed something else"
+    );
+    assert_eq!(
+        fast.stderr, checked.stderr,
+        "{suffix}: the fast mode wrote another standard error"
     );
     assert_eq!(
         fast.written, checked.written,
@@ -236,17 +242,17 @@ fn run() {
         let Entry::Test(suffix) = classify(path, "run") else {
             return;
         };
-        let (program, root, stderr) = compile(path, &suffix);
+        let (program, root, diagnostics) = compile(path, &suffix);
         let ran = execute_in(&program, path, &root, true);
-        assert!(ran.result.is_ok(), "{:?}\n{stderr}", ran.result);
-        let (stdout, written) = (&ran.stdout, &ran.written);
+        assert!(ran.result.is_ok(), "{:?}\n{diagnostics}", ran.result);
+        let (stdout, stderr, written) = (&ran.stdout, &ran.stderr, &ran.written);
         let exit = match ran.result {
             Ok(Some(code)) => format!("--- exit: {code} ---\n"),
             _ => String::new(),
         };
         snapshot_settings(&suffix).bind(|| {
             insta::assert_snapshot!(format!(
-                "--- stdout ---\n{stdout}--- stderr ---\n{stderr}{written}{exit}"
+                "--- stdout ---\n{stdout}--- stderr ---\n{diagnostics}{stderr}{written}{exit}"
             ));
         });
         assert_fast_mode_agrees(&suffix, &program, path, &root, &ran);
@@ -260,15 +266,15 @@ fn run_fail() {
         let Entry::Test(suffix) = classify(path, "run-fail") else {
             return;
         };
-        let (program, root, _) = compile(path, &suffix);
+        let (program, root, diagnostics) = compile(path, &suffix);
         let ran = execute_in(&program, path, &root, true);
         let Err(error) = &ran.result else {
             panic!("expected a runtime error");
         };
-        let (stdout, written) = (&ran.stdout, &ran.written);
+        let (stdout, stderr, written) = (&ran.stdout, &ran.stderr, &ran.written);
         snapshot_settings(&suffix).bind(|| {
             insta::assert_snapshot!(format!(
-                "--- stdout ---\n{stdout}--- runtime error ---\n{error}\n{written}"
+                "--- stdout ---\n{stdout}--- stderr ---\n{diagnostics}{stderr}--- runtime error ---\n{error}\n{written}"
             ));
         });
         if fast_mode_reports(error) {
