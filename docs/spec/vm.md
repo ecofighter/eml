@@ -201,8 +201,8 @@ base + 0 .. base + frame_size: スロット
 - 関数の名前は、命令の位置から `FnEntry` の範囲を二分探索して引く。`Finish` と `ApplyRest` はどの関数にも属さないので、そこで起きた誤りには、最後に戻った関数の名前を付ける。VM は `Ret` のたびにその位置を `Task::last_ret` に覚える。末尾の位置の部分適用が作ったクロージャを返すときも、関数の中で起きたなら同じく覚える
 - 位置は `locations` から命令の位置で引く。表に載せるのは、位置を持つ extern の呼び出しから作った命令である。専用の算術と比較の命令も含む。`run-fail` の UI テストの多くは `/` と `+` の誤りの位置を表示している
 - `Arith`、`Output`、`Io`、`NotUtf8`、`Heap(_)` の文言は `eml_rt` のものを使う ([オブジェクトモデル](object-model.md) の「誤り」)。extern の結果と文言は、`crates/eml_rt/src/heap/tests/expected.txt` の表が固定する ([テスト戦略](../implementation/testing.md) の「期待値の表」)
-- 安全点の `Ctx::poll` が返す `Stop` と extern の `Fault::Stopped` は、どちらも `Stop` の文言で表示する。`Fs.read_all` の `Fault::Stopped` は extern の誤りなので位置を付け、安全点の `Stop` には付けない
-- 割り込みで止めたときの表示も、ほかの実行時エラーと同じ形である。安全点で止めたときは ``interrupted in `f` `` (`f` は止めたときの関数)、`Fs.read_all` の中で止めたときは位置付きの `interrupted` である。`RuntimeError::interrupted()` は、安全点の `Stopped(Stop::Interrupted)` と、`Fs.read_all` の中で止めた `Extern(Fault::Stopped(Stop::Interrupted))` の両方で真を返す。CLI が終了コードを決めるのに使う (「上限と割り込み」)
+- 安全点の `Ctx::poll` が返す `Stop` と extern の `Fault::Stopped` は、どちらも `Stop` の文言で表示する。`Fs.read_all`、標準入力の読み、`Proc.run` の `Fault::Stopped` は extern の誤りなので位置を付け、安全点の `Stop` には付けない
+- 割り込みで止めたときの表示も、ほかの実行時エラーと同じ形である。安全点で止めたときは ``interrupted in `f` `` (`f` は止めたときの関数)、extern (`Fs.read_all`、標準入力の読み、`Proc.run`) の中で止めたときは位置付きの `interrupted` である。`RuntimeError::interrupted()` は、安全点の `Stopped(Stop::Interrupted)` と、extern の中で止めた `Extern(Fault::Stopped(Stop::Interrupted))` の両方で真を返す。CLI が終了コードを決めるのに使う (「上限と割り込み」)
 - 繰り返しが誤りで終わっても、`Finish` に着いても、`Machine::run` は `Ctx::flush` を呼んでから結果を返す。`> out 2>&1` のときに出力と誤りの順を保つためである
 - `Finish` に着いたら、次の順に処理する
   1. 入口の関数の結果を手放す。Repr が `obj` か `tobj` のときだけ `decref` する。`run_shown` では手放さずに残し、繰り返しを抜けた直後に `Ctx::copy_string` で写して手放す。写すときの誤りは、次の書き出しの誤りより先に返す。後の手順の確かめ (リークと不変条件) は、手放した後のヒープを見る
@@ -231,7 +231,7 @@ base + 0 .. base + frame_size: スロット
 
 `eml run` と `eml repl` は、`Control` を作った直後に、`eml_cli` の bin の `sigint` モジュールで SIGINT のハンドラを入れる。`eml run` はファイルを読む前に入れるので、読み込みとコンパイルの間の Ctrl-C も、既定の動作 (シグナルで殺される) でなく、このハンドラが受ける。`eml check` には入れない。ハンドラは unix だけで入れ、ほかの OS では Ctrl-C は OS の既定の動作でプロセスを終わらせる。
 
-- `libc::sigaction` で入れ、`sa_flags` に `SA_RESTART` も `SA_NODEFER` も入れない。`SA_RESTART` を外すので、待っている読みは `EINTR` で戻り、`Fs.read_all` が止める語を読んで止まる ([オブジェクトモデル](object-model.md) の「`File`」)。`SA_NODEFER` を入れないので、ハンドラが動く間は同じ SIGINT が塞がれ、ハンドラは入れ子にならない
+- `libc::sigaction` で入れ、`sa_flags` に `SA_RESTART` も `SA_NODEFER` も入れない。`SA_RESTART` を外すので、待っている読みは `EINTR` で戻り、`Fs.read_all` と標準入力の読みが止める語を読んで止まる ([オブジェクトモデル](object-model.md) の「`File`」)。子のプロセスを待つ間の Ctrl-C は、同じプロセスグループの子にも届くので、子が終わって `Proc.run` が止まる。`SA_NODEFER` を入れないので、ハンドラが動く間は同じ SIGINT が塞がれ、ハンドラは入れ子にならない
 - ハンドラは static に置いた `Control` と動き方だけを読み、アトミックな読み書きと `libc::_exit` だけをする。static は `sigaction` の前に置く
 - 止める語の `INTERRUPT` が 0 なら、`control.interrupt()` を呼ぶ。VM は次の安全点で止まる。コンパイルの間に立ったビットは、実行の最初の安全点で読まれる
 - `eml run` では、すでに立っていれば (2回目の Ctrl-C)、`libc::_exit(130)` でその場で終わる。まだ書いていない出力は捨てる。安全点に来ない処理から抜けるための道だからである。`eml repl` は終わらず、`interrupt()` を呼ぶだけである ([REPL の端末](repl.md) の「割り込み」)

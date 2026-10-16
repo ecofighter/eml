@@ -360,3 +360,235 @@ fn repeated_interrupts_end_a_program_waiting_in_a_read_with_130() {
     std::fs::remove_dir_all(&dir).unwrap();
     assert_eq!(status.code(), Some(130), "{stderr}");
 }
+
+/// 引数を1行に書く。
+const SHOW_ARGS: &str = "\
+main : Unit -> <IO> Unit
+main () = println (show (Env.args ()))
+";
+
+/// `eml FILE ARGS...` は `eml run FILE ARGS...` と同じで、ファイルより後ろの引数は `-` で始まってもそのまま渡す
+/// (docs/spec/stdlib.md の「起動」)。
+#[test]
+fn a_file_runs_directly_with_its_arguments() {
+    let dir = temp_project("cli-args", &[("main.em", SHOW_ARGS)]);
+    let direct = eml_in(&dir, &["main.em", "a", "-b", "--c"]);
+    let run = eml_in(
+        &dir,
+        &["run", "--debug-heap", "main.em", "x", "--debug-heap"],
+    );
+    let check = eml_in(&dir, &["check", "main.em", "--", "x"]);
+    std::fs::remove_dir_all(&dir).unwrap();
+    assert_eq!(direct.status.code(), Some(0));
+    assert_eq!(
+        String::from_utf8_lossy(&direct.stdout),
+        "[\"a\", \"-b\", \"--c\"]\n"
+    );
+    assert_eq!(run.status.code(), Some(0));
+    assert_eq!(
+        String::from_utf8_lossy(&run.stdout),
+        "[\"x\", \"--debug-heap\"]\n"
+    );
+    // サブコマンドの名前はファイルとして読まない
+    assert_eq!(check.status.code(), Some(2));
+}
+
+/// `-` で始まる最初の引数はフラグとして読むので、綴りを誤ったフラグは使い方の誤りである。
+#[test]
+fn a_misspelled_flag_is_a_usage_error() {
+    assert_eq!(eml(&["--verison"]).status.code(), Some(2));
+    assert_eq!(eml(&["--version"]).status.code(), Some(0));
+}
+
+#[test]
+fn a_script_reads_the_standard_input_and_writes_the_standard_error() {
+    use std::io::Write;
+    let text = "\
+main : Unit -> <IO> Unit
+main () =
+  eprintln \"to stderr\"
+  println (show (Stdin.read_line ()))
+  println (Stdin.read_all ())
+";
+    let dir = temp_project("cli-stdin", &[("main.em", text)]);
+    let mut child = Command::new(env!("CARGO_BIN_EXE_eml"))
+        .arg("main.em")
+        .current_dir(&dir)
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    child
+        .stdin
+        .take()
+        .unwrap()
+        .write_all(b"first\r\nrest\n")
+        .unwrap();
+    let output = child.wait_with_output().unwrap();
+    std::fs::remove_dir_all(&dir).unwrap();
+    assert_eq!(output.status.code(), Some(0));
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout),
+        "Some \"first\"\nrest\n\n"
+    );
+    assert_eq!(String::from_utf8_lossy(&output.stderr), "to stderr\n");
+}
+
+/// 1行目が `#!/usr/bin/env eml` の実行できるファイルは、そのまま動かせる。
+#[cfg(unix)]
+#[test]
+fn a_script_with_a_shebang_runs_directly() {
+    use std::os::unix::fs::PermissionsExt;
+    let text = format!("#!/usr/bin/env eml\n{SHOW_ARGS}");
+    let dir = temp_project("cli-shebang", &[("script.em", &text)]);
+    let script = dir.join("script.em");
+    std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let bin = Path::new(env!("CARGO_BIN_EXE_eml")).parent().unwrap();
+    let path = std::env::join_paths(std::iter::once(bin.to_path_buf()).chain(
+        std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default()),
+    ))
+    .unwrap();
+    let output = Command::new(&script)
+        .args(["1", "-2"])
+        .env("PATH", path)
+        .current_dir(&dir)
+        .output()
+        .unwrap();
+    std::fs::remove_dir_all(&dir).unwrap();
+    assert_eq!(output.status.code(), Some(0), "{output:?}");
+    assert_eq!(String::from_utf8_lossy(&output.stdout), "[\"1\", \"-2\"]\n");
+}
+
+/// UTF-8 でない引数と環境変数の値は、読んだときに実行時エラーにする。
+#[cfg(unix)]
+#[test]
+fn arguments_and_variables_that_are_not_utf8_are_runtime_errors() {
+    use std::ffi::OsStr;
+    use std::os::unix::ffi::OsStrExt;
+    let get = "\
+main : Unit -> <IO> Unit
+main () = println (show (Env.get \"BAD\"))
+";
+    let dir = temp_project("cli-not-utf8", &[("args.em", SHOW_ARGS), ("get.em", get)]);
+    let bad = OsStr::from_bytes(b"a\xff");
+    let eml = || {
+        let mut command = Command::new(env!("CARGO_BIN_EXE_eml"));
+        command.current_dir(&dir);
+        command
+    };
+    let args = eml()
+        .args([OsStr::new("args.em"), OsStr::new("ok"), bad])
+        .output()
+        .unwrap();
+    let get = eml().arg("get.em").env("BAD", bad).output().unwrap();
+    std::fs::remove_dir_all(&dir).unwrap();
+    assert_eq!(args.status.code(), Some(1));
+    assert!(
+        String::from_utf8_lossy(&args.stderr)
+            .starts_with("runtime error: argument 1 is not valid UTF-8\n"),
+        "{args:?}"
+    );
+    assert_eq!(get.status.code(), Some(1));
+    assert!(
+        String::from_utf8_lossy(&get.stderr)
+            .starts_with("runtime error: environment variable `BAD` is not valid UTF-8\n"),
+        "{get:?}"
+    );
+}
+
+/// 子のプロセスを待つ間に SIGINT が来ると、子が終わった後で止まり、終了コード 130 で終わる。子は自分のプロセス
+/// グループに置き、端末の Ctrl-C と同じくグループ全体に送る。子も SIGINT で終わるので、eml は待ちから戻る。起動と同時に
+/// 届いた SIGINT は子に届かないことがあるので、子が標準エラーに書いた行を読んで、子が動いてから送る
+/// (docs/spec/stdlib.md の「`Proc`」)。
+#[cfg(unix)]
+#[test]
+fn an_interrupt_stops_a_program_waiting_for_a_child_with_130() {
+    use std::io::{BufRead, BufReader, Read};
+    use std::os::unix::process::CommandExt;
+    use std::time::{Duration, Instant};
+
+    let text = "\
+main : Unit -> <IO> Unit
+main () = println (show (Proc.run \"sh\" [\"-c\", \"echo started >&2; exec sleep 30\"]))
+";
+    let dir = temp_project("cli-sigint-child", &[("main.em", text)]);
+    let deadline = Instant::now() + DEADLINE;
+    let mut child = Command::new(env!("CARGO_BIN_EXE_eml"))
+        .arg("main.em")
+        .current_dir(&dir)
+        .process_group(0)
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    let mut stderr = BufReader::new(child.stderr.take().unwrap());
+    let mut started = String::new();
+    stderr.read_line(&mut started).unwrap();
+    assert_eq!(started, "started\n");
+    let group = libc::pid_t::try_from(child.id()).unwrap();
+    // 子はまだ待っていないので、グループの番号はほかのグループに使い回されていない
+    assert_eq!(unsafe { libc::kill(-group, libc::SIGINT) }, 0);
+    let status = loop {
+        if let Some(status) = child.try_wait().unwrap() {
+            break status;
+        }
+        if Instant::now() >= deadline {
+            kill_after_deadline(&mut child, "the program did not stop");
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    };
+    let mut rest = String::new();
+    stderr.read_to_string(&mut rest).unwrap();
+    std::fs::remove_dir_all(&dir).unwrap();
+    assert_eq!(status.code(), Some(130), "{rest}");
+    assert!(rest.starts_with("runtime error: interrupted\n"), "{rest}");
+}
+
+/// 標準入力の読みの中で待つプログラムも、`Fs.read_all` と同じく SIGINT で止まり、終了コードは 130 である。読みに入る
+/// 直前に届いた SIGINT は読みを止めないので、終わるまで 100 ms ごとに送り続ける (2回目の SIGINT はその場で終わらせる。
+/// `repeated_interrupts_end_a_program_waiting_in_a_read_with_130` と同じ)。
+#[cfg(unix)]
+#[test]
+fn repeated_interrupts_end_a_program_waiting_for_the_standard_input_with_130() {
+    use std::io::{BufRead, BufReader};
+    use std::time::{Duration, Instant};
+
+    let text = "\
+main : Unit -> <IO> Unit
+main () =
+  eprintln \"ready\"
+  println (show (Stdin.read_line ()))
+";
+    let dir = temp_project("cli-sigint-stdin", &[("main.em", text)]);
+    let deadline = Instant::now() + DEADLINE;
+    let mut child = Command::new(env!("CARGO_BIN_EXE_eml"))
+        .arg("main.em")
+        .current_dir(&dir)
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    // 書き手を開いたままにして、読みを待たせる
+    let writer = child.stdin.take();
+    // ハンドラを入れる前の SIGINT はプロセスを殺すので、スクリプトが書いた行を読んでから送る
+    let mut ready = String::new();
+    BufReader::new(child.stderr.as_mut().unwrap())
+        .read_line(&mut ready)
+        .unwrap();
+    assert_eq!(ready, "ready\n");
+    let status = loop {
+        sigint(&child);
+        std::thread::sleep(Duration::from_millis(100));
+        if let Some(status) = child.try_wait().unwrap() {
+            break status;
+        }
+        if Instant::now() >= deadline {
+            kill_after_deadline(&mut child, "the program did not end");
+        }
+    };
+    drop(writer);
+    std::fs::remove_dir_all(&dir).unwrap();
+    assert_eq!(status.code(), Some(130));
+}

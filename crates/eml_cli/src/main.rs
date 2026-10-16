@@ -1,10 +1,11 @@
+use std::ffi::OsString;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::sync::Arc;
 
 use clap::{Parser, Subcommand};
-use eml_cli::{Control, FsProvider, RunConfig, Session, default_limits, stdio_host};
+use eml_cli::{Control, FsProvider, RunConfig, Session, default_limits, script_host};
 use eml_diagnostics::{has_errors, render};
 
 #[cfg(unix)]
@@ -22,12 +23,15 @@ struct Cli {
 enum Command {
     /// Check a file and print diagnostics
     Check { file: PathBuf },
-    /// Check a file and run it if there are no errors
+    /// Check a file and run it if there are no errors (`eml FILE` does the same)
     Run {
         /// Detect reference-count leaks and use-after-free
         #[arg(long)]
         debug_heap: bool,
         file: PathBuf,
+        /// Arguments for the script
+        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
+        args: Vec<OsString>,
     },
     /// Start an interactive session
     Repl {
@@ -39,9 +43,12 @@ enum Command {
     },
 }
 
+/// サブコマンドの名前。最初の引数がこのどれでもなく `-` で始まらなければ、`run` のファイルとして読む。
+const SUBCOMMANDS: [&str; 4] = ["check", "run", "repl", "help"];
+
 /// 使い方の誤りに 2 を使うのは、clap が引数の誤りで返す値に合わせるため (docs/implementation/architecture.md)。
 fn main() -> ExitCode {
-    let cli = Cli::parse();
+    let cli = Cli::parse_from(with_run(std::env::args_os().collect()));
     match cli.command {
         Command::Check { file } => {
             let Some(session) = load(&file) else {
@@ -56,7 +63,11 @@ fn main() -> ExitCode {
             }
         }
         Command::Repl { debug_heap, file } => terminal::run(debug_heap, file),
-        Command::Run { debug_heap, file } => {
+        Command::Run {
+            debug_heap,
+            file,
+            args,
+        } => {
             // 読み込みとコンパイルの間の Ctrl-C も、シグナルで殺されずにこのハンドラが受ける。そこで立てたビットは、
             // 実行の最初の安全点で読まれる
             let control = Arc::new(Control::new(default_limits()));
@@ -75,7 +86,7 @@ fn main() -> ExitCode {
                 return ExitCode::from(1);
             };
             // 相対パスはカレントディレクトリを基準にする
-            match eml_cli::execute(&program, &config, stdio_host(PathBuf::new())) {
+            match eml_cli::execute(&program, &config, script_host(PathBuf::new(), args)) {
                 Ok(_) => ExitCode::SUCCESS,
                 Err(error) => {
                     eprintln!("runtime error: {error}");
@@ -85,6 +96,19 @@ fn main() -> ExitCode {
             }
         }
     }
+}
+
+/// `eml FILE ARGS...` を `eml run FILE ARGS...` にする (docs/spec/stdlib.md の「起動」)。`-` で始まる最初の引数は今と同じく
+/// clap が読むので、綴りを誤ったフラグは使い方の誤りのままである。
+fn with_run(mut argv: Vec<OsString>) -> Vec<OsString> {
+    let is_file = argv.get(1).is_some_and(|first| {
+        let first = first.to_string_lossy();
+        !first.starts_with('-') && !SUBCOMMANDS.contains(&first.as_ref())
+    });
+    if is_file {
+        argv.insert(1, OsString::from("run"));
+    }
+    argv
 }
 
 /// 入口が読めないことは、読み込みの段に入る前に使い方の誤りとして報告する。依存先が読めないことは E1026 である。

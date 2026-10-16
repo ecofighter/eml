@@ -9,7 +9,7 @@
 import、リストのパターン、補間、複数行の文字列、名前付きのレコードと、まだ実装していないコマンドリテラル (コマンドリテラルの段) を含む。
 
 ```haskell
-#!/usr/bin/env eml run
+#!/usr/bin/env eml
 -- | ログを集計して、レポートを書く
 import Report.Format (render, Style(..))
 
