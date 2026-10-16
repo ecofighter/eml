@@ -125,6 +125,7 @@ ast_node! {
     ReturnClause => RETURN_CLAUSE,
     LambdaExpr => LAMBDA_EXPR,
     LetExpr => LET_EXPR,
+    ParamList => PARAM_LIST,
     OpSeq => OP_SEQ,
     AppExpr => APP_EXPR,
     DropExpr => DROP_EXPR,
@@ -551,8 +552,19 @@ impl PathExpr {
     }
 }
 
+impl ParamList {
+    pub fn pats(&self) -> AstChildren<Pat> {
+        support::children(&self.syntax)
+    }
+}
+
 impl LetStmt {
     pub fn pat(&self) -> Option<Pat> {
+        support::child(&self.syntax)
+    }
+
+    /// 関数の形 (`let go x = …`) の引数。パターンの束縛なら `None`。
+    pub fn params(&self) -> Option<ParamList> {
         support::child(&self.syntax)
     }
 
@@ -578,6 +590,11 @@ impl UseStmt {
 
 impl LetExpr {
     pub fn pat(&self) -> Option<Pat> {
+        support::child(&self.syntax)
+    }
+
+    /// 関数の形 (`let go x = …`) の引数。パターンの束縛なら `None`。
+    pub fn params(&self) -> Option<ParamList> {
         support::child(&self.syntax)
     }
 

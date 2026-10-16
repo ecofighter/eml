@@ -156,6 +156,8 @@ pub enum SyntaxKind {
     RETURN_CLAUSE,
     LAMBDA_EXPR,
     LET_EXPR,
+    /// 関数の形の `let` の引数 (docs/spec/expressions.md の「ローカル関数」)。
+    PARAM_LIST,
     /// fixity はユーザーが宣言し、名前解決の後でないと分からない。そのため演算子の列は平たく並べ、HIR で木に組み直す
     /// (docs/spec/expressions.md)。前置の `-` もトークンのまま入る。
     OP_SEQ,

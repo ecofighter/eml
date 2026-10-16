@@ -87,12 +87,37 @@ fn let_stmt(p: &mut Parser) {
     }
 }
 
+/// `let` の次が名前と引数の先頭なら関数の形である。`-` は演算子として読ませ、`let f -1 = …` を関数にしない
+/// (docs/spec/grammar.md の「文法上の補足」)。
+fn at_function_let(p: &Parser) -> bool {
+    p.nth(0) == LET_KW
+        && p.nth(1) == LIDENT
+        && p.nth(2) != MINUS
+        && patterns::at_apat_start_at(p, 2)
+}
+
 fn let_head_and_body(p: &mut Parser) {
+    let function = at_function_let(p);
     p.bump(LET_KW);
     if !patterns::pattern(p) {
         expected(p, "a pattern");
     }
-    if p.eat(COLON) {
+    if function {
+        let params = p.start();
+        while patterns::at_apat_start(p) {
+            patterns::apat(p);
+        }
+        params.complete(p, PARAM_LIST);
+        if p.at(COLON) {
+            p.error(
+                codes::SYNTAX_ERROR,
+                "a local function cannot declare its result type",
+                "annotate a parameter instead, as in `(x : Int)`",
+            );
+            p.bump(COLON);
+            types::type_(p);
+        }
+    } else if p.eat(COLON) {
         types::type_(p);
     }
     if expect(p, EQ) {
@@ -110,6 +135,7 @@ pub(super) fn let_or_expr_input(p: &mut Parser) -> SyntaxKind {
         }
         return REPL_EXPR;
     }
+    let function = at_function_let(p);
     let one_name = p.nth(1) == LIDENT && matches!(p.nth(2), COLON | EQ);
     let pattern = p.position() + 1;
     let m = p.start();
@@ -122,7 +148,14 @@ pub(super) fn let_or_expr_input(p: &mut Parser) -> SyntaxKind {
         return REPL_EXPR;
     }
     m.complete(p, LET_STMT);
-    if !one_name {
+    if function {
+        p.error_at(
+            pattern,
+            codes::SYNTAX_ERROR,
+            "a `let` input cannot define a function",
+            "write a signature and an equation",
+        );
+    } else if !one_name {
         p.error_at(
             pattern,
             codes::SYNTAX_ERROR,

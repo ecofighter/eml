@@ -968,3 +968,128 @@ fn a_mid_line_comma_that_ends_a_block_points_at_the_comma() {
       help: to write a tuple inside the block, wrap it in parentheses
     ");
 }
+
+#[test]
+fn a_function_let_has_a_parameter_list() {
+    let text = lines(&["main () =", "  let go acc (x, y) = acc", "  go 1 (2, 3)"]);
+    insta::assert_snapshot!(shape(&text), @r#"
+    SOURCE_FILE
+      EQUATION
+        NAME
+          LIDENT "main"
+        UNIT_PAT
+          L_PAREN "("
+          R_PAREN ")"
+        EQ "="
+        BLOCK
+          LET_STMT
+            LET_KW "let"
+            BIND_PAT
+              NAME
+                LIDENT "go"
+            PARAM_LIST
+              BIND_PAT
+                NAME
+                  LIDENT "acc"
+              TUPLE_PAT
+                L_PAREN "("
+                BIND_PAT
+                  NAME
+                    LIDENT "x"
+                COMMA ","
+                BIND_PAT
+                  NAME
+                    LIDENT "y"
+                R_PAREN ")"
+            EQ "="
+            PATH_EXPR
+              PATH
+                NAME_REF
+                  LIDENT "acc"
+          EXPR_STMT
+            APP_EXPR
+              PATH_EXPR
+                PATH
+                  NAME_REF
+                    LIDENT "go"
+              LITERAL
+                INT "1"
+              TUPLE_EXPR
+                L_PAREN "("
+                LITERAL
+                  INT "2"
+                COMMA ","
+                LITERAL
+                  INT "3"
+                R_PAREN ")"
+    "#);
+    assert_eq!(diagnostics(&text), Vec::<String>::new());
+}
+
+#[test]
+fn a_function_let_in_is_an_expression() {
+    let text = "main () = let twice x = x + x in twice 2";
+    insta::assert_snapshot!(shape(text), @r#"
+    SOURCE_FILE
+      EQUATION
+        NAME
+          LIDENT "main"
+        UNIT_PAT
+          L_PAREN "("
+          R_PAREN ")"
+        EQ "="
+        LET_EXPR
+          LET_KW "let"
+          BIND_PAT
+            NAME
+              LIDENT "twice"
+          PARAM_LIST
+            BIND_PAT
+              NAME
+                LIDENT "x"
+          EQ "="
+          OP_SEQ
+            PATH_EXPR
+              PATH
+                NAME_REF
+                  LIDENT "x"
+            OP "+"
+            PATH_EXPR
+              PATH
+                NAME_REF
+                  LIDENT "x"
+          IN_KW "in"
+          APP_EXPR
+            PATH_EXPR
+              PATH
+                NAME_REF
+                  LIDENT "twice"
+            LITERAL
+              INT "2"
+    "#);
+}
+
+#[test]
+fn pattern_lets_keep_their_shape() {
+    for stmt in [
+        "let x = 1",
+        "let x : Int = 1",
+        "let x :: rest = xs",
+        "let (f, t) = p",
+        "let Some x = o",
+        "let P { name = n } = p",
+        "let f -1 = 2",
+    ] {
+        let text = lines(&["main () =", &format!("  {stmt}"), "  ()"]);
+        assert!(!shape(&text).contains("PARAM_LIST"), "{stmt}");
+    }
+}
+
+#[test]
+fn a_function_let_cannot_declare_its_result_type() {
+    let text = lines(&["main () =", "  let go x : Int = x", "  go 1"]);
+    assert_eq!(
+        diagnostics(&text),
+        vec!["E0011 2:12 a local function cannot declare its result type".to_string()]
+    );
+}

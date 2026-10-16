@@ -363,3 +363,15 @@ fn a_query_rejects_what_is_not_one_expression() {
         "{diagnostics:?}"
     );
 }
+
+#[test]
+fn a_session_let_cannot_define_a_function() {
+    assert_eq!(
+        input("let f x = 1"),
+        (
+            REPL_LET,
+            vec!["E0011 1:5 a `let` input cannot define a function".to_string()]
+        )
+    );
+    assert_eq!(kind("let f x = x in f 1"), REPL_EXPR);
+}
