@@ -1,0 +1,21 @@
+---
+source: crates/eml_cli/tests/ui.rs
+expression: "format!(\"--- stdout ---\\n{stdout}--- stderr ---\\n{diagnostics}{stderr}{written}{exit}\")"
+input_file: tests/ui/run/scripts/deploy/main.em
+---
+--- stdout ---
+deploy demo
+[build] run: echo building
+building
+[build] ok
+[test] run: echo testing >&2; exit 3
+[test] failed with exit code 3
+--- stderr ---
+testing
+--- written: report.txt ---
+[build] run: echo building
+[build] ok
+[test] run: echo testing >&2; exit 3
+[test] failed with exit code 3
+result: failed at test (3)
+--- exit: 3 ---
