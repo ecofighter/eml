@@ -6,6 +6,7 @@
 
 mod fs_provider;
 pub mod lines;
+pub mod pretty;
 #[cfg(feature = "run")]
 mod repl;
 

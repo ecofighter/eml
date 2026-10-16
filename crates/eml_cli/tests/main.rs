@@ -7,6 +7,7 @@ mod api;
 mod citations;
 mod cli;
 mod lines;
+mod pretty;
 mod repl;
 mod terminal;
 mod ui;
