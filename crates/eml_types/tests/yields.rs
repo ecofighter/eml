@@ -175,3 +175,18 @@ fn the_second_row_variable_and_a_swapped_reference_keep_the_signature_order() {
     ");
     insta::assert_snapshot!(rows(text, "user"), @"5:12 second [Var(1), Var(0)]");
 }
+
+#[test]
+fn a_pure_local_function_in_an_io_body_never_yields() {
+    // row を閉じるので、`<IO>` の本体の中でも純粋なローカル関数の本体は yield しない
+    let text = "main : Unit -> <IO> Unit\nmain () =\n  let inc x = x + 1\n  println (show (inc 1))";
+    insta::assert_snapshot!(bodies(text, "main"), @"
+    body Always
+    3:3 Never
+    3:15#0 Never
+    3:15#1 Never
+    4:3#0 Always
+    4:12#0 Never
+    4:18#0 Never
+    ");
+}

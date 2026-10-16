@@ -208,3 +208,35 @@ main () =
     let checked = check(text);
     assert_eq!(short_text(checked.files(), &checked.diagnostics), "");
 }
+
+#[test]
+fn a_row_shared_with_a_capture_stays_open() {
+    // `go` の row の末尾は捕まえた `h` の row と同じ変数なので閉じない。閉じると `h` の row まで `<>` に決まる
+    let text = "f : Unit -> Int\nf () =\n  let g = fn h -> (let go x = h x in go 1)\n  0";
+    insta::assert_snapshot!(check_text(text), @"
+    f : Unit -> Int
+      h#0 : Int -> <_> _
+      go#1 : Int -> <_> _
+      x#2 : Int
+      g#3 : (Int -> <_> _) -> <_> _
+    ");
+}
+
+#[test]
+fn a_deferred_self_call_reports_against_the_row_at_the_call() {
+    // 自分への呼び出しの包含は row を閉じた後に確かめるが、診断は呼び出しの位置の今の row (純粋なラムダ) を指す
+    let text = "effect Ask where\n  ask : Unit -> Int\n\npure_apply : (Unit -> Int) -> Int\npure_apply f = f ()\n\ng : Int -> <Ask> Int\ng n =\n  let go k = if k == 0 then ask () else pure_apply (fn () -> go (k - 1))\n  go n";
+    insta::assert_snapshot!(check_text(text), @"
+    ask : Unit -> <Ask> Int
+    pure_apply : (Unit -> Int) -> Int
+      f#0 : Unit -> Int
+    g : Int -> <Ask> Int
+      n#0 : Int
+      go#1 : Int -> <Ask> Int
+      k#2 : Int
+    ---
+    E2002 9:62 `go` performs `Ask`, which this lambda does not allow
+      9:62 this call performs `Ask`
+      9:41 argument 1 of `pure_apply` does not allow it
+    ");
+}

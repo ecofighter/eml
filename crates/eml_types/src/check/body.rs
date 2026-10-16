@@ -1,10 +1,10 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use eml_diagnostics::{Diagnostic, FileId, Label, TextRange};
 use eml_hir::{
-    Body, Closure, ConstructorId, EffectId, ExprId, ExprKind, Function, Literal, LocalId, MatchArm,
-    OperationId, PatId, PatKind, Program, Res, RowRef, Segment, Stmt, TypeRefId, TypeRefKind,
-    ValueItem,
+    Body, Closure, ConstructorId, EffectId, ExprId, ExprKind, Function, Literal, LocalFunction,
+    LocalId, MatchArm, OperationId, PatId, PatKind, Program, Res, RowRef, Segment, Stmt, TypeRefId,
+    TypeRefKind, ValueItem,
 };
 use la_arena::ArenaMap;
 
@@ -79,6 +79,27 @@ pub(super) struct BodyCheck<'a, 'c> {
     pub(super) typing: BodyTyping,
     /// Kind の具体化の記録 (`Instance`)。段2が展開する。
     pub(super) instances: Vec<Instance>,
+    /// 本体を検査中のローカル関数。内側の関数ほど後ろにある。
+    pub(super) local_frames: Vec<LocalFrame>,
+    /// 最後の矢印の row を閉じたローカル関数。トップレベルの関数と同じく、値として参照すると row を開く
+    /// (docs/spec/types.md の「ローカル関数の推論」)。
+    pub(super) closed_locals: HashSet<LocalId>,
+}
+
+/// 本体を検査中のローカル関数。本体の中の自分への呼び出しの row は、まだ決まっていないので、包含を確かめずにここへ
+/// 積んでおき、row を閉じた後で確かめる (docs/spec/types.md の「ローカル関数の推論」)。
+pub(super) struct LocalFrame {
+    local: LocalId,
+    deferred: Vec<DeferredRow>,
+}
+
+/// 後に回した自分への呼び出しの矢印の row。包含の先は、呼び出しの位置の今の row とその由来である。
+struct DeferredRow {
+    row: Row,
+    key: (ExprId, usize),
+    name: String,
+    ambient: Row,
+    source: AmbientSource,
 }
 
 /// 式に期待する型。check と infer で `if` とブロックの処理を共有するため。
@@ -512,13 +533,116 @@ impl BodyCheck<'_, '_> {
                     };
                     self.bind_pat(*pat, ty);
                 }
-                Stmt::Functions(_) => unimplemented!("S12c: Task 4 / Task 6 で扱う"),
+                Stmt::Functions(functions) => self.local_functions(functions),
                 Stmt::Expr(expr) => {
                     let unit = self.table.unit;
                     self.check_expr(*expr, unit, Origin::Statement);
                 }
             }
         }
+    }
+
+    /// ローカル関数の組 (docs/spec/types.md の「ローカル関数の推論」)。各関数の型を先に置いて名前を束縛し、本体を
+    /// ラムダとして検査してから、最後の矢印の row の自由な末尾を閉じる。自分への呼び出しの包含は、閉じた後で確かめる。
+    fn local_functions(&mut self, functions: &[LocalFunction]) {
+        let body = self.body;
+        let base = self.local_frames.len();
+        let mut types = Vec::new();
+        let mut checked = Vec::new();
+        for function in functions {
+            let ExprKind::Lambda(closure) = &body.exprs[function.lambda].kind else {
+                unreachable!("a local function is a lambda")
+            };
+            let (ty, last_row) = self.local_function_type(closure.params.len());
+            self.bind_pat(function.pat, ty);
+            types.push(ty);
+            // 名前を束縛できなかった関数 (構文の誤りからの回復) は、ラムダと同じく扱う
+            if let Some(&local) = body.defining.get(function.lambda) {
+                self.local_frames.push(LocalFrame {
+                    local,
+                    deferred: Vec::new(),
+                });
+                checked.push((local, closure, last_row));
+            }
+        }
+        for (function, ty) in functions.iter().zip(types) {
+            self.check_expr(function.lambda, ty, Origin::Inferred);
+        }
+        let group: Vec<LocalId> = checked.iter().map(|&(local, _, _)| local).collect();
+        for (local, closure, last_row) in checked {
+            let Some(last_row) = last_row else { continue };
+            let keep: Vec<Ty> = body
+                .closure_captures(closure)
+                .into_iter()
+                .filter(|captured| !group.contains(captured))
+                .map(|captured| {
+                    self.typing
+                        .locals
+                        .get(captured)
+                        .copied()
+                        .unwrap_or(self.table.error)
+                })
+                .collect();
+            if self.table.close_free_tail(&last_row, &keep) {
+                self.closed_locals.insert(local);
+            }
+        }
+        let frames = self.local_frames.split_off(base);
+        // 1回の呼び出しの E2002 は、どの矢印で起きても1つだけ報告する (`call` と同じ)
+        let mut failed = HashSet::new();
+        for deferred in frames.into_iter().flat_map(|frame| frame.deferred) {
+            let DeferredRow {
+                row,
+                key,
+                name,
+                ambient,
+                source,
+            } = deferred;
+            let range = body.exprs[key.0].range;
+            let report = !failed.contains(&key.0);
+            let ok = self.with_ambient(ambient, source, |this| {
+                this.include_call_row(row, key, range, &name, report)
+            });
+            if !ok {
+                failed.insert(key.0);
+            }
+        }
+    }
+
+    /// 引数が `arity` 個のローカル関数の型と、最後の矢印の row。最後でない矢印は引数を受け取るだけなので、
+    /// トップレベルの関数と同じく row を `<>` に閉じる (docs/spec/types.md の「ローカル関数の推論」)。
+    fn local_function_type(&mut self, arity: usize) -> (Ty, Option<Row>) {
+        let mut ty = self.table.fresh_var();
+        let mut last = None;
+        for index in (0..arity).rev() {
+            let row = if index + 1 == arity {
+                let row = Row {
+                    labels: Vec::new(),
+                    tail: Tail::Var(self.table.fresh_row_var()),
+                };
+                last = Some(row.clone());
+                row
+            } else {
+                Row::pure()
+            };
+            let param = self.table.fresh_var();
+            let lin = self.table.fresh_arrow_lin();
+            ty = self.table.function_with(param, lin, row, ty);
+        }
+        (ty, last)
+    }
+
+    /// 呼び出し `call` が、本体を検査中のローカル関数を呼ぶなら、その枠の番号を返す。
+    fn self_call_frame(&self, call: ExprId) -> Option<usize> {
+        let ExprKind::Call { callee, .. } = &self.body.exprs[call].kind else {
+            return None;
+        };
+        let ExprKind::Path(Res::Local(local)) = self.body.exprs[*callee].kind else {
+            return None;
+        };
+        self.local_frames
+            .iter()
+            .position(|frame| frame.local == local)
     }
 
     /// トップレベルの値を参照するたびに、宣言の型の形を具体化する。呼び出し先の Kind の制約は複写せず、Kind の具体化の
@@ -572,12 +696,19 @@ impl BodyCheck<'_, '_> {
     fn path(&mut self, id: ExprId, res: Res, range: TextRange, open: bool) -> Ty {
         let item = match res {
             Res::Local(local) => {
-                return self
+                let ty = self
                     .typing
                     .locals
                     .get(local)
                     .copied()
                     .unwrap_or(self.table.error);
+                // row を閉じたローカル関数は、トップレベルの関数と同じく値として参照すると row を開く。自分の本体の中では
+                // まだ閉じていないので、開かない単相の型のままである (docs/spec/types.md の「ローカル関数の推論」)
+                return if open && self.closed_locals.contains(&local) {
+                    self.table.open_spine(ty)
+                } else {
+                    ty
+                };
             }
             Res::Item(item) => item,
         };
@@ -648,6 +779,15 @@ impl BodyCheck<'_, '_> {
                 let ty = self.path(callee, *res, callee_expr.range, false);
                 self.typing.exprs.insert(callee, ty);
                 (ty, true)
+            }
+            // ローカル関数も、呼ばれる位置では開かずに矢印の row を記録する。部分適用の残りを開くのは、row を閉じた
+            // 関数だけである (docs/spec/types.md の「ローカル関数の推論」)
+            ExprKind::Path(res @ Res::Local(local))
+                if body.local_functions.get(*local).is_some() =>
+            {
+                let ty = self.path(callee, *res, callee_expr.range, false);
+                self.typing.exprs.insert(callee, ty);
+                (ty, self.closed_locals.contains(local))
             }
             _ => (self.infer_expr(callee), false),
         };
@@ -766,6 +906,17 @@ impl BodyCheck<'_, '_> {
         name: &str,
         reported: &mut bool,
     ) {
+        if let Some(frame) = self.self_call_frame(call) {
+            let deferred = DeferredRow {
+                row,
+                key: (call, index),
+                name: name.to_string(),
+                ambient: self.ambient.clone(),
+                source: self.ambient_source.clone(),
+            };
+            self.local_frames[frame].deferred.push(deferred);
+            return;
+        }
         let range = self.body.exprs[call].range;
         let ok = self.include_call_row(row, (call, index), range, name, !*reported);
         *reported |= !ok;

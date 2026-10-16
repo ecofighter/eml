@@ -501,6 +501,8 @@ pub(crate) fn check_body<'c>(
         ambient_source: AmbientSource::Signature,
         typing: BodyTyping::default(),
         instances: Vec::new(),
+        local_frames: Vec::new(),
+        closed_locals: HashSet::new(),
     };
     checker.check_function(own.ty);
     checker.solve_constraints(Defaulting::None);

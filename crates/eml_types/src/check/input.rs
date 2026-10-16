@@ -3,7 +3,7 @@
 //! 単相に推論する。入力の関数はほかの関数から参照されないので、1つだけの SCC として、ほかの関数と同じ道で Kind を解いて
 //! 書き出す。
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use eml_diagnostics::{Diagnostic, Label};
 use eml_hir::{FunctionId, Generics, InputKind, Program, ValueItem};
@@ -74,6 +74,8 @@ pub(super) fn check_input<'c>(
         ambient_source: AmbientSource::Input,
         typing: BodyTyping::default(),
         instances: Vec::new(),
+        local_frames: Vec::new(),
+        closed_locals: HashSet::new(),
     };
     checker.check_function(own);
     if let InputKind::Let(binding) = kind {

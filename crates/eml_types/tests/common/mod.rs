@@ -22,3 +22,9 @@ pub fn kinds(text: &str, function: &str) -> String {
         .unwrap_or("")
         .to_string()
 }
+
+/// 型検査までの診断を `E0001 1:2 message` の行に並べる。
+pub fn check_short(text: &str) -> Vec<String> {
+    let checked = check(text);
+    eml_test_support::short(checked.files(), &checked.diagnostics)
+}

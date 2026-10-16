@@ -158,3 +158,10 @@ outer action = both action
     let checked = check(text);
     insta::assert_snapshot!(short_text(checked.files(), &checked.diagnostics), @"E2008 10:16 `both` performs `Log` itself and also passes `Log` through its row variable to an outer handler");
 }
+
+#[test]
+fn a_self_call_under_its_own_handler_has_no_mask() {
+    // 自分への呼び出しの包含は row を閉じた後に確かめる。閉じた row は rigid な末尾を持たないので `mask` が要らない
+    let text = "effect Ask where\n  ask : Unit -> Int\n\ncount : Int -> <IO> Int\ncount n =\n  let go k =\n    if k == 0 then 0\n    else handle ask () + go (k - 1) with | ask () r -> r 1\n  go n";
+    assert_eq!(masks(text, "count"), "");
+}

@@ -1,4 +1,4 @@
-use crate::common::check_text;
+use crate::common::{check_short, check_text};
 use eml_hir::ValueItem;
 
 #[test]
@@ -585,4 +585,48 @@ fn stacked_constructor_patterns_report_the_nesting_limit_without_overflowing() {
         "data T =\n  | Leaf\n  | T :+ Int\n\nf : T -> Int\nf t = match t with\n  | {pat} -> 1\n  | _ -> 0"
     );
     assert_eq!(codes(&text), ["E0013"]);
+}
+
+#[test]
+fn a_local_function_is_monomorphic_and_recursive() {
+    let text = "f : Int -> Int\nf n =\n  let go k acc = if k == 0 then acc else go (k - 1) (acc + k)\n  go n 0\n\nmain : Unit -> <IO> Unit\nmain () = println (show (f 3))";
+    insta::assert_snapshot!(check_text(text), @"
+    f : Int -> Int
+      n#0 : Int
+      go#1 : Int -> Int -> Int
+      k#2 : Int
+      acc#3 : Int
+    main : Unit -> <IO> Unit
+    ");
+}
+
+#[test]
+fn a_pure_local_function_is_called_inside_and_outside_a_handler() {
+    // row を閉じるので、どちらを先に呼んでも通る
+    let text = "effect Ask where\n  ask : Unit -> Int\n\nmain : Unit -> <IO> Unit\nmain () =\n  let inc x = x + 1\n  let n = handle inc (ask ()) with | ask () k -> k 1\n  println (show (inc n))";
+    assert_eq!(check_short(text), Vec::<String>::new());
+}
+
+#[test]
+fn a_local_function_recurses_under_its_own_handler() {
+    let text = "effect Ask where\n  ask : Unit -> Int\n\ncount : Int -> <IO> Int\ncount n =\n  let go k =\n    if k == 0 then 0\n    else handle ask () + go (k - 1) with | ask () r -> r 1\n  go n\n\nmain : Unit -> <IO> Unit\nmain () = println (show (count 3))";
+    assert_eq!(check_short(text), Vec::<String>::new());
+}
+
+#[test]
+fn a_local_function_value_is_opened() {
+    let text = "effect Ask where\n  ask : Unit -> Int\n\nmain : Unit -> <IO> Unit\nmain () =\n  let inc x = x + 1\n  let ys = handle List.map inc [ask ()] with | ask () k -> k 1\n  println (show ys)";
+    assert_eq!(check_short(text), Vec::<String>::new());
+}
+
+#[test]
+fn an_undetermined_projection_in_a_local_function_is_e2013() {
+    let text = "data P = | P { name : String }\n\nmain : Unit -> <IO> Unit\nmain () =\n  let name_of p = p.name\n  println (name_of (P { name = \"a\" }))";
+    assert_eq!(
+        check_short(text),
+        vec![
+            "E2013 5:19 the type of this value must be known to access its field `name`"
+                .to_string()
+        ]
+    );
 }

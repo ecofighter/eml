@@ -43,6 +43,28 @@ impl Table<'_> {
         self.unify_row(&open, &Row::pure())
     }
 
+    /// row の末尾が束縛のない rigid でない変数で、`keep` のどの型にも現れなければ、末尾を `<>` に閉じて `true` を返す。
+    /// ローカル関数の最後の矢印の row を閉じる。`keep` は捕まえた変数の型で、それに現れる末尾は外側の推論とつながって
+    /// いるので閉じない (docs/spec/types.md の「ローカル関数の推論」)。
+    pub fn close_free_tail(&mut self, row: &Row, keep: &[Ty]) -> bool {
+        let Tail::Var(var) = self.resolve_row(row).tail else {
+            return false;
+        };
+        if self.is_rigid_row(var) {
+            return false;
+        }
+        let shared = {
+            let _walk = self.start_walk();
+            keep.iter().any(|&ty| self.row_occurs_in(var, ty))
+        };
+        if shared {
+            return false;
+        }
+        let closed = self.close_row(var);
+        debug_assert!(closed.is_ok(), "a free row variable closes");
+        true
+    }
+
     /// Leijen の scoped labels の書き換えで単一化する (docs/spec/types.md)。
     pub fn unify_row(&mut self, a: &Row, b: &Row) -> Result<(), UnifyError> {
         self.unify_row_in(a, b, &mut Unified::new())

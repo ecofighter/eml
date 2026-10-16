@@ -401,3 +401,13 @@ fn a_record_example_names_its_fields_and_leaves_out_wildcards() {
       note: not covered: `Rect { high = False }`
     ");
 }
+
+#[test]
+fn a_refutable_local_function_parameter_is_e4003() {
+    let text = "f : Option Int -> Int\nf o =\n  let go (Some x) = x\n  go o";
+    insta::assert_snapshot!(diagnostics(text), @"
+    E4003 3:11 this pattern does not match every value
+      3:11 a parameter needs a pattern that matches every value
+      note: not covered: `None`
+    ");
+}
