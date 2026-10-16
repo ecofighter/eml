@@ -132,11 +132,16 @@ fn session(
     let inputs: Vec<eml_hir::SessionInput> = inputs
         .iter()
         .zip(1..)
-        .map(|(&text, number)| eml_hir::SessionInput { number, text })
+        .map(|(&text, number)| eml_hir::SessionInput {
+            number,
+            text,
+            form: eml_hir::InputForm::Typed,
+        })
         .collect();
     let (loaded, mut diagnostics, _) = eml_hir::load_session(
         eml_hir::STD,
         &inputs,
+        "",
         "",
         &NoModules,
         &eml_hir::ImportCache::default(),

@@ -157,6 +157,8 @@ pub(super) fn finish_input(
         InputKind::Expr if ty == types.unit() => InputDisplay::Unit,
         InputKind::Expr if satisfies(program, types, program.lang.show, ty) => InputDisplay::Show,
         InputKind::Expr => InputDisplay::TypeOnly(types.display(ty, &program.names).to_string()),
+        // 表示を読むのは translate だけで、問い合わせは translate に渡らない
+        InputKind::Query => InputDisplay::Unit,
     };
     InputType { ty, display }
 }
@@ -181,7 +183,7 @@ fn linear_input(
             )
             .with_note("only values that may be copied and dropped stay across inputs")
         }
-        InputKind::Expr => {
+        InputKind::Expr | InputKind::Query => {
             let body = program.body(id).expect("an input has a body");
             Diagnostic::error(
                 codes::INPUT_LINEAR,

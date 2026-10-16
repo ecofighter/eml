@@ -62,11 +62,22 @@ pub struct Loaded {
     pub modules: Vec<LoadedModule>,
 }
 
-/// REPL のセッションの1つの入力。
+/// REPL のセッションの1つの入力。`form` は読み方と表示のパスを決める (docs/spec/modules.md の「REPL のセッション」)。
 #[derive(Debug, Clone, Copy)]
 pub struct SessionInput<'a> {
     pub number: u32,
     pub text: &'a str,
+    pub form: InputForm<'a>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum InputForm<'a> {
+    /// 端末で打った入力。`eml_syntax::parse_input` で読む。
+    Typed,
+    /// `:load` のファイル。`eml_syntax::parse` で読み、表示のパスは `path` である。
+    File { path: &'a str },
+    /// `:type` の問い合わせ。`eml_syntax::parse_query` で読む。
+    Query,
 }
 
 /// セッションの import が解決した先と本文。後の入力でも同じモジュールを読むために持つ。ディスクのファイルが変わっても
@@ -133,23 +144,36 @@ pub fn load_with_std(
 
 /// REPL のセッションを読む。受け付けた入力と今の入力 (最後) をセッションのモジュールにし、今の入力を入口にする
 /// (docs/spec/modules.md の「REPL のセッション」)。`root` は import の表示の
-/// パスの前に付けるディレクトリ (`/` で終わるか空) である。ユーザーの import は、`cache` にあればその先と本文を使い、
-/// なければ `source` から読む。返す `ImportCache` は、この呼び出しで新しく読んだものだけを持つ。
+/// パスの前に付けるディレクトリ (`/` で終わるか空) である。`entry_file` は `:load` のファイル名 (最後の `/` の後ろ) で、
+/// なければ空である。ユーザーの import は、`cache` にあればその先と本文を使い、なければ `source` から読む。返す
+/// `ImportCache` は、この呼び出しで新しく読んだものだけを持つ。
 pub fn load_session(
     std: &[(&str, &str)],
     inputs: &[SessionInput<'_>],
     root: &str,
+    entry_file: &str,
     source: &dyn ModuleSource,
     cache: &ImportCache,
 ) -> (Loaded, Vec<Diagnostic>, ImportCache) {
-    // セッションには入口のファイルがないので、入口を import する誤り (E1030 の `Entry`) は起きない
-    let mut loader = Loader::new(root, "", source, cache);
+    // 入口のファイルは `:load` のファイルで、なければ空である。依存先と後の入力がそれを import すると E1030 になる
+    let mut loader = Loader::new(root, entry_file, source, cache);
     let prelude = loader.add_prelude(std);
+    debug_assert!(
+        inputs
+            .iter()
+            .enumerate()
+            .all(|(index, input)| index == 0 || !matches!(input.form, InputForm::File { .. })),
+        "only the first input of a session is a file"
+    );
     let mut entry = None;
     for input in inputs {
         let name = format!("<input {}>", input.number);
+        let path = match input.form {
+            InputForm::File { path } => path.to_string(),
+            InputForm::Typed | InputForm::Query => name.clone(),
+        };
         let origin = ModuleOrigin::Session(input.number);
-        entry = Some(loader.add(&name, name.clone(), input.text, origin));
+        entry = Some(loader.add_session(&name, path, input.text, origin, input.form));
     }
     let entry = entry.expect("a session has the current input");
     loader.add_std_modules(std);
@@ -261,15 +285,42 @@ impl<'a> Loader<'a> {
         (loaded, diagnostics, read)
     }
 
+    /// ユーザーと標準ライブラリのモジュール。ファイルの文法で読む。
     fn add(&mut self, name: &str, path: String, text: &str, origin: ModuleOrigin) -> FileId {
-        let file = self.files.add(path, text);
-        // セッションの入力は、`let` の束縛と式も受ける REPL の入口で読む
-        let (parse, errors) = match origin {
-            ModuleOrigin::Session(_) => eml_syntax::parse_input(file, self.files.text(file)),
-            ModuleOrigin::Std | ModuleOrigin::User => {
-                eml_syntax::parse(file, self.files.text(file))
-            }
+        debug_assert!(
+            origin.session().is_none(),
+            "a session module goes through `add_session`"
+        );
+        self.add_parsed(name, path, text, origin, eml_syntax::parse)
+    }
+
+    /// セッションのモジュール。読み方は `form` だけで決める。
+    fn add_session(
+        &mut self,
+        name: &str,
+        path: String,
+        text: &str,
+        origin: ModuleOrigin,
+        form: InputForm,
+    ) -> FileId {
+        let parse = match form {
+            InputForm::Typed => eml_syntax::parse_input,
+            InputForm::File { .. } => eml_syntax::parse,
+            InputForm::Query => eml_syntax::parse_query,
         };
+        self.add_parsed(name, path, text, origin, parse)
+    }
+
+    fn add_parsed(
+        &mut self,
+        name: &str,
+        path: String,
+        text: &str,
+        origin: ModuleOrigin,
+        parse: fn(FileId, &str) -> (Parse, Vec<Diagnostic>),
+    ) -> FileId {
+        let file = self.files.add(path, text);
+        let (parse, errors) = parse(file, self.files.text(file));
         self.diagnostics.extend(errors);
         let (tree, stage) = item_tree(file, &parse);
         self.diagnostics.extend(stage);

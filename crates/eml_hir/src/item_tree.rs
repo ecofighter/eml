@@ -25,12 +25,12 @@ pub struct ItemTree {
     pub fixities: Vec<FixityItem>,
     pub classes: Vec<ClassItem>,
     pub instances: Vec<InstanceItem>,
-    /// REPL の入力が `let` の束縛か式なら、その入力。item の並びの入力とファイルは `None` である
+    /// REPL の入力が `let` の束縛か式か問い合わせなら、その入力。item の並びの入力とファイルは `None` である
     /// (docs/spec/modules.md の「REPL のセッション」)。
     pub input: Option<InputItem>,
 }
 
-/// `let` の束縛か式の、REPL の入力。
+/// `let` の束縛か式か問い合わせの、REPL の入力。
 #[derive(Debug)]
 pub struct InputItem {
     pub kind: InputItemKind,
@@ -46,6 +46,8 @@ pub enum InputItemKind {
         name: Option<(String, TextRange)>,
         ptr: AstPtr<ast::LetStmt>,
     },
+    /// `:type` の問い合わせの式。
+    Query(AstPtr<ast::Expr>),
 }
 
 /// 同じ名前のシグネチャと等式をまとめたもの。名前で対応づけてから並び方を検査する (docs/spec/declarations.md)。
@@ -309,7 +311,7 @@ impl Definitions {
 /// `Parse` を受け取る。
 pub fn item_tree(file: FileId, parse: &Parse) -> (ItemTree, Vec<Diagnostic>) {
     let mut diagnostics = Vec::new();
-    // REPL の入力の木は、item の並びか、`let` の束縛か式を1つ持つ
+    // REPL の入力の木は、item の並びか、`let` の束縛か式を1つ持つ。問い合わせの木は式を1つ持つ
     let (items, input): (Vec<ast::Item>, Option<InputItem>) = match parse.syntax().kind() {
         SyntaxKind::SOURCE_FILE => (parse.tree().items().collect(), None),
         _ => {
@@ -327,8 +329,12 @@ pub fn item_tree(file: FileId, parse: &Parse) -> (ItemTree, Vec<Diagnostic>) {
                     });
                     (Vec::new(), input)
                 }
-                ast::ReplInput::ReplQuery(_) => {
-                    unreachable!("the loader does not read queries yet")
+                ast::ReplInput::ReplQuery(input) => {
+                    let input = input.expr().map(|expr| InputItem {
+                        kind: InputItemKind::Query(AstPtr::new(&expr)),
+                        range,
+                    });
+                    (Vec::new(), input)
                 }
                 ast::ReplInput::ReplExpr(input) => {
                     let input = input.expr().map(|expr| InputItem {

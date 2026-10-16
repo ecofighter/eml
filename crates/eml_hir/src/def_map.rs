@@ -379,7 +379,9 @@ impl ModuleScope {
             .map(|_| item_id(module, tree.functions.len()));
         let binding = tree.input.as_ref().and_then(|input| match &input.kind {
             InputItemKind::Let { name: Some(_), .. } => Some(item_id(module, 0)),
-            InputItemKind::Let { name: None, .. } | InputItemKind::Expr(_) => None,
+            InputItemKind::Let { name: None, .. }
+            | InputItemKind::Expr(_)
+            | InputItemKind::Query(_) => None,
         });
         let mut scope = ModuleScope {
             name: loaded.name.clone(),

@@ -188,8 +188,8 @@ pub enum FunctionKind {
     DefaultMethod(MethodId),
     /// instance のメソッド。等式で定義し、名前の表には入らない。
     InstanceMethod(InstanceId, MethodId),
-    /// REPL の `let` の束縛か式の入力を実行する関数 `input$N`。シグネチャを持たず、引数 `()` を1つ受ける。名前の表には
-    /// 入らない (docs/spec/modules.md の「REPL のセッション」)。
+    /// REPL の `let` の束縛か式の入力を実行する関数 `input$N`。問い合わせも同じ形の関数にし、検査だけをする。
+    /// シグネチャを持たず、引数 `()` を1つ受ける。名前の表には入らない (docs/spec/modules.md の「REPL のセッション」)。
     Input(InputKind),
 }
 
@@ -200,6 +200,8 @@ pub enum InputKind {
     Expr,
     /// `let` の束縛。値を束縛の根に置く。
     Let(BindingId),
+    /// `:type` の問い合わせ。検査だけをし、lowering しない (docs/spec/types.md の「REPL の入力」)。
+    Query,
 }
 
 /// REPL の `let` の束縛。値の名前空間に置くトップレベルの値で、値は根に置く。束縛した入力のモジュールからは見えない。

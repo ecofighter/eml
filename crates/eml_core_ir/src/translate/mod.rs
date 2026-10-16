@@ -317,6 +317,7 @@ fn entry_after(
             text: text.clone(),
             at: at(),
         },
+        (InputKind::Query, _) => unreachable!("a query is checked but never lowered"),
     }
 }
 

@@ -173,7 +173,7 @@ impl<'a> ItemLowering<'a> {
         self.lower_classes(&tree.classes, items, pending);
     }
 
-    /// REPL の `let` の束縛か式の入力を実行する関数 `input$N` と、`let` の束縛を置く。
+    /// REPL の `let` の束縛か式の入力を実行する関数 `input$N` と、`let` の束縛を置く。問い合わせも同じ形の関数にする。
     fn lower_input(&mut self, tree: &ItemTree, items: &mut Items) {
         let Some(input) = &tree.input else {
             return;
@@ -184,9 +184,10 @@ impl<'a> ItemLowering<'a> {
             .session()
             .expect("an input is a session module");
         let binding = self.def_map.binding(self.module);
-        let kind = match binding {
-            Some((binding, _)) => InputKind::Let(binding),
-            None => InputKind::Expr,
+        let kind = match (binding, &input.kind) {
+            (Some((binding, _)), _) => InputKind::Let(binding),
+            (None, InputItemKind::Query(_)) => InputKind::Query,
+            (None, _) => InputKind::Expr,
         };
         let function = ItemId::new(
             self.module,
@@ -409,7 +410,7 @@ fn lower_bodies(
     }
     if let (Some(input), Some(id)) = (&tree.input, def_map.input_function(module)) {
         let (expr, ty) = match &input.kind {
-            InputItemKind::Expr(ptr) => (Some(ptr.to_node(root)), None),
+            InputItemKind::Expr(ptr) | InputItemKind::Query(ptr) => (Some(ptr.to_node(root)), None),
             InputItemKind::Let { ptr, .. } => {
                 let stmt = ptr.to_node(root);
                 (stmt.body(), stmt.ty())

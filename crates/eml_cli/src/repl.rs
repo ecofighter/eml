@@ -6,7 +6,7 @@ use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::sync::Arc;
 
 use eml_diagnostics::{Diagnostic, SourceFiles, TextSize, has_errors};
-use eml_hir::{FunctionKind, ImportCache, InputKind, ModuleSource, SessionInput};
+use eml_hir::{FunctionKind, ImportCache, InputForm, InputKind, ModuleSource, SessionInput};
 use eml_types::{InstanceNode, TypedProgram};
 use eml_vm::{AnyMachine, Control, HostRef, RunConfig, RuntimeError, VmFault};
 
@@ -117,11 +117,16 @@ impl Repl {
             .map(|accepted| SessionInput {
                 number: accepted.number,
                 text: &accepted.text,
+                form: InputForm::Typed,
             })
             .collect();
-        inputs.push(SessionInput { number, text });
+        inputs.push(SessionInput {
+            number,
+            text,
+            form: InputForm::Typed,
+        });
         let (session, read) =
-            Session::load_session(&inputs, &self.root, &*self.source, &self.cache);
+            Session::load_session(&inputs, &self.root, "", &*self.source, &self.cache);
         let checked = session.check();
         let mut diagnostics = self.reported(checked.diagnostics, session.files());
         let mut uniform = BTreeMap::new();
