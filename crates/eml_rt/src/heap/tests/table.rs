@@ -377,6 +377,58 @@ pub fn inputs() -> Vec<(String, Vec<Arg>)> {
             push(name, vec![c(s)]);
         }
     }
+    // 文字列の核 (`byte_length`、`byte_at`、`slice`、`find_from`)。位置は端と、その外側の 1 つずつである
+    for s in &strings {
+        push("Std.String.byte_length", vec![c(s)]);
+    }
+    for s in STRINGS {
+        let len = s.len() as i64;
+        for i in [-1, 0, 1, len - 1, len, i64::MAX, i64::MIN] {
+            push("Std.String.byte_at", vec![Arg::Int(i), c(s)]);
+        }
+        for (start, end) in [
+            (0, 0),
+            (0, len),
+            (0, 1),
+            (1, 2),
+            (1, len),
+            (len, len),
+            (-1, 1),
+            (2, 1),
+            (0, len + 1),
+            (i64::MIN, i64::MAX),
+        ] {
+            push(
+                "Std.String.slice",
+                vec![Arg::Int(start), Arg::Int(end), c(s)],
+            );
+        }
+        for needle in ["", "a", "b", "ab", "日", "😀", "\u{0}", "\\", "日本語"] {
+            for from in [-1, 0, 1, len, len + 1] {
+                push(
+                    "Std.String.find_from",
+                    vec![c(needle), Arg::Int(from), c(s)],
+                );
+            }
+        }
+    }
+    // 一意な文字列と共有した文字列も、ほかの引数と同じく手放す
+    push(
+        "Std.String.slice",
+        vec![Arg::Int(0), Arg::Int(1), Arg::Unique("ab".into())],
+    );
+    push(
+        "Std.String.slice",
+        vec![Arg::Int(0), Arg::Int(1), Arg::Shared("ab".into())],
+    );
+    push(
+        "Std.String.find_from",
+        vec![
+            Arg::Unique("b".into()),
+            Arg::Int(0),
+            Arg::Shared("ab".into()),
+        ],
+    );
     let rel = |s: &str| vec![Arg::Rel(s.to_string())];
     for path in [
         "plain.txt",

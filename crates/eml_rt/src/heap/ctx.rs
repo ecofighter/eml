@@ -27,6 +27,7 @@ use crate::word::lemma_unit_bits;
 use proof::*;
 
 mod io;
+mod positions;
 // 証明の部品だけを置くので、検証のときだけ読む
 #[cfg(verus_only)]
 mod proof;

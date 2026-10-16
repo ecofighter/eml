@@ -815,6 +815,10 @@ token の表の項目は、`into_token` と `release_reuse` が添字を使い�
   - 1回目の走査で結果の長さを数え (桁あふれは `checked_add` で確かめる)、`alloc_string_room` でその容量の空の文字列を1回だけ確保する。2回目の走査で、エスケープのない区間はまとめて写し、エスケープは短い ASCII の列を足す。どれも容量に収まるので、作り直しは起きない
   - 足すのは、`string_push` と同じ道の内部の関数 (`append_str` と `append_part`) である。公開の `string_push` は検査モードで確かめ直し、その場で足すことを約束しないので使わない
   - 区間を写すときは、写す元の文字列を T10 で借りた `&str` を、vstd の `str::split_at` で `[from, to)` に切って渡す。そのため T10 の関数は変わらない。切る位置が文字の境目であることは、「正しい UTF-8 の列で、ASCII のバイトの直前と直後は文字の境目である」という補題で示す。結果が UTF-8 であることは `valid_utf8_concat` から出る
+- 文字列の核 (`String.byte_length`、`byte_at`、`slice`、`find_from`) は、位置を UTF-8 のバイトの位置で読む ([標準ライブラリ](stdlib.md) の「`String`」)
+  - `byte_length` は ghost のバイト列の長さを、`byte_at` は範囲の中ならその位置のバイトを約束する
+  - `slice` は、範囲の中で両端が vstd の `is_char_boundary` を満たすとき、結果の ghost のバイト列が部分の列に等しいことを約束する。結果は `String.show` と同じ道 (`alloc_string_room` と `append_part`) で作る。部分が UTF-8 であることは、ASCII の補題と同じく `valid_utf8_split` から出す (`lemma_boundary_in_prefix`)。範囲と境界は確保の前に確かめる
+  - `find_from` は、開始位置以降で探す文字列と一致する最小の位置か、なければ -1 であることを約束する (spec `found_from`)。照合は素朴な二重の繰り返しである
 - 検査モードでは、引数が `String` の物体でなければ `Heap(WrongKind)` を返す。速いモードは、読めることと所有を前提にする
 
 I/O の extern (`println`、`Fs.open`、`Fs.read_all`、`Fs.close`) は、メモリの安全と、RC のモデルでの増減を証明する。引数を消費すること、結果を持つこと、組のフィールド、`File` の種類と `lin` ビット、誤りのときに作りかけの物体を手放すことを含む。OS とのやりとりの中身 (何が書かれ、何が読めたか) は約束せず、T11 (下の「`unsafe` の核」) と期待値の表 ([テスト戦略](../implementation/testing.md) の「期待値の表」) に任せる。`Fs.read_all` の結果の文字列は `alloc_string` で作るので、ghost のバイト列と UTF-8 であることは今ある約束から出る。
@@ -889,6 +893,7 @@ pub struct Opened {
 - `Int.show`: 数字の列の長さ
 - `String.show`: 結果の長さ
 - `Fs.read_all`: ファイルの長さ
+- `String.slice`: 結果の長さ
 - `++`: 左が一意 (rc 1 の局所の物体) なら右の長さだけを数え、容量が足りずに作り直しても同じである。左が共有か不死なら、両辺の長さを数える
 
 ## `unsafe` の核

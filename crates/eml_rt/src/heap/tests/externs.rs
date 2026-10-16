@@ -344,6 +344,119 @@ fn strings_show_with_their_escapes<M: Mode>() {
     assert_eq!(mortal(ctx.heap()), 0);
 }
 
+/// 文字列の核はバイトの位置で読み、範囲の外と文字の境界を断る。断っても引数は手放す (docs/spec/stdlib.md)。
+fn the_string_core_reads_by_byte_positions<M: Mode>() {
+    let mut ctx = ctx::<M>();
+    unsafe {
+        let a = s(&mut ctx, "a日b");
+        assert_eq!(ctx.string_byte_length(a), Ok(5));
+        let a = s(&mut ctx, "a日b");
+        assert_eq!(ctx.string_byte_at(1, a), Ok(0xe6));
+        let a = s(&mut ctx, "a日b");
+        assert_eq!(
+            ctx.string_byte_at(5, a),
+            Err(Fault::Index(Box::new(IndexFault::String {
+                index: 5,
+                len: 5
+            })))
+        );
+        let a = s(&mut ctx, "a日b");
+        let w = ctx.string_slice(1, 4, a).unwrap();
+        assert_eq!(text(ctx.heap(), w), "日");
+        ctx.heap_mut().decref(w).unwrap();
+        let a = s(&mut ctx, "a日b");
+        assert_eq!(
+            ctx.string_slice(2, 4, a),
+            Err(Fault::Index(Box::new(IndexFault::Boundary {
+                start: 2,
+                end: 4
+            })))
+        );
+        let a = s(&mut ctx, "a日b");
+        assert_eq!(
+            ctx.string_slice(0, 6, a),
+            Err(Fault::Index(Box::new(IndexFault::Slice {
+                start: 0,
+                end: 6,
+                len: 5
+            })))
+        );
+        // 探す位置は `from` 以上で、空の文字列は `from` で見つかる
+        for (needle, from, found) in [
+            ("b", 0, 4),
+            ("日", 1, 1),
+            ("日", 2, -1),
+            ("", 3, 3),
+            ("", 5, 5),
+        ] {
+            let n = s(&mut ctx, needle);
+            let a = s(&mut ctx, "a日b");
+            assert_eq!(
+                ctx.string_find_from(n, from, a),
+                Ok(found),
+                "{needle} {from}"
+            );
+        }
+        let n = s(&mut ctx, "b");
+        let a = s(&mut ctx, "a日b");
+        assert_eq!(
+            ctx.string_find_from(n, 6, a),
+            Err(Fault::Index(Box::new(IndexFault::String {
+                index: 6,
+                len: 5
+            })))
+        );
+    }
+    assert_eq!(mortal(ctx.heap()), 0);
+}
+
+/// `slice` は写したバイトの数を数える。
+fn a_slice_counts_the_bytes_it_copies<M: Mode>() {
+    if !M::CHECKED {
+        return;
+    }
+    let mut ctx = ctx::<M>();
+    unsafe {
+        let a = s(&mut ctx, "a日b");
+        let before = ctx.stats().string_bytes_copied;
+        let w = ctx.string_slice(0, 4, a).unwrap();
+        assert_eq!(ctx.stats().string_bytes_copied - before, 4);
+        ctx.heap_mut().decref(w).unwrap();
+    }
+    assert_eq!(mortal(ctx.heap()), 0);
+}
+
+/// 文字列の核も、文字列でない引数を検査モードで断り、ヒープを変えない。
+fn the_string_core_refuses_a_non_string<M: Mode>() {
+    if !M::CHECKED {
+        return;
+    }
+    let mut ctx = ctx::<M>();
+    unsafe {
+        let d = ctx.heap_mut().alloc_data(0, 0, 1, false);
+        let a = s(&mut ctx, "a");
+        let live = mortal(ctx.heap());
+        let wrong = Fault::Heap(HeapError::WrongKind);
+        assert_eq!(
+            ctx.string_byte_length(d),
+            Err(Fault::Heap(HeapError::WrongKind))
+        );
+        assert_eq!(
+            ctx.string_byte_at(0, d),
+            Err(Fault::Heap(HeapError::WrongKind))
+        );
+        assert_eq!(
+            ctx.string_slice(0, 0, d),
+            Err(Fault::Heap(HeapError::WrongKind))
+        );
+        assert_eq!(ctx.string_find_from(a, 0, d), Err(wrong));
+        assert_eq!(mortal(ctx.heap()), live);
+        ctx.heap_mut().decref(a).unwrap();
+        ctx.heap_mut().decref(d).unwrap();
+    }
+    assert_eq!(mortal(ctx.heap()), 0);
+}
+
 /// 文字列でない引数は検査モードで断る。断ったときはヒープを変えない。
 fn a_string_extern_refuses_a_non_string<M: Mode>() {
     if !M::CHECKED {
@@ -912,6 +1025,24 @@ unsafe fn call<M: Mode>(
                 ctx.fs_close(f)?;
                 Outcome::Str(read)
             }
+            "Std.String.byte_length" => {
+                let a = one(ctx, args);
+                Outcome::Int(ctx.string_byte_length(a)?)
+            }
+            "Std.String.byte_at" => {
+                let a = args.string(ctx, &inputs[1], root);
+                Outcome::Int(ctx.string_byte_at(int(0), a)?)
+            }
+            "Std.String.slice" => {
+                let a = args.string(ctx, &inputs[2], root);
+                let w = ctx.string_slice(int(0), int(1), a)?;
+                take_text(ctx, w)
+            }
+            "Std.String.find_from" => {
+                let n = args.string(ctx, &inputs[0], root);
+                let a = args.string(ctx, &inputs[2], root);
+                Outcome::Int(ctx.string_find_from(n, int(1), a)?)
+            }
             name => panic!("an extern the table does not know: {name}"),
         })
     }
@@ -1014,6 +1145,9 @@ both_modes!(
     shows_count_the_bytes_they_write,
     strings_show_with_their_escapes,
     a_string_extern_refuses_a_non_string,
+    the_string_core_reads_by_byte_positions,
+    a_slice_counts_the_bytes_it_copies,
+    the_string_core_refuses_a_non_string,
     println_writes_a_line_and_releases_its_text,
     a_failed_write_still_releases_the_text,
     println_refuses_a_non_string,

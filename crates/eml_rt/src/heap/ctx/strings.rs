@@ -1236,7 +1236,14 @@ impl<M: Mode> Ctx<M> {
     }
 
     /// `String.show` で `s` を手放す前の、モデルが合っている道。確保と追記は `s` に触れないので、`s` はまだ持たれている。
-    proof fn lemma_text_shown(&self, h1: Heap<M>, h2: Heap<M>, h3: Heap<M>, s: Word, w: Word)
+    pub(super) proof fn lemma_text_shown(
+        &self,
+        h1: Heap<M>,
+        h2: Heap<M>,
+        h3: Heap<M>,
+        s: Word,
+        w: Word,
+    )
         requires
             self.held_ok(),
             self.is_string(s),
@@ -1275,7 +1282,15 @@ impl<M: Mode> Ctx<M> {
     }
 
     /// `String.show` の、モデルが合っている道。
-    proof fn lemma_shown(&self, s0: Ctx<M>, h1: Heap<M>, h2: Heap<M>, h3: Heap<M>, s: Word, w: Word)
+    pub(super) proof fn lemma_shown(
+        &self,
+        s0: Ctx<M>,
+        h1: Heap<M>,
+        h2: Heap<M>,
+        h3: Heap<M>,
+        s: Word,
+        w: Word,
+    )
         requires
             s0.held_ok(),
             s0.is_string(s),
@@ -1326,7 +1341,7 @@ impl<M: Mode> Ctx<M> {
     }
 
     /// 文字列を受ける extern の前提から、`settle` の後のヒープ `h1` で、ヒープの文字列の操作の前提を言う。
-    proof fn lemma_settled_strings(&self, h1: Heap<M>, a: Word, b: Word)
+    pub(super) proof fn lemma_settled_strings(&self, h1: Heap<M>, a: Word, b: Word)
         requires
             self.held_ok(),
             self.holds_strings(a, b),
@@ -1473,7 +1488,14 @@ impl<M: Mode> Ctx<M> {
     }
 
     /// `compare` の、モデルが合っている道。`settle` の後の `h1` から `a` と `b` を手放した。
-    proof fn lemma_released(&self, s0: Ctx<M>, h1: Heap<M>, mid: Heap<M>, a: Word, b: Word)
+    pub(super) proof fn lemma_released(
+        &self,
+        s0: Ctx<M>,
+        h1: Heap<M>,
+        mid: Heap<M>,
+        a: Word,
+        b: Word,
+    )
         requires
             s0.held_ok(),
             s0.holds_strings(a, b),

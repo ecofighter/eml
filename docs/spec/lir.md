@@ -627,8 +627,10 @@ LIR を実行する [VM](vm.md) と後のネイティブのコードは、次の
 次の場合は実行を止めて実行時エラーにする。CLI の終了コードは 1 で、割り込みで止まったときだけ 130 である ([VM](vm.md) の「上限と割り込み」)。
 
 - `Int` のオーバーフローとゼロ除算 ([宣言](declarations.md) の標準の演算子の表)
-- `Fs.open` が開けないとき (``cannot open `<path>`: <reason>``)、`Fs.read_all` が読めないとき (``cannot read `<path>`: <reason>``)、読んだ内容が UTF-8 でないとき (``` `<path>` is not valid UTF-8 ```)。`reason` は `not found`、`permission denied`、`I/O error` のどれかである
-- `println` が標準出力に書けないとき (``cannot write the output: <e>``)。`e` は書き込みの誤りの `io::Error` の文言である
+- `Fs.open` が開けないとき (``cannot open `<path>`: <reason>``)、`Fs.read_all` が読めないとき (``cannot read `<path>`: <reason>``)、`Fs.write_text` が書けないとき (``cannot write `<path>`: <reason>``)、`Proc.run` が子を起動できないとき (``cannot run `<program>`: <reason>``)、標準入力を読めないとき (``cannot read the standard input: <reason>``)。`reason` は `not found`、`permission denied`、`not available`、`I/O error` のどれかである
+- 読んだ内容が UTF-8 でないとき。ファイル (``` `<path>` is not valid UTF-8 ```)、標準入力 (`the standard input is not valid UTF-8`)、引数 (`argument <index> is not valid UTF-8`。`Env.args ()` のリストの 0 から数えた位置)、環境変数 (``environment variable `<name>` is not valid UTF-8``) である
+- 文字列の位置が範囲の外のとき (`string index <index> is out of range for length <len>`)、`String.slice` の範囲が文字列の外のとき (`string slice <start>..<end> is out of range for length <len>`) と、端が文字の境界にないとき (`string slice <start>..<end> is not on a character boundary`)、`Env.arg` の位置が範囲の外のとき (`argument index <index> is out of range for <count> arguments`)。最後のものは標準ライブラリの中だけで起きる ([標準ライブラリ](stdlib.md) の「実行時エラー」)
+- `println` と `eprintln` が書けないとき (``cannot write the output: <e>``)。`e` は書き込みの誤りの `io::Error` の文言である
 - 実行を止めたとき。割り込み (`interrupted`)、確保量の上限 (`the memory limit is exceeded`)、深さの上限 (`the call depth limit is exceeded`) である ([オブジェクトモデル](object-model.md) の「実行の制御」)
 - 検査モード (`eml run --debug-heap`) のヒープの誤り。解放済みの物体の使用 (`use of a freed object`)、`lin` ビットの立った物体の `dup` (`a Lin object is shared`)、終わりに残った物体 (リーク) などである ([オブジェクトモデル](object-model.md) の「報告する誤り」)。どれもコンパイラの誤りでしか起きない。速いモードはこれらを確かめない ([オブジェクトモデル](object-model.md) の「受け入れる制約」)
 - 内部の誤り (`internal error: …`)。verifier を通った IR では起きないはずの形を、VM の見張りが見つけたときである ([VM](vm.md) の「誤り、止めること、終わり」)
@@ -637,7 +639,7 @@ extern の実装は、VM と後のネイティブのコードが使う `eml_rt` 
 
 `eml_rt` の Host が出力をまとめて書くときは、書き込みの誤りが見つかるのは、後でバッファがあふれた `println` か、プログラムの終わりの flush である。そのため、`println` の誤りに付く位置は、書けなかった行を書いた `println` でなく、誤りを見つけた `println` の位置になる。終わりの flush の誤りは位置を持たない。
 
-実行時エラーは、誤りの種類 (`fault`)、そのとき実行していた LIR の関数の名前 (`function`)、省略できる位置 (`at`) を持つ。位置を持つ `extern` 命令の実行が起こした誤り (その中のヒープの誤りを含む) にだけ、その命令の位置を付ける。位置は Core IR から写したもので ([Core IR](core-ir.md) の「位置」)、ファイルは `Program.files` の添字である。引数の読み出し、`dup`、`decref`、`release`、`switch`、`unpack`、`box`、`unbox` の誤りと、位置を持たない `extern` 命令の誤りには付けない。安全点で止めたときも位置を付けない。`Fs.read_all` の中で止めたときは、extern の誤りなので位置を付ける。
+実行時エラーは、誤りの種類 (`fault`)、そのとき実行していた LIR の関数の名前 (`function`)、省略できる位置 (`at`) を持つ。位置を持つ `extern` 命令の実行が起こした誤り (その中のヒープの誤りを含む) にだけ、その命令の位置を付ける。位置は Core IR から写したもので ([Core IR](core-ir.md) の「位置」)、ファイルは `Program.files` の添字である。引数の読み出し、`dup`、`decref`、`release`、`switch`、`unpack`、`box`、`unbox` の誤りと、位置を持たない `extern` 命令の誤りには付けない。安全点で止めたときも位置を付けない。`Fs.read_all`、標準入力の読み、`Proc.run` の中で止めたときは、extern の誤りなので位置を付ける。標準ライブラリの関数の中の extern なら、位置は `<std>/…` を指す。
 
 位置があるときは、次のように表示する。`path` は `Program.files` の表示用のパスである。
 

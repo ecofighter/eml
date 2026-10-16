@@ -784,7 +784,7 @@ impl<M: Mode> Ctx<M> {
     }
 
     /// `println` の、モデルが合っている道。`settle` の後の `h1` から `s` を手放した。
-    proof fn lemma_printed(&self, s0: Ctx<M>, h1: Heap<M>, s: Word)
+    pub(super) proof fn lemma_printed(&self, s0: Ctx<M>, h1: Heap<M>, s: Word)
         requires
             s0.held_ok(),
             s0.is_string(s),
