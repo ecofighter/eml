@@ -240,3 +240,14 @@ fn a_deferred_self_call_reports_against_the_row_at_the_call() {
       9:41 argument 1 of `pure_apply` does not allow it
     ");
 }
+
+#[test]
+fn a_row_shared_with_a_parameter_stays_open() {
+    // `app` の row の末尾は引数 `g` の row と同じ変数なので閉じない。閉じると `g` も純粋な関数に決まる
+    let text = "f : Unit -> Int\nf () =\n  let app g = g ()\n  0";
+    insta::assert_snapshot!(check_text(text), @"
+    f : Unit -> Int
+      app#0 : (Unit -> <_> _) -> <_> _
+      g#1 : Unit -> <_> _
+    ");
+}

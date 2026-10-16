@@ -630,3 +630,10 @@ fn an_undetermined_projection_in_a_local_function_is_e2013() {
         ]
     );
 }
+
+#[test]
+fn a_higher_order_local_function_takes_the_effect_of_its_argument() {
+    // `app` の row の末尾は引数 `f` の型に現れるので閉じず、最初の呼び出しの位置で `Ask` を含む row に決まる
+    let text = "effect Ask where\n  ask : Unit -> Int\n\nmain : Unit -> <IO> Unit\nmain () =\n  let app f = f ()\n  let n = handle app (fn () -> ask ()) with | ask () k -> k 1\n  println (show n)";
+    assert_eq!(check_short(text), Vec::<String>::new());
+}

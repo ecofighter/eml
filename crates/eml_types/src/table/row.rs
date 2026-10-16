@@ -44,8 +44,8 @@ impl Table<'_> {
     }
 
     /// row の末尾が束縛のない rigid でない変数で、`keep` のどの型にも現れなければ、末尾を `<>` に閉じて `true` を返す。
-    /// ローカル関数の最後の矢印の row を閉じる。`keep` は捕まえた変数の型で、それに現れる末尾は外側の推論とつながって
-    /// いるので閉じない (docs/spec/types.md の「ローカル関数の推論」)。
+    /// ローカル関数の最後の矢印の row を閉じる。`keep` は捕まえた変数の型と、関数の引数と結果の型である。それらに現れる
+    /// 末尾は、外側の推論か引数のエフェクトとつながっているので閉じない (docs/spec/types.md の「ローカル関数の推論」)。
     pub fn close_free_tail(&mut self, row: &Row, keep: &[Ty]) -> bool {
         let Tail::Var(var) = self.resolve_row(row).tail else {
             return false;

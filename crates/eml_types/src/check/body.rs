@@ -553,7 +553,7 @@ impl BodyCheck<'_, '_> {
             let ExprKind::Lambda(closure) = &body.exprs[function.lambda].kind else {
                 unreachable!("a local function is a lambda")
             };
-            let (ty, last_row) = self.local_function_type(closure.params.len());
+            let (ty, last_row, parts) = self.local_function_type(closure.params.len());
             self.bind_pat(function.pat, ty);
             types.push(ty);
             // 名前を束縛できなかった関数 (構文の誤りからの回復) は、ラムダと同じく扱う
@@ -562,27 +562,30 @@ impl BodyCheck<'_, '_> {
                     local,
                     deferred: Vec::new(),
                 });
-                checked.push((local, closure, last_row));
+                checked.push((local, closure, last_row, parts));
             }
         }
         for (function, ty) in functions.iter().zip(types) {
             self.check_expr(function.lambda, ty, Origin::Inferred);
         }
-        let group: Vec<LocalId> = checked.iter().map(|&(local, _, _)| local).collect();
-        for (local, closure, last_row) in checked {
+        let group: Vec<LocalId> = checked.iter().map(|&(local, ..)| local).collect();
+        for (local, closure, last_row, parts) in checked {
             let Some(last_row) = last_row else { continue };
-            let keep: Vec<Ty> = body
-                .closure_captures(closure)
-                .into_iter()
-                .filter(|captured| !group.contains(captured))
-                .map(|captured| {
-                    self.typing
-                        .locals
-                        .get(captured)
-                        .copied()
-                        .unwrap_or(self.table.error)
-                })
-                .collect();
+            // 引数と結果の型に現れる末尾も閉じない。`let app f = f ()` のような高階のローカル関数のエフェクトは、
+            // 引数から来るためである
+            let mut keep = parts;
+            keep.extend(
+                body.closure_captures(closure)
+                    .into_iter()
+                    .filter(|captured| !group.contains(captured))
+                    .map(|captured| {
+                        self.typing
+                            .locals
+                            .get(captured)
+                            .copied()
+                            .unwrap_or(self.table.error)
+                    }),
+            );
             if self.table.close_free_tail(&last_row, &keep) {
                 self.closed_locals.insert(local);
             }
@@ -609,10 +612,11 @@ impl BodyCheck<'_, '_> {
         }
     }
 
-    /// 引数が `arity` 個のローカル関数の型と、最後の矢印の row。最後でない矢印は引数を受け取るだけなので、
-    /// トップレベルの関数と同じく row を `<>` に閉じる (docs/spec/types.md の「ローカル関数の推論」)。
-    fn local_function_type(&mut self, arity: usize) -> (Ty, Option<Row>) {
+    /// 引数が `arity` 個のローカル関数の型と、最後の矢印の row と、引数と結果の型。最後でない矢印は引数を受け取るだけ
+    /// なので、トップレベルの関数と同じく row を `<>` に閉じる (docs/spec/types.md の「ローカル関数の推論」)。
+    fn local_function_type(&mut self, arity: usize) -> (Ty, Option<Row>, Vec<Ty>) {
         let mut ty = self.table.fresh_var();
+        let mut parts = vec![ty];
         let mut last = None;
         for index in (0..arity).rev() {
             let row = if index + 1 == arity {
@@ -626,10 +630,11 @@ impl BodyCheck<'_, '_> {
                 Row::pure()
             };
             let param = self.table.fresh_var();
+            parts.push(param);
             let lin = self.table.fresh_arrow_lin();
             ty = self.table.function_with(param, lin, row, ty);
         }
-        (ty, last)
+        (ty, last, parts)
     }
 
     /// 呼び出し `call` が、本体を検査中のローカル関数を呼ぶなら、その枠の番号を返す。
