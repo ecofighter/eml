@@ -1,0 +1,19 @@
+# `:load` はセッションを作り直し、ファイルを入力 1 として読む (docs/spec/repl.md の「ファイルの読み込み」)
+> let k = 5
+> :load shapes.em
+> area (Circle 2)
+> k
+> :type area
+# ファイルの item を定義し直すと、古い版は `#1` になる
+> data Shape = | Dot
+> :type area
+# ファイルの関数の実行時エラーはファイルのパスを指す
+> half 0
+> let j = 1
+> :reload
+> j
+> area (Square 3)
+> :load missing.em
+> area (Square 3)
+> :load
+> area (Square 3)

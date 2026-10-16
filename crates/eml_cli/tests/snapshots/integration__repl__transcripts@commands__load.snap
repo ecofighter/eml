@@ -1,0 +1,45 @@
+---
+source: crates/eml_cli/tests/repl.rs
+expression: checked.render()
+input_file: crates/eml_cli/tests/repl/commands/load/main.repl
+---
+> let k = 5
+> :load shapes.em
+--- close (load) ---
+no leaks
+> area (Circle 2)
+12
+> k
+E1001 <input 3> 1:1 cannot find value `k`
+  <input 3> 1:1 not found in this scope
+> :type area
+area : Shape -> Int
+> data Shape = | Dot
+> :type area
+area : Shape#1 -> Int
+> half 0
+runtime error: division by zero
+  at shapes.em:11:13
+> let j = 1
+> :reload
+--- close (load) ---
+no leaks
+> j
+E1001 <input 2> 1:1 cannot find value `j`
+  <input 2> 1:1 not found in this scope
+> area (Square 3)
+9
+> :load missing.em
+error: cannot read `missing.em`: No such file or directory (os error 2)
+> area (Square 3)
+9
+> :load
+--- close (load) ---
+no leaks
+> area (Square 3)
+E1001 <input 1> 1:1 cannot find value `area`
+  <input 1> 1:1 not found in this scope
+E1001 <input 1> 1:7 cannot find constructor `Square`
+  <input 1> 1:7 not found in this scope
+--- close ---
+no leaks

@@ -1,0 +1,17 @@
+# `:type` は式の型を、残った型変数に名前を付けて書く (docs/spec/repl.md の「型の表示」)
+> :type (>>)
+> :type fn x -> x
+> :type []
+> :type show []
+> :type fn x y -> x < y && x == y
+> :type println "hi"
+> data Shape = | Circle
+> let s = Circle
+> data Shape = | Square
+> :t s
+# 誤りのある式は型を書かない
+> :type nope
+> :type f x = 1
+# 到達しない腕の警告は、型と一緒に出る
+> :type fn n -> match n with | x -> x | 0 -> 0
+> :reload

@@ -7,9 +7,10 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+use eml_cli::lines::{Command, Lines, Step};
 use eml_cli::{
-    Control, FsProvider, InputStatus, Outcome, Repl, RunConfig, RuntimeError, capture_host,
-    default_limits, input_status,
+    Control, Evaluated, FsProvider, HostRef, InputStatus, Outcome, Repl, RunConfig, RuntimeError,
+    capture_host, default_limits, input_status,
 };
 
 use crate::common::glob_lock;
@@ -31,6 +32,11 @@ impl Input {
     /// 先頭の `count` 行を、端末が行ごとに足していく形でつないだテキスト。
     fn text(&self, count: usize) -> String {
         self.lines[..count].join("\n")
+    }
+
+    /// 1行目が `:` で始まる入力は、端末と同じく `eml_cli::lines` で読むコマンドである。
+    fn is_command(&self) -> bool {
+        self.lines[0].trim().starts_with(':')
     }
 
     /// `eval` に渡すテキスト。入力を終える空行は含めない (docs/spec/layout.md の「REPL の入力の終わり」)。
@@ -140,42 +146,135 @@ fn assert_boundaries(suffix: &str, input: &Input) {
     );
 }
 
-/// 1回の流し方の結果。`inputs` は入力ごとの表示で、速いモードと比べる。
+/// 1回の流し方の結果。`inputs` は入力ごとの表示で、速いモードと比べる。`closes` は `:load` と `:reload` が閉じた
+/// セッションの `close` の結果で、入力の番号と組にする。リークは検査モードだけが数えるので、`inputs` に入れない。
 struct Transcript {
     inputs: Vec<String>,
+    closes: Vec<(usize, Option<RuntimeError>)>,
     close: Option<RuntimeError>,
     broken: bool,
 }
 
 impl Transcript {
     fn render(&self) -> String {
-        let mut out = self.inputs.concat();
-        out.push_str("--- close ---\n");
-        match &self.close {
-            None => out.push_str("no leaks\n"),
-            Some(error) => writeln!(out, "{error}").unwrap(),
+        let mut out = String::new();
+        for (index, input) in self.inputs.iter().enumerate() {
+            out.push_str(input);
+            for (_, close) in self.closes.iter().filter(|(at, _)| *at == index) {
+                render_close(&mut out, "--- close (load) ---", close);
+            }
         }
+        render_close(&mut out, "--- close ---", &self.close);
         out
     }
 }
 
-/// `eml run` と同じ既定の上限で流す。止める理由のビットは `eval` が入力ごとに下ろすので、1つの `Control` を
-/// トランスクリプト全体で使う。
-fn run(inputs: &[Input], root: &Path, debug_heap: bool) -> Transcript {
-    let (host, out) = capture_host(root.to_path_buf());
-    let config = RunConfig::default()
-        .with_debug_heap(debug_heap)
-        .with_control(Arc::new(Control::new(default_limits())));
-    let mut repl = Repl::new(&config, Box::new(FsProvider::new(root)), "", host);
-    let mut read = 0;
-    let mut rendered = Vec::new();
-    let mut broken = false;
-    for input in inputs {
-        let evaluated = repl.eval(&input.submitted());
-        let all = out.contents();
-        let mut block = input.echo();
-        block.push_str(&all[read..]);
-        read = all.len();
+fn render_close(out: &mut String, header: &str, close: &Option<RuntimeError>) {
+    writeln!(out, "{header}").unwrap();
+    match close {
+        None => out.push_str("no leaks\n"),
+        Some(error) => writeln!(out, "{error}").unwrap(),
+    }
+}
+
+/// 流している間のセッション。`:load` はセッションを作り直すので、作るのに要る `RunConfig` と `HostRef` を持つ。
+/// 端末の `Terminal` と同じ形である (docs/spec/repl.md の「ファイルの読み込み」)。
+struct Runner<'a> {
+    config: RunConfig,
+    host: HostRef,
+    root: &'a Path,
+    /// `<名前>/main.repl` の形のトランスクリプトか。`:load` のファイルはトランスクリプトのディレクトリに置くので、
+    /// ディレクトリの形でだけ使える。
+    directory: bool,
+    repl: Repl,
+    /// `:reload` で読み直すファイルの、トランスクリプトのディレクトリからのパス。
+    file: Option<String>,
+    closes: Vec<(usize, Option<RuntimeError>)>,
+    broken: bool,
+}
+
+impl Runner<'_> {
+    fn empty_session(&self) -> Repl {
+        Repl::new(
+            &self.config,
+            Box::new(FsProvider::new(self.root)),
+            "",
+            self.host.clone(),
+        )
+    }
+
+    /// 古いセッションを閉じ、その結果を入力 `index` の位置に記録する。
+    fn replace_with_empty(&mut self, index: usize) {
+        let empty = self.empty_session();
+        let old = std::mem::replace(&mut self.repl, empty);
+        self.closes.push((index, old.close().leaks));
+    }
+
+    /// 読めなければ、セッションも覚えたファイルも変えない。
+    fn load(&mut self, index: usize, path: &str, block: &mut String) {
+        assert!(
+            self.directory,
+            "`:load {path}` needs a transcript of the form <category>/<name>/main.repl"
+        );
+        let text = match fs::read_to_string(self.root.join(path)) {
+            Ok(text) => text,
+            Err(error) => {
+                writeln!(block, "error: cannot read `{path}`: {error}").unwrap();
+                return;
+            }
+        };
+        self.replace_with_empty(index);
+        let dir = Path::new(path).parent().unwrap_or(Path::new(""));
+        let (repl, evaluated) = Repl::with_file(
+            &self.config,
+            path,
+            &text,
+            Box::new(FsProvider::new(self.root.join(dir))),
+            self.host.clone(),
+        );
+        self.repl = repl;
+        self.file = Some(path.to_string());
+        self.record(&evaluated, block);
+    }
+
+    fn command(&mut self, index: usize, input: &Input, block: &mut String) {
+        assert_eq!(
+            input.lines.len(),
+            1,
+            "a command is one line: {:?}",
+            input.lines
+        );
+        match Lines::new().push(&input.lines[0]) {
+            Step::Command(Command::Type(expr)) => {
+                let typed = self.repl.type_of(&expr);
+                block.push_str(&eml_test_support::full_with_paths(
+                    &typed.files,
+                    &typed.diagnostics,
+                ));
+                if let Some(ty) = typed.ty {
+                    writeln!(block, "{expr} : {ty}").unwrap();
+                }
+            }
+            Step::Command(Command::Load(Some(path))) => self.load(index, &path, block),
+            Step::Command(Command::Load(None)) => {
+                self.replace_with_empty(index);
+                self.file = None;
+            }
+            Step::Command(Command::Reload) => match self.file.clone() {
+                Some(path) => self.load(index, &path, block),
+                None => writeln!(block, "no file to reload; use ':load'").unwrap(),
+            },
+            Step::Command(command @ (Command::Quit | Command::Help)) => {
+                panic!("a transcript does not use {command:?}")
+            }
+            Step::Error(message) => writeln!(block, "{message}").unwrap(),
+            step @ (Step::Read | Step::Eval(_)) => {
+                panic!("{:?} is not a command: {step:?}", input.lines[0])
+            }
+        }
+    }
+
+    fn record(&mut self, evaluated: &Evaluated, block: &mut String) {
         block.push_str(&eml_test_support::full_with_paths(
             &evaluated.files,
             &evaluated.diagnostics,
@@ -183,18 +282,55 @@ fn run(inputs: &[Input], root: &Path, debug_heap: bool) -> Transcript {
         match &evaluated.outcome {
             Outcome::Failed(error) => writeln!(block, "runtime error: {error}").unwrap(),
             Outcome::Broken(error) => {
-                broken = true;
+                self.broken = true;
                 writeln!(block, "runtime error (the session is broken): {error}").unwrap();
             }
             Outcome::Interrupted => writeln!(block, "interrupted").unwrap(),
             Outcome::Empty | Outcome::Accepted | Outcome::Rejected => {}
         }
+    }
+}
+
+/// `eml run` と同じ既定の上限で流す。止める理由のビットは `eval` が入力ごとに下ろすので、1つの `Control` を
+/// トランスクリプト全体で使う。`directory` は `<名前>/main.repl` の形のトランスクリプトかである。
+fn run(inputs: &[Input], root: &Path, directory: bool, debug_heap: bool) -> Transcript {
+    let (host, out) = capture_host(root.to_path_buf());
+    let config = RunConfig::default()
+        .with_debug_heap(debug_heap)
+        .with_control(Arc::new(Control::new(default_limits())));
+    let repl = Repl::new(&config, Box::new(FsProvider::new(root)), "", host.clone());
+    let mut runner = Runner {
+        config,
+        host,
+        root,
+        directory,
+        repl,
+        file: None,
+        closes: Vec::new(),
+        broken: false,
+    };
+    let mut read = 0;
+    let mut rendered = Vec::new();
+    for (index, input) in inputs.iter().enumerate() {
+        let mut block = input.echo();
+        let mut result = String::new();
+        if input.is_command() {
+            runner.command(index, input, &mut result);
+        } else {
+            let evaluated = runner.repl.eval(&input.submitted());
+            runner.record(&evaluated, &mut result);
+        }
+        let all = out.contents();
+        block.push_str(&all[read..]);
+        read = all.len();
+        block.push_str(&result);
         rendered.push(block);
     }
     Transcript {
         inputs: rendered,
-        close: repl.close().leaks,
-        broken,
+        closes: runner.closes,
+        close: runner.repl.close().leaks,
+        broken: runner.broken,
     }
 }
 
@@ -208,16 +344,18 @@ fn transcripts() {
     insta::glob!("repl", "**/*.repl", |path| {
         let suffix = classify(path);
         let inputs = parse_transcript(&fs::read_to_string(path).unwrap());
-        for input in &inputs {
+        // コマンドの行は `input_status` でなく `eml_cli::lines` が読むので、入力の終わりの規則を当てない
+        for input in inputs.iter().filter(|input| !input.is_command()) {
             assert_boundaries(&suffix, input);
         }
         let root = path.parent().expect("a transcript has a directory");
-        let checked = run(&inputs, root, true);
+        let directory = path.file_name().is_some_and(|name| name == "main.repl");
+        let checked = run(&inputs, root, directory, true);
         let mut settings = insta::Settings::clone_current();
         settings.set_snapshot_suffix(&suffix);
         settings.bind(|| insta::assert_snapshot!(checked.render()));
         if !checked.broken {
-            let fast = run(&inputs, root, false);
+            let fast = run(&inputs, root, directory, false);
             assert_eq!(
                 fast.inputs, checked.inputs,
                 "{suffix}: the fast mode printed or ended otherwise"
