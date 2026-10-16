@@ -192,7 +192,7 @@ main () =
 
 ### `eml_rt`
 
-- `Ctx::ev_find(effect: u16) -> Result<Option<Word>, HeapError>` を足す。`ev_lookup` と同じく `evv` をたどるが、見つからなくてもよい。見つかれば `dup` して返す。検査モードでは、形の違う節点に `BadEvidence` を返す。Verus で証明する。`RunStats` の `evidence_steps` は、`ev_lookup` と同じく見つかったときに数える
+- `Ctx::ev_find(effect: u16) -> Result<Option<Word>, HeapError>` を足す。`ev_lookup` と同じく `evv` をたどるが、見つからなくてもよい。見つかれば `dup` して返す。検査モードでは、形の違う節点に `BadEvidence` を返す。Verus で証明する。`RunStats` の `evidence_steps` は、`ev_lookup` と同じく検査モードでたどった節点ごとに数え、見つからなかったときもたどった分を数える
 - 文言から文字列を作る `fresh_string` を、安全な公開のメソッドにする (名前は計画で決める)。証明は今のものを使う。作った文字列のバイト数は、今と同じく `string_bytes_copied` に数える
 - `Fault` から `IOErrorKind` のタグを決める `Fault::io_error_kind(&self) -> Option<i64>` を、`verus!` の中の普通の `match` として置く。捕まえない `Fault` には `None` を返す。`verus!` の外に置ける安全な部分の一覧 ([オブジェクトモデル](../../spec/object-model.md) の「`unsafe` の核」) は変えない。タグの定数 (`IO_NOT_FOUND = 0` から `IO_OTHER = 4`) を `externs` に置き、`Bool` と `Ordering` のタグと同じく、`eml_vm` の `tags.rs` で Prelude の宣言の順と一致することを確かめる
 - `yield_abort` は、宛先が物体を指すことしか求めないので、ダミーの物体を宛先にできる。速いモードの前提の「呼ぶ側が参照を持つ」(`holds_args`) は、数の決まった物体にだけ効くので、不死のダミーの物体で満たせる見込みである。`yield_finish` が宛先を手放すのも、ダミーには何も起こさない。計画の最初の作業で、証明の上でこれを確かめる。満たせなければ、`exit` の中断を始める専用のメソッドを足して証明する
