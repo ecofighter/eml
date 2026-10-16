@@ -80,6 +80,22 @@ valgrind が arm64 の macOS で動かないので、callgrind は使わない�
 | `read-all` | メモリの Host の 1 MiB のファイルを、開いて全部読んで閉じることを、100 回繰り返す。Host は長さの見込みを返す |
 | `read-all-unsized` | 同じことを、長さの見込みを返さない Host で行う |
 
+## スクリプトの計測
+
+S12d の5本のスクリプト (`tests/ui/run/scripts/`) のうち、入力の大きさが効く4本を、実際の大きさの入力で Python と比べる。目標は、数十 MB のログを数秒以内に処理することである。`bench/` の基準のプログラムと違い、命令の数でなく実時間と最大の常駐メモリを見る。比べる相手の Python の実行が、命令の数で比べられる形でないためである。
+
+```sh
+bench/scripts.sh
+```
+
+- 入力は `bench/scripts/gen.py` が種を固定して生成する、約 30 MB のアクセスログ (`access.log`) と CSV (`data.csv`) で、`target/bench-scripts/` に置く。すでにあれば作り直さない
+- 比べる Python の版は `bench/scripts/<名前>.py` で、Python の標準ライブラリで普通に書いたものである。速さのために手で凝ったものにはしない
+- 各計測の前に `bench/scripts/compare.sh` で、eml と Python の標準出力と終了コード (と書き出したファイル) が一致することを確かめる。一致しなければ止まる
+- release ビルドの `eml run` (VM の速いモード) と `python3 -I` を3回ずつ走らせ、`/usr/bin/time -l` の実時間と最大の常駐メモリの中央値を出す。`bench/run.sh` と同じく macOS でだけ動く
+- 計測は `wc` (ログを標準入力から)、`grep -n` (約 0.5% の行が一致するパターン)、`logstat` (1行ずつ読む)、`logstat --whole` (全体を読んでから分ける)、`csv2jsonl` (3つの列を選ぶ) の5つである
+
+`bench/scripts/compare.sh` は、UI テストの付属のファイルで出力を確かめるとき (`compare.sh --fixture <名前>`) にも使う ([テスト戦略](testing.md) の「分類」)。
+
 ## 記録
 
 ### S4a (基準)
@@ -913,3 +929,32 @@ REPL の結果の表示器を足したとき、`eml run` の経路では VM の 
 実行の分は、どのプログラムでも差が 0.1% 未満で、`fib`、`list`、`loop`、`state` はわずかに減り、`tree` は約0.03%増えた。`bench/` のプログラムは std の補助関数を使わず、ローカル関数も書かないので、実行する命令列は変わらない。差は測定の揺れの範囲である。仕事の回数 (`crates/eml_vm/tests/bench.rs` の `RunStats`) も変わらない。
 
 `empty` は約28万 (約0.7%) 減った。`empty` は起動から変換までの費用で、実行の分には入らない。この減りの原因は調べていない。
+
+### S12d (スクリプト)
+
+5本のスクリプトを書いたときに、`bench/scripts.sh` で4本を Python と比べた (上の「スクリプトの計測」)。
+
+- 機種: Mac16,1 (Apple M4)
+- OS: macOS 27.0.1 (26A434)
+- rustc: rustc 1.98.1 (48a229cea 2026-09-01)
+- Python: Python 3.14.7
+- コミット: 9358fbe
+- 入力: access.log 30 MB (607741 行)、data.csv 30 MB
+
+| 計測 | eml の実時間 (s) | Python の実時間 (s) | 比 (eml / Python) | eml の最大 RSS (MB) | Python の最大 RSS (MB) |
+|---|---:|---:|---:|---:|---:|
+| `wc` | 1.60 | 0.08 | 20.0 | 70 | 227 |
+| `grep -n` | 0.37 | 0.14 | 2.6 | 8 | 15 |
+| `logstat` | 1.77 | 0.53 | 3.3 | 8 | 38 |
+| `logstat --whole` | 1.77 | 0.47 | 3.8 | 124 | 194 |
+| `csv2jsonl` | 3.88 | 2.11 | 1.8 | 121 | 385 |
+
+どの計測も 30 MB を4秒以内に処理し、目標 (数十 MB を数秒以内) には届いた。Python との比は 1.8〜20 倍である。
+
+- `wc` は、1バイトごとに `String.byte_at` を呼んで空白を判定する eml のループで、約 3,100 万回まわる。`bench/loop.em` の1反復は約330命令なので、反復の費用がそのまま効いている。Python の版は C で書かれた `bytes.count` と `bytes.split` に任せている
+- `grep -n` は、1行の読みと部分文字列の検索が extern (`Stdin.read_line`、`String.find_from`) なので、eml のループは行の数 (約61万回) しかまわらない。比は 2.6 倍にとどまる
+- `logstat` は、1行ごとに `String.split` と `String.to_int` (どちらも eml で書いた std の関数) と木の更新を通る。1行ずつ読むと常駐メモリは 8 MB で、`--whole` は入力全体の文字列と行のリストを持つので 124 MB になる。実時間は同じである
+- `csv2jsonl` は1バイトごとのループを含むが、Python の版も `csv` と `json` で欄ごとの処理が重いので、比は最も小さい
+
+S12d では直さない。どう扱うかは S13 で決める ([ロードマップ](../future/roadmap.md) の「S13 実例による判断」)。
+
