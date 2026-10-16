@@ -5,6 +5,8 @@ input_file: crates/eml_cli/tests/repl/commands/load/main.repl
 ---
 > let k = 5
 > :load shapes.em
+E4004 shapes.em 16:5 unreachable `match` arm
+  shapes.em 16:5 the arms above already match every value of this pattern
 --- close (load) ---
 no leaks
 > area (Circle 2)
@@ -22,6 +24,8 @@ runtime error: division by zero
   at shapes.em:11:13
 > let j = 1
 > :reload
+E4004 shapes.em 16:5 unreachable `match` arm
+  shapes.em 16:5 the arms above already match every value of this pattern
 --- close (load) ---
 no leaks
 > j

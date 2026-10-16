@@ -9,3 +9,8 @@ area s = match s with
 
 half : Int -> Int
 half n = 10 / n
+
+same : Int -> Int
+same n = match n with
+  | x -> x
+  | 0 -> 0
