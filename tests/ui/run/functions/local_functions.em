@@ -100,6 +100,11 @@ walk n =
   let each k = if k == 0 then () else walk (k - 1)
   if n == 0 then println "x" else each n
 
+annotated_parameter : Int -> Int
+annotated_parameter n =
+  let go (acc : Int) k = if k == 0 then acc else go (acc + k) (k - 1)
+  go 0 n
+
 main : Unit -> <IO> Unit
 main () =
   println (show (sum_to 100000))
@@ -128,3 +133,4 @@ main () =
   let x = x + 1
   println (show x)
   walk 3
+  println (show (annotated_parameter 4))

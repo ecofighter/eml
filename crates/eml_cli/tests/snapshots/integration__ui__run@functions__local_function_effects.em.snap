@@ -11,4 +11,5 @@ input_file: tests/ui/run/functions/local_function_effects.em
 6
 2
 12
+22
 --- stderr ---

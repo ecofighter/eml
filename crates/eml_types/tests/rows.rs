@@ -251,3 +251,21 @@ fn a_row_shared_with_a_parameter_stays_open() {
       g#1 : Unit -> <_> _
     ");
 }
+
+#[test]
+fn a_rigid_tail_in_a_local_function_is_order_dependent() {
+    // 現在の挙動の固定。本体が引数 `h` の row (rigid な `e`) を呼ぶと末尾が rigid になり、閉じられない。
+    // その後の `ask ()` は row を広げられず、`let` で束縛したラムダと同じく呼ぶ順序で通るかが決まる
+    let head =
+        "effect Ask where\n  ask : Unit -> Int\n\nf : (Unit -> <e> Int) -> <Ask | e> Int\nf h =\n";
+    let rejected = format!("{head}  let go k = h () + ask () + k\n  go 1");
+    let accepted = format!("{head}  let go k = ask () + h () + k\n  go 1");
+    let rejected = check_text(&rejected);
+    assert!(rejected.contains("E2002"), "{rejected}");
+    assert!(
+        rejected.contains("`ask` performs `Ask`, which this lambda does not allow"),
+        "{rejected}"
+    );
+    let accepted = check_text(&accepted);
+    assert!(!accepted.contains("E2"), "{accepted}");
+}

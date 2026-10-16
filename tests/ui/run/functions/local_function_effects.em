@@ -47,6 +47,13 @@ pure_under_multi () =
   Fs.close f
   println (show b)
 
+recursive_resuming_k_twice : Unit -> Int
+recursive_resuming_k_twice () =
+  handle (if choose () then 1 else 10) with
+    | choose () k ->
+        let both n = if n == 0 then 0 else k True + k False + both (n - 1)
+        both 2
+
 main : Unit -> <IO> Unit
 main () =
   inside_and_outside ()
@@ -54,3 +61,4 @@ main () =
   println (show (nested_handlers 3))
   println (show (clause_captures_k ()))
   pure_under_multi ()
+  println (show (recursive_resuming_k_twice ()))

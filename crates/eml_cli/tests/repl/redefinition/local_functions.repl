@@ -1,0 +1,13 @@
+# 局所関数を持つ関数を定義し直すと、新しい本体の局所関数が使われる
+> f : Int -> Int
+. f n =
+.   let go k = k + 1
+.   go n
+.
+> f 1
+> f : Int -> Int
+. f n =
+.   let go k acc = if k == 0 then acc else go (k - 1) (acc + k)
+.   go n 0
+.
+> f 4
