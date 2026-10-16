@@ -1,0 +1,13 @@
+---
+source: crates/eml_cli/tests/ui.rs
+expression: "format!(\"--- stdout ---\\n{stdout}--- stderr ---\\n{diagnostics}{stderr}{written}{exit}\")"
+input_file: tests/ui/run/scripts/csv2jsonl/main.em
+---
+--- stdout ---
+--- stderr ---
+--- written: out.jsonl ---
+{"name":"Alice","note":"plain"}
+{"name":"Bob, Jr.","note":"says \"hi\""}
+{"name":"山田","note":"two\nlines"}
+{"name":"tab\there","note":"ctl\u0001 and \\ back"}
+{"name":"","note":"x\"y"}
