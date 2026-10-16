@@ -327,132 +327,27 @@ fn std_public_functions_keep_their_lir() {
     fn "F6"(xs.0: tobj) -> int {
       tail call "F7"(0, xs.0)
     }
-    fn "F5"($0.0: int, $1.1: tobj) -> int {
-      switch $1.1 Prelude.List { #0 -> b1, #1(x.2: tobj, rest.3: tobj) -> b2 }
-    b1:
-      decref $1.1
-      return $0.0
-    b2:
-      let t.4: int = extern Prelude.+($0.0, 1)
-      release $1.1 Prelude.List #1(_, rest.3)
-      tail call "F5"(t.4, rest.3)
-    }
-    fn "F7"($0.0: int, $1.1: tobj) -> int {
-      switch $1.1 Prelude.List { #0 -> b1, #1(x.2: obj, rest.3: tobj) -> b2 }
-    b1:
-      decref $1.1
-      return $0.0
-    b2:
-      let t.4: int = extern Prelude.+($0.0, 1)
-      release $1.1 Prelude.List #1(_, rest.3)
-      tail call "F7"(t.4, rest.3)
-    }
     yields fn "F8"(f.0: tobj, xs.1: tobj) -> tobj {
       tail call "F9"(f.0, #0, xs.1)
     }
-    yields fn "F9"($0.0: tobj, $1.1: tobj, $2.2: tobj) -> tobj {
-      switch $2.2 Prelude.List { #0 -> b1, #1(x.3: tobj, rest.4: tobj) -> b2 }
-    b1:
-      decref $0.0
-      decref $2.2
-      tail call "F0"($1.1)
-    b2:
-      release $2.2 Prelude.List #1(x.3, rest.4)
-      dup $0.0
-      let t.5: tobj = yields apply $0.0(x.3)
-      let y.6: int = prim yielding()
-      switch y.6 { 0 -> b4, _ -> b3 }
-    b3:
-      decref t.5
-      let k.7: tobj poly = prim yield_cont_take()
-      let c.8: tobj = closure "F10"($0.0, $1.1, rest.4)
-      let k.9: tobj poly = closure compose$(k.7, c.8)
-      let u.10: unit = prim yield_cont_set(k.9)
-      let d.11: obj poly = prim dummy()
-      return d.11
-    b4:
-      let d.12: tobj = con Prelude.List #1(t.5, $1.1)
-      tail call "F9"($0.0, d.12, rest.4)
+    yields fn "F10"(p.0: tobj, xs.1: tobj) -> tobj {
+      tail call "F11"(p.0, #0, xs.1)
     }
-    yields fn "F11"(p.0: tobj, xs.1: tobj) -> tobj {
-      tail call "F12"(p.0, #0, xs.1)
+    yields fn "F12"(f.0: tobj, xs.1: tobj) -> tobj {
+      tail call "F13"(f.0, #0, xs.1)
     }
-    yields fn "F12"($0.0: tobj, $1.1: tobj, $2.2: tobj) -> tobj {
-      switch $2.2 Prelude.List { #0 -> b1, #1(x.3: tobj, rest.4: tobj) -> b2 }
-    b1:
-      decref $0.0
-      decref $2.2
-      tail call "F0"($1.1)
-    b2:
-      release $2.2 Prelude.List #1(x.3, rest.4)
-      dup $0.0
-      dup x.3
-      let t.5: tobj = yields apply $0.0(x.3)
-      let t.6: enum = unbox t.5
-      decref t.5
-      let y.7: int = prim yielding()
-      switch y.7 { 0 -> b4, _ -> b3 }
-    b3:
-      let k.8: tobj poly = prim yield_cont_take()
-      let c.9: tobj = closure "F13"($0.0, $1.1, x.3, rest.4)
-      let k.10: tobj poly = closure compose$(k.8, c.9)
-      let u.11: unit = prim yield_cont_set(k.10)
-      let d.12: obj poly = prim dummy()
-      return d.12
-    b4:
-      switch t.6 Prelude.Bool { #0 -> b5, #1 -> b6 }
-    b5:
-      decref x.3
-      tail call "F12"($0.0, $1.1, rest.4)
-    b6:
-      let d.13: tobj = con Prelude.List #1(x.3, $1.1)
-      tail call "F12"($0.0, d.13, rest.4)
+    fn F14(prefix.0: obj, s.1: obj) -> enum {
+      tail call F15(prefix.0, s.1, 0)
     }
-    yields fn "F14"(f.0: tobj, xs.1: tobj) -> tobj {
-      tail call "F15"(f.0, #0, xs.1)
-    }
-    yields fn "F15"($0.0: tobj, $1.1: tobj, $2.2: tobj) -> tobj {
-      switch $2.2 Prelude.List { #0 -> b1, #1(x.3: tobj, rest.4: tobj) -> b2 }
-    b1:
-      decref $0.0
-      decref $2.2
-      tail call "F0"($1.1)
-    b2:
-      release $2.2 Prelude.List #1(x.3, rest.4)
-      dup $0.0
-      let t.5: tobj = yields apply $0.0(x.3)
-      let y.6: int = prim yielding()
-      switch y.6 { 0 -> b4, _ -> b3 }
-    b3:
-      decref t.5
-      let k.7: tobj poly = prim yield_cont_take()
-      let c.8: tobj = closure "F16"($0.0, $1.1, rest.4)
-      let k.9: tobj poly = closure compose$(k.7, c.8)
-      let u.10: unit = prim yield_cont_set(k.9)
-      let d.11: obj poly = prim dummy()
-      return d.11
-    b4:
-      switch t.5 Prelude.Option { #0 -> b5, #1(y.12: tobj) -> b6 }
-    b5:
-      decref t.5
-      tail call "F15"($0.0, $1.1, rest.4)
-    b6:
-      release t.5 Prelude.Option #1(y.12)
-      let d.13: tobj = con Prelude.List #1(y.12, $1.1)
-      tail call "F15"($0.0, d.13, rest.4)
-    }
-    fn F17(prefix.0: obj, s.1: obj) -> enum {
-      tail call F18(prefix.0, s.1, 0)
-    }
-    fn F19(suffix.0: obj, s.1: obj) -> enum {
+    fn F16(suffix.0: obj, s.1: obj) -> enum {
       dup s.1
       let t.2: int = extern Std.String.byte_length(s.1)
       dup suffix.0
       let t.3: int = extern Std.String.byte_length(suffix.0)
       let t.4: int = extern Prelude.-(t.2, t.3)
-      tail call F18(suffix.0, s.1, t.4)
+      tail call F15(suffix.0, s.1, t.4)
     }
-    fn F18(needle.0: obj, s.1: obj, at.2: int) -> enum {
+    fn F15(needle.0: obj, s.1: obj, at.2: int) -> enum {
       dup needle.0
       let t.3: int = extern Std.String.byte_length(needle.0)
       let t.4: enum = extern "Prelude.Ord Int.>="(at.2, 0)
@@ -472,95 +367,24 @@ fn std_public_functions_keep_their_lir() {
       decref s.1
       return #0
     b4:
-      tail call F20(needle.0, s.1, at.2, 0, t.3)
+      tail call F17(needle.0, s.1, at.2, t.3, 0)
     }
-    fn F20(needle.0: obj, s.1: obj, at.2: int, i.3: int, n.4: int) -> enum {
-      let t.5: enum = extern "Prelude.Ord Int.>="(i.3, n.4)
-      switch t.5 Prelude.Bool { #0 -> b1, #1 -> b2 }
-    b1:
-      dup needle.0
-      let t.6: int = extern Std.String.byte_at(i.3, needle.0)
-      let t.7: int = extern Prelude.+(at.2, i.3)
-      dup s.1
-      let t.8: int = extern Std.String.byte_at(t.7, s.1)
-      let t.9: enum = extern "Prelude.Eq Int.=="(t.6, t.8)
-      switch t.9 Prelude.Bool { #0 -> b3, #1 -> b4 }
-    b2:
-      decref needle.0
-      decref s.1
-      return #1
-    b3:
-      decref needle.0
-      decref s.1
-      return #0
-    b4:
-      let t.10: int = extern Prelude.+(i.3, 1)
-      tail call F20(needle.0, s.1, at.2, t.10, n.4)
-    }
-    fn F21(sep.0: obj, s.1: obj) -> tobj {
+    fn F18(sep.0: obj, s.1: obj) -> tobj {
       dup sep.0
       let t.2: int = extern Std.String.byte_length(sep.0)
       let t.3: enum = extern "Prelude.Eq Int.=="(t.2, 0)
       switch t.3 Prelude.Bool { #0 -> b1, #1 -> b2 }
     b1:
-      tail call F22(sep.0, s.1, 0, #0)
+      tail call F19(sep.0, s.1, 0, #0)
     b2:
       decref sep.0
       let d.4: tobj = con Prelude.List #1(s.1, #0)
       return d.4
     }
-    fn F22(sep.0: obj, s.1: obj, at.2: int, acc.3: tobj) -> tobj {
-      dup sep.0
-      dup s.1
-      let t.4: int = extern Std.String.find_from(sep.0, at.2, s.1)
-      let t.5: enum = extern "Prelude.Ord Int.<"(t.4, 0)
-      switch t.5 Prelude.Bool { #0 -> b1, #1 -> b2 }
-    b1:
-      dup sep.0
-      let t.6: int = extern Std.String.byte_length(sep.0)
-      let t.7: int = extern Prelude.+(t.4, t.6)
-      dup s.1
-      let t.8: obj = extern Std.String.slice(at.2, t.4, s.1)
-      let d.9: tobj = con Prelude.List #1(t.8, acc.3)
-      tail call F22(sep.0, s.1, t.7, d.9)
-    b2:
-      decref sep.0
-      dup s.1
-      let t.10: int = extern Std.String.byte_length(s.1)
-      let t.11: obj = extern Std.String.slice(at.2, t.10, s.1)
-      let d.12: tobj = con Prelude.List #1(t.11, acc.3)
-      tail call "F2"(d.12)
+    fn F20(s.0: obj) -> tobj {
+      tail call F21(s.0, 0, #0)
     }
-    fn F23(s.0: obj) -> tobj {
-      tail call F24(s.0, 0, #0)
-    }
-    fn F24(s.0: obj, at.1: int, acc.2: tobj) -> tobj {
-      dup s.0
-      let t.3: int = extern Std.String.byte_length(s.0)
-      let t.4: enum = extern "Prelude.Ord Int.>="(at.1, t.3)
-      switch t.4 Prelude.Bool { #0 -> b1, #1 -> b2 }
-    b1:
-      let s.5: obj = const "\n"
-      dup s.0
-      let t.6: int = extern Std.String.find_from(s.5, at.1, s.0)
-      let t.7: enum = extern "Prelude.Ord Int.<"(t.6, 0)
-      switch t.7 Prelude.Bool { #0 -> b3, #1 -> b4 }
-    b2:
-      decref s.0
-      tail call "F2"(acc.2)
-    b3:
-      let t.8: int = extern Prelude.+(t.6, 1)
-      dup s.0
-      let t.9: obj = extern Std.String.slice(at.1, t.6, s.0)
-      let t.10: obj = call F25(t.9)
-      let d.11: tobj = con Prelude.List #1(t.10, acc.2)
-      tail call F24(s.0, t.8, d.11)
-    b4:
-      let t.12: obj = extern Std.String.slice(at.1, t.3, s.0)
-      let d.13: tobj = con Prelude.List #1(t.12, acc.2)
-      tail call "F2"(d.13)
-    }
-    fn F25(line.0: obj) -> obj {
+    fn F22(line.0: obj) -> obj {
       dup line.0
       let t.1: int = extern Std.String.byte_length(line.0)
       let t.2: enum = extern "Prelude.Ord Int.>"(t.1, 0)
@@ -582,41 +406,28 @@ fn std_public_functions_keep_their_lir() {
     b5:
       return line.0
     }
-    fn F26($0.0: obj, $1.1: tobj) -> obj {
-      switch $1.1 Prelude.List { #0 -> b1, #1(x.2: obj, rest.3: tobj) -> b2 }
+    fn F23(sep.0: obj, xs.1: tobj) -> obj {
+      switch xs.1 Prelude.List { #0 -> b1, #1(x.2: obj, rest.3: tobj) -> b2 }
     b1:
-      decref $0.0
-      decref $1.1
+      decref sep.0
+      decref xs.1
       let s.4: obj = const ""
       return s.4
     b2:
-      release $1.1 Prelude.List #1(x.2, rest.3)
-      tail call F27($0.0, x.2, rest.3)
+      release xs.1 Prelude.List #1(x.2, rest.3)
+      tail call F24(sep.0, x.2, rest.3)
     }
-    fn F27($0.0: obj, $1.1: obj, $2.2: tobj) -> obj {
-      switch $2.2 Prelude.List { #0 -> b1, #1(x.3: obj, rest.4: tobj) -> b2 }
-    b1:
-      decref $0.0
-      decref $2.2
-      return $1.1
-    b2:
-      dup $0.0
-      let t.5: obj = extern Prelude.++($1.1, $0.0)
-      release $2.2 Prelude.List #1(x.3, rest.4)
-      let t.6: obj = extern Prelude.++(t.5, x.3)
-      tail call F27($0.0, t.6, rest.4)
-    }
-    fn F28(s.0: obj) -> obj {
+    fn F25(s.0: obj) -> obj {
       dup s.0
       let t.1: int = extern Std.String.byte_length(s.0)
       dup s.0
-      let t.2: int = call F29(s.0, 0, t.1)
+      let t.2: int = call F26(s.0, t.1, 0)
       dup s.0
-      let t.3: int = call F30(s.0, t.2, t.1)
+      let t.3: int = call F27(s.0, t.2, t.1)
       let t.4: obj = extern Std.String.slice(t.2, t.3, s.0)
       return t.4
     }
-    fn F31(b.0: int) -> enum {
+    fn F28(b.0: int) -> enum {
       let t.1: enum = extern "Prelude.Eq Int.=="(b.0, 32)
       switch t.1 Prelude.Bool { #0 -> b1, #1 -> b2 }
     b1:
@@ -630,48 +441,7 @@ fn std_public_functions_keep_their_lir() {
       let t.3: enum = extern "Prelude.Ord Int.<="(b.0, 13)
       return t.3
     }
-    fn F29(s.0: obj, i.1: int, len.2: int) -> int {
-      let t.3: enum = extern "Prelude.Ord Int.<"(i.1, len.2)
-      switch t.3 Prelude.Bool { #0 -> b1, #1 -> b2 }
-    b1:
-      decref s.0
-      jump b5()
-    b2:
-      dup s.0
-      let t.4: int = extern Std.String.byte_at(i.1, s.0)
-      let t.5: enum = call F31(t.4)
-      switch t.5 Prelude.Bool { #0 -> b3, #1 -> b4 }
-    b3:
-      decref s.0
-      jump b5()
-    b4:
-      let t.6: int = extern Prelude.+(i.1, 1)
-      tail call F29(s.0, t.6, len.2)
-    b5:
-      return i.1
-    }
-    fn F30(s.0: obj, start.1: int, stop.2: int) -> int {
-      let t.3: enum = extern "Prelude.Ord Int.>"(stop.2, start.1)
-      switch t.3 Prelude.Bool { #0 -> b1, #1 -> b2 }
-    b1:
-      decref s.0
-      jump b5()
-    b2:
-      let t.4: int = extern Prelude.-(stop.2, 1)
-      dup s.0
-      let t.5: int = extern Std.String.byte_at(t.4, s.0)
-      let t.6: enum = call F31(t.5)
-      switch t.6 Prelude.Bool { #0 -> b3, #1 -> b4 }
-    b3:
-      decref s.0
-      jump b5()
-    b4:
-      let t.7: int = extern Prelude.-(stop.2, 1)
-      tail call F30(s.0, start.1, t.7)
-    b5:
-      return stop.2
-    }
-    fn F32(s.0: obj) -> tobj {
+    fn F29(s.0: obj) -> tobj {
       dup s.0
       let t.1: int = extern Std.String.byte_length(s.0)
       let t.2: enum = extern "Prelude.Ord Int.>"(t.1, 0)
@@ -701,17 +471,252 @@ fn std_public_functions_keep_their_lir() {
       switch t.8 Prelude.Bool { #0 -> b10, #1 -> b11 }
     b10:
       let t.9: enum = extern "Prelude.Eq Int.=="(t.4, 45)
-      tail call F33(s.0, t.7, t.1, t.9, 0)
+      tail call F30(s.0, t.1, t.7, t.9, 0)
     b11:
       decref s.0
       return #0
     }
-    fn F33(s.0: obj, i.1: int, len.2: int, negative.3: enum, acc.4: int) -> tobj {
-      let t.5: enum = extern "Prelude.Ord Int.>="(i.1, len.2)
+    fn F31() -> int {
+      let t.0: int = extern Prelude.-(0, 9223372036854775807)
+      let t.1: int = extern Prelude.-(t.0, 1)
+      return t.1
+    }
+    fn "F5"(n.0: int, ys.1: tobj) -> int {
+      switch ys.1 Prelude.List { #0 -> b1, #1(x.2: tobj, rest.3: tobj) -> b2 }
+    b1:
+      decref ys.1
+      return n.0
+    b2:
+      let t.4: int = extern Prelude.+(n.0, 1)
+      release ys.1 Prelude.List #1(_, rest.3)
+      tail call "F5"(t.4, rest.3)
+    }
+    fn "F7"(n.0: int, ys.1: tobj) -> int {
+      switch ys.1 Prelude.List { #0 -> b1, #1(x.2: obj, rest.3: tobj) -> b2 }
+    b1:
+      decref ys.1
+      return n.0
+    b2:
+      let t.4: int = extern Prelude.+(n.0, 1)
+      release ys.1 Prelude.List #1(_, rest.3)
+      tail call "F7"(t.4, rest.3)
+    }
+    yields fn "F9"(f.0: tobj, acc.1: tobj, ys.2: tobj) -> tobj {
+      switch ys.2 Prelude.List { #0 -> b1, #1(x.3: tobj, rest.4: tobj) -> b2 }
+    b1:
+      decref f.0
+      decref ys.2
+      tail call "F0"(acc.1)
+    b2:
+      release ys.2 Prelude.List #1(x.3, rest.4)
+      dup f.0
+      let t.5: tobj = yields apply f.0(x.3)
+      let y.6: int = prim yielding()
+      switch y.6 { 0 -> b4, _ -> b3 }
+    b3:
+      decref t.5
+      let k.7: tobj poly = prim yield_cont_take()
+      let c.8: tobj = closure "F32"(f.0, acc.1, rest.4)
+      let k.9: tobj poly = closure compose$(k.7, c.8)
+      let u.10: unit = prim yield_cont_set(k.9)
+      let d.11: obj poly = prim dummy()
+      return d.11
+    b4:
+      let d.12: tobj = con Prelude.List #1(t.5, acc.1)
+      tail call "F9"(f.0, d.12, rest.4)
+    }
+    yields fn "F11"(p.0: tobj, acc.1: tobj, ys.2: tobj) -> tobj {
+      switch ys.2 Prelude.List { #0 -> b1, #1(x.3: tobj, rest.4: tobj) -> b2 }
+    b1:
+      decref p.0
+      decref ys.2
+      tail call "F0"(acc.1)
+    b2:
+      release ys.2 Prelude.List #1(x.3, rest.4)
+      dup p.0
+      dup x.3
+      let t.5: tobj = yields apply p.0(x.3)
+      let t.6: enum = unbox t.5
+      decref t.5
+      let y.7: int = prim yielding()
+      switch y.7 { 0 -> b4, _ -> b3 }
+    b3:
+      let k.8: tobj poly = prim yield_cont_take()
+      let c.9: tobj = closure "F33"(p.0, acc.1, x.3, rest.4)
+      let k.10: tobj poly = closure compose$(k.8, c.9)
+      let u.11: unit = prim yield_cont_set(k.10)
+      let d.12: obj poly = prim dummy()
+      return d.12
+    b4:
+      switch t.6 Prelude.Bool { #0 -> b5, #1 -> b6 }
+    b5:
+      decref x.3
+      tail call "F11"(p.0, acc.1, rest.4)
+    b6:
+      let d.13: tobj = con Prelude.List #1(x.3, acc.1)
+      tail call "F11"(p.0, d.13, rest.4)
+    }
+    yields fn "F13"(f.0: tobj, acc.1: tobj, ys.2: tobj) -> tobj {
+      switch ys.2 Prelude.List { #0 -> b1, #1(x.3: tobj, rest.4: tobj) -> b2 }
+    b1:
+      decref f.0
+      decref ys.2
+      tail call "F0"(acc.1)
+    b2:
+      release ys.2 Prelude.List #1(x.3, rest.4)
+      dup f.0
+      let t.5: tobj = yields apply f.0(x.3)
+      let y.6: int = prim yielding()
+      switch y.6 { 0 -> b4, _ -> b3 }
+    b3:
+      decref t.5
+      let k.7: tobj poly = prim yield_cont_take()
+      let c.8: tobj = closure "F34"(f.0, acc.1, rest.4)
+      let k.9: tobj poly = closure compose$(k.7, c.8)
+      let u.10: unit = prim yield_cont_set(k.9)
+      let d.11: obj poly = prim dummy()
+      return d.11
+    b4:
+      switch t.5 Prelude.Option { #0 -> b5, #1(y.12: tobj) -> b6 }
+    b5:
+      decref t.5
+      tail call "F13"(f.0, acc.1, rest.4)
+    b6:
+      release t.5 Prelude.Option #1(y.12)
+      let d.13: tobj = con Prelude.List #1(y.12, acc.1)
+      tail call "F13"(f.0, d.13, rest.4)
+    }
+    fn F17(needle.0: obj, s.1: obj, at.2: int, n.3: int, i.4: int) -> enum {
+      let t.5: enum = extern "Prelude.Ord Int.>="(i.4, n.3)
+      switch t.5 Prelude.Bool { #0 -> b1, #1 -> b2 }
+    b1:
+      dup needle.0
+      let t.6: int = extern Std.String.byte_at(i.4, needle.0)
+      let t.7: int = extern Prelude.+(at.2, i.4)
+      dup s.1
+      let t.8: int = extern Std.String.byte_at(t.7, s.1)
+      let t.9: enum = extern "Prelude.Eq Int.=="(t.6, t.8)
+      switch t.9 Prelude.Bool { #0 -> b3, #1 -> b4 }
+    b2:
+      decref needle.0
+      decref s.1
+      return #1
+    b3:
+      decref needle.0
+      decref s.1
+      return #0
+    b4:
+      let t.10: int = extern Prelude.+(i.4, 1)
+      tail call F17(needle.0, s.1, at.2, n.3, t.10)
+    }
+    fn F19(sep.0: obj, s.1: obj, at.2: int, acc.3: tobj) -> tobj {
+      dup sep.0
+      dup s.1
+      let t.4: int = extern Std.String.find_from(sep.0, at.2, s.1)
+      let t.5: enum = extern "Prelude.Ord Int.<"(t.4, 0)
+      switch t.5 Prelude.Bool { #0 -> b1, #1 -> b2 }
+    b1:
+      dup sep.0
+      let t.6: int = extern Std.String.byte_length(sep.0)
+      let t.7: int = extern Prelude.+(t.4, t.6)
+      dup s.1
+      let t.8: obj = extern Std.String.slice(at.2, t.4, s.1)
+      let d.9: tobj = con Prelude.List #1(t.8, acc.3)
+      tail call F19(sep.0, s.1, t.7, d.9)
+    b2:
+      decref sep.0
+      dup s.1
+      let t.10: int = extern Std.String.byte_length(s.1)
+      let t.11: obj = extern Std.String.slice(at.2, t.10, s.1)
+      let d.12: tobj = con Prelude.List #1(t.11, acc.3)
+      tail call "F2"(d.12)
+    }
+    fn F21(s.0: obj, at.1: int, acc.2: tobj) -> tobj {
+      dup s.0
+      let t.3: int = extern Std.String.byte_length(s.0)
+      let t.4: enum = extern "Prelude.Ord Int.>="(at.1, t.3)
+      switch t.4 Prelude.Bool { #0 -> b1, #1 -> b2 }
+    b1:
+      let s.5: obj = const "\n"
+      dup s.0
+      let t.6: int = extern Std.String.find_from(s.5, at.1, s.0)
+      let t.7: enum = extern "Prelude.Ord Int.<"(t.6, 0)
+      switch t.7 Prelude.Bool { #0 -> b3, #1 -> b4 }
+    b2:
+      decref s.0
+      tail call "F2"(acc.2)
+    b3:
+      let t.8: int = extern Prelude.+(t.6, 1)
+      dup s.0
+      let t.9: obj = extern Std.String.slice(at.1, t.6, s.0)
+      let t.10: obj = call F22(t.9)
+      let d.11: tobj = con Prelude.List #1(t.10, acc.2)
+      tail call F21(s.0, t.8, d.11)
+    b4:
+      let t.12: obj = extern Std.String.slice(at.1, t.3, s.0)
+      let d.13: tobj = con Prelude.List #1(t.12, acc.2)
+      tail call "F2"(d.13)
+    }
+    fn F24(sep.0: obj, acc.1: obj, ys.2: tobj) -> obj {
+      switch ys.2 Prelude.List { #0 -> b1, #1(x.3: obj, rest.4: tobj) -> b2 }
+    b1:
+      decref sep.0
+      decref ys.2
+      return acc.1
+    b2:
+      dup sep.0
+      let t.5: obj = extern Prelude.++(acc.1, sep.0)
+      release ys.2 Prelude.List #1(x.3, rest.4)
+      let t.6: obj = extern Prelude.++(t.5, x.3)
+      tail call F24(sep.0, t.6, rest.4)
+    }
+    fn F26(s.0: obj, len.1: int, i.2: int) -> int {
+      let t.3: enum = extern "Prelude.Ord Int.<"(i.2, len.1)
+      switch t.3 Prelude.Bool { #0 -> b1, #1 -> b2 }
+    b1:
+      decref s.0
+      jump b5()
+    b2:
+      dup s.0
+      let t.4: int = extern Std.String.byte_at(i.2, s.0)
+      let t.5: enum = call F28(t.4)
+      switch t.5 Prelude.Bool { #0 -> b3, #1 -> b4 }
+    b3:
+      decref s.0
+      jump b5()
+    b4:
+      let t.6: int = extern Prelude.+(i.2, 1)
+      tail call F26(s.0, len.1, t.6)
+    b5:
+      return i.2
+    }
+    fn F27(s.0: obj, start.1: int, stop.2: int) -> int {
+      let t.3: enum = extern "Prelude.Ord Int.>"(stop.2, start.1)
+      switch t.3 Prelude.Bool { #0 -> b1, #1 -> b2 }
+    b1:
+      decref s.0
+      jump b5()
+    b2:
+      let t.4: int = extern Prelude.-(stop.2, 1)
+      dup s.0
+      let t.5: int = extern Std.String.byte_at(t.4, s.0)
+      let t.6: enum = call F28(t.5)
+      switch t.6 Prelude.Bool { #0 -> b3, #1 -> b4 }
+    b3:
+      decref s.0
+      jump b5()
+    b4:
+      let t.7: int = extern Prelude.-(stop.2, 1)
+      tail call F27(s.0, start.1, t.7)
+    b5:
+      return stop.2
+    }
+    fn F30(s.0: obj, len.1: int, i.2: int, negative.3: enum, acc.4: int) -> tobj {
+      let t.5: enum = extern "Prelude.Ord Int.>="(i.2, len.1)
       switch t.5 Prelude.Bool { #0 -> b1, #1 -> b2 }
     b1:
       dup s.0
-      let t.6: int = extern Std.String.byte_at(i.1, s.0)
+      let t.6: int = extern Std.String.byte_at(i.2, s.0)
       let t.7: int = extern Prelude.-(t.6, 48)
       let t.8: enum = extern "Prelude.Ord Int.<"(t.7, 0)
       switch t.8 Prelude.Bool { #0 -> b7, #1 -> b8 }
@@ -719,7 +724,7 @@ fn std_public_functions_keep_their_lir() {
       decref s.0
       switch negative.3 Prelude.Bool { #0 -> b3, #1 -> b4 }
     b3:
-      let min_int.9: int = call F34()
+      let min_int.9: int = call F31()
       let t.10: enum = extern "Prelude.Eq Int.=="(acc.4, min_int.9)
       switch t.10 Prelude.Bool { #0 -> b5, #1 -> b6 }
     b4:
@@ -740,7 +745,7 @@ fn std_public_functions_keep_their_lir() {
       decref s.0
       jump b11()
     b9:
-      let min_int.17: int = call F34()
+      let min_int.17: int = call F31()
       let t.18: int = extern Prelude.+(min_int.17, t.7)
       let t.19: int = extern Prelude./(t.18, 10)
       let t.20: enum = extern "Prelude.Ord Int.<"(acc.4, t.19)
@@ -751,43 +756,38 @@ fn std_public_functions_keep_their_lir() {
     b11:
       return #0
     b12:
-      let t.21: int = extern Prelude.+(i.1, 1)
+      let t.21: int = extern Prelude.+(i.2, 1)
       let t.22: int = extern Prelude.*(acc.4, 10)
       let t.23: int = extern Prelude.-(t.22, t.7)
-      tail call F33(s.0, t.21, len.2, negative.3, t.23)
+      tail call F30(s.0, len.1, t.21, negative.3, t.23)
     b13:
       decref s.0
       return #0
     }
-    fn F34() -> int {
-      let t.0: int = extern Prelude.-(0, 9223372036854775807)
-      let t.1: int = extern Prelude.-(t.0, 1)
-      return t.1
+    yields fn "F32"(f.0: tobj, acc.1: tobj, rest.2: tobj, t.3: tobj) -> tobj {
+      let d.4: tobj = con Prelude.List #1(t.3, acc.1)
+      tail call "F9"(f.0, d.4, rest.2)
     }
-    yields fn "F10"($0.0: tobj, $1.1: tobj, rest.2: tobj, t.3: tobj) -> tobj {
-      let d.4: tobj = con Prelude.List #1(t.3, $1.1)
-      tail call "F9"($0.0, d.4, rest.2)
-    }
-    yields fn "F13"($0.0: tobj, $1.1: tobj, x.2: tobj, rest.3: tobj, t.4: tobj) -> tobj {
+    yields fn "F33"(p.0: tobj, acc.1: tobj, x.2: tobj, rest.3: tobj, t.4: tobj) -> tobj {
       let t.5: enum = unbox t.4
       decref t.4
       switch t.5 Prelude.Bool { #0 -> b1, #1 -> b2 }
     b1:
       decref x.2
-      tail call "F12"($0.0, $1.1, rest.3)
+      tail call "F11"(p.0, acc.1, rest.3)
     b2:
-      let d.6: tobj = con Prelude.List #1(x.2, $1.1)
-      tail call "F12"($0.0, d.6, rest.3)
+      let d.6: tobj = con Prelude.List #1(x.2, acc.1)
+      tail call "F11"(p.0, d.6, rest.3)
     }
-    yields fn "F16"($0.0: tobj, $1.1: tobj, rest.2: tobj, t.3: tobj) -> tobj {
+    yields fn "F34"(f.0: tobj, acc.1: tobj, rest.2: tobj, t.3: tobj) -> tobj {
       switch t.3 Prelude.Option { #0 -> b1, #1(y.4: tobj) -> b2 }
     b1:
       decref t.3
-      tail call "F15"($0.0, $1.1, rest.2)
+      tail call "F13"(f.0, acc.1, rest.2)
     b2:
       release t.3 Prelude.Option #1(y.4)
-      let d.5: tobj = con Prelude.List #1(y.4, $1.1)
-      tail call "F15"($0.0, d.5, rest.2)
+      let d.5: tobj = con Prelude.List #1(y.4, acc.1)
+      tail call "F13"(f.0, d.5, rest.2)
     }
     "#);
 }

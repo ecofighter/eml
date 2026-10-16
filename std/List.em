@@ -13,36 +13,39 @@ pub append : List a -> List a -> List a
 append xs ys = reverse_onto ys (reverse xs)
 
 pub length : List a -> Int
-length xs = length_from 0 xs
-
-length_from : Int -> List a -> Int
-length_from n Nil = n
-length_from n (_ :: rest) = length_from (n + 1) rest
+length xs =
+  let go n ys =
+    match ys with
+      | Nil -> n
+      | _ :: rest -> go (n + 1) rest
+  go 0 xs
 
 pub map : (a -> <e> b) -> List a -> <e> List b
-map f xs = map_onto f Nil xs
-
-map_onto : (a -> <e> b) -> List b -> List a -> <e> List b
-map_onto f acc Nil = reverse acc
-map_onto f acc (x :: rest) = map_onto f (f x :: acc) rest
+map f xs =
+  let go acc ys =
+    match ys with
+      | Nil -> reverse acc
+      | x :: rest -> go (f x :: acc) rest
+  go Nil xs
 
 pub filter : (a -> <e> Bool) -> List a -> <e> List a
-filter p xs = filter_onto p Nil xs
-
-filter_onto : (a -> <e> Bool) -> List a -> List a -> <e> List a
-filter_onto p acc Nil = reverse acc
-filter_onto p acc (x :: rest) =
-  if p x then filter_onto p (x :: acc) rest else filter_onto p acc rest
+filter p xs =
+  let go acc ys =
+    match ys with
+      | Nil -> reverse acc
+      | x :: rest -> if p x then go (x :: acc) rest else go acc rest
+  go Nil xs
 
 pub filter_map : (a -> <e> Option b) -> List a -> <e> List b
-filter_map f xs = filter_map_onto f Nil xs
-
-filter_map_onto : (a -> <e> Option b) -> List b -> List a -> <e> List b
-filter_map_onto f acc Nil = reverse acc
-filter_map_onto f acc (x :: rest) =
-  match f x with
-    | Some y -> filter_map_onto f (y :: acc) rest
-    | None -> filter_map_onto f acc rest
+filter_map f xs =
+  let go acc ys =
+    match ys with
+      | Nil -> reverse acc
+      | x :: rest ->
+        match f x with
+          | Some y -> go (y :: acc) rest
+          | None -> go acc rest
+  go Nil xs
 
 -- 左からたたむ。`fold f init [x1, x2]` は `f (f init x1) x2` である
 pub fold : (b -> a -> <e> b) -> b -> List a -> <e> b
