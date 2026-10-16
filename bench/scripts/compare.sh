@@ -3,7 +3,8 @@
 # 比べる (docs/implementation/benchmarks.md の「スクリプトの計測」)。標準エラーの文言は比べない。
 #
 #   compare.sh NAME [ARG...]     標準入力をそのまま両方に渡す
-#   compare.sh --fixture NAME    tests/ui/run/scripts/NAME/ に移り、main.args を引数に、main.stdin を標準入力にする
+#   compare.sh --fixture NAME    tests/ui/run/scripts/NAME/ の写しの中で、main.args を引数に、main.stdin を標準入力に
+#                                する。各側は自分の写しの中で動き、書いたファイルも比べる (リポジトリにファイルを残さない)
 #
 # 引数の `@OUT` は各側の一時ファイルのパスに置き換え、実行の後でその中身を標準出力の後ろに足して比べる。書き出す
 # ファイルも比べるためである。eml は `$EML` (既定は debug ビルドの `target/debug/eml`) を使う。
@@ -14,9 +15,11 @@ eml="${EML:-$root/target/debug/eml}"
 work="$(mktemp -d)"
 trap 'rm -rf "$work"' EXIT
 
+fixture=""
 if [[ "${1:-}" == "--fixture" ]]; then
   name="$2"
-  cd "$root/tests/ui/run/scripts/$name"
+  fixture="$root/tests/ui/run/scripts/$name"
+  cd "$fixture"
   args=()
   if [[ -f main.args ]]; then
     while IFS= read -r line || [[ -n "$line" ]]; do
@@ -46,7 +49,20 @@ run_side() {
     command+=("${arg//@OUT/$out}")
   done
   local code=0
-  "${command[@]}" < "$work/stdin" > "$work/$side" 2> "$work/$side.err" || code=$?
+  if [[ -n "$fixture" ]]; then
+    cp -R "$fixture" "$work/$side.dir"
+    (cd "$work/$side.dir" && "${command[@]}" < "$work/stdin" > "$work/$side" 2> "$work/$side.err") || code=$?
+    # 付属のファイルにないか、中身の変わったファイルは、スクリプトが書いたものである
+    local file
+    while IFS= read -r file; do
+      if ! cmp -s "$work/$side.dir/$file" "$fixture/$file"; then
+        printf -- '--- written: %s ---\n' "$file" >> "$work/$side"
+        cat "$work/$side.dir/$file" >> "$work/$side"
+      fi
+    done < <(cd "$work/$side.dir" && find . -type f | sort)
+  else
+    "${command[@]}" < "$work/stdin" > "$work/$side" 2> "$work/$side.err" || code=$?
+  fi
   if [[ -f "$out" ]]; then
     printf -- '--- @OUT ---\n' >> "$work/$side"
     cat "$out" >> "$work/$side"
