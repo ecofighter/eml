@@ -12,21 +12,40 @@ data Parsed =
 effect Record where
   record : Parsed -> Unit
 
--- 二分探索木。キーの数はパスとステータスの種類の数なので、釣り合いを取らない
+-- 釣り合いを取った二分探索木 (AA 木)。`Node` の最初の欄は節の高さの段である。パスに ID を含むログでは、キーが
+-- 昇順に増えるので、釣り合いを取らないと挿入が全体で2乗の時間になる
 data Tree k v =
   | Leaf
-  | Node (Tree k v) k v (Tree k v)
+  | Node Int (Tree k v) k v (Tree k v)
+
+-- 左の子が同じ段なら、右に回す
+skew : Tree k v -> Tree k v
+skew tree =
+  match tree with
+    | Node level (Node left_level a lk lv b) k v right ->
+      if left_level == level then Node level a lk lv (Node level b k v right) else tree
+    | _ -> tree
+
+-- 右の孫が同じ段なら、右の子を1段上げる
+split : Tree k v -> Tree k v
+split tree =
+  match tree with
+    | Node level a k v (Node right_level b rk rv (Node grand_level c gk gv d)) ->
+      if grand_level == level then
+        Node (right_level + 1) (Node level a k v b) rk rv (Node grand_level c gk gv d)
+      else tree
+    | _ -> tree
 
 -- `k` の値を `f` で更新する。なければ `f None` を入れる
 upsert : Ord k => k -> (Option v -> v) -> Tree k v -> Tree k v
 upsert key f tree =
   match tree with
-    | Leaf -> Node Leaf key (f None) Leaf
-    | Node left k v right ->
+    | Leaf -> Node 1 Leaf key (f None) Leaf
+    | Node level left k v right ->
       match compare key k with
-        | LT -> Node (upsert key f left) k v right
-        | GT -> Node left k v (upsert key f right)
-        | EQ -> Node left k (f (Some v)) right
+        | LT -> split (skew (Node level (upsert key f left) k v right))
+        | GT -> split (skew (Node level left k v (upsert key f right)))
+        | EQ -> Node level left k (f (Some v)) right
 
 -- キーの昇順の組の列
 entries : Tree k v -> List (k, v)
@@ -34,7 +53,7 @@ entries tree =
   let go t acc =
     match t with
       | Leaf -> acc
-      | Node left k v right -> go left ((k, v) :: go right acc)
+      | Node _ left k v right -> go left ((k, v) :: go right acc)
   go tree Nil
 
 -- 安定なマージソート。`before a b` は `a` を `b` より前に置くときに `True` である
