@@ -8,7 +8,7 @@ input_file: tests/ui/check-fail/types/continuation_state_arity.em
    │
  8 │     | ask () k st -> k st
    │                      ──┬─  
-   │                        ╰─── expected `Int`, found `Int -> Int`
+   │                        ╰─── expected `Int`, found `once Int -> Int`
    │ 
    │ Note: each clause of a handler must have the type of the whole `handle` expression
 ───╯
@@ -24,7 +24,7 @@ input_file: tests/ui/check-fail/types/continuation_state_arity.em
     │
  21 │         again k
     │         ───┬───  
-    │            ╰───── expected `Int`, found `Int -> Int`
+    │            ╰───── expected `Int`, found `once Int -> Int`
     │ 
     │ Note: each clause of a handler must have the type of the whole `handle` expression
 ────╯

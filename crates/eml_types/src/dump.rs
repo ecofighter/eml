@@ -18,8 +18,8 @@ pub fn dump(program: &Program, typed: &TypedProgram) -> String {
     write_dump(program, typed, false)
 }
 
-/// `dump` と同じ並びで、型に線形性を書く。矢印の `Lin` は `%1`、`Poly` は `%m`、宣言の Kind 変数 `Var(i)` は `%m{i}` と
-/// 書き、`Flexible` と `OpVar` の Kind も名前の後に同じ印で書く。宣言の `joins` があれば、`joins: %m2 = %m0 | %m1` の
+/// `dump` と同じ並びで、型に線形性を書く。矢印の `Lin` は `once`、`Poly` は `poly`、宣言の Kind 変数 `Var(i)` は `poly{i}` と
+/// 頭に書き、`Flexible` と `OpVar` の Kind は名前の後に `:lin` / `:poly` と書く。宣言の `joins` があれば、`joins: poly2 = poly0 | poly1` の
 /// 行を足す。書き出した線形性を単体テストで読めるようにするためのもので、診断や `dump` の出力は変えない。
 pub fn dump_linear(program: &Program, typed: &TypedProgram) -> String {
     write_dump(program, typed, true)
@@ -113,8 +113,8 @@ fn write_decl(
             .iter()
             .enumerate()
             .map(|(k, set)| {
-                let vars: Vec<String> = set.iter().map(|var| format!("%m{var}")).collect();
-                format!("%m{} = {}", first + k, vars.join(" | "))
+                let vars: Vec<String> = set.iter().map(|var| format!("poly{var}")).collect();
+                format!("poly{} = {}", first + k, vars.join(" | "))
             })
             .collect();
         writeln!(out, "  joins: {}", joins.join(", ")).unwrap();

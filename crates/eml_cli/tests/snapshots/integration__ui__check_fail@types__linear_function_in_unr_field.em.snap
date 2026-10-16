@@ -10,7 +10,5 @@ input_file: tests/ui/check-fail/types/linear_function_in_unr_field.em
     │                   ─┬─ ┬  
     │                    ╰───── argument 1 of `Box`
     │                       │  
-    │                       ╰── expected `Int -> Box`, found `Int -> Box`
-    │ 
-    │ Note: these function types differ in how many times the function may be called: one can be called only once, the other any number of times
+    │                       ╰── expected `Int -> Box`, found `once Int -> Box`
 ────╯

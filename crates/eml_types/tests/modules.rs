@@ -136,7 +136,7 @@ fn a_user_unit_is_told_apart_from_the_builtin_one() {
     g : Int -> Int
       n#0 : Int
       x#1 : Int
-      k#2 : Int -> Int
+      k#2 : once Int -> Int
       $r#3 : Int
     ---
     E2001 9:7 mismatched types

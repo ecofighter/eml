@@ -47,7 +47,7 @@ fn a_handler_removes_its_effect_and_types_the_continuation() {
       n#0 : Int
     main : Unit -> <IO> Unit
       key#0 : String
-      k#1 : Int -> <IO> String
+      k#1 : once Int -> <IO> String
       x#2 : Int
       total#3 : String
     ");
@@ -61,13 +61,13 @@ fn a_continuation_is_a_function() {
     insta::assert_snapshot!(check_text(stateless), @"
     ask : Unit -> <Ask> Int
     run : Unit -> <IO> String
-      k#0 : Int -> <IO> String
+      k#0 : once Int -> <IO> String
       x#1 : Int
     ");
     insta::assert_snapshot!(check_text(stateful), @"
     tick : Unit -> <Tick> Int
     run : Unit -> Int
-      k#0 : Int -> String -> Int
+      k#0 : once Int -> once String -> Int
       st#1 : String
       x#2 : Int
     ");
@@ -80,9 +80,9 @@ fn a_partial_continuation_capturing_a_linear_value_is_linear() {
     insta::assert_snapshot!(check_text(text), @"
     pick : Unit -> <Pick> File
     run : Unit -> <IO> Unit
-      k#0 : File -> Unit -> <IO> Unit
+      k#0 : File -> once Unit -> <IO> Unit
       st#1 : Unit
-      g#2 : Unit -> <IO> Unit
+      g#2 : once Unit -> <IO> Unit
       f#3 : File
     ---
     E3002 10:9 `g` must be used exactly once, but it is used more than once
@@ -100,9 +100,9 @@ fn a_partial_continuation_of_a_once_operation_with_a_state_is_linear() {
     insta::assert_snapshot!(check_text(text), @"
     ask : Unit -> <Ask> Int
     run : Unit -> Int
-      k#0 : Int -> Int -> Int
+      k#0 : once Int -> once Int -> Int
       st#1 : Int
-      g#2 : Int -> Int
+      g#2 : once Int -> Int
       a#3 : Int
       b#4 : Int
       x#5 : Int
@@ -123,12 +123,12 @@ fn type_variables_of_an_operation_are_rigid_in_its_clause() {
     first : Unit -> Int
       x#0 : a
       y#1 : a
-      k#2 : a -> Int
+      k#2 : once a -> Int
       $r#3 : Int
     wrong : Unit -> Int
       x#0 : a
       y#1 : a
-      k#2 : a -> Int
+      k#2 : once a -> Int
       $r#3 : Int
     ---
     E2001 12:23 mismatched types
@@ -156,7 +156,7 @@ fn the_body_of_a_handler_may_perform_only_the_handled_effect_and_the_outer_row()
     ask : Unit -> <Ask> Int
     noisy : Unit -> <IO> Int
     f : Unit -> Int
-      k#0 : Int -> Int
+      k#0 : once Int -> Int
       $r#1 : Int
     ---
     E2002 11:10 `noisy` performs `IO`, which the signature of `f` does not allow
@@ -172,16 +172,16 @@ fn a_continuation_of_a_once_operation_must_be_used_exactly_once() {
     insta::assert_snapshot!(check_text(text), @"
     ask : Unit -> <Ask> Int
     twice : Unit -> Int
-      k#0 : Int -> Int
+      k#0 : once Int -> Int
       $r#1 : Int
     unused : Unit -> Int
-      k#0 : Int -> Int
+      k#0 : once Int -> Int
       $r#1 : Int
     discarded : Unit -> Int
       $r#0 : Int
     captured : Unit -> <Ask> Int
-      k#0 : Int -> <Ask> Int
-      inner#1 : Int -> <Ask> Int
+      k#0 : once Int -> <Ask> Int
+      inner#1 : once Int -> <Ask> Int
       $r#2 : Int
       $r#3 : Int
     ---
@@ -214,7 +214,7 @@ fn a_closure_capturing_a_continuation_cannot_be_used_twice() {
       kinds: (Int -> Int) <= Unr
       f#0 : Int -> Int
     g : Unit -> Int
-      k#0 : Int -> Int
+      k#0 : once Int -> Int
       n#1 : Int
       $r#2 : Int
     ---
@@ -230,11 +230,11 @@ fn a_body_with_a_reported_error_does_not_report_linear_values() {
     insta::assert_snapshot!(check_text(text), @"
     ask : Unit -> <Ask> Int
     f : Unit -> Int
-      k#0 : Int -> Int
+      k#0 : once Int -> Int
       $r#1 : Int
     ---
     E2001 7:19 mismatched types
-      7:19 expected `Int`, found `Int -> Int`
+      7:19 expected `Int`, found `once Int -> Int`
       note: each clause of a handler must have the type of the whole `handle` expression
     ");
 }
@@ -249,14 +249,14 @@ fn a_continuation_cannot_pass_through_a_polymorphic_operation_parameter() {
     pair : a -> (a -> a -> b) -> <Pair> b
       kinds: a <= Unr, (a -> a -> b) <= Unr, (a -> b) <= Unr, b <= Unr
     sunk : Unit -> <Sink> Int
-      k#0 : Int -> <Sink> Int
+      k#0 : once Int -> <Sink> Int
       $r#1 : Int
     paired : Unit -> <Pair> Int
-      k#0 : Int -> <Pair> Int
+      k#0 : once Int -> <Pair> Int
       x#1 : Int
       y#2 : Int
       u#3 : Unit
-      f#4 : Unit -> <Pair> Int
+      f#4 : once Unit -> <Pair> Int
       $r#5 : Int
     ---
     E3001 14:9 a linear value is passed to `sink`, which may use it more than once or not at all
@@ -275,9 +275,9 @@ fn a_clause_dropped_by_an_error_does_not_cause_linear_misuse() {
     ask : Unit -> <Ask> Int
     log : String -> <Log> Unit
     f : Unit -> Int
-      k#0 : Int -> Int
+      k#0 : once Int -> Int
       m#1 : String
-      k2#2 : Unit -> Int
+      k2#2 : once Unit -> Int
       x#3 : Int
       $r#5 : Int
     ---
@@ -320,10 +320,10 @@ fn a_handler_takes_the_type_arguments_of_its_effect_from_the_body() {
     ask : Unit -> <Reader r> r
     greeting : Unit -> <Reader String> String
     run : Unit -> String
-      k#0 : String -> String
+      k#0 : once String -> String
       $r#1 : String
     wrong : Unit -> String
-      k#0 : String -> String
+      k#0 : once String -> String
       $r#1 : String
     ---
     E2001 15:21 mismatched types
@@ -367,7 +367,7 @@ fn the_return_clause_of_a_multi_handler_cannot_capture_a_linear_value() {
     ask : Unit -> <Ask> Int
     choose : Unit -> <Choice> Bool
     captured : Unit -> Int
-      k#0 : Int -> Int
+      k#0 : once Int -> Int
       c#1 : Bool -> Int
       n#2 : Int
       $r#3 : Int
@@ -415,10 +415,10 @@ fn continuations_of_handlers_with_a_state_carry_the_state() {
     let text = "effect Ask where\n  ask : Unit -> Int\n\nf : Unit -> Int\nf () =\n  handle ask () from \"s\" with\n    | ask () k st -> k 1 st\n    | return x st -> x\n\ng : Unit -> Int\ng () =\n  handle ask () from () with\n    | ask () k st -> k 1 st\n    | return x st -> x";
     let dump = check_text(text);
     assert!(
-        dump.contains("k#") && dump.contains(": Int -> String -> Int"),
+        dump.contains("k#") && dump.contains(": once Int -> once String -> Int"),
         "{dump}"
     );
-    assert!(dump.contains(": Int -> Unit -> Int"), "{dump}");
+    assert!(dump.contains(": once Int -> once Unit -> Int"), "{dump}");
     assert!(!dump.contains("E2"), "{dump}");
 }
 
@@ -435,16 +435,16 @@ fn the_arity_of_a_continuation_follows_the_state_of_its_handler() {
     insta::assert_snapshot!(check_text(text), @"
     ask : Unit -> <Ask> Int
     missing : Unit -> Int
-      k#0 : Int -> Int -> Int
+      k#0 : once Int -> once Int -> Int
       st#1 : Int
       x#2 : Int
       st#3 : Int
     extra : Unit -> Int
-      k#0 : Int -> Int
+      k#0 : once Int -> Int
       $r#1 : Int
     ---
     E2001 7:22 mismatched types
-      7:22 expected `Int`, found `Int -> Int`
+      7:22 expected `Int`, found `once Int -> Int`
       note: each clause of a handler must have the type of the whole `handle` expression
     E2001 13:23 `k` takes 1 argument but 2 were given
       13:23 unexpected argument
@@ -489,9 +489,10 @@ fn operations_of_a_duplicate_effect_do_not_cascade() {
     );
 }
 
-/// 線形性だけが食い違う E2001 の note は、どちら側が `Lin` でも成り立つ言い方にする (docs/implementation/diagnostics.md)。
+/// 線形性だけが食い違う E2001 は、`Lin` の矢印に `once` を付けて書くので、note を足さなくても食い違いが読める
+/// (docs/spec/types.md の「Kind の書き出し」)。
 #[test]
-fn an_arrow_linearity_note_does_not_say_which_side_is_linear() {
+fn a_linear_arrow_is_displayed_as_once() {
     let text = "data Box =\n  | Box (Int -> Int)\n  | Done\n\neffect Ask where\n  ask : Unit -> Int\n\npick : Bool -> Box -> Int\npick c b =\n  match b with\n    | Box g ->\n        handle ask () with\n          | ask () k -> (if c then k else g) 1\n          | return x -> x\n    | Done -> 0";
     insta::assert_snapshot!(check_text(text), @"
     ask : Unit -> <Ask> Int
@@ -499,19 +500,18 @@ fn an_arrow_linearity_note_does_not_say_which_side_is_linear() {
       c#0 : Bool
       b#1 : Box
       g#2 : Int -> Int
-      k#3 : Int -> Int
+      k#3 : once Int -> Int
       x#4 : Int
     ---
     E2001 13:43 mismatched types
-      13:43 expected `Int -> Int`, found `Int -> Int`
+      13:43 expected `once Int -> Int`, found `Int -> Int`
       13:36 the `then` branch has this type
-      note: these function types differ in how many times the function may be called: one can be called only once, the other any number of times
     ");
 }
 
-/// 線形性の食い違いが大きな型の中にあっても、E2001 の note は付き、表示も成り立つ (docs/implementation/diagnostics.md)。
+/// 線形性の食い違いが大きな型の中にあっても、`once` は入れ子の矢印に付く。
 #[test]
-fn an_arrow_linearity_note_appears_when_the_difference_is_nested_in_a_tuple() {
+fn a_linear_arrow_nested_in_a_tuple_is_displayed_as_once() {
     let text = "data Box =\n  | Box (Int -> Int)\n  | Done\n\neffect Ask where\n  ask : Unit -> Int\n\npick : Bool -> Box -> Int\npick c b =\n  match b with\n    | Box g ->\n        handle ask () with\n          | ask () k ->\n              let (f, n) = if c then (k, 1) else (g, 2)\n              f n\n          | return x -> x\n    | Done -> 0";
     insta::assert_snapshot!(check_text(text), @"
     ask : Unit -> <Ask> Int
@@ -519,15 +519,27 @@ fn an_arrow_linearity_note_appears_when_the_difference_is_nested_in_a_tuple() {
       c#0 : Bool
       b#1 : Box
       g#2 : Int -> Int
-      k#3 : Int -> Int
-      f#4 : Int -> Int
+      k#3 : once Int -> Int
+      f#4 : once Int -> Int
       n#5 : Int
       x#6 : Int
     ---
     E2001 14:50 mismatched types
-      14:50 expected `(Int -> Int, Int)`, found `(Int -> Int, Int)`
+      14:50 expected `(once Int -> Int, Int)`, found `(Int -> Int, Int)`
       14:38 the `then` branch has this type
-      note: these function types differ in how many times the function may be called: one can be called only once, the other any number of times
+    ");
+}
+
+#[test]
+fn once_arrows_in_argument_position_are_parenthesized() {
+    let text = "effect Ask where\n  ask : Unit -> Int\n\nkeep : ((once Int -> Int) -> Int) -> Int\nkeep g = handle ask () with\n  | ask () k -> g k\n  | return x -> x";
+    insta::assert_snapshot!(check_text(text), @"
+    ask : Unit -> <Ask> Int
+    keep : ((once Int -> Int) -> Int) -> Int
+      kinds: ((once Int -> Int) -> Int) <= Unr
+      g#0 : (once Int -> Int) -> Int
+      k#1 : once Int -> Int
+      x#2 : Int
     ");
 }
 
@@ -543,7 +555,7 @@ fn a_clause_cannot_copy_a_value_of_a_result_only_operation_variable() {
     insta::assert_snapshot!(check_text(&text), @"
     mk : Unit -> <Mk> Box a
     main : Unit -> <IO> Unit
-      k#0 : Box a -> <IO> Unit
+      k#0 : once Box a -> <IO> Unit
       x#1 : a
       $r#2 : Unit
     ---
@@ -562,7 +574,7 @@ fn a_clause_cannot_discard_a_value_of_a_result_only_operation_variable() {
     insta::assert_snapshot!(check_text(&text), @"
     sink : Unit -> <Mk> Sink a
     main : Unit -> <IO> Unit
-      k#0 : Sink a -> <IO> Unit
+      k#0 : once Sink a -> <IO> Unit
       $r#1 : Unit
     ---
     E3004 14:32 a linear value cannot be discarded with `_`
@@ -580,7 +592,7 @@ fn a_clause_may_copy_a_value_of_an_operation_variable_in_a_parameter() {
       kinds: a <= Unr
     main : Unit -> <IO> Unit
       x#0 : a
-      k#1 : Unit -> <IO> Unit
+      k#1 : once Unit -> <IO> Unit
       p#2 : (a, a)
       $r#3 : Unit
     ");
@@ -599,7 +611,7 @@ fn a_linear_closure_cannot_enter_a_contravariant_argument_of_data_in_the_result(
     main : Unit -> <IO> Unit
       h#0 : File
       put#1 : (Unit -> <IO> Unit) -> <IO> Unit
-      k#2 : Sink (Unit -> <IO> Unit) -> <IO> Unit
+      k#2 : once Sink (Unit -> <IO> Unit) -> <IO> Unit
       f#3 : Unit -> <IO> Unit
       $r#4 : Unit
     ---
@@ -616,7 +628,7 @@ fn the_performer_may_call_a_function_the_clause_gives_more_than_once() {
     mk : Unit -> <Mk> (Unit -> <IO> Unit, Int)
     main : Unit -> <IO> Unit
       g#0 : Unit -> <IO> Unit
-      k#1 : (Unit -> <IO> Unit, Int) -> <IO> Unit
+      k#1 : once (Unit -> <IO> Unit, Int) -> <IO> Unit
       $r#2 : Unit
     ");
 }
@@ -629,10 +641,10 @@ fn a_clause_cannot_give_a_linear_closure_through_two_contravariant_data_argument
     main : Unit -> <IO> Unit
       s#0 : Sink (Unit -> <IO> Unit) -> <IO> Unit
       g#1 : Unit -> <IO> Unit
-      k#2 : (Sink (Sink (Unit -> <IO> Unit)), Int) -> <IO> Unit
-      sk#3 : Sink (Unit -> <IO> Unit)
+      k#2 : once (Sink (Sink (once Unit -> <IO> Unit)), Int) -> <IO> Unit
+      sk#3 : Sink (once Unit -> <IO> Unit)
       f#4 : File
-      h#5 : (Unit -> <IO> Unit) -> <IO> Unit
+      h#5 : (once Unit -> <IO> Unit) -> <IO> Unit
       $r#6 : Unit
     ---
     E3001 11:5 a linear value is used where the type of `mk` requires a value that may be used any number of times
@@ -652,9 +664,9 @@ fn a_twice_flipped_arrow_is_produced_by_the_clause() {
     main : Unit -> <IO> Unit
       run#0 : ((Unit -> <IO> Unit) -> <IO> Unit) -> <IO> Unit
       inner#1 : Unit -> <IO> Unit
-      k#2 : (((Unit -> <IO> Unit) -> <IO> Unit) -> <IO> Unit, Int) -> <IO> Unit
+      k#2 : once (once ((once Unit -> <IO> Unit) -> <IO> Unit) -> <IO> Unit, Int) -> <IO> Unit
       h#3 : File
-      cb#4 : (Unit -> <IO> Unit) -> <IO> Unit
+      cb#4 : (once Unit -> <IO> Unit) -> <IO> Unit
       $r#5 : Unit
     ---
     E3001 10:5 a linear value is used where the type of `mk` requires a value that may be used any number of times
@@ -683,10 +695,10 @@ fn a_linear_closure_cannot_enter_an_arrow_in_a_row_label_of_the_result() {
       f#0 : Unit -> <IO, Ask (Unit -> <IO> Unit)> Unit
     main : Unit -> <IO> Unit
       g#0 : Unit -> <Ask (Unit -> <IO> Unit), IO> Unit
-      k#1 : (Unit -> <IO> Unit) -> <Mk, IO> Unit
+      k#1 : once (Unit -> <IO> Unit) -> <Mk, IO> Unit
       h#2 : File
       $r#3 : Unit
-      k#4 : (Unit -> <Ask (Unit -> <IO> Unit), IO> Unit, Int) -> <IO> Unit
+      k#4 : once (Unit -> <Ask (Unit -> <IO> Unit), IO> Unit, Int) -> <IO> Unit
       $r#5 : Unit
     ---
     E3001 20:18 a lambda that captures a linear value is used where it may be called any number of times
@@ -702,7 +714,7 @@ fn a_clause_cannot_keep_a_file_across_a_function_with_an_operation_row_variable(
     mk : Unit -> <Mk> ((Unit -> <IO | e> Int) -> <IO | e> Int, Int)
     main : Unit -> <IO> Unit
       run#0 : (Unit -> <IO, Mk> Int) -> <IO, Mk> Int
-      k#1 : ((Unit -> <IO | e> Int) -> <IO | e> Int, Int) -> <IO> Unit
+      k#1 : once ((Unit -> <IO | e> Int) -> <IO | e> Int, Int) -> <IO> Unit
       g#2 : Unit -> <IO | e> Int
       h#3 : File
       x#4 : Int
@@ -723,7 +735,7 @@ fn a_clause_cannot_resume_with_a_linear_closure_where_the_result_has_an_arrow() 
     mk : Unit -> <Mk> (Unit -> <IO> Unit, Int)
     main : Unit -> <IO> Unit
       g#0 : Unit -> <IO> Unit
-      k#1 : (Unit -> <IO> Unit, Int) -> <IO> Unit
+      k#1 : once (once Unit -> <IO> Unit, Int) -> <IO> Unit
       h#2 : File
       $r#3 : Unit
     ---
@@ -745,11 +757,11 @@ fn a_clause_cannot_use_a_parameter_arrow_as_a_linear_one() {
       x#0 : a
       y#1 : a
     main : Unit -> <IO> Unit
-      x#0 : Unit -> <IO> Unit
-      k#1 : Unit -> <IO> Unit
+      x#0 : once Unit -> <IO> Unit
+      k#1 : once Unit -> <IO> Unit
       h#2 : File
-      p#3 : Unit -> <IO> Unit
-      q#4 : Unit -> <IO> Unit
+      p#3 : once Unit -> <IO> Unit
+      q#4 : once Unit -> <IO> Unit
       $r#5 : Unit
     ---
     E3001 10:5 a linear value is used where the type of `op` requires a value that may be used any number of times
@@ -767,7 +779,7 @@ fn a_clause_may_call_a_closure_it_receives_through_the_result_more_than_once() {
     mk : Unit -> <Mk> ((Unit -> <IO> Unit) -> <IO> Unit, Int)
     main : Unit -> <IO> Unit
       run#0 : (Unit -> <IO> Unit) -> <IO> Unit
-      k#1 : ((Unit -> <IO> Unit) -> <IO> Unit, Int) -> <IO> Unit
+      k#1 : once ((Unit -> <IO> Unit) -> <IO> Unit, Int) -> <IO> Unit
       g#2 : Unit -> <IO> Unit
       run#3 : (Unit -> <IO> Unit) -> <IO> Unit
       $r#4 : Unit
@@ -782,7 +794,7 @@ fn a_linear_closure_cannot_be_passed_to_a_function_from_the_result() {
     main : Unit -> <IO> Unit
       h#0 : File
       run#1 : (Unit -> <IO> Unit) -> <IO> Unit
-      k#2 : ((Unit -> <IO> Unit) -> <IO> Unit, Int) -> <IO> Unit
+      k#2 : once ((Unit -> <IO> Unit) -> <IO> Unit, Int) -> <IO> Unit
       g#3 : Unit -> <IO> Unit
       $r#4 : Unit
     ---
@@ -803,7 +815,7 @@ fn a_linear_closure_cannot_enter_an_arrow_in_both_directions_of_the_result() {
       h#0 : File
       put#1 : (Unit -> <IO> Unit) -> Unit
       v#2 : Unit -> <IO> Unit
-      k#3 : Ref (Unit -> <IO> Unit) -> <IO> Unit
+      k#3 : once Ref (Unit -> <IO> Unit) -> <IO> Unit
       $r#4 : Unit
     ---
     E3001 12:14 a lambda that captures a linear value is used where it may be called any number of times

@@ -643,7 +643,7 @@ impl TypeNames for DisplayNames {
 /// 型の表示の方法。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Show {
-    /// 診断の表示。表面の構文は線形性を書かないので、線形性を書かない。
+    /// 診断の表示。表面の構文で書ける `once` だけを `Lin` の矢印に書く。
     Plain,
     /// 矢印の線形性を書く。
     Arrows,
@@ -651,13 +651,24 @@ enum Show {
     Kinds,
 }
 
-/// 線形性の印。Haskell の LinearTypes に合わせて `Lin` を `%1`、`Poly` を `%m` と書き、`Unr` は書かない。
+/// 矢印の線形性の印。`Lin` を `once`、`Poly` を `poly`、宣言の Kind 変数 `Var(i)` を `poly{i}` と書き、`Unr` は書かない
+/// (docs/spec/types.md の「Kind の書き出し」)。
 fn mark(lin: Lin) -> String {
     match lin {
         Lin::Unr => String::new(),
-        Lin::Lin => "%1".to_string(),
-        Lin::Poly => "%m".to_string(),
-        Lin::Var(index) => format!("%m{index}"),
+        Lin::Lin => "once".to_string(),
+        Lin::Poly => "poly".to_string(),
+        Lin::Var(index) => format!("poly{index}"),
+    }
+}
+
+/// `Flexible` と `OpVar` の Kind の印。名前の後ろに `:lin` / `:poly` と書く。
+fn kind_mark(lin: Lin) -> String {
+    match lin {
+        Lin::Unr => String::new(),
+        Lin::Lin => ":lin".to_string(),
+        Lin::Poly => ":poly".to_string(),
+        Lin::Var(index) => format!(":poly{index}"),
     }
 }
 
@@ -720,13 +731,19 @@ impl fmt::Display for TypeDisplay<'_> {
                 tail,
                 ret,
             } => {
+                // 印は関数型の頭に書く。`Plain` が書くのは表面の構文にある `once` だけ
+                let head = match (show, *lin) {
+                    (Show::Plain, Lin::Lin) => mark(*lin),
+                    (Show::Plain, _) | (_, Lin::Unr) => String::new(),
+                    _ => mark(*lin),
+                };
+                if !head.is_empty() {
+                    write!(f, "{head} ")?;
+                }
                 if matches!(types.kind(*param), TypeKind::Fn { .. }) {
                     write!(f, "({})", self.child(*param))?;
                 } else {
                     write!(f, "{}", self.child(*param))?;
-                }
-                if show != Show::Plain && *lin != Lin::Unr {
-                    write!(f, " {}", mark(*lin))?;
                 }
                 f.write_str(" -> ")?;
                 // 空の閉じた row は書かない。省略した row が `<>` だから (docs/spec/types.md)
@@ -763,9 +780,9 @@ impl fmt::Display for TypeDisplay<'_> {
                 write!(f, "{}", self.child(*ret))
             }
             TypeKind::OpVar(name, kind) if show == Show::Kinds => {
-                write!(f, "{name}{}", mark(*kind))
+                write!(f, "{name}{}", kind_mark(*kind))
             }
-            TypeKind::Flexible(kind) if show == Show::Kinds => write!(f, "_{}", mark(*kind)),
+            TypeKind::Flexible(kind) if show == Show::Kinds => write!(f, "_{}", kind_mark(*kind)),
             TypeKind::Rigid(name) | TypeKind::OpVar(name, _) => f.write_str(name),
             TypeKind::Flexible(_) => f.write_str("_"),
             TypeKind::Error => f.write_str("{error}"),
@@ -1096,23 +1113,24 @@ mod tests {
         let lin = arrow(&mut types, Lin::Lin, int, int);
         let poly = arrow(&mut types, Lin::Poly, int, int);
         assert_eq!(show(&types, unr), "Int -> Int");
-        assert_eq!(show(&types, lin), "Int %1 -> Int");
-        assert_eq!(show(&types, poly), "Int %m -> Int");
+        assert_eq!(show(&types, lin), "once Int -> Int");
+        assert_eq!(show(&types, poly), "poly Int -> Int");
         let nested = arrow(&mut types, Lin::Unr, lin, int);
-        assert_eq!(show(&types, nested), "(Int %1 -> Int) -> Int");
+        assert_eq!(show(&types, nested), "(once Int -> Int) -> Int");
         // Kind だけが違う型は、名前で別の文字列になる
         let flexible_unr = types.flexible(Lin::Unr);
         let flexible_lin = types.flexible(Lin::Lin);
         let flexible_poly = types.flexible(Lin::Poly);
         assert_eq!(show(&types, flexible_unr), "_");
-        assert_eq!(show(&types, flexible_lin), "_%1");
-        assert_eq!(show(&types, flexible_poly), "_%m");
+        assert_eq!(show(&types, flexible_lin), "_:lin");
+        assert_eq!(show(&types, flexible_poly), "_:poly");
         let op = types.intern(TypeKind::OpVar("a".to_string(), Lin::Lin));
-        assert_eq!(show(&types, op), "a%1");
+        assert_eq!(show(&types, op), "a:lin");
         // 上限を超えた表示は `None` になる
         assert_eq!(types.display_name_bounded(nested, names, 5), None);
-        // 診断の表示は線形性を書かない
-        assert_eq!(types.display(lin, names).to_string(), "Int -> Int");
+        // 診断の表示は、表面の構文にある `once` だけを書く
+        assert_eq!(types.display(lin, names).to_string(), "once Int -> Int");
+        assert_eq!(types.display(poly, names).to_string(), "Int -> Int");
     }
 
     #[test]

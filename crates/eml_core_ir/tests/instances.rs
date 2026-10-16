@@ -371,7 +371,7 @@ fn a_polymorphic_entry_is_uniform() {
         .iter()
         .map(|function| function.name.as_str())
         .collect();
-    assert_eq!(names, ["first@[_%m]", "entry$first"]);
+    assert_eq!(names, ["first@[_:poly]", "entry$first"]);
 }
 
 /// `name` の関数を入口にして、`Pass::Translate` までの Core IR を表示する。
@@ -525,12 +525,12 @@ fn lowering_shared_type_arguments_is_linear() {
 #[test]
 fn instances_that_differ_only_in_linearity_have_different_names() {
     // `k` は `File` を捕まえるので矢印が `Lin` になる。`inc` の宣言の一番外の矢印は `Unr` で、参照の row は開いて
-    // いるので、`main` の中で呼ぶと `<IO>` になる。2つの型引数は線形性だけが違い、名前は矢印の線形性を `%1` で書くので、
+    // いるので、`main` の中で呼ぶと `<IO>` になる。2つの型引数は線形性だけが違い、名前は矢印の線形性を `once` で書くので、
     // 番号付きの名前に落ちない (docs/spec/core-ir.md の「変換の規則」)
     let text = "id : a -> a\nid x = x\n\ninc : Int -> Int\ninc x = x + 1\n\nmain : Unit -> <IO> Unit\nmain () =\n  let h = Fs.open \"a.txt\"\n  let k = fn n ->\n    Fs.close h\n    n\n  let one = id k\n  let a = one 1\n  let i = id inc\n  println (show (i a))";
     assert_eq!(
         instances_of(text, "id"),
-        ["id@[Int %1 -> <IO> Int]", "id@[Int -> <IO> Int]"]
+        ["id@[once Int -> <IO> Int]", "id@[Int -> <IO> Int]"]
     );
 }
 
@@ -548,11 +548,11 @@ const F_EXAMPLE: &str = "f : a -> (a -> <IO> Int) -> (Int -> <IO> Int) -> Int ->
 #[test]
 fn a_type_variable_above_a_poly_arrow_makes_the_recursive_call_poly() {
     // spec の「instance での評価」の `f` の例。`k` の矢印は `μ_a` と同じ成分にあり、`f@[Int]` で `g` の矢印の
-    // `Poly` が `μ_a` に伝わるので、再帰の呼び出しの型引数は `Int %m -> <IO> Int` になる
+    // `Poly` が `μ_a` に伝わるので、再帰の呼び出しの型引数は `poly Int -> <IO> Int` になる
     let text = F_EXAMPLE;
     assert_eq!(
         instances_of(text, "f"),
-        ["f@[Int]", "f@[Int %m -> <IO> Int]"]
+        ["f@[Int]", "f@[poly Int -> <IO> Int]"]
     );
 }
 
@@ -569,7 +569,7 @@ fn a_closure_with_a_file_passed_as_a_type_variable_lowers() {
         .filter(|function| !function.internal && function.name.starts_with("f@"))
         .map(|function| function.name.as_str())
         .collect();
-    assert_eq!(names, ["f@[Int]", "f@[Int %m -> <IO> Int]"]);
+    assert_eq!(names, ["f@[Int]", "f@[poly Int -> <IO> Int]"]);
 }
 
 #[test]
@@ -578,5 +578,5 @@ fn a_result_only_operation_variable_gives_one_uniform_key() {
     // 付けて書く (docs/spec/types.md の「`Flexible` と `OpVar` の Kind」と、docs/spec/core-ir.md の「変換の規則」)。
     // `OpVar` が `Poly` の Kind を持つことは、eml_types の `kind_export::a_clause_in_main_keeps_its_operation_variable_kinds` が確かめる
     let text = "ids : List a -> List a\nids xs = xs\n\neffect Make where\n  mk : Unit -> List a\n\nbody : Unit -> <Make> Int\nbody () =\n  let xs = (mk () : List Int)\n  0\n\nmain : Unit -> <IO> Unit\nmain () =\n  let n = handle body () with\n            | mk () k -> k (ids [])\n  println (show n)";
-    assert_eq!(instances_of(text, "ids"), ["ids@[_%m]"]);
+    assert_eq!(instances_of(text, "ids"), ["ids@[_:poly]"]);
 }
