@@ -396,6 +396,7 @@ impl<M: Mode> Heap<M> {
             final(self).text_of(w) == s.spec_bytes(),
             final(self).owned(w),
             !final(self).lin_of(w),
+            final(self).grew(*old(self), w),
             M::CHECKED ==> final(self).words_kept(*old(self)),
     {
         self.make_string(s, 1)
@@ -460,6 +461,7 @@ impl<M: Mode> Heap<M> {
             final(self).core.model@.owner[w.bits_spec()] == final(self).worker,
             !final(self).core.lin(w.bits_spec()),
             forall|x: Word| old(self).core.word_ok(x) ==> #[trigger] final(self).core.word_ok(x),
+            final(self).grew(*old(self), w),
     {
         let t = Tail::Str(s);
         let bytes = self.core.tail_len(&t);

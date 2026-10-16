@@ -33,6 +33,7 @@ mod positions;
 mod proof;
 mod recover;
 mod roots;
+mod script;
 mod strings;
 
 verus! {

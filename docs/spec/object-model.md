@@ -378,7 +378,7 @@ left が一意 (is_unique)
 そうでない (共有、不死) → 和の長さで確保し、left と s を写してから、left を decref
 ```
 
-- 文字列のバイトを書くのは、作るときと後ろに足すときだけである。`string_concat` は `string_push` と同じ道で右辺を写し、`String.show` も同じ道でその場に足す (下の「extern」)。バイトを書く信頼の関数を1つにするためである。S12 の extern (`join`、`replace` など) が Rust の側の `&str` を足すときも、`string_push` を使えば余分な写しが要らない
+- 文字列のバイトを書くのは、作るときと後ろに足すときだけである。`string_concat` は `string_push` と同じ道で右辺を写し、`String.show` と `String.slice` も同じ道でその場に足す (下の「extern」)。バイトを書く信頼の関数を1つにするためである。後で Rust の側の `&str` を足す extern を入れるときも、`string_push` を使えば余分な写しが要らない
 - `s` は、ほかの文字列の物体の中身を指してよい。その物体は呼び出しの間生きている。写すのは left を手放す前である。速いモードでは、大きい物体のページを `free_block` がすぐに返すためである
 - `s` は left 自身の中身を指さない。一意な left を作り直すと、`string_push` の中で left の箱を空け、大きい物体ならページも返す。引数の `&str` が指すメモリを呼び出しの間に返すと、写した後でも未定義の動作になる。自分自身との連結は、`dup` してから `string_concat(x, x)` で行う。`string_concat` の右辺は `&str` の引数でなく、写す直前にヒープの権限から借りるので、この制約を受けない。`x ++ x` は `dup` で rc が 2 になって届くので、写す枝に進む
 - 容量を読むのは、left が一意なときだけである。共有と不死の left (凍結した領域のリテラルを含む) は容量を使わないためである。そのため、速いモードの操作は rc 0 の物体のページの頭を読まない。ネイティブの静的なデータにはページの頭がないので、この性質を約束にする (下の「凍結した領域」)
@@ -821,7 +821,7 @@ token の表の項目は、`into_token` と `release_reuse` が添字を使い�
   - `find_from` は、開始位置以降で探す文字列と一致する最小の位置か、なければ -1 であることを約束する (spec `found_from`)。照合は素朴な二重の繰り返しである
 - 検査モードでは、引数が `String` の物体でなければ `Heap(WrongKind)` を返す。速いモードは、読めることと所有を前提にする
 
-I/O の extern (`println`、`Fs.open`、`Fs.read_all`、`Fs.close`) は、メモリの安全と、RC のモデルでの増減を証明する。引数を消費すること、結果を持つこと、組のフィールド、`File` の種類と `lin` ビット、誤りのときに作りかけの物体を手放すことを含む。OS とのやりとりの中身 (何が書かれ、何が読めたか) は約束せず、T11 (下の「`unsafe` の核」) と期待値の表 ([テスト戦略](../implementation/testing.md) の「期待値の表」) に任せる。`Fs.read_all` の結果の文字列は `alloc_string` で作るので、ghost のバイト列と UTF-8 であることは今ある約束から出る。
+I/O の extern (`println`、`eprintln`、`Fs.open`、`Fs.read_all`、`Fs.close`、`Fs.write_text`、`Env` と `Stdin` と `Proc.status` の extern) は、メモリの安全と、RC のモデルでの増減を証明する。引数を消費すること、結果を持つこと、組のフィールド、`File` の種類と `lin` ビット、誤りのときに作りかけの物体を手放すことを含む。OS とのやりとりの中身 (何が書かれ、何が読めたか) は約束せず、T11 (下の「`unsafe` の核」) と期待値の表 ([テスト戦略](../implementation/testing.md) の「期待値の表」) に任せる。`Fs.read_all` の結果の文字列は `alloc_string` で作るので、ghost のバイト列と UTF-8 であることは今ある約束から出る。
 
 ### Host
 
@@ -832,7 +832,14 @@ pub trait Host: Send + Sync {
     fn write_line(&self, stream: Stream, line: &str) -> io::Result<()>;
     fn flush(&self) -> io::Result<()>;
     fn open(&self, path: &str) -> io::Result<Opened>;
+    fn args(&self) -> &[OsString] { &[] }
+    fn env_var(&self, name: &str) -> Option<OsString> { None }
+    fn stdin(&self) -> io::Result<StdinLock<'_>> { /* Unsupported */ }
+    fn write_file(&self, path: &str, text: &str) -> io::Result<()> { /* Unsupported */ }
+    fn run(&self, program: &str, args: &[&str]) -> io::Result<i32> { /* Unsupported */ }
 }
+
+pub type StdinLock<'a> = MutexGuard<'a, Box<dyn BufRead + Send>>;
 
 pub struct Opened {
     pub reader: Box<dyn BufRead + Send>,
@@ -840,19 +847,23 @@ pub struct Opened {
 }
 ```
 
-- `write_line` は、本文と `\n` を、ほかの行と途中で混ざらないように書く。`&str` を受けるのは、eml の文字列は UTF-8 が証明されており、テキストしか受けない出力先 (WASM の console、GUI) にも渡せるためである。`Stream` は `Out` と `Err` で、標準エラーは S12 の `eprintln` が使う。今から `Stream` を置くのは、後でメソッドを足さずに済ませるためである
-- `open` は、`BufRead` の読み手と、読む前に分かる長さ (ふつうのファイルならメタデータの長さ) を返す。`BufRead` にするのは、S12 で行ごとに読む extern を足すときに、そのまま使えるようにするためである。`Fs.read_all` から見ると、`BufReader` は残っている分を渡したあと中の読み手をそのまま読むので、費用は開くときの 8 KiB の確保だけである
+- `write_line` は、本文と `\n` を、ほかの行と途中で混ざらないように書く。`&str` を受けるのは、eml の文字列は UTF-8 が証明されており、テキストしか受けない出力先 (WASM の console、GUI) にも渡せるためである。`Stream` は `Out` と `Err` で、標準エラーは `eprintln` が使う
+- `open` は、`BufRead` の読み手と、読む前に分かる長さ (ふつうのファイルならメタデータの長さ) を返す。`BufRead` にするのは、行ごとに読む extern (今は標準入力の `read_line_raw`) と同じ読みの部品を使うためである。`Fs.read_all` から見ると、`BufReader` は残っている分を渡したあと中の読み手をそのまま読むので、費用は開くときの 8 KiB の確保だけである
 - `Ctx` は Host を不透明な型 `HostRef` で持ち、何も約束しない関数を通して呼ぶ (下の「`unsafe` の核」の T11)。Verus は `dyn Host` も `io::Error` も扱えないためである。`HostRef` は `Arc<dyn Host>` を `ManuallyDrop` の欄に持ち、`Drop` で `#[inline(never)]` の関数に渡して手放す。`Control` と凍結した領域の鎖と同じ形で、`Ctx` を使うコードのコード生成単位の分け方を変えないための予防である。`Ctx` 自身は、今と同じく `Drop` を実装しない
 - `Ctx::new(control, host)` で受け取る。`par` の子の `Ctx` は、同じ Host を `Arc` で写して持つ
 - `Send + Sync` を求めるので、`JsValue` を持つブラウザの Host は `unsafe impl` が要る。これは受け入れる
 - Host を総称の型引数 (`Ctx<M, H>`) にはしない。基本操作がすべて `H` ごとにも単相化され、証明にも `H` が入るためである。動的な呼び出しの費用は数ナノ秒で、書き込みの費用と比べて小さい ([計測の基準](../implementation/benchmarks.md) の「S9b-3 (extern)」)
-- ネイティブ、WASM (WASI)、アプリへの組み込み、S11 の REPL は、渡す Host を替えるだけで済む。S12 で標準入力、環境変数、時刻などの extern を足すときも、Host のメソッドを足す
+- ネイティブ、WASM (WASI)、アプリへの組み込み、S11 の REPL は、渡す Host を替えるだけで済む。標準入力、環境変数、子のプロセスなどの extern を足すときも、Host のメソッドを足す
+- `args`、`env_var`、`stdin`、`write_file`、`run` は、その入出力を持たない Host の振る舞いを既定に持つ。引数は空、環境変数は設定されていない、ほかは `Unsupported` の誤り (extern の理由は `not available`) である。組み込み先の Host は、出力とファイルの読みだけを実装すれば済む
+- `stdin` は、Host が持つ標準入力の読み手を、読む間だけ `MutexGuard` で貸す。Host のメソッドは `&self` を受けるためである
+- `run` は、`PATH` からプログラムを探して子を起動し、終わるのを待って終了コードを返す。シグナルで終わった子は、シェルと同じく 128 + 番号にする (`exit_code`)
 
 ### 出力のバッファ
 
 `eml_rt` は Host の実装 `StdHost` を持つ。ネイティブのプログラムも `eml_rt` をつないで、同じ方針を使うためである。
 
-- `StdHost::stdio(file_root)` は、標準出力と標準エラーに書く。`StdHost::new(out, err, file_root, mode)` は、テストと組み込みのために書き込み先と書き方 (`Buffering` の `Line` か `Block`) を受ける
+- `StdHost::stdio(file_root)` は、標準出力と標準エラーに書く。`StdHost::new(out, err, file_root, mode)` は、テストと組み込みのために書き込み先と書き方 (`Buffering` の `Line` か `Block`) を受ける。どちらも引数と標準入力を持たず (REPL の Host)、`with_args` と `with_stdin` で足す (`eml run` の Host。[VM](vm.md) の「置き場所」)
+- `StdHost` の `env_var` はプロセスの環境を読む。空の名前と、`=` か NUL を含む名前は `std::env::var_os` が panic しうるので、読まずに `None` を返す。`write_file` は `file_root` にパスをつないで、作るか切り詰めて書く。`run` は、子に標準入出力と環境を受け継がせ、`file_root` が空でなければそこを作業ディレクトリにする
 - 出力の方針は C の stdio と同じにする。標準出力が端末なら、対話ですぐ見えるように行ごとに書く (`Line`)。端末でなければ、64 KiB の `BufWriter` でまとめて書く (`Block`)。標準エラーは、いつも行ごとに書く
 - まとめて書くと、行ごとに flush する書き方より約 65〜160 倍速い ([計測の基準](../implementation/benchmarks.md) の「S9b-3 (extern)」)
 - ストリームごとに `Mutex` を1つ持ち、ロックの中で本文と `\n` を書く。ロックが毒されていたら、`PoisonError::into_inner` で取り出して続ける。中身は書き込みのバッファだけで、続けても壊れないためである
@@ -862,7 +873,8 @@ pub struct Opened {
   - プログラムの終わり
   - 実行時エラーを出す前。`> out 2>&1` のときに、出力と誤りの順を保つためである
   - 割り込みと上限で止めたとき
-  - S12 で標準入力から読む前と、S11 の REPL の入力の区切り
+  - 標準入力から読む前 (`Stdin` の extern) と、S11 の REPL の入力の区切り
+- Host の `run` は、子を起動する前に標準出力を書き出す。子と eml の出力が順に並ぶようにするためである
 - `Ctx::print_line(line) -> Result<(), Fault>` は、Rust の文字列 `line` を `Stream::Out` に1行として書き (`write_line`)、続けて書き出す (`flush`)。REPL が整形した結果を書くのに使う ([REPL の端末](repl.md) の「結果の表示」)。どちらかが誤りなら `Fault::Output` を返す。ヒープには触れない
 - まとめて書くと、書き込みの誤り (`| head` での EPIPE など) が見つかるのは、後でバッファがあふれた `println` か、終わりの flush になる。そのため `println` の `Err(Output)` は、「この行か、それより前の行を書けなかった」ことを表す。終わりの flush の誤りは、VM が位置なしで出す
 - 2回目の Ctrl-C ですぐ終わるときは、まだ書いていない出力は失われる (C と同じ)
@@ -884,7 +896,9 @@ pub struct Opened {
   6. 結果は組 `(File, String)` で、`alloc_data(TUPLE, 2, 0, lin = true)` で作り、`File` の参照を組に移す。行の `ret_kind` が `Lin` なので `lin` ビットを立てる
   - 読みの誤りなら `Io { op: Read, .. }`、UTF-8 でなければ `NotUtf8`、止めたら `Stopped` を返す。どのときも `Vec` と `File` を手放す。`File` を手放すことで閉じる
 - ヒープに直接読む形、mmap で読む形、`Vec` をそのままヒープの文字列にする形は採らない。計測と理由は [計測の基準](../implementation/benchmarks.md) の「S9b-3 (extern)」にある
-- 読む途中で止める語を見るのは `Fs.read_all` だけである。ほかの extern は短い時間で終わるので、安全点を通らない
+- 標準入力の読み (`Std.Stdin.read_all` と `read_line_raw`) も、`Fs.read_all` と同じ読みの部品 (`StopOnInterrupt::read_bytes`) で読み、同じく区切りごとに止める語と確保量を見る。1行の読みは、std の `read_until` を使わず `fill_buf` と `consume` で `\n` まで写す。`read_until` は `Interrupted` を自分で読み直すので、止める語を見られないためである
+- `Proc.status` は、子を起動する前と、子が終わった後に止める語を見る。待つ間の Ctrl-C は同じプロセスグループの子にも届くので、子が終わって待ちから戻る。起動と同時に届いた Ctrl-C は子に届かないことがあり、そのときは子が終わってから止まる
+- 読む途中か待つ間に止める語を見るのは、`Fs.read_all`、標準入力の読み、`Proc.status` だけである。ほかの extern は短い時間で終わるので、安全点を通らない
 
 ### 仕事の回数
 
@@ -894,6 +908,7 @@ pub struct Opened {
 - `String.show`: 結果の長さ
 - `Fs.read_all`: ファイルの長さ
 - `String.slice`: 結果の長さ
+- `Env.arg`、`Env.var`、標準入力の読み: 写した文字列の長さ
 - `++`: 左が一意 (rc 1 の局所の物体) なら右の長さだけを数え、容量が足りずに作り直しても同じである。左が共有か不死なら、両辺の長さを数える
 
 ## `unsafe` の核
@@ -903,7 +918,7 @@ pub struct Opened {
 - `eml_rt` のコードは、核を含めて Verus の `verus!` の中に書き、`cargo verus verify -p eml_rt` が crate 全体を検証する ([テスト戦略](../implementation/testing.md) の「Verus」)。生のポインタの読み書きは、どれも Verus の権限 (`PointsTo`) の上で行う。証明するのは、公開の操作の前提 (上の「核の操作」の表) の下でのメモリの安全、ヒープの形の不変条件、RC と抽象のモデルの対応、`share` と `release` と reuse の遷移、上の「検査モードの約束」の性質である
 - 確保と atomic の操作は、std の関数を薄い関数で包み、その関数の約束を信頼する (下の表の T1 と T2)。vstd の確保は失敗すると `process::abort` を呼び、vstd の atomic は SeqCst だけを扱うので、使わない。包みは std の関数を1回呼ぶだけで、型を差し替える層ではない
 
-Verus で確かめない部分は、次の信頼の一覧にまとめる。`external_body`、`assume_specification` などの信頼の項目は、どれもこの表のどれかに属する。`eml_rt` の `trust.rs` のテストが、テストでないコードの項目を探し、表の番号を付けた一覧と同じであることを確かめる。`verus!` の外に置くのは、`fmt` と `Default` の実装、T4 の `Drop`、`unsafe impl Send` と `Sync`、`Sync` でないことの型の assert と配置を確かめるコンパイル時の assert、`leaks` の `BTreeMap` を組む安全な関数と `check_invariants`、前置きの構造体 `Prefix` の宣言、panic の文言の `const`、`Foreign` の表の `const` (T3)、`Control` の止める語と確保量を読み書きする安全な関数と `Ctx::poll` (上の「実行の制御」)、Host の trait と `Opened`、`Buffering`、`StdHost`、`HostRef::new` と `HostRef` の `Drop` (T4)、`Fault`、`ArithFault`、`IoReason`、`Stop` の `Display`、`io::Error` を `IoReason` に写す関数 `io_reason` (上の「extern」)、止める語が立った後の `Interrupted` を変える読み手 `StopOnInterrupt` (上の「`File`」)、テストだけである。
+Verus で確かめない部分は、次の信頼の一覧にまとめる。`external_body`、`assume_specification` などの信頼の項目は、どれもこの表のどれかに属する。`eml_rt` の `trust.rs` のテストが、テストでないコードの項目を探し、表の番号を付けた一覧と同じであることを確かめる。`verus!` の外に置くのは、`fmt` と `Default` の実装、T4 の `Drop`、`unsafe impl Send` と `Sync`、`Sync` でないことの型の assert と配置を確かめるコンパイル時の assert、`leaks` の `BTreeMap` を組む安全な関数と `check_invariants`、前置きの構造体 `Prefix` の宣言、panic の文言の `const`、`Foreign` の表の `const` (T3)、`Control` の止める語と確保量を読み書きする安全な関数と `Ctx::poll` (上の「実行の制御」)、Host の trait (既定のメソッドを含む) と `Opened`、`StdinLock`、`lock_stdin`、`exit_code`、`Buffering`、`StdHost`、`HostRef::new` と `HostRef` の `Drop` (T4)、`Fault`、`ArithFault`、`IoReason`、`Stop` の `Display`、`io::Error` を `IoReason` に写す関数 `io_reason` (上の「extern」)、止める語が立った後の `Interrupted` を変える読み手 `StopOnInterrupt` とその読みの部品 `read_bytes` と読みの誤り `Failure` (上の「`File`」)、テストだけである。
 
 | # | 中身 | 理由 | Miri で確かめること |
 |---|---|---|---|
@@ -914,11 +929,11 @@ Verus で確かめない部分は、次の信頼の一覧にまとめる。`exte
 | T4 | `verus!` の外の `Drop` の実装 (`Heap`、`Pages`、`Frozen`)。`Frozen` の `Drop` は、親への `Arc` を `Arc::into_inner` のループで手放し、ページは `Pages` の `Drop` が返す。`Heap` は付けた塊の `Arc` を `ManuallyDrop` の欄に持ち、`Drop` が生きている物体の後始末 (`finalize_all`) の後で、`#[inline(never)]` の関数に渡して手放す。`Pages` も、確保量を数える `Control` の `Arc` を `ManuallyDrop` の欄に持ち、`Drop` がページを返して確保量を引いた後で、`#[inline(never)]` の関数に渡して手放す。`HostRef` の `Drop` も、Host の `Arc` を `#[inline(never)]` の関数に渡して手放す (上の「extern」の「Host」)。欄の後始末を展開させると、計測のプログラムのコード生成単位の分け方が変わり、速い道が展開されなくなるためである ([計測の基準](../implementation/benchmarks.md) の「S9b-2a (凍結した領域)」)。後始末の中で破棄処理が panic すると、塊の `Arc` は手放されずに漏れる (メモリの安全は崩れない)。ヒープの ghost の欄の塊の権限の写しは、`wf` で `Arc` の指す塊の権限に結ぶが、写しを使う間 `Arc` が塊のメモリを生かし続けることは Verus が確かめない | Verus は利用者の `Drop` を扱わない。中身は検証した関数を呼ぶか、`Arc` を手放すだけにする | T1 と T3 のテストが通る道。塊の `Drop` がページを返すこと、鎖の塊と付けたヒープをどの順に落としても漏れず、残る `Arc` が鎖を生かすこと |
 | T5 | 証明に使う std の約束のうち vstd にないもの。`ptr::without_provenance_mut` (`Word::imm` が const fn のまま即値を作るため)、2つの塊が同じ塊かを `std::ptr::eq` で比べる `same_chunk` (同じ番地の塊は同じ値であると約束する。vstd は `Arc` の番地の比較に約束を持たない)、panic で止める関数 (大きさの桁あふれ、即値に収まらない `Word::imm`、不死の物体の数の桁あふれ、ページの配置の誤り、子孫でない塊を付ける `attach` の `not_a_descendant`)、`<[u8] as Ord>::cmp` を1回呼ぶ包み `bytes_cmp` の結果が辞書式の順序の spec `lex` に一致すること (上の「extern」。vstd の `assume_specification` は `cmp` を総称の形でしか受けないので、包みにする) | vstd の std の約束が足りない。panic の関数は値を返さないことだけを約束する | なし (値の約束で、メモリに触れない) |
 | T6 | `global` の宣言: 64 ビットの環境、`Word`、`Header`、`PageHeader`、前置きの配置 | Verus は `global` の宣言をコンパイル時に照らす | なし |
-| T7 | unwind。検証した関数は、決まった所でしか unwind しないとして証明する。決まった所は、T5 の panic の関数 (状態を変える前に呼ぶ)、T3 の破棄処理 (箱を先に死んだことにしてから呼ぶ)、`Vec` の伸長と、T11 の Host の呼び出し (`write_line`、`flush`、`open`、読み手の読みと drop、読んだバイト列の UTF-8 の確かめ) である。Host を呼ぶ前には、ヒープを整った状態にしておく。Host の中で unwind した後に残る状態は、`println` では文字列が漏れ、`Fs.open` では開く間借りていたパスの文字列が漏れ、`Fs.read_all` では `File` が漏れて `Heap` を落とすときの `finalize_all` が閉じる。どれもメモリの安全は崩れない。`Ctx` は `Drop` を実装せず、`evv` と yield の状態の語に触れないので、基本操作の中の `decref` で破棄処理が panic した後も、`Ctx` を落とすことは安全である (上の「実行文脈 `Ctx`」) | Verus の `ensures` は正常に戻ったときだけを扱う。unwind の後も `Heap` と `Ctx` を落とすことは安全でなければならない | 解放の連鎖の途中で破棄処理が panic した後に、`Heap` を落とすこと |
+| T7 | unwind。検証した関数は、決まった所でしか unwind しないとして証明する。決まった所は、T5 の panic の関数 (状態を変える前に呼ぶ)、T3 の破棄処理 (箱を先に死んだことにしてから呼ぶ)、`Vec` の伸長と、T11 の Host の呼び出し (`write_line`、`flush`、`open`、読み手の読みと drop、読んだバイト列の UTF-8 の確かめ、`args`、`env_var`、`stdin`、`write_file`、`run`) である。Host を呼ぶ前には、ヒープを整った状態にしておく。Host の中で unwind した後に残る状態は、`println` では文字列が漏れ、`Fs.open` では開く間借りていたパスの文字列が漏れ、`Fs.read_all` では `File` が漏れて `Heap` を落とすときの `finalize_all` が閉じる。どれもメモリの安全は崩れない。`Ctx` は `Drop` を実装せず、`evv` と yield の状態の語に触れないので、基本操作の中の `decref` で破棄処理が panic した後も、`Ctx` を落とすことは安全である (上の「実行文脈 `Ctx`」) | Verus の `ensures` は正常に戻ったときだけを扱う。unwind の後も `Heap` と `Ctx` を落とすことは安全でなければならない | 解放の連鎖の途中で破棄処理が panic した後に、`Heap` を落とすこと |
 | T8 | 借用の規則 (Stacked Borrows と Tree Borrows) | vstd の権限のモデルは、参照と生のポインタの借用の規則を表さない | 核の各操作を両方のモードで1回ずつ通す小さいテスト。ヒープの物体のフィールドに置いた領域の語を読み、領域の文字列から写し、`share` と解放の連鎖が領域の子で止まること。実行文脈の基本操作を1回ずつ通すこと |
 | T9 | Verus、Z3、rustc、vstd (その std の約束を含む) | 道具そのもの | なし |
 | T10 | 文字列のバイトの読み書き。`String` のブロックの権限を受けてペイロードにバイトを写す関数と、ペイロードを `str` として借りる関数と、その位置を返す関数。約束は、権限が渡したポインタの `String` のブロックのもので、長さの語とバイト列の語を持つとき、メモリのバイト列が権限の ghost のバイト列に等しいこと、写すのは長さの語の後ろの容量の中だけで、長さの語の値と権限の位置を変えないこと。写す元のバイト列が写す先と重ならないことを前提にする。このヒープの文字列から写すときは写す先がいつも別のブロックで、`string_push` の `s` は、呼ぶ側の約束により left 自身の中身を指さない | Verus の権限は語の単位で、語の中のバイトの位置を扱わない | 語に揃わない位置への追記、大きい物体のページをまたぐ長さ、大きい左辺からの作り直し、空の文字列、多バイトの文字、1ページの長さを含む自分自身との連結 (`x ++ x`)、ほかの文字列の中身を指す `s` の追記、`string` で読んだ位置の使用が終わった後の追記、`String.show` が区間を写すこと (区間が先頭、途中、末尾にあり、多バイトの文字と接する場合)、2つの借用の規則での読み書き |
-| T11 | Host の実装と、それを呼ぶ関数。`HostRef` とその `Clone`、Host の `write_line` と `flush` を呼ぶ関数、不透明な `File`、Host の `open` を呼ぶ関数、`File` を区切りごとに読んで UTF-8 を確かめる関数 `read_text`。何も約束しない (書いた中身、読めた中身、返した値のどれも)。`read_text` の `File` を借りる前提は、`foreign_unique` で確かめる (上の「extern」) | Verus は `dyn Host`、`io::Error`、`dyn BufRead` を扱わず、OS とのやりとりの中身は証明の外にある。中身は期待値の表で確かめる ([テスト戦略](../implementation/testing.md) の「期待値の表」) | メモリの Host を通る `println` と `flush`、`open`、`read_all` (区切りをまたぐ長さ、長さの見込みのない読み手、短い読み、途中の読みの誤り、UTF-8 でない中身、止める語 (区切りの前と、止める語が立った後の `Interrupted`))、`close` |
+| T11 | Host の実装と、それを呼ぶ関数。`HostRef` とその `Clone`、Host の `write_line` と `flush` を呼ぶ関数、不透明な `File`、Host の `open` を呼ぶ関数、`File` を区切りごとに読んで UTF-8 を確かめる関数 `read_text`、引数の数と引数を写す `host_arg_count` と `host_arg`、環境変数を読む `host_env_has` と `host_env_var`、標準入力を読む `host_read_stdin`、ファイルを書く `host_write_file`、子を起動する `host_run`。中身は何も約束しない (書いた中身、読めた中身、返した値のどれも)。約束するのは、`Fault` を返す橋が `Fault::Heap` を返さないことだけで、本体を読めば分かる。`read_text` の `File` を借りる前提は、`foreign_unique` で確かめる (上の「extern」) | Verus は `dyn Host`、`io::Error`、`dyn BufRead` を扱わず、OS とのやりとりの中身は証明の外にある。中身は期待値の表で確かめる ([テスト戦略](../implementation/testing.md) の「期待値の表」) | メモリの Host を通る `println` と `flush`、`open`、`read_all` (区切りをまたぐ長さ、長さの見込みのない読み手、短い読み、途中の読みの誤り、UTF-8 でない中身、止める語 (区切りの前と、止める語が立った後の `Interrupted`))、`close`。引数、環境変数、標準入力の行と残り、ファイルの書き込み、子の起動の橋 |
 
 T10 の約束は、関数そのものの外の次の2つにも頼る。
 

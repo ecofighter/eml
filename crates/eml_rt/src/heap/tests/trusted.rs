@@ -346,7 +346,7 @@ fn every_primitive_once<M: Mode>() {
         let shown = ctx.string_show(a).unwrap();
         let n = ctx.int_show(-12);
         let joined = ctx.string_append(shown, n).unwrap();
-        ctx.println(joined).unwrap();
+        ctx.write_string(crate::Stream::Out, joined).unwrap();
         ctx.flush().unwrap();
         assert_eq!(memory.out(), "\"a\\n\"-12\n");
     }
@@ -638,7 +638,7 @@ fn println_goes_through_the_host<M: Mode>() {
     let mut ctx = ctx_tests::ctx_with::<M>(&memory);
     unsafe {
         let a = ctx.heap_mut().alloc_string("日本");
-        ctx.println(a).unwrap();
+        ctx.write_string(crate::Stream::Out, a).unwrap();
     }
     ctx.flush().unwrap();
     assert_eq!(memory.out(), "日本\n");
@@ -718,6 +718,45 @@ fn files_go_through_the_host<M: Mode>() {
     assert_eq!(mortal(ctx.heap()), 0);
 }
 
+/// スクリプトの extern の橋 (引数、環境変数、標準入力、ファイルの書き込み、子のプロセス) を、メモリの Host で通す。
+/// Host から写した文字列がヒープの文字列になり、引数の文字列が手放されることを確かめる。
+fn script_externs_go_through_the_host<M: Mode>() {
+    let memory = Arc::new(
+        MemoryHost::default()
+            .with_args(vec!["日本".into()])
+            .with_env(vec![("K", "v".into())])
+            .with_stdin(MemoryFile::text("a\nbc")),
+    );
+    let mut ctx = ctx_tests::ctx_with::<M>(&memory);
+    unsafe {
+        assert_eq!(ctx.env_arg_count(), 1);
+        let w = ctx.env_arg(0).unwrap();
+        assert_eq!(text(ctx.heap(), w), "日本");
+        ctx.heap_mut().decref(w).unwrap();
+        assert!(ctx.env_arg(1).is_err());
+        let k = ctx.heap_mut().alloc_string("K");
+        assert_eq!(ctx.env_has(k), Ok(crate::externs::TRUE));
+        let k = ctx.heap_mut().alloc_string("K");
+        let w = ctx.env_var(k).unwrap();
+        assert_eq!(text(ctx.heap(), w), "v");
+        ctx.heap_mut().decref(w).unwrap();
+        let w = ctx.stdin_read(true).unwrap();
+        assert_eq!(text(ctx.heap(), w), "a\n");
+        ctx.heap_mut().decref(w).unwrap();
+        let w = ctx.stdin_read(false).unwrap();
+        assert_eq!(text(ctx.heap(), w), "bc");
+        ctx.heap_mut().decref(w).unwrap();
+        let p = ctx.heap_mut().alloc_string("f");
+        let t = ctx.heap_mut().alloc_string("x");
+        ctx.fs_write_text(p, t).unwrap();
+        let p = ctx.heap_mut().alloc_string("prog");
+        let a = ctx.heap_mut().alloc_string("2\0a\0b\0");
+        assert_eq!(ctx.proc_status(p, a), Ok(2));
+    }
+    assert_eq!(memory.written("f").as_deref(), Some("x"));
+    assert_eq!(mortal(ctx.heap()), 0);
+}
+
 both_modes!(
     pages_are_aligned_and_returned,
     large_objects_get_their_own_page,
@@ -746,4 +785,5 @@ both_modes!(
     two_threads_share_one_control,
     println_goes_through_the_host,
     files_go_through_the_host,
+    script_externs_go_through_the_host,
 );

@@ -29,6 +29,7 @@ mod raw;
 mod recover;
 mod reuse;
 mod roots;
+mod script;
 mod share;
 mod string;
 mod table;

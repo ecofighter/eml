@@ -12,13 +12,13 @@ use vstd::string::StringSliceAdditionalSpecFns;
 verus! {
 
 impl<M: Mode> Ctx<M> {
-    /// `println`。文字列 `s` と `\n` を標準出力に書く。`s` の参照を受け取り、書けたかどうかによらず手放す。Host が出力を
-    /// まとめて書くときは、`Err(Output)` は、この行かそれより前の行を書けなかったことを表す。
+    /// `println` と `eprintln`。文字列 `s` と `\n` を `stream` に書く。`s` の参照を受け取り、書けたかどうかによらず手放す。
+    /// Host が出力をまとめて書くときは、`Err(Output)` は、この行かそれより前の行を書けなかったことを表す。
     ///
     /// # Safety
     /// `heap_mut` の前提を守っている。`s` は即値か、このヒープか付けた塊の生きている物体を指し、呼ぶ側がその参照を1つ
     /// 持つ。速いモードでは、`s` は文字列である (検査モードは確かめ、違えば何も書かずに `WrongKind` を返す)。
-    pub unsafe fn println(&mut self, s: Word) -> (r: Result<(), Fault>)
+    pub unsafe fn write_string(&mut self, stream: Stream, s: Word) -> (r: Result<(), Fault>)
         requires
             old(self).wf(),
             old(self).heap_spec().word_in(s),
@@ -66,7 +66,7 @@ impl<M: Mode> Ctx<M> {
             }
             return Err(Fault::Heap(e));
         }
-        let written = host_write_line(&self.host, Stream::Out, self.heap.string_text(s));
+        let written = host_write_line(&self.host, stream, self.heap.string_text(s));
         self.heap.release_text(hs, Ghost(s), Ghost(c));
         proof {
             if M::CHECKED {
@@ -525,7 +525,7 @@ impl<M: Mode> Ctx<M> {
     }
 
     /// `Fs.open` で File を作った後も、パス `s` は持たれていて手放せる。`self` は呼ぶ前の文脈である。
-    proof fn lemma_path_kept(&self, h1: Heap<M>, h2: Heap<M>, s: Word, w: Word)
+    pub(super) proof fn lemma_path_kept(&self, h1: Heap<M>, h2: Heap<M>, s: Word, w: Word)
         requires
             self.held_ok(),
             self.is_string(s),
@@ -545,7 +545,7 @@ impl<M: Mode> Ctx<M> {
     }
 
     /// `Fs.open` の、開けた道でモデルが合っている道。`h1` は `settle` の後、`h2` は File を作った後である。
-    proof fn lemma_opened(&self, s0: Ctx<M>, h1: Heap<M>, h2: Heap<M>, s: Word, w: Word)
+    pub(super) proof fn lemma_opened(&self, s0: Ctx<M>, h1: Heap<M>, h2: Heap<M>, s: Word, w: Word)
         requires
             s0.held_ok(),
             s0.is_string(s),

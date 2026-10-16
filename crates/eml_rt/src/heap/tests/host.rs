@@ -1,11 +1,12 @@
 //! テストの Host。出力をメモリに受け、ファイルをメモリから読ませる。Miri でも動くように、OS に触れない。
 
 use std::collections::HashMap;
+use std::ffi::OsString;
 use std::io::{self, BufRead, BufReader, Read, Write};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
-use crate::{Host, HostRef, Opened, Stream};
+use crate::{Host, HostRef, Opened, StdinLock, Stream, lock_stdin};
 
 /// メモリの上のファイル。読み手の振る舞い (1回に返すバイト数、途中の誤り、中断) を決められる。
 #[derive(Clone, Default)]
@@ -86,6 +87,18 @@ pub(super) struct MemoryHost {
     files: Mutex<HashMap<String, MemoryFile>>,
     /// 書き込みで返す誤りの文言
     fail_write: Option<&'static str>,
+    args: Vec<OsString>,
+    env: HashMap<String, OsString>,
+    /// `None` なら標準入力を使えない
+    stdin: Option<Mutex<Box<dyn BufRead + Send>>>,
+    /// `write_file` が書いたファイル
+    written: Mutex<HashMap<String, String>>,
+    /// `run` が受けたプログラムと引数
+    runs: Mutex<Vec<(String, Vec<String>)>>,
+    /// `flush` を呼ばれた回数
+    flushes: AtomicUsize,
+    /// `run` の中でこの `Control` に割り込みを立てる。子を待つ間に届いた SIGINT を表す
+    interrupt_run: Option<Arc<crate::Control>>,
 }
 
 impl MemoryHost {
@@ -104,6 +117,37 @@ impl MemoryHost {
     pub(super) fn err(&self) -> String {
         String::from_utf8(self.err.lock().unwrap().clone()).unwrap()
     }
+    pub(super) fn with_args(mut self, args: Vec<OsString>) -> MemoryHost {
+        self.args = args;
+        self
+    }
+    pub(super) fn with_env(mut self, env: Vec<(&str, OsString)>) -> MemoryHost {
+        self.env = env.into_iter().map(|(k, v)| (k.to_string(), v)).collect();
+        self
+    }
+    /// 標準入力をメモリのファイルから読ませる
+    pub(super) fn with_stdin(mut self, file: MemoryFile) -> MemoryHost {
+        let reader: Box<dyn BufRead + Send> = Box::new(BufReader::new(Reader {
+            file,
+            at: 0,
+            interrupted: false,
+        }));
+        self.stdin = Some(Mutex::new(reader));
+        self
+    }
+    pub(super) fn interrupting(mut self, control: Arc<crate::Control>) -> MemoryHost {
+        self.interrupt_run = Some(control);
+        self
+    }
+    pub(super) fn written(&self, path: &str) -> Option<String> {
+        self.written.lock().unwrap().get(path).cloned()
+    }
+    pub(super) fn runs(&self) -> Vec<(String, Vec<String>)> {
+        self.runs.lock().unwrap().clone()
+    }
+    pub(super) fn flushes(&self) -> usize {
+        self.flushes.load(Ordering::Relaxed)
+    }
 }
 
 impl Host for MemoryHost {
@@ -120,6 +164,7 @@ impl Host for MemoryHost {
         Ok(())
     }
     fn flush(&self) -> io::Result<()> {
+        self.flushes.fetch_add(1, Ordering::Relaxed);
         Ok(())
     }
     fn open(&self, path: &str) -> io::Result<Opened> {
@@ -139,6 +184,41 @@ impl Host for MemoryHost {
             interrupted: false,
         }));
         Ok(Opened { reader, size })
+    }
+    fn args(&self) -> &[OsString] {
+        &self.args
+    }
+    fn env_var(&self, name: &str) -> Option<OsString> {
+        self.env.get(name).cloned()
+    }
+    fn stdin(&self) -> io::Result<StdinLock<'_>> {
+        match &self.stdin {
+            Some(stdin) => Ok(lock_stdin(stdin)),
+            None => Err(io::Error::from(io::ErrorKind::Unsupported)),
+        }
+    }
+    fn write_file(&self, path: &str, text: &str) -> io::Result<()> {
+        if path.is_empty() {
+            return Err(io::Error::from(io::ErrorKind::PermissionDenied));
+        }
+        self.written
+            .lock()
+            .unwrap()
+            .insert(path.to_string(), text.to_string());
+        Ok(())
+    }
+    /// プロセスを起動せず、受けたものを覚える。`missing` は見つからないプログラムで、ほかは引数の数を終了コードにする
+    fn run(&self, program: &str, args: &[&str]) -> io::Result<i32> {
+        if program == "missing" {
+            return Err(io::Error::from(io::ErrorKind::NotFound));
+        }
+        let args: Vec<String> = args.iter().map(|a| a.to_string()).collect();
+        let code = args.len() as i32;
+        self.runs.lock().unwrap().push((program.to_string(), args));
+        if let Some(control) = &self.interrupt_run {
+            control.interrupt();
+        }
+        Ok(code)
     }
 }
 
@@ -173,7 +253,7 @@ impl Write for Shared {
 }
 
 mod std_host {
-    use std::io::{self, Read};
+    use std::io::{self, BufRead, Read};
     use std::panic::{AssertUnwindSafe, catch_unwind};
     use std::path::PathBuf;
 
@@ -189,6 +269,61 @@ mod std_host {
             mode,
         );
         (host, out, err)
+    }
+
+    /// 設定できない名前は、`var_os` に渡さずに設定されていないとみなす。
+    #[test]
+    fn an_impossible_variable_name_is_unset() {
+        let (host, _, _) = std_host(Buffering::Line);
+        for name in ["", "A=B", "A\0B"] {
+            assert_eq!(host.env_var(name), None, "{name:?}");
+        }
+    }
+
+    #[test]
+    fn a_host_without_a_standard_input_refuses_to_read_it() {
+        let (host, _, _) = std_host(Buffering::Line);
+        assert_eq!(
+            host.stdin().err().map(|e| e.kind()),
+            Some(io::ErrorKind::Unsupported)
+        );
+        let host = host.with_stdin(Box::new(io::Cursor::new(b"x".to_vec())));
+        let mut line = String::new();
+        host.stdin().unwrap().read_line(&mut line).unwrap();
+        assert_eq!(line, "x");
+    }
+
+    #[test]
+    fn a_file_is_written_under_the_root() {
+        let dir = std::env::temp_dir().join(format!("eml_rt-write-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let host = StdHost::new(
+            Box::new(io::sink()),
+            Box::new(io::sink()),
+            dir.clone(),
+            Buffering::Line,
+        );
+        host.write_file("out.txt", "日本").unwrap();
+        assert_eq!(
+            std::fs::read_to_string(dir.join("out.txt")).unwrap(),
+            "日本"
+        );
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// 子の終了コードはそのまま返し、シグナルで終わった子は 128 + 番号にする。起動の前に標準出力を書き出す。
+    #[cfg(unix)]
+    #[test]
+    fn a_child_reports_its_exit_code() {
+        let (host, out, _) = std_host(Buffering::Block);
+        host.write_line(Stream::Out, "before").unwrap();
+        assert_eq!(host.run("sh", &["-c", "exit 3"]).unwrap(), 3);
+        assert_eq!(out.text(), "before\n");
+        assert_eq!(host.run("sh", &["-c", "kill -TERM $$"]).unwrap(), 128 + 15);
+        assert_eq!(
+            host.run("eml-no-such-program", &[]).err().map(|e| e.kind()),
+            Some(io::ErrorKind::NotFound)
+        );
     }
 
     #[test]

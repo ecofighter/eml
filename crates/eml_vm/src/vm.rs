@@ -3,7 +3,7 @@
 //! (docs/future/multicore.md の「VM の並列化の備え」の制約5)。
 
 use eml_extern::Extern;
-use eml_rt::{Ctx, Mode, Word, externs};
+use eml_rt::{Ctx, Mode, Stream, Word, externs};
 
 use crate::RunCounts;
 use crate::apply;
@@ -498,7 +498,7 @@ fn extern_call<M: Mode>(
     unsafe {
         match Extern::ALL[ops[0] as usize] {
             Extern::Println => {
-                ctx.println(task.get(arg(0)))?;
+                ctx.write_string(Stream::Out, task.get(arg(0)))?;
                 task.set(dst, Word::UNIT);
             }
             Extern::Open => {

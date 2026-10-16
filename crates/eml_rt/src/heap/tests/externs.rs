@@ -481,9 +481,9 @@ fn println_writes_a_line_and_releases_its_text<M: Mode>() {
     let mut ctx = ctx_with::<M>(&memory);
     unsafe {
         let a = s(&mut ctx, "héllo");
-        ctx.println(a).unwrap();
+        ctx.write_string(crate::Stream::Out, a).unwrap();
         let e = s(&mut ctx, "");
-        ctx.println(e).unwrap();
+        ctx.write_string(crate::Stream::Out, e).unwrap();
     }
     ctx.flush().unwrap();
     assert_eq!(memory.out(), "héllo\n\n");
@@ -497,7 +497,10 @@ fn a_failed_write_still_releases_the_text<M: Mode>() {
     let mut ctx = ctx_with::<M>(&memory);
     unsafe {
         let a = s(&mut ctx, "x");
-        assert_eq!(ctx.println(a), Err(Fault::Output("disk full".into())));
+        assert_eq!(
+            ctx.write_string(crate::Stream::Out, a),
+            Err(Fault::Output("disk full".into()))
+        );
     }
     assert_eq!(mortal(ctx.heap()), 0);
 }
@@ -510,9 +513,12 @@ fn println_refuses_a_non_string<M: Mode>() {
     let mut ctx = ctx_with::<M>(&memory);
     unsafe {
         let d = ctx.heap_mut().alloc_data(0, 0, 1, false);
-        assert_eq!(ctx.println(d), Err(Fault::Heap(HeapError::WrongKind)));
         assert_eq!(
-            ctx.println(Word::imm(0)),
+            ctx.write_string(crate::Stream::Out, d),
+            Err(Fault::Heap(HeapError::WrongKind))
+        );
+        assert_eq!(
+            ctx.write_string(crate::Stream::Out, Word::imm(0)),
             Err(Fault::Heap(HeapError::WrongKind))
         );
         assert_eq!(memory.out(), "");
@@ -1011,7 +1017,7 @@ unsafe fn call<M: Mode>(
             }
             "Prelude.println" => {
                 let a = one(ctx, args);
-                ctx.println(a)?;
+                ctx.write_string(crate::Stream::Out, a)?;
                 ctx.flush()?;
                 Outcome::Out(out.text())
             }

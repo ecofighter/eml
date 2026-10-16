@@ -4,16 +4,18 @@
 //! Verus は `dyn Host` も `io::Error` も扱えないので、Host の trait と実装は `verus!` の外に置く。`Ctx` は Host を不透明な
 //! `HostRef` で持ち、何も約束しない関数を通して呼ぶ (信頼の一覧の T11)。
 
+use std::ffi::OsString;
 use std::fs;
 use std::io::{self, BufRead, BufReader, BufWriter, IsTerminal, Read, Write};
 use std::mem::ManuallyDrop;
 use std::path::PathBuf;
-use std::sync::{Arc, Mutex, PoisonError};
+use std::process::{Command, ExitStatus};
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 use vstd::prelude::*;
 
 use crate::control::{Control, Stop, stop_reason};
-use crate::externs::IoReason;
+use crate::externs::{Fault, IndexFault, IoOp, IoReason, Utf8Source};
 
 verus! {
 
@@ -89,50 +91,123 @@ pub(crate) fn host_open(host: &HostRef, path: &str) -> Result<File, (Box<str>, I
 #[verifier::external_body]
 pub(crate) unsafe fn read_text(file: *mut File, control: &Control) -> Result<String, ReadError> {
     let file = unsafe { &mut *file };
-    // 止める語と確保量を見る。`Vec` はヒープの外にあるので、持つ領域の大きさ `held` をページの確保量に足して上限と比べる
-    let check = |held: usize|
+    let mut reader = StopOnInterrupt { reader: &mut *file.reader, control };
+    match reader.read_bytes(file.size.take(), false) {
+        Ok(bytes) => String::from_utf8(bytes).map_err(|_| ReadError::NotUtf8(file.path.clone())),
+        Err(Failure::Io(reason)) => Err(ReadError::Io(file.path.clone(), reason)),
+        Err(Failure::Stopped(stop)) => Err(ReadError::Stopped(stop)),
+    }
+}
+
+/// スクリプトに渡した引数の数。
+#[verifier::external_body]
+pub(crate) fn host_arg_count(host: &HostRef) -> usize {
+    host.host.args().len()
+}
+
+/// `Env.args ()` の `index` 番の引数を写す。範囲の外と UTF-8 でない引数は誤りにする。
+#[verifier::external_body]
+pub(crate) fn host_arg(host: &HostRef, index: i64) -> (r: Result<String, Fault>)
+    ensures
+        !(r matches Err(Fault::Heap(_))),
+{
+    let args = host.host.args();
+    let arg = usize::try_from(index).ok().and_then(|i| args.get(i)).ok_or_else(
+        || { Fault::Index(Box::new(IndexFault::Arg { index, count: args.len() as i64 })) },
+    )?;
+    arg.to_str().map(str::to_string).ok_or_else(|| Fault::NotUtf8(Box::new(Utf8Source::Arg(index))))
+}
+
+/// 環境変数 `name` が設定されているか。
+#[verifier::external_body]
+pub(crate) fn host_env_has(host: &HostRef, name: &str) -> bool {
+    host.host.env_var(name).is_some()
+}
+
+/// 環境変数 `name` の値を写す。設定されていなければ空の文字列で、UTF-8 でない値は誤りにする。
+#[verifier::external_body]
+pub(crate) fn host_env_var(host: &HostRef, name: &str) -> (r: Result<String, Fault>)
+    ensures
+        !(r matches Err(Fault::Heap(_))),
+{
+    match host.host.env_var(name) {
+        None => Ok(String::new()),
+        Some(value) => value.into_string().map_err(
+            |_| Fault::NotUtf8(Box::new(Utf8Source::EnvVar(name.into()))),
+        ),
+    }
+}
+
+/// 標準出力を書き出してから、標準入力の残りをすべて (`line` なら次の `\n` まで) 読む。読みは `read_text` と同じく
+/// 止める語と確保量を見る。
+#[verifier::external_body]
+pub(crate) fn host_read_stdin(host: &HostRef, control: &Control, line: bool) -> (r: Result<
+    String,
+    Fault,
+>)
+    ensures
+        !(r matches Err(Fault::Heap(_))),
+{
+    host.host.flush().map_err(|e| Fault::Output(e.to_string().into_boxed_str()))?;
+    let mut stdin = host.host.stdin().map_err(|e| Fault::Stdin(io_reason(&e)))?;
+    let mut reader = StopOnInterrupt { reader: &mut **stdin, control };
+    match reader.read_bytes(None, line) {
+        Ok(bytes) => String::from_utf8(bytes).map_err(
+            |_| Fault::NotUtf8(Box::new(Utf8Source::Stdin)),
+        ),
+        Err(Failure::Io(reason)) => Err(Fault::Stdin(reason)),
+        Err(Failure::Stopped(stop)) => Err(Fault::Stopped(stop)),
+    }
+}
+
+/// Host に `path` のファイルを書かせる。
+#[verifier::external_body]
+pub(crate) fn host_write_file(host: &HostRef, path: &str, text: &str) -> (r: Result<(), Fault>)
+    ensures
+        !(r matches Err(Fault::Heap(_))),
+{
+    host.host.write_file(path, text).map_err(
+        |e| Fault::Io { op: IoOp::Write, name: path.into(), reason: io_reason(&e) },
+    )
+}
+
+/// Host に子のプロセスを起動させ、終了コードを返す。`args` は、引数の数と各引数を、それぞれ NUL で終えて並べた列
+/// である。OS の引数は NUL を含めないので、NUL を含む引数があれば数が合わなくなり、起動の誤りにする。止める語が
+/// 起動の前に立っていれば起動せず、子を待つ間に立てば子が終わった後で、止めたことにする
+/// (docs/spec/object-model.md の「実行の制御」)。
+#[verifier::external_body]
+pub(crate) fn host_run(host: &HostRef, control: &Control, program: &str, args: &str) -> (r: Result<
+    i64,
+    Fault,
+>)
+    ensures
+        !(r matches Err(Fault::Heap(_))),
+{
+    let stopped = ||
         {
             let bits = control.stop_bits();
             if bits != 0 {
-                Err(ReadError::Stopped(stop_reason(bits)))
-            } else if control.bytes().saturating_add(held) > control.limits().max_bytes {
-                Err(ReadError::Stopped(Stop::MemoryLimit))
+                Err(Fault::Stopped(stop_reason(bits)))
             } else {
                 Ok(())
             }
         };
-    let mut bytes = Vec::new();
-    if let Some(size) = file.size.take() {
-        // 上限を超える見込みは、確保を試す前に止める。確保できないほど大きい見込みも、上限があれば上限の誤りになる
-        let size = usize::try_from(size).unwrap_or(usize::MAX);
-        check(size)?;
-        // 確保に失敗したら I/O の誤りにする (`read_to_end` と同じ)
-        if bytes.try_reserve(size).is_err() {
-            return Err(ReadError::Io(file.path.clone(), IoReason::Other));
-        }
-    }
-    loop {
-        check(bytes.capacity())?;
-        let mut reader = StopOnInterrupt { reader: &mut *file.reader, control };
-        // `read_to_end` が、止める語の立っていない `Interrupted` の読み直し、短い読み、終わりを小さな読みで確かめることを
-        // 受け持つ
-        match (&mut reader).take(READ_CHUNK).read_to_end(&mut bytes) {
-            Ok(0) => break,
-            Ok(_) => {},
-            Err(e) => {
-                // 止める語が立っていれば、読みの誤りより止めたことを報告する。`StopOnInterrupt` が返した誤りもここに来る
-                let bits = control.stop_bits();
-                return Err(
-                    if bits != 0 {
-                        ReadError::Stopped(stop_reason(bits))
-                    } else {
-                        ReadError::Io(file.path.clone(), io_reason(&e))
-                    },
-                );
-            },
-        }
-    }
-    String::from_utf8(bytes).map_err(|_| ReadError::NotUtf8(file.path.clone()))
+    stopped()?;
+    let run = ||
+        {
+            let mut fields = args.split_terminator('\0');
+            let count = fields.next().and_then(|n| n.parse::<usize>().ok());
+            let args: Vec<&str> = fields.collect();
+            if count != Some(args.len()) {
+                return Err(io::Error::from(io::ErrorKind::InvalidInput));
+            }
+            host.host.run(program, &args)
+        };
+    let code = run().map_err(
+        |e| Fault::Io { op: IoOp::Run, name: program.into(), reason: io_reason(&e) },
+    )?;
+    stopped()?;
+    Ok(code as i64)
 }
 
 } // verus!
@@ -144,6 +219,89 @@ pub(crate) unsafe fn read_text(file: *mut File, control: &Control) -> Result<Str
 struct StopOnInterrupt<'a> {
     reader: &'a mut (dyn BufRead + Send),
     control: &'a Control,
+}
+
+/// 読みが途中で終わった理由。
+enum Failure {
+    Io(IoReason),
+    Stopped(Stop),
+}
+
+impl StopOnInterrupt<'_> {
+    /// 終わりまで (`line` なら `\n` まで、それを含めて) 読む。`READ_CHUNK` バイトごとに止める語と確保量を見る。`size` は
+    /// 読む前に分かる長さで、それが上限を超える見込みなら、確保を試す前に止める。
+    fn read_bytes(&mut self, size: Option<u64>, line: bool) -> Result<Vec<u8>, Failure> {
+        let control = self.control;
+        // `Vec` はヒープの外にあるので、持つ領域の大きさ `held` をページの確保量に足して上限と比べる
+        let check = |held: usize| {
+            let bits = control.stop_bits();
+            if bits != 0 {
+                Err(Failure::Stopped(stop_reason(bits)))
+            } else if control.bytes().saturating_add(held) > control.limits().max_bytes {
+                Err(Failure::Stopped(Stop::MemoryLimit))
+            } else {
+                Ok(())
+            }
+        };
+        // 止める語が立っていれば、読みの誤りより止めたことを報告する。`read` が返した止めたことの誤りもここに来る
+        let failed = |e: &io::Error| {
+            let bits = control.stop_bits();
+            if bits != 0 {
+                Failure::Stopped(stop_reason(bits))
+            } else {
+                Failure::Io(io_reason(e))
+            }
+        };
+        let mut bytes = Vec::new();
+        if let Some(size) = size {
+            // 確保できないほど大きい見込みも、上限があれば上限の誤りになる
+            let size = usize::try_from(size).unwrap_or(usize::MAX);
+            check(size)?;
+            // 確保に失敗したら I/O の誤りにする (`read_to_end` と同じ)
+            if bytes.try_reserve(size).is_err() {
+                return Err(Failure::Io(IoReason::Other));
+            }
+        }
+        let chunk = READ_CHUNK as usize;
+        loop {
+            check(bytes.capacity())?;
+            if !line {
+                // `read_to_end` が、止める語の立っていない `Interrupted` の読み直し、短い読み、終わりを小さな読みで
+                // 確かめることを受け持つ
+                match (&mut *self).take(READ_CHUNK).read_to_end(&mut bytes) {
+                    Ok(0) => return Ok(bytes),
+                    Ok(_) => continue,
+                    Err(e) => return Err(failed(&e)),
+                }
+            }
+            // 行は `fill_buf` で読み手のバッファを見て、`\n` までを写す。std の `read_until` は `Interrupted` を自分で
+            // 読み直すので、止める語を見られない
+            let (used, done) = match self.reader.fill_buf() {
+                Ok([]) => return Ok(bytes),
+                Ok(buf) => {
+                    let buf = &buf[..buf.len().min(chunk)];
+                    match buf.iter().position(|&b| b == b'\n') {
+                        Some(i) => {
+                            bytes.extend_from_slice(&buf[..=i]);
+                            (i + 1, true)
+                        }
+                        None => {
+                            bytes.extend_from_slice(buf);
+                            (buf.len(), false)
+                        }
+                    }
+                }
+                Err(e) if e.kind() == io::ErrorKind::Interrupted && control.stop_bits() == 0 => {
+                    continue;
+                }
+                Err(e) => return Err(failed(&e)),
+            };
+            self.reader.consume(used);
+            if done {
+                return Ok(bytes);
+            }
+        }
+    }
 }
 
 impl Read for StopOnInterrupt<'_> {
@@ -189,6 +347,50 @@ pub trait Host: Send + Sync {
     fn flush(&self) -> io::Result<()>;
     /// `path` のファイルを読むために開く。
     fn open(&self, path: &str) -> io::Result<Opened>;
+    // 次のメソッドの既定は、その入出力を持たない Host (組み込み先や REPL) の振る舞いである。使えない入出力は
+    // `Unsupported` の誤りを返し、extern の誤りの理由は `not available` になる
+
+    /// スクリプトに渡した引数 (`Env.args`)。`eml` とスクリプトのパスは含めない。
+    fn args(&self) -> &[OsString] {
+        &[]
+    }
+    /// 環境変数 `name` の値。設定されていなければ `None` である。
+    fn env_var(&self, _name: &str) -> Option<OsString> {
+        None
+    }
+    /// 標準入力の読み手を、読む間だけ貸す。
+    fn stdin(&self) -> io::Result<StdinLock<'_>> {
+        Err(io::Error::from(io::ErrorKind::Unsupported))
+    }
+    /// `path` のファイルを作るか切り詰めて、`text` を書く。
+    fn write_file(&self, _path: &str, _text: &str) -> io::Result<()> {
+        Err(io::Error::from(io::ErrorKind::Unsupported))
+    }
+    /// `PATH` から `program` を探して子のプロセスを起動し、終わるのを待って終了コードを返す (`exit_code`)。子と eml の
+    /// 出力が順に並ぶよう、起動の前に標準出力を書き出す。
+    fn run(&self, _program: &str, _args: &[&str]) -> io::Result<i32> {
+        Err(io::Error::from(io::ErrorKind::Unsupported))
+    }
+}
+
+/// `Host::stdin` が貸す標準入力の読み手。
+pub type StdinLock<'a> = MutexGuard<'a, Box<dyn BufRead + Send>>;
+
+/// 子のプロセスの終了コード。シグナルで終わった子は、シェルと同じく 128 + シグナルの番号にする。
+pub fn exit_code(status: ExitStatus) -> i32 {
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::ExitStatusExt;
+        if let Some(signal) = status.signal() {
+            return 128 + signal;
+        }
+    }
+    status.code().unwrap_or(1)
+}
+
+/// 標準入力の読み手を守るロックを取る。中身は読み手だけなので、毒されても続けて使ってよい。
+pub fn lock_stdin(stdin: &Mutex<Box<dyn BufRead + Send>>) -> StdinLock<'_> {
+    stdin.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
 /// 開いたファイル。
@@ -212,7 +414,8 @@ pub enum Buffering {
 const BUFFER_BYTES: usize = 64 * 1024;
 
 /// 標準出力と標準エラーに書き、ファイルを `file_root` の下から開く Host。出力の書き方は C の stdio と同じにする。
-/// 落とすときは、`BufWriter` の `Drop` がまだ書いていない出力を書く (unwind のときも同じで、誤りは捨てる)。
+/// 落とすときは、`BufWriter` の `Drop` がまだ書いていない出力を書く (unwind のときも同じで、誤りは捨てる)。環境変数は
+/// プロセスのものを読み、子のプロセスは標準入出力と環境を受け継ぐ。
 pub struct StdHost {
     // ストリームごとにロックを1つ持ち、ロックの中で本文と `\n` を書く
     out: Mutex<BufWriter<Box<dyn Write + Send>>>,
@@ -220,6 +423,9 @@ pub struct StdHost {
     /// 標準出力を行ごとに書くか。
     line: bool,
     file_root: PathBuf,
+    args: Vec<OsString>,
+    /// `None` なら標準入力を使えない (REPL)。
+    stdin: Option<Mutex<Box<dyn BufRead + Send>>>,
 }
 
 impl StdHost {
@@ -249,7 +455,21 @@ impl StdHost {
             err: Mutex::new(BufWriter::with_capacity(BUFFER_BYTES, err)),
             line: mode == Buffering::Line,
             file_root,
+            args: Vec::new(),
+            stdin: None,
         }
+    }
+
+    /// スクリプトに渡す引数。
+    pub fn with_args(mut self, args: Vec<OsString>) -> StdHost {
+        self.args = args;
+        self
+    }
+
+    /// 標準入力の読み手。渡さなければ、標準入力を使えない。
+    pub fn with_stdin(mut self, stdin: Box<dyn BufRead + Send>) -> StdHost {
+        self.stdin = Some(Mutex::new(stdin));
+        self
     }
 }
 
@@ -296,6 +516,40 @@ impl Host for StdHost {
             size,
         })
     }
+
+    fn args(&self) -> &[OsString] {
+        &self.args
+    }
+
+    fn env_var(&self, name: &str) -> Option<OsString> {
+        // `var_os` は、空の名前と `=` か NUL を含む名前で panic しうる。どれも設定できない名前である
+        if name.is_empty() || name.contains(['=', '\0']) {
+            return None;
+        }
+        std::env::var_os(name)
+    }
+
+    fn stdin(&self) -> io::Result<StdinLock<'_>> {
+        match &self.stdin {
+            Some(stdin) => Ok(lock_stdin(stdin)),
+            None => Err(io::Error::from(io::ErrorKind::Unsupported)),
+        }
+    }
+
+    fn write_file(&self, path: &str, text: &str) -> io::Result<()> {
+        fs::write(self.file_root.join(path), text)
+    }
+
+    fn run(&self, program: &str, args: &[&str]) -> io::Result<i32> {
+        lock(&self.out).flush()?;
+        let mut command = Command::new(program);
+        command.args(args);
+        // 空の根はプロセスの今のディレクトリである。`current_dir("")` は開けない
+        if !self.file_root.as_os_str().is_empty() {
+            command.current_dir(&self.file_root);
+        }
+        Ok(exit_code(command.status()?))
+    }
 }
 
 /// I/O の誤りの理由。止める語の立っていない `Interrupted` は `read_to_end` が読み直し、立っていれば `read_text` が止めたことにするので、ここに届かない。
@@ -303,6 +557,7 @@ fn io_reason(e: &io::Error) -> IoReason {
     match e.kind() {
         io::ErrorKind::NotFound => IoReason::NotFound,
         io::ErrorKind::PermissionDenied => IoReason::PermissionDenied,
+        io::ErrorKind::Unsupported => IoReason::NotAvailable,
         _ => IoReason::Other,
     }
 }

@@ -1394,7 +1394,7 @@ impl<M: Mode> Ctx<M> {
     }
 
     /// 新しい物体 `w` を作っただけの変化の後、呼ぶ側は `w` の参照を `Ctx` と別に1つ持つ。
-    proof fn lemma_made_ok(&self, s0: Ctx<M>, w: Word)
+    pub(super) proof fn lemma_made_ok(&self, s0: Ctx<M>, w: Word)
         requires
             s0.held_ok(),
             self.heap.made(s0.heap, w),
