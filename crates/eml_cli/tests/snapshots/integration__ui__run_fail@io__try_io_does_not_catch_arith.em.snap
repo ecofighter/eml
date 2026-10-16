@@ -1,0 +1,9 @@
+---
+source: crates/eml_cli/tests/ui.rs
+expression: "format!(\"--- stdout ---\\n{stdout}--- runtime error ---\\n{error}\\n{written}\")"
+input_file: tests/ui/run-fail/io/try_io_does_not_catch_arith.em
+---
+--- stdout ---
+--- runtime error ---
+division by zero
+  at run-fail/io/try_io_does_not_catch_arith.em:4:28

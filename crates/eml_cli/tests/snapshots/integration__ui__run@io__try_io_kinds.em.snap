@@ -1,0 +1,9 @@
+---
+source: crates/eml_cli/tests/ui.rs
+expression: "format!(\"--- stdout ---\\n{stdout}--- stderr ---\\n{stderr}{written}\")"
+input_file: tests/ui/run/io/try_io_kinds.em
+---
+--- stdout ---
+NotUtf8: `not_utf8.txt` is not valid UTF-8
+NotUtf8: the standard input is not valid UTF-8
+--- stderr ---

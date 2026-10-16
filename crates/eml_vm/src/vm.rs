@@ -2,8 +2,9 @@
 //! スタックを Rust の再帰でなく `Task` のデータに持つので、後の協調的なタスクの切り替えでタスクごとに取り替えられる
 //! (docs/future/multicore.md の「VM の並列化の備え」の制約5)。
 
-use eml_extern::Extern;
-use eml_rt::{Ctx, Mode, Stream, Word, externs};
+use eml_extern::{Extern, ExternEffect, Purity};
+use eml_rt::externs::{self, Fault};
+use eml_rt::{Ctx, Mode, Stream, Word};
 
 use crate::RunCounts;
 use crate::apply;
@@ -484,8 +485,70 @@ fn finish<M: Mode>(code: &CodeBase<M>, ctx: &mut Ctx<M>, task: &Task) -> Result<
     Ok(())
 }
 
-/// 算術と比較以外の extern。行の番号の `match` で `Ctx` のメソッドを呼ぶ (docs/spec/object-model.md の「extern」)。
+/// `Prelude.IO` の操作 `io_failed` の番号。Prelude の宣言の唯一の操作である (docs/spec/vm.md の「IO の失敗と `exit`」)。
+const IO_FAILED: usize = 0;
+
+/// 算術と比較以外の extern。`try_io` の捕まえる誤りは `io_failed` で届ける。
 fn extern_call<M: Mode>(
+    code: &CodeBase<M>,
+    ctx: &mut Ctx<M>,
+    task: &mut Task,
+    dst: Slot,
+    at: u32,
+) -> Result<(), VmFault> {
+    match run_extern(code, ctx, task, dst, at) {
+        Err(VmFault::Extern(fault)) => {
+            let ext = Extern::ALL[code.operands[at as usize] as usize];
+            match fault.io_error_kind() {
+                Some(kind) if ext.row().purity == Purity::Effectful => {
+                    io_failed(code, ctx, task, dst, kind, fault)
+                }
+                _ => Err(VmFault::Extern(fault)),
+            }
+        }
+        other => other,
+    }
+}
+
+/// IO の失敗を、実行の時点で最も近い `try_io` に届ける。`try_io` がなければ、今までどおり実行時エラーにする。
+/// `io_failed` の節の入口は `never` の節の入口なので、中断を始めてダミーを `dst` に返し、次の yield の確認が遅い道へ
+/// 進む。`dst` の Repr が `int` などでも、そのダミーは遅い道の `drop` と `decref` にしか届かない
+/// (docs/spec/vm.md の「IO の失敗と `exit`」)。失敗した extern は引数をすでに消費している。
+fn io_failed<M: Mode>(
+    code: &CodeBase<M>,
+    ctx: &mut Ctx<M>,
+    task: &mut Task,
+    dst: Slot,
+    kind: i64,
+    fault: Fault,
+) -> Result<(), VmFault> {
+    let Some(&io) = code.index.effects.get(ExternEffect::Io.row().name) else {
+        return Err(VmFault::Extern(fault));
+    };
+    let Some(ev) = (unsafe { ctx.ev_find(io) })? else {
+        return Err(VmFault::Extern(fault));
+    };
+    // `ev_find` が `dup` した evidence を、節の入口の引数として渡す。`ev_clause` はそれを借りる
+    let clause = unsafe { ctx.ev_clause(ev, IO_FAILED) }?;
+    let message = ctx.fresh_string(&fault.to_string());
+    task.scratch.clear();
+    task.scratch
+        .extend([ev, Word::from_bits(kind as usize), message]);
+    let ret = task.pc;
+    apply::apply(
+        code,
+        ctx,
+        task,
+        clause,
+        apply::Target::Frame { ret, dst },
+        true,
+    )?;
+    ctx.poll(task.depth())?;
+    Ok(())
+}
+
+/// 行の番号の `match` で `Ctx` のメソッドを呼ぶ (docs/spec/object-model.md の「extern」)。
+fn run_extern<M: Mode>(
     code: &CodeBase<M>,
     ctx: &mut Ctx<M>,
     task: &mut Task,

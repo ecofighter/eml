@@ -1,0 +1,9 @@
+---
+source: crates/eml_cli/tests/ui.rs
+expression: "format!(\"--- stdout ---\\n{stdout}--- stderr ---\\n{stderr}{written}\")"
+input_file: tests/ui/run/io/try_io_missing_file.em
+---
+--- stdout ---
+NotFound: cannot open `missing.txt`: not found
+read 6 bytes
+--- stderr ---
