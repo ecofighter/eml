@@ -7,7 +7,7 @@
 ## エフェクトと row
 
 - エフェクトは Koka 方式の row 多相で扱う (scoped labels)。row 変数は Kind `Row<s>` (`s ∈ {Never ≤ Once ≤ Multi}`) を持つ ([型と Kind](types.md))。
-- 副作用は組み込みの `IO` エフェクトとして管理する。`IO` は操作のないラベルだけの extern のエフェクトである (下の「組み込みの `IO`」)。
+- 副作用は組み込みの `IO` エフェクトとして管理する。`IO` は extern のエフェクトである (下の「組み込みの `IO`」)。
 
 ## エフェクトの宣言と操作
 
@@ -56,8 +56,8 @@ effect Fail where
 
 ## 組み込みの `IO`
 
-- `IO` は、`Prelude` が `pub extern effect IO` と宣言する、操作を持たない extern のエフェクトである。ラベルだけで、handler が受け持つ操作はない ([宣言](declarations.md) の「`extern`」)。
-- `IO` を起こすのは、`IO` を row に持つ extern の関数 (`println` など) である。extern の関数は handler を通らず、その場で実行して値を返す。eml のコードを呼び返さず、継続も切り離さないので、中断は起こらない。
+- `IO` は、Prelude が `pub extern effect IO where never io_failed : IOErrorKind -> String -> a` と宣言する extern のエフェクトである。操作 `io_failed` は Prelude の外から見えず、Prelude の `try_io` だけが handle する ([標準ライブラリ](stdlib.md) の「`try_io`」)。
+- `IO` を起こすのは、`IO` を row に持つ extern の関数 (`println` など) である。extern の関数は handler を通らず、その場で実行して値を返す。ただし、`try_io` が捕まえる種類の誤りで失敗すると、VM が `io_failed` の節の入口を呼んで中断を始める。`exit` はいつも中断を始める ([VM](vm.md) の「IO の失敗と `exit`」)。そのため、`IO` を起こす extern の呼び出しは yield の地点で ([Core IR](core-ir.md) の「IO の extern」)、`IO` は yield しうるラベルである。
 - extern の関数の呼び出しは、操作の呼び出しと違って `perform` 命令にならない ([Core IR](core-ir.md))。多重度は `once` として扱う。
 - handler の節の先頭に、`IO` を起こす extern の関数の名前を書いたらエラーにする (E1009)。節の先頭の名前は、まず操作として引き、見つからないときだけ extern の関数を引く。`IO` を起こす extern の関数が見つかれば E1009 で、それ以外 (純粋な extern の関数) は E1001 である。ユーザーが定義した同名の関数は、`Prelude` の extern の関数を隠さない ([モジュールと名前解決](modules.md) の「名前の解決」)。
 
@@ -79,6 +79,8 @@ effect Fail where
 - 開けない、読めない、UTF-8 でないときは実行時エラーにする ([LIR](lir.md) の「実行時エラー」)。
 
 extern のエフェクトは、型検査では普通のエフェクトと次の点が違う ([型と Kind](types.md) の「推論」)。row の中で重なったラベルは1つにまとめ、`mask` には入れない。多重度は `once` である。
+
+重なりを1つにまとめ、`mask` に入れなくてよいのは、`IO` の操作が `never` の `io_failed` だけで、捕まえるのが例外と同じく実行の時点で最も近い `try_io` だからである。どちらの `IO` に届いても、捕まえる `try_io` は同じになる。
 
 組み込みのリソースは、どのスレッドで後始末してもよいものに限る。現状の `File` はこれを満たす ([マルチコア対応の設計](../future/multicore.md))。
 
@@ -153,6 +155,6 @@ run_state init action =
 - 呼び出し: 呼び出し先の row を `<ls | e>` とする。`ls` のラベルは、今の row の同じエフェクトのラベルと先頭から対になる。`e` が rigid なとき、rest (`ls` と対にならずに `e` の手前に余った今の row のラベル) のうち、handle できるラベル (extern のエフェクト以外) のエフェクトは `ls` に現れない (E2008)。そのため、`ls` に現れるエフェクト `L` では、`e` の手前にある今の row の `L` はすべて `ls` と対になり、`mask` は `L` を持たない。呼び出し先の `L` の操作は呼び出し元と同じ handler に届き、その並びは呼び出し先の row の `L` のラベルと先頭から一致する。`ls` に現れないエフェクト `M` では、`e` の手前にある今の row の `M` はすべて rest にあり、`mask` は同じ数の `M` を持つ。そのため、`e` を通る `M` の操作は rest の `M` の handler をすべて飛ばし、今の row の `e` に当たる handler に届く。末尾が推論用の変数なら、余ったラベルはその変数が受ける。末尾が閉じた row なら、`ls` のラベルを今の row の同じエフェクトのラベルと前から順に対にするだけで、今の row の残りのラベルには関わらない。どちらも `mask` はない。どの場合も、呼び出し先の中で、呼び出し先の row について不変条件が成り立つ。
 - `handle`: 本体の row は、扱うエフェクトのラベルを今の row の先頭に足したものである。設けた handler は、そのエフェクトの見える handler の先頭になる。
 - 節と `k` の呼び出し: `perform` は、handler まで yield してから節を呼ぶ。区間の中の `mask` の包みも継続に入り、`prompt$` が `evv` を handle の外側の `evv` に戻すので、節は handle の外側の row で動く。すぐに再開する節は `perform` の場所の `evv` のまま動くが、本体に yield の地点を持たないので、その中の操作はその中で設けた handler に届き、`evv` の違いは見えない。`k` の呼び出しは、`k` の最後の矢印の row (handle の外側の row) を今の row に含めたときの rest を `mask` に持つ。再開した区間の中から見ると、`k` の handler より外側は、呼び出し先から見た呼び出し元と同じ形になるので、呼び出しと同じ議論になる。`multi` の `k` を写して再開するときも、区間は同じなので同じである。
-- extern のエフェクト (`IO`): handler が存在せず、extern の関数がその場で実行するので、row の中の `IO` の数は handler の選び方に関わらない。そのため extern のエフェクトは `mask` に入れず、row の中で重なったら1つにまとめる ([型と Kind](types.md) の「推論」)。
+- extern のエフェクト (`IO`): handler は Prelude の `try_io` だけで、`io_failed` は外から名指せない。`IO` の失敗は row の上の位置でなく、実行の時点で最も近い `try_io` に届くと定める。そのため、row の中の `IO` の数は、どの handler に届くかに関わらない。extern のエフェクトは `mask` に入れず、row の中で重なったら1つにまとめる ([型と Kind](types.md) の「推論」)。
 
 `L` を飛ばす `mask` の各項目は、不変条件により、その呼び出しの時点で見える別々の `L` の handler に対応する。外側の `mask` が飛ばす handler は内側の点からは見えないので、同じ継続の上の別々の `mask` の項目も、別々の handler に対応する。空の `mask` は包みを作らないので、継続の上で `mask` の包みが残すフレームの数は handler の数以下に収まる ([LIR](lir.md) の「`evv` の不変条件」)。

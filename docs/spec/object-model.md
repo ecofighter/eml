@@ -609,6 +609,7 @@ token の表の項目は、`into_token` と `release_reuse` が添字を使い�
 - `Ctx` は `Drop` を実装しない。`evv` と yield の状態の参照は個別に手放さず、ヒープと一緒に消える。そのため、基本操作の中の `decref` で破棄処理が panic しても、`Ctx` を落とすことは安全である (下の「`unsafe` の核」の T7)
 - `check_finished()` は、`evv` が空で yield の状態がなしであることを確かめる。VM がリークの検査の前に呼ぶ ([LIR](lir.md) の「`evv` の不変条件」の最後の項)
 - `copy_string(s, max_chars) -> Result<String, Fault>` は、文字列の参照 `s` を1つ受けて手放し、中身の先頭 `max_chars` 文字を Rust の `String` に写して返す。VM が、文字列を返す入口の結果を受け取るのに使う ([VM](vm.md) の「追記」)。`unsafe fn` で、前提と事後条件 (`held_ok`、`evolved_by`) は `println` と同じである。検査モードは種類を確かめ、文字列でなければ何も写さずに `Fault::Heap(WrongKind)` を返す。写す長さを切るのは、利用者の `show` が巨大な文字列を返しても、確保量の上限の外で同じ大きさを写さないためである。文字の始まりは `str::is_char_boundary` で数え、写すのは `str::to_owned` である。どちらも vstd が仕様を持つので、下の「`unsafe` の核」の信頼の一覧は増えない
+- `ev_find(effect)` は `ev_lookup` と同じく `evv` をたどり、見つからなければ `None` を返す。`evidence_steps` は検査モードでたどった節点ごとに数える。`exit_abort` は、宛先を不死のダミーの物体、節と κ を `()` にした中断を始める。`fresh_string` は文言から文字列を作る
 
 ### セッションの根
 
@@ -780,9 +781,11 @@ token の表の項目は、`into_token` と `release_reuse` が添字を使い�
 | `Index(Box<IndexFault>)` | 範囲の外の位置。`IndexFault` は、文字列の位置 (`byte_at`、`find_from`)、`slice` の範囲、`slice` の境界、`Env.arg` の位置 | ``string index {index} is out of range for length {len}``、``string slice {start}..{end} is out of range for length {len}``、``string slice {start}..{end} is not on a character boundary``、``argument index {index} is out of range for {count} arguments`` |
 | `Stopped(Stop)` | `Fs.read_all` と標準入力の読みが読む途中で、`Proc.status` が子を起動する前か待つ間に、止める語か確保量の上限に当たった | `interrupted`、`the memory limit is exceeded`、`the call depth limit is exceeded` (`Stop` の表示) |
 
+`Fault::io_error_kind` は、`try_io` が捕まえる誤り (`Io`、`Stdin`、`NotUtf8`) に `IOErrorKind` のタグ (`IO_NOT_FOUND` 0 から `IO_OTHER` 4) を返し、ほかには `None` を返す ([標準ライブラリ](stdlib.md) の「`try_io`」)。
+
 - `name` は extern に渡されたパスの文字列そのもの (`file_root` をつなぐ前) か、`Run` ならプログラムの名前である
 - `NotAvailable` は、その実行の Host が持たない入出力である。REPL の標準入力と、組み込み先の Host が実装しなかったメソッドが当たる (下の「Host」)
-- I/O の誤りを文字列でなく値の種類で分けるのは、S12 の `try_io` が I/O の誤りを eml の `IOError` の値に変えるためである ([ロードマップ](../future/roadmap.md) の「S12 スクリプトの MVP」)
+- I/O の誤りを文字列でなく値の種類で分けるのは、`try_io` が I/O の誤りを eml の `IOError` の値に変えるためである
 - `Arith`、`Output`、`Io`、`Stdin`、`NotUtf8`、`Index` の表示は、[LIR](lir.md) の「実行時エラー」の文言と1文字も違わない。これは verifier を通るプログラムでの約束である。`Heap(_)` の表示は `eml_rt::HeapError` のものである
 - 位置 (`at path:line:column`) を付けるのは VM の役で、`Fault` は持たない
 - VM は `Stopped` を、安全点の `Ctx::poll` が返す `Err(Stop)` と同じに扱う

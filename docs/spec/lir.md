@@ -206,6 +206,11 @@ R1 と R2 から、ブロックの番号の順は辺の向きに沿った順 (�
 - 結果を `tobj` とすると、T3 が「確かめて失敗する」形の関数の `ret` を上げる。`tail clause Fail.fail ..` だけのために `ret` が `tobj` になり、成功する経路で `box` が、呼び出し元で `unbox` と `decref` が要る。ネイティブの 64 ビットの `Int` では、成功する呼び出しのたびに箱を確保しうる。`never` の操作の `clause` は戻らないので、末尾呼び出しの保証にも関わらない
 - `never` の操作の引数は、ほかの操作と同じく操作の表の `params` に従う。in-place の入口の `ret` は `obj` である ([Core IR](core-ir.md) の「`perform` と節の3つの形」)
 
+#### 戻らない extern
+
+- 表の行の `ret` が `Never` の extern (`exit`) は値を返さない。結果の束縛は位置でなく、Repr と Kind の印は translate が具体化した結果の型から決める。`never` の操作の `clause` の束縛と同じ扱いで、box の挿入は受け直さず、使う所にも変換を入れない。T3 は見ない。verifier は結果を行と比べず (R7 の結果の項と、Kind の印の比較)、互換の位置での束縛の使いも比べない
+- 行の `ret` と `OpRet` は、操作の表と同じ型 (`eml_extern::OpRet`) である
+
 #### T3
 
 - 末尾の位置の `apply` の結果は `tobj` である。`ret` が箱を要するスカラーの関数では、その結果を `unbox` するので、呼び出しは末尾呼び出しでなくなる。そのままでは、関数の値を通るループ (`loop f n = if n == 0 then 0 else f (n - 1)` と `go n = loop go n`) がフレームを積む。VM ではスタックが反復の数に比例して伸び、深さの上限で止まる。ネイティブではスタックがあふれる
@@ -344,6 +349,7 @@ handle の実行と、継続の再開のたびに、新しい evidence を作る
   - `dummy` の値は、`dup`、`decref`、`drop` で何も起こさない
   - `unbox` は、ダミーを受けても誤りにせず、何かの値を返す。その値は捨てられる
   - `box` は、ダミーを受けたらダミーを返す。`0` と `#0` は普通に箱に入れ、その値は捨てられる
+- `IO` の extern が失敗して `io_failed` の節を呼んだときは、extern の行き先が `obj` のダミーを受ける。行き先の Repr が `int`、`enum`、`unit` でも同じである。直後に yield の確認があるので、この値は遅い道の `drop` と `decref` にしか届かない
 - box の挿入が、yield の地点の結果の変換を確認の後に置く形は採らない。box の挿入に EP の形を知る特別な規則が要るためである
 - yield の確認のない呼び出しの後に残る変換の扱いは、[Core IR](core-ir.md) の「yield の確認のない呼び出しの後」にある
 
@@ -634,6 +640,8 @@ LIR を実行する [VM](vm.md) と後のネイティブのコードは、次の
 - 実行を止めたとき。割り込み (`interrupted`)、確保量の上限 (`the memory limit is exceeded`)、深さの上限 (`the call depth limit is exceeded`) である ([オブジェクトモデル](object-model.md) の「実行の制御」)
 - 検査モード (`eml run --debug-heap`) のヒープの誤り。解放済みの物体の使用 (`use of a freed object`)、`lin` ビットの立った物体の `dup` (`a Lin object is shared`)、終わりに残った物体 (リーク) などである ([オブジェクトモデル](object-model.md) の「報告する誤り」)。どれもコンパイラの誤りでしか起きない。速いモードはこれらを確かめない ([オブジェクトモデル](object-model.md) の「受け入れる制約」)
 - 内部の誤り (`internal error: …`)。verifier を通った IR では起きないはずの形を、VM の見張りが見つけたときである ([VM](vm.md) の「誤り、止めること、終わり」)
+
+`try_io` の中で起きた I/O の失敗の一部は、実行時エラーにせず `try_io` に届ける ([VM](vm.md) の「IO の失敗と `exit`」)。
 
 extern の実装は、VM と後のネイティブのコードが使う `eml_rt` にある ([オブジェクトモデル](object-model.md) の「extern」)。誤りの文言は `eml_rt` のもので、上の一覧と1文字も違わない。
 

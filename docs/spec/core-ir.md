@@ -553,7 +553,7 @@ in-place の入口は、translate が作った節の関数 g から、EP が節�
   - `never` の操作の節でない
   - g の `k` の引数の使いが、末尾の位置の `mask` のない `resume k(v, s)` だけである
   - g のすべての `return` が、そのような `resume` の結果を返す
-  - g の本体に、yield の地点になる呼び出しがない。EP は translate の出力の上でこれを決めるので、translate の命令で書くと次のどれもないことである: 末尾でない `perform`、g が `yields` のときの `handle`、`mask` 付きの呼び出し、最後の末尾の `resume` のほかの `resume`、`yields` の関数への末尾でない直接の呼び出し、印の立った末尾でない `apply`
+  - g の本体に、yield の地点になる呼び出しがない。EP は translate の出力の上でこれを決めるので、translate の命令で書くと次のどれもないことである: 末尾でない `perform`、g が `yields` のときの `handle`、`mask` 付きの呼び出し、最後の末尾の `resume` のほかの `resume`、`yields` の関数への末尾でない直接の呼び出し、印の立った末尾でない `apply`、`IO` の extern の呼び出し (下の「IO の extern」)
 
   入口の関数 `g$entry` (`clause` の印) は g の写しである。引数は、捕獲、evidence `ev`、操作の引数の順にし、g の `k` と状態の引数を除く。状態は入口の先頭の `ev_take_state(ev)` で得る。末尾の `let r = resume k(v, s)` と `return r` を、`ev_set_state(ev, s)` と `return v` に替える。`yields` の印は g の印を写す。g は使われなくなるので消す
 
@@ -568,6 +568,15 @@ in-place の入口は、translate が作った節の関数 g から、EP が節�
 - 中断の yield も、途中のフレームが普通の yield と同じく κ を組み立てる。`prompt$` が κ を `drop` すると、クロージャの解放の連鎖で、捕まっていた値が1回ずつ解放される。`File` はこの解放で閉じる
 - 途中のフレームは、生きている `Lin` の値に `decref` も `drop` も置かない。生きている値は継続のクロージャに捕まるためである。遅い道で手放すのは、yield の地点の結果 x (ダミー) だけで、EP が `drop x` を出す
 - `prompt$` の中断の経路は、`return` の節のクロージャ `ret` を `drop` する。捕まえていた `File` はこの解放で閉じる (上の「EP の明示の `drop`」)
+
+#### IO の extern
+
+- `IO` を起こす extern (表の行の `purity` が `Effectful`) の呼び出しは、`yields` の関数の中では、どれも yield の地点である。`try_io` が捕まえる種類の誤りで失敗すると、VM が `io_failed` の節の入口を呼んで中断を始め、`exit` はいつも中断を始めるためである ([VM](vm.md) の「IO の失敗と `exit`」)。直後に yield の確認と遅い道を置く形は、ほかの yield の地点と同じである
+- extern は末尾呼び出しにならないので、末尾の形の例外はない。「yield の確認のない呼び出しの後」の不変条件は、extern には関わらない
+- `IO` を row に持つ関数はいつも `yields` なので ([型と Kind](types.md) の「row の具体化の記録」)、`yields` でない関数が `IO` の extern を呼ぶことはない。EP はそれを内部の誤りとしてパニックする
+- すぐに再開する節の条件 (「`perform` と節の3つの形」) では、`IO` の extern の呼び出しも yield の地点として数える。in-place の節は `perform` の場所の `evv` で動くので、そうしないと、handle の本体の中の `try_io` が節の IO の失敗を捕まえてしまう
+- extern の関数を包む関数 (`$externN`) は、行が `Effectful` なら `yields` である
+- `IO` は、Prelude の最初のエフェクトとして、いつもエフェクトの表にある。番号は 0 である。`try_io` の handle、`io_failed` の節、`prompt$` は、普通の `never` の操作の handle と同じ形に変換する
 
 #### `mask` の包み
 

@@ -28,6 +28,66 @@ eml run --debug-heap wc.em -l input.txt
 
 - `eprintln : String -> <IO> Unit` は、標準エラーに1行を書く。C の stdio と同じく、標準出力は書き出さない。標準出力をまとめて書いているとき (端末でないとき) は、`eprintln` の行が先に出ることがある
 
+## `try_io`
+
+```haskell
+pub extern effect IO where
+  never io_failed : IOErrorKind -> String -> a
+
+pub data IOErrorKind =
+  | NotFound
+  | PermissionDenied
+  | NotAvailable
+  | NotUtf8
+  | Other
+  deriving (Eq, Show)
+
+pub data IOError =
+  | IOError { kind : IOErrorKind, message : String }
+
+instance Show IOError where
+  show e = "IOError { kind = \{show e.kind}, message = \{show e.message} }"
+  display e = e.message
+
+pub try_io : (Unit -> <IO | e> a) -> <IO | e> Result IOError a
+try_io action =
+  handle action () with
+    | io_failed kind message -> Err (IOError { kind = kind, message = message })
+    | return x -> Ok x
+```
+
+`IOError` の `show` は、導出した `Show` がレコードに使う形と同じにする。導出では `display` を上書きできないので、手で書く。
+
+- `try_io action` は `action ()` を呼び、IO の失敗がなければ `Ok` に包んで返す。IO の失敗があれば、そこで `action` の実行を止め、途中のフレームが持っていた値を後始末して `Err` を返す
+- 捕まえるのは、いちばん内側の `try_io` である。`IO` は `mask` に入らないので、row の上の位置でなく、実行の時点で外側にある最も近い `try_io` が捕まえる。例外と同じ動きである。たとえば `wrap : (Unit -> <e> a) -> <IO | e> Result IOError a` が、受け取ったコールバックを `try_io` の中で呼ぶと、コールバックの IO の失敗も `wrap` の `try_io` が捕まえる。ほかのエフェクトなら `mask` がコールバックの操作を外側へ通すが、`IO` ではそうしない
+- handler の節は handle の外側の `evv` で動く ([エフェクトと handler](effects.md) の「健全性」)。そのため、handle の本体の中にある `try_io` は、その handler の節の中で起きた IO の失敗を捕まえない。handle より外側の `try_io` が捕まえる
+- `try_io` は、`exit`、書き出しの失敗、算術の誤り、位置の範囲の誤り、割り込み、確保量と深さの上限、検査モードのヒープの誤りを捕まえない
+
+捕まえる失敗と `kind` は次のとおりである。`message` は、今の実行時エラーの文言 ([LIR](lir.md) の「実行時エラー」) と1文字も違わない。
+
+| `Fault` | 起こす関数 | `kind` |
+|---|---|---|
+| `Io { reason, .. }` | `Fs.open`、`Fs.read_all`、`Fs.read_text`、`Fs.write_text`、`Proc.run` | `reason` が `NotFound` なら `NotFound`、`PermissionDenied` なら `PermissionDenied`、`NotAvailable` なら `NotAvailable`、`Other` なら `Other` |
+| `Stdin(reason)` | `Stdin.read_all`、`Stdin.read_line` | 同上 |
+| `NotUtf8(_)` | `Fs.read_all`、`Fs.read_text`、`Stdin.read_all`、`Stdin.read_line`、`Env.args`、`Env.get` | `NotUtf8` |
+
+書き出しの失敗 (`Output`) を捕まえないのは、標準出力をまとめて書くためである ([オブジェクトモデル](object-model.md) の「Host」)。書けなかったことが分かるのは、後でバッファがあふれた `println` か、読みや起動の前の書き出しか、プログラムの終わりの書き出しになる。そのため、`try_io (fn () -> println s)` は書けなくても `Ok` を返しうるし、関係のない別の `try_io` が失敗を受け取りうる。どこで捕まるかが決まらないので、今と同じ実行時エラーのままにする。
+
+`try_io` で捕まえなかった IO の失敗は、今と同じ実行時エラーである。位置を付けて表示し、終了コード 1 で止まる。このときは後始末をしない。プロセスが終わるので、OS が開いたファイルを閉じる。
+
+## `exit`
+
+```haskell
+pub extern exit : Int -> <IO> a
+```
+
+- `exit n` は、途中のフレームが持っていた値を後始末し、標準出力を書き出してから、終了コード `n & 255` で終わる。シェルが終了コードを 8 ビットで扱うのと同じである
+- `try_io` も、利用者の handler も、`exit` を捕まえない。どの handler の `return` の節も呼ばない
+- 書き出しが失敗したら、今のプログラムの終わりの書き出しの失敗と同じく、位置のない実行時エラー (終了コード 1) にする
+- `exit` は `<IO>` を持つので、型の上では `IO` の関数としてどこからでも呼べる。`par` の子から呼べないようにする理由は、ロードマップの S12 の節にある
+- `exit 1`、`exit 2`、`exit 130` の終了コードは、CLI の実行時エラー (1)、使い方の誤り (2)、割り込み (130) と区別できない。スクリプトが選んだことなので、そのまま受け入れる
+- REPL では、`exit` は入力を終えるだけで、REPL は次の入力へ進む。詳しくは [REPL の端末](repl.md) の「割り込みと実行時エラー」にある
+
 ## `List`
 
 | 関数 | 型 |
@@ -120,6 +180,8 @@ eml run --debug-heap wc.em -l input.txt
 ## 実行時エラー
 
 標準ライブラリの extern の誤りの文言は次のとおりである。I/O の失敗の理由は `not found`、`permission denied`、`not available`、`I/O error` のどれかである。位置は extern を呼んだ所で、標準ライブラリの関数の中の extern なら `<std>/…` の位置になる。
+
+I/O の失敗の一部は `try_io` で捕まえられる (上の「`try_io`」)。捕まえなかった失敗は、この表の文言の実行時エラーになる。
 
 | 失敗 | 文言 |
 |---|---|

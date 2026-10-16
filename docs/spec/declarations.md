@@ -97,7 +97,8 @@ effect Fail where
 
 ```haskell
 pub extern data Int
-pub extern effect IO
+pub extern effect IO where
+  never io_failed : IOErrorKind -> String -> a
 pub extern println : String -> <IO> Unit
 ```
 
@@ -105,7 +106,7 @@ pub extern println : String -> <IO> Unit
 
 - 等式のないシグネチャ (`pub extern println : String -> <IO> Unit`)。実装は処理系が持ち、eml のコードで本体は書かない
 - `=` のない型引数なしの `data` (`pub extern data Int`)。値の表し方と Kind は処理系が決める
-- `where` のない型引数なしの `effect` (`pub extern effect IO`)。操作を持たない、ラベルだけのエフェクトである ([エフェクトと handler](effects.md) の「組み込みの `IO`」)
+- 型引数のない `effect`。`where` と操作の並びを書ける (`pub extern effect IO where …`)。型引数と `=` は書けない (E0011、``` `extern effect` cannot have parameters or `=` ```)
 
 extern の型とエフェクトに型引数を持たせないのは、row の中で重なったラベルを1つにまとめる規則が、型引数のないエフェクトでだけ正しいためである。これ以外の位置の `extern` は構文エラー (E0011) になる ([文法](grammar.md))。型引数を書いた extern の型も E0011 にするが、書いた型引数は型引数として数える。使う位置の型引数の数の誤り (E1015) を重ねないためである。
 

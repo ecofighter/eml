@@ -234,6 +234,7 @@ Core IR のテキストは `eml_core_ir::pretty` が書き、`eml_core_ir::parse
 ## UI テスト
 
 - `tests/ui/run/**/*.em` は、診断のエラーなしで実行が正常に終了することを確認し、stdout と stderr をスナップショットにする
+- `run` のテストは `exit` で終わってもよい。`exit` で終わったら、スナップショットの最後に `--- exit: {n} ---` を足す。`n` は `& 255` をしない値である。速いモードでも同じ終了コードであることを確かめる
 - `tests/ui/check-fail/**/*.em` は、診断のエラーが1件以上出ることを確認し、診断の表示をスナップショットにする
 - `tests/ui/run-fail/**/*.em` は、診断のエラーなしでコンパイルでき、実行が実行時エラーで終わることを確認する。エラーまでの出力と実行時エラーのメッセージをスナップショットにする
 - テストは `crates/eml_cli/tests/ui.rs` に置き、`insta::glob!` で `tests/ui/` 以下の `.em` を走査する。`eml_cli` の lib API をプロセス内で呼び、検査モードと速いモードの2つで実行する (下の「2つのモードで流す」)
@@ -279,7 +280,7 @@ Core IR のテキストは `eml_core_ir::pretty` が書き、`eml_core_ir::parse
 - `> ` で始まる行が入力の1行目、`. ` で始まる行が直前の入力の続きの行である。`>` や `.` だけの行は空の行で、入力を終える空行は `.` だけの行で書く。空の行と `#` で始まる行は入力の外のコメントで、その後に続きの行を置くと誤りにする
 - harness は、入力ごとに、最後の行より前の行までのテキストが `input_status` で `Incomplete`、全体が `Complete` であることを確かめる ([レイアウト規則](../spec/layout.md) の「REPL の入力の終わり」)。端末と同じ形で入力の終わりの規則を確かめるためである。入力を終える空行は含めずに `eval` に渡す
 - `> :` で始まる1行の入力はコマンドで、harness は端末と同じく `eml_cli::lines` で読む。コマンドの行には、上の入力の終わりの検査を当てない。`:type` は `Repl::type_of` の型か診断を記録する。`:load` と `:reload` は `<名前>/main.repl` の形のトランスクリプトでだけ使え、ほかの形で使うと harness が失敗する。パスはトランスクリプトのディレクトリからの相対パスで書き、表示のパスも書いたとおりになる。読めないファイルの `:load` は、端末と同じ誤りを記録し、セッションを変えない。`:quit` と `:help` を書くと harness が失敗する
-- スナップショットは、入力ごとに、入力の行、表示、診断 (`eml_test_support::full_with_paths` の形)、実行時エラーを並べ、最後に `close` の結果を置く。`:load` と `:reload` が閉じたセッションの `close` の結果は、そのコマンドの表示の直後に `--- close (load) ---` として置く。名前は最上位のディレクトリからの相対パスで決まる (`basics/expressions.repl` は `integration__repl__transcripts@basics__expressions.repl.snap`)
+- スナップショットは、入力ごとに、入力の行、表示、診断 (`eml_test_support::full_with_paths` の形)、実行時エラーを並べ、最後に `close` の結果を置く。`exit` した入力は `exited with code {n}` と書く。`:load` と `:reload` が閉じたセッションの `close` の結果は、そのコマンドの表示の直後に `--- close (load) ---` として置く。名前は最上位のディレクトリからの相対パスで決まる (`basics/expressions.repl` は `integration__repl__transcripts@basics__expressions.repl.snap`)
 - 検査モードで流した後に速いモードでも流し、入力ごとの表示が同じことを確かめる。`close` のリークは検査モードだけが数えるので、`--- close (load) ---` も含めて比べない。セッションを使えなくする誤り (`Outcome::Broken`) が出たトランスクリプトは、速いモードで流さない (上の「2つのモードで流す」)
 - Host は標準入力を持たない `CaptureHost` (`without_stdin`) である。REPL は標準入力から入力を読むので、プログラムには渡さない ([標準ライブラリ](../spec/stdlib.md) の「`Stdin`」)
 - 上限は `eml run` と同じ `default_limits()` で、1つの `Control` をトランスクリプト全体で使う。`Repl::eval` が入力ごとに止める理由のビットを下ろすためである。確保量の上限の後に続けられることは、上限を小さくする必要があるので、`crates/eml_cli/tests/api.rs` で確かめる。`api.rs` は、`Repl: Send`、空の入力、受け付けなかった入力の後にセッションが変わらないこと、import したモジュールのテキストを読み直さないこと、警告を一度だけ返すこと、割り込まれた入力の後に続けられること、割り込みで止まった入力が開いた `File` が `eval` から戻った時点で閉じていること、実行の前に立った割り込みがその入力を取り消すこと (`an_interrupt_before_the_run_cancels_the_input`)、`repl_limits()` の確保量が `default_limits()` の半分であること (`repl_limits_leave_room_for_recovery`) も確かめる
