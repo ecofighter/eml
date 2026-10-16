@@ -59,7 +59,7 @@ eml の目的、言語の性格、確定した設計判断の一覧、文書全�
 | エフェクトの宣言 | `effect Name a where` の後に操作を並べる。操作のカリー化を許す | [宣言](spec/declarations.md) |
 | `use` | ブロックの残りを、最後の引数のラムダとして渡す糖衣構文 | [式](spec/expressions.md) |
 | パラメータ付き handler | `handle e from init with`。状態を handler が持ち、節の最後の引数で受ける。状態のある handler では `k v st` で次の状態を渡す。状態があるかどうかは `from` の有無で決まる | [式](spec/expressions.md) |
-| 線形値の受け渡し | 糖衣構文は今は入れない。入れるかどうかは S13 で決める。再束縛、`use`、パラメータ付き handler で吸収する | [式](spec/expressions.md) |
+| 線形値の受け渡し | 糖衣構文は今は入れない。入れるかどうかは、S13b の `Iter` で `File` を持つ生産者を書いてから決める ([ロードマップ](future/roadmap.md) の「言語機能と構文」)。再束縛、`use`、パラメータ付き handler で吸収する | [式](spec/expressions.md) |
 | 文字列 | 補間は `"\{x}"`。複数行の `"""`、raw の `r"..."` | [字句](spec/lexical.md) |
 | コマンドリテラル | バッククォート。シェルを介さず、引数のリストを組む (Julia 方式) | [字句](spec/lexical.md) |
 | fixity | ユーザーが宣言する。優先順位は整数 0〜9。CST では演算子の列を平たいまま持ち、HIR で組み直す | [宣言](spec/declarations.md)、[式](spec/expressions.md) |

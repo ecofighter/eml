@@ -26,7 +26,7 @@ eml を実装するエージェントとプログラマのための文書群で�
 | [spec/object-model.md](spec/object-model.md) | 規範 | `eml_rt` の核: 語、ヘッダと種類、物体の形、ページの確保器と生存の列挙、局所と共有の RC、`share`、`lin` ビット、核の操作、文字列、凍結した領域、reuse の部品、検査モード、実行文脈 `Ctx`、extern (語の ABI、誤り、Host と出力のバッファ、`File`)、受け入れる制約 |
 | [spec/vm.md](spec/vm.md) | 規範 | VM の置き場所と実行の API、`CodeBase` と `FnEntry`、スロットとフレーム、命令の形、スロットの割り当て、呼び出しと戻り、命令ごとの実行、誤りと終わりの処理、上限と割り込み、`RunStats`、並列化への備え |
 | [spec/diagnostics.md](spec/diagnostics.md) | 規範 | 診断のデータ構造、診断の順、番号の範囲と各番号の意味、連鎖する診断の抑止 |
-| [spec/examples.md](spec/examples.md) | 説明 | まだ動かない、本番の構文で書いたプログラム例 |
+| [spec/examples.md](spec/examples.md) | 説明 | 本番の構文で書いたプログラム例。まだ実装していない構文を含む |
 | **implementation/** | 手引き | どう作るか、今どこまでできているか |
 | [implementation/architecture.md](implementation/architecture.md) | 手引き | プログラム全体の構成と採らなかった形、crate の構成、各段階の規律、エラー回復、各 crate の内部、CLI と lib API、translate の組み立て、継続と evidence、構文解析と名前解決の回復 |
 | [implementation/testing.md](implementation/testing.md) | 手引き | テスト戦略、テストの変更の運用、テストの置き場所、`eml_rt` の検証 (Verus、単体テスト、期待値の表、Miri)、`eml_vm` のテスト、UI テスト (2つのモードで流すこと)、LIR と Core IR のテキストの形、文書の引用の検査 |
@@ -34,7 +34,7 @@ eml を実装するエージェントとプログラマのための文書群で�
 | [implementation/benchmarks.md](implementation/benchmarks.md) | 手引き | 基準のプログラム、回数のテスト、命令の数の測り方、段ごとの記録 |
 | [implementation/diagnostics.md](implementation/diagnostics.md) | 手引き | 番号ごとの診断が指す場所、help と fix の文言と付ける条件、型エラー・線形性・網羅性の診断の表示 |
 | **future/** | 将来の設計 | まだ実装しない方針 |
-| [future/roadmap.md](future/roadmap.md) | 将来の設計 | 再設計の段 (S8〜S13)、その後の言語の項目と処理系の項目 |
+| [future/roadmap.md](future/roadmap.md) | 将来の設計 | 次の段 (S13)、その後の言語の項目と処理系の項目 |
 | [future/multicore.md](future/multicore.md) | 将来の設計 | マルチコア対応の設計 (共有の印方式の RC、`par`、並行処理、継続の移動) |
 | [future/stdlib.md](future/stdlib.md) | 将来の設計 | 標準ライブラリ spec への申し送り |
 | [future/verification.md](future/verification.md) | 将来の設計 | Verus で検証する範囲 (Kind 推論の解く部分を証明する方針、型検査と evidence passing を扱わない理由) |

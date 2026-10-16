@@ -81,7 +81,7 @@
 
 ### Verus
 
-`eml_rt` は vstd に依存し、コードを `verus!` の中に書く。`cargo verus verify -p eml_rt` が crate 全体を検証する (`Cargo.toml` の `[package.metadata.verus] verify = true`)。Apple M4 では、`773 verified, 0 errors` に約 20 秒かかる (S9b-3 の終わり)。初めは Kani を試したが、CBMC は 3 個の節点のグラフでも `share_walk` の検査でメモリか時間が尽きた。Verus は、値の全域と任意の大きさのヒープについての証明が通る。
+`eml_rt` は vstd に依存し、コードを `verus!` の中に書く。`cargo verus verify -p eml_rt` が crate 全体を検証する (`Cargo.toml` の `[package.metadata.verus] verify = true`)。Apple M4 では、`773 verified, 0 errors` に約 20 秒かかる (S9b-3 の終わり)。初めは Kani を試したが、CBMC は 3 個の節点のグラフでも `share_walk` の検査でメモリか時間が尽きた。Verus は、値の全域と任意の大きさのヒープについての証明が通る。loom も採らず、atomic と確保を `cfg(loom)` で差し替える層も置かない。atomic と確保は std の関数を1回呼ぶ薄い関数で包み、Verus は本体のコードそのものを検証するので、本体の型を差し替える必要がないためである。並行の振る舞いは、Miri の2つのスレッドのテストで確かめる (下の「Miri」)。
 
 公開の操作の前提 ([オブジェクトモデル](../spec/object-model.md) の「核の操作」の表) を、抽象のモデルの言葉で `requires` に書く。モデルの述語は `pub closed spec fn` にするので、名前は crate の外に見えるが、中身と実行時の費用はない。その下で、次のことを証明する。
 
