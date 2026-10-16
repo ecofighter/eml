@@ -7,6 +7,7 @@ use eml_lir::{Mark, Stmt, Term};
 #[test]
 fn hello_world() {
     insta::assert_snapshot!(core_text("main : Unit -> <IO> Unit\nmain () = println \"hi\"", Pass::Translate), @r#"
+    effect Prelude.IO { never io_failed(enum, obj) -> never }
     yields fn main(p.0: unit) -> unit {
       let s.1: obj = const "hi"
       let t.2: unit = extern Prelude.println(s.1)
@@ -210,6 +211,7 @@ fn each_reference_to_an_extern_as_a_value_gets_its_own_wrapper() {
     // 包む関数は参照の場所ごとに作り、その場所の位置を持つ。実行時エラーが参照した場所を指すようにするためである
     let text = "apply : (a -> <e> b) -> a -> <e> b\napply f x = f x\n\nmain : Unit -> <IO> Unit\nmain () =\n  apply println \"a\"\n  let say = println\n  say \"b\"";
     insta::assert_snapshot!(core_text_with_positions(text), @r#"
+    effect Prelude.IO { never io_failed(enum, obj) -> never }
     yields fn "apply@[String, Unit]<e>"(f.0: tobj poly, x.1: obj) -> unit {
       let t.2: unit = yields apply f.0(x.1)
       return t.2
@@ -306,6 +308,7 @@ fn reprs_follow_the_types() {
 fn the_entry_applies_a_point_free_main_to_unit() {
     let text = "main : Unit -> <IO> Unit\nmain = fn () -> println \"point-free\"";
     insta::assert_snapshot!(core_text(text, Pass::Translate), @r#"
+    effect Prelude.IO { never io_failed(enum, obj) -> never }
     fn main() -> tobj {
       return &main$lambda0
     }
@@ -326,6 +329,7 @@ fn the_entry_applies_a_point_free_main_to_unit() {
 fn handlers_are_lifted_with_their_return_reprs() {
     let text = "effect Ask where\n  ask : String -> Int\n\nmain : Unit -> <IO> Unit\nmain () =\n  let prefix = \"n = \"\n  let n =\n    handle ask \"x\" with\n      | ask key k -> k 1\n      | return x -> x + 1\n  println (prefix ++ show n)";
     insta::assert_snapshot!(core_text(text, Pass::Translate), @r#"
+    effect Prelude.IO { never io_failed(enum, obj) -> never }
     effect Ask { ask(obj) -> int }
     yields fn main(p.0: unit) -> unit {
       let s.1: obj = const "n = "
@@ -836,12 +840,13 @@ fn an_extern_function_with_an_effect_used_as_a_value_is_wrapped_with_its_extern_
     assert!(!shown.contains("perform"), "{shown}");
 }
 
-/// extern のエフェクトはエフェクトの表に入らず、番号も持たない。`IO` は Prelude の最初のエフェクトなので、番号を表と同じく
-/// 飛ばさないと、`mask`、`handle`、`perform` がユーザーのエフェクトを1つずれて指す。
+/// `IO` は Prelude の最初のエフェクトで表の0番にあるので、利用者のエフェクトは1番から始まる。番号を表と同じ順で
+/// 数えないと、`mask`、`handle`、`perform` がエフェクトを1つずれて指す。
 #[test]
-fn effect_numbers_skip_the_extern_effects() {
+fn user_effects_are_numbered_after_io() {
     let text = "effect A where\n  ask : Unit -> Int\n\neffect B where\n  tell : Int -> Unit\n\nneeds_a : (Unit -> <e> Int) -> <A | e> Int\nneeds_a f = ask () + f ()\n\ntold : Unit -> <B> Int\ntold () =\n  tell 1\n  2\n\nmain : Unit -> <IO> Unit\nmain () =\n  let n =\n    handle (handle needs_a told with | ask () k -> k 1) with\n      | tell m k -> k ()\n  println (show n)";
     insta::assert_snapshot!(core_text(text, Pass::Translate), @r#"
+    effect Prelude.IO { never io_failed(enum, obj) -> never }
     effect A { ask(unit) -> int }
     effect B { tell(int) -> unit }
     yields fn "needs_a<e>"(f.0: tobj poly) -> int {
@@ -909,6 +914,7 @@ fn the_entry_function_is_chosen_by_the_caller() {
         Pass::Translate,
     );
     insta::assert_snapshot!(eml_core_ir::pretty(&program), @r#"
+    effect Prelude.IO { never io_failed(enum, obj) -> never }
     yields fn alt(p.0: unit) -> unit {
       let s.1: obj = const "alt"
       let t.2: unit = extern Prelude.println(s.1)
@@ -929,6 +935,7 @@ fn names_outside_the_entry_are_qualified_with_their_module() {
     let main = "import Report.Csv\n\napply : (a -> <e> b) -> a -> <e> b\napply f x = f x\n\nmain : Unit -> <IO> Unit\nmain () =\n  let r =\n    handle Csv.parse () with\n      | Csv.next () k -> k 1\n      | return r -> r\n  let Csv.Row n = r\n  apply println (show n)";
     insta::assert_snapshot!(core_text_files(main, &[("Report/Csv.em", csv)], Pass::Translate), @r#"
     layout Report.Csv.Row { Row(int) }
+    effect Prelude.IO { never io_failed(enum, obj) -> never }
     effect Report.Csv.Parse { next(unit) -> int }
     yields fn "apply@[String, Unit]<e>"(f.0: tobj poly, x.1: obj) -> unit {
       let t.2: unit = yields apply f.0(x.1)
@@ -1011,6 +1018,7 @@ fn recursion_and_top_level_values() {
     let text = "answer : Int\nanswer = 42\n\ncount : Int -> Int\ncount n = if n == 0 then answer else count (n - 1)\n\nmain : Unit -> <IO> Unit\nmain () = println (show (count 3))";
     insta::assert_snapshot!(core_text(text, Pass::Translate), @r#"
     layout Prelude.Bool { False, True }
+    effect Prelude.IO { never io_failed(enum, obj) -> never }
     fn answer() -> int {
       return 42
     }
@@ -1042,6 +1050,7 @@ fn recursion_and_top_level_values() {
 fn partial_and_extra_arguments_use_closures() {
     let text = "add : Int -> Int -> Int\nadd a b = a + b\n\nadder : Int -> Int -> Int\nadder x = add x\n\nmain : Unit -> <IO> Unit\nmain () =\n  let f = add 1\n  let n = f 2 + adder 3 4\n  println (show n)";
     insta::assert_snapshot!(core_text(text, Pass::Translate), @r#"
+    effect Prelude.IO { never io_failed(enum, obj) -> never }
     fn add(a.0: int, b.1: int) -> int {
       let t.2: int = extern Prelude.+(a.0, b.1)
       return t.2
@@ -1072,6 +1081,7 @@ fn builtins_used_as_values_are_wrapped() {
     let text = "apply : (a -> <e> b) -> a -> <e> b\napply f x = f x\n\nmain : Unit -> <IO> Unit\nmain () =\n  let g = not >> not\n  apply println (show 1)";
     insta::assert_snapshot!(core_text(text, Pass::Translate), @r#"
     layout Prelude.Bool { False, True }
+    effect Prelude.IO { never io_failed(enum, obj) -> never }
     fn Prelude.not($0.0: enum) -> enum {
       switch $0.0 Prelude.Bool { #0 -> b1, #1 -> b2 }
     b1:
@@ -1113,6 +1123,7 @@ fn builtins_used_as_values_are_wrapped() {
 fn lambdas_are_lifted_with_their_captures_first() {
     let text = "apply : (a -> <e> b) -> a -> <e> b\napply f x = f x\n\nmain : Unit -> <IO> Unit\nmain () =\n  let s = \"!\"\n  let shout = fn t -> t ++ s\n  println (apply shout \"hi\")\n  println s";
     insta::assert_snapshot!(core_text(text, Pass::Translate), @r#"
+    effect Prelude.IO { never io_failed(enum, obj) -> never }
     yields fn "apply@[String, String]<e>"(f.0: tobj poly, x.1: obj) -> obj {
       let t.2: obj = yields apply f.0(x.1)
       return t.2
@@ -1141,6 +1152,7 @@ fn lambdas_are_lifted_with_their_captures_first() {
 fn a_zero_arity_callee_is_evaluated_before_its_arguments() {
     let text = "k : Int -> Int -> Int\nk a b = a\n\nfive : Int -> Int\nfive = k 5\n\nmain : Unit -> <IO> Unit\nmain () = println (show (five (1 + 2)))";
     insta::assert_snapshot!(core_text(text, Pass::Translate), @r#"
+    effect Prelude.IO { never io_failed(enum, obj) -> never }
     fn k(a.0: int, b.1: int) -> int {
       return a.0
     }
@@ -1216,6 +1228,7 @@ fn nested_value_ifs_meet_in_their_own_merge_blocks() {
 fn handlers_are_lifted_to_closures() {
     let text = "effect Ask where\n  ask : String -> Int\n\nmain : Unit -> <IO> Unit\nmain () =\n  let prefix = \"n = \"\n  let n =\n    handle ask \"x\" with\n      | ask key k -> k 1\n      | return x -> x + 1\n  println (prefix ++ show n)";
     insta::assert_snapshot!(core_text(text, Pass::Translate), @r#"
+    effect Prelude.IO { never io_failed(enum, obj) -> never }
     effect Ask { ask(obj) -> int }
     yields fn main(p.0: unit) -> unit {
       let s.1: obj = const "n = "
@@ -1571,6 +1584,7 @@ fn functions_without_captures_are_values() {
 fn a_handler_with_a_state_passes_its_initial_value_and_takes_the_state_from_its_clauses() {
     let text = "effect Ask where\n  ask : Unit -> Int\n\nmain : Unit -> <IO> Unit\nmain () =\n  let n =\n    handle ask () + ask () from 10 with\n      | ask () k st -> k st (st + 1)\n      | return x st -> x * st\n  println (show n)";
     insta::assert_snapshot!(core_text(text, Pass::Translate), @r#"
+    effect Prelude.IO { never io_failed(enum, obj) -> never }
     effect Ask { ask(unit) -> int }
     yields fn main(p.0: unit) -> unit {
       let t.1: int = handle Ask(10, &main$handle0) { ask: &main$handle0$ask } return &main$handle0$return
@@ -1611,6 +1625,7 @@ fn a_polymorphic_never_operation_takes_tobj_and_never_returns() {
         .collect();
     insta::assert_debug_snapshot!(table, @r#"
     [
+        "effect Prelude.IO { never io_failed(enum, obj) -> never }",
         "effect Fail { never fail(tobj poly) -> never }",
     ]
     "#);
@@ -1620,6 +1635,7 @@ fn a_polymorphic_never_operation_takes_tobj_and_never_returns() {
 fn effects_are_numbered_in_declaration_order() {
     let text = "effect A where\n  a : Unit -> Int\neffect B where\n  b : Unit -> Int\nmain : Unit -> <IO> Unit\nmain () =\n  let x = handle a () with\n    | a () k -> k 1\n  let y = handle b () with\n    | b () k -> k 2\n  println (show (x + y))";
     insta::assert_snapshot!(core_text(text, Pass::Translate), @r#"
+    effect Prelude.IO { never io_failed(enum, obj) -> never }
     effect A { a(unit) -> int }
     effect B { b(unit) -> int }
     yields fn main(p.0: unit) -> unit {
@@ -1693,6 +1709,7 @@ fn an_arm_reached_by_one_leaf_sits_at_the_leaf() {
     let text = "data Shape = | Dot | Box Int Int\n\narea : Shape -> Int\narea s =\n  match s with\n    | Box w h -> w * h\n    | Dot -> 0\n\npick : Int -> Int -> Int\npick a b =\n  match (a, b) with\n    | (0, 1) -> 0\n    | (n, _) -> n * 2\n\nmain : Unit -> <IO> Unit\nmain () = println (show (area (Box 2 3) + pick 0 1))";
     insta::assert_snapshot!(core_text(text, Pass::Translate), @r#"
     layout Shape { Dot, Box(int, int) }
+    effect Prelude.IO { never io_failed(enum, obj) -> never }
     fn area(s.0: tobj) -> int {
       switch s.0 Shape { #0 -> b1, #1(w.1: int, h.2: int) -> b2 }
     b1:
@@ -1755,6 +1772,7 @@ fn each_comparison_picks_the_instruction_of_its_operand_type() {
     let text = "compare : Int -> String -> Bool -> (Bool, Bool, Bool, Bool, Bool, Bool)\ncompare n s b = (n == 1, n != 2, s == \"a\", s != \"b\", b == True, b != False)\n\nmain : Unit -> <IO> Unit\nmain () =\n  let _ = compare 1 \"a\" True\n  ()";
     insta::assert_snapshot!(core_text(text, Pass::Translate), @r#"
     layout (,,,,,) { (,,,,,)(tobj, tobj, tobj, tobj, tobj, tobj) }
+    effect Prelude.IO { never io_failed(enum, obj) -> never }
     fn compare(n.0: int, s.1: obj, b.2: enum) -> obj {
       let t.3: enum = extern "Prelude.Eq Int.=="(n.0, 1)
       let t.4: enum = extern "Prelude.Eq Int.!="(n.0, 2)
@@ -3104,4 +3122,20 @@ fn a_linear_constructor_variable_destructured_in_both_branches_is_taken_apart_in
       return t.9
     }
     "#);
+}
+
+#[test]
+fn try_io_handles_the_io_effect() {
+    let text = "main : Unit -> <IO> Unit\nmain () =\n  match try_io (fn () -> Fs.read_text \"x\") with\n    | Ok s -> println s\n    | Err e -> println \"\\{e}\"";
+    let shown = core_text(text, Pass::Translate);
+    let effects: Vec<&str> = shown
+        .lines()
+        .filter(|line| line.starts_with("effect "))
+        .collect();
+    insta::assert_debug_snapshot!(effects, @r#"
+    [
+        "effect Prelude.IO { never io_failed(enum, obj) -> never }",
+    ]
+    "#);
+    assert!(shown.contains("handle Prelude.IO("), "{shown}");
 }

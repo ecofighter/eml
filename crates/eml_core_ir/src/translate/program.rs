@@ -4,8 +4,8 @@ use std::collections::HashMap;
 
 use eml_extern::{Extern, ExternType, Purity};
 use eml_hir::{
-    ConstructorId, EffectDef, EffectId, EffectKind, FunctionId, Items, ModuleId, ModuleOrigin,
-    OpMultiplicity, OperationId, Program as HirProgram, TypeDefId, TypeDefKind, ValueItem,
+    ConstructorId, EffectDef, EffectId, FunctionId, Items, ModuleId, ModuleOrigin, OpMultiplicity,
+    OperationId, Program as HirProgram, TypeDefId, TypeDefKind, ValueItem,
 };
 use eml_types::{TypeId, TypeStore, TypedProgram};
 
@@ -558,22 +558,14 @@ pub(super) fn plain_call(call: Call) -> Rhs {
 }
 
 /// Core IR のエフェクトの表に入るエフェクト。`eml_hir::Program::effects` の順 (モジュールの番号の順、モジュールの中の
-/// 宣言の順) に並べる。extern のエフェクトは `handle`、`perform`、`mask` が指さないので入れない。番号 (`effect_index`)
-/// と表 (`effect_table`) をどちらもここから作る。`IO` は Prelude の最初のエフェクトなので、片方だけで飛ばすと、
-/// ユーザーのエフェクトの番号が1つずれる。
+/// 宣言の順) にすべて並べる。`IO` は Prelude の最初のエフェクトなので、いつも 0 番である。`try_io` が `IO` の
+/// `handle` になるため、extern のエフェクトも表から外さない (docs/spec/core-ir.md の「IO の extern」)。
 fn core_effects(hir: &HirProgram) -> impl Iterator<Item = (EffectId, &EffectDef)> {
-    hir.effects().filter(|(_, effect)| match effect.kind {
-        EffectKind::Defined => true,
-        EffectKind::Extern(_) => false,
-    })
+    hir.effects()
 }
 
 /// エフェクトの番号は、`core_effects` の中の位置である。
 pub(super) fn effect_index(hir: &HirProgram, effect: EffectId) -> u32 {
-    assert!(
-        hir[effect].kind == EffectKind::Defined,
-        "an extern effect never reaches Core IR"
-    );
     core_effects(hir)
         .position(|(id, _)| id == effect)
         .expect("every effect is in the program") as u32

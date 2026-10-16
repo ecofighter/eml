@@ -6,6 +6,7 @@ use eml_core_ir::Pass;
 #[test]
 fn a_let_input_puts_its_value_in_a_root() {
     insta::assert_snapshot!(session_core_text(&["let x = 41"], Pass::Translate), @"
+    effect Prelude.IO { never io_failed(enum, obj) -> never }
     yields fn input$1(p.0: unit) -> int {
       return 41
     }
@@ -22,6 +23,7 @@ fn a_binding_is_read_from_its_root_and_the_result_is_returned_as_text() {
     // 根は `tobj` なので、型の Repr への変換は box の挿入が入れる。`Show` を書いた型の値は Prelude の `show` で文字列に
     // し、書くのは `Repl` である
     insta::assert_snapshot!(session_core_text(&["let x = 41", "x + 1"], Pass::Translate), @r#"
+    effect Prelude.IO { never io_failed(enum, obj) -> never }
     yields fn input$2(p.0: unit) -> int {
       let r.1: int = prim root_get[1]()
       let t.2: int = extern Prelude.+(r.1, 1)

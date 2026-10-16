@@ -12,6 +12,7 @@ use crate::common::{function, lir_text};
 fn strings_are_dupped_and_decreffed() {
     let text = "twice : String -> String\ntwice s = s ++ s\n\nignore : String -> Int\nignore s = 1\n\nmain : Unit -> <IO> Unit\nmain () = println (twice \"a\")";
     insta::assert_snapshot!(lir_text(text, eml_lir::Pass::Perceus), @r#"
+    effect Prelude.IO { never io_failed(enum, obj) -> never }
     fn twice(s.0: obj) -> obj {
       dup s.0
       let t.1: obj = extern Prelude.++(s.0, s.0)
@@ -33,6 +34,7 @@ fn strings_are_dupped_and_decreffed() {
 fn shadowed_and_discarded_strings() {
     let text = "main : Unit -> <IO> Unit\nmain () =\n  let s = \"x\"\n  let s = s ++ \"y\"\n  let _ = \"z\"\n  println s";
     insta::assert_snapshot!(lir_text(text, eml_lir::Pass::Perceus), @r#"
+    effect Prelude.IO { never io_failed(enum, obj) -> never }
     yields fn main(p.0: unit) -> unit {
       let s.1: obj = const "x"
       let s.2: obj = const "y"
@@ -221,6 +223,7 @@ fn a_discarded_call_result_is_released() {
     // `shadowed_and_discarded_strings` の捨てた文字列は contract が消すので、呼び出しの結果を捨てる場合の解放はここで確かめる
     let text = "f : Unit -> String\nf () = \"z\"\n\nmain : Unit -> <IO> Unit\nmain () =\n  let _ = f ()\n  println \"x\"";
     insta::assert_snapshot!(lir_text(text, eml_lir::Pass::Perceus), @r#"
+    effect Prelude.IO { never io_failed(enum, obj) -> never }
     fn f(p.0: unit) -> obj {
       let s.1: obj = const "z"
       return s.1

@@ -396,6 +396,7 @@ fn a_row_polymorphic_entry_may_yield() {
     let text = "effect Ask where\n  ask : Unit -> Int\n\ngo : Unit -> <e> Int\ngo () = 1\n\nmain : Unit -> <IO> Unit\nmain () = ()";
     // 入口の row のビットはすべて立つので、`go<e>` と入口の関数が yield しうる
     insta::assert_snapshot!(core_text_with_entry(text, "go"), @r#"
+    effect Prelude.IO { never io_failed(enum, obj) -> never }
     effect Ask { ask(unit) -> int }
     yields fn "go<e>"(p.0: unit) -> int {
       return 1
