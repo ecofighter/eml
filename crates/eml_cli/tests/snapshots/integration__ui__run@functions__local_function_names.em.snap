@@ -1,0 +1,8 @@
+---
+source: crates/eml_cli/tests/ui.rs
+expression: "format!(\"--- stdout ---\\n{stdout}--- stderr ---\\n{stderr}{written}{exit}\")"
+input_file: tests/ui/run/functions/local_function_names.em
+---
+--- stdout ---
+36
+--- stderr ---

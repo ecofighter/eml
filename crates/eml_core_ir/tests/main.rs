@@ -8,6 +8,7 @@ mod contract;
 mod evidence;
 mod externs;
 mod instances;
+mod local_functions;
 mod lowering;
 mod perceus;
 mod session;

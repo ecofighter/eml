@@ -1,0 +1,16 @@
+---
+source: crates/eml_cli/tests/ui.rs
+expression: rendered
+input_file: tests/ui/check-fail/linearity/recursive_local_captures_once_continuation.em
+---
+[E3001] Error: a local function that calls itself cannot capture a linear value
+   ╭─[ check-fail/linearity/recursive_local_captures_once_continuation.em:9:47 ]
+   │
+ 9 │         let go n = if n == 0 then k 0 else k (go (n - 1))
+   │                                               ─┬  
+   │                                                ╰── `go` refers to itself here, so it may be called any number of times
+   │ 
+   │ Note 1: linear values, such as files, the continuation of a `once` operation and closures that capture one, must be used exactly once
+   │ 
+   │ Note 2: pass linear values to a recursive local function as arguments
+───╯

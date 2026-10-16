@@ -793,3 +793,133 @@ fn if_switches(function: &eml_lir::LirFn) -> usize {
         })
         .count()
 }
+
+/// 同じ計算をトップレベルの補助関数で書いたプログラムと、ローカル関数で書いたプログラムの組。`eml_core_ir` の
+/// `local_functions` テストが LIR を比べる組と同じ文字列である。
+const LOCAL_FUNCTION_PAIRS: [(&str, &str, &str); 4] = [
+    (
+        "\
+helper : Int -> Int -> Int -> Int
+helper n k acc = if k == 0 then acc + n else helper n (k - 1) (acc + k)
+
+outer : Int -> Int
+outer n = helper n n 0
+
+main : Unit -> <IO> Unit
+main () = println (show (outer 5))
+",
+        "\
+outer : Int -> Int
+outer n =
+  let go k acc = if k == 0 then acc + n else go (k - 1) (acc + k)
+  go n 0
+
+main : Unit -> <IO> Unit
+main () = println (show (outer 5))
+",
+        "20\n",
+    ),
+    (
+        "\
+square : Int -> Int -> Int
+square n k = k * k + n
+
+countdown : Int -> Int -> <IO> Unit
+countdown n i =
+  if i == 0 then ()
+  else
+    println (show (square n i))
+    countdown n (i - 1)
+
+run : Int -> <IO> Unit
+run n = countdown n n
+
+main : Unit -> <IO> Unit
+main () = run 3
+",
+        "\
+run : Int -> <IO> Unit
+run n =
+  let square k = k * k + n
+  let countdown i =
+    if i == 0 then ()
+    else
+      println (show (square i))
+      countdown (i - 1)
+  countdown n
+
+main : Unit -> <IO> Unit
+main () = run 3
+",
+        "12\n7\n4\n",
+    ),
+    (
+        "\
+effect Ask where
+  ask : Unit -> Int
+
+bump : Int -> Int -> Int
+bump n x = x + n
+
+outer : Int -> <IO> Int
+outer n =
+  handle ask () + 1 with
+    | ask () k -> k (bump n 1)
+
+main : Unit -> <IO> Unit
+main () = println (show (outer 5))
+",
+        "\
+effect Ask where
+  ask : Unit -> Int
+
+outer : Int -> <IO> Int
+outer n =
+  let bump x = x + n
+  handle ask () + 1 with
+    | ask () k -> k (bump 1)
+
+main : Unit -> <IO> Unit
+main () = println (show (outer 5))
+",
+        "7\n",
+    ),
+    (
+        "\
+effect Ask where
+  ask : Unit -> Int
+
+bump : Int -> Int -> Int
+bump n x = x + n
+
+outer : Int -> <IO> Int
+outer n =
+  handle bump n (ask ()) with
+    | ask () k -> k 1
+
+main : Unit -> <IO> Unit
+main () = println (show (outer 2))
+",
+        "\
+effect Ask where
+  ask : Unit -> Int
+
+outer : Int -> <IO> Int
+outer n =
+  let bump x = x + n
+  handle bump (ask ()) with
+    | ask () k -> k 1
+
+main : Unit -> <IO> Unit
+main () = println (show (outer 2))
+",
+        "3\n",
+    ),
+];
+
+#[test]
+fn a_local_function_runs_like_a_top_level_helper() {
+    for (top, local, out) in LOCAL_FUNCTION_PAIRS {
+        assert_eq!(stats(top, out), stats(local, out), "{local}");
+    }
+}

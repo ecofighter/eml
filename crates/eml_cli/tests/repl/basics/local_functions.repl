@@ -1,0 +1,4 @@
+# `let` の入力は関数を定義できない。式の入力と、ブロックの中では書ける
+> let f x = 1
+> let twice x = x + x in twice 21
+> show (let go k acc = if k == 0 then acc else go (k - 1) (acc + k) in go 10 0)

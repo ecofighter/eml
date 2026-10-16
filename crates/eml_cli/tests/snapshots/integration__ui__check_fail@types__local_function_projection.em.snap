@@ -1,0 +1,14 @@
+---
+source: crates/eml_cli/tests/ui.rs
+expression: rendered
+input_file: tests/ui/check-fail/types/local_function_projection.em
+---
+[E2013] Error: the type of this value must be known to access its field `name`
+   ╭─[ check-fail/types/local_function_projection.em:6:19 ]
+   │
+ 6 │   let name_of p = p.name
+   │                   ┬  
+   │                   ╰── the type of this value is not known here
+   │ 
+   │ Help: annotate the type of the parameter, as in `fn (p : T) -> …`
+───╯

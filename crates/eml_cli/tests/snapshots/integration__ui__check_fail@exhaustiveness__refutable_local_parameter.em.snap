@@ -1,0 +1,14 @@
+---
+source: crates/eml_cli/tests/ui.rs
+expression: rendered
+input_file: tests/ui/check-fail/exhaustiveness/refutable_local_parameter.em
+---
+[E4003] Error: this pattern does not match every value
+   ╭─[ check-fail/exhaustiveness/refutable_local_parameter.em:6:12 ]
+   │
+ 6 │   let get (Some x) = x
+   │            ───┬──  
+   │               ╰──── a parameter needs a pattern that matches every value
+   │ 
+   │ Note: not covered: `Main.None`
+───╯

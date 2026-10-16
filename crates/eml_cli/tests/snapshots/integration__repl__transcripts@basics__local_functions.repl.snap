@@ -1,0 +1,14 @@
+---
+source: crates/eml_cli/tests/repl.rs
+expression: checked.render()
+input_file: crates/eml_cli/tests/repl/basics/local_functions.repl
+---
+> let f x = 1
+E0011 <input 1> 1:5 a `let` input cannot define a function
+  <input 1> 1:5 write a signature and an equation
+> let twice x = x + x in twice 21
+42
+> show (let go k acc = if k == 0 then acc else go (k - 1) (acc + k) in go 10 0)
+"55"
+--- close ---
+no leaks

@@ -1,0 +1,12 @@
+---
+source: crates/eml_cli/tests/ui.rs
+expression: rendered
+input_file: tests/ui/check-fail/syntax/local_function_result_type.em
+---
+[E0011] Error: a local function cannot declare its result type
+   ╭─[ check-fail/syntax/local_function_result_type.em:4:15 ]
+   │
+ 4 │   let twice x : Int = x + x
+   │               ┬  
+   │               ╰── annotate a parameter instead, as in `(x : Int)`
+───╯

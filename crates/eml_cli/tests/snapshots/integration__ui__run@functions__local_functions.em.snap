@@ -1,0 +1,28 @@
+---
+source: crates/eml_cli/tests/ui.rs
+expression: "format!(\"--- stdout ---\\n{stdout}--- stderr ---\\n{stderr}{written}{exit}\")"
+input_file: tests/ui/run/functions/local_functions.em
+---
+--- stdout ---
+5000050000
+5000050000
+[2, 4, 6]
+["1", "2"]
+7
+(1, "one")
+15
+[2, 3, 4]
+3
+8
+5
+2
+s!
+11
+43
+7
+42
+2
+10
+6
+x
+--- stderr ---
