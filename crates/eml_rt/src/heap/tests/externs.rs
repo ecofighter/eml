@@ -357,6 +357,80 @@ fn println_refuses_a_non_string<M: Mode>() {
     }
 }
 
+/// 中身を `max_chars` 文字まで写し、文字列を手放す。多バイトの文字の途中では切らない。
+fn copy_string_copies_up_to_a_number_of_chars<M: Mode>() {
+    let mut ctx = ctx::<M>();
+    unsafe {
+        let e = s(&mut ctx, "");
+        assert_eq!(ctx.copy_string(e, 10).unwrap(), "");
+        let a = s(&mut ctx, "héllo, 世界");
+        assert_eq!(ctx.copy_string(a, 100).unwrap(), "héllo, 世界");
+        let b = s(&mut ctx, "héllo, 世界");
+        assert_eq!(ctx.copy_string(b, 9).unwrap(), "héllo, 世界");
+        let c = s(&mut ctx, "héllo, 世界");
+        assert_eq!(ctx.copy_string(c, 8).unwrap(), "héllo, 世");
+        let d = s(&mut ctx, "héllo");
+        assert_eq!(ctx.copy_string(d, 2).unwrap(), "hé");
+        let z = s(&mut ctx, "abc");
+        assert_eq!(ctx.copy_string(z, 0).unwrap(), "");
+        let long = s(&mut ctx, &"あ".repeat(10_002));
+        assert_eq!(ctx.copy_string(long, 10_001).unwrap(), "あ".repeat(10_001));
+    }
+    assert_eq!(mortal(ctx.heap()), 0);
+}
+
+/// 凍結した領域の文字列も写せる。領域の物体は数えないので、手放しても何も変わらない。
+fn copy_string_reads_a_region_string<M: Mode>() {
+    let (b, constant, _) = super::frozen::builder::<M>();
+    let region = Arc::new(b.freeze().unwrap());
+    let mut ctx = ctx::<M>();
+    unsafe { ctx.heap_mut() }.attach(region);
+    assert_eq!(
+        unsafe { ctx.copy_string(constant, 100) }.unwrap(),
+        "constant"
+    );
+    assert_eq!(mortal(ctx.heap()), 0);
+}
+
+fn copy_string_refuses_a_non_string<M: Mode>() {
+    if !M::CHECKED {
+        return;
+    }
+    let mut ctx = ctx::<M>();
+    unsafe {
+        let d = ctx.heap_mut().alloc_data(0, 0, 1, false);
+        assert_eq!(
+            ctx.copy_string(d, 10),
+            Err(Fault::Heap(HeapError::WrongKind))
+        );
+        assert_eq!(
+            ctx.copy_string(Word::imm(0), 10),
+            Err(Fault::Heap(HeapError::WrongKind))
+        );
+        ctx.heap_mut().decref(d).unwrap();
+    }
+}
+
+/// 1行を書いて書き出す。まとめて書く Host でも、呼んだ後には書き先に届いている。
+fn print_line_writes_and_flushes<M: Mode>() {
+    let out = Shared::default();
+    let host = StdHost::new(
+        Box::new(out.clone()),
+        Box::new(io::sink()),
+        Default::default(),
+        Buffering::Block,
+    );
+    let mut ctx = crate::Ctx::<M>::new(
+        Arc::new(Control::new(Limits::default())),
+        HostRef::new(Arc::new(host)),
+    );
+    ctx.print_line("[ 1\n, 2 ] : List Int").unwrap();
+    assert_eq!(out.text(), "[ 1\n, 2 ] : List Int\n");
+    let memory = Arc::new(MemoryHost::failing("disk full"));
+    let mut ctx = ctx_with::<M>(&memory);
+    assert_eq!(ctx.print_line("x"), Err(Fault::Output("disk full".into())));
+}
+
 /// 開いて、全部読み、組から取り出す。
 unsafe fn open_and_read<M: Mode>(
     ctx: &mut crate::Ctx<M>,
@@ -895,6 +969,10 @@ both_modes!(
     println_writes_a_line_and_releases_its_text,
     a_failed_write_still_releases_the_text,
     println_refuses_a_non_string,
+    copy_string_copies_up_to_a_number_of_chars,
+    copy_string_reads_a_region_string,
+    copy_string_refuses_a_non_string,
+    print_line_writes_and_flushes,
     a_file_is_read_whole_and_closed,
     an_empty_file_reads_as_an_empty_string,
     a_long_unsized_file_is_read_in_chunks,

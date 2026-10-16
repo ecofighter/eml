@@ -608,6 +608,7 @@ token の表の項目は、`into_token` と `release_reuse` が添字を使い�
 - `heap()` は安全なメソッドで、`heap_mut()` は `unsafe fn` である。安全なコードがヒープを入れ替えると、`Ctx` の持つ語が、落としたヒープを指すためである。`heap_mut()` の前提は次の3つである。ヒープを入れ替えない (入れ替えるのは下の「回復」の `recover` だけである)。`Ctx` の持つ語 (`evv` と yield の状態の語) を手放したり書き換えたりせず、そこからたどれる物体 (`evv` の節点、evidence、入口の表) も書き換えない。`Ctx` のメソッドを次に呼ぶ前に、作っている物体を書き終える
 - `Ctx` は `Drop` を実装しない。`evv` と yield の状態の参照は個別に手放さず、ヒープと一緒に消える。そのため、基本操作の中の `decref` で破棄処理が panic しても、`Ctx` を落とすことは安全である (下の「`unsafe` の核」の T7)
 - `check_finished()` は、`evv` が空で yield の状態がなしであることを確かめる。VM がリークの検査の前に呼ぶ ([LIR](lir.md) の「`evv` の不変条件」の最後の項)
+- `copy_string(s, max_chars) -> Result<String, Fault>` は、文字列の参照 `s` を1つ受けて手放し、中身の先頭 `max_chars` 文字を Rust の `String` に写して返す。VM が、文字列を返す入口の結果を受け取るのに使う ([VM](vm.md) の「追記」)。`unsafe fn` で、前提と事後条件 (`held_ok`、`evolved_by`) は `println` と同じである。検査モードは種類を確かめ、文字列でなければ何も写さずに `Fault::Heap(WrongKind)` を返す。写す長さを切るのは、利用者の `show` が巨大な文字列を返しても、確保量の上限の外で同じ大きさを写さないためである。文字の始まりは `str::is_char_boundary` で数え、写すのは `str::to_owned` である。どちらも vstd が仕様を持つので、下の「`unsafe` の核」の信頼の一覧は増えない
 
 ### セッションの根
 
@@ -855,6 +856,7 @@ pub struct Opened {
   - 実行時エラーを出す前。`> out 2>&1` のときに、出力と誤りの順を保つためである
   - 割り込みと上限で止めたとき
   - S12 で標準入力から読む前と、S11 の REPL の入力の区切り
+- `Ctx::print_line(line) -> Result<(), Fault>` は、Rust の文字列 `line` を `Stream::Out` に1行として書き (`write_line`)、続けて書き出す (`flush`)。REPL が整形した結果を書くのに使う ([REPL の端末](repl.md) の「結果の表示」)。どちらかが誤りなら `Fault::Output` を返す。ヒープには触れない
 - まとめて書くと、書き込みの誤り (`| head` での EPIPE など) が見つかるのは、後でバッファがあふれた `println` か、終わりの flush になる。そのため `println` の `Err(Output)` は、「この行か、それより前の行を書けなかった」ことを表す。終わりの flush の誤りは、VM が位置なしで出す
 - 2回目の Ctrl-C ですぐ終わるときは、まだ書いていない出力は失われる (C と同じ)
 

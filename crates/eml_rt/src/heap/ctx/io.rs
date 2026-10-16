@@ -6,6 +6,8 @@ use super::proof::*;
 use super::*;
 use crate::externs::{Fault, IoOp, TUPLE};
 use crate::host::{File, ReadError, Stream, host_flush, host_open, host_write_line, read_text};
+#[cfg(verus_only)]
+use vstd::string::StringSliceAdditionalSpecFns;
 
 verus! {
 
@@ -76,6 +78,90 @@ impl<M: Mode> Ctx<M> {
             }
         }
         match written {
+            Ok(()) => Ok(()),
+            Err(e) => Err(Fault::Output(e)),
+        }
+    }
+
+    /// 文字列 `s` の中身を、先頭から `max_chars` 文字まで Rust の `String` に写して返す。`s` の参照を受け取って手放す。
+    /// REPL が式の入力の結果を整形するのに使う。写す長さを切るのは、利用者の `show` が巨大な文字列を返しても、確保量の
+    /// 上限の外で同じ大きさを写さないためである (docs/spec/object-model.md の「実行文脈 `Ctx`」)。
+    ///
+    /// # Safety
+    /// `heap_mut` の前提を守っている。`s` は即値か、このヒープか付けた塊の生きている物体を指し、呼ぶ側がその参照を1つ
+    /// 持つ。速いモードでは、`s` は文字列である (検査モードは確かめ、違えば何も写さずに `WrongKind` を返す)。
+    pub unsafe fn copy_string(&mut self, s: Word, max_chars: usize) -> (r: Result<String, Fault>)
+        requires
+            old(self).wf(),
+            old(self).heap_spec().word_in(s),
+            !M::CHECKED ==> old(self).is_string(s) && old(self).holds(s),
+        ensures
+            final(self).wf(),
+            final(self).evv_spec() == old(self).evv_spec(),
+            final(self).yield_spec() == old(self).yield_spec(),
+            r is Ok || (r matches Err(Fault::Heap(_))),
+            (r matches Err(Fault::Heap(_))) ==> final(self).heap_spec().settled_heap() == old(
+                self,
+            ).heap_spec().settled_heap(),
+            !M::CHECKED ==> !(r matches Err(Fault::Heap(_))),
+            old(self).held_ok() && old(self).is_string(s) && old(self).holds(s) ==> !(r matches Err(
+                Fault::Heap(_),
+            )) || (r matches Err(Fault::Heap(e)) && chain_err(Err::<(), HeapError>(e))),
+            old(self).held_ok() && old(self).is_string(s) && old(self).holds(s) && !(r matches Err(
+                Fault::Heap(_),
+            )) ==> {
+                &&& final(self).held_ok()
+                &&& final(self).evolved_by(*old(self), |x: usize| -points(s, x), Set::empty())
+            },
+    {
+        let ghost s0 = *self;
+        let ghost c = s0.held_ok() && s0.is_string(s) && s0.holds(s);
+        if M::CHECKED && !s.is_ptr() {
+            return Err(Fault::Heap(HeapError::WrongKind));
+        }
+        self.heap.settle();
+        let ghost h1 = self.heap;
+        let hs = self.heap.header_of(s);
+        proof {
+            lemma_settled_twice(s0.heap);
+            assert(h1.words_kept(s0.heap));
+            h1.lemma_text_spec(s);
+            s0.heap.lemma_text_spec(s);
+            if c {
+                s0.lemma_settled_string(h1, s);
+            }
+        }
+        if let Err(e) = self.heap.checked_string(hs) {
+            proof {
+                self.lemma_words_kept(s0);
+            }
+            return Err(Fault::Heap(e));
+        }
+        let copied = prefix_chars(self.heap.string_text(s), max_chars).to_owned();
+        self.heap.release_text(hs, Ghost(s), Ghost(c));
+        proof {
+            if M::CHECKED {
+                lemma_words_trans(self.heap, h1, s0.heap);
+                self.lemma_words_kept(s0);
+            }
+            if c {
+                self.lemma_printed(s0, h1, s);
+            }
+        }
+        Ok(copied)
+    }
+
+    /// `line` と `\n` を標準出力に書き、書き出す。REPL が整形した結果を書くのに使う。Host の境界 (T11) は何も約束しない
+    /// ので、書けたかどうかだけを返す。
+    pub fn print_line(&mut self, line: &str) -> (r: Result<(), Fault>)
+        ensures
+            *final(self) == *old(self),
+            r is Ok || (r matches Err(Fault::Output(_))),
+    {
+        if let Err(e) = host_write_line(&self.host, Stream::Out, line) {
+            return Err(Fault::Output(e));
+        }
+        match host_flush(&self.host) {
             Ok(()) => Ok(()),
             Err(e) => Err(Fault::Output(e)),
         }
@@ -725,6 +811,30 @@ impl<M: Mode> Ctx<M> {
         }
         self.lemma_holds_moved(s0, ws, seq![], ds, none);
         self.lemma_evv_kept(s0, ds, none);
+    }
+}
+
+/// `text` の先頭の `max_chars` 文字。文字の始まりを `is_char_boundary` で数えるので、多バイトの文字の途中で切らない。
+fn prefix_chars(text: &str, max_chars: usize) -> (r: &str) {
+    let len = text.len();
+    let mut end: usize = 0;
+    let mut count: usize = 0;
+    // `max_chars` 文字を数えた後の、次の文字の始まりで止まる
+    while end < len && (count < max_chars || !text.is_char_boundary(end))
+        invariant
+            end <= len,
+            count <= max_chars,
+        decreases len - end,
+    {
+        if text.is_char_boundary(end) {
+            count += 1;
+        }
+        end += 1;
+    }
+    if text.is_char_boundary(end) {
+        text.split_at(end).0
+    } else {
+        text
     }
 }
 
