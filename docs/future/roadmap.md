@@ -256,7 +256,7 @@ S12 を、S12a、S12b、S12c、S12d の4つの作業に分けて順に進める�
 |---|---|---|
 | S12a | 起動と標準ライブラリの核。`eml file.em args...`、`Env`、`Stdin`、`Fs` の読み書き、`Proc.run`、`eprintln`、`String` の核の extern と eml で書く `String` と `List` の関数、使う std のモジュールだけを読み込むこと | 終えた。決めたことは [標準ライブラリ](../spec/stdlib.md)、[モジュールと名前解決](../spec/modules.md) の「標準ライブラリ」と「REPL のセッション」、[オブジェクトモデル](../spec/object-model.md) の「extern」と「`unsafe` の核」、[LIR](../spec/lir.md) の「実行時エラー」、[VM](../spec/vm.md) の「置き場所」と「上限と割り込み」、[Core IR](../spec/core-ir.md) の「translate の配置」、[REPL の端末](../spec/repl.md) の「コマンドライン」、[テスト戦略](../implementation/testing.md) の「UI テスト」と「CLI のテスト」に移した |
 | S12b | `try_io` と `exit`。中断の経路、`IOError` の値、戻らない extern | 終えた。決めたことは [標準ライブラリ](../spec/stdlib.md) の「`try_io`」と「`exit`」、[エフェクトと handler](../spec/effects.md) の「組み込みの `IO`」と「健全性」、[型と Kind](../spec/types.md) の「row の具体化の記録」、[Core IR](../spec/core-ir.md) の「IO の extern」、[LIR](../spec/lir.md) の「戻らない extern」、[VM](../spec/vm.md) の「IO の失敗と `exit`」、[REPL の端末](../spec/repl.md) の「割り込みと実行時エラー」、[テスト戦略](../implementation/testing.md) の「UI テスト」に移した |
-| S12c | ローカルの再帰関数。構文、HIR、単相の推論、lambda lifting | |
+| S12c | ローカルの再帰関数。構文、HIR、単相の推論、lambda lifting | 終えた。決めたことは [式](../spec/expressions.md) の「ブロックと `let`」と「関数適用」、[文法](../spec/grammar.md)、[型と Kind](../spec/types.md) の「推論」と「row の具体化の記録」、[線形性](../spec/linearity.md)、[網羅性](../spec/exhaustiveness.md)、[Core IR](../spec/core-ir.md) の「変換の規則」と「`yields` の印」、[LIR](../spec/lir.md)、[診断](../spec/diagnostics.md)、[診断の表示](../implementation/diagnostics.md)、[コンパイラの構成](../implementation/architecture.md) に移した |
 | S12d | 5本のスクリプト (wc、grep、ログの集計、CSV の変換、デプロイ手順) を UI テストとして書く | |
 
 S12a では、この節で決めていた次の2つを変えた。
@@ -270,11 +270,7 @@ S12b では、標準ライブラリの関数の中の extern の誤りの位置�
 
 ### 決めたこと
 
-- (S12c) ローカルの再帰関数を入れる。`let (f, text) = Fs.read_all f` のような再束縛を壊さないように、引数を持つ関数の形のローカル定義だけを再帰的にする。単相で、lambda lifting する
-
-### 論点
-
-- (S12c) ローカルの再帰関数の構文
+- (S12c) ローカルの再帰関数を入れる。`let (f, text) = Fs.read_all f` のような再束縛を壊さないように、引数を持つ関数の形のローカル定義だけを再帰的にする。単相で、lambda lifting する。構文は、ブロックの中に `let go acc xs = …` と書く形である (関数の形の `let` は引数を1つ以上持ち、自分自身を参照できる)
 
 ## S13 実例による判断
 
@@ -282,6 +278,8 @@ S12b では、標準ライブラリの関数の中の extern の誤りの位置�
 
 S12 で書いたスクリプトの書き心地を見て、次の項目を採るかどうかを決める。最後の `par` の a1 だけは、スクリプトの書き心地でなく、並列の安全性を並列 VM より前に確かめるかどうかで決める。
 
+- 多相なローカル関数: S12c のローカル関数は単相である。シグネチャの書き方 (ブロックの中にシグネチャの行を書くか、`let` に型を明示するか) と、注釈のない汎化をするかを決める
+- ローカル関数どうしの相互再帰: 組を作る構文 (連続する関数の形の `let` を1つの組にするか、`and` のような区切りを入れるか) を決める
 - Kind の宣言化: シグネチャに Kind の境界を書き、段2の Kind 推論を減らす。宣言にするなら、持ち越しの条件付きの制約を書く形が要る。`map`、`fold`、`keep` を注釈なしで書ける今の性質を失わないことを条件にする。あわせて、ユーザーが Kind を書けるようにするか (関数型の線形性 `m` を含む) と、診断で矢印の線形性をどう表示するかを決める。今の診断は、`once` の `k` や `Lin` のクロージャを、ほかの関数と同じ形で表示する
 - fixity の宣言をやめ、先頭の文字で決まる固定の優先順位の表にすること。整数の優先順位で、ライブラリ同士の演算子の衝突が問題になった場合の代替案 (Swift 方式の優先順位グループ) も、ここで一緒に判断する
 - 字句的な負号 (`f -1` を `f (-1)` と読む。GHC の LexicalNegation と同じ)
