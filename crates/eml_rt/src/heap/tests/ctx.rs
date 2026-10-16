@@ -166,6 +166,42 @@ fn lookup_finds_the_innermost_evidence<M: Mode>() {
     assert!(ctx.check_finished());
 }
 
+fn find_returns_the_innermost_evidence_or_none<M: Mode>() {
+    let mut ctx = ctx::<M>();
+    unsafe {
+        assert_eq!(ctx.ev_find(0).unwrap(), None);
+    }
+    let e0 = push(&mut ctx, 0, 1);
+    let e1 = push(&mut ctx, 1, 1);
+    let e0_inner = push(&mut ctx, 0, 1);
+    unsafe {
+        let found = ctx.ev_find(0).unwrap().unwrap();
+        assert_eq!(found, e0_inner);
+        ctx.heap_mut().decref(found).unwrap();
+        let found = ctx.ev_find(1).unwrap().unwrap();
+        assert_eq!(found, e1);
+        ctx.heap_mut().decref(found).unwrap();
+        assert_eq!(ctx.ev_find(2).unwrap(), None);
+        for e in [e0, e1, e0_inner] {
+            ctx.heap_mut().decref(e).unwrap();
+        }
+    }
+    clear(&mut ctx);
+    assert!(ctx.check_finished());
+}
+
+fn exit_abort_targets_the_dummy<M: Mode>() {
+    let mut ctx = ctx::<M>();
+    let dummy = ctx.heap().dummy();
+    unsafe {
+        ctx.exit_abort().unwrap();
+        assert_eq!(ctx.yield_status(dummy), 2);
+        assert_eq!(ctx.yield_cont_take().unwrap(), Word::UNIT);
+        assert_eq!(ctx.yield_finish().unwrap(), Word::UNIT);
+    }
+    assert!(ctx.check_finished());
+}
+
 fn clauses_states_and_outer_lists<M: Mode>() {
     let mut ctx = ctx::<M>();
     let ev = push(&mut ctx, 0, 2);
@@ -583,6 +619,8 @@ both_modes!(
     evv_get_and_set_swap_the_list,
     dropping_a_ctx_mid_yield,
     lookup_finds_the_innermost_evidence,
+    find_returns_the_innermost_evidence_or_none,
+    exit_abort_targets_the_dummy,
     clauses_states_and_outer_lists,
     entry_tables_with_a_count_word,
     replacing_a_state_that_reaches_its_evidence,

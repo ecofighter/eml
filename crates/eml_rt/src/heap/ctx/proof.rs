@@ -28,6 +28,39 @@ impl<M: Mode> Ctx<M> {
         lemma_seq_of(self.heap, w, 0);
     }
 
+    /// ダミーの物体は物体を指す `word_in` の語である。yield していない速いモードの文脈は、ダミーと2つの `()` を
+    /// 宛先、節、κ として持てる。ダミーの rc は 0 なので、`owned` と数の条件は効かない。
+    pub(super) proof fn lemma_dummy_held(&self, unit: Word)
+        requires
+            self.wf(),
+            unit.bits_spec() == 1,
+        ensures
+            self.heap_spec().word_in(self.heap_spec().dummy_word()),
+            self.heap_spec().dummy_word().is_ptr_spec(),
+            !M::CHECKED && !self.is_yielding() ==> self.holds_args(
+                seq![self.heap_spec().dummy_word(), unit, unit],
+            ),
+    {
+        lemma_unit_bits();
+        let d = self.heap.dummy_word();
+        if !M::CHECKED && !self.is_yielding() {
+            let ws = seq![d, unit, unit];
+            let v = self.heap.core.settled_view();
+            assert(self.heap.dummy_wf());
+            assert(v.rc_of(d.bits_spec()) == 0);
+            assert forall|i: int| 0 <= i < ws.len() implies held_word(
+                self.heap,
+                #[trigger] ws[i],
+            ) by {}
+            assert forall|b: usize| #[trigger]
+                self.need(ws, b) > 0 && v.rc_of(b) != 0 implies v.ext(b) >= self.need(ws, b) by {
+                lemma_points_in(ws, b);
+                lemma_points_in(seq![], b);
+                assert(self.need(ws, b) == self.need(seq![], b));
+            }
+        }
+    }
+
     /// 検査モードの操作は語を `word_in` のまま保つので、`Ctx` の持つ語も `word_in` のままである。
     pub(super) proof fn lemma_words_kept(&self, old: Ctx<M>)
         requires

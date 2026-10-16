@@ -969,6 +969,38 @@ impl<M: Mode> Ctx<M> {
         self.start_yield(ev, clause, k, true)
     }
 
+    /// `exit` の中断を始める。宛先は不死のダミーの物体で、どの `prompt$` の evidence とも違うので、中断は実行の底
+    /// (`Finish`) まで届く。節と κ は `()` である (docs/spec/vm.md の「IO の失敗と `exit`」)。
+    ///
+    /// # Safety
+    /// `heap_mut` の前提を守っている。yield していない (検査モードは `YieldMisuse` を返す)。
+    pub unsafe fn exit_abort(&mut self) -> (r: Result<(), HeapError>)
+        requires
+            old(self).wf(),
+            !M::CHECKED ==> !old(self).is_yielding(),
+        ensures
+            final(self).wf(),
+            r is Err <==> M::CHECKED && old(self).is_yielding(),
+            r is Ok ==> {
+                &&& final(self).yield_spec().0 == old(self).heap_spec().dummy_word()
+                &&& final(self).yield_spec().1.bits_spec() == 1
+                &&& final(self).yield_spec().2.bits_spec() == 1
+                &&& final(self).yield_spec().3
+            },
+            final(self).heap_spec() == old(self).heap_spec(),
+            final(self).evv_spec() == old(self).evv_spec(),
+    {
+        let d = self.heap.dummy();
+        let unit = Word::UNIT;
+        proof {
+            lemma_unit_bits();
+            // ダミーは rc が 0 の不死の物体なので、`owned` と数の条件は rc が 0 でない物体にしか効かず、`held_word`
+            // も `holds_args` の数の項も満たす (heap/mod.rs の `dummy_wf`)
+            self.lemma_dummy_held(unit);
+        }
+        self.start_yield(d, unit, unit, true)
+    }
+
     /// κ を取り出し、欄を `()` にする。κ の参照は呼ぶ側に移る。ヒープに触れないので安全な関数にする。yield して
     /// いなければ、検査モードは `YieldMisuse` を返し、速いモードは空の欄の `()` を返す。
     pub fn yield_cont_take(&mut self) -> (r: Result<Word, HeapError>)
@@ -2190,6 +2222,187 @@ impl<M: Mode> Ctx<M> {
             }
         }
         Ok(e)
+    }
+
+    /// `ev_lookup` と同じく今の `evv` を先頭からたどり、エフェクト `effect` の最初の evidence を `dup` して返す。
+    /// なければ `None` を返す。VM は、IO の失敗を届ける `try_io` があるかをこれで確かめる
+    /// (docs/spec/vm.md の「IO の失敗と `exit`」)。`evidence_steps` は、見つからなくてもたどった節点を数える。
+    ///
+    /// # Safety
+    /// `heap_mut` の前提を守っている。検査モードは、形の違う節点や上限を超える長さに `BadEvidence` を返す。
+    pub unsafe fn ev_find(&mut self, effect: u16) -> (r: Result<Option<Word>, HeapError>)
+        requires
+            old(self).wf(),
+        ensures
+            final(self).wf(),
+            r is Err ==> final(self).heap_spec().settled_heap() == old(
+                self,
+            ).heap_spec().settled_heap(),
+            final(self).evv_spec() == old(self).evv_spec(),
+            final(self).yield_spec() == old(self).yield_spec(),
+            !M::CHECKED ==> r is Ok,
+            old(self).held_ok() && old(self).lookup(effect) is Some ==> (r matches Ok(Some(e)) && {
+                &&& e == old(self).lookup(effect)->0
+                &&& final(self).held_ok()
+                &&& final(self).holds(e)
+                &&& final(self).ev_shape(e)
+                &&& final(self).ev_tag(e) == effect + 1
+                &&& final(self).evolved_by(*old(self), |b: usize| points(e, b), Set::empty())
+            }),
+            old(self).held_ok() && old(self).lookup(effect) is None ==> (r == Ok::<
+                Option<Word>,
+                HeapError,
+            >(None) && final(self).held_ok() && final(self).heap_spec() == old(self).heap_spec()),
+    {
+        let ghost s0 = *self;
+        let ghost c = s0.held_ok();
+        let tag = tag_of_effect(effect);
+        let want = Meta::new(tag, 2, Kind::Data, false);
+        proof {
+            want.lemma_fields();
+        }
+        let wanted = want.bits();
+        let ghost f = choose|f: nat| #[trigger] path(s0.heap, s0.evv, f) is Some;
+        let ghost s = seq_of(s0.heap, s0.evv);
+        proof {
+            if c {
+                lemma_seq_of(s0.heap, s0.evv, f);
+                assert(s.subrange(0, s.len() as int) =~= s);
+            }
+        }
+        let mut node = self.evv;
+        let mut steps: usize = 0;
+        let ghost mut i: int = 0;
+        loop
+            invariant
+                self.wf(),
+                self.heap == s0.heap,
+                self.evv == s0.evv,
+                self.yielding == s0.yielding,
+                self.max_evv == s0.max_evv,
+                self.heap.word_in(node),
+                steps <= self.max_evv,
+                s0 == *old(self),
+                c == s0.held_ok(),
+                s == seq_of(s0.heap, s0.evv),
+                tag == effect_tag(effect),
+                wanted == want.bits_spec(),
+                bits_wf(wanted),
+                bits_tag(wanted) == tag,
+                bits_scan(wanted) == 2,
+                bits_kind(wanted) == Kind::Data,
+                !bits_lin(wanted),
+                c ==> {
+                    &&& 0 <= i <= s.len()
+                    &&& i <= f
+                    &&& path(self.heap, node, (f - i) as nat) == Some(s.subrange(i, s.len() as int))
+                    &&& find(s, tag) == find(s.subrange(i, s.len() as int), tag)
+                    &&& M::CHECKED ==> steps == i
+                    &&& s.len() <= self.max_evv
+                },
+                !M::CHECKED ==> c,
+            ensures
+                self.wf(),
+                self.heap == s0.heap,
+                self.evv == s0.evv,
+                self.yielding == s0.yielding,
+                self.max_evv == s0.max_evv,
+                self.heap.word_in(node),
+                node.is_ptr_spec(),
+                c ==> {
+                    &&& node_ok(self.heap, node)
+                    &&& ev_ok(self.heap, self.heap.scanned_word(node, 0))
+                    &&& find(s, tag) == Some(self.heap.scanned_word(node, 0))
+                    &&& self.heap.tag_of(self.heap.scanned_word(node, 0)) == tag
+                },
+            decreases
+                    if M::CHECKED {
+                        self.max_evv - steps
+                    } else {
+                        s.len() - i
+                    },
+        {
+            let ghost rest = s.subrange(i, s.len() as int);
+            proof {
+                if c && node.bits_spec() != 1 {
+                    let k = (f - i) as nat;
+                    assert(k > 0);
+                    let next = path(self.heap, self.heap.scanned_word(node, 1), (k - 1) as nat);
+                    assert(next is Some);
+                    let x = (self.heap.tag_of(node), self.heap.scanned_word(node, 0));
+                    assert(rest =~= seq![x] + next->0);
+                    assert(rest.drop_first() =~= s.subrange(i + 1, s.len() as int));
+                    assert((seq![x] + next->0).drop_first() =~= next->0);
+                    assert(rest.len() >= 1);
+                    assert(i < s.len());
+                    assert(node.is_ptr_spec());
+                }
+                if c && node.bits_spec() == 1 {
+                    assert(rest =~= Seq::<(u16, Word)>::empty());
+                    assert(find(rest, tag) is None);
+                }
+                lemma_unit_bits();
+            }
+            if node.bits() == 1 {
+                proof {
+                    if c {
+                        assert(rest.len() == 0);
+                        // 検査モードは `evidence_steps` を数えたので `*self` は `s0` と違うが、`Ctx` の持つ語は同じである
+                        assert forall|b: usize| #[trigger]
+                            self.need(seq![], b) == s0.need(seq![], b) by {}
+                        assert(self.held_ok());
+                    }
+                }
+                return Ok(None);
+            }
+            if M::CHECKED {
+                if steps >= self.max_evv || !node.is_ptr() {
+                    return Err(HeapError::BadEvidence);
+                }
+                self.stats.evidence_steps = self.stats.evidence_steps.wrapping_add(1);
+            }
+            let m = (unsafe { self.heap.meta(node) })?;
+            let bits = m.bits();
+            if bits == wanted {
+                break;
+            }
+            proof {
+                // 節点の形が正しければ、`meta` の値が違うのは tag が違うときだけである
+                if c && bits_tag(bits) == bits_tag(wanted) {
+                    lemma_meta_eq(bits, wanted);
+                }
+            }
+            if M::CHECKED && (!Self::data_meta(m, 2) || m.tag() == 0) {
+                return Err(HeapError::BadEvidence);
+            }
+            proof {
+                lemma_unextended(self.heap, node);
+            }
+            node = (unsafe { self.heap.field(node, 1) })?;
+            if M::CHECKED {
+                steps += 1;
+            }
+            proof {
+                i = i + 1;
+            }
+        }
+        proof {
+            if c {
+                lemma_unextended(self.heap, node);
+                s0.heap.lemma_readable_scanned(node, 0);
+            }
+        }
+        let e = (unsafe { self.heap.field(node, 0) })?;
+        (unsafe { self.heap.dup(e) })?;
+        proof {
+            if M::CHECKED {
+                self.lemma_words_kept(s0);
+            }
+            if c && s0.lookup(effect) is Some {
+                self.lemma_dupped_ok(s0, e, e);
+            }
+        }
+        Ok(Some(e))
     }
 
     /// `effects` の多重集合の各エフェクトについて、`w` の先頭から合う evidence をその数だけ除いたリストを返す。除いた

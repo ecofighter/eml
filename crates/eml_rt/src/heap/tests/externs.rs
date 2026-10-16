@@ -23,6 +23,42 @@ fn ordering(o: Order) -> i64 {
 }
 
 #[test]
+fn io_faults_map_to_their_kinds() {
+    use crate::externs::{
+        ArithFault, Fault, IO_NOT_AVAILABLE, IO_NOT_FOUND, IO_NOT_UTF8, IO_OTHER,
+        IO_PERMISSION_DENIED, IoOp, IoReason, Utf8Source,
+    };
+    let io = |reason| Fault::Io {
+        op: IoOp::Open,
+        name: "x".into(),
+        reason,
+    };
+    assert_eq!(io(IoReason::NotFound).io_error_kind(), Some(IO_NOT_FOUND));
+    assert_eq!(
+        io(IoReason::PermissionDenied).io_error_kind(),
+        Some(IO_PERMISSION_DENIED)
+    );
+    assert_eq!(
+        io(IoReason::NotAvailable).io_error_kind(),
+        Some(IO_NOT_AVAILABLE)
+    );
+    assert_eq!(io(IoReason::Other).io_error_kind(), Some(IO_OTHER));
+    assert_eq!(
+        Fault::Stdin(IoReason::NotAvailable).io_error_kind(),
+        Some(IO_NOT_AVAILABLE)
+    );
+    assert_eq!(
+        Fault::NotUtf8(Box::new(Utf8Source::Stdin)).io_error_kind(),
+        Some(IO_NOT_UTF8)
+    );
+    assert_eq!(Fault::Output("broken pipe".into()).io_error_kind(), None);
+    assert_eq!(
+        Fault::Arith(ArithFault::DivisionByZero).io_error_kind(),
+        None
+    );
+}
+
+#[test]
 fn arithmetic_matches_checked_rust() {
     for a in EDGES {
         assert_eq!(

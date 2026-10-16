@@ -28,6 +28,18 @@ pub const GT: i64 = 2;
 /// 組のタグ。`alloc_data` のタグの型に合わせる。
 pub const TUPLE: u16 = 0;
 
+/// `IOErrorKind` のタグ。Prelude の宣言の順で、`try_io` の `io_failed` の節が受け取る
+/// (docs/spec/stdlib.md の「`try_io`」)。
+pub const IO_NOT_FOUND: i64 = 0;
+
+pub const IO_PERMISSION_DENIED: i64 = 1;
+
+pub const IO_NOT_AVAILABLE: i64 = 2;
+
+pub const IO_NOT_UTF8: i64 = 3;
+
+pub const IO_OTHER: i64 = 4;
+
 /// 算術の誤り。`Fault` と分けておくと、`Result<i64, ArithFault>` が2つのレジスタで返る。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ArithFault {
@@ -94,6 +106,32 @@ pub enum Fault {
     Index(Box<IndexFault>),
     /// 読む途中か子を待つ間に、止める語か確保量の上限に当たった。
     Stopped(Stop),
+}
+
+impl Fault {
+    /// `try_io` が捕まえる誤りなら、`IOErrorKind` のタグを返す。書き出しの誤り (`Output`) は、標準出力をまとめて
+    /// 書くので見つかる場所が決まらず、捕まえない (docs/spec/stdlib.md の「`try_io`」)。
+    pub fn io_error_kind(&self) -> Option<i64> {
+        match self {
+            Fault::Io { op: _, name: _, reason } => Some(reason_kind(*reason)),
+            Fault::Stdin(reason) => Some(reason_kind(*reason)),
+            Fault::NotUtf8(_) => Some(IO_NOT_UTF8),
+            Fault::Heap(_)
+            | Fault::Arith(_)
+            | Fault::Output(_)
+            | Fault::Index(_)
+            | Fault::Stopped(_) => None,
+        }
+    }
+}
+
+fn reason_kind(reason: IoReason) -> i64 {
+    match reason {
+        IoReason::NotFound => IO_NOT_FOUND,
+        IoReason::PermissionDenied => IO_PERMISSION_DENIED,
+        IoReason::NotAvailable => IO_NOT_AVAILABLE,
+        IoReason::Other => IO_OTHER,
+    }
 }
 
 // `?` で `Fault` に変えた後も、どの誤りだったかを呼ぶ側の証明が知れるようにする

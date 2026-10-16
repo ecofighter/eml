@@ -691,6 +691,14 @@ pub const GT: u32 = 2;
 /// タプルの値のタグ。タプルは、コンストラクタが1つの `data` と同じオブジェクトで表す (docs/spec/core-ir.md)。
 pub const TUPLE: u32 = 0;
 
+/// `IOErrorKind` のタグ。`eml_rt::externs` と同じ値で、Prelude の宣言の順である (`eml_core_ir` の `tests/externs.rs` が
+/// 確かめる)。
+pub const IO_NOT_FOUND: u32 = 0;
+pub const IO_PERMISSION_DENIED: u32 = 1;
+pub const IO_NOT_AVAILABLE: u32 = 2;
+pub const IO_NOT_UTF8: u32 = 3;
+pub const IO_OTHER: u32 = 4;
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct VerifyError {
     pub function: String,

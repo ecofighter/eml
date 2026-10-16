@@ -68,8 +68,9 @@ impl<M: Mode> Ctx<M> {
         }
     }
 
-    /// Host から写した `text` の文字列を作り、呼ぶ側がその参照を持つ。
-    fn fresh_string(&mut self, text: &str) -> (w: Word)
+    /// `text` の文字列を作り、呼ぶ側がその参照を持つ。Host から写した文言のほか、VM が `io_failed` の節に渡す文言を
+    /// 作るのにも使う (docs/spec/vm.md の「IO の失敗と `exit`」)。
+    pub fn fresh_string(&mut self, text: &str) -> (w: Word)
         requires
             old(self).wf(),
         ensures
