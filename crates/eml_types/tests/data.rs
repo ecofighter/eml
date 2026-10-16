@@ -1,4 +1,4 @@
-use crate::common::check_text;
+use crate::common::{check_short, check_text};
 
 #[test]
 fn applied_types_are_displayed_with_their_arguments() {
@@ -156,4 +156,36 @@ fn a_user_int_hides_the_prelude_int() {
         full.contains("expected `Main.Int`, found `Prelude.Int`"),
         "{full}"
     );
+}
+
+#[test]
+fn a_once_field_makes_the_data_linear() {
+    let text = "data Task =\n  | Task (once Unit -> Unit)\n\ntwice : Task -> (Task, Task)\ntwice t = (t, t)";
+    assert_eq!(
+        check_short(text)
+            .iter()
+            .map(|d| &d[..5])
+            .collect::<Vec<_>>(),
+        ["E3002"]
+    );
+}
+
+#[test]
+fn a_once_arrow_inside_a_type_argument_makes_the_data_linear() {
+    let text =
+        "data Q =\n  | Q (Option (once Unit -> Unit))\n\ntwice : Q -> (Q, Q)\ntwice q = (q, q)";
+    assert_eq!(
+        check_short(text)
+            .iter()
+            .map(|d| &d[..5])
+            .collect::<Vec<_>>(),
+        ["E3002"]
+    );
+}
+
+#[test]
+fn a_once_arrow_inside_another_function_does_not_count() {
+    let text =
+        "data F =\n  | F (Unit -> once Unit -> Unit)\n\ntwice : F -> (F, F)\ntwice f = (f, f)";
+    assert_eq!(check_short(text), Vec::<String>::new());
 }

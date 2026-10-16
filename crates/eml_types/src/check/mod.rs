@@ -977,7 +977,9 @@ fn has_error(types: &Arena<TypeRef>, id: TypeRefId) -> bool {
         TypeRefKind::Con(_, args) => args.iter().any(|&arg| has_error(types, arg)),
         TypeRefKind::Tuple(elements) => elements.iter().any(|&element| has_error(types, element)),
         TypeRefKind::Var(_) => false,
-        TypeRefKind::Fn { param, row, ret } => {
+        TypeRefKind::Fn {
+            param, row, ret, ..
+        } => {
             let args_error = match row {
                 RowRef::Closed { effects, .. } | RowRef::Open { effects, .. } => effects
                     .iter()

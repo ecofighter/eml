@@ -897,3 +897,26 @@ fn local_function_parameters_are_one_group() {
         vec!["E1017 3:12 `a` is bound more than once"]
     );
 }
+
+#[test]
+fn once_arrows_are_lowered_and_printed() {
+    let text = "data Task =\n  | Task (once Unit -> <IO> Unit)\n\nrun : (once Unit -> <IO> Unit) -> <IO> Unit\nrun f = f ()";
+    insta::assert_snapshot!(lower_text(text), @"
+    data Task
+      | Task (once Unit -> <IO> Unit)
+    run : (once Unit -> <IO> Unit) -> <IO> Unit
+    run f#0 = (f#0 ())
+    ");
+}
+
+#[test]
+fn the_outermost_arrow_of_a_declaration_cannot_be_once() {
+    let text = "f : once Int -> Int\nf x = x\n\neffect E where\n  op : once Unit -> Unit";
+    assert_eq!(
+        diagnostics(text),
+        [
+            "E1050 1:5 the outermost arrow of `f` cannot be `once`",
+            "E1050 5:8 the outermost arrow of `op` cannot be `once`",
+        ]
+    );
+}

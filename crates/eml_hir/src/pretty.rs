@@ -561,7 +561,12 @@ impl Printer<'_> {
                 format!("({})", elements.join(", "))
             }
             TypeRefKind::Var(id) => self.generics.type_vars[*id].name.clone(),
-            TypeRefKind::Fn { param, row, ret } => {
+            TypeRefKind::Fn {
+                param,
+                once,
+                row,
+                ret,
+            } => {
                 let param_text = self.ty_operand(types, *param);
                 let effect_names = |effects: &[EffectRef]| -> Vec<String> {
                     effects
@@ -590,7 +595,8 @@ impl Printer<'_> {
                     }
                     RowRef::Error => "<error> ".to_string(),
                 };
-                format!("{param_text} -> {row}{}", self.ty(types, *ret))
+                let once = if *once { "once " } else { "" };
+                format!("{once}{param_text} -> {row}{}", self.ty(types, *ret))
             }
         }
     }

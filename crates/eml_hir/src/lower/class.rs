@@ -7,7 +7,9 @@ use eml_diagnostics::{Diagnostic, FileId, Label, TextRange};
 use eml_syntax::{SyntaxToken, ast};
 use la_arena::Arena;
 
-use super::types::{TypeLowering, Vars, has_error, mentions, private_in_public};
+use super::types::{
+    TypeLowering, Vars, has_error, mentions, private_in_public, reject_once_declaration,
+};
 use super::{BodyOwner, ItemLowering, NameKind, PendingBody, path_name, unresolved};
 use crate::codes;
 use crate::def_map::{DefMap, Resolved};
@@ -243,6 +245,13 @@ impl ItemLowering<'_> {
                     diagnostics: &mut *self.diagnostics,
                 }
                 .lower(decl.ty(), range);
+                reject_once_declaration(
+                    self.file,
+                    &mut types,
+                    ty,
+                    &method.name,
+                    &mut *self.diagnostics,
+                );
                 // 型に誤りがあれば変換が報告済みなので、クラスの型変数がないことを重ねて報告しない
                 let type_error = has_error(&types);
                 if !type_error && !mentions(&types, ty, class_var) {

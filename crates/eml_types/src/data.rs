@@ -141,7 +141,10 @@ fn collect(
                 collect(types, element, kinds, out);
             }
         }
-        TypeRefKind::Fn { .. } | TypeRefKind::Error => {}
+        // `once` の矢印は定数の `Lin` の型として数える。中の型は、関数型の中の型引数が効かない規則と同じく見ない
+        // (docs/spec/types.md の「1回だけ呼べる関数の型」)
+        TypeRefKind::Fn { once, .. } => out.lin |= *once,
+        TypeRefKind::Error => {}
     }
 }
 
@@ -172,7 +175,9 @@ fn collect_variance(
                 collect_variance(types, element, at, kinds, out);
             }
         }
-        TypeRefKind::Fn { param, row, ret } => {
+        TypeRefKind::Fn {
+            param, row, ret, ..
+        } => {
             collect_variance(types, *param, at.then(Variance::Contra), kinds, out);
             let effects = match row {
                 RowRef::Closed { effects, range: _ } | RowRef::Open { effects, .. } => &effects[..],

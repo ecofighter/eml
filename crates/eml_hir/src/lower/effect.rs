@@ -7,7 +7,7 @@ use la_arena::Arena;
 
 use super::ItemLowering;
 use super::class::ContextScope;
-use super::types::{TypeLowering, Vars, mentions};
+use super::types::{TypeLowering, Vars, mentions, reject_once_declaration};
 use crate::codes;
 use crate::hir::{
     EffectDef, EffectId, EffectKind, Generics, ItemId, OpMultiplicity, Operation, RowRef,
@@ -109,6 +109,13 @@ impl ItemLowering<'_> {
             diagnostics: &mut *self.diagnostics,
         }
         .lower(decl.ty(), range);
+        reject_once_declaration(
+            self.file,
+            &mut types,
+            ty,
+            &item.name,
+            &mut *self.diagnostics,
+        );
         // 操作に制約を書けると、handler の節が perform の位置で選んだ証拠を実行時に受け取る必要が生じる
         // (docs/spec/declarations.md の「宣言の検査」)
         let constraints = self.lower_context(
@@ -149,7 +156,10 @@ impl ItemLowering<'_> {
         let types = &signature.types;
         let mut params = Vec::new();
         let mut id = signature.ty;
-        while let TypeRefKind::Fn { param, row, ret } = &types[id].kind {
+        while let TypeRefKind::Fn {
+            param, row, ret, ..
+        } = &types[id].kind
+        {
             if let RowRef::Closed { range, .. } | RowRef::Open { range, .. } = row {
                 self.diagnostics.push(
                     Diagnostic::error(

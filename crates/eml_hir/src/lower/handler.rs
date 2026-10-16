@@ -256,6 +256,7 @@ impl BodyLowering<'_> {
             param: _,
             row: arrow,
             ret,
+            ..
         } = &signature.types[id].kind
         {
             row = Some(arrow);

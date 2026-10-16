@@ -276,6 +276,13 @@ impl<'a> ItemLowering<'a> {
                     diagnostics: &mut *self.diagnostics,
                 }
                 .lower(node.ty(), range);
+                types::reject_once_declaration(
+                    self.file,
+                    &mut types,
+                    ty,
+                    name,
+                    &mut *self.diagnostics,
+                );
                 // 型を先に変換する。`Vars::Define` は型に現れる型変数だけを表に入れるので、文脈の型変数が型に
                 // 現れるかを表で判定できる
                 let scope = match kind {

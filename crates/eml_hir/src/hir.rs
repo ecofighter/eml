@@ -840,6 +840,8 @@ pub enum TypeRefKind {
     Var(TypeVarId),
     Fn {
         param: TypeRefId,
+        /// 一番外側の矢印に `once` を書いたか (docs/spec/types.md の「1回だけ呼べる関数の型」)。
+        once: bool,
         row: RowRef,
         ret: TypeRefId,
     },

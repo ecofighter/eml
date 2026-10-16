@@ -583,11 +583,21 @@ impl SignatureCopy<'_> {
             TypeRefKind::Tuple(elements) => {
                 TypeRefKind::Tuple(elements.iter().map(|&element| self.ty(element)).collect())
             }
-            TypeRefKind::Fn { param, row, ret } => {
+            TypeRefKind::Fn {
+                param,
+                once,
+                row,
+                ret,
+            } => {
                 let param = self.ty(*param);
                 let row = self.row(row);
                 let ret = self.ty(*ret);
-                TypeRefKind::Fn { param, row, ret }
+                TypeRefKind::Fn {
+                    param,
+                    once: *once,
+                    row,
+                    ret,
+                }
             }
         };
         self.alloc(kind)

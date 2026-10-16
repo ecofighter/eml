@@ -979,3 +979,21 @@ fn a_captured_type_variable_becomes_unr() {
     let text = "rep : a -> Int -> List a\nrep x n =\n  let go k acc = if k == 0 then acc else go (k - 1) (x :: acc)\n  go n []";
     insta::assert_snapshot!(crate::common::kinds(text, "rep"), @"  kinds: a <= Unr");
 }
+
+#[test]
+fn a_once_continuation_fits_a_once_field() {
+    let text = "data Paused =\n  | Paused (once Int -> <IO> Paused)\n  | Finished\n\neffect Ask where\n  ask : Unit -> Int\n\npause : (Unit -> <Ask, IO> Unit) -> <IO> Paused\npause body =\n  handle body () with\n    | ask () k -> Paused k\n    | return () -> Finished";
+    assert_eq!(check_short(text), Vec::<String>::new());
+}
+
+#[test]
+fn a_once_parameter_cannot_be_called_twice() {
+    let text = "run : (once Unit -> Unit) -> Unit\nrun f =\n  f ()\n  f ()";
+    assert_eq!(
+        check_short(text)
+            .iter()
+            .map(|d| &d[..5])
+            .collect::<Vec<_>>(),
+        ["E3002"]
+    );
+}

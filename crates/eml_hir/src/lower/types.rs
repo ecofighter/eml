@@ -61,7 +61,12 @@ impl TypeLowering<'_> {
                     None => RowRef::Omitted,
                 };
                 let ret = self.lower(function.ret(), range);
-                TypeRefKind::Fn { param, row, ret }
+                TypeRefKind::Fn {
+                    param,
+                    once: function.is_once(),
+                    row,
+                    ret,
+                }
             }
             ast::Type::VarType(var) => match var.name() {
                 Some(name) => self.type_var(&name, range),
@@ -289,7 +294,9 @@ pub(super) fn visit_type_vars(
                 visit_type_vars(types, arg, visit);
             }
         }
-        TypeRefKind::Fn { param, row, ret } => {
+        TypeRefKind::Fn {
+            param, row, ret, ..
+        } => {
             visit_type_vars(types, *param, visit);
             if let RowRef::Closed { effects, .. } | RowRef::Open { effects, .. } = row {
                 for effect in effects {
@@ -394,5 +401,34 @@ fn type_arguments(n: usize) -> String {
         "1 type argument".to_string()
     } else {
         format!("{n} type arguments")
+    }
+}
+
+/// 宣言の型の一番外側の矢印に書いた `once` を E1050 にして外す。宣言した関数そのものは何度でも呼べるので `once` に
+/// 意味がなく、外すのは誤りを連鎖させないためである (docs/spec/types.md の「1回だけ呼べる関数の型」)。
+pub(super) fn reject_once_declaration(
+    file: FileId,
+    types: &mut Arena<TypeRef>,
+    id: TypeRefId,
+    name: &str,
+    diagnostics: &mut Vec<Diagnostic>,
+) {
+    let range = types[id].range;
+    if let TypeRefKind::Fn { once, .. } = &mut types[id].kind
+        && *once
+    {
+        *once = false;
+        diagnostics.push(
+            Diagnostic::error(
+                codes::ONCE_DECLARATION,
+                format!("the outermost arrow of `{name}` cannot be `once`"),
+                Label::new(
+                    file,
+                    range,
+                    format!("`{name}` can be called any number of times"),
+                ),
+            )
+            .with_help("remove `once`"),
+        );
     }
 }

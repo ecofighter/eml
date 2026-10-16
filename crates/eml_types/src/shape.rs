@@ -206,7 +206,12 @@ fn lower(
             table.tuple(lowered)
         }
         TypeRefKind::Var(var) => rigids.tys[*var],
-        TypeRefKind::Fn { param, row, ret } => {
+        TypeRefKind::Fn {
+            param,
+            once,
+            row,
+            ret,
+        } => {
             let param = lower(table, types, rigids, *param, arrows.param());
             let ret = lower(table, types, rigids, *ret, arrows.ret());
             let row = match row {
@@ -222,7 +227,12 @@ fn lower(
                 // 未定義のエフェクトか、解決できない row 変数の跡。どのエフェクトも受け入れて、診断を連鎖させない
                 RowRef::Error => Row::error(),
             };
-            let lin = arrows.lin(table);
+            // `once` の矢印はどの位置でも `Lin` である (docs/spec/types.md の「1回だけ呼べる関数の型」)
+            let lin = if *once {
+                ArrowLin::Known(Linearity::Lin)
+            } else {
+                arrows.lin(table)
+            };
             table.function_with(param, lin, row, ret)
         }
     }
