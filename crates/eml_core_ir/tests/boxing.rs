@@ -403,3 +403,29 @@ fn a_tail_call_off_any_loop_may_stay_an_ordinary_call() {
     }
     ");
 }
+
+#[test]
+fn the_result_of_exit_is_not_compared_with_positions() {
+    // `exit` は戻らないので、`int` の束縛が位置 (`tobj`) に流れても `box` / `unbox` は入らない (docs/spec/lir.md の「戻らない extern」)
+    let text = "f : Int -> <IO> Int\nf n = if n == 0 then exit 3 else n + 1\n\nmain : Unit -> <IO> Unit\nmain () = println (show (f 1))";
+    insta::assert_snapshot!(function(&lir_text(text, eml_lir::Pass::Boxing), "f"), @r#"
+    yields fn f(n.0: int) -> int {
+      let t.1: enum = extern "Prelude.Eq Int.=="(n.0, 0)
+      switch t.1 Prelude.Bool { #0 -> b1, #1 -> b2 }
+    b1:
+      let t.3: int = extern Prelude.+(n.0, 1)
+      return t.3
+    b2:
+      let t.2: int = extern Prelude.exit(3)
+      let y.4: int = prim yielding()
+      switch y.4 { 0 -> b4, _ -> b3 }
+    b3:
+      let k.5: tobj poly = prim yield_cont_take()
+      let k.6: tobj poly = closure compose$(k.5, &f$k0)
+      let u.7: unit = prim yield_cont_set(k.6)
+      return 0
+    b4:
+      return t.2
+    }
+    "#);
+}

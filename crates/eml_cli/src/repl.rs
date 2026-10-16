@@ -101,6 +101,9 @@ pub enum Outcome {
     Rejected,
     /// 実行を始める前に割り込まれた。セッションは変わらない (docs/spec/repl.md の「割り込み」)。
     Interrupted,
+    /// `exit` で終わった。実行時エラーと同じく受け入れず、`let` の束縛も作らない。中断で後始末が済んでいるので、
+    /// 回復は要らない (docs/spec/repl.md の「割り込みと実行時エラー」)。
+    Exited(i64),
     /// 続けられる実行時エラー。`let` の束縛は作らない。
     Failed(RuntimeError),
     /// 続けられない誤り (ヒープの誤り、内部の誤り、`Machine::load` の誤り)。後の `eval` も実行しない。
@@ -353,11 +356,15 @@ impl Repl {
             Some(_) => self
                 .machine
                 .run_shown(loaded.entry, pretty::LIMIT + 1)
-                .map(|(_, text)| text),
-            None => self.machine.run(loaded.entry).map(|_| None),
+                .map(|(finished, text)| (finished.exit, text)),
+            None => self
+                .machine
+                .run(loaded.entry)
+                .map(|finished| (finished.exit, None)),
         };
         match (result, shown) {
-            (Ok(Some(text)), Some(shown)) => {
+            (Ok((Some(code), _)), _) => Outcome::Exited(code),
+            (Ok((None, Some(text))), Some(shown)) => {
                 let line = pretty::format(&text, &shown.suffix, self.width);
                 match self.machine.write_line(&line) {
                     Ok(()) => Outcome::Accepted,

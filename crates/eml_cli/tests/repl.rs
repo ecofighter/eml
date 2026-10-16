@@ -286,6 +286,7 @@ impl Runner<'_> {
                 writeln!(block, "runtime error (the session is broken): {error}").unwrap();
             }
             Outcome::Interrupted => writeln!(block, "interrupted").unwrap(),
+            Outcome::Exited(code) => writeln!(block, "exited with code {code}").unwrap(),
             Outcome::Empty | Outcome::Accepted | Outcome::Rejected => {}
         }
     }

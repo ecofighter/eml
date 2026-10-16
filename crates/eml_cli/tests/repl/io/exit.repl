@@ -1,0 +1,6 @@
+> println "a"
+> exit 3
+> let x : Int = exit 4
+> x
+> 1 + 1
+> try_io (fn () -> Fs.read_text "missing.txt")

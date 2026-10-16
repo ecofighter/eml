@@ -289,6 +289,7 @@ fn show(evaluated: Evaluated) -> Flow {
             eprintln!("interrupted");
             return Flow::Interrupted;
         }
+        Outcome::Exited(code) => eprintln!("exited with code {code}"),
         Outcome::Failed(error) if error.interrupted() => {
             eprintln!("interrupted");
             return Flow::Interrupted;
