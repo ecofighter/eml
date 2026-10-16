@@ -15,9 +15,10 @@ impl Table<'_> {
                 None => break,
             }
         }
-        // handle できない extern のエフェクトは handler を選ばないので、row の中に何回あっても同じ意味になる。エフェクト
-        // ごとに2つ目以降を落とし、単一化、包含、表示のすべてで1つとして扱う。extern のエフェクトは型引数を持たないので、
-        // 落としても型引数は食い違わない (docs/spec/types.md の「推論」)
+        // `IO` の失敗は実行の時点で最も近い `try_io` に届くので、row の中に `IO` が何回あっても、どちらの `IO` に届いても
+        // 同じである (docs/spec/effects.md の「健全性」)。extern のエフェクトはエフェクトごとに2つ目以降を落とし、単一化、
+        // 包含、表示のすべてで1つとして扱う。extern のエフェクトは型引数を持たないので、落としても型引数は食い違わない
+        // (docs/spec/types.md の「推論」)
         let mut seen: Vec<EffectId> = Vec::new();
         labels.retain(|label| {
             if !self.context.is_extern_effect(label.effect) {
@@ -290,9 +291,10 @@ impl Table<'_> {
         }
     }
 
-    /// rigid な末尾の手前に余ったラベル `rest` のうち、handle できるものが `mask` になる。呼び出し先の `e` の操作は、
+    /// rigid な末尾の手前に余ったラベル `rest` のうち、extern のエフェクト以外が `mask` になる。呼び出し先の `e` の操作は、
     /// 今の row でそれらの handler をすべて飛ばして `e` の handler に届く。呼び出し先が明示したラベルは今の row の先頭から
-    /// 対になっているので、同じエフェクトを `mask` で飛ばすと、明示したラベルの操作まで飛んでしまう
+    /// 対になっているので、同じエフェクトを `mask` で飛ばすと、明示したラベルの操作まで飛んでしまう。`IO` の失敗は実行の
+    /// 時点で最も近い `try_io` に届くので、どちらの `IO` に届いても同じであり、`mask` に入れない
     /// (docs/spec/effects.md の「健全性」)。
     fn mask(&self, callee: &Row, rest: &Row) -> Result<Vec<EffectId>, UnifyError> {
         let mask: Vec<EffectId> = rest

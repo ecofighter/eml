@@ -40,7 +40,7 @@ impl Context {
         let effect_multiplicities = program
             .effects()
             .map(|(id, effect)| {
-                // extern のエフェクトは操作を持たないので、操作から求めると `Never` になってしまう。extern の関数は
+                // `IO` の操作は `never` の `io_failed` だけなので、操作から求めると `Never` になってしまう。extern の関数は
                 // その場で1回だけ戻るので `Once` である (docs/spec/types.md の「Kind」)
                 let multiplicity = match effect.kind {
                     EffectKind::Extern(_) => Multiplicity::Once,
@@ -64,7 +64,8 @@ impl Context {
         }
     }
 
-    /// extern のエフェクトは handle できないので、row の中で重なったら1つにまとめ、`mask` に入れない
+    /// `IO` の失敗は実行の時点で最も近い `try_io` に届くので、どちらの `IO` に届いても同じである
+    /// (docs/spec/effects.md の「健全性」)。そこで extern のエフェクトは、row の中で重なったら1つにまとめ、`mask` に入れない
     /// (docs/spec/types.md の「推論」)。
     pub fn is_extern_effect(&self, effect: EffectId) -> bool {
         self.extern_effects.contains(&effect)

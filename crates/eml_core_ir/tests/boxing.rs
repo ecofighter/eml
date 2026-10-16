@@ -89,15 +89,15 @@ fn a_top_level_function_used_only_as_a_value_gets_a_boxed_wrapper() {
       return t.3
     }
     ");
-    insta::assert_snapshot!(function(&shown, "main"), @"
-    fn main(p.0: unit) -> unit {
+    insta::assert_snapshot!(function(&shown, "main"), @r#"
+    yields fn main(p.0: unit) -> unit {
       let t.4: tobj = call apply_to(&inc$boxed, 2)
       let t.1: int = unbox t.4
-      let t.2: obj = extern \"Prelude.Show Int.show\"(t.1)
+      let t.2: obj = extern "Prelude.Show Int.show"(t.1)
       let t.3: unit = extern Prelude.println(t.2)
       return t.3
     }
-    ");
+    "#);
 }
 
 #[test]
@@ -105,7 +105,7 @@ fn a_function_also_called_directly_gets_a_boxed_wrapper() {
     let text = "label : Int -> String\nlabel n = show n\n\nshow_with : (Int -> String) -> Int -> String\nshow_with f n = f n\n\nmain : Unit -> <IO> Unit\nmain () =\n  println (label 1)\n  println (show_with label 2)";
     let shown = lir_text(text, eml_lir::Pass::Boxing);
     insta::assert_snapshot!(function(&shown, "main"), @"
-    fn main(p.0: unit) -> unit {
+    yields fn main(p.0: unit) -> unit {
       let t.1: obj = call label(1)
       let t.2: unit = extern Prelude.println(t.1)
       let t.3: obj = call show_with(&label$boxed, 2)
@@ -174,7 +174,7 @@ fn int_constants_are_boxed_and_other_constants_pass_as_they_are() {
     // 型変数のフィールドは `tobj` なので、`int` の定数は `box` を通り、`unit`、タグ、関数の値はそのまま入る
     let text = "data Four a b c d =\n  | Four a b c d\n\ncount : Four a b c d -> Int\ncount _ = 0\n\nid : a -> a\nid x = x\n\nmain : Unit -> <IO> Unit\nmain () = println (show (count (Four 5 () True id)))";
     insta::assert_snapshot!(function(&lir_text(text, eml_lir::Pass::Boxing), "main"), @r#"
-    fn main(p.0: unit) -> unit {
+    yields fn main(p.0: unit) -> unit {
       let b.5: tobj = box 5
       let d.1: obj = con Four #0(b.5, (), #1, &"id@[_]")
       let t.2: int = call "count@[Int, Unit, Bool, _ -> <_> _]"(d.1)
@@ -336,18 +336,18 @@ fn t3_raises_the_ret_along_a_chain_of_tail_calls() {
       tail apply f.0(x.4)
     }
     ");
-    insta::assert_snapshot!(function(&shown, "main"), @"
-    fn main(p.0: unit) -> unit {
+    insta::assert_snapshot!(function(&shown, "main"), @r#"
+    yields fn main(p.0: unit) -> unit {
       let t.6: tobj = call via(1)
       let t.1: int = unbox t.6
       let t.7: tobj = call through(&main$lambda0, 2)
       let t.2: int = unbox t.7
       let t.3: int = extern Prelude.+(t.1, t.2)
-      let t.4: obj = extern \"Prelude.Show Int.show\"(t.3)
+      let t.4: obj = extern "Prelude.Show Int.show"(t.3)
       let t.5: unit = extern Prelude.println(t.4)
       return t.5
     }
-    ");
+    "#);
 }
 
 #[test]

@@ -17,13 +17,13 @@ fn strings_are_dupped_and_decreffed() {
       let t.1: obj = extern Prelude.++(s.0, s.0)
       return t.1
     }
-    fn main(p.0: unit) -> unit {
+    yields fn main(p.0: unit) -> unit {
       let s.1: obj = const "a"
       let t.2: obj = call twice(s.1)
       let t.3: unit = extern Prelude.println(t.2)
       return t.3
     }
-    fn entry$main() -> unit {
+    yields fn entry$main() -> unit {
       tail call main(())
     }
     "#);
@@ -33,14 +33,14 @@ fn strings_are_dupped_and_decreffed() {
 fn shadowed_and_discarded_strings() {
     let text = "main : Unit -> <IO> Unit\nmain () =\n  let s = \"x\"\n  let s = s ++ \"y\"\n  let _ = \"z\"\n  println s";
     insta::assert_snapshot!(lir_text(text, eml_lir::Pass::Perceus), @r#"
-    fn main(p.0: unit) -> unit {
+    yields fn main(p.0: unit) -> unit {
       let s.1: obj = const "x"
       let s.2: obj = const "y"
       let t.3: obj = extern Prelude.++(s.1, s.2)
       let t.5: unit = extern Prelude.println(t.3)
       return t.5
     }
-    fn entry$main() -> unit {
+    yields fn entry$main() -> unit {
       tail call main(())
     }
     "#);
@@ -195,7 +195,7 @@ fn a_file_taken_out_of_a_tuple_is_neither_dupped_nor_decreffed() {
     // `File` は `Lin` なので、組を分解した所で `release` が両方のフィールドを残し、その後は1回ずつ使う
     let text = "main : Unit -> <IO> Unit\nmain () =\n  let f = Fs.open \"input.txt\"\n  let (f, first) = Fs.read_all f\n  let (f, rest) = Fs.read_all f\n  Fs.close f\n  println first\n  println (\"[\" ++ rest ++ \"]\")";
     insta::assert_snapshot!(function(&lir_text(text, eml_lir::Pass::Perceus), "main"), @r#"
-    fn main(p.0: unit) -> unit {
+    yields fn main(p.0: unit) -> unit {
       let s.1: obj = const "input.txt"
       let t.2: obj lin = extern Std.Fs.open(s.1)
       let t.3: obj lin = extern Std.Fs.read_all(t.2)
@@ -225,14 +225,14 @@ fn a_discarded_call_result_is_released() {
       let s.1: obj = const "z"
       return s.1
     }
-    fn main(p.0: unit) -> unit {
+    yields fn main(p.0: unit) -> unit {
       let t.1: obj = call f(())
       decref t.1
       let s.2: obj = const "x"
       let t.3: unit = extern Prelude.println(s.2)
       return t.3
     }
-    fn entry$main() -> unit {
+    yields fn entry$main() -> unit {
       tail call main(())
     }
     "#);
@@ -252,7 +252,7 @@ fn equations_allocate_no_tuple_for_their_arguments() {
 /// 求める。
 #[test]
 fn interpolation_keeps_only_the_accumulator_live_across_holes() {
-    let text = "g : Int -> <IO> Int\ng n =\n  println \"g\"\n  n\n\nf : Int -> <IO> String\nf n = \"a\\{g n}b\\{g 2}c\\{g 3}\"\n\nmain : Unit -> <IO> Unit\nmain () = println (f 1)";
+    let text = "g : Int -> Int\ng n = n + 1\n\nf : Int -> String\nf n = \"a\\{g n}b\\{g 2}c\\{g 3}\"\n\nmain : Unit -> <IO> Unit\nmain () = println (f 1)";
     let program = eml_test_support::lir(text);
     let shown = function(&eml_lir::pretty(&program), "f");
     let f = program

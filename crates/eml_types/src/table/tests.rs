@@ -395,7 +395,7 @@ fn an_error_row_keeps_its_own_labels() {
 
 #[test]
 fn an_extern_effect_is_performed_at_most_once() {
-    // 操作の多重度の最大を取ると、操作のない extern のエフェクトは `Never` になってしまう (docs/spec/types.md の「Kind」)
+    // 操作の多重度の最大を取ると、extern のエフェクトは `Never` になってしまう (docs/spec/types.md の「Kind」)
     let context = test_context();
     let table = Table::new(&context);
     assert_eq!(

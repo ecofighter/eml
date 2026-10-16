@@ -183,7 +183,7 @@ fn an_unknown_qualifier_in_a_row_is_reported_once() {
     ");
 }
 
-/// handle できない `IO` は、row の中で重なっても1つとして扱う (docs/spec/types.md の「推論」)。`<IO | e>` に
+/// `IO` は、row の中で重なっても1つとして扱う (docs/spec/types.md の「推論」)。`<IO | e>` に
 /// `e := <IO>` が入っても、`<IO>` の `main` から呼べる。
 #[test]
 fn io_from_a_row_variable_does_not_count_twice() {

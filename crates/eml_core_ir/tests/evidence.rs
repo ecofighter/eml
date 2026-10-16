@@ -523,7 +523,7 @@ fn a_handle_installs_evidence_and_calls_prompt() {
     );
     let shown = core_text(&text, Pass::Evidence);
     insta::assert_snapshot!(function(&shown, "main"), @r#"
-    fn main(p.0: unit) -> unit {
+    yields fn main(p.0: unit) -> unit {
       let w.4: tobj = prim evv_get()
       let ev.5: obj = prim ev_new[Ask]((), w.4)
       let u.6: unit = prim ev_set_clause[Ask.ask](ev.5, &main$handle0$ask$entry)
@@ -531,6 +531,14 @@ fn a_handle_installs_evidence_and_calls_prompt() {
       let u.8: unit = prim evv_set(w.7)
       let x.9: tobj poly = yields apply &main$handle0(())
       let t.1: int = call prompt$(ev.5, &main$handle0$return, x.9)
+      let y.10: int = prim yielding()
+      switch y.10 { 0 -> b2, _ -> b1 }
+    b1:
+      let k.11: tobj poly = prim yield_cont_take()
+      let k.12: tobj poly = closure compose$(k.11, &main$k0)
+      let u.13: unit = prim yield_cont_set(k.12)
+      return ()
+    b2:
       let t.2: obj = extern "Prelude.Show Int.show"(t.1)
       let t.3: unit = extern Prelude.println(t.2)
       return t.3
@@ -548,7 +556,7 @@ fn an_immediate_clause_becomes_its_entry() {
     let shown = core_text(&text, Pass::Evidence);
     assert!(!shown.contains("fn main$handle0$ask("), "{shown}");
     insta::assert_snapshot!(function(&shown, "main$handle0$ask$entry"), @"
-    internal clause Ask.ask fn main$handle0$ask$entry(e.4: obj, p.0: unit) -> int {
+    internal yields clause Ask.ask fn main$handle0$ask$entry(e.4: obj, p.0: unit) -> int {
       let p.2: unit = prim ev_take_state(e.4)
       let u.5: unit = prim ev_set_state(e.4, ())
       return 41
@@ -581,8 +589,16 @@ fn a_resume_becomes_an_apply() {
     );
     let shown = core_text(&text, Pass::Evidence);
     insta::assert_snapshot!(function(&shown, "main$handle0$ask"), @"
-    internal fn main$handle0$ask(p.0: unit, k.1: tobj lin, p.2: unit) -> int {
-      let t.3: int = apply k.1(10, ())
+    internal yields fn main$handle0$ask(p.0: unit, k.1: tobj lin, p.2: unit) -> int {
+      let t.3: int = yields apply k.1(10, ())
+      let y.5: int = prim yielding()
+      switch y.5 { 0 -> b2, _ -> b1 }
+    b1:
+      let k.6: tobj poly = prim yield_cont_take()
+      let k.7: tobj poly = closure compose$(k.6, &main$handle0$ask$k0)
+      let u.8: unit = prim yield_cont_set(k.7)
+      return 0
+    b2:
       let t.4: int = extern Prelude.*(t.3, 2)
       return t.4
     }
@@ -604,7 +620,7 @@ fn a_clause_that_performs_another_effect_is_not_run_in_place() {
     }
     ");
     insta::assert_snapshot!(function(&shown, "main$handle1$log$entry"), @"
-    internal clause Log.log fn main$handle1$log$entry(e.4: obj, n.0: int) -> unit {
+    internal yields clause Log.log fn main$handle1$log$entry(e.4: obj, n.0: int) -> unit {
       let p.2: unit = prim ev_take_state(e.4)
       let u.5: unit = prim ev_set_state(e.4, ())
       return ()
@@ -792,7 +808,7 @@ fn a_resume_in_a_yielding_function_becomes_a_yielding_apply() {
 #[test]
 fn a_pure_instance_of_a_row_polymorphic_function_has_no_yield_check() {
     let text = format!(
-        "{ASK}twice : (Unit -> <e> Int) -> <e> Int\ntwice f = f () + f ()\n\nmain : Unit -> <IO> Unit\nmain () =\n  println (show (twice (fn () -> 1)))\n  println (show (handle twice ask with\n    | ask () k -> k 2))"
+        "{ASK}twice : (Unit -> <e> Int) -> <e> Int\ntwice f = f () + f ()\n\npure : Unit -> Int\npure () = twice (fn () -> 1)\n\nmain : Unit -> <IO> Unit\nmain () =\n  println (show (pure ()))\n  println (show (handle twice ask with\n    | ask () k -> k 2))"
     );
     let shown = core_text(&text, Pass::Evidence);
     insta::assert_snapshot!(function(&shown, "twice"), @"

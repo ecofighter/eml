@@ -166,7 +166,7 @@ fn a_long_shared_type_argument_gets_a_hash_name() {
 
 #[test]
 fn a_row_polymorphic_function_has_an_instance_per_row_bit() {
-    let text = "effect Ask where\n  ask : Unit -> Int\n\ntwice : (Unit -> <e> Int) -> <e> Int\ntwice f = f () + f ()\n\nmain : Unit -> <IO> Unit\nmain () =\n  println (show (twice (fn () -> 1)))\n  println (show (handle twice ask with\n    | ask () k -> k 2))";
+    let text = "effect Ask where\n  ask : Unit -> Int\n\ntwice : (Unit -> <e> Int) -> <e> Int\ntwice f = f () + f ()\n\npure : Unit -> Int\npure () = twice (fn () -> 1)\n\nmain : Unit -> <IO> Unit\nmain () =\n  println (show (pure ()))\n  println (show (handle twice ask with\n    | ask () k -> k 2))";
     let shown = core_text(text, Pass::Translate);
     // 純粋な instance は今の名前で印がなく、yield しうる instance は `<e>` を持つ
     insta::assert_snapshot!(function(&shown, "twice"), @"
@@ -276,9 +276,9 @@ fn a_prelude_type_is_not_qualified_even_when_another_module_shares_its_name() {
 
 #[test]
 fn a_method_reference_passes_its_row_bits_to_the_method_function() {
-    // instance のメソッドの関数と既定のメソッドの関数は、メソッドのシグネチャと同じ順の row 変数を持つ。main の中の
+    // instance のメソッドの関数と既定のメソッドの関数は、メソッドのシグネチャと同じ順の row 変数を持つ。pure の中の
     // 呼び出しは純粋な instance に、run の中の呼び出しは `<e>` の instance に向かう
-    let text = "effect Ask where\n  ask : Unit -> Int\n\nclass Runner a where\n  run_with : a -> (Unit -> <e> Int) -> <e> Int\n  run_default : a -> (Unit -> <e> Int) -> <e> Int\n  run_default x g = g ()\n\ninstance Runner Int where\n  run_with n g = g () + n\n\nrun : Unit -> <Ask> Int\nrun () = run_with 1 ask + run_default 1 ask\n\nmain : Unit -> <IO> Unit\nmain () =\n  println (show (run_with 2 (fn () -> 3) + run_default 2 (fn () -> 3)))\n  println (show (handle run () with\n    | ask () k -> k 2))";
+    let text = "effect Ask where\n  ask : Unit -> Int\n\nclass Runner a where\n  run_with : a -> (Unit -> <e> Int) -> <e> Int\n  run_default : a -> (Unit -> <e> Int) -> <e> Int\n  run_default x g = g ()\n\ninstance Runner Int where\n  run_with n g = g () + n\n\nrun : Unit -> <Ask> Int\nrun () = run_with 1 ask + run_default 1 ask\n\npure : Unit -> Int\npure () = run_with 2 (fn () -> 3) + run_default 2 (fn () -> 3)\n\nmain : Unit -> <IO> Unit\nmain () =\n  println (show (pure ()))\n  println (show (handle run () with\n    | ask () k -> k 2))";
     let program = eml_test_support::core_until(text, Pass::Translate);
     let mut names: Vec<(&str, bool)> = program
         .functions
@@ -538,7 +538,7 @@ fn a_function_called_with_lin_and_unr_closures_has_one_instance() {
     // instance の鍵は型引数だけで、呼ばれる側の矢印の変数は鍵に入らない。`apply` の `f` の矢印は instance の中で
     // `Poly` になる (docs/spec/types.md の「instance での評価」)
     let text = "apply : (a -> <e> b) -> a -> <e> b\napply f x = f x\n\nmain : Unit -> <IO> Unit\nmain () =\n  let h = Fs.open \"a.txt\"\n  let a = apply (fn n ->\n    Fs.close h\n    n) 1\n  let b = apply (fn n -> n + 1) a\n  println (show b)";
-    assert_eq!(instances_of(text, "apply"), ["apply@[Int, Int]"]);
+    assert_eq!(instances_of(text, "apply"), ["apply@[Int, Int]<e>"]);
 }
 
 /// spec の「instance での評価」の `f` の例。

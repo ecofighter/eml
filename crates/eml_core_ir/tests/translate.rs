@@ -7,12 +7,12 @@ use eml_lir::{Mark, Stmt, Term};
 #[test]
 fn hello_world() {
     insta::assert_snapshot!(core_text("main : Unit -> <IO> Unit\nmain () = println \"hi\"", Pass::Translate), @r#"
-    fn main(p.0: unit) -> unit {
+    yields fn main(p.0: unit) -> unit {
       let s.1: obj = const "hi"
       let t.2: unit = extern Prelude.println(s.1)
       return t.2
     }
-    fn entry$main() -> unit {
+    yields fn entry$main() -> unit {
       let t.0: unit = call main(())
       return t.0
     }
@@ -24,13 +24,13 @@ fn a_value_if_with_one_exit_continues_in_the_same_block() {
     // 条件が定数なので続きへ向かうのは then の枝だけで、続きのブロックを作らずに同じブロックで続ける
     let text =
         "main : Unit -> <IO> Unit\nmain () =\n  let n = if True then 1 else 2\n  println (show n)";
-    insta::assert_snapshot!(function(&core_text(text, Pass::Translate), "main"), @"
-    fn main(p.0: unit) -> unit {
-      let t.1: obj = extern \"Prelude.Show Int.show\"(1)
+    insta::assert_snapshot!(function(&core_text(text, Pass::Translate), "main"), @r#"
+    yields fn main(p.0: unit) -> unit {
+      let t.1: obj = extern "Prelude.Show Int.show"(1)
       let t.2: unit = extern Prelude.println(t.1)
       return t.2
     }
-    ");
+    "#);
 }
 
 #[test]
@@ -129,7 +129,7 @@ fn a_known_head_selects_its_arm_and_leaves_the_other_out() {
     // 定数の条件は `switch` を作らない。届かない枝は変換しないので、その文字列の定数も作らない
     let text = "main : Unit -> <IO> Unit\nmain () =\n  println (if False then \"never\" else \"else\")\n  println (if True && False then \"never\" else \"and\")";
     insta::assert_snapshot!(function(&core_text(text, Pass::Translate), "main"), @r#"
-    fn main(p.0: unit) -> unit {
+    yields fn main(p.0: unit) -> unit {
       let s.1: obj = const "else"
       let t.2: unit = extern Prelude.println(s.1)
       let s.3: obj = const "and"
@@ -143,7 +143,7 @@ fn a_known_head_selects_its_arm_and_leaves_the_other_out() {
 fn an_if_statement_continues_after_a_merge_of_unit() {
     let text = "step : Bool -> <IO> Unit\nstep b =\n  if b then println \"a\"\n  if b then println \"b\"\n  println \"c\"\n\nmain : Unit -> <IO> Unit\nmain () = step True";
     insta::assert_snapshot!(function(&core_text(text, Pass::Translate), "step"), @r#"
-    fn step(b.0: enum) -> unit {
+    yields fn step(b.0: enum) -> unit {
       switch b.0 Prelude.Bool { #0 -> b1, #1 -> b2 }
     b1:
       jump b3(())
@@ -196,7 +196,7 @@ fn every_extern_call_carries_the_position_of_its_callee() {
     // 演算子の呼び出しは演算子のトークンの位置を、名前で呼ぶ extern は名前の位置を持つ
     let text = "main : Unit -> <IO> Unit\nmain () =\n  let n = 10 / 2\n  println (show n)";
     insta::assert_snapshot!(function(&core_text_with_positions(text), "main"), @r#"
-    fn main(p.0: unit) -> unit {
+    yields fn main(p.0: unit) -> unit {
       let t.1: int = extern Prelude./(10, 2) @"test.em":3:14
       let t.2: obj = extern "Prelude.Show Int.show"(t.1) @"test.em":4:12
       let t.3: unit = extern Prelude.println(t.2) @"test.em":4:3
@@ -210,26 +210,26 @@ fn each_reference_to_an_extern_as_a_value_gets_its_own_wrapper() {
     // 包む関数は参照の場所ごとに作り、その場所の位置を持つ。実行時エラーが参照した場所を指すようにするためである
     let text = "apply : (a -> <e> b) -> a -> <e> b\napply f x = f x\n\nmain : Unit -> <IO> Unit\nmain () =\n  apply println \"a\"\n  let say = println\n  say \"b\"";
     insta::assert_snapshot!(core_text_with_positions(text), @r#"
-    fn "apply@[String, Unit]"(f.0: tobj poly, x.1: obj) -> unit {
-      let t.2: unit = apply f.0(x.1)
+    yields fn "apply@[String, Unit]<e>"(f.0: tobj poly, x.1: obj) -> unit {
+      let t.2: unit = yields apply f.0(x.1)
       return t.2
     }
-    fn main(p.0: unit) -> unit {
+    yields fn main(p.0: unit) -> unit {
       let s.1: obj = const "a"
-      let t.2: unit = call "apply@[String, Unit]"(&main$extern0, s.1)
+      let t.2: unit = call "apply@[String, Unit]<e>"(&main$extern0, s.1)
       let s.3: obj = const "b"
-      let t.4: unit = apply &main$extern1(s.3)
+      let t.4: unit = yields apply &main$extern1(s.3)
       return t.4
     }
-    internal fn main$extern0(p.0: obj) -> unit {
+    internal yields fn main$extern0(p.0: obj) -> unit {
       let t.1: unit = extern Prelude.println(p.0) @"test.em":6:9
       return t.1
     }
-    internal fn main$extern1(p.0: obj) -> unit {
+    internal yields fn main$extern1(p.0: obj) -> unit {
       let t.1: unit = extern Prelude.println(p.0) @"test.em":7:13
       return t.1
     }
-    fn entry$main() -> unit {
+    yields fn entry$main() -> unit {
       let t.0: unit = call main(())
       return t.0
     }
@@ -309,14 +309,14 @@ fn the_entry_applies_a_point_free_main_to_unit() {
     fn main() -> tobj {
       return &main$lambda0
     }
-    internal fn main$lambda0(p.0: unit) -> unit {
+    internal yields fn main$lambda0(p.0: unit) -> unit {
       let s.1: obj = const "point-free"
       let t.2: unit = extern Prelude.println(s.1)
       return t.2
     }
-    fn entry$main() -> unit {
+    yields fn entry$main() -> unit {
       let f.0: tobj = call main()
-      let t.1: unit = apply f.0(())
+      let t.1: unit = yields apply f.0(())
       return t.1
     }
     "#);
@@ -327,7 +327,7 @@ fn handlers_are_lifted_with_their_return_reprs() {
     let text = "effect Ask where\n  ask : String -> Int\n\nmain : Unit -> <IO> Unit\nmain () =\n  let prefix = \"n = \"\n  let n =\n    handle ask \"x\" with\n      | ask key k -> k 1\n      | return x -> x + 1\n  println (prefix ++ show n)";
     insta::assert_snapshot!(core_text(text, Pass::Translate), @r#"
     effect Ask { ask(obj) -> int }
-    fn main(p.0: unit) -> unit {
+    yields fn main(p.0: unit) -> unit {
       let s.1: obj = const "n = "
       let t.2: int = handle Ask((), &main$handle0) { ask: &main$handle0$ask } return &main$handle0$return
       let t.3: obj = extern "Prelude.Show Int.show"(t.2)
@@ -340,15 +340,15 @@ fn handlers_are_lifted_with_their_return_reprs() {
       let t.2: int = perform Ask.ask(s.1)
       return t.2
     }
-    internal fn main$handle0$ask(key.0: obj, k.1: tobj lin, p.2: unit) -> int {
+    internal yields fn main$handle0$ask(key.0: obj, k.1: tobj lin, p.2: unit) -> int {
       let t.3: int = resume k.1(1, ())
       return t.3
     }
-    internal fn main$handle0$return(x.0: int, p.1: unit) -> int {
+    internal yields fn main$handle0$return(x.0: int, p.1: unit) -> int {
       let t.2: int = extern Prelude.+(x.0, 1)
       return t.2
     }
-    fn entry$main() -> unit {
+    yields fn entry$main() -> unit {
       let t.0: unit = call main(())
       return t.0
     }
@@ -359,13 +359,13 @@ fn handlers_are_lifted_with_their_return_reprs() {
 fn a_continuation_passed_to_a_function_is_wrapped() {
     let text = "effect Ask where\n  ask : Unit -> Int\n\ntwice : (Int -> <e> Int) -> <e> Int\ntwice f = f 1\n\nmain : Unit -> <IO> Unit\nmain () =\n  let n =\n    handle ask () with\n      | ask () k -> twice k\n  println (show n)";
     let shown = core_text(text, Pass::Translate);
-    insta::assert_snapshot!(function(&shown, "main$handle0$ask"), @"
-    internal fn main$handle0$ask(p.0: unit, k.1: tobj lin, p.2: unit) -> int {
+    insta::assert_snapshot!(function(&shown, "main$handle0$ask"), @r#"
+    internal yields fn main$handle0$ask(p.0: unit, k.1: tobj lin, p.2: unit) -> int {
       let c.3: tobj lin = closure cont$(k.1)
-      let t.4: int = call twice(c.3)
+      let t.4: int = call "twice<e>"(c.3)
       return t.4
     }
-    ");
+    "#);
     insta::assert_snapshot!(function(&shown, "cont$"), @"
     internal yields fn cont$(k.0: tobj poly, v.1: tobj poly) -> tobj poly {
       let t.2: tobj poly = resume k.0(v.1, ())
@@ -379,7 +379,7 @@ fn lower_until_stops_after_the_named_pass() {
     // contract は使われない純粋な `let` を消し、Perceus は RC の命令を足す
     let text = "f : Int -> Int\nf x = x + 1\n\nmain : Unit -> <IO> Unit\nmain () =\n  let unused = \"unused\"\n  let s = \"used\"\n  let n = f 1\n  println s\n  println (s ++ show n)";
     insta::assert_snapshot!(function(&core_text(text, Pass::Translate), "main"), @r#"
-    fn main(p.0: unit) -> unit {
+    yields fn main(p.0: unit) -> unit {
       let s.1: obj = const "unused"
       let s.2: obj = const "used"
       let t.3: int = call f(1)
@@ -391,7 +391,7 @@ fn lower_until_stops_after_the_named_pass() {
     }
     "#);
     insta::assert_snapshot!(function(&lir_text(text, eml_lir::Pass::Contract), "main"), @r#"
-    fn main(p.0: unit) -> unit {
+    yields fn main(p.0: unit) -> unit {
       let s.2: obj = const "used"
       let t.3: int = call f(1)
       let t.4: unit = extern Prelude.println(s.2)
@@ -402,7 +402,7 @@ fn lower_until_stops_after_the_named_pass() {
     }
     "#);
     insta::assert_snapshot!(function(&lir_text(text, eml_lir::Pass::Perceus), "main"), @r#"
-    fn main(p.0: unit) -> unit {
+    yields fn main(p.0: unit) -> unit {
       let s.2: obj = const "used"
       let t.3: int = call f(1)
       dup s.2
@@ -622,7 +622,7 @@ fn a_constructor_bound_by_let_is_known_later() {
         "{OPTION}unwrap : Int -> <IO> Int\nunwrap x =\n  let o = Some x\n  println \"built\"\n  match o with\n    | Some y -> y + 1\n    | None -> 0\n\nmain : Unit -> <IO> Unit\nmain () = println (show (unwrap 1))"
     );
     insta::assert_snapshot!(function(&core_text(&text, Pass::Translate), "unwrap"), @r#"
-    fn unwrap(x.0: int) -> int {
+    yields fn unwrap(x.0: int) -> int {
       let d.1: tobj = con Option #1(x.0)
       let s.2: obj = const "built"
       let t.3: unit = extern Prelude.println(s.2)
@@ -631,7 +631,7 @@ fn a_constructor_bound_by_let_is_known_later() {
     }
     "#);
     insta::assert_snapshot!(function(&lir_text(&text, eml_lir::Pass::Contract), "unwrap"), @r#"
-    fn unwrap(x.0: int) -> int {
+    yields fn unwrap(x.0: int) -> int {
       let s.2: obj = const "built"
       let t.3: unit = extern Prelude.println(s.2)
       let t.4: int = extern Prelude.+(x.0, 1)
@@ -828,7 +828,7 @@ fn an_extern_function_with_an_effect_used_as_a_value_is_wrapped_with_its_extern_
     let text = "each : (String -> <IO> Unit) -> <IO> Unit\neach f = f \"x\"\n\nmain : Unit -> <IO> Unit\nmain () = each println";
     let shown = core_text(text, Pass::Translate);
     insta::assert_snapshot!(function(&shown, "main$extern0"), @"
-    internal fn main$extern0(p.0: obj) -> unit {
+    internal yields fn main$extern0(p.0: obj) -> unit {
       let t.1: unit = extern Prelude.println(p.0)
       return t.1
     }
@@ -854,7 +854,7 @@ fn effect_numbers_skip_the_extern_effects() {
       let t.1: unit = perform B.tell(1)
       return 2
     }
-    fn main(p.0: unit) -> unit {
+    yields fn main(p.0: unit) -> unit {
       let t.1: int = handle B((), &main$handle1) { tell: &main$handle1$tell } return &main$handle1$return
       let t.2: obj = extern "Prelude.Show Int.show"(t.1)
       let t.3: unit = extern Prelude.println(t.2)
@@ -875,14 +875,14 @@ fn effect_numbers_skip_the_extern_effects() {
     internal yields fn main$handle0$return($r.0: int, p.1: unit) -> int {
       return $r.0
     }
-    internal fn main$handle1$tell(m.0: int, k.1: tobj lin, p.2: unit) -> int {
+    internal yields fn main$handle1$tell(m.0: int, k.1: tobj lin, p.2: unit) -> int {
       let t.3: int = resume k.1((), ())
       return t.3
     }
-    internal fn main$handle1$return($r.0: int, p.1: unit) -> int {
+    internal yields fn main$handle1$return($r.0: int, p.1: unit) -> int {
       return $r.0
     }
-    fn entry$main() -> unit {
+    yields fn entry$main() -> unit {
       let t.0: unit = call main(())
       return t.0
     }
@@ -909,12 +909,12 @@ fn the_entry_function_is_chosen_by_the_caller() {
         Pass::Translate,
     );
     insta::assert_snapshot!(eml_core_ir::pretty(&program), @r#"
-    fn alt(p.0: unit) -> unit {
+    yields fn alt(p.0: unit) -> unit {
       let s.1: obj = const "alt"
       let t.2: unit = extern Prelude.println(s.1)
       return t.2
     }
-    fn entry$alt() -> unit {
+    yields fn entry$alt() -> unit {
       let t.0: unit = call alt(())
       return t.0
     }
@@ -930,15 +930,15 @@ fn names_outside_the_entry_are_qualified_with_their_module() {
     insta::assert_snapshot!(core_text_files(main, &[("Report/Csv.em", csv)], Pass::Translate), @r#"
     layout Report.Csv.Row { Row(int) }
     effect Report.Csv.Parse { next(unit) -> int }
-    fn "apply@[String, Unit]"(f.0: tobj poly, x.1: obj) -> unit {
-      let t.2: unit = apply f.0(x.1)
+    yields fn "apply@[String, Unit]<e>"(f.0: tobj poly, x.1: obj) -> unit {
+      let t.2: unit = yields apply f.0(x.1)
       return t.2
     }
-    fn main(p.0: unit) -> unit {
+    yields fn main(p.0: unit) -> unit {
       let t.1: obj = handle Report.Csv.Parse((), &main$handle0) { next: &main$handle0$next } return &main$handle0$return
       unpack t.1 Report.Csv.Row #0(n.2: int)
       let t.3: obj = extern "Prelude.Show Int.show"(n.2)
-      let t.4: unit = call "apply@[String, Unit]"(&main$extern0, t.3)
+      let t.4: unit = call "apply@[String, Unit]<e>"(&main$extern0, t.3)
       return t.4
     }
     yields fn Report.Csv.parse(p.0: unit) -> obj {
@@ -950,14 +950,14 @@ fn names_outside_the_entry_are_qualified_with_their_module() {
       let t.1: obj = call Report.Csv.parse(())
       return t.1
     }
-    internal fn main$handle0$next(p.0: unit, k.1: tobj lin, p.2: unit) -> obj {
+    internal yields fn main$handle0$next(p.0: unit, k.1: tobj lin, p.2: unit) -> obj {
       let t.3: obj = resume k.1(1, ())
       return t.3
     }
-    internal fn main$handle0$return(r.0: obj, p.1: unit) -> obj {
+    internal yields fn main$handle0$return(r.0: obj, p.1: unit) -> obj {
       return r.0
     }
-    internal fn main$extern0(p.0: obj) -> unit {
+    internal yields fn main$extern0(p.0: obj) -> unit {
       let t.1: unit = extern Prelude.println(p.0)
       return t.1
     }
@@ -969,7 +969,7 @@ fn names_outside_the_entry_are_qualified_with_their_module() {
       let d.1: obj = con Report.Csv.Row #0(p.0)
       return d.1
     }
-    fn entry$main() -> unit {
+    yields fn entry$main() -> unit {
       let t.0: unit = call main(())
       return t.0
     }
@@ -989,7 +989,7 @@ fn an_entry_operation_does_not_collide_with_a_prelude_operation() {
     }
     ");
     insta::assert_snapshot!(function(&shown, "main$extern0"), @"
-    internal fn main$extern0(p.0: obj) -> unit {
+    internal yields fn main$extern0(p.0: obj) -> unit {
       let t.1: unit = extern Prelude.println(p.0)
       return t.1
     }
@@ -1009,13 +1009,13 @@ fn only_functions_reachable_from_the_entry_are_lowered() {
 #[test]
 fn recursion_and_top_level_values() {
     let text = "answer : Int\nanswer = 42\n\ncount : Int -> Int\ncount n = if n == 0 then answer else count (n - 1)\n\nmain : Unit -> <IO> Unit\nmain () = println (show (count 3))";
-    insta::assert_snapshot!(core_text(text, Pass::Translate), @"
+    insta::assert_snapshot!(core_text(text, Pass::Translate), @r#"
     layout Prelude.Bool { False, True }
     fn answer() -> int {
       return 42
     }
     fn count(n.0: int) -> int {
-      let t.1: enum = extern \"Prelude.Eq Int.==\"(n.0, 0)
+      let t.1: enum = extern "Prelude.Eq Int.=="(n.0, 0)
       switch t.1 Prelude.Bool { #0 -> b1, #1 -> b2 }
     b1:
       let t.3: int = extern Prelude.-(n.0, 1)
@@ -1025,17 +1025,17 @@ fn recursion_and_top_level_values() {
       let answer.2: int = call answer()
       return answer.2
     }
-    fn main(p.0: unit) -> unit {
+    yields fn main(p.0: unit) -> unit {
       let t.1: int = call count(3)
-      let t.2: obj = extern \"Prelude.Show Int.show\"(t.1)
+      let t.2: obj = extern "Prelude.Show Int.show"(t.1)
       let t.3: unit = extern Prelude.println(t.2)
       return t.3
     }
-    fn entry$main() -> unit {
+    yields fn entry$main() -> unit {
       let t.0: unit = call main(())
       return t.0
     }
-    ");
+    "#);
 }
 
 #[test]
@@ -1050,9 +1050,9 @@ fn partial_and_extra_arguments_use_closures() {
       let c.1: tobj poly = closure add(x.0)
       return c.1
     }
-    fn main(p.0: unit) -> unit {
+    yields fn main(p.0: unit) -> unit {
       let c.1: tobj = closure add(1)
-      let t.2: int = apply c.1(2)
+      let t.2: int = yields apply c.1(2)
       let t.3: tobj = call adder(3)
       let t.4: int = apply t.3(4)
       let t.5: int = extern Prelude.+(t.2, t.4)
@@ -1060,7 +1060,7 @@ fn partial_and_extra_arguments_use_closures() {
       let t.7: unit = extern Prelude.println(t.6)
       return t.7
     }
-    fn entry$main() -> unit {
+    yields fn entry$main() -> unit {
       let t.0: unit = call main(())
       return t.0
     }
@@ -1083,14 +1083,14 @@ fn builtins_used_as_values_are_wrapped() {
       let c.2: tobj poly = closure "Prelude.>>@[Bool, Bool, Bool]$lambda0"(f.0, g.1)
       return c.2
     }
-    fn "apply@[String, Unit]"(f.0: tobj poly, x.1: obj) -> unit {
-      let t.2: unit = apply f.0(x.1)
+    yields fn "apply@[String, Unit]<e>"(f.0: tobj poly, x.1: obj) -> unit {
+      let t.2: unit = yields apply f.0(x.1)
       return t.2
     }
-    fn main(p.0: unit) -> unit {
+    yields fn main(p.0: unit) -> unit {
       let t.1: tobj = call "Prelude.>>@[Bool, Bool, Bool]"(&Prelude.not, &Prelude.not)
       let t.2: obj = extern "Prelude.Show Int.show"(1)
-      let t.3: unit = call "apply@[String, Unit]"(&main$extern0, t.2)
+      let t.3: unit = call "apply@[String, Unit]<e>"(&main$extern0, t.2)
       return t.3
     }
     internal fn "Prelude.>>@[Bool, Bool, Bool]$lambda0"(f.0: tobj poly, g.1: tobj poly, x.2: enum) -> enum {
@@ -1098,11 +1098,11 @@ fn builtins_used_as_values_are_wrapped() {
       let t.4: enum = apply g.1(t.3)
       return t.4
     }
-    internal fn main$extern0(p.0: obj) -> unit {
+    internal yields fn main$extern0(p.0: obj) -> unit {
       let t.1: unit = extern Prelude.println(p.0)
       return t.1
     }
-    fn entry$main() -> unit {
+    yields fn entry$main() -> unit {
       let t.0: unit = call main(())
       return t.0
     }
@@ -1113,24 +1113,24 @@ fn builtins_used_as_values_are_wrapped() {
 fn lambdas_are_lifted_with_their_captures_first() {
     let text = "apply : (a -> <e> b) -> a -> <e> b\napply f x = f x\n\nmain : Unit -> <IO> Unit\nmain () =\n  let s = \"!\"\n  let shout = fn t -> t ++ s\n  println (apply shout \"hi\")\n  println s";
     insta::assert_snapshot!(core_text(text, Pass::Translate), @r#"
-    fn "apply@[String, String]"(f.0: tobj poly, x.1: obj) -> obj {
-      let t.2: obj = apply f.0(x.1)
+    yields fn "apply@[String, String]<e>"(f.0: tobj poly, x.1: obj) -> obj {
+      let t.2: obj = yields apply f.0(x.1)
       return t.2
     }
-    fn main(p.0: unit) -> unit {
+    yields fn main(p.0: unit) -> unit {
       let s.1: obj = const "!"
       let c.2: tobj = closure main$lambda0(s.1)
       let s.3: obj = const "hi"
-      let t.4: obj = call "apply@[String, String]"(c.2, s.3)
+      let t.4: obj = call "apply@[String, String]<e>"(c.2, s.3)
       let t.5: unit = extern Prelude.println(t.4)
       let t.6: unit = extern Prelude.println(s.1)
       return t.6
     }
-    internal fn main$lambda0(s.0: obj, t.1: obj) -> obj {
+    internal yields fn main$lambda0(s.0: obj, t.1: obj) -> obj {
       let t.2: obj = extern Prelude.++(t.1, s.0)
       return t.2
     }
-    fn entry$main() -> unit {
+    yields fn entry$main() -> unit {
       let t.0: unit = call main(())
       return t.0
     }
@@ -1140,7 +1140,7 @@ fn lambdas_are_lifted_with_their_captures_first() {
 #[test]
 fn a_zero_arity_callee_is_evaluated_before_its_arguments() {
     let text = "k : Int -> Int -> Int\nk a b = a\n\nfive : Int -> Int\nfive = k 5\n\nmain : Unit -> <IO> Unit\nmain () = println (show (five (1 + 2)))";
-    insta::assert_snapshot!(core_text(text, Pass::Translate), @"
+    insta::assert_snapshot!(core_text(text, Pass::Translate), @r#"
     fn k(a.0: int, b.1: int) -> int {
       return a.0
     }
@@ -1148,19 +1148,19 @@ fn a_zero_arity_callee_is_evaluated_before_its_arguments() {
       let c.0: tobj = closure k(5)
       return c.0
     }
-    fn main(p.0: unit) -> unit {
+    yields fn main(p.0: unit) -> unit {
       let five.1: tobj = call five()
       let t.2: int = extern Prelude.+(1, 2)
       let t.3: int = apply five.1(t.2)
-      let t.4: obj = extern \"Prelude.Show Int.show\"(t.3)
+      let t.4: obj = extern "Prelude.Show Int.show"(t.3)
       let t.5: unit = extern Prelude.println(t.4)
       return t.5
     }
-    fn entry$main() -> unit {
+    yields fn entry$main() -> unit {
       let t.0: unit = call main(())
       return t.0
     }
-    ");
+    "#);
 }
 
 #[test]
@@ -1217,7 +1217,7 @@ fn handlers_are_lifted_to_closures() {
     let text = "effect Ask where\n  ask : String -> Int\n\nmain : Unit -> <IO> Unit\nmain () =\n  let prefix = \"n = \"\n  let n =\n    handle ask \"x\" with\n      | ask key k -> k 1\n      | return x -> x + 1\n  println (prefix ++ show n)";
     insta::assert_snapshot!(core_text(text, Pass::Translate), @r#"
     effect Ask { ask(obj) -> int }
-    fn main(p.0: unit) -> unit {
+    yields fn main(p.0: unit) -> unit {
       let s.1: obj = const "n = "
       let t.2: int = handle Ask((), &main$handle0) { ask: &main$handle0$ask } return &main$handle0$return
       let t.3: obj = extern "Prelude.Show Int.show"(t.2)
@@ -1230,15 +1230,15 @@ fn handlers_are_lifted_to_closures() {
       let t.2: int = perform Ask.ask(s.1)
       return t.2
     }
-    internal fn main$handle0$ask(key.0: obj, k.1: tobj lin, p.2: unit) -> int {
+    internal yields fn main$handle0$ask(key.0: obj, k.1: tobj lin, p.2: unit) -> int {
       let t.3: int = resume k.1(1, ())
       return t.3
     }
-    internal fn main$handle0$return(x.0: int, p.1: unit) -> int {
+    internal yields fn main$handle0$return(x.0: int, p.1: unit) -> int {
       let t.2: int = extern Prelude.+(x.0, 1)
       return t.2
     }
-    fn entry$main() -> unit {
+    yields fn entry$main() -> unit {
       let t.0: unit = call main(())
       return t.0
     }
@@ -1572,7 +1572,7 @@ fn a_handler_with_a_state_passes_its_initial_value_and_takes_the_state_from_its_
     let text = "effect Ask where\n  ask : Unit -> Int\n\nmain : Unit -> <IO> Unit\nmain () =\n  let n =\n    handle ask () + ask () from 10 with\n      | ask () k st -> k st (st + 1)\n      | return x st -> x * st\n  println (show n)";
     insta::assert_snapshot!(core_text(text, Pass::Translate), @r#"
     effect Ask { ask(unit) -> int }
-    fn main(p.0: unit) -> unit {
+    yields fn main(p.0: unit) -> unit {
       let t.1: int = handle Ask(10, &main$handle0) { ask: &main$handle0$ask } return &main$handle0$return
       let t.2: obj = extern "Prelude.Show Int.show"(t.1)
       let t.3: unit = extern Prelude.println(t.2)
@@ -1584,16 +1584,16 @@ fn a_handler_with_a_state_passes_its_initial_value_and_takes_the_state_from_its_
       let t.3: int = extern Prelude.+(t.1, t.2)
       return t.3
     }
-    internal fn main$handle0$ask(p.0: unit, k.1: tobj lin, st.2: int) -> int {
+    internal yields fn main$handle0$ask(p.0: unit, k.1: tobj lin, st.2: int) -> int {
       let t.3: int = extern Prelude.+(st.2, 1)
       let t.4: int = resume k.1(st.2, t.3)
       return t.4
     }
-    internal fn main$handle0$return(x.0: int, st.1: int) -> int {
+    internal yields fn main$handle0$return(x.0: int, st.1: int) -> int {
       let t.2: int = extern Prelude.*(x.0, st.1)
       return t.2
     }
-    fn entry$main() -> unit {
+    yields fn entry$main() -> unit {
       let t.0: unit = call main(())
       return t.0
     }
@@ -1622,7 +1622,7 @@ fn effects_are_numbered_in_declaration_order() {
     insta::assert_snapshot!(core_text(text, Pass::Translate), @r#"
     effect A { a(unit) -> int }
     effect B { b(unit) -> int }
-    fn main(p.0: unit) -> unit {
+    yields fn main(p.0: unit) -> unit {
       let t.1: int = handle A((), &main$handle0) { a: &main$handle0$a } return &main$handle0$return
       let t.2: int = handle B((), &main$handle1) { b: &main$handle1$b } return &main$handle1$return
       let t.3: int = extern Prelude.+(t.1, t.2)
@@ -1634,25 +1634,25 @@ fn effects_are_numbered_in_declaration_order() {
       let t.1: int = perform A.a(())
       return t.1
     }
-    internal fn main$handle0$a(p.0: unit, k.1: tobj lin, p.2: unit) -> int {
+    internal yields fn main$handle0$a(p.0: unit, k.1: tobj lin, p.2: unit) -> int {
       let t.3: int = resume k.1(1, ())
       return t.3
     }
-    internal fn main$handle0$return($r.0: int, p.1: unit) -> int {
+    internal yields fn main$handle0$return($r.0: int, p.1: unit) -> int {
       return $r.0
     }
     internal yields fn main$handle1(p.0: unit) -> int {
       let t.1: int = perform B.b(())
       return t.1
     }
-    internal fn main$handle1$b(p.0: unit, k.1: tobj lin, p.2: unit) -> int {
+    internal yields fn main$handle1$b(p.0: unit, k.1: tobj lin, p.2: unit) -> int {
       let t.3: int = resume k.1(2, ())
       return t.3
     }
-    internal fn main$handle1$return($r.0: int, p.1: unit) -> int {
+    internal yields fn main$handle1$return($r.0: int, p.1: unit) -> int {
       return $r.0
     }
-    fn entry$main() -> unit {
+    yields fn entry$main() -> unit {
       let t.0: unit = call main(())
       return t.0
     }
@@ -1691,7 +1691,7 @@ fn an_arm_reached_by_one_leaf_sits_at_the_leaf() {
     // 1つの葉からだけ届く枝の本体は、その葉のブロックで変換し、複数の葉から届く枝だけを木の後のブロックにする
     // (docs/spec/core-ir.md)。`pick` の `(n, _)` は、`0` の case の `default` と、外側の `default` の2つの葉から届く
     let text = "data Shape = | Dot | Box Int Int\n\narea : Shape -> Int\narea s =\n  match s with\n    | Box w h -> w * h\n    | Dot -> 0\n\npick : Int -> Int -> Int\npick a b =\n  match (a, b) with\n    | (0, 1) -> 0\n    | (n, _) -> n * 2\n\nmain : Unit -> <IO> Unit\nmain () = println (show (area (Box 2 3) + pick 0 1))";
-    insta::assert_snapshot!(core_text(text, Pass::Translate), @"
+    insta::assert_snapshot!(core_text(text, Pass::Translate), @r#"
     layout Shape { Dot, Box(int, int) }
     fn area(s.0: tobj) -> int {
       switch s.0 Shape { #0 -> b1, #1(w.1: int, h.2: int) -> b2 }
@@ -1715,20 +1715,20 @@ fn an_arm_reached_by_one_leaf_sits_at_the_leaf() {
       let t.3: int = extern Prelude.*(n.2, 2)
       return t.3
     }
-    fn main(p.0: unit) -> unit {
+    yields fn main(p.0: unit) -> unit {
       let d.1: tobj = con Shape #1(2, 3)
       let t.2: int = call area(d.1)
       let t.3: int = call pick(0, 1)
       let t.4: int = extern Prelude.+(t.2, t.3)
-      let t.5: obj = extern \"Prelude.Show Int.show\"(t.4)
+      let t.5: obj = extern "Prelude.Show Int.show"(t.4)
       let t.6: unit = extern Prelude.println(t.5)
       return t.6
     }
-    fn entry$main() -> unit {
+    yields fn entry$main() -> unit {
       let t.0: unit = call main(())
       return t.0
     }
-    ");
+    "#);
 }
 
 #[test]
@@ -1767,12 +1767,12 @@ fn each_comparison_picks_the_instruction_of_its_operand_type() {
       let d.11: obj = con (,,,,,) #0(t.3, t.4, t.6, t.8, t.9, t.10)
       return d.11
     }
-    fn main(p.0: unit) -> unit {
+    yields fn main(p.0: unit) -> unit {
       let s.1: obj = const "a"
       let t.2: obj = call compare(1, s.1, #1)
       return ()
     }
-    fn entry$main() -> unit {
+    yields fn entry$main() -> unit {
       let t.0: unit = call main(())
       return t.0
     }
@@ -1800,10 +1800,10 @@ fn a_masked_callback_call() {
         "{STATE}run : (Unit -> <e> a) -> <State Int | e> a\nrun cb =\n  let n = get ()\n  cb ()\n\n{}",
         state_main("run (fn () -> 1)")
     );
-    insta::assert_snapshot!(function(&core_text(&text, Pass::Translate), "run@[Int]"), @r#"
-    yields fn "run@[Int]"(cb.0: tobj poly) -> int {
+    insta::assert_snapshot!(function(&core_text(&text, Pass::Translate), "run@[Int]<e>"), @r#"
+    yields fn "run@[Int]<e>"(cb.0: tobj poly) -> int {
       let t.1: int = perform State.get(())
-      let t.2: int = mask [State] apply cb.0(())
+      let t.2: int = mask [State] yields apply cb.0(())
       return t.2
     }
     "#);
@@ -1816,9 +1816,9 @@ fn a_saturated_known_call_takes_the_mask_of_its_last_arrow() {
         "{STATE}twice : Int -> (Unit -> <e> a) -> <e> a\ntwice _ cb =\n  let _ = cb ()\n  cb ()\n\nrun : (Unit -> <e> a) -> <State Int | e> a\nrun cb = twice 1 cb\n\n{}",
         state_main("run (fn () -> 1)")
     );
-    insta::assert_snapshot!(function(&core_text(&text, Pass::Translate), "run@[Int]"), @r#"
-    yields fn "run@[Int]"(cb.0: tobj) -> int {
-      let t.1: int = mask [State] call "twice@[Int]"(1, cb.0)
+    insta::assert_snapshot!(function(&core_text(&text, Pass::Translate), "run@[Int]<e>"), @r#"
+    yields fn "run@[Int]<e>"(cb.0: tobj) -> int {
+      let t.1: int = mask [State] call "twice@[Int]<e>"(1, cb.0)
       return t.1
     }
     "#);
@@ -1831,13 +1831,13 @@ fn arrows_with_different_masks_are_applied_apart() {
         "{STATE}h : (Int -> <e> Int -> <State Int | e> Int) -> <State Int | e> Int\nh f = f 1 2\n\n{}",
         state_main("h (fn x y -> x + y)")
     );
-    insta::assert_snapshot!(function(&core_text(&text, Pass::Translate), "h"), @"
-    yields fn h(f.0: tobj poly) -> int {
-      let t.1: tobj poly = mask [State] apply f.0(1)
+    insta::assert_snapshot!(function(&core_text(&text, Pass::Translate), "h<e>"), @r#"
+    yields fn "h<e>"(f.0: tobj poly) -> int {
+      let t.1: tobj poly = mask [State] yields apply f.0(1)
       let t.2: int = yields apply t.1(2)
       return t.2
     }
-    ");
+    "#);
 }
 
 /// 節の中の継続の呼び出しの `mask`。節は handle の外側の row で動くので、ふつうは `mask` が要らない。
@@ -1846,8 +1846,8 @@ fn a_continuation_call_in_its_clause_has_no_mask() {
     let text = format!(
         "{STATE}run : (Unit -> <State Int | e> a) -> <e> a\nrun action =\n  handle action () from 0 with\n    | get () k st -> k st st\n    | put n k _ -> k () n\n    | return x _ -> x\n\nmain : Unit -> <IO> Unit\nmain () = println (show (run (fn () -> get ())))\n"
     );
-    insta::assert_snapshot!(function(&core_text(&text, Pass::Translate), "run@[Int]$handle0$get"), @r#"
-    internal fn "run@[Int]$handle0$get"(p.0: unit, k.1: tobj lin, st.2: int) -> int {
+    insta::assert_snapshot!(function(&core_text(&text, Pass::Translate), "run@[Int]<e>$handle0$get"), @r#"
+    internal yields fn "run@[Int]<e>$handle0$get"(p.0: unit, k.1: tobj lin, st.2: int) -> int {
       let t.3: int = resume k.1(st.2, st.2)
       return t.3
     }
@@ -1904,10 +1904,10 @@ fn extra_arguments_of_a_known_call_take_the_mask_of_their_arrow() {
         "{STATE}pick : Int -> (Unit -> <e> a) -> <e> a\npick _ = fn cb -> cb ()\n\nrun : (Unit -> <e> a) -> <State Int | e> a\nrun cb = pick 1 cb\n\n{}",
         state_main("run (fn () -> 1)")
     );
-    insta::assert_snapshot!(function(&core_text(&text, Pass::Translate), "run@[Int]"), @r#"
-    yields fn "run@[Int]"(cb.0: tobj poly) -> int {
-      let t.1: tobj = call "pick@[Int]"(1)
-      let t.2: int = mask [State] apply t.1(cb.0)
+    insta::assert_snapshot!(function(&core_text(&text, Pass::Translate), "run@[Int]<e>"), @r#"
+    yields fn "run@[Int]<e>"(cb.0: tobj poly) -> int {
+      let t.1: tobj = call "pick@[Int]<e>"(1)
+      let t.2: int = mask [State] yields apply t.1(cb.0)
       return t.2
     }
     "#);
@@ -2046,7 +2046,10 @@ fn a_continuation_applied_to_extra_arguments_is_resumed_then_applied() {
         shown.contains("let t.3: tobj = resume k.1(1, ())"),
         "{shown}"
     );
-    assert!(shown.contains("let t.4: int = apply t.3(2)"), "{shown}");
+    assert!(
+        shown.contains("let t.4: int = yields apply t.3(2)"),
+        "{shown}"
+    );
     assert!(!shown.contains("cont$"), "{shown}");
 }
 
@@ -2097,7 +2100,7 @@ fn externs_are_called_by_their_canonical_name() {
         "extern \"Prelude.Eq String.==\"(",
         "extern \"Prelude.Eq Bool.!=\"(#1, #0)",
         "extern \"Prelude.Eq Int.==\"(",
-        "call \"apply@[Int, String]\"(&main$extern0, 3)",
+        "call \"apply@[Int, String]<e>\"(&main$extern0, 3)",
         "fn main$extern0(p.0: int) -> obj {\n  let t.1: obj = extern \"Prelude.Show Int.show\"(p.0)\n  return t.1\n}",
     ] {
         assert!(shown.contains(expected), "{expected}\n{shown}");
@@ -2110,7 +2113,7 @@ fn a_condition_true_on_every_path_meets_at_one_block() {
     // `(a || True) && True` はどの道でも真なので、`else` の枝は変換せず、どの葉も `then` の枝の1つのブロックへ向かう
     let text = "noisy : String -> Bool -> <IO> Bool\nnoisy name b =\n  println name\n  b\n\nmain : Unit -> <IO> Unit\nmain () =\n  let other = \"other\"\n  let a = noisy \"a\" True\n  if (a || True) && True then println \"x\" else println other\n  println \"end\"";
     insta::assert_snapshot!(function(&core_text(text, Pass::Translate), "main"), @r#"
-    fn main(p.0: unit) -> unit {
+    yields fn main(p.0: unit) -> unit {
       let s.1: obj = const "other"
       let s.2: obj = const "a"
       let t.3: enum = call noisy(s.2, #1)
@@ -2229,13 +2232,13 @@ fn a_known_tag_reaching_a_default_that_uses_the_scrutinee_passes_the_value() {
 fn a_known_tag_without_a_case_takes_the_default() {
     // `c` は `let` で束縛したタグなので、`switch` を出さずに `default` の枝を選ぶ
     let text = "data Color = | Red | Green | Blue\n\nmain : Unit -> <IO> Unit\nmain () =\n  let c = Green\n  let n = match c with\n    | Red -> 1\n    | _ -> 2\n  println (show n)";
-    insta::assert_snapshot!(function(&core_text(text, Pass::Translate), "main"), @"
-    fn main(p.0: unit) -> unit {
-      let t.1: obj = extern \"Prelude.Show Int.show\"(2)
+    insta::assert_snapshot!(function(&core_text(text, Pass::Translate), "main"), @r#"
+    yields fn main(p.0: unit) -> unit {
+      let t.1: obj = extern "Prelude.Show Int.show"(2)
       let t.2: unit = extern Prelude.println(t.1)
       return t.2
     }
-    ");
+    "#);
 }
 
 #[test]
@@ -2350,7 +2353,7 @@ fn a_method_call_resolves_to_the_instance_function() {
     );
     let shown = core_text(&text, Pass::Translate);
     insta::assert_snapshot!(function(&shown, "main"), @r#"
-    fn main(p.0: unit) -> unit {
+    yields fn main(p.0: unit) -> unit {
       let t.1: enum = call "Same Color.same"(#0, #1)
       switch t.1 Prelude.Bool { #0 -> b1, #1 -> b2 }
     b1:
@@ -2424,7 +2427,7 @@ fn an_instance_method_with_fewer_parameters_is_called_then_applied() {
     let text = "class Combine a where\n  combine : a -> a -> Int\n\ninstance Combine Int where\n  combine = add\n\nadd : Int -> Int -> Int\nadd a b = a + b\n\nmain : Unit -> <IO> Unit\nmain () = println (show (combine 1 2))";
     let shown = core_text(text, Pass::Translate);
     insta::assert_snapshot!(function(&shown, "main"), @r#"
-    fn main(p.0: unit) -> unit {
+    yields fn main(p.0: unit) -> unit {
       let t.1: tobj = call "Combine Int.combine"()
       let t.2: int = apply t.1(1, 2)
       let t.3: obj = extern "Prelude.Show Int.show"(t.2)
@@ -2700,7 +2703,7 @@ fn an_update_evaluates_its_fields_and_builds_a_new_value() {
 fn a_generic_update_keeps_the_fields_at_their_instantiated_types() {
     let text = "data Box a = | Box { item : a, n : Int }\n\nmain : Unit -> <IO> Unit\nmain () =\n  let b = { Box { item = 41, n = 1 } | n = 2 }\n  match b with\n    | Box { item } -> println (show (item + 1))";
     insta::assert_snapshot!(function(&core_text(text, Pass::Translate), "main"), @r#"
-    fn main(p.0: unit) -> unit {
+    yields fn main(p.0: unit) -> unit {
       let d.1: obj = con Box #0(41, 1)
       unpack d.1 Box #0(f.2: int, f.3: int)
       let d.4: obj = con Box #0(f.2, 2)
@@ -2717,13 +2720,13 @@ fn a_parameter_and_a_result_of_file_type_are_lin() {
     let text = "close_it : Fs.File -> <IO> Unit\nclose_it f = Fs.close f\n\nmain : Unit -> <IO> Unit\nmain () =\n  let f = Fs.open \"a.txt\"\n  close_it f";
     let ir = core_text(text, Pass::Translate);
     insta::assert_snapshot!(function(&ir, "close_it"), @"
-    fn close_it(f.0: obj lin) -> unit {
+    yields fn close_it(f.0: obj lin) -> unit {
       let t.1: unit = extern Std.Fs.close(f.0)
       return t.1
     }
     ");
     insta::assert_snapshot!(function(&ir, "main"), @r#"
-    fn main(p.0: unit) -> unit {
+    yields fn main(p.0: unit) -> unit {
       let s.1: obj = const "a.txt"
       let t.2: obj lin = extern Std.Fs.open(s.1)
       let t.3: unit = call close_it(t.2)
@@ -2738,7 +2741,7 @@ fn a_handle_body_and_clause_closures_take_the_join_of_their_captures() {
     let text = "effect Ask where\n  ask : Unit -> Int\n\nuse_file : Fs.File -> <Ask, IO> Int\nuse_file f =\n  Fs.close f\n  ask ()\n\nmain : Unit -> <IO> Unit\nmain () =\n  let f = Fs.open \"a.txt\"\n  let n = 40 + 1\n  let m =\n    handle use_file f with\n      | ask () k -> k n\n  println (show (m + 1))";
     let ir = core_text(text, Pass::Translate);
     insta::assert_snapshot!(function(&ir, "main"), @r#"
-    fn main(p.0: unit) -> unit {
+    yields fn main(p.0: unit) -> unit {
       let s.1: obj = const "a.txt"
       let t.2: obj lin = extern Std.Fs.open(s.1)
       let t.3: int = extern Prelude.+(40, 1)
@@ -2764,7 +2767,7 @@ fn a_constructor_built_from_a_scrutinee_expression_takes_its_type_mark() {
     // `Some []` の引数はタグだけだが、式の型 `Option (List Fs.File)` は Lin なので、葉で作る `con` は `lin` になる
     let text = "close_all : List Fs.File -> <IO> Unit\nclose_all xs =\n  match xs with\n    | [] -> ()\n    | f :: rest ->\n        Fs.close f\n        close_all rest\n\nclose_opt : Option (List Fs.File) -> <IO> Unit\nclose_opt o =\n  match o with\n    | None -> ()\n    | Some xs -> close_all xs\n\nmain : Unit -> <IO> Unit\nmain () =\n  match Some [] with\n    | other -> close_opt other";
     insta::assert_snapshot!(function(&core_text(text, Pass::Translate), "main"), @"
-    fn main(p.0: unit) -> unit {
+    yields fn main(p.0: unit) -> unit {
       let d.1: tobj lin = con Prelude.Option #1(#0)
       let t.2: unit = call close_opt(d.1)
       return t.2
@@ -2850,7 +2853,7 @@ fn a_leaf_that_binds_nothing_non_unr_drops_the_matched_value() {
     );
     let ir = core_text(&text, Pass::Translate);
     insta::assert_snapshot!(function(&ir, "close_all"), @r#"
-    fn close_all($0.0: tobj lin) -> unit {
+    yields fn close_all($0.0: tobj lin) -> unit {
       switch $0.0 Prelude.List { #0 -> b1, #1(f.1: obj lin, rest.2: tobj lin) -> b2 }
     b1:
       let u.3: unit = drop $0.0
@@ -2864,7 +2867,7 @@ fn a_leaf_that_binds_nothing_non_unr_drops_the_matched_value() {
     }
     "#);
     insta::assert_snapshot!(function(&ir, "go"), @"
-    fn go(p.0: obj lin) -> int {
+    yields fn go(p.0: obj lin) -> int {
       unpack p.0 (,) #0(n.1: int, x.2: tobj lin)
       switch x.2 Prelude.List { #0 -> b1, #1(f.3: obj lin, rest.4: tobj lin) -> b2 }
     b1:
@@ -2883,7 +2886,7 @@ fn a_leaf_that_receives_a_value_containing_v_does_not_drop_v() {
     // `(o, 0)` の葉は `h` を中に持つ `Some h` を受け取るので、`h` を drop しない
     let text = "close_opt : Option Fs.File -> <IO> Unit\nclose_opt o =\n  match o with\n    | None -> println \"none\"\n    | Some f -> Fs.close f\n\ngo : Fs.File -> Int -> <IO> Unit\ngo h n =\n  match (Some h, n) with\n    | (o, 0) -> close_opt o\n    | (Some h2, _) -> Fs.close h2\n    | (None, _) -> println \"never\"\n\nmain : Unit -> <IO> Unit\nmain () =\n  go (Fs.open \"input.txt\") 0\n  go (Fs.open \"input.txt\") 1";
     insta::assert_snapshot!(function(&core_text(text, Pass::Translate), "go"), @"
-    fn go(h.0: obj lin, n.1: int) -> unit {
+    yields fn go(h.0: obj lin, n.1: int) -> unit {
       switch n.1 { 0 -> b1, _ -> b2 }
     b1:
       let d.2: tobj lin = con Prelude.Option #1(h.0)
@@ -2903,7 +2906,7 @@ fn equal_non_unr_occurrences_are_built_apart() {
         "{CLOSE_ALL}{CLOSE_OPT}use_ints : Option (List Int) -> Int\nuse_ints o =\n  match o with\n    | None -> 0\n    | Some l -> 1\n\nmain : Unit -> <IO> Unit\nmain () =\n  let (a, b) = (Some [], Some [])\n  close_opt a\n  close_opt b\n  let (c, d, e) = (Some [], Some [], Some [])\n  close_opt c\n  println (show (use_ints d + use_ints e))"
     );
     insta::assert_snapshot!(function(&core_text(&text, Pass::Translate), "main"), @r#"
-    fn main(p.0: unit) -> unit {
+    yields fn main(p.0: unit) -> unit {
       let d.1: tobj lin = con Prelude.Option #1(#0)
       let d.2: tobj lin = con Prelude.Option #1(#0)
       let t.3: unit = call close_opt(d.1)
@@ -2935,7 +2938,7 @@ fn a_linear_constructor_variable_is_opened_when_no_arm_receives_it() {
     }
     let ir = core_text(&text, Pass::Translate);
     insta::assert_snapshot!(function(&ir, "finish"), @r#"
-    fn finish(l.0: obj lin, name.1: obj) -> int {
+    yields fn finish(l.0: obj lin, name.1: obj) -> int {
       let d.2: obj lin = con Job #0(name.1, l.0)
       let s.3: obj = const "between"
       let t.4: unit = extern Prelude.println(s.3)
@@ -2946,7 +2949,7 @@ fn a_linear_constructor_variable_is_opened_when_no_arm_receives_it() {
     }
     "#);
     insta::assert_snapshot!(function(&ir, "go"), @r#"
-    fn go(xs.0: tobj lin) -> unit {
+    yields fn go(xs.0: tobj lin) -> unit {
       let d.1: tobj lin = con Prelude.Option #1(xs.0)
       let s.2: obj = const "between"
       let t.3: unit = extern Prelude.println(s.2)
@@ -2971,7 +2974,7 @@ fn a_linear_constructor_variable_received_by_an_arm_is_taken_apart() {
         "{CLOSE_ALL}take : (List Fs.File, List Fs.File) -> <IO> Unit\ntake p =\n  match p with\n    | (a, b) ->\n        close_all a\n        close_all b\n\ngo : List Fs.File -> List Fs.File -> <IO> Unit\ngo xs ys =\n  let p = (xs, ys)\n  println \"between\"\n  match p with\n    | ([], b) -> close_all b\n    | other -> take other\n\nmain : Unit -> <IO> Unit\nmain () =\n  go [] [Fs.open \"input.txt\"]\n  go [Fs.open \"input.txt\"] []"
     );
     insta::assert_snapshot!(function(&lir_text(&text, eml_lir::Pass::Perceus), "go"), @r#"
-    fn go(xs.0: tobj lin, ys.1: tobj lin) -> unit {
+    yields fn go(xs.0: tobj lin, ys.1: tobj lin) -> unit {
       let d.2: obj lin = con (,) #0(xs.0, ys.1)
       let s.3: obj = const "between"
       let t.4: unit = extern Prelude.println(s.3)
@@ -2989,7 +2992,7 @@ fn a_linear_constructor_variable_received_by_an_arm_is_taken_apart() {
         "{CLOSE_ALL}{CLOSE_OPT}go : List Fs.File -> Int -> <IO> Unit\ngo xs n =\n  let q = Some xs\n  let p = (q, n)\n  println \"between\"\n  match p with\n    | (Some [], 0) -> println \"empty zero\"\n    | (o, _) -> close_opt o\n\nmain : Unit -> <IO> Unit\nmain () =\n  go [] 0\n  go [Fs.open \"input.txt\"] 1"
     );
     insta::assert_snapshot!(function(&core_text(&text, Pass::Translate), "go"), @r#"
-    fn go(xs.0: tobj lin, n.1: int) -> unit {
+    yields fn go(xs.0: tobj lin, n.1: int) -> unit {
       let d.2: tobj lin = con Prelude.Option #1(xs.0)
       let d.3: obj lin = con (,) #0(d.2, n.1)
       let s.4: obj = const "between"
@@ -3051,7 +3054,7 @@ fn a_linear_constructor_variable_used_on_another_path_is_not_opened() {
         }
     }
     insta::assert_snapshot!(function(&lir_text("close_all : List Fs.File -> <IO> Unit\nclose_all [] = println \"closed\"\nclose_all (f :: rest) =\n  Fs.close f\n  close_all rest\n\nclose_opt : Option (List Fs.File) -> <IO> Unit\nclose_opt o =\n  match o with\n    | None -> println \"none\"\n    | Some l -> close_all l\n\ngo : Bool -> List Fs.File -> <IO> Unit\ngo c xs =\n  let v = Some xs\n  println \"between\"\n  if c then\n    match v with\n      | Some l -> close_all l\n      | None -> println \"none\"\n  else close_opt v\n\nmain : Unit -> <IO> Unit\nmain () =\n  go True [Fs.open \"input.txt\"]\n  go False [Fs.open \"input.txt\"]", eml_lir::Pass::Perceus), "go"), @r#"
-    fn go(c.0: enum, xs.1: tobj lin) -> unit {
+    yields fn go(c.0: enum, xs.1: tobj lin) -> unit {
       let d.2: tobj lin = con Prelude.Option #1(xs.1)
       let s.3: obj = const "between"
       let t.4: unit = extern Prelude.println(s.3)
@@ -3081,7 +3084,7 @@ fn a_linear_constructor_variable_destructured_in_both_branches_is_taken_apart_in
         "{CLOSE_ALL}go : Bool -> List Fs.File -> <IO> Unit\ngo c xs =\n  let p = (xs, 1)\n  println \"between\"\n  if c then\n    let (a, n) = p\n    println (show n)\n    close_all a\n  else\n    let (b, m) = p\n    println (show (m + 1))\n    close_all b\n\nmain : Unit -> <IO> Unit\nmain () =\n  go True [Fs.open \"input.txt\"]\n  go False [Fs.open \"input.txt\"]"
     );
     insta::assert_snapshot!(function(&core_text(&text, Pass::Translate), "go"), @r#"
-    fn go(c.0: enum, xs.1: tobj lin) -> unit {
+    yields fn go(c.0: enum, xs.1: tobj lin) -> unit {
       let d.2: obj lin = con (,) #0(xs.1, 1)
       let s.3: obj = const "between"
       let t.4: unit = extern Prelude.println(s.3)

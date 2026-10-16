@@ -8,11 +8,8 @@ impl Table<'_> {
     /// 解いた row を分類する。`own` は、この定義の row 変数を `generics.row_vars` の順に並べたものである。
     pub fn row_yield(&self, row: &Row, own: &[RowVar]) -> RowYield {
         let row = self.resolve_row(row);
-        if row
-            .labels
-            .iter()
-            .any(|label| !self.context.is_extern_effect(label.effect))
-        {
+        // `IO` も、失敗すると `try_io` まで中断するので yield しうる (docs/spec/types.md の「row の具体化の記録」)
+        if !row.labels.is_empty() {
             return RowYield::Always;
         }
         self.tail_yield(row.tail, own)

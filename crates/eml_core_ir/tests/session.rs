@@ -5,11 +5,11 @@ use eml_core_ir::Pass;
 
 #[test]
 fn a_let_input_puts_its_value_in_a_root() {
-    insta::assert_snapshot!(session_core_text(&["let x = 41"], Pass::Translate), @r"
-    fn input$1(p.0: unit) -> int {
+    insta::assert_snapshot!(session_core_text(&["let x = 41"], Pass::Translate), @"
+    yields fn input$1(p.0: unit) -> int {
       return 41
     }
-    fn entry$input$1() -> unit {
+    yields fn entry$input$1() -> unit {
       let t.0: int = call input$1(())
       let u.1: unit = prim root_set[1](t.0)
       return u.1
@@ -22,12 +22,12 @@ fn a_binding_is_read_from_its_root_and_the_result_is_returned_as_text() {
     // 根は `tobj` なので、型の Repr への変換は box の挿入が入れる。`Show` を書いた型の値は Prelude の `show` で文字列に
     // し、書くのは `Repl` である
     insta::assert_snapshot!(session_core_text(&["let x = 41", "x + 1"], Pass::Translate), @r#"
-    fn input$2(p.0: unit) -> int {
+    yields fn input$2(p.0: unit) -> int {
       let r.1: int = prim root_get[1]()
       let t.2: int = extern Prelude.+(r.1, 1)
       return t.2
     }
-    fn entry$input$2() -> obj {
+    yields fn entry$input$2() -> obj {
       let t.0: int = call input$2(())
       let s.1: obj = extern "Prelude.Show Int.show"(t.0)
       return s.1
@@ -38,17 +38,25 @@ fn a_binding_is_read_from_its_root_and_the_result_is_returned_as_text() {
 #[test]
 fn roots_are_boxed_and_unboxed_after_the_lir_passes() {
     let stored = session_lir_text(&["let x = 41"]);
-    insta::assert_snapshot!(function(&stored, "entry$input$1"), @r"
-    fn entry$input$1() -> unit {
+    insta::assert_snapshot!(function(&stored, "entry$input$1"), @"
+    yields fn entry$input$1() -> unit {
       let t.0: int = call input$1(())
-      let t.2: tobj = box t.0
-      let u.1: unit = prim root_set[1](t.2)
+      let y.2: int = prim yielding()
+      switch y.2 { 0 -> b2, _ -> b1 }
+    b1:
+      let k.3: tobj poly = prim yield_cont_take()
+      let k.4: tobj poly = closure compose$(k.3, &entry$input$1$k0)
+      let u.5: unit = prim yield_cont_set(k.4)
+      return ()
+    b2:
+      let t.6: tobj = box t.0
+      let u.1: unit = prim root_set[1](t.6)
       return u.1
     }
     ");
     let read = session_lir_text(&["let x = 41", "x + 1"]);
-    insta::assert_snapshot!(function(&read, "input$2"), @r"
-    fn input$2(p.0: unit) -> int {
+    insta::assert_snapshot!(function(&read, "input$2"), @"
+    yields fn input$2(p.0: unit) -> int {
       let r.3: tobj = prim root_get[1]()
       let r.1: int = unbox r.3
       decref r.3
@@ -77,7 +85,7 @@ fn a_function_definition_reads_a_binding_from_its_root() {
 fn a_function_input_is_called_and_returns_fn() {
     let shown = session_core_text(&["fn x -> x + 1"], Pass::Translate);
     insta::assert_snapshot!(function(&shown, "entry$input$1"), @r#"
-    fn entry$input$1() -> obj {
+    yields fn entry$input$1() -> obj {
       let t.0: tobj = call input$1(())
       let s.1: obj = const "<fn>"
       return s.1
@@ -92,7 +100,7 @@ fn a_structural_input_calls_its_display_function() {
         Pass::Translate,
     );
     insta::assert_snapshot!(function(&shown, "entry$input$2"), @r#"
-    fn entry$input$2() -> obj {
+    yields fn entry$input$2() -> obj {
       let t.0: obj = call input$2(())
       let s.1: obj = const ""
       let r.2: obj = call display$2$0(s.1, 300, 0, 0, t.0)
@@ -202,8 +210,8 @@ fn a_list_display_walks_its_spine_in_a_tail_calling_helper() {
 #[test]
 fn a_unit_result_is_returned_without_printing() {
     let shown = session_core_text(&["println \"hi\""], Pass::Translate);
-    insta::assert_snapshot!(function(&shown, "entry$input$1"), @r"
-    fn entry$input$1() -> unit {
+    insta::assert_snapshot!(function(&shown, "entry$input$1"), @"
+    yields fn entry$input$1() -> unit {
       let t.0: unit = call input$1(())
       return t.0
     }
@@ -217,7 +225,7 @@ fn the_display_calls_the_prelude_show_even_when_shadowed() {
         Pass::Translate,
     );
     insta::assert_snapshot!(function(&shown, "entry$input$2"), @r#"
-    fn entry$input$2() -> obj {
+    yields fn entry$input$2() -> obj {
       let t.0: int = call input$2(())
       let s.1: obj = extern "Prelude.Show Int.show"(t.0)
       return s.1

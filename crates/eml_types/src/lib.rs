@@ -254,12 +254,12 @@ pub struct Instantiation {
 /// に従う (docs/spec/types.md の「row の具体化の記録」)。
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
 pub enum RowYield {
-    /// handle できるラベルを含まず、閉じているか、末尾が型検査で最後まで決まらなかった row 変数である。
+    /// ラベルを含まず、閉じているか、末尾が型検査で最後まで決まらなかった row 変数である。
     #[default]
     Never,
-    /// handle できるラベルを含むか、末尾が参照を含む定義のものでない rigid な row 変数である。
+    /// ラベルを含むか、末尾が参照を含む定義のものでない rigid な row 変数である。
     Always,
-    /// handle できるラベルを含まず、末尾が参照を含む定義の i 番目の row 変数である。
+    /// ラベルを含まず、末尾が参照を含む定義の i 番目の row 変数である。
     Var(u32),
 }
 
