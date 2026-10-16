@@ -1,0 +1,44 @@
+---
+source: crates/eml_cli/tests/ui.rs
+expression: "format!(\"--- stdout ---\\n{stdout}--- stderr ---\\n{stderr}\")"
+input_file: tests/ui/run/std/strings.em
+---
+--- stdout ---
+5
+230
+日
+Some 4
+None
+Some 0
+True
+False
+True
+True
+False
+["a", "b", "", "c"]
+[""]
+["abc"]
+["a", "b", ""]
+["", "", ""]
+["a", "b", ""]
+["one", "two", "three"]
+["a\r"]
+[""]
+[]
+x, y, z
+""
+[two words]
+[]
+Some 42
+Some 7
+Some 7
+Some 0
+Some (-9223372036854775808)
+Some 9223372036854775807
+None
+None
+None
+None
+None
+None
+--- stderr ---

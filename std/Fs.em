@@ -5,3 +5,13 @@ pub extern data File
 pub extern open : String -> <IO> File
 pub extern read_all : File -> <IO> (File, String)
 pub extern close : File -> <IO> Unit
+-- `path` のファイルを作るか切り詰めて、`text` を書く
+pub extern write_text : String -> String -> <IO> Unit
+
+-- ファイル全体を文字列として読む
+pub read_text : String -> <IO> String
+read_text path =
+  let f = open path
+  let (f, text) = read_all f
+  close f
+  text

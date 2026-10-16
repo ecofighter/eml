@@ -11,12 +11,11 @@
 - 標準入出力のハンドル: `Stdin` / `Stdout` / `Stderr` は別の型にして、取り違えを防ぐ。ハンドルは `Lin` で、バッファ付きの読み書きもハンドルにする。extern はハンドルに対する read/write の操作にとどめ、「行を流す」などのストリーム処理は標準ライブラリにエフェクトとして書く ([ロードマップ](roadmap.md) の「バイト列と `Array`」)
 - `Task a` を `Lin` にする: `Async.start` が返すタスクを、必ず `await` するか `drop` (キャンセル) させる。構造化された並行処理にする
 - `exit`: `exit : Int -> <IO> a` の組み込みにする。`never` の操作の中断と同じく `Lin` の値を後始末してから終了し、`try_io` は捕まえない。終了コードはこれで扱う ([ロードマップ](roadmap.md) の「S12 スクリプトの MVP」)
-- 最初の標準ライブラリのモジュールは `Fs` で、`std/` ツリーに `File`、`open`、`read_all`、`close` がある ([モジュールと名前解決](../spec/modules.md) の「標準ライブラリ」)。ファイル全体の読み書きは、S12 でこのモジュールに足す
-- `Prelude` の範囲: 今は `Bool`、`Ordering`、`List`、`Option`、`Result`、`println`、`not`、`|>` などの標準の演算子と fixity ([宣言](../spec/declarations.md) の標準の演算子の表)、型クラス `Eq`、`Ord`、`Show` ([宣言](../spec/declarations.md) の「Prelude のクラス」) を持つ。`eprintln` はまだない。リストを扱う関数 (`map`、`filter`、`length` など) は、S12 の標準ライブラリの spec で、`List.map` の形のモジュールと一緒に決める。`Float`、`Char`、`Num` の段で `Num` が入る
+- S12a で入れた標準ライブラリ (`Fs` の読み書き、`List`、`String`、`Env`、`Stdin`、`Proc.run`、`eprintln`) と extern の境界の方針は、[標準ライブラリ](../spec/stdlib.md) にある。S12a は、extern を小さい核にとどめ、どのスクリプトも使う少数の関数だけを eml で書いた。`replace`、並べ替え、`Option` と `Result` の補助関数、`Map` は、S12 のスクリプトの書き心地を見て S13 で決める
+- `Prelude` の範囲: 今は `Bool`、`Ordering`、`List`、`Option`、`Result`、`println`、`eprintln`、`not`、`|>` などの標準の演算子と fixity ([宣言](../spec/declarations.md) の標準の演算子の表)、型クラス `Eq`、`Ord`、`Show` ([宣言](../spec/declarations.md) の「Prelude のクラス」) を持つ。`Float`、`Char`、`Num` の段で `Num` が入る
 - モジュールの候補: `Fs`、`Path`、`Proc`、`Env`、`String`、`List`、`Map`、`Json`、`Csv`、`Toml`、`Regex`、`Http`、`Async`
 - 補間の穴は、Prelude の `Show` の `display` で文字列にする ([式](../spec/expressions.md) の「補間」)。標準ライブラリの型を穴に書けるようにするには、`Show` の instance を置く。人が読む形が `show` の形と違う型は、`display` を上書きする
-- 文字列を扱う関数 (`length`、`split` など) は、まだ Prelude にない。S12 の標準ライブラリの spec で決める
-- `Bytes` と UTF-8: `String` は常に妥当な UTF-8 である。extern は、検証付きのデコード、エンコード、バイト長、バイト位置から `Char` と次の位置を読む操作、境界を検査する切り出しにとどめる。分割、検索、反復は、S12 では Rust の extern として入れる。eml で書き直すかは後で決める ([ロードマップ](roadmap.md) の「UTF-8 と標準ライブラリ」)
+- `Bytes` と UTF-8: `String` は常に妥当な UTF-8 である。extern は、検証付きのデコード、エンコード、バイト長、バイト位置から `Char` と次の位置を読む操作、境界を検査する切り出しにとどめる。S12a の `String` の核 (`byte_length`、`byte_at`、`slice`、`find_from`) は、バイトの位置で読む今の形の核で、分割と検索は eml で書いた ([標準ライブラリ](../spec/stdlib.md) の「`String`」)。`Char` と `Bytes` を入れるときに、核をこの形に置き換える ([ロードマップ](roadmap.md) の「UTF-8 と標準ライブラリ」)
 
 ## マルチコア対応の設計からの申し送り
 

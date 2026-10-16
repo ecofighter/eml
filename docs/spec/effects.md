@@ -61,7 +61,7 @@ effect Fail where
 - extern の関数の呼び出しは、操作の呼び出しと違って `perform` 命令にならない ([Core IR](core-ir.md))。多重度は `once` として扱う。
 - handler の節の先頭に、`IO` を起こす extern の関数の名前を書いたらエラーにする (E1009)。節の先頭の名前は、まず操作として引き、見つからないときだけ extern の関数を引く。`IO` を起こす extern の関数が見つかれば E1009 で、それ以外 (純粋な extern の関数) は E1001 である。ユーザーが定義した同名の関数は、`Prelude` の extern の関数を隠さない ([モジュールと名前解決](modules.md) の「名前の解決」)。
 
-`IO` を起こす extern の関数と、その型は次のとおりである。
+`IO` を起こす extern の関数のうち、線形なファイルを扱うものは次のとおりである。ほかの標準ライブラリの関数 (`eprintln`、`Env`、`Stdin`、`Fs.write_text`、`Proc.run` など) は [標準ライブラリ](stdlib.md) にある。
 
 | 名前 | 所属 | 型 |
 |---|---|---|

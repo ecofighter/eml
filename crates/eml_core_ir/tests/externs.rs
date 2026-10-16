@@ -9,10 +9,9 @@ use eml_lir::{FALSE, TRUE, TUPLE};
 use eml_test_support::Checked;
 use eml_types::{Lin, Substitution, TypeId, TypeKind, TypeStore};
 
-/// 型の行ごとに、その型の値をそのまま返す関数を置く。型検査がその型に与える型を、関数の引数の型から読む。
+/// 型の行ごとに、その型の値をそのまま返す関数を置く。型検査がその型に与える型を、関数の引数の型から読む。標準
+/// ライブラリは使うモジュールだけを読み込むので、すべてのモジュールを import する (`probes`)。
 const PROBES: &str = "\
-import Std.Fs
-
 probe_int : Int -> Int
 probe_int x = x
 
@@ -39,8 +38,19 @@ fn probe(ty: ExternType) -> &'static str {
     }
 }
 
+/// `PROBES` の前に、Prelude のほかのすべての標準ライブラリのモジュールの import を置く。
+fn probes() -> String {
+    let imports: String = eml_hir::STD
+        .iter()
+        .filter_map(|(file, _)| file.strip_suffix(".em"))
+        .filter(|&name| name != "Prelude")
+        .map(|name| format!("import Std.{}\n", name.replace('/', ".")))
+        .collect();
+    format!("{imports}\n{PROBES}")
+}
+
 fn checked() -> Checked {
-    let checked = eml_test_support::check(PROBES);
+    let checked = eml_test_support::check(&probes());
     assert!(
         checked.diagnostics.is_empty(),
         "{}",

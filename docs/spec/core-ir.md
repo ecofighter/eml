@@ -127,7 +127,7 @@ box の挿入が足す変数の印は、[LIR](lir.md) の「box の挿入」に�
 
 #### 表の印の列
 
-- extern の行 (`eml_extern::FunctionRow`) は、`params` と `ret` と並べて `param_kinds: &'static [Linearity]` と `ret_kind: Linearity` を持つ。extern の関数は S12 まで多相にならないので、2値の `Linearity` で足りる
+- extern の行 (`eml_extern::FunctionRow`) は、`params` と `ret` と並べて `param_kinds: &'static [Linearity]` と `ret_kind: Linearity` を持つ。extern の関数は多相でないので、2値の `Linearity` で足りる
 
   | 行 | 引数 | 結果 |
   |---|---|---|
@@ -146,7 +146,7 @@ box の挿入が足す変数の印は、[LIR](lir.md) の「box の挿入」に�
 - translate の型の Repr と配置の Repr は、同じ関数 (`data_repr`) で決める
 - 配置を持つのは、translate が出す IR が指すデータ型 (Prelude の `Bool` を含む) と、組の大きさごとの配置である。extern の型と `Unit` は持たない。名前は関数と同じく、入口以外のモジュールの型を修飾する (`Prelude.Bool`)。組の配置は宣言がないので大きさだけで決まり、名前は `(,)`、`(,,)` のように、大きさより1少ないカンマを括弧で囲む。組のコンストラクタは1つで、名前は配置と同じで、フィールドはどれも `tobj` である
 - translate は、命令を出すそれぞれの所で、コンストラクタか型から配置を決める。値の型からは決めない。配置は最初に使った順に表に入れる。translate の後のパス (EP と LIR のパス) は表を変えないので、使われなくなった配置が残ることがある。番号は1回の変換の中だけで意味を持つ。VM は実行時に配置の番号を使わないので、REPL の追記も配置の番号を引き直さない ([VM](vm.md) の「追記」)
-- extern が作るデータは、比べる extern の `Bool`、`compare` の extern の `Ordering`、`Fs.read_all` の組である。`Bool` は機械の定数 `FALSE` と `TRUE` で、`Ordering` は `LT`、`EQ`、`GT` で作る。そのタグが `Prelude.Bool` と `Prelude.Ordering` の宣言の順と合うことを、テストが確かめる。組の配置は大きさだけで決まる。そのため、extern の行は配置を持たない。std の extern が名前的なデータ (`List`、`Option`、`Result`) を作るようになったら、行がその型の正規の名前を持ち、translate がその配置を表に入れる ([ロードマップ](../future/roadmap.md) の「S12 スクリプトの MVP」)
+- extern が作るデータは、比べる extern と `Std.Env.has` の `Bool`、`compare` の extern の `Ordering`、`Fs.read_all` の組である。`Bool` は機械の定数 `FALSE` と `TRUE` で、`Ordering` は `LT`、`EQ`、`GT` で作る。そのタグが `Prelude.Bool` と `Prelude.Ordering` の宣言の順と合うことを、テストが確かめる。組の配置は大きさだけで決まる。そのため、extern の行は配置を持たない。名前的なデータ (`List`、`Option`、`Result`) は extern が作らず、標準ライブラリの eml が包む ([標準ライブラリ](stdlib.md) の「extern の境界」)
 - 名前付きのレコードは、ほかの `data` と同じく、型ごとの配置に入る。名前付きのフィールドを持つコンストラクタも、フィールドの名前は持たず、宣言の順のフィールドの Repr の列を持つ
 
 ### 変換の規則

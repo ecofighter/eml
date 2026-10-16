@@ -34,6 +34,8 @@ pub data Ordering =
 -- 通らずにその場で実行するので、ユーザーは handle できない (docs/spec/effects.md の「組み込みの `IO`」)
 pub extern effect IO
 pub extern println : String -> <IO> Unit
+-- 標準エラーに1行を書く。C の stdio と同じく、標準出力は書き出さない
+pub extern eprintln : String -> <IO> Unit
 
 pub not : Bool -> Bool
 not True = False

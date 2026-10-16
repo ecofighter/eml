@@ -780,7 +780,20 @@ fn arithmetic(ext: Extern, dst: Slot, args: &[Slot]) -> Option<Op> {
         | Extern::StrEq
         | Extern::StrNe
         | Extern::StrCompare
-        | Extern::StrShow => return None,
+        | Extern::StrShow
+        | Extern::Eprintln
+        | Extern::StrByteLength
+        | Extern::StrByteAt
+        | Extern::StrSlice
+        | Extern::StrFindFrom
+        | Extern::EnvArgCount
+        | Extern::EnvArg
+        | Extern::EnvHas
+        | Extern::EnvVar
+        | Extern::StdinReadAll
+        | Extern::StdinReadLine
+        | Extern::WriteText
+        | Extern::ProcStatus => return None,
     })
 }
 

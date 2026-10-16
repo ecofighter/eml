@@ -495,8 +495,9 @@ fn extern_call<M: Mode>(
     let ops = &code.operands[at as usize..];
     let arg = |i: usize| ops[2 + i] as Slot;
     // 語の引数は、LIR の所有の規則により VM が持つ参照で、extern がそれを消費する
+    let ext = Extern::ALL[ops[0] as usize];
     unsafe {
-        match Extern::ALL[ops[0] as usize] {
+        match ext {
             Extern::Println => {
                 ctx.write_string(Stream::Out, task.get(arg(0)))?;
                 task.set(dst, Word::UNIT);
@@ -536,6 +537,52 @@ fn extern_call<M: Mode>(
             Extern::StrShow => {
                 let w = ctx.string_show(task.get(arg(0)))?;
                 task.set(dst, w);
+            }
+            Extern::Eprintln => {
+                ctx.write_string(Stream::Err, task.get(arg(0)))?;
+                task.set(dst, Word::UNIT);
+            }
+            Extern::StrByteLength => {
+                let n = ctx.string_byte_length(task.get(arg(0)))?;
+                task.set_raw(dst, n);
+            }
+            Extern::StrByteAt => {
+                let b = ctx.string_byte_at(task.raw(arg(0)), task.get(arg(1)))?;
+                task.set_raw(dst, b);
+            }
+            Extern::StrSlice => {
+                let w = ctx.string_slice(task.raw(arg(0)), task.raw(arg(1)), task.get(arg(2)))?;
+                task.set(dst, w);
+            }
+            Extern::StrFindFrom => {
+                let i =
+                    ctx.string_find_from(task.get(arg(0)), task.raw(arg(1)), task.get(arg(2)))?;
+                task.set_raw(dst, i);
+            }
+            Extern::EnvArgCount => task.set_raw(dst, ctx.env_arg_count()),
+            Extern::EnvArg => {
+                let w = ctx.env_arg(task.raw(arg(0)))?;
+                task.set(dst, w);
+            }
+            Extern::EnvHas => {
+                let b = ctx.env_has(task.get(arg(0)))?;
+                task.set_raw(dst, b);
+            }
+            Extern::EnvVar => {
+                let w = ctx.env_var(task.get(arg(0)))?;
+                task.set(dst, w);
+            }
+            Extern::StdinReadAll | Extern::StdinReadLine => {
+                let w = ctx.stdin_read(matches!(ext, Extern::StdinReadLine))?;
+                task.set(dst, w);
+            }
+            Extern::WriteText => {
+                ctx.fs_write_text(task.get(arg(0)), task.get(arg(1)))?;
+                task.set(dst, Word::UNIT);
+            }
+            Extern::ProcStatus => {
+                let code = ctx.proc_status(task.get(arg(0)), task.get(arg(1)))?;
+                task.set_raw(dst, code);
             }
             Extern::IntNeg
             | Extern::IntAdd

@@ -1,0 +1,9 @@
+---
+source: crates/eml_cli/tests/ui.rs
+expression: "format!(\"--- stdout ---\\n{stdout}--- runtime error ---\\n{error}\\n\")"
+input_file: tests/ui/run-fail/std/slice_boundary.em
+---
+--- stdout ---
+--- runtime error ---
+string slice 0..2 is not on a character boundary
+  at run-fail/std/slice_boundary.em:2:20

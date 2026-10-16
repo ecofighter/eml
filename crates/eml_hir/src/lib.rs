@@ -26,6 +26,11 @@ pub use program::*;
 pub const STD: &[(&str, &str)] = &[
     ("Prelude.em", include_str!("../../../std/Prelude.em")),
     ("Fs.em", include_str!("../../../std/Fs.em")),
+    ("List.em", include_str!("../../../std/List.em")),
+    ("String.em", include_str!("../../../std/String.em")),
+    ("Env.em", include_str!("../../../std/Env.em")),
+    ("Stdin.em", include_str!("../../../std/Stdin.em")),
+    ("Proc.em", include_str!("../../../std/Proc.em")),
 ];
 
 /// Prelude のソース。標準ライブラリの Prelude を差し替えるテストが、本文に宣言を足すのに使う。

@@ -172,15 +172,28 @@ pub enum Extern {
     StrShow,
     BoolEq,
     BoolNe,
+    Eprintln,
+    StrByteLength,
+    StrByteAt,
+    StrSlice,
+    StrFindFrom,
+    EnvArgCount,
+    EnvArg,
+    EnvHas,
+    EnvVar,
+    StdinReadAll,
+    StdinReadLine,
+    WriteText,
+    ProcStatus,
 }
 
 pub struct FunctionRow {
     pub name: &'static str,
     /// 引数の Repr。数はシグネチャの一番外側の `->` の数と等しい。
     pub params: &'static [Repr],
-    /// 結果の Repr。データを返す行は、比べる extern の `Bool`、`compare` の `Ordering`、`Std.Fs.read_all` の組である。
-    /// `Bool` と `Ordering` のタグは決まっていて、組の配置は大きさだけで決まるので、行は配置を持たない
-    /// (docs/spec/core-ir.md の「translate の配置」)。
+    /// 結果の Repr。データを返す行は、比べる extern と `Std.Env.has` の `Bool`、`compare` の `Ordering`、`Std.Fs.read_all`
+    /// の組である。`Bool` と `Ordering` のタグは決まっていて、組の配置は大きさだけで決まるので、行は配置を持たない。
+    /// `List` や `Option` は extern が作らず、標準ライブラリの eml が包む (docs/spec/core-ir.md の「translate の配置」)。
     pub ret: Repr,
     /// 引数ごとの Kind。長さは `params` と同じである。LIR の verifier が、呼び出しの引数と結果の印をこの列と比べる
     /// (docs/spec/core-ir.md の「表の印の列」)。
@@ -216,6 +229,19 @@ impl Extern {
         Extern::StrShow,
         Extern::BoolEq,
         Extern::BoolNe,
+        Extern::Eprintln,
+        Extern::StrByteLength,
+        Extern::StrByteAt,
+        Extern::StrSlice,
+        Extern::StrFindFrom,
+        Extern::EnvArgCount,
+        Extern::EnvArg,
+        Extern::EnvHas,
+        Extern::EnvVar,
+        Extern::StdinReadAll,
+        Extern::StdinReadLine,
+        Extern::WriteText,
+        Extern::ProcStatus,
     ];
 
     pub fn row(self) -> FunctionRow {
@@ -239,7 +265,7 @@ impl Extern {
                 purity,
             }
         }
-        // 標準ライブラリで線形な値を扱うのは `Fs` の3つだけなので、ほかの行はすべて `Unr` にする
+        // 標準ライブラリで線形な値を扱うのは `Fs` の `open`、`read_all`、`close` だけなので、ほかの行はすべて `Unr` にする
         fn row<const N: usize>(
             name: &'static str,
             params: &'static [Repr; N],
@@ -286,6 +312,26 @@ impl Extern {
             Extern::StrShow => row("Prelude.Show String.show", &[Obj], Obj, Purity::Pure),
             Extern::BoolEq => row("Prelude.Eq Bool.==", &[Enum, Enum], Enum, Purity::Pure),
             Extern::BoolNe => row("Prelude.Eq Bool.!=", &[Enum, Enum], Enum, Purity::Pure),
+            Extern::Eprintln => row("Prelude.eprintln", &[Obj], Unit, Purity::Effectful),
+            Extern::StrByteLength => row("Std.String.byte_length", &[Obj], Int, Purity::Pure),
+            Extern::StrByteAt => row("Std.String.byte_at", &[Int, Obj], Int, Purity::MayFail),
+            Extern::StrSlice => row("Std.String.slice", &[Int, Int, Obj], Obj, Purity::MayFail),
+            Extern::StrFindFrom => row(
+                "Std.String.find_from",
+                &[Obj, Int, Obj],
+                Int,
+                Purity::MayFail,
+            ),
+            Extern::EnvArgCount => row("Std.Env.arg_count", &[Unit], Int, Purity::Effectful),
+            Extern::EnvArg => row("Std.Env.arg", &[Int], Obj, Purity::Effectful),
+            Extern::EnvHas => row("Std.Env.has", &[Obj], Enum, Purity::Effectful),
+            Extern::EnvVar => row("Std.Env.var", &[Obj], Obj, Purity::Effectful),
+            Extern::StdinReadAll => row("Std.Stdin.read_all", &[Unit], Obj, Purity::Effectful),
+            Extern::StdinReadLine => {
+                row("Std.Stdin.read_line_raw", &[Unit], Obj, Purity::Effectful)
+            }
+            Extern::WriteText => row("Std.Fs.write_text", &[Obj, Obj], Unit, Purity::Effectful),
+            Extern::ProcStatus => row("Std.Proc.status", &[Obj, Obj], Int, Purity::Effectful),
         }
     }
 

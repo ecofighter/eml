@@ -734,7 +734,7 @@ token の表の項目は、`into_token` と `release_reuse` が添字を使い�
 
 ## extern
 
-`eml_extern` の表の関数の行25個を、`eml_rt` に語の ABI で1回だけ書く。S10 の VM と、後のネイティブのコードが同じ関数を呼ぶ。ヒープを使わない算術と比較は module `externs` の関数で、文字列と I/O の extern は `Ctx` のメソッドである。純粋な extern は、結果をバイト列や整数の spec に対して Verus で証明する。
+`eml_extern` の表の関数の行38個を、`eml_rt` に語の ABI で1回だけ書く。S10 の VM と、後のネイティブのコードが同じ関数を呼ぶ。ヒープを使わない算術と比較は module `externs` の関数で、文字列と I/O の extern は `Ctx` のメソッドである。純粋な extern は、結果をバイト列や整数の spec に対して Verus で証明する。
 
 行の番号 (`eml_extern::Extern`) から関数を引く表は `eml_rt` に置かない。VM が行の番号の `match` で各関数を呼ぶ。`match` は飛び先の表になるので、関数ポインタの表と同じ速さである。
 
@@ -746,8 +746,15 @@ token の表の項目は、`into_token` と `release_reuse` が添字を使い�
 | `Prelude.Eq String.==`、`!=`、`Prelude.Ord String.compare` | `Ctx::string_eq`、`string_ne`、`string_compare` |
 | `Prelude.++` | `Ctx::string_append` |
 | `Prelude.Show Int.show`、`Prelude.Show String.show` | `Ctx::int_show`、`string_show` |
-| `Prelude.println` | `Ctx::println` |
+| `Prelude.println`、`Prelude.eprintln` | `Ctx::write_string` (`Stream::Out`、`Stream::Err`) |
 | `Std.Fs.open`、`read_all`、`close` | `Ctx::fs_open`、`fs_read_all`、`fs_close` |
+| `Std.Fs.write_text` | `Ctx::fs_write_text` |
+| `Std.String.byte_length`、`byte_at`、`slice`、`find_from` | `Ctx::string_byte_length`、`string_byte_at`、`string_slice`、`string_find_from` |
+| `Std.Env.arg_count`、`arg`、`has`、`var` | `Ctx::env_arg_count`、`env_arg`、`env_has`、`env_var` |
+| `Std.Stdin.read_all`、`read_line_raw` | `Ctx::stdin_read` (`line` が偽と真) |
+| `Std.Proc.status` | `Ctx::proc_status` |
+
+`unit` の引数を持つ行 (`Std.Env.arg_count`、`Std.Stdin.read_all`、`read_line_raw`) は、VM が引数を読まずに呼ぶ。
 
 ### 語の ABI
 

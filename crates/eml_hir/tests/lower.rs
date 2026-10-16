@@ -166,14 +166,14 @@ fn type_variables_and_row_variables_have_separate_names() {
 
 #[test]
 fn operator_definitions_and_qualified_names() {
-    let text = "(<+>) : Int\na <+> b = a\nf : Int -> Int\nf (x) = List.length x";
+    let text = "(<+>) : Int\na <+> b = a\nf : Int -> Int\nf (x) = Report.length x";
     insta::assert_snapshot!(lower_text(text), @r"
     <+> : Int
     <+> a#0 b#1 = a#0
     f : Int -> Int
     f x#0 = (<missing> x#0)
     ---
-    E1031 4:9 unknown module qualifier `List`
+    E1031 4:9 unknown module qualifier `Report`
     ");
 }
 
