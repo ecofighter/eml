@@ -634,7 +634,6 @@ fn lower_forms(
 /// (docs/spec/modules.md の「REPL のセッション」)。
 #[test]
 fn a_file_input_is_read_as_a_file_under_its_path() {
-    // `f x = 1` の形の等式は、入力の入口では先読みの規則が違うが、ファイルの文法なら item である
     let file = "pub inc : Int -> Int\ninc x = x + 1\n\nhidden : Int\nhidden = 2\n";
     let inputs = [
         SessionInput {
@@ -658,6 +657,22 @@ fn a_file_input_is_read_as_a_file_under_its_path() {
         loaded.modules[index(module)].origin,
         ModuleOrigin::Session(1)
     );
+}
+
+/// 式だけのテキストは、入力の入口なら式の入力になる。ファイルの文法では構文の誤りで、入力の関数を作らない。
+#[test]
+fn a_file_input_does_not_take_an_expression() {
+    let inputs = [SessionInput {
+        number: 1,
+        text: "1 + 2",
+        form: InputForm::File { path: "main.em" },
+    }];
+    let (_, program, diagnostics) = lower_forms(&inputs, "", "main.em", &[]);
+    assert!(
+        diagnostics.contains(&"main.em 1:6 E0011 expected `=`".to_string()),
+        "{diagnostics:?}"
+    );
+    assert_eq!(program.input(), None);
 }
 
 /// ファイルは `eml run` の入口と同じく import できない。依存先からも、後の入力からも E1030 である。
