@@ -2,7 +2,7 @@
 
 use eml_test_support::{check, short_text};
 
-use crate::common::{check_short, check_text};
+use crate::common::{check_full, check_short, check_text};
 
 #[test]
 fn effects_must_be_in_the_signature() {
@@ -308,4 +308,12 @@ fn mismatched_row_arguments_are_errors() {
             .collect::<Vec<_>>(),
         ["E2001"]
     );
+}
+
+#[test]
+fn a_constraint_on_a_type_with_only_row_arguments_is_parenthesized() {
+    let text = "data G <e> =\n  | G Int\n\nf : G <IO> -> String\nf g = show g";
+    let report = check_full(text);
+    assert!(report.starts_with("E2006"), "{report}");
+    assert!(report.contains("`Show (G <IO>)`"), "{report}");
 }

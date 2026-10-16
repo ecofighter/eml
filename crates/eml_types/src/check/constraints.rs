@@ -290,7 +290,9 @@ pub(super) fn show_constraint(
     let class = names.class(class);
     match types.kind(ty) {
         TypeKind::Fn { .. } => format!("{class} ({shown})"),
-        TypeKind::Con { args, .. } if !args.is_empty() => format!("{class} ({shown})"),
+        TypeKind::Con { args, rows, .. } if !args.is_empty() || !rows.is_empty() => {
+            format!("{class} ({shown})")
+        }
         _ => format!("{class} {shown}"),
     }
 }
