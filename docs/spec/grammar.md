@@ -30,7 +30,8 @@ equation    ::= LIDENT apat* '=' body
 body        ::= block(stmt) | expr
 context     ::= (btype | '(' btype (',' btype)* ')') '=>'
 
-data_item   ::= 'data' UIDENT LIDENT* ('=' alts)? deriving?
+data_item   ::= 'data' UIDENT tparam* (':' UIDENT)? ('=' alts)? deriving?
+tparam      ::= LIDENT | '<' LIDENT '>'                   -- 後者は row の型引数
 alts        ::= block(alt) | alt+
 alt         ::= '|' UIDENT type_atom*
               | '|' UIDENT '{' list(ftype) '}'            -- 名前付きのフィールド
@@ -95,8 +96,9 @@ apat        ::= '_' | LIDENT | qcon | literal | '-' INT
 fpat        ::= LIDENT ('=' pat)?
 literal     ::= INT | string | RAW_STRING | CHAR
 
-type        ::= btype ('->' row? type)?
-btype       ::= qcon type_atom* | type_atom
+type        ::= 'once'? btype ('->' row? type)?           -- 'once' の後ろは関数型
+btype       ::= qcon targ* | type_atom
+targ        ::= type_atom | row                           -- row は row の型引数
 type_atom   ::= qcon | LIDENT
               | '(' type ')' | '(' type (',' type)+ ')'
 row         ::= '<' '>' | '<' LIDENT '>' | '<' effect (',' effect)* ('|' LIDENT)? '>'
@@ -109,7 +111,7 @@ command     ::= CMD_START (CMD_TEXT | ESCAPE | '\{' '..'? expr INTERP_END)* CMD_
 ## 文法上の補足
 
 - `import_item` は、ファイルの先頭で宣言より前に書く。宣言の後の `import_item` は E0011 にする。`import_name` の `'(' OP ')'` は `:` で始まらない演算子なので、`((:+))` も E0011 にする。CST はどちらも組む ([モジュールと名前解決](modules.md) の「import」)
-- `extern` は宣言の修飾子で、`pub` の後に書く。後ろに続けられるのは、等式のないシグネチャ、`=` のない型引数なしの `data`、型引数なしの `effect` だけである。`effect` には、普通の `effect` と同じく `where` と操作の並びを書ける。ほかの形 (`extern type`、`extern infixl`、`extern data T = …`、`extern effect E = …`、型引数のある `data` と `effect`、`extern pub`) は E0011 にする。`extern` を書けるのは標準ライブラリのモジュールだけで、ユーザーのモジュールに書くと HIR で E1033 になる ([宣言](declarations.md) の「`extern`」)
+- `extern` は宣言の修飾子で、`pub` の後に書く。後ろに続けられるのは、等式のないシグネチャ、`=` と Kind の宣言のない型引数なしの `data`、型引数なしの `effect` だけである。`effect` には、普通の `effect` と同じく `where` と操作の並びを書ける。ほかの形 (`extern type`、`extern infixl`、`extern data T = …`、`extern effect E = …`、型引数のある `data` と `effect`、`extern pub`) は E0011 にする。`extern` を書けるのは標準ライブラリのモジュールだけで、ユーザーのモジュールに書くと HIR で E1033 になる ([宣言](declarations.md) の「`extern`」)
 - 文脈 `context` は、型として読める形 (`Eq a`、`(Eq a, Show b)`) の後に `=>` を書いたものである。parser は、`signature` と `op_decl` の `:` の後と、`class` と `instance` のキーワードの後で、括弧の入れ子の外の `=>` が型の終わりより前にあるかを先読みし、あれば文脈として読む。括弧の外の `->`、`=`、`where` とブロックの始まりは文脈の後ろにしか現れないので、そこで先読みをやめる (中置のコンストラクタの `alt` の先読みと同じ形)。CST は `CONTEXT` の節点の下に、制約ごとの `CONSTRAINT` を置く。制約の形 (クラスの名前と1つの型変数) は HIR で検査する (E1040)
 - 文脈の構文があるのは、`signature` (トップレベルの関数、extern の関数、クラスのメソッド)、`op_decl`、`class` と `instance` の頭である。extern のシグネチャと操作のシグネチャの文脈は、構文として読んだうえで HIR が E1040 にする ([宣言](declarations.md) の「宣言の検査」)。本体の型の明示 `(e : T)`、ラムダの引数の型、`data` のフィールドの型には文脈の構文がなく、そこに書いた `=>` は E0011 になる
 - `pub` は `class` に付けられる。`pub instance` は E0011 にする。instance は名前を持たず、いつもプログラム全体で見えるためである ([モジュールと名前解決](modules.md) の「instance の一貫性」)。`class` と `instance` のブロックの中の `pub` も E0011 にする。メソッドはクラスと一緒に公開するためである
@@ -127,6 +129,8 @@ command     ::= CMD_START (CMD_TEXT | ESCAPE | '\{' '..'? expr INTERP_END)* CMD_
   ```
 - 型の位置では、`<` で始まる演算子のトークン (`<>` など) と `>` で始まる演算子のトークン (`>->` など) を、parser が分割して読む (Rust が `>>` を分割するのと同じ)。`->` の直後に row を空白なしで書いた `-><` は、lexer が `->` と `<` に分ける ([字句](lexical.md) の「演算子」)
 - 型の位置での `<` は row の開始だけを意味する。レイアウト段は、`->` の直後の `<` を row の始まりとして括弧に数える ([レイアウト規則](layout.md) の規則 4)
+- `once` は、後ろに続く関数型の一番外側の矢印に付く。`once a -> b -> c` の `once` は `a -> b -> c` の最初の矢印に付き、返す `b -> c` には付かない。`a -> once b -> c` の `once` は、右の関数型 `once b -> c` に付く。引数の位置の関数型は括弧で包む (`(once a -> b) -> c`)。`once` の後ろに `->` が続かなければ E0011 にする ([型と Kind](types.md) の「1回だけ呼べる関数の型」)
+- `data` の型引数の `<e>` は row の型引数で、`<` と `>` の間に書けるのは row 変数の名前1つだけである (それ以外は E0011)。型の中の型引数の位置に書く `<…>` は row である ([型と Kind](types.md) の「row の型引数」)。`:` 以降の `UIDENT` は Kind の宣言で、名前の検査は HIR が行う ([型と Kind](types.md) の「`Lin` の宣言」)。`extern data` の後ろに `:` を書いたら E0011 にする
 - リストの型の構文は `List a` だけで、`[a]` の形はない。型の位置の `[` は E0011 にする
 - 式の `qcon '{'` は、`{` の後が `}`、`,`、`=` か、`LIDENT` の後に `=`、`,`、`}` が続くときだけ、作る式として1つの `atom` に読む。そのほかの `{` は、引数としての更新の始まりである。更新の元の値は `,` や `=` で始まらないので、`C { , }` や `C { = 1 }` は作る式として読み、フィールドの並びの誤りにする。そのため `Some { p | age = 1 }` は、`Some` に更新を渡す式として読める。作る式は適用より強く結びつくので、`Some Person { … }` は `Some (Person { … })` と読む (Haskell と同じ)
 - 更新の元の値は `op_expr` として読む。`if`、`match`、`handle`、`fn`、`let ... in` の形は、演算の項と同じく括弧が要る (E0012)。`match` の枝の `|` と、更新の `|` を取り違えないためである。`{ p | }` のようにフィールドがなければ、フィールドを期待する E0011 にする
