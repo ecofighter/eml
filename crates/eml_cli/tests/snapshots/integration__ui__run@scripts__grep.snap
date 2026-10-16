@@ -1,0 +1,11 @@
+---
+source: crates/eml_cli/tests/ui.rs
+expression: "format!(\"--- stdout ---\\n{stdout}--- stderr ---\\n{diagnostics}{stderr}{written}{exit}\")"
+input_file: tests/ui/run/scripts/grep/main.em
+---
+--- stdout ---
+a.txt:2:エラー: 設定が見つからない
+a.txt:5:エラー: 再試行する
+-:1:エラー: 標準入力の1行目
+-:3:標準のエラー出力
+--- stderr ---
