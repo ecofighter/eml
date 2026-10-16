@@ -4,7 +4,7 @@
 #[cfg(verus_only)]
 use super::proof::*;
 use super::*;
-use crate::externs::{Fault, IoOp, TUPLE};
+use crate::externs::{Fault, IoOp, TUPLE, Utf8Source};
 use crate::host::{File, ReadError, Stream, host_flush, host_open, host_write_line, read_text};
 #[cfg(verus_only)]
 use vstd::string::StringSliceAdditionalSpecFns;
@@ -274,7 +274,7 @@ impl<M: Mode> Ctx<M> {
                         self.lemma_printed(s0, h1, path);
                     }
                 }
-                Err(Fault::Io { op: IoOp::Open, path: p, reason })
+                Err(Fault::Io { op: IoOp::Open, name: p, reason })
             },
         }
     }
@@ -297,7 +297,7 @@ impl<M: Mode> Ctx<M> {
             final(self).evv_spec() == old(self).evv_spec(),
             final(self).yield_spec() == old(self).yield_spec(),
             r is Ok || (r matches Err(Fault::Io { op: IoOp::Read, .. })) || (r matches Err(
-                Fault::NotUtf8 { .. },
+                Fault::NotUtf8(_),
             )) || (r matches Err(Fault::Stopped(_))) || (r matches Err(Fault::Heap(_))),
             (r matches Err(Fault::Heap(_))) ==> *final(self) == *old(self)
                 || final(self).heap_spec().kept_live(old(self).heap_spec()),
@@ -358,8 +358,14 @@ impl<M: Mode> Ctx<M> {
                 }
                 return Err(
                     match e {
-                        ReadError::Io(path, reason) => Fault::Io { op: IoOp::Read, path, reason },
-                        ReadError::NotUtf8(path) => Fault::NotUtf8 { path },
+                        ReadError::Io(path, reason) => Fault::Io {
+                            op: IoOp::Read,
+                            name: path,
+                            reason,
+                        },
+                        ReadError::NotUtf8(path) => Fault::NotUtf8(
+                            Box::new(Utf8Source::File(path)),
+                        ),
                         ReadError::Stopped(stop) => Fault::Stopped(stop),
                     },
                 );

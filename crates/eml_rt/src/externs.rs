@@ -39,6 +39,9 @@ pub enum ArithFault {
 pub enum IoOp {
     Open,
     Read,
+    Write,
+    /// 子のプロセスの起動。
+    Run,
 }
 
 /// I/O の誤りの理由。文字列でなく値で分けるのは、S12 の `try_io` が eml の `IOError` の値に変えるためである。
@@ -46,20 +49,50 @@ pub enum IoOp {
 pub enum IoReason {
     NotFound,
     PermissionDenied,
+    /// その実行で使えない入出力 (REPL の標準入力)。
+    NotAvailable,
     Other,
 }
 
-/// extern の誤り。位置は VM が付けるので持たない。
+/// UTF-8 でなかった入力。
+#[derive(Debug, PartialEq, Eq)]
+pub enum Utf8Source {
+    /// `open` に渡されたままのパス。
+    File(Box<str>),
+    Stdin,
+    /// `Env.args ()` のリストの 0 から数えた位置。
+    Arg(i64),
+    EnvVar(Box<str>),
+}
+
+/// 範囲の外の位置。
+#[derive(Debug, PartialEq, Eq)]
+pub enum IndexFault {
+    /// 文字列のバイトの位置 (`byte_at`、`find_from`)。
+    String { index: i64, len: i64 },
+    /// `slice` の範囲が文字列の外にある。
+    Slice { start: i64, end: i64, len: i64 },
+    /// `slice` の範囲の端が文字の境界にない。
+    Boundary { start: i64, end: i64 },
+    /// `Env.arg` の位置。
+    Arg { index: i64, count: i64 },
+}
+
+/// extern の誤り。位置は VM が付けるので持たない。24 バイトに収めるため (`faults_stay_small`)、まれな誤りの中身は
+/// `Box` に入れる。
 #[derive(Debug, PartialEq, Eq)]
 pub enum Fault {
     Heap(HeapError),
     Arith(ArithFault),
     /// 書き込みの誤りの `io::Error` の文言。
     Output(Box<str>),
-    /// `path` は `open` に渡されたままのパスである。
-    Io { op: IoOp, path: Box<str>, reason: IoReason },
-    NotUtf8 { path: Box<str> },
-    /// `read_all` が読む途中で止める語か確保量の上限に当たった。
+    /// `name` は extern に渡されたままのパスか、`Run` ならプログラムの名前である。
+    Io { op: IoOp, name: Box<str>, reason: IoReason },
+    /// 標準入力の読みの誤り。
+    Stdin(IoReason),
+    NotUtf8(Box<Utf8Source>),
+    Index(Box<IndexFault>),
+    /// 読む途中か子を待つ間に、止める語か確保量の上限に当たった。
     Stopped(Stop),
 }
 
@@ -354,6 +387,7 @@ impl fmt::Display for IoReason {
         f.write_str(match self {
             IoReason::NotFound => "not found",
             IoReason::PermissionDenied => "permission denied",
+            IoReason::NotAvailable => "not available",
             IoReason::Other => "I/O error",
         })
     }
@@ -365,14 +399,47 @@ impl fmt::Display for Fault {
             Fault::Heap(e) => write!(f, "{e}"),
             Fault::Arith(e) => write!(f, "{e}"),
             Fault::Output(e) => write!(f, "cannot write the output: {e}"),
-            Fault::Io { op, path, reason } => {
+            Fault::Io { op, name, reason } => {
                 let verb = match op {
                     IoOp::Open => "open",
                     IoOp::Read => "read",
+                    IoOp::Write => "write",
+                    IoOp::Run => "run",
                 };
-                write!(f, "cannot {verb} `{path}`: {reason}")
+                write!(f, "cannot {verb} `{name}`: {reason}")
             }
-            Fault::NotUtf8 { path } => write!(f, "`{path}` is not valid UTF-8"),
+            Fault::Stdin(reason) => write!(f, "cannot read the standard input: {reason}"),
+            Fault::NotUtf8(source) => match &**source {
+                Utf8Source::File(path) => write!(f, "`{path}` is not valid UTF-8"),
+                Utf8Source::Stdin => f.write_str("the standard input is not valid UTF-8"),
+                Utf8Source::Arg(index) => write!(f, "argument {index} is not valid UTF-8"),
+                Utf8Source::EnvVar(name) => {
+                    write!(f, "environment variable `{name}` is not valid UTF-8")
+                }
+            },
+            Fault::Index(fault) => match **fault {
+                IndexFault::String { index, len } => {
+                    write!(f, "string index {index} is out of range for length {len}")
+                }
+                IndexFault::Slice { start, end, len } => {
+                    write!(
+                        f,
+                        "string slice {start}..{end} is out of range for length {len}"
+                    )
+                }
+                IndexFault::Boundary { start, end } => {
+                    write!(
+                        f,
+                        "string slice {start}..{end} is not on a character boundary"
+                    )
+                }
+                IndexFault::Arg { index, count } => {
+                    write!(
+                        f,
+                        "argument index {index} is out of range for {count} arguments"
+                    )
+                }
+            },
             Fault::Stopped(s) => write!(f, "{s}"),
         }
     }

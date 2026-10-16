@@ -75,7 +75,7 @@ fn bools_compare_by_tag() {
 /// 文言は docs/spec/lir.md の「実行時エラー」の一覧のとおりである。
 #[test]
 fn faults_print_their_listed_texts() {
-    let cases: [(Fault, &str); 9] = [
+    let cases: [(Fault, &str); 19] = [
         (ArithFault::DivisionByZero.into(), "division by zero"),
         (ArithFault::IntegerOverflow.into(), "integer overflow"),
         (
@@ -85,7 +85,7 @@ fn faults_print_their_listed_texts() {
         (
             Fault::Io {
                 op: IoOp::Open,
-                path: "a.txt".into(),
+                name: "a.txt".into(),
                 reason: IoReason::NotFound,
             },
             "cannot open `a.txt`: not found",
@@ -93,7 +93,7 @@ fn faults_print_their_listed_texts() {
         (
             Fault::Io {
                 op: IoOp::Open,
-                path: "p".into(),
+                name: "p".into(),
                 reason: IoReason::PermissionDenied,
             },
             "cannot open `p`: permission denied",
@@ -101,16 +101,66 @@ fn faults_print_their_listed_texts() {
         (
             Fault::Io {
                 op: IoOp::Read,
-                path: "d".into(),
+                name: "d".into(),
                 reason: IoReason::Other,
             },
             "cannot read `d`: I/O error",
         ),
         (
-            Fault::NotUtf8 {
-                path: "b.bin".into(),
-            },
+            Fault::NotUtf8(Box::new(Utf8Source::File("b.bin".into()))),
             "`b.bin` is not valid UTF-8",
+        ),
+        (
+            Fault::Io {
+                op: IoOp::Write,
+                name: "out.txt".into(),
+                reason: IoReason::PermissionDenied,
+            },
+            "cannot write `out.txt`: permission denied",
+        ),
+        (
+            Fault::Io {
+                op: IoOp::Run,
+                name: "rsync".into(),
+                reason: IoReason::NotFound,
+            },
+            "cannot run `rsync`: not found",
+        ),
+        (
+            Fault::Stdin(IoReason::NotAvailable),
+            "cannot read the standard input: not available",
+        ),
+        (
+            Fault::NotUtf8(Box::new(Utf8Source::Stdin)),
+            "the standard input is not valid UTF-8",
+        ),
+        (
+            Fault::NotUtf8(Box::new(Utf8Source::Arg(2))),
+            "argument 2 is not valid UTF-8",
+        ),
+        (
+            Fault::NotUtf8(Box::new(Utf8Source::EnvVar("LANG".into()))),
+            "environment variable `LANG` is not valid UTF-8",
+        ),
+        (
+            Fault::Index(Box::new(IndexFault::String { index: 5, len: 3 })),
+            "string index 5 is out of range for length 3",
+        ),
+        (
+            Fault::Index(Box::new(IndexFault::Slice {
+                start: 2,
+                end: 9,
+                len: 3,
+            })),
+            "string slice 2..9 is out of range for length 3",
+        ),
+        (
+            Fault::Index(Box::new(IndexFault::Boundary { start: 1, end: 3 })),
+            "string slice 1..3 is not on a character boundary",
+        ),
+        (
+            Fault::Index(Box::new(IndexFault::Arg { index: 3, count: 2 })),
+            "argument index 3 is out of range for 2 arguments",
         ),
         (
             HeapError::WrongKind.into(),
@@ -553,7 +603,7 @@ fn a_missing_file_is_a_fault_naming_its_path<M: Mode>() {
             ctx.fs_open(p),
             Err(Fault::Io {
                 op: IoOp::Open,
-                path: "missing.txt".into(),
+                name: "missing.txt".into(),
                 reason: IoReason::NotFound
             })
         );
@@ -590,7 +640,7 @@ fn a_failed_read_closes_the_file<M: Mode>() {
             ctx.fs_read_all(f),
             Err(Fault::Io {
                 op: IoOp::Read,
-                path: "broken.txt".into(),
+                name: "broken.txt".into(),
                 reason: IoReason::Other
             })
         );
@@ -599,9 +649,7 @@ fn a_failed_read_closes_the_file<M: Mode>() {
         let f = ctx.fs_open(p).unwrap();
         assert_eq!(
             ctx.fs_read_all(f),
-            Err(Fault::NotUtf8 {
-                path: "bad.bin".into()
-            })
+            Err(Fault::NotUtf8(Box::new(Utf8Source::File("bad.bin".into()))))
         );
         assert_eq!(drops.load(Ordering::Relaxed), 2);
     }

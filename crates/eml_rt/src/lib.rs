@@ -27,7 +27,7 @@ mod word;
 
 pub use control::{Control, Limits, Stop};
 pub use error::HeapError;
-pub use externs::{ArithFault, Fault, IoOp, IoReason};
+pub use externs::{ArithFault, Fault, IndexFault, IoOp, IoReason, Utf8Source};
 pub use frozen::Frozen;
 pub use heap::{Ctx, CtxStats, Heap, Stats, Token};
 pub use host::{Buffering, Host, HostRef, Opened, StdHost, Stream};

@@ -760,20 +760,23 @@ token の表の項目は、`into_token` と `release_reuse` が添字を使い�
 
 ### 誤り
 
-算術の誤りは `ArithFault` (`DivisionByZero` と `IntegerOverflow`) で、`Copy` である。`Result<i64, ArithFault>` は 16 バイトで、展開されないときも2つのレジスタで返る。`Ctx` のメソッドの誤りは `Fault` (24 バイト) で、`From<ArithFault>` と `From<HeapError>` を持つ。
+算術の誤りは `ArithFault` (`DivisionByZero` と `IntegerOverflow`) で、`Copy` である。`Result<i64, ArithFault>` は 16 バイトで、展開されないときも2つのレジスタで返る。`Ctx` のメソッドの誤りは `Fault` (24 バイト) で、`From<ArithFault>` と `From<HeapError>` を持つ。24 バイトに収めるため、まれな誤り (`NotUtf8` と `Index`) の中身は `Box` に入れる。
 
 | `Fault` | 中身 | 表示 |
 |---|---|---|
 | `Heap(HeapError)` | 検査モードの確かめと解放の連鎖の誤り | `HeapError` の表示 |
 | `Arith(ArithFault)` | 算術の誤り | `division by zero`、`integer overflow` |
 | `Output(Box<str>)` | 書き込みの誤りの `io::Error` の文言 | ``cannot write the output: {e}`` |
-| `Io { op, path, reason }` | `op` は `Open` か `Read`、`reason` は `IoReason` (`NotFound`、`PermissionDenied`、`Other`) | ``cannot open `{path}`: {reason}``、``cannot read `{path}`: {reason}``。理由は `not found`、`permission denied`、`I/O error` |
-| `NotUtf8 { path }` | 読んだ中身が UTF-8 でない | ``` `{path}` is not valid UTF-8 ``` |
-| `Stopped(Stop)` | `Fs.read_all` が、読む途中で止める語か確保量の上限に当たった | `interrupted`、`the memory limit is exceeded`、`the call depth limit is exceeded` (`Stop` の表示) |
+| `Io { op, name, reason }` | `op` は `Open`、`Read`、`Write`、`Run`、`reason` は `IoReason` (`NotFound`、`PermissionDenied`、`NotAvailable`、`Other`) | ``cannot open `{name}`: {reason}``、``cannot read `{name}`: {reason}``、``cannot write `{name}`: {reason}``、``cannot run `{name}`: {reason}``。理由は `not found`、`permission denied`、`not available`、`I/O error` |
+| `Stdin(IoReason)` | 標準入力の読みの誤り | ``cannot read the standard input: {reason}`` |
+| `NotUtf8(Box<Utf8Source>)` | 読んだ中身が UTF-8 でない。`Utf8Source` はファイル (パス)、標準入力、引数 (`Env.args ()` の位置)、環境変数 (名前) | ``` `{path}` is not valid UTF-8 ```、`the standard input is not valid UTF-8`、`argument {index} is not valid UTF-8`、``environment variable `{name}` is not valid UTF-8`` |
+| `Index(Box<IndexFault>)` | 範囲の外の位置。`IndexFault` は、文字列の位置 (`byte_at`、`find_from`)、`slice` の範囲、`slice` の境界、`Env.arg` の位置 | ``string index {index} is out of range for length {len}``、``string slice {start}..{end} is out of range for length {len}``、``string slice {start}..{end} is not on a character boundary``、``argument index {index} is out of range for {count} arguments`` |
+| `Stopped(Stop)` | `Fs.read_all` と標準入力の読みが読む途中で、`Proc.status` が子を起動する前か待つ間に、止める語か確保量の上限に当たった | `interrupted`、`the memory limit is exceeded`、`the call depth limit is exceeded` (`Stop` の表示) |
 
-- `path` は `open` に渡されたパスの文字列そのもの (`file_root` をつなぐ前) である
+- `name` は extern に渡されたパスの文字列そのもの (`file_root` をつなぐ前) か、`Run` ならプログラムの名前である
+- `NotAvailable` は、その実行の Host が持たない入出力である。REPL の標準入力と、組み込み先の Host が実装しなかったメソッドが当たる (下の「Host」)
 - I/O の誤りを文字列でなく値の種類で分けるのは、S12 の `try_io` が I/O の誤りを eml の `IOError` の値に変えるためである ([ロードマップ](../future/roadmap.md) の「S12 スクリプトの MVP」)
-- `Arith`、`Output`、`Io`、`NotUtf8` の表示は、[LIR](lir.md) の「実行時エラー」の文言と1文字も違わない。これは verifier を通るプログラムでの約束である。`Heap(_)` の表示は `eml_rt::HeapError` のものである
+- `Arith`、`Output`、`Io`、`Stdin`、`NotUtf8`、`Index` の表示は、[LIR](lir.md) の「実行時エラー」の文言と1文字も違わない。これは verifier を通るプログラムでの約束である。`Heap(_)` の表示は `eml_rt::HeapError` のものである
 - 位置 (`at path:line:column`) を付けるのは VM の役で、`Fault` は持たない
 - VM は `Stopped` を、安全点の `Ctx::poll` が返す `Err(Stop)` と同じに扱う
 
@@ -784,7 +787,7 @@ token の表の項目は、`into_token` と `release_reuse` が添字を使い�
 | 誤り | 約束 |
 |---|---|
 | `Heap(_)` | どの確かめも、状態を変える前、Host を呼ぶ前に行う。ヒープは変わらず、何も書かず、何も開かない。確かめるのは、種類 (文字列か、`File` の `Foreign` か)、`decref` が通ること (同じ物体を2つの引数に渡したときは2回続けて通ること。`string_concat` と同じ)、`Fs.read_all` の `File` が一意であること (`foreign_unique`) である。ただし `fs_read_all` と `fs_close` は、確かめた後で `File` を手放す解放の連鎖の誤りも返しうる (下の項) |
-| `Output`、`Io`、`NotUtf8`、`Stopped` | 引数は成功のときと同じく消費する。`Fs.read_all` は `File` を手放し (破棄処理が閉じる)、読んだバイト列を手放し、結果を作らない。ほかのヒープは変わらず、`held_ok` は保たれる。S11 の REPL が続けて使うためである |
+| `Output`、`Io`、`Stdin`、`NotUtf8`、`Index`、`Stopped` | 引数は成功のときと同じく消費する。`Fs.read_all` は `File` を手放し (破棄処理が閉じる)、読んだバイト列を手放し、結果を作らない。`slice` は範囲と境界を確保の前に確かめ、誤りなら何も作らない。引数を受けない extern (`Env.arg`、標準入力の読み) は、誤りならヒープを変えない。ほかのヒープは変わらず、`held_ok` は保たれる。S11 の REPL が続けて使うためである |
 | `ArithFault` | ヒープに触れない |
 
 - `fs_read_all` と `fs_close` の `Heap(_)` は、ヒープが変わらないか、`File` を手放す解放の連鎖で起きたモデルが照らさない誤り (上の「検査モードの約束」) である。モデルは `Foreign` の物体が走査する語を持たないことを知らないので、約束はこの形になる。基本操作の `evv_set`、`ev_set_state`、`yield_finish` と同じく、その後は `Ctx` を落とすことしかできない
