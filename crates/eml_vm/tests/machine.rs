@@ -480,3 +480,59 @@ fn main() -> unit {
         );
     }
 }
+
+/// 文字列を返す入口。`run_shown` が結果を写して手放すので、検査モードの `close` はリークを報告しない
+/// (docs/spec/vm.md の「追記」)。
+const SHOWN: &str = "\
+fn shown() -> obj {
+  let s.0: obj = const \"x = \"
+  let n.1: obj = extern \"Prelude.Show Int.show\"(42)
+  let t.2: obj = extern \"Prelude.++\"(s.0, n.1)
+  let u.3: obj = const \"printed\"
+  let v.4: unit = extern Prelude.println(u.3)
+  return t.2
+}
+";
+
+#[test]
+fn a_shown_entry_returns_its_text_after_the_output() {
+    for debug_heap in [true, false] {
+        let (host, out) = capture_host(Default::default());
+        let config = RunConfig::default().with_debug_heap(debug_heap);
+        let mut machine = AnyMachine::new(&config, host);
+        let program = parse(SHOWN);
+        eml_lir::verify(&program).unwrap_or_else(|error| panic!("{error}"));
+        let loaded = machine.load(&program).unwrap();
+        let (_, text) = machine.run_shown(loaded.entry, 100).unwrap();
+        assert_eq!(text, "x = 42");
+        // 入口が書いた行は、結果を返す前に書き出してある
+        assert_eq!(out.contents(), "printed\n");
+        let (_, text) = machine.run_shown(loaded.entry, 3).unwrap();
+        assert_eq!(text, "x =");
+        machine.write_line("x = 42 : Int").unwrap();
+        assert_eq!(out.contents(), "printed\nprinted\nx = 42 : Int\n");
+        machine.close().unwrap_or_else(|error| panic!("{error}"));
+    }
+}
+
+/// `Unit` を返す入口は文字列を返さないので、`run_shown` は内部の誤りにする。速いモードで文字列でない語を読まないため
+/// である。
+#[test]
+fn a_shown_entry_must_return_an_object() {
+    let (host, _) = capture_host(Default::default());
+    let mut machine = Machine::<Fast>::new(RunConfig::default().control, host);
+    let loaded = machine
+        .load(&parse("fn main() -> unit {\n  return ()\n}\n"))
+        .unwrap();
+    let error = machine.run_shown(loaded.entry, 10).unwrap_err();
+    assert!(
+        matches!(
+            error,
+            RuntimeError::Fault {
+                fault: VmFault::Internal(_),
+                ..
+            }
+        ),
+        "{error:?}"
+    );
+}

@@ -6,7 +6,7 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex, PoisonError};
 
 use eml_lir::Program;
-use eml_rt::{Buffering, Checked, Ctx, Fast, HeapError, Mode, Stats, StdHost};
+use eml_rt::{Buffering, Checked, Ctx, Fast, Fault, HeapError, Mode, Stats, StdHost};
 
 mod apply;
 mod code;
@@ -175,7 +175,32 @@ impl<M: Mode> Machine<M> {
     /// 根は手放さず、次の実行に残す。続けられる誤りの後は、根から届く物体を新しいヒープに写して古いヒープを捨て、
     /// 元の誤りを返す。回復が失敗したら `Unrecovered` を返す (docs/spec/vm.md の「追記」)。
     pub fn run(&mut self, entry: u32) -> Result<RunStats, RuntimeError> {
-        match self.run_entry(entry) {
+        self.run_recovering(entry, None).map(|(stats, _)| stats)
+    }
+
+    /// 文字列を返す入口の関数を実行し、結果の文字列の先頭 `max_chars` 文字を写して返す。REPL が式の入力の値を書いた
+    /// 文字列を受け取るのに使う。LIR は入口が文字列を返すことを印さないので、呼ぶ側が文字列を返す入口にだけ使う。誤りと
+    /// 回復は `run` と同じである (docs/spec/vm.md の「追記」)。
+    pub fn run_shown(
+        &mut self,
+        entry: u32,
+        max_chars: usize,
+    ) -> Result<(RunStats, String), RuntimeError> {
+        self.run_recovering(entry, Some(max_chars))
+            .map(|(stats, text)| (stats, text.expect("a shown run copies its result")))
+    }
+
+    /// `line` を Host の標準出力に1行として書き、書き出す。REPL が整形した結果を書くのに使う。
+    pub fn write_line(&mut self, line: &str) -> Result<(), Fault> {
+        self.ctx.print_line(line)
+    }
+
+    fn run_recovering(
+        &mut self,
+        entry: u32,
+        shown: Option<usize>,
+    ) -> Result<(RunStats, Option<String>), RuntimeError> {
+        match self.run_entry(entry, shown) {
             Err(cause) if !cause.is_broken() => Err(match self.recover() {
                 Ok(()) => cause,
                 Err(reason) => RuntimeError::Unrecovered {
@@ -208,14 +233,45 @@ impl<M: Mode> Machine<M> {
         }
     }
 
-    fn run_entry(&mut self, entry: u32) -> Result<RunStats, RuntimeError> {
+    fn run_entry(
+        &mut self,
+        entry: u32,
+        shown: Option<usize>,
+    ) -> Result<(RunStats, Option<String>), RuntimeError> {
         let (code, ctx) = (&self.code, &mut self.ctx);
         let mut task = Task::new(code, entry, self.max_depth);
+        if shown.is_some() {
+            if !code.functions[entry as usize].ret_rc {
+                return Err(code.error(
+                    vm::Failure {
+                        fault: VmFault::Internal("a shown entry does not return a string"),
+                        pc: task.pc,
+                    },
+                    &task,
+                ));
+            }
+            task.keep_result = true;
+        }
         let mut counts = RunCounts::default();
         let result = vm::run(code, ctx, &mut task, &mut counts);
+        // 結果は `Finish` が手放さずに残した、VM の持つ参照である。書き出しの前に写すので、写すときの誤りも
+        // 書き出しの誤りより先に報告する (docs/spec/vm.md の「誤り、止めること、終わり」)
+        let copied = match (&result, shown) {
+            (Ok(()), Some(max_chars)) => Some(unsafe { ctx.copy_string(task.get(0), max_chars) }),
+            _ => None,
+        };
         // 誤りを返す前にも書き出す。`> out 2>&1` のときに出力と誤りの順を保つためである
         let flushed = ctx.flush();
         result.map_err(|failure| code.error(failure, &task))?;
+        let text = copied.transpose().map_err(|fault| {
+            code.error(
+                vm::Failure {
+                    fault: fault.into(),
+                    pc: task.last_ret,
+                },
+                &task,
+            )
+        })?;
         flushed.map_err(|fault| {
             code.error(
                 vm::Failure {
@@ -238,7 +294,7 @@ impl<M: Mode> Machine<M> {
             .map_err(|error| heap_fault(error, code.function_name(task.last_ret, &task)))?;
         let c = ctx.stats();
         let h = self.heap_work();
-        Ok(RunStats {
+        let stats = RunStats {
             evidence_steps: c.evidence_steps,
             yields: c.yields,
             yield_frames: c.yield_frames,
@@ -254,7 +310,8 @@ impl<M: Mode> Machine<M> {
             } else {
                 0
             },
-        })
+        };
+        Ok((stats, text))
     }
 
     /// 実行の状態を閉じる。根の参照は VM が持つので先に手放す。検査モードでは、その後にヒープの不変条件を確かめ、
@@ -315,6 +372,24 @@ impl AnyMachine {
         match self {
             AnyMachine::Fast(machine) => machine.run(entry),
             AnyMachine::Checked(machine) => machine.run(entry),
+        }
+    }
+
+    pub fn run_shown(
+        &mut self,
+        entry: u32,
+        max_chars: usize,
+    ) -> Result<(RunStats, String), RuntimeError> {
+        match self {
+            AnyMachine::Fast(machine) => machine.run_shown(entry, max_chars),
+            AnyMachine::Checked(machine) => machine.run_shown(entry, max_chars),
+        }
+    }
+
+    pub fn write_line(&mut self, line: &str) -> Result<(), Fault> {
+        match self {
+            AnyMachine::Fast(machine) => machine.write_line(line),
+            AnyMachine::Checked(machine) => machine.write_line(line),
         }
     }
 

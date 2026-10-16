@@ -26,6 +26,8 @@ pub struct Task {
     pub(crate) stack_limit: usize,
     /// 入口の関数の番号。どの関数にも属さない命令の誤りの名前と、`Finish` が結果を手放すかを決める。
     pub(crate) entry: u32,
+    /// `Finish` が結果を手放さずに残す。`Machine::run_shown` が、実行の後に結果の文字列を写して手放す。
+    pub(crate) keep_result: bool,
 }
 
 /// 誤りと、それが起きた命令の位置。
@@ -54,6 +56,7 @@ impl Task {
             scratch: Vec::new(),
             stack_limit: stack_limit(max_depth),
             entry: index,
+            keep_result: false,
         }
     }
 
@@ -474,7 +477,7 @@ fn call<M: Mode>(code: &CodeBase<M>, task: &mut Task, dst: Slot, at: u32) {
 
 /// 入口の関数の結果を手放す (docs/spec/vm.md の「誤り、止めること、終わり」)。
 fn finish<M: Mode>(code: &CodeBase<M>, ctx: &mut Ctx<M>, task: &Task) -> Result<(), VmFault> {
-    if code.functions[task.entry as usize].ret_rc {
+    if code.functions[task.entry as usize].ret_rc && !task.keep_result {
         // 結果は入口の関数が返した、VM の持つ参照である
         unsafe { ctx.heap_mut().decref(task.get(0)) }?;
     }
@@ -572,6 +575,7 @@ mod tests {
             scratch: Vec::new(),
             stack_limit: stack_limit(max_depth),
             entry: 0,
+            keep_result: false,
         }
     }
 

@@ -2,7 +2,7 @@
 //! の `unsafe fn` を呼ぶので、核の操作の前提を守っていることを確かめる。メモリの Host だけを使い、ファイルを開かない。
 //! 確かめる道: 直接の呼び出しと戻り、`con` と `switch` と `release`、部分適用と余った引数、基本操作 (evidence を作って
 //! 引く)、ヒープの文字列の extern、2つのプログラムを1つの `Machine` に続けて読み込み、2つ目の塊を付け替えること、
-//! 両方のモード。
+//! 文字列を返す入口の結果を写すこと、両方のモード。
 
 use eml_vm::{AnyMachine, RunConfig, capture_host, execute};
 
@@ -185,5 +185,29 @@ fn second() -> unit {
         }
         machine.close().unwrap_or_else(|error| panic!("{error}"));
         assert_eq!(out.contents(), "one\nonetwo\n");
+    }
+}
+
+/// 文字列を返す入口の結果を写す (`Ctx::copy_string`)。`Finish` は結果を手放さず、写した後に手放す。
+#[test]
+fn a_shown_entry_copies_its_result() {
+    let text = "\
+fn shown() -> obj {
+  let s.0: obj = const \"é\"
+  let n.1: obj = extern \"Prelude.Show Int.show\"(7)
+  let t.2: obj = extern \"Prelude.++\"(s.0, n.1)
+  return t.2
+}
+";
+    let program = eml_lir::parse(text).unwrap_or_else(|error| panic!("{error}"));
+    eml_lir::verify(&program).unwrap_or_else(|error| panic!("{error}"));
+    for debug_heap in [true, false] {
+        let (host, _) = capture_host(Default::default());
+        let config = RunConfig::default().with_debug_heap(debug_heap);
+        let mut machine = AnyMachine::new(&config, host);
+        let loaded = machine.load(&program).unwrap();
+        let (_, shown) = machine.run_shown(loaded.entry, 10).unwrap();
+        assert_eq!(shown, "é7");
+        machine.close().unwrap_or_else(|error| panic!("{error}"));
     }
 }
