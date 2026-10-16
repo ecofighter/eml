@@ -154,7 +154,8 @@ fn an_unresolved_variable_takes_the_least_value() {
 #[test]
 fn std_public_functions_keep_their_schemes() {
     // 補助関数をローカル関数に移しても、公開の関数の型は変わらない (docs/spec/stdlib.md)。標準ライブラリは `dump` に出ないので、
-    // 型を直接読む。
+    // 型を直接読む。`display_linear` は矢印の線形性を書くが、`Flexible` と `OpVar` の Kind と宣言の Kind の制約は書かないので、
+    // この表で確かめるのは矢印の線形性までである。
     let checked = check(
         "main : Unit -> <IO> Unit\nmain () = List.each (fn x -> println (String.join \",\" [\"a\"])) (String.lines \"a\")",
     );
@@ -184,19 +185,19 @@ fn std_public_functions_keep_their_schemes() {
         let ty = checked.typed.decls[&item].ty;
         shown.push_str(&format!(
             "{module}.{name} : {}\n",
-            checked.typed.types.display(ty, &program.names)
+            checked.typed.types.display_linear(ty, &program.names)
         ));
     }
     insta::assert_snapshot!(shown, @"
     Std.List.length : List a -> Int
-    Std.List.map : (a -> <e> b) -> List a -> <e> List b
-    Std.List.filter : (a -> <e> Bool) -> List a -> <e> List a
-    Std.List.filter_map : (a -> <e> Option b) -> List a -> <e> List b
-    Std.String.starts_with : String -> String -> Bool
-    Std.String.ends_with : String -> String -> Bool
-    Std.String.split : String -> String -> List String
+    Std.List.map : (a -> <e> b) -> List a %m3 -> <e> List b
+    Std.List.filter : (a -> <e> Bool) -> List a %m2 -> <e> List a
+    Std.List.filter_map : (a -> <e> Option b) -> List a %m3 -> <e> List b
+    Std.String.starts_with : String -> String %m0 -> Bool
+    Std.String.ends_with : String -> String %m0 -> Bool
+    Std.String.split : String -> String %m0 -> List String
     Std.String.lines : String -> List String
-    Std.String.join : String -> List String -> String
+    Std.String.join : String -> List String %m0 -> String
     Std.String.trim : String -> String
     Std.String.to_int : String -> Option Int
     ");
