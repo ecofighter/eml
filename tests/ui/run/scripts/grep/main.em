@@ -54,29 +54,23 @@ matching opts prefix lines =
       if opts.count_only then println "\{prefix}\{count}" else ()
       count
 
-read_file : String -> <IO> Result IOError String
-read_file name =
-  use try_io
-  let f = Fs.open name
-  let (f, text) = Fs.read_all f
-  Fs.close f
-  text
-
--- 1つの入力を探し、選んだ数を返す。開けなければ `None` である
+-- 1つの入力を探し、選んだ数を返す。開けないか読めなければ `None` である
 search : Options -> String -> String -> <IO> Option Int
 search opts prefix name =
-  if name == "-" then
-    Some (matching opts prefix stdin_lines)
-  else
-    match read_file name with
-      | Ok text ->
-        let n =
-          use matching opts prefix
-          numbered_lines (String.lines text)
-        Some n
-      | Err e ->
-        eprintln "grep: \{e}"
-        None
+  let found =
+    use try_io
+    if name == "-" then matching opts prefix stdin_lines
+    else
+      let f = Fs.open name
+      let (f, text) = Fs.read_all f
+      Fs.close f
+      use matching opts prefix
+      numbered_lines (String.lines text)
+  match found with
+    | Ok n -> Some n
+    | Err e ->
+      eprintln "grep: \{e}"
+      None
 
 main : Unit -> <IO> Unit
 main () =

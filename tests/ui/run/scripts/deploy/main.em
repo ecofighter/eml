@@ -124,7 +124,13 @@ deploy dry config =
     use runner
     pipeline config
   match config.report with
-    | Some path -> Fs.write_text path (String.join "\n" (List.append lines [result_line outcome]) ++ "\n")
+    | Some path ->
+      let text = String.join "\n" (List.append lines [result_line outcome]) ++ "\n"
+      match try_io (fn () -> Fs.write_text path text) with
+        | Ok _ -> ()
+        | Err e ->
+          eprintln "deploy: \{e}"
+          exit 2
     | None -> ()
   match outcome with
     | Done -> ()

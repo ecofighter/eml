@@ -85,7 +85,12 @@ main () =
     | Some (chosen, names) ->
       let shown = if chosen == none then Shown { lines = True, words = True, bytes = True } else chosen
       match names with
-        | Nil -> println (format shown (count (Stdin.read_all ())) None)
+        | Nil ->
+          match read_input "-" with
+            | Ok text -> println (format shown (count text) None)
+            | Err e ->
+              eprintln "wc: \{e}"
+              exit 1
         | _ ->
           let (total, failed) = count_files shown names
           if List.length names >= 2 then println (format shown total (Some "total")) else ()

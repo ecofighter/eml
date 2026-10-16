@@ -180,8 +180,13 @@ main () =
       eprintln "usage: logstat [-n N] [--whole]"
       exit 2
     | Some (top, whole) ->
-      let stats =
+      let result =
+        use try_io
         use aggregate
         use parsing
         if whole then each_line (String.lines (Stdin.read_all ())) else stdin_lines ()
-      report top stats
+      match result with
+        | Ok stats -> report top stats
+        | Err e ->
+          eprintln "logstat: \{e}"
+          exit 1

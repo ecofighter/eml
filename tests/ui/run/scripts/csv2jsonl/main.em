@@ -207,7 +207,12 @@ main () =
             use convert (String.split "," names)
             rows text
           match result with
-            | Ok out -> Fs.write_text target out
+            | Ok out ->
+              match try_io (fn () -> Fs.write_text target out) with
+                | Ok _ -> ()
+                | Err e ->
+                  eprintln "csv2jsonl: \{e}"
+                  exit 1
             | Err (code, message) ->
               eprintln "csv2jsonl: \{message}"
               exit code
