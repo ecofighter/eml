@@ -22,6 +22,15 @@ pub fn diagnostics(text: &str) -> Vec<String> {
     short(lowered.files(), &lowered.diagnostics)
 }
 
+/// 診断の fix を、`eml_test_support::fixes` の書式の行に分けて並べる。
+pub fn fixes(text: &str) -> Vec<String> {
+    let lowered = lower(text);
+    eml_test_support::fixes(lowered.files(), &lowered.diagnostics)
+        .lines()
+        .map(str::to_string)
+        .collect()
+}
+
 /// 複数のモジュールのプログラムの診断を、ラベル、note、help まで、位置に表示のパスを付けて表示する。
 pub fn module_report(entry: &str, modules: &[(&str, &str)]) -> String {
     let lowered = lower_files(entry, modules);

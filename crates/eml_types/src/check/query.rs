@@ -5,7 +5,7 @@ use std::collections::HashSet;
 use eml_hir::{ClassId, Program};
 
 use crate::store::TypeStore;
-use crate::table::{Exporter, RowVar, Table, Tail, Ty, TyShape, VarNames};
+use crate::table::{Exporter, Row, RowVar, Table, Tail, Ty, TyShape, VarNames};
 
 /// 型を書く順 (矢印は引数、row のラベルの型引数、row の変数、結果) にたどった、型変数の代表と row 変数の現れ。
 /// 書いた型の木の上で数えるので、共有した部分は現れるたびに数える。数える費用は書く文字列の長さに比例する。
@@ -46,9 +46,15 @@ fn walk(table: &Table<'_>, ty: Ty, negative: bool, found: &mut Occurrences) {
                 found.types.push(ty);
             }
         }
-        TyShape::Con(_, args) => args
-            .iter()
-            .for_each(|&arg| walk(table, arg, negative, found)),
+        TyShape::Con(_, args, rows) => {
+            args.iter()
+                .for_each(|&arg| walk(table, arg, negative, found));
+            // row の型引数の変位は求めていないので、負の位置とみなして閉じない
+            // (docs/spec/types.md の「row の型引数」)
+            for row in rows {
+                walk_row(table, row, true, negative, found);
+            }
+        }
         TyShape::Tuple(elements) => elements
             .iter()
             .for_each(|&element| walk(table, element, negative, found)),
@@ -56,29 +62,40 @@ fn walk(table: &Table<'_>, ty: Ty, negative: bool, found: &mut Occurrences) {
             param, row, ret, ..
         } => {
             walk(table, *param, !negative, found);
-            let row = table.resolve_row(row);
-            for label in &row.labels {
-                label
-                    .args
-                    .iter()
-                    .for_each(|&arg| walk(table, arg, negative, found));
-            }
-            if let Tail::Var(var) = row.tail {
-                match found.rows.iter_mut().find(|seen| seen.var == var) {
-                    Some(seen) => {
-                        seen.count += 1;
-                        seen.negative |= negative;
-                    }
-                    None => found.rows.push(RowOccurrence {
-                        var,
-                        count: 1,
-                        negative,
-                    }),
-                }
-            }
+            walk_row(table, row, negative, negative, found);
             walk(table, *ret, negative, found);
         }
         TyShape::Rigid(_) | TyShape::Error => {}
+    }
+}
+
+/// row のラベルの型引数をたどり、row 変数の現れを数える。`tail_negative` は row 変数の現れを負の位置とみなすかである。
+fn walk_row(
+    table: &Table<'_>,
+    row: &Row,
+    tail_negative: bool,
+    negative: bool,
+    found: &mut Occurrences,
+) {
+    let row = table.resolve_row(row);
+    for label in &row.labels {
+        label
+            .args
+            .iter()
+            .for_each(|&arg| walk(table, arg, negative, found));
+    }
+    if let Tail::Var(var) = row.tail {
+        match found.rows.iter_mut().find(|seen| seen.var == var) {
+            Some(seen) => {
+                seen.count += 1;
+                seen.negative |= tail_negative;
+            }
+            None => found.rows.push(RowOccurrence {
+                var,
+                count: 1,
+                negative: tail_negative,
+            }),
+        }
     }
 }
 

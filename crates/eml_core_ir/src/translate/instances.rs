@@ -660,10 +660,12 @@ impl Collector<'_> {
         let hir = self.hir;
         match self.store.kind(ty).clone() {
             TypeKind::Tuple(elements) => DisplayForm::Tuple(elements),
-            TypeKind::Con { id, args } if id == hir.lang.list => {
+            // row は値を持たないので、フィールドの表示は型の型引数だけで決まる
+            // (docs/spec/types.md の「row の型引数」)
+            TypeKind::Con { id, args, rows: _ } if id == hir.lang.list => {
                 DisplayForm::List(self.constructor_fields(id, &args))
             }
-            TypeKind::Con { id, args } => match hir[id].kind {
+            TypeKind::Con { id, args, rows: _ } => match hir[id].kind {
                 TypeDefKind::Data { .. } => {
                     DisplayForm::Data(id, self.constructor_fields(id, &args))
                 }

@@ -7,7 +7,7 @@ use std::collections::{HashMap, HashSet};
 use eml_hir::{ClassId, EffectId, ModuleId, ModuleOrigin, Program as HirProgram, TypeDefId};
 
 use super::program::versioned;
-use eml_types::{Lin, RowTail, TypeId, TypeKind, TypeNames, TypeStore};
+use eml_types::{EffectLabel, Lin, RowTail, TypeId, TypeKind, TypeNames, TypeStore};
 
 /// 型、エフェクト、クラスの名前の表。Prelude の item は修飾しない。入口のモジュールの item は修飾しないが、Prelude の
 /// 型、エフェクト、クラスと同じ名前のものはモジュール名で修飾する。ほかのモジュールの item は、いつもモジュール名で
@@ -128,10 +128,18 @@ impl Hasher<'_> {
         }
         let mut state = Fnv::new();
         match self.store.kind(id) {
-            TypeKind::Con { id: def, args } => {
+            TypeKind::Con {
+                id: def,
+                args,
+                rows,
+            } => {
                 state.number(0);
                 state.text(self.names.ty(*def));
                 self.children(&mut state, args);
+                // row の型引数の数は型の名前で決まるので混ぜない
+                for row in rows {
+                    self.row(&mut state, &row.effects, &row.tail);
+                }
             }
             TypeKind::Tuple(elements) => {
                 state.number(1);
@@ -148,20 +156,7 @@ impl Hasher<'_> {
                 let param = self.hash(*param);
                 state.number(param);
                 state.lin(*lin);
-                state.number(effects.len() as u64);
-                for label in effects {
-                    state.text(self.names.effect(label.id));
-                    self.children(&mut state, &label.args);
-                }
-                match tail {
-                    None => state.number(0),
-                    Some(RowTail::Rigid(name)) => {
-                        state.number(1);
-                        state.text(name);
-                    }
-                    Some(RowTail::Flexible) => state.number(2),
-                    Some(RowTail::Error) => state.number(3),
-                }
+                self.row(&mut state, effects, tail);
                 let ret = self.hash(*ret);
                 state.number(ret);
             }
@@ -182,6 +177,23 @@ impl Hasher<'_> {
         }
         self.memo.insert(id, state.0);
         state.0
+    }
+
+    fn row(&mut self, state: &mut Fnv, effects: &[EffectLabel], tail: &Option<RowTail>) {
+        state.number(effects.len() as u64);
+        for label in effects {
+            state.text(self.names.effect(label.id));
+            self.children(state, &label.args);
+        }
+        match tail {
+            None => state.number(0),
+            Some(RowTail::Rigid(name)) => {
+                state.number(1);
+                state.text(name);
+            }
+            Some(RowTail::Flexible) => state.number(2),
+            Some(RowTail::Error) => state.number(3),
+        }
     }
 
     fn children(&mut self, state: &mut Fnv, children: &[TypeId]) {

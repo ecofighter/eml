@@ -115,9 +115,10 @@ impl<'t, 'c, 's, 'k> Exporter<'t, 'c, 's, 'k> {
         // 表は `self` と別に借りているので、形を複製せずに子を書き出せる
         let table = self.table;
         let kind = match &table.shapes[rep.0 as usize] {
-            TyShape::Con(id, args) => TypeKind::Con {
+            TyShape::Con(id, args, rows) => TypeKind::Con {
                 id: *id,
                 args: args.iter().map(|&arg| self.export(arg)).collect(),
+                rows: rows.iter().map(|row| self.row(row)).collect(),
             },
             TyShape::Tuple(elements) => TypeKind::Tuple(
                 elements
@@ -137,7 +138,7 @@ impl<'t, 'c, 's, 'k> Exporter<'t, 'c, 's, 'k> {
                     ArrowLin::Var(var) => self.kind(var),
                 };
                 let param = self.export(*param);
-                let (effects, tail) = self.row(row);
+                let RowType { effects, tail } = self.row(row);
                 let ret = self.export(*ret);
                 TypeKind::Fn {
                     param,
@@ -166,7 +167,7 @@ impl<'t, 'c, 's, 'k> Exporter<'t, 'c, 's, 'k> {
         self.types.intern(kind)
     }
 
-    fn row(&mut self, row: &Row) -> (Vec<EffectLabel>, Option<RowTail>) {
+    fn row(&mut self, row: &Row) -> RowType {
         let row = self.table.resolve_row(row);
         let effects = row.labels.iter().map(|label| self.label(label)).collect();
         let tail = match row.tail {
@@ -183,7 +184,7 @@ impl<'t, 'c, 's, 'k> Exporter<'t, 'c, 's, 'k> {
             },
             Tail::Error => Some(RowTail::Error),
         };
-        (effects, tail)
+        RowType { effects, tail }
     }
 }
 

@@ -111,7 +111,7 @@ impl BodyCheck<'_, '_> {
                 self.unknown_record(base, Site::Update, &first.name);
                 return None;
             }
-            TyShape::Con(def, _) => {
+            TyShape::Con(def, _, _) => {
                 if let TypeDefKind::Data { constructors } = &self.program[def].kind
                     && let [ctor] = constructors[..]
                 {
@@ -181,7 +181,7 @@ impl BodyCheck<'_, '_> {
                     None
                 }
             },
-            TyShape::Con(def, _) => {
+            TyShape::Con(def, _, _) => {
                 let TypeDefKind::Data { constructors } = &self.program[def].kind else {
                     self.no_such_field(base_ty, key, field, |diagnostic| diagnostic);
                     return None;

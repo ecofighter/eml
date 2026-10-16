@@ -1,6 +1,6 @@
 //! `data` の宣言、コンストラクタ、型の適用、パターン、`match` の変換。
 
-use crate::common::{diagnostics, lower_text};
+use crate::common::{diagnostics, fixes, lower_text};
 use eml_hir::{Body, ExprKind, Program, TypeDefKind};
 
 #[test]
@@ -221,5 +221,64 @@ fn data_kind_annotations_are_lowered() {
     assert_eq!(
         diagnostics("data B : Row =\n  | B"),
         ["E1049 1:10 `Row` is not a kind"]
+    );
+}
+
+#[test]
+fn row_parameters_are_lowered() {
+    let text = "data Iter <e> a =\n  | Done\n  | More a (once Unit -> <e> Iter <e> a)\n\nlines : Int -> Iter <IO> Int\nlines n = Done\n\ntake : Int -> Iter <e> a -> Iter <e> a\ntake n it = it\n\nempty : Iter <> a\nempty = Done";
+    insta::assert_snapshot!(lower_text(text), @"
+    data Iter <e> a
+      | Done
+      | More a (once Unit -> <e> Iter <e> a)
+    lines : Int -> Iter <IO> Int
+    lines n#0 = Done
+    take : Int -> Iter <e> a -> Iter <e> a
+    take n#0 it#1 = it#1
+    empty : Iter <> a
+    empty = Done
+    ");
+}
+
+#[test]
+fn argument_sorts_are_checked() {
+    let text = "data Iter <e> a =\n  | Done\n\nf : Iter e Int -> Int\nf x = 0\n\ng : Iter Int Int -> Int\ng x = 0\n\nh : List <IO> -> Int\nh x = 0\n\nk : Iter Int -> Int\nk x = 0";
+    assert_eq!(
+        diagnostics(text),
+        [
+            "E1048 4:10 `Iter` takes a row here",
+            "E1048 7:10 `Iter` takes a row here",
+            "E1048 10:10 `List` takes a type here",
+            "E1015 13:5 `Iter` takes 2 type arguments, but 1 was given",
+        ]
+    );
+}
+
+#[test]
+fn a_bare_row_name_gets_a_fix() {
+    let text = "data Iter <e> a =\n  | Done\n\nf : Iter e Int -> Int\nf x = 0";
+    assert_eq!(
+        fixes(text),
+        ["E1048 4:10 write `<e>`", "  4:10..4:11 \"<e>\""]
+    );
+}
+
+#[test]
+fn parameter_names_are_shared_between_sorts() {
+    assert_eq!(
+        diagnostics("data T <e> e =\n  | T"),
+        ["E1003 1:12 `e` is defined more than once"]
+    );
+}
+
+#[test]
+fn types_with_row_parameters_cannot_have_instances() {
+    let text = "data H <e> =\n  | H (Unit -> <e> Unit)\n  deriving (Eq)\n\ndata G <e> =\n  | G Int\n\ninstance Show (G <e>) where\n  show _ = \"g\"";
+    assert_eq!(
+        diagnostics(text)
+            .iter()
+            .map(|d| &d[..5])
+            .collect::<Vec<_>>(),
+        ["E0004", "E0004"]
     );
 }

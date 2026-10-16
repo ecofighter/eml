@@ -759,13 +759,6 @@ impl Effect {
     }
 }
 
-impl AppType {
-    /// 型の引数だけ。row の引数を通すまでの HIR のつなぎ。
-    pub fn type_args(&self) -> AstChildren<Type> {
-        support::children(&self.syntax)
-    }
-}
-
 /// 型の適用の引数。row は `<…>` で書く。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TypeArg {

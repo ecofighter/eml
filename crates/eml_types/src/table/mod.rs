@@ -2,7 +2,7 @@ use crate::context::Context;
 use crate::data::DataKind;
 use crate::kind::problem::{Bounds, Instance, KindProblem, OwnVars};
 use crate::kind::{Bound, Carry, KindVar, Provenance};
-use crate::store::{EffectLabel, Lin, RowTail, TypeId, TypeKind, TypeStore};
+use crate::store::{EffectLabel, Lin, RowTail, RowType, TypeId, TypeKind, TypeStore};
 use crate::ty::{Linearity, Multiplicity};
 use eml_extern::ExternType;
 use eml_hir::{EffectId, ItemMap, LangItems, OperationId, TypeDef, TypeDefId};
@@ -95,7 +95,8 @@ impl Row {
 
 #[derive(Debug, Clone)]
 pub(crate) enum TyShape {
-    Con(TypeDefId, Vec<Ty>),
+    /// 型の型引数と row の型引数を、それぞれの種類の中の順で分けて持つ (docs/spec/types.md の「row の型引数」)。
+    Con(TypeDefId, Vec<Ty>, Vec<Row>),
     Tuple(Vec<Ty>),
     Fn {
         param: Ty,
@@ -116,11 +117,14 @@ pub(crate) enum Child<'a> {
 }
 
 impl TyShape {
-    /// 直接の子を、引数、row、戻り値の順に `f` に渡す。型の木をたどる処理はすべてここを通す。欄を足したときに直し忘れ
+    /// 直接の子を、引数、row、戻り値の順に `f` に渡す。型構成子では、型の型引数の後に row の型引数を渡す。型の木をたどる処理はすべてここを通す。欄を足したときに直し忘れ
     /// ないよう、`..` を使わずにすべての欄を名前で受ける。矢印の線形性は Kind なので子に含めない。
     pub fn for_each_child<'a>(&'a self, mut f: impl FnMut(Child<'a>)) {
         match self {
-            TyShape::Con(_, args) => args.iter().for_each(|&arg| f(Child::Ty(arg))),
+            TyShape::Con(_, args, rows) => {
+                args.iter().for_each(|&arg| f(Child::Ty(arg)));
+                rows.iter().for_each(|row| f(Child::Row(row)));
+            }
             TyShape::Tuple(elements) => elements.iter().for_each(|element| f(Child::Ty(*element))),
             TyShape::Fn {
                 param,
@@ -302,12 +306,17 @@ impl<'c> Table<'c> {
             carries: Vec::new(),
             marks: RefCell::default(),
         };
-        table.int = table.alloc(TyShape::Con(table.extern_type(ExternType::Int), Vec::new()));
+        table.int = table.alloc(TyShape::Con(
+            table.extern_type(ExternType::Int),
+            Vec::new(),
+            Vec::new(),
+        ));
         table.string = table.alloc(TyShape::Con(
             table.extern_type(ExternType::String),
             Vec::new(),
+            Vec::new(),
         ));
-        table.bool = table.alloc(TyShape::Con(lang.bool, Vec::new()));
+        table.bool = table.alloc(TyShape::Con(lang.bool, Vec::new(), Vec::new()));
         table.unit = table.alloc(TyShape::Tuple(Vec::new()));
         table.error = table.alloc(TyShape::Error);
         table

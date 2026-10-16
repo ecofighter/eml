@@ -6,7 +6,9 @@ use std::fmt;
 use std::sync::Arc;
 
 use eml_extern::ExternType;
-use eml_hir::{DisplayNames, EffectId, ItemMap, Program, TypeDef, TypeDefId};
+use eml_hir::{
+    DisplayNames, EffectId, ItemMap, Program, SortedArg, TypeDef, TypeDefId, in_declaration_order,
+};
 
 use crate::data::{DataKind, data_kinds};
 
@@ -81,10 +83,12 @@ impl EffectLabel {
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum TypeKind {
     /// 型構成子とその型引数。`Int` などの組み込みの型は引数を持たない。型の同一性は ID で決まり、表示名は `display` が
-    /// `DisplayNames` から引く。
+    /// `DisplayNames` から引く。型の型引数 `args` と row の型引数 `rows` は、それぞれの種類の中の順で分けて持つ
+    /// (docs/spec/types.md の「row の型引数」)。
     Con {
         id: TypeDefId,
         args: Vec<TypeId>,
+        rows: Vec<RowType>,
     },
     /// タプル。`Unit` は要素のないタプルである (docs/spec/records.md の「構成」)。
     Tuple(Vec<TypeId>),
@@ -108,6 +112,14 @@ pub enum TypeKind {
     Error,
 }
 
+/// `data` の row の型引数に置いた row。
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct RowType {
+    pub effects: Vec<EffectLabel>,
+    /// row の末尾。`None` なら閉じた row である。
+    pub tail: Option<RowTail>,
+}
+
 /// row の末尾。シグネチャの row 変数は名前を持つ。推論で解けなかった row 変数は `_` と表示する。
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum RowTail {
@@ -118,11 +130,19 @@ pub enum RowTail {
 }
 
 impl TypeKind {
-    /// 直接の子の型を、引数、row のラベルの型引数、戻り値の順に `f` に渡す。row の末尾は型ではないので渡さない。欄を
+    /// 直接の子の型を、引数、row のラベルの型引数、戻り値の順に `f` に渡す。型構成子では、型の型引数の後に row の型引数の
+    /// ラベルの型引数を渡す。row の末尾は型ではないので渡さない。欄を
     /// 足したときに直し忘れないよう、`..` を使わずにすべての欄を名前で受ける。
     fn for_each_child(&self, mut f: impl FnMut(TypeId)) {
         match self {
-            TypeKind::Con { id: _, args } => args.iter().copied().for_each(f),
+            TypeKind::Con { id: _, args, rows } => {
+                args.iter().copied().for_each(&mut f);
+                for row in rows {
+                    for label in &row.effects {
+                        label.args.iter().copied().for_each(&mut f);
+                    }
+                }
+            }
             TypeKind::Tuple(elements) => elements.iter().copied().for_each(f),
             TypeKind::Fn {
                 param,
@@ -233,6 +253,7 @@ impl TypeStore {
         let con = |id| TypeKind::Con {
             id,
             args: Vec::new(),
+            rows: Vec::new(),
         };
         store.unit = store.intern(TypeKind::Tuple(Vec::new()));
         store.int = store.intern(con(program.extern_type(ExternType::Int)));
@@ -247,14 +268,15 @@ impl TypeStore {
         if let Some(&id) = self.ids.get(&kind) {
             return id;
         }
-        let mut error = matches!(
-            kind,
+        let mut error = match &kind {
             TypeKind::Error
-                | TypeKind::Fn {
-                    tail: Some(RowTail::Error),
-                    ..
-                }
-        );
+            | TypeKind::Fn {
+                tail: Some(RowTail::Error),
+                ..
+            } => true,
+            TypeKind::Con { rows, .. } => rows.iter().any(|row| row.tail == Some(RowTail::Error)),
+            _ => false,
+        };
         let mut var = matches!(kind, TypeKind::Rigid(_) | TypeKind::OpVar(_, _));
         let mut kind_vars = matches!(
             kind,
@@ -281,7 +303,8 @@ impl TypeStore {
     }
 
     /// 型の値の線形性と、それが `Rigid` か `Var` に依存するか (依存するときの値は `Poly`)。`Fn` は自分の `lin` だけで
-    /// 決まるので子を見ない。`Con` と `Tuple` は効く型引数 (`DataKind::params`) だけを見る。
+    /// 決まるので子を見ない。`Con` と `Tuple` は効く型引数 (`DataKind::params`) だけを見る。row の型引数は Kind に効かない
+    /// (docs/spec/types.md の「row の型引数」)。
     fn linearity_of(&self, kind: &TypeKind) -> (Lin, bool) {
         let join_of = |children: &mut dyn Iterator<Item = TypeId>| {
             let mut value = Lin::Unr;
@@ -300,7 +323,7 @@ impl TypeStore {
             }
         };
         match kind {
-            TypeKind::Con { id, args } => {
+            TypeKind::Con { id, args, rows: _ } => {
                 let data = &self.data_kinds[*id];
                 if data.lin {
                     return (Lin::Lin, false);
@@ -364,7 +387,8 @@ impl TypeStore {
 
     /// 2つの型の対応する線形性が、一方が `Unr`、他方が `Lin` になっていないか。`Poly` はどちらとも食い違わない。片方が
     /// `Flexible(k)` か `OpVar(_, k)` で他方が別の形なら、`k` と他方の値を比べる。`Rigid` はどの型とも合う。形が一致しない
-    /// 所 (誤りの跡) は比べない (docs/spec/core-ir.md の「食い違いがないことの検査」)。
+    /// 所 (誤りの跡) は比べない (docs/spec/core-ir.md の「食い違いがないことの検査」)。row の型引数は Kind に効かないので
+    /// 比べない。
     pub fn lin_compatible(&self, a: TypeId, b: TypeId) -> bool {
         let mut seen = HashSet::new();
         let mut stack = vec![(a, b)];
@@ -387,10 +411,11 @@ impl TypeStore {
                     continue;
                 }
                 (
-                    TypeKind::Con { id, args },
+                    TypeKind::Con { id, args, rows: _ },
                     TypeKind::Con {
                         id: other,
                         args: other_args,
+                        rows: _,
                     },
                 ) if id == other && args.len() == other_args.len() => args
                     .iter()
@@ -470,11 +495,18 @@ impl TypeStore {
                 subst.done.insert(ty, flexible);
                 return flexible;
             }
-            TypeKind::Con { id, args } => TypeKind::Con {
+            TypeKind::Con { id, args, rows } => TypeKind::Con {
                 id,
                 args: args
                     .into_iter()
                     .map(|arg| self.substitute(arg, subst))
+                    .collect(),
+                rows: rows
+                    .into_iter()
+                    .map(|row| RowType {
+                        effects: self.substitute_labels(row.effects, subst),
+                        tail: row.tail,
+                    })
                     .collect(),
             },
             TypeKind::Tuple(elements) => TypeKind::Tuple(
@@ -492,17 +524,7 @@ impl TypeStore {
             } => TypeKind::Fn {
                 param: self.substitute(param, subst),
                 lin: subst.evaluate(lin),
-                effects: effects
-                    .into_iter()
-                    .map(|label| EffectLabel {
-                        id: label.id,
-                        args: label
-                            .args
-                            .into_iter()
-                            .map(|arg| self.substitute(arg, subst))
-                            .collect(),
-                    })
-                    .collect(),
+                effects: self.substitute_labels(effects, subst),
                 tail,
                 ret: self.substitute(ret, subst),
             },
@@ -513,6 +535,24 @@ impl TypeStore {
         let substituted = self.intern(kind);
         subst.done.insert(ty, substituted);
         substituted
+    }
+
+    fn substitute_labels(
+        &mut self,
+        labels: Vec<EffectLabel>,
+        subst: &mut Substitution,
+    ) -> Vec<EffectLabel> {
+        labels
+            .into_iter()
+            .map(|label| EffectLabel {
+                id: label.id,
+                args: label
+                    .args
+                    .into_iter()
+                    .map(|arg| self.substitute(arg, subst))
+                    .collect(),
+            })
+            .collect()
     }
 
     /// 表示が `limit` 文字以下ならその文字列、超えたら `None`。表示は型を木としてたどるので、部分を共有する型では
@@ -700,16 +740,62 @@ impl TypeDisplay<'_> {
     fn child(&self, id: TypeId) -> TypeDisplay<'_> {
         TypeDisplay { id, ..*self }
     }
+
+    /// row を `<…>` の形で書く。
+    fn row(
+        &self,
+        f: &mut fmt::Formatter<'_>,
+        effects: &[EffectLabel],
+        tail: &Option<RowTail>,
+    ) -> fmt::Result {
+        let tail = match tail {
+            Some(RowTail::Rigid(name)) => Some(name.as_str()),
+            Some(RowTail::Flexible) => Some("_"),
+            Some(RowTail::Error) => Some("{error}"),
+            None => None,
+        };
+        f.write_str("<")?;
+        for (index, label) in effects.iter().enumerate() {
+            if index > 0 {
+                f.write_str(", ")?;
+            }
+            write!(
+                f,
+                "{}",
+                LabelDisplay {
+                    label,
+                    types: self.types,
+                    names: self.names,
+                    show: self.show,
+                }
+            )?;
+        }
+        match tail {
+            Some(tail) if effects.is_empty() => f.write_str(tail)?,
+            Some(tail) => write!(f, " | {tail}")?,
+            None => {}
+        }
+        f.write_str(">")
+    }
 }
 
 impl fmt::Display for TypeDisplay<'_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let (types, names, show) = (self.types, self.names, self.show);
         match types.kind(self.id) {
-            TypeKind::Con { id, args } => {
+            TypeKind::Con { id, args, rows } => {
                 f.write_str(names.ty(*id))?;
-                for &arg in args {
-                    write!(f, " {}", atomic(types, arg, names, show))?;
+                let sorts = &types.data_kinds[*id].sorts;
+                for arg in in_declaration_order(sorts, args, rows) {
+                    match arg {
+                        SortedArg::Type(&arg) => write!(f, " {}", atomic(types, arg, names, show))?,
+                        // 型の引数の row は、空でも `<>` と書く。row の位置が見て分かるようにするため
+                        // (docs/spec/types.md の「row の型引数」)
+                        SortedArg::Row(row) => {
+                            f.write_str(" ")?;
+                            self.row(f, &row.effects, &row.tail)?;
+                        }
+                    }
                 }
                 Ok(())
             }
@@ -747,35 +833,9 @@ impl fmt::Display for TypeDisplay<'_> {
                 }
                 f.write_str(" -> ")?;
                 // 空の閉じた row は書かない。省略した row が `<>` だから (docs/spec/types.md)
-                let tail = match tail {
-                    Some(RowTail::Rigid(name)) => Some(name.as_str()),
-                    Some(RowTail::Flexible) => Some("_"),
-                    Some(RowTail::Error) => Some("{error}"),
-                    None => None,
-                };
                 if !effects.is_empty() || tail.is_some() {
-                    f.write_str("<")?;
-                    for (index, label) in effects.iter().enumerate() {
-                        if index > 0 {
-                            f.write_str(", ")?;
-                        }
-                        write!(
-                            f,
-                            "{}",
-                            LabelDisplay {
-                                label,
-                                types,
-                                names,
-                                show
-                            }
-                        )?;
-                    }
-                    match tail {
-                        Some(tail) if effects.is_empty() => f.write_str(tail)?,
-                        Some(tail) => write!(f, " | {tail}")?,
-                        None => {}
-                    }
-                    f.write_str("> ")?;
+                    self.row(f, effects, tail)?;
+                    f.write_str(" ")?;
                 }
                 write!(f, "{}", self.child(*ret))
             }
@@ -808,7 +868,9 @@ impl fmt::Display for Atomic<'_> {
         };
         match self.types.kind(self.id) {
             TypeKind::Fn { .. } => write!(f, "({shown})"),
-            TypeKind::Con { args, .. } if !args.is_empty() => write!(f, "({shown})"),
+            TypeKind::Con { args, rows, .. } if !args.is_empty() || !rows.is_empty() => {
+                write!(f, "({shown})")
+            }
             _ => write!(f, "{shown}"),
         }
     }
@@ -1089,7 +1151,11 @@ mod tests {
     }
 
     fn con(types: &mut TypeStore, id: TypeDefId, args: Vec<TypeId>) -> TypeId {
-        types.intern(TypeKind::Con { id, args })
+        types.intern(TypeKind::Con {
+            id,
+            args,
+            rows: Vec::new(),
+        })
     }
 
     fn arrow(types: &mut TypeStore, lin: Lin, param: TypeId, ret: TypeId) -> TypeId {

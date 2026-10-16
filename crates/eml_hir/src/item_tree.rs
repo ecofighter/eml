@@ -12,6 +12,7 @@ use eml_diagnostics::{Diagnostic, FileId, Label, TextRange};
 use eml_syntax::{AstPtr, Parse, SyntaxKind, SyntaxToken, ast};
 
 use crate::codes;
+use crate::hir::ParamSort;
 
 /// 1つのファイルのトップレベルの宣言。各並びはソースの順で、モジュールの中の item の局所の番号の順でもある。
 #[derive(Debug)]
@@ -76,8 +77,9 @@ pub struct DataItem {
     pub name_range: TextRange,
     pub public: bool,
     pub extern_keyword: Option<TextRange>,
-    /// 型引数 (名前、位置)。重複した名前 (E1003) は最初の1つだけを残す。
-    pub params: Vec<(String, TextRange)>,
+    /// 型引数 (名前、位置、種類)。宣言の順である。名前は種類によらず重ねられないので、重複した名前 (E1003) は最初の
+    /// 1つだけを残す (docs/spec/types.md の「row の型引数」)。
+    pub params: Vec<(String, TextRange, ParamSort)>,
     /// `=` か選択肢を書いたか (`ast::DataItem::has_constructors`)。
     pub has_constructors: bool,
     /// `data T : Lin` の Kind の名前と位置。名前が書かれていない誤りはパーサが報告済みなので持たない。
@@ -396,9 +398,10 @@ pub fn item_tree(file: FileId, parse: &Parse) -> (ItemTree, Vec<Diagnostic>) {
                     extern_keyword: item.extern_keyword().map(|keyword| keyword.text_range()),
                     params: params(
                         file,
+                        // 名前のない row の型引数はパーサが報告済み
                         item.type_params().filter_map(|param| match param {
-                            ast::TypeParam::Type(name) => Some(name),
-                            ast::TypeParam::Row(_) => None,
+                            ast::TypeParam::Type(name) => Some((name, ParamSort::Type)),
+                            ast::TypeParam::Row(row) => Some((row.name()?, ParamSort::Row)),
                         }),
                         &mut diagnostics,
                     ),
@@ -433,7 +436,10 @@ pub fn item_tree(file: FileId, parse: &Parse) -> (ItemTree, Vec<Diagnostic>) {
                     name_range: name.text_range(),
                     public,
                     extern_keyword: item.extern_keyword().map(|keyword| keyword.text_range()),
-                    params: params(file, item.params(), &mut diagnostics),
+                    params: params(file, item.params().map(|name| (name, ())), &mut diagnostics)
+                        .into_iter()
+                        .map(|(name, range, ())| (name, range))
+                        .collect(),
                     operations,
                 });
             }
@@ -709,19 +715,19 @@ fn not_consecutive(
     .with_help(help)
 }
 
-/// `data` と `effect` の型引数。重複した名前は E1003 にして、最初の1つだけを残す。
-fn params(
+/// `data` と `effect` の型引数。`T` は型引数の種類である。重複した名前は E1003 にして、最初の1つだけを残す。
+fn params<T>(
     file: FileId,
-    names: impl Iterator<Item = ast::Name>,
+    names: impl Iterator<Item = (ast::Name, T)>,
     diagnostics: &mut Vec<Diagnostic>,
-) -> Vec<(String, TextRange)> {
-    let mut params: Vec<(String, TextRange)> = Vec::new();
-    for name in names {
+) -> Vec<(String, TextRange, T)> {
+    let mut params: Vec<(String, TextRange, T)> = Vec::new();
+    for (name, sort) in names {
         let token = name.token();
         let (text, range) = (token.text(), token.text_range());
-        match params.iter().find(|(param, _)| param == text) {
-            Some((_, first)) => diagnostics.push(duplicate(file, text, *first, range)),
-            None => params.push((text.to_string(), range)),
+        match params.iter().find(|(param, _, _)| param == text) {
+            Some((_, first, _)) => diagnostics.push(duplicate(file, text, *first, range)),
+            None => params.push((text.to_string(), range, sort)),
         }
     }
     params

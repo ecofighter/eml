@@ -9,7 +9,7 @@ use eml_extern::{Extern, ExternEffect, ExternType};
 use la_arena::{Idx, RawIdx};
 
 use crate::codes;
-use crate::hir::{ExternIndex, LangItems};
+use crate::hir::{ExternIndex, LangItems, ParamSort};
 use crate::item_tree::{Fixity, ImportName, InputItemKind, ItemTree, duplicate};
 use crate::load::{ImportTarget, LoadedModule, STD_ROOT};
 use crate::names::{Definer, DisplayNames};
@@ -142,8 +142,8 @@ struct ModuleScope {
     /// 名前ごとの定義。ソースの位置の順で、使える定義の最初が名前の定義である (規則1)。
     values: HashMap<String, Vec<Definition<ValueItem>>>,
     types: HashMap<String, Vec<Definition<TypeItem>>>,
-    /// 型引数の数 (E1015)。重複した型引数を除いた数である。
-    type_params: HashMap<TypeDefId, usize>,
+    /// 型引数の種類の並び (E1015、E1048)。重複した型引数は除いてある。
+    type_params: HashMap<TypeDefId, Vec<ParamSort>>,
     effect_params: HashMap<EffectId, usize>,
     /// 定義に付いた fixity、宣言が `pub` か、宣言の演算子の位置。
     fixities: HashMap<ValueItem, (Fixity, bool, TextRange)>,
@@ -423,7 +423,8 @@ impl ModuleScope {
                 data.public,
                 true,
             );
-            self.type_params.insert(id, data.params.len());
+            self.type_params
+                .insert(id, data.params.iter().map(|&(_, _, sort)| sort).collect());
         }
         for (k, effect) in tree.effects.iter().enumerate() {
             let id = self.effects[k];
@@ -1267,13 +1268,13 @@ impl<'a> Resolver<'a> {
         })
     }
 
-    pub fn type_params(&self, id: TypeDefId) -> usize {
+    /// 型の型引数の種類。宣言の順である。
+    pub fn type_params(&self, id: TypeDefId) -> &'a [ParamSort] {
         self.def_map
             .scope(id.module)
             .type_params
             .get(&id)
-            .copied()
-            .unwrap_or(0)
+            .map_or(&[], Vec::as_slice)
     }
 
     pub fn effect_params(&self, id: EffectId) -> usize {

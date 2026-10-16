@@ -287,11 +287,13 @@ mod tests {
         let int = types.intern(TypeKind::Con {
             id: program.extern_type(ExternType::Int),
             args: Vec::new(),
+            rows: Vec::new(),
         });
         let list = |types: &mut TypeStore, element| {
             types.intern(TypeKind::Con {
                 id: program.lang.list,
                 args: vec![element],
+                rows: Vec::new(),
             })
         };
         let function = types.intern(TypeKind::Fn {
@@ -309,6 +311,7 @@ mod tests {
         let plain = types.intern(TypeKind::Con {
             id: plain,
             args: Vec::new(),
+            rows: Vec::new(),
         });
         let show = program.lang.show;
         let ints = list(&mut types, int);
@@ -328,6 +331,7 @@ mod tests {
         let string = types.intern(TypeKind::Con {
             id: program.extern_type(ExternType::String),
             args: Vec::new(),
+            rows: Vec::new(),
         });
         let function = types.intern(TypeKind::Fn {
             param: types.unit(),

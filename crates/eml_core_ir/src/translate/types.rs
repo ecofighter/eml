@@ -10,7 +10,12 @@ use eml_lir::{Mark, Repr, VarInfo, data_repr};
 /// (捕まえた変数のない関数、引数のないコンストラクタ) にもヒープの物体にもなるので `tobj` にする。
 pub fn repr(types: &TypeStore, ty: TypeId, hir: &HirProgram) -> Repr {
     match types.kind(ty) {
-        TypeKind::Con { id, args: _ } => type_def_repr(*id, hir),
+        // row は値を持たないので、表し方は型構成子だけで決まる
+        TypeKind::Con {
+            id,
+            args: _,
+            rows: _,
+        } => type_def_repr(*id, hir),
         TypeKind::Fn { .. }
         | TypeKind::Rigid(_)
         | TypeKind::OpVar(_, _)

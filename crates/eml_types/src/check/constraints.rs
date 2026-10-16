@@ -343,7 +343,7 @@ pub(super) fn solve(
             }
         };
         match table.shape(ty) {
-            TyShape::Con(id, args) => {
+            TyShape::Con(id, args, _) => {
                 let Some(instance) = program.instance(class, *id) else {
                     return Err(no_instance((class, ty)));
                 };

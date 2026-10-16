@@ -5,6 +5,8 @@ use eml_hir::NameRef::{self, Plain};
 use eml_hir::{Assoc, DefMap, Fixity, Resolved, Silence, TypeItem, ValueItem};
 use eml_test_support::{def_map, def_map_files};
 
+use crate::common::module_report;
+
 fn qualified<'a>(qualifier: &'a str, name: &'a str) -> NameRef<'a> {
     NameRef::Qualified { qualifier, name }
 }
@@ -622,4 +624,23 @@ fn a_long_import_chain_does_not_overflow_the_stack() {
     assert!(diagnostics.is_empty(), "{diagnostics:?}");
     let (_, diagnostics) = eml_hir::def_map(&loaded.modules);
     assert!(diagnostics.is_empty(), "{diagnostics:?}");
+}
+
+#[test]
+fn row_arguments_of_an_imported_type_are_checked() {
+    let modules = [("M.em", "pub data Iter <e> a =\n  | Done")];
+    let qualified =
+        "import M\n\nf : M.Iter <IO> Int -> Int\nf x = 0\n\ng : M.Iter e Int -> Int\ng x = 0";
+    insta::assert_snapshot!(module_report(qualified, &modules), @"
+    E1048 test.em 6:12 `M.Iter` takes a row here
+      test.em 6:12 this is a type
+      help: write it as a row: `<e>`
+    ");
+    let imported =
+        "import M (Iter)\n\nf : Iter <IO> Int -> Int\nf x = 0\n\ng : Iter e Int -> Int\ng x = 0";
+    insta::assert_snapshot!(module_report(imported, &modules), @"
+    E1048 test.em 6:10 `Iter` takes a row here
+      test.em 6:10 this is a type
+      help: write it as a row: `<e>`
+    ");
 }

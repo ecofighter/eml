@@ -2,7 +2,7 @@
 
 use eml_test_support::{check, short_text};
 
-use crate::common::check_text;
+use crate::common::{check_short, check_text};
 
 #[test]
 fn effects_must_be_in_the_signature() {
@@ -268,4 +268,44 @@ fn a_rigid_tail_in_a_local_function_is_order_dependent() {
     );
     let accepted = check_text(&accepted);
     assert!(!accepted.contains("E2"), "{accepted}");
+}
+
+#[test]
+fn row_arguments_unify_as_rows() {
+    let text = "data Iter <e> a =\n  | Done\n  | More a (once Unit -> <e> Iter <e> a)\n\nnext : Iter <e> a -> <e> Option a\nnext it =\n  match it with\n    | Done -> None\n    | More x k ->\n        drop (k ())\n        Some x\n\nuse_io : Iter <IO> Int -> <IO> Option Int\nuse_io it = next it";
+    insta::assert_snapshot!(check_text(text), @"
+    next : Iter <e> a -> <e> Option a
+      kinds: carry(a, <e>)
+      it#0 : Iter <e> a
+      x#1 : a
+      k#2 : once Unit -> <e> Iter <e> a
+    use_io : Iter <IO> Int -> <IO> Option Int
+      it#0 : Iter <IO> Int
+    ");
+}
+
+#[test]
+fn row_arguments_are_displayed_in_declaration_order() {
+    let text =
+        "data P a <e> b =\n  | P a b (Unit -> <e> Unit)\n\nf : P Int <IO> Bool -> Int\nf p = p";
+    insta::assert_snapshot!(check_text(text), @"
+    f : P Int <IO> Bool -> Int
+      p#0 : P Int <IO> Bool
+    ---
+    E2001 5:7 mismatched types
+      5:7 expected `Int`, found `P Int <IO> Bool`
+      4:5 expected because of the signature of `f`
+    ");
+}
+
+#[test]
+fn mismatched_row_arguments_are_errors() {
+    let text = "data Iter <e> a =\n  | Done\n\nf : Iter <IO> Int -> Iter <> Int\nf x = x";
+    assert_eq!(
+        check_short(text)
+            .iter()
+            .map(|d| &d[..5])
+            .collect::<Vec<_>>(),
+        ["E2001"]
+    );
 }

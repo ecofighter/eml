@@ -4,7 +4,8 @@
 
 use eml_extern::Linearity;
 use eml_hir::{
-    ItemMap, Program, RowRef, TypeDef, TypeDefKind, TypeRef, TypeRefId, TypeRefKind, TypeVarId,
+    ItemMap, ParamSort, Program, RowRef, TypeDef, TypeDefKind, TypeRef, TypeRefId, TypeRefKind,
+    TypeVarId,
 };
 use la_arena::Arena;
 
@@ -18,6 +19,9 @@ pub(crate) struct DataKind {
     /// 型引数の位置ごとの変位。操作の結果の型の矢印が、節から見てどちら向きの位置にあるかを決めるのに使う
     /// (docs/spec/effects.md の「handler の意味」)。
     pub variance: Vec<Variance>,
+    /// 型引数の種類を宣言の順に並べたもの。`params` と `variance` は型の型引数だけを数えるので、表示はこれで row の
+    /// 型引数を宣言の順に混ぜ直す (docs/spec/types.md の「row の型引数」)。
+    pub sorts: Vec<ParamSort>,
 }
 
 /// 型の中の位置の向き。値を作る側から見て、作って渡す位置が `Co`、受け取る位置が `Contra` である。
@@ -66,6 +70,7 @@ pub(crate) fn data_kinds(program: &Program) -> ItemMap<TypeDef, DataKind> {
                     TypeDefKind::Extern(_) => vec![Variance::Both; arity],
                     TypeDefKind::Data { constructors: _ } => vec![Variance::Absent; arity],
                 },
+                sorts: def.params.clone(),
             };
             (id, kind)
         })
@@ -126,7 +131,8 @@ fn collect(
 ) {
     match &types[id].kind {
         TypeRefKind::Var(var) => out.vars.push(*var),
-        TypeRefKind::Con(con, args) => {
+        // row の型引数は値を持たないので Kind に効かない (docs/spec/types.md の「row の型引数」)
+        TypeRefKind::Con(con, args, _) => {
             if kinds[*con].lin {
                 out.lin = true;
             }
@@ -163,12 +169,16 @@ fn collect_variance(
             let index = u32::from(var.into_raw()) as usize;
             out[index] = out[index].join(at);
         }
-        TypeRefKind::Con(con, args) => {
+        TypeRefKind::Con(con, args, rows) => {
             for (&arg, &inner) in args.iter().zip(&kinds[*con].variance) {
                 let at = at.then(inner);
                 if at != Variance::Absent {
                     collect_variance(types, arg, at, kinds, out);
                 }
+            }
+            // row の型引数は、row のラベルの型引数と同じく両方向とする (docs/spec/types.md の「row の型引数」)
+            for row in rows {
+                collect_label_variance(types, row, at.then(Variance::Both), kinds, out);
             }
         }
         TypeRefKind::Tuple(elements) => {
@@ -180,18 +190,29 @@ fn collect_variance(
             param, row, ret, ..
         } => {
             collect_variance(types, *param, at.then(Variance::Contra), kinds, out);
-            let effects = match row {
-                RowRef::Closed { effects, range: _ } | RowRef::Open { effects, .. } => &effects[..],
-                RowRef::Omitted | RowRef::Error => &[],
-            };
-            for effect in effects {
-                for &arg in &effect.args {
-                    collect_variance(types, arg, at.then(Variance::Both), kinds, out);
-                }
-            }
+            collect_label_variance(types, row, at.then(Variance::Both), kinds, out);
             collect_variance(types, *ret, at, kinds, out);
         }
         TypeRefKind::Error => {}
+    }
+}
+
+/// row のラベルの型引数に現れる型変数の向きを `out` に足す。
+fn collect_label_variance(
+    types: &Arena<TypeRef>,
+    row: &RowRef,
+    at: Variance,
+    kinds: &ItemMap<TypeDef, DataKind>,
+    out: &mut [Variance],
+) {
+    let effects = match row {
+        RowRef::Closed { effects, range: _ } | RowRef::Open { effects, .. } => &effects[..],
+        RowRef::Omitted | RowRef::Error => &[],
+    };
+    for effect in effects {
+        for &arg in &effect.args {
+            collect_variance(types, arg, at, kinds, out);
+        }
     }
 }
 

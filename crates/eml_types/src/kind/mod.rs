@@ -485,6 +485,7 @@ mod tests {
         let file = types.intern(TypeKind::Con {
             id: program.extern_type(ExternType::File),
             args: Vec::new(),
+            rows: Vec::new(),
         });
         let range = |start: u32, end: u32| TextRange::new(start.into(), end.into());
         let op = |index: u32| {

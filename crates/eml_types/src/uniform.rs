@@ -701,8 +701,8 @@ fn type_vars(signature: Option<&Signature>) -> Vec<String> {
         .unwrap_or_default()
 }
 
-/// `ty` に現れる `names` の型変数 (番号ごとの真偽)。`substitute` がたどる位置 (型構成子の引数、関数型の引数と結果と
-/// エフェクトの型引数、タプルの要素) を見る。結果を `memo` に覚え、共有された型は1回だけたどる。
+/// `ty` に現れる `names` の型変数 (番号ごとの真偽)。`substitute` がたどる位置 (型構成子の引数と row の型引数のエフェクトの
+/// 型引数、関数型の引数と結果とエフェクトの型引数、タプルの要素) を見る。結果を `memo` に覚え、共有された型は1回だけたどる。
 fn vars_in(
     types: &TypeStore,
     ty: TypeId,
@@ -731,9 +731,14 @@ fn vars_in(
                 });
             }
         }
-        TypeKind::Con { args, .. } => {
+        TypeKind::Con { id: _, args, rows } => {
             for &arg in args {
                 merge(vars_in(types, arg, names, memo));
+            }
+            for label in rows.iter().flat_map(|row| &row.effects) {
+                for &arg in &label.args {
+                    merge(vars_in(types, arg, names, memo));
+                }
             }
         }
         TypeKind::Tuple(elements) => {

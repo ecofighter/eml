@@ -26,7 +26,8 @@ impl Table<'_> {
             return;
         }
         match &self.shapes[ty.0 as usize] {
-            TyShape::Con(id, args) => {
+            // row の型引数は Kind に効かない (docs/spec/types.md の「row の型引数」)
+            TyShape::Con(id, args, _) => {
                 let kind = &self.context.data_kinds[*id];
                 if kind.lin {
                     bounds.push(Bound::Const(Linearity::Lin));
@@ -224,7 +225,17 @@ impl Table<'_> {
                         push_unique(&mut mult, self.row_multiplicity_var(tail));
                     }
                 }
-                TyShape::Con(_, _) | TyShape::Tuple(_) | TyShape::Var(_) | TyShape::Error => {}
+                // `Shape` の番号と同じ順にするため、row の型引数の `σ` は型の型引数より前に並べる (`Closer::ty`)
+                TyShape::Con(_, _, rows) => {
+                    for row in rows {
+                        if let Tail::Var(tail) = self.resolve_row(row).tail
+                            && self.is_rigid_row(tail)
+                        {
+                            push_unique(&mut mult, self.row_multiplicity_var(tail));
+                        }
+                    }
+                }
+                TyShape::Tuple(_) | TyShape::Var(_) | TyShape::Error => {}
             }
             // 子を前から作業の列に積み、積んだ範囲を裏返す。最初の子から取り出すので、Kind 変数は現れた順に並ぶ
             let first_child = work.len();

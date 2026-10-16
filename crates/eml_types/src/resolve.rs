@@ -25,7 +25,9 @@ pub enum Resolution {
 
 pub fn resolve(program: &Program, types: &TypeStore, class: ClassId, ty: TypeId) -> Resolution {
     match types.kind(ty) {
-        TypeKind::Con { id, args } => match program.instance(class, *id) {
+        // row の型引数を持つ型は instance を持たない (E0004) ので、row は照合しない
+        // (docs/spec/types.md の「row の型引数」)
+        TypeKind::Con { id, args, rows: _ } => match program.instance(class, *id) {
             Some(instance) => Resolution::Instance {
                 instance,
                 args: args.clone(),

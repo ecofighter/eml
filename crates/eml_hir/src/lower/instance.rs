@@ -3,7 +3,7 @@
 
 use std::collections::HashMap;
 
-use eml_diagnostics::{Diagnostic, Label, TextRange};
+use eml_diagnostics::{Diagnostic, FileId, Label, TextRange};
 use eml_extern::{Extern, ExternType};
 use eml_syntax::ast;
 use la_arena::{Arena, Idx, RawIdx};
@@ -15,8 +15,8 @@ use crate::codes;
 use crate::def_map::Resolved;
 use crate::hir::{
     ClassId, Constraint, EffectRef, Function, FunctionKind, Generics, InstanceDef, InstanceId,
-    InstanceOrigin, ItemId, MethodId, MethodImpl, RowRef, Signature, TypeDefId, TypeDefKind,
-    TypeRef, TypeRefId, TypeRefKind, TypeVarDecl, TypeVarId,
+    InstanceOrigin, ItemId, MethodId, MethodImpl, ParamSort, RowRef, Signature, TypeDefId,
+    TypeDefKind, TypeRef, TypeRefId, TypeRefKind, TypeVarDecl, TypeVarId,
 };
 use crate::item_tree::{InstanceItem, ItemTree, MemberItem};
 use crate::program::{Module, TypeItem};
@@ -263,6 +263,14 @@ impl ItemLowering<'_> {
                     ));
                     continue;
                 }
+                if modules[self.module].items.types[ty.local]
+                    .params
+                    .contains(&ParamSort::Row)
+                {
+                    self.diagnostics
+                        .push(row_parameter_instance(self.file, *range));
+                    continue;
+                }
                 if self.duplicate(modules, index, class, ty, *range) {
                     continue;
                 }
@@ -352,9 +360,9 @@ impl ItemLowering<'_> {
             ty = paren.ty()?;
         }
         let range = ty.range();
-        let (path, args): (Option<ast::Path>, Vec<ast::Type>) = match &ty {
+        let (path, args): (Option<ast::Path>, Vec<ast::TypeArg>) = match &ty {
             ast::Type::PathType(path) => (path.path(), Vec::new()),
-            ast::Type::AppType(app) => (app.path(), app.type_args().collect()),
+            ast::Type::AppType(app) => (app.path(), app.args().collect()),
             ast::Type::VarType(_) => {
                 self.invalid_head(range, "a type variable");
                 return None;
@@ -403,12 +411,18 @@ impl ItemLowering<'_> {
             valid = false;
         }
         if let Some(id) = id {
-            let expected = self.resolver.type_params(id);
-            if args.len() != expected {
+            let sorts = self.resolver.type_params(id);
+            // 頭の型変数に row 変数を足す仕事は、必要な例が出るまで見送る (docs/spec/types.md の「row の型引数」)
+            if sorts.contains(&ParamSort::Row) {
+                self.diagnostics
+                    .push(row_parameter_instance(self.file, range));
+                return None;
+            }
+            if args.len() != sorts.len() {
                 self.diagnostics.push(arity_error(
                     self.file,
                     &written,
-                    expected,
+                    sorts.len(),
                     args.len(),
                     range,
                 ));
@@ -417,18 +431,19 @@ impl ItemLowering<'_> {
         }
         let mut vars: Vec<String> = Vec::new();
         for arg in &args {
-            let name = match arg {
-                ast::Type::VarType(var) => var.name(),
-                _ => None,
+            let (name, arg_range) = match arg {
+                ast::TypeArg::Type(ast::Type::VarType(var)) => (var.name(), var.range()),
+                ast::TypeArg::Type(ty) => (None, ty.range()),
+                ast::TypeArg::Row(row) => (None, row.range()),
             };
             let Some(name) = name else {
-                self.invalid_head(arg.range(), "not a type variable");
+                self.invalid_head(arg_range, "not a type variable");
                 valid = false;
                 continue;
             };
             let name = name.text().to_string();
             if vars.contains(&name) {
-                self.invalid_head(arg.range(), &format!("`{name}` appears more than once"));
+                self.invalid_head(arg_range, &format!("`{name}` appears more than once"));
                 valid = false;
                 continue;
             }
@@ -448,6 +463,16 @@ impl ItemLowering<'_> {
             Label::new(self.file, range, label),
         ));
     }
+}
+
+/// row の型引数を持つ型の instance と `deriving` (E0004)。こうした型は関数型のフィールドを持つので、導出できる
+/// クラスがない (docs/spec/types.md の「row の型引数」)。
+fn row_parameter_instance(file: FileId, range: TextRange) -> Diagnostic {
+    Diagnostic::not_yet_supported(
+        file,
+        range,
+        "instances of a type with row parameters are not supported yet",
+    )
 }
 
 /// 置かない instance のメンバーの本体。
@@ -471,7 +496,10 @@ fn written_vars(head: Option<ast::Type>) -> Vec<String> {
                     vars.push(name);
                 }
             }
-            ast::Type::AppType(app) => work.extend(app.type_args()),
+            ast::Type::AppType(app) => work.extend(app.args().filter_map(|arg| match arg {
+                ast::TypeArg::Type(ty) => Some(ty),
+                ast::TypeArg::Row(_) => None,
+            })),
             ast::Type::ParenType(paren) => work.extend(paren.ty()),
             ast::Type::TupleType(tuple) => work.extend(tuple.elements()),
             ast::Type::FnType(function) => {
@@ -573,12 +601,13 @@ impl SignatureCopy<'_> {
                 let args = (0..self.head_vars)
                     .map(|i| self.alloc(TypeRefKind::Var(Idx::from_raw(RawIdx::from(i as u32)))))
                     .collect();
-                TypeRefKind::Con(self.head, args)
+                TypeRefKind::Con(self.head, args, Vec::new())
             }
             TypeRefKind::Var(var) => TypeRefKind::Var(self.var(*var)),
-            TypeRefKind::Con(id, args) => {
+            TypeRefKind::Con(id, args, rows) => {
                 let args = args.iter().map(|&arg| self.ty(arg)).collect();
-                TypeRefKind::Con(*id, args)
+                let rows = rows.iter().map(|row| self.row(row)).collect();
+                TypeRefKind::Con(*id, args, rows)
             }
             TypeRefKind::Tuple(elements) => {
                 TypeRefKind::Tuple(elements.iter().map(|&element| self.ty(element)).collect())

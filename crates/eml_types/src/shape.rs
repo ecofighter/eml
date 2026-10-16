@@ -15,7 +15,7 @@ use crate::context::Context;
 use crate::data::Variance;
 use crate::kind::KindVar;
 use crate::kind::eval::SchemeFacts;
-use crate::store::{EffectLabel, Lin, RowTail, TypeId, TypeKind, TypeStore};
+use crate::store::{EffectLabel, Lin, RowTail, RowType, TypeId, TypeKind, TypeStore};
 use crate::table::{ArrowLin, Label, RigidVar, Row, RowVar, Table, Tail, Ty, TyShape};
 use crate::ty::Linearity;
 
@@ -186,17 +186,23 @@ fn lower(
     match &types[id].kind {
         TypeRefKind::Error => table.error,
         // `Unit` は要素のないタプルである (docs/spec/records.md の「構成」)
-        TypeRefKind::Con(id, _) if *id == table.extern_type(ExternType::Unit) => table.unit,
-        TypeRefKind::Con(id, _) if *id == table.extern_type(ExternType::Int) => table.int,
-        TypeRefKind::Con(id, _) if *id == table.extern_type(ExternType::String) => table.string,
-        TypeRefKind::Con(id, _) if *id == table.lang.bool => table.bool,
-        TypeRefKind::Con(id, args) => {
+        TypeRefKind::Con(id, _, _) if *id == table.extern_type(ExternType::Unit) => table.unit,
+        TypeRefKind::Con(id, _, _) if *id == table.extern_type(ExternType::Int) => table.int,
+        TypeRefKind::Con(id, _, _) if *id == table.extern_type(ExternType::String) => table.string,
+        TypeRefKind::Con(id, _, _) if *id == table.lang.bool => table.bool,
+        TypeRefKind::Con(id, args, rows) => {
             let variance = &table.data_kinds()[*id].variance;
             let mut lowered = Vec::new();
             for (&arg, &variance) in args.iter().zip(variance) {
                 lowered.push(lower(table, types, rigids, arg, arrows.arg(variance)));
             }
-            table.alloc(TyShape::Con(*id, lowered))
+            // row の型引数は変位を両方とするので、ラベルの型引数と同じ決め方にする
+            // (docs/spec/types.md の「row の型引数」)
+            let rows = rows
+                .iter()
+                .map(|row| lower_row(table, types, rigids, row, arrows.label()))
+                .collect();
+            table.alloc(TyShape::Con(*id, lowered, rows))
         }
         TypeRefKind::Tuple(elements) => {
             let mut lowered = Vec::new();
@@ -214,19 +220,7 @@ fn lower(
         } => {
             let param = lower(table, types, rigids, *param, arrows.param());
             let ret = lower(table, types, rigids, *ret, arrows.ret());
-            let row = match row {
-                // 省略した row は空の row である (docs/spec/types.md の「関数型」)
-                RowRef::Omitted => Row::pure(),
-                RowRef::Closed { effects, .. } => {
-                    Row::closed(lower_labels(table, types, rigids, effects, arrows.label()))
-                }
-                RowRef::Open { effects, tail, .. } => Row {
-                    labels: lower_labels(table, types, rigids, effects, arrows.label()),
-                    tail: Tail::Var(rigids.rows[*tail]),
-                },
-                // 未定義のエフェクトか、解決できない row 変数の跡。どのエフェクトも受け入れて、診断を連鎖させない
-                RowRef::Error => Row::error(),
-            };
+            let row = lower_row(table, types, rigids, row, arrows.label());
             // `once` の矢印はどの位置でも `Lin` である (docs/spec/types.md の「1回だけ呼べる関数の型」)
             let lin = if *once {
                 ArrowLin::Known(Linearity::Lin)
@@ -235,6 +229,29 @@ fn lower(
             };
             table.function_with(param, lin, row, ret)
         }
+    }
+}
+
+/// row を表に下ろす。`arrows` はラベルの型引数の矢印の決め方である。
+fn lower_row(
+    table: &mut Table,
+    types: &Arena<TypeRef>,
+    rigids: &Rigids,
+    row: &RowRef,
+    arrows: Arrows,
+) -> Row {
+    match row {
+        // 省略した row は空の row である (docs/spec/types.md の「関数型」)
+        RowRef::Omitted => Row::pure(),
+        RowRef::Closed { effects, .. } => {
+            Row::closed(lower_labels(table, types, rigids, effects, arrows))
+        }
+        RowRef::Open { effects, tail, .. } => Row {
+            labels: lower_labels(table, types, rigids, effects, arrows),
+            tail: Tail::Var(rigids.rows[*tail]),
+        },
+        // 未定義のエフェクトか、解決できない row 変数の跡。どのエフェクトも受け入れて、診断を連鎖させない
+        RowRef::Error => Row::error(),
     }
 }
 
@@ -259,7 +276,8 @@ fn lower_labels(
     labels
 }
 
-/// コンストラクタのスキームの型。`Some : a -> Option a` の形で、宣言の型引数で量化する。矢印の row は `<>` である。
+/// コンストラクタのスキームの型。`Some : a -> Option a` の形で、宣言の型引数で量化する。row の型引数も宣言の row 変数で
+/// 量化する (`Done : Iter <e> a`)。矢印の row は `<>` である。
 /// 一番外側の矢印は、トップレベルの関数と同じく何度でも呼べるので `Unr` にし、内側の矢印は推論する。部分適用の
 /// クロージャはそれまでの引数を捕まえるためである (docs/spec/types.md の「関数型」)。フィールドの型の中の矢印は
 /// `Unr` に固定する。
@@ -275,7 +293,16 @@ pub(crate) fn lower_constructor(
         .iter()
         .map(|(var, _)| rigids.tys[var])
         .collect();
-    let mut ty = table.alloc(TyShape::Con(constructor.ty, args));
+    let rows = def
+        .generics
+        .row_vars
+        .iter()
+        .map(|(var, _)| Row {
+            labels: Vec::new(),
+            tail: Tail::Var(rigids.rows[var]),
+        })
+        .collect();
+    let mut ty = table.alloc(TyShape::Con(constructor.ty, args, rows));
     for (index, &field) in constructor.fields.iter().enumerate().rev() {
         let field = lower(table, &def.types, rigids, field, Arrows::Unr);
         let lin = if index == 0 {
@@ -350,7 +377,8 @@ pub(crate) struct Shape {
 /// 閉じた形の型。推論用の変数は、シグネチャから作る型に現れないので持たない。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum ShapeTy {
-    Con(TypeDefId, Vec<ShapeTy>),
+    /// 型の型引数と row の型引数を、それぞれの種類の中の順で分けて持つ。
+    Con(TypeDefId, Vec<ShapeTy>, Vec<ShapeRow>),
     Tuple(Vec<ShapeTy>),
     Fn {
         param: Box<ShapeTy>,
@@ -371,10 +399,14 @@ pub(crate) enum ShapeChild<'a> {
 }
 
 impl ShapeTy {
-    /// 直接の子を、引数、row、戻り値の順に `f` に渡す。`..` を使わずにすべての欄を名前で受ける。
+    /// 直接の子を、引数、row、戻り値の順に `f` に渡す。型構成子では、型の型引数の後に row の型引数を渡す。`..` を使わずに
+    /// すべての欄を名前で受ける。
     pub fn for_each_child<'a>(&'a self, mut f: impl FnMut(ShapeChild<'a>)) {
         match self {
-            ShapeTy::Con(_, args) => args.iter().for_each(|arg| f(ShapeChild::Ty(arg))),
+            ShapeTy::Con(_, args, rows) => {
+                args.iter().for_each(|arg| f(ShapeChild::Ty(arg)));
+                rows.iter().for_each(|row| f(ShapeChild::Row(row)));
+            }
             ShapeTy::Tuple(elements) => elements
                 .iter()
                 .for_each(|element| f(ShapeChild::Ty(element))),
@@ -475,9 +507,13 @@ pub(crate) fn closed_shape(types: &TypeStore, ty: TypeId) -> Shape {
 
 fn closed_ty(types: &TypeStore, ty: TypeId) -> ShapeTy {
     match types.kind(ty) {
-        TypeKind::Con { id, args } => {
-            ShapeTy::Con(*id, args.iter().map(|&arg| closed_ty(types, arg)).collect())
-        }
+        TypeKind::Con { id, args, rows } => ShapeTy::Con(
+            *id,
+            args.iter().map(|&arg| closed_ty(types, arg)).collect(),
+            rows.iter()
+                .map(|row| closed_row(types, &row.effects, &row.tail))
+                .collect(),
+        ),
         TypeKind::Tuple(elements) => ShapeTy::Tuple(
             elements
                 .iter()
@@ -499,26 +535,7 @@ fn closed_ty(types: &TypeStore, ty: TypeId) -> ShapeTy {
                     unreachable!("an input's type has no Kind variables after solving")
                 }
             }),
-            row: ShapeRow {
-                labels: effects
-                    .iter()
-                    .map(|label| {
-                        let args = label
-                            .args
-                            .iter()
-                            .map(|&arg| closed_ty(types, arg))
-                            .collect();
-                        (label.id, args)
-                    })
-                    .collect(),
-                tail: match tail {
-                    None => ShapeTail::Closed,
-                    Some(RowTail::Error) => ShapeTail::Error,
-                    Some(RowTail::Flexible | RowTail::Rigid(_)) => {
-                        unreachable!("an input closes its unsolved rows and has no row variables")
-                    }
-                },
-            },
+            row: closed_row(types, effects, tail),
             ret: Box::new(closed_ty(types, *ret)),
         },
         // 決まらない型変数は、誤り (`let`) か `Unit` (式) にしてある。誤りの跡は `Error` として扱う
@@ -529,9 +546,32 @@ fn closed_ty(types: &TypeStore, ty: TypeId) -> ShapeTy {
     }
 }
 
+fn closed_row(types: &TypeStore, effects: &[EffectLabel], tail: &Option<RowTail>) -> ShapeRow {
+    ShapeRow {
+        labels: effects
+            .iter()
+            .map(|label| {
+                let args = label
+                    .args
+                    .iter()
+                    .map(|&arg| closed_ty(types, arg))
+                    .collect();
+                (label.id, args)
+            })
+            .collect(),
+        tail: match tail {
+            None => ShapeTail::Closed,
+            Some(RowTail::Error) => ShapeTail::Error,
+            Some(RowTail::Flexible | RowTail::Rigid(_)) => {
+                unreachable!("an input closes its unsolved rows and has no row variables")
+            }
+        },
+    }
+}
+
 /// 表に下ろした型を閉じた形にする。Kind 変数の番号は、`Table::kind_vars` と同じ順 (外側から、矢印の `m`、row の `σ`、
-/// 引数、ラベルの型引数、戻り値の順) にたどって、最初に現れた順に振る。型に現れない rigid 変数の Kind 変数は、その後に
-/// 振る。
+/// 引数、ラベルの型引数、戻り値の順。型構成子では row の型引数の `σ`、型の型引数、row の型引数のラベルの型引数の順) に
+/// たどって、最初に現れた順に振る。型に現れない rigid 変数の Kind 変数は、その後に振る。
 fn close(table: &Table<'_>, ty: Ty, rigids: &Rigids) -> Shape {
     let mut closer = Closer {
         table,
@@ -599,8 +639,19 @@ impl Closer<'_, '_> {
 
     fn ty(&mut self, ty: Ty) -> ShapeTy {
         match self.table.shape(ty).clone() {
-            TyShape::Con(id, args) => {
-                ShapeTy::Con(id, args.into_iter().map(|arg| self.ty(arg)).collect())
+            TyShape::Con(id, args, rows) => {
+                let rows: Vec<Row> = rows.iter().map(|row| self.table.resolve_row(row)).collect();
+                let tails: Vec<ShapeTail> = rows.iter().map(|row| self.tail(row.tail)).collect();
+                let args = args.into_iter().map(|arg| self.ty(arg)).collect();
+                let rows = rows
+                    .into_iter()
+                    .zip(tails)
+                    .map(|(row, tail)| ShapeRow {
+                        labels: self.labels(row.labels),
+                        tail,
+                    })
+                    .collect();
+                ShapeTy::Con(id, args, rows)
             }
             TyShape::Tuple(elements) => ShapeTy::Tuple(
                 elements
@@ -619,24 +670,9 @@ impl Closer<'_, '_> {
                     ArrowLin::Var(v) => ShapeLin::Var(self.lin_var(v)),
                 };
                 let row = self.table.resolve_row(&row);
-                let tail = match row.tail {
-                    Tail::Closed => ShapeTail::Closed,
-                    Tail::Error => ShapeTail::Error,
-                    // シグネチャの row 変数はどれも rigid である
-                    Tail::Var(var) => {
-                        self.mult_var(self.table.row_multiplicity_var(var));
-                        ShapeTail::Rigid(self.row_index[&var])
-                    }
-                };
+                let tail = self.tail(row.tail);
                 let param = self.ty(param);
-                let labels = row
-                    .labels
-                    .into_iter()
-                    .map(|label| {
-                        let args = label.args.into_iter().map(|arg| self.ty(arg)).collect();
-                        (label.effect, args)
-                    })
-                    .collect();
+                let labels = self.labels(row.labels);
                 let ret = self.ty(ret);
                 ShapeTy::Fn {
                     param: Box::new(param),
@@ -652,6 +688,28 @@ impl Closer<'_, '_> {
             TyShape::Error => ShapeTy::Error,
             TyShape::Var(_) => unreachable!("a signature has no inference variables"),
         }
+    }
+
+    fn tail(&mut self, tail: Tail) -> ShapeTail {
+        match tail {
+            Tail::Closed => ShapeTail::Closed,
+            Tail::Error => ShapeTail::Error,
+            // シグネチャの row 変数はどれも rigid である
+            Tail::Var(var) => {
+                self.mult_var(self.table.row_multiplicity_var(var));
+                ShapeTail::Rigid(self.row_index[&var])
+            }
+        }
+    }
+
+    fn labels(&mut self, labels: Vec<Label>) -> Vec<(EffectId, Vec<ShapeTy>)> {
+        labels
+            .into_iter()
+            .map(|label| {
+                let args = label.args.into_iter().map(|arg| self.ty(arg)).collect();
+                (label.effect, args)
+            })
+            .collect()
     }
 }
 
@@ -809,11 +867,15 @@ impl Shape {
 
     fn export_ty(&self, ty: &ShapeTy, types: &mut TypeStore, arrows: &ArrowKinds<'_>) -> TypeId {
         let kind = match ty {
-            ShapeTy::Con(id, args) => TypeKind::Con {
+            ShapeTy::Con(id, args, rows) => TypeKind::Con {
                 id: *id,
                 args: args
                     .iter()
                     .map(|arg| self.export_ty(arg, types, arrows))
+                    .collect(),
+                rows: rows
+                    .iter()
+                    .map(|row| self.export_row(row, types, arrows))
                     .collect(),
             },
             ShapeTy::Tuple(elements) => TypeKind::Tuple(
@@ -829,22 +891,7 @@ impl Shape {
                 ret,
             } => {
                 let param = self.export_ty(param, types, arrows);
-                let effects = row
-                    .labels
-                    .iter()
-                    .map(|(effect, args)| EffectLabel {
-                        id: *effect,
-                        args: args
-                            .iter()
-                            .map(|arg| self.export_ty(arg, types, arrows))
-                            .collect(),
-                    })
-                    .collect();
-                let tail = match row.tail {
-                    ShapeTail::Closed => None,
-                    ShapeTail::Rigid(index) => Some(RowTail::Rigid(self.rows[index].0.clone())),
-                    ShapeTail::Error => Some(RowTail::Error),
-                };
+                let RowType { effects, tail } = self.export_row(row, types, arrows);
                 let ret = self.export_ty(ret, types, arrows);
                 TypeKind::Fn {
                     param,
@@ -858,6 +905,31 @@ impl Shape {
             ShapeTy::Error => TypeKind::Error,
         };
         types.intern(kind)
+    }
+
+    fn export_row(
+        &self,
+        row: &ShapeRow,
+        types: &mut TypeStore,
+        arrows: &ArrowKinds<'_>,
+    ) -> RowType {
+        let effects = row
+            .labels
+            .iter()
+            .map(|(effect, args)| EffectLabel {
+                id: *effect,
+                args: args
+                    .iter()
+                    .map(|arg| self.export_ty(arg, types, arrows))
+                    .collect(),
+            })
+            .collect();
+        let tail = match row.tail {
+            ShapeTail::Closed => None,
+            ShapeTail::Rigid(index) => Some(RowTail::Rigid(self.rows[index].0.clone())),
+            ShapeTail::Error => Some(RowTail::Error),
+        };
+        RowType { effects, tail }
     }
 
     /// 線形性の Kind 変数の表示名。rigid な型変数の `μ` はその型変数、矢印の `m` はその矢印の型で呼ぶ。外側から順に見て、
@@ -898,7 +970,7 @@ impl Shape {
                 row: _,
                 ret: _,
             }
-            | ShapeTy::Con(_, _)
+            | ShapeTy::Con(_, _, _)
             | ShapeTy::Tuple(_)
             | ShapeTy::Error => {}
         }
@@ -1003,12 +1075,16 @@ impl ClauseWalk {
 /// 閉じた形を表に組み立てる。`tys` と `rows` は rigid な変数の置き換え先、`lin` は線形性の Kind 変数の置き換え先である。
 fn build(table: &mut Table<'_>, ty: &ShapeTy, tys: &[Ty], rows: &[Tail], lin: &[KindVar]) -> Ty {
     match ty {
-        ShapeTy::Con(id, args) => {
+        ShapeTy::Con(id, args, con_rows) => {
             let args = args
                 .iter()
                 .map(|arg| build(table, arg, tys, rows, lin))
                 .collect();
-            table.alloc(TyShape::Con(*id, args))
+            let con_rows = con_rows
+                .iter()
+                .map(|row| build_row(table, row, tys, rows, lin))
+                .collect();
+            table.alloc(TyShape::Con(*id, args, con_rows))
         }
         ShapeTy::Tuple(elements) if elements.is_empty() => table.unit,
         ShapeTy::Tuple(elements) => {
@@ -1025,32 +1101,43 @@ fn build(table: &mut Table<'_>, ty: &ShapeTy, tys: &[Ty], rows: &[Tail], lin: &[
             ret,
         } => {
             let param = build(table, param, tys, rows, lin);
-            let labels = row
-                .labels
-                .iter()
-                .map(|(effect, args)| Label {
-                    effect: *effect,
-                    args: args
-                        .iter()
-                        .map(|arg| build(table, arg, tys, rows, lin))
-                        .collect(),
-                })
-                .collect();
-            let tail = match row.tail {
-                ShapeTail::Closed => Tail::Closed,
-                ShapeTail::Rigid(index) => rows[index],
-                ShapeTail::Error => Tail::Error,
-            };
+            let row = build_row(table, row, tys, rows, lin);
             let ret = build(table, ret, tys, rows, lin);
             let arrow = match arrow {
                 ShapeLin::Known(l) => ArrowLin::Known(*l),
                 ShapeLin::Var(v) => ArrowLin::Var(lin[v.index()]),
             };
-            table.function_with(param, arrow, Row { labels, tail }, ret)
+            table.function_with(param, arrow, row, ret)
         }
         ShapeTy::Rigid(index) => tys[*index],
         ShapeTy::Error => table.error,
     }
+}
+
+fn build_row(
+    table: &mut Table<'_>,
+    row: &ShapeRow,
+    tys: &[Ty],
+    rows: &[Tail],
+    lin: &[KindVar],
+) -> Row {
+    let labels = row
+        .labels
+        .iter()
+        .map(|(effect, args)| Label {
+            effect: *effect,
+            args: args
+                .iter()
+                .map(|arg| build(table, arg, tys, rows, lin))
+                .collect(),
+        })
+        .collect();
+    let tail = match row.tail {
+        ShapeTail::Closed => Tail::Closed,
+        ShapeTail::Rigid(index) => rows[index],
+        ShapeTail::Error => Tail::Error,
+    };
+    Row { labels, tail }
 }
 
 #[cfg(test)]
@@ -1102,6 +1189,23 @@ mod tests {
         let own = shape.instantiate_rigid(&mut table, &signature.generics);
         assert_eq!(table.kind_vars(own.ty), (own.lin.clone(), own.mult.clone()));
         assert_eq!(table.show(own.ty, &program), "(a -> <e> a) -> a -> <e> a");
+    }
+
+    #[test]
+    fn shape_numbers_follow_the_order_of_kind_vars_through_row_arguments() {
+        let program = program(
+            "data Iter <e> a =\n  | Done\n\nf : (b -> <f> b) -> Iter <e> (a -> a) -> <f> Int\nf g it = 0",
+        );
+        let context = context(&program);
+        let signature = signature(&program);
+        let shape = signature_shape(&context, signature, Arrows::OutermostUnr);
+        let mut table = Table::new(&context);
+        let own = shape.instantiate_rigid(&mut table, &signature.generics);
+        assert_eq!(table.kind_vars(own.ty), (own.lin.clone(), own.mult.clone()));
+        assert_eq!(
+            table.show(own.ty, &program),
+            "(b -> <f> b) -> Iter <e> (a -> a) -> <f> Int"
+        );
     }
 
     #[test]

@@ -974,23 +974,25 @@ fn check_main(
 fn has_error(types: &Arena<TypeRef>, id: TypeRefId) -> bool {
     match &types[id].kind {
         TypeRefKind::Error => true,
-        TypeRefKind::Con(_, args) => args.iter().any(|&arg| has_error(types, arg)),
+        TypeRefKind::Con(_, args, rows) => {
+            args.iter().any(|&arg| has_error(types, arg))
+                || rows.iter().any(|row| row_has_error(types, row))
+        }
         TypeRefKind::Tuple(elements) => elements.iter().any(|&element| has_error(types, element)),
         TypeRefKind::Var(_) => false,
         TypeRefKind::Fn {
             param, row, ret, ..
-        } => {
-            let args_error = match row {
-                RowRef::Closed { effects, .. } | RowRef::Open { effects, .. } => effects
-                    .iter()
-                    .any(|effect| effect.args.iter().any(|&arg| has_error(types, arg))),
-                RowRef::Omitted | RowRef::Error => false,
-            };
-            matches!(row, RowRef::Error)
-                || args_error
-                || has_error(types, *param)
-                || has_error(types, *ret)
-        }
+        } => row_has_error(types, row) || has_error(types, *param) || has_error(types, *ret),
+    }
+}
+
+fn row_has_error(types: &Arena<TypeRef>, row: &RowRef) -> bool {
+    match row {
+        RowRef::Closed { effects, .. } | RowRef::Open { effects, .. } => effects
+            .iter()
+            .any(|effect| effect.args.iter().any(|&arg| has_error(types, arg))),
+        RowRef::Omitted => false,
+        RowRef::Error => true,
     }
 }
 

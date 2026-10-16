@@ -103,8 +103,12 @@ fn head_type(checked: &Checked, head: TypeDefId) -> TypeId {
     let mut pending: Vec<TypeId> = checked.typed.decls.values().map(|decl| decl.ty).collect();
     while let Some(ty) = pending.pop() {
         match types.kind(ty) {
-            TypeKind::Con { id, args } if *id == head && args.is_empty() => return ty,
-            TypeKind::Con { id: _, args } => pending.extend(args),
+            TypeKind::Con { id, args, rows: _ } if *id == head && args.is_empty() => return ty,
+            TypeKind::Con {
+                id: _,
+                args,
+                rows: _,
+            } => pending.extend(args),
             TypeKind::Fn { param, ret, .. } => pending.extend([*param, *ret]),
             TypeKind::Tuple(elements) => pending.extend(elements),
             TypeKind::Rigid(_)
@@ -121,7 +125,11 @@ fn head_type(checked: &Checked, head: TypeDefId) -> TypeId {
 
 fn has_type_var(types: &TypeStore, ty: TypeId) -> bool {
     match types.kind(ty) {
-        TypeKind::Con { id: _, args } => args.iter().any(|&arg| has_type_var(types, arg)),
+        TypeKind::Con {
+            id: _,
+            args,
+            rows: _,
+        } => args.iter().any(|&arg| has_type_var(types, arg)),
         TypeKind::Tuple(elements) => elements.iter().any(|&ty| has_type_var(types, ty)),
         TypeKind::Fn {
             param,

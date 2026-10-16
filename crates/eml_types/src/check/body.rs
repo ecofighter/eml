@@ -286,7 +286,7 @@ impl BodyCheck<'_, '_> {
     /// 型が `List t` の形に決まっていれば、要素の型 `t` を返す。
     fn list_element(&self, ty: Ty) -> Option<Ty> {
         match self.table.shape(ty) {
-            TyShape::Con(list, args) if *list == self.program.lang.list && args.len() == 1 => {
+            TyShape::Con(list, args, _) if *list == self.program.lang.list && args.len() == 1 => {
                 Some(args[0])
             }
             _ => None,
@@ -303,7 +303,7 @@ impl BodyCheck<'_, '_> {
         let Some((list, _, _)) = instantiated else {
             return self.table.error;
         };
-        let TyShape::Con(_, args) = self.table.shape(list).clone() else {
+        let TyShape::Con(_, args, _) = self.table.shape(list).clone() else {
             unreachable!("`Nil` makes a `List`")
         };
         let element = args[0];

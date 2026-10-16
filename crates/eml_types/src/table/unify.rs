@@ -28,9 +28,14 @@ impl Table<'_> {
             // `Error` が関わる制約からは診断を出さない (docs/spec/types.md の「エラーの扱い」)
             (TyShape::Error, _) | (_, TyShape::Error) => Ok(()),
             (TyShape::Rigid(x), TyShape::Rigid(y)) if x == y => Ok(()),
-            (TyShape::Con(x, xs), TyShape::Con(y, ys)) if x == y && xs.len() == ys.len() => {
+            (TyShape::Con(x, xs, x_rows), TyShape::Con(y, ys, y_rows))
+                if x == y && xs.len() == ys.len() && x_rows.len() == y_rows.len() =>
+            {
                 for (x, y) in xs.iter().zip(&ys) {
                     self.unify_in(*x, *y, done)?;
+                }
+                for (x, y) in x_rows.iter().zip(&y_rows) {
+                    self.unify_row_in(x, y, done)?;
                 }
                 done.insert((a, b));
                 Ok(())

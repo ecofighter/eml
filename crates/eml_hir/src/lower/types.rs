@@ -1,4 +1,4 @@
-use eml_diagnostics::{Diagnostic, FileId, Label, TextRange};
+use eml_diagnostics::{Diagnostic, FileId, Label, TextEdit, TextRange};
 use eml_syntax::{SyntaxToken, ast};
 use la_arena::Arena;
 
@@ -6,7 +6,7 @@ use super::{NameKind, NameUse, not_found, path_name, unresolved};
 use crate::codes;
 use crate::def_map::{Resolved, Resolver};
 use crate::hir::{
-    EffectRef, Generics, RowRef, RowVarDecl, RowVarId, TypeRef, TypeRefId, TypeRefKind,
+    EffectRef, Generics, ParamSort, RowRef, RowVarDecl, RowVarId, TypeRef, TypeRefId, TypeRefKind,
     TypeVarDecl, TypeVarId,
 };
 use crate::program::TypeItem;
@@ -18,8 +18,8 @@ pub(super) enum Vars {
     Define,
     /// 本体の注釈。シグネチャの表にある名前だけを使える (docs/spec/types.md の「推論」)。
     Signature,
-    /// `data` の宣言のフィールド。宣言の型引数だけを使える。宣言は row 変数を持たない
-    /// (docs/spec/declarations.md の「`data` と `type`」)。
+    /// `data` の宣言のフィールド。宣言の型引数だけを使える。row の末尾には宣言の row の型引数だけを書ける
+    /// (docs/spec/types.md の「row の型引数」)。
     Data,
 }
 
@@ -50,7 +50,7 @@ impl TypeLowering<'_> {
         .map(|path| path.range());
         let kind = match ty {
             ast::Type::PathType(path) => match path_name(path.path()).at(range) {
-                Some(at) => self.applied(&at, Vec::new(), range),
+                Some(at) => self.applied(&at, &[], range),
                 None => TypeRefKind::Error,
             },
             ast::Type::ParenType(paren) => return self.lower(paren.ty(), range),
@@ -73,17 +73,13 @@ impl TypeLowering<'_> {
                 None => TypeRefKind::Error,
             },
             ast::Type::AppType(app) => {
-                // 型引数を先に変換し、型の名前が誤っていても型引数の中の誤りを報告する
-                let args = app
-                    .type_args()
-                    .map(|arg| {
-                        let range = arg.range();
-                        self.lower(Some(arg), range)
-                    })
-                    .collect();
+                let args: Vec<ast::TypeArg> = app.args().collect();
                 match path_name(app.path()).at(range) {
-                    Some(at) => self.applied(&at, args, range),
-                    None => TypeRefKind::Error,
+                    Some(at) => self.applied(&at, &args, range),
+                    None => {
+                        self.lower_written_args(&args);
+                        TypeRefKind::Error
+                    }
                 }
             }
             ast::Type::TupleType(tuple) => TypeRefKind::Tuple(
@@ -96,34 +92,37 @@ impl TypeLowering<'_> {
                     .collect(),
             ),
         };
-        if let (TypeRefKind::Con(id, _), Some(path_range)) = (&kind, path_range) {
+        if let (TypeRefKind::Con(id, _, _), Some(path_range)) = (&kind, path_range) {
             self.check_exposed(TypeItem::Type(*id), path_range);
         }
         self.alloc(kind, range)
     }
 
-    fn applied(&mut self, at: &NameUse<'_>, args: Vec<TypeRefId>, range: TextRange) -> TypeRefKind {
-        match self.items.type_item(at.name) {
-            Resolved::Found(TypeItem::Type(id)) => {
-                let expected = self.items.type_params(id);
-                if args.len() != expected {
-                    self.arity_error(&at.written(), expected, args.len(), range);
-                    return TypeRefKind::Error;
-                }
-                TypeRefKind::Con(id, args)
-            }
+    /// 型の名前に引数を適用する。型の名前が誤っていても引数の中の誤りを報告するよう、名前の誤りより先に引数を変換する。
+    /// 引数の種類は宣言の種類と位置ごとに照合する (docs/spec/types.md の「row の型引数」)。
+    fn applied(
+        &mut self,
+        at: &NameUse<'_>,
+        args: &[ast::TypeArg],
+        range: TextRange,
+    ) -> TypeRefKind {
+        let id = match self.items.type_item(at.name) {
+            Resolved::Found(TypeItem::Type(id)) => id,
             // エフェクトの名前は型の位置に書けない
             Resolved::Found(TypeItem::Effect(_)) => {
+                self.lower_written_args(args);
                 self.diagnostics
                     .push(not_found(&self.items, self.file, NameKind::Type, at));
-                TypeRefKind::Error
+                return TypeRefKind::Error;
             }
             Resolved::Found(TypeItem::Class(_)) => {
+                self.lower_written_args(args);
                 self.diagnostics
                     .push(class_as_type(self.file, &at.written(), range));
-                TypeRefKind::Error
+                return TypeRefKind::Error;
             }
             other => {
+                self.lower_written_args(args);
                 self.diagnostics.extend(unresolved(
                     &self.items,
                     self.file,
@@ -131,8 +130,64 @@ impl TypeLowering<'_> {
                     at,
                     other,
                 ));
-                TypeRefKind::Error
+                return TypeRefKind::Error;
             }
+        };
+        let sorts = self.items.type_params(id);
+        if args.len() != sorts.len() {
+            self.lower_written_args(args);
+            self.arity_error(&at.written(), sorts.len(), args.len(), range);
+            return TypeRefKind::Error;
+        }
+        let mut types = Vec::new();
+        let mut rows = Vec::new();
+        let mut valid = true;
+        for (sort, arg) in sorts.iter().zip(args) {
+            match (sort, arg) {
+                (ParamSort::Type, ast::TypeArg::Type(ty)) => {
+                    types.push(self.lower(Some(ty.clone()), ty.range()));
+                }
+                (ParamSort::Row, ast::TypeArg::Row(row)) => rows.push(self.row_arg(row)),
+                (ParamSort::Row, ast::TypeArg::Type(ty)) => {
+                    self.diagnostics
+                        .push(row_expected(self.file, &at.written(), ty));
+                    valid = false;
+                }
+                (ParamSort::Type, ast::TypeArg::Row(row)) => {
+                    self.diagnostics.push(Diagnostic::error(
+                        codes::ARGUMENT_SORT,
+                        format!("`{}` takes a type here", at.written()),
+                        Label::new(self.file, row.range(), "this is a row"),
+                    ));
+                    valid = false;
+                }
+            }
+        }
+        if !valid {
+            return TypeRefKind::Error;
+        }
+        TypeRefKind::Con(id, types, rows)
+    }
+
+    /// 種類を照合できない引数を、書いた形のまま変換する。中の誤りを報告するためで、結果は使わない。
+    fn lower_written_args(&mut self, args: &[ast::TypeArg]) {
+        for arg in args {
+            match arg {
+                ast::TypeArg::Type(ty) => {
+                    self.lower(Some(ty.clone()), ty.range());
+                }
+                ast::TypeArg::Row(row) => {
+                    self.row_arg(row);
+                }
+            }
+        }
+    }
+
+    /// 型の適用の引数に書いた row。`<…>` の中身がなければパーサが報告済みである。
+    fn row_arg(&mut self, arg: &ast::RowArg) -> RowRef {
+        match arg.row() {
+            Some(row) => self.row(&row),
+            None => RowRef::Error,
         }
     }
 
@@ -289,7 +344,15 @@ pub(super) fn visit_type_vars(
     match &types[id].kind {
         TypeRefKind::Error => {}
         TypeRefKind::Var(var) => visit(*var),
-        TypeRefKind::Con(_, args) | TypeRefKind::Tuple(args) => {
+        TypeRefKind::Con(_, args, rows) => {
+            for &arg in args {
+                visit_type_vars(types, arg, visit);
+            }
+            for row in rows {
+                visit_row_type_vars(types, row, visit);
+            }
+        }
+        TypeRefKind::Tuple(args) => {
             for &arg in args {
                 visit_type_vars(types, arg, visit);
             }
@@ -298,14 +361,18 @@ pub(super) fn visit_type_vars(
             param, row, ret, ..
         } => {
             visit_type_vars(types, *param, visit);
-            if let RowRef::Closed { effects, .. } | RowRef::Open { effects, .. } = row {
-                for effect in effects {
-                    for &arg in &effect.args {
-                        visit_type_vars(types, arg, visit);
-                    }
-                }
-            }
+            visit_row_type_vars(types, row, visit);
             visit_type_vars(types, *ret, visit);
+        }
+    }
+}
+
+fn visit_row_type_vars(types: &Arena<TypeRef>, row: &RowRef, visit: &mut impl FnMut(TypeVarId)) {
+    if let RowRef::Closed { effects, .. } | RowRef::Open { effects, .. } = row {
+        for effect in effects {
+            for &arg in &effect.args {
+                visit_type_vars(types, arg, visit);
+            }
         }
     }
 }
@@ -313,15 +380,13 @@ pub(super) fn visit_type_vars(
 /// 変換が誤りを報告した型か。誤りの跡 (`Error` の型と row) からは型変数が落ちているので、型変数が現れないことを
 /// 根拠にした診断を重ねない。
 pub(super) fn has_error(types: &Arena<TypeRef>) -> bool {
-    types.iter().any(|(_, ty)| {
-        matches!(
-            ty.kind,
-            TypeRefKind::Error
-                | TypeRefKind::Fn {
-                    row: RowRef::Error,
-                    ..
-                }
-        )
+    types.iter().any(|(_, ty)| match &ty.kind {
+        TypeRefKind::Error
+        | TypeRefKind::Fn {
+            row: RowRef::Error, ..
+        } => true,
+        TypeRefKind::Con(_, _, rows) => rows.contains(&RowRef::Error),
+        TypeRefKind::Var(_) | TypeRefKind::Fn { .. } | TypeRefKind::Tuple(_) => false,
     })
 }
 
@@ -384,6 +449,33 @@ pub(super) fn arity_error(
             format!("expected {}", type_arguments(expected)),
         ),
     )
+}
+
+/// row の位置に型を書いた (E1048)。小文字の名前だけを書いたなら、`<e>` に直す fix を付ける
+/// (docs/spec/types.md の「row の型引数」)。
+fn row_expected(file: FileId, name: &str, ty: &ast::Type) -> Diagnostic {
+    let diagnostic = Diagnostic::error(
+        codes::ARGUMENT_SORT,
+        format!("`{name}` takes a row here"),
+        Label::new(file, ty.range(), "this is a type"),
+    );
+    let ast::Type::VarType(var) = ty else {
+        return diagnostic;
+    };
+    let Some(var) = var.name() else {
+        return diagnostic;
+    };
+    let row = format!("<{}>", var.text());
+    diagnostic
+        .with_help(format!("write it as a row: `{row}`"))
+        .with_fix(
+            format!("write `{row}`"),
+            vec![TextEdit {
+                file,
+                range: var.text_range(),
+                replacement: row,
+            }],
+        )
 }
 
 /// E1043。クラスは型の名前空間にあるが、型ではない

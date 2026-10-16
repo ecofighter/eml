@@ -9,7 +9,8 @@ use super::types::{TypeLowering, Vars};
 use crate::codes;
 use crate::def_map::Resolved;
 use crate::hir::{
-    Constructor, FieldName, Generics, ItemId, TypeDef, TypeDefKind, TypeVarDecl, ValueItem,
+    Constructor, FieldName, Generics, ItemId, ParamSort, RowVarDecl, TypeDef, TypeDefKind,
+    TypeVarDecl, ValueItem,
 };
 use crate::item_tree::{DataItem, Fixity};
 
@@ -20,9 +21,18 @@ impl ItemLowering<'_> {
             let mut generics = Generics::default();
             // extern の型に書いた型引数はパーサが E0011 にした (docs/spec/declarations.md の「`extern`」)。それでも型引数として置き、使う位置の型引数の数 (E1015) と
             // 型検査の Kind を書いたとおりにそろえて、誤りを連鎖させない
-            for (name, _) in &item.params {
-                generics.type_vars.alloc(TypeVarDecl { name: name.clone() });
+            for (name, _, sort) in &item.params {
+                let name = name.clone();
+                match sort {
+                    ParamSort::Type => {
+                        generics.type_vars.alloc(TypeVarDecl { name });
+                    }
+                    ParamSort::Row => {
+                        generics.row_vars.alloc(RowVarDecl { name });
+                    }
+                }
             }
+            let params = item.params.iter().map(|&(_, _, sort)| sort).collect();
             // extern でない `=` のない `data` は、値を作れないので E1025 にする。標準ライブラリでも同じである
             // (docs/spec/declarations.md の「`data` と `type`」)
             let data = TypeDefKind::Data {
@@ -52,6 +62,7 @@ impl ItemLowering<'_> {
                 types.alloc(TypeDef {
                     name: item.name.clone(),
                     generics,
+                    params,
                     types: Arena::new(),
                     kind,
                     lin,

@@ -19,13 +19,45 @@ pub type TypeRefId = Idx<TypeRef>;
 #[derive(Debug)]
 pub struct TypeDef {
     pub name: String,
-    /// 宣言の型引数。型引数は型だけで、row 変数は持たない (docs/spec/declarations.md の「`data` と `type`」)。
+    /// 宣言の型引数。型の型引数は `type_vars` に、row の型引数は `row_vars` に、それぞれの種類の中の順で置く。
     pub generics: Generics,
+    /// 型引数の種類を宣言の順に並べたもの。種類ごとに分けた `generics` を、書いた順に戻すのに使う
+    /// (docs/spec/types.md の「row の型引数」)。
+    pub params: Vec<ParamSort>,
     /// フィールドの型の注釈。`Constructor::fields` が指す。
     pub types: Arena<TypeRef>,
     pub kind: TypeDefKind,
     /// `data T : Lin` と宣言したか。フィールドによらず `Lin` の型になる (docs/spec/types.md の「`Lin` の宣言」)。
     pub lin: bool,
+}
+
+/// `data` の型引数の種類。使い方からは推論せず、宣言の書き方で決まる (docs/spec/types.md の「row の型引数」)。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ParamSort {
+    Type,
+    /// `<e>` と書いた row の型引数。
+    Row,
+}
+
+/// 宣言の順に並べ直した型引数の1つ。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SortedArg<T, R> {
+    Type(T),
+    Row(R),
+}
+
+/// 種類ごとに分けて持つ型引数 (`types` と `rows`) を、`sorts` の宣言の順に混ぜ直す。表示が宣言の順で書くのに使う
+/// (docs/spec/types.md の「row の型引数」)。
+pub fn in_declaration_order<'a, T, R>(
+    sorts: &'a [ParamSort],
+    types: &'a [T],
+    rows: &'a [R],
+) -> impl Iterator<Item = SortedArg<&'a T, &'a R>> {
+    let (mut types, mut rows) = (types.iter(), rows.iter());
+    sorts.iter().filter_map(move |sort| match sort {
+        ParamSort::Type => types.next().map(SortedArg::Type),
+        ParamSort::Row => rows.next().map(SortedArg::Row),
+    })
 }
 
 #[derive(Debug)]
@@ -837,8 +869,9 @@ pub struct TypeRef {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TypeRefKind {
     Error,
-    /// 型引数の個数は宣言と一致する。違えば E1015 を報告して `Error` にする。
-    Con(TypeDefId, Vec<TypeRefId>),
+    /// 型の型引数と row の型引数を、それぞれの種類の中の順で分けて持つ。個数と種類は宣言と一致する。個数が違えば E1015、
+    /// 種類が違えば E1048 を報告して `Error` にする。
+    Con(TypeDefId, Vec<TypeRefId>, Vec<RowRef>),
     Var(TypeVarId),
     Fn {
         param: TypeRefId,

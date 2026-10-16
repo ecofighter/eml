@@ -29,11 +29,23 @@ pub fn pretty(program: &Program) -> String {
 fn items(program: &Program, module: &Module, out: &mut String) {
     let items = &module.items;
     for (_, def) in items.types.iter() {
-        let params: Vec<&str> = def
+        let type_vars: Vec<&str> = def
             .generics
             .type_vars
             .iter()
             .map(|(_, var)| var.name.as_str())
+            .collect();
+        let row_vars: Vec<&str> = def
+            .generics
+            .row_vars
+            .iter()
+            .map(|(_, var)| var.name.as_str())
+            .collect();
+        let params: Vec<String> = in_declaration_order(&def.params, &type_vars, &row_vars)
+            .map(|param| match param {
+                SortedArg::Type(name) => name.to_string(),
+                SortedArg::Row(name) => format!("<{name}>"),
+            })
             .collect();
         let (keyword, constructors) = match &def.kind {
             TypeDefKind::Data { constructors } => ("data", constructors.as_slice()),
@@ -162,7 +174,9 @@ impl Printer<'_> {
         let text = self.ty(types, id);
         match &types[id].kind {
             TypeRefKind::Fn { .. } => format!("({text})"),
-            TypeRefKind::Con(_, args) if !args.is_empty() => format!("({text})"),
+            TypeRefKind::Con(_, args, rows) if !args.is_empty() || !rows.is_empty() => {
+                format!("({text})")
+            }
             _ => text,
         }
     }
@@ -553,10 +567,20 @@ impl Printer<'_> {
     fn ty(&self, types: &la_arena::Arena<TypeRef>, id: TypeRefId) -> String {
         match &types[id].kind {
             TypeRefKind::Error => "<error>".to_string(),
-            TypeRefKind::Con(id, args) => {
+            TypeRefKind::Con(id, args, rows) => {
                 let mut text = self.program.names.ty(*id).to_string();
-                for &arg in args {
-                    write!(text, " {}", self.ty_atom(types, arg)).unwrap();
+                for arg in in_declaration_order(&self.program[*id].params, args, rows) {
+                    match arg {
+                        SortedArg::Type(&arg) => write!(text, " {}", self.ty_atom(types, arg)),
+                        // 型の引数の row は省略できない (docs/spec/types.md の「row の型引数」)
+                        SortedArg::Row(row) => write!(
+                            text,
+                            " {}",
+                            self.row(types, row)
+                                .expect("a row argument is always written")
+                        ),
+                    }
+                    .unwrap();
                 }
                 text
             }
@@ -575,37 +599,43 @@ impl Printer<'_> {
                 ret,
             } => {
                 let param_text = self.ty_operand(types, *param);
-                let effect_names = |effects: &[EffectRef]| -> Vec<String> {
-                    effects
-                        .iter()
-                        .map(|effect| {
-                            let mut text = self.program.names.effect(effect.effect).to_string();
-                            for &arg in &effect.args {
-                                write!(text, " {}", self.ty_atom(types, arg)).unwrap();
-                            }
-                            text
-                        })
-                        .collect()
-                };
-                let row = match row {
-                    RowRef::Omitted => String::new(),
-                    RowRef::Closed { effects, .. } => {
-                        format!("<{}> ", effect_names(effects).join(", "))
-                    }
-                    RowRef::Open { effects, tail, .. } => {
-                        let tail = &self.generics.row_vars[*tail].name;
-                        if effects.is_empty() {
-                            format!("<{tail}> ")
-                        } else {
-                            format!("<{} | {tail}> ", effect_names(effects).join(", "))
-                        }
-                    }
-                    RowRef::Error => "<error> ".to_string(),
+                let row = match self.row(types, row) {
+                    Some(row) => format!("{row} "),
+                    None => String::new(),
                 };
                 let once = if *once { "once " } else { "" };
                 format!("{once}{param_text} -> {row}{}", self.ty(types, *ret))
             }
         }
+    }
+
+    /// 書いた row。省略した row は `None` である。
+    fn row(&self, types: &la_arena::Arena<TypeRef>, row: &RowRef) -> Option<String> {
+        let effect_names = |effects: &[EffectRef]| -> Vec<String> {
+            effects
+                .iter()
+                .map(|effect| {
+                    let mut text = self.program.names.effect(effect.effect).to_string();
+                    for &arg in &effect.args {
+                        write!(text, " {}", self.ty_atom(types, arg)).unwrap();
+                    }
+                    text
+                })
+                .collect()
+        };
+        Some(match row {
+            RowRef::Omitted => return None,
+            RowRef::Closed { effects, .. } => format!("<{}>", effect_names(effects).join(", ")),
+            RowRef::Open { effects, tail, .. } => {
+                let tail = &self.generics.row_vars[*tail].name;
+                if effects.is_empty() {
+                    format!("<{tail}>")
+                } else {
+                    format!("<{} | {tail}>", effect_names(effects).join(", "))
+                }
+            }
+            RowRef::Error => "<error>".to_string(),
+        })
     }
 }
 

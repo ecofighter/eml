@@ -2,7 +2,7 @@ use eml_diagnostics::TextRange;
 use eml_syntax::SyntaxKind::{self, *};
 use eml_syntax::ast::{
     AppExpr, ClassMember, Clause, Expr, InstanceMember, Item, LiteralValue, OpSeqElement, Pat,
-    SourceFile, Stmt, Type, TypeParam,
+    SourceFile, Stmt, Type, TypeArg, TypeParam,
 };
 use rowan::ast::AstNode;
 
@@ -452,7 +452,13 @@ fn type_application_parts() {
         .map(|segment| segment.text())
         .collect();
     assert_eq!(segments, ["Option"]);
-    let args: Vec<SyntaxKind> = app.type_args().map(|ty| ty.syntax().kind()).collect();
+    let args: Vec<SyntaxKind> = app
+        .args()
+        .map(|arg| match arg {
+            TypeArg::Type(ty) => ty.syntax().kind(),
+            TypeArg::Row(row) => row.syntax().kind(),
+        })
+        .collect();
     assert_eq!(args, [PAREN_TYPE]);
 }
 

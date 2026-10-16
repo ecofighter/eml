@@ -59,7 +59,12 @@ fn declarations_hold_what_is_known_before_resolving_names() {
             })
             .collect()
     };
-    assert_eq!(params(&tree.data[0].params), ["a", "b"]);
+    let data_params: Vec<(String, eml_diagnostics::TextRange)> = tree.data[0]
+        .params
+        .iter()
+        .map(|(name, range, _)| (name.clone(), *range))
+        .collect();
+    assert_eq!(params(&data_params), ["a", "b"]);
     assert_eq!(u32::from(tree.data[0].params[0].1.start()), 7);
     assert_eq!(params(&tree.effects[0].params), ["s"]);
     let keyword = |range: Option<eml_diagnostics::TextRange>| range.map(|range| &text[range]);

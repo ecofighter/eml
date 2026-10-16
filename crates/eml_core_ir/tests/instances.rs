@@ -580,3 +580,9 @@ fn a_result_only_operation_variable_gives_one_uniform_key() {
     let text = "ids : List a -> List a\nids xs = xs\n\neffect Make where\n  mk : Unit -> List a\n\nbody : Unit -> <Make> Int\nbody () =\n  let xs = (mk () : List Int)\n  0\n\nmain : Unit -> <IO> Unit\nmain () =\n  let n = handle body () with\n            | mk () k -> k (ids [])\n  println (show n)";
     assert_eq!(instances_of(text, "ids"), ["ids@[_:poly]"]);
 }
+
+#[test]
+fn instance_names_show_row_arguments() {
+    let text = "data Iter <e> a =\n  | Done\n  | More a (once Unit -> <e> Iter <e> a)\n\nid : a -> a\nid x = x\n\nempty : Iter <IO> Int\nempty = Done\n\nmain : Unit -> <IO> Unit\nmain () = drop (id empty)";
+    assert_eq!(instances_of(text, "id"), ["id@[Iter <IO> Int]"]);
+}

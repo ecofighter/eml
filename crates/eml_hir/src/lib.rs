@@ -89,6 +89,7 @@ pub mod codes {
     pub const DUPLICATE_FIELD: ErrorCode = ErrorCode(1045);
     pub const UNKNOWN_FIELD: ErrorCode = ErrorCode(1046);
     pub const MISSING_FIELDS: ErrorCode = ErrorCode(1047);
+    pub const ARGUMENT_SORT: ErrorCode = ErrorCode(1048);
     pub const UNKNOWN_KIND: ErrorCode = ErrorCode(1049);
     pub const ONCE_DECLARATION: ErrorCode = ErrorCode(1050);
 }
