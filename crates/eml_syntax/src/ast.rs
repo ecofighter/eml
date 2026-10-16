@@ -90,6 +90,7 @@ ast_node! {
     ReplItems => REPL_ITEMS,
     ReplLet => REPL_LET,
     ReplExpr => REPL_EXPR,
+    ReplQuery => REPL_QUERY,
     Name => NAME,
     NameRef => NAME_REF,
     Path => PATH,
@@ -168,8 +169,8 @@ ast_node! {
 }
 
 ast_enum! {
-    /// REPL の入力の根 (`eml_syntax::parse_input`)。
-    ReplInput { ReplItems, ReplLet, ReplExpr }
+    /// REPL の入力の根 (`eml_syntax::parse_input` と `eml_syntax::parse_query`)。
+    ReplInput { ReplItems, ReplLet, ReplExpr, ReplQuery }
 }
 
 ast_enum! {
@@ -305,6 +306,12 @@ impl ReplLet {
 }
 
 impl ReplExpr {
+    pub fn expr(&self) -> Option<Expr> {
+        support::child(&self.syntax)
+    }
+}
+
+impl ReplQuery {
     pub fn expr(&self) -> Option<Expr> {
         support::child(&self.syntax)
     }

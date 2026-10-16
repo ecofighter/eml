@@ -53,9 +53,10 @@ impl Parse {
         ast::SourceFile::cast(self.syntax()).expect("the root is always SOURCE_FILE")
     }
 
-    /// `parse_input` の木の根。
+    /// `parse_input` と `parse_query` の木の根。
     pub fn repl_input(&self) -> ast::ReplInput {
-        ast::ReplInput::cast(self.syntax()).expect("the root of `parse_input` is a REPL input")
+        ast::ReplInput::cast(self.syntax())
+            .expect("the root of `parse_input` and `parse_query` is a REPL input")
     }
 }
 
@@ -67,6 +68,11 @@ pub fn parse(file: FileId, text: &str) -> (Parse, Vec<Diagnostic>) {
 /// (docs/spec/grammar.md の「REPL の入力」)。
 pub fn parse_input(file: FileId, text: &str) -> (Parse, Vec<Diagnostic>) {
     parse_with(file, text, grammar::repl_input)
+}
+
+/// `:type` の問い合わせを読む。根は `REPL_QUERY` で、式をちょうど1つ持つ (docs/spec/grammar.md の「REPL の入力」)。
+pub fn parse_query(file: FileId, text: &str) -> (Parse, Vec<Diagnostic>) {
+    parse_with(file, text, grammar::repl_query)
 }
 
 fn parse_with(file: FileId, text: &str, rule: fn(&mut parser::Parser)) -> (Parse, Vec<Diagnostic>) {

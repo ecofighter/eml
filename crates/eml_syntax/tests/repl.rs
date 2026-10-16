@@ -1,8 +1,8 @@
 //! REPL の入力の読み分けと、入力の終わりの判定 (docs/spec/grammar.md の「REPL の入力」と、docs/spec/layout.md の
 //! 「REPL の入力の終わり」)。
 
-use eml_syntax::SyntaxKind::{self, REPL_EXPR, REPL_ITEMS, REPL_LET};
-use eml_syntax::{InputStatus, input_status, parse_input};
+use eml_syntax::SyntaxKind::{self, REPL_EXPR, REPL_ITEMS, REPL_LET, REPL_QUERY};
+use eml_syntax::{InputStatus, input_status, parse_input, parse_query};
 use eml_test_support::{short, source};
 
 /// 根の種類と、構文の診断。木が元のテキストに戻ることもここで確かめる。
@@ -303,4 +303,63 @@ fn crlf_lines_end_inputs_like_lf() {
     complete("main () =\r\n  println 1\r\n");
     assert_eq!(kind("f x = x\r\n"), REPL_ITEMS);
     assert_eq!(kind("f x\r\n"), REPL_EXPR);
+}
+
+/// 問い合わせの根の種類と構文の診断。木が元のテキストに戻ることも確かめる。
+fn query(text: &str) -> (SyntaxKind, Vec<String>) {
+    let (files, file) = source(text);
+    let (parse, diagnostics) = parse_query(file, files.text(file));
+    assert_eq!(
+        parse.syntax().text().to_string(),
+        text,
+        "tree must be lossless"
+    );
+    (parse.syntax().kind(), short(&files, &diagnostics))
+}
+
+/// `:type` の引数は、入力の読み分けをせずに式を1つ読む (docs/spec/grammar.md の「REPL の入力」)。
+#[test]
+fn a_query_reads_one_expression() {
+    for text in [
+        "map",
+        "(>>)",
+        "fn x -> x",
+        "let x = 1 in x",
+        "f x",
+        "[1, 2]",
+    ] {
+        assert_eq!(query(text), (REPL_QUERY, vec![]), "{text:?}");
+    }
+    let (files, file) = source("fn x -> x");
+    let (parse, _) = parse_query(file, files.text(file));
+    let eml_syntax::ast::ReplInput::ReplQuery(input) = parse.repl_input() else {
+        panic!("a query root");
+    };
+    assert!(input.expr().is_some());
+}
+
+#[test]
+fn a_query_rejects_what_is_not_one_expression() {
+    for text in ["f x = 1", "1\n2"] {
+        let (kind, diagnostics) = query(text);
+        assert_eq!(kind, REPL_QUERY);
+        assert_eq!(diagnostics.len(), 1, "{text:?}: {diagnostics:?}");
+        assert!(
+            diagnostics[0].contains("E0011")
+                && diagnostics[0].contains("':type' takes one expression"),
+            "{text:?}: {diagnostics:?}"
+        );
+    }
+    let (_, diagnostics) = query("let x = 1");
+    assert!(
+        diagnostics.iter().any(|d| d.contains("expected `in`")),
+        "{diagnostics:?}"
+    );
+    let (_, diagnostics) = query("data Color = | Red");
+    assert!(
+        diagnostics
+            .iter()
+            .any(|d| d.contains("expected an expression")),
+        "{diagnostics:?}"
+    );
 }

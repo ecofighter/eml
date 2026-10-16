@@ -108,6 +108,8 @@ pub enum SyntaxKind {
     REPL_ITEMS,
     REPL_LET,
     REPL_EXPR,
+    /// `:type` の問い合わせの根。子は式のノード1つである (docs/spec/grammar.md の「REPL の入力」)。
+    REPL_QUERY,
     ERROR,
     /// 入れ子の上限 (E0013) で読み飛ばした部分。`ERROR` と分けるのは、これを含む等式の本体を HIR が誤りの式に
     /// して、その項目の中の連鎖する診断を後の段階でも出さないため (docs/spec/grammar.md)。

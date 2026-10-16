@@ -37,6 +37,31 @@ pub(crate) fn repl_input(p: &mut Parser) {
     m.complete(p, kind);
 }
 
+/// `:type` の問い合わせを読む。入力の読み分けをせず、式をちょうど1つ読む。`f x = 1` も式として読み始めるので、
+/// `=` で誤りになる (docs/spec/grammar.md の「REPL の入力」)。
+pub(crate) fn repl_query(p: &mut Parser) {
+    let m = p.start();
+    if !expressions::expr(p) {
+        expected(p, "an expression");
+    }
+    while p.at_sep() || p.at(LAYOUT_CLOSE) {
+        p.bump_any();
+    }
+    if !p.at_eof() {
+        p.error(
+            codes::SYNTAX_ERROR,
+            "':type' takes one expression",
+            "the expression ends before this",
+        );
+        let rest = p.start();
+        while !p.at_eof() {
+            p.bump_any();
+        }
+        rest.complete(p, ERROR);
+    }
+    m.complete(p, REPL_QUERY);
+}
+
 /// `let` の束縛と式の入力は1つの項目だけを持つ。2つ目の項目を、1件の診断とともに `ERROR` にする。
 fn only_one_item(p: &mut Parser) {
     while p.at_sep() || p.at(LAYOUT_CLOSE) {

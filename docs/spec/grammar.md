@@ -169,3 +169,5 @@ REPL の入力は、ファイルの文法でなく、入力の入口 (`eml_synta
 - どれでもなければ式である。`let … in …` も式である
 - `let` の束縛と式は、ちょうど1つの項目でなければならない。列 0 の `SEP` か `;` で2つ目の項目を続けたら、構文の誤り (E0011) にする
 - trivia だけの入力 (空、コメントだけ) は、要素のない `REPL_ITEMS` になる。REPL は何もせず、入力の番号も進めない
+- `:type` の問い合わせ ([REPL の端末](repl.md) の「型の表示」) は、入力の入口でなく、問い合わせの入口 (`eml_syntax::parse_query`) で読む。根は `REPL_QUERY` で、式をちょうど1つ持つ。入力の読み分けの先読みはしないので、`f x = 1` も式として読み始め、`=` で E0011 (`':type' takes one expression`) にする。`let x = 1` と `data …` は、式の文法のままの誤り (``expected `in` ``、`expected an expression`) になる
+- `:load` のファイル ([REPL の端末](repl.md) の「ファイルの読み込み」) は、セッションの入力だが、ファイルの文法 (`eml_syntax::parse`) で読む

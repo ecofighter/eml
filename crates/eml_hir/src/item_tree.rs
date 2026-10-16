@@ -327,6 +327,9 @@ pub fn item_tree(file: FileId, parse: &Parse) -> (ItemTree, Vec<Diagnostic>) {
                     });
                     (Vec::new(), input)
                 }
+                ast::ReplInput::ReplQuery(_) => {
+                    unreachable!("the loader does not read queries yet")
+                }
                 ast::ReplInput::ReplExpr(input) => {
                     let input = input.expr().map(|expr| InputItem {
                         kind: InputItemKind::Expr(AstPtr::new(&expr)),
