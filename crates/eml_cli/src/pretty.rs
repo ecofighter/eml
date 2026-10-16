@@ -203,15 +203,20 @@ impl<'a> Tokens<'a> {
     }
 }
 
-/// 書く作業。入れ子が深くても Rust のスタックを使わないよう、組の中身を再帰でなくこの列でたどる。
-enum Work {
+/// 書く作業。入れ子が深くても Rust のスタックを使わないよう、組の中身を再帰でなくこの列でたどる。字下げの文字列は、
+/// 積むときでなく書くときに作る。積んだまま書かずに諦める字下げを作らないためである。
+enum Work<'a> {
     /// トークン `from..to` を順に書く。組に出会えば、書き方を決める。`base` は、この範囲の中で行を分けた組を置く列の
     /// 基準 (行の始めの列) で、組は `base + 2` の列に置く。
     Tokens { from: usize, to: usize, base: usize },
-    /// 1要素ずつ書く組の要素の前の区切り (`[ ` か、改行と字下げと `, `)。書いた後の列が、要素の行の始めの列になる。
-    Prefix(String),
-    /// 1要素ずつ書く組の閉じ括弧の行 (改行と字下げと閉じ括弧)。
-    Close(String),
+    /// 1要素ずつ書く組の要素の前の区切り。最初の要素の前は開き括弧と空白 (`[ `)、ほかは改行と `column` の列までの
+    /// 字下げと `, ` である。書いた後の列が、要素の行の始めの列になる。
+    Prefix {
+        open: Option<&'a str>,
+        column: usize,
+    },
+    /// 1要素ずつ書く組の閉じ括弧の行 (改行と `column` の列までの字下げと閉じ括弧)。
+    Close { column: usize, text: &'a str },
 }
 
 struct Layout<'t, 'a> {
@@ -230,8 +235,9 @@ struct Layout<'t, 'a> {
     one_by_one: Vec<bool>,
 }
 
-impl Layout<'_, '_> {
-    /// 整形した文字列。`OUTPUT_LIMIT` を超えるなら `None` を返す。
+impl<'a> Layout<'_, 'a> {
+    /// 整形した文字列。`OUTPUT_LIMIT` を超えるなら `None` を返す。超えた所で書くのをやめる。字下げの多い結果は上限の
+    /// 何倍にもなりうるので、書き終えてから比べると、手間が出力の上限で抑えられない。
     fn run(mut self) -> Option<String> {
         let mut work = vec![Work::Tokens {
             from: 0,
@@ -240,13 +246,19 @@ impl Layout<'_, '_> {
         }];
         while let Some(item) = work.pop() {
             match item {
-                Work::Prefix(text) => {
-                    self.write(&text);
+                Work::Prefix { open, column } => {
+                    match open {
+                        Some(open) => {
+                            self.write(open);
+                            self.write(" ");
+                        }
+                        None => self.newline(column, ", "),
+                    }
                     self.line_start = self.column;
                 }
-                Work::Close(text) => self.write(&text),
+                Work::Close { column, text } => self.newline(column, text),
                 Work::Tokens { mut from, to, base } => {
-                    while from < to {
+                    while from < to && !self.over() {
                         if matches!(self.tokens.list[from].kind, Kind::Open(_)) {
                             match self.group(from, to, base, &mut work) {
                                 Some(next) => from = next,
@@ -259,7 +271,7 @@ impl Layout<'_, '_> {
                     }
                 }
             }
-            if self.written > OUTPUT_LIMIT {
+            if self.over() {
                 return None;
             }
         }
@@ -273,7 +285,7 @@ impl Layout<'_, '_> {
         open: usize,
         end: usize,
         base: usize,
-        work: &mut Vec<Work>,
+        work: &mut Vec<Work<'a>>,
     ) -> Option<usize> {
         let tokens = self.tokens;
         let n = tokens.list.len();
@@ -328,7 +340,10 @@ impl Layout<'_, '_> {
             base,
         });
         if close < n {
-            work.push(Work::Close(format!("\n{}{close_text}", " ".repeat(column))));
+            work.push(Work::Close {
+                column,
+                text: close_text,
+            });
         }
         for (index, &(from, to)) in elements.iter().enumerate().rev() {
             work.push(Work::Tokens {
@@ -336,11 +351,10 @@ impl Layout<'_, '_> {
                 to,
                 base: column + 2,
             });
-            work.push(Work::Prefix(if index == 0 {
-                format!("{open_text} ")
-            } else {
-                format!("\n{}, ", " ".repeat(column))
-            }));
+            work.push(Work::Prefix {
+                open: (index == 0).then_some(open_text),
+                column,
+            });
         }
         None
     }
@@ -348,13 +362,16 @@ impl Layout<'_, '_> {
     /// 組を含まない要素を、幅まで詰めて並べる。収まらない要素の前で改行し、開き括弧の列から `, ` で続ける。
     fn packed(&mut self, elements: &[(usize, usize)], column: usize, open: &str, close: &str) {
         for (index, &(from, to)) in elements.iter().enumerate() {
+            if self.over() {
+                return;
+            }
             if index == 0 {
                 self.write(open);
                 self.write(" ");
             } else if self.column + 2 + self.tokens.span(from, to) <= self.width {
                 self.write(", ");
             } else {
-                self.write(&format!("\n{}, ", " ".repeat(column)));
+                self.newline(column, ", ");
             }
             self.write_span(from, to);
         }
@@ -394,7 +411,16 @@ impl Layout<'_, '_> {
             self.out.pop();
             self.written -= 1;
         }
-        self.write(&format!("\n{}", " ".repeat(indent)));
+        self.newline(indent, "");
+    }
+
+    /// 改行して `indent` の列まで字下げし、`text` を書く。
+    fn newline(&mut self, indent: usize, text: &str) {
+        self.write(&format!("\n{}{text}", " ".repeat(indent)));
+    }
+
+    fn over(&self) -> bool {
+        self.written > OUTPUT_LIMIT
     }
 
     fn write_span(&mut self, from: usize, to: usize) {

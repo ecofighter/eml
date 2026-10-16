@@ -848,7 +848,8 @@ pub(super) fn collect(hir: &HirProgram, typed: &TypedProgram, entry: FunctionId)
     // (docs/spec/core-ir.md の「row のビットと instance の鍵」)
     let entry_bits = vec![true; row_vars(hir, entry).len()];
     let entry_index = collector.add(entry, entry_args, entry_bits);
-    // 入力の値そのものを `Show` で書くときは、今までどおり `show` を呼ぶ (docs/spec/core-ir.md の「REPL の入力」)
+    // 入力の値そのものは、`show_prec` で書く型でも `show` を呼ぶ。表示を、利用者が `show` で得る文字列と同じにするため
+    // である (docs/spec/core-ir.md の「REPL の入力」)
     let display = match (hir[entry].kind, typed.inputs.get(entry)) {
         (FunctionKind::Input(InputKind::Expr), Some(input))
             if input.display != InputDisplay::Unit =>

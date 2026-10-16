@@ -386,6 +386,11 @@ fn shown(
         InputDisplay::Value => String::new(),
         InputDisplay::Typed(ty) => format!(" : {ty}"),
     };
+    // `let` の束縛の入力はいつも `Unit` を記録する (docs/spec/types.md の「REPL の入力」)
+    debug_assert!(matches!(
+        program[entry].kind,
+        FunctionKind::Input(InputKind::Expr)
+    ));
     let file = program.file(entry.module);
     let body = program.body(entry).expect("an input has a body");
     let position = files.line_col(file, body.exprs[body.root].range.start());

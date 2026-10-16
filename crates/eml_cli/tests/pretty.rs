@@ -218,3 +218,15 @@ fn a_formatted_result_over_the_output_limit_is_left_alone() {
     assert_eq!(shown.lines().count(), 40);
     assert!(shown.chars().count() <= OUTPUT_LIMIT);
 }
+
+/// 長い前置きの後の組は、要素ごとに長い字下げを書く。整形した結果は上限の何十倍にもなるが、上限を超えた所で諦めて、
+/// 切った文字列をそのまま返す。
+#[test]
+fn a_long_indent_gives_up_at_the_output_limit() {
+    let prefix = "x".repeat(5000);
+    let packed = format!("{prefix}[{}1]", "1,".repeat(3000));
+    let cut: String = packed.chars().take(LIMIT).collect();
+    assert_eq!(format(&packed, " : T", 80), format!("{cut} ... : T"));
+    let one_by_one = format!("{prefix}[{}[1]]", "[1],".repeat(1000));
+    assert_eq!(format(&one_by_one, "", 80), one_by_one);
+}
