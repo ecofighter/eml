@@ -4,7 +4,7 @@ use std::sync::{Arc, Mutex, PoisonError};
 
 use eml_cli::{
     Capture, Control, FsProvider, HostRef, Limits, ModulePath, ModuleSource, Outcome, ReadError,
-    Repl, RunConfig, RuntimeError, Session, Stop, VmFault, capture_host, execute,
+    Repl, RunConfig, RuntimeError, Session, SourceLocation, Stop, VmFault, capture_host, execute,
 };
 use eml_diagnostics::{Diagnostic, has_errors};
 use eml_rt::{Fault, Host, Opened, Stream};
@@ -1093,4 +1093,192 @@ fn type_of_clears_a_stale_interrupt() {
     control.interrupt();
     assert_eq!(console.repl.type_of("1 + 1").ty.as_deref(), Some("Int"));
     assert_eq!(control.stop_bits() & Control::INTERRUPT, 0);
+}
+
+/// 関数の大きなリストも、予算の分の要素だけを書く (docs/spec/repl.md の「上限」)。
+#[test]
+fn a_long_list_of_functions_is_cut_by_the_budget() {
+    let mut console = Console::new(&RunConfig::default().with_debug_heap(true));
+    let fns = "fns : Int -> List (Int -> Int) -> List (Int -> Int)\n\
+               fns n acc = if n == 0 then acc else fns (n - 1) ((fn x -> x) :: acc)";
+    assert_eq!(console.eval(fns).0, Outcome::Accepted);
+    let (outcome, output, _) = console.eval("fns 100000 []");
+    assert_eq!(outcome, Outcome::Accepted);
+    assert_eq!(output.matches("<fn>").count(), 299, "{output}");
+    assert!(
+        output.ends_with(", ... ] : List (Int -> Int)\n"),
+        "{output}"
+    );
+    assert_eq!(console.repl.close().leaks, None);
+}
+
+/// 表示関数が呼んだ利用者の `show` が止まらなくても、確保量の上限で止まり、セッションは続く。表示器は入力と同じ実行の
+/// 中の普通のコードなので、回復も割り込みも同じ安全点で働く (docs/spec/repl.md の「割り込みと実行時エラー」)。
+#[test]
+fn a_display_stopped_by_the_memory_limit_leaves_the_session_usable() {
+    for debug_heap in [true, false] {
+        let control = Arc::new(Control::new(Limits {
+            max_bytes: 1 << 22,
+            ..Limits::default()
+        }));
+        let config = RunConfig::default()
+            .with_debug_heap(debug_heap)
+            .with_control(control);
+        let mut console = Console::new(&config);
+        for input in [
+            "data Grow = | Grow",
+            "grow : String -> String\ngrow s = grow (s ++ s)",
+            "instance Show Grow where\n  show _ = grow \"x\"",
+        ] {
+            let (outcome, _, codes) = console.eval(input);
+            assert_eq!(outcome, Outcome::Accepted, "{input}: {codes:?}");
+        }
+        let (outcome, output, _) = console.eval("(Grow, fn x -> x + 1)");
+        let Outcome::Failed(error) = outcome else {
+            panic!("expected the memory limit, got {outcome:?} (debug_heap = {debug_heap})");
+        };
+        assert!(
+            error
+                .to_string()
+                .starts_with("the memory limit is exceeded"),
+            "{error}"
+        );
+        assert_eq!(output, "");
+        assert_eq!(console.eval("1 + 1").1, "2\n", "debug_heap = {debug_heap}");
+        assert_eq!(
+            console.repl.close().leaks,
+            None,
+            "debug_heap = {debug_heap}"
+        );
+    }
+}
+
+/// 書き込みを断る Host。
+struct Unwritable;
+
+impl Host for Unwritable {
+    fn write_line(&self, _: Stream, _: &str) -> io::Result<()> {
+        Err(io::Error::other("the pipe is closed"))
+    }
+
+    fn flush(&self) -> io::Result<()> {
+        Ok(())
+    }
+
+    fn open(&self, _: &str) -> io::Result<Opened> {
+        Err(io::ErrorKind::NotFound.into())
+    }
+}
+
+/// 結果を書けなければ、入力の式の先頭を指す出力の誤りになり、セッションは続く (docs/spec/repl.md の「割り込みと実行時
+/// エラー」)。
+#[test]
+fn a_result_that_cannot_be_written_fails_at_the_input() {
+    let mut repl = Repl::new(
+        &RunConfig::default(),
+        Box::new(MemorySource(&[])),
+        "",
+        HostRef::new(Arc::new(Unwritable)),
+    );
+    assert_eq!(repl.eval("let k = 2").outcome, Outcome::Accepted);
+    let Outcome::Failed(error) = repl.eval("  k + 1").outcome else {
+        panic!("expected an output error");
+    };
+    assert_eq!(
+        error,
+        RuntimeError::Fault {
+            fault: VmFault::Extern(Fault::Output("the pipe is closed".into())),
+            function: "<repl>".to_string(),
+            at: Some(SourceLocation {
+                path: "<input 2>".to_string(),
+                line: 1,
+                column: 3,
+            }),
+        }
+    );
+    assert_eq!(
+        error.to_string(),
+        "cannot write the output: the pipe is closed\n  at <input 2>:1:3"
+    );
+    assert_eq!(repl.eval("()").outcome, Outcome::Accepted);
+}
+
+/// `()` と、フィールドのないコンストラクタとレコードも構造で書ける。`()` の表示関数は値を `unit` で受ける。
+#[test]
+fn units_and_fieldless_constructors_are_written() {
+    for debug_heap in [true, false] {
+        let mut console = Console::new(&RunConfig::default().with_debug_heap(debug_heap));
+        assert_eq!(console.eval("[(), ()]").1, "[(), ()]\n");
+        assert_eq!(
+            console.eval("((), fn x -> x + 1)").1,
+            "((), <fn>) : (Unit, Int -> Int)\n"
+        );
+        assert_eq!(console.eval("data E = | E {} | F").0, Outcome::Accepted);
+        assert_eq!(
+            console.eval("(E {}, F, fn x -> x + 1)").1,
+            "(E {}, F, <fn>) : (E, E, Int -> Int)\n"
+        );
+        assert_eq!(
+            console.repl.close().leaks,
+            None,
+            "debug_heap = {debug_heap}"
+        );
+    }
+}
+
+/// 表示関数が呼んだ利用者の `show` の実行時エラーは、入力の実行時エラーになり、セッションは続く
+/// (docs/spec/repl.md の「結果の表示」)。
+#[test]
+fn a_runtime_error_in_a_show_inside_a_display_fails_the_input() {
+    for debug_heap in [true, false] {
+        let mut console = Console::new(&RunConfig::default().with_debug_heap(debug_heap));
+        for input in [
+            "data Bad = | Bad",
+            "instance Show Bad where\n  show _ = show (1 / 0)",
+        ] {
+            let (outcome, _, codes) = console.eval(input);
+            assert_eq!(outcome, Outcome::Accepted, "{input}: {codes:?}");
+        }
+        let (outcome, output, _) = console.eval("[(Bad, fn x -> x + 1)]");
+        let Outcome::Failed(error) = outcome else {
+            panic!("expected a runtime error, got {outcome:?}");
+        };
+        assert_eq!(error.to_string(), "division by zero\n  at <input 2>:2:20");
+        assert_eq!(output, "");
+        assert_eq!(console.eval("1 + 1").1, "2\n");
+        assert_eq!(
+            console.repl.close().leaks,
+            None,
+            "debug_heap = {debug_heap}"
+        );
+    }
+}
+
+/// 10,000 文字ちょうどの結果は切らず、超えた結果は 10,000 文字に ` ...` を足す。型の ` : T` は切らない
+/// (docs/spec/repl.md の「上限」)。
+#[test]
+fn a_result_is_cut_after_ten_thousand_chars() {
+    let mut console = Console::new(&RunConfig::default());
+    for input in [
+        "rep : Int -> String -> String\nrep n s = if n == 0 then s else rep (n - 1) (s ++ \"x\")",
+        "data Big = | Big Int",
+        "instance Show Big where\n  show (Big n) = rep n \"\"",
+    ] {
+        let (outcome, _, codes) = console.eval(input);
+        assert_eq!(outcome, Outcome::Accepted, "{input}: {codes:?}");
+    }
+    assert_eq!(
+        console.eval("Big 10000").1,
+        format!("{}\n", "x".repeat(10_000))
+    );
+    assert_eq!(
+        console.eval("Big 10001").1,
+        format!("{} ...\n", "x".repeat(10_000))
+    );
+    let typed = console.eval("(Big 9999, fn x -> x + 1)").1;
+    // 切った所で開いたままの括弧は閉じているとみなす
+    assert_eq!(
+        typed,
+        format!("({} ... : (Big, Int -> Int)\n", "x".repeat(9_999))
+    );
 }
