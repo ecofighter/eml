@@ -581,6 +581,8 @@ fn keyword(ident: &str) -> Option<SyntaxKind> {
         "multi" => MULTI_KW,
         "use" => USE_KW,
         "fn" => FN_KW,
+        "ctl" => CTL_KW,
+        "and" => AND_KW,
         "forall" => FORALL_KW,
         "class" => CLASS_KW,
         "instance" => INSTANCE_KW,

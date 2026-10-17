@@ -416,3 +416,139 @@ fn a_qualified_clause_head_must_end_with_a_lowercase_name() {
         ["E0011 1:24 expected a lowercase name"]
     );
 }
+
+#[test]
+fn fn_and_ctl_keywords_after_the_pipe() {
+    insta::assert_snapshot!(shape(&lines(&["main () =", "  handle f () with", "    | fn ask () -> 1"])), @r#"
+    SOURCE_FILE
+      EQUATION
+        NAME
+          LIDENT "main"
+        UNIT_PAT
+          L_PAREN "("
+          R_PAREN ")"
+        EQ "="
+        BLOCK
+          EXPR_STMT
+            HANDLE_EXPR
+              HANDLE_KW "handle"
+              APP_EXPR
+                PATH_EXPR
+                  PATH
+                    NAME_REF
+                      LIDENT "f"
+                UNIT_EXPR
+                  L_PAREN "("
+                  R_PAREN ")"
+              WITH_KW "with"
+              OP_CLAUSE
+                PIPE "|"
+                FN_KW "fn"
+                PATH
+                  NAME_REF
+                    LIDENT "ask"
+                UNIT_PAT
+                  L_PAREN "("
+                  R_PAREN ")"
+                THIN_ARROW "->"
+                LITERAL
+                  INT "1"
+    "#);
+    insta::assert_snapshot!(shape(&lines(&["main () =", "  handle f () with", "    | ctl fail e -> 0"])), @r#"
+    SOURCE_FILE
+      EQUATION
+        NAME
+          LIDENT "main"
+        UNIT_PAT
+          L_PAREN "("
+          R_PAREN ")"
+        EQ "="
+        BLOCK
+          EXPR_STMT
+            HANDLE_EXPR
+              HANDLE_KW "handle"
+              APP_EXPR
+                PATH_EXPR
+                  PATH
+                    NAME_REF
+                      LIDENT "f"
+                UNIT_EXPR
+                  L_PAREN "("
+                  R_PAREN ")"
+              WITH_KW "with"
+              OP_CLAUSE
+                PIPE "|"
+                CTL_KW "ctl"
+                PATH
+                  NAME_REF
+                    LIDENT "fail"
+                BIND_PAT
+                  NAME
+                    LIDENT "e"
+                THIN_ARROW "->"
+                LITERAL
+                  INT "0"
+    "#);
+    insta::assert_snapshot!(shape(&lines(&["main () =", "  handle f () with", "    | ctl get () k st -> k st st"])), @r#"
+    SOURCE_FILE
+      EQUATION
+        NAME
+          LIDENT "main"
+        UNIT_PAT
+          L_PAREN "("
+          R_PAREN ")"
+        EQ "="
+        BLOCK
+          EXPR_STMT
+            HANDLE_EXPR
+              HANDLE_KW "handle"
+              APP_EXPR
+                PATH_EXPR
+                  PATH
+                    NAME_REF
+                      LIDENT "f"
+                UNIT_EXPR
+                  L_PAREN "("
+                  R_PAREN ")"
+              WITH_KW "with"
+              OP_CLAUSE
+                PIPE "|"
+                CTL_KW "ctl"
+                PATH
+                  NAME_REF
+                    LIDENT "get"
+                UNIT_PAT
+                  L_PAREN "("
+                  R_PAREN ")"
+                BIND_PAT
+                  NAME
+                    LIDENT "k"
+                BIND_PAT
+                  NAME
+                    LIDENT "st"
+                THIN_ARROW "->"
+                APP_EXPR
+                  PATH_EXPR
+                    PATH
+                      NAME_REF
+                        LIDENT "k"
+                  PATH_EXPR
+                    PATH
+                      NAME_REF
+                        LIDENT "st"
+                  PATH_EXPR
+                    PATH
+                      NAME_REF
+                        LIDENT "st"
+    "#);
+}
+
+#[test]
+fn clauses_without_a_keyword_or_with_a_misplaced_one_parse_cleanly() {
+    for text in [
+        lines(&["main () =", "  handle f () with", "    | ask () k -> k 1"]),
+        lines(&["main () =", "  handle f () with", "    | fn return x -> x"]),
+    ] {
+        assert_eq!(diagnostics(&text), Vec::<String>::new());
+    }
+}

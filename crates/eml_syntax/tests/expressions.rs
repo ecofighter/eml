@@ -1093,3 +1093,303 @@ fn a_function_let_cannot_declare_its_result_type() {
         vec!["E0011 2:12 a local function cannot declare its result type".to_string()]
     );
 }
+
+#[test]
+fn let_and_group_in_a_block() {
+    insta::assert_snapshot!(shape(&lines(&[
+        "main () =",
+        "  let even k = odd k",
+        "  and odd k = even k",
+        "  even 1",
+    ])), @r#"
+    SOURCE_FILE
+      EQUATION
+        NAME
+          LIDENT "main"
+        UNIT_PAT
+          L_PAREN "("
+          R_PAREN ")"
+        EQ "="
+        BLOCK
+          LET_STMT
+            LET_KW "let"
+            BIND_PAT
+              NAME
+                LIDENT "even"
+            PARAM_LIST
+              BIND_PAT
+                NAME
+                  LIDENT "k"
+            EQ "="
+            APP_EXPR
+              PATH_EXPR
+                PATH
+                  NAME_REF
+                    LIDENT "odd"
+              PATH_EXPR
+                PATH
+                  NAME_REF
+                    LIDENT "k"
+            AND_BINDING
+              AND_KW "and"
+              BIND_PAT
+                NAME
+                  LIDENT "odd"
+              PARAM_LIST
+                BIND_PAT
+                  NAME
+                    LIDENT "k"
+              EQ "="
+              APP_EXPR
+                PATH_EXPR
+                  PATH
+                    NAME_REF
+                      LIDENT "even"
+                PATH_EXPR
+                  PATH
+                    NAME_REF
+                      LIDENT "k"
+          EXPR_STMT
+            APP_EXPR
+              PATH_EXPR
+                PATH
+                  NAME_REF
+                    LIDENT "even"
+              LITERAL
+                INT "1"
+    "#);
+}
+
+#[test]
+fn let_and_group_with_a_block_body_comment_and_blank_line() {
+    insta::assert_snapshot!(shape(&lines(&[
+        "main () =",
+        "  let even k =",
+        "    odd k",
+        "",
+        "  -- the other half",
+        "  and odd k = even k",
+        "  even 1",
+    ])), @r#"
+    SOURCE_FILE
+      EQUATION
+        NAME
+          LIDENT "main"
+        UNIT_PAT
+          L_PAREN "("
+          R_PAREN ")"
+        EQ "="
+        BLOCK
+          LET_STMT
+            LET_KW "let"
+            BIND_PAT
+              NAME
+                LIDENT "even"
+            PARAM_LIST
+              BIND_PAT
+                NAME
+                  LIDENT "k"
+            EQ "="
+            BLOCK
+              EXPR_STMT
+                APP_EXPR
+                  PATH_EXPR
+                    PATH
+                      NAME_REF
+                        LIDENT "odd"
+                  PATH_EXPR
+                    PATH
+                      NAME_REF
+                        LIDENT "k"
+            AND_BINDING
+              AND_KW "and"
+              BIND_PAT
+                NAME
+                  LIDENT "odd"
+              PARAM_LIST
+                BIND_PAT
+                  NAME
+                    LIDENT "k"
+              EQ "="
+              APP_EXPR
+                PATH_EXPR
+                  PATH
+                    NAME_REF
+                      LIDENT "even"
+                PATH_EXPR
+                  PATH
+                    NAME_REF
+                      LIDENT "k"
+          EXPR_STMT
+            APP_EXPR
+              PATH_EXPR
+                PATH
+                  NAME_REF
+                    LIDENT "even"
+              LITERAL
+                INT "1"
+    "#);
+}
+
+#[test]
+fn let_and_group_of_three() {
+    insta::assert_snapshot!(shape(&lines(&[
+        "main () =",
+        "  let a k = b k",
+        "  and b k = c k",
+        "  and c k = a k",
+        "  a 1",
+    ])), @r#"
+    SOURCE_FILE
+      EQUATION
+        NAME
+          LIDENT "main"
+        UNIT_PAT
+          L_PAREN "("
+          R_PAREN ")"
+        EQ "="
+        BLOCK
+          LET_STMT
+            LET_KW "let"
+            BIND_PAT
+              NAME
+                LIDENT "a"
+            PARAM_LIST
+              BIND_PAT
+                NAME
+                  LIDENT "k"
+            EQ "="
+            APP_EXPR
+              PATH_EXPR
+                PATH
+                  NAME_REF
+                    LIDENT "b"
+              PATH_EXPR
+                PATH
+                  NAME_REF
+                    LIDENT "k"
+            AND_BINDING
+              AND_KW "and"
+              BIND_PAT
+                NAME
+                  LIDENT "b"
+              PARAM_LIST
+                BIND_PAT
+                  NAME
+                    LIDENT "k"
+              EQ "="
+              APP_EXPR
+                PATH_EXPR
+                  PATH
+                    NAME_REF
+                      LIDENT "c"
+                PATH_EXPR
+                  PATH
+                    NAME_REF
+                      LIDENT "k"
+            AND_BINDING
+              AND_KW "and"
+              BIND_PAT
+                NAME
+                  LIDENT "c"
+              PARAM_LIST
+                BIND_PAT
+                  NAME
+                    LIDENT "k"
+              EQ "="
+              APP_EXPR
+                PATH_EXPR
+                  PATH
+                    NAME_REF
+                      LIDENT "a"
+                PATH_EXPR
+                  PATH
+                    NAME_REF
+                      LIDENT "k"
+          EXPR_STMT
+            APP_EXPR
+              PATH_EXPR
+                PATH
+                  NAME_REF
+                    LIDENT "a"
+              LITERAL
+                INT "1"
+    "#);
+}
+
+#[test]
+fn one_line_let_and_in() {
+    insta::assert_snapshot!(shape("main () = let f x = a and g y = b in f 1"), @r#"
+    SOURCE_FILE
+      EQUATION
+        NAME
+          LIDENT "main"
+        UNIT_PAT
+          L_PAREN "("
+          R_PAREN ")"
+        EQ "="
+        LET_EXPR
+          LET_KW "let"
+          BIND_PAT
+            NAME
+              LIDENT "f"
+          PARAM_LIST
+            BIND_PAT
+              NAME
+                LIDENT "x"
+          EQ "="
+          PATH_EXPR
+            PATH
+              NAME_REF
+                LIDENT "a"
+          AND_BINDING
+            AND_KW "and"
+            BIND_PAT
+              NAME
+                LIDENT "g"
+            PARAM_LIST
+              BIND_PAT
+                NAME
+                  LIDENT "y"
+            EQ "="
+            PATH_EXPR
+              PATH
+                NAME_REF
+                  LIDENT "b"
+          IN_KW "in"
+          APP_EXPR
+            PATH_EXPR
+              PATH
+                NAME_REF
+                  LIDENT "f"
+            LITERAL
+              INT "1"
+    "#);
+}
+
+#[test]
+fn and_after_a_value_let_is_an_error() {
+    let text = lines(&["main () =", "  let x = 1", "  and g y = y", "  x"]);
+    assert_eq!(
+        diagnostics(&text),
+        vec!["E0011 3:3 `and` follows a function-form `let`, not a value `let`".to_string()]
+    );
+}
+
+#[test]
+fn and_without_parameters_is_an_error() {
+    let text = lines(&["main () =", "  let f x = x", "  and y = 1", "  f y"]);
+    assert_eq!(
+        diagnostics(&text),
+        vec!["E0011 3:9 `and` defines a local function, so it needs parameters".to_string()]
+    );
+}
+
+#[test]
+fn and_binding_cannot_declare_a_result_type() {
+    let text = lines(&["main () =", "  let f x = x", "  and g y : Int = y", "  f 1"]);
+    assert_eq!(
+        diagnostics(&text),
+        vec!["E0011 3:11 a local function cannot declare its result type".to_string()]
+    );
+}

@@ -1,0 +1,12 @@
+---
+source: crates/eml_cli/tests/ui.rs
+expression: rendered
+input_file: tests/ui/check-fail/syntax/and_value_binding.em
+---
+[E0011] Error: `and` follows a function-form `let`, not a value `let`
+   ╭─[ check-fail/syntax/and_value_binding.em:4:3 ]
+   │
+ 4 │   and g y = y
+   │   ─┬─  
+   │    ╰─── write the first binding as a function, as in `let f x = …`
+───╯

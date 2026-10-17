@@ -123,6 +123,59 @@ fn let_head_and_body(p: &mut Parser) {
     if expect(p, EQ) {
         body(p);
     }
+    // 組は関数の形の `let` にだけ続く。値の `let` に続く `and` も、回復のために束縛として読む
+    // (docs/spec/expressions.md)。
+    while at_and(p) {
+        and_binding(p, function);
+    }
+}
+
+/// `and` を行頭に書くと、レイアウト段が直前に `SEP` を入れる。`and` で始まる文はないので、`then` / `else` と
+/// 同じく、その `SEP` を1つ読み飛ばしても曖昧にならない (docs/spec/layout.md)。
+fn at_and(p: &mut Parser) -> bool {
+    skip_sep_before(p, AND_KW);
+    p.at(AND_KW)
+}
+
+fn and_binding(p: &mut Parser, after_function: bool) {
+    let m = p.start();
+    if !after_function {
+        p.error(
+            codes::SYNTAX_ERROR,
+            "`and` follows a function-form `let`, not a value `let`",
+            "write the first binding as a function, as in `let f x = …`",
+        );
+    }
+    p.bump(AND_KW);
+    if !patterns::pattern(p) {
+        expected(p, "a pattern");
+    }
+    let params = p.start();
+    let has_params = patterns::at_apat_start(p);
+    while patterns::at_apat_start(p) {
+        patterns::apat(p);
+    }
+    params.complete(p, PARAM_LIST);
+    if !has_params {
+        p.error(
+            codes::SYNTAX_ERROR,
+            "`and` defines a local function, so it needs parameters",
+            "write the parameters after the name",
+        );
+    }
+    if p.at(COLON) {
+        p.error(
+            codes::SYNTAX_ERROR,
+            "a local function cannot declare its result type",
+            "annotate a parameter instead, as in `(x : Int)`",
+        );
+        p.bump(COLON);
+        types::type_(p);
+    }
+    if expect(p, EQ) {
+        body(p);
+    }
+    m.complete(p, AND_BINDING);
 }
 
 /// REPL の `let` の束縛か式を1つ読み、根の種類 (`REPL_LET` か `REPL_EXPR`) を返す。`let` の後ろに `in` が続けば
@@ -812,6 +865,9 @@ fn handler_clause(p: &mut Parser) -> bool {
     }
     let m = p.start();
     p.bump(PIPE);
+    if p.at(FN_KW) || p.at(CTL_KW) {
+        p.bump_any();
+    }
     let kind = if p.eat(RETURN_KW) {
         if !patterns::at_apat_start(p) {
             expected(p, "a pattern");

@@ -1,3 +1,4 @@
+use crate::common::lines;
 use eml_diagnostics::TextRange;
 use eml_syntax::SyntaxKind::{self, *};
 use eml_syntax::ast::{
@@ -587,4 +588,62 @@ fn extern_methods_of_an_instance_have_names() {
         })
         .collect();
     assert_eq!(externs, ["show", "<>"]);
+}
+
+#[test]
+fn clause_keywords() {
+    let file = source(&lines(&[
+        "main () =",
+        "  handle f () with",
+        "    | fn ask () -> 1",
+        "    | ctl fail e -> 0",
+        "    | get () k -> k 1",
+        "    | fn return x -> x",
+    ]));
+    let keywords: Vec<Option<SyntaxKind>> = first_equation(&file)
+        .syntax()
+        .descendants()
+        .filter_map(|node| {
+            if let Some(clause) = eml_syntax::ast::OpClause::cast(node.clone()) {
+                Some(clause.keyword().map(|t| t.kind()))
+            } else {
+                eml_syntax::ast::ReturnClause::cast(node).map(|c| c.keyword().map(|t| t.kind()))
+            }
+        })
+        .collect();
+    assert_eq!(keywords, [Some(FN_KW), Some(CTL_KW), None, Some(FN_KW)]);
+}
+
+#[test]
+fn and_bindings_of_let_statements_and_expressions() {
+    let file = source(&lines(&[
+        "main () =",
+        "  let even k = odd k",
+        "  and odd k = even k",
+        "  and third k = k",
+        "  even 1",
+    ]));
+    let stmt = first_equation(&file)
+        .syntax()
+        .descendants()
+        .find_map(eml_syntax::ast::LetStmt::cast)
+        .unwrap();
+    assert!(stmt.params().is_some());
+    let names: Vec<String> = stmt
+        .and_bindings()
+        .map(|b| {
+            assert!(b.params().is_some() && b.body().is_some());
+            b.pat().unwrap().syntax().text().to_string()
+        })
+        .collect();
+    assert_eq!(names, ["odd", "third"]);
+
+    let file = source("main () = let f x = x and g y = y in f 1");
+    let expr = first_equation(&file)
+        .syntax()
+        .descendants()
+        .find_map(eml_syntax::ast::LetExpr::cast)
+        .unwrap();
+    assert_eq!(expr.and_bindings().count(), 1);
+    assert!(expr.body().is_some());
 }

@@ -125,6 +125,7 @@ ast_node! {
     ReturnClause => RETURN_CLAUSE,
     LambdaExpr => LAMBDA_EXPR,
     LetExpr => LET_EXPR,
+    AndBinding => AND_BINDING,
     ParamList => PARAM_LIST,
     OpSeq => OP_SEQ,
     AppExpr => APP_EXPR,
@@ -561,7 +562,25 @@ impl ParamList {
     }
 }
 
+impl AndBinding {
+    pub fn pat(&self) -> Option<Pat> {
+        support::child(&self.syntax)
+    }
+
+    pub fn params(&self) -> Option<ParamList> {
+        support::child(&self.syntax)
+    }
+
+    pub fn body(&self) -> Option<Expr> {
+        support::child(&self.syntax)
+    }
+}
+
 impl LetStmt {
+    pub fn and_bindings(&self) -> AstChildren<AndBinding> {
+        support::children(&self.syntax)
+    }
+
     pub fn pat(&self) -> Option<Pat> {
         support::child(&self.syntax)
     }
@@ -592,6 +611,10 @@ impl UseStmt {
 }
 
 impl LetExpr {
+    pub fn and_bindings(&self) -> AstChildren<AndBinding> {
+        support::children(&self.syntax)
+    }
+
     pub fn pat(&self) -> Option<Pat> {
         support::child(&self.syntax)
     }
@@ -869,6 +892,11 @@ impl HandleExpr {
 }
 
 impl OpClause {
+    /// `|` の直後の `fn` か `ctl`。
+    pub fn keyword(&self) -> Option<SyntaxToken> {
+        clause_keyword(&self.syntax)
+    }
+
     /// 節の先頭の操作の名前。修飾できる (docs/spec/grammar.md の `clause`)。
     pub fn path(&self) -> Option<Path> {
         support::child(&self.syntax)
@@ -884,7 +912,19 @@ impl OpClause {
     }
 }
 
+/// 節の直下に置かれるトークンのうち `fn` か `ctl` だけを探す。`| fn return x` のように `return` 節に付いても読める。
+fn clause_keyword(node: &SyntaxNode) -> Option<SyntaxToken> {
+    node.children_with_tokens()
+        .filter_map(|element| element.into_token())
+        .find(|token| matches!(token.kind(), SyntaxKind::FN_KW | SyntaxKind::CTL_KW))
+}
+
 impl ReturnClause {
+    /// `|` の直後の `fn` か `ctl`。
+    pub fn keyword(&self) -> Option<SyntaxToken> {
+        clause_keyword(&self.syntax)
+    }
+
     pub fn params(&self) -> AstChildren<Pat> {
         support::children(&self.syntax)
     }
