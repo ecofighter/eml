@@ -183,6 +183,7 @@ S13c-2 は S13c-1 に依る。`yields` でない関数の中で中断が起き�
 - 種類2 (S13c-1): `eml_vm` のコード生成のテスト (`crates/eml_vm/tests/codegen.rs`) の逆アセンブルのスナップショット。巻き戻しの地点の命令の後に、表の行 (`unwind [...]` と `land`) が加わる。理由: 追記の一致の確かめが表も比べるように、逆アセンブルに表を書くため
 - 種類2 (S13c-1): `eml_lir::unwind::points_all` が、所有の段の verifier が拒む関数で panic せず、その誤りを返すようにする。`crates/eml_lir/tests/unwind.rs` の `unverified_lir_panics` を、誤りを返すことを確かめる `unverified_lir_has_no_points` に書き換える。理由: VM は自身の見張りを確かめるテストで verifier を通さない IR を読み込むので、拒まれた関数を表のない関数として扱う
 - 種類2 (S13c-2): EP の出力の Core IR と LIR のスナップショットのうち、`IO` か `never` の操作だけのエフェクトを row に持つもの。`yields` の印、yield の確かめ、under の形が変わる。`RunStats` のスナップショットの `yields`、`yield_frames` と RC の回数
+- 種類2 (S13c-2): 逆のことを確かめるようになる既存のテスト2本は、名前と期待値を書き直す。`crates/eml_types/tests/yields.rs` の `every_label_always_yields` (`IO` だけの row が `Never` になる)と、`crates/eml_core_ir/tests/evidence.rs` の `an_io_extern_is_a_yield_point` (`IO` の extern の後に yield の確かめがなくなる) である。理由: yield の地点の分類から `IO` を外したため
 - 種類3 (S13c-3): `tests/ui/run/scripts/csv2jsonl/main.em` の `drop k` を消す。出力は変わらない
 - 種類1 の変更は見込んでいない。作業中に見つかったら、この spec に足す
 
