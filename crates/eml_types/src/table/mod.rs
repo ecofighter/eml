@@ -1,3 +1,4 @@
+use crate::MaskItem;
 use crate::context::Context;
 use crate::data::DataKind;
 use crate::kind::problem::{Bounds, Instance, KindProblem, OwnVars};
@@ -166,8 +167,6 @@ pub(crate) enum UnifyError {
         left: Label,
         right: Label,
     },
-    /// 呼び出し先の row が明示したエフェクトを、同じ包含の `mask` でも飛ばす必要がある (E2008)。
-    MaskConflict(EffectId),
 }
 
 struct TyVarInfo {

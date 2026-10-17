@@ -213,42 +213,6 @@ impl BodyCheck<'_, '_> {
                 }
                 return false;
             }
-            // 呼び出し先が自分で起こす `L` は今の row の先頭の `L` に届き、row 変数を通る `L` は余った `L` をすべて飛ばす
-            // 必要がある。`mask` は呼び出しの中の `L` の操作をすべて同じだけ飛ばすので、両方を満たせない
-            // (docs/spec/effects.md の「健全性」)
-            Err(UnifyError::MaskConflict(effect)) => {
-                if report {
-                    // 余った `L` のうち、いちばん後ろのものがシグネチャの row の `L` になるのは、シグネチャがそれを
-                    // 並べたときだけである。handle は今の row の先頭にラベルを足すので、handle の `L` だけが余ることもある
-                    // (docs/implementation/diagnostics.md の E2008)
-                    let from_signature = matches!(self.ambient_source, AmbientSource::Signature)
-                        && self.signature_row_lists(effect);
-                    let effect = self.program.names.effect(effect).to_string();
-                    let mut diagnostic = Diagnostic::error(
-                        codes::MASK_CONFLICT,
-                        format!(
-                            "{name} performs `{effect}` itself and also passes `{effect}` through its row variable to an outer handler"
-                        ),
-                        Label::new(
-                            self.file(),
-                            range,
-                            format!("the `{effect}` of this call cannot be told apart"),
-                        ),
-                    )
-                    .with_note(format!(
-                        "the call's own `{effect}` goes to the innermost `{effect}` handler, but the `{effect}` of its row variable must skip it"
-                    ));
-                    if from_signature {
-                        diagnostic = diagnostic.with_secondary(Label::new(
-                            self.file(),
-                            self.body_arrow_range(),
-                            format!("this row lists `{effect}` before the row variable"),
-                        ));
-                    }
-                    self.diagnostics.push(diagnostic);
-                }
-                return false;
-            }
             // include_row は rigid な row 変数を束縛しない。型引数の単一化の失敗は `EffectArgs` か `Occurs` になるので、
             // `Mismatch` は起きない
             Err(UnifyError::Mismatch) => unreachable!(

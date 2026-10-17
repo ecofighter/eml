@@ -1870,6 +1870,36 @@ fn a_masked_callback_call() {
     "#);
 }
 
+/// 呼び出し先が自分で起こすエフェクトのラベルを残す `mask`。`g` の `Yield Int` は `render` の handler に届き、`e` を
+/// 通る `Yield` は `Yield String` の handler を飛ばす (docs/spec/types.md の「推論」)。
+#[test]
+fn a_masked_call_keeps_the_callees_own_labels() {
+    let text = "\
+effect Yield a where
+  yield : a -> Unit
+
+render : (Unit -> <Yield Int | e> Unit) -> <Yield String | e> Unit
+render g =
+  handle g () with
+    | yield n k ->
+      yield (show n)
+      k ()
+
+main : Unit -> <IO> Unit
+main () =
+  handle render (fn () -> yield 1) with
+    | yield s k ->
+      println s
+      k ()
+";
+    insta::assert_snapshot!(function(&core_text(text, Pass::Translate), "render<e>$handle0"), @r#"
+    internal yields fn "render<e>$handle0"(g.0: tobj poly, p.1: unit) -> unit {
+      let t.2: unit = mask [Yield@1] yields apply g.0(())
+      return t.2
+    }
+    "#);
+}
+
 /// 引数がそろう既知の関数の呼び出しは、最後の矢印の `mask` を使う。前の矢印は部分適用で、エフェクトを起こさない。
 #[test]
 fn a_saturated_known_call_takes_the_mask_of_its_last_arrow() {

@@ -1,0 +1,10 @@
+---
+source: crates/eml_cli/tests/ui.rs
+expression: "format!(\"--- stdout ---\\n{stdout}--- stderr ---\\n{diagnostics}{stderr}{written}{exit}\")"
+input_file: tests/ui/run/effects/transform_handler.em
+---
+--- stdout ---
+string: n=1
+bool: True
+string: n=2
+--- stderr ---

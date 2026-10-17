@@ -51,7 +51,6 @@ pub mod codes {
     pub const INVALID_MAIN_TYPE: ErrorCode = ErrorCode(2004);
     pub const INFINITE_TYPE: ErrorCode = ErrorCode(2005);
     pub const NO_INSTANCE: ErrorCode = ErrorCode(2006);
-    pub const MASK_CONFLICT: ErrorCode = ErrorCode(2008);
     pub const AMBIGUOUS_CONSTRAINT: ErrorCode = ErrorCode(2009);
     pub const LINEAR_INSTANCE_HEAD: ErrorCode = ErrorCode(2010);
     pub const METHOD_KIND_MISMATCH: ErrorCode = ErrorCode(2011);
@@ -184,6 +183,15 @@ impl TypedProgram {
     }
 }
 
+/// `mask` の1つの項目。呼び出しの間に起きた `effect` の操作は、外側の `effect` の handler のうち、内側から数えて
+/// `keep` 個を残し、続く `skip` 個を飛ばす (docs/spec/effects.md の「handler の意味」)。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct MaskItem {
+    pub effect: EffectId,
+    pub keep: u32,
+    pub skip: u32,
+}
+
 #[derive(Debug, Default)]
 pub struct BodyTypes {
     pub exprs: ArenaMap<ExprId, TypeId>,
@@ -197,9 +205,9 @@ pub struct BodyTypes {
     /// シグネチャのない参照は記録しない
     /// (docs/implementation/architecture.md の「`eml_types` の内部」)。
     pub instantiations: ArenaMap<ExprId, Instantiation>,
-    /// 呼び出しの矢印ごとの `mask` (docs/spec/types.md の「推論」)。キーは呼び出しの式と矢印の番号である。
-    /// Core IR が、その呼び出しで飛ばすエフェクトとして使う。
-    pub masks: HashMap<(ExprId, usize), Vec<EffectId>>,
+    /// 呼び出しの矢印ごとの `mask` (docs/spec/types.md の「推論」)。キーは呼び出しの式と矢印の番号である。項目は
+    /// エフェクトが rest に初めて現れた順に並ぶ。Core IR が、エフェクトの番号の順に並べ直して呼び出しに付ける。
+    pub masks: HashMap<(ExprId, usize), Vec<MaskItem>>,
     /// 射影 (`ExprKind::Field`) が指すフィールド。型検査が射影の時点の型から引いた結果である
     /// (docs/spec/types.md の「フィールドの解決」)。
     pub fields: ArenaMap<ExprId, FieldTarget>,

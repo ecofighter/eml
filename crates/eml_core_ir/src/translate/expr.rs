@@ -261,30 +261,23 @@ impl FnLowering<'_> {
     }
 
     /// 型検査が記録した、呼び出し `call` の矢印 `arrow` の `mask` を、エフェクトの番号の昇順の項目で返す
-    /// (docs/spec/core-ir.md)。型検査はまだ多重集合を記録するので、同じエフェクトの連なりを先頭から飛ばす 1 つの項目に
-    /// まとめる。位置つきの項目を型検査から写す形には、後で置き換える。
+    /// (docs/spec/core-ir.md)。型検査は rest に現れた順に記録するので、ここで並べる。
     fn mask(&self, call: ExprId, arrow: usize) -> Vec<MaskItem> {
-        let mut effects: Vec<u32> = self
+        let mut mask: Vec<MaskItem> = self
             .ctx
             .types
             .masks
             .get(&(call, arrow))
-            .map(|effects| {
-                effects
-                    .iter()
-                    .map(|&effect| effect_index(self.ctx.hir, effect))
-                    .collect()
+            .into_iter()
+            .flatten()
+            .map(|item| MaskItem {
+                effect: effect_index(self.ctx.hir, item.effect),
+                keep: item.keep,
+                skip: item.skip,
             })
-            .unwrap_or_default();
-        effects.sort_unstable();
-        effects
-            .chunk_by(|a, b| a == b)
-            .map(|run| MaskItem {
-                effect: run[0],
-                keep: 0,
-                skip: run.len() as u32,
-            })
-            .collect()
+            .collect();
+        mask.sort_unstable_by_key(|item| item.effect);
+        mask
     }
 
     /// 本体が動き出すまでに受け取る引数の数。extern の関数は表の行の引数の数、操作はシグネチャの外側の矢印の数、

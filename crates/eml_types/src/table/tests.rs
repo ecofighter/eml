@@ -471,11 +471,18 @@ fn a_rigid_callee_row_masks_the_handleable_labels_before_its_variable() {
         labels: vec![label, Label::plain(table.context.externs.io)],
         tail: Tail::Var(e),
     };
-    assert_eq!(table.include_row(&callee, &ambient), Ok(vec![state]));
+    assert_eq!(
+        table.include_row(&callee, &ambient),
+        Ok(vec![MaskItem {
+            effect: state,
+            keep: 0,
+            skip: 1
+        }])
+    );
 }
 
 #[test]
-fn a_mask_cannot_skip_an_effect_the_callee_names() {
+fn a_mask_keeps_the_labels_the_callee_names() {
     let program = crate::test_program("effect State s where\n  get : Unit -> s");
     let context = Context::new(&program);
     let mut table = Table::new(&context);
@@ -495,7 +502,11 @@ fn a_mask_cannot_skip_an_effect_the_callee_names() {
     };
     assert_eq!(
         table.include_row(&callee, &ambient),
-        Err(UnifyError::MaskConflict(state))
+        Ok(vec![MaskItem {
+            effect: state,
+            keep: 1,
+            skip: 1
+        }])
     );
 }
 

@@ -272,7 +272,7 @@ impl Table<'_> {
         &mut self,
         callee: &Row,
         ambient: &Row,
-    ) -> Result<Vec<EffectId>, UnifyError> {
+    ) -> Result<Vec<MaskItem>, UnifyError> {
         let callee = self.resolve_row(callee);
         match callee.tail {
             Tail::Var(tail) if !self.is_rigid_row(tail) => {
@@ -311,30 +311,35 @@ impl Table<'_> {
                         return Err(UnifyError::MissingRowVar(name.unwrap_or_default()));
                     }
                 }
-                self.mask(&callee, &rest)
+                Ok(self.mask(&callee, &rest))
             }
         }
     }
 
-    /// rigid な末尾の手前に余ったラベル `rest` のうち、extern のエフェクト以外が `mask` になる。呼び出し先の `e` の操作は、
-    /// 今の row でそれらの handler をすべて飛ばして `e` の handler に届く。呼び出し先が明示したラベルは今の row の先頭から
-    /// 対になっているので、同じエフェクトを `mask` で飛ばすと、明示したラベルの操作まで飛んでしまう。`IO` の失敗は実行の
-    /// 時点で最も近い `try_io` に届くので、どちらの `IO` に届いても同じであり、`mask` に入れない
-    /// (docs/spec/effects.md の「健全性」)。
-    fn mask(&self, callee: &Row, rest: &Row) -> Result<Vec<EffectId>, UnifyError> {
-        let mask: Vec<EffectId> = rest
-            .labels
-            .iter()
-            .map(|label| label.effect)
-            .filter(|&effect| !self.context.is_extern_effect(effect))
-            .collect();
-        if let Some(&effect) = mask
-            .iter()
-            .find(|&&effect| callee.labels.iter().any(|label| label.effect == effect))
-        {
-            return Err(UnifyError::MaskConflict(effect));
+    /// rigid な末尾の手前に余ったラベル `rest` の、extern でないエフェクト `L` ごとに項目を作る。scoped labels の対にし方
+    /// から、今の row の `L` は、呼び出し先が明示した `L` と対になった n 個、rest の m 個、`e` に当たる分の順に並ぶ。
+    /// n 個を残して m 個を飛ばすと、呼び出し先から見える `L` の handler は呼び出し先の row の `L` の並びで始まる。
+    /// `IO` の失敗は実行の時点で最も近い `try_io` に届くので、どちらの `IO` に届いても同じであり、`mask` に入れない
+    /// (docs/spec/types.md の「推論」、docs/spec/effects.md の「健全性」)。
+    fn mask(&self, callee: &Row, rest: &Row) -> Vec<MaskItem> {
+        let count = |labels: &[Label], effect: EffectId| {
+            labels.iter().filter(|label| label.effect == effect).count() as u32
+        };
+        let mut mask: Vec<MaskItem> = Vec::new();
+        for label in &rest.labels {
+            let effect = label.effect;
+            if self.context.is_extern_effect(effect)
+                || mask.iter().any(|item| item.effect == effect)
+            {
+                continue;
+            }
+            mask.push(MaskItem {
+                effect,
+                keep: count(&callee.labels, effect),
+                skip: count(&rest.labels, effect),
+            });
         }
-        Ok(mask)
+        mask
     }
 
     /// 戻り値の側に並ぶ矢印の閉じた row を、新しい row 変数で開く。純粋な関数を、エフェクトを持つ関数型の引数に

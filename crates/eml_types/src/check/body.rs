@@ -2,12 +2,13 @@ use std::collections::{HashMap, HashSet};
 
 use eml_diagnostics::{Diagnostic, FileId, Label, TextRange};
 use eml_hir::{
-    Body, Closure, ConstructorId, EffectId, ExprId, ExprKind, Function, Literal, LocalFunction,
-    LocalId, MatchArm, OperationId, PatId, PatKind, Program, Res, RowRef, Segment, Stmt, TypeRefId,
-    TypeRefKind, ValueItem,
+    Body, Closure, ConstructorId, ExprId, ExprKind, Function, Literal, LocalFunction, LocalId,
+    MatchArm, OperationId, PatId, PatKind, Program, Res, Segment, Stmt, TypeRefId, TypeRefKind,
+    ValueItem,
 };
 use la_arena::ArenaMap;
 
+use crate::MaskItem;
 use crate::kind::problem::Instance;
 use crate::kind::{KindOrigin, KindReason, Provenance, Span};
 use crate::shape::{Instantiated, Rigids, lower_type};
@@ -50,7 +51,7 @@ pub(crate) struct BodyTyping {
     pub calls: ArenaMap<ExprId, CallRows>,
     /// 呼び出しの矢印ごとの `mask`。キーは呼び出しの式と矢印の番号である。空の `mask` は入れない
     /// (docs/spec/types.md の「推論」)。
-    pub masks: HashMap<(ExprId, usize), Vec<EffectId>>,
+    pub masks: HashMap<(ExprId, usize), Vec<MaskItem>>,
     /// 射影が指すフィールド。
     pub fields: ArenaMap<ExprId, FieldTarget>,
     /// 更新が作り直すコンストラクタとフィールド。
@@ -149,21 +150,6 @@ impl BodyCheck<'_, '_> {
         match self.body_arrow() {
             Some(id) if self.body.params.len() > 1 => signature.types[id].range,
             _ => signature.range,
-        }
-    }
-
-    /// シグネチャに書いた本体の row が、row 変数の手前に `effect` を並べているか。handle の本体の今の row には
-    /// handle が足したラベルも入るので、今の row ではなくシグネチャを読む (docs/implementation/diagnostics.md の E2008)。
-    pub(super) fn signature_row_lists(&self, effect: EffectId) -> bool {
-        let (Some(signature), Some(id)) = (&self.function.signature, self.body_arrow()) else {
-            return false;
-        };
-        match &signature.types[id].kind {
-            TypeRefKind::Fn {
-                row: RowRef::Open { effects, .. },
-                ..
-            } => effects.iter().any(|listed| listed.effect == effect),
-            _ => false,
         }
     }
 

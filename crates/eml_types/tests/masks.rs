@@ -1,9 +1,10 @@
 //! 呼び出しごとの `mask` の記録 (docs/spec/types.md の「推論」)。rigid な row 変数の手前に余ったラベルを、矢印ごとに
-//! 記録する。
+//! エフェクトごとの項目 (残す数 n、飛ばす数 m) として記録する。
 
 use eml_test_support::{Checked, check, short_text};
 
-/// 入口のモジュールの関数 `name` の本体の `mask` を、式の位置の順に `<行:列>#<矢印> [<エフェクト>, …]` の形で出す。
+/// 入口のモジュールの関数 `name` の本体の `mask` を、式の位置の順に `<行:列>#<矢印> [<項目>, …]` の形で出す。項目は
+/// IR のテキストと同じく、エフェクトの名前の後に、n が 0 でなければ `@n` を、m が 1 でなければ `*m` を続ける。
 fn masks(text: &str, name: &str) -> String {
     let checked: Checked = check(text);
     assert_eq!(short_text(checked.files(), &checked.diagnostics), "");
@@ -17,11 +18,20 @@ fn masks(text: &str, name: &str) -> String {
     let mut rows: Vec<_> = checked.typed.bodies[id]
         .masks
         .iter()
-        .map(|(&(expr, arrow), effects)| {
+        .map(|(&(expr, arrow), items)| {
             let start = body.exprs[expr].range.start();
-            let names: Vec<&str> = effects
+            let names: Vec<String> = items
                 .iter()
-                .map(|&effect| program.names.effect(effect))
+                .map(|item| {
+                    let mut name = program.names.effect(item.effect).to_string();
+                    if item.keep != 0 {
+                        name.push_str(&format!("@{}", item.keep));
+                    }
+                    if item.skip != 1 {
+                        name.push_str(&format!("*{}", item.skip));
+                    }
+                    name
+                })
                 .collect();
             let at = checked.files().line_col(file, start);
             (
@@ -104,7 +114,7 @@ fn a_label_twice_is_masked_twice() {
     let text = format!(
         "{STATE}run : (Unit -> <e> a) -> <State Int, State String | e> a\nrun cb = cb ()\n"
     );
-    insta::assert_snapshot!(masks(&text, "run"), @"6:10#0 [State, State]");
+    insta::assert_snapshot!(masks(&text, "run"), @"6:10#0 [State*2]");
 }
 
 #[test]
@@ -142,7 +152,9 @@ fn only_the_arrow_that_needs_it_is_masked() {
 }
 
 #[test]
-fn a_callee_that_performs_the_masked_effect_itself_is_rejected() {
+fn a_callee_that_performs_the_masked_effect_itself_keeps_its_own_label() {
+    // `both` の row `<Log | e>` の `Log` は今の row の1つ目の `Log` と対になり、2つ目の `Log` が rest に余る。
+    // `both` 自身の `log` は1つ目の handler に届き、`e` を通る `Log` は2つ目を飛ばす (docs/spec/effects.md の「健全性」)
     let text = "\
 effect Log where
   log : String -> Unit
@@ -155,8 +167,142 @@ both action =
 outer : (Unit -> <e> a) -> <Log, Log | e> a
 outer action = both action
 ";
-    let checked = check(text);
-    insta::assert_snapshot!(short_text(checked.files(), &checked.diagnostics), @"E2008 10:16 `both` performs `Log` itself and also passes `Log` through its row variable to an outer handler");
+    insta::assert_snapshot!(masks(text, "outer"), @"10:16#0 [Log@1]");
+}
+
+#[test]
+fn a_transforming_handler_keeps_the_producers_own_label() {
+    // handle の本体の row は `<Yield Int, Yield String | e>` で、`g` の `Yield Int` が1つ目と対になる。`g` の
+    // `e` を通る `Yield` は、`render` の handler を残し、`Yield String` の handler を飛ばす
+    let text = "\
+effect Yield a where
+  yield : a -> Unit
+
+render : (Unit -> <Yield Int | e> Unit) -> <Yield String | e> Unit
+render g =
+  handle g () with
+    | yield n k ->
+      yield (show n)
+      k ()
+";
+    insta::assert_snapshot!(masks(text, "render"), @"6:10#0 [Yield@1]");
+}
+
+#[test]
+fn a_label_the_callee_names_is_paired_and_only_the_other_effect_is_masked() {
+    let text = format!(
+        "{STATE}effect Log where\n  log : String -> Unit\n\nrun : (Unit -> <Log | e> a) -> <Log, State Int | e> a\nrun cb = cb ()\n"
+    );
+    insta::assert_snapshot!(masks(&text, "run"), @"9:10#0 [State]");
+}
+
+#[test]
+fn two_effects_are_masked_with_their_own_counts() {
+    // rest は `[State Int, Log]` なので、項目は rest に現れた順に `State`、`Log@1` になる
+    let text = format!(
+        "{STATE}effect Log where\n  log : String -> Unit\n\nrun : (Unit -> <Log | e> a) -> <Log, State Int, Log | e> a\nrun cb = cb ()\n"
+    );
+    insta::assert_snapshot!(masks(&text, "run"), @"9:10#0 [State, Log@1]");
+}
+
+#[test]
+fn a_stateful_continuation_keeps_its_own_label_at_its_last_arrow() {
+    // 節の中の handle の本体の row は `<Log, Log | e>` で、`k` の最後の矢印の row は handle の外側の `<Log | e>` である。
+    // `k () (n + 1)` は最後の矢印 1 に `Log@1` を持ち、row の空な最初の矢印 0 には `mask` がない。`action ()` も
+    // handle の本体で `<Log | e>` を呼ぶので `Log@1` を持つ
+    let text = "\
+effect Log where
+  log : String -> Unit
+
+twice : (Unit -> <Log | e> a) -> <Log | e> a
+twice action =
+  handle action () from 1 with
+    | log s k n ->
+      log \"outer #\\{n} sees \\{s}\"
+      handle k () (n + 1) with
+        | log t k2 ->
+          log \"inner sees \\{t}\"
+          k2 ()
+    | return x _ -> x
+";
+    insta::assert_snapshot!(masks(text, "twice"), @r"
+    6:10#0 [Log@1]
+    9:14#1 [Log@1]
+    ");
+}
+
+#[test]
+fn a_continuation_under_a_handler_of_its_own_effect_keeps_its_own_label() {
+    // `tests/ui/run/effects/mask_behind_continuation.em` の `twice` である。`k ()` は節の中の `Log` の handler を残し、
+    // 外側の `Log` を飛ばす
+    let text = "\
+effect Log where
+  log : String -> Unit
+
+twice : (Unit -> <Log | e> a) -> <Log | e> a
+twice action =
+  handle action () with
+    | log s k ->
+      log \"outer sees \\{s}\"
+      handle k () with
+        | log t k2 ->
+          log \"inner sees \\{t}\"
+          k2 ()
+";
+    insta::assert_snapshot!(masks(text, "twice"), @r"
+    6:10#0 [Log@1]
+    9:14#0 [Log@1]
+    ");
+}
+
+#[test]
+fn a_multi_continuation_resumed_twice_keeps_its_own_label_at_both_calls() {
+    // `tests/ui/run/effects/mask_behind_multi.em` の `both` である。`IO` は extern のエフェクトなので項目にならない
+    let text = "\
+effect Choice where
+  multi choose : String -> Bool
+
+both : (Unit -> <Choice | e> Unit) -> <Choice, IO | e> Unit
+both action =
+  handle action () with
+    | choose q k ->
+      let _ = choose \"outer sees \\{q}\"
+      handle (let _ = k True in k False) with
+        | choose t k2 ->
+          println \"inner answers \\{t}\"
+          k2 False
+";
+    insta::assert_snapshot!(masks(text, "both"), @r"
+    6:10#0 [Choice@1]
+    9:23#0 [Choice@1]
+    9:33#0 [Choice@1]
+    ");
+}
+
+#[test]
+fn a_callee_under_two_handlers_of_its_own_effect_keeps_its_own_label() {
+    // `tests/ui/run/effects/mask_behind_handles.em` の `outer` である。rest の `Log` は、シグネチャの row でなく、
+    // 外側の handle が足したラベルである
+    let text = "\
+effect Log where
+  log : String -> Unit
+
+both : (Unit -> <e> a) -> <Log | e> a
+both action =
+  log \"x\"
+  action ()
+
+outer : (Unit -> <IO | e> a) -> <IO | e> a
+outer action =
+  handle (handle both action with
+            | log s k ->
+              println \"inner: \\{s}\"
+              k ()) with
+    | log s k ->
+      println \"middle: \\{s}\"
+      k ()
+";
+    insta::assert_snapshot!(masks(text, "outer"), @"11:18#0 [Log@1]");
 }
 
 #[test]
