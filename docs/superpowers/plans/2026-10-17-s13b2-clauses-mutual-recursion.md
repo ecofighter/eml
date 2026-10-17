@@ -2,9 +2,9 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Handler operation clauses start with `fn` (no `k`, resumes with the body's value) or `ctl` (today's clauses), and consecutive function-form `let`s in a block form one mutually recursive group checked by strongly connected components with one row per function solved by a fixpoint.
+**Goal:** Handler operation clauses start with `fn` (no `k`, resumes with the body's value) or `ctl` (today's clauses), and `let f x = … and g y = …` defines a mutually recursive group of local functions, checked as one unit with one row per function solved by a fixpoint.
 
-**Architecture:** The parser accepts an optional `fn` / `ctl` after `|`; HIR reports E1051 and desugars a `fn` clause into an ordinary resuming clause with a hidden `$k`, so types, translate and EP keep their current shapes (EP's `runs_in_place` already makes such clauses in-place). HIR forms groups, binds all names first and records the components (`Body::local_components`); `eml_types` checks component by component (deferred in-component calls, label fixpoint, closing, inclusion), and Core IR lifts each component with one shared capture list.
+**Architecture:** The parser accepts an optional `fn` / `ctl` after `|`; HIR reports E1051 and desugars a `fn` clause into an ordinary resuming clause with a hidden `$k`, so types, translate and EP keep their current shapes (EP's `runs_in_place` already makes such clauses in-place). The parser reads `and` bindings after a function-form `let` (skipping one `SEP` before a line-initial `and`, like `then` / `else`); HIR binds all names of the group first and records the groups (`Body::local_groups`); `eml_types` checks a group as today's group-shaped `local_functions` does, adding a label fixpoint before closing, and Core IR lifts each group with one shared capture list.
 
 **Tech Stack:** Rust workspace (edition 2024), insta snapshots, the eml UI test harness.
 
@@ -15,7 +15,9 @@
 - Code comments and docs are Japanese, written with the `yomiyasu:yomiyasu` skill; comments explain why, not what, and cite `docs/` paths for rules. CLAUDE.md stays English.
 - No compatibility shims: every existing operation clause is rewritten with `ctl` (spec 「テストの変更」, kind 2).
 - Test changes follow the kinds in `docs/implementation/testing.md`; every kind-2 change named in the spec is the agreement, anything else found on the way is recorded in the commit message (and, if it is not mechanical, reported to the controller).
-- New diagnostic code: E1051 `CLAUSE_KEYWORD` (HIR). Duplicate names in a group reuse E1017 `DUPLICATE_BINDING`. E3001's recursive-local message becomes `a recursive local function cannot capture a linear value`.
+- New keywords: `ctl`, `and`. New diagnostic code: E1051 `CLAUSE_KEYWORD` (HIR). Duplicate names in an `and` group reuse E1017 `DUPLICATE_BINDING`; a value binding after `and` (or `and` after a value `let`) is E0011.
+- Function-form `let`s without `and` keep today's sequential scoping exactly; no existing local-function test changes.
+- E3001's recursive-local message becomes `a recursive local function cannot capture a linear value`.
 - `fn` clause carry diagnostic wording: `the continuation of this \`fn\` clause`.
 - Hidden names: `$k` (the `fn` clause continuation), `$r` (stateless body value), `$v` / `$st` (stateful body pair). They cannot be resolved from user code.
 - `bench/state.em` only gains `ctl`; `crates/eml_vm/tests/bench.rs` `RunStats` snapshots must not change. A change is a finding to report, not to accept.
@@ -25,27 +27,37 @@
 ## Review Focus
 
 - A `fn` clause inside a handler nested in a local function, or a handler inside another `fn` clause body: the hidden `$k` must refer to its own clause (Task 3 run test `fn_clauses.em` covers nesting).
-- A mutually recursive function used as a value (`List.map even xs`, partial application): the lifted closure must carry the component's shared captures (Task 6 run test).
-- A component nested inside another recursive local function's body, calling the outer function: the outer frame's pending deferred calls and the inner fixpoint must not close the outer row too early (Task 5 types test).
-- A group broken by a `use` statement or a one-line `let … in` between two function lets: the later function must not be visible from the earlier one (Task 4 HIR tests).
+- A mutually recursive function used as a value (`List.map even xs`, partial application): the lifted closure must carry the group's shared captures (Task 6 run test).
+- A group nested inside another recursive local function's body, calling the outer function: the outer frame's pending deferred calls and the inner fixpoint must not close the outer row too early (Task 5 types test).
+- `and` after a definition whose body is an indented block, with comments or blank lines before the `and` line: the `and` must close the body block and continue the group (Task 1 syntax tests).
 - A `fn` clause whose body returns a `Lin` value (a `File`) or, in a stateful handler, a `Lin` state: no double use or leak through the hidden `$r` / `$v` / `$st` (Task 3 run test `fn_clauses_state.em`, using a `data Token : Lin` type declared in the test).
 
 ---
 
-### Task 1: Parse `fn` / `ctl` clause keywords
+### Task 1: Parse `fn` / `ctl` clause keywords and `let … and …`
 
 **Files:**
-- Modify: `crates/eml_syntax/src/lexer/mod.rs` (keyword table near `"fn" => FN_KW`), `crates/eml_syntax/src/syntax_kind.rs` (add `CTL_KW` next to `FN_KW`), `crates/eml_syntax/src/grammar/expressions.rs` (`handler_clause`), `crates/eml_syntax/src/ast.rs` (`OpClause`, `ReturnClause`)
-- Test: `crates/eml_syntax/tests/handlers.rs`, `crates/eml_syntax/tests/lexer.rs`
+- Modify: `crates/eml_syntax/src/lexer/mod.rs` (keyword table near `"fn" => FN_KW`), `crates/eml_syntax/src/syntax_kind.rs` (add `CTL_KW`, `AND_KW`, and the node kind `AND_BINDING`), `crates/eml_syntax/src/grammar/expressions.rs` (`handler_clause`, `let_stmt` / `let_head_and_body` and the one-line `let … in` path), `crates/eml_syntax/src/ast.rs` (`OpClause`, `ReturnClause`, `LetStmt`, `LetExpr`, new `AndBinding`)
+- Test: `crates/eml_syntax/tests/handlers.rs`, `crates/eml_syntax/tests/expressions.rs`, `crates/eml_syntax/tests/lexer.rs`
+- Create: `tests/ui/check-fail/syntax/and_value_binding.em` (+ snapshot)
 
 **Interfaces:**
-- Produces: `SyntaxKind::CTL_KW`; `ast::OpClause::keyword(&self) -> Option<SyntaxToken>` and `ast::ReturnClause::keyword(&self) -> Option<SyntaxToken>`, each returning the `FN_KW` or `CTL_KW` token right after `|`, if any.
+- Produces:
+  - `SyntaxKind::CTL_KW`, `SyntaxKind::AND_KW`, `SyntaxKind::AND_BINDING`.
+  - `ast::OpClause::keyword(&self) -> Option<SyntaxToken>` and `ast::ReturnClause::keyword(&self) -> Option<SyntaxToken>`: the `FN_KW` or `CTL_KW` token right after `|`, if any.
+  - `ast::AndBinding { pat() -> Option<Pat>, params() -> Option<ParamList>, body() -> Option<Expr> }` (same accessors as a function-form `LetStmt`), and `LetStmt::and_bindings(&self) -> AstChildren<AndBinding>` / `LetExpr::and_bindings(&self) -> AstChildren<AndBinding>`. An `AND_BINDING` node is a child of the `LET_STMT` / `LET_EXPR` it continues and holds `AND_KW`, the name pattern, a `PARAM_LIST` and the body.
 
-- [ ] **Step 1: Write failing tests** in `handlers.rs`: CST snapshots (existing style of the file) for `handle f () with | fn ask () -> 1`, `| ctl fail e -> 0`, `| ctl get () k st -> k st st`, and the error-free parse of `| ask () k -> k 1` and `| fn return x -> x` (no syntax diagnostics; HIR reports them). An AST test asserting `keyword()` returns `FN_KW` / `CTL_KW` / `None` for those clauses. In `lexer.rs`, `ctl` lexes as `CTL_KW`.
-- [ ] **Step 2: Run** `cargo test -p eml_syntax --test integration handlers::` — expect the new tests to fail.
-- [ ] **Step 3: Implement.** In `handler_clause`, after `p.bump(PIPE)`, eat one `FN_KW` or `CTL_KW` if present, then continue as today (`RETURN_KW` check, then the operation path). `fn` after `|` in a handler clause never starts a lambda.
-- [ ] **Step 4: Run** `cargo test -p eml_syntax` — all pass (existing snapshots unchanged: no existing source writes `fn` / `ctl` after a clause `|`; `ctl` as an identifier does not occur in the repository).
-- [ ] **Step 5: Commit** `Parse fn and ctl keywords on handler clauses`.
+- [ ] **Step 1: Write failing tests.**
+  - `handlers.rs`: CST snapshots (the file's existing style) for `handle f () with | fn ask () -> 1`, `| ctl fail e -> 0`, `| ctl get () k st -> k st st`; error-free parses of `| ask () k -> k 1` and `| fn return x -> x` (HIR reports them); an AST test that `keyword()` returns `FN_KW` / `CTL_KW` / `None`.
+  - `expressions.rs`: CST snapshots for a block with `let even k = …` and a line-initial `and odd k = …` at the same column; the same where `even`'s body is an indented block and a comment and a blank line come before the `and` line (Review Focus 4); three bindings (`let … and … and …`); the one-line `let f x = a and g y = b in f 1`. Errors: `and x = 1` after a function-form `let` → E0011; `let x = 1` followed by `and g y = y` → E0011; `and g y : Int = y` → E0011 (result type, same wording as the existing local-function result-type error).
+  - `lexer.rs`: `ctl` lexes as `CTL_KW`, `and` as `AND_KW`.
+  - UI `check-fail/syntax/and_value_binding.em`.
+- [ ] **Step 2: Run** `cargo test -p eml_syntax` — the new tests fail.
+- [ ] **Step 3: Implement.**
+  - `handler_clause`: after `p.bump(PIPE)`, eat one `FN_KW` or `CTL_KW` if present, then continue as today.
+  - `let`: after a function-form definition's body, while the next tokens are `AND_KW` or `LAYOUT_SEP AND_KW`, skip that one `SEP` (exactly as the `if` parser skips one before `then` / `else`, `docs/spec/layout.md` 「`then` / `else` の前の `SEP`」), and parse an `AND_BINDING` (name, `apat+` as a `PARAM_LIST`, `=`, body). A missing `PARAM_LIST` after `and` is E0011 (`` `and` defines a local function, so it needs parameters ``); an `and` after a value `let` is E0011 and is parsed as an `AND_BINDING` for recovery. For the one-line form, the `and` bindings come before `in`.
+- [ ] **Step 4: Run** `cargo test -p eml_syntax` and `cargo test -p eml_cli --test integration ui::` — pass; no existing snapshot changes (no existing source writes `fn` / `ctl` after a clause `|`, and `ctl` / `and` are not used as names anywhere in the repository).
+- [ ] **Step 5: Commit** `Parse fn and ctl clauses and let-and groups`.
 
 ### Task 2: Lower clause keywords in HIR and rewrite every handler with `ctl`
 
@@ -105,35 +117,32 @@
 - [ ] **Step 4: Run** `cargo test --workspace` — pass.
 - [ ] **Step 5: Commit** `Type fn clauses against the operation result`.
 
-### Task 4: Form local function groups in HIR
+### Task 4: Lower `let … and …` groups in HIR
 
 **Files:**
-- Modify: `crates/eml_hir/src/lower/expr.rs` (`lower_stmts`, `lower_local_function`), `crates/eml_hir/src/hir.rs` (`Body::local_components`, `LocalComponent`), the body-finishing code that builds `Body`
-- Modify: `crates/eml_core_ir/tests/translate.rs` (`local_function_names_do_not_collide_with_generated_names`: put the expression statement `()` between the two `let k0` so the expected `main$let$k0#2` stays)
+- Modify: `crates/eml_hir/src/lower/expr.rs` (`lower_stmts`, the `LetExpr` arm, `lower_local_function`), `crates/eml_hir/src/hir.rs` (`Body::local_groups`, `LocalGroup`), the body-finishing code that builds `Body`
 - Test: `crates/eml_hir/tests/lower.rs`
 - Create: `tests/ui/check-fail/names/duplicate_local_function.em` (+ snapshot)
 
 **Interfaces:**
+- Consumes: Task 1 `AndBinding`, `LetStmt::and_bindings`, `LetExpr::and_bindings`.
 - Produces:
-  - `Stmt::Functions(Vec<LocalFunction>)` now holds the whole group in definition order.
-  - `pub struct LocalComponent { pub members: Vec<LocalId>, pub recursive: bool }` and `Body::local_components: Vec<LocalComponent>`: every local function belongs to exactly one component; `recursive` is true when the component has two or more members or its member refers to itself. Order: groups by their first name's `LocalId` (outer groups before groups nested in their bodies), and within a group callees before callers (reverse topological, like `eml_types/src/scc.rs`). References are the members found in `Body::closure_captures` of each member's lambda.
-  - `Body::component_of(&self, local: LocalId) -> Option<&LocalComponent>`.
+  - `Stmt::Functions(Vec<LocalFunction>)` holds the `let` definition and its `and` definitions in definition order (one element for a `let` without `and`, as today).
+  - `pub struct LocalGroup { pub members: Vec<LocalId>, pub recursive: bool }` and `Body::local_groups: Vec<LocalGroup>`: one per `Stmt::Functions`, members in definition order; `recursive` is true when some member's lambda refers to some member (itself included), read from `Body::closure_captures` of each member's lambda. Order: by the group's first member's `LocalId` (outer groups before groups nested in their bodies, since a group binds its names before lowering its bodies).
+  - `Body::group_of(&self, local: LocalId) -> Option<&LocalGroup>`.
 
 - [ ] **Step 1: Write failing HIR tests** in `lower.rs`:
-  - `an_earlier_local_function_sees_a_later_one` (`let f x = g x` / `let g y = y` / `f 1` resolves `g` to the local).
-  - `a_later_group_name_hides_an_outer_name_in_earlier_bodies` (outer top-level `g`; inside the block the group's `g` wins in `f`'s body).
-  - `an_expression_statement_breaks_the_group`, `a_value_let_breaks_the_group`, `a_use_statement_breaks_the_group`, `a_one_line_let_in_breaks_the_group` (each: the earlier body's `g` is E1001 or resolves outward).
-  - `comments_and_blank_lines_keep_the_group`.
-  - `a_duplicate_name_in_a_group_is_e1017` (second definition labelled; references go to the first).
-  - `components_are_in_dependency_order` (assert `local_components` for `even`/`odd` plus a non-recursive helper: `[helper] (recursive: false)`, `[even, odd] (recursive: true)` in the right order) and `a_self_calling_function_is_a_recursive_component`.
+  - `an_and_binding_sees_the_later_function` (`let f x = g x` / `and g y = y` / `f 1`: `g` in `f`'s body is the local) and the one-line form `let f x = g x and g y = y in f 1`.
+  - `a_let_without_and_keeps_sequential_scope` (`let f x = g x` / `let g y = y`: the first `g` is E1001 as today; `let f x = 1` / `let f x = f x` keeps shadowing).
+  - `a_duplicate_name_in_an_and_group_is_e1017` (second definition labelled; references go to the first).
+  - `local_groups_record_recursion` (`let f x = g x and g y = f y` → recursive; `let f x = 1 and g y = 2` → not recursive; `let go n = go n` → recursive; `let h x = x` → not recursive).
 - [ ] **Step 2: Run** `cargo test -p eml_hir --test integration lower::` — fail.
-- [ ] **Step 3: Implement.** In `lower_stmts`, collect a run of consecutive function-form `LetStmt`s; first `lower_pat` every name (skip binding a name already bound in this run: E1017 on the later one, references keep the first), then lower each function's params and body as `lower_local_function` does today; emit one `Stmt::Functions`. Record each group's members while lowering and compute `local_components` when the `Body` is finished (Tarjan, as `eml_types/src/scc.rs`).
-- [ ] **Step 4: Sweep for silent meaning changes (spec 「テストの変更」).** Temporarily make lowering print (`eprintln!`) every reference in a group body that resolves to a later group member while an outer binding or item of the same name exists. Run `cargo test --workspace 2>&1 | rg <marker>`; for each hit, decide per the spec (keep the old meaning by inserting an expression statement or renaming, or change the expectation), note it for the commit message, and report any hit to the controller. Remove the print.
-- [ ] **Step 5: Fix** `local_function_names_do_not_collide_with_generated_names` as listed in Files; add `check-fail/names/duplicate_local_function.em`.
-- [ ] **Step 6: Run** `cargo test --workspace` — pass. (Mutual recursion past HIR is not exercised yet; Tasks 5-6 add it.)
-- [ ] **Step 7: Commit** `Group consecutive local functions in HIR`.
+- [ ] **Step 3: Implement.** For a function-form `LetStmt` / `LetExpr`, first `lower_pat` the `let` name and every `and` name (a name already bound in this group: E1017 on the later one and do not bind it again, so references keep the first), then lower each definition's params and body as `lower_local_function` does today; emit one `Stmt::Functions`. Record each group's members while lowering and compute `local_groups` when the `Body` is finished.
+- [ ] **Step 4: Add** `check-fail/names/duplicate_local_function.em`.
+- [ ] **Step 5: Run** `cargo test --workspace` — pass. (Mutual recursion past HIR is not exercised yet; Tasks 5-6 add it.)
+- [ ] **Step 6: Commit** `Lower let-and groups of local functions`.
 
-### Task 5: Check local function components in `eml_types`
+### Task 5: Check local function groups with a row fixpoint in `eml_types`
 
 **Files:**
 - Modify: `crates/eml_types/src/check/body.rs` (`local_functions`, `LocalFrame` use), `crates/eml_types/src/table/row.rs` (two new `Table` operations), `crates/eml_types/src/usage.rs` (the `Lambda` arm's own-reference handling and its `debug_assert_eq!`, `scope_end`), `crates/eml_types/src/carry.rs` (the `Lambda` arm's `own` filter), `crates/eml_types/src/kind/mod.rs` and `check/report.rs` (`KindReason::RecursiveLocal`)
@@ -141,7 +150,7 @@
 - Create: `tests/ui/check-fail/linearity/mutual_recursion_captures_file.em` (+ snapshot); update the snapshots of `recursive_local_captures_file.em` and `recursive_local_captures_once_continuation.em` (kind 2, new E3001 wording)
 
 **Interfaces:**
-- Consumes: Task 4 `Body::local_components`, `Body::component_of`.
+- Consumes: Task 4 `Body::local_groups`, `Body::group_of`.
 - Produces:
   - `Table::missing_labels(&self, callee: &Row, ambient: &Row) -> Vec<Label>`: the labels of `callee` (resolved; its tail ignored) not matched in `ambient` when same-effect labels pair in row order (scoped labels); does not modify the table.
   - `Table::add_labels(&mut self, row: &Row, labels: Vec<Label>) -> bool`: if `row`'s resolved tail is a free non-rigid variable, extends it with `labels` (fresh tail) and returns `true`; otherwise returns `false` and changes nothing.
@@ -149,21 +158,21 @@
 
 - [ ] **Step 1: Write failing tests.**
   - `table/tests.rs`: `missing_labels_pairs_same_effect_labels_in_order` (`<Ask, Ask>` vs `<Ask | r>` misses one `Ask`), `add_labels_extends_only_a_free_tail` (rigid tail and closed row return `false`).
-  - `check.rs`: `mutually_recursive_local_functions_check` (even/odd → `Int -> Bool` each), `a_group_of_independent_functions_types_as_before` (later calls earlier and earlier calls later, both non-recursive).
+  - `check.rs`: `mutually_recursive_local_functions_check` (even/odd with `and` → `Int -> Bool` each), `a_one_way_and_group_types_like_sequential_lets` (`let f x = g x and g y = y + 1` gives the same types as `let g y = y + 1` / `let f x = g x`).
   - `effects.rs`:
-    - `a_component_effect_reaches_every_member` (`f` calls `g`, `g` performs `ask`: both rows contain `Ask`).
-    - `a_handler_inside_a_component_keeps_its_effect_inside` (the spec's `f` / `g` example: `f : Int -> <> Int` usable from a `<>` signature; `g` row `<Ask>`).
+    - `a_group_effect_reaches_every_member` (`f` calls `g`, `g` performs `ask`: both rows contain `Ask`).
+    - `a_handler_inside_a_group_keeps_its_effect_inside` (the spec's `f` / `g` example: `f : Int -> <> Int` usable from a `<>` signature; `g` row `<Ask>`).
     - `a_three_member_fixpoint` (`f`→`g`→`h`→`f`, only `h` performs `Ask`: all three rows contain `Ask`).
-    - `a_rigid_ambient_reports_e2002_in_a_component` (a call site whose row tail is rigid cannot receive the label → E2002).
-    - `a_nested_component_calls_the_enclosing_recursive_function` (Review Focus 3: a component inside a self-recursive local function's body calls the outer function; checks with the expected rows).
-  - `linearity.rs`: `a_mutually_recursive_function_cannot_capture_a_file` (E3001, new wording, label names the callee), `a_non_recursive_group_member_can_capture_a_file`.
+    - `a_rigid_ambient_reports_e2002_in_a_group` (a call site whose row tail is rigid cannot receive the label → E2002).
+    - `a_nested_group_calls_the_enclosing_recursive_function` (Review Focus 3: a group inside a self-recursive local function's body calls the outer function; checks with the expected rows).
+  - `linearity.rs`: `a_mutually_recursive_function_cannot_capture_a_file` (E3001, new wording, label names the callee), `a_non_recursive_and_group_member_can_capture_a_file` (`let f () = use_file file and g x = x`: no reference inside the group, `f` may capture the `File`).
   - UI: `check-fail/linearity/mutual_recursion_captures_file.em`.
 - [ ] **Step 2: Run** `cargo test -p eml_types` — new tests fail.
-- [ ] **Step 3: Implement** `local_functions` per the spec's 4 steps for each component of the statement's group, in `local_components` order: bind every group name to its `local_function_type` first; then per component push frames for its members only, check the members' lambdas in text order, run the fixpoint over the collected `DeferredRow`s (`missing_labels` on `deferred.row` vs `deferred.ambient`, `add_labels` on `deferred.ambient`, until no call adds anything), close each member's tail with `keep` = its parts plus captured types excluding the component's members (and `pending` as today), then include the deferred rows as today. In `usage.rs` and `carry.rs`, references to members of the same component are not captures; when the component is `recursive`, every member's function type gets `kind_at_most(.., Unr)` with `RecursiveLocal { name, callee }` at that member's first reference to a component member. New message: `a recursive local function cannot capture a linear value`; label: `` `{name}` refers to `{callee}` here, so it may be called any number of times `` (`{callee}` equals `{name}` for a self-reference); keep the existing note.
+- [ ] **Step 3: Implement** `local_functions` per the spec's 4 steps. Today's function already binds every member's type, pushes a frame per member, checks the lambdas in text order, closes each tail and then includes the deferred rows; add the fixpoint between checking and closing: run it over the collected `DeferredRow`s (`missing_labels` on `deferred.row` vs `deferred.ambient`, `add_labels` on `deferred.ambient`, until no call adds anything), keep closing each member's tail with `keep` = its parts plus captured types excluding the group's members (and `pending` as today), then include the deferred rows as today. In `usage.rs` and `carry.rs`, references to members of the same group are not captures; when the group is `recursive`, every member's function type gets `kind_at_most(.., Unr)` with `RecursiveLocal { name, callee }` at the first reference to a group member found in any member's body (for a member with no such reference of its own, use the first such reference in the group). New message: `a recursive local function cannot capture a linear value`; label: `` `{name}` refers to `{callee}` here, so it may be called any number of times `` (`{callee}` equals `{name}` for a self-reference); keep the existing note.
 - [ ] **Step 4: Run** `cargo test --workspace` — pass (the two existing E3001 snapshots change wording only; accept them).
-- [ ] **Step 5: Commit** `Check local function components with a row fixpoint`.
+- [ ] **Step 5: Commit** `Check local function groups with a row fixpoint`.
 
-### Task 6: Lift local function components in Core IR
+### Task 6: Lift local function groups in Core IR
 
 **Files:**
 - Modify: `crates/eml_core_ir/src/translate/mod.rs` (`lifted_functions`, its doc comment)
@@ -171,23 +180,23 @@
 - Create: `tests/ui/run/functions/mutual_recursion.em`, `tests/ui/run/functions/mutual_recursion_csv.em` (+ snapshots)
 
 **Interfaces:**
-- Consumes: Task 4 `Body::local_components`; Task 5 types.
-- Produces: every member of a component has the same `Lifted::captured`, the sorted union of the members' `closure_captures` minus the members, with captured local functions of earlier components replaced by their captures (`lifted_captures`), sorted after replacement.
+- Consumes: Task 4 `Body::local_groups`; Task 5 types.
+- Produces: every member of a group has the same `Lifted::captured`, the sorted union of the members' `closure_captures` minus the members, with captured local functions of earlier groups replaced by their captures (`lifted_captures`), sorted after replacement.
 
 - [ ] **Step 1: Write failing tests.**
-  - Core IR: `mutually_recursive_functions_share_their_captures` (`even` captures `a`, `odd` captures `b`: both lifted functions take `a`, `b` first, and in-component calls pass them), `a_component_member_as_a_value_carries_the_shared_captures` (`List.map even xs` builds a closure over the shared captures; Review Focus 2).
-  - UI `run/functions/mutual_recursion.em`: even/odd; mutual recursion with captured variables; mutual recursion that performs an effect handled outside; the spec's `f`/`g` handler-inside-component example called from a pure context; a three-member component; a group mixing independent functions and a component; a member passed to `List.map`.
-  - UI `run/functions/mutual_recursion_csv.em`: a CSV field/row state machine (functions for an unquoted field, a quoted field, a quote inside a quoted field, and the next row) over a string with `String.byte_at` / `String.slice`, printing the parsed rows, including quoted fields with commas and doubled quotes.
+  - Core IR: `mutually_recursive_functions_share_their_captures` (`even` captures `a`, `odd` captures `b`: both lifted functions take `a`, `b` first, and in-group calls pass them), `a_group_member_as_a_value_carries_the_shared_captures` (`List.map even xs` builds a closure over the shared captures; Review Focus 2).
+  - UI `run/functions/mutual_recursion.em`: even/odd with `and`; mutual recursion with captured variables; mutual recursion that performs an effect handled outside; the spec's `f`/`g` handler-inside-group example called from a pure context; a three-member group; the one-line `let … and … in` form; a block mixing an `and` group with plain function lets; a member passed to `List.map`.
+  - UI `run/functions/mutual_recursion_csv.em`: a CSV field/row state machine written as one `let … and …` group (functions for an unquoted field, a quoted field, a quote inside a quoted field, and the next row) over a string with `String.byte_at` / `String.slice`, printing the parsed rows, including quoted fields with commas and doubled quotes.
 - [ ] **Step 2: Run** them — fail (translate panics or mis-lifts).
-- [ ] **Step 3: Implement** `lifted_functions` over `body.local_components` in order: compute the shared captures once per component, then `program.reserve` and insert each member with the same list. Update the comment that says only earlier functions and the function itself can be referenced.
+- [ ] **Step 3: Implement** `lifted_functions` over `body.local_groups` in order: compute the shared captures once per group, then `program.reserve` and insert each member with the same list. Update the comment that says only earlier functions and the function itself can be referenced.
 - [ ] **Step 4: Run** `cargo test --workspace` — pass.
-- [ ] **Step 5: Commit** `Lift local function components with shared captures`.
+- [ ] **Step 5: Commit** `Lift local function groups with shared captures`.
 
 ### Task 7: Record S13b-2 in the docs
 
 **Files:**
 - Modify: `docs/spec/lexical.md`, `docs/spec/grammar.md`, `docs/spec/expressions.md`, `docs/spec/effects.md`, `docs/spec/types.md`, `docs/spec/linearity.md`, `docs/spec/core-ir.md`, `docs/spec/diagnostics.md`, `docs/spec/examples.md` and the other `docs/` files with handler examples (`rg -l '\| [a-z_.]+ .*->' docs` plus `rg -l 'handle' docs`), `docs/implementation/status.md`, `docs/implementation/architecture.md`, `docs/implementation/diagnostics.md`, `docs/future/roadmap.md`, `CLAUDE.md`
 
-- [ ] **Step 1:** Apply the spec's 「段の終わりの文書」 list. In docs examples, clauses that only resume immediately become `fn`; every other operation clause gets `ctl`. `types.md` 「ローカル関数の推論」 describes the component order, the fixpoint and how the closing exceptions apply per function; `expressions.md` drops 「相互再帰は書けない」 and the consecutive-`let` shadowing sentence, and states the group rules; `diagnostics.md` adds E1051 and updates E1017, E3001 and E3006. `roadmap.md`: mark S13b-2 済み in the S13b table (like S13b-1) and delete the 「決めたこと: `k` を書かない節と相互再帰 (S13b-2)」 subsection; keep the `and` group proposal in 「言語機能と構文」. `CLAUDE.md`: mention S13b-2's grammar (`fn` / `ctl` clauses, `ctl` keyword, local function groups) in the `eml_syntax` paragraph and the component handling in the type-checker / Core IR paragraphs, in English.
+- [ ] **Step 1:** Apply the spec's 「段の終わりの文書」 list. In docs examples, clauses that only resume immediately become `fn`; every other operation clause gets `ctl`. `types.md` 「ローカル関数の推論」 describes group checking, the fixpoint and how the closing exceptions apply per function; `expressions.md` drops 「相互再帰は書けない」 and states the `and` group rules (the consecutive-`let` shadowing sentence stays true for lets without `and`); `layout.md` adds `and` to the 「`then` / `else` の前の `SEP`」 section; `lexical.md` adds `ctl` and `and`; `diagnostics.md` adds E1051 and updates E1017, E3001 and E3006. `roadmap.md`: mark S13b-2 済み in the S13b table (like S13b-1) and delete the 「決めたこと: `k` を書かない節と相互再帰 (S13b-2)」 subsection. `CLAUDE.md`: mention S13b-2's grammar (`fn` / `ctl` clauses, `let … and …` groups, the `ctl` and `and` keywords) in the `eml_syntax` paragraph and the group handling (fixpoint, shared captures) in the type-checker / Core IR paragraphs, in English.
 - [ ] **Step 2:** Check: `rg -n '\| [a-z_]+ .* k ->' docs` finds no clause without `fn` / `ctl`; `cargo test --workspace` still passes (docs-only).
 - [ ] **Step 3: Commit** `Record S13b-2 in the specs, the status and the roadmap`.
