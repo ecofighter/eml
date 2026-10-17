@@ -20,7 +20,7 @@ use super::{Helpers, captured_mark, direct, dummy, named, reserve, yield_switch}
 pub(crate) struct Annotations {
     /// handle の本体の `apply`。yield したかは `prompt$` が見る。
     pub(crate) not_yield_points: HashSet<(BlockId, usize)>,
-    /// 直後に `evv_set(w0)` が続く `mask` の呼び出しと、その飛ばすエフェクト。遅い道は κ を `mask$` で包み、続きは
+    /// 直後に `evv_set(w0)` が続く `mask` の呼び出しと、その `mask` の項目。遅い道は κ を `mask$` で包み、続きは
     /// `evv_set(w0)` の後から始まる (docs/spec/core-ir.md の「`mask` の包み」)。
     pub(crate) masked: HashMap<(BlockId, usize), Vec<MaskItem>>,
     /// `mask` の呼び出し。呼ぶ相手が `yields` でなくても地点にする。

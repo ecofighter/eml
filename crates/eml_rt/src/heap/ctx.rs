@@ -2533,8 +2533,9 @@ impl<M: Mode> Ctx<M> {
     ///
     /// # Safety
     /// `heap_mut` の前提を守っている。`w` は即値か、このヒープか付けた塊の生きている物体を指す。速いモードでは、`w` は
-    /// `evv` のリストで、どの項目についても合う evidence を `keep + skip` 個以上持つ。検査モードは写す前にリストを
-    /// たどって確かめ、合う evidence が足りなければ `NoHandler` を、形の違う節点や上限を超える長さには `BadEvidence` を
+    /// `evv` のリストで、各エフェクトの最初の項目について合う evidence を `keep + skip` 個以上持つ (`mask_spec` と
+    /// `skip_total`)。同じエフェクトの後の項目は使わないので、その数は求めない。検査モードは写す前にリストをたどって
+    /// 確かめ、合う evidence が足りなければ `NoHandler` を、形の違う節点や上限を超える長さには `BadEvidence` を
     /// 返す。
     #[verifier::spinoff_prover]
     pub unsafe fn evv_mask(&mut self, items: &[MaskItem], w: Word) -> (r: Result<Word, HeapError>)

@@ -596,8 +596,8 @@ impl Out<'_> {
         });
     }
 
-    /// `mask` のある呼び出しは、`evv` から飛ばすエフェクトを除いてから呼び、戻ったら元の `evv` に戻す。呼ばれる関数が
-    /// `yields` でなくても yield の地点にするのは、遅い道で κ を `mask$` で包むためである。
+    /// `mask` のある呼び出しは、`evv` から項目が飛ばす evidence を除いてから呼び、戻ったら元の `evv` に戻す。呼ばれる
+    /// 関数が `yields` でなくても yield の地点にするのは、遅い道で κ を `mask$` で包むためである。
     fn masked_call(
         &mut self,
         annotations: &mut Annotations,

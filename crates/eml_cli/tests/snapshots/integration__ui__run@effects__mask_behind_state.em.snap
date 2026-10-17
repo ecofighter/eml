@@ -4,6 +4,8 @@ expression: "format!(\"--- stdout ---\\n{stdout}--- stderr ---\\n{diagnostics}{s
 input_file: tests/ui/run/effects/mask_behind_state.em
 ---
 --- stdout ---
-outer #1 sees a
-inner sees outer #2 sees b
+P1: outer #1 sees a
+P2: cb
+P1: inner sees outer #2 sees b
+P2: cb
 --- stderr ---

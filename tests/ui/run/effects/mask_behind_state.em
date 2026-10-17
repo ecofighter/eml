@@ -1,20 +1,22 @@
 -- `mask_behind_continuation.em` と同じ形を、状態に数を持つ handler で書く。`k () (n + 1)` の `mask` は最後の矢印に
--- 付く `Log@1` で、再開した区間で節が2回目に起こす `log` は内側の handler に届く (docs/spec/effects.md の「健全性」)。
+-- 付く `Log@1` で、再開した区間で節が2回目に起こす `log` は内側の handler に、`cb ()` は `P2` に届く
+-- (docs/spec/effects.md の「健全性」)。
 effect Log where
   log : String -> Unit
 
-printing : (Unit -> <Log, IO | e> a) -> <IO | e> a
-printing action =
+tagged : String -> (Unit -> <Log, IO | e> a) -> <IO | e> a
+tagged tag action =
   handle action () with
     | log s k ->
-      println s
+      println "\{tag}: \{s}"
       k ()
 
-twice : (Unit -> <Log | e> a) -> <Log | e> a
-twice action =
+twice : (Unit -> <e> Unit) -> (Unit -> <Log | e> a) -> <Log | e> a
+twice cb action =
   handle action () from 1 with
     | log s k n ->
       log "outer #\{n} sees \{s}"
+      cb ()
       handle k () (n + 1) with
         | log t k2 ->
           log "inner sees \{t}"
@@ -23,7 +25,8 @@ twice action =
 
 main : Unit -> <IO> Unit
 main () =
-  use printing
-  use twice
+  use tagged "P2"
+  use tagged "P1"
+  use twice (fn () -> log "cb")
   log "a"
   log "b"

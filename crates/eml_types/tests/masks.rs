@@ -207,18 +207,20 @@ fn two_effects_are_masked_with_their_own_counts() {
 
 #[test]
 fn a_stateful_continuation_keeps_its_own_label_at_its_last_arrow() {
-    // 節の中の handle の本体の row は `<Log, Log | e>` で、`k` の最後の矢印の row は handle の外側の `<Log | e>` である。
-    // `k () (n + 1)` は最後の矢印 1 に `Log@1` を持ち、row の空な最初の矢印 0 には `mask` がない。`action ()` も
-    // handle の本体で `<Log | e>` を呼ぶので `Log@1` を持つ
+    // `tests/ui/run/effects/mask_behind_state.em` の `twice` である。節の中の handle の本体の row は `<Log, Log | e>`
+    // で、`k` の最後の矢印の row は handle の外側の `<Log | e>` である。`k () (n + 1)` は最後の矢印 1 に `Log@1` を持ち、
+    // row の空な最初の矢印 0 には `mask` がない。`action ()` も handle の本体で `<Log | e>` を呼ぶので `Log@1` を持つ。
+    // 節の row `<Log | e>` で `<e>` を呼ぶ `cb ()` は、最初の `Log` を飛ばす
     let text = "\
 effect Log where
   log : String -> Unit
 
-twice : (Unit -> <Log | e> a) -> <Log | e> a
-twice action =
+twice : (Unit -> <e> Unit) -> (Unit -> <Log | e> a) -> <Log | e> a
+twice cb action =
   handle action () from 1 with
     | log s k n ->
       log \"outer #\\{n} sees \\{s}\"
+      cb ()
       handle k () (n + 1) with
         | log t k2 ->
           log \"inner sees \\{t}\"
@@ -227,23 +229,25 @@ twice action =
 ";
     insta::assert_snapshot!(masks(text, "twice"), @r"
     6:10#0 [Log@1]
-    9:14#1 [Log@1]
+    9:7#0 [Log]
+    10:14#1 [Log@1]
     ");
 }
 
 #[test]
 fn a_continuation_under_a_handler_of_its_own_effect_keeps_its_own_label() {
     // `tests/ui/run/effects/mask_behind_continuation.em` の `twice` である。`k ()` は節の中の `Log` の handler を残し、
-    // 外側の `Log` を飛ばす
+    // 外側の `Log` を飛ばす。`cb ()` は節の row の最初の `Log` を飛ばす
     let text = "\
 effect Log where
   log : String -> Unit
 
-twice : (Unit -> <Log | e> a) -> <Log | e> a
-twice action =
+twice : (Unit -> <e> Unit) -> (Unit -> <Log | e> a) -> <Log | e> a
+twice cb action =
   handle action () with
     | log s k ->
       log \"outer sees \\{s}\"
+      cb ()
       handle k () with
         | log t k2 ->
           log \"inner sees \\{t}\"
@@ -251,22 +255,25 @@ twice action =
 ";
     insta::assert_snapshot!(masks(text, "twice"), @r"
     6:10#0 [Log@1]
-    9:14#0 [Log@1]
+    9:7#0 [Log]
+    10:14#0 [Log@1]
     ");
 }
 
 #[test]
 fn a_multi_continuation_resumed_twice_keeps_its_own_label_at_both_calls() {
-    // `tests/ui/run/effects/mask_behind_multi.em` の `both` である。`IO` は extern のエフェクトなので項目にならない
+    // `tests/ui/run/effects/mask_behind_multi.em` の `both` である。`IO` は extern のエフェクトなので項目にならない。
+    // `cb ()` は節の row の最初の `Choice` を飛ばす
     let text = "\
 effect Choice where
   multi choose : String -> Bool
 
-both : (Unit -> <Choice | e> Unit) -> <Choice, IO | e> Unit
-both action =
+both : (Unit -> <e> Unit) -> (Unit -> <Choice | e> Unit) -> <Choice, IO | e> Unit
+both cb action =
   handle action () with
     | choose q k ->
       let _ = choose \"outer sees \\{q}\"
+      cb ()
       handle (let _ = k True in k False) with
         | choose t k2 ->
           println \"inner answers \\{t}\"
@@ -274,8 +281,9 @@ both action =
 ";
     insta::assert_snapshot!(masks(text, "both"), @r"
     6:10#0 [Choice@1]
-    9:23#0 [Choice@1]
-    9:33#0 [Choice@1]
+    9:7#0 [Choice]
+    10:23#0 [Choice@1]
+    10:33#0 [Choice@1]
     ");
 }
 

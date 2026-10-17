@@ -385,7 +385,7 @@ fn lookups_and_masks_count_the_list_nodes_they_visit<M: Mode>() {
 }
 
 /// evv は先頭から 0、1、1、0 のエフェクトの evidence である。各項目のエフェクトについて、先頭から合う evidence を
-/// 項目の数だけ飛ばし、飛ばした最後の節点の前で残した節点だけを写す。
+/// 項目の skip の数だけ飛ばし、飛ばした最後の節点の前で残した節点だけを写す。
 fn a_mask_skips_the_first_matches_of_each_item<M: Mode>() {
     let mut ctx = ctx::<M>();
     let evs: Vec<Word> = [0, 1, 1, 0]
