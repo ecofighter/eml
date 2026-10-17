@@ -1,5 +1,6 @@
 -- 値を1つずつ渡す `Yield` エフェクトと、その消費者 (docs/spec/stdlib.md)。消費者は handler で包んで値を受け取る。
 -- どの節も、受け取ってすぐ再開するので `fn` で書く。
+import List
 
 pub effect Yield a where
   yield : a -> Unit
@@ -19,8 +20,4 @@ fold f init producer =
 
 -- 先頭に積んでいくので、最後に逆順に戻す
 pub collect : (Unit -> <Yield a | e> Unit) -> <e> List a
-collect producer = reverse_onto Nil (fold (fn acc x -> x :: acc) Nil producer)
-
-reverse_onto : List a -> List a -> List a
-reverse_onto acc Nil = acc
-reverse_onto acc (x :: rest) = reverse_onto (x :: acc) rest
+collect producer = List.reverse (fold (fn acc x -> x :: acc) Nil producer)

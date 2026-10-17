@@ -1,5 +1,6 @@
 -- 引いて使うジェネレータ (docs/spec/stdlib.md)。`next` を呼ぶまで何も動かさない。
 -- `Iter` は `once` の関数を持つので `Lin` である。途中でやめるときは `drop` で捨てる。
+import List
 import Yield (Yield(..))
 
 pub data Iter <e> a = | Iter (once Unit -> <e> Option (a, Iter <e> a))
@@ -107,8 +108,4 @@ fold f acc it =
 
 -- 先頭に積んでいくので、最後に逆順に戻す
 pub to_list : Iter <e> a -> <e> List a
-to_list it = reverse_onto Nil (fold (fn acc x -> x :: acc) Nil it)
-
-reverse_onto : List a -> List a -> List a
-reverse_onto acc Nil = acc
-reverse_onto acc (x :: rest) = reverse_onto (x :: acc) rest
+to_list it = List.reverse (fold (fn acc x -> x :: acc) Nil it)
