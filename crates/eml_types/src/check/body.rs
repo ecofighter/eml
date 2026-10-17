@@ -623,16 +623,25 @@ impl BodyCheck<'_, '_> {
     /// ラベルのうち足りないものを、呼び出しの位置の今の row の自由な末尾に足す。何も足さなくなるまで繰り返す。
     /// 足せない呼び出しは、後の包含の確かめが E2002 を報告する。
     fn add_missing_labels(&mut self, deferred: &[(LocalId, DeferredRow)]) {
-        // 呼び出しの位置の row が「呼び出す側の row と、呼び出しを囲む handler のラベル」の形なら、足したあとの row の
-        // エフェクトごとのラベルの数は、始めたときの呼び出し先の row の数の最大を超えない。組の関数を値として渡すと、
-        // この形にならないことがある。呼び出し先と今の row が末尾を共有すると、足すたびに呼び出し先も伸びる。呼び出しの
-        // 輪をたどるたびにラベルが増え続けることもある。どちらも有限の row の解はないので、そうなった呼び出しには
-        // 足さない。前者は、呼び出し先の自由な末尾を使わないことと同じである
-        let mut limits: HashMap<EffectId, usize> = HashMap::new();
+        // 足すラベルは、どれも始めたときにいずれかの呼び出し先か今の row にあったラベルの写しである。有限の最小の解では、
+        // ある row のエフェクトごとのラベルは、始めたときの row から写ってきたものを重ねても、異なる row のラベルの数の
+        // 和を超えない。呼び出しの輪をたどるたびに数が増える場合 (組の関数を値として渡したときや、高階の関数の row で
+        // 呼び出し先の row の手前にラベルが付く場合) は有限の解がなく、いずれこの和を超える。超えた呼び出し先からは
+        // 足さないので、固定点は止まり、後の包含が E2002 を報告する。呼び出し先と今の row が末尾を共有するときも
+        // 足さない。足すたびに呼び出し先も伸びるためで、呼び出し先の自由な末尾を使わないことと同じである
+        let mut rows: Vec<Row> = Vec::new();
         for (_, call) in deferred {
-            for (effect, count) in self.label_counts(&call.row) {
-                let limit = limits.entry(effect).or_default();
-                *limit = (*limit).max(count);
+            for row in [&call.row, &call.ambient] {
+                let row = self.table.resolve_row(row);
+                if !rows.contains(&row) {
+                    rows.push(row);
+                }
+            }
+        }
+        let mut limits: HashMap<EffectId, usize> = HashMap::new();
+        for row in &rows {
+            for (effect, count) in self.label_counts(row) {
+                *limits.entry(effect).or_default() += count;
             }
         }
         loop {

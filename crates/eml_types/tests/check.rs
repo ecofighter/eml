@@ -689,3 +689,34 @@ fn a_one_way_and_group_types_like_sequential_lets() {
     ");
     assert_eq!(types_by_name(group), types_by_name(sequential));
 }
+
+/// `wrap` の外に出る `Ask` で、`g` の row は `f` の row よりラベルが1つ多い。`h` の row が `g` の row に届くまで固定点を
+/// 回しても止まり、順に書いた `let` と同じ型になる。
+#[test]
+fn a_group_through_a_higher_order_function_types_like_sequential_lets() {
+    let prelude = "effect Ask where\n  ask : Unit -> Int\n\nwrap : (Unit -> <e> Int) -> <Ask | e> Int\nwrap action = ask () + action ()\n\nrun : Int -> <Ask> Int\nrun m =\n";
+    let handled = "  handle h m with\n    | fn ask () -> 1";
+    let group = format!(
+        "{prelude}  let f n = ask () + n\n  and g n = wrap (fn () -> f n)\n  and h n = g n\n{handled}"
+    );
+    let sequential = format!(
+        "{prelude}  let f n = ask () + n\n  let g n = wrap (fn () -> f n)\n  let h n = g n\n{handled}"
+    );
+    insta::assert_snapshot!(check_text(&group), @"
+    ask : Unit -> <Ask> Int
+    wrap : (Unit -> <e> Int) -> <Ask | e> Int
+      action#0 : Unit -> <e> Int
+    run : Int -> <Ask> Int
+      m#0 : Int
+      f#1 : Int -> <Ask> Int
+      g#2 : Int -> <Ask, Ask> Int
+      h#3 : Int -> <Ask, Ask> Int
+      n#4 : Int
+      n#5 : Int
+      n#6 : Int
+      $k#7 : once Int -> <Ask> Int
+      $r#8 : Int
+      $r#9 : Int
+    ");
+    assert_eq!(types_by_name(&group), types_by_name(&sequential));
+}
