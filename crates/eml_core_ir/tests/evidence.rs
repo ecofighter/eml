@@ -1133,8 +1133,8 @@ fn a_fn_clause_that_prints_runs_in_place_under_the_outer_evv() {
     insta::assert_snapshot!(entry, @r#"
     internal clause Ask.ask fn run$handle0$ask$entry(e.6: obj, p.0: unit) -> int {
       let w.7: tobj = prim evv_get()
-      let w.8: tobj = prim ev_evv(e.6)
-      let u.11: unit = prim evv_set(w.8)
+      let o.8: tobj = prim ev_evv(e.6)
+      let u.11: unit = prim evv_set(o.8)
       let p.2: unit = prim ev_take_state(e.6)
       let s.3: obj = const "x"
       let t.4: unit = extern Prelude.println(s.3)
@@ -1174,8 +1174,8 @@ fn a_fn_clause_that_fails_runs_in_place() {
     insta::assert_snapshot!(entry, @r#"
     internal clause Ask.ask fn run$handle0$ask$entry(n.0: int, e.9: obj, p.1: unit) -> int {
       let w.10: tobj = prim evv_get()
-      let w.11: tobj = prim ev_evv(e.9)
-      let u.14: unit = prim evv_set(w.11)
+      let o.11: tobj = prim ev_evv(e.9)
+      let u.14: unit = prim evv_set(o.11)
       let p.3: unit = prim ev_take_state(e.9)
       let t.4: enum = extern "Prelude.Eq Int.=="(n.0, 0)
       switch t.4 Prelude.Bool { #0 -> b1, #1 -> b2 }

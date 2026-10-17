@@ -348,7 +348,7 @@ fn into_entry(program: &mut Program, clause: FnIdx, effect: u32, op: u32) {
         );
         let o = fresh(
             &mut function.vars,
-            "w",
+            "o",
             Repr::TObj,
             Prim::EvEvv.row().ret_mark,
         );

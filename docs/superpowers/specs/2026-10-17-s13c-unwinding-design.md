@@ -186,6 +186,7 @@ S13c-2 は S13c-1 に依る。`yields` でない関数の中で中断が起き�
 - 種類2 (S13c-2): 逆のことを確かめるようになる既存のテスト2本は、名前と期待値を書き直す。`crates/eml_types/tests/yields.rs` の `every_label_always_yields` (`IO` だけの row が `Never` になる)と、`crates/eml_core_ir/tests/evidence.rs` の `an_io_extern_is_a_yield_point` (`IO` の extern の後に yield の確かめがなくなる) である。理由: yield の地点の分類から `IO` を外したため
 - 種類2 (S13c-2): `crates/eml_core_ir/tests/evidence.rs` の `continuations_of_many_io_externs_stay_linear_in_size` は、`println` の代わりに再開する操作 `ask` を並べる形に書き直し、名前を `continuations_of_many_yield_points_stay_linear_in_size` に変える。上限は測った値 (N = 2000 で 20N 個ほど) から 24N 個にする。理由: `IO` の extern が yield の地点でなくなり、継続の関数の大きさを確かめられなくなったため
 - 種類3 (S13c-3): `tests/ui/run/scripts/csv2jsonl/main.em` の `drop k` を消す。出力は変わらない
+- 種類2 (S13c-3): under の入口の2つ目の変数 (`ev_evv(ev)` の結果) の名前を `w` から `o` にする。EP の出力の Core IR と LIR のスナップショットのうち、under の入口の `w.N` が `o.N` に変わる。理由: spec の under の形 (`o = ev_evv(ev)`) と名前をそろえるため
 - 種類1 の変更は見込んでいない。作業中に見つかったら、この spec に足す
 
 ## 段の終わりの文書
