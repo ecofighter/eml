@@ -107,7 +107,8 @@ pub(super) fn check_input<'c>(
             .expect("an unsolved row variable closes to `<>`");
     }
     let reliable = usage::reliable(body, diagnostics.is_empty());
-    usage::constrain(program, file, body, &typing, &mut table, types, reliable);
+    let implicit_drops =
+        usage::constrain(program, file, body, &typing, &mut table, types, reliable);
     carry::constrain(program, file, body, &typing, &mut table, reliable);
     (
         PendingBody {
@@ -122,6 +123,7 @@ pub(super) fn check_input<'c>(
             instances,
             reliable,
             query,
+            implicit_drops,
         },
         diagnostics,
     )

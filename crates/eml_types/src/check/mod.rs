@@ -2,9 +2,9 @@ use std::collections::{HashMap, HashSet};
 
 use eml_diagnostics::{Diagnostic, Label, SourceFiles};
 use eml_hir::{
-    Binding, ClassId, Constructor, Function, FunctionId, FunctionKind, Generics, InstanceId,
-    InstanceOrigin, ItemMap, Method, Operation, Program, RowRef, Signature, TypeDefKind, TypeRef,
-    TypeRefId, TypeRefKind, TypeVarId, ValueItem,
+    Binding, ClassId, Constructor, ExprId, Function, FunctionId, FunctionKind, Generics,
+    InstanceId, InstanceOrigin, ItemMap, LocalId, Method, Operation, Program, RowRef, Signature,
+    TypeDefKind, TypeRef, TypeRefId, TypeRefKind, TypeVarId, ValueItem,
 };
 use la_arena::Arena;
 
@@ -71,6 +71,8 @@ pub(crate) struct PendingBody<'c> {
     pub reliable: bool,
     /// `:type` の問い合わせの型の文字列。
     query: Option<String>,
+    /// 戻らない呼び出しの前で暗黙に手放す変数 (`BodyTypes::implicit_drops`)。
+    implicit_drops: HashMap<ExprId, Vec<LocalId>>,
 }
 
 impl PendingBody<'_> {
@@ -514,7 +516,8 @@ pub(crate) fn check_body<'c>(
     let linear_head = matches!(function.kind, FunctionKind::InstanceMethod(instance, _)
         if context.data_kinds[program[instance].head].lin);
     let reliable = usage::reliable(body, diagnostics.is_empty()) && !linear_head;
-    usage::constrain(program, file, body, &typing, &mut table, types, reliable);
+    let implicit_drops =
+        usage::constrain(program, file, body, &typing, &mut table, types, reliable);
     carry::constrain(program, file, body, &typing, &mut table, reliable);
     Some((
         PendingBody {
@@ -524,6 +527,7 @@ pub(crate) fn check_body<'c>(
             instances,
             reliable,
             query: None,
+            implicit_drops,
         },
         diagnostics,
     ))
@@ -537,7 +541,11 @@ pub(crate) fn export_body(
     types: &mut TypeStore,
 ) -> (BodyTypes, Vec<Vec<u32>>) {
     let PendingBody {
-        table, typing, own, ..
+        table,
+        typing,
+        own,
+        implicit_drops,
+        ..
     } = pending;
     // 式、局所変数、パターン、具体化の型は表の同じ節点を共有するので、1つの `Exporter` で書き出し、各節点を1回だけ
     // 書き出す。`joins` の番号は初めて現れた順に振るので、この書き出しの順 (式、局所変数、パターン、具体化、更新、
@@ -590,6 +598,7 @@ pub(crate) fn export_body(
         .map(|(&key, row)| (key, classify(row)))
         .collect();
     body_types.masks = typing.masks;
+    body_types.implicit_drops = implicit_drops;
     body_types.fields = typing.fields;
     for (expr, update) in typing.updates.iter() {
         let update = Update {

@@ -12,17 +12,45 @@ use eml_hir::{
 
 use crate::FieldTarget;
 use crate::check::BodyTyping;
+use crate::diverge::diverging_call;
 use crate::kind::{Bound, DiscardSite, KindOrigin, KindReason, Provenance, Span, UnusedPath};
 use crate::store::TypeStore;
 use crate::table::{Exporter, Table};
 use crate::ty::Linearity;
 
 /// 制御フローの経路ごとの変数の使い方。
-type Uses = HashMap<LocalId, Use>;
+#[derive(Debug, Default)]
+struct Uses {
+    locals: HashMap<LocalId, Use>,
+    /// すべての経路が戻らない呼び出しで終わるときの、経路ごとに評価の順で最初の呼び出し。戻る経路があれば空である。
+    /// 後ろの呼び出しには実行が届かないので、手放すのは最初の呼び出しの前だけにする
+    /// (docs/superpowers/specs/2026-10-17-s13c-unwinding-design.md の「線形性」)。
+    diverges: Vec<ExprId>,
+}
+
+impl Uses {
+    fn new() -> Uses {
+        Uses::default()
+    }
+
+    fn used(&self, local: LocalId) -> Use {
+        self.locals.get(&local).copied().unwrap_or_default()
+    }
+}
+
+impl FromIterator<(LocalId, Use)> for Uses {
+    fn from_iter<I: IntoIterator<Item = (LocalId, Use)>>(locals: I) -> Uses {
+        Uses {
+            locals: locals.into_iter().collect(),
+            diverges: Vec::new(),
+        }
+    }
+}
 
 #[derive(Debug, Clone, Copy, Default)]
 struct Use {
-    /// 経路ごとの使用回数の最小と最大。2回以上は区別しないので2で頭打ちにする。
+    /// 経路ごとの使用回数の最小と最大。2回以上は区別しないので2で頭打ちにする。戻らない呼び出しで終わる枝のうち、
+    /// 変数を使わない経路は最小に数えない。その経路では呼び出しの前で手放すためである。
     min: u8,
     max: u8,
     /// どこかの経路で最初に使った位置。
@@ -82,7 +110,7 @@ pub(crate) fn constrain(
     table: &mut Table,
     types: &mut TypeStore,
     reliable: bool,
-) {
+) -> HashMap<ExprId, Vec<LocalId>> {
     let mut by_name: HashMap<&str, Vec<LocalId>> = HashMap::new();
     for (local, data) in body.locals.iter() {
         by_name.entry(data.name.as_str()).or_default().push(local);
@@ -102,11 +130,31 @@ pub(crate) fn constrain(
         by_name,
         scopes: HashMap::new(),
         omitted_states: HashSet::new(),
+        implicit_drops: HashMap::new(),
     };
     let uses = usage.expr(body.root);
     for &param in &body.params {
         usage.check_pat(param, &uses, body.root);
     }
+    // 再帰する組の関数は `Unr` で、組の本体の中の参照は捕まえた値でもない。持ち上げた関数の中に手放す値はないので
+    // 記録から除く
+    let recursive: HashSet<LocalId> = body
+        .local_groups
+        .iter()
+        .filter(|group| group.recursive)
+        .flat_map(|group| group.members.iter().copied())
+        .collect();
+    let mut implicit_drops = usage.implicit_drops;
+    for locals in implicit_drops.values_mut() {
+        locals.retain(|local| !recursive.contains(local));
+        locals.sort();
+        debug_assert!(
+            locals.windows(2).all(|pair| pair[0] != pair[1]),
+            "a path drops a variable once"
+        );
+    }
+    implicit_drops.retain(|_, locals| !locals.is_empty());
+    implicit_drops
 }
 
 struct Usage<'a, 'c> {
@@ -126,6 +174,8 @@ struct Usage<'a, 'c> {
     scopes: HashMap<LocalId, ExprId>,
     /// HIR が合成した `return` の節で、状態を受ける `_` のパターン。捨てたのは書き手の `_` ではないので、報告を変える。
     omitted_states: HashSet<PatId>,
+    /// 戻らない呼び出しの前で暗黙に手放す変数 (`BodyTypes::implicit_drops`)。数えられる本体でだけ記録する。
+    implicit_drops: HashMap<ExprId, Vec<LocalId>>,
 }
 
 impl<'a> Usage<'a, '_> {
@@ -144,7 +194,7 @@ impl<'a> Usage<'a, '_> {
         let at = body.exprs[id].range;
         match &body.exprs[id].kind {
             ExprKind::Missing | ExprKind::Literal(_) => Uses::new(),
-            ExprKind::Path(Res::Local(local)) => Uses::from([(*local, Use::once(at))]),
+            ExprKind::Path(Res::Local(local)) => Uses::from_iter([(*local, Use::once(at))]),
             ExprKind::Path(_) => Uses::new(),
             // 関数型の値を呼ぶことも、その値の1回の使用である (docs/spec/linearity.md の「基本の規則」)
             ExprKind::Call { callee, args, .. } => {
@@ -152,6 +202,10 @@ impl<'a> Usage<'a, '_> {
                 for &arg in args {
                     let next = self.expr(arg);
                     sequence(&mut uses, next);
+                }
+                // 引数の中の戻らない呼び出しのほうが先に実行される
+                if uses.diverges.is_empty() && diverging_call(self.program, body, id) {
+                    uses.diverges.push(id);
                 }
                 uses
             }
@@ -166,19 +220,19 @@ impl<'a> Usage<'a, '_> {
                     Some(else_branch) => (self.expr(*else_branch), Missing::Branch(*else_branch)),
                     None => (Uses::new(), Missing::NoElse(id)),
                 };
-                sequence(
-                    &mut uses,
-                    join(vec![(then_uses, Missing::Branch(*then_branch)), otherwise]),
-                );
+                let joined = self.join(vec![(then_uses, Missing::Branch(*then_branch)), otherwise]);
+                sequence(&mut uses, joined);
                 uses
             }
             ExprKind::Block { stmts, tail, .. } => {
                 let mut uses = Uses::new();
                 let mut bound = Vec::new();
+                // 束縛した変数が見え始める位置を、束縛ごとに覚えておく。戻らない呼び出しがそれより前にあれば、その
+                // 時点で変数はまだないので手放せない
                 for stmt in stmts {
                     let next = match stmt {
                         Stmt::Let { pat, init, .. } => {
-                            bound.push((*pat, true));
+                            bound.push((*pat, true, body.exprs[*init].range.end()));
                             self.expr(*init)
                         }
                         Stmt::Functions(functions) => {
@@ -186,7 +240,14 @@ impl<'a> Usage<'a, '_> {
                             // 数えて誤りになるのは型が `Lin` のときだけで、そのときは E3001 がすでに出ている
                             let counted =
                                 !self.group(functions).is_some_and(|group| group.recursive);
-                            bound.extend(functions.iter().map(|function| (function.pat, counted)));
+                            let visible = body.exprs[functions.last().expect("a function").lambda]
+                                .range
+                                .end();
+                            bound.extend(
+                                functions
+                                    .iter()
+                                    .map(|function| (function.pat, counted, visible)),
+                            );
                             self.local_functions(functions)
                         }
                         Stmt::Expr(expr) => self.expr(*expr),
@@ -200,14 +261,24 @@ impl<'a> Usage<'a, '_> {
                 // ブロックの `let` は外から見えないので、ここで数え終える。外の `if` で枝を合わせると、片方の枝で
                 // 束縛した変数が、もう片方の枝では「使わない」と数えられてしまうため
                 // 同じブロックの後の `let` が前の変数を隠すかを、前の変数を数えるときに調べられるようにする
-                for &(pat, _) in &bound {
+                for &(pat, _, _) in &bound {
                     for local in body.pat_bindings(pat) {
                         self.scopes.insert(local, id);
                     }
                 }
-                for (pat, counted) in bound {
+                for (pat, counted, visible) in bound {
                     if counted {
+                        let before = uses
+                            .diverges
+                            .iter()
+                            .any(|&call| body.exprs[call].range.start() < visible);
+                        let hidden = if before {
+                            std::mem::take(&mut uses.diverges)
+                        } else {
+                            Vec::new()
+                        };
                         self.check_pat(pat, &uses, id);
+                        uses.diverges.extend(hidden);
                     }
                     remove_bound(body, pat, &mut uses);
                 }
@@ -251,7 +322,7 @@ impl<'a> Usage<'a, '_> {
                         }
                         remove_bound(body, pat, &mut inner);
                     }
-                    let mut captured: Vec<LocalId> = inner.keys().copied().collect();
+                    let mut captured: Vec<LocalId> = inner.locals.keys().copied().collect();
                     captured.sort();
                     debug_assert_eq!(captured, body.closure_captures(&clause.closure));
                     // 操作の節は、操作を起こすたびに呼ばれる。捕まえた変数は、何回使ってもよいものでなければならない
@@ -285,7 +356,8 @@ impl<'a> Usage<'a, '_> {
                     remove_bound(body, arm.pat, &mut inner);
                     branches.push((inner, Missing::Branch(arm.body)));
                 }
-                sequence(&mut uses, join(branches));
+                let joined = self.join(branches);
+                sequence(&mut uses, joined);
                 uses
             }
             ExprKind::Tuple(elements) | ExprKind::List(elements) => {
@@ -399,7 +471,7 @@ impl<'a> Usage<'a, '_> {
         let reference = group
             .iter()
             .filter_map(|member| {
-                let used = inner.remove(member)?;
+                let used = inner.locals.remove(member)?;
                 Some((
                     *member,
                     used.first.expect("a used variable has a first use"),
@@ -408,7 +480,7 @@ impl<'a> Usage<'a, '_> {
             .min_by_key(|&(_, at)| at.start());
         // 残りは捕まえた変数である。捕まえることは外から見て1回の使用で、本体の中で1回でなければ `Unr`
         // にする。ラムダとその部分適用の線形性は、捕まえた値の Kind 以上になる (docs/spec/linearity.md)
-        let mut captured: Vec<LocalId> = inner.keys().copied().collect();
+        let mut captured: Vec<LocalId> = inner.locals.keys().copied().collect();
         captured.sort();
         // 捕まえた変数の集合は、Core IR の変換が使う `closure_captures` から組の関数を除いたものと同じでなければ
         // ならない
@@ -421,7 +493,7 @@ impl<'a> Usage<'a, '_> {
         );
         let mut captured_types = Vec::new();
         for &local in &captured {
-            self.count(local, inner[&local], *lambda_body);
+            self.count(local, inner.used(local), *lambda_body);
             if let Some(&ty) = self.typing.locals.get(local) {
                 captured_types.push(ty);
             }
@@ -445,7 +517,9 @@ impl<'a> Usage<'a, '_> {
         match &self.body.pats[pat].kind {
             PatKind::Bind(local) => {
                 self.scopes.insert(*local, scope);
-                self.count(*local, uses.get(local).copied().unwrap_or_default(), scope);
+                if !self.dropped_at_divergence(*local, uses) {
+                    self.count(*local, uses.used(*local), scope);
+                }
             }
             PatKind::Wildcard => {
                 if let Some(&ty) = self.typing.pats.get(pat) {
@@ -544,7 +618,10 @@ impl<'a> Usage<'a, '_> {
         };
         let local = *local;
         self.scopes.insert(local, scope);
-        let used = uses.get(&local).copied().unwrap_or_default();
+        if self.dropped_at_divergence(local, uses) {
+            return;
+        }
+        let used = uses.used(local);
         if used.max < 2 && used.min == 0 {
             let name = self.body.locals[local].name.clone();
             self.unr_local(local, KindReason::ContinuationNotUsed { name, clause });
@@ -562,17 +639,100 @@ impl<'a> Usage<'a, '_> {
             self.check_pat(param, &inner, root);
             remove_bound(self.body, param, &mut inner);
         }
-        let mut captured: Vec<LocalId> = inner.keys().copied().collect();
+        let mut captured: Vec<LocalId> = inner.locals.keys().copied().collect();
         captured.sort();
         // 捕まえた変数の集合は、Core IR の変換が使う `captures` と同じでなければならない
         debug_assert_eq!(captured, self.body.closure_captures(closure));
         for &local in &captured {
-            self.count(local, inner[&local], root);
+            self.count(local, inner.used(local), root);
         }
         captured
             .into_iter()
             .map(|local| (local, Use::once(at)))
             .collect()
+    }
+
+    /// スコープの終わりで、どの経路でも使わなかった変数を、すべての経路が戻らない呼び出しで終わるなら、それぞれの
+    /// 呼び出しの前で手放すものとして記録する。どこかの経路で使った変数は、使わない経路を枝の合流 (`join`) で記録
+    /// 済みか、使わない経路が誤りかのどちらかなので、ここでは記録しない。
+    fn dropped_at_divergence(&mut self, local: LocalId, uses: &Uses) -> bool {
+        if uses.diverges.is_empty() || uses.locals.contains_key(&local) {
+            return false;
+        }
+        for &call in &uses.diverges {
+            self.record_drop(call, local);
+        }
+        true
+    }
+
+    fn record_drop(&mut self, call: ExprId, local: LocalId) {
+        if self.reliable {
+            self.implicit_drops.entry(call).or_default().push(local);
+        }
+    }
+
+    /// 分岐の枝の使い方を合わせる。枝に現れない変数は、その枝では使われない。ただし戻らない呼び出しで終わる枝は、
+    /// どの消費の集合とも合う。その枝が使わない変数は、ほかの枝が使うなら、その枝の呼び出しの前で手放すものとして
+    /// 記録し、使用回数の最小に数えない。二重使用は戻らない枝でも誤りなので、最大と使った位置はすべての枝から取る
+    /// (docs/superpowers/specs/2026-10-17-s13c-unwinding-design.md の「線形性」)。使った位置は回数の多い枝から
+    /// 取り、使わなかった経路は前の枝から取る。すべての枝が戻らなければ、分岐全体が戻らない。
+    fn join(&mut self, branches: Vec<(Uses, Missing)>) -> Uses {
+        let mut locals: Vec<LocalId> = branches
+            .iter()
+            .flat_map(|(uses, _)| uses.locals.keys().copied())
+            .collect();
+        locals.sort();
+        locals.dedup();
+        let mut out = Uses::new();
+        for local in locals {
+            let mut joined: Option<Use> = None;
+            for (uses, path) in &branches {
+                let used = match uses.locals.get(&local) {
+                    Some(&used) => used,
+                    None if !uses.diverges.is_empty() => {
+                        for &call in &uses.diverges {
+                            self.record_drop(call, local);
+                        }
+                        continue;
+                    }
+                    None => Use::unused(*path),
+                };
+                joined = Some(match joined {
+                    None => used,
+                    Some(j) => {
+                        let min = j.min.min(used.min);
+                        let (first, second) = if used.max > j.max {
+                            (used.first, used.second)
+                        } else {
+                            (j.first, j.second)
+                        };
+                        let missing = match (min, j.min) {
+                            (0, 0) => j.missing,
+                            (0, _) => used.missing,
+                            _ => None,
+                        };
+                        Use {
+                            min,
+                            max: j.max.max(used.max),
+                            first,
+                            second,
+                            missing,
+                        }
+                    }
+                });
+            }
+            out.locals.insert(
+                local,
+                joined.expect("a local of some branch is used on that branch"),
+            );
+        }
+        if branches.iter().all(|(uses, _)| !uses.diverges.is_empty()) {
+            out.diverges = branches
+                .into_iter()
+                .flat_map(|(uses, _)| uses.diverges)
+                .collect();
+        }
+        out
     }
 
     /// 経路ごとの使用回数が1回でなければ、`Unr` の制約を出す。
@@ -725,14 +885,18 @@ impl<'a> Usage<'a, '_> {
 
 fn remove_bound(body: &Body, pat: PatId, uses: &mut Uses) {
     for local in body.pat_bindings(pat) {
-        uses.remove(&local);
+        uses.locals.remove(&local);
     }
 }
 
-/// 続けて実行する2つの部分の使い方を足す。2回目の位置は、経路の上で早いものを選ぶ。
+/// 続けて実行する2つの部分の使い方を足す。2回目の位置は、経路の上で早いものを選ぶ。前の部分がすべての経路で
+/// 戻らなければ、その呼び出しが評価の順で最初なので残す。
 fn sequence(uses: &mut Uses, next: Uses) {
-    for (local, b) in next {
-        let a = uses.entry(local).or_default();
+    if uses.diverges.is_empty() {
+        uses.diverges = next.diverges;
+    }
+    for (local, b) in next.locals {
+        let a = uses.locals.entry(local).or_default();
         let min = (a.min + b.min).min(2);
         let max = (a.max + b.max).min(2);
         let second = a
@@ -751,49 +915,4 @@ fn sequence(uses: &mut Uses, next: Uses) {
             },
         };
     }
-}
-
-/// 分岐の枝の使い方を合わせる。枝に現れない変数は、その枝では使われない。使った位置は回数の多い枝から取り、
-/// 使わなかった経路は前の枝から取る。
-fn join(branches: Vec<(Uses, Missing)>) -> Uses {
-    let mut locals: Vec<LocalId> = branches
-        .iter()
-        .flat_map(|(uses, _)| uses.keys().copied())
-        .collect();
-    locals.sort();
-    locals.dedup();
-    let mut out = Uses::new();
-    for local in locals {
-        let mut joined: Option<Use> = None;
-        for (uses, path) in &branches {
-            let used = uses.get(&local).copied().unwrap_or(Use::unused(*path));
-            joined = Some(match joined {
-                None => used,
-                Some(j) => {
-                    let min = j.min.min(used.min);
-                    let (first, second) = if used.max > j.max {
-                        (used.first, used.second)
-                    } else {
-                        (j.first, j.second)
-                    };
-                    let missing = match (min, j.min) {
-                        (0, 0) => j.missing,
-                        (0, _) => used.missing,
-                        _ => None,
-                    };
-                    Use {
-                        min,
-                        max: j.max.max(used.max),
-                        first,
-                        second,
-                        missing,
-                    }
-                }
-            });
-        }
-        if let Some(joined) = joined {
-            out.insert(local, joined);
-        }
-    }
-    out
 }

@@ -489,6 +489,7 @@ impl Collector<'_> {
                 first_arrow_yield: body.first_arrow_yield,
                 lambda_yields: body.lambda_yields.clone(),
                 arrow_yields: body.arrow_yields.clone(),
+                implicit_drops: body.implicit_drops.clone(),
             };
             debug_assert!(
                 types

@@ -1,6 +1,6 @@
 //! 線形性の診断 (docs/implementation/diagnostics.md の「線形性の診断」)。番号、文言、指す場所を確かめる。
 
-use eml_test_support::{check, fixes, full};
+use eml_test_support::{check, fixes, full, short_text};
 
 use crate::common::{check_full, check_short};
 
@@ -1099,4 +1099,98 @@ fn a_member_beside_a_self_recursive_one_is_named() {
       note: linear values, such as files, the continuation of a `once` operation and closures that capture one, must be used exactly once
       note: pass linear values to a recursive local function as arguments
     ");
+}
+
+/// 戻らない呼び出しの前で暗黙に手放す変数の副表 (`BodyTypes::implicit_drops`) を、入口のモジュールのすべての本体から
+/// 集め、`行:列 [名前, …]` の行に呼び出しの位置の順で並べる。診断のないプログラムだけを受ける。
+fn implicit_drops(text: &str) -> String {
+    let checked = check(text);
+    assert_eq!(short_text(checked.files(), &checked.diagnostics), "");
+    let program = &checked.program;
+    let mut rows = Vec::new();
+    for (id, _) in program.functions() {
+        if program.modules[id.module].name != "Main" {
+            continue;
+        }
+        let (Some(body), Some(types)) = (program.body(id), checked.typed.bodies.get(id)) else {
+            continue;
+        };
+        let file = program.file(id.module);
+        for (&call, locals) in &types.implicit_drops {
+            let start = body.exprs[call].range.start();
+            let names: Vec<&str> = locals
+                .iter()
+                .map(|&local| body.locals[local].name.as_str())
+                .collect();
+            let at = checked.files().line_col(file, start);
+            rows.push((start, format!("{at} [{}]\n", names.join(", "))));
+        }
+    }
+    rows.sort();
+    rows.into_iter().map(|(_, row)| row).collect()
+}
+
+const FAIL: &str = "effect Fail where\n  never fail : String -> a\n\n";
+
+#[test]
+fn a_file_left_open_before_exit_is_dropped_at_exit() {
+    let text = "main : Unit -> <IO> Unit\nmain () =\n  let f = Fs.open \"a\"\n  exit 1";
+    insta::assert_snapshot!(implicit_drops(text), @"4:3 [f]");
+}
+
+#[test]
+fn a_diverging_branch_matches_a_consuming_branch() {
+    let text = format!(
+        "{FAIL}close_or_fail : Bool -> Fs.File -> <Fail, IO> Unit\nclose_or_fail c f = if c then Fs.close f else fail \"x\""
+    );
+    insta::assert_snapshot!(implicit_drops(&text), @"5:47 [f]");
+}
+
+/// 「消費しない」は評価の順を区別しない。戻らない呼び出しの後ろで消費する `f` は、呼び出しをまたいで生きているので
+/// 巻き戻しが解放する。
+#[test]
+fn a_variable_consumed_after_the_call_is_not_dropped() {
+    let text = format!(
+        "{FAIL}pair : Fs.File -> <Fail, IO> (Unit, Unit)\npair f = (fail \"x\", Fs.close f)"
+    );
+    insta::assert_snapshot!(implicit_drops(&text), @"");
+}
+
+#[test]
+fn only_the_first_diverging_call_is_recorded() {
+    let text = format!(
+        "{FAIL}g : Int -> Int -> Int\ng a b = a + b\n\ntwo : Fs.File -> <Fail> Int\ntwo f = g (fail \"a\") (fail \"b\")"
+    );
+    insta::assert_snapshot!(implicit_drops(&text), @"8:12 [f]");
+}
+
+#[test]
+fn a_user_die_is_non_returning() {
+    let text = "die : String -> <IO> a\ndie message =\n  eprintln message\n  exit 2\n\nmain : Unit -> <IO> Unit\nmain () =\n  let f = Fs.open \"a\"\n  die \"no\"";
+    insta::assert_snapshot!(implicit_drops(text), @"9:3 [f]");
+}
+
+#[test]
+fn a_clause_continuation_need_not_be_dropped_before_fail() {
+    let text = format!(
+        "{HEADER}{FAIL}run : Unit -> <Fail> Int\nrun () =\n  handle ask () with\n    | ctl ask () k -> fail \"x\""
+    );
+    insta::assert_snapshot!(implicit_drops(&text), @"13:23 [k]");
+}
+
+/// 操作の節が捕まえる値は `Unr` に限られる (E3001) ので、1回だけ動く `return` の節で確かめる。節の本体が捕まえた
+/// 変数は、その本体の変数として数える。
+#[test]
+fn a_captured_file_in_a_clause_is_dropped_on_the_diverging_branch() {
+    let text = format!(
+        "{HEADER}{FAIL}close_later : Bool -> Fs.File -> <Ask, Fail, IO> Unit\nclose_later c f =\n  handle ask () with\n    | ctl ask () k -> k 1\n    | return x -> if c then Fs.close f else fail \"x\""
+    );
+    insta::assert_snapshot!(implicit_drops(&text), @"14:45 [f]");
+}
+
+/// 暗黙に手放す `f` は、戻らない呼び出しの時点で死んでいる。`multi` の操作を row に持つ呼び出しでも持ち越さない。
+#[test]
+fn a_diverging_call_with_a_multi_row_drops_before_carrying() {
+    let text = "effect Choose where\n  multi choose : Unit -> Bool\n\ndie2 : String -> <Choose, IO> a\ndie2 message =\n  eprintln message\n  exit 2\n\nrun : Unit -> <Choose, IO> Unit\nrun () =\n  let f = Fs.open \"a\"\n  die2 \"no\"";
+    insta::assert_snapshot!(implicit_drops(text), @"12:3 [f]");
 }
