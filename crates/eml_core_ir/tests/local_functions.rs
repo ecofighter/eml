@@ -327,13 +327,13 @@ fn std_public_functions_keep_their_lir() {
     fn "F6"(xs.0: tobj) -> int {
       tail call "F7"(0, xs.0)
     }
-    yields fn "F8"(f.0: tobj, xs.1: tobj) -> tobj {
+    fn "F8"(f.0: tobj, xs.1: tobj) -> tobj {
       tail call "F9"(f.0, #0, xs.1)
     }
-    yields fn "F10"(p.0: tobj, xs.1: tobj) -> tobj {
+    fn "F10"(p.0: tobj, xs.1: tobj) -> tobj {
       tail call "F11"(p.0, #0, xs.1)
     }
-    yields fn "F12"(f.0: tobj, xs.1: tobj) -> tobj {
+    fn "F12"(f.0: tobj, xs.1: tobj) -> tobj {
       tail call "F13"(f.0, #0, xs.1)
     }
     fn F14(prefix.0: obj, s.1: obj) -> enum {
@@ -501,7 +501,7 @@ fn std_public_functions_keep_their_lir() {
       release ys.1 Prelude.List #1(_, rest.3)
       tail call "F7"(t.4, rest.3)
     }
-    yields fn "F9"(f.0: tobj, acc.1: tobj, ys.2: tobj) -> tobj {
+    fn "F9"(f.0: tobj, acc.1: tobj, ys.2: tobj) -> tobj {
       switch ys.2 Prelude.List { #0 -> b1, #1(x.3: tobj, rest.4: tobj) -> b2 }
     b1:
       decref f.0
@@ -510,22 +510,11 @@ fn std_public_functions_keep_their_lir() {
     b2:
       release ys.2 Prelude.List #1(x.3, rest.4)
       dup f.0
-      let t.5: tobj = yields apply f.0(x.3)
-      let y.6: int = prim yielding()
-      switch y.6 { 0 -> b4, _ -> b3 }
-    b3:
-      decref t.5
-      let k.7: tobj poly = prim yield_cont_take()
-      let c.8: tobj = closure "F32"(f.0, acc.1, rest.4)
-      let k.9: tobj poly = closure compose$(k.7, c.8)
-      let u.10: unit = prim yield_cont_set(k.9)
-      let d.11: obj poly = prim dummy()
-      return d.11
-    b4:
-      let d.12: tobj = con Prelude.List #1(t.5, acc.1)
-      tail call "F9"(f.0, d.12, rest.4)
+      let t.5: tobj = apply f.0(x.3)
+      let d.6: tobj = con Prelude.List #1(t.5, acc.1)
+      tail call "F9"(f.0, d.6, rest.4)
     }
-    yields fn "F11"(p.0: tobj, acc.1: tobj, ys.2: tobj) -> tobj {
+    fn "F11"(p.0: tobj, acc.1: tobj, ys.2: tobj) -> tobj {
       switch ys.2 Prelude.List { #0 -> b1, #1(x.3: tobj, rest.4: tobj) -> b2 }
     b1:
       decref p.0
@@ -535,28 +524,18 @@ fn std_public_functions_keep_their_lir() {
       release ys.2 Prelude.List #1(x.3, rest.4)
       dup p.0
       dup x.3
-      let t.5: tobj = yields apply p.0(x.3)
+      let t.5: tobj = apply p.0(x.3)
       let t.6: enum = unbox t.5
       decref t.5
-      let y.7: int = prim yielding()
-      switch y.7 { 0 -> b4, _ -> b3 }
+      switch t.6 Prelude.Bool { #0 -> b3, #1 -> b4 }
     b3:
-      let k.8: tobj poly = prim yield_cont_take()
-      let c.9: tobj = closure "F33"(p.0, acc.1, x.3, rest.4)
-      let k.10: tobj poly = closure compose$(k.8, c.9)
-      let u.11: unit = prim yield_cont_set(k.10)
-      let d.12: obj poly = prim dummy()
-      return d.12
-    b4:
-      switch t.6 Prelude.Bool { #0 -> b5, #1 -> b6 }
-    b5:
       decref x.3
       tail call "F11"(p.0, acc.1, rest.4)
-    b6:
-      let d.13: tobj = con Prelude.List #1(x.3, acc.1)
-      tail call "F11"(p.0, d.13, rest.4)
+    b4:
+      let d.7: tobj = con Prelude.List #1(x.3, acc.1)
+      tail call "F11"(p.0, d.7, rest.4)
     }
-    yields fn "F13"(f.0: tobj, acc.1: tobj, ys.2: tobj) -> tobj {
+    fn "F13"(f.0: tobj, acc.1: tobj, ys.2: tobj) -> tobj {
       switch ys.2 Prelude.List { #0 -> b1, #1(x.3: tobj, rest.4: tobj) -> b2 }
     b1:
       decref f.0
@@ -565,26 +544,15 @@ fn std_public_functions_keep_their_lir() {
     b2:
       release ys.2 Prelude.List #1(x.3, rest.4)
       dup f.0
-      let t.5: tobj = yields apply f.0(x.3)
-      let y.6: int = prim yielding()
-      switch y.6 { 0 -> b4, _ -> b3 }
+      let t.5: tobj = apply f.0(x.3)
+      switch t.5 Prelude.Option { #0 -> b3, #1(y.6: tobj) -> b4 }
     b3:
       decref t.5
-      let k.7: tobj poly = prim yield_cont_take()
-      let c.8: tobj = closure "F34"(f.0, acc.1, rest.4)
-      let k.9: tobj poly = closure compose$(k.7, c.8)
-      let u.10: unit = prim yield_cont_set(k.9)
-      let d.11: obj poly = prim dummy()
-      return d.11
-    b4:
-      switch t.5 Prelude.Option { #0 -> b5, #1(y.12: tobj) -> b6 }
-    b5:
-      decref t.5
       tail call "F13"(f.0, acc.1, rest.4)
-    b6:
-      release t.5 Prelude.Option #1(y.12)
-      let d.13: tobj = con Prelude.List #1(y.12, acc.1)
-      tail call "F13"(f.0, d.13, rest.4)
+    b4:
+      release t.5 Prelude.Option #1(y.6)
+      let d.7: tobj = con Prelude.List #1(y.6, acc.1)
+      tail call "F13"(f.0, d.7, rest.4)
     }
     fn F17(needle.0: obj, s.1: obj, at.2: int, n.3: int, i.4: int) -> enum {
       let t.5: enum = extern "Prelude.Ord Int.>="(i.4, n.3)
@@ -763,31 +731,6 @@ fn std_public_functions_keep_their_lir() {
     b13:
       decref s.0
       return #0
-    }
-    yields fn "F32"(f.0: tobj, acc.1: tobj, rest.2: tobj, t.3: tobj) -> tobj {
-      let d.4: tobj = con Prelude.List #1(t.3, acc.1)
-      tail call "F9"(f.0, d.4, rest.2)
-    }
-    yields fn "F33"(p.0: tobj, acc.1: tobj, x.2: tobj, rest.3: tobj, t.4: tobj) -> tobj {
-      let t.5: enum = unbox t.4
-      decref t.4
-      switch t.5 Prelude.Bool { #0 -> b1, #1 -> b2 }
-    b1:
-      decref x.2
-      tail call "F11"(p.0, acc.1, rest.3)
-    b2:
-      let d.6: tobj = con Prelude.List #1(x.2, acc.1)
-      tail call "F11"(p.0, d.6, rest.3)
-    }
-    yields fn "F34"(f.0: tobj, acc.1: tobj, rest.2: tobj, t.3: tobj) -> tobj {
-      switch t.3 Prelude.Option { #0 -> b1, #1(y.4: tobj) -> b2 }
-    b1:
-      decref t.3
-      tail call "F13"(f.0, acc.1, rest.2)
-    b2:
-      release t.3 Prelude.Option #1(y.4)
-      let d.5: tobj = con Prelude.List #1(y.4, acc.1)
-      tail call "F13"(f.0, d.5, rest.2)
     }
     "#);
 }

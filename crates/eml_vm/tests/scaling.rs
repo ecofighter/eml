@@ -285,6 +285,30 @@ main () = println (show (Fail.to_result (fn () -> down {depth})))
     );
 }
 
+/// 汎用の handler の節が IO だけの row のコールバックを呼んでも、IO を yield しうるラベルに数えないので、節はその場で
+/// 動き、一度も yield しない (docs/spec/types.md の「row の具体化の記録」)。
+#[test]
+fn a_generic_handler_with_a_printing_callback_does_not_yield() {
+    const COUNT: u64 = 1000;
+    let text = format!(
+        "import Yield (Yield(..))
+
+produce : Int -> <Yield Int> Unit
+produce n =
+  if n == 0 then ()
+  else
+    yield n
+    produce (n - 1)
+
+main : Unit -> <IO> Unit
+main () = Yield.for_each (fn () -> produce {COUNT}) (fn n -> println (show n))
+"
+    );
+    let expected: String = (1..=COUNT).rev().map(|n| format!("{n}\n")).collect();
+    let stats = stats(&text, &expected);
+    assert_eq!((stats.yields, stats.yield_frames), (0, 0), "{stats:?}");
+}
+
 /// リストの関数と、本体が `traverse` の `main` を並べたプログラム。`traverse` の中の `{n}` を n に置き換える。
 fn list_traversal(n: u64, traverse: &str) -> String {
     format!(

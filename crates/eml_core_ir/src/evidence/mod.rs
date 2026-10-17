@@ -11,8 +11,7 @@ mod tests;
 
 use std::collections::HashMap;
 
-use crate::{Call, CoreFn, Program, Rhs, Stmt, Term};
-use eml_extern::Purity;
+use crate::{Call, CoreFn, Program, Rhs, Term};
 use eml_lir::{
     Atom, BlockId, Case, CasePattern, FnIdx, Mark, MaskItem, Prim, Repr, VarId, VarInfo,
 };
@@ -33,30 +32,8 @@ pub fn evidence(program: &mut Program) {
         let lowered = program.function(function);
         if lowered.yields && lowered.clause.is_none() {
             split(program, function, &annotations, &mut helpers);
-        } else {
-            // `IO` を row に持つ関数はいつも `yields` で、in-place の入口は IO の extern を持たない
-            // (docs/spec/core-ir.md の「IO の extern」)
-            assert!(
-                !calls_io_extern(lowered),
-                "`{}` calls an IO extern but is not split at yield points",
-                lowered.name
-            );
         }
     }
-}
-
-fn calls_io_extern(function: &CoreFn) -> bool {
-    function
-        .blocks
-        .iter()
-        .flat_map(|block| &block.stmts)
-        .any(|stmt| {
-            matches!(
-                stmt,
-                Stmt::Let { var: _, rhs: Rhs::Extern { ext, args: _, at: _ } }
-                    if ext.row().purity == Purity::Effectful
-            )
-        })
 }
 
 /// EP が作る補助の関数。使うときに1つずつ作り、プログラムの末尾に足す

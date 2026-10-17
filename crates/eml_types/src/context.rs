@@ -70,6 +70,12 @@ impl Context {
     pub fn is_extern_effect(&self, effect: EffectId) -> bool {
         self.extern_effects.contains(&effect)
     }
+
+    /// row のラベルとして yield しうるか。`IO` の失敗と `never` の操作は、巻き戻しで継続を作らずに中断するので
+    /// yield しない (docs/spec/types.md の「row の具体化の記録」)。
+    pub(crate) fn may_yield(&self, effect: EffectId) -> bool {
+        !self.is_extern_effect(effect) && self.effect_multiplicities[effect] != Multiplicity::Never
+    }
 }
 
 fn multiplicity(multiplicity: OpMultiplicity) -> Multiplicity {

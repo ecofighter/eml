@@ -1,0 +1,9 @@
+---
+source: crates/eml_cli/tests/ui.rs
+expression: "format!(\"--- stdout ---\\n{stdout}--- stderr ---\\n{diagnostics}{stderr}{written}{exit}\")"
+input_file: tests/ui/run/effects/in_place_clause_catches_its_own_failure.em
+---
+--- stdout ---
+clause caught: cannot open `missing.txt`: not found
+got 8
+--- stderr ---

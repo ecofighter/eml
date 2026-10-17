@@ -75,16 +75,30 @@ fn bodies(text: &str, name: &str) -> String {
 }
 
 #[test]
-fn every_label_always_yields() {
-    // `IO` も、失敗すると `try_io` まで中断するので yield しうる
-    let text = "effect Ask where\n  ask : Unit -> Int\n\nf : Unit -> <Ask, IO> Int\nf () = ask ()\n\ng : Unit -> <IO> Unit\ng () = println \"x\"";
+fn io_and_never_only_labels_never_yield() {
+    // `IO` と、操作がすべて `never` のエフェクトは、中断しても継続を作らないので yield しない。ほかのラベルが1つでもあれば
+    // yield しうる
+    let text = "effect Ask where\n  ask : Unit -> Int\n\neffect Fail where\n  never fail : Unit -> a\n\nf : Unit -> <Ask, IO> Int\nf () = ask ()\n\ng : Unit -> <IO> Unit\ng () = println \"x\"\n\nh : Unit -> <Fail> Int\nh () = fail ()";
     insta::assert_snapshot!(bodies(text, "f"), @"
     body Always
-    5:8#0 Always
+    8:8#0 Always
     ");
     insta::assert_snapshot!(bodies(text, "g"), @"
-    body Always
-    8:8#0 Always
+    body Never
+    11:8#0 Never
+    ");
+    insta::assert_snapshot!(bodies(text, "h"), @"
+    body Never
+    14:8#0 Never
+    ");
+}
+
+#[test]
+fn a_row_variable_beside_io_is_var() {
+    let text = "f : (Unit -> <e> Int) -> <IO | e> Int\nf g = g ()";
+    insta::assert_snapshot!(bodies(text, "f"), @"
+    body Var(0)
+    2:7#0 Var(0)
     ");
 }
 
@@ -106,7 +120,7 @@ fn the_rows_of_a_reference_follow_the_signature_order() {
     insta::assert_snapshot!(rows(text, "main"), @"
     5:11 println []
     5:20 show []
-    5:26 twice [Always]
+    5:26 twice [Never]
     ");
 }
 
@@ -125,14 +139,14 @@ fn an_operation_row_variable_in_a_clause_always_yields() {
     let text = "effect Run where\n  run : (Unit -> <e> Int) -> Int\n\nbody : Unit -> <Run> Int\nbody () = run (fn () -> 1)\n\nmain : Unit -> <IO> Unit\nmain () =\n  let r =\n    handle body () with\n      | ctl run f k ->\n        let g = fn () -> f () + 1\n        k 7\n  println (show r)";
     // 節の中のラムダ g の row は操作の row 変数で、main の row 変数ではない
     insta::assert_snapshot!(bodies(text, "main"), @"
-    body Always
+    body Never
     10:12#0 Always
     12:17 Always
     12:26#0 Always
     12:26#0 Never
     12:26#1 Never
-    13:9#0 Always
-    14:3#0 Always
+    13:9#0 Never
+    14:3#0 Never
     14:12#0 Never
     ");
 }
@@ -141,12 +155,12 @@ fn an_operation_row_variable_in_a_clause_always_yields() {
 fn an_unresolved_row_variable_never_yields() {
     let text = "main : Unit -> <IO> Unit\nmain () =\n  let h = fn f -> f 1 + 1\n  println \"x\"";
     insta::assert_snapshot!(bodies(text, "main"), @"
-    body Always
+    body Never
     3:11 Never
     3:19#0 Never
     3:19#0 Never
     3:19#1 Never
-    4:3#0 Always
+    4:3#0 Never
     ");
 }
 
@@ -181,11 +195,11 @@ fn a_pure_local_function_in_an_io_body_never_yields() {
     // row を閉じるので、`<IO>` の本体の中でも純粋なローカル関数の本体は yield しない
     let text = "main : Unit -> <IO> Unit\nmain () =\n  let inc x = x + 1\n  println (show (inc 1))";
     insta::assert_snapshot!(bodies(text, "main"), @"
-    body Always
+    body Never
     3:3 Never
     3:15#0 Never
     3:15#1 Never
-    4:3#0 Always
+    4:3#0 Never
     4:12#0 Never
     4:18#0 Never
     ");

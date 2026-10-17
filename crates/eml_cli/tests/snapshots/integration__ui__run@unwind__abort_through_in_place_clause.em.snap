@@ -1,0 +1,9 @@
+---
+source: crates/eml_cli/tests/ui.rs
+expression: "format!(\"--- stdout ---\\n{stdout}--- stderr ---\\n{diagnostics}{stderr}{written}{exit}\")"
+input_file: tests/ui/run/unwind/abort_through_in_place_clause.em
+---
+--- stdout ---
+stop at 2
+--- stderr ---
+--- exit: 6 ---

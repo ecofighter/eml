@@ -162,11 +162,10 @@ pub(super) fn lower(
                         yields,
                         prompt: None,
                     };
-                    out.masked_call(&mut annotations, id, var, apply, mask);
+                    out.masked_call(&mut annotations, id, var, apply, mask, yields);
                 }
                 Rhs::Call { call, mask } if !mask.is_empty() => {
-                    debug_assert!(yields, "a function with a mask yields");
-                    out.masked_call(&mut annotations, id, var, call, mask);
+                    out.masked_call(&mut annotations, id, var, call, mask, yields);
                 }
                 rhs => out.stmts.push(Stmt::Let { var, rhs }),
             }
@@ -246,7 +245,9 @@ fn clause_target(function: &CoreFn, value: Atom) -> FnIdx {
 
 /// すぐに再開し、本体に yield の地点がない節か (docs/spec/core-ir.md の
 /// 「`perform` と節の3つの形」)。EP の前の命令で、yield の地点になるものがないことを確かめる。`k` の使いが末尾の
-/// `resume` の呼ばれる値だけなら、どの道でも `k` を1回だけ、最後に再開する。
+/// `resume` の呼ばれる値だけなら、どの道でも `k` を1回だけ、最後に再開する。IO の extern と `never` の操作は、
+/// 巻き戻しで κ を作らずに中断するので、yield の地点に数えない。その場で動く節の本体は under の形で handler の
+/// 外側の `evv` で動くので、中断は handle の外の handler に届く。
 fn runs_in_place(program: &Program, clause: &CoreFn, operation: &OperationInfo) -> bool {
     if !operation.resumable {
         return false;
@@ -280,7 +281,13 @@ fn runs_in_place(program: &Program, clause: &CoreFn, operation: &OperationInfo) 
                         || match call {
                             // 末尾の位置の `resume` は、上で `k` の再開だと確かめた
                             Call::Resume { .. } => tail != Some(at),
-                            Call::Perform { .. } | Call::Clause { .. } => true,
+                            Call::Perform {
+                                effect: _,
+                                op: _,
+                                resumable,
+                                args: _,
+                            } => *resumable,
+                            Call::Clause { .. } => true,
                             Call::Handle { .. } => clause.yields,
                             Call::Direct(target, _) => program.function(*target).yields,
                             Call::Apply {
@@ -291,17 +298,6 @@ fn runs_in_place(program: &Program, clause: &CoreFn, operation: &OperationInfo) 
                             } => *yields,
                         }
                 }
-                // in-place の節は `perform` の場所の `evv` で動くので、IO の extern を持つと、handle の本体の中の
-                // `try_io` が節の失敗を捕まえてしまう (docs/spec/core-ir.md の「IO の extern」)
-                Stmt::Let {
-                    var: _,
-                    rhs:
-                        Rhs::Extern {
-                            ext,
-                            args: _,
-                            at: _,
-                        },
-                } => ext.row().purity == Purity::Effectful,
                 _ => continue,
             };
             if yield_point {
@@ -322,7 +318,10 @@ fn runs_in_place(program: &Program, clause: &CoreFn, operation: &OperationInfo) 
 }
 
 /// すぐに再開する節の関数 g を、その場で入口にする。引数を「捕獲、evidence、操作の引数」にし、状態は入口の先頭で
-/// evidence の欄から取り出す。末尾の `resume k(v, s)` は、状態を欄に戻して v を返す形にする。
+/// evidence の欄から取り出す。末尾の `resume k(v, s)` は、状態を欄に戻して v を返す形にする。本体が何かを呼ぶなら
+/// under の形にし、入口の先頭で `evv` を evidence の外側に替え、`return` の前に戻す。節の本体は handler の外側で
+/// 動くので、本体の中の中断と `perform` が handle の本体の中の handler に届かないようにするためである。何も呼ばない
+/// 節では `evv` を読む命令がないので、替えない (docs/spec/core-ir.md の「`perform` と節の3つの形」)。
 fn into_entry(program: &mut Program, clause: FnIdx, effect: u32, op: u32) {
     let operation = operation(&program.effects, effect, op);
     let operation_params = operation.params.len();
@@ -335,10 +334,26 @@ fn into_entry(program: &mut Program, clause: FnIdx, effect: u32, op: u32) {
         .filter_map(|(index, block)| tail_position_call(block).map(|(at, _)| (index, at)))
         .collect();
     let function = &mut program.functions[clause.0 as usize];
+    let under = calls_anything(function, &resumes);
     let params = function.params().to_vec();
     let captures = params.len() - operation_params - 2;
     let state = params[params.len() - 1];
     let evidence = fresh(&mut function.vars, "e", Repr::Obj, Mark::Unr);
+    let outer_evv = under.then(|| {
+        let w = fresh(
+            &mut function.vars,
+            "w",
+            Repr::TObj,
+            Prim::EvvGet.row().ret_mark,
+        );
+        let o = fresh(
+            &mut function.vars,
+            "w",
+            Repr::TObj,
+            Prim::EvEvv.row().ret_mark,
+        );
+        (w, o)
+    });
     let mut values = Vec::new();
     for (index, at) in resumes {
         let unit = fresh(
@@ -347,6 +362,15 @@ fn into_entry(program: &mut Program, clause: FnIdx, effect: u32, op: u32) {
             Repr::Unit,
             Prim::EvSetState.row().ret_mark,
         );
+        let restore = outer_evv.map(|(w, _)| {
+            let unit = fresh(
+                &mut function.vars,
+                "u",
+                Repr::Unit,
+                Prim::EvvSet.row().ret_mark,
+            );
+            (unit, w)
+        });
         let block = &mut function.blocks[index];
         let Stmt::Let {
             var: result,
@@ -378,6 +402,15 @@ fn into_entry(program: &mut Program, clause: FnIdx, effect: u32, op: u32) {
             var: unit,
             rhs: Rhs::Prim(Prim::EvSetState, vec![Atom::Var(evidence), resumed]),
         };
+        if let Some((unit, w)) = restore {
+            block.stmts.insert(
+                at + 1,
+                Stmt::Let {
+                    var: unit,
+                    rhs: Rhs::Prim(Prim::EvvSet, vec![Atom::Var(w)]),
+                },
+            );
+        }
         block.term = Term::Return(arg);
         values.push(arg);
     }
@@ -392,22 +425,66 @@ fn into_entry(program: &mut Program, clause: FnIdx, effect: u32, op: u32) {
             _ => None,
         })
         .unwrap_or_else(|| atom_repr(values[0]));
-    let entry = &mut function.blocks[BlockId::ENTRY.0 as usize];
+    let mut prologue = Vec::new();
+    if let Some((w, o)) = outer_evv {
+        let unit = fresh(
+            &mut function.vars,
+            "u",
+            Repr::Unit,
+            Prim::EvvSet.row().ret_mark,
+        );
+        prologue.extend([
+            Stmt::Let {
+                var: w,
+                rhs: Rhs::Prim(Prim::EvvGet, Vec::new()),
+            },
+            Stmt::Let {
+                var: o,
+                rhs: Rhs::Prim(Prim::EvEvv, vec![Atom::Var(evidence)]),
+            },
+            Stmt::Let {
+                var: unit,
+                rhs: Rhs::Prim(Prim::EvvSet, vec![Atom::Var(o)]),
+            },
+        ]);
+    }
+    prologue.push(Stmt::Let {
+        var: state,
+        rhs: Rhs::Prim(Prim::EvTakeState, vec![Atom::Var(evidence)]),
+    });
     let mut entry_params = params[..captures].to_vec();
     entry_params.push(evidence);
     entry_params.extend_from_slice(&params[captures..captures + operation_params]);
+    let entry = &mut function.blocks[BlockId::ENTRY.0 as usize];
     entry.params = entry_params;
-    entry.stmts.insert(
-        0,
-        Stmt::Let {
-            var: state,
-            rhs: Rhs::Prim(Prim::EvTakeState, vec![Atom::Var(evidence)]),
-        },
-    );
+    entry.stmts.splice(0..0, prologue);
     function.ret = ret;
     function.ret_mark = ret_mark;
     function.name.push_str("$entry");
     function.clause = Some((effect, op));
+}
+
+/// 節の本体が、末尾の `resume` のほかに呼び出しか、`Effectful` の extern を持つか。`resumes` は末尾の `resume` の
+/// 位置である。
+fn calls_anything(clause: &CoreFn, resumes: &[(usize, usize)]) -> bool {
+    clause.blocks.iter().enumerate().any(|(index, block)| {
+        block.stmts.iter().enumerate().any(|(at, stmt)| match stmt {
+            Stmt::Let {
+                var: _,
+                rhs: Rhs::Call { .. },
+            } => !resumes.contains(&(index, at)),
+            Stmt::Let {
+                var: _,
+                rhs:
+                    Rhs::Extern {
+                        ext,
+                        args: _,
+                        at: _,
+                    },
+            } => ext.row().purity == Purity::Effectful,
+            _ => false,
+        })
+    })
 }
 
 /// 再開する節と `never` の節の入口 `g$entry`。節のクロージャを作って yield か中断を始め、ダミーを返す。`prompt$` が
@@ -602,7 +679,8 @@ impl Out<'_> {
     }
 
     /// `mask` のある呼び出しは、`evv` から項目が飛ばす evidence を除いてから呼び、戻ったら元の `evv` に戻す。呼ばれる
-    /// 関数が `yields` でなくても yield の地点にするのは、遅い道で κ を `mask$` で包むためである。
+    /// 関数が `yields` でなくても yield の地点にするのは、遅い道で κ を `mask$` で包むためである。囲む関数が `yields`
+    /// でなければ、項目のエフェクトはどれも yield しないので、地点にしない (docs/spec/core-ir.md の「`mask` の包み」)。
     fn masked_call(
         &mut self,
         annotations: &mut Annotations,
@@ -610,6 +688,7 @@ impl Out<'_> {
         result: VarId,
         target: Call,
         mask: Vec<MaskItem>,
+        yields: bool,
     ) {
         if mask.is_empty() {
             self.stmts.push(Stmt::Let {
@@ -626,9 +705,11 @@ impl Out<'_> {
             vec![Atom::Var(outer)],
         );
         self.prim("u", Repr::Unit, Prim::EvvSet, vec![Atom::Var(masked)]);
-        let at = (block, self.stmts.len());
-        annotations.masked.insert(at, mask);
-        annotations.forced.insert(at);
+        if yields {
+            let at = (block, self.stmts.len());
+            annotations.masked.insert(at, mask);
+            annotations.forced.insert(at);
+        }
         self.stmts.push(Stmt::Let {
             var: result,
             rhs: call(target),

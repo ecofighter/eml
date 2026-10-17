@@ -523,7 +523,7 @@ fn a_handle_installs_evidence_and_calls_prompt() {
     );
     let shown = core_text(&text, Pass::Evidence);
     insta::assert_snapshot!(function(&shown, "main"), @r#"
-    yields fn main(p.0: unit) -> unit {
+    fn main(p.0: unit) -> unit {
       let w.4: tobj = prim evv_get()
       let ev.5: obj = prim ev_new[Ask]((), w.4)
       let u.6: unit = prim ev_set_clause[Ask.ask](ev.5, &main$handle0$ask$entry)
@@ -531,24 +531,8 @@ fn a_handle_installs_evidence_and_calls_prompt() {
       let u.8: unit = prim evv_set(w.7)
       let x.9: tobj poly = yields apply &main$handle0(()) prompt ev.5
       let t.1: int = call prompt$(ev.5, &main$handle0$return, x.9)
-      let y.10: int = prim yielding()
-      switch y.10 { 0 -> b2, _ -> b1 }
-    b1:
-      let k.11: tobj poly = prim yield_cont_take()
-      let k.12: tobj poly = closure compose$(k.11, &main$k0)
-      let u.13: unit = prim yield_cont_set(k.12)
-      return ()
-    b2:
       let t.2: obj = extern "Prelude.Show Int.show"(t.1)
       let t.3: unit = extern Prelude.println(t.2)
-      let y.14: int = prim yielding()
-      switch y.14 { 0 -> b4, _ -> b3 }
-    b3:
-      let k.15: tobj poly = prim yield_cont_take()
-      let k.16: tobj poly = closure compose$(k.15, &main$k1)
-      let u.17: unit = prim yield_cont_set(k.16)
-      return ()
-    b4:
       return t.3
     }
     "#);
@@ -564,7 +548,7 @@ fn an_immediate_clause_becomes_its_entry() {
     let shown = core_text(&text, Pass::Evidence);
     assert!(!shown.contains("fn main$handle0$ask("), "{shown}");
     insta::assert_snapshot!(function(&shown, "main$handle0$ask$entry"), @"
-    internal yields clause Ask.ask fn main$handle0$ask$entry(e.4: obj, p.0: unit) -> int {
+    internal clause Ask.ask fn main$handle0$ask$entry(e.4: obj, p.0: unit) -> int {
       let p.2: unit = prim ev_take_state(e.4)
       let u.5: unit = prim ev_set_state(e.4, ())
       return 41
@@ -597,16 +581,8 @@ fn a_resume_becomes_an_apply() {
     );
     let shown = core_text(&text, Pass::Evidence);
     insta::assert_snapshot!(function(&shown, "main$handle0$ask"), @"
-    internal yields fn main$handle0$ask(p.0: unit, k.1: tobj lin, p.2: unit) -> int {
-      let t.3: int = yields apply k.1(10, ())
-      let y.5: int = prim yielding()
-      switch y.5 { 0 -> b2, _ -> b1 }
-    b1:
-      let k.6: tobj poly = prim yield_cont_take()
-      let k.7: tobj poly = closure compose$(k.6, &main$handle0$ask$k0)
-      let u.8: unit = prim yield_cont_set(k.7)
-      return 0
-    b2:
+    internal fn main$handle0$ask(p.0: unit, k.1: tobj lin, p.2: unit) -> int {
+      let t.3: int = apply k.1(10, ())
       let t.4: int = extern Prelude.*(t.3, 2)
       return t.4
     }
@@ -628,7 +604,7 @@ fn a_clause_that_performs_another_effect_is_not_run_in_place() {
     }
     ");
     insta::assert_snapshot!(function(&shown, "main$handle1$log$entry"), @"
-    internal yields clause Log.log fn main$handle1$log$entry(e.4: obj, n.0: int) -> unit {
+    internal clause Log.log fn main$handle1$log$entry(e.4: obj, n.0: int) -> unit {
       let p.2: unit = prim ev_take_state(e.4)
       let u.5: unit = prim ev_set_state(e.4, ())
       return ()
@@ -966,27 +942,11 @@ fn an_io_extern_is_a_yield_point() {
         Pass::Evidence,
     );
     insta::assert_snapshot!(function(&shown, "main"), @r#"
-    yields fn main(p.0: unit) -> unit {
+    fn main(p.0: unit) -> unit {
       let s.1: obj = const "a"
       let t.2: unit = extern Prelude.println(s.1)
-      let y.5: int = prim yielding()
-      switch y.5 { 0 -> b2, _ -> b1 }
-    b1:
-      let k.6: tobj poly = prim yield_cont_take()
-      let k.7: tobj poly = closure compose$(k.6, &main$k0)
-      let u.8: unit = prim yield_cont_set(k.7)
-      return ()
-    b2:
       let s.3: obj = const "b"
       let t.4: unit = extern Prelude.println(s.3)
-      let y.9: int = prim yielding()
-      switch y.9 { 0 -> b4, _ -> b3 }
-    b3:
-      let k.10: tobj poly = prim yield_cont_take()
-      let k.11: tobj poly = closure compose$(k.10, &main$k1)
-      let u.12: unit = prim yield_cont_set(k.11)
-      return ()
-    b4:
       return t.4
     }
     "#);
@@ -1066,4 +1026,80 @@ fn a_fn_clause_that_performs_yields() {
       return 0
     }
     ");
+}
+
+/// 本体が `println` を呼ぶ `fn` の節は、IO の extern を yield の地点に数えないので、その場で動く。節の本体は handler の
+/// 外側の `evv` で動かすので、入口の先頭で `evv` を evidence の外側に替え、`return` の前に戻す
+/// (docs/spec/core-ir.md の「`perform` と節の3つの形」)。
+#[test]
+fn a_fn_clause_that_prints_runs_in_place_under_the_outer_evv() {
+    let text = format!(
+        "{ASK}run : Unit -> <IO> Int\nrun () =\n  handle ask () + 1 with\n    | fn ask () ->\n      println \"x\"\n      1\n\nmain : Unit -> <IO> Unit\nmain () = println (show (run ()))"
+    );
+    let shown = core_text(&text, Pass::Evidence);
+    let entry = function(&shown, "run$handle0$ask$entry");
+    assert!(!entry.contains("yield_to"), "{entry}");
+    insta::assert_snapshot!(entry, @r#"
+    internal clause Ask.ask fn run$handle0$ask$entry(e.6: obj, p.0: unit) -> int {
+      let w.7: tobj = prim evv_get()
+      let w.8: tobj = prim ev_evv(e.6)
+      let u.11: unit = prim evv_set(w.8)
+      let p.2: unit = prim ev_take_state(e.6)
+      let s.3: obj = const "x"
+      let t.4: unit = extern Prelude.println(s.3)
+      let u.9: unit = prim ev_set_state(e.6, ())
+      let u.10: unit = prim evv_set(w.7)
+      return 1
+    }
+    "#);
+}
+
+/// 何も呼ばない節には、`evv` を替える命令を足さない。
+#[test]
+fn a_fn_clause_that_calls_nothing_has_no_under() {
+    let text = "effect Get where\n  get : Unit -> Int\n\nrun : Int -> Int\nrun n =\n  handle get () + 1 from n with\n    | fn get () st -> (st, st)\n    | return x _ -> x\n\nmain : Unit -> <IO> Unit\nmain () = println (show (run 41))";
+    let shown = core_text(text, Pass::Evidence);
+    let entry = function(&shown, "run$handle0$get$entry");
+    assert!(!entry.contains("evv_get"), "{entry}");
+    insta::assert_snapshot!(entry, @"
+    internal clause Get.get fn run$handle0$get$entry(e.4: obj, p.0: unit) -> int {
+      let st.2: int = prim ev_take_state(e.4)
+      let u.5: unit = prim ev_set_state(e.4, st.2)
+      return st.2
+    }
+    ");
+}
+
+/// `never` の操作は戻らないので、末尾でない `perform` も yield の地点に数えない。本体が外の handler の `fail` を
+/// 呼ぶ節もその場で動き、`fail` が外の handler に届くように `evv` を替える。
+#[test]
+fn a_fn_clause_that_fails_runs_in_place() {
+    let text = format!(
+        "{ASK}effect Fail where\n  never fail : String -> a\n\nrun : Int -> <Fail> Int\nrun n =\n  handle ask () + 1 with\n    | fn ask () -> if n == 0 then fail \"zero\" else n\n\nmain : Unit -> <IO> Unit\nmain () =\n  let r =\n    handle run 0 with\n      | ctl fail _ -> 0\n  println (show r)"
+    );
+    let shown = core_text(&text, Pass::Evidence);
+    let entry = function(&shown, "run$handle0$ask$entry");
+    assert!(!entry.contains("yield_to"), "{entry}");
+    insta::assert_snapshot!(entry, @r#"
+    internal clause Ask.ask fn run$handle0$ask$entry(n.0: int, e.9: obj, p.1: unit) -> int {
+      let w.10: tobj = prim evv_get()
+      let w.11: tobj = prim ev_evv(e.9)
+      let u.14: unit = prim evv_set(w.11)
+      let p.3: unit = prim ev_take_state(e.9)
+      let t.4: enum = extern "Prelude.Eq Int.=="(n.0, 0)
+      switch t.4 Prelude.Bool { #0 -> b1, #1 -> b2 }
+    b1:
+      jump b3(n.0)
+    b2:
+      let s.5: obj = const "zero"
+      let ev.15: obj = prim ev_lookup[Fail]()
+      let c.16: tobj = prim ev_clause[Fail.fail](ev.15)
+      let t.6: int = clause Fail.fail c.16(ev.15, s.5)
+      jump b3(t.6)
+    b3(t.7: int):
+      let u.12: unit = prim ev_set_state(e.9, ())
+      let u.13: unit = prim evv_set(w.10)
+      return t.7
+    }
+    "#);
 }

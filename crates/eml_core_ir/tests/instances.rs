@@ -539,7 +539,7 @@ fn a_function_called_with_lin_and_unr_closures_has_one_instance() {
     // instance の鍵は型引数だけで、呼ばれる側の矢印の変数は鍵に入らない。`apply` の `f` の矢印は instance の中で
     // `Poly` になる (docs/spec/types.md の「instance での評価」)
     let text = "apply : (a -> <e> b) -> a -> <e> b\napply f x = f x\n\nmain : Unit -> <IO> Unit\nmain () =\n  let h = Fs.open \"a.txt\"\n  let a = apply (fn n ->\n    Fs.close h\n    n) 1\n  let b = apply (fn n -> n + 1) a\n  println (show b)";
-    assert_eq!(instances_of(text, "apply"), ["apply@[Int, Int]<e>"]);
+    assert_eq!(instances_of(text, "apply"), ["apply@[Int, Int]"]);
 }
 
 /// spec の「instance での評価」の `f` の例。

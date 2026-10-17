@@ -82,7 +82,7 @@ fn fib() {
         boxes: 0,
         unboxes: 0,
         peak_objects: 2,
-        peak_stack: 133,
+        peak_stack: 132,
     }
     ");
 }
@@ -101,7 +101,7 @@ fn list() {
         boxes: 400000,
         unboxes: 400000,
         peak_objects: 100001,
-        peak_stack: 700016,
+        peak_stack: 700015,
     }
     ");
 }
@@ -120,7 +120,7 @@ fn loop_() {
         boxes: 0,
         unboxes: 0,
         peak_objects: 2,
-        peak_stack: 15,
+        peak_stack: 14,
     }
     ");
 }

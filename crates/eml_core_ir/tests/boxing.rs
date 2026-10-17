@@ -90,19 +90,11 @@ fn a_top_level_function_used_only_as_a_value_gets_a_boxed_wrapper() {
     }
     ");
     insta::assert_snapshot!(function(&shown, "main"), @r#"
-    yields fn main(p.0: unit) -> unit {
-      let t.8: tobj = call apply_to(&inc$boxed, 2)
-      let t.1: int = unbox t.8
+    fn main(p.0: unit) -> unit {
+      let t.4: tobj = call apply_to(&inc$boxed, 2)
+      let t.1: int = unbox t.4
       let t.2: obj = extern "Prelude.Show Int.show"(t.1)
       let t.3: unit = extern Prelude.println(t.2)
-      let y.4: int = prim yielding()
-      switch y.4 { 0 -> b2, _ -> b1 }
-    b1:
-      let k.5: tobj poly = prim yield_cont_take()
-      let k.6: tobj poly = closure compose$(k.5, &main$k0)
-      let u.7: unit = prim yield_cont_set(k.6)
-      return ()
-    b2:
       return t.3
     }
     "#);
@@ -113,27 +105,11 @@ fn a_function_also_called_directly_gets_a_boxed_wrapper() {
     let text = "label : Int -> String\nlabel n = show n\n\nshow_with : (Int -> String) -> Int -> String\nshow_with f n = f n\n\nmain : Unit -> <IO> Unit\nmain () =\n  println (label 1)\n  println (show_with label 2)";
     let shown = lir_text(text, eml_lir::Pass::Boxing);
     insta::assert_snapshot!(function(&shown, "main"), @"
-    yields fn main(p.0: unit) -> unit {
+    fn main(p.0: unit) -> unit {
       let t.1: obj = call label(1)
       let t.2: unit = extern Prelude.println(t.1)
-      let y.5: int = prim yielding()
-      switch y.5 { 0 -> b2, _ -> b1 }
-    b1:
-      let k.6: tobj poly = prim yield_cont_take()
-      let k.7: tobj poly = closure compose$(k.6, &main$k0)
-      let u.8: unit = prim yield_cont_set(k.7)
-      return ()
-    b2:
       let t.3: obj = call show_with(&label$boxed, 2)
       let t.4: unit = extern Prelude.println(t.3)
-      let y.9: int = prim yielding()
-      switch y.9 { 0 -> b4, _ -> b3 }
-    b3:
-      let k.10: tobj poly = prim yield_cont_take()
-      let k.11: tobj poly = closure compose$(k.10, &main$k1)
-      let u.12: unit = prim yield_cont_set(k.11)
-      return ()
-    b4:
       return t.4
     }
     ");
@@ -198,20 +174,12 @@ fn int_constants_are_boxed_and_other_constants_pass_as_they_are() {
     // 型変数のフィールドは `tobj` なので、`int` の定数は `box` を通り、`unit`、タグ、関数の値はそのまま入る
     let text = "data Four a b c d =\n  | Four a b c d\n\ncount : Four a b c d -> Int\ncount _ = 0\n\nid : a -> a\nid x = x\n\nmain : Unit -> <IO> Unit\nmain () = println (show (count (Four 5 () True id)))";
     insta::assert_snapshot!(function(&lir_text(text, eml_lir::Pass::Boxing), "main"), @r#"
-    yields fn main(p.0: unit) -> unit {
-      let b.9: tobj = box 5
-      let d.1: obj = con Four #0(b.9, (), #1, &"id@[_]")
+    fn main(p.0: unit) -> unit {
+      let b.5: tobj = box 5
+      let d.1: obj = con Four #0(b.5, (), #1, &"id@[_]")
       let t.2: int = call "count@[Int, Unit, Bool, _ -> <_> _]"(d.1)
       let t.3: obj = extern "Prelude.Show Int.show"(t.2)
       let t.4: unit = extern Prelude.println(t.3)
-      let y.5: int = prim yielding()
-      switch y.5 { 0 -> b2, _ -> b1 }
-    b1:
-      let k.6: tobj poly = prim yield_cont_take()
-      let k.7: tobj poly = closure compose$(k.6, &main$k0)
-      let u.8: unit = prim yield_cont_set(k.7)
-      return ()
-    b2:
       return t.4
     }
     "#);
@@ -278,7 +246,7 @@ fn a_function_that_fails_with_a_never_operation_keeps_its_scalar_ret() {
     // `never` の操作の `clause` は戻らないので、T3 は見ない。結果も受け直さない
     let text = "effect Fail where\n  never fail : String -> a\n\ncheck_positive : Int -> <Fail> Int\ncheck_positive n =\n  if n > 0 then n else fail \"not positive\"\n\nmain : Unit -> <IO> Unit\nmain () =\n  let r = handle check_positive 1 with\n    | ctl fail message -> 0\n  println (show r)";
     insta::assert_snapshot!(function(&lir_text(text, eml_lir::Pass::Boxing), "check_positive"), @r#"
-    yields fn check_positive(n.0: int) -> int {
+    fn check_positive(n.0: int) -> int {
       let t.1: enum = extern "Prelude.Ord Int.>"(n.0, 0)
       switch t.1 Prelude.Bool { #0 -> b1, #1 -> b2 }
     b1:
@@ -293,7 +261,7 @@ fn a_function_that_fails_with_a_never_operation_keeps_its_scalar_ret() {
     "#);
     // 縮約は、`never` の操作の `clause` をどの `ret` の関数でも末尾呼び出しにする
     insta::assert_snapshot!(function(&lir_text(text, eml_lir::Pass::Contract), "check_positive"), @r#"
-    yields fn check_positive(n.0: int) -> int {
+    fn check_positive(n.0: int) -> int {
       let t.1: enum = extern "Prelude.Ord Int.>"(n.0, 0)
       switch t.1 Prelude.Bool { #0 -> b1, #1 -> b2 }
     b1:
@@ -313,7 +281,7 @@ fn a_value_lambda_that_fails_ends_in_a_tail_never_clause() {
     // 届かないからである。縮約は、その `return` を末尾呼び出しにする
     let text = "effect Fail where\n  never fail : String -> a\n\napply_to : (Int -> <e> Int) -> Int -> <e> Int\napply_to f x = f x\n\nmain : Unit -> <IO> Unit\nmain () =\n  let r = handle apply_to (fn n -> if n > 0 then n else fail \"neg\") 1 with\n    | ctl fail message -> 0\n  println (show r)";
     insta::assert_snapshot!(function(&lir_text(text, eml_lir::Pass::Boxing), "main$lambda0"), @r#"
-    internal yields fn main$lambda0(n.6: tobj) -> tobj {
+    internal fn main$lambda0(n.6: tobj) -> tobj {
       let n.0: int = unbox n.6
       let t.1: enum = extern "Prelude.Ord Int.>"(n.0, 0)
       switch t.1 Prelude.Bool { #0 -> b1, #1 -> b2 }
@@ -328,7 +296,7 @@ fn a_value_lambda_that_fails_ends_in_a_tail_never_clause() {
     }
     "#);
     insta::assert_snapshot!(function(&lir_text(text, eml_lir::Pass::Contract), "main$lambda0"), @r#"
-    internal yields fn main$lambda0(n.6: tobj) -> tobj {
+    internal fn main$lambda0(n.6: tobj) -> tobj {
       let n.0: int = unbox n.6
       let t.1: enum = extern "Prelude.Ord Int.>"(n.0, 0)
       switch t.1 Prelude.Bool { #0 -> b1, #1 -> b2 }
@@ -369,22 +337,14 @@ fn t3_raises_the_ret_along_a_chain_of_tail_calls() {
     }
     ");
     insta::assert_snapshot!(function(&shown, "main"), @r#"
-    yields fn main(p.0: unit) -> unit {
-      let t.10: tobj = call via(1)
-      let t.1: int = unbox t.10
-      let t.11: tobj = call through(&main$lambda0, 2)
-      let t.2: int = unbox t.11
+    fn main(p.0: unit) -> unit {
+      let t.6: tobj = call via(1)
+      let t.1: int = unbox t.6
+      let t.7: tobj = call through(&main$lambda0, 2)
+      let t.2: int = unbox t.7
       let t.3: int = extern Prelude.+(t.1, t.2)
       let t.4: obj = extern "Prelude.Show Int.show"(t.3)
       let t.5: unit = extern Prelude.println(t.4)
-      let y.6: int = prim yielding()
-      switch y.6 { 0 -> b2, _ -> b1 }
-    b1:
-      let k.7: tobj poly = prim yield_cont_take()
-      let k.8: tobj poly = closure compose$(k.7, &main$k0)
-      let u.9: unit = prim yield_cont_set(k.8)
-      return ()
-    b2:
       return t.5
     }
     "#);
@@ -409,29 +369,18 @@ fn the_result_of_exit_is_not_compared_with_positions() {
     // `exit` は戻らないので、`int` の束縛がタプルのフィールド (`tobj` の位置) に流れても `box` は入らない (docs/spec/lir.md の「戻らない extern」)
     let text = "f : Int -> <IO> (Int, Int)\nf n = if n == 0 then (exit 3, n) else (n, n)\n\nmain : Unit -> <IO> Unit\nmain () = println (show (f 1))";
     insta::assert_snapshot!(function(&lir_text(text, eml_lir::Pass::Boxing), "f"), @r#"
-    yields fn f(n.0: int) -> obj {
+    fn f(n.0: int) -> obj {
       let t.1: enum = extern "Prelude.Eq Int.=="(n.0, 0)
       switch t.1 Prelude.Bool { #0 -> b1, #1 -> b2 }
     b1:
-      let n.11: tobj = box n.0
-      let n.12: tobj = box n.0
-      let d.4: obj = con (,) #0(n.11, n.12)
+      let n.5: tobj = box n.0
+      let n.6: tobj = box n.0
+      let d.4: obj = con (,) #0(n.5, n.6)
       return d.4
     b2:
       let t.2: int = extern Prelude.exit(3)
-      let y.5: int = prim yielding()
-      switch y.5 { 0 -> b4, _ -> b3 }
-    b3:
-      let k.6: tobj poly = prim yield_cont_take()
-      let n.13: tobj = box n.0
-      let c.7: tobj = closure f$k0(n.13)
-      let k.8: tobj poly = closure compose$(k.6, c.7)
-      let u.9: unit = prim yield_cont_set(k.8)
-      let d.10: obj poly = prim dummy()
-      return d.10
-    b4:
-      let n.14: tobj = box n.0
-      let d.3: obj = con (,) #0(t.2, n.14)
+      let n.7: tobj = box n.0
+      let d.3: obj = con (,) #0(t.2, n.7)
       return d.3
     }
     "#);
