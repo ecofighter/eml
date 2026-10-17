@@ -924,3 +924,74 @@ fn g(h.0: obj lin, u.1: unit) -> tobj lin {
         )
     );
 }
+
+// 着地の印 `prompt v`
+
+fn marked(body: &str, ev: &str, ret: &str) -> String {
+    format!("fn f(b.0: tobj, {ev}) -> {ret} {{\n{body}}}\n")
+}
+
+#[test]
+fn prompt_marker_is_accepted_after_the_evidence_pass() {
+    let text = marked(
+        "  let x.2: tobj = yields apply b.0(()) prompt ev.1\n  return ev.1\n",
+        "ev.1: obj",
+        "obj",
+    );
+    assert_eq!(check_evidence(&text), Ok(()));
+}
+
+#[test]
+fn prompt_marker_is_rejected_before_the_evidence_pass() {
+    let text = marked(
+        "  let x.2: tobj = yields apply b.0(()) prompt ev.1\n  return ev.1\n",
+        "ev.1: obj",
+        "obj",
+    );
+    assert_eq!(
+        check_translated(&text),
+        Err("a prompt marker appears before the evidence pass in `f`".to_string())
+    );
+}
+
+#[test]
+fn prompt_marker_in_tail_position_is_rejected() {
+    let text = marked(
+        "  let x.2: tobj = yields apply b.0(()) prompt ev.1\n  return x.2\n",
+        "ev.1: obj",
+        "tobj",
+    );
+    assert_eq!(
+        check_evidence(&text),
+        Err("an apply with the prompt marker `ev.1` is in a tail position, which leaves no frame to land on in `f`".to_string())
+    );
+}
+
+#[test]
+fn prompt_marker_on_a_dead_variable_is_rejected() {
+    let text = marked(
+        "  let x.2: tobj = yields apply b.0(()) prompt ev.1\n  return ()\n",
+        "ev.1: obj",
+        "unit",
+    );
+    assert_eq!(
+        check_evidence(&text),
+        Err(
+            "`ev.1` is the prompt marker of an apply, but it is not used after the call in `f`"
+                .to_string()
+        )
+    );
+}
+
+#[test]
+fn prompt_marker_on_a_non_obj_variable_is_rejected() {
+    let text = marked(
+        "  let x.2: tobj = yields apply b.0(()) prompt ev.1\n  return ev.1\n",
+        "ev.1: tobj",
+        "tobj",
+    );
+    assert_eq!(
+        check_evidence(&text),
+        Err("`ev.1` is the prompt marker of an apply, but it is tobj, not obj in `f`".to_string())
+    );
+}

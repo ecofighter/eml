@@ -243,6 +243,7 @@ impl FnLowering<'_> {
                     callee: function,
                     args: part,
                     yields,
+                    prompt: None,
                 },
                 run[0].0.clone(),
             );

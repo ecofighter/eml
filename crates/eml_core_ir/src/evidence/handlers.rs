@@ -160,6 +160,7 @@ pub(super) fn lower(
                         callee: k,
                         args: vec![arg, state],
                         yields,
+                        prompt: None,
                     };
                     out.masked_call(&mut annotations, id, var, apply, mask);
                 }
@@ -286,6 +287,7 @@ fn runs_in_place(program: &Program, clause: &CoreFn, operation: &OperationInfo) 
                                 callee: _,
                                 args: _,
                                 yields,
+                                prompt: _,
                             } => *yields,
                         }
                 }
@@ -566,6 +568,7 @@ impl Out<'_> {
                 callee: body,
                 args: vec![Atom::Unit],
                 yields: true,
+                prompt: None,
             }),
         );
         self.stmts.push(Stmt::Let {

@@ -564,3 +564,21 @@ fn f(c.0: tobj) -> tobj {
     };
     assert_eq!(mask, &[item(0, 0), item(1, 1)]);
 }
+
+#[test]
+fn prompt_marker_round_trips() {
+    let program = round_trip(
+        "fn f(b.1: tobj, ev.2: obj) -> obj {\n  let x.3: tobj poly = yields apply b.1(()) prompt ev.2\n  return ev.2\n}\n",
+    );
+    let Stmt::Let {
+        rhs: Rhs::Call { call, .. },
+        ..
+    } = &program.functions[0].blocks[0].stmts[0]
+    else {
+        panic!("expected a call");
+    };
+    assert_eq!(call.prompt(), Some(VarId(2)));
+    let mut atoms = Vec::new();
+    call.for_each_atom(|atom| atoms.push(atom));
+    assert_eq!(atoms, vec![v(1), Atom::Unit]);
+}

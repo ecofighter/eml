@@ -903,6 +903,12 @@ impl<'a> Checker<'a> {
     /// 呼び出しは、形を確かめた後に、オペランドの Repr を左から比べ、結果を `receiver` と比べてから、範囲と所有を
     /// 確かめる (docs/spec/lir.md の「verifier」)。
     fn check_call(&self, owned: &mut Owned, call: &Call, receiver: Receiver) -> Result<(), String> {
+        if matches!(receiver, Receiver::Tail) && call.prompt().is_some() {
+            return Err(format!(
+                "{} has a prompt marker, but a tail call leaves no frame to land on",
+                self.call_text(call, true)
+            ));
+        }
         let result = match call {
             Call::Direct(target, args) => {
                 if let Some(clause) = self.cx.clause_of(*target) {
@@ -960,7 +966,62 @@ impl<'a> Checker<'a> {
                 self.check_result(call, result, receiver)?;
             }
         }
-        self.consume_all(owned, |f| call.for_each_atom(f))
+        self.consume_all(owned, |f| call.for_each_atom(f))?;
+        match call.prompt() {
+            Some(marker) => self.check_prompt(owned, call, marker),
+            None => Ok(()),
+        }
+    }
+
+    /// 着地の印 `prompt v` の検査。`v` は呼び出しの後も生きている `obj` の変数でなければならない。所有の段では、
+    /// 呼び出しの直後にも所有していなければならない (docs/superpowers/specs/2026-10-17-s13c-unwinding-design.md の「着地の印」)。
+    fn check_prompt(&self, owned: &Owned, call: &Call, marker: VarId) -> Result<(), String> {
+        let what = self.call_text(call, false);
+        self.visible(marker)?;
+        if self.function.repr(marker) != Repr::Obj {
+            return Err(format!(
+                "`{}` is the prompt marker of {what}, but it is {}, not obj",
+                self.cx.name(marker),
+                self.function.repr(marker).name()
+            ));
+        }
+        if !self.used_after(marker) {
+            return Err(format!(
+                "`{}` is the prompt marker of {what}, but it is not used after the call",
+                self.cx.name(marker)
+            ));
+        }
+        if self.level == Level::Ownership && !owned.contains_key(&marker) {
+            return Err(format!(
+                "`{}` is the prompt marker of {what}, but it is not owned after the call",
+                self.cx.name(marker)
+            ));
+        }
+        Ok(())
+    }
+
+    /// 現在の位置より後ろの文か終端が `var` を使うか。辺は前向きなので、後ろのブロックと同じブロックの後ろの文を
+    /// 見れば足りる。到達できないブロックの使いも数える近似で、生存解析は使わない。
+    fn used_after(&self, var: VarId) -> bool {
+        let mut found = false;
+        let mut check = |atom: Atom| found |= atom == Atom::Var(var);
+        let blocks = &self.function.blocks;
+        let current = &blocks[self.at.block as usize];
+        let skip = (self.at.index + 1) as usize;
+        current
+            .stmts
+            .iter()
+            .skip(skip)
+            .for_each(|stmt| stmt.for_each_atom(&mut check));
+        current.term.for_each_atom(&mut check);
+        for block in &blocks[self.at.block as usize + 1..] {
+            block
+                .stmts
+                .iter()
+                .for_each(|stmt| stmt.for_each_atom(&mut check));
+            block.term.for_each_atom(&mut check);
+        }
+        found
     }
 
     /// 呼び出しのオペランドを左から比べる (R7)。直接の呼び出しは、呼ばれる関数の引数と比べる。関数値の適用の
@@ -1009,6 +1070,7 @@ impl<'a> Checker<'a> {
                 callee,
                 args,
                 yields: _,
+                prompt: _,
             } => {
                 let uniform = operands("an apply");
                 uniform(&|| "the callee".to_string(), *callee)?;

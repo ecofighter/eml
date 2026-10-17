@@ -158,11 +158,13 @@ impl<'p> Printer<'p> {
                 callee,
                 args,
                 yields,
+                prompt,
             } => format!(
-                "{}apply {}({})",
+                "{}apply {}({}){}",
                 if *yields { "yields " } else { "" },
                 w.atom(vars, callee),
-                w.atoms(vars, args)
+                w.atoms(vars, args),
+                prompt.map_or(String::new(), |v| format!(" prompt {}", w.var(vars, v)))
             ),
             Call::Handle {
                 effect,

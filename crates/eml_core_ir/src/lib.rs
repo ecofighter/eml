@@ -295,6 +295,10 @@ pub enum Call {
         callee: Atom,
         args: Vec<Atom>,
         yields: bool,
+        /// 着地の印。この呼び出しの中で始まった abort は、`prompt$` が使う evidence `v` を持つ呼び出しの
+        /// フレームまで VM のスタックを巻き戻す。`v` は呼び出しが消費も読みもしないので `for_each_atom` は
+        /// 見せず、呼び出しの後も生きている `obj` の変数である (docs/superpowers/specs/2026-10-17-s13c-unwinding-design.md の「着地の印」)。
+        prompt: Option<VarId>,
     },
     /// handler を設け、本体の関数に `()` を適用する。translate だけが出し、EP が基本操作と `prompt$` の呼び出しに
     /// 置き換える (docs/spec/core-ir.md の「handle と `prompt$`」)。本体と節と `return` の節は、捕まえた変数を先頭の
@@ -331,6 +335,14 @@ pub enum Call {
 }
 
 impl Call {
+    /// 着地の印の変数。
+    pub fn prompt(&self) -> Option<VarId> {
+        match self {
+            Call::Apply { prompt, .. } => *prompt,
+            _ => None,
+        }
+    }
+
     /// 呼び出しが使う値。関数値の呼び出しでは、呼ばれる値が先に来る。
     pub fn for_each_atom(&self, mut f: impl FnMut(Atom)) {
         match self {
@@ -345,6 +357,7 @@ impl Call {
                 callee,
                 args,
                 yields: _,
+                prompt: _,
             }
             | Call::Clause {
                 effect: _,
@@ -388,6 +401,7 @@ impl Call {
                 callee,
                 args,
                 yields: _,
+                prompt: _,
             }
             | Call::Clause {
                 effect: _,

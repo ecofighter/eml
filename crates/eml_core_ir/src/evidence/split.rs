@@ -138,6 +138,7 @@ fn yield_points(
                             callee: _,
                             args: _,
                             yields,
+                            prompt: _,
                         } => *yields,
                         Call::Clause { .. } => true,
                         Call::Handle { .. } | Call::Perform { .. } | Call::Resume { .. } => false,
@@ -558,7 +559,7 @@ fn slow_path(
     }
 }
 
-/// ブロックの中の変数の出現 (引数、束縛、使用、case のフィールド) をすべて訪れる。
+/// ブロックの中の変数の出現 (引数、束縛、使用、case のフィールド、着地の印) をすべて訪れる。
 fn for_each_var_mut(block: &mut Block, mut f: impl FnMut(&mut VarId)) {
     block.params.iter_mut().for_each(&mut f);
     for stmt in &mut block.stmts {
@@ -570,6 +571,18 @@ fn for_each_var_mut(block: &mut Block, mut f: impl FnMut(&mut VarId)) {
                         f(var);
                     }
                 });
+                // 着地の印の変数は呼び出しが使う値ではなく `for_each_atom_mut` に出ないので、ここで写す
+                if let Rhs::Call {
+                    call:
+                        Call::Apply {
+                            prompt: Some(marker),
+                            ..
+                        },
+                    mask: _,
+                } = rhs
+                {
+                    f(marker);
+                }
             }
             Stmt::Unpack {
                 value,

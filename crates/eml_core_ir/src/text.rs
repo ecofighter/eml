@@ -286,10 +286,17 @@ impl Parser<'_> {
     fn apply(&mut self, state: &mut FnState, yields: bool) -> Result<Call, ParseError> {
         let callee = self.reader.atom(state)?;
         let args = self.reader.list('(', ')', |p| p.atom(state))?;
+        let prompt = if self.reader.at_word("prompt") {
+            self.reader.bump();
+            Some(self.reader.var(state)?)
+        } else {
+            None
+        };
         Ok(Call::Apply {
             callee,
             args,
             yields,
+            prompt,
         })
     }
 

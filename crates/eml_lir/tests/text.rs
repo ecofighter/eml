@@ -270,6 +270,7 @@ fn f(c.0: tobj) -> int {
             callee: v(0),
             args: vec![Atom::Int(1)],
             yields: false,
+            prompt: None,
         })
     );
 }
@@ -670,6 +671,7 @@ fn f(c.0: tobj) -> int {
                 callee: v(0),
                 args: vec![Atom::Int(1), Atom::Int(2)],
                 yields: false,
+                prompt: None,
             }),
         }
     );
@@ -679,6 +681,7 @@ fn f(c.0: tobj) -> int {
             callee: Atom::Unit,
             args: vec![v(1)],
             yields: false,
+            prompt: None,
         })
     );
 }
@@ -1557,4 +1560,22 @@ fn a_mask_item_that_skips_nothing_is_an_error() {
         "effect A { a(unit) -> tobj }\nfn f(w.0: tobj) -> tobj {\n  let x.1: tobj = prim evv_mask[A*0](w.0)\n  return x.1\n}\n",
     );
     assert_eq!(error.to_string(), "line 3: `A*0` skips no handler");
+}
+
+#[test]
+fn prompt_marker_round_trips() {
+    let program = round_trip(
+        "fn f(b.1: tobj, ev.2: obj) -> obj {\n  let x.3: tobj poly = yields apply b.1(()) prompt ev.2\n  return ev.2\n}\n",
+    );
+    let Stmt::Let {
+        rhs: Rhs::Call(call),
+        ..
+    } = &program.functions[0].blocks[0].stmts[0]
+    else {
+        panic!("expected a call");
+    };
+    assert_eq!(call.prompt(), Some(VarId(2)));
+    let mut atoms = Vec::new();
+    call.for_each_atom(|atom| atoms.push(atom));
+    assert_eq!(atoms, vec![v(1), Atom::Unit]);
 }

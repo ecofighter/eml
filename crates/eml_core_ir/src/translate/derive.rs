@@ -624,6 +624,7 @@ pub(super) fn call_target(
                     callee: value,
                     args: rest,
                     yields: false,
+                    prompt: None,
                 }),
             )
         }

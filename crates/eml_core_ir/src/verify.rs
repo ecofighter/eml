@@ -21,6 +21,7 @@
 
 use std::collections::HashMap;
 
+use crate::tail::tail_position_call;
 use crate::{Block, Call, CoreFn, Program, Rhs, Stmt, Term};
 use eml_lir::check::{
     BlockShape, Context, Dominators, FnSummary, Tables, TermShape, field_count, shape,
@@ -501,7 +502,8 @@ impl<'a> Checker<'a> {
         match rhs {
             Rhs::Call { call, mask } => {
                 self.check_mask(call, mask)?;
-                return self.check_call(call);
+                self.check_call(call)?;
+                return self.check_prompt(call);
             }
             Rhs::MakeClosure(index, args) => {
                 let target = self.function_at(*index)?;
@@ -670,6 +672,61 @@ impl<'a> Checker<'a> {
             } => {}
         }
         self.use_all(|f| call.for_each_atom(f))
+    }
+
+    /// 着地の印 `prompt v` の検査。印は EP だけが出し、末尾の位置の呼び出しには付かず、`v` は呼び出しの後も
+    /// 生きている `obj` の変数でなければならない (docs/superpowers/specs/2026-10-17-s13c-unwinding-design.md の「着地の印」)。
+    fn check_prompt(&self, call: &Call) -> Result<(), String> {
+        let Some(marker) = call.prompt() else {
+            return Ok(());
+        };
+        if self.level == Level::Translated {
+            return Err("a prompt marker appears before the evidence pass".to_string());
+        }
+        self.visible(marker)?;
+        let block = &self.function.blocks[self.at.block as usize];
+        if tail_position_call(block).is_some_and(|(at, _)| at as i64 == self.at.index) {
+            return Err(format!(
+                "an apply with the prompt marker `{}` is in a tail position, which leaves no frame to land on",
+                self.cx.name(marker)
+            ));
+        }
+        let repr = self.function.repr(marker);
+        if repr != Repr::Obj {
+            return Err(format!(
+                "`{}` is the prompt marker of an apply, but it is {}, not obj",
+                self.cx.name(marker),
+                repr.name()
+            ));
+        }
+        if !self.used_after(marker) {
+            return Err(format!(
+                "`{}` is the prompt marker of an apply, but it is not used after the call",
+                self.cx.name(marker)
+            ));
+        }
+        Ok(())
+    }
+
+    /// 現在の位置より後ろの文か終端が `var` を使うか。辺は前向きなので、後ろのブロックと同じブロックの後ろの文を
+    /// 見れば足りる。生存解析は使わない近似である。
+    fn used_after(&self, var: VarId) -> bool {
+        let mut found = false;
+        let mut check = |atom: Atom| found |= atom == Atom::Var(var);
+        let blocks = &self.function.blocks;
+        let current = &blocks[self.at.block as usize];
+        let skip = (self.at.index + 1) as usize;
+        for stmt in current.stmts.iter().skip(skip) {
+            stmt.for_each_atom(&mut check);
+        }
+        current.term.for_each_atom(&mut check);
+        for block in &blocks[self.at.block as usize + 1..] {
+            for stmt in &block.stmts {
+                stmt.for_each_atom(&mut check);
+            }
+            block.term.for_each_atom(&mut check);
+        }
+        found
     }
 
     /// 結果を受けない呼び出し。`never` の操作の `perform` と `clause` は戻らない。

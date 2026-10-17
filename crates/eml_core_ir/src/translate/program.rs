@@ -425,6 +425,7 @@ impl ProgramBuilder {
                 callee: Atom::Var(value),
                 args: unit,
                 yields,
+                prompt: None,
             }
         } else {
             Call::Direct(target, unit)
@@ -506,6 +507,7 @@ impl ProgramBuilder {
                     callee: Atom::Var(function),
                     args: vec![value],
                     yields: false,
+                    prompt: None,
                 })
             }
         };

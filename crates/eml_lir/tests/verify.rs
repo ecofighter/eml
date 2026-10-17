@@ -2952,3 +2952,71 @@ fn root_primitives_move_tobj_values() {
         "`n.0` (int) is bound to `prim root_get[0]`, which returns tobj in `f`"
     );
 }
+
+// 着地の印 `prompt v`
+
+/// `ev` を呼び出しの後も持ち続けて返す、印の付いた `apply`。
+fn marked(body: &str, ev: &str) -> String {
+    format!("fn f(b.0: tobj, {ev}) -> obj {{\n{body}}}\n")
+}
+
+#[test]
+fn prompt_marker_is_accepted() {
+    let text = marked(
+        "  let x.2: tobj = yields apply b.0(()) prompt ev.1\n  decref x.2\n  return ev.1\n",
+        "ev.1: obj",
+    );
+    assert_eq!(check(&text), Ok(()));
+}
+
+#[test]
+fn prompt_marker_in_tail_position_is_rejected() {
+    let text = "fn f(b.0: tobj, ev.1: obj) -> tobj {\n  tail yields apply b.0(()) prompt ev.1\n}\n";
+    assert_eq!(
+        check_scopes(text),
+        Err(
+            "a tail apply has a prompt marker, but a tail call leaves no frame to land on in `f`"
+                .to_string()
+        )
+    );
+}
+
+#[test]
+fn prompt_marker_on_a_dead_variable_is_rejected() {
+    let text = marked(
+        "  let x.2: tobj = yields apply b.0(()) prompt ev.1\n  decref x.2\n  decref ev.1\n  return ()\n",
+        "ev.1: obj",
+    )
+    .replace("-> obj", "-> unit");
+    assert_eq!(
+        check_scopes(&text),
+        Err(
+            "`ev.1` is the prompt marker of an apply, but it is not used after the call in `f`"
+                .to_string()
+        )
+    );
+}
+
+#[test]
+fn prompt_marker_on_a_non_obj_variable_is_rejected() {
+    let text = "fn f(b.0: tobj, ev.1: tobj) -> tobj {\n  let x.2: tobj = yields apply b.0(()) prompt ev.1\n  decref x.2\n  return ev.1\n}\n";
+    assert_eq!(
+        check_scopes(text),
+        Err("`ev.1` is the prompt marker of an apply, but it is tobj, not obj in `f`".to_string())
+    );
+}
+
+#[test]
+fn prompt_marker_on_an_unowned_variable_is_rejected() {
+    let text = marked(
+        "  decref ev.1\n  let x.2: tobj = yields apply b.0(()) prompt ev.1\n  decref x.2\n  return ev.1\n",
+        "ev.1: obj",
+    );
+    assert_eq!(
+        check(&text),
+        Err(
+            "`ev.1` is the prompt marker of an apply, but it is not owned after the call in `f`"
+                .to_string()
+        )
+    );
+}

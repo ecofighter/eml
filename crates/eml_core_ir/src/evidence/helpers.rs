@@ -264,6 +264,7 @@ fn apply(b: &mut FnBuilder, name: &str, callee: VarId, args: Vec<Atom>) -> VarId
         callee: Atom::Var(callee),
         args,
         yields: true,
+        prompt: None,
     });
     bind(b, name, Repr::TObj, Mark::Poly, rhs)
 }
