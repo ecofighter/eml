@@ -1,6 +1,5 @@
 ---
 source: crates/eml_cli/tests/repl.rs
-assertion_line: 360
 expression: checked.render()
 input_file: crates/eml_cli/tests/repl/unwind/implicit_drop_exit.repl
 ---

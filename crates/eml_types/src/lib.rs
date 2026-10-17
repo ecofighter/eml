@@ -229,7 +229,7 @@ pub struct BodyTypes {
     pub arrow_yields: HashMap<(ExprId, usize), RowYield>,
     /// 戻らない呼び出しの前で暗黙に手放す変数。キーは記録の対象の戻らない呼び出しの式、値はその経路のどこでも消費
     /// しない局所変数で、番号の順に並ぶ。誤りのある本体では空である
-    /// (docs/superpowers/specs/2026-10-17-s13c-unwinding-design.md の「線形性」)。
+    /// (docs/spec/linearity.md の「線形性の検査パス」)。
     pub implicit_drops: HashMap<ExprId, Vec<LocalId>>,
 }
 

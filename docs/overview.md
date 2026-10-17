@@ -33,7 +33,7 @@ eml の目的、言語の性格、確定した設計判断の一覧、文書全�
 | 継続 | 継続 `k` は普通の関数で、`k v` で再開する。状態のある handler では `k v st` と書く。`once` の `k` は `Lin` の矢印を持ち、`ctl` の節は `k` を呼ぶか `drop k` を必ず書く。`fn` の節は `k` を書かず、本体の値で再開する。`multi` の `k` は `Unr` の矢印を持つ | [エフェクトと handler](spec/effects.md) |
 | handler の意味 | deep handler。再開した継続の中でも同じ handler が有効なまま | [エフェクトと handler](spec/effects.md) |
 | `IO` | Prelude が宣言する組み込みの extern のエフェクトで、操作は `never` の `io_failed` だけである。`io_failed` は Prelude の外から見えず、Prelude の `try_io` だけが `IO` を handle する。利用者は `IO` を handle できない。`println` などは `<IO>` を持つ `extern` の関数である | [エフェクトと handler](spec/effects.md) の「組み込みの `IO`」、[標準ライブラリ](spec/stdlib.md) の「`try_io`」 |
-| 暗黙の後始末 | 通常の制御フローでは一切行わない。中断時 (`drop k` や `never` 操作) だけ、捕まっていた `Lin` 値を、その型に宣言された破棄処理で drop する | [線形性](spec/linearity.md)、[エフェクトと handler](spec/effects.md) |
+| 暗黙の後始末 | 通常の制御フローでは行わない。例外は2つで、中断では外れるフレームの値を巻き戻しが解放し、戻らない呼び出し (`fail`、`exit` など) で終わる経路では、消費しない `Lin` の値を呼び出しの前で手放す。破棄処理は物体の解放だけで、エフェクトを起こさず、失敗もしない | [線形性](spec/linearity.md) の「暗黙の後始末」、[エフェクトと handler](spec/effects.md) |
 | 型付け | Bidirectional Typing + 単一化。トップレベルの関数は引数と戻り値の型注釈が必須。トップレベルの関数の row はシグネチャで決まり、省略した row は `<>` (純粋) である。Kind は推論する | [型と Kind](spec/types.md) |
 | 直積型 | レコードは名前的で、`data` のコンストラクタにフィールドの名前を付けて宣言する (`data Person = \| Person { name : String, age : Int }`)。どのコンストラクタにもフィールドの名前を付けられ、射影 `p.name` と更新 `{ p \| age = 31 }` はコンストラクタが1つの型でだけ使える。タプルは構造的なままで、`t.0` で射影する。Unit は 0 要素のタプル `()` である。Kind はフィールドの Kind の join で推論する | [直積型とレコード](spec/records.md) |
 | 単相化 | 関数のコードは (関数, 型引数) の instance ごとに単相化し、データの配置は一様のままにする。多相再帰で大きくなる型変数の位置と handler の節の型変数は、一様な位置 (`tobj`) として扱う | [Core IR](spec/core-ir.md) の「変換の規則」 |
@@ -83,7 +83,8 @@ eml の目的、言語の性格、確定した設計判断の一覧、文書全�
 | `Row<s>` | row の Kind。`s ∈ {Never ≤ Once ≤ Multi}` は、その row に含まれてよい操作の上限を表す |
 | 多重度 | 操作ごとに宣言する `never` / `once` / `multi`。handler 側の継続 `k` の有無と線形性 (`once` なら `Lin`、`multi` なら `Unr`、`never` には `k` がない) を決める |
 | 持ち越し規則 | 操作の呼び出しをまたいで生きていてよい値の規則。`multi` の操作をまたげるのは `Unr` の値だけである |
-| 中断 | `drop k` や `never` 操作によって、継続が再開されずに捨てられること。暗黙の後始末は中断時にだけ起きる |
+| 中断 | 継続が再開されずに捨てられること。`never` の操作、`try_io` が捕まえる IO の失敗、`exit` は、継続を組み立てずに、タスクのスタックを行き先のフレームまで巻き戻す。`drop k` は継続を捨てる。どちらも、捨てたフレームや継続が持っていた値を解放する |
+| 戻らない呼び出し | 型スキームを持つ宣言を引数をそろえて呼ぶ呼び出しで、結果の型が、宣言の型のほかの所に現れない制約のない型変数であるもの (`fail`、`exit`)。その型の値を作れないので、普通には戻らない。この呼び出しで終わる経路では、消費しない `Lin` の値を手放さなくてよい |
 | 破棄処理 | `Lin` 型に宣言された捨て方。標準ライブラリのリソース `Fs.File` では `Fs.close` |
 | deep handler | 再開した継続の中でも同じ handler が有効なままの handler |
 | パラメータ付き handler | `handle e from init with` の形で、状態を節の最後の引数として受け渡す handler。状態は handler の実行ごとの evidence に置き、脱糖しない |

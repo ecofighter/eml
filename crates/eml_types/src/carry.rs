@@ -98,7 +98,7 @@ impl Carrying<'_, '_> {
                 let mut live = after.clone();
                 // translate は、暗黙に手放す変数の `drop` を引数を評価した後、呼び出しの前に置く。その変数は束縛から
                 // `drop` まで生きているので、呼び出しそのものはまたがないが、呼ばれる式と引数の評価はまたぐ
-                // (docs/superpowers/specs/2026-10-17-s13c-unwinding-design.md の「translate」)
+                // (docs/spec/core-ir.md の「戻らない呼び出しの前の `drop`」)
                 let mut dropped = self.implicit_drops.get(&id);
                 // 評価の順は `eml_hir::call_steps` だけが持つ。後で使う値は後ろの手順から決まるので、その順を逆にたどる。
                 // 引数はすべて評価してから矢印を順に適用するので、矢印 i の呼び出しの間は、後で使う値と、評価済みで

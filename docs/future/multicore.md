@@ -196,7 +196,7 @@ row の Kind: Row<s>,  s ∈ { Never ≤ Once ≤ Multi }
 - a2-wait では、左の子が例外を投げて右の子が停止しない場合、逐次実行なら例外で終わるはずのプログラムが止まらない。逐次実行と異なるのはこの点だけで、a2-cancel で解消する
 - 捨てる側の子の結果が `Lin` の場合、`par` は型について多相なので、実行時にオブジェクトの記述子から破棄処理を引いて drop する。`eml_rt` の記述子は、破棄処理を持たなければならない。今の `eml_rt` は型ごとの記述子の表を持たず、破棄処理をヘッダの種類で表す ([オブジェクトモデル](../spec/object-model.md) の「ヘッダ」)
 - `never` の操作が `par` から抜けるのを perform が認識する必要がある。そのため、`par` 自体は実行系の核のプリミティブ (fork / join の節点) の上に作る。スケジューラはライブラリのままである
-- evidence passing の上では、`par` の子タスクの `evv` に、外側の handler の evidence の代わりに、fork の目印を指す evidence を置く。子の row は `Row<Never>` なので、子から外に出る操作は `never` の操作だけである。子の中の `never` の操作は fork の目印まで中断の yield をし、fork / join の節点がそれを親に渡す ([Core IR](../spec/core-ir.md) の「`never` の中断」)
+- evidence passing の上では、`par` の子タスクの `evv` に、外側の handler の evidence の代わりに、fork の目印を指す evidence を置く。子の row は `Row<Never>` なので、子から外に出る操作は `never` の操作だけである。子の中の `never` の操作は fork の目印までタスクのスタックを巻き戻し、fork / join の節点がそれを親に渡す ([Core IR](../spec/core-ir.md) の「`never` の中断」、[VM](../spec/vm.md) の「巻き戻し」)
 - 協調的な中断は、安全な地点 (perform、メモリの確保、ループの先頭など) で中断の印を確認して行う。中断した子が捕まえている `Lin` の値は、`drop k` と同じ後始末の情報で解放する
 
 ### データ並列での使い勝手

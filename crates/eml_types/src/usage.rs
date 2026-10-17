@@ -24,7 +24,7 @@ struct Uses {
     locals: HashMap<LocalId, Use>,
     /// すべての経路が戻らない呼び出しで終わるときの、経路ごとに評価の順で最初の呼び出し。戻る経路があれば空である。
     /// 後ろの呼び出しには実行が届かないので、手放すのは最初の呼び出しの前だけにする
-    /// (docs/superpowers/specs/2026-10-17-s13c-unwinding-design.md の「線形性」)。
+    /// (docs/spec/linearity.md の「戻らない経路の検査」)。
     diverges: Vec<ExprId>,
 }
 
@@ -674,8 +674,8 @@ impl<'a> Usage<'a, '_> {
     /// 分岐の枝の使い方を合わせる。枝に現れない変数は、その枝では使われない。ただし戻らない呼び出しで終わる枝は、
     /// どの消費の集合とも合う。その枝が使わない変数は、ほかの枝が使うなら、その枝の呼び出しの前で手放すものとして
     /// 記録し、使用回数の最小に数えない。二重使用は戻らない枝でも誤りなので、最大と使った位置はすべての枝から取る
-    /// (docs/superpowers/specs/2026-10-17-s13c-unwinding-design.md の「線形性」)。使った位置は回数の多い枝から
-    /// 取り、使わなかった経路は前の枝から取る。すべての枝が戻らなければ、分岐全体が戻らない。
+    /// (docs/spec/linearity.md の「戻らない経路の検査」)。使った位置は回数の多い枝から取り、使わなかった経路は前の
+    /// 枝から取る。すべての枝が戻らなければ、分岐全体が戻らない。
     fn join(&mut self, branches: Vec<(Uses, Missing)>) -> Uses {
         let mut locals: Vec<LocalId> = branches
             .iter()

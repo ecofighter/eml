@@ -451,8 +451,7 @@ impl FnLowering<'_> {
     /// 戻らない呼び出し `call` の前で、型検査が記録した変数 (`BodyTypes::implicit_drops`) のうち印が `unr` でないものを
     /// 変数の番号の順に手放す。引数をすべて評価した後に置くので、引数の評価の間はまだ持っている。持ち越しのパスも
     /// 同じ範囲で持つものとして数える。持ち上げたローカル関数は変数を持たないので、その捕まえる変数を手放す
-    /// (docs/superpowers/specs/2026-10-17-s13c-unwinding-design.md の「translate」、docs/spec/core-ir.md の
-    /// 「ローカル関数の持ち上げ」)。
+    /// (docs/spec/core-ir.md の「戻らない呼び出しの前の `drop`」と「ローカル関数の持ち上げ」)。
     fn implicit_drops(&mut self, call: ExprId) {
         let Some(locals) = self.ctx.types.implicit_drops.get(&call) else {
             return;
