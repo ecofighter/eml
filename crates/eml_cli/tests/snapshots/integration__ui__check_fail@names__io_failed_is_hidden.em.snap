@@ -18,9 +18,9 @@ input_file: tests/ui/check-fail/names/io_failed_is_hidden.em
    │                ╰────────── not found in this module
 ───╯
 [E1001] Error: cannot find effect operation `io_failed`
-    ╭─[ check-fail/names/io_failed_is_hidden.em:11:7 ]
+    ╭─[ check-fail/names/io_failed_is_hidden.em:11:11 ]
     │
- 11 │     | io_failed kind message -> 0
-    │       ────┬────  
-    │           ╰────── not an operation of any effect
+ 11 │     | ctl io_failed kind message -> 0
+    │           ────┬────  
+    │               ╰────── not an operation of any effect
 ────╯

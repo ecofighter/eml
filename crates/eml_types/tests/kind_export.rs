@@ -122,7 +122,7 @@ fn a_clause_in_main_keeps_its_operation_variable_kinds() {
     // 現れるので `Poly` で、`a:poly` と書く (「`Flexible` と `OpVar` の Kind」)。`main` は型変数を持たないので、本体の型は
     // instance で写さず、この Kind を `linearity` がそのまま読む。`k` の矢印は、操作が `once` なので推論の前から `Lin`
     // (`once`) である
-    let text = "effect Put where\n  put : a -> Unit\n  mk : Unit -> List a\n\nbody : Unit -> <Put> Int\nbody () =\n  put 1\n  let xs = (mk () : List Int)\n  0\n\nmain : Unit -> <IO> Unit\nmain () =\n  let n = handle body () with\n            | put x k -> k ()\n            | mk () k -> k []\n  println (show n)";
+    let text = "effect Put where\n  put : a -> Unit\n  mk : Unit -> List a\n\nbody : Unit -> <Put> Int\nbody () =\n  put 1\n  let xs = (mk () : List Int)\n  0\n\nmain : Unit -> <IO> Unit\nmain () =\n  let n = handle body () with\n            | ctl put x k -> k ()\n            | ctl mk () k -> k []\n  println (show n)";
     insta::assert_snapshot!(exported(text), @"
     put : a -> <Put> Unit
       kinds: a <= Unr
@@ -142,7 +142,7 @@ fn a_clause_in_main_keeps_its_operation_variable_kinds() {
 fn an_unresolved_variable_takes_the_least_value() {
     // tests/ui/run/files/file_in_return_clause_on_abort.em の形。使われない `return x` の `x` の型は推論で決まらず、
     // その `μ` は下限を持たないので、最小値の `Unr` の `Flexible` になり `_` と書く
-    let text = "effect Fail where\n  never fail : Unit -> a\n\nmain : Unit -> <IO> Unit\nmain () =\n  let f = Fs.open \"input.txt\"\n  handle fail () with\n    | fail () -> println \"aborted\"\n    | return x -> Fs.close f";
+    let text = "effect Fail where\n  never fail : Unit -> a\n\nmain : Unit -> <IO> Unit\nmain () =\n  let f = Fs.open \"input.txt\"\n  handle fail () with\n    | ctl fail () -> println \"aborted\"\n    | return x -> Fs.close f";
     insta::assert_snapshot!(exported(text), @"
     fail : Unit -> <Fail> a
     main : Unit -> <IO> Unit

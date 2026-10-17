@@ -9,6 +9,6 @@ main : Unit -> <IO> Unit
 main () =
   let all =
     handle pick () from "" with
-      | choose () k log -> k True (log ++ "T") ++ "|" ++ k False (log ++ "F")
+      | ctl choose () k log -> k True (log ++ "T") ++ "|" ++ k False (log ++ "F")
       | return x log -> log ++ ":" ++ x
   println all

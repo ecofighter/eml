@@ -9,5 +9,5 @@ pub effect Yield a where
 pub generate : (Unit -> <Yield a | e> Unit) -> <e> Iter <e> a
 generate producer =
   handle producer () with
-    | yield x k -> More x k
+    | ctl yield x k -> More x k
     | return () -> Done

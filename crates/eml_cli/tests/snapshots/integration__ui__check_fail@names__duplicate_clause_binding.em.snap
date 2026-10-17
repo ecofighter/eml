@@ -4,11 +4,11 @@ expression: rendered
 input_file: tests/ui/check-fail/names/duplicate_clause_binding.em
 ---
 [E1017] Error: `n` is bound more than once
-    ╭─[ check-fail/names/duplicate_clause_binding.em:11:13 ]
+    ╭─[ check-fail/names/duplicate_clause_binding.em:11:17 ]
     │
- 11 │     | ask n n -> n 1
-    │           ┬ ┬  
-    │           ╰──── first bound here
-    │             │  
-    │             ╰── bound again here
+ 11 │     | ctl ask n n -> n 1
+    │               ┬ ┬  
+    │               ╰──── first bound here
+    │                 │  
+    │                 ╰── bound again here
 ────╯

@@ -13,13 +13,13 @@ main : Unit -> <IO> Unit
 main () =
   let taken =
     handle pick () with
-      | choose question k ->
+      | ctl choose question k ->
           drop question
           k True
   println taken
   let dropped =
     handle pick () with
-      | choose question k ->
+      | ctl choose question k ->
           drop k
           "dropped " ++ question
   println dropped

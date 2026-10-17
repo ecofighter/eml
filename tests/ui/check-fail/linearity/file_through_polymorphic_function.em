@@ -22,4 +22,4 @@ pick () =
 main : Unit -> <IO> Unit
 main () =
   handle pick () with
-    | choose () k -> k True
+    | ctl choose () k -> k True

@@ -65,10 +65,10 @@ main () =
   println (spend token)
   println (spend_some (Some Token))
   println (spend_some None)
-  println (handle hold Token with | ask () k -> k 7)
+  println (handle hold Token with | ctl ask () k -> k 7)
   let dropped =
     handle hold Token with
-      | ask () k ->
+      | ctl ask () k ->
           drop k
           "continuation holding a token dropped"
   println dropped

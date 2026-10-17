@@ -560,11 +560,12 @@ fn a_runtime_error_inside_a_handler_leaves_no_handler_behind() {
         let mut console = Console::new(&config);
         let (outcome, _, codes) = console.eval("effect Counter where\n  tick : Unit -> Int");
         assert_eq!(outcome, Outcome::Accepted, "{codes:?}");
-        let (outcome, _, _) = console.eval("handle 1 / (tick () - 5) with\n  | tick () k -> k 5");
+        let (outcome, _, _) =
+            console.eval("handle 1 / (tick () - 5) with\n  | ctl tick () k -> k 5");
         assert!(matches!(outcome, Outcome::Failed(_)), "{outcome:?}");
         // evv が残っていれば、表示の後の終わりの確かめで `Broken` になる
         let (outcome, output, codes) =
-            console.eval("handle tick () + tick () with\n  | tick () k -> k 2");
+            console.eval("handle tick () + tick () with\n  | ctl tick () k -> k 2");
         assert_eq!(outcome, Outcome::Accepted, "{codes:?}");
         assert_eq!(output, "4\n");
     }

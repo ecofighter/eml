@@ -14,8 +14,8 @@ cb () = get () ++ "!"
 main : Unit -> <IO> Unit
 main () =
   let r = handle (handle run cb with
-                    | get () k -> k 42
-                    | put _ k -> k ()) with
-            | get () k -> k "str"
-            | put _ k -> k ()
+                    | ctl get () k -> k 42
+                    | ctl put _ k -> k ()) with
+            | ctl get () k -> k "str"
+            | ctl put _ k -> k ()
   println r

@@ -8,9 +8,9 @@ effect Log where
 f : (Unit -> <Ask | e> Int) -> <e> Int
 f action =
   handle action () with
-    | ask () k ->
+    | ctl ask () k ->
         handle k 1 with
-          | log m k2 ->
+          | ctl log m k2 ->
               k2 ()
 
 act : Unit -> <Ask, Log> Int
@@ -22,7 +22,7 @@ act () =
 main : Unit -> <IO> Unit
 main () =
   let r = handle f act with
-            | log m k ->
+            | ctl log m k ->
                 println ("outer " ++ m)
                 k ()
   println (show r)

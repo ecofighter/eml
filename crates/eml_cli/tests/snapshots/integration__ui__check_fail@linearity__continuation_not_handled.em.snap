@@ -6,11 +6,11 @@ input_file: tests/ui/check-fail/linearity/continuation_not_handled.em
 [E3005] Error: the continuation `k` of a `once` operation must be called or dropped
    ╭─[ check-fail/linearity/continuation_not_handled.em:9:7 ]
    │
- 9 │       | ask () k -> 0
-   │       ───────┬─┬─────  
-   │              ╰───────── this clause
-   │                │       
-   │                ╰─────── `k` is bound here
+ 9 │       | ctl ask () k -> 0
+   │       ─────────┬───┬─────  
+   │                ╰─────────── this clause
+   │                    │       
+   │                    ╰─────── `k` is bound here
    │ 
    │ Help: call `k` or `drop k` on every path
    │ 

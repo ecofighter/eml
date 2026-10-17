@@ -133,7 +133,7 @@ fn continuation_steps(t: &str) -> Vec<String> {
 fn a_continuation_is_called_with_all_its_arguments_at_once() {
     assert_eq!(
         continuation_steps(
-            "effect Tick where\n  tick : Unit -> Int\n\nt : Unit -> Int\nt () =\n  handle tick () from 0 with\n    | tick () k st -> k st (st + 1)\n    | return x _ -> x"
+            "effect Tick where\n  tick : Unit -> Int\n\nt : Unit -> Int\nt () =\n  handle tick () from 0 with\n    | ctl tick () k st -> k st (st + 1)\n    | return x _ -> x"
         ),
         ["eval k", "eval st", "eval st + 1", "arrow 0", "arrow 1"]
     );
@@ -144,7 +144,7 @@ fn a_continuation_is_called_with_all_its_arguments_at_once() {
 fn an_annotated_clause_pattern_records_the_continuation_arity() {
     assert_eq!(
         continuation_steps(
-            "effect Tick where\n  tick : Unit -> Int\n\nt : Unit -> Int\nt () =\n  handle tick () from 0 with\n    | tick () (k : Int -> Int -> Int) st -> k st (st + 1)\n    | return x _ -> x"
+            "effect Tick where\n  tick : Unit -> Int\n\nt : Unit -> Int\nt () =\n  handle tick () from 0 with\n    | ctl tick () (k : Int -> Int -> Int) st -> k st (st + 1)\n    | return x _ -> x"
         ),
         ["eval k", "eval st", "eval st + 1", "arrow 0", "arrow 1"]
     );
@@ -155,7 +155,7 @@ fn an_annotated_clause_pattern_records_the_continuation_arity() {
 fn an_argument_beyond_the_continuation_arity_is_evaluated_before_the_resume() {
     assert_eq!(
         continuation_steps(
-            "effect Ask where\n  ask : Unit -> Int\n\nt : Unit -> Int\nt () =\n  let f =\n    handle ask () with\n      | ask () k -> k 1 (g ())\n      | return x -> fn y -> x + y\n  f 2"
+            "effect Ask where\n  ask : Unit -> Int\n\nt : Unit -> Int\nt () =\n  let f =\n    handle ask () with\n      | ctl ask () k -> k 1 (g ())\n      | return x -> fn y -> x + y\n  f 2"
         ),
         ["eval k", "eval 1", "eval g ()", "arrow 0", "arrow 1"]
     );

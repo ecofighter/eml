@@ -8,15 +8,15 @@
 > run_old : Unit -> Int
 . run_old () =
 .   handle asker () with
-.     | ask () k -> k 10
+.     | ctl ask () k -> k 10
 .
 > effect Ask where
 .   ask : Unit -> Int
 .
 > run_old ()
 > handle asker () with
-.   | ask () k -> k 20
+.   | ctl ask () k -> k 20
 .
 > handle ask () * 2 with
-.   | ask () k -> k 20
+.   | ctl ask () k -> k 20
 .

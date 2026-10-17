@@ -286,12 +286,12 @@ fn let_in_is_a_block_with_one_let() {
 
 #[test]
 fn lambda_and_clause_parameters_are_one_group() {
-    let text = "effect Ask where\n  ask : Int -> Int\n\nf : Unit -> Int\nf () =\n  let g = fn x x -> x\n  handle 1 with\n    | ask n n -> 0\n    | return r -> r";
+    let text = "effect Ask where\n  ask : Int -> Int\n\nf : Unit -> Int\nf () =\n  let g = fn x x -> x\n  handle 1 with\n    | ctl ask n n -> 0\n    | return r -> r";
     assert_eq!(
         diagnostics(text),
         vec![
             "E1017 6:16 `x` is bound more than once",
-            "E1017 8:13 `n` is bound more than once",
+            "E1017 8:17 `n` is bound more than once",
         ]
     );
 }
@@ -383,7 +383,7 @@ fn a_reserved_cons_constructor_is_still_matched() {
 #[test]
 fn modules_other_than_the_prelude_are_printed_in_order() {
     let entry = "import Report.Csv\n\nf : Bool -> Bool\nf b = not b";
-    let csv = "import Report.Format\n\npub data Row =\n  | Row Int\n\npub effect Parse where\n  next : Unit -> Int\n\npub parse : Unit -> <Parse> Row\nparse () = Row (next ())\n\npub first : Row -> String\nfirst r = match r with\n  | Row n -> show n\n\npub run : Unit -> Row\nrun () = handle parse () with\n  | next () k -> k 1";
+    let csv = "import Report.Format\n\npub data Row =\n  | Row Int\n\npub effect Parse where\n  next : Unit -> Int\n\npub parse : Unit -> <Parse> Row\nparse () = Row (next ())\n\npub first : Row -> String\nfirst r = match r with\n  | Row n -> show n\n\npub run : Unit -> Row\nrun () = handle parse () with\n  | ctl next () k -> k 1";
     let format = "pub width : Int\nwidth = 8";
     insta::assert_snapshot!(
         lower_files_text(entry, &[("Report/Csv.em", csv), ("Report/Format.em", format)]),
@@ -456,7 +456,7 @@ fn an_ambiguous_name_is_reported_where_it_is_used() {
         ("A.em", "pub get : Unit -> Int\nget () = 1"),
         ("B.em", "pub effect E where\n  get : Unit -> Int"),
     ];
-    let entry = "import A (get)\nimport B (E(..))\n\nf : Unit -> Int\nf () = get ()\n\ng : Unit -> Int\ng () =\n  handle 1 with\n    | get () k -> k 2\n    | return x -> x";
+    let entry = "import A (get)\nimport B (E(..))\n\nf : Unit -> Int\nf () = get ()\n\ng : Unit -> Int\ng () =\n  handle 1 with\n    | ctl get () k -> k 2\n    | return x -> x";
     insta::assert_snapshot!(module_report(entry, &modules), @r"
     E1028 test.em 5:8 `get` is ambiguous
       test.em 5:8 this name refers to more than one definition
@@ -490,14 +490,14 @@ fn an_import_after_a_declaration_is_still_resolved() {
 #[test]
 fn parts_of_a_broken_import_are_silent_errors() {
     // `T(..)` と `E(..)` の部品は分からないので、コンストラクタと節の先頭の操作を使った位置も診断を出さない
-    let entry = "import Missing (T(..), E(..))\n\nf : Int -> Int\nf x = match x with\n  | Mk n -> n\n\ng : Unit -> Int\ng () =\n  handle 1 with\n    | get () k -> k 2\n    | return x -> x";
+    let entry = "import Missing (T(..), E(..))\n\nf : Int -> Int\nf x = match x with\n  | Mk n -> n\n\ng : Unit -> Int\ng () =\n  handle 1 with\n    | ctl get () k -> k 2\n    | return x -> x";
     assert_eq!(module_codes(entry, &[]), ["E1026 test.em 1:8"]);
 }
 
 #[test]
 fn parts_of_a_type_missing_from_the_import_list_are_silent_errors() {
     let modules = [("A.em", "pub x : Int\nx = 1")];
-    let entry = "import A (T(..), E(..))\n\nf : Int -> Int\nf x = match x with\n  | Mk n -> Mk n\n\ng : Unit -> Int\ng () =\n  handle 1 with\n    | get () k -> k 2\n    | return x -> x";
+    let entry = "import A (T(..), E(..))\n\nf : Int -> Int\nf x = match x with\n  | Mk n -> Mk n\n\ng : Unit -> Int\ng () =\n  handle 1 with\n    | ctl get () k -> k 2\n    | return x -> x";
     assert_eq!(
         module_codes(entry, &modules),
         ["E1002 test.em 1:11", "E1002 test.em 1:18"]
@@ -511,7 +511,7 @@ fn qualified_names_resolve_in_every_position() {
         "State.em",
         "pub effect State where\n  get : Unit -> Int\n\npub data Box = | Box Int\n\npub unbox : Box -> Int\nunbox (Box n) = n",
     )];
-    let entry = "import State\n\ncounter : Unit -> <State.State> Int\ncounter () = State.get () + 1\n\nunbox : State.Box -> Int\nunbox (State.Box n) = State.unbox (State.Box n)\n\nrun : Int -> Int\nrun n =\n  handle counter () with\n    | State.get () k -> k n\n    | return x -> x";
+    let entry = "import State\n\ncounter : Unit -> <State.State> Int\ncounter () = State.get () + 1\n\nunbox : State.Box -> Int\nunbox (State.Box n) = State.unbox (State.Box n)\n\nrun : Int -> Int\nrun n =\n  handle counter () with\n    | ctl State.get () k -> k n\n    | return x -> x";
     assert_eq!(module_report(entry, &modules), "");
     let shown = lower_files_text(entry, &modules);
     assert!(
@@ -726,7 +726,7 @@ fn private_in_public_in_a_dependency_points_into_its_file() {
 
 #[test]
 fn mixed_effects_are_named_by_their_display_names() {
-    let entry = "import Report\n\neffect Log where\n  log : String -> Unit\n\nf : Unit -> Unit\nf () =\n  handle () with\n    | log s k -> k ()\n    | Report.note s k -> k ()";
+    let entry = "import Report\n\neffect Log where\n  log : String -> Unit\n\nf : Unit -> Unit\nf () =\n  handle () with\n    | ctl log s k -> k ()\n    | ctl Report.note s k -> k ()";
     let lowered = eml_test_support::lower_files(
         entry,
         &[("Report.em", "pub effect Log where\n  note : String -> Unit")],
@@ -742,7 +742,7 @@ fn mixed_effects_are_named_by_their_display_names() {
 
 #[test]
 fn a_missing_clause_is_suggested_with_the_qualifier_of_the_existing_clause() {
-    let entry = "import Report as R\nimport Report (State(..))\n\neffect State where\n  tick : Unit -> Unit\n\nf : Unit -> Int\nf () =\n  handle 0 with\n    | R.get () k -> k 1\n\ng : Unit -> Int\ng () =\n  handle 0 with\n    | get () k -> k 1";
+    let entry = "import Report as R\nimport Report (State(..))\n\neffect State where\n  tick : Unit -> Unit\n\nf : Unit -> Int\nf () =\n  handle 0 with\n    | ctl R.get () k -> k 1\n\ng : Unit -> Int\ng () =\n  handle 0 with\n    | ctl get () k -> k 1";
     let lowered = eml_test_support::lower_files(
         entry,
         &[(
@@ -750,13 +750,13 @@ fn a_missing_clause_is_suggested_with_the_qualifier_of_the_existing_clause() {
             "pub effect State where\n  get : Unit -> Int\n  put : Int -> Unit",
         )],
     );
-    insta::assert_snapshot!(eml_test_support::full(lowered.files(), &lowered.diagnostics), @r"
+    insta::assert_snapshot!(eml_test_support::full(lowered.files(), &lowered.diagnostics), @"
     E1013 9:3 this handler has no clause for `put` of `Report.State`
       9:3 this handler
-      help: add `| R.put _ k -> ...`
+      help: add `| ctl R.put _ k -> ...`
     E1013 14:3 this handler has no clause for `put` of `Report.State`
       14:3 this handler
-      help: add `| put _ k -> ...`
+      help: add `| ctl put _ k -> ...`
     ");
 }
 
@@ -771,12 +771,12 @@ fn an_ambiguous_clause_head_does_not_report_missing_clauses() {
         ),
         ("B.em", "pub effect Other where\n  get : Unit -> Int"),
     ];
-    let entry = "import A (State(..))\nimport B (Other(..))\nimport Missing (Gone(..))\n\nf : Unit -> Int\nf () =\n  handle 0 with\n    | get () k -> k 1\n    | put _ k -> k ()\n\ng : Unit -> Int\ng () =\n  handle 0 with\n    | gone () k -> k 1\n    | put _ k -> k ()";
-    insta::assert_snapshot!(module_report(entry, &modules), @r"
+    let entry = "import A (State(..))\nimport B (Other(..))\nimport Missing (Gone(..))\n\nf : Unit -> Int\nf () =\n  handle 0 with\n    | ctl get () k -> k 1\n    | ctl put _ k -> k ()\n\ng : Unit -> Int\ng () =\n  handle 0 with\n    | ctl gone () k -> k 1\n    | ctl put _ k -> k ()";
+    insta::assert_snapshot!(module_report(entry, &modules), @"
     E1026 test.em 3:8 cannot find module `Missing`
       test.em 3:8 there is no file `Missing.em`
-    E1028 test.em 8:7 `get` is ambiguous
-      test.em 8:7 this name refers to more than one definition
+    E1028 test.em 8:11 `get` is ambiguous
+      test.em 8:11 this name refers to more than one definition
       test.em 1:1 one of the definitions is imported here
       test.em 2:1 one of the definitions is imported here
     ");

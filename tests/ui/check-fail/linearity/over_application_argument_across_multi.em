@@ -17,5 +17,5 @@ body () = pick 1 (Fs.open "input.txt")
 main : Unit -> <IO> Unit
 main () =
   let r = handle body () with
-    | choose () k -> k True + k False
+    | ctl choose () k -> k True + k False
   println (show r)

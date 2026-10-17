@@ -9,6 +9,6 @@ main : Unit -> <IO> Unit
 main () =
   let r =
     handle ask () * 2 from 0 with
-      | ask () k st -> later (k 5) (st + 100)
+      | ctl ask () k st -> later (k 5) (st + 100)
       | return x s -> x + s
   println (show r)

@@ -38,7 +38,7 @@ in_handle () =
     1
   let n =
     handle finish () + ask () with
-      | ask () k -> k 41
+      | ctl ask () k -> k 41
   println ("in handle " ++ show (n + 1))
 
 read_twice : Unit -> <IO> Unit

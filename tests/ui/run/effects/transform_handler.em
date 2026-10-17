@@ -13,21 +13,21 @@ gen cb () =
 render : (Unit -> <Yield Int | e> Unit) -> <Yield String | e> Unit
 render g =
   handle g () with
-    | yield n k ->
+    | ctl yield n k ->
       yield "n=\{n}"
       k ()
 
 strings : (Unit -> <Yield String, IO | e> a) -> <IO | e> a
 strings action =
   handle action () with
-    | yield s k ->
+    | ctl yield s k ->
       println "string: \{s}"
       k ()
 
 bools : (Unit -> <Yield Bool, IO | e> a) -> <IO | e> a
 bools action =
   handle action () with
-    | yield b k ->
+    | ctl yield b k ->
       println "bool: \{b}"
       k ()
 

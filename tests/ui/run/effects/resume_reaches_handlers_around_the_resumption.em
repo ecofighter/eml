@@ -20,7 +20,7 @@ between () =
 capture : Unit -> <Log> Saved
 capture () =
   handle Value (ask () + between ()) with
-    | ask () k ->
+    | ctl ask () k ->
       log "ask"
       Saved k
 
@@ -33,7 +33,7 @@ describe s =
 logging : String -> (Unit -> <Log> Saved) -> <IO> Saved
 logging name body =
   handle body () with
-    | log s k ->
+    | ctl log s k ->
       println (name ++ ": " ++ s)
       k ()
 

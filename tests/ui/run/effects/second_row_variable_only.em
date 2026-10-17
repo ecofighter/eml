@@ -11,5 +11,5 @@ main () =
   println (show (pick (fn () -> 1) (fn () -> 2)))
   let r =
     handle pick (fn () -> 1) (fn () -> ask () * 10) with
-      | ask () k -> k 4
+      | ctl ask () k -> k 4
   println (show r)

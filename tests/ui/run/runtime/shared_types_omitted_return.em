@@ -51,5 +51,5 @@ main () =
   let f40 = f39 ident
   let n =
     handle ask () * 2 from f0 with
-      | ask () k s -> k (f40 21) s
+      | ctl ask () k s -> k (f40 21) s
   println (show n)

@@ -9,7 +9,7 @@ effect Ask where
 keep : Unit -> Box
 keep () =
   handle ask () with
-    | ask () k -> Box k
+    | ctl ask () k -> Box k
     | return x -> Done
 
 main : Unit -> <IO> Unit

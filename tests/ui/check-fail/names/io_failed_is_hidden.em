@@ -8,4 +8,4 @@ g () = Prelude.io_failed NotFound "x"
 h : Unit -> Int
 h () =
   handle 1 with
-    | io_failed kind message -> 0
+    | ctl io_failed kind message -> 0

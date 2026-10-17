@@ -12,7 +12,7 @@ body () = if choose () then 10 else 20
 start : Unit -> Paused
 start () =
   handle body () with
-    | choose () k -> Paused k
+    | ctl choose () k -> Paused k
     | return x -> Done x
 
 value_of : Paused -> Int

@@ -268,7 +268,7 @@ fn a_redefined_effect_gets_its_own_name_and_number() {
         &[
             "effect Ask where\n  ask : Unit -> Int",
             "effect Ask where\n  ask : Unit -> Int",
-            "handle ask () with\n  | ask () k -> k 1\n  | return r -> r",
+            "handle ask () with\n  | ctl ask () k -> k 1\n  | return r -> r",
         ],
         Pass::Translate,
     );
@@ -283,7 +283,7 @@ fn a_redefined_effect_gets_its_own_name_and_number() {
     let lowered = session_lir_text(&[
         "effect Ask where\n  ask : Unit -> Int",
         "effect Ask where\n  ask : Unit -> Int",
-        "handle ask () with\n  | ask () k -> k 1\n  | return r -> r",
+        "handle ask () with\n  | ctl ask () k -> k 1\n  | return r -> r",
     ]);
     assert!(lowered.contains("Ask#2"), "{lowered}");
 }

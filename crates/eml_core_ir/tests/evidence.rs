@@ -519,7 +519,7 @@ const ASK: &str = "effect Ask where\n  ask : Unit -> Int\n\n";
 #[test]
 fn a_handle_installs_evidence_and_calls_prompt() {
     let text = format!(
-        "{ASK}main : Unit -> <IO> Unit\nmain () =\n  let r =\n    handle ask () + 1 with\n      | ask () k -> k 41\n  println (show r)"
+        "{ASK}main : Unit -> <IO> Unit\nmain () =\n  let r =\n    handle ask () + 1 with\n      | ctl ask () k -> k 41\n  println (show r)"
     );
     let shown = core_text(&text, Pass::Evidence);
     insta::assert_snapshot!(function(&shown, "main"), @r#"
@@ -559,7 +559,7 @@ fn an_immediate_clause_becomes_its_entry() {
     // 末尾で1回だけ再開する節は、`k` と状態の引数を除いた入口になり、状態を evidence の欄から出し入れする。
     // resume は残らない
     let text = format!(
-        "{ASK}main : Unit -> <IO> Unit\nmain () =\n  let r =\n    handle ask () + 1 with\n      | ask () k -> k 41\n  println (show r)"
+        "{ASK}main : Unit -> <IO> Unit\nmain () =\n  let r =\n    handle ask () + 1 with\n      | ctl ask () k -> k 41\n  println (show r)"
     );
     let shown = core_text(&text, Pass::Evidence);
     assert!(!shown.contains("fn main$handle0$ask("), "{shown}");
@@ -576,7 +576,7 @@ fn an_immediate_clause_becomes_its_entry() {
 fn a_clause_that_does_not_resume_at_once_yields_to_its_handler() {
     // 入口は節のクロージャを作って `yield_to` を呼び、ダミーを返す。節の関数は `prompt$` が `apply c(k, st)` で呼ぶ
     let text = format!(
-        "{ASK}main : Unit -> <IO> Unit\nmain () =\n  let r =\n    handle ask () + 1 with\n      | ask () k ->\n        let v = k 10\n        v * 2\n  println (show r)"
+        "{ASK}main : Unit -> <IO> Unit\nmain () =\n  let r =\n    handle ask () + 1 with\n      | ctl ask () k ->\n        let v = k 10\n        v * 2\n  println (show r)"
     );
     let shown = core_text(&text, Pass::Evidence);
     insta::assert_snapshot!(function(&shown, "main$handle0$ask$entry"), @"
@@ -593,7 +593,7 @@ fn a_resume_becomes_an_apply() {
     // `resume k(v, s)` は、含む関数の `yields` の印を写した `apply k(v, s)` になる。handle を含む `main` が `yields` で
     // ないので、節の関数も `apply` も印を持たない
     let text = format!(
-        "{ASK}main : Unit -> <IO> Unit\nmain () =\n  let r =\n    handle ask () + 1 with\n      | ask () k ->\n        let v = k 10\n        v * 2\n  println (show r)"
+        "{ASK}main : Unit -> <IO> Unit\nmain () =\n  let r =\n    handle ask () + 1 with\n      | ctl ask () k ->\n        let v = k 10\n        v * 2\n  println (show r)"
     );
     let shown = core_text(&text, Pass::Evidence);
     insta::assert_snapshot!(function(&shown, "main$handle0$ask"), @"
@@ -617,7 +617,7 @@ fn a_resume_becomes_an_apply() {
 fn a_clause_that_performs_another_effect_is_not_run_in_place() {
     // 節の本体が外の handler の操作を呼ぶ (yield の地点を持つ) と、すぐに再開する節でも `yield_to` の入口になる
     let text = format!(
-        "{ASK}effect Log where\n  log : Int -> Unit\n\nmain : Unit -> <IO> Unit\nmain () =\n  let r =\n    handle (handle ask () + 1 with\n              | ask () k ->\n                log 1\n                k 41) with\n      | log n k -> k ()\n  println (show r)"
+        "{ASK}effect Log where\n  log : Int -> Unit\n\nmain : Unit -> <IO> Unit\nmain () =\n  let r =\n    handle (handle ask () + 1 with\n              | ctl ask () k ->\n                log 1\n                k 41) with\n      | ctl log n k -> k ()\n  println (show r)"
     );
     let shown = core_text(&text, Pass::Evidence);
     insta::assert_snapshot!(function(&shown, "main$handle0$ask$entry"), @"
@@ -639,7 +639,7 @@ fn a_clause_that_performs_another_effect_is_not_run_in_place() {
 #[test]
 fn a_never_clause_aborts() {
     // `never` の節の入口は `yield_abort` を呼ぶ。`ret` は `obj` で、ダミーの物体を返す
-    let text = "effect Fail where\n  never fail : String -> a\n\nmain : Unit -> <IO> Unit\nmain () =\n  let r =\n    handle fail \"x\" + 1 with\n      | fail _ -> 0\n  println (show r)";
+    let text = "effect Fail where\n  never fail : String -> a\n\nmain : Unit -> <IO> Unit\nmain () =\n  let r =\n    handle fail \"x\" + 1 with\n      | ctl fail _ -> 0\n  println (show r)";
     let shown = core_text(text, Pass::Evidence);
     insta::assert_snapshot!(function(&shown, "main$handle0$fail$entry"), @"
     internal yields clause Fail.fail fn main$handle0$fail$entry(e.0: obj, p.1: obj) -> obj poly {
@@ -655,7 +655,7 @@ fn a_never_clause_aborts() {
 fn a_perform_looks_up_evidence_and_calls_its_clause() {
     // `perform` は evidence を探し、その入口の欄を読んで節の呼び出しにする。末尾でないので yield の地点になる
     let text = format!(
-        "{ASK}main : Unit -> <IO> Unit\nmain () =\n  let r =\n    handle ask () + 1 with\n      | ask () k -> k 41\n  println (show r)"
+        "{ASK}main : Unit -> <IO> Unit\nmain () =\n  let r =\n    handle ask () + 1 with\n      | ctl ask () k -> k 41\n  println (show r)"
     );
     let shown = core_text(&text, Pass::Evidence);
     insta::assert_snapshot!(function(&shown, "main$handle0"), @"
@@ -701,7 +701,7 @@ fn instance_name(shown: &str, name: &str) -> String {
 fn a_masked_call_restores_the_evidence_list_and_wraps_the_continuation() {
     // 遅い道は κ を `mask$[State]` で包んでから `run$k1` を `compose$` で足す。速い道の先頭で `evv_set(w0)` が
     // `evv` を戻し、`run$k1` の引数に w0 はない
-    let text = "effect State s where\n  get : Unit -> s\n  put : s -> Unit\n\nrun : (Unit -> <e> String) -> <State Int | e> String\nrun cb =\n  let n = get ()\n  let s = cb ()\n  s ++ show n\n\ncb : Unit -> <State String> String\ncb () = get () ++ \"!\"\n\nmain : Unit -> <IO> Unit\nmain () =\n  let r = handle (handle run cb with\n                    | get () k -> k 42\n                    | put _ k -> k ()) with\n            | get () k -> k \"str\"\n            | put _ k -> k ()\n  println r";
+    let text = "effect State s where\n  get : Unit -> s\n  put : s -> Unit\n\nrun : (Unit -> <e> String) -> <State Int | e> String\nrun cb =\n  let n = get ()\n  let s = cb ()\n  s ++ show n\n\ncb : Unit -> <State String> String\ncb () = get () ++ \"!\"\n\nmain : Unit -> <IO> Unit\nmain () =\n  let r = handle (handle run cb with\n                    | ctl get () k -> k 42\n                    | ctl put _ k -> k ()) with\n            | ctl get () k -> k \"str\"\n            | ctl put _ k -> k ()\n  println r";
     let shown = core_text(text, Pass::Evidence);
     let run = instance_name(&shown, "run");
     insta::assert_snapshot!(function(&shown, &run), @r#"
@@ -753,7 +753,7 @@ fn a_masked_call_restores_the_evidence_list_and_wraps_the_continuation() {
 fn a_masked_call_in_a_continuation_restores_the_evidence_list_before_it_continues() {
     // 2つ目の `cb ()` は1つ目の地点の後の区間にあるので、`run$k0` の中の地点になる。`run$k0` の速い道は `run$k1` を
     // 呼んで止まるが、その前に `evv_set(w0)` で `evv` を戻す。`run$k1` の本体には `evv_set` がない
-    let text = "effect State s where\n  get : Unit -> s\n  put : s -> Unit\n\nrun : (Unit -> <e> String) -> <State Int | e> String\nrun cb =\n  let a = cb ()\n  let b = cb ()\n  a ++ b\n\ncb : Unit -> <State String> String\ncb () = get ()\n\nmain : Unit -> <IO> Unit\nmain () =\n  let r = handle (handle run cb with\n                    | get () k -> k 42\n                    | put _ k -> k ()) with\n            | get () k -> k \"str\"\n            | put _ k -> k ()\n  println r";
+    let text = "effect State s where\n  get : Unit -> s\n  put : s -> Unit\n\nrun : (Unit -> <e> String) -> <State Int | e> String\nrun cb =\n  let a = cb ()\n  let b = cb ()\n  a ++ b\n\ncb : Unit -> <State String> String\ncb () = get ()\n\nmain : Unit -> <IO> Unit\nmain () =\n  let r = handle (handle run cb with\n                    | ctl get () k -> k 42\n                    | ctl put _ k -> k ()) with\n            | ctl get () k -> k \"str\"\n            | ctl put _ k -> k ()\n  println r";
     let shown = core_text(text, Pass::Evidence);
     let run = instance_name(&shown, "run");
     insta::assert_snapshot!(function(&shown, &format!("{run}$k0")), @r#"
@@ -791,7 +791,7 @@ fn a_resume_in_a_yielding_function_becomes_a_yielding_apply() {
     // handle を含む `f` は `Log` を外へ通すので `yields` で、節の関数も `yields` になる。`resume k(v, s)` は
     // `yields apply k(v, s)` になり、末尾でなければ yield の地点になる
     let text = format!(
-        "{ASK}effect Log where\n  log : Int -> Unit\n\nf : Unit -> <Log> Int\nf () =\n  handle ask () + 1 with\n    | ask () k ->\n      let v = k 10\n      v * 2\n\nmain : Unit -> <IO> Unit\nmain () =\n  let r = handle f () with\n            | log _ k -> k ()\n  println (show r)"
+        "{ASK}effect Log where\n  log : Int -> Unit\n\nf : Unit -> <Log> Int\nf () =\n  handle ask () + 1 with\n    | ctl ask () k ->\n      let v = k 10\n      v * 2\n\nmain : Unit -> <IO> Unit\nmain () =\n  let r = handle f () with\n            | ctl log _ k -> k ()\n  println (show r)"
     );
     let shown = core_text(&text, Pass::Evidence);
     insta::assert_snapshot!(function(&shown, "f$handle0$ask"), @"
@@ -816,7 +816,7 @@ fn a_resume_in_a_yielding_function_becomes_a_yielding_apply() {
 #[test]
 fn a_pure_instance_of_a_row_polymorphic_function_has_no_yield_check() {
     let text = format!(
-        "{ASK}twice : (Unit -> <e> Int) -> <e> Int\ntwice f = f () + f ()\n\npure : Unit -> Int\npure () = twice (fn () -> 1)\n\nmain : Unit -> <IO> Unit\nmain () =\n  println (show (pure ()))\n  println (show (handle twice ask with\n    | ask () k -> k 2))"
+        "{ASK}twice : (Unit -> <e> Int) -> <e> Int\ntwice f = f () + f ()\n\npure : Unit -> Int\npure () = twice (fn () -> 1)\n\nmain : Unit -> <IO> Unit\nmain () =\n  println (show (pure ()))\n  println (show (handle twice ask with\n    | ctl ask () k -> k 2))"
     );
     let shown = core_text(&text, Pass::Evidence);
     insta::assert_snapshot!(function(&shown, "twice"), @"
@@ -877,7 +877,7 @@ fn closures_ep_builds_take_the_join_of_their_captures() {
     // `count` の続きは `Int` しか捕まえないので `unr` になる。すぐに再開しない節の入口が作る節のクロージャも、
     // 操作の引数の `File` を捕まえて `lin` になる
     // (docs/spec/core-ir.md の「EP が足す変数の印」)
-    let text = "effect Ask where\n  ask : Unit -> Int\n\neffect Sink where\n  put : Fs.File -> Unit\n\nuse_it : Fs.File -> <Ask, IO> Unit\nuse_it f =\n  let n = ask ()\n  Fs.close f\n  println (show n)\n\ncount : Int -> <Ask> Int\ncount m =\n  let n = ask ()\n  n + m\n\nmain : Unit -> <IO> Unit\nmain () =\n  handle use_it (Fs.open \"input.txt\") with\n    | ask () k -> k 1\n  let r = handle count 1 with\n    | ask () k -> k 2\n  println (show r)\n  handle put (Fs.open \"input.txt\") with\n    | put f k ->\n      Fs.close f\n      let u = k ()\n      println \"resumed\"\n      u";
+    let text = "effect Ask where\n  ask : Unit -> Int\n\neffect Sink where\n  put : Fs.File -> Unit\n\nuse_it : Fs.File -> <Ask, IO> Unit\nuse_it f =\n  let n = ask ()\n  Fs.close f\n  println (show n)\n\ncount : Int -> <Ask> Int\ncount m =\n  let n = ask ()\n  n + m\n\nmain : Unit -> <IO> Unit\nmain () =\n  handle use_it (Fs.open \"input.txt\") with\n    | ctl ask () k -> k 1\n  let r = handle count 1 with\n    | ctl ask () k -> k 2\n  println (show r)\n  handle put (Fs.open \"input.txt\") with\n    | ctl put f k ->\n      Fs.close f\n      let u = k ()\n      println \"resumed\"\n      u";
     let shown = core_text(text, Pass::Evidence);
     let use_it = function(&shown, "use_it");
     let rest = let_line(&use_it, "closure use_it$k0(");
@@ -908,7 +908,7 @@ fn evidence_and_evv_are_unr_and_state_is_poly() {
     // 状態、κ、節の本体、ダミーは `poly` である。ただし in-place の入口が取り出す状態は、translate が節の状態の引数に
     // 付けた印のままである。handle の本体の結果は `File` でありうるので `poly` である
     // (docs/spec/core-ir.md の「EP が足す変数の印」)
-    let text = "effect State s where\n  get : Unit -> s\n  put : s -> Unit\n\neffect Ask where\n  ask : Unit -> Int\n\nrun : (Unit -> <e> String) -> <State Int | e> String\nrun cb =\n  let n = get ()\n  let s = cb ()\n  s ++ show n\n\ncb : Unit -> <State String> String\ncb () = get () ++ \"!\"\n\nmain : Unit -> <IO> Unit\nmain () =\n  let r = handle (handle run cb with\n                    | get () k -> k 42\n                    | put _ k -> k ()) with\n            | get () k -> k \"str\"\n            | put _ k -> k ()\n  println r\n  let a = handle ask () + 1 with\n    | ask () k ->\n      let v = k 10\n      v * 2\n  println (show a)";
+    let text = "effect State s where\n  get : Unit -> s\n  put : s -> Unit\n\neffect Ask where\n  ask : Unit -> Int\n\nrun : (Unit -> <e> String) -> <State Int | e> String\nrun cb =\n  let n = get ()\n  let s = cb ()\n  s ++ show n\n\ncb : Unit -> <State String> String\ncb () = get () ++ \"!\"\n\nmain : Unit -> <IO> Unit\nmain () =\n  let r = handle (handle run cb with\n                    | ctl get () k -> k 42\n                    | ctl put _ k -> k ()) with\n            | ctl get () k -> k \"str\"\n            | ctl put _ k -> k ()\n  println r\n  let a = handle ask () + 1 with\n    | ctl ask () k ->\n      let v = k 10\n      v * 2\n  println (show a)";
     let program = eml_test_support::core_until(text, Pass::Evidence);
     let mut seen = std::collections::HashSet::new();
     for function in &program.functions {
@@ -1016,7 +1016,7 @@ fn clause_local_function_resumes_once() {
     // 生の `k` を持ち上げたローカル関数の引数に渡すので、節の `return` は `k` の末尾の `resume` で終わらず、節は
     // その場で動かない (docs/spec/core-ir.md の「ローカル関数の持ち上げ」)。実行した値は UI テストで確かめる
     let text = format!(
-        "{ASK}main : Unit -> <IO> Unit\nmain () =\n  let r =\n    handle ask () + 1 with\n      | ask () k -> (let finish v = k v in finish 1)\n  println (show r)"
+        "{ASK}main : Unit -> <IO> Unit\nmain () =\n  let r =\n    handle ask () + 1 with\n      | ctl ask () k -> (let finish v = k v in finish 1)\n  println (show r)"
     );
     let shown = core_text(&text, Pass::Evidence);
     insta::assert_snapshot!(function(&shown, "main$handle0$ask$entry"), @"

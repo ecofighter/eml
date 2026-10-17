@@ -6,7 +6,7 @@ main : Unit -> <IO> Unit
 main () =
   let text =
     handle load () from Fs.open "input.txt" with
-      | load () k f ->
+      | ctl load () k f ->
           let (f, s) = Fs.read_all f
           k s f
       | return x f ->

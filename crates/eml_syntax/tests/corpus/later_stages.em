@@ -28,7 +28,7 @@ is_error _ = False
 try : (Unit -> <Fail | e> a) -> <IO | e> Option a
 try action =
   handle action () with
-    | fail msg ->
+    | ctl fail msg ->
         eprintln "error: \{msg}"
         None
     | return x -> Some x

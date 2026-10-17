@@ -397,14 +397,14 @@ fn main() -> unit {{
 /// rehandle : Unit -> <IO> Unit
 /// rehandle () =
 ///   handle asker () with
-///     | ask () k -> k "new"
+///     | ctl ask () k -> k "new"
 ///
 /// resumer : (Unit -> <Yield | e> Unit) -> (Unit -> <e> Unit) -> <e> Unit
 /// resumer body after =
 ///   handle body () with
-///     | yield () k ->
+///     | ctl yield () k ->
 ///         handle k () with
-///           | ask () k2 -> k2 "clause"
+///           | ctl ask () k2 -> k2 "clause"
 ///         after ()
 ///
 /// yielder : Unit -> <Yield, Ask, IO> Unit
@@ -422,8 +422,8 @@ fn main() -> unit {{
 /// main : Unit -> <IO> Unit
 /// main () =
 ///   handle (handle body () with
-///             | ask () k -> k "inner") with
-///     | ask () k -> k "outer"
+///             | ctl ask () k -> k "inner") with
+///     | ctl ask () k -> k "outer"
 /// ```
 ///
 /// `Ask` の handler を2つ積む。外側の handler は `outer`、内側の handler は `inner` を返す。内側の handler の下で、
@@ -464,9 +464,9 @@ fn a_mask_skips_outer_handlers_only() {
 /// main : Unit -> <IO> Unit
 /// main () =
 ///   let r = handle (handle choose () with
-///                     | ask () k -> k 0
+///                     | ctl ask () k -> k 0
 ///                     | return x -> x + 100) with
-///             | choose () k -> k 1 + k 2
+///             | ctl choose () k -> k 1 + k 2
 ///   println (show r)
 /// ```
 #[test]

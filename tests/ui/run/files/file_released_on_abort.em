@@ -10,4 +10,4 @@ checked f =
 main : Unit -> <IO> Unit
 main () =
   handle checked (Fs.open "input.txt") with
-    | fail () -> println "aborted"
+    | ctl fail () -> println "aborted"

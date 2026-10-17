@@ -12,7 +12,7 @@ body () =
 run : Unit -> <IO> String
 run () =
   handle body () with
-    | load path k -> k (Fs.read_text path)
+    | ctl load path k -> k (Fs.read_text path)
 
 main : Unit -> <IO> Unit
 main () =

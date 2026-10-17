@@ -13,5 +13,5 @@ main : Unit -> <IO> Unit
 main () =
   let r =
     handle deep 3 with
-      | fail msg -> 0
+      | ctl fail msg -> 0
   println (show r)

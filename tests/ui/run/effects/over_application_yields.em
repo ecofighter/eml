@@ -14,7 +14,7 @@ main : Unit -> <IO> Unit
 main () =
   let r =
     handle run adder with
-      | ask () k ->
+      | ctl ask () k ->
         let v = k 10
         v * 2
   println (show r)

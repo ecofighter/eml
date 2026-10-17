@@ -12,5 +12,5 @@ main () =
   let f = Fs.open "input.txt"
   let n =
     handle use_file f with
-      | ask () k -> k 41
+      | ctl ask () k -> k 41
   println (show (n + 1))

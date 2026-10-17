@@ -17,5 +17,5 @@ use_it () =
 main : Unit -> <IO> Unit
 main () =
   handle use_it () with
-    | mk () k -> k (Box (fn x -> (x, x)))
+    | ctl mk () k -> k (Box (fn x -> (x, x)))
     | return u -> u

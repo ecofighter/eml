@@ -156,7 +156,7 @@ instance Show IOError where
 pub try_io : (Unit -> <IO | e> a) -> <IO | e> Result IOError a
 try_io action =
   handle action () with
-    | io_failed kind message -> Err (IOError { kind = kind, message = message })
+    | ctl io_failed kind message -> Err (IOError { kind = kind, message = message })
     | return x -> Ok x
 
 instance Show a => Show (List a) where

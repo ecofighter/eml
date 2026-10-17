@@ -7,7 +7,7 @@ main : Unit -> <IO> Unit
 main () =
   handle (match each () with
     | (run, _) -> run (fn i -> println "\{i}")) with
-    | each () k ->
+    | ctl each () k ->
         k (fn f ->
           f 1
           f 2, 0)

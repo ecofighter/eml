@@ -13,29 +13,29 @@ pick () =
 both : Unit -> String
 both () =
   handle pick () with
-    | choose () k -> k True ++ " and " ++ k False
+    | ctl choose () k -> k True ++ " and " ++ k False
 
 first_only : Unit -> String
 first_only () =
   handle pick () with
-    | choose () k -> k True
+    | ctl choose () k -> k True
 
 dropped : Unit -> String
 dropped () =
   handle pick () with
-    | choose () k ->
+    | ctl choose () k ->
         drop k
         "dropped"
 
 unused : Unit -> String
 unused () =
   handle pick () with
-    | choose () k -> "unused"
+    | ctl choose () k -> "unused"
 
 counted : Unit -> String
 counted () =
   handle pick () with
-    | choose () k -> k False ++ "/" ++ k True
+    | ctl choose () k -> k False ++ "/" ++ k True
     | return s -> "<" ++ s ++ ">"
 
 main : Unit -> <IO> Unit

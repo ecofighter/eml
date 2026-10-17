@@ -7,18 +7,18 @@ effect Log where
 tagged : String -> (Unit -> <Log, IO | e> a) -> <IO | e> a
 tagged tag action =
   handle action () with
-    | log s k ->
+    | ctl log s k ->
       println "\{tag}: \{s}"
       k ()
 
 twice : (Unit -> <e> Unit) -> (Unit -> <Log | e> a) -> <Log | e> a
 twice cb action =
   handle action () from 1 with
-    | log s k n ->
+    | ctl log s k n ->
       log "outer #\{n} sees \{s}"
       cb ()
       handle k () (n + 1) with
-        | log t k2 ->
+        | ctl log t k2 ->
           log "inner sees \{t}"
           k2 ()
     | return x _ -> x

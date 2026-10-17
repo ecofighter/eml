@@ -15,7 +15,7 @@ fn diagnostics(rest: &str) -> String {
 
 #[test]
 fn a_value_used_twice_points_at_both_uses() {
-    let rest = "twice : Unit -> Int\ntwice () =\n  handle ask () with\n    | ask () k ->\n        let j = k\n        j 1 + j 2";
+    let rest = "twice : Unit -> Int\ntwice () =\n  handle ask () with\n    | ctl ask () k ->\n        let j = k\n        j 1 + j 2";
     insta::assert_snapshot!(diagnostics(rest), @"
     E3002 12:15 `j` must be used exactly once, but it is used more than once
       12:15 used again here
@@ -26,7 +26,7 @@ fn a_value_used_twice_points_at_both_uses() {
 
 #[test]
 fn a_branch_that_does_not_use_a_value() {
-    let rest = "branch : Unit -> Int\nbranch () =\n  handle ask () with\n    | ask () k ->\n        let j = k\n        if flag () then j 1 else 0";
+    let rest = "branch : Unit -> Int\nbranch () =\n  handle ask () with\n    | ctl ask () k ->\n        let j = k\n        if flag () then j 1 else 0";
     insta::assert_snapshot!(diagnostics(rest), @"
     E3003 11:13 `j` must be used exactly once, but some paths do not use it
       11:13 `j` is bound here
@@ -38,7 +38,7 @@ fn a_branch_that_does_not_use_a_value() {
 
 #[test]
 fn an_omitted_else_does_not_use_a_value() {
-    let rest = "omitted : Unit -> Int\nomitted () =\n  handle ask () with\n    | ask () k ->\n        let j = k\n        if flag () then drop j\n        0";
+    let rest = "omitted : Unit -> Int\nomitted () =\n  handle ask () with\n    | ctl ask () k ->\n        let j = k\n        if flag () then drop j\n        0";
     insta::assert_snapshot!(diagnostics(rest), @r"
     E3003 11:13 `j` must be used exactly once, but some paths do not use it
       11:13 `j` is bound here
@@ -50,7 +50,7 @@ fn an_omitted_else_does_not_use_a_value() {
 
 #[test]
 fn a_match_arm_that_does_not_use_a_value() {
-    let rest = "arm : Bool -> Int\narm b =\n  handle ask () with\n    | ask () k ->\n        let j = k\n        match b with\n          | True -> j 1\n          | False -> 0";
+    let rest = "arm : Bool -> Int\narm b =\n  handle ask () with\n    | ctl ask () k ->\n        let j = k\n        match b with\n          | True -> j 1\n          | False -> 0";
     insta::assert_snapshot!(diagnostics(rest), @r"
     E3003 11:13 `j` must be used exactly once, but some paths do not use it
       11:13 `j` is bound here
@@ -62,7 +62,7 @@ fn a_match_arm_that_does_not_use_a_value() {
 
 #[test]
 fn a_value_never_used_points_at_the_end_of_its_scope() {
-    let rest = "unused : Unit -> Int\nunused () =\n  handle ask () with\n    | ask () k ->\n        let j = k\n        0";
+    let rest = "unused : Unit -> Int\nunused () =\n  handle ask () with\n    | ctl ask () k ->\n        let j = k\n        0";
     insta::assert_snapshot!(diagnostics(rest), @r"
     E3003 11:13 `j` must be used exactly once, but it is not used
       11:13 `j` is bound here
@@ -74,7 +74,7 @@ fn a_value_never_used_points_at_the_end_of_its_scope() {
 
 #[test]
 fn a_shadowed_value_is_not_consumed() {
-    let rest = "shadowed : Unit -> Int\nshadowed () =\n  handle ask () with\n    | ask () k ->\n        let j = k\n        let j = 1\n        j";
+    let rest = "shadowed : Unit -> Int\nshadowed () =\n  handle ask () with\n    | ctl ask () k ->\n        let j = k\n        let j = 1\n        j";
     insta::assert_snapshot!(diagnostics(rest), @r"
     E3003 11:13 `j` must be used exactly once, but it is not used
       11:13 `j` is bound here
@@ -86,11 +86,11 @@ fn a_shadowed_value_is_not_consumed() {
 
 #[test]
 fn a_continuation_unused_on_some_paths_points_at_the_clause() {
-    let rest = "partial : Unit -> Int\npartial () =\n  handle ask () with\n    | ask () k -> if flag () then k 1 else 0";
+    let rest = "partial : Unit -> Int\npartial () =\n  handle ask () with\n    | ctl ask () k -> if flag () then k 1 else 0";
     insta::assert_snapshot!(diagnostics(rest), @"
     E3005 10:5 the continuation `k` of a `once` operation must be called or dropped
       10:5 this clause
-      10:14 `k` is bound here
+      10:18 `k` is bound here
       note: linear values, such as files, the continuation of a `once` operation and closures that capture one, must be used exactly once
       help: call `k` or `drop k` on every path
     ");
@@ -98,7 +98,7 @@ fn a_continuation_unused_on_some_paths_points_at_the_clause() {
 
 #[test]
 fn a_body_with_a_type_error_reports_no_linearity_errors() {
-    let rest = "broken : Unit -> Int\nbroken () =\n  handle ask () with\n    | ask () k ->\n        let j = k\n        j \"no\" + j 2";
+    let rest = "broken : Unit -> Int\nbroken () =\n  handle ask () with\n    | ctl ask () k ->\n        let j = k\n        j \"no\" + j 2";
     let checked = check(&format!("{HEADER}{rest}"));
     let codes: Vec<String> = checked
         .diagnostics
@@ -115,7 +115,7 @@ fn fix_text(rest: &str) -> String {
 
 #[test]
 fn the_fix_inserts_drop_before_the_last_statement_of_the_scope() {
-    let rest = "unused : Unit -> Int\nunused () =\n  handle ask () with\n    | ask () k ->\n        let j = k\n        0";
+    let rest = "unused : Unit -> Int\nunused () =\n  handle ask () with\n    | ctl ask () k ->\n        let j = k\n        0";
     insta::assert_snapshot!(fix_text(rest), @r#"
     E3003 11:13 insert `drop j`
       12:9..12:9 "drop j\n        "
@@ -124,7 +124,7 @@ fn the_fix_inserts_drop_before_the_last_statement_of_the_scope() {
 
 #[test]
 fn the_fix_inserts_drop_into_a_branch_that_is_a_block() {
-    let rest = "arm : Bool -> Int\narm b =\n  handle ask () with\n    | ask () k ->\n        let j = k\n        match b with\n          | True -> j 1\n          | False ->\n              let n = 0\n              n";
+    let rest = "arm : Bool -> Int\narm b =\n  handle ask () with\n    | ctl ask () k ->\n        let j = k\n        match b with\n          | True -> j 1\n          | False ->\n              let n = 0\n              n";
     insta::assert_snapshot!(fix_text(rest), @r#"
     E3003 11:13 insert `drop j`
       16:15..16:15 "drop j\n              "
@@ -133,19 +133,19 @@ fn the_fix_inserts_drop_into_a_branch_that_is_a_block() {
 
 #[test]
 fn no_fix_for_a_branch_on_one_line() {
-    let rest = "branch : Unit -> Int\nbranch () =\n  handle ask () with\n    | ask () k ->\n        let j = k\n        if flag () then j 1 else 0";
+    let rest = "branch : Unit -> Int\nbranch () =\n  handle ask () with\n    | ctl ask () k ->\n        let j = k\n        if flag () then j 1 else 0";
     assert_eq!(fix_text(rest), "");
 }
 
 #[test]
 fn no_fix_when_a_shadowing_binding_comes_first() {
-    let rest = "shadowed : Unit -> Int\nshadowed () =\n  handle ask () with\n    | ask () k ->\n        let j = k\n        let j = 1\n        j";
+    let rest = "shadowed : Unit -> Int\nshadowed () =\n  handle ask () with\n    | ctl ask () k ->\n        let j = k\n        let j = 1\n        j";
     assert_eq!(fix_text(rest), "");
 }
 
 #[test]
 fn no_fix_when_the_binding_is_the_last_statement() {
-    let rest = "last : Unit -> Unit\nlast () =\n  handle ask () with\n    | ask () k ->\n        let j = k\n    | return x -> ()";
+    let rest = "last : Unit -> Unit\nlast () =\n  handle ask () with\n    | ctl ask () k ->\n        let j = k\n    | return x -> ()";
     assert_eq!(fix_text(rest), "");
     assert!(diagnostics(rest).starts_with("E3003 11:13"));
 }
@@ -153,7 +153,7 @@ fn no_fix_when_the_binding_is_the_last_statement() {
 #[test]
 fn no_fix_when_a_comment_comes_first_on_the_line() {
     // `0` はブロックの列にあるので文の始まりだが、行の先頭から `0` までにコメントがあり、前に行を入れられない
-    let rest = "unused : Unit -> Int\nunused () =\n  handle ask () with\n    | ask () k ->\n        let j = k\n{- c -} 0";
+    let rest = "unused : Unit -> Int\nunused () =\n  handle ask () with\n    | ctl ask () k ->\n        let j = k\n{- c -} 0";
     assert_eq!(fix_text(rest), "");
     assert!(diagnostics(rest).starts_with("E3003 11:13"));
 }
@@ -161,7 +161,7 @@ fn no_fix_when_a_comment_comes_first_on_the_line() {
 #[test]
 fn the_fix_in_a_crlf_source_points_after_the_line_break() {
     // 字下げは `\r\n` の後から数え、`\r` を含めない。入れる行の改行は `\n` のままである
-    let rest = "unused : Unit -> Int\nunused () =\n  handle ask () with\n    | ask () k ->\n        let j = k\n        0";
+    let rest = "unused : Unit -> Int\nunused () =\n  handle ask () with\n    | ctl ask () k ->\n        let j = k\n        0";
     let checked = check(&format!("{HEADER}{rest}").replace('\n', "\r\n"));
     insta::assert_snapshot!(fixes(checked.files(), &checked.diagnostics), @r#"
     E3003 11:13 insert `drop j`
@@ -172,7 +172,7 @@ fn the_fix_in_a_crlf_source_points_after_the_line_break() {
 #[test]
 fn the_fix_copies_a_tab_indent() {
     // タブの字下げは E0006 の誤りだが、型検査は続く。fix は行の字下げをそのまま写す
-    let rest = "unused : Unit -> Int\nunused () =\n\thandle ask () with\n\t\t| ask () k ->\n\t\t\tlet j = k\n\t\t\t0";
+    let rest = "unused : Unit -> Int\nunused () =\n\thandle ask () with\n\t\t| ctl ask () k ->\n\t\t\tlet j = k\n\t\t\t0";
     insta::assert_snapshot!(fix_text(rest), @r#"
     E3003 11:8 insert `drop j`
       12:4..12:4 "drop j\n\t\t\t"
@@ -264,7 +264,7 @@ const TWO_OPS: &str = "effect Two where\n  one : Unit -> Unit\n  two : Unit -> U
 #[test]
 fn two_operation_clauses_capturing_one_file_report_once() {
     let text = format!(
-        "{TWO_OPS}main : Unit -> <IO> Unit\nmain () =\n  let f = Fs.open \"a.txt\"\n  handle one () with\n    | one () k -> k (Fs.close f)\n    | two () k -> k (Fs.close f)"
+        "{TWO_OPS}main : Unit -> <IO> Unit\nmain () =\n  let f = Fs.open \"a.txt\"\n  handle one () with\n    | ctl one () k -> k (Fs.close f)\n    | ctl two () k -> k (Fs.close f)"
     );
     let checked = check(&text);
     let codes: Vec<String> = checked
@@ -283,7 +283,7 @@ fn two_operation_clauses_capturing_one_file_report_once() {
 #[test]
 fn a_file_captured_by_the_body_and_the_return_clause() {
     let text = format!(
-        "{TWO_OPS}main : Unit -> <IO> Unit\nmain () =\n  let f = Fs.open \"a.txt\"\n  handle Fs.close f with\n    | one () k -> k ()\n    | two () k -> k ()\n    | return x -> Fs.close f"
+        "{TWO_OPS}main : Unit -> <IO> Unit\nmain () =\n  let f = Fs.open \"a.txt\"\n  handle Fs.close f with\n    | ctl one () k -> k ()\n    | ctl two () k -> k ()\n    | return x -> Fs.close f"
     );
     insta::assert_snapshot!(plain(&text), @r"
     E3002 11:19 `f` must be used exactly once, but it is used more than once
@@ -312,7 +312,7 @@ fn a_type_error_in_one_body_does_not_hide_linearity_errors_in_another() {
 
 #[test]
 fn the_fix_for_a_shadowed_value_goes_before_the_shadowing_let() {
-    let rest = "last : Unit -> Unit\nlast () =\n  handle ask () with\n    | ask () k ->\n        let j = k\n        let j = 1\n    | return x -> ()";
+    let rest = "last : Unit -> Unit\nlast () =\n  handle ask () with\n    | ctl ask () k ->\n        let j = k\n        let j = 1\n    | return x -> ()";
     insta::assert_snapshot!(fix_text(rest), @r#"
     E3003 11:13 insert `drop j`
       12:9..12:9 "drop j\n        "
@@ -322,7 +322,7 @@ fn the_fix_for_a_shadowed_value_goes_before_the_shadowing_let() {
 #[test]
 fn a_same_name_in_an_unrelated_lambda_keeps_the_fix() {
     // ラムダの引数の `j` は、`drop j` を入れる位置では見えないので、外側の `j` を隠さない
-    let rest = "lambda_name : Unit -> Int\nlambda_name () =\n  handle ask () with\n    | ask () k ->\n        let j = k\n        let f = fn j -> j + 1\n        f 0";
+    let rest = "lambda_name : Unit -> Int\nlambda_name () =\n  handle ask () with\n    | ctl ask () k ->\n        let j = k\n        let f = fn j -> j + 1\n        f 0";
     insta::assert_snapshot!(diagnostics(rest), @r"
     E3003 11:13 `j` must be used exactly once, but it is not used
       11:13 `j` is bound here
@@ -340,7 +340,7 @@ fn a_same_name_in_an_unrelated_lambda_keeps_the_fix() {
 fn a_shadowing_let_after_a_lambda_with_the_same_name() {
     // ラムダの引数の `j` を飛ばして、同じブロックの後の `let` を隠した束縛として指す。最後の文の位置ではその `let` が
     // 見えているので、fix は付けない
-    let rest = "skip : Unit -> Int\nskip () =\n  handle ask () with\n    | ask () k ->\n        let j = k\n        let f = fn j -> j + 1\n        let j = 1\n        f j";
+    let rest = "skip : Unit -> Int\nskip () =\n  handle ask () with\n    | ctl ask () k ->\n        let j = k\n        let f = fn j -> j + 1\n        let j = 1\n        f j";
     insta::assert_snapshot!(diagnostics(rest), @r"
     E3003 11:13 `j` must be used exactly once, but it is not used
       11:13 `j` is bound here
@@ -353,7 +353,7 @@ fn a_shadowing_let_after_a_lambda_with_the_same_name() {
 
 #[test]
 fn a_value_used_twice_inside_one_branch() {
-    let rest = "inbranch : Unit -> Int\ninbranch () =\n  handle ask () with\n    | ask () k ->\n        let j = k\n        if flag () then j 1 + j 2 else j 0";
+    let rest = "inbranch : Unit -> Int\ninbranch () =\n  handle ask () with\n    | ctl ask () k ->\n        let j = k\n        if flag () then j 1 + j 2 else j 0";
     insta::assert_snapshot!(diagnostics(rest), @"
     E3002 12:31 `j` must be used exactly once, but it is used more than once
       12:31 used again here
@@ -364,7 +364,7 @@ fn a_value_used_twice_inside_one_branch() {
 
 #[test]
 fn an_unused_lambda_parameter_points_at_the_end_of_the_lambda_body() {
-    let rest = "lambda_param : Unit -> Int\nlambda_param () =\n  handle ask () with\n    | ask () k ->\n        let f = fn j -> 0\n        f k";
+    let rest = "lambda_param : Unit -> Int\nlambda_param () =\n  handle ask () with\n    | ctl ask () k ->\n        let f = fn j -> 0\n        f k";
     insta::assert_snapshot!(diagnostics(rest), @r"
     E3003 11:20 `j` must be used exactly once, but it is not used
       11:20 `j` is bound here
@@ -376,7 +376,7 @@ fn an_unused_lambda_parameter_points_at_the_end_of_the_lambda_body() {
 
 #[test]
 fn an_unused_arm_pattern_variable_points_at_the_end_of_the_arm() {
-    let rest = "arm_var : Unit -> Int\narm_var () =\n  handle ask () with\n    | ask () k ->\n        match (k, 1) with\n          | (j, n) -> n";
+    let rest = "arm_var : Unit -> Int\narm_var () =\n  handle ask () with\n    | ctl ask () k ->\n        match (k, 1) with\n          | (j, n) -> n";
     insta::assert_snapshot!(diagnostics(rest), @r"
     E3003 12:14 `j` must be used exactly once, but it is not used
       12:14 `j` is bound here
@@ -389,24 +389,24 @@ fn an_unused_arm_pattern_variable_points_at_the_end_of_the_arm() {
 #[test]
 fn a_continuation_used_twice_on_one_path_is_a_double_use() {
     // 2回使う経路があれば、使わない経路があっても E3005 ではなく E3002 にする
-    let rest = "twice_or_none : Unit -> Int\ntwice_or_none () =\n  handle ask () with\n    | ask () k -> if flag () then k 1 + k 2 else 0";
+    let rest = "twice_or_none : Unit -> Int\ntwice_or_none () =\n  handle ask () with\n    | ctl ask () k -> if flag () then k 1 + k 2 else 0";
     insta::assert_snapshot!(diagnostics(rest), @"
-    E3002 10:41 `k` must be used exactly once, but it is used more than once
-      10:41 used again here
-      10:35 first used here
+    E3002 10:45 `k` must be used exactly once, but it is used more than once
+      10:45 used again here
+      10:39 first used here
       note: linear values, such as files, the continuation of a `once` operation and closures that capture one, must be used exactly once
     ");
 }
 
 #[test]
 fn no_fix_for_an_omitted_else() {
-    let rest = "omitted : Unit -> Int\nomitted () =\n  handle ask () with\n    | ask () k ->\n        let j = k\n        if flag () then drop j\n        0";
+    let rest = "omitted : Unit -> Int\nomitted () =\n  handle ask () with\n    | ctl ask () k ->\n        let j = k\n        if flag () then drop j\n        0";
     assert_eq!(fix_text(rest), "");
 }
 
 #[test]
 fn no_fix_when_the_last_statement_does_not_start_a_line() {
-    let rest = "same_line : Unit -> Int\nsame_line () =\n  handle ask () with\n    | ask () k ->\n        let j = k; 0";
+    let rest = "same_line : Unit -> Int\nsame_line () =\n  handle ask () with\n    | ctl ask () k ->\n        let j = k; 0";
     assert!(diagnostics(rest).starts_with("E3003 11:13"));
     assert_eq!(fix_text(rest), "");
 }
@@ -514,11 +514,11 @@ fn a_multi_operation_of_an_effect_with_once_operations() {
 
 #[test]
 fn a_once_continuation_kept_across_a_multi_operation_in_a_clause() {
-    let rest = "inner : Unit -> <Choice> Int\ninner () =\n  handle ask () with\n    | ask () k ->\n        let b = choose ()\n        k (if b then 1 else 2)";
+    let rest = "inner : Unit -> <Choice> Int\ninner () =\n  handle ask () with\n    | ctl ask () k ->\n        let b = choose ()\n        k (if b then 1 else 2)";
     insta::assert_snapshot!(carried(rest), @"
     E3006 24:17 `k` must be used exactly once, but it is kept alive across a call that may resume more than once
       24:17 this call may perform `choose`, a `multi` operation
-      23:14 `k` is bound here
+      23:18 `k` is bound here
       2:9 `choose` is declared `multi` here
       note: a continuation of a `multi` operation can be resumed more than once, and each resumption would use the value again
       help: finish using `k` before this call
@@ -651,17 +651,17 @@ fn a_file_passed_to_the_call_is_not_kept_across_it() {
 
 #[test]
 fn unrestricted_values_may_be_kept_across_a_multi_operation() {
-    let rest = "counted : Unit -> <Choice> Int\ncounted () =\n  let n = 1\n  let b = choose ()\n  n\n\nnested : Unit -> <Choice> Int\nnested () =\n  handle (if choose () then 1 else 2) with\n    | choose () k ->\n        let b = choose ()\n        k b";
+    let rest = "counted : Unit -> <Choice> Int\ncounted () =\n  let n = 1\n  let b = choose ()\n  n\n\nnested : Unit -> <Choice> Int\nnested () =\n  handle (if choose () then 1 else 2) with\n    | ctl choose () k ->\n        let b = choose ()\n        k b";
     assert_eq!(carried(rest), "");
 }
 
 #[test]
 fn a_clause_argument_kept_across_a_continuation_call() {
-    let rest = "use_then_choose : Fs.File -> <Use, Choice> Unit\nuse_then_choose f =\n  use_file f\n  let b = choose ()\n  ()\n\nresumed : Unit -> <Choice, IO> Unit\nresumed () =\n  let f = Fs.open \"a.txt\"\n  handle use_then_choose f with\n    | use_file g k ->\n        let r = k ()\n        Fs.close g\n        r";
+    let rest = "use_then_choose : Fs.File -> <Use, Choice> Unit\nuse_then_choose f =\n  use_file f\n  let b = choose ()\n  ()\n\nresumed : Unit -> <Choice, IO> Unit\nresumed () =\n  let f = Fs.open \"a.txt\"\n  handle use_then_choose f with\n    | ctl use_file g k ->\n        let r = k ()\n        Fs.close g\n        r";
     insta::assert_snapshot!(carried(rest), @"
     E3006 31:17 `g` must be used exactly once, but it is kept alive across a call that may resume more than once
       31:17 this call may perform `choose`, a `multi` operation
-      30:16 `g` is bound here
+      30:20 `g` is bound here
       2:9 `choose` is declared `multi` here
       note: a continuation of a `multi` operation can be resumed more than once, and each resumption would use the value again
       help: finish using `g` before this call
@@ -670,7 +670,7 @@ fn a_clause_argument_kept_across_a_continuation_call() {
 
 #[test]
 fn a_file_kept_across_a_handle_whose_body_performs_a_multi_operation() {
-    let rest = "across_handle : Unit -> <Choice, IO> Unit\nacross_handle () =\n  let f = Fs.open \"a.txt\"\n  let n =\n    handle (if choose () then ask () else 0) with\n      | ask () k -> k 1\n  Fs.close f";
+    let rest = "across_handle : Unit -> <Choice, IO> Unit\nacross_handle () =\n  let f = Fs.open \"a.txt\"\n  let n =\n    handle (if choose () then ask () else 0) with\n      | ctl ask () k -> k 1\n  Fs.close f";
     insta::assert_snapshot!(carried(rest), @"
     E3006 24:5 `f` must be used exactly once, but it is kept alive across a call that may resume more than once
       24:5 this handle may perform `choose`, a `multi` operation
@@ -685,7 +685,7 @@ fn a_file_kept_across_a_handle_whose_body_performs_a_multi_operation() {
 /// (docs/spec/effects.md の「handler の意味」)。
 #[test]
 fn a_return_clause_capture_under_an_outer_multi_operation() {
-    let rest = "returned : Unit -> <Choice, IO> Unit\nreturned () =\n  let f = Fs.open \"a.txt\"\n  handle (if choose () then ask () else 0) with\n    | ask () k -> k 1\n    | return n -> Fs.close f";
+    let rest = "returned : Unit -> <Choice, IO> Unit\nreturned () =\n  let f = Fs.open \"a.txt\"\n  handle (if choose () then ask () else 0) with\n    | ctl ask () k -> k 1\n    | return n -> Fs.close f";
     insta::assert_snapshot!(carried(rest), @"
     E3006 23:3 `f` must be used exactly once, but it is kept alive across a call that may resume more than once
       23:3 this handle may perform `choose`, a `multi` operation
@@ -698,7 +698,7 @@ fn a_return_clause_capture_under_an_outer_multi_operation() {
 
 #[test]
 fn a_file_may_be_kept_across_a_handle_and_a_continuation_call_without_multi() {
-    let rest = "fine_return : Unit -> <IO> Unit\nfine_return () =\n  let f = Fs.open \"a.txt\"\n  handle ask () with\n    | ask () k -> k 1\n    | return n -> Fs.close f\n\nfine_resume : Unit -> <IO> Unit\nfine_resume () =\n  let f = Fs.open \"a.txt\"\n  handle use_file f with\n    | use_file g k ->\n        let r = k ()\n        Fs.close g\n        r";
+    let rest = "fine_return : Unit -> <IO> Unit\nfine_return () =\n  let f = Fs.open \"a.txt\"\n  handle ask () with\n    | ctl ask () k -> k 1\n    | return n -> Fs.close f\n\nfine_resume : Unit -> <IO> Unit\nfine_resume () =\n  let f = Fs.open \"a.txt\"\n  handle use_file f with\n    | ctl use_file g k ->\n        let r = k ()\n        Fs.close g\n        r";
     assert_eq!(carried(rest), "");
 }
 
@@ -793,7 +793,7 @@ fn a_polymorphic_function_may_keep_unrestricted_values_or_avoid_multi() {
 
 #[test]
 fn a_carry_over_whose_row_has_no_known_multi_operation() {
-    let rest = "ping : (Unit -> <e> Unit) -> Int -> <IO | e> Unit\nping action n =\n  let f = Fs.open \"a.txt\"\n  action ()\n  Fs.close f\n  pong n\n\npong : Int -> <IO | e> Unit\npong n =\n  handle ping chooser n with\n    | choose () k -> k True\n\nchooser : Unit -> <Choice> Unit\nchooser () =\n  let b = choose ()\n  ()";
+    let rest = "ping : (Unit -> <e> Unit) -> Int -> <IO | e> Unit\nping action n =\n  let f = Fs.open \"a.txt\"\n  action ()\n  Fs.close f\n  pong n\n\npong : Int -> <IO | e> Unit\npong n =\n  handle ping chooser n with\n    | ctl choose () k -> k True\n\nchooser : Unit -> <Choice> Unit\nchooser () =\n  let b = choose ()\n  ()";
     insta::assert_snapshot!(carried(rest), @"
     E3006 23:3 `f` must be used exactly once, but it is kept alive across a call that may resume more than once
       23:3 this call may perform `multi` operations
@@ -805,7 +805,7 @@ fn a_carry_over_whose_row_has_no_known_multi_operation() {
 
 #[test]
 fn an_omitted_return_clause_discards_a_linear_state() {
-    let rest = "omitted : Unit -> <IO> Int\nomitted () =\n  handle ask () from Fs.open \"a.txt\" with\n    | ask () k f -> k 1 f";
+    let rest = "omitted : Unit -> <IO> Int\nomitted () =\n  handle ask () from Fs.open \"a.txt\" with\n    | ctl ask () k f -> k 1 f";
     insta::assert_snapshot!(diagnostics(rest), @"
     E3004 9:22 the state of this handler is discarded by the omitted `return` clause
       9:22 this state has a linear type `File`
@@ -817,7 +817,7 @@ fn an_omitted_return_clause_discards_a_linear_state() {
 /// 書いた `return` の節を HIR が拒否すると、本体に誤りの跡が残り、使用回数のパスは由来を記録しない。E3004 を連鎖させない。
 #[test]
 fn a_rejected_return_clause_does_not_report_the_state_again() {
-    let rest = "rejected : Unit -> <IO> Int\nrejected () =\n  handle ask () from Fs.open \"a.txt\" with\n    | ask () k f -> k 1 f\n    | return x -> x";
+    let rest = "rejected : Unit -> <IO> Int\nrejected () =\n  handle ask () from Fs.open \"a.txt\" with\n    | ctl ask () k f -> k 1 f\n    | return x -> x";
     let checked = check(&format!("{HEADER}{rest}"));
     let codes: Vec<String> = checked
         .diagnostics
@@ -829,7 +829,7 @@ fn a_rejected_return_clause_does_not_report_the_state_again() {
 
 #[test]
 fn a_clause_that_drops_k_must_still_consume_a_linear_state() {
-    let rest = "dropped : Unit -> <IO> Int\ndropped () =\n  handle ask () from Fs.open \"a.txt\" with\n    | ask () k f ->\n        drop k\n        0\n    | return x f ->\n        Fs.close f\n        x";
+    let rest = "dropped : Unit -> <IO> Int\ndropped () =\n  handle ask () from Fs.open \"a.txt\" with\n    | ctl ask () k f ->\n        drop k\n        0\n    | return x f ->\n        Fs.close f\n        x";
     let checked = check(&format!("{HEADER}{rest}"));
     let codes: Vec<String> = checked
         .diagnostics
@@ -841,7 +841,7 @@ fn a_clause_that_drops_k_must_still_consume_a_linear_state() {
 
 #[test]
 fn a_linear_state_is_kept_across_a_multi_operation_of_the_outer_row() {
-    let rest = "kept : Unit -> <Choose, IO> Int\nkept () =\n  handle ask () from Fs.open \"a.txt\" with\n    | ask () k f -> k 1 f\n    | return x f ->\n        Fs.close f\n        x";
+    let rest = "kept : Unit -> <Choose, IO> Int\nkept () =\n  handle ask () from Fs.open \"a.txt\" with\n    | ctl ask () k f -> k 1 f\n    | return x f ->\n        Fs.close f\n        x";
     let text = format!("effect Choose where\n  multi choose : Unit -> Bool\n\n{HEADER}{rest}");
     let checked = check(&text);
     insta::assert_snapshot!(full(checked.files(), &checked.diagnostics), @"
@@ -856,7 +856,7 @@ fn a_linear_state_is_kept_across_a_multi_operation_of_the_outer_row() {
 
 #[test]
 fn values_held_while_the_initial_state_is_evaluated_are_carried() {
-    let rest = "early : Unit -> <Choose, IO> Int\nearly () =\n  let f = Fs.open \"a.txt\"\n  let n =\n    handle ask () from (if choose () then 1 else 2) with\n      | ask () k st -> k st st\n      | return x _ -> x\n  Fs.close f\n  n";
+    let rest = "early : Unit -> <Choose, IO> Int\nearly () =\n  let f = Fs.open \"a.txt\"\n  let n =\n    handle ask () from (if choose () then 1 else 2) with\n      | ctl ask () k st -> k st st\n      | return x _ -> x\n  Fs.close f\n  n";
     let text = format!("effect Choose where\n  multi choose : Unit -> Bool\n\n{HEADER}{rest}");
     let checked = check(&text);
     let codes: Vec<String> = checked
@@ -873,7 +873,7 @@ fn values_held_while_the_initial_state_is_evaluated_are_carried() {
 /// 初期値の `choose ()` をまたぐ (docs/spec/expressions.md の「パラメータ付き handler」)。
 #[test]
 fn a_value_used_only_by_the_handled_body_is_carried_across_the_initial_state() {
-    let rest = "use_file : Fs.File -> <Ask, IO> Int\nuse_file f =\n  Fs.close f\n  ask ()\n\nearly : Unit -> <Choose, IO> Int\nearly () =\n  let f = Fs.open \"a.txt\"\n  handle use_file f from (if choose () then 1 else 2) with\n    | ask () k st -> k st st\n    | return x _ -> x";
+    let rest = "use_file : Fs.File -> <Ask, IO> Int\nuse_file f =\n  Fs.close f\n  ask ()\n\nearly : Unit -> <Choose, IO> Int\nearly () =\n  let f = Fs.open \"a.txt\"\n  handle use_file f from (if choose () then 1 else 2) with\n    | ctl ask () k st -> k st st\n    | return x _ -> x";
     let text = format!("effect Choose where\n  multi choose : Unit -> Bool\n\n{HEADER}{rest}");
     let checked = check(&text);
     insta::assert_snapshot!(full(checked.files(), &checked.diagnostics), @"
@@ -890,7 +890,7 @@ fn a_value_used_only_by_the_handled_body_is_carried_across_the_initial_state() {
 /// (docs/spec/linearity.md)。
 #[test]
 fn a_linear_state_does_not_cross_the_multi_operation_the_handler_handles() {
-    let rest = "main : Unit -> <IO> Unit\nmain () =\n  let n =\n    handle (if choose () then 1 else 2) from Fs.open \"a.txt\" with\n      | choose () k f -> k True f\n      | return x f ->\n          Fs.close f\n          x\n  println (show n)";
+    let rest = "main : Unit -> <IO> Unit\nmain () =\n  let n =\n    handle (if choose () then 1 else 2) from Fs.open \"a.txt\" with\n      | ctl choose () k f -> k True f\n      | return x f ->\n          Fs.close f\n          x\n  println (show n)";
     let text = format!("effect Choose where\n  multi choose : Unit -> Bool\n\n{HEADER}{rest}");
     let checked = check(&text);
     insta::assert_snapshot!(full(checked.files(), &checked.diagnostics), @"");
@@ -982,7 +982,7 @@ fn a_captured_type_variable_becomes_unr() {
 
 #[test]
 fn a_once_continuation_fits_a_once_field() {
-    let text = "data Paused =\n  | Paused (once Int -> <IO> Paused)\n  | Finished\n\neffect Ask where\n  ask : Unit -> Int\n\npause : (Unit -> <Ask, IO> Unit) -> <IO> Paused\npause body =\n  handle body () with\n    | ask () k -> Paused k\n    | return () -> Finished";
+    let text = "data Paused =\n  | Paused (once Int -> <IO> Paused)\n  | Finished\n\neffect Ask where\n  ask : Unit -> Int\n\npause : (Unit -> <Ask, IO> Unit) -> <IO> Paused\npause body =\n  handle body () with\n    | ctl ask () k -> Paused k\n    | return () -> Finished";
     assert_eq!(check_short(text), Vec::<String>::new());
 }
 

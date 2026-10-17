@@ -434,6 +434,18 @@ pub struct Body {
     pub local_functions: ArenaMap<LocalId, ExprId>,
     /// `local_functions` の逆で、ラムダからそれを定義する名前への対応。ラムダの本体が自分を参照するかを調べるために使う。
     pub defining: ArenaMap<ExprId, LocalId>,
+    /// 下ろした `fn` の節。型検査が、本体の型の誤りを隠れた `k` の引数の誤りではなく「`fn` の節の本体」の誤りとして
+    /// 報告するために使う (docs/spec/expressions.md の「handler」)。
+    pub fn_clauses: Vec<FnClause>,
+}
+
+/// `ctl` の節の形に下ろした `fn` の節の記録。`k` は隠れた継続 `$k`、`body` は書いた本体の式 (下ろした節の本体のブロックの
+/// `let` の右辺)、`range` は節の範囲である。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct FnClause {
+    pub k: LocalId,
+    pub body: ExprId,
+    pub range: TextRange,
 }
 
 impl Body {

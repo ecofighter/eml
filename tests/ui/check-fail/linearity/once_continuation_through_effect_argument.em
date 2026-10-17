@@ -19,9 +19,9 @@ run b =
   match b with
     | Inc inc ->
         handle ask () with
-          | ask () k ->
+          | ctl ask () k ->
               handle seq (put inc) (seq (put (fn x -> k x)) 0) with
-                | put f k2 -> f 1 + f 2 + k2 ()
+                | ctl put f k2 -> f 1 + f 2 + k2 ()
 
 main : Unit -> <IO> Unit
 main () = println (show (run (Inc (fn x -> x + 1))))

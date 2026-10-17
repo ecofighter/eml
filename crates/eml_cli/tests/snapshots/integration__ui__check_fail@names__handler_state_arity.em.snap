@@ -4,20 +4,20 @@ expression: rendered
 input_file: tests/ui/check-fail/names/handler_state_arity.em
 ---
 [E1010] Error: the clause for `ask` takes 3 parameters, but this one has 2
-    ╭─[ check-fail/names/handler_state_arity.em:11:7 ]
+    ╭─[ check-fail/names/handler_state_arity.em:11:11 ]
     │
- 11 │     | ask () k -> k 1 0
-    │       ─┬─  
-    │        ╰─── this clause
+ 11 │     | ctl ask () k -> k 1 0
+    │           ─┬─  
+    │            ╰─── this clause
     │ 
     │ Note: the clause takes the arguments of `ask`, the continuation `k`, and then the state
 ────╯
 [E1010] Error: the clause for `fail` takes 2 parameters, but this one has 1
-    ╭─[ check-fail/names/handler_state_arity.em:17:7 ]
+    ╭─[ check-fail/names/handler_state_arity.em:17:11 ]
     │
- 17 │     | fail () -> 0
-    │       ──┬─  
-    │         ╰─── this clause
+ 17 │     | ctl fail () -> 0
+    │           ──┬─  
+    │             ╰─── this clause
     │ 
     │ Note: `fail` is a `never` operation, so its clause takes the arguments of the operation and then the state
 ────╯
@@ -31,9 +31,9 @@ input_file: tests/ui/check-fail/names/handler_state_arity.em
     │ Note: the second parameter receives the state of the handler
 ────╯
 [E2001] Error: `k` takes 2 arguments but 3 were given
-    ╭─[ check-fail/names/handler_state_arity.em:29:29 ]
+    ╭─[ check-fail/names/handler_state_arity.em:29:33 ]
     │
- 29 │     | ask () k st -> k 1 st st
-    │                             ─┬  
-    │                              ╰── unexpected argument
+ 29 │     | ctl ask () k st -> k 1 st st
+    │                                 ─┬  
+    │                                  ╰── unexpected argument
 ────╯

@@ -5,4 +5,4 @@ effect Ask where
 twice : Unit -> Int
 twice () =
   handle ask () with
-    | ask () k -> k 1 + k 2
+    | ctl ask () k -> k 1 + k 2

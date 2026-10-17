@@ -18,9 +18,9 @@ run () =
 main : Unit -> <IO> Unit
 main () =
   handle run () with
-    | log level message k ->
+    | ctl log level message k ->
         println (level ++ ": " ++ message)
         k ()
-    | note message k ->
+    | ctl note message k ->
         println ("note: " ++ message)
         k ()

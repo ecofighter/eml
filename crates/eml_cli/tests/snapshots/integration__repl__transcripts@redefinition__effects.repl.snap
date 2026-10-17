@@ -12,7 +12,7 @@ input_file: crates/eml_cli/tests/repl/redefinition/effects.repl
 > run_old : Unit -> Int
 . run_old () =
 .   handle asker () with
-.     | ask () k -> k 10
+.     | ctl ask () k -> k 10
 .
 > effect Ask where
 .   ask : Unit -> Int
@@ -20,13 +20,13 @@ input_file: crates/eml_cli/tests/repl/redefinition/effects.repl
 > run_old ()
 11
 > handle asker () with
-.   | ask () k -> k 20
+.   | ctl ask () k -> k 20
 .
 E2015 <input 6> 1:8 `asker` performs `Ask#1`, but an input may perform only `IO`
   <input 6> 1:8 this call performs `Ask#1`
   help: handle `Ask#1` inside the input, as in `handle … with …`
 > handle ask () * 2 with
-.   | ask () k -> k 20
+.   | ctl ask () k -> k 20
 .
 40
 --- close ---

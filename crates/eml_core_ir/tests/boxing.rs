@@ -35,7 +35,7 @@ fn shared_wrappers_are_never_called_directly_and_become_uniform_in_place() {
     // `op$`、`con$`、`cont$` は値と部分適用でだけ使われ、直接は呼ばれない。そのため box の挿入はいつもその場で一様にし、
     // `f$boxed` を足さない。どのプログラムでも同じコードになるので、名前で照らす追記で使い回せる
     // (docs/spec/lir.md の「位置の規則」)
-    let text = "data Pair = | P Int Int\n\neffect Ask where\n  ask : Int -> Int\n\npair_with : (Int -> Int -> Pair) -> Pair\npair_with f = f 1 2\n\nfirst : Pair -> Int\nfirst p = match p with\n  | P a _ -> a\n\nrun : Unit -> <Ask> Int\nrun () =\n  let g = ask\n  let h = P 3\n  first (pair_with P) + first (h 4) + g 1\n\nmain : Unit -> <IO> Unit\nmain () =\n  let r = handle run () with\n            | ask n k ->\n              let resume = k\n              resume (n + 1)\n  println (show r)";
+    let text = "data Pair = | P Int Int\n\neffect Ask where\n  ask : Int -> Int\n\npair_with : (Int -> Int -> Pair) -> Pair\npair_with f = f 1 2\n\nfirst : Pair -> Int\nfirst p = match p with\n  | P a _ -> a\n\nrun : Unit -> <Ask> Int\nrun () =\n  let g = ask\n  let h = P 3\n  first (pair_with P) + first (h 4) + g 1\n\nmain : Unit -> <IO> Unit\nmain () =\n  let r = handle run () with\n            | ctl ask n k ->\n              let resume = k\n              resume (n + 1)\n  println (show r)";
     let program = eml_test_support::lir(text);
     let names: Vec<&str> = program
         .functions
@@ -276,7 +276,7 @@ fn a_monomorphic_int_loop_has_no_box() {
 #[test]
 fn a_function_that_fails_with_a_never_operation_keeps_its_scalar_ret() {
     // `never` の操作の `clause` は戻らないので、T3 は見ない。結果も受け直さない
-    let text = "effect Fail where\n  never fail : String -> a\n\ncheck_positive : Int -> <Fail> Int\ncheck_positive n =\n  if n > 0 then n else fail \"not positive\"\n\nmain : Unit -> <IO> Unit\nmain () =\n  let r = handle check_positive 1 with\n    | fail message -> 0\n  println (show r)";
+    let text = "effect Fail where\n  never fail : String -> a\n\ncheck_positive : Int -> <Fail> Int\ncheck_positive n =\n  if n > 0 then n else fail \"not positive\"\n\nmain : Unit -> <IO> Unit\nmain () =\n  let r = handle check_positive 1 with\n    | ctl fail message -> 0\n  println (show r)";
     insta::assert_snapshot!(function(&lir_text(text, eml_lir::Pass::Boxing), "check_positive"), @r#"
     yields fn check_positive(n.0: int) -> int {
       let t.1: enum = extern "Prelude.Ord Int.>"(n.0, 0)
@@ -311,7 +311,7 @@ fn a_function_that_fails_with_a_never_operation_keeps_its_scalar_ret() {
 fn a_value_lambda_that_fails_ends_in_a_tail_never_clause() {
     // その場で一様にしたラムダでも、`never` の操作の `clause` の束縛は `tobj` に変換せずに返す。束縛の使いには制御が
     // 届かないからである。縮約は、その `return` を末尾呼び出しにする
-    let text = "effect Fail where\n  never fail : String -> a\n\napply_to : (Int -> <e> Int) -> Int -> <e> Int\napply_to f x = f x\n\nmain : Unit -> <IO> Unit\nmain () =\n  let r = handle apply_to (fn n -> if n > 0 then n else fail \"neg\") 1 with\n    | fail message -> 0\n  println (show r)";
+    let text = "effect Fail where\n  never fail : String -> a\n\napply_to : (Int -> <e> Int) -> Int -> <e> Int\napply_to f x = f x\n\nmain : Unit -> <IO> Unit\nmain () =\n  let r = handle apply_to (fn n -> if n > 0 then n else fail \"neg\") 1 with\n    | ctl fail message -> 0\n  println (show r)";
     insta::assert_snapshot!(function(&lir_text(text, eml_lir::Pass::Boxing), "main$lambda0"), @r#"
     internal yields fn main$lambda0(n.6: tobj) -> tobj {
       let n.0: int = unbox n.6
@@ -394,7 +394,7 @@ fn t3_raises_the_ret_along_a_chain_of_tail_calls() {
 fn a_tail_call_off_any_loop_may_stay_an_ordinary_call() {
     // handle の本体は `tobj` を返す一様な関数になり、`Int` を返す `answer` の結果を `box` してから返す。この呼び出しは
     // 末尾呼び出しにならないが、関数の値を通るループの上にないので、積むフレームは有界である
-    let text = "effect Ask where\n  ask : Unit -> Int\n\nanswer : Unit -> <Ask> Int\nanswer () = ask () + 1\n\nmain : Unit -> <IO> Unit\nmain () =\n  let r = handle answer () with\n    | ask () k -> k 1\n  println (show r)";
+    let text = "effect Ask where\n  ask : Unit -> Int\n\nanswer : Unit -> <Ask> Int\nanswer () = ask () + 1\n\nmain : Unit -> <IO> Unit\nmain () =\n  let r = handle answer () with\n    | ctl ask () k -> k 1\n  println (show r)";
     insta::assert_snapshot!(function(&lir_text(text, eml_lir::Pass::Contract), "main$handle0"), @"
     internal yields fn main$handle0(p.0: unit) -> tobj {
       let t.1: int = call answer(())

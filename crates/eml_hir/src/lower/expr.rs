@@ -36,6 +36,7 @@ pub(super) struct BodyLowering<'a> {
     use_lambdas: HashSet<ExprId>,
     local_functions: ArenaMap<LocalId, ExprId>,
     defining: ArenaMap<ExprId, LocalId>,
+    pub(super) fn_clauses: Vec<FnClause>,
     /// 内側の束縛ほど後ろにある。後の `let` が前の同じ名前を隠す (docs/spec/expressions.md)。
     pub(super) scope: Vec<(String, LocalId)>,
     /// 今変換しているパターンの組が `scope` に積み始めた位置。組の中で同じ名前を2回束縛したら E1017 にする。
@@ -85,6 +86,7 @@ impl<'a> BodyLowering<'a> {
             use_lambdas: HashSet::new(),
             local_functions: ArenaMap::default(),
             defining: ArenaMap::default(),
+            fn_clauses: Vec::new(),
             scope: Vec::new(),
             group_start: 0,
         }
@@ -142,6 +144,7 @@ impl<'a> BodyLowering<'a> {
             use_lambdas: self.use_lambdas,
             local_functions: self.local_functions,
             defining: self.defining,
+            fn_clauses: self.fn_clauses,
         }
     }
 

@@ -5,6 +5,6 @@ effect Ask where
 twice : Unit -> Int
 twice () =
   handle ask () with
-    | ask () k ->
+    | ctl ask () k ->
         let f = fn x -> k x
         f 1 + f 2

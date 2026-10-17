@@ -20,17 +20,17 @@ describe () =
 labelled : Unit -> <Choice> String
 labelled () =
   handle describe () with
-    | name () k -> k "bits"
+    | ctl name () k -> k "bits"
 
 every : Unit -> String
 every () =
   handle labelled () with
-    | choose () k -> k False ++ " " ++ k True
+    | ctl choose () k -> k False ++ " " ++ k True
 
 paths : Unit -> Int
 paths () =
   handle labelled () with
-    | choose () k -> k False + k True
+    | ctl choose () k -> k False + k True
     | return s -> 1
 
 main : Unit -> <IO> Unit

@@ -20,7 +20,7 @@ run_next () =
 async : (Unit -> <Async, Queue, IO> Unit) -> <Queue, IO> Unit
 async body =
   handle body () with
-    | suspend () k ->
+    | ctl suspend () k ->
         enqueue (Task k)
         run_next ()
     | return () -> run_next ()
@@ -53,8 +53,8 @@ schedule () =
 main : Unit -> <IO> Unit
 main () =
   handle schedule () from [] with
-    | enqueue task k queue -> k () (List.append queue [task])
-    | dequeue () k queue ->
+    | ctl enqueue task k queue -> k () (List.append queue [task])
+    | ctl dequeue () k queue ->
         match queue with
           | [] -> k None []
           | task :: rest -> k (Some task) rest

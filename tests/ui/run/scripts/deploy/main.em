@@ -84,18 +84,18 @@ pipeline config =
 real_run : (Unit -> <Run, IO | e> a) -> <IO | e> a
 real_run body =
   handle body () with
-    | run cmd k -> k (try_io (fn () -> Proc.run "sh" ["-c", cmd]))
+    | ctl run cmd k -> k (try_io (fn () -> Proc.run "sh" ["-c", cmd]))
 
 dry_run : (Unit -> <Run, IO | e> a) -> <IO | e> a
 dry_run body =
   handle body () with
-    | run _ k -> k (Ok 0)
+    | ctl run _ k -> k (Ok 0)
 
 -- 記録を標準出力に書きながら集める。集めた行は記録の順に並ぶ
 collecting : (Unit -> <Log, IO | e> a) -> <IO | e> (a, List String)
 collecting body =
   handle body () from Nil with
-    | log line k lines ->
+    | ctl log line k lines ->
       println line
       k () (line :: lines)
     | return x lines -> (x, List.reverse lines)

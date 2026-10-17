@@ -11,6 +11,6 @@ main : Unit -> <IO> Unit
 main () =
   let f = Fs.open "input.txt"
   handle read_after f with
-    | ask () k ->
+    | ctl ask () k ->
         drop k
         println "dropped"

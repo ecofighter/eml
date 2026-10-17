@@ -4,11 +4,11 @@ expression: rendered
 input_file: tests/ui/check-fail/types/linear_function_in_unr_field.em
 ---
 [E2001] Error: mismatched types
-    ╭─[ check-fail/types/linear_function_in_unr_field.em:12:23 ]
+    ╭─[ check-fail/types/linear_function_in_unr_field.em:12:27 ]
     │
- 12 │     | ask () k -> Box k
-    │                   ─┬─ ┬  
-    │                    ╰───── argument 1 of `Box`
-    │                       │  
-    │                       ╰── expected `Int -> Box`, found `once Int -> Box`
+ 12 │     | ctl ask () k -> Box k
+    │                       ─┬─ ┬  
+    │                        ╰───── argument 1 of `Box`
+    │                           │  
+    │                           ╰── expected `Int -> Box`, found `once Int -> Box`
 ────╯

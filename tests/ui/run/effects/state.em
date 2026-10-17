@@ -13,8 +13,8 @@ main : Unit -> <IO> Unit
 main () =
   let (result, final) =
     handle count () from 5 with
-      | get () k st -> k st st
-      | put n k _ -> k () n
+      | ctl get () k st -> k st st
+      | ctl put n k _ -> k () n
       | return x st -> (x, st)
   println (show result)
   println (show final)

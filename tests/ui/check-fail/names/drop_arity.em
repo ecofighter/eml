@@ -5,6 +5,6 @@ effect Ask where
 two : Unit -> Int
 two () =
   handle ask () with
-    | ask () k ->
+    | ctl ask () k ->
         drop k 1
         0

@@ -13,7 +13,7 @@ effect Keep where
 step : Unit -> R
 step () =
   handle Done (ask () + 1) with
-    | ask () k -> Paused k
+    | ctl ask () k -> Paused k
 
 body : Unit -> <Keep> Int
 body () =
@@ -29,7 +29,7 @@ main : Unit -> <IO> Unit
 main () =
   let r =
     handle body () from Done 0 with
-      | stash v k _ -> k () v
-      | fetch () k st -> k st st
+      | ctl stash v k _ -> k () v
+      | ctl fetch () k st -> k st st
       | return x _ -> x
   println (show r)

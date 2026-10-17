@@ -12,7 +12,7 @@ main : Unit -> <IO> Unit
 main () =
   let (_, final) =
     handle count 100000 from 0 with
-      | get () k st -> k st st
-      | put n k _ -> k () n
+      | ctl get () k st -> k st st
+      | ctl put n k _ -> k () n
       | return x st -> (x, st)
   println (show final)

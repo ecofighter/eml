@@ -603,19 +603,19 @@ fn a_local_function_is_monomorphic_and_recursive() {
 #[test]
 fn a_pure_local_function_is_called_inside_and_outside_a_handler() {
     // row を閉じるので、どちらを先に呼んでも通る
-    let text = "effect Ask where\n  ask : Unit -> Int\n\nmain : Unit -> <IO> Unit\nmain () =\n  let inc x = x + 1\n  let n = handle inc (ask ()) with | ask () k -> k 1\n  println (show (inc n))";
+    let text = "effect Ask where\n  ask : Unit -> Int\n\nmain : Unit -> <IO> Unit\nmain () =\n  let inc x = x + 1\n  let n = handle inc (ask ()) with | ctl ask () k -> k 1\n  println (show (inc n))";
     assert_eq!(check_short(text), Vec::<String>::new());
 }
 
 #[test]
 fn a_local_function_recurses_under_its_own_handler() {
-    let text = "effect Ask where\n  ask : Unit -> Int\n\ncount : Int -> <IO> Int\ncount n =\n  let go k =\n    if k == 0 then 0\n    else handle ask () + go (k - 1) with | ask () r -> r 1\n  go n\n\nmain : Unit -> <IO> Unit\nmain () = println (show (count 3))";
+    let text = "effect Ask where\n  ask : Unit -> Int\n\ncount : Int -> <IO> Int\ncount n =\n  let go k =\n    if k == 0 then 0\n    else handle ask () + go (k - 1) with | ctl ask () r -> r 1\n  go n\n\nmain : Unit -> <IO> Unit\nmain () = println (show (count 3))";
     assert_eq!(check_short(text), Vec::<String>::new());
 }
 
 #[test]
 fn a_local_function_value_is_opened() {
-    let text = "effect Ask where\n  ask : Unit -> Int\n\nmain : Unit -> <IO> Unit\nmain () =\n  let inc x = x + 1\n  let ys = handle List.map inc [ask ()] with | ask () k -> k 1\n  println (show ys)";
+    let text = "effect Ask where\n  ask : Unit -> Int\n\nmain : Unit -> <IO> Unit\nmain () =\n  let inc x = x + 1\n  let ys = handle List.map inc [ask ()] with | ctl ask () k -> k 1\n  println (show ys)";
     assert_eq!(check_short(text), Vec::<String>::new());
 }
 
@@ -634,7 +634,7 @@ fn an_undetermined_projection_in_a_local_function_is_e2013() {
 #[test]
 fn a_higher_order_local_function_takes_the_effect_of_its_argument() {
     // `app` の row の末尾は引数 `f` の型に現れるので閉じず、最初の呼び出しの位置で `Ask` を含む row に決まる
-    let text = "effect Ask where\n  ask : Unit -> Int\n\nmain : Unit -> <IO> Unit\nmain () =\n  let app f = f ()\n  let n = handle app (fn () -> ask ()) with | ask () k -> k 1\n  println (show n)";
+    let text = "effect Ask where\n  ask : Unit -> Int\n\nmain : Unit -> <IO> Unit\nmain () =\n  let app f = f ()\n  let n = handle app (fn () -> ask ()) with | ctl ask () k -> k 1\n  println (show n)";
     assert_eq!(check_short(text), Vec::<String>::new());
 }
 

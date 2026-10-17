@@ -13,9 +13,9 @@ use_it () =
 main : Unit -> <IO> Unit
 main () =
   handle use_it () with
-    | take () k -> k (Fs.open "input.txt")
+    | ctl take () k -> k (Fs.open "input.txt")
   handle use_it () with
-    | take () k ->
+    | ctl take () k ->
       let u = k (Fs.open "input.txt")
       println "resumed"
       u

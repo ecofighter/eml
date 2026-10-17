@@ -309,12 +309,12 @@ fn the_newest_definer_stops_the_lookup_whatever_its_kind() {
             (2, "ask : Int -> Int\nask x = x"),
             (
                 3,
-                "f : Unit -> Int\nf () = handle 1 with\n  | ask () k -> k 1",
+                "f : Unit -> Int\nf () = handle 1 with\n  | ctl ask () k -> k 1",
             ),
         ],
         &[],
     );
-    insta::assert_snapshot!(lowered.diagnostics.join("\n"), @"<input 3> 3:5 E1001 cannot find effect operation `ask`");
+    insta::assert_snapshot!(lowered.diagnostics.join("\n"), @"<input 3> 3:9 E1001 cannot find effect operation `ask`");
     // クラス `C` を型に定義し直した後の instance の頭は、古いクラスを見つけない
     let lowered = lower(
         &[

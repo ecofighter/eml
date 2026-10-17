@@ -15,7 +15,7 @@ run () =
   let direct = boxed (k0 (lambda0 10))
   let as_values = apply boxed (apply k0 (apply lambda0 10))
   let h = handle boxed (ask ()) + k0 1 with
-    | ask () k -> k (lambda0 5)
+    | ctl ask () k -> k (lambda0 5)
   let l = (fn x -> lambda0 x) 4
   direct + as_values + h + l
 

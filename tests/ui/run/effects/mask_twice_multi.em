@@ -20,11 +20,11 @@ flip () = if choose () then get () else 0
 main : Unit -> <IO> Unit
 main () =
   let r = handle (handle (handle twice flip flip from 100 with
-                            | get () k st -> k st st
-                            | put n k _ -> k () n
+                            | ctl get () k st -> k st st
+                            | ctl put n k _ -> k () n
                             | return x _ -> x) from 1 with
-                    | get () k st -> k st st
-                    | put n k _ -> k () n
+                    | ctl get () k st -> k st st
+                    | ctl put n k _ -> k () n
                     | return x _ -> show x) with
-            | choose () k -> k True ++ " " ++ k False
+            | ctl choose () k -> k True ++ " " ++ k False
   println r

@@ -122,7 +122,7 @@ fn a_reference_classifies_each_row_variable_against_the_enclosing_definition() {
 
 #[test]
 fn an_operation_row_variable_in_a_clause_always_yields() {
-    let text = "effect Run where\n  run : (Unit -> <e> Int) -> Int\n\nbody : Unit -> <Run> Int\nbody () = run (fn () -> 1)\n\nmain : Unit -> <IO> Unit\nmain () =\n  let r =\n    handle body () with\n      | run f k ->\n        let g = fn () -> f () + 1\n        k 7\n  println (show r)";
+    let text = "effect Run where\n  run : (Unit -> <e> Int) -> Int\n\nbody : Unit -> <Run> Int\nbody () = run (fn () -> 1)\n\nmain : Unit -> <IO> Unit\nmain () =\n  let r =\n    handle body () with\n      | ctl run f k ->\n        let g = fn () -> f () + 1\n        k 7\n  println (show r)";
     // 節の中のラムダ g の row は操作の row 変数で、main の row 変数ではない
     insta::assert_snapshot!(bodies(text, "main"), @"
     body Always

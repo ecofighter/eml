@@ -79,9 +79,9 @@ effect Log where
 f : (Unit -> <Ask | e> Int) -> <e> Int
 f action =
   handle action () with
-    | ask () k ->
+    | ctl ask () k ->
         handle k 1 with
-          | log m k2 ->
+          | ctl log m k2 ->
               k2 ()
 ";
     insta::assert_snapshot!(masks(text, "f"), @"11:16#0 [Log]");
@@ -101,9 +101,9 @@ effect Log where
 f : (Unit -> <Ask | e> Int) -> <e> Int
 f action =
   handle action () from 0 with
-    | ask () k st ->
+    | ctl ask () k st ->
         handle k 1 st with
-          | log m k2 -> k2 ()
+          | ctl log m k2 -> k2 ()
     | return x _ -> x
 ";
     insta::assert_snapshot!(masks(text, "f"), @"11:16#1 [Log]");
@@ -181,7 +181,7 @@ effect Yield a where
 render : (Unit -> <Yield Int | e> Unit) -> <Yield String | e> Unit
 render g =
   handle g () with
-    | yield n k ->
+    | ctl yield n k ->
       yield (show n)
       k ()
 ";
@@ -218,11 +218,11 @@ effect Log where
 twice : (Unit -> <e> Unit) -> (Unit -> <Log | e> a) -> <Log | e> a
 twice cb action =
   handle action () from 1 with
-    | log s k n ->
+    | ctl log s k n ->
       log \"outer #\\{n} sees \\{s}\"
       cb ()
       handle k () (n + 1) with
-        | log t k2 ->
+        | ctl log t k2 ->
           log \"inner sees \\{t}\"
           k2 ()
     | return x _ -> x
@@ -245,11 +245,11 @@ effect Log where
 twice : (Unit -> <e> Unit) -> (Unit -> <Log | e> a) -> <Log | e> a
 twice cb action =
   handle action () with
-    | log s k ->
+    | ctl log s k ->
       log \"outer sees \\{s}\"
       cb ()
       handle k () with
-        | log t k2 ->
+        | ctl log t k2 ->
           log \"inner sees \\{t}\"
           k2 ()
 ";
@@ -271,11 +271,11 @@ effect Choice where
 both : (Unit -> <e> Unit) -> (Unit -> <Choice | e> Unit) -> <Choice, IO | e> Unit
 both cb action =
   handle action () with
-    | choose q k ->
+    | ctl choose q k ->
       let _ = choose \"outer sees \\{q}\"
       cb ()
       handle (let _ = k True in k False) with
-        | choose t k2 ->
+        | ctl choose t k2 ->
           println \"inner answers \\{t}\"
           k2 False
 ";
@@ -303,10 +303,10 @@ both action =
 outer : (Unit -> <IO | e> a) -> <IO | e> a
 outer action =
   handle (handle both action with
-            | log s k ->
+            | ctl log s k ->
               println \"inner: \\{s}\"
               k ()) with
-    | log s k ->
+    | ctl log s k ->
       println \"middle: \\{s}\"
       k ()
 ";
@@ -316,6 +316,6 @@ outer action =
 #[test]
 fn a_self_call_under_its_own_handler_has_no_mask() {
     // 自分への呼び出しの包含は row を閉じた後に確かめる。閉じた row は rigid な末尾を持たないので `mask` が要らない
-    let text = "effect Ask where\n  ask : Unit -> Int\n\ncount : Int -> <IO> Int\ncount n =\n  let go k =\n    if k == 0 then 0\n    else handle ask () + go (k - 1) with | ask () r -> r 1\n  go n";
+    let text = "effect Ask where\n  ask : Unit -> Int\n\ncount : Int -> <IO> Int\ncount n =\n  let go k =\n    if k == 0 then 0\n    else handle ask () + go (k - 1) with | ctl ask () r -> r 1\n  go n";
     assert_eq!(masks(text, "count"), "");
 }

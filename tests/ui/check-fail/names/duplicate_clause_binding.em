@@ -8,5 +8,5 @@ run () = ask 1
 main : Unit -> <IO> Unit
 main () =
   let r = handle run () with
-    | ask n n -> n 1
+    | ctl ask n n -> n 1
   println (show r)

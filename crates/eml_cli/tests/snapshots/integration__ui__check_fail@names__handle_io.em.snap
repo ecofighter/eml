@@ -4,9 +4,9 @@ expression: rendered
 input_file: tests/ui/check-fail/names/handle_io.em
 ---
 [E1009] Error: `IO` cannot be handled
-   ╭─[ check-fail/names/handle_io.em:5:7 ]
+   ╭─[ check-fail/names/handle_io.em:5:11 ]
    │
- 5 │     | println text k -> k ()
-   │       ───┬───  
-   │          ╰───── `println` is an extern function with the effect `IO`
+ 5 │     | ctl println text k -> k ()
+   │           ───┬───  
+   │              ╰───── `println` is an extern function with the effect `IO`
 ───╯

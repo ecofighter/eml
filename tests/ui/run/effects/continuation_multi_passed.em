@@ -9,5 +9,5 @@ main : Unit -> <IO> Unit
 main () =
   let r =
     handle show (if choose () then 10 else 20) with
-      | choose () k -> both k
+      | ctl choose () k -> both k
   println r

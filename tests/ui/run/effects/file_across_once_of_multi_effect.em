@@ -14,6 +14,6 @@ main : Unit -> <IO> Unit
 main () =
   let total =
     handle counted (Fs.open "../files/input.txt") with
-      | single () k -> k 1
-      | many () k -> k 10 + k 20
+      | ctl single () k -> k 1
+      | ctl many () k -> k 10 + k 20
   println (show total)

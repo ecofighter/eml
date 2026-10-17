@@ -437,7 +437,7 @@ fn a_qualifier_anywhere_loads_the_std_module() {
         "y : Shapes.Size a => a -> Int\ny _ = 1",
         "y : String\ny = \"\\{Shapes.x}\"",
         "y : Int\ny = (Shapes.P { n = 1 }).n",
-        "y : Unit -> Int\ny () = handle 1 with\n  | Shapes.ask () k -> k 1",
+        "y : Unit -> Int\ny () = handle 1 with\n  | ctl Shapes.ask () k -> k 1",
     ] {
         let (loaded, _) = eml_hir::load_with_std(&std, ENTRY_PATH, entry, &MemorySource(&[]));
         assert_eq!(names(&loaded), ["Prelude", "Main", "Std.Shapes"], "{entry}");

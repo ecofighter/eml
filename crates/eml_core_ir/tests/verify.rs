@@ -21,7 +21,7 @@ const K: &str = "fn k(a.0: int) -> int {\n  return a.0\n}\n";
 
 const ASK: &str = "effect Ask { ask(tobj) -> tobj }\n";
 
-/// `handle ask 1 with | ask x k -> resume k x` を持ち上げた translate の出力の形。`effects` は先頭のエフェクトの行。
+/// `handle ask 1 with | ctl ask x k -> resume k x` を持ち上げた translate の出力の形。`effects` は先頭のエフェクトの行。
 /// box の挿入の前なので、捕まえる `Int` と handle の結果は `int` のままである。
 fn handler_program(effects: &str) -> String {
     format!(

@@ -14,7 +14,7 @@ effect Count where
 generate : (Unit -> <Yield a | e> Unit) -> <e> Iter <e> a
 generate producer =
   handle producer () with
-    | yield x k -> More x k
+    | ctl yield x k -> More x k
     | return () -> Done
 
 take : Int -> Iter <e> a -> <e> Iter <e> a
@@ -75,7 +75,7 @@ main () =
   print_all (take 3 io)
   let report =
     handle to_list (take 3 (generate (fn () -> counted 1 5))) from 0 with
-      | tick () k n -> k () (n + 1)
+      | ctl tick () k n -> k () (n + 1)
       | return xs n -> "\{show xs} after \{n} ticks"
   println report
   let pure : Iter <> Int = generate (fn () -> pure_count 1 4)

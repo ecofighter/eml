@@ -10,7 +10,7 @@ data Saved =
 capture : Unit -> Saved
 capture () =
   handle Value (ask () + ask ()) with
-    | ask () k -> Saved k
+    | ctl ask () k -> Saved k
 
 describe : Saved -> String
 describe s =
@@ -24,7 +24,7 @@ main () =
     | Saved k ->
       let r =
         handle k 1 with
-          | ask () k2 -> k2 100
+          | ctl ask () k2 -> k2 100
       println (describe r)
       match r with
         | Saved k3 -> println (describe (k3 2))

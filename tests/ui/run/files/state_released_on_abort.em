@@ -13,10 +13,10 @@ body () =
 inner : Unit -> <Fail, IO> Unit
 inner () =
   handle body () from Fs.open "input.txt" with
-    | tick () k f -> k () f
+    | ctl tick () k f -> k () f
     | return x f -> Fs.close f
 
 main : Unit -> <IO> Unit
 main () =
   handle inner () with
-    | fail () -> println "aborted"
+    | ctl fail () -> println "aborted"

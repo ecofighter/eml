@@ -1,8 +1,8 @@
 //! handler と `drop` の変換と検査 (docs/spec/expressions.md の「handler」)。1つの handler は1つのエフェクトを
 //! 扱い、そのすべての操作に節を書く (docs/spec/effects.md の「handler の意味」)。
 
-use eml_diagnostics::{Diagnostic, Label, TextRange};
-use eml_syntax::ast;
+use eml_diagnostics::{Diagnostic, FileId, Label, TextEdit, TextRange};
+use eml_syntax::{SyntaxKind, SyntaxToken, ast};
 
 use super::expr::BodyLowering;
 use super::{NameKind, NameUse, path_name, unresolved};
@@ -92,6 +92,10 @@ impl BodyLowering<'_> {
 
     fn op_clause(&mut self, clause: &ast::OpClause, stateful: bool, out: &mut Clauses) {
         out.any_operation = true;
+        let keyword = clause.keyword();
+        let mut fn_keyword = keyword
+            .clone()
+            .filter(|keyword| keyword.kind() == SyntaxKind::FN_KW);
         // 引数のスコープは節の本体だけである
         let mark = self.scope.len();
         // 節の引数の並び (操作の引数と `k`) は、等式の引数と同じく1つの組である (E1017)
@@ -103,6 +107,12 @@ impl BodyLowering<'_> {
             return;
         };
         let name_range = path.range();
+        // キーワードのない節は `ctl` の節として下ろし、後の検査を続ける。`ctl` を足せば今の意味のまま通るため
+        // (docs/spec/expressions.md の「handler」)
+        if keyword.is_none() {
+            self.diagnostics
+                .push(missing_keyword(self.file, clause.range(), name_range));
+        }
         let path = path_name(Some(path));
         let Some(at) = path.at(name_range) else {
             return;
@@ -128,6 +138,13 @@ impl BodyLowering<'_> {
         let effect = operation.effect;
         let never = operation.multiplicity == OpMultiplicity::Never;
         let arity = operation.arity;
+        // `never` の操作は再開しないので、`fn` の節の意味 `k (本体)` が成り立たない。書けるのは `ctl` の節だけなので、
+        // `ctl` の節として下ろし、E1010 や E1013 を重ねない
+        if never && let Some(keyword) = fn_keyword.take() {
+            self.diagnostics
+                .push(fn_clause_for_never(self.file, &keyword, text));
+        }
+        let is_fn = fn_keyword.is_some();
         if let Some(&(_, first)) = out.seen.iter().find(|(seen, _)| *seen == op) {
             self.diagnostics.push(
                 Diagnostic::error(
@@ -174,9 +191,19 @@ impl BodyLowering<'_> {
             Some(_) => {}
         }
         out.seen.push((op, name_range));
-        let expected = arity + usize::from(!never) + usize::from(stateful);
+        // `fn` の節は `k` を書かないので、`k` の分を数えない
+        let expected = arity + usize::from(!never && !is_fn) + usize::from(stateful);
         if params.len() != expected {
+            let clause_name = if is_fn {
+                "the `fn` clause"
+            } else {
+                "the clause"
+            };
             let note = match (never, stateful) {
+                _ if is_fn && stateful => {
+                    format!("the `fn` clause takes the arguments of `{text}` and then the state")
+                }
+                _ if is_fn => format!("the `fn` clause takes the arguments of `{text}`"),
                 (true, true) => format!(
                     "`{text}` is a `never` operation, so its clause takes the arguments of the operation and then the state"
                 ),
@@ -194,7 +221,7 @@ impl BodyLowering<'_> {
                 Diagnostic::error(
                     codes::CLAUSE_ARITY,
                     format!(
-                        "the clause for `{text}` takes {}, but this one has {}",
+                        "{clause_name} for `{text}` takes {}, but this one has {}",
                         parameters(expected),
                         params.len()
                     ),
@@ -204,6 +231,11 @@ impl BodyLowering<'_> {
             );
             return;
         }
+        let (params, body) = if is_fn {
+            self.lower_fn_clause(params, body, arity, stateful, clause.range())
+        } else {
+            (params, body)
+        };
         if !never {
             self.record_continuation(params[arity], 1 + usize::from(stateful));
         }
@@ -214,6 +246,57 @@ impl BodyLowering<'_> {
             resumes: !never,
             range: clause.range(),
         });
+    }
+
+    /// `fn` の節を同じ意味の `ctl` の節の引数と本体に書き換える。状態のない handler では `$k (本体)`、パラメータ付き
+    /// handler では `let ($v, $st) = 本体 in $k $v $st` にする (docs/spec/expressions.md の「handler」)。HIR の節を
+    /// 1つの形のまま保てば、型検査、translate、EP を変えずに済む。隠れた名前はスコープに積まないので、利用者のコードから
+    /// 解決できない。
+    fn lower_fn_clause(
+        &mut self,
+        mut params: Vec<PatId>,
+        body: ExprId,
+        arity: usize,
+        stateful: bool,
+        range: TextRange,
+    ) -> (Vec<PatId>, ExprId) {
+        let (k_pat, k) = self.hidden_param("$k", range);
+        let PatKind::Bind(k_local) = self.pats[k_pat].kind else {
+            unreachable!("a hidden parameter binds a variable");
+        };
+        params.insert(arity, k_pat);
+        let body_range = self.exprs[body].range;
+        let (pat, args) = if stateful {
+            let (value_pat, value) = self.hidden_param("$v", body_range);
+            let (state_pat, state) = self.hidden_param("$st", body_range);
+            let pat = self.pats.alloc(Pat {
+                kind: PatKind::Tuple(vec![value_pat, state_pat]),
+                range: body_range,
+            });
+            (pat, vec![value, state])
+        } else {
+            let (pat, value) = self.hidden_param("$r", body_range);
+            (pat, vec![value])
+        };
+        let resume = self.alloc(ExprKind::Call { callee: k, args }, body_range);
+        let block = self.alloc(
+            ExprKind::Block {
+                stmts: vec![Stmt::Let {
+                    pat,
+                    ty: None,
+                    init: body,
+                }],
+                tail: Some(resume),
+                last_start: None,
+            },
+            body_range,
+        );
+        self.fn_clauses.push(FnClause {
+            k: k_local,
+            body,
+            range,
+        });
+        (params, block)
     }
 
     /// 操作として見つからなかった節の先頭が、extern のエフェクトを起こす extern の関数なら E1009 を出して `true` を
@@ -299,6 +382,18 @@ impl BodyLowering<'_> {
     }
 
     fn return_clause(&mut self, clause: &ast::ReturnClause, stateful: bool, out: &mut Clauses) {
+        // `return` の節は継続を受けないので、`fn` と `ctl` の区別がない。書いたキーワードは無視して下ろし続ける
+        if let Some(keyword) = clause.keyword() {
+            self.diagnostics.push(Diagnostic::error(
+                codes::CLAUSE_KEYWORD,
+                "a `return` clause takes neither `fn` nor `ctl`",
+                Label::new(
+                    self.file,
+                    keyword.text_range(),
+                    format!("remove this `{}`", keyword.text()),
+                ),
+            ));
+        }
         let mark = self.scope.len();
         // `return` 節の引数 (最後の値を受けるパターン) も、等式の引数と同じく1つの組として扱う (E1017)
         let params = self.lower_param_group(clause.params(), clause.range());
@@ -443,11 +538,49 @@ fn clause_qualifier(clause: &ast::OpClause) -> Option<String> {
     (!qualifier.is_empty()).then(|| qualifier.join("."))
 }
 
-/// E1013 の help に出す節の書き方。既存の節と同じ修飾子で書き、その handler にそのまま足せる形にする。
+/// キーワードのない操作の節 (E1051)。`|` から操作名までを指し、操作名の前に `ctl ` を足す fix を付ける。
+fn missing_keyword(file: FileId, clause: TextRange, name: TextRange) -> Diagnostic {
+    Diagnostic::error(
+        codes::CLAUSE_KEYWORD,
+        "this clause needs `fn` or `ctl`",
+        Label::new(
+            file,
+            TextRange::new(clause.start(), name.end()),
+            "this clause",
+        ),
+    )
+    .with_note("a `fn` clause resumes with the value of its body, and a `ctl` clause resumes only by calling `k`")
+    .with_fix(
+        "write `ctl`",
+        vec![TextEdit {
+            file,
+            range: TextRange::empty(name.start()),
+            replacement: "ctl ".to_string(),
+        }],
+    )
+}
+
+/// `never` の操作の `fn` の節 (E1051)。
+fn fn_clause_for_never(file: FileId, keyword: &SyntaxToken, operation: &str) -> Diagnostic {
+    Diagnostic::error(
+        codes::CLAUSE_KEYWORD,
+        "a `never` operation cannot have a `fn` clause",
+        Label::new(
+            file,
+            keyword.text_range(),
+            format!("`{operation}` is a `never` operation"),
+        ),
+    )
+    .with_note("a `never` operation never resumes, so its clause must be `ctl`")
+    .with_help("write `ctl` instead of `fn`")
+}
+
+/// E1013 の help に出す節の書き方。既存の節と同じ修飾子で書き、その handler にそのまま足せる形にする。今の節と同じ
+/// 意味になる `ctl` の節で書く。
 fn clause_example(operation: &Operation, qualifier: Option<&str>) -> String {
     let mut example = match qualifier {
-        Some(qualifier) => format!("| {qualifier}.{}", operation.name),
-        None => format!("| {}", operation.name),
+        Some(qualifier) => format!("| ctl {qualifier}.{}", operation.name),
+        None => format!("| ctl {}", operation.name),
     };
     for _ in 0..operation.arity {
         example.push_str(" _");

@@ -15,7 +15,7 @@ outer action = both action
 tagged : String -> (Unit -> <Log, IO | e> a) -> <IO | e> a
 tagged tag action =
   handle action () with
-    | log s k ->
+    | ctl log s k ->
       println "\{tag}: \{s}"
       k ()
 

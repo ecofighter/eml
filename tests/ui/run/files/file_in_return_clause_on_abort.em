@@ -8,5 +8,5 @@ main : Unit -> <IO> Unit
 main () =
   let f = Fs.open "input.txt"
   handle fail () with
-    | fail () -> println "aborted"
+    | ctl fail () -> println "aborted"
     | return x -> Fs.close f

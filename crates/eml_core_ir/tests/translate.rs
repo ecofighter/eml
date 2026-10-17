@@ -257,7 +257,7 @@ fn the_file_table_holds_only_the_paths_that_positions_use() {
 fn lambdas_and_handlers_are_numbered_in_expression_order() {
     // HIR は子の式を親より先に作るので、内側のラムダと内側の handle の番号が小さい。変換は外側から持ち上げるが、
     // 番号は変換の順に依らない
-    let text = "effect A where\n  ask : Unit -> Int\n\neffect B where\n  tell : Int -> Unit\n\nmain : Unit -> <IO> Unit\nmain () =\n  let add = fn x -> fn y -> x + y\n  let n =\n    handle (handle ask () + add 1 2 with | ask () k -> k 1) with\n      | tell m k -> k ()\n  println (show n)";
+    let text = "effect A where\n  ask : Unit -> Int\n\neffect B where\n  tell : Int -> Unit\n\nmain : Unit -> <IO> Unit\nmain () =\n  let add = fn x -> fn y -> x + y\n  let n =\n    handle (handle ask () + add 1 2 with | ctl ask () k -> k 1) with\n      | ctl tell m k -> k ()\n  println (show n)";
     let shown = core_text(text, Pass::Translate);
     let names: Vec<&str> = shown
         .lines()
@@ -329,7 +329,7 @@ fn the_entry_applies_a_point_free_main_to_unit() {
 
 #[test]
 fn handlers_are_lifted_with_their_return_reprs() {
-    let text = "effect Ask where\n  ask : String -> Int\n\nmain : Unit -> <IO> Unit\nmain () =\n  let prefix = \"n = \"\n  let n =\n    handle ask \"x\" with\n      | ask key k -> k 1\n      | return x -> x + 1\n  println (prefix ++ show n)";
+    let text = "effect Ask where\n  ask : String -> Int\n\nmain : Unit -> <IO> Unit\nmain () =\n  let prefix = \"n = \"\n  let n =\n    handle ask \"x\" with\n      | ctl ask key k -> k 1\n      | return x -> x + 1\n  println (prefix ++ show n)";
     insta::assert_snapshot!(core_text(text, Pass::Translate), @r#"
     effect Prelude.IO { never io_failed(enum, obj) -> never }
     effect Ask { ask(obj) -> int }
@@ -363,7 +363,7 @@ fn handlers_are_lifted_with_their_return_reprs() {
 
 #[test]
 fn a_continuation_passed_to_a_function_is_wrapped() {
-    let text = "effect Ask where\n  ask : Unit -> Int\n\ntwice : (Int -> <e> Int) -> <e> Int\ntwice f = f 1\n\nmain : Unit -> <IO> Unit\nmain () =\n  let n =\n    handle ask () with\n      | ask () k -> twice k\n  println (show n)";
+    let text = "effect Ask where\n  ask : Unit -> Int\n\ntwice : (Int -> <e> Int) -> <e> Int\ntwice f = f 1\n\nmain : Unit -> <IO> Unit\nmain () =\n  let n =\n    handle ask () with\n      | ctl ask () k -> twice k\n  println (show n)";
     let shown = core_text(text, Pass::Translate);
     insta::assert_snapshot!(function(&shown, "main$handle0$ask"), @r#"
     internal yields fn main$handle0$ask(p.0: unit, k.1: tobj lin, p.2: unit) -> int {
@@ -887,7 +887,7 @@ fn an_extern_function_with_an_effect_used_as_a_value_is_wrapped_with_its_extern_
 /// 数えないと、`mask`、`handle`、`perform` がエフェクトを1つずれて指す。
 #[test]
 fn user_effects_are_numbered_after_io() {
-    let text = "effect A where\n  ask : Unit -> Int\n\neffect B where\n  tell : Int -> Unit\n\nneeds_a : (Unit -> <e> Int) -> <A | e> Int\nneeds_a f = ask () + f ()\n\ntold : Unit -> <B> Int\ntold () =\n  tell 1\n  2\n\nmain : Unit -> <IO> Unit\nmain () =\n  let n =\n    handle (handle needs_a told with | ask () k -> k 1) with\n      | tell m k -> k ()\n  println (show n)";
+    let text = "effect A where\n  ask : Unit -> Int\n\neffect B where\n  tell : Int -> Unit\n\nneeds_a : (Unit -> <e> Int) -> <A | e> Int\nneeds_a f = ask () + f ()\n\ntold : Unit -> <B> Int\ntold () =\n  tell 1\n  2\n\nmain : Unit -> <IO> Unit\nmain () =\n  let n =\n    handle (handle needs_a told with | ctl ask () k -> k 1) with\n      | ctl tell m k -> k ()\n  println (show n)";
     insta::assert_snapshot!(core_text(text, Pass::Translate), @r#"
     effect Prelude.IO { never io_failed(enum, obj) -> never }
     effect A { ask(unit) -> int }
@@ -975,7 +975,7 @@ fn names_outside_the_entry_are_qualified_with_their_module() {
     // テキストの形は関数とエフェクトを名前で引くので、入口以外のモジュールの名前には `モジュール名.` を付ける
     // (docs/spec/core-ir.md)。入れ子のモジュールのエフェクトの `perform` と `handle` も読み戻せることを確かめる
     let csv = "pub data Row = | Row Int\n\npub effect Parse where\n  next : Unit -> Int\n\npub parse : Unit -> <Parse> Row\nparse () =\n  let get = next\n  let make = Row\n  make (get ())";
-    let main = "import Report.Csv\n\napply : (a -> <e> b) -> a -> <e> b\napply f x = f x\n\nmain : Unit -> <IO> Unit\nmain () =\n  let r =\n    handle Csv.parse () with\n      | Csv.next () k -> k 1\n      | return r -> r\n  let Csv.Row n = r\n  apply println (show n)";
+    let main = "import Report.Csv\n\napply : (a -> <e> b) -> a -> <e> b\napply f x = f x\n\nmain : Unit -> <IO> Unit\nmain () =\n  let r =\n    handle Csv.parse () with\n      | ctl Csv.next () k -> k 1\n      | return r -> r\n  let Csv.Row n = r\n  apply println (show n)";
     insta::assert_snapshot!(core_text_files(main, &[("Report/Csv.em", csv)], Pass::Translate), @r#"
     layout Report.Csv.Row { Row(int) }
     effect Prelude.IO { never io_failed(enum, obj) -> never }
@@ -1030,7 +1030,7 @@ fn names_outside_the_entry_are_qualified_with_their_module() {
 fn an_entry_operation_does_not_collide_with_a_prelude_operation() {
     // 入口の `println` という操作を包む関数は `op$println` で、Prelude の `println` を包む関数は参照する場所の名前を
     // 持つ `main$extern0` なので、名前が重ならない (docs/spec/core-ir.md)
-    let text = "effect Log where\n  println : String -> Unit\n\neach : (String -> <e> Unit) -> <e> Unit\neach f = f \"x\"\n\nlogged : Unit -> <Log> Unit\nlogged () = each println\n\nmain : Unit -> <IO> Unit\nmain () =\n  handle logged () with\n    | println s k -> k ()\n  each Prelude.println";
+    let text = "effect Log where\n  println : String -> Unit\n\neach : (String -> <e> Unit) -> <e> Unit\neach f = f \"x\"\n\nlogged : Unit -> <Log> Unit\nlogged () = each println\n\nmain : Unit -> <IO> Unit\nmain () =\n  handle logged () with\n    | ctl println s k -> k ()\n  each Prelude.println";
     let shown = core_text(text, Pass::Translate);
     insta::assert_snapshot!(function(&shown, "op$println"), @"
     internal yields fn op$println(p.0: obj) -> unit {
@@ -1269,7 +1269,7 @@ fn nested_value_ifs_meet_in_their_own_merge_blocks() {
 
 #[test]
 fn handlers_are_lifted_to_closures() {
-    let text = "effect Ask where\n  ask : String -> Int\n\nmain : Unit -> <IO> Unit\nmain () =\n  let prefix = \"n = \"\n  let n =\n    handle ask \"x\" with\n      | ask key k -> k 1\n      | return x -> x + 1\n  println (prefix ++ show n)";
+    let text = "effect Ask where\n  ask : String -> Int\n\nmain : Unit -> <IO> Unit\nmain () =\n  let prefix = \"n = \"\n  let n =\n    handle ask \"x\" with\n      | ctl ask key k -> k 1\n      | return x -> x + 1\n  println (prefix ++ show n)";
     insta::assert_snapshot!(core_text(text, Pass::Translate), @r#"
     effect Prelude.IO { never io_failed(enum, obj) -> never }
     effect Ask { ask(obj) -> int }
@@ -1303,7 +1303,7 @@ fn handlers_are_lifted_to_closures() {
 
 #[test]
 fn operations_as_values_and_drop() {
-    let text = "effect Log where\n  log : String -> String -> Unit\n\nrun : Unit -> <Log> Unit\nrun () =\n  let info = log \"info\"\n  info \"a\"\n\ndiscard : String -> Unit\ndiscard s = drop s\n\nmain : Unit -> <IO> Unit\nmain () =\n  handle run () with\n    | log _ _ k -> k ()\n  discard \"x\"";
+    let text = "effect Log where\n  log : String -> String -> Unit\n\nrun : Unit -> <Log> Unit\nrun () =\n  let info = log \"info\"\n  info \"a\"\n\ndiscard : String -> Unit\ndiscard s = drop s\n\nmain : Unit -> <IO> Unit\nmain () =\n  handle run () with\n    | ctl log _ _ k -> k ()\n  discard \"x\"";
     let shown = core_text(text, Pass::Translate);
     insta::assert_snapshot!(function(&shown, "run"), @r#"
     yields fn run(p.0: unit) -> unit {
@@ -1474,7 +1474,7 @@ fn a_variable_pattern_after_a_switch_binds_the_scrutinee() {
 #[test]
 fn constructor_patterns_in_handler_clause_parameters() {
     // 操作の節と `return` の節はラムダと同じく関数に持ち上げるので、引数のコンストラクタのパターンも同じ経路で分解する
-    let text = "data Box a = | Box a\n\neffect Give where\n  give : Box Int -> Int\n\nrun : Unit -> Int\nrun () =\n  handle Box (give (Box 1)) with\n    | give (Box n) k -> k n\n    | return (Box r) -> r\n\nmain : Unit -> <IO> Unit\nmain () = println (show (run ()))";
+    let text = "data Box a = | Box a\n\neffect Give where\n  give : Box Int -> Int\n\nrun : Unit -> Int\nrun () =\n  handle Box (give (Box 1)) with\n    | ctl give (Box n) k -> k n\n    | return (Box r) -> r\n\nmain : Unit -> <IO> Unit\nmain () = println (show (run ()))";
     let shown = core_text(text, Pass::Translate);
     insta::assert_snapshot!(function(&shown, "run$handle0$give"), @"
     internal fn run$handle0$give(p.0: obj, k.1: tobj lin, p.2: unit) -> int {
@@ -1625,7 +1625,7 @@ fn functions_without_captures_are_values() {
 
 #[test]
 fn a_handler_with_a_state_passes_its_initial_value_and_takes_the_state_from_its_clauses() {
-    let text = "effect Ask where\n  ask : Unit -> Int\n\nmain : Unit -> <IO> Unit\nmain () =\n  let n =\n    handle ask () + ask () from 10 with\n      | ask () k st -> k st (st + 1)\n      | return x st -> x * st\n  println (show n)";
+    let text = "effect Ask where\n  ask : Unit -> Int\n\nmain : Unit -> <IO> Unit\nmain () =\n  let n =\n    handle ask () + ask () from 10 with\n      | ctl ask () k st -> k st (st + 1)\n      | return x st -> x * st\n  println (show n)";
     insta::assert_snapshot!(core_text(text, Pass::Translate), @r#"
     effect Prelude.IO { never io_failed(enum, obj) -> never }
     effect Ask { ask(unit) -> int }
@@ -1660,7 +1660,7 @@ fn a_handler_with_a_state_passes_its_initial_value_and_takes_the_state_from_its_
 #[test]
 fn a_polymorphic_never_operation_takes_tobj_and_never_returns() {
     // 引数の型はエフェクトの型変数なので一様な位置の `tobj` になり、`never` の操作の戻り値は `OpRet::Never` である
-    let text = "effect Fail e where\n  never fail : e -> a\n\ncheck : Int -> <Fail String> Int\ncheck x = if x < 0 then fail \"negative\" else x\n\nmain : Unit -> <IO> Unit\nmain () =\n  let n = handle check 1 with\n    | fail message -> 0\n  println (show n)";
+    let text = "effect Fail e where\n  never fail : e -> a\n\ncheck : Int -> <Fail String> Int\ncheck x = if x < 0 then fail \"negative\" else x\n\nmain : Unit -> <IO> Unit\nmain () =\n  let n = handle check 1 with\n    | ctl fail message -> 0\n  println (show n)";
     let ir = core_text(text, Pass::Translate);
     let table: Vec<&str> = ir
         .lines()
@@ -1676,7 +1676,7 @@ fn a_polymorphic_never_operation_takes_tobj_and_never_returns() {
 
 #[test]
 fn effects_are_numbered_in_declaration_order() {
-    let text = "effect A where\n  a : Unit -> Int\neffect B where\n  b : Unit -> Int\nmain : Unit -> <IO> Unit\nmain () =\n  let x = handle a () with\n    | a () k -> k 1\n  let y = handle b () with\n    | b () k -> k 2\n  println (show (x + y))";
+    let text = "effect A where\n  a : Unit -> Int\neffect B where\n  b : Unit -> Int\nmain : Unit -> <IO> Unit\nmain () =\n  let x = handle a () with\n    | ctl a () k -> k 1\n  let y = handle b () with\n    | ctl b () k -> k 2\n  println (show (x + y))";
     insta::assert_snapshot!(core_text(text, Pass::Translate), @r#"
     effect Prelude.IO { never io_failed(enum, obj) -> never }
     effect A { a(unit) -> int }
@@ -1795,7 +1795,7 @@ fn an_arm_reached_by_one_leaf_sits_at_the_leaf() {
 fn effects_of_the_same_name_in_two_modules_stay_apart() {
     // エフェクトの表は名前で引くので、入口の `Log` と `Audit.Log` は別の名前になる (docs/spec/core-ir.md)
     let audit = "pub effect Log where\n  emit : Int -> Unit\n\npub audited : Unit -> <Log> Unit\naudited () = emit 1";
-    let main = "import Audit\n\neffect Log where\n  emit : Int -> Unit\n\nlocal : Unit -> <Log> Unit\nlocal () = emit 2\n\nmain : Unit -> <IO> Unit\nmain () =\n  handle Audit.audited () with\n    | Audit.emit n k -> k (println (show n))\n  handle local () with\n    | emit n k -> k (println (show n))";
+    let main = "import Audit\n\neffect Log where\n  emit : Int -> Unit\n\nlocal : Unit -> <Log> Unit\nlocal () = emit 2\n\nmain : Unit -> <IO> Unit\nmain () =\n  handle Audit.audited () with\n    | ctl Audit.emit n k -> k (println (show n))\n  handle local () with\n    | ctl emit n k -> k (println (show n))";
     let shown = core_text_files(main, &[("Audit.em", audit)], Pass::Translate);
     for expected in [
         "effect Log { emit(int) -> unit }",
@@ -1850,7 +1850,7 @@ effect State s where
 /// `body` を `State Int` の handler の中で動かす `main`。変換は入口から届く関数だけを作るので、確かめる関数をここから呼ぶ。
 fn state_main(body: &str) -> String {
     format!(
-        "main : Unit -> <IO> Unit\nmain () =\n  let n =\n    handle {body} from 0 with\n      | get () k st -> k st st\n      | put s k _ -> k () s\n      | return x _ -> x\n  println (show n)\n"
+        "main : Unit -> <IO> Unit\nmain () =\n  let n =\n    handle {body} from 0 with\n      | ctl get () k st -> k st st\n      | ctl put s k _ -> k () s\n      | return x _ -> x\n  println (show n)\n"
     )
 }
 
@@ -1881,14 +1881,14 @@ effect Yield a where
 render : (Unit -> <Yield Int | e> Unit) -> <Yield String | e> Unit
 render g =
   handle g () with
-    | yield n k ->
+    | ctl yield n k ->
       yield (show n)
       k ()
 
 main : Unit -> <IO> Unit
 main () =
   handle render (fn () -> yield 1) with
-    | yield s k ->
+    | ctl yield s k ->
       println s
       k ()
 ";
@@ -1935,7 +1935,7 @@ fn arrows_with_different_masks_are_applied_apart() {
 #[test]
 fn a_continuation_call_in_its_clause_has_no_mask() {
     let text = format!(
-        "{STATE}run : (Unit -> <State Int | e> a) -> <e> a\nrun action =\n  handle action () from 0 with\n    | get () k st -> k st st\n    | put n k _ -> k () n\n    | return x _ -> x\n\nmain : Unit -> <IO> Unit\nmain () = println (show (run (fn () -> get ())))\n"
+        "{STATE}run : (Unit -> <State Int | e> a) -> <e> a\nrun action =\n  handle action () from 0 with\n    | ctl get () k st -> k st st\n    | ctl put n k _ -> k () n\n    | return x _ -> x\n\nmain : Unit -> <IO> Unit\nmain () = println (show (run (fn () -> get ())))\n"
     );
     insta::assert_snapshot!(function(&core_text(&text, Pass::Translate), "run@[Int]<e>$handle0$get"), @r#"
     internal yields fn "run@[Int]<e>$handle0$get"(p.0: unit, k.1: tobj lin, st.2: int) -> int {
@@ -1959,9 +1959,9 @@ effect Log where
 f : (Unit -> <Ask | e> Int) -> <e> Int
 f action =
   handle action () with
-    | ask () k ->
+    | ctl ask () k ->
         handle k 1 with
-          | log m k2 ->
+          | ctl log m k2 ->
               k2 ()
 
 act : Unit -> <Ask, Log> Int
@@ -1973,7 +1973,7 @@ act () =
 main : Unit -> <IO> Unit
 main () =
   let r = handle f act with
-            | log m k ->
+            | ctl log m k ->
                 println (\"outer \" ++ m)
                 k ()
   println (show r)
@@ -2019,7 +2019,7 @@ fn handled(extra: &str, handle: &str) -> String {
 /// `k` を直接呼ぶだけなら、生の継続への `resume` にする (docs/spec/core-ir.md)。
 #[test]
 fn a_continuation_called_directly_is_resumed() {
-    let shown = handled("", "    handle ask () with\n      | ask () k -> k 1");
+    let shown = handled("", "    handle ask () with\n      | ctl ask () k -> k 1");
     assert!(shown.contains("resume k.1(1, ())"), "{shown}");
     assert!(!shown.contains("cont$"), "{shown}");
 }
@@ -2029,7 +2029,7 @@ fn a_continuation_called_directly_is_resumed() {
 fn a_continuation_with_an_expression_argument_is_resumed_once() {
     let shown = handled(
         "",
-        "    handle ask () from 0 with\n      | ask () k st -> k st (st + 1)\n      | return x _ -> x",
+        "    handle ask () from 0 with\n      | ctl ask () k st -> k st (st + 1)\n      | return x _ -> x",
     );
     assert_eq!(shown.matches("resume ").count(), 1, "{shown}");
     assert!(
@@ -2044,7 +2044,7 @@ fn a_continuation_with_an_expression_argument_is_resumed_once() {
 fn a_continuation_called_inside_an_inner_handle_is_resumed() {
     let shown = handled(
         "effect Log where\n  log : Int -> Unit\n\n",
-        "    handle ask () with\n      | ask () k ->\n          handle k 1 with\n            | log _ j -> j ()",
+        "    handle ask () with\n      | ctl ask () k ->\n          handle k 1 with\n            | ctl log _ j -> j ()",
     );
     assert!(shown.contains("resume k"), "{shown}");
     assert!(!shown.contains("cont$"), "{shown}");
@@ -2056,7 +2056,7 @@ fn a_continuation_called_inside_an_inner_handle_is_resumed() {
 fn a_continuation_called_saturated_in_a_lambda_is_resumed_there() {
     let shown = handled(
         "",
-        "    handle ask () with\n      | ask () k ->\n          let f = fn x -> k x\n          f 1",
+        "    handle ask () with\n      | ctl ask () k ->\n          let f = fn x -> k x\n          f 1",
     );
     assert!(shown.contains("resume k"), "{shown}");
     assert!(!shown.contains("cont$"), "{shown}");
@@ -2075,9 +2075,9 @@ effect Log where
 f : (Unit -> <Ask | e> Int) -> <e> Int
 f action =
   handle action () from 0 with
-    | ask () k st ->
+    | ctl ask () k st ->
         handle k 1 st with
-          | log m k2 ->
+          | ctl log m k2 ->
               k2 ()
     | return x _ -> x
 
@@ -2090,7 +2090,7 @@ act () =
 main : Unit -> <IO> Unit
 main () =
   let r = handle f act with
-            | log m k ->
+            | ctl log m k ->
                 println (\"outer \" ++ m)
                 k ()
   println (show r)
@@ -2104,7 +2104,7 @@ main () =
 fn a_partial_continuation_is_wrapped_with_the_state_wrapper() {
     let shown = handled(
         "later : (Int -> <e> Int) -> Int -> <e> Int\nlater f s = f s\n\n",
-        "    handle ask () from 0 with\n      | ask () k st -> later (k 1) st\n      | return x _ -> x",
+        "    handle ask () from 0 with\n      | ctl ask () k st -> later (k 1) st\n      | return x _ -> x",
     );
     assert!(shown.contains("closure cont$state(k"), "{shown}");
     insta::assert_snapshot!(function(&shown, "cont$state"), @"
@@ -2120,7 +2120,7 @@ fn a_partial_continuation_is_wrapped_with_the_state_wrapper() {
 fn a_dropped_continuation_is_not_wrapped() {
     let shown = handled(
         "",
-        "    handle ask () with\n      | ask () k ->\n          drop k\n          0",
+        "    handle ask () with\n      | ctl ask () k ->\n          drop k\n          0",
     );
     assert!(!shown.contains("cont$"), "{shown}");
     assert!(!shown.contains("resume "), "{shown}");
@@ -2130,7 +2130,7 @@ fn a_dropped_continuation_is_not_wrapped() {
 #[test]
 fn a_continuation_applied_to_extra_arguments_is_resumed_then_applied() {
     let text = format!(
-        "{ASK}main : Unit -> <IO> Unit\nmain () =\n  let h = handle ask () with\n    | ask () k ->\n        let r = k 1 2\n        fn y -> r + y\n    | return x -> fn y -> x + y\n  println (show (h 5))"
+        "{ASK}main : Unit -> <IO> Unit\nmain () =\n  let h = handle ask () with\n    | ctl ask () k ->\n        let r = k 1 2\n        fn y -> r + y\n    | return x -> fn y -> x + y\n  println (show (h 5))"
     );
     let shown = core_text(&text, Pass::Translate);
     assert!(
@@ -2157,10 +2157,10 @@ effect Log where
 f : (Unit -> <Ask | e> Int) -> <e> Int
 f action =
   handle action () with
-    | ask () k ->
+    | ctl ask () k ->
         let g = k
         handle g 1 with
-          | log m k2 ->
+          | ctl log m k2 ->
               k2 ()
 
 act : Unit -> <Ask, Log> Int
@@ -2172,7 +2172,7 @@ act () =
 main : Unit -> <IO> Unit
 main () =
   let r = handle f act with
-            | log m k ->
+            | ctl log m k ->
                 println (\"outer \" ++ m)
                 k ()
   println (show r)
@@ -2415,7 +2415,7 @@ fn instances_of_one_function_get_their_own_reprs() {
 
 #[test]
 fn lifted_functions_are_named_after_their_instance() {
-    let text = "effect Ask where\n  ask : Unit -> Int\n\ntwice : a -> (a -> a) -> a\ntwice x f =\n  let g = fn y -> f (f y)\n  handle g x with\n    | ask () k -> k 1\n\nmain : Unit -> <IO> Unit\nmain () = println (show (twice 1 (fn n -> n + 1)))";
+    let text = "effect Ask where\n  ask : Unit -> Int\n\ntwice : a -> (a -> a) -> a\ntwice x f =\n  let g = fn y -> f (f y)\n  handle g x with\n    | ctl ask () k -> k 1\n\nmain : Unit -> <IO> Unit\nmain () = println (show (twice 1 (fn n -> n + 1)))";
     let shown = core_text(text, Pass::Translate);
     for name in ["twice@[Int]$lambda0", "twice@[Int]$handle0"] {
         assert!(
@@ -2829,7 +2829,7 @@ fn a_parameter_and_a_result_of_file_type_are_lin() {
 #[test]
 fn a_handle_body_and_clause_closures_take_the_join_of_their_captures() {
     // 本体と節のクロージャには HIR の型がないので、捕まえた値の印の結びにする。本体は File を、節は Int を捕まえる
-    let text = "effect Ask where\n  ask : Unit -> Int\n\nuse_file : Fs.File -> <Ask, IO> Int\nuse_file f =\n  Fs.close f\n  ask ()\n\nmain : Unit -> <IO> Unit\nmain () =\n  let f = Fs.open \"a.txt\"\n  let n = 40 + 1\n  let m =\n    handle use_file f with\n      | ask () k -> k n\n  println (show (m + 1))";
+    let text = "effect Ask where\n  ask : Unit -> Int\n\nuse_file : Fs.File -> <Ask, IO> Int\nuse_file f =\n  Fs.close f\n  ask ()\n\nmain : Unit -> <IO> Unit\nmain () =\n  let f = Fs.open \"a.txt\"\n  let n = 40 + 1\n  let m =\n    handle use_file f with\n      | ctl ask () k -> k n\n  println (show (m + 1))";
     let ir = core_text(text, Pass::Translate);
     insta::assert_snapshot!(function(&ir, "main"), @r#"
     yields fn main(p.0: unit) -> unit {
@@ -2916,7 +2916,7 @@ fn derived_generators_are_unr() {
 #[test]
 fn wrappers_read_declaration_types_conservatively() {
     // `op$` と `con$` は宣言の型を代入せずに読むので、型変数に依存する位置は `poly` になる
-    let text = "effect Pass e where\n  pass : e -> Fs.File -> e\n\ndata Box a = | Box a Fs.File\n\nuse_op : (Int -> Fs.File -> <Pass Int, IO> Int) -> <Pass Int, IO> Int\nuse_op op = op 1 (Fs.open \"a.txt\")\n\nmain : Unit -> <IO> Unit\nmain () =\n  let n = handle use_op pass with\n    | pass x g k ->\n        Fs.close g\n        k x\n  let mk = Box n\n  match mk (Fs.open \"a.txt\") with\n    | Box m f ->\n        Fs.close f\n        println (show m)";
+    let text = "effect Pass e where\n  pass : e -> Fs.File -> e\n\ndata Box a = | Box a Fs.File\n\nuse_op : (Int -> Fs.File -> <Pass Int, IO> Int) -> <Pass Int, IO> Int\nuse_op op = op 1 (Fs.open \"a.txt\")\n\nmain : Unit -> <IO> Unit\nmain () =\n  let n = handle use_op pass with\n    | ctl pass x g k ->\n        Fs.close g\n        k x\n  let mk = Box n\n  match mk (Fs.open \"a.txt\") with\n    | Box m f ->\n        Fs.close f\n        println (show m)";
     let ir = core_text(text, Pass::Translate);
     insta::assert_snapshot!(function(&ir, "op$pass"), @"
     internal yields fn op$pass(p.0: tobj poly, p.1: obj lin) -> tobj poly {
@@ -3343,7 +3343,7 @@ fn a_lin_enum_variable_is_unr() {
     // すると、box の挿入が足す `unr` の箱が `lin` の引数に渡り、`yield` の遅い道で死ぬ箱を Perceus が `decref` する
     // (docs/spec/core-ir.md の「translate が決める印」)。値を包む `Option` は型のとおり `lin` のままである。所有の段の
     // 検査まで通す
-    let text = "data Token : Lin =\n  | Token\n\neffect Ask where\n  ask : Unit -> Int\n\nspend : Token -> Int\nspend t =\n  match t with\n    | Token -> 1\n\nhold : Token -> <Ask> Int\nhold t =\n  let n = ask ()\n  spend t + n\n\nopen_it : Option Token -> Int\nopen_it o =\n  match o with\n    | None -> 0\n    | Some t -> spend t\n\nmain : Unit -> <IO> Unit\nmain () =\n  println (show (handle hold Token with | ask () k -> k 1))\n  println (show (open_it (Some Token)))\n  println (show (List.length (List.map spend [Token])))";
+    let text = "data Token : Lin =\n  | Token\n\neffect Ask where\n  ask : Unit -> Int\n\nspend : Token -> Int\nspend t =\n  match t with\n    | Token -> 1\n\nhold : Token -> <Ask> Int\nhold t =\n  let n = ask ()\n  spend t + n\n\nopen_it : Option Token -> Int\nopen_it o =\n  match o with\n    | None -> 0\n    | Some t -> spend t\n\nmain : Unit -> <IO> Unit\nmain () =\n  println (show (handle hold Token with | ctl ask () k -> k 1))\n  println (show (open_it (Some Token)))\n  println (show (List.length (List.map spend [Token])))";
     insta::assert_snapshot!(function(&core_text(text, Pass::Translate), "open_it"), @"
     fn open_it(o.0: tobj lin) -> int {
       switch o.0 Prelude.Option { #0 -> b1, #1(t.1: enum) -> b2 }

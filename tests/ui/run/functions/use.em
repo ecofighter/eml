@@ -5,7 +5,7 @@ effect Log where
 with_log : (Unit -> <Log, IO> a) -> <IO> a
 with_log body =
   handle body () with
-    | log s k ->
+    | ctl log s k ->
         println ("log: " ++ s)
         k ()
 

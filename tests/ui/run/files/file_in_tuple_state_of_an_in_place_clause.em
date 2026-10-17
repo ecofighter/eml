@@ -9,7 +9,7 @@ body () = tick () + tick ()
 main : Unit -> <IO> Unit
 main () =
   let r = handle body () from (Fs.open "input.txt", 0) with
-    | tick () k st ->
+    | ctl tick () k st ->
         match st with
           | (f, n) -> k n (f, n + 1)
     | return x st ->

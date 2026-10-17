@@ -5,7 +5,7 @@ effect Ask where
 run : (Unit -> <Ask, IO> Unit) -> <IO> Unit
 run body =
   handle body () with
-    | ask () k -> k 1
+    | ctl ask () k -> k 1
 
 main : Unit -> <IO> Unit
 main () =

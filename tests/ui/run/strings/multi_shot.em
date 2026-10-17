@@ -6,5 +6,5 @@ effect Choice where
 main : Unit -> <IO> Unit
 main () =
   let s = handle "x=\{1}\{choose ()},\{choose ()}" with
-    | choose () k -> k True ++ " | " ++ k False
+    | ctl choose () k -> k True ++ " | " ++ k False
   println s

@@ -20,7 +20,7 @@ file_lines path =
   let f = Fs.open path
   let (f, text) = Fs.read_all f
   handle yield_all (String.lines text) with
-    | yield line k -> More line k
+    | ctl yield line k -> More line k
     | return () ->
         Fs.close f
         println "closed by the return clause"

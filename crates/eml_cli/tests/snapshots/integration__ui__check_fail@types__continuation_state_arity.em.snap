@@ -4,20 +4,20 @@ expression: rendered
 input_file: tests/ui/check-fail/types/continuation_state_arity.em
 ---
 [E2001] Error: mismatched types
-   ╭─[ check-fail/types/continuation_state_arity.em:8:22 ]
+   ╭─[ check-fail/types/continuation_state_arity.em:8:26 ]
    │
- 8 │     | ask () k st -> k st
-   │                      ──┬─  
-   │                        ╰─── expected `Int`, found `once Int -> Int`
+ 8 │     | ctl ask () k st -> k st
+   │                          ──┬─  
+   │                            ╰─── expected `Int`, found `once Int -> Int`
    │ 
    │ Note: each clause of a handler must have the type of the whole `handle` expression
 ───╯
 [E2001] Error: `k` takes 1 argument but 2 were given
-    ╭─[ check-fail/types/continuation_state_arity.em:14:23 ]
+    ╭─[ check-fail/types/continuation_state_arity.em:14:27 ]
     │
- 14 │     | ask () k -> k 1 2
-    │                       ┬  
-    │                       ╰── unexpected argument
+ 14 │     | ctl ask () k -> k 1 2
+    │                           ┬  
+    │                           ╰── unexpected argument
 ────╯
 [E2001] Error: mismatched types
     ╭─[ check-fail/types/continuation_state_arity.em:21:9 ]

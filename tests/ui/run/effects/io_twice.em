@@ -12,7 +12,7 @@ effect Ask where
 try : (Unit -> <Fail | e> a) -> <IO | e> Option a
 try action =
   handle action () with
-    | fail msg ->
+    | ctl fail msg ->
         println ("error: " ++ msg)
         None
     | return x -> Some x
@@ -20,7 +20,7 @@ try action =
 with_env : (Unit -> <Ask, IO | e> a) -> <IO | e> a
 with_env action =
   handle action () with
-    | ask key k -> k "host"
+    | ctl ask key k -> k "host"
 
 deploy : Unit -> <Ask, Fail, IO> Unit
 deploy () =

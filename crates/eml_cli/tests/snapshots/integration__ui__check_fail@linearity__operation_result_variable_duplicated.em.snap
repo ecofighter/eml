@@ -4,13 +4,13 @@ expression: rendered
 input_file: tests/ui/check-fail/linearity/operation_result_variable_duplicated.em
 ---
 [E3002] Error: `x` must be used exactly once, but it is used more than once
-    ╭─[ check-fail/linearity/operation_result_variable_duplicated.em:20:38 ]
+    ╭─[ check-fail/linearity/operation_result_variable_duplicated.em:20:42 ]
     │
- 20 │     | mk () k -> k (Box (fn x -> (x, x)))
-    │                                   ┬  ┬  
-    │                                   ╰───── first used here
-    │                                      │  
-    │                                      ╰── used again here
+ 20 │     | ctl mk () k -> k (Box (fn x -> (x, x)))
+    │                                       ┬  ┬  
+    │                                       ╰───── first used here
+    │                                          │  
+    │                                          ╰── used again here
     │ 
     │ Note: linear values, such as files, the continuation of a `once` operation and closures that capture one, must be used exactly once
 ────╯

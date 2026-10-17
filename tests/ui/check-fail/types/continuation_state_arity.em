@@ -5,18 +5,18 @@ effect Ask where
 missing : Unit -> Int
 missing () =
   handle ask () from 0 with
-    | ask () k st -> k st
+    | ctl ask () k st -> k st
     | return x st -> x
 
 extra : Unit -> Int
 extra () =
   handle ask () with
-    | ask () k -> k 1 2
+    | ctl ask () k -> k 1 2
 
 through : Unit -> Int
 through () =
   handle ask () from 0 with
-    | ask () k st ->
+    | ctl ask () k st ->
         let again = fn c -> c 1
         again k
     | return x _ -> x

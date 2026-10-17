@@ -252,7 +252,7 @@ fn a_head_variable_and_a_method_variable_with_the_same_name_stay_apart() {
 #[test]
 fn a_clause_variable_has_no_instance() {
     let text = format!(
-        "{SAME}effect Pick where\n  pick : a -> a\n\nrun : Int -> Int\nrun v =\n  handle pick v with\n    | pick x k -> if same x x then k x else k x"
+        "{SAME}effect Pick where\n  pick : a -> a\n\nrun : Int -> Int\nrun v =\n  handle pick v with\n    | ctl pick x k -> if same x x then k x else k x"
     );
     assert!(lines(&text)[0].starts_with("E2006"), "{:?}", lines(&text));
 }

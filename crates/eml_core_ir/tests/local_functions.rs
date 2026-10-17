@@ -88,7 +88,7 @@ bump n x = x + n
 outer : Int -> <IO> Int
 outer n =
   handle ask () + 1 with
-    | ask () k -> k (bump n 1)
+    | ctl ask () k -> k (bump n 1)
 
 main : Unit -> <IO> Unit
 main () = println (show (outer 5))
@@ -101,7 +101,7 @@ outer : Int -> <IO> Int
 outer n =
   let bump x = x + n
   handle ask () + 1 with
-    | ask () k -> k (bump 1)
+    | ctl ask () k -> k (bump 1)
 
 main : Unit -> <IO> Unit
 main () = println (show (outer 5))
@@ -121,7 +121,7 @@ bump n x = x + n
 outer : Int -> <IO> Int
 outer n =
   handle bump n (ask ()) with
-    | ask () k -> k 1
+    | ctl ask () k -> k 1
 
 main : Unit -> <IO> Unit
 main () = println (show (outer 2))
@@ -134,7 +134,7 @@ outer : Int -> <IO> Int
 outer n =
   let bump x = x + n
   handle bump (ask ()) with
-    | ask () k -> k 1
+    | ctl ask () k -> k 1
 
 main : Unit -> <IO> Unit
 main () = println (show (outer 2))

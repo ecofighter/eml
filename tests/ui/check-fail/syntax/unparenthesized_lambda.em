@@ -16,5 +16,5 @@ main () =
   each 3 fn n ->
     println (show n)
   let v = handle ask () + 1 with
-    | ask () k -> after drop k
+    | ctl ask () k -> after drop k
   println (show v)

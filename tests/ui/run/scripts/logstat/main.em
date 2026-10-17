@@ -106,7 +106,7 @@ parse number line =
 parsing : (Unit -> <Yield String, Record | e> Unit) -> <Record | e> Unit
 parsing lines =
   handle lines () from 1 with
-    | yield line k number ->
+    | ctl yield line k number ->
       record (parse number line)
       k () (number + 1)
     | return _ _ -> ()
@@ -147,7 +147,7 @@ aggregate : (Unit -> <Record, IO | e> Unit) -> <IO | e> Stats
 aggregate body =
   let empty = Stats { total = 0, malformed = 0, statuses = Leaf, paths = Leaf, count = 0, sum = 0, max = 0 }
   handle body () from empty with
-    | record parsed k st -> k () (add st parsed)
+    | ctl record parsed k st -> k () (add st parsed)
     | return _ st -> st
 
 report : Int -> Stats -> <IO> Unit

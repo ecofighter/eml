@@ -7,18 +7,18 @@ effect Choice where
 answering : String -> (Unit -> <Choice, IO | e> a) -> <IO | e> a
 answering tag action =
   handle action () with
-    | choose q k ->
+    | ctl choose q k ->
       println "\{tag} answers \{q}"
       k True
 
 both : (Unit -> <e> Unit) -> (Unit -> <Choice | e> Unit) -> <Choice, IO | e> Unit
 both cb action =
   handle action () with
-    | choose q k ->
+    | ctl choose q k ->
       let _ = choose "outer sees \{q}"
       cb ()
       handle (let _ = k True in k False) with
-        | choose t k2 ->
+        | ctl choose t k2 ->
           println "inner answers \{t}"
           k2 False
 

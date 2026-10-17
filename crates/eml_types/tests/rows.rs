@@ -194,7 +194,7 @@ effect Fail where
 try : (Unit -> <Fail | e> a) -> <IO | e> Int
 try action =
   handle action () with
-    | fail msg -> 0
+    | ctl fail msg -> 0
     | return x -> 1
 
 work : Unit -> <Fail, IO> Unit

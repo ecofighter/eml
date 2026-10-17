@@ -44,7 +44,7 @@ fn every_operation_looks_up_its_evidence() {
         "main : Unit -> <IO> Unit",
         "main () =",
         "  let n = handle ask () + ask () + ask () with",
-        "            | ask () k -> k 1",
+        "            | ctl ask () k -> k 1",
         "  println (show n)",
     ]
     .join("\n");
@@ -129,7 +129,7 @@ fn a_perform_under_one_handler_looks_at_one_evidence() {
         "main : Unit -> <IO> Unit
 main () =
   let r = handle count {n} with
-            | ask () k -> k 1
+            | ctl ask () k -> k 1
   println (show r)
 "
     );
@@ -148,8 +148,8 @@ fn a_perform_passes_an_inner_evidence_of_another_effect_once() {
 main : Unit -> <IO> Unit
 main () =
   let r = handle (handle count {n} with
-                    | tell _ k -> k ()) with
-            | ask () k -> k 1
+                    | ctl tell _ k -> k ()) with
+            | ctl ask () k -> k 1
   println (show r)
 "
     );
@@ -174,8 +174,8 @@ go () = count {n}
 main : Unit -> <IO> Unit
 main () =
   let r = handle (handle run go with
-                    | ask () k -> k 2) with
-            | ask () k -> k 1
+                    | ctl ask () k -> k 2) with
+            | ctl ask () k -> k 1
   println (show r)
 "
     );
@@ -204,8 +204,8 @@ main : Unit -> <IO> Unit
 main () =
   let (r, _) =
     handle down {depth} from 0 with
-      | get () k st -> k st st
-      | put n k _ -> k () n
+      | ctl get () k st -> k st st
+      | ctl put n k _ -> k () n
       | return x st -> (x, st)
   println (show r)
 "
@@ -239,7 +239,7 @@ main : Unit -> <IO> Unit
 main () =
   let r =
     handle down {depth} with
-      | ask () k -> k 1 + 0
+      | ctl ask () k -> k 1 + 0
   println (show r)
 "
         );
@@ -435,7 +435,7 @@ sum_asks n acc = if n == 0 then acc else sum_asks (n - 1) (acc + ask ())
 main : Unit -> <IO> Unit
 main () =
   let r = handle sum_asks {n} 0 with
-            | ask () k -> k 2
+            | ctl ask () k -> k 2
   println (show r)
 "
             ),
@@ -457,7 +457,7 @@ fn immediate_operations_under_deep_recursion_keep_the_peak_linear() {
 main : Unit -> <IO> Unit
 main () =
   let r = handle count {n} with
-            | ask () k -> k 1
+            | ctl ask () k -> k 1
   println (show r)
 "
             ),
@@ -507,7 +507,7 @@ go n = loop go n
 main : Unit -> <IO> Unit
 main () =
   let r = handle go {n} with
-            | ask () k -> k 0
+            | ctl ask () k -> k 0
   println (show r)
 "
             ),
@@ -864,7 +864,7 @@ bump n x = x + n
 outer : Int -> <IO> Int
 outer n =
   handle ask () + 1 with
-    | ask () k -> k (bump n 1)
+    | ctl ask () k -> k (bump n 1)
 
 main : Unit -> <IO> Unit
 main () = println (show (outer 5))
@@ -877,7 +877,7 @@ outer : Int -> <IO> Int
 outer n =
   let bump x = x + n
   handle ask () + 1 with
-    | ask () k -> k (bump 1)
+    | ctl ask () k -> k (bump 1)
 
 main : Unit -> <IO> Unit
 main () = println (show (outer 5))
@@ -895,7 +895,7 @@ bump n x = x + n
 outer : Int -> <IO> Int
 outer n =
   handle bump n (ask ()) with
-    | ask () k -> k 1
+    | ctl ask () k -> k 1
 
 main : Unit -> <IO> Unit
 main () = println (show (outer 2))
@@ -908,7 +908,7 @@ outer : Int -> <IO> Int
 outer n =
   let bump x = x + n
   handle bump (ask ()) with
-    | ask () k -> k 1
+    | ctl ask () k -> k 1
 
 main : Unit -> <IO> Unit
 main () = println (show (outer 2))

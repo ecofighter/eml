@@ -6,5 +6,5 @@
 . count () = tick () + tick ()
 .
 > handle count () with
-.   | tick () k -> k 5
+.   | ctl tick () k -> k 5
 .

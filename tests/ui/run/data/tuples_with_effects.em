@@ -11,7 +11,7 @@ both () =
 collect : Unit -> (String, Int)
 collect () =
   handle both () with
-    | pick (a, b) k ->
+    | ctl pick (a, b) k ->
       let (x, n) = k a
       let (y, m) = k b
       (x ++ " " ++ y, n + m)

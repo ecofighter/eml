@@ -12,17 +12,17 @@ both action =
 outer : (Unit -> <IO | e> a) -> <IO | e> a
 outer action =
   handle (handle both action with
-            | log s k ->
+            | ctl log s k ->
               println "inner: \{s}"
               k ()) with
-    | log s k ->
+    | ctl log s k ->
       println "middle: \{s}"
       k ()
 
 tagged : String -> (Unit -> <Log, IO | e> a) -> <IO | e> a
 tagged tag action =
   handle action () with
-    | log s k ->
+    | ctl log s k ->
       println "\{tag}: \{s}"
       k ()
 

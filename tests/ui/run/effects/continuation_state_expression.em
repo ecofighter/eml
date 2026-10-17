@@ -13,6 +13,6 @@ main : Unit -> <IO> Unit
 main () =
   let r =
     handle body () from 10 with
-      | ask () k st -> k st (st + 1)
+      | ctl ask () k st -> k st (st + 1)
       | return x st -> show x ++ "/" ++ show st
   println r

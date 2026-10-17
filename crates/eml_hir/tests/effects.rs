@@ -127,7 +127,7 @@ fn type_arguments_of_effects_in_an_open_row_are_checked() {
 #[test]
 fn a_function_after_an_operation_of_the_same_name_is_a_duplicate() {
     // 不具合2: 関数が操作を上書きし、節の `run` が E1001 になっていた
-    let text = "effect E where\n  run : Int -> Int\n\nrun : Int -> Int\nrun x = x\n\nf : Unit -> Int\nf () = handle run 1 with\n  | run x k -> k x";
+    let text = "effect E where\n  run : Int -> Int\n\nrun : Int -> Int\nrun x = x\n\nf : Unit -> Int\nf () = handle run 1 with\n  | ctl run x k -> k x";
     assert_eq!(
         diagnostics(text),
         ["E1003 4:1 `run` is defined more than once"]
@@ -136,7 +136,7 @@ fn a_function_after_an_operation_of_the_same_name_is_a_duplicate() {
 
 #[test]
 fn a_function_before_an_operation_of_the_same_name_does_not_hide_it_from_clauses() {
-    let text = "run : Int -> Int\nrun x = x\n\neffect E where\n  run : Int -> Int\n\nf : Unit -> Int\nf () = handle 1 with\n  | run x k -> k x";
+    let text = "run : Int -> Int\nrun x = x\n\neffect E where\n  run : Int -> Int\n\nf : Unit -> Int\nf () = handle 1 with\n  | ctl run x k -> k x";
     assert_eq!(
         diagnostics(text),
         ["E1003 5:3 `run` is defined more than once"]
@@ -145,7 +145,7 @@ fn a_function_before_an_operation_of_the_same_name_does_not_hide_it_from_clauses
 
 #[test]
 fn handler_continuations_and_drop_are_expressions() {
-    let text = "effect Ask where\n  ask : String -> String\n  never fail : String -> a\n\nf : Unit -> String\nf () =\n  handle ask \"x\" with\n    | ask key k -> k key\n    | fail message -> message\n    | return x -> x\n\ng : String -> Unit\ng s = drop s";
+    let text = "effect Ask where\n  ask : String -> String\n  never fail : String -> a\n\nf : Unit -> String\nf () =\n  handle ask \"x\" with\n    | ctl ask key k -> k key\n    | ctl fail message -> message\n    | return x -> x\n\ng : String -> Unit\ng s = drop s";
     insta::assert_snapshot!(lower_text(text), @r#"
     effect Ask
       ask : String -> String
@@ -161,7 +161,7 @@ fn handler_continuations_and_drop_are_expressions() {
 
 #[test]
 fn clause_names_are_resolved_among_operations_only() {
-    let text = "effect Ask where\n  ask : Unit -> Int\n\nf : Unit -> Int\nf () =\n  let ask = 1\n  handle ask with\n    | ask () k -> k ask";
+    let text = "effect Ask where\n  ask : Unit -> Int\n\nf : Unit -> Int\nf () =\n  let ask = 1\n  handle ask with\n    | ctl ask () k -> k ask";
     insta::assert_snapshot!(lower_text(text), @"
     effect Ask
       ask : Unit -> Int
@@ -175,18 +175,18 @@ fn clause_names_are_resolved_among_operations_only() {
 
 #[test]
 fn clause_errors_are_reported_together() {
-    let text = "effect Ask where\n  ask : Unit -> Int\n  other : Unit -> Int\n\neffect Log where\n  log : String -> Unit\n\neffect Fail where\n  never fail : String -> a\n\nf : Unit -> Int\nf () =\n  handle 1 with\n    | ask () -> 1\n    | ask () k -> k 1\n    | log m k -> k ()\n    | nope x k -> 1\n    | println s k -> k ()\n    | return x -> x\n    | return y -> y\n\ng : Unit -> Int\ng () = handle 1 with | fail m k -> 1\n\nh : Unit -> Int\nh () = handle 1 with | return x -> x";
+    let text = "effect Ask where\n  ask : Unit -> Int\n  other : Unit -> Int\n\neffect Log where\n  log : String -> Unit\n\neffect Fail where\n  never fail : String -> a\n\nf : Unit -> Int\nf () =\n  handle 1 with\n    | ctl ask () -> 1\n    | ctl ask () k -> k 1\n    | ctl log m k -> k ()\n    | ctl nope x k -> 1\n    | ctl println s k -> k ()\n    | return x -> x\n    | return y -> y\n\ng : Unit -> Int\ng () = handle 1 with | ctl fail m k -> 1\n\nh : Unit -> Int\nh () = handle 1 with | return x -> x";
     assert_eq!(
         diagnostics(text),
         [
             "E1013 13:3 this handler has no clause for `other` of `Ask`",
-            "E1010 14:7 the clause for `ask` takes 2 parameters, but this one has 1",
-            "E1014 15:7 `ask` has more than one clause in this handler",
-            "E1012 16:7 a handler can handle only one effect",
-            "E1001 17:7 cannot find effect operation `nope`",
-            "E1009 18:7 `IO` cannot be handled",
+            "E1010 14:11 the clause for `ask` takes 2 parameters, but this one has 1",
+            "E1014 15:11 `ask` has more than one clause in this handler",
+            "E1012 16:11 a handler can handle only one effect",
+            "E1001 17:11 cannot find effect operation `nope`",
+            "E1009 18:11 `IO` cannot be handled",
             "E1014 20:5 this handler has more than one `return` clause",
-            "E1010 23:24 the clause for `fail` takes 1 parameter, but this one has 2",
+            "E1010 23:28 the clause for `fail` takes 1 parameter, but this one has 2",
             "E1013 26:8 this handler has no operation clauses",
         ]
     );
@@ -206,7 +206,7 @@ fn drop_takes_exactly_one_argument() {
 
 #[test]
 fn a_handler_with_a_state_takes_the_state_last_in_every_clause() {
-    let text = "effect Ask where\n  ask : Unit -> Int\n\nf : Unit -> Int\nf () =\n  handle ask () from 0 with\n    | ask () k st -> k st (st + 1)\n    | return x st -> x + st";
+    let text = "effect Ask where\n  ask : Unit -> Int\n\nf : Unit -> Int\nf () =\n  handle ask () from 0 with\n    | ctl ask () k st -> k st (st + 1)\n    | return x st -> x + st";
     let lowered = lower_clean(text);
     let (id, _) = lowered
         .program
@@ -245,7 +245,7 @@ fn a_handler_with_a_state_takes_the_state_last_in_every_clause() {
 
 #[test]
 fn a_handler_with_a_state_is_printed_with_its_initial_state() {
-    let text = "effect Ask where\n  ask : Unit -> Int\n\nf : Unit -> Int\nf () =\n  handle ask () from 0 with\n    | ask () k st -> k st (st + 1)\n    | return x st -> x + st";
+    let text = "effect Ask where\n  ask : Unit -> Int\n\nf : Unit -> Int\nf () =\n  handle ask () from 0 with\n    | ctl ask () k st -> k st (st + 1)\n    | return x st -> x + st";
     insta::assert_snapshot!(lower_text(text), @"
     effect Ask
       ask : Unit -> Int
@@ -258,7 +258,7 @@ fn a_handler_with_a_state_is_printed_with_its_initial_state() {
 
 #[test]
 fn an_omitted_return_clause_of_a_handler_with_a_state_discards_the_state() {
-    let text = "effect Ask where\n  ask : Unit -> Int\n\nf : Unit -> Int\nf () =\n  handle ask () from 0 with\n    | ask () k st -> k 1 st";
+    let text = "effect Ask where\n  ask : Unit -> Int\n\nf : Unit -> Int\nf () =\n  handle ask () from 0 with\n    | ctl ask () k st -> k 1 st";
     let lowered = lower_clean(text);
     let (id, _) = lowered
         .program
@@ -295,20 +295,20 @@ fn names_inside_a_handler_with_a_state_are_resolved() {
 
 #[test]
 fn clauses_of_a_handler_with_a_state_take_one_more_parameter() {
-    let text = "effect Ask where\n  ask : Unit -> Int\n\neffect Fail where\n  never fail : Unit -> a\n\nf : Unit -> Int\nf () =\n  handle ask () from 0 with\n    | ask () k -> k 1 0\n    | return x -> x\n\ng : Unit -> Int\ng () =\n  handle fail () from 0 with\n    | fail () -> 0\n    | return x st -> x";
+    let text = "effect Ask where\n  ask : Unit -> Int\n\neffect Fail where\n  never fail : Unit -> a\n\nf : Unit -> Int\nf () =\n  handle ask () from 0 with\n    | ctl ask () k -> k 1 0\n    | return x -> x\n\ng : Unit -> Int\ng () =\n  handle fail () from 0 with\n    | ctl fail () -> 0\n    | return x st -> x";
     assert_eq!(
         diagnostics(text),
         [
-            "E1010 10:7 the clause for `ask` takes 3 parameters, but this one has 2",
+            "E1010 10:11 the clause for `ask` takes 3 parameters, but this one has 2",
             "E1010 11:5 the `return` clause takes 2 parameters, but this one has 1",
-            "E1010 16:7 the clause for `fail` takes 2 parameters, but this one has 1",
+            "E1010 16:11 the clause for `fail` takes 2 parameters, but this one has 1",
         ]
     );
 }
 
 #[test]
 fn handler_parts_capture_what_they_use() {
-    let text = "effect Ask where\n  ask : Unit -> Int\n\nf : Int -> Int -> Int\nf a b =\n  handle ask () + a with\n    | ask () k -> k b\n    | return x -> x + a";
+    let text = "effect Ask where\n  ask : Unit -> Int\n\nf : Int -> Int -> Int\nf a b =\n  handle ask () + a with\n    | ctl ask () k -> k b\n    | return x -> x + a";
     let lowered = lower_clean(text);
     let (id, _) = lowered
         .program
@@ -350,7 +350,7 @@ fn handler_parts_capture_what_they_use() {
 
 #[test]
 fn an_omitted_return_clause_is_synthesized() {
-    let text = "effect Ask where\n  ask : Unit -> Int\n\nf : Unit -> Int\nf () =\n  handle ask () with\n    | ask () k -> k 1";
+    let text = "effect Ask where\n  ask : Unit -> Int\n\nf : Unit -> Int\nf () =\n  handle ask () with\n    | ctl ask () k -> k 1";
     let lowered = lower_clean(text);
     let (id, _) = lowered
         .program
@@ -382,7 +382,7 @@ fn an_omitted_return_clause_is_synthesized() {
 
 #[test]
 fn a_repeated_operation_name_is_not_a_missing_clause() {
-    let text = "effect Ask where\n  ask : Unit -> Int\n  ask : Unit -> Int\n\nf : Unit -> Int\nf () = handle 1 with | ask () k -> k 1";
+    let text = "effect Ask where\n  ask : Unit -> Int\n  ask : Unit -> Int\n\nf : Unit -> Int\nf () = handle 1 with | ctl ask () k -> k 1";
     assert_eq!(
         diagnostics(text),
         ["E1003 3:3 `ask` is defined more than once"]
@@ -391,10 +391,10 @@ fn a_repeated_operation_name_is_not_a_missing_clause() {
 
 #[test]
 fn file_operations_cannot_be_handled() {
-    let text = "f : Unit -> Int\nf () =\n  handle 1 with\n    | Fs.open p k -> k 1";
+    let text = "f : Unit -> Int\nf () =\n  handle 1 with\n    | ctl Fs.open p k -> k 1";
     insta::assert_snapshot!(report(text), @"
-    E1009 4:7 `IO` cannot be handled
-      4:7 `open` is an extern function with the effect `IO`
+    E1009 4:11 `IO` cannot be handled
+      4:11 `open` is an extern function with the effect `IO`
     ");
 }
 
@@ -402,19 +402,19 @@ fn file_operations_cannot_be_handled() {
 fn a_user_println_does_not_make_the_io_clause_handleable() {
     // 節の先頭は extern の関数だけから引き直すので、ユーザーが同じ名前の関数を定義していても Prelude の `println` に
     // 届き、E1009 にする
-    let text = "println : String -> Unit\nprintln s = ()\nf : Unit -> Unit\nf () = handle () with\n  | println s k -> k ()";
+    let text = "println : String -> Unit\nprintln s = ()\nf : Unit -> Unit\nf () = handle () with\n  | ctl println s k -> k ()";
     insta::assert_snapshot!(report(text), @"
-    E1009 5:5 `IO` cannot be handled
-      5:5 `println` is an extern function with the effect `IO`
+    E1009 5:9 `IO` cannot be handled
+      5:9 `println` is an extern function with the effect `IO`
     ");
 }
 
 #[test]
 fn a_qualified_extern_function_in_a_clause_cannot_be_handled() {
-    let text = "f : Unit -> Unit\nf () = handle () with\n  | Prelude.println s k -> k ()";
+    let text = "f : Unit -> Unit\nf () = handle () with\n  | ctl Prelude.println s k -> k ()";
     insta::assert_snapshot!(report(text), @"
-    E1009 3:5 `IO` cannot be handled
-      3:5 `println` is an extern function with the effect `IO`
+    E1009 3:9 `IO` cannot be handled
+      3:9 `println` is an extern function with the effect `IO`
     ");
 }
 
@@ -427,27 +427,27 @@ fn a_pure_extern_function_in_a_clause_is_not_an_operation() {
         "\npub extern negate : Int -> Int",
     );
     assert_ne!(prelude, eml_hir::PRELUDE_SOURCE);
-    let text = "f : Unit -> Int\nf () = handle 1 with\n  | negate x k -> k 1";
+    let text = "f : Unit -> Int\nf () = handle 1 with\n  | ctl negate x k -> k 1";
     let lowered =
         eml_test_support::lower_with_std(&[("Prelude.em", &prelude), eml_hir::STD[1]], text);
     assert_eq!(
         short(lowered.files(), &lowered.diagnostics),
-        ["E1001 3:5 cannot find effect operation `negate`"]
+        ["E1001 3:9 cannot find effect operation `negate`"]
     );
 }
 
 #[test]
 fn a_method_in_a_clause_is_not_an_operation() {
-    let text = "f : Unit -> Int\nf () = handle 1 with\n  | show x k -> k 1";
+    let text = "f : Unit -> Int\nf () = handle 1 with\n  | ctl show x k -> k 1";
     assert_eq!(
         diagnostics(text),
-        ["E1001 3:5 cannot find effect operation `show`"]
+        ["E1001 3:9 cannot find effect operation `show`"]
     );
 }
 
 #[test]
 fn an_unknown_qualifier_in_a_clause_does_not_reach_the_extern_functions() {
-    let text = "f : Unit -> Unit\nf () = handle () with\n  | Nope.println s k -> k ()";
+    let text = "f : Unit -> Unit\nf () = handle () with\n  | ctl Nope.println s k -> k ()";
     let found = diagnostics(text);
     assert_eq!(found.len(), 1, "{found:?}");
     assert!(found[0].starts_with("E1031 "), "{found:?}");
@@ -456,7 +456,7 @@ fn an_unknown_qualifier_in_a_clause_does_not_reach_the_extern_functions() {
 #[test]
 fn an_ambiguous_clause_head_does_not_reach_the_extern_functions() {
     // 曖昧な名前は E1028 のままで、`Prelude.println` へ引き直さない (E1009 にしない)
-    let entry = "import A (Out(..))\nimport B (Err(..))\n\nf : Unit -> Unit\nf () = handle () with\n  | println s k -> k ()";
+    let entry = "import A (Out(..))\nimport B (Err(..))\n\nf : Unit -> Unit\nf () = handle () with\n  | ctl println s k -> k ()";
     let a = "pub effect Out where\n  println : String -> Unit";
     let b = "pub effect Err where\n  println : String -> Unit";
     let lowered = eml_test_support::lower_files(entry, &[("A.em", a), ("B.em", b)]);
@@ -473,7 +473,7 @@ fn report(text: &str) -> String {
 #[test]
 fn a_clause_for_an_operation_of_a_duplicate_effect_is_dropped_silently() {
     // 規則2: 重複した `effect` の操作は使えない。節を捨て、E1001 を重ねない
-    let text = "effect E where\n  x : Unit -> Int\neffect E where\n  y : Unit -> Int\n\nf : Unit -> Int\nf () = handle 1 with\n  | y () k -> k 1";
+    let text = "effect E where\n  x : Unit -> Int\neffect E where\n  y : Unit -> Int\n\nf : Unit -> Int\nf () = handle 1 with\n  | ctl y () k -> k 1";
     assert_eq!(
         diagnostics(text),
         ["E1003 3:8 `E` is defined more than once"]
@@ -482,9 +482,123 @@ fn a_clause_for_an_operation_of_a_duplicate_effect_is_dropped_silently() {
 
 #[test]
 fn a_qualified_clause_head_with_an_unknown_qualifier_is_dropped() {
-    let text = "effect Ask where\n  ask : Unit -> Int\n\nf : Unit -> Int\nf () = handle 1 with | M.ask () k -> k 1";
+    let text = "effect Ask where\n  ask : Unit -> Int\n\nf : Unit -> Int\nf () = handle 1 with | ctl M.ask () k -> k 1";
     assert_eq!(
         diagnostics(text),
-        ["E1031 5:24 unknown module qualifier `M`"]
+        ["E1031 5:28 unknown module qualifier `M`"]
     );
+}
+
+#[test]
+fn a_clause_without_a_keyword_is_e1051() {
+    let text = "effect Ask where\n  ask : Unit -> Int\n\nf : Unit -> Int\nf () = handle 1 with | ask () k -> k 1";
+    assert_eq!(
+        diagnostics(text),
+        ["E1051 5:22 this clause needs `fn` or `ctl`"]
+    );
+    assert_eq!(
+        crate::common::fixes(text),
+        ["E1051 5:22 write `ctl`", "  5:24..5:24 \"ctl \""]
+    );
+}
+
+#[test]
+fn a_fn_clause_for_a_never_operation_is_e1051() {
+    // `fn` の節として下ろさず `ctl` の節として下ろすので、E1010 も E1013 も重ねない
+    let text = "effect Fail where\n  never fail : String -> a\n\nf : Unit -> Int\nf () = handle 1 with | fn fail e -> 0";
+    insta::assert_snapshot!(report(text), @"
+    E1051 5:24 a `never` operation cannot have a `fn` clause
+      5:24 `fail` is a `never` operation
+      note: a `never` operation never resumes, so its clause must be `ctl`
+      help: write `ctl` instead of `fn`
+    ");
+}
+
+#[test]
+fn a_return_clause_with_a_keyword_is_e1051() {
+    let text = "effect Ask where\n  ask : Unit -> Int\n\nf : Unit -> Int\nf () = handle 1 with\n    | ctl ask () k -> k 1\n    | fn return x -> x\n\ng : Unit -> Int\ng () = handle 1 with\n    | ctl ask () k -> k 1\n    | ctl return x -> x";
+    insta::assert_snapshot!(report(text), @"
+    E1051 7:7 a `return` clause takes neither `fn` nor `ctl`
+      7:7 remove this `fn`
+    E1051 12:7 a `return` clause takes neither `fn` nor `ctl`
+      12:7 remove this `ctl`
+    ");
+}
+
+#[test]
+fn a_fn_clause_lowers_to_a_resuming_clause() {
+    let text = "effect Ask where\n  ask : Unit -> Int\n\nf : Unit -> Int\nf () = handle ask () with | fn ask () -> 1\n\ng : Unit -> Int\ng () =\n  handle ask () from 0 with\n    | fn ask () st -> (st, st + 1)\n    | return x st -> x + st";
+    insta::assert_snapshot!(lower_text(text), @"
+    effect Ask
+      ask : Unit -> Int
+    f : Unit -> Int
+    f () = (handle (@Ask.ask ()) with | ask () $k#0 -> {
+      let $r#1 = 1
+      ($k#0 $r#1)
+    } | return $r#2 -> $r#2)
+    g : Unit -> Int
+    g () = {
+      (handle (@Ask.ask ()) from 0 with | ask () $k#1 st#0 -> {
+        let ($v#2, $st#3) = (st#0, (+ st#0 1))
+        ($k#1 $v#2 $st#3)
+      } | return x#4 st#5 -> (+ x#4 st#5))
+    }
+    ");
+    let lowered = lower_clean(text);
+    for (name, arity) in [("f", 1), ("g", 2)] {
+        let (id, _) = lowered
+            .program
+            .functions()
+            .find(|(_, function)| function.name == name)
+            .unwrap();
+        let body = lowered.program.body(id).unwrap();
+        let [fn_clause] = body.fn_clauses.as_slice() else {
+            panic!("`{name}` has one `fn` clause");
+        };
+        assert_eq!(body.locals[fn_clause.k].name, "$k");
+        // 隠れた `k` も、書いた `k` と同じく継続の引数の数を持つ (docs/spec/effects.md)
+        assert_eq!(body.continuations.get(fn_clause.k), Some(&arity));
+        let clause = body
+            .exprs
+            .iter()
+            .find_map(|(_, expr)| match &expr.kind {
+                eml_hir::ExprKind::Handle { clauses, .. } => Some(&clauses[0]),
+                _ => None,
+            })
+            .unwrap();
+        assert!(clause.resumes);
+        assert_eq!(clause.range, fn_clause.range);
+        let k = clause.k().unwrap();
+        assert_eq!(body.pats[k].kind, eml_hir::PatKind::Bind(fn_clause.k));
+        let eml_hir::ExprKind::Block { stmts, .. } = &body.exprs[clause.closure.body].kind else {
+            panic!("the body of a `fn` clause becomes a block");
+        };
+        let [eml_hir::Stmt::Let { init, .. }] = stmts.as_slice() else {
+            panic!("the block binds the body of the clause");
+        };
+        assert_eq!(*init, fn_clause.body);
+    }
+}
+
+#[test]
+fn a_fn_clause_arity_does_not_count_k() {
+    let text = "effect Ask where\n  ask : Unit -> Int\n\nf : Unit -> Int\nf () = handle 1 with | fn ask () st -> 1\n\ng : Unit -> Int\ng () = handle 1 from 0 with | fn ask () -> (1, 0)";
+    insta::assert_snapshot!(report(text), @"
+    E1010 5:27 the `fn` clause for `ask` takes 1 parameter, but this one has 2
+      5:27 this clause
+      note: the `fn` clause takes the arguments of `ask`
+    E1010 8:34 the `fn` clause for `ask` takes 2 parameters, but this one has 1
+      8:34 this clause
+      note: the `fn` clause takes the arguments of `ask` and then the state
+    ");
+}
+
+#[test]
+fn missing_clause_help_writes_ctl() {
+    let text = "effect Ask where\n  ask : Unit -> Int\n  other : Unit -> Int\n  never fail : Unit -> a\n\nf : Unit -> Int\nf () = handle 1 with | ctl ask () k -> k 1";
+    insta::assert_snapshot!(report(text), @"
+    E1013 7:8 this handler has no clause for `other`, `fail` of `Ask`
+      7:8 this handler
+      help: add `| ctl other _ k -> ...` and `| ctl fail _ -> ...`
+    ");
 }

@@ -16,7 +16,7 @@ body () =
 inner : Unit -> <Ask, IO> Int
 inner () =
   handle body () from Fs.open "input.txt" with
-    | tick () k f -> k () f
+    | ctl tick () k f -> k () f
     | return x f ->
         Fs.close f
         x
@@ -24,10 +24,10 @@ inner () =
 main : Unit -> <IO> Unit
 main () =
   let r = handle inner () with
-    | ask () k -> k 3
+    | ctl ask () k -> k 3
   println (show r)
   let r2 = handle inner () with
-    | ask () k ->
+    | ctl ask () k ->
         drop k
         42
   println (show r2)

@@ -15,12 +15,12 @@ main : Unit -> <IO> Unit
 main () =
   let n =
     handle count () with
-      | tick () k -> k 10
+      | ctl tick () k -> k 10
   println (show n)
   let (m, final) =
     handle bump () from 41 with
-      | State.get () k st -> k st st
-      | State.put v k _ -> k () v
+      | ctl State.get () k st -> k st st
+      | ctl State.put v k _ -> k () v
       | return x st -> (x, st)
   println (show m)
   println (show final)

@@ -6,5 +6,5 @@ main : Unit -> <IO> Unit
 main () =
   let n =
     handle ask () with
-      | ask () k -> 0
+      | ctl ask () k -> 0
   println (show n)

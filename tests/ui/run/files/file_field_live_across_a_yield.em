@@ -17,6 +17,6 @@ body p = match p with
 main : Unit -> <IO> Unit
 main () =
   handle body (P (Fs.open "input.txt") "tag") with
-    | ask () k -> k 7
+    | ctl ask () k -> k 7
   handle body (P (Fs.open "input.txt") "dropped") with
-    | ask () k -> drop k
+    | ctl ask () k -> drop k

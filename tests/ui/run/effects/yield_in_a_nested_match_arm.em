@@ -15,8 +15,8 @@ go p = match p with
 main : Unit -> <IO> Unit
 main () =
   let r = handle go (P (Some "v") 1) with
-    | ask () k -> k 10
+    | ctl ask () k -> k 10
   println r
   let r2 = handle go (P None 1) with
-    | ask () k -> k 10
+    | ctl ask () k -> k 10
   println r2

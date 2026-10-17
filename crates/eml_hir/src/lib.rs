@@ -92,4 +92,5 @@ pub mod codes {
     pub const ARGUMENT_SORT: ErrorCode = ErrorCode(1048);
     pub const UNKNOWN_KIND: ErrorCode = ErrorCode(1049);
     pub const ONCE_DECLARATION: ErrorCode = ErrorCode(1050);
+    pub const CLAUSE_KEYWORD: ErrorCode = ErrorCode(1051);
 }

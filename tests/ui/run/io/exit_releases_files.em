@@ -16,7 +16,7 @@ main () =
   let g = Fs.open "input.txt"
   let result =
     handle try_io (fn () -> deep 2) from g with
-      | tick () k st -> k () st
+      | ctl tick () k st -> k () st
       | return x st ->
         Fs.close st
         x

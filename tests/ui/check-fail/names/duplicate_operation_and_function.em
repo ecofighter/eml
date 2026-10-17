@@ -8,5 +8,5 @@ ask () = 1
 main : Unit -> <IO> Unit
 main () =
   let n = handle ask () with
-    | ask () k -> k 2
+    | ctl ask () k -> k 2
   println (show n)

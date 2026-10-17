@@ -21,5 +21,5 @@ go xs =
 main : Unit -> <IO> Unit
 main () =
   let r = handle go (Cons 1 (Cons 2 (Cons 3 Nil))) with
-    | choose () k -> k True + k False
+    | ctl choose () k -> k True + k False
   println (show r)

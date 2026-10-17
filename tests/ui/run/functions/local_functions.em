@@ -87,13 +87,13 @@ with_handler : Unit -> <IO> Int
 with_handler () =
   let go y = y + 1
   handle go 1 + ask () with
-    | ask () k -> k (go 40)
+    | ctl ask () k -> k (go 40)
 
 higher_order : Unit -> <IO> Int
 higher_order () =
   let app f = f ()
   handle app (fn () -> ask ()) with
-    | ask () k -> k 7
+    | ctl ask () k -> k 7
 
 walk : Int -> <IO> Unit
 walk n =
@@ -121,7 +121,7 @@ main () =
   println (show (polymorphic_outer 1 (fn x -> x + 1)))
   println (polymorphic_outer "s" (fn x -> x ++ "!"))
   println (show (handle polymorphic_outer 1 (fn x -> x + ask ()) with
-    | ask () k -> k 10))
+    | ctl ask () k -> k 10))
   println (show (with_handler ()))
   println (show (higher_order ()))
   println (show (let twice x = x + x in twice 21))

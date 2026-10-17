@@ -31,14 +31,14 @@ a <+> b = a * 2 + b
 try : (Unit -> <Fail | e> a) -> <e> Option a
 try action =
   handle action () with
-    | fail _ -> None
+    | ctl fail _ -> None
     | return x -> Some x
 
 run_state : s -> (Unit -> <State s | e> a) -> <e> (a, s)
 run_state init action =
   handle action () from init with
-    | get () k st -> k st st
-    | put st2 k _ -> k () st2
+    | ctl get () k st -> k st st
+    | ctl put st2 k _ -> k () st2
     | return x st -> (x, st)
 
 counter : Unit -> <State Int> Int
@@ -49,7 +49,7 @@ counter () =
 
 first : (Unit -> <Choose | e> a) -> <e> a
 first action =
-  handle action () with | choose () k -> k True
+  handle action () with | ctl choose () k -> k True
 
 classify : Int -> String
 classify n =

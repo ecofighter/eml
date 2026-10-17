@@ -114,11 +114,11 @@ fn a_clause_variable_is_shown_like_the_function_variable_of_the_same_name() {
     // 節の `x` の型は操作ごとの型変数 `a` で、関数の `a` と別の型 (`OpVar`) だが、同じ名前で表示する
     // (docs/implementation/architecture.md の「`eml_types` の内部」)
     let text = format!(
-        "{ID}effect Pick where\n  pick : a -> a\n\nrun : a -> a\nrun v =\n  handle id v with\n    | pick x k -> k (id x)"
+        "{ID}effect Pick where\n  pick : a -> a\n\nrun : a -> a\nrun v =\n  handle id v with\n    | ctl pick x k -> k (id x)"
     );
     insta::assert_snapshot!(entry_table(&text, "run"), @"
     9:10 id [a]
-    10:22 id [a]
+    10:26 id [a]
     ");
 }
 
@@ -127,7 +127,7 @@ fn a_clause_variable_is_a_different_type_from_the_function_variable_of_the_same_
     // 単相化は関数の型変数にだけ代入するので、節の操作ごとの型変数は別の種類で書き出す
     // (docs/implementation/architecture.md の「`eml_types` の内部」)
     let text = format!(
-        "{ID}effect Pick where\n  pick : a -> a\n\nrun : a -> a\nrun v =\n  handle id v with\n    | pick x k -> k (id x)"
+        "{ID}effect Pick where\n  pick : a -> a\n\nrun : a -> a\nrun v =\n  handle id v with\n    | ctl pick x k -> k (id x)"
     );
     let checked = check(&text);
     let program = &checked.program;

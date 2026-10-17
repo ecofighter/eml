@@ -18,7 +18,7 @@ pick o =
 both : Option String -> String
 both o =
   handle pick o with
-    | choose () k -> k True ++ " " ++ k False
+    | ctl choose () k -> k True ++ " " ++ k False
 
 main : Unit -> <IO> Unit
 main () =

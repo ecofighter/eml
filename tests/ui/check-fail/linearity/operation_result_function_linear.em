@@ -12,7 +12,7 @@ use_it () =
 main : Unit -> <IO> Unit
 main () =
   handle use_it () with
-    | mk () k ->
+    | ctl mk () k ->
         let h = Fs.open "input.txt"
         k (fn () -> Fs.close h, 1)
     | return u -> u

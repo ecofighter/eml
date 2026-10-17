@@ -15,13 +15,13 @@ input_file: tests/ui/check-fail/linearity/state.em
     │ Note: linear values, such as files, the continuation of a `once` operation and closures that capture one, must be used exactly once
 ────╯
 [E3003] Error: `f` must be used exactly once, but it is not used
-    ╭─[ check-fail/linearity/state.em:19:15 ]
+    ╭─[ check-fail/linearity/state.em:19:19 ]
     │
- 19 │     | fail () f -> 0
-    │               ┬     │ 
-    │               ╰─────── `f` is bound here
-    │                     │ 
-    │                     ╰─ `f` is not used before the end of this scope
+ 19 │     | ctl fail () f -> 0
+    │                   ┬     │ 
+    │                   ╰─────── `f` is bound here
+    │                         │ 
+    │                         ╰─ `f` is not used before the end of this scope
     │ 
     │ Help: pass `f` to `drop`
     │ 

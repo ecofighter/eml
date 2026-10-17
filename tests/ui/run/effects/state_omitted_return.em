@@ -6,5 +6,5 @@ main : Unit -> <IO> Unit
 main () =
   let n =
     handle ask () * 2 from "unused" with
-      | ask () k s -> k 21 s
+      | ctl ask () k s -> k 21 s
   println (show n)

@@ -40,7 +40,7 @@ fn operations_are_values_and_can_be_partially_applied() {
 
 #[test]
 fn a_handler_removes_its_effect_and_types_the_continuation() {
-    let text = "effect Ask where\n  ask : String -> Int\n\nrun : Unit -> <Ask, IO> Int\nrun () =\n  let n = ask \"n\"\n  println \"asked\"\n  n + 1\n\nmain : Unit -> <IO> Unit\nmain () =\n  let total =\n    handle run () with\n      | ask key k -> k 41\n      | return x -> show x\n  println total";
+    let text = "effect Ask where\n  ask : String -> Int\n\nrun : Unit -> <Ask, IO> Int\nrun () =\n  let n = ask \"n\"\n  println \"asked\"\n  n + 1\n\nmain : Unit -> <IO> Unit\nmain () =\n  let total =\n    handle run () with\n      | ctl ask key k -> k 41\n      | return x -> show x\n  println total";
     insta::assert_snapshot!(check_text(text), @"
     ask : String -> <Ask> Int
     run : Unit -> <Ask, IO> Int
@@ -56,8 +56,8 @@ fn a_handler_removes_its_effect_and_types_the_continuation() {
 /// 節の `k` は普通の関数型である。状態のある handler では2引数で、row は最後の矢印に付く (docs/spec/effects.md)。
 #[test]
 fn a_continuation_is_a_function() {
-    let stateless = "effect Ask where\n  ask : Unit -> Int\n\nrun : Unit -> <IO> String\nrun () =\n  handle ask () with\n    | ask () k -> k 1\n    | return x -> show x";
-    let stateful = "effect Tick where\n  tick : Unit -> Int\n\nrun : Unit -> Int\nrun () =\n  handle tick () from \"s\" with\n    | tick () k st -> k 1 st\n    | return x _ -> x";
+    let stateless = "effect Ask where\n  ask : Unit -> Int\n\nrun : Unit -> <IO> String\nrun () =\n  handle ask () with\n    | ctl ask () k -> k 1\n    | return x -> show x";
+    let stateful = "effect Tick where\n  tick : Unit -> Int\n\nrun : Unit -> Int\nrun () =\n  handle tick () from \"s\" with\n    | ctl tick () k st -> k 1 st\n    | return x _ -> x";
     insta::assert_snapshot!(check_text(stateless), @"
     ask : Unit -> <Ask> Int
     run : Unit -> <IO> String
@@ -76,7 +76,7 @@ fn a_continuation_is_a_function() {
 /// 状態のある `multi` の `k` を部分適用したクロージャは、`Lin` の値を捕まえると1回しか呼べない (docs/spec/effects.md)。
 #[test]
 fn a_partial_continuation_capturing_a_linear_value_is_linear() {
-    let text = "effect Pick where\n  multi pick : Unit -> Fs.File\n\nrun : Unit -> <IO> Unit\nrun () =\n  handle pick () from () with\n    | pick () k st ->\n        let g = k (Fs.open \"a\")\n        g st\n        g st\n    | return f _ -> Fs.close f";
+    let text = "effect Pick where\n  multi pick : Unit -> Fs.File\n\nrun : Unit -> <IO> Unit\nrun () =\n  handle pick () from () with\n    | ctl pick () k st ->\n        let g = k (Fs.open \"a\")\n        g st\n        g st\n    | return f _ -> Fs.close f";
     insta::assert_snapshot!(check_text(text), @"
     pick : Unit -> <Pick> File
     run : Unit -> <IO> Unit
@@ -96,7 +96,7 @@ fn a_partial_continuation_capturing_a_linear_value_is_linear() {
 /// (docs/spec/effects.md)。
 #[test]
 fn a_partial_continuation_of_a_once_operation_with_a_state_is_linear() {
-    let text = "effect Ask where\n  ask : Unit -> Int\n\nrun : Unit -> Int\nrun () =\n  handle ask () from 0 with\n    | ask () k st ->\n        let g = k 1\n        let a = g st\n        let b = g st\n        a + b\n    | return x _ -> x";
+    let text = "effect Ask where\n  ask : Unit -> Int\n\nrun : Unit -> Int\nrun () =\n  handle ask () from 0 with\n    | ctl ask () k st ->\n        let g = k 1\n        let a = g st\n        let b = g st\n        a + b\n    | return x _ -> x";
     insta::assert_snapshot!(check_text(text), @"
     ask : Unit -> <Ask> Int
     run : Unit -> Int
@@ -116,7 +116,7 @@ fn a_partial_continuation_of_a_once_operation_with_a_state_is_linear() {
 
 #[test]
 fn type_variables_of_an_operation_are_rigid_in_its_clause() {
-    let text = "effect Pick where\n  pick : a -> a -> a\n\nfirst : Unit -> Int\nfirst () =\n  handle pick 1 2 with\n    | pick x y k -> k x\n\nwrong : Unit -> Int\nwrong () =\n  handle pick 1 2 with\n    | pick x y k -> k 0";
+    let text = "effect Pick where\n  pick : a -> a -> a\n\nfirst : Unit -> Int\nfirst () =\n  handle pick 1 2 with\n    | ctl pick x y k -> k x\n\nwrong : Unit -> Int\nwrong () =\n  handle pick 1 2 with\n    | ctl pick x y k -> k 0";
     insta::assert_snapshot!(check_text(text), @"
     pick : a -> a -> <Pick> a
       kinds: a <= Unr
@@ -131,9 +131,9 @@ fn type_variables_of_an_operation_are_rigid_in_its_clause() {
       k#2 : once a -> Int
       $r#3 : Int
     ---
-    E2001 12:23 mismatched types
-      12:23 expected `a`, found `Int`
-      12:21 argument 1 of `k`
+    E2001 12:27 mismatched types
+      12:27 expected `a`, found `Int`
+      12:25 argument 1 of `k`
     ");
 }
 
@@ -151,7 +151,7 @@ fn drop_takes_any_value_and_a_non_function_cannot_be_called() {
 
 #[test]
 fn the_body_of_a_handler_may_perform_only_the_handled_effect_and_the_outer_row() {
-    let text = "effect Ask where\n  ask : Unit -> Int\n\nnoisy : Unit -> <IO> Int\nnoisy () =\n  println \"x\"\n  1\n\nf : Unit -> Int\nf () =\n  handle noisy () with\n    | ask () k -> k 1";
+    let text = "effect Ask where\n  ask : Unit -> Int\n\nnoisy : Unit -> <IO> Int\nnoisy () =\n  println \"x\"\n  1\n\nf : Unit -> Int\nf () =\n  handle noisy () with\n    | ctl ask () k -> k 1";
     insta::assert_snapshot!(check_text(text), @"
     ask : Unit -> <Ask> Int
     noisy : Unit -> <IO> Int
@@ -168,7 +168,7 @@ fn the_body_of_a_handler_may_perform_only_the_handled_effect_and_the_outer_row()
 
 #[test]
 fn a_continuation_of_a_once_operation_must_be_used_exactly_once() {
-    let text = "effect Ask where\n  ask : Unit -> Int\n\ntwice : Unit -> Int\ntwice () =\n  handle ask () with\n    | ask () k -> k 1 + k 2\n\nunused : Unit -> Int\nunused () =\n  handle ask () with\n    | ask () k -> 0\n\ndiscarded : Unit -> Int\ndiscarded () =\n  handle ask () with\n    | ask () _ -> 0\n\ncaptured : Unit -> <Ask> Int\ncaptured () =\n  handle ask () with\n    | ask () k ->\n        handle ask () with\n          | ask () inner -> k (inner 1)";
+    let text = "effect Ask where\n  ask : Unit -> Int\n\ntwice : Unit -> Int\ntwice () =\n  handle ask () with\n    | ctl ask () k -> k 1 + k 2\n\nunused : Unit -> Int\nunused () =\n  handle ask () with\n    | ctl ask () k -> 0\n\ndiscarded : Unit -> Int\ndiscarded () =\n  handle ask () with\n    | ctl ask () _ -> 0\n\ncaptured : Unit -> <Ask> Int\ncaptured () =\n  handle ask () with\n    | ctl ask () k ->\n        handle ask () with\n          | ctl ask () inner -> k (inner 1)";
     insta::assert_snapshot!(check_text(text), @"
     ask : Unit -> <Ask> Int
     twice : Unit -> Int
@@ -185,21 +185,21 @@ fn a_continuation_of_a_once_operation_must_be_used_exactly_once() {
       $r#2 : Int
       $r#3 : Int
     ---
-    E3002 7:25 `k` must be used exactly once, but it is used more than once
-      7:25 used again here
-      7:19 first used here
+    E3002 7:29 `k` must be used exactly once, but it is used more than once
+      7:29 used again here
+      7:23 first used here
       note: linear values, such as files, the continuation of a `once` operation and closures that capture one, must be used exactly once
     E3005 12:5 the continuation `k` of a `once` operation must be called or dropped
       12:5 this clause
-      12:14 `k` is bound here
+      12:18 `k` is bound here
       note: linear values, such as files, the continuation of a `once` operation and closures that capture one, must be used exactly once
       help: call `k` or `drop k` on every path
-    E3004 17:14 a linear value cannot be discarded with `_`
-      17:14 this pattern discards it
+    E3004 17:18 a linear value cannot be discarded with `_`
+      17:18 this pattern discards it
       note: linear values, such as files, the continuation of a `once` operation and closures that capture one, must be used exactly once
       help: bind it to a name and pass the name to `drop`
-    E3001 22:14 `k` must be used exactly once, but an operation clause captures it
-      22:14 `k` is bound here
+    E3001 22:18 `k` must be used exactly once, but an operation clause captures it
+      22:18 `k` is bound here
       note: linear values, such as files, the continuation of a `once` operation and closures that capture one, must be used exactly once
       note: an operation clause runs each time its operation is performed
     ");
@@ -207,7 +207,7 @@ fn a_continuation_of_a_once_operation_must_be_used_exactly_once() {
 
 #[test]
 fn a_closure_capturing_a_continuation_cannot_be_used_twice() {
-    let text = "effect Ask where\n  ask : Unit -> Int\n\ntwice : (Int -> Int) -> Int\ntwice f = f (f 0)\n\ng : Unit -> Int\ng () =\n  handle ask () with\n    | ask () k -> twice (fn n -> k n)";
+    let text = "effect Ask where\n  ask : Unit -> Int\n\ntwice : (Int -> Int) -> Int\ntwice f = f (f 0)\n\ng : Unit -> Int\ng () =\n  handle ask () with\n    | ctl ask () k -> twice (fn n -> k n)";
     insta::assert_snapshot!(check_text(text), @"
     ask : Unit -> <Ask> Int
     twice : (Int -> Int) -> Int
@@ -218,30 +218,30 @@ fn a_closure_capturing_a_continuation_cannot_be_used_twice() {
       n#1 : Int
       $r#2 : Int
     ---
-    E3001 10:19 a linear value is passed to `twice`, which may use it more than once or not at all
-      10:19 `twice` is used here
+    E3001 10:23 a linear value is passed to `twice`, which may use it more than once or not at all
+      10:23 `twice` is used here
       note: linear values, such as files, the continuation of a `once` operation and closures that capture one, must be used exactly once
     ");
 }
 
 #[test]
 fn a_body_with_a_reported_error_does_not_report_linear_values() {
-    let text = "effect Ask where\n  ask : Unit -> Int\n\nf : Unit -> Int\nf () =\n  handle ask () with\n    | ask () k -> k";
+    let text = "effect Ask where\n  ask : Unit -> Int\n\nf : Unit -> Int\nf () =\n  handle ask () with\n    | ctl ask () k -> k";
     insta::assert_snapshot!(check_text(text), @"
     ask : Unit -> <Ask> Int
     f : Unit -> Int
       k#0 : once Int -> Int
       $r#1 : Int
     ---
-    E2001 7:19 mismatched types
-      7:19 expected `Int`, found `once Int -> Int`
+    E2001 7:23 mismatched types
+      7:23 expected `Int`, found `once Int -> Int`
       note: each clause of a handler must have the type of the whole `handle` expression
     ");
 }
 
 #[test]
 fn a_continuation_cannot_pass_through_a_polymorphic_operation_parameter() {
-    let text = "effect Ask where\n  ask : Unit -> Int\n\neffect Sink where\n  sink : a -> Unit\n\neffect Pair where\n  pair : a -> (a -> a -> b) -> b\n\nsunk : Unit -> <Sink> Int\nsunk () =\n  handle ask () with\n    | ask () k ->\n        sink k\n        0\n\npaired : Unit -> <Pair> Int\npaired () =\n  handle ask () with\n    | ask () k ->\n        let f = pair 1 (fn x y -> fn u -> k (x + y))\n        f ()";
+    let text = "effect Ask where\n  ask : Unit -> Int\n\neffect Sink where\n  sink : a -> Unit\n\neffect Pair where\n  pair : a -> (a -> a -> b) -> b\n\nsunk : Unit -> <Sink> Int\nsunk () =\n  handle ask () with\n    | ctl ask () k ->\n        sink k\n        0\n\npaired : Unit -> <Pair> Int\npaired () =\n  handle ask () with\n    | ctl ask () k ->\n        let f = pair 1 (fn x y -> fn u -> k (x + y))\n        f ()";
     insta::assert_snapshot!(check_text(text), @"
     ask : Unit -> <Ask> Int
     sink : a -> <Sink> Unit
@@ -270,7 +270,7 @@ fn a_continuation_cannot_pass_through_a_polymorphic_operation_parameter() {
 
 #[test]
 fn a_clause_dropped_by_an_error_does_not_cause_linear_misuse() {
-    let text = "effect Ask where\n  ask : Unit -> Int\n\neffect Log where\n  log : String -> Unit\n\nf : Unit -> Int\nf () =\n  handle ask () with\n    | ask () k ->\n        handle 1 with\n          | log m k2 -> k2 ()\n          | return x -> x\n          | return y -> k y";
+    let text = "effect Ask where\n  ask : Unit -> Int\n\neffect Log where\n  log : String -> Unit\n\nf : Unit -> Int\nf () =\n  handle ask () with\n    | ctl ask () k ->\n        handle 1 with\n          | ctl log m k2 -> k2 ()\n          | return x -> x\n          | return y -> k y";
     insta::assert_snapshot!(check_text(text), @"
     ask : Unit -> <Ask> Int
     log : String -> <Log> Unit
@@ -315,7 +315,7 @@ fn type_arguments_of_a_performed_effect_must_match_the_row() {
 
 #[test]
 fn a_handler_takes_the_type_arguments_of_its_effect_from_the_body() {
-    let text = "effect Reader r where\n  ask : Unit -> r\n\ngreeting : Unit -> <Reader String> String\ngreeting () = ask ()\n\nrun : Unit -> String\nrun () =\n  handle greeting () with\n    | ask () k -> k \"x\"\n\nwrong : Unit -> String\nwrong () =\n  handle greeting () with\n    | ask () k -> k 1";
+    let text = "effect Reader r where\n  ask : Unit -> r\n\ngreeting : Unit -> <Reader String> String\ngreeting () = ask ()\n\nrun : Unit -> String\nrun () =\n  handle greeting () with\n    | ctl ask () k -> k \"x\"\n\nwrong : Unit -> String\nwrong () =\n  handle greeting () with\n    | ctl ask () k -> k 1";
     insta::assert_snapshot!(check_text(text), @"
     ask : Unit -> <Reader r> r
     greeting : Unit -> <Reader String> String
@@ -326,9 +326,9 @@ fn a_handler_takes_the_type_arguments_of_its_effect_from_the_body() {
       k#0 : once String -> String
       $r#1 : String
     ---
-    E2001 15:21 mismatched types
-      15:21 expected `String`, found `Int`
-      15:19 argument 1 of `k`
+    E2001 15:25 mismatched types
+      15:25 expected `String`, found `Int`
+      15:23 argument 1 of `k`
     ");
 }
 
@@ -351,7 +351,7 @@ fn a_function_type_with_other_effect_arguments_is_a_mismatch() {
 
 #[test]
 fn a_continuation_of_a_multi_operation_may_be_called_twice() {
-    let text = "effect Choice where\n  multi choose : Unit -> Bool\n\nboth : Unit -> Int\nboth () =\n  handle (if choose () then 1 else 2) with\n    | choose () k -> k True + k False";
+    let text = "effect Choice where\n  multi choose : Unit -> Bool\n\nboth : Unit -> Int\nboth () =\n  handle (if choose () then 1 else 2) with\n    | ctl choose () k -> k True + k False";
     insta::assert_snapshot!(check_text(text), @"
     choose : Unit -> <Choice> Bool
     both : Unit -> Int
@@ -362,7 +362,7 @@ fn a_continuation_of_a_multi_operation_may_be_called_twice() {
 
 #[test]
 fn the_return_clause_of_a_multi_handler_cannot_capture_a_linear_value() {
-    let text = "effect Ask where\n  ask : Unit -> Int\n\neffect Choice where\n  multi choose : Unit -> Bool\n\ncaptured : Unit -> Int\ncaptured () =\n  handle ask () with\n    | ask () k ->\n        handle (if choose () then 1 else 2) with\n          | choose () c -> c True + c False\n          | return n -> k n";
+    let text = "effect Ask where\n  ask : Unit -> Int\n\neffect Choice where\n  multi choose : Unit -> Bool\n\ncaptured : Unit -> Int\ncaptured () =\n  handle ask () with\n    | ctl ask () k ->\n        handle (if choose () then 1 else 2) with\n          | ctl choose () c -> c True + c False\n          | return n -> k n";
     insta::assert_snapshot!(check_text(text), @"
     ask : Unit -> <Ask> Int
     choose : Unit -> <Choice> Bool
@@ -386,7 +386,7 @@ fn the_return_clause_of_a_multi_handler_cannot_capture_a_linear_value() {
 /// `table` の単体テスト `an_extern_effect_is_performed_at_most_once` が確かめる。
 #[test]
 fn a_linear_value_may_be_kept_across_an_io_call_in_a_multi_clause() {
-    let text = "effect Choice where\n  multi choose : Unit -> Bool\n\nsay : String -> <IO> Unit\nsay s = println s\n\nboth : Unit -> <IO> Int\nboth () =\n  handle (if choose () then 1 else 2) with\n    | choose () k ->\n        let file = Fs.open \"a\"\n        say \"x\"\n        Fs.close file\n        k True + k False";
+    let text = "effect Choice where\n  multi choose : Unit -> Bool\n\nsay : String -> <IO> Unit\nsay s = println s\n\nboth : Unit -> <IO> Int\nboth () =\n  handle (if choose () then 1 else 2) with\n    | ctl choose () k ->\n        let file = Fs.open \"a\"\n        say \"x\"\n        Fs.close file\n        k True + k False";
     insta::assert_snapshot!(check_text(text), @"
     choose : Unit -> <Choice> Bool
     say : String -> <IO> Unit
@@ -400,7 +400,7 @@ fn a_linear_value_may_be_kept_across_an_io_call_in_a_multi_clause() {
 
 #[test]
 fn the_return_clause_of_a_multi_handler_may_capture_an_unrestricted_value() {
-    let text = "effect Choice where\n  multi choose : Unit -> Bool\n\ncaptured : Int -> Int\ncaptured base =\n  handle (if choose () then 1 else 2) with\n    | choose () c -> c True + c False\n    | return n -> n + base";
+    let text = "effect Choice where\n  multi choose : Unit -> Bool\n\ncaptured : Int -> Int\ncaptured base =\n  handle (if choose () then 1 else 2) with\n    | ctl choose () c -> c True + c False\n    | return n -> n + base";
     insta::assert_snapshot!(check_text(text), @"
     choose : Unit -> <Choice> Bool
     captured : Int -> Int
@@ -412,7 +412,7 @@ fn the_return_clause_of_a_multi_handler_may_capture_an_unrestricted_value() {
 
 #[test]
 fn continuations_of_handlers_with_a_state_carry_the_state() {
-    let text = "effect Ask where\n  ask : Unit -> Int\n\nf : Unit -> Int\nf () =\n  handle ask () from \"s\" with\n    | ask () k st -> k 1 st\n    | return x st -> x\n\ng : Unit -> Int\ng () =\n  handle ask () from () with\n    | ask () k st -> k 1 st\n    | return x st -> x";
+    let text = "effect Ask where\n  ask : Unit -> Int\n\nf : Unit -> Int\nf () =\n  handle ask () from \"s\" with\n    | ctl ask () k st -> k 1 st\n    | return x st -> x\n\ng : Unit -> Int\ng () =\n  handle ask () from () with\n    | ctl ask () k st -> k 1 st\n    | return x st -> x";
     let dump = check_text(text);
     assert!(
         dump.contains("k#") && dump.contains(": once Int -> once String -> Int"),
@@ -424,14 +424,14 @@ fn continuations_of_handlers_with_a_state_carry_the_state() {
 
 #[test]
 fn a_continuation_with_a_state_is_called_through_a_lambda_and_more_than_once() {
-    let text = "effect Choose where\n  multi choose : Unit -> Bool\n\nf : Unit -> Int\nf () =\n  handle (if choose () then 1 else 2) from 0 with\n    | choose () k st ->\n        let again = fn c -> c True (st + 1)\n        again k + k False (st + 2)\n    | return x st -> x + st";
+    let text = "effect Choose where\n  multi choose : Unit -> Bool\n\nf : Unit -> Int\nf () =\n  handle (if choose () then 1 else 2) from 0 with\n    | ctl choose () k st ->\n        let again = fn c -> c True (st + 1)\n        again k + k False (st + 2)\n    | return x st -> x + st";
     let checked = eml_test_support::check(text);
     assert!(checked.diagnostics.is_empty(), "{:?}", checked.diagnostics);
 }
 
 #[test]
 fn the_arity_of_a_continuation_follows_the_state_of_its_handler() {
-    let text = "effect Ask where\n  ask : Unit -> Int\n\nmissing : Unit -> Int\nmissing () =\n  handle ask () from 0 with\n    | ask () k st -> k st\n    | return x st -> x\n\nextra : Unit -> Int\nextra () =\n  handle ask () with\n    | ask () k -> k 1 2";
+    let text = "effect Ask where\n  ask : Unit -> Int\n\nmissing : Unit -> Int\nmissing () =\n  handle ask () from 0 with\n    | ctl ask () k st -> k st\n    | return x st -> x\n\nextra : Unit -> Int\nextra () =\n  handle ask () with\n    | ctl ask () k -> k 1 2";
     insta::assert_snapshot!(check_text(text), @"
     ask : Unit -> <Ask> Int
     missing : Unit -> Int
@@ -443,11 +443,11 @@ fn the_arity_of_a_continuation_follows_the_state_of_its_handler() {
       k#0 : once Int -> Int
       $r#1 : Int
     ---
-    E2001 7:22 mismatched types
-      7:22 expected `Int`, found `once Int -> Int`
+    E2001 7:26 mismatched types
+      7:26 expected `Int`, found `once Int -> Int`
       note: each clause of a handler must have the type of the whole `handle` expression
-    E2001 13:23 `k` takes 1 argument but 2 were given
-      13:23 unexpected argument
+    E2001 13:27 `k` takes 1 argument but 2 were given
+      13:27 unexpected argument
     ");
 }
 
@@ -455,7 +455,7 @@ fn the_arity_of_a_continuation_follows_the_state_of_its_handler() {
 fn a_continuation_with_a_state_called_without_it_in_a_lambda_is_a_mismatch() {
     // ラムダの中の `c 1` は `c` に引数を1つだけ渡す。状態のある `k` を渡すと、`again k` が部分適用の関数になり、
     // 節の型と食い違う
-    let text = "effect Ask where\n  ask : Unit -> Int\n\nf : Unit -> Int\nf () =\n  handle ask () from 0 with\n    | ask () k st ->\n        let again = fn c -> c 1\n        again k\n    | return x _ -> x";
+    let text = "effect Ask where\n  ask : Unit -> Int\n\nf : Unit -> Int\nf () =\n  handle ask () from 0 with\n    | ctl ask () k st ->\n        let again = fn c -> c 1\n        again k\n    | return x _ -> x";
     let checked = eml_test_support::check(text);
     let codes: Vec<String> = checked
         .diagnostics
@@ -467,7 +467,7 @@ fn a_continuation_with_a_state_called_without_it_in_a_lambda_is_a_mismatch() {
 
 #[test]
 fn a_handler_of_an_unknown_effect_still_checks_its_initial_state() {
-    let text = "f : Unit -> Int\nf () =\n  handle 1 from (1 + \"a\") with\n    | nope () k st -> k 1 st\n    | return x st -> x";
+    let text = "f : Unit -> Int\nf () =\n  handle 1 from (1 + \"a\") with\n    | ctl nope () k st -> k 1 st\n    | return x st -> x";
     let checked = eml_test_support::check(text);
     let codes: Vec<String> = checked
         .diagnostics
@@ -493,7 +493,7 @@ fn operations_of_a_duplicate_effect_do_not_cascade() {
 /// (docs/spec/types.md の「Kind の書き出し」)。
 #[test]
 fn a_linear_arrow_is_displayed_as_once() {
-    let text = "data Box =\n  | Box (Int -> Int)\n  | Done\n\neffect Ask where\n  ask : Unit -> Int\n\npick : Bool -> Box -> Int\npick c b =\n  match b with\n    | Box g ->\n        handle ask () with\n          | ask () k -> (if c then k else g) 1\n          | return x -> x\n    | Done -> 0";
+    let text = "data Box =\n  | Box (Int -> Int)\n  | Done\n\neffect Ask where\n  ask : Unit -> Int\n\npick : Bool -> Box -> Int\npick c b =\n  match b with\n    | Box g ->\n        handle ask () with\n          | ctl ask () k -> (if c then k else g) 1\n          | return x -> x\n    | Done -> 0";
     insta::assert_snapshot!(check_text(text), @"
     ask : Unit -> <Ask> Int
     pick : Bool -> Box -> Int
@@ -503,16 +503,16 @@ fn a_linear_arrow_is_displayed_as_once() {
       k#3 : once Int -> Int
       x#4 : Int
     ---
-    E2001 13:43 mismatched types
-      13:43 expected `once Int -> Int`, found `Int -> Int`
-      13:36 the `then` branch has this type
+    E2001 13:47 mismatched types
+      13:47 expected `once Int -> Int`, found `Int -> Int`
+      13:40 the `then` branch has this type
     ");
 }
 
 /// 線形性の食い違いが大きな型の中にあっても、`once` は入れ子の矢印に付く。
 #[test]
 fn a_linear_arrow_nested_in_a_tuple_is_displayed_as_once() {
-    let text = "data Box =\n  | Box (Int -> Int)\n  | Done\n\neffect Ask where\n  ask : Unit -> Int\n\npick : Bool -> Box -> Int\npick c b =\n  match b with\n    | Box g ->\n        handle ask () with\n          | ask () k ->\n              let (f, n) = if c then (k, 1) else (g, 2)\n              f n\n          | return x -> x\n    | Done -> 0";
+    let text = "data Box =\n  | Box (Int -> Int)\n  | Done\n\neffect Ask where\n  ask : Unit -> Int\n\npick : Bool -> Box -> Int\npick c b =\n  match b with\n    | Box g ->\n        handle ask () with\n          | ctl ask () k ->\n              let (f, n) = if c then (k, 1) else (g, 2)\n              f n\n          | return x -> x\n    | Done -> 0";
     insta::assert_snapshot!(check_text(text), @"
     ask : Unit -> <Ask> Int
     pick : Bool -> Box -> Int
@@ -532,7 +532,7 @@ fn a_linear_arrow_nested_in_a_tuple_is_displayed_as_once() {
 
 #[test]
 fn once_arrows_in_argument_position_are_parenthesized() {
-    let text = "effect Ask where\n  ask : Unit -> Int\n\nkeep : ((once Int -> Int) -> Int) -> Int\nkeep g = handle ask () with\n  | ask () k -> g k\n  | return x -> x";
+    let text = "effect Ask where\n  ask : Unit -> Int\n\nkeep : ((once Int -> Int) -> Int) -> Int\nkeep g = handle ask () with\n  | ctl ask () k -> g k\n  | return x -> x";
     insta::assert_snapshot!(check_text(text), @"
     ask : Unit -> <Ask> Int
     keep : ((once Int -> Int) -> Int) -> Int
@@ -550,7 +550,7 @@ const BOX: &str = "data Box a =\n  | Box (a -> (a, a))\n\ndata Sink a =\n  | Sin
 #[test]
 fn a_clause_cannot_copy_a_value_of_a_result_only_operation_variable() {
     let text = format!(
-        "{BOX}effect Mk where\n  mk : Unit -> Box a\n\nmain : Unit -> <IO> Unit\nmain () =\n  handle (match mk () with\n    | Box _ -> ()) with\n    | mk () k -> k (Box (fn x -> (x, x)))"
+        "{BOX}effect Mk where\n  mk : Unit -> Box a\n\nmain : Unit -> <IO> Unit\nmain () =\n  handle (match mk () with\n    | Box _ -> ()) with\n    | ctl mk () k -> k (Box (fn x -> (x, x)))"
     );
     insta::assert_snapshot!(check_text(&text), @"
     mk : Unit -> <Mk> Box a
@@ -559,9 +559,9 @@ fn a_clause_cannot_copy_a_value_of_a_result_only_operation_variable() {
       x#1 : a
       $r#2 : Unit
     ---
-    E3002 14:38 `x` must be used exactly once, but it is used more than once
-      14:38 used again here
-      14:35 first used here
+    E3002 14:42 `x` must be used exactly once, but it is used more than once
+      14:42 used again here
+      14:39 first used here
       note: linear values, such as files, the continuation of a `once` operation and closures that capture one, must be used exactly once
     ");
 }
@@ -569,7 +569,7 @@ fn a_clause_cannot_copy_a_value_of_a_result_only_operation_variable() {
 #[test]
 fn a_clause_cannot_discard_a_value_of_a_result_only_operation_variable() {
     let text = format!(
-        "{BOX}effect Mk where\n  sink : Unit -> Sink a\n\nmain : Unit -> <IO> Unit\nmain () =\n  handle (match sink () with\n    | Sink _ -> ()) with\n    | sink () k -> k (Sink (fn _ -> ()))"
+        "{BOX}effect Mk where\n  sink : Unit -> Sink a\n\nmain : Unit -> <IO> Unit\nmain () =\n  handle (match sink () with\n    | Sink _ -> ()) with\n    | ctl sink () k -> k (Sink (fn _ -> ()))"
     );
     insta::assert_snapshot!(check_text(&text), @"
     sink : Unit -> <Mk> Sink a
@@ -577,8 +577,8 @@ fn a_clause_cannot_discard_a_value_of_a_result_only_operation_variable() {
       k#0 : once Sink a -> <IO> Unit
       $r#1 : Unit
     ---
-    E3004 14:32 a linear value cannot be discarded with `_`
-      14:32 this pattern discards it
+    E3004 14:36 a linear value cannot be discarded with `_`
+      14:36 this pattern discards it
       note: linear values, such as files, the continuation of a `once` operation and closures that capture one, must be used exactly once
       help: bind it to a name and pass the name to `drop`
     ");
@@ -586,7 +586,7 @@ fn a_clause_cannot_discard_a_value_of_a_result_only_operation_variable() {
 
 #[test]
 fn a_clause_may_copy_a_value_of_an_operation_variable_in_a_parameter() {
-    let text = "effect Put where\n  put : a -> Unit\n\nmain : Unit -> <IO> Unit\nmain () =\n  handle put 1 with\n    | put x k ->\n        let p = (x, x)\n        k ()";
+    let text = "effect Put where\n  put : a -> Unit\n\nmain : Unit -> <IO> Unit\nmain () =\n  handle put 1 with\n    | ctl put x k ->\n        let p = (x, x)\n        k ()";
     insta::assert_snapshot!(check_text(text), @"
     put : a -> <Put> Unit
       kinds: a <= Unr
@@ -605,7 +605,7 @@ const REF: &str = "data Ref a =\n  | Ref (a -> Unit) a\n\n";
 
 #[test]
 fn a_linear_closure_cannot_enter_a_contravariant_argument_of_data_in_the_result() {
-    let text = "data Sink a =\n  | Sink (a -> <IO> Unit)\n\neffect Mk where\n  mk : Unit -> Sink (Unit -> <IO> Unit)\n\nmain : Unit -> <IO> Unit\nmain () =\n  let h = Fs.open \"a\"\n  handle (match mk () with\n    | Sink put -> put (fn () -> Fs.close h)) with\n    | mk () k ->\n        k (Sink (fn f ->\n          f ()\n          f ()))";
+    let text = "data Sink a =\n  | Sink (a -> <IO> Unit)\n\neffect Mk where\n  mk : Unit -> Sink (Unit -> <IO> Unit)\n\nmain : Unit -> <IO> Unit\nmain () =\n  let h = Fs.open \"a\"\n  handle (match mk () with\n    | Sink put -> put (fn () -> Fs.close h)) with\n    | ctl mk () k ->\n        k (Sink (fn f ->\n          f ()\n          f ()))";
     insta::assert_snapshot!(check_text(text), @"
     mk : Unit -> <Mk> Sink (Unit -> <IO> Unit)
     main : Unit -> <IO> Unit
@@ -623,7 +623,7 @@ fn a_linear_closure_cannot_enter_a_contravariant_argument_of_data_in_the_result(
 
 #[test]
 fn the_performer_may_call_a_function_the_clause_gives_more_than_once() {
-    let text = "effect Mk where\n  mk : Unit -> (Unit -> <IO> Unit, Int)\n\nmain : Unit -> <IO> Unit\nmain () =\n  handle (match mk () with\n    | (g, _) ->\n        g ()\n        g ()) with\n    | mk () k -> k (fn () -> println \"g\", 1)";
+    let text = "effect Mk where\n  mk : Unit -> (Unit -> <IO> Unit, Int)\n\nmain : Unit -> <IO> Unit\nmain () =\n  handle (match mk () with\n    | (g, _) ->\n        g ()\n        g ()) with\n    | ctl mk () k -> k (fn () -> println \"g\", 1)";
     insta::assert_snapshot!(check_text(text), @"
     mk : Unit -> <Mk> (Unit -> <IO> Unit, Int)
     main : Unit -> <IO> Unit
@@ -635,7 +635,7 @@ fn the_performer_may_call_a_function_the_clause_gives_more_than_once() {
 
 #[test]
 fn a_clause_cannot_give_a_linear_closure_through_two_contravariant_data_arguments() {
-    let text = "data Sink a =\n  | Sink (a -> <IO> Unit)\n\neffect Mk where\n  mk : Unit -> (Sink (Sink (Unit -> <IO> Unit)), Int)\n\nmain : Unit -> <IO> Unit\nmain () =\n  handle (match mk () with\n    | (Sink s, _) -> s (Sink (fn g -> g ()))) with\n    | mk () k -> k (Sink (fn sk ->\n        let f = Fs.open \"a\"\n        match sk with\n          | Sink h -> h (fn () -> Fs.close f)), 0)";
+    let text = "data Sink a =\n  | Sink (a -> <IO> Unit)\n\neffect Mk where\n  mk : Unit -> (Sink (Sink (Unit -> <IO> Unit)), Int)\n\nmain : Unit -> <IO> Unit\nmain () =\n  handle (match mk () with\n    | (Sink s, _) -> s (Sink (fn g -> g ()))) with\n    | ctl mk () k -> k (Sink (fn sk ->\n        let f = Fs.open \"a\"\n        match sk with\n          | Sink h -> h (fn () -> Fs.close f)), 0)";
     insta::assert_snapshot!(check_text(text), @"
     mk : Unit -> <Mk> (Sink (Sink (Unit -> <IO> Unit)), Int)
     main : Unit -> <IO> Unit
@@ -658,7 +658,7 @@ fn a_clause_cannot_give_a_linear_closure_through_two_contravariant_data_argument
 #[test]
 fn a_twice_flipped_arrow_is_produced_by_the_clause() {
     // `inner` は、呼ぶ側の関数の引数の引数なので、向きが2回反転して節が作って渡す位置にある
-    let text = "effect Mk where\n  mk : Unit -> (((Unit -> <IO> Unit) -> <IO> Unit) -> <IO> Unit, Int)\n\nmain : Unit -> <IO> Unit\nmain () =\n  handle (match mk () with\n    | (run, _) -> run (fn inner ->\n        inner ()\n        inner ())) with\n    | mk () k ->\n        let h = Fs.open \"a\"\n        k (fn cb -> cb (fn () -> Fs.close h), 0)";
+    let text = "effect Mk where\n  mk : Unit -> (((Unit -> <IO> Unit) -> <IO> Unit) -> <IO> Unit, Int)\n\nmain : Unit -> <IO> Unit\nmain () =\n  handle (match mk () with\n    | (run, _) -> run (fn inner ->\n        inner ()\n        inner ())) with\n    | ctl mk () k ->\n        let h = Fs.open \"a\"\n        k (fn cb -> cb (fn () -> Fs.close h), 0)";
     insta::assert_snapshot!(check_text(text), @"
     mk : Unit -> <Mk> (((Unit -> <IO> Unit) -> <IO> Unit) -> <IO> Unit, Int)
     main : Unit -> <IO> Unit
@@ -686,7 +686,7 @@ fn a_twice_flipped_arrow_is_produced_by_the_clause() {
 fn a_linear_closure_cannot_enter_an_arrow_in_a_row_label_of_the_result() {
     // ラベルの型引数の矢印は両方の向きとして `Unr` に固定するので、`mk` の節が渡す `twice` はそれを2回呼べ、`ask`
     // の答えに線形なクロージャは渡せない
-    let text = "effect Ask a where\n  ask : Unit -> a\n\neffect Mk where\n  mk : Unit -> (Unit -> <Ask (Unit -> <IO> Unit), IO> Unit, Int)\n\ntwice : Unit -> <Ask (Unit -> <IO> Unit), IO> Unit\ntwice () =\n  let f = ask ()\n  f ()\n  f ()\n\nmain : Unit -> <IO> Unit\nmain () =\n  handle (match mk () with\n    | (g, _) ->\n        handle g () with\n          | ask () k ->\n              let h = Fs.open \"a\"\n              k (fn () -> Fs.close h)) with\n    | mk () k -> k (twice, 0)";
+    let text = "effect Ask a where\n  ask : Unit -> a\n\neffect Mk where\n  mk : Unit -> (Unit -> <Ask (Unit -> <IO> Unit), IO> Unit, Int)\n\ntwice : Unit -> <Ask (Unit -> <IO> Unit), IO> Unit\ntwice () =\n  let f = ask ()\n  f ()\n  f ()\n\nmain : Unit -> <IO> Unit\nmain () =\n  handle (match mk () with\n    | (g, _) ->\n        handle g () with\n          | ctl ask () k ->\n              let h = Fs.open \"a\"\n              k (fn () -> Fs.close h)) with\n    | ctl mk () k -> k (twice, 0)";
     insta::assert_snapshot!(check_text(text), @"
     ask : Unit -> <Ask a> a
     mk : Unit -> <Mk> (Unit -> <Ask (Unit -> <IO> Unit), IO> Unit, Int)
@@ -709,7 +709,7 @@ fn a_linear_closure_cannot_enter_an_arrow_in_a_row_label_of_the_result() {
 
 #[test]
 fn a_clause_cannot_keep_a_file_across_a_function_with_an_operation_row_variable() {
-    let text = "effect Mk where\n  mk : Unit -> ((Unit -> <IO | e> Int) -> <IO | e> Int, Int)\n\nmain : Unit -> <IO> Unit\nmain () =\n  handle (match mk () with\n    | (run, _) -> println (show (run (fn () -> 1)))) with\n    | mk () k ->\n        k (fn g ->\n          let h = Fs.open \"a\"\n          let x = g ()\n          Fs.close h\n          x, 0)";
+    let text = "effect Mk where\n  mk : Unit -> ((Unit -> <IO | e> Int) -> <IO | e> Int, Int)\n\nmain : Unit -> <IO> Unit\nmain () =\n  handle (match mk () with\n    | (run, _) -> println (show (run (fn () -> 1)))) with\n    | ctl mk () k ->\n        k (fn g ->\n          let h = Fs.open \"a\"\n          let x = g ()\n          Fs.close h\n          x, 0)";
     insta::assert_snapshot!(check_text(text), @"
     mk : Unit -> <Mk> ((Unit -> <IO | e> Int) -> <IO | e> Int, Int)
     main : Unit -> <IO> Unit
@@ -730,7 +730,7 @@ fn a_clause_cannot_keep_a_file_across_a_function_with_an_operation_row_variable(
 
 #[test]
 fn a_clause_cannot_resume_with_a_linear_closure_where_the_result_has_an_arrow() {
-    let text = "effect Mk where\n  mk : Unit -> (Unit -> <IO> Unit, Int)\n\nmain : Unit -> <IO> Unit\nmain () =\n  handle (match mk () with\n    | (g, _) -> g ()) with\n    | mk () k ->\n        let h = Fs.open \"a\"\n        k (fn () -> Fs.close h, 1)";
+    let text = "effect Mk where\n  mk : Unit -> (Unit -> <IO> Unit, Int)\n\nmain : Unit -> <IO> Unit\nmain () =\n  handle (match mk () with\n    | (g, _) -> g ()) with\n    | ctl mk () k ->\n        let h = Fs.open \"a\"\n        k (fn () -> Fs.close h, 1)";
     insta::assert_snapshot!(check_text(text), @"
     mk : Unit -> <Mk> (Unit -> <IO> Unit, Int)
     main : Unit -> <IO> Unit
@@ -749,7 +749,7 @@ fn a_clause_cannot_resume_with_a_linear_closure_where_the_result_has_an_arrow() 
 
 #[test]
 fn a_clause_cannot_use_a_parameter_arrow_as_a_linear_one() {
-    let text = "effect Op where\n  op : (Unit -> <IO> Unit) -> Unit\n\nsame : a -> a -> (a, a)\nsame x y = (x, y)\n\nmain : Unit -> <IO> Unit\nmain () =\n  handle op (fn () -> ()) with\n    | op x k ->\n        let h = Fs.open \"a\"\n        let (p, q) = same x (fn () -> Fs.close h)\n        p ()\n        q ()\n        k ()";
+    let text = "effect Op where\n  op : (Unit -> <IO> Unit) -> Unit\n\nsame : a -> a -> (a, a)\nsame x y = (x, y)\n\nmain : Unit -> <IO> Unit\nmain () =\n  handle op (fn () -> ()) with\n    | ctl op x k ->\n        let h = Fs.open \"a\"\n        let (p, q) = same x (fn () -> Fs.close h)\n        p ()\n        q ()\n        k ()";
     insta::assert_snapshot!(check_text(text), @"
     op : (Unit -> <IO> Unit) -> <Op> Unit
       kinds: (Unit -> <IO> Unit) <= Unr
@@ -774,7 +774,7 @@ fn a_clause_cannot_use_a_parameter_arrow_as_a_linear_one() {
 
 #[test]
 fn a_clause_may_call_a_closure_it_receives_through_the_result_more_than_once() {
-    let text = "effect Mk where\n  mk : Unit -> ((Unit -> <IO> Unit) -> <IO> Unit, Int)\n\nmain : Unit -> <IO> Unit\nmain () =\n  handle (match mk () with\n    | (run, _) -> run (fn () -> ())) with\n    | mk () k ->\n        let run = fn g ->\n          g ()\n          g ()\n        k (run, 1)";
+    let text = "effect Mk where\n  mk : Unit -> ((Unit -> <IO> Unit) -> <IO> Unit, Int)\n\nmain : Unit -> <IO> Unit\nmain () =\n  handle (match mk () with\n    | (run, _) -> run (fn () -> ())) with\n    | ctl mk () k ->\n        let run = fn g ->\n          g ()\n          g ()\n        k (run, 1)";
     insta::assert_snapshot!(check_text(text), @"
     mk : Unit -> <Mk> ((Unit -> <IO> Unit) -> <IO> Unit, Int)
     main : Unit -> <IO> Unit
@@ -788,7 +788,7 @@ fn a_clause_may_call_a_closure_it_receives_through_the_result_more_than_once() {
 
 #[test]
 fn a_linear_closure_cannot_be_passed_to_a_function_from_the_result() {
-    let text = "effect Mk where\n  mk : Unit -> ((Unit -> <IO> Unit) -> <IO> Unit, Int)\n\nmain : Unit -> <IO> Unit\nmain () =\n  let h = Fs.open \"a\"\n  handle (match mk () with\n    | (run, _) -> run (fn () -> Fs.close h)) with\n    | mk () k -> k (fn g -> g (), 1)";
+    let text = "effect Mk where\n  mk : Unit -> ((Unit -> <IO> Unit) -> <IO> Unit, Int)\n\nmain : Unit -> <IO> Unit\nmain () =\n  let h = Fs.open \"a\"\n  handle (match mk () with\n    | (run, _) -> run (fn () -> Fs.close h)) with\n    | ctl mk () k -> k (fn g -> g (), 1)";
     insta::assert_snapshot!(check_text(text), @"
     mk : Unit -> <Mk> ((Unit -> <IO> Unit) -> <IO> Unit, Int)
     main : Unit -> <IO> Unit
@@ -807,7 +807,7 @@ fn a_linear_closure_cannot_be_passed_to_a_function_from_the_result() {
 #[test]
 fn a_linear_closure_cannot_enter_an_arrow_in_both_directions_of_the_result() {
     let text = format!(
-        "{REF}effect Mk where\n  mk : Unit -> Ref (Unit -> <IO> Unit)\n\nmain : Unit -> <IO> Unit\nmain () =\n  let h = Fs.open \"a\"\n  handle (match mk () with\n    | Ref put v ->\n        put (fn () -> Fs.close h)\n        v ()) with\n    | mk () k -> k (Ref (fn _ -> ()) (fn () -> ()))"
+        "{REF}effect Mk where\n  mk : Unit -> Ref (Unit -> <IO> Unit)\n\nmain : Unit -> <IO> Unit\nmain () =\n  let h = Fs.open \"a\"\n  handle (match mk () with\n    | Ref put v ->\n        put (fn () -> Fs.close h)\n        v ()) with\n    | ctl mk () k -> k (Ref (fn _ -> ()) (fn () -> ()))"
     );
     insta::assert_snapshot!(check_text(&text), @"
     mk : Unit -> <Mk> Ref (Unit -> <IO> Unit)

@@ -15,6 +15,6 @@ main : Unit -> <IO> Unit
 main () =
   let r =
     handle mapl check [1, -2, 3] with
-      | fail _ -> []
+      | ctl fail _ -> []
       | return x -> x
   println (show r)

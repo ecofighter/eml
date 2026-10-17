@@ -99,7 +99,7 @@ fn only_the_growing_position_is_uniform() {
 
 #[test]
 fn a_generic_call_in_a_clause_at_the_clause_variable_is_uniform() {
-    let text = "id : a -> a\nid x = x\n\neffect Pick where\n  pick : a -> a\n\nrun : Int -> Int\nrun v =\n  handle pick v with\n    | pick x k -> k (id x)\n\nmain : Unit -> <IO> Unit\nmain () = println (show (run 1))";
+    let text = "id : a -> a\nid x = x\n\neffect Pick where\n  pick : a -> a\n\nrun : Int -> Int\nrun v =\n  handle pick v with\n    | ctl pick x k -> k (id x)\n\nmain : Unit -> <IO> Unit\nmain () = println (show (run 1))";
     assert_eq!(instances_of(text, "id"), ["id@[_]"]);
 }
 
@@ -127,17 +127,17 @@ body () =
 run : Unit -> <Abort> Unit
 run () =
   let r = handle body () with
-            | put x k ->
+            | ctl put x k ->
                 drop k
                 id x
-            | stop u -> abort ()
+            | ctl stop u -> abort ()
   let p = pair r
   ()
 
 main : Unit -> <IO> Unit
 main () =
   handle run () with
-    | abort u -> println \"aborted\"
+    | ctl abort u -> println \"aborted\"
   println \"done\"";
     assert_eq!(instances_of(text, "id"), ["id@[_]"]);
     assert_eq!(instances_of(text, "pair"), ["pair@[_]"]);
@@ -166,7 +166,7 @@ fn a_long_shared_type_argument_gets_a_hash_name() {
 
 #[test]
 fn a_row_polymorphic_function_has_an_instance_per_row_bit() {
-    let text = "effect Ask where\n  ask : Unit -> Int\n\ntwice : (Unit -> <e> Int) -> <e> Int\ntwice f = f () + f ()\n\npure : Unit -> Int\npure () = twice (fn () -> 1)\n\nmain : Unit -> <IO> Unit\nmain () =\n  println (show (pure ()))\n  println (show (handle twice ask with\n    | ask () k -> k 2))";
+    let text = "effect Ask where\n  ask : Unit -> Int\n\ntwice : (Unit -> <e> Int) -> <e> Int\ntwice f = f () + f ()\n\npure : Unit -> Int\npure () = twice (fn () -> 1)\n\nmain : Unit -> <IO> Unit\nmain () =\n  println (show (pure ()))\n  println (show (handle twice ask with\n    | ctl ask () k -> k 2))";
     let shown = core_text(text, Pass::Translate);
     // 純粋な instance は今の名前で印がなく、yield しうる instance は `<e>` を持つ
     insta::assert_snapshot!(function(&shown, "twice"), @"
@@ -189,7 +189,7 @@ fn a_row_polymorphic_function_has_an_instance_per_row_bit() {
 
 #[test]
 fn only_the_set_row_variables_are_named_in_signature_order() {
-    let text = "effect Ask where\n  ask : Unit -> Int\n\nboth : (Unit -> <e> Int) -> (Unit -> <f> Int) -> <f> Int\nboth a b = b ()\n\nrun : Unit -> <Ask> Int\nrun () = both (fn () -> 1) ask + both ask ask\n\nmain : Unit -> <IO> Unit\nmain () = println (show (handle run () with\n    | ask () k -> k 2))";
+    let text = "effect Ask where\n  ask : Unit -> Int\n\nboth : (Unit -> <e> Int) -> (Unit -> <f> Int) -> <f> Int\nboth a b = b ()\n\nrun : Unit -> <Ask> Int\nrun () = both (fn () -> 1) ask + both ask ask\n\nmain : Unit -> <IO> Unit\nmain () = println (show (handle run () with\n    | ctl ask () k -> k 2))";
     let program = eml_test_support::core_until(text, Pass::Translate);
     let names: Vec<&str> = program
         .functions
@@ -213,7 +213,7 @@ fn a_hash_name_keeps_its_row_bits() {
         text.push_str(&format!("  let f{i} = f{} ident\n", i - 1));
     }
     text.push_str(&format!(
-        "  let _ = tap f1 ask\n  f{n} 5\n\nmain : Unit -> <IO> Unit\nmain () = println (show (handle run () with\n    | ask () k -> k 2))"
+        "  let _ = tap f1 ask\n  f{n} 5\n\nmain : Unit -> <IO> Unit\nmain () = println (show (handle run () with\n    | ctl ask () k -> k 2))"
     ));
     assert_eq!(instances_of(&text, "tap"), ["tap@#56963963a7329f3e<e>"]);
 }
@@ -231,7 +231,7 @@ fn tap_program(short: bool) -> String {
         text.push_str(&format!("  let f{i} = f{} ident\n", i - 1));
     }
     text.push_str(&format!(
-        "  let _ = tap f1 ask\n  f{n} 5\n\nmain : Unit -> <IO> Unit\nmain () = println (show (handle run () with\n    | ask () k -> k 2))"
+        "  let _ = tap f1 ask\n  f{n} 5\n\nmain : Unit -> <IO> Unit\nmain () = println (show (handle run () with\n    | ctl ask () k -> k 2))"
     ));
     text
 }
@@ -278,7 +278,7 @@ fn a_prelude_type_is_not_qualified_even_when_another_module_shares_its_name() {
 fn a_method_reference_passes_its_row_bits_to_the_method_function() {
     // instance のメソッドの関数と既定のメソッドの関数は、メソッドのシグネチャと同じ順の row 変数を持つ。pure の中の
     // 呼び出しは純粋な instance に、run の中の呼び出しは `<e>` の instance に向かう
-    let text = "effect Ask where\n  ask : Unit -> Int\n\nclass Runner a where\n  run_with : a -> (Unit -> <e> Int) -> <e> Int\n  run_default : a -> (Unit -> <e> Int) -> <e> Int\n  run_default x g = g ()\n\ninstance Runner Int where\n  run_with n g = g () + n\n\nrun : Unit -> <Ask> Int\nrun () = run_with 1 ask + run_default 1 ask\n\npure : Unit -> Int\npure () = run_with 2 (fn () -> 3) + run_default 2 (fn () -> 3)\n\nmain : Unit -> <IO> Unit\nmain () =\n  println (show (pure ()))\n  println (show (handle run () with\n    | ask () k -> k 2))";
+    let text = "effect Ask where\n  ask : Unit -> Int\n\nclass Runner a where\n  run_with : a -> (Unit -> <e> Int) -> <e> Int\n  run_default : a -> (Unit -> <e> Int) -> <e> Int\n  run_default x g = g ()\n\ninstance Runner Int where\n  run_with n g = g () + n\n\nrun : Unit -> <Ask> Int\nrun () = run_with 1 ask + run_default 1 ask\n\npure : Unit -> Int\npure () = run_with 2 (fn () -> 3) + run_default 2 (fn () -> 3)\n\nmain : Unit -> <IO> Unit\nmain () =\n  println (show (pure ()))\n  println (show (handle run () with\n    | ctl ask () k -> k 2))";
     let program = eml_test_support::core_until(text, Pass::Translate);
     let mut names: Vec<(&str, bool)> = program
         .functions
@@ -311,7 +311,7 @@ fn a_method_reference_passes_its_row_bits_to_the_method_function() {
 
 #[test]
 fn a_clause_lambda_over_an_operation_row_variable_may_yield() {
-    let text = "effect Run where\n  run : (Unit -> <e> Int) -> Int\n\nbody : Unit -> <Run> Int\nbody () = run (fn () -> 1)\n\nmain : Unit -> <IO> Unit\nmain () =\n  let r =\n    handle body () with\n      | run f k ->\n        let g = fn () -> f () + 1\n        k 7\n  println (show r)";
+    let text = "effect Run where\n  run : (Unit -> <e> Int) -> Int\n\nbody : Unit -> <Run> Int\nbody () = run (fn () -> 1)\n\nmain : Unit -> <IO> Unit\nmain () =\n  let r =\n    handle body () with\n      | ctl run f k ->\n        let g = fn () -> f () + 1\n        k 7\n  println (show r)";
     let shown = core_text(text, Pass::Translate);
     // g の row は操作の row 変数で、main の row 変数ではないので、g は yield しうる
     insta::assert_snapshot!(function(&shown, "main$lambda0"), @"
@@ -325,7 +325,7 @@ fn a_clause_lambda_over_an_operation_row_variable_may_yield() {
 
 #[test]
 fn an_apply_is_split_after_an_arrow_that_may_yield() {
-    let text = "effect Ask where\n  ask : Unit -> Int\n\nadder : Int -> <Ask> (Int -> Int)\nadder x =\n  let n = ask ()\n  fn y -> x + y + n\n\nrun : (Int -> <Ask> (Int -> Int)) -> <Ask> Int\nrun h = h 1 2\n\nmain : Unit -> <IO> Unit\nmain () =\n  let r =\n    handle run adder with\n      | ask () k -> k 10\n  println (show r)";
+    let text = "effect Ask where\n  ask : Unit -> Int\n\nadder : Int -> <Ask> (Int -> Int)\nadder x =\n  let n = ask ()\n  fn y -> x + y + n\n\nrun : (Int -> <Ask> (Int -> Int)) -> <Ask> Int\nrun h = h 1 2\n\nmain : Unit -> <IO> Unit\nmain () =\n  let r =\n    handle run adder with\n      | ctl ask () k -> k 10\n  println (show r)";
     let shown = core_text(text, Pass::Translate);
     // h 1 で yield しうるので、1つ目の apply の後で分け、1つ目に印を付ける
     insta::assert_snapshot!(function(&shown, "run"), @"
@@ -577,7 +577,7 @@ fn a_result_only_operation_variable_gives_one_uniform_key() {
     // `mk` の `a` は結果の型にだけ現れるので、`ids` の鍵は一様な位置の `_` が1つになる。名前の `Flexible` は Kind の印を
     // 付けて書く (docs/spec/types.md の「`Flexible` と `OpVar` の Kind」と、docs/spec/core-ir.md の「変換の規則」)。
     // `OpVar` が `Poly` の Kind を持つことは、eml_types の `kind_export::a_clause_in_main_keeps_its_operation_variable_kinds` が確かめる
-    let text = "ids : List a -> List a\nids xs = xs\n\neffect Make where\n  mk : Unit -> List a\n\nbody : Unit -> <Make> Int\nbody () =\n  let xs = (mk () : List Int)\n  0\n\nmain : Unit -> <IO> Unit\nmain () =\n  let n = handle body () with\n            | mk () k -> k (ids [])\n  println (show n)";
+    let text = "ids : List a -> List a\nids xs = xs\n\neffect Make where\n  mk : Unit -> List a\n\nbody : Unit -> <Make> Int\nbody () =\n  let xs = (mk () : List Int)\n  0\n\nmain : Unit -> <IO> Unit\nmain () =\n  let n = handle body () with\n            | ctl mk () k -> k (ids [])\n  println (show n)";
     assert_eq!(instances_of(text, "ids"), ["ids@[_:poly]"]);
 }
 

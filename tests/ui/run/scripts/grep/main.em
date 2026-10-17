@@ -43,7 +43,7 @@ numbered_lines lines =
 matching : Options -> String -> (Unit -> <Yield (Int, String), IO | e> Unit) -> <IO | e> Int
 matching opts prefix lines =
   handle lines () from 0 with
-    | yield (n, line) k count ->
+    | ctl yield (n, line) k count ->
       if String.contains opts.pattern line != opts.invert then
         if opts.count_only then ()
         else if opts.numbered then println "\{prefix}\{n}:\{line}"

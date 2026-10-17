@@ -2,4 +2,4 @@
 quiet : Unit -> Unit
 quiet () =
   handle println "hi" with
-    | println text k -> k ()
+    | ctl println text k -> k ()

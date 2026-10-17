@@ -13,5 +13,5 @@ main () =
   println (show (mapl (fn x -> x + 1) [1, 2, 3]))
   let r =
     handle mapl (fn x -> x + ask ()) [1, 2, 3] with
-      | ask () k -> k 10
+      | ctl ask () k -> k 10
   println (show r)

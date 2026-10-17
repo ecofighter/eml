@@ -9,7 +9,7 @@ effect Choice where
 inner : Unit -> <Choice> Int
 inner () =
   handle ask () with
-    | ask () k ->
+    | ctl ask () k ->
         let b = choose ()
         k (if b then 1 else 2)
 
@@ -17,5 +17,5 @@ main : Unit -> <IO> Unit
 main () =
   let total =
     handle inner () with
-      | choose () c -> c True + c False
+      | ctl choose () c -> c True + c False
   println (show total)

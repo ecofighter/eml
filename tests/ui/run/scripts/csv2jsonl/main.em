@@ -11,7 +11,7 @@ effect Yield a where
 catching : (Unit -> <Fail | e> a) -> <e> Result (Int, String) a
 catching body =
   handle body () with
-    | fail code message -> Err (code, message)
+    | ctl fail code message -> Err (code, message)
     | return x -> Ok x
 
 -- 1つの行の欄と、その行が始まる入力の行の番号
@@ -171,7 +171,7 @@ zip xs ys =
 convert : List String -> (Unit -> <Yield Row, Fail | e> Unit) -> <Fail | e> String
 convert columns body =
   handle body () from (None, "") with
-    | yield row k (picked, out) ->
+    | ctl yield row k (picked, out) ->
       match picked with
         | None -> k () (Some (List.length row.fields, column_indexes row.fields columns), out)
         | Some (width, indexes) ->

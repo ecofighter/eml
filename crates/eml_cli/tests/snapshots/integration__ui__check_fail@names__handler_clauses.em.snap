@@ -4,26 +4,26 @@ expression: rendered
 input_file: tests/ui/check-fail/names/handler_clauses.em
 ---
 [E1010] Error: the clause for `ask` takes 2 parameters, but this one has 1
-    ╭─[ check-fail/names/handler_clauses.em:19:7 ]
+    ╭─[ check-fail/names/handler_clauses.em:19:11 ]
     │
- 19 │     | ask key -> key
-    │       ─┬─  
-    │        ╰─── this clause
+ 19 │     | ctl ask key -> key
+    │           ─┬─  
+    │            ╰─── this clause
     │ 
     │ Note: the clause takes the arguments of `ask` and then the continuation `k`
 ────╯
 [E1012] Error: a handler can handle only one effect
-    ╭─[ check-fail/names/handler_clauses.em:26:7 ]
+    ╭─[ check-fail/names/handler_clauses.em:26:11 ]
     │
- 26 │     | ask key k -> k key
-    │       ─┬─  
-    │        ╰─── `ask` is an operation of `Ask`
+ 26 │     | ctl ask key k -> k key
+    │           ─┬─  
+    │            ╰─── `ask` is an operation of `Ask`
     │
-    ├─[ check-fail/names/handler_clauses.em:26:7 ]
+    ├─[ check-fail/names/handler_clauses.em:26:11 ]
     │
- 25 │     | log message k -> k ()
-    │       ─┬─  
-    │        ╰─── this handler handles `Log` because of this clause
+ 25 │     | ctl log message k -> k ()
+    │           ─┬─  
+    │            ╰─── this handler handles `Log` because of this clause
     │ 
     │ Help: handle each effect with its own `handle`
 ────╯
@@ -34,20 +34,20 @@ input_file: tests/ui/check-fail/names/handler_clauses.em
     │   ───┬──  
     │      ╰──── this handler
     │ 
-    │ Help: add `| ask_twice _ k -> ...`
+    │ Help: add `| ctl ask_twice _ k -> ...`
 ────╯
 [E1014] Error: `ask` has more than one clause in this handler
-    ╭─[ check-fail/names/handler_clauses.em:38:7 ]
+    ╭─[ check-fail/names/handler_clauses.em:38:11 ]
     │
- 38 │     | ask key k -> k "again"
-    │       ─┬─  
-    │        ╰─── another clause for `ask`
+ 38 │     | ctl ask key k -> k "again"
+    │           ─┬─  
+    │            ╰─── another clause for `ask`
     │
-    ├─[ check-fail/names/handler_clauses.em:38:7 ]
+    ├─[ check-fail/names/handler_clauses.em:38:11 ]
     │
- 36 │     | ask key k -> k key
-    │       ─┬─  
-    │        ╰─── the first clause
+ 36 │     | ctl ask key k -> k key
+    │           ─┬─  
+    │            ╰─── the first clause
 ────╯
 [E1014] Error: this handler has more than one `return` clause
     ╭─[ check-fail/names/handler_clauses.em:40:5 ]
@@ -63,11 +63,11 @@ input_file: tests/ui/check-fail/names/handler_clauses.em
     │            ╰───────── the first `return` clause
 ────╯
 [E1010] Error: the clause for `fail` takes 1 parameter, but this one has 2
-    ╭─[ check-fail/names/handler_clauses.em:45:7 ]
+    ╭─[ check-fail/names/handler_clauses.em:45:11 ]
     │
- 45 │     | fail message k -> message
-    │       ──┬─  
-    │         ╰─── this clause
+ 45 │     | ctl fail message k -> message
+    │           ──┬─  
+    │             ╰─── this clause
     │ 
     │ Note: `fail` is a `never` operation, so its clause takes only the arguments of the operation
 ────╯

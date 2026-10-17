@@ -9,13 +9,13 @@ main : Unit -> <IO> Unit
 main () =
   let passed =
     handle add_two () with
-      | ask () k ->
+      | ctl ask () k ->
           let go = fn cont value -> cont value
           go k 20
   println (show passed)
   let captured =
     handle add_two () with
-      | ask () k ->
+      | ctl ask () k ->
           let later = fn n -> k n
           later 7
   println (show captured)

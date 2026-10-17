@@ -15,13 +15,13 @@ main : Unit -> <IO> Unit
 main () =
   let r =
     handle (handle body () with
-      | mk () k ->
+      | ctl mk () k ->
           k (fn g ->
             let h = Fs.open "input.txt"
             let x = g ()
             Fs.close h
             x, 0)) with
-      | pick () k ->
+      | ctl pick () k ->
           let a = k True
           let b = k False
           a + b

@@ -12,9 +12,9 @@ input_file: tests/ui/check-fail/linearity/multi_over_once.em
     │
     ├─[ check-fail/linearity/multi_over_once.em:13:17 ]
     │
- 12 │     | ask () k ->
-    │              ┬  
-    │              ╰── `k` is bound here
+ 12 │     | ctl ask () k ->
+    │                  ┬  
+    │                  ╰── `k` is bound here
     │
     ├─[ check-fail/linearity/multi_over_once.em:13:17 ]
     │

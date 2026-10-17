@@ -323,7 +323,7 @@ fn parameters_written_on_a_user_extern_type_count_at_use_sites() {
 
 #[test]
 fn a_user_extern_function_in_a_clause_adds_nothing_to_e1033() {
-    let text = "extern effect E\n\nextern f : Int -> <E> Int\n\ng : Unit -> Int\ng () = handle 1 with\n  | f x k -> k 1";
+    let text = "extern effect E\n\nextern f : Int -> <E> Int\n\ng : Unit -> Int\ng () = handle 1 with\n  | ctl f x k -> k 1";
     assert_eq!(
         diagnostics(text),
         [

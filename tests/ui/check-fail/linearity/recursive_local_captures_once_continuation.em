@@ -5,6 +5,6 @@ effect Ask where
 drain : Unit -> Int
 drain () =
   handle ask () with
-    | ask () k ->
+    | ctl ask () k ->
         let go n = if n == 0 then k 0 else k (go (n - 1))
         go 3

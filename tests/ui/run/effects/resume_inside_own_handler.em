@@ -21,9 +21,9 @@ body () =
 run : Unit -> Int
 run () =
   handle body () from 0 with
-    | grab () k st -> k (Re k) st
-    | get () k st -> k st st
-    | put n k _ -> k () n
+    | ctl grab () k st -> k (Re k) st
+    | ctl get () k st -> k st st
+    | ctl put n k _ -> k () n
     | return x _ -> x
 
 main : Unit -> <IO> Unit
