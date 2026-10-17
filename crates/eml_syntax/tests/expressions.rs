@@ -1402,3 +1402,57 @@ fn and_needs_a_name_not_a_pattern() {
         vec!["E0011 3:7 expected a name".to_string()]
     );
 }
+
+/// 名前の位置の単純パターンは、名前の書き誤りとして `ERROR` に入れる。引数として読むと、`G` が引数のコンストラクタの
+/// パターンになり、HIR が E1001 を連鎖させるためである。
+#[test]
+fn and_with_a_capitalized_name_keeps_it_out_of_the_parameters() {
+    insta::assert_snapshot!(shape("f () = let g x = x and G n = 1 in g 1"), @r#"
+    SOURCE_FILE
+      EQUATION
+        NAME
+          LIDENT "f"
+        UNIT_PAT
+          L_PAREN "("
+          R_PAREN ")"
+        EQ "="
+        LET_EXPR
+          LET_KW "let"
+          BIND_PAT
+            NAME
+              LIDENT "g"
+          PARAM_LIST
+            BIND_PAT
+              NAME
+                LIDENT "x"
+          EQ "="
+          PATH_EXPR
+            PATH
+              NAME_REF
+                LIDENT "x"
+          AND_BINDING
+            AND_KW "and"
+            ERROR
+              CON_PAT
+                PATH
+                  NAME_REF
+                    UIDENT "G"
+            PARAM_LIST
+              BIND_PAT
+                NAME
+                  LIDENT "n"
+            EQ "="
+            LITERAL
+              INT "1"
+          IN_KW "in"
+          APP_EXPR
+            PATH_EXPR
+              PATH
+                NAME_REF
+                  LIDENT "g"
+            LITERAL
+              INT "1"
+    ---
+    E0011 1:24 expected a name
+    "#);
+}

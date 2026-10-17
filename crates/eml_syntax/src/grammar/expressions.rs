@@ -151,6 +151,13 @@ fn and_binding(p: &mut Parser, after_function: bool) {
         patterns::pattern(p);
     } else {
         expected(p, "a name");
+        // 名前の位置の単純パターンは、名前の書き誤りとして `ERROR` に入れる。引数として読むと、`and G n` の `G` が
+        // コンストラクタのパターンになり、HIR が E1001 を連鎖させるためである
+        if patterns::at_apat_start(p) {
+            let bad = p.start();
+            patterns::apat(p);
+            bad.complete(p, ERROR);
+        }
     }
     let params = p.start();
     let has_params = patterns::at_apat_start(p);
