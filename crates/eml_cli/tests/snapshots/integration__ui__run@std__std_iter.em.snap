@@ -1,0 +1,28 @@
+---
+source: crates/eml_cli/tests/ui.rs
+expression: "format!(\"--- stdout ---\\n{stdout}--- stderr ---\\n{diagnostics}{stderr}{written}{exit}\")"
+input_file: tests/ui/run/std/std_iter.em
+---
+--- stdout ---
+build
+built
+produce 1
+first 10
+[1, 2, 3]
+[]
+[]
+[1, 2]
+[1, 2, 3]
+[1, 2, 3]
+[2, 3, 4]
+[2, 3]
+[4, 6]
+[(1, 4), (2, 5)]
+[(1, 4)]
+[(1, 7), (2, 8), (3, 9)]
+each 1
+each 2
+10
+[5, 6, 7]
+dropped
+--- stderr ---
