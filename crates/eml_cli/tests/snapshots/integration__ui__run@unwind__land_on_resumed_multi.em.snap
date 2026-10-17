@@ -1,0 +1,11 @@
+---
+source: crates/eml_cli/tests/ui.rs
+expression: "format!(\"--- stdout ---\\n{stdout}--- stderr ---\\n{diagnostics}{stderr}{written}{exit}\")"
+input_file: tests/ui/run/unwind/land_on_resumed_multi.em
+---
+--- stdout ---
+picked 1
+picked 2
+101
+after
+--- stderr ---
