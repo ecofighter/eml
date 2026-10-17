@@ -170,7 +170,8 @@ main () =
 
 - `translate/instances.rs` の `check_linearity` は、関数の参照の型と呼ぶ先のシグネチャを `lin_compatible` で比べている。参照の一番外側の矢印は `Lin` になりうるので、比べるときに一番外側の矢印を除く
 - 値として使ったトップレベルの関数の変数は、矢印が `Lin` なら印が `lin` になる。`lin` の印の変数は `dup` も `decref` もされないので、今の検査のままでよい
-- フィールドがない `Lin` の型 (`data Token : Lin = | Token`) は Repr が `enum` になる。`enum` の変数に `lin` の印が付いても、boxing、Perceus、検査器、VM が今のまま動くことをテストで確かめる。`drop` は `enum` でも何もしない
+- フィールドがない `Lin` の型 (`data Token : Lin = | Token`) は Repr が `enum` になる。Repr が `int`、`enum`、`unit` の変数の印は、型の Kind によらず `unr` にする。スカラーは資源を持たず、`lin` にすると box の挿入が足す `unr` の箱が `lin` の受け手に渡って V2 に当たるためである。1回だけ使うことは型検査が守る
+- 射影と更新で、印が `unr` でない値を `unpack` し、取り出すフィールドの印がどれも `unr` なら、`unpack` の直後に `drop` を置く。決定木の葉の `drop` と同じ規則である。残る `decref` を V1 が拒むためである
 - instance の名前は、型の表示の変更 (`once`、`poly`、`:poly`) をそのまま使う。64文字を超えたら今と同じく構造の hash にする
 
 ### 誤り
@@ -221,7 +222,7 @@ main () =
 - `eml_syntax`: `once` の型 (入れ子、括弧、`once` の後ろが関数型でない場合)、`data T a : Lin`、型引数の row の形
 - `eml_hir`: 種類つきの型引数の下ろし方、使う所での種類の照合 (E1048 とその fix)、Kind の宣言の下ろし方
 - `eml_types`: `once` のフィールドと `Lin` の宣言の `DataKind`、参照の一番外側の矢印が `once` の位置で `Lin` になり、そうでなければ `Unr` に解けること、row の型引数の単一化と表示
-- `eml_core_ir`: `enum` の `lin` の変数を通す LIR、`once` の位置に置いたトップレベルの関数の instance と印
+- `eml_core_ir`: `enum` の変数が `unr` になることを確かめる `a_lin_enum_variable_is_unr`、`once` の位置に置いたトップレベルの関数の instance と印
 
 ## テストの変更
 
@@ -254,3 +255,5 @@ main () =
 - row の型引数を持つ `data` の instance を E0004 にする
 - 参照ごとの変数が宣言の Kind 変数と等しくなって、書き出した型と印が変わる場合を受け入れる
 - 2回呼んだ引数を `once` の位置に置いたときの誤りは、今の E3002 のままにする
+- `int`、`enum`、`unit` の変数の印を、型が `Lin` でも `unr` にする (実装中に、`lin` の `enum` が V2 と V1 に当たると分かったため)
+- 射影と更新が、印が `unr` でない値を取り分け、取り出すフィールドがどれも `unr` のときに、`drop` を置く
