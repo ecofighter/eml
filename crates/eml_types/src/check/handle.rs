@@ -1,7 +1,7 @@
 //! handle の検査 (docs/spec/effects.md の「handler の意味」)。
 
 use eml_diagnostics::TextRange;
-use eml_hir::{Closure, EffectId, ExprId, OpClause, OpMultiplicity, PatId, ReturnClause};
+use eml_hir::{Closure, EffectId, ExprId, OpClause, OpMultiplicity, PatId, PatKind, ReturnClause};
 
 use crate::kind::{KindReason, OperationSide};
 use crate::table::{ArrowLin, Label, Row, Ty, TyShape};
@@ -127,6 +127,7 @@ impl BodyCheck<'_, '_> {
             }
         }
         self.bind_state(clause.state(), state);
+        self.expect_fn_clause_body(clause, ty, state);
         if let Some(k) = clause.k() {
             // `multi` の操作の `k` は何度でも再開でき、捨ててもよい (docs/spec/effects.md の「継続の多重度と持ち越し規則」)
             let lin = match operation.multiplicity {
@@ -159,6 +160,28 @@ impl BodyCheck<'_, '_> {
             self.bind_pat(k, continuation);
         }
         self.check_expr(clause.closure.body, result, Origin::HandlerClause);
+    }
+
+    /// `fn` の節なら、書いた本体に期待する型を記録する。状態のない handler では操作の結果の型、パラメータ付き handler
+    /// では結果と次の状態の組である (docs/spec/expressions.md の「handler」と「パラメータ付き handler」)。
+    fn expect_fn_clause_body(&mut self, clause: &OpClause, result: Ty, state: Option<Ty>) {
+        let Some(k) = clause.k() else { return };
+        let PatKind::Bind(k) = self.body.pats[k].kind else {
+            return;
+        };
+        let Some(fn_clause) = self.body.fn_clauses.iter().find(|c| c.k == k) else {
+            return;
+        };
+        let expected = match state {
+            None => result,
+            Some(sigma) => self.table.tuple(vec![result, sigma]),
+        };
+        let origin = Origin::FnClauseBody {
+            op: self.program[clause.op].name.clone(),
+            stateful: state.is_some(),
+        };
+        self.fn_clause_bodies
+            .insert(fn_clause.body, (expected, origin));
     }
 
     /// 扱うエフェクトが決まらない handler は HIR が報告済みである。本体のエフェクトをすべて受け入れ、型を `Error` に

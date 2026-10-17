@@ -1,0 +1,24 @@
+---
+source: crates/eml_cli/tests/ui.rs
+expression: rendered
+input_file: tests/ui/check-fail/linearity/fn_clause_carries_continuation.em
+---
+[E3006] Error: the continuation of this `fn` clause must be used exactly once, but it is kept alive across a call that may resume more than once
+    ╭─[ check-fail/linearity/fn_clause_carries_continuation.em:12:23 ]
+    │
+ 12 │     | fn ask () -> if choose () then 1 else 2
+    │     ────────────────────┬─┬──────────────────  
+    │                         ╰────────────────────── the continuation of this `fn` clause
+    │                           │                    
+    │                           ╰──────────────────── this call may perform `choose`, a `multi` operation
+    │
+    ├─[ check-fail/linearity/fn_clause_carries_continuation.em:12:23 ]
+    │
+  7 │   multi choose : Unit -> Bool
+    │         ───┬──  
+    │            ╰──── `choose` is declared `multi` here
+    │ 
+    │ Help: perform this call outside the `fn` clause
+    │ 
+    │ Note: a continuation of a `multi` operation can be resumed more than once, and each resumption would use the value again
+────╯

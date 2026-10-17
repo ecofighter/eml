@@ -1,0 +1,15 @@
+---
+source: crates/eml_cli/tests/ui.rs
+expression: "format!(\"--- stdout ---\\n{stdout}--- stderr ---\\n{diagnostics}{stderr}{written}{exit}\")"
+input_file: tests/ui/run/effects/fn_clauses.em
+---
+--- stdout ---
+42
+11
+asked once
+42
+ok: 42
+failed: division by zero
+skipped, then ok: 0
+41
+--- stderr ---

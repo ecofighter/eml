@@ -76,6 +76,7 @@ pub(super) fn check_input<'c>(
         instances: Vec::new(),
         local_frames: Vec::new(),
         closed_locals: HashSet::new(),
+        fn_clause_bodies: HashMap::new(),
     };
     checker.check_function(own);
     if let InputKind::Let(binding) = kind {

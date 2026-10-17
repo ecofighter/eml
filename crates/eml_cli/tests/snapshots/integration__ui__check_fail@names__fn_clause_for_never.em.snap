@@ -1,0 +1,16 @@
+---
+source: crates/eml_cli/tests/ui.rs
+expression: rendered
+input_file: tests/ui/check-fail/names/fn_clause_for_never.em
+---
+[E1051] Error: a `never` operation cannot have a `fn` clause
+   ╭─[ check-fail/names/fn_clause_for_never.em:9:9 ]
+   │
+ 9 │       | fn fail message -> 0
+   │         ─┬  
+   │          ╰── `fail` is a `never` operation
+   │ 
+   │ Help: write `ctl` instead of `fn`
+   │ 
+   │ Note: a `never` operation never resumes, so its clause must be `ctl`
+───╯

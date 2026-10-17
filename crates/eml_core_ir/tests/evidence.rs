@@ -1027,3 +1027,43 @@ fn clause_local_function_resumes_once() {
     }
     ");
 }
+
+/// `fn` の節は `| ctl ask () k -> k n` と同じ形に下ろすので、yield の地点のない本体はその場で動く入口になる
+/// (docs/spec/core-ir.md の「evidence passing」)。
+#[test]
+fn a_fn_clause_runs_in_place() {
+    let program = |clause: &str| {
+        format!(
+            "{ASK}run : Int -> Int\nrun n =\n  handle ask () + 1 with\n    | {clause}\n\nmain : Unit -> <IO> Unit\nmain () = println (show (run 41))"
+        )
+    };
+    let fn_clause = core_text(&program("fn ask () -> n"), Pass::Evidence);
+    let ctl_clause = core_text(&program("ctl ask () k -> k n"), Pass::Evidence);
+    assert_eq!(
+        function(&fn_clause, "run$handle0$ask$entry"),
+        function(&ctl_clause, "run$handle0$ask$entry")
+    );
+    insta::assert_snapshot!(function(&fn_clause, "run$handle0$ask$entry"), @"
+    internal clause Ask.ask fn run$handle0$ask$entry(n.0: int, e.5: obj, p.1: unit) -> int {
+      let p.3: unit = prim ev_take_state(e.5)
+      let u.6: unit = prim ev_set_state(e.5, ())
+      return n.0
+    }
+    ");
+}
+
+/// 本体が別のエフェクトの操作を起こす `fn` の節は yield の地点を持つので、その場で動かず `yield_to` の入口になる。
+#[test]
+fn a_fn_clause_that_performs_yields() {
+    let text = format!(
+        "{ASK}effect Log where\n  log : Int -> Unit\n\nmain : Unit -> <IO> Unit\nmain () =\n  let r =\n    handle (handle ask () + 1 with\n              | fn ask () ->\n                log 1\n                41) with\n      | ctl log n k -> k ()\n  println (show r)"
+    );
+    let shown = core_text(&text, Pass::Evidence);
+    insta::assert_snapshot!(function(&shown, "main$handle0$ask$entry"), @"
+    internal yields clause Ask.ask fn main$handle0$ask$entry(e.0: obj, p.1: unit) -> int {
+      let c.2: tobj = closure main$handle0$ask(p.1)
+      let u.3: unit = prim yield_to(e.0, c.2, &id$)
+      return 0
+    }
+    ");
+}

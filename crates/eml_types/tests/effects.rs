@@ -844,3 +844,27 @@ fn a_linear_local_function_held_across_multi_is_e3006() {
       help: finish using `close` before this call
     ");
 }
+
+/// `fn` の節の本体の型の誤りは、隠れた `k` の引数ではなく、操作の結果の型との誤りとして本体を指す
+/// (docs/spec/expressions.md の「handler」)。
+#[test]
+fn a_fn_clause_body_mismatch_names_the_operation_result() {
+    let text = "effect Ask where\n  ask : Unit -> Int\n\nf : Unit -> Int\nf () =\n  handle ask () with\n    | fn ask () -> \"x\"";
+    insta::assert_snapshot!(check_full(text), @"
+    E2001 7:20 mismatched types
+      7:20 expected `Int`, found `String`
+      note: the `fn` clause for `ask` must return the result type of `ask`
+    ");
+}
+
+/// パラメータ付き handler の `fn` の節の本体は、操作の結果と次の状態の組を返す (docs/spec/expressions.md の
+/// 「パラメータ付き handler」)。
+#[test]
+fn a_stateful_fn_clause_body_mismatch_names_the_pair() {
+    let text = "effect Ask where\n  ask : Unit -> Int\n\nf : s -> Int\nf s0 =\n  handle ask () from s0 with\n    | fn ask () st -> st\n    | return x _ -> x";
+    insta::assert_snapshot!(check_full(text), @"
+    E2001 7:23 mismatched types
+      7:23 expected `(Int, s)`, found `s`
+      note: the `fn` clause for `ask` must return a pair of the result of `ask` and the next state
+    ");
+}

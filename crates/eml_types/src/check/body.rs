@@ -85,6 +85,10 @@ pub(super) struct BodyCheck<'a, 'c> {
     /// 最後の矢印の row を閉じたローカル関数。トップレベルの関数と同じく、値として参照すると row を開く
     /// (docs/spec/types.md の「ローカル関数の推論」)。
     pub(super) closed_locals: HashSet<LocalId>,
+    /// `fn` の節の本体に期待する型と由来。キーは書いた本体の式である。HIR が本体を `let` の右辺に下ろすので、その
+    /// `let` で本体を期待する型に照らす。隠れた `k` の引数の誤りとして報告しないため (docs/spec/expressions.md の
+    /// 「handler」)。
+    pub(super) fn_clause_bodies: HashMap<ExprId, (Ty, Origin)>,
 }
 
 /// 本体を検査中のローカル関数。本体の中の自分への呼び出しの row は、まだ決まっていないので、包含を確かめずにここへ
@@ -515,7 +519,13 @@ impl BodyCheck<'_, '_> {
                             self.check_expr(*init, annotated, Origin::Annotation(range));
                             annotated
                         }
-                        None => self.infer_expr(*init),
+                        None => match self.fn_clause_bodies.remove(init) {
+                            Some((expected, origin)) => {
+                                self.check_expr(*init, expected, origin);
+                                expected
+                            }
+                            None => self.infer_expr(*init),
+                        },
                     };
                     self.bind_pat(*pat, ty);
                 }

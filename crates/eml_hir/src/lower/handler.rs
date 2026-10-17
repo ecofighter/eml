@@ -248,10 +248,10 @@ impl BodyLowering<'_> {
         });
     }
 
-    /// `fn` の節を同じ意味の `ctl` の節の引数と本体に書き換える。状態のない handler では `$k (本体)`、パラメータ付き
-    /// handler では `let ($v, $st) = 本体 in $k $v $st` にする (docs/spec/expressions.md の「handler」)。HIR の節を
-    /// 1つの形のまま保てば、型検査、translate、EP を変えずに済む。隠れた名前はスコープに積まないので、利用者のコードから
-    /// 解決できない。
+    /// `fn` の節を同じ意味の `ctl` の節の引数と本体に書き換える。状態のない handler では `let $r = 本体 in $k $r`、
+    /// パラメータ付き handler では `let ($v, $st) = 本体 in $k $v $st` にする (docs/spec/expressions.md の「handler」)。
+    /// HIR の節を1つの形のまま保てば、型検査、translate、EP を変えずに済む。隠れた名前はスコープに積まないので、
+    /// 利用者のコードから解決できない。
     fn lower_fn_clause(
         &mut self,
         mut params: Vec<PatId>,

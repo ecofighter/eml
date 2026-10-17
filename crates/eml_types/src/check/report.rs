@@ -55,6 +55,11 @@ pub(super) enum Origin {
     LambdaBody,
     /// handler の節の本体。handle 式全体の型を持つ。
     HandlerClause,
+    /// `fn` の節の書いた本体。操作の名前と、パラメータ付き handler の節かどうかを持つ。
+    FnClauseBody {
+        op: String,
+        stateful: bool,
+    },
     /// 推論で決まる型。根拠の場所はない。
     Inferred,
 }
@@ -444,6 +449,12 @@ impl BodyCheck<'_, '_> {
             Origin::HandlerClause => diagnostic.with_note(
                 "each clause of a handler must have the type of the whole `handle` expression",
             ),
+            Origin::FnClauseBody { op, stateful: false } => diagnostic.with_note(format!(
+                "the `fn` clause for `{op}` must return the result type of `{op}`"
+            )),
+            Origin::FnClauseBody { op, stateful: true } => diagnostic.with_note(format!(
+                "the `fn` clause for `{op}` must return a pair of the result of `{op}` and the next state"
+            )),
             Origin::LambdaParameter => diagnostic.with_note(
                 "an annotated lambda parameter must have the parameter type the lambda is expected to have",
             ),
@@ -749,6 +760,9 @@ fn carried_across(
         }
         CarriedValue::Temporary(_) => "a linear value".to_string(),
         CarriedValue::HandlerState { .. } => "the state of this handler".to_string(),
+        CarriedValue::FnClauseContinuation { .. } => {
+            "the continuation of this `fn` clause".to_string()
+        }
     };
     let what = match call {
         CallKind::Call => "this call",
@@ -788,6 +802,11 @@ fn carried_across(
         CarriedValue::HandlerState { init } => {
             diagnostic.with_secondary(Label::new(file, *init, "the state of this handler"))
         }
+        CarriedValue::FnClauseContinuation { clause } => diagnostic.with_secondary(Label::new(
+            file,
+            *clause,
+            "the continuation of this `fn` clause",
+        )),
     };
     if let Some(op) = operation {
         let declared = &program[op];
@@ -807,6 +826,10 @@ fn carried_across(
         CarriedValue::HandlerState { .. } => {
             "finish using the state before this handle, or give the handler a state that is not linear"
                 .to_string()
+        }
+        // 継続は本体の値で再開するまで生きているので、本体の中では使い終えられない
+        CarriedValue::FnClauseContinuation { .. } => {
+            "perform this call outside the `fn` clause".to_string()
         }
     };
     diagnostic.with_note(CARRY_NOTE).with_help(help)

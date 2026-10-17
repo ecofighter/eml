@@ -1021,3 +1021,18 @@ fn a_parameter_called_twice_does_not_fit_a_once_field() {
         ["E3002"]
     );
 }
+
+/// `once` の操作の `fn` の節の本体が `multi` の操作を起こすと、隠れた `k` が区間をまたぐ。`$k` ではなく節の継続として
+/// 報告する (docs/spec/effects.md の「継続の多重度と持ち越し規則」)。
+#[test]
+fn a_fn_clause_continuation_held_across_multi_is_e3006() {
+    let rest = "nested : Unit -> Int\nnested () =\n  let run () =\n    handle ask () with\n      | fn ask () -> if choose () then 1 else 2\n  handle run () with\n    | ctl choose () k -> k True";
+    insta::assert_snapshot!(carried(rest), @"
+    E3006 24:25 the continuation of this `fn` clause must be used exactly once, but it is kept alive across a call that may resume more than once
+      24:25 this call may perform `choose`, a `multi` operation
+      24:7 the continuation of this `fn` clause
+      2:9 `choose` is declared `multi` here
+      note: a continuation of a `multi` operation can be resumed more than once, and each resumption would use the value again
+      help: perform this call outside the `fn` clause
+    ");
+}

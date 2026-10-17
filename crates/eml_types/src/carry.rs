@@ -377,6 +377,13 @@ impl Carrying<'_, '_> {
         match value {
             Held::Local(local) => {
                 let ty = *self.typing.locals.get(local)?;
+                // 隠れた `$k` は書き手が名前を知らないので、節を指す (docs/spec/effects.md の「継続の多重度と持ち越し規則」)
+                if let Some(clause) = self.body.fn_clauses.iter().find(|c| c.k == local) {
+                    let value = CarriedValue::FnClauseContinuation {
+                        clause: clause.range,
+                    };
+                    return Some((ty, value));
+                }
                 let data = &self.body.locals[local];
                 Some((
                     ty,

@@ -332,6 +332,9 @@ pub(crate) enum CarriedValue {
         /// `from` の初期値の式の範囲。
         init: TextRange,
     },
+    /// `fn` の節の隠れた継続 `$k`。書き手は名前を知らないので、節の範囲で指す (docs/spec/effects.md の
+    /// 「継続の多重度と持ち越し規則」)。
+    FnClauseContinuation { clause: TextRange },
 }
 
 impl CarriedValue {
@@ -343,6 +346,7 @@ impl CarriedValue {
             }
             CarriedValue::Temporary(range) => *range,
             CarriedValue::HandlerState { init } => *init,
+            CarriedValue::FnClauseContinuation { clause } => *clause,
         }
     }
 
@@ -355,6 +359,7 @@ impl CarriedValue {
                 [vec![number(2), text(name)], span(*clause)].concat()
             }
             CarriedValue::HandlerState { .. } => vec![number(3)],
+            CarriedValue::FnClauseContinuation { .. } => vec![number(4)],
         };
         [span(self.key()), rest].concat()
     }
@@ -568,6 +573,13 @@ mod tests {
                 CarriedValue::HandlerState { init: range(1, 2) },
                 Some(op(0)),
                 CallKind::Handle,
+            ),
+            across(
+                CarriedValue::FnClauseContinuation {
+                    clause: range(1, 2),
+                },
+                Some(op(0)),
+                CallKind::Call,
             ),
             through(None),
             through(Some(inner(a, 1, InnerLabel::Value))),

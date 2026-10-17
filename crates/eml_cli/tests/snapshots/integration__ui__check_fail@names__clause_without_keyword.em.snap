@@ -1,0 +1,14 @@
+---
+source: crates/eml_cli/tests/ui.rs
+expression: rendered
+input_file: tests/ui/check-fail/names/clause_without_keyword.em
+---
+[E1051] Error: this clause needs `fn` or `ctl`
+    ╭─[ check-fail/names/clause_without_keyword.em:10:7 ]
+    │
+ 10 │       | ask () k -> k 41
+    │       ──┬──  
+    │         ╰──── this clause
+    │ 
+    │ Note: a `fn` clause resumes with the value of its body, and a `ctl` clause resumes only by calling `k`
+────╯
