@@ -28,7 +28,7 @@
 - An `Iter` dropped before its first `next`, or a `zip` where the first `Iter` ends: the other / unstarted producer's `File` must be closed, no leak in checked mode (Tasks 2-3 tests).
 - `Fs.read_line` on a line longer than 64 KiB and on a file without a final newline (Task 3 Miri and UI tests).
 - `Fs.read_line` after the file has been read to the end by `Fs.read_all` (returns `None`, keeps the `File`) (Task 3 UI test).
-- A user module named `Yield.em` / `Iter.em` next to `main.em`: the user module wins as for other std names (Task 1 check: run the existing `modules/` tests; add one user `Iter.em` shadow case).
+- A user module named `Yield.em` / `Iter.em` next to `main.em`: the user module wins as for other std names (Task 2 test `modules/std_name_shadowed_by_user`).
 
 ---
 
@@ -37,7 +37,7 @@
 **Files:**
 - Create: `std/Yield.em`, `std/Fail.em`, `std/State.em`
 - Modify: `crates/eml_hir/src/lib.rs` (`STD`: append the three entries)
-- Create: `tests/ui/run/std/yield.em`, `tests/ui/run/std/fail.em`, `tests/ui/run/std/state.em`, `tests/ui/check-fail/std/to_option_linear_error.em`, `tests/ui/run/modules/std_name_shadowed_by_user/main.em` + `Iter.em` (a user `Iter` module that wins over std; may be added in Task 2 instead if `Std.Iter` must exist first) (+ snapshots)
+- Create: `tests/ui/run/std/yield.em`, `tests/ui/run/std/fail.em`, `tests/ui/run/std/state.em`, `tests/ui/check-fail/std/to_option_linear_error.em` (+ snapshots)
 
 **Interfaces:**
 - Produces: the spec's `Std.Yield` (`effect Yield a`, `for_each`, `collect`, `fold`), `Std.Fail` (`effect Fail x` with `never fail`, `to_result`, `to_option`), `Std.State` (`effect State s`, `run`, `eval`, `exec`) — every effect and function `pub`.
@@ -56,13 +56,13 @@
 
 **Files:**
 - Create: `std/Iter.em`; Modify: `crates/eml_hir/src/lib.rs` (`STD`)
-- Create: `tests/ui/run/std/iter.em` (+ snapshot)
+- Create: `tests/ui/run/std/iter.em`, `tests/ui/run/modules/std_name_shadowed_by_user/main.em` + `Iter.em` (+ snapshots)
 
 **Interfaces:**
 - Consumes: Task 1 `Std.Yield`.
 - Produces: the spec's `Std.Iter` (`pub data Iter <e> a = | Iter (once Unit -> <e> Option (a, Iter <e> a))` and the 13 functions).
 
-- [ ] **Step 1: Write the failing UI test** `std/iter.em`: every function; laziness (a producer that `println`s before each `yield`: building `generate` / `map` / `take` prints nothing, the first `next` prints); `take 0` and `take` past the end; an empty producer; `zip` with different lengths (both directions); `enumerate 1`; `from_list` → `to_list` round trip; `yield_all` back into `Yield.collect`; dropping an `Iter` before any `next`.
+- [ ] **Step 1: Write the failing UI test** `std/iter.em`: every function; laziness (a producer that `println`s before each `yield`: building `generate` / `map` / `take` prints nothing, the first `next` prints); `take 0` and `take` past the end; an empty producer; `zip` with different lengths (both directions); `enumerate 1`; `from_list` → `to_list` round trip; `yield_all` back into `Yield.collect`; dropping an `Iter` before any `next`. `modules/std_name_shadowed_by_user`: a user `Iter.em` next to `main.em` (with a different `next`) wins over `Std.Iter` for `import Iter` and the `Iter.` qualifier.
 - [ ] **Step 2: Run** it — fails.
 - [ ] **Step 3: Write `std/Iter.em`** per the spec (`take` drops the rest at the `next` after the n-th element; `zip` drops the other on end). Append to `STD`.
 - [ ] **Step 4: Run** `cargo test --workspace` — pass.
