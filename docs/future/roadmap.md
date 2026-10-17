@@ -46,7 +46,7 @@ S12d の5本のスクリプトの書き心地と、その後の議論と試作 (
 | 作業 | 中身 | 完了の条件 |
 |---|---|---|
 | S13a | Kind の記法。1回だけ呼べる関数 `once a -> b`、`data` の row の型引数、`data` の Kind の宣言 | 済み。決めたことは [型と Kind](../spec/types.md) と [宣言](../spec/declarations.md) にある |
-| S13b | `mask` を位置つきにして E2008 をなくすこと。std のエフェクト `Yield`、`Fail`、`State` と、その handler、引いて使うジェネレータ `Iter`、`Fs.read_line`。`k` を書かない節、ローカル関数どうしの相互再帰。S13b-1〜S13b-3 に分ける | 済み。決めたことは [エフェクトと handler](../spec/effects.md)、[型と Kind](../spec/types.md)、[式](../spec/expressions.md)、[標準ライブラリ](../spec/stdlib.md) にある |
+| S13b | `mask` を位置つきにして E2008 をなくすこと。std のエフェクト `Yield`、`Fail`、`State` と、その handler、引いて使うジェネレータ `Iter`、`Fs.read_line`。`k` を書かない節、ローカル関数どうしの相互再帰 | 済み。決めたことは [エフェクトと handler](../spec/effects.md)、[型と Kind](../spec/types.md)、[式](../spec/expressions.md)、[標準ライブラリ](../spec/stdlib.md)、[オブジェクトモデル](../spec/object-model.md) にあり、スクリプトの計測は [計測の基準](../implementation/benchmarks.md) の「S13b (スクリプト)」にある |
 | S13c | 中断を巻き戻しで行うこと、`IO` と `never` の操作を yield の地点から外すこと、節の間の `evv` の付け替え (under)、中断で終わる経路での `Lin` の値の暗黙の後始末 | 本体で `println` を呼ぶ総称な handler が、`RunStats` で yield を数えない。中断で巻き戻した `File` が閉じ、検査モードで漏れがない。`never` の操作の前の `drop k` が要らない |
 | S13d | row の最小の具体化 | 純粋なコールバックを渡した総称な handler を、外側にユーザーのエフェクト (`State` など) の handler がある所で呼んでも、`RunStats` で yield を数えない。`<IO>` だけの場合は S13c で済む |
 | S13e | `Iter` の状態機械への特殊化 | 末尾再帰の生産者を `Iter` で引く計測で、1要素ごとの yield と確保がなくなる。直接のループとの実時間の差を [計測の基準](../implementation/benchmarks.md) に記録する |
@@ -58,18 +58,6 @@ S12d の5本のスクリプトの書き心地と、その後の議論と試作 (
 - S13c と S13d を S13b の後に置くのは、std のエフェクトで書いたプログラムで、yield の数の変化を `RunStats` で測るためである。S13c を S13d より先に置くのは、スクリプトで最も多い形 (消費者の本体で `println` を呼ぶ形) の yield を S13c が消し、S13d の効果はその残りで測れるためである
 - S13e は、S13b の `Iter` と S13c の中断の仕組みを前提にする
 - S13f は他の作業に依らない。数値計算の計測をネイティブ化の前の基準にするため、S13 の中で入れる
-
-### S13b std のエフェクトと `Iter`
-
-S13b を、次の3つの作業に分けて順に進める (2026-10-17 に決めた)。
-
-| 作業 | 中身 |
-|---|---|
-| S13b-1 | 位置つきの `mask`。E2008 をなくす。済み。決めたことは [エフェクトと handler](../spec/effects.md) と [型と Kind](../spec/types.md) にある |
-| S13b-2 | `k` を書かない節と、ローカル関数どうしの相互再帰。済み。決めたことは [式](../spec/expressions.md)、[エフェクトと handler](../spec/effects.md)、[型と Kind](../spec/types.md) にある |
-| S13b-3 | std の `Yield`、`Fail`、`State` とその handler、`Std.Iter`、`Fs.read_line`、S12d のスクリプトの書き換え。済み。決めたことは [標準ライブラリ](../spec/stdlib.md) と [オブジェクトモデル](../spec/object-model.md) にあり、スクリプトの計測は [計測の基準](../implementation/benchmarks.md) の「S13b (スクリプト)」にある |
-
-位置つきの `mask` を最初に置くのは、型を変換する handler を書く前提で、ほかの2つの作業に依らないためである。std の `Yield` はまだないので、S13b-1 の完了の条件はテストの中で宣言した `Yield` で確かめる。S13b-3 を最後に置くのは、std の handler を S13b-2 の `k` を書かない節で書くためである。
 
 ### S13c 中断の巻き戻し
 
