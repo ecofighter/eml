@@ -63,18 +63,29 @@ enum Level {
     Ownership,
 }
 
-/// Perceus の後の関数を所有の段で確かめながら、巻き戻しの地点ごとの所有を書き留める (`unwind::points`)。
-pub(crate) fn unwind_points(
-    program: &Program,
-    function: &LirFn,
-) -> Result<Vec<UnwindPoint>, String> {
+/// Perceus の後の関数を所有の段で確かめながら、巻き戻しの地点ごとの所有を書き留める (`unwind::points_all`)。
+/// 表はプログラムに1回だけ作る。
+pub(crate) fn unwind_points(program: &Program) -> Result<Vec<Vec<UnwindPoint>>, VerifyError> {
     with_tables(program, |tables| {
-        let dominators = shape(&block_shapes(function))?;
-        let mut checker = Checker::new(program, tables, function, Level::Ownership, dominators);
-        checker.points = Some(Vec::new());
-        checker.run()
+        program
+            .functions
+            .iter()
+            .map(|function| {
+                shape(&block_shapes(function))
+                    .and_then(|dominators| {
+                        let mut checker =
+                            Checker::new(program, tables, function, Level::Ownership, dominators);
+                        checker.points = Some(Vec::new());
+                        checker.run()
+                    })
+                    .map(|points| points.expect("the checker was given a list"))
+                    .map_err(|message| VerifyError {
+                        function: function.name.clone(),
+                        message,
+                    })
+            })
+            .collect()
     })
-    .map(|points| points.expect("the checker was given a list"))
 }
 
 fn verify_at(program: &Program, level: Level) -> Result<(), VerifyError> {

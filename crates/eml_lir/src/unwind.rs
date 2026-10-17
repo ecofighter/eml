@@ -5,7 +5,7 @@
 
 use eml_extern::Purity;
 
-use crate::{BlockId, LirFn, Prim, Program, Rhs, Stmt, VarId, verify};
+use crate::{BlockId, Prim, Program, Rhs, Stmt, VarId, verify};
 
 /// 巻き戻しの地点。中断がこの命令の中を通ると、フレームは `owned` の参照を手放すか、`landing` に着地する。
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -20,16 +20,13 @@ pub struct UnwindPoint {
     pub landing: Option<VarId>,
 }
 
-/// 関数の巻き戻しの地点を、ブロックの順、文の順に返す。地点は末尾でない呼び出し、`Effectful` の extern、
-/// `prim yield_abort` である。入力は `verify` を通る Perceus の後の LIR でなければならず、通らなければ panic する。
-/// VM はリリースのビルドでも呼ぶので、debug のビルドだけの検査には頼らない。
-pub fn points(program: &Program, function: &LirFn) -> Vec<UnwindPoint> {
-    verify::unwind_points(program, function).unwrap_or_else(|message| {
-        panic!(
-            "unwind points need verified LIR: {message} in `{}`",
-            function.name
-        )
-    })
+/// 関数ごとの巻き戻しの地点。`FnIdx` の番号で引き、各関数の地点はブロックの順、文の順に並ぶ。地点は末尾でない
+/// 呼び出し、`Effectful` の extern、`prim yield_abort` である。入力は `verify` を通る Perceus の後の LIR でなければ
+/// ならず、通らなければ panic する。VM はリリースのビルドでも呼ぶので、debug のビルドだけの検査には頼らない。
+/// プログラム全体を1回で求めるのは、検査の表 (関数ごとの要約) を作り直さないためである。
+pub fn points_all(program: &Program) -> Vec<Vec<UnwindPoint>> {
+    verify::unwind_points(program)
+        .unwrap_or_else(|error| panic!("unwind points need verified LIR: {error}"))
 }
 
 /// 文が巻き戻しの地点なら、文が束縛する変数と着地の印を返す。

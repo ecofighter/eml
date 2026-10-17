@@ -1,7 +1,7 @@
-//! 巻き戻しの点 (`eml_lir::unwind::points`)。入力は所有の段の verifier を通る、Perceus の後の LIR のテキストである
+//! 巻き戻しの点 (`eml_lir::unwind::points_all`)。入力は所有の段の verifier を通る、Perceus の後の LIR のテキストである
 //! (docs/superpowers/specs/2026-10-17-s13c-unwinding-design.md の「巻き戻しの表」)。
 
-use eml_lir::unwind::{UnwindPoint, points};
+use eml_lir::unwind::{UnwindPoint, points_all};
 use eml_lir::{BlockId, VarId, parse, verify};
 
 /// `name` の関数の巻き戻しの点。入力が所有の段の verifier を通ることも確かめる。
@@ -10,12 +10,12 @@ fn points_of(text: &str, name: &str) -> Vec<UnwindPoint> {
     if let Err(error) = verify(&program) {
         panic!("the input must verify: {error}\n{text}");
     }
-    let function = program
+    let index = program
         .functions
         .iter()
-        .find(|function| function.name == name)
+        .position(|function| function.name == name)
         .unwrap_or_else(|| panic!("no `{name}`"));
-    points(&program, function)
+    points_all(&program).swap_remove(index)
 }
 
 fn point(block: u32, stmt: usize, owned: &[(u32, u32)], landing: Option<u32>) -> UnwindPoint {
@@ -160,5 +160,5 @@ fn f(c.0: tobj, e.1: obj, k.2: obj) -> obj {
 fn unverified_lir_panics() {
     let program = parse("fn f(a.0: obj) -> unit {\n  return ()\n}\n")
         .unwrap_or_else(|error| panic!("{error}"));
-    points(&program, &program.functions[0]);
+    points_all(&program);
 }
