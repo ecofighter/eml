@@ -215,7 +215,7 @@ fn a_hash_name_keeps_its_row_bits() {
     text.push_str(&format!(
         "  let _ = tap f1 ask\n  f{n} 5\n\nmain : Unit -> <IO> Unit\nmain () = println (show (handle run () with\n    | ctl ask () k -> k 2))"
     ));
-    assert_eq!(instances_of(&text, "tap"), ["tap@#56963963a7329f3e<e>"]);
+    assert_eq!(instances_of(&text, "tap"), ["tap@#25dc3bd8ddbc9f49<e>"]);
 }
 
 /// `tap` を長い型引数で使うプログラム。`short` なら、その前に `Int` でも使う。
@@ -242,8 +242,8 @@ fn a_hash_name_does_not_depend_on_the_other_instances() {
     // いつも同じコードになる (docs/spec/core-ir.md の「変換の規則」)
     let alone = instances_of(&tap_program(false), "tap");
     let with_short = instances_of(&tap_program(true), "tap");
-    assert_eq!(alone, ["tap@#56963963a7329f3e<e>"]);
-    assert_eq!(with_short, ["tap@[Int]<e>", "tap@#56963963a7329f3e<e>"]);
+    assert_eq!(alone, ["tap@#25dc3bd8ddbc9f49<e>"]);
+    assert_eq!(with_short, ["tap@[Int]<e>", "tap@#25dc3bd8ddbc9f49<e>"]);
 }
 
 #[test]
@@ -530,7 +530,7 @@ fn instances_that_differ_only_in_linearity_have_different_names() {
     let text = "id : a -> a\nid x = x\n\ninc : Int -> Int\ninc x = x + 1\n\nmain : Unit -> <IO> Unit\nmain () =\n  let h = Fs.open \"a.txt\"\n  let k = fn n ->\n    Fs.close h\n    n\n  let one = id k\n  let a = one 1\n  let i = id inc\n  println (show (i a))";
     assert_eq!(
         instances_of(text, "id"),
-        ["id@[once Int -> <IO> Int]", "id@[Int -> <IO> Int]"]
+        ["id@[once Int -> <IO> Int]", "id@[Int -> Int]"]
     );
 }
 

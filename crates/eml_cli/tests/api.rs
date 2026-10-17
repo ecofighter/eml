@@ -1076,6 +1076,20 @@ fn type_of_neither_accepts_nor_numbers_its_question() {
     assert_eq!(console.eval("t").2, ["E1001"]);
 }
 
+/// `:type` は問い合わせた型の row 変数を残す。
+#[test]
+fn type_of_keeps_the_row_variables_of_the_queried_type() {
+    let console = Console::new(&RunConfig::default());
+    assert_eq!(
+        console.repl.type_of("fn f -> f ()").ty.as_deref(),
+        Some("(Unit -> <e> a) -> <e> a")
+    );
+    assert_eq!(
+        console.repl.type_of("fn f x -> List.map f x").ty.as_deref(),
+        Some("(a -> <e> b) -> List a -> <e> List b")
+    );
+}
+
 /// 後で報告する誤り (線形性) だけの問い合わせでも、型を返さない。
 #[test]
 fn type_of_returns_no_type_when_any_error_is_found() {

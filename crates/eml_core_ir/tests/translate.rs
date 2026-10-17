@@ -282,7 +282,7 @@ fn lambdas_and_handlers_are_numbered_in_expression_order() {
     entry$main
     ");
     insta::assert_snapshot!(function(&shown, "main$lambda1"), @"
-    internal yields fn main$lambda1(x.0: int) -> tobj {
+    internal fn main$lambda1(x.0: int) -> tobj {
       let c.1: tobj = closure main$lambda0(x.0)
       return c.1
     }
@@ -947,7 +947,7 @@ fn names_outside_the_entry_are_qualified_with_their_module() {
     }
     yields fn Report.Csv.parse(p.0: unit) -> obj {
       let t.1: int = yields apply &op$Report.Csv.next(())
-      let t.2: obj = yields apply &con$Report.Csv.Row(t.1)
+      let t.2: obj = apply &con$Report.Csv.Row(t.1)
       return t.2
     }
     internal yields fn main$handle0(p.0: unit) -> obj {
