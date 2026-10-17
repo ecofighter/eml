@@ -3668,9 +3668,9 @@ impl<M: Mode> Heap<M> {
         }
     }
 
-    /// 書き換えるために `Foreign` の値を借りる。`Fs.read_all` が `File` の読み手を進めるために使う。検査モードは、
-    /// 読めなければ `UseAfterFree` を、rc が 1 でなければ (共有の負の rc も) `NotUnique` を、持ち主が今の worker で
-    /// なければ `WrongOwner` を返す。型の照らし合わせは `foreign` と同じく速いモードでも行う。
+    /// 書き換えるために `Foreign` の値を借りる。`Fs.read_all` と `Fs.read_line_raw` が `File` の読み手を進めるために
+    /// 使う。検査モードは、読めなければ `UseAfterFree` を、rc が 1 でなければ (共有の負の rc も) `NotUnique` を、持ち主が
+    /// 今の worker でなければ `WrongOwner` を返す。型の照らし合わせは `foreign` と同じく速いモードでも行う。
     ///
     /// # Safety
     ///

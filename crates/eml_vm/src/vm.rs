@@ -583,12 +583,8 @@ fn run_extern<M: Mode>(
                 let w = ctx.fs_open(task.get(arg(0)))?;
                 task.set(dst, w);
             }
-            Extern::ReadAll => {
-                let w = ctx.fs_read_all(task.get(arg(0)))?;
-                task.set(dst, w);
-            }
-            Extern::ReadLine => {
-                let w = ctx.fs_read_line(task.get(arg(0)))?;
+            Extern::ReadAll | Extern::ReadLine => {
+                let w = ctx.fs_read(task.get(arg(0)), matches!(ext, Extern::ReadLine))?;
                 task.set(dst, w);
             }
             Extern::Close => {

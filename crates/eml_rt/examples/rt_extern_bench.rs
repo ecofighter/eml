@@ -191,12 +191,12 @@ fn read_all(sized: bool) {
     // SAFETY: 不死の文字列を1つ確保するだけである。
     let path = unsafe { ctx.heap_mut() }.alloc_string_immortal("big.txt");
     for _ in 0..100 {
-        // SAFETY: path は生きた不死の物体である。fs_read_all が返した組から File と文字列の参照を取り出し、組は
+        // SAFETY: path は生きた不死の物体である。fs_read が返した組から File と文字列の参照を取り出し、組は
         // 両方を残して手放す。File は fs_close に、文字列は decref に渡し、その後どちらも読まない。
         unsafe {
             ctx.heap_mut().acquire_immortal(path).unwrap();
             let file = ctx.fs_open(path).unwrap();
-            let pair = ctx.fs_read_all(file).unwrap();
+            let pair = ctx.fs_read(file, false).unwrap();
             let file = ctx.heap().field(pair, 0).unwrap();
             let text = ctx.heap().field(pair, 1).unwrap();
             ctx.heap_mut().release(pair, TUPLE, &[true, true]).unwrap();

@@ -279,7 +279,8 @@ impl<M: Mode> Ctx<M> {
         }
     }
 
-    /// `Fs.read_all`。`file` を終わりまで読み、組 `(File, String)` を返す。`file` の参照は組に移る。64 KiB ずつ読み、
+    /// `Fs.read_all` と `Fs.read_line_raw`。`file` を終わりまで (`line` なら次の `\n` まで、それを含めて) 読み、組
+    /// `(File, String)` を返す。行の読みでは、終わりなら文字列は空である。`file` の参照は組に移る。64 KiB ずつ読み、
     /// 区切りごとに止める語と確保量を見る (docs/spec/object-model.md の「実行の制御」)。読みの誤り、UTF-8 でない中身、
     /// 止めたときは、`file` を手放して閉じ、結果を作らない。
     ///
@@ -287,96 +288,7 @@ impl<M: Mode> Ctx<M> {
     /// `heap_mut` の前提を守っている。`file` は即値か、このヒープか付けた塊の生きている物体を指し、呼ぶ側がその参照を
     /// 1つ持つ。速いモードでは、`file` は局所で rc が 1 である (検査モードは確かめ、違えば `NotUnique` か `WrongOwner`
     /// を返す)。`File` でなければ、どちらのモードでも `WrongKind` を返す。
-    pub unsafe fn fs_read_all(&mut self, file: Word) -> (r: Result<Word, Fault>)
-        requires
-            old(self).wf(),
-            old(self).heap_spec().word_in(file),
-            !M::CHECKED ==> old(self).holds(file) && old(self).heap_spec().rc_value(file) == 1,
-        ensures
-            final(self).wf(),
-            final(self).evv_spec() == old(self).evv_spec(),
-            final(self).yield_spec() == old(self).yield_spec(),
-            r is Ok || (r matches Err(Fault::Io { op: IoOp::Read, .. })) || (r matches Err(
-                Fault::NotUtf8(_),
-            )) || (r matches Err(Fault::Stopped(_))) || (r matches Err(Fault::Heap(_))),
-            (r matches Err(Fault::Heap(_))) ==> *final(self) == *old(self)
-                || final(self).heap_spec().kept_live(old(self).heap_spec()),
-            !M::CHECKED && (r matches Err(Fault::Heap(_))) ==> r == Err::<Word, Fault>(
-                Fault::Heap(HeapError::WrongKind),
-            ) && *final(self) == *old(self),
-            r matches Ok(t) ==> {
-                let h = final(self).heap_spec();
-                &&& h.kind_of(t) == Kind::Data
-                &&& h.tag_of(t) == TUPLE
-                &&& h.lin_of(t)
-                &&& h.count_of(t) == 2
-                &&& h.scanned_word(t, 0) == file
-                &&& final(self).is_string(h.scanned_word(t, 1))
-            },
-            old(self).held_ok() && old(self).holds(file) && old(self).heap_spec().rc_value(file)
-                == 1 ==> (r matches Err(Fault::Heap(e)) ==> *final(self) == *old(self) || chain_err(
-                Err::<(), HeapError>(e),
-            )),
-            old(self).held_ok() && old(self).holds(file) && old(self).heap_spec().rc_value(file)
-                == 1 && !(r matches Err(Fault::Heap(_))) ==> {
-                &&& final(self).held_ok()
-                &&& final(self).evolved_by(*old(self), |x: usize| -points(file, x), Set::empty())
-                &&& r matches Ok(t) ==> final(self).holds(t)
-            },
-    {
-        unsafe { self.fs_read(file, false) }
-    }
-
-    /// `Fs.read_line_raw`。`file` から次の `\n` まで (それを含めて) 読み、組 `(File, String)` を返す。終わりなら文字列は
-    /// 空である。読み方、誤り、`file` の扱いは `fs_read_all` と同じである。
-    ///
-    /// # Safety
-    /// `fs_read_all` と同じである。
-    pub unsafe fn fs_read_line(&mut self, file: Word) -> (r: Result<Word, Fault>)
-        requires
-            old(self).wf(),
-            old(self).heap_spec().word_in(file),
-            !M::CHECKED ==> old(self).holds(file) && old(self).heap_spec().rc_value(file) == 1,
-        ensures
-            final(self).wf(),
-            final(self).evv_spec() == old(self).evv_spec(),
-            final(self).yield_spec() == old(self).yield_spec(),
-            r is Ok || (r matches Err(Fault::Io { op: IoOp::Read, .. })) || (r matches Err(
-                Fault::NotUtf8(_),
-            )) || (r matches Err(Fault::Stopped(_))) || (r matches Err(Fault::Heap(_))),
-            (r matches Err(Fault::Heap(_))) ==> *final(self) == *old(self)
-                || final(self).heap_spec().kept_live(old(self).heap_spec()),
-            !M::CHECKED && (r matches Err(Fault::Heap(_))) ==> r == Err::<Word, Fault>(
-                Fault::Heap(HeapError::WrongKind),
-            ) && *final(self) == *old(self),
-            r matches Ok(t) ==> {
-                let h = final(self).heap_spec();
-                &&& h.kind_of(t) == Kind::Data
-                &&& h.tag_of(t) == TUPLE
-                &&& h.lin_of(t)
-                &&& h.count_of(t) == 2
-                &&& h.scanned_word(t, 0) == file
-                &&& final(self).is_string(h.scanned_word(t, 1))
-            },
-            old(self).held_ok() && old(self).holds(file) && old(self).heap_spec().rc_value(file)
-                == 1 ==> (r matches Err(Fault::Heap(e)) ==> *final(self) == *old(self) || chain_err(
-                Err::<(), HeapError>(e),
-            )),
-            old(self).held_ok() && old(self).holds(file) && old(self).heap_spec().rc_value(file)
-                == 1 && !(r matches Err(Fault::Heap(_))) ==> {
-                &&& final(self).held_ok()
-                &&& final(self).evolved_by(*old(self), |x: usize| -points(file, x), Set::empty())
-                &&& r matches Ok(t) ==> final(self).holds(t)
-            },
-    {
-        unsafe { self.fs_read(file, true) }
-    }
-
-    /// `fs_read_all` と `fs_read_line` の本体。`line` は Host の読みに渡すだけで、証明はどちらでも同じである。
-    ///
-    /// # Safety
-    /// `fs_read_all` と同じである。
-    unsafe fn fs_read(&mut self, file: Word, line: bool) -> (r: Result<Word, Fault>)
+    pub unsafe fn fs_read(&mut self, file: Word, line: bool) -> (r: Result<Word, Fault>)
         requires
             old(self).wf(),
             old(self).heap_spec().word_in(file),
@@ -680,7 +592,7 @@ impl<M: Mode> Ctx<M> {
         self.lemma_fresh_holds(s0, w);
     }
 
-    /// `Fs.read_all` で文字列 `s` と組 `t` を作った後の、モデルが合っている道。`self` は呼ぶ前の文脈で、組の 0 番に
+    /// `fs_read` で文字列 `s` と組 `t` を作った後の、モデルが合っている道。`self` は呼ぶ前の文脈で、組の 0 番に
     /// `file` を書ける。
     proof fn lemma_read_mid(&self, h1: Heap<M>, h2: Heap<M>, s: Word, t: Word, file: Word)
         requires
@@ -759,7 +671,7 @@ impl<M: Mode> Ctx<M> {
         assert(same_head(h3, h2, t.bits_spec()));
     }
 
-    /// `Fs.read_all` が返す組の形。モデルが合わなくても言える。
+    /// `fs_read` が返す組の形。モデルが合わなくても言える。
     proof fn lemma_tuple_made(
         &self,
         h0: Heap<M>,
@@ -800,7 +712,7 @@ impl<M: Mode> Ctx<M> {
         h3.lemma_text_spec(s);
     }
 
-    /// `Fs.read_all` の、読めた道でモデルが合っている道。
+    /// `fs_read` の、読めた道でモデルが合っている道。
     proof fn lemma_read_ok(
         &self,
         s0: Ctx<M>,

@@ -648,7 +648,7 @@ fn println_goes_through_the_host<M: Mode>() {
 /// 1行を読み、組から File と行を取り出す。
 unsafe fn next_line<M: Mode>(ctx: &mut Ctx<M>, f: Word) -> (Word, String) {
     unsafe {
-        let t = ctx.fs_read_line(f).unwrap();
+        let t = ctx.fs_read(f, true).unwrap();
         let file = ctx.heap().field(t, 0).unwrap();
         let w = ctx.heap().field(t, 1).unwrap();
         let line = text(ctx.heap(), w);
@@ -725,13 +725,13 @@ fn files_go_through_the_host<M: Mode>() {
         for name in ["broken.txt", "bad.bin"] {
             let p = ctx.heap_mut().alloc_string(name);
             let f = ctx.fs_open(p).unwrap();
-            assert!(ctx.fs_read_line(f).is_err());
+            assert!(ctx.fs_read(f, true).is_err());
             assert_eq!(mortal(ctx.heap()), 0);
         }
         let p = ctx.heap_mut().alloc_string("fifo");
         let f = ctx.fs_open(p).unwrap();
         assert_eq!(
-            ctx.fs_read_line(f),
+            ctx.fs_read(f, true),
             Err(crate::Fault::Stopped(crate::Stop::Interrupted))
         );
         control.clear();
@@ -739,21 +739,21 @@ fn files_go_through_the_host<M: Mode>() {
         let f = ctx.fs_open(p).unwrap();
         control.interrupt();
         assert_eq!(
-            ctx.fs_read_line(f),
+            ctx.fs_read(f, true),
             Err(crate::Fault::Stopped(crate::Stop::Interrupted))
         );
         control.clear();
         assert_eq!(mortal(ctx.heap()), 0);
         let p = ctx.heap_mut().alloc_string("big.txt");
         let f = ctx.fs_open(p).unwrap();
-        let t = ctx.fs_read_all(f).unwrap();
+        let t = ctx.fs_read(f, false).unwrap();
         let w = ctx.heap().field(t, 1).unwrap();
         assert_eq!(text(ctx.heap(), w), body);
         ctx.heap_mut().decref(t).unwrap();
         for name in ["broken.txt", "bad.bin"] {
             let p = ctx.heap_mut().alloc_string(name);
             let f = ctx.fs_open(p).unwrap();
-            assert!(ctx.fs_read_all(f).is_err());
+            assert!(ctx.fs_read(f, false).is_err());
         }
         let p = ctx.heap_mut().alloc_string("big.txt");
         let f = ctx.fs_open(p).unwrap();
@@ -762,7 +762,7 @@ fn files_go_through_the_host<M: Mode>() {
         let p = ctx.heap_mut().alloc_string("fifo");
         let f = ctx.fs_open(p).unwrap();
         assert_eq!(
-            ctx.fs_read_all(f),
+            ctx.fs_read(f, false),
             Err(crate::Fault::Stopped(crate::Stop::Interrupted))
         );
         control.clear();
@@ -771,7 +771,7 @@ fn files_go_through_the_host<M: Mode>() {
         let f = ctx.fs_open(p).unwrap();
         control.interrupt();
         assert_eq!(
-            ctx.fs_read_all(f),
+            ctx.fs_read(f, false),
             Err(crate::Fault::Stopped(crate::Stop::Interrupted))
         );
         assert_eq!(mortal(ctx.heap()), before);
