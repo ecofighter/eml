@@ -13,4 +13,5 @@ input_file: tests/ui/run/functions/mutual_recursion.em
 [True, False, True, False]
 111
 [True, False, True, False, True]
+3
 --- stderr ---

@@ -184,7 +184,7 @@ fn numbering(hir: &HirProgram, body: &Body, targets: &ArenaMap<ExprId, Target>) 
 }
 
 /// 持ち上げたローカル関数。`captured` は持ち上げの捕まえる変数で、`LocalId` の順に並び、ローカル関数を含まない。
-/// 同じ組の関数は同じ `captured` を持つ (docs/spec/core-ir.md の「ローカル関数の持ち上げ」)。
+/// 再帰する組の関数は同じ `captured` を持つ (docs/spec/core-ir.md の「ローカル関数の持ち上げ」)。
 struct Lifted {
     target: FnIdx,
     captured: Vec<LocalId>,
@@ -209,32 +209,41 @@ fn lifted_captures(
 }
 
 /// 本体のローカル関数の、関数の番号と持ち上げの捕まえる変数の表。自分と組の相手への参照と、後で変換する入れ子の関数
-/// からの参照のために、どのローカル関数を変換するより前に作る。組の関数は、メンバーが捕まえる変数の和を共通の追加の
-/// 引数として受け取る。そのため、組の中の呼び出しは、受け取った追加の引数をそのまま相手に渡せる。組の外の関数で
+/// からの参照のために、どのローカル関数を変換するより前に作る。再帰する組の関数は、メンバーが捕まえる変数の和を共通の
+/// 追加の引数として受け取る。そのため、組の中の呼び出しは、受け取った追加の引数をそのまま相手に渡せる。組の外の関数で
 /// 参照できるのは前の組の関数だけで、`local_groups` は外側の組を入れ子の組より先に並べるので、組の順に1回ずつ求めれば
 /// よい (docs/spec/core-ir.md の「ローカル関数の持ち上げ」)。組の名前は本体より先に束縛するので、関数の番号を取る
 /// 定義の順は `LocalId` の順と同じである。
 fn lifted_functions(body: &Body, program: &mut ProgramBuilder) -> ArenaMap<LocalId, Lifted> {
     let mut lifted = ArenaMap::default();
     for group in &body.local_groups {
-        let hir_captured = group
-            .members
-            .iter()
-            .flat_map(|&member| {
-                body.closure_captures(local_closure(body, body.local_functions[member]))
-            })
-            .filter(|captured| !group.members.contains(captured));
-        let captured = lifted_captures(&lifted, hir_captured);
-        for &member in &group.members {
-            let closure = local_closure(body, body.local_functions[member]);
-            let target = program.reserve(captured.len() + closure.params.len());
-            lifted.insert(
-                member,
-                Lifted {
-                    target,
-                    captured: captured.clone(),
-                },
-            );
+        // 再帰しない組のメンバーは互いを参照しないので、捕まえる変数を共有しなくてよい。共有すると、あるメンバーが
+        // 捕まえた `Lin` の値を、ほかのメンバーの呼び出しも受け渡して複製してしまう。再帰する組が捕まえるのは `Unr`
+        // の値だけなので、共有しても複製してよい (docs/spec/linearity.md の「基本の規則」)
+        let sharing: Vec<&[LocalId]> = if group.recursive {
+            vec![&group.members]
+        } else {
+            group.members.iter().map(std::slice::from_ref).collect()
+        };
+        for members in sharing {
+            let hir_captured = members
+                .iter()
+                .flat_map(|&member| {
+                    body.closure_captures(local_closure(body, body.local_functions[member]))
+                })
+                .filter(|captured| !members.contains(captured));
+            let captured = lifted_captures(&lifted, hir_captured);
+            for &member in members {
+                let closure = local_closure(body, body.local_functions[member]);
+                let target = program.reserve(captured.len() + closure.params.len());
+                lifted.insert(
+                    member,
+                    Lifted {
+                        target,
+                        captured: captured.clone(),
+                    },
+                );
+            }
         }
     }
     lifted

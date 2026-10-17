@@ -1,6 +1,7 @@
 -- `let … and …` の組で書いた相互再帰を確かめる。偶奇の判定、組の関数ごとに違う変数を捕まえる形、外で処理する
 -- エフェクトを起こす形、組の中で handler を張る形を純粋な文脈から呼ぶ形、3つの関数の組、1行の形、`and` のない
--- `let` との混在、組の関数を `List.map` に渡す形 (docs/spec/expressions.md の「ローカル関数」)。
+-- `let` との混在、組の関数を `List.map` に渡す形、`File` を捕まえる再帰しない組
+-- (docs/spec/expressions.md の「ローカル関数」)。
 effect Ask where
   ask : Unit -> Int
 
@@ -56,6 +57,16 @@ evens xs =
   and odd k = if k == 0 then False else even (k - 1)
   List.map even xs
 
+-- 再帰しない組の関数は捕まえる変数を共有しないので、`File` は捕まえた `finish` だけが受け取る
+-- (docs/spec/linearity.md の「基本の規則」)
+apart : Unit -> <IO> Unit
+apart () =
+  let f = Fs.open "input.txt"
+  let finish () = Fs.close f
+  and next n = n + 1
+  println (show (next (next 1)))
+  finish ()
+
 main : Unit -> <IO> Unit
 main () =
   println (show (parity 7))
@@ -67,3 +78,4 @@ main () =
   println (show (List.map inline [0, 1, 2, 3]))
   println (show (mixed 27))
   println (show (evens [0, 1, 2, 5, 8]))
+  apart ()

@@ -3371,6 +3371,23 @@ fn a_group_member_as_a_value_carries_the_shared_captures() {
 }
 
 #[test]
+fn a_group_without_recursion_keeps_each_members_captures() {
+    // 再帰しない組では、`File` を捕まえた `finish` だけがそれを受け取る。共有すると `next` の呼び出しが `f` を複製する
+    let text = "main : Unit -> <IO> Unit\nmain () =\n  let f = Fs.open \"input.txt\"\n  let finish () = Fs.close f\n  and next n = n + 1\n  println (show (next 1))\n  finish ()";
+    let shown = core_text(text, Pass::Translate);
+    let signatures: Vec<&str> = shown
+        .lines()
+        .filter(|line| line.contains("fn main$let$"))
+        .collect();
+    insta::assert_debug_snapshot!(signatures, @r#"
+    [
+        "internal yields fn main$let$finish(f.0: obj lin, p.1: unit) -> unit {",
+        "internal fn main$let$next(n.0: int) -> int {",
+    ]
+    "#);
+}
+
+#[test]
 fn a_local_function_passed_as_a_value_inside_use() {
     // `List.each` は関数を先に受けるので、`use` で書けるようにリストを先に受ける補助関数を置く
     let text = "for_each : List Int -> (Int -> <IO> Unit) -> <IO> Unit\nfor_each xs g = List.each g xs\n\nf : Int -> List Int -> <IO> Unit\nf base xs =\n  let add x = x + base\n  use x <- for_each xs\n  println (show (List.map add [x]))\n\nmain : Unit -> <IO> Unit\nmain () = f 1 [1, 2]";
