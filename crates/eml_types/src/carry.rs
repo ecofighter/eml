@@ -155,15 +155,19 @@ impl Carrying<'_, '_> {
                 live
             }
             ExprKind::Annot { expr, .. } => self.expr(*expr, after),
-            // ローカル関数の自分への参照は、定義の前から持つ値ではない (docs/spec/linearity.md の「基本の規則」)
+            // ローカル関数の組の中の参照は、定義の前から持つ値ではない (docs/spec/linearity.md の「基本の規則」)
             ExprKind::Lambda(closure) => {
                 self.function(closure.body);
-                let own = body.defining.get(id).copied();
+                let group = body
+                    .defining
+                    .get(id)
+                    .and_then(|&own| body.group_of(own))
+                    .map_or(&[][..], |group| &group.members[..]);
                 let mut live = after.clone();
                 live.extend(
                     body.closure_captures(closure)
                         .into_iter()
-                        .filter(|&local| Some(local) != own)
+                        .filter(|local| !group.contains(local))
                         .map(Held::Local),
                 );
                 live

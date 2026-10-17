@@ -868,3 +868,108 @@ fn a_stateful_fn_clause_body_mismatch_names_the_pair() {
       note: the `fn` clause for `ask` must return a pair of the result of `ask` and the next state
     ");
 }
+
+/// 組の中の関数が起こすエフェクトは、固定点で、その関数を呼ぶ組のどの関数の row にも入る (docs/spec/types.md の
+/// 「ローカル関数の推論」)。
+#[test]
+fn a_group_effect_reaches_every_member() {
+    let text = "effect Ask where\n  ask : Unit -> Int\n\nrun : Int -> <Ask> Int\nrun n =\n  let f x = if x == 0 then 0 else g (x - 1)\n  and g y = ask () + f y\n  f n";
+    insta::assert_snapshot!(check_text(text), @"
+    ask : Unit -> <Ask> Int
+    run : Int -> <Ask> Int
+      n#0 : Int
+      f#1 : Int -> <Ask> Int
+      g#2 : Int -> <Ask> Int
+      x#3 : Int
+      y#4 : Int
+    ");
+}
+
+/// 組の関数は関数ごとに row を持つので、`f` の中で張った handler が処理する `Ask` は `f` の row に出ない。
+#[test]
+fn a_handler_inside_a_group_keeps_its_effect_inside() {
+    let text = "effect Ask where\n  ask : Unit -> Int\n\nrun : Int -> Int\nrun m =\n  let f n = handle g n with\n    | fn ask () -> 1\n  and g n = if n == 0 then ask () else f (n - 1)\n  f m";
+    insta::assert_snapshot!(check_text(text), @"
+    ask : Unit -> <Ask> Int
+    run : Int -> Int
+      m#0 : Int
+      f#1 : Int -> Int
+      g#2 : Int -> <Ask> Int
+      n#3 : Int
+      $k#4 : once Int -> Int
+      $r#5 : Int
+      $r#6 : Int
+      n#7 : Int
+    ");
+}
+
+/// `h` の `Ask` は、`g` に届いてから `f` に届く。固定点は呼び出しを2回以上たどる。
+#[test]
+fn a_three_member_fixpoint() {
+    let text = "effect Ask where\n  ask : Unit -> Int\n\nrun : Int -> <Ask> Int\nrun n =\n  let f x = if x == 0 then 0 else g (x - 1)\n  and g x = h x\n  and h x = ask () + f x\n  f n";
+    insta::assert_snapshot!(check_text(text), @"
+    ask : Unit -> <Ask> Int
+    run : Int -> <Ask> Int
+      n#0 : Int
+      f#1 : Int -> <Ask> Int
+      g#2 : Int -> <Ask> Int
+      h#3 : Int -> <Ask> Int
+      x#4 : Int
+      x#5 : Int
+      x#6 : Int
+    ");
+}
+
+/// `h ()` で `f` の row の末尾が rigid な `e` に決まるので、固定点は `g` の `Ask` を足せず、包含が E2002 を報告する。
+#[test]
+fn a_rigid_ambient_reports_e2002_in_a_group() {
+    let text = "effect Ask where\n  ask : Unit -> Int\n\nrun : (Unit -> <e> Int) -> <Ask | e> Int\nrun h =\n  let f n = h () + g n\n  and g n = ask () + n\n  f 1";
+    insta::assert_snapshot!(check_full(text), @"
+    E2002 6:20 `g` performs `Ask`, which this lambda does not allow
+      6:20 this call performs `Ask`
+    ");
+}
+
+/// 自分を呼ぶローカル関数 `walk` の本体の中の組が `walk` を呼ぶ。`walk` の `Ask` は、`walk` を直接呼ぶ `even` だけでなく、
+/// `even` を呼ぶ `odd` にも届く。`odd` の row を内側の組で先に閉じると、`walk` の `Ask` が入らない。
+#[test]
+fn a_nested_group_calls_the_enclosing_recursive_function() {
+    let text = "effect Ask where\n  ask : Unit -> Int\n\nrun : Int -> <Ask> Int\nrun m =\n  let walk n =\n    let even k = if k == 0 then walk (n - 1) else odd (k - 1)\n    and odd k = if k == 0 then 0 else even (k - 1)\n    if n == 0 then ask () else even n\n  walk m";
+    insta::assert_snapshot!(check_text(text), @"
+    ask : Unit -> <Ask> Int
+    run : Int -> <Ask> Int
+      m#0 : Int
+      walk#1 : Int -> <Ask> Int
+      n#2 : Int
+      even#3 : Int -> <Ask> Int
+      odd#4 : Int -> <Ask> Int
+      k#5 : Int
+      k#6 : Int
+    ");
+}
+
+/// `run_ask g` で `g` の row が `<Ask | ρ>` (`ρ` は `f` の row) になる。`f` の中の `g ()` の位置で足りない `Ask` を `f` の
+/// row に足すと、`g` の row も伸びる。有限の row の解はないので、固定点は足すのをやめ、包含が E2002 を報告する。
+#[test]
+fn a_group_member_sharing_its_tail_with_the_caller_stops_the_fixpoint() {
+    let text = "effect Ask where\n  ask : Unit -> Int\n\nrun_ask : (Unit -> <Ask | e> Int) -> <e> Int\nrun_ask action = handle action () with\n  | fn ask () -> 1\n\nrun : Unit -> Int\nrun () =\n  let f n = run_ask g + g ()\n  and g () = ask () + f 0\n  f 1";
+    insta::assert_snapshot!(check_full(text), @"
+    E2002 10:25 `g` performs `Ask`, which this lambda does not allow
+      10:25 this call performs `Ask`
+    ");
+}
+
+/// `wrap` の外に出る `Ask` が、`g` を通って `f` に戻るたびに1つずつ増える。足すラベルの数は始めたときの数で抑えるので、
+/// 固定点は止まり、包含が E2002 を報告する。
+#[test]
+fn a_growing_cycle_of_calls_stops_the_fixpoint() {
+    let text = "effect Ask where\n  ask : Unit -> Int\n\nwrap : (Unit -> <e> Int) -> <Ask | e> Int\nwrap action = ask () + action ()\n\nrun : Int -> <Ask> Int\nrun m =\n  let f n = wrap (fn () -> g n)\n  and g n = f n\n  f m";
+    insta::assert_snapshot!(check_full(text), @"
+    E2002 10:13 `f` performs `Ask`, which this lambda does not allow
+      10:13 this call performs `Ask`
+    E2002 11:3 `f` performs `Ask`, which the signature of `run` does not allow
+      11:3 this call performs `Ask`
+      7:7 the row of this signature does not include it
+      help: add `Ask` to the row of the signature of `run`, as in `-> <Ask> ...`
+    ");
+}

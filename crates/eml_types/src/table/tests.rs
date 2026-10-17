@@ -842,3 +842,58 @@ fn a_closed_row_variable_reads_as_the_empty_row() {
     assert_eq!(shown(&table, f), "Int -> Int");
     assert_eq!(table.unsolved([f]), (Vec::new(), Vec::new()));
 }
+
+#[test]
+fn missing_labels_pairs_same_effect_labels_in_order() {
+    let program = crate::test_program("effect Ask where\n  ask : Unit -> Int");
+    let context = Context::new(&program);
+    let mut table = Table::new(&context);
+    let ask = effect_named(&program, "Ask");
+    let io = table.context.externs.io;
+    let r = table.fresh_row_var();
+    let callee = Row::closed(vec![Label::plain(ask), Label::plain(io), Label::plain(ask)]);
+    let ambient = Row {
+        labels: vec![Label::plain(ask)],
+        tail: Tail::Var(r),
+    };
+    assert_eq!(
+        table.missing_labels(&callee, &ambient),
+        vec![Label::plain(io), Label::plain(ask)]
+    );
+    assert_eq!(table.missing_labels(&ambient, &callee), Vec::new());
+    // 数えるだけで、今の row の末尾は束縛しない
+    assert_eq!(table.resolve_row(&ambient).tail, Tail::Var(r));
+}
+
+#[test]
+fn add_labels_extends_only_a_free_tail() {
+    let program = crate::test_program("effect Ask where\n  ask : Unit -> Int");
+    let context = Context::new(&program);
+    let mut table = Table::new(&context);
+    let ask = Label::plain(effect_named(&program, "Ask"));
+    let io = Label::plain(table.context.externs.io);
+    let free = table.fresh_row_var();
+    let open = Row {
+        labels: vec![io.clone()],
+        tail: Tail::Var(free),
+    };
+    assert!(table.add_labels(&open, vec![ask.clone()]));
+    let resolved = table.resolve_row(&open);
+    assert_eq!(resolved.labels, vec![io.clone(), ask.clone()]);
+    let Tail::Var(rest) = resolved.tail else {
+        panic!("the extended row keeps a free tail")
+    };
+    assert_ne!(rest, free);
+    assert!(!table.is_rigid_row(rest));
+
+    let e = table.fresh_rigid_row("e");
+    let rigid = Row {
+        labels: Vec::new(),
+        tail: Tail::Var(e),
+    };
+    assert!(!table.add_labels(&rigid, vec![ask.clone()]));
+    assert_eq!(table.resolve_row(&rigid), rigid);
+    let closed = Row::closed(vec![io]);
+    assert!(!table.add_labels(&closed, vec![ask]));
+    assert_eq!(table.resolve_row(&closed), closed);
+}

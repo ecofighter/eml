@@ -43,28 +43,68 @@ impl Table<'_> {
         self.unify_row(&open, &Row::pure())
     }
 
-    /// row の末尾が束縛のない rigid でない変数で、`keep` のどの型にも `keep_rows` のどの row にも現れなければ、末尾を
-    /// `<>` に閉じて `true` を返す。ローカル関数の最後の矢印の row を閉じる。`keep` は捕まえた変数の型と、関数の引数と
-    /// 結果の型である。`keep_rows` は、外側のローカル関数への呼び出しで後に回したものの、呼び出しの位置の今の row である。
-    /// それらに現れる末尾は、外側の推論か、引数のエフェクトか、まだ含めていない呼び出しとつながっているので閉じない
-    /// (docs/spec/types.md の「ローカル関数の推論」)。
-    pub fn close_free_tail(&mut self, row: &Row, keep: &[Ty], keep_rows: &[Row]) -> bool {
+    /// row の末尾が束縛のない rigid でない変数で、`keep` のどの型にも `keep_rows` のどの row にも現れなければ、その
+    /// 変数を返す。ローカル関数の最後の矢印の row の、`close_row` で閉じてよい末尾である。`keep` は捕まえた変数の型と、
+    /// 関数の引数と結果の型である。`keep_rows` は、後に回した呼び出しのうち、まだ閉じない row の関数への呼び出しの、
+    /// 呼び出しの位置の今の row である。それらに現れる末尾は、外側の推論か、引数のエフェクトか、まだ含めていない
+    /// 呼び出しとつながっているので閉じない (docs/spec/types.md の「ローカル関数の推論」)。
+    pub fn closable_tail(&self, row: &Row, keep: &[Ty], keep_rows: &[Row]) -> Option<RowVar> {
+        let Tail::Var(var) = self.resolve_row(row).tail else {
+            return None;
+        };
+        if self.is_rigid_row(var) {
+            return None;
+        }
+        let _walk = self.start_walk();
+        let shared = keep.iter().any(|&ty| self.row_occurs_in(var, ty))
+            || keep_rows.iter().any(|row| self.row_occurs_within(var, row));
+        (!shared).then_some(var)
+    }
+
+    /// 呼び出し先の row `callee` のラベルのうち、今の row `ambient` に足りないもの。同じエフェクトのラベルは、
+    /// 単一化と同じく row の中の順で対にして数える (scoped labels)。ローカル関数の組の固定点が、表を変えずに足りない
+    /// ラベルを数えるために使う。呼び出し先の末尾は見ない。末尾どうしをつなぐと、包含の確かめを先に済ませることに
+    /// なるためである (docs/spec/types.md の「ローカル関数の推論」)。
+    pub fn missing_labels(&self, callee: &Row, ambient: &Row) -> Vec<Label> {
+        let mut unmatched = self.resolve_row(ambient).labels;
+        self.resolve_row(callee)
+            .labels
+            .into_iter()
+            .filter(|label| {
+                match unmatched
+                    .iter()
+                    .position(|other| other.effect == label.effect)
+                {
+                    Some(index) => {
+                        unmatched.remove(index);
+                        false
+                    }
+                    None => true,
+                }
+            })
+            .collect()
+    }
+
+    /// `row` の末尾が束縛のない rigid でない変数なら、末尾を `labels` と新しい末尾に束縛して `true` を返す。足せない
+    /// とき (閉じた末尾、rigid な末尾、`Error`、ラベルの型引数に末尾が現れるとき) は表を変えずに `false` を返す。
+    /// 足せなかった呼び出しは、後の包含の確かめが報告する (docs/spec/types.md の「ローカル関数の推論」)。
+    pub fn add_labels(&mut self, row: &Row, labels: Vec<Label>) -> bool {
         let Tail::Var(var) = self.resolve_row(row).tail else {
             return false;
         };
-        if self.is_rigid_row(var) {
+        let labels = Row::closed(labels);
+        if labels.labels.is_empty() || self.is_rigid_row(var) || self.row_occurs(var, &labels) {
             return false;
         }
-        let shared = {
-            let _walk = self.start_walk();
-            keep.iter().any(|&ty| self.row_occurs_in(var, ty))
-                || keep_rows.iter().any(|row| self.row_occurs_within(var, row))
+        let rest = Row {
+            labels: labels.labels,
+            tail: Tail::Var(self.fresh_row_var()),
         };
-        if shared {
-            return false;
-        }
-        let closed = self.close_row(var);
-        debug_assert!(closed.is_ok(), "a free row variable closes");
+        let bound = self.bind_row(var, rest);
+        debug_assert!(
+            bound.is_ok(),
+            "a free row variable takes labels it does not occur in"
+        );
         true
     }
 

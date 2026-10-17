@@ -2,9 +2,9 @@ use std::collections::{HashMap, HashSet};
 
 use eml_diagnostics::{Diagnostic, FileId, Label, TextRange};
 use eml_hir::{
-    Body, Closure, ConstructorId, ExprId, ExprKind, Function, Literal, LocalFunction, LocalId,
-    MatchArm, OperationId, PatId, PatKind, Program, Res, Segment, Stmt, TypeRefId, TypeRefKind,
-    ValueItem,
+    Body, Closure, ConstructorId, EffectId, ExprId, ExprKind, Function, Literal, LocalFunction,
+    LocalId, MatchArm, OperationId, PatId, PatKind, Program, Res, Segment, Stmt, TypeRefId,
+    TypeRefKind, ValueItem,
 };
 use la_arena::ArenaMap;
 
@@ -539,12 +539,13 @@ impl BodyCheck<'_, '_> {
     }
 
     /// ローカル関数の組 (docs/spec/types.md の「ローカル関数の推論」)。各関数の型を先に置いて名前を束縛し、本体を
-    /// ラムダとして検査してから、最後の矢印の row の自由な末尾を閉じる。自分への呼び出しの包含は、閉じた後で確かめる。
+    /// ラムダとして検査する。組の中の呼び出しで後に回した row は、固定点で今の row に足りないラベルを足してから、
+    /// 各関数の最後の矢印の row の自由な末尾を閉じ、閉じた後で包含を確かめる。
     fn local_functions(&mut self, functions: &[LocalFunction]) {
         let body = self.body;
         let base = self.local_frames.len();
         let mut types = Vec::new();
-        let mut checked = Vec::new();
+        let mut members = Vec::new();
         for function in functions {
             let ExprKind::Lambda(closure) = &body.exprs[function.lambda].kind else {
                 unreachable!("a local function is a lambda")
@@ -558,49 +559,48 @@ impl BodyCheck<'_, '_> {
                     local,
                     deferred: Vec::new(),
                 });
-                checked.push((local, closure, last_row, parts));
+                members.push((local, closure, last_row, parts));
             }
         }
         for (function, ty) in functions.iter().zip(types) {
             self.check_expr(function.lambda, ty, Origin::Inferred);
         }
-        let group: Vec<LocalId> = checked.iter().map(|&(local, ..)| local).collect();
-        // 外側のローカル関数への呼び出しで後に回したものは、外側の row を閉じた後で、呼び出しの位置の今の row に含める。
-        // その今の row に現れる末尾を先に閉じると、外側の関数のエフェクトが入らなくなるので閉じない
-        let pending: Vec<Row> = self.local_frames[..base]
-            .iter()
+        let deferred: Vec<(LocalId, DeferredRow)> = self
+            .local_frames
+            .split_off(base)
+            .into_iter()
             .flat_map(|frame| {
-                frame
-                    .deferred
-                    .iter()
-                    .map(|deferred| deferred.ambient.clone())
+                let callee = frame.local;
+                frame.deferred.into_iter().map(move |row| (callee, row))
             })
             .collect();
-        for (local, closure, last_row, parts) in checked {
-            let Some(last_row) = last_row else { continue };
-            // 引数と結果の型に現れる末尾も閉じない。`let app f = f ()` のような高階のローカル関数のエフェクトは、
-            // 引数から来るためである
-            let mut keep = parts;
-            keep.extend(
-                body.closure_captures(closure)
-                    .into_iter()
-                    .filter(|captured| !group.contains(captured))
-                    .map(|captured| {
-                        self.typing
-                            .locals
-                            .get(captured)
-                            .copied()
-                            .unwrap_or(self.table.error)
-                    }),
-            );
-            if self.table.close_free_tail(&last_row, &keep, &pending) {
-                self.closed_locals.insert(local);
-            }
-        }
-        let frames = self.local_frames.split_off(base);
+        self.add_missing_labels(&deferred);
+        let group: Vec<LocalId> = members.iter().map(|&(local, ..)| local).collect();
+        let closing: Vec<(LocalId, Row, Vec<Ty>)> = members
+            .into_iter()
+            .filter_map(|(local, closure, last_row, parts)| {
+                // 引数と結果の型に現れる末尾も閉じない。`let app f = f ()` のような高階のローカル関数のエフェクトは、
+                // 引数から来るためである。組の関数への参照は捕まえた値ではない
+                let mut keep = parts;
+                keep.extend(
+                    body.closure_captures(closure)
+                        .into_iter()
+                        .filter(|captured| !group.contains(captured))
+                        .map(|captured| {
+                            self.typing
+                                .locals
+                                .get(captured)
+                                .copied()
+                                .unwrap_or(self.table.error)
+                        }),
+                );
+                Some((local, last_row?, keep))
+            })
+            .collect();
+        self.close_group(&closing, &deferred);
         // 1回の呼び出しの E2002 は、どの矢印で起きても1つだけ報告する (`call` と同じ)
         let mut failed = HashSet::new();
-        for deferred in frames.into_iter().flat_map(|frame| frame.deferred) {
+        for (_, deferred) in deferred {
             let DeferredRow {
                 row,
                 key,
@@ -615,6 +615,104 @@ impl BodyCheck<'_, '_> {
             });
             if !ok {
                 failed.insert(key.0);
+            }
+        }
+    }
+
+    /// 組の固定点 (docs/spec/types.md の「ローカル関数の推論」)。後に回した呼び出しごとに、呼び出し先の row の今の
+    /// ラベルのうち足りないものを、呼び出しの位置の今の row の自由な末尾に足す。何も足さなくなるまで繰り返す。
+    /// 足せない呼び出しは、後の包含の確かめが E2002 を報告する。
+    fn add_missing_labels(&mut self, deferred: &[(LocalId, DeferredRow)]) {
+        // 呼び出しの位置の row が「呼び出す側の row と、呼び出しを囲む handler のラベル」の形なら、足したあとの row の
+        // エフェクトごとのラベルの数は、始めたときの呼び出し先の row の数の最大を超えない。組の関数を値として渡すと、
+        // この形にならないことがある。呼び出し先と今の row が末尾を共有すると、足すたびに呼び出し先も伸びる。呼び出しの
+        // 輪をたどるたびにラベルが増え続けることもある。どちらも有限の row の解はないので、そうなった呼び出しには
+        // 足さない。前者は、呼び出し先の自由な末尾を使わないことと同じである
+        let mut limits: HashMap<EffectId, usize> = HashMap::new();
+        for (_, call) in deferred {
+            for (effect, count) in self.label_counts(&call.row) {
+                let limit = limits.entry(effect).or_default();
+                *limit = (*limit).max(count);
+            }
+        }
+        loop {
+            let mut added = false;
+            for (_, call) in deferred {
+                let missing = self.table.missing_labels(&call.row, &call.ambient);
+                if missing.is_empty() {
+                    continue;
+                }
+                let shares_tail = self.table.resolve_row(&call.row).tail
+                    == self.table.resolve_row(&call.ambient).tail;
+                let grown = self
+                    .label_counts(&call.row)
+                    .into_iter()
+                    .any(|(effect, count)| count > limits.get(&effect).copied().unwrap_or(0));
+                if shares_tail || grown {
+                    continue;
+                }
+                added |= self.table.add_labels(&call.ambient, missing);
+            }
+            if !added {
+                break;
+            }
+        }
+    }
+
+    fn label_counts(&self, row: &Row) -> HashMap<EffectId, usize> {
+        let mut counts = HashMap::new();
+        for label in self.table.resolve_row(row).labels {
+            *counts.entry(label.effect).or_default() += 1;
+        }
+        counts
+    }
+
+    /// 組の関数の最後の矢印の row の自由な末尾を閉じる。閉じない例外 (docs/spec/types.md の「ローカル関数の推論」) は
+    /// 関数ごとに当てはめる。`members` は関数と、その row と、末尾が現れたら閉じない型である。外側のローカル関数への
+    /// 呼び出しで後に回したものの今の row に現れる末尾も閉じない。また、閉じない row の関数を組の中で呼ぶ位置の今の
+    /// row も閉じない。その包含は閉じない row が決まる前に確かめるので、先に閉じると、閉じない row に後から入る
+    /// エフェクトが入らない。
+    fn close_group(
+        &mut self,
+        members: &[(LocalId, Row, Vec<Ty>)],
+        deferred: &[(LocalId, DeferredRow)],
+    ) {
+        let mut keep_rows: Vec<Row> = self
+            .local_frames
+            .iter()
+            .flat_map(|frame| frame.deferred.iter().map(|call| call.ambient.clone()))
+            .collect();
+        let mut open = vec![false; members.len()];
+        loop {
+            let mut grew = false;
+            for (index, (local, row, keep)) in members.iter().enumerate() {
+                if open[index]
+                    || self.table.closable_tail(row, keep, &keep_rows).is_some()
+                    || !matches!(self.table.resolve_row(row).tail, Tail::Var(_))
+                {
+                    continue;
+                }
+                open[index] = true;
+                grew = true;
+                keep_rows.extend(
+                    deferred
+                        .iter()
+                        .filter(|(callee, _)| callee == local)
+                        .map(|(_, call)| call.ambient.clone()),
+                );
+            }
+            if !grew {
+                break;
+            }
+        }
+        for ((local, row, keep), open) in members.iter().zip(open) {
+            if open {
+                continue;
+            }
+            if let Some(tail) = self.table.closable_tail(row, keep, &keep_rows) {
+                let closed = self.table.close_row(tail);
+                debug_assert!(closed.is_ok(), "a free row variable closes");
+                self.closed_locals.insert(*local);
             }
         }
     }

@@ -6,8 +6,8 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 
 use eml_diagnostics::{FileId, TextRange, TextSize};
 use eml_hir::{
-    Body, ClauseSource, Closure, ConstructorId, ExprId, ExprKind, LocalId, PatId, PatKind, Program,
-    Res, Segment, Stmt,
+    Body, ClauseSource, Closure, ConstructorId, ExprId, ExprKind, LocalFunction, LocalId, PatId,
+    PatKind, Program, Res, Segment, Stmt,
 };
 
 use crate::FieldTarget;
@@ -181,15 +181,9 @@ impl<'a> Usage<'a, '_> {
                             bound.push(*pat);
                             self.expr(*init)
                         }
-                        // 本体の中の自分への参照はラムダの腕が外すので、ここでは外からの使用だけを数える
                         Stmt::Functions(functions) => {
-                            let mut uses = Uses::new();
-                            for function in functions {
-                                bound.push(function.pat);
-                                let next = self.expr(function.lambda);
-                                sequence(&mut uses, next);
-                            }
-                            uses
+                            bound.extend(functions.iter().map(|function| function.pat));
+                            self.local_functions(functions)
                         }
                         Stmt::Expr(expr) => self.expr(*expr),
                     };
@@ -309,61 +303,118 @@ impl<'a> Usage<'a, '_> {
                 self.in_order(segments.iter().filter_map(Segment::hole))
             }
             ExprKind::Drop(value) => self.expr(*value),
-            ExprKind::Lambda(closure) => {
-                let Closure {
-                    params,
-                    body: lambda_body,
-                } = closure;
-                let mut inner = self.expr(*lambda_body);
-                for &param in params {
-                    self.check_pat(param, &inner, *lambda_body);
-                    remove_bound(body, param, &mut inner);
-                }
-                // ローカル関数の自分への参照は、捕まえた値ではない。自分を参照する関数は何度も呼ばれうるので、
-                // 回数を数えずに関数の型を `Unr` にする。捕まえた値は矢印の線形性以下なので、`Lin` の値を
-                // 捕まえると、この制約と矛盾する (docs/spec/linearity.md の「基本の規則」)
-                let own = body.defining.get(id).copied();
-                if let Some(own) = own
-                    && let Some(used) = inner.remove(&own)
-                    && let Some(&ty) = self.typing.locals.get(own)
-                {
-                    let first = used.first.expect("a used variable has a first use");
-                    let name = body.locals[own].name.clone();
-                    self.with_origin(first, KindReason::RecursiveLocal { name }, |table| {
-                        table.kind_at_most(ty, Bound::Const(Linearity::Unr))
-                    });
-                }
-                // 残りは捕まえた変数である。捕まえることは外から見て1回の使用で、本体の中で1回でなければ `Unr`
-                // にする。ラムダとその部分適用の線形性は、捕まえた値の Kind 以上になる (docs/spec/linearity.md)
-                let mut captured: Vec<LocalId> = inner.keys().copied().collect();
-                captured.sort();
-                // 捕まえた変数の集合は、Core IR の変換が使う `closure_captures` から自分を除いたものと同じでなければ
-                // ならない
-                debug_assert_eq!(
-                    captured,
-                    body.closure_captures(closure)
-                        .into_iter()
-                        .filter(|&local| Some(local) != own)
-                        .collect::<Vec<_>>()
-                );
-                let mut captured_types = Vec::new();
-                for &local in &captured {
-                    self.count(local, inner[&local], *lambda_body);
-                    if let Some(&ty) = self.typing.locals.get(local) {
-                        captured_types.push(ty);
-                    }
-                }
-                if let Some(&ty) = self.typing.exprs.get(id) {
-                    self.with_origin(at, KindReason::CapturedByLambda, |table| {
-                        table.closure_kinds(ty, params.len(), &captured_types)
-                    });
-                }
-                captured
-                    .into_iter()
-                    .map(|local| (local, Use::once(at)))
-                    .collect()
+            ExprKind::Lambda(closure) => self.closure(id, closure, &[]).0,
+        }
+    }
+
+    /// ローカル関数の組。組の中の参照は、捕まえた値ではない。再帰する組の関数は何度も呼ばれうるので、回数を数えずに
+    /// 各関数の型を `Unr` にする。捕まえた値は矢印の線形性以下なので、`Lin` の値を捕まえると、この制約と矛盾する。
+    /// 相互に呼ぶ組では、自分を参照しない関数も何度も呼ばれうる。そのような関数の制約の由来は、組の中で最初に見つけた
+    /// 参照にする (docs/spec/linearity.md の「基本の規則」)。返すのは組の外からの使用である。
+    fn local_functions(&mut self, functions: &[LocalFunction]) -> Uses {
+        let body = self.body;
+        let group = functions
+            .iter()
+            .find_map(|function| body.defining.get(function.lambda))
+            .and_then(|&local| body.group_of(local));
+        let members = group.map_or(&[][..], |group| &group.members[..]);
+        let mut uses = Uses::new();
+        let mut references = Vec::new();
+        for function in functions {
+            let ExprKind::Lambda(closure) = &body.exprs[function.lambda].kind else {
+                unreachable!("a local function is a lambda")
+            };
+            let (next, reference) = self.closure(function.lambda, closure, members);
+            sequence(&mut uses, next);
+            if let Some(&own) = body.defining.get(function.lambda) {
+                references.push((own, reference));
             }
         }
+        let first = references
+            .iter()
+            .filter_map(|&(own, reference)| Some((own, reference?)))
+            .min_by_key(|&(_, (_, at))| at.start());
+        debug_assert_eq!(group.is_some_and(|group| group.recursive), first.is_some());
+        if let Some(first) = first {
+            for (own, reference) in references {
+                let Some(&ty) = self.typing.locals.get(own) else {
+                    continue;
+                };
+                let (referrer, (callee, at)) = match reference {
+                    Some(reference) => (own, reference),
+                    None => first,
+                };
+                let reason = KindReason::RecursiveLocal {
+                    name: body.locals[referrer].name.clone(),
+                    callee: body.locals[callee].name.clone(),
+                };
+                self.with_origin(at, reason, |table| {
+                    table.kind_at_most(ty, Bound::Const(Linearity::Unr))
+                });
+            }
+        }
+        uses
+    }
+
+    /// ラムダの使用。`group` はラムダが属するローカル関数の組の関数で、本体の中のそれらへの参照は捕まえた値に
+    /// 数えない。返すのは捕まえた変数の使用と、組の関数への最初の参照 (参照先と位置) である。
+    fn closure(
+        &mut self,
+        id: ExprId,
+        closure: &Closure,
+        group: &[LocalId],
+    ) -> (Uses, Option<(LocalId, TextRange)>) {
+        let body = self.body;
+        let at = body.exprs[id].range;
+        let Closure {
+            params,
+            body: lambda_body,
+        } = closure;
+        let mut inner = self.expr(*lambda_body);
+        for &param in params {
+            self.check_pat(param, &inner, *lambda_body);
+            remove_bound(body, param, &mut inner);
+        }
+        let reference = group
+            .iter()
+            .filter_map(|member| {
+                let used = inner.remove(member)?;
+                Some((
+                    *member,
+                    used.first.expect("a used variable has a first use"),
+                ))
+            })
+            .min_by_key(|&(_, at)| at.start());
+        // 残りは捕まえた変数である。捕まえることは外から見て1回の使用で、本体の中で1回でなければ `Unr`
+        // にする。ラムダとその部分適用の線形性は、捕まえた値の Kind 以上になる (docs/spec/linearity.md)
+        let mut captured: Vec<LocalId> = inner.keys().copied().collect();
+        captured.sort();
+        // 捕まえた変数の集合は、Core IR の変換が使う `closure_captures` から組の関数を除いたものと同じでなければ
+        // ならない
+        debug_assert_eq!(
+            captured,
+            body.closure_captures(closure)
+                .into_iter()
+                .filter(|local| !group.contains(local))
+                .collect::<Vec<_>>()
+        );
+        let mut captured_types = Vec::new();
+        for &local in &captured {
+            self.count(local, inner[&local], *lambda_body);
+            if let Some(&ty) = self.typing.locals.get(local) {
+                captured_types.push(ty);
+            }
+        }
+        if let Some(&ty) = self.typing.exprs.get(id) {
+            self.with_origin(at, KindReason::CapturedByLambda, |table| {
+                table.closure_kinds(ty, params.len(), &captured_types)
+            });
+        }
+        let uses = captured
+            .into_iter()
+            .map(|local| (local, Use::once(at)))
+            .collect();
+        (uses, reference)
     }
 
     /// パターンが束縛した変数を数え終える。`scope` は変数が見える範囲の式で、どの経路でも使わなかったときに

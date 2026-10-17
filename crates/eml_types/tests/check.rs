@@ -645,3 +645,47 @@ fn a_nested_local_function_calling_the_outer_one_keeps_its_row_open() {
     let text = "main : Unit -> <IO> Unit\nmain () =\n  let walk n =\n    let each k = if k == 0 then () else walk (k - 1)\n    if n == 0 then println \"x\" else each n\n  walk 3";
     assert_eq!(check_short(text), Vec::<String>::new());
 }
+
+#[test]
+fn mutually_recursive_local_functions_check() {
+    let text = "parity : Int -> Bool\nparity n =\n  let even k = if k == 0 then True else odd (k - 1)\n  and odd k = if k == 0 then False else even (k - 1)\n  even n";
+    insta::assert_snapshot!(check_text(text), @"
+    parity : Int -> Bool
+      n#0 : Int
+      even#1 : Int -> Bool
+      odd#2 : Int -> Bool
+      k#3 : Int
+      k#4 : Int
+    ");
+}
+
+/// 局所変数の番号を外し、行を並べ替えた推論結果。束縛の順が違うだけの2つの本体を比べるため。
+fn types_by_name(text: &str) -> Vec<String> {
+    let mut lines: Vec<String> = check_text(text)
+        .lines()
+        .map(|line| match line.split_once('#') {
+            Some((name, rest)) => {
+                let rest = rest.trim_start_matches(|c: char| c.is_ascii_digit());
+                format!("{name}{rest}")
+            }
+            None => line.to_string(),
+        })
+        .collect();
+    lines.sort();
+    lines
+}
+
+#[test]
+fn a_one_way_and_group_types_like_sequential_lets() {
+    let group = "run : Int -> Int\nrun n =\n  let f x = g x\n  and g y = y + 1\n  f n";
+    let sequential = "run : Int -> Int\nrun n =\n  let g y = y + 1\n  let f x = g x\n  f n";
+    insta::assert_snapshot!(check_text(group), @"
+    run : Int -> Int
+      n#0 : Int
+      f#1 : Int -> Int
+      g#2 : Int -> Int
+      x#3 : Int
+      y#4 : Int
+    ");
+    assert_eq!(types_by_name(group), types_by_name(sequential));
+}

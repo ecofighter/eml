@@ -939,8 +939,8 @@ fn a_recursive_local_function_cannot_capture_a_file() {
       4:45 this branch does not use `f`
       note: linear values, such as files, the continuation of a `once` operation and closures that capture one, must be used exactly once
       help: pass `f` to `drop`
-    E3001 4:45 a local function that calls itself cannot capture a linear value
-      4:45 `go` refers to itself here, so it may be called any number of times
+    E3001 4:45 a recursive local function cannot capture a linear value
+      4:45 `go` refers to `go` here, so it may be called any number of times
       note: linear values, such as files, the continuation of a `once` operation and closures that capture one, must be used exactly once
       note: pass linear values to a recursive local function as arguments
     ");
@@ -1034,5 +1034,44 @@ fn a_fn_clause_continuation_held_across_multi_is_e3006() {
       2:9 `choose` is declared `multi` here
       note: a continuation of a `multi` operation can be resumed more than once, and each resumption would use the value again
       help: perform this call outside the `fn` clause
+    ");
+}
+
+#[test]
+fn a_mutually_recursive_function_cannot_capture_a_file() {
+    let text = "main : Unit -> <IO> Unit\nmain () =\n  let f = Fs.open \"a\"\n  let even n = if n == 0 then Fs.close f else odd (n - 1)\n  and odd n = if n == 0 then () else even (n - 1)\n  even 3";
+    insta::assert_snapshot!(check_full(text), @"
+    E3003 3:7 `f` must be used exactly once, but some paths do not use it
+      3:7 `f` is bound here
+      4:47 this branch does not use `f`
+      note: linear values, such as files, the continuation of a `once` operation and closures that capture one, must be used exactly once
+      help: pass `f` to `drop`
+    E3001 4:47 a recursive local function cannot capture a linear value
+      4:47 `even` refers to `odd` here, so it may be called any number of times
+      note: linear values, such as files, the continuation of a `once` operation and closures that capture one, must be used exactly once
+      note: pass linear values to a recursive local function as arguments
+    ");
+}
+
+#[test]
+fn a_non_recursive_and_group_member_can_capture_a_file() {
+    let text = "main : Unit -> <IO> Unit\nmain () =\n  let file = Fs.open \"a\"\n  let f () = Fs.close file\n  and g x = x\n  f ()\n  println (show (g 1))";
+    assert_eq!(check_short(text), Vec::<String>::new());
+}
+
+/// `close_at` は組の関数を参照しないが、`go` から何度も呼ばれうる。由来は組の中で最初に見つけた参照である。
+#[test]
+fn a_member_without_a_reference_points_at_the_first_one_in_the_group() {
+    let text = "main : Unit -> <IO> Unit\nmain () =\n  let f = Fs.open \"a\"\n  let close_at () = Fs.close f\n  and go n = if n == 0 then close_at () else go (n - 1)\n  go 3";
+    insta::assert_snapshot!(check_full(text), @"
+    E3003 4:7 `close_at` must be used exactly once, but it is not used
+      4:7 `close_at` is bound here
+      6:7 `close_at` is not used before the end of this scope
+      note: linear values, such as files, the continuation of a `once` operation and closures that capture one, must be used exactly once
+      help: pass `close_at` to `drop`
+    E3001 5:29 a recursive local function cannot capture a linear value
+      5:29 `go` refers to `close_at` here, so it may be called any number of times
+      note: linear values, such as files, the continuation of a `once` operation and closures that capture one, must be used exactly once
+      note: pass linear values to a recursive local function as arguments
     ");
 }

@@ -1,0 +1,30 @@
+---
+source: crates/eml_cli/tests/ui.rs
+expression: rendered
+input_file: tests/ui/check-fail/linearity/mutual_recursion_captures_file.em
+---
+[E3003] Error: `f` must be used exactly once, but some paths do not use it
+   ╭─[ check-fail/linearity/mutual_recursion_captures_file.em:5:7 ]
+   │
+ 5 │   let f = Fs.open "input.txt"
+   │       ┬  
+   │       ╰── `f` is bound here
+ 6 │   let close_at n = if n == 0 then Fs.close f else skip (n - 1)
+   │                                                   ──────┬─────  
+   │                                                         ╰─────── this branch does not use `f`
+   │ 
+   │ Help: pass `f` to `drop`
+   │ 
+   │ Note: linear values, such as files, the continuation of a `once` operation and closures that capture one, must be used exactly once
+───╯
+[E3001] Error: a recursive local function cannot capture a linear value
+   ╭─[ check-fail/linearity/mutual_recursion_captures_file.em:6:51 ]
+   │
+ 6 │   let close_at n = if n == 0 then Fs.close f else skip (n - 1)
+   │                                                   ──┬─  
+   │                                                     ╰─── `close_at` refers to `skip` here, so it may be called any number of times
+   │ 
+   │ Note 1: linear values, such as files, the continuation of a `once` operation and closures that capture one, must be used exactly once
+   │ 
+   │ Note 2: pass linear values to a recursive local function as arguments
+───╯
