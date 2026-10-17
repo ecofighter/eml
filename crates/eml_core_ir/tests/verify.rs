@@ -995,3 +995,35 @@ fn prompt_marker_on_a_non_obj_variable_is_rejected() {
         Err("`ev.1` is the prompt marker of an apply, but it is tobj, not obj in `f`".to_string())
     );
 }
+
+#[test]
+fn prompt_marker_used_only_in_a_sibling_branch_is_rejected() {
+    let text = "layout Prelude.Bool { False, True }\nfn f(b.0: tobj, ev.1: obj, c.2: enum, e.3: obj) -> obj {
+  switch c.2 Prelude.Bool { #0 -> b1, #1 -> b2 }
+b1:
+  let x.4: tobj = yields apply b.0(()) prompt ev.1
+  return e.3
+b2:
+  return ev.1
+}
+";
+    assert_eq!(
+        check_evidence(text),
+        Err(
+            "`ev.1` is the prompt marker of an apply, but it is not used after the call in `f`"
+                .to_string()
+        )
+    );
+}
+
+#[test]
+fn prompt_marker_passed_only_to_a_jump_is_accepted() {
+    let text = "fn f(b.0: tobj, ev.1: obj) -> obj {
+  let x.2: tobj = yields apply b.0(()) prompt ev.1
+  jump b1(ev.1)
+b1(p.3: obj):
+  return p.3
+}
+";
+    assert_eq!(check_evidence(text), Ok(()));
+}

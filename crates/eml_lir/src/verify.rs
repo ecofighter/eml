@@ -29,6 +29,7 @@ use crate::check::{
     BlockShape, Context, Dominators, FnSummary, Tables, TermShape, boxed_scalars, clause_function,
     field_count, shape,
 };
+use crate::liveness;
 use crate::syntax::{operation_text, prim_text};
 use crate::{
     Atom, Block, BlockId, Call, CasePattern, Ctor, FnIdx, Layout, LirFn, Mark, OpRet, Prim,
@@ -173,6 +174,8 @@ struct Checker<'a> {
     cx: Context<'a>,
     defs: Vec<Option<Site>>,
     at: Site,
+    /// 着地の印の検査が使う入口の生存集合。印がなければ求めない。
+    live_in: std::cell::OnceCell<Vec<Vec<VarId>>>,
     /// まだ着いていないブロックの入口の所有。`switch` の行き先は1本の辺から、合流するブロックは最初の `jump` から
     /// 作る。
     pending: HashMap<u32, Owned>,
@@ -203,6 +206,7 @@ impl<'a> Checker<'a> {
                 block: 0,
                 index: -1,
             },
+            live_in: std::cell::OnceCell::new(),
             pending: HashMap::new(),
             owners: vec![None; function.vars.len()],
             origins: vec![None; function.vars.len()],
@@ -1000,28 +1004,20 @@ impl<'a> Checker<'a> {
         Ok(())
     }
 
-    /// 現在の位置より後ろの文か終端が `var` を使うか。辺は前向きなので、後ろのブロックと同じブロックの後ろの文を
-    /// 見れば足りる。到達できないブロックの使いも数える近似で、生存解析は使わない。
+    /// 呼び出しの直後で `var` が生きているか。生存解析の入口の集合から、終端と後ろの文を逆にたどって求める。
     fn used_after(&self, var: VarId) -> bool {
-        let mut found = false;
-        let mut check = |atom: Atom| found |= atom == Atom::Var(var);
-        let blocks = &self.function.blocks;
-        let current = &blocks[self.at.block as usize];
-        let skip = (self.at.index + 1) as usize;
-        current
-            .stmts
-            .iter()
-            .skip(skip)
-            .for_each(|stmt| stmt.for_each_atom(&mut check));
-        current.term.for_each_atom(&mut check);
-        for block in &blocks[self.at.block as usize + 1..] {
-            block
-                .stmts
-                .iter()
-                .for_each(|stmt| stmt.for_each_atom(&mut check));
-            block.term.for_each_atom(&mut check);
+        let function = self.function;
+        let live_in = self.live_in.get_or_init(|| liveness::live_in(function));
+        let block = &function.blocks[self.at.block as usize];
+        let mut live = liveness::live_after_term(function, &block.term, live_in);
+        block
+            .term
+            .for_each_atom(|atom| liveness::insert_var(&mut live, atom));
+        let first = (self.at.index + 1) as usize;
+        for stmt in block.stmts[first..].iter().rev() {
+            liveness::step_back(stmt, &mut live);
         }
-        found
+        live.contains(&var)
     }
 
     /// 呼び出しのオペランドを左から比べる (R7)。直接の呼び出しは、呼ばれる関数の引数と比べる。関数値の適用の

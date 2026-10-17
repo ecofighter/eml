@@ -21,6 +21,7 @@
 
 use std::collections::HashMap;
 
+use crate::liveness;
 use crate::tail::tail_position_call;
 use crate::{Block, Call, CoreFn, Program, Rhs, Stmt, Term};
 use eml_lir::check::{
@@ -156,6 +157,8 @@ struct Checker<'a> {
     cx: Context<'a>,
     defs: Vec<Option<Site>>,
     at: Site,
+    /// 着地の印の検査が使う入口の生存集合。印がなければ求めない。
+    live_in: std::cell::OnceCell<Vec<Vec<VarId>>>,
 }
 
 impl<'a> Checker<'a> {
@@ -177,6 +180,7 @@ impl<'a> Checker<'a> {
                 block: 0,
                 index: -1,
             },
+            live_in: std::cell::OnceCell::new(),
         }
     }
 
@@ -708,25 +712,20 @@ impl<'a> Checker<'a> {
         Ok(())
     }
 
-    /// 現在の位置より後ろの文か終端が `var` を使うか。辺は前向きなので、後ろのブロックと同じブロックの後ろの文を
-    /// 見れば足りる。生存解析は使わない近似である。
+    /// 呼び出しの直後で `var` が生きているか。生存解析の入口の集合から、終端と後ろの文を逆にたどって求める。
     fn used_after(&self, var: VarId) -> bool {
-        let mut found = false;
-        let mut check = |atom: Atom| found |= atom == Atom::Var(var);
-        let blocks = &self.function.blocks;
-        let current = &blocks[self.at.block as usize];
-        let skip = (self.at.index + 1) as usize;
-        for stmt in current.stmts.iter().skip(skip) {
-            stmt.for_each_atom(&mut check);
+        let function = self.function;
+        let live_in = self.live_in.get_or_init(|| liveness::live_in(function));
+        let block = &function.blocks[self.at.block as usize];
+        let mut live = liveness::live_after_term(function, &block.term, live_in);
+        block
+            .term
+            .for_each_atom(|atom| liveness::insert_var(&mut live, atom));
+        let first = (self.at.index + 1) as usize;
+        for stmt in block.stmts[first..].iter().rev() {
+            liveness::step_back(stmt, &mut live);
         }
-        current.term.for_each_atom(&mut check);
-        for block in &blocks[self.at.block as usize + 1..] {
-            for stmt in &block.stmts {
-                stmt.for_each_atom(&mut check);
-            }
-            block.term.for_each_atom(&mut check);
-        }
-        found
+        live.contains(&var)
     }
 
     /// 結果を受けない呼び出し。`never` の操作の `perform` と `clause` は戻らない。
