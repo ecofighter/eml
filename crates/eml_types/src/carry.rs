@@ -3,7 +3,7 @@
 //! 評価の順に沿った生存の計算を別に持つ。呼び出しの評価の順は `eml_hir::call_steps` に従う。Core IR の変換も同じ手順を
 //! 読む (docs/spec/expressions.md の「関数適用」)。
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, HashMap};
 
 use eml_diagnostics::FileId;
 use eml_hir::{
@@ -35,6 +35,7 @@ pub(crate) fn constrain(
     typing: &BodyTyping,
     table: &mut Table<'_>,
     reliable: bool,
+    implicit_drops: &HashMap<ExprId, Vec<LocalId>>,
 ) {
     let mut carrying = Carrying {
         program,
@@ -43,6 +44,7 @@ pub(crate) fn constrain(
         typing,
         table,
         reliable,
+        implicit_drops,
     };
     carrying.function(body.root);
 }
@@ -54,6 +56,8 @@ struct Carrying<'a, 'c> {
     typing: &'a BodyTyping,
     table: &'a mut Table<'c>,
     reliable: bool,
+    /// 戻らない呼び出しの前で暗黙に手放す変数 (`BodyTypes::implicit_drops`)。
+    implicit_drops: &'a HashMap<ExprId, Vec<LocalId>>,
 }
 
 impl Carrying<'_, '_> {
@@ -92,6 +96,10 @@ impl Carrying<'_, '_> {
                     _ => None,
                 };
                 let mut live = after.clone();
+                // translate は、暗黙に手放す変数の `drop` を引数を評価した後、呼び出しの前に置く。その変数は束縛から
+                // `drop` まで生きているので、呼び出しそのものはまたがないが、呼ばれる式と引数の評価はまたぐ
+                // (docs/superpowers/specs/2026-10-17-s13c-unwinding-design.md の「translate」)
+                let mut dropped = self.implicit_drops.get(&id);
                 // 評価の順は `eml_hir::call_steps` だけが持つ。後で使う値は後ろの手順から決まるので、その順を逆にたどる。
                 // 引数はすべて評価してから矢印を順に適用するので、矢印 i の呼び出しの間は、後で使う値と、評価済みで
                 // 後の矢印に渡す引数を持つ (docs/spec/effects.md の「継続の多重度と持ち越し規則」)
@@ -113,6 +121,9 @@ impl Carrying<'_, '_> {
                             live.insert(self.evaluated(args[index]));
                         }
                         EvalStep::Eval(expr) => {
+                            if let Some(locals) = dropped.take() {
+                                live.extend(locals.iter().map(|&local| Held::Local(local)));
+                            }
                             live.remove(&self.evaluated(expr));
                             live = self.expr(expr, &live);
                         }

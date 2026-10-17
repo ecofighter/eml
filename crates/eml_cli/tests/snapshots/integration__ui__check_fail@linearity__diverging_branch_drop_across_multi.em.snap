@@ -1,0 +1,28 @@
+---
+source: crates/eml_cli/tests/ui.rs
+expression: rendered
+input_file: tests/ui/check-fail/linearity/diverging_branch_drop_across_multi.em
+---
+[E3006] Error: `f` must be used exactly once, but it is kept alive across a call that may resume more than once
+    ╭─[ check-fail/linearity/diverging_branch_drop_across_multi.em:10:13 ]
+    │
+ 10 │     let b = choose ()
+    │             ────┬────  
+    │                 ╰────── this call may perform `choose`, a `multi` operation
+    │
+    ├─[ check-fail/linearity/diverging_branch_drop_across_multi.em:10:13 ]
+    │
+  7 │   let f = Fs.open "input.txt"
+    │       ┬  
+    │       ╰── `f` is bound here
+    │
+    ├─[ check-fail/linearity/diverging_branch_drop_across_multi.em:10:13 ]
+    │
+  3 │   multi choose : Unit -> Bool
+    │         ───┬──  
+    │            ╰──── `choose` is declared `multi` here
+    │ 
+    │ Help: finish using `f` before this call
+    │ 
+    │ Note: a continuation of a `multi` operation can be resumed more than once, and each resumption would use the value again
+────╯

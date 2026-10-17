@@ -109,7 +109,15 @@ pub(super) fn check_input<'c>(
     let reliable = usage::reliable(body, diagnostics.is_empty());
     let implicit_drops =
         usage::constrain(program, file, body, &typing, &mut table, types, reliable);
-    carry::constrain(program, file, body, &typing, &mut table, reliable);
+    carry::constrain(
+        program,
+        file,
+        body,
+        &typing,
+        &mut table,
+        reliable,
+        &implicit_drops,
+    );
     (
         PendingBody {
             table,

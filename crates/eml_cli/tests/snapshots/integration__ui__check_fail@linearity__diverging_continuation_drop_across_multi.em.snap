@@ -1,0 +1,28 @@
+---
+source: crates/eml_cli/tests/ui.rs
+expression: rendered
+input_file: tests/ui/check-fail/linearity/diverging_continuation_drop_across_multi.em
+---
+[E3006] Error: `k` must be used exactly once, but it is kept alive across a call that may resume more than once
+    ╭─[ check-fail/linearity/diverging_continuation_drop_across_multi.em:15:17 ]
+    │
+ 15 │         let b = choose ()
+    │                 ────┬────  
+    │                     ╰────── this call may perform `choose`, a `multi` operation
+    │
+    ├─[ check-fail/linearity/diverging_continuation_drop_across_multi.em:15:17 ]
+    │
+ 14 │     | ctl ask () k ->
+    │                  ┬  
+    │                  ╰── `k` is bound here
+    │
+    ├─[ check-fail/linearity/diverging_continuation_drop_across_multi.em:15:17 ]
+    │
+  3 │   multi choose : Unit -> Bool
+    │         ───┬──  
+    │            ╰──── `choose` is declared `multi` here
+    │ 
+    │ Help: finish using `k` before this call
+    │ 
+    │ Note: a continuation of a `multi` operation can be resumed more than once, and each resumption would use the value again
+────╯
