@@ -4,7 +4,7 @@
 use std::collections::{HashMap, HashSet};
 
 use crate::{Program, parse, pretty, verify_evidence};
-use eml_lir::{BlockId, FnIdx};
+use eml_lir::{BlockId, FnIdx, MaskItem};
 
 use super::Helpers;
 use super::split::{Annotations, split};
@@ -37,16 +37,16 @@ fn split_named(program: &mut Program, name: &str, annotations: &Annotations) {
 
 #[test]
 fn helpers_have_their_final_form() {
-    // `prompt$` は `resume$` と `rewind$` を参照するので、まとめて作られる。同じ多重集合の `mask$` は1つである
+    // `prompt$` は `resume$` と `rewind$` を参照するので、まとめて作られる。同じ項目の `mask$` は1つである
     let mut program =
         program("effect State { get(unit) -> tobj }\nfn main() -> unit {\n  return ()\n}\n");
     let mut helpers = Helpers::default();
     let id = helpers.id(&mut program);
     let prompt = helpers.prompt(&mut program);
-    let mask = helpers.mask(&mut program, &[0]);
+    let mask = helpers.mask(&mut program, &[item(0, 0, 1)]);
     assert_eq!(helpers.id(&mut program), id);
     assert_eq!(helpers.prompt(&mut program), prompt);
-    assert_eq!(helpers.mask(&mut program, &[0]), mask);
+    assert_eq!(helpers.mask(&mut program, &[item(0, 0, 1)]), mask);
     insta::assert_snapshot!(shown(&program), @r#"
     effect State { get(unit) -> tobj }
     fn main() -> unit {
@@ -124,15 +124,34 @@ fn helpers_have_their_final_form() {
     "#);
 }
 
+fn item(effect: u32, keep: u32, skip: u32) -> MaskItem {
+    MaskItem { effect, keep, skip }
+}
+
 #[test]
-fn a_mask_names_its_multiset() {
+fn a_mask_with_kept_handlers_is_named_by_its_items() {
+    let mut program = program(
+        "effect State { get(unit) -> tobj }\neffect Yield { y(unit) -> tobj }\nfn main() -> unit {\n  return ()\n}\n",
+    );
+    let mut helpers = Helpers::default();
+    let mask = helpers.mask(&mut program, &[item(1, 1, 1)]);
+    assert_eq!(program.function(mask).name, "mask$[Yield@1]");
+    assert!(
+        shown(&program).contains("prim evv_mask[Yield@1](w.2)"),
+        "{}",
+        shown(&program)
+    );
+}
+
+#[test]
+fn a_mask_names_its_items() {
     let mut program =
         program("effect State { get(unit) -> tobj }\nfn main() -> unit {\n  return ()\n}\n");
     let mut helpers = Helpers::default();
-    let once = helpers.mask(&mut program, &[0]);
-    let twice = helpers.mask(&mut program, &[0, 0]);
+    let once = helpers.mask(&mut program, &[item(0, 0, 1)]);
+    let twice = helpers.mask(&mut program, &[item(0, 0, 2)]);
     assert_ne!(once, twice);
-    assert_eq!(program.function(twice).name, "mask$[State, State]");
+    assert_eq!(program.function(twice).name, "mask$[State*2]");
 }
 
 #[test]
@@ -161,7 +180,7 @@ yields fn f(a.0: int, h.1: tobj) -> int {
     let at = (BlockId(0), 3);
     let annotations = Annotations {
         not_yield_points: HashSet::from([(BlockId(0), 5)]),
-        masked: HashMap::from([(at, vec![0])]),
+        masked: HashMap::from([(at, vec![item(0, 0, 1)])]),
         forced: HashSet::from([at]),
     };
     split_named(&mut program, "f", &annotations);
@@ -386,7 +405,7 @@ fn compose_and_mask_drop_r_on_their_slow_paths() {
         program("effect State { get(unit) -> tobj }\nfn main() -> unit {\n  return ()\n}\n");
     let mut helpers = Helpers::default();
     helpers.compose(&mut program);
-    helpers.mask(&mut program, &[0]);
+    helpers.mask(&mut program, &[item(0, 0, 1)]);
     let shown = pretty(&program);
     for name in ["compose$", "mask$[State]"] {
         let slow = block_lines(&shown, name, "b1");

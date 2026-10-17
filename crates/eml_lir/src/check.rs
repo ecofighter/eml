@@ -818,21 +818,21 @@ impl<'a> Context<'a> {
         ))
     }
 
-    /// 根の基本操作は translate が、ほかの基本操作は EP が作る。エフェクトの即値は表にあり、`evv_mask` の多重集合は
-    /// 呼び出しの `mask` と同じく空でなく昇順に並び、引数の数は表の行と同じである。根の番号は表を持たないので確かめない。
+    /// 根の基本操作は translate が、ほかの基本操作は EP が作る。エフェクトの即値は表にあり、`evv_mask` の項目は
+    /// 呼び出しの `mask` と同じく空でなくエフェクトの真に昇順に並び、飛ばす数が 1 以上で、引数の数は表の行と同じである。
+    /// 根の番号は表を持たないので確かめない。
     /// 範囲の段と所有の段では、引数と結果を直接の呼び出しと同じく互換の位置として比べる (docs/spec/lir.md の「基本操作」)。
     pub fn check_prim(&self, var: VarId, prim: &Prim, args: &[Atom]) -> Result<(), String> {
         let row = prim.row();
         let name = &prim_text(self.tables.effects, prim);
         let immediates = prim.immediates();
         let (effects, operation) = match &immediates {
-            Immediates::None => (&[][..], None),
-            Immediates::Effects(effects) => (*effects, None),
-            Immediates::Effect(effect) => (std::slice::from_ref(effect), None),
-            Immediates::Operation { effect, op } => (std::slice::from_ref(effect), Some(*op)),
-            Immediates::Root(_) => (&[][..], None),
+            Immediates::None | Immediates::Root(_) => (Vec::new(), None),
+            Immediates::Mask(items) => (items.iter().map(|item| item.effect).collect(), None),
+            Immediates::Effect(effect) => (vec![*effect], None),
+            Immediates::Operation { effect, op } => (vec![*effect], Some(*op)),
         };
-        for &effect in effects {
+        for effect in effects {
             let Some(info) = self.tables.effects.get(effect as usize) else {
                 return Err(format!(
                     "`prim {name}` names effect {effect}, which is not in the effect table"
@@ -848,14 +848,17 @@ impl<'a> Context<'a> {
                 ));
             }
         }
-        if let Immediates::Effects(effects) = immediates {
-            if effects.is_empty() {
+        if let Immediates::Mask(items) = immediates {
+            if items.is_empty() {
                 return Err(format!("`prim {name}` masks no effect"));
             }
-            if !effects.is_sorted() {
+            if !items.is_sorted_by(|a, b| a.effect < b.effect) {
                 return Err(format!(
                     "the effects of `prim {name}` are not in ascending order"
                 ));
+            }
+            if items.iter().any(|item| item.skip == 0) {
+                return Err(format!("an item of `prim {name}` skips no handler"));
             }
         }
         if args.len() != row.params.len() {

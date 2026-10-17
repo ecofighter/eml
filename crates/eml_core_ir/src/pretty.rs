@@ -5,11 +5,11 @@
 use std::fmt::Write;
 
 use crate::{Block, Call, CoreFn, Program, Rhs, Stmt, Term};
-use eml_lir::BlockId;
 use eml_lir::syntax::{
-    FnHeader, Writer, effect_text, effects_text, function_name, operation_name, operation_text,
+    FnHeader, Writer, effect_text, function_name, mask_text, operation_name, operation_text,
     prim_text,
 };
+use eml_lir::{BlockId, MaskItem};
 
 /// 位置を出さない表示。translate のテストの多くは位置を見ないので、既定では出さない。
 pub fn pretty(program: &Program) -> String {
@@ -230,10 +230,10 @@ impl<'p> Printer<'p> {
     }
 
     /// 空の `mask` は書かない。
-    fn mask(&self, mask: &[u32]) -> String {
+    fn mask(&self, mask: &[MaskItem]) -> String {
         if mask.is_empty() {
             return String::new();
         }
-        format!("mask [{}] ", effects_text(&self.program.effects, mask))
+        format!("mask [{}] ", mask_text(&self.program.effects, mask))
     }
 }

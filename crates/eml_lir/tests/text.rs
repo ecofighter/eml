@@ -1,7 +1,7 @@
 //! LIR のテキストの形 (docs/implementation/testing.md の「LIR のテキストの形」)。`parse` が読んだものを
 //! `pretty` で表示すると元のテキストに戻ることと、構文の誤りの報告を確かめる。
 
-use eml_lir::{Atom, CasePattern, Ctor, FnIdx, LayoutId, OpRet, Prim, VarId};
+use eml_lir::{Atom, CasePattern, Ctor, FnIdx, LayoutId, MaskItem, OpRet, Prim, VarId};
 use eml_lir::{BlockId, Loc, Mark, ParseError, Repr, verify};
 use eml_lir::{Call, Program, Rhs, Stmt, Term, parse, pretty, pretty_with_positions};
 
@@ -1261,7 +1261,7 @@ fn a_never_operation_returns_never() {
 #[test]
 fn prims_and_clauses_round_trip() {
     let program = round_trip(
-        "effect State { get(unit) -> tobj, put(tobj) -> unit }\nyields fn f(s.0: tobj) -> tobj {\n  let w.1: tobj = prim evv_get()\n  let e.2: obj = prim ev_new[State](s.0, w.1)\n  let u.3: unit = prim ev_set_clause[State.get](e.2, &g)\n  let m.4: tobj = prim evv_mask[State, State](w.1)\n  let c.5: tobj = prim ev_clause[State.get](e.2)\n  let r.6: tobj = clause State.get c.5(e.2, ())\n  return r.6\n}\ninternal yields clause State.get fn g(e.0: obj, u.1: unit) -> tobj {\n  let s.2: tobj = prim ev_take_state(e.0)\n  return s.2\n}\n",
+        "effect State { get(unit) -> tobj, put(tobj) -> unit }\nyields fn f(s.0: tobj) -> tobj {\n  let w.1: tobj = prim evv_get()\n  let e.2: obj = prim ev_new[State](s.0, w.1)\n  let u.3: unit = prim ev_set_clause[State.get](e.2, &g)\n  let m.4: tobj = prim evv_mask[State*2](w.1)\n  let c.5: tobj = prim ev_clause[State.get](e.2)\n  let r.6: tobj = clause State.get c.5(e.2, ())\n  return r.6\n}\ninternal yields clause State.get fn g(e.0: obj, u.1: unit) -> tobj {\n  let s.2: tobj = prim ev_take_state(e.0)\n  return s.2\n}\n",
     );
     let f = &program.functions[0];
     assert_eq!(f.clause, None);
@@ -1286,7 +1286,14 @@ fn prims_and_clauses_round_trip() {
         f.blocks[0].stmts[3],
         Stmt::Let {
             var: VarId(4),
-            rhs: Rhs::Prim(Prim::EvvMask(vec![0, 0]), vec![v(1)]),
+            rhs: Rhs::Prim(
+                Prim::EvvMask(vec![MaskItem {
+                    effect: 0,
+                    keep: 0,
+                    skip: 2
+                }]),
+                vec![v(1)]
+            ),
         }
     );
     assert_eq!(
@@ -1499,4 +1506,55 @@ fn a_root_primitive_takes_one_root_number() {
         prim("root_set[x](x.0)"),
         "line 2: expected a root number, found `x`"
     );
+}
+
+#[test]
+fn a_mask_item_reads_back() {
+    let program = round_trip(
+        "effect A { a(unit) -> tobj }\neffect B { b(unit) -> tobj }\neffect C { c(unit) -> tobj }\neffect D { d(unit) -> tobj }\nfn f(w.0: tobj) -> tobj {\n  let m.1: tobj = prim evv_mask[A, B@1, C*2, D@1*2](w.0)\n  return m.1\n}\n",
+    );
+    let item = |effect, keep, skip| MaskItem { effect, keep, skip };
+    assert_eq!(
+        program.functions[0].blocks[0].stmts[0],
+        Stmt::Let {
+            var: VarId(1),
+            rhs: Rhs::Prim(
+                Prim::EvvMask(vec![
+                    item(0, 0, 1),
+                    item(1, 1, 1),
+                    item(2, 0, 2),
+                    item(3, 1, 2)
+                ]),
+                vec![v(0)]
+            ),
+        }
+    );
+}
+
+#[test]
+fn a_mask_item_may_name_an_effect_missing_from_the_table() {
+    round_trip(
+        "effect Log#3 { l(unit) -> tobj }\nfn f(w.0: tobj) -> tobj {\n  let m.1: tobj = prim evv_mask[#3@1, Log#3@1](w.0)\n  return m.1\n}\n",
+    );
+}
+
+#[test]
+fn a_mask_item_in_its_longer_form_is_an_error() {
+    let item = |item: &str| {
+        parse_error(&format!(
+            "effect A {{ a(unit) -> tobj }}\nfn f(w.0: tobj) -> tobj {{\n  let x.1: tobj = prim evv_mask[{item}](w.0)\n  return x.1\n}}\n"
+        ))
+        .to_string()
+    };
+    assert_eq!(item("A@0"), "line 3: write `A` for `A@0`");
+    assert_eq!(item("A*1"), "line 3: write `A` for `A*1`");
+    assert_eq!(item("A@1*1"), "line 3: write `A@1` for `A@1*1`");
+}
+
+#[test]
+fn a_mask_item_that_skips_nothing_is_an_error() {
+    let error = parse_error(
+        "effect A { a(unit) -> tobj }\nfn f(w.0: tobj) -> tobj {\n  let x.1: tobj = prim evv_mask[A*0](w.0)\n  return x.1\n}\n",
+    );
+    assert_eq!(error.to_string(), "line 3: `A*0` skips no handler");
 }

@@ -2,7 +2,7 @@
 //! `pretty` で表示すると元のテキストに戻ることと、構文の誤りの報告を確かめる。
 
 use eml_core_ir::{Call, Program, Rhs, Stmt, parse, pretty};
-use eml_lir::{Atom, BlockId, Mark, ParseError, VarId};
+use eml_lir::{Atom, BlockId, Mark, MaskItem, ParseError, VarId};
 
 /// 読んで表示し直すと元に戻ることを確かめ、読んだプログラムを返す。
 fn round_trip(text: &str) -> Program {
@@ -159,7 +159,11 @@ fn f(k.0: tobj, s.1: int) -> int {
                     arg: Atom::Int(1),
                     state: v(1),
                 },
-                mask: vec![0],
+                mask: vec![MaskItem {
+                    effect: 0,
+                    keep: 0,
+                    skip: 1,
+                }],
             },
         }
     );
@@ -171,7 +175,7 @@ fn a_mask_reads_back() {
         "\
 effect Main.State { get(tobj) -> tobj, put(tobj) -> tobj }
 fn entry$main(c.0: tobj) -> tobj {
-  let t.1: tobj = mask [Main.State, Main.State] apply c.0(())
+  let t.1: tobj = mask [Main.State*2] apply c.0(())
   let t.2: tobj = mask [Main.State] apply t.1(())
   return t.2
 }
@@ -465,7 +469,7 @@ yields fn f(s.0: tobj, o.1: tobj, c.2: tobj, k.3: tobj) -> tobj {
   let w.4: tobj = prim evv_get()
   let e.5: obj = prim ev_new[State](s.0, w.4)
   let u.6: unit = prim ev_set_clause[State.get](e.5, &g)
-  let m.7: tobj = prim evv_mask[State, State](w.4)
+  let m.7: tobj = prim evv_mask[State*2](w.4)
   let a.8: tobj = prim ev_clause[State.get](e.5)
   let r.9: tobj = clause State.get a.8(e.5, ())
   let t.10: tobj = mask [State] yields apply c.2(r.9)
@@ -532,4 +536,31 @@ b2:
     let f = &program.functions[0];
     assert_eq!(f.vars[1].mark, eml_lir::Mark::Lin);
     assert_eq!(f.vars[2].mark, eml_lir::Mark::Poly);
+}
+
+#[test]
+fn a_mask_with_two_items_reads_back() {
+    let program = round_trip(
+        "\
+effect State { get(unit) -> tobj }
+effect Yield { y(unit) -> tobj }
+fn f(c.0: tobj) -> tobj {
+  let t.2: tobj = mask [State, Yield@1] yields apply c.0(())
+  return t.2
+}
+",
+    );
+    let Stmt::Let {
+        var: _,
+        rhs: Rhs::Call { mask, .. },
+    } = &program.functions[0].blocks[0].stmts[0]
+    else {
+        panic!("not a call");
+    };
+    let item = |effect, keep| MaskItem {
+        effect,
+        keep,
+        skip: 1,
+    };
+    assert_eq!(mask, &[item(0, 0), item(1, 1)]);
 }

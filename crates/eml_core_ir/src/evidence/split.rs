@@ -11,7 +11,7 @@ use crate::liveness::{insert_var, live_after_term, live_in, step_back};
 use crate::tail::tail_position_call;
 use crate::{Block, Call, CoreFn, Program, Rhs, Stmt, Term};
 use eml_extern::Purity;
-use eml_lir::{Atom, BlockId, FnIdx, Mark, Prim, Repr, VarId, VarInfo};
+use eml_lir::{Atom, BlockId, FnIdx, Mark, MaskItem, Prim, Repr, VarId, VarInfo};
 
 use super::{Helpers, captured_mark, direct, dummy, named, reserve, yield_switch};
 
@@ -22,7 +22,7 @@ pub(crate) struct Annotations {
     pub(crate) not_yield_points: HashSet<(BlockId, usize)>,
     /// 直後に `evv_set(w0)` が続く `mask` の呼び出しと、その飛ばすエフェクト。遅い道は κ を `mask$` で包み、続きは
     /// `evv_set(w0)` の後から始まる (docs/spec/core-ir.md の「`mask` の包み」)。
-    pub(crate) masked: HashMap<(BlockId, usize), Vec<u32>>,
+    pub(crate) masked: HashMap<(BlockId, usize), Vec<MaskItem>>,
     /// `mask` の呼び出し。呼ぶ相手が `yields` でなくても地点にする。
     pub(crate) forced: HashSet<(BlockId, usize)>,
 }
@@ -38,7 +38,7 @@ struct Point {
     result: VarId,
     /// 続きの始めで生きている変数から x を除いたもの。番号の順に並ぶ。
     live: Vec<VarId>,
-    mask: Option<Vec<u32>>,
+    mask: Option<Vec<MaskItem>>,
 }
 
 pub(crate) fn split(
@@ -528,8 +528,8 @@ fn slow_path(
         );
     }
     let mut k = out.prim(&mut stmts, "k", Repr::TObj, Prim::YieldContTake, Vec::new());
-    if let Some(effects) = &point.mask {
-        let mask = helpers.mask(program, effects);
+    if let Some(items) = &point.mask {
+        let mask = helpers.mask(program, items);
         k = out.closure(&mut stmts, "k", mask, vec![Atom::Var(k)]);
     }
     // `closure` は引数を1つ以上とるので、捕まえる変数がなければ関数の値にする

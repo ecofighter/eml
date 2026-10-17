@@ -25,10 +25,10 @@ use crate::{Block, Call, CoreFn, Program, Rhs, Stmt, Term};
 use eml_lir::check::{
     BlockShape, Context, Dominators, FnSummary, Tables, TermShape, field_count, shape,
 };
-use eml_lir::syntax::{operation_text, prim_text};
+use eml_lir::syntax::{effect_text, operation_text, prim_text};
 use eml_lir::{
-    Atom, BlockId, CasePattern, EffectInfo, FnIdx, Layout, OpRet, Prim, Repr, VarId, VerifyError,
-    operation,
+    Atom, BlockId, CasePattern, EffectInfo, FnIdx, Layout, MaskItem, OpRet, Prim, Repr, VarId,
+    VerifyError, operation,
 };
 
 /// EP の後の IR を確かめる。変換の段と同じ形と範囲を確かめ、`handle`、`perform`、`resume`、`mask` が残っていない
@@ -685,9 +685,9 @@ impl<'a> Checker<'a> {
         }
     }
 
-    /// `mask` はエフェクトの表にある番号を昇順に並べた多重集合である。extern のエフェクトは表にないので、`mask` にも
+    /// `mask` はエフェクトの表にある番号を真に昇順に並べた項目で、どの項目も 1 つ以上の handler を飛ばす。extern のエフェクトは表にないので、`mask` にも
     /// 現れない。`handle`、`perform`、`clause` は `mask` を持たない (docs/spec/core-ir.md)。
-    fn check_mask(&self, call: &Call, mask: &[u32]) -> Result<(), String> {
+    fn check_mask(&self, call: &Call, mask: &[MaskItem]) -> Result<(), String> {
         if mask.is_empty() {
             return Ok(());
         }
@@ -719,14 +719,23 @@ impl<'a> Checker<'a> {
                 state: _,
             } => {}
         }
-        if let Some(&unknown) = mask
+        if let Some(unknown) = mask
             .iter()
-            .find(|&&effect| effect as usize >= self.program.effects.len())
+            .find(|item| item.effect as usize >= self.program.effects.len())
         {
-            return Err(format!("a mask names an unknown effect #{unknown}"));
+            return Err(format!(
+                "a mask names an unknown effect #{}",
+                unknown.effect
+            ));
         }
-        if !mask.is_sorted() {
+        if !mask.is_sorted_by(|a, b| a.effect < b.effect) {
             return Err("a mask is not in ascending order".to_string());
+        }
+        if let Some(item) = mask.iter().find(|item| item.skip == 0) {
+            return Err(format!(
+                "a mask item of `{}` skips no handler",
+                effect_text(&self.program.effects, item.effect)
+            ));
         }
         Ok(())
     }

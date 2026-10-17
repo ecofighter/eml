@@ -2357,7 +2357,7 @@ yields fn f(s.0: tobj) -> tobj {
   let w.1: tobj = prim evv_get()
   let e.2: obj = prim ev_new[State](s.0, w.1)
   let u.3: unit = prim ev_set_clause[State.get](e.2, &g)
-  let m.4: tobj = prim evv_mask[State, State](w.1)
+  let m.4: tobj = prim evv_mask[State*2](w.1)
   let c.5: tobj = prim ev_clause[State.get](e.2)
   let r.6: tobj = clause State.get c.5(e.2, ())
   return r.6
@@ -2564,7 +2564,7 @@ fn an_evv_mask_names_known_effects_in_order() {
             "{STATE}{COUNTER}fn f(w.0: tobj) -> tobj {{\n  let m.1: tobj = prim evv_mask[{effects}](w.0)\n  return m.1\n}}\n"
         )
     };
-    assert_eq!(check_lowered(&mask("State, State, Counter")), Ok(()));
+    assert_eq!(check_lowered(&mask("State*2, Counter")), Ok(()));
     assert_eq!(
         check_lowered(&mask("Counter, State")),
         Err(
@@ -2591,6 +2591,40 @@ fn an_evv_mask_names_known_effects_in_order() {
     assert_eq!(
         verify_lowered(&program).unwrap_err().message,
         "`prim evv_mask[]` masks no effect"
+    );
+}
+
+/// 同じエフェクトの項目が2つあると、並びは真に昇順でない。
+#[test]
+fn an_evv_mask_names_each_effect_once() {
+    assert_eq!(
+        check_lowered(&format!(
+            "{STATE}fn f(w.0: tobj) -> tobj {{\n  let m.1: tobj = prim evv_mask[State, State@1](w.0)\n  return m.1\n}}\n"
+        )),
+        Err(
+            "the effects of `prim evv_mask[State, State@1]` are not in ascending order in `f`"
+                .to_string()
+        )
+    );
+}
+
+/// 項目は 1 つ以上の handler を飛ばす。テキストは `*0` を読まないので、読んだ後で 0 にする。
+#[test]
+fn an_evv_mask_item_skips_some_handler() {
+    let mut program = read(&format!(
+        "{STATE}fn f(w.0: tobj) -> tobj {{\n  let m.1: tobj = prim evv_mask[State](w.0)\n  return m.1\n}}\n"
+    ));
+    let Stmt::Let {
+        var: _,
+        rhs: Rhs::Prim(Prim::EvvMask(items), _),
+    } = &mut program.functions[0].blocks[0].stmts[0]
+    else {
+        panic!("not an evv_mask");
+    };
+    items[0].skip = 0;
+    assert_eq!(
+        verify_lowered(&program).unwrap_err().message,
+        "an item of `prim evv_mask[State*0]` skips no handler"
     );
 }
 

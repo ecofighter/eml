@@ -8,7 +8,7 @@ use eml_extern::Extern;
 
 use crate::{Block, Call, CoreFn, Program, Rhs, Stmt, Term};
 use eml_lir::syntax::{self, FnState, Reader, error};
-use eml_lir::{ParseError, VarId};
+use eml_lir::{MaskItem, ParseError, VarId};
 
 /// `pretty` の表示を `Program` に戻す。入口は `entry$main` という名前の関数で、なければ最初の関数である。
 pub fn parse(text: &str) -> Result<Program, ParseError> {
@@ -183,9 +183,9 @@ impl Parser<'_> {
         Ok(rhs)
     }
 
-    /// `mask [E1, E2]` を読む。エフェクトはエフェクトの行の名前か `#N` で書く。`#N` は表にない番号を書いて、
+    /// `mask [E1, E2@1*2]` を読む。項目のエフェクトはエフェクトの行の名前か `#N` で書く。`#N` は表にない番号を書いて、
     /// 誤りを含む IR を verifier に渡すためにある。並びの順は verifier が確かめる。
-    fn mask(&mut self) -> Result<Vec<u32>, ParseError> {
+    fn mask(&mut self) -> Result<Vec<MaskItem>, ParseError> {
         if !self.reader.at_word("mask") {
             return Ok(Vec::new());
         }
@@ -194,7 +194,7 @@ impl Parser<'_> {
         let mask = self.reader.list('[', ']', |p| {
             let line = p.line();
             let word = p.word()?;
-            p.effect_ref(&word, line)
+            p.mask_item(&word, line)
         })?;
         // `pretty` は空の `mask` を書かない。`mask []` を受け入れると、表示と同じ形に戻らないテキストが読めてしまう
         if mask.is_empty() {
@@ -204,7 +204,7 @@ impl Parser<'_> {
     }
 
     /// `mask` を前に付けてよい呼び出し。`mask` は call、apply、resume にだけ付く (docs/spec/core-ir.md)。
-    fn masked_call(&mut self, state: &mut FnState) -> Result<(Vec<u32>, Call), ParseError> {
+    fn masked_call(&mut self, state: &mut FnState) -> Result<(Vec<MaskItem>, Call), ParseError> {
         let line = self.reader.line();
         let mask = self.mask()?;
         if !mask.is_empty()

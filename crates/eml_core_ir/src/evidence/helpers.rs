@@ -6,8 +6,8 @@
 
 use crate::builder::FnBuilder;
 use crate::{Call, CoreFn, Program, Rhs, Stmt, Term};
-use eml_lir::syntax::effects_text;
-use eml_lir::{Atom, BlockId, Case, CasePattern, FnIdx, Mark, Prim, Repr, VarId};
+use eml_lir::syntax::mask_text;
+use eml_lir::{Atom, BlockId, Case, CasePattern, FnIdx, Mark, MaskItem, Prim, Repr, VarId};
 
 use super::{call, captured_mark, direct, dummy, named, yield_switch};
 
@@ -196,14 +196,14 @@ pub(super) fn rewind(resume: FnIdx) -> CoreFn {
     b.finish("rewind$".to_string(), false, true, Repr::TObj, Mark::Poly)
 }
 
-/// `mask$[effects]` の名前。多重集合をエフェクトの名前で書く。
-pub(super) fn mask_name(program: &Program, effects: &[u32]) -> String {
-    format!("mask$[{}]", effects_text(&program.effects, effects))
+/// `mask$[items]` の名前。項目をテキストの形で書く。
+pub(super) fn mask_name(program: &Program, items: &[MaskItem]) -> String {
+    format!("mask$[{}]", mask_text(&program.effects, items))
 }
 
-/// `mask$[effects](κ, v)`。再開されたときに `evv` から `effects` を飛ばしてから κ を呼び、戻ったら `evv` を戻す。
+/// `mask$[items](κ, v)`。再開されたときに `evv` から `items` の項目を飛ばしてから κ を呼び、戻ったら `evv` を戻す。
 /// κ が yield したら、もう一度包む (docs/spec/core-ir.md の「`mask` の包み」)。
-pub(super) fn mask(mask: FnIdx, name: String, effects: &[u32]) -> CoreFn {
+pub(super) fn mask(mask: FnIdx, name: String, items: &[MaskItem]) -> CoreFn {
     let mut b = FnBuilder::new();
     let k = b.param(named("k", Repr::TObj, Mark::Poly));
     let v = b.param(named("v", Repr::TObj, Mark::Poly));
@@ -212,7 +212,7 @@ pub(super) fn mask(mask: FnIdx, name: String, effects: &[u32]) -> CoreFn {
         &mut b,
         "m",
         Repr::TObj,
-        Prim::EvvMask(effects.to_vec()),
+        Prim::EvvMask(items.to_vec()),
         vec![Atom::Var(w)],
     );
     prim(

@@ -169,6 +169,58 @@ fn main() -> unit {{
     assert_eq!(output, "2\n1\n");
 }
 
+/// `Counter` を3つ積み、`Counter@1` で一番内側を残して次の1つを飛ばす。残った先頭は一番内側 (3)、そのリストの2つ目は
+/// 飛ばした2ではなく一番外側 (1) である。2つ目は、先頭を飛ばす `evv_mask[Counter]` をもう一度かけて確かめる。
+#[test]
+fn evv_mask_keeps_the_innermost_evidence_and_skips_the_next() {
+    let text = format!(
+        "{COUNTER}\
+fn main() -> unit {{
+  let w.0: tobj = prim evv_get()
+  dup w.0
+  dup w.0
+  dup w.0
+  dup w.0
+  let s.1: tobj = box 1
+  let c.2: obj = prim ev_new[Counter](s.1, w.0)
+  let w.3: tobj = prim evv_push(w.0, c.2)
+  let s.4: tobj = box 2
+  let d.5: obj = prim ev_new[Counter](s.4, w.0)
+  let w.6: tobj = prim evv_push(w.3, d.5)
+  let s.7: tobj = box 3
+  let o.8: obj = prim ev_new[Counter](s.7, w.0)
+  let w.9: tobj = prim evv_push(w.6, o.8)
+  let m.10: tobj = prim evv_mask[Counter@1](w.9)
+  decref w.9
+  dup m.10
+  let u.11: unit = prim evv_set(m.10)
+  let e.12: obj = prim ev_lookup[Counter]()
+  let s.13: tobj = prim ev_take_state(e.12)
+  decref e.12
+  let m.14: tobj = prim evv_mask[Counter](m.10)
+  decref m.10
+  let u.15: unit = prim evv_set(m.14)
+  let e.16: obj = prim ev_lookup[Counter]()
+  let s.17: tobj = prim ev_take_state(e.16)
+  decref e.16
+  let u.18: unit = prim evv_set(w.0)
+  let n.19: int = unbox s.13
+  decref s.13
+  let t.20: obj = extern \"Prelude.Show Int.show\"(n.19)
+  let v.21: unit = extern Prelude.println(t.20)
+  let n.22: int = unbox s.17
+  decref s.17
+  let t.23: obj = extern \"Prelude.Show Int.show\"(n.22)
+  let v.24: unit = extern Prelude.println(t.23)
+  return v.24
+}}
+"
+    );
+    let (output, result) = run_lir(&text);
+    assert_eq!(result, Ok(()));
+    assert_eq!(output, "3\n1\n");
+}
+
 /// handler の下で継続を再開するときの形。`ev_renew` は入口の表を共有し、状態を差し替え、今の `evv` を外側の `evv`
 /// にした evidence を作る (docs/spec/object-model.md の「evidence の3つの物体」)。元の evidence の外側の `evv` は空なので、
 /// `ev_evv` が元の外側を返せば `ev_lookup` は evidence を見つけられない。

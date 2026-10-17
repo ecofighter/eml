@@ -9,7 +9,7 @@ use eml_hir::{
 use eml_types::{FieldTarget, TypeId};
 
 use crate::{Call, Rhs, Stmt};
-use eml_lir::{Atom, Ctor, FnIdx, Mark, Prim, Repr, TUPLE, VarId};
+use eml_lir::{Atom, Ctor, FnIdx, Mark, MaskItem, Prim, Repr, TUPLE, VarId};
 
 use super::pattern::Known;
 use super::program::{effect_index, perform_call, plain_call};
@@ -57,7 +57,7 @@ enum Callee {
 }
 
 /// `mask` 付きの呼び出し。
-fn masked_call(call: Call, mask: Vec<u32>) -> Rhs {
+fn masked_call(call: Call, mask: Vec<MaskItem>) -> Rhs {
     Rhs::Call { call, mask }
 }
 
@@ -224,7 +224,7 @@ impl FnLowering<'_> {
         ty: TypeId,
     ) -> Atom {
         let last = first + args.len();
-        let arrows: Vec<(Vec<u32>, bool)> = (first..last)
+        let arrows: Vec<(Vec<MaskItem>, bool)> = (first..last)
             .map(|arrow| (self.mask(id, arrow), self.arrow_yields(id, arrow)))
             .collect();
         let mut args = args.into_iter();
@@ -260,9 +260,11 @@ impl FnLowering<'_> {
             .is_some_and(|&row| self.ctx.resolve(row))
     }
 
-    /// 型検査が記録した、呼び出し `call` の矢印 `arrow` の `mask` を、エフェクトの番号の昇順で返す (docs/spec/core-ir.md)。
-    fn mask(&self, call: ExprId, arrow: usize) -> Vec<u32> {
-        let mut mask: Vec<u32> = self
+    /// 型検査が記録した、呼び出し `call` の矢印 `arrow` の `mask` を、エフェクトの番号の昇順の項目で返す
+    /// (docs/spec/core-ir.md)。型検査はまだ多重集合を記録するので、同じエフェクトの連なりを先頭から飛ばす 1 つの項目に
+    /// まとめる。位置つきの項目を型検査から写す形には、後で置き換える。
+    fn mask(&self, call: ExprId, arrow: usize) -> Vec<MaskItem> {
+        let mut effects: Vec<u32> = self
             .ctx
             .types
             .masks
@@ -274,8 +276,15 @@ impl FnLowering<'_> {
                     .collect()
             })
             .unwrap_or_default();
-        mask.sort_unstable();
-        mask
+        effects.sort_unstable();
+        effects
+            .chunk_by(|a, b| a == b)
+            .map(|run| MaskItem {
+                effect: run[0],
+                keep: 0,
+                skip: run.len() as u32,
+            })
+            .collect()
     }
 
     /// 本体が動き出すまでに受け取る引数の数。extern の関数は表の行の引数の数、操作はシグネチャの外側の矢印の数、

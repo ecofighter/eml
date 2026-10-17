@@ -144,7 +144,7 @@ fn g(p.0: unit) -> unit {
   let ev.1: obj = prim ev_lookup[A]()
   let ev.2: obj = prim ev_lookup[B]()
   let w.3: tobj = prim evv_get()
-  let w.4: tobj = prim evv_mask[B, A](w.3)
+  let w.4: tobj = prim evv_mask[B, A@1](w.3)
   return ()
 }
 ";
@@ -156,7 +156,7 @@ fn g(p.0: unit) -> unit {
     let g = &text[text.find("fn g").unwrap()..];
     assert!(g.contains("ev_lookup s0, E0"), "{g}");
     assert!(g.contains("ev_lookup s0, E1"), "{g}");
-    assert!(g.contains("evv_mask s0, [0, 1]"), "{g}");
+    assert!(g.contains("evv_mask s0, [0@1, 1]"), "{g}");
 }
 
 /// 位置のファイルはパスで引く。2つ目のプログラムの `Program.files` では `b.em` が 0 番だが、誤りの位置は `b.em` を指す。

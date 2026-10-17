@@ -13,7 +13,9 @@ use std::collections::HashMap;
 
 use crate::{Call, CoreFn, Program, Rhs, Stmt, Term};
 use eml_extern::Purity;
-use eml_lir::{Atom, BlockId, Case, CasePattern, FnIdx, Mark, Prim, Repr, VarId, VarInfo};
+use eml_lir::{
+    Atom, BlockId, Case, CasePattern, FnIdx, Mark, MaskItem, Prim, Repr, VarId, VarInfo,
+};
 
 use split::split;
 
@@ -66,7 +68,7 @@ pub(crate) struct Helpers {
     prompt: Option<FnIdx>,
     resume: Option<FnIdx>,
     rewind: Option<FnIdx>,
-    masks: HashMap<Vec<u32>, FnIdx>,
+    masks: HashMap<Vec<MaskItem>, FnIdx>,
 }
 
 impl Helpers {
@@ -125,19 +127,21 @@ impl Helpers {
         rewind
     }
 
-    /// `effects` は飛ばすエフェクトの多重集合で、番号の昇順に並ぶ。
-    pub(crate) fn mask(&mut self, program: &mut Program, effects: &[u32]) -> FnIdx {
+    /// `items` は飛ばす項目で、エフェクトの番号の真に昇順に並び、どれも 1 つ以上の handler を飛ばす。
+    pub(crate) fn mask(&mut self, program: &mut Program, items: &[MaskItem]) -> FnIdx {
         debug_assert!(
-            !effects.is_empty() && effects.is_sorted(),
-            "a mask names a nonempty sorted multiset"
+            !items.is_empty()
+                && items.is_sorted_by(|a, b| a.effect < b.effect)
+                && items.iter().all(|item| item.skip != 0),
+            "a mask names nonempty items in strictly ascending effect order that each skip a handler"
         );
-        if let Some(&mask) = self.masks.get(effects) {
+        if let Some(&mask) = self.masks.get(items) {
             return mask;
         }
-        let name = helpers::mask_name(program, effects);
+        let name = helpers::mask_name(program, items);
         let mask = reserve(program, &name);
-        self.masks.insert(effects.to_vec(), mask);
-        fill(program, mask, helpers::mask(mask, name, effects));
+        self.masks.insert(items.to_vec(), mask);
+        fill(program, mask, helpers::mask(mask, name, items));
         mask
     }
 }

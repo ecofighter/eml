@@ -1,7 +1,7 @@
 //! evidence passing の基本操作と、REPL のセッションの根を読み書きする基本操作 (docs/spec/lir.md の「基本操作」)。
 //! 表は `eml_extern` に置かない。`eml_extern` の表は `std/` と1対1に結び付くが、基本操作はソースに現れないためである。
 
-use crate::{Mark, Repr};
+use crate::{Mark, MaskItem, Repr};
 
 /// 基本操作の種類と即値。エフェクトと操作は `Program.effects` の番号である。`EvSetClause` と `EvClause` は、
 /// テキストの形で操作の名前をエフェクトで修飾するために、操作だけでなくエフェクトも持つ。`RootGet` と `RootSet` の
@@ -11,8 +11,8 @@ pub enum Prim {
     EvvGet,
     EvvSet,
     EvvPush,
-    /// 飛ばすエフェクトの多重集合。呼び出しの `mask` と同じく、空でなく番号の昇順に並ぶ。
-    EvvMask(Vec<u32>),
+    /// 飛ばす項目。呼び出しの `mask` と同じく、空でなく、エフェクトの番号の真に昇順に並ぶ。
+    EvvMask(Vec<MaskItem>),
     EvNew(u32),
     EvSetClause {
         effect: u32,
@@ -60,7 +60,7 @@ pub struct PrimRow {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Immediates<'a> {
     None,
-    Effects(&'a [u32]),
+    Mask(&'a [MaskItem]),
     Effect(u32),
     Operation { effect: u32, op: u32 },
     Root(u32),
@@ -117,7 +117,7 @@ impl Prim {
 
     pub fn immediates(&self) -> Immediates<'_> {
         match self {
-            Prim::EvvMask(effects) => Immediates::Effects(effects),
+            Prim::EvvMask(items) => Immediates::Mask(items),
             Prim::EvNew(effect) | Prim::EvLookup(effect) => Immediates::Effect(*effect),
             Prim::EvSetClause { effect, op } | Prim::EvClause { effect, op } => {
                 Immediates::Operation {

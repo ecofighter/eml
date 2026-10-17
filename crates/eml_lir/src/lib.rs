@@ -416,6 +416,15 @@ impl Call {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct LayoutId(pub u32);
 
+/// `mask` と `evv_mask` の項目。`effect` の evidence のうち、先に同じ `effect` が `keep` 個ある所から `skip` 個を
+/// 飛ばす (docs/spec/core-ir.md の「`mask` の包み」)。`skip` は 1 以上で、並びは `effect` の真に昇順である。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct MaskItem {
+    pub effect: u32,
+    pub keep: u32,
+    pub skip: u32,
+}
+
 /// `con`、`unpack`、`release` が指すコンストラクタ。タグは配置の中の添字で、宣言の順である。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct Ctor {

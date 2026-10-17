@@ -443,20 +443,19 @@ impl<'a, M: Mode> Emitter<'a, '_, M> {
                 l: a[0],
                 e: a[1],
             },
-            Prim::EvvMask(effects) => {
+            Prim::EvvMask(items) => {
                 let start = self.out.mask_lists.len() as u32;
-                // 引き直した番号でも昇順に保つ。基本操作の並びと同じ約束にするためである (docs/spec/lir.md の「基本操作」)
-                let mut numbers: Vec<u16> = effects.iter().map(|&e| self.effect(e)).collect();
-                numbers.sort_unstable();
-                // LIR の並びは飛ばすエフェクトの多重集合なので、同じエフェクトの連なりを、先頭から飛ばす1つの項目にする
-                let items: Vec<MaskItem> = numbers
-                    .chunk_by(|a, b| a == b)
-                    .map(|run| MaskItem {
-                        effect: run[0],
-                        keep: 0,
-                        skip: run.len() as u32,
+                // 引き直した番号でも昇順に保つ。項目は (エフェクト, keep, skip) を 1 つの単位として動かす
+                // (docs/spec/lir.md の「基本操作」)
+                let mut items: Vec<MaskItem> = items
+                    .iter()
+                    .map(|item| MaskItem {
+                        effect: self.effect(item.effect),
+                        keep: item.keep,
+                        skip: item.skip,
                     })
                     .collect();
+                items.sort_unstable_by_key(|item| item.effect);
                 let len = items.len() as u32;
                 self.out.mask_lists.extend(items);
                 let at = self.out.operands([start, len, u32::from(a[0])]);

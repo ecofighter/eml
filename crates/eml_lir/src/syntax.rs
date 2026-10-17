@@ -10,7 +10,7 @@ use std::fmt::Write as _;
 
 use crate::{
     Atom, BlockId, Case, CasePattern, Ctor, EffectInfo, FnIdx, Immediates, Layout, LayoutCtor,
-    LayoutId, Loc, Mark, OpRet, OperationInfo, ParseError, Prim, Repr, VarId, VarInfo,
+    LayoutId, Loc, Mark, MaskItem, OpRet, OperationInfo, ParseError, Prim, Repr, VarId, VarInfo,
 };
 
 /// エフェクトの名前。表にない番号は `#N` で書く。誤りを含む IR も表示でき、`parse` が読み戻せて、verifier がその番号を
@@ -21,13 +21,22 @@ pub fn effect_text(effects: &[EffectInfo], effect: u32) -> String {
         .map_or_else(|| format!("#{effect}"), |info| info.name.clone())
 }
 
-/// エフェクトの多重集合 (`mask` と `evv_mask` の即値) を `, ` で区切って並べる。
-pub fn effects_text(effects: &[EffectInfo], ids: &[u32]) -> String {
-    let names: Vec<String> = ids
+/// `mask` と `evv_mask` の項目を `, ` で区切って並べる。`keep` が 0 なら `@n` を、`skip` が 1 なら `*m` を省く。
+pub fn mask_text(effects: &[EffectInfo], items: &[MaskItem]) -> String {
+    let texts: Vec<String> = items
         .iter()
-        .map(|&effect| effect_text(effects, effect))
+        .map(|item| {
+            let mut text = effect_text(effects, item.effect);
+            if item.keep != 0 {
+                text.push_str(&format!("@{}", item.keep));
+            }
+            if item.skip != 1 {
+                text.push_str(&format!("*{}", item.skip));
+            }
+            text
+        })
         .collect();
-    names.join(", ")
+    texts.join(", ")
 }
 
 /// エフェクトで修飾しない操作の名前。表にない操作は `#N` で書く。
@@ -52,7 +61,7 @@ pub fn prim_text(effects: &[EffectInfo], prim: &Prim) -> String {
     let name = prim.name();
     match prim.immediates() {
         Immediates::None => name.to_string(),
-        Immediates::Effects(list) => format!("{name}[{}]", effects_text(effects, list)),
+        Immediates::Mask(items) => format!("{name}[{}]", mask_text(effects, items)),
         Immediates::Effect(effect) => format!("{name}[{}]", effect_text(effects, effect)),
         Immediates::Operation { effect, op } => {
             format!("{name}[{}]", operation_text(effects, effect, op))
@@ -758,6 +767,42 @@ impl<'t> Reader<'t> {
         }
     }
 
+    /// `E`、`E@n`、`E*m`、`E@n*m` の形の `mask` の項目。表示が最短の形を書くので、`@0` と `*1` は、読み直した表示が
+    /// 元と変わらないよう誤りにする。`*0` は何も飛ばさない項目なので、これも誤りにする (docs/spec/core-ir.md)。
+    pub fn mask_item(&self, word: &str, line: usize) -> Result<MaskItem, ParseError> {
+        let count = |digits: &str| {
+            number(digits).ok_or_else(|| {
+                error(
+                    line,
+                    format!("`{word}` is not written as an integer prints (no leading 0)"),
+                )
+            })
+        };
+        let (rest, skip) = match word.rsplit_once('*') {
+            Some((rest, digits)) => (rest, Some(count(digits)?)),
+            None => (word, None),
+        };
+        let (name, keep) = match rest.rsplit_once('@') {
+            Some((name, digits)) => (name, Some(count(digits)?)),
+            None => (rest, None),
+        };
+        if skip == Some(0) {
+            return Err(error(line, format!("`{word}` skips no handler")));
+        }
+        if keep == Some(0) || skip == Some(1) {
+            let shortest = match keep {
+                Some(keep) if keep != 0 => format!("{name}@{keep}"),
+                _ => name.to_string(),
+            };
+            return Err(error(line, format!("write `{shortest}` for `{word}`")));
+        }
+        Ok(MaskItem {
+            effect: self.effect_ref(name, line)?,
+            keep: keep.unwrap_or(0),
+            skip: skip.unwrap_or(1),
+        })
+    }
+
     /// `E.op`。表にないエフェクト `#N` の操作は、名前で引けないので `#N` で書く。
     pub fn operation_ref(&mut self) -> Result<(u32, u32), ParseError> {
         let line = self.line();
@@ -803,19 +848,19 @@ impl<'t> Reader<'t> {
         let kind = Prim::by_name(&name)
             .ok_or_else(|| error(line, format!("unknown primitive `{name}`")))?;
         match kind.immediates() {
-            Immediates::Effects(_) => {
+            Immediates::Mask(_) => {
                 let immediates = immediates.ok_or_else(|| {
                     error(line, format!("`{name}` needs an immediate `[Effect, ..]`"))
                 })?;
-                // `mask` と同じく空の多重集合は読まない。並びの順と番号は verifier が確かめる
+                // `mask` と同じく空の並びは読まない。並びの順と番号は verifier が確かめる
                 if immediates.is_empty() {
                     return Err(error(line, format!("`{name}` masks no effect")));
                 }
-                let effects = immediates
+                let items = immediates
                     .iter()
-                    .map(|(line, word)| self.effect_ref(word, *line))
+                    .map(|(line, word)| self.mask_item(word, *line))
                     .collect::<Result<_, _>>()?;
-                Ok(Prim::EvvMask(effects))
+                Ok(Prim::EvvMask(items))
             }
             Immediates::Effect(_) => {
                 let (line, word) = one(immediates, "Effect", "effect")?;

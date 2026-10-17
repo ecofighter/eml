@@ -4,8 +4,8 @@
 
 use eml_extern::Extern;
 use eml_lir::{
-    Atom, BlockId, Case, Ctor, EffectInfo, FnIdx, Layout, LayoutId, Loc, Mark, Prim, Repr, VarId,
-    VarInfo,
+    Atom, BlockId, Case, Ctor, EffectInfo, FnIdx, Layout, LayoutId, Loc, Mark, MaskItem, Prim,
+    Repr, VarId, VarInfo,
 };
 
 mod builder;
@@ -223,8 +223,8 @@ impl Term {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Rhs {
-    /// `mask` は呼び出しの間に飛ばすエフェクトの多重集合で、番号の昇順に並ぶ (docs/spec/core-ir.md)。
-    Call { call: Call, mask: Vec<u32> },
+    /// `mask` は呼び出しの間に飛ばす項目で、エフェクトの番号の真に昇順に並ぶ (docs/spec/core-ir.md)。
+    Call { call: Call, mask: Vec<MaskItem> },
     /// 関数と先頭の引数の並びからクロージャを作る。ラムダの捕獲と部分適用は、どちらもこの形になる。
     MakeClosure(FnIdx, Vec<Atom>),
     /// extern の関数をその場で実行する。eml のコードを呼び返さず、継続のフレームも積まない。`at` を持つ呼び出しが

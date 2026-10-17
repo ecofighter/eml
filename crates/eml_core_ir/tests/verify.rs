@@ -2,7 +2,7 @@
 //! 構造の規則 R1 から R8 と、前の形の IR から引き継いだ検査を1つずつ確かめる。
 
 use eml_core_ir::{Program, Rhs, Stmt, parse, verify_evidence, verify_translated};
-use eml_lir::Prim;
+use eml_lir::{MaskItem, Prim};
 
 fn read(text: &str) -> Program {
     parse(text).unwrap_or_else(|error| panic!("{error}"))
@@ -422,7 +422,11 @@ fn a_mask_on_handle_or_perform_is_rejected() {
             else {
                 panic!("not a call");
             };
-            mask.push(0);
+            mask.push(MaskItem {
+                effect: 0,
+                keep: 0,
+                skip: 1,
+            });
             verify_translated(&program).unwrap_err().message
         })
         .collect();
@@ -443,7 +447,11 @@ fn a_mask_on_a_clause_is_rejected() {
     else {
         panic!("not a call");
     };
-    mask.push(0);
+    mask.push(MaskItem {
+        effect: 0,
+        keep: 0,
+        skip: 1,
+    });
     assert_eq!(
         verify_translated(&program).unwrap_err().message,
         "a mask on clause"
@@ -482,12 +490,51 @@ fn entry$main(c.0: tobj) -> tobj {
 }
 
 #[test]
-fn a_mask_may_name_one_effect_twice() {
+fn a_mask_names_each_effect_once() {
+    let text = "\
+effect Main.A { a(tobj) -> tobj }
+fn entry$main(c.0: tobj) -> tobj {
+  let t.1: tobj = mask [Main.A, Main.A@1] apply c.0(())
+  return t.1
+}
+";
+    assert_eq!(
+        check_translated(text),
+        Err("a mask is not in ascending order in `entry$main`".to_string())
+    );
+}
+
+#[test]
+fn a_mask_item_skips_some_handler() {
+    let text = "\
+effect Main.A { a(tobj) -> tobj }
+fn entry$main(c.0: tobj) -> tobj {
+  let t.1: tobj = mask [Main.A] apply c.0(())
+  return t.1
+}
+";
+    let mut program = read(text);
+    let Stmt::Let {
+        var: _,
+        rhs: Rhs::Call { mask, .. },
+    } = &mut program.functions[0].blocks[0].stmts[0]
+    else {
+        panic!("not a call");
+    };
+    mask[0].skip = 0;
+    assert_eq!(
+        verify_translated(&program).unwrap_err().message,
+        "a mask item of `Main.A` skips no handler"
+    );
+}
+
+#[test]
+fn a_mask_may_skip_one_effect_twice() {
     let text = "\
 effect Main.A { a(tobj) -> tobj }
 effect Main.B { b(tobj) -> tobj }
 fn entry$main(c.0: tobj) -> tobj {
-  let t.1: tobj = mask [Main.A, Main.A, Main.B] apply c.0(())
+  let t.1: tobj = mask [Main.A*2, Main.B] apply c.0(())
   let t.2: tobj = mask [Main.B] apply t.1(())
   return t.2
 }
@@ -537,7 +584,7 @@ yields fn f(s.0: tobj) -> tobj {
   let w.1: tobj = prim evv_get()
   let e.2: obj = prim ev_new[State](s.0, w.1)
   let u.3: unit = prim ev_set_clause[State.get](e.2, &g)
-  let m.4: tobj = prim evv_mask[State, State](w.1)
+  let m.4: tobj = prim evv_mask[State*2](w.1)
   let c.5: tobj = prim ev_clause[State.get](e.2)
   let r.6: tobj = clause State.get c.5(e.2, ())
   return r.6
@@ -658,7 +705,7 @@ fn an_evv_mask_names_known_effects_in_order() {
             "{STATE}{COUNTER}fn f(w.0: tobj) -> tobj {{\n  let m.1: tobj = prim evv_mask[{effects}](w.0)\n  return m.1\n}}\n"
         )
     };
-    assert_eq!(check_evidence(&mask("State, State, Counter")), Ok(()));
+    assert_eq!(check_evidence(&mask("State*2, Counter")), Ok(()));
     assert_eq!(
         check_evidence(&mask("Counter, State")),
         Err(

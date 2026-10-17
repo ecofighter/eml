@@ -11,7 +11,8 @@ use crate::tail::tail_position_call;
 use crate::{Call, CoreFn, Program, Rhs, Stmt, Term};
 use eml_extern::Purity;
 use eml_lir::{
-    Atom, BlockId, FnIdx, Mark, OpRet, OperationInfo, Prim, Repr, VarId, VarInfo, operation,
+    Atom, BlockId, FnIdx, Mark, MaskItem, OpRet, OperationInfo, Prim, Repr, VarId, VarInfo,
+    operation,
 };
 
 use super::split::Annotations;
@@ -603,7 +604,7 @@ impl Out<'_> {
         block: BlockId,
         result: VarId,
         target: Call,
-        mask: Vec<u32>,
+        mask: Vec<MaskItem>,
     ) {
         if mask.is_empty() {
             self.stmts.push(Stmt::Let {
