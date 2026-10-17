@@ -506,6 +506,7 @@ pub(crate) fn check_body<'c>(
         instances: Vec::new(),
         inclusions: Vec::new(),
         failed_calls: HashSet::new(),
+        continuations: HashSet::new(),
         fn_clause_bodies: HashMap::new(),
     };
     checker.check_function(own.ty);

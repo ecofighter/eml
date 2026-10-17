@@ -20,6 +20,8 @@ pub(super) struct Inclusion {
     /// 呼び出しの式と矢印の番号。`mask` の表と同じキーである。
     pub(super) key: (ExprId, usize),
     pub(super) name: String,
+    /// 節の継続 (`ctl` の節の `k` か、`fn` の節の隠れた `$k`) を直に呼ぶ呼び出しか。
+    pub(super) resumes: bool,
 }
 
 impl BodyCheck<'_, '_> {
@@ -104,14 +106,14 @@ impl BodyCheck<'_, '_> {
         }
     }
 
-    /// どの引数からもエフェクトが入らなかった呼び出し先の末尾を `<>` に閉じる。これが最小の解になる。ただし、どれかの
-    /// 包含で呼び出し先と今の row が共有し、閉じると呼び出し先のラベルが今の row の内側のラベルと対になる末尾は閉じない。
-    /// `handle k x with …` の `k` の操作が、`mask` なしで内側の handler に届いてしまう形を、今と同じく誤りにするため
-    /// である。
+    /// どの引数からもエフェクトが入らなかった呼び出し先の末尾を `<>` に閉じる。これが最小の解になる。ただし、継続を
+    /// 直に呼ぶ包含で、呼び出し先と今の row が共有し、閉じると呼び出し先のラベルが今の row の内側のラベルと対になる
+    /// 末尾は閉じない。`handle k x with …` の `k` の操作が、`mask` なしで内側の handler に届いてしまう形を、今と
+    /// 同じく誤りにするためである (docs/spec/types.md の「推論」)。
     fn close_unused_tails(&mut self, inclusions: &[Inclusion], keep_open: &[Ty]) {
         let shared: HashSet<RowVar> = inclusions
             .iter()
-            .filter(|inclusion| self.pairs_inside(inclusion))
+            .filter(|inclusion| inclusion.resumes && self.pairs_inside(inclusion))
             .filter_map(
                 |inclusion| match self.table.resolve_row(&inclusion.callee).tail {
                     Tail::Var(var) => Some(var),
@@ -120,10 +122,17 @@ impl BodyCheck<'_, '_> {
             )
             .collect();
         for inclusion in inclusions {
+            // 共有する末尾は、今の row の末尾にも現れる。それだけでは閉じない理由にならないので、今の row はラベルの中だけを
+            // 見る
+            let ambient = if self.shares_tail(inclusion) {
+                Row::closed(self.table.resolve_row(&inclusion.ambient).labels)
+            } else {
+                inclusion.ambient.clone()
+            };
             let Some(tail) = self.table.closable_tail(
                 &inclusion.callee,
                 keep_open,
-                std::slice::from_ref(&inclusion.ambient),
+                std::slice::from_ref(&ambient),
             ) else {
                 continue;
             };
@@ -148,6 +157,7 @@ impl BodyCheck<'_, '_> {
                 source,
                 key,
                 name,
+                ..
             } = inclusion;
             let range = self.body.exprs[key.0].range;
             let report = !self.failed_calls.contains(&key.0);
@@ -167,9 +177,9 @@ impl BodyCheck<'_, '_> {
     }
 
     /// 末尾を共有する包含で、今の row が呼び出し先より多く持つエフェクトのラベルを、呼び出し先も持つか。末尾を閉じると、
-    /// 呼び出し先のそのラベルは今の row の内側のラベルと対になる。呼び出し先がそのエフェクトのラベルを持たなければ、
-    /// 閉じても届く handler は変わらない。自分の handler の中で自分を呼ぶローカル関数と、節の中でそのまま呼ぶ `k`
-    /// がこの場合である。
+    /// 呼び出し先のそのラベルは今の row の内側のラベルと対になる。これが問題になるのは継続だけである。継続の row の
+    /// ラベルは外側の特定の handler を指すが、ふつうの関数の row はエフェクトの集まりで、最も内側の handler に届く
+    /// ことは今の閉じた row と同じ意味である。
     fn pairs_inside(&self, inclusion: &Inclusion) -> bool {
         if !self.shares_tail(inclusion) {
             return false;

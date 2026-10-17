@@ -756,3 +756,11 @@ fn a_partially_applied_local_function_is_passed_to_map() {
     let text = "import List\n\nf : List Int -> List Int\nf xs =\n  let add x y = x + y\n  List.map (add 1) xs";
     assert_eq!(check_short(text), Vec::<String>::new());
 }
+
+#[test]
+fn a_local_function_performing_and_handling_its_effect_around_its_self_call() {
+    // `go` の row はエフェクトの集まりなので、自分の handler の中の自分への呼び出しは、末尾を共有しても閉じて通る。呼ばない
+    // `go` でも同じである
+    let text = "effect Ask where\n  ask : Unit -> Int\n\ncalled : Int -> <Ask> Int\ncalled n =\n  let go k = if k == 0 then ask () else ask () + (handle go (k - 1) with | fn ask () -> 10)\n  go n\n\nuncalled : Int -> <Ask> Int\nuncalled n =\n  let go k = if k == 0 then ask () else ask () + (handle go (k - 1) with | fn ask () -> 10)\n  n";
+    assert_eq!(check_short(text), Vec::<String>::new());
+}
