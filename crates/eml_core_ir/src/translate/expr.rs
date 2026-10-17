@@ -418,9 +418,7 @@ impl FnLowering<'_> {
                     index += 1;
                 }
                 EvalStep::Arrow(_) => {
-                    if applied == 0 {
-                        self.implicit_drops(id);
-                    }
+                    self.implicit_drops(id);
                     let mut group = Vec::new();
                     while let Some(&EvalStep::Arrow(arg)) = steps.get(index) {
                         group.push(

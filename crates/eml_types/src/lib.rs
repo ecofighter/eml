@@ -228,7 +228,7 @@ pub struct BodyTypes {
     /// 呼び出しの矢印の row の分類。キーは `masks` と同じく、呼び出しの式と矢印の番号である。
     pub arrow_yields: HashMap<(ExprId, usize), RowYield>,
     /// 戻らない呼び出しの前で暗黙に手放す変数。キーは記録の対象の戻らない呼び出しの式、値はその経路のどこでも消費
-    /// しない局所変数で、番号の順に並ぶ。誤りのある本体では空である
+    /// しない局所変数で、番号の順に並ぶ。型や HIR の誤りがある本体では記録しない
     /// (docs/spec/linearity.md の「線形性の検査パス」)。
     pub implicit_drops: HashMap<ExprId, Vec<LocalId>>,
 }

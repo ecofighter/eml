@@ -50,7 +50,7 @@ enum ContinuationForm {
 /// 本体の中の局所変数ごとの参照の数。`continuation_forms` と同じく arena の式を全部見て数えるので、入れ子のラムダや
 /// handle の中の参照も、別の制御の道の参照も同じ数に入る。戻らない呼び出しの前の暗黙の `drop`
 /// (`BodyTypes::implicit_drops`) も1つの参照に数える。数えないと、別の枝の `match` だけが参照する `con` の変数を
-/// 決定木が開き、`drop` が残す `con` とフィールドを二重に持つためである (docs/spec/core-ir.md の「translate が決める印」)。
+/// 決定木が開き、`drop` が残す `con` とフィールドを二重に持つためである (docs/spec/core-ir.md の「translate が決める印」と「戻らない呼び出しの前の `drop`」)。
 fn references(
     body: &Body,
     implicit_drops: &HashMap<ExprId, Vec<LocalId>>,
