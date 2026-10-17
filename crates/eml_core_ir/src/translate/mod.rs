@@ -48,13 +48,21 @@ enum ContinuationForm {
 }
 
 /// 本体の中の局所変数ごとの参照の数。`continuation_forms` と同じく arena の式を全部見て数えるので、入れ子のラムダや
-/// handle の中の参照も、別の制御の道の参照も同じ数に入る。
-fn references(body: &Body) -> ArenaMap<LocalId, u32> {
+/// handle の中の参照も、別の制御の道の参照も同じ数に入る。戻らない呼び出しの前の暗黙の `drop`
+/// (`BodyTypes::implicit_drops`) も1つの参照に数える。数えないと、別の枝の `match` だけが参照する `con` の変数を
+/// 決定木が開き、`drop` が残す `con` とフィールドを二重に持つためである (docs/spec/core-ir.md の「translate が決める印」)。
+fn references(
+    body: &Body,
+    implicit_drops: &HashMap<ExprId, Vec<LocalId>>,
+) -> ArenaMap<LocalId, u32> {
     let mut counts = ArenaMap::default();
     for (_, expr) in body.exprs.iter() {
         if let ExprKind::Path(Res::Local(local)) = expr.kind {
             *counts.entry(local).or_insert(0) += 1;
         }
+    }
+    for &local in implicit_drops.values().flatten() {
+        *counts.entry(local).or_insert(0) += 1;
     }
     counts
 }
@@ -355,13 +363,13 @@ pub(crate) fn translate(
             .map(|(&pat, &ty)| (Some(pat), repr(store, ty, hir), mark(store, ty, hir)))
             .collect();
         let forms = continuation_forms(body);
-        let references = references(body);
         let numbers = numbering(hir, body, &function.targets);
         let lifted = lifted_functions(body, &mut builder);
         let types = function
             .types
             .as_deref()
             .unwrap_or_else(|| typed.bodies.get(id).expect("every body is type-checked"));
+        let references = references(body, &types.implicit_drops);
         let ctx = BodyCtx {
             hir,
             body,
