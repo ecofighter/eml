@@ -133,8 +133,14 @@ pub(crate) enum KindReason {
     /// ラムダが捕まえた値。
     CapturedByLambda,
     /// 再帰する組のローカル関数の型。`name` の関数の本体が、組の関数 `callee` (自分を含む) を参照する。由来の範囲は
-    /// その参照の位置である (docs/implementation/diagnostics.md の「線形性の診断」)。
-    RecursiveLocal { name: String, callee: String },
+    /// その参照の位置である。制約を受けた関数が組の関数を参照しないときは、由来は組の中の最初の参照になり、`name` は
+    /// その関数を指さない。そのため `member` に、制約を受けた関数の名前と束縛の位置を持つ
+    /// (docs/implementation/diagnostics.md の「線形性の診断」)。
+    RecursiveLocal {
+        name: String,
+        callee: String,
+        member: Option<(String, TextRange)>,
+    },
     /// トップレベルの関数、組み込み、操作のスキームから複写した制約。名前は参照した値の名前である。
     Passed(String),
     /// 操作の型が、その操作の節に求める制約。名前は操作の名前で、由来の範囲は節の頭 (操作の名前から最後の引数まで)
@@ -222,7 +228,17 @@ impl KindReason {
             KindReason::Discarded => (3, Vec::new()),
             KindReason::CapturedByClause(name) => (4, vec![text(name)]),
             KindReason::CapturedByLambda => (5, Vec::new()),
-            KindReason::RecursiveLocal { name, callee } => (5, vec![text(name), text(callee)]),
+            KindReason::RecursiveLocal {
+                name,
+                callee,
+                member,
+            } => {
+                let member = match member {
+                    None => vec![number(0)],
+                    Some((member, range)) => [vec![number(1), text(member)], span(*range)].concat(),
+                };
+                (5, [vec![text(name), text(callee)], member].concat())
+            }
             KindReason::Passed(name) => (6, vec![text(name)]),
             KindReason::Unified => (7, Vec::new()),
             KindReason::CarriedAcross { value, multi, call } => {
@@ -545,14 +561,22 @@ mod tests {
             KindReason::RecursiveLocal {
                 name: "go".to_string(),
                 callee: "go".to_string(),
+                member: None,
             },
             KindReason::RecursiveLocal {
                 name: "go".to_string(),
                 callee: "loop".to_string(),
+                member: None,
             },
             KindReason::RecursiveLocal {
                 name: "loop".to_string(),
                 callee: "go".to_string(),
+                member: None,
+            },
+            KindReason::RecursiveLocal {
+                name: "loop".to_string(),
+                callee: "go".to_string(),
+                member: Some(("close".to_string(), range(1, 2))),
             },
             KindReason::Unified,
             across(local("f", 1), None, CallKind::Call),

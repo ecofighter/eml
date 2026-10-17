@@ -6,8 +6,8 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 
 use eml_diagnostics::{FileId, TextRange, TextSize};
 use eml_hir::{
-    Body, ClauseSource, Closure, ConstructorId, ExprId, ExprKind, LocalFunction, LocalId, PatId,
-    PatKind, Program, Res, Segment, Stmt,
+    Body, ClauseSource, Closure, ConstructorId, ExprId, ExprKind, LocalFunction, LocalGroup,
+    LocalId, PatId, PatKind, Program, Res, Segment, Stmt,
 };
 
 use crate::FieldTarget;
@@ -178,11 +178,15 @@ impl<'a> Usage<'a, '_> {
                 for stmt in stmts {
                     let next = match stmt {
                         Stmt::Let { pat, init, .. } => {
-                            bound.push(*pat);
+                            bound.push((*pat, true));
                             self.expr(*init)
                         }
                         Stmt::Functions(functions) => {
-                            bound.extend(functions.iter().map(|function| function.pat));
+                            // 再帰する組の関数は `local_functions` で型を `Unr` にするので、組の外の使用を数えない。
+                            // 数えて誤りになるのは型が `Lin` のときだけで、そのときは E3001 がすでに出ている
+                            let counted =
+                                !self.group(functions).is_some_and(|group| group.recursive);
+                            bound.extend(functions.iter().map(|function| (function.pat, counted)));
                             self.local_functions(functions)
                         }
                         Stmt::Expr(expr) => self.expr(*expr),
@@ -196,13 +200,15 @@ impl<'a> Usage<'a, '_> {
                 // ブロックの `let` は外から見えないので、ここで数え終える。外の `if` で枝を合わせると、片方の枝で
                 // 束縛した変数が、もう片方の枝では「使わない」と数えられてしまうため
                 // 同じブロックの後の `let` が前の変数を隠すかを、前の変数を数えるときに調べられるようにする
-                for &pat in &bound {
+                for &(pat, _) in &bound {
                     for local in body.pat_bindings(pat) {
                         self.scopes.insert(local, id);
                     }
                 }
-                for pat in bound {
-                    self.check_pat(pat, &uses, id);
+                for (pat, counted) in bound {
+                    if counted {
+                        self.check_pat(pat, &uses, id);
+                    }
                     remove_bound(body, pat, &mut uses);
                 }
                 uses
@@ -310,13 +316,11 @@ impl<'a> Usage<'a, '_> {
     /// ローカル関数の組。組の中の参照は、捕まえた値ではない。再帰する組の関数は何度も呼ばれうるので、回数を数えずに
     /// 各関数の型を `Unr` にする。捕まえた値は矢印の線形性以下なので、`Lin` の値を捕まえると、この制約と矛盾する。
     /// 相互に呼ぶ組では、自分を参照しない関数も何度も呼ばれうる。そのような関数の制約の由来は、組の中で最初に見つけた
-    /// 参照にする (docs/spec/linearity.md の「基本の規則」)。返すのは組の外からの使用である。
+    /// 参照にし、報告がその関数を名指しできるよう、名前と束縛の位置を由来に入れる (docs/spec/linearity.md の
+    /// 「基本の規則」)。返すのは組の外からの使用である。
     fn local_functions(&mut self, functions: &[LocalFunction]) -> Uses {
         let body = self.body;
-        let group = functions
-            .iter()
-            .find_map(|function| body.defining.get(function.lambda))
-            .and_then(|&local| body.group_of(local));
+        let group = self.group(functions);
         let members = group.map_or(&[][..], |group| &group.members[..]);
         let mut uses = Uses::new();
         let mut references = Vec::new();
@@ -340,13 +344,21 @@ impl<'a> Usage<'a, '_> {
                 let Some(&ty) = self.typing.locals.get(own) else {
                     continue;
                 };
-                let (referrer, (callee, at)) = match reference {
-                    Some(reference) => (own, reference),
-                    None => first,
+                let (referrer, (callee, at), member) = match reference {
+                    Some(reference) => (own, reference, None),
+                    None => {
+                        let binding = &body.locals[own];
+                        (
+                            first.0,
+                            first.1,
+                            Some((binding.name.clone(), binding.range)),
+                        )
+                    }
                 };
                 let reason = KindReason::RecursiveLocal {
                     name: body.locals[referrer].name.clone(),
                     callee: body.locals[callee].name.clone(),
+                    member,
                 };
                 self.with_origin(at, reason, |table| {
                     table.kind_at_most(ty, Bound::Const(Linearity::Unr))
@@ -354,6 +366,15 @@ impl<'a> Usage<'a, '_> {
             }
         }
         uses
+    }
+
+    /// `functions` が属するローカル関数の組。
+    fn group(&self, functions: &[LocalFunction]) -> Option<&'a LocalGroup> {
+        let body = self.body;
+        functions
+            .iter()
+            .find_map(|function| body.defining.get(function.lambda))
+            .and_then(|&local| body.group_of(local))
     }
 
     /// ラムダの使用。`group` はラムダが属するローカル関数の組の関数で、本体の中のそれらへの参照は捕まえた値に

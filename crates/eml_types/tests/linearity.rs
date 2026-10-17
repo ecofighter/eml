@@ -1059,18 +1059,43 @@ fn a_non_recursive_and_group_member_can_capture_a_file() {
     assert_eq!(check_short(text), Vec::<String>::new());
 }
 
-/// `close_at` は組の関数を参照しないが、`go` から何度も呼ばれうる。由来は組の中で最初に見つけた参照である。
+/// `close_at` は組の関数を参照しないが、`go` から何度も呼ばれうる。由来は組の中で最初に見つけた参照で、`close_at`
+/// の束縛を secondary で示す。`close_at` を組の外で使わないことは報告しない。再帰する組の関数の使用回数が誤りになるのは
+/// 型が `Lin` のときだけで、そのときは E3001 がすでに出ているためである。
 #[test]
 fn a_member_without_a_reference_points_at_the_first_one_in_the_group() {
     let text = "main : Unit -> <IO> Unit\nmain () =\n  let f = Fs.open \"a\"\n  let close_at () = Fs.close f\n  and go n = if n == 0 then close_at () else go (n - 1)\n  go 3";
     insta::assert_snapshot!(check_full(text), @"
-    E3003 4:7 `close_at` must be used exactly once, but it is not used
-      4:7 `close_at` is bound here
-      6:7 `close_at` is not used before the end of this scope
-      note: linear values, such as files, the continuation of a `once` operation and closures that capture one, must be used exactly once
-      help: pass `close_at` to `drop`
     E3001 5:29 a recursive local function cannot capture a linear value
       5:29 `go` refers to `close_at` here, so it may be called any number of times
+      4:7 `close_at` is in this recursive group and captures a linear value
+      note: linear values, such as files, the continuation of a `once` operation and closures that capture one, must be used exactly once
+      note: pass linear values to a recursive local function as arguments
+    ");
+}
+
+/// 一方だけが他方を呼ぶ組も再帰する組である。呼ばれる側を組の外で使わなくても、E3003 は連鎖させない。
+#[test]
+fn a_member_called_only_by_its_partner_is_not_reported_unused() {
+    let text = "main : Unit -> <IO> Unit\nmain () =\n  let f = Fs.open \"a\"\n  let close_it () = Fs.close f\n  and run () = close_it ()\n  run ()";
+    insta::assert_snapshot!(check_full(text), @"
+    E3001 5:16 a recursive local function cannot capture a linear value
+      5:16 `run` refers to `close_it` here, so it may be called any number of times
+      4:7 `close_it` is in this recursive group and captures a linear value
+      note: linear values, such as files, the continuation of a `once` operation and closures that capture one, must be used exactly once
+      note: pass linear values to a recursive local function as arguments
+    ");
+}
+
+/// 組の中の参照が自分を呼ぶ `loop` だけでも、同じ組の `close_it` は `Unr` に限られる。報告は、値を捕まえた
+/// `close_it` を secondary で名指しする。
+#[test]
+fn a_member_beside_a_self_recursive_one_is_named() {
+    let text = "main : Unit -> <IO> Unit\nmain () =\n  let f = Fs.open \"a\"\n  let close_it () = Fs.close f\n  and loop n = if n == 0 then 0 else loop (n - 1)\n  println (show (loop 3))\n  close_it ()";
+    insta::assert_snapshot!(check_full(text), @"
+    E3001 5:38 a recursive local function cannot capture a linear value
+      5:38 `loop` refers to `loop` here, so it may be called any number of times
+      4:7 `close_it` is in this recursive group and captures a linear value
       note: linear values, such as files, the continuation of a `once` operation and closures that capture one, must be used exactly once
       note: pass linear values to a recursive local function as arguments
     ");
