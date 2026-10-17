@@ -183,6 +183,7 @@ pub read_line : File -> <IO> (File, Option String)
 
 - 種類3: `grep`、`logstat`、`csv2jsonl` の書き換え。出力のスナップショットはバイト単位で変わらない
 - 種類3: `Stdin.read_line` の行の終わりの除き方を `String.trim_line_end` に移す。出力は変わらない
+- 種類2: `std/Fs.em` が `Fs.read_line` のために `import String` (とそれが読む `List`) を持つので、本物の `Fs.em` (`eml_hir::STD[1]`) を使って偽の std の木を作る `eml_hir` (load / def_map / session) と `eml_types` (`modules`) のテスト17本は、その木に本物の `String.em` と `List.em` を足す。モジュールの一覧に `Std.String` と `Std.List` が加わり、モジュールの番号と行の位置がずれる (2026-10-17 の作業中に分かった。小さな固定の `Fs` に替える案は、本物の std とずれうるので採らなかった)
 - 言語機能を確かめる既存のテストのうち、自前の `Yield` (4本)、`State` (6本)、`Fail` (8本) を宣言するものは書き換えない。std のモジュールは import や修飾子に現れたときだけ読み込むので、名前はぶつからない
 
 ## 段の終わりの文書
