@@ -2476,6 +2476,48 @@ pub(super) proof fn lemma_path_walkable<M: Mode>(h: Heap<M>, w: Word, f: nat, s:
     }
 }
 
+/// 先頭の `j + 1` 個の項目の `skip_total` は、先頭の `j` 個のものに項目 `j` の分を足した数である。
+pub(super) proof fn lemma_skip_step(items: Seq<MaskItem>, j: int)
+    requires
+        0 <= j < items.len(),
+    ensures
+        skip_total(items.subrange(0, j + 1)) == skip_total(items.subrange(0, j)) + if repeated(
+            items,
+            j,
+        ) {
+            0int
+        } else {
+            items[j].skip as int
+        },
+{
+    let p = items.subrange(0, j + 1);
+    assert(p.drop_last() =~= items.subrange(0, j));
+    if repeated(items, j) {
+        let k = choose|k: int| 0 <= k < j && #[trigger] items[k].effect == items[j].effect;
+        assert(p[k].effect == p[j].effect);
+    }
+    if repeated(p, j) {
+        let k = choose|k: int| 0 <= k < j && #[trigger] p[k].effect == p[j].effect;
+        assert(items[k].effect == items[j].effect);
+    }
+}
+
+/// 先頭の `j` 個の項目の `skip_total` は、全体の `skip_total` を超えない。
+pub(super) proof fn lemma_skip_prefix(items: Seq<MaskItem>, j: int)
+    requires
+        0 <= j <= items.len(),
+    ensures
+        skip_total(items.subrange(0, j)) <= skip_total(items),
+    decreases items.len() - j,
+{
+    if j < items.len() {
+        lemma_skip_step(items, j);
+        lemma_skip_prefix(items, j + 1);
+    } else {
+        assert(items.subrange(0, j) =~= items);
+    }
+}
+
 /// 組の列の tag が節点の tag と同じなら、数える数も同じである。
 pub(super) proof fn lemma_seen_eq<M: Mode>(s: Seq<(u16, Word)>, h: Heap<M>, w: Word, i: nat, t: u16)
     requires
@@ -2493,7 +2535,7 @@ pub(super) proof fn lemma_seen_eq<M: Mode>(s: Seq<(u16, Word)>, h: Heap<M>, w: W
 
 /// 組の列とヒープの上のたどりで、mask の残す組は同じである。
 pub(super) proof fn lemma_kept_eq<M: Mode>(
-    effects: Seq<u16>,
+    items: Seq<MaskItem>,
     s: Seq<(u16, Word)>,
     h: Heap<M>,
     w: Word,
@@ -2503,7 +2545,7 @@ pub(super) proof fn lemma_kept_eq<M: Mode>(
         i < s.len(),
         forall|j: int| 0 <= j < s.len() ==> #[trigger] s[j].0 == h.tag_of(nth(h, w, j as nat)),
     ensures
-        kept_at(effects, s, i as int) == wkept(effects, h, w, i),
+        kept_at(items, s, i as int) == wkept(items, h, w, i),
 {
     assert(s[i as int].0 == h.tag_of(nth(h, w, i)));
     lemma_seen_eq(s, h, w, i, s[i as int].0);
@@ -2511,7 +2553,7 @@ pub(super) proof fn lemma_kept_eq<M: Mode>(
 
 /// 組 `i` から後ろで残す組の数と除く組の数を足すと、後ろの組の数になる。
 pub(super) proof fn lemma_mask_count<M: Mode>(
-    effects: Seq<u16>,
+    items: Seq<MaskItem>,
     s: Seq<(u16, Word)>,
     h: Heap<M>,
     w: Word,
@@ -2521,8 +2563,8 @@ pub(super) proof fn lemma_mask_count<M: Mode>(
         i <= s.len(),
         forall|j: int| 0 <= j < s.len() ==> #[trigger] s[j].0 == h.tag_of(nth(h, w, j as nat)),
     ensures
-        mask_from(effects, s, i as int).len() + wdropped(effects, h, w, s.len()) - wdropped(
-            effects,
+        mask_from(items, s, i as int).len() + wdropped(items, h, w, s.len()) - wdropped(
+            items,
             h,
             w,
             i,
@@ -2530,14 +2572,9 @@ pub(super) proof fn lemma_mask_count<M: Mode>(
     decreases s.len() - i,
 {
     if i < s.len() {
-        lemma_mask_count(effects, s, h, w, i + 1);
-        lemma_kept_eq(effects, s, h, w, i);
-        assert(wdropped(effects, h, w, i + 1) == wdropped(effects, h, w, i) + if wkept(
-            effects,
-            h,
-            w,
-            i,
-        ) {
+        lemma_mask_count(items, s, h, w, i + 1);
+        lemma_kept_eq(items, s, h, w, i);
+        assert(wdropped(items, h, w, i + 1) == wdropped(items, h, w, i) + if wkept(items, h, w, i) {
             0int
         } else {
             1int
@@ -2546,21 +2583,21 @@ pub(super) proof fn lemma_mask_count<M: Mode>(
 }
 
 /// 組 `i` から後ろで残す組は、後ろの組の数を超えない。同じ数なら、どの組も残す。
-pub(super) proof fn lemma_mask_full(effects: Seq<u16>, s: Seq<(u16, Word)>, i: int)
+pub(super) proof fn lemma_mask_full(items: Seq<MaskItem>, s: Seq<(u16, Word)>, i: int)
     requires
         0 <= i <= s.len(),
     ensures
-        mask_from(effects, s, i).len() <= s.len() - i,
-        mask_from(effects, s, i).len() == s.len() - i ==> mask_from(effects, s, i) =~= s.subrange(
+        mask_from(items, s, i).len() <= s.len() - i,
+        mask_from(items, s, i).len() == s.len() - i ==> mask_from(items, s, i) =~= s.subrange(
             i,
             s.len() as int,
         ),
     decreases s.len() - i,
 {
     if i < s.len() {
-        lemma_mask_full(effects, s, i + 1);
-        if mask_from(effects, s, i).len() == s.len() - i {
-            assert(kept_at(effects, s, i));
+        lemma_mask_full(items, s, i + 1);
+        if mask_from(items, s, i).len() == s.len() - i {
+            assert(kept_at(items, s, i));
             assert(s.subrange(i, s.len() as int) =~= seq![s[i]] + s.subrange(
                 i + 1,
                 s.len() as int,
@@ -2572,7 +2609,7 @@ pub(super) proof fn lemma_mask_full(effects: Seq<u16>, s: Seq<(u16, Word)>, i: i
 /// 除く組がちょうど尽きる最初の節点。除く数は1歩に1つまでしか増えないので、全体で `m` 除くなら、どこかで初めて
 /// `m` になる。
 pub(super) proof fn lemma_cut<M: Mode>(
-    effects: Seq<u16>,
+    items: Seq<MaskItem>,
     h: Heap<M>,
     w: Word,
     n: nat,
@@ -2580,20 +2617,20 @@ pub(super) proof fn lemma_cut<M: Mode>(
 ) -> (k: nat)
     requires
         i <= n,
-        wdropped(effects, h, w, n) == effects.len(),
-        wdropped(effects, h, w, i) <= effects.len(),
-        forall|j: nat| j < i ==> #[trigger] wdropped(effects, h, w, j) < effects.len(),
+        wdropped(items, h, w, n) == skip_total(items),
+        wdropped(items, h, w, i) <= skip_total(items),
+        forall|j: nat| j < i ==> #[trigger] wdropped(items, h, w, j) < skip_total(items),
     ensures
         i <= k <= n,
-        wdropped(effects, h, w, k) == effects.len(),
-        forall|j: nat| j < k ==> #[trigger] wdropped(effects, h, w, j) < effects.len(),
+        wdropped(items, h, w, k) == skip_total(items),
+        forall|j: nat| j < k ==> #[trigger] wdropped(items, h, w, j) < skip_total(items),
     decreases n - i,
 {
-    if wdropped(effects, h, w, i) == effects.len() {
+    if wdropped(items, h, w, i) == skip_total(items) {
         i
     } else {
-        assert(wdropped(effects, h, w, i + 1) <= wdropped(effects, h, w, i) + 1);
-        lemma_cut(effects, h, w, n, i + 1)
+        assert(wdropped(items, h, w, i + 1) <= wdropped(items, h, w, i) + 1);
+        lemma_cut(items, h, w, n, i + 1)
     }
 }
 
@@ -2739,7 +2776,7 @@ pub(super) proof fn lemma_copies_push<M: Mode>(
 
 /// mask の列の1歩。組 `i` を残すなら `out` に足し、除くなら除いた数を1つ増やす。
 pub(super) proof fn lemma_copy_seq_step(
-    effects: Seq<u16>,
+    items: Seq<MaskItem>,
     s: Seq<(u16, Word)>,
     out: Seq<(u16, Word)>,
     js: Seq<int>,
@@ -2747,16 +2784,16 @@ pub(super) proof fn lemma_copy_seq_step(
     removed: int,
 )
     requires
-        copy_seq(effects, s, out, js, i, removed),
+        copy_seq(items, s, out, js, i, removed),
         0 <= i < s.len(),
     ensures
-        kept_at(effects, s, i) ==> copy_seq(effects, s, out.push(s[i]), js.push(i), i + 1, removed),
-        !kept_at(effects, s, i) ==> copy_seq(effects, s, out, js, i + 1, removed + 1),
+        kept_at(items, s, i) ==> copy_seq(items, s, out.push(s[i]), js.push(i), i + 1, removed),
+        !kept_at(items, s, i) ==> copy_seq(items, s, out, js, i + 1, removed + 1),
 {
-    if kept_at(effects, s, i) {
-        assert(mask_from(effects, s, i) == seq![s[i]] + mask_from(effects, s, i + 1));
-        assert(out + (seq![s[i]] + mask_from(effects, s, i + 1)) =~= out.push(s[i]) + mask_from(
-            effects,
+    if kept_at(items, s, i) {
+        assert(mask_from(items, s, i) == seq![s[i]] + mask_from(items, s, i + 1));
+        assert(out + (seq![s[i]] + mask_from(items, s, i + 1)) =~= out.push(s[i]) + mask_from(
+            items,
             s,
             i + 1,
         ));
@@ -2769,7 +2806,7 @@ pub(super) proof fn lemma_copy_seq_step(
             }
         }
     } else {
-        assert(mask_from(effects, s, i) == mask_from(effects, s, i + 1));
+        assert(mask_from(items, s, i) == mask_from(items, s, i + 1));
     }
 }
 
@@ -2907,7 +2944,7 @@ pub(super) proof fn lemma_copy_set<M: Mode>(
 /// mask の写しで `dup` する evidence。`hs` で読んだ残す節点の evidence で、モデルが合っていれば `dup` の前提を満たし、
 /// 検査モードでは前のたどりが `dup` を確かめている。
 pub(super) proof fn lemma_mask_ev<M: Mode>(
-    effects: Seq<u16>,
+    items: Seq<MaskItem>,
     hs: Heap<M>,
     h0: Heap<M>,
     w: Word,
@@ -2922,8 +2959,8 @@ pub(super) proof fn lemma_mask_ev<M: Mode>(
         kept_for(h0, hs, Set::empty()),
         i < bound,
         ev == hs.scanned_word(nth(hs, w, i), 0),
-        wkept(effects, hs, w, i),
-        M::CHECKED ==> mask_dups(effects, hs, w, bound),
+        wkept(items, hs, w, i),
+        M::CHECKED ==> mask_dups(items, hs, w, bound),
         c ==> {
             &&& mask_path(hs, w, f, s)
             &&& bound <= s.len()
@@ -3114,7 +3151,7 @@ impl<M: Mode> Ctx<M> {
     pub(super) proof fn lemma_evv_mask_ok(
         &self,
         s0: Ctx<M>,
-        effects: Seq<u16>,
+        items: Seq<MaskItem>,
         w: Word,
         f: nat,
         s: Seq<(u16, Word)>,
@@ -3129,10 +3166,10 @@ impl<M: Mode> Ctx<M> {
             s0.held_ok(),
             s0.evv_wf(w),
             s == s0.evv_seq(w),
-            mask_spec(effects, s).len() + effects.len() == s.len(),
+            mask_spec(items, s).len() + skip_total(items) == s.len(),
             mask_path(s0.heap, w, f, s),
             bound <= s.len(),
-            copy_seq(effects, s, out, js, bound as int, effects.len() as int),
+            copy_seq(items, s, out, js, bound as int, skip_total(items) as int),
             rest == nth(s0.heap, w, bound),
             self.evv == s0.evv,
             self.yielding == s0.yielding,
@@ -3155,7 +3192,7 @@ impl<M: Mode> Ctx<M> {
             self.held_ok(),
             self.holds(r),
             self.evv_wf(r),
-            self.evv_seq(r) == mask_spec(effects, s0.evv_seq(w)),
+            self.evv_seq(r) == mask_spec(items, s0.evv_seq(w)),
             self.evv_wf(w),
             self.evv_seq(w) == s0.evv_seq(w),
             self.evolved_by(s0, |b: usize| points(r, b), Set::empty()),
@@ -3177,10 +3214,11 @@ impl<M: Mode> Ctx<M> {
         }
         lemma_readable_kept(h, hs, rest);
         lemma_path_kept(h, hs, d, none, rest, g);
-        // mask した列は、残した組と共有する後ろである
-        lemma_mask_full(effects, s, bound as int);
-        assert(mask_from(effects, s, bound as int) =~= tail);
-        assert(mask_spec(effects, s) == out + tail);
+        // mask した列は、残した組と共有する後ろである。除く数は負でないので、元の列より長くない
+        lemma_mask_full(items, s, bound as int);
+        lemma_skip_prefix(items, 0);
+        assert(mask_from(items, s, bound as int) =~= tail);
+        assert(mask_spec(items, s) == out + tail);
         // Ctx の語
         assert forall|b: usize| #[trigger] self.need(seq![], b) > 0 implies s0.need(seq![], b) + d(
             b,

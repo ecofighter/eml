@@ -222,7 +222,7 @@ pub enum Op {
         l: Slot,
         e: Slot,
     },
-    /// `operands[at..]` は [effect_lists の先頭, 長さ, リストのスロット]。
+    /// `operands[at..]` は [mask_lists の先頭, 長さ, リストのスロット]。
     EvvMask {
         dst: Slot,
         at: u32,

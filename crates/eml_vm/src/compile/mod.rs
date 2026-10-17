@@ -9,7 +9,7 @@ use std::mem;
 use std::sync::Arc;
 
 use eml_lir::{FnIdx, Loc, Program};
-use eml_rt::{Control, Mode};
+use eml_rt::{Control, MaskItem, Mode};
 
 use crate::code::{CodeBase, CompileError, FnEntry, Index};
 use crate::disasm;
@@ -21,7 +21,7 @@ use constants::Constants;
 pub(crate) struct Out {
     pub(crate) code: Vec<Op>,
     pub(crate) operands: Vec<u32>,
-    pub(crate) effect_lists: Vec<u16>,
+    pub(crate) mask_lists: Vec<MaskItem>,
     pub(crate) locations: Vec<(Pc, Loc)>,
 }
 
@@ -48,15 +48,15 @@ impl Out {
         [
             self.code.len(),
             self.operands.len(),
-            self.effect_lists.len(),
+            self.mask_lists.len(),
             self.locations.len(),
         ]
     }
 
-    fn truncate(&mut self, [code, operands, effect_lists, locations]: [usize; 4]) {
+    fn truncate(&mut self, [code, operands, mask_lists, locations]: [usize; 4]) {
         self.code.truncate(code);
         self.operands.truncate(operands);
-        self.effect_lists.truncate(effect_lists);
+        self.mask_lists.truncate(mask_lists);
         self.locations.truncate(locations);
     }
 }
@@ -86,7 +86,7 @@ impl<M: Mode> CodeBase<M> {
             functions: Vec::new(),
             code: vec![Op::Finish, Op::ApplyRest],
             operands: Vec::new(),
-            effect_lists: Vec::new(),
+            mask_lists: Vec::new(),
             constants: Vec::new(),
             region: None,
             locations: Vec::new(),
@@ -106,7 +106,7 @@ impl<M: Mode> CodeBase<M> {
             functions,
             code,
             operands,
-            effect_lists,
+            mask_lists,
             constants,
             region,
             locations,
@@ -117,7 +117,7 @@ impl<M: Mode> CodeBase<M> {
         let mut out = Out {
             code: mem::take(code),
             operands: mem::take(operands),
-            effect_lists: mem::take(effect_lists),
+            mask_lists: mem::take(mask_lists),
             locations: mem::take(locations),
         };
         let mut pool = Constants::new(constants, index, region, control);
@@ -152,7 +152,7 @@ impl<M: Mode> CodeBase<M> {
         let frozen = pool.freeze();
         *code = out.code;
         *operands = out.operands;
-        *effect_lists = out.effect_lists;
+        *mask_lists = out.mask_lists;
         *locations = out.locations;
         result?;
         if let Some(chunk) = frozen? {
@@ -238,7 +238,7 @@ fn check_known<M: Mode>(
             disasm::View {
                 code: &out.code,
                 operands: &out.operands,
-                effect_lists: &out.effect_lists,
+                mask_lists: &out.mask_lists,
                 locations: &out.locations,
                 functions,
                 files,

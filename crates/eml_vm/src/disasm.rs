@@ -5,7 +5,7 @@ use std::fmt::Write as _;
 
 use eml_extern::Extern;
 use eml_lir::Loc;
-use eml_rt::Mode;
+use eml_rt::{MaskItem, Mode};
 
 use crate::code::{CodeBase, FnEntry};
 use crate::op::{KEEP, NONE, Op, Pc, RAW};
@@ -31,10 +31,22 @@ pub fn disassemble<M: Mode>(code: &CodeBase<M>) -> String {
 pub(crate) struct View<'a> {
     pub(crate) code: &'a [Op],
     pub(crate) operands: &'a [u32],
-    pub(crate) effect_lists: &'a [u16],
+    pub(crate) mask_lists: &'a [MaskItem],
     pub(crate) locations: &'a [(Pc, Loc)],
     pub(crate) functions: &'a [FnEntry],
     pub(crate) files: &'a [String],
+}
+
+/// mask の項目を、IR のテキストの形の数字の版で書く。`keep` が 0 なら `@n` を、`skip` が 1 なら `*m` を省く。
+fn mask_item(item: &MaskItem) -> String {
+    let mut text = item.effect.to_string();
+    if item.keep != 0 {
+        write!(text, "@{}", item.keep).unwrap();
+    }
+    if item.skip != 1 {
+        write!(text, "*{}", item.skip).unwrap();
+    }
+    text
 }
 
 fn slots(list: &[u32]) -> String {
@@ -63,7 +75,7 @@ impl<'a> View<'a> {
         View {
             code: &code.code,
             operands: &code.operands,
-            effect_lists: &code.effect_lists,
+            mask_lists: &code.mask_lists,
             locations: &code.locations,
             functions: &code.functions,
             files: &code.files,
@@ -228,11 +240,11 @@ impl<'a> View<'a> {
             Op::EvvPush { dst, l, e } => bin("evv_push", dst, l, e),
             Op::EvvMask { dst, at } => {
                 let o = ops(at);
-                let effects: Vec<String> = self.effect_lists[o[0] as usize..(o[0] + o[1]) as usize]
+                let items: Vec<String> = self.mask_lists[o[0] as usize..(o[0] + o[1]) as usize]
                     .iter()
-                    .map(u16::to_string)
+                    .map(mask_item)
                     .collect();
-                format!("evv_mask s{dst}, [{}] s{}", effects.join(", "), o[2])
+                format!("evv_mask s{dst}, [{}] s{}", items.join(", "), o[2])
             }
             Op::EvNew { dst, at } => {
                 let o = ops(at);

@@ -38,6 +38,15 @@ mod strings;
 
 verus! {
 
+/// `evv_mask` の項目。エフェクト `effect` の evidence のうち、先に同じエフェクトの evidence が `keep` 個以上
+/// `keep + skip` 個未満あるものを除く (docs/spec/object-model.md の「実行文脈 `Ctx`」)。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct MaskItem {
+    pub effect: u16,
+    pub keep: u32,
+    pub skip: u32,
+}
+
 /// 検査モードだけで数える仕事の回数。
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 #[non_exhaustive]
@@ -301,18 +310,44 @@ spec fn find(s: Seq<(u16, Word)>, tag: u16) -> Option<Word>
     }
 }
 
-/// `effects` のうち、tag が `t` になるエフェクトの数。
-spec fn occurs(effects: Seq<u16>, t: u16) -> int
-    decreases effects.len(),
+/// `items` のうち、tag が `t` になるエフェクトの最初の項目。後の項目は使わない。
+spec fn item_of(items: Seq<MaskItem>, t: u16) -> Option<MaskItem>
+    decreases items.len(),
 {
-    if effects.len() == 0 {
+    if items.len() == 0 {
+        None
+    } else if effect_tag(items[0].effect) == t {
+        Some(items[0])
+    } else {
+        item_of(items.drop_first(), t)
+    }
+}
+
+/// 項目 `j` の前に、同じエフェクトの項目がある。
+spec fn repeated(items: Seq<MaskItem>, j: int) -> bool {
+    exists|k: int| 0 <= k < j && #[trigger] items[k].effect == items[j].effect
+}
+
+/// mask が除く組の数。同じエフェクトの項目が前にない項目の `skip` の和である。
+pub closed spec fn skip_total(items: Seq<MaskItem>) -> int
+    decreases items.len(),
+{
+    if items.len() == 0 {
         0
     } else {
-        occurs(effects.drop_last(), t) + if effect_tag(effects.last()) == t {
-            1int
-        } else {
+        skip_total(items.drop_last()) + if repeated(items, items.len() - 1) {
             0int
+        } else {
+            items.last().skip as int
         }
+    }
+}
+
+/// tag が `t` で、前に同じ tag の組が `seen` 個ある組を、mask は残す。
+spec fn kept_by(items: Seq<MaskItem>, t: u16, seen: int) -> bool {
+    match item_of(items, t) {
+        Some(it) => !(it.keep <= seen && seen < it.keep + it.skip),
+        None => true,
     }
 }
 
@@ -331,28 +366,28 @@ spec fn seen(s: Seq<(u16, Word)>, i: int, t: u16) -> int
     }
 }
 
-/// mask は組 `i` を残す。同じ tag の組が、前に除く数だけもうある。
-spec fn kept_at(effects: Seq<u16>, s: Seq<(u16, Word)>, i: int) -> bool {
-    seen(s, i, s[i].0) >= occurs(effects, s[i].0)
+/// mask は組 `i` を残す。
+spec fn kept_at(items: Seq<MaskItem>, s: Seq<(u16, Word)>, i: int) -> bool {
+    kept_by(items, s[i].0, seen(s, i, s[i].0))
 }
 
 /// 組 `i` から後ろのうち、mask が残す組の列。
-spec fn mask_from(effects: Seq<u16>, s: Seq<(u16, Word)>, i: int) -> Seq<(u16, Word)>
+spec fn mask_from(items: Seq<MaskItem>, s: Seq<(u16, Word)>, i: int) -> Seq<(u16, Word)>
     decreases s.len() - i,
 {
     if i < 0 || i >= s.len() {
         Seq::empty()
-    } else if kept_at(effects, s, i) {
-        seq![s[i]] + mask_from(effects, s, i + 1)
+    } else if kept_at(items, s, i) {
+        seq![s[i]] + mask_from(items, s, i + 1)
     } else {
-        mask_from(effects, s, i + 1)
+        mask_from(items, s, i + 1)
     }
 }
 
-/// `effects` の多重集合の各エフェクトについて、先頭から tag の合う組をその数だけ除いた列。組が tag を持つので、
-/// ヒープを読まずに定まる。
-pub closed spec fn mask_spec(effects: Seq<u16>, seq: Seq<(u16, Word)>) -> Seq<(u16, Word)> {
-    mask_from(effects, seq, 0)
+/// 各項目のエフェクトについて、tag の合う組を先頭から数え、`keep` 個を残して続く `skip` 個を除いた列。どんな項目の
+/// 並びにも定まり、同じエフェクトの項目が2つあれば先の項目を使う。組が tag を持つので、ヒープを読まずに定まる。
+pub closed spec fn mask_spec(items: Seq<MaskItem>, seq: Seq<(u16, Word)>) -> Seq<(u16, Word)> {
+    mask_from(items, seq, 0)
 }
 
 /// `w` から節点を `j` 歩たどった語。
@@ -404,19 +439,19 @@ spec fn wseen<M: Mode>(h: Heap<M>, w: Word, i: nat, t: u16) -> int
 }
 
 /// mask は `w` からの `i` 個目の節点を残す (`kept_at` のヒープの上の形)。
-spec fn wkept<M: Mode>(effects: Seq<u16>, h: Heap<M>, w: Word, i: nat) -> bool {
+spec fn wkept<M: Mode>(items: Seq<MaskItem>, h: Heap<M>, w: Word, i: nat) -> bool {
     let t = h.tag_of(nth(h, w, i));
-    wseen(h, w, i, t) >= occurs(effects, t)
+    kept_by(items, t, wseen(h, w, i, t))
 }
 
 /// `w` から先頭の `i` 個の節点のうち、mask が除くものの数。
-spec fn wdropped<M: Mode>(effects: Seq<u16>, h: Heap<M>, w: Word, i: nat) -> int
+spec fn wdropped<M: Mode>(items: Seq<MaskItem>, h: Heap<M>, w: Word, i: nat) -> int
     decreases i,
 {
     if i == 0 {
         0
     } else {
-        wdropped(effects, h, w, (i - 1) as nat) + if wkept(effects, h, w, (i - 1) as nat) {
+        wdropped(items, h, w, (i - 1) as nat) + if wkept(items, h, w, (i - 1) as nat) {
             0int
         } else {
             1int
@@ -425,18 +460,16 @@ spec fn wdropped<M: Mode>(effects: Seq<u16>, h: Heap<M>, w: Word, i: nat) -> int
 }
 
 /// mask のたどりは `w` から `k` 個の節点を読み、`k` 個目でちょうど除く組が尽きる。
-spec fn mask_walk<M: Mode>(effects: Seq<u16>, h: Heap<M>, w: Word, k: nat) -> bool {
+spec fn mask_walk<M: Mode>(items: Seq<MaskItem>, h: Heap<M>, w: Word, k: nat) -> bool {
     &&& walkable(h, w, k)
-    &&& wdropped(effects, h, w, k) == effects.len()
-    &&& forall|i: nat| i < k ==> #[trigger] wdropped(effects, h, w, i) < effects.len()
+    &&& wdropped(items, h, w, k) == skip_total(items)
+    &&& forall|i: nat| i < k ==> #[trigger] wdropped(items, h, w, i) < skip_total(items)
 }
 
 /// 検査モードのたどりが確かめた、写しに要る `dup` の条件。残す節点の evidence と、共有する後ろの先頭である。
-spec fn mask_dups<M: Mode>(effects: Seq<u16>, h: Heap<M>, w: Word, k: nat) -> bool {
+spec fn mask_dups<M: Mode>(items: Seq<MaskItem>, h: Heap<M>, w: Word, k: nat) -> bool {
     &&& forall|j: nat|
-        j < k && wkept(effects, h, w, j) ==> h.dup_passes(
-            h.scanned_word(#[trigger] nth(h, w, j), 0),
-        )
+        j < k && wkept(items, h, w, j) ==> h.dup_passes(h.scanned_word(#[trigger] nth(h, w, j), 0))
     &&& h.dup_passes(nth(h, w, k))
 }
 
@@ -483,7 +516,7 @@ spec fn copy_heap<M: Mode>(
 
 /// mask の写しの途中の列。先頭の `i` 組のうち残した組が `out` で、その後ろで残す組を足すと `mask_spec` になる。
 spec fn copy_seq(
-    effects: Seq<u16>,
+    items: Seq<MaskItem>,
     s: Seq<(u16, Word)>,
     out: Seq<(u16, Word)>,
     js: Seq<int>,
@@ -491,7 +524,7 @@ spec fn copy_seq(
     removed: int,
 ) -> bool {
     &&& out.len() + removed == i
-    &&& mask_spec(effects, s) == out + mask_from(effects, s, i)
+    &&& mask_spec(items, s) == out + mask_from(items, s, i)
     &&& js.len() == out.len()
     &&& forall|k: int| 0 <= k < out.len() ==> 0 <= #[trigger] js[k] < i && out[k] == s[js[k]]
 }
@@ -505,35 +538,123 @@ spec fn mask_path<M: Mode>(hs: Heap<M>, w: Word, f: nat, s: Seq<(u16, Word)>) ->
     &&& forall|j: int| 0 <= j < s.len() ==> #[trigger] s[j].0 == hs.tag_of(nth(hs, w, j as nat))
 }
 
-/// `effects` のうち、tag が `t` になるエフェクトを数える。mask のエフェクトの数は小さいので、節点ごとに数え直す。
-fn count_effect(effects: &[u16], t: u16) -> (r: usize)
+/// `items` のうち、tag が `t` になるエフェクトの最初の項目を探す。mask の項目の数は小さいので、節点ごとに探し直す。
+fn item_for(items: &[MaskItem], t: u16) -> (r: Option<MaskItem>)
     ensures
-        r as int == occurs(effects@, t),
+        r == item_of(items@, t),
 {
-    let mut n: usize = 0;
     let mut j: usize = 0;
-    while j < effects.len()
+    proof {
+        assert(items@.subrange(0, items@.len() as int) =~= items@);
+    }
+    while j < items.len()
         invariant
-            j <= effects.len(),
-            n <= j,
-            n as int == occurs(effects@.subrange(0, j as int), t),
-        decreases effects.len() - j,
+            j <= items.len(),
+            item_of(items@, t) == item_of(items@.subrange(j as int, items@.len() as int), t),
+        decreases items.len() - j,
     {
-        let e = effects[j];
-        let et = tag_of_effect(e);
         proof {
-            assert(effects@.subrange(0, j + 1).drop_last() =~= effects@.subrange(0, j as int));
-            assert(effects@.subrange(0, j + 1).last() == e);
+            let rest = items@.subrange(j as int, items@.len() as int);
+            assert(rest[0] == items@[j as int]);
+            assert(rest.drop_first() =~= items@.subrange(j + 1, items@.len() as int));
         }
-        if et == t {
-            n += 1;
+        if tag_of_effect(items[j].effect) == t {
+            return Some(items[j]);
+        }
+        j += 1;
+    }
+    None
+}
+
+/// 項目 `j` の前に、同じエフェクトの項目があるかを返す。
+fn repeated_at(items: &[MaskItem], j: usize) -> (r: bool)
+    requires
+        j < items@.len(),
+    ensures
+        r == repeated(items@, j as int),
+{
+    let mut k: usize = 0;
+    while k < j
+        invariant
+            k <= j < items@.len(),
+            forall|q: int| 0 <= q < k ==> #[trigger] items@[q].effect != items@[j as int].effect,
+        decreases j - k,
+    {
+        if items[k].effect == items[j].effect {
+            return true;
+        }
+        k += 1;
+    }
+    false
+}
+
+/// `skip_total` を計算する。和が `usize` に収まらなければ `None` を返す。そのときは、どの `evv` のリストにも除く組が
+/// 足りない。
+fn total_skip(items: &[MaskItem]) -> (r: Option<usize>)
+    ensures
+        r matches Some(n) ==> n == skip_total(items@),
+        r is None ==> skip_total(items@) > usize::MAX,
+{
+    let mut total: usize = 0;
+    let mut j: usize = 0;
+    proof {
+        assert(items@.subrange(0, 0) =~= Seq::<MaskItem>::empty());
+    }
+    while j < items.len()
+        invariant
+            j <= items.len(),
+            total as int == skip_total(items@.subrange(0, j as int)),
+        decreases items.len() - j,
+    {
+        proof {
+            lemma_skip_step(items@, j as int);
+        }
+        if !repeated_at(items, j) {
+            let skip = items[j].skip as usize;
+            if skip > usize::MAX - total {
+                proof {
+                    lemma_skip_prefix(items@, j + 1);
+                }
+                return None;
+            }
+            total += skip;
         }
         j += 1;
     }
     proof {
-        assert(effects@.subrange(0, effects@.len() as int) =~= effects@);
+        assert(items@.subrange(0, items@.len() as int) =~= items@);
     }
-    n
+    Some(total)
+}
+
+/// mask は `w` からの `i` 個目の節点 (tag は `t`) を残すかを返す。節点と tag は `hs` のものと同じである。
+/// `keep + skip` は `u32` の2つの和なので、桁があふれないよう `u64` で比べる。
+fn mask_keeps<M: Mode>(
+    h: &Heap<M>,
+    Ghost(hs): Ghost<Heap<M>>,
+    w: Word,
+    i: usize,
+    t: u16,
+    items: &[MaskItem],
+) -> (r: Result<bool, HeapError>)
+    requires
+        h.wf(),
+        h.safe_settleable(),
+        !M::CHECKED ==> h.settleable(),
+        walkable(*h, w, i as nat),
+        agree(*h, hs, w, i as nat),
+    ensures
+        r matches Ok(b) && b == kept_by(items@, t, wseen(hs, w, i as nat, t)),
+{
+    match item_for(items, t) {
+        None => Ok(true),
+        Some(it) => {
+            if !seen_at_least(h, Ghost(hs), w, i, t, it.keep as u64)? {
+                return Ok(true);
+            }
+            seen_at_least(h, Ghost(hs), w, i, t, it.keep as u64 + it.skip as u64)
+        },
+    }
 }
 
 /// `w` から先頭の `i` 個の節点のうち、tag が `t` のものが `occ` 個以上あるかを返す。節点と tag は `hs` のものと同じ
@@ -545,7 +666,7 @@ fn seen_at_least<M: Mode>(
     w: Word,
     i: usize,
     t: u16,
-    occ: usize,
+    occ: u64,
 ) -> (r: Result<bool, HeapError>)
     requires
         h.wf(),
@@ -572,7 +693,7 @@ fn seen_at_least<M: Mode>(
             count as int == wseen(hs, w, j as nat, t),
         decreases i - j,
     {
-        if count >= occ {
+        if count as u64 >= occ {
             proof {
                 lemma_wseen_mono(hs, w, j as nat, i as nat, t);
             }
@@ -593,7 +714,7 @@ fn seen_at_least<M: Mode>(
         n = (unsafe { h.field(n, 1) })?;
         j += 1;
     }
-    Ok(count >= occ)
+    Ok(count as u64 >= occ)
 }
 
 /// 実行文脈。VM はこれだけを持ち回す。`evv` と yield の状態の語は、`Ctx` が持つ数えた参照である。`Ctx` を落としても
@@ -2405,21 +2526,23 @@ impl<M: Mode> Ctx<M> {
         Ok(Some(e))
     }
 
-    /// `effects` の多重集合の各エフェクトについて、`w` の先頭から合う evidence をその数だけ除いたリストを返す。除いた
-    /// 最後の節点までに残す節点を先頭から順に写し、その後ろは元のリストを共有する。evidence の物体は写さない
-    /// (docs/spec/lir.md の「evidence を探す」)。`w` は借りる。
+    /// 各項目のエフェクトについて、`w` の先頭から合う evidence を数え、`keep` 個を残して続く `skip` 個を除いたリストを
+    /// 返す (`mask_spec`)。除いた最後の節点までに残す節点を先頭から順に写し、その後ろは元のリストを共有する。
+    /// evidence の物体は写さない (docs/spec/lir.md の「evidence を探す」)。`w` は借りる。項目の順や重なりは verifier が
+    /// 確かめるが、VM がセッションでエフェクトの番号を引き直すので、ここには前提として求めない。
     ///
     /// # Safety
     /// `heap_mut` の前提を守っている。`w` は即値か、このヒープか付けた塊の生きている物体を指す。速いモードでは、`w` は
-    /// `evv` のリストで、`effects` が挙げる数だけ合う evidence を持つ。検査モードは写す前にリストをたどって確かめ、
-    /// 合う evidence が足りなければ `NoHandler` を、形の違う節点や上限を超える長さには `BadEvidence` を返す。
+    /// `evv` のリストで、どの項目についても合う evidence を `keep + skip` 個以上持つ。検査モードは写す前にリストを
+    /// たどって確かめ、合う evidence が足りなければ `NoHandler` を、形の違う節点や上限を超える長さには `BadEvidence` を
+    /// 返す。
     #[verifier::spinoff_prover]
-    pub unsafe fn evv_mask(&mut self, effects: &[u16], w: Word) -> (r: Result<Word, HeapError>)
+    pub unsafe fn evv_mask(&mut self, items: &[MaskItem], w: Word) -> (r: Result<Word, HeapError>)
         requires
             old(self).wf(),
             old(self).heap_spec().word_in(w),
-            !M::CHECKED ==> old(self).evv_wf(w) && mask_spec(effects@, old(self).evv_seq(w)).len()
-                + effects@.len() == old(self).evv_seq(w).len(),
+            !M::CHECKED ==> old(self).evv_wf(w) && mask_spec(items@, old(self).evv_seq(w)).len()
+                + skip_total(items@) == old(self).evv_seq(w).len(),
         ensures
             final(self).wf(),
             r is Err ==> *final(self) == *old(self),
@@ -2427,13 +2550,13 @@ impl<M: Mode> Ctx<M> {
             final(self).yield_spec() == old(self).yield_spec(),
             !M::CHECKED ==> r is Ok,
             old(self).held_ok() && old(self).evv_wf(w) && mask_spec(
-                effects@,
+                items@,
                 old(self).evv_seq(w),
-            ).len() + effects@.len() == old(self).evv_seq(w).len() ==> (r matches Ok(n) && {
+            ).len() + skip_total(items@) == old(self).evv_seq(w).len() ==> (r matches Ok(n) && {
                 &&& final(self).held_ok()
                 &&& final(self).holds(n)
                 &&& final(self).evv_wf(n)
-                &&& final(self).evv_seq(n) == mask_spec(effects@, old(self).evv_seq(w))
+                &&& final(self).evv_seq(n) == mask_spec(items@, old(self).evv_seq(w))
                 &&& final(self).evv_wf(w)
                 &&& final(self).evv_seq(w) == old(self).evv_seq(w)
                 &&& final(self).evolved_by(*old(self), |b: usize| points(n, b), Set::empty())
@@ -2441,10 +2564,10 @@ impl<M: Mode> Ctx<M> {
     {
         let ghost s0 = *self;
         let ghost hs = self.heap;
-        let ghost m = effects@.len();
+        let ghost m = skip_total(items@);
         let ghost f = choose|f: nat| #[trigger] path(hs, w, f) is Some;
         let ghost s = seq_of(hs, w);
-        let ghost c = s0.held_ok() && s0.evv_wf(w) && mask_spec(effects@, s0.evv_seq(w)).len() + m
+        let ghost c = s0.held_ok() && s0.evv_wf(w) && mask_spec(items@, s0.evv_seq(w)).len() + m
             == s0.evv_seq(w).len();
         let ghost z = |b: usize| 0int;
         let ghost none = Set::<usize>::empty();
@@ -2452,16 +2575,25 @@ impl<M: Mode> Ctx<M> {
         proof {
             if c {
                 lemma_seq_of(hs, w, f);
+            }
+        }
+        // 和が `usize` に収まらなければ、`max_evv` より長いリストが要るので、合う evidence は足りない
+        let total = match total_skip(items) {
+            Some(n) => n,
+            None => return Err(HeapError::NoHandler),
+        };
+        proof {
+            if c {
                 lemma_path_walkable(hs, w, f, s);
-                lemma_mask_count(effects@, s, hs, w, 0);
+                lemma_mask_count(items@, s, hs, w, 0);
                 if !M::CHECKED {
-                    bound = lemma_cut(effects@, hs, w, s.len(), 0);
+                    bound = lemma_cut(items@, hs, w, s.len(), 0);
                 }
             }
         }
         // 写す前にすべてを確かめる。写し始めた後に `Err` を返すと、ヒープを変えたまま返すことになるためである
         if M::CHECKED {
-            let k = self.checked_mask(effects, w)?;
+            let k = self.checked_mask(items, total, w)?;
             self.stats.evidence_steps = self.stats.evidence_steps.wrapping_add(k as u64);
             proof {
                 bound = k as nat;
@@ -2477,11 +2609,7 @@ impl<M: Mode> Ctx<M> {
             lemma_kept_refl(hs);
             lemma_unit_bits();
             lemma_moved_refl(hs);
-            assert(mask_spec(effects@, s) == Seq::<(u16, Word)>::empty() + mask_from(
-                effects@,
-                s,
-                0,
-            ));
+            assert(mask_spec(items@, s) == Seq::<(u16, Word)>::empty() + mask_from(items@, s, 0));
         }
         let mut node = w;
         let mut i: usize = 0;
@@ -2495,10 +2623,10 @@ impl<M: Mode> Ctx<M> {
             if c {
                 assert(copies_ok(hs, cs, out));
                 assert(copy_heap(hs, hs, cs, out, z));
-                assert(copy_seq(effects@, s, out, js, 0, 0));
+                assert(copy_seq(items@, s, out, js, 0, 0));
             }
         }
-        while removed < effects.len()
+        while removed < total
             invariant
                 self.heap.wf(),
                 self.heap.safe_settleable(),
@@ -2507,16 +2635,17 @@ impl<M: Mode> Ctx<M> {
                 self.yielding == s0.yielding,
                 self.max_evv == s0.max_evv,
                 s0.heap == hs,
-                m == effects@.len(),
+                m == skip_total(items@),
+                total as int == m,
                 none == Set::<usize>::empty(),
                 z == (|b: usize| 0int),
-                mask_walk(effects@, hs, w, bound),
-                M::CHECKED ==> mask_dups(effects@, hs, w, bound),
+                mask_walk(items@, hs, w, bound),
+                M::CHECKED ==> mask_dups(items@, hs, w, bound),
                 bound <= s0.max_evv,
                 i <= bound,
                 node == nth(hs, w, i as nat),
                 self.heap.word_in(node),
-                removed as int == wdropped(effects@, hs, w, i as nat),
+                removed as int == wdropped(items@, hs, w, i as nat),
                 kept_for(self.heap, hs, none),
                 M::CHECKED ==> self.heap.words_kept(hs),
                 forall|k: int|
@@ -2539,7 +2668,7 @@ impl<M: Mode> Ctx<M> {
                     &&& s == s0.evv_seq(w)
                     &&& bound <= s.len()
                     &&& copy_heap(hs, self.heap, cs, out, z)
-                    &&& copy_seq(effects@, s, out, js, i as int, removed as int)
+                    &&& copy_seq(items@, s, out, js, i as int, removed as int)
                 },
             decreases bound - i,
         {
@@ -2567,13 +2696,12 @@ impl<M: Mode> Ctx<M> {
             proof {
                 assert(t == hs.tag_of(node));
             }
-            let occ = count_effect(effects, t);
-            let keep = seen_at_least(&self.heap, Ghost(hs), w, i, t, occ)?;
+            let keep = mask_keeps(&self.heap, Ghost(hs), w, i, t, items)?;
             proof {
-                assert(keep == wkept(effects@, hs, w, i as nat));
+                assert(keep == wkept(items@, hs, w, i as nat));
                 if c {
-                    lemma_kept_eq(effects@, s, hs, w, i as nat);
-                    lemma_copy_seq_step(effects@, s, out, js, i as int, removed as int);
+                    lemma_kept_eq(items@, s, hs, w, i as nat);
+                    lemma_copy_seq_step(items@, s, out, js, i as int, removed as int);
                 }
             }
             let next = (unsafe { self.heap.field(node, 1) })?;
@@ -2583,7 +2711,7 @@ impl<M: Mode> Ctx<M> {
             if keep {
                 let ev = (unsafe { self.heap.field(node, 0) })?;
                 proof {
-                    lemma_mask_ev(effects@, hs, h0, w, f, s, bound, i as nat, ev, c);
+                    lemma_mask_ev(items@, hs, h0, w, f, s, bound, i as nat, ev, c);
                 }
                 (unsafe { self.heap.dup(ev) })?;
                 let ghost h1 = self.heap;
@@ -2685,7 +2813,7 @@ impl<M: Mode> Ctx<M> {
         let ghost h5 = self.heap;
         proof {
             if (i as nat) < bound {
-                assert(wdropped(effects@, hs, w, i as nat) < m);
+                assert(wdropped(items@, hs, w, i as nat) < m);
             }
             lemma_unit_bits();
             if M::CHECKED {
@@ -2723,7 +2851,7 @@ impl<M: Mode> Ctx<M> {
                     self.lemma_words_kept(s0);
                 }
                 if c {
-                    self.lemma_evv_mask_ok(s0, effects@, w, f, s, bound, cs, out, js, node, node);
+                    self.lemma_evv_mask_ok(s0, items@, w, f, s, bound, cs, out, js, node, node);
                 }
             }
             Ok(node)
@@ -2736,7 +2864,7 @@ impl<M: Mode> Ctx<M> {
                 }
                 if c {
                     lemma_copy_close(hs, h6, self.heap, cs, out, node);
-                    self.lemma_evv_mask_ok(s0, effects@, w, f, s, bound, cs, out, js, node, head);
+                    self.lemma_evv_mask_ok(s0, items@, w, f, s, bound, cs, out, js, node, head);
                 }
             }
             Ok(head)
@@ -2803,29 +2931,29 @@ impl<M: Mode> Ctx<M> {
         Ok(t)
     }
 
-    /// mask が除く組を、写す前に数える。節点ごとに形を確かめ、上限の歩数で止まり、除く組が足りなければ
-    /// `NoHandler` を返す。写しに要る `dup` もここで確かめるので、写す間は `Err` を返さない。返すのはたどった節点の
-    /// 数である。
+    /// mask が除く組を、写す前に `m` 個 (`skip_total`) まで数える。節点ごとに形を確かめ、上限の歩数で止まり、除く組が
+    /// 足りなければ `NoHandler` を返す。写しに要る `dup` もここで確かめるので、写す間は `Err` を返さない。返すのは
+    /// たどった節点の数である。
     // 根の表の欄を `Ctx` に足すと、ループの不変条件の `self.wf()` を解く量が既定の上限 (10) を少し超えた
     #[verifier::spinoff_prover]
     #[verifier::rlimit(20)]
-    fn checked_mask(&self, effects: &[u16], w: Word) -> (r: Result<usize, HeapError>)
+    fn checked_mask(&self, items: &[MaskItem], m: usize, w: Word) -> (r: Result<usize, HeapError>)
         requires
             M::CHECKED,
+            m == skip_total(items@),
             self.wf(),
             self.heap.word_in(w),
         ensures
             r matches Ok(k) ==> {
-                &&& mask_walk(effects@, self.heap, w, k as nat)
-                &&& mask_dups(effects@, self.heap, w, k as nat)
+                &&& mask_walk(items@, self.heap, w, k as nat)
+                &&& mask_dups(items@, self.heap, w, k as nat)
                 &&& k <= self.max_evv
             },
-            self.held_ok() && self.evv_wf(w) && mask_spec(effects@, self.evv_seq(w)).len()
-                + effects@.len() == self.evv_seq(w).len() ==> r is Ok,
+            self.held_ok() && self.evv_wf(w) && mask_spec(items@, self.evv_seq(w)).len()
+                + skip_total(items@) == self.evv_seq(w).len() ==> r is Ok,
     {
         let ghost h = self.heap;
-        let ghost m = effects@.len();
-        let ghost c = self.held_ok() && self.evv_wf(w) && mask_spec(effects@, self.evv_seq(w)).len()
+        let ghost c = self.held_ok() && self.evv_wf(w) && mask_spec(items@, self.evv_seq(w)).len()
             + m == self.evv_seq(w).len();
         let ghost f = choose|f: nat| #[trigger] path(h, w, f) is Some;
         let ghost s = seq_of(h, w);
@@ -2833,28 +2961,28 @@ impl<M: Mode> Ctx<M> {
             if c {
                 lemma_seq_of(h, w, f);
                 lemma_path_walkable(h, w, f, s);
-                lemma_mask_count(effects@, s, h, w, 0);
+                lemma_mask_count(items@, s, h, w, 0);
             }
         }
         let mut node = w;
         let mut k: usize = 0;
         let mut removed: usize = 0;
-        while removed < effects.len()
+        while removed < m
             invariant
                 M::CHECKED,
                 self.wf(),
                 self.heap == h,
                 self.heap.word_in(node),
-                c == (self.held_ok() && self.evv_wf(w) && mask_spec(effects@, self.evv_seq(w)).len()
+                c == (self.held_ok() && self.evv_wf(w) && mask_spec(items@, self.evv_seq(w)).len()
                     + m == self.evv_seq(w).len()),
-                m == effects@.len(),
+                m == skip_total(items@),
                 walkable(h, w, k as nat),
                 node == nth(h, w, k as nat),
-                removed as int == wdropped(effects@, h, w, k as nat),
+                removed as int == wdropped(items@, h, w, k as nat),
                 removed <= m,
-                forall|i: nat| i < k ==> #[trigger] wdropped(effects@, h, w, i) < m,
+                forall|i: nat| i < k ==> #[trigger] wdropped(items@, h, w, i) < m,
                 forall|j: nat|
-                    j < k && wkept(effects@, h, w, j) ==> h.dup_passes(
+                    j < k && wkept(items@, h, w, j) ==> h.dup_passes(
                         h.scanned_word(#[trigger] nth(h, w, j), 0),
                     ),
                 k <= self.max_evv,
@@ -2864,7 +2992,7 @@ impl<M: Mode> Ctx<M> {
                     &&& walkable(h, w, s.len())
                     &&& forall|j: int|
                         0 <= j < s.len() ==> #[trigger] s[j].0 == h.tag_of(nth(h, w, j as nat))
-                    &&& wdropped(effects@, h, w, s.len()) == m
+                    &&& wdropped(items@, h, w, s.len()) == m
                     &&& k <= s.len()
                 },
             decreases self.max_evv - k,
@@ -2901,12 +3029,11 @@ impl<M: Mode> Ctx<M> {
                 }
                 lemma_agree_refl(h, w, k as nat);
             }
-            let occ = count_effect(effects, t);
-            let keep = seen_at_least(&self.heap, Ghost(h), w, k, t, occ)?;
+            let keep = mask_keeps(&self.heap, Ghost(h), w, k, t, items)?;
             proof {
-                assert(keep == wkept(effects@, h, w, k as nat));
+                assert(keep == wkept(items@, h, w, k as nat));
                 if c {
-                    lemma_kept_eq(effects@, s, h, w, k as nat);
+                    lemma_kept_eq(items@, s, h, w, k as nat);
                 }
             }
             if keep {

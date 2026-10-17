@@ -5,7 +5,7 @@ use eml_lir::{
     Atom, BlockId, Call, Ctor, FnIdx, LayoutCtor, LirFn, Loc, Program, Repr, Rhs, Shape, Stmt,
     Term, VarId,
 };
-use eml_rt::Mode;
+use eml_rt::{MaskItem, Mode};
 
 use super::constants::Constants;
 use super::slots::{Slots, allocate};
@@ -444,14 +444,22 @@ impl<'a, M: Mode> Emitter<'a, '_, M> {
                 e: a[1],
             },
             Prim::EvvMask(effects) => {
-                let start = self.out.effect_lists.len() as u32;
+                let start = self.out.mask_lists.len() as u32;
                 // 引き直した番号でも昇順に保つ。基本操作の並びと同じ約束にするためである (docs/spec/lir.md の「基本操作」)
                 let mut numbers: Vec<u16> = effects.iter().map(|&e| self.effect(e)).collect();
                 numbers.sort_unstable();
-                self.out.effect_lists.extend(numbers);
-                let at = self
-                    .out
-                    .operands([start, effects.len() as u32, u32::from(a[0])]);
+                // LIR の並びは飛ばすエフェクトの多重集合なので、同じエフェクトの連なりを、先頭から飛ばす1つの項目にする
+                let items: Vec<MaskItem> = numbers
+                    .chunk_by(|a, b| a == b)
+                    .map(|run| MaskItem {
+                        effect: run[0],
+                        keep: 0,
+                        skip: run.len() as u32,
+                    })
+                    .collect();
+                let len = items.len() as u32;
+                self.out.mask_lists.extend(items);
+                let at = self.out.operands([start, len, u32::from(a[0])]);
                 Op::EvvMask { dst, at }
             }
             Prim::EvNew(e) => {

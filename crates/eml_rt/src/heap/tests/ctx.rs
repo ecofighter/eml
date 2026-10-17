@@ -3,7 +3,7 @@
 use std::sync::Arc;
 
 use super::host::{MemoryHost, host};
-use crate::{Control, Ctx, HeapError, Limits, Mode, Stop, Word};
+use crate::{Control, Ctx, HeapError, Limits, MaskItem, Mode, Stop, Word};
 
 pub(super) const UNIT: Word = Word::imm(0);
 
@@ -31,6 +31,11 @@ pub(super) fn push<M: Mode>(ctx: &mut Ctx<M>, effect: u16, n_ops: usize) -> Word
         ctx.evv_set(list).unwrap();
         ev
     }
+}
+
+/// エフェクト `effect` の、先頭の `keep` 個を残して続く `skip` 個を除く mask の項目。
+pub(super) fn item(effect: u16, keep: u32, skip: u32) -> MaskItem {
+    MaskItem { effect, keep, skip }
 }
 
 /// 今の evv を空にする。
@@ -365,7 +370,7 @@ fn lookups_and_masks_count_the_list_nodes_they_visit<M: Mode>() {
             assert_eq!(ctx.stats().evidence_steps, 3);
         }
         let list = ctx.evv_get().unwrap();
-        let masked = ctx.evv_mask(&[1], list).unwrap();
+        let masked = ctx.evv_mask(&[item(1, 0, 1)], list).unwrap();
         if M::CHECKED {
             assert_eq!(ctx.stats().evidence_steps, 4);
         }
@@ -379,9 +384,9 @@ fn lookups_and_masks_count_the_list_nodes_they_visit<M: Mode>() {
     assert_eq!(super::mortal(ctx.heap()), 0);
 }
 
-/// evv は先頭から 0、1、1、0 のエフェクトの evidence である。多重集合の各エフェクトについて、先頭から合う
-/// evidence をその数だけ飛ばし、飛ばした最後の節点の前で残した節点だけを写す。
-fn a_mask_skips_the_first_matches_of_each_effect_in_its_multiset<M: Mode>() {
+/// evv は先頭から 0、1、1、0 のエフェクトの evidence である。各項目のエフェクトについて、先頭から合う evidence を
+/// 項目の数だけ飛ばし、飛ばした最後の節点の前で残した節点だけを写す。
+fn a_mask_skips_the_first_matches_of_each_item<M: Mode>() {
     let mut ctx = ctx::<M>();
     let evs: Vec<Word> = [0, 1, 1, 0]
         .into_iter()
@@ -390,9 +395,9 @@ fn a_mask_skips_the_first_matches_of_each_effect_in_its_multiset<M: Mode>() {
     unsafe {
         let list = ctx.evv_get().unwrap();
         let original = nodes(&ctx, list);
-        let distinct = ctx.evv_mask(&[0, 1], list).unwrap();
+        let distinct = ctx.evv_mask(&[item(0, 0, 1), item(1, 0, 1)], list).unwrap();
         assert_eq!(distinct, original[2].0);
-        let twice = ctx.evv_mask(&[1, 1], list).unwrap();
+        let twice = ctx.evv_mask(&[item(1, 0, 2)], list).unwrap();
         let masked = nodes(&ctx, twice);
         assert_eq!(
             masked.iter().map(|&(_, ev)| ev).collect::<Vec<_>>(),
@@ -414,7 +419,71 @@ fn a_mask_skips_the_first_matches_of_each_effect_in_its_multiset<M: Mode>() {
     assert_eq!(super::mortal(ctx.heap()), 0);
 }
 
+/// evv は先頭から 0、1、1、0、1 のエフェクトの evidence である。エフェクト 1 の先頭の1つを残し、次の1つを除く。
+fn a_mask_keeps_the_first_matches_before_it_skips<M: Mode>() {
+    let mut ctx = ctx::<M>();
+    // `push` は先頭に足すので、後ろから足す
+    let evs: Vec<Word> = [0, 1, 1, 0, 1]
+        .into_iter()
+        .rev()
+        .map(|e| push(&mut ctx, e, 1))
+        .collect();
+    unsafe {
+        let list = ctx.evv_get().unwrap();
+        let original = nodes(&ctx, list);
+        let masked = ctx.evv_mask(&[item(1, 1, 1)], list).unwrap();
+        let copied = nodes(&ctx, masked);
+        assert_eq!(
+            copied.iter().map(|&(_, ev)| ev).collect::<Vec<_>>(),
+            [original[0].1, original[1].1, original[3].1, original[4].1]
+        );
+        assert_ne!(copied[0].0, original[0].0);
+        assert_ne!(copied[1].0, original[1].0);
+        assert_eq!(copied[2].0, original[3].0);
+        if M::CHECKED {
+            assert_eq!(ctx.stats().evidence_steps, 3);
+        }
+        for w in [masked, list] {
+            ctx.heap_mut().decref(w).unwrap();
+        }
+        for e in evs {
+            ctx.heap_mut().decref(e).unwrap();
+        }
+    }
+    clear(&mut ctx);
+    assert_eq!(super::mortal(ctx.heap()), 0);
+}
+
+/// 同じエフェクトの項目が2つあれば、先の項目だけを使う。
+fn a_second_item_of_the_same_effect_is_ignored<M: Mode>() {
+    let mut ctx = ctx::<M>();
+    let evs: Vec<Word> = [1, 1].into_iter().map(|e| push(&mut ctx, e, 1)).collect();
+    unsafe {
+        let list = ctx.evv_get().unwrap();
+        let original = nodes(&ctx, list);
+        let masked = ctx.evv_mask(&[item(1, 0, 1), item(1, 0, 5)], list).unwrap();
+        assert_eq!(masked, original[1].0);
+        for w in [masked, list] {
+            ctx.heap_mut().decref(w).unwrap();
+        }
+        for e in evs {
+            ctx.heap_mut().decref(e).unwrap();
+        }
+    }
+    clear(&mut ctx);
+    assert_eq!(super::mortal(ctx.heap()), 0);
+}
+
 fn a_mask_that_skips_more_evidence_than_the_list_holds<M: Mode>() {
+    a_refused_mask::<M>(&[item(1, 0, 2)]);
+}
+
+fn a_mask_that_keeps_and_skips_more_evidence_than_the_list_holds<M: Mode>() {
+    a_refused_mask::<M>(&[item(1, 1, 1)]);
+}
+
+/// evv は先頭から 1、0 のエフェクトの evidence で、`items` には合う evidence が足りない。
+fn a_refused_mask<M: Mode>(items: &[MaskItem]) {
     if !M::CHECKED {
         return;
     }
@@ -424,10 +493,7 @@ fn a_mask_that_skips_more_evidence_than_the_list_holds<M: Mode>() {
     unsafe {
         let list = ctx.evv_get().unwrap();
         let before = super::mortal(ctx.heap());
-        assert_eq!(
-            ctx.evv_mask(&[1, 1], list).unwrap_err(),
-            HeapError::NoHandler
-        );
+        assert_eq!(ctx.evv_mask(items, list).unwrap_err(), HeapError::NoHandler);
         // 確保の前に断るので、写しは残らず、たどった数も数えない
         assert_eq!(super::mortal(ctx.heap()), before);
         assert_eq!(ctx.stats().evidence_steps, 0);
@@ -453,7 +519,7 @@ fn a_cyclic_evv_stops_at_the_limit<M: Mode>() {
         assert_eq!(ctx.ev_lookup(5).unwrap_err(), HeapError::BadEvidence);
         let list = ctx.evv_get().unwrap();
         assert_eq!(
-            ctx.evv_mask(&[5], list).unwrap_err(),
+            ctx.evv_mask(&[item(5, 0, 1)], list).unwrap_err(),
             HeapError::BadEvidence
         );
     }
@@ -627,8 +693,11 @@ both_modes!(
     bad_evidence_is_reported_in_checked_mode,
     a_push_past_the_evv_limit_is_bad_evidence,
     lookups_and_masks_count_the_list_nodes_they_visit,
-    a_mask_skips_the_first_matches_of_each_effect_in_its_multiset,
+    a_mask_skips_the_first_matches_of_each_item,
+    a_mask_keeps_the_first_matches_before_it_skips,
+    a_second_item_of_the_same_effect_is_ignored,
     a_mask_that_skips_more_evidence_than_the_list_holds,
+    a_mask_that_keeps_and_skips_more_evidence_than_the_list_holds,
     a_cyclic_evv_stops_at_the_limit,
     perform_in_place,
     yield_and_resume_once,

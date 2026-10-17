@@ -6,7 +6,9 @@ use std::io;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use eml_rt::{Buffering, Control, Ctx, Fast, Heap, HostRef, Kind, Limits, Meta, StdHost, Word};
+use eml_rt::{
+    Buffering, Control, Ctx, Fast, Heap, HostRef, Kind, Limits, MaskItem, Meta, StdHost, Word,
+};
 
 const CONS: Meta = Meta::new(1, 2, Kind::Data, false);
 const CELLS: usize = 1_000_000;
@@ -259,11 +261,16 @@ fn mask() {
     for e in 0..4 {
         push(&mut ctx, e);
     }
+    let items = [MaskItem {
+        effect: 2,
+        keep: 0,
+        skip: 1,
+    }];
     // SAFETY: list は evv_get が返した参照で、evv_mask は借りるだけである。evv_mask の結果は1回ずつ手放す。
     unsafe {
         let list = ctx.evv_get().unwrap();
         for _ in 0..PRIMITIVES {
-            let masked = ctx.evv_mask(black_box(&[2]), list).unwrap();
+            let masked = ctx.evv_mask(black_box(&items), list).unwrap();
             ctx.heap_mut().decref(black_box(masked)).unwrap();
         }
         ctx.heap_mut().decref(list).unwrap();

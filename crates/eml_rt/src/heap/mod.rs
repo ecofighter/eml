@@ -54,7 +54,7 @@ use vstd::raw_ptr::ptr_mut_write;
 #[cfg(verus_keep_ghost)]
 use vstd::shared::Shared;
 
-pub use ctx::{Ctx, CtxStats};
+pub use ctx::{Ctx, CtxStats, MaskItem};
 pub use reuse::Token;
 
 use crate::foreign::{finalizer_of, run_finalizer};

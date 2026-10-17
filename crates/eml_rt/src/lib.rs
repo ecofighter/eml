@@ -29,7 +29,7 @@ pub use control::{Control, Limits, Stop};
 pub use error::HeapError;
 pub use externs::{ArithFault, Fault, IndexFault, IoOp, IoReason, Utf8Source};
 pub use frozen::Frozen;
-pub use heap::{Ctx, CtxStats, Heap, Stats, Token};
+pub use heap::{Ctx, CtxStats, Heap, MaskItem, Stats, Token};
 pub use host::{
     Buffering, Host, HostRef, Opened, StdHost, StdinLock, Stream, exit_code, lock_stdin,
 };

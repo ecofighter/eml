@@ -315,7 +315,7 @@ fn every_primitive_once<M: Mode>() {
         ctx.heap_mut().decref(found).unwrap();
         let list = ctx.evv_get().unwrap();
         // e0 を除き、e1 の節点を写す
-        let masked = ctx.evv_mask(&[0], list).unwrap();
+        let masked = ctx.evv_mask(&[ctx_tests::item(0, 0, 1)], list).unwrap();
         assert_ne!(masked, list);
         assert_eq!(ctx.heap().field(masked, 0), Ok(e1));
         for w in [masked, list] {

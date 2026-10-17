@@ -4,7 +4,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use eml_lir::Loc;
-use eml_rt::{Control, Frozen, HeapError, Mode, Word};
+use eml_rt::{Control, Frozen, HeapError, MaskItem, Mode, Word};
 
 use crate::error::{RuntimeError, SourceLocation};
 use crate::op::{BUILTINS, Op, Pc};
@@ -29,8 +29,8 @@ pub struct CodeBase<M: Mode> {
     pub(crate) functions: Vec<FnEntry>,
     pub(crate) code: Vec<Op>,
     pub(crate) operands: Vec<u32>,
-    /// `EvvMask` が参照する、飛ばすエフェクトの並び。
-    pub(crate) effect_lists: Vec<u16>,
+    /// `EvvMask` が参照する、mask の項目の並び。
+    pub(crate) mask_lists: Vec<MaskItem>,
     pub(crate) constants: Vec<Word>,
     /// 定数を置いた凍結した塊の鎖の先頭。定数の物体をまだ作っていなければ `None`。
     pub(crate) region: Option<Arc<Frozen<M>>>,

@@ -341,8 +341,8 @@ fn step<M: Mode>(
         }
         Op::EvvMask { dst, at } => {
             let o = ops(at);
-            let list = &code.effect_lists[o[0] as usize..(o[0] + o[1]) as usize];
-            let w = unsafe { ctx.evv_mask(list, task.get(o[2] as Slot)) }?;
+            let items = &code.mask_lists[o[0] as usize..(o[0] + o[1]) as usize];
+            let w = unsafe { ctx.evv_mask(items, task.get(o[2] as Slot)) }?;
             task.set(dst, w);
         }
         Op::EvNew { dst, at } => {
