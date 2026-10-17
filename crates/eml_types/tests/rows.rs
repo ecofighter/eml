@@ -210,21 +210,22 @@ main () =
 }
 
 #[test]
-fn a_row_shared_with_a_capture_stays_open() {
-    // `go` の row の末尾は捕まえた `h` の row と同じ変数なので閉じない。閉じると `h` の row まで `<>` に決まる
+fn a_row_reached_only_from_a_capture_closes() {
+    // `g` を呼ばないので、捕まえた `h` の row にはどの引数からもエフェクトが入らない。`h x` と `go 1` の包含が、呼び出し先の
+    // `h` と `go` の row を `<>` に閉じる。呼ばれない `g` の row は開いたまま残る
     let text = "f : Unit -> Int\nf () =\n  let g = fn h -> (let go x = h x in go 1)\n  0";
     insta::assert_snapshot!(check_text(text), @"
     f : Unit -> Int
-      h#0 : Int -> <_> _
-      go#1 : Int -> <_> _
+      h#0 : Int -> _
+      go#1 : Int -> _
       x#2 : Int
-      g#3 : (Int -> <_> _) -> <_> _
+      g#3 : (Int -> _) -> <_> _
     ");
 }
 
 #[test]
 fn a_deferred_self_call_reports_against_the_row_at_the_call() {
-    // 自分への呼び出しの包含は row を閉じた後に確かめるが、診断は呼び出しの位置の今の row (純粋なラムダ) を指す
+    // 自分への呼び出しの包含は本体の後で確かめるが、診断は呼び出しの位置の今の row (純粋なラムダ) を指す
     let text = "effect Ask where\n  ask : Unit -> Int\n\npure_apply : (Unit -> Int) -> Int\npure_apply f = f ()\n\ng : Int -> <Ask> Int\ng n =\n  let go k = if k == 0 then ask () else pure_apply (fn () -> go (k - 1))\n  go n";
     insta::assert_snapshot!(check_text(text), @"
     ask : Unit -> <Ask> Int
@@ -242,32 +243,38 @@ fn a_deferred_self_call_reports_against_the_row_at_the_call() {
 }
 
 #[test]
-fn a_row_shared_with_a_parameter_stays_open() {
-    // `app` の row の末尾は引数 `g` の row と同じ変数なので閉じない。閉じると `g` も純粋な関数に決まる
+fn a_row_reached_only_from_a_parameter_closes() {
+    // `app` を呼ばないので、引数 `g` の row にはどの引数からもエフェクトが入らない。`g ()` の包含が `g` の row を `<>` に
+    // 閉じる。呼ばれない `app` の row は開いたまま残る
     let text = "f : Unit -> Int\nf () =\n  let app g = g ()\n  0";
     insta::assert_snapshot!(check_text(text), @"
     f : Unit -> Int
-      app#0 : (Unit -> <_> _) -> <_> _
-      g#1 : Unit -> <_> _
+      app#0 : (Unit -> _) -> <_> _
+      g#1 : Unit -> _
     ");
 }
 
 #[test]
-fn a_rigid_tail_in_a_local_function_is_order_dependent() {
-    // 現在の挙動の固定。本体が引数 `h` の row (rigid な `e`) を呼ぶと末尾が rigid になり、閉じられない。
-    // その後の `ask ()` は row を広げられず、`let` で束縛したラムダと同じく呼ぶ順序で通るかが決まる
+fn a_rigid_tail_in_a_local_function_does_not_depend_on_call_order() {
+    // 引数 `h` の row の rigid な `e` は、`ask` のラベルを足し終えてから `go` の row の末尾に束縛するので、呼ぶ順序に
+    // よらず通る (docs/spec/types.md の「推論」)
     let head =
         "effect Ask where\n  ask : Unit -> Int\n\nf : (Unit -> <e> Int) -> <Ask | e> Int\nf h =\n";
-    let rejected = format!("{head}  let go k = h () + ask () + k\n  go 1");
-    let accepted = format!("{head}  let go k = ask () + h () + k\n  go 1");
-    let rejected = check_text(&rejected);
-    assert!(rejected.contains("E2002"), "{rejected}");
-    assert!(
-        rejected.contains("`ask` performs `Ask`, which this lambda does not allow"),
-        "{rejected}"
-    );
-    let accepted = check_text(&accepted);
-    assert!(!accepted.contains("E2"), "{accepted}");
+    for go in ["h () + ask () + k", "ask () + h () + k"] {
+        let out = check_text(&format!("{head}  let go k = {go}\n  go 1"));
+        assert!(!out.contains("E2"), "{out}");
+    }
+}
+
+#[test]
+fn a_let_bound_lambda_is_called_inside_and_outside_a_handler_in_any_order() {
+    // 呼び出しは row の包含なので、`g` の row は最初の呼び出しの今の row に決まらない
+    let head = "effect Ask where\n  ask : Unit -> Int\n\nf : Unit -> <IO> Int\nf () =\n  let g = fn () -> 1\n";
+    let handled = "(handle g () + ask () with | fn ask () -> 2)";
+    for body in [format!("{handled} + g ()"), format!("g () + {handled}")] {
+        let out = check_text(&format!("{head}  {body}"));
+        assert!(!out.contains("---"), "{out}");
+    }
 }
 
 #[test]

@@ -198,17 +198,17 @@ fn equations_may_return_functions_and_calls_may_pass_more_arguments() {
 #[test]
 fn lambdas_are_checked_against_the_expected_type_or_inferred() {
     let text = "apply : (Int -> Int) -> Int\napply f = f 1\n\nmain : Unit -> <IO> Unit\nmain () =\n  let n = apply (fn x -> x + 1)\n  let id = fn y -> y\n  let s = id \"s\"\n  let k = fn (z : Int) _ -> z\n  println (show (k n s))";
-    insta::assert_snapshot!(check_text(text), @r"
+    insta::assert_snapshot!(check_text(text), @"
     apply : (Int -> Int) -> Int
       f#0 : Int -> Int
     main : Unit -> <IO> Unit
       x#0 : Int
       n#1 : Int
       y#2 : String
-      id#3 : String -> <IO> String
+      id#3 : String -> String
       s#4 : String
       z#5 : Int
-      k#6 : Int -> <IO> String -> <IO> Int
+      k#6 : Int -> String -> Int
     ");
 }
 
@@ -633,14 +633,14 @@ fn an_undetermined_projection_in_a_local_function_is_e2013() {
 
 #[test]
 fn a_higher_order_local_function_takes_the_effect_of_its_argument() {
-    // `app` の row の末尾は引数 `f` の型に現れるので閉じず、最初の呼び出しの位置で `Ask` を含む row に決まる
+    // 引数のラムダの `Ask` は、本体の `f ()` の包含で `app` の row に入る
     let text = "effect Ask where\n  ask : Unit -> Int\n\nmain : Unit -> <IO> Unit\nmain () =\n  let app f = f ()\n  let n = handle app (fn () -> ask ()) with | ctl ask () k -> k 1\n  println (show n)";
     assert_eq!(check_short(text), Vec::<String>::new());
 }
 
 #[test]
 fn a_nested_local_function_calling_the_outer_one_keeps_its_row_open() {
-    // `each` の中の `walk` の呼び出しは、`walk` の row を閉じた後で `each` の row に含める。`each` の row を先に閉じると、
+    // `walk` の `IO` は、`each` の中の `walk` の呼び出しの包含で `each` の row に入る。`each` の row を先に閉じると、
     // `walk` の `IO` が入らない
     let text = "main : Unit -> <IO> Unit\nmain () =\n  let walk n =\n    let each k = if k == 0 then () else walk (k - 1)\n    if n == 0 then println \"x\" else each n\n  walk 3";
     assert_eq!(check_short(text), Vec::<String>::new());
@@ -719,4 +719,40 @@ fn a_group_through_a_higher_order_function_types_like_sequential_lets() {
       $r#9 : Int
     ");
     assert_eq!(types_by_name(&group), types_by_name(&sequential));
+}
+
+#[test]
+fn a_lambda_called_before_it_is_passed_as_a_pure_function() {
+    // `g 1` は `g` の row を `<IO>` に単一化せず、包含として残す。`g` の row は `apply_pure` に渡すときに `<>` に決まる
+    let text = "apply_pure : (Int -> Int) -> Int -> Int\napply_pure f x = f x\n\npassed_after_call : Unit -> <IO> Int\npassed_after_call () =\n  let g = fn x -> x + 1\n  let a = g 1\n  apply_pure g a";
+    assert_eq!(check_short(text), Vec::<String>::new());
+}
+
+#[test]
+fn projecting_the_result_of_a_higher_order_local_function_needs_an_annotation() {
+    // 制限の固定。`run` の row に `State` が入るのは本体の検査の後なので、射影の時点では `get` の結果の型が決まらない
+    let head = "effect State s where\n  get : Unit -> s\n\ndata Person = | Person { name : String }\n\nprojected : Unit -> <State Person> String\nprojected () =\n  let run h = h ()\n";
+    let codes: Vec<String> = check_short(&format!("{head}  (run get).name"))
+        .iter()
+        .map(|d| d[..5].to_string())
+        .collect();
+    assert_eq!(codes, ["E2013"]);
+    assert_eq!(
+        check_short(&format!("{head}  (run get : Person).name")),
+        Vec::<String>::new()
+    );
+}
+
+#[test]
+fn a_label_arriving_through_an_argument_unifies_with_the_ambient() {
+    // `State s` は解くときに `run` の row に入る。その型引数 `s` は、クラスの制約を解く前に今の row の `State Int` と
+    // 単一化される
+    let text = "effect State s where\n  get : Unit -> s\n\nf : Unit -> <State Int> Int\nf () =\n  let run h = h ()\n  run get + 1";
+    assert_eq!(check_short(text), Vec::<String>::new());
+}
+
+#[test]
+fn a_partially_applied_local_function_is_passed_to_map() {
+    let text = "import List\n\nf : List Int -> List Int\nf xs =\n  let add x y = x + y\n  List.map (add 1) xs";
+    assert_eq!(check_short(text), Vec::<String>::new());
 }

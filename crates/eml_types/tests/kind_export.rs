@@ -25,7 +25,7 @@ fn a_lambda_that_captures_nothing_is_unr() {
     insta::assert_snapshot!(exported(text), @"
     main : Unit -> <IO> Unit
       x#0 : Int
-      f#1 : Int -> <IO> Int
+      f#1 : Int -> Int
     ");
 }
 
@@ -72,7 +72,7 @@ fn a_body_variable_in_an_own_variable_component_takes_its_var() {
       eat#0 : poly0 a -> <IO> Unit
       x#1 : a
       n#2 : Int
-      g#3 : poly1 Unit -> <IO> a
+      g#3 : poly1 Unit -> a
     use_g : (poly0 Int -> Int) -> poly1 Int -> Int
       g#0 : poly0 Int -> Int
       x#1 : Int

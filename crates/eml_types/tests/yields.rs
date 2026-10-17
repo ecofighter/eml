@@ -204,3 +204,46 @@ fn a_pure_local_function_in_an_io_body_never_yields() {
     4:18#0 Never
     ");
 }
+
+const COUNT_TO: &str = "import Yield (Yield(..))\nimport State (State(..))\nimport List\n\ncount_to : Int -> Unit -> <Yield Int> Unit\ncount_to n () =\n  let go i =\n    if i > n then ()\n    else\n      yield i\n      go (i + 1)\n  go 1\n\n";
+
+#[test]
+fn a_pure_callback_under_state_does_not_make_fold_yield() {
+    // `fold` の row は純粋なラムダからしかエフェクトを受けないので、外側の `State` を受けずに `<>` に閉じる
+    // (docs/spec/types.md の「推論」)
+    let text = format!(
+        "{COUNT_TO}main : Unit -> <IO> Unit\nmain () =\n  let (t, _) = State.run 0 (fn () -> Yield.fold (fn acc x -> acc + x) 0 (count_to 10))\n  println (show t)"
+    );
+    let rows = rows(&text, "main");
+    assert!(
+        rows.lines().any(|line| line.ends_with("fold [Never]")),
+        "{rows}"
+    );
+}
+
+#[test]
+fn a_callee_row_shared_with_a_rigid_producer_stays_var() {
+    // `fold` の row は生産者 `p` の row の rigid な `e` と同じ変数なので、閉じずにシグネチャの `e` になる
+    let text = format!(
+        "{COUNT_TO}sum : (Unit -> <Yield Int | e> Unit) -> <e> Int\nsum p = Yield.fold (fn acc x -> acc + x) 0 p"
+    );
+    let rows = rows(&text, "sum");
+    assert!(rows.contains("fold [Var(0)]"), "{rows}");
+}
+
+#[test]
+fn a_lambda_shared_by_two_generic_calls_stays_pure() {
+    // `g` の row は `map` の row と単一化され、`filter` に渡すラムダの中の呼び出しで `filter` の row に含まれる。どちらも
+    // 外側の `State` を受けない
+    let text = format!(
+        "{COUNT_TO}f : List Int -> <State Int> Int\nf xs =\n  let g = fn x -> x + 1\n  List.length (List.map g xs) + List.length (List.filter (fn y -> g y > 0) xs)"
+    );
+    let rows = rows(&text, "f");
+    for name in ["map", "filter"] {
+        assert!(
+            rows.lines()
+                .any(|line| line.ends_with(&format!("{name} [Never]"))),
+            "{rows}"
+        );
+    }
+}

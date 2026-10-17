@@ -692,7 +692,7 @@ fn a_linear_closure_cannot_enter_an_arrow_in_a_row_label_of_the_result() {
     mk : Unit -> <Mk> (Unit -> <Ask (Unit -> <IO> Unit), IO> Unit, Int)
     twice : Unit -> <Ask (Unit -> <IO> Unit), IO> Unit
       kinds: (Unit -> <IO> Unit) <= Unr
-      f#0 : Unit -> <IO, Ask (Unit -> <IO> Unit)> Unit
+      f#0 : Unit -> <IO> Unit
     main : Unit -> <IO> Unit
       g#0 : Unit -> <Ask (Unit -> <IO> Unit), IO> Unit
       k#1 : once (Unit -> <IO> Unit) -> <Mk, IO> Unit
@@ -713,7 +713,7 @@ fn a_clause_cannot_keep_a_file_across_a_function_with_an_operation_row_variable(
     insta::assert_snapshot!(check_text(text), @"
     mk : Unit -> <Mk> ((Unit -> <IO | e> Int) -> <IO | e> Int, Int)
     main : Unit -> <IO> Unit
-      run#0 : (Unit -> <IO, Mk> Int) -> <IO, Mk> Int
+      run#0 : (Unit -> <IO> Int) -> <IO> Int
       k#1 : once ((Unit -> <IO | e> Int) -> <IO | e> Int, Int) -> <IO> Unit
       g#2 : Unit -> <IO | e> Int
       h#3 : File
@@ -920,14 +920,12 @@ fn a_three_member_fixpoint() {
     ");
 }
 
-/// `h ()` で `f` の row の末尾が rigid な `e` に決まるので、固定点は `g` の `Ask` を足せず、包含が E2002 を報告する。
+/// `f` の row には、`g` の `Ask` を足し終えてから `h` の rigid な `e` を末尾に束縛するので、呼ぶ順序によらず通る
+/// (docs/spec/types.md の「推論」)。
 #[test]
-fn a_rigid_ambient_reports_e2002_in_a_group() {
+fn a_rigid_ambient_takes_the_labels_of_a_group_first() {
     let text = "effect Ask where\n  ask : Unit -> Int\n\nrun : (Unit -> <e> Int) -> <Ask | e> Int\nrun h =\n  let f n = h () + g n\n  and g n = ask () + n\n  f 1";
-    insta::assert_snapshot!(check_full(text), @"
-    E2002 6:20 `g` performs `Ask`, which this lambda does not allow
-      6:20 this call performs `Ask`
-    ");
+    insta::assert_snapshot!(check_full(text), @"");
 }
 
 /// 自分を呼ぶローカル関数 `walk` の本体の中の組が `walk` を呼ぶ。`walk` の `Ask` は、`walk` を直接呼ぶ `even` だけでなく、
@@ -954,8 +952,10 @@ fn a_nested_group_calls_the_enclosing_recursive_function() {
 fn a_group_member_sharing_its_tail_with_the_caller_stops_the_fixpoint() {
     let text = "effect Ask where\n  ask : Unit -> Int\n\nrun_ask : (Unit -> <Ask | e> Int) -> <e> Int\nrun_ask action = handle action () with\n  | fn ask () -> 1\n\nrun : Unit -> Int\nrun () =\n  let f n = run_ask g + g ()\n  and g () = ask () + f 0\n  f 1";
     insta::assert_snapshot!(check_full(text), @"
-    E2002 10:25 `g` performs `Ask`, which this lambda does not allow
-      10:25 this call performs `Ask`
+    E2002 12:3 `f` performs `Ask`, which the signature of `run` does not allow
+      12:3 this call performs `Ask`
+      8:7 the row of this signature does not include it
+      help: add `Ask` to the row of the signature of `run`, as in `-> <Ask> ...`
     ");
 }
 
@@ -965,11 +965,11 @@ fn a_group_member_sharing_its_tail_with_the_caller_stops_the_fixpoint() {
 fn a_growing_cycle_of_calls_stops_the_fixpoint() {
     let text = "effect Ask where\n  ask : Unit -> Int\n\nwrap : (Unit -> <e> Int) -> <Ask | e> Int\nwrap action = ask () + action ()\n\nrun : Int -> <Ask> Int\nrun m =\n  let f n = wrap (fn () -> g n)\n  and g n = f n\n  f m";
     insta::assert_snapshot!(check_full(text), @"
-    E2002 10:13 `f` performs `Ask`, which this lambda does not allow
-      10:13 this call performs `Ask`
-    E2002 11:3 `f` performs `Ask`, which the signature of `run` does not allow
-      11:3 this call performs `Ask`
+    E2002 9:13 `wrap` performs `Ask`, which this lambda does not allow
+      9:13 this call performs `Ask`
+    E2002 11:3 `f` performs `Ask`, `Ask`, `Ask`, which the signature of `run` does not allow
+      11:3 this call performs `Ask`, `Ask`, `Ask`
       7:7 the row of this signature does not include it
-      help: add `Ask` to the row of the signature of `run`, as in `-> <Ask> ...`
+      help: add `Ask`, `Ask`, `Ask` to the row of the signature of `run`, as in `-> <Ask, Ask, Ask> ...`
     ");
 }

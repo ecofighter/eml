@@ -74,11 +74,18 @@ pub(super) fn check_input<'c>(
         ambient_source: AmbientSource::Input,
         typing: BodyTyping::default(),
         instances: Vec::new(),
-        local_frames: Vec::new(),
-        closed_locals: HashSet::new(),
+        inclusions: Vec::new(),
+        failed_calls: HashSet::new(),
         fn_clause_bodies: HashMap::new(),
     };
     checker.check_function(own);
+    // 包含は、決まらない型を `Error` にする `undecided_binding` より前に解く。問い合わせの型に現れる row 変数は閉じない。
+    // 閉じると `:type fn f -> f ()` の row が消え、型の一般さを失うためである (docs/spec/types.md の「REPL の入力」)
+    let keep_open = match kind {
+        InputKind::Query => vec![result],
+        InputKind::Expr | InputKind::Let(_) => Vec::new(),
+    };
+    checker.solve_inclusions(&keep_open);
     if let InputKind::Let(binding) = kind {
         checker.undecided_binding(binding, result);
     }

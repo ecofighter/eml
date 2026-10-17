@@ -487,16 +487,10 @@ fn a_value_kept_across_two_calls_is_reported_once() {
 /// 精度の限界 (spec の「精度の限界」)。`log` の row は呼び出しで今の row と単一化されるので、`println` しか起こさない
 /// のに `choose` を起こしうると判定される。
 #[test]
-fn a_local_lambda_takes_the_row_of_its_caller() {
+fn a_pure_local_lambda_call_keeps_a_file_across_it() {
+    // `log` の row は今の row を受けずに `<IO>` だけになるので、`log ()` は `multi` の操作を起こさない
     let rest = "logged : Unit -> <Choice, IO> Unit\nlogged () =\n  let f = Fs.open \"a.txt\"\n  let log = fn () -> println \"x\"\n  log ()\n  Fs.close f";
-    insta::assert_snapshot!(carried(rest), @"
-    E3006 24:3 `f` must be used exactly once, but it is kept alive across a call that may resume more than once
-      24:3 this call may perform `choose`, a `multi` operation
-      22:7 `f` is bound here
-      2:9 `choose` is declared `multi` here
-      note: a continuation of a `multi` operation can be resumed more than once, and each resumption would use the value again
-      help: finish using `f` before this call
-    ");
+    assert_eq!(carried(rest), "");
 }
 
 #[test]
@@ -788,6 +782,13 @@ fn a_multi_action_given_to_a_function_that_keeps_a_file() {
 #[test]
 fn a_polymorphic_function_may_keep_unrestricted_values_or_avoid_multi() {
     let rest = "unrestricted : Unit -> <Choice> Int\nunrestricted () = keep 1 chooser\n\npure_action : Unit -> <IO> Unit\npure_action () =\n  let f = Fs.open \"a.txt\"\n  let g = keep f (fn () -> ())\n  Fs.close g";
+    assert_eq!(polymorphic(rest), "");
+}
+
+#[test]
+fn a_pure_function_passed_to_an_effect_polymorphic_function_keeps_a_file() {
+    // `keep` の row は純粋なラムダからしかエフェクトを受けないので、`<>` に閉じて `Choice` を受けない
+    let rest = "kept_pure : Unit -> <Choice, IO> Unit\nkept_pure () =\n  let f = Fs.open \"a.txt\"\n  let g = keep f (fn () -> ())\n  Fs.close g";
     assert_eq!(polymorphic(rest), "");
 }
 

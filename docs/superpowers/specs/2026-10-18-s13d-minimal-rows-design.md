@@ -136,6 +136,7 @@ handler の節の `k` の row は、handle の外側の row である。節の�
 
 - `crates/eml_types/tests/rows.rs` の `a_rigid_tail_in_a_local_function_is_order_dependent`: `h () + ask () + k` の順の E2002 が出なくなる。順序によらず通ることを確かめるテストに書き換え、名前も変える。理由は、rigid な末尾の束縛をラベルを足した後に回したことである
 - `crates/eml_types/tests/linearity.rs` の `a_local_lambda_takes_the_row_of_its_caller`: `log ()` の E3006 が出なくなる。純粋なラムダの呼び出しをまたいで `File` を持てることを確かめるテストに書き換える。理由は、ラムダの row が今の row を受けなくなったことである
+- `crates/eml_types/tests/effects.rs` の `a_rigid_ambient_reports_e2002_in_a_group` (作る途中で見つけた): `f n = h () + g n` の `g n` の E2002 が出なくなる。誤りがないことを確かめるテストに書き換え、名前を `a_rigid_ambient_takes_the_labels_of_a_group_first` に変える。理由は1つ目と同じく、rigid な末尾の束縛をラベルを足した後に回したことである
 
 実装の途中で、ほかにも誤りが出なくなるテストや、新しく誤りになるテスト (上の「ローカル関数とラムダ」の、同じローカル関数を別々の閉じた row の位置に渡す形など) が見つかったら、作る人はコミットの前にこの節に1つずつ足し、理由を書いて、ユーザーの確認を受ける。
 

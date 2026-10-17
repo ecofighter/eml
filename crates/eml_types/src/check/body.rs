@@ -2,9 +2,9 @@ use std::collections::{HashMap, HashSet};
 
 use eml_diagnostics::{Diagnostic, FileId, Label, TextRange};
 use eml_hir::{
-    Body, Closure, ConstructorId, EffectId, ExprId, ExprKind, Function, Literal, LocalFunction,
-    LocalId, MatchArm, OperationId, PatId, PatKind, Program, Res, Segment, Stmt, TypeRefId,
-    TypeRefKind, ValueItem,
+    Body, Closure, ConstructorId, ExprId, ExprKind, Function, Literal, LocalFunction, LocalId,
+    MatchArm, OperationId, PatId, PatKind, Program, Res, Segment, Stmt, TypeRefId, TypeRefKind,
+    ValueItem,
 };
 use la_arena::ArenaMap;
 
@@ -17,6 +17,7 @@ use crate::table::{Row, RowVar, Table, Tail, Ty, TyShape, UnifyError};
 use crate::{FieldTarget, Update, codes};
 
 use super::Signatures;
+use super::inclusion::Inclusion;
 use super::report::{AmbientSource, Origin, callee_subject};
 
 /// 呼び出しの row。持ち越しのパスが読む (docs/spec/effects.md の「継続の多重度と持ち越し規則」)。
@@ -80,31 +81,16 @@ pub(super) struct BodyCheck<'a, 'c> {
     pub(super) typing: BodyTyping,
     /// Kind の具体化の記録 (`Instance`)。段2が展開する。
     pub(super) instances: Vec<Instance>,
-    /// 本体を検査中のローカル関数。内側の関数ほど後ろにある。
-    pub(super) local_frames: Vec<LocalFrame>,
-    /// 最後の矢印の row を閉じたローカル関数。トップレベルの関数と同じく、値として参照すると row を開く
-    /// (docs/spec/types.md の「ローカル関数の推論」)。
-    pub(super) closed_locals: HashSet<LocalId>,
+    /// 呼び出し先の row の末尾が row 変数の呼び出しの包含。本体の検査の後で `solve_inclusions` が解く
+    /// (docs/spec/types.md の「推論」)。
+    pub(super) inclusions: Vec<Inclusion>,
+    /// row の包含で誤りを報告した呼び出し。1回の呼び出しの E2002 は、どの矢印で起きても、呼び出しの位置で確かめても
+    /// 本体の後で解いても1つだけ報告する。
+    pub(super) failed_calls: HashSet<ExprId>,
     /// `fn` の節の本体に期待する型と由来。キーは書いた本体の式である。HIR が本体を `let` の右辺に下ろすので、その
     /// `let` で本体を期待する型に照らす。隠れた `k` の引数の誤りとして報告しないため (docs/spec/expressions.md の
     /// 「handler」)。
     pub(super) fn_clause_bodies: HashMap<ExprId, (Ty, Origin)>,
-}
-
-/// 本体を検査中のローカル関数。本体の中の自分への呼び出しの row は、まだ決まっていないので、包含を確かめずにここへ
-/// 積んでおき、row を閉じた後で確かめる (docs/spec/types.md の「ローカル関数の推論」)。
-pub(super) struct LocalFrame {
-    local: LocalId,
-    deferred: Vec<DeferredRow>,
-}
-
-/// 後に回した自分への呼び出しの矢印の row。包含の先は、呼び出しの位置の今の row とその由来である。
-struct DeferredRow {
-    row: Row,
-    key: (ExprId, usize),
-    name: String,
-    ambient: Row,
-    source: AmbientSource,
 }
 
 /// 式に期待する型。check と infer で `if` とブロックの処理を共有するため。
@@ -539,229 +525,41 @@ impl BodyCheck<'_, '_> {
     }
 
     /// ローカル関数の組 (docs/spec/types.md の「ローカル関数の推論」)。各関数の型を先に置いて名前を束縛し、本体を
-    /// ラムダとして検査する。組の中の呼び出しで後に回した row は、固定点で今の row に足りないラベルを足してから、
-    /// 各関数の最後の矢印の row の自由な末尾を閉じ、閉じた後で包含を確かめる。
+    /// ラムダとして検査する。組の関数の呼び出しも、ほかの呼び出しと同じく包含として本体の後で解く。
     fn local_functions(&mut self, functions: &[LocalFunction]) {
         let body = self.body;
-        let base = self.local_frames.len();
         let mut types = Vec::new();
-        let mut members = Vec::new();
         for function in functions {
             let ExprKind::Lambda(closure) = &body.exprs[function.lambda].kind else {
                 unreachable!("a local function is a lambda")
             };
-            let (ty, last_row, parts) = self.local_function_type(closure.params.len());
+            let ty = self.local_function_type(closure.params.len());
             self.bind_pat(function.pat, ty);
             types.push(ty);
-            // 名前を束縛できなかった関数 (構文の誤りからの回復) は、ラムダと同じく扱う
-            if let Some(&local) = body.defining.get(function.lambda) {
-                self.local_frames.push(LocalFrame {
-                    local,
-                    deferred: Vec::new(),
-                });
-                members.push((local, closure, last_row, parts));
-            }
         }
         for (function, ty) in functions.iter().zip(types) {
             self.check_expr(function.lambda, ty, Origin::Inferred);
         }
-        let deferred: Vec<(LocalId, DeferredRow)> = self
-            .local_frames
-            .split_off(base)
-            .into_iter()
-            .flat_map(|frame| {
-                let callee = frame.local;
-                frame.deferred.into_iter().map(move |row| (callee, row))
-            })
-            .collect();
-        self.add_missing_labels(&deferred);
-        let group: Vec<LocalId> = members.iter().map(|&(local, ..)| local).collect();
-        let closing: Vec<(LocalId, Row, Vec<Ty>)> = members
-            .into_iter()
-            .filter_map(|(local, closure, last_row, parts)| {
-                // 引数と結果の型に現れる末尾も閉じない。`let app f = f ()` のような高階のローカル関数のエフェクトは、
-                // 引数から来るためである。組の関数への参照は捕まえた値ではない
-                let mut keep = parts;
-                keep.extend(
-                    body.closure_captures(closure)
-                        .into_iter()
-                        .filter(|captured| !group.contains(captured))
-                        .map(|captured| {
-                            self.typing
-                                .locals
-                                .get(captured)
-                                .copied()
-                                .unwrap_or(self.table.error)
-                        }),
-                );
-                Some((local, last_row?, keep))
-            })
-            .collect();
-        self.close_group(&closing, &deferred);
-        // 1回の呼び出しの E2002 は、どの矢印で起きても1つだけ報告する (`call` と同じ)
-        let mut failed = HashSet::new();
-        for (_, deferred) in deferred {
-            let DeferredRow {
-                row,
-                key,
-                name,
-                ambient,
-                source,
-            } = deferred;
-            let range = body.exprs[key.0].range;
-            let report = !failed.contains(&key.0);
-            let ok = self.with_ambient(ambient, source, |this| {
-                this.include_call_row(row, key, range, &name, report)
-            });
-            if !ok {
-                failed.insert(key.0);
-            }
-        }
     }
 
-    /// 組の固定点 (docs/spec/types.md の「ローカル関数の推論」)。後に回した呼び出しごとに、呼び出し先の row の今の
-    /// ラベルのうち足りないものを、呼び出しの位置の今の row の自由な末尾に足す。何も足さなくなるまで繰り返す。
-    /// 足せない呼び出しは、後の包含の確かめが E2002 を報告する。
-    fn add_missing_labels(&mut self, deferred: &[(LocalId, DeferredRow)]) {
-        // 足すラベルは、どれも始めたときにいずれかの呼び出し先か今の row にあったラベルの写しである。有限の最小の解では、
-        // ある row のエフェクトごとのラベルは、始めたときの row から写ってきたものを重ねても、異なる row のラベルの数の
-        // 和を超えない。呼び出しの輪をたどるたびに数が増える場合 (組の関数を値として渡したときや、高階の関数の row で
-        // 呼び出し先の row の手前にラベルが付く場合) は有限の解がなく、いずれこの和を超える。超えた呼び出し先からは
-        // 足さないので、固定点は止まり、後の包含が E2002 を報告する。呼び出し先と今の row が末尾を共有するときも
-        // 足さない。足すたびに呼び出し先も伸びるためで、呼び出し先の自由な末尾を使わないことと同じである
-        let mut rows: Vec<Row> = Vec::new();
-        for (_, call) in deferred {
-            for row in [&call.row, &call.ambient] {
-                let row = self.table.resolve_row(row);
-                if !rows.contains(&row) {
-                    rows.push(row);
-                }
-            }
-        }
-        let mut limits: HashMap<EffectId, usize> = HashMap::new();
-        for row in &rows {
-            for (effect, count) in self.label_counts(row) {
-                *limits.entry(effect).or_default() += count;
-            }
-        }
-        loop {
-            let mut added = false;
-            for (_, call) in deferred {
-                let missing = self.table.missing_labels(&call.row, &call.ambient);
-                if missing.is_empty() {
-                    continue;
-                }
-                let shares_tail = self.table.resolve_row(&call.row).tail
-                    == self.table.resolve_row(&call.ambient).tail;
-                let grown = self
-                    .label_counts(&call.row)
-                    .into_iter()
-                    .any(|(effect, count)| count > limits.get(&effect).copied().unwrap_or(0));
-                if shares_tail || grown {
-                    continue;
-                }
-                added |= self.table.add_labels(&call.ambient, missing);
-            }
-            if !added {
-                break;
-            }
-        }
-    }
-
-    fn label_counts(&self, row: &Row) -> HashMap<EffectId, usize> {
-        let mut counts = HashMap::new();
-        for label in self.table.resolve_row(row).labels {
-            *counts.entry(label.effect).or_default() += 1;
-        }
-        counts
-    }
-
-    /// 組の関数の最後の矢印の row の自由な末尾を閉じる。閉じない例外 (docs/spec/types.md の「ローカル関数の推論」) は
-    /// 関数ごとに当てはめる。`members` は関数と、その row と、末尾が現れたら閉じない型である。外側のローカル関数への
-    /// 呼び出しで後に回したものの今の row に現れる末尾も閉じない。また、閉じない row の関数を組の中で呼ぶ位置の今の
-    /// row も閉じない。その包含は閉じない row が決まる前に確かめるので、先に閉じると、閉じない row に後から入る
-    /// エフェクトが入らない。
-    fn close_group(
-        &mut self,
-        members: &[(LocalId, Row, Vec<Ty>)],
-        deferred: &[(LocalId, DeferredRow)],
-    ) {
-        let mut keep_rows: Vec<Row> = self
-            .local_frames
-            .iter()
-            .flat_map(|frame| frame.deferred.iter().map(|call| call.ambient.clone()))
-            .collect();
-        let mut open = vec![false; members.len()];
-        loop {
-            let mut grew = false;
-            for (index, (local, row, keep)) in members.iter().enumerate() {
-                if open[index]
-                    || self.table.closable_tail(row, keep, &keep_rows).is_some()
-                    || !matches!(self.table.resolve_row(row).tail, Tail::Var(_))
-                {
-                    continue;
-                }
-                open[index] = true;
-                grew = true;
-                keep_rows.extend(
-                    deferred
-                        .iter()
-                        .filter(|(callee, _)| callee == local)
-                        .map(|(_, call)| call.ambient.clone()),
-                );
-            }
-            if !grew {
-                break;
-            }
-        }
-        for ((local, row, keep), open) in members.iter().zip(open) {
-            if open {
-                continue;
-            }
-            if let Some(tail) = self.table.closable_tail(row, keep, &keep_rows) {
-                let closed = self.table.close_row(tail);
-                debug_assert!(closed.is_ok(), "a free row variable closes");
-                self.closed_locals.insert(*local);
-            }
-        }
-    }
-
-    /// 引数が `arity` 個のローカル関数の型と、最後の矢印の row と、引数と結果の型。最後でない矢印は引数を受け取るだけ
-    /// なので、トップレベルの関数と同じく row を `<>` に閉じる (docs/spec/types.md の「ローカル関数の推論」)。
-    fn local_function_type(&mut self, arity: usize) -> (Ty, Option<Row>, Vec<Ty>) {
+    /// 引数が `arity` 個のローカル関数の型。最後でない矢印は引数を受け取るだけなので、トップレベルの関数と同じく
+    /// row を `<>` に閉じる (docs/spec/types.md の「ローカル関数の推論」)。
+    fn local_function_type(&mut self, arity: usize) -> Ty {
         let mut ty = self.table.fresh_var();
-        let mut parts = vec![ty];
-        let mut last = None;
         for index in (0..arity).rev() {
             let row = if index + 1 == arity {
-                let row = Row {
+                Row {
                     labels: Vec::new(),
                     tail: Tail::Var(self.table.fresh_row_var()),
-                };
-                last = Some(row.clone());
-                row
+                }
             } else {
                 Row::pure()
             };
             let param = self.table.fresh_var();
-            parts.push(param);
             let lin = self.table.fresh_arrow_lin();
             ty = self.table.function_with(param, lin, row, ty);
         }
-        (ty, last, parts)
-    }
-
-    /// 呼び出し `call` が、本体を検査中のローカル関数を呼ぶなら、その枠の番号を返す。
-    fn self_call_frame(&self, call: ExprId) -> Option<usize> {
-        let ExprKind::Call { callee, .. } = &self.body.exprs[call].kind else {
-            return None;
-        };
-        let ExprKind::Path(Res::Local(local)) = self.body.exprs[*callee].kind else {
-            return None;
-        };
-        self.local_frames
-            .iter()
-            .position(|frame| frame.local == local)
+        ty
     }
 
     /// トップレベルの値を参照するたびに、宣言の型の形を具体化する。呼び出し先の Kind の制約は複写せず、Kind の具体化の
@@ -807,7 +605,8 @@ impl BodyCheck<'_, '_> {
     /// 記録し、部分適用の残りだけを開くため (docs/spec/effects.md の「継続の多重度と持ち越し規則」)。
     ///
     /// 関数と組み込みの参照は、`open` なら、具体化した後に戻り値の側の閉じた row を開く。純粋な関数を、エフェクトを持つ関数型の
-    /// 引数に渡せるようにするため (docs/spec/types.md の「推論」)。局所変数の型は開かない。スキームから複写する Kind
+    /// 引数に渡せるようにするため (docs/spec/types.md の「推論」)。局所変数とローカル関数の型は開かない。row 変数を
+    /// そのまま共有し、呼び出しの包含で row を決める。スキームから複写する Kind
     /// の制約は、参照した場所を由来にする。
     ///
     /// トップレベルの値の参照は、参照ごとの具体化の表に型引数を記録する。単相化の instance の表と型クラスの制約が
@@ -815,19 +614,12 @@ impl BodyCheck<'_, '_> {
     fn path(&mut self, id: ExprId, res: Res, range: TextRange, open: bool) -> Ty {
         let item = match res {
             Res::Local(local) => {
-                let ty = self
+                return self
                     .typing
                     .locals
                     .get(local)
                     .copied()
                     .unwrap_or(self.table.error);
-                // row を閉じたローカル関数は、トップレベルの関数と同じく値として参照すると row を開く。自分の本体の中では
-                // まだ閉じていないので、開かない単相の型のままである (docs/spec/types.md の「ローカル関数の推論」)
-                return if open && self.closed_locals.contains(&local) {
-                    self.table.open_spine(ty)
-                } else {
-                    ty
-                };
             }
             Res::Item(item) => item,
         };
@@ -906,15 +698,6 @@ impl BodyCheck<'_, '_> {
                 self.typing.exprs.insert(callee, ty);
                 (ty, true)
             }
-            // ローカル関数も、呼ばれる位置では開かずに矢印の row を記録する。部分適用の残りを開くのは、row を閉じた
-            // 関数だけである (docs/spec/types.md の「ローカル関数の推論」)
-            ExprKind::Path(res @ Res::Local(local))
-                if body.local_functions.get(*local).is_some() =>
-            {
-                let ty = self.path(callee, *res, callee_expr.range, false);
-                self.typing.exprs.insert(callee, ty);
-                (ty, self.closed_locals.contains(local))
-            }
             _ => (self.infer_expr(callee), false),
         };
         let performs = match &callee_expr.kind {
@@ -925,8 +708,6 @@ impl BodyCheck<'_, '_> {
         };
         let mut arrows = Vec::new();
         let mut postponed = Postponed::default();
-        // 1回の呼び出しの E2002 は、どの引数の矢印で起きても1つだけ報告する
-        let mut reported = false;
         let argument = |index| Origin::Argument {
             callee: callee_expr.range,
             name: name.clone(),
@@ -937,7 +718,7 @@ impl BodyCheck<'_, '_> {
             // 呼ばれる側の型が変数なら、`next_arrow` がそれを新しい関数型に決める前に、後に回したラムダを検査する。
             // その変数を決めるのはラムダかもしれないためである (`apply (fn x -> x) 1 2`)
             if !postponed.is_empty() && matches!(self.table.shape(ty), TyShape::Var(_)) {
-                self.check_postponed(&mut postponed, id, &name, &mut reported);
+                self.check_postponed(&mut postponed, id, &name);
             }
             match self.next_arrow(ty) {
                 Arrow::Fn { param, row, ret } => {
@@ -950,7 +731,7 @@ impl BodyCheck<'_, '_> {
                         self.check_expr(arg, param, origin);
                         // ラムダを後に回した後は、row を引数の順に入れるため、この row も後に回す
                         if postponed.is_empty() {
-                            self.include_arg_row(row, id, index, &name, &mut reported);
+                            self.include_arg_row(row, id, index, &name);
                         } else {
                             postponed.rows.push((index, row));
                         }
@@ -958,13 +739,13 @@ impl BodyCheck<'_, '_> {
                     ty = ret;
                 }
                 Arrow::Error => {
-                    self.check_postponed(&mut postponed, id, &name, &mut reported);
+                    self.check_postponed(&mut postponed, id, &name);
                     self.check_against_error(arg, origin);
                 }
                 Arrow::NotFunction => {
                     let diagnostic = self.call_arity_error(&name, index, args.len(), arg);
                     self.diagnostics.push(diagnostic);
-                    self.check_postponed(&mut postponed, id, &name, &mut reported);
+                    self.check_postponed(&mut postponed, id, &name);
                     for (rest_index, &rest) in args.iter().enumerate().skip(index) {
                         self.check_against_error(rest, argument(rest_index));
                     }
@@ -989,7 +770,7 @@ impl BodyCheck<'_, '_> {
             if let Expectation::Has(expected, origin) = expectation {
                 self.expect(range, expected, ty, &origin);
             }
-            self.check_postponed(&mut postponed, id, &name, &mut reported);
+            self.check_postponed(&mut postponed, id, &name);
             Expectation::None
         };
         if let Expectation::Has(expected, origin) = expectation {
@@ -1009,43 +790,40 @@ impl BodyCheck<'_, '_> {
     /// から row を入れるため、この順にする (`try (fn () -> deploy ())`)。ラムダは、後に回したときの矢印の引数の型に
     /// 対して検査する。後の引数で呼び出しが誤りになっても同じである。ラムダの型は誤りより前の矢印で決まっているので、
     /// ラムダの中の誤りを、ラムダを後に回さないときと同じく報告するためである。
-    fn check_postponed(
-        &mut self,
-        postponed: &mut Postponed,
-        call: ExprId,
-        name: &str,
-        reported: &mut bool,
-    ) {
+    fn check_postponed(&mut self, postponed: &mut Postponed, call: ExprId, name: &str) {
         for (arg, param, origin) in std::mem::take(&mut postponed.lambdas) {
             self.check_expr(arg, param, origin);
         }
         for (index, row) in std::mem::take(&mut postponed.rows) {
-            self.include_arg_row(row, call, index, name, reported);
+            self.include_arg_row(row, call, index, name);
         }
     }
 
-    fn include_arg_row(
-        &mut self,
-        row: Row,
-        call: ExprId,
-        index: usize,
-        name: &str,
-        reported: &mut bool,
-    ) {
-        if let Some(frame) = self.self_call_frame(call) {
-            let deferred = DeferredRow {
-                row,
-                key: (call, index),
-                name: name.to_string(),
-                ambient: self.ambient.clone(),
-                source: self.ambient_source.clone(),
-            };
-            self.local_frames[frame].deferred.push(deferred);
+    /// 呼び出し先の矢印の row を今の row に入れる (docs/spec/types.md の「推論」)。末尾が row 変数なら、明示した
+    /// ラベルだけを今すぐ今の row と対にし、末尾は単一化せずに包含として本体の後に回す。ラベルを今すぐ対にするのは、
+    /// 操作の結果の型を後の射影より前に決めるためである。
+    fn include_arg_row(&mut self, row: Row, call: ExprId, index: usize, name: &str) {
+        let range = self.body.exprs[call].range;
+        let key = (call, index);
+        let row = self.table.resolve_row(&row);
+        let labels = match row.tail {
+            Tail::Var(_) => Row::closed(row.labels.clone()),
+            Tail::Closed | Tail::Error => row.clone(),
+        };
+        let report = !self.failed_calls.contains(&call);
+        if !self.include_call_row(labels, key, range, name, report) {
+            self.failed_calls.insert(call);
             return;
         }
-        let range = self.body.exprs[call].range;
-        let ok = self.include_call_row(row, (call, index), range, name, !*reported);
-        *reported |= !ok;
+        if let Tail::Var(_) = row.tail {
+            self.inclusions.push(Inclusion {
+                callee: row,
+                ambient: self.ambient.clone(),
+                source: self.ambient_source.clone(),
+                key,
+                name: name.to_string(),
+            });
+        }
     }
 
     /// 矢印に当たらない、型の壊れた呼び出しの引数。ラムダは `Error` の型に対して検査し、引数を `Error` で束縛する。

@@ -29,6 +29,7 @@ mod body;
 mod constraints;
 mod field;
 mod handle;
+mod inclusion;
 mod input;
 mod query;
 mod report;
@@ -503,11 +504,12 @@ pub(crate) fn check_body<'c>(
         ambient_source: AmbientSource::Signature,
         typing: BodyTyping::default(),
         instances: Vec::new(),
-        local_frames: Vec::new(),
-        closed_locals: HashSet::new(),
+        inclusions: Vec::new(),
+        failed_calls: HashSet::new(),
         fn_clause_bodies: HashMap::new(),
     };
     checker.check_function(own.ty);
+    checker.solve_inclusions(&[]);
     checker.solve_constraints(Defaulting::None);
     let typing = checker.typing;
     let instances = checker.instances;

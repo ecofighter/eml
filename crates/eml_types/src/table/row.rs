@@ -44,10 +44,9 @@ impl Table<'_> {
     }
 
     /// row の末尾が束縛のない rigid でない変数で、`keep` のどの型にも `keep_rows` のどの row にも現れなければ、その
-    /// 変数を返す。ローカル関数の最後の矢印の row の、`close_row` で閉じてよい末尾である。`keep` は捕まえた変数の型と、
-    /// 関数の引数と結果の型である。`keep_rows` は、後に回した呼び出しのうち、まだ閉じない row の関数への呼び出しの、
-    /// 呼び出しの位置の今の row である。それらに現れる末尾は、外側の推論か、引数のエフェクトか、まだ含めていない
-    /// 呼び出しとつながっているので閉じない (docs/spec/types.md の「ローカル関数の推論」)。
+    /// 変数を返す。呼び出し先の row の、`close_row` で閉じてよい末尾である。`keep` は REPL の `:type` で問い合わせた
+    /// 式の型で、`keep_rows` は呼び出しの位置の今の row である。それらに現れる末尾は、閉じずに包含の確かめの単一化に
+    /// 任せる (docs/spec/types.md の「推論」)。
     pub fn closable_tail(&self, row: &Row, keep: &[Ty], keep_rows: &[Row]) -> Option<RowVar> {
         let Tail::Var(var) = self.resolve_row(row).tail else {
             return None;
@@ -62,9 +61,9 @@ impl Table<'_> {
     }
 
     /// 呼び出し先の row `callee` のラベルのうち、今の row `ambient` に足りないもの。同じエフェクトのラベルは、
-    /// 単一化と同じく row の中の順で対にして数える (scoped labels)。ローカル関数の組の固定点が、表を変えずに足りない
-    /// ラベルを数えるために使う。呼び出し先の末尾は見ない。末尾どうしをつなぐと、包含の確かめを先に済ませることに
-    /// なるためである (docs/spec/types.md の「ローカル関数の推論」)。
+    /// 単一化と同じく row の中の順で対にして数える (scoped labels)。包含の固定点が、表を変えずに足りないラベルを
+    /// 数えるために使う。呼び出し先の末尾は見ない。末尾どうしをつなぐと、包含の確かめを先に済ませることになるため
+    /// である (docs/spec/types.md の「推論」)。
     pub fn missing_labels(&self, callee: &Row, ambient: &Row) -> Vec<Label> {
         let mut unmatched = self.resolve_row(ambient).labels;
         self.resolve_row(callee)
@@ -87,7 +86,7 @@ impl Table<'_> {
 
     /// `row` の末尾が束縛のない rigid でない変数なら、末尾を `labels` と新しい末尾に束縛して `true` を返す。足せない
     /// とき (閉じた末尾、rigid な末尾、`Error`、ラベルの型引数に末尾が現れるとき) は表を変えずに `false` を返す。
-    /// 足せなかった呼び出しは、後の包含の確かめが報告する (docs/spec/types.md の「ローカル関数の推論」)。
+    /// 足せなかった呼び出しは、後の包含の確かめが報告する (docs/spec/types.md の「推論」)。
     pub fn add_labels(&mut self, row: &Row, labels: Vec<Label>) -> bool {
         let Tail::Var(var) = self.resolve_row(row).tail else {
             return false;
@@ -105,6 +104,27 @@ impl Table<'_> {
             bound.is_ok(),
             "a free row variable takes labels it does not occur in"
         );
+        true
+    }
+
+    /// `ambient` の末尾が束縛のない rigid でない変数なら、その変数を rigid な変数 `rigid` だけを末尾に持つ row に束縛
+    /// して `true` を返す。ほかの末尾なら表を変えずに `false` を返す。包含の rigid な末尾の固定点が、ラベルを足し
+    /// 終えた今の row を呼び出し先の rigid な変数で閉じるのに使う (docs/spec/types.md の「推論」)。
+    pub fn extend_to_rigid(&mut self, ambient: &Row, rigid: RowVar) -> bool {
+        let Tail::Var(var) = self.resolve_row(ambient).tail else {
+            return false;
+        };
+        if self.is_rigid_row(var) {
+            return false;
+        }
+        let bound = self.bind_row(
+            var,
+            Row {
+                labels: Vec::new(),
+                tail: Tail::Var(rigid),
+            },
+        );
+        debug_assert!(bound.is_ok(), "a free row variable takes a rigid tail");
         true
     }
 

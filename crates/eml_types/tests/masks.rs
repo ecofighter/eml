@@ -315,7 +315,40 @@ outer action =
 
 #[test]
 fn a_self_call_under_its_own_handler_has_no_mask() {
-    // 自分への呼び出しの包含は row を閉じた後に確かめる。閉じた row は rigid な末尾を持たないので `mask` が要らない
+    // 自分への呼び出しの包含は、外からの `go n` の包含が `go` の row を閉じた後に確かめる。閉じた row は rigid な末尾を
+    // 持たないので `mask` が要らない
     let text = "effect Ask where\n  ask : Unit -> Int\n\ncount : Int -> <IO> Int\ncount n =\n  let go k =\n    if k == 0 then 0\n    else handle ask () + go (k - 1) with | ctl ask () r -> r 1\n  go n";
     assert_eq!(masks(text, "count"), "");
+}
+
+#[test]
+fn a_rigid_callee_with_a_label_of_the_masked_effect_keeps_it() {
+    // `h` の row が明示した `Log` は、今の row の最初の `Log` と対になって残り、2つ目の `Log` を飛ばす
+    let text = "effect Log where\n  log : String -> Unit\n\nf : (Unit -> <Log | e> Int) -> <Log, Log | e> Int\nf h = h ()\n";
+    insta::assert_snapshot!(masks(text, "f"), @"5:7#0 [Log@1]");
+}
+
+const L: &str = "effect L where\n  op : Unit -> Int\n\n";
+
+#[test]
+fn resuming_under_a_handler_of_the_same_effect() {
+    // `k` の row と今の row が同じ開いた末尾を共有する形は、今と同じく誤りになる。rigid な末尾なら `mask` で通る
+    let in_lambda = format!(
+        "{L}in_lambda : Unit -> <L> Int\nin_lambda () =\n  let f = fn () ->\n    op () + (handle op () with\n      | ctl op () k -> handle k 1 with\n          | fn op () -> 2)\n  f ()\n"
+    );
+    let checked = check(&in_lambda);
+    let diagnostics = eml_test_support::short(checked.files(), &checked.diagnostics);
+    assert_eq!(diagnostics.len(), 1, "{diagnostics:?}");
+    assert!(
+        diagnostics[0].starts_with("E2002")
+            && diagnostics[0].ends_with("`k` performs `L`, which this lambda does not allow"),
+        "{diagnostics:?}"
+    );
+    let in_signature = format!(
+        "{L}in_signature : (Unit -> <e> Int) -> <L | e> Int\nin_signature h =\n  op () + (handle op () with\n    | ctl op () k -> handle k (h ()) with\n        | fn op () -> 2)\n"
+    );
+    insta::assert_snapshot!(masks(&in_signature, "in_signature"), @"
+    7:29#0 [L@1]
+    7:32#0 [L*2]
+    ");
 }

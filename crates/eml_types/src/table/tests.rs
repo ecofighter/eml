@@ -897,3 +897,31 @@ fn add_labels_extends_only_a_free_tail() {
     assert!(!table.add_labels(&closed, vec![ask]));
     assert_eq!(table.resolve_row(&closed), closed);
 }
+
+#[test]
+fn extend_to_rigid_binds_only_a_free_tail() {
+    let context = test_context();
+    let mut table = Table::new(&context);
+    let io = Label::plain(table.context.externs.io);
+    let e = table.fresh_rigid_row("e");
+    let free = table.fresh_row_var();
+    let open = Row {
+        labels: vec![io.clone()],
+        tail: Tail::Var(free),
+    };
+    assert!(table.extend_to_rigid(&open, e));
+    let resolved = table.resolve_row(&open);
+    assert_eq!(resolved.labels, vec![io.clone()]);
+    assert_eq!(resolved.tail, Tail::Var(e));
+
+    let closed = Row::closed(vec![io]);
+    assert!(!table.extend_to_rigid(&closed, e));
+    assert_eq!(table.resolve_row(&closed), closed);
+    let f = table.fresh_rigid_row("f");
+    let rigid = Row {
+        labels: Vec::new(),
+        tail: Tail::Var(f),
+    };
+    assert!(!table.extend_to_rigid(&rigid, e));
+    assert_eq!(table.resolve_row(&rigid), rigid);
+}
