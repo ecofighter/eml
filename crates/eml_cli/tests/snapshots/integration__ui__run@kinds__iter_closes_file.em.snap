@@ -1,0 +1,13 @@
+---
+source: crates/eml_cli/tests/ui.rs
+expression: "format!(\"--- stdout ---\\n{stdout}--- stderr ---\\n{diagnostics}{stderr}{written}{exit}\")"
+input_file: tests/ui/run/kinds/iter_closes_file.em
+---
+--- stdout ---
+first line
+first line
+second line
+third line
+closed by the return clause
+done
+--- stderr ---

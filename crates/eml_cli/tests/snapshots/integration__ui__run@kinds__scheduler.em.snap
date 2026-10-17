@@ -1,0 +1,13 @@
+---
+source: crates/eml_cli/tests/ui.rs
+expression: "format!(\"--- stdout ---\\n{stdout}--- stderr ---\\n{diagnostics}{stderr}{written}{exit}\")"
+input_file: tests/ui/run/kinds/scheduler.em
+---
+--- stdout ---
+a: 1
+b: 1
+a: 2
+b: 2
+a: 3
+all done
+--- stderr ---

@@ -1,0 +1,19 @@
+---
+source: crates/eml_cli/tests/ui.rs
+expression: "format!(\"--- stdout ---\\n{stdout}--- stderr ---\\n{diagnostics}{stderr}{written}{exit}\")"
+input_file: tests/ui/run/kinds/references_in_once_positions.em
+---
+--- stdout ---
+2
+(2, 3)
+11
+5
+(1, 2)
+println in a once field
+println in a field, 1
+println in a field, 2
+Some 3
+(Some 3, Some 4)
+42
+("5", "6")
+--- stderr ---

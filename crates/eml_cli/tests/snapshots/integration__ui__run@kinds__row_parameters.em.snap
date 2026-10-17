@@ -1,0 +1,17 @@
+---
+source: crates/eml_cli/tests/ui.rs
+expression: "format!(\"--- stdout ---\\n{stdout}--- stderr ---\\n{diagnostics}{stderr}{written}{exit}\")"
+input_file: tests/ui/run/kinds/row_parameters.em
+---
+--- stdout ---
+produce 1
+got 1
+produce 2
+got 2
+produce 3
+got 3
+done
+[10, 20, 30] after 3 ticks
+[1, 2, 3, 4]
+[]
+--- stderr ---

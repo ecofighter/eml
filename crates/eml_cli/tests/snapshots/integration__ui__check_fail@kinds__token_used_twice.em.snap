@@ -1,0 +1,16 @@
+---
+source: crates/eml_cli/tests/ui.rs
+expression: rendered
+input_file: tests/ui/check-fail/kinds/token_used_twice.em
+---
+[E3002] Error: `t` must be used exactly once, but it is used more than once
+    ╭─[ check-fail/kinds/token_used_twice.em:11:27 ]
+    │
+ 11 │ twice t = spend t + spend t
+    │                 ┬         ┬  
+    │                 ╰──────────── first used here
+    │                           │  
+    │                           ╰── used again here
+    │ 
+    │ Note: linear values, such as files, the continuation of a `once` operation and closures that capture one, must be used exactly once
+────╯

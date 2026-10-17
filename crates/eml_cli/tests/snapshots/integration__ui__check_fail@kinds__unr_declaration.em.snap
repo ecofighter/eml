@@ -1,0 +1,12 @@
+---
+source: crates/eml_cli/tests/ui.rs
+expression: rendered
+input_file: tests/ui/check-fail/kinds/unr_declaration.em
+---
+[E0004] Error: declaring a type `Unr` is not supported yet
+   ╭─[ check-fail/kinds/unr_declaration.em:2:14 ]
+   │
+ 2 │ data Plain : Unr =
+   │              ─┬─  
+   │               ╰─── this is implemented in a later stage
+───╯

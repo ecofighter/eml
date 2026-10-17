@@ -1,0 +1,14 @@
+---
+source: crates/eml_cli/tests/ui.rs
+expression: rendered
+input_file: tests/ui/check-fail/kinds/duplicate_parameter.em
+---
+[E1003] Error: `e` is defined more than once
+   ╭─[ check-fail/kinds/duplicate_parameter.em:2:15 ]
+   │
+ 2 │ data Pair <e> e =
+   │            ┬  ┬  
+   │            ╰───── first defined here
+   │               │  
+   │               ╰── defined again here
+───╯

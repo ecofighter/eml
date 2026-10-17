@@ -1,0 +1,28 @@
+---
+source: crates/eml_cli/tests/ui.rs
+expression: rendered
+input_file: tests/ui/check-fail/kinds/argument_sorts.em
+---
+[E1048] Error: `Iter` takes a row here
+   ╭─[ check-fail/kinds/argument_sorts.em:7:14 ]
+   │
+ 7 │ lower : Iter e Int -> Int
+   │              ┬  
+   │              ╰── this is a type
+   │ 
+   │ Help: write it as a row: `<e>`
+───╯
+[E1048] Error: `Iter` takes a row here
+    ╭─[ check-fail/kinds/argument_sorts.em:10:14 ]
+    │
+ 10 │ typed : Iter Int Int -> Int
+    │              ─┬─  
+    │               ╰─── this is a type
+────╯
+[E1048] Error: `List` takes a type here
+    ╭─[ check-fail/kinds/argument_sorts.em:13:21 ]
+    │
+ 13 │ row_for_type : List <IO> -> Int
+    │                     ──┬─  
+    │                       ╰─── this is a row
+────╯

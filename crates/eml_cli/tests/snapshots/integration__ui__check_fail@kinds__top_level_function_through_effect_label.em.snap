@@ -1,0 +1,16 @@
+---
+source: crates/eml_cli/tests/ui.rs
+expression: rendered
+input_file: tests/ui/check-fail/kinds/top_level_function_through_effect_label.em
+---
+[E3002] Error: `f` must be used exactly once, but it is used more than once
+    ╭─[ check-fail/kinds/top_level_function_through_effect_label.em:21:31 ]
+    │
+ 21 │           | put f k2 -> f 1 + f 2 + k2 ()
+    │                         ┬     ┬  
+    │                         ╰──────── first used here
+    │                               │  
+    │                               ╰── used again here
+    │ 
+    │ Note: linear values, such as files, the continuation of a `once` operation and closures that capture one, must be used exactly once
+────╯

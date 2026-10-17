@@ -1,0 +1,39 @@
+---
+source: crates/eml_cli/tests/repl.rs
+expression: checked.render()
+input_file: crates/eml_cli/tests/repl/declarations/kinds.repl
+---
+> data Iter <e> a =
+.   | Done
+.   | More a (once Unit -> <e> Iter <e> a)
+. effect Yield a where
+.   yield : a -> Unit
+. generate : (Unit -> <Yield a | e> Unit) -> <e> Iter <e> a
+. generate producer =
+.   handle producer () with
+.     | yield x k -> More x k
+.     | return () -> Done
+.
+> :type More
+More : a -> (once Unit -> <e> Iter <e> a) -> Iter <e> a
+> :type fn it -> match it with | More _ next -> next | Done -> fn () -> Done
+fn it -> match it with | More _ next -> next | Done -> fn () -> Done : Iter <e> a -> once Unit -> <e> Iter <e> a
+> to_list : Iter <e> a -> <e> List a
+. to_list it =
+.   match it with
+.     | Done -> []
+.     | More x next -> x :: to_list (next ())
+.
+> to_list (generate (fn () -> List.each yield [1, 2, 3]))
+[1, 2, 3]
+> data Token : Lin =
+.   | Token
+.
+> :type Token
+Token : Token
+> Token
+E2016 <input 5> 1:1 this input leaves a value of the linear type `Token`
+  <input 5> 1:1 a linear value
+  help: use up the value inside the input, as in `drop`
+--- close ---
+no leaks

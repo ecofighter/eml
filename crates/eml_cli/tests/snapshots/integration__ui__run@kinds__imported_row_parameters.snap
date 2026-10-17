@@ -1,0 +1,11 @@
+---
+source: crates/eml_cli/tests/ui.rs
+expression: "format!(\"--- stdout ---\\n{stdout}--- stderr ---\\n{diagnostics}{stderr}{written}{exit}\")"
+input_file: tests/ui/run/kinds/imported_row_parameters/main.em
+---
+--- stdout ---
+yield 1
+yield 2
+yield 3
+numbers: 6
+--- stderr ---

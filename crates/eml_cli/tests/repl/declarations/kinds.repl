@@ -1,0 +1,29 @@
+# row の型引数と `once` のフィールドを持つ `Iter` を定義し、`:type` が `once` の矢印を書くことを確かめる
+# (docs/spec/types.md の「1回だけ呼べる関数の型」)
+> data Iter <e> a =
+.   | Done
+.   | More a (once Unit -> <e> Iter <e> a)
+. effect Yield a where
+.   yield : a -> Unit
+. generate : (Unit -> <Yield a | e> Unit) -> <e> Iter <e> a
+. generate producer =
+.   handle producer () with
+.     | yield x k -> More x k
+.     | return () -> Done
+.
+> :type More
+> :type fn it -> match it with | More _ next -> next | Done -> fn () -> Done
+> to_list : Iter <e> a -> <e> List a
+. to_list it =
+.   match it with
+.     | Done -> []
+.     | More x next -> x :: to_list (next ())
+.
+> to_list (generate (fn () -> List.each yield [1, 2, 3]))
+# `: Lin` と宣言した型も、セッションで定義して使える
+> data Token : Lin =
+.   | Token
+.
+> :type Token
+# `Lin` の値は入力の外へ残せない
+> Token

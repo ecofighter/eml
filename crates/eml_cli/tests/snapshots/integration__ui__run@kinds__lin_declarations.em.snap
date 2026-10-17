@@ -1,0 +1,14 @@
+---
+source: crates/eml_cli/tests/ui.rs
+expression: "format!(\"--- stdout ---\\n{stdout}--- stderr ---\\n{diagnostics}{stderr}{written}{exit}\")"
+input_file: tests/ui/run/kinds/lin_declarations.em
+---
+--- stdout ---
+token spent
+token spent
+nothing to spend
+token spent after 7
+continuation holding a token dropped
+worker did 3: [2, 1, 0]
+True
+--- stderr ---

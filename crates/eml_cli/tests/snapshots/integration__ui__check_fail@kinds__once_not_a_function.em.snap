@@ -1,0 +1,12 @@
+---
+source: crates/eml_cli/tests/ui.rs
+expression: rendered
+input_file: tests/ui/check-fail/kinds/once_not_a_function.em
+---
+[E0011] Error: expected `->`
+   ╭─[ check-fail/kinds/once_not_a_function.em:3:18 ]
+   │
+ 3 │   | Job (once Int)
+   │                  ┬  
+   │                  ╰── found `)`
+───╯
