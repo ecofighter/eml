@@ -65,17 +65,11 @@ S13b を、次の3つの作業に分けて順に進める (2026-10-17 に決め�
 
 | 作業 | 中身 |
 |---|---|
-| S13b-1 | 位置つきの `mask`。E2008 をなくす |
+| S13b-1 | 位置つきの `mask`。E2008 をなくす。済み。決めたことは [エフェクトと handler](../spec/effects.md) と [型と Kind](../spec/types.md) にある |
 | S13b-2 | `k` を書かない節と、ローカル関数どうしの相互再帰 |
 | S13b-3 | std の `Yield`、`Fail`、`State` とその handler、`Std.Iter`、`Fs.read_line`、S12d のスクリプトの書き換え |
 
 位置つきの `mask` を最初に置くのは、型を変換する handler を書く前提で、ほかの2つの作業に依らないためである。std の `Yield` はまだないので、S13b-1 の完了の条件はテストの中で宣言した `Yield` で確かめる。S13b-3 を最後に置くのは、std の handler を S13b-2 の `k` を書かない節で書くためである。
-
-#### 決めたこと: 位置つきの `mask` (S13b-1)
-
-- `mask` を位置つきにして E2008 をなくす。今の `mask` は、呼び出しの中の操作が handler を探すとき、同じエフェクトの handler を先頭から決まった数だけ飛ばす。これを「先頭から n 個を残し、その後ろの m 個を飛ばす」形に広げる。呼び出し先の row を `<ls | e>` とすると、n は `ls` の中のそのエフェクトの数、m は rest の中の数である。今の row の `L` の並びは `[ls と対になる n 個, rest の m 個, e の分]` で、m 個を飛ばすと、呼び出し先から見える並びが呼び出し先の row と一致する。そのため、[エフェクトと handler](../spec/effects.md) の「健全性」の不変条件がそのまま成り立つ。Koka の `mask behind` と同じ考え方である。`k` の呼び出しの `mask` も同じ規則で決める
-- Core IR の呼び出しの `mask`、EP の `mask$[…]`、基本操作 `evv_mask[…]` の即値を、多重集合から「エフェクトごとの (n, m)」に変える。`evv_mask` は `evv` の中で `L` の evidence を n 個残し、続く m 個を除く。写すのは除く位置までの節点だけなので、実行時の費用は今と変わらない
-- 理由: `Yield Int` を受けて `Yield String` を出す handler (`render : (Unit -> <Yield Int | e> Unit) -> <Yield String | e> Unit`) は、今は E2008 になる (2026-10-17 に試した)。`handle` の本体の row は `<Yield Int, Yield String | e>` で、`gen` 自身の `Yield` は1つ目の handler に、`e` を通る `Yield` は2つ目も飛ばして外へ届かなければならない。E2008 になるのはちょうど n と m がどちらも正の場合なので、位置つきの `mask` で E2008 はなくなる。E2008 の UI テスト (`tests/ui/check-fail/types/mask_conflict.em`、`mask_conflict_handles.em`) は `run` に移る
 
 #### 決めたこと: `k` を書かない節と相互再帰 (S13b-2)
 

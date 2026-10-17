@@ -121,7 +121,6 @@ struct Fix {
 | E2004 | `INVALID_MAIN_TYPE` | `main` のシグネチャが `Unit -> <IO> Unit` でない |
 | E2005 | `INFINITE_TYPE` | 無限の型 (単一化の occurs check)。row のラベルの型引数を通して、型変数か row 変数が自分自身の中に現れる場合を含む |
 | E2006 | `NO_INSTANCE` | 制約 `C T` を満たす instance がない。上位クラスの instance がないこと、導出した instance のフィールドの型が instance を持たないことを含む ([型と Kind](types.md) の「制約の解決」) |
-| E2008 | `MASK_CONFLICT` | 呼び出し先が自分で起こすエフェクトを、同じ呼び出しで row 変数のために飛ばす必要がある |
 | E2009 | `AMBIGUOUS_CONSTRAINT` | 制約の型が最後まで決まらない。`:type` の問い合わせでは、型に現れない型変数を `Unit` とみなして解けないとき |
 | E2010 | `LINEAR_INSTANCE_HEAD` | `Unr` のクラスの instance の頭が `Unr` でない ([型と Kind](types.md) の「`Unr` のクラス」) |
 | E2011 | `METHOD_KIND_MISMATCH` | instance のメソッドか既定のメソッドが、クラスのシグネチャから導けない Kind の制約 (線形性と多重度の境界、持ち越しの制約) を持つ ([型と Kind](types.md) の「instance と既定のメソッドの検査」) |
@@ -147,6 +146,8 @@ struct Fix {
 E1011 は、もとは `resume` と `drop` の引数の個数の誤り (`KEYWORD_ARITY`) だった。`resume` をキーワードでなく継続 `k` の呼び出しにしたときに、`drop` だけの誤り (`DROP_ARITY`) に狭めて使い続けることにした。
 
 E2007 は欠番である。もとは `resume` の状態の欄の食い違いに使っていた番号で、ほかの診断には使わない。
+
+E2008 は欠番である。もとは `MASK_CONFLICT` (呼び出し先が自分で起こすエフェクトを、同じ呼び出しで row 変数のために飛ばす必要がある) に使っていた番号で、`mask` を位置つきにしたときに不要になった ([エフェクトと handler](effects.md) の「handler の意味」)。ほかの診断には使わない。
 
 E2006 は、もとは `NOT_COMPARABLE` (`==` か `!=` で、`Int`、`String`、`Bool` のどれでもない型の値を比べた) だった。型クラスを入れたときに、E2007 のように欠番にせず、名前と意味を改めて使い続けることにした。新しい意味 (instance がない) は、もとの意味を含む一般化だからである。`==` の位置に出る場合も、演算子でなくクラスの言葉で言う。
 

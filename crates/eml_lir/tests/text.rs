@@ -1351,7 +1351,7 @@ fn a_prim_has_the_immediates_of_its_kind() {
     assert_eq!(prim("ev_frob()"), "line 3: unknown primitive `ev_frob`");
 }
 
-/// 空の多重集合は、表示と同じ形に戻らないので読まない。
+/// 空の項目の並びは、表示と同じ形に戻らないので読まない。
 #[test]
 fn an_evv_mask_masks_some_effect() {
     let error = parse_error(

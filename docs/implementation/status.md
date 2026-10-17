@@ -2,7 +2,7 @@
 
 位置づけ: 手引き。
 
-M1 (言語の全体を一通り通す vertical slice と、本番の構文の最初の部分) と M2 (モジュールと、参照ごとの具体化の表) は完了した。今は再設計 (S0〜S13) を進めていて、S10 (VM と切り替え) と S11 (REPL) を終え、S12 (スクリプトの MVP) を終え、S13a (Kind の記法) を終えた ([ロードマップ](../future/roadmap.md) の「段の列」)。S12d で書いた5本のスクリプト (wc、grep、ログの集計、CSV の変換、デプロイ手順) は `tests/ui/run/scripts/` の UI テストで、書いてみて分かったことはロードマップの「S13 実例による判断」にある。`eml run` は、Perceus の後の LIR をレジスタ型のバイトコードに変換し、`eml_rt` の上の VM で実行する ([VM](../spec/vm.md))。Perceus は、`switch` と `unpack` のフィールドを借りたまま使い、所有が要る所でだけ所有を取る ([LIR](../spec/lir.md) の「Perceus」)。S11 で `eml repl` を入れた ([REPL の端末](../spec/repl.md))。次は S13b (std のエフェクトと `Iter`) である。この文書は、今の言語の範囲と既知の制限をまとめる。実装が進んだら更新する。
+M1 (言語の全体を一通り通す vertical slice と、本番の構文の最初の部分) と M2 (モジュールと、参照ごとの具体化の表) は完了した。今は再設計 (S0〜S13) を進めていて、S10 (VM と切り替え) と S11 (REPL) を終え、S12 (スクリプトの MVP) を終え、S13a (Kind の記法) と S13b-1 (位置つきの `mask`) を終えた ([ロードマップ](../future/roadmap.md) の「段の列」)。S12d で書いた5本のスクリプト (wc、grep、ログの集計、CSV の変換、デプロイ手順) は `tests/ui/run/scripts/` の UI テストで、書いてみて分かったことはロードマップの「S13 実例による判断」にある。`eml run` は、Perceus の後の LIR をレジスタ型のバイトコードに変換し、`eml_rt` の上の VM で実行する ([VM](../spec/vm.md))。Perceus は、`switch` と `unpack` のフィールドを借りたまま使い、所有が要る所でだけ所有を取る ([LIR](../spec/lir.md) の「Perceus」)。S11 で `eml repl` を入れた ([REPL の端末](../spec/repl.md))。次は S13b-2 (`k` を書かない節と、ローカル関数どうしの相互再帰) である。この文書は、今の言語の範囲と既知の制限をまとめる。実装が進んだら更新する。
 
 ## 今の言語の範囲
 
@@ -19,6 +19,7 @@ M1 (言語の全体を一通り通す vertical slice と、本番の構文の最
 - fixity の宣言とユーザー定義の演算子、演算子のセクション、`use`
 - `drop` キーワード
 - エフェクトの宣言 (`never` / `once` / `multi`、型引数)、`handle` (deep)、`k` の呼び出しによる再開、`drop k`、パラメータ付き handler (`handle ... from ... with`)
+- 位置つきの `mask`: 型検査が呼び出しごとに決め、エフェクトごとに内側の n 個の handler を残して続く m 個を飛ばす。`Yield Int` を受けて `Yield String` を出すような、型を変換する handler を書ける ([エフェクトと handler](../spec/effects.md) の「handler の意味」、[型と Kind](../spec/types.md) の「推論」)
 - `extern` の宣言と `eml_extern` の表。`Int`、`String`、`Unit`、`IO`、`println`、算術の演算子などは Prelude の `extern` である。`Int`、`String`、`Bool` の比較と表示のメソッドは、instance の中の `extern` で表の行に結ぶ。`IO` を、`println` と標準ライブラリのモジュール `Fs` の `open`、`read_all`、`close` などが起こし、`Fs.File` は線形型である。ユーザーは `IO` を handle できず (Prelude の `try_io` だけが handle する)、`extern` を書けない (E1033) ([エフェクトと handler](../spec/effects.md) の「組み込みの `IO`」)
 - IO の失敗と終了: Prelude の `try_io : (Unit -> <IO | e> a) -> <IO | e> Result IOError a` が、IO の extern の失敗 (書き出しの失敗を除く) を `IOError { kind, message }` の値にする。`exit : Int -> <IO> a` は途中のフレームの値を後始末し、終了コード `n & 255` で終わる。REPL では入力を終えるだけである ([標準ライブラリ](../spec/stdlib.md) の「`try_io`」と「`exit`」)
 - 標準ライブラリのツリー: リポジトリの `std/` (`Prelude.em`、`Fs.em`、`List.em`、`String.em`、`Env.em`、`Stdin.em`、`Proc.em`) をバイナリに埋め込む。Prelude はいつも読み込み、ほかのモジュールは import か修飾子で使うものだけを読み込む。`Fs.open` のように import なしで修飾付きで使え、`import Std.Fs` でも読める。予約した根は `Std` である ([モジュールと名前解決](../spec/modules.md) の「標準ライブラリ」)

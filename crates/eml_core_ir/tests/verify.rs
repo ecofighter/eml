@@ -696,8 +696,8 @@ fn a_prim_names_known_effects_and_operations() {
     );
 }
 
-/// `evv_mask` の多重集合は、呼び出しの `mask` と同じく空でなく、表にあるエフェクトを昇順に並べる。テキストは空の
-/// 多重集合を読まないので、読んだ後で空にする。
+/// `evv_mask` の項目の並びは、呼び出しの `mask` と同じく空でなく、表にあるエフェクトを昇順に並べる。テキストは空の
+/// 並びを読まないので、読んだ後で空にする。
 #[test]
 fn an_evv_mask_names_known_effects_in_order() {
     let mask = |effects: &str| {

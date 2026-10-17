@@ -266,12 +266,12 @@ handle の実行と、継続の再開のたびに、新しい evidence を作る
 ### evidence を探す
 
 - `ev_lookup[E]` は、`evv` を先頭からたどり、エフェクトの番号が E の最初の evidence を返す。費用は今有効な handler の数に比例し、呼び出しの深さにはよらない
-- `evv_mask[effects](w)` は、`effects` の多重集合の各エフェクトについて、w の先頭から合う evidence をその数だけ除いたリストを作る。除く位置までの節点を写し、残りは共有する。evidence の物体は写さない
+- `evv_mask[items](w)` は、`items` の各項目 (エフェクト、残す数 n、飛ばす数 m) について、w の先頭から合う evidence を数え、n 個を残して続く m 個を除いたリストを作る。項目のないエフェクトの evidence は残す。除く位置までの節点を写し、残りは共有する。evidence の物体は写さない
 - `evv` は書き換えないので、探す場所ごとのキャッシュを後で足せる ([ロードマップ](../future/roadmap.md) の「処理系」)
 
 ### 基本操作
 
-右辺 `Rhs::Prim(Prim, Vec<Atom>)` は基本操作である。`Prim` は基本操作の種類と、その即値 (エフェクトの番号、操作、エフェクトの多重集合) を持つ。テキストの形は `prim ev_lookup[State]()`、`prim ev_clause[State.get](ev.2)`、`prim evv_mask[State, State](w.3)` のように、即値を `[…]` に書く。
+右辺 `Rhs::Prim(Prim, Vec<Atom>)` は基本操作である。`Prim` は基本操作の種類と、その即値 (エフェクトの番号、操作、`mask` の項目の並び) を持つ。テキストの形は `prim ev_lookup[State]()`、`prim ev_clause[State.get](ev.2)`、`prim evv_mask[State*2, Yield@1](w.3)` のように、即値を `[…]` に書く。`evv_mask` の項目は Core IR の呼び出しの `mask` と同じ型 (`eml_lir::MaskItem`) で、書き方も同じである ([テスト戦略](../implementation/testing.md) の「Core IR のテキストの形」)。
 
 - 引数と結果の Repr は、次の表で決まる。引数と結果は、直接の呼び出しの引数と結果と同じく互換の位置で、合わなければ box の挿入が変換を入れる。状態とクロージャの引数には、translate が決めた Repr の値 (`State Int` の状態なら `int`、状態のない handler なら `()`) が来るためである
 - 引数は、表の借用の列が「借用」のものを読み、ほかを消費する。結果は所有した参照である
@@ -288,7 +288,7 @@ handle の実行と、継続の再開のたびに、新しい evidence を作る
 | `evv_get` | なし | | `tobj` | 今の `evv` |
 | `evv_set` | `tobj` | なし | `unit` | `evv` を替える。元の `evv` は手放す |
 | `evv_push` | `tobj`、`obj` | なし | `tobj` | リストの先頭に evidence を足す |
-| `evv_mask[effects]` | `tobj` | 元の `evv` | `tobj` | 上の「evidence を探す」 |
+| `evv_mask[items]` | `tobj` | 元の `evv` | `tobj` | 上の「evidence を探す」 |
 | `ev_new[E]` | `tobj` (状態)、`tobj` (外側の `evv`) | なし | `obj` | 新しい入口の表 (欄は空) と、それを指す新しい evidence |
 | `ev_set_clause[E.op]` | `obj`、`tobj` | evidence | `unit` | 入口の表の欄に入れる。handle の場所だけが、本体を始める前に使う |
 | `ev_renew` | `obj`、`tobj` (状態) | 元の evidence | `obj` | 元の evidence と同じ入口の表を指し、状態を引数に、外側の `evv` を今の `evv` にした新しい evidence |
@@ -572,7 +572,7 @@ Perceus は、`switch` と `unpack` のフィールドを借りたまま使い�
   - `unbox` の束縛: `` `n.2` (tobj) is bound to an unbox, which gives int or enum ``
 - 引き継ぐ検査は次のとおりである。2つの IR のすべての段で走る。直接呼び出しとクロージャの引数の数、文字列定数と関数の番号が表にあること、`extern` 命令の引数の数、case の種類 (1つの `switch` の case が同じ種類であること、リテラルの case がフィールドを持たないこと)、`switch` が行き先を1つ以上持つこと、フィールドを束縛する case を持つ `switch` の scrutinee が RC の対象 (`obj` か `tobj`) の変数であること、リテラルの `switch` の `default`。Core IR のエフェクトの命令の検査は [Core IR](core-ir.md) の「verifier」にある
 - 基本操作と `clause` の検査は次のとおりである。Core IR の EP の段と、LIR の3つの段のすべてで走る
-  - `prim` の即値のエフェクトと操作がエフェクトの表にあり、引数の数が表の行と同じである。`evv_mask` の多重集合は、呼び出しの `mask` と同じく空でなく、番号の昇順に並ぶ (``the effects of `prim evv_mask[Counter, State]` are not in ascending order``、`` `prim evv_mask[]` masks no effect ``)
+  - `prim` の即値のエフェクトと操作がエフェクトの表にあり、引数の数が表の行と同じである。`evv_mask` の項目は、呼び出しの `mask` と同じく空でなく、番号の真に昇順に並び (同じエフェクトの項目が2つない)、どの項目も1つ以上の evidence を飛ばす (``the effects of `prim evv_mask[Counter, State]` are not in ascending order``、`` `prim evv_mask[]` masks no effect ``、``an item of `prim evv_mask[State*0]` skips no handler``)
   - `clause` の操作がエフェクトの表にあり、引数の数が「1 + 操作の引数の数」である
   - `ev_set_clause[E.op]` に渡す値が `&g` か、同じ関数の中の `closure g(..)` なら、g の `clause` の印が op に合い、同じ関数の中で evidence を定義した `ev_new[E]` の E にも合う
   - `clause` の印の関数が、`ev_set_clause` の引数のほかで値として参照されず、直接も呼ばれない。印のエフェクトと操作が表にあり、捕獲の後に evidence と操作の引数を受ける

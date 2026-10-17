@@ -200,13 +200,13 @@ box の挿入が足す変数の印は、[LIR](lir.md) の「box の挿入」に�
 - 持ち上げた関数の番号 (`$lambdaN`、`$handleN`、`$externN` の N) は、外側の関数の本体の中で、HIR の式の ID の順に振る。変換の順に依らないようにするためである。ローカル関数の定義のラムダは `$lambdaN` の番号を使わない。
 - 変換は、`main` を `()` で呼ぶ入口の関数を作る。等式に引数のない `main` は関数値を返すので、入口の関数が返った値に `()` を適用する。
 - `handle`、`perform`、`resume` は、translate の出力では呼び出しの一種である。表面の構文に `resume` はなく、`resume` は変換が作る Core IR の内部の命令 (`Call::Resume`) である。EP がどれも基本操作と普通の呼び出しに置き換える (下の「evidence passing」)。
-- 呼び出し (`Rhs::Call` の `Call::Direct`、`Call::Apply`、`Call::Resume`) は `mask` を持つ ([エフェクトと handler](effects.md) の「handler の意味」)。`mask` は、呼び出しの間に飛ばすエフェクトの多重集合で、エフェクトの番号の昇順に並べ、飛ばす数だけ同じ番号を繰り返す。空なら `mask` なしである。extern のエフェクトは入れない。`Call::Handle` と `Call::Perform` は `mask` を持たない。LIR の呼び出しは `mask` を持たない。`handle` の本体の中の呼び出しは、持ち上げた本体の関数の中の呼び出しとして `mask` を持つ。
-- 変換は、型検査が呼び出しの矢印ごとに記録した `mask` ([型と Kind](types.md) の「推論」) を、Core IR の呼び出しに付ける。
+- 呼び出し (`Rhs::Call` の `Call::Direct`、`Call::Apply`、`Call::Resume`) は `mask` を持つ ([エフェクトと handler](effects.md) の「handler の意味」)。`mask` は、呼び出しの間に飛ばす handler を表す項目の並びである。項目 (`eml_lir::MaskItem`) は、エフェクトの番号と、残す数 n と、飛ばす数 m を持つ。m は 1 以上である。項目はエフェクトの番号の真に昇順に並ぶので、同じエフェクトの項目は2つない。空なら `mask` なしである。extern のエフェクトは入れない。`Call::Handle` と `Call::Perform` は `mask` を持たない。LIR の呼び出しは `mask` を持たない。`handle` の本体の中の呼び出しは、持ち上げた本体の関数の中の呼び出しとして `mask` を持つ。
+- 変換は、型検査が呼び出しの矢印ごとに記録した `mask` の項目 ([型と Kind](types.md) の「推論」) を、エフェクトの番号に写して昇順に並べ、Core IR の呼び出しに付ける。型検査の項目は、エフェクトが rest に初めて現れた順に並ぶ。
   - 引数がそろう既知の関数の呼び出し (`Call::Direct`) は、最後の矢印の `mask` を使う。前の矢印は部分適用で、エフェクトを起こさないためである。同じ理由で、引数が足りずにクロージャを作るときは `mask` を付けない。extern、操作、コンストラクタの呼び出しには、型検査が `mask` を記録しない。
   - 余った引数を `Call::Apply` で渡すときは、矢印ごとの `mask` が変わる境目で `apply` を分ける。`mask` は1つの Core IR の呼び出し全体に効くので、違う `mask` の矢印を1つの `apply` にまとめると、片方の矢印に余計な `mask` が効くためである。yield しうる矢印の後でも分ける (下の「`apply` の印と分け方」)。
   - `mask` が効くのは呼び出しそのものだけで、引数の評価には効かない。Core IR の呼び出しの引数は値 (アトム) なので、引数は呼び出しより前の文で評価し終えている。そのため、これは形から決まる。
 - `mask` は translate の出力にだけある。EP が `evv_mask` の包みに置き換える (下の「`mask` の包み」)。包みは戻りで `evv` を戻すので、`mask` 付きの末尾の位置の呼び出しは末尾呼び出しにならない。
-- 変換の段の verifier は、`mask` のエフェクトの番号がエフェクトの表にあること、昇順に並んでいること、`mask` が `handle`、`perform`、`clause` に付いていないことを確かめる。EP の後の段は、`mask` が残っていれば誤りにする。
+- 変換の段の verifier は、`mask` のエフェクトの番号がエフェクトの表にあること、番号が真に昇順に並んでいること (同じエフェクトの項目が2つないこと)、どの項目も m が 1 以上であること、`mask` が `handle`、`perform`、`clause` に付いていないことを確かめる (``a mask is not in ascending order``、``a mask item of `State` skips no handler``)。EP の後の段は、`mask` が残っていれば誤りにする。
 - extern のエフェクト (`IO`) も、ほかのエフェクトと同じく Core IR のエフェクトの表に入る。番号は下の「IO の extern」にある。`mask` は extern のエフェクトを持たない。また verifier は、`extern` 命令の引数の数と、引数と結果の Repr を表の行と比べる。
 - handle の本体、操作の節、`return` の節は、ラムダと同じく、捕まえた変数を先頭の引数に持つ関数に持ち上げ、そのクロージャか関数の値を `handle` に渡す。本体の関数は `()` を受ける。節はエフェクトの操作の順に並べる。操作を値として使うときは、`perform` を呼ぶだけの関数 (`op$…`) で包む。
 - 変換は、節ごとに `k` の使い方を HIR で調べ、次の2つの形のどちらかにする。
@@ -444,7 +444,7 @@ EP は、使うときだけ次の関数をプログラムに1つずつ足す。�
 | `prompt$` | `ev`、`ret`、`x` | 下の「handle と `prompt$`」 |
 | `resume$` | `ev`、`ret`、`κ`、`v`、`s` | 下の「再開と状態」 |
 | `rewind$` | `ev`、`ret`、`s`、`κ`、`v` | `resume$(ev, ret, κ, v, s)` を末尾で呼ぶ |
-| `mask$[effects]` | `κ`、`v` | 下の「`mask` の包み」。`effects` の多重集合ごとに1つ作り、名前に多重集合を書く (`mask$[State]`) |
+| `mask$[items]` | `κ`、`v` | 下の「`mask` の包み」。`mask` の項目の並びごとに1つ作り、名前に項目を書く (`mask$[State]`、`mask$[Yield@1]`) |
 
 補助の関数の中の `apply` (κ、c、`ret`、節の本体を呼ぶもの) は、どれも印を立てる。
 
@@ -585,7 +585,7 @@ in-place の入口は、translate が作った節の関数 g から、EP が節�
 
   入口の関数 `g$entry` (`clause` の印) は g の写しである。引数は、捕獲、evidence `ev`、操作の引数の順にし、g の `k` と状態の引数を除く。状態は入口の先頭の `ev_take_state(ev)` で得る。末尾の `let r = resume k(v, s)` と `return r` を、`ev_set_state(ev, s)` と `return v` に替える。`yields` の印は g の印を写す。g は使われなくなるので消す
 
-  本体は yield しないので、`evv` を替えずに `perform` の場所の `evv` のまま動かしてよい。g が `yields` でないときは、本体に `handle` や `mask` 付きの呼び出しが残りうるが、それらが呼ぶ関数は yield しない。健全性の不変条件 ([エフェクトと handler](effects.md) の「健全性」) から、その中の操作はその中で設けた handler に届くので、外側の `evv` の違いは見えない
+  本体は yield しないので、`evv` を替えずに `perform` の場所の `evv` のまま動かしてよい。g が `yields` でないときは、本体に `handle` や `mask` 付きの呼び出しが残りうるが、それらが呼ぶ関数は yield しない。健全性の不変条件 ([エフェクトと handler](effects.md) の「健全性」) から、その中の操作はその中で設けた handler に届くので、外側の `evv` の違いは見えない。g の中の `mask` も同じで、項目が残す n 個と飛ばす m 個は、g が自分で設けた handler でなければならない。g が `yields` でなければ、その instance の外側の row はラベルを持たないので、`e` の手前のラベルはすべて g の `handle` が足したもので、`e` を通る操作もない。g が `yields` で `handle` か `mask` 付きの呼び出しを持てば、それは yield の地点なので、g はその場で動かない (`evidence/handlers.rs` の `runs_in_place` が両方を yield の地点に数える)
 - **再開する節** (`once` と `multi` の操作のうち、上に当たらない節): 入口の関数は、捕獲、`ev`、操作の引数を受け、`c = closure g(捕獲, 操作の引数)` を作り、`yield_to(ev, c, &id$)` を呼んで、ダミーを返す。入口はいつも yield を始めるので、g の印によらず `yields` の印を立てる。`prompt$` が後で `apply c(k, st)` を呼ぶ。外のエフェクトを呼ぶすぐに再開する節もここに入り、節の本体は handle の外側の `evv` で動く。節の実行中に `evv` を外側に替える包み (論文の under) は作らない。再開で evidence を作り直すと、包みと節の本体が古い evidence を持ち続けるので、探し直す仕組みも要るためである
 - **`never` の節**: 入口は同じ形で `yield_abort(ev, c, &id$)` を呼び、`yields` の印を立てる。`prompt$` が後で `apply c(st)` を呼ぶ。入口の `ret` は `obj` で、`prim dummy()` を返す。`never` の操作の `clause` の束縛は、`OpRet::Never` なので位置と比べない。その値はダミーで、[LIR](lir.md) の「ダミーの値」の約束で安全である
 - handle の場所では、節の値 c_i がどの関数のクロージャかを知る必要がある。translate は節を `&g` か、同じ関数の中の `closure g(..)` で渡すので、EP はそれを読む。そうでない形は内部の誤りとしてパニックする
@@ -608,25 +608,25 @@ in-place の入口は、translate が作った節の関数 g から、EP が節�
 
 #### `mask` の包み
 
-translate の `mask` 付きの呼び出し (直接の呼び出し、`apply`、`resume` から作った `apply`) を、次の形にする。
+translate の `mask` 付きの呼び出し (直接の呼び出し、`apply`、`resume` から作った `apply`) を、次の形にする。`items` は呼び出しの `mask` の項目の並びで、`prim evv_mask` の即値と `mask$` の名前にそのまま渡す。
 
 ```
   let w0 = prim evv_get()
-  let w1 = prim evv_mask[effects](w0)
+  let w1 = prim evv_mask[items](w0)
   let u = prim evv_set(w1)
   let x = <mask を外した呼び出し>
   let y: int = prim yielding()
   switch y { 0 -> b_fast, _ -> b_slow }
 b_slow:
-  (κ を mask$[effects](κ) で包み、その上で f$kN を compose$ で足して、ダミーを返す)
+  (κ を mask$[items](κ) で包み、その上で f$kN を compose$ で足して、ダミーを返す)
 b_fast:
   let u2 = prim evv_set(w0)
   (元のブロックの残り)
 ```
 
-- 遅い道は、κ を `compose$(mask$[effects](κ), f$kN)` にする。`mask$` が内側のフレームの再開のときに `evv` を整え、`f$kN` が f の残りを続ける
+- 遅い道は、κ を `compose$(mask$[items](κ), f$kN)` にする。`mask$` が内側のフレームの再開のときに `evv` を整え、`f$kN` が f の残りを続ける
 - `f$kN` の区間は、`evv_set(w0)` の後から始まる。`w0` は区間で生きていないので捕獲しない。再開した後の `evv` は、外側の包むフレームが作り直した `evv` で、`mask$` が戻るときにそれへ戻すので、f の残りはその `evv` で動く
-- `mask$[effects](κ, v)` は、再開されたとき、`w = evv_get()` を得て、`evv` を `evv_mask[effects](w)` にし、`r = apply κ(v)` を呼ぶ。yield していなければ `evv` を `w` に戻して r を返す。yield 中なら、`drop r` の後、もう一度 `mask$` で包んでダミーを返す
+- `mask$[items](κ, v)` は、再開されたとき、`w = evv_get()` を得て、`evv` を `evv_mask[items](w)` にし、`r = apply κ(v)` を呼ぶ。yield していなければ `evv` を `w` に戻して r を返す。yield 中なら、`drop r` の後、もう一度 `mask$` で包んでダミーを返す
 - `mask` のラベルは今の row の handle できるラベルなので、`mask` を持つ関数はいつも `yields` である
 - `mask` 付きの末尾の位置の呼び出しの後には `evv_set(w0)` が続くので、末尾呼び出しにならない
 
@@ -646,6 +646,6 @@ b_fast:
 - RC の命令、`box`、`unbox`、`tail` は Core IR の型にないので、verifier は確かめない。境界の検査もしない。translate と EP の出力は、box の挿入より前には境界に合わないためである。関数の値の対象が一様かも見ない ([LIR](lir.md) の「値の表現」の定数の当てはめ)
 - R7 と R8 の文言、`jump` と `return` の文言、引数のない `con` の文言、2つの IR に共通する引き継ぐ検査、検査の順、支配木の求め方は、LIR の verifier と同じである ([LIR](lir.md) の「verifier」)。文言と支配木の求め方などの部品は、2つの verifier が `eml_lir::check` で共有する。検査の順は共有する部品ではなく、2つの verifier で同じに保つ約束である
 - Core IR だけの引き継ぐ検査は次のとおりである。どれも変換の段にだけ現れる。EP の段は、これらの命令そのものを拒むためである
-  - 呼び出しの `mask` は、エフェクトの番号がエフェクトの表にあり、昇順に並び、`handle`、`perform`、`clause` に付かない (上の「変換の規則」)
+  - 呼び出しの `mask` は、エフェクトの番号がエフェクトの表にあり、真に昇順に並び、どの項目も1つ以上の handler を飛ばし、`handle`、`perform`、`clause` に付かない (上の「変換の規則」)
   - `perform` の `resumable` が、エフェクトの表と一致する
   - `handle` の節の数が、エフェクトの操作の数と同じである。`handle` の節と `return` の節の関数が分かるとき (関数の値か、同じ関数の中で `closure` で作った値のとき) は、節が捕獲の後にちょうど「操作の引数 + `k` (再開する操作) + 状態」個の引数を持つことと、`return` の節が捕獲の後にちょうど2つ (値と状態) の引数を持つことも確かめる。操作の引数の数は、エフェクトの表の操作の `params` の長さである

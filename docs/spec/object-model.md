@@ -685,7 +685,7 @@ token の表の項目は、`into_token` と `release_reuse` が添字を使い�
 - `ev_shape(e)`: e は evidence の浅い形をしている。tag が 0 でない `Data` で、走査する語が3つ (入口の表、状態、外側の `evv`) で、`lin` ビットを持たない。入口の表は tag 0 の `Data` で、`lin` ビットを持たない。入口の欄と外側の `evv` の語は `dup` でき、状態の語は手放せる。再帰しない浅い形である。ここで物体を指す語は、どれも持ち主が今の worker である
 - `evv_path(w, fuel)`: w から節点をたどり、`fuel` 歩以内に `()` に着くなら、(tag, evidence) の組の列になる。どの節点も走査する語が2つの `Data` で、`lin` ビットを持たず、tag はその evidence の tag と同じで、evidence は `ev_shape` を満たす。輪になったリストと形の違う節点では、列はない
 - `evv_seq(w)` はその列で、`evv_wf(w)` は、列があって長さが `max_evv` 以下であることである
-- `mask_spec(effects, seq)`: `effects` の多重集合の各エフェクトについて、先頭から tag の合う組をその数だけ除いた列。組が tag を持つので、ヒープを読まずに定まる
+- `mask_spec(items, seq)`: `items` の各項目 (エフェクト、残す数 n、飛ばす数 m) について、先頭から tag の合う組を数え、n 個を残して続く m 個を除いた列。i 番目の組の tag があるエフェクトに当たり、それより前に同じ tag の組が s 個あるとき、そのエフェクトの項目について n ≤ s < n + m なら、その組を除く。項目のないエフェクトの組は残す。どんな項目の並びにも定まり、同じエフェクトの項目が2つあれば先の項目を使い、m が 0 の項目は何も除かない。n と m は自然数として扱う。組が tag を持つので、ヒープを読まずに定まる
 - `held_ok()`: モデルが合っていて、`evv_wf(evv)` が成り立ち、`Ctx` の持つ4つの語 (`evv` と、yield の状態の `target`、`clause`、`cont`) の参照を `Ctx` が持っている
 
 外側の `evv` が `evv_wf` であることは、`ev_shape` に入れない。入れると2つの述語が互いに再帰し、検査モードで確かめる費用が、handler の入れ子の深さについて指数で増えるためである。外側の `evv` が正しいことは EP の不変条件として速いモードの前提にし、`ev_evv` の結果は語そのものだけを約束する。
@@ -697,7 +697,7 @@ token の表の項目は、`into_token` と `release_reuse` が添字を使い�
 | `evv_get()` | | `evv` を `dup` して返す |
 | `evv_set(l)` | `evv_wf(l)` | `evv` を l にし、元の `evv` を手放す |
 | `evv_push(l, e)` | `evv_wf(l)`、l の長さが `max_evv` より小さい、`ev_shape(e)` | e と同じ tag の新しい節点を返す。結果の `evv_seq` は、(tag, e) の後に `evv_seq(l)` を続けた列である |
-| `evv_mask(effects, w)` | `evv_wf(w)`、`effects` の各エフェクトの数だけ合う組がある | 結果の `evv_seq` は `mask_spec(effects, evv_seq(w))` である。除いた最後の節点までに残す節点を写し、その後ろは元のリストを共有する |
+| `evv_mask(items, w)` | `evv_wf(w)`、どの項目についても合う組が n + m 個以上ある (`mask_spec(items, evv_seq(w))` の長さに、各エフェクトの先の項目の m を足すと、`evv_seq(w)` の長さになる) | 結果の `evv_seq` は `mask_spec(items, evv_seq(w))` である。除いた最後の節点までに残す節点を写し、その後ろは元のリストを共有する |
 | `ev_new(effect, n_ops, state, outer)` | `evv_wf(outer)`、effect が 65535 より小さい | 欄が `n_ops` 個でどれも `()` の入口の表と、それを指す tag が effect + 1 の evidence を作る |
 | `ev_set_clause(ev, op, c)` | `ev_shape(ev)`、op が入口の数より小さい、欄が `()`、入口の表の rc が正、c が `lin` ビットを持たない | 入口の欄 op を c にする |
 | `ev_renew(ev, state)` | `ev_shape(ev)` | ev と同じ入口の表と tag を持ち、状態を state に、外側を今の `evv` にした新しい evidence を作る |
@@ -720,7 +720,7 @@ token の表の項目は、`into_token` と `release_reuse` が添字を使い�
 - `ev_new` は入口の数を引数で受ける。VM とネイティブのコードは、エフェクトの操作の数をコードの定数として持つためである
 - evidence (3語) と節点 (2語) は、`field` と `set_field` で読み書きする。速いモードで1回の読み込みで済むためである。入口の表は、欄が 255 個以上なら先頭に数の語があるので (上の「ヘッダ」)、`scanned` で読み、書くときは位置を1つずらす
 - `perform` の道は `ev_lookup` と `ev_clause` である。速いモードの `ev_lookup` の1歩は、節点の `meta` を、作っておいた値 (tag が effect + 1、走査する語が2つ、`Data`、`lin` ビットなし) と1回比べ、次の節点を1回読むだけである
-- `evv_mask` の `effects` は `&[u16]` (エフェクトの番号の多重集合) である。写す節点は先頭から順に作り、1つ前の写しの次の欄を `set_field` で書く。除いた数を配列にも `Vec` にも持たず、tag が `effects` にある節点ごとに、それより前の節点を先頭からたどり直して数える。節点ごとに `effects` も見直す。そのため、たどった先頭の i 個の節点のうち、tag が `effects` にある節点が n 個で、`effects` の長さが m なら、費用は O(i·m + n·i) である。`evv_mask` を通るのは `mask` の包みと `mask$` だけで ([Core IR](core-ir.md) の「`mask` の包み」)、`perform` の道にはない
+- `evv_mask` の `items` は `&[MaskItem]` である。`MaskItem` はエフェクトの番号 (`u16`) と n と m (どちらも `u32`) を持つ `Copy` の構造体である。項目の昇順と重なりのなさと m が 1 以上であることは verifier が確かめ、`evv_mask` の前提には入れない。VM はセッションでエフェクトの番号を引き直すので ([VM](vm.md) の「追記」)、`evv_mask` に届く並びは verifier を通った並びそのものでないためである。写す節点は先頭から順に作り、1つ前の写しの次の欄を `set_field` で書く。除いた数を配列にも `Vec` にも持たず、tag に合う項目のある節点ごとに、それより前の節点を先頭からたどり直して数える。たどり直しは、合う節点を n 個見つけるまでと n + m 個見つけるまでの高々2回で、n + m は桁があふれないよう `u64` で比べる。節点ごとに `items` も見直す。そのため、たどった先頭の i 個の節点のうち、tag に合う項目のある節点が p 個で、項目の数が q なら、費用は O(i·q + p·i) である。`evv_mask` を通るのは `mask` の包みと `mask$` だけで ([Core IR](core-ir.md) の「`mask` の包み」)、`perform` の道にはない
 - evidence と節点は不死の物体にしない。`freeze` はヒープを消費し、evidence は定数にしないためである
 
 ### 速いモードと検査モード
@@ -729,7 +729,7 @@ token の表の項目は、`into_token` と `release_reuse` が添字を使い�
 - 検査モードは、各操作が読む所だけを確かめる。`ev_lookup` と `evv_mask` は、たどる節点ごとに形と tag を確かめ、`ev_*` は evidence の形を確かめる。`evv_set` はリストをたどらず、`evv_push` は l の長さを数えるためにたどる
 - 検査モードのリストをたどるループは、`max_evv` 歩を超えたら `BadEvidence` を返す。`evv_wf` が長さを `max_evv` 以下と定めるので、超えるのは前提を破ったとき (輪になったリストなど) だけである。既定の `max_evv` は `usize::MAX` なので、輪になったリストのテストは小さい上限で作る
 - 検査モードは、状態を変える前に、確かめることをすべて確かめる。たとえば `evv_push` は、確保の前に e の形と l の長さを確かめる。`Err` のとき、ヒープと、`Ctx` の `evv` と yield の状態は変わらない。`ev_evv`、`ev_clause`、`ev_take_state`、`ev_set_clause`、`ev_lookup`、`ev_set_state` は例外で、`Err` を返す前に構築中の物体を書き終えて生きている物体にすることがあり、ヒープはその点だけ変わりうる。仕事の回数は、`ev_lookup` がたどった分だけ増えうる (下の仕事の回数の項)。ただし `evv_set`、`ev_set_state`、`yield_finish` は、状態を変えた後の解放の連鎖で起きた誤りを返しうる。その後は `Ctx` を落とすことしかできない (上の「検査モードの約束」)。extern の誤りのときの約束は、下の「extern」にある
-- 検査モードの `evv_mask` は、確保の前にリストをたどって確かめ、合う evidence が足りなければ `NoHandler` を返す。たどった節点の数は、たどりが通ったときだけ `evidence_steps` に足し、`Err` のときは数えない
+- 検査モードの `evv_mask` は、確保の前にリストをたどって確かめ、項目ごとに合う evidence が n + m 個に足りなければ `NoHandler` を返す。たどった節点の数は、たどりが通ったときだけ `evidence_steps` に足し、`Err` のときは数えない
 - モデルが合っていて `held_ok()` と表の前提が成り立てば、検査モードの基本操作は `Ok` を返し、結果は速いモードと同じになる。ただし `evv_set`、`ev_set_state`、`yield_finish` の解放の連鎖は、核の `decref` と同じく、モデルが照らさない誤りを返しうる。`evv_mask` が合う evidence の足りないときに `NoHandler` を返すことは、テストで確かめ、Verus では約束しない
 - 仕事の回数の数え方は、`heap/tests/ctx.rs` の3つのテストが固定する。S10b で消したインタプリタの数え方のテストを、同じ期待値で写したものである
 
