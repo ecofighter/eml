@@ -568,7 +568,7 @@ impl Out<'_> {
                 callee: body,
                 args: vec![Atom::Unit],
                 yields: true,
-                prompt: None,
+                prompt: Some(evidence),
             }),
         );
         self.stmts.push(Stmt::Let {

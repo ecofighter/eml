@@ -158,7 +158,7 @@ pub(super) fn resume(prompt: FnIdx) -> CoreFn {
         Prim::EvvSet,
         vec![Atom::Var(pushed)],
     );
-    let x = apply(&mut b, "x", k, vec![Atom::Var(v)]);
+    let x = apply_marked(&mut b, "x", k, vec![Atom::Var(v)], Some(renewed));
     let r = bind(
         &mut b,
         "r",
@@ -260,11 +260,22 @@ fn drop(b: &mut FnBuilder, var: VarId) {
 
 /// 補助の関数の `apply` は、一様な位置の κ、節の本体、`return` の節を呼ぶ。結果は何でもありうるので `poly` である。
 fn apply(b: &mut FnBuilder, name: &str, callee: VarId, args: Vec<Atom>) -> VarId {
+    apply_marked(b, name, callee, args, None)
+}
+
+/// 続く `prompt$` の evidence を `prompt` に持つ `apply`。中断が巻き戻しで着地する先を示す。
+fn apply_marked(
+    b: &mut FnBuilder,
+    name: &str,
+    callee: VarId,
+    args: Vec<Atom>,
+    prompt: Option<VarId>,
+) -> VarId {
     let rhs = call(Call::Apply {
         callee: Atom::Var(callee),
         args,
         yields: true,
-        prompt: None,
+        prompt,
     });
     bind(b, name, Repr::TObj, Mark::Poly, rhs)
 }

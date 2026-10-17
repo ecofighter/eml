@@ -529,7 +529,7 @@ fn a_handle_installs_evidence_and_calls_prompt() {
       let u.6: unit = prim ev_set_clause[Ask.ask](ev.5, &main$handle0$ask$entry)
       let w.7: tobj = prim evv_push(w.4, ev.5)
       let u.8: unit = prim evv_set(w.7)
-      let x.9: tobj poly = yields apply &main$handle0(())
+      let x.9: tobj poly = yields apply &main$handle0(()) prompt ev.5
       let t.1: int = call prompt$(ev.5, &main$handle0$return, x.9)
       let y.10: int = prim yielding()
       switch y.10 { 0 -> b2, _ -> b1 }

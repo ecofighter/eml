@@ -95,7 +95,7 @@ fn helpers_have_their_final_form() {
       let w.6: tobj = prim evv_get()
       let w.7: tobj = prim evv_push(w.6, e.5)
       let u.8: unit = prim evv_set(w.7)
-      let x.9: tobj poly = yields apply k.2(v.3)
+      let x.9: tobj poly = yields apply k.2(v.3) prompt e.5
       let r.10: tobj poly = call prompt$(e.5, ret.1, x.9)
       return r.10
     }
