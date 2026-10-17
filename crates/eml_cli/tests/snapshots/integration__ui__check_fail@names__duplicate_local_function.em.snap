@@ -1,0 +1,18 @@
+---
+source: crates/eml_cli/tests/ui.rs
+expression: rendered
+input_file: tests/ui/check-fail/names/duplicate_local_function.em
+---
+[E1017] Error: `f` is bound more than once
+   ╭─[ check-fail/names/duplicate_local_function.em:5:7 ]
+   │
+ 5 │   and f y = y + 2
+   │       ┬  
+   │       ╰── bound again here
+   │
+   ├─[ check-fail/names/duplicate_local_function.em:5:7 ]
+   │
+ 4 │   let f x = x + 1
+   │       ┬  
+   │       ╰── first bound here
+───╯

@@ -36,6 +36,7 @@ pub(super) struct BodyLowering<'a> {
     use_lambdas: HashSet<ExprId>,
     local_functions: ArenaMap<LocalId, ExprId>,
     defining: ArenaMap<ExprId, LocalId>,
+    groups: Vec<Vec<LocalId>>,
     pub(super) fn_clauses: Vec<FnClause>,
     /// 内側の束縛ほど後ろにある。後の `let` が前の同じ名前を隠す (docs/spec/expressions.md)。
     pub(super) scope: Vec<(String, LocalId)>,
@@ -86,6 +87,7 @@ impl<'a> BodyLowering<'a> {
             use_lambdas: HashSet::new(),
             local_functions: ArenaMap::default(),
             defining: ArenaMap::default(),
+            groups: Vec::new(),
             fn_clauses: Vec::new(),
             scope: Vec::new(),
             group_start: 0,
@@ -131,7 +133,8 @@ impl<'a> BodyLowering<'a> {
 
     /// `reported` は、本体の変換を始めたときの診断の数である。
     fn finish(self, params: Vec<PatId>, root: ExprId, reported: usize) -> Body {
-        Body {
+        let groups = self.groups;
+        let mut body = Body {
             params,
             root,
             exprs: self.exprs,
@@ -144,8 +147,27 @@ impl<'a> BodyLowering<'a> {
             use_lambdas: self.use_lambdas,
             local_functions: self.local_functions,
             defining: self.defining,
+            local_groups: Vec::new(),
             fn_clauses: self.fn_clauses,
-        }
+        };
+        // 組は名前を束縛してから本体を変換するので、局所変数の番号の順が外側の組を先にする
+        let mut local_groups: Vec<LocalGroup> = groups
+            .into_iter()
+            .map(|members| {
+                let recursive = members.iter().any(|&member| {
+                    let ExprKind::Lambda(closure) = &body.exprs[body.local_functions[member]].kind
+                    else {
+                        return false;
+                    };
+                    let captures = body.closure_captures(closure);
+                    members.iter().any(|other| captures.contains(other))
+                });
+                LocalGroup { members, recursive }
+            })
+            .collect();
+        local_groups.sort_by_key(|group| group.members[0]);
+        body.local_groups = local_groups;
+        body
     }
 
     fn lower_equation_match(
@@ -341,7 +363,10 @@ impl<'a> BodyLowering<'a> {
                 // ブロックの `let` と同じく右辺を先に変換し、束縛は `in` の後の式でだけ見える (docs/spec/expressions.md)
                 let mark = self.scope.len();
                 let stmt = match e.params() {
-                    Some(params) => self.lower_local_function(e.pat(), params, e.init(), range),
+                    Some(params) => {
+                        let ands = e.and_bindings().collect::<Vec<_>>();
+                        self.lower_local_functions((e.pat(), params, e.init()), &ands, range)
+                    }
                     None => {
                         let init = self.lower_expr(e.init(), range);
                         let ty = e.ty().map(|ty| self.lower_type(Some(ty), range));
@@ -494,9 +519,13 @@ impl<'a> BodyLowering<'a> {
                 }
                 ast::Stmt::LetStmt(stmt) => {
                     if let Some(params) = stmt.params() {
-                        let function =
-                            self.lower_local_function(stmt.pat(), params, stmt.body(), stmt_range);
-                        stmts.push(function);
+                        let ands = stmt.and_bindings().collect::<Vec<_>>();
+                        let functions = self.lower_local_functions(
+                            (stmt.pat(), params, stmt.body()),
+                            &ands,
+                            stmt_range,
+                        );
+                        stmts.push(functions);
                         continue;
                     }
                     // 右辺を先に変換する。`let x = x + 1` の右辺の `x` は外側の `x` を指すため
@@ -524,27 +553,61 @@ impl<'a> BodyLowering<'a> {
         )
     }
 
-    /// 関数の形の `let f p1 … pn = e` を、名前を束縛する文とラムダにする。名前を先に束縛するので本体の `f` は自分を指し、
-    /// 引数は名前を隠せる。引数の有効範囲は本体で閉じ、名前は呼び出し側のスコープに残る
+    /// 関数の形の `let f p1 … pn = e` と、続く `and` の定義を、名前を束縛する文とラムダにする。名前を先にすべて束縛する
+    /// ので本体の `f` は自分を、`and` の組の別の名前も指し、引数は名前を隠せる。引数の有効範囲は本体で閉じ、名前は
+    /// 呼び出し側のスコープに残る。`and` のない `let` の名前は、その後の文からだけ見える
     /// (docs/spec/expressions.md の「ローカル関数」)。
-    fn lower_local_function(
+    fn lower_local_functions(
         &mut self,
-        name: Option<ast::Pat>,
-        params: ast::ParamList,
-        body: Option<ast::Expr>,
+        first: (Option<ast::Pat>, ast::ParamList, Option<ast::Expr>),
+        ands: &[ast::AndBinding],
         range: TextRange,
     ) -> Stmt {
-        let pat = self.lower_pat(name, range);
-        let mark = self.scope.len();
-        let params = self.lower_param_group(params.pats(), range);
-        let body = self.lower_expr(body, range);
-        self.scope.truncate(mark);
-        let lambda = self.alloc(ExprKind::Lambda(Closure { params, body }), range);
-        if let PatKind::Bind(local) = self.pats[pat].kind {
-            self.local_functions.insert(local, lambda);
-            self.defining.insert(lambda, local);
+        let mut definitions = vec![(first.0, Some(first.1), first.2)];
+        definitions.extend(ands.iter().map(|and| (and.pat(), and.params(), and.body())));
+        let group_start = self.scope.len();
+        let outer = std::mem::replace(&mut self.group_start, group_start);
+        let pats: Vec<PatId> = definitions
+            .iter()
+            .map(|(name, _, _)| {
+                let before = self.scope.len();
+                let pat = self.lower_pat_in_group(name.clone(), range);
+                // 組の中の2つ目以降の同名は E1017 にして束縛せず、参照は最初の定義を指す
+                if let PatKind::Bind(local) = self.pats[pat].kind
+                    && self.scope[group_start..before]
+                        .iter()
+                        .any(|(bound, _)| *bound == self.locals[local].name)
+                {
+                    self.scope.truncate(before);
+                }
+                pat
+            })
+            .collect();
+        self.group_start = outer;
+        let mut functions = Vec::new();
+        for (pat, (_, params, body)) in pats.into_iter().zip(definitions) {
+            let mark = self.scope.len();
+            let params = self.lower_param_group(params.iter().flat_map(|p| p.pats()), range);
+            let body = self.lower_expr(body, range);
+            self.scope.truncate(mark);
+            let lambda = self.alloc(ExprKind::Lambda(Closure { params, body }), range);
+            if let PatKind::Bind(local) = self.pats[pat].kind {
+                self.local_functions.insert(local, lambda);
+                self.defining.insert(lambda, local);
+            }
+            functions.push(LocalFunction { pat, lambda });
         }
-        Stmt::Functions(vec![LocalFunction { pat, lambda }])
+        let members = functions
+            .iter()
+            .filter_map(|function| match self.pats[function.pat].kind {
+                PatKind::Bind(local) => Some(local),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        if !members.is_empty() {
+            self.groups.push(members);
+        }
+        Stmt::Functions(functions)
     }
 
     /// `use f a b` を `f a b (fn () -> 残り)` に、`use p <- f a b` を `f a b (fn p -> 残り)` にする。ラムダと残りの

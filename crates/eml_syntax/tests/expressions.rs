@@ -1393,3 +1393,12 @@ fn and_binding_cannot_declare_a_result_type() {
         vec!["E0011 3:11 a local function cannot declare its result type".to_string()]
     );
 }
+
+#[test]
+fn and_needs_a_name_not_a_pattern() {
+    let text = lines(&["main () =", "  let f x = x", "  and (a, b) y = 1", "  f 1"]);
+    assert_eq!(
+        diagnostics(&text),
+        vec!["E0011 3:7 expected a name".to_string()]
+    );
+}

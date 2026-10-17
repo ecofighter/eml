@@ -147,8 +147,10 @@ fn and_binding(p: &mut Parser, after_function: bool) {
         );
     }
     p.bump(AND_KW);
-    if !patterns::pattern(p) {
-        expected(p, "a pattern");
+    if p.at(LIDENT) {
+        patterns::pattern(p);
+    } else {
+        expected(p, "a name");
     }
     let params = p.start();
     let has_params = patterns::at_apat_start(p);

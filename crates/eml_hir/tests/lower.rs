@@ -920,3 +920,77 @@ fn the_outermost_arrow_of_a_declaration_cannot_be_once() {
         ]
     );
 }
+
+fn local_groups(text: &str) -> Vec<String> {
+    let lowered = eml_test_support::lower(text);
+    let program = &lowered.program;
+    let module = &program.modules[program.entry];
+    let (_, body) = module.bodies.iter().next().expect("one function body");
+    body.local_groups
+        .iter()
+        .map(|group| {
+            let names: Vec<&str> = group
+                .members
+                .iter()
+                .map(|&local| body.locals[local].name.as_str())
+                .collect();
+            let recursive = if group.recursive {
+                "recursive"
+            } else {
+                "plain"
+            };
+            format!("{} {recursive}", names.join(","))
+        })
+        .collect()
+}
+
+#[test]
+fn an_and_binding_sees_the_later_function() {
+    let text = "main : Unit -> Int\nmain () =\n  let f x = g x\n  and g y = y\n  f 1";
+    insta::assert_snapshot!(lower_text(text), @"
+    main : Unit -> Int
+    main () = {
+      let f#0 x#2 = (g#1 x#2)
+      let g#1 y#3 = y#3
+      (f#0 1)
+    }
+    ");
+    let text = "main : Unit -> Int\nmain () = let f x = g x and g y = y in f 1";
+    assert_eq!(diagnostics(text), Vec::<String>::new());
+}
+
+#[test]
+fn a_let_without_and_keeps_sequential_scope() {
+    let text = "main : Unit -> Int\nmain () =\n  let f x = g x\n  let g y = y\n  f 1";
+    assert_eq!(
+        diagnostics(text),
+        vec!["E1001 3:13 cannot find value `g`".to_string()]
+    );
+    let text = "main : Unit -> Int\nmain () =\n  let f x = 1\n  let f x = f x\n  f 1";
+    assert_eq!(diagnostics(text), Vec::<String>::new());
+}
+
+#[test]
+fn a_duplicate_name_in_an_and_group_is_e1017() {
+    let text = "main : Unit -> Int\nmain () =\n  let f x = 1\n  and f y = 2\n  f 1";
+    assert_eq!(
+        diagnostics(text),
+        vec!["E1017 4:7 `f` is bound more than once".to_string()]
+    );
+}
+
+#[test]
+fn local_groups_record_recursion() {
+    let rec = |body: &str| local_groups(&format!("main : Unit -> Int\nmain () =\n{body}\n  1"));
+    assert_eq!(
+        rec("  let f x = g x\n  and g y = f y"),
+        vec!["f,g recursive"]
+    );
+    assert_eq!(rec("  let f x = 1\n  and g y = 2"), vec!["f,g plain"]);
+    assert_eq!(rec("  let go n = go n"), vec!["go recursive"]);
+    assert_eq!(rec("  let h x = x"), vec!["h plain"]);
+    assert_eq!(
+        rec("  let f x =\n    let g y = y\n    g x\n  and h z = z"),
+        vec!["f,h plain", "g plain"]
+    );
+}

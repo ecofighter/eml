@@ -434,6 +434,9 @@ pub struct Body {
     pub local_functions: ArenaMap<LocalId, ExprId>,
     /// `local_functions` の逆で、ラムダからそれを定義する名前への対応。ラムダの本体が自分を参照するかを調べるために使う。
     pub defining: ArenaMap<ExprId, LocalId>,
+    /// `Stmt::Functions` ごとの組。局所変数の番号の順 (外側の組が、本体に入れ子の組より先) に並ぶ。
+    /// 相互再帰の組の捕まえる変数は、メンバーの間で共有する (docs/spec/core-ir.md の「ローカル関数の持ち上げ」)。
+    pub local_groups: Vec<LocalGroup>,
     /// 下ろした `fn` の節。型検査が、本体の型の誤りを隠れた `k` の引数の誤りではなく「`fn` の節の本体」の誤りとして
     /// 報告するために使う (docs/spec/expressions.md の「handler」)。
     pub fn_clauses: Vec<FnClause>,
@@ -554,6 +557,12 @@ impl Body {
             }
             PatKind::Missing | PatKind::Wildcard | PatKind::Unit | PatKind::Literal(_) => {}
         }
+    }
+
+    pub fn group_of(&self, local: LocalId) -> Option<&LocalGroup> {
+        self.local_groups
+            .iter()
+            .find(|group| group.members.contains(&local))
     }
 
     /// closure の本体で参照する局所変数のうち、本体の中でも引数でも束縛していないもの。`LocalId` の順に並べる。
@@ -831,6 +840,14 @@ pub enum Stmt {
     /// 関数の形の `let`。名前は自分の本体と以降の文で見える (docs/spec/expressions.md の「ローカル関数」)。
     Functions(Vec<LocalFunction>),
     Expr(ExprId),
+}
+
+/// `let … and …` の組。`members` は定義の順で、`and` のない `let` は1つだけの組になる。`recursive` は、あるメンバーの
+/// ラムダが組のメンバー (自分を含む) を参照するときに真になる。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LocalGroup {
+    pub members: Vec<LocalId>,
+    pub recursive: bool,
 }
 
 /// ローカル関数。`pat` は名前を束縛する `PatKind::Bind`、`lambda` は引数と本体を持つ `ExprKind::Lambda` である。
