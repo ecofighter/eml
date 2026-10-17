@@ -320,7 +320,7 @@ fn effect_declaration_parts() {
 
 #[test]
 fn handler_clauses_call_the_continuation_and_drop() {
-    let file = source("h = handle f () with\n  | ask key k -> k key\n  | return x -> drop x");
+    let file = source("h = handle f () with\n  | ctl ask key k -> k key\n  | return x -> drop x");
     let equation = first_equation(&file);
     let Some(Expr::HandleExpr(handle)) = equation.body() else {
         panic!("expected a handler");

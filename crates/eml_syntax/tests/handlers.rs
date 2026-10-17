@@ -5,7 +5,7 @@ fn handler_with_operation_and_return_clauses() {
     let text = lines(&[
         "try action =",
         "  handle action () with",
-        "    | fail _ -> None",
+        "    | ctl fail _ -> None",
         "    | return x -> Some x",
     ]);
     insta::assert_snapshot!(shape(&text), @r#"
@@ -32,6 +32,7 @@ fn handler_with_operation_and_return_clauses() {
               WITH_KW "with"
               OP_CLAUSE
                 PIPE "|"
+                CTL_KW "ctl"
                 PATH
                   NAME_REF
                     LIDENT "fail"
@@ -66,8 +67,8 @@ fn parameterized_handler() {
     let text = lines(&[
         "run_state init action =",
         "  handle action () from init with",
-        "    | get () k st -> k st st",
-        "    | put st2 k _ -> k () st2",
+        "    | ctl get () k st -> k st st",
+        "    | ctl put st2 k _ -> k () st2",
         "    | return x st -> (x, st)",
     ]);
     insta::assert_snapshot!(shape(&text), @r#"
@@ -102,6 +103,7 @@ fn parameterized_handler() {
               WITH_KW "with"
               OP_CLAUSE
                 PIPE "|"
+                CTL_KW "ctl"
                 PATH
                   NAME_REF
                     LIDENT "get"
@@ -130,6 +132,7 @@ fn parameterized_handler() {
                         LIDENT "st"
               OP_CLAUSE
                 PIPE "|"
+                CTL_KW "ctl"
                 PATH
                   NAME_REF
                     LIDENT "put"
@@ -181,7 +184,7 @@ fn parameterized_handler() {
 
 #[test]
 fn handler_on_one_line_with_drop() {
-    insta::assert_snapshot!(shape("h = handle f () with | ask key k -> drop k"), @r#"
+    insta::assert_snapshot!(shape("h = handle f () with | ctl ask key k -> drop k"), @r#"
     SOURCE_FILE
       EQUATION
         NAME
@@ -200,6 +203,7 @@ fn handler_on_one_line_with_drop() {
           WITH_KW "with"
           OP_CLAUSE
             PIPE "|"
+            CTL_KW "ctl"
             PATH
               NAME_REF
                 LIDENT "ask"
@@ -364,7 +368,7 @@ fn clauses_at_the_column_of_handle_are_read_as_clauses() {
 
 #[test]
 fn a_clause_head_can_be_qualified() {
-    insta::assert_snapshot!(shape("f = handle g () with | A.B.get () k -> k 1"), @r#"
+    insta::assert_snapshot!(shape("f = handle g () with | ctl A.B.get () k -> k 1"), @r#"
     SOURCE_FILE
       EQUATION
         NAME
@@ -383,6 +387,7 @@ fn a_clause_head_can_be_qualified() {
           WITH_KW "with"
           OP_CLAUSE
             PIPE "|"
+            CTL_KW "ctl"
             PATH
               NAME_REF
                 UIDENT "A"
@@ -412,8 +417,8 @@ fn a_clause_head_can_be_qualified() {
 #[test]
 fn a_qualified_clause_head_must_end_with_a_lowercase_name() {
     assert_eq!(
-        diagnostics("h = handle f () with | M.N x -> 2"),
-        ["E0011 1:24 expected a lowercase name"]
+        diagnostics("h = handle f () with | ctl M.N x -> 2"),
+        ["E0011 1:28 expected a lowercase name"]
     );
 }
 

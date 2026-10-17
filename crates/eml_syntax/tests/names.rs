@@ -107,7 +107,7 @@ fn types_patterns_and_effects_hold_paths() {
 
 #[test]
 fn a_clause_names_its_operation_with_a_path() {
-    insta::assert_snapshot!(shape("f = handle g () with\n  | get () k -> k 1"), @r#"
+    insta::assert_snapshot!(shape("f = handle g () with\n  | ctl get () k -> k 1"), @r#"
     SOURCE_FILE
       EQUATION
         NAME
@@ -126,6 +126,7 @@ fn a_clause_names_its_operation_with_a_path() {
           WITH_KW "with"
           OP_CLAUSE
             PIPE "|"
+            CTL_KW "ctl"
             PATH
               NAME_REF
                 LIDENT "get"
