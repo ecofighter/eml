@@ -365,7 +365,7 @@ handle の実行と、継続の再開のたびに、新しい evidence を作る
 
 ### `evv` の不変条件
 
-- 呼び出しが普通に返ったとき、`evv` は呼び出しの前と同じである。`evv` を替える所 (handle の `prompt$`、`resume$`、`mask` の包み。[Core IR](core-ir.md) の「evidence passing」) が、戻るときに必ず元に戻すためである
+- 呼び出しが普通に返ったとき、`evv` は呼び出しの前と同じである。`evv` を替える所 (handle の `prompt$`、`resume$`、`mask` の包み、under の形の入口。[Core IR](core-ir.md) の「evidence passing」) が、戻るときに必ず元に戻すためである
 - yield 中の `evv` には意味がない。再開のときに、包むフレームが外側から順に `evv` を作り直す
 - 中断の途中の `evv` にも意味がない。巻き戻しは `evv` に触れず、着地した `prompt$` が `evv` を宛先の evidence の外側に戻す。`exit` では `Finish` が空に戻す ([VM](vm.md) の「IO の失敗と `exit`」)
 - `mask` 付きの呼び出しは、戻りで `evv` を戻すのでフレームを残す。`mask` は見える別々の handler を飛ばすので、継続の上で `mask` が残すフレームは handler の数以下である ([エフェクトと handler](effects.md) の「健全性」の最後の段落)。`prompt$` と `resume$` のフレームは、handler 1つにつき1つである

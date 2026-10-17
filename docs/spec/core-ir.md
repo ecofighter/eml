@@ -264,9 +264,9 @@ row は「yield しうるか」だけで単相化する。handler を使わな�
 - translate は、関数の型の「引数の数番目の矢印」の row が yield しうるとき (`RowYield` をその instance のビットで解いて立つとき) に立てる。本体はその矢印の row で動くためである ([型と Kind](types.md) の「推論」)。`f : Int -> <State> (Int -> Int)` の `f x = …` では1番目の矢印である。引数のない値は純粋なので立てない
 - トップレベルの関数は宣言の型から、ラムダとローカル関数は外側の instance の代入をかけた自分の型から決める。row を閉じたローカル関数は、最後の矢印のラベルだけで決まる。閉じなかったものは、ラムダと同じく外側の instance の row のビットで分類する
 - 入口の関数 `entry$<名前>` の印と、その中の `apply f(())` の印は、入口の関数の宣言の型の最初の矢印から決める。等式に引数のない入口 (`main = fn () -> ..`) では、入口の関数の instance の印 (引数の数が 0 なので立たない) が使えないためである。型検査が記録したその矢印の分類 (`BodyTypes::first_arrow_yield`、[型と Kind](types.md) の「row の具体化の記録」) を、入口の instance のビットで解く
-- handle の本体はいつも立てる。本体の row は扱うエフェクトを含むためである
+- handle の本体はいつも立てる。本体の row は扱うエフェクトのラベルを含むので、多くの場合は yield しうる。扱うエフェクトのすべての操作が `never` のとき (`Fail.to_result` の handle など) は、そのラベルは yield しうるラベルでなく ([型と Kind](types.md) の「row の具体化の記録」)、本体の row が yield しないこともあるが、それでも立てる。印が保守的なだけで、本体に置いた yield の確かめは yield を見つけないので、意味は変わらない (この節の最後の項)。費用は、そうした本体の末尾でない呼び出しに残る確かめと、本体の中で設けた handler の節が印を写して `yields` になることだけである。本体の row の分類で印を決める改良は、まだ入れていない
 - 操作の節と `return` の節は、handle を含む関数の印と同じにする。節は handle の外側の row で動き、その row は handle を含む関数が動いている row である
-- `op$` は、その操作を呼ぶ形なので立てる。`cont$` と `cont$state` は、どの文脈からも呼ばれる補助の関数なので立てる。`con$`、導出とタプルの生成器が作る関数、`tag$`、表示関数は立てない。`$externN` は、行が `Effectful` のときだけ立てる (下の「IO の extern」)
+- `op$` は、その操作を呼ぶ形なので立てる。`cont$` と `cont$state` は、どの文脈からも呼ばれる補助の関数なので立てる。`con$`、導出とタプルの生成器が作る関数、`tag$`、表示関数、`$externN` は立てない。`$externN` は行が `Effectful` でも立てない。`Effectful` の extern の呼び出しは yield の地点でないためである (下の「IO の extern」)
 - box の挿入が足す `f$boxed` は、`f` の印を写す ([LIR](lir.md) の「一様な関数」)
 - EP が作る関数の印は、下の「evidence passing」の各項目で決まる
 - `evv` を関数の引数でなく実行の文脈に持つので ([LIR](lir.md) の「実行の文脈」)、yield しうる関数とそうでない関数の呼び出しの規約は同じである。そのため、印が保守的でも規約は食い違わない
@@ -456,8 +456,10 @@ EP は、使うときだけ次の関数をプログラムに1つずつ足す。�
 - `yields` の関数の中で、末尾でない次の呼び出しを yield の地点とする
   - `yields` の関数への直接の呼び出し (EP が作る関数を含む)
   - `yields` の印の立った `apply`
-  - `Call::Clause`
-- 末尾の位置の呼び出し ([LIR](lir.md) の「末尾の位置の呼び出し」の、形だけで決まる定義) は、yield の地点にしない。呼ばれた側の yield は、そのまま呼び出し元へ返るためである。EP はこの定義を Core IR の上の写しで判定する。末尾の位置の `never` の操作の `clause` も yield の地点にせず、縮約が `tail clause` にする
+  - 再開する操作 (`once` と `multi`) の `Call::Clause`
+  - `mask` 付きの呼び出し (下の「`mask` の包み」)
+- `never` の操作の `Call::Clause` と `Effectful` の extern は、yield の地点にしない。どちらも中断を始めることがあるが、中断は継続を作らずに巻き戻しで進み、呼び出しの後には戻らないためである (下の「`never` の中断」と「IO の extern」)
+- 末尾の位置の呼び出し ([LIR](lir.md) の「末尾の位置の呼び出し」の、形だけで決まる定義) は、yield の地点にしない。呼ばれた側の yield は、そのまま呼び出し元へ返るためである。EP はこの定義を Core IR の上の写しで判定する。末尾の位置の `never` の操作の `clause` は、縮約が `tail clause` にする
 - yield の地点 `let x = <呼び出し>` の直後でブロックを切り、次の形にする
 
   ```
@@ -571,7 +573,7 @@ translate の `let r = handle E(init, body) { c_0, .., c_n } return ret` を、�
 
 #### `perform` と節の3つの形
 
-translate の `let r = perform E.op(a_1, .., a_n)` を、次の形にする。末尾でなければ `Call::Clause` が yield の地点になる。
+translate の `let r = perform E.op(a_1, .., a_n)` を、次の形にする。`yields` の関数の中で末尾でなければ、再開する操作の `Call::Clause` は yield の地点になる。`never` の操作の `Call::Clause` はならない (上の「yield の地点」)。
 
 ```
   let ev = prim ev_lookup[E]()
@@ -585,13 +587,28 @@ in-place の入口は、translate が作った節の関数 g から、EP が節�
   - `never` の操作の節でない
   - g の `k` の引数の使いが、末尾の位置の `mask` のない `resume k(v, s)` だけである
   - g のすべての `return` が、そのような `resume` の結果を返す
-  - g の本体に、yield の地点になる呼び出しがない。EP は translate の出力の上でこれを決めるので、translate の命令で書くと次のどれもないことである: 末尾でない `perform`、g が `yields` のときの `handle`、`mask` 付きの呼び出し、最後の末尾の `resume` のほかの `resume`、`yields` の関数への末尾でない直接の呼び出し、印の立った末尾でない `apply`、`IO` の extern の呼び出し (下の「IO の extern」)
+  - g の本体に、yield の地点になる呼び出しがない。EP は translate の出力の上でこれを決めるので、translate の命令で書くと次のどれもないことである: 再開する操作の `perform`、g が `yields` のときの `handle`、`mask` 付きの呼び出し、最後の末尾の `resume` のほかの `resume`、`yields` の関数への末尾でない直接の呼び出し、印の立った末尾でない `apply`。`never` の操作の `perform` と `IO` の extern の呼び出しは数えない。中断は巻き戻しで進み、節の本体を継続に入れないためである (下の「`never` の中断」と「IO の extern」)
 
   入口の関数 `g$entry` (`clause` の印) は g の写しである。引数は、捕獲、evidence `ev`、操作の引数の順にし、g の `k` と状態の引数を除く。状態は入口の先頭の `ev_take_state(ev)` で得る。末尾の `let r = resume k(v, s)` と `return r` を、`ev_set_state(ev, s)` と `return v` に替える。`yields` の印は g の印を写す。g は使われなくなるので消す
 
-  本体は yield しないので、`evv` を替えずに `perform` の場所の `evv` のまま動かしてよい。g が `yields` でないときは、本体に `handle` や `mask` 付きの呼び出しが残りうるが、それらが呼ぶ関数は yield しない。健全性の不変条件 ([エフェクトと handler](effects.md) の「健全性」) から、その中の操作はその中で設けた handler に届くので、外側の `evv` の違いは見えない。g の中の `mask` も同じで、項目が残す n 個と飛ばす m 個は、g が自分で設けた handler でなければならない。g が `yields` でなければ、その instance の外側の row はラベルを持たないので、`e` の手前のラベルはすべて g の `handle` が足したもので、`e` を通る操作もない。g が `yields` で `handle` か `mask` 付きの呼び出しを持てば、それは yield の地点なので、g はその場で動かない (`evidence/handlers.rs` の `runs_in_place` が両方を yield の地点に数える)
-- **再開する節** (`once` と `multi` の操作のうち、上に当たらない節): 入口の関数は、捕獲、`ev`、操作の引数を受け、`c = closure g(捕獲, 操作の引数)` を作り、`yield_to(ev, c, &id$)` を呼んで、ダミーを返す。入口はいつも yield を始めるので、g の印によらず `yields` の印を立てる。`prompt$` が後で `apply c(k, st)` を呼ぶ。外のエフェクトを呼ぶすぐに再開する節もここに入り、節の本体は handle の外側の `evv` で動く。節の実行中に `evv` を外側に替える包み (論文の under) は作らない。再開で evidence を作り直すと、包みと節の本体が古い evidence を持ち続けるので、探し直す仕組みも要るためである
-- **`never` の節**: 入口は c を同じ形で作り、`yield_abort(ev, c)` を呼んで中断を始め、`yields` の印を立てる。最初の κ は渡さない。中断は κ を組み立てず、VM がタスクのスタックを巻き戻すためである (下の「`never` の中断」)。`prompt$` が着地の後に `apply c(st)` を呼ぶ。入口の `ret` は `obj` で、`yield_abort` の後に `prim dummy()` を返す形のままにする。`yield_abort` は戻らないので、この `return` には実行が届かない。`never` の操作の `clause` の束縛は、`OpRet::Never` なので位置と比べない。`clause` の後へ制御は戻らないので、その束縛を使う所にも実行は届かない
+  g の本体が、最後の末尾の `resume` のほかに呼び出し (`Rhs::Call`。直接の呼び出し、`apply`、`perform`、`handle`) か `Effectful` の extern を1つでも持てば、入口を under の形にする。入口の先頭 (状態を取り出す前) で `evv` を evidence の外側の `evv` に替え、各 `return v` の前 (`ev_set_state(ev, s)` の後) で元に戻す。
+
+  ```
+    let w = prim evv_get()
+    let o = prim ev_evv(ev)
+    let u = prim evv_set(o)
+    let s = prim ev_take_state(ev)
+    (本体)
+    let u1 = prim ev_set_state(ev, s1)
+    let u2 = prim evv_set(w)
+    return v
+  ```
+
+  under の形の本体は、yield で handler に移ってから動く節 (下の再開する節。`prompt$` が `evv` を handle の外側の `evv` に戻してから呼ぶ) と同じ `evv` で動く。本体の中の `perform`、`handle`、`mask` は handle の外側の row の handler を見る。本体の中で起きた中断 (`fail`、IO の失敗) も、handle の本体の中の `to_result` や `try_io` ではなく、handle の外の handler に届く。本体は yield しないので、再開の後に evidence を探し直す仕組みは要らない。中断が入口のフレームを外すときは、入口が持つ `w` を巻き戻しの表が手放す ([VM](vm.md) の「巻き戻し」)。そのときの `evv` は、着地した `prompt$` が正しい値に戻す ([LIR](lir.md) の「`evv` の不変条件」)
+
+  何も呼ばない節 (`State` の `get` と `put`) は、under の形にしない。`evv` を読む命令がなく、中断も起こさないので、`perform` の場所の `evv` のまま動かしてよい
+- **再開する節** (`once` と `multi` の操作のうち、上に当たらない節): 入口の関数は、捕獲、`ev`、操作の引数を受け、`c = closure g(捕獲, 操作の引数)` を作り、`yield_to(ev, c, &id$)` を呼んで、ダミーを返す。入口はいつも yield を始めるので、g の印によらず `yields` の印を立てる。`prompt$` が後で `apply c(k, st)` を呼ぶ。yield しうる外のエフェクトを呼ぶすぐに再開する節もここに入り、節の本体は handle の外側の `evv` で動く。under の形は、本体が yield しないすぐに再開する節だけに使う。yield する本体を under で動かすと、yield と再開のたびに `evv` を替え直す包みが要る。そのうえ再開で evidence を作り直すと、包みと節の本体が古い evidence を持ち続けるので、探し直す仕組みも要るためである
+- **`never` の節**: 入口は c を同じ形で作り、`yield_abort(ev, c)` を呼んで中断を始める。最初の κ は渡さず、`yields` の印も立てない。中断は κ を組み立てず、VM がタスクのスタックを巻き戻すので、入口を呼んだ側に yield は返らないためである (下の「`never` の中断」)。`prompt$` が着地の後に `apply c(st)` を呼ぶ。入口の `ret` は `obj` で、`yield_abort` の後に `prim dummy()` を返す形のままにする。`yield_abort` は戻らないので、この `return` には実行が届かない。`never` の操作の `clause` の束縛は、`OpRet::Never` なので位置と比べない。`clause` の後へ制御は戻らないので、その束縛を使う所にも実行は届かない
 - handle の場所では、節の値 c_i がどの関数のクロージャかを知る必要がある。translate は節を `&g` か、同じ関数の中の `closure g(..)` で渡すので、EP はそれを読む。そうでない形は内部の誤りとしてパニックする
 - `ev_set_clause` には、入口の関数のクロージャ (捕獲がなければ関数の値) を渡す。捕獲は節の捕獲をそのまま写す。再開する節と `never` の節の入口が作る c も、捕獲も操作の引数もなければ `&g` にする (`closure` は引数を1つ以上とる)
 
@@ -599,21 +616,20 @@ in-place の入口は、translate が作った節の関数 g から、EP が節�
 
 - 中断は κ を組み立てない。`yield_abort` が yield の状態に宛先の evidence と節の本体を入れると、VM がタスクのスタックを、着地の印の evidence が宛先と同じ `apply` まで巻き戻す ([VM](vm.md) の「巻き戻し」)。外すフレームが持つ値は、巻き戻しの表で手放す。`File` はこの解放で閉じる
 - 途中のフレームは、生きている `Lin` の値に `decref` も `drop` も置かない。生きている値は、巻き戻しの表に載るためである
-- EP の yield の地点の決め方は、中断のために変えていない。中断が通る途中のフレームにも、`never` の操作の `clause` や `IO` の extern の後の yield の確かめと遅い道が残る。巻き戻しはそれを飛ばすので、中断では実行されない。`IO` と `never` の操作だけのエフェクトを yield の地点から外すことは、ロードマップの S13c の残りである ([ロードマップ](../future/roadmap.md) の「S13c 中断の巻き戻し」)
+- 中断を始めうる命令 (`never` の操作の `clause` と `IO` の extern) は yield の地点にせず、その後に yield の確かめと遅い道を置かない (上の「yield の地点」)。`IO` と、すべての操作が `never` のエフェクトは、yield しうるラベルでもない ([型と Kind](types.md) の「row の具体化の記録」)。そのため、それらだけを row に持つ関数は `yields` でなく、その中で中断が起きてよい。巻き戻しは `yields` の印によらず、表で途中のフレームを片付ける
 - `prompt$` の中断の経路は、`return` の節のクロージャ `ret` を `drop` する。捕まえていた `File` はこの解放で閉じる (上の「EP の明示の `drop`」)
 
 #### IO の extern
 
-- `IO` を起こす extern (表の行の `purity` が `Effectful`) の呼び出しは、`yields` の関数の中では、どれも yield の地点である。直後に yield の確認と遅い道を置く形は、ほかの yield の地点と同じである。`try_io` が捕まえる種類の誤りで失敗すると、VM が `io_failed` の節の入口を呼んで中断を始め、`exit` はいつも中断を始める ([VM](vm.md) の「IO の失敗と `exit`」)。どちらの中断も巻き戻しで進み、extern の後の yield の確認には戻らない (上の「`never` の中断」)
-- extern は末尾呼び出しにならないので、末尾の形の例外はない。「yield の確認のない呼び出しの後」の不変条件は、extern には関わらない
-- `IO` を row に持つ関数はいつも `yields` なので ([型と Kind](types.md) の「row の具体化の記録」)、`yields` でない関数が `IO` の extern を呼ぶことはない。EP はそれを内部の誤りとしてパニックする
-- すぐに再開する節の条件 (「`perform` と節の3つの形」) では、`IO` の extern の呼び出しも yield の地点として数える。in-place の節は `perform` の場所の `evv` で動くので、そうしないと、handle の本体の中の `try_io` が節の IO の失敗を捕まえてしまう
-- extern の関数を包む関数 (`$externN`) は、行が `Effectful` なら `yields` である
+- `IO` を起こす extern (表の行の `purity` が `Effectful`) の呼び出しは、yield の地点でない。直後に yield の確認も遅い道も置かない。`try_io` が捕まえる種類の誤りで失敗すると、VM が `io_failed` の節の入口を呼んで中断を始め、`exit` はいつも中断を始める ([VM](vm.md) の「IO の失敗と `exit`」)。どちらの中断も巻き戻しで進み、extern の後には戻らない (上の「`never` の中断」)
+- `IO` は yield しうるラベルでないので、`IO` だけを row に持つ関数は `yields` でない ([型と Kind](types.md) の「row の具体化の記録」)。`yields` でない関数も `IO` の extern を呼んでよい
+- すぐに再開する節の条件 (「`perform` と節の3つの形」) では、`IO` の extern の呼び出しを yield の地点に数えない。`IO` の extern を呼ぶ節の入口は under の形にするので、節の本体は handle の外側の `evv` で動き、節の IO の失敗は handle の本体の中の `try_io` でなく、handle の外の `try_io` に届く
+- extern の関数を包む関数 (`$externN`) は、行が `Effectful` でも `yields` でない。extern を呼んで返すだけだからである
 - `IO` は、Prelude の最初のエフェクトとして、いつもエフェクトの表にある。番号は 0 である。`try_io` の handle、`io_failed` の節、`prompt$` は、普通の `never` の操作の handle と同じ形に変換する
 
 #### `mask` の包み
 
-translate の `mask` 付きの呼び出し (直接の呼び出し、`apply`、`resume` から作った `apply`) を、次の形にする。`items` は呼び出しの `mask` の項目の並びで、`prim evv_mask` の即値と `mask$` の名前にそのまま渡す。
+translate の `mask` 付きの呼び出し (直接の呼び出し、`apply`、`resume` から作った `apply`) を、囲む関数が `yields` なら次の形にする。`items` は呼び出しの `mask` の項目の並びで、`prim evv_mask` の即値と `mask$` の名前にそのまま渡す。
 
 ```
   let w0 = prim evv_get()
@@ -632,7 +648,8 @@ b_fast:
 - 遅い道は、κ を `compose$(mask$[items](κ), f$kN)` にする。`mask$` が内側のフレームの再開のときに `evv` を整え、`f$kN` が f の残りを続ける
 - `f$kN` の区間は、`evv_set(w0)` の後から始まる。`w0` は区間で生きていないので捕獲しない。再開した後の `evv` は、外側の包むフレームが作り直した `evv` で、`mask$` が戻るときにそれへ戻すので、f の残りはその `evv` で動く
 - `mask$[items](κ, v)` は、再開されたとき、`w = evv_get()` を得て、`evv` を `evv_mask[items](w)` にし、`r = apply κ(v)` を呼ぶ。yield していなければ `evv` を `w` に戻して r を返す。yield 中なら、`drop r` の後、もう一度 `mask$` で包んでダミーを返す
-- `mask` のラベルは今の row の handle できるラベルなので、`mask` を持つ関数はいつも `yields` である
+- 囲む関数が `yields` なら、呼ばれる関数が `yields` でなくても、`mask` 付きの呼び出しを yield の地点にする。遅い道で κ を `mask$` で包むためである
+- 囲む関数が `yields` でなければ、項目のエフェクトはどれも yield しない (`Fail` のように操作がすべて `never` のエフェクトの項目など)。包みは `evv_get`、`evv_mask[items]`、`evv_set`、呼び出し、`evv_set(w0)` だけにし、yield の確かめと遅い道を置かない
 - `mask` 付きの末尾の位置の呼び出しの後には `evv_set(w0)` が続くので、末尾呼び出しにならない
 
 ## Core IR から LIR への変換

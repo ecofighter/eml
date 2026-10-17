@@ -153,7 +153,7 @@ S13c-2 は S13c-1 に依る。`yields` でない関数の中で中断が起き�
 ### S13c-1
 
 - `run`: 呼び出しの深い所で中断し、途中のフレームが持つ `File` が閉じることを確かめる。`Fail.to_result` への `fail`、`try_io` への IO の失敗、`exit` の3通り。検査モードの漏れの検査で確かめる
-- `run`: 途中に別の handler があり、その状態が `File` のときに外側へ中断する (状態が evidence と一緒に閉じること)
+- `run`: 途中に別の handler があり、その状態が `File` のときに外側へ中断する (着地しない印のフレームで、巻き戻しが evidence から状態を取り出して手放し、`File` が閉じること)
 - `run`: `mask` 付きの呼び出しと `multi` の継続を再開した区間を通る中断
 - 既存の `tests/ui/run/files/` の中断のテスト (`file_dropped_with_continuation` など) はそのまま通る
 - `eml_lir` と `eml_core_ir`: 印のテキストの形の読み書き、verifier の規則 (末尾の位置、生きていない v、所有していない v を拒む)
