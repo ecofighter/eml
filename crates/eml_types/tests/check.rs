@@ -752,6 +752,14 @@ fn a_label_arriving_through_an_argument_unifies_with_the_ambient() {
 }
 
 #[test]
+fn a_label_arriving_through_an_argument_decides_a_class_constraint() {
+    // 包含はクラスの制約より前に解くので、`show` の `Show s` は、`run` の row に入った `State s` が今の row の
+    // `State Int` と対になり、`s` が `Int` に決まってから解く (docs/spec/types.md の「呼び出しの包含を解く」)
+    let text = "effect State s where\n  get : Unit -> s\n\nf : Unit -> <State Int> String\nf () =\n  let run h = h ()\n  show (run get)";
+    assert_eq!(check_short(text), Vec::<String>::new());
+}
+
+#[test]
 fn a_partially_applied_local_function_is_passed_to_map() {
     let text = "import List\n\nf : List Int -> List Int\nf xs =\n  let add x y = x + y\n  List.map (add 1) xs";
     assert_eq!(check_short(text), Vec::<String>::new());

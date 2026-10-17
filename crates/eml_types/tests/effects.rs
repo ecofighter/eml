@@ -824,8 +824,8 @@ fn a_linear_closure_cannot_enter_an_arrow_in_both_directions_of_the_result() {
     ");
 }
 
-/// 純粋なローカル関数は row を `<>` に閉じるので、`multi` の操作を起こす関数の中で呼んでも、その呼び出しは再開しない
-/// (docs/spec/types.md の「ローカル関数の推論」)。
+/// 純粋なローカル関数の row は包含を解くときに `<>` に閉じるので、`multi` の操作を起こす関数の中で呼んでも、その呼び出しは
+/// 再開しない (docs/spec/types.md の「呼び出しの包含を解く」)。
 #[test]
 fn a_pure_local_call_inside_multi_keeps_a_file() {
     let text = "effect Choice where\n  multi choose : Unit -> Bool\n\nheld : Unit -> <Choice, IO> Unit\nheld () =\n  let f = Fs.open \"a\"\n  let count n = if n == 0 then 0 else count (n - 1)\n  let x = count 3\n  Fs.close f\n  if choose () then println (show x) else ()";
@@ -870,7 +870,7 @@ fn a_stateful_fn_clause_body_mismatch_names_the_pair() {
 }
 
 /// 組の中の関数が起こすエフェクトは、固定点で、その関数を呼ぶ組のどの関数の row にも入る (docs/spec/types.md の
-/// 「ローカル関数の推論」)。
+/// 「呼び出しの包含を解く」)。
 #[test]
 fn a_group_effect_reaches_every_member() {
     let text = "effect Ask where\n  ask : Unit -> Int\n\nrun : Int -> <Ask> Int\nrun n =\n  let f x = if x == 0 then 0 else g (x - 1)\n  and g y = ask () + f y\n  f n";
