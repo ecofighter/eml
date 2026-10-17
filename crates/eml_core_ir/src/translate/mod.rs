@@ -183,8 +183,8 @@ fn numbering(hir: &HirProgram, body: &Body, targets: &ArenaMap<ExprId, Target>) 
     }
 }
 
-/// 持ち上げたローカル関数。`captured` は持ち上げの捕まえる変数で、`LocalId` の順に並び、ローカル関数を含まない
-/// (docs/spec/core-ir.md の「ローカル関数の持ち上げ」)。
+/// 持ち上げたローカル関数。`captured` は持ち上げの捕まえる変数で、`LocalId` の順に並び、ローカル関数を含まない。
+/// 同じ組の関数は同じ `captured` を持つ (docs/spec/core-ir.md の「ローカル関数の持ち上げ」)。
 struct Lifted {
     target: FnIdx,
     captured: Vec<LocalId>,
@@ -208,20 +208,34 @@ fn lifted_captures(
     locals.into_iter().collect()
 }
 
-/// 本体のローカル関数の、関数の番号と持ち上げの捕まえる変数の表。自分への参照と、後で変換する入れ子の関数からの参照の
-/// ために、どのローカル関数を変換するより前に作る。ローカル関数が参照できるのは前に定義したローカル関数と自分だけ
-/// なので、`LocalId` の順に1回ずつ求めればよい (docs/spec/core-ir.md の「ローカル関数の持ち上げ」)。
+/// 本体のローカル関数の、関数の番号と持ち上げの捕まえる変数の表。自分と組の相手への参照と、後で変換する入れ子の関数
+/// からの参照のために、どのローカル関数を変換するより前に作る。組の関数は、メンバーが捕まえる変数の和を共通の追加の
+/// 引数として受け取る。そのため、組の中の呼び出しは、受け取った追加の引数をそのまま相手に渡せる。組の外の関数で
+/// 参照できるのは前の組の関数だけで、`local_groups` は外側の組を入れ子の組より先に並べるので、組の順に1回ずつ求めれば
+/// よい (docs/spec/core-ir.md の「ローカル関数の持ち上げ」)。組の名前は本体より先に束縛するので、関数の番号を取る
+/// 定義の順は `LocalId` の順と同じである。
 fn lifted_functions(body: &Body, program: &mut ProgramBuilder) -> ArenaMap<LocalId, Lifted> {
     let mut lifted = ArenaMap::default();
-    for (local, &lambda) in body.local_functions.iter() {
-        let closure = local_closure(body, lambda);
-        let hir_captured = body
-            .closure_captures(closure)
-            .into_iter()
-            .filter(|&captured| captured != local);
+    for group in &body.local_groups {
+        let hir_captured = group
+            .members
+            .iter()
+            .flat_map(|&member| {
+                body.closure_captures(local_closure(body, body.local_functions[member]))
+            })
+            .filter(|captured| !group.members.contains(captured));
         let captured = lifted_captures(&lifted, hir_captured);
-        let target = program.reserve(captured.len() + closure.params.len());
-        lifted.insert(local, Lifted { target, captured });
+        for &member in &group.members {
+            let closure = local_closure(body, body.local_functions[member]);
+            let target = program.reserve(captured.len() + closure.params.len());
+            lifted.insert(
+                member,
+                Lifted {
+                    target,
+                    captured: captured.clone(),
+                },
+            );
+        }
     }
     lifted
 }

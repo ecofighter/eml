@@ -1,0 +1,18 @@
+---
+source: crates/eml_cli/tests/ui.rs
+expression: "format!(\"--- stdout ---\\n{stdout}--- stderr ---\\n{diagnostics}{stderr}{written}{exit}\")"
+input_file: tests/ui/run/functions/mutual_recursion_csv.em
+---
+--- stdout ---
+name|age|quote
+Ada|36|Hello, world
+Bob "B" Ross|52|
+--
+last||x
+a,b|c"|d
+trailing|
+--
+unterminated, still one field
+--
+[["x", "y\"z"], ["1", "2"]]
+--- stderr ---

@@ -3322,6 +3322,55 @@ fn nested_local_functions_pass_outer_captures() {
 }
 
 #[test]
+fn mutually_recursive_functions_share_their_captures() {
+    // `even` は `a` だけ、`odd` は `b` だけを捕まえるが、組の関数はどちらも和の `a`、`b` を先頭に受ける
+    let text = "f : Int -> Int -> Int -> Bool\nf a b n =\n  let even k = if k == a then True else odd (k - 1)\n  and odd k = if k == b then False else even (k - 1)\n  even n\n\nmain : Unit -> <IO> Unit\nmain () = println (show (f 0 0 4))";
+    let shown = core_text(text, Pass::Translate);
+    insta::assert_snapshot!(function(&shown, "f$let$even"), @r#"
+    internal fn f$let$even(a.0: int, b.1: int, k.2: int) -> enum {
+      let t.3: enum = extern "Prelude.Eq Int.=="(k.2, a.0)
+      switch t.3 Prelude.Bool { #0 -> b1, #1 -> b2 }
+    b1:
+      let t.4: int = extern Prelude.-(k.2, 1)
+      let t.5: enum = call f$let$odd(a.0, b.1, t.4)
+      return t.5
+    b2:
+      return #1
+    }
+    "#);
+    insta::assert_snapshot!(function(&shown, "f$let$odd"), @r#"
+    internal fn f$let$odd(a.0: int, b.1: int, k.2: int) -> enum {
+      let t.3: enum = extern "Prelude.Eq Int.=="(k.2, b.1)
+      switch t.3 Prelude.Bool { #0 -> b1, #1 -> b2 }
+    b1:
+      let t.4: int = extern Prelude.-(k.2, 1)
+      let t.5: enum = call f$let$even(a.0, b.1, t.4)
+      return t.5
+    b2:
+      return #0
+    }
+    "#);
+    insta::assert_snapshot!(function(&shown, "f"), @"
+    fn f(a.0: int, b.1: int, n.2: int) -> enum {
+      let t.3: enum = call f$let$even(a.0, b.1, n.2)
+      return t.3
+    }
+    ");
+}
+
+#[test]
+fn a_group_member_as_a_value_carries_the_shared_captures() {
+    let text = "f : Int -> Int -> List Int -> List Bool\nf a b xs =\n  let even k = if k == a then True else odd (k - 1)\n  and odd k = if k == b then False else even (k - 1)\n  List.map even xs\n\nmain : Unit -> <IO> Unit\nmain () = println (show (f 0 0 [1, 2]))";
+    insta::assert_snapshot!(function(&core_text(text, Pass::Translate), "f"), @r#"
+    fn f(a.0: int, b.1: int, xs.2: tobj) -> tobj {
+      let c.3: tobj = closure f$let$even(a.0, b.1)
+      let t.4: tobj = call "Std.List.map@[Int, Bool]"(c.3, xs.2)
+      return t.4
+    }
+    "#);
+}
+
+#[test]
 fn a_local_function_passed_as_a_value_inside_use() {
     // `List.each` は関数を先に受けるので、`use` で書けるようにリストを先に受ける補助関数を置く
     let text = "for_each : List Int -> (Int -> <IO> Unit) -> <IO> Unit\nfor_each xs g = List.each g xs\n\nf : Int -> List Int -> <IO> Unit\nf base xs =\n  let add x = x + base\n  use x <- for_each xs\n  println (show (List.map add [x]))\n\nmain : Unit -> <IO> Unit\nmain () = f 1 [1, 2]";
