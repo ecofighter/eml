@@ -506,6 +506,11 @@ fn unwind<M: Mode>(
                     .ok_or(VmFault::Internal("a frame stops outside an unwind point"))?;
                 if let Some(landing) = entry.landing {
                     let ev = task.get(landing);
+                    // 中断を始めたフレーム (`dst` がまだない) は、印の付いた呼び出しの最中ではないので印を持たない
+                    debug_assert!(
+                        dst.is_some(),
+                        "the frame that started the abort carries a landing marker"
+                    );
                     if let Some(dst) = dst
                         && ev == target
                     {
@@ -630,6 +635,13 @@ fn run_extern<M: Mode>(
     let arg = |i: usize| ops[2 + i] as Slot;
     // 語の引数は、LIR の所有の規則により VM が持つ参照で、extern がそれを消費する
     let ext = Extern::ALL[ops[0] as usize];
+    if ext == Extern::Exit {
+        task.exit = Some(task.raw(arg(0)));
+        unsafe { ctx.exit_abort() }?;
+        // 宛先は不死のダミーなので、どの着地の印とも合わずに `Finish` まで巻き戻す
+        let dummy = ctx.heap().dummy();
+        return unwind(code, ctx, task, counts, dummy);
+    }
     unsafe {
         match ext {
             Extern::Println => {
@@ -718,14 +730,8 @@ fn run_extern<M: Mode>(
                 let code = ctx.proc_status(task.get(arg(0)), task.get(arg(1)))?;
                 task.set_raw(dst, code);
             }
-            Extern::Exit => {
-                task.exit = Some(task.raw(arg(0)));
-                ctx.exit_abort()?;
-                // 宛先は不死のダミーなので、どの着地の印とも合わずに `Finish` まで巻き戻す
-                let dummy = ctx.heap().dummy();
-                unwind(code, ctx, task, counts, dummy)?;
-            }
-            Extern::IntNeg
+            Extern::Exit
+            | Extern::IntNeg
             | Extern::IntAdd
             | Extern::IntSub
             | Extern::IntMul
