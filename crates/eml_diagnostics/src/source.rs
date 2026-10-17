@@ -28,9 +28,11 @@ pub struct SourceFiles {
 struct SourceFile {
     path: String,
     text: String,
-    /// 各行の先頭の位置で、最初はいつも 0 である。`line_col` は1つのファイルに何度も呼ばれるので、呼ばれるたびに
-    /// ファイルの先頭から行を数えずに済むよう、読み込み時に1回だけ作る。
+    /// 各行の先頭の位置で、最初はいつも 0 である。`line_col` と `char_index` は1つのファイルに何度も呼ばれるので、
+    /// 呼ばれるたびにファイルの先頭から数えずに済むよう、読み込み時に1回だけ作る。
     line_starts: Vec<TextSize>,
+    /// 各行の先頭までの文字の数。`line_starts` と同じ長さである。
+    line_char_starts: Vec<usize>,
 }
 
 impl SourceFiles {
@@ -46,14 +48,20 @@ impl SourceFiles {
         if text.starts_with('\u{feff}') {
             text.drain(..'\u{feff}'.len_utf8());
         }
-        let line_starts = std::iter::once(0)
-            .chain(text.match_indices('\n').map(|(newline, _)| newline + 1))
-            .map(|start| TextSize::try_from(start).expect("source file too large"))
-            .collect();
+        let mut line_starts = vec![TextSize::from(0)];
+        let mut line_char_starts = vec![0];
+        for (chars, (offset, c)) in text.char_indices().enumerate() {
+            if c == '\n' {
+                let start = TextSize::try_from(offset + 1).expect("source file too large");
+                line_starts.push(start);
+                line_char_starts.push(chars + 1);
+            }
+        }
         self.files.push(SourceFile {
             path: path.into(),
             text,
             line_starts,
+            line_char_starts,
         });
         id
     }
@@ -71,17 +79,18 @@ impl SourceFiles {
         self.files.iter().map(|file| file.path.as_str())
     }
 
+    /// 位置を、ファイルの先頭からの文字の番号にする。`offset` は、このファイルのテキストの中の文字の境界でなければならない。
+    pub fn char_index(&self, id: FileId, offset: TextSize) -> usize {
+        let file = &self.files[id.0 as usize];
+        let (line, column) = file.locate(offset);
+        file.line_char_starts[line] + column
+    }
+
     /// 位置を行と列にする。`offset` は、このファイルのテキストの中の文字の境界でなければならない。
     pub fn line_col(&self, id: FileId, offset: TextSize) -> LineCol {
-        let file = &self.files[id.0 as usize];
-        // `line_starts` の最初は 0 なので、`offset` 以下の先頭は少なくとも1つあり、その数が1始まりの行になる。
-        let line = file.line_starts.partition_point(|&start| start <= offset);
-        let line_start = file.line_starts[line - 1];
-        let column = file.text[usize::from(line_start)..usize::from(offset)]
-            .chars()
-            .count();
+        let (line, column) = self.files[id.0 as usize].locate(offset);
         LineCol {
-            line: u32::try_from(line).expect("too many lines"),
+            line: u32::try_from(line + 1).expect("too many lines"),
             column: u32::try_from(column + 1).expect("line too long"),
         }
     }
@@ -90,6 +99,17 @@ impl SourceFiles {
         self.files
             .iter()
             .map(|file| (file.path.as_str(), file.text.as_str()))
+    }
+}
+
+impl SourceFile {
+    /// 位置を、0 始まりの行の番号と、行の先頭からの文字の数にする。
+    fn locate(&self, offset: TextSize) -> (usize, usize) {
+        // `line_starts` の最初は 0 なので、`offset` 以下の先頭は少なくとも1つある
+        let line = self.line_starts.partition_point(|&start| start <= offset) - 1;
+        let line_start = usize::from(self.line_starts[line]);
+        let column = self.text[line_start..usize::from(offset)].chars().count();
+        (line, column)
     }
 }
 
@@ -168,5 +188,37 @@ mod tests {
                 column: 1
             }
         );
+    }
+
+    #[test]
+    fn char_index_counts_characters_from_the_file_start() {
+        let mut files = SourceFiles::new();
+        let file = files.add("a.em", "αβ x\nγ y");
+        let at = |offset: u32| files.char_index(file, offset.into());
+        assert_eq!(at(0), 0);
+        // `α` と `β` は2バイトずつなので、`x` はバイト位置 5、文字の番号 3 にある
+        assert_eq!(at(5), 3);
+        assert_eq!(at(7), 5);
+        // 2行目の `y` はバイト位置 10、文字の番号 7 にある
+        assert_eq!(at(10), 7);
+        assert_eq!(at(11), 8);
+    }
+
+    #[test]
+    fn char_index_finds_every_line_of_a_large_file() {
+        // 描画はラベルごとに文字の番号を引く。呼ぶたびにファイルの先頭から数えると、ラベルの数とファイルの大きさの積の
+        // 時間がかかる。行ごとの文字数の表を引く実装なら debug ビルドでも1秒かからない。上限を超えたところで失敗にする。
+        const LINE: &str = "αβ x\n";
+        const LIMIT: Duration = Duration::from_secs(5);
+        let lines = 400_000;
+        let mut files = SourceFiles::new();
+        let file = files.add("a.em", LINE.repeat(lines));
+        let start = Instant::now();
+        for index in 0..lines {
+            let offset = TextSize::try_from(index * LINE.len() + 5).unwrap();
+            assert_eq!(files.char_index(file, offset), index * 5 + 3);
+            let elapsed = start.elapsed();
+            assert!(elapsed < LIMIT, "took {elapsed:?} up to line {index}");
+        }
     }
 }

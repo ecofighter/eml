@@ -45,8 +45,7 @@ pub fn render(diagnostics: &[Diagnostic], files: &SourceFiles) -> String {
 
 fn span(label: &Label, files: &SourceFiles) -> (String, Range<usize>) {
     // ariadne は主でない側のファイルの見出しの位置を、バイト指定でも文字の番号として読むので、文字の番号で渡す
-    let text = files.text(label.file);
-    let chars = |offset: crate::TextSize| text[..usize::from(offset)].chars().count();
+    let chars = |offset| files.char_index(label.file, offset);
     (
         files.path(label.file).to_string(),
         chars(label.range.start())..chars(label.range.end()),
