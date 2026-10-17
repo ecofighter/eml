@@ -144,6 +144,8 @@ struct ModuleScope {
     types: HashMap<String, Vec<Definition<TypeItem>>>,
     /// 型引数の種類の並び (E1015、E1048)。重複した型引数は除いてある。
     type_params: HashMap<TypeDefId, Vec<ParamSort>>,
+    /// `type_params` の各型引数を宣言に書いた位置。E1048 の secondary が指す。
+    type_param_ranges: HashMap<TypeDefId, Vec<TextRange>>,
     effect_params: HashMap<EffectId, usize>,
     /// 定義に付いた fixity、宣言が `pub` か、宣言の演算子の位置。
     fixities: HashMap<ValueItem, (Fixity, bool, TextRange)>,
@@ -393,6 +395,7 @@ impl ModuleScope {
             values: HashMap::new(),
             types: HashMap::new(),
             type_params: HashMap::new(),
+            type_param_ranges: HashMap::new(),
             effect_params: HashMap::new(),
             fixities: HashMap::new(),
             functions,
@@ -425,6 +428,8 @@ impl ModuleScope {
             );
             self.type_params
                 .insert(id, data.params.iter().map(|&(_, _, sort)| sort).collect());
+            self.type_param_ranges
+                .insert(id, data.params.iter().map(|&(_, range, _)| range).collect());
         }
         for (k, effect) in tree.effects.iter().enumerate() {
             let id = self.effects[k];
@@ -1275,6 +1280,13 @@ impl<'a> Resolver<'a> {
             .type_params
             .get(&id)
             .map_or(&[], Vec::as_slice)
+    }
+
+    /// `index` 番目の型引数を宣言に書いた位置とファイル。
+    pub fn type_param_position(&self, id: TypeDefId, index: usize) -> Option<(FileId, TextRange)> {
+        let scope = self.def_map.scope(id.module);
+        let range = *scope.type_param_ranges.get(&id)?.get(index)?;
+        Some((scope.file, range))
     }
 
     pub fn effect_params(&self, id: EffectId) -> usize {

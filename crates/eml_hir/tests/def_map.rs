@@ -634,6 +634,7 @@ fn row_arguments_of_an_imported_type_are_checked() {
     insta::assert_snapshot!(module_report(qualified, &modules), @"
     E1048 test.em 6:12 `M.Iter` takes a row here
       test.em 6:12 this is a type
+      M.em 1:16 declared as a row parameter here
       help: write it as a row: `<e>`
     ");
     let imported =
@@ -641,6 +642,7 @@ fn row_arguments_of_an_imported_type_are_checked() {
     insta::assert_snapshot!(module_report(imported, &modules), @"
     E1048 test.em 6:10 `Iter` takes a row here
       test.em 6:10 this is a type
+      M.em 1:16 declared as a row parameter here
       help: write it as a row: `<e>`
     ");
 }

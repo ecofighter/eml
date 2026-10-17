@@ -373,7 +373,10 @@ impl Table<'_> {
         else {
             return ty;
         };
-        // 置き換えてよいのは、宣言で `Unr` に決まった矢印だけである。ほかの値を置き換えると、その矢印の制約が消える
+        // 置き換えてよいのは、宣言で `Unr` に決まった矢印だけである。ほかの値を置き換えると、その矢印の制約が消える。
+        // 成り立つのは、シグネチャの一番外側の矢印が `Arrows::OutermostUnr` と `Method { outermost }` で `Unr` になり、
+        // コンストラクタの最初の矢印も `Unr` で、一番外側の `once` は E1050 の後に HIR が外すためである
+        // (docs/spec/types.md の「1回だけ呼べる関数の型」)
         debug_assert!(
             matches!(lin, ArrowLin::Known(Linearity::Unr)),
             "the outermost arrow of a declaration is unr"

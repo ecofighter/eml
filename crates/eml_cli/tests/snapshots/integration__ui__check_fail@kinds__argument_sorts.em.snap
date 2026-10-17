@@ -9,6 +9,12 @@ input_file: tests/ui/check-fail/kinds/argument_sorts.em
  7 │ lower : Iter e Int -> Int
    │              ┬  
    │              ╰── this is a type
+   │
+   ├─[ check-fail/kinds/argument_sorts.em:7:14 ]
+   │
+ 3 │ data Iter <e> a =
+   │            ┬  
+   │            ╰── declared as a row parameter here
    │ 
    │ Help: write it as a row: `<e>`
 ───╯
@@ -18,11 +24,23 @@ input_file: tests/ui/check-fail/kinds/argument_sorts.em
  10 │ typed : Iter Int Int -> Int
     │              ─┬─  
     │               ╰─── this is a type
+    │
+    ├─[ check-fail/kinds/argument_sorts.em:10:14 ]
+    │
+  3 │ data Iter <e> a =
+    │            ┬  
+    │            ╰── declared as a row parameter here
 ────╯
 [E1048] Error: `List` takes a type here
-    ╭─[ check-fail/kinds/argument_sorts.em:13:21 ]
-    │
- 13 │ row_for_type : List <IO> -> Int
-    │                     ──┬─  
-    │                       ╰─── this is a row
-────╯
+     ╭─[ check-fail/kinds/argument_sorts.em:13:21 ]
+     │
+  13 │ row_for_type : List <IO> -> Int
+     │                     ──┬─  
+     │                       ╰─── this is a row
+     │
+     ├─[ <std>/Prelude.em:123:15 ]
+     │
+ 123 │ pub data List a =
+     │               ┬  
+     │               ╰── declared as a type parameter here
+─────╯

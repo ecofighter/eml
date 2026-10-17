@@ -735,7 +735,7 @@ impl BodyCheck<'_, '_> {
         let Some((ty, args, rows)) = instantiated else {
             return self.table.error;
         };
-        // 操作のほかの宣言は何も捕まえないので、一番外側の矢印を参照ごとの変数にして、`once` の位置にも置けるようにする。
+        // 操作以外の宣言は何も捕まえないので、一番外側の矢印を参照ごとの変数にして、`once` の位置にも置けるようにする。
         // 呼び出しの位置でも同じにする。制約がなければ `Unr` に解けるので、呼び出しの意味は変わらない。この変数は宣言の
         // `Shape` の番号を持たないので、`Instance.lin` には入れない (docs/spec/types.md の「トップレベルの関数の参照」)
         let ty = match item {

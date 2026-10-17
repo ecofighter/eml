@@ -465,8 +465,9 @@ impl ItemLowering<'_> {
     }
 }
 
-/// row の型引数を持つ型の instance と `deriving` (E0004)。こうした型は関数型のフィールドを持つので、導出できる
-/// クラスがない (docs/spec/types.md の「row の型引数」)。
+/// row の型引数を持つ型の instance と `deriving` (E0004)。instance の頭とクラスの解決に row 変数を
+/// 持たせる仕事 (メソッドの参照の row の具体化、解決、導出、名前) は、必要な例が出るまで見送る
+/// (docs/spec/types.md の「row の型引数」)。
 fn row_parameter_instance(file: FileId, range: TextRange) -> Diagnostic {
     Diagnostic::not_yet_supported(
         file,

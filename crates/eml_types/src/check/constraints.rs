@@ -277,7 +277,7 @@ impl BodyCheck<'_, '_> {
     }
 }
 
-/// 制約 `C T` の表示。`T` が引数のある型構成子か関数型なら、括弧で囲む (`Same (Box (Int -> Int))`)。タプルは
+/// 制約 `C T` の表示。`T` が引数のある型構成子 (row の引数だけでもよい) か関数型なら、括弧で囲む (`Same (Box (Int -> Int))`)。タプルは
 /// 自分の括弧を持つ。文字列の空白で決めないのは、`(Int, Int) -> Int` のように括弧で始まる関数型があるためである。
 pub(super) fn show_constraint(
     program: &Program,

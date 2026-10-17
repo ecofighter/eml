@@ -375,7 +375,7 @@ V2 は、`unr` と `lin` の受け渡しを拒み、`poly` はどちらとも受
 
 2つの型の比べ方は `TypeStore::lin_compatible` である。2つの型を構造をそろえてたどり、対応する線形性 (矢印の `lin`、`Flexible` と `OpVar` の Kind) の一方が `Unr`、他方が `Lin` なら食い違いとする。`Poly` はどちらとも食い違わない。片方が `Flexible(k)` か `OpVar(_, k)` で他方が別の形の型 `T` なら、`k` と `linearity(T)` を比べる。`Rigid` はどの型とも合う。形が一致しない所 (誤りの跡) は比べない。
 
-- 参照の検査: instance を集めた後に、各関数の instance の中の参照 (関数を指す式) ごとに、代入した参照の型と、呼ばれる instance の型を比べる。飽和した呼び出しだけでなく、部分適用と値としての関数の参照も入る。導出とタプルの生成器の instance と extern の関数は、比べる型を持たないので比べない。extern は行の Kind の列で確かめる (`FunctionRow::param_kinds` と `ret_kind`。`std/` のシグネチャとの結び付けは `crates/eml_core_ir/tests/externs.rs`)
+- 参照の検査: instance を集めた後に、各関数の instance の中の参照 (関数を指す式) ごとに、代入した参照の型と、呼ばれる instance の型を比べる。比べ方は、参照の一番外側の矢印を飛ばす `lin_compatible_inner` である。その矢印は参照ごとの変数で、宣言の矢印と比べる相手ではないためである ([型と Kind](types.md) の「トップレベルの関数の参照」)。飽和した呼び出しだけでなく、部分適用と値としての関数の参照も入る。導出とタプルの生成器の instance と extern の関数は、比べる型を持たないので比べない。extern は行の Kind の列で確かめる (`FunctionRow::param_kinds` と `ret_kind`。`std/` のシグネチャとの結び付けは `crates/eml_core_ir/tests/externs.rs`)
 - 操作の検査: 各 `perform` の参照の型を、その参照の具体化の `kind_values` で評価した操作の宣言の型と比べる。handler の節の引数のパターンの型と `k` の型は、操作の宣言の型と、`Rigid` をどの型とも合う型、`Var` を `Poly` として比べる。節の具体化は記録されていないので、`kind_values` は求めない。この比べ方で確かめられるのは、引数の型の矢印と、結果の型の中で呼ぶ側から節へ渡る位置の矢印が、節の側でも宣言の `Unr` と食い違わないことである
 - 捕獲の検査: 両側が同じに誤った印 (`Lin` の値を持つ `unr` のクロージャ) は、比べ方では見つけられない。そこでクロージャを作る所で、矢印が `Unr` なら、捕まえた値の型の `linearity` がすべて `Unr` であることを確かめる
 

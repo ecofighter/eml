@@ -21,7 +21,7 @@ pub fn render(diagnostics: &[Diagnostic], files: &SourceFiles) -> String {
             .with_config(
                 Config::default()
                     .with_color(false)
-                    .with_index_type(IndexType::Byte),
+                    .with_index_type(IndexType::Char),
             )
             .with_code(diagnostic.code)
             .with_message(&diagnostic.message)
@@ -44,9 +44,13 @@ pub fn render(diagnostics: &[Diagnostic], files: &SourceFiles) -> String {
 }
 
 fn span(label: &Label, files: &SourceFiles) -> (String, Range<usize>) {
-    let start = usize::from(label.range.start());
-    let end = usize::from(label.range.end());
-    (files.path(label.file).to_string(), start..end)
+    // ariadne は主でない側のファイルの見出しの位置を、バイト指定でも文字の番号として読むので、文字の番号で渡す
+    let text = files.text(label.file);
+    let chars = |offset: crate::TextSize| text[..usize::from(offset)].chars().count();
+    (
+        files.path(label.file).to_string(),
+        chars(label.range.start())..chars(label.range.end()),
+    )
 }
 
 fn label(label: &Label, files: &SourceFiles) -> AriadneLabel<(String, Range<usize>)> {

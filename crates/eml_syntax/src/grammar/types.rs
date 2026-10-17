@@ -29,7 +29,7 @@ fn type_in_inner(p: &mut Parser, in_type_block: bool) -> bool {
     }
     if once {
         // `once` は後ろの関数型の一番外側の矢印に付くので、矢印がなくても節点は FN_TYPE にして `once` を残す
-        // (docs/spec/grammar.md の `type`)。
+        // (docs/spec/grammar.md の「文法」)。
         if expect(p, THIN_ARROW) {
             arrow_result(p, in_type_block);
         }

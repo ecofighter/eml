@@ -9,7 +9,7 @@ use crate::hir::{
     EffectRef, Generics, ParamSort, RowRef, RowVarDecl, RowVarId, TypeRef, TypeRefId, TypeRefKind,
     TypeVarDecl, TypeVarId,
 };
-use crate::program::TypeItem;
+use crate::program::{TypeDefId, TypeItem};
 
 /// 型変数と row 変数の名前の引き方。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -142,23 +142,26 @@ impl TypeLowering<'_> {
         let mut types = Vec::new();
         let mut rows = Vec::new();
         let mut valid = true;
-        for (sort, arg) in sorts.iter().zip(args) {
+        for (index, (sort, arg)) in sorts.iter().zip(args).enumerate() {
             match (sort, arg) {
                 (ParamSort::Type, ast::TypeArg::Type(ty)) => {
                     types.push(self.lower(Some(ty.clone()), ty.range()));
                 }
                 (ParamSort::Row, ast::TypeArg::Row(row)) => rows.push(self.row_arg(row)),
                 (ParamSort::Row, ast::TypeArg::Type(ty)) => {
-                    self.diagnostics
-                        .push(row_expected(self.file, &at.written(), ty));
+                    let mut diagnostic = row_expected(self.file, &at.written(), ty);
+                    self.declared_here(&mut diagnostic, id, index);
+                    self.diagnostics.push(diagnostic);
                     valid = false;
                 }
                 (ParamSort::Type, ast::TypeArg::Row(row)) => {
-                    self.diagnostics.push(Diagnostic::error(
+                    let mut diagnostic = Diagnostic::error(
                         codes::ARGUMENT_SORT,
                         format!("`{}` takes a type here", at.written()),
                         Label::new(self.file, row.range(), "this is a row"),
-                    ));
+                    );
+                    self.declared_here(&mut diagnostic, id, index);
+                    self.diagnostics.push(diagnostic);
                     valid = false;
                 }
             }
@@ -167,6 +170,23 @@ impl TypeLowering<'_> {
             return TypeRefKind::Error;
         }
         TypeRefKind::Con(id, types, rows)
+    }
+
+    /// E1048 に、宣言の型引数の位置を secondary で足す。宣言は別のファイルにあることがある
+    /// (docs/spec/types.md の「row の型引数」)。
+    fn declared_here(&self, diagnostic: &mut Diagnostic, id: TypeDefId, index: usize) {
+        let Some((file, range)) = self.items.type_param_position(id, index) else {
+            return;
+        };
+        let sort = match self.items.type_params(id)[index] {
+            ParamSort::Type => "type",
+            ParamSort::Row => "row",
+        };
+        diagnostic.secondary.push(Label::new(
+            file,
+            range,
+            format!("declared as a {sort} parameter here"),
+        ));
     }
 
     /// 種類を照合できない引数を、書いた形のまま変換する。中の誤りを報告するためで、結果は使わない。

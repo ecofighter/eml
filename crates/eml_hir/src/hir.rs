@@ -53,6 +53,17 @@ pub fn in_declaration_order<'a, T, R>(
     types: &'a [T],
     rows: &'a [R],
 ) -> impl Iterator<Item = SortedArg<&'a T, &'a R>> {
+    debug_assert_eq!(
+        sorts
+            .iter()
+            .filter(|&&sort| sort == ParamSort::Type)
+            .count(),
+        types.len()
+    );
+    debug_assert_eq!(
+        sorts.iter().filter(|&&sort| sort == ParamSort::Row).count(),
+        rows.len()
+    );
     let (mut types, mut rows) = (types.iter(), rows.iter());
     sorts.iter().filter_map(move |sort| match sort {
         ParamSort::Type => types.next().map(SortedArg::Type),
