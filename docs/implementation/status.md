@@ -2,7 +2,7 @@
 
 位置づけ: 手引き。
 
-M1 (言語の全体を一通り通す vertical slice と、本番の構文の最初の部分) と M2 (モジュールと、参照ごとの具体化の表) は完了した。今は再設計 (S0〜S13) を進めていて、S10 (VM と切り替え) と S11 (REPL) を終え、S12 (スクリプトの MVP) を終え、S13a (Kind の記法)、S13b-1 (位置つきの `mask`)、S13b-2 (`fn` と `ctl` の節、ローカル関数の組) を終えた ([ロードマップ](../future/roadmap.md) の「段の列」)。S12d で書いた5本のスクリプト (wc、grep、ログの集計、CSV の変換、デプロイ手順) は `tests/ui/run/scripts/` の UI テストで、書いてみて分かったことはロードマップの「S13 実例による判断」にある。`eml run` は、Perceus の後の LIR をレジスタ型のバイトコードに変換し、`eml_rt` の上の VM で実行する ([VM](../spec/vm.md))。Perceus は、`switch` と `unpack` のフィールドを借りたまま使い、所有が要る所でだけ所有を取る ([LIR](../spec/lir.md) の「Perceus」)。S11 で `eml repl` を入れた ([REPL の端末](../spec/repl.md))。次は S13b-3 (std の `Yield`、`Fail`、`State` とその handler、`Std.Iter`、`Fs.read_line`) である。この文書は、今の言語の範囲と既知の制限をまとめる。実装が進んだら更新する。
+M1 (言語の全体を一通り通す vertical slice と、本番の構文の最初の部分) と M2 (モジュールと、参照ごとの具体化の表) は完了した。今は再設計 (S0〜S13) を進めていて、S10 (VM と切り替え) と S11 (REPL) を終え、S12 (スクリプトの MVP) を終え、S13a (Kind の記法) と S13b (位置つきの `mask`、`fn` と `ctl` の節とローカル関数の組、std のエフェクトと `Iter`) を終えた ([ロードマップ](../future/roadmap.md) の「段の列」)。S12d で書いた5本のスクリプト (wc、grep、ログの集計、CSV の変換、デプロイ手順) は `tests/ui/run/scripts/` の UI テストで、書いてみて分かったことはロードマップの「S13 実例による判断」にある。`eml run` は、Perceus の後の LIR をレジスタ型のバイトコードに変換し、`eml_rt` の上の VM で実行する ([VM](../spec/vm.md))。Perceus は、`switch` と `unpack` のフィールドを借りたまま使い、所有が要る所でだけ所有を取る ([LIR](../spec/lir.md) の「Perceus」)。S11 で `eml repl` を入れた ([REPL の端末](../spec/repl.md))。次は S13c (中断の巻き戻し) である。この文書は、今の言語の範囲と既知の制限をまとめる。実装が進んだら更新する。
 
 ## 今の言語の範囲
 
@@ -22,7 +22,8 @@ M1 (言語の全体を一通り通す vertical slice と、本番の構文の最
 - 位置つきの `mask`: 型検査が呼び出しごとに決め、エフェクトごとに内側の n 個の handler を残して続く m 個を飛ばす。`Yield Int` を受けて `Yield String` を出すような、型を変換する handler を書ける ([エフェクトと handler](../spec/effects.md) の「handler の意味」、[型と Kind](../spec/types.md) の「推論」)
 - `extern` の宣言と `eml_extern` の表。`Int`、`String`、`Unit`、`IO`、`println`、算術の演算子などは Prelude の `extern` である。`Int`、`String`、`Bool` の比較と表示のメソッドは、instance の中の `extern` で表の行に結ぶ。`IO` を、`println` と標準ライブラリのモジュール `Fs` の `open`、`read_all`、`close` などが起こし、`Fs.File` は線形型である。ユーザーは `IO` を handle できず (Prelude の `try_io` だけが handle する)、`extern` を書けない (E1033) ([エフェクトと handler](../spec/effects.md) の「組み込みの `IO`」)
 - IO の失敗と終了: Prelude の `try_io : (Unit -> <IO | e> a) -> <IO | e> Result IOError a` が、IO の extern の失敗 (書き出しの失敗を除く) を `IOError { kind, message }` の値にする。`exit : Int -> <IO> a` は途中のフレームの値を後始末し、終了コード `n & 255` で終わる。REPL では入力を終えるだけである ([標準ライブラリ](../spec/stdlib.md) の「`try_io`」と「`exit`」)
-- 標準ライブラリのツリー: リポジトリの `std/` (`Prelude.em`、`Fs.em`、`List.em`、`String.em`、`Env.em`、`Stdin.em`、`Proc.em`) をバイナリに埋め込む。Prelude はいつも読み込み、ほかのモジュールは import か修飾子で使うものだけを読み込む。`Fs.open` のように import なしで修飾付きで使え、`import Std.Fs` でも読める。予約した根は `Std` である ([モジュールと名前解決](../spec/modules.md) の「標準ライブラリ」)
+- 標準ライブラリのツリー: リポジトリの `std/` (`Prelude.em`、`Fs.em`、`List.em`、`String.em`、`Env.em`、`Stdin.em`、`Proc.em`、`Yield.em`、`Fail.em`、`State.em`、`Iter.em`) をバイナリに埋め込む。Prelude はいつも読み込み、ほかのモジュールは import か修飾子で使うものだけを読み込む。`Fs.open` のように import なしで修飾付きで使え、`import Std.Fs` でも読める。予約した根は `Std` である ([モジュールと名前解決](../spec/modules.md) の「標準ライブラリ」)
+- std のエフェクトと `Iter`: エフェクトのモジュール `Yield` (`for_each`、`fold`、`collect`)、`Fail` (`to_result`、`to_option`)、`State` (`run`、`eval`、`exec`) と、`once` の継続で作る引いて使うジェネレータ `Iter` とその変換。`File` から1行ずつ読む `Fs.read_line` ([標準ライブラリ](../spec/stdlib.md) の「エフェクトのモジュール」と「`Fs`」)。S12d の `grep`、`logstat`、`csv2jsonl` は std のエフェクトを使い、`csv2jsonl` の CSV の読み取りは `let … and …` の組で書く
 - 線形性、持ち越し規則、網羅性の検査
 - 型クラス: `class` (上位クラス、既定のメソッド、メソッド自身の型変数と制約)、`instance` (文脈、標準ライブラリの中の `extern`)、シグネチャの制約 `Eq a =>`、`deriving (Eq, Ord, Show)`、Prelude のクラス `Eq`、`Ord`、`Show` と `Ordering`、タプルと `Unit` の構造的な instance。証拠は単相化で決め、実行時の辞書は持たない ([宣言](../spec/declarations.md) の「クラスと instance」、[型と Kind](../spec/types.md) の「制約」)
 - モジュール: 入口のファイルのディレクトリを根にして import をたどる読み込み、`pub`、修飾した名前、別名、import の並び、`T(..)` と `E(..)`、修飾子の合流、モジュールとしての Prelude と `Prelude.` の修飾、import の循環の禁止 (E1027)、公開の範囲の検査 (E1032) ([モジュールと名前解決](../spec/modules.md))
@@ -33,7 +34,7 @@ M1 (言語の全体を一通り通す vertical slice と、本番の構文の最
 
 - 浮動小数と文字 (字句として予約し、使うと E0004。`Float`、`Char`、`Num` の段)
 - まだ実装していない構文: 型の別名 `type` ([ロードマップ](../future/roadmap.md) の「言語機能と構文」)、コマンドリテラル (コマンドリテラルの段)。字句と文法の置き場所を用意してあり、使うと E0004 (未対応) を出して回復する。どの層が E0004 を出すかは下の「未対応の構文と E0004」にある
-- バイト列、配列、標準入出力のハンドル (バイト列と `Array` の段)。文字の型を使う文字列の関数、連想配列、並べ替え、`File` を持ったまま1行ずつ読む関数などの標準ライブラリ (UTF-8 と標準ライブラリの段)
+- バイト列、配列、標準入出力のハンドル (バイト列と `Array` の段)。文字の型を使う文字列の関数、連想配列、並べ替えなどの標準ライブラリ (UTF-8 と標準ライブラリの段)
 - ユーザーが書く extern (FFI)
 - 可変参照 `Ref`、再エクスポート (`pub import`)、抽象型、修飾した演算子の構文、`data` のフィールドの矢印の線形性の多相、`: Unr` の宣言、row の型引数の省略、`Lin` の型を受けるクラス、or パターン、ガード、as パターン、Perceus の reuse analysis と借用の最適化、LSP、フォーマッタ、ネイティブ化 ([ロードマップ](../future/roadmap.md) の「その後の項目」)
 
@@ -86,7 +87,8 @@ M1 (言語の全体を一通り通す vertical slice と、本番の構文の最
 - `++` は一意な左辺をその場で伸ばすが、先頭に足す連結 (`"x" ++ acc`) と、共有された左辺への連結は、両辺を写した新しい文字列を作る。ループで先頭に足していくと、伸びていく右辺を毎回写すので、全体で2乗の時間がかかる ([オブジェクトモデル](../spec/object-model.md) の「文字列の操作」)
 - 末尾呼び出しの保証は、末尾の位置の呼び出しをたどって元の関数に戻る輪の上にだけある ([LIR](../spec/lir.md) の「末尾の位置の呼び出し」)。輪の上にない末尾の位置の呼び出しのうち、結果に変換の要るものは普通の呼び出しになる。UI のプログラムでは、`$handleN` の本体が `Int` を返すトップレベルの関数を末尾の位置で呼ぶ形がこれに当たる。輪をたどらないので、積むフレームは有界である
 - 呼び出しの値が、文を持つ合流のブロックを通って `return` に届く形 (`let r = if n == 0 then 0 else f (n - 1) in let s = "unused" in r`) は、末尾の位置の呼び出しでなく、末尾呼び出しにならない。translate の転送は文のない合流のブロックにしか効かないので、この形のループは反復の数に比例してフレームを積む。縮約が使われない `let` を消した後で、`return` だけになった合流のブロックへの転送をやり直せば、保証の範囲を広げられる
-- eml で1バイトずつまわすループは、Python の組み込みの関数より約20倍遅い。`bench/loop.em` の1反復は約330命令かかる。30 MB の入力を1バイトずつ数える `wc` のスクリプトは約1.6秒で、`Stdin.read_line` や `String.find_from` のような extern に任せられる処理は速い ([計測の基準](benchmarks.md) の「S12d (スクリプト)」)
+- eml で1バイトずつまわすループは、Python の組み込みの関数より約20倍遅い。`bench/loop.em` の1反復は約330命令かかる。30 MB の入力を1バイトずつ数える `wc` のスクリプトは約1.6秒で、`Stdin.read_line` や `String.find_from` のような extern に任せられる処理は速い ([計測の基準](benchmarks.md) の「S12d (スクリプト)」と「S13b (スクリプト)」)
+- `Iter` で引くと、1要素ごとに yield と確保が起きるので、push の形の `Yield.for_each` より遅い。状態機械への特殊化は S13e で入れる ([標準ライブラリ](../spec/stdlib.md) の「`Iter`」)
 
 ### 型と row の推論
 

@@ -16,7 +16,7 @@
 - モジュールの候補: `Fs`、`Path`、`Proc`、`Env`、`String`、`List`、`Map`、`Json`、`Csv`、`Toml`、`Regex`、`Http`、`Async`
 - 補間の穴は、Prelude の `Show` の `display` で文字列にする ([式](../spec/expressions.md) の「補間」)。標準ライブラリの型を穴に書けるようにするには、`Show` の instance を置く。人が読む形が `show` の形と違う型は、`display` を上書きする
 - `Bytes` と UTF-8: `String` は常に妥当な UTF-8 である。extern は、検証付きのデコード、エンコード、バイト長、バイト位置から `Char` と次の位置を読む操作、境界を検査する切り出しにとどめる。S12a の `String` の核 (`byte_length`、`byte_at`、`slice`、`find_from`) は、バイトの位置で読む今の形の核で、分割と検索は eml で書いた ([標準ライブラリ](../spec/stdlib.md) の「`String`」)。`Char` と `Bytes` を入れるときに、核をこの形に置き換える ([ロードマップ](roadmap.md) の「UTF-8 と標準ライブラリ」)
-- ジェネレータ: S13b では、`once` の継続で作る `Std.Iter` と、その上の変換だけを入れる ([ロードマップ](roadmap.md) の「S13b std のエフェクトと `Iter`」)。多回の再開ができるジェネレータ (`multi` の `yield`) と、push の形の変換 (`Yield` を受けて `Yield` を出す handler) は入れない。実用のプログラムで要る例が出たら足す。多回の再開ができるジェネレータは、今の `Yield` の意味を変えずに、別のエフェクトとして足せる
+- エフェクトとジェネレータ: S13b-3 で、エフェクトのモジュール `Std.Yield`、`Std.Fail`、`Std.State` とその handler、`once` の継続で作る引いて使うジェネレータ `Std.Iter` とその上の変換、`Fs.read_line` を入れた ([標準ライブラリ](../spec/stdlib.md) の「エフェクトのモジュール」)。多回の再開ができるジェネレータ (`multi` の `yield`) と、push の形の変換 (`Yield` を受けて `Yield` を出す handler) は入れない。実用のプログラムで要る例が出たら足す。多回の再開ができるジェネレータは、今の `Yield` の意味を変えずに、別のエフェクトとして足せる
 
 ## マルチコア対応の設計からの申し送り
 

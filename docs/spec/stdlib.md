@@ -67,9 +67,9 @@ try_io action =
 
 | `Fault` | 起こす関数 | `kind` |
 |---|---|---|
-| `Io { reason, .. }` | `Fs.open`、`Fs.read_all`、`Fs.read_text`、`Fs.write_text`、`Proc.run` | `reason` が `NotFound` なら `NotFound`、`PermissionDenied` なら `PermissionDenied`、`NotAvailable` なら `NotAvailable`、`Other` なら `Other` |
+| `Io { reason, .. }` | `Fs.open`、`Fs.read_all`、`Fs.read_line`、`Fs.read_text`、`Fs.write_text`、`Proc.run` | `reason` が `NotFound` なら `NotFound`、`PermissionDenied` なら `PermissionDenied`、`NotAvailable` なら `NotAvailable`、`Other` なら `Other` |
 | `Stdin(reason)` | `Stdin.read_all`、`Stdin.read_line` | 同上 |
-| `NotUtf8(_)` | `Fs.read_all`、`Fs.read_text`、`Stdin.read_all`、`Stdin.read_line`、`Env.args`、`Env.get` | `NotUtf8` |
+| `NotUtf8(_)` | `Fs.read_all`、`Fs.read_line`、`Fs.read_text`、`Stdin.read_all`、`Stdin.read_line`、`Env.args`、`Env.get` | `NotUtf8` |
 
 書き出しの失敗 (`Output`) を捕まえないのは、標準出力をまとめて書くためである ([オブジェクトモデル](object-model.md) の「Host」)。書けなかったことが分かるのは、後でバッファがあふれた `println` か、読みや起動の前の書き出しか、プログラムの終わりの書き出しになる。そのため、`try_io (fn () -> println s)` は書けなくても `Ok` を返しうるし、関係のない別の `try_io` が失敗を受け取りうる。どこで捕まるかが決まらないので、実行時エラーのままにする。
 
@@ -118,6 +118,7 @@ pub extern exit : Int -> <IO> a
 | `lines` | `String -> List String` | eml |
 | `join` | `String -> List String -> String` | eml |
 | `trim` | `String -> String` | eml |
+| `trim_line_end` | `String -> String` | eml |
 | `to_int` | `String -> Option Int` | eml |
 
 - `byte_length s` は UTF-8 のバイトの数である
@@ -129,6 +130,7 @@ pub extern exit : Int -> <IO> a
 - `lines s` は、Rust の `str::lines` と同じである。行の終わりは `\n` か `\r\n` で、最後の行の終わりは省ける。`lines "a\r\nb\n"` は `["a", "b"]`、`lines "a\r"` は `["a\r"]`、`lines ""` は `[]` である
 - `join sep xs` は、要素の間に `sep` を挟んでつなぐ
 - `trim s` は、両端の ASCII の空白 (空白、`\t`、`\n`、`\x0B`、`\x0C`、`\r`) を除く。Unicode の空白は除かない
+- `trim_line_end s` は、最後の行の終わり (`\n` か `\r\n`) を1つ除く。行の終わりで終わらなければ `s` をそのまま返し、`trim_line_end ""` は `""` である。`Stdin.read_line` と `Fs.read_line` が、読んだ行の終わりを除くのに使う
 - `to_int s` は、Rust の `i64::from_str` と同じ形を読む。省略できる符号 `+` か `-` の後に、1つ以上の ASCII の数字が続く形である。空白は許さない。範囲を超えれば `None` で、`"-9223372036854775808"` は読める
 - 部分文字列の照合は素朴な方法で、`needle` の長さと探す範囲の長さの積に比例する時間がかかる
 
@@ -151,7 +153,7 @@ pub extern exit : Int -> <IO> a
 | `read_line` | `Unit -> <IO> Option String` |
 
 - `read_all ()` は、標準入力の残りをすべて読む
-- `read_line ()` は1行を読み、行の終わり (`\n` か `\r\n`) を除いて返す。EOF なら `None` を返す。行の終わりのない最後の行も1行として返す
+- `read_line ()` は1行を読み、行の終わり (`\n` か `\r\n`) を `String.trim_line_end` で除いて返す。EOF なら `None` を返す。行の終わりのない最後の行も1行として返す
 - どちらも、読む前に標準出力を書き出す。読みは `Fs.read_all` と同じく、64 KiB ずつ読みながら割り込みと確保量の上限を見る。UTF-8 でない入力は実行時エラーにする
 - REPL では、標準入力を REPL 自身が読むので、どちらも I/O の失敗 (`cannot read the standard input: not available`) にする
 
@@ -161,9 +163,15 @@ pub extern exit : Int -> <IO> a
 |---|---|
 | `read_text` | `String -> <IO> String` |
 | `write_text` | `String -> String -> <IO> Unit` |
+| `read_line` | `File -> <IO> (File, Option String)` |
+
+`open`、`read_all`、`close` と `File` は [エフェクトと handler](effects.md) の「組み込みの `IO`」にある。
 
 - `read_text path` は、ファイル全体を文字列として読む。`open`、`read_all`、`close` で書いた関数である
 - `write_text path text` は、ファイルを作るか切り詰めて、`text` を書く
+- `read_line file` は、今の位置から1行を読み、行の終わり (`\n` か `\r\n`) を `String.trim_line_end` で除いて、同じ `File` と組にして返す。終わりなら `None` を返す。行の終わりのない最後の行も1行として返す。`Stdin.read_line` と同じである
+- `read_line` は、`File` を持ったまま1行ずつ読む生産者を書くための関数で、後のバイト列と `Array` の段でハンドルの API に置き換わりうる ([ロードマップ](../future/roadmap.md) の「バイト列と `Array`」)。std の中だけの extern `read_line_raw : File -> <IO> (File, String)` の上に書いてある。`read_line_raw` は行の終わりを含む1行を返し、終わりなら空の文字列を返す (上の「extern の境界」の番兵)。読み方は `read_all` と同じく `File` の `BufRead` から読み、64 KiB を超える行も、割り込みと確保量の上限を見ながら読む ([オブジェクトモデル](object-model.md) の「`File`」)
+- 読めないときと UTF-8 でない行の誤りは、文言も `try_io` での捕まえ方も `read_all` と同じである ([LIR](lir.md) の「実行時エラー」)。誤りのときは `read_all` と同じく、`File` をそこで閉じる
 
 ## `Proc`
 
@@ -176,6 +184,121 @@ pub extern exit : Int -> <IO> a
 - NUL を含む引数は OS に渡せないので、起動の誤り (`I/O error`) にする
 - Ctrl-C は同じプロセスグループの子にも届く。子が終わった後、割り込みが来ていれば、`run` はその場で止まる (終了コード 130)
 - 起動に使う extern は、引数の数と各引数を、それぞれ NUL で終えて並べた1つの文字列を受ける。OS の引数は NUL を含めないので、NUL を含む引数があれば数が合わなくなり、起動の誤りとして見つかる
+
+## エフェクトのモジュール
+
+`Yield`、`Fail`、`State` は、エフェクトとその handler を持つモジュールで、`Iter` は `Yield` の上に書いた引いて使うジェネレータである。エフェクトの型と操作を修飾せずに書くには、`import Yield (Yield(..))` のように import の一覧に入れる。一覧のない `import Yield` や import なしでは、`Yield.Yield Int`、`Yield.yield x` と修飾して書く ([モジュールと名前解決](modules.md) の「import」)。
+
+```haskell
+import Yield (Yield(..))
+import Iter
+
+numbers : Unit -> <Yield Int> Unit
+numbers () =
+  let go n =
+    yield n
+    go (n + 1)
+  go 1
+
+main : Unit -> <IO> Unit
+main () =
+  Iter.each (fn n -> println (show n)) (Iter.take 3 (Iter.generate numbers))
+```
+
+- エフェクトごとにモジュールを分け、`Std.List` と同じく主役の型の名前をモジュール名にする。修飾子から何の handler かが読める (`Yield.for_each`) ためである。1つのモジュール `Std.Effect` にまとめると、修飾子から読めなくなる。Prelude に置かないのは、すべての検査で読み込むことになり、`get`、`put`、`fail`、`yield` のような短い名前がすべてのモジュールで修飾なしに見えるためである
+- 関数の引数は、`Std.List` と同じく関数を先、対象を最後に置く。`Yield.for_each` だけは、`use x <- Yield.for_each gen` と書けるように、生産者を先、要素ごとの関数を最後に置く
+
+## `Yield`
+
+```haskell
+pub effect Yield a where
+  yield : a -> Unit
+```
+
+| 関数 | 型 |
+|---|---|
+| `for_each` | `(Unit -> <Yield a \| e> Unit) -> (a -> <e> Unit) -> <e> Unit` |
+| `fold` | `(b -> a -> <e> b) -> b -> (Unit -> <Yield a \| e> Unit) -> <e> b` |
+| `collect` | `(Unit -> <Yield a \| e> Unit) -> <e> List a` |
+
+- `for_each producer f` は `producer ()` を呼び、出された値ごとに `f` を呼ぶ
+- `fold f init producer` は、出された値を左からたたむ (`f (f init x1) x2`)。`collect producer` は、出された順のリストを返す。`collect` は `fold` の上に書いてある
+- どの handler の節も、受け取ってすぐ再開する `fn` の節である ([式](expressions.md) の「handler」)
+- push の形の変換 (`Yield` を受けて `Yield` を出す handler) は置かない。変換は `Iter` の側だけに置く。両方に置くと同じ変換が2組になり、push の形では `zip` を書けないためである。push の形の変換は、位置つきの `mask` と `fn` の節で、利用者が数行で書ける
+
+## `Fail`
+
+```haskell
+pub effect Fail x where
+  never fail : x -> a
+```
+
+| 関数 | 型 |
+|---|---|
+| `to_result` | `(Unit -> <Fail x \| e> a) -> <e> Result x a` |
+| `to_option` | `(Unit -> <Fail x \| e> a) -> <e> Option a` |
+
+- `Fail` は誤りの型を引数に持つ。誤りの形はプログラムごとに違うためである (S12d の `csv2jsonl` は、終了コードと文言の組を `fail (1, "…")` と渡す)
+- `to_result action` は、`action ()` が `fail x` で止まれば `Err x` を、値 `v` を返せば `Ok v` を返す
+- `to_option action` は、誤りを捨てて `None` を返す。捨てるので、誤りの型は `Unr` でなければならない。節で誤りを `_` に束縛するので、型検査が `Unr` の制約を付け、`Fail File` のような誤りの型は E3001 になる。新しい規則は要らない
+- row に2つの `Fail` を並べたときは、`fail` はいつも1つ目のラベルに向かう。2つ目を名指す構文はまだない ([ロードマップ](../future/roadmap.md) の「言語機能と構文」)
+
+## `State`
+
+```haskell
+pub effect State s where
+  get : Unit -> s
+  put : s -> Unit
+```
+
+| 関数 | 型 |
+|---|---|
+| `run` | `s -> (Unit -> <State s \| e> a) -> <e> (a, s)` |
+| `eval` | `s -> (Unit -> <State s \| e> a) -> <e> a` |
+| `exec` | `s -> (Unit -> <State s \| e> a) -> <e> s` |
+
+- `run init action` は、状態 `init` で `action ()` を動かし、結果と最後の状態の組を返す。`eval` は結果だけを、`exec` は最後の状態だけを返す。どちらも `run` の組から取り出す関数である。名前は Haskell の `runState`、`evalState`、`execState` に倣う
+- `get` は状態の写しを返すので、状態の型は `Unr` でなければならない。パラメータ付き handler の `fn` の節の書き方から、型検査がこの制約を付ける ([式](expressions.md) の「パラメータ付き handler」)
+
+## `Iter`
+
+```haskell
+pub data Iter <e> a = | Iter (once Unit -> <e> Option (a, Iter <e> a))
+```
+
+| 関数 | 型 |
+|---|---|
+| `next` | `Iter <e> a -> <e> Option (a, Iter <e> a)` |
+| `generate` | `(Unit -> <Yield a \| e> Unit) -> Iter <e> a` |
+| `yield_all` | `Iter <e> a -> <Yield a \| e> Unit` |
+| `from_list` | `List a -> Iter <e> a` |
+| `map` | `(a -> <e> b) -> Iter <e> a -> Iter <e> b` |
+| `filter` | `(a -> <e> Bool) -> Iter <e> a -> Iter <e> a` |
+| `filter_map` | `(a -> <e> Option b) -> Iter <e> a -> Iter <e> b` |
+| `take` | `Int -> Iter <e> a -> Iter <e> a` |
+| `zip` | `Iter <e> a -> Iter <e> b -> Iter <e> (a, b)` |
+| `enumerate` | `Int -> Iter <e> a -> Iter <e> (Int, a)` |
+| `each` | `(a -> <e> Unit) -> Iter <e> a -> <e> Unit` |
+| `fold` | `(b -> a -> <e> b) -> b -> Iter <e> a -> <e> b` |
+| `to_list` | `Iter <e> a -> <e> List a` |
+
+- `Iter` は `once` の関数を持つので `Lin` である ([型と Kind](types.md) の「1回だけ呼べる関数の型」)。途中でやめるときは `drop` で捨てる。生産者が `File` を持っていれば、そこで閉じる
+- コンストラクタ `Iter` も公開する。コンストラクタを隠す `pub data` (抽象型) がまだないためである
+- `next it` は、次の要素と残りの `Iter` の組を返し、終わりなら `None` を返す
+- `generate`、`from_list` と変換 (`map`、`filter`、`filter_map`、`take`、`zip`、`enumerate`) は、`next` を呼ぶまで何も動かさない。そのため、どれもエフェクトを起こさず、矢印に row が要らない。Python のジェネレータが `next` まで本体を動かさないのと同じである
+- `generate producer` は、生産者を `Yield` の handler で包む。名前を `from` にしないのは、`from` が `handle … from …` のキーワードだからである。`yield` の節は、受け取った値と、継続 `k` を包んだ次の `Iter` の組を返し、`return` の節は `None` を返す。`yield_all` は逆向きの変換で、`Iter` の要素を順に `yield` する
+- `take n it` は、n 個を渡した後の `next` で残りを `drop` して `None` を返す。n が 0 以下なら、最初の `next` で何も取り出さずに捨てる。`take` の `Iter` そのものを `drop` したときも、中の `Iter` は一緒に捨てられる。そのため、生産者の `File` が閉じるのは、渡し終えた次の `next` か `drop` の時点である
+- `zip` は、どちらかが終わったら、もう一方の残りを `drop` する。`enumerate start` は、番号を `start` から数える。行番号のように1から数える場面が多いためである
+- `each`、`fold`、`to_list` は、終わりまで `next` を呼ぶ。`fold` は左からたたみ、`to_list` は要素の順のリストを返す
+- `next` の結果を専用の型にせず `Option` の組にするのは、利用者が覚える型を `Iter` だけにするためである (Rust の `Iterator::next`、OCaml の `Seq.uncons` と同じ形)。先頭の値を先に求める形 (`| Done | More a (once Unit -> <e> Iter <e> a)`) では、作っただけで生産者が最初の `yield` まで動く
+- `Std.Iter` は `Std.Yield` を import し、`Std.Yield` は `Std.Iter` を知らない。両方向の変換 (`generate` と `yield_all`) を `Std.Iter` に置くので、依存は一方向で、push の形だけを使うプログラムは `Std.Iter` を読み込まない
+- 多回の再開ができるジェネレータ (`multi` の `yield`) は用意しない。生産者が `yield` をまたいで `Lin` の値を持てなくなり、`File` を持つ生産者を書けないためである。要る例が出たら、`Yield` の意味を変えずに別のエフェクトとして足せる
+
+`Iter` を使うときは、次の3つに注意する。
+
+- 速さ: S13e までは、`Iter` で引くと1要素ごとに yield と確保が起きるので、push の形の消費者 (`Yield.for_each`) より遅い。状態機械への特殊化は S13e で入れる ([ロードマップ](../future/roadmap.md) の「S13 実例による判断」)
+- エフェクトの届く先: 生産者のエフェクトは、`Iter.generate` を呼んだ場所ではなく、`next` を呼んだ場所の handler に届く。そのため、`try_io` は `Iter.generate` ではなく、消費するループを包む (`try_io (fn () -> Iter.each f (Iter.generate producer))`)
+- `multi` の操作: `yield` は `once` の操作なので、`Yield.for_each` の要素ごとの関数の中で `multi` の操作を起こすと E3006 になる。`yield` の継続を持ったまま、`multi` の操作をまたぐためである ([エフェクトと handler](effects.md) の「継続の多重度と持ち越し規則」)。多回の再開ができるジェネレータを用意しないことの帰結である
 
 ## 実行時エラー
 

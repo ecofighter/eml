@@ -46,7 +46,7 @@ S12d の5本のスクリプトの書き心地と、その後の議論と試作 (
 | 作業 | 中身 | 完了の条件 |
 |---|---|---|
 | S13a | Kind の記法。1回だけ呼べる関数 `once a -> b`、`data` の row の型引数、`data` の Kind の宣言 | 済み。決めたことは [型と Kind](../spec/types.md) と [宣言](../spec/declarations.md) にある |
-| S13b | `mask` を位置つきにして E2008 をなくすこと。std のエフェクト `Yield`、`Fail`、`State` と、その handler、引いて使うジェネレータ `Iter`、`Fs.read_line`。`k` を書かない節、ローカル関数どうしの相互再帰。S13b-1〜S13b-3 に分ける | `Yield Int` を受けて `Yield String` を出す handler が動く。S12d のスクリプトが自前の `Yield` と `Fail` を宣言せずに std のものを使う。`csv2jsonl` の CSV の読み取りを相互再帰で書ける。`Fs.read_line` で `File` から1行ずつ読む生産者を `Iter` で書ける |
+| S13b | `mask` を位置つきにして E2008 をなくすこと。std のエフェクト `Yield`、`Fail`、`State` と、その handler、引いて使うジェネレータ `Iter`、`Fs.read_line`。`k` を書かない節、ローカル関数どうしの相互再帰。S13b-1〜S13b-3 に分ける | 済み。決めたことは [エフェクトと handler](../spec/effects.md)、[型と Kind](../spec/types.md)、[式](../spec/expressions.md)、[標準ライブラリ](../spec/stdlib.md) にある |
 | S13c | 中断を巻き戻しで行うこと、`IO` と `never` の操作を yield の地点から外すこと、節の間の `evv` の付け替え (under)、中断で終わる経路での `Lin` の値の暗黙の後始末 | 本体で `println` を呼ぶ総称な handler が、`RunStats` で yield を数えない。中断で巻き戻した `File` が閉じ、検査モードで漏れがない。`never` の操作の前の `drop k` が要らない |
 | S13d | row の最小の具体化 | 純粋なコールバックを渡した総称な handler を、外側にユーザーのエフェクト (`State` など) の handler がある所で呼んでも、`RunStats` で yield を数えない。`<IO>` だけの場合は S13c で済む |
 | S13e | `Iter` の状態機械への特殊化 | 末尾再帰の生産者を `Iter` で引く計測で、1要素ごとの yield と確保がなくなる。直接のループとの実時間の差を [計測の基準](../implementation/benchmarks.md) に記録する |
@@ -67,24 +67,9 @@ S13b を、次の3つの作業に分けて順に進める (2026-10-17 に決め�
 |---|---|
 | S13b-1 | 位置つきの `mask`。E2008 をなくす。済み。決めたことは [エフェクトと handler](../spec/effects.md) と [型と Kind](../spec/types.md) にある |
 | S13b-2 | `k` を書かない節と、ローカル関数どうしの相互再帰。済み。決めたことは [式](../spec/expressions.md)、[エフェクトと handler](../spec/effects.md)、[型と Kind](../spec/types.md) にある |
-| S13b-3 | std の `Yield`、`Fail`、`State` とその handler、`Std.Iter`、`Fs.read_line`、S12d のスクリプトの書き換え |
+| S13b-3 | std の `Yield`、`Fail`、`State` とその handler、`Std.Iter`、`Fs.read_line`、S12d のスクリプトの書き換え。済み。決めたことは [標準ライブラリ](../spec/stdlib.md) と [オブジェクトモデル](../spec/object-model.md) にあり、スクリプトの計測は [計測の基準](../implementation/benchmarks.md) の「S13b (スクリプト)」にある |
 
 位置つきの `mask` を最初に置くのは、型を変換する handler を書く前提で、ほかの2つの作業に依らないためである。std の `Yield` はまだないので、S13b-1 の完了の条件はテストの中で宣言した `Yield` で確かめる。S13b-3 を最後に置くのは、std の handler を S13b-2 の `k` を書かない節で書くためである。
-
-#### 決めたこと: std のエフェクトと `Iter` (S13b-3)
-
-- std のエフェクトは、エフェクトごとのモジュール `Std.Yield`、`Std.Fail`、`Std.State` に置く。`Std.List` と同じく、主役の型の名前をモジュール名にする。handler は修飾子で何の handler かが読め (`Yield.for_each`)、操作は `import Yield (Yield(..))` で修飾なしにする。Prelude に置かないのは、すべての検査で読み込むことになり、`get`、`put`、`fail`、`yield` のような短い名前がすべてのモジュールで修飾なしに見えるためである。1つのモジュール `Std.Effect` にまとめると、修飾子から何の handler かが読めない
-- `Yield a` (`yield : a -> Unit`) の handler は、要素ごとに関数を呼ぶ `for_each` (`use x <- Yield.for_each gen` と書ける形)、リストに集める `collect`、畳み込む `fold` とする
-- `Fail x` は誤りの型を引数に持つ (`never fail : x -> a`)。handler は `to_result : (Unit -> <Fail x | e> a) -> <e> Result x a` と `to_option` である。S12d で `Fail` を使った `csv2jsonl` の誤りは終了コードと文言の組で、誤りの形はスクリプトごとに違うためである。`to_option` は誤りを捨てるので、誤りの型に `Unr` の制約が付く。row に2つの `Fail` を並べた場合、`fail` はいつも1つ目に向かう (「その後の項目」の「同じエフェクトの2つ目のラベルを名指すこと」)
-- `State s` (`get`、`put`) の handler は `run` (結果は `(a, s)`)、`eval` (値だけ)、`exec` (状態だけ) とする。Haskell の `runState`、`evalState`、`execState` に倣う
-- 引いて使うジェネレータ `Iter` を `Std.Iter` に置く。`data Iter <e> a = | Iter (once Unit -> <e> Option (a, Iter <e> a))` の形で、`next : Iter <e> a -> <e> Option (a, Iter <e> a)` で1つ取り出す。`Iter` は `Lin` で、途中でやめるときは残りを `drop` で捨てる。生産者が持っていた `File` は、そこで閉じる
-- 理由: `next` を呼ぶまで生産者を動かさないので、`Iter` を作ることと変換は純粋になり、変換のシグネチャに `<e>` が要らない。Python のジェネレータが `next` まで本体を動かさないのと同じである。先頭の値を先に求める形 (`| Done | More a (once Unit -> <e> Iter <e> a)`) では、作っただけで生産者が最初の `yield` まで動く。`next` の結果を専用の型にせず `Option` の組にしたのは、利用者が覚える型を `Iter` だけにするためである (Rust の `Iterator::next`、OCaml の `Seq.uncons` と同じ形)。1要素ごとの確保は先頭の値を先に求める形より多いが、S13e の特殊化でなくす対象である
-- `Std.Iter` の関数は、`from : (Unit -> <Yield a | e> Unit) -> Iter <e> a`、`yield_all : Iter <e> a -> <Yield a | e> Unit`、`from_list`、`next`、変換の `map`、`filter`、`filter_map`、`take`、`zip`、`enumerate`、消費の `each`、`fold`、`to_list` とする。名前は `Std.List` にそろえる。`take` と `zip` は、使わない残りを `drop` する。`enumerate` は始めの番号を引数に取る。行番号のように1から数える場面が多かったためである。`Iter` は `Yield` の生産者から作るので `Yield` を知る必要があるが、`Yield` の側は `Iter` を知らなくて済む。両方向の変換を `Std.Iter` に置けば、依存は `Iter` から `Yield` への一方向になる。push の形だけを使うプログラムは `Std.Iter` を読み込まずに済む
-- `Iter` を使うときの注意を [標準ライブラリ](../spec/stdlib.md) に書く。S13e までは、`Iter` で引くと1要素ごとに yield するので、push の形の消費者 (`Yield.for_each`) より遅い。また、生産者のエフェクトは `next` を呼んだ場所の handler に届くので、`try_io` は `Iter.from` ではなく、消費するループを包む
-- ジェネレータの変換は `Iter` の側だけに置き、push の形の変換 (`Yield` を受けて `Yield` を出す handler) は std に置かない。両方に置くと同じ変換が2組になり、push の形では `zip` を書けないためである。push の形の変換は、位置つきの `mask` と `k` を書かない節があれば、利用者が数行で書ける
-- 多回の再開ができるジェネレータ (`multi` の `yield`) は用意しない。生産者が `yield` をまたいで `Lin` の値を持てなくなり、`File` を持つ生産者を書けないためである。S12d の5本と試作にも、要る使い方は出なかった。試作で `multi` の `yield` を使ったのは、`once` の継続をデータに入れる記法がなかったためで、その記法は S13a で入った
-- `Fs.read_line : File -> <IO> (File, Option String)` を入れる。`File` を持ったまま1行ずつ読む生産者を `Iter` で書き、`File` が `Iter` の区間と中断をまたぐ形を確かめるためである。S12d の5本ではこの形が出なかったので、「線形値の受け渡しの糖衣」を判断する材料にもする。行の終わりの除き方は `Stdin.read_line` と同じにする。extern の行、Host の関数、信頼の一覧の行と Miri のテストを足す ([オブジェクトモデル](../spec/object-model.md) の「`unsafe` の核」)。後の「バイト列と `Array`」でハンドルの API に置き換わりうる
-- S12d のスクリプトのうち `grep`、`logstat`、`csv2jsonl` を std のエフェクトに書き換え、`csv2jsonl` の CSV の読み取りを相互再帰で書き直す。出力のスナップショットはバイト単位で変えないので、テストの変更の種類3に当たる。ただし完了の条件なので、S13b-3 の spec に作業として書き、`bench/scripts/compare.sh` で Python の版と出力が一致し続けることも条件にする。`grep` は全体を読む今の形のまま残し、`File` を持つ生産者を `Iter` で引いて `take` で途中でやめる `run` のテストを別に足す。S13e までは `Iter` で引くと遅く、`bench/scripts.sh` の計測が悪くなるためである。`bench/scripts.sh` は S13b-3 の終わりに測り直す
 
 ### S13c 中断の巻き戻し
 
@@ -281,7 +266,7 @@ UTF-8 の核の extern を入れ、標準ライブラリを広げる。`std/` �
   - 互換の条件: 既存のシグネチャの型が、広げた規則の型の特別な場合 (ε := `<>`) になる形でだけ広げる。そのため、ε を入れるのは row を1つも書いていないシグネチャに限る。row を1つでも書いたシグネチャは、今と同じく省略を `<>` と読む。たとえば `twice : (Unit -> Unit) -> <IO> Unit` の引数に ε を入れると、閉じた `<IO>` の本体でコールバックを呼べなくなり、今は通るプログラムが通らなくなる
   - ε を入れるのはトップレベルのシグネチャだけで、`data` のフィールドの型には入れない。ローカルの型の明示とラムダの引数の型で省略した row は、推論用の row 変数に変えてもよい (型がより一般になるだけなので互換である)
 - 同じエフェクトの2つ目のラベルを名指すこと: `<Yield a, Yield b | e>` の中で `yield (x : b)` と書くと、操作はいつも1つ目の `Yield a` に向かうので型の誤りになる。2つ目に届けるには、`mask` を書く構文 (Koka の `mask<yield>{…}`) が要る。型を変換する handler では、節が外側の row で動くので名指しは要らない (S13b の位置つきの `mask`)。実用のプログラムで要る例が出たら構文を決める
-- 線形値の受け渡しの糖衣: `Fs.read_all &input` を `let (input, r) = Fs.read_all input` に脱糖する、Swift の `inout` 風の構文。API の返り値の形を縛ることと、巻き上げの規則が課題である。S12d の5本では `File` が解析や中断の区間をまたぐ形が出なかったので、S13b の `Iter` で `File` を持つ生産者を書いてから判断する
+- 線形値の受け渡しの糖衣: `Fs.read_all &input` を `let (input, r) = Fs.read_all input` に脱糖する、Swift の `inout` 風の構文。API の返り値の形を縛ることと、巻き上げの規則が課題である。S12d の5本では `File` が解析や中断の区間をまたぐ形が出なかった。S13b-3 で、`File` を持つ生産者を `Iter` で引くテスト (`tests/ui/run/std/iter_file/`) を書いた。`match Fs.read_line file with | (file, Some line) -> …` と組のパターンで `File` を受け直す形で書けた。糖衣を入れるかはまだ決めていない
 - トップレベルの値を一度だけ評価すること: 今は参照するたびに計算する ([Core IR](../spec/core-ir.md))。一度だけ評価するのは、単相で `Unr` の値に限る。起動時に評価するか初めて使うときに評価するかと、実行時エラーの報告の仕方も決める。REPL で入力をまたいで残す束縛の評価と、意味を揃えるかも一緒に決める。評価した値を凍結すると塊が増える (下の「REPL」)
 - 可変参照 (方針は決定済み): 値 `Ref h a` と組み込みのエフェクト `Heap h` を持ち、`IO` と分離する。`run_heap` は rank-2 の組み込みとして特別扱いする。`Ref` には `Unr` の値だけを入れ、multi-shot で再開したときの状態は共有する ([マルチコア対応の設計](multicore.md) の「可変状態」)。入れ子の `run_heap` の中から外側の `Ref` を使うには、同じエフェクトのインスタンスを区別する必要がある。名前付きの handler が要るかどうかを、入れるときに決める
 - 局所的な可変変数の糖衣構文: Koka の `var` のように、関数の中に閉じた可変変数を `Heap` を外に見せずに書けるようにする。前提: 可変参照
