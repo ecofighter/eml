@@ -1,0 +1,13 @@
+---
+source: crates/eml_cli/tests/ui.rs
+expression: "format!(\"--- stdout ---\\n{stdout}--- stderr ---\\n{diagnostics}{stderr}{written}{exit}\")"
+input_file: tests/ui/run/std/std_iter_lin.em
+---
+--- stdout ---
+1 4
+right ended
+5 6
+left ended
+0 9
+1 10
+--- stderr ---

@@ -67,7 +67,8 @@ take n it =
         | None -> None
         | Some (x, rest) -> Some (x, take (n - 1) rest))
 
--- どちらかが終わったら、もう一方の残りを捨てる
+-- どちらかが終わったら、もう一方の残りを捨てる。右が終わったときは、左から引いた要素も捨てる。捨てないと要素が
+-- `Unr` に限られる
 pub zip : Iter <e> a -> Iter <e> b -> Iter <e> (a, b)
 zip left right =
   Iter (fn () ->
@@ -78,6 +79,7 @@ zip left right =
       | Some (x, left_rest) ->
         match next right with
           | None ->
+            drop x
             drop left_rest
             None
           | Some (y, right_rest) -> Some ((x, y), zip left_rest right_rest))
