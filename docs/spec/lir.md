@@ -259,9 +259,9 @@ evidence は、handler の1回の実行を表すヒープの物体で、次を�
 
 handle の実行と、継続の再開のたびに、新しい evidence を作る。入口の表は handle のときに1つ作り、再開で作る evidence はその表を共有し、状態と外側の `evv` だけを新しくするので、作る費用は操作の数によらない。yield の宛先は evidence の物体そのもので比べるので、目印の番号は持たない。
 
-状態の欄だけは書き換える。書き換えるのは、その evidence の実行が動いている間の、in-place の節 (`ev_take_state`、`ev_set_state`) と `prompt$` (状態の取り出し) だけである。別の実行は別の evidence を持つので、欄を共有しない。handle 1回につき evidence を1つにして状態を yield と再開で出し入れする形は採らない。handler の実行中にその handler 自身の継続を再開すると ([Core IR](core-ir.md) の「再開と状態」の例)、2つの実行が状態の欄と外側の `evv` の欄を共有して壊し、外側の `evv` がその evidence 自身を指す参照の輪もできるためである。
+状態の欄だけは書き換える。書き換えるのは、その evidence の実行が動いている間の、in-place の節 (`ev_take_state`、`ev_set_state`) と `prompt$` (状態の取り出し) と、その実行を中断で外す巻き戻し (状態の取り出し) だけである。別の実行は別の evidence を持つので、欄を共有しない。handle 1回につき evidence を1つにして状態を yield と再開で出し入れする形は採らない。handler の実行中にその handler 自身の継続を再開すると ([Core IR](core-ir.md) の「再開と状態」の例)、2つの実行が状態の欄と外側の `evv` の欄を共有して壊し、外側の `evv` がその evidence 自身を指す参照の輪もできるためである。
 
-状態の欄を通る参照の輪は、一時的にはできうる。外側の handler O の本体の中で内側の handler I を動かし、I の継続 `k_I` をデータに包んで O の状態に入れると、`evO.状態 → k_I → evI → evI.外側の evv → evO` の輪になる。`prompt$` は、どの出口 ([Core IR](core-ir.md) の「handle と `prompt$`」の 0〜3) でも状態の欄を空にするので、O の実行が `prompt$` を通って終われば輪は切れる。これを不変条件とし、`debug_heap` 付きの UI テスト (`tests/ui/run/effects/continuation_in_outer_state.em`) で確かめる。O の外の宛先への中断と `exit` は、O の handle のフレームを着地せずに外し、evO を巻き戻しの表で手放すだけで、`prompt$` を通らない。そのため、そのとき O の状態がこの輪を作っていれば、輪は切れずに残る ([実装の現在地](../implementation/status.md) の「中断の後始末」)。
+状態の欄を通る参照の輪は、一時的にはできうる。外側の handler O の本体の中で内側の handler I を動かし、I の継続 `k_I` をデータに包んで O の状態に入れると、`evO.状態 → k_I → evI → evI.外側の evv → evO` の輪になる。`prompt$` は、どの出口 ([Core IR](core-ir.md) の「handle と `prompt$`」の 0〜3) でも状態の欄を空にするので、O の実行が `prompt$` を通って終われば輪は切れる。これを不変条件とし、`debug_heap` 付きの UI テスト (`tests/ui/run/effects/continuation_in_outer_state.em`) で確かめる。O の外の宛先への中断と `exit` は `prompt$` を通らないが、O の handle のフレームを着地せずに外すときに、巻き戻しが evO の状態を取り出して手放すので、輪はやはり切れる ([VM](vm.md) の「巻き戻しの手順」)。この場合も UI テスト (`tests/ui/run/unwind/state_holding_inner_continuation_exit.em`、`state_holding_inner_continuation_fail.em`) で確かめる。
 
 ### evidence を探す
 

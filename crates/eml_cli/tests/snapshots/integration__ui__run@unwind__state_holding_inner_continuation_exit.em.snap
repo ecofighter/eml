@@ -1,0 +1,8 @@
+---
+source: crates/eml_cli/tests/ui.rs
+expression: "format!(\"--- stdout ---\\n{stdout}--- stderr ---\\n{diagnostics}{stderr}{written}{exit}\")"
+input_file: tests/ui/run/unwind/state_holding_inner_continuation_exit.em
+---
+--- stdout ---
+--- stderr ---
+--- exit: 3 ---

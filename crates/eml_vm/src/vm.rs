@@ -476,7 +476,8 @@ fn call<M: Mode>(code: &CodeBase<M>, task: &mut Task, dst: Slot, at: u32) {
 
 /// 中断を始めた命令の後で、タスクのスタックを巻き戻す (docs/spec/vm.md の「巻き戻しの手順」)。`task.pc` は中断を
 /// 始めた命令の次の位置で、今のフレームの表を引く位置である。着地の印の evidence が `target` と同じ語のフレームに
-/// 着いたら、呼び出しの結果にダミーを書いてそこから続ける。それまでのフレームは、表のスロットを手放して外す。
+/// 着いたら、呼び出しの結果にダミーを書いてそこから続ける。それまでのフレームは、着地の印があればその evidence の
+/// 状態を手放し、表のスロットを手放して外す。
 /// 巻き戻しの間は物体を作らず、`target` は着地するフレームが所有し続けるので、解放した物体の番地が `target` と
 /// 取り違えられることはない。安全点を置かないのは、仕事が外すフレームの数で終わるためである。
 fn unwind<M: Mode>(
@@ -503,11 +504,19 @@ fn unwind<M: Mode>(
                 let entry = code
                     .unwind_at(pc)
                     .ok_or(VmFault::Internal("a frame stops outside an unwind point"))?;
-                if let (Some(landing), Some(dst)) = (entry.landing, dst)
-                    && task.get(landing) == target
-                {
-                    task.set(dst, ctx.heap().dummy());
-                    return Ok(());
+                if let Some(landing) = entry.landing {
+                    let ev = task.get(landing);
+                    if let Some(dst) = dst
+                        && ev == target
+                    {
+                        task.set(dst, ctx.heap().dummy());
+                        return Ok(());
+                    }
+                    // 外す handler の状態は、その handler の継続を持てば evidence と輪になる。ここで取り出して
+                    // 手放し、輪を切る。生き残った継続は `resume$` で新しい evidence と状態を作るので、古い状態は
+                    // もう読まれない (docs/spec/vm.md の「巻き戻し」)
+                    let state = unsafe { ctx.ev_take_state(ev) }?;
+                    unsafe { ctx.heap_mut().decref(state) }?;
                 }
                 // 表のスロットは、LIR の所有の規則によりこのフレームが持つ参照である。`Lin` の物体も手放してよく、
                 // `File` はここで閉じる
