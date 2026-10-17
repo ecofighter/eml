@@ -1,0 +1,15 @@
+---
+source: crates/eml_cli/tests/ui.rs
+expression: "format!(\"--- stdout ---\\n{stdout}--- stderr ---\\n{diagnostics}{stderr}{written}{exit}\")"
+input_file: tests/ui/run/std/std_fail.em
+---
+--- stdout ---
+Ok 5
+Err "div by zero"
+Some 2
+None
+Err "div by zero"
+Ok 26
+Err 7
+Err (-3, "negative")
+--- stderr ---
