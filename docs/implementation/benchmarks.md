@@ -1108,7 +1108,7 @@ S13d (row の最小の解。純粋なコールバックを渡しても、呼び�
 | `Yield (List a)` を `Yield (List b)` に変える handler の節で `List.map` を呼ぶ | 1000 | 1000 |
 | 同じ変換を `State.run` の中で使う | 2000 | 1000 |
 
-見込みどおりである。4行目の1000は変換の節が `yield` を呼ぶ分で、5行目の `State.run` の分の1000は消えた。2行目の形は `bench/fold_state.em` (10万要素) が `yields: 0` で固定し、2行目から4行目と同じ形の出力は `tests/ui/run/effects/pure_callback_under_state.em` が固定する。
+見込みどおりである。4行目の1000は変換の節が `yield` を呼ぶ分で、5行目の `State.run` の分の1000は消えた。2行目の形は `bench/fold_state.em` (10万要素) が `yields: 0` で固定し、2行目、3行目、5行目と同じ形の出力は `tests/ui/run/effects/pure_callback_under_state.em` が固定する。
 
 #### 100万要素の `fold`
 

@@ -16,7 +16,7 @@
 
 | 段 | 中身 | 前提 | 完了の条件 |
 |---|---|---|---|
-| S13 実例による判断 | Kind の記法、std のエフェクトと `Iter`、中断の巻き戻し、row の最小の具体化、`Iter` の状態機械への特殊化、std のデータ構造と診断と計測 | S12 | 下の「S13 実例による判断」の S13a〜S13f の完了の条件。S13a〜S13c は済み |
+| S13 実例による判断 | Kind の記法、std のエフェクトと `Iter`、中断の巻き戻し、row の最小の具体化、`Iter` の状態機械への特殊化、std のデータ構造と診断と計測 | S12 | 下の「S13 実例による判断」の S13a〜S13f の完了の条件。S13a〜S13d は済み |
 
 S13 の後は、言語の項目を次の順に並べる。
 
@@ -48,7 +48,7 @@ S12d の5本のスクリプトの書き心地と、その後の議論と試作 (
 | S13a | Kind の記法。1回だけ呼べる関数 `once a -> b`、`data` の row の型引数、`data` の Kind の宣言 | 済み。決めたことは [型と Kind](../spec/types.md) と [宣言](../spec/declarations.md) にある |
 | S13b | `mask` を位置つきにして E2008 をなくすこと。std のエフェクト `Yield`、`Fail`、`State` と、その handler、引いて使うジェネレータ `Iter`、`Fs.read_line`。`k` を書かない節、ローカル関数どうしの相互再帰 | 済み。決めたことは [エフェクトと handler](../spec/effects.md)、[型と Kind](../spec/types.md)、[式](../spec/expressions.md)、[標準ライブラリ](../spec/stdlib.md)、[オブジェクトモデル](../spec/object-model.md) にあり、スクリプトの計測は [計測の基準](../implementation/benchmarks.md) の「S13b (スクリプト)」にある |
 | S13c | 中断を巻き戻しで行うこと、`IO` と `never` の操作を yield の地点から外すこと、節の間の `evv` の付け替え (under)、戻らない呼び出しで終わる経路での `Lin` の値の暗黙の後始末 | 済み。決めたことは [線形性](../spec/linearity.md)、[エフェクトと handler](../spec/effects.md)、[型と Kind](../spec/types.md)、[Core IR](../spec/core-ir.md)、[LIR](../spec/lir.md)、[VM](../spec/vm.md) にあり、計測は [計測の基準](../implementation/benchmarks.md) の「S13c」にある |
-| S13d | row の最小の具体化 | 純粋なコールバックを渡した総称な handler を、外側にユーザーのエフェクト (`State` など) の handler がある所で呼んでも、`RunStats` で yield を数えない。`<IO>` だけの場合は S13c で済む |
+| S13d | row の最小の具体化 | 済み。決めたことは [型と Kind](../spec/types.md)、[エフェクトと handler](../spec/effects.md)、[式](../spec/expressions.md) にあり、残した制限は [実装の現在地](../implementation/status.md) の「型と row の推論」に、計測は [計測の基準](../implementation/benchmarks.md) の「S13d」にある |
 | S13e | `Iter` の状態機械への特殊化 | 末尾再帰の生産者を `Iter` で引く計測で、1要素ごとの yield と確保がなくなる。直接のループとの実時間の差を [計測の基準](../implementation/benchmarks.md) に記録する |
 | S13f | std の `Map`、並べ替え、リストの関数、診断の改善、`String.byte_at` の借用、数値計算の計測 | `logstat` が std の `Map` と並べ替えを使う。S12d で挙げた診断の3つが直る。数値計算の計測が Python の版と一緒に `bench/scripts.sh` で動く |
 
@@ -58,20 +58,6 @@ S12d の5本のスクリプトの書き心地と、その後の議論と試作 (
 - S13c と S13d を S13b の後に置くのは、std のエフェクトで書いたプログラムで、yield の数の変化を `RunStats` で測るためである。S13c を S13d より先に置くのは、スクリプトで最も多い形 (消費者の本体で `println` を呼ぶ形) の yield を S13c が消し、S13d の効果はその残りで測れるためである
 - S13e は、S13b の `Iter` と S13c の中断の仕組みを前提にする
 - S13f は他の作業に依らない。数値計算の計測をネイティブ化の前の基準にするため、S13 の中で入れる
-
-### S13d row の最小の具体化
-
-#### 決めたこと
-
-- 呼び出し先の矢印の row の末尾が推論用の変数のとき、呼んだ場所の row の残りのラベルをその変数に受けさせない。「呼んだ場所の row に含まれる」制約を残して後で確かめ、引数から何も入らなければ `<>` に閉じる。row の具体化の記録 (`Instantiation::rows`) は、この解から作る
-- 理由: 今は、引数が純粋でも、呼んだ場所の `<IO>` が変数に入る。そのため、総称な handler の instance が「yield しうる」になり、節がその場で動かない。S13c で `IO` は yield の地点でなくなったが、外側の `State` のようなユーザーのエフェクトでは同じことが起きる
-- 外側のエフェクトの操作を起こす節の yield は、S13d では扱わない。`Yield a` を `Yield b` に変える handler の `yield` の節のように、節の本体に再開する操作の `perform` があると、すぐに再開する節の条件から外れ、row の具体化に関係なく1要素ごとに yield するためである (下の「判断の材料」)。この yield は、「処理系」の「evidence passing の最適化」の under の項目で扱う
-
-#### 論点
-
-- 後で確かめる包含の制約の形と、`mask` の決め方 (今は、余ったラベルを変数が受けるときの `mask` は空である) との関係
-- ローカル関数の row の閉じ方 ([型と Kind](../spec/types.md) の「ローカル関数の推論」) と規則を揃えるか
-- 包含の誤りの診断の位置と文言
 
 ### S13e `Iter` の状態機械への特殊化
 
@@ -265,7 +251,7 @@ UTF-8 の核の extern を入れ、標準ライブラリを広げる。`std/` �
 - Core IR の上の最適化パス: 既知の閉包への `apply` を `call` に置き換えること、引数が定数の関数の特殊化、純粋な extern の定数畳み込み。EP より前の Core IR に置き、関数単位の作業リストで動かす。枝の部分木を置き換えると、S3b-1 までの `simplify` のように長い `else if` の連鎖で2乗の時間がかかるためである。CPS のラムダの位置の変換 (試作で 200,125 回) は、既知の閉包への特殊化で減らす。Repr が同じ instance (`List Int` と `List String` の instance など、同じ形のコードになるもの) をまとめるのも、このパスに置く ([Core IR](../spec/core-ir.md) の「変換の規則」)
 - evidence passing の最適化 ([Core IR](../spec/core-ir.md) の「evidence passing」)。どれも EP と実行時の中に閉じ、型検査と translate は変わらない
   - evidence を探す場所ごとのキャッシュと、閉じた row の静的な添字。今は `ev_lookup` が `evv` を先頭から探し、費用は今有効な handler の数に比例する。`evv` は書き換えないので、場所ごとのキャッシュを足せる。静的な添字は Koka の open の包みを要し、包みが部分ベクタを確保して末尾呼び出しを失うので、目立ったときに採るかを決める
-  - yield しうる外のエフェクトを呼ぶすぐに再開する節を、その場で実行する形 (論文の under)。yield しない外のエフェクト (`IO` と `never` の操作) を呼ぶ節は、S13c から、節の実行中だけ `evv` を外側に替える under の形でその場で動く ([Core IR](../spec/core-ir.md) の「`perform` と節の3つの形」)。yield しうるエフェクトを呼ぶ節には、yield したら `evv` を替え直す包みと、再開で作り直した evidence を探し直す仕組みが要る。S13d に入る前の計測 (上の「判断の材料」) では、`Yield a` を `Yield b` に変える handler の `yield` の節が、外側の handler の節がその場で動く場合でも1要素ごとに yield した。節の本体の `yield` が外側の操作を起こすためで、S13d の row の具体化では消えない。S13 の段に入れるかは、S13d を終えた後に決める。中断は S13c から継続を組み立てずに巻き戻すので、中断のための最適化は残っていない
+  - yield しうる外のエフェクトを呼ぶすぐに再開する節を、その場で実行する形 (論文の under)。yield しない外のエフェクト (`IO` と `never` の操作) を呼ぶ節は、S13c から、節の実行中だけ `evv` を外側に替える under の形でその場で動く ([Core IR](../spec/core-ir.md) の「`perform` と節の3つの形」)。yield しうるエフェクトを呼ぶ節には、yield したら `evv` を替え直す包みと、再開で作り直した evidence を探し直す仕組みが要る。S13d に入る前の計測 (上の「判断の材料」) では、`Yield a` を `Yield b` に変える handler の `yield` の節が、外側の handler の節がその場で動く場合でも1要素ごとに yield した。節の本体の `yield` が外側の操作を起こすためで、S13d の row の具体化の後も消えなかった ([計測の基準](../implementation/benchmarks.md) の「S13d」)。S13 の段に入れるかは、S13d を終えた後に決める。中断は S13c から継続を組み立てずに巻き戻すので、中断のための最適化は残っていない
   - `mask` 付きの呼び出しのたびに `evv_mask` が `evv` の節点を写して確保しないようにすること
   - 末尾の位置の `mask` 付きの呼び出しで、x を返すだけの `f$kN` を作らないこと
   - T3 で `ret` を上げた関数の遅い道で、ダミーの `0` を `box` しないこと
