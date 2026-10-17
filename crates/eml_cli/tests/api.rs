@@ -1088,6 +1088,40 @@ fn type_of_keeps_the_row_variables_of_the_queried_type() {
         console.repl.type_of("fn f x -> List.map f x").ty.as_deref(),
         Some("(a -> <e> b) -> List a -> <e> List b")
     );
+    // 途中のラムダやローカル関数の row も、問い合わせの型の変数から外側へたどって残す
+    assert_eq!(
+        console
+            .repl
+            .type_of("fn f xs -> List.map (fn x -> f x) xs")
+            .ty
+            .as_deref(),
+        Some("(a -> <e> b) -> List a -> <e> List b")
+    );
+    for text in [
+        "fn g -> (fn () -> g ()) ()",
+        "fn g -> (let run h = h () in run g)",
+        "fn g -> (let w = fn () -> g () in w ())",
+    ] {
+        assert_eq!(
+            console.repl.type_of(text).ty.as_deref(),
+            Some("(Unit -> <e> a) -> <e> a"),
+            "{text}"
+        );
+    }
+}
+
+/// 自分の handler の中で自分を呼ぶローカル関数の row は、問い合わせの型に現れても閉じる。開いたままでは包含が誤りに
+/// なるためである (docs/spec/types.md の「REPL の入力」)。
+#[test]
+fn type_of_closes_the_row_of_a_self_call_under_its_own_handler() {
+    let mut console = Console::new(&RunConfig::default());
+    let (outcome, _, defined) = console.eval("effect Ask where\n  ask : Unit -> Int");
+    assert_eq!(outcome, Outcome::Accepted, "{defined:?}");
+    let typed = console.repl.type_of(
+        "let go k = if k == 0 then 0 else ask () + (handle go (k - 1) with | fn ask () -> 1) in go",
+    );
+    assert_eq!(codes(&typed.diagnostics), Vec::<String>::new());
+    assert_eq!(typed.ty.as_deref(), Some("Int -> <Ask> Int"));
 }
 
 /// 後で報告する誤り (線形性) だけの問い合わせでも、型を返さない。

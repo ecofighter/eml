@@ -107,7 +107,7 @@ C と A が同じ開いた末尾に行き着く制約は、1 では飛ばし、3
 ### REPL の入力
 
 - `check_input` (`crates/eml_types/src/check/input.rs`) でも、`check_function` の直後、`undecided_binding` より前に同じ手順で解く。`undecided_binding` は決まらなかった型変数を `Error` と単一化するので、4 で決まる型変数を先に `Error` にしないためである
-- `:type` の表示 (`query::render`) は解いた後、今の `default_unsolved` の前で作る。3 は、問い合わせた式の型に現れる row 変数を閉じない。閉じると `:type fn f -> f ()` が `(Unit -> <e> a) -> <e> a` でなく `(Unit -> a) -> a` になり、型の一般さを失うためである。トップレベルの本体では、本体の外へ出る型は rigid なシグネチャだけなので、閉じても一般さは失わない。`let` の入力は今も `default_unsolved` がすべての自由な row を閉じるので、変わらない
+- `:type` の表示 (`query::render`) は解いた後、今の `default_unsolved` の前で作る。3 は、問い合わせた式の型に現れる row 変数を閉じない。閉じると `:type fn f -> f ()` が `(Unit -> <e> a) -> <e> a` でなく `(Unit -> a) -> a` になり、型の一般さを失うためである。閉じない変数は、問い合わせた式の型に現れる row 変数から、包含の C の末尾から A の末尾へと外側へたどって集める (最終レビューで足した)。途中のラムダやローカル関数の row を閉じると、4 の単一化で問い合わせの型の変数まで `<>` に決まり、`:type fn f xs -> List.map (fn x -> f x) xs` が `(a -> b) -> List a -> List b` になるためである。C と A が共有する末尾で A が C より多くラベルを持つものは集めない。開いたままでは 4 が必ず誤りにするので、閉じる解しかない。トップレベルの本体では、本体の外へ出る型は rigid なシグネチャだけなので、閉じても一般さは失わない。`let` の入力は今も `default_unsolved` がすべての自由な row を閉じるので、変わらない
 
 ### 診断
 

@@ -6,7 +6,7 @@ use std::collections::{HashMap, HashSet};
 use eml_hir::{EffectId, ExprId};
 
 use crate::kind::KindReason;
-use crate::table::{Row, Tail, Ty};
+use crate::table::{Row, RowVar, Tail, Ty};
 
 use super::body::BodyCheck;
 use super::report::AmbientSource;
@@ -23,14 +23,56 @@ pub(super) struct Inclusion {
 }
 
 impl BodyCheck<'_, '_> {
-    /// 積んだ包含を、ラベルの固定点、rigid な末尾の固定点、閉じる、確かめるの順に解く。`keep_open` は閉じない row 変数を
-    /// 含む型で、REPL の `:type` で問い合わせた式の型である。
-    pub(super) fn solve_inclusions(&mut self, keep_open: &[Ty]) {
+    /// 積んだ包含を、ラベルの固定点、rigid な末尾の固定点、閉じる、確かめるの順に解く。`query` は REPL の `:type` で
+    /// 問い合わせた式の型で、そこから閉じずに残す row 変数を決める。
+    pub(super) fn solve_inclusions(&mut self, query: &[Ty]) {
         let inclusions = std::mem::take(&mut self.inclusions);
         self.add_missing_labels(&inclusions);
         self.extend_to_rigid_tails(&inclusions);
-        self.close_unused_tails(&inclusions, keep_open);
+        let keep = self.kept_open(&inclusions, query);
+        self.close_unused_tails(&inclusions, &keep);
         self.check_inclusions(inclusions);
+    }
+
+    /// 閉じずに残す row 変数。問い合わせた式の型に現れる変数と、それを末尾に持つ呼び出し先の包含の今の row の末尾を、
+    /// 外側へたどって集める。途中のラムダやローカル関数の row を閉じると、4 の単一化で問い合わせの型の変数まで `<>` に
+    /// 決まり、`:type fn f xs -> List.map (fn x -> f x) xs` の row が消えるためである。ただし、今の row と共有する末尾で、
+    /// 今の row が呼び出し先より多くラベルを持つものは残さない。開いたままでは 4 の単一化が必ず誤りにし、閉じる解しか
+    /// ないためである (自分の handler の中で自分を呼ぶローカル関数を問い合わせる形。docs/spec/types.md の「REPL の入力」)。
+    fn kept_open(&self, inclusions: &[Inclusion], query: &[Ty]) -> HashSet<RowVar> {
+        let (_, roots) = self.table.unsolved(query.iter().copied());
+        if roots.is_empty() {
+            return HashSet::new();
+        }
+        let mut closing: HashSet<RowVar> = HashSet::new();
+        let mut outward: HashMap<RowVar, Vec<RowVar>> = HashMap::new();
+        for inclusion in inclusions {
+            let (Tail::Var(callee), Tail::Var(ambient)) = (
+                self.table.resolve_row(&inclusion.callee).tail,
+                self.table.resolve_row(&inclusion.ambient).tail,
+            ) else {
+                continue;
+            };
+            if callee == ambient {
+                let extra = self
+                    .table
+                    .missing_labels(&inclusion.ambient, &inclusion.callee);
+                if !extra.is_empty() {
+                    closing.insert(callee);
+                }
+            } else if !self.table.is_rigid_row(ambient) {
+                outward.entry(callee).or_default().push(ambient);
+            }
+        }
+        let mut keep: HashSet<RowVar> = HashSet::new();
+        let mut work: Vec<RowVar> = roots;
+        while let Some(var) = work.pop() {
+            if closing.contains(&var) || !keep.insert(var) {
+                continue;
+            }
+            work.extend(outward.get(&var).into_iter().flatten().copied());
+        }
+        keep
     }
 
     /// 何も足さなくなるまで、呼び出し先の row の今のラベルのうち足りないものを、今の row の自由な末尾に足す。
@@ -109,7 +151,7 @@ impl BodyCheck<'_, '_> {
     /// 共有する末尾も閉じる。閉じた呼び出し先のラベルは今の row の最も内側のラベルと対になり、節の継続 `k` を同じ
     /// エフェクトの handler の中で呼ぶ形でも、rigid な末尾の `mask` と同じ handler に届く (docs/spec/types.md の
     /// 「呼び出しの包含を解く」)。
-    fn close_unused_tails(&mut self, inclusions: &[Inclusion], keep_open: &[Ty]) {
+    fn close_unused_tails(&mut self, inclusions: &[Inclusion], keep: &HashSet<RowVar>) {
         for inclusion in inclusions {
             // 共有する末尾は、今の row の末尾にも現れる。それだけでは閉じない理由にならないので、今の row はラベルの中だけを
             // 見る
@@ -118,11 +160,10 @@ impl BodyCheck<'_, '_> {
             } else {
                 inclusion.ambient.clone()
             };
-            let Some(tail) = self.table.closable_tail(
-                &inclusion.callee,
-                keep_open,
-                std::slice::from_ref(&ambient),
-            ) else {
+            let Some(tail) =
+                self.table
+                    .closable_tail(&inclusion.callee, keep, std::slice::from_ref(&ambient))
+            else {
                 continue;
             };
             let closed = self.at_call(inclusion, |this| this.table.close_row(tail));

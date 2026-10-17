@@ -1,3 +1,5 @@
+use std::collections::HashSet;
+
 use super::unify::Unified;
 use super::*;
 
@@ -43,20 +45,24 @@ impl Table<'_> {
         self.unify_row(&open, &Row::pure())
     }
 
-    /// row の末尾が束縛のない rigid でない変数で、`keep` のどの型にも `keep_rows` のどの row にも現れなければ、その
-    /// 変数を返す。呼び出し先の row の、`close_row` で閉じてよい末尾である。`keep` は REPL の `:type` で問い合わせた
-    /// 式の型で、`keep_rows` は呼び出しの位置の今の row である。それらに現れる末尾は、閉じずに包含の確かめの単一化に
-    /// 任せる (docs/spec/types.md の「推論」)。
-    pub fn closable_tail(&self, row: &Row, keep: &[Ty], keep_rows: &[Row]) -> Option<RowVar> {
+    /// row の末尾が束縛のない rigid でない変数で、`keep` に入っておらず、`keep_rows` のどの row にも現れなければ、その
+    /// 変数を返す。呼び出し先の row の、`close_row` で閉じてよい末尾である。`keep` は REPL の `:type` で閉じずに残す
+    /// row 変数で、`keep_rows` は呼び出しの位置の今の row である。それらに現れる末尾は、閉じずに包含の確かめの単一化に
+    /// 任せる (docs/spec/types.md の「呼び出しの包含を解く」)。
+    pub fn closable_tail(
+        &self,
+        row: &Row,
+        keep: &HashSet<RowVar>,
+        keep_rows: &[Row],
+    ) -> Option<RowVar> {
         let Tail::Var(var) = self.resolve_row(row).tail else {
             return None;
         };
-        if self.is_rigid_row(var) {
+        if self.is_rigid_row(var) || keep.contains(&var) {
             return None;
         }
         let _walk = self.start_walk();
-        let shared = keep.iter().any(|&ty| self.row_occurs_in(var, ty))
-            || keep_rows.iter().any(|row| self.row_occurs_within(var, row));
+        let shared = keep_rows.iter().any(|row| self.row_occurs_within(var, row));
         (!shared).then_some(var)
     }
 
