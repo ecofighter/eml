@@ -87,8 +87,6 @@ pub(super) struct BodyCheck<'a, 'c> {
     /// row の包含で誤りを報告した呼び出し。1回の呼び出しの E2002 は、どの矢印で起きても、呼び出しの位置で確かめても
     /// 本体の後で解いても1つだけ報告する。
     pub(super) failed_calls: HashSet<ExprId>,
-    /// handler の節の継続を束縛した局所変数。直に呼ぶ包含は、末尾を共有しても閉じないことがある (`solve_inclusions`)。
-    pub(super) continuations: HashSet<LocalId>,
     /// `fn` の節の本体に期待する型と由来。キーは書いた本体の式である。HIR が本体を `let` の右辺に下ろすので、その
     /// `let` で本体を期待する型に照らす。隠れた `k` の引数の誤りとして報告しないため (docs/spec/expressions.md の
     /// 「handler」)。
@@ -818,20 +816,12 @@ impl BodyCheck<'_, '_> {
             return;
         }
         if let Tail::Var(_) = row.tail {
-            let resumes = match &self.body.exprs[call].kind {
-                ExprKind::Call { callee, .. } => matches!(
-                    self.body.exprs[*callee].kind,
-                    ExprKind::Path(Res::Local(local)) if self.continuations.contains(&local)
-                ),
-                _ => false,
-            };
             self.inclusions.push(Inclusion {
                 callee: row,
                 ambient: self.ambient.clone(),
                 source: self.ambient_source.clone(),
                 key,
                 name: name.to_string(),
-                resumes,
             });
         }
     }

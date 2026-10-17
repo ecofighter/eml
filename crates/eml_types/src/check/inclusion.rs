@@ -6,7 +6,7 @@ use std::collections::{HashMap, HashSet};
 use eml_hir::{EffectId, ExprId};
 
 use crate::kind::KindReason;
-use crate::table::{Row, RowVar, Tail, Ty};
+use crate::table::{Row, Tail, Ty};
 
 use super::body::BodyCheck;
 use super::report::AmbientSource;
@@ -20,8 +20,6 @@ pub(super) struct Inclusion {
     /// 呼び出しの式と矢印の番号。`mask` の表と同じキーである。
     pub(super) key: (ExprId, usize),
     pub(super) name: String,
-    /// 節の継続 (`ctl` の節の `k` か、`fn` の節の隠れた `$k`) を直に呼ぶ呼び出しか。
-    pub(super) resumes: bool,
 }
 
 impl BodyCheck<'_, '_> {
@@ -107,21 +105,11 @@ impl BodyCheck<'_, '_> {
         }
     }
 
-    /// どの引数からもエフェクトが入らなかった呼び出し先の末尾を `<>` に閉じる。これが最小の解になる。ただし、継続を
-    /// 直に呼ぶ包含で、呼び出し先と今の row が共有し、閉じると呼び出し先のラベルが今の row の内側のラベルと対になる
-    /// 末尾は閉じない。`handle k x with …` の `k` の操作が、`mask` なしで内側の handler に届いてしまう形を、今と
-    /// 同じく誤りにするためである (docs/spec/types.md の「推論」)。
+    /// どの引数からもエフェクトが入らなかった呼び出し先の末尾を `<>` に閉じる。これが最小の解になる。今の row と
+    /// 共有する末尾も閉じる。閉じた呼び出し先のラベルは今の row の最も内側のラベルと対になり、節の継続 `k` を同じ
+    /// エフェクトの handler の中で呼ぶ形でも、rigid な末尾の `mask` と同じ handler に届く (docs/spec/types.md の
+    /// 「呼び出しの包含を解く」)。
     fn close_unused_tails(&mut self, inclusions: &[Inclusion], keep_open: &[Ty]) {
-        let shared: HashSet<RowVar> = inclusions
-            .iter()
-            .filter(|inclusion| inclusion.resumes && self.pairs_inside(inclusion))
-            .filter_map(
-                |inclusion| match self.table.resolve_row(&inclusion.callee).tail {
-                    Tail::Var(var) => Some(var),
-                    Tail::Closed | Tail::Error => None,
-                },
-            )
-            .collect();
         for inclusion in inclusions {
             // 共有する末尾は、今の row の末尾にも現れる。それだけでは閉じない理由にならないので、今の row はラベルの中だけを
             // 見る
@@ -137,28 +125,20 @@ impl BodyCheck<'_, '_> {
             ) else {
                 continue;
             };
-            if shared.contains(&tail) {
-                continue;
-            }
             let closed = self.at_call(inclusion, |this| this.table.close_row(tail));
             debug_assert!(closed.is_ok(), "a free row variable closes");
         }
     }
 
-    /// 包含を確かめ、誤りと `mask` を呼び出しの位置で記録する。末尾を共有する包含を先に確かめる。共有する変数を別の
-    /// 包含の単一化が先に束縛すると、閉じた末尾として通ってしまうためである。
+    /// 包含を積んだ順に確かめ、誤りと `mask` を呼び出しの位置で記録する。
     fn check_inclusions(&mut self, inclusions: Vec<Inclusion>) {
-        let (shared, rest): (Vec<Inclusion>, Vec<Inclusion>) = inclusions
-            .into_iter()
-            .partition(|inclusion| self.shares_tail(inclusion));
-        for inclusion in shared.into_iter().chain(rest) {
+        for inclusion in inclusions {
             let Inclusion {
                 callee,
                 ambient,
                 source,
                 key,
                 name,
-                ..
             } = inclusion;
             let range = self.body.exprs[key.0].range;
             let report = !self.failed_calls.contains(&key.0);
@@ -175,26 +155,6 @@ impl BodyCheck<'_, '_> {
     fn shares_tail(&self, inclusion: &Inclusion) -> bool {
         let callee = self.table.resolve_row(&inclusion.callee).tail;
         matches!(callee, Tail::Var(_)) && callee == self.table.resolve_row(&inclusion.ambient).tail
-    }
-
-    /// 末尾を共有する包含で、今の row が呼び出し先より多く持つエフェクトのラベルを、呼び出し先も持つか。末尾を閉じると、
-    /// 呼び出し先のそのラベルは今の row の内側のラベルと対になる。これが問題になるのは継続だけである。継続の row の
-    /// ラベルは外側の特定の handler を指すが、ふつうの関数の row はエフェクトの集まりで、最も内側の handler に届く
-    /// ことは今の閉じた row と同じ意味である。
-    fn pairs_inside(&self, inclusion: &Inclusion) -> bool {
-        if !self.shares_tail(inclusion) {
-            return false;
-        }
-        let callee = self.table.resolve_row(&inclusion.callee);
-        self.table
-            .missing_labels(&inclusion.ambient, &inclusion.callee)
-            .iter()
-            .any(|extra| {
-                callee
-                    .labels
-                    .iter()
-                    .any(|label| label.effect == extra.effect)
-            })
     }
 
     /// row を束縛すると多重度の制約が足されるので、その由来を包含の呼び出しの範囲にする。

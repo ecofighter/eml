@@ -157,9 +157,6 @@ impl BodyCheck<'_, '_> {
                     continuation
                 }
             };
-            if let PatKind::Bind(local) = self.body.pats[k].kind {
-                self.continuations.insert(local);
-            }
             self.bind_pat(k, continuation);
         }
         self.check_expr(clause.closure.body, result, Origin::HandlerClause);

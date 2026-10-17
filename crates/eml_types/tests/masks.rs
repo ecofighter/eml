@@ -332,18 +332,13 @@ const L: &str = "effect L where\n  op : Unit -> Int\n\n";
 
 #[test]
 fn resuming_under_a_handler_of_the_same_effect() {
-    // `k` の row と今の row が同じ開いた末尾を共有する形は、今と同じく誤りになる。rigid な末尾なら `mask` で通る
+    // 推論用の末尾の `k` の row は閉じ、その `L` は今の row の最も内側の `L`、つまり内側の handler と対になる。`mask`
+    // は要らない。rigid な末尾では `L@1` が内側の handler を残すので、どちらも同じ handler に届く
+    // (docs/spec/types.md の「呼び出しの包含を解く」)
     let in_lambda = format!(
         "{L}in_lambda : Unit -> <L> Int\nin_lambda () =\n  let f = fn () ->\n    op () + (handle op () with\n      | ctl op () k -> handle k 1 with\n          | fn op () -> 2)\n  f ()\n"
     );
-    let checked = check(&in_lambda);
-    let diagnostics = eml_test_support::short(checked.files(), &checked.diagnostics);
-    assert_eq!(diagnostics.len(), 1, "{diagnostics:?}");
-    assert!(
-        diagnostics[0].starts_with("E2002")
-            && diagnostics[0].ends_with("`k` performs `L`, which this lambda does not allow"),
-        "{diagnostics:?}"
-    );
+    assert_eq!(masks(&in_lambda, "in_lambda"), "");
     let in_signature = format!(
         "{L}in_signature : (Unit -> <e> Int) -> <L | e> Int\nin_signature h =\n  op () + (handle op () with\n    | ctl op () k -> handle k (h ()) with\n        | fn op () -> 2)\n"
     );
