@@ -16,6 +16,7 @@ mod pretty;
 mod prim;
 pub mod syntax;
 mod text;
+pub mod unwind;
 mod verify;
 
 pub use boxing::boxing;

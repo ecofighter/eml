@@ -31,6 +31,7 @@ use crate::check::{
 };
 use crate::liveness;
 use crate::syntax::{operation_text, prim_text};
+use crate::unwind::{self, UnwindPoint};
 use crate::{
     Atom, Block, BlockId, Call, CasePattern, Ctor, FnIdx, Layout, LirFn, Mark, OpRet, Prim,
     Program, Repr, Rhs, Stmt, Term, VarId, VerifyError, operation,
@@ -62,7 +63,56 @@ enum Level {
     Ownership,
 }
 
+/// Perceus の後の関数を所有の段で確かめながら、巻き戻しの地点ごとの所有を書き留める (`unwind::points`)。
+pub(crate) fn unwind_points(
+    program: &Program,
+    function: &LirFn,
+) -> Result<Vec<UnwindPoint>, String> {
+    with_tables(program, |tables| {
+        let dominators = shape(&block_shapes(function))?;
+        let mut checker = Checker::new(program, tables, function, Level::Ownership, dominators);
+        checker.points = Some(Vec::new());
+        checker.run()
+    })
+    .map(|points| points.expect("the checker was given a list"))
+}
+
 fn verify_at(program: &Program, level: Level) -> Result<(), VerifyError> {
+    with_tables(program, |tables| {
+        // `clause` の印の関数の ABI は、参照ごとでなく関数ごとに1回だけ確かめる
+        for function in &program.functions {
+            clause_function(
+                &program.effects,
+                &function.name,
+                function.clause,
+                function
+                    .params()
+                    .iter()
+                    .map(|&param| (param, &function.vars[param.0 as usize])),
+                function.ret,
+                function.ret_mark,
+                level >= Level::Scopes,
+            )
+            .map_err(|message| VerifyError {
+                function: function.name.clone(),
+                message,
+            })?;
+        }
+        for function in &program.functions {
+            shape(&block_shapes(function))
+                .and_then(|dominators| {
+                    Checker::new(program, tables, function, level, dominators).run()
+                })
+                .map_err(|message| VerifyError {
+                    function: function.name.clone(),
+                    message,
+                })?;
+        }
+        Ok(())
+    })
+}
+
+fn with_tables<R>(program: &Program, f: impl FnOnce(Tables<'_>) -> R) -> R {
     // 配置の Repr はコンストラクタをすべてたどって決まるので、命令ごとでなく表ごとに1回だけ求める
     let layout_reprs: Vec<Repr> = program.layouts.iter().map(Layout::repr).collect();
     let functions: Vec<FnSummary> = program
@@ -84,34 +134,7 @@ fn verify_at(program: &Program, level: Level) -> Result<(), VerifyError> {
         strings: &program.strings,
         functions: &functions,
     };
-    // `clause` の印の関数の ABI は、参照ごとでなく関数ごとに1回だけ確かめる
-    for function in &program.functions {
-        clause_function(
-            &program.effects,
-            &function.name,
-            function.clause,
-            function
-                .params()
-                .iter()
-                .map(|&param| (param, &function.vars[param.0 as usize])),
-            function.ret,
-            function.ret_mark,
-            level >= Level::Scopes,
-        )
-        .map_err(|message| VerifyError {
-            function: function.name.clone(),
-            message,
-        })?;
-    }
-    for function in &program.functions {
-        shape(&block_shapes(function))
-            .and_then(|dominators| Checker::new(program, tables, function, level, dominators).run())
-            .map_err(|message| VerifyError {
-                function: function.name.clone(),
-                message,
-            })?;
-    }
-    Ok(())
+    f(tables)
 }
 
 fn param_reprs(function: &LirFn) -> impl ExactSizeIterator<Item = Repr> + '_ {
@@ -184,6 +207,8 @@ struct Checker<'a> {
     /// (docs/spec/lir.md の「verifier」)。
     owners: Vec<Option<VarId>>,
     origins: Vec<Option<Origin>>,
+    /// 巻き戻しの地点ごとの所有を書き留める先。`unwind_points` だけが与える。
+    points: Option<Vec<UnwindPoint>>,
 }
 
 impl<'a> Checker<'a> {
@@ -210,10 +235,11 @@ impl<'a> Checker<'a> {
             pending: HashMap::new(),
             owners: vec![None; function.vars.len()],
             origins: vec![None; function.vars.len()],
+            points: None,
         }
     }
 
-    fn run(mut self) -> Result<(), String> {
+    fn run(mut self) -> Result<Option<Vec<UnwindPoint>>, String> {
         let function = self.function;
         self.clause_values()?;
         for (index, block) in function.blocks.iter().enumerate() {
@@ -234,7 +260,7 @@ impl<'a> Checker<'a> {
             }
             self.check_block(index, block, owned)?;
         }
-        Ok(())
+        Ok(self.points)
     }
 
     /// `clause` の印の関数の値 (`&g` と `closure g(..)` の変数) は、`ev_set_clause` の2つ目の引数にだけ使える。入口の
@@ -299,6 +325,21 @@ impl<'a> Checker<'a> {
                 index: at as i64,
             };
             self.check_stmt(&mut owned, stmt)?;
+            if let Some(points) = &mut self.points
+                && let Some((var, landing)) = unwind::point(stmt)
+            {
+                // 束縛した変数は命令が戻ってから現れるので、巻き戻しで手放すものに入れない
+                points.push(UnwindPoint {
+                    block: BlockId(index),
+                    stmt: at,
+                    owned: owned
+                        .iter()
+                        .filter(|&(&held, _)| held != var)
+                        .map(|(&var, &count)| (var, count))
+                        .collect(),
+                    landing,
+                });
+            }
         }
         self.at = Site {
             block: index,
