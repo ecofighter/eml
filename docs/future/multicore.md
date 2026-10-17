@@ -175,7 +175,7 @@ row の Kind: Row<s>,  s ∈ { Never ≤ Once ≤ Multi }
 
 ### 子タスクに `never` の操作だけを許す理由
 
-- 一般の handler は並列と組み合わせられない: `once` / `multi` の handler は、状態を handler の実行ごとの evidence に、計算の続きを継続のクロージャに持つ。例えば [エフェクトと handler](../spec/effects.md) の `run_state` の節 `| get () k st -> k st st` の状態は、操作が起きるたびに evidence から節に渡り、その場で evidence へ戻る ([Core IR](../spec/core-ir.md) の「`perform` と節の3つの形」)。二つの子タスクがこうした操作を同時に perform すると、どちらの節の `k` に計算の続きを返すかが決まらない
+- 一般の handler は並列と組み合わせられない: `once` / `multi` の handler は、状態を handler の実行ごとの evidence に、計算の続きを継続のクロージャに持つ。例えば [エフェクトと handler](../spec/effects.md) の `run_state` の節 `| fn get () st -> (st, st)` の状態は、操作が起きるたびに evidence から節に渡り、その場で evidence へ戻る ([Core IR](../spec/core-ir.md) の「`perform` と節の3つの形」)。二つの子タスクがこうした操作を同時に perform すると、どちらの節の `k` に計算の続きを返すかが決まらない
 - `never` の操作は再開しない: handler の節は、子をすべて片付けた後に、親のスレッドで1回だけ実行すればよい。節が並行に走ることがないので、ロックも、子のスレッドから親のフレームをたどる処理も要らない
 - データ並列にはこれで足りる: データ並列の処理は、もともと純粋な関数と、失敗の通知 (`Fail` のような `never` のエフェクト) で書ける
 
@@ -246,7 +246,7 @@ run_scheduler : (Unit -> <Async, IO> a) -> <IO> a
 ### `multi` の継続の並列な再開
 
 ```haskell
-| choose () k -> par (fn () -> k True) (fn () -> k False)
+| ctl choose () k -> par (fn () -> k True) (fn () -> k False)
 ```
 
 - [エフェクトと handler](../spec/effects.md) の持ち越し規則により、`multi` の操作をまたいで `Lin` の値は生きていない。`k` が捕まえているのは `Unr` の値だけなので、共有しても安全である

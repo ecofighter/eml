@@ -51,7 +51,7 @@ modpath     ::= UIDENT ('.' UIDENT)*
 import_name ::= LIDENT | '(' OP ')' | UIDENT ('(' '..' ')')?
 
 stmt        ::= 'let' pat (':' type)? '=' body
-              | 'let' LIDENT apat+ '=' body                -- ローカル関数
+              | 'let' local_fn ('and' local_fn)*           -- ローカル関数の組
               | 'use' (pat '<-')? expr
               | expr
 
@@ -60,12 +60,13 @@ expr        ::= 'if' expr 'then' body ('else' body)?
               | 'handle' expr ('from' expr)? 'with' clauses
               | 'fn' apat+ '->' body
               | 'let' pat (':' type)? '=' body 'in' expr
-              | 'let' LIDENT apat+ '=' body 'in' expr      -- ローカル関数
+              | 'let' local_fn ('and' local_fn)* 'in' expr -- ローカル関数の組
               | op_expr
+local_fn    ::= LIDENT apat+ '=' body
 arms        ::= block(arm) | arm+
 arm         ::= '|' pat '->' body
 clauses     ::= block(clause) | clause+
-clause      ::= '|' qvar apat* '->' body                  -- 操作の節 (引数、k、状態)
+clause      ::= '|' ('fn' | 'ctl') qvar apat* '->' body   -- 操作の節 (引数、ctl の k、状態)
               | '|' 'return' apat+ '->' body              -- return x [状態]
 
 op_expr     ::= operand ((OP | CONOP) operand)*           -- CST では平たい列
@@ -156,7 +157,12 @@ command     ::= CMD_START (CMD_TEXT | ESCAPE | '\{' '..'? expr INTERP_END)* CMD_
   - `let x = e` と `let x : T = e` (名前の次が `=` か `:`)
   - `let (f, text) = e`、`let Some x = e`、`let P { name = n } = e` (最初がパターン)
   - `let x :: rest = e` (名前の次が演算子)
-- ローカル関数の引数の後に `:` が来たら、``a local function cannot declare its result type`` (help は ``annotate a parameter instead, as in `(x : Int)` ``) の E0011 にする
+- ローカル関数の引数の後に `:` が来たら、``a local function cannot declare its result type`` (help は ``annotate a parameter instead, as in `(x : Int)` ``) の E0011 にする。`and` の束縛でも同じである
+- ローカル関数の組は、関数の形の `let` の束縛の後に、`and` で始まる束縛を続けて読む。行の先頭の `and` の直前の `SEP` は1つ読み飛ばす ([レイアウト規則](layout.md) の「`then` / `else` / `and` の前の `SEP`」)。CST では、`and` の束縛ごとに `AND_BINDING` の節点を `LET_STMT` か `LET_EXPR` の子に置く。`AND_BINDING` は、`and`、名前のパターン、`PARAM_LIST`、`=`、本体を持つ。typed AST の `ast::LetStmt` と `ast::LetExpr` は、`and_bindings` で `ast::AndBinding` を並べる。次の形は E0011 にし、束縛として読んで回復する
+  - 値の `let` の後の `and` (`` `and` follows a function-form `let`, not a value `let` ``)
+  - 引数のない `and` の束縛 (`and x = 1`。`` `and` defines a local function, so it needs parameters ``)
+  - `and` の後が名前でない束縛 (名前を期待する誤り)
+- 操作の節の `fn` と `ctl` は、文法では省ける形で読む。`return` の節に付いた `fn` / `ctl` (`| fn return x -> e`) も読む。どちらの誤りも HIR が E1051 にする ([式](expressions.md) の「handler」)。`fn` を書けない `never` の操作の節を見分けるには、操作の宣言が要るためである。`OpClause` と `ReturnClause` の `keyword` は、`|` の直後の `fn` か `ctl` を返す
 - トップレベルでパターンによる束縛 (`(a, b) = ...`) は書けない。トップレベルの値は、関数と同じく `LIDENT apat* '='` (引数 0 個) で定義する
 - 等式が `LIDENT OP` で始まる場合は演算子の定義、`LIDENT` の後に `=` か `apat` が続く場合は関数の定義である。2トークンの先読みで区別する
 - `A -> <E> B -> C` の row `<E>` は最初の `->` に付き、`A -> <E> (B -> C)` と読む。内側の `B -> C` の row は省略扱いとする

@@ -30,7 +30,7 @@ eml の目的、言語の性格、確定した設計判断の一覧、文書全�
 | Kind の将来 | 内部では最初から Kind 変数と部分 Kind 関係を扱う。表面の構文では当面書かせず、将来ユーザーが Kind を書けるようにする | [型と Kind](spec/types.md) |
 | エフェクト | Row 多相 (Koka 方式、scoped labels)。row 変数にも Kind `Row<s>`、`s ∈ {Never ≤ Once ≤ Multi}` を持たせる。`Never` は将来のマルチコア対応のための要素 | [型と Kind](spec/types.md)、[エフェクトと handler](spec/effects.md) |
 | 継続の多重度 | 操作ごとに `never` / `once` / `multi` を宣言する。デフォルトは `once` | [エフェクトと handler](spec/effects.md) |
-| 継続 | 継続 `k` は普通の関数で、`k v` で再開する。状態のある handler では `k v st` と書く。`once` の `k` は `Lin` の矢印を持ち、handler は `k` を呼ぶか `drop k` を必ず書く。`multi` の `k` は `Unr` の矢印を持つ | [エフェクトと handler](spec/effects.md) |
+| 継続 | 継続 `k` は普通の関数で、`k v` で再開する。状態のある handler では `k v st` と書く。`once` の `k` は `Lin` の矢印を持ち、`ctl` の節は `k` を呼ぶか `drop k` を必ず書く。`fn` の節は `k` を書かず、本体の値で再開する。`multi` の `k` は `Unr` の矢印を持つ | [エフェクトと handler](spec/effects.md) |
 | handler の意味 | deep handler。再開した継続の中でも同じ handler が有効なまま | [エフェクトと handler](spec/effects.md) |
 | `IO` | Prelude が宣言する組み込みの extern のエフェクトで、操作は `never` の `io_failed` だけである。`io_failed` は Prelude の外から見えず、Prelude の `try_io` だけが `IO` を handle する。利用者は `IO` を handle できない。`println` などは `<IO>` を持つ `extern` の関数である | [エフェクトと handler](spec/effects.md) の「組み込みの `IO`」、[標準ライブラリ](spec/stdlib.md) の「`try_io`」 |
 | 暗黙の後始末 | 通常の制御フローでは一切行わない。中断時 (`drop k` や `never` 操作) だけ、捕まっていた `Lin` 値を、その型に宣言された破棄処理で drop する | [線形性](spec/linearity.md)、[エフェクトと handler](spec/effects.md) |
@@ -58,6 +58,8 @@ eml の目的、言語の性格、確定した設計判断の一覧、文書全�
 | 型の宣言 | `data` は直和型、`type` は型の別名 | [宣言](spec/declarations.md) |
 | エフェクトの宣言 | `effect Name a where` の後に操作を並べる。操作のカリー化を許す | [宣言](spec/declarations.md) |
 | `use` | ブロックの残りを、最後の引数のラムダとして渡す糖衣構文 | [式](spec/expressions.md) |
+| handler の節 | 操作の節は `\| ctl op x k -> …` (継続を操作する) か `\| fn op x -> …` (本体の値ですぐに再開する) で、`return` の節にはどちらも書かない。名前は Koka に合わせた | [式](spec/expressions.md) |
+| ローカル関数 | `let f x = …` で定義し、`and g y = …` で続けた組は互いに呼び合える (OCaml の `let rec … and …` と同じ) | [式](spec/expressions.md) |
 | パラメータ付き handler | `handle e from init with`。状態を handler が持ち、節の最後の引数で受ける。状態のある handler では `k v st` で次の状態を渡す。状態があるかどうかは `from` の有無で決まる | [式](spec/expressions.md) |
 | 線形値の受け渡し | 糖衣構文は今は入れない。入れるかどうかは、S13b の `Iter` で `File` を持つ生産者を書いてから決める ([ロードマップ](future/roadmap.md) の「言語機能と構文」)。再束縛、`use`、パラメータ付き handler で吸収する | [式](spec/expressions.md) |
 | 文字列 | 補間は `"\{x}"`。複数行の `"""`、raw の `r"..."` | [字句](spec/lexical.md) |

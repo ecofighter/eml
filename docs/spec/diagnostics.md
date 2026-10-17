@@ -77,11 +77,11 @@ struct Fix {
 | E1010 | `CLAUSE_ARITY` | handler の節の引数の個数の誤り |
 | E1011 | `DROP_ARITY` | `drop` の引数の個数の誤り |
 | E1012 | `MIXED_EFFECTS_IN_HANDLER` | 1つの handler に別のエフェクトの操作の節が混ざった |
-| E1013 | `MISSING_CLAUSE` | 節のない操作がある。操作の節が1つもない handler も含む |
+| E1013 | `MISSING_CLAUSE` | 節のない操作がある。操作の節が1つもない handler も含む。help は足す節を `ctl` の形 (`\| ctl op _ k -> ...`、`never` の操作では `\| ctl op _ -> ...`) で示す |
 | E1014 | `DUPLICATE_CLAUSE` | 同じ操作の節、または `return` の節が2つある |
 | E1015 | `TYPE_ARGUMENT_COUNT` | `data` の型の適用や row の中のエフェクトの型引数の個数が、宣言と違う |
 | E1016 | `CONSTRUCTOR_ARITY` | パターンのコンストラクタの引数の個数が、宣言のフィールドの数と違う |
-| E1017 | `DUPLICATE_BINDING` | 1つのパターン、または1つの等式の引数の並び、ラムダの引数の並び、ローカル関数の引数の並び、あるいは handler の節の引数の並び (操作の引数と `k`) の中で、同じ変数名を2回束縛した |
+| E1017 | `DUPLICATE_BINDING` | 1つのパターン、または1つの等式の引数の並び、ラムダの引数の並び、ローカル関数の引数の並び、あるいは handler の節の引数の並び (操作の引数と `k`) の中で、同じ変数名を2回束縛した。ローカル関数の組 (`let … and …`) の中で同じ名前を2回定義した場合も含み、2つ目の定義を指す |
 | E1018 | `NON_CONSECUTIVE_EQUATIONS` | 同じ名前の等式が連続していない (間に別の item がある) |
 | E1019 | `SIGNATURE_NOT_ADJACENT` | シグネチャと最初の等式が隣り合っていない |
 | E1020 | `EQUATION_ARITY_MISMATCH` | 等式ごとに引数の個数が違う |
@@ -115,6 +115,7 @@ struct Fix {
 | E1048 | `ARGUMENT_SORT` | 型引数の種類が合わない。row の位置に型を書いた、または型の位置に `<…>` を書いた ([型と Kind](types.md) の「row の型引数」) |
 | E1049 | `UNKNOWN_KIND` | `data T : K` の `K` が Kind の名前でない (`Lin` でも `Unr` でもない) ([型と Kind](types.md) の「`Lin` の宣言」) |
 | E1050 | `ONCE_DECLARATION` | トップレベルの関数と値、extern の関数、クラスのメソッド、操作のシグネチャの一番外側の矢印に `once` を書いた ([型と Kind](types.md) の「1回だけ呼べる関数の型」) |
+| E1051 | `CLAUSE_KEYWORD` | 操作の節に `fn` も `ctl` も書いていない (`ctl ` を足す fix を付ける)、`never` の操作の節に `fn` を書いた、`return` の節に `fn` か `ctl` を書いた ([式](expressions.md) の「handler」) |
 | E2001 | `TYPE_MISMATCH` | 型の不一致。呼び出しの row のエフェクトの型引数が今の row と一致しない場合を含む |
 | E2002 | `EFFECT_NOT_IN_ROW` | シグネチャの row に含まれないエフェクトを起こした。ラムダの本体の場合を含む |
 | E2003 | `MISSING_MAIN` | 入口のモジュールに `main` がない。import した `main` は数えない。`eml run` のときだけ出す |
@@ -131,12 +132,12 @@ struct Fix {
 | E2016 | `INPUT_LINEAR` | REPL の `let` の束縛か式の入力の型が `Unr` でない。`:type` の問い合わせには当てない |
 | E2017 | `BINDING_AMBIGUOUS` | REPL の `let` の束縛の型に、決まらない型変数が残った |
 | E2018 | `INPUT_CHANGES_UNIFORM` | REPL の入力が、前の入力の関数か instance の一様な位置を変える。`eml_cli` の `Repl` が `eml_types::input_changes_uniform` で作る |
-| E3001 | `LINEAR_VALUE_MISUSED` | 線形な値の誤った使い方のうち、E3002〜E3005 に当たらないもの (関数への受け渡し、型の単一化、ラムダや節の捕獲、再帰するローカル関数の捕獲、操作の型が節に求める制約) |
+| E3001 | `LINEAR_VALUE_MISUSED` | 線形な値の誤った使い方のうち、E3002〜E3005 に当たらないもの (関数への受け渡し、型の単一化、ラムダや節の捕獲、再帰するローカル関数の組の関数の捕獲、操作の型が節に求める制約) |
 | E3002 | `LINEAR_VALUE_USED_TWICE` | 線形な値を、ある経路で2回以上使った |
 | E3003 | `LINEAR_VALUE_NOT_CONSUMED` | 線形な値を、ある経路で使わなかった |
 | E3004 | `LINEAR_VALUE_DISCARDED` | 線形な値を `_` で受けた。状態のある handler で省いた `return` の節が `Lin` の状態を捨てた場合、分解のパターンに書かないフィールド、射影で取り出さない残りのフィールド、更新で上書きされる古い値が線形な場合を含む |
 | E3005 | `CONTINUATION_NOT_HANDLED` | `once` の操作の節の `k` を、ある経路で呼びも `drop` もしなかった |
-| E3006 | `LINEAR_VALUE_KEPT_ACROSS_MULTI` | 線形な値を持ったまま、`multi` の操作を起こしうる呼び出し、`handle` をまたいだ (持ち越し規則)。呼んだ関数のスキームを通る持ち越しを含む |
+| E3006 | `LINEAR_VALUE_KEPT_ACROSS_MULTI` | 線形な値を持ったまま、`multi` の操作を起こしうる呼び出し、`handle` をまたいだ (持ち越し規則)。呼んだ関数のスキームを通る持ち越しと、`once` の操作の `fn` の節の隠れた継続を本体の中の呼び出しがまたぐ場合を含む |
 | E4001 | `NON_EXHAUSTIVE_MATCH` | 網羅されていない `match` |
 | E4002 | `NON_EXHAUSTIVE_EQUATION` | 網羅されていない等式 |
 | E4003 | `REFUTABLE_PATTERN` | 反駁可能な `let` の左辺、ラムダの引数、ローカル関数の引数、handler の節の引数と `return` の節の引数のパターン |

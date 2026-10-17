@@ -33,7 +33,7 @@
 ```
 data type effect where pub extern import as infixl infixr infix
 let in if then else match with handle from drop return
-never once multi use fn
+never once multi use fn ctl and
 class instance deriving
 ```
 

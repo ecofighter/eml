@@ -98,7 +98,7 @@
 
 - 複数行のシグネチャは、`->` を行の先頭に置いて書く ([宣言](declarations.md) の「シグネチャと等式」)。`->` で行を終えて次の行を同じ列に揃えると、規則 3 によりエラーになる
 
-## `then` / `else` の前の `SEP`
+## `then` / `else` / `and` の前の `SEP`
 
 ブロックの中で、`if` の後の `else` (と `then`) を `if` と同じ列に書くと、規則 1 により `SEP` が挿入される。
 
@@ -110,6 +110,15 @@
 ```
 
 parser は、`if` の解析中に、`then` / `else` の直前の `SEP` を1つ読み飛ばす (Haskell の DoAndIfThenElse と同じ扱い)。`else` で始まる文は存在しないので、曖昧さはない。
+
+ローカル関数の組の `and` ([式](expressions.md) の「ローカル関数」) も同じである。`and` を `let` と同じ列の行の先頭に書くと、規則 1 により `SEP` が挿入される。parser は、`let` の束縛を読んだ後、`and` の直前の `SEP` を1つ読み飛ばす。`and` で始まる文は存在しないので、曖昧さはない。前の定義の本体が字下げしたブロックなら、`and` の行がそのブロックを閉じる。
+
+```haskell
+  let even k =
+    if k == 0 then True else odd (k - 1)
+  and odd k =
+    if k == 0 then False else even (k - 1)
+```
 
 ## REPL の入力の終わり
 

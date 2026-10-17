@@ -39,7 +39,7 @@ is_error _ = False
 try : (Unit -> <Fail | e> a) -> <IO | e> Option a
 try action =
   handle action () with
-    | fail msg ->
+    | ctl fail msg ->
         eprintln "error: \{msg}"
         None
     | return x -> Some x
@@ -90,8 +90,8 @@ effect State s where
 run_state : s -> (Unit -> <State s | e> a) -> <e> (a, s)
 run_state init action =
   handle action () from init with
-    | get () k st -> k st st
-    | put st2 k _ -> k () st2
+    | fn get () st -> (st, st)
+    | fn put st2 _ -> ((), st2)
     | return x st -> (x, st)
 
 counter : Unit -> <State Int> Int
@@ -116,7 +116,7 @@ effect Ask where
 with_env : (Unit -> <Ask, IO | e> a) -> <IO | e> a
 with_env action =
   handle action () with
-    | ask key k -> k (Option.default "" (Env.get key))
+    | fn ask key -> Option.default "" (Env.get key)
 
 deploy : List String -> <Ask, Fail, IO> Unit
 deploy files =

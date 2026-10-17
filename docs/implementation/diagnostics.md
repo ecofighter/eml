@@ -21,12 +21,14 @@ E0xxx は `eml_syntax::codes` (E0004 だけは `eml_diagnostics`)、E1xxx は `e
 | E1002 | `UNDEFINED_TYPE` | 未定義の型の名前、未定義のエフェクトの名前、本体の注釈に書いたシグネチャにない型変数と row 変数。修飾した名前と import の並びでは、E1001 と同じくメッセージにモジュールの名前を書く。隠れた標準ライブラリのモジュールの help も E1001 と同じである |
 | E1004 | `MISSING_SIGNATURE` | シグネチャのない等式。シグネチャの追加を提案する help を付ける |
 | E1009 | `UNHANDLEABLE_EFFECT` | handler の節の先頭の名前が、extern のエフェクトを起こす extern の関数である。見出しは「`IO` cannot be handled」で、エフェクトの名前を入れる。ラベルは「`println` is an extern function with the effect `IO`」である。節の先頭の名前を指す。操作として引けなかったときだけ、extern の関数だけに絞って引き直す |
-| E1013 | `MISSING_CLAUSE` | 節のない操作がある。操作の節が1つもない handler も含む。primary は `handle` で、節の追加を help で示す |
-| E1017 | `DUPLICATE_BINDING` | 1つのパターン、または1つの等式の引数の並び、ラムダの引数の並び、あるいは handler の節の引数の並び (操作の引数と `k`) の中で、同じ変数名を2回束縛した。2つ目の束縛を primary、1つ目を secondary にする |
+| E1010 | `CLAUSE_ARITY` | 見出しは「the clause for `op` takes n parameters, but this one has m」で、節の操作の名前を指す。`fn` の節では見出しを「the `fn` clause for `op` takes …」にし、note は `k` に触れない (「the `fn` clause takes the arguments of `op`」、パラメータ付き handler では「… and then the state」)。`ctl` の節の note は、操作の引数、継続 `k`、状態の順に受け取ることを書く。`never` の操作では、操作の引数 (と状態) だけを受け取ることを書く |
+| E1013 | `MISSING_CLAUSE` | 節のない操作がある。操作の節が1つもない handler も含む。primary は `handle` で、節の追加を help で示す。help の節は `ctl` の形 (`\| ctl op _ k -> ...`、`never` の操作では `\| ctl op _ -> ...`) で書く |
+| E1017 | `DUPLICATE_BINDING` | 1つのパターン、または1つの等式の引数の並び、ラムダの引数の並び、あるいは handler の節の引数の並び (操作の引数と `k`) の中で、同じ変数名を2回束縛した。ローカル関数の組の中で同じ名前を2回定義した場合も含む。2つ目の束縛を primary、1つ目を secondary にする。組の中の参照は1つ目の定義を指すものとして続ける |
 | E1018 | `NON_CONSECUTIVE_EQUATIONS` | 同じ名前の等式が連続していない (間に別の item がある)。離れた等式の関数名を primary、直前の等式の並びの最後の等式の関数名を secondary にする。等式をシグネチャの直後にまとめるよう help で伝える。instance の等式はシグネチャを持たないので、help は等式をまとめることだけを伝える |
 | E1019 | `SIGNATURE_NOT_ADJACENT` | シグネチャと最初の等式が隣り合っていない。最初の等式の関数名を primary、シグネチャの関数名を secondary にする。等式をシグネチャの直後に置くよう help で伝える |
 | E1020 | `EQUATION_ARITY_MISMATCH` | 等式ごとに引数の個数が違う。個数の違う等式の関数名を primary、最初の等式の関数名を secondary にする |
 | E1021 | `DUPLICATE_FIXITY` | 同じ演算子への2回目の fixity の宣言。1つの宣言に同じ演算子を2回並べた場合を含む。2回目の宣言の演算子を primary、1回目を secondary にする |
+| E1051 | `CLAUSE_KEYWORD` | 3つの場合がある。(1) キーワードのない操作の節: 見出しは「this clause needs `fn` or `ctl`」で、`\|` から操作の名前までを指してラベルを「this clause」にする。note「a `fn` clause resumes with the value of its body, and a `ctl` clause resumes only by calling `k`」と、操作の名前の前に `ctl ` を足す fix「write `ctl`」を付ける。節は `ctl` の節として下ろす。(2) `never` の操作の `fn` の節: 見出しは「a `never` operation cannot have a `fn` clause」で、`fn` を指してラベルを「`fail` is a `never` operation」にする。note「a `never` operation never resumes, so its clause must be `ctl`」と help「write `ctl` instead of `fn`」を付け、節は `ctl` の節として下ろす。(3) `return` の節のキーワード: 見出しは「a `return` clause takes neither `fn` nor `ctl`」で、キーワードを指してラベルを「remove this `fn`」(または `ctl`) にする |
 | E1022 | `FIXITY_WITHOUT_DEFINITION` | このモジュールで定義していない演算子への fixity の宣言。標準ライブラリの演算子の fixity を変えようとした場合を含む。宣言の演算子を指す |
 | E1023 | `INVALID_SECTION` | 優先順位の合わないセクション (`(* a + b)` や `(+ a + b)`)。セクション全体を指し、被演算子を括弧で囲むよう help で伝える |
 | E1024 | `USE_AT_END_OF_BLOCK` | ブロックの最後の文が `use` である (包む残りがない)。`use` の文を指す |
@@ -66,18 +68,20 @@ E0xxx は `eml_syntax::codes` (E0004 だけは `eml_diagnostics`)、E1xxx は `e
 | E2012 | `CONSTRAINED_POLYMORPHIC_RECURSION` | 見出しは「`name` would need an instance of `C` at infinitely many types」である。`name` は、関数ならその名前、instance なら `Same (Box a)` のようなクラスと頭である。関数ならシグネチャの名前を、instance のメソッドと instance の節点なら instance の頭を指し、ラベルを「a constrained type variable grows on each recursive call」にする。note は「instances are chosen at compile time, so a constraint cannot follow polymorphic recursion」である。大きくなる成分ごとに1つだけ出し、成分のほかの位置を secondary にしてラベルを「also grows here」にする。ほかの成分で同じクラスについて示した位置は重ねない |
 | E2013 | `FIELD_NEEDS_KNOWN_TYPE` | 射影の見出しは「the type of this value must be known to access its field `f`」、更新の見出しは「the type of this value must be known to update its fields」である。射影か更新の元の値の式を指して、ラベルを「the type of this value is not known here」にする。help は元の値の形で変える。ラムダの引数のパターンがそのまま束縛した変数なら「annotate the type of the parameter, as in `fn (p : T) -> …`」、フィールドのセクションの隠れた引数なら「write the section as a lambda with an annotated parameter, as in `fn (p : T) -> p.f`」、ほかの局所変数なら「annotate the type of the value, as in `(x : T)`」、それ以外の式なら「annotate the type of the value, as in `(… : T)`」である |
 | E2014 | `NO_SUCH_FIELD` | 見出しは「no field `f` on type `T`」で、`T` は値の型の表示である。射影か更新のフィールドの名前か番号を指して、ラベルを「unknown field」にする。help と note は型ごとに変える。コンストラクタが1つの `data` なら、宣言したフィールドを help「the fields are `name` and `age`」で並べる (フィールドの名前がなければ付けない)。コンストラクタが2つ以上の型なら、note「`Shape` has more than one constructor」と help「take the value apart with `match`」を付ける。タプルの範囲外の番号と名前は、射影なら help「the elements of this tuple are numbered from `0` to `1`」、更新なら help「a tuple cannot be updated; build a new tuple instead」を付ける。要素のないタプル (`Unit`) では、射影でも更新でも help「`Unit` has no fields」にする。型変数、関数型、extern の型には付けない。コンストラクタのない `data` は E1025 を報告済みなので、E2014 を出さない。更新では、元の値の型がフィールドを名前で持たないとき (コンストラクタが2つ以上の型、タプル、`Unit` など) は、最初のフィールドについて1件だけ出す。型がコンストラクタが1つの `data` なら、宣言にないフィールドごとに1件出す |
-| E3001 | `LINEAR_VALUE_MISUSED` | 線形な値の誤った使い方のうち、E3002〜E3005 に当たらないもの (関数への受け渡し、型の単一化、ラムダや節の捕獲、再帰するローカル関数の捕獲、操作の型が節に求める制約)。違反した Kind の制約の由来を指す |
+| E3001 | `LINEAR_VALUE_MISUSED` | 線形な値の誤った使い方のうち、E3002〜E3005 に当たらないもの (関数への受け渡し、型の単一化、ラムダや節の捕獲、再帰するローカル関数の組の関数の捕獲、操作の型が節に求める制約)。違反した Kind の制約の由来を指す |
 | E3002 | `LINEAR_VALUE_USED_TWICE` | 線形な値を、ある経路で2回以上使った。2回目に使った位置を primary、1回目を secondary にする |
 | E3003 | `LINEAR_VALUE_NOT_CONSUMED` | 線形な値を、ある経路で使わなかった。束縛した位置を primary、使わなかった枝、省いた `else`、またはスコープの終わりを secondary にする。どの経路でも使わないうちに同じブロックの後の `let` で隠されたときは、スコープの終わりではなく隠した束縛を secondary にし、隠す前に `drop` するよう help で伝える。help で `drop` を提案し、使わなかった経路がブロックで、その最後の文がその行の最初のトークンなら、最後の文の前に、同じ字下げで `drop x` の行を入れる fix を付ける。最後の文の前に同じ行のほかの文やコメントがあるときと、`drop x` を入れる位置で同じ名前の後の束縛が見えているときは、fix を付けない |
 | E3004 | `LINEAR_VALUE_DISCARDED` | 線形な値を `_` で受けた。パターンを指す。状態のある handler で省いた `return` の節が `Lin` の状態を捨てた場合は、`from` の初期値を指し、状態を受ける `return` の節を書くよう help で伝える。捨てたフィールドの文言は下の「線形性の診断」にある。fix は付けない |
 | E3005 | `CONTINUATION_NOT_HANDLED` | `once` の操作の節の `k` を、ある経路で呼びも `drop` もしなかった。節を primary、`k` の束縛を secondary にし、すべての経路で `k` を呼ぶか `drop k` するよう help で伝える |
-| E3006 | `LINEAR_VALUE_KEPT_ACROSS_MULTI` | 線形な値を持ったまま、`multi` の操作を起こしうる呼び出し、`handle` をまたいだ (持ち越し規則)。同じ値は、呼び出しの位置が最も前の1件だけを報告する。持ち越した値が handler の状態のときは、`from` の初期値を secondary にする。呼んだ関数のスキームを通る持ち越しの違反は、そのスキームに残した組ごとに1件で、呼んだ関数の中で位置が最も前の持ち越しを指す |
+| E3006 | `LINEAR_VALUE_KEPT_ACROSS_MULTI` | 線形な値を持ったまま、`multi` の操作を起こしうる呼び出し、`handle` をまたいだ (持ち越し規則)。同じ値は、呼び出しの位置が最も前の1件だけを報告する。持ち越した値が handler の状態のときは、`from` の初期値を secondary にする。呼んだ関数のスキームを通る持ち越しの違反は、そのスキームに残した組ごとに1件で、呼んだ関数の中で位置が最も前の持ち越しを指す。`fn` の節の隠れた継続の持ち越しは、見出しの主語を「the continuation of this `fn` clause」にし、節を secondary にして同じラベルを付け、help を「perform this call outside the `fn` clause」にする |
 
 シグネチャに関する E1xxx の診断には、シグネチャの追加を提案する help を付ける ([宣言](../spec/declarations.md))。
 
 ## 型エラー
 
 制約の由来 (引数の位置、`if` の各枝、型注釈など) をもとに、「expected / found」と、その根拠になった場所を示すラベルを出す ([型と Kind](../spec/types.md))。
+
+`fn` の節の本体の型の誤りは、本体を指し、期待する型の由来を「`fn` の節の本体」(`Origin::FnClauseBody`) にして報告する。note は「the `fn` clause for `ask` must return the result type of `ask`」で、パラメータ付き handler では「the `fn` clause for `ask` must return a pair of the result of `ask` and the next state」である。HIR が足した隠れた `k` の呼び出しの引数の誤りとしては報告しない。
 
 リストのパターン `[p1, …, pn]` の型の誤りは、HIR が組んだ `::` と `Nil` のコンストラクタのパターンとして報告する。そのため、ほかのコンストラクタのパターンと同じく「`::` is a constructor of `List`」の note が付く。`::` はユーザーが書ける名前なので、リストのパターンだけの言い方を作らず、この note のままにする。
 
@@ -88,9 +92,9 @@ E0xxx は `eml_syntax::codes` (E0004 だけは `eml_diagnostics`)、E1xxx は `e
 | 二重使用 | 1回目に消費した場所と、2回目に使った場所 |
 | 消費されていない | 束縛した場所とスコープの終わり。同じブロックの後の `let` で隠されたときは、隠した束縛。help と fix で `drop x` の追加を提案する |
 | `_` で `Lin` の値を受けた | そのパターン。help で、変数に束縛して `drop` するよう提案する。省いた `return` の節が `Lin` の状態を捨てたときは、`from` の初期値 |
-| `multi` の呼び出しをまたぐ | primary はその呼び出し、または `handle` で、起こしうる `multi` の操作を書く。secondary は値 (変数の束縛、途中の値の部分式、`return` の節) と、`multi` と宣言した操作。値が handler の状態のときは、`from` の初期値を値の secondary にする。help で、呼び出しの前に使い終えるよう提案する |
+| `multi` の呼び出しをまたぐ | primary はその呼び出し、または `handle` で、起こしうる `multi` の操作を書く。secondary は値 (変数の束縛、途中の値の部分式、`return` の節、`fn` の節) と、`multi` と宣言した操作。値が handler の状態のときは、`from` の初期値を値の secondary にする。help で、呼び出しの前に使い終えるよう提案する |
 | 呼んだ関数が `multi` の呼び出しをまたがせる | primary は呼んだ関数を参照した位置。secondary は、呼んだ関数の中で値をまたがせている呼び出し、またはその先の関数の参照 (1段だけ) |
-| 再帰するローカル関数が `Lin` の値を捕まえた | 自分を参照した位置。見出しは「a local function that calls itself cannot capture a linear value」、ラベルは「`go` refers to itself here, so it may be called any number of times」(`go` は関数の名前) である。note は、`LINEAR_NOTE` の後に「pass linear values to a recursive local function as arguments」を続ける。制約は上限の由来の位置に出るので、primary は捕まえた変数でなく自分への参照を指す |
+| 再帰する組のローカル関数が `Lin` の値を捕まえた | 組の関数を参照した位置。関数の本体に組の関数への参照があればその最初の参照、なければ組の中の最初の参照である。見出しは、自分を呼ぶ場合も相互に呼ぶ場合も「a recursive local function cannot capture a linear value」にする。ラベルは「`f` refers to `g` here, so it may be called any number of times」にする (`f` は参照した関数、`g` は参照された関数の名前)。note は、`LINEAR_NOTE` の後に「pass linear values to a recursive local function as arguments」を続ける。制約は上限の由来の位置に出るので、primary は捕まえた変数でなく組の関数への参照を指す |
 | 継続の扱い忘れ | `k` を呼びも `drop` もしていない handler の節 |
 | 操作の型が何回でも使える値を求める所に、線形な値が届いた | その操作の handler の節の頭 (操作の名前から最後の引数まで)。見出しは「a linear value is used where the type of `mk` requires a value that may be used any number of times」、ラベルは「this clause handles `mk`」である。引数の型から出た制約なら、操作の引数は何回でも使えるので線形な値として扱えない、という note を付ける。結果の型から出た制約なら、操作を呼ぶ側は結果の中の関数を何回でも呼べる、という note を付ける。制約は節の中の値ではなく操作の型から出るので、primary は値の位置を指さない。線形の下限がラムダの捕獲から来たときは、そのラムダを secondary にし、ラベルを「this lambda captures a linear value」にする |
 | 分解のパターンに書かない `Lin` なフィールド | レコードのパターンの全体。見出しは「the field `log` is discarded, but it holds a linear value」、ラベルは「this pattern leaves out `log`」で、help「bind `log` in the pattern and pass it to `drop`」を付ける |

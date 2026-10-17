@@ -2,7 +2,7 @@
 
 位置づけ: 手引き。
 
-M1 (言語の全体を一通り通す vertical slice と、本番の構文の最初の部分) と M2 (モジュールと、参照ごとの具体化の表) は完了した。今は再設計 (S0〜S13) を進めていて、S10 (VM と切り替え) と S11 (REPL) を終え、S12 (スクリプトの MVP) を終え、S13a (Kind の記法) と S13b-1 (位置つきの `mask`) を終えた ([ロードマップ](../future/roadmap.md) の「段の列」)。S12d で書いた5本のスクリプト (wc、grep、ログの集計、CSV の変換、デプロイ手順) は `tests/ui/run/scripts/` の UI テストで、書いてみて分かったことはロードマップの「S13 実例による判断」にある。`eml run` は、Perceus の後の LIR をレジスタ型のバイトコードに変換し、`eml_rt` の上の VM で実行する ([VM](../spec/vm.md))。Perceus は、`switch` と `unpack` のフィールドを借りたまま使い、所有が要る所でだけ所有を取る ([LIR](../spec/lir.md) の「Perceus」)。S11 で `eml repl` を入れた ([REPL の端末](../spec/repl.md))。次は S13b-2 (`k` を書かない節と、ローカル関数どうしの相互再帰) である。この文書は、今の言語の範囲と既知の制限をまとめる。実装が進んだら更新する。
+M1 (言語の全体を一通り通す vertical slice と、本番の構文の最初の部分) と M2 (モジュールと、参照ごとの具体化の表) は完了した。今は再設計 (S0〜S13) を進めていて、S10 (VM と切り替え) と S11 (REPL) を終え、S12 (スクリプトの MVP) を終え、S13a (Kind の記法)、S13b-1 (位置つきの `mask`)、S13b-2 (`fn` と `ctl` の節、ローカル関数の組) を終えた ([ロードマップ](../future/roadmap.md) の「段の列」)。S12d で書いた5本のスクリプト (wc、grep、ログの集計、CSV の変換、デプロイ手順) は `tests/ui/run/scripts/` の UI テストで、書いてみて分かったことはロードマップの「S13 実例による判断」にある。`eml run` は、Perceus の後の LIR をレジスタ型のバイトコードに変換し、`eml_rt` の上の VM で実行する ([VM](../spec/vm.md))。Perceus は、`switch` と `unpack` のフィールドを借りたまま使い、所有が要る所でだけ所有を取る ([LIR](../spec/lir.md) の「Perceus」)。S11 で `eml repl` を入れた ([REPL の端末](../spec/repl.md))。次は S13b-3 (std の `Yield`、`Fail`、`State` とその handler、`Std.Iter`、`Fs.read_line`) である。この文書は、今の言語の範囲と既知の制限をまとめる。実装が進んだら更新する。
 
 ## 今の言語の範囲
 
@@ -13,12 +13,12 @@ M1 (言語の全体を一通り通す vertical slice と、本番の構文の最
 - 名前付きのレコード: `data` のコンストラクタの名前付きのフィールド、作る式 `Person { name = "a", age = 3 }` と省略形、射影 `p.name`、更新 `{ p | age = 31 }`、分解のパターン、フィールドのセクション `(.name)` と `(.0)`、導出した `Show` の `Person { … }` の表示 ([直積型とレコード](../spec/records.md))。呼び出しの引数のラムダは、ほかの引数の後に型を検査する ([型と Kind](../spec/types.md) の「引数のラムダを後で検査する」)
 - Prelude の `List`、`Option`、`Result` と、その `Eq`、`Ord`、`Show` の instance ([宣言](../spec/declarations.md) の「Prelude のクラス」)。リストのリテラル `[…]` とパターン、コンストラクタ `::` (`infixr 5`。Prelude だけが宣言できる、E1044) ([式](../spec/expressions.md) の「リスト」)。リストを扱う関数 (`map`、`length` など) はまだない
 - 文字列: エスケープ、補間 `\{式}`、複数行の文字列 `"""`、raw 文字列 `r"…"` / `r#"…"#` ([字句](../spec/lexical.md) の「文字列」)。補間の穴は、Prelude の `Show` のメソッド `display` で文字列にする ([式](../spec/expressions.md) の「補間」)。文字列の関数は標準ライブラリの `String` にある。位置は UTF-8 のバイトの位置である ([標準ライブラリ](../spec/stdlib.md))
-- トップレベルの関数 (シグネチャが必須)、複数の等式による定義、ローカルの `let` と `let ... in`、ローカルの再帰関数 (`let go acc xs = …`。引数を1つ以上持つ関数の形の `let` は自分自身を参照でき、単相で、lambda lifting する。[式](../spec/expressions.md) の「ブロックと `let`」)、`if` (then 節が `Unit` なら `else` を省略できる)、再帰、ラムダとクロージャ、部分適用、型の明示 `(e : T)`
+- トップレベルの関数 (シグネチャが必須)、複数の等式による定義、ローカルの `let` と `let ... in`、ローカルの再帰関数 (`let go acc xs = …`。引数を1つ以上持つ関数の形の `let` は自分自身を参照でき、単相で、lambda lifting する。`let … and …` で書いた組の関数は互いに呼び合える。[式](../spec/expressions.md) の「ローカル関数」)、`if` (then 節が `Unit` なら `else` を省略できる)、再帰、ラムダとクロージャ、部分適用、型の明示 `(e : T)`
 - シグネチャの型変数と row 変数による多相
 - 1回だけ呼べる関数の型 `once a -> b` (`Lin` の矢印。`data` のフィールドにも書ける)、`data` の row の型引数 (`data Iter <e> a`、使う所は `Iter <IO> Int`)、`data` の Kind の宣言 `data T : Lin`、トップレベルの関数と extern の関数とコンストラクタとクラスのメソッドと REPL の `let` の値を `once` の位置に置くこと (参照ごとに一番外側の矢印が新しい Kind 変数になる)。row の型引数を持つ型の instance と `deriving` は E0004 ([型と Kind](../spec/types.md)、[宣言](../spec/declarations.md))
 - fixity の宣言とユーザー定義の演算子、演算子のセクション、`use`
 - `drop` キーワード
-- エフェクトの宣言 (`never` / `once` / `multi`、型引数)、`handle` (deep)、`k` の呼び出しによる再開、`drop k`、パラメータ付き handler (`handle ... from ... with`)
+- エフェクトの宣言 (`never` / `once` / `multi`、型引数)、`handle` (deep)、`k` の呼び出しによる再開、`drop k`、パラメータ付き handler (`handle ... from ... with`)。操作の節は、`k` を受け取る `ctl` の節 (`| ctl op x k -> …`) と、本体の値ですぐに再開する `fn` の節 (`| fn op x -> …`) である ([式](../spec/expressions.md) の「handler」)
 - 位置つきの `mask`: 型検査が呼び出しごとに決め、エフェクトごとに内側の n 個の handler を残して続く m 個を飛ばす。`Yield Int` を受けて `Yield String` を出すような、型を変換する handler を書ける ([エフェクトと handler](../spec/effects.md) の「handler の意味」、[型と Kind](../spec/types.md) の「推論」)
 - `extern` の宣言と `eml_extern` の表。`Int`、`String`、`Unit`、`IO`、`println`、算術の演算子などは Prelude の `extern` である。`Int`、`String`、`Bool` の比較と表示のメソッドは、instance の中の `extern` で表の行に結ぶ。`IO` を、`println` と標準ライブラリのモジュール `Fs` の `open`、`read_all`、`close` などが起こし、`Fs.File` は線形型である。ユーザーは `IO` を handle できず (Prelude の `try_io` だけが handle する)、`extern` を書けない (E1033) ([エフェクトと handler](../spec/effects.md) の「組み込みの `IO`」)
 - IO の失敗と終了: Prelude の `try_io : (Unit -> <IO | e> a) -> <IO | e> Result IOError a` が、IO の extern の失敗 (書き出しの失敗を除く) を `IOError { kind, message }` の値にする。`exit : Int -> <IO> a` は途中のフレームの値を後始末し、終了コード `n & 255` で終わる。REPL では入力を終えるだけである ([標準ライブラリ](../spec/stdlib.md) の「`try_io`」と「`exit`」)
@@ -90,8 +90,8 @@ M1 (言語の全体を一通り通す vertical slice と、本番の構文の最
 
 ### 型と row の推論
 
-- ローカルの再帰関数 (関数の形の `let`) は、本体を検査した後で自由な row の末尾を閉じ、値として参照するときに開く。ただし、末尾が本体の検査中に rigid な row 変数に決まったとき、末尾が捕まえた変数の型や、関数自身の引数や結果の型に現れるとき (`let app f = f ()`) と、外側のローカル関数の保留した自分への呼び出しが使う row の末尾 (入れ子の `walk` と `each`) は閉じない ([型と Kind](../spec/types.md) の「推論」)
-- ローカル関数は単相で、多相にも相互再帰にもできない。シグネチャと結果の型の明示もない (引数の後の `:` は誤りになる)。相互再帰は S13b で入れ、多相にすることは採らなかった ([ロードマップ](../future/roadmap.md) の「S13 実例による判断」)
+- ローカルの再帰関数 (関数の形の `let`) は、本体を検査した後で自由な row の末尾を閉じ、値として参照するときに開く。ただし、末尾が本体の検査中に rigid な row 変数に決まったとき、末尾が捕まえた変数の型や、関数自身の引数や結果の型に現れるとき (`let app f = f ()`) と、外側のローカル関数の保留した組の中の呼び出しが使う row の末尾 (入れ子の `walk` と `each`) は閉じない。`let … and …` の組では、組の中の呼び出しで足りないラベルを固定点で足してから閉じる ([型と Kind](../spec/types.md) の「ローカル関数の推論」)
+- ローカル関数は単相で、多相にできない。シグネチャと結果の型の明示もない (引数の後の `:` は誤りになる)。相互再帰は `let … and …` の組で書く。多相にすることは採らなかった ([ロードマップ](../future/roadmap.md) の「S13 実例による判断」)
 - `File` を捕まえた再帰するローカル関数が、自分を呼ぶ前に `multi` の操作を起こすと、E3001 のほかに、その関数に冗長な E3006 も出る。自分への参照がネストしたラムダの中にだけある場合、E3001 はそのラムダを指す
 - `let` で束縛したラムダの row は、最初の呼び出しで決まる。同じ制限は、関数の形の `let` でも、row の末尾が本体の検査中に rigid な row 変数に決まった場合に起きる (`let go k = h () + ask () + k` は E2002、`ask () + h () + k` の順なら通る。`h` は外側の関数の引数で、型は `Unit -> <e> Int`)。末尾が自由なままのローカル関数では起きない。ローカルの `let` は単相で、関数型の局所変数の型は開かない ([型と Kind](../spec/types.md) の「推論」) ためである。例えば `<IO>` の本体で `let g = fn x -> x + 1` を呼んでから `g` を `(Int -> Int)` の引数に渡すと、E2001 か E2002 になる。どちらになるかは、呼び出しと受け渡しの順で変わる。`let` で束縛したラムダの値の row 変数だけを多相化する案があり、これには spec の決定が要る
 - 持ち越し規則は、開いた row の呼び出しを今の row と同じとみなす。`include_row` が、末尾が推論用の変数の row を今の row とまるごと単一化するためである。例えば `<Choice, IO>` の本体で `let log = fn () -> println "x"` を呼ぶと、`log` の row が `<Choice, IO>` になり、`log ()` をまたいで持っている `File` が E3006 になる。エフェクト多相な関数に純粋な関数を渡す `keep f (fn () -> ())` も同じである。`handle` の外側の row と `k` の呼び出しの row (handle の外側の row) も、handle の位置の今の row なので、今の row に `multi` があれば、本体が `multi` の操作を起こさなくても、handle をまたぐ `File` が拒否される。どれも健全な側に外れるだけである。`let` で束縛したラムダの row を閉じて使う位置で開くか、row の包摂を入れるか、handle の本体が起こすエフェクトを本体の中の呼び出しの row から集めるときに見直す
