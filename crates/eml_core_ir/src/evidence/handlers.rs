@@ -447,15 +447,17 @@ fn yielding_entry(
             Rhs::MakeClosure(clause, args),
         ))
     };
-    let start = if operation.resumable {
-        Prim::YieldTo
+    // 中断は継続を組み立てずに巻き戻すので、最初の κ `id$` を渡すのは yield だけである
+    // (docs/superpowers/specs/2026-10-17-s13c-unwinding-design.md の「`eml_rt` と EP の変更」)
+    let (start, args) = if operation.resumable {
+        (Prim::YieldTo, vec![Atom::Var(evidence), body, Atom::Fn(id)])
     } else {
-        Prim::YieldAbort
+        (Prim::YieldAbort, vec![Atom::Var(evidence), body])
     };
     builder_bind(
         &mut b,
         named("u", Repr::Unit, start.row().ret_mark),
-        Rhs::Prim(start, vec![Atom::Var(evidence), body, Atom::Fn(id)]),
+        Rhs::Prim(start, args),
     );
     let ret = match operation.ret {
         OpRet::Repr(repr) => repr,

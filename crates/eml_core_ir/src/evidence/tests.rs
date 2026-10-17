@@ -75,20 +75,18 @@ fn helpers_have_their_final_form() {
     b3:
       let u.14: unit = drop ret.1
       let u.15: unit = drop x.2
-      let k.16: tobj poly = prim yield_cont_take()
-      let u.17: unit = drop k.16
-      let c.18: tobj poly = prim yield_finish()
-      let st.19: tobj poly = prim ev_take_state(ev.0)
-      let r.20: tobj poly = yields apply c.18(st.19)
-      return r.20
+      let c.16: tobj poly = prim yield_finish()
+      let st.17: tobj poly = prim ev_take_state(ev.0)
+      let r.18: tobj poly = yields apply c.16(st.17)
+      return r.18
     b4:
-      let u.21: unit = drop x.2
-      let st.22: tobj poly = prim ev_take_state(ev.0)
-      let k.23: tobj poly = prim yield_cont_take()
-      let k.24: tobj poly = closure rewind$(ev.0, ret.1, st.22, k.23)
-      let u.25: unit = prim yield_cont_set(k.24)
-      let d.26: obj poly = prim dummy()
-      return d.26
+      let u.19: unit = drop x.2
+      let st.20: tobj poly = prim ev_take_state(ev.0)
+      let k.21: tobj poly = prim yield_cont_take()
+      let k.22: tobj poly = closure rewind$(ev.0, ret.1, st.20, k.21)
+      let u.23: unit = prim yield_cont_set(k.22)
+      let d.24: obj poly = prim dummy()
+      return d.24
     }
     yields fn resume$(ev.0: obj, ret.1: tobj poly, k.2: tobj poly, v.3: tobj poly, s.4: tobj poly) -> tobj poly {
       let e.5: obj = prim ev_renew(ev.0, s.4)
@@ -390,10 +388,11 @@ fn prompt_drops_x_on_its_yield_paths_and_ret_on_abort() {
             "{label}\n{shown}"
         );
     }
-    // 中断の道は、これまでどおり取り出した κ も捨てる
+    // 中断は κ を持たないので、中断の道が捨てるのは `ret` と `x` だけである
+    // (docs/superpowers/specs/2026-10-17-s13c-unwinding-design.md の「`eml_rt` と EP の変更」)
     assert_eq!(
         drops(&block_lines(&shown, "prompt$", "b3")).len(),
-        3,
+        2,
         "{shown}"
     );
 }

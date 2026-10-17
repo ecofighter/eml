@@ -94,7 +94,7 @@ fn yield_status_tells_targets_apart<M: Mode>() {
     let ev = ctx_evidence(&mut ctx);
     let other = ctx_evidence(&mut ctx);
     assert_eq!(ctx.yield_status(ev), 0);
-    unsafe { ctx.yield_abort(ev, UNIT, UNIT) }.unwrap();
+    unsafe { ctx.yield_abort(ev, UNIT) }.unwrap();
     assert_eq!(ctx.yield_status(ev), 2);
     assert_eq!(ctx.yield_status(other), 3);
     unsafe {
@@ -102,6 +102,27 @@ fn yield_status_tells_targets_apart<M: Mode>() {
         ctx.heap_mut().decref(other).unwrap();
     }
     assert!(ctx.check_finished());
+}
+
+/// 中断は κ を持たない。巻き戻しはスタックを外すだけで継続を組み立てないので、κ の欄は `()` のままである。`yields`
+/// は `yield_to` だけを数え、中断と `exit` は数えない (docs/superpowers/specs/2026-10-17-s13c-unwinding-design.md
+/// の「`eml_rt` と EP の変更」と「`RunStats`」)。
+fn yield_abort_leaves_no_continuation<M: Mode>() {
+    let mut ctx = ctx::<M>();
+    let ev = ctx_evidence(&mut ctx);
+    unsafe {
+        ctx.yield_abort(ev, UNIT).unwrap();
+        assert_eq!(ctx.yield_status(ev), 2);
+        assert_eq!(ctx.yield_cont_take().unwrap(), UNIT);
+        assert_eq!(ctx.yield_finish().unwrap(), UNIT);
+        ctx.exit_abort().unwrap();
+        ctx.yield_finish().unwrap();
+    }
+    assert!(ctx.check_finished());
+    if M::CHECKED {
+        let stats = ctx.stats();
+        assert_eq!((stats.yields, stats.yield_frames), (0, 0));
+    }
 }
 
 fn misused_yields_are_reported_in_checked_mode<M: Mode>() {
@@ -607,7 +628,7 @@ fn a_refused_yield_operation_keeps_the_state<M: Mode>() {
     unsafe {
         ctx.yield_to(ev, UNIT, Word::imm(1)).unwrap();
         assert_eq!(
-            ctx.yield_abort(other, UNIT, UNIT).unwrap_err(),
+            ctx.yield_abort(other, UNIT).unwrap_err(),
             HeapError::YieldMisuse
         );
         assert_eq!(ctx.yield_status(ev), 1);
@@ -681,6 +702,7 @@ both_modes!(
     poll_reports_each_stop,
     yields_and_continuation_frames_are_counted,
     yield_status_tells_targets_apart,
+    yield_abort_leaves_no_continuation,
     misused_yields_are_reported_in_checked_mode,
     evv_get_and_set_swap_the_list,
     dropping_a_ctx_mid_yield,

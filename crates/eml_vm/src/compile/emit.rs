@@ -525,14 +525,14 @@ impl<'a, M: Mode> Emitter<'a, '_, M> {
             },
             Prim::Yielding => Op::Yielding { dst },
             Prim::YieldStatus => Op::YieldStatus { dst, ev: a[0] },
-            Prim::YieldTo | Prim::YieldAbort => {
+            Prim::YieldTo => {
                 let at = self.out.operands(a.iter().map(|&s| u32::from(s)));
-                if matches!(prim, Prim::YieldTo) {
-                    Op::YieldTo { dst, at }
-                } else {
-                    Op::YieldAbort { dst, at }
-                }
+                Op::YieldTo { dst, at }
             }
+            Prim::YieldAbort => Op::YieldAbort {
+                ev: a[0],
+                clause: a[1],
+            },
             Prim::YieldContTake => Op::YieldContTake { dst },
             Prim::YieldContSet => Op::YieldContSet { dst, k: a[0] },
             Prim::YieldFinish => Op::YieldFinish { dst },

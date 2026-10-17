@@ -276,9 +276,10 @@ pub enum Op {
         dst: Slot,
         at: u32,
     },
+    /// 中断は戻らないので、結果のスロットを持たない。
     YieldAbort {
-        dst: Slot,
-        at: u32,
+        ev: Slot,
+        clause: Slot,
     },
     YieldContTake {
         dst: Slot,

@@ -644,7 +644,7 @@ fn a_never_clause_aborts() {
     insta::assert_snapshot!(function(&shown, "main$handle0$fail$entry"), @"
     internal yields clause Fail.fail fn main$handle0$fail$entry(e.0: obj, p.1: obj) -> obj poly {
       let c.2: tobj = closure main$handle0$fail(p.1)
-      let u.3: unit = prim yield_abort(e.0, c.2, &id$)
+      let u.3: unit = prim yield_abort(e.0, c.2)
       let d.4: obj poly = prim dummy()
       return d.4
     }

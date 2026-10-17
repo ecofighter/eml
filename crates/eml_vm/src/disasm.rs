@@ -280,10 +280,7 @@ impl<'a> View<'a> {
                 let o = ops(at);
                 format!("yield_to s{dst}, s{}, s{}, s{}", o[0], o[1], o[2])
             }
-            Op::YieldAbort { dst, at } => {
-                let o = ops(at);
-                format!("yield_abort s{dst}, s{}, s{}, s{}", o[0], o[1], o[2])
-            }
+            Op::YieldAbort { ev, clause } => format!("yield_abort s{ev}, s{clause}"),
             Op::YieldContTake { dst } => format!("yield_cont_take s{dst}"),
             Op::YieldContSet { dst, k } => format!("yield_cont_set s{dst}, s{k}"),
             Op::YieldFinish { dst } => format!("yield_finish s{dst}"),

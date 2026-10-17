@@ -331,7 +331,7 @@ fn every_primitive_once<M: Mode>() {
         assert_eq!(ctx.yield_finish(), Ok(UNIT));
         // 中断の1往復
         ctx.heap_mut().dup(e1).unwrap();
-        ctx.yield_abort(e1, UNIT, UNIT).unwrap();
+        ctx.yield_abort(e1, UNIT).unwrap();
         assert_eq!(ctx.yield_status(e1), 2);
         assert_eq!(ctx.yield_finish(), Ok(UNIT));
         assert_eq!(ctx.poll(0), Ok(()));

@@ -92,9 +92,9 @@ b1:
 #[test]
 fn effectful_extern_and_yield_abort_are_points() {
     let text = "\
-fn f(s.0: obj, t.1: obj, e.2: obj, c.3: tobj, v.4: tobj) -> obj {
+fn f(s.0: obj, t.1: obj, e.2: obj, c.3: tobj) -> obj {
   let u.5: unit = extern Prelude.println(s.0)
-  let w.6: unit = prim yield_abort(e.2, c.3, v.4)
+  let w.6: unit = prim yield_abort(e.2, c.3)
   return t.1
 }
 fn g(t.0: obj) -> obj {
@@ -106,7 +106,7 @@ fn g(t.0: obj) -> obj {
     assert_eq!(
         points_of(text, "f"),
         [
-            point(0, 0, &[(1, 1), (2, 1), (3, 1), (4, 1)], None),
+            point(0, 0, &[(1, 1), (2, 1), (3, 1)], None),
             point(0, 1, &[(1, 1)], None),
         ]
     );

@@ -52,6 +52,8 @@ pub struct MaskItem {
 #[non_exhaustive]
 pub struct CtxStats {
     pub evidence_steps: u64,
+    /// `yield_to` の回数。中断と `exit` は yield でないので数えない
+    /// (docs/superpowers/specs/2026-10-17-s13c-unwinding-design.md の「`RunStats`」)。
     pub yields: u64,
     pub yield_frames: u64,
     /// extern がヒープの文字列に写したバイト数。検査モードだけで数える。`Int.show` は数字の列の長さを、`String.show`
@@ -1011,7 +1013,7 @@ impl<M: Mode> Ctx<M> {
             lemma_unit_bits();
         }
         self.yielding = YieldState { target: ev, clause, cont: k, abort };
-        if M::CHECKED {
+        if M::CHECKED && !abort {
             self.stats.yields = self.stats.yields.wrapping_add(1);
         }
         proof {
@@ -1061,21 +1063,20 @@ impl<M: Mode> Ctx<M> {
         self.start_yield(ev, clause, k, false)
     }
 
-    /// 中断を始める。引数と前提は `yield_to` と同じである。
+    /// 中断を始める。`ev` は宛先の evidence、`clause` は節の本体で、どちらも消費する。中断は継続を組み立てずにタスクの
+    /// スタックを巻き戻すので、κ の欄は `()` にする (docs/superpowers/specs/2026-10-17-s13c-unwinding-design.md の
+    /// 「`eml_rt` と EP の変更」)。
     ///
     /// # Safety
-    /// `yield_to` と同じ。
-    pub unsafe fn yield_abort(&mut self, ev: Word, clause: Word, k: Word) -> (r: Result<
-        (),
-        HeapError,
-    >)
+    /// 2つの語は即値か、このヒープか付けた塊の生きている物体を指し、呼ぶ側がその参照を1つずつ持つ。`ev` は物体を指す。
+    /// yield していない (検査モードは `YieldMisuse` を返す)。
+    pub unsafe fn yield_abort(&mut self, ev: Word, clause: Word) -> (r: Result<(), HeapError>)
         requires
             old(self).wf(),
             old(self).heap_spec().word_in(ev),
             old(self).heap_spec().word_in(clause),
-            old(self).heap_spec().word_in(k),
             !M::CHECKED ==> !old(self).is_yielding() && ev.is_ptr_spec() && old(self).holds_args(
-                seq![ev, clause, k],
+                seq![ev, clause],
             ),
         ensures
             final(self).wf(),
@@ -1083,11 +1084,43 @@ impl<M: Mode> Ctx<M> {
             r is Err ==> r == Err::<(), HeapError>(HeapError::YieldMisuse) && *final(self) == *old(
                 self,
             ),
-            r is Ok ==> final(self).yield_spec() == (ev, clause, k, true),
+            r is Ok ==> {
+                &&& final(self).yield_spec().0 == ev
+                &&& final(self).yield_spec().1 == clause
+                &&& final(self).cont_empty()
+                &&& final(self).yield_spec().3
+            },
             final(self).heap_spec() == old(self).heap_spec(),
             final(self).evv_spec() == old(self).evv_spec(),
     {
-        self.start_yield(ev, clause, k, true)
+        let unit = Word::UNIT;
+        proof {
+            lemma_unit_bits();
+            // `()` は物体を指さないので、`ev` と `clause` を持つ文脈は `()` も合わせて持てる
+            if !M::CHECKED {
+                let ws2 = seq![ev, clause];
+                let ws3 = seq![ev, clause, unit];
+                let v = self.heap.core.settled_view();
+                assert forall|i: int| 0 <= i < ws3.len() implies held_word(
+                    self.heap,
+                    #[trigger] ws3[i],
+                ) by {
+                    if i < 2 {
+                        assert(ws3[i] == ws2[i]);
+                    }
+                }
+                assert forall|b: usize| #[trigger]
+                    self.need(ws3, b) > 0 && v.rc_of(b) != 0 implies v.ext(b) >= self.need(
+                    ws3,
+                    b,
+                ) by {
+                    lemma_points_in(ws3, b);
+                    lemma_points_in(ws2, b);
+                    assert(self.need(ws3, b) == self.need(ws2, b));
+                }
+            }
+        }
+        self.start_yield(ev, clause, unit, true)
     }
 
     /// `exit` の中断を始める。宛先は不死のダミーの物体で、どの `prompt$` の evidence とも違うので、中断は実行の底

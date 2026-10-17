@@ -276,7 +276,7 @@ main () = println (show (Fail.to_result (fn () -> down {depth})))
     };
     let (shallow, deep) = (at(1000), at(2000));
     for stats in [shallow, deep] {
-        assert_eq!((stats.yields, stats.yield_frames), (1, 0), "{stats:?}");
+        assert_eq!((stats.yields, stats.yield_frames), (0, 0), "{stats:?}");
     }
     assert_eq!(
         deep.unwound_frames - shallow.unwound_frames,

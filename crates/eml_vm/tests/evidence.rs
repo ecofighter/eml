@@ -8,7 +8,7 @@ use crate::common::run_lir;
 
 const COUNTER: &str = "effect Counter { get(unit) -> tobj, put(tobj) -> unit }\n";
 
-/// yield を始めるときの κ。EP の `id$` と同じ形で、`yield_to` と `yield_abort` の3つ目の引数に渡す。`()` を渡さない
+/// yield を始めるときの κ。EP の `id$` と同じ形で、`yield_to` の3つ目の引数に渡す。`()` を渡さない
 /// のは、継続の欄の `()` が「取り出した後」の印を兼ねるためである (docs/spec/core-ir.md の「EP が作る補助の関数」)。
 const ID: &str = "yields fn id(x.0: tobj) -> tobj {\n  return x.0\n}\n";
 
@@ -92,8 +92,6 @@ fn main() -> unit {{
   decref u.16
   let g.17: int = prim yield_status(e.1)
   decref e.1
-  let k.18: tobj = prim yield_cont_take()
-  decref k.18
   let c.19: tobj = prim yield_finish()
   decref c.19
   let p.20: unit = call show(a.3)
@@ -106,7 +104,7 @@ fn main() -> unit {{
   tail call say(c.13)
 }}
 fn abort(e.0: tobj) -> tobj {{
-  let u.1: unit = prim yield_abort(e.0, (), &id)
+  let u.1: unit = prim yield_abort(e.0, ())
   return u.1
 }}
 fn say(s.0: obj) -> unit {{
@@ -359,7 +357,7 @@ fn main() -> unit {{
   let e.1: obj = prim ev_new[Counter]((), w.0)
   dup e.1
   let u.2: unit = prim yield_to(e.1, (), &id)
-  let u.3: unit = prim yield_abort(e.1, (), &id)
+  let u.3: unit = prim yield_abort(e.1, ())
   return u.3
 }}
 {ID}"

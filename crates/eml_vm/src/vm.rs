@@ -399,14 +399,9 @@ fn step<M: Mode>(
             unsafe { ctx.yield_to(ev, clause, k) }?;
             task.set(dst, Word::UNIT);
         }
-        Op::YieldAbort { dst: _, at } => {
-            let o = ops(at);
-            let (ev, clause, k) = (
-                task.get(o[0] as Slot),
-                task.get(o[1] as Slot),
-                task.get(o[2] as Slot),
-            );
-            unsafe { ctx.yield_abort(ev, clause, k) }?;
+        Op::YieldAbort { ev, clause } => {
+            let ev = task.get(ev);
+            unsafe { ctx.yield_abort(ev, task.get(clause)) }?;
             unwind(code, ctx, task, counts, ev)?;
         }
         Op::YieldContTake { dst } => {
@@ -538,11 +533,9 @@ fn unwind<M: Mode>(
 /// 入口の関数の結果か、`exit` の中断を手放す (docs/spec/vm.md の「誤り、止めること、終わり」)。
 fn finish<M: Mode>(code: &CodeBase<M>, ctx: &mut Ctx<M>, task: &Task) -> Result<(), VmFault> {
     if task.exit.is_some() {
-        // 途中のフレームは巻き戻しで片付けてある。yield の記録に残った κ を手放す。入口の結果はダミーなので
-        // 手放さない。中断の途中の `evv` には意味がないので、空に戻す (docs/spec/vm.md の「IO の失敗と `exit`」)
-        let k = ctx.yield_cont_take()?;
+        // 途中のフレームは巻き戻しで片付けてある。入口の結果はダミーなので手放さない。中断の途中の `evv` には
+        // 意味がないので、空に戻す (docs/spec/vm.md の「IO の失敗と `exit`」)
         unsafe {
-            ctx.heap_mut().decref(k)?;
             ctx.yield_finish()?;
             ctx.evv_set(Word::UNIT)?;
         }
