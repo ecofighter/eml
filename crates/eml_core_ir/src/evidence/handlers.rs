@@ -542,12 +542,13 @@ fn yielding_entry(
     };
     let value = dummy(ret, |info, rhs| builder_bind(&mut b, info, rhs));
     b.terminate(Term::Return(value));
-    // 入口はいつも yield か中断を始めるので、g の印によらず `yields` を立てる (docs/spec/core-ir.md の「`perform` と節の3つの形」)。
+    // `yield_to` の入口はいつも yield を始めるので、g の印によらず `yields` を立てる。`never` の入口は中断を始めるだけで、
+    // 中断は継続を作らずに巻き戻すので立てない (docs/spec/core-ir.md の「`perform` と節の3つの形」)。
     // 戻り値の印は操作の表から写す。`never` の操作の表の印は `poly` である
     let mut entry = b.finish(
         format!("{}$entry", function.name),
         true,
-        true,
+        operation.resumable,
         ret,
         operation.ret_mark,
     );

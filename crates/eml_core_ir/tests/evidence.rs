@@ -618,7 +618,7 @@ fn a_never_clause_aborts() {
     let text = "effect Fail where\n  never fail : String -> a\n\nmain : Unit -> <IO> Unit\nmain () =\n  let r =\n    handle fail \"x\" + 1 with\n      | ctl fail _ -> 0\n  println (show r)";
     let shown = core_text(text, Pass::Evidence);
     insta::assert_snapshot!(function(&shown, "main$handle0$fail$entry"), @"
-    internal yields clause Fail.fail fn main$handle0$fail$entry(e.0: obj, p.1: obj) -> obj poly {
+    internal clause Fail.fail fn main$handle0$fail$entry(e.0: obj, p.1: obj) -> obj poly {
       let c.2: tobj = closure main$handle0$fail(p.1)
       let u.3: unit = prim yield_abort(e.0, c.2)
       let d.4: obj poly = prim dummy()
@@ -935,21 +935,111 @@ fn evidence_and_evv_are_unr_and_state_is_poly() {
     }
 }
 
+/// `IO` の extern は、失敗すると継続を作らずに巻き戻すので、`yields` の関数の中でも yield の地点に数えない
+/// (docs/spec/core-ir.md の「IO の extern」)。`println` の後に yield の確認はなく、`ask` の後にだけある。
 #[test]
-fn an_io_extern_is_a_yield_point() {
-    let shown = core_text(
-        "main : Unit -> <IO> Unit\nmain () =\n  println \"a\"\n  println \"b\"",
-        Pass::Evidence,
+fn an_io_extern_is_not_a_yield_point() {
+    let text = format!(
+        "{ASK}f : Unit -> <Ask, IO> Int\nf () =\n  println \"a\"\n  let n = ask ()\n  n + 1\n\nmain : Unit -> <IO> Unit\nmain () =\n  let r = handle f () with\n            | ctl ask () k -> k 1\n  println (show r)"
     );
-    insta::assert_snapshot!(function(&shown, "main"), @r#"
-    fn main(p.0: unit) -> unit {
+    let shown = core_text(&text, Pass::Evidence);
+    insta::assert_snapshot!(function(&shown, "f"), @r#"
+    yields fn f(p.0: unit) -> int {
       let s.1: obj = const "a"
       let t.2: unit = extern Prelude.println(s.1)
-      let s.3: obj = const "b"
-      let t.4: unit = extern Prelude.println(s.3)
+      let ev.5: obj = prim ev_lookup[Ask]()
+      let c.6: tobj = prim ev_clause[Ask.ask](ev.5)
+      let t.3: int = clause Ask.ask c.6(ev.5, ())
+      let y.7: int = prim yielding()
+      switch y.7 { 0 -> b2, _ -> b1 }
+    b1:
+      let k.8: tobj poly = prim yield_cont_take()
+      let k.9: tobj poly = closure compose$(k.8, &f$k0)
+      let u.10: unit = prim yield_cont_set(k.9)
+      return 0
+    b2:
+      let t.4: int = extern Prelude.+(t.3, 1)
       return t.4
     }
     "#);
+}
+
+/// `never` の操作の節の呼び出しは戻らないので、末尾でなくても yield の地点に数えない。`fail` の後に yield の確認は
+/// なく、`ask` の後にだけある。
+#[test]
+fn a_never_clause_call_is_not_a_yield_point() {
+    let text = format!(
+        "{ASK}effect Fail where\n  never fail : String -> a\n\nf : Unit -> <Ask, Fail> Int\nf () =\n  let n = fail \"x\"\n  let m = ask ()\n  n + m\n\nmain : Unit -> <IO> Unit\nmain () =\n  let r = handle (handle f () with\n                    | ctl ask () k -> k 1) with\n            | ctl fail _ -> 0\n  println (show r)"
+    );
+    let shown = core_text(&text, Pass::Evidence);
+    insta::assert_snapshot!(function(&shown, "f"), @r#"
+    yields fn f(p.0: unit) -> int {
+      let s.1: obj = const "x"
+      let ev.5: obj = prim ev_lookup[Fail]()
+      let c.6: tobj = prim ev_clause[Fail.fail](ev.5)
+      let t.2: int = clause Fail.fail c.6(ev.5, s.1)
+      let ev.7: obj = prim ev_lookup[Ask]()
+      let c.8: tobj = prim ev_clause[Ask.ask](ev.7)
+      let t.3: int = clause Ask.ask c.8(ev.7, ())
+      let y.9: int = prim yielding()
+      switch y.9 { 0 -> b2, _ -> b1 }
+    b1:
+      let k.10: tobj poly = prim yield_cont_take()
+      let c.11: tobj = closure f$k0(t.2)
+      let k.12: tobj poly = closure compose$(k.10, c.11)
+      let u.13: unit = prim yield_cont_set(k.12)
+      return 0
+    b2:
+      let t.4: int = extern Prelude.+(t.2, t.3)
+      return t.4
+    }
+    "#);
+}
+
+/// `never` の入口は `yield_abort` で中断を始めるだけで、κ を作らずに巻き戻すので `yields` を立てない。
+#[test]
+fn a_never_entry_does_not_yield() {
+    let text = "effect Fail where\n  never fail : String -> a\n\nmain : Unit -> <IO> Unit\nmain () =\n  let r =\n    handle fail \"x\" + 1 with\n      | ctl fail _ -> 0\n  println (show r)";
+    let shown = core_text(text, Pass::Evidence);
+    let entry = function(&shown, "main$handle0$fail$entry");
+    assert!(
+        entry.starts_with("internal clause Fail.fail fn "),
+        "{entry}"
+    );
+}
+
+/// `$externN` は extern を呼ぶだけで、`IO` の extern も yield の地点でないので、`yields` を立てない。
+#[test]
+fn an_extern_wrapper_does_not_yield() {
+    let text = "main : Unit -> <IO> Unit\nmain () =\n  match try_io (fn () -> List.each Fs.close (List.map Fs.open [\"a.txt\"])) with\n    | Ok () -> println \"ok\"\n    | Err e -> println \"\\{e}\"";
+    let shown = core_text(text, Pass::Evidence);
+    let wrappers: Vec<&str> = shown
+        .lines()
+        .filter(|line| line.contains("fn ") && line.contains("$extern"))
+        .collect();
+    insta::assert_snapshot!(wrappers.join("\n"), @"
+    internal fn main$extern0(p.0: obj lin) -> unit {
+    internal fn main$extern1(p.0: obj) -> obj lin {
+    ");
+}
+
+/// `yields` でない関数の `mask` 付きの呼び出しは、`evv` を替えて戻すだけで、yield の確認も遅い道も持たない。
+/// 内側の `Fail` の handler を飛ばす `fail` は、継続を作らずに外側の handler へ巻き戻す。
+#[test]
+fn a_masked_call_in_a_non_yielding_function_has_no_slow_path() {
+    let text = "effect Fail where\n  never fail : String -> a\n\nrun : (Unit -> <e> Int) -> <Fail | e> Int\nrun cb =\n  let x = cb ()\n  x + 1\n\nmain : Unit -> <IO> Unit\nmain () =\n  let r = handle (handle run (fn () -> fail \"outer\") with\n                    | ctl fail _ -> 1) with\n            | ctl fail _ -> 2\n  println (show r)";
+    let shown = core_text(text, Pass::Evidence);
+    insta::assert_snapshot!(function(&shown, "run"), @"
+    fn run(cb.0: tobj poly) -> int {
+      let w.3: tobj = prim evv_get()
+      let w.4: tobj = prim evv_mask[Fail](w.3)
+      let u.5: unit = prim evv_set(w.4)
+      let t.1: int = apply cb.0(())
+      let u.6: unit = prim evv_set(w.3)
+      let t.2: int = extern Prelude.+(t.1, 1)
+      return t.2
+    }
+    ");
 }
 
 #[test]

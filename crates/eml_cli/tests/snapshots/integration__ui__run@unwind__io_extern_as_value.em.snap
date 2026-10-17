@@ -1,0 +1,9 @@
+---
+source: crates/eml_cli/tests/ui.rs
+assertion_line: 254
+expression: "format!(\"--- stdout ---\\n{stdout}--- stderr ---\\n{diagnostics}{stderr}{written}{exit}\")"
+input_file: tests/ui/run/unwind/io_extern_as_value.em
+---
+--- stdout ---
+Err cannot open `missing.txt`: not found
+--- stderr ---

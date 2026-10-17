@@ -2,7 +2,7 @@
 
 use std::collections::HashMap;
 
-use eml_extern::{Extern, ExternType, Purity};
+use eml_extern::{Extern, ExternType};
 use eml_hir::{
     ConstructorId, EffectDef, EffectId, FunctionId, Items, ModuleId, ModuleOrigin, OpMultiplicity,
     OperationId, Program as HirProgram, TypeDefId, TypeDefKind, ValueItem,
@@ -376,11 +376,11 @@ impl ProgramBuilder {
             .iter()
             .map(|&ty| var_info("p", types, ty, hir))
             .collect();
-        // `IO` を起こす extern は yield の地点なので、包む関数も yield しうる (docs/spec/core-ir.md の「IO の extern」)
-        let yields = row.row().purity == Purity::Effectful;
+        // `IO` を起こす extern も、失敗すると継続を作らずに巻き戻すので yield の地点でない。包む関数は extern を呼ぶだけ
+        // なので yield しない (docs/spec/core-ir.md の「IO の extern」)
         self.simple(
             name,
-            yields,
+            false,
             params,
             |args| Rhs::Extern {
                 ext: row,

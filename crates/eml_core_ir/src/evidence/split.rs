@@ -10,8 +10,7 @@ use std::ops::Range;
 use crate::liveness::{insert_var, live_after_term, live_in, step_back};
 use crate::tail::tail_position_call;
 use crate::{Block, Call, CoreFn, Program, Rhs, Stmt, Term};
-use eml_extern::Purity;
-use eml_lir::{Atom, BlockId, FnIdx, Mark, MaskItem, Prim, Repr, VarId, VarInfo};
+use eml_lir::{Atom, BlockId, FnIdx, Mark, MaskItem, Prim, Repr, VarId, VarInfo, operation};
 
 use super::{Helpers, captured_mark, direct, dummy, named, reserve, yield_switch};
 
@@ -126,36 +125,27 @@ fn yield_points(
         let tail = tail_position_call(block).map(|(at, _)| at);
         let first = points.len();
         for (at, stmt) in block.stmts.iter().enumerate() {
-            let (var, yields) = match stmt {
-                Stmt::Let {
-                    var,
-                    rhs: Rhs::Call { call, mask: _ },
-                } => (
-                    var,
-                    match call {
-                        Call::Direct(target, _) => program.function(*target).yields,
-                        Call::Apply {
-                            callee: _,
-                            args: _,
-                            yields,
-                            prompt: _,
-                        } => *yields,
-                        Call::Clause { .. } => true,
-                        Call::Handle { .. } | Call::Perform { .. } | Call::Resume { .. } => false,
-                    },
-                ),
-                // `IO` を起こす extern は、失敗すると VM が `io_failed` の節を呼んで中断を始め、`exit` はいつも中断を
-                // 始める。extern は末尾呼び出しにならないので、末尾の例外はない (docs/spec/core-ir.md の「IO の extern」)
-                Stmt::Let {
-                    var,
-                    rhs:
-                        Rhs::Extern {
-                            ext,
-                            args: _,
-                            at: _,
-                        },
-                } => (var, ext.row().purity == Purity::Effectful),
-                _ => continue,
+            // `IO` の extern と `never` の操作の節の呼び出しは、中断しても継続を作らずに巻き戻すので、地点にしない
+            // (docs/spec/core-ir.md の「IO の extern」「`perform` と節の3つの形」)
+            let Stmt::Let {
+                var,
+                rhs: Rhs::Call { call, mask: _ },
+            } = stmt
+            else {
+                continue;
+            };
+            let yields = match call {
+                Call::Direct(target, _) => program.function(*target).yields,
+                Call::Apply {
+                    callee: _,
+                    args: _,
+                    yields,
+                    prompt: _,
+                } => *yields,
+                Call::Clause { effect, op, .. } => {
+                    operation(&program.effects, *effect, *op).resumable
+                }
+                Call::Handle { .. } | Call::Perform { .. } | Call::Resume { .. } => false,
             };
             if tail == Some(at) || annotations.not_yield_points.contains(&(id, at)) {
                 continue;
@@ -190,7 +180,7 @@ fn yield_points(
 }
 
 /// 1つのブロックの地点ごとに、続きの始めで生きている変数を決める。ブロックを後ろから1回だけたどる。地点ごとに
-/// ブロックの末尾からたどると、IO の extern が並ぶブロックでは文の数の2乗の手間になるためである。
+/// ブロックの末尾からたどると、yield する呼び出しが並ぶブロックでは文の数の2乗の手間になるためである。
 fn fill_live(function: &CoreFn, block: &Block, live_in: &[Vec<VarId>], points: &mut [Point]) {
     let mut live = live_after_term(function, &block.term, live_in);
     block.term.for_each_atom(|atom| insert_var(&mut live, atom));

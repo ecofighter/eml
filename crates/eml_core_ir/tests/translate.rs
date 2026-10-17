@@ -225,11 +225,11 @@ fn each_reference_to_an_extern_as_a_value_gets_its_own_wrapper() {
       let t.4: unit = apply &main$extern1(s.3)
       return t.4
     }
-    internal yields fn main$extern0(p.0: obj) -> unit {
+    internal fn main$extern0(p.0: obj) -> unit {
       let t.1: unit = extern Prelude.println(p.0) @"test.em":6:9
       return t.1
     }
-    internal yields fn main$extern1(p.0: obj) -> unit {
+    internal fn main$extern1(p.0: obj) -> unit {
       let t.1: unit = extern Prelude.println(p.0) @"test.em":7:13
       return t.1
     }
@@ -829,7 +829,7 @@ fn an_extern_function_with_an_effect_used_as_a_value_is_wrapped_with_its_extern_
     let text = "each : (String -> <IO> Unit) -> <IO> Unit\neach f = f \"x\"\n\nmain : Unit -> <IO> Unit\nmain () = each println";
     let shown = core_text(text, Pass::Translate);
     insta::assert_snapshot!(function(&shown, "main$extern0"), @"
-    internal yields fn main$extern0(p.0: obj) -> unit {
+    internal fn main$extern0(p.0: obj) -> unit {
       let t.1: unit = extern Prelude.println(p.0)
       return t.1
     }
@@ -961,7 +961,7 @@ fn names_outside_the_entry_are_qualified_with_their_module() {
     internal fn main$handle0$return(r.0: obj, p.1: unit) -> obj {
       return r.0
     }
-    internal yields fn main$extern0(p.0: obj) -> unit {
+    internal fn main$extern0(p.0: obj) -> unit {
       let t.1: unit = extern Prelude.println(p.0)
       return t.1
     }
@@ -993,7 +993,7 @@ fn an_entry_operation_does_not_collide_with_a_prelude_operation() {
     }
     ");
     insta::assert_snapshot!(function(&shown, "main$extern0"), @"
-    internal yields fn main$extern0(p.0: obj) -> unit {
+    internal fn main$extern0(p.0: obj) -> unit {
       let t.1: unit = extern Prelude.println(p.0)
       return t.1
     }
@@ -1105,7 +1105,7 @@ fn builtins_used_as_values_are_wrapped() {
       let t.4: enum = apply g.1(t.3)
       return t.4
     }
-    internal yields fn main$extern0(p.0: obj) -> unit {
+    internal fn main$extern0(p.0: obj) -> unit {
       let t.1: unit = extern Prelude.println(p.0)
       return t.1
     }
