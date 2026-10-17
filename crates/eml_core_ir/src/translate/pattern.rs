@@ -248,7 +248,7 @@ impl FnLowering<'_> {
                 let ty = self.ty(*expr);
                 (
                     repr(self.ctx.store, ty, self.ctx.hir),
-                    mark(self.ctx.store, ty),
+                    mark(self.ctx.store, ty, self.ctx.hir),
                 )
             }
             Scrutinee::Occ(_, repr, mark) => (*repr, *mark),
@@ -426,7 +426,7 @@ impl FnLowering<'_> {
                 tag: self.ctx.hir[ctor].tag,
                 fields,
                 value: ConValue::Data(ctor),
-                mark: mark(self.ctx.store, self.ty(id)),
+                mark: mark(self.ctx.store, self.ty(id), self.ctx.hir),
             };
         }
         match &body.exprs[id].kind {
@@ -440,7 +440,7 @@ impl FnLowering<'_> {
                     tag: TUPLE,
                     fields,
                     value: ConValue::Tuple,
-                    mark: mark(self.ctx.store, self.ty(id)),
+                    mark: mark(self.ctx.store, self.ty(id), self.ctx.hir),
                 }
             }
             _ => Occ::Atom(self.atom(id)),
@@ -766,9 +766,9 @@ impl FnLowering<'_> {
                     .unwrap_or("x");
                 let ty = self.pat_type(pat);
                 let repr = repr(self.ctx.store, ty, hir);
-                let field = self
-                    .builder
-                    .var(named(name, repr, mark(self.ctx.store, ty)));
+                let field =
+                    self.builder
+                        .var(named(name, repr, mark(self.ctx.store, ty, self.ctx.hir)));
                 self.parents.insert(field, parent);
                 field
             })

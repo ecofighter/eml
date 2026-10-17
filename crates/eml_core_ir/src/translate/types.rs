@@ -45,14 +45,25 @@ pub(super) fn type_def_repr(id: TypeDefId, hir: &HirProgram) -> Repr {
 
 /// instance の代入をかけた型の印 (docs/spec/core-ir.md の「translate が決める印」)。宣言に対して相対的な型は
 /// 現れないので、`TypeStore::linearity` で読む。
-pub(super) fn mark(types: &TypeStore, ty: TypeId) -> Mark {
-    mark_of(types.linearity(ty))
+pub(super) fn mark(types: &TypeStore, ty: TypeId, hir: &HirProgram) -> Mark {
+    scalar_or(types, ty, hir, || types.linearity(ty))
 }
 
 /// 宣言の型を代入せずに読む所 (`op$`、`con$`、操作の表) の印。`Rigid` と `Var` に依存する型は `poly` になる。
 /// 保守的なので、`(a, File)` も `lin` でなく `poly` になる。
-pub(super) fn declared_mark(types: &TypeStore, ty: TypeId) -> Mark {
-    mark_of(types.linearity_or_poly(ty))
+pub(super) fn declared_mark(types: &TypeStore, ty: TypeId, hir: &HirProgram) -> Mark {
+    scalar_or(types, ty, hir, || types.linearity_or_poly(ty))
+}
+
+/// Repr がスカラー (RC の対象でない) の値は、型の Kind によらず `unr` である。印は参照の RC を守るためのもので、
+/// スカラーとその箱は資源を持たないためである。`Lin` と宣言したフィールドのない型 (`enum`) の値が1回だけ使われる
+/// ことは、型検査が守る (docs/spec/core-ir.md の「translate が決める印」)。
+fn scalar_or(types: &TypeStore, ty: TypeId, hir: &HirProgram, lin: impl FnOnce() -> Lin) -> Mark {
+    if repr(types, ty, hir).is_rc() {
+        mark_of(lin())
+    } else {
+        Mark::Unr
+    }
 }
 
 /// 型の線形性が決める印。決まらない型 (`Poly`) は、呼び出し側が決めるので `poly` にする。`TypeStore` は `Var` に
@@ -68,7 +79,7 @@ fn mark_of(lin: Lin) -> Mark {
 }
 
 pub(super) fn var_info(name: &str, types: &TypeStore, ty: TypeId, hir: &HirProgram) -> VarInfo {
-    named(name, repr(types, ty, hir), mark(types, ty))
+    named(name, repr(types, ty, hir), mark(types, ty, hir))
 }
 
 /// 宣言の型で決める `var_info`。
@@ -78,7 +89,7 @@ pub(super) fn declared_var_info(
     ty: TypeId,
     hir: &HirProgram,
 ) -> VarInfo {
-    named(name, repr(types, ty, hir), declared_mark(types, ty))
+    named(name, repr(types, ty, hir), declared_mark(types, ty, hir))
 }
 
 pub(super) fn named(name: &str, repr: Repr, mark: Mark) -> VarInfo {

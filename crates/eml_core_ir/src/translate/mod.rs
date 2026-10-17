@@ -329,7 +329,7 @@ pub(crate) fn translate(
             .params
             .iter()
             .zip(&param_types)
-            .map(|(&pat, &ty)| (Some(pat), repr(store, ty, hir), mark(store, ty)))
+            .map(|(&pat, &ty)| (Some(pat), repr(store, ty, hir), mark(store, ty, hir)))
             .collect();
         let forms = continuation_forms(body);
         let references = references(body);
@@ -365,7 +365,7 @@ pub(crate) fn translate(
             &[],
             &params,
             body.root,
-            (repr(store, ret, hir), mark(store, ret)),
+            (repr(store, ret, hir), mark(store, ret, hir)),
         );
         builder.finish(index, core);
     }
@@ -554,11 +554,14 @@ impl BodyCtx<'_> {
                 (
                     Some(pat),
                     repr(self.store, ty, self.hir),
-                    mark(self.store, ty),
+                    mark(self.store, ty, self.hir),
                 )
             })
             .collect();
-        let ret = (repr(self.store, ret_ty, self.hir), mark(self.store, ret_ty));
+        let ret = (
+            repr(self.store, ret_ty, self.hir),
+            mark(self.store, ret_ty, self.hir),
+        );
         (params, ret)
     }
 
@@ -568,7 +571,11 @@ impl BodyCtx<'_> {
             .iter()
             .map(|&local| {
                 let ty = *self.types.locals.get(local).expect("every local is typed");
-                (local, repr(self.store, ty, self.hir), mark(self.store, ty))
+                (
+                    local,
+                    repr(self.store, ty, self.hir),
+                    mark(self.store, ty, self.hir),
+                )
             })
             .collect()
     }
@@ -653,7 +660,7 @@ impl<'a> FnLowering<'a> {
                 .program
                 .continuation_wrapper(body.continuations[local] == 2);
             // 包んだ `k` は生の継続と同じ値なので、`k` の型の矢印の線形性で決める
-            let k_mark = mark(self.ctx.store, self.ctx.types.locals[local]);
+            let k_mark = mark(self.ctx.store, self.ctx.types.locals[local], self.ctx.hir);
             let closure = self.closure(wrapper, vec![Atom::Var(var)], k_mark);
             self.locals.insert(local, closure);
         }

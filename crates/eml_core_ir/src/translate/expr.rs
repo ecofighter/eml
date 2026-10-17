@@ -120,13 +120,20 @@ impl FnLowering<'_> {
             ctor,
             fields: fields.clone(),
         });
+        // `unr` でない値から `unr` でないフィールドを1つも取り出さないと、Perceus はフィールドの消費でこの値を
+        // `release` で解かず、残る `decref` は V1 に反する。`Lin` と宣言した型のフィールドが `unr` だけの値である。
+        // 決定木の葉の `drop` と同じく、分解した直後に手放す (docs/spec/core-ir.md の「変換の規則」)
+        let linear = |var: VarId| self.builder.mark(var) != Mark::Unr;
+        if linear(value) && !fields.iter().any(|&field| linear(field)) {
+            self.bind("u", Repr::Unit, Mark::Unr, Rhs::Drop(Atom::Var(value)));
+        }
         fields
     }
 
     /// 型 `ty` の値を束縛する `bind`。
     fn bind_typed(&mut self, name: &str, ty: TypeId, rhs: Rhs) -> Atom {
         let repr = repr(self.ctx.store, ty, self.ctx.hir);
-        let mark = mark(self.ctx.store, ty);
+        let mark = mark(self.ctx.store, ty, self.ctx.hir);
         self.bind(name, repr, mark, rhs)
     }
 
@@ -188,7 +195,7 @@ impl FnLowering<'_> {
                 Callee::Local { local, .. } => self.lifted_args(local, args),
                 _ => args,
             };
-            let closure_mark = mark(self.ctx.store, closure_ty);
+            let closure_mark = mark(self.ctx.store, closure_ty, self.ctx.hir);
             return self.closure(wrapper, args, closure_mark);
         }
         let rest = args.split_off(arity);
@@ -524,7 +531,7 @@ impl FnLowering<'_> {
             ExprKind::Path(Res::Local(local)) if self.ctx.lifted.contains_idx(*local) => {
                 let target = self.ctx.lifted[*local].target;
                 let args = self.lifted_args(*local, Vec::new());
-                let local_mark = mark(self.ctx.store, self.ctx.types.locals[*local]);
+                let local_mark = mark(self.ctx.store, self.ctx.types.locals[*local], self.ctx.hir);
                 self.closure(target, args, local_mark)
             }
             ExprKind::Path(Res::Local(local)) => self.locals[*local],
@@ -604,7 +611,7 @@ impl FnLowering<'_> {
                 let handled_ty = self.ty(handled.body);
                 let handled_ret = (
                     repr(self.ctx.store, handled_ty, self.ctx.hir),
-                    mark(self.ctx.store, handled_ty),
+                    mark(self.ctx.store, handled_ty, self.ctx.hir),
                 );
                 // 本体の row は扱うエフェクトを含むので、本体はいつも yield しうる
                 let handled_closure = self.lift(
@@ -705,9 +712,9 @@ impl FnLowering<'_> {
                 // すべて並べることに頼るので、埋まらない位置を `Unr` で済ませない
                 let rest = &self.ctx.types.discarded[id];
                 let mut marks = vec![None; rest.len() + 1];
-                marks[index as usize] = Some(mark(self.ctx.store, ty));
+                marks[index as usize] = Some(mark(self.ctx.store, ty, self.ctx.hir));
                 for &(field, field_ty) in rest {
-                    marks[field as usize] = Some(mark(self.ctx.store, field_ty));
+                    marks[field as usize] = Some(mark(self.ctx.store, field_ty, self.ctx.hir));
                 }
                 let marks: Vec<Mark> = marks
                     .into_iter()
@@ -735,7 +742,7 @@ impl FnLowering<'_> {
                 let marks: Vec<Mark> = update
                     .fields
                     .iter()
-                    .map(|&ty| mark(self.ctx.store, ty))
+                    .map(|&ty| mark(self.ctx.store, ty, self.ctx.hir))
                     .collect();
                 let written = update.written.clone();
                 let mut args: Vec<Atom> = self
@@ -797,7 +804,7 @@ impl FnLowering<'_> {
                         .get(id)
                         .expect("every lambda has its row classified"),
                 );
-                let lambda_mark = mark(self.ctx.store, lambda_ty);
+                let lambda_mark = mark(self.ctx.store, lambda_ty, self.ctx.hir);
                 self.lift(
                     name,
                     yields,
@@ -836,7 +843,7 @@ impl FnLowering<'_> {
                 (
                     Some(pat),
                     repr(self.ctx.store, ty, self.ctx.hir),
-                    mark(self.ctx.store, ty),
+                    mark(self.ctx.store, ty, self.ctx.hir),
                 )
             })
             .collect();
@@ -847,7 +854,7 @@ impl FnLowering<'_> {
         let ret_ty = self.ty(closure.body);
         let ret = (
             repr(self.ctx.store, ret_ty, self.ctx.hir),
-            mark(self.ctx.store, ret_ty),
+            mark(self.ctx.store, ret_ty, self.ctx.hir),
         );
         self.lift(
             name,

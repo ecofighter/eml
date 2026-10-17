@@ -3306,3 +3306,67 @@ fn a_local_function_passed_as_a_value_inside_use() {
     }
     "#);
 }
+
+#[test]
+fn a_lin_enum_variable_is_unr() {
+    // `Lin` と宣言したフィールドのない型の Repr は `enum` で、スカラーは資源を持たないので印は `unr` である。`lin` に
+    // すると、box の挿入が足す `unr` の箱が `lin` の引数に渡り、`yield` の遅い道で死ぬ箱を Perceus が `decref` する
+    // (docs/spec/core-ir.md の「translate が決める印」)。値を包む `Option` は型のとおり `lin` のままである。所有の段の
+    // 検査まで通す
+    let text = "data Token : Lin =\n  | Token\n\neffect Ask where\n  ask : Unit -> Int\n\nspend : Token -> Int\nspend t =\n  match t with\n    | Token -> 1\n\nhold : Token -> <Ask> Int\nhold t =\n  let n = ask ()\n  spend t + n\n\nopen_it : Option Token -> Int\nopen_it o =\n  match o with\n    | None -> 0\n    | Some t -> spend t\n\nmain : Unit -> <IO> Unit\nmain () =\n  println (show (handle hold Token with | ask () k -> k 1))\n  println (show (open_it (Some Token)))\n  println (show (List.length (List.map spend [Token])))";
+    insta::assert_snapshot!(function(&core_text(text, Pass::Translate), "open_it"), @"
+    fn open_it(o.0: tobj lin) -> int {
+      switch o.0 Prelude.Option { #0 -> b1, #1(t.1: enum) -> b2 }
+    b1:
+      let u.2: unit = drop o.0
+      return 0
+    b2:
+      let u.3: unit = drop o.0
+      let t.4: int = call spend(t.1)
+      return t.4
+    }
+    ");
+    let lir = lir_text(text, eml_lir::Pass::Perceus);
+    insta::assert_snapshot!(function(&lir, "hold$k0"), @"
+    internal yields fn hold$k0(t.4: tobj, t.5: tobj) -> tobj {
+      let t.0: enum = unbox t.4
+      decref t.4
+      let t.1: int = unbox t.5
+      decref t.5
+      let t.2: int = call spend(t.0)
+      let t.3: int = extern Prelude.+(t.2, t.1)
+      let t.6: tobj = box t.3
+      return t.6
+    }
+    ");
+}
+
+#[test]
+fn taking_only_unr_fields_out_of_a_lin_value_drops_it() {
+    // `Lin` と宣言した型のフィールドが `unr` だけなら、射影も更新も `unr` でないフィールドを取り出さないので、分解した
+    // 直後に値を `drop` する。しないと、Perceus は値を `release` で解かず、`decref` が V1 に反する
+    // (docs/spec/core-ir.md の「変換の規則」)。所有の段の検査まで通す
+    let text = "data Ledger : Lin =\n  | Ledger { entries : List Int, owner : String }\n\nempty : Ledger -> Bool\nempty l =\n  match l.entries with\n    | [] -> True\n    | _ -> False\n\nrename : Ledger -> Ledger\nrename l = { l | owner = \"b\" }\n\nmain : Unit -> <IO> Unit\nmain () = println (show (empty (rename (Ledger { entries = [1], owner = \"a\" }))))";
+    let ir = core_text(text, Pass::Translate);
+    insta::assert_snapshot!(function(&ir, "empty"), @"
+    fn empty(l.0: obj lin) -> enum {
+      unpack l.0 Ledger #0(f.1: tobj, f.2: obj)
+      let u.3: unit = drop l.0
+      switch f.1 Prelude.List { #0 -> b1, _ -> b2 }
+    b1:
+      return #1
+    b2:
+      return #0
+    }
+    ");
+    insta::assert_snapshot!(function(&ir, "rename"), @r#"
+    fn rename(l.0: obj lin) -> obj lin {
+      let s.1: obj = const "b"
+      unpack l.0 Ledger #0(f.2: tobj, f.3: obj)
+      let u.4: unit = drop l.0
+      let d.5: obj lin = con Ledger #0(f.2, s.1)
+      return d.5
+    }
+    "#);
+    lir_text(text, eml_lir::Pass::Perceus);
+}

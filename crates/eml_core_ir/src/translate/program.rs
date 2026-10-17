@@ -439,7 +439,7 @@ impl ProgramBuilder {
             EntryAfter::Return => (
                 value,
                 repr(types, result_type, hir),
-                mark(types, result_type),
+                mark(types, result_type, hir),
             ),
             EntryAfter::Store(root) => {
                 let stored = unit_var(&mut builder, Rhs::Prim(Prim::RootSet(root), vec![value]));
@@ -652,7 +652,7 @@ pub(super) fn effect_table(
                     let ty = typed.decls[&ValueItem::Operation(op)].ty;
                     let (params, result) = split_arrows(types, ty, operation.arity);
                     let resumable = operation.multiplicity != OpMultiplicity::Never;
-                    let mark = |ty| declared_mark(types, ty);
+                    let mark = |ty| declared_mark(types, ty, hir);
                     OperationInfo {
                         name: operation.name.clone(),
                         params: params.iter().map(|&ty| repr(types, ty, hir)).collect(),
