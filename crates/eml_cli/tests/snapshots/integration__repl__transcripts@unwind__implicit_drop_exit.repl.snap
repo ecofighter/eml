@@ -1,0 +1,12 @@
+---
+source: crates/eml_cli/tests/repl.rs
+assertion_line: 360
+expression: checked.render()
+input_file: crates/eml_cli/tests/repl/unwind/implicit_drop_exit.repl
+---
+> let f = Fs.open "implicit_drop_exit.repl" in exit 1
+exited with code 1
+> 1 + 1
+2
+--- close ---
+no leaks

@@ -1,0 +1,12 @@
+---
+source: crates/eml_cli/tests/ui.rs
+assertion_line: 254
+expression: "format!(\"--- stdout ---\\n{stdout}--- stderr ---\\n{diagnostics}{stderr}{written}{exit}\")"
+input_file: tests/ui/run/linearity/diverging_match_arm.em
+---
+--- stdout ---
+Ok 1
+Err "zero"
+closed
+--- stderr ---
+--- exit: 3 ---

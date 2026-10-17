@@ -156,7 +156,6 @@ convert columns body =
         | Some (width, indexes) ->
           let found = List.length row.fields
           if found != width then
-            drop k
             fail (1, "line \{row.line}: expected \{width} fields, found \{found}")
           else k () (picked, out ++ json_line columns indexes row)
     | return _ (picked, out) ->

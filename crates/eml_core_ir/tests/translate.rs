@@ -3390,3 +3390,23 @@ fn taking_only_unr_fields_out_of_a_lin_value_drops_it() {
     "#);
     lir_text(text, eml_lir::Pass::Perceus);
 }
+
+#[test]
+fn a_non_returning_call_drops_the_open_file_first() {
+    // 戻らない呼び出しで終わる経路で消費しない `File` は、引数を評価した後、呼び出しの直前に手放す。`unr` の `s` は
+    // 手放さない (docs/superpowers/specs/2026-10-17-s13c-unwinding-design.md の「translate」)。所有の段の検査まで通す
+    let text = "main : Unit -> <IO> Unit\nmain () =\n  let f = Fs.open \"a\"\n  let s = \"b\"\n  exit (1 + 1)";
+    let ir = core_text(text, Pass::Translate);
+    insta::assert_snapshot!(function(&ir, "main"), @r#"
+    fn main(p.0: unit) -> unit {
+      let s.1: obj = const "a"
+      let t.2: obj lin = extern Std.Fs.open(s.1)
+      let s.3: obj = const "b"
+      let t.4: int = extern Prelude.+(1, 1)
+      let u.5: unit = drop t.2
+      let t.6: unit = extern Prelude.exit(t.4)
+      return t.6
+    }
+    "#);
+    lir_text(text, eml_lir::Pass::Perceus);
+}

@@ -1,0 +1,10 @@
+---
+source: crates/eml_cli/tests/ui.rs
+assertion_line: 254
+expression: "format!(\"--- stdout ---\\n{stdout}--- stderr ---\\n{diagnostics}{stderr}{written}{exit}\")"
+input_file: tests/ui/run/linearity/captured_file_in_a_clause.em
+---
+--- stdout ---
+Ok 1
+Err "not positive"
+--- stderr ---
