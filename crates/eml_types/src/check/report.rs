@@ -1,3 +1,5 @@
+use std::collections::HashSet;
+
 use eml_diagnostics::{Diagnostic, FileId, Label, SourceFiles, TextEdit, TextRange, TextSize};
 use eml_hir::{
     Body, ConstructorId, ExprId, ExprKind, FunctionKind, OperationId, PatId, Program, Res, RowRef,
@@ -186,10 +188,16 @@ impl BodyCheck<'_, '_> {
                 }
                 return true;
             }
-            Err(UnifyError::MissingEffects(effects)) => effects
-                .iter()
-                .map(|e| self.program.names.effect(*e).to_string())
-                .collect(),
+            // 同じエフェクトのラベルが足りないことは、名前を1回書けば伝わる。有限の解のない呼び出しの輪では、固定点が
+            // 上限まで足したラベルが並ぶので、名前を重ねると読みにくい (docs/spec/types.md の「呼び出しの包含を解く」)
+            Err(UnifyError::MissingEffects(mut effects)) => {
+                let mut seen = HashSet::new();
+                effects.retain(|effect| seen.insert(*effect));
+                effects
+                    .iter()
+                    .map(|e| self.program.names.effect(*e).to_string())
+                    .collect()
+            }
             Err(UnifyError::MissingRowVar(var)) => vec![var],
             Err(UnifyError::EffectArgs { left, right }) => {
                 // 呼び出し先の row が左辺である (`Table::include_row`)

@@ -967,9 +967,9 @@ fn a_growing_cycle_of_calls_stops_the_fixpoint() {
     insta::assert_snapshot!(check_full(text), @"
     E2002 9:13 `wrap` performs `Ask`, which this lambda does not allow
       9:13 this call performs `Ask`
-    E2002 11:3 `f` performs `Ask`, `Ask`, `Ask`, which the signature of `run` does not allow
-      11:3 this call performs `Ask`, `Ask`, `Ask`
+    E2002 11:3 `f` performs `Ask`, which the signature of `run` does not allow
+      11:3 this call performs `Ask`
       7:7 the row of this signature does not include it
-      help: add `Ask`, `Ask`, `Ask` to the row of the signature of `run`, as in `-> <Ask, Ask, Ask> ...`
+      help: add `Ask` to the row of the signature of `run`, as in `-> <Ask> ...`
     ");
 }
