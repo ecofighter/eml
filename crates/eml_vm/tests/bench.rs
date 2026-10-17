@@ -7,7 +7,15 @@ use eml_test_support::run_stats;
 use eml_vm::RunStats;
 
 /// テストを持つ基準のプログラム。`bench/` にプログラムを足したら、ここと下のテストの関数の両方に足す。
-const PROGRAMS: [&str; 6] = ["empty", "fib", "list", "loop", "state", "tree"];
+const PROGRAMS: [&str; 7] = [
+    "empty",
+    "fib",
+    "fold_state",
+    "list",
+    "loop",
+    "state",
+    "tree",
+];
 
 fn bench_dir() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("../../bench")
@@ -83,6 +91,25 @@ fn fib() {
         unboxes: 0,
         peak_objects: 2,
         peak_stack: 132,
+    }
+    ");
+}
+
+#[test]
+fn fold_state() {
+    insta::assert_debug_snapshot!(stats("fold_state", "5000050000\n"), @"
+    RunStats {
+        evidence_steps: 100000,
+        yields: 0,
+        yield_frames: 0,
+        unwound_frames: 0,
+        string_bytes_copied: 10,
+        rc_increments: 400005,
+        rc_decrements: 400017,
+        boxes: 200003,
+        unboxes: 200002,
+        peak_objects: 10,
+        peak_stack: 45,
     }
     ");
 }

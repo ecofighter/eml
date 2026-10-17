@@ -1,0 +1,15 @@
+---
+source: crates/eml_cli/tests/ui.rs
+expression: "format!(\"--- stdout ---\\n{stdout}--- stderr ---\\n{diagnostics}{stderr}{written}{exit}\")"
+input_file: tests/ui/run/effects/pure_callback_under_state.em
+---
+--- stdout ---
+500500
+3
+3
+3
+3
+3
+1
+3000
+--- stderr ---
