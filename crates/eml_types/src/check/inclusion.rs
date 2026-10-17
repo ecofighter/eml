@@ -43,19 +43,20 @@ impl BodyCheck<'_, '_> {
         // 呼び出し先の row の手前にラベルが付く場合) は有限の解がなく、いずれこの和を超える。超えた呼び出し先からは
         // 足さないので、固定点は止まり、後の確かめが E2002 を報告する。呼び出し先と今の row が末尾を共有するときも
         // 足さない。足すたびに呼び出し先も伸びるためで、呼び出し先の自由な末尾を使わないことと同じである
-        let mut rows: Vec<Row> = Vec::new();
+        // 本体の包含の数に比例する時間で数えるため、ラベルのない row は飛ばし (どの上限にも 0 を足す)、同じ row を
+        // ハッシュで1回にまとめる
+        let mut rows: HashSet<Row> = HashSet::new();
+        let mut limits: HashMap<EffectId, usize> = HashMap::new();
         for inclusion in inclusions {
             for row in [&inclusion.callee, &inclusion.ambient] {
                 let row = self.table.resolve_row(row);
-                if !rows.contains(&row) {
-                    rows.push(row);
+                if row.labels.is_empty() || rows.contains(&row) {
+                    continue;
                 }
-            }
-        }
-        let mut limits: HashMap<EffectId, usize> = HashMap::new();
-        for row in &rows {
-            for (effect, count) in self.label_counts(row) {
-                *limits.entry(effect).or_default() += count;
+                for label in &row.labels {
+                    *limits.entry(label.effect).or_default() += 1;
+                }
+                rows.insert(row);
             }
         }
         loop {

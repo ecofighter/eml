@@ -42,7 +42,7 @@ pub(crate) enum ArrowLin {
 
 /// row の末尾。`Error` は未定義のエフェクトか解決できない row 変数の跡で、型の `Error` と同じく、どのエフェクトも
 /// 受け入れて束縛されない (docs/spec/types.md の「エラーの扱い」)。
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) enum Tail {
     Closed,
     Var(RowVar),
@@ -50,7 +50,7 @@ pub(crate) enum Tail {
 }
 
 /// row のラベル。エフェクトとその型引数である (docs/spec/types.md の「関数型」)。
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub(crate) struct Label {
     pub effect: EffectId,
     pub args: Vec<Ty>,
@@ -68,7 +68,7 @@ impl Label {
 }
 
 /// エフェクトの row。
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub(crate) struct Row {
     pub labels: Vec<Label>,
     pub tail: Tail,
