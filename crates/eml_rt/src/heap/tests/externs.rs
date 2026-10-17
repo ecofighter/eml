@@ -858,9 +858,12 @@ fn an_interrupted_read_stops_when_the_stop_word_is_set<M: Mode>() {
 }
 
 /// ヒープの外の読みの領域も、確保量の上限に数える。長さの見込みがあれば確保する前に比べるので、確保できないほど
-/// 大きい見込みも I/O の誤りでなく上限で止まる。見込みがなければ、1回読むごとに比べる。
+/// 大きい見込みも I/O の誤りでなく上限で止まる。見込みがなければ、1回読むごとに比べる。行の読みも同じ上限で止まる。
+/// ただし行の読みは見込みを使わないので、見込みだけが大きい `huge.txt` は読める。上限は、ヒープが初めに取るページ
+/// より十分大きくする。ページだけで上限を超えると、どの読みも中身を見る前に止まり、比べ方を確かめられない。
 fn a_read_past_the_memory_limit_stops<M: Mode>() {
-    let body = "x".repeat(200_000);
+    let max_bytes = 1 << 20;
+    let body = "x".repeat(2 * max_bytes);
     let memory = Arc::new(MemoryHost::default());
     memory.add("big.txt", MemoryFile::text(&body));
     memory.add(
@@ -879,19 +882,29 @@ fn a_read_past_the_memory_limit_stops<M: Mode>() {
         },
     );
     let control = Arc::new(Control::new(Limits {
-        max_bytes: 150_000,
+        max_bytes,
         ..Limits::default()
     }));
-    let mut ctx = crate::Ctx::<M>::new(control, host(&memory));
-    for path in ["big.txt", "huge.txt", "unsized.txt"] {
-        unsafe {
-            let p = s(&mut ctx, path);
-            let f = ctx.fs_open(p).unwrap();
-            assert_eq!(
-                ctx.fs_read(f, false),
-                Err(Fault::Stopped(Stop::MemoryLimit)),
-                "{path}"
-            );
+    let mut ctx = crate::Ctx::<M>::new(control.clone(), host(&memory));
+    for line in [false, true] {
+        for path in ["big.txt", "huge.txt", "unsized.txt"] {
+            unsafe {
+                let p = s(&mut ctx, path);
+                let f = ctx.fs_open(p).unwrap();
+                assert_eq!(control.stop_bits(), 0);
+                assert!(control.bytes() < max_bytes / 2);
+                if line && path == "huge.txt" {
+                    let (f, read) = read_line_once(&mut ctx, f).unwrap();
+                    assert_eq!(read, "x");
+                    ctx.fs_close(f).unwrap();
+                } else {
+                    assert_eq!(
+                        ctx.fs_read(f, line),
+                        Err(Fault::Stopped(Stop::MemoryLimit)),
+                        "{path}, line: {line}"
+                    );
+                }
+            }
         }
     }
     assert_eq!(mortal(ctx.heap()), 0);
