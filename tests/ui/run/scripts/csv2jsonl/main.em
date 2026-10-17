@@ -1,37 +1,12 @@
 -- csv2jsonl: ヘッダ付きの CSV の選んだ列を JSON Lines に変換する (S12d のスクリプト)。
--- `csv2jsonl --columns NAME,NAME... INPUT OUTPUT`。引用符の欄は `,`、改行、`""` を含められる。誤りは `never` の操作を
--- 持つ `Fail` で中断し、全体を組み立ててから書くので、誤りがあれば何も書かない
-effect Fail where
-  never fail : Int -> String -> a
-
-effect Yield a where
-  yield : a -> Unit
-
--- `Fail` を、終了コードと文言の `Err` にする
-catching : (Unit -> <Fail | e> a) -> <e> Result (Int, String) a
-catching body =
-  handle body () with
-    | ctl fail code message -> Err (code, message)
-    | return x -> Ok x
+-- `csv2jsonl --columns NAME,NAME... INPUT OUTPUT`。引用符の欄は `,`、改行、`""` を含められる。誤りは終了コードと文言の
+-- 組を `fail` に渡して中断し、全体を組み立ててから書くので、誤りがあれば何も書かない
+import Yield (Yield(..))
+import Fail (Fail(..))
 
 -- 1つの行の欄と、その行が始まる入力の行の番号
 data Row =
   | Row { line : Int, fields : List String }
-
--- `text` の位置 `start` から、引用符で囲んだ欄の中身を読む。`start` は開きの引用符の次である。中身と、閉じの引用符の
--- 次の位置と、中身の改行の数を返す
-quoted : Int -> Int -> String -> Int -> <Fail> (String, Int, Int)
-quoted row_line start text n =
-  let go at acc newlines =
-    let close = find_byte 34 at text n
-    if close >= n then fail 1 "line \{row_line}: unclosed quote"
-    else
-      let piece = String.slice at close text
-      let newlines = newlines + count_byte 10 piece
-      if close + 1 < n && String.byte_at (close + 1) text == 34 then
-        go (close + 2) ((acc ++ piece) ++ "\"") newlines
-      else ((acc ++ piece), close + 1, newlines)
-  go start "" 0
 
 -- `at` 以降で最初の `byte` の位置。なければ `n` である
 find_byte : Int -> Int -> String -> Int -> Int
@@ -44,45 +19,49 @@ count_byte byte s =
   let go i acc = if i >= n then acc else go (i + 1) (if String.byte_at i s == byte then acc + 1 else acc)
   go 0 0
 
--- 位置 `at` から1つの行を読む。欄と、次の行の位置と、次の行の番号を返す。`row_line` は、その行が始まる入力の行の
--- 番号である
-read_row : String -> Int -> Int -> Int -> <Fail> (List String, Int, Int)
-read_row text n at row_line =
-  -- 位置 `at` から1つの欄を読み、行の残りを続ける。`fields` は逆順に積む
-  let field at line fields =
-    if at < n && String.byte_at at text == 34 then
-      let (value, after, newlines) = quoted row_line (at + 1) text n
-      let line = line + newlines
-      let fields = value :: fields
-      if after >= n then (List.reverse fields, n, line + 1)
-      else
-        let b = String.byte_at after text
-        if b == 44 then field (after + 1) line fields
-        else if b == 10 then (List.reverse fields, after + 1, line + 1)
-        else if b == 13 && after + 1 < n && String.byte_at (after + 1) text == 10 then
-          (List.reverse fields, after + 2, line + 1)
-        else fail 1 "line \{line}: unexpected text after a closing quote"
+-- 入力を行ごとに流す。空の行は飛ばす。読み取りの状態 (行の始め、欄の中、引用符の中、引用符の閉じた後) を
+-- 1つの `let … and …` の組の関数にする (docs/spec/expressions.md の「ローカル関数」)。`row_line` は行が始まる入力の
+-- 行の番号、`line` は今読んでいる入力の行の番号で、引用符の中の改行の分だけ `row_line` から進む。欄は `fields` に
+-- 逆順に積む
+rows : String -> <Yield Row, Fail (Int, String)> Unit
+rows text =
+  let n = String.byte_length text
+  let row_start at line =
+    if at >= n then ()
+    else if String.byte_at at text == 10 then row_start (at + 1) (line + 1)
+    else if String.byte_at at text == 13 && at + 1 < n && String.byte_at (at + 1) text == 10 then
+      row_start (at + 2) (line + 1)
+    else field at line line Nil
+  and field at row_line line fields =
+    if at < n && String.byte_at at text == 34 then in_quotes (at + 1) "" row_line line fields
     else
       let stop = unquoted_end at text n
       let fields = without_cr (String.slice at stop text) :: fields
-      if stop < n && String.byte_at stop text == 44 then field (stop + 1) line fields
-      else (List.reverse fields, if stop < n then stop + 1 else n, line + 1)
-  field at row_line Nil
-
--- 入力を行ごとに流す。空の行は飛ばす
-rows : String -> <Yield Row, Fail> Unit
-rows text =
-  let n = String.byte_length text
-  let go at line =
-    if at >= n then ()
-    else if String.byte_at at text == 10 then go (at + 1) (line + 1)
-    else if String.byte_at at text == 13 && at + 1 < n && String.byte_at (at + 1) text == 10 then
-      go (at + 2) (line + 1)
+      if stop < n && String.byte_at stop text == 44 then field (stop + 1) row_line line fields
+      else
+        yield (Row { line = row_line, fields = List.reverse fields })
+        row_start (if stop < n then stop + 1 else n) (line + 1)
+  -- `at` から閉じの引用符までを `acc` に足す。2つ続けた引用符は1つの引用符である
+  and in_quotes at acc row_line line fields =
+    let close = find_byte 34 at text n
+    if close >= n then fail (1, "line \{row_line}: unclosed quote")
     else
-      let (fields, next, next_line) = read_row text n at line
-      yield (Row { line = line, fields = fields })
-      go next next_line
-  go 0 1
+      let piece = String.slice at close text
+      let line = line + count_byte 10 piece
+      if close + 1 < n && String.byte_at (close + 1) text == 34 then
+        in_quotes (close + 2) ((acc ++ piece) ++ "\"") row_line line fields
+      else after_quote (close + 1) row_line line ((acc ++ piece) :: fields)
+  and after_quote at row_line line fields =
+    if at < n && String.byte_at at text == 44 then field (at + 1) row_line line fields
+    else
+      let next =
+        if at >= n then n
+        else if String.byte_at at text == 10 then at + 1
+        else if String.byte_at at text == 13 && at + 1 < n && String.byte_at (at + 1) text == 10 then at + 2
+        else fail (1, "line \{line}: unexpected text after a closing quote")
+      yield (Row { line = row_line, fields = List.reverse fields })
+      row_start next (line + 1)
+  row_start 0 1
 
 -- 引用符で囲まない欄の終わり (`,` か `\n` の位置、なければ `n`)
 unquoted_end : Int -> String -> Int -> Int
@@ -141,16 +120,16 @@ nth i xs =
     | x :: rest -> if i == 0 then Some x else nth (i - 1) rest
 
 -- 選んだ列の位置。ヘッダにない列名は終了コード 2 の誤りである
-column_indexes : List String -> List String -> <Fail> List Int
+column_indexes : List String -> List String -> <Fail (Int, String)> List Int
 column_indexes header columns =
   List.map
     (fn name ->
       match index_of name header with
         | Some i -> i
-        | None -> fail 2 "unknown column `\{name}`")
+        | None -> fail (2, "unknown column `\{name}`"))
     columns
 
-json_line : List String -> List Int -> Row -> <Fail> String
+json_line : List String -> List Int -> Row -> String
 json_line columns indexes row =
   let pick name i =
     match nth i row.fields with
@@ -168,7 +147,7 @@ zip xs ys =
   go Nil xs ys
 
 -- 最初の行をヘッダにし、残りの行を JSON Lines の文字列に変換する。状態は、ヘッダを読んだ後の列の位置と出力である
-convert : List String -> (Unit -> <Yield Row, Fail | e> Unit) -> <Fail | e> String
+convert : List String -> (Unit -> <Yield Row, Fail (Int, String) | e> Unit) -> <Fail (Int, String) | e> String
 convert columns body =
   handle body () from (None, "") with
     | ctl yield row k (picked, out) ->
@@ -178,11 +157,11 @@ convert columns body =
           let found = List.length row.fields
           if found != width then
             drop k
-            fail 1 "line \{row.line}: expected \{width} fields, found \{found}"
+            fail (1, "line \{row.line}: expected \{width} fields, found \{found}")
           else k () (picked, out ++ json_line columns indexes row)
     | return _ (picked, out) ->
       match picked with
-        | None -> fail 1 "line 1: missing header"
+        | None -> fail (1, "line 1: missing header")
         | Some _ -> out
 
 read_text : String -> <IO> Result IOError String
@@ -203,7 +182,7 @@ main () =
           exit 1
         | Ok text ->
           let result =
-            use catching
+            use Fail.to_result
             use convert (String.split "," names)
             rows text
           match result with

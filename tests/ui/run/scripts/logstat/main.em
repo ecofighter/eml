@@ -1,8 +1,7 @@
 -- logstat: アクセスログを集計する (S12d のスクリプト)。`logstat [-n N] [--whole]` で、標準入力の各行
 -- `時刻 メソッド パス ステータス 応答時間` を読む。行を流す生産者、行を解析する handler、集計する handler の3段を
 -- `use` で重ねる。`--whole` は、1行ずつでなく全体を読んでから行に分ける (2つの読み方の性能を比べるため)
-effect Yield a where
-  yield : a -> Unit
+import Yield (Yield(..))
 
 -- 解析した1行。形の崩れた行は行番号だけを持つ
 data Parsed =
@@ -106,9 +105,7 @@ parse number line =
 parsing : (Unit -> <Yield String, Record | e> Unit) -> <Record | e> Unit
 parsing lines =
   handle lines () from 1 with
-    | ctl yield line k number ->
-      record (parse number line)
-      k () (number + 1)
+    | fn yield line number -> (record (parse number line), number + 1)
     | return _ _ -> ()
 
 data Stats =
@@ -147,7 +144,7 @@ aggregate : (Unit -> <Record, IO | e> Unit) -> <IO | e> Stats
 aggregate body =
   let empty = Stats { total = 0, malformed = 0, statuses = Leaf, paths = Leaf, count = 0, sum = 0, max = 0 }
   handle body () from empty with
-    | ctl record parsed k st -> k () (add st parsed)
+    | fn record parsed st -> ((), add st parsed)
     | return _ st -> st
 
 report : Int -> Stats -> <IO> Unit

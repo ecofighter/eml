@@ -1,7 +1,6 @@
 -- grep: 固定の文字列を含む行を出す (S12d のスクリプト)。`grep [-v] [-n] [-c] PATTERN [FILE...]` で、ファイル名 `-` と、
--- ファイルを書かないときは標準入力を1行ずつ読む。行を流す生産者と、絞り込んで出す handler に分けて書く
-effect Yield a where
-  yield : a -> Unit
+-- ファイルを書かないときは標準入力を1行ずつ読む。行を流す生産者と、`Yield.fold` で絞り込んで出す消費者に分けて書く
+import Yield (Yield(..))
 
 data Options =
   | Options { invert : Bool, numbered : Bool, count_only : Bool, pattern : String }
@@ -42,17 +41,16 @@ numbered_lines lines =
 -- 流れてきた行のうち選ぶものを出し、選んだ数を返す
 matching : Options -> String -> (Unit -> <Yield (Int, String), IO | e> Unit) -> <IO | e> Int
 matching opts prefix lines =
-  handle lines () from 0 with
-    | ctl yield (n, line) k count ->
-      if String.contains opts.pattern line != opts.invert then
-        if opts.count_only then ()
-        else if opts.numbered then println "\{prefix}\{n}:\{line}"
-        else println "\{prefix}\{line}"
-        k () (count + 1)
-      else k () count
-    | return _ count ->
-      if opts.count_only then println "\{prefix}\{count}" else ()
-      count
+  let step count (n, line) =
+    if String.contains opts.pattern line != opts.invert then
+      if opts.count_only then ()
+      else if opts.numbered then println "\{prefix}\{n}:\{line}"
+      else println "\{prefix}\{line}"
+      count + 1
+    else count
+  let count = Yield.fold step 0 lines
+  if opts.count_only then println "\{prefix}\{count}" else ()
+  count
 
 -- 1つの入力を探し、選んだ数を返す。開けないか読めなければ `None` である
 search : Options -> String -> String -> <IO> Option Int
