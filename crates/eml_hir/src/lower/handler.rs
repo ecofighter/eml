@@ -100,7 +100,12 @@ impl BodyLowering<'_> {
         let mark = self.scope.len();
         // 節の引数の並び (操作の引数と `k`) は、等式の引数と同じく1つの組である (E1017)
         let params = self.lower_param_group(clause.params(), clause.range());
+        // 本体で書いた `k` に note を付けるか決めるため、本体より先に操作を引く。`never` の操作は `ctl` の節でも
+        // 継続を持たないので、`ctl` を勧めない
+        let fn_body = fn_keyword.is_some() && !self.clause_never(clause);
+        let outer = std::mem::replace(&mut self.in_fn_clause, fn_body);
         let body = self.lower_expr(clause.body(), clause.range());
+        self.in_fn_clause = outer;
         self.scope.truncate(mark);
         // 節の先頭の `PATH` がないか、`PATH` にセグメントがなければ、どちらもパーサが報告済み
         let Some(path) = clause.path() else {
@@ -246,6 +251,19 @@ impl BodyLowering<'_> {
             resumes: !never,
             range: clause.range(),
         });
+    }
+
+    /// 節の先頭の名前が `never` の操作か。引けない名前は偽にする。
+    fn clause_never(&self, clause: &ast::OpClause) -> bool {
+        let Some(path) = clause.path() else {
+            return false;
+        };
+        let range = path.range();
+        let name = path_name(Some(path));
+        match name.at(range).map(|at| self.items.operation(at.name)) {
+            Some(Resolved::Found(op)) => self.operation(op).multiplicity == OpMultiplicity::Never,
+            _ => false,
+        }
     }
 
     /// `fn` の節を同じ意味の `ctl` の節の引数と本体に書き換える。状態のない handler では `let $r = 本体 in $k $r`、

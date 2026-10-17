@@ -593,6 +593,32 @@ fn a_fn_clause_arity_does_not_count_k() {
     ");
 }
 
+/// `fn` の節には `k` がない。本体で `k` を書いたら、E1001 に `ctl` で継続を受けるよう note を付ける。入れ子のラムダの中も
+/// 同じ節の本体である。`never` の操作は `ctl` の節でも `k` を持たないので、note を付けない。継続に別の名前を付けた
+/// `ctl` の節の `k` と、節の外の `k` にも付けない。
+#[test]
+fn k_in_a_fn_clause_is_e1001_with_a_note() {
+    let text = "effect Ask where\n  ask : Unit -> Int\n\neffect Fail where\n  never fail : Unit -> a\n\nf : Unit -> Int\nf () = handle ask () with | fn ask () -> k 1\n\ng : Unit -> Int\ng () = handle ask () with | fn ask () -> (fn x -> k x) 1\n\nh : Unit -> Int\nh () = handle 1 with | fn fail () -> k 0\n\ni : Unit -> Int\ni () = handle ask () with | ctl ask () c -> k 1\n\nj : Unit -> Int\nj () = k 1";
+    insta::assert_snapshot!(report(text), @"
+    E1001 8:42 cannot find value `k`
+      8:42 not found in this scope
+      note: a `fn` clause has no `k`; write `ctl` to take the continuation
+    E1001 11:51 cannot find value `k`
+      11:51 not found in this scope
+      note: a `fn` clause has no `k`; write `ctl` to take the continuation
+    E1051 14:24 a `never` operation cannot have a `fn` clause
+      14:24 `fail` is a `never` operation
+      note: a `never` operation never resumes, so its clause must be `ctl`
+      help: write `ctl` instead of `fn`
+    E1001 14:38 cannot find value `k`
+      14:38 not found in this scope
+    E1001 17:45 cannot find value `k`
+      17:45 not found in this scope
+    E1001 20:8 cannot find value `k`
+      20:8 not found in this scope
+    ");
+}
+
 #[test]
 fn missing_clause_help_writes_ctl() {
     let text = "effect Ask where\n  ask : Unit -> Int\n  other : Unit -> Int\n  never fail : Unit -> a\n\nf : Unit -> Int\nf () = handle 1 with | ctl ask () k -> k 1";

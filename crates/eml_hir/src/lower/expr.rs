@@ -38,6 +38,9 @@ pub(super) struct BodyLowering<'a> {
     defining: ArenaMap<ExprId, LocalId>,
     groups: Vec<Vec<LocalId>>,
     pub(super) fn_clauses: Vec<FnClause>,
+    /// `fn` の節の本体 (入れ子のラムダを含む) を変換しているか。そこで `k` が見つからなければ、E1001 に `ctl` を
+    /// 勧める note を付ける (docs/implementation/diagnostics.md の E1001)。
+    pub(super) in_fn_clause: bool,
     /// 内側の束縛ほど後ろにある。後の `let` が前の同じ名前を隠す (docs/spec/expressions.md)。
     pub(super) scope: Vec<(String, LocalId)>,
     /// 今変換しているパターンの組が `scope` に積み始めた位置。組の中で同じ名前を2回束縛したら E1017 にする。
@@ -89,6 +92,7 @@ impl<'a> BodyLowering<'a> {
             defining: ArenaMap::default(),
             groups: Vec::new(),
             fn_clauses: Vec::new(),
+            in_fn_clause: false,
             scope: Vec::new(),
             group_start: 0,
         }
@@ -454,8 +458,19 @@ impl<'a> BodyLowering<'a> {
             None => match self.items.value(at.name) {
                 Resolved::Found(item) => Res::Item(item),
                 other => {
-                    self.diagnostics
-                        .extend(unresolved(&self.items, self.file, kind, at, other));
+                    let k_in_fn_clause = self.in_fn_clause
+                        && matches!(at.name, NameRef::Plain("k"))
+                        && matches!(other, Resolved::NotFound);
+                    let diagnostic = unresolved(&self.items, self.file, kind, at, other);
+                    self.diagnostics.extend(diagnostic.map(|diagnostic| {
+                        if k_in_fn_clause {
+                            diagnostic.with_note(
+                                "a `fn` clause has no `k`; write `ctl` to take the continuation",
+                            )
+                        } else {
+                            diagnostic
+                        }
+                    }));
                     return self.alloc(ExprKind::Missing, range);
                 }
             },
