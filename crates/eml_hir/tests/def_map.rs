@@ -575,7 +575,13 @@ fn a_std_name_defined_by_a_user_module_is_qualified_by_the_canonical_name() {
         "{}\npub data Tag = | A\n\npub data Only = | O\n\ndata Secret = | Z",
         eml_hir::STD[1].1
     );
-    let std = [("Prelude.em", eml_hir::PRELUDE_SOURCE), ("Fs.em", &fs)];
+    // 本物の `Fs` は `String` を import し、`String` は `List` を import する
+    let std = [
+        ("Prelude.em", eml_hir::PRELUDE_SOURCE),
+        ("Fs.em", &fs),
+        eml_test_support::std_module("String.em"),
+        eml_test_support::std_module("List.em"),
+    ];
     // 標準ライブラリの `Fs` は、使うときだけ読み込む
     let lowered = eml_test_support::lower_with_std(
         &std,

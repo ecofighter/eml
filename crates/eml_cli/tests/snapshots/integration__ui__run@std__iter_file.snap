@@ -1,0 +1,15 @@
+---
+source: crates/eml_cli/tests/ui.rs
+expression: "format!(\"--- stdout ---\\n{stdout}--- stderr ---\\n{diagnostics}{stderr}{written}{exit}\")"
+input_file: tests/ui/run/std/iter_file/main.em
+---
+--- stdout ---
+take one
+take two
+each one
+each two
+each three
+each four
+done
+error: cannot open `missing.txt`: not found
+--- stderr ---

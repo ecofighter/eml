@@ -921,6 +921,128 @@ fn read_all_refuses_a_non_file_or_a_shared_file<M: Mode>() {
     assert_eq!(mortal(ctx.heap()), 0);
 }
 
+/// 1行を読み、組から File と行を取り出す。組は `lin` ビットを持ち、File の参照を持つ。
+unsafe fn read_line_once<M: Mode>(
+    ctx: &mut crate::Ctx<M>,
+    f: Word,
+) -> Result<(Word, String), Fault> {
+    unsafe {
+        let t = ctx.fs_read_line(f)?;
+        assert!(ctx.heap().meta(t).unwrap().lin());
+        let file = ctx.heap().field(t, 0).unwrap();
+        let line_word = ctx.heap().field(t, 1).unwrap();
+        let line = text(ctx.heap(), line_word);
+        ctx.heap_mut()
+            .release(t, crate::externs::TUPLE, &[true, true])
+            .unwrap();
+        ctx.heap_mut().decref(line_word).unwrap();
+        Ok((file, line))
+    }
+}
+
+/// 行の終わりを含めて1行ずつ読み、終わりでは空の文字列を返す。全部の読みの後も空である。
+fn a_file_is_read_line_by_line<M: Mode>() {
+    let memory = Arc::new(MemoryHost::default());
+    memory.add("a.txt", MemoryFile::text("one\r\n\ntwo\nlast"));
+    let mut ctx = ctx_with::<M>(&memory);
+    unsafe {
+        let p = s(&mut ctx, "a.txt");
+        let mut file = ctx.fs_open(p).unwrap();
+        for expected in ["one\r\n", "\n", "two\n"] {
+            let line;
+            (file, line) = read_line_once(&mut ctx, file).unwrap();
+            assert_eq!(line, expected);
+        }
+        let rest;
+        (file, rest) = read_once(&mut ctx, file).unwrap();
+        assert_eq!(rest, "last");
+        for _ in 0..2 {
+            let line;
+            (file, line) = read_line_once(&mut ctx, file).unwrap();
+            assert_eq!(line, "");
+        }
+        ctx.fs_close(file).unwrap();
+    }
+    assert_eq!(mortal(ctx.heap()), 0);
+}
+
+/// 行の読みの誤りも、File を手放して閉じる。
+fn a_failed_line_read_closes_the_file<M: Mode>() {
+    let memory = Arc::new(MemoryHost::default());
+    let drops = Arc::new(AtomicUsize::new(0));
+    memory.add(
+        "broken.txt",
+        MemoryFile {
+            fail_after: Some(3),
+            drops: Some(drops.clone()),
+            ..MemoryFile::text("abcdef")
+        },
+    );
+    memory.add(
+        "bad.bin",
+        MemoryFile {
+            bytes: vec![b'a', 0xff, b'\n'],
+            sized: true,
+            drops: Some(drops.clone()),
+            ..MemoryFile::default()
+        },
+    );
+    let mut ctx = ctx_with::<M>(&memory);
+    unsafe {
+        let p = s(&mut ctx, "broken.txt");
+        let f = ctx.fs_open(p).unwrap();
+        assert_eq!(
+            ctx.fs_read_line(f),
+            Err(Fault::Io {
+                op: IoOp::Read,
+                name: "broken.txt".into(),
+                reason: IoReason::Other
+            })
+        );
+        assert_eq!(drops.load(Ordering::Relaxed), 1);
+        let p = s(&mut ctx, "bad.bin");
+        let f = ctx.fs_open(p).unwrap();
+        assert_eq!(
+            ctx.fs_read_line(f),
+            Err(Fault::NotUtf8(Box::new(Utf8Source::File("bad.bin".into()))))
+        );
+        assert_eq!(drops.load(Ordering::Relaxed), 2);
+    }
+    assert_eq!(mortal(ctx.heap()), 0);
+}
+
+/// 行の読みも、File でない物体と参照が2つある File を断り、ヒープを変えない。
+fn read_line_refuses_a_non_file_or_a_shared_file<M: Mode>() {
+    let memory = Arc::new(MemoryHost::default());
+    memory.add("a.txt", MemoryFile::text("abc"));
+    let mut ctx = ctx_with::<M>(&memory);
+    unsafe {
+        let other = ctx.heap_mut().alloc_foreign(0u64, false);
+        let objects = mortal(ctx.heap());
+        assert_eq!(
+            ctx.fs_read_line(other),
+            Err(Fault::Heap(HeapError::WrongKind))
+        );
+        assert_eq!(
+            ctx.fs_read_line(Word::imm(0)),
+            Err(Fault::Heap(HeapError::WrongKind))
+        );
+        assert_eq!(mortal(ctx.heap()), objects);
+        ctx.heap_mut().decref(other).unwrap();
+        if M::CHECKED {
+            let p = s(&mut ctx, "a.txt");
+            let f = ctx.fs_open(p).unwrap();
+            super::raw::set_rc(ctx.heap_mut(), f, 2);
+            let objects = mortal(ctx.heap());
+            assert_eq!(ctx.fs_read_line(f), Err(Fault::Heap(HeapError::NotUnique)));
+            assert_eq!(mortal(ctx.heap()), objects);
+            super::raw::set_rc(ctx.heap_mut(), f, 1);
+            ctx.fs_close(f).unwrap();
+        }
+    }
+    assert_eq!(mortal(ctx.heap()), 0);
+}
+
 /// 表の場合を `eml_rt` の extern で動かすときの引数。共有した文字列の残った参照と、作った不死の物体の数を持つ
 #[derive(Default)]
 struct Args {
@@ -1067,6 +1189,16 @@ unsafe fn call<M: Mode>(
                 ctx.fs_close(f)?;
                 Outcome::Str(read)
             }
+            "Std.Fs.read_line_raw" | "Std.Fs.read_line_raw2" => {
+                let p = one(ctx, args);
+                let f = ctx.fs_open(p)?;
+                let (mut f, mut line) = read_line_once(ctx, f)?;
+                if name == "Std.Fs.read_line_raw2" {
+                    (f, line) = read_line_once(ctx, f)?;
+                }
+                ctx.fs_close(f)?;
+                Outcome::Str(line)
+            }
             "Std.String.byte_length" => {
                 let a = one(ctx, args);
                 Outcome::Int(ctx.string_byte_length(a)?)
@@ -1207,5 +1339,8 @@ both_modes!(
     an_interrupted_read_stops_when_the_stop_word_is_set,
     a_read_past_the_memory_limit_stops,
     read_all_refuses_a_non_file_or_a_shared_file,
+    a_file_is_read_line_by_line,
+    a_failed_line_read_closes_the_file,
+    read_line_refuses_a_non_file_or_a_shared_file,
     the_externs_match_the_table,
 );

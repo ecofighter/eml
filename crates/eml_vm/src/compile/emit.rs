@@ -780,6 +780,7 @@ fn arithmetic(ext: Extern, dst: Slot, args: &[Slot]) -> Option<Op> {
         Extern::Println
         | Extern::Open
         | Extern::ReadAll
+        | Extern::ReadLine
         | Extern::Close
         | Extern::IntShow
         | Extern::IntNeg

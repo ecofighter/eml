@@ -444,6 +444,20 @@ pub fn inputs() -> Vec<(String, Vec<Arg>)> {
     }
     push("Std.Fs.read_all", vec![Arg::Abs("plain.txt".into())]);
     push("Std.Fs.read_all2", rel("plain.txt"));
+    for path in [
+        "plain.txt",
+        "crlf.txt",
+        "empty.txt",
+        "bad.bin",
+        "big.txt",
+        "dir",
+        "missing.txt",
+    ] {
+        push("Std.Fs.read_line_raw", rel(path));
+    }
+    for path in ["plain.txt", "crlf.txt", "empty.txt"] {
+        push("Std.Fs.read_line_raw2", rel(path));
+    }
     inputs
 }
 
@@ -473,6 +487,7 @@ impl Drop for Scratch {
 /// ファイルを用意する。`locked.txt` を作れなかった (root で動いている) ら false を返す
 pub fn fixtures(root: &Path) -> bool {
     std::fs::write(root.join("plain.txt"), "line 1\nline 2\n").unwrap();
+    std::fs::write(root.join("crlf.txt"), "a\r\nb").unwrap();
     std::fs::write(root.join("empty.txt"), "").unwrap();
     std::fs::write(root.join("bad.bin"), [b'a', 0xff, 0xfe]).unwrap();
     // 1 MiB にして、64 KiB ずつの読みの区切りを何度もまたがせる

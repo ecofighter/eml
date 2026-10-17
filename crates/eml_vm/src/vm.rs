@@ -587,6 +587,10 @@ fn run_extern<M: Mode>(
                 let w = ctx.fs_read_all(task.get(arg(0)))?;
                 task.set(dst, w);
             }
+            Extern::ReadLine => {
+                let w = ctx.fs_read_line(task.get(arg(0)))?;
+                task.set(dst, w);
+            }
             Extern::Close => {
                 ctx.fs_close(task.get(arg(0)))?;
                 task.set(dst, Word::UNIT);

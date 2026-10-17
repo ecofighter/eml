@@ -10,7 +10,7 @@ use eml_hir::{
     DefMap, ImportTarget, Loaded, ModuleId, ModuleOrigin, ModulePath, ModuleSource, NameRef,
     Program, ReadError, Resolved, ValueItem,
 };
-use eml_test_support::{ENTRY_PATH, MemorySource, full};
+use eml_test_support::{ENTRY_PATH, MemorySource, full, std_module};
 
 /// 読み込みの段を流し、診断を `パス 行:列 番号 メッセージ` の行にする。依存先のファイルを指す診断を読み分けるため。
 fn load_at(entry_path: &str, entry: &str, modules: &[(&str, &str)]) -> (Loaded, Vec<String>) {
@@ -291,10 +291,19 @@ static FAKE_FS: LazyLock<String> = LazyLock::new(|| {
 });
 
 fn fake_std() -> Vec<(&'static str, &'static str)> {
+    let [string, list] = fs_imports();
     vec![
         ("Prelude.em", eml_hir::PRELUDE_SOURCE),
         ("Fs.em", FAKE_FS.as_str()),
+        string,
+        list,
     ]
+}
+
+/// 本物の `Fs` が読む標準ライブラリのモジュール。`Fs` は `String` を import し、`String` は `List` を import するので、
+/// 本物の `Fs` を使う偽の木にはこの2つも要る。
+fn fs_imports() -> [(&'static str, &'static str); 2] {
+    [std_module("String.em"), std_module("List.em")]
 }
 
 /// 読んだパスを記録する読み方。読まないはずのユーザーのファイルを読んでいないことを確かめるため。
@@ -400,10 +409,27 @@ f () = Fs.greet ()",
         &MemorySource(&[("Util.em", "")]),
     );
     assert!(diagnostics.is_empty(), "{diagnostics:?}");
-    assert_eq!(names(&loaded), ["Prelude", "Main", "Util", "Std.Fs"]);
+    assert_eq!(
+        names(&loaded),
+        [
+            "Prelude",
+            "Main",
+            "Util",
+            "Std.Fs",
+            "Std.String",
+            "Std.List"
+        ]
+    );
     assert_eq!(
         paths(&loaded),
-        ["<std>/Prelude.em", "test.em", "Util.em", "<std>/Fs.em"]
+        [
+            "<std>/Prelude.em",
+            "test.em",
+            "Util.em",
+            "<std>/Fs.em",
+            "<std>/String.em",
+            "<std>/List.em"
+        ]
     );
     assert_eq!(
         origins(&loaded),
@@ -411,6 +437,8 @@ f () = Fs.greet ()",
             ModuleOrigin::Std,
             ModuleOrigin::User,
             ModuleOrigin::User,
+            ModuleOrigin::Std,
+            ModuleOrigin::Std,
             ModuleOrigin::Std
         ]
     );
@@ -463,7 +491,10 @@ fn a_std_module_is_reached_by_its_short_name_without_an_import() {
     );
     assert_eq!(lowered.diagnostics, Vec::<String>::new());
     assert_eq!(lowered.qualified_in("Main", "Fs", "greet"), Some("Std.Fs"));
-    assert_eq!(names(&lowered.loaded), ["Prelude", "Main", "Std.Fs"]);
+    assert_eq!(
+        names(&lowered.loaded),
+        ["Prelude", "Main", "Std.Fs", "Std.String", "Std.List"]
+    );
     assert_eq!(source.read_paths(), Vec::<String>::new());
     // 修飾子は1つの区切りで、正式な名前は修飾子にならない
     let lowered = lower_std(
@@ -484,7 +515,10 @@ fn an_import_prefers_the_user_module_of_the_same_name() {
     let lowered = lower_std(&fake_std(), entry, &MemorySource(&user));
     assert_eq!(lowered.diagnostics, Vec::<String>::new());
     // ユーザーのモジュールが勝っても、同じパスの標準ライブラリのモジュールを読む
-    assert_eq!(names(&lowered.loaded), ["Prelude", "Main", "Fs", "Std.Fs"]);
+    assert_eq!(
+        names(&lowered.loaded),
+        ["Prelude", "Main", "Fs", "Std.Fs", "Std.String", "Std.List"]
+    );
     assert_eq!(lowered.qualified_in("Main", "Fs", "greet"), Some("Fs"));
     // ユーザーのモジュールに名前がなくても、標準ライブラリへは進まない
     let lowered = lower_std(&fake_std(), entry, &MemorySource(&[("Fs.em", "")]));
@@ -522,7 +556,10 @@ fn an_unimported_user_module_does_not_shadow_a_std_module() {
     );
     assert_eq!(lowered.diagnostics, Vec::<String>::new());
     assert_eq!(lowered.qualified_in("Main", "Fs", "greet"), Some("Std.Fs"));
-    assert_eq!(names(&lowered.loaded), ["Prelude", "Main", "Std.Fs"]);
+    assert_eq!(
+        names(&lowered.loaded),
+        ["Prelude", "Main", "Std.Fs", "Std.String", "Std.List"]
+    );
     assert_eq!(source.read_paths(), Vec::<String>::new());
 }
 
@@ -537,7 +574,15 @@ fn a_qualifier_means_what_each_module_imports() {
     assert_eq!(lowered.diagnostics, Vec::<String>::new());
     assert_eq!(
         names(&lowered.loaded),
-        ["Prelude", "Main", "Fs", "Std.Fs", "B"]
+        [
+            "Prelude",
+            "Main",
+            "Fs",
+            "Std.Fs",
+            "B",
+            "Std.String",
+            "Std.List"
+        ]
     );
     assert_eq!(lowered.qualified_in("Main", "Fs", "greet"), Some("Fs"));
     assert_eq!(lowered.qualified_in("B", "Fs", "greet"), Some("Std.Fs"));
@@ -553,7 +598,10 @@ fn an_import_falls_back_to_the_std_module_when_the_file_is_missing() {
         &source,
     );
     assert!(diagnostics.is_empty(), "{diagnostics:?}");
-    assert_eq!(names(&loaded), ["Prelude", "Main", "Std.Fs"]);
+    assert_eq!(
+        names(&loaded),
+        ["Prelude", "Main", "Std.Fs", "Std.String", "Std.List"]
+    );
     assert_eq!(targets(&loaded, 1), [Some(2), Some(2)]);
     // `import Std.Fs` はユーザーの根を読まない
     assert_eq!(source.read_paths(), ["Fs.em"]);
@@ -624,32 +672,56 @@ fn private_names_of_a_std_module_are_undefined() {
     );
 }
 
-/// `head` の後ろに本物の `Fs` を続けたもの。診断の行を `head` の中に保ったまま、`File` などの宣言を残すため。
-fn fs_after(head: &str) -> String {
-    format!("{head}\n{}", eml_hir::STD[1].1)
+/// 本物の `Fs` の先頭 (注釈と import) の後ろに `head` を挟んだもの。`head` の import を宣言より前に置いたまま、
+/// `File` などの宣言を残すため。`head` の1行目は `Fs.em` の `FS_HEAD_LINES + 1` 行目になる。
+fn fs_with(head: &str) -> String {
+    let fs = eml_hir::STD[1].1;
+    let lines: Vec<&str> = fs.split_inclusive('\n').collect();
+    assert!(
+        lines[..FS_HEAD_LINES]
+            .iter()
+            .all(|line| line.starts_with("--")
+                || line.starts_with("import ")
+                || line.trim().is_empty())
+            && !lines[FS_HEAD_LINES].starts_with("import "),
+        "the head of the real Fs changed"
+    );
+    format!(
+        "{}{head}{}",
+        lines[..FS_HEAD_LINES].concat(),
+        lines[FS_HEAD_LINES..].concat()
+    )
 }
+
+/// 本物の `Fs` の先頭の注釈、import、空の行の数。
+const FS_HEAD_LINES: usize = 5;
 
 #[test]
 fn a_std_module_reaches_another_only_through_an_import() {
+    let [string, list] = fs_imports();
     let other = "pub x : Int\nx = 1\n";
     let without = [
         ("Prelude.em", eml_hir::PRELUDE_SOURCE),
-        ("Fs.em", &fs_after("pub f : Unit -> Int\nf () = Other.x\n")),
+        ("Fs.em", &fs_with("pub f : Unit -> Int\nf () = Other.x\n")),
         ("Other.em", other),
+        string,
+        list,
     ];
     // 入口が `Fs` を使わないと、標準ライブラリの `Fs` を読まない
     let lowered = lower_std(&without, "import Std.Fs", &MemorySource(&[]));
     assert_eq!(
         lowered.diagnostics,
-        ["<std>/Fs.em 2:8 E1031 unknown module qualifier `Other`"]
+        ["<std>/Fs.em 7:8 E1031 unknown module qualifier `Other`"]
     );
     let with = [
         ("Prelude.em", eml_hir::PRELUDE_SOURCE),
         (
             "Fs.em",
-            &fs_after("import Other\n\npub f : Unit -> Int\nf () = Other.x\n"),
+            &fs_with("import Other\n\npub f : Unit -> Int\nf () = Other.x\n"),
         ),
         ("Other.em", other),
+        string,
+        list,
     ];
     // 標準ライブラリのモジュールの import は、ユーザーの根を読まない
     let source = Recording::new(&[("Other.em", "")]);
@@ -657,50 +729,63 @@ fn a_std_module_reaches_another_only_through_an_import() {
     assert_eq!(lowered.diagnostics, Vec::<String>::new());
     assert_eq!(
         names(&lowered.loaded),
-        ["Prelude", "Main", "Std.Fs", "Std.Other"]
+        [
+            "Prelude",
+            "Main",
+            "Std.Fs",
+            "Std.String",
+            "Std.Other",
+            "Std.List"
+        ]
     );
-    assert_eq!(targets(&lowered.loaded, 2), [Some(3)]);
+    assert_eq!(targets(&lowered.loaded, 2), [Some(3), Some(4)]);
     assert_eq!(source.read_paths(), Vec::<String>::new());
 }
 
 #[test]
 fn a_std_module_reaches_another_by_its_canonical_name_too() {
+    let [string, list] = fs_imports();
     let other = "pub x : Int\nx = 1\n";
     let std = [
         ("Prelude.em", eml_hir::PRELUDE_SOURCE),
         (
             "Fs.em",
-            &fs_after("import Std.Other\n\npub f : Unit -> Int\nf () = Other.x\n"),
+            &fs_with("import Std.Other\n\npub f : Unit -> Int\nf () = Other.x\n"),
         ),
         ("Other.em", other),
+        string,
+        list,
     ];
     let source = Recording::new(&[]);
     let lowered = lower_std(&std, "import Std.Fs", &source);
     assert_eq!(lowered.diagnostics, Vec::<String>::new());
-    assert_eq!(targets(&lowered.loaded, 2), [Some(3)]);
+    assert_eq!(targets(&lowered.loaded, 2), [Some(3), Some(4)]);
     assert_eq!(source.read_paths(), Vec::<String>::new());
 }
 
 #[test]
 fn a_std_module_cannot_import_the_prelude() {
+    let [string, list] = fs_imports();
     // 標準ライブラリのモジュールも Prelude を暗黙に取り込むので、書いた `import Prelude` は誤りである
     let std = [
         ("Prelude.em", eml_hir::PRELUDE_SOURCE),
         (
             "Fs.em",
-            &fs_after("import Prelude\nimport Std.Prelude as P\n"),
+            &fs_with("import Prelude\nimport Std.Prelude as P\n"),
         ),
+        string,
+        list,
     ];
     let (loaded, mut diagnostics) =
         eml_hir::load_with_std(&std, ENTRY_PATH, "import Std.Fs", &MemorySource(&[]));
     sort_diagnostics(&mut diagnostics);
     insta::assert_snapshot!(full(&loaded.files, &diagnostics), @"
-    E1030 1:1 the module `Prelude` is reserved
-      1:1 the Prelude is imported implicitly
-    E1030 2:1 the module `Std.Prelude` is reserved
-      2:1 the Prelude is imported implicitly
+    E1030 6:1 the module `Prelude` is reserved
+      6:1 the Prelude is imported implicitly
+    E1030 7:1 the module `Std.Prelude` is reserved
+      7:1 the Prelude is imported implicitly
     ");
-    assert_eq!(targets(&loaded, 2), [None, None]);
+    assert_eq!(targets(&loaded, 2), [Some(3), None, None]);
 }
 
 #[test]
@@ -714,7 +799,10 @@ fn a_std_directory_in_the_user_root_is_never_read() {
         &source,
     );
     assert!(diagnostics.is_empty(), "{diagnostics:?}");
-    assert_eq!(names(&loaded), ["Prelude", "Main", "Std.Fs"]);
+    assert_eq!(
+        names(&loaded),
+        ["Prelude", "Main", "Std.Fs", "Std.String", "Std.List"]
+    );
     assert_eq!(loaded.files.text(loaded.prelude), eml_hir::PRELUDE_SOURCE);
     assert_eq!(source.read_paths(), ["Fs.em"]);
 }

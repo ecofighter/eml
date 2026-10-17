@@ -209,7 +209,7 @@ fn kind_of(lin: Lin) -> Linearity {
     }
 }
 
-/// 表の値そのもの。`Fs` の3つ以外は、引数も結果も `Unr` である。
+/// 表の値そのもの。`Fs` の4つ以外は、引数も結果も `Unr` である。
 #[test]
 fn only_the_file_functions_carry_a_lin() {
     use Linearity::{Lin, Unr};
@@ -218,6 +218,7 @@ fn only_the_file_functions_carry_a_lin() {
         let expected: (&[Linearity], Linearity) = match row.name {
             "Std.Fs.open" => (&[Unr], Lin),
             "Std.Fs.read_all" => (&[Lin], Lin),
+            "Std.Fs.read_line_raw" => (&[Lin], Lin),
             "Std.Fs.close" => (&[Lin], Unr),
             _ => {
                 assert!(

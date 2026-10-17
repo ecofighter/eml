@@ -130,6 +130,15 @@ pub fn lower_files(entry: &str, modules: &[(&str, &str)]) -> Lowered {
     lower_session(load(entry, modules))
 }
 
+/// 埋め込んだ標準ライブラリの `name` (`"String.em"` など) の組。差し替えた木に本物のモジュールを足すのに使う。
+#[cfg(feature = "hir")]
+pub fn std_module(name: &str) -> (&'static str, &'static str) {
+    *eml_hir::STD
+        .iter()
+        .find(|(path, _)| *path == name)
+        .expect("an embedded std module")
+}
+
 #[cfg(feature = "hir")]
 pub fn lower_with_std(std: &[(&str, &str)], entry: &str) -> Lowered {
     lower_session(load_with_std(std, entry))

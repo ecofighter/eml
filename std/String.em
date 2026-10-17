@@ -54,6 +54,14 @@ lines s =
       else lines_from (i + 1) (without_cr (slice at i s) :: acc)
   lines_from 0 Nil
 
+-- 最後の行の終わり (`\n` か `\r\n`) を1つ除く。なければそのまま返す
+pub trim_line_end : String -> String
+trim_line_end line =
+  let n = byte_length line
+  if n == 0 || byte_at (n - 1) line != 10 then line
+  else if n >= 2 && byte_at (n - 2) line == 13 then slice 0 (n - 2) line
+  else slice 0 (n - 1) line
+
 -- `\r\n` で終わった行の `\r` を除く
 without_cr : String -> String
 without_cr line =

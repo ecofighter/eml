@@ -184,7 +184,16 @@ fn imports_of_inputs_follow_the_inputs_in_the_order_they_are_found() {
     assert!(diagnostics.is_empty(), "{diagnostics:?}");
     assert_eq!(
         names(&loaded),
-        ["Prelude", "<input 1>", "<input 2>", "A", "Std.Fs", "B"]
+        [
+            "Prelude",
+            "<input 1>",
+            "<input 2>",
+            "A",
+            "Std.Fs",
+            "B",
+            "Std.String",
+            "Std.List"
+        ]
     );
 }
 
@@ -229,7 +238,10 @@ fn a_cached_fallback_to_the_standard_library_stays() {
         &first,
     );
     assert!(diagnostics.is_empty(), "{diagnostics:?}");
-    assert_eq!(names(&loaded), ["Prelude", "<input 1>", "Std.Fs"]);
+    assert_eq!(
+        names(&loaded),
+        ["Prelude", "<input 1>", "Std.Fs", "Std.String", "Std.List"]
+    );
     assert_eq!(
         loaded.modules[1].targets,
         [ImportTarget::Module(module_named(&loaded, "Std.Fs"))]

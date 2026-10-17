@@ -159,6 +159,7 @@ pub enum Extern {
     Println,
     Open,
     ReadAll,
+    ReadLine,
     Close,
     IntShow,
     IntNeg,
@@ -202,9 +203,9 @@ pub struct FunctionRow {
     /// 引数の Repr。数はシグネチャの一番外側の `->` の数と等しい。
     pub params: &'static [Repr],
     /// 結果の Repr。`Never` は戻らない extern で、`ret_kind` は読まない。データを返す行は、比べる extern と
-    /// `Std.Env.has` の `Bool`、`compare` の `Ordering`、`Std.Fs.read_all` の組である。`Bool` と `Ordering` のタグは
-    /// 決まっていて、組の配置は大きさだけで決まるので、行は配置を持たない。`List` や `Option` は extern が作らず、
-    /// 標準ライブラリの eml が包む (docs/spec/core-ir.md の「translate の配置」)。
+    /// `Std.Env.has` の `Bool`、`compare` の `Ordering`、`Std.Fs.read_all` と `read_line_raw` の組である。`Bool` と
+    /// `Ordering` のタグは決まっていて、組の配置は大きさだけで決まるので、行は配置を持たない。`List` や `Option` は
+    /// extern が作らず、標準ライブラリの eml が包む (docs/spec/core-ir.md の「translate の配置」)。
     pub ret: OpRet,
     /// 引数ごとの Kind。長さは `params` と同じである。LIR の verifier が、呼び出しの引数と結果の印をこの列と比べる
     /// (docs/spec/core-ir.md の「表の印の列」)。
@@ -218,6 +219,7 @@ impl Extern {
         Extern::Println,
         Extern::Open,
         Extern::ReadAll,
+        Extern::ReadLine,
         Extern::Close,
         Extern::IntShow,
         Extern::IntNeg,
@@ -277,7 +279,8 @@ impl Extern {
                 purity,
             }
         }
-        // 標準ライブラリで線形な値を扱うのは `Fs` の `open`、`read_all`、`close` だけなので、ほかの行はすべて `Unr` にする
+        // 標準ライブラリで線形な値を扱うのは `Fs` の `open`、`read_all`、`read_line_raw`、`close` だけなので、ほかの行は
+        // すべて `Unr` にする
         fn row<const N: usize>(
             name: &'static str,
             params: &'static [Repr; N],
@@ -291,6 +294,14 @@ impl Extern {
             Extern::Open => kinded("Std.Fs.open", &[Obj], &[Unr], Obj, Lin, Purity::Effectful),
             Extern::ReadAll => kinded(
                 "Std.Fs.read_all",
+                &[Obj],
+                &[Lin],
+                Obj,
+                Lin,
+                Purity::Effectful,
+            ),
+            Extern::ReadLine => kinded(
+                "Std.Fs.read_line_raw",
                 &[Obj],
                 &[Lin],
                 Obj,

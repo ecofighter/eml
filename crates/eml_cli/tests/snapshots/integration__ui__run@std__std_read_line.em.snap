@@ -1,0 +1,24 @@
+---
+source: crates/eml_cli/tests/ui.rs
+expression: "format!(\"--- stdout ---\\n{stdout}--- stderr ---\\n{diagnostics}{stderr}{written}{exit}\")"
+input_file: tests/ui/run/std/std_read_line.em
+---
+--- stdout ---
+"first"
+"second"
+""
+""
+"last"
+end
+end
+21
+None
+["a", "a", "a\n", "a\r", "a", "", ""]
+--- stderr ---
+--- written: empty.txt ---
+--- written: lines.txt ---
+first
+second
+
+
+last

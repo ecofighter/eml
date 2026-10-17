@@ -645,8 +645,23 @@ fn println_goes_through_the_host<M: Mode>() {
     assert_eq!(mortal(ctx.heap()), 0);
 }
 
+/// 1行を読み、組から File と行を取り出す。
+unsafe fn next_line<M: Mode>(ctx: &mut Ctx<M>, f: Word) -> (Word, String) {
+    unsafe {
+        let t = ctx.fs_read_line(f).unwrap();
+        let file = ctx.heap().field(t, 0).unwrap();
+        let w = ctx.heap().field(t, 1).unwrap();
+        let line = text(ctx.heap(), w);
+        ctx.heap_mut()
+            .release(t, crate::externs::TUPLE, &[true, true])
+            .unwrap();
+        ctx.heap_mut().decref(w).unwrap();
+        (file, line)
+    }
+}
+
 /// Host を通る読み。区切りをまたぐ長さ、長さの見込みのない読み手、短い読み、途中の誤り、UTF-8 でない中身、
-/// 止める語、閉じることを通す。
+/// 止める語、閉じることを、全部の読みと行の読みの両方で通す。
 fn files_go_through_the_host<M: Mode>() {
     let memory = Arc::new(MemoryHost::default());
     let control = Arc::new(Control::new(Limits::default()));
@@ -681,8 +696,54 @@ fn files_go_through_the_host<M: Mode>() {
             ..MemoryFile::text("abc")
         },
     );
+    let long_line = "x".repeat(70_000);
+    memory.add(
+        "lines.txt",
+        MemoryFile {
+            chunk: 4096,
+            ..MemoryFile::text(&format!("{long_line}\na\r\n\nlast"))
+        },
+    );
     let mut ctx = Ctx::<M>::new(control.clone(), host(&memory));
     unsafe {
+        // 64 KiB の区切りをまたぐ行、`\r\n` を残した行、空の行、行の終わりのない最後の行、終わりの空の文字列
+        let p = ctx.heap_mut().alloc_string("lines.txt");
+        let mut f = ctx.fs_open(p).unwrap();
+        for expected in [
+            format!("{long_line}\n"),
+            "a\r\n".into(),
+            "\n".into(),
+            "last".into(),
+            String::new(),
+        ] {
+            let line;
+            (f, line) = next_line(&mut ctx, f);
+            assert_eq!(line, expected);
+        }
+        ctx.fs_close(f).unwrap();
+        assert_eq!(mortal(ctx.heap()), 0);
+        for name in ["broken.txt", "bad.bin"] {
+            let p = ctx.heap_mut().alloc_string(name);
+            let f = ctx.fs_open(p).unwrap();
+            assert!(ctx.fs_read_line(f).is_err());
+            assert_eq!(mortal(ctx.heap()), 0);
+        }
+        let p = ctx.heap_mut().alloc_string("fifo");
+        let f = ctx.fs_open(p).unwrap();
+        assert_eq!(
+            ctx.fs_read_line(f),
+            Err(crate::Fault::Stopped(crate::Stop::Interrupted))
+        );
+        control.clear();
+        let p = ctx.heap_mut().alloc_string("lines.txt");
+        let f = ctx.fs_open(p).unwrap();
+        control.interrupt();
+        assert_eq!(
+            ctx.fs_read_line(f),
+            Err(crate::Fault::Stopped(crate::Stop::Interrupted))
+        );
+        control.clear();
+        assert_eq!(mortal(ctx.heap()), 0);
         let p = ctx.heap_mut().alloc_string("big.txt");
         let f = ctx.fs_open(p).unwrap();
         let t = ctx.fs_read_all(f).unwrap();

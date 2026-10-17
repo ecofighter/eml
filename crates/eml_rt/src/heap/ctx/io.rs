@@ -324,6 +324,95 @@ impl<M: Mode> Ctx<M> {
                 &&& r matches Ok(t) ==> final(self).holds(t)
             },
     {
+        unsafe { self.fs_read(file, false) }
+    }
+
+    /// `Fs.read_line_raw`。`file` から次の `\n` まで (それを含めて) 読み、組 `(File, String)` を返す。終わりなら文字列は
+    /// 空である。読み方、誤り、`file` の扱いは `fs_read_all` と同じである。
+    ///
+    /// # Safety
+    /// `fs_read_all` と同じである。
+    pub unsafe fn fs_read_line(&mut self, file: Word) -> (r: Result<Word, Fault>)
+        requires
+            old(self).wf(),
+            old(self).heap_spec().word_in(file),
+            !M::CHECKED ==> old(self).holds(file) && old(self).heap_spec().rc_value(file) == 1,
+        ensures
+            final(self).wf(),
+            final(self).evv_spec() == old(self).evv_spec(),
+            final(self).yield_spec() == old(self).yield_spec(),
+            r is Ok || (r matches Err(Fault::Io { op: IoOp::Read, .. })) || (r matches Err(
+                Fault::NotUtf8(_),
+            )) || (r matches Err(Fault::Stopped(_))) || (r matches Err(Fault::Heap(_))),
+            (r matches Err(Fault::Heap(_))) ==> *final(self) == *old(self)
+                || final(self).heap_spec().kept_live(old(self).heap_spec()),
+            !M::CHECKED && (r matches Err(Fault::Heap(_))) ==> r == Err::<Word, Fault>(
+                Fault::Heap(HeapError::WrongKind),
+            ) && *final(self) == *old(self),
+            r matches Ok(t) ==> {
+                let h = final(self).heap_spec();
+                &&& h.kind_of(t) == Kind::Data
+                &&& h.tag_of(t) == TUPLE
+                &&& h.lin_of(t)
+                &&& h.count_of(t) == 2
+                &&& h.scanned_word(t, 0) == file
+                &&& final(self).is_string(h.scanned_word(t, 1))
+            },
+            old(self).held_ok() && old(self).holds(file) && old(self).heap_spec().rc_value(file)
+                == 1 ==> (r matches Err(Fault::Heap(e)) ==> *final(self) == *old(self) || chain_err(
+                Err::<(), HeapError>(e),
+            )),
+            old(self).held_ok() && old(self).holds(file) && old(self).heap_spec().rc_value(file)
+                == 1 && !(r matches Err(Fault::Heap(_))) ==> {
+                &&& final(self).held_ok()
+                &&& final(self).evolved_by(*old(self), |x: usize| -points(file, x), Set::empty())
+                &&& r matches Ok(t) ==> final(self).holds(t)
+            },
+    {
+        unsafe { self.fs_read(file, true) }
+    }
+
+    /// `fs_read_all` と `fs_read_line` の本体。`line` は Host の読みに渡すだけで、証明はどちらでも同じである。
+    ///
+    /// # Safety
+    /// `fs_read_all` と同じである。
+    unsafe fn fs_read(&mut self, file: Word, line: bool) -> (r: Result<Word, Fault>)
+        requires
+            old(self).wf(),
+            old(self).heap_spec().word_in(file),
+            !M::CHECKED ==> old(self).holds(file) && old(self).heap_spec().rc_value(file) == 1,
+        ensures
+            final(self).wf(),
+            final(self).evv_spec() == old(self).evv_spec(),
+            final(self).yield_spec() == old(self).yield_spec(),
+            r is Ok || (r matches Err(Fault::Io { op: IoOp::Read, .. })) || (r matches Err(
+                Fault::NotUtf8(_),
+            )) || (r matches Err(Fault::Stopped(_))) || (r matches Err(Fault::Heap(_))),
+            (r matches Err(Fault::Heap(_))) ==> *final(self) == *old(self)
+                || final(self).heap_spec().kept_live(old(self).heap_spec()),
+            !M::CHECKED && (r matches Err(Fault::Heap(_))) ==> r == Err::<Word, Fault>(
+                Fault::Heap(HeapError::WrongKind),
+            ) && *final(self) == *old(self),
+            r matches Ok(t) ==> {
+                let h = final(self).heap_spec();
+                &&& h.kind_of(t) == Kind::Data
+                &&& h.tag_of(t) == TUPLE
+                &&& h.lin_of(t)
+                &&& h.count_of(t) == 2
+                &&& h.scanned_word(t, 0) == file
+                &&& final(self).is_string(h.scanned_word(t, 1))
+            },
+            old(self).held_ok() && old(self).holds(file) && old(self).heap_spec().rc_value(file)
+                == 1 ==> (r matches Err(Fault::Heap(e)) ==> *final(self) == *old(self) || chain_err(
+                Err::<(), HeapError>(e),
+            )),
+            old(self).held_ok() && old(self).holds(file) && old(self).heap_spec().rc_value(file)
+                == 1 && !(r matches Err(Fault::Heap(_))) ==> {
+                &&& final(self).held_ok()
+                &&& final(self).evolved_by(*old(self), |x: usize| -points(file, x), Set::empty())
+                &&& r matches Ok(t) ==> final(self).holds(t)
+            },
+    {
         let ghost s0 = *self;
         let ghost c = s0.held_ok() && s0.holds(file) && s0.heap.rc_value(file) == 1;
         if !file.is_ptr() {
@@ -338,7 +427,7 @@ impl<M: Mode> Ctx<M> {
             Ok(p) => p,
             Err(e) => return Err(Fault::Heap(e)),
         };
-        let text = match unsafe { read_text(p, &self.control) } {
+        let text = match unsafe { read_text(p, &self.control, line) } {
             Ok(text) => text,
             Err(e) => {
                 // 手放すと破棄処理が File を閉じる

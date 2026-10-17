@@ -59,7 +59,7 @@ pub(crate) struct File {
     /// `open` に渡されたままのパス。誤りの文言に使う。
     path: Box<str>,
     reader: Box<dyn BufRead + Send>,
-    /// まだ使っていない長さの見込み。1回目の `read_all` が取り出すので、2回目は余分に確保しない。
+    /// まだ使っていない長さの見込み。1回目の読みが取り出すので、その後の `read_all` は余分に確保しない。
     size: Option<u64>,
 }
 
@@ -84,15 +84,20 @@ pub(crate) fn host_open(host: &HostRef, path: &str) -> Result<File, (Box<str>, I
     }
 }
 
-/// `file` を終わりまで読み、UTF-8 の文字列にする。
+/// `file` を終わりまで (`line` なら次の `\n` まで、それを含めて) 読み、UTF-8 の文字列にする。
 ///
 /// # Safety
 /// `file` は生きている `File` を指し、読む間ほかに参照がない。呼ぶ側が `Heap::foreign_unique` で確かめる (T3)。
 #[verifier::external_body]
-pub(crate) unsafe fn read_text(file: *mut File, control: &Control) -> Result<String, ReadError> {
+pub(crate) unsafe fn read_text(file: *mut File, control: &Control, line: bool) -> Result<
+    String,
+    ReadError,
+> {
     let file = unsafe { &mut *file };
+    // 見込みはファイル全体の長さなので、1行の読みでは確保に使わない。読んだ後は残りの長さと合わないので捨てる
+    let size = file.size.take().filter(|_| !line);
     let mut reader = StopOnInterrupt { reader: &mut *file.reader, control };
-    match reader.read_bytes(file.size.take(), false) {
+    match reader.read_bytes(size, line) {
         Ok(bytes) => String::from_utf8(bytes).map_err(|_| ReadError::NotUtf8(file.path.clone())),
         Err(Failure::Io(reason)) => Err(ReadError::Io(file.path.clone(), reason)),
         Err(Failure::Stopped(stop)) => Err(ReadError::Stopped(stop)),

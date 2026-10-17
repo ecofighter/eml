@@ -19,8 +19,16 @@ fn check_with_prelude(extra: &str, text: &str) -> String {
 fn check_with_std_extras(prelude_extra: &str, fs_extra: &str, text: &str) -> String {
     let prelude = format!("{}\n{prelude_extra}", eml_hir::PRELUDE_SOURCE);
     let fs = format!("{}\n{fs_extra}", eml_hir::STD[1].1);
-    let checked =
-        eml_test_support::check_with_std(&[("Prelude.em", &prelude), ("Fs.em", &fs)], text);
+    // 本物の `Fs` は `String` を import し、`String` は `List` を import する
+    let checked = eml_test_support::check_with_std(
+        &[
+            ("Prelude.em", &prelude),
+            ("Fs.em", &fs),
+            eml_test_support::std_module("String.em"),
+            eml_test_support::std_module("List.em"),
+        ],
+        text,
+    );
     let files = checked.files();
     let mut out = String::new();
     for d in &checked.diagnostics {
