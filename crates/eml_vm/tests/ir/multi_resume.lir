@@ -1,6 +1,7 @@
+effect Prelude.IO { never io_failed(enum, obj) -> never }
 effect Choose { choose(unit) -> int }
 effect Ask { ask(unit) -> int }
-fn main(p.0: unit) -> unit {
+yields fn main(p.0: unit) -> unit {
   let w.4: tobj = prim evv_get()
   dup w.4
   let ev.5: obj = prim ev_new[Choose]((), w.4)
@@ -8,12 +9,28 @@ fn main(p.0: unit) -> unit {
   dup ev.5
   let w.7: tobj = prim evv_push(w.4, ev.5)
   let u.8: unit = prim evv_set(w.7)
-  let x.9: tobj poly = yields apply &main$handle1(())
-  let t.10: tobj = call prompt$(ev.5, &main$handle1$return, x.9)
-  let t.1: int = unbox t.10
-  decref t.10
+  let x.9: tobj poly = yields apply &main$handle1(()) prompt ev.5
+  let t.18: tobj = call prompt$(ev.5, &main$handle1$return, x.9)
+  let t.1: int = unbox t.18
+  decref t.18
+  let y.10: int = prim yielding()
+  switch y.10 { 0 -> b2, _ -> b1 }
+b1:
+  let k.11: tobj poly = prim yield_cont_take()
+  let k.12: tobj poly = closure compose$(k.11, &main$k0)
+  let u.13: unit = prim yield_cont_set(k.12)
+  return ()
+b2:
   let t.2: obj = extern "Prelude.Show Int.show"(t.1)
   let t.3: unit = extern Prelude.println(t.2)
+  let y.14: int = prim yielding()
+  switch y.14 { 0 -> b4, _ -> b3 }
+b3:
+  let k.15: tobj poly = prim yield_cont_take()
+  let k.16: tobj poly = closure compose$(k.15, &main$k1)
+  let u.17: unit = prim yield_cont_set(k.16)
+  return ()
+b4:
   return t.3
 }
 internal yields fn main$handle1(p.0: unit) -> tobj {
@@ -24,7 +41,7 @@ internal yields fn main$handle1(p.0: unit) -> tobj {
   dup ev.3
   let w.5: tobj = prim evv_push(w.2, ev.3)
   let u.6: unit = prim evv_set(w.5)
-  let x.7: tobj poly = yields apply &main$handle0(())
+  let x.7: tobj poly = yields apply &main$handle0(()) prompt ev.3
   tail call prompt$(ev.3, &main$handle0$return, x.7)
 }
 internal yields fn main$handle0(p.0: unit) -> tobj {
@@ -47,24 +64,45 @@ internal yields fn main$handle0$return(x.3: tobj, p.1: unit) -> tobj {
   let t.4: tobj = box t.2
   return t.4
 }
-internal fn main$handle1$choose(p.0: unit, k.1: tobj, p.2: unit) -> tobj {
-  let b.6: tobj = box 1
+internal yields fn main$handle1$choose(p.0: unit, k.1: tobj, p.2: unit) -> tobj {
+  let b.16: tobj = box 1
   dup k.1
-  let t.7: tobj = apply k.1(b.6, ())
-  let t.3: int = unbox t.7
-  decref t.7
-  let b.8: tobj = box 2
-  let t.9: tobj = apply k.1(b.8, ())
-  let t.4: int = unbox t.9
-  decref t.9
+  let t.17: tobj = yields apply k.1(b.16, ())
+  let t.3: int = unbox t.17
+  let y.6: int = prim yielding()
+  switch y.6 { 0 -> b2, _ -> b1 }
+b1:
+  decref t.17
+  let k.7: tobj poly = prim yield_cont_take()
+  let c.8: tobj = closure main$handle1$choose$k0(k.1)
+  let k.9: tobj poly = closure compose$(k.7, c.8)
+  let u.10: unit = prim yield_cont_set(k.9)
+  let b.18: tobj = box 0
+  return b.18
+b2:
+  let b.19: tobj = box 2
+  let t.20: tobj = yields apply k.1(b.19, ())
+  let t.4: int = unbox t.20
+  decref t.20
+  let y.11: int = prim yielding()
+  switch y.11 { 0 -> b4, _ -> b3 }
+b3:
+  let k.12: tobj poly = prim yield_cont_take()
+  let c.13: tobj = closure main$handle1$choose$k1$boxed(t.17)
+  let k.14: tobj poly = closure compose$(k.12, c.13)
+  let u.15: unit = prim yield_cont_set(k.14)
+  let b.21: tobj = box 0
+  return b.21
+b4:
+  decref t.17
   let t.5: int = extern Prelude.+(t.3, t.4)
-  let t.10: tobj = box t.5
-  return t.10
+  let t.22: tobj = box t.5
+  return t.22
 }
-internal fn main$handle1$return($r.2: tobj, p.1: unit) -> tobj {
+internal yields fn main$handle1$return($r.2: tobj, p.1: unit) -> tobj {
   return $r.2
 }
-fn entry$main() -> unit {
+yields fn entry$main() -> unit {
   tail call main(())
 }
 yields fn id$(x.0: tobj poly) -> tobj poly {
@@ -116,9 +154,75 @@ yields fn resume$(ev.0: obj, ret.1: tobj poly, k.2: tobj poly, v.3: tobj poly, s
   dup e.5
   let w.7: tobj = prim evv_push(w.6, e.5)
   let u.8: unit = prim evv_set(w.7)
-  let x.9: tobj poly = yields apply k.2(v.3)
+  let x.9: tobj poly = yields apply k.2(v.3) prompt e.5
   tail call prompt$(e.5, ret.1, x.9)
 }
 yields fn rewind$(ev.0: obj, ret.1: tobj poly, s.2: tobj poly, k.3: tobj poly, v.4: tobj poly) -> tobj poly {
   tail call resume$(ev.0, ret.1, k.3, v.4, s.2)
+}
+internal yields fn main$k0(t.8: tobj) -> unit {
+  let t.0: int = unbox t.8
+  decref t.8
+  let t.1: obj = extern "Prelude.Show Int.show"(t.0)
+  let t.2: unit = extern Prelude.println(t.1)
+  let y.3: int = prim yielding()
+  switch y.3 { 0 -> b2, _ -> b1 }
+b1:
+  let k.4: tobj poly = prim yield_cont_take()
+  let k.5: tobj poly = closure compose$(k.4, &main$k1)
+  let u.6: unit = prim yield_cont_set(k.5)
+  return ()
+b2:
+  tail call main$k1(t.2)
+}
+internal yields fn main$k1(t.0: unit) -> unit {
+  return t.0
+}
+yields fn compose$(k.0: tobj poly, c.1: tobj poly, x.2: tobj poly) -> tobj poly {
+  let r.3: tobj poly = yields apply k.0(x.2)
+  let y.4: int = prim yielding()
+  switch y.4 { 0 -> b2, _ -> b1 }
+b1:
+  let u.5: unit = drop r.3
+  let k.6: tobj poly = prim yield_cont_take()
+  let k.7: tobj poly = closure compose$(k.6, c.1)
+  let u.8: unit = prim yield_cont_set(k.7)
+  let d.9: obj poly = prim dummy()
+  return d.9
+b2:
+  tail yields apply c.1(r.3)
+}
+internal yields fn main$handle1$choose$k0(k.0: tobj, t.9: tobj) -> tobj {
+  let t.1: int = unbox t.9
+  let b.10: tobj = box 2
+  let t.11: tobj = yields apply k.0(b.10, ())
+  let t.2: int = unbox t.11
+  decref t.11
+  let y.3: int = prim yielding()
+  switch y.3 { 0 -> b2, _ -> b1 }
+b1:
+  let k.4: tobj poly = prim yield_cont_take()
+  let c.5: tobj = closure main$handle1$choose$k1$boxed(t.9)
+  let k.6: tobj poly = closure compose$(k.4, c.5)
+  let u.7: unit = prim yield_cont_set(k.6)
+  let b.12: tobj = box 0
+  return b.12
+b2:
+  decref t.9
+  let r.8: int = call main$handle1$choose$k1(t.1, t.2)
+  let r.13: tobj = box r.8
+  return r.13
+}
+internal yields fn main$handle1$choose$k1(t.0: int, t.1: int) -> int {
+  let t.2: int = extern Prelude.+(t.0, t.1)
+  return t.2
+}
+internal yields fn main$handle1$choose$k1$boxed(t.0: tobj, t.1: tobj) -> tobj {
+  let t.3: int = unbox t.0
+  decref t.0
+  let t.4: int = unbox t.1
+  decref t.1
+  let t.2: int = call main$handle1$choose$k1(t.3, t.4)
+  let t.5: tobj = box t.2
+  return t.5
 }

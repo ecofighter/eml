@@ -1,6 +1,7 @@
 //! 関数ごとの命令の生成 (docs/spec/vm.md の「命令ごとの実行」)。定数の atom は、命令の前に一時のスロットへ読み込む。
 
 use eml_extern::Extern;
+use eml_lir::unwind::UnwindPoint;
 use eml_lir::{
     Atom, BlockId, Call, Ctor, FnIdx, LayoutCtor, LirFn, Loc, Program, Repr, Rhs, Shape, Stmt,
     Term, VarId,
@@ -10,13 +11,14 @@ use eml_rt::{MaskItem, Mode};
 use super::constants::Constants;
 use super::slots::{Slots, allocate};
 use super::{Links, Out};
-use crate::code::{CompileError, FnEntry};
+use crate::code::{CompileError, FnEntry, Unwind};
 use crate::op::{KEEP, NONE, Op, Pc, RAW, Slot};
 
 pub(crate) fn function<M: Mode>(
     program: &Program,
     index: FnIdx,
     function: &LirFn,
+    points: &[UnwindPoint],
     links: &Links,
     constants: &mut Constants<'_, M>,
     out: &mut Out,
@@ -39,11 +41,16 @@ pub(crate) fn function<M: Mode>(
         self_tail_patches: Vec::new(),
         used: used_vars(function),
         elided: elided_decrefs(function),
+        points: points.iter().peekable(),
     };
     for block in 0..function.blocks.len() {
         emitter.block_pcs[block] = emitter.out.pc();
         emitter.block(BlockId(block as u32));
     }
+    debug_assert!(
+        emitter.points.next().is_none(),
+        "every unwind point is a statement of the function"
+    );
     emitter.patch();
     for &at in &emitter.self_tail_patches {
         emitter.out.operands[at] = start;
@@ -146,6 +153,8 @@ pub(crate) struct Emitter<'a, 'c, M: Mode> {
     pub(crate) used: Vec<bool>,
     /// ブロックごとの、`decref` を出さない scrutinee (`elided_decrefs`)。
     pub(crate) elided: Vec<Option<VarId>>,
+    /// まだ書いていない巻き戻しの地点。ブロックの順、文の順に並ぶ。
+    pub(crate) points: std::iter::Peekable<std::slice::Iter<'a, UnwindPoint>>,
 }
 
 impl<'a, M: Mode> Emitter<'a, '_, M> {
@@ -209,9 +218,12 @@ impl<'a, M: Mode> Emitter<'a, '_, M> {
 
     fn block(&mut self, id: BlockId) {
         let block = self.function.block(id);
-        for stmt in &block.stmts {
+        for (i, stmt) in block.stmts.iter().enumerate() {
             self.temps = 0;
             self.stmt(id, stmt);
+            if let Some(point) = self.points.next_if(|p| (p.block, p.stmt) == (id, i)) {
+                self.unwind(point);
+            }
         }
         self.temps = 0;
         self.term(id, &block.term);
@@ -272,6 +284,21 @@ impl<'a, M: Mode> Emitter<'a, '_, M> {
                 self.out.push(Op::Release { src, at });
             }
         }
+    }
+
+    /// 巻き戻しの表の行を足す。地点の命令は文の最後に書くので、今の位置がその命令の次の位置である
+    /// (docs/superpowers/specs/2026-10-17-s13c-unwinding-design.md の「巻き戻しの表」)。
+    fn unwind(&mut self, point: &UnwindPoint) {
+        let entry = Unwind {
+            slots: point
+                .owned
+                .iter()
+                .map(|&(var, count)| (self.slot(var), count))
+                .collect(),
+            landing: point.landing.map(|var| self.slot(var)),
+        };
+        let pc = self.out.pc();
+        self.out.unwinds.push((pc, entry));
     }
 
     /// コンストラクタの配置。命令ごとに1回引き、形 (`LayoutCtor::shape`) とともに使い回す。

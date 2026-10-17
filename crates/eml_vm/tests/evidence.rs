@@ -61,7 +61,8 @@ internal yields clause Counter.put fn put(e.0: obj, n.1: tobj) -> unit {{
 }
 
 /// yield_to で始めた yield を、yield_status と yield_finish で受け取る。yield_status は、yield の前と後は 0、
-/// 宛先の evidence では 1 (中断なら 2)、ほかの evidence では 3 である。
+/// 宛先の evidence では 1 (中断なら 2)、ほかの evidence では 3 である。`yield_abort` は戻らずに巻き戻すので、中断は
+/// 呼んだ関数の中で始め、着地の印の付いた `apply` から状態を読む。
 #[test]
 fn a_yield_reaches_the_status_of_its_target() {
     let text = format!(
@@ -87,7 +88,8 @@ fn main() -> unit {{
   let c.13: tobj = prim yield_finish()
   let f.14: int = prim yield_status(e.1)
   let z.15: int = prim yielding()
-  let u.16: unit = prim yield_abort(e.1, (), &id)
+  let u.16: tobj = apply &abort(e.1) prompt e.1
+  decref u.16
   let g.17: int = prim yield_status(e.1)
   decref e.1
   let k.18: tobj = prim yield_cont_take()
@@ -102,6 +104,10 @@ fn main() -> unit {{
   let p.25: unit = call show(z.15)
   let p.26: unit = call show(g.17)
   tail call say(c.13)
+}}
+fn abort(e.0: tobj) -> tobj {{
+  let u.1: unit = prim yield_abort(e.0, (), &id)
+  return u.1
 }}
 fn say(s.0: obj) -> unit {{
   let u.1: unit = extern Prelude.println(s.0)

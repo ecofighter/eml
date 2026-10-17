@@ -7,7 +7,7 @@ use eml_lir::Loc;
 use eml_rt::{Control, Frozen, HeapError, MaskItem, Mode, Word};
 
 use crate::error::{RuntimeError, SourceLocation};
-use crate::op::{BUILTINS, Op, Pc};
+use crate::op::{BUILTINS, Op, Pc, Slot};
 use crate::vm::{Failure, Task};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -20,6 +20,16 @@ pub struct FnEntry {
     pub frame_size: u16,
     /// `ret` が RC の Repr か。入口の関数として呼んだとき、`Finish` が結果を手放すかを決める。
     pub ret_rc: bool,
+}
+
+/// 巻き戻しの地点の表の1行 (docs/superpowers/specs/2026-10-17-s13c-unwinding-design.md の「巻き戻しの表」)。
+/// 地点の命令の次の位置で引く。呼び出しの地点では、それがフレームの見出しの戻り先と一致するためである。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct Unwind {
+    /// 地点の命令の後で所有している RC の対象のスロットと、その参照の数。命令が束縛する変数は含めない。
+    pub(crate) slots: Vec<(Slot, u32)>,
+    /// `apply` の着地の印の evidence のスロット。
+    pub(crate) landing: Option<Slot>,
 }
 
 /// 実行中は読むだけの表。後の並列 VM の worker がそのまま共有できるように、`Sync` に保つ
@@ -36,6 +46,8 @@ pub struct CodeBase<M: Mode> {
     pub(crate) region: Option<Arc<Frozen<M>>>,
     /// 命令の位置の昇順。
     pub(crate) locations: Vec<(Pc, Loc)>,
+    /// 巻き戻しの表。地点の命令の次の位置の昇順。
+    pub(crate) unwinds: Vec<(Pc, Unwind)>,
     pub(crate) files: Vec<String>,
     /// 追記で番号を引き直す表。
     pub(crate) index: Index,
@@ -89,6 +101,12 @@ impl<M: Mode> CodeBase<M> {
             .binary_search_by_key(&pc, |&(at, _)| at)
             .ok()?;
         Some(self.locations[index].1)
+    }
+
+    /// 地点の命令の次の位置 `pc` の巻き戻しの表の行。
+    pub(crate) fn unwind_at(&self, pc: Pc) -> Option<&Unwind> {
+        let index = self.unwinds.binary_search_by_key(&pc, |&(at, _)| at).ok()?;
+        Some(&self.unwinds[index].1)
     }
 
     /// 命令の位置の関数の名前。どの関数にも属さない位置には、タスクの入口の関数の名前を返す。

@@ -65,7 +65,7 @@ enum Level {
 
 /// Perceus の後の関数を所有の段で確かめながら、巻き戻しの地点ごとの所有を書き留める (`unwind::points_all`)。
 /// 表はプログラムに1回だけ作る。
-pub(crate) fn unwind_points(program: &Program) -> Result<Vec<Vec<UnwindPoint>>, VerifyError> {
+pub(crate) fn unwind_points(program: &Program) -> Vec<Result<Vec<UnwindPoint>, VerifyError>> {
     with_tables(program, |tables| {
         program
             .functions

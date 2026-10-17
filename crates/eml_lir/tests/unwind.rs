@@ -15,7 +15,9 @@ fn points_of(text: &str, name: &str) -> Vec<UnwindPoint> {
         .iter()
         .position(|function| function.name == name)
         .unwrap_or_else(|| panic!("no `{name}`"));
-    points_all(&program).swap_remove(index)
+    points_all(&program)
+        .swap_remove(index)
+        .unwrap_or_else(|error| panic!("{error}"))
 }
 
 fn point(block: u32, stmt: usize, owned: &[(u32, u32)], landing: Option<u32>) -> UnwindPoint {
@@ -153,12 +155,14 @@ fn f(c.0: tobj, e.1: obj, k.2: obj) -> obj {
     assert_eq!(points_of(text, "f"), [point(0, 0, &[(2, 1)], None)]);
 }
 
+/// 所有の段の verifier が拒む関数は、地点の代わりにその誤りを返す。VM は、その関数を表のない関数として扱う。
 #[test]
-#[should_panic(
-    expected = "unwind points need verified LIR: `a.0` is still owned at the end of the function in `f`"
-)]
-fn unverified_lir_panics() {
+fn unverified_lir_has_no_points() {
     let program = parse("fn f(a.0: obj) -> unit {\n  return ()\n}\n")
         .unwrap_or_else(|error| panic!("{error}"));
-    points_all(&program);
+    let error = points_all(&program).swap_remove(0).unwrap_err();
+    assert_eq!(
+        error.to_string(),
+        "`a.0` is still owned at the end of the function in `f`"
+    );
 }

@@ -303,7 +303,7 @@ b1:
          9  dup s2
         10  dup s3
         11  decref s0
-        12  extern s0 = Prelude.println(s2)
+        12  extern s0 = Prelude.println(s2) unwind [s3]
         13  extern s0 = Prelude.println(s3)
         14  ret s0
     ");
@@ -478,5 +478,39 @@ b3:
         13  decref s0
         14  load_raw s1, 3
         15  ret s1
+    ");
+}
+
+/// 巻き戻しの地点の命令の後に、表の行を書く。行は命令の後で所有しているスロット (2つ以上の参照は `*n`) と、着地の
+/// 印の evidence のスロットである。手放すものも着地もない行は書かない
+/// (docs/superpowers/specs/2026-10-17-s13c-unwinding-design.md の「巻き戻しの表」)。
+#[test]
+fn an_unwind_point_shows_its_owned_slots_and_landing() {
+    insta::assert_snapshot!(disasm("\
+fn main() -> unit {
+  return ()
+}
+yields fn land(b.0: tobj, ev.1: obj, s.2: obj) -> unit {
+  dup s.2
+  let x.3: tobj = yields apply b.0(()) prompt ev.1
+  decref x.3
+  decref ev.1
+  let t.4: obj = extern \"Prelude.++\"(s.2, s.2)
+  let u.5: unit = extern Prelude.println(t.4)
+  return u.5
+}
+"), @"
+    fn main (arity 0, frame 1)
+         2  load_imm s0, 0
+         3  ret s0
+    fn land (arity 3, frame 4)
+         4  dup s2
+         5  load_imm s3, 0
+         6  apply s0 = s0(s3) unwind [s1, s2*2] land s1
+         7  decref s0
+         8  decref s1
+         9  extern s0 = Prelude.++(s2, s2)
+        10  extern s0 = Prelude.println(s0)
+        11  ret s0
     ");
 }

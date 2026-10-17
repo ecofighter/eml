@@ -2,7 +2,7 @@
 //! の `unsafe fn` を呼ぶので、核の操作の前提を守っていることを確かめる。メモリの Host だけを使い、ファイルを開かない。
 //! 確かめる道: 直接の呼び出しと戻り、`con` と `switch` と `release`、部分適用と余った引数、基本操作 (evidence を作って
 //! 引く)、ヒープの文字列の extern、2つのプログラムを1つの `Machine` に続けて読み込み、2つ目の塊を付け替えること、
-//! 文字列を返す入口の結果を写すこと、両方のモード。
+//! 文字列を返す入口の結果を写すこと、`exit` の巻き戻し、両方のモード。
 
 use eml_vm::{AnyMachine, RunConfig, capture_host, execute};
 
@@ -209,5 +209,48 @@ fn shown() -> obj {
         let (_, shown) = machine.run_shown(loaded.entry, 10).unwrap();
         assert_eq!(shown.as_deref(), Some("é7"));
         machine.close().unwrap_or_else(|error| panic!("{error}"));
+    }
+}
+
+/// `exit` は、文字列を持つフレームと、余った引数を預けた `ApplyRest` の枠を巻き戻して `Finish` に届く。どの文字列も
+/// 巻き戻しで1回ずつ手放す (docs/superpowers/specs/2026-10-17-s13c-unwinding-design.md の「VM の巻き戻し」)。
+#[test]
+fn exit_unwinds_frames_holding_strings() {
+    let text = "\
+fn main() -> unit {
+  let a.0: obj = const \"main\"
+  let b.1: obj = const \"!\"
+  dup b.1
+  let s.2: obj = extern \"Prelude.++\"(a.0, b.1)
+  let c.3: obj = const \"rest\"
+  let d.4: obj = extern \"Prelude.++\"(c.3, b.1)
+  let n.5: tobj = box 5
+  let r.6: tobj = apply &mid(n.5, d.4)
+  decref r.6
+  let u.7: unit = extern Prelude.println(s.2)
+  return u.7
+}
+fn mid(n.0: tobj) -> tobj {
+  let m.1: int = unbox n.0
+  decref n.0
+  let s.2: obj = extern \"Prelude.Show Int.show\"(m.1)
+  let z.3: unit = call bottom(m.1)
+  return s.2
+}
+fn bottom(n.0: int) -> unit {
+  let z.1: unit = extern Prelude.exit(n.0)
+  return z.1
+}
+";
+    let program = eml_lir::parse(text).unwrap_or_else(|error| panic!("{error}"));
+    eml_lir::verify(&program).unwrap_or_else(|error| panic!("{error}"));
+    for debug_heap in [true, false] {
+        let (host, out) = capture_host(Default::default());
+        let config = RunConfig::default().with_debug_heap(debug_heap);
+        let finished = execute(&program, &config, host).unwrap_or_else(|error| panic!("{error}"));
+        assert_eq!((finished.exit, out.contents()), (Some(5), String::new()));
+        // `bottom`、`mid`、`ApplyRest` の枠、`main` の4つ。数は検査モードだけで数える
+        let unwound = if debug_heap { 4 } else { 0 };
+        assert_eq!(finished.stats.unwound_frames, unwound);
     }
 }

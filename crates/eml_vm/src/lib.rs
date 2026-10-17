@@ -32,6 +32,8 @@ pub struct RunStats {
     pub evidence_steps: u64,
     pub yields: u64,
     pub yield_frames: u64,
+    /// 中断の巻き戻しで外したフレームの数。`ApplyRest` の枠も数える。
+    pub unwound_frames: u64,
     pub string_bytes_copied: u64,
     pub rc_increments: u64,
     pub rc_decrements: u64,
@@ -52,6 +54,7 @@ pub struct Finished {
 /// VM だけが知る仕事の回数。検査モードだけで数える。
 #[derive(Debug, Default)]
 pub(crate) struct RunCounts {
+    pub(crate) unwound_frames: u64,
     pub(crate) boxes: u64,
     pub(crate) unboxes: u64,
 }
@@ -309,6 +312,7 @@ impl<M: Mode> Machine<M> {
             evidence_steps: c.evidence_steps,
             yields: c.yields,
             yield_frames: c.yield_frames,
+            unwound_frames: counts.unwound_frames,
             string_bytes_copied: c.string_bytes_copied,
             rc_increments: h.rc_increments,
             rc_decrements: h.rc_decrements,

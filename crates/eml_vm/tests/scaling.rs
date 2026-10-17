@@ -256,6 +256,35 @@ main () =
     );
 }
 
+/// `fail` による中断は継続を作らず、タスクのスタックを巻き戻す。仕事は外したフレームの数で、深さに比例する
+/// (docs/superpowers/specs/2026-10-17-s13c-unwinding-design.md の「VM の巻き戻し」)。再帰は末尾でないので、段ごとに
+/// フレームが1つ残る。
+#[test]
+fn unwinding_work_is_linear_in_depth() {
+    let at = |depth: u64| {
+        let text = format!(
+            "import Fail (Fail(..))
+
+down : Int -> <Fail String> Int
+down n = if n == 0 then Fail.fail \"bottom\" else 1 + down (n - 1)
+
+main : Unit -> <IO> Unit
+main () = println (show (Fail.to_result (fn () -> down {depth})))
+"
+        );
+        stats(&text, "Err \"bottom\"\n")
+    };
+    let (shallow, deep) = (at(1000), at(2000));
+    for stats in [shallow, deep] {
+        assert_eq!((stats.yields, stats.yield_frames), (1, 0), "{stats:?}");
+    }
+    assert_eq!(
+        deep.unwound_frames - shallow.unwound_frames,
+        1000,
+        "{shallow:?} {deep:?}"
+    );
+}
+
 /// リストの関数と、本体が `traverse` の `main` を並べたプログラム。`traverse` の中の `{n}` を n に置き換える。
 fn list_traversal(n: u64, traverse: &str) -> String {
     format!(

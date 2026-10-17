@@ -5,7 +5,7 @@
 
 use eml_extern::Purity;
 
-use crate::{BlockId, Prim, Program, Rhs, Stmt, VarId, verify};
+use crate::{BlockId, Prim, Program, Rhs, Stmt, VarId, VerifyError, verify};
 
 /// 巻き戻しの地点。中断がこの命令の中を通ると、フレームは `owned` の参照を手放すか、`landing` に着地する。
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -21,12 +21,12 @@ pub struct UnwindPoint {
 }
 
 /// 関数ごとの巻き戻しの地点。`FnIdx` の番号で引き、各関数の地点はブロックの順、文の順に並ぶ。地点は末尾でない
-/// 呼び出し、`Effectful` の extern、`prim yield_abort` である。入力は `verify` を通る Perceus の後の LIR でなければ
-/// ならず、通らなければ panic する。VM はリリースのビルドでも呼ぶので、debug のビルドだけの検査には頼らない。
-/// プログラム全体を1回で求めるのは、検査の表 (関数ごとの要約) を作り直さないためである。
-pub fn points_all(program: &Program) -> Vec<Vec<UnwindPoint>> {
+/// 呼び出し、`Effectful` の extern、`prim yield_abort` である。所有の段の verifier が拒む関数は、地点の代わりにその
+/// 誤りを返す。VM は verifier を通さない IR も読み込むので (VM 自身の見張りを確かめるテスト)、panic せず、拒まれた
+/// 関数を表のない関数として扱えるようにする。プログラム全体を1回で求めるのは、検査の表 (関数ごとの要約) を作り直さない
+/// ためである。
+pub fn points_all(program: &Program) -> Vec<Result<Vec<UnwindPoint>, VerifyError>> {
     verify::unwind_points(program)
-        .unwrap_or_else(|error| panic!("unwind points need verified LIR: {error}"))
 }
 
 /// 文が巻き戻しの地点なら、文が束縛する変数と着地の印を返す。

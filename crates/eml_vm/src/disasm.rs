@@ -7,7 +7,7 @@ use eml_extern::Extern;
 use eml_lir::Loc;
 use eml_rt::{MaskItem, Mode};
 
-use crate::code::{CodeBase, FnEntry};
+use crate::code::{CodeBase, FnEntry, Unwind};
 use crate::op::{KEEP, NONE, Op, Pc, RAW};
 
 pub fn disassemble<M: Mode>(code: &CodeBase<M>) -> String {
@@ -33,6 +33,7 @@ pub(crate) struct View<'a> {
     pub(crate) operands: &'a [u32],
     pub(crate) mask_lists: &'a [MaskItem],
     pub(crate) locations: &'a [(Pc, Loc)],
+    pub(crate) unwinds: &'a [(Pc, Unwind)],
     pub(crate) functions: &'a [FnEntry],
     pub(crate) files: &'a [String],
 }
@@ -77,6 +78,7 @@ impl<'a> View<'a> {
             operands: &code.operands,
             mask_lists: &code.mask_lists,
             locations: &code.locations,
+            unwinds: &code.unwinds,
             functions: &code.functions,
             files: &code.files,
         }
@@ -94,6 +96,15 @@ impl<'a> View<'a> {
             .binary_search_by_key(&pc, |&(at, _)| at)
             .ok()?;
         Some(self.locations[index].1)
+    }
+
+    /// 命令 `pc` の後の巻き戻しの表の行。表は命令の次の位置で引く。
+    fn unwind(&self, pc: Pc) -> Option<&Unwind> {
+        let index = self
+            .unwinds
+            .binary_search_by_key(&(pc + 1), |&(at, _)| at)
+            .ok()?;
+        Some(&self.unwinds[index].1)
     }
 
     /// タグの switch の飛び先の表を、case のあるタグだけ並べる。
@@ -288,6 +299,23 @@ impl<'a> View<'a> {
                 args(at, 2)
             ),
         };
+        // 手放すものも着地もない行は書かない。どの命令に行があるかは命令の種類で決まるので、書かなくても失うものはない
+        if let Some(entry) = self.unwind(pc)
+            && (!entry.slots.is_empty() || entry.landing.is_some())
+        {
+            let slots: Vec<String> = entry
+                .slots
+                .iter()
+                .map(|&(slot, count)| match count {
+                    1 => format!("s{slot}"),
+                    n => format!("s{slot}*{n}"),
+                })
+                .collect();
+            write!(text, " unwind [{}]", slots.join(", ")).unwrap();
+            if let Some(slot) = entry.landing {
+                write!(text, " land s{slot}").unwrap();
+            }
+        }
         if let Some(loc) = self.location(pc) {
             write!(
                 text,

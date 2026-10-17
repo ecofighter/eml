@@ -11,7 +11,7 @@ use crate::apply;
 use crate::code::CodeBase;
 use crate::data;
 use crate::error::VmFault;
-use crate::op::{FINISH, Op, Pc, Slot};
+use crate::op::{APPLY_REST, FINISH, Op, Pc, Slot};
 
 /// 1つのタスクの実行の状態。
 pub struct Task {
@@ -323,7 +323,7 @@ fn step<M: Mode>(
             let n = data::unbox(ctx, task.get(src), counts)?;
             task.set_raw(dst, n);
         }
-        Op::Extern { dst, at } => extern_call(code, ctx, task, dst, at)?,
+        Op::Extern { dst, at } => extern_call(code, ctx, task, counts, dst, at)?,
         // 基本操作 (docs/spec/lir.md の「基本操作」) は `Ctx` の同じ名前のメソッドを呼ぶ。引数の語は、LIR の所有の規則に
         // より VM が持つ参照か借りた語で、基本操作の契約 (docs/spec/object-model.md の「基本操作の契約」) のとおりに
         // 渡す。借用の引数は `Ctx` が手放さない。VM は基本操作の合間に `Ctx` の持つ語に触れない
@@ -399,7 +399,7 @@ fn step<M: Mode>(
             unsafe { ctx.yield_to(ev, clause, k) }?;
             task.set(dst, Word::UNIT);
         }
-        Op::YieldAbort { dst, at } => {
+        Op::YieldAbort { dst: _, at } => {
             let o = ops(at);
             let (ev, clause, k) = (
                 task.get(o[0] as Slot),
@@ -407,7 +407,7 @@ fn step<M: Mode>(
                 task.get(o[2] as Slot),
             );
             unsafe { ctx.yield_abort(ev, clause, k) }?;
-            task.set(dst, Word::UNIT);
+            unwind(code, ctx, task, counts, ev)?;
         }
         Op::YieldContTake { dst } => {
             let w = ctx.yield_cont_take()?;
@@ -479,10 +479,66 @@ fn call<M: Mode>(code: &CodeBase<M>, task: &mut Task, dst: Slot, at: u32) {
     task.pc = entry.start;
 }
 
+/// 中断を始めた命令の後で、タスクのスタックを巻き戻す (docs/superpowers/specs/2026-10-17-s13c-unwinding-design.md
+/// の「VM の巻き戻し」)。`task.pc` は中断を始めた命令の次の位置で、今のフレームの表を引く位置である。着地の印の
+/// evidence が `target` と同じ語のフレームに着いたら、呼び出しの結果にダミーを書いてそこから続ける。それまでの
+/// フレームは、表のスロットを手放して外す。巻き戻しの間は物体を作らず、`target` は着地するフレームが所有し続けるので、
+/// 解放した物体の番地が `target` と取り違えられることはない。安全点を置かないのは、仕事が外すフレームの数で終わるため
+/// である。
+fn unwind<M: Mode>(
+    code: &CodeBase<M>,
+    ctx: &mut Ctx<M>,
+    task: &mut Task,
+    counts: &mut RunCounts,
+    target: Word,
+) -> Result<(), VmFault> {
+    // 最後に外したフレームの見出しにある、呼び出し元の結果のスロット
+    let mut dst = None;
+    loop {
+        match task.pc {
+            FINISH if task.exit.is_some() => return Ok(()),
+            FINISH => return Err(VmFault::Internal("an abort reached the bottom of the task")),
+            APPLY_REST => {
+                // 余った引数は、まだ渡していないこの枠の参照である
+                let n = task.get(1).bits();
+                for i in 0..n {
+                    unsafe { ctx.heap_mut().decref(task.get((2 + i) as Slot)) }?;
+                }
+            }
+            pc => {
+                let entry = code
+                    .unwind_at(pc)
+                    .ok_or(VmFault::Internal("a frame stops outside an unwind point"))?;
+                if let (Some(landing), Some(dst)) = (entry.landing, dst)
+                    && task.get(landing) == target
+                {
+                    task.set(dst, ctx.heap().dummy());
+                    return Ok(());
+                }
+                // 表のスロットは、LIR の所有の規則によりこのフレームが持つ参照である。`Lin` の物体も手放してよく、
+                // `File` はここで閉じる
+                for &(slot, count) in &entry.slots {
+                    for _ in 0..count {
+                        unsafe { ctx.heap_mut().decref(task.get(slot)) }?;
+                    }
+                }
+            }
+        }
+        let (ret, slot, size) = read_header(task.stack[task.base - 2]);
+        task.base = task.stack[task.base - 1].bits();
+        task.frame_size = size;
+        task.pc = ret;
+        dst = Some(slot);
+        if M::CHECKED {
+            counts.unwound_frames += 1;
+        }
+    }
+}
+
 /// 入口の関数の結果か、`exit` の中断を手放す (docs/spec/vm.md の「誤り、止めること、終わり」)。
 fn finish<M: Mode>(code: &CodeBase<M>, ctx: &mut Ctx<M>, task: &Task) -> Result<(), VmFault> {
     if task.exit.is_some() {
-        // 中断の κ を手放すと、途中のフレームが持っていた値が解放の連鎖で後始末される。入口の結果はダミーなので
+        // 途中のフレームは巻き戻しで片付けてある。yield の記録に残った κ を手放す。入口の結果はダミーなので
         // 手放さない。中断の途中の `evv` には意味がないので、空に戻す (docs/spec/vm.md の「IO の失敗と `exit`」)
         let k = ctx.yield_cont_take()?;
         unsafe {
@@ -507,10 +563,11 @@ fn extern_call<M: Mode>(
     code: &CodeBase<M>,
     ctx: &mut Ctx<M>,
     task: &mut Task,
+    counts: &mut RunCounts,
     dst: Slot,
     at: u32,
 ) -> Result<(), VmFault> {
-    match run_extern(code, ctx, task, dst, at) {
+    match run_extern(code, ctx, task, counts, dst, at) {
         Err(VmFault::Extern(fault)) => {
             let ext = Extern::ALL[code.operands[at as usize] as usize];
             match fault.io_error_kind() {
@@ -525,9 +582,10 @@ fn extern_call<M: Mode>(
 }
 
 /// IO の失敗を、実行の時点で最も近い `try_io` に届ける。`try_io` がなければ、今までどおり実行時エラーにする。
-/// `io_failed` の節の入口は `never` の節の入口なので、中断を始めてダミーを `dst` に返し、次の yield の確認が遅い道へ
-/// 進む。`dst` の Repr が `int` などでも、そのダミーは遅い道の `drop` と `decref` にしか届かない
-/// (docs/spec/vm.md の「IO の失敗と `exit`」)。失敗した extern は引数をすでに消費している。
+/// `io_failed` の節の入口は `never` の節の入口なので、`yield_abort` で巻き戻しを始めて戻らない。extern の命令の
+/// フレームは入口の呼び出し元になり、extern の地点の表で片付く。入口が戻らないので、安全点も置かない
+/// (docs/superpowers/specs/2026-10-17-s13c-unwinding-design.md の「VM の巻き戻し」)。失敗した extern は引数を
+/// すでに消費している。
 fn io_failed<M: Mode>(
     code: &CodeBase<M>,
     ctx: &mut Ctx<M>,
@@ -556,9 +614,7 @@ fn io_failed<M: Mode>(
         clause,
         apply::Target::Frame { ret, dst },
         true,
-    )?;
-    ctx.poll(task.depth())?;
-    Ok(())
+    )
 }
 
 /// 行の番号の `match` で `Ctx` のメソッドを呼ぶ (docs/spec/object-model.md の「extern」)。
@@ -566,6 +622,7 @@ fn run_extern<M: Mode>(
     code: &CodeBase<M>,
     ctx: &mut Ctx<M>,
     task: &mut Task,
+    counts: &mut RunCounts,
     dst: Slot,
     at: u32,
 ) -> Result<(), VmFault> {
@@ -664,8 +721,9 @@ fn run_extern<M: Mode>(
             Extern::Exit => {
                 task.exit = Some(task.raw(arg(0)));
                 ctx.exit_abort()?;
+                // 宛先は不死のダミーなので、どの着地の印とも合わずに `Finish` まで巻き戻す
                 let dummy = ctx.heap().dummy();
-                task.set(dst, dummy);
+                unwind(code, ctx, task, counts, dummy)?;
             }
             Extern::IntNeg
             | Extern::IntAdd
