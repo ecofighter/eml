@@ -1043,14 +1043,15 @@ fn a_masked_call_in_a_non_yielding_function_has_no_slow_path() {
 }
 
 #[test]
-fn continuations_of_many_io_externs_stay_linear_in_size() {
-    // 継続の関数の大きさは元のコードの2倍ほどに収まる (docs/spec/core-ir.md の「継続の関数」)。`println` 1つにつき、
-    // `main` は呼び出しと確認と遅い道で6個ほど、継続の関数は引数を足して8個ほどの変数を持つので、合わせて14N 個ほど
-    // になる。継続の関数が元の関数の変数の表を丸ごと写すと、N^2 個ほどになる
+fn continuations_of_many_yield_points_stay_linear_in_size() {
+    // 継続の関数の大きさは元のコードの2倍ほどに収まる (docs/spec/core-ir.md の「継続の関数」)。`ask` 1つにつき、`f` は
+    // 呼び出しと確認と遅い道で7個、継続の関数 `f$kN` は引数を足して9個、boxing が足す `f$kN$boxed` は4個の変数を
+    // 持つ。N = 2000 で測ると合わせて 40069 個 (20N 個ほど) になる。継続の関数が元の関数の変数の表を丸ごと写すと、
+    // N^2 個ほどになる
     const COUNT: usize = 2000;
     let text = format!(
-        "main : Unit -> <IO> Unit\nmain () =\n{}",
-        "  println \"x\"\n".repeat(COUNT)
+        "{ASK}f : Unit -> <Ask> Int\nf () =\n{}  0\n\nmain : Unit -> <IO> Unit\nmain () =\n  let r = handle f () with\n            | ctl ask () k -> k 1\n  println (show r)",
+        "  let _ = ask ()\n".repeat(COUNT)
     );
     let program = eml_test_support::lir(&text);
     let vars: usize = program
@@ -1058,7 +1059,7 @@ fn continuations_of_many_io_externs_stay_linear_in_size() {
         .iter()
         .map(|function| function.vars.len())
         .sum();
-    assert!(vars <= 16 * COUNT, "{vars} variables for {COUNT} calls");
+    assert!(vars <= 24 * COUNT, "{vars} variables for {COUNT} calls");
 }
 
 #[test]
