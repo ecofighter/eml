@@ -22,7 +22,7 @@ pub struct FnEntry {
     pub ret_rc: bool,
 }
 
-/// 巻き戻しの地点の表の1行 (docs/superpowers/specs/2026-10-17-s13c-unwinding-design.md の「巻き戻しの表」)。
+/// 巻き戻しの地点の表の1行 (docs/spec/vm.md の「巻き戻しの表」)。
 /// 地点の命令の次の位置で引く。呼び出しの地点では、それがフレームの見出しの戻り先と一致するためである。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct Unwind {

@@ -389,7 +389,7 @@ fn prompt_drops_x_on_its_yield_paths_and_ret_on_abort() {
         );
     }
     // 中断は κ を持たないので、中断の道が捨てるのは `ret` と `x` だけである
-    // (docs/superpowers/specs/2026-10-17-s13c-unwinding-design.md の「`eml_rt` と EP の変更」)
+    // (docs/spec/core-ir.md の「handle と `prompt$`」)
     assert_eq!(
         drops(&block_lines(&shown, "prompt$", "b3")).len(),
         2,

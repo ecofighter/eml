@@ -213,7 +213,7 @@ fn shown() -> obj {
 }
 
 /// `exit` は、文字列を持つフレームと、余った引数を預けた `ApplyRest` の枠を巻き戻して `Finish` に届く。どの文字列も
-/// 巻き戻しで1回ずつ手放す (docs/superpowers/specs/2026-10-17-s13c-unwinding-design.md の「VM の巻き戻し」)。
+/// 巻き戻しで1回ずつ手放す (docs/spec/vm.md の「巻き戻しの手順」)。
 #[test]
 fn exit_unwinds_frames_holding_strings() {
     let text = "\

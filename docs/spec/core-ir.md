@@ -116,13 +116,13 @@ box の挿入が足す変数の印は、[LIR](lir.md) の「box の挿入」に�
 
 | 所 | 実行時の値 | 出す `drop` |
 |---|---|---|
-| `prompt$` の yield と中断の経路 (状態 1、2、3) の `x` | いつもダミー | 各経路の先頭で `drop x` |
+| `prompt$` の yield と中断の経路 (状態 1、2、3) の `x` | いつもダミー (状態 2 では、巻き戻しが着地で書いたダミー) | 各経路の先頭で `drop x` |
 | `prompt$` の中断の経路 (状態 2) の `ret` | `return` の節のクロージャ。捕まえた `File` を持ちうる | 中断の経路の先頭で `drop ret` |
 | `compose$` と `mask$[..]` の遅い道の `r` | いつもダミー | 遅い道の先頭で `drop r` |
 | ユーザーの関数の yield の地点の結果 (遅い道) | いつもダミー | 遅い道の先頭で `drop x` |
 
 - どれも、結果の Repr が RC の対象 (`obj` か `tobj`) で、印が `unr` でないときにだけ出す
-- 中断の経路の `drop ret` は、唯一の本当の後始末である。中断で `return` の節のクロージャを手放し、捕まえていた `File` を閉じる。中断のときの drop は [線形性](linearity.md) の「暗黙の後始末」が許している。中断の経路でも、関数のフレームは生きている値を drop しない。生きている値は κ の中にあり、`prompt$` が κ を drop する。新しく足す drop は、死んだ yield の結果と `ret` だけである
+- 中断の経路の `drop ret` は、唯一の本当の後始末である。中断で `return` の節のクロージャを手放し、捕まえていた `File` を閉じる。中断のときの drop は [線形性](linearity.md) の「暗黙の後始末」が許している。中断で外れる途中のフレームの生きている値は、EP が drop を置かず、VM の巻き戻しが表で手放す ([VM](vm.md) の「巻き戻し」)。新しく足す drop は、死んだ yield の結果と `ret` だけである
 - `drop` の意味は「参照を1つ手放す」である。`poly` の値は実は `Unr` で共有されていることがある (多重の継続を2回再開して写した `resume$` のクロージャが捕まえる `ret` など) ので、「すぐに破棄する」の意味にはしない。S9 の検査モードでは、ヘッダの `lin` ビットの立った物体だけが、共有の上の drop を誤りにする
 - translate が出す決定木の葉の `drop` (上の「決定木の葉の `drop`」) と合わせて、V1 の下で `unr` でない変数を手放す命令は、`drop` と分解のときの `release` だけになる
 
@@ -519,21 +519,22 @@ translate の `let r = handle E(init, body) { c_0, .., c_n } return ret` を、�
   (操作ごとに) let u_i = prim ev_set_clause[E.op_i](ev, <i 番目の in-place の入口>)
   let w1 = prim evv_push(w0, ev)
   let u = prim evv_set(w1)
-  let x = yields apply body(())
+  let x = yields apply body(()) prompt ev
   let r = call prompt$(ev, ret, x)
 ```
 
 - `w0` と `ev` は2回以上消費するので、Perceus が `dup` を足す。`ev_set_clause` は `ev` を借りるだけなので、数に入らない ([LIR](lir.md) の「基本操作」)
 - `apply body(())` は yield の地点にしない。yield したかは `prompt$` が見る。`call prompt$` は、handle を含む関数が `yields` なら yield の地点である (その関数が `yields` でなければ、その row から外へ出る yield はない)
-- `prompt$(ev, ret, x)` は、最初に `evv` を `ev` の外側の `evv` に戻し、`yield_status(ev)` で4つに分ける
+- `apply body(())` には着地の印 `prompt ev` を付ける ([LIR](lir.md) の「着地の印」)。`ev` 宛ての中断は、VM の巻き戻しがこの `apply` の結果 x にダミーを書いて止まり、続く `prompt$` が状態 2 の経路に進む ([VM](vm.md) の「巻き戻し」)。印を付けるのは EP だけで、付ける所はここと、下の「再開と状態」の `resume$` の2か所である
+- `prompt$(ev, ret, x)` は、最初に `evv` を `ev` の外側の `evv` に戻し、`yield_status(ev)` で4つに分ける。`evv` を戻すときに、今の `evv` を手放す。中断が着地したときの `evv` は中断を始めた所の `evv` のままで意味がないが ([LIR](lir.md) の「`evv` の不変条件」)、ここで正しい `evv` に戻る
   - 0 (yield していない): `st = ev_take_state(ev)` で状態を取り出し、`apply ret(x, st)` を末尾で呼ぶ
   - 1 (`ev` 宛ての yield): `drop x` の後、`κ = yield_cont_take()`、`c = yield_finish()`、`st = ev_take_state(ev)` を得て、`k = closure resume$(ev, ret, κ)` を作り、`apply c(k, st)` を末尾で呼ぶ
-  - 2 (`ev` 宛ての中断): `drop ret` と `drop x` の後、κ を取り出して `drop κ` し、`c = yield_finish()` と状態を得て、`apply c(st)` を末尾で呼ぶ
-  - 3 (ほかの宛先): `drop x` の後、状態を `ev_take_state(ev)` で取り出し、κ を `rewind$(ev, ret, st, κ)` のクロージャで作り直して、ダミーを返す
+  - 2 (`ev` 宛ての中断): `drop ret` と `drop x` の後、`c = yield_finish()` と `st = ev_take_state(ev)` を得て、`apply c(st)` を末尾で呼ぶ。中断は κ を組み立てないので、取り出す κ はない
+  - 3 (ほかの宛先の yield): `drop x` の後、状態を `ev_take_state(ev)` で取り出し、κ を `rewind$(ev, ret, st, κ)` のクロージャで作り直して、ダミーを返す。ほかの宛先の中断は、巻き戻しがこのフレームを着地せずに外すので、`prompt$` に届かない。EP は状態 3 の経路を中断と yield で分けずに作るが、中断では通らない
 
 #### 再開と状態
 
-- `resume$(ev, ret, κ, v, s)` は、`ev2 = ev_renew(ev, s)` で新しい evidence を作り、今の `evv` の先頭に `ev2` を足して `evv` にする。その後 `x = apply κ(v)` を呼び、`prompt$(ev2, ret, x)` を末尾で呼ぶ。deep handler の再接続と、スコープの外での再開に当たる。`ev2` の外側の `evv` は再開した時点の `evv` なので、handle が返った後の再開も、ほかの handler の中での再開も、その場の文脈の上につながる
+- `resume$(ev, ret, κ, v, s)` は、`ev2 = ev_renew(ev, s)` で新しい evidence を作り、今の `evv` の先頭に `ev2` を足して `evv` にする。その後 `x = apply κ(v) prompt ev2` を呼び、`prompt$(ev2, ret, x)` を末尾で呼ぶ。着地の印の evidence は新しい `ev2` で、再開した計算の中の `ev2` 宛ての中断がこの `apply` に着地する。deep handler の再接続と、スコープの外での再開に当たる。`ev2` の外側の `evv` は再開した時点の `evv` なので、handle が返った後の再開も、ほかの handler の中での再開も、その場の文脈の上につながる
 - `rewind$` は、外側のフレームの yield で handler の外へ出たときに `prompt$` が取り出した状態で、`resume$` を呼ぶ
 - 再開した計算の中の操作は、`ev_lookup` で `ev2` を見つける。古い `ev` を持ったまま止まっているフレームはない。`ev` を持つのは、`prompt$` (止まるときは `rewind$` が `ev` の写す部分だけを使う)、`resume$` のクロージャ (同じ)、yield を始める入口 (止まらない)、in-place の節 (本体に yield の地点がないので止まらない) だけだからである
 - handler の実行中にその handler 自身の継続を再開する形も、deep handler の意味 ([エフェクトと handler](effects.md) の「handler の意味」) のとおりに動く。次のプログラムでは、`k r 100` の再開が状態 100 の新しい evidence を作り、外側の実行の evidence (状態 1) は変わらないので、101 を表示する (`tests/ui/run/effects/resume_inside_own_handler.em`)
@@ -590,19 +591,20 @@ in-place の入口は、translate が作った節の関数 g から、EP が節�
 
   本体は yield しないので、`evv` を替えずに `perform` の場所の `evv` のまま動かしてよい。g が `yields` でないときは、本体に `handle` や `mask` 付きの呼び出しが残りうるが、それらが呼ぶ関数は yield しない。健全性の不変条件 ([エフェクトと handler](effects.md) の「健全性」) から、その中の操作はその中で設けた handler に届くので、外側の `evv` の違いは見えない。g の中の `mask` も同じで、項目が残す n 個と飛ばす m 個は、g が自分で設けた handler でなければならない。g が `yields` でなければ、その instance の外側の row はラベルを持たないので、`e` の手前のラベルはすべて g の `handle` が足したもので、`e` を通る操作もない。g が `yields` で `handle` か `mask` 付きの呼び出しを持てば、それは yield の地点なので、g はその場で動かない (`evidence/handlers.rs` の `runs_in_place` が両方を yield の地点に数える)
 - **再開する節** (`once` と `multi` の操作のうち、上に当たらない節): 入口の関数は、捕獲、`ev`、操作の引数を受け、`c = closure g(捕獲, 操作の引数)` を作り、`yield_to(ev, c, &id$)` を呼んで、ダミーを返す。入口はいつも yield を始めるので、g の印によらず `yields` の印を立てる。`prompt$` が後で `apply c(k, st)` を呼ぶ。外のエフェクトを呼ぶすぐに再開する節もここに入り、節の本体は handle の外側の `evv` で動く。節の実行中に `evv` を外側に替える包み (論文の under) は作らない。再開で evidence を作り直すと、包みと節の本体が古い evidence を持ち続けるので、探し直す仕組みも要るためである
-- **`never` の節**: 入口は同じ形で `yield_abort(ev, c, &id$)` を呼び、`yields` の印を立てる。`prompt$` が後で `apply c(st)` を呼ぶ。入口の `ret` は `obj` で、`prim dummy()` を返す。`never` の操作の `clause` の束縛は、`OpRet::Never` なので位置と比べない。その値はダミーで、[LIR](lir.md) の「ダミーの値」の約束で安全である
+- **`never` の節**: 入口は c を同じ形で作り、`yield_abort(ev, c)` を呼んで中断を始め、`yields` の印を立てる。最初の κ は渡さない。中断は κ を組み立てず、VM がタスクのスタックを巻き戻すためである (下の「`never` の中断」)。`prompt$` が着地の後に `apply c(st)` を呼ぶ。入口の `ret` は `obj` で、`yield_abort` の後に `prim dummy()` を返す形のままにする。`yield_abort` は戻らないので、この `return` には実行が届かない。`never` の操作の `clause` の束縛は、`OpRet::Never` なので位置と比べない。`clause` の後へ制御は戻らないので、その束縛を使う所にも実行は届かない
 - handle の場所では、節の値 c_i がどの関数のクロージャかを知る必要がある。translate は節を `&g` か、同じ関数の中の `closure g(..)` で渡すので、EP はそれを読む。そうでない形は内部の誤りとしてパニックする
 - `ev_set_clause` には、入口の関数のクロージャ (捕獲がなければ関数の値) を渡す。捕獲は節の捕獲をそのまま写す。再開する節と `never` の節の入口が作る c も、捕獲も操作の引数もなければ `&g` にする (`closure` は引数を1つ以上とる)
 
 #### `never` の中断
 
-- 中断の yield も、途中のフレームが普通の yield と同じく κ を組み立てる。`prompt$` が κ を `drop` すると、クロージャの解放の連鎖で、捕まっていた値が1回ずつ解放される。`File` はこの解放で閉じる
-- 途中のフレームは、生きている `Lin` の値に `decref` も `drop` も置かない。生きている値は継続のクロージャに捕まるためである。遅い道で手放すのは、yield の地点の結果 x (ダミー) だけで、EP が `drop x` を出す
+- 中断は κ を組み立てない。`yield_abort` が yield の状態に宛先の evidence と節の本体を入れると、VM がタスクのスタックを、着地の印の evidence が宛先と同じ `apply` まで巻き戻す ([VM](vm.md) の「巻き戻し」)。外すフレームが持つ値は、巻き戻しの表で手放す。`File` はこの解放で閉じる
+- 途中のフレームは、生きている `Lin` の値に `decref` も `drop` も置かない。生きている値は、巻き戻しの表に載るためである
+- EP の yield の地点の決め方は、中断のために変えていない。中断が通る途中のフレームにも、`never` の操作の `clause` や `IO` の extern の後の yield の確かめと遅い道が残る。巻き戻しはそれを飛ばすので、中断では実行されない。`IO` と `never` の操作だけのエフェクトを yield の地点から外すことは、ロードマップの S13c の残りである ([ロードマップ](../future/roadmap.md) の「S13c 中断の巻き戻し」)
 - `prompt$` の中断の経路は、`return` の節のクロージャ `ret` を `drop` する。捕まえていた `File` はこの解放で閉じる (上の「EP の明示の `drop`」)
 
 #### IO の extern
 
-- `IO` を起こす extern (表の行の `purity` が `Effectful`) の呼び出しは、`yields` の関数の中では、どれも yield の地点である。`try_io` が捕まえる種類の誤りで失敗すると、VM が `io_failed` の節の入口を呼んで中断を始め、`exit` はいつも中断を始めるためである ([VM](vm.md) の「IO の失敗と `exit`」)。直後に yield の確認と遅い道を置く形は、ほかの yield の地点と同じである
+- `IO` を起こす extern (表の行の `purity` が `Effectful`) の呼び出しは、`yields` の関数の中では、どれも yield の地点である。直後に yield の確認と遅い道を置く形は、ほかの yield の地点と同じである。`try_io` が捕まえる種類の誤りで失敗すると、VM が `io_failed` の節の入口を呼んで中断を始め、`exit` はいつも中断を始める ([VM](vm.md) の「IO の失敗と `exit`」)。どちらの中断も巻き戻しで進み、extern の後の yield の確認には戻らない (上の「`never` の中断」)
 - extern は末尾呼び出しにならないので、末尾の形の例外はない。「yield の確認のない呼び出しの後」の不変条件は、extern には関わらない
 - `IO` を row に持つ関数はいつも `yields` なので ([型と Kind](types.md) の「row の具体化の記録」)、`yields` でない関数が `IO` の extern を呼ぶことはない。EP はそれを内部の誤りとしてパニックする
 - すぐに再開する節の条件 (「`perform` と節の3つの形」) では、`IO` の extern の呼び出しも yield の地点として数える。in-place の節は `perform` の場所の `evv` で動くので、そうしないと、handle の本体の中の `try_io` が節の IO の失敗を捕まえてしまう
@@ -645,6 +647,7 @@ b_fast:
 - Core IR の verifier は2つの段を持つ。段はパスの順に並ぶ
   - 変換の段 (`verify_translated`) は translate の後にかける。[LIR](lir.md) の「構造の規則」の印のない部分と、引き継ぐ検査を確かめる。EP が作るもの (REPL の根の `root_get` と `root_set` を除く `prim`、`clause`、`clause` の印の関数) を拒む (`` `prim evv_get` is used before the evidence pass ``、`a clause call is used before the evidence pass`、``a clause of `Counter.get` is defined before the evidence pass``)
   - EP の段 (`verify_evidence`) は EP の後にかける。変換の段の検査から EP が作るものの拒否を除き、基本操作と `clause` の検査 ([LIR](lir.md) の「verifier」) を足す。`handle`、`perform`、`resume` と、呼び出しの `mask` を拒む (``a perform remains after the evidence pass``。`a handler`、`a resume`、`a mask` も同じ形)
+- 着地の印 ([LIR](lir.md) の「着地の印」) も EP が作るものなので、変換の段は拒む (`a prompt marker appears before the evidence pass`)。EP の段は、`apply` のほかの検査の後に、印の変数 v が見えること、印の付いた `apply` が末尾の位置 ([LIR](lir.md) の「末尾の位置の呼び出し」) にないこと、v の Repr が `obj` であること、v が呼び出しの直後で生きていることを、この順に確かめる (``an apply with the prompt marker `ev.2` is in a tail position, which leaves no frame to land on``、`` `ev.2` is the prompt marker of an apply, but it is tobj, not obj ``、`` `ev.2` is the prompt marker of an apply, but it is not used after the call ``)。生きているかは、生存解析の入口の集合を関数ごとに1回だけ求め、ブロックの終端と後ろの文から逆にたどって決める。印の変数は呼び出しの使いではないので、生存解析は印を使いに数えない
 - 印の検査は、Core IR の2つの段で、`jump` と `return` の V2 と、作る所の検査を行う。それ以外の受け渡しは、境界に合うようになってから LIR の範囲の段で比べる。`perform`、`handle`、`resume` の受け渡しは比べず、EP がそれらを `clause` と基本操作に置き換えた後の段で比べる。`never` の操作の `perform` (変換の段) と `clause` (EP の段) の結果を束縛する変数は、使いに制御が届かないので、V2 と作る所の検査の対象にしない。V1 は `dup` と `decref` が Core IR にないので走らない ([LIR](lir.md) の「Kind の印の検査」)
 - RC の命令、`box`、`unbox`、`tail` は Core IR の型にないので、verifier は確かめない。境界の検査もしない。translate と EP の出力は、box の挿入より前には境界に合わないためである。関数の値の対象が一様かも見ない ([LIR](lir.md) の「値の表現」の定数の当てはめ)
 - R7 と R8 の文言、`jump` と `return` の文言、引数のない `con` の文言、2つの IR に共通する引き継ぐ検査、検査の順、支配木の求め方は、LIR の verifier と同じである ([LIR](lir.md) の「verifier」)。文言と支配木の求め方などの部品は、2つの verifier が `eml_lir::check` で共有する。検査の順は共有する部品ではなく、2つの verifier で同じに保つ約束である

@@ -287,7 +287,7 @@ impl<'a, M: Mode> Emitter<'a, '_, M> {
     }
 
     /// 巻き戻しの表の行を足す。地点の命令は文の最後に書くので、今の位置がその命令の次の位置である
-    /// (docs/superpowers/specs/2026-10-17-s13c-unwinding-design.md の「巻き戻しの表」)。
+    /// (docs/spec/vm.md の「巻き戻しの表」)。
     fn unwind(&mut self, point: &UnwindPoint) {
         let entry = Unwind {
             slots: point

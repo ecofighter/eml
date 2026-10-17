@@ -600,7 +600,7 @@ token の表の項目は、`into_token` と `release_reuse` が添字を使い�
 | `control` | セッションの `Arc<Control>` (下の「実行の制御」)。安全点の確かめがヒープの中をたどらずに読めるように、ヒープとは別に持つ |
 | `max_depth`、`max_evv` | `Control` の上限の写し。`Ctx::new` が写す |
 | `host` | セッションの Host (下の「extern」の「Host」)。出力とファイルは、これを通す |
-| `stats` | 仕事の回数 `CtxStats` (`evidence_steps`、`yields`、`yield_frames`、`string_bytes_copied`)。`Heap` の `Stats` と同じく、検査モードだけで数える |
+| `stats` | 仕事の回数 `CtxStats` (`evidence_steps`、`yields`、`yield_frames`、`string_bytes_copied`)。`Heap` の `Stats` と同じく、検査モードだけで数える。`yields` は `yield_to` の回数で、中断は数えない |
 | `roots` | セッションの根の表 (下の「セッションの根」) |
 
 - `Ctx` は `Send` で `Sync` でない (`Heap` と同じ)。`Control` は `Send` と `Sync` である。どちらも型の assert で固定する
@@ -609,7 +609,7 @@ token の表の項目は、`into_token` と `release_reuse` が添字を使い�
 - `Ctx` は `Drop` を実装しない。`evv` と yield の状態の参照は個別に手放さず、ヒープと一緒に消える。そのため、基本操作の中の `decref` で破棄処理が panic しても、`Ctx` を落とすことは安全である (下の「`unsafe` の核」の T7)
 - `check_finished()` は、`evv` が空で yield の状態がなしであることを確かめる。VM がリークの検査の前に呼ぶ ([LIR](lir.md) の「`evv` の不変条件」の最後の項)
 - `copy_string(s, max_chars) -> Result<String, Fault>` は、文字列の参照 `s` を1つ受けて手放し、中身の先頭 `max_chars` 文字を Rust の `String` に写して返す。VM が、文字列を返す入口の結果を受け取るのに使う ([VM](vm.md) の「追記」)。`unsafe fn` で、前提と事後条件 (`held_ok`、`evolved_by`) は `println` と同じである。検査モードは種類を確かめ、文字列でなければ何も写さずに `Fault::Heap(WrongKind)` を返す。写す長さを切るのは、利用者の `show` が巨大な文字列を返しても、確保量の上限の外で同じ大きさを写さないためである。文字の始まりは `str::is_char_boundary` で数え、写すのは `str::to_owned` である。どちらも vstd が仕様を持つので、下の「`unsafe` の核」の信頼の一覧は増えない
-- `ev_find(effect)` は `ev_lookup` と同じく `evv` をたどり、見つけた evidence を `dup` して返す。見つからなければ `None` を返す。検査モードでは、形の違う節点に `BadEvidence` を返す。`evidence_steps` は検査モードでたどった節点ごとに数える。`exit_abort` は、宛先を不死のダミーの物体、節と κ を `()` にした中断を始める。`fresh_string` は文言から文字列を作る
+- `ev_find(effect)` は `ev_lookup` と同じく `evv` をたどり、見つけた evidence を `dup` して返す。見つからなければ `None` を返す。検査モードでは、形の違う節点に `BadEvidence` を返す。`evidence_steps` は検査モードでたどった節点ごとに数える。`exit_abort` は、宛先を不死のダミーの物体、節と κ を `()` にした中断を始める。`yield_abort` と同じく `yields` には数えない。`fresh_string` は文言から文字列を作る
 
 ### セッションの根
 
@@ -648,6 +648,7 @@ token の表の項目は、`into_token` と `release_reuse` が添字を使い�
 - yield の状態は、平らな `#[repr(C)]` の記録 `YieldState { target, clause, cont, abort }` である。`target` は宛先の evidence、`clause` は節の本体、`cont` は組み立て中の継続 κ、`abort` は中断かどうかで、`target` が `()` のときを「なし」とする。Rust の enum は配置が決まらないが、この形なら、ネイティブのコードが「yield 中か」を、決まった位置の語と即値の1回の比較で読める (Koka の `yielding` の欄と同じ形)
 - 不変条件は「`target` が `()` なら、`clause` と `cont` も `()` で、`abort` は偽である」の1つである。VM から見た動作は、なし、yield 中、中断中の3つの値の enum と変わらない
 - `yield_to` と `yield_abort` の宛先は物体でなければならない。`()` を宛先にすると、yield の状態が「なし」と区別できないためである
+- 中断 (`yield_abort` と `exit_abort`) は κ の欄を `()` にする。中断は継続を組み立てず、VM がタスクのスタックを巻き戻すためである ([VM](vm.md) の「巻き戻し」)。そのため、中断中の `yield_finish` は κ を取り出さずに呼べる。`yield_abort` は κ を受けない。成功したときに κ の欄が空であることは、Verus で証明する
 - `yield_status` は、宛先を語の値 (番地) で比べる。yield の状態が宛先の参照を持つので、比べる間に番地が使い回されることはない
 - `yielding`、`yield_status`、`yield_cont_take`、`check_finished` は、ヒープに触れないので安全な関数である。前提を崩しても、リークするだけである。`yield_cont_take` は、yield していなければ、検査モードでは `YieldMisuse` を返し、速いモードでは空の欄の `()` を返す
 
@@ -708,7 +709,8 @@ token の表の項目は、`into_token` と `release_reuse` が添字を使い�
 | `ev_set_state(ev, s)` | `ev_shape(ev)`、ev の rc が正、呼ぶ側が s と別に ev の参照を持つ | 状態の欄を s にし、元の状態を手放す |
 | `yielding()` | | yield 中か中断中なら 1、そうでなければ 0 |
 | `yield_status(ev)` | | [LIR](lir.md) の「基本操作」の表の 0 / 1 / 2 / 3 |
-| `yield_to(ev, clause, k)` / `yield_abort(ev, clause, k)` | yield していない、ev が物体 | yield 中 (中断中) にする。3つの参照を `Ctx` が持つ |
+| `yield_to(ev, clause, k)` | yield していない、ev が物体 | yield 中にする。3つの参照を `Ctx` が持つ |
+| `yield_abort(ev, clause)` | yield していない、ev が物体 | 中断中にする。2つの参照を `Ctx` が持ち、κ の欄は `()` のままにする |
 | `yield_cont_take()` | yield 中 | κ を返し、欄を `()` にする |
 | `yield_cont_set(k)` | yield 中で、κ の欄が `()` | κ を入れる |
 | `yield_finish()` | yield 中で、κ の欄が `()` | 宛先の参照を手放し、節の本体を返し、yield の状態をなしにする |

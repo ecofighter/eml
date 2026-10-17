@@ -448,7 +448,7 @@ fn yielding_entry(
         ))
     };
     // 中断は継続を組み立てずに巻き戻すので、最初の κ `id$` を渡すのは yield だけである
-    // (docs/superpowers/specs/2026-10-17-s13c-unwinding-design.md の「`eml_rt` と EP の変更」)
+    // (docs/spec/core-ir.md の「`perform` と節の3つの形」)
     let (start, args) = if operation.resumable {
         (Prim::YieldTo, vec![Atom::Var(evidence), body, Atom::Fn(id)])
     } else {

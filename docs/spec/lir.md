@@ -198,7 +198,7 @@ R1 と R2 から、ブロックの番号の順は辺の向きに沿った順 (�
 
 #### `never` の操作
 
-- `never` の操作の `clause` は値を返さない。節が継続を捨てるので、`clause` の後へ制御が戻らない。そのため、その結果は位置でなく、束縛の Repr は translate が決めたまま (具体化した型の Repr) にする。EP の後は、その値は `never` の節の入口が返すダミーである (下の「ダミーの値」)
+- `never` の操作の `clause` は値を返さない。`never` の節の入口は中断を始め、中断はタスクのスタックを巻き戻すので、`clause` の後へ制御が戻らない (下の「実行の意味」)。そのため、その結果は位置でなく、束縛の Repr は translate が決めたまま (具体化した型の Repr) にする
   - box の挿入は、`never` の `clause` の束縛を受け直さず、その束縛を使う所にも変換を入れない。束縛の使いには制御が届かないからである
   - T3 は `never` の `clause` を見ない。縮約は、末尾の位置の `never` の操作の `clause` を、どの `ret` とも互換として扱う
   - verifier は、`never` の `clause` の結果を束縛と比べず、末尾の `never` の操作の `clause` の結果を呼び出し元の `ret` と比べない。互換の位置では、`never` の `clause` の束縛の使い (`return` の値、呼び出しの引数など) も位置と比べない。正確な位置の使いは、ほかの変数と同じく比べる
@@ -243,7 +243,7 @@ EP ([Core IR](core-ir.md) の「evidence passing」) の出力は、普通の呼
 実行の文脈は、次の2つである。VM とネイティブでは、これを実行の単位ごとに持つ。協調的な `par` の a1 ([ロードマップ](../future/roadmap.md) の「マルチコア対応」) でタスクを切り替えるなら、タスクごとに持つか、切り替えで退避する。`eml_rt` では、実行文脈 `Ctx` が2つを持ち、タスクは yield の状態がなしの安全点でだけ切り替えて、`evv` だけを退避する ([オブジェクトモデル](object-model.md) の「実行文脈 `Ctx`」)。
 
 - `evv`: 今有効な evidence の並び。内側の handler を先頭にした永続リストで、書き換えない。handler を設けるたびに、先頭に足した新しいリストを作る。空のリストは `()` である
-- yield の状態: なし、yield 中、中断中のどれか。yield 中と中断中は、宛先の evidence、節の本体のクロージャ、組み立て中の継続 κ を持つ
+- yield の状態: なし、yield 中、中断中のどれか。yield 中と中断中は、宛先の evidence と節の本体のクロージャを持ち、yield 中は組み立て中の継続 κ も持つ。中断は κ を組み立てずにタスクのスタックを巻き戻す (下の「実行の意味」)
 
 `eml_rt` の `Ctx` は、yield の状態を平らな記録 `{ target, clause, cont, abort }` で持ち、宛先 `target` が `()` のときを「なし」とする。ネイティブのコードが、決まった位置の語と即値の1回の比較で、yield 中かを読めるようにするためである。
 
@@ -261,7 +261,7 @@ handle の実行と、継続の再開のたびに、新しい evidence を作る
 
 状態の欄だけは書き換える。書き換えるのは、その evidence の実行が動いている間の、in-place の節 (`ev_take_state`、`ev_set_state`) と `prompt$` (状態の取り出し) だけである。別の実行は別の evidence を持つので、欄を共有しない。handle 1回につき evidence を1つにして状態を yield と再開で出し入れする形は採らない。handler の実行中にその handler 自身の継続を再開すると ([Core IR](core-ir.md) の「再開と状態」の例)、2つの実行が状態の欄と外側の `evv` の欄を共有して壊し、外側の `evv` がその evidence 自身を指す参照の輪もできるためである。
 
-状態の欄を通る参照の輪は、一時的にはできうる。外側の handler O の本体の中で内側の handler I を動かし、I の継続 `k_I` をデータに包んで O の状態に入れると、`evO.状態 → k_I → evI → evI.外側の evv → evO` の輪になる。`prompt$` は、どの出口 ([Core IR](core-ir.md) の「handle と `prompt$`」の 0〜3) でも状態の欄を空にするので、O の実行が終われば輪は切れる。これを不変条件とし、`debug_heap` 付きの UI テスト (`tests/ui/run/effects/continuation_in_outer_state.em`) で確かめる。
+状態の欄を通る参照の輪は、一時的にはできうる。外側の handler O の本体の中で内側の handler I を動かし、I の継続 `k_I` をデータに包んで O の状態に入れると、`evO.状態 → k_I → evI → evI.外側の evv → evO` の輪になる。`prompt$` は、どの出口 ([Core IR](core-ir.md) の「handle と `prompt$`」の 0〜3) でも状態の欄を空にするので、O の実行が `prompt$` を通って終われば輪は切れる。これを不変条件とし、`debug_heap` 付きの UI テスト (`tests/ui/run/effects/continuation_in_outer_state.em`) で確かめる。O の外の宛先への中断と `exit` は、O の handle のフレームを着地せずに外し、evO を巻き戻しの表で手放すだけで、`prompt$` を通らない。そのため、そのとき O の状態がこの輪を作っていれば、輪は切れずに残る ([実装の現在地](../implementation/status.md) の「中断の後始末」)。
 
 ### evidence を探す
 
@@ -300,7 +300,7 @@ handle の実行と、継続の再開のたびに、新しい evidence を作る
 | `yielding` | なし | | `int` | yield 中か中断中なら 1、そうでなければ 0 |
 | `yield_status` | `obj` | evidence | `int` | 0: yield していない、1: この evidence 宛ての yield、2: この evidence 宛ての中断、3: ほかの宛先の yield か中断 |
 | `yield_to` | `obj`、`tobj` (節の本体)、`tobj` (最初の κ) | なし | `unit` | yield を始める |
-| `yield_abort` | `obj`、`tobj`、`tobj` | なし | `unit` | 中断を始める |
+| `yield_abort` | `obj`、`tobj` (節の本体) | なし | `unit` | 中断を始め、タスクのスタックを巻き戻す。戻らない (下の「実行の意味」) |
 | `yield_cont_take` | なし | | `tobj` | κ を取り出す (欄は空になる) |
 | `yield_cont_set` | `tobj` | なし | `unit` | κ を入れる |
 | `yield_finish` | なし | | `tobj` | 節の本体を取り出し、宛先の evidence への参照を手放し、yield の状態をなしに戻す |
@@ -320,7 +320,7 @@ handle の実行と、継続の再開のたびに、新しい evidence を作る
   | `ev_lookup` / `ev_clause` / `ev_evv` | なし / `unr` / `unr` | `unr` |
   | `ev_take_state` / `ev_set_state` | `unr` / `unr`、`poly` | `poly` / `unr` |
   | `yielding` / `yield_status` | なし / `unr` | `unr` |
-  | `yield_to` / `yield_abort` | `unr`、`poly`、`poly` | `unr` |
+  | `yield_to` / `yield_abort` | `unr`、`poly`、`poly` / `unr`、`poly` | `unr` |
   | `yield_cont_take` / `yield_cont_set` / `yield_finish` | なし / `poly` / なし | `poly` / `unr` / `poly` |
   | `root_get` / `root_set` | なし / `unr` | `unr` |
   | `dummy` | なし | `poly` |
@@ -336,6 +336,15 @@ handle の実行と、継続の再開のたびに、新しい evidence を作る
 - `mask` は持たない
 - 操作の Repr を `perform` の境界に通すために、この呼び出しを足した。box の挿入、T3、縮約、verifier にその規則がある。Perceus には規則を足さない
 
+### 着地の印
+
+- `Call::Apply` は、省ける着地の印 `prompt: Option<VarId>` を持つ。印の変数 v は evidence (`obj`) の変数である。意味は「宛先が v の中断は、この呼び出しの結果にダミーを入れて、呼び出しの次から続ける」である (下の「実行の意味」、[VM](vm.md) の「巻き戻し」)。Core IR の `apply` も同じ欄を持ち、LIR への変換がそのまま写す
+- テキストの形は、呼び出しの後に `prompt v` と書く (`let x.5: tobj poly = yields apply body.4(()) prompt ev.2`)。`mask` は呼び出しの前に書くので、印と並ぶことはない
+- 印は呼び出しの使いではない。v を消費も読みもしないので、呼び出しが使う値 (`Call::for_each_atom`) にも、生存解析にも、Perceus と所有の検査の消費にも入らない。v は、続く `prompt$` の呼び出しが使うので、着地の後も生きている。巻き戻しは着地したフレームの値を手放さないので、v は着地の後も有効である
+- 印を付けるのは EP だけで、付ける所は2つである。handle の `apply body(())` (v は handle の evidence) と、`resume$` の `apply κ(v)` (v は再開で作り直した evidence) である。どちらも直後に `prompt$` の呼び出しが続き、`prompt$` が `yield_status` の状態 2 の経路に進む ([Core IR](core-ir.md) の「handle と `prompt$`」と「再開と状態」)
+- 印の付いた呼び出しは末尾の位置にない。直後に `prompt$` の呼び出しが続くので、縮約に印のための規則は要らず、verifier が確かめるだけにする (下の「verifier」)
+- 印は `apply` にだけ付く。EP が印を付ける2か所が、どちらも `apply` だからである
+
 ### 入口の関数の印
 
 - 関数は、in-place の入口の関数にだけ `(effect, op)` の印 (`clause`) を持つ。テキストの形では `internal yields clause State.get fn …` と書く
@@ -349,7 +358,8 @@ handle の実行と、継続の再開のたびに、新しい evidence を作る
   - `dummy` の値は、`dup`、`decref`、`drop` で何も起こさない
   - `unbox` は、ダミーを受けても誤りにせず、何かの値を返す。その値は捨てられる
   - `box` は、ダミーを受けたらダミーを返す。`0` と `#0` は普通に箱に入れ、その値は捨てられる
-- `IO` の extern が失敗して `io_failed` の節を呼んだときは、extern の行き先が `obj` のダミーを受ける。行き先の Repr が `int`、`enum`、`unit` でも同じである。直後に yield の確認があるので、この値は遅い道の `drop` と `decref` にしか届かない
+- 中断が着地したときは、着地の印の付いた `apply` の結果に `prim dummy()` の値が入る。`apply` の結果は `tobj` なので、Repr の違いは起きない。続く `prompt$` は、状態 2 の経路の先頭でこの値を `drop` する ([Core IR](core-ir.md) の「handle と `prompt$`」)
+- 中断で外すフレームには値を返さない。`never` の節の入口は `yield_abort` の後にダミーを返す形をしているが、その `return` には実行が届かない。`IO` の extern が失敗して `io_failed` の節を呼んだときも、extern の行き先には何も書かない ([VM](vm.md) の「巻き戻し」)
 - box の挿入が、yield の地点の結果の変換を確認の後に置く形は採らない。box の挿入に EP の形を知る特別な規則が要るためである
 - yield の確認のない呼び出しの後に残る変換の扱いは、[Core IR](core-ir.md) の「yield の確認のない呼び出しの後」にある
 
@@ -357,6 +367,7 @@ handle の実行と、継続の再開のたびに、新しい evidence を作る
 
 - 呼び出しが普通に返ったとき、`evv` は呼び出しの前と同じである。`evv` を替える所 (handle の `prompt$`、`resume$`、`mask` の包み。[Core IR](core-ir.md) の「evidence passing」) が、戻るときに必ず元に戻すためである
 - yield 中の `evv` には意味がない。再開のときに、包むフレームが外側から順に `evv` を作り直す
+- 中断の途中の `evv` にも意味がない。巻き戻しは `evv` に触れず、着地した `prompt$` が `evv` を宛先の evidence の外側に戻す。`exit` では `Finish` が空に戻す ([VM](vm.md) の「IO の失敗と `exit`」)
 - `mask` 付きの呼び出しは、戻りで `evv` を戻すのでフレームを残す。`mask` は見える別々の handler を飛ばすので、継続の上で `mask` が残すフレームは handler の数以下である ([エフェクトと handler](effects.md) の「健全性」の最後の段落)。`prompt$` と `resume$` のフレームは、handler 1つにつき1つである
 - そのため、末尾呼び出しの保証 (上の「末尾の位置の呼び出し」) は、`mask` 付きの呼び出しを除いて保てる
 - 実行が正しく終わったとき、`evv` は空で、yield の状態はなしである。VM はこれをモードによらず、検査モードのリークの検査の前に確かめる ([VM](vm.md) の「誤り、止めること、終わり」)
@@ -512,6 +523,11 @@ Perceus は、`switch` と `unpack` のフィールドを借りたまま使い�
   - 範囲の段 (`verify_scopes`) は box の挿入と縮約の後にかける。入口の段から `tail`、`box`、`unbox` の拒否を除き、`box` と `unbox` の規則 (上の「値の表現」) と境界の検査を足す
   - 所有の段 (`verify`) は Perceus の後にかけ、範囲の段に加えて、RC の対象の所有の多重集合 (R6) と、V1 を確かめる
 - Kind の印の検査 (V1、V2、作る所の検査) は、下の「Kind の印の検査」にある。V2 と作る所の検査は Repr を比べる所と同じ所で、V1 は所有の段で走る
+- 着地の印 (上の「着地の印」) の検査は、3つの段のすべてで走る
+  - 末尾呼び出しの印は、呼び出しの検査の最初に拒む (``a tail apply has a prompt marker, but a tail call leaves no frame to land on``)。入口の段は `tail` そのものを拒むので、この文言は範囲の段と所有の段で出る
+  - ほかの印は、呼び出しの検査 (範囲と所有を含む) の後に確かめる。印の変数 v が見えること、v の Repr が `obj` であること、v が呼び出しの直後で生きていることを、この順に確かめる (`` `ev.1` is the prompt marker of an apply, but it is tobj, not obj ``、`` `ev.1` is the prompt marker of an apply, but it is not used after the call ``)
+  - 所有の段では、v が呼び出しの直後にも所有されていることも確かめる (`` `ev.1` is the prompt marker of an apply, but it is not owned after the call ``)。巻き戻しは着地したフレームの値を手放さないので、続く `prompt$` が使う v は、着地の後も有効でなければならない
+- `eml_lir::unwind::points_all` は、所有の段の走査に、巻き戻しの地点ごとの所有を書き留めさせる。VM のコード生成が、これで巻き戻しの表を作る ([VM](vm.md) の「巻き戻し」)。所有を求める走査を、verifier と巻き戻しの表で2つ持たないためである
 - Core IR の verifier の2つの段は、印のない構造の規則と同じ部品 (`eml_lir::check`) を使う ([Core IR](core-ir.md) の「verifier」)
 - 境界の検査は、R7 と R8 の検査のうち、`jump`、`return`、`box`、`unbox` を除くものである。直接の呼び出しの引数と結果、`closure` の引数、関数の値の対象が一様であること、`apply`、`clause`、`prim` のオペランドと結果、`clause` の印の関数の引数と `ret` が操作の表と互換であること、`tail` の結果、宣言した Repr が `tobj` のフィールドである。translate と EP の出力は、box の挿入より前には境界に合わないので、Core IR の verifier と LIR の入口の段は境界を見ない
 - 関数の値の対象が一様かは、verifier を始めるときに関数ごとに1回求めて表にし、`&g` と `closure g` では表を引くだけにする。参照ごとに引数をたどると、時間が参照の数と引数の数の積になるためである
@@ -581,7 +597,8 @@ Perceus は、`switch` と `unpack` のフィールドを借りたまま使い�
   - 1つの呼び出しの中では、引数の数、引数の Repr (左から)、結果を束縛する変数の Repr の順に比べ、その後で範囲と所有を確かめる。`tail` では、引数の Repr の後で結果と呼び出し元の `ret` を比べる
   - `closure g(..)` では、引数の数の後で g が一様かを確かめ、その後で引数の Repr を比べる。そのため、`closure` の対象が一様でない誤りは、その引数の範囲の誤りより先に出る
   - `&g` は、互換の位置では、定数の当てはめの中で `tobj` に収まるかを確かめた後に g が一様かを確かめる。`extern` の引数では当てはめが通った後に、`drop &g` と case のない `switch` の scrutinee ではその命令の検査の中で確かめる。IR のどこにある `&g` も関数の値だからである
-- verifier は生存解析を使わない。ブロックを番号の順にたどるだけで、反復しない。辺は前向きなので、ブロックに着いたときには入る辺がすべて出そろっている
+- verifier は、着地の印の検査のほかでは生存解析を使わない。ブロックを番号の順にたどるだけで、反復しない。辺は前向きなので、ブロックに着いたときには入る辺がすべて出そろっている
+  - 着地の印の検査は、v が呼び出しの直後で生きているかを、生存解析の入口の集合から決める。集合は印のある関数でだけ、関数ごとに1回求める。呼び出しのたびに、そのブロックの終端と後ろの文から逆にたどる
   - 支配木は Cooper-Harvey-Kennedy の方法で求める。番号の順が辺の向きに沿っているので、1回たどれば決まる。2つのブロックの共通の支配者は、支配木の skew-binary の飛び先 (Myers) を使って、深さの対数の歩みで求める。1段ずつ登ると、深さの違う辺が多く1つのブロックに合流したとき (`a || b || ...` の真の行き先など)、時間はブロックの数と深さの積になる
   - 変数ごとに定義の位置 (ブロックと文の番号。引数は -1) を記録し、支配は支配木の前順と後順の番号で調べる
   - 所有の多重集合は、合流を待つブロックごとに疎に持つ。辺ごとに所有の多重集合を写して比べるので、その時間は辺の数と所有の大きさの積に比例する
@@ -622,7 +639,9 @@ LIR を実行する [VM](vm.md) と後のネイティブのコードは、次の
 - `prim` は、上の「基本操作」の表のとおりに文脈と evidence を読み書きする。借用の引数は呼ぶ側が持ったままなので手放さず、ほかの引数は所有した参照として受け取り、結果に残さないものを手放す。結果は所有した参照である。`evv_mask` が残すリストの残りと、`ev_renew` が新しい evidence に入れる入口の表は、基本操作が自分で `dup` する
 - `clause` は `apply` と同じく関数の値を呼ぶ。操作の ABI は値の表し方を変えないためである (上の「節の呼び出し」)
 - ダミーの値 (`prim dummy()`、`0`、`#0`、`()`) は、上の「ダミーの値」の約束を守る。`dup`、`decref`、`drop` は何も起こさず、`box` と `unbox` は誤りにしない
-- `drop k` と `never` の操作による中断は、継続のクロージャが捕まえていた値を、解放の連鎖で1回ずつ解放する。`Lin` の値の破棄処理は物体の解放そのものなので、捕まっていた `File` は、この解放で読み出し口が捨てられて閉じる ([オブジェクトモデル](object-model.md) の「`File`」)
+- `drop k` は、継続のクロージャが捕まえていた値を、解放の連鎖で1回ずつ解放する。`Lin` の値の破棄処理は物体の解放そのものなので、捕まっていた `File` は、この解放で読み出し口が捨てられて閉じる ([オブジェクトモデル](object-model.md) の「`File`」)
+- 中断 (`never` の操作、`try_io` が捕まえる IO の失敗、`exit`) は継続を組み立てず、タスクのスタックを巻き戻す。外すフレームが、中断の通った命令 (末尾でない呼び出し、`Effectful` の extern、`yield_abort`) の直後に所有している RC の対象の値を、所有の数だけ手放す。`File` はこの解放で閉じる。着地の印の evidence が中断の宛先と同じ `apply` (上の「着地の印」) に着いたら、その結果にダミーを入れ、次の文から続ける。`exit` の中断の宛先はどの印とも合わないので、実行の底まで巻き戻す。手順は [VM](vm.md) の「巻き戻し」にある
+- 下の「実行時エラー」は巻き戻さず、評価全体を止める。分担は [VM](vm.md) の「中断と実行時エラーの分担」にある
 - `extern` 命令は、引数を受け取ってその場で実行し、値を返す。継続の最下部には、プログラムの終わりを表す枠があるだけで、`IO` の handler はない。`println` は Host に書く。`open` は `File` の物体を確保し、`read_all` と `read_line_raw` は受け取った `File` の参照を、読んだ文字列との組に移して返す。`close` は `File` を解放する ([エフェクトと handler](effects.md) の「組み込みの `IO`」)
 - 実行が正しく終わったとき、`evv` は空で、yield の状態はなしでなければならない (上の「`evv` の不変条件」)。そうでなければ内部の誤りである。残った evidence がリークに見えないように、この検査はモードによらず、検査モードのリークの検査の前に行う
 - 呼び出しの深さの扱いは [VM](vm.md) の「スロットとスタック」にある

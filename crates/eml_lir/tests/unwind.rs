@@ -1,5 +1,5 @@
 //! 巻き戻しの点 (`eml_lir::unwind::points_all`)。入力は所有の段の verifier を通る、Perceus の後の LIR のテキストである
-//! (docs/superpowers/specs/2026-10-17-s13c-unwinding-design.md の「巻き戻しの表」)。
+//! (docs/spec/vm.md の「巻き戻しの表」)。
 
 use eml_lir::unwind::{UnwindPoint, points_all};
 use eml_lir::{BlockId, VarId, parse, verify};

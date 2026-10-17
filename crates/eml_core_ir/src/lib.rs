@@ -297,7 +297,7 @@ pub enum Call {
         yields: bool,
         /// 着地の印。この呼び出しの中で始まった abort は、`prompt$` が使う evidence `v` を持つ呼び出しの
         /// フレームまで VM のスタックを巻き戻す。`v` は呼び出しが消費も読みもしないので `for_each_atom` は
-        /// 見せず、呼び出しの後も生きている `obj` の変数である (docs/superpowers/specs/2026-10-17-s13c-unwinding-design.md の「着地の印」)。
+        /// 見せず、呼び出しの後も生きている `obj` の変数である (docs/spec/lir.md の「着地の印」)。
         prompt: Option<VarId>,
     },
     /// handler を設け、本体の関数に `()` を適用する。translate だけが出し、EP が基本操作と `prompt$` の呼び出しに

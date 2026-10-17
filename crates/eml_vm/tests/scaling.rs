@@ -257,7 +257,7 @@ main () =
 }
 
 /// `fail` による中断は継続を作らず、タスクのスタックを巻き戻す。仕事は外したフレームの数で、深さに比例する
-/// (docs/superpowers/specs/2026-10-17-s13c-unwinding-design.md の「VM の巻き戻し」)。再帰は末尾でないので、段ごとに
+/// (docs/spec/vm.md の「巻き戻しの手順」)。再帰は末尾でないので、段ごとに
 /// フレームが1つ残る。
 #[test]
 fn unwinding_work_is_linear_in_depth() {

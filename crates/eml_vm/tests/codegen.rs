@@ -483,7 +483,7 @@ b3:
 
 /// 巻き戻しの地点の命令の後に、表の行を書く。行は命令の後で所有しているスロット (2つ以上の参照は `*n`) と、着地の
 /// 印の evidence のスロットである。手放すものも着地もない行は書かない
-/// (docs/superpowers/specs/2026-10-17-s13c-unwinding-design.md の「巻き戻しの表」)。
+/// (docs/spec/vm.md の「巻き戻しの表」)。
 #[test]
 fn an_unwind_point_shows_its_owned_slots_and_landing() {
     insta::assert_snapshot!(disasm("\

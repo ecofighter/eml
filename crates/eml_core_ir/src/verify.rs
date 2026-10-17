@@ -679,7 +679,7 @@ impl<'a> Checker<'a> {
     }
 
     /// 着地の印 `prompt v` の検査。印は EP だけが出し、末尾の位置の呼び出しには付かず、`v` は呼び出しの後も
-    /// 生きている `obj` の変数でなければならない (docs/superpowers/specs/2026-10-17-s13c-unwinding-design.md の「着地の印」)。
+    /// 生きている `obj` の変数でなければならない (docs/spec/lir.md の「着地の印」)。
     fn check_prompt(&self, call: &Call) -> Result<(), String> {
         let Some(marker) = call.prompt() else {
             return Ok(());

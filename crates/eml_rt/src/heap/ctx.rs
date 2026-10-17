@@ -53,7 +53,7 @@ pub struct MaskItem {
 pub struct CtxStats {
     pub evidence_steps: u64,
     /// `yield_to` の回数。中断と `exit` は yield でないので数えない
-    /// (docs/superpowers/specs/2026-10-17-s13c-unwinding-design.md の「`RunStats`」)。
+    /// (docs/spec/vm.md の「`RunStats`」)。
     pub yields: u64,
     pub yield_frames: u64,
     /// extern がヒープの文字列に写したバイト数。検査モードだけで数える。`Int.show` は数字の列の長さを、`String.show`
@@ -1064,8 +1064,7 @@ impl<M: Mode> Ctx<M> {
     }
 
     /// 中断を始める。`ev` は宛先の evidence、`clause` は節の本体で、どちらも消費する。中断は継続を組み立てずにタスクの
-    /// スタックを巻き戻すので、κ の欄は `()` にする (docs/superpowers/specs/2026-10-17-s13c-unwinding-design.md の
-    /// 「`eml_rt` と EP の変更」)。
+    /// スタックを巻き戻すので、κ の欄は `()` にする (docs/spec/object-model.md の「yield の状態」)。
     ///
     /// # Safety
     /// 2つの語は即値か、このヒープか付けた塊の生きている物体を指し、呼ぶ側がその参照を1つずつ持つ。`ev` は物体を指す。

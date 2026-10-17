@@ -474,12 +474,11 @@ fn call<M: Mode>(code: &CodeBase<M>, task: &mut Task, dst: Slot, at: u32) {
     task.pc = entry.start;
 }
 
-/// 中断を始めた命令の後で、タスクのスタックを巻き戻す (docs/superpowers/specs/2026-10-17-s13c-unwinding-design.md
-/// の「VM の巻き戻し」)。`task.pc` は中断を始めた命令の次の位置で、今のフレームの表を引く位置である。着地の印の
-/// evidence が `target` と同じ語のフレームに着いたら、呼び出しの結果にダミーを書いてそこから続ける。それまでの
-/// フレームは、表のスロットを手放して外す。巻き戻しの間は物体を作らず、`target` は着地するフレームが所有し続けるので、
-/// 解放した物体の番地が `target` と取り違えられることはない。安全点を置かないのは、仕事が外すフレームの数で終わるため
-/// である。
+/// 中断を始めた命令の後で、タスクのスタックを巻き戻す (docs/spec/vm.md の「巻き戻しの手順」)。`task.pc` は中断を
+/// 始めた命令の次の位置で、今のフレームの表を引く位置である。着地の印の evidence が `target` と同じ語のフレームに
+/// 着いたら、呼び出しの結果にダミーを書いてそこから続ける。それまでのフレームは、表のスロットを手放して外す。
+/// 巻き戻しの間は物体を作らず、`target` は着地するフレームが所有し続けるので、解放した物体の番地が `target` と
+/// 取り違えられることはない。安全点を置かないのは、仕事が外すフレームの数で終わるためである。
 fn unwind<M: Mode>(
     code: &CodeBase<M>,
     ctx: &mut Ctx<M>,
@@ -577,8 +576,7 @@ fn extern_call<M: Mode>(
 /// IO の失敗を、実行の時点で最も近い `try_io` に届ける。`try_io` がなければ、今までどおり実行時エラーにする。
 /// `io_failed` の節の入口は `never` の節の入口なので、`yield_abort` で巻き戻しを始めて戻らない。extern の命令の
 /// フレームは入口の呼び出し元になり、extern の地点の表で片付く。入口が戻らないので、安全点も置かない
-/// (docs/superpowers/specs/2026-10-17-s13c-unwinding-design.md の「VM の巻き戻し」)。失敗した extern は引数を
-/// すでに消費している。
+/// (docs/spec/vm.md の「IO の失敗」)。失敗した extern は引数をすでに消費している。
 fn io_failed<M: Mode>(
     code: &CodeBase<M>,
     ctx: &mut Ctx<M>,

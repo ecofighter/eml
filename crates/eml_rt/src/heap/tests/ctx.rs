@@ -105,8 +105,8 @@ fn yield_status_tells_targets_apart<M: Mode>() {
 }
 
 /// 中断は κ を持たない。巻き戻しはスタックを外すだけで継続を組み立てないので、κ の欄は `()` のままである。`yields`
-/// は `yield_to` だけを数え、中断と `exit` は数えない (docs/superpowers/specs/2026-10-17-s13c-unwinding-design.md
-/// の「`eml_rt` と EP の変更」と「`RunStats`」)。
+/// は `yield_to` だけを数え、中断と `exit` は数えない (docs/spec/object-model.md の「yield の状態」、docs/spec/vm.md
+/// の「`RunStats`」)。
 fn yield_abort_leaves_no_continuation<M: Mode>() {
     let mut ctx = ctx::<M>();
     let ev = ctx_evidence(&mut ctx);

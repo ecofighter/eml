@@ -361,7 +361,7 @@ pub enum Call {
         yields: bool,
         /// 着地の印。この呼び出しの中で始まった abort は、`prompt$` が使う evidence `v` を持つ呼び出しの
         /// フレームまで VM のスタックを巻き戻す。`v` は呼び出しが消費も読みもしないので `for_each_atom` は
-        /// 見せず、呼び出しの後も生きている `obj` の変数である (docs/superpowers/specs/2026-10-17-s13c-unwinding-design.md の「着地の印」)。
+        /// 見せず、呼び出しの後も生きている `obj` の変数である (docs/spec/lir.md の「着地の印」)。
         prompt: Option<VarId>,
     },
     /// 操作の in-place の入口のクロージャ `callee` を呼ぶ。`args` の先頭は evidence (`obj`)、残りは操作の引数で、

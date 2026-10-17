@@ -98,7 +98,7 @@ pub(super) fn prompt(resume: FnIdx, rewind: FnIdx) -> CoreFn {
     b.terminate(Term::Return(Atom::Var(r)));
 
     // `ev` 宛ての中断。巻き戻しで着地したので、κ はない
-    // (docs/superpowers/specs/2026-10-17-s13c-unwinding-design.md の「`eml_rt` と EP の変更」)
+    // (docs/spec/core-ir.md の「handle と `prompt$`」)
     b.reopen(targets[2]);
     drop(&mut b, ret);
     drop(&mut b, x);

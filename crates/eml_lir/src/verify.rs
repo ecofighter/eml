@@ -1030,7 +1030,7 @@ impl<'a> Checker<'a> {
     }
 
     /// 着地の印 `prompt v` の検査。`v` は呼び出しの後も生きている `obj` の変数でなければならない。所有の段では、
-    /// 呼び出しの直後にも所有していなければならない (docs/superpowers/specs/2026-10-17-s13c-unwinding-design.md の「着地の印」)。
+    /// 呼び出しの直後にも所有していなければならない (docs/spec/lir.md の「着地の印」)。
     fn check_prompt(&self, owned: &Owned, call: &Call, marker: VarId) -> Result<(), String> {
         let what = self.call_text(call, false);
         self.visible(marker)?;
