@@ -74,7 +74,8 @@ fn a_shared_box_gives_an_empty_token() {
     assert_eq!((stats.reuses, stats.allocations), (0, 3));
 }
 
-/// その場の書き換えで書かないフィールドは、箱に残っていた元の値を保つ。
+/// その場の書き換えの道を通す。正しい LIR では書かない引数は箱に残っている値と同じなので、このテストは書かない印を
+/// 無視して書き直す実装と見分けない。書かないフィールドを確かめるのは、空の token の道の次のテストである。
 #[test]
 fn a_skipped_field_keeps_its_value() {
     let text = format!(
@@ -97,6 +98,39 @@ fn a_skipped_field_keeps_its_value() {
     );
     assert_eq!(run_lir(&text), ("1\n3\n".to_string(), Ok(())));
     assert_eq!(checked_stats(&text).reuses, 1);
+}
+
+/// 共有された箱の token は空なので、`con` は新しい箱を確保し、書かない印の引数も書く。書かなければ新しい箱の
+/// フィールドが空のままになり、出力が違うか、引数の参照が漏れる。元の値はそのまま残る。
+#[test]
+fn a_skipped_field_is_written_when_the_token_is_empty() {
+    let text = format!(
+        "{P}fn main() -> unit {{
+  let a.0: obj = const \"1\"
+  let b.1: obj = const \"2\"
+  let p.2: obj = con P #0(a.0, b.1)
+  dup p.2
+  unpack p.2 P #0(x.3: obj, y.4: obj)
+  let r.5: token = release p.2 P #0(x.3, y.4)
+  decref y.4
+  let c.6: obj = const \"3\"
+  let q.7: obj = con P #0(=x.3, c.6) reuse r.5 in place
+  unpack q.7 P #0(u.8: obj, v.9: obj)
+  release q.7 P #0(u.8, v.9)
+  let o.10: unit = extern Prelude.println(u.8)
+  let o.11: unit = extern Prelude.println(v.9)
+  unpack p.2 P #0(s.12: obj, t.13: obj)
+  release p.2 P #0(s.12, t.13)
+  let o.14: unit = extern Prelude.println(s.12)
+  let o.15: unit = extern Prelude.println(t.13)
+  return o.15
+}}
+"
+    );
+    assert_eq!(run_lir(&text), ("1\n3\n1\n2\n".to_string(), Ok(())));
+    let stats = checked_stats(&text);
+    // ダミーと2つの `P` の3回
+    assert_eq!((stats.reuses, stats.allocations), (0, 3));
 }
 
 /// 別の型の同じ大きさのコンストラクタが箱を使うと、ヘッダのタグが書き直され、switch はそのタグの case に進む。
