@@ -451,6 +451,7 @@ impl Rewriter<'_> {
         out.push(Stmt::Let { var, rhs });
     }
 }
+
 /// 書き換えた閉包のうち、使う所が残らなかったものの `closure` を消す。残すと、`unr` でない閉包の捕獲を閉包と直接の
 /// 呼び出しの2か所で消費する IR になり、box の挿入も値として参照された関数に `f$boxed` を作る
 /// (docs/superpowers/specs/2026-10-18-s13e-specialization-design.md の「パスの後に直すもの」)。定義は使う所を

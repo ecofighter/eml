@@ -428,6 +428,42 @@ main () =
     eml_test_support::core_until(text, Pass::Evidence);
 }
 
+/// translate の関数の中で既知の閉包を捕まえた節の複製も、持ち主の handle が値として使うだけなので `internal` にする。
+/// そうしないと box の挿入が `$boxed` を挟み、yield するたびに `box` と `unbox` が増える
+/// (docs/spec/core-ir.md の「handle を含む関数の複製」)。
+#[test]
+fn a_clause_copy_in_a_translated_function_is_internal() {
+    let text = "\
+import Yield (Yield(..))
+
+nums : Unit -> <Yield Int> Unit
+nums () =
+  yield 1
+  yield 2
+
+main : Unit -> <IO> Unit
+main () =
+  let f = fn x -> x + 1
+  handle nums () with
+    | fn yield x -> println (show (f x))
+";
+    let program = eml_test_support::core_until(text, Pass::Optimize);
+    let copy = program
+        .functions
+        .iter()
+        .find(|function| function.name == "main$handle0$yield{0=main$lambda0}")
+        .unwrap_or_else(|| panic!("{}", pretty(&program)));
+    assert!(copy.internal, "{}", pretty(&program));
+    let lir = eml_test_support::lir(text);
+    assert!(
+        lir.functions
+            .iter()
+            .all(|function| !function.name.ends_with("}$boxed")),
+        "{}",
+        eml_lir::pretty(&lir)
+    );
+}
+
 /// 同じ関数の閉包でも、捕獲の数が違えば鍵が違う。名前にも捕獲の数を書き、同じ名前の関数が2つにならないようにする
 /// (docs/spec/vm.md の「追記」)。`core_text` は表示を読み直すので、名前が重なれば失敗する。
 #[test]

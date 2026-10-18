@@ -112,8 +112,7 @@ fn a_function_also_called_directly_gets_a_boxed_wrapper() {
     let text = format!(
         "{HIDE}label : Int -> String\nlabel n = show n\n\nshow_with : (Int -> String) -> Int -> String\nshow_with f n = f n\n\nmain : Unit -> <IO> Unit\nmain () =\n  println (label 1)\n  let Box f = hide label\n  println (show_with f 2)"
     );
-    let text = &text;
-    let shown = lir_text(text, eml_lir::Pass::Boxing);
+    let shown = lir_text(&text, eml_lir::Pass::Boxing);
     insta::assert_snapshot!(function(&shown, "main"), @r#"
     fn main(p.0: unit) -> unit {
       let t.1: obj = call label(1)
@@ -133,7 +132,7 @@ fn a_function_also_called_directly_gets_a_boxed_wrapper() {
     }
     ");
     // `label` の `ret` は一様なので、縮約が `f$boxed` の呼び出しを末尾呼び出しにする
-    insta::assert_snapshot!(function(&lir_text(text, eml_lir::Pass::Contract), "label$boxed"), @"
+    insta::assert_snapshot!(function(&lir_text(&text, eml_lir::Pass::Contract), "label$boxed"), @"
     fn label$boxed(n.0: tobj) -> obj {
       let n.2: int = unbox n.0
       tail call label(n.2)
@@ -298,8 +297,7 @@ fn a_value_lambda_that_fails_ends_in_a_tail_never_clause() {
     let text = format!(
         "{HIDE}effect Fail where\n  never fail : String -> a\n\napply_to : (Int -> <e> Int) -> Int -> <e> Int\napply_to f x = f x\n\nmain : Unit -> <IO> Unit\nmain () =\n  let Box f = hide (fn n -> if n > 0 then n else fail \"neg\")\n  let r = handle apply_to f 1 with\n    | ctl fail message -> 0\n  println (show r)"
     );
-    let text = &text;
-    insta::assert_snapshot!(function(&lir_text(text, eml_lir::Pass::Boxing), "main$lambda0"), @r#"
+    insta::assert_snapshot!(function(&lir_text(&text, eml_lir::Pass::Boxing), "main$lambda0"), @r#"
     internal fn main$lambda0(n.6: tobj) -> tobj {
       let n.0: int = unbox n.6
       let t.1: enum = extern "Prelude.Ord Int.>"(n.0, 0)
@@ -314,7 +312,7 @@ fn a_value_lambda_that_fails_ends_in_a_tail_never_clause() {
       return n.6
     }
     "#);
-    insta::assert_snapshot!(function(&lir_text(text, eml_lir::Pass::Contract), "main$lambda0"), @r#"
+    insta::assert_snapshot!(function(&lir_text(&text, eml_lir::Pass::Contract), "main$lambda0"), @r#"
     internal fn main$lambda0(n.6: tobj) -> tobj {
       let n.0: int = unbox n.6
       let t.1: enum = extern "Prelude.Ord Int.>"(n.0, 0)

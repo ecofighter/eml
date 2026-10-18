@@ -1201,6 +1201,7 @@ S13e-1 の完了の条件は、5つの組の自動の版と `_by_hand` の版で
 - RC の回数は、`orders`、`push_fold`、`upsert` で手書きの版に届いていない。インライン化しないので、要素ごとに直接の呼び出しが1回残り、その呼び出しが要素の所有権を受け取るためである ([実装の現在地](status.md) の「深さと性能」)。RC の回数を揃えるのは S13e-3 の条件である
 - `iter_pipeline_by_hand` も変わった。確保が1つ減り、`box` と `unbox` が1つずつ増えた (1回の実行で1回)。`Iter.generate` の handle の本体の複製は `internal` でないので、値として渡す所で `$boxed` を通るためである
 - `list` は `map` の複製で `boxes` と `unboxes` が 400000 から 200000 に、`fold_state` は `rc_increments` が 400005 から 300005 に減った
+- 変える前と変えた後で、`push_fold_by_hand` の `allocations` は7から6に、`fold_state` の `allocations` は13から10に、`push_fold` の `rc_increments` は300001から200001に減った
 
 #### 打ち切りの深さ
 
