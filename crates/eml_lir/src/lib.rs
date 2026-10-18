@@ -60,9 +60,8 @@ impl Program {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LirFn {
     pub name: String,
-    /// translate が定義の中から作る関数 (ラムダ、節、handle の本体) と、translate が作る補助の関数 (`op$`、`con$`、
-    /// `$externN`、`cont$`、`cont$state`)。直接呼ぶのは、それを作った定義の中だけである。トップレベルの関数と入口の
-    /// 関数は内部の関数でない。テキストの形では `internal fn` と書く (docs/spec/lir.md)。
+    /// 内部の関数。値として生まれる関数で、ABI は名前で決まり、いつも一様である。box の挿入はこの印だけを読む
+    /// (`eml_core_ir::CoreFn::internal`、docs/spec/lir.md の「一様な関数」)。テキストの形では `internal fn` と書く。
     pub internal: bool,
     /// 本体が yield しうる (docs/spec/core-ir.md の「`yields` の印」)。
     /// テキストの形では `internal` の後に `yields fn` と書く。

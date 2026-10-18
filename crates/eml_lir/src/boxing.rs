@@ -17,9 +17,15 @@ use crate::{
 };
 
 pub fn boxing(program: &mut Program) {
-    let (values, direct) = classify(program);
+    let values = values(program);
+    // 内部の関数の一様な ABI は名前で決まるので、T3 より前に決める。T3 は末尾で呼ぶ関数の最後の `ret` を読む
+    for function in &mut program.functions {
+        if function.internal && function.clause.is_none() && !uniform(function) {
+            uniformize_in_place(function);
+        }
+    }
     raise_tail_returns(&mut program.functions, &program.effects);
-    uniformize(program, &values, &direct);
+    uniformize(program, &values);
     // 変換はほかの関数を `signatures` でだけ見るので、関数を1つずつ書き換えながら表を共有で借りられる
     let signatures: Vec<Signature> = program.functions.iter().map(Signature::of).collect();
     for function in &mut program.functions {
@@ -37,11 +43,10 @@ pub fn boxing(program: &mut Program) {
     }
 }
 
-/// 関数ごとに、値として参照されるか (`&f`、`closure f` の対象) と、直接呼ばれるか (`call f`) を記録する。
-fn classify(program: &Program) -> (Vec<bool>, Vec<bool>) {
+/// 関数ごとに、値として参照されるか (`&f`、`closure f` の対象) を記録する。
+fn values(program: &Program) -> Vec<bool> {
     let count = program.functions.len();
     let mut values = vec![false; count];
-    let mut direct = vec![false; count];
     let mut note_value = |atom: Atom| {
         if let Atom::Fn(target) = atom {
             values[target.0 as usize] = true;
@@ -51,18 +56,18 @@ fn classify(program: &Program) -> (Vec<bool>, Vec<bool>) {
         for block in &function.blocks {
             for stmt in &block.stmts {
                 stmt.for_each_atom(&mut note_value);
-                if let Stmt::Let { var: _, rhs } = stmt {
-                    match rhs {
-                        Rhs::MakeClosure(target, _) => note_value(Atom::Fn(*target)),
-                        Rhs::Call(Call::Direct(target, _)) => direct[target.0 as usize] = true,
-                        _ => {}
-                    }
+                if let Stmt::Let {
+                    var: _,
+                    rhs: Rhs::MakeClosure(target, _),
+                } = stmt
+                {
+                    note_value(Atom::Fn(*target));
                 }
             }
             block.term.for_each_atom(&mut note_value);
         }
     }
-    (values, direct)
+    values
 }
 
 /// T3。`ret` が箱を要するスカラーで、末尾の位置の呼び出しのどれかの結果が `ret` と互換でない関数の `ret` を `tobj` に
@@ -153,12 +158,12 @@ fn uniform_repr(repr: Repr) -> Repr {
     if repr.needs_box() { Repr::TObj } else { repr }
 }
 
-/// 値として参照され、T3 の後でも一様でない関数を一様にする。直接は呼ばれない内部の関数はその場で一様にし、ほかの
-/// 関数 (直接も呼ばれる内部の関数と、トップレベルの関数) には一様な `f$boxed` を足して、値の参照をすべてそちらへ
-/// 向ける。トップレベルの関数の ABI を、ほかの定義が後から値として参照するかどうかで変えないためである
-/// (docs/spec/lir.md の「位置の規則」)。`clause` の印の関数は `apply` で呼ばれず、節の呼び出しが操作の ABI で
+/// 内部でない関数のうち、値として参照され、T3 の後でも一様でないものに、一様な `f$boxed` を足して、値の参照を
+/// すべてそちらへ向ける。関数そのものの形は変えない。内部の関数は `boxing` の初めにその場で一様にしてあり、直接の
+/// 呼び出しは呼ぶ側で `box` と `unbox` を通す。どちらも ABI を名前で決まる印だけで決め、ほかの定義が値として参照するか
+/// 直接呼ぶかで変えないためである (docs/spec/lir.md の「一様な関数」)。`clause` の印の関数は `apply` で呼ばれず、節の呼び出しが操作の ABI で
 /// 呼ぶので、一様にせずに操作の ABI に合わせる。
-fn uniformize(program: &mut Program, values: &[bool], direct: &[bool]) {
+fn uniformize(program: &mut Program, values: &[bool]) {
     let count = values.len();
     let mut redirect: Vec<Option<FnIdx>> = vec![None; count];
     for index in 0..count {
@@ -170,12 +175,7 @@ fn uniformize(program: &mut Program, values: &[bool], direct: &[bool]) {
             continue;
         }
         let function = &program.functions[index];
-        if !values[index] || uniform(function) {
-            continue;
-        }
-        if function.internal && !direct[index] {
-            uniformize_in_place(&mut program.functions[index]);
-        } else {
+        if values[index] && !uniform(function) {
             let wrapper = boxed(function, FnIdx(index as u32));
             redirect[index] = Some(FnIdx(program.functions.len() as u32));
             program.functions.push(wrapper);

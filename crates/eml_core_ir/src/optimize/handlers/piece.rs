@@ -33,7 +33,8 @@ pub(crate) fn joins(blocks: &[Block]) -> Vec<bool> {
 /// `function` の `block` の `start` 番目の文からの続きを、1つの関数の本体にする。入口は、引数を `params` にした
 /// ブロックの残りで、そこから合流のブロックを通らずに届くブロックを元の順のまま番号を振り直して続ける。合流の
 /// ブロック J への `jump` は、`exit(J, 実引数)` が返す呼び出しの末尾呼び出しにして、J には進まない。届かない
-/// ブロックは落とす。継続の関数 `f{H}$hN` と合流のブロックの関数 `f{H}$hjJ` は、どちらもこの形で作る。
+/// ブロックは落とす。継続の関数 `f{H}$hN` と合流のブロックの関数 `f{H}$hjJ` は、どちらもこの形で作る。作る関数は
+/// 内部の関数でない。`k` として渡す継続の関数だけを、呼ぶ側が内部の関数にする (docs/spec/lir.md の「一様な関数」)。
 ///
 /// 合流のブロックを写さないのは、写すと、合流のブロックとその先が、そこへ届くどの継続の関数にも入るためである。
 /// 条件つきの `perform` が並ぶと、コードが `perform` の数の2乗で育つ。合流のブロックでない行き先は、入る辺が
@@ -116,7 +117,7 @@ pub(crate) fn region(
     };
     CoreFn {
         name: function.name.clone(),
-        internal: true,
+        internal: false,
         yields: function.yields,
         clause: None,
         vars: used.iter().map(info).collect(),
@@ -309,7 +310,8 @@ impl Copy<'_> {
 /// 消して、使う所を `k` そのものにする。継続の関数の閉包は包む関数と同じ引数を受けるので、包む必要がないためである。
 /// `resume k(v, s)` は、状態のない handler では `apply k(v)` に、状態つきでは `apply k(v, s)` にする。`mask` は
 /// そのまま残す。EP が `resume` から作る `apply` と同じく、印は節の関数の `yields` の印にする (docs/spec/core-ir.md の
-/// 「`apply` の印と分け方」)。`k` の出現がこの3つの形だけであることは、呼ぶ側が確かめてある。
+/// 「`apply` の印と分け方」)。`k` の出現がこの3つの形だけであることは、呼ぶ側が確かめてある。写しは handler の
+/// 複製から直接呼ばれるために生まれるので、内部の関数でない (docs/spec/lir.md の「一様な関数」)。
 pub(crate) fn clause_with_k(
     clause: &CoreFn,
     name: String,
@@ -318,7 +320,7 @@ pub(crate) fn clause_with_k(
 ) -> CoreFn {
     let mut copy = clause.clone();
     copy.name = name;
-    copy.internal = true;
+    copy.internal = false;
     let k = copy.params()[copy.params().len() - 2];
     copy.vars[k.0 as usize].repr = Repr::TObj;
     let mut wrapped = HashSet::new();

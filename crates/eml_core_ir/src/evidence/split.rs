@@ -99,7 +99,7 @@ pub(crate) fn split(
         let segments = splitter.interval(point.block, point.resume);
         let body = splitter.build(program, helpers, &segments, params, Mode::Interval);
         let idx = splitter.continuations[index];
-        program.functions[idx.0 as usize] = splitter.continuation(idx, program, body);
+        program.functions[idx.0 as usize] = splitter.continuation(idx, program, body, true);
     }
     while let Some(join) = splitter.pending.pop() {
         let mut params = splitter.join_live(join);
@@ -107,7 +107,7 @@ pub(crate) fn split(
         let segments = splitter.interval(join, 0);
         let body = splitter.build(program, helpers, &segments, params, Mode::Interval);
         let idx = splitter.joins[&join];
-        program.functions[idx.0 as usize] = splitter.continuation(idx, program, body);
+        program.functions[idx.0 as usize] = splitter.continuation(idx, program, body, false);
     }
 }
 
@@ -289,11 +289,13 @@ impl<'a> Splitter<'a> {
         join
     }
 
-    fn continuation(&self, idx: FnIdx, program: &Program, body: Out) -> CoreFn {
+    /// 継続の関数 `f$kN` は κ に合成する値として生まれるので内部の関数にし、直接呼ばれるだけの合流のブロックの関数
+    /// `f$jJ` は内部の関数にしない (`internal`、docs/spec/lir.md の「一様な関数」)。
+    fn continuation(&self, idx: FnIdx, program: &Program, body: Out, internal: bool) -> CoreFn {
         let (vars, blocks) = body.compact();
         CoreFn {
             name: program.function(idx).name.clone(),
-            internal: true,
+            internal,
             yields: true,
             clause: None,
             vars,

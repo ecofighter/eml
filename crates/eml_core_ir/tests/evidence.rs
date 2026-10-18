@@ -255,7 +255,7 @@ b3(v.3: int):
     }
     ");
     insta::assert_snapshot!(function(&shown, "f$j3"), @"
-    internal yields fn f$j3(a.0: int, v.1: int) -> int {
+    yields fn f$j3(a.0: int, v.1: int) -> int {
       let w.2: int = extern Prelude.+(v.1, a.0)
       return w.2
     }
@@ -295,7 +295,7 @@ b3(v.2: int):
     }
     ");
     insta::assert_snapshot!(function(&shown, "f$j3"), @"
-    internal yields fn f$j3(x.0: int, v.1: int) -> int {
+    yields fn f$j3(x.0: int, v.1: int) -> int {
       let w.2: int = call g(v.1)
       let y.3: int = prim yielding()
       switch y.3 { 0 -> b2, _ -> b1 }
@@ -517,29 +517,29 @@ const ASK: &str = "effect Ask where\n  ask : Unit -> Int\n\n";
 /// 関数の値をデータに入れて取り出す。optimize はデータを通った値を既知の閉包としないので
 /// (docs/superpowers/specs/2026-10-18-s13e-specialization-design.md の「既知の閉包」)、取り出した値への呼び出しは
 /// 特殊化されない。handle の本体に使えば handler への特殊化も起きないので、EP が handle、`perform`、`resume` を
-/// 下ろす形を確かめられる。
-const HIDE: &str = "data Box a = | Box a\n\nhide : a -> Box a\nhide x = Box x\n\n";
+/// 下ろす形を確かめられる。`hide` は自分を呼ぶので展開されず、取り出した値は呼ぶ側から見えない。
+const HIDE: &str = "data Box a = | Box a\n\nhide : Int -> a -> Box a\nhide n x = if n <= 0 then Box x else hide (n - 1) x\n\n";
 
 /// handle の場所の形 (docs/spec/core-ir.md の「handle と `prompt$`」)。
 /// in-place の入口を `ev_set_clause` で入れてから `evv` を替え、本体の結果を `prompt$` に渡す。
 #[test]
 fn a_handle_installs_evidence_and_calls_prompt() {
     let text = format!(
-        "{ASK}{HIDE}main : Unit -> <IO> Unit\nmain () =\n  let Box b = hide (fn () -> ask () + 1)\n  let r =\n    handle b () with\n      | ctl ask () k -> k 41\n  println (show r)"
+        "{ASK}{HIDE}main : Unit -> <IO> Unit\nmain () =\n  let Box b = hide 0 (fn () -> ask () + 1)\n  let r =\n    handle b () with\n      | ctl ask () k -> k 41\n  println (show r)"
     );
     let shown = core_text(&text, Pass::Evidence);
     insta::assert_snapshot!(function(&shown, "main"), @r#"
     fn main(p.0: unit) -> unit {
-      let d.7: obj = con Box #0(&main$lambda0)
-      unpack d.7 Box #0(b.2: tobj)
+      let t.1: obj = call "hide@[Unit -> <Ask> Int]{1=main$lambda0}"(0)
+      unpack t.1 Box #0(b.2: tobj)
       let c.3: tobj = closure main$handle0(b.2)
-      let w.8: tobj = prim evv_get()
-      let ev.9: obj = prim ev_new[Ask]((), w.8)
-      let u.10: unit = prim ev_set_clause[Ask.ask](ev.9, &main$handle0$ask$entry)
-      let w.11: tobj = prim evv_push(w.8, ev.9)
-      let u.12: unit = prim evv_set(w.11)
-      let x.13: tobj poly = yields apply c.3(()) prompt ev.9
-      let t.4: int = call prompt$(ev.9, &main$handle0$return, x.13)
+      let w.7: tobj = prim evv_get()
+      let ev.8: obj = prim ev_new[Ask]((), w.7)
+      let u.9: unit = prim ev_set_clause[Ask.ask](ev.8, &main$handle0$ask$entry)
+      let w.10: tobj = prim evv_push(w.7, ev.8)
+      let u.11: unit = prim evv_set(w.10)
+      let x.12: tobj poly = yields apply c.3(()) prompt ev.8
+      let t.4: int = call prompt$(ev.8, &main$handle0$return, x.12)
       let t.5: obj = extern "Prelude.Show Int.show"(t.4)
       let t.6: unit = extern Prelude.println(t.5)
       return t.6
@@ -552,7 +552,7 @@ fn an_immediate_clause_becomes_its_entry() {
     // 末尾で1回だけ再開する節は、`k` と状態の引数を除いた入口になり、状態を evidence の欄から出し入れする。
     // resume は残らない
     let text = format!(
-        "{ASK}{HIDE}main : Unit -> <IO> Unit\nmain () =\n  let Box b = hide (fn () -> ask () + 1)\n  let r =\n    handle b () with\n      | ctl ask () k -> k 41\n  println (show r)"
+        "{ASK}{HIDE}main : Unit -> <IO> Unit\nmain () =\n  let Box b = hide 0 (fn () -> ask () + 1)\n  let r =\n    handle b () with\n      | ctl ask () k -> k 41\n  println (show r)"
     );
     let shown = core_text(&text, Pass::Evidence);
     assert!(!shown.contains("fn main$handle0$ask("), "{shown}");
@@ -569,7 +569,7 @@ fn an_immediate_clause_becomes_its_entry() {
 fn a_clause_that_does_not_resume_at_once_yields_to_its_handler() {
     // 入口は節のクロージャを作って `yield_to` を呼び、ダミーを返す。節の関数は `prompt$` が `apply c(k, st)` で呼ぶ
     let text = format!(
-        "{ASK}{HIDE}main : Unit -> <IO> Unit\nmain () =\n  let Box b = hide (fn () -> ask () + 1)\n  let r =\n    handle b () with\n      | ctl ask () k ->\n        let v = k 10\n        v * 2\n  println (show r)"
+        "{ASK}{HIDE}main : Unit -> <IO> Unit\nmain () =\n  let Box b = hide 0 (fn () -> ask () + 1)\n  let r =\n    handle b () with\n      | ctl ask () k ->\n        let v = k 10\n        v * 2\n  println (show r)"
     );
     let shown = core_text(&text, Pass::Evidence);
     insta::assert_snapshot!(function(&shown, "main$handle0$ask$entry"), @"
@@ -586,7 +586,7 @@ fn a_resume_becomes_an_apply() {
     // `resume k(v, s)` は、含む関数の `yields` の印を写した `apply k(v, s)` になる。handle を含む `main` が `yields` で
     // ないので、節の関数も `apply` も印を持たない
     let text = format!(
-        "{ASK}{HIDE}main : Unit -> <IO> Unit\nmain () =\n  let Box b = hide (fn () -> ask () + 1)\n  let r =\n    handle b () with\n      | ctl ask () k ->\n        let v = k 10\n        v * 2\n  println (show r)"
+        "{ASK}{HIDE}main : Unit -> <IO> Unit\nmain () =\n  let Box b = hide 0 (fn () -> ask () + 1)\n  let r =\n    handle b () with\n      | ctl ask () k ->\n        let v = k 10\n        v * 2\n  println (show r)"
     );
     let shown = core_text(&text, Pass::Evidence);
     insta::assert_snapshot!(function(&shown, "main$handle0$ask"), @"
@@ -602,7 +602,7 @@ fn a_resume_becomes_an_apply() {
 fn a_clause_that_performs_another_effect_is_not_run_in_place() {
     // 節の本体が外の handler の操作を呼ぶ (yield の地点を持つ) と、すぐに再開する節でも `yield_to` の入口になる
     let text = format!(
-        "{ASK}{HIDE}effect Log where\n  log : Int -> Unit\n\nmain : Unit -> <IO> Unit\nmain () =\n  let Box b = hide (fn () -> ask () + 1)\n  let r =\n    handle (handle b () with\n              | ctl ask () k ->\n                log 1\n                k 41) with\n      | ctl log n k -> k ()\n  println (show r)"
+        "{ASK}{HIDE}effect Log where\n  log : Int -> Unit\n\nmain : Unit -> <IO> Unit\nmain () =\n  let Box b = hide 0 (fn () -> ask () + 1)\n  let r =\n    handle (handle b () with\n              | ctl ask () k ->\n                log 1\n                k 41) with\n      | ctl log n k -> k ()\n  println (show r)"
     );
     let shown = core_text(&text, Pass::Evidence);
     insta::assert_snapshot!(function(&shown, "main$handle0$ask$entry"), @"
@@ -640,7 +640,7 @@ fn a_never_clause_aborts() {
 fn a_perform_looks_up_evidence_and_calls_its_clause() {
     // `perform` は evidence を探し、その入口の欄を読んで節の呼び出しにする。末尾でないので yield の地点になる
     let text = format!(
-        "{ASK}{HIDE}main : Unit -> <IO> Unit\nmain () =\n  let Box b = hide (fn () -> ask () + 1)\n  let r =\n    handle b () with\n      | ctl ask () k -> k 41\n  println (show r)"
+        "{ASK}{HIDE}main : Unit -> <IO> Unit\nmain () =\n  let Box b = hide 0 (fn () -> ask () + 1)\n  let r =\n    handle b () with\n      | ctl ask () k -> k 41\n  println (show r)"
     );
     let shown = core_text(&text, Pass::Evidence);
     insta::assert_snapshot!(function(&shown, "main$lambda0"), @"
@@ -687,7 +687,7 @@ fn a_masked_call_restores_the_evidence_list_and_wraps_the_continuation() {
     // 遅い道は κ を `mask$[State]` で包んでから `run$k1` を `compose$` で足す。速い道の先頭で `evv_set(w0)` が
     // `evv` を戻し、`run$k1` の引数に w0 はない
     let text = format!(
-        "effect State s where\n  get : Unit -> s\n  put : s -> Unit\n\n{HIDE}run : (Unit -> <e> String) -> <State Int | e> String\nrun cb =\n  let n = get ()\n  let s = cb ()\n  s ++ show n\n\ncb : Unit -> <State String> String\ncb () = get () ++ \"!\"\n\nmain : Unit -> <IO> Unit\nmain () =\n  let Box f = hide cb\n  let r = handle (handle run f with\n                    | ctl get () k -> k 42\n                    | ctl put _ k -> k ()) with\n            | ctl get () k -> k \"str\"\n            | ctl put _ k -> k ()\n  println r"
+        "effect State s where\n  get : Unit -> s\n  put : s -> Unit\n\n{HIDE}run : (Unit -> <e> String) -> <State Int | e> String\nrun cb =\n  let n = get ()\n  let s = cb ()\n  s ++ show n\n\ncb : Unit -> <State String> String\ncb () = get () ++ \"!\"\n\nmain : Unit -> <IO> Unit\nmain () =\n  let Box f = hide 0 cb\n  let r = handle (handle run f with\n                    | ctl get () k -> k 42\n                    | ctl put _ k -> k ()) with\n            | ctl get () k -> k \"str\"\n            | ctl put _ k -> k ()\n  println r"
     );
     let shown = core_text(&text, Pass::Evidence);
     let run = instance_name(&shown, "run");
@@ -741,7 +741,7 @@ fn a_masked_call_in_a_continuation_restores_the_evidence_list_before_it_continue
     // 2つ目の `cb ()` は1つ目の地点の後の区間にあるので、`run$k0` の中の地点になる。`run$k0` の速い道は `run$k1` を
     // 呼んで止まるが、その前に `evv_set(w0)` で `evv` を戻す。`run$k1` の本体には `evv_set` がない
     let text = format!(
-        "effect State s where\n  get : Unit -> s\n  put : s -> Unit\n\n{HIDE}run : (Unit -> <e> String) -> <State Int | e> String\nrun cb =\n  let a = cb ()\n  let b = cb ()\n  a ++ b\n\ncb : Unit -> <State String> String\ncb () = get ()\n\nmain : Unit -> <IO> Unit\nmain () =\n  let Box f = hide cb\n  let Box run = hide run\n  let r = handle (handle run f with\n                    | ctl get () k -> k 42\n                    | ctl put _ k -> k ()) with\n            | ctl get () k -> k \"str\"\n            | ctl put _ k -> k ()\n  println r"
+        "effect State s where\n  get : Unit -> s\n  put : s -> Unit\n\n{HIDE}run : (Unit -> <e> String) -> <State Int | e> String\nrun cb =\n  let a = cb ()\n  let b = cb ()\n  a ++ b\n\ncb : Unit -> <State String> String\ncb () = get ()\n\nmain : Unit -> <IO> Unit\nmain () =\n  let Box f = hide 0 cb\n  let Box run = hide 0 run\n  let r = handle (handle run f with\n                    | ctl get () k -> k 42\n                    | ctl put _ k -> k ()) with\n            | ctl get () k -> k \"str\"\n            | ctl put _ k -> k ()\n  println r"
     );
     let shown = core_text(&text, Pass::Evidence);
     let run = instance_name(&shown, "run");
@@ -780,7 +780,7 @@ fn a_resume_in_a_yielding_function_becomes_a_yielding_apply() {
     // handle を含む `f` は `Log` を外へ通すので `yields` で、節の関数も `yields` になる。`resume k(v, s)` は
     // `yields apply k(v, s)` になり、末尾でなければ yield の地点になる
     let text = format!(
-        "{ASK}{HIDE}effect Log where\n  log : Int -> Unit\n\nf : Unit -> <Log> Int\nf () =\n  let Box b = hide (fn () -> ask () + 1)\n  handle b () with\n    | ctl ask () k ->\n      let v = k 10\n      v * 2\n\nmain : Unit -> <IO> Unit\nmain () =\n  let r = handle f () with\n            | ctl log _ k -> k ()\n  println (show r)"
+        "{ASK}{HIDE}effect Log where\n  log : Int -> Unit\n\nf : Unit -> <Log> Int\nf () =\n  let Box b = hide 0 (fn () -> ask () + 1)\n  handle b () with\n    | ctl ask () k ->\n      let v = k 10\n      v * 2\n\nmain : Unit -> <IO> Unit\nmain () =\n  let r = handle f () with\n            | ctl log _ k -> k ()\n  println (show r)"
     );
     let shown = core_text(&text, Pass::Evidence);
     insta::assert_snapshot!(function(&shown, "f$handle0$ask"), @"
@@ -805,7 +805,7 @@ fn a_resume_in_a_yielding_function_becomes_a_yielding_apply() {
 #[test]
 fn a_pure_instance_of_a_row_polymorphic_function_has_no_yield_check() {
     let text = format!(
-        "{ASK}{HIDE}twice : (Unit -> <e> Int) -> <e> Int\ntwice f = f () + f ()\n\npure : Unit -> Int\npure () =\n  let Box f = hide (fn () -> 1)\n  let Box twice = hide twice\n  twice f\n\nmain : Unit -> <IO> Unit\nmain () =\n  println (show (pure ()))\n  let Box g = hide ask\n  let Box twice = hide twice\n  println (show (handle twice g with\n    | ctl ask () k -> k 2))"
+        "{ASK}{HIDE}twice : (Unit -> <e> Int) -> <e> Int\ntwice f = f () + f ()\n\npure : Unit -> Int\npure () =\n  let Box f = hide 0 (fn () -> 1)\n  let Box twice = hide 0 twice\n  twice f\n\nmain : Unit -> <IO> Unit\nmain () =\n  println (show (pure ()))\n  let Box g = hide 0 ask\n  let Box twice = hide 0 twice\n  println (show (handle twice g with\n    | ctl ask () k -> k 2))"
     );
     let shown = core_text(&text, Pass::Evidence);
     insta::assert_snapshot!(function(&shown, "twice"), @"
@@ -867,7 +867,7 @@ fn closures_ep_builds_take_the_join_of_their_captures() {
     // 操作の引数の `File` を捕まえて `lin` になる
     // (docs/spec/core-ir.md の「EP が足す変数の印」)
     let text = format!(
-        "effect Ask where\n  ask : Unit -> Int\n\neffect Sink where\n  put : Fs.File -> Unit\n\nuse_it : Fs.File -> <Ask, IO> Unit\nuse_it f =\n  let n = ask ()\n  Fs.close f\n  println (show n)\n\ncount : Int -> <Ask> Int\ncount m =\n  let n = ask ()\n  n + m\n\n{HIDE}main : Unit -> <IO> Unit\nmain () =\n  let Box u = hide use_it\n  let Box c = hide count\n  handle u (Fs.open \"input.txt\") with\n    | ctl ask () k -> k 1\n  let r = handle c 1 with\n    | ctl ask () k -> k 2\n  println (show r)\n  let Box p = hide put\n  handle p (Fs.open \"input.txt\") with\n    | ctl put f k ->\n      Fs.close f\n      let u = k ()\n      println \"resumed\"\n      u"
+        "effect Ask where\n  ask : Unit -> Int\n\neffect Sink where\n  put : Fs.File -> Unit\n\nuse_it : Fs.File -> <Ask, IO> Unit\nuse_it f =\n  let n = ask ()\n  Fs.close f\n  println (show n)\n\ncount : Int -> <Ask> Int\ncount m =\n  let n = ask ()\n  n + m\n\n{HIDE}main : Unit -> <IO> Unit\nmain () =\n  let Box u = hide 0 use_it\n  let Box c = hide 0 count\n  handle u (Fs.open \"input.txt\") with\n    | ctl ask () k -> k 1\n  let r = handle c 1 with\n    | ctl ask () k -> k 2\n  println (show r)\n  let Box p = hide 0 put\n  handle p (Fs.open \"input.txt\") with\n    | ctl put f k ->\n      Fs.close f\n      let u = k ()\n      println \"resumed\"\n      u"
     );
     let shown = core_text(&text, Pass::Evidence);
     let use_it = function(&shown, "use_it");
@@ -899,7 +899,7 @@ fn evidence_and_evv_are_unr_and_state_is_poly() {
     // 状態、κ、節の本体、ダミーは `poly` である。ただし in-place の入口が取り出す状態は、translate が節の状態の引数に
     // 付けた印のままである。handle の本体の結果は `File` でありうるので `poly` である
     // (docs/spec/core-ir.md の「EP が足す変数の印」)
-    let text = "effect State s where\n  get : Unit -> s\n  put : s -> Unit\n\neffect Ask where\n  ask : Unit -> Int\n\nrun : (Unit -> <e> String) -> <State Int | e> String\nrun cb =\n  let n = get ()\n  let s = cb ()\n  s ++ show n\n\ncb : Unit -> <State String> String\ncb () = get () ++ \"!\"\n\nmain : Unit -> <IO> Unit\nmain () =\n  let r = handle (handle run cb with\n                    | ctl get () k -> k 42\n                    | ctl put _ k -> k ()) with\n            | ctl get () k -> k \"str\"\n            | ctl put _ k -> k ()\n  println r\n  let Box b = hide (fn () -> ask () + 1)\n  let a = handle b () with\n    | ctl ask () k ->\n      let v = k 10\n      v * 2\n  println (show a)";
+    let text = "effect State s where\n  get : Unit -> s\n  put : s -> Unit\n\neffect Ask where\n  ask : Unit -> Int\n\nrun : (Unit -> <e> String) -> <State Int | e> String\nrun cb =\n  let n = get ()\n  let s = cb ()\n  s ++ show n\n\ncb : Unit -> <State String> String\ncb () = get () ++ \"!\"\n\nmain : Unit -> <IO> Unit\nmain () =\n  let r = handle (handle run cb with\n                    | ctl get () k -> k 42\n                    | ctl put _ k -> k ()) with\n            | ctl get () k -> k \"str\"\n            | ctl put _ k -> k ()\n  println r\n  let Box b = hide 0 (fn () -> ask () + 1)\n  let a = handle b () with\n    | ctl ask () k ->\n      let v = k 10\n      v * 2\n  println (show a)";
     let text = format!("{HIDE}{text}");
     let text = text.as_str();
     let program = eml_test_support::core_until(text, Pass::Evidence);
@@ -957,7 +957,7 @@ fn evidence_and_evv_are_unr_and_state_is_poly() {
 #[test]
 fn an_io_extern_is_not_a_yield_point() {
     let text = format!(
-        "{ASK}{HIDE}f : Unit -> <Ask, IO> Int\nf () =\n  println \"a\"\n  let n = ask ()\n  n + 1\n\nmain : Unit -> <IO> Unit\nmain () =\n  let Box g = hide f\n  let r = handle g () with\n            | ctl ask () k -> k 1\n  println (show r)"
+        "{ASK}{HIDE}f : Unit -> <Ask, IO> Int\nf () =\n  println \"a\"\n  let n = ask ()\n  n + 1\n\nmain : Unit -> <IO> Unit\nmain () =\n  let Box g = hide 0 f\n  let r = handle g () with\n            | ctl ask () k -> k 1\n  println (show r)"
     );
     let shown = core_text(&text, Pass::Evidence);
     insta::assert_snapshot!(function(&shown, "f"), @r#"
@@ -986,7 +986,7 @@ fn an_io_extern_is_not_a_yield_point() {
 #[test]
 fn a_never_clause_call_is_not_a_yield_point() {
     let text = format!(
-        "{ASK}{HIDE}effect Fail where\n  never fail : String -> a\n\nf : Unit -> <Ask, Fail> Int\nf () =\n  let n = fail \"x\"\n  let m = ask ()\n  n + m\n\nmain : Unit -> <IO> Unit\nmain () =\n  let Box g = hide f\n  let r = handle (handle g () with\n                    | ctl ask () k -> k 1) with\n            | ctl fail _ -> 0\n  println (show r)"
+        "{ASK}{HIDE}effect Fail where\n  never fail : String -> a\n\nf : Unit -> <Ask, Fail> Int\nf () =\n  let n = fail \"x\"\n  let m = ask ()\n  n + m\n\nmain : Unit -> <IO> Unit\nmain () =\n  let Box g = hide 0 f\n  let r = handle (handle g () with\n                    | ctl ask () k -> k 1) with\n            | ctl fail _ -> 0\n  println (show r)"
     );
     let shown = core_text(&text, Pass::Evidence);
     insta::assert_snapshot!(function(&shown, "f"), @r#"
@@ -1030,17 +1030,19 @@ fn a_never_entry_does_not_yield() {
 fn an_extern_wrapper_does_not_yield() {
     // 包む関数は小さいので、特殊化した複製に展開されて消える。データを通して渡し、包む関数を値として残す
     let text = format!(
-        "{HIDE}main : Unit -> <IO> Unit\nmain () =\n  let Box close = hide Fs.close\n  let Box open = hide Fs.open\n  match try_io (fn () -> List.each close (List.map open [\"a.txt\"])) with\n    | Ok () -> println \"ok\"\n    | Err e -> println \"\\{{e}}\""
+        "{HIDE}main : Unit -> <IO> Unit\nmain () =\n  let Box close = hide 0 Fs.close\n  let Box open = hide 0 Fs.open\n  match try_io (fn () -> List.each close (List.map open [\"a.txt\"])) with\n    | Ok () -> println \"ok\"\n    | Err e -> println \"\\{{e}}\""
     );
     let shown = core_text(&text, Pass::Evidence);
     let wrappers: Vec<&str> = shown
         .lines()
         .filter(|line| line.contains("fn ") && line.contains("$extern"))
         .collect();
-    insta::assert_snapshot!(wrappers.join("\n"), @"
+    insta::assert_snapshot!(wrappers.join("\n"), @r#"
     internal fn main$extern0(p.0: obj lin) -> unit {
     internal fn main$extern1(p.0: obj) -> obj lin {
-    ");
+    fn "hide@[Std.Fs.File -> <IO> Unit]{1=main$extern0}"(n.0: int) -> obj {
+    fn "hide@[String -> <IO> Std.Fs.File]{1=main$extern1}"(n.0: int) -> obj {
+    "#);
 }
 
 /// `yields` でない関数の `mask` 付きの呼び出しは、`evv` を替えて戻すだけで、yield の確認も遅い道も持たない。
@@ -1048,7 +1050,7 @@ fn an_extern_wrapper_does_not_yield() {
 #[test]
 fn a_masked_call_in_a_non_yielding_function_has_no_slow_path() {
     let text = format!(
-        "effect Fail where\n  never fail : String -> a\n\n{HIDE}run : (Unit -> <e> Int) -> <Fail | e> Int\nrun cb =\n  let x = cb ()\n  x + 1\n\nmain : Unit -> <IO> Unit\nmain () =\n  let Box cb = hide (fn () -> fail \"outer\")\n  let r = handle (handle run cb with\n                    | ctl fail _ -> 1) with\n            | ctl fail _ -> 2\n  println (show r)"
+        "effect Fail where\n  never fail : String -> a\n\n{HIDE}run : (Unit -> <e> Int) -> <Fail | e> Int\nrun cb =\n  let x = cb ()\n  x + 1\n\nmain : Unit -> <IO> Unit\nmain () =\n  let Box cb = hide 0 (fn () -> fail \"outer\")\n  let r = handle (handle run cb with\n                    | ctl fail _ -> 1) with\n            | ctl fail _ -> 2\n  println (show r)"
     );
     let shown = core_text(&text, Pass::Evidence);
     insta::assert_snapshot!(function(&shown, "run"), @"
@@ -1072,7 +1074,7 @@ fn continuations_of_many_yield_points_stay_linear_in_size() {
     // N^2 個ほどになる
     const COUNT: usize = 2000;
     let text = format!(
-        "{ASK}{HIDE}f : Unit -> <Ask> Int\nf () =\n{}  0\n\nmain : Unit -> <IO> Unit\nmain () =\n  let Box g = hide f\n  let r = handle g () with\n            | ctl ask () k -> k 1\n  println (show r)",
+        "{ASK}{HIDE}f : Unit -> <Ask> Int\nf () =\n{}  0\n\nmain : Unit -> <IO> Unit\nmain () =\n  let Box g = hide 0 f\n  let r = handle g () with\n            | ctl ask () k -> k 1\n  println (show r)",
         "  let _ = ask ()\n".repeat(COUNT)
     );
     let program = eml_test_support::lir(&text);
@@ -1107,7 +1109,7 @@ fn clause_local_function_resumes_once() {
 fn a_fn_clause_runs_in_place() {
     let program = |clause: &str| {
         format!(
-            "{ASK}{HIDE}run : Int -> Int\nrun n =\n  let Box b = hide (fn () -> ask () + 1)\n  handle b () with\n    | {clause}\n\nmain : Unit -> <IO> Unit\nmain () = println (show (run 41))"
+            "{ASK}{HIDE}run : Int -> Int\nrun n =\n  let Box b = hide 0 (fn () -> ask () + 1)\n  handle b () with\n    | {clause}\n\nmain : Unit -> <IO> Unit\nmain () = println (show (run 41))"
         )
     };
     let fn_clause = core_text(&program("fn ask () -> n"), Pass::Evidence);
@@ -1129,7 +1131,7 @@ fn a_fn_clause_runs_in_place() {
 #[test]
 fn a_fn_clause_that_performs_yields() {
     let text = format!(
-        "{ASK}{HIDE}effect Log where\n  log : Int -> Unit\n\nmain : Unit -> <IO> Unit\nmain () =\n  let Box b = hide (fn () -> ask () + 1)\n  let r =\n    handle (handle b () with\n              | fn ask () ->\n                log 1\n                41) with\n      | ctl log n k -> k ()\n  println (show r)"
+        "{ASK}{HIDE}effect Log where\n  log : Int -> Unit\n\nmain : Unit -> <IO> Unit\nmain () =\n  let Box b = hide 0 (fn () -> ask () + 1)\n  let r =\n    handle (handle b () with\n              | fn ask () ->\n                log 1\n                41) with\n      | ctl log n k -> k ()\n  println (show r)"
     );
     let shown = core_text(&text, Pass::Evidence);
     insta::assert_snapshot!(function(&shown, "main$handle0$ask$entry"), @"
@@ -1147,7 +1149,7 @@ fn a_fn_clause_that_performs_yields() {
 #[test]
 fn a_fn_clause_that_prints_runs_in_place_under_the_outer_evv() {
     let text = format!(
-        "{ASK}{HIDE}run : Unit -> <IO> Int\nrun () =\n  let Box b = hide (fn () -> ask () + 1)\n  handle b () with\n    | fn ask () ->\n      println \"x\"\n      1\n\nmain : Unit -> <IO> Unit\nmain () = println (show (run ()))"
+        "{ASK}{HIDE}run : Unit -> <IO> Int\nrun () =\n  let Box b = hide 0 (fn () -> ask () + 1)\n  handle b () with\n    | fn ask () ->\n      println \"x\"\n      1\n\nmain : Unit -> <IO> Unit\nmain () = println (show (run ()))"
     );
     let shown = core_text(&text, Pass::Evidence);
     let entry = function(&shown, "run$handle0$ask$entry");
@@ -1171,7 +1173,7 @@ fn a_fn_clause_that_prints_runs_in_place_under_the_outer_evv() {
 #[test]
 fn a_fn_clause_that_calls_nothing_has_no_under() {
     let text = format!(
-        "effect Get where\n  get : Unit -> Int\n\n{HIDE}run : Int -> Int\nrun n =\n  let Box b = hide (fn () -> get () + 1)\n  handle b () from n with\n    | fn get () st -> (st, st)\n    | return x _ -> x\n\nmain : Unit -> <IO> Unit\nmain () = println (show (run 41))"
+        "effect Get where\n  get : Unit -> Int\n\n{HIDE}run : Int -> Int\nrun n =\n  let Box b = hide 0 (fn () -> get () + 1)\n  handle b () from n with\n    | fn get () st -> (st, st)\n    | return x _ -> x\n\nmain : Unit -> <IO> Unit\nmain () = println (show (run 41))"
     );
     let shown = core_text(&text, Pass::Evidence);
     let entry = function(&shown, "run$handle0$get$entry");
@@ -1190,7 +1192,7 @@ fn a_fn_clause_that_calls_nothing_has_no_under() {
 #[test]
 fn a_fn_clause_that_fails_runs_in_place() {
     let text = format!(
-        "{ASK}{HIDE}effect Fail where\n  never fail : String -> a\n\nrun : Int -> <Fail> Int\nrun n =\n  let Box b = hide (fn () -> ask () + 1)\n  handle b () with\n    | fn ask () -> if n == 0 then fail \"zero\" else n\n\nmain : Unit -> <IO> Unit\nmain () =\n  let r =\n    handle run 0 with\n      | ctl fail _ -> 0\n  println (show r)"
+        "{ASK}{HIDE}effect Fail where\n  never fail : String -> a\n\nrun : Int -> <Fail> Int\nrun n =\n  let Box b = hide 0 (fn () -> ask () + 1)\n  handle b () with\n    | fn ask () -> if n == 0 then fail \"zero\" else n\n\nmain : Unit -> <IO> Unit\nmain () =\n  let r =\n    handle run 0 with\n      | ctl fail _ -> 0\n  println (show r)"
     );
     let shown = core_text(&text, Pass::Evidence);
     let entry = function(&shown, "run$handle0$ask$entry");

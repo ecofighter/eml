@@ -571,18 +571,12 @@ fn a_closure_with_a_file_passed_as_a_type_variable_lowers() {
         .collect();
     // optimize は `f` を既知のラムダごとに複製するので、2つの instance は複製に置き換わる。複製の連鎖は鍵の入れ子の
     // 深さで止まる (docs/superpowers/specs/2026-10-18-s13e-specialization-design.md の「鍵」)。小さな複製は呼ぶ側に
-    // 展開されて残らない (同じ文書の「インライン化」)
+    // 展開されて残らない (同じ文書の「インライン化」)。ラムダの複製は内部の関数なので、ここには並ばない
     assert_eq!(
         names,
         [
             "f@[Int]{1=main$lambda0, 2=shut_with/1}",
-            "f@#a5c201dc663fca79",
-            "f@#8125c0618c7d4a0f",
-            "f@#7d810ee743b0d10c",
-            "f@[Int]$lambda0{1=main$lambda0, 2=shut_with/1}",
-            "f@#a5c201dc663fca79$boxed",
-            "f@#8125c0618c7d4a0f$boxed",
-            "f@[Int]$lambda0{1=main$lambda0, 2=shut_with/1}$boxed",
+            "f@#7d810ee743b0d10c"
         ]
     );
 }

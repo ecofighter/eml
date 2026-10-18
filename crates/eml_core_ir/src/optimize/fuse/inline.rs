@@ -1,29 +1,30 @@
 //! 小さな再帰しない関数のインライン化 (docs/superpowers/specs/2026-10-18-s13e-specialization-design.md の
-//! 「インライン化」)。展開するかどうかは、呼び出し先の元のコードと呼び出しの場所だけで決める。プログラム全体の
-//! 大きさの予算は使わない。全体の予算を使うと、同じ名前の関数のコードがプログラムの残りに依って変わるためである。
+//! 「インライン化」)。展開する関数かどうかは、呼び出し先の書き換えた後のコードだけで決め、展開するかどうかは、
+//! それに呼び出しの場所の形を足して決める。プログラム全体の大きさの予算は使わない。全体の予算を使うと、同じ名前の
+//! 関数のコードがプログラムの残りに依って変わるためである。
 
 use crate::tail::tail_position_call;
 use crate::{Block, Call, CoreFn, Rhs, Stmt, Term};
 use eml_lir::{Atom, BlockId, FnIdx, Mark, Repr, VarId, VarInfo};
 
-use super::Base;
 use crate::optimize::known::fresh;
 
-/// 展開する関数の文の数の上限。
+/// 展開する関数の文の数の上限。ブロックの終端も1つの文と数える。文を持たないブロックが多い関数 (定数を返す枝の
+/// 多い `match`) も、展開すれば終端の数だけコードが増えるためである。
 pub(super) const INLINE_LIMIT: usize = 40;
 
-/// 1つの関数の中で、展開した本体の中の呼び出しをさらに展開する深さの上限。呼び出し先は再帰しないので展開は止まるが、
-/// 呼び出しの連なりが深いと関数が呼び出し先の大きさの積で育つので、ここで打ち切る。
-pub(super) const MAX_INLINE_DEPTH: u32 = 8;
-
-/// `f` を展開してよいか。再帰する関数は特殊化だけで扱う。handle、`resume`、`clause` を持つ関数は展開しない。EP は、
-/// 節の関数がちょうど1つの handle に属することを前提にするためである (`crates/eml_core_ir/src/evidence/handlers.rs` の
+/// 書き換えた後の `function` を、ほかの関数に展開してよいか。大きさが上限以下で、handle、`resume`、`clause` を
+/// 持たない関数である。再帰しないことは呼ぶ側が確かめる。handle を持つ関数を展開しないのは、EP が節の関数が
+/// ちょうど1つの handle に属することを前提にするためである (`crates/eml_core_ir/src/evidence/handlers.rs` の
 /// `entries`)。
-pub(super) fn inlinable(base: &Base, f: FnIdx) -> bool {
-    let index = f.0 as usize;
-    !base.recursive[index]
-        && base.size[index] <= INLINE_LIMIT
-        && !base.functions[index]
+pub(super) fn inlinable(function: &CoreFn) -> bool {
+    let size: usize = function
+        .blocks
+        .iter()
+        .map(|block| block.stmts.len() + 1)
+        .sum();
+    size <= INLINE_LIMIT
+        && !function
             .blocks
             .iter()
             .flat_map(|block| &block.stmts)
@@ -41,53 +42,141 @@ pub(super) fn inlinable(base: &Base, f: FnIdx) -> bool {
             })
 }
 
-/// `function` の直接の呼び出しを、ブロックの順に、展開できるものから展開する。1つでも展開したかを返す。`depths` は
-/// 変数ごとの展開の深さで、展開した本体の変数は呼び出しの深さに1を足した値を持つ。展開した本体はその場に入るので、
-/// 同じ位置から読み直せば、本体の中の呼び出しも続けて見る。
-pub(super) fn inline_calls(base: &Base, function: &mut CoreFn, depths: &mut Vec<u32>) -> bool {
-    depths.resize(function.vars.len(), 0);
-    let mut inlined = false;
-    let mut block = 0;
-    while block < function.blocks.len() {
-        let mut index = 0;
-        while index < function.blocks[block].stmts.len() {
-            let at = (BlockId(block as u32), index);
-            if let Some((result, target, args)) = candidate(base, function, at, depths) {
-                let depth = depths[result.0 as usize] + 1;
-                inline_call(function, at, &base.functions[target.0 as usize], &args);
-                depths.resize(function.vars.len(), depth);
-                inlined = true;
-                continue;
-            }
-            index += 1;
-        }
-        block += 1;
-    }
-    inlined
+/// 展開する呼び出し。`index` はブロックの中の文の位置で、`tail` は本体の `return` をそのまま残すかである。
+struct Site {
+    index: usize,
+    callee: FnIdx,
+    tail: bool,
 }
 
-fn candidate(
-    base: &Base,
-    function: &CoreFn,
-    (block, index): (BlockId, usize),
-    depths: &[u32],
-) -> Option<(VarId, FnIdx, Vec<Atom>)> {
-    let Stmt::Let {
-        var,
-        rhs: Rhs::Call {
-            call: Call::Direct(target, args),
-            mask,
-        },
-    } = &function.block(block).stmts[index]
-    else {
-        return None;
-    };
-    // `mask` は呼び出し先の本体のエフェクトに掛かるので、展開すると掛ける所がなくなる
-    if !mask.is_empty() || depths[var.0 as usize] >= MAX_INLINE_DEPTH || !inlinable(base, *target) {
-        return None;
+/// `function` の直接の呼び出しのうち、展開できるものをすべて展開する。`functions` の呼び出し先は書き換えた後の
+/// コードで、`inlinable` はその関数を展開してよいかである。
+///
+/// 展開する場所は、書き換える前の関数の文から先に決める。展開した本体の中の呼び出しは、呼び出し先を書き換えた
+/// ときに決めてあるので、ここでは見ない。そのため、ブロックの新しい番号も先に決まり、新しいブロックの列を1回で
+/// 組み立てられる。手間は、元の関数と展開した本体の大きさの和に比例する。
+///
+/// 呼び出しのあるブロックは、呼び出しの前の文に本体の入口のブロックを続けたものになる。本体のほかのブロックは、その
+/// 直後に元の順のまま入れる。本体の変数は新しい変数にし、引数は実引数で置き換える。呼び出しの後の文と終端は、呼び出しの
+/// 結果の変数を引数にした新しいブロックに移し、本体の `return r` をそのブロックへの `jump` にする。末尾の位置の
+/// 呼び出しで `stays_tail` が成り立てば、本体の `return` をそのまま残し、後ろの純粋な `let` (使われない) と
+/// `return` は捨てる。元のブロックは元の順に並ぶので、辺はどれも番号の大きいブロックへ向かう
+/// (docs/spec/lir.md の「構造の規則」の R2)。extern の呼び出しは位置 (`at`) を持ったまま写すので、実行時エラーの
+/// 位置は変わらない。
+pub(super) fn inline_calls(function: &mut CoreFn, functions: &[CoreFn], inlinable: &[bool]) {
+    let sites: Vec<Vec<Site>> = (0..function.blocks.len())
+        .map(|block| sites(function, BlockId(block as u32), functions, inlinable))
+        .collect();
+    if sites.iter().all(Vec::is_empty) {
+        return;
     }
-    let callee = &base.functions[target.0 as usize];
-    fits(function, (block, index), callee, args).then(|| (*var, *target, args.clone()))
+    let mut starts = Vec::with_capacity(sites.len());
+    let mut next = 0u32;
+    for block in &sites {
+        starts.push(next);
+        next += 1;
+        for site in block {
+            next += functions[site.callee.0 as usize].blocks.len() as u32 - 1;
+            next += u32::from(!site.tail);
+        }
+    }
+    let original = |target: BlockId| BlockId(starts[target.0 as usize]);
+    let old = std::mem::take(&mut function.blocks);
+    let mut out: Vec<Block> = Vec::with_capacity(next as usize);
+    for (block, sites) in old.into_iter().zip(&sites) {
+        let Block {
+            params,
+            stmts,
+            mut term,
+        } = block;
+        let mut stmts = stmts.into_iter();
+        let mut consumed = 0;
+        let mut current = Some(Block {
+            params,
+            stmts: Vec::new(),
+            term: Term::Return(Atom::Unit),
+        });
+        for site in sites {
+            let mut host = current
+                .take()
+                .expect("a tail site is the last site of its block");
+            host.stmts
+                .extend(stmts.by_ref().take(site.index - consumed));
+            consumed = site.index + 1;
+            let Some(Stmt::Let {
+                var: result,
+                rhs:
+                    Rhs::Call {
+                        call: Call::Direct(_, args),
+                        mask: _,
+                    },
+            }) = stmts.next()
+            else {
+                unreachable!("a site is a direct call");
+            };
+            let callee = &functions[site.callee.0 as usize];
+            let first = out.len() as u32;
+            let rest = BlockId(first + callee.blocks.len() as u32);
+            let mut copied = copy_body(
+                &mut function.vars,
+                callee,
+                &args,
+                first,
+                (!site.tail).then_some(rest),
+            );
+            let entry = copied.remove(0);
+            host.stmts.extend(entry.stmts);
+            host.term = entry.term;
+            out.push(host);
+            out.extend(copied);
+            if !site.tail {
+                current = Some(Block {
+                    params: vec![result],
+                    stmts: Vec::new(),
+                    term: Term::Return(Atom::Unit),
+                });
+            }
+        }
+        if let Some(mut last) = current {
+            last.stmts.extend(stmts);
+            term.for_each_successor_mut(|target| *target = original(*target));
+            last.term = term;
+            out.push(last);
+        }
+    }
+    debug_assert_eq!(out.len(), next as usize);
+    function.blocks = out;
+}
+
+/// `block` の中で展開する呼び出し。
+fn sites(function: &CoreFn, block: BlockId, functions: &[CoreFn], inlinable: &[bool]) -> Vec<Site> {
+    let stmts = &function.block(block).stmts;
+    (0..stmts.len())
+        .filter_map(|index| {
+            let Stmt::Let {
+                var: _,
+                rhs:
+                    Rhs::Call {
+                        call: Call::Direct(target, args),
+                        mask,
+                    },
+            } = &stmts[index]
+            else {
+                return None;
+            };
+            // `mask` は呼び出し先の本体のエフェクトに掛かるので、展開すると掛ける所がなくなる
+            if !mask.is_empty() || !inlinable[target.0 as usize] {
+                return None;
+            }
+            let callee = &functions[target.0 as usize];
+            let at = (block, index);
+            fits(function, at, callee, args).then(|| Site {
+                index,
+                callee: *target,
+                tail: stays_tail(function, at, callee, args),
+            })
+        })
+        .collect()
 }
 
 /// 呼び出しの場所で、展開した本体が Repr と印の検査を通るか。
@@ -188,48 +277,26 @@ fn never_bound(function: &CoreFn) -> Vec<VarId> {
         .collect()
 }
 
-/// `function` の `at` の直接の呼び出しを、`callee` の本体で置き換える。`args` は呼び出しの実引数で、`fits` を通って
-/// いる。
-///
-/// 呼び出しのあるブロックは、呼び出しの前の文に本体の入口のブロックを続けたものになる。本体のほかのブロックは、その
-/// 直後に元の順のまま入れる。本体の変数は新しい変数にし、引数は実引数で置き換える。呼び出しの後の文と終端は、呼び出しの
-/// 結果の変数を引数にした新しいブロックに移し、本体の `return r` をそのブロックへの `jump` にする。末尾の位置の
-/// 呼び出しで `stays_tail` が成り立てば、本体の `return` をそのまま残し、後ろの純粋な `let` (使われない) と
-/// `return` は捨てる。挿したブロックの後ろのブロックは番号をずらすので、辺はどれも番号の大きいブロックへ向かう
-/// (docs/spec/lir.md の「構造の規則」の R2)。extern の呼び出しは位置 (`at`) を持ったまま写すので、実行時エラーの
-/// 位置は変わらない。
-pub(super) fn inline_call(
-    function: &mut CoreFn,
-    (block, index): (BlockId, usize),
+/// `callee` の本体を、`vars` に新しい変数を足して写す。写したブロックは `first` から順に番号を振る。入口のブロックは
+/// 呼ぶ側のブロックにつながり、引数を持たない。`rest` があれば本体の `return r` を `jump rest(r)` にし、なければ
+/// `return` のまま残す。
+fn copy_body(
+    vars: &mut Vec<VarInfo>,
     callee: &CoreFn,
     args: &[Atom],
-) {
-    let host = block.0 as usize;
-    let tail = stays_tail(function, (block, index), callee, args);
-    let Stmt::Let { var: result, .. } = function.blocks[host].stmts[index] else {
-        unreachable!("a call binds its result");
-    };
-    let extra = callee.blocks.len() - 1;
-    let shift = (extra + usize::from(!tail)) as u32;
-    let rest = BlockId(host as u32 + extra as u32 + 1);
-    let caller_block = |id: BlockId| {
-        if id.0 as usize <= host {
-            id
-        } else {
-            BlockId(id.0 + shift)
-        }
-    };
-
+    first: u32,
+    rest: Option<BlockId>,
+) -> Vec<Block> {
     let mut map = vec![None; callee.vars.len()];
     for (&param, &arg) in callee.params().iter().zip(args) {
         map[param.0 as usize] = Some(arg);
     }
     let mut copy = Copy {
-        vars: &mut function.vars,
+        vars,
         source: &callee.vars,
         map,
     };
-    let mut copied: Vec<Block> = callee
+    callee
         .blocks
         .iter()
         .enumerate()
@@ -244,12 +311,12 @@ pub(super) fn inline_call(
                     .collect()
             };
             let stmts = block.stmts.iter().map(|stmt| copy.stmt(stmt)).collect();
-            let term = match block.term {
-                Term::Return(returned) if !tail => Term::Jump {
+            let term = match (block.term.clone(), rest) {
+                (Term::Return(returned), Some(rest)) => Term::Jump {
                     target: rest,
                     args: vec![copy.atom(returned)],
                 },
-                _ => copy.term(&block.term, |id| BlockId(host as u32 + id.0)),
+                (term, _) => copy.term(&term, |id| BlockId(first + id.0)),
             };
             Block {
                 params,
@@ -257,30 +324,7 @@ pub(super) fn inline_call(
                 term,
             }
         })
-        .collect();
-
-    for (position, block) in function.blocks.iter_mut().enumerate() {
-        if position != host {
-            block
-                .term
-                .for_each_successor_mut(|target| *target = caller_block(*target));
-        }
-    }
-    let entry = copied.remove(0);
-    let caller = &mut function.blocks[host];
-    let after = caller.stmts.split_off(index + 1);
-    caller.stmts.pop();
-    caller.stmts.extend(entry.stmts);
-    let mut term = std::mem::replace(&mut caller.term, entry.term);
-    if !tail {
-        term.for_each_successor_mut(|target| *target = caller_block(*target));
-        copied.push(Block {
-            params: vec![result],
-            stmts: after,
-            term,
-        });
-    }
-    function.blocks.splice(host + 1..host + 1, copied);
+        .collect()
 }
 
 /// 本体を写すときの変数の対応。`map` は呼び出し先の変数ごとの、呼ぶ側の値である。

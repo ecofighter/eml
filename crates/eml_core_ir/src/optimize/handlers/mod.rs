@@ -603,7 +603,8 @@ impl Copies<'_> {
     /// 展開してあるので、継続の関数も同じ番号の継続の関数を呼ぶ。N は f の中の H 宛ての `perform` の、ブロックと文の
     /// 順の通し番号である。接尾辞を EP の `$kN` と分けるのは、`f{H}` がほかのエフェクトで yield するとき、EP が
     /// `f{H}$kN` を作り、名前が重なるためである。継続の関数は同じ複製の中からだけ、直接呼ばれるか値として使われる。
-    /// どちらになるかは `perform` の操作の節の形で決まり、節の形は名前で決まるので、内部の関数にする。
+    /// どちらになるかは `perform` の操作の節の形で決まり、節の形は名前で決まる。`k` として渡す継続の関数は値として
+    /// 生まれるので内部の関数にし、末尾で呼ぶだけの継続の関数は内部の関数にしない (docs/spec/lir.md の「一様な関数」)。
     ///
     /// 続きは合流のブロックで止め、合流のブロック J からの続きは合流のブロックの関数 `f{H}$hjJ` にする
     /// (`piece::region`)。J は f でのブロックの番号である。接尾辞を EP の `$jJ` と分けるのも、`$hN` と同じ理由で
@@ -794,6 +795,7 @@ impl Copies<'_> {
         params.extend(copy.state);
         let mut body = self.region(copy, (block, stmt + 1), params);
         body.name = format!("{}$h{number}", copy.code.name);
+        body.internal = shape.forms[op] == ClauseForm::Other;
         self.place(continuation, body);
         let live: Vec<Atom> = live.into_iter().map(Atom::Var).collect();
         if shape.forms[op] == ClauseForm::Other {

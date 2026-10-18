@@ -51,8 +51,8 @@ fn a_known_lambda_is_called_directly() {
         "main : Unit -> <IO> Unit\nmain () =\n  let f = fn x -> x + 1\n  println (show (f 2))";
     insta::assert_snapshot!(function(&core_text(text, Pass::Optimize), "entry$main"), @r#"
     fn entry$main() -> unit {
-      let t.4: int = extern Prelude.+(2, 1)
-      let t.2: obj = extern "Prelude.Show Int.show"(t.4)
+      let t.1: int = extern Prelude.+(2, 1)
+      let t.2: obj = extern "Prelude.Show Int.show"(t.1)
       let t.3: unit = extern Prelude.println(t.2)
       return t.3
     }
@@ -64,8 +64,8 @@ fn a_partial_application_is_called_directly() {
     let text = "add : Int -> Int -> Int\nadd x y = x + y\n\nmain : Unit -> <IO> Unit\nmain () =\n  let g = add 1\n  println (show (g 2))";
     insta::assert_snapshot!(function(&core_text(text, Pass::Optimize), "entry$main"), @r#"
     fn entry$main() -> unit {
-      let t.4: int = extern Prelude.+(1, 2)
-      let t.2: obj = extern "Prelude.Show Int.show"(t.4)
+      let t.1: int = extern Prelude.+(1, 2)
+      let t.2: obj = extern "Prelude.Show Int.show"(t.1)
       let t.3: unit = extern Prelude.println(t.2)
       return t.3
     }
@@ -77,11 +77,11 @@ fn an_under_saturated_known_apply_builds_a_closure() {
     let text = "add3 : Int -> Int -> Int -> Int\nadd3 x y z = x + y + z\n\nmain : Unit -> <IO> Unit\nmain () =\n  let g = add3 1\n  let h = g 2\n  println (show (h 3))";
     insta::assert_snapshot!(function(&core_text(text, Pass::Optimize), "entry$main"), @r#"
     fn entry$main() -> unit {
-      let t.4: int = extern Prelude.+(1, 2)
-      let t.5: int = extern Prelude.+(t.4, 3)
-      let t.2: obj = extern "Prelude.Show Int.show"(t.5)
-      let t.3: unit = extern Prelude.println(t.2)
-      return t.3
+      let t.1: int = extern Prelude.+(1, 2)
+      let t.2: int = extern Prelude.+(t.1, 3)
+      let t.3: obj = extern "Prelude.Show Int.show"(t.2)
+      let t.4: unit = extern Prelude.println(t.3)
+      return t.4
     }
     "#);
 }
@@ -89,7 +89,7 @@ fn an_under_saturated_known_apply_builds_a_closure() {
 #[test]
 fn yield_as_a_value_becomes_a_perform() {
     let text = format!(
-        "import Yield (Yield(..))\n\nproduce : Unit -> <Yield Int> Unit\nproduce () =\n  let y = yield\n  y 1\n{HIDE}\nmain : Unit -> <IO> Unit\nmain () =\n  match hide produce with\n    | Box p -> println (show (Yield.collect p))"
+        "import Yield (Yield(..))\n\nproduce : Unit -> <Yield Int> Unit\nproduce () =\n  let y = yield\n  y 1\n{HIDE}\nmain : Unit -> <IO> Unit\nmain () =\n  match hide 0 produce with\n    | Box p -> println (show (Yield.collect p))"
     );
     let shown = core_text(&text, Pass::Optimize);
     assert!(!shown.contains("call op$"), "{shown}");
@@ -135,10 +135,10 @@ fn a_constructor_value_becomes_a_con() {
     insta::assert_snapshot!(function(&core_text(text, Pass::Optimize), "entry$main"), @r#"
     fn entry$main() -> unit {
       let t.1: obj = con Pair #0(1, 2)
-      unpack t.1 Pair #0(a.5: int, x.6: int)
-      let t.3: obj = extern "Prelude.Show Int.show"(a.5)
-      let t.4: unit = extern Prelude.println(t.3)
-      return t.4
+      unpack t.1 Pair #0(a.2: int, x.3: int)
+      let t.4: obj = extern "Prelude.Show Int.show"(a.2)
+      let t.5: unit = extern Prelude.println(t.4)
+      return t.5
     }
     "#);
 }
@@ -165,8 +165,8 @@ fn an_over_saturated_known_apply_calls_then_applies_the_rest() {
     let text = "main : Unit -> <IO> Unit\nmain () =\n  let f = fn x -> fn y -> x + y\n  println (show (f 1 2))";
     insta::assert_snapshot!(function(&core_text(text, Pass::Optimize), "entry$main"), @r#"
     fn entry$main() -> unit {
-      let c.5: tobj = closure main$lambda0(1)
-      let t.2: int = apply c.5(2)
+      let c.1: tobj = closure main$lambda0(1)
+      let t.2: int = apply c.1(2)
       let t.3: obj = extern "Prelude.Show Int.show"(t.2)
       let t.4: unit = extern Prelude.println(t.3)
       return t.4
@@ -191,16 +191,16 @@ fn a_closure_whose_applies_are_all_rewritten_is_dropped() {
     );
 }
 
-/// `pass` の直後の関数の名前。
 /// 値をデータに入れて取り出す。取り出した値は既知の閉包でないので、handle の本体に届いても handler への特殊化の
-/// 対象にならない。S13e-1 の規則だけを見るテストが使う。
+/// 対象にならない。S13e-1 の規則だけを見るテストが使う。`hide` は自分を呼ぶので展開されず、取り出した値は呼ぶ側から見えない。
 const HIDE: &str = "
 data Box a = | Box a
 
-hide : a -> Box a
-hide x = Box x
+hide : Int -> a -> Box a
+hide n x = if n <= 0 then Box x else hide (n - 1) x
 ";
 
+/// `pass` の直後の関数の名前。
 fn names(text: &str, pass: Pass) -> Vec<String> {
     eml_test_support::core_until(text, pass)
         .functions
@@ -247,7 +247,7 @@ emit lines () = List.each yield lines
 {HIDE}
 main : Unit -> <IO> Unit
 main () =
-  match hide (emit [\"a\"]) with
+  match hide 0 (emit [\"a\"]) with
     | Box p -> println (show (Yield.collect p))
 "
     );
@@ -300,20 +300,20 @@ fn captures_become_parameters() {
       let d.1: tobj = con Prelude.List #1(3, #0)
       let d.2: tobj = con Prelude.List #1(2, d.1)
       let d.3: tobj = con Prelude.List #1(1, d.2)
-      let t.7: tobj = call "Std.List.map@[Int, Int]$let$go{0=main$lambda0/1}"(3, #0, d.3)
-      switch t.7 Prelude.List { #0 -> b1, #1(x.8: int, rest.9: tobj) -> b2 }
+      let t.4: tobj = call "Std.List.map@[Int, Int]$let$go{0=main$lambda0/1}"(3, #0, d.3)
+      switch t.4 Prelude.List { #0 -> b1, #1(x.5: int, rest.6: tobj) -> b2 }
     b1:
-      let s.10: obj = const "[]"
-      jump b3(s.10)
+      let s.7: obj = const "[]"
+      jump b3(s.7)
     b2:
-      let s.11: obj = const "["
-      let t.12: obj = extern "Prelude.Show Int.show"(x.8)
-      let t.13: obj = extern Prelude.++(s.11, t.12)
-      let t.14: obj = call "Prelude.show_rest@[Int]"(t.13, rest.9)
-      jump b3(t.14)
-    b3(t.5: obj):
-      let t.6: unit = extern Prelude.println(t.5)
-      return t.6
+      let s.8: obj = const "["
+      let t.9: obj = extern "Prelude.Show Int.show"(x.5)
+      let t.10: obj = extern Prelude.++(s.8, t.9)
+      let t.11: obj = call "Prelude.show_rest@[Int]"(t.10, rest.6)
+      jump b3(t.11)
+    b3(t.12: obj):
+      let t.13: unit = extern Prelude.println(t.12)
+      return t.13
     }
 
     fn "Std.List.map@[Int, Int]$let$go{0=main$lambda0/1}"(k.9: int, acc.1: tobj, ys.2: tobj) -> tobj {
@@ -335,7 +335,7 @@ fn a_closure_captured_by_a_closure_is_specialized() {
     let text = "main : Unit -> <IO> Unit\nmain () = println (show (Iter.to_list (Iter.map (fn x -> x + 1) (Iter.from_list [1, 2, 3]))))";
     let shown = core_text(text, Pass::Optimize);
     insta::assert_snapshot!(function(&shown, "Std.Iter.map@[Int, Int]$lambda0{0=main$lambda0}"), @r#"
-    fn "Std.Iter.map@[Int, Int]$lambda0{0=main$lambda0}"(it.1: obj lin, p.2: unit) -> tobj lin {
+    internal fn "Std.Iter.map@[Int, Int]$lambda0{0=main$lambda0}"(it.1: obj lin, p.2: unit) -> tobj lin {
       unpack it.1 Std.Iter.Iter #0(pull.12: tobj lin)
       let t.13: tobj lin = apply pull.12(())
       switch t.13 Prelude.Option { #0 -> b1, #1(x.4: obj lin) -> b2 }
@@ -408,17 +408,17 @@ main () =
     );
     insta::assert_snapshot!(function(&core_text(text, Pass::Optimize), "entry$main"), @r#"
     fn entry$main() -> unit {
-      let d.6: tobj poly = con Prelude.Option #1(&main$lambda0)
-      jump b1(d.6)
-    b1(t.1: tobj):
-      switch t.1 Prelude.Option { #0 -> b2, #1(g.2: tobj) -> b3 }
+      let d.1: tobj poly = con Prelude.Option #1(&main$lambda0)
+      jump b1(d.1)
+    b1(t.2: tobj):
+      switch t.2 Prelude.Option { #0 -> b2, #1(g.3: tobj) -> b3 }
     b2:
       return ()
     b3:
-      let t.3: int = apply g.2(1)
-      let t.4: obj = extern "Prelude.Show Int.show"(t.3)
-      let t.5: unit = extern Prelude.println(t.4)
-      return t.5
+      let t.4: int = apply g.3(1)
+      let t.5: obj = extern "Prelude.Show Int.show"(t.4)
+      let t.6: unit = extern Prelude.println(t.5)
+      return t.6
     }
     "#);
 }
@@ -453,9 +453,9 @@ other n () = yield (n * 10)
 {HIDE}
 main : Unit -> <IO> Unit
 main () =
-  match hide (nums 3) with
+  match hide 0 (nums 3) with
     | Box p -> Yield.for_each p (fn x -> println \"\\{{x}}\")
-  match hide (other 3) with
+  match hide 0 (other 3) with
     | Box q -> Yield.for_each q (fn x -> println \"\\{{x}}\")
 "
     );
@@ -522,7 +522,7 @@ nums () =
 main : Unit -> <IO> Unit
 main () =
   let f = fn x -> x + 1
-  match hide nums with
+  match hide 0 nums with
     | Box p ->
       handle p () with
         | fn yield x -> println (show (f x))
@@ -654,23 +654,23 @@ fn for_each_is_specialized() {
     assert!(!shown.contains("handle "), "{shown}");
     insta::assert_snapshot!(format!("{}\n{}", function(&shown, "entry$main"), handler_copies(&shown)), @r#"
     fn entry$main() -> unit {
-      let t.4: unit = call "nums$let$go{H=Std.Yield.for_each@#0450afda50afc4ec}"(3, 1)
-      return t.4
+      let t.1: unit = call "nums$let$go{H=Std.Yield.for_each@#0450afda50afc4ec}"(3, 1)
+      return t.1
     }
 
     fn "nums$let$go{H=Std.Yield.for_each@#0450afda50afc4ec}"(n.0: int, i.1: int) -> unit {
       let t.2: enum = extern "Prelude.Ord Int.>"(i.1, n.0)
       switch t.2 Prelude.Bool { #0 -> b1, #1 -> b2 }
     b1:
-      let t.12: obj = extern "Prelude.Show Int.show"(i.1)
-      let t.11: unit = extern Prelude.println(t.12)
+      let t.10: obj = extern "Prelude.Show Int.show"(i.1)
+      let t.11: unit = extern Prelude.println(t.10)
       let t.9: unit = call "nums$let$go{H=Std.Yield.for_each@#0450afda50afc4ec}$h0"(n.0, i.1, t.11)
       return t.9
     b2:
       return ()
     }
 
-    internal fn "nums$let$go{H=Std.Yield.for_each@#0450afda50afc4ec}$h0"(n.0: int, i.1: int, t.2: unit) -> unit {
+    fn "nums$let$go{H=Std.Yield.for_each@#0450afda50afc4ec}$h0"(n.0: int, i.1: int, t.2: unit) -> unit {
       let t.3: int = extern Prelude.+(i.1, 1)
       let t.4: unit = call "nums$let$go{H=Std.Yield.for_each@#0450afda50afc4ec}"(n.0, t.3)
       return t.4
@@ -710,13 +710,13 @@ main () =
       return d.12
     }
 
-    internal fn "count{H=Std.State.run@#c7a76c0c3d933166}$h1"(n.0: int, t.1: unit, st.3: int) -> obj {
+    fn "count{H=Std.State.run@#c7a76c0c3d933166}$h1"(n.0: int, t.1: unit, st.3: int) -> obj {
       let t.2: int = extern Prelude.-(n.0, 1)
       let t.4: obj = call "count{H=Std.State.run@#c7a76c0c3d933166}"(t.2, st.3)
       return t.4
     }
 
-    internal fn "count{H=Std.State.run@#c7a76c0c3d933166}$h0"(n.0: int, t.1: int, st.3: int) -> obj {
+    fn "count{H=Std.State.run@#c7a76c0c3d933166}$h0"(n.0: int, t.1: int, st.3: int) -> obj {
       let t.2: int = extern Prelude.+(t.1, 1)
       let t.4: obj = call "count{H=Std.State.run@#c7a76c0c3d933166}$h1"(n.0, (), t.2)
       return t.4
@@ -800,12 +800,12 @@ fn an_unknown_producer_keeps_the_handle() {
         "{NUMS}
 data Box a = | Box a
 
-hide : a -> Box a
-hide x = Box x
+hide : Int -> a -> Box a
+hide n x = if n <= 0 then Box x else hide (n - 1) x
 
 main : Unit -> <IO> Unit
 main () =
-  match hide (nums 3) with
+  match hide 0 (nums 3) with
     | Box p -> Yield.for_each p (fn x -> println \"\\{{x}}\")
 "
     ));
@@ -966,10 +966,10 @@ fn a_continuation_captures_its_live_variables() {
       switch t.5 Prelude.Bool { #0 -> b1, #1 -> b2 }
     b1:
       let k.6: tobj lin = closure "nums$let$go{H=Std.Iter.generate@#8c179e1f604536f1}$h0"(n.0, t.3)
-      let d.9: obj lin = con Std.Iter.Iter #0(k.6)
-      let d.10: obj lin = con (,) #0(t.3, d.9)
-      let d.11: tobj lin = con Prelude.Option #1(d.10)
-      return d.11
+      let d.7: obj lin = con Std.Iter.Iter #0(k.6)
+      let d.8: obj lin = con (,) #0(t.3, d.7)
+      let d.9: tobj lin = con Prelude.Option #1(d.8)
+      return d.9
     b2:
       return #0
     }
@@ -1138,7 +1138,7 @@ answer f =
 {HIDE}
 main : Unit -> <IO> Unit
 main () =
-  match hide (fn () -> ask ()) with
+  match hide 0 (fn () -> ask ()) with
     | Box f -> println (show (answer f))
 ";
     let text = text.replace("{HIDE}", HIDE);
@@ -1178,4 +1178,30 @@ main () =
     let a = function(&core_text(a, Pass::Optimize), name);
     assert!(!calls(&a, "main$lambda0") && !calls(&a, "inc("), "{a}");
     assert_eq!(a, function(&core_text(b, Pass::Optimize), name));
+}
+
+/// 展開は呼び出し先の書き換えた後のコードを写すので、大きさが上限を超えた関数は展開されず、コードは呼び出しの
+/// 連なりの深さに比例して育つ。展開した本体の中の呼び出しを呼ぶ側でもう1度展開すると、深さの指数で育つ
+/// (docs/superpowers/specs/2026-10-18-s13e-specialization-design.md の「止まること」)。
+#[test]
+fn nested_inlining_grows_linearly_with_the_call_depth() {
+    let size = |depth: usize| {
+        let mut text = String::from("f0 : Int -> Int\nf0 x = x + 1\n\n");
+        for i in 1..=depth {
+            let calls: Vec<String> = (0..6).map(|k| format!("f{} (x + {k})", i - 1)).collect();
+            text.push_str(&format!(
+                "f{i} : Int -> Int\nf{i} x = {}\n\n",
+                calls.join(" + ")
+            ));
+        }
+        text.push_str(&format!(
+            "main : Unit -> <IO> Unit\nmain () = println (display (f{depth} 1))"
+        ));
+        core_text(&text, Pass::Optimize).lines().count()
+    };
+    let (shallow, deep) = (size(8), size(16));
+    assert!(
+        deep <= shallow * 5 / 2,
+        "{shallow} lines at depth 8, {deep} at depth 16"
+    );
 }

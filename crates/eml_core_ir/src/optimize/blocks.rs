@@ -111,6 +111,8 @@ pub(crate) fn fold_constant_switches(function: &mut CoreFn) -> bool {
 /// 元の順のまま番号を振り直せば R2 を保つ。
 ///
 /// 展開した関数の `return` が残りのブロックへの `jump` になる所と、畳んだ `switch` の行き先で、ブロックの境目を消す。
+/// つなげて定数で分けるようになった `switch` も畳むので、片付けは1回で済む。辺の入らなくなったブロックは、呼ぶ側が
+/// `prune` で落とす。
 pub(crate) fn merge_jumps(function: &mut CoreFn) -> bool {
     let count = function.blocks.len();
     let mut edges = vec![0usize; count];
@@ -152,6 +154,21 @@ pub(crate) fn merge_jumps(function: &mut CoreFn) -> bool {
             host.stmts.extend(next.stmts);
             host.term = next.term;
             merged = true;
+            // 引数を定数で置き換えた `switch` は、ここで畳む。畳んだ行き先も1本の `jump` だけが入るので、続けてつなげる
+            if let Term::Switch { scrutinee, .. } = &mut host.term {
+                *scrutinee = resolve(&substitution, *scrutinee);
+            }
+            if let Some(kept) = constant_target(&host.term) {
+                host.term.for_each_successor_mut(|dropped| {
+                    if *dropped != kept {
+                        edges[dropped.0 as usize] -= 1;
+                    }
+                });
+                host.term = Term::Jump {
+                    target: kept,
+                    args: Vec::new(),
+                };
+            }
         }
     }
     if !merged {

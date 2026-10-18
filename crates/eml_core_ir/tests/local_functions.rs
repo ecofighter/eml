@@ -20,8 +20,8 @@ const PAIRS: [Pair; 4] = [
         top: "\
 data Box a = | Box a
 
-hide : a -> Box a
-hide x = Box x
+hide : Int -> a -> Box a
+hide n x = if n <= 0 then Box x else hide (n - 1) x
 
 helper : Int -> Int -> Int -> Int
 helper n k acc = if k == 0 then acc + n else helper n (k - 1) (acc + k)
@@ -31,14 +31,14 @@ outer n = helper n n 0
 
 main : Unit -> <IO> Unit
 main () =
-  let Box outer = hide outer
+  let Box outer = hide 0 outer
   println (show (outer 5))
 ",
         local: "\
 data Box a = | Box a
 
-hide : a -> Box a
-hide x = Box x
+hide : Int -> a -> Box a
+hide n x = if n <= 0 then Box x else hide (n - 1) x
 
 outer : Int -> Int
 outer n =
@@ -47,7 +47,7 @@ outer n =
 
 main : Unit -> <IO> Unit
 main () =
-  let Box outer = hide outer
+  let Box outer = hide 0 outer
   println (show (outer 5))
 ",
         outer: "outer",
@@ -58,8 +58,8 @@ main () =
         top: "\
 data Box a = | Box a
 
-hide : a -> Box a
-hide x = Box x
+hide : Int -> a -> Box a
+hide n x = if n <= 0 then Box x else hide (n - 1) x
 
 square : Int -> Int -> Int
 square n k = k * k + n
@@ -76,14 +76,14 @@ run n = countdown n n
 
 main : Unit -> <IO> Unit
 main () =
-  let Box run = hide run
+  let Box run = hide 0 run
   run 3
 ",
         local: "\
 data Box a = | Box a
 
-hide : a -> Box a
-hide x = Box x
+hide : Int -> a -> Box a
+hide n x = if n <= 0 then Box x else hide (n - 1) x
 
 run : Int -> <IO> Unit
 run n =
@@ -97,7 +97,7 @@ run n =
 
 main : Unit -> <IO> Unit
 main () =
-  let Box run = hide run
+  let Box run = hide 0 run
   run 3
 ",
         outer: "run",
@@ -111,8 +111,8 @@ main () =
         top: "\
 data Box a = | Box a
 
-hide : a -> Box a
-hide x = Box x
+hide : Int -> a -> Box a
+hide n x = if n <= 0 then Box x else hide (n - 1) x
 
 effect Ask where
   ask : Unit -> Int
@@ -127,14 +127,14 @@ outer n =
 
 main : Unit -> <IO> Unit
 main () =
-  let Box outer = hide outer
+  let Box outer = hide 0 outer
   println (show (outer 5))
 ",
         local: "\
 data Box a = | Box a
 
-hide : a -> Box a
-hide x = Box x
+hide : Int -> a -> Box a
+hide n x = if n <= 0 then Box x else hide (n - 1) x
 
 effect Ask where
   ask : Unit -> Int
@@ -147,7 +147,7 @@ outer n =
 
 main : Unit -> <IO> Unit
 main () =
-  let Box outer = hide outer
+  let Box outer = hide 0 outer
   println (show (outer 5))
 ",
         outer: "outer",
@@ -158,8 +158,8 @@ main () =
         top: "\
 data Box a = | Box a
 
-hide : a -> Box a
-hide x = Box x
+hide : Int -> a -> Box a
+hide n x = if n <= 0 then Box x else hide (n - 1) x
 
 effect Ask where
   ask : Unit -> Int
@@ -174,14 +174,14 @@ outer n =
 
 main : Unit -> <IO> Unit
 main () =
-  let Box outer = hide outer
+  let Box outer = hide 0 outer
   println (show (outer 2))
 ",
         local: "\
 data Box a = | Box a
 
-hide : a -> Box a
-hide x = Box x
+hide : Int -> a -> Box a
+hide n x = if n <= 0 then Box x else hide (n - 1) x
 
 effect Ask where
   ask : Unit -> Int
@@ -194,7 +194,7 @@ outer n =
 
 main : Unit -> <IO> Unit
 main () =
-  let Box outer = hide outer
+  let Box outer = hide 0 outer
   println (show (outer 2))
 ",
         outer: "outer",
@@ -303,27 +303,27 @@ fn a_lifted_function_has_the_same_lir_as_a_top_level_helper() {
 const STD_PROGRAM: &str = "\
 data Box a = | Box a
 
-hide : a -> Box a
-hide x = Box x
+hide : Int -> a -> Box a
+hide n x = if n <= 0 then Box x else hide (n - 1) x
 
 main : Unit -> <IO> Unit
 main () =
   let xs = [1, 2, 3]
-  let Box inc = hide (fn x -> x + 1)
-  let Box big = hide (fn x -> x > 1)
-  let Box keep = hide (fn x -> if x > 1 then Some x else None)
-  let Box length = hide List.length
-  let Box count = hide List.length
-  let Box map = hide List.map
-  let Box filter = hide List.filter
-  let Box filter_map = hide List.filter_map
-  let Box split = hide String.split
-  let Box lines = hide String.lines
-  let Box join = hide String.join
-  let Box trim = hide String.trim
-  let Box to_int = hide String.to_int
-  let Box starts_with = hide String.starts_with
-  let Box ends_with = hide String.ends_with
+  let Box inc = hide 0 (fn x -> x + 1)
+  let Box big = hide 0 (fn x -> x > 1)
+  let Box keep = hide 0 (fn x -> if x > 1 then Some x else None)
+  let Box length = hide 0 List.length
+  let Box count = hide 0 List.length
+  let Box map = hide 0 List.map
+  let Box filter = hide 0 List.filter
+  let Box filter_map = hide 0 List.filter_map
+  let Box split = hide 0 String.split
+  let Box lines = hide 0 String.lines
+  let Box join = hide 0 String.join
+  let Box trim = hide 0 String.trim
+  let Box to_int = hide 0 String.to_int
+  let Box starts_with = hide 0 String.starts_with
+  let Box ends_with = hide 0 String.ends_with
   println (show (length xs))
   println (show (length (map inc xs)))
   println (show (length (filter big xs)))

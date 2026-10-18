@@ -3,9 +3,9 @@
 //! 複製は鍵だけで名前を決め、呼び出し先の translate の出力から作る。そのため、どの関数をどの順に書き換えても、同じ
 //! 名前の複製は同じコードになる (docs/spec/vm.md の「追記」)。
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 
-use super::known::{self, Callee, KnownClosure, known_closures};
+use super::known::{self, Callee, KnownClosure};
 use crate::fnv::Fnv;
 use crate::{Call, CoreFn, Program, Rhs, Stmt};
 use eml_lir::{Atom, FnIdx, Mark, Repr, VarId, VarInfo};
@@ -60,8 +60,6 @@ pub(crate) struct Specializer {
     passed: Vec<Vec<bool>>,
     /// 関数ごとの鍵の入れ子の深さ。translate の関数は 0 である。
     depths: Vec<usize>,
-    /// translate の出力で handle の節か `return` の節に使う関数。
-    clauses: HashSet<FnIdx>,
     copies: HashMap<Key, FnIdx>,
     /// 作ったがまだプログラムに足していない複製と、その中で閉包の捕獲に開いた引数の組。
     created: Vec<(CoreFn, HashMap<VarId, KnownClosure>)>,
@@ -97,7 +95,6 @@ impl Specializer {
         Specializer {
             translated: program.functions.clone(),
             depths: vec![0; callees.len()],
-            clauses: clause_functions(program),
             callees,
             passed,
             copies: HashMap::new(),
@@ -149,13 +146,8 @@ impl Specializer {
         }
         let mut function = self.translated[key.callee.0 as usize].clone();
         function.name = self.copy_name(&key);
-        // 鍵だけで名前を決めた複製は、いくつもの定義から直接も値としても使われうるので内部の関数にしない。そうしないと、
-        // 同じ名前の関数の ABI がプログラムによって変わる (docs/spec/lir.md の「一様な関数」)。節と `return` の節の
-        // 複製は例外で、持ち主の handle だけが値として使う。translate は節を handle ごとに別の関数にするので、内部の
-        // 関数にするかどうかは鍵の呼び出し先だけで決まり、同じ名前の複製は同じ印を持つ (docs/spec/vm.md の「追記」)。
-        // translate の節の関数と同じく内部の関数にし、box の挿入がその場で一様にする。そうしないと、値として使う所に
-        // `f$boxed` が挟まり、操作ごとに `box` と `unbox` が増える
-        function.internal = self.clauses.contains(&key.callee);
+        // ABI は名前で決まるので、複製は呼び出し先の印を写す。値として生まれた関数 (ラムダ、節と `return` の節) の複製は
+        // 内部の関数で、ほかの関数の複製は内部の関数でない (docs/spec/lir.md の「一様な関数」)
         let mut params = Vec::new();
         let mut opened = HashMap::new();
         for (position, param) in function.params().to_vec().into_iter().enumerate() {
@@ -247,38 +239,6 @@ pub(crate) fn limited(callee: &str, name: String) -> String {
     let mut state = Fnv::new();
     state.text(&name);
     format!("{base}@#{:016x}", state.0)
-}
-
-/// handle の節か `return` の節に使う関数。translate はこれらを、その handle を含む関数の中の `closure` か `&f` として
-/// 渡す。
-fn clause_functions(program: &Program) -> HashSet<FnIdx> {
-    let mut clauses = HashSet::new();
-    for function in &program.functions {
-        let known = known_closures(function);
-        for stmt in function.blocks.iter().flat_map(|block| &block.stmts) {
-            if let Stmt::Let {
-                var: _,
-                rhs:
-                    Rhs::Call {
-                        call:
-                            Call::Handle {
-                                clauses: atoms,
-                                ret,
-                                ..
-                            },
-                        mask: _,
-                    },
-            } = stmt
-            {
-                clauses.extend(atoms.iter().chain([ret]).filter_map(|atom| match atom {
-                    Atom::Fn(target) => Some(*target),
-                    Atom::Var(var) => known.get(var).map(|closure| closure.function),
-                    _ => None,
-                }));
-            }
-        }
-    }
-    clauses
 }
 
 /// 引数を特殊化してよい位置。本体でその引数を `apply` するか、直接の呼び出しに渡すか、`closure` で捕まえるか、

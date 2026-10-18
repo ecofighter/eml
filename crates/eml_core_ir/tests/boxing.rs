@@ -10,13 +10,13 @@ const APPLY_TO: &str = "apply_to : (Int -> Int) -> Int -> Int\napply_to f x = f 
 /// 関数の値をデータに入れて取り出す。optimize はデータを通った値を既知の閉包としないので
 /// (docs/superpowers/specs/2026-10-18-s13e-specialization-design.md の「既知の閉包」)、取り出した値への呼び出しは
 /// 特殊化されず、値として使う関数の形を確かめられる。調べる関数をこの形で呼ぶと、呼ぶ側に展開されず (「インライン化」)、
-/// 自分のコードのまま残る。
-const HIDE: &str = "data Box a = | Box a\n\nhide : a -> Box a\nhide x = Box x\n\n";
+/// 自分のコードのまま残る。`hide` は自分を呼ぶので展開されず、取り出した値は呼ぶ側から見えない。
+const HIDE: &str = "data Box a = | Box a\n\nhide : Int -> a -> Box a\nhide n x = if n <= 0 then Box x else hide (n - 1) x\n\n";
 
 #[test]
 fn a_lambda_used_only_as_a_value_is_made_uniform_in_place() {
     let text = format!(
-        "{HIDE}{APPLY_TO}main : Unit -> <IO> Unit\nmain () =\n  let Box f = hide (fn n -> n + 1)\n  println (show (apply_to f 2))"
+        "{HIDE}{APPLY_TO}main : Unit -> <IO> Unit\nmain () =\n  let Box f = hide 0 (fn n -> n + 1)\n  println (show (apply_to f 2))"
     );
     let shown = lir_text(&text, eml_lir::Pass::Boxing);
     insta::assert_snapshot!(function(&shown, "main$lambda0"), @"
@@ -41,7 +41,7 @@ fn shared_wrappers_are_never_called_directly_and_become_uniform_in_place() {
     // `op$`、`con$`、`cont$` は値と部分適用でだけ使われ、直接は呼ばれない。そのため box の挿入はいつもその場で一様にし、
     // `f$boxed` を足さない。どのプログラムでも同じコードになるので、名前で照らす追記で使い回せる
     // (docs/spec/lir.md の「位置の規則」)
-    let text = "data Pair = | P Int Int\n\ndata Box a = | Box a\n\neffect Ask where\n  ask : Int -> Int\n\nhide : a -> Box a\nhide x = Box x\n\nfirst : Pair -> Int\nfirst p = match p with\n  | P a _ -> a\n\nrun : Unit -> <Ask> Int\nrun () =\n  let Box g = hide ask\n  let Box f = hide P\n  let Box h = hide (P 3)\n  first (f 1 2) + first (h 4) + g 1\n\nmain : Unit -> <IO> Unit\nmain () =\n  let r = handle run () with\n            | ctl ask n k ->\n              let Box resume = hide k\n              resume (n + 1)\n  println (show r)";
+    let text = "data Pair = | P Int Int\n\ndata Box a = | Box a\n\neffect Ask where\n  ask : Int -> Int\n\nhide : Int -> a -> Box a\nhide n x = if n <= 0 then Box x else hide (n - 1) x\n\nfirst : Pair -> Int\nfirst p = match p with\n  | P a _ -> a\n\nrun : Unit -> <Ask> Int\nrun () =\n  let Box g = hide 0 ask\n  let Box f = hide 0 P\n  let Box h = hide 0 (P 3)\n  first (f 1 2) + first (h 4) + g 1\n\nmain : Unit -> <IO> Unit\nmain () =\n  let r = handle run () with\n            | ctl ask n k ->\n              let Box resume = hide 0 k\n              resume (n + 1)\n  println (show r)";
     let program = eml_test_support::lir(text);
     let names: Vec<&str> = program
         .functions
@@ -78,7 +78,7 @@ fn shared_wrappers_are_never_called_directly_and_become_uniform_in_place() {
 #[test]
 fn a_top_level_function_used_only_as_a_value_gets_a_boxed_wrapper() {
     let text = format!(
-        "{HIDE}inc : Int -> Int\ninc n = n + 1\n\n{APPLY_TO}main : Unit -> <IO> Unit\nmain () =\n  let Box f = hide inc\n  println (show (apply_to f 2))"
+        "{HIDE}inc : Int -> Int\ninc n = n + 1\n\n{APPLY_TO}main : Unit -> <IO> Unit\nmain () =\n  let Box f = hide 0 inc\n  println (show (apply_to f 2))"
     );
     let shown = lir_text(&text, eml_lir::Pass::Boxing);
     insta::assert_snapshot!(function(&shown, "inc"), @"
@@ -97,10 +97,10 @@ fn a_top_level_function_used_only_as_a_value_gets_a_boxed_wrapper() {
     ");
     insta::assert_snapshot!(function(&shown, "entry$main"), @r#"
     fn entry$main() -> unit {
-      let d.6: obj = con Box #0(&inc$boxed)
-      unpack d.6 Box #0(f.2: tobj)
-      let t.7: tobj = call apply_to(f.2, 2)
-      let t.3: int = unbox t.7
+      let t.1: obj = call "hide@[Int -> Int]{1=inc}"(0)
+      unpack t.1 Box #0(f.2: tobj)
+      let t.6: tobj = call apply_to(f.2, 2)
+      let t.3: int = unbox t.6
       let t.4: obj = extern "Prelude.Show Int.show"(t.3)
       let t.5: unit = extern Prelude.println(t.4)
       return t.5
@@ -111,20 +111,20 @@ fn a_top_level_function_used_only_as_a_value_gets_a_boxed_wrapper() {
 #[test]
 fn a_function_also_called_directly_gets_a_boxed_wrapper() {
     let text = format!(
-        "{HIDE}label : Int -> String\nlabel n = if n > 9 then label (n - 10) else show n\n\nshow_with : (Int -> String) -> Int -> String\nshow_with f n = f n\n\nmain : Unit -> <IO> Unit\nmain () =\n  println (label 1)\n  let Box f = hide label\n  println (show_with f 2)"
+        "{HIDE}label : Int -> String\nlabel n = if n > 9 then label (n - 10) else show n\n\nshow_with : (Int -> String) -> Int -> String\nshow_with f n = f n\n\nmain : Unit -> <IO> Unit\nmain () =\n  println (label 1)\n  let Box f = hide 0 label\n  println (show_with f 2)"
     );
     let shown = lir_text(&text, eml_lir::Pass::Boxing);
-    insta::assert_snapshot!(function(&shown, "entry$main"), @"
+    insta::assert_snapshot!(function(&shown, "entry$main"), @r#"
     fn entry$main() -> unit {
       let t.1: obj = call label(1)
       let t.2: unit = extern Prelude.println(t.1)
-      let d.7: obj = con Box #0(&label$boxed)
-      unpack d.7 Box #0(f.4: tobj)
+      let t.3: obj = call "hide@[Int -> String]{1=label}"(0)
+      unpack t.3 Box #0(f.4: tobj)
       let t.5: obj = call show_with(f.4, 2)
       let t.6: unit = extern Prelude.println(t.5)
       return t.6
     }
-    ");
+    "#);
     insta::assert_snapshot!(function(&shown, "label$boxed"), @"
     fn label$boxed(n.0: tobj) -> obj {
       let n.2: int = unbox n.0
@@ -144,7 +144,7 @@ fn a_function_also_called_directly_gets_a_boxed_wrapper() {
 #[test]
 fn a_function_made_uniform_by_t3_gets_no_boxed_wrapper() {
     let text = format!(
-        "{HIDE}call_with : (Unit -> Int) -> Int\ncall_with f = f ()\n\nmain : Unit -> <IO> Unit\nmain () =\n  let Box g = hide call_with\n  println (show (g (fn () -> 1)))"
+        "{HIDE}call_with : (Unit -> Int) -> Int\ncall_with f = f ()\n\nmain : Unit -> <IO> Unit\nmain () =\n  let Box g = hide 0 call_with\n  println (show (g (fn () -> 1)))"
     );
     let shown = lir_text(&text, eml_lir::Pass::Boxing);
     assert!(!shown.contains("call_with$boxed"), "{shown}");
@@ -159,7 +159,7 @@ fn a_function_made_uniform_by_t3_gets_no_boxed_wrapper() {
 
 #[test]
 fn fields_are_rebound_at_the_head_of_the_case_target_and_after_an_unpack() {
-    let text = "data Option a =\n  | None\n  | Some a\n\nget : Option Int -> Int\nget o = match o with\n  | Some v -> v + 1\n  | None -> 0\n\nsum : (Int, Int) -> Int\nsum p =\n  let (a, b) = p\n  a + b\n\nmain : Unit -> <IO> Unit\nmain () =\n  let Box get = hide get\n  let Box sum = hide sum\n  println (show (get (Some 1) + sum (1, 2)))";
+    let text = "data Option a =\n  | None\n  | Some a\n\nget : Option Int -> Int\nget o = match o with\n  | Some v -> v + 1\n  | None -> 0\n\nsum : (Int, Int) -> Int\nsum p =\n  let (a, b) = p\n  a + b\n\nmain : Unit -> <IO> Unit\nmain () =\n  let Box get = hide 0 get\n  let Box sum = hide 0 sum\n  println (show (get (Some 1) + sum (1, 2)))";
     let text = format!("{HIDE}{text}");
     let shown = lir_text(&text, eml_lir::Pass::Boxing);
     insta::assert_snapshot!(function(&shown, "get"), @"
@@ -187,16 +187,16 @@ fn fields_are_rebound_at_the_head_of_the_case_target_and_after_an_unpack() {
 #[test]
 fn int_constants_are_boxed_and_other_constants_pass_as_they_are() {
     // 型変数のフィールドは `tobj` なので、`int` の定数は `box` を通り、`unit`、タグ、関数の値はそのまま入る
-    let text = "data Four a b c d =\n  | Four a b c d\n\ncount : Four a b c d -> Int\ncount _ = 0\n\nid : a -> a\nid x = x\n\nmain : Unit -> <IO> Unit\nmain () =\n  let Box count = hide count\n  println (show (count (Four 5 () True id)))";
+    let text = "data Four a b c d =\n  | Four a b c d\n\ncount : Four a b c d -> Int\ncount _ = 0\n\nid : a -> a\nid x = x\n\nmain : Unit -> <IO> Unit\nmain () =\n  let Box count = hide 0 count\n  println (show (count (Four 5 () True id)))";
     let text = format!("{HIDE}{text}");
     insta::assert_snapshot!(function(&lir_text(&text, eml_lir::Pass::Boxing), "entry$main"), @r#"
     fn entry$main() -> unit {
-      let d.7: obj = con Box #0(&"count@[Int, Unit, Bool, _ -> <_> _]$boxed")
-      unpack d.7 Box #0(count.2: tobj)
-      let b.8: tobj = box 5
-      let d.3: obj = con Four #0(b.8, (), #1, &"id@[_]")
-      let t.9: tobj = apply count.2(d.3)
-      let t.4: int = unbox t.9
+      let t.1: obj = call "hide@#29c654b2da42db65"(0)
+      unpack t.1 Box #0(count.2: tobj)
+      let b.7: tobj = box 5
+      let d.3: obj = con Four #0(b.7, (), #1, &"id@[_]")
+      let t.8: tobj = apply count.2(d.3)
+      let t.4: int = unbox t.8
       let t.5: obj = extern "Prelude.Show Int.show"(t.4)
       let t.6: unit = extern Prelude.println(t.5)
       return t.6
@@ -208,7 +208,7 @@ fn int_constants_are_boxed_and_other_constants_pass_as_they_are() {
 fn a_value_unboxed_by_the_pass_is_passed_on_without_a_new_box() {
     // 恒等のラムダは、入口で `unbox` した値の代わりに、受けた `tobj` をそのまま返す
     let text = format!(
-        "{HIDE}{APPLY_TO}main : Unit -> <IO> Unit\nmain () =\n  let Box f = hide (fn m -> m)\n  println (show (apply_to f 3))"
+        "{HIDE}{APPLY_TO}main : Unit -> <IO> Unit\nmain () =\n  let Box f = hide 0 (fn m -> m)\n  println (show (apply_to f 3))"
     );
     insta::assert_snapshot!(function(&lir_text(&text, eml_lir::Pass::Boxing), "main$lambda0"), @"
     internal fn main$lambda0(m.1: tobj) -> tobj {
@@ -218,7 +218,7 @@ fn a_value_unboxed_by_the_pass_is_passed_on_without_a_new_box() {
     ");
     // 受け直した `apply` の結果をもう一度 `apply` に渡すときも、受けた `tobj` を渡す
     let text = format!(
-        "{HIDE}twice_plus : (Int -> Int) -> Int -> Int\ntwice_plus f x = f (f x) + 1\n\nmain : Unit -> <IO> Unit\nmain () =\n  let Box f = hide (fn n -> n)\n  let Box twice_plus = hide twice_plus\n  println (show (twice_plus f 1))"
+        "{HIDE}twice_plus : (Int -> Int) -> Int -> Int\ntwice_plus f x = f (f x) + 1\n\nmain : Unit -> <IO> Unit\nmain () =\n  let Box f = hide 0 (fn n -> n)\n  let Box twice_plus = hide 0 twice_plus\n  println (show (twice_plus f 1))"
     );
     insta::assert_snapshot!(function(&lir_text(&text, eml_lir::Pass::Boxing), "twice_plus"), @"
     fn twice_plus(f.0: tobj, x.1: int) -> int {
@@ -236,7 +236,7 @@ fn a_value_unboxed_by_the_pass_is_passed_on_without_a_new_box() {
 #[test]
 fn a_unit_value_passes_to_tobj_without_an_instruction() {
     let text = format!(
-        "{HIDE}wrap : Unit -> Box Unit\nwrap u = Box u\n\nmain : Unit -> <IO> Unit\nmain () =\n  let Box wrap = hide wrap\n  let _ = wrap ()\n  println \"done\""
+        "{HIDE}wrap : Unit -> Box Unit\nwrap u = Box u\n\nmain : Unit -> <IO> Unit\nmain () =\n  let Box wrap = hide 0 wrap\n  let _ = wrap ()\n  println \"done\""
     );
     insta::assert_snapshot!(function(&lir_text(&text, eml_lir::Pass::Boxing), "wrap"), @"
     fn wrap(u.0: unit) -> obj {
@@ -268,7 +268,7 @@ fn a_monomorphic_int_loop_has_no_box() {
 fn a_function_that_fails_with_a_never_operation_keeps_its_scalar_ret() {
     // `never` の操作の `clause` は戻らないので、T3 は見ない。結果も受け直さない
     let text = format!(
-        "{HIDE}effect Fail where\n  never fail : String -> a\n\ncheck_positive : Int -> <Fail> Int\ncheck_positive n =\n  if n > 0 then n else fail \"not positive\"\n\nmain : Unit -> <IO> Unit\nmain () =\n  let Box check = hide check_positive\n  let r = handle check 1 with\n    | ctl fail message -> 0\n  println (show r)"
+        "{HIDE}effect Fail where\n  never fail : String -> a\n\ncheck_positive : Int -> <Fail> Int\ncheck_positive n =\n  if n > 0 then n else fail \"not positive\"\n\nmain : Unit -> <IO> Unit\nmain () =\n  let Box check = hide 0 check_positive\n  let r = handle check 1 with\n    | ctl fail message -> 0\n  println (show r)"
     );
     let text = text.as_str();
     insta::assert_snapshot!(function(&lir_text(text, eml_lir::Pass::Boxing), "check_positive"), @r#"
@@ -306,7 +306,7 @@ fn a_value_lambda_that_fails_ends_in_a_tail_never_clause() {
     // その場で一様にしたラムダでも、`never` の操作の `clause` の束縛は `tobj` に変換せずに返す。束縛の使いには制御が
     // 届かないからである。縮約は、その `return` を末尾呼び出しにする
     let text = format!(
-        "{HIDE}effect Fail where\n  never fail : String -> a\n\napply_to : (Int -> <e> Int) -> Int -> <e> Int\napply_to f x = f x\n\nmain : Unit -> <IO> Unit\nmain () =\n  let Box f = hide (fn n -> if n > 0 then n else fail \"neg\")\n  let r = handle apply_to f 1 with\n    | ctl fail message -> 0\n  println (show r)"
+        "{HIDE}effect Fail where\n  never fail : String -> a\n\napply_to : (Int -> <e> Int) -> Int -> <e> Int\napply_to f x = f x\n\nmain : Unit -> <IO> Unit\nmain () =\n  let Box f = hide 0 (fn n -> if n > 0 then n else fail \"neg\")\n  let r = handle apply_to f 1 with\n    | ctl fail message -> 0\n  println (show r)"
     );
     insta::assert_snapshot!(function(&lir_text(&text, eml_lir::Pass::Boxing), "main$lambda0"), @r#"
     internal fn main$lambda0(n.6: tobj) -> tobj {
@@ -345,7 +345,7 @@ fn t3_raises_the_ret_along_a_chain_of_tail_calls() {
     // `through` は、呼び出しと `return` の間に使われない純粋な `let` があっても上がる。`apply_to` は自分を呼ぶので
     // `via` に展開されず、`via` と `through` はデータを通して呼ぶので `main` に展開されない
     let text = format!(
-        "{HIDE}apply_to : (Int -> Int) -> Int -> Int\napply_to f x = if x > 9 then apply_to f (x - 1) else f x\n\nvia : Int -> Int\nvia x =\n  let Box f = hide (fn n -> n)\n  apply_to f x\n\nthrough : (Int -> Int) -> Int -> Int\nthrough f x =\n  let r = f x\n  let s = \"unused\"\n  r\n\nmain : Unit -> <IO> Unit\nmain () =\n  let Box g = hide (fn n -> n)\n  let Box via = hide via\n  let Box through = hide through\n  println (show (via 1 + through g 2))"
+        "{HIDE}apply_to : (Int -> Int) -> Int -> Int\napply_to f x = if x > 9 then apply_to f (x - 1) else f x\n\nvia : Int -> Int\nvia x =\n  let Box f = hide 0 (fn n -> n)\n  apply_to f x\n\nthrough : (Int -> Int) -> Int -> Int\nthrough f x =\n  let r = f x\n  let s = \"unused\"\n  r\n\nmain : Unit -> <IO> Unit\nmain () =\n  let Box g = hide 0 (fn n -> n)\n  let Box via = hide 0 via\n  let Box through = hide 0 through\n  println (show (via 1 + through g 2))"
     );
     let shown = lir_text(&text, eml_lir::Pass::Contract);
     insta::assert_snapshot!(function(&shown, "apply_to"), @r#"
@@ -360,13 +360,13 @@ fn t3_raises_the_ret_along_a_chain_of_tail_calls() {
       tail call apply_to(f.0, t.3)
     }
     "#);
-    insta::assert_snapshot!(function(&shown, "via"), @"
+    insta::assert_snapshot!(function(&shown, "via"), @r#"
     fn via(x.0: int) -> tobj {
-      let d.4: obj = con Box #0(&via$lambda0)
-      unpack d.4 Box #0(f.2: tobj)
+      let t.1: obj = call "hide@[Int -> Int]{1=via$lambda0}"(0)
+      unpack t.1 Box #0(f.2: tobj)
       tail call apply_to(f.2, x.0)
     }
-    ");
+    "#);
     insta::assert_snapshot!(function(&shown, "through"), @"
     fn through(f.0: tobj poly, x.1: int) -> tobj {
       let x.4: tobj = box x.1
@@ -375,18 +375,18 @@ fn t3_raises_the_ret_along_a_chain_of_tail_calls() {
     ");
     insta::assert_snapshot!(function(&shown, "entry$main"), @r#"
     fn entry$main() -> unit {
-      let d.12: obj = con Box #0(&main$lambda0)
-      unpack d.12 Box #0(g.2: tobj)
-      let d.13: obj = con Box #0(&via$boxed)
-      unpack d.13 Box #0(via.4: tobj)
-      let d.14: obj = con Box #0(&through$boxed)
-      unpack d.14 Box #0(through.6: tobj)
-      let b.15: tobj = box 1
-      let t.16: tobj = apply via.4(b.15)
-      let t.7: int = unbox t.16
-      let b.17: tobj = box 2
-      let t.18: tobj = apply through.6(g.2, b.17)
-      let t.8: int = unbox t.18
+      let t.1: obj = call "hide@[Int -> Int]{1=main$lambda0}"(0)
+      unpack t.1 Box #0(g.2: tobj)
+      let t.3: obj = call "hide@[Int -> Int]{1=via}"(0)
+      unpack t.3 Box #0(via.4: tobj)
+      let t.5: obj = call "hide@[(Int -> Int) -> Int -> Int]{1=through}"(0)
+      unpack t.5 Box #0(through.6: tobj)
+      let b.12: tobj = box 1
+      let t.13: tobj = apply via.4(b.12)
+      let t.7: int = unbox t.13
+      let b.14: tobj = box 2
+      let t.15: tobj = apply through.6(g.2, b.14)
+      let t.8: int = unbox t.15
       let t.9: int = extern Prelude.+(t.7, t.8)
       let t.10: obj = extern "Prelude.Show Int.show"(t.9)
       let t.11: unit = extern Prelude.println(t.10)
@@ -400,7 +400,7 @@ fn a_tail_call_off_any_loop_may_stay_an_ordinary_call() {
     // handle の本体は `tobj` を返す一様な関数になり、`Int` を返す `answer` の結果を `box` してから返す。この呼び出しは
     // 末尾呼び出しにならないが、関数の値を通るループの上にないので、積むフレームは有界である
     let text = format!(
-        "effect Ask where\n  ask : Unit -> Int\n\n{HIDE}answer : Int -> <Ask> Int\nanswer n =\n  if n > 0 then answer (n - 1)\n  else\n    let Box q = hide ask\n    q () + 1\n\nmain : Unit -> <IO> Unit\nmain () =\n  let r = handle answer 0 with\n    | ctl ask () k -> k 1\n  println (show r)"
+        "effect Ask where\n  ask : Unit -> Int\n\n{HIDE}answer : Int -> <Ask> Int\nanswer n =\n  if n > 0 then answer (n - 1)\n  else\n    let Box q = hide 0 ask\n    q () + 1\n\nmain : Unit -> <IO> Unit\nmain () =\n  let r = handle answer 0 with\n    | ctl ask () k -> k 1\n  println (show r)"
     );
     insta::assert_snapshot!(function(&lir_text(&text, eml_lir::Pass::Contract), "main$handle0"), @"
     internal yields fn main$handle0(p.0: unit) -> tobj {
@@ -415,7 +415,7 @@ fn a_tail_call_off_any_loop_may_stay_an_ordinary_call() {
 fn the_result_of_exit_is_not_compared_with_positions() {
     // `exit` は戻らないので、`int` の束縛がタプルのフィールド (`tobj` の位置) に流れても `box` は入らない (docs/spec/lir.md の「戻らない extern」)
     let text = format!(
-        "{HIDE}f : Int -> <IO> (Int, Int)\nf n = if n == 0 then (exit 3, n) else (n, n)\n\nmain : Unit -> <IO> Unit\nmain () =\n  let Box f = hide f\n  println (show (f 1))"
+        "{HIDE}f : Int -> <IO> (Int, Int)\nf n = if n == 0 then (exit 3, n) else (n, n)\n\nmain : Unit -> <IO> Unit\nmain () =\n  let Box f = hide 0 f\n  println (show (f 1))"
     );
     insta::assert_snapshot!(function(&lir_text(&text, eml_lir::Pass::Boxing), "f"), @r#"
     fn f(n.0: int) -> obj {
@@ -433,4 +433,21 @@ fn the_result_of_exit_is_not_compared_with_positions() {
       return d.3
     }
     "#);
+}
+
+/// 関数の ABI は名前で決まり、ほかの定義の使い方によらない (docs/spec/lir.md の「一様な関数」)。値としても使う
+/// ローカル関数 `d$let$g` は、`d` をどの深さの呼び出しから展開するプログラムでも、同じ LIR になる。
+#[test]
+fn a_local_function_used_as_a_value_has_one_abi_in_every_program() {
+    const D: &str =
+        "d : Int -> Int\nd x =\n  let g y = y + 1\n  let fs = [g]\n  g x + List.length fs\n\n";
+    let direct = format!("{D}main : Unit -> <IO> Unit\nmain () = println (display (d 5))");
+    let mut chain = String::from(D);
+    chain.push_str("x1 : Int -> Int\nx1 n = d n\n\n");
+    for i in 2..=6 {
+        chain.push_str(&format!("x{i} : Int -> Int\nx{i} n = x{} n\n\n", i - 1));
+    }
+    chain.push_str("main : Unit -> <IO> Unit\nmain () = println (display (x6 5))");
+    let g = |text: &str| function(&lir_text(text, eml_lir::Pass::Perceus), "d$let$g");
+    assert_eq!(g(&direct), g(&chain));
 }

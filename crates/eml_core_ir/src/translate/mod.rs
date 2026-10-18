@@ -292,9 +292,11 @@ fn lower_local_functions(ctx: BodyCtx<'_>, program: &mut ProgramBuilder) {
                 .expect("every lambda has its row classified"),
         );
         let captured = ctx.typed_captures(&function.captured);
+        // ローカル関数は直接呼ばれるために生まれるので、内部の関数でない。値として使う所には box の挿入が `f$boxed` を
+        // 作る (docs/spec/lir.md の「一様な関数」)
         let core = FnLowering::new(ctx, program, yields).lower(
             &name,
-            true,
+            false,
             &captured,
             &params,
             closure.body,
@@ -648,7 +650,7 @@ impl<'a> FnLowering<'a> {
 
     /// ラムダと handle の本体と節は、捕まえた変数を先頭の引数に持つ (docs/spec/core-ir.md)。トップレベルの関数では
     /// `captured` は空である。捕まえた変数と引数は、その値の Repr と印と組にして渡す。`ret` は本体の値の Repr と印で、
-    /// 関数の `ret` と `ret_mark` になる。`internal` は、持ち上げた関数なら真である。
+    /// 関数の `ret` と `ret_mark` になる。`internal` は、値として生まれる関数 (ラムダ、handle の本体と節) なら真である。
     fn lower(
         mut self,
         name: &str,

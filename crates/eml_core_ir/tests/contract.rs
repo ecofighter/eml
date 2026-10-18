@@ -7,14 +7,15 @@ use crate::common::{function, lir_text};
 /// 調べる関数をデータに通して呼び、optimize がそれを呼ぶ側に展開しないようにする。取り出した関数の値への `apply` は
 /// 直接の呼び出しでないので、関数は自分のコードのまま残る。`f` と `g` は自分を呼ぶので展開されず、調べる関数の中で
 /// 直接の呼び出しのまま残る (docs/superpowers/specs/2026-10-18-s13e-specialization-design.md の「インライン化」)。
-const KEEP: &str = "data Box a = | Box a\n\nhide : a -> Box a\nhide x = Box x\n\nf : Int -> Int\nf x = if x > 9 then f (x - 1) else x + 1\n\ng : Int -> Int\ng x = if x < 0 then g (x + 1) else x - 1\n\n";
+/// `hide` は自分を呼ぶので展開されず、取り出した値は呼ぶ側から見えない。
+const KEEP: &str = "data Box a = | Box a\n\nhide : Int -> a -> Box a\nhide n x = if n <= 0 then Box x else hide (n - 1) x\n\nf : Int -> Int\nf x = if x > 9 then f (x - 1) else x + 1\n\ng : Int -> Int\ng x = if x < 0 then g (x + 1) else x - 1\n\n";
 
 #[test]
 fn a_returned_if_value_becomes_tail_calls_in_each_arm() {
     // `let y = if ..; y` の続きは `return` だけのブロックなので、translate が各枝の `jump` を `return` にしてブロックを
     // 消し、縮約が呼び出しの後の `return` を末尾呼び出しにする
     let text = format!(
-        "{KEEP}h : Bool -> Int -> Int\nh c x =\n  let y = if c then f x else g x\n  y\n\nmain : Unit -> <IO> Unit\nmain () =\n  let Box h = hide h\n  println (show (h True 1))"
+        "{KEEP}h : Bool -> Int -> Int\nh c x =\n  let y = if c then f x else g x\n  y\n\nmain : Unit -> <IO> Unit\nmain () =\n  let Box h = hide 0 h\n  println (show (h True 1))"
     );
     let text = text.as_str();
     insta::assert_snapshot!(function(&lir_text(text, eml_lir::Pass::Contract), "h"), @"
@@ -31,7 +32,7 @@ fn a_returned_if_value_becomes_tail_calls_in_each_arm() {
 #[test]
 fn a_returned_match_value_becomes_tail_calls_in_each_arm() {
     let text = format!(
-        "data Option a =\n  | None\n  | Some a\n\n{KEEP}h : Option Int -> Int\nh o =\n  let y = match o with\n    | Some v -> f v\n    | None -> g 0\n  let z = y\n  z\n\nmain : Unit -> <IO> Unit\nmain () =\n  let Box h = hide h\n  println (show (h None))"
+        "data Option a =\n  | None\n  | Some a\n\n{KEEP}h : Option Int -> Int\nh o =\n  let y = match o with\n    | Some v -> f v\n    | None -> g 0\n  let z = y\n  z\n\nmain : Unit -> <IO> Unit\nmain () =\n  let Box h = hide 0 h\n  println (show (h None))"
     );
     let text = text.as_str();
     insta::assert_snapshot!(function(&lir_text(text, eml_lir::Pass::Contract), "h"), @"
@@ -50,7 +51,7 @@ fn a_returned_match_value_becomes_tail_calls_in_each_arm() {
 fn returning_a_field_of_a_call_result_is_not_a_tail_call() {
     // 返すのはタプル全体ではなくフィールドなので、呼び出しの後に `unpack` が残り、末尾呼び出しにならない
     let text = format!(
-        "{KEEP}split : Int -> (Int, Int)\nsplit x = if x > 9 then split (x - 1) else (x, x + 1)\n\nfirst : Int -> Int\nfirst x =\n  let (y, _) = split x\n  y\n\nmain : Unit -> <IO> Unit\nmain () =\n  let Box first = hide first\n  println (show (first 1))"
+        "{KEEP}split : Int -> (Int, Int)\nsplit x = if x > 9 then split (x - 1) else (x, x + 1)\n\nfirst : Int -> Int\nfirst x =\n  let (y, _) = split x\n  y\n\nmain : Unit -> <IO> Unit\nmain () =\n  let Box first = hide 0 first\n  println (show (first 1))"
     );
     let text = text.as_str();
     insta::assert_snapshot!(function(&lir_text(text, eml_lir::Pass::Contract), "first"), @"
@@ -66,7 +67,7 @@ fn returning_a_field_of_a_call_result_is_not_a_tail_call() {
 #[test]
 fn calls_in_tail_position_are_tail_calls() {
     // ラムダはデータを通して渡し、optimize が `call_twice` を特殊化しないようにする。`apply` の末尾呼び出しを見るためである
-    let text = "data Box a = | Box a\n\nhide : a -> Box a\nhide x = Box x\n\nloop : Int -> Int -> Int\nloop n acc = if n == 0 then acc else loop (n - 1) (acc + 1)\n\ncall_twice : (Int -> Int) -> Int -> Int\ncall_twice f x = f (f x)\n\nmain : Unit -> <IO> Unit\nmain () =\n  let Box f = hide (fn x -> x + 1)\n  let Box call_twice = hide call_twice\n  println (show (loop 3 0 + call_twice f 1))";
+    let text = "data Box a = | Box a\n\nhide : Int -> a -> Box a\nhide n x = if n <= 0 then Box x else hide (n - 1) x\n\nloop : Int -> Int -> Int\nloop n acc = if n == 0 then acc else loop (n - 1) (acc + 1)\n\ncall_twice : (Int -> Int) -> Int -> Int\ncall_twice f x = f (f x)\n\nmain : Unit -> <IO> Unit\nmain () =\n  let Box f = hide 0 (fn x -> x + 1)\n  let Box call_twice = hide 0 call_twice\n  println (show (loop 3 0 + call_twice f 1))";
     let shown = lir_text(text, eml_lir::Pass::Contract);
     insta::assert_snapshot!(function(&shown, "loop"), @"
     fn loop(n.0: int, acc.1: int) -> int {
@@ -94,7 +95,7 @@ fn a_local_self_call_is_a_tail_call() {
     // 持ち上げたローカル関数の自分への呼び出しも直接の呼び出しなので、トップレベルの関数と同じく末尾呼び出しになる
     let text = "f : Int -> Int -> Int\nf base n =\n  let go k acc = if k == 0 then acc else go (k - 1) (acc + base)\n  go n 0\n\nmain : Unit -> <IO> Unit\nmain () = println (show (f 2 3))";
     insta::assert_snapshot!(function(&lir_text(text, eml_lir::Pass::Contract), "f$let$go"), @r#"
-    internal fn f$let$go(base.0: int, k.1: int, acc.2: int) -> int {
+    fn f$let$go(base.0: int, k.1: int, acc.2: int) -> int {
       let t.3: enum = extern "Prelude.Eq Int.=="(k.1, 0)
       switch t.3 Prelude.Bool { #0 -> b1, #1 -> b2 }
     b1:
