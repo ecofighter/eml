@@ -569,7 +569,7 @@ fn an_immediate_clause_becomes_its_entry() {
 fn a_clause_that_does_not_resume_at_once_yields_to_its_handler() {
     // 入口は節のクロージャを作って `yield_to` を呼び、ダミーを返す。節の関数は `prompt$` が `apply c(k, st)` で呼ぶ
     let text = format!(
-        "{ASK}main : Unit -> <IO> Unit\nmain () =\n  let r =\n    handle ask () + 1 with\n      | ctl ask () k ->\n        let v = k 10\n        v * 2\n  println (show r)"
+        "{ASK}{HIDE}main : Unit -> <IO> Unit\nmain () =\n  let Box b = hide (fn () -> ask () + 1)\n  let r =\n    handle b () with\n      | ctl ask () k ->\n        let v = k 10\n        v * 2\n  println (show r)"
     );
     let shown = core_text(&text, Pass::Evidence);
     insta::assert_snapshot!(function(&shown, "main$handle0$ask$entry"), @"
@@ -586,7 +586,7 @@ fn a_resume_becomes_an_apply() {
     // `resume k(v, s)` は、含む関数の `yields` の印を写した `apply k(v, s)` になる。handle を含む `main` が `yields` で
     // ないので、節の関数も `apply` も印を持たない
     let text = format!(
-        "{ASK}main : Unit -> <IO> Unit\nmain () =\n  let r =\n    handle ask () + 1 with\n      | ctl ask () k ->\n        let v = k 10\n        v * 2\n  println (show r)"
+        "{ASK}{HIDE}main : Unit -> <IO> Unit\nmain () =\n  let Box b = hide (fn () -> ask () + 1)\n  let r =\n    handle b () with\n      | ctl ask () k ->\n        let v = k 10\n        v * 2\n  println (show r)"
     );
     let shown = core_text(&text, Pass::Evidence);
     insta::assert_snapshot!(function(&shown, "main$handle0$ask"), @"
@@ -780,7 +780,7 @@ fn a_resume_in_a_yielding_function_becomes_a_yielding_apply() {
     // handle を含む `f` は `Log` を外へ通すので `yields` で、節の関数も `yields` になる。`resume k(v, s)` は
     // `yields apply k(v, s)` になり、末尾でなければ yield の地点になる
     let text = format!(
-        "{ASK}effect Log where\n  log : Int -> Unit\n\nf : Unit -> <Log> Int\nf () =\n  handle ask () + 1 with\n    | ctl ask () k ->\n      let v = k 10\n      v * 2\n\nmain : Unit -> <IO> Unit\nmain () =\n  let r = handle f () with\n            | ctl log _ k -> k ()\n  println (show r)"
+        "{ASK}{HIDE}effect Log where\n  log : Int -> Unit\n\nf : Unit -> <Log> Int\nf () =\n  let Box b = hide (fn () -> ask () + 1)\n  handle b () with\n    | ctl ask () k ->\n      let v = k 10\n      v * 2\n\nmain : Unit -> <IO> Unit\nmain () =\n  let r = handle f () with\n            | ctl log _ k -> k ()\n  println (show r)"
     );
     let shown = core_text(&text, Pass::Evidence);
     insta::assert_snapshot!(function(&shown, "f$handle0$ask"), @"
@@ -867,7 +867,7 @@ fn closures_ep_builds_take_the_join_of_their_captures() {
     // 操作の引数の `File` を捕まえて `lin` になる
     // (docs/spec/core-ir.md の「EP が足す変数の印」)
     let text = format!(
-        "effect Ask where\n  ask : Unit -> Int\n\neffect Sink where\n  put : Fs.File -> Unit\n\nuse_it : Fs.File -> <Ask, IO> Unit\nuse_it f =\n  let n = ask ()\n  Fs.close f\n  println (show n)\n\ncount : Int -> <Ask> Int\ncount m =\n  let n = ask ()\n  n + m\n\n{HIDE}main : Unit -> <IO> Unit\nmain () =\n  let Box u = hide use_it\n  let Box c = hide count\n  handle u (Fs.open \"input.txt\") with\n    | ctl ask () k -> k 1\n  let r = handle c 1 with\n    | ctl ask () k -> k 2\n  println (show r)\n  handle put (Fs.open \"input.txt\") with\n    | ctl put f k ->\n      Fs.close f\n      let u = k ()\n      println \"resumed\"\n      u"
+        "effect Ask where\n  ask : Unit -> Int\n\neffect Sink where\n  put : Fs.File -> Unit\n\nuse_it : Fs.File -> <Ask, IO> Unit\nuse_it f =\n  let n = ask ()\n  Fs.close f\n  println (show n)\n\ncount : Int -> <Ask> Int\ncount m =\n  let n = ask ()\n  n + m\n\n{HIDE}main : Unit -> <IO> Unit\nmain () =\n  let Box u = hide use_it\n  let Box c = hide count\n  handle u (Fs.open \"input.txt\") with\n    | ctl ask () k -> k 1\n  let r = handle c 1 with\n    | ctl ask () k -> k 2\n  println (show r)\n  let Box p = hide put\n  handle p (Fs.open \"input.txt\") with\n    | ctl put f k ->\n      Fs.close f\n      let u = k ()\n      println \"resumed\"\n      u"
     );
     let shown = core_text(&text, Pass::Evidence);
     let use_it = function(&shown, "use_it");

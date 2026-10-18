@@ -1,0 +1,15 @@
+---
+source: crates/eml_cli/tests/ui.rs
+assertion_line: 254
+expression: "format!(\"--- stdout ---\\n{stdout}--- stderr ---\\n{diagnostics}{stderr}{written}{exit}\")"
+input_file: tests/ui/run/std/specialized_iter_file_drop.em
+---
+--- stdout ---
+one
+two
+--- stderr ---
+--- written: lines.txt ---
+one
+two
+three
+four

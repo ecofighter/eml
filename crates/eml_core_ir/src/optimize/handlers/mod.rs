@@ -10,11 +10,11 @@ mod piece;
 
 use std::collections::HashMap;
 
-use super::known::{fresh, known_closures};
+use super::known::{Wrapper, fresh, known_closures, wrapper};
 use super::specialize::limited;
 use crate::tail::tail_position_call;
 use crate::{Call, CoreFn, Program, Rhs, Stmt, Term};
-use eml_lir::{Atom, BlockId, FnIdx, OperationInfo, VarId, VarInfo};
+use eml_lir::{Atom, BlockId, FnIdx, Mark, OperationInfo, Repr, VarId, VarInfo};
 
 /// `let x = handle …` の文で、本体が既知の閉包か関数の値であるもの。
 #[derive(Debug, Clone, Copy)]
@@ -30,6 +30,8 @@ struct Site {
 enum ClauseForm {
     /// `k` の使いが、末尾の位置の `mask` のない `resume k(v, s)` だけで、どの `return` もその結果を返す節。
     Resuming,
+    /// それ以外の節。`k` を値として使う節、`k` を末尾でなく呼ぶ節、`k` を使わない節、`never` の操作の節、本体に
+    /// `handle` を持つ節である。`perform` の地点から節の写しを末尾で呼び、`k` には継続の関数の閉包を渡す。
     Other,
 }
 
@@ -90,6 +92,47 @@ impl ClauseForm {
     }
 }
 
+/// 再開する操作の、それ以外の節の `k` の出現が、`resume k(..)` の呼ばれる値、`k` を包む `cont$` か `cont$state` の
+/// 捕獲 (`stateful` と合う方)、`drop k` だけか。この3つは、`k` を継続の関数の閉包に替えた写し (`piece::clause_with_k`)
+/// でもそのまま書ける。生の継続を入れ子の関数が捕獲する形は、その関数の `resume` も書き換えることになるので扱わない。
+fn keeps_k(program: &Program, clause: &CoreFn, stateful: bool) -> bool {
+    let params = clause.params();
+    let k = Atom::Var(params[params.len() - 2]);
+    let mut uses = 0;
+    let mut fitting = 0;
+    for block in &clause.blocks {
+        for stmt in &block.stmts {
+            stmt.for_each_atom(|atom| uses += usize::from(atom == k));
+            let Stmt::Let { var: _, rhs } = stmt else {
+                continue;
+            };
+            fitting += usize::from(match rhs {
+                Rhs::Call {
+                    call: Call::Resume { k: callee, .. },
+                    mask: _,
+                } => *callee == k,
+                Rhs::MakeClosure(function, captures) => {
+                    captures[..] == [k] && resumes(program, *function) == Some(stateful)
+                }
+                Rhs::Drop(atom) => *atom == k,
+                _ => false,
+            });
+        }
+        block
+            .term
+            .for_each_atom(|atom| uses += usize::from(atom == k));
+    }
+    uses == fitting
+}
+
+/// `function` が生の継続を包む関数 (`cont$` か `cont$state`) なら、状態つきの方か。
+fn resumes(program: &Program, function: FnIdx) -> Option<bool> {
+    match wrapper(program.function(function)) {
+        Some(Wrapper::Resume { stateful }) => Some(stateful),
+        _ => None,
+    }
+}
+
 /// 特殊化する handle。節と `return` の節の捕獲は、handle を含む関数の値である。
 struct Handler {
     site: Site,
@@ -100,6 +143,16 @@ struct Handler {
     clauses: Vec<KnownFn>,
     /// handle のためだけに作られた `closure` の変数。handle を消すと使われなくなる。
     closures: Vec<VarId>,
+    /// 操作の順の節の形。
+    forms: Vec<ClauseForm>,
+}
+
+impl Handler {
+    /// 状態のない handler の `init` は `()` である (docs/spec/core-ir.md)。`from ()` の状態つきの handler も、状態の
+    /// ない handler と同じに扱う。状態の値が `()` なので、渡しても省いても同じである。
+    fn stateful(&self) -> bool {
+        self.init != Atom::Unit
+    }
 }
 
 /// handle に渡された関数と捕獲。
@@ -116,6 +169,8 @@ struct Shape {
     effect: u32,
     /// 操作の順の節と、最後に `return` の節の関数と、その捕獲の数。
     clauses: Vec<(FnIdx, usize)>,
+    /// 操作の順の節の形。
+    forms: Vec<ClauseForm>,
     stateful: bool,
 }
 
@@ -128,12 +183,13 @@ impl Shape {
     }
 }
 
-/// handle を特殊化する。handle を含む関数はその場で書き換え、複製と継続の関数は後ろに足す。
-pub(crate) fn handlers(program: &mut Program) {
+/// handle を特殊化する。handle を含む関数はその場で書き換え、複製と継続の関数は後ろに足す。`translated` は、
+/// `yields` の印を付け直す前の、関数ごとの印である (`path`)。
+pub(crate) fn handlers(program: &mut Program, translated: &[bool]) {
     let count = program.functions.len();
     let handlers: Vec<Handler> = (0..count)
         .flat_map(|owner| sites(program, FnIdx(owner as u32)))
-        .filter_map(|site| eligible(program, site))
+        .filter_map(|site| eligible(program, translated, site))
         .collect();
     if handlers.is_empty() {
         return;
@@ -141,6 +197,7 @@ pub(crate) fn handlers(program: &mut Program) {
     let mut copies = Copies {
         program,
         table: HashMap::new(),
+        clause_copies: HashMap::new(),
         created: Vec::new(),
         pending: Vec::new(),
     };
@@ -154,7 +211,8 @@ pub(crate) fn handlers(program: &mut Program) {
                     .iter()
                     .map(|clause| (clause.function, clause.captures.len()))
                     .collect(),
-                stateful: handler.init != Atom::Unit,
+                forms: handler.forms.clone(),
+                stateful: handler.stateful(),
             };
             let copy = copies.copy(handler.body.function, &shape);
             let mut args = handler.body.captures.clone();
@@ -231,7 +289,7 @@ fn sites(program: &Program, owner: FnIdx) -> Vec<Site> {
 }
 
 /// `site` の handle を特殊化してよいなら、その中身。判断は handle を含む関数と経路の関数のコードだけで決まる。
-fn eligible(program: &Program, site: Site) -> Option<Handler> {
+fn eligible(program: &Program, translated: &[bool], site: Site) -> Option<Handler> {
     let owner = program.function(site.owner);
     let Stmt::Let {
         var: _,
@@ -297,19 +355,40 @@ fn eligible(program: &Program, site: Site) -> Option<Handler> {
         return None;
     }
     let (ret, operations) = clauses.split_last().expect("a handler has a return clause");
-    if program.function(ret.function).params().len() != ret.captures.len() + 2 {
+    let ret_fn = program.function(ret.function);
+    if ret_fn.params().len() != ret.captures.len() + 2 {
         return None;
     }
+    let stateful = *init != Atom::Unit;
+    let state = &ret_fn.vars[ret_fn.params()[ret_fn.params().len() - 1].0 as usize];
+    let mut forms = Vec::with_capacity(operations.len());
     for (clause, operation) in operations.iter().zip(&info.operations) {
         let function = program.function(clause.function);
-        if function.params().len() != clause.captures.len() + operation.params.len() + 2
-            || ClauseForm::of(function, operation) != ClauseForm::Resuming
+        // `never` の操作の節は `k` を受けない (docs/spec/core-ir.md の「`never` の中断」)
+        let continuation = usize::from(operation.resumable);
+        if function.params().len()
+            != clause.captures.len() + operation.params.len() + continuation + 1
         {
             return None;
         }
+        // 複製は状態を `return` の節の状態の引数の形で受け、そのまま節に渡す
+        let param = &function.vars[function.params()[function.params().len() - 1].0 as usize];
+        if stateful && (param.repr, param.mark) != (state.repr, state.mark) {
+            return None;
+        }
+        let form = ClauseForm::of(function, operation);
+        // それ以外の節の結果は、そのまま複製の結果になる
+        let returns_handled =
+            function.ret == ret_fn.ret && function.ret_mark.compatible(ret_fn.ret_mark);
+        if form == ClauseForm::Other
+            && (!returns_handled || (operation.resumable && !keeps_k(program, function, stateful)))
+        {
+            return None;
+        }
+        forms.push(form);
     }
-    let path = path(program, body.function, *effect)?;
-    if !performs_fit(program, &path, *effect, operations) {
+    let path = path(program, translated, body.function, *effect)?;
+    if !performs_fit(program, &path, *effect, operations, &forms) {
         return None;
     }
     Some(Handler {
@@ -319,6 +398,7 @@ fn eligible(program: &Program, site: Site) -> Option<Handler> {
         body,
         clauses,
         closures,
+        forms,
     })
 }
 
@@ -327,11 +407,17 @@ fn eligible(program: &Program, site: Site) -> Option<Handler> {
 /// 経路の外の `perform` が H に届くかは、呼ぶ相手と `apply` の `yields` の印で安全側に判断できる。yield しうる操作を
 /// 持つエフェクトの `perform` は、それを含む関数の印に必ず表れるためである (docs/spec/types.md の「row の具体化の
 /// 記録」)。すべての操作が `never` のエフェクト (`IO` を含む) は、中断が巻き戻しで安いので対象にしない。
-fn path(program: &Program, body: FnIdx, effect: u32) -> Option<Vec<FnIdx>> {
+///
+/// ただし、付け直した印は再開する操作の `perform` だけを yield の地点に数えるので、`never` の操作だけを起こす関数は
+/// 印を失う。扱うエフェクトが `never` の操作を持つときは、呼ぶ相手を translate の印 (`translated`) で見て、印の
+/// 立った経路の外の関数を呼ぶ handle を残す。translate の印は関数の row から決まり、エフェクトのラベルは再開する操作を
+/// 持てば yield しうるので、その `perform` を見落とさない。印は名前ごとに決まるので、判断も名前ごとに決まる。
+fn path(program: &Program, translated: &[bool], body: FnIdx, effect: u32) -> Option<Vec<FnIdx>> {
     let info = &program.effects[effect as usize];
     if info.operations.iter().all(|operation| !operation.resumable) {
         return None;
     }
+    let aborts = info.operations.iter().any(|operation| !operation.resumable);
     let mut path = vec![body];
     let mut next = 0;
     while let Some(&function) = path.get(next) {
@@ -360,6 +446,9 @@ fn path(program: &Program, body: FnIdx, effect: u32) -> Option<Vec<FnIdx>> {
                             path.push(*target);
                         }
                     }
+                    Call::Direct(target, _) if aborts && translated[target.0 as usize] => {
+                        return None;
+                    }
                     Call::Direct(..) | Call::Apply { .. } | Call::Perform { .. } => {}
                 }
             }
@@ -370,7 +459,16 @@ fn path(program: &Program, body: FnIdx, effect: u32) -> Option<Vec<FnIdx>> {
 
 /// 経路の関数の H 宛ての `perform` の引数が、節の引数と同じ Repr で、印も受け渡せる。節の本体は引数を置き換えて
 /// 展開するので、Repr が違うと、box の挿入が直す呼び出しの境目がないまま、違う Repr の値を使うことになるためである。
-fn performs_fit(program: &Program, path: &[FnIdx], effect: u32, clauses: &[KnownFn]) -> bool {
+/// 展開する節では、引数の印が節の引数の印を超えないことも求める。`unr` の引数の所に `poly` の値を置くと、展開した
+/// 本体がその値を何度も使い、`unr` でない値を写すことになるためである (docs/spec/lir.md の「Kind の印の検査」の V1)。
+/// それ以外の節は呼び出しで引数を渡すので、印は受け渡せれば足りる。
+fn performs_fit(
+    program: &Program,
+    path: &[FnIdx],
+    effect: u32,
+    clauses: &[KnownFn],
+    forms: &[ClauseForm],
+) -> bool {
     path.iter().all(|&function| {
         let function = program.function(function);
         targeted(function, effect).all(|(block, stmt)| {
@@ -386,13 +484,16 @@ fn performs_fit(program: &Program, path: &[FnIdx], effect: u32, clauses: &[Known
                 unreachable!("a targeted statement is a perform");
             };
             let clause = &clauses[*op as usize];
+            let inlined = forms[*op as usize] == ClauseForm::Resuming;
+            let operation = &program.effects[effect as usize].operations[*op as usize];
             let params = &program.function(clause.function).params()[clause.captures.len()..];
             let vars = &program.function(clause.function).vars;
-            args.len() + 2 == params.len()
+            args.len() + usize::from(operation.resumable) + 1 == params.len()
                 && args.iter().zip(params).all(|(&arg, &param)| {
                     let info = &vars[param.0 as usize];
                     arg.fits(&function.vars, info.repr)
                         && match arg {
+                            Atom::Var(var) if inlined => info.mark.at_least(function.mark(var)),
                             Atom::Var(var) => function.mark(var).compatible(info.mark),
                             _ => true,
                         }
@@ -430,6 +531,8 @@ fn targeted(function: &CoreFn, effect: u32) -> impl Iterator<Item = (BlockId, us
 struct Copies<'a> {
     program: &'a Program,
     table: HashMap<(FnIdx, FnIdx), FnIdx>,
+    /// 節の関数ごとの、`k` を閉包で受ける写し `<g>{k}`。
+    clause_copies: HashMap<FnIdx, FnIdx>,
     /// `program.functions` の後ろに足す関数。番号を取った順に並ぶ。
     created: Vec<Option<CoreFn>>,
     pending: Vec<(FnIdx, FnIdx, Shape)>,
@@ -455,6 +558,24 @@ impl Copies<'_> {
         let copy = self.reserve();
         self.table.insert(key, copy);
         self.pending.push((copy, function, shape.clone()));
+        copy
+    }
+
+    /// 節の関数 `clause` の、`k` を閉包で受ける写し `<g>{k}` の番号。節の関数はちょうど1つの handle に属するので、
+    /// 写しの鍵は節の関数だけで、状態つきかどうかもそれで決まる。
+    fn clause_copy(&mut self, clause: FnIdx, stateful: bool) -> FnIdx {
+        if let Some(&copy) = self.clause_copies.get(&clause) {
+            return copy;
+        }
+        let copy = self.reserve();
+        self.clause_copies.insert(clause, copy);
+        let program = self.program;
+        let function = program.function(clause);
+        let name = limited(&function.name, format!("{}{{k}}", function.name));
+        let code = piece::clause_with_k(function, name, stateful, |wrapper| {
+            resumes(program, wrapper).is_some()
+        });
+        self.place(copy, code);
         copy
     }
 
@@ -550,9 +671,6 @@ impl Copies<'_> {
         }
 
         for (number, &(block, stmt)) in performs.iter().enumerate().rev() {
-            let continuation = self.reserve();
-            let (live, mut cut) = piece::cut(&code, block, stmt, state);
-            cut.name = format!("{}$h{number}", code.name);
             let Stmt::Let {
                 var: _,
                 rhs:
@@ -564,10 +682,76 @@ impl Copies<'_> {
             else {
                 unreachable!("a targeted statement is a perform");
             };
-            let (clause, _) = shape.clauses[*op as usize];
-            let mut clause_args = captures[*op as usize].clone();
+            let op = *op as usize;
+            let (clause, _) = shape.clauses[op];
+            let mut clause_args = captures[op].clone();
             clause_args.extend(args.iter().copied());
+            let operation = &program.effects[shape.effect as usize].operations[op];
+            if !operation.resumable {
+                // `never` の操作: 節の関数を末尾で呼び、`perform` より後ろは捨てる。中断で巻き戻したフレームの値は、
+                // ここで手放す
+                let live = piece::live_at(&code, block, stmt, state);
+                clause_args.push(state_atom);
+                let released = dead(&code, &all_captures, &live, &clause_args);
+                let call = Call::Direct(clause, clause_args);
+                end(
+                    &mut code,
+                    (block, stmt),
+                    released,
+                    None,
+                    call,
+                    program.function(clause),
+                );
+                continue;
+            }
+            let continuation = self.reserve();
+            let (live, mut cut) = piece::cut(&code, block, stmt, state);
+            cut.name = format!("{}$h{number}", code.name);
+            self.place(continuation, cut);
             let live: Vec<Atom> = live.into_iter().map(Atom::Var).collect();
+            if shape.forms[op] == ClauseForm::Other {
+                // `k` を値として使う節: 続きの閉包を `k` にして、節の写しを末尾で呼ぶ。閉包の印は節の `k` の印で、
+                // `once` の操作なら `lin` になる
+                let source = program.function(clause);
+                let k = source.vars[source.params()[source.params().len() - 2].0 as usize].mark;
+                debug_assert!(
+                    live.iter().all(|&atom| match atom {
+                        Atom::Var(var) => k.at_least(code.mark(var)),
+                        _ => true,
+                    }),
+                    "a `multi` continuation captures only `unr` values"
+                );
+                // 捕獲のない閉包は関数の値で書く (docs/spec/core-ir.md)
+                let closure = (!live.is_empty()).then(|| {
+                    let var = fresh(
+                        &mut code.vars,
+                        VarInfo {
+                            name: "k".to_string(),
+                            repr: Repr::TObj,
+                            mark: k,
+                        },
+                    );
+                    (var, Rhs::MakeClosure(continuation, live.clone()))
+                });
+                let value = closure
+                    .as_ref()
+                    .map_or(Atom::Fn(continuation), |&(var, _)| Atom::Var(var));
+                clause_args.extend([value, state_atom]);
+                let mut passed = live;
+                passed.extend(clause_args.iter().copied());
+                let released = dead(&code, &all_captures, &[], &passed);
+                // 写しの戻り値は節の関数の戻り値のままである
+                let call = Call::Direct(self.clause_copy(clause, shape.stateful), clause_args);
+                end(
+                    &mut code,
+                    (block, stmt),
+                    released,
+                    closure,
+                    call,
+                    program.function(clause),
+                );
+                continue;
+            }
             let stateful = shape.stateful;
             piece::inline_clause(
                 &mut code,
@@ -587,9 +771,76 @@ impl Copies<'_> {
                     }
                 },
             );
-            self.place(continuation, cut);
         }
         piece::prune(&mut code);
         self.place(index, code);
     }
+}
+
+/// `perform` の地点で複製を終える。ブロックの `perform` から後ろを捨て、`released` を `drop` し、`closure` を作って
+/// から `call` を末尾で呼ぶ。呼ぶ相手は節の関数かその写しで、結果 (`returned` の形) はそのまま複製の結果になる。
+fn end(
+    code: &mut CoreFn,
+    (block, stmt): (BlockId, usize),
+    released: Vec<VarId>,
+    closure: Option<(VarId, Rhs)>,
+    call: Call,
+    returned: &CoreFn,
+) {
+    let unit = VarInfo {
+        name: "u".to_string(),
+        repr: Repr::Unit,
+        mark: Mark::Unr,
+    };
+    let mut stmts = Vec::new();
+    for var in released {
+        stmts.push(Stmt::Let {
+            var: fresh(&mut code.vars, unit.clone()),
+            rhs: Rhs::Drop(Atom::Var(var)),
+        });
+    }
+    stmts.extend(closure.map(|(var, rhs)| Stmt::Let { var, rhs }));
+    let var = fresh(
+        &mut code.vars,
+        VarInfo {
+            name: "t".to_string(),
+            repr: returned.ret,
+            mark: returned.ret_mark,
+        },
+    );
+    stmts.push(Stmt::Let {
+        var,
+        rhs: Rhs::Call {
+            call,
+            mask: Vec::new(),
+        },
+    });
+    let host = &mut code.blocks[block.0 as usize];
+    host.stmts.truncate(stmt);
+    host.stmts.extend(stmts);
+    host.term = Term::Return(Atom::Var(var));
+}
+
+/// 複製を `perform` の地点で終えるときに手放す、`unr` でない値。節と `return` の節の捕獲と、`perform` の後で
+/// 生きていた変数 (`live`) のうち、末尾の呼び出しに渡さないものである。中断と同じく、もとの意味でも handle の
+/// フレームの値はそこで捨てる (docs/spec/core-ir.md の「`never` の中断」)。`unr` の値は Perceus が手放すが、`unr` で
+/// ない値には `decref` を出せないので、ここで `drop` にする (docs/spec/lir.md の「Kind の印の検査」の V1)。
+fn dead(code: &CoreFn, captures: &[Atom], live: &[VarId], passed: &[Atom]) -> Vec<VarId> {
+    let mut released: Vec<VarId> = Vec::new();
+    let candidates = captures
+        .iter()
+        .filter_map(|atom| match atom {
+            Atom::Var(var) => Some(*var),
+            _ => None,
+        })
+        .chain(live.iter().copied());
+    for var in candidates {
+        if code.mark(var) != Mark::Unr
+            && !passed.contains(&Atom::Var(var))
+            && !released.contains(&var)
+        {
+            released.push(var);
+        }
+    }
+    released
 }

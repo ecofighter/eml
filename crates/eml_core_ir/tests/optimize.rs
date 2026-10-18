@@ -342,15 +342,19 @@ fn a_closure_captured_by_a_closure_is_specialized() {
     "#);
 }
 
+/// `emit` の末尾でない呼び出しが、S13e-2 の handler への特殊化を止め、handle の本体を残す。
 #[test]
 fn generate_reaches_the_handle_body() {
     let text = "\
 import Yield (Yield(..))
 
+emit : Int -> <Yield Int> Unit
+emit x = yield x
+
 nums : Int -> Unit -> <Yield Int> Unit
 nums n () =
-  yield n
-  yield (n + 1)
+  emit n
+  emit (n + 1)
 
 main : Unit -> <IO> Unit
 main () = println (show (Iter.to_list (Iter.generate (nums 3))))
@@ -906,4 +910,111 @@ main () =
             .unwrap();
         assert!(!scrutinee.starts_with('#'), "{line}\n{shown}");
     }
+}
+
+/// `k` を値として使う節は、継続の関数の閉包を `k` として受ける写し `<g>{k}` を末尾で呼ぶ形になり、`Iter.generate` で
+/// 引く形から yield が消える (docs/superpowers/specs/2026-10-18-s13e-specialization-design.md の「書き換え」)。
+#[test]
+fn iter_generate_has_no_yield_left() {
+    let shown = core_text(
+        include_str!("../../../bench/iter_generate.em"),
+        Pass::Optimize,
+    );
+    assert!(
+        shown
+            .lines()
+            .all(|line| !line.contains("handle ") && !line.contains("perform Std.Yield")),
+        "{shown}"
+    );
+    let continuation = shown
+        .lines()
+        .find(|line| line.contains(" fn \"") && line.contains("{H=") && line.contains("}$h0\"("))
+        .unwrap_or_else(|| panic!("{shown}"));
+    assert!(continuation.starts_with("internal "), "{continuation}");
+    let copy = shown
+        .lines()
+        .find(|line| line.contains("{k}\"(") && line.contains(" fn "))
+        .unwrap_or_else(|| panic!("{shown}"));
+    let copy = function(&shown, copy.split('"').nth(1).unwrap());
+    assert!(copy.starts_with("internal "), "{copy}");
+    assert!(copy.contains("con Std.Iter.Iter #0(k"), "{copy}");
+    assert!(!copy.contains("closure cont$"), "{copy}");
+}
+
+/// 継続の関数は、`perform` の後で生きている変数を捕獲し、再開の値を最後に受ける。
+#[test]
+fn a_continuation_captures_its_live_variables() {
+    let text = format!(
+        "{NUMS}\nmain : Unit -> <IO> Unit\nmain () = println (show (Iter.to_list (Iter.generate (nums 3))))\n"
+    );
+    let shown = core_text(&text, Pass::Optimize);
+    let name = shown
+        .lines()
+        .find(|line| line.contains("fn \"nums$let$go{H=") && line.contains("}$h0\"("))
+        .unwrap_or_else(|| panic!("{shown}"));
+    let name = name.split('"').nth(1).unwrap().to_string();
+    insta::assert_snapshot!(function(&shown, &name), @r#"
+    internal fn "nums$let$go{H=Std.Iter.generate@#8c179e1f604536f1}$h0"(n.0: int, i.1: int, t.2: unit) -> tobj lin {
+      let t.3: int = extern Prelude.+(i.1, 1)
+      let t.4: tobj lin = call "nums$let$go{H=Std.Iter.generate@#8c179e1f604536f1}"(n.0, t.3)
+      return t.4
+    }
+    "#);
+}
+
+const WALK: &str = "\
+effect Walk where
+  step : Int -> Unit
+  never stop : Unit -> a
+";
+
+/// `never` の操作だけを起こす関数は、`yields` の付け直しで印を失う。経路の関数がそれを末尾でなく呼ぶと、H に届く
+/// `perform` を印で見つけられないので、handle を残す。
+#[test]
+fn a_helper_that_performs_a_never_operation_keeps_the_handle() {
+    let text = format!(
+        "{WALK}
+check : Int -> <Walk> Int
+check i = if i == 3 then stop () else i
+
+walk : Int -> <Walk> Unit
+walk i =
+  let j = check i
+  step j
+  walk (i + 1)
+
+main : Unit -> <IO> Unit
+main () =
+  handle walk 1 with
+    | fn step n -> println (show n)
+    | ctl stop () -> println \"stopped\"
+"
+    );
+    let shown = core_text(&text, Pass::Optimize);
+    assert!(shown.contains("handle "), "{shown}");
+    assert!(!shown.contains("{H="), "{shown}");
+}
+
+/// `never` の操作の `perform` は、節の関数の末尾呼び出しになり、その後ろは消える。
+#[test]
+fn a_never_operation_calls_its_clause() {
+    let text = format!(
+        "{WALK}
+walk : Int -> <Walk> Unit
+walk i =
+  if i == 3 then stop ()
+  else
+    step i
+    walk (i + 1)
+
+main : Unit -> <IO> Unit
+main () =
+  handle walk 1 with
+    | fn step n -> println (show n)
+    | ctl stop () -> println \"stopped\"
+"
+    );
+    let shown = core_text(&text, Pass::Optimize);
+    assert!(!shown.contains("handle "), "{shown}");
+    assert!(!shown.contains("perform "), "{shown}");
 }

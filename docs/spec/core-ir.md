@@ -490,6 +490,13 @@ translate の包む関数 (`op$`、`con$`、`cont$`、`cont$state`) は、名前
 - translate の出力で `handle` の節か `return` の節に使う関数の複製は、すべて `internal` にする。持ち主を名前に含む複製も、translate の関数の中で既知の閉包を捕まえた節の複製 (`"main$handle0$yield{0=main$lambda0}"`) も同じである。translate は節の関数を handle ごとに別に作るので、節の複製はその handle が値として使うだけで、直接は呼ばれない。`internal` にするかどうかは鍵の呼び出し先だけで決まるので、名前が同じ複製はいつも同じ印を持つ。translate の節の関数と同じく、box の挿入がその場で一様にする。`internal` にしないと、値として使う所に `f$boxed` が挟まり、yield するたびに `box` と `unbox` が1回ずつ増える
 - `handle` の本体の関数は、ほかの複製と同じ鍵で複製する。EP が1つの `handle` への所属を求めるのは節だけなので、本体の複製はいくつもの `handle` で共有してよい
 
+#### handler への特殊化
+
+本体が既知の `handle` は、経路の関数の handler ごとの複製 `<f>{H=<ret>}` の呼び出しに替える (規則は `docs/superpowers/specs/2026-10-18-s13e-specialization-design.md` の「S13e-2 handler への特殊化」)。ここでは、ほかの規則の前提になる印と判断だけを書く。
+
+- 複製 `f{H}` は `internal` にしない。継続の関数 `f{H}$hN` と、`k` を閉包で受ける節の写し `<g>{k}` は `internal` にする。どちらも、使う所がすべて名前で決まる同じ handler の複製の中にあるので、値としてだけ使うか直接呼ぶかも名前で決まり、名前が同じなら ABI も同じになる ([LIR](lir.md) の「一様な関数」)
+- 扱うエフェクトが `never` の操作を持つときは、経路の関数から `yields` でない関数を直接呼ぶ所を、付け直す前の translate の印でも見る。印が立っていれば、その handle は特殊化しない。付け直しは再開する操作の `perform` だけを yield の地点に数えるので、`never` の操作だけを起こす関数は印を失い、特殊化した後の `perform` が handler を見つけられなくなるためである。translate の印は名前ごとに決まるので、判断も名前ごとに決まる
+
 #### `yields` の付け直し
 
 書き換えた後のプログラムで、`yields` の印を最小の固定点で付け直す。translate の印が立ち、本体に yield の地点 (再開できる `perform`、`yields` の `apply`、`resume`、`handle`、yield しうる関数の直接の呼び出し) が残る関数だけを yield しうるとする。純粋なラムダで特殊化した `map` の複製は、中に yield しうる呼び出しが残らなければ `yields` でなくなる。

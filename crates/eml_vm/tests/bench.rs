@@ -212,38 +212,48 @@ fn tree() {
 fn iter_generate() {
     insta::assert_debug_snapshot!(stats("iter_generate", "5000050000\n"), @"
     RunStats {
-        evidence_steps: 100000,
-        yields: 100000,
-        yield_frames: 100000,
+        evidence_steps: 0,
+        yields: 0,
+        yield_frames: 0,
         unwound_frames: 0,
         string_bytes_copied: 10,
-        rc_increments: 300001,
-        rc_decrements: 1300008,
-        boxes: 300002,
-        unboxes: 300002,
-        allocations: 1000008,
-        peak_objects: 10,
-        peak_stack: 34,
+        rc_increments: 0,
+        rc_decrements: 400003,
+        boxes: 300001,
+        unboxes: 300001,
+        allocations: 400004,
+        peak_objects: 5,
+        peak_stack: 21,
     }
     ");
+}
+
+/// S13e-2 の完了の条件。特殊化した `Iter.generate` は、1要素ごとに `k`、`Iter`、組、`Some` の4つを確保する。残りは
+/// 前後の準備の分である
+/// (docs/superpowers/specs/2026-10-18-s13e-specialization-design.md の「`Iter` と push の形での結果 (見込み)」)。
+#[test]
+fn iter_generate_allocates_four_objects_per_element() {
+    let stats = stats("iter_generate", "5000050000\n");
+    assert!(stats.allocations <= 100_000 * 4 + 100, "{stats:?}");
+    assert_eq!(stats.yields, 0, "{stats:?}");
 }
 
 #[test]
 fn iter_pipeline() {
     insta::assert_debug_snapshot!(stats("iter_pipeline", "166671666700000\n"), @"
     RunStats {
-        evidence_steps: 100000,
-        yields: 100000,
-        yield_frames: 100000,
+        evidence_steps: 0,
+        yields: 0,
+        yield_frames: 0,
         unwound_frames: 0,
         string_bytes_copied: 15,
-        rc_increments: 300001,
-        rc_decrements: 1800012,
-        boxes: 350002,
-        unboxes: 400002,
-        allocations: 1500012,
-        peak_objects: 14,
-        peak_stack: 49,
+        rc_increments: 0,
+        rc_decrements: 900007,
+        boxes: 350001,
+        unboxes: 400001,
+        allocations: 900008,
+        peak_objects: 9,
+        peak_stack: 36,
     }
     ");
 }
@@ -252,18 +262,18 @@ fn iter_pipeline() {
 fn iter_pipeline_by_hand() {
     insta::assert_debug_snapshot!(stats("iter_pipeline_by_hand", "166671666700000\n"), @"
     RunStats {
-        evidence_steps: 100000,
-        yields: 100000,
-        yield_frames: 100000,
+        evidence_steps: 0,
+        yields: 0,
+        yield_frames: 0,
         unwound_frames: 0,
         string_bytes_copied: 15,
-        rc_increments: 300001,
-        rc_decrements: 1800012,
-        boxes: 350002,
-        unboxes: 400002,
-        allocations: 1500012,
-        peak_objects: 14,
-        peak_stack: 49,
+        rc_increments: 0,
+        rc_decrements: 900007,
+        boxes: 350001,
+        unboxes: 400001,
+        allocations: 900008,
+        peak_objects: 9,
+        peak_stack: 36,
     }
     ");
 }

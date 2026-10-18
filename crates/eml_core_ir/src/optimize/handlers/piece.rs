@@ -6,7 +6,7 @@ use std::collections::{BTreeSet, HashMap, HashSet};
 use crate::liveness::{insert_var, step_back};
 use crate::tail::tail_position_call;
 use crate::{Block, Call, CoreFn, Rhs, Stmt, Term};
-use eml_lir::{Atom, BlockId, CasePattern, VarId, VarInfo};
+use eml_lir::{Atom, BlockId, CasePattern, FnIdx, Repr, VarId, VarInfo};
 
 use super::super::known::fresh;
 
@@ -28,29 +28,8 @@ pub(crate) fn cut(
     let Stmt::Let { var: result, .. } = source.stmts[stmt] else {
         panic!("a cut point is a `let`");
     };
+    let live = live_at(function, block, stmt, state);
     let reached = reachable(&function.blocks, &source.term);
-    let mut live_in: HashMap<BlockId, BTreeSet<VarId>> = HashMap::new();
-    for &index in reached.iter().rev() {
-        let block = function.block(index);
-        let mut live = live_after(function, &block.term, &live_in);
-        block.term.for_each_atom(|atom| insert_var(&mut live, atom));
-        for stmt in block.stmts.iter().rev() {
-            step_back(stmt, &mut live);
-        }
-        live_in.insert(index, live);
-    }
-    let mut live = live_after(function, &source.term, &live_in);
-    source
-        .term
-        .for_each_atom(|atom| insert_var(&mut live, atom));
-    for later in source.stmts[stmt + 1..].iter().rev() {
-        step_back(later, &mut live);
-    }
-    live.remove(&result);
-    if let Some(state) = state {
-        live.remove(&state);
-    }
-    let live: Vec<VarId> = live.into_iter().collect();
 
     let mut params = live.clone();
     params.push(result);
@@ -96,6 +75,43 @@ pub(crate) fn cut(
         blocks,
     };
     (live, cut)
+}
+
+/// `function` の `block` の `stmt` 番目の文 `let v = perform …` の後で生きている変数。v と状態 `state` を除き、番号の
+/// 昇順に並ぶ。生存は地点から届く部分の上だけで求める。
+pub(crate) fn live_at(
+    function: &CoreFn,
+    block: BlockId,
+    stmt: usize,
+    state: Option<VarId>,
+) -> Vec<VarId> {
+    let source = function.block(block);
+    let Stmt::Let { var: result, .. } = source.stmts[stmt] else {
+        panic!("a cut point is a `let`");
+    };
+    let reached = reachable(&function.blocks, &source.term);
+    let mut live_in: HashMap<BlockId, BTreeSet<VarId>> = HashMap::new();
+    for &index in reached.iter().rev() {
+        let block = function.block(index);
+        let mut live = live_after(function, &block.term, &live_in);
+        block.term.for_each_atom(|atom| insert_var(&mut live, atom));
+        for stmt in block.stmts.iter().rev() {
+            step_back(stmt, &mut live);
+        }
+        live_in.insert(index, live);
+    }
+    let mut live = live_after(function, &source.term, &live_in);
+    source
+        .term
+        .for_each_atom(|atom| insert_var(&mut live, atom));
+    for later in source.stmts[stmt + 1..].iter().rev() {
+        step_back(later, &mut live);
+    }
+    live.remove(&result);
+    if let Some(state) = state {
+        live.remove(&state);
+    }
+    live.into_iter().collect()
 }
 
 /// 終端の後で生きている変数 (`crate::liveness::live_after_term` の、入口の生存集合を表で持つ形)。
@@ -384,4 +400,70 @@ fn constant_target(term: &Term) -> Option<BlockId> {
             .or(*default)
             .expect("a switch on a constant has a matching case or a default"),
     )
+}
+
+/// `k` を値として受ける節の写し `<g>{k}`。`k` には、生の継続でなく、継続の関数の閉包が来る
+/// (docs/superpowers/specs/2026-10-18-s13e-specialization-design.md の「書き換え」)。`k` の引数は位置をそのままに、
+/// Repr を `tobj` にして印を保つ。`k` を包む `closure cont$(k)` と `closure cont$state(k)` (`resumes` が見分ける) は
+/// 消して、使う所を `k` そのものにする。継続の関数の閉包は包む関数と同じ引数を受けるので、包む必要がないためである。
+/// `resume k(v, s)` は、状態のない handler では `apply k(v)` に、状態つきでは `apply k(v, s)` にする。`mask` は
+/// そのまま残す。EP が `resume` から作る `apply` と同じく、印は節の関数の `yields` の印にする (docs/spec/core-ir.md の
+/// 「`apply` の印と分け方」)。`k` の出現がこの3つの形だけであることは、呼ぶ側が確かめてある。
+pub(crate) fn clause_with_k(
+    clause: &CoreFn,
+    name: String,
+    stateful: bool,
+    resumes: impl Fn(FnIdx) -> bool,
+) -> CoreFn {
+    let mut copy = clause.clone();
+    copy.name = name;
+    copy.internal = true;
+    let k = copy.params()[copy.params().len() - 2];
+    copy.vars[k.0 as usize].repr = Repr::TObj;
+    let mut wrapped = HashSet::new();
+    for block in &mut copy.blocks {
+        block.stmts.retain(|stmt| match stmt {
+            Stmt::Let {
+                var,
+                rhs: Rhs::MakeClosure(function, captures),
+            } if resumes(*function) && captures[..] == [Atom::Var(k)] => {
+                wrapped.insert(*var);
+                false
+            }
+            _ => true,
+        });
+    }
+    for block in &mut copy.blocks {
+        block.for_each_var_mut(|var| {
+            if wrapped.contains(var) {
+                *var = k;
+            }
+        });
+        for stmt in &mut block.stmts {
+            if let Stmt::Let {
+                var: _,
+                rhs: Rhs::Call { call, mask: _ },
+            } = stmt
+                && let Call::Resume {
+                    k: callee,
+                    arg,
+                    state,
+                } = *call
+            {
+                debug_assert_eq!(callee, Atom::Var(k), "a clause resumes only its own `k`");
+                let args = if stateful {
+                    vec![arg, state]
+                } else {
+                    vec![arg]
+                };
+                *call = Call::Apply {
+                    callee,
+                    args,
+                    yields: clause.yields,
+                    prompt: None,
+                };
+            }
+        }
+    }
+    copy
 }

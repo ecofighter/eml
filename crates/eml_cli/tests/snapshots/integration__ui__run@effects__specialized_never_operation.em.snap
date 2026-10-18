@@ -1,0 +1,15 @@
+---
+source: crates/eml_cli/tests/ui.rs
+assertion_line: 254
+expression: "format!(\"--- stdout ---\\n{stdout}--- stderr ---\\n{diagnostics}{stderr}{written}{exit}\")"
+input_file: tests/ui/run/effects/specialized_never_operation.em
+---
+--- stdout ---
+step 1
+step 2
+stopped
+total 100
+checked 1
+checked 2
+stopped checked
+--- stderr ---
