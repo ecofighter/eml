@@ -1,8 +1,12 @@
 //! 最適化パス。translate の出力を EP の前に書き換える (docs/spec/core-ir.md)。関数ごとの作業リストで、既知の閉包への
 //! `apply` を直接の呼び出しにし、既知の閉包を受ける関数と閉包を鍵ごとの複製にする。そのあと `yields` の印を付け直し、
 //! 到達できない関数を落とす
-//! (docs/superpowers/specs/2026-10-18-s13e-specialization-design.md の「S13e-1 既知の閉包への特殊化」)。
+//! (docs/superpowers/specs/2026-10-18-s13e-specialization-design.md の「S13e-1 既知の閉包への特殊化」)。handler への
+//! 特殊化 (「S13e-2 handler への特殊化」) の後に、小さな再帰しない関数を展開する融合の段 (`fuse`、「S13e-3
+//! インライン化と融合」) を置き、その後でもう1度印を付け直す。
 
+mod blocks;
+mod fuse;
 mod handlers;
 mod known;
 mod reach;
@@ -25,6 +29,9 @@ pub fn optimize(program: &mut Program) {
     let keep = kept_marks(program);
     recompute_yields(program, &keep);
     handlers::handlers(program, &translated);
+    let keep = kept_marks(program);
+    recompute_yields(program, &keep);
+    fuse::fuse(program);
     let keep = kept_marks(program);
     recompute_yields(program, &keep);
     retain_reachable(program);

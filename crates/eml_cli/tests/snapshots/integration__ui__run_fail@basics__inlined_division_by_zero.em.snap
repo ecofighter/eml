@@ -1,0 +1,10 @@
+---
+source: crates/eml_cli/tests/ui.rs
+expression: "format!(\"--- stdout ---\\n{stdout}--- stderr ---\\n{diagnostics}{stderr}--- runtime error ---\\n{error}\\n{written}\")"
+input_file: tests/ui/run-fail/basics/inlined_division_by_zero.em
+---
+--- stdout ---
+--- stderr ---
+--- runtime error ---
+division by zero
+  at run-fail/basics/inlined_division_by_zero.em:4:16

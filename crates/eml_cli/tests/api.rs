@@ -751,10 +751,10 @@ fn a_file_left_open_by_an_interrupt_is_closed_by_recovery() {
             HostRef::new(Arc::new(host)),
         );
         for input in [
-            "keep : Fs.File -> Fs.File\nkeep f = f",
+            "keep : Int -> Fs.File -> Fs.File\nkeep n f = if n > 0 then keep (n - 1) f else f",
             "read : Unit -> <IO> String\nread () =\n  let f = Fs.open \"a.txt\"\n  \
              let (f, text) = Fs.read_all f\n  Fs.close f\n  text",
-            "read_kept : Unit -> <IO> String\nread_kept () =\n  let f = keep (Fs.open \"a.txt\")\n  \
+            "read_kept : Unit -> <IO> String\nread_kept () =\n  let f = keep 0 (Fs.open \"a.txt\")\n  \
              let (f, text) = Fs.read_all f\n  Fs.close f\n  text",
         ] {
             let evaluated = repl.eval(input);

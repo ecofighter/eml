@@ -123,7 +123,7 @@ fn fold_state() {
         unboxes: 1,
         allocations: 3,
         peak_objects: 2,
-        peak_stack: 25,
+        peak_stack: 18,
     }
     ");
 }
@@ -219,11 +219,11 @@ fn iter_generate() {
         string_bytes_copied: 10,
         rc_increments: 0,
         rc_decrements: 400003,
-        boxes: 300001,
+        boxes: 200002,
         unboxes: 300001,
         allocations: 400004,
         peak_objects: 5,
-        peak_stack: 21,
+        peak_stack: 22,
     }
     ");
 }
@@ -263,11 +263,11 @@ fn iter_pipeline() {
         string_bytes_copied: 15,
         rc_increments: 0,
         rc_decrements: 900007,
-        boxes: 350001,
+        boxes: 250002,
         unboxes: 400001,
         allocations: 900008,
         peak_objects: 9,
-        peak_stack: 36,
+        peak_stack: 37,
     }
     ");
 }
@@ -283,11 +283,11 @@ fn iter_pipeline_by_hand() {
         string_bytes_copied: 15,
         rc_increments: 0,
         rc_decrements: 900007,
-        boxes: 350001,
+        boxes: 250002,
         unboxes: 400001,
         allocations: 900008,
         peak_objects: 9,
-        peak_stack: 36,
+        peak_stack: 37,
     }
     ");
 }
@@ -301,8 +301,8 @@ fn orders() {
         yield_frames: 0,
         unwound_frames: 0,
         string_bytes_copied: 9,
-        rc_increments: 100000,
-        rc_decrements: 459321,
+        rc_increments: 0,
+        rc_decrements: 359321,
         boxes: 39830,
         unboxes: 39830,
         allocations: 359322,
@@ -327,7 +327,7 @@ fn orders_by_hand() {
         unboxes: 39830,
         allocations: 359322,
         peak_objects: 200001,
-        peak_stack: 17,
+        peak_stack: 19,
     }
     ");
 }
@@ -347,7 +347,7 @@ fn push_fold() {
         unboxes: 0,
         allocations: 2,
         peak_objects: 2,
-        peak_stack: 19,
+        peak_stack: 16,
     }
     ");
 }
@@ -367,7 +367,7 @@ fn push_fold_by_hand() {
         unboxes: 0,
         allocations: 2,
         peak_objects: 2,
-        peak_stack: 14,
+        peak_stack: 16,
     }
     ");
 }
@@ -421,13 +421,13 @@ fn upsert() {
         yield_frames: 0,
         unwound_frames: 0,
         string_bytes_copied: 157580,
-        rc_increments: 513768,
-        rc_decrements: 892534,
+        rc_increments: 436140,
+        rc_decrements: 814906,
         boxes: 20000,
         unboxes: 56815,
         allocations: 378767,
         peak_objects: 6002,
-        peak_stack: 206,
+        peak_stack: 352,
     }
     ");
 }
@@ -447,7 +447,7 @@ fn upsert_by_hand() {
         unboxes: 56815,
         allocations: 378767,
         peak_objects: 6002,
-        peak_stack: 206,
+        peak_stack: 352,
     }
     ");
 }

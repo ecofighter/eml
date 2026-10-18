@@ -12,6 +12,7 @@ mod piece;
 
 use std::collections::{BTreeSet, HashMap};
 
+use super::blocks;
 use super::known::{Wrapper, fresh, known_closures, wrapper};
 use super::specialize::limited;
 use crate::liveness::{insert_var, live_after_term, step_back};
@@ -738,7 +739,7 @@ impl Copies<'_> {
             let function = copy.join_functions[&join];
             self.place(function, body);
         }
-        piece::prune(&mut copy.code);
+        blocks::prune(&mut copy.code);
         self.place(index, copy.code);
     }
 

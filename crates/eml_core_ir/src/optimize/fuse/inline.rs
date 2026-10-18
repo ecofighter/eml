@@ -1,0 +1,367 @@
+//! 小さな再帰しない関数のインライン化 (docs/superpowers/specs/2026-10-18-s13e-specialization-design.md の
+//! 「インライン化」)。展開するかどうかは、呼び出し先の元のコードと呼び出しの場所だけで決める。プログラム全体の
+//! 大きさの予算は使わない。全体の予算を使うと、同じ名前の関数のコードがプログラムの残りに依って変わるためである。
+
+use crate::tail::tail_position_call;
+use crate::{Block, Call, CoreFn, Rhs, Stmt, Term};
+use eml_lir::{Atom, BlockId, FnIdx, Mark, Repr, VarId, VarInfo};
+
+use super::Base;
+use crate::optimize::known::fresh;
+
+/// 展開する関数の文の数の上限。
+pub(super) const INLINE_LIMIT: usize = 40;
+
+/// 1つの関数の中で、展開した本体の中の呼び出しをさらに展開する深さの上限。呼び出し先は再帰しないので展開は止まるが、
+/// 呼び出しの連なりが深いと関数が呼び出し先の大きさの積で育つので、ここで打ち切る。
+pub(super) const MAX_INLINE_DEPTH: u32 = 8;
+
+/// `f` を展開してよいか。再帰する関数は特殊化だけで扱う。handle、`resume`、`clause` を持つ関数は展開しない。EP は、
+/// 節の関数がちょうど1つの handle に属することを前提にするためである (`crates/eml_core_ir/src/evidence/handlers.rs` の
+/// `entries`)。
+pub(super) fn inlinable(base: &Base, f: FnIdx) -> bool {
+    let index = f.0 as usize;
+    !base.recursive[index]
+        && base.size[index] <= INLINE_LIMIT
+        && !base.functions[index]
+            .blocks
+            .iter()
+            .flat_map(|block| &block.stmts)
+            .any(|stmt| {
+                matches!(
+                    stmt,
+                    Stmt::Let {
+                        var: _,
+                        rhs: Rhs::Call {
+                            call: Call::Handle { .. } | Call::Resume { .. } | Call::Clause { .. },
+                            mask: _,
+                        },
+                    }
+                )
+            })
+}
+
+/// `function` の直接の呼び出しを、ブロックの順に、展開できるものから展開する。1つでも展開したかを返す。`depths` は
+/// 変数ごとの展開の深さで、展開した本体の変数は呼び出しの深さに1を足した値を持つ。展開した本体はその場に入るので、
+/// 同じ位置から読み直せば、本体の中の呼び出しも続けて見る。
+pub(super) fn inline_calls(base: &Base, function: &mut CoreFn, depths: &mut Vec<u32>) -> bool {
+    depths.resize(function.vars.len(), 0);
+    let mut inlined = false;
+    let mut block = 0;
+    while block < function.blocks.len() {
+        let mut index = 0;
+        while index < function.blocks[block].stmts.len() {
+            let at = (BlockId(block as u32), index);
+            if let Some((result, target, args)) = candidate(base, function, at, depths) {
+                let depth = depths[result.0 as usize] + 1;
+                inline_call(function, at, &base.functions[target.0 as usize], &args);
+                depths.resize(function.vars.len(), depth);
+                inlined = true;
+                continue;
+            }
+            index += 1;
+        }
+        block += 1;
+    }
+    inlined
+}
+
+fn candidate(
+    base: &Base,
+    function: &CoreFn,
+    (block, index): (BlockId, usize),
+    depths: &[u32],
+) -> Option<(VarId, FnIdx, Vec<Atom>)> {
+    let Stmt::Let {
+        var,
+        rhs: Rhs::Call {
+            call: Call::Direct(target, args),
+            mask,
+        },
+    } = &function.block(block).stmts[index]
+    else {
+        return None;
+    };
+    // `mask` は呼び出し先の本体のエフェクトに掛かるので、展開すると掛ける所がなくなる
+    if !mask.is_empty() || depths[var.0 as usize] >= MAX_INLINE_DEPTH || !inlinable(base, *target) {
+        return None;
+    }
+    let callee = &base.functions[target.0 as usize];
+    fits(function, (block, index), callee, args).then(|| (*var, *target, args.clone()))
+}
+
+/// 呼び出しの場所で、展開した本体が Repr と印の検査を通るか。
+///
+/// - yield しうる本体は yield しうる関数にだけ展開する。`yields` の付け直しは、印の立っていない関数を yield しない
+///   ものとして扱うためである (`crate::optimize::yields::recompute_yields`)
+/// - 引数を置き換えるので、変数の実引数は引数と同じ Repr と印を持たなければならない。印を下げて置き換えると、本体が
+///   その引数を `lin` の受け手に渡す所で `unr` と `lin` が出会う (docs/spec/lir.md の「Kind の印の検査」の V2)。
+///   定数は、引数の Repr の値になれればよい
+/// - 本体の `return` の値は、呼び出しの結果の変数へ渡す `jump` の実引数になる。末尾の位置の呼び出しなら、呼ぶ側の
+///   `return` の値にしてもよい。どちらかの受け手と互換でなければ展開しない
+fn fits(function: &CoreFn, at: (BlockId, usize), callee: &CoreFn, args: &[Atom]) -> bool {
+    if callee.yields && !function.yields {
+        return false;
+    }
+    let params_fit = callee.params().iter().zip(args).all(|(&param, &arg)| {
+        let info = &callee.vars[param.0 as usize];
+        match arg {
+            Atom::Var(var) => function.repr(var) == info.repr && function.mark(var) == info.mark,
+            constant => constant.fits(&callee.vars, info.repr),
+        }
+    });
+    if !params_fit {
+        return false;
+    }
+    let Stmt::Let { var: result, .. } = function.block(at.0).stmts[at.1] else {
+        unreachable!("a call binds its result");
+    };
+    returns_pass(
+        function,
+        callee,
+        args,
+        function.repr(result),
+        function.mark(result),
+    ) || stays_tail(function, at, callee, args)
+}
+
+/// 末尾の位置の呼び出しで、本体の `return` をそのまま呼ぶ側の `return` にしてよいか。
+fn stays_tail(
+    function: &CoreFn,
+    (block, index): (BlockId, usize),
+    callee: &CoreFn,
+    args: &[Atom],
+) -> bool {
+    tail_position_call(function.block(block)).is_some_and(|(at, _)| at == index)
+        && returns_pass(function, callee, args, function.ret, function.ret_mark)
+}
+
+/// 本体のどの `return` の値も、Repr が `repr`、印が `mark` の受け手に渡せるか (R7 と V2)。戻らない呼び出しの束縛は、
+/// verifier と同じくどの受け手にも渡せる (docs/spec/lir.md の「Kind の印の検査」)。
+fn returns_pass(function: &CoreFn, callee: &CoreFn, args: &[Atom], repr: Repr, mark: Mark) -> bool {
+    let params = callee.params();
+    let never = never_bound(callee);
+    callee.blocks.iter().all(|block| {
+        let Term::Return(returned) = block.term else {
+            return true;
+        };
+        match returned {
+            Atom::Var(var) if never.contains(&var) => true,
+            Atom::Var(var) => match params.iter().position(|&param| param == var) {
+                Some(position) => match args[position] {
+                    Atom::Var(arg) => {
+                        function.repr(arg).compatible(repr) && function.mark(arg).compatible(mark)
+                    }
+                    constant => constant.fits_compatible(&function.vars, repr),
+                },
+                None => callee.repr(var).compatible(repr) && callee.mark(var).compatible(mark),
+            },
+            constant => constant.fits_compatible(&callee.vars, repr),
+        }
+    })
+}
+
+/// 戻らない呼び出し (`never` の操作の `perform` と、戻らない extern) が束縛する変数。
+fn never_bound(function: &CoreFn) -> Vec<VarId> {
+    function
+        .blocks
+        .iter()
+        .flat_map(|block| &block.stmts)
+        .filter_map(|stmt| match stmt {
+            Stmt::Let {
+                var,
+                rhs:
+                    Rhs::Call {
+                        call:
+                            Call::Perform {
+                                resumable: false, ..
+                            },
+                        mask: _,
+                    },
+            } => Some(*var),
+            Stmt::Let {
+                var,
+                rhs: Rhs::Extern { ext, .. },
+            } if ext.row().ret == eml_extern::OpRet::Never => Some(*var),
+            _ => None,
+        })
+        .collect()
+}
+
+/// `function` の `at` の直接の呼び出しを、`callee` の本体で置き換える。`args` は呼び出しの実引数で、`fits` を通って
+/// いる。
+///
+/// 呼び出しのあるブロックは、呼び出しの前の文に本体の入口のブロックを続けたものになる。本体のほかのブロックは、その
+/// 直後に元の順のまま入れる。本体の変数は新しい変数にし、引数は実引数で置き換える。呼び出しの後の文と終端は、呼び出しの
+/// 結果の変数を引数にした新しいブロックに移し、本体の `return r` をそのブロックへの `jump` にする。末尾の位置の
+/// 呼び出しで `stays_tail` が成り立てば、本体の `return` をそのまま残し、後ろの純粋な `let` (使われない) と
+/// `return` は捨てる。挿したブロックの後ろのブロックは番号をずらすので、辺はどれも番号の大きいブロックへ向かう
+/// (docs/spec/lir.md の「構造の規則」の R2)。extern の呼び出しは位置 (`at`) を持ったまま写すので、実行時エラーの
+/// 位置は変わらない。
+pub(super) fn inline_call(
+    function: &mut CoreFn,
+    (block, index): (BlockId, usize),
+    callee: &CoreFn,
+    args: &[Atom],
+) {
+    let host = block.0 as usize;
+    let tail = stays_tail(function, (block, index), callee, args);
+    let Stmt::Let { var: result, .. } = function.blocks[host].stmts[index] else {
+        unreachable!("a call binds its result");
+    };
+    let extra = callee.blocks.len() - 1;
+    let shift = (extra + usize::from(!tail)) as u32;
+    let rest = BlockId(host as u32 + extra as u32 + 1);
+    let caller_block = |id: BlockId| {
+        if id.0 as usize <= host {
+            id
+        } else {
+            BlockId(id.0 + shift)
+        }
+    };
+
+    let mut map = vec![None; callee.vars.len()];
+    for (&param, &arg) in callee.params().iter().zip(args) {
+        map[param.0 as usize] = Some(arg);
+    }
+    let mut copy = Copy {
+        vars: &mut function.vars,
+        source: &callee.vars,
+        map,
+    };
+    let mut copied: Vec<Block> = callee
+        .blocks
+        .iter()
+        .enumerate()
+        .map(|(position, block)| {
+            let params = if position == 0 {
+                Vec::new()
+            } else {
+                block
+                    .params
+                    .iter()
+                    .map(|&param| copy.define(param))
+                    .collect()
+            };
+            let stmts = block.stmts.iter().map(|stmt| copy.stmt(stmt)).collect();
+            let term = match block.term {
+                Term::Return(returned) if !tail => Term::Jump {
+                    target: rest,
+                    args: vec![copy.atom(returned)],
+                },
+                _ => copy.term(&block.term, |id| BlockId(host as u32 + id.0)),
+            };
+            Block {
+                params,
+                stmts,
+                term,
+            }
+        })
+        .collect();
+
+    for (position, block) in function.blocks.iter_mut().enumerate() {
+        if position != host {
+            block
+                .term
+                .for_each_successor_mut(|target| *target = caller_block(*target));
+        }
+    }
+    let entry = copied.remove(0);
+    let caller = &mut function.blocks[host];
+    let after = caller.stmts.split_off(index + 1);
+    caller.stmts.pop();
+    caller.stmts.extend(entry.stmts);
+    let mut term = std::mem::replace(&mut caller.term, entry.term);
+    if !tail {
+        term.for_each_successor_mut(|target| *target = caller_block(*target));
+        copied.push(Block {
+            params: vec![result],
+            stmts: after,
+            term,
+        });
+    }
+    function.blocks.splice(host + 1..host + 1, copied);
+}
+
+/// 本体を写すときの変数の対応。`map` は呼び出し先の変数ごとの、呼ぶ側の値である。
+struct Copy<'a> {
+    vars: &'a mut Vec<VarInfo>,
+    source: &'a [VarInfo],
+    map: Vec<Option<Atom>>,
+}
+
+impl Copy<'_> {
+    fn define(&mut self, var: VarId) -> VarId {
+        let copy = fresh(self.vars, self.source[var.0 as usize].clone());
+        self.map[var.0 as usize] = Some(Atom::Var(copy));
+        copy
+    }
+
+    /// 定義は使いを支配し、ブロックは番号の順に写すので、使いを写すときには定義が写してある。
+    fn atom(&self, atom: Atom) -> Atom {
+        match atom {
+            Atom::Var(var) => {
+                self.map[var.0 as usize].expect("a definition is copied before its uses")
+            }
+            atom => atom,
+        }
+    }
+
+    /// `unpack` の値と着地の印は `obj` で、`obj` に収まる定数はないので (`Atom::fits`)、`fits` を通った実引数は
+    /// 変数である。
+    fn var(&self, var: VarId) -> VarId {
+        match self.atom(Atom::Var(var)) {
+            Atom::Var(var) => var,
+            atom => panic!("a variable is replaced by the constant {atom:?}"),
+        }
+    }
+
+    fn stmt(&mut self, stmt: &Stmt) -> Stmt {
+        match stmt {
+            Stmt::Let { var, rhs } => {
+                let mut rhs = rhs.clone();
+                rhs.for_each_atom_mut(|atom| *atom = self.atom(*atom));
+                if let Rhs::Call {
+                    call:
+                        Call::Apply {
+                            prompt: Some(marker),
+                            ..
+                        },
+                    mask: _,
+                } = &mut rhs
+                {
+                    *marker = self.var(*marker);
+                }
+                Stmt::Let {
+                    var: self.define(*var),
+                    rhs,
+                }
+            }
+            Stmt::Unpack {
+                value,
+                ctor,
+                fields,
+            } => Stmt::Unpack {
+                value: self.var(*value),
+                ctor: *ctor,
+                fields: fields.iter().map(|&field| self.define(field)).collect(),
+            },
+        }
+    }
+
+    fn term(&mut self, term: &Term, block_of: impl Fn(BlockId) -> BlockId) -> Term {
+        let mut term = term.clone();
+        term.for_each_atom_mut(|atom| *atom = self.atom(*atom));
+        term.for_each_successor_mut(|target| *target = block_of(*target));
+        if let Term::Switch { cases, .. } = &mut term {
+            for case in cases {
+                case.fields = case
+                    .fields
+                    .iter()
+                    .map(|&field| self.define(field))
+                    .collect();
+            }
+        }
+        term
+    }
+}

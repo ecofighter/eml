@@ -121,9 +121,10 @@ fn lir_until_stops_after_the_named_pass() {
     use eml_lir::{Pass, pretty};
     // contract は、使われない純粋な `let` を消す
     assert!(!pretty(&lir_until(UNUSED, Pass::Contract)).contains("\"unused\""));
-    // `s` を2回使うので、Perceus の後にだけ `dup` が入る
+    // `s` を2回使うので、Perceus の後にだけ `dup` が入る。`twice` は小さいので `main` に展開され、`s` の番号は
+    // 展開した先で決まる
     assert!(!pretty(&lir_until(TWICE, Pass::Contract)).contains("dup"));
-    assert!(pretty(&lir_until(TWICE, Pass::Perceus)).contains("dup s.0"));
+    assert!(pretty(&lir_until(TWICE, Pass::Perceus)).contains("dup s."));
     assert_eq!(
         pretty(&lir_until(TWICE, Pass::Perceus)),
         pretty(&lir(TWICE))

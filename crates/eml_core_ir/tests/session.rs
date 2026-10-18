@@ -42,22 +42,22 @@ fn roots_are_boxed_and_unboxed_after_the_lir_passes() {
     let stored = session_lir_text(&["let x = 41"]);
     insta::assert_snapshot!(function(&stored, "entry$input$1"), @"
     fn entry$input$1() -> unit {
-      let t.0: int = call input$1(())
-      let t.2: tobj = box t.0
-      let u.1: unit = prim root_set[1](t.2)
+      let b.2: tobj = box 41
+      let u.1: unit = prim root_set[1](b.2)
       return u.1
     }
     ");
     let read = session_lir_text(&["let x = 41", "x + 1"]);
-    insta::assert_snapshot!(function(&read, "input$2"), @"
-    fn input$2(p.0: unit) -> int {
-      let r.3: tobj = prim root_get[1]()
-      let r.1: int = unbox r.3
-      decref r.3
-      let t.2: int = extern Prelude.+(r.1, 1)
-      return t.2
+    insta::assert_snapshot!(function(&read, "entry$input$2"), @r#"
+    fn entry$input$2() -> obj {
+      let r.4: tobj = prim root_get[1]()
+      let r.2: int = unbox r.4
+      decref r.4
+      let t.3: int = extern Prelude.+(r.2, 1)
+      let s.1: obj = extern "Prelude.Show Int.show"(t.3)
+      return s.1
     }
-    ");
+    "#);
 }
 
 #[test]

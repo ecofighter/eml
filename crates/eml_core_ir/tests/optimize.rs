@@ -5,12 +5,17 @@ use eml_lir::Atom;
 
 use crate::common::{core_text, function};
 
+/// 1階のプログラムは、小さな `main` が入口に展開されるほかは変わらない。
 #[test]
 fn optimize_keeps_a_first_order_program() {
     let text = "main : Unit -> <IO> Unit\nmain () = println (show (1 + 2))";
+    let body = |shown: &str, name: &str| {
+        let code = function(shown, name);
+        code.lines().skip(1).collect::<Vec<_>>().join("\n")
+    };
     assert_eq!(
-        core_text(text, Pass::Optimize),
-        core_text(text, Pass::Translate)
+        body(&core_text(text, Pass::Optimize), "entry$main"),
+        body(&core_text(text, Pass::Translate), "main")
     );
 }
 
@@ -21,7 +26,8 @@ fn unreachable_functions_are_dropped() {
   return a.0
 }
 fn helper(a.0: int) -> int {
-  return a.0
+  let r.1: int = call helper(a.0)
+  return r.1
 }
 fn entry$main() -> int {
   let r.0: int = call helper(1)
@@ -43,10 +49,10 @@ fn entry$main() -> int {
 fn a_known_lambda_is_called_directly() {
     let text =
         "main : Unit -> <IO> Unit\nmain () =\n  let f = fn x -> x + 1\n  println (show (f 2))";
-    insta::assert_snapshot!(function(&core_text(text, Pass::Optimize), "main"), @r#"
-    fn main(p.0: unit) -> unit {
-      let t.1: int = call main$lambda0(2)
-      let t.2: obj = extern "Prelude.Show Int.show"(t.1)
+    insta::assert_snapshot!(function(&core_text(text, Pass::Optimize), "entry$main"), @r#"
+    fn entry$main() -> unit {
+      let t.4: int = extern Prelude.+(2, 1)
+      let t.2: obj = extern "Prelude.Show Int.show"(t.4)
       let t.3: unit = extern Prelude.println(t.2)
       return t.3
     }
@@ -56,12 +62,12 @@ fn a_known_lambda_is_called_directly() {
 #[test]
 fn a_partial_application_is_called_directly() {
     let text = "add : Int -> Int -> Int\nadd x y = x + y\n\nmain : Unit -> <IO> Unit\nmain () =\n  let g = add 1\n  println (show (g 2))";
-    insta::assert_snapshot!(function(&core_text(text, Pass::Optimize), "main"), @r#"
-    fn main(p.0: unit) -> unit {
-      let t.2: int = call add(1, 2)
-      let t.3: obj = extern "Prelude.Show Int.show"(t.2)
-      let t.4: unit = extern Prelude.println(t.3)
-      return t.4
+    insta::assert_snapshot!(function(&core_text(text, Pass::Optimize), "entry$main"), @r#"
+    fn entry$main() -> unit {
+      let t.4: int = extern Prelude.+(1, 2)
+      let t.2: obj = extern "Prelude.Show Int.show"(t.4)
+      let t.3: unit = extern Prelude.println(t.2)
+      return t.3
     }
     "#);
 }
@@ -69,12 +75,13 @@ fn a_partial_application_is_called_directly() {
 #[test]
 fn an_under_saturated_known_apply_builds_a_closure() {
     let text = "add3 : Int -> Int -> Int -> Int\nadd3 x y z = x + y + z\n\nmain : Unit -> <IO> Unit\nmain () =\n  let g = add3 1\n  let h = g 2\n  println (show (h 3))";
-    insta::assert_snapshot!(function(&core_text(text, Pass::Optimize), "main"), @r#"
-    fn main(p.0: unit) -> unit {
-      let t.3: int = call add3(1, 2, 3)
-      let t.4: obj = extern "Prelude.Show Int.show"(t.3)
-      let t.5: unit = extern Prelude.println(t.4)
-      return t.5
+    insta::assert_snapshot!(function(&core_text(text, Pass::Optimize), "entry$main"), @r#"
+    fn entry$main() -> unit {
+      let t.4: int = extern Prelude.+(1, 2)
+      let t.5: int = extern Prelude.+(t.4, 3)
+      let t.2: obj = extern "Prelude.Show Int.show"(t.5)
+      let t.3: unit = extern Prelude.println(t.2)
+      return t.3
     }
     "#);
 }
@@ -125,20 +132,21 @@ main () =
 #[test]
 fn a_constructor_value_becomes_a_con() {
     let text = "data Pair = | Pair Int Int\n\nfirst : Pair -> Int\nfirst (Pair a _) = a\n\nmain : Unit -> <IO> Unit\nmain () =\n  let p = Pair 1\n  println (show (first (p 2)))";
-    insta::assert_snapshot!(function(&core_text(text, Pass::Optimize), "main"), @r#"
-    fn main(p.0: unit) -> unit {
-      let t.2: obj = con Pair #0(1, 2)
-      let t.3: int = call first(t.2)
-      let t.4: obj = extern "Prelude.Show Int.show"(t.3)
-      let t.5: unit = extern Prelude.println(t.4)
-      return t.5
+    insta::assert_snapshot!(function(&core_text(text, Pass::Optimize), "entry$main"), @r#"
+    fn entry$main() -> unit {
+      let t.1: obj = con Pair #0(1, 2)
+      unpack t.1 Pair #0(a.5: int, x.6: int)
+      let t.3: obj = extern "Prelude.Show Int.show"(a.5)
+      let t.4: unit = extern Prelude.println(t.3)
+      return t.4
     }
     "#);
 }
 
 #[test]
 fn a_caller_without_yield_points_stops_yielding() {
-    let text = "import State (State(..))\n\nf : Int -> <State Int> Int\nf n =\n  let g = fn x -> x + n\n  g 1\n\nmain : Unit -> <IO> Unit\nmain () =\n  let (r, _) = State.run 0 (fn () -> f 2)\n  println (show r)";
+    // `f` は自分を呼ぶので展開されず、印を付け直した関数として残る
+    let text = "import State (State(..))\n\nf : Int -> <State Int> Int\nf n =\n  let g = fn x -> x + n\n  if n == 0 then g 1 else f (n - 1)\n\nmain : Unit -> <IO> Unit\nmain () =\n  let (r, _) = State.run 0 (fn () -> f 2)\n  println (show r)";
     let yields = |pass| {
         let program = eml_test_support::core_until(text, pass);
         let f = program
@@ -155,13 +163,13 @@ fn a_caller_without_yield_points_stops_yielding() {
 #[test]
 fn an_over_saturated_known_apply_calls_then_applies_the_rest() {
     let text = "main : Unit -> <IO> Unit\nmain () =\n  let f = fn x -> fn y -> x + y\n  println (show (f 1 2))";
-    insta::assert_snapshot!(function(&core_text(text, Pass::Optimize), "main"), @r#"
-    fn main(p.0: unit) -> unit {
-      let t.4: tobj = call main$lambda1(1)
-      let t.1: int = apply t.4(2)
-      let t.2: obj = extern "Prelude.Show Int.show"(t.1)
-      let t.3: unit = extern Prelude.println(t.2)
-      return t.3
+    insta::assert_snapshot!(function(&core_text(text, Pass::Optimize), "entry$main"), @r#"
+    fn entry$main() -> unit {
+      let c.5: tobj = closure main$lambda0(1)
+      let t.2: int = apply c.5(2)
+      let t.3: obj = extern "Prelude.Show Int.show"(t.2)
+      let t.4: unit = extern Prelude.println(t.3)
+      return t.4
     }
     "#);
 }
@@ -206,33 +214,22 @@ fn map_is_copied_for_a_known_lambda() {
     let text =
         "main : Unit -> <IO> Unit\nmain () = println (show (List.map (fn x -> x * 2) [1, 2, 3]))";
     let shown = core_text(text, Pass::Optimize);
-    let copy = function(&shown, "Std.List.map@[Int, Int]{0=main$lambda0}");
     let go = function(&shown, "Std.List.map@[Int, Int]$let$go{0=main$lambda0}");
     assert!(!go.contains("apply"), "{go}");
-    insta::assert_snapshot!(format!("{}\n\n{copy}\n{go}", names(text, Pass::Optimize).join("\n")), @r#"
+    insta::assert_snapshot!(format!("{}\n\n{go}", names(text, Pass::Optimize).join("\n")), @r#"
     Prelude.show_rest@[Int]
-    Prelude.Show List.show@[Int]
-    main
-    Std.List.reverse@[Int]
     Std.List.reverse_onto@[Int]
-    main$lambda0
     entry$main
-    Std.List.map@[Int, Int]{0=main$lambda0}
     Std.List.map@[Int, Int]$let$go{0=main$lambda0}
-
-    fn "Std.List.map@[Int, Int]{0=main$lambda0}"(xs.1: tobj) -> tobj {
-      let t.2: tobj = call "Std.List.map@[Int, Int]$let$go{0=main$lambda0}"(#0, xs.1)
-      return t.2
-    }
 
     fn "Std.List.map@[Int, Int]$let$go{0=main$lambda0}"(acc.1: tobj, ys.2: tobj) -> tobj {
       switch ys.2 Prelude.List { #0 -> b1, #1(x.3: int, rest.4: tobj) -> b2 }
     b1:
-      let t.5: tobj = call "Std.List.reverse@[Int]"(acc.1)
-      return t.5
+      let t.9: tobj = call "Std.List.reverse_onto@[Int]"(#0, acc.1)
+      return t.9
     b2:
-      let t.6: int = call main$lambda0(x.3)
-      let d.7: tobj = con Prelude.List #1(t.6, acc.1)
+      let t.10: int = extern Prelude.*(x.3, 2)
+      let d.7: tobj = con Prelude.List #1(t.10, acc.1)
       let t.8: tobj = call "Std.List.map@[Int, Int]$let$go{0=main$lambda0}"(d.7, rest.4)
       return t.8
     }
@@ -295,34 +292,38 @@ fn captures_become_parameters() {
     let shown = core_text(text, Pass::Optimize);
     assert!(!shown.contains("closure"), "{shown}");
     insta::assert_snapshot!(format!(
-        "{}\n{}\n{}",
-        function(&shown, "main"),
-        function(&shown, "Std.List.map@[Int, Int]{0=main$lambda0/1}"),
+        "{}\n{}",
+        function(&shown, "entry$main"),
         function(&shown, "Std.List.map@[Int, Int]$let$go{0=main$lambda0/1}")
     ), @r#"
-    fn main(p.0: unit) -> unit {
-      let d.2: tobj = con Prelude.List #1(3, #0)
-      let d.3: tobj = con Prelude.List #1(2, d.2)
-      let d.4: tobj = con Prelude.List #1(1, d.3)
-      let t.5: tobj = call "Std.List.map@[Int, Int]{0=main$lambda0/1}"(3, d.4)
-      let t.6: obj = call "Prelude.Show List.show@[Int]"(t.5)
-      let t.7: unit = extern Prelude.println(t.6)
-      return t.7
-    }
-
-    fn "Std.List.map@[Int, Int]{0=main$lambda0/1}"(k.3: int, xs.1: tobj) -> tobj {
-      let t.2: tobj = call "Std.List.map@[Int, Int]$let$go{0=main$lambda0/1}"(k.3, #0, xs.1)
-      return t.2
+    fn entry$main() -> unit {
+      let d.1: tobj = con Prelude.List #1(3, #0)
+      let d.2: tobj = con Prelude.List #1(2, d.1)
+      let d.3: tobj = con Prelude.List #1(1, d.2)
+      let t.7: tobj = call "Std.List.map@[Int, Int]$let$go{0=main$lambda0/1}"(3, #0, d.3)
+      switch t.7 Prelude.List { #0 -> b1, #1(x.8: int, rest.9: tobj) -> b2 }
+    b1:
+      let s.10: obj = const "[]"
+      jump b3(s.10)
+    b2:
+      let s.11: obj = const "["
+      let t.12: obj = extern "Prelude.Show Int.show"(x.8)
+      let t.13: obj = extern Prelude.++(s.11, t.12)
+      let t.14: obj = call "Prelude.show_rest@[Int]"(t.13, rest.9)
+      jump b3(t.14)
+    b3(t.5: obj):
+      let t.6: unit = extern Prelude.println(t.5)
+      return t.6
     }
 
     fn "Std.List.map@[Int, Int]$let$go{0=main$lambda0/1}"(k.9: int, acc.1: tobj, ys.2: tobj) -> tobj {
       switch ys.2 Prelude.List { #0 -> b1, #1(x.3: int, rest.4: tobj) -> b2 }
     b1:
-      let t.5: tobj = call "Std.List.reverse@[Int]"(acc.1)
-      return t.5
+      let t.10: tobj = call "Std.List.reverse_onto@[Int]"(#0, acc.1)
+      return t.10
     b2:
-      let t.6: int = call main$lambda0(k.9, x.3)
-      let d.7: tobj = con Prelude.List #1(t.6, acc.1)
+      let t.11: int = extern Prelude.*(x.3, k.9)
+      let d.7: tobj = con Prelude.List #1(t.11, acc.1)
       let t.8: tobj = call "Std.List.map@[Int, Int]$let$go{0=main$lambda0/1}"(k.9, d.7, rest.4)
       return t.8
     }
@@ -333,11 +334,22 @@ fn captures_become_parameters() {
 fn a_closure_captured_by_a_closure_is_specialized() {
     let text = "main : Unit -> <IO> Unit\nmain () = println (show (Iter.to_list (Iter.map (fn x -> x + 1) (Iter.from_list [1, 2, 3]))))";
     let shown = core_text(text, Pass::Optimize);
-    insta::assert_snapshot!(function(&shown, "Std.Iter.map@[Int, Int]{0=main$lambda0}"), @r#"
-    fn "Std.Iter.map@[Int, Int]{0=main$lambda0}"(it.1: obj lin) -> obj lin {
-      let c.2: tobj lin = closure "Std.Iter.map@[Int, Int]$lambda0{0=main$lambda0}"(it.1)
-      let d.3: obj lin = con Std.Iter.Iter #0(c.2)
-      return d.3
+    insta::assert_snapshot!(function(&shown, "Std.Iter.map@[Int, Int]$lambda0{0=main$lambda0}"), @r#"
+    fn "Std.Iter.map@[Int, Int]$lambda0{0=main$lambda0}"(it.1: obj lin, p.2: unit) -> tobj lin {
+      unpack it.1 Std.Iter.Iter #0(pull.12: tobj lin)
+      let t.13: tobj lin = apply pull.12(())
+      switch t.13 Prelude.Option { #0 -> b1, #1(x.4: obj lin) -> b2 }
+    b1:
+      let u.7: unit = drop t.13
+      return #0
+    b2:
+      unpack x.4 (,) #0(x.5: int, rest.6: obj lin)
+      let t.14: int = extern Prelude.+(x.5, 1)
+      let c.15: tobj lin = closure "Std.Iter.map@[Int, Int]$lambda0{0=main$lambda0}"(rest.6)
+      let d.16: obj lin = con Std.Iter.Iter #0(c.15)
+      let d.10: obj lin = con (,) #0(t.14, d.16)
+      let d.11: tobj lin = con Prelude.Option #1(d.10)
+      return d.11
     }
     "#);
 }
@@ -372,7 +384,8 @@ main () = println (show (Iter.to_list (Iter.generate (nums 3))))
     assert_eq!(bodies.len(), 1, "{}", pretty(&program));
     let shown = pretty(&program);
     let body = function(&shown, &bodies[0].name);
-    assert!(body.contains("call nums("), "{body}");
+    // `nums` と `emit` は小さいので、本体に展開される
+    assert!(body.contains("perform Std.Yield.Yield.yield("), "{body}");
     assert!(!body.contains("apply"), "{body}");
 }
 
@@ -393,12 +406,21 @@ main () =
             .iter()
             .all(|name| !name.starts_with("wrap{")),
     );
-    insta::assert_snapshot!(function(&core_text(text, Pass::Optimize), "wrap"), @"
-    fn wrap(f.0: tobj poly) -> tobj poly {
-      let d.1: tobj poly = con Prelude.Option #1(f.0)
-      return d.1
+    insta::assert_snapshot!(function(&core_text(text, Pass::Optimize), "entry$main"), @r#"
+    fn entry$main() -> unit {
+      let d.6: tobj poly = con Prelude.Option #1(&main$lambda0)
+      jump b1(d.6)
+    b1(t.1: tobj):
+      switch t.1 Prelude.Option { #0 -> b2, #1(g.2: tobj) -> b3 }
+    b2:
+      return ()
+    b3:
+      let t.3: int = apply g.2(1)
+      let t.4: obj = extern "Prelude.Show Int.show"(t.3)
+      let t.5: unit = extern Prelude.println(t.4)
+      return t.5
     }
-    ");
+    "#);
 }
 
 /// 複製の名前とコードは鍵だけで決まり、ほかの関数の有無や作った順によらない (docs/spec/vm.md の「追記」)。
@@ -407,15 +429,11 @@ fn a_copy_does_not_depend_on_the_rest_of_the_program() {
     let a =
         "main : Unit -> <IO> Unit\nmain () =\n  println (show (List.map (fn x -> x + 1) [1, 2]))";
     let b = "other : List Int -> List Int\nother ys = List.map (fn y -> y * 2) ys\n\nmain : Unit -> <IO> Unit\nmain () =\n  println (show (List.map (fn x -> x + 1) [1, 2]))\n  println (show (other [3]))";
-    for name in [
-        "Std.List.map@[Int, Int]{0=main$lambda0}",
-        "Std.List.map@[Int, Int]$let$go{0=main$lambda0}",
-    ] {
-        assert_eq!(
-            function(&core_text(a, Pass::Optimize), name),
-            function(&core_text(b, Pass::Optimize), name)
-        );
-    }
+    let name = "Std.List.map@[Int, Int]$let$go{0=main$lambda0}";
+    assert_eq!(
+        function(&core_text(a, Pass::Optimize), name),
+        function(&core_text(b, Pass::Optimize), name)
+    );
 }
 
 /// 節の関数は、ちょうど1つの handle に属する (`crates/eml_core_ir/src/evidence/handlers.rs` の `entries`)。
@@ -533,18 +551,18 @@ main () =
 fn closures_with_different_capture_counts_get_different_copies() {
     let text = "\
 apply_to : (Int -> Int) -> Int -> Int
-apply_to f x = f x
+apply_to f x = if x > 9 then apply_to f (x - 1) else f x
 
 add3 : Int -> Int -> Int -> Int
 add3 a b c = a + b + c
 
-pick : (Int -> Int -> Int) -> Int
-pick g = g 1 2
+pick : (Int -> Int -> Int) -> Int -> Int
+pick g n = if n > 0 then pick g (n - 1) else g 1 2
 
 main : Unit -> <IO> Unit
 main () =
   println (show (apply_to (add3 1 2) 3))
-  println (show (pick (add3 1)))
+  println (show (pick (add3 1) 0))
 ";
     let shown = core_text(text, Pass::Optimize);
     let copies: Vec<String> = names(text, Pass::Optimize)
@@ -621,8 +639,10 @@ fn push_fold_has_no_handle_left() {
             .all(|line| !line.contains("handle ") && !line.contains("perform Std.Yield")),
         "{shown}"
     );
+    // 畳み込みのラムダは直接の呼び出しになり、そのあと展開される
     let copies = handler_copies(&shown);
-    assert!(copies.contains("call main$lambda0("), "{shown}");
+    assert!(copies.contains("extern Prelude.+("), "{shown}");
+    assert!(!copies.contains("apply"), "{shown}");
 }
 
 #[test]
@@ -632,27 +652,22 @@ fn for_each_is_specialized() {
     );
     let shown = core_text(&text, Pass::Optimize);
     assert!(!shown.contains("handle "), "{shown}");
-    insta::assert_snapshot!(format!("{}\n{}", function(&shown, "main"), handler_copies(&shown)), @r#"
-    fn main(p.0: unit) -> unit {
-      let t.2: unit = call "Std.Yield.for_each@[Int]{0=nums/1, 1=main$lambda0}"(3)
-      return t.2
-    }
-
-    fn "nums{H=Std.Yield.for_each@#0450afda50afc4ec}"(n.0: int, p.1: unit) -> unit {
-      let t.3: unit = call "nums$let$go{H=Std.Yield.for_each@#0450afda50afc4ec}"(n.0, 1)
-      return t.3
+    insta::assert_snapshot!(format!("{}\n{}", function(&shown, "entry$main"), handler_copies(&shown)), @r#"
+    fn entry$main() -> unit {
+      let t.4: unit = call "nums$let$go{H=Std.Yield.for_each@#0450afda50afc4ec}"(3, 1)
+      return t.4
     }
 
     fn "nums$let$go{H=Std.Yield.for_each@#0450afda50afc4ec}"(n.0: int, i.1: int) -> unit {
       let t.2: enum = extern "Prelude.Ord Int.>"(i.1, n.0)
       switch t.2 Prelude.Bool { #0 -> b1, #1 -> b2 }
     b1:
-      let t.8: unit = call main$lambda0(i.1)
-      let t.9: unit = call "nums$let$go{H=Std.Yield.for_each@#0450afda50afc4ec}$h0"(n.0, i.1, t.8)
+      let t.12: obj = extern "Prelude.Show Int.show"(i.1)
+      let t.11: unit = extern Prelude.println(t.12)
+      let t.9: unit = call "nums$let$go{H=Std.Yield.for_each@#0450afda50afc4ec}$h0"(n.0, i.1, t.11)
       return t.9
     b2:
-      let t.7: unit = call "Std.Yield.for_each@#0450afda50afc4ec"((), ())
-      return t.7
+      return ()
     }
 
     internal fn "nums$let$go{H=Std.Yield.for_each@#0450afda50afc4ec}$h0"(n.0: int, i.1: int, t.2: unit) -> unit {
@@ -684,11 +699,6 @@ main () =
     let shown = core_text(text, Pass::Optimize);
     assert!(!shown.contains("handle "), "{shown}");
     insta::assert_snapshot!(handler_copies(&shown), @r#"
-    fn "main$lambda0{H=Std.State.run@#c7a76c0c3d933166}"(p.0: unit, st.2: int) -> obj {
-      let t.3: obj = call "count{H=Std.State.run@#c7a76c0c3d933166}"(5, st.2)
-      return t.3
-    }
-
     fn "count{H=Std.State.run@#c7a76c0c3d933166}"(n.0: int, st.7: int) -> obj {
       let t.1: enum = extern "Prelude.Eq Int.=="(n.0, 0)
       switch t.1 Prelude.Bool { #0 -> b1, #1 -> b2 }
@@ -696,8 +706,8 @@ main () =
       let t.11: obj = call "count{H=Std.State.run@#c7a76c0c3d933166}$h0"(n.0, st.7, st.7)
       return t.11
     b2:
-      let t.9: obj = call "Std.State.run@#c7a76c0c3d933166"((), st.7)
-      return t.9
+      let d.12: obj = con (,) #0((), st.7)
+      return d.12
     }
 
     internal fn "count{H=Std.State.run@#c7a76c0c3d933166}$h1"(n.0: int, t.1: unit, st.3: int) -> obj {
@@ -931,14 +941,10 @@ fn iter_generate_has_no_yield_left() {
         .find(|line| line.contains(" fn \"") && line.contains("{H=") && line.contains("}$h0\"("))
         .unwrap_or_else(|| panic!("{shown}"));
     assert!(continuation.starts_with("internal "), "{continuation}");
-    let copy = shown
-        .lines()
-        .find(|line| line.contains("{k}\"(") && line.contains(" fn "))
-        .unwrap_or_else(|| panic!("{shown}"));
-    let copy = function(&shown, copy.split('"').nth(1).unwrap());
-    assert!(copy.starts_with("internal "), "{copy}");
-    assert!(copy.contains("con Std.Iter.Iter #0(k"), "{copy}");
-    assert!(!copy.contains("closure cont$"), "{copy}");
+    // 節の写し `<g>{k}` は小さいので、それを呼ぶ handler の複製に展開される
+    let copies = handler_copies(&shown);
+    assert!(copies.contains("con Std.Iter.Iter #0(k"), "{copies}");
+    assert!(!shown.contains("closure cont$"), "{shown}");
 }
 
 /// 継続の関数は、`perform` の後で生きている変数を捕獲し、再開の値を最後に受ける。
@@ -956,8 +962,16 @@ fn a_continuation_captures_its_live_variables() {
     insta::assert_snapshot!(function(&shown, &name), @r#"
     internal fn "nums$let$go{H=Std.Iter.generate@#8c179e1f604536f1}$h0"(n.0: int, i.1: int, t.2: unit) -> tobj lin {
       let t.3: int = extern Prelude.+(i.1, 1)
-      let t.4: tobj lin = call "nums$let$go{H=Std.Iter.generate@#8c179e1f604536f1}"(n.0, t.3)
-      return t.4
+      let t.5: enum = extern "Prelude.Ord Int.>"(t.3, n.0)
+      switch t.5 Prelude.Bool { #0 -> b1, #1 -> b2 }
+    b1:
+      let k.6: tobj lin = closure "nums$let$go{H=Std.Iter.generate@#8c179e1f604536f1}$h0"(n.0, t.3)
+      let d.9: obj lin = con Std.Iter.Iter #0(k.6)
+      let d.10: obj lin = con (,) #0(t.3, d.9)
+      let d.11: tobj lin = con Prelude.Option #1(d.10)
+      return d.11
+    b2:
+      return #0
     }
     "#);
 }
@@ -1040,4 +1054,128 @@ fn continuations_across_join_blocks_stay_linear_in_size() {
         large <= small * 5 / 2,
         "{small} lines for 50, {large} for 100"
     );
+}
+
+/// 既知のラムダは、`map` の複製のループに展開される。ループの中に乗算の extern が入り、ラムダの呼び出しは残らない
+/// (docs/superpowers/specs/2026-10-18-s13e-specialization-design.md の「インライン化」)。
+#[test]
+fn a_known_lambda_is_inlined_into_its_copy() {
+    let text =
+        "main : Unit -> <IO> Unit\nmain () = println (show (List.map (fn x -> x * 2) [1, 2, 3]))";
+    let shown = core_text(text, Pass::Optimize);
+    let go = function(&shown, "Std.List.map@[Int, Int]$let$go{0=main$lambda0}");
+    assert!(!go.contains("main$lambda0("), "{go}");
+    insta::assert_snapshot!(go, @r#"
+    fn "Std.List.map@[Int, Int]$let$go{0=main$lambda0}"(acc.1: tobj, ys.2: tobj) -> tobj {
+      switch ys.2 Prelude.List { #0 -> b1, #1(x.3: int, rest.4: tobj) -> b2 }
+    b1:
+      let t.9: tobj = call "Std.List.reverse_onto@[Int]"(#0, acc.1)
+      return t.9
+    b2:
+      let t.10: int = extern Prelude.*(x.3, 2)
+      let d.7: tobj = con Prelude.List #1(t.10, acc.1)
+      let t.8: tobj = call "Std.List.map@[Int, Int]$let$go{0=main$lambda0}"(d.7, rest.4)
+      return t.8
+    }
+    "#);
+}
+
+/// 名前が `name` で始まる関数の直接の呼び出しが残っているか。
+fn calls(shown: &str, name: &str) -> bool {
+    shown.lines().any(|line| {
+        line.split_once("= call ")
+            .is_some_and(|(_, callee)| callee.trim_start_matches('"').starts_with(name))
+    })
+}
+
+/// Prelude の合成子は、インライン化で展開される (docs/superpowers/specs/2026-10-18-s13e-specialization-design.md の
+/// 「インライン化」)。
+#[test]
+fn pipe_operators_are_inlined() {
+    let text = "\
+inc : Int -> Int
+inc x = x + 1
+
+double : Int -> Int
+double x = x * 2
+
+main : Unit -> <IO> Unit
+main () =
+  println (show ([1, 2, 3] |> List.length))
+  println (show ((inc >> double) 4))
+";
+    let shown = core_text(text, Pass::Optimize);
+    assert!(!calls(&shown, "Prelude.|>@"), "{shown}");
+    assert!(!calls(&shown, "Prelude.>>@[Int, Int, Int]{"), "{shown}");
+}
+
+/// 自分を呼ぶ関数は、インライン化しない。
+#[test]
+fn a_recursive_function_is_not_inlined() {
+    let text = "\
+count : Int -> Int -> Int
+count acc n = if n == 0 then acc else count (acc + 1) (n - 1)
+
+main : Unit -> <IO> Unit
+main () = println (show (count 0 3))
+";
+    let shown = core_text(text, Pass::Optimize);
+    assert!(calls(&shown, "count("), "{shown}");
+}
+
+/// handle を含む関数は、インライン化しない。EP は、節の関数がちょうど1つの handle に属することを前提にする
+/// (`crates/eml_core_ir/src/evidence/handlers.rs` の `entries`)。
+#[test]
+fn a_function_with_a_handle_is_not_inlined() {
+    let text = "\
+effect Ask where
+  ask : Unit -> Int
+
+answer : (Unit -> <Ask> Int) -> Int
+answer f =
+  handle f () + 1 with
+    | ctl ask () k -> k 41
+{HIDE}
+main : Unit -> <IO> Unit
+main () =
+  match hide (fn () -> ask ()) with
+    | Box f -> println (show (answer f))
+";
+    let text = text.replace("{HIDE}", HIDE);
+    let shown = core_text(&text, Pass::Optimize);
+    assert!(shown.contains("handle "), "{shown}");
+    assert!(calls(&shown, "answer("), "{shown}");
+}
+
+/// インライン化した関数のコードは、その関数と呼び出し先の凍らせたコードだけで決まり、ほかの関数の有無によらない
+/// (docs/spec/vm.md の「追記」)。
+#[test]
+fn inlining_does_not_depend_on_the_rest_of_the_program() {
+    let a = "\
+inc : Int -> Int
+inc x = x + 1
+
+main : Unit -> <IO> Unit
+main () =
+  println (show (List.map (fn x -> inc x) [1, 2]))
+";
+    let b = "\
+inc : Int -> Int
+inc x = x + 1
+
+twice : Int -> Int
+twice x = inc (inc x)
+
+other : List Int -> List Int
+other ys = List.map (fn y -> twice y) ys
+
+main : Unit -> <IO> Unit
+main () =
+  println (show (List.map (fn x -> inc x) [1, 2]))
+  println (show (other [3]))
+";
+    let name = "Std.List.map@[Int, Int]$let$go{0=main$lambda0}";
+    let a = function(&core_text(a, Pass::Optimize), name);
+    assert!(!calls(&a, "main$lambda0") && !calls(&a, "inc("), "{a}");
+    assert_eq!(a, function(&core_text(b, Pass::Optimize), name));
 }

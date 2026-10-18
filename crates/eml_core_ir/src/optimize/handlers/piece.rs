@@ -1,15 +1,16 @@
 //! handler の複製の部品 (docs/superpowers/specs/2026-10-18-s13e-specialization-design.md の「書き換え」)。
 //! `perform` の地点からの続きを継続の関数にし、合流のブロックからの続きを合流のブロックの関数にする (`region`)。
 //! すぐに再開する節の本体を `perform` の地点に展開し (`inline_clause`)、引数を置き換えて定数になった `switch` を
-//! 合う行き先へのジャンプにする (`constant_target`)。`k` を値として使う節は、`k` に継続の関数の閉包を受ける写し
-//! `<g>{k}` にする (`clause_with_k`)。展開で辺の入らなくなったブロックは、最後に落とす (`prune`)。
+//! 合う行き先へのジャンプにする (`blocks::constant_target`)。`k` を値として使う節は、`k` に継続の関数の閉包を受ける写し
+//! `<g>{k}` にする (`clause_with_k`)。展開で辺の入らなくなったブロックは、最後に落とす (`blocks::prune`)。
 
 use std::collections::{BTreeSet, HashMap, HashSet};
 
 use crate::tail::tail_position_call;
 use crate::{Block, Call, CoreFn, Rhs, Stmt, Term};
-use eml_lir::{Atom, BlockId, CasePattern, FnIdx, Repr, VarId, VarInfo};
+use eml_lir::{Atom, BlockId, FnIdx, Repr, VarId, VarInfo};
 
+use super::super::blocks::constant_target;
 use super::super::known::fresh;
 
 /// ブロックごとの、合流のブロックか。合流のブロックは、入る辺が2本以上か、引数を持つブロックである。引数を持つ
@@ -123,51 +124,6 @@ pub(crate) fn region(
         ret_mark: function.ret_mark,
         blocks,
     }
-}
-
-/// 入口から届かないブロックを落とし、残ったブロックに元の順のまま番号を振り直す。`inline_clause` が切り離した
-/// ブロックは辺が入らなくなるので、残すと構造の規則に反する (docs/spec/lir.md の「構造の規則」)。
-pub(crate) fn prune(function: &mut CoreFn) {
-    let mut kept = vec![BlockId::ENTRY];
-    kept.extend(reachable(&function.blocks, &function.blocks[0].term));
-    let renumber: HashMap<BlockId, BlockId> = kept
-        .iter()
-        .enumerate()
-        .map(|(position, &index)| (index, BlockId(position as u32)))
-        .collect();
-    let mut blocks: Vec<Block> = kept
-        .iter()
-        .map(|&index| {
-            std::mem::replace(
-                &mut function.blocks[index.0 as usize],
-                Block {
-                    params: Vec::new(),
-                    stmts: Vec::new(),
-                    term: Term::Return(Atom::Unit),
-                },
-            )
-        })
-        .collect();
-    for block in &mut blocks {
-        block
-            .term
-            .for_each_successor_mut(|target| *target = renumber[target]);
-    }
-    function.blocks = blocks;
-}
-
-/// `term` の行き先から届くブロックを、番号の昇順に返す。届く部分だけをたどるので、関数の残りの大きさに依らない。
-fn reachable(blocks: &[Block], term: &Term) -> Vec<BlockId> {
-    let mut seen = HashSet::new();
-    let mut pending: Vec<BlockId> = term.successors().collect();
-    while let Some(block) = pending.pop() {
-        if seen.insert(block) {
-            pending.extend(blocks[block.0 as usize].term.successors());
-        }
-    }
-    let mut reached: Vec<BlockId> = seen.into_iter().collect();
-    reached.sort_unstable_by_key(|block| block.0);
-    reached
 }
 
 /// `target` の `at` の文 (`perform`) の場所に、すぐに再開する節の関数 `clause` の本体を写して展開する。ブロックの
@@ -345,39 +301,6 @@ impl Copy<'_> {
             None => term,
         }
     }
-}
-
-/// 引数を置き換えて定数になった `switch` の行き先。操作の引数が定数 (`True`、引数のないコンストラクタ、整数) なら、
-/// 節の本体の `switch` の値も定数になる。定数で分ける `switch` は verifier が断るので (docs/spec/lir.md の
-/// 「verifier」)、合う case か `default` へのジャンプにする。定数はフィールドを持たないので、合う case はフィールドを
-/// 束縛しない。`switch` の行き先は引数を持たないので、ジャンプは値を渡さない。ほかの case のブロックには辺が入らなく
-/// なり、複製の最後の `prune` が落とす。
-fn constant_target(term: &Term) -> Option<BlockId> {
-    let Term::Switch {
-        scrutinee,
-        layout: _,
-        cases,
-        default,
-    } = term
-    else {
-        return None;
-    };
-    let pattern = match *scrutinee {
-        Atom::Tag(tag) => CasePattern::Tag(tag),
-        Atom::Int(value) => CasePattern::Int(value),
-        Atom::Var(_) | Atom::Unit | Atom::Fn(_) => return None,
-    };
-    let matched = cases.iter().find(|case| case.pattern == pattern);
-    debug_assert!(
-        matched.is_none_or(|case| case.fields.is_empty()),
-        "a constant has no fields"
-    );
-    Some(
-        matched
-            .map(|case| case.target)
-            .or(*default)
-            .expect("a switch on a constant has a matching case or a default"),
-    )
 }
 
 /// `k` を値として受ける節の写し `<g>{k}`。`k` には、生の継続でなく、継続の関数の閉包が来る

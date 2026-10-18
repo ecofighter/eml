@@ -570,20 +570,16 @@ fn a_closure_with_a_file_passed_as_a_type_variable_lowers() {
         .map(|function| function.name.as_str())
         .collect();
     // optimize は `f` を既知のラムダごとに複製するので、2つの instance は複製に置き換わる。複製の連鎖は鍵の入れ子の
-    // 深さで止まる (docs/superpowers/specs/2026-10-18-s13e-specialization-design.md の「鍵」)
+    // 深さで止まる (docs/superpowers/specs/2026-10-18-s13e-specialization-design.md の「鍵」)。小さな複製は呼ぶ側に
+    // 展開されて残らない (同じ文書の「インライン化」)
     assert_eq!(
         names,
         [
             "f@[Int]{1=main$lambda0, 2=shut_with/1}",
             "f@#a5c201dc663fca79",
-            "f@#fdd7ab21470536c1",
             "f@#8125c0618c7d4a0f",
             "f@#7d810ee743b0d10c",
             "f@[Int]$lambda0{1=main$lambda0, 2=shut_with/1}",
-            "f@#f05a9ccbe4e4c4b0",
-            "f@[poly Int -> <IO> Int]$lambda1{0=f@#a5c201dc663fca79/1}",
-            "f@[poly Int -> <IO> Int]$lambda1{0=f@#8125c0618c7d4a0f/1}",
-            "f@#3e4b3e52119beca3",
             "f@#a5c201dc663fca79$boxed",
             "f@#8125c0618c7d4a0f$boxed",
             "f@[Int]$lambda0{1=main$lambda0, 2=shut_with/1}$boxed",
@@ -618,5 +614,7 @@ fn a_top_level_function_in_a_once_field_lowers() {
         .filter(|function| !function.internal && !function.name.contains('$'))
         .map(|function| function.name.as_str())
         .collect();
-    assert_eq!(names, ["worker", "get_worker", "main"]);
+    // `get_worker` と `main` は小さいので、呼ぶ側に展開されて残らない
+    // (docs/superpowers/specs/2026-10-18-s13e-specialization-design.md の「インライン化」)
+    assert_eq!(names, ["worker"]);
 }
