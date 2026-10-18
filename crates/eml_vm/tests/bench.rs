@@ -7,7 +7,7 @@ use eml_test_support::run_stats;
 use eml_vm::RunStats;
 
 /// テストを持つ基準のプログラム。`bench/` にプログラムを足したら、ここと下のテストの関数の両方に足す。
-const PROGRAMS: [&str; 18] = [
+const PROGRAMS: [&str; 22] = [
     "empty",
     "fib",
     "fold_state",
@@ -20,10 +20,14 @@ const PROGRAMS: [&str; 18] = [
     "orders_by_hand",
     "push_fold",
     "push_fold_by_hand",
+    "rbtree",
+    "records",
     "state",
+    "std_list",
     "sum_loop",
     "tree",
     "tree_by_hand",
+    "tree_map",
     "upsert",
     "upsert_by_hand",
 ];
@@ -497,6 +501,109 @@ fn upsert_by_hand() {
         peak_stack: 352,
     }
     ");
+}
+
+#[test]
+fn records() {
+    insta::assert_debug_snapshot!(stats("records", "100000 49764648 999 223\n"), @"
+    RunStats {
+        evidence_steps: 0,
+        yields: 0,
+        yield_frames: 0,
+        unwound_frames: 0,
+        string_bytes_copied: 37,
+        rc_increments: 0,
+        rc_decrements: 7,
+        boxes: 0,
+        unboxes: 0,
+        allocations: 8,
+        reuses: 100000,
+        peak_objects: 5,
+        peak_stack: 29,
+    }
+    ");
+}
+
+#[test]
+fn rbtree() {
+    insta::assert_debug_snapshot!(stats("rbtree", "9997\n"), @"
+    RunStats {
+        evidence_steps: 0,
+        yields: 0,
+        yield_frames: 0,
+        unwound_frames: 0,
+        string_bytes_copied: 4,
+        rc_increments: 0,
+        rc_decrements: 24497,
+        boxes: 0,
+        unboxes: 0,
+        allocations: 24498,
+        reuses: 128498,
+        peak_objects: 9998,
+        peak_stack: 259,
+    }
+    ");
+}
+
+#[test]
+fn tree_map() {
+    insta::assert_debug_snapshot!(stats("tree_map", "33714156\n"), @"
+    RunStats {
+        evidence_steps: 0,
+        yields: 0,
+        yield_frames: 0,
+        unwound_frames: 0,
+        string_bytes_copied: 8,
+        rc_increments: 0,
+        rc_decrements: 8192,
+        boxes: 0,
+        unboxes: 0,
+        allocations: 8193,
+        reuses: 163820,
+        peak_objects: 8192,
+        peak_stack: 126,
+    }
+    ");
+}
+
+#[test]
+fn std_list() {
+    insta::assert_debug_snapshot!(stats("std_list", "887099805\n"), @"
+    RunStats {
+        evidence_steps: 0,
+        yields: 0,
+        yield_frames: 0,
+        unwound_frames: 0,
+        string_bytes_copied: 9,
+        rc_increments: 0,
+        rc_decrements: 20001,
+        boxes: 91430,
+        unboxes: 148574,
+        allocations: 20002,
+        reuses: 257148,
+        peak_objects: 20001,
+        peak_stack: 23,
+    }
+    ");
+}
+
+/// S13e-4 の完了の条件 (docs/implementation/benchmarks.md の「S13e-4」)。関数の中で手放して作り直す8つのプログラムで、
+/// `con` が手放した箱を使い回す (docs/spec/lir.md の「reuse」)。
+#[test]
+fn rebuilding_programs_reuse_boxes() {
+    for (name, output) in [
+        ("list", "10000100000\n"),
+        ("tree", "14898 7454478318\n"),
+        ("upsert", "2000 k1182 23\n"),
+        ("orders", "150308561\n"),
+        ("records", "100000 49764648 999 223\n"),
+        ("rbtree", "9997\n"),
+        ("tree_map", "33714156\n"),
+        ("std_list", "887099805\n"),
+    ] {
+        let stats = stats(name, output);
+        assert!(stats.reuses > 0, "{name}: {stats:?}");
+    }
 }
 
 /// 確保の数は検査モードの `Stats::allocations` から来る。`list` は `range` が 100000 個の `Cons` を作り、`map` はその箱を
