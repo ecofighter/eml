@@ -398,6 +398,7 @@ impl Fuser<'_> {
         self.status.push(Status::Pending);
         self.recursive.push(false);
         self.groups.push(copy.0 as usize);
+        self.sizes.push(1);
         self.inlinable.push(false);
         self.con_params.push(ConParams::default());
         self.depths.push(key_depth(&self.depths, &key));

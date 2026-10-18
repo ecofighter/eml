@@ -62,6 +62,8 @@ pub(super) struct Fuser<'a> {
     recursive: Vec<bool>,
     /// 複製の輪の union-find。輪に入った複製は、同じ輪の複製と同じ代表を持つ。
     groups: Vec<usize>,
+    /// 代表ごとの、輪の複製の数。
+    sizes: Vec<usize>,
     /// 書き換えた後のコードを展開してよいか。書き換え終えたときに決める。
     inlinable: Vec<bool>,
     /// 引数ごとの、`con` の形について特殊化してよい位置 (`copies::con_params`)。書き換え終えたときに決める。
@@ -91,6 +93,7 @@ pub(crate) fn fuse(program: &mut Program) {
         status: vec![Status::Pending; count],
         recursive,
         groups: (0..count).collect(),
+        sizes: vec![1; count],
         inlinable: vec![false; count],
         con_params: vec![copies::ConParams::default(); count],
         depths: vec![0; count],
@@ -138,7 +141,14 @@ impl Fuser<'_> {
         self.rewrite(&mut function);
         self.stack.pop();
         self.status[index] = Status::Done;
-        self.inlinable[index] = !self.recursive[index] && inline::inlinable(&function);
+        // 複製は、自分を直接呼ぶときだけ再帰する。値として自分を参照するだけの複製 (`Iter` の次の状態に自分の閉包を
+        // 入れる `map` の写し) は、書き換え終えればコードが決まり、展開しても展開した本体は展開し直さない
+        let recursive = if index < self.base {
+            self.recursive[index]
+        } else {
+            references(&function, false).contains(&index)
+        };
+        self.inlinable[index] = !recursive && inline::inlinable(&function);
         self.con_params[index] = copies::con_params(&function, FnIdx(index as u32), &self.callees);
         self.functions[index] = function;
     }
@@ -183,26 +193,24 @@ impl Fuser<'_> {
         }
     }
 
-    /// いま書き換えている関数から複製 `target` への参照を記録する。参照で輪ができたら、輪の複製をどれも再帰する
-    /// 複製にする。輪ができるのは、`target` を書き換えているか、`target` の輪に書き換えている複製があるときである。
-    /// 書き換えている複製は、書き換えの途中で作った複製から参照の連なりで届くので、そこからいまの関数までの書き換えて
-    /// いる複製がどれも輪に入る。
+    /// いま書き換えている関数から複製 `target` への参照を記録する。参照で輪ができたら、輪の複製を1つの組にまとめる。
+    /// 輪ができるのは、`target` を書き換えているか、`target` の組に書き換えている複製があるときである。書き換えている
+    /// 複製は、書き換えの途中で作った複製から参照の連なりで届くので、そこからいまの関数までの書き換えている複製が
+    /// どれも輪に入る。値として自分を参照するだけの複製も、1つの複製の組になる。
     ///
-    /// 輪の中の複製は展開せず、鍵の閉包の関数にもしない (`settled`)。参照は書き換えている関数だけが作り、書き換え
-    /// 終えた関数のコードは変わらないので、輪は、輪を閉じる参照を作ったときに必ず見つかる。そのため、輪のどの複製を
-    /// 先に作っても同じ複製が輪に入り、どの複製のコードも名前で決まる (docs/spec/vm.md の「追記」)。
+    /// 参照は書き換えている関数だけが作り、書き換え終えた関数のコードは変わらないので、輪は、輪を閉じる参照を作った
+    /// ときに必ず見つかる。書き換えている複製を含む組は、輪のどの複製を先に作ったかで、まだ書き換えていない所が
+    /// 変わる。そこで、その組の複製は読まない (`settled`)。書き換えている複製を含まなくなった組は、もう変わらない。
+    /// そのため、どの複製のコードも名前で決まる (docs/spec/vm.md の「追記」)。
     fn refer(&mut self, target: usize) {
         if target < self.base {
             return;
         }
-        let root = self.find(target);
+        let root = self.root(target);
         let from = if self.status[target] == Status::Active {
             self.stack.iter().position(|&active| active == target)
         } else if self.recursive[target] {
-            (0..self.stack.len()).find(|&at| {
-                let active = self.stack[at];
-                active >= self.base && self.find(active) == root
-            })
+            self.active_member(root)
         } else {
             None
         };
@@ -213,19 +221,28 @@ impl Fuser<'_> {
             let member = self.stack[at];
             if member >= self.base {
                 self.recursive[member] = true;
-                let member = self.find(member);
-                let root = self.find(target);
-                self.groups[member] = root;
+                let (member, root) = (self.root(member), self.root(target));
+                if member != root {
+                    self.groups[member] = root;
+                    self.sizes[root] += self.sizes[member];
+                }
             }
         }
     }
 
-    fn find(&mut self, mut function: usize) -> usize {
+    fn root(&self, mut function: usize) -> usize {
         while self.groups[function] != function {
-            self.groups[function] = self.groups[self.groups[function]];
             function = self.groups[function];
         }
         function
+    }
+
+    /// 代表が `root` の組の、書き換えている複製のうち一番外側のもののスタックの位置。
+    fn active_member(&self, root: usize) -> Option<usize> {
+        (0..self.stack.len()).find(|&at| {
+            let active = self.stack[at];
+            active >= self.base && self.root(active) == root
+        })
     }
 
     /// `function` のコードが参照する複製を、どれも参照する (`refer`)。
@@ -236,20 +253,23 @@ impl Fuser<'_> {
     }
 
     /// 書き換えで生まれた呼び出しや鍵の閉包の関数として、コードを読んでよい関数か (`settled`) で、展開してよいもの。
+    /// 2つ以上の複製の輪に入る複製は、展開しない。
     fn inlinable_from_here(&self, target: usize) -> bool {
-        self.settled(target) && self.inlinable[target]
+        self.settled(target)
+            && self.inlinable[target]
+            && (target < self.base || self.sizes[self.root(target)] == 1)
     }
 
     /// 書き換え終えていて、そのコードが名前で決まる関数か。元の関数は、いま書き換えている関数と違う SCC に入るときだけ
     /// である。同じ SCC の中の書き換えの順はプログラムによって変わるので、同じ SCC の関数を読むと、コードが順によって
     /// 変わる。ただし直接の呼び出しの呼ばれる関数は先に書き換えるので、最初の展開 (`fuse_at`) はそれを読んでよい。
-    /// 複製は、輪にならなかったものだけである (`copy`)。
+    /// 複製は、組に書き換えている複製がないときだけである (`refer`)。
     fn settled(&self, target: usize) -> bool {
         self.status[target] == Status::Done
             && if target < self.base {
                 self.graph.scc[target] != self.current
             } else {
-                !self.recursive[target]
+                !self.recursive[target] || self.active_member(self.root(target)).is_none()
             }
     }
 }

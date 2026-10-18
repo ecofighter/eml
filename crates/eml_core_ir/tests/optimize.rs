@@ -1435,6 +1435,62 @@ fn iter_pipeline_fuses_map_into_the_fold_and_generate_into_the_filter() {
     assert!(filter.contains("con Prelude.Option"), "{filter}");
 }
 
+/// `File` を持つ生産者も融合する。`Iter.fold` だけの形と `Iter.map` を重ねた形のループは、`File` を引数に回し、
+/// `Iter` を作らず `apply` もしない。`tests/ui/run/std/fused_iter_file_take.em` は、このループで `File` がちょうど
+/// 1回閉じることを確かめる。
+#[test]
+fn a_fold_over_a_file_producer_is_fused() {
+    let text = "\
+import Yield (Yield(..))
+
+numbers : Int -> Unit -> <Yield Int, IO> Unit
+numbers n () =
+  let go file i =
+    if i > n then Fs.close file
+    else
+      yield i
+      go file (i + 1)
+  go (Fs.open \"numbers.txt\") 1
+
+main : Unit -> <IO> Unit
+main () =
+  println (show (Iter.fold (fn a b -> a + b) 0 (Iter.generate (numbers 5))))
+  println (show (Iter.fold (fn a b -> a + b) 0 (Iter.map (fn x -> x * 2) (Iter.generate (numbers 5)))))
+";
+    let folds: Vec<String> = loops(text)
+        .into_iter()
+        .filter(|code| code.contains("fn \"Std.Iter.fold@"))
+        .collect();
+    assert_eq!(folds.len(), 2, "{}", core_text(text, Pass::Optimize));
+    for code in &folds {
+        assert!(code.contains("obj lin"), "the File is a parameter:\n{code}");
+        for allocation in ["con Std.Iter.Iter", "closure ", "apply "] {
+            assert!(!code.contains(allocation), "{allocation} in\n{code}");
+        }
+    }
+}
+
+/// 書き換えで生まれた呼び出しの展開は、関数ごとに `MAX_INLINE_ROUNDS` 回で止まる。自分を引数に受けて呼ぶ閉包は、
+/// 展開するたびに既知の閉包への `apply` をまた持ち込むので、上限がないと融合の段が止まらない
+/// (docs/superpowers/specs/2026-10-18-s13e-specialization-design.md の「止まること」)。実行の結果は UI テストの
+/// `tests/ui/run/functions/self_applying_closure.em` が確かめる。
+#[test]
+fn a_self_applying_closure_stops_inlining() {
+    let text = "\
+data Fix = | Fix (Fix -> Int -> Int)
+
+fix_apply : Fix -> Int -> Int
+fix_apply (Fix f) x = f (Fix f) x
+
+main : Unit -> <IO> Unit
+main () =
+  let lam = fn self n -> if n == 0 then 0 else fix_apply self (n - 1) + 2
+  println (show (fix_apply (Fix lam) 10))
+";
+    let shown = core_text(text, Pass::Optimize);
+    assert!(shown.contains("fn entry$main("), "{shown}");
+}
+
 /// 融合した複製の名前とコードは鍵だけで決まり、ほかの関数の有無によらない (docs/spec/vm.md の「追記」)。
 #[test]
 fn fusion_does_not_depend_on_the_rest_of_the_program() {

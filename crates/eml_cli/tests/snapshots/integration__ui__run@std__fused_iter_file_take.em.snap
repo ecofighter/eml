@@ -4,11 +4,11 @@ expression: "format!(\"--- stdout ---\\n{stdout}--- stderr ---\\n{diagnostics}{s
 input_file: tests/ui/run/std/fused_iter_file_take.em
 ---
 --- stdout ---
-one;two;
-4
+15
+3
+30
+12
+9
 --- stderr ---
---- written: lines.txt ---
-one
-two
-three
-four
+--- written: numbers.txt ---
+x
