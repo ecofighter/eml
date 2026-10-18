@@ -163,6 +163,7 @@ S12d のスクリプトは、約 30 MB の入力で命令の数の全体を測�
 - `crates/eml_core_ir/tests`、`crates/eml_lir/tests`、`crates/eml_vm/tests` の、パイプラインの終わりまでの LIR と逆アセンブルのスナップショットのうち、token を定義する `release`、token を受ける `con`、`drop_token` が入るもの。Perceus を直接呼ぶテストの期待値は変わらない
 - `crates/eml_vm/tests/bench.rs` と `crates/eml_vm/tests/scaling.rs` の `RunStats` のうち、確保、RC、reuse の回数が変わるものと、足した欄
 - 試作で変わった `crates/eml_vm/tests/codegen.rs` の `a_dead_switch_scrutinee_does_not_share_a_slot_with_the_case_fields` のように、token のスロットでフレームの大きさやスロットの番号が変わる逆アセンブルの期待値
+- `crates/eml_vm/tests/bench.rs` の `list` の `peak_stack` (600,014 から 700,015)。`map` が末尾でない再帰の呼び出しをまたいで token を持ち、フレームごとに token のスロットが1つ増えるためである。同じファイルの `allocations_are_counted_in_checked_mode` の下限 (200,000 から 100,000)。`map` が `range` の作ったセルを使い回し、確保が半分になるためである (実装の途中で見つかり、計画の判断で受け入れた)
 
 `specialization_matches_hand_written_work` と `specialization_matches_hand_written_rc` の組が、reuse の回数の違いで確保か RC の回数を違えるようになったら、作る人は原因を調べてユーザーに確かめる。テストを直すのは、その後である。
 

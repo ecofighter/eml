@@ -243,6 +243,8 @@ S13e-1 と同じく、鍵の入れ子の深さで打ち切る。関数自身の�
 
 ## S13e-4 reuse analysis
 
+この節と「作業の分け方と完了の条件」の S13e-4 の行は、S13e-4 の設計 (`docs/superpowers/specs/2026-10-19-s13e4-reuse-design.md`) に代わった。
+
 `eml_rt` には、reuse の部品 (`release_reuse`、`con_at`、`reuse_in_place`、`drop_token`) と検査モードの扱いが S9 で入っている (`docs/spec/object-model.md`)。S13e-4 で作るのは、LIR のパスと VM の命令と verifier の規則である。
 
 ### 規則

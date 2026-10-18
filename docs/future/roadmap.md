@@ -16,7 +16,7 @@
 
 | 段 | 中身 | 前提 | 完了の条件 |
 |---|---|---|---|
-| S13 実例による判断 | Kind の記法、std のエフェクトと `Iter`、中断の巻き戻し、row の最小の具体化、特殊化と融合と reuse、std のデータ構造と診断と計測 | S12 | 下の「S13 実例による判断」の S13a〜S13f の完了の条件。S13a〜S13d と S13e-1〜S13e-3 は済み |
+| S13 実例による判断 | Kind の記法、std のエフェクトと `Iter`、中断の巻き戻し、row の最小の具体化、特殊化と融合と reuse、std のデータ構造と診断と計測 | S12 | 下の「S13 実例による判断」の S13a〜S13f の完了の条件。S13a〜S13e は済み |
 
 S13 の後は、言語の項目を次の順に並べる。
 
@@ -49,7 +49,7 @@ S12d の5本のスクリプトの書き心地と、その後の議論と試作 (
 | S13b | `mask` を位置つきにして E2008 をなくすこと。std のエフェクト `Yield`、`Fail`、`State` と、その handler、引いて使うジェネレータ `Iter`、`Fs.read_line`。`k` を書かない節、ローカル関数どうしの相互再帰 | 済み。決めたことは [エフェクトと handler](../spec/effects.md)、[型と Kind](../spec/types.md)、[式](../spec/expressions.md)、[標準ライブラリ](../spec/stdlib.md)、[オブジェクトモデル](../spec/object-model.md) にあり、スクリプトの計測は [計測の基準](../implementation/benchmarks.md) の「S13b (スクリプト)」にある |
 | S13c | 中断を巻き戻しで行うこと、`IO` と `never` の操作を yield の地点から外すこと、節の間の `evv` の付け替え (under)、戻らない呼び出しで終わる経路での `Lin` の値の暗黙の後始末 | 済み。決めたことは [線形性](../spec/linearity.md)、[エフェクトと handler](../spec/effects.md)、[型と Kind](../spec/types.md)、[Core IR](../spec/core-ir.md)、[LIR](../spec/lir.md)、[VM](../spec/vm.md) にあり、計測は [計測の基準](../implementation/benchmarks.md) の「S13c」にある |
 | S13d | row の最小の具体化 | 済み。決めたことは [型と Kind](../spec/types.md)、[エフェクトと handler](../spec/effects.md)、[式](../spec/expressions.md) にあり、残した制限は [実装の現在地](../implementation/status.md) の「型と row の推論」に、計測は [計測の基準](../implementation/benchmarks.md) の「S13d」にある |
-| S13e | 既知の閉包への特殊化、handler への特殊化 (`Iter` の状態機械を含む)、インライン化と融合、Perceus の reuse analysis。S13e-1〜S13e-4 の4つに分けて順に進める | 末尾再帰の生産者を `Iter` で引く計測で、1要素ごとの yield と確保がなくなる。直接のループとの実時間の差を [計測の基準](../implementation/benchmarks.md) に記録する。4つの作業ごとの条件は下の「S13e 特殊化と融合と reuse」にある。S13e-1〜S13e-3 は済み |
+| S13e | 既知の閉包への特殊化、handler への特殊化 (`Iter` の状態機械を含む)、インライン化と融合、Perceus の reuse analysis。S13e-1〜S13e-4 の4つに分けて順に進める | 末尾再帰の生産者を `Iter` で引く計測で、1要素ごとの yield と確保がなくなる。直接のループとの実時間の差を [計測の基準](../implementation/benchmarks.md) に記録する。4つの作業ごとの条件は下の「S13e 特殊化と融合と reuse」にある。済み。S13e-1〜S13e-4 を終えた |
 | S13f | std の `Map`、並べ替え、リストの関数、診断の改善、`String.byte_at` の借用、数値計算の計測 | `logstat` が std の `Map` と並べ替えを使う。S12d で挙げた診断の3つが直る。数値計算の計測が Python の版と一緒に `bench/scripts.sh` で動く |
 
 この順にしたのは次の理由による。
@@ -70,7 +70,7 @@ S12d の5本のスクリプトの書き心地と、その後の議論と試作 (
 | S13e-1 | 最適化パスの骨組みと、既知の閉包への特殊化。既知の閉包への `apply` を `call` にし、既知の閉包を受ける関数と閉包を、捕獲を引数に開いた複製にする | 済み。決めたこと (鍵と名前、決定性、包む関数、handle の節の複製、`yields` の付け直し) は [Core IR](../spec/core-ir.md) の「最適化」にあり、残した制限は [実装の現在地](../implementation/status.md) の「深さと性能」に、計測は [計測の基準](../implementation/benchmarks.md) の「S13e-1」にある |
 | S13e-2 | handler への特殊化。届く先が静的に分かる `perform` を、handler ごとの経路の関数の複製の中で、節の直接の実行に置き換える。`k` をデータに入れて返す節 (`Iter.generate`) と、すぐに再開する節 (状態つきを含む) を対象にする | 済み。決めたこと (対象と経路の条件、節の2つの形、複製と継続の関数と節の写しの名前、`internal` の印、意味が変わらない理由) は [Core IR](../spec/core-ir.md) の「handler への特殊化」から「handler の特殊化で意味が変わらない理由」までにあり、残した制限は [実装の現在地](../implementation/status.md) の「深さと性能」に、計測と直接のループとの差は [計測の基準](../implementation/benchmarks.md) の「S13e-2」にある |
 | S13e-3 | インライン化、既知のコンストラクタの jump threading、既知の閉包をフィールドに持つ `con` の値の形についての特殊化 (生産者と消費者の融合) | 済み。`Iter.generate` を `Iter.fold` で引く形と、`Iter.map` を重ねた形で、1要素ごとの確保がなくなった。`Iter.filter` を重ねた形では、残した要素ごとに4つの確保が残る。要素を飛ばすループが再帰し、作った `Some ((x, Iter k))` を相手の分からない呼ぶ側へ返すためである。これをなくす再帰する呼び出し先の継続についての特殊化は、後に回した (ユーザーが 2026-10-19 に決めた。下の「その後の項目」の「Core IR の上の最適化パス」)。S13e-1 の5つの組は、RC の回数が手で特殊化した版と同じになり、命令の数が 2% 以内に届いた。決めたこと (呼ばれる関数から先に1回ずつ書き換える順、展開してよい関数、既知のコンストラクタと jump threading の規則、`con` の値の形の鍵と名前、複製の輪の扱い、止まること) は [Core IR](../spec/core-ir.md) の「融合」から「融合が止まること」までにあり、関数の ABI を名前で決めることは [LIR](../spec/lir.md) の「一様な関数」に、残した制限は [実装の現在地](../implementation/status.md) の「深さと性能」に、計測としきい値の理由は [計測の基準](../implementation/benchmarks.md) の「S13e-3」にある |
-| S13e-4 | Perceus の reuse analysis (drop-guided reuse と、同じコンストラクタの作り直しのその場の書き換え) | `list.em`、`tree.em`、`logstat` の形で reuse が出る。`logstat` を `bench/scripts.sh` で測り、S13e-3 の後と比べて記録する |
+| S13e-4 | Perceus の reuse analysis (drop-guided reuse と、同じコンストラクタの作り直しのその場の書き換え) | 済み。Perceus の後の LIR のパス `reuse` が、`release` と構築子の分かっている値の `decref` を token にし、同じ物理的な語の数の `con` がその箱を使う。`bench/` の8つの作り直すプログラムで reuse が出て、`bench/tree.em` と足した4つのプログラムの命令の数は、試作と同じかそれ以上に減った。決めたこと (token の命令、token の流れ、reuse の元、組の選び方、verifier の検査、部品の列) は [LIR](../spec/lir.md) の「reuse」と「実行の意味」に、VM の命令は [VM](../spec/vm.md) の「reuse」に、残した制限は [実装の現在地](../implementation/status.md) の「深さと性能」に、計測は [計測の基準](../implementation/benchmarks.md) の「S13e-4」にある。関数をまたぐ reuse と、合流をまたぐ token は、下の「処理系」の Perceus の最適化に残した |
 
 - 見分け方は std の印でなく、Core IR の形で決める。将来の `Async` のスケジューラが、待っているタスクの `k` を返す形で書かれれば、同じ規則で特殊化できるようにするためである。届く先が静的に分からない `perform` と、経路に末尾でないフレームがある `perform` は、今の道に残す
 - 特殊化した複製の名前と、特殊化とインライン化の判断は、鍵と呼び出し先の translate の出力だけで決める。プログラム全体の予算は使わない。名前が同じ関数はいつも同じコードになるという、REPL の追記の規則 ([VM](../spec/vm.md) の「追記」) を守るためである
@@ -80,7 +80,7 @@ S12d の5本のスクリプトの書き心地と、その後の議論と試作 (
 
 - 見分け方: handler の形で見分ける (上の「決めたこと」)
 - 末尾でない再帰の生産者 (木の走査など): S13e では特殊化しない。フレームごとに継続を作って渡す CPS の拡張が要るので、`Async` を作るときに測って決める
-- reuse analysis: `Iter` に限らない一般の形を、S13e-4 で入れる
+- reuse analysis: `Iter` に限らない一般の形を、S13e-4 で入れた ([LIR](../spec/lir.md) の「reuse」)
 - 置き場所: 下の「Core IR の上の最適化パス」の既知の閉包への特殊化を、S13e-1 として先に入れ、handler への特殊化と融合を同じパスに足す
 
 ### S13f std のデータ構造、診断、計測
@@ -267,9 +267,11 @@ UTF-8 の核の extern を入れ、標準ライブラリを広げる。`std/` �
   - `mask` 付きの呼び出しのたびに `evv_mask` が `evv` の節点を写して確保しないようにすること
   - 末尾の位置の `mask` 付きの呼び出しで、x を返すだけの `f$kN` を作らないこと
   - T3 で `ret` を上げた関数の遅い道で、ダミーの `0` を `box` しないこと
-- Perceus の最適化: reuse analysis (FBIP)、借用パラメータ。reuse analysis は S13e-4 で入れる (上の「S13e 特殊化と融合と reuse」)。どちらも LIR の上のパスで、消費しない `switch` と `release` の上に、IR を作り直さずに足す。reuse の確保の API と検査モードでの扱いは S9 で入れてある。足すときは次の約束を守る
-  - reuse は、`release` を `release_reuse` に、それが空けた箱を使う `con` を `con@token` に書き換えて入れる (Lorenzen と Leijen の drop-guided reuse と同じ方向)。共有の印の付いた物体は reuse しない (S9)。reuse のトークンは、継続が捕まえる値 (EP の後は継続のクロージャ) に入れない。入れると、複数回の再開が同じ箱に2つの値を作るためである
-  - 借用パラメータ: 1つの呼び出しでは、所有の引数を消費した後で借用の引数を確かめる。継続のクロージャが捕まえる値に借用の部分を含めない。借用のブロック引数は持ち主 (同じブロックの引数か関数の入口) を宣言し、verifier は辺ごとに確かめる
+- Perceus の最適化: reuse analysis (FBIP)、借用パラメータ。reuse analysis は S13e-4 で、関数の中で閉じた形を入れた ([LIR](../spec/lir.md) の「reuse」)。どちらも LIR の上のパスで、消費しない `switch` と `release` の上に、IR を作り直さずに足す。足すときは次の約束を守る
+  - reuse は、`release` と構築子の分かっている値の `decref` を token を定義する `release` に、それが空けた箱を使う `con` を token を受ける `con` に書き換える (Lorenzen と Leijen の drop-guided reuse と同じ方向)。共有の印の付いた物体は reuse しない (S9)。reuse の token は、継続が捕まえる値 (EP の後は継続のクロージャ) に入れない。入れると、複数回の再開が同じ箱に2つの値を作るためである。S13e-4 では、yield しうる呼び出しの前で token を消して守っている
+  - 関数をまたぐ reuse は残した。token を呼び出しの引数や戻り値で渡すことである。Okasaki の書き方の赤黒木 (`balance c l k r`) は、節を作るのが呼び出し先の `balance` なので、これが要る。今は token をフレームの中に限る (frame-limited reuse) ので、`ins` の token は `balance` への末尾呼び出しの前で消える
+  - 合流をまたぐ token も残した。token を `jump` の実引数で合流するブロックへ渡すことである。道によって空の token を作る定数と、ブロックの引数の検査が要る
+  - 借用パラメータ: 1つの呼び出しでは、所有の引数を消費した後で借用の引数を確かめる。借用の推論では、同じ配置の `con` を作る行き先を持つ `switch` の scrutinee を所有にする。借用にすると、その値の箱が reuse の元にならないためである。継続のクロージャが捕まえる値に借用の部分を含めない。借用のブロック引数は持ち主 (同じブロックの引数か関数の入口) を宣言し、verifier は辺ごとに確かめる
     - 所有の都合で `TailCall` を `let r = <呼び出し>` と `return r` に降格するのも、借用パラメータと一緒に入れる。今は `tail` の前に実引数をすべて所有にし、保持している変数をすべて手放す ([LIR](../spec/lir.md) の「持ち主を手放す時点」) ので、借用パラメータを入れるまで降格は起きない。Perceus は、終端を文と新しい終端に置き換える編集をその場でできる形にしてある
     - 降格は、末尾の位置の呼び出しの輪の上の `tail` には当てない ([LIR](../spec/lir.md) の「末尾の位置の呼び出し」)。借用の推論は、輪の上の `tail` が渡す引数の仮引数を所有にして、降格を避ける (Lean の `ownParamsUsingArgs`)。降格してよいのは、輪の上にない末尾呼び出しだけである
     - extern の行の、引数ごとの所有と借用の列は、S13f で `String.byte_at` のために先に入れる。ほかの extern の引数を借用にするのは、借用パラメータと一緒に行う
