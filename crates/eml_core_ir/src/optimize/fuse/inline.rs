@@ -50,7 +50,8 @@ struct Site {
 }
 
 /// `function` の直接の呼び出しのうち、展開できるものをすべて展開する。`functions` の呼び出し先は書き換えた後の
-/// コードで、`inlinable` はその関数を展開してよいかである。
+/// コードで、`chosen` は呼び出しの結果の変数と呼び出し先から、その呼び出しを展開してよいかを答える。何か展開したかを
+/// 返す。
 ///
 /// 展開する場所は、書き換える前の関数の文から先に決める。展開した本体の中の呼び出しは、呼び出し先を書き換えた
 /// ときに決めてあるので、ここでは見ない。そのため、ブロックの新しい番号も先に決まり、新しいブロックの列を1回で
@@ -63,12 +64,16 @@ struct Site {
 /// `return` は捨てる。元のブロックは元の順に並ぶので、辺はどれも番号の大きいブロックへ向かう
 /// (docs/spec/lir.md の「構造の規則」の R2)。extern の呼び出しは位置 (`at`) を持ったまま写すので、実行時エラーの
 /// 位置は変わらない。
-pub(super) fn inline_calls(function: &mut CoreFn, functions: &[CoreFn], inlinable: &[bool]) {
+pub(super) fn inline_calls(
+    function: &mut CoreFn,
+    functions: &[CoreFn],
+    chosen: &dyn Fn(VarId, FnIdx) -> bool,
+) -> bool {
     let sites: Vec<Vec<Site>> = (0..function.blocks.len())
-        .map(|block| sites(function, BlockId(block as u32), functions, inlinable))
+        .map(|block| sites(function, BlockId(block as u32), functions, chosen))
         .collect();
     if sites.iter().all(Vec::is_empty) {
-        return;
+        return false;
     }
     let mut starts = Vec::with_capacity(sites.len());
     let mut next = 0u32;
@@ -146,15 +151,21 @@ pub(super) fn inline_calls(function: &mut CoreFn, functions: &[CoreFn], inlinabl
     }
     debug_assert_eq!(out.len(), next as usize);
     function.blocks = out;
+    true
 }
 
 /// `block` の中で展開する呼び出し。
-fn sites(function: &CoreFn, block: BlockId, functions: &[CoreFn], inlinable: &[bool]) -> Vec<Site> {
+fn sites(
+    function: &CoreFn,
+    block: BlockId,
+    functions: &[CoreFn],
+    chosen: &dyn Fn(VarId, FnIdx) -> bool,
+) -> Vec<Site> {
     let stmts = &function.block(block).stmts;
     (0..stmts.len())
         .filter_map(|index| {
             let Stmt::Let {
-                var: _,
+                var,
                 rhs:
                     Rhs::Call {
                         call: Call::Direct(target, args),
@@ -165,7 +176,7 @@ fn sites(function: &CoreFn, block: BlockId, functions: &[CoreFn], inlinable: &[b
                 return None;
             };
             // `mask` は呼び出し先の本体のエフェクトに掛かるので、展開すると掛ける所がなくなる
-            if !mask.is_empty() || !inlinable[target.0 as usize] {
+            if !mask.is_empty() || !chosen(*var, *target) {
                 return None;
             }
             let callee = &functions[target.0 as usize];

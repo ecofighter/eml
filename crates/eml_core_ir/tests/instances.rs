@@ -600,7 +600,8 @@ fn instance_names_show_row_arguments() {
 fn a_top_level_function_in_a_once_field_lowers() {
     // `Task worker` の `worker` の型は一番外側の矢印が `once` で、`worker` のシグネチャの `Unr` と食い違う。参照の一番
     // 外側の矢印は参照ごとの変数なので、translate の参照の検査はそこを比べない (docs/spec/types.md の「トップレベルの関数の参照」)
-    let text = "data Task =\n  | Task (once Unit -> <IO> Unit)\n\nworker : Unit -> <IO> Unit\nworker () = println \"work\"\n\nget_worker : Unit -> (Unit -> <IO> Unit)\nget_worker () = worker\n\nmain : Unit -> <IO> Unit\nmain () =\n  match Task worker with\n    | Task f -> f ()\n  get_worker () ()";
+    // `Task worker` は `hide` を通して `match` に届けるので、`worker` は値のまま残る
+    let text = "data Box a = | Box a\n\nhide : Int -> a -> Box a\nhide n x = if n <= 0 then Box x else hide (n - 1) x\n\ndata Task =\n  | Task (once Unit -> <IO> Unit)\n\nworker : Unit -> <IO> Unit\nworker () = println \"work\"\n\nget_worker : Unit -> (Unit -> <IO> Unit)\nget_worker () = worker\n\nmain : Unit -> <IO> Unit\nmain () =\n  match hide 0 (Task worker) with\n    | Box (Task f) -> f ()\n  get_worker () ()";
     let program = eml_test_support::lir(text);
     let names: Vec<&str> = program
         .functions
@@ -610,5 +611,5 @@ fn a_top_level_function_in_a_once_field_lowers() {
         .collect();
     // `get_worker` と `main` は小さいので、呼ぶ側に展開されて残らない
     // (docs/superpowers/specs/2026-10-18-s13e-specialization-design.md の「インライン化」)
-    assert_eq!(names, ["worker"]);
+    assert_eq!(names, ["hide@[Task]", "worker"]);
 }

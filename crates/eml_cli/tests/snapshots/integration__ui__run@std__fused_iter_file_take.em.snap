@@ -1,0 +1,14 @@
+---
+source: crates/eml_cli/tests/ui.rs
+expression: "format!(\"--- stdout ---\\n{stdout}--- stderr ---\\n{diagnostics}{stderr}{written}{exit}\")"
+input_file: tests/ui/run/std/fused_iter_file_take.em
+---
+--- stdout ---
+one;two;
+4
+--- stderr ---
+--- written: lines.txt ---
+one
+two
+three
+four

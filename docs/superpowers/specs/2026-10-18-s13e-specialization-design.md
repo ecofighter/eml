@@ -59,7 +59,7 @@ S13e-2 の特殊化は、`Iter` 専用の見分け方にしない。意味の上
 |---|---|---|
 | S13e-1 | 最適化パスの骨組みと、既知の閉包への特殊化 | 上の表の上から4つのプログラムと `logstat` の形を `bench/` に入れ、`RunStats` の確保 (下の「`RunStats` に足す欄」)、`boxes`、`unboxes` が、手で特殊化した版と同じになる。`bench/run.sh` の命令数を記録する |
 | S13e-2 | handler への特殊化 | `Iter.generate` で引く形の `yields` が0になる。push の形の `evidence_steps` が0になる。直接のループとの実時間の差を記録する |
-| S13e-3 | インライン化、既知のコンストラクタの jump threading、`con` の値の形についての特殊化 | `Iter.generate` で引く形と `Iter.map` / `filter` を重ねた形で、1要素ごとの確保がなくなる (下の「`RunStats` に足す欄」で確かめる)。ロードマップの S13e の完了の条件「1要素ごとの yield と確保がなくなる」は、ここで満たす。S13e-1 の表のプログラムが、`RunStats` の RC の回数と `bench/run.sh` の命令数で、手で特殊化した版に届く |
+| S13e-3 | インライン化、既知のコンストラクタの jump threading、`con` の値の形についての特殊化 | `Iter.generate` を `Iter.fold` で引く形と、`Iter.map` を重ねた形で、1要素ごとの確保がなくなる (下の「`RunStats` に足す欄」で確かめる)。`Iter.filter` を重ねた形では、残した要素ごとに4つの確保が残り、融合の前の4分の1になる (下の「`con` の値の形についての特殊化」)。ロードマップの S13e の完了の条件「1要素ごとの yield と確保がなくなる」は、ここで満たす。S13e-1 の表のプログラムが、`RunStats` の RC の回数と `bench/run.sh` の命令数で、手で特殊化した版に届く |
 | S13e-4 | Perceus の reuse analysis | `list.em`、`tree.em`、`logstat` の形のプログラムで reuse の回数が出る。`logstat` を `bench/scripts.sh` で測り、S13e-3 の後の値と比べて記録する |
 
 S13e-2 の push の形について、直接のループに対する倍率の目標は置かない。差を記録し、残りの理由を `benchmarks.md` に書く (私の判断)。
@@ -225,6 +225,13 @@ S13e-1 の「既知」を、既知の閉包をフィールドに持つ `con` の
 2. `fold` をその形について特殊化し、`next` と、S13e-2 の後で再帰しなくなった `go{H}` をインライン化する。`Some (i, Iter (closure go{H}$h0(n, i)))` がその場で `match` され、既知のコンストラクタとして解ける
 3. 再帰の呼び出しの引数の形は `Iter (closure go{H}$h0(…))` で、要素ごとに同じなので、2つ目の複製に収まる。結果は `fold''(f, acc + i, n, i + 1)` のループで、1要素ごとの確保はない
 
+`Iter.map` を重ねた形も、`map` の閉包の複製を通して同じループに収まる。`Iter.filter` を重ねた形では、残した要素ごとに4つ (`Some`、組、`Iter`、閉包) の確保が残る (実装の結果)。`filter` が要素を飛ばすループ (`next (filter p rest)`) は、融合の後も自分を呼ぶ複製になる。再帰する関数は展開しないので、そのループが作って返す `Some ((x, Iter k))` は、相手の分からない呼ぶ側に届く。これをなくすには、再帰する呼び出し先の継続についての特殊化が要る。呼び出しの後の継続を関数に切り出し、再帰する呼び出し先をその継続について複製する形である。S13e では入れず、後に回した (ユーザーが 2026-10-19 に決めた。`docs/future/roadmap.md` の「Core IR の上の最適化パス」)。
+
+作る人が決めたことで、S13e-3 の文書の更新 (Task 4) に書くものは次のとおりである。
+
+- 書き換えで生まれた呼び出し (既知の閉包への `apply` を書き換えた呼び出しと、複製に向けた呼び出し) は、呼ぶ側で展開する。展開する回数は関数ごとに `MAX_INLINE_ROUNDS` (今は 8) 回までにする。展開した本体がまた既知の閉包への `apply` を持ち込むと、自分を引数に受けて呼ぶ閉包のような形で展開が終わらないためである。回数は関数のコードだけで決まるので、名前が同じ関数のコードは変わらない
+- `switch` で始まる合流のブロックへの jump threading は、`switch` の値をほかの行き先のブロックで使っていてもよい。行き先へ入る辺は `switch` の辺1本だけなので (`docs/spec/lir.md` の R3)、ほかの行き先の使いは合流のブロックを通る経路にしか現れない。translate がフィールドを束縛しない葉で `Unr` でない値を `drop` するので、`None` の葉が `Option` を捨てていても、`Some` の `con` を `jump` の側で解ける。選ばれる行き先の中で使うときは飛ばさない。ロードマップの規則 (「`p` をほかで使わず」) を広げたものである
+
 ### 止まること
 
 S13e-1 と同じく、鍵の入れ子の深さで打ち切る。インライン化は、呼ばれる関数から先に1回ずつ書き換え、展開した本体を展開し直さないので、深さの上限を置かなくても止まる (上の「インライン化」)。
@@ -287,6 +294,7 @@ S13e-1 と S13e-3 の確かめのため、S13e-1 で確保の回数 `allocations
 - 関数の ABI を名前で決めるようにしたので、ローカル関数、EP の `f$jJ`、S13e-2 の `f{H}$hjJ` と `<g>{k}` と末尾で呼ぶだけの `f{H}$hN` の表示から `internal` が外れ、ラムダの複製に `internal` が付く。直接呼ぶラムダは一様な引数を受ける。`crates/eml_core_ir/tests/instances.rs` の `a_closure_with_a_file_passed_as_a_type_variable_lowers` の一覧から、内部の関数になった複製が外れる
 - 小さな `main` は入口の関数に展開される。`main` や展開された関数の表示を見ていたテストは、入口の関数 (`entry$main`、REPL では `entry$input$N`) の表示を見る。展開と、使われない純粋な `let` の削除で、`optimize` の後の Core IR、LIR、関数の名前の一覧の期待値が変わる (`optimize.rs`、`instances.rs`、`session.rs`、`translate.rs` の `lower_until_stops_after_the_named_pass`、`crates/eml_test_support/tests/support.rs` の `lir_until_stops_after_the_named_pass` など)。`lower_until_stops_after_the_named_pass` の使われない `let` は、縮約より前に融合の段が消す
 - 既知のコンストラクタの規則 (その場で解くことと jump threading) と、解いたフィールドの既知の閉包への `apply` の書き換えで、`optimize` の後の Core IR と LIR の期待値が変わる (`optimize.rs` の `a_closure_only_stored_in_data_is_not_specialized`、`local_functions.rs` の `std_public_functions_keep_their_lir`)。`crates/eml_vm/tests/bench.rs` の `RunStats` も変わる。`fold_state`、`iter_pipeline` とその手で書いた版、`upsert` とその手で書いた版の確保と RC の回数が減る。`upsert` の2つは `unboxes` が増える。`Some v` を解くと、型変数のフィールドから取り出した値を `Int` として使う所が増え、box の挿入が case の行き先の先頭で `unbox` するためである。調べる値が解けるようになったテストは、確かめる内容を変えずに書き直した。値を `hide` に通したのは、`optimize.rs` の `a_constructor_value_becomes_a_con` と `crates/eml_vm/tests/scaling.rs` の `an_int_in_a_type_variable_field_is_boxed_and_unboxed` である。`optimize.rs` の `an_over_saturated_known_apply_calls_then_applies_the_rest` は、閉包を返す関数を自分を呼ぶ形 (`adder`) にした
+- `con` の値の形についての複製と、書き換えで生まれた呼び出しの展開で、`optimize` の後の Core IR と LIR の期待値が変わる (`optimize.rs` の `a_closure_only_stored_in_data_is_not_specialized` は `main$lambda0` が展開される)。`crates/eml_vm/tests/bench.rs` の `iter_generate`、`iter_pipeline` とその手で書いた版の `RunStats` も変わり、確保と RC と box の回数が減る。計画の `iter_pipeline_is_fused` は、`Iter.filter` の確保が残るので、成り立つことを確かめる `iter_pipeline_fuses_map_into_the_fold_and_generate_into_the_filter` に名前と中身を変えた (`Iter.fold` のループは `Iter` も `Option` も閉包も作らず、`Iter.filter` のループは `apply` をせずに `Some` を作る)。`bench.rs` の `iter_allocations_do_not_grow_with_the_input` は、`iter_pipeline` とその手で書いた版について確保が 200,100 以下であることを確かめる (ユーザーが 2026-10-19 に決めた)。`Iter` や閉包が消費する関数に届くようになったテストは、確かめる内容を変えずに書き直した。生産者か `Iter` を `hide` に通したのは、`optimize.rs` の3つ (`iter_generate_has_no_yield_left`、`a_continuation_captures_its_live_variables`、`a_closure_captured_by_a_closure_is_specialized`) と、`instances.rs` の `a_top_level_function_in_a_once_field_lowers` (`Task worker` を通す。関数の名前の一覧に `hide@[Task]` が加わる) である
 
 ### 足すテスト
 

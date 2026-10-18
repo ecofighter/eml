@@ -346,8 +346,10 @@ fn captures_become_parameters() {
 
 #[test]
 fn a_closure_captured_by_a_closure_is_specialized() {
-    let text = "main : Unit -> <IO> Unit\nmain () = println (show (Iter.to_list (Iter.map (fn x -> x + 1) (Iter.from_list [1, 2, 3]))))";
-    let shown = core_text(text, Pass::Optimize);
+    let text = format!(
+        "{HIDE}\nmain : Unit -> <IO> Unit\nmain () =\n  let Box it = hide 0 (Iter.from_list [1, 2, 3])\n  let Box mapped = hide 0 (Iter.map (fn x -> x + 1) it)\n  println (show (Iter.to_list mapped))"
+    );
+    let shown = core_text(&text, Pass::Optimize);
     insta::assert_snapshot!(function(&shown, "Std.Iter.map@[Int, Int]$lambda0{0=main$lambda0}"), @r#"
     internal fn "Std.Iter.map@[Int, Int]$lambda0{0=main$lambda0}"(it.1: obj lin, p.2: unit) -> tobj lin {
       unpack it.1 Std.Iter.Iter #0(pull.12: tobj lin)
@@ -422,7 +424,7 @@ main () =
     );
     insta::assert_snapshot!(function(&core_text(text, Pass::Optimize), "entry$main"), @r#"
     fn entry$main() -> unit {
-      let t.1: int = call main$lambda0(1)
+      let t.1: int = extern Prelude.+(1, 1)
       let t.2: obj = extern "Prelude.Show Int.show"(t.1)
       let t.3: unit = extern Prelude.println(t.2)
       return t.3
@@ -930,13 +932,19 @@ main () =
 }
 
 /// `k` を値として使う節は、継続の関数の閉包を `k` として受ける写し `<g>{k}` を末尾で呼ぶ形になり、`Iter.generate` で
-/// 引く形から yield が消える (docs/superpowers/specs/2026-10-18-s13e-specialization-design.md の「書き換え」)。
+/// 引く形から yield が消える (docs/superpowers/specs/2026-10-18-s13e-specialization-design.md の「書き換え」)。`Iter`
+/// は `hide` を通して `Iter.fold` に届けるので、融合 (S13e-3) で継続の関数が消えない。
 #[test]
 fn iter_generate_has_no_yield_left() {
-    let shown = core_text(
-        include_str!("../../../bench/iter_generate.em"),
-        Pass::Optimize,
+    let text = format!(
+        "{NUMS}{HIDE}
+main : Unit -> <IO> Unit
+main () =
+  let Box it = hide 0 (Iter.generate (nums 100000))
+  println \"\\{{Iter.fold (fn acc x -> acc + x) 0 it}}\"
+"
     );
+    let shown = core_text(&text, Pass::Optimize);
     assert!(
         shown
             .lines()
@@ -958,7 +966,7 @@ fn iter_generate_has_no_yield_left() {
 #[test]
 fn a_continuation_captures_its_live_variables() {
     let text = format!(
-        "{NUMS}\nmain : Unit -> <IO> Unit\nmain () = println (show (Iter.to_list (Iter.generate (nums 3))))\n"
+        "{NUMS}{HIDE}\nmain : Unit -> <IO> Unit\nmain () =\n  let Box it = hide 0 (Iter.generate (nums 3))\n  println (show (Iter.to_list it))\n"
     );
     let shown = core_text(&text, Pass::Optimize);
     let name = shown
@@ -1346,4 +1354,119 @@ main () =
         !main.contains("con (,)") && !main.contains("unpack "),
         "{main}"
     );
+}
+
+/// 自分を直接呼ぶ関数 (融合した後のループ) の表示。
+fn loops(text: &str) -> Vec<String> {
+    let program = eml_test_support::core_until(text, Pass::Optimize);
+    let shown = pretty(&program);
+    program
+        .functions
+        .iter()
+        .enumerate()
+        .filter(|(index, function)| {
+            function
+                .blocks
+                .iter()
+                .flat_map(|block| &block.stmts)
+                .any(|stmt| {
+                    matches!(stmt, Stmt::Let {
+                        var: _,
+                        rhs: Rhs::Call { call: Call::Direct(target, _), mask: _ },
+                    } if target.0 as usize == *index)
+                })
+        })
+        .map(|(_, function)| self::function(&shown, &function.name))
+        .collect()
+}
+
+/// 融合したループは、1要素ごとに `Iter` も `Option` も閉包も作らず、`apply` もしない
+/// (docs/spec/core-ir.md の「最適化」)。
+fn assert_fused(text: &str) {
+    let loops = loops(text);
+    assert!(
+        loops
+            .iter()
+            .any(|code| code.contains("fn \"Std.Iter.fold@")),
+        "{}",
+        core_text(text, Pass::Optimize)
+    );
+    for code in &loops {
+        for allocation in [
+            "con Std.Iter.Iter",
+            "con Prelude.Option",
+            "closure ",
+            "apply ",
+        ] {
+            assert!(!code.contains(allocation), "{allocation} in\n{code}");
+        }
+    }
+}
+
+/// `Iter.fold` は、`Iter.generate` が作る既知の `Iter` の形について複製され、要素ごとの確保のないループになる
+/// (docs/superpowers/specs/2026-10-18-s13e-specialization-design.md の「`con` の値の形についての特殊化」)。
+#[test]
+fn iter_fold_over_generate_is_fused() {
+    assert_fused(include_str!("../../../bench/iter_generate.em"));
+}
+
+/// `Iter.filter` と `Iter.map` を重ねた形では、`Iter.map` の段は `Iter.fold` のループに入り、ループは `Iter` も
+/// `Option` も閉包も作らない。`Iter.generate` は `Iter.filter` が要素を飛ばすループに入り、そのループは `apply` を
+/// しない。そのループは再帰するので展開されず、残した要素ごとに `Some` を作って返す。これをなくす継続についての
+/// 特殊化は後に回した (docs/superpowers/specs/2026-10-18-s13e-specialization-design.md の「`con` の値の形についての
+/// 特殊化」)。
+#[test]
+fn iter_pipeline_fuses_map_into_the_fold_and_generate_into_the_filter() {
+    let text = include_str!("../../../bench/iter_pipeline.em");
+    let loops = loops(text);
+    let named = |prefix: &str| {
+        loops
+            .iter()
+            .find(|code| code.contains(&format!("fn \"{prefix}")))
+            .unwrap_or_else(|| panic!("no {prefix} loop in\n{}", core_text(text, Pass::Optimize)))
+    };
+    let fold = named("Std.Iter.fold@");
+    assert!(fold.contains("extern Prelude.*("), "{fold}");
+    for allocation in ["con Std.Iter.Iter", "con Prelude.Option", "closure "] {
+        assert!(!fold.contains(allocation), "{allocation} in\n{fold}");
+    }
+    let filter = named("Std.Iter.filter@");
+    assert!(!filter.contains("apply "), "{filter}");
+    assert!(filter.contains("con Prelude.Option"), "{filter}");
+}
+
+/// 融合した複製の名前とコードは鍵だけで決まり、ほかの関数の有無によらない (docs/spec/vm.md の「追記」)。
+#[test]
+fn fusion_does_not_depend_on_the_rest_of_the_program() {
+    let a = format!(
+        "{NUMS}
+main : Unit -> <IO> Unit
+main () = println (show (Iter.fold (fn acc x -> acc + x) 0 (Iter.generate (nums 10))))
+"
+    );
+    let b = format!(
+        "{NUMS}
+evens : Int -> Unit -> <Yield Int> Unit
+evens n () =
+  let go i =
+    if i > n then ()
+    else
+      yield (i * 2)
+      go (i + 1)
+  go 1
+
+main : Unit -> <IO> Unit
+main () =
+  println (show (Iter.fold (fn acc x -> acc + x) 0 (Iter.generate (nums 10))))
+  println (show (Iter.fold (fn acc x -> acc + x) 0 (Iter.generate (evens 10))))
+"
+    );
+    let shown = core_text(&a, Pass::Optimize);
+    let fused = loops(&a);
+    let [code] = &fused[..] else {
+        panic!("{shown}");
+    };
+    let name = code.split('"').nth(1).unwrap_or_else(|| panic!("{code}"));
+    assert!(name.starts_with("Std.Iter.fold@"), "{code}");
+    assert_eq!(*code, function(&core_text(&b, Pass::Optimize), name));
 }

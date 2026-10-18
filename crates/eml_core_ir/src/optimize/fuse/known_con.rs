@@ -32,7 +32,7 @@ pub(super) fn known_cons(function: &CoreFn) -> HashMap<VarId, (Ctor, Vec<Atom>)>
 }
 
 /// 変数ごとの、値として使う所の数。
-fn uses(function: &CoreFn) -> Vec<usize> {
+pub(super) fn uses(function: &CoreFn) -> Vec<usize> {
     let mut uses = vec![0usize; function.vars.len()];
     let mut count = |atom: Atom| {
         if let Atom::Var(var) = atom {
@@ -245,7 +245,8 @@ fn drop_cons(function: &mut CoreFn, opened: &HashSet<VarId>) {
 
 /// 合流のブロック `M(p…)` の始まりの形。
 enum Entry {
-    /// 文を持たず、`i` 番目の引数で分ける `switch` で終わる。ほかの引数は使われない。
+    /// 文を持たず、`i` 番目の引数で分ける `switch` で終わる。ほかの引数は使われない。`i` 番目の引数は、`switch` の
+    /// ほかに行き先のブロックで使われていてもよい (`thread_switch`)。
     Switch(usize),
     /// `i` 番目の引数の `unpack` で始まる。
     Unpack(usize),
@@ -260,7 +261,10 @@ fn entry(uses: &[usize], block: &Block) -> Option<Entry> {
     };
     match (&block.stmts[..], &block.term) {
         ([], Term::Switch { scrutinee, .. }) => {
-            let position = only_use(*scrutinee)?;
+            let Atom::Var(scrutinee) = *scrutinee else {
+                return None;
+            };
+            let position = block.params.iter().position(|&param| param == scrutinee)?;
             let others_unused = block
                 .params
                 .iter()
@@ -359,6 +363,9 @@ fn thread_switch(
     if con.is_none() && !fields.is_empty() {
         return None;
     }
+    if !scrutinee_skipped(function, uses, target, chosen) {
+        return None;
+    }
     // フィールドを持たない行き先へ進む `con` は、引数を捨てる (`opens`)
     if fields.is_empty() && values.iter().any(|&value| non_unr(function, value)) {
         return None;
@@ -431,6 +438,52 @@ fn thread_switch(
         },
         con,
     ))
+}
+
+/// `jump` が `M` の `switch` を飛ばして `chosen` の本体へ進むとき、`switch` の値を使う所がほかの行き先のブロックに
+/// しかないか。行き先へ入る辺は `switch` の辺1本だけなので (docs/spec/lir.md の「構造の規則」の R3)、ほかの行き先の
+/// 使いは `M` を通る経路にしか現れない。translate はフィールドを束縛しない葉で `Unr` でない値を `drop` するので
+/// (docs/spec/core-ir.md)、`None` の葉が `Option` の値を捨てていても `Some` の `con` を `jump` の側で解けるように、
+/// ほかの行き先の使いは許す。
+fn scrutinee_skipped(function: &CoreFn, uses: &[usize], target: usize, chosen: BlockId) -> bool {
+    let block = &function.blocks[target];
+    let Term::Switch {
+        scrutinee: Atom::Var(scrutinee),
+        cases,
+        default,
+        ..
+    } = &block.term
+    else {
+        return false;
+    };
+    let mut targets: Vec<BlockId> = cases
+        .iter()
+        .map(|case| case.target)
+        .chain(*default)
+        .collect();
+    targets.sort_unstable_by_key(|target| target.0);
+    targets.dedup();
+    let mut elsewhere = 0;
+    for other in targets {
+        let used = uses_in(&function.blocks[other.0 as usize], *scrutinee);
+        if other == chosen && used > 0 {
+            return false;
+        }
+        elsewhere += used;
+    }
+    uses[scrutinee.0 as usize] == 1 + elsewhere
+}
+
+/// ブロックの文と終端が `var` を使う数。
+fn uses_in(block: &Block, var: VarId) -> usize {
+    let mut count = 0;
+    let mut add = |atom: Atom| count += usize::from(atom == Atom::Var(var));
+    block
+        .stmts
+        .iter()
+        .for_each(|stmt| stmt.for_each_atom(&mut add));
+    block.term.for_each_atom(&mut add);
+    count
 }
 
 /// `unpack` で始まる `M` への `jump` を、`unpack` の後ろの部分へつなぐ。
@@ -648,8 +701,9 @@ fn insert_after(function: &mut CoreFn, added: Vec<(usize, Block)>) {
 /// 既知の閉包への `apply` を直接の呼び出しにする (docs/superpowers/specs/2026-10-18-s13e-specialization-design.md
 /// の「書き換え」)。解いた `con` のフィールドを置き換えると、`closure` で束縛した変数や関数の値への `apply` が新しく
 /// 現れるためである。`Unr` でない閉包は、使う所がすべて書き換わるときだけ書き換える。書き換えない使う所が残ると、
-/// 捕獲した値を閉包と直接の呼び出しの2か所で消費するためである (S13e-1 と同じ規則)。何か書き換えたかを返す。
-pub(super) fn call_known_closures(function: &mut CoreFn, callees: &[Callee]) -> bool {
+/// 捕獲した値を閉包と直接の呼び出しの2か所で消費するためである (S13e-1 と同じ規則)。書き換えた文の数と、書き換えで
+/// 生まれた直接の呼び出しの結果の変数を返す。生まれた呼び出しは、呼ぶ側がインライン化の候補にする。
+pub(super) fn call_known_closures(function: &mut CoreFn, callees: &[Callee]) -> (bool, Vec<VarId>) {
     let closures = known_closures(function);
     let mut total: HashMap<VarId, usize> = HashMap::new();
     let mut applied: HashMap<VarId, Vec<bool>> = HashMap::new();
@@ -697,6 +751,7 @@ pub(super) fn call_known_closures(function: &mut CoreFn, callees: &[Callee]) -> 
         })
         .collect();
     let mut changed = false;
+    let mut produced = Vec::new();
     for block in &mut function.blocks {
         if !block.stmts.iter().any(|stmt| applies_known(stmt, &known)) {
             continue;
@@ -712,6 +767,17 @@ pub(super) fn call_known_closures(function: &mut CoreFn, callees: &[Callee]) -> 
             match replaced {
                 Some(stmts) => {
                     changed = true;
+                    produced.extend(stmts.iter().filter_map(|stmt| match stmt {
+                        Stmt::Let {
+                            var,
+                            rhs:
+                                Rhs::Call {
+                                    call: Call::Direct(_, _),
+                                    mask: _,
+                                },
+                        } => Some(*var),
+                        _ => None,
+                    }));
                     out.extend(stmts);
                 }
                 None => out.push(stmt),
@@ -719,7 +785,7 @@ pub(super) fn call_known_closures(function: &mut CoreFn, callees: &[Callee]) -> 
         }
         block.stmts = out;
     }
-    changed
+    (changed, produced)
 }
 
 /// 既知の閉包か関数の値への `apply` か。

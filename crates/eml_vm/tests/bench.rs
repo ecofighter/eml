@@ -218,14 +218,30 @@ fn iter_generate() {
         unwound_frames: 0,
         string_bytes_copied: 10,
         rc_increments: 0,
-        rc_decrements: 400003,
-        boxes: 200001,
-        unboxes: 300001,
-        allocations: 400004,
-        peak_objects: 5,
-        peak_stack: 22,
+        rc_decrements: 1,
+        boxes: 0,
+        unboxes: 0,
+        allocations: 2,
+        peak_objects: 2,
+        peak_stack: 15,
     }
     ");
+}
+
+/// S13e-3 の完了の条件 (docs/superpowers/specs/2026-10-18-s13e-specialization-design.md の「作業の分け方と完了の
+/// 条件」)。`Iter.generate` を `Iter.fold` で引く形は、融合で1要素ごとの確保がなくなり、確保の数は入力の 10 万要素に
+/// 比例しない。`Iter.filter` を重ねた形は、残した要素ごとに4つを確保する。`filter` が要素を飛ばすループは再帰する
+/// 複製になり、作った `Some ((x, Iter k))` を相手の分からない呼ぶ側へ返すためである。これをなくすには再帰する
+/// 呼び出し先の継続についての特殊化が要り、後に回した (ユーザーが決めた)。ここでは、融合の前の 800008 の4分の1に
+/// 減ったことを固定する。
+#[test]
+fn iter_allocations_do_not_grow_with_the_input() {
+    let generate = stats("iter_generate", "5000050000\n");
+    assert!(generate.allocations < 1000, "{generate:?}");
+    for name in ["iter_pipeline", "iter_pipeline_by_hand"] {
+        let stats = stats(name, "166671666700000\n");
+        assert!(stats.allocations <= 200_100, "{name}: {stats:?}");
+    }
 }
 
 /// S13e-2 の完了の条件。特殊化した `Iter.generate` は、1要素ごとに `k`、`Iter`、組、`Some` の4つを確保する。残りは
@@ -262,12 +278,12 @@ fn iter_pipeline() {
         unwound_frames: 0,
         string_bytes_copied: 15,
         rc_increments: 0,
-        rc_decrements: 800007,
-        boxes: 250001,
-        unboxes: 400001,
-        allocations: 800008,
-        peak_objects: 9,
-        peak_stack: 37,
+        rc_decrements: 200001,
+        boxes: 150001,
+        unboxes: 250000,
+        allocations: 200002,
+        peak_objects: 5,
+        peak_stack: 26,
     }
     ");
 }
@@ -282,12 +298,12 @@ fn iter_pipeline_by_hand() {
         unwound_frames: 0,
         string_bytes_copied: 15,
         rc_increments: 0,
-        rc_decrements: 800007,
-        boxes: 250001,
-        unboxes: 400001,
-        allocations: 800008,
-        peak_objects: 9,
-        peak_stack: 37,
+        rc_decrements: 200001,
+        boxes: 150001,
+        unboxes: 250000,
+        allocations: 200002,
+        peak_objects: 5,
+        peak_stack: 26,
     }
     ");
 }

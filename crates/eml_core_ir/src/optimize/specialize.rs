@@ -8,7 +8,7 @@ use std::collections::HashMap;
 use super::known::{self, Callee, KnownClosure};
 use crate::fnv::Fnv;
 use crate::{Call, CoreFn, Program, Rhs, Stmt};
-use eml_lir::{Atom, FnIdx, Mark, Repr, VarId, VarInfo};
+use eml_lir::{Atom, Ctor, FnIdx, Layout, Mark, Repr, VarId, VarInfo};
 
 /// 鍵の入れ子の深さの上限。特殊化で生まれた閉包をまた鍵にする連鎖 (CPS 風に閉包が育つ形) を、ここで打ち切る。
 pub(crate) const MAX_KEY_DEPTH: usize = 4;
@@ -25,13 +25,45 @@ pub(crate) struct ClosureShape {
     pub(crate) captures: Vec<(Repr, Mark)>,
 }
 
+/// 鍵の位置が受け取る既知の値の形。S13e-1 は閉包だけを、融合の段は既知の閉包をフィールドに持つ `con` も鍵にする
+/// (docs/superpowers/specs/2026-10-18-s13e-specialization-design.md の「`con` の値の形についての特殊化」)。
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub(crate) enum ArgShape {
+    Closure(ClosureShape),
+    Con { ctor: Ctor, fields: Vec<FieldShape> },
+}
+
+/// `con` の形のフィールド。閉包でないフィールドは値のまま複製の引数にする。その Repr は配置のフィールドの Repr で、
+/// 印は `unr` に限る。どちらもコンストラクタで決まるので、名前に `_` と書くだけで鍵が区別できる。
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub(crate) enum FieldShape {
+    Closure(ClosureShape),
+    Value(Repr, Mark),
+}
+
+impl ArgShape {
+    /// 形が含む閉包の形。
+    pub(crate) fn closures(&self) -> Vec<&ClosureShape> {
+        match self {
+            ArgShape::Closure(shape) => vec![shape],
+            ArgShape::Con { ctor: _, fields } => fields
+                .iter()
+                .filter_map(|field| match field {
+                    FieldShape::Closure(shape) => Some(shape),
+                    FieldShape::Value(_, _) => None,
+                })
+                .collect(),
+        }
+    }
+}
+
 /// 複製の鍵。`args` は特殊化する引数の位置の昇順に並ぶ。`owner` は、複製の中の handle の節の関数を複製するときの、
 /// その複製の名前である。
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub(crate) struct Key {
-    callee: FnIdx,
-    args: Vec<(usize, ClosureShape)>,
-    owner: Option<String>,
+    pub(crate) callee: FnIdx,
+    pub(crate) args: Vec<(usize, ArgShape)>,
+    pub(crate) owner: Option<String>,
 }
 
 impl Key {
@@ -44,7 +76,7 @@ impl Key {
             callee,
             args: plan
                 .iter()
-                .map(|(position, shape, _)| (*position, shape.clone()))
+                .map(|(position, shape, _)| (*position, ArgShape::Closure(shape.clone())))
                 .collect(),
             owner,
         }
@@ -54,6 +86,7 @@ impl Key {
 /// 書き換えが複製を頼む相手。translate の出力を凍らせて持ち、複製をいつもそこから作る。
 pub(crate) struct Specializer {
     translated: Vec<CoreFn>,
+    layouts: Vec<Layout>,
     /// 関数ごとの表。添字は `FnIdx` で、複製を作るたびに後ろに足す。
     pub(crate) callees: Vec<Callee>,
     /// translate の関数ごとの、引数を特殊化してよい位置 (`passed_params`)。
@@ -94,6 +127,7 @@ impl Specializer {
             .collect();
         Specializer {
             translated: program.functions.clone(),
+            layouts: program.layouts.clone(),
             depths: vec![0; callees.len()],
             callees,
             passed,
@@ -155,6 +189,9 @@ impl Specializer {
                 params.push(param);
                 continue;
             };
+            let ArgShape::Closure(shape) = shape else {
+                unreachable!("S13e-1 keys hold only closures");
+            };
             let limit = function.mark(param);
             let names = &self.callees[shape.function.0 as usize].params;
             let captures = shape
@@ -192,40 +229,66 @@ impl Specializer {
 
     /// 1 に、鍵の閉包の関数のうち複製であるものの深さの最大を足した値。
     pub(crate) fn key_depth(&self, key: &Key) -> usize {
-        1 + key
-            .args
-            .iter()
-            .map(|(_, shape)| self.depths[shape.function.0 as usize])
-            .max()
-            .unwrap_or(0)
+        key_depth(&self.depths, key)
     }
 
-    /// `<callee>{<i>=<closure fn>/<captures>, …}`。捕獲のない閉包は `/<captures>` を省く。handle の節の複製は
-    /// `<callee>@{…} via <owner>` である。上限を超えた名前は、呼び出し先の `@` より前の部分に、名前全体のハッシュを
-    /// 付けた `<base>@#<16 hex>` にする。
-    ///
-    /// 捕獲の Repr と印は閉包の関数と捕獲の数で決まるので (`shape`)、名前は鍵を区別する。同じ関数の部分適用でも、
-    /// 捕獲の数が違えば複製の引数が違う。数を書かないと、同じ名前の関数が2つできる (docs/spec/vm.md の「追記」)。
     pub(crate) fn copy_name(&self, key: &Key) -> String {
-        let callee = &self.callees[key.callee.0 as usize].name;
-        let args: Vec<String> = key
-            .args
-            .iter()
-            .map(|(position, shape)| {
-                let function = &self.callees[shape.function.0 as usize].name;
-                match shape.captures.len() {
-                    0 => format!("{position}={function}"),
-                    count => format!("{position}={function}/{count}"),
-                }
-            })
-            .collect();
-        let args = args.join(", ");
-        let name = match &key.owner {
-            None => format!("{callee}{{{args}}}"),
-            Some(owner) => format!("{callee}@{{{args}}} via {owner}"),
-        };
-        limited(callee, name)
+        copy_name(&self.callees, &self.layouts, key)
     }
+}
+
+/// 1 に、鍵の閉包の関数の深さ (`depths`) の最大を足した値。`con` の形の閉包も、閉包の形と同じに数える。
+pub(crate) fn key_depth(depths: &[usize], key: &Key) -> usize {
+    1 + key
+        .args
+        .iter()
+        .flat_map(|(_, shape)| shape.closures())
+        .map(|shape| depths[shape.function.0 as usize])
+        .max()
+        .unwrap_or(0)
+}
+
+/// `<callee>{<i>=<closure fn>/<captures>, …}`。捕獲のない閉包は `/<captures>` を省く。`con` の形は
+/// `<配置> #<タグ>(<フィールド>, …)` で、フィールドは閉包の形か、値のまま渡すフィールドの `_` である。handle の節の
+/// 複製は `<callee>@{…} via <owner>` である。上限を超えた名前は、呼び出し先の `@` より前の部分に、名前全体のハッシュを
+/// 付けた `<base>@#<16 hex>` にする。
+///
+/// 捕獲の Repr と印は閉包の関数と捕獲の数で決まり (`Specializer::shape`)、値のフィールドの Repr と印はコンストラクタで
+/// 決まるので、名前は鍵を区別する。同じ関数の部分適用でも、捕獲の数が違えば複製の引数が違う。数を書かないと、同じ
+/// 名前の関数が2つできる (docs/spec/vm.md の「追記」)。
+pub(crate) fn copy_name(callees: &[Callee], layouts: &[Layout], key: &Key) -> String {
+    let closure = |shape: &ClosureShape| {
+        let function = &callees[shape.function.0 as usize].name;
+        match shape.captures.len() {
+            0 => function.clone(),
+            count => format!("{function}/{count}"),
+        }
+    };
+    let callee = &callees[key.callee.0 as usize].name;
+    let args: Vec<String> = key
+        .args
+        .iter()
+        .map(|(position, shape)| match shape {
+            ArgShape::Closure(shape) => format!("{position}={}", closure(shape)),
+            ArgShape::Con { ctor, fields } => {
+                let fields: Vec<String> = fields
+                    .iter()
+                    .map(|field| match field {
+                        FieldShape::Closure(shape) => closure(shape),
+                        FieldShape::Value(_, _) => "_".to_string(),
+                    })
+                    .collect();
+                let layout = &layouts[ctor.layout.0 as usize].name;
+                format!("{position}={layout} #{}({})", ctor.tag, fields.join(", "))
+            }
+        })
+        .collect();
+    let args = args.join(", ");
+    let name = match &key.owner {
+        None => format!("{callee}{{{args}}}"),
+        Some(owner) => format!("{callee}@{{{args}}} via {owner}"),
+    };
+    limited(callee, name)
 }
 
 /// 上限を超えた複製の名前 `name` を、呼び出し先 `callee` の名前の `@` より前の部分に、`name` 全体のハッシュを付けた
