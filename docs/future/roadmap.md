@@ -16,7 +16,7 @@
 
 | 段 | 中身 | 前提 | 完了の条件 |
 |---|---|---|---|
-| S13 実例による判断 | Kind の記法、std のエフェクトと `Iter`、中断の巻き戻し、row の最小の具体化、特殊化と融合と reuse、std のデータ構造と診断と計測 | S12 | 下の「S13 実例による判断」の S13a〜S13f の完了の条件。S13a〜S13d は済み |
+| S13 実例による判断 | Kind の記法、std のエフェクトと `Iter`、中断の巻き戻し、row の最小の具体化、特殊化と融合と reuse、std のデータ構造と診断と計測 | S12 | 下の「S13 実例による判断」の S13a〜S13f の完了の条件。S13a〜S13d と S13e-1 は済み |
 
 S13 の後は、言語の項目を次の順に並べる。
 
@@ -49,7 +49,7 @@ S12d の5本のスクリプトの書き心地と、その後の議論と試作 (
 | S13b | `mask` を位置つきにして E2008 をなくすこと。std のエフェクト `Yield`、`Fail`、`State` と、その handler、引いて使うジェネレータ `Iter`、`Fs.read_line`。`k` を書かない節、ローカル関数どうしの相互再帰 | 済み。決めたことは [エフェクトと handler](../spec/effects.md)、[型と Kind](../spec/types.md)、[式](../spec/expressions.md)、[標準ライブラリ](../spec/stdlib.md)、[オブジェクトモデル](../spec/object-model.md) にあり、スクリプトの計測は [計測の基準](../implementation/benchmarks.md) の「S13b (スクリプト)」にある |
 | S13c | 中断を巻き戻しで行うこと、`IO` と `never` の操作を yield の地点から外すこと、節の間の `evv` の付け替え (under)、戻らない呼び出しで終わる経路での `Lin` の値の暗黙の後始末 | 済み。決めたことは [線形性](../spec/linearity.md)、[エフェクトと handler](../spec/effects.md)、[型と Kind](../spec/types.md)、[Core IR](../spec/core-ir.md)、[LIR](../spec/lir.md)、[VM](../spec/vm.md) にあり、計測は [計測の基準](../implementation/benchmarks.md) の「S13c」にある |
 | S13d | row の最小の具体化 | 済み。決めたことは [型と Kind](../spec/types.md)、[エフェクトと handler](../spec/effects.md)、[式](../spec/expressions.md) にあり、残した制限は [実装の現在地](../implementation/status.md) の「型と row の推論」に、計測は [計測の基準](../implementation/benchmarks.md) の「S13d」にある |
-| S13e | 既知の閉包への特殊化、handler への特殊化 (`Iter` の状態機械を含む)、インライン化と融合、Perceus の reuse analysis。S13e-1〜S13e-4 の4つに分けて順に進める | 末尾再帰の生産者を `Iter` で引く計測で、1要素ごとの yield と確保がなくなる。直接のループとの実時間の差を [計測の基準](../implementation/benchmarks.md) に記録する。4つの作業ごとの条件は下の「S13e 特殊化と融合と reuse」にある |
+| S13e | 既知の閉包への特殊化、handler への特殊化 (`Iter` の状態機械を含む)、インライン化と融合、Perceus の reuse analysis。S13e-1〜S13e-4 の4つに分けて順に進める | 末尾再帰の生産者を `Iter` で引く計測で、1要素ごとの yield と確保がなくなる。直接のループとの実時間の差を [計測の基準](../implementation/benchmarks.md) に記録する。4つの作業ごとの条件は下の「S13e 特殊化と融合と reuse」にある。S13e-1 は済み |
 | S13f | std の `Map`、並べ替え、リストの関数、診断の改善、`String.byte_at` の借用、数値計算の計測 | `logstat` が std の `Map` と並べ替えを使う。S12d で挙げた診断の3つが直る。数値計算の計測が Python の版と一緒に `bench/scripts.sh` で動く |
 
 この順にしたのは次の理由による。
@@ -67,7 +67,7 @@ S12d の5本のスクリプトの書き心地と、その後の議論と試作 (
 
 | 作業 | 中身 | 完了の条件 |
 |---|---|---|
-| S13e-1 | 最適化パスの骨組みと、既知の閉包への特殊化。既知の閉包への `apply` を `call` にし、既知の閉包を受ける関数と閉包を、捕獲を引数に開いた複製にする | 実用の形の計測 (高階関数にラムダを渡すリストの集計、push の `Yield.fold`、`Iter` を重ねた形、総称な木の `fold`、`logstat` の `upsert` と `sort_by`) を `bench/` に入れ、`RunStats` の確保と `box` / `unbox` の回数が、手で特殊化した版と同じになる |
+| S13e-1 | 最適化パスの骨組みと、既知の閉包への特殊化。既知の閉包への `apply` を `call` にし、既知の閉包を受ける関数と閉包を、捕獲を引数に開いた複製にする | 済み。決めたこと (鍵と名前、決定性、包む関数、handle の節の複製、`yields` の付け直し) は [Core IR](../spec/core-ir.md) の「最適化」にあり、残した制限は [実装の現在地](../implementation/status.md) の「深さと性能」に、計測は [計測の基準](../implementation/benchmarks.md) の「S13e-1」にある |
 | S13e-2 | handler への特殊化。届く先が静的に分かる `perform` を、handler ごとの経路の関数の複製の中で、節の直接の実行に置き換える。`k` をデータに入れて返す節 (`Iter.generate`) と、すぐに再開する節 (状態つきを含む) を対象にする | `Iter.generate` で引く形の `yields` と、push の形の `evidence_steps` が0になる。直接のループとの実時間の差を記録する |
 | S13e-3 | インライン化、既知のコンストラクタの jump threading、既知の閉包をフィールドに持つ `con` の値の形についての特殊化 (生産者と消費者の融合) | `Iter.generate` で引く形と `Iter.map` / `filter` を重ねた形で、1要素ごとの確保がなくなる。S13e-1 の計測が、RC の回数と命令数で手で特殊化した版に届く |
 | S13e-4 | Perceus の reuse analysis (drop-guided reuse と、同じコンストラクタの作り直しのその場の書き換え) | `list.em`、`tree.em`、`logstat` の形で reuse が出る。`logstat` を `bench/scripts.sh` で測り、S13e-3 の後と比べて記録する |
@@ -258,7 +258,7 @@ UTF-8 の核の extern を入れ、標準ライブラリを広げる。`std/` �
   - ネイティブのコードの中で起きた実行時エラーを、評価全体の中断にする方法は未設計である。旗を立てて戻る方式は効果を持たない関数にも確認を足し、巻き戻しは Cranelift のコードに展開情報を要する。中断と同じ呼び出しの位置ごとの表で巻き戻す形が候補になる
   - extern の C ABI の入口 (`extern "C"`) は、この項目で足す。今の extern は、引数がどれも 64 ビットの語で数が決まっているので、そのまま移せる。Host と読み手は panic しうるので、入口で `catch_unwind` する。`extern "C"` を越える panic はプロセスを落とすためである。`Fault` を `Ctx` の欄に置いて状態の語を返す形にするかは、`Ctx` の配置 (yield の状態は `#[repr(C)]`) の決まりと一緒に決める ([オブジェクトモデル](../spec/object-model.md) の「extern」)
   - 定数の静的なデータは、凍結した領域と同じ約束 (rc 0、書き込まない、検査ビルドでは前置きを持つ) に乗る ([オブジェクトモデル](../spec/object-model.md) の「凍結した領域」)。検査モードの範囲の確かめのようにページの頭を読む道は、起動時に `freeze` で定数を作る形か、静的なデータに容量を持たせる形で扱う
-- Core IR の上の最適化パス: 引数が定数の関数の特殊化、純粋な extern の定数畳み込み。既知の閉包への `apply` を `call` に置き換えることと既知の閉包への特殊化は、S13e-1 で入れる (上の「S13e 特殊化と融合と reuse」)。EP より前の Core IR に置き、関数単位の作業リストで動かす。枝の部分木を置き換えると、S3b-1 までの `simplify` のように長い `else if` の連鎖で2乗の時間がかかるためである。CPS のラムダの位置の変換 (試作で 200,125 回) は、既知の閉包への特殊化で減らす。Repr が同じ instance (`List Int` と `List String` の instance など、同じ形のコードになるもの) をまとめるのも、このパスに置く ([Core IR](../spec/core-ir.md) の「変換の規則」)
+- Core IR の上の最適化パス: 引数が定数の関数の特殊化、純粋な extern の定数畳み込み。既知の閉包への `apply` を `call` に置き換えることと既知の閉包への特殊化は、S13e-1 で入れた (上の「S13e 特殊化と融合と reuse」と [Core IR](../spec/core-ir.md) の「最適化」)。EP より前の Core IR に置き、関数単位の作業リストで動かす。枝の部分木を置き換えると、S3b-1 までの `simplify` のように長い `else if` の連鎖で2乗の時間がかかるためである。CPS のラムダの位置の変換 (試作で 200,125 回) は、既知の閉包への特殊化で減らす。Repr が同じ instance (`List Int` と `List String` の instance など、同じ形のコードになるもの) をまとめるのも、このパスに置く ([Core IR](../spec/core-ir.md) の「変換の規則」)
 - evidence passing の最適化 ([Core IR](../spec/core-ir.md) の「evidence passing」)。どれも EP と実行時の中に閉じ、型検査と translate は変わらない
   - evidence を探す場所ごとのキャッシュと、閉じた row の静的な添字。今は `ev_lookup` が `evv` を先頭から探し、費用は今有効な handler の数に比例する。`evv` は書き換えないので、場所ごとのキャッシュを足せる。静的な添字は Koka の open の包みを要し、包みが部分ベクタを確保して末尾呼び出しを失うので、目立ったときに採るかを決める
   - yield しうる外のエフェクトを呼ぶすぐに再開する節を、その場で実行する形 (論文の under)。yield しない外のエフェクト (`IO` と `never` の操作) を呼ぶ節は、S13c から、節の実行中だけ `evv` を外側に替える under の形でその場で動く ([Core IR](../spec/core-ir.md) の「`perform` と節の3つの形」)。yield しうるエフェクトを呼ぶ節には、yield したら `evv` を替え直す包みと、再開で作り直した evidence を探し直す仕組みが要る。S13d に入る前の計測 (上の「判断の材料」) では、`Yield a` を `Yield b` に変える handler の `yield` の節が、外側の handler の節がその場で動く場合でも1要素ごとに yield した。節の本体の `yield` が外側の操作を起こすためで、S13d の row の具体化の後も消えなかった ([計測の基準](../implementation/benchmarks.md) の「S13d」)。S13 の段に入れるかは、S13d を終えた後に決める。中断は S13c から継続を組み立てずに巻き戻すので、中断のための最適化は残っていない

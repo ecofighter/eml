@@ -434,3 +434,30 @@ fn allocations_are_counted_in_checked_mode() {
     let stats = stats("list", "10000100000\n");
     assert!(stats.allocations >= 200_000, "{stats:?}");
 }
+
+/// S13e-1 の完了の条件 (docs/superpowers/specs/2026-10-18-s13e-specialization-design.md の「作業の分け方と完了の条件」)。
+/// 既知の閉包を渡す版と手で特殊化した版で、確保と `box` / `unbox` の回数が同じになる。RC の回数は、本体を埋め込む
+/// S13e-3 で揃えるので、ここでは比べない。
+#[test]
+fn specialization_matches_hand_written_work() {
+    let pairs = [
+        ("orders", "orders_by_hand", "150308561\n"),
+        ("push_fold", "push_fold_by_hand", "5000050000\n"),
+        (
+            "iter_pipeline",
+            "iter_pipeline_by_hand",
+            "166671666700000\n",
+        ),
+        ("tree", "tree_by_hand", "14898 7454478318\n"),
+        ("upsert", "upsert_by_hand", "2000 k1182 23\n"),
+    ];
+    for (name, by_hand, output) in pairs {
+        let written = stats(name, output);
+        let hand = stats(by_hand, output);
+        assert_eq!(
+            (written.allocations, written.boxes, written.unboxes),
+            (hand.allocations, hand.boxes, hand.unboxes),
+            "{name} against {by_hand}: (allocations, boxes, unboxes)"
+        );
+    }
+}

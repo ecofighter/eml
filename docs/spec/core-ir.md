@@ -276,6 +276,7 @@ row は「yield しうるか」だけで単相化する。handler を使わな�
 - handle の本体はいつも立てる。本体の row は扱うエフェクトのラベルを含むので、多くの場合は yield しうる。扱うエフェクトのすべての操作が `never` のとき (`Fail.to_result` の handle など) は、そのラベルは yield しうるラベルでなく ([型と Kind](types.md) の「row の具体化の記録」)、本体の row が yield しないこともあるが、それでも立てる。印が保守的なだけで、本体に置いた yield の確かめは yield を見つけないので、意味は変わらない (この節の最後の項)。費用は、そうした本体の末尾でない呼び出しに残る確かめと、本体の中で設けた handler の節が印を写して `yields` になることだけである。本体の row の分類で印を決める改良は、まだ入れていない
 - 操作の節と `return` の節は、handle を含む関数の印と同じにする。節は handle の外側の row で動き、その row は handle を含む関数が動いている row である
 - `op$` は、その操作を呼ぶ形なので立てる。`cont$` と `cont$state` は、どの文脈からも呼ばれる補助の関数なので立てる。`con$`、導出とタプルの生成器が作る関数、`tag$`、表示関数、`$externN` は立てない。`$externN` は行が `Effectful` でも立てない。`Effectful` の extern の呼び出しは yield の地点でないためである (下の「IO の extern」)
+- `optimize` は、書き換えた後のプログラムで印を付け直す (下の「最適化」の「`yields` の付け直し」)
 - box の挿入が足す `f$boxed` は、`f` の印を写す ([LIR](lir.md) の「一様な関数」)
 - EP が作る関数の印は、下の「evidence passing」の各項目で決まる
 - `evv` を関数の引数でなく実行の文脈に持つので ([LIR](lir.md) の「実行の文脈」)、yield しうる関数とそうでない関数の呼び出しの規約は同じである。そのため、印が保守的でも規約は食い違わない
@@ -414,25 +415,90 @@ REPL の入力から作る関数 `input$N` (N は入力の番号) は、`()` を
 - 変換の段の verifier は、translate が出す基本操作として `root_get` と `root_set` だけを受ける (下の「verifier」)
 - セッションの item は、種類 (型、コンストラクタ、エフェクト、操作、クラス、メソッド、instance、関数) によらず中段の名前を持つ。前の入力が同じ名前の item を (名前空間によらず) 定義していなければ名前そのもの、定義していれば定義した入力の番号を付けた `名前#N` である。前の入力は変わらないので、前の版の名前は後の入力で変わらない。名前空間の違う同じ名前の item (型とそのコンストラクタ) は IR の別の表に入るので重ならない。エフェクトの名前、`op$E.op`、`con$A`、配置の名前、`mask$[E]` も中段の名前から作る。セッションのモジュールの名前 (`<input N>`) は接頭辞にしない
 - `#` を含む関数の名前は、テキストの形では空白を含む名前と同じく引用符で囲む ([テスト戦略](../implementation/testing.md) の「LIR のテキストの形」)。エフェクトと配置の名前は、`#` を含んでも1つの語として読めるので囲まない
-- `op$`、`con$`、`cont$`、`cont$state` は複数の定義が値として使う `internal` の関数である。どれも値と部分適用でだけ使われ、直接は呼ばれないので、box の挿入はいつもその場で一様にする (`cont$` と `cont$state` は初めから一様である)。どのプログラムでも同じコードになるので、REPL の追記と食い違わない。直接は呼ばれないことを、テストで固定する
+- `op$`、`con$`、`cont$`、`cont$state` は複数の定義が値として使う `internal` の関数である。どれも値と部分適用でだけ使われ、直接は呼ばれないので、box の挿入はいつもその場で一様にする (`cont$` と `cont$state` は初めから一様である)。`optimize` もこれらを直接呼ばない。引数のそろった `apply` は包んでいる命令に戻し、これらを複製しない (下の「最適化」の「包む関数」)。どのプログラムでも同じコードになるので、REPL の追記と食い違わない。直接は呼ばれないことを、テストで固定する
+- `optimize` の複製の名前は、呼び出し先の instance の名前と、閉包の関数の名前と捕獲の数から作る (下の「最適化」の「鍵と名前」)。前の入力の高階関数に後の入力のラムダを渡すと、後の入力の関数の名前を含む複製ができる。名前が同じ複製はどの入力でも同じコードになるので、追記の確かめを通る
 - 構造で書く型を表示する入力のたびに、その入力の表示関数が `CodeBase` に増える。`entry$input$N` が入力ごとに増えるのと同じで、受け入れる
 
 ## パス
 
-型付き HIR から LIR までを、次のパスの順に作る。Core IR のパスは translate と EP で、その後に LIR への変換と LIR のパス ([LIR](lir.md) の「パスの順番」) が続く。
+型付き HIR から LIR までを、次のパスの順に作る。Core IR のパスは translate、`optimize`、EP で、その後に LIR への変換と LIR のパス ([LIR](lir.md) の「パスの順番」) が続く。
 
 | パス | 受け取る IR | 渡す IR |
 |---|---|---|
 | 変換 (`translate`) | 誤りのない型付き HIR | Core IR。基本操作と `clause` はない |
-| evidence passing (`evidence`) | translate の出力 | `handle`、`perform`、`resume`、`mask` のない Core IR。基本操作、`clause`、EP が作る関数を含む |
+| 最適化 (`optimize`) | translate の出力 | translate の出力と同じ段の Core IR。既知の閉包への `apply` を直接の呼び出しにし、既知の閉包を受ける関数と閉包を複製にしたもの (下の「最適化」) |
+| evidence passing (`evidence`) | `optimize` の出力 | `handle`、`perform`、`resume`、`mask` のない Core IR。基本操作、`clause`、EP が作る関数を含む |
 | LIR への変換 (`to_lir`) | EP の後の Core IR | 変換の直後の LIR (下の「Core IR から LIR への変換」) |
 
-- `eml_core_ir::Pass` は `Translate` と `Evidence` の2つである。`core_until(hir, typed, entry, files, Pass)` は、指定したパスの直後の Core IR で止める。テストは各パスの直後の IR を見られる
-- 全体の入口は `lower(hir, typed, entry, files)` と `lower_until(hir, typed, entry, files, eml_lir::Pass)` で、どちらも LIR を返す。translate、EP、`to_lir`、`eml_lir::passes_until` の順に呼び、`lower` は Perceus まで進む。2つの層をつなぐ順番を知るのは、この2つの関数だけである
-- verifier はデバッグビルドだけでかけ、誤りはパスの名前を付けて報告する。translate の後は変換の段を、EP の後は EP の段をかけ (下の「verifier」)、誤りを `internal error: invalid Core IR after {pass}: {error}` と報告する。`to_lir` の直後には別の検査を置かない。`to_lir` の出力は EP の段の検査を通った IR を写しただけで、`passes_until` の入口の検査がすぐに同じことを確かめるためである
+- `eml_core_ir::Pass` は `Translate`、`Optimize`、`Evidence` の3つである。`core_until(hir, typed, entry, files, Pass)` は、指定したパスの直後の Core IR で止める。テストは各パスの直後の IR を見られる
+- 全体の入口は `lower(hir, typed, entry, files)` と `lower_until(hir, typed, entry, files, eml_lir::Pass)` で、どちらも LIR を返す。translate、`optimize`、EP、`to_lir`、`eml_lir::passes_until` の順に呼び、`lower` は Perceus まで進む。2つの層をつなぐ順番を知るのは、この2つの関数だけである
+- verifier はデバッグビルドだけでかけ、誤りはパスの名前を付けて報告する。translate と `optimize` の後は変換の段を、EP の後は EP の段をかけ (下の「verifier」)、誤りを `internal error: invalid Core IR after {pass}: {error}` と報告する。`to_lir` の直後には別の検査を置かない。`to_lir` の出力は EP の段の検査を通った IR を写しただけで、`passes_until` の入口の検査がすぐに同じことを確かめるためである
 - どのパスの後でも、ブロックの列は構造の規則を満たす。パスの間で古くなる索引やキャッシュは IR に持たせない
 - 後のパスの置き場所: 呼び出しを作るか行き先を変えるパス (インライン化、evidence passing など) は、Core IR の上で translate と box の挿入の間に置く。Core IR は `tail`、`box`、`unbox` を持たないので、こうしたパスはそれらを出さない。box の挿入がプログラム全体の ABI と変換を1か所で決め、縮約が末尾呼び出しを作るためである
 - 再帰の深さ: 2つの IR のパス、verifier、テキストの表示と読み込み、VM のコード生成と実行、`Drop`、`Clone`、`Debug` のどれも、プログラムの大きさに比例して Rust のスタックを使わない。残るのは、変換が HIR の式の入れ子をたどる分 (E0013 が抑える) と、決定木のパターンの大きさの分 ([実装の現在地](../implementation/status.md) の「深さと性能」) だけである
+
+### 最適化
+
+`optimize` (`optimize/`) は、translate の出力を EP の前に書き換える。EP の前に置くのは、EP が見る `apply` と `yields` の印を先に減らすためと、後で足す handler への特殊化が `handle` と `perform` の残る段で動くためである。S13e-1 で入れた規則は、既知の閉包への特殊化である。handler への特殊化、インライン化、融合は、同じパスに規則を足して入れる (設計は `docs/superpowers/specs/2026-10-18-s13e-specialization-design.md`)。
+
+- 出力は translate の出力と同じ段の Core IR で、`handle`、`perform`、`resume`、`mask` を残す。基本操作、`clause`、`tail`、`box`、`unbox`、RC の命令は出さない (上の「パス」の後のパスの置き場所)
+- 関数ごとの作業リストで動く。translate の関数を順に書き換え、途中で作った複製を後ろに足して、同じ規則で書き換える。複製は鍵ごとに1つなので、作業リストは止まる
+- 書き換えの後、`yields` の印を付け直し (下の「`yields` の付け直し」)、入口から届かない関数を落とす。残った関数は元の順のまま番号を振り直す。使われなくなった閉包の関数が消えるので、値として使われなくなった関数の `f$boxed` と、その `box` と `unbox` も消える
+
+#### 既知の閉包
+
+同じ関数の中で `closure f(c_1, .., c_n)` が束縛した変数と、関数の値 `&f` を、既知の閉包とする。複製の中で、閉包の捕獲に開いた引数の組も既知の閉包である (下の「複製」)。ブロック引数を通って合流する値と、データに入れてから取り出した値は、既知としない。
+
+- 既知の閉包への `apply` は、`call f(c_1, .., c_n, 引数…)` にする。引数が足りなければ `closure` にし、部分適用はエフェクトを起こさないので `mask` を落とす。引数が余れば、結果の関数の値に残りを `apply` する。余る形を書き換えるのは `mask` が空のときだけで、`mask` の掛かる範囲を変えないためである。translate が呼ぶ相手の分かっている呼び出しにする場合分け (上の「変換の規則」) と同じである
+- `unr` でない引数を、箱を要するスカラー (`int`、`enum`) の引数で受ける閉包の関数には、直接の呼び出しにしない。一様な instance (`_:poly`) の中の値は型変数の印 (`poly`) のままである。box の挿入はこの値を `unbox` で読むだけなので、Perceus は値かその持ち主を `decref` で手放すことになり、V1 ([LIR](lir.md) の「Kind の印の検査」) に反する。この `apply` は残し、閉包は値として渡す
+- `unr` でない既知の閉包は、使う所がすべて書き換えられるときだけ書き換える。書き換えない使う所が残ると、捕獲した値を、閉包と直接の呼び出しの2か所で消費するためである。使う所ごとの判断は、その閉包と使う所だけで決まるので、先に決めた答えと使う所での書き換えは食い違わない
+- 書き換えで使う所がなくなった `closure` は消す。残すと、`unr` でない捕獲を2か所で消費する IR になり、box の挿入も値として参照された関数に `f$boxed` を作る
+
+#### 包む関数
+
+translate の包む関数 (`op$`、`con$`、`cont$`、`cont$state`) は、名前でなく形で見分ける。引数をそのままの順で1つの命令に渡し、結果を返すだけの `internal` の関数である。`internal` に限るのは、トップレベルの関数の呼び出しを命令に開くのがインライン化の受け持ちだからである。
+
+- 引数のそろった `apply` と直接の呼び出しを、包んでいる命令に戻す。`op$E.op` は `perform E.op(引数…)` に、`con$C` は `con C(引数…)` に、`cont$` と `cont$state` は捕獲の生の継続への `resume` にする
+- `mask` の付いた `op$` への `apply` は書き換えない。`perform` は `mask` を持てないためである
+- 包む関数は直接呼ばない。複製の呼び出し先にも、鍵の閉包の関数にもしない。直接呼ばれないことで、box の挿入がいつもその場で一様にする (上の「REPL の入力」)
+
+#### 複製
+
+既知の閉包を関数 g の引数に渡す直接の呼び出しは、特殊化した g の複製の呼び出しにする。複製では、その引数を捕獲の値の引数 n 個に置き換える。既知の閉包を別の閉包 `closure h(..)` の捕獲に入れるときも、同じく h の複製の `closure` にする。`Iter.map f it` が作る閉包の中身や、`Iter.generate` の handle の本体に特殊化を届けるためである。`handle` の本体、節、`return` の節も、関数の値の位置として同じく扱う。
+
+- 特殊化する位置は、呼び出し先が本体でその引数を `apply` するか、包む関数でない関数の直接の呼び出しか `closure` に渡すか、`handle` に渡す位置に限る。データに入れるだけの引数を特殊化しても、閉包を作り直すだけで何も減らないためである
+- 呼び出し先は translate の関数に限る。呼び出し先がすでに複製である呼び出しは、それ以上特殊化しない
+- 複製の中の再帰 (`map f rest` のように、受け取った閉包をそのまま渡す呼び出し) は同じ鍵になるので、同じ複製を呼ぶ
+- 複製の中で閉包そのものが値として要る位置 (データに入れる、`return` する、相手の分からない `apply` の引数にする、特殊化しない呼び出しに渡す、など) では、その場で `closure f(..)` を作り直す。捕獲のない閉包は `&f` にする
+- 捕獲がなくなった複製の閉包は、関数の値 `&copy` にする
+
+#### 鍵と名前
+
+複製の鍵は (呼び出し先、特殊化する引数の位置ごとの閉包の関数と、捕獲の Repr と印) である。捕獲の値は鍵に入れず、引数として渡す。鍵が同じなら同じ複製を使い回す。
+
+- 捕獲の Repr と印は、捕獲した値でなく、閉包の関数の捕獲の位置の引数からとる。そのため、捕獲の形は閉包の関数と捕獲の数で決まる。値の Repr と引数の Repr の違いは、呼び出しの所で box の挿入が1回だけ直す
+- 開いた引数の印は、閉包の関数の引数の印と、呼び出し先のもとの引数の印のうち、小さい方 (`unr` < `poly` < `lin`) にする。開いた引数の印がもとの引数の印を超えないので、開いた引数を捕まえて作り直す閉包も、組み立ての検査を通る。たとえば `Yield.for_each` は生産者を `poly` で受けるので、`File` を捕まえた生産者を開いた引数も `poly` になる
+- 名前は、呼び出し先の instance の名前の後ろに、引数の位置と閉包の関数を書く (`"Std.List.map@[Int, Int]{0=main$lambda0}"`)。捕獲のある閉包は、関数の後ろに捕獲の数を書く (`{0=main$lambda0/1}`)。同じ関数の部分適用でも、捕獲の数が違えば複製の引数が違うためである。64字を超えた名前は、呼び出し先の名前の `@` より前の部分に、捕獲の数を含む名前全体の 64 ビットのハッシュを付けて `<base>@#<16 hex>` にする。名前は `{` と `=` を含むので、テキストの形ではいつも引用符で囲む ([テスト戦略](../implementation/testing.md) の「LIR のテキストの形」)
+- 打ち切り: 特殊化で生まれた閉包をまた鍵にする連鎖 (CPS 風に閉包が育つ形) は、鍵の入れ子の深さで打ち切る。translate の関数の深さは 0 で、複製の深さは、鍵の閉包の関数の深さの最大に1を足した値である。引数の位置ごとに、閉包の関数の深さに1を足した値が `MAX_KEY_DEPTH` (今は4) を超える位置だけを特殊化せず、閉包を作り直して渡す。位置ごとに決めるので、ある位置で閉包を開くかどうかは、その閉包と使う所だけで決まる。`unr` でない閉包の判断 (上の「既知の閉包」) が、呼び出しのほかの引数に依らないようにするためである
+- 決定性: 複製は呼び出し先の translate の出力から作り、そのあと同じ規則で書き換える。特殊化するか、どこで打ち切るかの判断は、鍵と translate のコードだけで決まり、プログラム全体の大きさの予算は使わない。作業リストの順でほかの関数をどこまで書き換えたかが変わっても、複製のコードは変わらない。こうして、名前が同じ関数はいつも同じコードになる ([VM](vm.md) の「追記」)
+- 複製は `internal` にしない。鍵だけで名前を決めた複製は、いくつもの定義と REPL の入力から作られ、あるプログラムでは値としてだけ、別のプログラムでは直接も呼ばれうる。`internal` にすると、同じ名前の関数の ABI がプログラムによって変わる ([LIR](lir.md) の「一様な関数」)。`internal` にしなければ、値として使う所には box の挿入がいつも `f$boxed` を作る。もとの関数の印は変えない。例外は下の handle の節の複製だけである
+
+#### handle を含む関数の複製
+
+- `handle` を含む関数を複製するときは、その `handle` の節と `return` の節の関数も、複製の名前を持ち主として鍵に入れて一緒に複製する (`<callee>@{…} via <owner>`)。捕獲に既知の閉包がなくても複製する。EP は、節の関数がちょうど1つの `handle` に属することを前提にして、節の関数をその場で入口の関数に書き換えるためである (`evidence/handlers.rs` の `entries`)。同じ鍵の複製は1つしか作らないので、複製した節の関数も1つの `handle` に属する
+- 持ち主を名前に含む節と `return` の節の複製は、`internal` にする。持ち主の handle が値として使うだけで、直接は呼ばれないためである。translate の節の関数と同じく、box の挿入がその場で一様にする。`internal` にしないと、値として使う所に `f$boxed` が挟まり、yield するたびに `box` と `unbox` が1回ずつ増える
+- `handle` の本体の関数は、ほかの複製と同じ鍵で複製する。EP が1つの `handle` への所属を求めるのは節だけなので、本体の複製はいくつもの `handle` で共有してよい
+
+#### `yields` の付け直し
+
+書き換えた後のプログラムで、`yields` の印を最小の固定点で付け直す。translate の印が立ち、本体に yield の地点 (再開できる `perform`、`yields` の `apply`、`resume`、`handle`、yield しうる関数の直接の呼び出し) が残る関数だけを yield しうるとする。純粋なラムダで特殊化した `map` の複製は、中に yield しうる呼び出しが残らなければ `yields` でなくなる。
+
+- 包む関数と、プログラムの中の `handle` が本体、節、`return` の節として使う関数は、translate の印のままにする。これらの印は、本体の中身でなく handle で決まるためである (上の「`yields` の印」)
+- 印は立つ方へだけ動く。呼ばれる側が立つたびに呼ぶ側を見直すので、関数と呼び出しの数に比例する手間で済む
+
+#### 検査
+
+debug ビルドでは、`optimize` の後に変換の段の verifier (`verify_translated`) をかけ、誤りを `internal error: invalid Core IR after optimize: …` と報告する (上の「パス」)。translate の線形性の検査 (上の「食い違いがないことの検査」) は translate の中で動き、`optimize` の出力にはかけない。
 
 ### evidence passing
 
@@ -440,7 +506,7 @@ REPL の入力から作る関数 `input$N` (N は入力の番号) は、`()` を
 
 - EP は translate と box の挿入の間に置く。型は読まない。読むのは、関数の `yields` と `clause` の印、`apply` の印、操作の表、Core IR の形と生存解析だけである
 - EP は `tail`、`box`、`unbox`、RC の命令を出さない。Core IR はこれらを持たない (上の「パス」の後のパスの置き場所)
-- 書き換えるのは、translate が作った関数のうち、`yields` の関数と、`handle`、`perform`、`resume`、`mask` を含む関数である。`yields` でない関数も、row が純粋なまま handle を含むことがある (handle の本体は yield する)。どれにも当たらない関数は変えない
+- 書き換えるのは、EP の前からある関数 (translate と `optimize` が作った関数) のうち、`yields` の関数と、`handle`、`perform`、`resume`、`mask` を含む関数である。`yields` でない関数も、row が純粋なまま handle を含むことがある (handle の本体は yield する)。どれにも当たらない関数は変えない
 - EP が作る関数 (補助の関数、継続の関数、合流のブロックの関数、入口の関数) は、作るときに最終の形 (yield の確認と遅い道を置いた形) で作り、もう一度は書き換えない
 - evidence は実行時にエフェクトの番号で探す ([LIR](lir.md) の「evidence を探す」)。閉じた row の静的な添字と、閉じた row の関数を広い row の文脈から呼ぶときにベクタを合わせる包み (Koka の open) は作らない。トップレベルの関数の row はすべて閉じているので、handler の下での呼び出しの多くが包みを通り、包みは部分ベクタを確保して末尾呼び出しも失うためである。動的に探す費用は handler の数に比例する数命令である
 - EP の出力の基本操作、節の呼び出し、入口の関数の印の意味と、それが読み書きする実行の文脈、evidence、ダミーの値、`evv` の不変条件は、[LIR](lir.md) の「基本操作と実行の文脈」にある
@@ -671,7 +737,7 @@ b_fast:
 ## verifier
 
 - Core IR の verifier は2つの段を持つ。段はパスの順に並ぶ
-  - 変換の段 (`verify_translated`) は translate の後にかける。[LIR](lir.md) の「構造の規則」の印のない部分と、引き継ぐ検査を確かめる。EP が作るもの (REPL の根の `root_get` と `root_set` を除く `prim`、`clause`、`clause` の印の関数) を拒む (`` `prim evv_get` is used before the evidence pass ``、`a clause call is used before the evidence pass`、``a clause of `Counter.get` is defined before the evidence pass``)
+  - 変換の段 (`verify_translated`) は translate と `optimize` の後にかける。[LIR](lir.md) の「構造の規則」の印のない部分と、引き継ぐ検査を確かめる。EP が作るもの (REPL の根の `root_get` と `root_set` を除く `prim`、`clause`、`clause` の印の関数) を拒む (`` `prim evv_get` is used before the evidence pass ``、`a clause call is used before the evidence pass`、``a clause of `Counter.get` is defined before the evidence pass``)
   - EP の段 (`verify_evidence`) は EP の後にかける。変換の段の検査から EP が作るものの拒否を除き、基本操作と `clause` の検査 ([LIR](lir.md) の「verifier」) を足す。`handle`、`perform`、`resume` と、呼び出しの `mask` を拒む (``a perform remains after the evidence pass``。`a handler`、`a resume`、`a mask` も同じ形)
 - 着地の印 ([LIR](lir.md) の「着地の印」) も EP が作るものなので、変換の段は拒む (`a prompt marker appears before the evidence pass`)。EP の段は、`apply` のほかの検査の後に、印の変数 v が見えること、印の付いた `apply` が末尾の位置 ([LIR](lir.md) の「末尾の位置の呼び出し」) にないこと、v の Repr が `obj` であること、v が呼び出しの直後で生きていることを、この順に確かめる (``an apply with the prompt marker `ev.2` is in a tail position, which leaves no frame to land on``、`` `ev.2` is the prompt marker of an apply, but it is tobj, not obj ``、`` `ev.2` is the prompt marker of an apply, but it is not used after the call ``)。生きているかは、生存解析の入口の集合を関数ごとに1回だけ求め、ブロックの終端と後ろの文から逆にたどって決める。印の変数は呼び出しの使いではないので、生存解析は印を使いに数えない
 - 印の検査は、Core IR の2つの段で、`jump` と `return` の V2 と、作る所の検査を行う。それ以外の受け渡しは、境界に合うようになってから LIR の範囲の段で比べる。`perform`、`handle`、`resume` の受け渡しは比べず、EP がそれらを `clause` と基本操作に置き換えた後の段で比べる。`never` の操作の `perform` (変換の段) と `clause` (EP の段) の結果を束縛する変数は、使いに制御が届かないので、V2 と作る所の検査の対象にしない。V1 は `dup` と `decref` が Core IR にないので走らない ([LIR](lir.md) の「Kind の印の検査」)
