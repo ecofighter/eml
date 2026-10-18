@@ -10,12 +10,14 @@
 //! 呼び出しの連なりの深さの積で育たない。
 
 mod inline;
+mod known_con;
 
 use crate::tail::pure;
 use crate::{Call, CoreFn, Program, Rhs, Stmt};
 use eml_lir::Atom;
 
 use super::blocks;
+use super::known::Callee;
 
 /// `fuse` に入った時点の直接の呼び出しの関係。
 struct Base {
@@ -28,10 +30,12 @@ struct Base {
 pub(crate) fn fuse(program: &mut Program) {
     let (recursive, order) = call_graph(&program.functions);
     let base = Base { recursive, order };
+    // 呼ぶ相手の引数の数、Repr、印、包む命令は、融合で変わらない
+    let callees: Vec<Callee> = program.functions.iter().map(Callee::of).collect();
     let mut inlinable = vec![false; program.functions.len()];
     for &index in &base.order {
         let mut function = std::mem::replace(&mut program.functions[index], placeholder());
-        fuse_function(&mut function, &program.functions, &inlinable);
+        fuse_function(&mut function, &program.functions, &inlinable, &callees);
         inlinable[index] = !base.recursive[index] && inline::inlinable(&function);
         program.functions[index] = function;
     }
@@ -51,18 +55,34 @@ fn placeholder() -> CoreFn {
     }
 }
 
-/// 関数1つを書き換える。展開を1回の走査で済ませ、そのあと片付けの規則をそれぞれ1回ずつ当てる。どれも関数の
-/// 大きさに比例する手間で、展開した本体を読み直さない。
-fn fuse_function(function: &mut CoreFn, functions: &[CoreFn], inlinable: &[bool]) {
+/// 関数1つを書き換える。展開を1回の走査で済ませ、そのあと片付けと既知のコンストラクタの規則を、どれも当たらなく
+/// なるまで繰り返す。展開した本体は読み直さない。どの規則も、`switch` や `unpack` を通る経路か `apply` か文を
+/// 減らし、ほかの規則が減らしたものを増やさないので、繰り返しは止まる。
+fn fuse_function(
+    function: &mut CoreFn,
+    functions: &[CoreFn],
+    inlinable: &[bool],
+    callees: &[Callee],
+) {
     inline::inline_calls(function, functions, inlinable);
-    blocks::fold_constant_switches(function);
-    blocks::prune(function);
-    // つなげたブロックの引数を定数で置き換えると、つなげなかったブロックの `switch` も定数で分けることがある
-    if blocks::merge_jumps(function) {
-        blocks::fold_constant_switches(function);
+    loop {
+        let mut changed = blocks::fold_constant_switches(function);
         blocks::prune(function);
+        // つなげたブロックの引数を定数で置き換えると、つなげなかったブロックの `switch` も定数で分けることがある
+        if blocks::merge_jumps(function) {
+            changed = true;
+            blocks::fold_constant_switches(function);
+            blocks::prune(function);
+        }
+        changed |= known_con::resolve_known(function);
+        changed |= known_con::thread_jumps(function);
+        blocks::prune(function);
+        changed |= known_con::call_known_closures(function, callees);
+        changed |= drop_dead_pure_lets(function);
+        if !changed {
+            break;
+        }
     }
-    drop_dead_pure_lets(function);
 }
 
 /// 使われない純粋な `let` を消す。展開した本体が返す値を呼ぶ側が捨てる所で、値を作るだけの
@@ -70,7 +90,7 @@ fn fuse_function(function: &mut CoreFn, functions: &[CoreFn], inlinable: &[bool]
 /// 定義は使う位置を支配し、辺は番号の大きいブロックへ向かうので、ブロックを後ろから、文を後ろから見れば、`let` を
 /// 見る時点でその変数の使いはすべて見終わっている。消すたびに使いの数を減らせば、1回で、消した `let` だけが使って
 /// いた束縛も消える (LIR の縮約の `remove_dead_lets` と同じ形)。
-fn drop_dead_pure_lets(function: &mut CoreFn) {
+fn drop_dead_pure_lets(function: &mut CoreFn) -> bool {
     let mut uses = vec![0usize; function.vars.len()];
     for block in &function.blocks {
         let mut count = |atom: Atom| {
@@ -84,6 +104,7 @@ fn drop_dead_pure_lets(function: &mut CoreFn) {
             .for_each(|stmt| stmt.for_each_atom(&mut count));
         block.term.for_each_atom(&mut count);
     }
+    let mut dropped = false;
     for block in function.blocks.iter_mut().rev() {
         let mut keep = vec![true; block.stmts.len()];
         for (position, stmt) in block.stmts.iter().enumerate().rev() {
@@ -100,10 +121,12 @@ fn drop_dead_pure_lets(function: &mut CoreFn) {
             }
         }
         if keep.contains(&false) {
+            dropped = true;
             let mut keep = keep.into_iter();
             block.stmts.retain(|_| keep.next() == Some(true));
         }
     }
+    dropped
 }
 
 /// 直接の呼び出しの関係で再帰する関数と、呼ばれる関数が先に来る関数の順。Tarjan の方法で SCC を求める。Tarjan の

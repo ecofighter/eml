@@ -159,8 +159,12 @@ pub(crate) fn merge_jumps(function: &mut CoreFn) -> bool {
                 *scrutinee = resolve(&substitution, *scrutinee);
             }
             if let Some(kept) = constant_target(&host.term) {
+                // 行き先ごとの辺を数えたので、残す行き先への辺も1本を除いて減らす
+                let mut kept_once = false;
                 host.term.for_each_successor_mut(|dropped| {
-                    if *dropped != kept {
+                    if *dropped == kept && !kept_once {
+                        kept_once = true;
+                    } else {
                         edges[dropped.0 as usize] -= 1;
                     }
                 });

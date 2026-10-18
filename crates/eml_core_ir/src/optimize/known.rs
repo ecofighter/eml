@@ -629,12 +629,37 @@ fn rewritable(
     }
 }
 
+/// `let var = apply closure(args)` を書き換えられるか (`rewritable`)。印は変数の表から読む。
+pub(crate) fn apply_rewritable(
+    vars: &[VarInfo],
+    closure: &KnownClosure,
+    var: VarId,
+    args: &[Atom],
+    mask: &[MaskItem],
+    callees: &[Callee],
+) -> bool {
+    let mark = |atom: &Atom| match *atom {
+        Atom::Var(var) => vars[var.0 as usize].mark,
+        _ => Mark::Unr,
+    };
+    let marks: Vec<Mark> = args.iter().map(mark).collect();
+    let captured: Vec<Mark> = closure.captures.iter().map(mark).collect();
+    rewritable(
+        closure,
+        &captured,
+        &marks,
+        vars[var.0 as usize].mark,
+        !mask.is_empty(),
+        callees,
+    )
+}
+
 fn is_perform(wrapper: Option<Wrapper>) -> bool {
     matches!(wrapper, Some(Wrapper::Perform { .. }))
 }
 
 /// `let var = rhs` を置き換える文。書き換えないなら `None`。
-fn replace(
+pub(crate) fn replace(
     vars: &mut Vec<VarInfo>,
     known: &HashMap<VarId, KnownClosure>,
     callees: &[Callee],
@@ -664,33 +689,10 @@ fn replace(
                 Atom::Var(callee) => known.get(&callee)?.clone(),
                 _ => return None,
             };
-            let callee = &callees[closure.function.0 as usize];
-            let marks: Vec<Mark> = args
-                .iter()
-                .map(|&arg| match arg {
-                    Atom::Var(var) => vars[var.0 as usize].mark,
-                    _ => Mark::Unr,
-                })
-                .collect();
-            let captured: Vec<Mark> = closure
-                .captures
-                .iter()
-                .map(|&atom| match atom {
-                    Atom::Var(var) => vars[var.0 as usize].mark,
-                    _ => Mark::Unr,
-                })
-                .collect();
-            let result = vars[var.0 as usize].mark;
-            if !rewritable(
-                &closure,
-                &captured,
-                &marks,
-                result,
-                !mask.is_empty(),
-                callees,
-            ) {
+            if !apply_rewritable(vars, &closure, var, args, mask, callees) {
                 return None;
             }
+            let callee = &callees[closure.function.0 as usize];
             let mut given = closure.captures;
             given.extend(args.iter().copied());
             if given.len() < callee.arity {

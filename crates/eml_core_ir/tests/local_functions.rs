@@ -724,20 +724,21 @@ fn std_public_functions_keep_their_lir() {
       let t.6: enum = extern "Prelude.Ord Int.>="(t.4, 9)
       switch t.6 Prelude.Bool { #0 -> b5, #1 -> b6 }
     b4:
-      jump b7(#1)
+      jump b9()
     b5:
-      jump b7(#0)
-    b6:
-      let t.7: enum = extern "Prelude.Ord Int.<="(t.4, 13)
-      jump b7(t.7)
-    b7(t.8: enum):
-      switch t.8 Prelude.Bool { #0 -> b8, #1 -> b9 }
-    b8:
       decref s.0
       jump b10()
+    b6:
+      let t.7: enum = extern "Prelude.Ord Int.<="(t.4, 13)
+      switch t.7 Prelude.Bool { #0 -> b7, #1 -> b8 }
+    b7:
+      decref s.0
+      jump b10()
+    b8:
+      jump b9()
     b9:
-      let t.9: int = extern Prelude.+(i.2, 1)
-      tail call F22(s.0, len.1, t.9)
+      let t.8: int = extern Prelude.+(i.2, 1)
+      tail call F22(s.0, len.1, t.8)
     b10:
       return i.2
     }
@@ -757,20 +758,21 @@ fn std_public_functions_keep_their_lir() {
       let t.7: enum = extern "Prelude.Ord Int.>="(t.5, 9)
       switch t.7 Prelude.Bool { #0 -> b5, #1 -> b6 }
     b4:
-      jump b7(#1)
+      jump b9()
     b5:
-      jump b7(#0)
-    b6:
-      let t.8: enum = extern "Prelude.Ord Int.<="(t.5, 13)
-      jump b7(t.8)
-    b7(t.9: enum):
-      switch t.9 Prelude.Bool { #0 -> b8, #1 -> b9 }
-    b8:
       decref s.0
       jump b10()
+    b6:
+      let t.8: enum = extern "Prelude.Ord Int.<="(t.5, 13)
+      switch t.8 Prelude.Bool { #0 -> b7, #1 -> b8 }
+    b7:
+      decref s.0
+      jump b10()
+    b8:
+      jump b9()
     b9:
-      let t.10: int = extern Prelude.-(stop.2, 1)
-      tail call F23(s.0, start.1, t.10)
+      let t.9: int = extern Prelude.-(stop.2, 1)
+      tail call F23(s.0, start.1, t.9)
     b10:
       return stop.2
     }

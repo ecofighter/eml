@@ -655,7 +655,8 @@ main () = println (walk {n})
 }
 
 /// 型変数のフィールドは `tobj` なので、`Int` を入れると `box`、取り出して `Int` として使うと `unbox` を通る
-/// (docs/spec/lir.md の「位置の規則」)。データの配置は単相化の後も一様なので、この形の変換は残る。
+/// (docs/spec/lir.md の「位置の規則」)。データの配置は単相化の後も一様なので、この形の変換は残る。`Wrap 1` は自分を
+/// 呼ぶ `hide` を通すので、既知のコンストラクタとしてその場で解けない。
 #[test]
 fn an_int_in_a_type_variable_field_is_boxed_and_unboxed() {
     let text = [
@@ -666,8 +667,15 @@ fn an_int_in_a_type_variable_field_is_boxed_and_unboxed() {
         "unwrap w = match w with",
         "  | Wrap x -> x",
         "",
+        "data Box a = | Box a",
+        "",
+        "hide : Int -> a -> Box a",
+        "hide n x = if n <= 0 then Box x else hide (n - 1) x",
+        "",
         "main : Unit -> <IO> Unit",
-        "main () = println (show (unwrap (Wrap 1) + 1))",
+        "main () =",
+        "  let Box w = hide 0 (Wrap 1)",
+        "  println (show (unwrap w + 1))",
     ]
     .join("\n");
     let stats = stats(&text, "2\n");

@@ -131,14 +131,19 @@ main () =
 
 #[test]
 fn a_constructor_value_becomes_a_con() {
-    let text = "data Pair = | Pair Int Int\n\nfirst : Pair -> Int\nfirst (Pair a _) = a\n\nmain : Unit -> <IO> Unit\nmain () =\n  let p = Pair 1\n  println (show (first (p 2)))";
+    // `con` を `hide` に渡し、既知のコンストラクタの規則で解けないようにする
+    let text = "data Pair = | Pair Int Int\n\nfirst : Pair -> Int\nfirst (Pair a _) = a\n{HIDE}\nmain : Unit -> <IO> Unit\nmain () =\n  let p = Pair 1\n  match hide 0 (p 2) with\n    | Box q -> println (show (first q))";
+    let text = text.replace("{HIDE}", HIDE);
+    let text = text.as_str();
     insta::assert_snapshot!(function(&core_text(text, Pass::Optimize), "entry$main"), @r#"
     fn entry$main() -> unit {
       let t.1: obj = con Pair #0(1, 2)
-      unpack t.1 Pair #0(a.2: int, x.3: int)
-      let t.4: obj = extern "Prelude.Show Int.show"(a.2)
-      let t.5: unit = extern Prelude.println(t.4)
-      return t.5
+      let t.2: obj = call "hide@[Pair]"(0, t.1)
+      unpack t.2 Box #0(q.3: obj)
+      unpack q.3 Pair #0(a.4: int, x.5: int)
+      let t.6: obj = extern "Prelude.Show Int.show"(a.4)
+      let t.7: unit = extern Prelude.println(t.6)
+      return t.7
     }
     "#);
 }
@@ -162,11 +167,20 @@ fn a_caller_without_yield_points_stops_yielding() {
 
 #[test]
 fn an_over_saturated_known_apply_calls_then_applies_the_rest() {
-    let text = "main : Unit -> <IO> Unit\nmain () =\n  let f = fn x -> fn y -> x + y\n  println (show (f 1 2))";
+    // `adder` は自分を呼ぶので展開されず、呼び出しが返す閉包は呼ぶ側から見えない
+    let text = "\
+adder : Int -> Int -> (Int -> Int)
+adder n x = if n <= 0 then (fn y -> x + y) else adder (n - 1) x
+
+main : Unit -> <IO> Unit
+main () =
+  let f = adder 0
+  println (show (f 1 2))
+";
     insta::assert_snapshot!(function(&core_text(text, Pass::Optimize), "entry$main"), @r#"
     fn entry$main() -> unit {
-      let c.1: tobj = closure main$lambda0(1)
-      let t.2: int = apply c.1(2)
+      let t.1: tobj poly = call adder(0, 1)
+      let t.2: int = apply t.1(2)
       let t.3: obj = extern "Prelude.Show Int.show"(t.2)
       let t.4: unit = extern Prelude.println(t.3)
       return t.4
@@ -408,17 +422,10 @@ main () =
     );
     insta::assert_snapshot!(function(&core_text(text, Pass::Optimize), "entry$main"), @r#"
     fn entry$main() -> unit {
-      let d.1: tobj poly = con Prelude.Option #1(&main$lambda0)
-      jump b1(d.1)
-    b1(t.2: tobj):
-      switch t.2 Prelude.Option { #0 -> b2, #1(g.3: tobj) -> b3 }
-    b2:
-      return ()
-    b3:
-      let t.4: int = apply g.3(1)
-      let t.5: obj = extern "Prelude.Show Int.show"(t.4)
-      let t.6: unit = extern Prelude.println(t.5)
-      return t.6
+      let t.1: int = call main$lambda0(1)
+      let t.2: obj = extern "Prelude.Show Int.show"(t.1)
+      let t.3: unit = extern Prelude.println(t.2)
+      return t.3
     }
     "#);
 }
@@ -1203,5 +1210,140 @@ fn nested_inlining_grows_linearly_with_the_call_depth() {
     assert!(
         deep <= shallow * 5 / 2,
         "{shallow} lines at depth 8, {deep} at depth 16"
+    );
+}
+
+/// 同じ関数の中で作った `con` への `match` は、その場で解ける
+/// (docs/superpowers/specs/2026-10-18-s13e-specialization-design.md の「既知のコンストラクタ」)。
+#[test]
+fn matching_a_local_con_resolves() {
+    let text = "\
+main : Unit -> <IO> Unit
+main () =
+  let n = match Some 3 with
+    | Some x -> x
+    | None -> 0
+  println (show n)
+";
+    insta::assert_snapshot!(function(&core_text(text, Pass::Optimize), "entry$main"), @r#"
+    fn entry$main() -> unit {
+      let t.1: obj = extern "Prelude.Show Int.show"(3)
+      let t.2: unit = extern Prelude.println(t.1)
+      return t.2
+    }
+    "#);
+    // translate は `Some 3` を決定木の中で開くので、`fuse` の規則を見るには、`con` を展開した関数から受ける
+    let inlined = "\
+some : Int -> Option Int
+some x = Some x
+
+main : Unit -> <IO> Unit
+main () =
+  let n = match some 3 with
+    | Some x -> x
+    | None -> 0
+  println (show n)
+";
+    let main = function(&core_text(inlined, Pass::Optimize), "entry$main");
+    assert!(
+        !main.contains("switch ") && !main.contains("con "),
+        "{main}"
+    );
+}
+
+/// 展開した関数が返す `con` は、合流のブロックの引数を通って `match` に届く。`jump` の側で `switch` を決める
+/// (docs/future/roadmap.md の「処理系」の項目「jump threading とインライン化」)。
+#[test]
+fn a_con_returned_by_an_inlined_function_resolves() {
+    let text = "\
+pick : Bool -> Option Int
+pick b = if b then Some 1 else None
+
+main : Unit -> <IO> Unit
+main () =
+  let c = List.length (Env.args ()) > 0
+  match pick c with
+    | Some x -> println (show x)
+    | None -> println \"none\"
+";
+    let shown = core_text(text, Pass::Optimize);
+    let main = function(&shown, "entry$main");
+    assert!(!main.contains("con Prelude.Option"), "{main}");
+    insta::assert_snapshot!(main, @r#"
+    fn entry$main() -> unit {
+      let t.1: int = extern Std.Env.arg_count(())
+      let t.2: tobj = call Std.Env.collect_args(t.1, #0)
+      let t.3: int = call "Std.List.length@[String]$let$go"(0, t.2)
+      let t.4: enum = extern "Prelude.Ord Int.>"(t.3, 0)
+      switch t.4 Prelude.Bool { #0 -> b1, #1 -> b2 }
+    b1:
+      let s.5: obj = const "none"
+      let t.6: unit = extern Prelude.println(s.5)
+      return t.6
+    b2:
+      let t.7: obj = extern "Prelude.Show Int.show"(1)
+      let t.8: unit = extern Prelude.println(t.7)
+      return t.8
+    }
+    "#);
+}
+
+/// ほかでも使う `con` は開かない。開くと引数の所有権が2か所に移る。translate は `Unr` の `con` を使う所が
+/// いくつあっても決定木の中で開くので、`con` は展開した関数から受ける。
+#[test]
+fn a_con_with_two_uses_is_not_opened() {
+    let text = "\
+some : Int -> Option Int
+some x = Some x
+
+main : Unit -> <IO> Unit
+main () =
+  let it = some 3
+  let n = List.length [it]
+  match it with
+    | Some x -> println (show (x + n))
+    | None -> ()
+";
+    let shown = core_text(text, Pass::Optimize);
+    let main = function(&shown, "entry$main");
+    assert!(main.contains("switch "), "{main}");
+}
+
+/// `con` のフィールドの既知の閉包は、`con` を解いた後で既知の閉包になり、`apply` は直接の呼び出しになる。
+#[test]
+fn next_of_a_known_iter_calls_its_closure() {
+    let text = "\
+main : Unit -> <IO> Unit
+main () =
+  match Iter.next (Iter.from_list [1, 2]) with
+    | Some (x, rest) ->
+      drop rest
+      println (show x)
+    | None -> ()
+";
+    let shown = core_text(text, Pass::Optimize);
+    let main = function(&shown, "entry$main");
+    assert!(!main.contains("apply "), "{main}");
+}
+
+/// 展開した関数の `if` の両方の枝が作る組は、合流のブロックの `unpack` を `jump` の側で飛ばして、組を作らずに渡す
+/// (docs/future/roadmap.md の「処理系」の項目「jump threading とインライン化」)。translate は同じ関数の中の
+/// `let (a, b) = if …` を自分で組を作らない形にするので、組は展開した関数から受ける。
+#[test]
+fn a_tuple_from_both_arms_of_an_if_is_threaded() {
+    let text = "\
+pair : Bool -> (Int, Int)
+pair c = if c then (1, 2) else (3, 4)
+
+main : Unit -> <IO> Unit
+main () =
+  let c = List.length (Env.args ()) > 0
+  let (a, b) = pair c
+  println (show (a - b))
+";
+    let main = function(&core_text(text, Pass::Optimize), "entry$main");
+    assert!(
+        !main.contains("con (,)") && !main.contains("unpack "),
+        "{main}"
     );
 }
