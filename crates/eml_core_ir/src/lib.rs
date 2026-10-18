@@ -101,6 +101,56 @@ pub struct Block {
     pub term: Term,
 }
 
+impl Block {
+    /// ブロックの中の変数の出現 (引数、束縛、使用、case のフィールド、着地の印) をすべて訪れる。継続の関数の変数の表を
+    /// 詰めるのに使う (docs/spec/core-ir.md の「継続の関数」)。
+    pub(crate) fn for_each_var_mut(&mut self, mut f: impl FnMut(&mut VarId)) {
+        self.params.iter_mut().for_each(&mut f);
+        for stmt in &mut self.stmts {
+            match stmt {
+                Stmt::Let { var, rhs } => {
+                    f(var);
+                    rhs.for_each_atom_mut(|atom| {
+                        if let Atom::Var(var) = atom {
+                            f(var);
+                        }
+                    });
+                    // 着地の印の変数は呼び出しが使う値ではなく `for_each_atom_mut` に出ないので、ここで写す
+                    if let Rhs::Call {
+                        call:
+                            Call::Apply {
+                                prompt: Some(marker),
+                                ..
+                            },
+                        mask: _,
+                    } = rhs
+                    {
+                        f(marker);
+                    }
+                }
+                Stmt::Unpack {
+                    value,
+                    ctor: _,
+                    fields,
+                } => {
+                    f(value);
+                    fields.iter_mut().for_each(&mut f);
+                }
+            }
+        }
+        self.term.for_each_atom_mut(|atom| {
+            if let Atom::Var(var) = atom {
+                f(var);
+            }
+        });
+        if let Term::Switch { cases, .. } = &mut self.term {
+            for case in cases {
+                case.fields.iter_mut().for_each(&mut f);
+            }
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Stmt {
     Let {

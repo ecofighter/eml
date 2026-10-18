@@ -375,8 +375,10 @@ fn t3_raises_the_ret_along_a_chain_of_tail_calls() {
 fn a_tail_call_off_any_loop_may_stay_an_ordinary_call() {
     // handle の本体は `tobj` を返す一様な関数になり、`Int` を返す `answer` の結果を `box` してから返す。この呼び出しは
     // 末尾呼び出しにならないが、関数の値を通るループの上にないので、積むフレームは有界である
-    let text = "effect Ask where\n  ask : Unit -> Int\n\nanswer : Unit -> <Ask> Int\nanswer () = ask () + 1\n\nmain : Unit -> <IO> Unit\nmain () =\n  let r = handle answer () with\n    | ctl ask () k -> k 1\n  println (show r)";
-    insta::assert_snapshot!(function(&lir_text(text, eml_lir::Pass::Contract), "main$handle0"), @"
+    let text = format!(
+        "effect Ask where\n  ask : Unit -> Int\n\n{HIDE}answer : Unit -> <Ask> Int\nanswer () =\n  let Box q = hide ask\n  q () + 1\n\nmain : Unit -> <IO> Unit\nmain () =\n  let r = handle answer () with\n    | ctl ask () k -> k 1\n  println (show r)"
+    );
+    insta::assert_snapshot!(function(&lir_text(&text, eml_lir::Pass::Contract), "main$handle0"), @"
     internal yields fn main$handle0(p.0: unit) -> tobj {
       let t.1: int = call answer(())
       let t.2: tobj = box t.1

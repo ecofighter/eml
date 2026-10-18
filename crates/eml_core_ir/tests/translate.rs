@@ -3334,7 +3334,7 @@ fn a_lin_enum_variable_is_unr() {
     // すると、box の挿入が足す `unr` の箱が `lin` の引数に渡り、`yield` の遅い道で死ぬ箱を Perceus が `decref` する
     // (docs/spec/core-ir.md の「translate が決める印」)。値を包む `Option` は型のとおり `lin` のままである。所有の段の
     // 検査まで通す
-    let text = "data Token : Lin =\n  | Token\n\neffect Ask where\n  ask : Unit -> Int\n\nspend : Token -> Int\nspend t =\n  match t with\n    | Token -> 1\n\nhold : Token -> <Ask> Int\nhold t =\n  let n = ask ()\n  spend t + n\n\nopen_it : Option Token -> Int\nopen_it o =\n  match o with\n    | None -> 0\n    | Some t -> spend t\n\nmain : Unit -> <IO> Unit\nmain () =\n  println (show (handle hold Token with | ctl ask () k -> k 1))\n  println (show (open_it (Some Token)))\n  println (show (List.length (List.map spend [Token])))";
+    let text = "data Token : Lin =\n  | Token\n\ndata Box a = | Box a\n\nhide : a -> Box a\nhide x = Box x\n\neffect Ask where\n  ask : Unit -> Int\n\nspend : Token -> Int\nspend t =\n  match t with\n    | Token -> 1\n\nhold : Token -> <Ask> Int\nhold t =\n  let n = ask ()\n  spend t + n\n\nopen_it : Option Token -> Int\nopen_it o =\n  match o with\n    | None -> 0\n    | Some t -> spend t\n\nmain : Unit -> <IO> Unit\nmain () =\n  let Box h = hide hold\n  println (show (handle h Token with | ctl ask () k -> k 1))\n  println (show (open_it (Some Token)))\n  println (show (List.length (List.map spend [Token])))";
     insta::assert_snapshot!(function(&core_text(text, Pass::Translate), "open_it"), @"
     fn open_it(o.0: tobj lin) -> int {
       switch o.0 Prelude.Option { #0 -> b1, #1(t.1: enum) -> b2 }

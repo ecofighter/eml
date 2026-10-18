@@ -34,16 +34,23 @@ fn a_program_without_operations_or_strings_does_no_counted_work() {
     assert_eq!(stats.peak_objects, 1, "{stats:?}");
 }
 
-/// どの `perform` も、少なくとも見つけた evidence の節点を1つたどる。
+/// どの `perform` も、少なくとも見つけた evidence の節点を1つたどる。handle の本体はデータを通して渡し、`optimize` が
+/// handler を特殊化して evidence を探さなくなる形を避ける。
 #[test]
 fn every_operation_looks_up_its_evidence() {
     let text = [
         "effect Ask where",
         "  ask : Unit -> Int",
         "",
+        "data Box a = | Box a",
+        "",
+        "hide : a -> Box a",
+        "hide x = Box x",
+        "",
         "main : Unit -> <IO> Unit",
         "main () =",
-        "  let n = handle ask () + ask () + ask () with",
+        "  let Box b = hide (fn () -> ask () + ask () + ask ())",
+        "  let n = handle b () with",
         "            | ctl ask () k -> k 1",
         "  println (show n)",
     ]

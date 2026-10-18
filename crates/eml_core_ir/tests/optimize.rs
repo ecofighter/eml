@@ -81,8 +81,10 @@ fn an_under_saturated_known_apply_builds_a_closure() {
 
 #[test]
 fn yield_as_a_value_becomes_a_perform() {
-    let text = "import Yield (Yield(..))\n\nproduce : Unit -> <Yield Int> Unit\nproduce () =\n  let y = yield\n  y 1\n\nmain : Unit -> <IO> Unit\nmain () = println (show (Yield.collect produce))";
-    let shown = core_text(text, Pass::Optimize);
+    let text = format!(
+        "import Yield (Yield(..))\n\nproduce : Unit -> <Yield Int> Unit\nproduce () =\n  let y = yield\n  y 1\n{HIDE}\nmain : Unit -> <IO> Unit\nmain () =\n  match hide produce with\n    | Box p -> println (show (Yield.collect p))"
+    );
+    let shown = core_text(&text, Pass::Optimize);
     assert!(!shown.contains("call op$"), "{shown}");
     insta::assert_snapshot!(function(&shown, "produce"), @"
     yields fn produce(p.0: unit) -> unit {
@@ -182,6 +184,15 @@ fn a_closure_whose_applies_are_all_rewritten_is_dropped() {
 }
 
 /// `pass` の直後の関数の名前。
+/// 値をデータに入れて取り出す。取り出した値は既知の閉包でないので、handle の本体に届いても handler への特殊化の
+/// 対象にならない。S13e-1 の規則だけを見るテストが使う。
+const HIDE: &str = "
+data Box a = | Box a
+
+hide : a -> Box a
+hide x = Box x
+";
+
 fn names(text: &str, pass: Pass) -> Vec<String> {
     eml_test_support::core_until(text, pass)
         .functions
@@ -230,16 +241,20 @@ fn map_is_copied_for_a_known_lambda() {
 
 #[test]
 fn each_yield_is_specialized() {
-    let text = "\
+    let text = format!(
+        "\
 import Yield (Yield(..))
 
 emit : List String -> Unit -> <Yield String> Unit
 emit lines () = List.each yield lines
-
+{HIDE}
 main : Unit -> <IO> Unit
-main () = println (show (Yield.collect (emit [\"a\"])))
-";
-    let shown = core_text(text, Pass::Optimize);
+main () =
+  match hide (emit [\"a\"]) with
+    | Box p -> println (show (Yield.collect p))
+"
+    );
+    let shown = core_text(&text, Pass::Optimize);
     let copy = shown
         .lines()
         .find(|line| line.contains("fn \"Std.List.each@") && line.contains("{0="))
@@ -402,7 +417,8 @@ fn a_copy_does_not_depend_on_the_rest_of_the_program() {
 /// 節の関数は、ちょうど1つの handle に属する (`crates/eml_core_ir/src/evidence/handlers.rs` の `entries`)。
 #[test]
 fn two_handler_copies_keep_their_own_clauses() {
-    let text = "\
+    let text = format!(
+        "\
 import Yield (Yield(..))
 
 nums : Int -> Unit -> <Yield Int> Unit
@@ -412,13 +428,16 @@ nums n () =
 
 other : Int -> Unit -> <Yield Int> Unit
 other n () = yield (n * 10)
-
+{HIDE}
 main : Unit -> <IO> Unit
 main () =
-  Yield.for_each (nums 3) (fn x -> println \"\\{x}\")
-  Yield.for_each (other 3) (fn x -> println \"\\{x}\")
-";
-    let program = eml_test_support::core_until(text, Pass::Optimize);
+  match hide (nums 3) with
+    | Box p -> Yield.for_each p (fn x -> println \"\\{{x}}\")
+  match hide (other 3) with
+    | Box q -> Yield.for_each q (fn x -> println \"\\{{x}}\")
+"
+    );
+    let program = eml_test_support::core_until(&text, Pass::Optimize);
     let mut clauses = Vec::new();
     for function in &program.functions {
         let closures: std::collections::HashMap<_, _> = function
@@ -461,7 +480,7 @@ main () =
     assert_eq!(clauses.len(), 4, "{}", pretty(&program));
     let distinct: std::collections::HashSet<_> = clauses.iter().collect();
     assert_eq!(distinct.len(), 4, "{}", pretty(&program));
-    eml_test_support::core_until(text, Pass::Evidence);
+    eml_test_support::core_until(&text, Pass::Evidence);
 }
 
 /// translate の関数の中で既知の閉包を捕まえた節の複製も、持ち主の handle が値として使うだけなので `internal` にする。
@@ -469,28 +488,32 @@ main () =
 /// (docs/spec/core-ir.md の「handle を含む関数の複製」)。
 #[test]
 fn a_clause_copy_in_a_translated_function_is_internal() {
-    let text = "\
+    let text = format!(
+        "\
 import Yield (Yield(..))
 
 nums : Unit -> <Yield Int> Unit
 nums () =
   yield 1
   yield 2
-
+{HIDE}
 main : Unit -> <IO> Unit
 main () =
   let f = fn x -> x + 1
-  handle nums () with
-    | fn yield x -> println (show (f x))
-";
-    let program = eml_test_support::core_until(text, Pass::Optimize);
+  match hide nums with
+    | Box p ->
+      handle p () with
+        | fn yield x -> println (show (f x))
+"
+    );
+    let program = eml_test_support::core_until(&text, Pass::Optimize);
     let copy = program
         .functions
         .iter()
         .find(|function| function.name == "main$handle0$yield{0=main$lambda0}")
         .unwrap_or_else(|| panic!("{}", pretty(&program)));
     assert!(copy.internal, "{}", pretty(&program));
-    let lir = eml_test_support::lir(text);
+    let lir = eml_test_support::lir(&text);
     assert!(
         lir.functions
             .iter()
@@ -557,5 +580,267 @@ main () =
         "map_nested@[_:poly, _:poly]{0=add3/1}",
     ] {
         function(&shown, name);
+    }
+}
+
+/// handler の複製の関数 (名前に `{H=` を含むもの) を、表示の順に並べる。
+fn handler_copies(shown: &str) -> String {
+    shown
+        .lines()
+        .filter(|line| line.contains("fn \"") && line.contains("{H="))
+        .map(|line| function(shown, line.split('"').nth(1).unwrap()))
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+const NUMS: &str = "\
+import Yield (Yield(..))
+
+nums : Int -> Unit -> <Yield Int> Unit
+nums n () =
+  let go i =
+    if i > n then ()
+    else
+      yield i
+      go (i + 1)
+  go 1
+";
+
+/// すぐに再開する節の handler は、経路の関数の複製に節を展開して消える
+/// (docs/superpowers/specs/2026-10-18-s13e-specialization-design.md の「S13e-2 handler への特殊化」)。
+#[test]
+fn push_fold_has_no_handle_left() {
+    let shown = core_text(include_str!("../../../bench/push_fold.em"), Pass::Optimize);
+    assert!(
+        shown
+            .lines()
+            .all(|line| !line.contains("handle ") && !line.contains("perform Std.Yield")),
+        "{shown}"
+    );
+    let copies = handler_copies(&shown);
+    assert!(copies.contains("call main$lambda0("), "{shown}");
+}
+
+#[test]
+fn for_each_is_specialized() {
+    let text = format!(
+        "{NUMS}\nmain : Unit -> <IO> Unit\nmain () = Yield.for_each (nums 3) (fn x -> println \"\\{{x}}\")\n"
+    );
+    let shown = core_text(&text, Pass::Optimize);
+    assert!(!shown.contains("handle "), "{shown}");
+    insta::assert_snapshot!(format!("{}\n{}", function(&shown, "main"), handler_copies(&shown)), @r#"
+    fn main(p.0: unit) -> unit {
+      let t.2: unit = call "Std.Yield.for_each@[Int]{0=nums/1, 1=main$lambda0}"(3)
+      return t.2
+    }
+
+    fn "nums{H=Std.Yield.for_each@#0450afda50afc4ec}"(n.0: int, p.1: unit) -> unit {
+      let t.3: unit = call "nums$let$go{H=Std.Yield.for_each@#0450afda50afc4ec}"(n.0, 1)
+      return t.3
+    }
+
+    fn "nums$let$go{H=Std.Yield.for_each@#0450afda50afc4ec}"(n.0: int, i.1: int) -> unit {
+      let t.2: enum = extern "Prelude.Ord Int.>"(i.1, n.0)
+      switch t.2 Prelude.Bool { #0 -> b1, #1 -> b2 }
+    b1:
+      let t.8: unit = call main$lambda0(i.1)
+      let t.9: unit = call "nums$let$go{H=Std.Yield.for_each@#0450afda50afc4ec}$h0"(n.0, i.1, t.8)
+      return t.9
+    b2:
+      let t.7: unit = call "Std.Yield.for_each@#0450afda50afc4ec"((), ())
+      return t.7
+    }
+
+    internal fn "nums$let$go{H=Std.Yield.for_each@#0450afda50afc4ec}$h0"(n.0: int, i.1: int, t.2: unit) -> unit {
+      let t.3: int = extern Prelude.+(i.1, 1)
+      let t.4: unit = call "nums$let$go{H=Std.Yield.for_each@#0450afda50afc4ec}"(n.0, t.3)
+      return t.4
+    }
+    "#);
+}
+
+/// 状態つきの handler では、複製が状態を最後の引数で受け、節の展開が次の状態を継続の関数に渡す。
+#[test]
+fn a_stateful_handler_threads_its_state() {
+    let text = "\
+import Std.State (State(..))
+
+count : Int -> <State Int> Unit
+count n =
+  if n == 0 then ()
+  else
+    put (get () + 1)
+    count (n - 1)
+
+main : Unit -> <IO> Unit
+main () =
+  let (_, st) = State.run 0 (fn () -> count 5)
+  println (show st)
+";
+    let shown = core_text(text, Pass::Optimize);
+    assert!(!shown.contains("handle "), "{shown}");
+    insta::assert_snapshot!(handler_copies(&shown), @r#"
+    fn "main$lambda0{H=Std.State.run@#c7a76c0c3d933166}"(p.0: unit, st.2: int) -> obj {
+      let t.3: obj = call "count{H=Std.State.run@#c7a76c0c3d933166}"(5, st.2)
+      return t.3
+    }
+
+    fn "count{H=Std.State.run@#c7a76c0c3d933166}"(n.0: int, st.7: int) -> obj {
+      let t.1: enum = extern "Prelude.Eq Int.=="(n.0, 0)
+      switch t.1 Prelude.Bool { #0 -> b1, #1 -> b2 }
+    b1:
+      let t.11: obj = call "count{H=Std.State.run@#c7a76c0c3d933166}$h0"(n.0, st.7, st.7)
+      return t.11
+    b2:
+      let t.9: obj = call "Std.State.run@#c7a76c0c3d933166"((), st.7)
+      return t.9
+    }
+
+    internal fn "count{H=Std.State.run@#c7a76c0c3d933166}$h1"(n.0: int, t.1: unit, st.3: int) -> obj {
+      let t.2: int = extern Prelude.-(n.0, 1)
+      let t.4: obj = call "count{H=Std.State.run@#c7a76c0c3d933166}"(t.2, st.3)
+      return t.4
+    }
+
+    internal fn "count{H=Std.State.run@#c7a76c0c3d933166}$h0"(n.0: int, t.1: int, st.3: int) -> obj {
+      let t.2: int = extern Prelude.+(t.1, 1)
+      let t.4: obj = call "count{H=Std.State.run@#c7a76c0c3d933166}$h1"(n.0, (), t.2)
+      return t.4
+    }
+    "#);
+}
+
+/// `Yield.for_each` の複製の handle が残ることを確かめる。
+fn keeps_the_handle(text: &str) {
+    let shown = core_text(text, Pass::Optimize);
+    assert!(shown.contains("handle "), "{shown}");
+    assert!(!shown.contains("{H="), "{shown}");
+}
+
+#[test]
+fn a_non_tail_yielding_frame_keeps_the_handle() {
+    keeps_the_handle(
+        "\
+import Yield (Yield(..))
+
+emit2 : Int -> <Yield Int> Unit
+emit2 i =
+  yield i
+  yield (i + 1)
+
+nums : Unit -> <Yield Int> Unit
+nums () =
+  emit2 1
+  emit2 3
+
+main : Unit -> <IO> Unit
+main () = Yield.for_each nums (fn x -> println \"\\{x}\")
+",
+    );
+}
+
+#[test]
+fn a_masked_call_keeps_the_handle() {
+    keeps_the_handle(
+        "\
+import Yield (Yield(..))
+
+gen : (Unit -> <e> Unit) -> Unit -> <Yield Int | e> Unit
+gen cb () =
+  yield 1
+  cb ()
+
+main : Unit -> <IO> Unit
+main () = Yield.for_each (gen (fn () -> println \"cb\")) (fn x -> println \"\\{x}\")
+",
+    );
+}
+
+/// 経路に handle があれば特殊化しない。内側の handle は特殊化してよいので、外側の `Yield.for_each` の handle だけを見る。
+#[test]
+fn a_nested_handle_keeps_the_handle() {
+    let text = "\
+import Yield (Yield(..))
+
+nums : Unit -> <Yield Int> Unit
+nums () =
+  yield 1
+  handle (yield 2) with
+    | fn yield x -> yield (x + 1)
+
+main : Unit -> <IO> Unit
+main () = Yield.for_each nums (fn x -> println \"\\{x}\")
+";
+    let shown = core_text(text, Pass::Optimize);
+    let owner = shown
+        .lines()
+        .find(|line| line.contains("fn \"Std.Yield.for_each@"))
+        .unwrap_or_else(|| panic!("{shown}"));
+    let owner = function(&shown, owner.split('"').nth(1).unwrap());
+    assert!(owner.contains("handle "), "{shown}");
+}
+
+#[test]
+fn an_unknown_producer_keeps_the_handle() {
+    keeps_the_handle(&format!(
+        "{NUMS}
+data Box a = | Box a
+
+hide : a -> Box a
+hide x = Box x
+
+main : Unit -> <IO> Unit
+main () =
+  match hide (nums 3) with
+    | Box p -> Yield.for_each p (fn x -> println \"\\{{x}}\")
+"
+    ));
+}
+
+/// すべての操作が `never` のエフェクトは、中断が巻き戻しで安いので特殊化しない。
+#[test]
+fn a_never_only_effect_is_not_targeted() {
+    let text = "\
+import Fail (Fail(..))
+
+check : Int -> <Fail String> Int
+check n = if n > 0 then n else fail \"negative\"
+
+main : Unit -> <IO> Unit
+main () =
+  match Fail.to_result (fn () -> check 3) with
+    | Ok n -> println (show n)
+    | Err e -> println e
+";
+    let shown = core_text(text, Pass::Optimize);
+    assert!(shown.contains("handle "), "{shown}");
+    assert!(!shown.contains("{H="), "{shown}");
+}
+
+/// handler の複製の名前とコードは、handle を含む関数と経路の関数のコードだけで決まる (docs/spec/vm.md の「追記」)。
+#[test]
+fn handler_copies_do_not_depend_on_the_rest_of_the_program() {
+    let a = format!(
+        "{NUMS}\nmain : Unit -> <IO> Unit\nmain () = println (show (Yield.fold (fn acc x -> acc + x) 0 (nums 3)))\n"
+    );
+    let b = format!(
+        "{NUMS}
+other : Int -> Unit -> <Yield Int> Unit
+other n () =
+  yield n
+  yield (n * 2)
+
+main : Unit -> <IO> Unit
+main () =
+  println (show (Yield.fold (fn acc x -> acc + x) 0 (nums 3)))
+  println (show (Yield.fold (fn acc x -> acc * x) 1 (other 4)))
+"
+    );
+    let a = core_text(&a, Pass::Optimize);
+    let b = core_text(&b, Pass::Optimize);
+    let copies = handler_copies(&a);
+    assert!(!copies.is_empty(), "{a}");
+    for copy in copies.split("\n\n") {
+        assert!(b.contains(copy.trim()), "{copy}\n---\n{b}");
     }
 }

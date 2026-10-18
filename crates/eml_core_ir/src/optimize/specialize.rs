@@ -110,7 +110,7 @@ impl Specializer {
     }
 
     /// `target` の `position` の引数 (または捕獲) に既知の閉包 `closure` を渡すとき、特殊化するならその形。判断は
-    /// 呼び出し先の translate のコードと、閉包の関数だけで決まる。包む関数は、呼び出し先にも閉包の関数にもしない
+    /// 呼び出し先の translate のコードと、閉包の関数だけで決まる。包む関数は呼び出し先にしない
     /// (docs/spec/core-ir.md の「REPL の入力」)。
     pub(crate) fn shape(
         &self,
@@ -232,14 +232,21 @@ impl Specializer {
             None => format!("{callee}{{{args}}}"),
             Some(owner) => format!("{callee}@{{{args}}} via {owner}"),
         };
-        if name.chars().count() <= NAME_LIMIT {
-            return name;
-        }
-        let base = callee.split('@').next().unwrap_or(callee);
-        let mut state = Fnv::new();
-        state.text(&name);
-        format!("{base}@#{:016x}", state.0)
+        limited(callee, name)
     }
+}
+
+/// 上限を超えた複製の名前 `name` を、呼び出し先 `callee` の名前の `@` より前の部分に、`name` 全体のハッシュを付けた
+/// `<base>@#<16 hex>` にする。上限以内ならそのまま返す。handler への特殊化の複製も同じ形にする
+/// (docs/spec/core-ir.md の「鍵と名前」)。
+pub(crate) fn limited(callee: &str, name: String) -> String {
+    if name.chars().count() <= NAME_LIMIT {
+        return name;
+    }
+    let base = callee.split('@').next().unwrap_or(callee);
+    let mut state = Fnv::new();
+    state.text(&name);
+    format!("{base}@#{:016x}", state.0)
 }
 
 /// handle の節か `return` の節に使う関数。translate はこれらを、その handle を含む関数の中の `closure` か `&f` として

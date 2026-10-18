@@ -112,18 +112,18 @@ fn fib() {
 fn fold_state() {
     insta::assert_debug_snapshot!(stats("fold_state", "5000050000\n"), @"
     RunStats {
-        evidence_steps: 100000,
+        evidence_steps: 0,
         yields: 0,
         yield_frames: 0,
         unwound_frames: 0,
         string_bytes_copied: 10,
-        rc_increments: 300005,
-        rc_decrements: 300014,
-        boxes: 200003,
-        unboxes: 200002,
-        allocations: 10,
-        peak_objects: 8,
-        peak_stack: 43,
+        rc_increments: 0,
+        rc_decrements: 2,
+        boxes: 2,
+        unboxes: 1,
+        allocations: 3,
+        peak_objects: 2,
+        peak_stack: 25,
     }
     ");
 }
@@ -172,18 +172,18 @@ fn loop_() {
 fn state() {
     insta::assert_debug_snapshot!(stats("state", "100000\n"), @"
     RunStats {
-        evidence_steps: 200000,
+        evidence_steps: 0,
         yields: 0,
         yield_frames: 0,
         unwound_frames: 0,
         string_bytes_copied: 6,
-        rc_increments: 200001,
-        rc_decrements: 200006,
-        boxes: 100002,
-        unboxes: 100001,
-        allocations: 6,
-        peak_objects: 4,
-        peak_stack: 27,
+        rc_increments: 0,
+        rc_decrements: 2,
+        boxes: 2,
+        unboxes: 1,
+        allocations: 3,
+        peak_objects: 2,
+        peak_stack: 16,
     }
     ");
 }
@@ -312,18 +312,18 @@ fn orders_by_hand() {
 fn push_fold() {
     insta::assert_debug_snapshot!(stats("push_fold", "5000050000\n"), @"
     RunStats {
-        evidence_steps: 100000,
+        evidence_steps: 0,
         yields: 0,
         yield_frames: 0,
         unwound_frames: 0,
         string_bytes_copied: 10,
-        rc_increments: 200001,
-        rc_decrements: 200006,
-        boxes: 200002,
-        unboxes: 200002,
-        allocations: 6,
-        peak_objects: 5,
-        peak_stack: 36,
+        rc_increments: 0,
+        rc_decrements: 1,
+        boxes: 0,
+        unboxes: 0,
+        allocations: 2,
+        peak_objects: 2,
+        peak_stack: 19,
     }
     ");
 }
@@ -332,18 +332,18 @@ fn push_fold() {
 fn push_fold_by_hand() {
     insta::assert_debug_snapshot!(stats("push_fold_by_hand", "5000050000\n"), @"
     RunStats {
-        evidence_steps: 100000,
+        evidence_steps: 0,
         yields: 0,
         yield_frames: 0,
         unwound_frames: 0,
         string_bytes_copied: 10,
-        rc_increments: 100001,
-        rc_decrements: 100006,
-        boxes: 200002,
-        unboxes: 200002,
-        allocations: 6,
-        peak_objects: 5,
-        peak_stack: 30,
+        rc_increments: 0,
+        rc_decrements: 1,
+        boxes: 0,
+        unboxes: 0,
+        allocations: 2,
+        peak_objects: 2,
+        peak_stack: 14,
     }
     ");
 }

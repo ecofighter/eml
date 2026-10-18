@@ -436,12 +436,12 @@ impl Out<'_> {
     fn compact(mut self) -> (Vec<VarInfo>, Vec<Block>) {
         let mut used = Vec::new();
         for block in &mut self.blocks {
-            for_each_var_mut(block, |var| used.push(*var));
+            block.for_each_var_mut(|var| used.push(*var));
         }
         used.sort_unstable();
         used.dedup();
         for block in &mut self.blocks {
-            for_each_var_mut(block, |var| {
+            block.for_each_var_mut(|var| {
                 *var = VarId(used.binary_search(var).expect("a used variable") as u32);
             });
         }
@@ -546,52 +546,5 @@ fn slow_path(
         params: Vec::new(),
         stmts,
         term: Term::Return(value),
-    }
-}
-
-/// ブロックの中の変数の出現 (引数、束縛、使用、case のフィールド、着地の印) をすべて訪れる。
-fn for_each_var_mut(block: &mut Block, mut f: impl FnMut(&mut VarId)) {
-    block.params.iter_mut().for_each(&mut f);
-    for stmt in &mut block.stmts {
-        match stmt {
-            Stmt::Let { var, rhs } => {
-                f(var);
-                rhs.for_each_atom_mut(|atom| {
-                    if let Atom::Var(var) = atom {
-                        f(var);
-                    }
-                });
-                // 着地の印の変数は呼び出しが使う値ではなく `for_each_atom_mut` に出ないので、ここで写す
-                if let Rhs::Call {
-                    call:
-                        Call::Apply {
-                            prompt: Some(marker),
-                            ..
-                        },
-                    mask: _,
-                } = rhs
-                {
-                    f(marker);
-                }
-            }
-            Stmt::Unpack {
-                value,
-                ctor: _,
-                fields,
-            } => {
-                f(value);
-                fields.iter_mut().for_each(&mut f);
-            }
-        }
-    }
-    block.term.for_each_atom_mut(|atom| {
-        if let Atom::Var(var) = atom {
-            f(var);
-        }
-    });
-    if let Term::Switch { cases, .. } = &mut block.term {
-        for case in cases {
-            case.fields.iter_mut().for_each(&mut f);
-        }
     }
 }

@@ -150,35 +150,42 @@ handle の本体から、末尾の位置の既知の直接の呼び出しだけ�
 
 Core IR は row を持たないが、yield しうる操作を持つエフェクトの `perform` は、それを含む関数の `yields` の印に必ず表れる (`docs/spec/types.md` の「row の具体化の記録」)。そのため、末尾でない呼び出しの先で H に届く `perform` が起きうるかは、この印で安全側に判断できる。`never` の操作だけのエフェクト (`Fail`) と `IO` の handle は、中断がすでに巻き戻しで安いので対象にしない。
 
+handle の地点と `perform` にも、次の条件を置く (実装の判断)。
+
+- 本体、節、`return` の節は、関数の値か、handle を含む関数の中の `closure` の変数で、その変数を使うのはこの handle だけである。捕獲を複製の引数に開くので、閉包をほかの所でも使うと、`unr` でない捕獲を2か所で消費することになるためである
+- 経路の関数の H 宛ての `perform` の引数は、節の関数の引数と同じ Repr を持ち、印も受け渡せる。節の本体は引数を置き換えて展開するので、Repr が違うと、box の挿入が直す呼び出しの境目がないまま、違う Repr の値を使うことになるためである
+
 ### 節の形
 
 節ごとに、Core IR の形から次のどちらかに分ける。`fn` と `ctl` の書き方ではなく、形で決める。
 
 - **すぐに再開する節**: 節の関数 g の `k` の使いが、末尾の位置の `mask` のない `resume k(v, s)` だけである節。EP の「すぐに再開する節」(`docs/spec/core-ir.md` の「`perform` と節の3つの形」) の最初の3つの条件と同じである。4つ目の条件 (本体に yield の地点がない) は要らない。特殊化した節は handler の外側でふつうの関数として動き、本体の yield は EP が今までどおり扱うためである
-- **それ以外の節**: `k` を値として使う節 (`Iter k`)、`k` を末尾でなく呼ぶ節、`k` を使わない節、`never` の操作の節
+- **それ以外の節**: `k` を値として使う節 (`Iter k`)、`k` を末尾でなく呼ぶ節、`k` を使わない節、`never` の操作の節。本体に `handle` を持つ節もここに入れる。展開した所ごとにその `handle` が写り、節の関数がちょうど1つの `handle` に属するという EP の前提 (`crates/eml_core_ir/src/evidence/handlers.rs` の `entries`) に反するためである (実装の判断)
 
 ### 書き換え
 
-経路の関数 f を、handler ごとの複製 `f{H}` にする。鍵は (f、handle の位置の handler の関数の組、節の捕獲の Repr と印) で、S13e-1 の鍵と同じ規則で名前を決める。複製の引数には、節と `return` の節の捕獲と、handler の状態を足す。
+経路の関数 f を、handler ごとの複製 `f{H}` にする。鍵は (f、handle の `return` の節の関数) で、名前は `<f>{H=<ret>}` である。translate は handle ごとに `return` の節を作り、S13e-1 は持ち主の名前を鍵に入れて節を複製するので、`return` の節の関数が handle を1つに決める。節の関数と捕獲の形も、それで決まる。64字を超えた名前は、S13e-1 の複製と同じく、f の名前の `@` より前の部分に名前全体のハッシュを付けた形にする (計画のときに決めた)。複製の引数は、f の引数、節と `return` の節の捕獲 (節の順)、状態つきの handler なら状態の順にする。状態のない handler の複製は、状態の引数を持たない。複製は `internal` にしない。
 
-- すぐに再開する節への `perform E.op(a…)`: 節の関数 g の本体を、`perform` の地点にその場で展開する。g の `return` のブロックの末尾の `resume k(v, s)` は、`perform` の後ろへのジャンプにし、v を `perform` の結果に、s をその後のコードの状態にする。状態のない handler では状態を省く。g を呼んで `(v, s)` の組を返させる形にしないのは、状態つきの handler で `perform` のたびに組を確保することになるためである。g は再帰しないので、展開は止まる (私の判断)
-- それ以外の節への `perform E.op(a…)`: `perform` より後ろの部分を継続の関数 `f{H}$kN` に切り出す。`f{H}$kN` は生きている変数を捕獲し、状態のない handler なら再開の値 v を、状態つきの handler なら v と次の状態 s を受けて、`f{H}` の残りを動かす。引数の形は、translate が節の入口で生の継続を包む `cont$` (`v` を受ける) と `cont$state` (`v` と `s` を受ける) と同じにする。節の関数の写しに `k` として `closure f{H}$kN(…)` を渡し、末尾で呼ぶ。写しの中では、`k` を包む `closure cont$(k)` と `closure cont$state(k)` を `k` そのものに替え、`resume k(v, s)` を `apply k(v)` か `apply k(v, s)` に替える。節の結果が、そのまま handle の結果になる
-- 経路の関数の `return r`: `return` の節を、r と今の状態で末尾で呼ぶ
-- 経路の関数への末尾呼び出し: 節の捕獲と今の状態を渡して `g{H}` を呼ぶ
-- handle の地点: evidence を作らず、`body{H}(本体の捕獲…, 節の捕獲…, init)` を呼ぶ
+- すぐに再開する節への `perform E.op(a…)`: `perform` より後ろの部分を継続の関数 `f{H}$hN` に切り出し、節の関数 g の本体を `perform` の地点にその場で展開する。g の `return` のブロックの末尾の `resume k(v, s)` は、`f{H}$hN(生きている変数…, v, s)` の末尾呼び出しにする。状態のない handler では s を省く。状態がいつも関数の引数なので、ブロックの間で状態を持ち回る必要がなく、組も確保しない。費用は `perform` ごとの末尾呼び出し1回である。`perform` の後ろへジャンプする形でなくこの形にすることは、計画のときに決めた。g を呼んで `(v, s)` の組を返させる形にしないのは、状態つきの handler で `perform` のたびに組を確保することになるためである。g は再帰しないので、展開は止まる (私の判断)。展開した節の本体の文は、H 宛てとして書き換えない。節の中の `perform` は、もとの意味でも handler の外側で動くためである
+- それ以外の節への `perform E.op(a…)`: `perform` より後ろの部分を継続の関数 `f{H}$hN` に切り出す。`f{H}$hN` は生きている変数を捕獲し、状態のない handler なら再開の値 v を、状態つきの handler なら v と次の状態 s を受けて、`f{H}` の残りを動かす。引数の形は、translate が節の入口で生の継続を包む `cont$` (`v` を受ける) と `cont$state` (`v` と `s` を受ける) と同じにする。節の関数の写しに `k` として `closure f{H}$hN(…)` を渡し、末尾で呼ぶ。写しの中では、`k` を包む `closure cont$(k)` と `closure cont$state(k)` を `k` そのものに替え、`resume k(v, s)` を `apply k(v)` か `apply k(v, s)` に替える。節の結果が、そのまま handle の結果になる
+- 経路の関数の `return r`: `return` の節を、その捕獲、r、今の状態で末尾で呼ぶ。経路の関数でない関数への末尾呼び出し (`yields` でない関数の呼び出しと、`yields` でない `apply`) は末尾でない呼び出しにして、その結果で `return` の節を末尾で呼ぶ
+- 経路の関数への末尾呼び出し: 引数に節と `return` の節の捕獲と今の状態を足して、`g{H}` を呼ぶ
+- handle の地点: evidence を作らず、`body{H}(本体の捕獲…, (), 節と return の節の捕獲…, init)` を呼ぶ。状態のない handler では init を省く。handle のためだけに作った `closure` は消す
 
-`f{H}$kN` は `once` の継続なら `Lin`、`multi` の継続なら捕獲がすべて `Unr` になる。持ち越し規則 (`docs/spec/linearity.md`) が、`multi` の継続の捕獲を `Unr` に限っているためである。
+継続の関数の名前は `<f{H}>$h<N>` で、N は f の中の H 宛ての `perform` の、ブロックと文の順の通し番号である (0 から振る)。後ろの `perform` から書き換えるので、継続の関数の中の `perform` も同じ番号の継続の関数を呼ぶ。接尾辞を EP の継続の関数の `$kN` と分けるのは、`f{H}` がほかのエフェクトで yield すると、EP が `f{H}$kN` を作って名前が重なるためである (実装の判断)。継続の関数は同じ複製の中からだけ直接呼ばれるので、`internal` にする。変数の表は、EP の継続の関数と同じく、本体に現れる変数だけに詰める (`docs/spec/core-ir.md` の「継続の関数」)。関数全体の表を地点ごとに写すと、地点の数と変数の数の積の大きさになるためである。
+
+`f{H}$hN` は `once` の継続なら `Lin`、`multi` の継続なら捕獲がすべて `Unr` になる。持ち越し規則 (`docs/spec/linearity.md`) が、`multi` の継続の捕獲を `Unr` に限っているためである。
 
 ### 意味が変わらない理由
 
 - 節の中の `perform` は、もとの意味でも handler の外側で動く。特殊化した後は `evv` に H がないので、外側の handler に届く
 - 経路の関数の中の、ほかのエフェクトの `perform` も、外側の handler に届く。H は E だけを扱い、経路に入れ子の handle も `mask` もないためである
 - 経路の関数の中で外側のエフェクト (`State` など) が yield するときは、EP が今までどおり継続を作る。その継続には `f{H}` の残りが入るので、H の handle のフレームを含む今の継続と同じ意味になる
-- `File` を持つ生産者では、継続 `closure f{H}$kN` が `File` を捕獲する。継続を捨てると `File` も閉じる。今の `Iter.generate` の注釈 (継続を捨てるときに閉じる) と同じである
+- `File` を持つ生産者では、継続 `closure f{H}$hN` が `File` を捕獲する。継続を捨てると `File` も閉じる。今の `Iter.generate` の注釈 (継続を捨てるときに閉じる) と同じである
 
 ### `Iter` と push の形での結果 (見込み)
 
-- `Iter.generate (nums n)`: `go{H}` の `yield i` は、`tail call yield節'(i, closure go{H}$k0(n, i))` になる。節は `Some (i, Iter k)` を作って返す。`go{H}` は自分を呼ばなくなり、再帰は継続 `go{H}$k0` の中に移る。1要素あたりの yield は0回、確保は4回 (`k`、`Iter`、組、`Some`) になる。節が `k` を値として包む `closure cont$(k)` は、上の書き換えで `k` そのものになるので、閉包は増えない
+- `Iter.generate (nums n)`: `go{H}` の `yield i` は、`tail call yield節'(i, closure go{H}$h0(n, i))` になる。節は `Some (i, Iter k)` を作って返す。`go{H}` は自分を呼ばなくなり、再帰は継続 `go{H}$h0` の中に移る。1要素あたりの yield は0回、確保は4回 (`k`、`Iter`、組、`Some`) になる。節が `k` を値として包む `closure cont$(k)` は、上の書き換えで `k` そのものになるので、閉包は増えない
 - `Yield.fold f init (nums n)`: `go{H}(n, i, acc)` の `yield i` は、`f acc i` を呼んで新しい状態を作り、`go{H}(n, i + 1, acc')` を末尾で呼ぶ形になる。`f` が既知なら、S13e-1 で直接の呼び出しになる
 
 ## S13e-3 インライン化と融合
@@ -202,8 +209,8 @@ S13e-1 の「既知」を、既知の閉包をフィールドに持つ `con` の
 `Iter.fold f 0 (Iter.generate (nums n))` では、次のように融合する (見込み)。
 
 1. `generate{nums}` をインライン化すると、`fold` の引数が `Iter (closure lambda0{nums}(n))` という既知の形になる
-2. `fold` をその形について特殊化し、`next` と、S13e-2 の後で再帰しなくなった `go{H}` をインライン化する。`Some (i, Iter (closure go{H}$k0(n, i)))` がその場で `match` され、既知のコンストラクタとして解ける
-3. 再帰の呼び出しの引数の形は `Iter (closure go{H}$k0(…))` で、要素ごとに同じなので、2つ目の複製に収まる。結果は `fold''(f, acc + i, n, i + 1)` のループで、1要素ごとの確保はない
+2. `fold` をその形について特殊化し、`next` と、S13e-2 の後で再帰しなくなった `go{H}` をインライン化する。`Some (i, Iter (closure go{H}$h0(n, i)))` がその場で `match` され、既知のコンストラクタとして解ける
+3. 再帰の呼び出しの引数の形は `Iter (closure go{H}$h0(…))` で、要素ごとに同じなので、2つ目の複製に収まる。結果は `fold''(f, acc + i, n, i + 1)` のループで、1要素ごとの確保はない
 
 ### 止まること
 
@@ -261,6 +268,7 @@ S13e-1 と S13e-3 の確かめのため、S13e-1 で確保の回数 `allocations
 - `crates/eml_vm/tests/bench.rs` と `crates/eml_vm/tests/scaling.rs` の `RunStats` のうち、回数が変わるものと、足した欄
 - `crates/eml_cli/tests/api.rs` などで、関数の名前を含む内部の誤りの文言が変わるもの
 - 包む関数や既知の閉包への、特殊化しない `apply` が残ることを前提にしていたテストのプログラム。テストが確かめる内容は変えずに書き直す。値はデータを通して使う所に届け、包む関数と同じ形のローカル関数には本体に計算を足す (`crates/eml_core_ir/tests/boxing.rs` の `shared_wrappers_are_never_called_directly_and_become_uniform_in_place`、`crates/eml_core_ir/tests/evidence.rs` の `clause_local_function_resumes_once`)。S13e-1 の複製の後は、高階関数に既知の閉包を渡して、特殊化しない `apply` や値として使う関数の形を見ていたテストも、閉包を `data Box a = | Box a` に入れて取り出してから渡す形に書き直す。書き直したのは `boxing.rs` の7つ (`a_lambda_used_only_as_a_value_is_made_uniform_in_place`、`a_top_level_function_used_only_as_a_value_gets_a_boxed_wrapper`、`a_function_also_called_directly_gets_a_boxed_wrapper`、`a_function_made_uniform_by_t3_gets_no_boxed_wrapper`、`a_value_unboxed_by_the_pass_is_passed_on_without_a_new_box`、`a_value_lambda_that_fails_ends_in_a_tail_never_clause`、`t3_raises_the_ret_along_a_chain_of_tail_calls`)、`contract.rs` の `calls_in_tail_position_are_tail_calls`、`evidence.rs` の4つ (`a_masked_call_restores_the_evidence_list_and_wraps_the_continuation`、`a_masked_call_in_a_continuation_restores_the_evidence_list_before_it_continues`、`a_pure_instance_of_a_row_polymorphic_function_has_no_yield_check`、`a_masked_call_in_a_non_yielding_function_has_no_slow_path`)、`translate.rs` の `a_boxed_wrapper_is_named_after_its_instance`、`local_functions.rs` の `std_public_functions_keep_their_lir` (の `STD_PROGRAM`) である。`boxing.rs` の `main` と `via` の期待値は、`hide` の呼び出しと `unpack` が増えた分だけ変わる
+- S13e-2 の handler への特殊化で handle が消えるようになったテストのプログラム。EP が handle、`perform`、`resume` を下ろす形を見るテストは、handle の本体を `hide` でデータに通して渡す形に書き直し、確かめる内容は変えない。書き直したのは `evidence.rs` の13 (`a_handle_installs_evidence_and_calls_prompt`、`an_immediate_clause_becomes_its_entry`、`a_clause_that_performs_another_effect_is_not_run_in_place`、`a_perform_looks_up_evidence_and_calls_its_clause`、`closures_ep_builds_take_the_join_of_their_captures`、`an_io_extern_is_not_a_yield_point`、`a_never_clause_call_is_not_a_yield_point`、`continuations_of_many_yield_points_stay_linear_in_size`、`a_fn_clause_runs_in_place`、`a_fn_clause_that_performs_yields`、`a_fn_clause_that_prints_runs_in_place_under_the_outer_evv`、`a_fn_clause_that_calls_nothing_has_no_under`、`a_fn_clause_that_fails_runs_in_place`)、`translate.rs` の `a_lin_enum_variable_is_unr`、`crates/eml_vm/tests/scaling.rs` の `every_operation_looks_up_its_evidence` である。`a_perform_looks_up_evidence_and_calls_its_clause` は、`perform` を下ろした関数が本体のラムダ `main$lambda0` になるので、その関数の表示を見る。`a_handle_installs_evidence_and_calls_prompt` の `main` の期待値は、`hide` の呼び出しと `unpack` が増えた分だけ変わる。`boxing.rs` の `a_tail_call_off_any_loop_may_stay_an_ordinary_call` は、handle の本体の形 (`answer` の結果の `box`) を見るので、本体でなく `answer` の中で `ask` をデータに通す。S13e-1 の規則だけを見る `optimize.rs` の4つ (`yield_as_a_value_becomes_a_perform`、`each_yield_is_specialized`、`two_handler_copies_keep_their_own_clauses`、`a_clause_copy_in_a_translated_function_is_internal`) も、生産者をデータに通して渡す
 - 関数の名前の一覧と、複製を含む Core IR の期待値。`crates/eml_core_ir/tests/instances.rs` の `a_closure_with_a_file_passed_as_a_type_variable_lowers` は、`f` の2つの instance の代わりに、既知のラムダごとの複製の名前を並べる。`evidence.rs` の `an_extern_wrapper_does_not_yield` は、`$extern` を名前に含む複製 (`yields` でない) も並べる
 
 ### 足すテスト
@@ -276,7 +284,7 @@ S13e-1 と S13e-3 の確かめのため、S13e-1 で確保の回数 `allocations
 - `optimize` のモジュールの分け方と、作業リストの形
 - 特殊化した複製の名前の細部の書き方
 - 打ち切りの深さとインライン化の大きさのしきい値。計測で決め、`benchmarks.md` に理由を書く
-- 継続の関数 `f{H}$kN` の切り出しを、EP の継続の関数を作る仕組みと共有するか、別に作るか
+- 継続の関数 `f{H}$hN` の切り出しを、EP の継続の関数を作る仕組みと共有するか、別に作るか
 - reuse の組の選び方 (1つの `release` に後ろの `con` が複数あるときにどれを選ぶか)
 - `RunStats` に足す欄の名前
 - 各作業の計画のタスクの分け方

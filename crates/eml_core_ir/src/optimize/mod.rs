@@ -3,6 +3,7 @@
 //! 到達できない関数を落とす
 //! (docs/superpowers/specs/2026-10-18-s13e-specialization-design.md の「S13e-1 既知の閉包への特殊化」)。
 
+mod handlers;
 mod known;
 mod reach;
 mod specialize;
@@ -15,6 +16,9 @@ pub(crate) use yields::{kept_marks, recompute_yields};
 
 pub fn optimize(program: &mut Program) {
     specialize::specialize(program);
+    let keep = kept_marks(program);
+    recompute_yields(program, &keep);
+    handlers::handlers(program);
     let keep = kept_marks(program);
     recompute_yields(program, &keep);
     retain_reachable(program);
