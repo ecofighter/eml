@@ -4,7 +4,7 @@
 
 use eml_extern::{Extern, ExternEffect, Purity};
 use eml_rt::externs::{self, Fault};
-use eml_rt::{Ctx, Mode, Stream, Word};
+use eml_rt::{Ctx, Mode, Stream, Token, Word};
 
 use crate::RunCounts;
 use crate::apply;
@@ -300,6 +300,12 @@ fn step<M: Mode>(
         Op::Decref { src } => unsafe { ctx.heap_mut().decref(task.get(src)) }?,
         Op::Release { src, at } => data::release(code, ctx, task, src, at)?,
         Op::Con { dst, at } => data::con(code, ctx, task, dst, at)?,
+        Op::ReleaseReuse { src, at } => data::release_reuse(code, ctx, task, src, at)?,
+        Op::ConReuse { dst, at } => data::con_reuse(code, ctx, task, counts, dst, at)?,
+        // token は verifier を通った IR の、このヒープのまだ使っていない token である
+        Op::DropToken { tok } => {
+            unsafe { ctx.heap_mut().drop_token(Token::from_word(task.get(tok))) }?
+        }
         Op::BoxInt { dst, src } => {
             if M::CHECKED {
                 counts.boxes += 1;
@@ -529,6 +535,10 @@ fn unwind<M: Mode>(
                     for _ in 0..count {
                         unsafe { ctx.heap_mut().decref(task.get(slot)) }?;
                     }
+                }
+                // 表の token は、地点の後で生きていてまだ使っていない token である。手放さないと箱が残る
+                for &slot in &entry.tokens {
+                    unsafe { ctx.heap_mut().drop_token(Token::from_word(task.get(slot))) }?;
                 }
             }
         }

@@ -14,8 +14,9 @@ VM は、LIR をレジスタ型のバイトコードに変換し、`eml_rt` の 
 - `eml_lir` は、データの物理的な形を決める関数 `LayoutCtor::shape` を持つ ([オブジェクトモデル](object-model.md) の「ペイロード」)
 - `eml_lir` は、文の単位の生存を公開の API にする ([LIR](lir.md) の「生存解析」)。スロットの割り当て (「スロットの割り当て」) が文の単位の干渉を作るために使う
 - `eml_rt` は、`Word::from_bits` を公開する。生の `int` と `enum` の値をスロットに置くためである (「スロットとスタック」)
-- `eml_rt` の関数には、VM のために `#[inline]` を足していない。インライン化の注釈 (`-C remark=inline`) が「definition is unavailable」と示した `eml_rt` の関数は、どれも実行の繰り返しの外か冷えた道にあったためである。繰り返しの中で呼ぶ関数に同じ注釈が出たときに足し、前後に `bench/rt.sh` を流して [計測の基準](../implementation/benchmarks.md) に記録する。`#[inline]` の置き方によって `map-reuse` の命令の数がビルドごとに約2倍振れたことがあるためである
+- `eml_rt` の関数には、S10 で VM のために `#[inline]` を足さなかった。インライン化の注釈 (`-C remark=inline`) が「definition is unavailable」と示した `eml_rt` の関数は、どれも実行の繰り返しの外か冷えた道にあったためである。繰り返しの中で呼ぶ関数に同じ注釈が出たときに足し、前後に `bench/rt.sh` を流して [計測の基準](../implementation/benchmarks.md) に記録する。`#[inline]` の置き方によって `map-reuse` の命令の数がビルドごとに約2倍振れたことがあるためである。S13e-4 では、reuse の命令の速い道で呼ぶ `into_token` と `drop_token` に `#[inline]` を足した。足す前後の `bench/rt.sh` の値は、どの計測も 0.5% より大きくは増えなかった
 - `eml_vm` の中の関数には、2つが分かったときだけ `#[inline]` を付ける。1つは、インライン化の注釈 (`-C remark=inline`) で、VM の繰り返し (`vm::run` と、そこに展開される関数) に「definition is unavailable」で展開されていないことである。もう1つは、付けると `bench/run.sh` で命令の数が減ることである。総称な関数の実体は、コード生成単位の1つにしかできず、ほかの単位からは展開できないためである。今は `data` の命令の関数 (`con`、`switch_tag`、`switch_int`、`switch_string`、`unpack`、`release`、`unbox`) と、`apply` の `make_closure` と `apply_rest` に付けている。測った数は [計測の基準](../implementation/benchmarks.md) の「S10b」にある
+- reuse の命令の関数 (`release_reuse` と `con_reuse`) には `#[inline(never)]` を付ける。`vm::run` に展開すると、reuse の命令を1つも使わないプログラムでも `bench/run.sh` の命令の数が増えたためである (S13e-4 の実装の途中で、`list` で 2.4%、`tree` で 3.2%)。`eml_rt` の部品 (`is_unique`、`into_token`、`con_at` など) は、この2つの関数の中に展開される
 - release のプロファイルの `codegen-units` は既定の値のままにする。1 にすると、VM の実行の分の命令の数はプログラムによって減ったり増えたりしたためである (`state` で 14.2% 減、`fib` で 2.5% 増。[計測の基準](../implementation/benchmarks.md) の「S10a (VM)」)
 - 実行の関数は `eml_vm::execute(program: &eml_lir::Program, config: &RunConfig, host: HostRef) -> Result<RunStats, RuntimeError>` の1つである。`execute` は、新しい `Machine` にプログラムを読み込み、入口を実行して閉じる (「追記」)。`RunConfig` は、検査モードかどうか (`debug_heap`) と、実行を止める情報 (`control: Arc<Control>`) を持つ。`file_root` は Host が持つので、`RunConfig` は持たない
 - `RunConfig` は `#[non_exhaustive]` にする。欄を足しても呼び出し側を壊さないためである。`RunConfig::default()` は、速いモードと、上限のない新しい `Control` (`Control::new(Limits::default())`) である。`Control` は `Default` を持たないので、`Default` は手で書く。`with_debug_heap(bool)` と `with_control(Arc<Control>)` で組み立てる
@@ -100,6 +101,7 @@ base + 0 .. base + frame_size: スロット
   - 固定のスロット: `Move { dst, src }`、`IntAdd { dst, a, b }` のように `u16` を3つまで持つ。`EvLookup { dst, effect }` と `EvClause { dst, ev, op }` は、エフェクトと操作の番号も `u16` で持つ
   - スロットと即値: `LoadRaw { dst, value: i32 }` (生の `int` と `enum` の値)、`LoadImm { dst, value: i32 }` (即値の語)、`LoadConst { dst, index: u32 }`、`BoxConst { dst, index: u32 }`、`Goto { target: u32 }`
   - スロットと表の添字: `Call { dst, at: u32 }` のように、長さの変わるオペランドを `operands[at..]` に置く。関数の番号、行の番号、引数のスロットの並びは表の側にある
+  - スロットを2つと表の添字は 8 バイトに収まらない。そのため、token を定義する `release` (`ReleaseReuse { src, at }`) と token を受ける `con` (`ConReuse { dst, at }`) は、token のスロットを `operands[at]` に置く (「reuse」)
 - 呼び出し、`apply`、`clause`、extern、`con`、`closure`、`prim` の引数と `return` の値に定数の atom (`Int`、`#N`、`&f`、`()`) があれば、命令の前に一時のスロットへ読み込み、そのスロットを渡す。一時のスロットは変数のスロットの後に置き、命令ごとに使い回す。枠の大きさは、変数のスロットの数と、1つの命令が使う一時のスロットの数の最大の和である
 - 定数の読み込みは、受ける位置の Repr で分ける。`Int` は `LoadRaw` で、`i32` に収まらなければ `constants` に置いて `LoadConst` で読む。`#N` は、`enum` の位置では `LoadRaw`、`tobj` の位置では `LoadImm` である。`&f` は関数の番号の `LoadImm`、`()` は値 0 の `LoadImm` である
 - 実行は、`match` で命令を分ける1つのループで、`M: Mode` について総称にする。Rust の再帰は使わない。`ApplyRest` と `Finish` の処理も、ループの中で命令として扱う
@@ -113,6 +115,7 @@ base + 0 .. base + frame_size: スロット
   - 変数を定義する文 (呼び出しの結果、`let`、`unpack` のフィールド) は、同じ文が定義するほかの変数と、その文の後で生きているすべての変数と干渉する。定義した変数が使われずに死んでいても同じである。使われない呼び出しの結果を `Ret` が書いても、生きている値を上書きしないためである
   - ブロックの引数は入口で同時に書くので、互いと、そのブロックの入口で生きている変数と干渉する
   - case のフィールドは `switch` で書くので、互いと、行き先の入口で生きている変数と、scrutinee と干渉する。`unpack` のフィールドも、その値と干渉する。フィールドを1つずつ読んで書く間に、scrutinee のスロットを上書きしないためである
+- token の変数も、ほかの変数と同じ規則でスロットを持つ。token を定義する `release` が定義で、token を受ける `con` と `drop_token` が使いである
 - 定義する変数は、その文で死ぬオペランドとスロットを共有しうる。そのため、複数の手順に展開する命令 (`con`、`closure`、`apply`、基本操作など) は、オペランドをすべて読み終えてから `dst` を書く
 - case と `unpack` のフィールドは、使われるものだけを読んで書く。SSA なので、使われないフィールドは死んでいる
 - Repr ごとにスロットを分けない。どの値も1語なので、分けても得るものがないためである。命令の位置ごとの割り当ては静的に決まるので、命令の位置ごとの「生きていて所有しているスロット」の表を作れる。表は生存解析だけでは決まらず、Perceus の所有の状態から作る。巻き戻しの地点の表はこの形で作っている (「巻き戻し」)。安全点ごとの表は作っていない (「並列化への備え」)
@@ -172,6 +175,29 @@ base + 0 .. base + frame_size: スロット
 - 走査する語が 255 個以上のデータでは、ペイロードの先頭に数の語がある。`field`、`set_field`、`raw`、`set_raw` の位置はこの数の語を含む物理的な位置なので、VM はその物体の位置を、コード生成の時点で1つずらしておく
 - `closure f(a..)` は、`alloc_data(0, 1 + 引数の数, 0, lin)` で作り、最初の走査する語に即値 `&f`、続く語に引数を書く。`lin` の決め方は `con` と同じである。走査する語が 255 個以上なら、`con` と同じく位置をずらす
 
+### reuse
+
+token は1語の値で、フレームのスロットに置く ([オブジェクトモデル](object-model.md) の「reuse」)。どの箱を使い回すか、ヘッダを書くか、どのフィールドを書かないかは LIR が決めている。VM は、命令ごとに `eml_rt` の部品を決まった順に呼ぶだけで、実行時に token を探したり溜めたりしない。
+
+- token を定義する `let r = release x L #t(..)` (`ReleaseReuse`) は、`release` と同じく、形の分かっている部品を命令の中に並べる。オペランドは、token のスロットと、`release` と同じ項目である。検査モードの展開の前の確かめも `release` と同じである
+
+  ```
+  is_unique(x)
+    真: 残さない走査する語を decref → into_token(x) の語を r に書く
+    偽: release と同じ展開 (is_last で分ける) → 空の token (ビットが 0 の語) を r に書く
+  ```
+
+  token のスロットは `x` のスロットと同じ色でありうるので、`x` を読み終えてから token を書く。`eml_rt` の `release_reuse` も同じ列だが、`eml_vm` からは crate の外の関数なので、速い道に crate をまたぐ呼び出しを入れないために `eml_vm` の関数の中に並べる (「置き場所」)
+
+- token を受ける `con L #t(a..) reuse r [in place]` (`ConReuse`) のオペランドは、token のスロット、タグ、走査する語の数、生の語の数、`lin`、`in place` の印、引数の並びである。引数の並びは `con` と同じ [物理的な位置, スロット] で、書かない引数の位置には `SKIP` のビットを立てる
+  - token が空なら、`con` と同じく `alloc_data` で確保し、書かない印の引数も含めてすべてのフィールドを書く
+  - 空でなければ、`in place` なら `reuse_in_place(r, meta)`、そうでなければ `con_at(r, 走査する語の数 + 生の語の数, meta)` で箱を得る。`meta` は `Meta::new(tag, 走査する語の数, Data, lin)` で、`lin` は `con` と同じく束縛する変数の印で決める。そのうえで、書かない印の引数を飛ばしてフィールドを書く。箱は中身を消さないので、飛ばしたフィールドには元の値が残っている
+  - 組になる形は走査する語が 255 個未満に限るので (`Shape::reuse_words`、[オブジェクトモデル](object-model.md) の「ヘッダ」)、数の語はなく、位置をずらさない。コード生成はこれをデバッグビルドで確かめる
+  - 検査モードでは、空でない token を使った回数を `RunStats` の `reuses` に数える
+- `drop_token r` (`DropToken`) は、`Heap::drop_token` を呼ぶ。空の token なら何もしない
+- token の命令を1つも持たない関数は、reuse を入れる前と同じ命令の列になる
+- 逆アセンブラは、token のスロットを `release s0 #1 [keep @0] token s3`、`con s1 = #1 (2 scanned, 0 raw) [skip @0 -> s2, @1 -> s4] reuse s3 in place`、`drop_token s3` の形で書く
+
 ### switch
 
 - タグの `switch` は、scrutinee の Repr で読み方を分け、命令も分ける。語の形では分けない。生の `enum` の値は即値にもポインタにも見えるためである
@@ -202,14 +228,15 @@ base + 0 .. base + frame_size: スロット
 ### 巻き戻しの表
 
 - 巻き戻しの地点は、末尾でない呼び出し (`call`、`apply`、`clause`)、`Effectful` の extern の命令 (`exit` を含む)、`prim yield_abort` である。中断はこのどれかの命令の中か、その呼ばれる側で始まるので、中断が通るフレームはいつも地点の命令の直後で止まっている
-- 地点ごとの所有は、`eml_lir::unwind::points_all(program) -> Vec<Result<Vec<UnwindPoint>, VerifyError>>` が関数ごとに求める。各関数の `UnwindPoint { block, stmt, owned, landing }` は、ブロックの順、文の順に並ぶ
+- 地点ごとの所有は、`eml_lir::unwind::points_all(program) -> Vec<Result<Vec<UnwindPoint>, VerifyError>>` が関数ごとに求める。各関数の `UnwindPoint { block, stmt, owned, tokens, landing }` は、ブロックの順、文の順に並ぶ
   - `owned` は、地点の命令の直後に所有している RC の対象の変数と、その所有の数 (1 以上) の列で、変数の番号の昇順に並ぶ。命令が束縛する変数 (呼び出しの結果、extern の行き先) は含めない。命令が戻らなければ、その変数はまだないためである
+  - `tokens` は、地点の命令の直後に生きている token の変数の列で、変数の番号の昇順に並ぶ。token は RC の対象でないので `owned` には入れない。token は yield しうる呼び出しの後で生きていないので、着地の印を持つ地点の `tokens` はいつも空である
   - `landing` は、`apply` の着地の印の変数である ([LIR](lir.md) の「着地の印」)
 - 所有は、verifier の所有の段の走査そのもので求める ([LIR](lir.md) の「verifier」)。生きている変数をすべて手放すのでなく所有で決めるのは、借りたフィールドが呼び出しをまたぐことがあるためである。持ち主が呼び出しの後も生きていて所有されているとき、借りたフィールドも手放すと、持ち主の解放と合わせて2回手放すことになる ([LIR](lir.md) の「所有を取る時点」)。所有している変数は、所有の規則により後で消費されるので、どれも生きている
 - `points_all` は、所有の段の verifier が拒む関数について、地点の代わりにその誤りを返す。コード生成はそういう関数を、表の行を持たない関数として扱う。VM の見張りを確かめるテストが、verifier を通さない IR を読み込むためである。表のない関数のフレームを中断が通ると、内部の誤りになる (下の「巻き戻しの手順」)
-- 表の行 (`Unwind`) は、手放すスロットとその所有の数の列 `slots` と、着地の印があればその evidence のスロット `landing` を持つ。`CodeBase::unwinds` は、行を地点の命令の次の命令の位置で引けるように、位置の昇順に持ち、二分探索で引く。呼び出しの地点では、その位置がフレームの見出しの戻り先と一致するためである。地点の命令は文の最後に書くので、コード生成は文を書き終えた位置で行を足す
-- 逆アセンブラは、手放すスロットか着地のスロットを持つ行を、地点の命令の後に `unwind [s3, s5*2] land s4` の形で書く。所有の数が 1 なら `*` を書かない。どの命令が行を持つかは命令の種類で決まるので、空の行は書かない
-- 表の大きさは、地点ごとの所有している変数の数の和である。命令の列には解放を書き出さない
+- 表の行 (`Unwind`) は、手放すスロットとその所有の数の列 `slots`、生きている token のスロットの列 `tokens`、着地の印があればその evidence のスロット `landing` を持つ。`CodeBase::unwinds` は、行を地点の命令の次の命令の位置で引けるように、位置の昇順に持ち、二分探索で引く。呼び出しの地点では、その位置がフレームの見出しの戻り先と一致するためである。地点の命令は文の最後に書くので、コード生成は文を書き終えた位置で行を足す
+- 逆アセンブラは、手放すスロット、token のスロット、着地のスロットのどれかを持つ行を、地点の命令の後に `unwind [s3, s5*2] tokens [s6] land s4` の形で書く。所有の数が 1 なら `*` を書かない。token のスロットがなければ `tokens [..]` を書かない。どの命令が行を持つかは命令の種類で決まるので、空の行は書かない
+- 表の大きさは、地点ごとの所有している変数と生きている token の数の和である。命令の列には解放を書き出さない
 
 ### 巻き戻しの手順
 
@@ -223,7 +250,7 @@ base + 0 .. base + frame_size: スロット
 
 1. `pc` が `Finish` なら終わる。`exit` の中断なら、`Finish` の命令に進む (下の「`exit`」)。そうでなければ内部の誤り (`an abort reached the bottom of the task`) にする
 2. `pc` が `ApplyRest` なら、そのフレームが持つ残りの引数 (スロット 2 から n 個) を `Heap::decref` で手放す
-3. そうでなければ、`pc` で表の行を引く。行がなければ内部の誤り (`a frame stops outside an unwind point`) にする。行が着地のスロットを持ち、その語が宛先と同じなら、着地する。直前に外したフレームの見出しにある結果のスロットにダミーの物体を書き、`pc` から続けて、巻き戻しを終える。着地しないとき、行が着地のスロットを持てば、まずその evidence の状態を `Ctx::ev_take_state` で取り出して `Heap::decref` で手放す。それから、行のスロットをそれぞれ所有の数だけ `Heap::decref` で手放す。`Lin` の物体でも誤りにならず、`File` はここで閉じる
+3. そうでなければ、`pc` で表の行を引く。行がなければ内部の誤り (`a frame stops outside an unwind point`) にする。行が着地のスロットを持ち、その語が宛先と同じなら、着地する。直前に外したフレームの見出しにある結果のスロットにダミーの物体を書き、`pc` から続けて、巻き戻しを終える。着地しないとき、行が着地のスロットを持てば、まずその evidence の状態を `Ctx::ev_take_state` で取り出して `Heap::decref` で手放す。それから、行のスロットをそれぞれ所有の数だけ `Heap::decref` で手放す。`Lin` の物体でも誤りにならず、`File` はここで閉じる。最後に、行の token のスロットをそれぞれ `Heap::drop_token` で手放す。手放さないと token の箱が残り、検査モードの漏れの検査で見つかる
 4. フレームを外す。見出しから戻り先と結果のスロットと呼び出し元の `frame_size` を読み、`base` を呼び出し元のものに戻し、`pc` を戻り先にする。1. に戻る
 
 - 中断を始めたフレームの行は、着地のスロットを持たない。始めた命令は `yield_abort` か extern で、どちらも着地の印を持たないためである。そのため、着地するのはいつも1つ以上のフレームを外した後で、結果のスロットは直前に外したフレームの見出しにある。VM はこれをデバッグビルドで確かめる
@@ -315,7 +342,7 @@ base + 0 .. base + frame_size: スロット
 
 `Machine::run`、`run_shown`、`eml_vm::execute` は、成功すると `Finished { stats, exit }` を返す。`stats` は下の `RunStats` で、`exit` は `exit` で終わったときの終了コード (`Option<i64>`) である。
 
-`RunStats` は、実行の仕事の回数と、同時に生きていたヒープの物体の数と、スタックの語の数の最大である。検査モードだけで数え、速いモードの欄は 0 のままである。実行時エラーとリークのときは返さない。欄は次の12で、はじめの10が仕事の回数である。
+`RunStats` は、実行の仕事の回数と、同時に生きていたヒープの物体の数と、スタックの語の数の最大である。検査モードだけで数え、速いモードの欄は 0 のままである。実行時エラーとリークのときは返さない。欄は次の13で、はじめの11が仕事の回数である。
 
 - `evidence_steps`: `ev_lookup` と `evv_mask` がたどった `evv` の節点の数。今有効な handler の数で決まり、呼び出しの深さにはよらない。検査モードの `evv_mask` は、合う evidence が足りずに誤りを返したときは数えない ([オブジェクトモデル](object-model.md) の「速いモードと検査モード」)。出どころは `Ctx` の `CtxStats` である
 - `yields`: `yield_to` を実行した回数。すぐに再開する操作は yield しないので数えない。中断 (`yield_abort` と `exit`) は yield でないので数えない。出どころは `CtxStats` である
@@ -327,6 +354,7 @@ base + 0 .. base + frame_size: スロット
 - `boxes`: VM が実行した `box` (`BoxInt`、`BoxEnum`、`BoxConst`) の数。語の値の表現では確保しうる変換なので数える
 - `unboxes`: VM が実行した `unbox` の数。数える理由は `boxes` と同じである
 - `allocations`: ヒープが物体を確保した回数。検査モードで数える `Heap` の `Stats` の `allocations` をそのまま写す ([オブジェクトモデル](object-model.md) の「仕事の回数」)。速いモードは数えず 0 である。回復の確保は数えない。
+- `reuses`: token を受ける `con` が、空でない token の箱を使った回数 (「reuse」)。空の token で確保した `con` は数えず、その確保は `allocations` に入る。VM が数える
 - `peak_objects`: 同時に生きていたヒープの物体の数の最大 (`Heap` の `Stats` の `peak_live`)。ヒープごとのダミーの物体を1つ含む。フレームはスタックにあり、凍結した領域の物体も数えないので、どちらも含まない
 - `peak_stack`: タスクのスタックで同時に使った語の数の最大。スタックの `Vec` の長さは縮めないので、`Task::reserve` が伸ばした長さがそのまま最大になり、VM は実行の終わりに `task.stack.len()` を読むだけで済む。フレームはスタックにあって `peak_objects` に表れないので、末尾呼び出しを失ったことはこの欄で見つける
 

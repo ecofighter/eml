@@ -40,6 +40,8 @@ pub struct RunStats {
     pub boxes: u64,
     pub unboxes: u64,
     pub allocations: u64,
+    /// token の箱を使った `con` の回数。空の token で確保した `con` は数えない。
+    pub reuses: u64,
     pub peak_objects: u64,
     /// タスクのスタックで同時に使った語の数の最大。
     pub peak_stack: u64,
@@ -58,6 +60,7 @@ pub(crate) struct RunCounts {
     pub(crate) unwound_frames: u64,
     pub(crate) boxes: u64,
     pub(crate) unboxes: u64,
+    pub(crate) reuses: u64,
 }
 
 /// 実行の設定。上限は `Control` が持つので、ここに上限の欄は置かない。`file_root` は Host が持つ
@@ -321,6 +324,7 @@ impl<M: Mode> Machine<M> {
             boxes: counts.boxes,
             unboxes: counts.unboxes,
             allocations: h.allocations,
+            reuses: counts.reuses,
             peak_objects: h.peak_objects,
             // スタックの長さは縮めないので、長さがそのまま使った語の数の最大である。統計は検査モードだけで数える
             peak_stack: if M::CHECKED {

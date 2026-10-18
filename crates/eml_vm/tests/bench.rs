@@ -95,6 +95,7 @@ fn empty() {
         boxes: 0,
         unboxes: 0,
         allocations: 1,
+        reuses: 0,
         peak_objects: 1,
         peak_stack: 7,
     }
@@ -115,6 +116,7 @@ fn fib() {
         boxes: 0,
         unboxes: 0,
         allocations: 2,
+        reuses: 0,
         peak_objects: 2,
         peak_stack: 132,
     }
@@ -135,6 +137,7 @@ fn fold_state() {
         boxes: 0,
         unboxes: 0,
         allocations: 2,
+        reuses: 0,
         peak_objects: 2,
         peak_stack: 16,
     }
@@ -155,6 +158,7 @@ fn list() {
         boxes: 200000,
         unboxes: 200000,
         allocations: 200002,
+        reuses: 0,
         peak_objects: 100001,
         peak_stack: 600014,
     }
@@ -175,6 +179,7 @@ fn loop_() {
         boxes: 0,
         unboxes: 0,
         allocations: 2,
+        reuses: 0,
         peak_objects: 2,
         peak_stack: 14,
     }
@@ -195,6 +200,7 @@ fn state() {
         boxes: 2,
         unboxes: 1,
         allocations: 3,
+        reuses: 0,
         peak_objects: 2,
         peak_stack: 16,
     }
@@ -215,6 +221,7 @@ fn tree() {
         boxes: 14898,
         unboxes: 251563,
         allocations: 251568,
+        reuses: 0,
         peak_objects: 14900,
         peak_stack: 392,
     }
@@ -235,6 +242,7 @@ fn iter_generate() {
         boxes: 0,
         unboxes: 0,
         allocations: 2,
+        reuses: 0,
         peak_objects: 2,
         peak_stack: 15,
     }
@@ -295,6 +303,7 @@ fn iter_pipeline() {
         boxes: 150001,
         unboxes: 250000,
         allocations: 200002,
+        reuses: 0,
         peak_objects: 5,
         peak_stack: 26,
     }
@@ -315,6 +324,7 @@ fn iter_pipeline_by_hand() {
         boxes: 150001,
         unboxes: 250000,
         allocations: 200002,
+        reuses: 0,
         peak_objects: 5,
         peak_stack: 26,
     }
@@ -335,6 +345,7 @@ fn orders() {
         boxes: 39830,
         unboxes: 39830,
         allocations: 359322,
+        reuses: 0,
         peak_objects: 200001,
         peak_stack: 20,
     }
@@ -355,6 +366,7 @@ fn orders_by_hand() {
         boxes: 39830,
         unboxes: 39830,
         allocations: 359322,
+        reuses: 0,
         peak_objects: 200001,
         peak_stack: 19,
     }
@@ -375,6 +387,7 @@ fn push_fold() {
         boxes: 0,
         unboxes: 0,
         allocations: 2,
+        reuses: 0,
         peak_objects: 2,
         peak_stack: 16,
     }
@@ -395,6 +408,7 @@ fn push_fold_by_hand() {
         boxes: 0,
         unboxes: 0,
         allocations: 2,
+        reuses: 0,
         peak_objects: 2,
         peak_stack: 16,
     }
@@ -415,6 +429,7 @@ fn sum_loop() {
         boxes: 0,
         unboxes: 0,
         allocations: 2,
+        reuses: 0,
         peak_objects: 2,
         peak_stack: 16,
     }
@@ -435,6 +450,7 @@ fn tree_by_hand() {
         boxes: 14898,
         unboxes: 251563,
         allocations: 251568,
+        reuses: 0,
         peak_objects: 14900,
         peak_stack: 392,
     }
@@ -455,6 +471,7 @@ fn upsert() {
         boxes: 20000,
         unboxes: 56815,
         allocations: 360767,
+        reuses: 0,
         peak_objects: 6002,
         peak_stack: 352,
     }
@@ -475,6 +492,7 @@ fn upsert_by_hand() {
         boxes: 20000,
         unboxes: 56815,
         allocations: 360767,
+        reuses: 0,
         peak_objects: 6002,
         peak_stack: 352,
     }

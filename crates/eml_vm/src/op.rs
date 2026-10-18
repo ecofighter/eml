@@ -188,6 +188,21 @@ pub enum Op {
         dst: Slot,
         at: u32,
     },
+    /// token を定義する `release`。`operands[at..]` は [token のスロット, タグ, 走査する語の数, 項目の数, 項目…] で、
+    /// 項目は `Release` と同じである。token のスロットは命令に収まらないのでオペランドに置く。
+    ReleaseReuse {
+        src: Slot,
+        at: u32,
+    },
+    /// token を受ける `con`。`operands[at..]` は [token のスロット, タグ, 走査する語の数, 生の語の数, lin,
+    /// in_place, 引数の数, [位置 | RAW | SKIP, スロット]…]。
+    ConReuse {
+        dst: Slot,
+        at: u32,
+    },
+    DropToken {
+        tok: Slot,
+    },
     BoxInt {
         dst: Slot,
         src: Slot,
@@ -311,6 +326,8 @@ pub const NONE: u32 = u32::MAX;
 pub const RAW: u32 = 1 << 31;
 /// `release` のフィールドの位置のうち、残すフィールドであることを表すビット。
 pub const KEEP: u32 = 1 << 31;
+/// token を受ける `con` のフィールドの位置のうち、箱を使い回したときに書かないフィールドであることを表すビット。
+pub const SKIP: u32 = 1 << 30;
 
 // 命令の列を密に保ち、1回の読み込みで命令を取れるようにする
 const _: () = assert!(std::mem::size_of::<Op>() == 8);

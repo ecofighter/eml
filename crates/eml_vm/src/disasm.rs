@@ -8,7 +8,7 @@ use eml_lir::Loc;
 use eml_rt::{MaskItem, Mode};
 
 use crate::code::{CodeBase, FnEntry, Unwind};
-use crate::op::{KEEP, NONE, Op, Pc, RAW};
+use crate::op::{KEEP, NONE, Op, Pc, RAW, SKIP};
 
 pub fn disassemble<M: Mode>(code: &CodeBase<M>) -> String {
     let view = View::of(code);
@@ -38,6 +38,18 @@ pub(crate) struct View<'a> {
     pub(crate) files: &'a [String],
 }
 
+/// `release` の項目の並び。
+fn release_entries(entries: &[u32]) -> String {
+    entries
+        .iter()
+        .map(|&e| {
+            let keep = if e & KEEP != 0 { "keep " } else { "" };
+            format!("{keep}@{}", e & !KEEP)
+        })
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
 /// mask の項目を、IR のテキストの形の数字の版で書く。`keep` が 0 なら `@n` を、`skip` が 1 なら `*m` を省く。
 fn mask_item(item: &MaskItem) -> String {
     let mut text = item.effect.to_string();
@@ -57,15 +69,16 @@ fn slots(list: &[u32]) -> String {
         .join(", ")
 }
 
-/// [位置 | RAW, スロット] の並び。
+/// [位置 | RAW | SKIP, スロット] の並び。
 fn fields(items: &[u32]) -> String {
     items
         .as_chunks::<2>()
         .0
         .iter()
         .map(|pair| {
+            let skip = if pair[0] & SKIP != 0 { "skip " } else { "" };
             let raw = if pair[0] & RAW != 0 { "raw " } else { "" };
-            format!("{raw}@{} -> s{}", pair[0] & !RAW, pair[1])
+            format!("{skip}{raw}@{} -> s{}", pair[0] & !(RAW | SKIP), pair[1])
         })
         .collect::<Vec<_>>()
         .join(", ")
@@ -222,14 +235,13 @@ impl<'a> View<'a> {
             Op::Decref { src } => format!("decref s{src}"),
             Op::Release { src, at } => {
                 let o = ops(at);
-                let entries: Vec<String> = o[3..3 + o[2] as usize]
-                    .iter()
-                    .map(|&e| {
-                        let keep = if e & KEEP != 0 { "keep " } else { "" };
-                        format!("{keep}@{}", e & !KEEP)
-                    })
-                    .collect();
-                format!("release s{src} #{} [{}]", o[0], entries.join(", "))
+                let entries = release_entries(&o[3..3 + o[2] as usize]);
+                format!("release s{src} #{} [{entries}]", o[0])
+            }
+            Op::ReleaseReuse { src, at } => {
+                let o = ops(at);
+                let entries = release_entries(&o[4..4 + o[3] as usize]);
+                format!("release s{src} #{} [{entries}] token s{}", o[1], o[0])
             }
             Op::Con { dst, at } => {
                 let o = ops(at);
@@ -242,6 +254,20 @@ impl<'a> View<'a> {
                     fields(&o[5..5 + 2 * o[4] as usize])
                 )
             }
+            Op::ConReuse { dst, at } => {
+                let o = ops(at);
+                let lin = if o[4] != 0 { " lin" } else { "" };
+                let in_place = if o[5] != 0 { " in place" } else { "" };
+                format!(
+                    "con s{dst} = #{} ({} scanned, {} raw{lin}) [{}] reuse s{}{in_place}",
+                    o[1],
+                    o[2],
+                    o[3],
+                    fields(&o[7..7 + 2 * o[6] as usize]),
+                    o[0]
+                )
+            }
+            Op::DropToken { tok } => format!("drop_token s{tok}"),
             Op::BoxInt { dst, src } => format!("box_int s{dst}, s{src}"),
             Op::BoxEnum { dst, src } => format!("box_enum s{dst}, s{src}"),
             Op::BoxConst { dst, index } => format!("box_const s{dst}, c{index}"),
@@ -296,9 +322,9 @@ impl<'a> View<'a> {
                 args(at, 2)
             ),
         };
-        // 手放すものも着地もない行は書かない。どの命令に行があるかは命令の種類で決まるので、書かなくても失うものはない
+        // 手放すものも token も着地もない行は書かない。どの命令に行があるかは命令の種類で決まるので、書かなくても失うものはない
         if let Some(entry) = self.unwind(pc)
-            && (!entry.slots.is_empty() || entry.landing.is_some())
+            && (!entry.slots.is_empty() || !entry.tokens.is_empty() || entry.landing.is_some())
         {
             let slots: Vec<String> = entry
                 .slots
@@ -309,6 +335,10 @@ impl<'a> View<'a> {
                 })
                 .collect();
             write!(text, " unwind [{}]", slots.join(", ")).unwrap();
+            if !entry.tokens.is_empty() {
+                let tokens: Vec<u32> = entry.tokens.iter().map(|&slot| slot.into()).collect();
+                write!(text, " tokens [{}]", self::slots(&tokens)).unwrap();
+            }
             if let Some(slot) = entry.landing {
                 write!(text, " land s{slot}").unwrap();
             }

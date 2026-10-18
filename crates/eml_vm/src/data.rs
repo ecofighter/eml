@@ -1,11 +1,11 @@
-//! データの命令: `con`、switch、`unpack`、`release`、box (docs/spec/vm.md の「命令ごとの実行」)。
+//! データの命令: `con`、switch、`unpack`、`release`、reuse、box (docs/spec/vm.md の「命令ごとの実行」)。
 
-use eml_rt::{Ctx, Kind, Mode, Word};
+use eml_rt::{Ctx, Heap, HeapError, Kind, Meta, Mode, Token, Word};
 
 use crate::RunCounts;
 use crate::code::CodeBase;
 use crate::error::VmFault;
-use crate::op::{KEEP, NONE, RAW, Slot};
+use crate::op::{KEEP, NONE, RAW, SKIP, Slot};
 use crate::vm::Task;
 
 /// 走査する語が 255 個以上の物体の、ペイロードの先頭の数の語の分 (docs/spec/object-model.md の「ヘッダ」)。
@@ -76,15 +76,37 @@ pub(crate) fn con<M: Mode>(
     // ヒープに触れるのは作る物体だけで、`Ctx` の持つ語には触れない
     let heap = unsafe { ctx.heap_mut() };
     let w = heap.alloc_data(tag as u16, scanned as usize, raw as usize, lin);
-    for pair in ops[5..5 + 2 * n].as_chunks::<2>().0 {
+    unsafe { write_fields(heap, task, w, &ops[5..5 + 2 * n], false) }?;
+    task.set(dst, w);
+    Ok(())
+}
+
+/// [位置 | RAW | SKIP, スロット] の並びの値を `w` のフィールドに書く。`skip` なら、書かない印のフィールドを飛ばす。
+///
+/// # Safety
+/// `w` は作っている途中の物体で、並びはその形の位置である。スロットの値の参照は `w` に移る。
+#[inline]
+unsafe fn write_fields<M: Mode>(
+    heap: &mut Heap<M>,
+    task: &Task,
+    w: Word,
+    items: &[u32],
+    skip: bool,
+) -> Result<(), HeapError> {
+    for pair in items.as_chunks::<2>().0 {
         let (position, value) = (pair[0], task.get(pair[1] as Slot));
-        if position & RAW == 0 {
-            unsafe { heap.set_field(w, position as usize, value) }?;
-        } else {
-            unsafe { heap.set_raw(w, (position & !RAW) as usize, value.bits() as u64) }?;
+        if skip && position & SKIP != 0 {
+            continue;
+        }
+        let index = (position & !(RAW | SKIP)) as usize;
+        unsafe {
+            if position & RAW == 0 {
+                heap.set_field(w, index, value)?;
+            } else {
+                heap.set_raw(w, index, value.bits() as u64)?;
+            }
         }
     }
-    task.set(dst, w);
     Ok(())
 }
 
@@ -210,7 +232,6 @@ pub(crate) fn release<M: Mode>(
 ) -> Result<(), VmFault> {
     let ops = &code.operands[at as usize..];
     let (tag, scanned, n) = (ops[0], ops[1], ops[2] as usize);
-    let entries = &ops[3..3 + n];
     let w = task.get(src);
     check_data(
         ctx,
@@ -219,23 +240,132 @@ pub(crate) fn release<M: Mode>(
         scanned,
         "a release names a tag and number of fields the value does not have",
     )?;
-    // VM は `w` の参照を1つ持ち、残さない子はその参照と数える
-    let heap = unsafe { ctx.heap_mut() };
+    // VM は `w` の参照を1つ持つ
+    unsafe { release_fields(ctx.heap_mut(), w, &ops[3..3 + n]) }?;
+    Ok(())
+}
+
+/// `release` の部品の列。最後の参照なら残さない子を手放して箱を空け、そうでなければ残す子を `dup` して `w` を手放す。
+///
+/// # Safety
+/// `w` は検査を通った `release` の値で、呼ぶ側がその参照を1つ持つ。`entries` はその形の RC のフィールドの項目である。
+#[inline]
+unsafe fn release_fields<M: Mode>(
+    heap: &mut Heap<M>,
+    w: Word,
+    entries: &[u32],
+) -> Result<(), HeapError> {
     unsafe {
         if heap.is_last(w)? {
-            for &entry in entries.iter().filter(|&&e| e & KEEP == 0) {
-                let child = heap.field(w, entry as usize)?;
-                heap.decref(child)?;
-            }
-            heap.free_block(w)?;
+            drop_children(heap, w, entries)?;
+            heap.free_block(w)
         } else {
             for &entry in entries.iter().filter(|&&e| e & KEEP != 0) {
                 let child = heap.field(w, (entry & !KEEP) as usize)?;
                 heap.dup(child)?;
             }
-            heap.decref(w)?;
+            heap.decref(w)
         }
     }
+}
+
+/// 残さない子を手放す。残さない子は、呼ぶ側が持つ `w` の最後の参照の分と数える。
+///
+/// # Safety
+/// `release_fields` と同じで、`w` の参照は最後のものである。
+#[inline]
+unsafe fn drop_children<M: Mode>(
+    heap: &mut Heap<M>,
+    w: Word,
+    entries: &[u32],
+) -> Result<(), HeapError> {
+    for &entry in entries.iter().filter(|&&e| e & KEEP == 0) {
+        unsafe {
+            let child = heap.field(w, entry as usize)?;
+            heap.decref(child)?;
+        }
+    }
+    Ok(())
+}
+
+/// token を定義する `release` (docs/spec/vm.md の「reuse」)。一意なら残さない子を手放して箱を token にし、そうで
+/// なければ `release` と同じにして空の token を書く。`eml_rt` の `release_reuse` と同じ列を、`release` と同じく
+/// この関数の中に並べる。crate をまたぐ呼び出しを速い道に入れないためである。
+// `vm::run` に展開すると、reuse の命令を使わないプログラムでも命令の数が増えたので、展開しない
+// (docs/spec/vm.md の「置き場所」)
+#[inline(never)]
+pub(crate) fn release_reuse<M: Mode>(
+    code: &CodeBase<M>,
+    ctx: &mut Ctx<M>,
+    task: &mut Task,
+    src: Slot,
+    at: u32,
+) -> Result<(), VmFault> {
+    let ops = &code.operands[at as usize..];
+    let (tok, tag, scanned, n) = (ops[0] as Slot, ops[1], ops[2], ops[3] as usize);
+    let entries = &ops[4..4 + n];
+    let w = task.get(src);
+    check_data(
+        ctx,
+        w,
+        tag,
+        scanned,
+        "a release names a tag and number of fields the value does not have",
+    )?;
+    // VM は `w` の参照を1つ持つ。token のスロットは `w` のスロットと同じ色でありうるので、`w` を読んだ後で書く
+    let heap = unsafe { ctx.heap_mut() };
+    let token = unsafe {
+        if heap.is_unique(w)? {
+            drop_children(heap, w, entries)?;
+            heap.into_token(w)?.into_word()
+        } else {
+            release_fields(heap, w, entries)?;
+            Word::EMPTY
+        }
+    };
+    task.set(tok, token);
+    Ok(())
+}
+
+/// token を受ける `con` (docs/spec/vm.md の「reuse」)。空の token なら `con` と同じに確保してフィールドをみな書く。
+/// 空でなければ token の箱を使い、書かない印のフィールドは飛ばす。箱は中身を消さないので、そのフィールドには
+/// 元の値が残っている。
+// 展開しない理由は `release_reuse` と同じである
+#[inline(never)]
+pub(crate) fn con_reuse<M: Mode>(
+    code: &CodeBase<M>,
+    ctx: &mut Ctx<M>,
+    task: &mut Task,
+    counts: &mut RunCounts,
+    dst: Slot,
+    at: u32,
+) -> Result<(), VmFault> {
+    let ops = &code.operands[at as usize..];
+    let (tok, tag, scanned, raw) = (ops[0] as Slot, ops[1], ops[2], ops[3]);
+    let (lin, in_place, n) = (ops[4] != 0, ops[5] != 0, ops[6] as usize);
+    // token は verifier を通った IR の token で、このヒープのまだ使っていないものである
+    let token = unsafe { Token::from_word(task.get(tok)) };
+    let heap = unsafe { ctx.heap_mut() };
+    let reused = !token.is_empty();
+    let w = if reused {
+        if M::CHECKED {
+            counts.reuses += 1;
+        }
+        // 組は走査する語が 255 個未満の形に限るので、`scan` に収まり、数の語もない
+        // (docs/spec/object-model.md の「ヘッダ」)。物理的な語の数が同じ形の token なので、箱の級も合う
+        let meta = Meta::new(tag as u16, scanned as u8, Kind::Data, lin);
+        unsafe {
+            if in_place {
+                heap.reuse_in_place(token, meta)?
+            } else {
+                heap.con_at(token, (scanned + raw) as usize, meta)?.0
+            }
+        }
+    } else {
+        heap.alloc_data(tag as u16, scanned as usize, raw as usize, lin)
+    };
+    unsafe { write_fields(heap, task, w, &ops[7..7 + 2 * n], reused) }?;
+    task.set(dst, w);
     Ok(())
 }
 

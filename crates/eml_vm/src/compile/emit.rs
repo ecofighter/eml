@@ -12,7 +12,7 @@ use super::constants::Constants;
 use super::slots::{Slots, allocate};
 use super::{Links, Out};
 use crate::code::{CompileError, FnEntry, Unwind};
-use crate::op::{KEEP, NONE, Op, Pc, RAW, Slot};
+use crate::op::{KEEP, NONE, Op, Pc, RAW, SKIP, Slot};
 
 pub(crate) fn function<M: Mode>(
     program: &Program,
@@ -262,7 +262,7 @@ impl<'a, M: Mode> Emitter<'a, '_, M> {
                 value,
                 ctor,
                 fields,
-                token: None,
+                token,
             } => {
                 let layout_ctor = self.layout_ctor(*ctor);
                 let shape = layout_ctor.shape();
@@ -276,16 +276,25 @@ impl<'a, M: Mode> Emitter<'a, '_, M> {
                         (position + offset) | if field.is_some() { KEEP } else { 0 }
                     })
                     .collect();
-                let at = self.out.operands(
-                    [ctor.tag, shape.scanned, entries.len() as u32]
-                        .into_iter()
-                        .chain(entries),
-                );
                 let src = self.slot(*value);
-                self.out.push(Op::Release { src, at });
+                let head = [ctor.tag, shape.scanned, entries.len() as u32];
+                match token {
+                    None => {
+                        let at = self.out.operands(head.into_iter().chain(entries));
+                        self.out.push(Op::Release { src, at });
+                    }
+                    Some(token) => {
+                        let tok = u32::from(self.slot(*token));
+                        let at = self
+                            .out
+                            .operands([tok].into_iter().chain(head).chain(entries));
+                        self.out.push(Op::ReleaseReuse { src, at });
+                    }
+                }
             }
-            Stmt::Release { token: Some(_), .. } | Stmt::DropToken(_) => {
-                unreachable!("no LIR pass emits reuse tokens yet")
+            Stmt::DropToken(token) => {
+                let tok = self.slot(*token);
+                self.out.push(Op::DropToken { tok });
             }
         }
     }
@@ -299,6 +308,7 @@ impl<'a, M: Mode> Emitter<'a, '_, M> {
                 .iter()
                 .map(|&(var, count)| (self.slot(var), count))
                 .collect(),
+            tokens: point.tokens.iter().map(|&var| self.slot(var)).collect(),
             landing: point.landing.map(|var| self.slot(var)),
         };
         let pc = self.out.pc();
@@ -363,33 +373,47 @@ impl<'a, M: Mode> Emitter<'a, '_, M> {
                 let index = self.links.strings[*index as usize];
                 self.out.push(Op::LoadConst { dst, index });
             }
-            Rhs::Con { reuse: Some(_), .. } => unreachable!("no LIR pass emits reuse tokens yet"),
-            Rhs::Con {
-                ctor,
-                args,
-                reuse: None,
-            } => {
+            Rhs::Con { ctor, args, reuse } => {
                 let layout_ctor = self.layout_ctor(*ctor);
                 let shape = layout_ctor.shape();
                 let offset = crate::data::count_word(shape.scanned);
                 let lin = self.function.mark(var) == eml_lir::Mark::Lin;
-                let mut items = vec![
-                    ctor.tag,
-                    shape.scanned,
-                    shape.raw,
-                    u32::from(lin),
-                    args.len() as u32,
-                ];
-                for ((&arg, &position), &repr) in
-                    args.iter().zip(&shape.positions).zip(&layout_ctor.fields)
+                let head = [ctor.tag, shape.scanned, shape.raw, u32::from(lin)];
+                let mut items = match reuse {
+                    None => head.to_vec(),
+                    Some(reuse) => {
+                        debug_assert!(
+                            shape.reuse_words().is_some(),
+                            "the verifier pairs only shapes without a count word"
+                        );
+                        let tok = u32::from(self.slot(reuse.token));
+                        let mut items = vec![tok];
+                        items.extend(head);
+                        items.push(u32::from(reuse.in_place));
+                        items
+                    }
+                };
+                items.push(args.len() as u32);
+                for (i, ((&arg, &position), &repr)) in args
+                    .iter()
+                    .zip(&shape.positions)
+                    .zip(&layout_ctor.fields)
+                    .enumerate()
                 {
                     let slot = self.atom(arg, repr);
                     let raw = if repr.is_rc() { 0 } else { RAW };
-                    items.push((position + offset) | raw);
+                    let skip = match reuse {
+                        Some(reuse) if reuse.skip[i] => SKIP,
+                        _ => 0,
+                    };
+                    items.push((position + offset) | raw | skip);
                     items.push(u32::from(slot));
                 }
                 let at = self.out.operands(items);
-                self.out.push(Op::Con { dst, at });
+                self.out.push(match reuse {
+                    None => Op::Con { dst, at },
+                    Some(_) => Op::ConReuse { dst, at },
+                });
             }
             Rhs::Drop(atom) => {
                 if let Atom::Var(v) = atom

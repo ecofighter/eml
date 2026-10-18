@@ -514,3 +514,64 @@ yields fn land(b.0: tobj, ev.1: obj, s.2: obj) -> unit {
         11  ret s0
     ");
 }
+
+/// reuse の命令。token を定義する `release` は token のスロットを、token を受ける `con` は token のスロット、
+/// `in place`、書かないフィールド (`skip`) を書く。巻き戻しの表の行は、生きている token のスロットを `token` の後に
+/// 並べる (docs/spec/vm.md の「reuse」)。
+#[test]
+fn reuse_instructions_disassemble() {
+    insta::assert_snapshot!(disasm("\
+layout P { P(obj, int) }
+layout Q { Q(obj, int) }
+fn main() -> unit {
+  let a.0: obj = const \"a\"
+  let p.1: obj = con P #0(a.0, 7)
+  tail call go(p.1)
+}
+fn go(p.0: obj) -> unit {
+  unpack p.0 P #0(x.1: obj, n.2: int)
+  let r.3: token = release p.0 P #0(x.1, _)
+  let s.4: obj = const \"!\"
+  let u.5: unit = extern Prelude.println(s.4)
+  switch n.2 { 0 -> b1, 1 -> b2, _ -> b3 }
+b1:
+  let q.6: obj = con P #0(=x.1, n.2) reuse r.3 in place
+  tail call sink(q.6)
+b2:
+  let q.7: obj = con Q #0(x.1, 8) reuse r.3
+  tail call sink(q.7)
+b3:
+  drop_token r.3
+  decref x.1
+  return u.5
+}
+fn sink(q.0: obj) -> unit {
+  decref q.0
+  return ()
+}
+"), @"
+    fn main (arity 0, frame 2)
+         2  load_const s0, c0
+         3  load_raw s1, 7
+         4  con s0 = #0 (1 scanned, 1 raw) [@0 -> s0, raw @1 -> s1]
+         5  tail_call go(s0)
+    fn go (arity 1, frame 5)
+         6  unpack s0 #0 [@0 -> s1, raw @1 -> s2]
+         7  release s0 #0 [keep @0] token s0
+         8  load_const s3, c1
+         9  extern s3 = Prelude.println(s3) unwind [s1] tokens [s0]
+        10  switch_int s2 { 0 -> 11, 1 -> 13, _ -> 16 }
+        11  con s0 = #0 (1 scanned, 1 raw) [skip @0 -> s1, raw @1 -> s2] reuse s0 in place
+        12  tail_call sink(s0)
+        13  load_raw s4, 8
+        14  con s0 = #0 (1 scanned, 1 raw) [@0 -> s1, raw @1 -> s4] reuse s0
+        15  tail_call sink(s0)
+        16  drop_token s0
+        17  decref s1
+        18  ret s3
+    fn sink (arity 1, frame 2)
+        19  decref s0
+        20  load_imm s1, 0
+        21  ret s1
+    ");
+}

@@ -206,6 +206,7 @@ impl<M: Mode> Heap<M> {
     /// # Safety
     /// `w` はこのヒープの生きている物体を指し、呼ぶ側がその唯一の参照を持ち (rc が 1)、子の参照はもう処理してある。
     /// 種類は token にできる (`Data`)。持ち主は今の worker である。
+    #[inline]
     pub unsafe fn into_token(&mut self, w: Word) -> (r: Result<Token, HeapError>)
         requires
             old(self).wf(),
@@ -696,6 +697,7 @@ impl<M: Mode> Heap<M> {
     ///
     /// # Safety
     /// `token` はこのヒープの token で、まだ使っていない。
+    #[inline]
     pub unsafe fn drop_token(&mut self, token: Token) -> (r: Result<(), HeapError>)
         requires
             old(self).wf(),

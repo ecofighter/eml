@@ -28,6 +28,8 @@ pub struct FnEntry {
 pub(crate) struct Unwind {
     /// 地点の命令の後で所有している RC の対象のスロットと、その参照の数。命令が束縛する変数は含めない。
     pub(crate) slots: Vec<(Slot, u32)>,
+    /// 地点の命令の後で生きている token のスロット。巻き戻しで `drop_token` する。
+    pub(crate) tokens: Vec<Slot>,
     /// `apply` の着地の印の evidence のスロット。
     pub(crate) landing: Option<Slot>,
 }
