@@ -28,6 +28,19 @@ const PROGRAMS: [&str; 18] = [
     "upsert_by_hand",
 ];
 
+/// 自動の版と手で特殊化した `_by_hand` の版の組と、両方の出力。
+const PAIRS: [(&str, &str, &str); 5] = [
+    ("orders", "orders_by_hand", "150308561\n"),
+    ("push_fold", "push_fold_by_hand", "5000050000\n"),
+    (
+        "iter_pipeline",
+        "iter_pipeline_by_hand",
+        "166671666700000\n",
+    ),
+    ("tree", "tree_by_hand", "14898 7454478318\n"),
+    ("upsert", "upsert_by_hand", "2000 k1182 23\n"),
+];
+
 fn bench_dir() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("../../bench")
 }
@@ -228,12 +241,11 @@ fn iter_generate() {
     ");
 }
 
-/// S13e-3 の完了の条件 (docs/superpowers/specs/2026-10-18-s13e-specialization-design.md の「作業の分け方と完了の
-/// 条件」)。`Iter.generate` を `Iter.fold` で引く形は、融合で1要素ごとの確保がなくなり、確保の数は入力の 10 万要素に
-/// 比例しない。`Iter.filter` を重ねた形は、残した要素ごとに4つを確保する。`filter` が要素を飛ばすループは再帰する
-/// 複製になり、作った `Some ((x, Iter k))` を相手の分からない呼ぶ側へ返すためである。これをなくすには再帰する
-/// 呼び出し先の継続についての特殊化が要り、後に回した (ユーザーが決めた)。ここでは、融合の前の 800008 の4分の1に
-/// 減ったことを固定する。
+/// S13e-3 の完了の条件 (docs/implementation/benchmarks.md の「S13e-3」)。`Iter.generate` を `Iter.fold` で引く形は、
+/// 融合で1要素ごとの確保がなくなり、確保の数は入力の 10 万要素に比例しない。`Iter.filter` を重ねた形は、
+/// 残した要素ごとに4つを確保する。`filter` が要素を飛ばすループは再帰する複製になり、作った `Some ((x, Iter k))`
+/// を相手の分からない呼ぶ側へ返すためである。これをなくすには再帰する呼び出し先の継続についての特殊化が要り、後に回した
+/// (ユーザーが決めた)。ここでは、S13e-3 の前の 900008 の約4分の1に減ったことを固定する。
 #[test]
 fn iter_allocations_do_not_grow_with_the_input() {
     let generate = stats("iter_generate", "5000050000\n");
@@ -244,18 +256,19 @@ fn iter_allocations_do_not_grow_with_the_input() {
     }
 }
 
-/// S13e-2 の完了の条件。特殊化した `Iter.generate` は、1要素ごとに `k`、`Iter`、組、`Some` の4つを確保する。残りは
-/// 前後の準備の分である
-/// (docs/superpowers/specs/2026-10-18-s13e-specialization-design.md の「`Iter` と push の形での結果 (見込み)」)。
+/// S13e-2 の完了の条件は、特殊化した `Iter.generate` が1要素ごとに `k`、`Iter`、組、`Some` の4つを確保することだった。
+/// S13e-3 の融合の後は、`Iter.fold` で引く形は1要素ごとに何も確保せず、確保の数は直接のループ `sum_loop` と同じ
+/// になる。残りは結果を表示する分である (docs/implementation/benchmarks.md の「S13e-3」)。
 #[test]
-fn iter_generate_allocates_four_objects_per_element() {
-    let stats = stats("iter_generate", "5000050000\n");
-    assert!(stats.allocations <= 100_000 * 4 + 100, "{stats:?}");
-    assert_eq!(stats.yields, 0, "{stats:?}");
+fn iter_generate_allocates_as_much_as_the_direct_loop() {
+    let generate = stats("iter_generate", "5000050000\n");
+    let direct = stats("sum_loop", "5000050000\n");
+    assert_eq!(generate.allocations, direct.allocations, "{generate:?}");
+    assert_eq!(generate.yields, 0, "{generate:?}");
 }
 
-/// S13e-2 の完了の条件 (docs/superpowers/specs/2026-10-18-s13e-specialization-design.md の「作業の分け方と完了の
-/// 条件」)。`Iter.generate` で引く形は yield せず、push の形と状態の handler は evidence を引かない。
+/// S13e-2 の完了の条件 (docs/implementation/benchmarks.md の「S13e-2」)。`Iter.generate` で引く形は yield せず、push の
+/// 形と状態の handler は evidence を引かない。
 #[test]
 fn handler_specialization_removes_yields_and_evidence() {
     let generate = stats("iter_generate", "5000050000\n");
@@ -475,29 +488,33 @@ fn allocations_are_counted_in_checked_mode() {
     assert!(stats.allocations >= 200_000, "{stats:?}");
 }
 
-/// S13e-1 の完了の条件 (docs/superpowers/specs/2026-10-18-s13e-specialization-design.md の「作業の分け方と完了の条件」)。
-/// 既知の閉包を渡す版と手で特殊化した版で、確保と `box` / `unbox` の回数が同じになる。RC の回数は、本体を埋め込む
-/// S13e-3 で揃えるので、ここでは比べない。
+/// S13e-1 の完了の条件 (docs/implementation/benchmarks.md の「S13e-1」)。既知の閉包を渡す版と手で特殊化した版で、
+/// 確保と `box` / `unbox` の回数が同じになる。RC の回数は、本体を埋め込む S13e-3 で揃うので、下の
+/// `specialization_matches_hand_written_rc` が比べる。
 #[test]
 fn specialization_matches_hand_written_work() {
-    let pairs = [
-        ("orders", "orders_by_hand", "150308561\n"),
-        ("push_fold", "push_fold_by_hand", "5000050000\n"),
-        (
-            "iter_pipeline",
-            "iter_pipeline_by_hand",
-            "166671666700000\n",
-        ),
-        ("tree", "tree_by_hand", "14898 7454478318\n"),
-        ("upsert", "upsert_by_hand", "2000 k1182 23\n"),
-    ];
-    for (name, by_hand, output) in pairs {
+    for (name, by_hand, output) in PAIRS {
         let written = stats(name, output);
         let hand = stats(by_hand, output);
         assert_eq!(
             (written.allocations, written.boxes, written.unboxes),
             (hand.allocations, hand.boxes, hand.unboxes),
             "{name} against {by_hand}: (allocations, boxes, unboxes)"
+        );
+    }
+}
+
+/// S13e-3 の完了の条件 (docs/implementation/benchmarks.md の「S13e-3」)。インライン化と融合の後は、自動の版と
+/// `_by_hand` の版の5つの組で、RC の回数も同じになる。
+#[test]
+fn specialization_matches_hand_written_rc() {
+    for (name, by_hand, output) in PAIRS {
+        let written = stats(name, output);
+        let hand = stats(by_hand, output);
+        assert_eq!(
+            (written.rc_increments, written.rc_decrements),
+            (hand.rc_increments, hand.rc_decrements),
+            "{name} against {by_hand}: (rc_increments, rc_decrements)"
         );
     }
 }

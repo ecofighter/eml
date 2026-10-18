@@ -570,7 +570,7 @@ fn a_closure_with_a_file_passed_as_a_type_variable_lowers() {
         .map(|function| function.name.as_str())
         .collect();
     // optimize は `f` を既知のラムダごとに複製するので、2つの instance は複製に置き換わる。複製の連鎖は鍵の入れ子の
-    // 深さで止まる (docs/superpowers/specs/2026-10-18-s13e-specialization-design.md の「鍵」)。小さな複製は呼ぶ側に
+    // 深さで止まる (docs/spec/core-ir.md の「鍵と名前」)。小さな複製は呼ぶ側に
     // 展開されて残らない (同じ文書の「インライン化」)。ラムダの複製は内部の関数なので、ここには並ばない
     assert_eq!(
         names,
@@ -610,6 +610,6 @@ fn a_top_level_function_in_a_once_field_lowers() {
         .map(|function| function.name.as_str())
         .collect();
     // `get_worker` と `main` は小さいので、呼ぶ側に展開されて残らない
-    // (docs/superpowers/specs/2026-10-18-s13e-specialization-design.md の「インライン化」)
+    // (docs/spec/core-ir.md の「インライン化」)
     assert_eq!(names, ["hide@[Task]", "worker"]);
 }

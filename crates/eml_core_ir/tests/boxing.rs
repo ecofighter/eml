@@ -8,7 +8,7 @@ use eml_lir::{Call, FnIdx, Rhs, Stmt, Term};
 const APPLY_TO: &str = "apply_to : (Int -> Int) -> Int -> Int\napply_to f x = f x\n\n";
 
 /// 関数の値をデータに入れて取り出す。optimize はデータを通った値を既知の閉包としないので
-/// (docs/superpowers/specs/2026-10-18-s13e-specialization-design.md の「既知の閉包」)、取り出した値への呼び出しは
+/// (docs/spec/core-ir.md の「既知の閉包」)、取り出した値への呼び出しは
 /// 特殊化されず、値として使う関数の形を確かめられる。調べる関数をこの形で呼ぶと、呼ぶ側に展開されず (「インライン化」)、
 /// 自分のコードのまま残る。`hide` は自分を呼ぶので展開されず、取り出した値は呼ぶ側から見えない。
 const HIDE: &str = "data Box a = | Box a\n\nhide : Int -> a -> Box a\nhide n x = if n <= 0 then Box x else hide (n - 1) x\n\n";

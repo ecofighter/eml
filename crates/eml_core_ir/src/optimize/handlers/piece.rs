@@ -1,4 +1,4 @@
-//! handler の複製の部品 (docs/superpowers/specs/2026-10-18-s13e-specialization-design.md の「書き換え」)。
+//! handler の複製の部品 (docs/spec/core-ir.md の「handler の複製」)。
 //! `perform` の地点からの続きを継続の関数にし、合流のブロックからの続きを合流のブロックの関数にする (`region`)。
 //! すぐに再開する節の本体を `perform` の地点に展開し (`inline_clause`)、引数を置き換えて定数になった `switch` を
 //! 合う行き先へのジャンプにする (`blocks::constant_target`)。`k` を値として使う節は、`k` に継続の関数の閉包を受ける写し
@@ -134,7 +134,7 @@ pub(crate) fn region(
 /// そろえる。`resume` から `return` までの純粋な `let` は使われないので写さない。
 ///
 /// 写した文は、どれも H 宛てとして書き換えない。節の中の `perform` は、もとの意味でも handler の外側で動くためである
-/// (docs/superpowers/specs/2026-10-18-s13e-specialization-design.md の「意味が変わらない理由」)。
+/// (docs/spec/core-ir.md の「handler の特殊化で意味が変わらない理由」)。
 pub(crate) fn inline_clause(
     target: &mut CoreFn,
     at: (BlockId, usize),
@@ -305,7 +305,7 @@ impl Copy<'_> {
 }
 
 /// `k` を値として受ける節の写し `<g>{k}`。`k` には、生の継続でなく、継続の関数の閉包が来る
-/// (docs/superpowers/specs/2026-10-18-s13e-specialization-design.md の「書き換え」)。`k` の引数は位置をそのままに、
+/// (docs/spec/core-ir.md の「handler の複製」)。`k` の引数は位置をそのままに、
 /// Repr を `tobj` にして印を保つ。`k` を包む `closure cont$(k)` と `closure cont$state(k)` (`resumes` が見分ける) は
 /// 消して、使う所を `k` そのものにする。継続の関数の閉包は包む関数と同じ引数を受けるので、包む必要がないためである。
 /// `resume k(v, s)` は、状態のない handler では `apply k(v)` に、状態つきでは `apply k(v, s)` にする。`mask` は

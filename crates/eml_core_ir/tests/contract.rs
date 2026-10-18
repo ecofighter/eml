@@ -6,7 +6,7 @@ use crate::common::{function, lir_text};
 
 /// 調べる関数をデータに通して呼び、optimize がそれを呼ぶ側に展開しないようにする。取り出した関数の値への `apply` は
 /// 直接の呼び出しでないので、関数は自分のコードのまま残る。`f` と `g` は自分を呼ぶので展開されず、調べる関数の中で
-/// 直接の呼び出しのまま残る (docs/superpowers/specs/2026-10-18-s13e-specialization-design.md の「インライン化」)。
+/// 直接の呼び出しのまま残る (docs/spec/core-ir.md の「インライン化」)。
 /// `hide` は自分を呼ぶので展開されず、取り出した値は呼ぶ側から見えない。
 const KEEP: &str = "data Box a = | Box a\n\nhide : Int -> a -> Box a\nhide n x = if n <= 0 then Box x else hide (n - 1) x\n\nf : Int -> Int\nf x = if x > 9 then f (x - 1) else x + 1\n\ng : Int -> Int\ng x = if x < 0 then g (x + 1) else x - 1\n\n";
 

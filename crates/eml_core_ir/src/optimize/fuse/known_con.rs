@@ -1,4 +1,4 @@
-//! 既知のコンストラクタ (docs/superpowers/specs/2026-10-18-s13e-specialization-design.md の「既知のコンストラクタ」)。
+//! 既知のコンストラクタ (docs/spec/core-ir.md の「既知のコンストラクタ」)。
 //! 同じ関数の中の `con` で作った値への `switch` と `unpack` をその場で解き、合流のブロックの引数を通って届く場合は
 //! `jump` の側で決める (docs/future/roadmap.md の「処理系」の項目「jump threading とインライン化」)。解いた `con` の
 //! フィールドにある既知の閉包への `apply` は、S13e-1 と同じ規則で直接の呼び出しにする。
@@ -698,11 +698,11 @@ fn insert_after(function: &mut CoreFn, added: Vec<(usize, Block)>) {
     function.blocks = out;
 }
 
-/// 既知の閉包への `apply` を直接の呼び出しにする (docs/superpowers/specs/2026-10-18-s13e-specialization-design.md
-/// の「書き換え」)。解いた `con` のフィールドを置き換えると、`closure` で束縛した変数や関数の値への `apply` が新しく
-/// 現れるためである。`Unr` でない閉包は、使う所がすべて書き換わるときだけ書き換える。書き換えない使う所が残ると、
-/// 捕獲した値を閉包と直接の呼び出しの2か所で消費するためである (S13e-1 と同じ規則)。書き換えた文の数と、書き換えで
-/// 生まれた直接の呼び出しの結果の変数を返す。生まれた呼び出しは、呼ぶ側がインライン化の候補にする。
+/// 既知の閉包への `apply` を直接の呼び出しにする (docs/spec/core-ir.md の「既知の閉包」)。解いた `con`
+/// のフィールドを置き換えると、`closure` で束縛した変数や関数の値への `apply` が新しく現れるためである。`Unr`
+/// でない閉包は、使う所がすべて書き換わるときだけ書き換える。書き換えない使う所が残ると、
+/// 捕獲した値を閉包と直接の呼び出しの2か所で消費するためである (S13e-1 と同じ規則)。書き換えた文の数と、
+/// 書き換えで生まれた直接の呼び出しの結果の変数を返す。生まれた呼び出しは、呼ぶ側がインライン化の候補にする。
 pub(super) fn call_known_closures(function: &mut CoreFn, callees: &[Callee]) -> (bool, Vec<VarId>) {
     let closures = known_closures(function);
     let mut total: HashMap<VarId, usize> = HashMap::new();

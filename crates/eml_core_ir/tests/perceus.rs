@@ -231,7 +231,7 @@ fn a_file_taken_out_of_a_tuple_is_neither_dupped_nor_decreffed() {
 fn a_discarded_call_result_is_released() {
     // `shadowed_and_discarded_strings` の捨てた文字列は contract が消すので、呼び出しの結果を捨てる場合の解放はここで確かめる
     // `f` は自分を呼ぶので展開されず、捨てる結果を返す呼び出しとして残る
-    // (docs/superpowers/specs/2026-10-18-s13e-specialization-design.md の「インライン化」)
+    // (docs/spec/core-ir.md の「インライン化」)
     let text = "f : Int -> String\nf n = if n > 0 then f (n - 1) else \"z\"\n\nmain : Unit -> <IO> Unit\nmain () =\n  let _ = f 0\n  println \"x\"";
     insta::assert_snapshot!(lir_text(text, eml_lir::Pass::Perceus), @r#"
     layout Prelude.Bool { False, True }
@@ -271,7 +271,7 @@ fn equations_allocate_no_tuple_for_their_arguments() {
 #[test]
 fn interpolation_keeps_only_the_accumulator_live_across_holes() {
     // `g` は自分を呼ぶので展開されず、穴ごとの呼び出しとして残る。`f` はデータを通して呼び、`main` に展開されないように
-    // する (docs/superpowers/specs/2026-10-18-s13e-specialization-design.md の「インライン化」)
+    // する (docs/spec/core-ir.md の「インライン化」)
     let text = "g : Int -> Int\ng n = if n > 9 then g (n - 1) else n + 1\n\nf : Int -> String\nf n = \"a\\{g n}b\\{g 2}c\\{g 3}\"\n\nmain : Unit -> <IO> Unit\nmain () =\n  let Box f = hide 0 f\n  println (f 1)";
     let text = format!(
         "data Box a = | Box a\n\nhide : Int -> a -> Box a\nhide n x = if n <= 0 then Box x else hide (n - 1) x\n\n{text}"

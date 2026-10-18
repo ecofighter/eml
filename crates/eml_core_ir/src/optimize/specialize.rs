@@ -1,5 +1,5 @@
 //! 既知の閉包を受ける関数と閉包の複製と、関数ごとの作業リスト
-//! (docs/superpowers/specs/2026-10-18-s13e-specialization-design.md の「鍵と名前」と「S13e-1 既知の閉包への特殊化」)。
+//! (docs/spec/core-ir.md の「鍵と名前」と「複製」)。
 //! 複製は鍵だけで名前を決め、呼び出し先の translate の出力から作る。そのため、どの関数をどの順に書き換えても、同じ
 //! 名前の複製は同じコードになる (docs/spec/vm.md の「追記」)。
 
@@ -26,7 +26,7 @@ pub(crate) struct ClosureShape {
 }
 
 /// 鍵の位置が受け取る既知の値の形。S13e-1 は閉包だけを、融合の段は既知の閉包をフィールドに持つ `con` も鍵にする
-/// (docs/superpowers/specs/2026-10-18-s13e-specialization-design.md の「`con` の値の形についての特殊化」)。
+/// (docs/spec/core-ir.md の「`con` の値の形についての特殊化」)。
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub(crate) enum ArgShape {
     Closure(ClosureShape),

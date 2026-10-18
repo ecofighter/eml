@@ -1,5 +1,5 @@
 //! 既知の閉包をフィールドに持つ `con` を受ける呼び出しと閉包の、鍵ごとの複製
-//! (docs/superpowers/specs/2026-10-18-s13e-specialization-design.md の「`con` の値の形についての特殊化」)。
+//! (docs/spec/core-ir.md の「`con` の値の形についての特殊化」)。
 //!
 //! 複製は、呼び出し先の書き換えた後のコードの引数を、`con` のフィールドの閉包の捕獲と値のフィールドに開いたもので、
 //! 入口で `closure` と `con` を作り直す。作り直した値は同じ関数の中の既知の `con` と既知の閉包なので、既知の
@@ -287,7 +287,7 @@ impl Fuser<'_> {
 
     /// 既知の閉包をフィールドに少なくとも1つ持つ `con` の形と、その値の代わりに渡す実引数。閉包でないフィールドは、
     /// `Unr` の値か定数のときだけ値のまま渡す。鍵の入れ子の深さが `MAX_KEY_DEPTH` を超える位置は特殊化しない
-    /// (docs/superpowers/specs/2026-10-18-s13e-specialization-design.md の「止まること」)。
+    /// (docs/spec/core-ir.md の「融合が止まること」)。
     fn con_shape(
         &self,
         function: &CoreFn,

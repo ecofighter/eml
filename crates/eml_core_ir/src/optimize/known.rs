@@ -1,5 +1,5 @@
 //! 既知の閉包への `apply` の書き換えと、translate の包む関数の命令への戻し
-//! (docs/superpowers/specs/2026-10-18-s13e-specialization-design.md の「書き換え」)。
+//! (docs/spec/core-ir.md の「既知の閉包」)。
 
 use std::collections::{HashMap, HashSet};
 
@@ -155,7 +155,7 @@ pub(crate) fn fresh(vars: &mut Vec<VarInfo>, info: VarInfo) -> VarId {
 /// `function` の中の既知の閉包を書き換える。既知の閉包への `apply` を直接の呼び出しにし、包む関数への呼び出しを命令に
 /// 戻し、既知の閉包を受ける呼び出しと捕獲を複製に向ける。`opened` は、複製が閉包の捕獲に開いた引数の組で、定義する
 /// 文を持たない既知の閉包である。`owner` は複製の名前で、その中の handle の節の関数も複製する
-/// (docs/superpowers/specs/2026-10-18-s13e-specialization-design.md の「鍵と名前」)。
+/// (docs/spec/core-ir.md の「鍵と名前」)。
 pub(crate) fn rewrite(
     function: &mut CoreFn,
     opened: HashMap<VarId, KnownClosure>,
@@ -468,7 +468,7 @@ impl Rewriter<'_> {
 
 /// 書き換えた閉包のうち、使う所が残らなかったものの `closure` を消す。残すと、`unr` でない閉包の捕獲を閉包と直接の
 /// 呼び出しの2か所で消費する IR になり、box の挿入も値として参照された関数に `f$boxed` を作る
-/// (docs/superpowers/specs/2026-10-18-s13e-specialization-design.md の「パスの後に直すもの」)。定義は使う所を
+/// (docs/spec/core-ir.md の「既知の閉包」)。定義は使う所を
 /// 支配し、辺は前へ向かうので、後ろから1回たどれば、消した `closure` だけが捕獲していた、書き換えた閉包も消える。
 fn drop_unused_closures(function: &mut CoreFn, rewritten: &HashSet<VarId>) {
     if rewritten.is_empty() {

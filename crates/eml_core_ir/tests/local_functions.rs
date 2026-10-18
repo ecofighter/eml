@@ -13,7 +13,7 @@ struct Pair {
 }
 
 /// 外側の関数は小さいので、`main` から直接呼ぶと `main` に展開される。外側の関数をデータに通して呼び、外側の関数の
-/// コードを比べられるように残す (docs/superpowers/specs/2026-10-18-s13e-specialization-design.md の「インライン化」)。
+/// コードを比べられるように残す (docs/spec/core-ir.md の「インライン化」)。
 const PAIRS: [Pair; 4] = [
     // 純粋な外側の関数の中の accumulator のループ
     Pair {
@@ -297,7 +297,7 @@ fn a_lifted_function_has_the_same_lir_as_a_top_level_helper() {
 }
 
 /// 関数を受ける std の関数には、データを通した値を渡す。optimize はデータを通った値を既知の閉包としないので
-/// (docs/superpowers/specs/2026-10-18-s13e-specialization-design.md の「既知の閉包」)、特殊化しない std の関数の
+/// (docs/spec/core-ir.md の「既知の閉包」)、特殊化しない std の関数の
 /// LIR が残る。std の関数もデータを通して呼ぶ。直接呼ぶと、小さな関数は `main` に展開されて残らないためである
 /// (同じ文書の「インライン化」)。値として使う関数に box の挿入が足す `$boxed` は比べない。
 const STD_PROGRAM: &str = "\

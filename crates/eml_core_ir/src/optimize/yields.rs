@@ -1,5 +1,5 @@
 //! 書き換えた後の `yields` の印の付け直し (docs/spec/core-ir.md の「`yields` の印」と
-//! docs/superpowers/specs/2026-10-18-s13e-specialization-design.md の「パスの後に直すもの」)。
+//! docs/spec/core-ir.md の「`yields` の付け直し」)。
 
 use std::collections::{HashMap, HashSet};
 

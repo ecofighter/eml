@@ -382,8 +382,8 @@ fn a_continuation_passed_to_a_function_is_wrapped() {
 
 #[test]
 fn lower_until_stops_after_the_named_pass() {
-    // 使われない純粋な `let` は optimize の融合の段が消し (docs/superpowers/specs/2026-10-18-s13e-specialization-design.md
-    // の「S13e-3 インライン化と融合」)、Perceus は RC の命令を足す。小さな `main` は入口に展開される
+    // 使われない純粋な `let` は optimize の融合の段が消し (docs/spec/core-ir.md の「融合」)、Perceus は RC
+    // の命令を足す。小さな `main` は入口に展開される
     let text = "f : Int -> Int\nf x = x + 1\n\nmain : Unit -> <IO> Unit\nmain () =\n  let unused = \"unused\"\n  let s = \"used\"\n  let n = f 1\n  println s\n  println (s ++ show n)";
     insta::assert_snapshot!(function(&core_text(text, Pass::Translate), "main"), @r#"
     fn main(p.0: unit) -> unit {
@@ -445,7 +445,7 @@ const OPTION: &str = "data Option a =\n  | None\n  | Some a\n\n";
 
 /// 調べる関数をデータに通して呼ぶ。取り出した関数の値への `apply` は直接の呼び出しでないので、optimize は関数を
 /// 呼ぶ側に展開せず、関数は自分のコードのまま LIR まで残る
-/// (docs/superpowers/specs/2026-10-18-s13e-specialization-design.md の「インライン化」)。`hide` は自分を呼ぶので展開されず、取り出した値は呼ぶ側から見えない。
+/// (docs/spec/core-ir.md の「インライン化」)。`hide` は自分を呼ぶので展開されず、取り出した値は呼ぶ側から見えない。
 const HIDE: &str = "data Hide a = | Hide a\n\nhide : Int -> a -> Hide a\nhide n x = if n <= 0 then Hide x else hide (n - 1) x\n\n";
 
 #[test]
@@ -3353,7 +3353,7 @@ fn a_lin_enum_variable_is_unr() {
     // すると、box の挿入が足す `unr` の箱が `lin` の引数に渡り、`yield` の遅い道で死ぬ箱を Perceus が `decref` する
     // (docs/spec/core-ir.md の「translate が決める印」)。値を包む `Option` は型のとおり `lin` のままである。所有の段の
     // 検査まで通す。`spend` は展開されるので、自分を呼ぶ `spend_after` に `Token` を渡し、`yield` の後まで生かす
-    // (docs/superpowers/specs/2026-10-18-s13e-specialization-design.md の「インライン化」)
+    // (docs/spec/core-ir.md の「インライン化」)
     let text = "data Token : Lin =\n  | Token\n\ndata Box a = | Box a\n\nhide : Int -> a -> Box a\nhide n x = if n <= 0 then Box x else hide (n - 1) x\n\neffect Ask where\n  ask : Unit -> Int\n\nspend : Token -> Int\nspend t = spend_after 0 t\n\nspend_after : Int -> Token -> Int\nspend_after n t =\n  if n > 0 then spend_after (n - 1) t\n  else\n    match t with\n      | Token -> 1\n\nhold : Token -> <Ask> Int\nhold t =\n  let n = ask ()\n  spend t + n\n\nopen_it : Option Token -> Int\nopen_it o =\n  match o with\n    | None -> 0\n    | Some t -> spend t\n\nmain : Unit -> <IO> Unit\nmain () =\n  let Box h = hide 0 hold\n  println (show (handle h Token with | ctl ask () k -> k 1))\n  println (show (open_it (Some Token)))\n  println (show (List.length (List.map spend [Token])))";
     insta::assert_snapshot!(function(&core_text(text, Pass::Translate), "open_it"), @"
     fn open_it(o.0: tobj lin) -> int {

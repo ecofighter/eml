@@ -405,29 +405,37 @@ main () = println (show (Iter.to_list (Iter.generate (nums 3))))
     assert!(!body.contains("apply"), "{body}");
 }
 
+/// データに入れるだけの引数は特殊化しない (docs/spec/core-ir.md の「複製」)。`wrap` は自分を呼ぶので展開されず、
+/// 呼び出しのまま残る。自分を呼ぶ所に `f` を渡すと、直接の呼び出しに渡す位置として特殊化するので、別の閉包を渡す。
 #[test]
 fn a_closure_only_stored_in_data_is_not_specialized() {
     let text = "\
-wrap : (Int -> Int) -> Option (Int -> Int)
-wrap f = Some f
+wrap : Int -> (Int -> Int) -> Option (Int -> Int)
+wrap n f = if n <= 0 then Some f else wrap (n - 1) (fn x -> x)
 
 main : Unit -> <IO> Unit
 main () =
-  match wrap (fn x -> x + 1) with
+  match wrap 0 (fn x -> x + 1) with
     | Some g -> println (show (g 1))
     | None -> ()
 ";
+    let names = names(text, Pass::Optimize);
+    assert!(names.iter().any(|name| name == "wrap"), "{names:?}");
     assert!(
-        names(text, Pass::Optimize)
-            .iter()
-            .all(|name| !name.starts_with("wrap{")),
+        names.iter().all(|name| !name.starts_with("wrap{")),
+        "{names:?}"
     );
     insta::assert_snapshot!(function(&core_text(text, Pass::Optimize), "entry$main"), @r#"
     fn entry$main() -> unit {
-      let t.1: int = extern Prelude.+(1, 1)
-      let t.2: obj = extern "Prelude.Show Int.show"(t.1)
-      let t.3: unit = extern Prelude.println(t.2)
-      return t.3
+      let t.1: tobj = call wrap(0, &main$lambda0)
+      switch t.1 Prelude.Option { #0 -> b1, #1(g.2: tobj) -> b2 }
+    b1:
+      return ()
+    b2:
+      let t.3: int = apply g.2(1)
+      let t.4: obj = extern "Prelude.Show Int.show"(t.3)
+      let t.5: unit = extern Prelude.println(t.4)
+      return t.5
     }
     "#);
 }
@@ -638,7 +646,7 @@ nums n () =
 ";
 
 /// すぐに再開する節の handler は、経路の関数の複製に節を展開して消える
-/// (docs/superpowers/specs/2026-10-18-s13e-specialization-design.md の「S13e-2 handler への特殊化」)。
+/// (docs/spec/core-ir.md の「handler への特殊化」)。
 #[test]
 fn push_fold_has_no_handle_left() {
     let shown = core_text(include_str!("../../../bench/push_fold.em"), Pass::Optimize);
@@ -932,7 +940,7 @@ main () =
 }
 
 /// `k` を値として使う節は、継続の関数の閉包を `k` として受ける写し `<g>{k}` を末尾で呼ぶ形になり、`Iter.generate` で
-/// 引く形から yield が消える (docs/superpowers/specs/2026-10-18-s13e-specialization-design.md の「書き換え」)。`Iter`
+/// 引く形から yield が消える (docs/spec/core-ir.md の「handler の複製」)。`Iter`
 /// は `hide` を通して `Iter.fold` に届けるので、融合 (S13e-3) で継続の関数が消えない。
 #[test]
 fn iter_generate_has_no_yield_left() {
@@ -1072,7 +1080,7 @@ fn continuations_across_join_blocks_stay_linear_in_size() {
 }
 
 /// 既知のラムダは、`map` の複製のループに展開される。ループの中に乗算の extern が入り、ラムダの呼び出しは残らない
-/// (docs/superpowers/specs/2026-10-18-s13e-specialization-design.md の「インライン化」)。
+/// (docs/spec/core-ir.md の「インライン化」)。
 #[test]
 fn a_known_lambda_is_inlined_into_its_copy() {
     let text =
@@ -1103,8 +1111,7 @@ fn calls(shown: &str, name: &str) -> bool {
     })
 }
 
-/// Prelude の合成子は、インライン化で展開される (docs/superpowers/specs/2026-10-18-s13e-specialization-design.md の
-/// 「インライン化」)。
+/// Prelude の合成子は、インライン化で展開される (docs/spec/core-ir.md の「インライン化」)。
 #[test]
 fn pipe_operators_are_inlined() {
     let text = "\
@@ -1197,7 +1204,7 @@ main () =
 
 /// 展開は呼び出し先の書き換えた後のコードを写すので、大きさが上限を超えた関数は展開されず、コードは呼び出しの
 /// 連なりの深さに比例して育つ。展開した本体の中の呼び出しを呼ぶ側でもう1度展開すると、深さの指数で育つ
-/// (docs/superpowers/specs/2026-10-18-s13e-specialization-design.md の「止まること」)。
+/// (docs/spec/core-ir.md の「融合が止まること」)。
 #[test]
 fn nested_inlining_grows_linearly_with_the_call_depth() {
     let size = |depth: usize| {
@@ -1222,7 +1229,7 @@ fn nested_inlining_grows_linearly_with_the_call_depth() {
 }
 
 /// 同じ関数の中で作った `con` への `match` は、その場で解ける
-/// (docs/superpowers/specs/2026-10-18-s13e-specialization-design.md の「既知のコンストラクタ」)。
+/// (docs/spec/core-ir.md の「既知のコンストラクタ」)。
 #[test]
 fn matching_a_local_con_resolves() {
     let text = "\
@@ -1314,7 +1321,16 @@ main () =
 ";
     let shown = core_text(text, Pass::Optimize);
     let main = function(&shown, "entry$main");
-    assert!(main.contains("switch "), "{main}");
+    let some = main
+        .lines()
+        .find(|line| line.contains("= con Prelude.Option #1("))
+        .and_then(|line| line.trim().strip_prefix("let "))
+        .and_then(|line| line.split(':').next())
+        .unwrap_or_else(|| panic!("the con stays:\n{main}"));
+    assert!(
+        main.contains(&format!("switch {some} Prelude.Option")),
+        "{main}"
+    );
 }
 
 /// `con` のフィールドの既知の閉包は、`con` を解いた後で既知の閉包になり、`apply` は直接の呼び出しになる。
@@ -1404,7 +1420,7 @@ fn assert_fused(text: &str) {
 }
 
 /// `Iter.fold` は、`Iter.generate` が作る既知の `Iter` の形について複製され、要素ごとの確保のないループになる
-/// (docs/superpowers/specs/2026-10-18-s13e-specialization-design.md の「`con` の値の形についての特殊化」)。
+/// (docs/spec/core-ir.md の「`con` の値の形についての特殊化」)。
 #[test]
 fn iter_fold_over_generate_is_fused() {
     assert_fused(include_str!("../../../bench/iter_generate.em"));
@@ -1413,8 +1429,7 @@ fn iter_fold_over_generate_is_fused() {
 /// `Iter.filter` と `Iter.map` を重ねた形では、`Iter.map` の段は `Iter.fold` のループに入り、ループは `Iter` も
 /// `Option` も閉包も作らない。`Iter.generate` は `Iter.filter` が要素を飛ばすループに入り、そのループは `apply` を
 /// しない。そのループは再帰するので展開されず、残した要素ごとに `Some` を作って返す。これをなくす継続についての
-/// 特殊化は後に回した (docs/superpowers/specs/2026-10-18-s13e-specialization-design.md の「`con` の値の形についての
-/// 特殊化」)。
+/// 特殊化は後に回した (docs/spec/core-ir.md の「`con` の値の形についての特殊化」)。
 #[test]
 fn iter_pipeline_fuses_map_into_the_fold_and_generate_into_the_filter() {
     let text = include_str!("../../../bench/iter_pipeline.em");
@@ -1472,7 +1487,7 @@ main () =
 
 /// 書き換えで生まれた呼び出しの展開は、関数ごとに `MAX_INLINE_ROUNDS` 回で止まる。自分を引数に受けて呼ぶ閉包は、
 /// 展開するたびに既知の閉包への `apply` をまた持ち込むので、上限がないと融合の段が止まらない
-/// (docs/superpowers/specs/2026-10-18-s13e-specialization-design.md の「止まること」)。実行の結果は UI テストの
+/// (docs/spec/core-ir.md の「融合が止まること」)。実行の結果は UI テストの
 /// `tests/ui/run/functions/self_applying_closure.em` が確かめる。
 #[test]
 fn a_self_applying_closure_stops_inlining() {
@@ -1525,4 +1540,78 @@ main () =
     let name = code.split('"').nth(1).unwrap_or_else(|| panic!("{code}"));
     assert!(name.starts_with("Std.Iter.fold@"), "{code}");
     assert_eq!(*code, function(&core_text(&b, Pass::Optimize), name));
+}
+
+/// `Iter` を作り合う2つの関数 `ping` と `pong` (2つの関数の輪) と、`Iter` を引く側の関数。
+const CYCLES: &str = "
+add : Int -> Int -> Int
+add a b = a + b
+
+double : Int -> Int
+double x = x * 2
+
+ping : (Int -> Int) -> Iter <e> Int -> Iter <e> Int
+ping f it =
+  Iter (fn () ->
+    match Iter.next it with
+      | None -> None
+      | Some (x, rest) -> Some (f x, pong f rest))
+
+pong : (Int -> Int) -> Iter <e> Int -> Iter <e> Int
+pong f it =
+  Iter (fn () ->
+    match Iter.next it with
+      | None -> None
+      | Some (x, rest) -> Some (f (f x), ping f rest))
+";
+
+/// 2つのプログラムに共通する名前の関数は、同じコードになる。その名前を返す。プログラムごとに違う `main` と入口の
+/// 関数は比べない。
+fn shared_functions(a: &str, b: &str) -> Vec<String> {
+    let (a_shown, b_shown) = (core_text(a, Pass::Optimize), core_text(b, Pass::Optimize));
+    let b_names = names(b, Pass::Optimize);
+    let shared: Vec<String> = names(a, Pass::Optimize)
+        .into_iter()
+        .filter(|name| {
+            !name.starts_with("entry$") && !name.starts_with("main") && b_names.contains(name)
+        })
+        .collect();
+    for name in &shared {
+        assert_eq!(function(&a_shown, name), function(&b_shown, name), "{name}");
+    }
+    shared
+}
+
+/// 自分の閉包を値として参照する複製 (`Iter.map` の写し) と、互いを参照する複製の輪 (`ping` と `pong` の閉包の写し)
+/// は、引く側が違っても、輪にどちらの端から入っても、同じ名前なら同じコードになる (docs/spec/core-ir.md の
+/// 「融合」と docs/spec/vm.md の「追記」)。複製を作る順は入り方で変わるので、書き換えている輪の複製を読まない規則が
+/// これを守る。
+#[test]
+fn copies_in_cycles_do_not_depend_on_the_entry_into_the_cycle() {
+    let a = format!(
+        "import Iter (Iter(..))
+{NUMS}{CYCLES}
+main : Unit -> <IO> Unit
+main () =
+  println (show (Iter.to_list (Iter.take 3 (Iter.map double (Iter.generate (nums 10))))))
+  println (show (Iter.fold add 0 (Iter.take 3 (ping double (Iter.generate (nums 10))))))
+"
+    );
+    let b = format!(
+        "import Iter (Iter(..))
+{NUMS}{CYCLES}
+main : Unit -> <IO> Unit
+main () =
+  println (show (Iter.to_list (Iter.zip (Iter.map double (Iter.generate (nums 10))) (Iter.generate (nums 3)))))
+  println (show (Iter.fold add 0 (Iter.take 3 (Iter.map double (Iter.generate (nums 10))))))
+  println (show (Iter.fold add 0 (Iter.take 3 (pong double (Iter.generate (nums 10))))))
+"
+    );
+    let shared = shared_functions(&a, &b);
+    for prefix in ["Std.Iter.map@", "ping$lambda0{", "pong$lambda0{"] {
+        assert!(
+            shared.iter().any(|name| name.starts_with(prefix)),
+            "no shared {prefix} copy in {shared:#?}"
+        );
+    }
 }

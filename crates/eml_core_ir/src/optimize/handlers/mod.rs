@@ -1,8 +1,7 @@
-//! handler への特殊化 (docs/superpowers/specs/2026-10-18-s13e-specialization-design.md の「S13e-2 handler への
-//! 特殊化」)。本体が既知の関数になった `handle` のうち、`perform` までの経路が末尾呼び出しだけでできたものを、経路の
-//! 関数の handler ごとの複製の呼び出しに替える。複製の中の `perform` は、すぐに再開する節なら節の本体をその場に
-//! 展開した形にする。それ以外の節なら、継続の関数の閉包を `k` として節の写し `<g>{k}` を末尾で呼ぶ形にし、`never` の
-//! 操作なら、後ろを捨てて節の関数を末尾で呼ぶ形にする。
+//! handler への特殊化 (docs/spec/core-ir.md の「handler への特殊化」)。本体が既知の関数になった `handle` のうち、
+//! `perform` までの経路が末尾呼び出しだけでできたものを、経路の関数の handler ごとの複製の呼び出しに替える。
+//! 複製の中の `perform` は、すぐに再開する節なら節の本体をその場に展開した形にする。それ以外の節なら、継続の関数の閉包を
+//! `k` として節の写し `<g>{k}` を末尾で呼ぶ形にし、`never` の操作なら、後ろを捨てて節の関数を末尾で呼ぶ形にする。
 //!
 //! 複製と継続の関数は、`specialize` と最初の `yields` の付け直しの後のコードから作る。そのコードは名前ごとに決まって
 //! いるので、どの handle を特殊化するかも、複製のコードも、handle を含む関数と経路の関数のコードだけで決まる
@@ -29,7 +28,7 @@ struct Site {
 }
 
 /// 節の関数の形。Core IR の形で決め、`fn` と `ctl` の書き方には依らない
-/// (docs/superpowers/specs/2026-10-18-s13e-specialization-design.md の「節の形」)。
+/// (docs/spec/core-ir.md の「handler の節の形」)。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ClauseForm {
     /// `k` の使いが、末尾の位置の `mask` のない `resume k(v, s)` だけで、どの `return` もその結果を返す節。
@@ -408,7 +407,7 @@ fn eligible(program: &Program, translated: &[bool], site: Site) -> Option<Handle
 }
 
 /// handle の本体から、末尾の位置の既知の直接の呼び出しだけでたどれる `yields` の関数 (経路の関数)。経路の条件
-/// (docs/superpowers/specs/2026-10-18-s13e-specialization-design.md の「対象」) に反する関数があれば `None` を返す。
+/// (docs/spec/core-ir.md の「handler への特殊化」) に反する関数があれば `None` を返す。
 /// 経路の外の `perform` が H に届くかは、呼ぶ相手と `apply` の `yields` の印で安全側に判断できる。yield しうる操作を
 /// 持つエフェクトの `perform` は、それを含む関数の印に必ず表れるためである (docs/spec/types.md の「row の具体化の
 /// 記録」)。すべての操作が `never` のエフェクト (`IO` を含む) は、中断が巻き戻しで安いので対象にしない。
