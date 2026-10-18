@@ -4,6 +4,10 @@
 //! 関数ごとに、ブロックを番号の順に1回たどる。道ごとに、構築子が分かっている変数と、使える token を持つ。token は
 //! `switch` の行き先へだけ流れ、合流するブロックは token なしで始まる。たどり終えてから、どの道でも使わなかった元を
 //! 元の文に戻し、一部の道でだけ使う token を、使わない行き先の入口で手放す。
+//!
+//! Perceus は、保持した持ち主を、借りたフィールドが要る所 (末尾呼び出しなど) で解く。そのため、手放す箱と同じ語の数の
+//! `con` が `release` より前に来ることがある。元の文は、間の文が元の値と残さないフィールドを使わず、yield しうる呼び出し
+//! もないとき、ブロックの中で、まだ token を受けていない前の `con` の直前へ上げる。
 
 use std::collections::HashMap;
 
@@ -54,6 +58,8 @@ struct Token {
     ctor: Ctor,
     fields: usize,
     words: u32,
+    /// 元の文を上げる先。同じブロックの、この token を受ける `con` の文の番号である。
+    moved_to: Option<usize>,
 }
 
 /// `con` が受け取る token の番号と、その箱の使い方。
@@ -83,6 +89,8 @@ struct Planner<'a> {
     /// ブロックごとの、入口で使える token と、そのブロックで `con` が使った token。
     available: Vec<Vec<usize>>,
     used: Vec<Vec<usize>>,
+    /// 今のブロックで、まだ token を受けていない `con` の文の番号と語の数。番号の順に並ぶ。
+    unpaired: Vec<(usize, u32)>,
 }
 
 impl<'a> Planner<'a> {
@@ -118,6 +126,7 @@ impl<'a> Planner<'a> {
             pairings: HashMap::new(),
             available: vec![Vec::new(); blocks],
             used: vec![Vec::new(); blocks],
+            unpaired: Vec::new(),
         }
     }
 
@@ -133,6 +142,7 @@ impl<'a> Planner<'a> {
         for (index, block) in function.blocks.iter().enumerate() {
             let mut path = entries.remove(&index).unwrap_or_default();
             self.available[index] = path.tokens.clone();
+            self.unpaired.clear();
             for (at, stmt) in block.stmts.iter().enumerate() {
                 self.stmt(&mut path, (index, at), stmt);
             }
@@ -180,14 +190,14 @@ impl<'a> Planner<'a> {
             Stmt::Release {
                 value,
                 ctor,
+                fields,
                 token: None,
-                ..
-            } => self.source(path, at, *value, *ctor),
+            } => self.source(path, at, *value, *ctor, fields),
             // 構築子が分かっている箱の `decref` も元にする。レコードの更新では、フィールドがみな借りたまま読まれるので、
             // Perceus は `release` でなく `decref` を出す (docs/spec/lir.md の「reuse」)
             Stmt::Decref(value) => {
                 if let Some(&ctor) = path.known.get(value) {
-                    self.source(path, at, *value, ctor);
+                    self.source(path, at, *value, ctor, &[]);
                 }
             }
             Stmt::Let {
@@ -207,22 +217,110 @@ impl<'a> Planner<'a> {
         }
     }
 
-    fn source(&mut self, path: &mut Path, at: At, value: VarId, ctor: Ctor) {
+    /// `kept` は `release` が名前を書いた位置で、`decref` では空である。
+    fn source(
+        &mut self,
+        path: &mut Path,
+        at: At,
+        value: VarId,
+        ctor: Ctor,
+        kept: &[Option<VarId>],
+    ) {
         let shape = self.shape(ctor);
         // フィールドのない構築子は箱でなく即値である
         if shape.positions.is_empty() {
             return;
         }
-        if let Some(words) = shape.reuse_words() {
-            path.tokens.push(self.tokens.len());
-            self.tokens.push(Token {
-                at,
-                value,
-                ctor,
-                fields: shape.positions.len(),
-                words,
-            });
+        let Some(words) = shape.reuse_words() else {
+            return;
+        };
+        let id = self.tokens.len();
+        self.tokens.push(Token {
+            at,
+            value,
+            ctor,
+            fields: shape.positions.len(),
+            words,
+            moved_to: None,
+        });
+        if !self.move_up(at, id, kept) {
+            path.tokens.push(id);
         }
+    }
+
+    /// 元の文を、同じブロックの前にある、まだ token を受けていない同じ語の数の `con` の直前へ上げ、その `con` と組に
+    /// する。いちばん前の `con` を選ぶ。間の文 (`con` を含む) が元の値か残さないフィールドを使うときと、yield しうる
+    /// 呼び出しがあるときは上げない。上げた元はすぐに組になるので、元の文に戻すことはない (docs/spec/lir.md の「reuse」)。
+    fn move_up(&mut self, (block, at): At, id: usize, kept: &[Option<VarId>]) -> bool {
+        let words = self.tokens[id].words;
+        let Some(&(first, _)) = self.unpaired.iter().find(|&&(_, w)| w == words) else {
+            return false;
+        };
+        let stmts = &self.function.blocks[block].stmts;
+        let mut target = None;
+        for index in (first..at).rev() {
+            if self.blocks_move(&stmts[index], self.tokens[id].value, kept) {
+                break;
+            }
+            if self.unpaired.binary_search(&(index, words)).is_ok() {
+                target = Some(index);
+            }
+        }
+        let Some(index) = target else {
+            return false;
+        };
+        let Stmt::Let {
+            var,
+            rhs: Rhs::Con { ctor, args, .. },
+        } = &stmts[index]
+        else {
+            unreachable!("an unpaired position holds a con");
+        };
+        let (_, in_place, skip) = self.fit(&self.tokens[id], *var, *ctor, args);
+        self.unpaired.retain(|&(position, _)| position != index);
+        self.tokens[id].moved_to = Some(index);
+        self.used[block].push(id);
+        let pairing = Pairing {
+            token: id,
+            in_place,
+            skip,
+        };
+        self.pairings.insert((block, index), pairing);
+        true
+    }
+
+    /// 元の値 `value` の箱を手放す文を、`stmt` の前へ上げられないか。上げると、`stmt` が手放した後の値か、残さない
+    /// フィールド (と、その下の変数) を使うことになるか、手放す時点が yield の地点をまたぐ。
+    fn blocks_move(&self, stmt: &Stmt, value: VarId, kept: &[Option<VarId>]) -> bool {
+        if let Stmt::Let {
+            rhs: Rhs::Call(call),
+            ..
+        } = stmt
+            && may_yield(self.program, self.function, call)
+        {
+            return true;
+        }
+        let mut blocked = false;
+        for_each_var(stmt, |var| {
+            blocked |= self.lost_by_release(var, value, kept)
+        });
+        blocked
+    }
+
+    /// `value` の `release` の後で `var` が使えなくなるか。名前を書いて残すフィールドだけは、`release` の後に所有になる
+    /// ので使える。分解の入れ子の下の変数は、持ち主が `value` のままなので使えない (docs/spec/lir.md の「verifier」)。
+    fn lost_by_release(&self, var: VarId, value: VarId, kept: &[Option<VarId>]) -> bool {
+        if var == value {
+            return true;
+        }
+        let mut current = var;
+        while let Some((parent, _, slot)) = self.origins[current.0 as usize] {
+            if parent == value {
+                return current != var || kept.get(slot).copied().flatten() != Some(var);
+            }
+            current = parent;
+        }
+        false
     }
 
     /// 同じ語の数の token のうち、書かないフィールドが最も多いもの、次にその場で作り直せるもの、次に最も後に定義した
@@ -238,12 +336,7 @@ impl<'a> Planner<'a> {
             .enumerate()
             .filter(|&(_, &id)| self.tokens[id].words == words)
             .map(|(slot, &id)| {
-                let token = &self.tokens[id];
-                let skip = self.skips(token, shape, args);
-                let skips = skip.iter().filter(|&&skip| skip).count();
-                let in_place = token.ctor == ctor
-                    && (self.function.mark(token.value) == Mark::Unr
-                        || self.function.mark(var) == Mark::Lin);
+                let (skips, in_place, skip) = self.fit(&self.tokens[id], var, ctor, args);
                 ((skips, in_place, id), slot, skip)
             })
             .max_by_key(|&(key, _, _)| key);
@@ -256,7 +349,25 @@ impl<'a> Planner<'a> {
                 skip,
             };
             self.pairings.insert(at, pairing);
+        } else {
+            self.unpaired.push((at.1, words));
         }
+    }
+
+    /// token を `var = con ctor(args)` に使うときの、書かない引数の数、その場で作り直せるか、書かない印。
+    fn fit(
+        &self,
+        token: &Token,
+        var: VarId,
+        ctor: Ctor,
+        args: &[Atom],
+    ) -> (usize, bool, Vec<bool>) {
+        let skip = self.skips(token, self.shape(ctor), args);
+        let skips = skip.iter().filter(|&&skip| skip).count();
+        let in_place = token.ctor == ctor
+            && (self.function.mark(token.value) == Mark::Unr
+                || self.function.mark(var) == Mark::Lin);
+        (skips, in_place, skip)
     }
 
     /// 書かない引数。token の元の値を分解して束縛した変数で、語の種類と物理的な位置が元と同じものである。箱は中身を
@@ -332,6 +443,23 @@ impl<'a> Planner<'a> {
             pairings: self.pairings,
             drops,
         }
+    }
+}
+
+/// 文が使う変数。`dup`、`decref`、`release` の対象と、`release` が名前を書いたフィールドも数える。
+fn for_each_var(stmt: &Stmt, mut f: impl FnMut(VarId)) {
+    match stmt {
+        Stmt::Dup(var) | Stmt::Decref(var) => f(*var),
+        Stmt::Release { value, fields, .. } => {
+            f(*value);
+            fields.iter().flatten().for_each(|&field| f(field));
+        }
+        Stmt::Let { .. } | Stmt::Unpack { .. } => stmt.for_each_atom(|atom| {
+            if let Atom::Var(var) = atom {
+                f(var);
+            }
+        }),
+        Stmt::DropToken(_) => {}
     }
 }
 
@@ -414,6 +542,32 @@ impl Plan {
                 } => *slot = Some(reuse),
                 other => unreachable!("a token goes to a con, not {other:?}"),
             }
+        }
+        let mut moves: HashMap<usize, Vec<(usize, usize)>> = HashMap::new();
+        for token in &self.tokens {
+            if let Some(target) = token.moved_to {
+                moves
+                    .entry(token.at.0)
+                    .or_default()
+                    .push((target, token.at.1));
+            }
+        }
+        for (block, moves) in moves {
+            let targets: HashMap<usize, usize> = moves.iter().copied().collect();
+            let mut old: Vec<Option<Stmt>> = std::mem::take(&mut function.blocks[block].stmts)
+                .into_iter()
+                .map(Some)
+                .collect();
+            let mut stmts = Vec::with_capacity(old.len());
+            for index in 0..old.len() {
+                if let Some(&source) = targets.get(&index) {
+                    stmts.push(old[source].take().expect("a source moves once"));
+                }
+                if let Some(stmt) = old[index].take() {
+                    stmts.push(stmt);
+                }
+            }
+            function.blocks[block].stmts = stmts;
         }
         for (block, drops) in self.drops.into_iter().enumerate() {
             if drops.is_empty() {

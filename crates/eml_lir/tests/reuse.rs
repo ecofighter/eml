@@ -379,6 +379,104 @@ b6:
     ");
 }
 
+const LIST: &str = "layout Prelude.List { Nil, ::(tobj, tobj) }\n";
+
+/// std の `List.map` のループの Perceus の後の形。`b2` の本体は `body` で、`ys` を手放す `release` が新しい `con` の
+/// 後にある。`g` は `yields` の印で選ぶ自分を呼ぶ関数である。
+fn map_loop(yields: &str, body: &str) -> String {
+    format!(
+        "{LIST}{yields}fn go(acc.1: tobj, ys.2: tobj) -> tobj {{
+  switch ys.2 Prelude.List {{ #0 -> b1, #1(x.12: tobj, rest.4: tobj) -> b2 }}
+b1:
+  decref ys.2
+  return acc.1
+b2:
+{body}}}
+{yields}fn g(n.0: int) -> int {{
+  return n.0
+}}
+"
+    )
+}
+
+#[test]
+fn a_release_after_a_con_moves_up_to_it() {
+    let text = map_loop(
+        "",
+        "  let x.3: int = unbox x.12
+  let t.10: int = extern Prelude.*(x.3, 3)
+  let t.11: int = extern Prelude.+(t.10, 1)
+  let t.13: tobj = box t.11
+  let d.7: tobj = con Prelude.List #1(t.13, acc.1)
+  release ys.2 Prelude.List #1(_, rest.4)
+  tail call go(d.7, rest.4)
+",
+    );
+    insta::assert_snapshot!(function(&reuse_text(&text), "go"), @"
+    fn go(acc.1: tobj, ys.2: tobj) -> tobj {
+      switch ys.2 Prelude.List { #0 -> b1, #1(x.12: tobj, rest.4: tobj) -> b2 }
+    b1:
+      decref ys.2
+      return acc.1
+    b2:
+      let x.3: int = unbox x.12
+      let t.10: int = extern Prelude.*(x.3, 3)
+      let t.11: int = extern Prelude.+(t.10, 1)
+      let t.13: tobj = box t.11
+      let r.14: token = release ys.2 Prelude.List #1(_, rest.4)
+      let d.7: tobj = con Prelude.List #1(t.13, acc.1) reuse r.14 in place
+      tail call go(d.7, rest.4)
+    }
+    ");
+}
+
+#[test]
+fn a_release_does_not_move_above_a_use_of_an_unkept_field() {
+    // `unbox x.12` が `con` と `release` の間にある。`release` を上げると、手放した x.12 を読むことになる
+    assert_unchanged(&map_loop(
+        "",
+        "  dup acc.1
+  let d.7: tobj = con Prelude.List #1(acc.1, acc.1)
+  let x.3: int = unbox x.12
+  release ys.2 Prelude.List #1(_, rest.4)
+  let t.10: int = extern Prelude.*(x.3, 3)
+  tail call go(d.7, rest.4)
+",
+    ));
+}
+
+#[test]
+fn a_release_does_not_move_across_a_yielding_call() {
+    assert_unchanged(&map_loop(
+        "yields ",
+        "  let x.3: int = unbox x.12
+  let t.13: tobj = box x.3
+  let d.7: tobj = con Prelude.List #1(t.13, acc.1)
+  let n.5: int = call g(x.3)
+  release ys.2 Prelude.List #1(_, rest.4)
+  tail call go(d.7, rest.4)
+",
+    ));
+}
+
+#[test]
+fn a_moved_release_without_a_partner_stays_put() {
+    // 前にある `con` は1語の箱なので、2語の `ys` の箱とは組にならない
+    assert_unchanged(&format!(
+        "layout Box {{ Box(tobj) }}\n{}",
+        map_loop(
+            "",
+            "  let x.3: int = unbox x.12
+  let t.13: tobj = box x.3
+  let d.7: obj = con Box #0(t.13)
+  decref acc.1
+  release ys.2 Prelude.List #1(_, rest.4)
+  tail call go(d.7, rest.4)
+",
+        )
+    ));
+}
+
 #[test]
 fn reuse_of_a_function_does_not_depend_on_the_rest_of_the_program() {
     let f = "\

@@ -193,3 +193,23 @@ fn a_live_token_is_dropped_on_exit() {
         assert_eq!((finished.exit, out.contents()), (Some(3), String::new()));
     }
 }
+
+/// std の `List.map` は、ループの中で手放す cons の箱を新しい cons に使い回す。`release` が新しい `con` の後に
+/// あっても、パスが `con` の前へ上げる (docs/spec/lir.md の「reuse」)。`List.reverse` の箱も使い回すので、要素ごとに
+/// 2回である。
+#[test]
+fn std_list_map_reuses_its_cells() {
+    let text = "\
+range : Int -> Int -> List Int
+range lo hi = if lo > hi then [] else lo :: range (lo + 1) hi
+
+main : Unit -> <IO> Unit
+main () =
+  let ys = List.map (fn x -> x * 3 + 1) (range 1 1000)
+  println (show (List.length ys))
+";
+    let (out, result) = eml_test_support::run_stats(text);
+    assert_eq!(out, "1000\n", "{result:?}");
+    let stats = result.unwrap_or_else(|error| panic!("{error}"));
+    assert!(stats.reuses >= 2000, "{stats:?}");
+}
