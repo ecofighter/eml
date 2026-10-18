@@ -35,7 +35,7 @@ fn shared_wrappers_are_never_called_directly_and_become_uniform_in_place() {
     // `op$`、`con$`、`cont$` は値と部分適用でだけ使われ、直接は呼ばれない。そのため box の挿入はいつもその場で一様にし、
     // `f$boxed` を足さない。どのプログラムでも同じコードになるので、名前で照らす追記で使い回せる
     // (docs/spec/lir.md の「位置の規則」)
-    let text = "data Pair = | P Int Int\n\neffect Ask where\n  ask : Int -> Int\n\npair_with : (Int -> Int -> Pair) -> Pair\npair_with f = f 1 2\n\nfirst : Pair -> Int\nfirst p = match p with\n  | P a _ -> a\n\nrun : Unit -> <Ask> Int\nrun () =\n  let g = ask\n  let h = P 3\n  first (pair_with P) + first (h 4) + g 1\n\nmain : Unit -> <IO> Unit\nmain () =\n  let r = handle run () with\n            | ctl ask n k ->\n              let resume = k\n              resume (n + 1)\n  println (show r)";
+    let text = "data Pair = | P Int Int\n\ndata Box a = | Box a\n\neffect Ask where\n  ask : Int -> Int\n\nhide : a -> Box a\nhide x = Box x\n\nfirst : Pair -> Int\nfirst p = match p with\n  | P a _ -> a\n\nrun : Unit -> <Ask> Int\nrun () =\n  let Box g = hide ask\n  let Box f = hide P\n  let Box h = hide (P 3)\n  first (f 1 2) + first (h 4) + g 1\n\nmain : Unit -> <IO> Unit\nmain () =\n  let r = handle run () with\n            | ctl ask n k ->\n              let Box resume = hide k\n              resume (n + 1)\n  println (show r)";
     let program = eml_test_support::lir(text);
     let names: Vec<&str> = program
         .functions

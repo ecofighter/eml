@@ -1067,7 +1067,7 @@ fn clause_local_function_resumes_once() {
     // 生の `k` を持ち上げたローカル関数の引数に渡すので、節の `return` は `k` の末尾の `resume` で終わらず、節は
     // その場で動かない (docs/spec/core-ir.md の「ローカル関数の持ち上げ」)。実行した値は UI テストで確かめる
     let text = format!(
-        "{ASK}main : Unit -> <IO> Unit\nmain () =\n  let r =\n    handle ask () + 1 with\n      | ctl ask () k -> (let finish v = k v in finish 1)\n  println (show r)"
+        "{ASK}main : Unit -> <IO> Unit\nmain () =\n  let r =\n    handle ask () + 1 with\n      | ctl ask () k -> (let finish v = k (v + 1) in finish 1)\n  println (show r)"
     );
     let shown = core_text(&text, Pass::Evidence);
     insta::assert_snapshot!(function(&shown, "main$handle0$ask$entry"), @"

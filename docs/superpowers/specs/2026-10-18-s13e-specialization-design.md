@@ -258,6 +258,7 @@ S13e-1 と S13e-3 の確かめのため、S13e-1 で確保の回数 `allocations
 - `crates/eml_lir/tests` と `crates/eml_vm/tests` の、Perceus の後の LIR と逆アセンブルのスナップショットのうち、reuse の命令が入るもの
 - `crates/eml_vm/tests/bench.rs` と `crates/eml_vm/tests/scaling.rs` の `RunStats` のうち、回数が変わるものと、足した欄
 - `crates/eml_cli/tests/api.rs` などで、関数の名前を含む内部の誤りの文言が変わるもの
+- 包む関数や既知の閉包への、特殊化しない `apply` が残ることを前提にしていたテストのプログラム。テストが確かめる内容は変えずに書き直す。値はデータを通して使う所に届け、包む関数と同じ形のローカル関数には本体に計算を足す (`crates/eml_core_ir/tests/boxing.rs` の `shared_wrappers_are_never_called_directly_and_become_uniform_in_place`、`crates/eml_core_ir/tests/evidence.rs` の `clause_local_function_resumes_once`)
 
 ### 足すテスト
 
