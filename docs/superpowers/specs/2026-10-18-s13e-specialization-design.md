@@ -307,7 +307,7 @@ S13e-1 と S13e-3 の確かめのため、S13e-1 で確保の回数 `allocations
 - `crates/eml_lir/tests` に、reuse の手書きの LIR のテスト (同じ語の数、`reuse_in_place`、token が呼び出しと yield の地点をまたぐ規則、使わない道の `drop_token`) を足す。verifier が token の誤用を断ることも確かめる
 - UI テスト (`tests/ui/run/`) に、`File` を持つ生産者を特殊化した `Iter` で引いて途中で捨てる形と、`multi` の継続を2回再開する handler を特殊化する形を足す。checked mode のリークの検査で、後始末が今と同じことを確かめる
 - Miri: `eml_rt` に新しい FFI の境界は入らないので、足さない
-- S13e-3 の完了の条件として、`crates/eml_vm/tests/bench.rs` に `specialization_matches_hand_written_rc` (5つの組の RC の回数が同じ) を、`crates/eml_cli/tests/repl/std/fused_generators.repl` (前の入力の生産者を後の入力で `Iter.fold` と `Iter.map` に渡して融合する形) を、`optimize.rs` に `copies_in_cycles_do_not_depend_on_the_entry_into_the_cycle` (`Iter.map` の写しを違う引く側から使う形と、`ping` と `pong` の輪にどちらの端から入る形で、共通する名前の関数のコードが同じ) を足す
+- S13e-3 の完了の条件として、`crates/eml_vm/tests/bench.rs` に `specialization_matches_hand_written_rc` (5つの組の RC の回数が同じ) を、`crates/eml_cli/tests/repl/std/fused_generators.repl` (前の入力の生産者を後の入力で `Iter.fold` と `Iter.map` に渡して融合する形) を、`optimize.rs` に `copies_in_cycles_do_not_depend_on_the_entry_into_the_cycle` (`Iter.map` の写しを違う引く側から使う形と、相手の `Iter` を `Iter.map` で包んで返す `ping` と `pong` の輪にどちらの端から入る形で、共通する名前の関数のコードが同じ。共通する名前に、互いの閉包を作る2つの `Iter.map` の写しがあることも確かめる。書き換えている複製を含む組の複製を読まない規則 (`settled`) を外すと失敗する) を足す
 
 ## 作る人に任せること
 

@@ -1542,7 +1542,8 @@ main () =
     assert_eq!(*code, function(&core_text(&b, Pass::Optimize), name));
 }
 
-/// `Iter` を作り合う2つの関数 `ping` と `pong` (2つの関数の輪) と、`Iter` を引く側の関数。
+/// `Iter` を作り合う2つの関数 `ping` と `pong` (2つの関数の輪) と、`Iter` を引く側の関数。どちらも相手の `Iter` を
+/// `Iter.map` で包んで返すので、`Iter.map` の閉包の複製の鍵に、輪の相手の閉包の複製を持つ `Iter` の形が入る。
 const CYCLES: &str = "
 add : Int -> Int -> Int
 add a b = a + b
@@ -1550,19 +1551,19 @@ add a b = a + b
 double : Int -> Int
 double x = x * 2
 
-ping : (Int -> Int) -> Iter <e> Int -> Iter <e> Int
+ping : (Int -> <e> Int) -> Iter <e> Int -> Iter <e> Int
 ping f it =
   Iter (fn () ->
     match Iter.next it with
       | None -> None
-      | Some (x, rest) -> Some (f x, pong f rest))
+      | Some (x, rest) -> Some (f x, Iter.map f (pong f rest)))
 
-pong : (Int -> Int) -> Iter <e> Int -> Iter <e> Int
+pong : (Int -> <e> Int) -> Iter <e> Int -> Iter <e> Int
 pong f it =
   Iter (fn () ->
     match Iter.next it with
       | None -> None
-      | Some (x, rest) -> Some (f (f x), ping f rest))
+      | Some (x, rest) -> Some (f (f x), Iter.map f (ping f rest)))
 ";
 
 /// 2つのプログラムに共通する名前の関数は、同じコードになる。その名前を返す。プログラムごとに違う `main` と入口の
@@ -1584,8 +1585,9 @@ fn shared_functions(a: &str, b: &str) -> Vec<String> {
 
 /// 自分の閉包を値として参照する複製 (`Iter.map` の写し) と、互いを参照する複製の輪 (`ping` と `pong` の閉包の写し)
 /// は、引く側が違っても、輪にどちらの端から入っても、同じ名前なら同じコードになる (docs/spec/core-ir.md の
-/// 「融合」と docs/spec/vm.md の「追記」)。複製を作る順は入り方で変わるので、書き換えている輪の複製を読まない規則が
-/// これを守る。
+/// 「融合が止まること」と docs/spec/vm.md の「追記」)。複製を作る順は入り方で変わるので、書き換えている複製を含む組の
+/// 複製を読まない規則 (`settled`) がこれを守る。この規則を外して、書き換え終えた複製をいつも読んでよいことにすると、
+/// 輪の `Iter.map` の写しのコードが入り方で変わり、このテストは失敗する。
 #[test]
 fn copies_in_cycles_do_not_depend_on_the_entry_into_the_cycle() {
     let a = format!(
@@ -1608,10 +1610,17 @@ main () =
 "
     );
     let shared = shared_functions(&a, &b);
-    for prefix in ["Std.Iter.map@", "ping$lambda0{", "pong$lambda0{"] {
-        assert!(
-            shared.iter().any(|name| name.starts_with(prefix)),
-            "no shared {prefix} copy in {shared:#?}"
-        );
-    }
+    // 共通する名前の中に、互いの閉包を作る2つの `Iter.map` の写し (複製の輪) がある
+    let shown = core_text(&a, Pass::Optimize);
+    let maps: Vec<&String> = shared
+        .iter()
+        .filter(|name| name.starts_with("Std.Iter.map@"))
+        .collect();
+    let refers =
+        |from: &str, to: &str| function(&shown, from).contains(&format!("closure {to:?}("));
+    assert!(
+        maps.iter()
+            .any(|x| maps.iter().any(|y| x != y && refers(x, y) && refers(y, x))),
+        "no shared cycle of Iter.map copies in {shared:#?}"
+    );
 }

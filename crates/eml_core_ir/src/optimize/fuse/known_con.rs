@@ -279,8 +279,9 @@ fn entry(uses: &[usize], block: &Block) -> Option<Entry> {
 
 /// `jump` の実引数で解ける合流のブロックの入口を、`jump` の側で決める (docs/future/roadmap.md の「処理系」の
 /// 項目「jump threading とインライン化」)。`jump M(a…)` の行き先 `M(p…)` が `switch p_i` か `unpack p_i` で始まり、
-/// `p_i` をほかで使わず、`a_i` が `Tag` や `Int` の定数か、唯一の使いがこの `jump` である既知の `con` なら、`switch`
-/// か `unpack` を飛ばす。
+/// `a_i` が `Tag` や `Int` の定数か、唯一の使いがこの `jump` である既知の `con` なら、`switch` か `unpack` を飛ばす。
+/// `unpack` で始まる M では、`p_i` をほかで使わない。`switch` で始まる M では、`p_i` を選ばれる行き先の外の、ほかの
+/// case の行き先で使っていてもよい (`scrutinee_skipped`)。
 ///
 /// ブロックの分け方は「R3 を守る作り方」に従う。`switch` で選ばれる行き先 C は、`jump N(f')` だけを持つ辺のブロック
 /// と、元の本体と case のフィールドを引数に持つ合流のブロック N に分け、`jump` を `jump N(fs)` に付け替える。C は
