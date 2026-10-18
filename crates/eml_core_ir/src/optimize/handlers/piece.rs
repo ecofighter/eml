@@ -1,54 +1,98 @@
-//! handler の複製の部品。関数を `perform` の地点で切って続きを継続の関数にすることと、節の本体を `perform` の
-//! 地点に展開すること (docs/superpowers/specs/2026-10-18-s13e-specialization-design.md の「書き換え」)。
+//! handler の複製の部品 (docs/superpowers/specs/2026-10-18-s13e-specialization-design.md の「書き換え」)。
+//! `perform` の地点からの続きを継続の関数にし、合流のブロックからの続きを合流のブロックの関数にする (`region`)。
+//! すぐに再開する節の本体を `perform` の地点に展開し (`inline_clause`)、引数を置き換えて定数になった `switch` を
+//! 合う行き先へのジャンプにする (`constant_target`)。`k` を値として使う節は、`k` に継続の関数の閉包を受ける写し
+//! `<g>{k}` にする (`clause_with_k`)。展開で辺の入らなくなったブロックは、最後に落とす (`prune`)。
 
 use std::collections::{BTreeSet, HashMap, HashSet};
 
-use crate::liveness::{insert_var, step_back};
 use crate::tail::tail_position_call;
 use crate::{Block, Call, CoreFn, Rhs, Stmt, Term};
 use eml_lir::{Atom, BlockId, CasePattern, FnIdx, Repr, VarId, VarInfo};
 
 use super::super::known::fresh;
 
-/// `function` の `block` の `stmt` 番目の文 `let v = perform …` の後ろを、継続の関数に切り出す。返すのは、地点の後で
-/// 生きている変数 (v と状態を除き、番号の昇順) と、継続の関数である。継続の関数の引数は、その変数、再開の値 v、
-/// 状態つきの handler なら状態 `state` の順に並ぶ。本体は、ブロックの残りを入口にし、そこから届くブロックを元の順の
-/// まま番号を振り直して続ける。届かないブロックは落とす。状態の変数も引数になるので、続きは再開で受けた次の状態を読む。
-///
-/// 生存は切り出す部分の上だけで求め、変数の表は本体に現れる変数だけに元の順のまま詰める。EP の継続の関数と同じく、
-/// 関数全体の表を地点ごとに写すと、地点の数と変数の数の積の大きさになるためである (docs/spec/core-ir.md の
-/// 「継続の関数」)。
-pub(crate) fn cut(
-    function: &CoreFn,
-    block: BlockId,
-    stmt: usize,
-    state: Option<VarId>,
-) -> (Vec<VarId>, CoreFn) {
-    let source = function.block(block);
-    let Stmt::Let { var: result, .. } = source.stmts[stmt] else {
-        panic!("a cut point is a `let`");
-    };
-    let live = live_at(function, block, stmt, state);
-    let reached = reachable(&function.blocks, &source.term);
+/// ブロックごとの、合流のブロックか。合流のブロックは、入る辺が2本以上か、引数を持つブロックである。引数を持つ
+/// ブロックには、引数を渡す `jump` で入る (docs/spec/lir.md の「構造の規則」の R3 と R4)。`switch` の行き先は入る辺が
+/// 1本で引数を持たないので、合流のブロックにならない。
+pub(crate) fn joins(blocks: &[Block]) -> Vec<bool> {
+    let mut edges = vec![0usize; blocks.len()];
+    for block in blocks {
+        for target in block.term.successors() {
+            edges[target.0 as usize] += 1;
+        }
+    }
+    blocks
+        .iter()
+        .zip(edges)
+        .map(|(block, edges)| edges > 1 || !block.params.is_empty())
+        .collect()
+}
 
-    let mut params = live.clone();
-    params.push(result);
-    params.extend(state);
-    let mut blocks = vec![Block {
-        params,
-        stmts: source.stmts[stmt + 1..].to_vec(),
-        term: source.term.clone(),
-    }];
-    let renumber: HashMap<BlockId, BlockId> = reached
+/// `function` の `block` の `start` 番目の文からの続きを、1つの関数の本体にする。入口は、引数を `params` にした
+/// ブロックの残りで、そこから合流のブロックを通らずに届くブロックを元の順のまま番号を振り直して続ける。合流の
+/// ブロック J への `jump` は、`exit(J, 実引数)` が返す呼び出しの末尾呼び出しにして、J には進まない。届かない
+/// ブロックは落とす。継続の関数 `f{H}$hN` と合流のブロックの関数 `f{H}$hjJ` は、どちらもこの形で作る。
+///
+/// 合流のブロックを写さないのは、写すと、合流のブロックとその先が、そこへ届くどの継続の関数にも入るためである。
+/// 条件つきの `perform` が並ぶと、コードが `perform` の数の2乗で育つ。合流のブロックでない行き先は、入る辺が
+/// 1本なので、どの続きにも多くとも1回しか入らない。EP の継続の関数が合流のブロックで `f$jJ` を呼ぶのと同じ形で
+/// ある (docs/spec/core-ir.md の「継続の関数」)。変数の表は本体に現れる変数だけに元の順のまま詰める。関数全体の表を
+/// 地点ごとに写すと、地点の数と変数の数の積の大きさになるためである。
+pub(crate) fn region(
+    function: &CoreFn,
+    (block, start): (BlockId, usize),
+    params: Vec<VarId>,
+    joins: &[bool],
+    mut exit: impl FnMut(BlockId, &[Atom]) -> Call,
+) -> CoreFn {
+    let source = function.block(block);
+    let follow = |term: &Term, pending: &mut Vec<BlockId>| {
+        pending.extend(term.successors().filter(|target| !joins[target.0 as usize]));
+    };
+    let mut seen = BTreeSet::new();
+    let mut pending = Vec::new();
+    follow(&source.term, &mut pending);
+    while let Some(target) = pending.pop() {
+        if seen.insert(target) {
+            follow(&function.block(target).term, &mut pending);
+        }
+    }
+    let renumber: HashMap<BlockId, BlockId> = seen
         .iter()
         .enumerate()
         .map(|(position, &index)| (index, BlockId(position as u32 + 1)))
         .collect();
-    blocks.extend(reached.iter().map(|&index| function.block(index).clone()));
+    let mut blocks = vec![Block {
+        params,
+        stmts: source.stmts[start..].to_vec(),
+        term: source.term.clone(),
+    }];
+    blocks.extend(seen.iter().map(|&index| function.block(index).clone()));
+    let mut added = Vec::new();
     for block in &mut blocks {
-        block
-            .term
-            .for_each_successor_mut(|target| *target = renumber[target]);
+        match &block.term {
+            Term::Jump { target, args } if joins[target.0 as usize] => {
+                let call = exit(*target, args);
+                let var = VarId((function.vars.len() + added.len()) as u32);
+                added.push(VarInfo {
+                    name: "t".to_string(),
+                    repr: function.ret,
+                    mark: function.ret_mark,
+                });
+                block.stmts.push(Stmt::Let {
+                    var,
+                    rhs: Rhs::Call {
+                        call,
+                        mask: Vec::new(),
+                    },
+                });
+                block.term = Term::Return(Atom::Var(var));
+            }
+            _ => block
+                .term
+                .for_each_successor_mut(|target| *target = renumber[target]),
+        }
     }
     let mut used = Vec::new();
     for block in &mut blocks {
@@ -61,92 +105,24 @@ pub(crate) fn cut(
             *var = VarId(used.binary_search(var).expect("a used variable") as u32);
         });
     }
-    let cut = CoreFn {
+    let info = |var: &VarId| {
+        let index = var.0 as usize;
+        function
+            .vars
+            .get(index)
+            .unwrap_or_else(|| &added[index - function.vars.len()])
+            .clone()
+    };
+    CoreFn {
         name: function.name.clone(),
         internal: true,
         yields: function.yields,
         clause: None,
-        vars: used
-            .iter()
-            .map(|var| function.vars[var.0 as usize].clone())
-            .collect(),
+        vars: used.iter().map(info).collect(),
         ret: function.ret,
         ret_mark: function.ret_mark,
         blocks,
-    };
-    (live, cut)
-}
-
-/// `function` の `block` の `stmt` 番目の文 `let v = perform …` の後で生きている変数。v と状態 `state` を除き、番号の
-/// 昇順に並ぶ。生存は地点から届く部分の上だけで求める。
-pub(crate) fn live_at(
-    function: &CoreFn,
-    block: BlockId,
-    stmt: usize,
-    state: Option<VarId>,
-) -> Vec<VarId> {
-    let source = function.block(block);
-    let Stmt::Let { var: result, .. } = source.stmts[stmt] else {
-        panic!("a cut point is a `let`");
-    };
-    let reached = reachable(&function.blocks, &source.term);
-    let mut live_in: HashMap<BlockId, BTreeSet<VarId>> = HashMap::new();
-    for &index in reached.iter().rev() {
-        let block = function.block(index);
-        let mut live = live_after(function, &block.term, &live_in);
-        block.term.for_each_atom(|atom| insert_var(&mut live, atom));
-        for stmt in block.stmts.iter().rev() {
-            step_back(stmt, &mut live);
-        }
-        live_in.insert(index, live);
     }
-    let mut live = live_after(function, &source.term, &live_in);
-    source
-        .term
-        .for_each_atom(|atom| insert_var(&mut live, atom));
-    for later in source.stmts[stmt + 1..].iter().rev() {
-        step_back(later, &mut live);
-    }
-    live.remove(&result);
-    if let Some(state) = state {
-        live.remove(&state);
-    }
-    live.into_iter().collect()
-}
-
-/// 終端の後で生きている変数 (`crate::liveness::live_after_term` の、入口の生存集合を表で持つ形)。
-fn live_after(
-    function: &CoreFn,
-    term: &Term,
-    live_in: &HashMap<BlockId, BTreeSet<VarId>>,
-) -> BTreeSet<VarId> {
-    let mut live = BTreeSet::new();
-    let mut add = |target: BlockId, bound: &[VarId]| {
-        live.extend(
-            live_in[&target]
-                .iter()
-                .copied()
-                .filter(|var| !bound.contains(var)),
-        );
-    };
-    match term {
-        Term::Return(_) => {}
-        Term::Jump { target, args: _ } => add(*target, &function.block(*target).params),
-        Term::Switch {
-            scrutinee: _,
-            layout: _,
-            cases,
-            default,
-        } => {
-            for case in cases {
-                add(case.target, &case.fields);
-            }
-            if let Some(default) = default {
-                add(*default, &[]);
-            }
-        }
-    }
-    live
 }
 
 /// 入口から届かないブロックを落とし、残ったブロックに元の順のまま番号を振り直す。`inline_clause` が切り離した
@@ -213,6 +189,8 @@ pub(crate) fn inline_clause(
     let params = clause.params();
     let count = params.len();
     let k = params[count - 2];
+    // 捕獲の引数は複製の引数そのもので、展開した本体と、継続の関数に渡す生きている変数の両方に現れうる。2か所で
+    // 使ってよいのは、操作の節の捕獲が `Unr` に限られるためである (E3001、docs/spec/linearity.md)。呼ぶ側が確かめる
     let mut substitution: HashMap<VarId, Atom> = params[..count - 2]
         .iter()
         .copied()

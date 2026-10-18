@@ -1018,3 +1018,26 @@ main () =
     assert!(!shown.contains("handle "), "{shown}");
     assert!(!shown.contains("perform "), "{shown}");
 }
+
+/// 条件つきの `yield` の後の合流のブロックは、継続の関数に写さず、合流のブロックの関数 `f{H}$hjJ` を呼ぶ。写すと、
+/// 合流のブロックがその前のどの継続の関数にも入り、コードが `yield` の数の2乗で育つ。EP の `f$jJ` と同じ形で、
+/// 大きさは数に比例する (docs/spec/core-ir.md の「handler の複製」)。
+#[test]
+fn continuations_across_join_blocks_stay_linear_in_size() {
+    let size = |count: usize| {
+        let lines: String = (1..=count)
+            .map(|i| format!("  if n > {i} then yield {i} else ()\n"))
+            .collect();
+        let text = format!(
+            "import Yield (Yield(..))\n\ngen : Int -> Unit -> <Yield Int> Unit\ngen n () =\n{lines}  ()\n\nmain : Unit -> <IO> Unit\nmain () = println (show (Yield.fold (fn a b -> a + b) 0 (gen 7)))\n"
+        );
+        let shown = core_text(&text, Pass::Optimize);
+        assert!(!shown.contains("handle "), "{shown}");
+        shown.lines().count()
+    };
+    let (small, large) = (size(50), size(100));
+    assert!(
+        large <= small * 5 / 2,
+        "{small} lines for 50, {large} for 100"
+    );
+}

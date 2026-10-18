@@ -10,10 +10,11 @@
 
 mod piece;
 
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 
 use super::known::{Wrapper, fresh, known_closures, wrapper};
 use super::specialize::limited;
+use crate::liveness::{insert_var, live_after_term, step_back};
 use crate::tail::tail_position_call;
 use crate::{Call, CoreFn, Program, Rhs, Stmt, Term};
 use eml_lir::{Atom, BlockId, FnIdx, Mark, OperationInfo, Repr, VarId, VarInfo};
@@ -33,7 +34,8 @@ enum ClauseForm {
     /// `k` の使いが、末尾の位置の `mask` のない `resume k(v, s)` だけで、どの `return` もその結果を返す節。
     Resuming,
     /// それ以外の節。`k` を値として使う節、`k` を末尾でなく呼ぶ節、`k` を使わない節、`never` の操作の節、本体に
-    /// `handle` を持つ節である。`perform` の地点から節の写しを末尾で呼び、`k` には継続の関数の閉包を渡す。
+    /// `handle` を持つ節である。再開する操作では、`perform` の地点から節の写し `<g>{k}` を末尾で呼び、`k` には継続の
+    /// 関数の閉包を渡す。`never` の操作の節は `k` を受けないので、写さずに節の関数 g そのものを末尾で呼ぶ。
     Other,
 }
 
@@ -601,6 +603,12 @@ impl Copies<'_> {
     /// 順の通し番号である。接尾辞を EP の `$kN` と分けるのは、`f{H}` がほかのエフェクトで yield するとき、EP が
     /// `f{H}$kN` を作り、名前が重なるためである。継続の関数は同じ複製の中からだけ、直接呼ばれるか値として使われる。
     /// どちらになるかは `perform` の操作の節の形で決まり、節の形は名前で決まるので、内部の関数にする。
+    ///
+    /// 続きは合流のブロックで止め、合流のブロック J からの続きは合流のブロックの関数 `f{H}$hjJ` にする
+    /// (`piece::region`)。J は f でのブロックの番号である。接尾辞を EP の `$jJ` と分けるのも、`$hN` と同じ理由で
+    /// ある。生存はブロックを後ろから1回だけたどって求め、`perform` はそのたどる途中で書き換える。辺はすべて番号の
+    /// 大きいブロックへ向かうので、`perform` の後ろと合流のブロックの生存は、そこへ着いたときには書き換えた後のコード
+    /// で決まっている。`perform` ごとに続きを末尾までたどると、`perform` の数の2乗の手間になるためである。
     fn build(&mut self, index: FnIdx, function: FnIdx, shape: &Shape) {
         let program = self.program;
         let ret = program.function(shape.ret());
@@ -632,7 +640,6 @@ impl Copies<'_> {
             _ => unreachable!("captures are parameters"),
         }));
         params.extend(state);
-        let state_atom = state.map_or(Atom::Unit, Atom::Var);
         let returned = VarInfo {
             name: "t".to_string(),
             repr: ret.ret,
@@ -660,7 +667,7 @@ impl Copies<'_> {
                 }
                 None => {
                     let mut args = captures.last().expect("a return clause").clone();
-                    args.extend([value, state_atom]);
+                    args.extend([value, state.map_or(Atom::Unit, Atom::Var)]);
                     Call::Direct(shape.ret(), args)
                 }
             };
@@ -675,111 +682,275 @@ impl Copies<'_> {
             block.term = Term::Return(Atom::Var(var));
         }
 
-        for (number, &(block, stmt)) in performs.iter().enumerate().rev() {
-            let Stmt::Let {
-                var: _,
-                rhs:
-                    Rhs::Call {
-                        call: Call::Perform { op, args, .. },
-                        mask: _,
-                    },
-            } = &code.blocks[block.0 as usize].stmts[stmt]
-            else {
-                unreachable!("a targeted statement is a perform");
-            };
-            let op = *op as usize;
-            let (clause, _) = shape.clauses[op];
-            let mut clause_args = captures[op].clone();
-            clause_args.extend(args.iter().copied());
-            let operation = &program.effects[shape.effect as usize].operations[op];
-            if !operation.resumable {
-                // `never` の操作: 節の関数を末尾で呼び、`perform` より後ろは捨てる。中断で巻き戻したフレームの値は、
-                // ここで手放す
-                let live = piece::live_at(&code, block, stmt, state);
-                clause_args.push(state_atom);
-                let released = dead(&code, &all_captures, &live, &clause_args);
-                let call = Call::Direct(clause, clause_args);
-                end(
-                    &mut code,
+        let mut copy = Rewrite {
+            joins: piece::joins(&code.blocks),
+            live_in: vec![Vec::new(); code.blocks.len()],
+            code,
+            captures,
+            all_captures,
+            state,
+            join_functions: HashMap::new(),
+            pending: Vec::new(),
+        };
+        let mut next = performs.len();
+        for block in (0..copy.joins.len()).rev() {
+            let block = BlockId(block as u32);
+            let mut live = copy.live_out(block);
+            let mut end = copy.code.block(block).stmts.len();
+            while next > 0 && performs[next - 1].0 == block {
+                next -= 1;
+                let stmt = performs[next].1;
+                let source = copy.code.block(block);
+                for later in source.stmts[stmt + 1..end].iter().rev() {
+                    step_back(later, &mut live);
+                }
+                let Stmt::Let { var: result, .. } = source.stmts[stmt] else {
+                    unreachable!("a targeted statement is a `let`");
+                };
+                live.remove(&result);
+                if let Some(state) = state {
+                    live.remove(&state);
+                }
+                self.perform(
+                    &mut copy,
+                    shape,
+                    next,
                     (block, stmt),
-                    released,
-                    None,
-                    call,
-                    program.function(clause),
+                    live.into_iter().collect(),
                 );
-                continue;
+                live = copy.live_out(block);
+                for later in copy.code.block(block).stmts[stmt..].iter().rev() {
+                    step_back(later, &mut live);
+                }
+                end = stmt;
             }
-            let continuation = self.reserve();
-            let (live, mut cut) = piece::cut(&code, block, stmt, state);
-            cut.name = format!("{}$h{number}", code.name);
-            self.place(continuation, cut);
-            let live: Vec<Atom> = live.into_iter().map(Atom::Var).collect();
-            if shape.forms[op] == ClauseForm::Other {
-                // `k` を値として使う節: 続きの閉包を `k` にして、節の写しを末尾で呼ぶ。閉包の印は節の `k` の印で、
-                // `once` の操作なら `lin` になる
-                let source = program.function(clause);
-                let k = source.vars[source.params()[source.params().len() - 2].0 as usize].mark;
-                debug_assert!(
-                    live.iter().all(|&atom| match atom {
-                        Atom::Var(var) => k.at_least(code.mark(var)),
-                        _ => true,
-                    }),
-                    "a `multi` continuation captures only `unr` values"
-                );
-                // 捕獲のない閉包は関数の値で書く (docs/spec/core-ir.md)
-                let closure = (!live.is_empty()).then(|| {
-                    let var = fresh(
-                        &mut code.vars,
-                        VarInfo {
-                            name: "k".to_string(),
-                            repr: Repr::TObj,
-                            mark: k,
-                        },
-                    );
-                    (var, Rhs::MakeClosure(continuation, live.clone()))
-                });
-                let value = closure
-                    .as_ref()
-                    .map_or(Atom::Fn(continuation), |&(var, _)| Atom::Var(var));
-                clause_args.extend([value, state_atom]);
-                let mut passed = live;
-                passed.extend(clause_args.iter().copied());
-                let released = dead(&code, &all_captures, &[], &passed);
-                // 写しの戻り値は節の関数の戻り値のままである
-                let call = Call::Direct(self.clause_copy(clause, shape.stateful), clause_args);
-                end(
-                    &mut code,
-                    (block, stmt),
-                    released,
-                    closure,
-                    call,
-                    program.function(clause),
-                );
-                continue;
+            for earlier in copy.code.block(block).stmts[..end].iter().rev() {
+                step_back(earlier, &mut live);
             }
-            let stateful = shape.stateful;
-            piece::inline_clause(
-                &mut code,
-                (block, stmt),
-                program.function(clause),
-                &clause_args,
-                state_atom,
-                |value, state| {
-                    let mut args = live.clone();
-                    args.push(value);
-                    if stateful {
-                        args.push(state);
-                    }
-                    Rhs::Call {
-                        call: Call::Direct(continuation, args),
-                        mask: Vec::new(),
-                    }
-                },
-            );
+            copy.live_in[block.0 as usize] = live.into_iter().collect();
         }
-        piece::prune(&mut code);
-        self.place(index, code);
+        while let Some(join) = copy.pending.pop() {
+            let mut params = copy.code.block(join).params.clone();
+            params.extend(copy.join_live(join));
+            params.extend(state);
+            let mut body = self.region(&mut copy, (join, 0), params);
+            body.name = format!("{}$hj{}", copy.code.name, join.0);
+            let function = copy.join_functions[&join];
+            self.place(function, body);
+        }
+        piece::prune(&mut copy.code);
+        self.place(index, copy.code);
     }
+
+    /// `copy` の `block` の `stmt` 番目の H 宛ての `perform` を書き換える。`number` はその通し番号で、`live` は
+    /// `perform` の後で生きている変数 (結果と状態を除き、番号の昇順) である。
+    fn perform(
+        &mut self,
+        copy: &mut Rewrite,
+        shape: &Shape,
+        number: usize,
+        (block, stmt): (BlockId, usize),
+        live: Vec<VarId>,
+    ) {
+        let program = self.program;
+        let Stmt::Let {
+            var: result,
+            rhs:
+                Rhs::Call {
+                    call: Call::Perform { op, args, .. },
+                    mask: _,
+                },
+        } = &copy.code.block(block).stmts[stmt]
+        else {
+            unreachable!("a targeted statement is a perform");
+        };
+        let result = *result;
+        let op = *op as usize;
+        let (clause, _) = shape.clauses[op];
+        let mut clause_args = copy.captures[op].clone();
+        clause_args.extend(args.iter().copied());
+        let state_atom = copy.state.map_or(Atom::Unit, Atom::Var);
+        let operation = &program.effects[shape.effect as usize].operations[op];
+        if !operation.resumable {
+            // `never` の操作: 節の関数を末尾で呼び、`perform` より後ろは捨てる。中断で巻き戻したフレームの値は、
+            // ここで手放す
+            clause_args.push(state_atom);
+            let released = dead(&copy.code, &copy.all_captures, &live, &clause_args);
+            let call = Call::Direct(clause, clause_args);
+            end(
+                &mut copy.code,
+                (block, stmt),
+                released,
+                None,
+                call,
+                program.function(clause),
+            );
+            return;
+        }
+        let continuation = self.reserve();
+        let mut params = live.clone();
+        params.push(result);
+        params.extend(copy.state);
+        let mut body = self.region(copy, (block, stmt + 1), params);
+        body.name = format!("{}$h{number}", copy.code.name);
+        self.place(continuation, body);
+        let live: Vec<Atom> = live.into_iter().map(Atom::Var).collect();
+        if shape.forms[op] == ClauseForm::Other {
+            // `k` を値として使う節: 続きの閉包を `k` にして、節の写しを末尾で呼ぶ。閉包の印は節の `k` の印で、
+            // `once` の操作なら `lin` になる
+            let source = program.function(clause);
+            let k = source.vars[source.params()[source.params().len() - 2].0 as usize].mark;
+            debug_assert!(
+                live.iter().all(|&atom| match atom {
+                    Atom::Var(var) => k.at_least(copy.code.mark(var)),
+                    _ => true,
+                }),
+                "a `multi` continuation captures only `unr` values"
+            );
+            // 捕獲のない閉包は関数の値で書く (docs/spec/core-ir.md)
+            let closure = (!live.is_empty()).then(|| {
+                let var = fresh(
+                    &mut copy.code.vars,
+                    VarInfo {
+                        name: "k".to_string(),
+                        repr: Repr::TObj,
+                        mark: k,
+                    },
+                );
+                (var, Rhs::MakeClosure(continuation, live.clone()))
+            });
+            let value = closure
+                .as_ref()
+                .map_or(Atom::Fn(continuation), |&(var, _)| Atom::Var(var));
+            clause_args.extend([value, state_atom]);
+            let mut passed = live;
+            passed.extend(clause_args.iter().copied());
+            let released = dead(&copy.code, &copy.all_captures, &[], &passed);
+            // 写しの戻り値は節の関数の戻り値のままである
+            let call = Call::Direct(self.clause_copy(clause, shape.stateful), clause_args);
+            end(
+                &mut copy.code,
+                (block, stmt),
+                released,
+                closure,
+                call,
+                program.function(clause),
+            );
+            return;
+        }
+        // 節の捕獲は、展開した本体と、継続の関数に渡す生きている変数の両方に現れうる。同じ値を2か所で使ってよいのは、
+        // 操作の節の捕獲が `Unr` に限られるためである (E3001、docs/spec/linearity.md)
+        debug_assert!(
+            copy.captures[op].iter().all(|&atom| match atom {
+                Atom::Var(var) => copy.code.mark(var) == Mark::Unr,
+                _ => true,
+            }),
+            "an operation clause captures only `unr` values"
+        );
+        let stateful = shape.stateful;
+        let clause = program.function(clause);
+        let base = copy.code.blocks.len();
+        piece::inline_clause(
+            &mut copy.code,
+            (block, stmt),
+            clause,
+            &clause_args,
+            state_atom,
+            |value, state| {
+                let mut args = live.clone();
+                args.push(value);
+                if stateful {
+                    args.push(state);
+                }
+                Rhs::Call {
+                    call: Call::Direct(continuation, args),
+                    mask: Vec::new(),
+                }
+            },
+        );
+        // 足したブロックは合流のブロックにしない。この `perform` の地点からだけ届くので1つの続きにしか入らず、節が
+        // 状態を使った後なので、状態を渡す合流のブロックの関数の形にも合わないためである。H 宛ての `perform` を
+        // 含まないので、生存はここで決めてよい
+        copy.joins.resize(copy.code.blocks.len(), false);
+        copy.live_in.resize(copy.code.blocks.len(), Vec::new());
+        for added in (base..copy.code.blocks.len()).rev() {
+            let added = BlockId(added as u32);
+            let mut live = copy.live_out(added);
+            for stmt in copy.code.block(added).stmts.iter().rev() {
+                step_back(stmt, &mut live);
+            }
+            copy.live_in[added.0 as usize] = live.into_iter().collect();
+        }
+    }
+
+    /// `copy` の `block` の `start` 番目の文からの続きを関数にする (`piece::region`)。合流のブロック J への `jump` は、
+    /// J の関数を、`jump` の実引数、J の入口で生きている変数、状態の順で末尾で呼ぶ形にする。
+    fn region(&mut self, copy: &mut Rewrite, at: (BlockId, usize), params: Vec<VarId>) -> CoreFn {
+        let Rewrite {
+            code,
+            joins,
+            state,
+            join_functions,
+            pending,
+            ..
+        } = copy;
+        let live_in = &copy.live_in;
+        piece::region(code, at, params, joins, |join, args| {
+            let function = *join_functions.entry(join).or_insert_with(|| {
+                pending.push(join);
+                self.reserve()
+            });
+            let mut args = args.to_vec();
+            args.extend(join_live(code, live_in, join, *state).map(Atom::Var));
+            args.extend(state.map(Atom::Var));
+            Call::Direct(function, args)
+        })
+    }
+}
+
+/// 書き換えている複製 `f{H}` と、そのブロックの表。
+struct Rewrite {
+    code: CoreFn,
+    /// 節の順の、節の捕獲の引数。最後が `return` の節である。
+    captures: Vec<Vec<Atom>>,
+    all_captures: Vec<Atom>,
+    state: Option<VarId>,
+    /// ブロックごとの、合流のブロックか (`piece::joins`)。
+    joins: Vec<bool>,
+    /// ブロックごとの入口の生存集合。後ろのブロックから、書き換えた後のコードで求める。
+    live_in: Vec<Vec<VarId>>,
+    /// 番号を取った合流のブロックの関数 `f{H}$hjJ`。
+    join_functions: HashMap<BlockId, FnIdx>,
+    /// 番号を取ったが、中身をまだ作っていない合流のブロック。
+    pending: Vec<BlockId>,
+}
+
+impl Rewrite {
+    /// ブロックの終端の前で生きている変数。
+    fn live_out(&self, block: BlockId) -> BTreeSet<VarId> {
+        let term = &self.code.block(block).term;
+        let mut live = live_after_term(&self.code, term, &self.live_in);
+        term.for_each_atom(|atom| insert_var(&mut live, atom));
+        live
+    }
+
+    fn join_live(&self, join: BlockId) -> impl Iterator<Item = VarId> + '_ {
+        join_live(&self.code, &self.live_in, join, self.state)
+    }
+}
+
+/// 合流のブロック J の入口で生きている変数から、J の引数と状態を除いたもの。番号の昇順に並ぶ。
+fn join_live<'a>(
+    code: &'a CoreFn,
+    live_in: &'a [Vec<VarId>],
+    join: BlockId,
+    state: Option<VarId>,
+) -> impl Iterator<Item = VarId> + 'a {
+    let params = &code.block(join).params;
+    live_in[join.0 as usize]
+        .iter()
+        .copied()
+        .filter(move |var| !params.contains(var) && Some(*var) != state)
 }
 
 /// `perform` の地点で複製を終える。ブロックの `perform` から後ろを捨て、`released` を `drop` し、`closure` を作って
