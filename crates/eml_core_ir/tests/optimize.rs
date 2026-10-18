@@ -1333,6 +1333,37 @@ main () =
     );
 }
 
+/// 同じ関数の中の `con` への `switch` も、`switch` のほかの行き先で `con` を使っていてよい。translate は
+/// フィールドを束縛しない葉で `Unr` でない値を `drop` するので、`None` の葉が `Option Fs.File` を捨てる。
+/// `merge_jumps` が合流のブロックをつないで、`jump` の側で決めるはずだった `switch` が `con` と同じブロックに来ても、
+/// jump threading と同じ規則で解ける (docs/spec/core-ir.md の「既知のコンストラクタ」)。
+#[test]
+fn a_local_switch_resolves_when_another_case_drops_the_con() {
+    let text = "\
+maybe_file : Bool -> Fs.File -> <IO> Option Fs.File
+maybe_file c f =
+  if c then Some f
+  else
+    Fs.close f
+    None
+
+close_opt : Option Fs.File -> <IO> Int
+close_opt o = match o with
+  | None -> 0
+  | Some f ->
+    Fs.close f
+    1
+
+main : Unit -> <IO> Unit
+main () = println (show (close_opt (maybe_file True (Fs.open \"in.txt\"))))
+";
+    let main = function(&core_text(text, Pass::Optimize), "entry$main");
+    assert!(
+        !main.contains("con Prelude.Option") && !main.contains("switch "),
+        "{main}"
+    );
+}
+
 /// `con` のフィールドの既知の閉包は、`con` を解いた後で既知の閉包になり、`apply` は直接の呼び出しになる。
 #[test]
 fn next_of_a_known_iter_calls_its_closure() {
@@ -1504,6 +1535,68 @@ main () =
 ";
     let shown = core_text(text, Pass::Optimize);
     assert!(shown.contains("fn entry$main("), "{shown}");
+}
+
+/// 自分を引数に受けて呼ぶ閉包で、本体が `g (Fix g)` を `calls` 回呼ぶもの。`name` の関数が閉包を作って呼ぶ。
+fn self_applying(name: &str, calls: usize) -> String {
+    let applies: Vec<String> = (1..=calls)
+        .map(|k| format!("g (Fix g) (n - {k})"))
+        .collect();
+    format!(
+        "data Fix = | Fix (Fix -> Int -> Int)
+
+{name} : Int -> Int
+{name} m =
+  let lam = fn self n -> match self with
+    | Fix g -> if n <= 0 then 1 else {}
+  lam (Fix lam) m
+",
+        applies.join(" + ")
+    )
+}
+
+/// 書き換えで生まれた呼び出しの展開は、関数ごとの大きさの予算 (`GROWTH_FACTOR`) で止まる。展開した本体が既知の
+/// 閉包への `apply` を k 個持ち込むと、回ごとに k 倍に育つためである。予算がなく回数の上限
+/// (`MAX_INLINE_ROUNDS`) だけで止めると、呼び出しが2つで6,163行、3つで157,491行、4つで1,747,659行になった
+/// (docs/spec/core-ir.md の「融合が止まること」)。予算で止まると、呼び出しの数によらず数百行に収まる。
+#[test]
+fn inlining_fusion_created_calls_stays_within_a_budget() {
+    for calls in [2, 3, 4] {
+        let text = format!(
+            "{}\nmain : Unit -> <IO> Unit\nmain () = println (show (spin 5))\n",
+            self_applying("spin", calls)
+        );
+        let started = std::time::Instant::now();
+        let lines = core_text(&text, Pass::Optimize).lines().count();
+        let elapsed = started.elapsed();
+        assert!(lines <= 1000, "{lines} lines with {calls} calls per body");
+        assert!(
+            elapsed < std::time::Duration::from_secs(10),
+            "{elapsed:?} with {calls} calls per body"
+        );
+    }
+}
+
+/// 予算は関数ごとに決まる。予算を使い切る関数があっても、同じプログラムのほかの関数の融合は変わらない。
+/// プログラム全体の予算にすると、名前が同じ関数のコードがプログラムの残りに依って変わる (docs/spec/vm.md の
+/// 「追記」)。
+#[test]
+fn the_growth_budget_binds_per_function() {
+    let text = format!(
+        "{NUMS}\n{}
+main : Unit -> <IO> Unit
+main () =
+  println (show (spin 5))
+  println (show (Iter.fold (fn acc x -> acc + x) 0 (Iter.generate (nums 10))))
+",
+        self_applying("spin", 4)
+    );
+    let shown = core_text(&text, Pass::Optimize);
+    let spin = function(&shown, "spin");
+    // 予算を使い切った所で、書き換えで生まれた呼び出しが展開されずに残る
+    assert!(spin.contains("call spin$lambda0("), "{spin}");
+    assert!(spin.lines().count() <= 500, "{spin}");
+    assert_fused(&text);
 }
 
 /// 融合した複製の名前とコードは鍵だけで決まり、ほかの関数の有無によらない (docs/spec/vm.md の「追記」)。

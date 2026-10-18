@@ -239,6 +239,8 @@ S13e-1 と同じく、鍵の入れ子の深さで打ち切る。関数自身の�
 
 融合が作った呼び出し (既知の閉包への `apply` を書き換えた呼び出しと、複製に向けた呼び出し) の展開は、これだけでは止まらない。展開した本体が、また既知の閉包への `apply` を持ち込むことがあるためである。たとえば、自分を引数に受けて呼ぶ閉包 (`data Fix = | Fix (Fix -> Int -> Int)` を通して自分を呼ぶラムダ) は、展開するたびに同じ形の `apply` が現れる。そこで、この展開は関数ごとに `MAX_INLINE_ROUNDS` 回 (今は 8) までにする。回数はその関数を書き換える間だけ数え、関数のコードだけで決まるので、名前が同じ関数のコードは変わらない (実装の判断。`crates/eml_core_ir/tests/optimize.rs` の `a_self_applying_closure_stops_inlining` と UI テストの `tests/ui/run/functions/self_applying_closure.em` が確かめる)。
 
+回数の上限だけでは大きさが抑えられない。展開した本体が既知の閉包への `apply` を k 個持ち込むと、関数は回ごとに k 倍に育つ (最後のレビューで、本体が自分を4回呼ぶ `Fix` のラムダの Core IR が175万行になった)。そこで、この展開には関数ごとの大きさの予算を置く。展開した後の関数の文の数を、書き換えを始めたときの大きさ (`INLINE_LIMIT` より小さければ `INLINE_LIMIT`) の `GROWTH_FACTOR` 倍 (今は 8) までにする。予算は関数自身のコードだけで決まる (最後のレビューの後の修正。`crates/eml_core_ir/tests/optimize.rs` の `inlining_fusion_created_calls_stays_within_a_budget` と `the_growth_budget_binds_per_function`、UI テストの `tests/ui/run/functions/self_applying_closure_wide.em` が確かめる)。
+
 ## S13e-4 reuse analysis
 
 `eml_rt` には、reuse の部品 (`release_reuse`、`con_at`、`reuse_in_place`、`drop_token`) と検査モードの扱いが S9 で入っている (`docs/spec/object-model.md`)。S13e-4 で作るのは、LIR のパスと VM の命令と verifier の規則である。

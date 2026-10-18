@@ -4,8 +4,9 @@
 //! フィールドにある既知の閉包への `apply` は、S13e-1 と同じ規則で直接の呼び出しにする。
 //!
 //! `con` の変数を開くのは、その `switch` か `unpack` が唯一の使いのときだけである。translate が `Unr` でない `con` の
-//! 変数を開く規則と同じで (docs/spec/core-ir.md)、引数の所有権はちょうど1回だけ移る。どの規則も関数自身のコードだけを
-//! 読むので、書き換えた後のコードは名前で決まる (docs/spec/vm.md の「追記」)。
+//! 変数を開く規則と同じで (docs/spec/core-ir.md)、引数の所有権はちょうど1回だけ移る。`switch` では、選ばれない
+//! 行き先のブロックの使いも許す。その使いは、`switch` を解くと届かなくなって消えるためである (`scrutinee_skipped`)。
+//! どの規則も関数自身のコードだけを読むので、書き換えた後のコードは名前で決まる (docs/spec/vm.md の「追記」)。
 
 use std::collections::{HashMap, HashSet};
 
@@ -110,6 +111,11 @@ fn opens(function: &CoreFn, uses: &[usize], args: &[Atom], fields: &[VarId]) -> 
 /// ブロックの引数を case のフィールドにする。`unpack` はブロックをそこで分け、残りを `con` の引数を受ける新しい
 /// ブロックにする。値の置き換えは `merge_jumps` に任せる。Repr と印が同じでない引数は置き換えずに `jump` で渡す
 /// ので、どちらの形も verifier の検査をそのまま通る。開いた `con` の `let` は消す。何か解いたかを返す。
+///
+/// `switch` の値は、jump threading と同じく、選ばれない行き先のブロックで使われていてもよい (`scrutinee_skipped`)。
+/// `merge_jumps` は jump threading より先に動くので、`jump` の側で解くはずだった `switch` は、合流のブロックを
+/// つなぐと `con` の変数を直接分ける `switch` になるためである。選ばれない行き先は届かなくなるので、呼ぶ側が
+/// `prune` で落とす。
 pub(super) fn resolve_known(function: &mut CoreFn) -> bool {
     let known = known_cons(function);
     if known.is_empty() {
@@ -127,7 +133,10 @@ pub(super) fn resolve_known(function: &mut CoreFn) -> bool {
         else {
             continue;
         };
-        let Some((var, (ctor, args))) = single_con(&known, &uses, *scrutinee) else {
+        let Atom::Var(var) = *scrutinee else {
+            continue;
+        };
+        let Some((ctor, args)) = known.get(&var) else {
             continue;
         };
         if *layout != Some(ctor.layout) {
@@ -136,7 +145,9 @@ pub(super) fn resolve_known(function: &mut CoreFn) -> bool {
         let Some((target, fields)) = decide(cases, *default, CasePattern::Tag(ctor.tag)) else {
             continue;
         };
-        if !opens(function, &uses, args, &fields) {
+        if !scrutinee_skipped(function, &uses, index, target)
+            || !opens(function, &uses, args, &fields)
+        {
             continue;
         }
         // 行き先は `switch` の行き先でなくなり、入る辺はこの `jump` の1本だけになる (R3 と R4)

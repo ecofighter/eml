@@ -356,31 +356,32 @@ impl Fuser<'_> {
     }
 
     /// 複製のもとにしてよい関数。融合の段に入った時点の関数で、書き換え終えたもの (`settled`) に限る。複製の複製を
-    /// 作らないので、複製のもとのコードはいつも名前で決まる。包む関数、handle を持つ関数、節の関数は複製しない。EP は
-    /// 節の関数がちょうど1つの handle に属することを前提にするためである
-    /// (`crates/eml_core_ir/src/evidence/handlers.rs` の `entries`)。
+    /// 作らないので、複製のもとのコードはいつも名前で決まる。包む関数と handle を持つ関数は複製しない。
+    ///
+    /// EP は、節の関数がちょうど1つの handle に属することを前提にする
+    /// (`crates/eml_core_ir/src/evidence/handlers.rs` の `entries`)。節の関数の閉包を作るのは、その handle を持つ
+    /// 関数だけである。handle を持つ関数は展開も複製もしないので、閉包を作る所は1つのままである。そのため、節の関数を
+    /// 複製してよい。閉包の捕獲の `con` について複製すると、その handle は節の複製を使い、複製もその handle だけに属する。
     fn copy_source(&self, index: usize) -> bool {
         if index >= self.base || !self.settled(index) || self.callees[index].wrapper.is_some() {
             return false;
         }
-        let function = &self.functions[index];
-        function.clause.is_none()
-            && !function
-                .blocks
-                .iter()
-                .flat_map(|block| &block.stmts)
-                .any(|stmt| {
-                    matches!(
-                        stmt,
-                        Stmt::Let {
-                            var: _,
-                            rhs: Rhs::Call {
-                                call: Call::Handle { .. },
-                                mask: _,
-                            },
-                        }
-                    )
-                })
+        !self.functions[index]
+            .blocks
+            .iter()
+            .flat_map(|block| &block.stmts)
+            .any(|stmt| {
+                matches!(
+                    stmt,
+                    Stmt::Let {
+                        var: _,
+                        rhs: Rhs::Call {
+                            call: Call::Handle { .. },
+                            mask: _,
+                        },
+                    }
+                )
+            })
     }
 
     /// 鍵の複製。同じ鍵には同じ複製を返す。新しい複製は、作ったその場で書き換える。返した複製は、いま書き換えている

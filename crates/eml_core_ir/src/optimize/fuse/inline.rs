@@ -18,12 +18,7 @@ pub(super) const INLINE_LIMIT: usize = 40;
 /// ちょうど1つの handle に属することを前提にするためである (`crates/eml_core_ir/src/evidence/handlers.rs` の
 /// `entries`)。
 pub(super) fn inlinable(function: &CoreFn) -> bool {
-    let size: usize = function
-        .blocks
-        .iter()
-        .map(|block| block.stmts.len() + 1)
-        .sum();
-    size <= INLINE_LIMIT
+    size(function) <= INLINE_LIMIT
         && !function
             .blocks
             .iter()
@@ -42,6 +37,15 @@ pub(super) fn inlinable(function: &CoreFn) -> bool {
             })
 }
 
+/// 関数の文の数。ブロックの終端も1つと数える (`INLINE_LIMIT`)。
+pub(super) fn size(function: &CoreFn) -> usize {
+    function
+        .blocks
+        .iter()
+        .map(|block| block.stmts.len() + 1)
+        .sum()
+}
+
 /// 展開する呼び出し。`index` はブロックの中の文の位置で、`tail` は本体の `return` をそのまま残すかである。
 struct Site {
     index: usize,
@@ -49,9 +53,10 @@ struct Site {
     tail: bool,
 }
 
-/// `function` の直接の呼び出しのうち、展開できるものをすべて展開する。`functions` の呼び出し先は書き換えた後の
-/// コードで、`chosen` は呼び出しの結果の変数と呼び出し先から、その呼び出しを展開してよいかを答える。何か展開したかを
-/// 返す。
+/// `function` の直接の呼び出しのうち、展開できるものを展開する。`functions` の呼び出し先は書き換えた後の
+/// コードで、`chosen` は呼び出しの結果の変数と呼び出し先から、その呼び出しを展開してよいかを答える。`limit` は
+/// 展開した後の関数の大きさの上限で、呼び出しをブロックの順、文の順に見て、呼び出し先の大きさが残りに収まる
+/// 呼び出しだけを展開する。どれを展開するかは関数と呼び出し先のコードだけで決まる。何か展開したかを返す。
 ///
 /// 展開する場所は、書き換える前の関数の文から先に決める。展開した本体の中の呼び出しは、呼び出し先を書き換えた
 /// ときに決めてあるので、ここでは見ない。そのため、ブロックの新しい番号も先に決まり、新しいブロックの列を1回で
@@ -68,9 +73,19 @@ pub(super) fn inline_calls(
     function: &mut CoreFn,
     functions: &[CoreFn],
     chosen: &dyn Fn(VarId, FnIdx) -> bool,
+    limit: usize,
 ) -> bool {
+    let mut room = limit.saturating_sub(size(function));
     let sites: Vec<Vec<Site>> = (0..function.blocks.len())
-        .map(|block| sites(function, BlockId(block as u32), functions, chosen))
+        .map(|block| {
+            sites(
+                function,
+                BlockId(block as u32),
+                functions,
+                chosen,
+                &mut room,
+            )
+        })
         .collect();
     if sites.iter().all(Vec::is_empty) {
         return false;
@@ -160,6 +175,7 @@ fn sites(
     block: BlockId,
     functions: &[CoreFn],
     chosen: &dyn Fn(VarId, FnIdx) -> bool,
+    room: &mut usize,
 ) -> Vec<Site> {
     let stmts = &function.block(block).stmts;
     (0..stmts.len())
@@ -181,7 +197,12 @@ fn sites(
             }
             let callee = &functions[target.0 as usize];
             let at = (block, index);
-            fits(function, at, callee, args).then(|| Site {
+            let grown = size(callee);
+            if grown > *room || !fits(function, at, callee, args) {
+                return None;
+            }
+            *room -= grown;
+            Some(Site {
                 index,
                 callee: *target,
                 tail: stays_tail(function, at, callee, args),

@@ -8,8 +8,12 @@
 //! 決まる。展開した本体の中の呼び出しは、呼び出し先を書き換えたときに展開するかどうかを決めてあるので、呼ぶ側では
 //! 展開し直さない。書き換えで生まれた呼び出し (既知の閉包への `apply` と、複製へ向けた呼び出し) だけを、呼ぶ側で
 //! 新しく展開する。どの関数のコードも、その関数と呼び出し先のコードだけで決まり、プログラムのほかの関数によらない
-//! (docs/spec/vm.md の「追記」)。展開を重ねても、展開した本体の大きさは `INLINE_LIMIT` を超えないので、コードは
-//! 呼び出しの連なりの深さの積で育たない。
+//! (docs/spec/vm.md の「追記」)。
+//!
+//! 最初の走査で展開する本体はどれも `INLINE_LIMIT` 以下で、展開し直さないので、最初の走査の後の関数の大きさは、
+//! 自分の直接の呼び出しの数に比例する分しか増えない。書き換えで生まれた呼び出しの展開はそうならない。展開した本体が
+//! 既知の閉包への `apply` を k 個持ち込めば、回ごとに k 倍に育つ。そこで、この展開には関数ごとの大きさの予算
+//! (`GROWTH_FACTOR`) を置く (docs/spec/core-ir.md の「融合が止まること」)。
 
 mod copies;
 mod inline;
@@ -27,8 +31,18 @@ use super::specialize::Key;
 
 /// 書き換えで生まれた呼び出し (既知の閉包への `apply` を書き換えた呼び出しと、複製に向けた呼び出し) を展開する回数の
 /// 上限。展開した本体がまた既知の閉包への `apply` を持ち込むと、自分を引数に受けて呼ぶ閉包のような形で展開が終わら
-/// ないためである。回数は関数のコードだけで決まるので、名前が同じ関数のコードは変わらない (docs/spec/vm.md の「追記」)。
+/// ないためである。展開した本体が解けて同じ形の `apply` に戻る形は関数が育たず、`GROWTH_FACTOR` の予算では止まらない
+/// ので、回数の上限も置く。回数は関数のコードだけで決まるので、名前が同じ関数のコードは変わらない
+/// (docs/spec/vm.md の「追記」)。
 const MAX_INLINE_ROUNDS: usize = 8;
+
+/// 書き換えで生まれた呼び出しを展開した後の関数の大きさの上限を、書き換え始めの大きさの何倍にするか。書き換え始めが
+/// `INLINE_LIMIT` より小さい関数は、`INLINE_LIMIT` の大きさとして数える。回数の上限だけでは、展開した本体が既知の
+/// 閉包への `apply` を k 個持ち込む関数が k の `MAX_INLINE_ROUNDS` 乗の大きさまで育つためである。予算は関数自身の
+/// コードだけで決まるので、名前が同じ関数のコードは変わらない (docs/spec/vm.md の「追記」)。決まった大きさでなく
+/// 倍率にしたのは、大きな関数が持つ `Iter` の段の連なりのどれもを融合するためで、下限を置いたのは、数文のラムダにも
+/// 展開した本体をいくつか入れるためである。8倍にした理由は docs/implementation/benchmarks.md の「S13e-3」にある。
+const GROWTH_FACTOR: usize = 8;
 
 /// `fuse` に入った時点の関数の関係。
 struct Graph {
@@ -134,7 +148,8 @@ impl Fuser<'_> {
                 let target = target.0 as usize;
                 self.status[target] == Status::Done && self.inlinable[target]
             };
-            inline::inline_calls(&mut function, self.functions, &chosen);
+            // 最初の走査は、自分の直接の呼び出しの数に比例してしか育たないので、予算を置かない
+            inline::inline_calls(&mut function, self.functions, &chosen, usize::MAX);
         } else {
             self.refer_all(&function);
         }
@@ -156,8 +171,10 @@ impl Fuser<'_> {
     /// 規則を、どれも当たらなくなるまで繰り返す。ほとんどの規則は、`switch` や `unpack` を通る経路か `apply` か文を
     /// 減らすか、呼び出しを1回だけ複製へ向ける。引数の余る既知の閉包への `apply` の書き換えは `apply` を残すが、残る
     /// `apply` は呼び出しの結果に向き、それが既知の閉包になるのは呼び出しを展開したときだけである。展開は
-    /// `MAX_INLINE_ROUNDS` 回までなので、繰り返しは止まる (docs/spec/core-ir.md の「融合が止まること」)。
+    /// `MAX_INLINE_ROUNDS` 回までなので、繰り返しは止まる。展開して育つ大きさは、書き換え始めの大きさから決まる
+    /// 予算 (`GROWTH_FACTOR`) までにとどめる (docs/spec/core-ir.md の「融合が止まること」)。
     fn rewrite(&mut self, function: &mut CoreFn) {
+        let limit = GROWTH_FACTOR * inline::size(function).max(inline::INLINE_LIMIT);
         let mut rounds = 0;
         loop {
             let mut changed = blocks::fold_constant_switches(function);
@@ -169,6 +186,8 @@ impl Fuser<'_> {
                 blocks::prune(function);
             }
             changed |= known_con::resolve_known(function);
+            // 解いた `switch` のほかの行き先は、開いて消した `con` をまだ使っているので、jump threading の前に落とす
+            blocks::prune(function);
             changed |= known_con::thread_jumps(function);
             blocks::prune(function);
             let (rewritten, mut produced) = known_con::call_known_closures(function, &self.callees);
@@ -181,7 +200,7 @@ impl Fuser<'_> {
                 let chosen = |var: VarId, target: FnIdx| {
                     produced.contains(&var) && self.inlinable_from_here(target.0 as usize)
                 };
-                if inline::inline_calls(function, self.functions, &chosen) {
+                if inline::inline_calls(function, self.functions, &chosen, limit) {
                     changed = true;
                     rounds += 1;
                     // 展開した本体が参照する複製も、この関数から参照する
