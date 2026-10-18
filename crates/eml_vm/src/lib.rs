@@ -39,6 +39,7 @@ pub struct RunStats {
     pub rc_decrements: u64,
     pub boxes: u64,
     pub unboxes: u64,
+    pub allocations: u64,
     pub peak_objects: u64,
     /// タスクのスタックで同時に使った語の数の最大。
     pub peak_stack: u64,
@@ -240,6 +241,7 @@ impl<M: Mode> Machine<M> {
                 - self.copying.rc_increments,
             rc_decrements: self.earlier.rc_decrements + now.rc_decrements
                 - self.copying.rc_decrements,
+            allocations: self.earlier.allocations + now.allocations - self.copying.allocations,
             peak_objects: self.earlier.peak_objects.max(now.peak_objects),
         }
     }
@@ -318,6 +320,7 @@ impl<M: Mode> Machine<M> {
             rc_decrements: h.rc_decrements,
             boxes: counts.boxes,
             unboxes: counts.unboxes,
+            allocations: h.allocations,
             peak_objects: h.peak_objects,
             // スタックの長さは縮めないので、長さがそのまま使った語の数の最大である。統計は検査モードだけで数える
             peak_stack: if M::CHECKED {
@@ -353,6 +356,7 @@ impl<M: Mode> Machine<M> {
 struct HeapWork {
     rc_increments: u64,
     rc_decrements: u64,
+    allocations: u64,
     peak_objects: u64,
 }
 
@@ -361,6 +365,7 @@ impl HeapWork {
         HeapWork {
             rc_increments: stats.rc_increments,
             rc_decrements: stats.rc_decrements,
+            allocations: stats.allocations,
             peak_objects: stats.peak_live,
         }
     }

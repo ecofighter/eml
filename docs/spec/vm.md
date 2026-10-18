@@ -315,7 +315,7 @@ base + 0 .. base + frame_size: スロット
 
 `Machine::run`、`run_shown`、`eml_vm::execute` は、成功すると `Finished { stats, exit }` を返す。`stats` は下の `RunStats` で、`exit` は `exit` で終わったときの終了コード (`Option<i64>`) である。
 
-`RunStats` は、実行の仕事の回数と、同時に生きていたヒープの物体の数と、スタックの語の数の最大である。検査モードだけで数え、速いモードの欄は 0 のままである。実行時エラーとリークのときは返さない。欄は次の11で、はじめの9つが仕事の回数である。
+`RunStats` は、実行の仕事の回数と、同時に生きていたヒープの物体の数と、スタックの語の数の最大である。検査モードだけで数え、速いモードの欄は 0 のままである。実行時エラーとリークのときは返さない。欄は次の12で、はじめの10が仕事の回数である。
 
 - `evidence_steps`: `ev_lookup` と `evv_mask` がたどった `evv` の節点の数。今有効な handler の数で決まり、呼び出しの深さにはよらない。検査モードの `evv_mask` は、合う evidence が足りずに誤りを返したときは数えない ([オブジェクトモデル](object-model.md) の「速いモードと検査モード」)。出どころは `Ctx` の `CtxStats` である
 - `yields`: `yield_to` を実行した回数。すぐに再開する操作は yield しないので数えない。中断 (`yield_abort` と `exit`) は yield でないので数えない。出どころは `CtxStats` である
@@ -326,6 +326,7 @@ base + 0 .. base + frame_size: スロット
 - `rc_decrements`: 参照の数を減らした回数。`decref`、`drop`、解放の連鎖で子を手放した分を数える。`release` と `free_block` は、持ち主を空けるときにも1つ足す。出どころは `Heap` の `Stats` である
 - `boxes`: VM が実行した `box` (`BoxInt`、`BoxEnum`、`BoxConst`) の数。語の値の表現では確保しうる変換なので数える
 - `unboxes`: VM が実行した `unbox` の数。数える理由は `boxes` と同じである
+- `allocations`: ヒープが物体を確保した回数。検査モードで数える `Heap` の `Stats` の `allocations` をそのまま写す ([オブジェクトモデル](object-model.md) の「仕事の回数」)。速いモードは数えず 0 である。回復の確保は数えない。
 - `peak_objects`: 同時に生きていたヒープの物体の数の最大 (`Heap` の `Stats` の `peak_live`)。ヒープごとのダミーの物体を1つ含む。フレームはスタックにあり、凍結した領域の物体も数えないので、どちらも含まない
 - `peak_stack`: タスクのスタックで同時に使った語の数の最大。スタックの `Vec` の長さは縮めないので、`Task::reserve` が伸ばした長さがそのまま最大になり、VM は実行の終わりに `task.stack.len()` を読むだけで済む。フレームはスタックにあって `peak_objects` に表れないので、末尾呼び出しを失ったことはこの欄で見つける
 

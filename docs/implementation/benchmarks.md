@@ -22,12 +22,25 @@
 | `fold_state.em` | `State.run` の中で `Yield.fold` に純粋なラムダを渡し、10万要素を合計する (S13d で足した) | 純粋なコールバックを節がその場で呼ぶこと (`yields` が0) |
 | `list.em` | プログラムの中で定義した `List a` を `range`、`map`、`foldl` で合計する | 型変数のフィールドの `Int`、高階関数 |
 | `tree.em` | 線形合同法で作った `Int` を二分探索木に入れ、総称な `size` と `fold` で畳む | 再帰的なデータ、`switch` と `unpack` |
+| `orders.em` | 10万件の `Order` のレコードを、ラムダを渡した `List.filter`、`List.map`、`List.fold` で集計する (S13e で足した) | リストの高階関数に渡すラムダ |
+| `orders_by_hand.em` | `orders.em` のラムダを各ループに書き込んだ版 | `orders.em` の特殊化が目指す下限 |
+| `push_fold.em` | `Yield.fold (fn acc x -> acc + x) 0 (nums 100000)` | `Yield` の畳み込みに渡すラムダ |
+| `push_fold_by_hand.em` | 専用の `sum` handler に `acc + x` を書き込んだ版 | `push_fold.em` の下限 |
+| `iter_pipeline.em` | `Iter.generate (nums 100000)` を `Iter.filter`、`Iter.map`、`Iter.fold` に通す | `Iter` の段ごとのラムダ |
+| `iter_pipeline_by_hand.em` | 専用の `evens`、`squares`、`sum` にした版 | `iter_pipeline.em` の下限 |
+| `iter_generate.em` | `Iter.fold (fn acc x -> acc + x) 0 (Iter.generate (nums 100000))` | `Iter.generate` が生産者を包む費用 |
+| `sum_loop.em` | 1 から 100000 までの合計を直接の末尾再帰で求める | `iter_generate.em` と `push_fold.em` を比べる基準 |
+| `tree_by_hand.em` | `tree.em` の `fold (fn acc x -> acc + x)` を専用の `fold_sum` にした版 | `tree.em` の下限 |
+| `upsert.em` | `logstat` の AA 木の `upsert key increment` で 20000 個の文字列のキーを数え、`sort_by (fn (_, a) (_, b) -> a > b)` で並べる | 高階の更新関数と比較関数 |
+| `upsert_by_hand.em` | `increment` と比較を `upsert` と `sort_by` に書き込んだ版 | `upsert.em` の下限 |
+
+`_by_hand` の版は、対応する自動の版と同じ出力を出す。特殊化の効果は、自動の版の `RunStats` が手書きの版に近づくことで測る。
 
 `list.em` と `tree.em` はデータ型を自分で定義する。S6a で Prelude に `List` とリストのリテラルが入った後も、前の段の記録と比べられるように、自分のデータ型を使い続ける。`list.em` と `tree.em` の多相な関数 (`map`、`foldl`、`size`、`fold`) では、型変数の位置の `Int` が `box` と `unbox` を通る。単相化の前後でこの回数がどう変わったかは、下の「記録」の「S4b (単相化)」にある。
 
 ## 回数のテスト
 
-`crates/eml_vm/tests/bench.rs` は、プログラムごとに1つのテストで、VM の検査モードで走らせ、出力を確かめ、`RunStats` の全項目をインラインスナップショットで固定する。`bench/` のファイルの一覧と、テストのプログラムの一覧が一致することも確かめる。回数は機械の速さに左右されないので、ふだんの `cargo test` で流す。
+`crates/eml_vm/tests/bench.rs` は、プログラムごとに1つのテストで、VM の検査モードで走らせ、出力を確かめ、`RunStats` の全項目 (S13e で足した `allocations` を含む) をインラインスナップショットで固定する。`bench/` のファイルの一覧と、テストのプログラムの一覧が一致することも確かめる。回数は機械の速さに左右されないので、ふだんの `cargo test` で流す。
 
 段の前後の回数は、このスナップショットの差分で残る。回数を変える変更は、その段の spec に期待値の変更として書く ([テスト戦略](testing.md) の「テストの変更の運用」)。S10a までの記録の回数は S10b で消したインタプリタのもので、`rc_increments`、`rc_decrements`、`peak_objects` は VM と数え方が違う (下の「S10a (VM)」)。`peak_stack` は S10b で足した欄で、それより前の記録にはない。
 
