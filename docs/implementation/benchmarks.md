@@ -40,7 +40,7 @@
 
 ## 回数のテスト
 
-`crates/eml_vm/tests/bench.rs` は、プログラムごとに1つのテストで、VM の検査モードで走らせ、出力を確かめ、`RunStats` の全項目 (S13e で足した `allocations` を含む) をインラインスナップショットで固定する。`bench/` のファイルの一覧と、テストのプログラムの一覧が一致することも確かめる。`specialization_matches_hand_written_work` は、自動の版と `_by_hand` の版の5つの組で、`allocations`、`boxes`、`unboxes` が同じことを確かめる (S13e-1 の完了の条件。下の「S13e-1」)。回数は機械の速さに左右されないので、ふだんの `cargo test` で流す。
+`crates/eml_vm/tests/bench.rs` は、プログラムごとに1つのテストで、VM の検査モードで走らせ、出力を確かめ、`RunStats` の全項目 (S13e で足した `allocations` を含む) をインラインスナップショットで固定する。`bench/` のファイルの一覧と、テストのプログラムの一覧が一致することも確かめる。`specialization_matches_hand_written_work` は、自動の版と `_by_hand` の版の5つの組で、`allocations`、`boxes`、`unboxes` が同じことを確かめる (S13e-1 の完了の条件。下の「S13e-1」)。`handler_specialization_removes_yields_and_evidence` は、`iter_generate` と `iter_pipeline` の `yields` と、`push_fold` と `fold_state` の `evidence_steps` が0であることを確かめる (S13e-2 の完了の条件。下の「S13e-2」)。回数は機械の速さに左右されないので、ふだんの `cargo test` で流す。
 
 段の前後の回数は、このスナップショットの差分で残る。回数を変える変更は、その段の spec に期待値の変更として書く ([テスト戦略](testing.md) の「テストの変更の運用」)。S10a までの記録の回数は S10b で消したインタプリタのもので、`rc_increments`、`rc_decrements`、`peak_objects` は VM と数え方が違う (下の「S10a (VM)」)。`peak_stack` は S10b で足した欄で、それより前の記録にはない。
 
@@ -1264,3 +1264,94 @@ S13e-1 の完了の条件は、5つの組の自動の版と `_by_hand` の版で
 - 自動の版の実行の分は、`orders` が16.5%、`push_fold` が31.1%、`iter_pipeline` が5.9%、`tree` が3.2%、`upsert` が2.8% 減った。手書きの版との差のうち、62% から 73% が縮んだ。残りは要素ごとの直接の呼び出しと、その周りの RC で、S13e-3 のインライン化が扱う
 - 5つの組の外では、`list` が25.8%、`fold_state` が30.5%、`iter_generate` が4.4% 減った。`list` と `fold_state` は、`map` と `Yield.fold` に渡すラムダの `apply` と `box` / `unbox` が消えた分である
 - `fib`、`loop`、`state`、`sum_loop` と手書きの版の実行の分は、±0.4% 以内で、揺れの範囲である
+
+### S13e-2
+
+S13e-2 (handler への特殊化。[Core IR](../spec/core-ir.md) の「handler への特殊化」) の効果を、`RunStats` と `bench/run.sh` の命令の数と、100万要素の版の実時間で測った。変える前は S13e-2 の計画を足したコミット 57e034c (S13e-1 の後、handler への特殊化の前) で、変えた後はコミット ef4292e (S13e-2 の最適化の変更の最後) である。
+
+- 機種: Mac16,1 (Apple M4)
+- OS: macOS 27.0.1 (26A434)
+- rustc: rustc 1.98.1 (48a229cea 2026-09-01)
+
+#### 完了の条件
+
+S13e-2 の完了の条件は、`Iter.generate` で引く形の `yields` と、push の形の `evidence_steps` が0になることである。`crates/eml_vm/tests/bench.rs` の `handler_specialization_removes_yields_and_evidence` が、`iter_generate` と `iter_pipeline` の `yields` と、`push_fold` と `fold_state` の `evidence_steps` が0であることを確かめる。変える前と変えた後の値 (検査モード) は次のとおりである。
+
+| プログラム | evidence_steps | yields | rc_increments | boxes | allocations | peak_stack |
+|---|---:|---:|---:|---:|---:|---:|
+| `iter_generate` | 100000 → 0 | 100000 → 0 | 300001 → 0 | 300002 → 300001 | 1000008 → 400004 | 34 → 21 |
+| `iter_pipeline` | 100000 → 0 | 100000 → 0 | 300001 → 0 | 350002 → 350001 | 1500012 → 900008 | 49 → 36 |
+| `push_fold` | 100000 → 0 | 0 → 0 | 200001 → 0 | 200002 → 0 | 6 → 2 | 36 → 19 |
+| `fold_state` | 100000 → 0 | 0 → 0 | 300005 → 0 | 200003 → 2 | 10 → 3 | 43 → 25 |
+| `state` | 200000 → 0 | 0 → 0 | 200001 → 0 | 100002 → 2 | 6 → 3 | 27 → 16 |
+
+- `iter_generate` の確保は、1要素ごとに4つ (継続の閉包、`Iter`、組、`Some`) で、残りの4つは前後の準備の分である。設計の見込みどおりで、`iter_generate_allocates_four_objects_per_element` が固定する。1要素ごとの確保をなくすのは S13e-3 である
+- `push_fold` は、すぐに再開する `yield` の節を `perform` の地点に展開したので、evidence と節の呼び出しがなくなった。`box` / `unbox` が消えたのは、`yield` の値と状態の `Int` が、節の呼び出しの一様な引数と handler の状態を通らなくなったためである
+- 手で特殊化した版 (`push_fold_by_hand`、`iter_pipeline_by_hand`) も `Yield` の handle を持つので、同じく特殊化した。`specialization_matches_hand_written_work` の5つの組は、変えた後も3つの欄が揃っている
+
+#### 直接のループとの差
+
+`bench/` の版は10万要素で、実時間が 0.01 秒の単位に届かない。そのため、`iter_generate.em`、`push_fold.em`、`sum_loop.em` と `empty.em` の要素の数を100万にした使い捨てのコピーを、release ビルドの `eml run` で5回ずつ走らせ、`/usr/bin/time -l` の中央値をとった。実行の分は `empty` (4,100万) を引いた値である。
+
+| プログラム | 変える前の実時間 (s) | 変えた後の実時間 (s) | 変える前の実行の分 | 変えた後の実行の分 |
+|---|---:|---:|---:|---:|
+| `sum_loop` (直接のループ) | 0.01 | 0.01 | 3.42億 | 3.42億 |
+| `iter_generate` | 0.35 | 0.12 | 90.8億 | 31.1億 |
+| `push_fold` | 0.06 | 0.02 | 14.5億 | 7.81億 |
+
+- 直接のループとの実時間の差は、`iter_generate` が 0.34 秒から 0.11 秒に、`push_fold` が 0.05 秒から 0.01 秒に縮んだ。実行の分の倍率は、`iter_generate` が26.5倍から9.1倍に、`push_fold` が4.2倍から2.3倍になった。5回の実時間は、どれも中央値から 0.01 秒以内だった
+- `push_fold` に残る差は、1要素ごとの呼び出し2回である。`yield` の地点で畳み込みのラムダ (`main$lambda0`) を直接呼び、続きの `nums$let$go{H=…}$h0` を末尾で呼んで、そこから `go{H}` を末尾で呼び直す。直接のループは `sum_to` を末尾で1回呼ぶだけである。ラムダと継続の関数を埋め込むのは S13e-3 のインライン化である
+- `iter_generate` に残る差は、1要素ごとの4つの確保と、`Iter.fold` が `next` で継続の閉包を `apply` する呼び出しと、`Some` と組の分解である。S13e-3 の既知のコンストラクタと `con` の値の形についての特殊化が扱う
+
+#### 基準のプログラムの命令の数
+
+`bench/run.sh` を、変える前と変えた後で1回ずつ流した。どちらも環境は上と同じである。変える前は、コミット 57e034c を一時的な `git worktree` に取り出して測った。
+
+変える前 (コミット 57e034c)。
+
+| プログラム | instructions retired | 実行の分 | 実時間 (s) |
+|---|---:|---:|---:|
+| `empty` | 41142127 | | 0.00 |
+| `fib` | 126209545 | 85067418 | 0.00 |
+| `fold_state` | 202413256 | 161271129 | 0.01 |
+| `iter_generate` | 974022642 | 932880515 | 0.04 |
+| `iter_pipeline` | 1291903863 | 1250761736 | 0.05 |
+| `iter_pipeline_by_hand` | 1262175479 | 1221033352 | 0.05 |
+| `list` | 237911855 | 196769728 | 0.01 |
+| `loop` | 207262142 | 166120015 | 0.00 |
+| `orders` | 336677642 | 295535515 | 0.01 |
+| `orders_by_hand` | 301463701 | 260321574 | 0.01 |
+| `push_fold` | 197764423 | 156622296 | 0.01 |
+| `push_fold_by_hand` | 167079380 | 125937253 | 0.00 |
+| `state` | 215093472 | 173951345 | 0.01 |
+| `sum_loop` | 76555385 | 35413258 | 0.00 |
+| `tree` | 259167764 | 218025637 | 0.01 |
+| `tree_by_hand` | 256255995 | 215113868 | 0.01 |
+| `upsert` | 594277200 | 553135073 | 0.02 |
+| `upsert_by_hand` | 585686277 | 544544150 | 0.02 |
+
+変えた後 (コミット ef4292e)。
+
+| プログラム | instructions retired | 実行の分 | 実時間 (s) |
+|---|---:|---:|---:|
+| `empty` | 40974749 | | 0.00 |
+| `fib` | 126070766 | 85096017 | 0.00 |
+| `fold_state` | 132870571 | 91895822 | 0.00 |
+| `iter_generate` | 376006389 | 335031640 | 0.01 |
+| `iter_pipeline` | 693891479 | 652916730 | 0.03 |
+| `iter_pipeline_by_hand` | 664386674 | 623411925 | 0.02 |
+| `list` | 237764062 | 196789313 | 0.01 |
+| `loop` | 207070769 | 166096020 | 0.00 |
+| `orders` | 336420921 | 295446172 | 0.01 |
+| `orders_by_hand` | 301269224 | 260294475 | 0.01 |
+| `push_fold` | 129864573 | 88889824 | 0.00 |
+| `push_fold_by_hand` | 114248476 | 73273727 | 0.00 |
+| `state` | 120156630 | 79181881 | 0.00 |
+| `sum_loop` | 76326696 | 35351947 | 0.00 |
+| `tree` | 258973932 | 217999183 | 0.01 |
+| `tree_by_hand` | 256025173 | 215050424 | 0.01 |
+| `upsert` | 594136483 | 553161734 | 0.02 |
+| `upsert_by_hand` | 585485052 | 544510303 | 0.02 |
+
+- 実行の分は、`iter_generate` が64.1%、`iter_pipeline` が47.8%、`state` が54.5%、`push_fold` が43.2%、`fold_state` が43.0% 減った。手で特殊化した版も、`iter_pipeline_by_hand` が48.9%、`push_fold_by_hand` が41.8% 減った
+- handler を使わない `fib`、`list`、`loop`、`orders`、`sum_loop`、`tree`、`upsert` と、その手書きの版の実行の分は、±0.2% 以内で、揺れの範囲である

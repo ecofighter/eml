@@ -16,7 +16,7 @@
 
 | 段 | 中身 | 前提 | 完了の条件 |
 |---|---|---|---|
-| S13 実例による判断 | Kind の記法、std のエフェクトと `Iter`、中断の巻き戻し、row の最小の具体化、特殊化と融合と reuse、std のデータ構造と診断と計測 | S12 | 下の「S13 実例による判断」の S13a〜S13f の完了の条件。S13a〜S13d と S13e-1 は済み |
+| S13 実例による判断 | Kind の記法、std のエフェクトと `Iter`、中断の巻き戻し、row の最小の具体化、特殊化と融合と reuse、std のデータ構造と診断と計測 | S12 | 下の「S13 実例による判断」の S13a〜S13f の完了の条件。S13a〜S13d と S13e-1、S13e-2 は済み |
 
 S13 の後は、言語の項目を次の順に並べる。
 
@@ -49,7 +49,7 @@ S12d の5本のスクリプトの書き心地と、その後の議論と試作 (
 | S13b | `mask` を位置つきにして E2008 をなくすこと。std のエフェクト `Yield`、`Fail`、`State` と、その handler、引いて使うジェネレータ `Iter`、`Fs.read_line`。`k` を書かない節、ローカル関数どうしの相互再帰 | 済み。決めたことは [エフェクトと handler](../spec/effects.md)、[型と Kind](../spec/types.md)、[式](../spec/expressions.md)、[標準ライブラリ](../spec/stdlib.md)、[オブジェクトモデル](../spec/object-model.md) にあり、スクリプトの計測は [計測の基準](../implementation/benchmarks.md) の「S13b (スクリプト)」にある |
 | S13c | 中断を巻き戻しで行うこと、`IO` と `never` の操作を yield の地点から外すこと、節の間の `evv` の付け替え (under)、戻らない呼び出しで終わる経路での `Lin` の値の暗黙の後始末 | 済み。決めたことは [線形性](../spec/linearity.md)、[エフェクトと handler](../spec/effects.md)、[型と Kind](../spec/types.md)、[Core IR](../spec/core-ir.md)、[LIR](../spec/lir.md)、[VM](../spec/vm.md) にあり、計測は [計測の基準](../implementation/benchmarks.md) の「S13c」にある |
 | S13d | row の最小の具体化 | 済み。決めたことは [型と Kind](../spec/types.md)、[エフェクトと handler](../spec/effects.md)、[式](../spec/expressions.md) にあり、残した制限は [実装の現在地](../implementation/status.md) の「型と row の推論」に、計測は [計測の基準](../implementation/benchmarks.md) の「S13d」にある |
-| S13e | 既知の閉包への特殊化、handler への特殊化 (`Iter` の状態機械を含む)、インライン化と融合、Perceus の reuse analysis。S13e-1〜S13e-4 の4つに分けて順に進める | 末尾再帰の生産者を `Iter` で引く計測で、1要素ごとの yield と確保がなくなる。直接のループとの実時間の差を [計測の基準](../implementation/benchmarks.md) に記録する。4つの作業ごとの条件は下の「S13e 特殊化と融合と reuse」にある。S13e-1 は済み |
+| S13e | 既知の閉包への特殊化、handler への特殊化 (`Iter` の状態機械を含む)、インライン化と融合、Perceus の reuse analysis。S13e-1〜S13e-4 の4つに分けて順に進める | 末尾再帰の生産者を `Iter` で引く計測で、1要素ごとの yield と確保がなくなる。直接のループとの実時間の差を [計測の基準](../implementation/benchmarks.md) に記録する。4つの作業ごとの条件は下の「S13e 特殊化と融合と reuse」にある。S13e-1 と S13e-2 は済み |
 | S13f | std の `Map`、並べ替え、リストの関数、診断の改善、`String.byte_at` の借用、数値計算の計測 | `logstat` が std の `Map` と並べ替えを使う。S12d で挙げた診断の3つが直る。数値計算の計測が Python の版と一緒に `bench/scripts.sh` で動く |
 
 この順にしたのは次の理由による。
@@ -68,7 +68,7 @@ S12d の5本のスクリプトの書き心地と、その後の議論と試作 (
 | 作業 | 中身 | 完了の条件 |
 |---|---|---|
 | S13e-1 | 最適化パスの骨組みと、既知の閉包への特殊化。既知の閉包への `apply` を `call` にし、既知の閉包を受ける関数と閉包を、捕獲を引数に開いた複製にする | 済み。決めたこと (鍵と名前、決定性、包む関数、handle の節の複製、`yields` の付け直し) は [Core IR](../spec/core-ir.md) の「最適化」にあり、残した制限は [実装の現在地](../implementation/status.md) の「深さと性能」に、計測は [計測の基準](../implementation/benchmarks.md) の「S13e-1」にある |
-| S13e-2 | handler への特殊化。届く先が静的に分かる `perform` を、handler ごとの経路の関数の複製の中で、節の直接の実行に置き換える。`k` をデータに入れて返す節 (`Iter.generate`) と、すぐに再開する節 (状態つきを含む) を対象にする | `Iter.generate` で引く形の `yields` と、push の形の `evidence_steps` が0になる。直接のループとの実時間の差を記録する |
+| S13e-2 | handler への特殊化。届く先が静的に分かる `perform` を、handler ごとの経路の関数の複製の中で、節の直接の実行に置き換える。`k` をデータに入れて返す節 (`Iter.generate`) と、すぐに再開する節 (状態つきを含む) を対象にする | 済み。決めたこと (対象と経路の条件、節の2つの形、複製と継続の関数と節の写しの名前、`internal` の印、意味が変わらない理由) は [Core IR](../spec/core-ir.md) の「handler への特殊化」から「handler の特殊化で意味が変わらない理由」までにあり、残した制限は [実装の現在地](../implementation/status.md) の「深さと性能」に、計測と直接のループとの差は [計測の基準](../implementation/benchmarks.md) の「S13e-2」にある |
 | S13e-3 | インライン化、既知のコンストラクタの jump threading、既知の閉包をフィールドに持つ `con` の値の形についての特殊化 (生産者と消費者の融合) | `Iter.generate` で引く形と `Iter.map` / `filter` を重ねた形で、1要素ごとの確保がなくなる。S13e-1 の計測が、RC の回数と命令数で手で特殊化した版に届く |
 | S13e-4 | Perceus の reuse analysis (drop-guided reuse と、同じコンストラクタの作り直しのその場の書き換え) | `list.em`、`tree.em`、`logstat` の形で reuse が出る。`logstat` を `bench/scripts.sh` で測り、S13e-3 の後と比べて記録する |
 

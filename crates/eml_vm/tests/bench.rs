@@ -238,6 +238,20 @@ fn iter_generate_allocates_four_objects_per_element() {
     assert_eq!(stats.yields, 0, "{stats:?}");
 }
 
+/// S13e-2 の完了の条件 (docs/superpowers/specs/2026-10-18-s13e-specialization-design.md の「作業の分け方と完了の
+/// 条件」)。`Iter.generate` で引く形は yield せず、push の形と状態の handler は evidence を引かない。
+#[test]
+fn handler_specialization_removes_yields_and_evidence() {
+    let generate = stats("iter_generate", "5000050000\n");
+    assert_eq!(generate.yields, 0, "{generate:?}");
+    let push = stats("push_fold", "5000050000\n");
+    assert_eq!(push.evidence_steps, 0, "{push:?}");
+    let fold = stats("fold_state", "5000050000\n");
+    assert_eq!(fold.evidence_steps, 0, "{fold:?}");
+    let pipeline = stats("iter_pipeline", "166671666700000\n");
+    assert_eq!(pipeline.yields, 0, "{pipeline:?}");
+}
+
 #[test]
 fn iter_pipeline() {
     insta::assert_debug_snapshot!(stats("iter_pipeline", "166671666700000\n"), @"

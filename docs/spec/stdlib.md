@@ -297,7 +297,7 @@ pub data Iter <e> a = | Iter (once Unit -> <e> Option (a, Iter <e> a))
 
 `Iter` を使うときは、次の3つに注意する。
 
-- 速さ: S13e までは、`Iter` で引くと1要素ごとに yield と確保が起きるので、push の形の消費者 (`Yield.for_each`) より遅い。状態機械への特殊化は S13e で入れる ([ロードマップ](../future/roadmap.md) の「S13 実例による判断」)
+- 速さ: 末尾再帰の生産者を `generate` で引く形は、S13e-2 の handler への特殊化 ([Core IR](core-ir.md) の「handler への特殊化」) で yield しなくなった。それでも1要素ごとに4つの確保 (継続の閉包、`Iter`、組、`Some`) が起きるので、push の形の消費者 (`Yield.for_each`) より遅い。末尾でない再帰の生産者 (木の走査など) は、今も1要素ごとに yield する。確保をなくすのは S13e-3 である ([ロードマップ](../future/roadmap.md) の「S13 実例による判断」)
 - エフェクトの届く先: 生産者のエフェクトは、`Iter.generate` を呼んだ場所ではなく、`next` を呼んだ場所の handler に届く。そのため、`try_io` は `Iter.generate` ではなく、消費するループを包む (`try_io (fn () -> Iter.each f (Iter.generate producer))`)
 - `multi` の操作: `yield` は `once` の操作なので、`Yield.for_each` の要素ごとの関数の中で `multi` の操作を起こすと E3006 になる。`yield` の継続を持ったまま、`multi` の操作をまたぐためである ([エフェクトと handler](effects.md) の「継続の多重度と持ち越し規則」)。多回の再開ができるジェネレータを用意しないことの帰結である
 

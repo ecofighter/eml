@@ -1,0 +1,23 @@
+---
+source: crates/eml_cli/tests/repl.rs
+expression: checked.render()
+input_file: crates/eml_cli/tests/repl/std/specialized_generators.repl
+---
+> import Yield (Yield(..))
+> nums : Int -> Unit -> <Yield Int> Unit
+. nums n () =
+.   let go i =
+.     if i > n then ()
+.     else
+.       yield i
+.       go (i + 1)
+.   go 1
+.
+> Iter.fold (fn a b -> a + b) 0 (Iter.generate (nums 10))
+55
+> Iter.to_list (Iter.take 3 (Iter.generate (nums 10)))
+[1, 2, 3]
+> Yield.fold (fn a b -> a + b) 0 (nums 4)
+10
+--- close ---
+no leaks

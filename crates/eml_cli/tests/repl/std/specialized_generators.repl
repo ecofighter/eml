@@ -1,0 +1,15 @@
+# 前の入力の末尾再帰の生産者を、後の入力で `Iter.generate` と `Yield.fold` に渡す。handler の複製と継続の関数の名前は
+# handle と経路の関数だけから決まるので、追記の「同じ名前なら同じコード」の確かめを通る
+> import Yield (Yield(..))
+> nums : Int -> Unit -> <Yield Int> Unit
+. nums n () =
+.   let go i =
+.     if i > n then ()
+.     else
+.       yield i
+.       go (i + 1)
+.   go 1
+.
+> Iter.fold (fn a b -> a + b) 0 (Iter.generate (nums 10))
+> Iter.to_list (Iter.take 3 (Iter.generate (nums 10)))
+> Yield.fold (fn a b -> a + b) 0 (nums 4)
