@@ -1,5 +1,5 @@
--- 操作の引数が定数 (`True`、`False`、引数のないコンストラクタ) のとき、節の本体を展開すると、その定数で分ける
--- `switch` ができる。optimize は、それを合う case へのジャンプにする
+-- 操作の引数が定数 (`True`、`False`、引数のないコンストラクタ。フィールドを持つコンストラクタと混ざるものも含む)
+-- のとき、節の本体を展開すると、その定数で分ける `switch` ができる。optimize は、それを合う case へのジャンプにする
 -- (docs/superpowers/specs/2026-10-18-s13e-specialization-design.md の「書き換え」)。
 import Yield (Yield(..))
 
@@ -7,8 +7,13 @@ data Box a = | Box a
 
 data Level = | Info | Warn
 
+data T = | A | B Int
+
 effect Say where
   say : Level -> Unit
+
+effect Pick where
+  pick : T -> Unit
 
 flags : (Int -> Int) -> Unit -> <Yield Bool> Int
 flags g () =
@@ -22,6 +27,11 @@ levels () =
   say Warn
   say Info
 
+picks : Unit -> <Pick> Unit
+picks () =
+  pick A
+  pick (B 3)
+
 main : Unit -> <IO> Unit
 main () =
   let Box g = Box (fn x -> x + 1)
@@ -33,3 +43,7 @@ main () =
     | fn say l -> match l with
       | Info -> println "info"
       | Warn -> println "warn"
+  handle picks () with
+    | fn pick t -> match t with
+      | A -> println "a"
+      | B n -> println "b\{n}"

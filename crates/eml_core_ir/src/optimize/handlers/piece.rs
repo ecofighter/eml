@@ -299,6 +299,7 @@ impl Copy<'_> {
         }
     }
 
+    /// `unpack` の値は `obj` で、`obj` に収まる定数はないので (`Atom::fits`)、`performs_fit` を通った引数は変数である。
     fn var(&self, var: VarId) -> VarId {
         match self.atom(Atom::Var(var)) {
             Atom::Var(var) => var,
@@ -332,12 +333,7 @@ impl Copy<'_> {
         let mut term = term.clone();
         term.for_each_atom_mut(|atom| *atom = self.atom(*atom));
         term.for_each_successor_mut(|target| *target = block_of(*target));
-        if let Some(target) = constant_target(&term) {
-            return Term::Jump {
-                target,
-                args: Vec::new(),
-            };
-        }
+        // 飛ばした case のブロックも写すので、そのフィールドも先に定義する。ブロックは辺が入らなくなり、`prune` が落とす
         if let Term::Switch { cases, .. } = &mut term {
             for case in cases {
                 case.fields = case
@@ -347,7 +343,13 @@ impl Copy<'_> {
                     .collect();
             }
         }
-        term
+        match constant_target(&term) {
+            Some(target) => Term::Jump {
+                target,
+                args: Vec::new(),
+            },
+            None => term,
+        }
     }
 }
 

@@ -8,4 +8,6 @@ input_file: tests/ui/run/effects/specialized_constant_operation_argument.em
 info
 warn
 info
+a
+b3
 --- stderr ---

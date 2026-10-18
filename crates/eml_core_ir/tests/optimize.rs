@@ -846,7 +846,8 @@ main () =
 }
 
 /// 定数の操作の引数を節の本体に展開すると、その定数で分ける `switch` ができる。合う case へのジャンプにして、読み直した
-/// IR が変換の段の verifier を通ることを確かめる (`core_text` が読み直す)。
+/// IR が変換の段の verifier を通ることを確かめる (`core_text` が読み直す)。`T` の `A` のように、フィールドを持つ
+/// コンストラクタと混ざる引数のないコンストラクタも `tobj` の定数として届き、飛ばした case のフィールドも写す。
 #[test]
 fn a_constant_operation_argument_folds_the_clause_switch() {
     let text = "\
@@ -868,8 +869,22 @@ levels () =
   say Info
   say Warn
 
+data T = | A | B Int
+
+effect Pick where
+  pick : T -> Unit
+
+picks : Unit -> <Pick> Unit
+picks () =
+  pick A
+  pick (B 3)
+
 main : Unit -> <IO> Unit
 main () =
+  handle picks () with
+    | fn pick t -> match t with
+      | A -> println \"a\"
+      | B n -> println \"b\\{n}\"
   let r = handle flags () from 0 with
     | fn yield b st -> if b then ((), st + 10) else ((), st + 1)
     | return x st -> x * 100 + st
