@@ -5,13 +5,14 @@ use eml_diagnostics::SourceFiles;
 use eml_hir::{FunctionId, Program as HirProgram};
 use eml_types::TypedProgram;
 
-use crate::{Program, evidence, to_lir, translate, verify_evidence, verify_translated};
+use crate::{Program, evidence, optimize, to_lir, translate, verify_evidence, verify_translated};
 use eml_lir::VerifyError;
 
 /// `core_until` で止める位置。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Pass {
     Translate,
+    Optimize,
     Evidence,
 }
 
@@ -19,6 +20,7 @@ impl Pass {
     fn name(self) -> &'static str {
         match self {
             Pass::Translate => "translate",
+            Pass::Optimize => "optimize",
             Pass::Evidence => "evidence",
         }
     }
@@ -41,6 +43,11 @@ pub fn core_until(
     let mut program = translate::translate(hir, typed, entry, files);
     check(&program, Pass::Translate);
     if last == Pass::Translate {
+        return program;
+    }
+    optimize(&mut program);
+    check(&program, Pass::Optimize);
+    if last == Pass::Optimize {
         return program;
     }
     evidence(&mut program);
@@ -77,7 +84,7 @@ fn check(program: &Program, pass: Pass) {
         return;
     }
     let result = match pass {
-        Pass::Translate => verify_translated(program),
+        Pass::Translate | Pass::Optimize => verify_translated(program),
         Pass::Evidence => verify_evidence(program),
     };
     if let Err(error) = result {

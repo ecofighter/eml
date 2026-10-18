@@ -12,6 +12,7 @@ mod builder;
 mod evidence;
 pub(crate) mod liveness;
 mod lowering;
+mod optimize;
 mod pipeline;
 mod pretty;
 mod tail;
@@ -21,6 +22,7 @@ mod verify;
 
 pub use evidence::evidence;
 pub use lowering::to_lir;
+pub use optimize::optimize;
 pub use pipeline::{Pass, core_until, lower, lower_until};
 pub use pretty::{pretty, pretty_with_positions};
 pub use text::parse;

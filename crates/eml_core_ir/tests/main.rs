@@ -10,6 +10,7 @@ mod externs;
 mod instances;
 mod local_functions;
 mod lowering;
+mod optimize;
 mod perceus;
 mod session;
 mod text;

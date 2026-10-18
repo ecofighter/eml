@@ -27,7 +27,7 @@ fn read_back(shown: &str, last: Pass, show: fn(&Program) -> String) {
     let parsed = parse(shown).unwrap_or_else(|error| panic!("{error}\n{shown}"));
     assert_eq!(show(&parsed), shown, "the printed Core IR must read back");
     let verified = match last {
-        Pass::Translate => eml_core_ir::verify_translated(&parsed),
+        Pass::Translate | Pass::Optimize => eml_core_ir::verify_translated(&parsed),
         Pass::Evidence => eml_core_ir::verify_evidence(&parsed),
     };
     if let Err(error) = verified {
