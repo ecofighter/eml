@@ -14,6 +14,7 @@ mod perceus;
 mod pipeline;
 mod pretty;
 mod prim;
+pub mod reuse;
 pub mod syntax;
 mod text;
 pub mod unwind;
@@ -122,11 +123,16 @@ pub enum Stmt {
     /// `release x L #t(p1, .., pn)`。Perceus だけが入れる RC の命令である。分解した値 `x` の参照を1つ手放し、名前を
     /// 書いた位置の変数が、そのフィールドの参照を1つずつ受け取る。`None` は残さない位置である
     /// (docs/spec/lir.md)。
+    /// `token` を持つ形 (`let r: token = release ..`) は reuse のパスが作る。x が一意なら箱を token `r` にし、そうでなければ
+    /// 空の token を定義する。残す位置がなくてもよいのはこの形だけである (docs/spec/object-model.md の「reuse」)。
     Release {
         value: VarId,
         ctor: Ctor,
         fields: Vec<Option<VarId>>,
+        token: Option<VarId>,
     },
+    /// `drop_token r`。使わなかった token を手放す。
+    DropToken(VarId),
 }
 
 impl Stmt {
@@ -139,11 +145,15 @@ impl Stmt {
                 ctor: _,
                 fields,
             } => fields,
-            Stmt::Dup(_) | Stmt::Decref(_) | Stmt::Release { .. } => &[],
+            Stmt::Release {
+                token: Some(token), ..
+            } => std::slice::from_ref(token),
+            Stmt::Dup(_) | Stmt::Decref(_) | Stmt::Release { .. } | Stmt::DropToken(_) => &[],
         }
     }
 
-    /// 文が値として使う変数と定数。`Dup`、`Decref`、`Release` は Perceus の命令なので、値の使用に数えない。
+    /// 文が値として使う変数と定数。`Dup`、`Decref`、`Release` は Perceus の命令なので、値の使用に数えない。token は
+    /// 値でないので、`DropToken` も数えない。
     pub fn for_each_atom(&self, mut f: impl FnMut(Atom)) {
         match self {
             Stmt::Let { var: _, rhs } => rhs.for_each_atom(f),
@@ -152,7 +162,7 @@ impl Stmt {
                 ctor: _,
                 fields: _,
             } => f(Atom::Var(*value)),
-            Stmt::Dup(_) | Stmt::Decref(_) | Stmt::Release { .. } => {}
+            Stmt::Dup(_) | Stmt::Decref(_) | Stmt::Release { .. } | Stmt::DropToken(_) => {}
         }
     }
 
@@ -161,7 +171,11 @@ impl Stmt {
     pub fn for_each_consumed(&self, f: impl FnMut(Atom)) {
         match self {
             Stmt::Let { var: _, rhs } => rhs.for_each_consumed(f),
-            Stmt::Unpack { .. } | Stmt::Dup(_) | Stmt::Decref(_) | Stmt::Release { .. } => {}
+            Stmt::Unpack { .. }
+            | Stmt::Dup(_)
+            | Stmt::Decref(_)
+            | Stmt::Release { .. }
+            | Stmt::DropToken(_) => {}
         }
     }
 }
@@ -275,10 +289,12 @@ pub enum Rhs {
     /// (docs/spec/lir.md の「値の表現」)。
     ConstString(u32),
     /// 引数を持つコンストラクタの値を作る。`args` の所有権は値に移る。引数のないコンストラクタの値は `Atom::Tag` で
-    /// ある (docs/spec/lir.md)。
+    /// ある (docs/spec/lir.md)。`reuse` を持つ `con` は、token が空でなければその箱に作る。token は値でないので、
+    /// `for_each_atom` は見せない。
     Con {
         ctor: Ctor,
         args: Vec<Atom>,
+        reuse: Option<Reuse>,
     },
     /// 値の所有権を受け取って捨てる。値は `()` である。
     Drop(Atom),
@@ -304,7 +320,11 @@ impl Rhs {
                 args,
                 at: _,
             }
-            | Rhs::Con { ctor: _, args }
+            | Rhs::Con {
+                ctor: _,
+                args,
+                reuse: _,
+            }
             | Rhs::Prim(_, args) => args.iter().for_each(|&atom| f(atom)),
             Rhs::Drop(atom) | Rhs::Box(atom) | Rhs::Unbox(atom) => f(*atom),
             Rhs::ConstString(_) => {}
@@ -337,12 +357,28 @@ impl Rhs {
                 args,
                 at: _,
             }
-            | Rhs::Con { ctor: _, args }
+            | Rhs::Con {
+                ctor: _,
+                args,
+                reuse: _,
+            }
             | Rhs::Prim(_, args) => args.iter_mut().for_each(f),
             Rhs::Drop(atom) | Rhs::Box(atom) | Rhs::Unbox(atom) => f(atom),
             Rhs::ConstString(_) => {}
         }
     }
+}
+
+/// `con` が受け取る token と、その箱の使い方。どちらにするかも、どの引数を書かないかも LIR に書き、VM とネイティブの
+/// コード生成が同じ判断に従うようにする (docs/spec/object-model.md の「reuse」)。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Reuse {
+    pub token: VarId,
+    /// ヘッダを書かずに使う (`reuse_in_place`)。偽ならヘッダを書き直す (`con_at`)。
+    pub in_place: bool,
+    /// 引数ごとの、書かない印。長さは `con` の引数の数である。箱は中身を消さないので、元の値から同じ物理的な位置に
+    /// 取り出した変数は、書かなくてもその位置に残っている。
+    pub skip: Vec<bool>,
 }
 
 /// 呼び出し。クロージャと引数の所有権は呼び出しに移る。LIR の呼び出しは `mask` を持たない
@@ -478,6 +514,14 @@ pub struct Shape {
     pub positions: Vec<u32>,
     pub scanned: u32,
     pub raw: u32,
+}
+
+impl Shape {
+    /// reuse の組を作るときに比べる、ペイロードの物理的な語の数。走査する語が 255 個以上の形は、`eml_rt` だけが知る
+    /// 数の語を持つので、組に入れない (docs/spec/object-model.md の「ヘッダ」)。
+    pub fn reuse_words(&self) -> Option<u32> {
+        (self.scanned < 255).then_some(self.scanned + self.raw)
+    }
 }
 
 impl LayoutCtor {

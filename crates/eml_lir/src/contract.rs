@@ -134,14 +134,16 @@ fn remove_dead_lets(function: &mut LirFn) -> bool {
 /// 解放が早まるだけである。translate が開いた `unr` でない変数の `con` は、消さなければならない。その `lin` の引数は
 /// 葉も読むので、残すと Perceus が `lin` の `con` を `decref` し、V1 が拒む。縮約は使われない純粋な `let` をすべて消し、
 /// いつも Perceus より前に走るので、Perceus の入力にこの `con` は残らない (docs/spec/lir.md の「縮約」)。`box` を消すと
-/// 確保が1つ減るだけで、`unbox` は値を読むだけなので、どちらも評価の順を変えない。
+/// 確保が1つ減るだけで、`unbox` は値を読むだけなので、どちらも評価の順を変えない。token を受ける `con` は、消すと
+/// token を手放す命令がなくなるので消さない。
 pub(crate) fn pure(rhs: &Rhs) -> bool {
     match rhs {
-        Rhs::ConstString(_)
-        | Rhs::Con { ctor: _, args: _ }
-        | Rhs::MakeClosure(_, _)
-        | Rhs::Box(_)
-        | Rhs::Unbox(_) => true,
+        Rhs::Con {
+            ctor: _,
+            args: _,
+            reuse,
+        } => reuse.is_none(),
+        Rhs::ConstString(_) | Rhs::MakeClosure(_, _) | Rhs::Box(_) | Rhs::Unbox(_) => true,
         Rhs::Extern {
             ext,
             args: _,

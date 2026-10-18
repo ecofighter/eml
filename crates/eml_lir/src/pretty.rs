@@ -95,18 +95,22 @@ impl<'p> Printer<'p> {
                     value,
                     ctor,
                     fields,
+                    token,
                 } => {
                     let kept: Vec<String> = fields
                         .iter()
                         .map(|field| field.map_or_else(|| "_".to_string(), |v| w.var(vars, v)))
                         .collect();
+                    let binder =
+                        token.map_or_else(String::new, |r| format!("let {} = ", w.binder(vars, r)));
                     format!(
-                        "release {} {}({})",
+                        "{binder}release {} {}({})",
                         w.var(vars, *value),
                         w.ctor(*ctor),
                         kept.join(", ")
                     )
                 }
+                Stmt::DropToken(r) => format!("drop_token {}", w.var(vars, *r)),
             };
             writeln!(out, "  {text}").unwrap();
         }
@@ -148,8 +152,32 @@ impl<'p> Printer<'p> {
                 w.position(*at)
             ),
             Rhs::ConstString(index) => format!("const {}", w.string(*index)),
-            Rhs::Con { ctor, args } => {
-                format!("con {}({})", w.ctor(*ctor), w.atoms(vars, args))
+            Rhs::Con {
+                ctor,
+                args,
+                reuse: None,
+            } => format!("con {}({})", w.ctor(*ctor), w.atoms(vars, args)),
+            Rhs::Con {
+                ctor,
+                args,
+                reuse: Some(reuse),
+            } => {
+                // 印の数が引数の数と違う IR も、verifier が報告する前に表示できるように、引数をすべて書く
+                let args: Vec<String> = args
+                    .iter()
+                    .enumerate()
+                    .map(|(index, arg)| {
+                        let skip = reuse.skip.get(index) == Some(&true);
+                        format!("{}{}", if skip { "=" } else { "" }, w.atom(vars, arg))
+                    })
+                    .collect();
+                format!(
+                    "con {}({}) reuse {}{}",
+                    w.ctor(*ctor),
+                    args.join(", "),
+                    w.var(vars, reuse.token),
+                    if reuse.in_place { " in place" } else { "" }
+                )
             }
             Rhs::Drop(a) => format!("drop {}", w.atom(vars, a)),
             Rhs::Box(a) => format!("box {}", w.atom(vars, a)),

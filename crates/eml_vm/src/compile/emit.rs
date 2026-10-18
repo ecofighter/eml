@@ -262,6 +262,7 @@ impl<'a, M: Mode> Emitter<'a, '_, M> {
                 value,
                 ctor,
                 fields,
+                token: None,
             } => {
                 let layout_ctor = self.layout_ctor(*ctor);
                 let shape = layout_ctor.shape();
@@ -282,6 +283,9 @@ impl<'a, M: Mode> Emitter<'a, '_, M> {
                 );
                 let src = self.slot(*value);
                 self.out.push(Op::Release { src, at });
+            }
+            Stmt::Release { token: Some(_), .. } | Stmt::DropToken(_) => {
+                unreachable!("no LIR pass emits reuse tokens yet")
             }
         }
     }
@@ -359,7 +363,12 @@ impl<'a, M: Mode> Emitter<'a, '_, M> {
                 let index = self.links.strings[*index as usize];
                 self.out.push(Op::LoadConst { dst, index });
             }
-            Rhs::Con { ctor, args } => {
+            Rhs::Con { reuse: Some(_), .. } => unreachable!("no LIR pass emits reuse tokens yet"),
+            Rhs::Con {
+                ctor,
+                args,
+                reuse: None,
+            } => {
                 let layout_ctor = self.layout_ctor(*ctor);
                 let shape = layout_ctor.shape();
                 let offset = crate::data::count_word(shape.scanned);

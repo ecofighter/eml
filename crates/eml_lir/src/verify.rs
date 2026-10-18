@@ -30,11 +30,12 @@ use crate::check::{
     field_count, shape,
 };
 use crate::liveness;
+use crate::reuse;
 use crate::syntax::{operation_text, prim_text};
 use crate::unwind::{self, UnwindPoint};
 use crate::{
     Atom, Block, BlockId, Call, CasePattern, Ctor, FnIdx, Layout, LirFn, Mark, OpRet, Prim,
-    Program, Repr, Rhs, Stmt, Term, VarId, VerifyError, operation,
+    Program, Repr, Reuse, Rhs, Stmt, Term, VarId, VerifyError, operation,
 };
 
 /// Perceus の後の LIR を確かめる。形と範囲に加えて、RC の対象の変数の所有が釣り合うことを確かめる。
@@ -196,7 +197,9 @@ struct Site {
     index: i64,
 }
 
-/// RC の対象の変数ごとの、所有している参照の数。0 になった変数は除く。
+/// RC の対象の変数ごとの、所有している参照の数。0 になった変数は除く。所有の段では、経路でまだ使っていない token も
+/// 1 として持つ。token も経路ごとにちょうど1回使うので、所有と同じ写し方で `switch` の行き先へ渡せる
+/// (docs/spec/object-model.md の「reuse」)。
 type Owned = BTreeMap<VarId, u32>;
 
 struct Checker<'a> {
@@ -218,6 +221,8 @@ struct Checker<'a> {
     /// (docs/spec/lir.md の「verifier」)。
     owners: Vec<Option<VarId>>,
     origins: Vec<Option<Origin>>,
+    /// token ごとの、元の値とそのコンストラクタ。`owners` と同じく、変数は1回だけ定義されるので関数に1つの表にする。
+    token_sources: Vec<Option<(VarId, Ctor)>>,
     /// 巻き戻しの地点ごとの所有を書き留める先。`unwind_points` だけが与える。
     points: Option<Vec<UnwindPoint>>,
 }
@@ -246,6 +251,7 @@ impl<'a> Checker<'a> {
             pending: HashMap::new(),
             owners: vec![None; function.vars.len()],
             origins: vec![None; function.vars.len()],
+            token_sources: vec![None; function.vars.len()],
             points: None,
         }
     }
@@ -330,6 +336,7 @@ impl<'a> Checker<'a> {
     }
 
     fn check_block(&mut self, index: u32, block: &Block, mut owned: Owned) -> Result<(), String> {
+        let function = self.function;
         for (at, stmt) in block.stmts.iter().enumerate() {
             self.at = Site {
                 block: index,
@@ -340,14 +347,16 @@ impl<'a> Checker<'a> {
                 && let Some((var, landing)) = unwind::point(stmt)
             {
                 // 束縛した変数は命令が戻ってから現れるので、巻き戻しで手放すものに入れない
+                let (tokens, owned): (Vec<_>, Vec<_>) = owned
+                    .iter()
+                    .filter(|&(&held, _)| held != var)
+                    .map(|(&var, &count)| (var, count))
+                    .partition(|&(held, _)| function.repr(held) == Repr::Token);
                 points.push(UnwindPoint {
                     block: BlockId(index),
                     stmt: at,
-                    owned: owned
-                        .iter()
-                        .filter(|&(&held, _)| held != var)
-                        .map(|(&var, &count)| (var, count))
-                        .collect(),
+                    owned,
+                    tokens: tokens.into_iter().map(|(token, _)| token).collect(),
                     landing,
                 });
             }
@@ -360,6 +369,9 @@ impl<'a> Checker<'a> {
     }
 
     fn check_stmt(&mut self, owned: &mut Owned, stmt: &Stmt) -> Result<(), String> {
+        let mut atoms = Vec::new();
+        stmt.for_each_atom(|atom| atoms.push(atom));
+        self.no_token_values(&atoms)?;
         match stmt {
             Stmt::Let { var, rhs } => {
                 self.check_rhs(owned, *var, rhs)?;
@@ -367,6 +379,16 @@ impl<'a> Checker<'a> {
                     Rhs::Call(call) => {
                         let never = self.never_returns(call);
                         self.cx.note_never(*var, never);
+                        // 継続を2回再開すると、yield の後の `con` が同じ箱を2回使うので、token は yield しうる呼び出しを
+                        // またがない (docs/spec/object-model.md の「reuse」)
+                        if reuse::may_yield(self.program, self.function, call) {
+                            self.no_token_live(owned, || {
+                                format!(
+                                    "live after {}, which may yield",
+                                    self.call_text(call, false)
+                                )
+                            })?;
+                        }
                     }
                     Rhs::MakeClosure(target, args) => {
                         self.cx.note_closure(*var, *target, args.len());
@@ -383,7 +405,7 @@ impl<'a> Checker<'a> {
                     }
                     Rhs::Prim(_, _)
                     | Rhs::ConstString(_)
-                    | Rhs::Con { ctor: _, args: _ }
+                    | Rhs::Con { .. }
                     | Rhs::Drop(_)
                     | Rhs::Box(_)
                     | Rhs::Unbox(_) => {}
@@ -456,14 +478,197 @@ impl<'a> Checker<'a> {
                 value,
                 ctor,
                 fields,
+                token,
             } => {
                 self.rc_allowed(*value, "released with its fields")?;
-                self.release(owned, *value, *ctor, fields)
+                self.release(owned, *value, *ctor, fields, token.is_some())?;
+                match *token {
+                    Some(token) => self.define_token(owned, token, *value, *ctor),
+                    None => Ok(()),
+                }
+            }
+            Stmt::DropToken(token) => {
+                self.rc_allowed(*token, "dropped")?;
+                self.use_token(owned, *token)
             }
         }
     }
 
+    fn is_token(&self, var: VarId) -> bool {
+        self.function.repr(var) == Repr::Token
+    }
+
+    /// token は、token を受ける `con` と `drop_token` でだけ使う。値の位置 (呼び出し、`apply`、`clause`、extern と
+    /// `prim` の引数、閉包の捕獲、`con` のフィールド、`jump` の実引数、`return` の値、`switch` の scrutinee) には
+    /// 現れない (docs/spec/object-model.md の「reuse」)。
+    fn no_token_values(&self, atoms: &[Atom]) -> Result<(), String> {
+        match atoms.iter().find_map(|&atom| match atom {
+            Atom::Var(var) if self.is_token(var) => Some(var),
+            _ => None,
+        }) {
+            Some(token) => Err(format!(
+                "the token `{}` is used as a value",
+                self.cx.name(token)
+            )),
+            None => Ok(()),
+        }
+    }
+
+    /// 経路でまだ使っていない token がないこと。`state` は誤りの文で token の状態を言う句である。
+    fn no_token_live(&self, owned: &Owned, state: impl FnOnce() -> String) -> Result<(), String> {
+        match owned.keys().find(|&&var| self.is_token(var)) {
+            Some(&token) => Err(format!(
+                "the token `{}` is {}",
+                self.cx.name(token),
+                state()
+            )),
+            None => Ok(()),
+        }
+    }
+
+    /// token を定義する `release` の token。元の値とコンストラクタを、token を受ける `con` の検査のために覚える。
+    fn define_token(
+        &mut self,
+        owned: &mut Owned,
+        token: VarId,
+        value: VarId,
+        ctor: Ctor,
+    ) -> Result<(), String> {
+        if !self.is_token(token) {
+            return Err(format!(
+                "`{}` ({}) is bound to a release, which gives a token",
+                self.cx.name(token),
+                self.function.repr(token).name()
+            ));
+        }
+        self.define_once(token, self.at)?;
+        owned.insert(token, 1);
+        self.token_sources[token.0 as usize] = Some((value, ctor));
+        Ok(())
+    }
+
+    /// token を使う。経路でまだ使っていない token に限る。
+    fn use_token(&self, owned: &mut Owned, token: VarId) -> Result<(), String> {
+        self.visible(token)?;
+        if !self.is_token(token) {
+            return Err(format!(
+                "`{}` ({}) is used as a token",
+                self.cx.name(token),
+                self.function.repr(token).name()
+            ));
+        }
+        if owned.remove(&token).is_none() {
+            return Err(format!("the token `{}` is used twice", self.cx.name(token)));
+        }
+        Ok(())
+    }
+
+    /// token を受ける `con` の検査。箱の物理的な語の数は、token の元のコンストラクタと同じである。ヘッダを書かない
+    /// `con` は、元と同じ配置の同じタグで、`lin` ビットの条件 (元の変数が `unr` か、`con` の束縛が `lin`) を満たす。
+    /// 書かない引数は、元の値を分解して束縛した変数で、元と `con` で物理的な位置と語の種類が同じである。箱は中身を
+    /// 消さないので、その位置には同じ語が残っている (docs/spec/object-model.md の「reuse」と「`lin` ビット」)。
+    fn check_reuse(
+        &self,
+        owned: &mut Owned,
+        var: VarId,
+        ctor: Ctor,
+        args: &[Atom],
+        reuse: &Reuse,
+    ) -> Result<(), String> {
+        let token = reuse.token;
+        self.rc_allowed(token, "reused")?;
+        self.use_token(owned, token)?;
+        let (source, from) = self.token_sources[token.0 as usize]
+            .expect("only a release defines a token, and it records the source");
+        // どちらのコンストラクタも、`check_con` と `release` が配置で確かめてある
+        let (layout, _, constructor) = self.cx.ctor(ctor, "a con")?;
+        let (from_layout, _, from_constructor) = self.cx.ctor(from, "a release")?;
+        let (shape, from_shape) = (constructor.shape(), from_constructor.shape());
+        let what = format!("a con of `{}` #{}", layout.name, ctor.tag);
+        let token_name = self.cx.name(token);
+        let words = |words: Option<u32>| {
+            words.map_or("255 or more scanned words".to_string(), |words| {
+                format!("{words} words")
+            })
+        };
+        match (shape.reuse_words(), from_shape.reuse_words()) {
+            (Some(needed), Some(held)) if needed == held => {}
+            (needed, held) => {
+                return Err(format!(
+                    "{what} has {}, but the token `{token_name}` holds {}",
+                    words(needed),
+                    words(held)
+                ));
+            }
+        }
+        if reuse.in_place {
+            if ctor != from {
+                return Err(format!(
+                    "{what} rebuilds the token `{token_name}` in place, but the token comes from `{}` #{}",
+                    from_layout.name, from.tag
+                ));
+            }
+            let (source_mark, mark) = (self.function.mark(source), self.function.mark(var));
+            if source_mark != Mark::Unr && mark != Mark::Lin {
+                return Err(format!(
+                    "{what} rebuilds the token `{token_name}` in place, but `{}` is {} and `{}` is {}",
+                    self.cx.name(source),
+                    source_mark.name(),
+                    self.cx.name(var),
+                    mark.name()
+                ));
+            }
+        }
+        if reuse.skip.len() != args.len() {
+            return Err(format!(
+                "{what} has {} arguments, but {} skip marks",
+                args.len(),
+                reuse.skip.len()
+            ));
+        }
+        for (index, (&arg, _)) in args
+            .iter()
+            .zip(&reuse.skip)
+            .enumerate()
+            .filter(|(_, (_, skip))| **skip)
+        {
+            let kept = match arg {
+                Atom::Var(field) => self.origins[field.0 as usize].is_some_and(|origin| {
+                    origin.value == source
+                        && origin.ctor == from
+                        && from_constructor.fields[origin.slot].is_rc()
+                            == constructor.fields[index].is_rc()
+                        && from_shape.positions[origin.slot] == shape.positions[index]
+                }),
+                Atom::Int(_) | Atom::Unit | Atom::Tag(_) | Atom::Fn(_) => false,
+            };
+            if !kept {
+                return Err(format!(
+                    "argument {index} of {what} is skipped, but {} is not at the same position in the box of the token `{token_name}`",
+                    self.cx.atom_text(arg)
+                ));
+            }
+        }
+        Ok(())
+    }
+
     fn check_term(&mut self, mut owned: Owned, term: &Term) -> Result<(), String> {
+        let mut atoms = Vec::new();
+        term.for_each_atom(|atom| atoms.push(atom));
+        self.no_token_values(&atoms)?;
+        // token は合流するブロックへ流れず、関数からも出ない (docs/spec/object-model.md の「reuse」)
+        match term {
+            Term::Return(_) => {
+                self.no_token_live(&owned, || "still live at a return".to_string())?
+            }
+            Term::TailCall(_) => {
+                self.no_token_live(&owned, || "still live at a tail call".to_string())?;
+            }
+            Term::Jump { target, args: _ } => {
+                self.no_token_live(&owned, || format!("still live at a jump to b{}", target.0))?
+            }
+            Term::Switch { .. } => {}
+        }
         match term {
             Term::Return(atom) => {
                 self.consume(&mut owned, *atom)?;
@@ -597,16 +802,29 @@ impl<'a> Checker<'a> {
         })
     }
 
-    /// 変数を多くとも1回定義し (R5)、RC の対象なら所有を1つ持つ。
+    /// 変数を多くとも1回定義し (R5)、RC の対象なら所有を1つ持つ。token は token を定義する `release` でだけ定義する
+    /// (`define_token`)。
     fn define(&mut self, owned: &mut Owned, var: VarId, site: Site) -> Result<(), String> {
+        if self.is_token(var) {
+            return Err(format!(
+                "`{}` is a token, but only a release defines one",
+                self.cx.name(var)
+            ));
+        }
+        self.define_once(var, site)?;
+        if self.level == Level::Ownership && self.function.repr(var).is_rc() {
+            owned.insert(var, 1);
+        }
+        Ok(())
+    }
+
+    /// 変数を多くとも1回定義する (R5)。
+    fn define_once(&mut self, var: VarId, site: Site) -> Result<(), String> {
         let slot = &mut self.defs[var.0 as usize];
         if slot.is_some() {
             return Err(format!("`{}` is defined twice", self.cx.name(var)));
         }
         *slot = Some(site);
-        if self.level == Level::Ownership && self.function.repr(var).is_rc() {
-            owned.insert(var, 1);
-        }
         Ok(())
     }
 
@@ -713,15 +931,17 @@ impl<'a> Checker<'a> {
     }
 
     /// `release x L #t(p1, .., pn)`。x の参照を1つ手放し、名前を書いた変数が参照を1つずつ受け取る。名前を書いた変数は、
-    /// x を同じ配置とタグで分解したときの、同じ位置のフィールドである (docs/spec/lir.md)。
+    /// x を同じ配置とタグで分解したときの、同じ位置のフィールドである (docs/spec/lir.md)。残す位置のない `release` は
+    /// `decref` と同じなので、token を定義する形でだけ認める。
     fn release(
         &self,
         owned: &mut Owned,
         value: VarId,
         ctor: Ctor,
         fields: &[Option<VarId>],
+        defines_token: bool,
     ) -> Result<(), String> {
-        if fields.iter().all(Option::is_none) {
+        if !defines_token && fields.iter().all(Option::is_none) {
             return Err(format!(
                 "a release of `{}` keeps no field",
                 self.cx.name(value)
@@ -779,7 +999,7 @@ impl<'a> Checker<'a> {
         ))
     }
 
-    /// RC の命令は Perceus だけが入れる。
+    /// RC の命令は Perceus だけが、token の命令は Perceus の後の reuse のパスだけが入れる。
     fn rc_allowed(&self, var: VarId, what: &str) -> Result<(), String> {
         if self.level != Level::Ownership {
             return Err(format!("`{}` is {what} before Perceus", self.cx.name(var)));
@@ -892,7 +1112,12 @@ impl<'a> Checker<'a> {
                     ));
                 }
             }
-            Rhs::Con { ctor, args } => self.cx.check_con(var, *ctor, args)?,
+            Rhs::Con { ctor, args, reuse } => {
+                self.cx.check_con(var, *ctor, args)?;
+                if let Some(reuse) = reuse {
+                    self.check_reuse(owned, var, *ctor, args, reuse)?;
+                }
+            }
             Rhs::Drop(atom) => self.cx.fn_atom(*atom)?,
             // `unit` の値、`()`、`#N`、`&f`、参照は命令なしで `tobj` に収まるので、`box` しない。1つの値の書き方を1つに保つ
             // (docs/spec/lir.md の「値の表現」)

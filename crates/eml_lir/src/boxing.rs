@@ -578,7 +578,11 @@ impl Converter<'_> {
                         }
                         None
                     }
-                    Rhs::Con { ctor, args } => {
+                    Rhs::Con {
+                        ctor,
+                        args,
+                        reuse: _,
+                    } => {
                         let layout = ctor.layout.0 as usize;
                         let tag = ctor.tag as usize;
                         for (index, arg) in args.iter_mut().enumerate() {
@@ -644,7 +648,7 @@ impl Converter<'_> {
                 });
                 out.extend(after);
             }
-            Stmt::Dup(_) | Stmt::Decref(_) | Stmt::Release { .. } => {
+            Stmt::Dup(_) | Stmt::Decref(_) | Stmt::Release { .. } | Stmt::DropToken(_) => {
                 unreachable!("the boxing pass runs before Perceus")
             }
         }

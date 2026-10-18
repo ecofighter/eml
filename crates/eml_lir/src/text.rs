@@ -7,7 +7,7 @@
 use eml_extern::Extern;
 
 use crate::syntax::{self, FnState, Reader, error};
-use crate::{Block, Call, LirFn, ParseError, Program, Rhs, Stmt, Term, VarId};
+use crate::{Atom, Block, Call, LirFn, ParseError, Program, Reuse, Rhs, Stmt, Term, VarId};
 
 /// `pretty` の表示を `Program` に戻す。入口は `entry$main` という名前の関数で、なければ最初の関数である。
 pub fn parse(text: &str) -> Result<Program, ParseError> {
@@ -79,8 +79,14 @@ impl Parser<'_> {
                 "let" => {
                     let var = self.reader.binder(state)?;
                     self.reader.expect_word("=")?;
-                    let rhs = self.rhs(state)?;
-                    stmts.push(Stmt::Let { var, rhs });
+                    // token を定義する `release` は文で、右辺でない
+                    if self.reader.at_word("release") {
+                        self.reader.bump();
+                        stmts.push(self.release(state, line, Some(var))?);
+                    } else {
+                        let rhs = self.rhs(state)?;
+                        stmts.push(Stmt::Let { var, rhs });
+                    }
                 }
                 "unpack" => {
                     let value = self.reader.var(state)?;
@@ -94,26 +100,8 @@ impl Parser<'_> {
                 }
                 "dup" => stmts.push(Stmt::Dup(self.reader.var(state)?)),
                 "decref" => stmts.push(Stmt::Decref(self.reader.var(state)?)),
-                "release" => {
-                    let value = self.reader.var(state)?;
-                    let ctor = self.reader.ctor()?;
-                    let fields = self.reader.list('(', ')', |p| {
-                        if p.at_word("_") {
-                            p.bump();
-                            Ok(None)
-                        } else {
-                            p.var(state).map(Some)
-                        }
-                    })?;
-                    if fields.iter().all(Option::is_none) {
-                        return Err(error(line, "a release keeps no field; write `decref`"));
-                    }
-                    stmts.push(Stmt::Release {
-                        value,
-                        ctor,
-                        fields,
-                    });
-                }
+                "release" => stmts.push(self.release(state, line, None)?),
+                "drop_token" => stmts.push(Stmt::DropToken(self.reader.var(state)?)),
                 "return" => break Term::Return(self.reader.atom(state)?),
                 "tail" => break Term::TailCall(self.call(state)?),
                 "jump" => {
@@ -151,6 +139,66 @@ impl Parser<'_> {
         })
     }
 
+    /// `release` の後の値と、残す位置の並び。残す位置のない `release` は `decref` と同じなので、token を定義する形でだけ
+    /// 書ける (docs/spec/object-model.md の「reuse」)。
+    fn release(
+        &mut self,
+        state: &mut FnState,
+        line: usize,
+        token: Option<VarId>,
+    ) -> Result<Stmt, ParseError> {
+        let value = self.reader.var(state)?;
+        let ctor = self.reader.ctor()?;
+        let fields = self.reader.list('(', ')', |p| {
+            if p.at_word("_") {
+                p.bump();
+                Ok(None)
+            } else {
+                p.var(state).map(Some)
+            }
+        })?;
+        if token.is_none() && fields.iter().all(Option::is_none) {
+            return Err(error(line, "a release keeps no field; write `decref`"));
+        }
+        Ok(Stmt::Release {
+            value,
+            ctor,
+            fields,
+            token,
+        })
+    }
+
+    /// `con` の後のコンストラクタと引数と、省略できる `reuse r` (`in place`)。書かない引数の印 `=` は `reuse` の
+    /// 後でしか意味を持たない。
+    fn con(&mut self, state: &mut FnState) -> Result<Rhs, ParseError> {
+        let ctor = self.reader.ctor()?;
+        let line = self.reader.line();
+        let (args, skip): (Vec<Atom>, Vec<bool>) = self
+            .reader
+            .list('(', ')', |p| p.con_arg(state))?
+            .into_iter()
+            .unzip();
+        let reuse = if self.reader.at_word("reuse") {
+            self.reader.bump();
+            let token = self.reader.var(state)?;
+            let in_place = self.reader.at_word("in");
+            if in_place {
+                self.reader.bump();
+                self.reader.expect_word("place")?;
+            }
+            Some(Reuse {
+                token,
+                in_place,
+                skip,
+            })
+        } else if skip.contains(&true) {
+            return Err(error(line, "a skipped argument `=` needs `reuse`"));
+        } else {
+            None
+        };
+        Ok(Rhs::Con { ctor, args, reuse })
+    }
+
     fn rhs(&mut self, state: &mut FnState) -> Result<Rhs, ParseError> {
         let line = self.reader.line();
         let keyword = match self.reader.peek_word() {
@@ -183,13 +231,7 @@ impl Parser<'_> {
                 Rhs::Prim(prim, self.reader.list('(', ')', |p| p.atom(state))?)
             }
             "const" => Rhs::ConstString(self.reader.const_string()?),
-            "con" => {
-                let ctor = self.reader.ctor()?;
-                Rhs::Con {
-                    ctor,
-                    args: self.reader.list('(', ')', |p| p.atom(state))?,
-                }
-            }
+            "con" => self.con(state)?,
             "drop" => Rhs::Drop(self.reader.atom(state)?),
             // オペランドがスカラーか参照かは verifier が報告する。誤りを含む IR も読み戻して verifier に渡すためである
             "box" => Rhs::Box(self.reader.atom(state)?),

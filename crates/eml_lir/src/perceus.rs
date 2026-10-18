@@ -89,7 +89,10 @@ fn deaths(
     let mut deaths = Vec::with_capacity(block.stmts.len());
     for stmt in block.stmts.iter().rev() {
         debug_assert!(
-            !matches!(stmt, Stmt::Dup(_) | Stmt::Decref(_) | Stmt::Release { .. }),
+            !matches!(
+                stmt,
+                Stmt::Dup(_) | Stmt::Decref(_) | Stmt::Release { .. } | Stmt::DropToken(_)
+            ),
             "Perceus runs once on code without RC instructions"
         );
         let born = stmt
@@ -503,6 +506,7 @@ impl Fields<'_> {
                 value,
                 ctor,
                 fields: named,
+                token: None,
             });
         }
         owned.remove(&owner);

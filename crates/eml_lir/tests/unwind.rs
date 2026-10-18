@@ -28,6 +28,7 @@ fn point(block: u32, stmt: usize, owned: &[(u32, u32)], landing: Option<u32>) ->
             .iter()
             .map(|&(var, count)| (VarId(var), count))
             .collect(),
+        tokens: Vec::new(),
         landing: landing.map(VarId),
     }
 }
@@ -164,5 +165,30 @@ fn unverified_lir_has_no_points() {
     assert_eq!(
         error.to_string(),
         "`a.0` is still owned at the end of the function in `f`"
+    );
+}
+
+#[test]
+fn a_live_token_is_listed_apart_from_owned() {
+    // token は RC の対象でないので `owned` に入れず、巻き戻しで `drop_token` するものとして別に並べる
+    let text = "\
+layout P { P(obj, obj) }
+fn g(s.0: obj) -> obj {
+  return s.0
+}
+fn f(x.0: obj) -> obj {
+  unpack x.0 P #0(a.1: obj, b.2: obj)
+  let r.3: token = release x.0 P #0(a.1, b.2)
+  let z.4: obj = call g(a.1)
+  let d.5: obj = con P #0(z.4, b.2) reuse r.3
+  return d.5
+}
+";
+    assert_eq!(
+        points_of(text, "f"),
+        [UnwindPoint {
+            tokens: vec![VarId(3)],
+            ..point(0, 2, &[(2, 1)], None)
+        }]
     );
 }

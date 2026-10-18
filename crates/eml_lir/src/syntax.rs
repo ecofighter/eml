@@ -953,6 +953,18 @@ impl<'t> Reader<'t> {
         Ok(Atom::Var(self.var_named(state, &word, None, line)?))
     }
 
+    /// `con` の引数。`reuse` を持つ `con` が書かない引数は、`=name.N` と書く。
+    pub fn con_arg(&mut self, state: &mut FnState) -> Result<(Atom, bool), ParseError> {
+        if let Some(name) = self.peek_word().and_then(|word| word.strip_prefix('='))
+            && !name.is_empty()
+        {
+            let line = self.line();
+            self.pos += 1;
+            return Ok((Atom::Var(self.var_named(state, name, None, line)?), true));
+        }
+        Ok((self.atom(state)?, false))
+    }
+
     pub fn var(&mut self, state: &mut FnState) -> Result<VarId, ParseError> {
         let line = self.line();
         let word = self.word()?;
@@ -992,8 +1004,10 @@ impl<'t> Reader<'t> {
     pub fn repr(&mut self) -> Result<Repr, ParseError> {
         let line = self.line();
         let word = self.word()?;
+        // token は値の Repr でなく、LIR の reuse のパスだけが作るので、誤りの文の一覧には並べない
         REPRS
             .into_iter()
+            .chain([Repr::Token])
             .find(|repr| repr.name() == word)
             .ok_or_else(|| {
                 error(

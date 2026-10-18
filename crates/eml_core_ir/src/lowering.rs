@@ -106,7 +106,11 @@ fn rhs(rhs: Rhs) -> eml_lir::Rhs {
         Rhs::MakeClosure(function, args) => eml_lir::Rhs::MakeClosure(function, args),
         Rhs::Extern { ext, args, at } => eml_lir::Rhs::Extern { ext, args, at },
         Rhs::ConstString(index) => eml_lir::Rhs::ConstString(index),
-        Rhs::Con { ctor, args } => eml_lir::Rhs::Con { ctor, args },
+        Rhs::Con { ctor, args } => eml_lir::Rhs::Con {
+            ctor,
+            args,
+            reuse: None,
+        },
         Rhs::Drop(atom) => eml_lir::Rhs::Drop(atom),
         Rhs::Prim(prim, args) => eml_lir::Rhs::Prim(prim, args),
     }

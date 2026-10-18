@@ -7,7 +7,7 @@ use eml_extern::Purity;
 
 use crate::{BlockId, Prim, Program, Rhs, Stmt, VarId, VerifyError, verify};
 
-/// 巻き戻しの地点。中断がこの命令の中を通ると、フレームは `owned` の参照を手放すか、`landing` に着地する。
+/// 巻き戻しの地点。中断がこの命令の中を通ると、フレームは `owned` の参照と `tokens` を手放すか、`landing` に着地する。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct UnwindPoint {
     pub block: BlockId,
@@ -16,6 +16,9 @@ pub struct UnwindPoint {
     /// 命令の直後に所有している RC の対象の変数と、その参照の数。命令が束縛する変数は、命令が戻らなければまだない
     /// ので含めない。`VarId` の昇順で、数は 1 以上である。
     pub owned: Vec<(VarId, u32)>,
+    /// 命令の直後に生きている token の変数。`VarId` の昇順である。token は RC の対象でないので `owned` に入れず、
+    /// 巻き戻しでは `drop_token` で手放す (docs/spec/object-model.md の「reuse」)。
+    pub tokens: Vec<VarId>,
     /// `apply` の着地の印の変数。
     pub landing: Option<VarId>,
 }

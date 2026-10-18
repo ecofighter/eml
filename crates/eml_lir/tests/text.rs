@@ -2,7 +2,7 @@
 //! `pretty` で表示すると元のテキストに戻ることと、構文の誤りの報告を確かめる。
 
 use eml_lir::{Atom, CasePattern, Ctor, FnIdx, LayoutId, MaskItem, OpRet, Prim, VarId};
-use eml_lir::{BlockId, Loc, Mark, ParseError, Repr, verify};
+use eml_lir::{BlockId, Loc, Mark, ParseError, Repr, Reuse, verify};
 use eml_lir::{Call, Program, Rhs, Stmt, Term, parse, pretty, pretty_with_positions};
 
 /// 読んで表示し直すと元に戻ることを確かめ、読んだプログラムを返す。
@@ -127,6 +127,7 @@ fn f(x.0: obj) -> obj {
                     tag: 0,
                 },
                 args: vec![v(0), Atom::Int(2)],
+                reuse: None,
             },
         }]
     );
@@ -204,6 +205,7 @@ fn f(p.0: obj) -> obj {
                 tag: 0,
             },
             fields: vec![Some(VarId(1)), None],
+            token: None,
         }
     );
     // `dup` や `decref` と同じく、変数を定義せず、値の使いにも数えない
@@ -547,6 +549,7 @@ fn f(x.0: int) -> obj {
                     tag: 2,
                 },
                 args: vec![v(0), Atom::Tag(1), Atom::Unit, Atom::Fn(FnIdx(0))],
+                reuse: None,
             },
         }
     );
@@ -1154,6 +1157,7 @@ fn a_layout_number_in_the_table_reads_as_that_layout() {
                     tag: 1,
                 },
                 args: vec![v(0)],
+                reuse: None,
             },
         }
     );
@@ -1578,4 +1582,106 @@ fn prompt_marker_round_trips() {
     let mut atoms = Vec::new();
     call.for_each_atom(|atom| atoms.push(atom));
     assert_eq!(atoms, vec![v(1), Atom::Unit]);
+}
+
+#[test]
+fn token_instructions_round_trip() {
+    let program = round_trip(
+        "\
+layout Tree { Leaf, Node(int, tobj, obj, tobj, tobj) }
+layout P { P(obj, obj) }
+fn f(x.0: tobj, y.1: obj) -> tobj {
+  switch x.0 Tree { #0 -> b1, #1(c.2: int, l.3: tobj, k.4: obj, v.5: tobj, r.6: tobj) -> b2 }
+b1:
+  decref y.1
+  return x.0
+b2:
+  let t.7: token = release x.0 Tree #1(_, l.3, k.4, _, r.6)
+  unpack y.1 P #0(a.8: obj, b.9: obj)
+  let u.10: token = release y.1 P #0(_, _)
+  let d.11: tobj = con Tree #1(5, l.3, k.4, r.6, r.6) reuse t.7
+  let e.12: tobj = con Tree #1(=c.2, d.11, =k.4, d.11, =r.6) reuse t.7 in place
+  drop_token u.10
+  return e.12
+}
+",
+    );
+    let stmts = &program.functions[0].blocks[2].stmts;
+    assert_eq!(
+        stmts[0],
+        Stmt::Release {
+            value: VarId(0),
+            ctor: Ctor {
+                layout: LayoutId(0),
+                tag: 1,
+            },
+            fields: vec![None, Some(VarId(3)), Some(VarId(4)), None, Some(VarId(6))],
+            token: Some(VarId(7)),
+        }
+    );
+    // token を定義する `release` は、token を定義する
+    assert_eq!(stmts[0].defs(), [VarId(7)]);
+    assert_eq!(program.functions[0].repr(VarId(7)), Repr::Token);
+    assert_eq!(program.functions[0].mark(VarId(7)), Mark::Unr);
+    let Stmt::Let {
+        rhs: Rhs::Con { reuse, .. },
+        ..
+    } = &stmts[3]
+    else {
+        panic!("expected a con");
+    };
+    assert_eq!(
+        *reuse,
+        Some(Reuse {
+            token: VarId(7),
+            in_place: false,
+            skip: vec![false; 5],
+        })
+    );
+    let Stmt::Let {
+        rhs: Rhs::Con { reuse, .. },
+        ..
+    } = &stmts[4]
+    else {
+        panic!("expected a con");
+    };
+    assert_eq!(
+        *reuse,
+        Some(Reuse {
+            token: VarId(7),
+            in_place: true,
+            skip: vec![true, false, true, false, true],
+        })
+    );
+    assert_eq!(stmts[5], Stmt::DropToken(VarId(10)));
+    assert!(stmts[5].defs().is_empty());
+}
+
+#[test]
+fn a_release_without_kept_fields_needs_a_token() {
+    let error =
+        parse_error("fn f(p.0: obj) -> unit {\n  release p.0 #0 #0(_, _)\n  return ()\n}\n");
+    assert_eq!(error.message, "a release keeps no field; write `decref`");
+    let program = round_trip(
+        "\
+layout P { P(obj, obj) }
+fn f(p.0: obj) -> unit {
+  let r.1: token = release p.0 P #0(_, _)
+  drop_token r.1
+  return ()
+}
+",
+    );
+    assert_eq!(
+        program.functions[0].blocks[0].stmts[0],
+        Stmt::Release {
+            value: VarId(0),
+            ctor: Ctor {
+                layout: LayoutId(0),
+                tag: 0,
+            },
+            fields: vec![None, None],
+            token: Some(VarId(1)),
+        }
+    );
 }

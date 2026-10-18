@@ -192,6 +192,7 @@ fn dummy(ret: Repr, bind: impl FnOnce(VarInfo, Rhs) -> VarId) -> Atom {
         Repr::Int => Atom::Int(0),
         Repr::Enum => Atom::Tag(0),
         Repr::Unit => Atom::Unit,
+        Repr::Token => unreachable!("only the LIR reuse pass makes tokens"),
     }
 }
 

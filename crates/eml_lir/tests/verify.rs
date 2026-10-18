@@ -3054,3 +3054,215 @@ b1(p.3: obj):
 ";
     assert_eq!(check_scopes(text), Ok(()));
 }
+
+const P2: &str = "layout P { P(obj, obj) }\n";
+
+/// `x` を分解して token `r` にし、`c` で分かれた行き先の b1 と b2 で、それぞれ `left` と `right` が使う
+/// (docs/spec/lir.md の「verifier」)。
+fn token_paths(left: &str, right: &str) -> String {
+    format!(
+        "{BOOL}{P2}fn f(x.0: obj, c.1: enum) -> obj {{
+  unpack x.0 P #0(a.2: obj, b.3: obj)
+  let r.4: token = release x.0 P #0(a.2, b.3)
+  switch c.1 Prelude.Bool {{ #0 -> b1, #1 -> b2 }}
+b1:
+{left}b2:
+{right}}}
+"
+    )
+}
+
+const REBUILT: &str = "  let d.5: obj = con P #0(=a.2, b.3) reuse r.4 in place\n  return d.5\n";
+const DROPPED: &str = "  drop_token r.4\n  let d.6: obj = con P #0(a.2, b.3)\n  return d.6\n";
+
+#[test]
+fn a_token_used_on_every_path_verifies() {
+    assert_eq!(check(&token_paths(REBUILT, DROPPED)), Ok(()));
+}
+
+#[test]
+fn token_instructions_are_rejected_before_perceus() {
+    let text = token_paths(REBUILT, DROPPED);
+    assert_eq!(
+        check_scopes(&text),
+        Err("`x.0` is released with its fields before Perceus in `f`".to_string())
+    );
+    assert_eq!(
+        check_lowered(&text),
+        Err("`x.0` is released with its fields before Perceus in `f`".to_string())
+    );
+}
+
+#[test]
+fn a_token_used_twice_is_rejected() {
+    let left = "  let d.5: obj = con P #0(a.2, b.3) reuse r.4\n  drop_token r.4\n  return d.5\n";
+    assert_eq!(
+        check(&token_paths(left, DROPPED)),
+        Err("the token `r.4` is used twice in `f`".to_string())
+    );
+}
+
+#[test]
+fn a_token_unused_on_a_path_is_rejected() {
+    let right = "  let d.6: obj = con P #0(a.2, b.3)\n  return d.6\n";
+    assert_eq!(
+        check(&token_paths(REBUILT, right)),
+        Err("the token `r.4` is still live at a return in `f`".to_string())
+    );
+}
+
+#[test]
+fn a_token_passed_to_a_call_is_rejected() {
+    let right = "  let z.6: obj = call g(r.4)\n  drop_token r.4\n  decref z.6\n  let d.7: obj = con P #0(a.2, b.3)\n  return d.7\n";
+    let text = format!("{}{IDENTITY}", token_paths(REBUILT, right));
+    assert_eq!(
+        check(&text),
+        Err("the token `r.4` is used as a value in `f`".to_string())
+    );
+}
+
+#[test]
+fn a_token_passed_to_a_jump_is_rejected() {
+    let text = format!(
+        "{P2}fn f(x.0: obj) -> obj {{
+  unpack x.0 P #0(a.1: obj, b.2: obj)
+  let r.3: token = release x.0 P #0(a.1, b.2)
+  jump b1(r.3)
+b1(t.4: obj):
+  let d.5: obj = con P #0(a.1, b.2)
+  return d.5
+}}
+"
+    );
+    assert_eq!(
+        check(&text),
+        Err("the token `r.3` is used as a value in `f`".to_string())
+    );
+}
+
+#[test]
+fn a_token_live_at_a_jump_is_rejected() {
+    let text = format!(
+        "{P2}fn f(x.0: obj) -> obj {{
+  unpack x.0 P #0(a.1: obj, b.2: obj)
+  let r.3: token = release x.0 P #0(a.1, b.2)
+  jump b1()
+b1:
+  let d.4: obj = con P #0(a.1, b.2) reuse r.3
+  return d.4
+}}
+"
+    );
+    assert_eq!(
+        check(&text),
+        Err("the token `r.3` is still live at a jump to b1 in `f`".to_string())
+    );
+}
+
+#[test]
+fn a_returned_token_is_rejected() {
+    let right = "  decref a.2\n  decref b.3\n  return r.4\n";
+    assert_eq!(
+        check(&token_paths(REBUILT, right)),
+        Err("the token `r.4` is used as a value in `f`".to_string())
+    );
+}
+
+#[test]
+fn a_captured_token_is_rejected() {
+    let right = "  let k.6: tobj = closure h(r.4)\n  drop_token r.4\n  decref k.6\n  let d.7: obj = con P #0(a.2, b.3)\n  return d.7\n";
+    let h = "fn h(s.0: obj, t.1: obj) -> obj {\n  decref t.1\n  return s.0\n}\n";
+    let text = format!("{}{h}", token_paths(REBUILT, right));
+    assert_eq!(
+        check(&text),
+        Err("the token `r.4` is used as a value in `f`".to_string())
+    );
+}
+
+/// `x` を token にし、`g` の呼び出しをまたいで `con` が使う。`yields` は呼ぶ側と呼ばれる側の両方の印である。
+fn token_across_call(yields: &str) -> String {
+    format!(
+        "{P2}{yields}fn g(s.0: obj) -> obj {{
+  return s.0
+}}
+{yields}fn f(x.0: obj) -> obj {{
+  unpack x.0 P #0(a.1: obj, b.2: obj)
+  let r.3: token = release x.0 P #0(a.1, b.2)
+  let z.4: obj = call g(a.1)
+  let d.5: obj = con P #0(z.4, b.2) reuse r.3
+  return d.5
+}}
+"
+    )
+}
+
+#[test]
+fn a_token_live_across_a_yielding_call_is_rejected() {
+    assert_eq!(
+        check(&token_across_call("yields ")),
+        Err("the token `r.3` is live after `g`, which may yield in `f`".to_string())
+    );
+}
+
+#[test]
+fn a_token_may_cross_a_non_yielding_call() {
+    assert_eq!(check(&token_across_call("")), Ok(()));
+}
+
+#[test]
+fn a_con_of_another_size_is_rejected() {
+    let left = "  let d.5: obj = con Q #0(a.2, b.3, 1) reuse r.4\n  return d.5\n";
+    let text = format!(
+        "layout Q {{ Q(obj, obj, int) }}\n{}",
+        token_paths(left, DROPPED)
+    );
+    assert_eq!(
+        check(&text),
+        Err("a con of `Q` #0 has 3 words, but the token `r.4` holds 2 words in `f`".to_string())
+    );
+}
+
+#[test]
+fn in_place_needs_the_same_constructor() {
+    let left = "  let d.5: obj = con Q #0(a.2, b.3) reuse r.4 in place\n  return d.5\n";
+    let text = format!("layout Q {{ Q(obj, obj) }}\n{}", token_paths(left, DROPPED));
+    assert_eq!(
+        check(&text),
+        Err(
+            "a con of `Q` #0 rebuilds the token `r.4` in place, but the token comes from `P` #0 in `f`"
+                .to_string()
+        )
+    );
+}
+
+#[test]
+fn in_place_needs_the_lin_condition() {
+    let text = format!(
+        "{P2}fn f(x.0: obj lin) -> obj {{
+  unpack x.0 P #0(a.1: obj, b.2: obj)
+  let r.3: token = release x.0 P #0(a.1, b.2)
+  let d.4: obj poly = con P #0(b.2, a.1) reuse r.3 in place
+  return d.4
+}}
+"
+    );
+    assert_eq!(
+        check(&text),
+        Err(
+            "a con of `P` #0 rebuilds the token `r.3` in place, but `x.0` is lin and `d.4` is poly in `f`"
+                .to_string()
+        )
+    );
+}
+
+#[test]
+fn a_skip_at_another_position_is_rejected() {
+    let left = "  let d.5: obj = con P #0(=b.3, a.2) reuse r.4 in place\n  return d.5\n";
+    assert_eq!(
+        check(&token_paths(left, DROPPED)),
+        Err(
+            "argument 0 of a con of `P` #0 is skipped, but `b.3` is not at the same position in the box of the token `r.4` in `f`"
+                .to_string()
+        )
+    );
+}

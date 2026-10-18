@@ -4,7 +4,7 @@
 
 use std::collections::BTreeSet;
 
-use crate::{Atom, BlockId, LirFn, Stmt, Term, VarId};
+use crate::{Atom, BlockId, LirFn, Rhs, Stmt, Term, VarId};
 
 /// ブロックごとの入口の生存集合。`BlockId` の番号で引き、各集合は昇順に並ぶ。入口は、ブロックの引数と case の
 /// フィールドを束縛した後の位置なので、使う引数とフィールドも集合に入る。RC の対象に限らず、すべての変数を持つ。
@@ -56,25 +56,35 @@ pub fn live_after_term(function: &LirFn, term: &Term, live_in: &[Vec<VarId>]) ->
 }
 
 /// 文の前で生きている変数に更新する。`dup`、`decref`、`release` も変数を使うものとして数え、Perceus の後の IR にも
-/// 使えるようにする。VM のスロットの割り当てが、文の単位の干渉を作るのに使う (docs/spec/vm.md の「スロットの割り当て」)。
+/// 使えるようにする。token も、`con` の受け取りと `drop_token` を使いとして数える。VM のスロットの割り当てが、文の
+/// 単位の干渉を作るのに使い、token にもスロットを与える (docs/spec/vm.md の「スロットの割り当て」)。
 pub fn step_back(stmt: &Stmt, live: &mut BTreeSet<VarId>) {
     for var in stmt.defs() {
         live.remove(var);
     }
     match stmt {
-        Stmt::Dup(var) | Stmt::Decref(var) => {
+        Stmt::Dup(var) | Stmt::Decref(var) | Stmt::DropToken(var) => {
             live.insert(*var);
         }
         Stmt::Release {
             value,
             ctor: _,
             fields,
+            token: _,
         } => {
             live.insert(*value);
             live.extend(fields.iter().flatten().copied());
         }
-        Stmt::Let { var: _, rhs: _ }
-        | Stmt::Unpack {
+        Stmt::Let { var: _, rhs } => {
+            if let Rhs::Con {
+                reuse: Some(reuse), ..
+            } = rhs
+            {
+                live.insert(reuse.token);
+            }
+            stmt.for_each_atom(|atom| insert_var(live, atom));
+        }
+        Stmt::Unpack {
             value: _,
             ctor: _,
             fields: _,

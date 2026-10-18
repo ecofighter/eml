@@ -36,6 +36,9 @@ pub enum Repr {
     /// 引数のないコンストラクタだけの data のタグ。
     Enum,
     Unit,
+    /// reuse の token。解放した箱を指すか、空を表す1語で、RC の対象ではない。LIR の reuse のパスだけが作り、extern の
+    /// 行、配置、操作の表、Core IR には現れない (docs/spec/object-model.md の「reuse」)。
+    Token,
 }
 
 impl Repr {
@@ -47,7 +50,7 @@ impl Repr {
     pub fn is_rc(self) -> bool {
         match self {
             Repr::Obj | Repr::TObj => true,
-            Repr::Int | Repr::Enum | Repr::Unit => false,
+            Repr::Int | Repr::Enum | Repr::Unit | Repr::Token => false,
         }
     }
 
@@ -74,6 +77,7 @@ impl Repr {
             Repr::Int => "int",
             Repr::Enum => "enum",
             Repr::Unit => "unit",
+            Repr::Token => "token",
         }
     }
 }
