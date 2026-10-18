@@ -26,6 +26,7 @@ pub use perceus::perceus;
 pub use pipeline::{Pass, passes_until};
 pub use pretty::{pretty, pretty_with_positions};
 pub use prim::{Immediates, Prim, PrimRow};
+pub use reuse::reuse;
 pub use text::parse;
 pub use verify::{verify, verify_lowered, verify_scopes};
 
@@ -506,7 +507,7 @@ impl Layout {
 }
 
 /// コンストラクタのフィールドの物理的な形 (docs/spec/object-model.md の「ペイロード」)。走査する語 (`obj` と `tobj`)
-/// を宣言の順に並べ、その後に残りを宣言の順に並べる。VM と後の reuse analysis が同じ規則を使うように、規則はここに
+/// を宣言の順に並べ、その後に残りを宣言の順に並べる。VM と reuse のパスが同じ規則を使うように、規則はここに
 /// 1つだけ置く。走査する語が 255 個以上のときにペイロードの先頭に置く数の語は `eml_rt` の形なので、ここでは数えない。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Shape {

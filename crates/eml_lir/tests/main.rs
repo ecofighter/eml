@@ -6,6 +6,7 @@ mod common;
 mod boxing;
 mod contract;
 mod perceus;
+mod reuse;
 mod shape;
 mod text;
 mod unwind;

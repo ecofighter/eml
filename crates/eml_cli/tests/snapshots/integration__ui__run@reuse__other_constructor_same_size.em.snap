@@ -1,0 +1,9 @@
+---
+source: crates/eml_cli/tests/ui.rs
+expression: "format!(\"--- stdout ---\\n{stdout}--- stderr ---\\n{diagnostics}{stderr}{written}{exit}\")"
+input_file: tests/ui/run/reuse/other_constructor_same_size.em
+---
+--- stdout ---
+[(1, 2), (2, 3), (3, 4)]
+[3, 5, 7]
+--- stderr ---

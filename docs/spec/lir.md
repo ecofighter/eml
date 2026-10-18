@@ -17,11 +17,12 @@ EP の後の Core IR から写す LIR と、その実行の意味を定める。
 | 終端 | `return a`、`tail <呼び出し>`、`jump bN(a1, .., an)`、`switch a L { #0 -> bN, #1(y1, .., yn) -> bN, _ -> bN }`、`switch a { 1 -> bN, _ -> bN }` |
 | RC (RC の対象の変数のみ) | `dup x`、`decref x`、`release x L #t(p1, .., pn)` |
 | 手放す | `drop x` (参照を1つ手放す) |
+| reuse (token) | `let r: token = release x L #t(p1, .., pn)`、`con L #t(a1, .., an) reuse r`、`drop_token r` (下の「reuse」) |
 | evidence passing の出力 | `prim` (基本操作)、`clause` (節の呼び出し) |
 
 - LIR は、EP の後の Core IR を写したものである ([Core IR](core-ir.md) の「Core IR から LIR への変換」)。Core IR との違いは次の2つである
   - エフェクトの命令 (`perform`、`handle`、`resume`) と、呼び出しの `mask` を持たない。LIR の型にないので、EP の後に残っていないことを verifier でなく型で保証する
-  - RC の命令 (`dup`、`decref`、`release`)、`box` と `unbox`、末尾呼び出し `tail` を持つ。どれも LIR のパス (box の挿入、縮約、Perceus) だけが入れる。変換の直後の LIR はこれらを持たず、`passes_until` の入口の verifier がそれを確かめる (下の「パスの順番」)
+  - RC の命令 (`dup`、`decref`、`release`)、`box` と `unbox`、末尾呼び出し `tail` を持つ。どれも LIR のパス (box の挿入、縮約、Perceus) だけが入れる。token の命令は reuse のパスだけが入れる (下の「reuse」)。変換の直後の LIR はこれらを持たず、`passes_until` の入口の verifier がそれを確かめる (下の「パスの順番」)
 - 関数は、名前、内部の関数かどうかの印 (`internal`)、yield しうるかの印 (`yields`)、入口の関数の印 (`clause`)、変数の表、`ret` と `ret_mark`、ブロックの列を持つ。印は Core IR と同じ意味である ([Core IR](core-ir.md) の「`yields` の印」、下の「一様な関数」と「入口の関数の印」)。box の挿入が `internal` と `clause` を読み、`f$boxed` が `yields` を写す。VM は `yields` を読まない ([VM](vm.md) の「呼び出しと戻り」)
 - プログラムは、関数、入口、文字列の表、配置の表、エフェクトの表、ファイルの表を持つ。Core IR のプログラムと同じ欄である。エフェクトの表は、`clause` の ABI (操作の Repr) と、基本操作の即値のために持つ
 - 2つの IR は別の型を持つ。型を読むだけでどちらの IR か分かり、LIR にエフェクトの命令がないことと、Core IR に RC と box がないことを、verifier でなく型で保証できるためである。重なる部品 (共有する型、テキスト形式の字句解析と共通の命令の読み書き、verifier の支配木と R7 と R8 の検査、基本操作と `clause` の検査) は `eml_lir` に置き、`eml_core_ir` が借りる
@@ -87,7 +88,7 @@ R1 と R2 から、ブロックの番号の順は辺の向きに沿った順 (�
 ### 値の表現
 
 - 変数は値の表現 (Repr) を持つ。Repr は Core IR で型から決まり ([Core IR](core-ir.md) の「型の Repr」)、LIR にそのまま写る。Kind は Repr とは別に、印として持つ (下の「Kind の印」)
-- Repr は `int`、`enum`、`unit`、`obj`、`tobj` の5つである。`obj` はつねにヒープの物体を指す。`tobj` は、即値 (タグか関数の値) かヒープの物体を指す。RC の対象は `obj` と `tobj` の変数で、Perceus はこの変数にだけ RC の命令を付ける
+- Repr は `int`、`enum`、`unit`、`obj`、`tobj` の5つである。`obj` はつねにヒープの物体を指す。`tobj` は、即値 (タグか関数の値) かヒープの物体を指す。RC の対象は `obj` と `tobj` の変数で、Perceus はこの変数にだけ RC の命令を付ける。reuse のパスが足す token の Repr `token` は、値ではない (下の「reuse」)
 - 局所の変数はスカラーのまま持ち、呼ぶ側か呼ばれる側が具体的な型を知らない位置 (一様な位置) だけを参照にする。一様な位置の Repr は `tobj` である。Lean の IR と同じ方式である。`int`、`enum`、`unit` の変数は、VM ではタグのないスロットに、ネイティブではレジスタに置ける。値を受ける位置の Repr は下の「位置の規則」が決め、変数の Repr と互換でなければ、box の挿入 (下の「box の挿入」) が変換を入れる
 - `tobj` の位置との間で `box` と `unbox` を要するスカラーの Repr を、箱を要するスカラーと呼ぶ。今は `int` と `enum` で、後の `Float` の Repr もここに入る。規則と verifier の文言は、この集合の1つの定義 (`Repr::BOXED_SCALARS`) から作る。`Float` を足すときに、規則を1つずつ探して直さずに済むためである。命令なしで `tobj` と行き来するスカラーは `unit` だけである。`obj` と `tobj` の間は、命令なしで渡せる
 - 2つの Repr a と b は、次のどれかのとき互換 (`Repr::compatible`) である
@@ -378,20 +379,22 @@ handle の実行と、継続の再開のたびに、新しい evidence を作る
 
 ### パスの順番
 
-- LIR のパスは、box の挿入、縮約、Perceus の順である。`eml_lir::Pass` は `Boxing`、`Contract`、`Perceus` の3つで、`passes_until(&mut Program, Pass)` は、変換の直後の LIR に、box の挿入から指定したパスまでを順にかける。LIR のパスの順番を知るのはこの関数だけである。Core IR のパスと、2つの層をつなぐ順番は [Core IR](core-ir.md) の「パス」にある
+- LIR のパスは、box の挿入、縮約、Perceus、reuse の順である。`eml_lir::Pass` は `Boxing`、`Contract`、`Perceus`、`Reuse` の4つで、`passes_until(&mut Program, Pass)` は、変換の直後の LIR に、box の挿入から指定したパスまでを順にかける。LIR のパスの順番を知るのはこの関数だけである。Core IR のパスと、2つの層をつなぐ順番は [Core IR](core-ir.md) の「パス」にある
 - verifier はデバッグビルドだけでかけ、誤りはパスの名前を付けて報告する
   - `passes_until` は、最初に入力に入口の段 (`verify_lowered`) をかけ、誤りを `internal error: invalid LIR before boxing: {error}` と報告する。box の挿入の入力の約束であり、手で書いた LIR を `passes_until` に渡すテストもこの検査を通る
-  - box の挿入と縮約の後は範囲の段 (`verify_scopes`) を、Perceus の後は所有の段 (`verify`) をかけ、誤りを `internal error: invalid LIR after {pass}: {error}` と報告する
-- 3つのパスは、テストが直接呼べるように、それぞれ公開する (`boxing`、`contract`、`perceus`)
+  - box の挿入と縮約の後は範囲の段 (`verify_scopes`) を、Perceus と reuse の後は所有の段 (`verify`) をかけ、誤りを `internal error: invalid LIR after {pass}: {error}` と報告する
+- 4つのパスは、テストが直接呼べるように、それぞれ公開する (`boxing`、`contract`、`perceus`、`reuse`)
+- `eml_core_ir::lower` は reuse まで、`lower_until` は指定したパスまでかける
 
 | パス | 受け取る IR | 渡す IR |
 |---|---|---|
 | box の挿入 (`boxing`) | 末尾呼び出し、`box` と `unbox`、RC の命令のない LIR | 位置の規則を満たす LIR。一様にした関数と `f$boxed` を含む |
 | 縮約 (`contract`) | RC の命令のない LIR | 使われない純粋な `let` を消し、末尾呼び出しを作った LIR |
 | Perceus | RC の命令のない LIR | `dup` / `decref` / `release` が入った LIR |
+| reuse (`reuse`) | Perceus の後の、token の命令のない LIR | 手放す箱を token にし、同じ語の数の `con` がそれを使う LIR |
 
 - どのパスの後でも、ブロックの列は上の「構造の規則」を満たす。パスの間で古くなる索引やキャッシュは IR に持たせない
-- reuse analysis と借用パラメータの最適化は後で追加する ([ロードマップ](../future/roadmap.md))。再帰の深さの決まりは、[Core IR](core-ir.md) の「パス」にある
+- 借用パラメータの最適化は後で追加する ([ロードマップ](../future/roadmap.md))。再帰の深さの決まりは、[Core IR](core-ir.md) の「パス」にある
 
 ### box の挿入
 
@@ -518,12 +521,51 @@ Perceus は、`switch` と `unpack` のフィールドを借りたまま使い�
 - 「持ち主を解く」は o に属する変数とその親の道をたどるので、時間は o に属する変数の数と分解の入れ子の深さの積で抑えられる
 - 長い借用の `switch` の連なり、多くの生きている引数、1つの持ち主の多くの読み、1つずつ解く多くの持ち主で、時間が線形であることを `crates/eml_lir/tests/perceus.rs` のテストで確かめる
 
+### reuse
+
+reuse のパスは、Perceus が手放す箱を token にし、同じ物理的な語の数の `con` がその箱を使うようにする。箱が一意なら、解放と確保をしないで済む。どの `con` がどの token を使うか、ヘッダを書くか、どの引数を書かないか、使わない道のどこで token を手放すかは、すべて LIR に書く。VM とネイティブのコード生成は、書かれたとおりに `eml_rt` の部品を並べるだけである ([オブジェクトモデル](object-model.md) の「reuse」、[VM](vm.md) の「reuse」)。
+
+#### token と命令
+
+- token は、Repr が `token` で印が `unr` の変数である。RC の対象ではなく、`dup`、`decref`、`release` の相手にならない。extern の行、配置、操作の表には現れない。ネイティブのコード生成では、箱を指すか空を表す1語になる
+- `let r: token = release x L #t(p1, .., pn)` は、`release` と同じく x を手放し、token `r` を定義する。x が一意なら、`_` の位置のフィールドを `decref` して、x の箱を token にする。そうでなければ `release` と同じに振る舞い、空の token を定義する。名前を1つも書かない `release x L #t(_, .., _)` は、token を定義する形でだけ書ける
+- `let d = con L #k(a1, .., an) reuse r` は、token `r` を受け取る `con` である。token が空なら、普通の `con` と同じく確保する。空でなければ、その箱にヘッダを書き直して作る。`reuse r in place` と書いた `con` は、ヘッダを書かない。引数の前の `=` (`con L #k(=a1, a2) reuse r`) は、その引数を書かない印である。token が空のときは、書かない印の引数も書く
+- `drop_token r` は、使わなかった token を手放す文である
+- テキストの形は `eml_lir::parse` と `pretty` の両方で扱う
+
+#### token の流れ
+
+- token は、定義した文から後ろへ、同じブロックの中と、`switch` の行き先へ流れる。R3 から、行き先に入る辺は `switch` の辺1本である
+- token は合流するブロックへ流れない。`jump`、`return`、`tail` の前で、まだ使っていない token は消える。合流で token を受けるには、道によって空の token を作る定数とブロックの引数の検査が要るためである
+- yield しうる呼び出しの前でも、token は消える。継続を2回再開すると、yield の後の `con` が同じ箱を2回使うためである。yield しうる呼び出しは `eml_lir::reuse::may_yield` が決める。`yields` の関数の中の、`yields` の関数の直接の呼び出し、`yields` の `apply`、再開できる操作の `clause` で、EP の yield の地点に合わせている ([Core IR](core-ir.md) の「yield の地点」)。yield しない呼び出し、`Effectful` の extern、`never` の操作の `clause` はまたいでよい
+- token は値ではない。呼び出し、`apply`、`clause`、extern、`prim` の引数、`closure` の捕獲、`con` の引数、`jump` の実引数、`return` の値、`switch` の scrutinee にならない
+- 呼び出しをまたいで生きている token は、その呼び出しを通る中断の巻き戻しで手放す。`eml_lir::unwind::UnwindPoint` の `tokens` が、地点の直後に生きている token を並べる ([VM](vm.md) の「巻き戻し」)
+
+#### reuse の元
+
+- 元は、Perceus の `release x L #t(..)` と、構築子がその道で分かっている x の `decref x` である。レコードの更新では、フィールドがみな借りたまま読まれるので、Perceus は `release` でなく `decref` を出す。`decref x` は、`release x L #t(_, .., _)` に書き換えてから token を定義する
+- 構築子が分かるのは、x を scrutinee とするタグの `switch` の case の行き先と、`unpack x` の後である。合流するブロックへは、入るすべての道で分かっている構築子だけを渡す
+- x の Repr は `obj` か `tobj` で、構築子はフィールドを持つ。フィールドのない構築子の値は、箱でなく即値である
+- 組にする語の数は、構築子の `Shape::reuse_words` (走査する語と生の語の数の和) である ([オブジェクトモデル](object-model.md) の「ペイロード」)。走査する語が 255 個以上の構築子は、`eml_rt` だけが知る数の語を持つので、元にも `con` の相手にもならない
+- translate と EP が出す `drop x` は元にしない。出る所が少なく、束縛が `()` の右辺を token の定義に変える手間に見合わないためである
+
+#### 組の選び方
+
+- 関数ごとに、ブロックを番号の順に1回たどる。道ごとに、構築子が分かっている変数と、使える token の並びを持つ。元の文で token を足し、`con` で同じ語の数の token を1つ取る。`switch` の行き先は、`switch` のブロックをたどり終えた状態を引き継ぐ。合流するブロックは token なしで始まる
+- 1つの `con` に使える token が複数あるときは、書かない引数が最も多い token を選ぶ。同じ数なら、その場で作り直せる token を先に選ぶ。それでも決まらなければ、最も後に定義した token を選ぶ。`con` は文の順に1つずつ決める。`bench/upsert.em` の `split` を融合した形では、3つの `release` の後に3つの `con` が続く。この規則なら、書かない引数は順に 4 個、5 個 (すべて)、2 個になる。最も後に定義した token を先に選ぶ規則では、最初の `con` に書かない引数がなくなる
+- その場で作り直す (`in place`) のは、token の元と `con` が同じ配置の同じタグで、元の変数の印が `unr` か、`con` の束縛の印が `lin` のときである ([オブジェクトモデル](object-model.md) の「`lin` ビット」)。そうでなければヘッダを書き直す
+- 引数を書かないのは、引数が token の元の値を `switch` か `unpack` で分解して束縛した変数で、元の構築子と `con` の構築子で、語の種類 (走査する語か生の語か) と物理的な位置が同じときである。箱は中身を消さないので、その位置には同じ語が残っている。配置が違う `con` でも、この条件を満たす引数は書かない
+- どの道でも使わなかった token の元は、元の文 (`release` か `decref`) のまま残す。`into_token` と `drop_token` の2回の操作が、箱を解放する1回より安いことはないためである
+- 一部の道でだけ使う token は、使わないと決まる最も早い位置で手放す。token は `switch` の辺でしか流れず、`jump`、`return`、`tail`、yield しうる呼び出しの前で消えるので、その位置は `switch` の行き先の入口である。行き先 t から `switch` の辺だけでたどれるブロックのどこでも token を使わないとき、t の入口の先頭に `drop_token` を置く。t より上の行き先の入口で手放した token は、t では手放さない
+- 新しい token の変数は、名前を `r` にして変数の表の後ろに足す
+- パスが読むのは、その関数の LIR、呼ぶ関数の `yields` の印、配置の表、操作の表だけである。関数のコードはその関数の名前で決まる ([VM](vm.md) の「追記」)
+
 ### verifier
 
 - LIR の verifier は3つの段を持つ。段はパスの順に直線に並ぶので、境界の検査だけを切り替える別の旗は持たない
   - 入口の段 (`verify_lowered`) は、`passes_until` が入力にかける (上の「パスの順番」)。構造の規則のうち境界と所有に関わらないもの (R1〜R5、R6 の支配、R7 と R8 のうち境界の検査を除くもの) と、下の引き継ぐ検査と、基本操作と `clause` の検査を確かめ、`tail`、`box`、`unbox`、`dup`、`decref`、`release` がないことを確かめる。box の挿入は末尾呼び出しと変換のない入力を前提にし、T3 は `let` と `return` の形から末尾の位置を見るためである。Perceus より前に `release` を拒むのと同じく、パスの入力の約束を verifier が確かめる
   - 範囲の段 (`verify_scopes`) は box の挿入と縮約の後にかける。入口の段から `tail`、`box`、`unbox` の拒否を除き、`box` と `unbox` の規則 (上の「値の表現」) と境界の検査を足す
-  - 所有の段 (`verify`) は Perceus の後にかけ、範囲の段に加えて、RC の対象の所有の多重集合 (R6) と、V1 を確かめる
+  - 所有の段 (`verify`) は Perceus と reuse の後にかけ、範囲の段に加えて、RC の対象の所有の多重集合 (R6)、V1、token の規則を確かめる
 - Kind の印の検査 (V1、V2、作る所の検査) は、下の「Kind の印の検査」にある。V2 と作る所の検査は Repr を比べる所と同じ所で、V1 は所有の段で走る
 - 着地の印 (上の「着地の印」) の検査は、3つの段のすべてで走る
   - 末尾呼び出しの印は、呼び出しの検査の最初に拒む (``a tail apply has a prompt marker, but a tail call leaves no frame to land on``)。入口の段は `tail` そのものを拒むので、この文言は範囲の段と所有の段で出る
@@ -543,6 +585,8 @@ Perceus は、`switch` と `unpack` のフィールドを借りたまま使い�
   - 読む (`switch` の scrutinee、`unpack` の値、`unbox` のオペランド、`prim` の借用の引数、`dup` の対象): 見えて有効である。所有の数を変えない。ただし `dup v` は v の所有の数を1つ増やす。`prim` の借用の引数が変数でない値なら、消費と同じ検査 (関数の値の番号) だけを通す
   - 消費と `decref v`: 見えて、v の所有の数が1つ以上である。1つ減らす。1つの命令の中では左から順に当てる
   - `release x L #t(p1, .., pn)`: 名前が1つ以上ある。x の所有の数が1つ以上である。名前を書いた各 pi は見えて、Repr が RC の対象で、出どころが `(x, L #t, i)` である。その後、x を1つ減らし、各 pi を1つ増やす。1つの位置には1つの名前しか書けないので、同じフィールドを2つの変数が引き継ぐことはない
+  - token: token の変数は、token を定義する `release` でだけ定義する。経路でまだ使っていない token は所有の数1として持ち、所有と同じ写し方で `switch` の行き先へ渡す。どの経路でも、token を受ける `con` か `drop_token` で、ちょうど1回使う。token は値の位置 (上の「token の流れ」) に現れず、`jump`、`return`、`tail` の時点と、yield しうる呼び出しの直後に生きていない
+  - token を受ける `con`: 物理的な語の数は token の元の構築子と同じである。`in place` なら、元と同じ配置の同じタグで、`lin` ビットの条件を満たす。書かない印の数は引数の数と同じで、書かない引数は、元の値を分解して束縛した変数で、語の種類と物理的な位置が元と同じである
   - 借りた変数 (所有の数0) は消費できないので、`jump` で渡されることはない。呼び出しの後も見えたままで、持ち主が所有されていれば有効である。持ち主を呼び出しの引数として消費すると、その後の借りた変数の使いは拒まれる。定義が支配する合流のブロックでも見えたままで、持ち主がどの辺でも所有されていれば有効である
   - 持ち主を手放した後は、間の変数を後で `dup` していても、借りた変数を拒む。保守的だが健全で、Perceus はその形を出さない。親をたどる規則に緩めることは、IR を変えずに後でできる
 - 引数のない `con` は、2つの IR のどの段でも拒む (`` a constructor value without fields is written as a tag `#N`, not `con` ``)
@@ -550,12 +594,14 @@ Perceus は、`switch` と `unpack` のフィールドを借りたまま使い�
   - `tail`: ``a tail call is formed before contract``。`call` のほかは ``a tail apply``、``a tail clause`` を同じ形で使う
   - `box` と `unbox`: `` `n.1` is boxed before the boxing pass ``、``5 is boxed before the boxing pass``、`` `b.2` is unboxed before the boxing pass ``
 - 入口の段と範囲の段の文言は次のとおりである。Perceus より前の RC の命令を拒む
-  - `` `s.0` is duplicated before Perceus ``、`` `s.0` is released before Perceus `` (`decref`)、`` `d.0` is released with its fields before Perceus `` (`release`)
+  - `` `s.0` is duplicated before Perceus ``、`` `s.0` is released before Perceus `` (`decref`)、`` `d.0` is released with its fields before Perceus `` (`release`)。token の命令も同じく拒む
 - 所有の段の誤りの文言は次のとおりである
   - `` `x.1` is {used|released} but is only borrowed from `d.0` ``: 持ち主が所有されている間に、所有の数0の変数を消費したか、`decref` か `release` で手放した
   - `` `x.1` is {duplicated|switched on|unpacked|unboxed|lent to `prim ev_evv`} after its owner `d.0` was given up ``: 無効な変数を読んだ。`prim` の借用の引数では、基本操作をテキストの形 (即値を含む) で書く
   - `` `x.1` is not field 0 of `d.0` as `Option` #1 ``: `release` の名前の出どころが違う
   - `` a release of `d.0` keeps no field `` と `` `x.1` is kept but is not reference counted ``: `release` の名前の誤り
+  - token: `` the token `r.4` is used twice ``、`` the token `r.4` is used as a value ``、`` the token `r.4` is still live at a return `` (`a tail call`、``a jump to b1`` も同じ形)、`` the token `r.3` is live after `g`, which may yield ``
+  - token を受ける `con`: ``a con of `Q` #0 has 3 words, but the token `r.4` holds 2 words``、``a con of `Q` #0 rebuilds the token `r.4` in place, but the token comes from `P` #0``、``a con of `P` #0 rebuilds the token `r.3` in place, but `x.0` is lin and `d.4` is poly``、``argument 0 of a con of `P` #0 is skipped, but `b.3` is not at the same position in the box of the token `r.4` ``
   - 持ち主のない変数を読むか消費するか手放したときと、持ち主も手放した変数を消費するか手放したときは、今までと同じく `` `x.1` is {used|released|duplicated|switched on|unpacked|unboxed|lent to `prim ev_evv`} after it was moved `` で報告する
 - R7 と R8 のうち境界の検査でないものは、2つの IR のすべての段で走り、どの段でも次の文言で報告する (`release` は LIR の所有の段にだけ現れる)。境界の検査と、`box` と `unbox` の規則は、範囲の段と所有の段で走る。どの文言の後にも、ほかの誤りと同じく `` in `f` `` が付く
   - R7 の extern: ``argument 0 of `Prelude.+` is `s.0` (obj), but the extern takes int``、``argument 1 of `Prelude.+` is (), but the extern takes int``、`` `t.1` (obj) is bound to `Prelude.<`, which returns enum ``。引数の数を確かめた後で、引数を左から、最後に束縛する変数を比べる

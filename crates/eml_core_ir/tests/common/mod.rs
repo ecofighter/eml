@@ -57,7 +57,7 @@ fn lir_read_back(shown: &str, last: eml_lir::Pass) {
     );
     let verified = match last {
         eml_lir::Pass::Boxing | eml_lir::Pass::Contract => eml_lir::verify_scopes(&parsed),
-        eml_lir::Pass::Perceus => eml_lir::verify(&parsed),
+        eml_lir::Pass::Perceus | eml_lir::Pass::Reuse => eml_lir::verify(&parsed),
     };
     if let Err(error) = verified {
         panic!("the LIR read back must verify: {error}\n{shown}");
@@ -101,7 +101,7 @@ pub fn session_lir_text(inputs: &[&str]) -> String {
         .input()
         .expect("the last input is an input function");
     let shown = eml_lir::pretty(&eml_core_ir::lower(&program, &typed, entry, &files));
-    lir_read_back(&shown, eml_lir::Pass::Perceus);
+    lir_read_back(&shown, eml_lir::Pass::Reuse);
     shown
 }
 

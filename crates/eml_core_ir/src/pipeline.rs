@@ -62,7 +62,7 @@ pub fn lower(
     entry: FunctionId,
     files: &SourceFiles,
 ) -> eml_lir::Program {
-    lower_until(hir, typed, entry, files, eml_lir::Pass::Perceus)
+    lower_until(hir, typed, entry, files, eml_lir::Pass::Reuse)
 }
 
 /// EP の後の Core IR を LIR に写し、`last` までの LIR のパスをかける。入力の条件は `core_until` と同じである。

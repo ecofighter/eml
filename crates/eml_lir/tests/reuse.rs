@@ -1,0 +1,407 @@
+//! reuse のパス (docs/spec/lir.md の「reuse」)。入力は Perceus の後の LIR で、入力と出力の両方が所有の段の verifier を
+//! 通ることも確かめる。
+
+use eml_lir::{parse, pretty, reuse, verify};
+
+use crate::common::function;
+
+fn reuse_text(text: &str) -> String {
+    let mut program = parse(text).unwrap_or_else(|error| panic!("{error}"));
+    if let Err(error) = verify(&program) {
+        panic!("the input must verify: {error}\n{text}");
+    }
+    reuse(&mut program);
+    let shown = pretty(&program);
+    if let Err(error) = verify(&program) {
+        panic!("the output must verify: {error}\n{shown}");
+    }
+    shown
+}
+
+/// パスが何も変えないこと。入力も `pretty` を通して比べる。
+fn assert_unchanged(text: &str) {
+    let input = pretty(&parse(text).unwrap_or_else(|error| panic!("{error}")));
+    assert_eq!(reuse_text(text), input);
+}
+
+const BOOL: &str = "layout Prelude.Bool { False, True }\n";
+const P2: &str = "layout P { P(obj, obj) }\n";
+
+#[test]
+fn a_release_pairs_with_a_con_of_the_same_size() {
+    let text = format!(
+        "{P2}fn swap(x.0: obj) -> obj {{
+  unpack x.0 P #0(a.1: obj, b.2: obj)
+  release x.0 P #0(a.1, b.2)
+  let d.3: obj = con P #0(b.2, a.1)
+  return d.3
+}}
+"
+    );
+    insta::assert_snapshot!(reuse_text(&text), @"
+    layout P { P(obj, obj) }
+    fn swap(x.0: obj) -> obj {
+      unpack x.0 P #0(a.1: obj, b.2: obj)
+      let r.4: token = release x.0 P #0(a.1, b.2)
+      let d.3: obj = con P #0(b.2, a.1) reuse r.4 in place
+      return d.3
+    }
+    ");
+}
+
+#[test]
+fn the_same_constructor_is_rebuilt_in_place_and_skips_unchanged_fields() {
+    // 走査する語 (s) も生の語 (k) も、元と同じ位置なら書かない。m は新しい値なので書く
+    let text = "\
+layout Cell { Cell(int, int, obj) }
+fn bump(x.0: obj) -> obj {
+  unpack x.0 Cell #0(n.1: int, k.2: int, s.3: obj)
+  release x.0 Cell #0(_, _, s.3)
+  let m.4: int = extern Prelude.+(n.1, 1)
+  let d.5: obj = con Cell #0(m.4, k.2, s.3)
+  return d.5
+}
+";
+    insta::assert_snapshot!(reuse_text(text), @"
+    layout Cell { Cell(int, int, obj) }
+    fn bump(x.0: obj) -> obj {
+      unpack x.0 Cell #0(n.1: int, k.2: int, s.3: obj)
+      let r.6: token = release x.0 Cell #0(_, _, s.3)
+      let m.4: int = extern Prelude.+(n.1, 1)
+      let d.5: obj = con Cell #0(m.4, =k.2, =s.3) reuse r.6 in place
+      return d.5
+    }
+    ");
+}
+
+#[test]
+fn another_constructor_of_the_same_size_rewrites_the_header() {
+    // cons の箱を組の箱に使う。配置が違うので、ヘッダを書き直す
+    let text = "\
+layout Prelude.List { Nil, ::(tobj, tobj) }
+layout (,) { (,)(tobj, tobj) }
+fn flip(xs.0: tobj) -> tobj {
+  switch xs.0 Prelude.List { #0 -> b1, #1(h.1: tobj, t.2: tobj) -> b2 }
+b1:
+  return xs.0
+b2:
+  release xs.0 Prelude.List #1(h.1, t.2)
+  let d.3: obj = con (,) #0(t.2, h.1)
+  return d.3
+}
+";
+    insta::assert_snapshot!(reuse_text(text), @"
+    layout Prelude.List { Nil, ::(tobj, tobj) }
+    layout (,) { (,)(tobj, tobj) }
+    fn flip(xs.0: tobj) -> tobj {
+      switch xs.0 Prelude.List { #0 -> b1, #1(h.1: tobj, t.2: tobj) -> b2 }
+    b1:
+      return xs.0
+    b2:
+      let r.4: token = release xs.0 Prelude.List #1(h.1, t.2)
+      let d.3: obj = con (,) #0(t.2, h.1) reuse r.4
+      return d.3
+    }
+    ");
+}
+
+#[test]
+fn a_lin_source_rebuilt_as_poly_is_not_in_place() {
+    // ヘッダの `lin` ビットを書き直すため、その場で作り直さない。フィールドは同じ位置に残るので書かない
+    // (docs/spec/object-model.md の「`lin` ビット」)
+    let text = "\
+layout P { P(tobj, tobj) }
+fn rebuild(x.0: obj lin) -> obj poly {
+  unpack x.0 P #0(a.1: tobj poly, b.2: tobj poly)
+  release x.0 P #0(a.1, b.2)
+  let d.3: obj poly = con P #0(a.1, b.2)
+  return d.3
+}
+";
+    insta::assert_snapshot!(reuse_text(text), @"
+    layout P { P(tobj, tobj) }
+    fn rebuild(x.0: obj lin) -> obj poly {
+      unpack x.0 P #0(a.1: tobj poly, b.2: tobj poly)
+      let r.4: token = release x.0 P #0(a.1, b.2)
+      let d.3: obj poly = con P #0(=a.1, =b.2) reuse r.4
+      return d.3
+    }
+    ");
+}
+
+#[test]
+fn a_decref_of_a_known_value_is_a_source() {
+    // レコードの更新の形。フィールドがみなスカラーなので、Perceus は `release` でなく `decref` を出す
+    let text = "\
+layout Stats { Stats(int, int) }
+fn count(st.0: obj) -> obj {
+  unpack st.0 Stats #0(n.1: int, k.2: int)
+  decref st.0
+  let m.3: int = extern Prelude.+(n.1, 1)
+  let d.4: obj = con Stats #0(m.3, k.2)
+  return d.4
+}
+";
+    insta::assert_snapshot!(reuse_text(text), @"
+    layout Stats { Stats(int, int) }
+    fn count(st.0: obj) -> obj {
+      unpack st.0 Stats #0(n.1: int, k.2: int)
+      let r.5: token = release st.0 Stats #0(_, _)
+      let m.3: int = extern Prelude.+(n.1, 1)
+      let d.4: obj = con Stats #0(m.3, =k.2) reuse r.5 in place
+      return d.4
+    }
+    ");
+}
+
+#[test]
+fn a_decref_of_an_unknown_value_is_not_a_source() {
+    assert_unchanged(
+        "\
+layout Stats { Stats(int, int) }
+fn fresh(st.0: obj) -> obj {
+  decref st.0
+  let d.1: obj = con Stats #0(1, 2)
+  return d.1
+}
+",
+    );
+}
+
+#[test]
+fn a_token_flows_into_switch_targets_and_is_dropped_where_unused() {
+    let text = format!(
+        "{BOOL}{P2}fn f(x.0: obj, c.1: enum) -> obj {{
+  unpack x.0 P #0(a.2: obj, b.3: obj)
+  release x.0 P #0(a.2, b.3)
+  switch c.1 Prelude.Bool {{ #0 -> b1, #1 -> b2 }}
+b1:
+  let d.4: obj = con P #0(b.3, a.2)
+  return d.4
+b2:
+  let s.5: obj = extern Prelude.++(a.2, b.3)
+  return s.5
+}}
+"
+    );
+    insta::assert_snapshot!(reuse_text(&text), @"
+    layout Prelude.Bool { False, True }
+    layout P { P(obj, obj) }
+    fn f(x.0: obj, c.1: enum) -> obj {
+      unpack x.0 P #0(a.2: obj, b.3: obj)
+      let r.6: token = release x.0 P #0(a.2, b.3)
+      switch c.1 Prelude.Bool { #0 -> b1, #1 -> b2 }
+    b1:
+      let d.4: obj = con P #0(b.3, a.2) reuse r.6 in place
+      return d.4
+    b2:
+      drop_token r.6
+      let s.5: obj = extern Prelude.++(a.2, b.3)
+      return s.5
+    }
+    ");
+}
+
+#[test]
+fn a_token_unused_below_a_switch_target_is_dropped_once() {
+    // b2 より下のどこでも使わないので、b2 の入口で1回だけ手放す。b3 と b4 は手放さない
+    let text = format!(
+        "{BOOL}{P2}fn f(x.0: obj, c.1: enum, e.2: enum) -> obj {{
+  unpack x.0 P #0(a.3: obj, b.4: obj)
+  release x.0 P #0(a.3, b.4)
+  switch c.1 Prelude.Bool {{ #0 -> b1, #1 -> b2 }}
+b1:
+  let d.5: obj = con P #0(b.4, a.3)
+  return d.5
+b2:
+  switch e.2 Prelude.Bool {{ #0 -> b3, #1 -> b4 }}
+b3:
+  let s.6: obj = extern Prelude.++(a.3, b.4)
+  return s.6
+b4:
+  let s.7: obj = extern Prelude.++(b.4, a.3)
+  return s.7
+}}
+"
+    );
+    insta::assert_snapshot!(function(&reuse_text(&text), "f"), @"
+    fn f(x.0: obj, c.1: enum, e.2: enum) -> obj {
+      unpack x.0 P #0(a.3: obj, b.4: obj)
+      let r.8: token = release x.0 P #0(a.3, b.4)
+      switch c.1 Prelude.Bool { #0 -> b1, #1 -> b2 }
+    b1:
+      let d.5: obj = con P #0(b.4, a.3) reuse r.8 in place
+      return d.5
+    b2:
+      drop_token r.8
+      switch e.2 Prelude.Bool { #0 -> b3, #1 -> b4 }
+    b3:
+      let s.6: obj = extern Prelude.++(a.3, b.4)
+      return s.6
+    b4:
+      let s.7: obj = extern Prelude.++(b.4, a.3)
+      return s.7
+    }
+    ");
+}
+
+#[test]
+fn a_token_is_not_passed_through_a_jump() {
+    assert_unchanged(&format!(
+        "{P2}fn f(x.0: obj) -> obj {{
+  unpack x.0 P #0(a.1: obj, b.2: obj)
+  release x.0 P #0(a.1, b.2)
+  jump b1(a.1, b.2)
+b1(p.3: obj, q.4: obj):
+  let d.5: obj = con P #0(q.4, p.3)
+  return d.5
+}}
+"
+    ));
+}
+
+#[test]
+fn a_source_no_path_uses_stays_a_release() {
+    assert_unchanged(&format!(
+        "{BOOL}{P2}layout Box {{ Box(obj) }}
+fn f(x.0: obj, c.1: enum) -> obj {{
+  unpack x.0 P #0(a.2: obj, b.3: obj)
+  release x.0 P #0(a.2, b.3)
+  switch c.1 Prelude.Bool {{ #0 -> b1, #1 -> b2 }}
+b1:
+  decref b.3
+  let d.4: obj = con Box #0(a.2)
+  return d.4
+b2:
+  let s.5: obj = extern Prelude.++(a.2, b.3)
+  return s.5
+}}
+"
+    ));
+}
+
+#[test]
+fn a_token_crosses_a_non_yielding_call() {
+    let text = format!(
+        "{P2}fn g(s.0: obj) -> obj {{
+  return s.0
+}}
+fn f(x.0: obj) -> obj {{
+  unpack x.0 P #0(a.1: obj, b.2: obj)
+  release x.0 P #0(a.1, b.2)
+  let c.3: obj = call g(a.1)
+  let d.4: obj = con P #0(c.3, b.2)
+  return d.4
+}}
+"
+    );
+    insta::assert_snapshot!(function(&reuse_text(&text), "f"), @"
+    fn f(x.0: obj) -> obj {
+      unpack x.0 P #0(a.1: obj, b.2: obj)
+      let r.5: token = release x.0 P #0(a.1, b.2)
+      let c.3: obj = call g(a.1)
+      let d.4: obj = con P #0(c.3, =b.2) reuse r.5 in place
+      return d.4
+    }
+    ");
+}
+
+#[test]
+fn a_token_does_not_cross_a_yielding_call() {
+    // 継続を2回再開すると、同じ箱に2つの値を作ってしまう (docs/spec/core-ir.md の「yield の地点」)
+    assert_unchanged(&format!(
+        "{P2}yields fn g(s.0: obj) -> obj {{
+  return s.0
+}}
+yields fn f(x.0: obj) -> obj {{
+  unpack x.0 P #0(a.1: obj, b.2: obj)
+  release x.0 P #0(a.1, b.2)
+  let c.3: obj = call g(a.1)
+  let d.4: obj = con P #0(c.3, b.2)
+  return d.4
+}}
+"
+    ));
+}
+
+#[test]
+fn three_tokens_go_to_the_cons_with_the_most_skips() {
+    // `bench/upsert.em` の `split` を融合した形。最も後に定義した token を先に選ぶと、x.46 の token が d.54 に行き、
+    // 書かないフィールドがなくなる
+    let text = "\
+layout Tree { Leaf, Node(int, tobj, tobj, tobj, tobj) }
+fn split(t.13: tobj) -> tobj {
+  switch t.13 Tree { #1(level.37: int, a.38: tobj, k.39: obj, v.96: tobj, x.41: tobj) -> b1, _ -> b2 }
+b1:
+  switch x.41 Tree { #1(right_level.42: int, b.43: tobj, rk.44: obj, rv.97: tobj, x.46: tobj) -> b3, _ -> b4 }
+b2:
+  return t.13
+b3:
+  switch x.46 Tree { #1(grand_level.47: int, c.48: tobj, gk.49: obj, gv.98: tobj, d.51: tobj) -> b5, _ -> b6 }
+b4:
+  return t.13
+b5:
+  let t.53: int = extern Prelude.+(right_level.42, 1)
+  release t.13 Tree #1(_, a.38, k.39, v.96, x.41)
+  release x.41 Tree #1(_, b.43, rk.44, rv.97, x.46)
+  release x.46 Tree #1(_, c.48, gk.49, gv.98, d.51)
+  let d.54: tobj = con Tree #1(level.37, a.38, k.39, v.96, b.43)
+  let d.55: tobj = con Tree #1(grand_level.47, c.48, gk.49, gv.98, d.51)
+  let d.56: tobj = con Tree #1(t.53, d.54, rk.44, rv.97, d.55)
+  return d.56
+b6:
+  return t.13
+}
+";
+    insta::assert_snapshot!(function(&reuse_text(text), "split"), @"
+    fn split(t.13: tobj) -> tobj {
+      switch t.13 Tree { #1(level.37: int, a.38: tobj, k.39: obj, v.96: tobj, x.41: tobj) -> b1, _ -> b2 }
+    b1:
+      switch x.41 Tree { #1(right_level.42: int, b.43: tobj, rk.44: obj, rv.97: tobj, x.46: tobj) -> b3, _ -> b4 }
+    b2:
+      return t.13
+    b3:
+      switch x.46 Tree { #1(grand_level.47: int, c.48: tobj, gk.49: obj, gv.98: tobj, d.51: tobj) -> b5, _ -> b6 }
+    b4:
+      return t.13
+    b5:
+      let t.53: int = extern Prelude.+(right_level.42, 1)
+      let r.99: token = release t.13 Tree #1(_, a.38, k.39, v.96, x.41)
+      let r.100: token = release x.41 Tree #1(_, b.43, rk.44, rv.97, x.46)
+      let r.101: token = release x.46 Tree #1(_, c.48, gk.49, gv.98, d.51)
+      let d.54: tobj = con Tree #1(=level.37, =a.38, =k.39, =v.96, b.43) reuse r.99 in place
+      let d.55: tobj = con Tree #1(=grand_level.47, =c.48, =gk.49, =gv.98, =d.51) reuse r.101 in place
+      let d.56: tobj = con Tree #1(t.53, d.54, =rk.44, =rv.97, d.55) reuse r.100 in place
+      return d.56
+    b6:
+      return t.13
+    }
+    ");
+}
+
+#[test]
+fn reuse_of_a_function_does_not_depend_on_the_rest_of_the_program() {
+    let f = "\
+fn f(x.0: obj) -> obj {
+  unpack x.0 P #0(a.1: obj, b.2: obj)
+  release x.0 P #0(a.1, b.2)
+  let d.3: obj = con P #0(b.2, a.1)
+  return d.3
+}
+";
+    let other = "\
+fn h(y.0: obj, z.1: obj) -> obj {
+  unpack y.0 P #0(a.2: obj, b.3: obj)
+  release y.0 P #0(a.2, b.3)
+  unpack z.1 P #0(c.4: obj, d.5: obj)
+  release z.1 P #0(c.4, d.5)
+  let e.6: obj = con P #0(a.2, d.5)
+  let g.7: obj = con P #0(c.4, b.3)
+  let k.8: obj = con P #0(e.6, g.7)
+  return k.8
+}
+";
+    let alone = reuse_text(&format!("{P2}{f}"));
+    let together = reuse_text(&format!("{P2}{other}{f}"));
+    assert_eq!(function(&alone, "f"), function(&together, "f"));
+}

@@ -154,13 +154,13 @@ fn list() {
         unwound_frames: 0,
         string_bytes_copied: 11,
         rc_increments: 0,
-        rc_decrements: 200001,
+        rc_decrements: 100001,
         boxes: 200000,
         unboxes: 200000,
-        allocations: 200002,
-        reuses: 0,
+        allocations: 100002,
+        reuses: 100000,
         peak_objects: 100001,
-        peak_stack: 600014,
+        peak_stack: 700015,
     }
     ");
 }
@@ -217,11 +217,11 @@ fn tree() {
         unwound_frames: 0,
         string_bytes_copied: 37,
         rc_increments: 14898,
-        rc_decrements: 266465,
+        rc_decrements: 29800,
         boxes: 14898,
         unboxes: 251563,
-        allocations: 251568,
-        reuses: 0,
+        allocations: 14903,
+        reuses: 236665,
         peak_objects: 14900,
         peak_stack: 392,
     }
@@ -341,11 +341,11 @@ fn orders() {
         unwound_frames: 0,
         string_bytes_copied: 9,
         rc_increments: 0,
-        rc_decrements: 359321,
+        rc_decrements: 239831,
         boxes: 39830,
         unboxes: 39830,
-        allocations: 359322,
-        reuses: 0,
+        allocations: 239832,
+        reuses: 119490,
         peak_objects: 200001,
         peak_stack: 20,
     }
@@ -362,11 +362,11 @@ fn orders_by_hand() {
         unwound_frames: 0,
         string_bytes_copied: 9,
         rc_increments: 0,
-        rc_decrements: 359321,
+        rc_decrements: 239831,
         boxes: 39830,
         unboxes: 39830,
-        allocations: 359322,
-        reuses: 0,
+        allocations: 239832,
+        reuses: 119490,
         peak_objects: 200001,
         peak_stack: 19,
     }
@@ -446,11 +446,11 @@ fn tree_by_hand() {
         unwound_frames: 0,
         string_bytes_copied: 37,
         rc_increments: 14898,
-        rc_decrements: 266465,
+        rc_decrements: 29800,
         boxes: 14898,
         unboxes: 251563,
-        allocations: 251568,
-        reuses: 0,
+        allocations: 14903,
+        reuses: 236665,
         peak_objects: 14900,
         peak_stack: 392,
     }
@@ -467,11 +467,11 @@ fn upsert() {
         unwound_frames: 0,
         string_bytes_copied: 157580,
         rc_increments: 436140,
-        rc_decrements: 796906,
+        rc_decrements: 484142,
         boxes: 20000,
         unboxes: 56815,
-        allocations: 360767,
-        reuses: 0,
+        allocations: 48003,
+        reuses: 312764,
         peak_objects: 6002,
         peak_stack: 352,
     }
@@ -488,22 +488,23 @@ fn upsert_by_hand() {
         unwound_frames: 0,
         string_bytes_copied: 157580,
         rc_increments: 436140,
-        rc_decrements: 796906,
+        rc_decrements: 484142,
         boxes: 20000,
         unboxes: 56815,
-        allocations: 360767,
-        reuses: 0,
+        allocations: 48003,
+        reuses: 312764,
         peak_objects: 6002,
         peak_stack: 352,
     }
     ");
 }
 
-/// 確保の数は検査モードの `Stats::allocations` から来る。`list` は `range` と `map` が 100000 個ずつ `Cons` を作る。
+/// 確保の数は検査モードの `Stats::allocations` から来る。`list` は `range` が 100000 個の `Cons` を作り、`map` はその箱を
+/// 使い回す (docs/spec/lir.md の「reuse」)。
 #[test]
 fn allocations_are_counted_in_checked_mode() {
     let stats = stats("list", "10000100000\n");
-    assert!(stats.allocations >= 200_000, "{stats:?}");
+    assert!(stats.allocations >= 100_000, "{stats:?}");
 }
 
 /// S13e-1 の完了の条件 (docs/implementation/benchmarks.md の「S13e-1」)。既知の閉包を渡す版と手で特殊化した版で、

@@ -1,0 +1,8 @@
+---
+source: crates/eml_cli/tests/ui.rs
+expression: "format!(\"--- stdout ---\\n{stdout}--- stderr ---\\n{diagnostics}{stderr}{written}{exit}\")"
+input_file: tests/ui/run/reuse/multi_resume_rebuilds.em
+---
+--- stdout ---
+[P 2 1, P 1 12]
+--- stderr ---

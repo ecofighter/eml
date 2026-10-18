@@ -1,0 +1,14 @@
+---
+source: crates/eml_cli/tests/ui.rs
+expression: "format!(\"--- stdout ---\\n{stdout}--- stderr ---\\n{diagnostics}{stderr}{written}{exit}\")"
+input_file: tests/ui/run/reuse/moved_fields_are_written.em
+---
+--- stdout ---
+P b a
+P a b
+T c a b
+T b c a
+T a b c
+Q 3 1 2
+Q 2 3 1
+--- stderr ---

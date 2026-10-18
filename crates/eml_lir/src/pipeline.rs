@@ -2,7 +2,7 @@
 //! Core IR から LIR への変換までの順番は `eml_core_ir` が知る。
 
 use crate::{
-    Program, VerifyError, boxing, contract, perceus, verify, verify_lowered, verify_scopes,
+    Program, VerifyError, boxing, contract, perceus, reuse, verify, verify_lowered, verify_scopes,
 };
 
 /// `passes_until` で止める位置。
@@ -11,6 +11,7 @@ pub enum Pass {
     Boxing,
     Contract,
     Perceus,
+    Reuse,
 }
 
 impl Pass {
@@ -19,6 +20,7 @@ impl Pass {
             Pass::Boxing => "boxing",
             Pass::Contract => "contract",
             Pass::Perceus => "perceus",
+            Pass::Reuse => "reuse",
         }
     }
 }
@@ -44,6 +46,11 @@ pub fn passes_until(program: &mut Program, last: Pass) {
     }
     perceus(program);
     check(program, Pass::Perceus);
+    if last == Pass::Perceus {
+        return;
+    }
+    reuse(program);
+    check(program, Pass::Reuse);
 }
 
 /// 誤りを、それを作ったパスの名前で報告する。
@@ -53,7 +60,7 @@ fn check(program: &Program, pass: Pass) {
     }
     let result = match pass {
         Pass::Boxing | Pass::Contract => verify_scopes(program),
-        Pass::Perceus => verify(program),
+        Pass::Perceus | Pass::Reuse => verify(program),
     };
     if let Err(error) = result {
         fail(pass, error);
