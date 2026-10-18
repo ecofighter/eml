@@ -10,7 +10,7 @@
 
 use std::collections::HashMap;
 
-use crate::check::{Dominators, shape};
+use crate::check::shape;
 use crate::contract::pure;
 use crate::verify::block_shapes;
 use crate::{
@@ -364,8 +364,6 @@ struct Converter<'a> {
 
 impl Converter<'_> {
     fn run(mut self) {
-        let dominators = shape(&block_shapes(self.function))
-            .expect("the input of the boxing pass keeps the edge rules (R1-R4)");
         let mut fields = Vec::new();
         for index in 0..self.function.blocks.len() {
             let stmts = std::mem::take(&mut self.function.blocks[index].stmts);
@@ -382,17 +380,27 @@ impl Converter<'_> {
             block.stmts = out;
             block.term = term;
         }
-        self.place_field_conversions(fields, &dominators);
+        if !fields.is_empty() {
+            self.place_field_conversions(fields);
+        }
     }
 
-    /// case のフィールドの受け直しを、元の変数を使うブロックすべての、最も近い共通の支配者の先頭に置く。変換を
-    /// 終えた後で元の変数が残っている所は、どれも元の Repr を要する。`tobj` の位置へは覗き穴が受け直した変数を
-    /// 渡すからである。そのため、元の Repr で使わない枝を通る実行は、変換を踏まない。使う所がなければ、変換を置かない。
-    /// 使う所はどれも case の行き先に支配されるので、置く所も行き先に支配され、受け直した変数の定義の後にある
+    /// case のフィールドの受け直しを置く。置く所は、元の変数を使うブロックすべての最も近い共通の支配者から支配木を
+    /// 登り、case の行き先から switch の辺だけで届く最も深いブロックである。変換を終えた後で元の変数が残っている所は、
+    /// どれも元の Repr を要する。`tobj` の位置へは覗き穴が受け直した変数を渡すからである。使う所がなければ置かない。
+    /// 合流 (jump の行き先) より先に置かないのは、借りた `tobj` のフィールドが jump の行き先で生きると、Perceus が
+    /// 入る jump ごとに所有を取るからである。R3 から、行き先から switch の辺だけで届くブロックへの道は1つで、そこまで
+    /// フィールドは jump をまたがない。置く所は行き先に支配され、使いをすべて支配する
     /// (R6。docs/spec/lir.md の「box の挿入」)。
-    fn place_field_conversions(&mut self, fields: Vec<Stmt>, dominators: &Dominators) {
-        let mut sites: HashMap<VarId, Option<u32>> =
-            fields.iter().map(|stmt| (defined(stmt), None)).collect();
+    fn place_field_conversions(&mut self, fields: Vec<(u32, Stmt)>) {
+        let dominators = shape(&block_shapes(self.function))
+            .expect("the input of the boxing pass keeps the edge rules (R1-R4)");
+        let count = self.function.blocks.len();
+        let mut sites: HashMap<VarId, Option<u32>> = fields
+            .iter()
+            .map(|(_, stmt)| (defined(stmt), None))
+            .collect();
+        let mut joined = vec![false; count];
         for (index, block) in self.function.blocks.iter().enumerate() {
             let index = index as u32;
             let mut note = |atom: Atom| {
@@ -406,12 +414,31 @@ impl Converter<'_> {
                 stmt.for_each_atom(&mut note);
             }
             block.term.for_each_atom(&mut note);
-        }
-        let mut heads: Vec<Vec<Stmt>> = vec![Vec::new(); self.function.blocks.len()];
-        for stmt in fields {
-            if let Some(site) = sites[&defined(&stmt)] {
-                heads[site as usize].push(stmt);
+            if let Term::Jump { target, args: _ } = block.term {
+                joined[target.0 as usize] = true;
             }
+        }
+        // ブロックごとの、支配木で自身か祖先のうち最も近い合流 (なければ入口)。直接の支配者は番号が小さいので、
+        // 番号の順に1回で決まる
+        let mut nearest_join = vec![0u32; count];
+        for block in 1..count {
+            nearest_join[block] = if joined[block] {
+                block as u32
+            } else {
+                nearest_join[dominators.parent(block as u32) as usize]
+            };
+        }
+        let mut heads: Vec<Vec<Stmt>> = vec![Vec::new(); count];
+        for (target, stmt) in fields {
+            let Some(mut site) = sites[&defined(&stmt)] else {
+                continue;
+            };
+            // 最も近い合流が行き先のものと違えば、その合流は行き先と置く所の間にある。その直接の支配者へ登ることを、
+            // 間に合流がなくなるまで繰り返す。1回の登りで合流を1つ越える
+            while nearest_join[site as usize] != nearest_join[target as usize] {
+                site = dominators.parent(nearest_join[site as usize]);
+            }
+            heads[site as usize].push(stmt);
         }
         for (block, head) in self.function.blocks.iter_mut().zip(heads) {
             block.stmts.splice(0..0, head);
@@ -661,8 +688,9 @@ impl Converter<'_> {
         }
     }
 
-    /// case のフィールドを受け直す変換は、置く所を決める `place_field_conversions` に渡すため `fields` に足す。
-    fn term(&mut self, term: &mut Term, out: &mut Vec<Stmt>, fields: &mut Vec<Stmt>) {
+    /// case のフィールドを受け直す変換は、置く所を決める `place_field_conversions` に渡すため、case の行き先と組に
+    /// して `fields` に足す。
+    fn term(&mut self, term: &mut Term, out: &mut Vec<Stmt>, fields: &mut Vec<(u32, Stmt)>) {
         match term {
             Term::Return(atom) => {
                 *atom = self.convert(*atom, self.function.ret, out);
@@ -685,11 +713,13 @@ impl Converter<'_> {
                     let CasePattern::Tag(tag) = case.pattern else {
                         continue;
                     };
+                    let mut after = Vec::new();
                     for (index, field) in case.fields.iter_mut().enumerate() {
                         let declared =
                             self.layouts[layout].constructors[tag as usize].fields[index];
-                        *field = self.rebind(*field, declared, fields);
+                        *field = self.rebind(*field, declared, &mut after);
                     }
+                    fields.extend(after.into_iter().map(|stmt| (case.target.0, stmt)));
                 }
             }
             Term::Switch {

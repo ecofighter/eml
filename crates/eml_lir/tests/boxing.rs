@@ -421,3 +421,87 @@ b2:
     }
     ");
 }
+
+/// case のフィールド `y` を、`b3` の下の枝で使う関数。`b5` と `b6` は合流の `b7` へ jump する。`arg5` は `b5` が
+/// `b7` に渡す値である。`b7` は `int` の引数 `t` を受け、`join` を足して返す。
+fn case_field_before_a_join(arg5: &str, join: &str) -> String {
+    format!(
+        "\
+layout Prelude.Bool {{ False, True }}
+layout Option {{ None, Some(tobj) }}
+fn f(o.0: tobj, c.1: enum, d.2: enum) -> int {{
+  switch o.0 Option {{ #0 -> b1, #1(y.3: int) -> b2 }}
+b1:
+  return 0
+b2:
+  switch c.1 Prelude.Bool {{ #0 -> b3, #1 -> b4 }}
+b3:
+  switch d.2 Prelude.Bool {{ #0 -> b5, #1 -> b6 }}
+b4:
+  return 1
+b5:
+  jump b7({arg5})
+b6:
+  jump b7(2)
+b7(t.4: int):
+  let r.5: int = extern Prelude.+(t.4, {join})
+  return r.5
+}}
+"
+    )
+}
+
+#[test]
+fn a_case_field_used_after_a_join_is_unboxed_before_the_join() {
+    // `y` を使う所は合流の `b7` だけである。`b7` に置くと、借りた `tobj` のフィールドが jump の行き先で生きるので、
+    // Perceus が `b5` と `b6` で所有を取る (`dup`)。そのため、行き先から switch の辺だけで届く最も深い所、`b3` に置く
+    // (docs/spec/lir.md の「box の挿入」)
+    insta::assert_snapshot!(function(&boxing_text(&case_field_before_a_join("1", "y.3")), "f"), @"
+    fn f(o.0: tobj, c.1: enum, d.2: enum) -> int {
+      switch o.0 Option { #0 -> b1, #1(y.6: tobj) -> b2 }
+    b1:
+      return 0
+    b2:
+      switch c.1 Prelude.Bool { #0 -> b3, #1 -> b4 }
+    b3:
+      let y.3: int = unbox y.6
+      switch d.2 Prelude.Bool { #0 -> b5, #1 -> b6 }
+    b4:
+      return 1
+    b5:
+      jump b7(1)
+    b6:
+      jump b7(2)
+    b7(t.4: int):
+      let r.5: int = extern Prelude.+(t.4, y.3)
+      return r.5
+    }
+    ");
+}
+
+#[test]
+fn a_case_field_passed_as_a_jump_argument_is_unboxed_in_the_jumping_block() {
+    // jump の実引数は、jump するブロックでの使いである。`b5` は合流の前なので、そこに置く
+    let text = case_field_before_a_join("y.3", "1");
+    insta::assert_snapshot!(function(&boxing_text(&text), "f"), @"
+    fn f(o.0: tobj, c.1: enum, d.2: enum) -> int {
+      switch o.0 Option { #0 -> b1, #1(y.6: tobj) -> b2 }
+    b1:
+      return 0
+    b2:
+      switch c.1 Prelude.Bool { #0 -> b3, #1 -> b4 }
+    b3:
+      switch d.2 Prelude.Bool { #0 -> b5, #1 -> b6 }
+    b4:
+      return 1
+    b5:
+      let y.3: int = unbox y.6
+      jump b7(y.3)
+    b6:
+      jump b7(2)
+    b7(t.4: int):
+      let r.5: int = extern Prelude.+(t.4, 1)
+      return r.5
+    }
+    ");
+}

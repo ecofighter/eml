@@ -176,6 +176,11 @@ impl Dominators {
     pub fn common(&self, a: u32, b: u32) -> u32 {
         self.tree.intersect(a, b)
     }
+
+    /// `block` の直接の支配者。入口の支配者は入口自身である。
+    pub fn parent(&self, block: u32) -> u32 {
+        self.tree.parent(block)
+    }
 }
 
 /// `shape` が見るブロックの形。引数の数と、終端の行き先である。
