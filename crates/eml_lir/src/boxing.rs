@@ -10,7 +10,9 @@
 
 use std::collections::HashMap;
 
+use crate::check::{Dominators, shape};
 use crate::contract::pure;
+use crate::verify::block_shapes;
 use crate::{
     Atom, Block, BlockId, Call, CasePattern, EffectInfo, FnIdx, Layout, LirFn, Mark, OpRet,
     OperationInfo, Program, Repr, Rhs, Stmt, Term, VarId, VarInfo, operation,
@@ -362,11 +364,12 @@ struct Converter<'a> {
 
 impl Converter<'_> {
     fn run(mut self) {
-        // case のフィールドの受け直しは、行き先のブロックの先頭に置く。辺は前向きなので、行き先は後で見る
-        let mut heads: Vec<Vec<Stmt>> = vec![Vec::new(); self.function.blocks.len()];
+        let dominators = shape(&block_shapes(self.function))
+            .expect("the input of the boxing pass keeps the edge rules (R1-R4)");
+        let mut fields = Vec::new();
         for index in 0..self.function.blocks.len() {
             let stmts = std::mem::take(&mut self.function.blocks[index].stmts);
-            let mut out = std::mem::take(&mut heads[index]);
+            let mut out = Vec::new();
             for stmt in stmts {
                 self.stmt(stmt, &mut out);
             }
@@ -374,10 +377,44 @@ impl Converter<'_> {
                 &mut self.function.blocks[index].term,
                 Term::Return(Atom::Unit),
             );
-            self.term(&mut term, &mut out, &mut heads);
+            self.term(&mut term, &mut out, &mut fields);
             let block = &mut self.function.blocks[index];
             block.stmts = out;
             block.term = term;
+        }
+        self.place_field_conversions(fields, &dominators);
+    }
+
+    /// case のフィールドの受け直しを、元の変数を使うブロックすべての、最も近い共通の支配者の先頭に置く。変換を
+    /// 終えた後で元の変数が残っている所は、どれも元の Repr を要する。`tobj` の位置へは覗き穴が受け直した変数を
+    /// 渡すからである。そのため、元の Repr で使わない枝を通る実行は、変換を踏まない。使う所がなければ、変換を置かない。
+    /// 使う所はどれも case の行き先に支配されるので、置く所も行き先に支配され、受け直した変数の定義の後にある
+    /// (R6。docs/spec/lir.md の「box の挿入」)。
+    fn place_field_conversions(&mut self, fields: Vec<Stmt>, dominators: &Dominators) {
+        let mut sites: HashMap<VarId, Option<u32>> =
+            fields.iter().map(|stmt| (defined(stmt), None)).collect();
+        for (index, block) in self.function.blocks.iter().enumerate() {
+            let index = index as u32;
+            let mut note = |atom: Atom| {
+                if let Atom::Var(var) = atom
+                    && let Some(site) = sites.get_mut(&var)
+                {
+                    *site = Some(site.map_or(index, |other| dominators.common(other, index)));
+                }
+            };
+            for stmt in &block.stmts {
+                stmt.for_each_atom(&mut note);
+            }
+            block.term.for_each_atom(&mut note);
+        }
+        let mut heads: Vec<Vec<Stmt>> = vec![Vec::new(); self.function.blocks.len()];
+        for stmt in fields {
+            if let Some(site) = sites[&defined(&stmt)] {
+                heads[site as usize].push(stmt);
+            }
+        }
+        for (block, head) in self.function.blocks.iter_mut().zip(heads) {
+            block.stmts.splice(0..0, head);
         }
     }
 
@@ -624,7 +661,8 @@ impl Converter<'_> {
         }
     }
 
-    fn term(&mut self, term: &mut Term, out: &mut Vec<Stmt>, heads: &mut [Vec<Stmt>]) {
+    /// case のフィールドを受け直す変換は、置く所を決める `place_field_conversions` に渡すため `fields` に足す。
+    fn term(&mut self, term: &mut Term, out: &mut Vec<Stmt>, fields: &mut Vec<Stmt>) {
         match term {
             Term::Return(atom) => {
                 *atom = self.convert(*atom, self.function.ret, out);
@@ -647,13 +685,11 @@ impl Converter<'_> {
                     let CasePattern::Tag(tag) = case.pattern else {
                         continue;
                     };
-                    let mut after = Vec::new();
                     for (index, field) in case.fields.iter_mut().enumerate() {
                         let declared =
                             self.layouts[layout].constructors[tag as usize].fields[index];
-                        *field = self.rebind(*field, declared, &mut after);
+                        *field = self.rebind(*field, declared, fields);
                     }
-                    heads[case.target.0 as usize].extend(after);
                 }
             }
             Term::Switch {
@@ -666,5 +702,13 @@ impl Converter<'_> {
                 unreachable!("contract forms tail calls after the boxing pass")
             }
         }
+    }
+}
+
+/// 受け直しの変換 `let v = unbox w` (または `box`) が定義する元の変数 v。
+fn defined(stmt: &Stmt) -> VarId {
+    match stmt {
+        Stmt::Let { var, rhs: _ } => *var,
+        _ => unreachable!("a conversion is a `let`"),
     }
 }

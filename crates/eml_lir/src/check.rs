@@ -132,21 +132,24 @@ pub fn clause_function<'v>(
     Ok(())
 }
 
-/// 支配木の前順と後順の番号。`a` が `b` を支配するのは、`b` が `a` の部分木にあるときである。
+/// 支配木の前順と後順の番号と、育て終えた木。`a` が `b` を支配するのは、`b` が `a` の部分木にあるときである。
 pub struct Dominators {
     pre: Vec<u32>,
     post: Vec<u32>,
+    tree: GrowingTree,
 }
 
 impl Dominators {
-    /// `idom[b]` は `b` の直接の支配者で、つねに `b` より番号が小さい。木は深くなりうるので、再帰せずにたどる。
-    fn new(idom: &[u32]) -> Self {
-        let mut children = vec![Vec::new(); idom.len()];
-        for (block, &parent) in idom.iter().enumerate().skip(1) {
+    /// 木の `idom[b]` は `b` の直接の支配者で、つねに `b` より番号が小さい。木は深くなりうるので、再帰せずにたどる。
+    fn new(tree: GrowingTree) -> Self {
+        let count = tree.idom.len();
+        let mut children = vec![Vec::new(); count];
+        for (block, parent) in tree.idom.iter().enumerate().skip(1) {
+            let parent = parent.expect("every block is reachable");
             children[parent as usize].push(block as u32);
         }
-        let mut pre = vec![0; idom.len()];
-        let mut post = vec![0; idom.len()];
+        let mut pre = vec![0; count];
+        let mut post = vec![0; count];
         let mut clock = 1;
         let mut stack = vec![(0u32, 0usize)];
         while let Some((node, next)) = stack.last_mut() {
@@ -161,12 +164,17 @@ impl Dominators {
                 stack.pop();
             }
         }
-        Dominators { pre, post }
+        Dominators { pre, post, tree }
     }
 
     pub fn dominates(&self, a: u32, b: u32) -> bool {
         let (a, b) = (a as usize, b as usize);
         self.pre[a] <= self.pre[b] && self.post[b] <= self.post[a]
+    }
+
+    /// `a` と `b` の共通の支配者のうち、最も近いもの。
+    pub fn common(&self, a: u32, b: u32) -> u32 {
+        self.tree.intersect(a, b)
     }
 }
 
@@ -255,12 +263,7 @@ pub fn shape(blocks: &[BlockShape]) -> Result<Dominators, String> {
         }
     }
     // R4 を満たせば、どのブロックにも番号の小さいブロックから辺が入るので、入口から届き、支配者が決まっている
-    let idom: Vec<u32> = tree
-        .idom
-        .into_iter()
-        .map(|parent| parent.expect("every block is reachable"))
-        .collect();
-    Ok(Dominators::new(&idom))
+    Ok(Dominators::new(tree))
 }
 
 /// ブロックを番号の順に加えながら育てる支配木。`jump` は Myers の skew-binary の飛び先で、深さだけで決まる。

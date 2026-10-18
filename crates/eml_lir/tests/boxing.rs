@@ -319,3 +319,105 @@ fn main(h.0: obj lin) -> obj lin {
     }
     ");
 }
+
+/// case のフィールド `y` を、後の2つの枝で使う関数。`b3` は `tobj` の位置 (`con`) で、`b4` は `int` の位置
+/// (`extern`) で使う。`both` が真なら、`b3` も `int` の位置で使う。
+fn case_field_in_branches(both: bool) -> String {
+    let b3 = if both {
+        "  let s.3: int = extern Prelude.+(y.2, 2)\n  let u.6: tobj = con Option #1(s.3)\n  return u.6\n"
+    } else {
+        "  let u.6: tobj = con Option #1(y.2)\n  return u.6\n"
+    };
+    format!(
+        "\
+layout Prelude.Bool {{ False, True }}
+layout Option {{ None, Some(tobj) }}
+fn f(o.0: tobj, c.1: enum) -> tobj {{
+  switch o.0 Option {{ #0 -> b1, #1(y.2: int) -> b2 }}
+b1:
+  return #0
+b2:
+  switch c.1 Prelude.Bool {{ #0 -> b3, #1 -> b4 }}
+b3:
+{b3}b4:
+  let t.4: int = extern Prelude.+(y.2, 1)
+  let v.5: tobj = con Option #1(t.4)
+  return v.5
+}}
+"
+    )
+}
+
+#[test]
+fn a_case_field_is_unboxed_in_the_one_branch_that_uses_it_as_a_scalar() {
+    // `y` を `int` で使うのは `b4` だけなので、`unbox` は case の行き先の `b2` でなく `b4` の先頭に置く。`b3` は
+    // `tobj` のままのフィールドを渡す。`b3` を通る実行は `unbox` を踏まない (docs/spec/lir.md の「box の挿入」)
+    insta::assert_snapshot!(function(&boxing_text(&case_field_in_branches(false)), "f"), @"
+    fn f(o.0: tobj, c.1: enum) -> tobj {
+      switch o.0 Option { #0 -> b1, #1(y.7: tobj) -> b2 }
+    b1:
+      return #0
+    b2:
+      switch c.1 Prelude.Bool { #0 -> b3, #1 -> b4 }
+    b3:
+      let u.6: tobj = con Option #1(y.7)
+      return u.6
+    b4:
+      let y.2: int = unbox y.7
+      let t.4: int = extern Prelude.+(y.2, 1)
+      let t.8: tobj = box t.4
+      let v.5: tobj = con Option #1(t.8)
+      return v.5
+    }
+    ");
+}
+
+#[test]
+fn a_case_field_used_as_a_scalar_in_two_branches_is_unboxed_at_their_common_dominator() {
+    // `b3` と `b4` の共通の支配者で最も近いのは `b2` なので、`unbox` は `b2` の先頭に1つだけ置く
+    insta::assert_snapshot!(function(&boxing_text(&case_field_in_branches(true)), "f"), @"
+    fn f(o.0: tobj, c.1: enum) -> tobj {
+      switch o.0 Option { #0 -> b1, #1(y.7: tobj) -> b2 }
+    b1:
+      return #0
+    b2:
+      let y.2: int = unbox y.7
+      switch c.1 Prelude.Bool { #0 -> b3, #1 -> b4 }
+    b3:
+      let s.3: int = extern Prelude.+(y.2, 2)
+      let s.8: tobj = box s.3
+      let u.6: tobj = con Option #1(s.8)
+      return u.6
+    b4:
+      let t.4: int = extern Prelude.+(y.2, 1)
+      let t.9: tobj = box t.4
+      let v.5: tobj = con Option #1(t.9)
+      return v.5
+    }
+    ");
+}
+
+#[test]
+fn a_case_field_never_used_as_a_scalar_is_not_unboxed() {
+    let text = "\
+layout Option { None, Some(tobj) }
+fn f(o.0: tobj) -> tobj {
+  switch o.0 Option { #0 -> b1, #1(y.1: int) -> b2 }
+b1:
+  return #0
+b2:
+  let u.2: tobj = con Option #1(y.1)
+  return u.2
+}
+";
+    insta::assert_snapshot!(function(&boxing_text(text), "f"), @"
+    fn f(o.0: tobj) -> tobj {
+      switch o.0 Option { #0 -> b1, #1(y.3: tobj) -> b2 }
+    b1:
+      return #0
+    b2:
+      let u.2: tobj = con Option #1(y.3)
+      return u.2
+    }
+    ");
+}

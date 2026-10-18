@@ -153,7 +153,7 @@ fn param_reprs(function: &LirFn) -> impl ExactSizeIterator<Item = Repr> + '_ {
 }
 
 /// 辺の規則の検査 (`shape`) に渡す、ブロックの形。
-fn block_shapes(function: &LirFn) -> Vec<BlockShape> {
+pub(crate) fn block_shapes(function: &LirFn) -> Vec<BlockShape> {
     function
         .blocks
         .iter()
