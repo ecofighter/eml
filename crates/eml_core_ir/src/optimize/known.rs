@@ -135,6 +135,8 @@ enum Use {
     /// `apply` の呼ばれる値。引数ごとの印と、`mask` が空でないか。
     Callee {
         args: Vec<Mark>,
+        /// `apply` の結果の変数の印
+        result: Mark,
         masked: bool,
     },
     /// 直接の呼び出しの引数か、`closure` の捕獲。`position` は呼ぶ相手の引数の位置である。
@@ -401,8 +403,20 @@ impl Rewriter<'_> {
         self.vars[var.0 as usize].mark == Mark::Unr
             || self.uses.get(&var).is_some_and(|uses| {
                 uses.iter().all(|use_| match use_ {
-                    Use::Callee { args, masked } => {
-                        rewritable(closure, args, *masked, &self.cx.callees)
+                    Use::Callee {
+                        args,
+                        result,
+                        masked,
+                    } => {
+                        let captured: Vec<Mark> = closure
+                            .captures
+                            .iter()
+                            .map(|&atom| match atom {
+                                Atom::Var(var) => self.vars[var.0 as usize].mark,
+                                _ => Mark::Unr,
+                            })
+                            .collect();
+                        rewritable(closure, &captured, args, *result, *masked, &self.cx.callees)
                     }
                     &Use::Passed { target, position } => {
                         self.cx.shape(target, position, closure).is_some()
@@ -509,7 +523,7 @@ fn uses(function: &CoreFn) -> HashMap<VarId, Vec<Use>> {
         for stmt in &block.stmts {
             match stmt {
                 Stmt::Let {
-                    var: _,
+                    var: result,
                     rhs:
                         Rhs::Call {
                             call:
@@ -527,6 +541,7 @@ fn uses(function: &CoreFn) -> HashMap<VarId, Vec<Use>> {
                         *callee,
                         Use::Callee {
                             args: args.iter().map(|&arg| mark_of(function, arg)).collect(),
+                            result: function.mark(*result),
                             masked,
                         },
                     );
@@ -567,7 +582,18 @@ fn mark_of(function: &CoreFn, atom: Atom) -> Mark {
 /// いるが、一様な instance の値は型変数の印 (`poly`) のままである。box の挿入はこの値を `unbox` で読むだけなので、
 /// Perceus は値かその持ち主を `decref` で手放すことになり、`unr` でない値には出せない (docs/spec/lir.md の
 /// 「Kind の印の検査」の V1)。
-fn rewritable(closure: &KnownClosure, args: &[Mark], masked: bool, callees: &[Callee]) -> bool {
+///
+/// 包むコンストラクタに引数を渡して結果を `con` にするときは、結果の印が引数の印の合併以上でなければならない
+/// (docs/spec/lir.md の「Kind の印の検査」の組み立ての検査)。型変数の位置の `poly` の引数を `unr` の結果の `con` に
+/// 入れる形は、`apply` のまま残す。
+fn rewritable(
+    closure: &KnownClosure,
+    captured: &[Mark],
+    args: &[Mark],
+    result: Mark,
+    masked: bool,
+    callees: &[Callee],
+) -> bool {
     let callee = &callees[closure.function.0 as usize];
     let given = closure.captures.len() + args.len();
     let unboxes_non_unr = args.iter().enumerate().any(|(index, &mark)| {
@@ -578,6 +604,22 @@ fn rewritable(closure: &KnownClosure, args: &[Mark], masked: bool, callees: &[Ca
                 .is_some_and(|param| param.repr.needs_box())
     });
     if unboxes_non_unr {
+        return false;
+    }
+    let builds_con = matches!(callee.wrapper, Some(Wrapper::Con(_)));
+    let joined_fits = || {
+        let result = if given == callee.arity {
+            result
+        } else {
+            callee.ret_mark
+        };
+        captured
+            .iter()
+            .chain(args)
+            .take(callee.arity)
+            .all(|&mark| result.at_least(mark))
+    };
+    if builds_con && given >= callee.arity && !joined_fits() {
         return false;
     }
     match given.cmp(&callee.arity) {
@@ -630,7 +672,23 @@ fn replace(
                     _ => Mark::Unr,
                 })
                 .collect();
-            if !rewritable(&closure, &marks, !mask.is_empty(), callees) {
+            let captured: Vec<Mark> = closure
+                .captures
+                .iter()
+                .map(|&atom| match atom {
+                    Atom::Var(var) => vars[var.0 as usize].mark,
+                    _ => Mark::Unr,
+                })
+                .collect();
+            let result = vars[var.0 as usize].mark;
+            if !rewritable(
+                &closure,
+                &captured,
+                &marks,
+                result,
+                !mask.is_empty(),
+                callees,
+            ) {
                 return None;
             }
             let mut given = closure.captures;

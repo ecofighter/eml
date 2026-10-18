@@ -115,7 +115,7 @@ S13e-1 で、関数ごとの作業リストを持つ1つのパスを作る。S13
 ### 書き換え
 
 - 既知の閉包への `apply` は、`call f(c_1, .., c_n, 引数…)` にする。引数の数が足りないときと余るときは、translate が呼ぶ相手の分かっている呼び出しにしている場合分け (`docs/spec/core-ir.md` の「変換の規則」の eval/apply) と同じに扱う
-- translate が作る共有の包み (`op$`、`con$`、`cont$`、`cont$state`) は、複製の鍵にせず、`call` にもしない。`docs/spec/core-ir.md` の「REPL の入力」のとおり、これらは直接呼ばれないことで、box の挿入がいつもその場で一様にするためである (`crates/eml_core_ir/tests/boxing.rs` の `shared_wrappers_are_never_called_directly_and_become_uniform_in_place` が固定する。確かめる内容は変えず、包む関数の値をデータを通して使う所に届けるようにプログラムだけを書き直す。下の「種類2」)。代わりに、引数のそろった `apply` を、包んでいる命令に戻す
+- translate が作る共有の包み (`op$`、`con$`、`cont$`、`cont$state`) は、複製の呼び出し先にせず、`call` にもしない。鍵の閉包の関数にはしてよい。複製の中で、引数のそろった `apply` が包んでいる命令に戻るためである。`docs/spec/core-ir.md` の「REPL の入力」のとおり、これらは直接呼ばれないことで、box の挿入がいつもその場で一様にするためである (`crates/eml_core_ir/tests/boxing.rs` の `shared_wrappers_are_never_called_directly_and_become_uniform_in_place` が固定する。確かめる内容は変えず、包む関数の値をデータを通して使う所に届けるようにプログラムだけを書き直す。下の「種類2」)。代わりに、引数のそろった `apply` を、包んでいる命令に戻す
   - `op$E.op` への `apply` は `perform E.op(引数…)` にする。`mask` の付いた `apply` は、`perform` が `mask` を持てないので書き換えない。`List.each yield lines` のような形が S13e-2 の経路の条件を満たすようにするためである (私の判断)
   - `con$C` への `apply` は `con C(引数…)` にする
   - `cont$` と `cont$state` への `apply` は、捕獲の生の継続への `resume` にする

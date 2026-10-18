@@ -229,6 +229,42 @@ fn map_is_copied_for_a_known_lambda() {
 }
 
 #[test]
+fn each_yield_is_specialized() {
+    let text = "\
+import Yield (Yield(..))
+
+emit : List String -> Unit -> <Yield String> Unit
+emit lines () = List.each yield lines
+
+main : Unit -> <IO> Unit
+main () = println (show (Yield.collect (emit [\"a\"])))
+";
+    let shown = core_text(text, Pass::Optimize);
+    let copy = shown
+        .lines()
+        .find(|line| line.contains("fn \"Std.List.each@") && line.contains("{0="))
+        .unwrap_or_else(|| panic!("{shown}"));
+    let name = copy.split('"').nth(1).unwrap();
+    let body = function(&shown, name);
+    assert!(body.contains("perform Std.Yield.Yield.yield("), "{body}");
+    assert!(!body.contains("apply"), "{body}");
+}
+
+#[test]
+fn a_wrapper_shaped_lambda_is_specialized() {
+    let text =
+        "main : Unit -> <IO> Unit\nmain () = println (show (List.map (fn x -> Some x) [1, 2, 3]))";
+    let shown = core_text(text, Pass::Optimize);
+    let go = shown
+        .lines()
+        .find(|line| line.contains("fn \"Std.List.map@") && line.contains("$let$go"))
+        .unwrap_or_else(|| panic!("{shown}"));
+    let body = function(&shown, go.split('"').nth(1).unwrap());
+    assert!(body.contains("con Prelude.Option #1"), "{body}");
+    assert!(!body.contains("apply"), "{body}");
+}
+
+#[test]
 fn a_recursive_call_reuses_the_copy() {
     let text = include_str!("../../../bench/tree.em");
     let folds: Vec<String> = names(text, Pass::Optimize)

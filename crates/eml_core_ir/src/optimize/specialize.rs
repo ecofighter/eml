@@ -127,7 +127,7 @@ impl Specializer {
         }
         let function = closure.function.0 as usize;
         let callee = &self.callees[function];
-        if callee.wrapper.is_some() || 1 + self.depths[function] > MAX_KEY_DEPTH {
+        if 1 + self.depths[function] > MAX_KEY_DEPTH {
             return None;
         }
         Some(ClosureShape {
