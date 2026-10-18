@@ -2378,7 +2378,8 @@ fn lifted_functions_are_named_after_their_instance() {
 
 #[test]
 fn a_boxed_wrapper_is_named_after_its_instance() {
-    let text = "inc : a -> Int -> Int\ninc _ n = n + 1\n\napply_to : (Int -> Int) -> Int -> Int\napply_to f x = f x\n\nmain : Unit -> <IO> Unit\nmain () = println (show (apply_to (inc ()) 1))";
+    // 部分適用はデータを通して渡し、optimize が `apply_to` を特殊化して `inc@[Unit]` を直接呼ばないようにする
+    let text = "data Box a = | Box a\n\nhide : a -> Box a\nhide x = Box x\n\ninc : a -> Int -> Int\ninc _ n = n + 1\n\napply_to : (Int -> Int) -> Int -> Int\napply_to f x = f x\n\nmain : Unit -> <IO> Unit\nmain () =\n  let Box g = hide (inc ())\n  println (show (apply_to g 1))";
     let shown = lir_text(text, eml_lir::Pass::Boxing);
     assert!(
         shown.contains("\"inc@[Unit]$boxed\""),

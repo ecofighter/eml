@@ -117,13 +117,13 @@ fn fold_state() {
         yield_frames: 0,
         unwound_frames: 0,
         string_bytes_copied: 10,
-        rc_increments: 400005,
-        rc_decrements: 400017,
+        rc_increments: 300005,
+        rc_decrements: 300014,
         boxes: 200003,
         unboxes: 200002,
-        allocations: 13,
-        peak_objects: 10,
-        peak_stack: 45,
+        allocations: 10,
+        peak_objects: 8,
+        peak_stack: 43,
     }
     ");
 }
@@ -139,11 +139,11 @@ fn list() {
         string_bytes_copied: 11,
         rc_increments: 0,
         rc_decrements: 200001,
-        boxes: 400000,
-        unboxes: 400000,
+        boxes: 200000,
+        unboxes: 200000,
         allocations: 200002,
         peak_objects: 100001,
-        peak_stack: 700015,
+        peak_stack: 600014,
     }
     ");
 }
@@ -199,8 +199,8 @@ fn tree() {
         string_bytes_copied: 37,
         rc_increments: 14898,
         rc_decrements: 266465,
-        boxes: 44694,
-        unboxes: 281359,
+        boxes: 14898,
+        unboxes: 251563,
         allocations: 251568,
         peak_objects: 14900,
         peak_stack: 392,
@@ -218,12 +218,12 @@ fn iter_generate() {
         unwound_frames: 0,
         string_bytes_copied: 10,
         rc_increments: 300001,
-        rc_decrements: 1300009,
-        boxes: 500001,
-        unboxes: 500001,
-        allocations: 1000009,
+        rc_decrements: 1300008,
+        boxes: 300002,
+        unboxes: 300002,
+        allocations: 1000008,
         peak_objects: 10,
-        peak_stack: 36,
+        peak_stack: 34,
     }
     ");
 }
@@ -238,12 +238,12 @@ fn iter_pipeline() {
         unwound_frames: 0,
         string_bytes_copied: 15,
         rc_increments: 300001,
-        rc_decrements: 1800013,
-        boxes: 550001,
-        unboxes: 600001,
-        allocations: 1500013,
+        rc_decrements: 1800012,
+        boxes: 350002,
+        unboxes: 400002,
+        allocations: 1500012,
         peak_objects: 14,
-        peak_stack: 52,
+        peak_stack: 49,
     }
     ");
 }
@@ -258,10 +258,10 @@ fn iter_pipeline_by_hand() {
         unwound_frames: 0,
         string_bytes_copied: 15,
         rc_increments: 300001,
-        rc_decrements: 1800013,
-        boxes: 350001,
-        unboxes: 400001,
-        allocations: 1500013,
+        rc_decrements: 1800012,
+        boxes: 350002,
+        unboxes: 400002,
+        allocations: 1500012,
         peak_objects: 14,
         peak_stack: 49,
     }
@@ -279,11 +279,11 @@ fn orders() {
         string_bytes_copied: 9,
         rc_increments: 100000,
         rc_decrements: 459321,
-        boxes: 219490,
-        unboxes: 219490,
+        boxes: 39830,
+        unboxes: 39830,
         allocations: 359322,
         peak_objects: 200001,
-        peak_stack: 23,
+        peak_stack: 20,
     }
     ");
 }
@@ -317,13 +317,13 @@ fn push_fold() {
         yield_frames: 0,
         unwound_frames: 0,
         string_bytes_copied: 10,
-        rc_increments: 300001,
-        rc_decrements: 300008,
+        rc_increments: 200001,
+        rc_decrements: 200006,
         boxes: 200002,
         unboxes: 200002,
-        allocations: 8,
-        peak_objects: 7,
-        peak_stack: 37,
+        allocations: 6,
+        peak_objects: 5,
+        peak_stack: 36,
     }
     ");
 }
@@ -338,12 +338,12 @@ fn push_fold_by_hand() {
         unwound_frames: 0,
         string_bytes_copied: 10,
         rc_increments: 100001,
-        rc_decrements: 100007,
+        rc_decrements: 100006,
         boxes: 200002,
         unboxes: 200002,
-        allocations: 7,
-        peak_objects: 6,
-        peak_stack: 29,
+        allocations: 6,
+        peak_objects: 5,
+        peak_stack: 30,
     }
     ");
 }
@@ -399,11 +399,11 @@ fn upsert() {
         string_bytes_copied: 157580,
         rc_increments: 513768,
         rc_decrements: 892534,
-        boxes: 39407,
-        unboxes: 76222,
+        boxes: 20000,
+        unboxes: 56815,
         allocations: 378767,
         peak_objects: 6002,
-        peak_stack: 224,
+        peak_stack: 206,
     }
     ");
 }

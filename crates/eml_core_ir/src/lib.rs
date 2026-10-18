@@ -10,6 +10,7 @@ use eml_lir::{
 
 mod builder;
 mod evidence;
+mod fnv;
 pub(crate) mod liveness;
 mod lowering;
 mod optimize;

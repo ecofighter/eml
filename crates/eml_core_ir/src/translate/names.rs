@@ -7,6 +7,7 @@ use std::collections::{HashMap, HashSet};
 use eml_hir::{ClassId, EffectId, ModuleId, ModuleOrigin, Program as HirProgram, TypeDefId};
 
 use super::program::versioned;
+use crate::fnv::Fnv;
 use eml_types::{EffectLabel, Lin, RowTail, TypeId, TypeKind, TypeNames, TypeStore};
 
 /// 型、エフェクト、クラスの名前の表。Prelude の item は修飾しない。入口のモジュールの item は修飾しないが、Prelude の
@@ -205,31 +206,7 @@ impl Hasher<'_> {
     }
 }
 
-/// 64 ビットの FNV-1a。名前はプロセスをまたいで同じでなければならないので、種を乱数で選ぶ `std` のハッシュは使わない。
-struct Fnv(u64);
-
 impl Fnv {
-    fn new() -> Fnv {
-        Fnv(0xcbf2_9ce4_8422_2325)
-    }
-
-    fn bytes(&mut self, bytes: &[u8]) {
-        for &byte in bytes {
-            self.0 ^= u64::from(byte);
-            self.0 = self.0.wrapping_mul(0x0000_0100_0000_01b3);
-        }
-    }
-
-    fn number(&mut self, value: u64) {
-        self.bytes(&value.to_le_bytes());
-    }
-
-    /// 長さを先に混ぜ、続く値と境目がずれないようにする。
-    fn text(&mut self, text: &str) {
-        self.number(text.len() as u64);
-        self.bytes(text.as_bytes());
-    }
-
     fn lin(&mut self, lin: Lin) {
         match lin {
             Lin::Unr => self.number(0),

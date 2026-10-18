@@ -514,6 +514,11 @@ yields fn h() -> int {
 
 const ASK: &str = "effect Ask where\n  ask : Unit -> Int\n\n";
 
+/// 関数の値をデータに入れて取り出す。optimize はデータを通った値を既知の閉包としないので
+/// (docs/superpowers/specs/2026-10-18-s13e-specialization-design.md の「既知の閉包」)、取り出した値への呼び出しは
+/// 特殊化されない。
+const HIDE: &str = "data Box a = | Box a\n\nhide : a -> Box a\nhide x = Box x\n\n";
+
 /// handle の場所の形 (docs/spec/core-ir.md の「handle と `prompt$`」)。
 /// in-place の入口を `ev_set_clause` で入れてから `evv` を替え、本体の結果を `prompt$` に渡す。
 #[test]
@@ -677,8 +682,10 @@ fn instance_name(shown: &str, name: &str) -> String {
 fn a_masked_call_restores_the_evidence_list_and_wraps_the_continuation() {
     // 遅い道は κ を `mask$[State]` で包んでから `run$k1` を `compose$` で足す。速い道の先頭で `evv_set(w0)` が
     // `evv` を戻し、`run$k1` の引数に w0 はない
-    let text = "effect State s where\n  get : Unit -> s\n  put : s -> Unit\n\nrun : (Unit -> <e> String) -> <State Int | e> String\nrun cb =\n  let n = get ()\n  let s = cb ()\n  s ++ show n\n\ncb : Unit -> <State String> String\ncb () = get () ++ \"!\"\n\nmain : Unit -> <IO> Unit\nmain () =\n  let r = handle (handle run cb with\n                    | ctl get () k -> k 42\n                    | ctl put _ k -> k ()) with\n            | ctl get () k -> k \"str\"\n            | ctl put _ k -> k ()\n  println r";
-    let shown = core_text(text, Pass::Evidence);
+    let text = format!(
+        "effect State s where\n  get : Unit -> s\n  put : s -> Unit\n\n{HIDE}run : (Unit -> <e> String) -> <State Int | e> String\nrun cb =\n  let n = get ()\n  let s = cb ()\n  s ++ show n\n\ncb : Unit -> <State String> String\ncb () = get () ++ \"!\"\n\nmain : Unit -> <IO> Unit\nmain () =\n  let Box f = hide cb\n  let r = handle (handle run f with\n                    | ctl get () k -> k 42\n                    | ctl put _ k -> k ()) with\n            | ctl get () k -> k \"str\"\n            | ctl put _ k -> k ()\n  println r"
+    );
+    let shown = core_text(&text, Pass::Evidence);
     let run = instance_name(&shown, "run");
     insta::assert_snapshot!(function(&shown, &run), @r#"
     yields fn "run<e>"(cb.0: tobj poly) -> obj {
@@ -729,8 +736,10 @@ fn a_masked_call_restores_the_evidence_list_and_wraps_the_continuation() {
 fn a_masked_call_in_a_continuation_restores_the_evidence_list_before_it_continues() {
     // 2つ目の `cb ()` は1つ目の地点の後の区間にあるので、`run$k0` の中の地点になる。`run$k0` の速い道は `run$k1` を
     // 呼んで止まるが、その前に `evv_set(w0)` で `evv` を戻す。`run$k1` の本体には `evv_set` がない
-    let text = "effect State s where\n  get : Unit -> s\n  put : s -> Unit\n\nrun : (Unit -> <e> String) -> <State Int | e> String\nrun cb =\n  let a = cb ()\n  let b = cb ()\n  a ++ b\n\ncb : Unit -> <State String> String\ncb () = get ()\n\nmain : Unit -> <IO> Unit\nmain () =\n  let r = handle (handle run cb with\n                    | ctl get () k -> k 42\n                    | ctl put _ k -> k ()) with\n            | ctl get () k -> k \"str\"\n            | ctl put _ k -> k ()\n  println r";
-    let shown = core_text(text, Pass::Evidence);
+    let text = format!(
+        "effect State s where\n  get : Unit -> s\n  put : s -> Unit\n\n{HIDE}run : (Unit -> <e> String) -> <State Int | e> String\nrun cb =\n  let a = cb ()\n  let b = cb ()\n  a ++ b\n\ncb : Unit -> <State String> String\ncb () = get ()\n\nmain : Unit -> <IO> Unit\nmain () =\n  let Box f = hide cb\n  let r = handle (handle run f with\n                    | ctl get () k -> k 42\n                    | ctl put _ k -> k ()) with\n            | ctl get () k -> k \"str\"\n            | ctl put _ k -> k ()\n  println r"
+    );
+    let shown = core_text(&text, Pass::Evidence);
     let run = instance_name(&shown, "run");
     insta::assert_snapshot!(function(&shown, &format!("{run}$k0")), @r#"
     internal yields fn "run<e>$k0"(cb.0: tobj, t.1: obj) -> obj {
@@ -792,7 +801,7 @@ fn a_resume_in_a_yielding_function_becomes_a_yielding_apply() {
 #[test]
 fn a_pure_instance_of_a_row_polymorphic_function_has_no_yield_check() {
     let text = format!(
-        "{ASK}twice : (Unit -> <e> Int) -> <e> Int\ntwice f = f () + f ()\n\npure : Unit -> Int\npure () = twice (fn () -> 1)\n\nmain : Unit -> <IO> Unit\nmain () =\n  println (show (pure ()))\n  println (show (handle twice ask with\n    | ctl ask () k -> k 2))"
+        "{ASK}{HIDE}twice : (Unit -> <e> Int) -> <e> Int\ntwice f = f () + f ()\n\npure : Unit -> Int\npure () =\n  let Box f = hide (fn () -> 1)\n  twice f\n\nmain : Unit -> <IO> Unit\nmain () =\n  println (show (pure ()))\n  let Box g = hide ask\n  println (show (handle twice g with\n    | ctl ask () k -> k 2))"
     );
     let shown = core_text(&text, Pass::Evidence);
     insta::assert_snapshot!(function(&shown, "twice"), @"
@@ -1017,18 +1026,23 @@ fn an_extern_wrapper_does_not_yield() {
         .lines()
         .filter(|line| line.contains("fn ") && line.contains("$extern"))
         .collect();
-    insta::assert_snapshot!(wrappers.join("\n"), @"
+    insta::assert_snapshot!(wrappers.join("\n"), @r#"
     internal fn main$extern0(p.0: obj lin) -> unit {
     internal fn main$extern1(p.0: obj) -> obj lin {
-    ");
+    fn "Std.List.map@[String, Std.Fs.File]{0=main$extern1}"(xs.1: tobj) -> tobj lin {
+    fn "Std.List.each@[Std.Fs.File]{0=main$extern0}"($1.1: tobj lin) -> unit {
+    fn "Std.List.map@[String, Std.Fs.File]$let$go{0=main$extern1}"(acc.1: tobj lin, ys.2: tobj) -> tobj lin {
+    "#);
 }
 
 /// `yields` でない関数の `mask` 付きの呼び出しは、`evv` を替えて戻すだけで、yield の確認も遅い道も持たない。
 /// 内側の `Fail` の handler を飛ばす `fail` は、継続を作らずに外側の handler へ巻き戻す。
 #[test]
 fn a_masked_call_in_a_non_yielding_function_has_no_slow_path() {
-    let text = "effect Fail where\n  never fail : String -> a\n\nrun : (Unit -> <e> Int) -> <Fail | e> Int\nrun cb =\n  let x = cb ()\n  x + 1\n\nmain : Unit -> <IO> Unit\nmain () =\n  let r = handle (handle run (fn () -> fail \"outer\") with\n                    | ctl fail _ -> 1) with\n            | ctl fail _ -> 2\n  println (show r)";
-    let shown = core_text(text, Pass::Evidence);
+    let text = format!(
+        "effect Fail where\n  never fail : String -> a\n\n{HIDE}run : (Unit -> <e> Int) -> <Fail | e> Int\nrun cb =\n  let x = cb ()\n  x + 1\n\nmain : Unit -> <IO> Unit\nmain () =\n  let Box cb = hide (fn () -> fail \"outer\")\n  let r = handle (handle run cb with\n                    | ctl fail _ -> 1) with\n            | ctl fail _ -> 2\n  println (show r)"
+    );
+    let shown = core_text(&text, Pass::Evidence);
     insta::assert_snapshot!(function(&shown, "run"), @"
     fn run(cb.0: tobj poly) -> int {
       let w.3: tobj = prim evv_get()

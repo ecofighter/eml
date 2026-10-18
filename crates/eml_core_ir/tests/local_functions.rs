@@ -238,14 +238,25 @@ fn a_lifted_function_has_the_same_lir_as_a_top_level_helper() {
     }
 }
 
+/// 関数を受ける std の関数には、データを通した値を渡す。optimize はデータを通った値を既知の閉包としないので
+/// (docs/superpowers/specs/2026-10-18-s13e-specialization-design.md の「既知の閉包」)、特殊化しない std の関数の
+/// LIR が残る。
 const STD_PROGRAM: &str = "\
+data Box a = | Box a
+
+hide : a -> Box a
+hide x = Box x
+
 main : Unit -> <IO> Unit
 main () =
   let xs = [1, 2, 3]
+  let Box inc = hide (fn x -> x + 1)
+  let Box big = hide (fn x -> x > 1)
+  let Box keep = hide (fn x -> if x > 1 then Some x else None)
   println (show (List.length xs))
-  println (show (List.length (List.map (fn x -> x + 1) xs)))
-  println (show (List.length (List.filter (fn x -> x > 1) xs)))
-  println (show (List.length (List.filter_map (fn x -> if x > 1 then Some x else None) xs)))
+  println (show (List.length (List.map inc xs)))
+  println (show (List.length (List.filter big xs)))
+  println (show (List.length (List.filter_map keep xs)))
   println (show (List.length (String.split \",\" \"a,b\")))
   println (show (List.length (String.lines \"a\\nb\")))
   println (String.join \",\" [\"a\", \"b\"])

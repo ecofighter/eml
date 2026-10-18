@@ -51,7 +51,8 @@ fn returning_a_field_of_a_call_result_is_not_a_tail_call() {
 
 #[test]
 fn calls_in_tail_position_are_tail_calls() {
-    let text = "loop : Int -> Int -> Int\nloop n acc = if n == 0 then acc else loop (n - 1) (acc + 1)\n\ncall_twice : (Int -> Int) -> Int -> Int\ncall_twice f x = f (f x)\n\nmain : Unit -> <IO> Unit\nmain () = println (show (loop 3 0 + call_twice (fn x -> x + 1) 1))";
+    // ラムダはデータを通して渡し、optimize が `call_twice` を特殊化しないようにする。`apply` の末尾呼び出しを見るためである
+    let text = "data Box a = | Box a\n\nhide : a -> Box a\nhide x = Box x\n\nloop : Int -> Int -> Int\nloop n acc = if n == 0 then acc else loop (n - 1) (acc + 1)\n\ncall_twice : (Int -> Int) -> Int -> Int\ncall_twice f x = f (f x)\n\nmain : Unit -> <IO> Unit\nmain () =\n  let Box f = hide (fn x -> x + 1)\n  println (show (loop 3 0 + call_twice f 1))";
     let shown = lir_text(text, eml_lir::Pass::Contract);
     insta::assert_snapshot!(function(&shown, "loop"), @"
     fn loop(n.0: int, acc.1: int) -> int {

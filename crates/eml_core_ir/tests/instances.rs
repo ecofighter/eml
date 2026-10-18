@@ -569,7 +569,26 @@ fn a_closure_with_a_file_passed_as_a_type_variable_lowers() {
         .filter(|function| !function.internal && function.name.starts_with("f@"))
         .map(|function| function.name.as_str())
         .collect();
-    assert_eq!(names, ["f@[Int]", "f@[poly Int -> <IO> Int]"]);
+    // optimize は `f` を既知のラムダごとに複製するので、2つの instance は複製に置き換わる。複製の連鎖は鍵の入れ子の
+    // 深さで止まる (docs/superpowers/specs/2026-10-18-s13e-specialization-design.md の「鍵」)
+    assert_eq!(
+        names,
+        [
+            "f@[Int]{1=main$lambda0, 2=shut_with}",
+            "f@#a5c201dc663fca79",
+            "f@#c525f19f0fa72adf",
+            "f@#8125c0618c7d4a0f",
+            "f@#57be9109987267a6",
+            "f@[Int]$lambda0{1=main$lambda0, 2=shut_with}",
+            "f@#4e5278e67ecf2e33",
+            "f@[poly Int -> <IO> Int]$lambda1{0=f@#a5c201dc663fca79}",
+            "f@[poly Int -> <IO> Int]$lambda1{0=f@#8125c0618c7d4a0f}",
+            "f@[Int]$lambda1{0=f@[Int]$lambda0{1=main$lambda0, 2=shut_with}}",
+            "f@#a5c201dc663fca79$boxed",
+            "f@#8125c0618c7d4a0f$boxed",
+            "f@[Int]$lambda0{1=main$lambda0, 2=shut_with}$boxed",
+        ]
+    );
 }
 
 #[test]
