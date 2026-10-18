@@ -844,3 +844,51 @@ main () =
         assert!(b.contains(copy.trim()), "{copy}\n---\n{b}");
     }
 }
+
+/// 定数の操作の引数を節の本体に展開すると、その定数で分ける `switch` ができる。合う case へのジャンプにして、読み直した
+/// IR が変換の段の verifier を通ることを確かめる (`core_text` が読み直す)。
+#[test]
+fn a_constant_operation_argument_folds_the_clause_switch() {
+    let text = "\
+import Yield (Yield(..))
+
+data Level = | Info | Warn
+
+effect Say where
+  say : Level -> Unit
+
+flags : Unit -> <Yield Bool> Int
+flags () =
+  yield True
+  yield False
+  41
+
+levels : Unit -> <Say> Unit
+levels () =
+  say Info
+  say Warn
+
+main : Unit -> <IO> Unit
+main () =
+  let r = handle flags () from 0 with
+    | fn yield b st -> if b then ((), st + 10) else ((), st + 1)
+    | return x st -> x * 100 + st
+  println (show r)
+  handle levels () with
+    | fn say l -> match l with
+      | Info -> println \"info\"
+      | Warn -> println \"warn\"
+";
+    let shown = core_text(text, Pass::Optimize);
+    assert!(!shown.contains("handle "), "{shown}");
+    for line in shown
+        .lines()
+        .filter(|line| line.trim_start().starts_with("switch "))
+    {
+        let scrutinee = line.trim_start()["switch ".len()..]
+            .split(' ')
+            .next()
+            .unwrap();
+        assert!(!scrutinee.starts_with('#'), "{line}\n{shown}");
+    }
+}

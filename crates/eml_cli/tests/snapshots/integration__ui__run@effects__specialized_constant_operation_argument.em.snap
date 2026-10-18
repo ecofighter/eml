@@ -1,0 +1,11 @@
+---
+source: crates/eml_cli/tests/ui.rs
+expression: "format!(\"--- stdout ---\\n{stdout}--- stderr ---\\n{diagnostics}{stderr}{written}{exit}\")"
+input_file: tests/ui/run/effects/specialized_constant_operation_argument.em
+---
+--- stdout ---
+4211
+info
+warn
+info
+--- stderr ---

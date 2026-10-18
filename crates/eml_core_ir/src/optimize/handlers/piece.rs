@@ -6,7 +6,7 @@ use std::collections::{BTreeSet, HashMap, HashSet};
 use crate::liveness::{insert_var, step_back};
 use crate::tail::tail_position_call;
 use crate::{Block, Call, CoreFn, Rhs, Stmt, Term};
-use eml_lir::{Atom, BlockId, VarId, VarInfo};
+use eml_lir::{Atom, BlockId, CasePattern, VarId, VarInfo};
 
 use super::super::known::fresh;
 
@@ -332,6 +332,12 @@ impl Copy<'_> {
         let mut term = term.clone();
         term.for_each_atom_mut(|atom| *atom = self.atom(*atom));
         term.for_each_successor_mut(|target| *target = block_of(*target));
+        if let Some(target) = constant_target(&term) {
+            return Term::Jump {
+                target,
+                args: Vec::new(),
+            };
+        }
         if let Term::Switch { cases, .. } = &mut term {
             for case in cases {
                 case.fields = case
@@ -343,4 +349,37 @@ impl Copy<'_> {
         }
         term
     }
+}
+
+/// 引数を置き換えて定数になった `switch` の行き先。操作の引数が定数 (`True`、引数のないコンストラクタ、整数) なら、
+/// 節の本体の `switch` の値も定数になる。定数で分ける `switch` は verifier が断るので (docs/spec/lir.md の
+/// 「verifier」)、合う case か `default` へのジャンプにする。定数はフィールドを持たないので、合う case はフィールドを
+/// 束縛しない。`switch` の行き先は引数を持たないので、ジャンプは値を渡さない。ほかの case のブロックには辺が入らなく
+/// なり、複製の最後の `prune` が落とす。
+fn constant_target(term: &Term) -> Option<BlockId> {
+    let Term::Switch {
+        scrutinee,
+        layout: _,
+        cases,
+        default,
+    } = term
+    else {
+        return None;
+    };
+    let pattern = match *scrutinee {
+        Atom::Tag(tag) => CasePattern::Tag(tag),
+        Atom::Int(value) => CasePattern::Int(value),
+        Atom::Var(_) | Atom::Unit | Atom::Fn(_) => return None,
+    };
+    let matched = cases.iter().find(|case| case.pattern == pattern);
+    debug_assert!(
+        matched.is_none_or(|case| case.fields.is_empty()),
+        "a constant has no fields"
+    );
+    Some(
+        matched
+            .map(|case| case.target)
+            .or(*default)
+            .expect("a switch on a constant has a matching case or a default"),
+    )
 }
