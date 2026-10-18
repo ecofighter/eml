@@ -291,9 +291,9 @@ unsafe fn drop_children<M: Mode>(
 /// token を定義する `release` (docs/spec/vm.md の「reuse」)。一意なら残さない子を手放して箱を token にし、そうで
 /// なければ `release` と同じにして空の token を書く。`eml_rt` の `release_reuse` と同じ列を、`release` と同じく
 /// この関数の中に並べる。crate をまたぐ呼び出しを速い道に入れないためである。
-// `vm::run` に展開すると、reuse の命令を使わないプログラムでも命令の数が増えたので、展開しない
-// (docs/spec/vm.md の「置き場所」)
-#[inline(never)]
+// 共有された値の道は `release_shared` に出し、`vm::run` に展開するのは一意な道だけにする。全部を展開すると、
+// reuse の命令を使わないプログラムの命令の数が増えたためである (docs/spec/vm.md の「置き場所」)
+#[inline]
 pub(crate) fn release_reuse<M: Mode>(
     code: &CodeBase<M>,
     ctx: &mut Ctx<M>,
@@ -319,7 +319,7 @@ pub(crate) fn release_reuse<M: Mode>(
             drop_children(heap, w, entries)?;
             heap.into_token(w)?.into_word()
         } else {
-            release_fields(heap, w, entries)?;
+            release_shared(heap, w, entries)?;
             Word::EMPTY
         }
     };
@@ -327,11 +327,25 @@ pub(crate) fn release_reuse<M: Mode>(
     Ok(())
 }
 
+/// token を定義する `release` の、値が共有されていた道。`release` と同じに振る舞う。
+///
+/// # Safety
+/// `release_fields` と同じである。
+#[cold]
+#[inline(never)]
+unsafe fn release_shared<M: Mode>(
+    heap: &mut Heap<M>,
+    w: Word,
+    entries: &[u32],
+) -> Result<(), HeapError> {
+    unsafe { release_fields(heap, w, entries) }
+}
+
 /// token を受ける `con` (docs/spec/vm.md の「reuse」)。空の token なら `con` と同じに確保してフィールドをみな書く。
 /// 空でなければ token の箱を使い、書かない印のフィールドは飛ばす。箱は中身を消さないので、そのフィールドには
 /// 元の値が残っている。
-// 展開しない理由は `release_reuse` と同じである
-#[inline(never)]
+// 空の token の道を `con_fresh` に出す理由は、`release_reuse` が共有された値の道を出す理由と同じである
+#[inline]
 pub(crate) fn con_reuse<M: Mode>(
     code: &CodeBase<M>,
     ctx: &mut Ctx<M>,
@@ -346,25 +360,44 @@ pub(crate) fn con_reuse<M: Mode>(
     // token は verifier を通った IR の token で、このヒープのまだ使っていないものである
     let token = unsafe { Token::from_word(task.get(tok)) };
     let heap = unsafe { ctx.heap_mut() };
-    let reused = !token.is_empty();
-    let w = if reused {
-        if M::CHECKED {
-            counts.reuses += 1;
+    let fields = &ops[7..7 + 2 * n];
+    if token.is_empty() {
+        return con_fresh(heap, task, dst, tag, scanned, raw, lin, fields);
+    }
+    if M::CHECKED {
+        counts.reuses += 1;
+    }
+    // 組は走査する語が 255 個未満の形に限るので、`scan` に収まり、数の語もない
+    // (docs/spec/object-model.md の「ヘッダ」)。物理的な語の数が同じ形の token なので、箱の級も合う
+    let meta = Meta::new(tag as u16, scanned as u8, Kind::Data, lin);
+    let w = unsafe {
+        if in_place {
+            heap.reuse_in_place(token, meta)?
+        } else {
+            heap.con_at(token, (scanned + raw) as usize, meta)?.0
         }
-        // 組は走査する語が 255 個未満の形に限るので、`scan` に収まり、数の語もない
-        // (docs/spec/object-model.md の「ヘッダ」)。物理的な語の数が同じ形の token なので、箱の級も合う
-        let meta = Meta::new(tag as u16, scanned as u8, Kind::Data, lin);
-        unsafe {
-            if in_place {
-                heap.reuse_in_place(token, meta)?
-            } else {
-                heap.con_at(token, (scanned + raw) as usize, meta)?.0
-            }
-        }
-    } else {
-        heap.alloc_data(tag as u16, scanned as usize, raw as usize, lin)
     };
-    unsafe { write_fields(heap, task, w, &ops[7..7 + 2 * n], reused) }?;
+    unsafe { write_fields(heap, task, w, fields, true) }?;
+    task.set(dst, w);
+    Ok(())
+}
+
+/// token を受ける `con` の、token が空の道。`con` と同じに確保して、書かない印のフィールドも書く。
+#[cold]
+#[inline(never)]
+#[expect(clippy::too_many_arguments, reason = "the decoded operands of one con")]
+fn con_fresh<M: Mode>(
+    heap: &mut Heap<M>,
+    task: &mut Task,
+    dst: Slot,
+    tag: u32,
+    scanned: u32,
+    raw: u32,
+    lin: bool,
+    fields: &[u32],
+) -> Result<(), VmFault> {
+    let w = heap.alloc_data(tag as u16, scanned as usize, raw as usize, lin);
+    unsafe { write_fields(heap, task, w, fields, false) }?;
     task.set(dst, w);
     Ok(())
 }
