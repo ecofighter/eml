@@ -574,19 +574,19 @@ fn a_closure_with_a_file_passed_as_a_type_variable_lowers() {
     assert_eq!(
         names,
         [
-            "f@[Int]{1=main$lambda0, 2=shut_with}",
+            "f@[Int]{1=main$lambda0, 2=shut_with/1}",
             "f@#a5c201dc663fca79",
-            "f@#c525f19f0fa72adf",
+            "f@#fdd7ab21470536c1",
             "f@#8125c0618c7d4a0f",
-            "f@#57be9109987267a6",
-            "f@[Int]$lambda0{1=main$lambda0, 2=shut_with}",
-            "f@#4e5278e67ecf2e33",
-            "f@[poly Int -> <IO> Int]$lambda1{0=f@#a5c201dc663fca79}",
-            "f@[poly Int -> <IO> Int]$lambda1{0=f@#8125c0618c7d4a0f}",
-            "f@[Int]$lambda1{0=f@[Int]$lambda0{1=main$lambda0, 2=shut_with}}",
+            "f@#7d810ee743b0d10c",
+            "f@[Int]$lambda0{1=main$lambda0, 2=shut_with/1}",
+            "f@#f05a9ccbe4e4c4b0",
+            "f@[poly Int -> <IO> Int]$lambda1{0=f@#a5c201dc663fca79/1}",
+            "f@[poly Int -> <IO> Int]$lambda1{0=f@#8125c0618c7d4a0f/1}",
+            "f@#3e4b3e52119beca3",
             "f@#a5c201dc663fca79$boxed",
             "f@#8125c0618c7d4a0f$boxed",
-            "f@[Int]$lambda0{1=main$lambda0, 2=shut_with}$boxed",
+            "f@[Int]$lambda0{1=main$lambda0, 2=shut_with/1}$boxed",
         ]
     );
 }

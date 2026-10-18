@@ -16,9 +16,9 @@ pub(crate) const MAX_KEY_DEPTH: usize = 4;
 /// 名前の上限の文字数。超えた名前は、translate の instance の名前と同じくハッシュの形にする。
 const NAME_LIMIT: usize = 64;
 
-/// 複製が受け取る既知の閉包の形。`captures` は閉包の関数の捕獲の位置の引数の Repr と印で、閉包の関数だけで決まる。
-/// 捕獲の値そのものは鍵に入れず、複製の引数として渡す。捕獲の Repr を関数の側にそろえるのは、名前 (関数の名前だけを
-/// 書く) が同じなら複製のコードも同じになるようにするためである。
+/// 複製が受け取る既知の閉包の形。`captures` は閉包の関数の捕獲の位置の引数の Repr と印で、閉包の関数と捕獲の数で
+/// 決まる。捕獲の値そのものは鍵に入れず、複製の引数として渡す。捕獲の Repr を関数の側にそろえるのは、名前 (関数の
+/// 名前と捕獲の数を書く) が同じなら複製のコードも同じになるようにするためである。
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub(crate) struct ClosureShape {
     pub(crate) function: FnIdx,
@@ -204,8 +204,12 @@ impl Specializer {
             .unwrap_or(0)
     }
 
-    /// `<callee>{<i>=<closure fn>, …}`。handle の節の複製は `<callee>@{…} via <owner>` である。上限を超えた名前は、
-    /// 呼び出し先の `@` より前の部分に、名前全体のハッシュを付けた `<base>@#<16 hex>` にする。
+    /// `<callee>{<i>=<closure fn>/<captures>, …}`。捕獲のない閉包は `/<captures>` を省く。handle の節の複製は
+    /// `<callee>@{…} via <owner>` である。上限を超えた名前は、呼び出し先の `@` より前の部分に、名前全体のハッシュを
+    /// 付けた `<base>@#<16 hex>` にする。
+    ///
+    /// 捕獲の Repr と印は閉包の関数と捕獲の数で決まるので (`shape`)、名前は鍵を区別する。同じ関数の部分適用でも、
+    /// 捕獲の数が違えば複製の引数が違う。数を書かないと、同じ名前の関数が2つできる (docs/spec/vm.md の「追記」)。
     pub(crate) fn copy_name(&self, key: &Key) -> String {
         let callee = &self.callees[key.callee.0 as usize].name;
         let args: Vec<String> = key
@@ -213,7 +217,10 @@ impl Specializer {
             .iter()
             .map(|(position, shape)| {
                 let function = &self.callees[shape.function.0 as usize].name;
-                format!("{position}={function}")
+                match shape.captures.len() {
+                    0 => format!("{position}={function}"),
+                    count => format!("{position}={function}/{count}"),
+                }
             })
             .collect();
         let args = args.join(", ");

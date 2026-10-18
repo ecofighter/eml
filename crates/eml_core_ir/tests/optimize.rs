@@ -246,25 +246,25 @@ fn captures_become_parameters() {
     insta::assert_snapshot!(format!(
         "{}\n{}\n{}",
         function(&shown, "main"),
-        function(&shown, "Std.List.map@[Int, Int]{0=main$lambda0}"),
-        function(&shown, "Std.List.map@[Int, Int]$let$go{0=main$lambda0}")
+        function(&shown, "Std.List.map@[Int, Int]{0=main$lambda0/1}"),
+        function(&shown, "Std.List.map@[Int, Int]$let$go{0=main$lambda0/1}")
     ), @r#"
     fn main(p.0: unit) -> unit {
       let d.2: tobj = con Prelude.List #1(3, #0)
       let d.3: tobj = con Prelude.List #1(2, d.2)
       let d.4: tobj = con Prelude.List #1(1, d.3)
-      let t.5: tobj = call "Std.List.map@[Int, Int]{0=main$lambda0}"(3, d.4)
+      let t.5: tobj = call "Std.List.map@[Int, Int]{0=main$lambda0/1}"(3, d.4)
       let t.6: obj = call "Prelude.Show List.show@[Int]"(t.5)
       let t.7: unit = extern Prelude.println(t.6)
       return t.7
     }
 
-    fn "Std.List.map@[Int, Int]{0=main$lambda0}"(k.3: int, xs.1: tobj) -> tobj {
-      let t.2: tobj = call "Std.List.map@[Int, Int]$let$go{0=main$lambda0}"(k.3, #0, xs.1)
+    fn "Std.List.map@[Int, Int]{0=main$lambda0/1}"(k.3: int, xs.1: tobj) -> tobj {
+      let t.2: tobj = call "Std.List.map@[Int, Int]$let$go{0=main$lambda0/1}"(k.3, #0, xs.1)
       return t.2
     }
 
-    fn "Std.List.map@[Int, Int]$let$go{0=main$lambda0}"(k.9: int, acc.1: tobj, ys.2: tobj) -> tobj {
+    fn "Std.List.map@[Int, Int]$let$go{0=main$lambda0/1}"(k.9: int, acc.1: tobj, ys.2: tobj) -> tobj {
       switch ys.2 Prelude.List { #0 -> b1, #1(x.3: int, rest.4: tobj) -> b2 }
     b1:
       let t.5: tobj = call "Std.List.reverse@[Int]"(acc.1)
@@ -272,7 +272,7 @@ fn captures_become_parameters() {
     b2:
       let t.6: int = call main$lambda0(k.9, x.3)
       let d.7: tobj = con Prelude.List #1(t.6, acc.1)
-      let t.8: tobj = call "Std.List.map@[Int, Int]$let$go{0=main$lambda0}"(k.9, d.7, rest.4)
+      let t.8: tobj = call "Std.List.map@[Int, Int]$let$go{0=main$lambda0/1}"(k.9, d.7, rest.4)
       return t.8
     }
     "#);
@@ -426,4 +426,64 @@ main () =
     let distinct: std::collections::HashSet<_> = clauses.iter().collect();
     assert_eq!(distinct.len(), 4, "{}", pretty(&program));
     eml_test_support::core_until(text, Pass::Evidence);
+}
+
+/// 同じ関数の閉包でも、捕獲の数が違えば鍵が違う。名前にも捕獲の数を書き、同じ名前の関数が2つにならないようにする
+/// (docs/spec/vm.md の「追記」)。`core_text` は表示を読み直すので、名前が重なれば失敗する。
+#[test]
+fn closures_with_different_capture_counts_get_different_copies() {
+    let text = "\
+apply_to : (Int -> Int) -> Int -> Int
+apply_to f x = f x
+
+add3 : Int -> Int -> Int -> Int
+add3 a b c = a + b + c
+
+pick : (Int -> Int -> Int) -> Int
+pick g = g 1 2
+
+main : Unit -> <IO> Unit
+main () =
+  println (show (apply_to (add3 1 2) 3))
+  println (show (pick (add3 1)))
+";
+    let shown = core_text(text, Pass::Optimize);
+    let copies: Vec<String> = names(text, Pass::Optimize)
+        .into_iter()
+        .filter(|name| name.contains("{0=add3"))
+        .collect();
+    assert_eq!(copies, ["apply_to{0=add3/2}", "pick{0=add3/1}"], "{shown}");
+
+    // 多相再帰の一様な instance は2つの閉包で同じなので、捕獲の数だけが鍵を分ける
+    let text = "\
+data Nested a =
+  | Flat a
+  | Nest (Nested (List a))
+
+map_nested : (a -> b) -> Nested a -> Nested b
+map_nested f n = match n with
+  | Flat x -> Flat (f x)
+  | Nest inner -> Nest (map_nested (List.map f) inner)
+
+add3 : Int -> Int -> Int -> Int
+add3 a b c = a + b + c
+
+main : Unit -> <IO> Unit
+main () =
+  let r1 = map_nested (add3 1 2) (Flat 10)
+  let r2 = map_nested (add3 1) (Flat 10)
+  match r1 with
+    | Flat x -> println (show x)
+    | Nest _ -> println \"nest\"
+  match r2 with
+    | Flat g -> println (show (g 5))
+    | Nest _ -> println \"nest\"
+";
+    let shown = core_text(text, Pass::Optimize);
+    for name in [
+        "map_nested@[_:poly, _:poly]{0=add3/2}",
+        "map_nested@[_:poly, _:poly]{0=add3/1}",
+    ] {
+        function(&shown, name);
+    }
 }

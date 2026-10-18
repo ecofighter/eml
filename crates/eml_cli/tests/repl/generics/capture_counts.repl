@@ -1,0 +1,21 @@
+# 同じ関数の部分適用を、捕獲の数を変えて前の入力の総称な関数に渡す。複製の名前は捕獲の数を含むので、追記で同じ名前の別の
+# コードにならない
+> data Nested a =
+.   | Flat a
+.   | Nest (Nested (List a))
+.
+> map_nested : (a -> b) -> Nested a -> Nested b
+. map_nested f n = match n with
+.   | Flat x -> Flat (f x)
+.   | Nest inner -> Nest (map_nested (List.map f) inner)
+.
+> add3 : Int -> Int -> Int -> Int
+. add3 a b c = a + b + c
+.
+> get : Nested a -> Option a
+. get n = match n with
+.   | Flat x -> Some x
+.   | Nest _ -> None
+.
+> get (map_nested (add3 1 2) (Flat 10))
+> match get (map_nested (add3 1) (Flat 10)) with | Some g -> g 5 | None -> 0

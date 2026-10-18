@@ -1,0 +1,29 @@
+---
+source: crates/eml_cli/tests/repl.rs
+assertion_line: 360
+expression: checked.render()
+input_file: crates/eml_cli/tests/repl/generics/capture_counts.repl
+---
+> data Nested a =
+.   | Flat a
+.   | Nest (Nested (List a))
+.
+> map_nested : (a -> b) -> Nested a -> Nested b
+. map_nested f n = match n with
+.   | Flat x -> Flat (f x)
+.   | Nest inner -> Nest (map_nested (List.map f) inner)
+.
+> add3 : Int -> Int -> Int -> Int
+. add3 a b c = a + b + c
+.
+> get : Nested a -> Option a
+. get n = match n with
+.   | Flat x -> Some x
+.   | Nest _ -> None
+.
+> get (map_nested (add3 1 2) (Flat 10))
+Some 13
+> match get (map_nested (add3 1) (Flat 10)) with | Some g -> g 5 | None -> 0
+16
+--- close ---
+no leaks
