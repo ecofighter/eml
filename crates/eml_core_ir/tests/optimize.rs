@@ -57,7 +57,6 @@ fn a_partial_application_is_called_directly() {
     let text = "add : Int -> Int -> Int\nadd x y = x + y\n\nmain : Unit -> <IO> Unit\nmain () =\n  let g = add 1\n  println (show (g 2))";
     insta::assert_snapshot!(function(&core_text(text, Pass::Optimize), "main"), @r#"
     fn main(p.0: unit) -> unit {
-      let c.1: tobj = closure add(1)
       let t.2: int = call add(1, 2)
       let t.3: obj = extern "Prelude.Show Int.show"(t.2)
       let t.4: unit = extern Prelude.println(t.3)
@@ -71,8 +70,6 @@ fn an_under_saturated_known_apply_builds_a_closure() {
     let text = "add3 : Int -> Int -> Int -> Int\nadd3 x y z = x + y + z\n\nmain : Unit -> <IO> Unit\nmain () =\n  let g = add3 1\n  let h = g 2\n  println (show (h 3))";
     insta::assert_snapshot!(function(&core_text(text, Pass::Optimize), "main"), @r#"
     fn main(p.0: unit) -> unit {
-      let c.1: tobj = closure add3(1)
-      let t.2: tobj = closure add3(1, 2)
       let t.3: int = call add3(1, 2, 3)
       let t.4: obj = extern "Prelude.Show Int.show"(t.3)
       let t.5: unit = extern Prelude.println(t.4)
@@ -127,7 +124,6 @@ fn a_constructor_value_becomes_a_con() {
     let text = "data Pair = | Pair Int Int\n\nfirst : Pair -> Int\nfirst (Pair a _) = a\n\nmain : Unit -> <IO> Unit\nmain () =\n  let p = Pair 1\n  println (show (first (p 2)))";
     insta::assert_snapshot!(function(&core_text(text, Pass::Optimize), "main"), @r#"
     fn main(p.0: unit) -> unit {
-      let c.1: tobj = closure con$Pair(1)
       let t.2: obj = con Pair #0(1, 2)
       let t.3: int = call first(t.2)
       let t.4: obj = extern "Prelude.Show Int.show"(t.3)
@@ -165,4 +161,21 @@ fn an_over_saturated_known_apply_calls_then_applies_the_rest() {
       return t.3
     }
     "#);
+}
+
+/// 書き換えで使われなくなった `closure` は残さない。値として参照されなくなった `add` に、box の挿入が `add$boxed` を
+/// 作らないためである。
+#[test]
+fn a_closure_whose_applies_are_all_rewritten_is_dropped() {
+    let text = "add : Int -> Int -> Int\nadd x y = x + y\n\nmain : Unit -> <IO> Unit\nmain () =\n  let g = add 1\n  println (show (g 2))";
+    let shown = core_text(text, Pass::Optimize);
+    assert!(!shown.contains("closure add("), "{shown}");
+    let lir = eml_test_support::lir(text);
+    assert!(
+        lir.functions
+            .iter()
+            .all(|function| function.name != "add$boxed"),
+        "{}",
+        eml_lir::pretty(&lir)
+    );
 }

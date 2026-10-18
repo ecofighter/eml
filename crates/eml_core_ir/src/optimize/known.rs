@@ -1,7 +1,7 @@
 //! 既知の閉包への `apply` の書き換えと、translate の包む関数の命令への戻し
 //! (docs/superpowers/specs/2026-10-18-s13e-specialization-design.md の「書き換え」)。
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use crate::{Call, CoreFn, Rhs, Stmt, Term};
 use eml_lir::{Atom, Ctor, FnIdx, Mark, MaskItem, Repr, VarId, VarInfo};
@@ -147,6 +147,7 @@ pub(crate) fn rewrite(function: &mut CoreFn, callees: &[Callee]) {
             })
     };
     known.retain(|&var, closure| safe(var, closure, function));
+    let mut rewritten = HashSet::new();
     for index in 0..function.blocks.len() {
         let stmts = std::mem::take(&mut function.blocks[index].stmts);
         let mut out = Vec::with_capacity(stmts.len());
@@ -159,6 +160,17 @@ pub(crate) fn rewrite(function: &mut CoreFn, callees: &[Callee]) {
                 out.push(Stmt::Let { var, rhs });
                 continue;
             };
+            if let Rhs::Call {
+                call:
+                    Call::Apply {
+                        callee: Atom::Var(callee),
+                        ..
+                    },
+                mask: _,
+            } = rhs
+            {
+                rewritten.insert(callee);
+            }
             for stmt in replaced {
                 if let Stmt::Let {
                     var,
@@ -177,6 +189,52 @@ pub(crate) fn rewrite(function: &mut CoreFn, callees: &[Callee]) {
             }
         }
         function.blocks[index].stmts = out;
+    }
+    drop_unused_closures(function, &rewritten);
+}
+
+/// 書き換えた閉包のうち、使う所が残らなかったものの `closure` を消す。残すと、`unr` でない閉包の捕獲を閉包と直接の
+/// 呼び出しの2か所で消費する IR になり、box の挿入も値として参照された関数に `f$boxed` を作る
+/// (docs/superpowers/specs/2026-10-18-s13e-specialization-design.md の「パスの後に直すもの」)。定義は使う所を
+/// 支配し、辺は前へ向かうので、後ろから1回たどれば、消した `closure` だけが捕獲していた、書き換えた閉包も消える。
+fn drop_unused_closures(function: &mut CoreFn, rewritten: &HashSet<VarId>) {
+    if rewritten.is_empty() {
+        return;
+    }
+    let mut uses = vec![0usize; function.vars.len()];
+    for block in &function.blocks {
+        let mut count = |atom: Atom| {
+            if let Atom::Var(var) = atom {
+                uses[var.0 as usize] += 1;
+            }
+        };
+        block
+            .stmts
+            .iter()
+            .for_each(|stmt| stmt.for_each_atom(&mut count));
+        block.term.for_each_atom(&mut count);
+    }
+    for block in function.blocks.iter_mut().rev() {
+        let mut kept = Vec::with_capacity(block.stmts.len());
+        for stmt in block.stmts.drain(..).rev() {
+            if let Stmt::Let {
+                var,
+                rhs: Rhs::MakeClosure(_, captures),
+            } = &stmt
+                && rewritten.contains(var)
+                && uses[var.0 as usize] == 0
+            {
+                for capture in captures {
+                    if let Atom::Var(capture) = capture {
+                        uses[capture.0 as usize] -= 1;
+                    }
+                }
+                continue;
+            }
+            kept.push(stmt);
+        }
+        kept.reverse();
+        block.stmts = kept;
     }
 }
 
