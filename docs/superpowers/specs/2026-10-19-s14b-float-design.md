@@ -99,7 +99,7 @@ pub class Div a where
 | `pi` / `infinity` / `nan` | `Float` | 定数 |
 | `is_nan` | `Float -> Bool` | NaN か |
 | `to_fixed` | `Int -> Float -> <Panic> String` | 小数点以下を指定の桁数で書く。Python の `f"{x:.{n}f}"` と同じ (偶数への丸め、`inf`、`nan`)。桁数が負か 100 を超えると `Panic` |
-| `parse` | `String -> Option Float` | Python の `float(s)` が受ける10進の形 (前後の空白、符号、`inf`、`nan` を含む) |
+| `parse` | `String -> Option Float` | 前後の空白を除き、符号、10進と指数の形、`inf` / `infinity` / `nan` (大文字小文字を問わない) を受ける。Python の `float(s)` と違い、数字の間の `_` は受けない (計画を書くときの私の判断。Rust の `f64` の読み取りに合わせる) |
 
 - `truncate`、`floor`、`ceil`、`round` は、NaN、無限大、`Int` の範囲を外れた値で `Panic` になる (文言は「float `{x}` does not fit in `Int`」)
 - `pi`、`infinity`、`nan` はトップレベルの値で、本体は extern の関数の呼び出しでなく、`Float` のリテラルか extern の値で書く (私の判断。値の本体は `<>` なので、`Panic` を起こさない書き方にする。`infinity` と `nan` はリテラルがなく、今の言語には extern の値もないので、`Pure` の extern の関数 `Unit -> Float` を std の中で呼ぶ形にする)
