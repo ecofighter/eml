@@ -68,10 +68,10 @@ pub try_panic : (Unit -> <Panic | e> a) -> <e> Result String a
 
 - `Fault::Arith` を返しうる extern (`+ - * / %` と `negate`)、`Fault::Index` を返しうる extern (`String.byte_at`、`slice`、`find_from`、`Env.arg`) の std の型に、`<Panic>` を足す。`Env.arg` は `<IO, Panic>` になる
 - `eml_extern` の `Purity::MayFail` は「`Panic` を起こしうる」の意味にする。名前を `Panics` に変え、`Effectful` は `IO` を起こす行に限る。`panic` の行は `Panics` である (私の判断)。`crates/eml_core_ir/tests/externs.rs` と `eml_hir` の行と std を結ぶテストに、`Panics` の行の std の型の row が `Panic` を含み、`Effectful` の行の row が `IO` を含むことの検査を足す
-- `main` の型は、row のラベルが `IO` と `Panic` のどちらか、または両方である `Unit -> <…> Unit` を許す。今の E2004 の比べ方 (型の番号が等しいこと) を、row のラベルの集まりの比べ方に変える
-- トップレベルの値の本体は `<>` で検査する。今の値は参照するたびに計算する純粋な式で、型に row を書く場所がないためである。`Panic` を起こしうる計算は E2002 になる。std の `String.min_int` は、下の負のリテラルで書き直す
+- `main` の型は、row のラベルが `IO` と `Panic` だけで、row 変数の末尾を持たない `Unit -> <…> Unit` を許す (`<>`、`<IO>`、`<Panic>`、`<IO, Panic>`)。今の E2004 の比べ方 (型の番号が等しいこと) を、row のラベルの集まりの比べ方に変える
+- トップレベルの値の本体は `<>` で検査する。今の値は参照するたびに計算する純粋な式で、型に row を書く場所がないためである。`Panic` を起こしうる計算は E2002 になる。std の `String.min_int` は書き直す (下の負のリテラル)
 - `Eq`、`Ord`、`Show` のメソッドの型は変えない。row が空なので、instance の本体で `Panic` を起こしうる計算をすると E2002 になる。要るときは本体の中で `try_panic` を使う。導出した instance は `Panic` を起こさない。利用者が宣言するクラスのメソッドの row は、宣言に書いたとおりである
-- `-` を直接リテラルに付けた形 (`-1`、`-2.5`、`-9223372036854775808`) は、HIR で負のリテラルにする。今は `negate 1` の呼び出しで、`-1` を返すだけの関数にも `<Panic>` が付いてしまうためである。`-` とリテラルの間に空白があっても、前置の `-` の直後がリテラルのトークンなら同じにする。`f -1` を2項の `-` と読む規則は変えない (字句的な負号はロードマップの「言語機能と構文」に残す)。`-9223372036854775808` は正のリテラルとしては範囲を外れるが、負のリテラルとしては受け付ける (私の判断)
+- `-` を直接リテラルに付けた形 (`-1`、`-2.5`) は、HIR で負のリテラルにする。今は `negate 1` の呼び出しで、`-1` を返すだけの関数にも `<Panic>` が付いてしまうためである。`-` とリテラルの間に空白があっても、前置の `-` の直後がリテラルのトークンなら同じにする。`f -1` を2項の `-` と読む規則は変えない (字句的な負号はロードマップの「言語機能と構文」に残す)。`-9223372036854775808` は、今と同じく字句で範囲外の誤りになる (私の判断。字句に負号の文脈を持ち込まない)。std の `String.min_int` は、`<Panic>` を持つ `to_int` の中で計算する形に書き直す
 - REPL の入力の row は `<IO, Panic>` にする。E2015 の文言を `an input may perform only `IO` and `Panic`` に変える
 - `par` の子の row は `<>` なので、`par` の子は `Panic` を起こせない。[マルチコア対応の設計](../../future/multicore.md) の「実行時エラーの報告の決定性」は、型に出さない停止だけの話になる。この文書の範囲では `par` を作らないので、multicore.md に書き足すだけにする
 
@@ -80,18 +80,17 @@ pub try_panic : (Unit -> <Panic | e> a) -> <e> Result String a
 - VM は、`Panics` の行の extern の誤りと、`panic` の呼び出しを、`IO` の失敗と同じ道で扱う ([VM](../../spec/vm.md) の「IO の失敗」)。`ctx.ev_find(Panic)` で `Panic` の evidence を探し、あれば `ev_clause[Panic.panicked]` に `(ev, message)` を渡して呼ぶ。その節の `yield_abort` が巻き戻しを始める。`CodeBase` は、`Prelude.IO` と同じく `Prelude.Panic` のエフェクトの番号を持つ
 - evidence がなければ、今と同じ実行時エラーにする。文言と位置の表示 (`{fault}\n  at path:line:column`) は変えない。利用者の `panic` の文言は `panicked: {message}` とする (私の判断)
 - 算術の専用の命令も、誤りのときは同じ道を通る。専用の命令は巻き戻しの地点になり、巻き戻しの表に行が足りる。速い道の命令の数は変わらない
-- `eml_rt` には、利用者の `panic` の `Fault` の種類を足す。`Fault::panic_message` (`io_error_kind` に当たるもの) が、`Panic` に渡す誤りを選ぶ。`eml_rt` を変えるので、Verus の検証と `verusfmt` の検査も通す
+- `panic` は、`exit` と同じく VM が自分で実行する。引数の文字列をそのまま `panicked` の節に渡し、evidence がなければ文言を写して実行時エラー (`VmFault::Panicked`) にする。`eml_rt` には、`Panic` に渡す誤りを選ぶ `Fault::panics` (`io_error_kind` に当たるもの) だけを足す。`eml_rt` を変えるので、Verus の検証と `verusfmt` の検査も通す
 - すぐに再開する節がその場で動くとき、本体に `Panics` の行の extern か `panic` があれば、`Effectful` の extern と同じく under の形にする ([Core IR](../../spec/core-ir.md) の「`perform` と節の3つの形」)。節の中の誤りを、handle の本体の中の `try_panic` でなく、handle の外の `try_panic` が捕まえるという意味を保つためである。数を数える節 (`fn tick () st -> ((), st + 1)`) にも `evv` の付け替えが増えるので、`RunStats` が変われば理由を計測の基準に書く
 - 捕まえた誤りは巻き戻しで後始末するので、途中のフレームが持つ `File` も手放す。検査モードの漏れの検査も通る
 
 ### 中断しうるかの印
 
-関数と `apply` に、`yields` と並ぶ印 `aborts` を付ける。中断しうる (`never` の操作、`IO` の失敗、`exit`、`Panic`) ことの印である。
+LIR の関数ごとに、中断しうる (`never` の操作、`IO` の失敗、`exit`、`Panic`) かを決め、巻き戻しの地点をそれで絞る。計画を書くときに、型から印を付ける形をやめ、LIR の上で計算する形にした (私の判断。IR のテキストの形も translate も変えずに済み、特殊化の後のコードを直接見るので精度も落ちない)。
 
-- translate は、`yields` と同じく型から印を付ける。関数の印は instance の row から、`apply` の印は矢印の row から決める。row が `<>` (ラベルも row 変数の末尾もない) のときだけ中断しないとみなす。ラベルが `<State>` のように `never` の操作を持たないエフェクトだけでも、すぐに再開する節は操作を起こしたフレームの上でその場で動くので、節の本体の `panic` や IO の失敗が、そのフレームを通って巻き戻るためである。instance の名前の row の印には、中断の印を足さない (私の判断。足すと instance の数が増える。下の付け直しで精度を取り戻す)
-- optimize は、`yields` を付け直すのと同じ時点で、`aborts` を最小の不動点で付け直す。中断しうる命令は、中断しうる関数の呼び出し、`aborts` の `apply`、`perform`、`resume`、`clause`、`Panics` と `Effectful` の行の extern である。`handle` は本体と節の `apply` で数える。既知の閉包への特殊化の後は、`List.map` に純粋な関数を渡した複製が中断しない関数になる
-- LIR は印を写す。巻き戻しの地点 (`eml_lir::unwind::point`) は、中断しうる関数の末尾でない呼び出し、`aborts` の `apply`、`clause`、`Panics` と `Effectful` の行の extern、`prim yield_abort` にする。中断しない関数の呼び出しは巻き戻しの地点にならず、表の行も作らない
-- verifier は、`aborts` でない関数が中断しうる命令を持たないことを確かめる
+- `eml_lir::unwind` が、プログラムの関数ごとに「中断しうる」を最小の不動点で求める。中断しうる文は、中断しうる関数の直接の呼び出し (末尾の呼び出しを含む)、すべての `apply` と `clause` の呼び出し (末尾を含む)、`Pure` でない extern、`prim yield_abort` である。`apply` を中断しうるとみなすのは、すぐに再開する節が操作を起こしたフレームの上でその場で動くので、row が `<State>` のような閉包でも、節の本体の `panic` や IO の失敗がそのフレームを通って巻き戻るためである。row が `<>` の閉包への `apply` を絞るのは、要ればネイティブ化で足す
+- 巻き戻しの地点 (`eml_lir::unwind::point`) は、中断しうる関数の末尾でない呼び出し、末尾でない `apply` と `clause`、`Pure` でない extern、`prim yield_abort` にする。中断しない関数の呼び出しは巻き戻しの地点にならず、表の行も作らない。REPL の入力の LIR はセッションの関数をすべて持つので、不動点は入力ごとに閉じ、名前が同じ関数の表はいつも同じになる
+- 既知の閉包への特殊化の後は、`List.map` に純粋な関数を渡した複製のように、`apply` を持たない複製が中断しない関数になる
 - ネイティブ化では、巻き戻しの地点のない関数に展開情報が要らない。S14a ではその前段として、VM の表の行が減ることを記録する
 - 中断しない計算のうち、消してよいのは今と同じ `Pure` の extern だけにする。中断しない関数の呼び出しを消すには、止まることも分かっている必要がある。止まらないことは型に出していないので、S14a では呼び出しを消す最適化を入れない。S14b の `Float` の演算は `Pure` になるので、使わない `Float` の計算は消える
 
@@ -121,8 +120,8 @@ pub try_panic : (Unit -> <Panic | e> a) -> <e> Result String a
 - [モジュールと名前解決](../../spec/modules.md): `main` の型
 - [型と Kind](../../spec/types.md): REPL の入力の row
 - [VM](../../spec/vm.md): 「中断と実行時エラーの分担」「IO の失敗」に `Panic` を足す
-- [LIR](../../spec/lir.md) と [Core IR](../../spec/core-ir.md): `aborts` の印、巻き戻しの地点、「実行時エラー」
-- [オブジェクトモデル](../../spec/object-model.md): `Fault` の種類と `panic_message`
+- [LIR](../../spec/lir.md) と [Core IR](../../spec/core-ir.md): 中断しうるかの不動点、巻き戻しの地点、「実行時エラー」、under の形
+- [オブジェクトモデル](../../spec/object-model.md): `Fault::panics`
 - [マルチコア対応の設計](../../future/multicore.md): 「実行時エラーの報告の決定性」
 - ロードマップ: S14 の節を、この文書の分け方 (S14a〜S14e) に合わせる
 - [実装の現在地](../../implementation/status.md) と [コンパイラの構成](../../implementation/architecture.md) は、S14 の終わりに直す
@@ -135,11 +134,11 @@ pub try_panic : (Unit -> <Panic | e> a) -> <e> Result String a
 
 ### 種類2 (期待値の変更)
 
-- `Panic` を起こしうる計算をするトップレベルの関数のシグネチャに `<Panic>` を足す。UI テスト、REPL のトランスクリプト、`bench/` のプログラム、`tests/` の Rust のテストの中の eml のソースが対象である。おおよそ、UI テストの約200のファイルの約330のシグネチャ (うち約80が `main`) と、std の約15の関数である。足したことで変わる診断の位置と引用の行、IR のダンプ (instance の名前、`aborts` の印、巻き戻しの表) の期待値を書き直す
+- `Panic` を起こしうる計算をするトップレベルの関数のシグネチャに `<Panic>` を足す。UI テスト、REPL のトランスクリプト、`bench/` のプログラム、`tests/` の Rust のテストの中の eml のソースが対象である。おおよそ、UI テストの約200のファイルの約330のシグネチャ (うち約80が `main`) と、std の約15の関数である。足したことで変わる診断の位置と引用の行、IR のダンプ (instance の名前、巻き戻しの表) の期待値を書き直す
 - E2004 と E2015 の文言を書き直す
 - 負のリテラルが `negate` の呼び出しでなくなるので、Core IR、LIR のダンプと `RunStats` (`bench/` で負のリテラルを使うプログラム) の期待値を書き直す
 - under の形が増える節を持つプログラムの `RunStats` と IR のダンプの期待値を書き直す
-- `crates/eml_lir/tests/unwind.rs` の巻き戻しの地点の期待値を、`aborts` に合わせて書き直す
+- `crates/eml_lir/tests/unwind.rs` の巻き戻しの地点の期待値を、中断しうるかの不動点に合わせて書き直す
 
 ### 足すテスト
 
@@ -149,14 +148,13 @@ pub try_panic : (Unit -> <Panic | e> a) -> <e> Result String a
 - 捕まえない利用者の `panic` は実行時エラーになる (`run-fail`)
 - `Panic` のない row の関数で `+` を使うと E2002 になる (`check-fail`)
 - トップレベルの値の本体と、`Show` の instance の本体で `/` を使うと E2002 になる (`check-fail`)
-- `-1` と `-9223372036854775808` を返す関数が `<>` の row で通る (`run`)
+- `-1` と `-2` を返す関数が `<>` の row で通る (`run`)
 - すぐに再開する節の中の桁あふれを、handle の本体の中の `try_panic` でなく、外の `try_panic` が捕まえる (`run`)
-- `main : Unit -> <IO, Panic> Unit` と `main : Unit -> <Panic> Unit` が通り、ほかのラベルを持つ `main` は E2004 になる
+- `main` の row が `<>`、`<Panic>`、`<IO, Panic>` のどれでも通り、ほかのラベルか row 変数を持つ `main` は E2004 になる
 - REPL で、`Panic` を起こす入力が実行時エラーになり、次の入力に進める
-- 中断しない関数の呼び出しが巻き戻しの地点にならないことと、`List.map` に純粋な関数を渡した複製が `aborts` でないこと (LIR と Core IR のテスト)
+- 中断しない関数の呼び出しが巻き戻しの地点にならないことと、`List.map` に純粋な関数を渡した複製の呼び出しが巻き戻しの地点にならないこと (LIR のテスト)
 
 ## 作る人に任せること
 
-- `aborts` の付け直しを、`yields` の付け直しと同じ関数にまとめるか、別の関数にするか
 - E2002 の誤りに `<Panic>` を足す fix を付けるか
 - 種類2の書き直しを、機械的に行うスクリプトの形
