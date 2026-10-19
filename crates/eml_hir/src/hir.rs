@@ -205,13 +205,15 @@ pub struct LangItems {
     pub show_method: MethodId,
 }
 
-/// extern の表の行から、標準ライブラリの宣言を引く索引。使い手のある行 (extern の型、`IO`、`negate`) だけを持つ。
-/// 型は、読み込んだモジュールが宣言するものだけを持つ (docs/spec/modules.md の「標準ライブラリ」)。
+/// extern の表の行から、標準ライブラリの宣言を引く索引。使い手のある行 (extern の型、`IO`、`Panic`、`negate`) だけを
+/// 持つ。型は、読み込んだモジュールが宣言するものだけを持つ (docs/spec/modules.md の「標準ライブラリ」)。
 #[derive(Debug, Clone)]
 pub struct ExternIndex {
     pub(crate) types: HashMap<ExternType, TypeDefId>,
-    /// `main` の型の検査が引く。
+    /// `main` の型と REPL の入力の row の検査が引く。
     pub io: EffectId,
+    /// `IO` と同じく、`main` の型と REPL の入力の row の検査が引く (docs/spec/modules.md の「モジュール」)。
+    pub panic: EffectId,
     /// 前置の `-` の脱糖が呼ぶ。Prelude で `pub` にしないので、ユーザーは名前で書けない。
     pub negate: FunctionId,
 }

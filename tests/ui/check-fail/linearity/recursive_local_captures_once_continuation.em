@@ -2,7 +2,7 @@
 effect Ask where
   ask : Unit -> Int
 
-drain : Unit -> Int
+drain : Unit -> <Panic> Int
 drain () =
   handle ask () with
     | ctl ask () k ->

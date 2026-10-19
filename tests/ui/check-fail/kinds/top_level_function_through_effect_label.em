@@ -10,15 +10,15 @@ effect Store s where
 seq : Unit -> Int -> Int
 seq _ n = n
 
-inc : Int -> Int
+inc : Int -> <Panic> Int
 inc x = x + 1
 
-run : Unit -> Int
+run : Unit -> <Panic> Int
 run () =
   handle ask () with
     | ctl ask () k ->
         handle seq (put inc) (seq (put (fn x -> k x)) 0) with
           | ctl put f k2 -> f 1 + f 2 + k2 ()
 
-main : Unit -> <IO> Unit
+main : Unit -> <IO, Panic> Unit
 main () = println (show (run ()))

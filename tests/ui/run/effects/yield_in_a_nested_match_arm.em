@@ -6,13 +6,13 @@ effect Ask where
 data P =
   | P (Option String) Int
 
-go : P -> <Ask> String
+go : P -> <Ask, Panic> String
 go p = match p with
   | P opt n -> match opt with
       | Some s -> s ++ show (ask () + n)
       | None -> "none"
 
-main : Unit -> <IO> Unit
+main : Unit -> <IO, Panic> Unit
 main () =
   let r = handle go (P (Some "v") 1) with
     | ctl ask () k -> k 10

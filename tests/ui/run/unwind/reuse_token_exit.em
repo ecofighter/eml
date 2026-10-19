@@ -2,10 +2,10 @@
 -- token は巻き戻しで手放す。
 data Stats = | Stats { count : Int, total : Int }
 
-check : Int -> Int -> <IO> Unit
+check : Int -> Int -> <IO, Panic> Unit
 check depth count = if depth == 0 then (if count > 3 then exit 3 else ()) else check (depth - 1) count
 
-step : Stats -> <IO> Stats
+step : Stats -> <IO, Panic> Stats
 step st =
   match st with
     | Stats { count, total } ->
@@ -13,7 +13,7 @@ step st =
       check 5 next
       Stats { count = next, total = total + next }
 
-run : Int -> Stats -> <IO> Stats
+run : Int -> Stats -> <IO, Panic> Stats
 run n st =
   if n == 0 then st
   else
@@ -21,7 +21,7 @@ run n st =
     println "count \{st.count}"
     run (n - 1) st
 
-main : Unit -> <IO> Unit
+main : Unit -> <IO, Panic> Unit
 main () =
   let st = run (List.length [1, 2, 3, 4, 5, 6]) (Stats { count = 0, total = 0 })
   println "total \{st.total}"

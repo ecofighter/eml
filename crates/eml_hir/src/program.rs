@@ -417,6 +417,11 @@ impl Program {
         self.externs.io
     }
 
+    /// `Panic` を宣言した item。
+    pub fn panic(&self) -> EffectId {
+        self.externs.panic
+    }
+
     /// 前置の `-` の脱糖が呼ぶ extern の関数。
     pub fn negate(&self) -> FunctionId {
         self.externs.negate

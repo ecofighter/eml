@@ -3,13 +3,13 @@ effect Counter where
   get : Unit -> Int
   put : Int -> Unit
 
-count : Unit -> <Counter> Int
+count : Unit -> <Counter, Panic> Int
 count () =
   put (get () + 1)
   put (get () + 10)
   get ()
 
-main : Unit -> <IO> Unit
+main : Unit -> <IO, Panic> Unit
 main () =
   let (result, final) =
     handle count () from 5 with

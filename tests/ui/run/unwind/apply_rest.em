@@ -2,16 +2,16 @@
 -- 呼び出しが外側の `Fail.to_result` へ中断する。呼び出し元のフレームが持つ `File` は閉じる。
 import Fail (Fail(..))
 
-check : Int -> Int -> <Fail String> Int
+check : Int -> Int -> <Fail String, Panic> Int
 check = fn a -> fn b -> if a == 0 then Fail.fail "zero" else a + b
 
-call2 : (Int -> Int -> <Fail String> Int) -> <Fail String, IO> Int
+call2 : (Int -> Int -> <Fail String, Panic> Int) -> <Fail String, IO, Panic> Int
 call2 g =
   let f = Fs.open "input.txt"
   let r = g 0 1
   Fs.close f
   r
 
-main : Unit -> <IO> Unit
+main : Unit -> <IO, Panic> Unit
 main () =
   println (show (Fail.to_result (fn () -> call2 check)))

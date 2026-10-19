@@ -1,6 +1,6 @@
 pub data Row = | Row String Int
 
-pub make : String -> Int -> Row
+pub make : String -> Int -> <Panic> Row
 make name n = Row name (n * 10)
 
 pub show : Row -> String

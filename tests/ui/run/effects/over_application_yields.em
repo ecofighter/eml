@@ -2,15 +2,15 @@
 effect Ask where
   ask : Unit -> Int
 
-adder : Int -> <Ask> (Int -> Int)
+adder : Int -> <Ask> (Int -> <Panic> Int)
 adder x =
   let n = ask ()
   fn y -> x + y + n
 
-run : (Int -> <Ask> (Int -> Int)) -> <Ask> Int
+run : (Int -> <Ask> (Int -> <Panic> Int)) -> <Ask, Panic> Int
 run h = h 1 2
 
-main : Unit -> <IO> Unit
+main : Unit -> <IO, Panic> Unit
 main () =
   let r =
     handle run adder with

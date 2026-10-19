@@ -4,14 +4,14 @@ effect State s where
   get : Unit -> s
   put : s -> Unit
 
-counted : (Unit -> <e> a) -> <e> (a, Int)
+counted : (Unit -> <e> a) -> <Panic | e> (a, Int)
 counted action =
   handle tick action from 0 with
     | ctl get () k st -> k st st
     | ctl put n k _ -> k () n
     | return x st -> (x, st)
 
-tick : (Unit -> <e> a) -> <State Int | e> a
+tick : (Unit -> <e> a) -> <State Int, Panic | e> a
 tick action =
   put (get () + 1)
   action ()
@@ -19,7 +19,7 @@ tick action =
 user : Unit -> <State String> String
 user () = get () ++ "!"
 
-main : Unit -> <IO> Unit
+main : Unit -> <IO, Panic> Unit
 main () =
   let (s, n) = handle counted user from "outer" with
                  | ctl get () k st -> k st st

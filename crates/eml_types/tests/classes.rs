@@ -72,20 +72,20 @@ fn an_instance_context_is_needed_where_the_instance_is_used() {
     );
     let checked = check(&text);
     insta::assert_snapshot!(eml_test_support::full(checked.files(), &checked.diagnostics), @"
-    E2006 12:5 no instance of `Same` for `Int -> <_> Int`
-      12:5 `same` requires `Same (Box (Int -> <_> Int))`
-      note: `Same (Box (Int -> <_> Int))` needs `Same (Int -> <_> Int)`
+    E2006 12:5 no instance of `Same` for `Int -> <Panic | _> Int`
+      12:5 `same` requires `Same (Box (Int -> <Panic | _> Int))`
+      note: `Same (Box (Int -> <Panic | _> Int))` needs `Same (Int -> <Panic | _> Int)`
     ");
 }
 
 #[test]
 fn an_undecided_type_is_ambiguous_unless_the_body_has_another_error() {
-    let text = format!("{SAME}f : Int -> Int\nf x =\n  let s = same\n  x");
+    let text = format!("{SAME}f : Int -> <Panic> Int\nf x =\n  let s = same\n  x");
     assert_eq!(
         lines(&text),
         ["E2009 8:11 cannot decide which instance of `Same` to use for `same`"]
     );
-    let text = format!("{SAME}f : Int -> Int\nf x =\n  let s = same\n  x + \"1\"");
+    let text = format!("{SAME}f : Int -> <Panic> Int\nf x =\n  let s = same\n  x + \"1\"");
     let found = lines(&text);
     assert!(
         found.iter().all(|line| !line.starts_with("E2009")),
@@ -97,11 +97,11 @@ fn an_undecided_type_is_ambiguous_unless_the_body_has_another_error() {
 fn a_missing_instance_wins_over_an_undecided_type_in_one_reference() {
     // `Same (Pair ?y (Int -> Int))` は先に `Same ?y` を解くが、決まった誤りの E2006 を報告する
     let text = format!(
-        "{SAME}data Pair a b = | Pair a b\n\ninstance (Same a, Same b) => Same (Pair a b) where\n  same _ _ = True\n\nf : Int -> Int\nf x =\n  let g = fn y -> same (Pair y (fn z -> z + 1)) (Pair y (fn z -> z))\n  x"
+        "{SAME}data Pair a b = | Pair a b\n\ninstance (Same a, Same b) => Same (Pair a b) where\n  same _ _ = True\n\nf : Int -> <Panic> Int\nf x =\n  let g = fn y -> same (Pair y (fn z -> z + 1)) (Pair y (fn z -> z))\n  x"
     );
     assert_eq!(
         lines(&text),
-        ["E2006 13:19 no instance of `Same` for `Int -> <_> Int`"]
+        ["E2006 13:19 no instance of `Same` for `Int -> <Panic | _> Int`"]
     );
 }
 
@@ -157,8 +157,7 @@ fn codes_and_helps(text: &str) -> Vec<(String, Vec<String>)> {
 fn a_method_defined_with_too_few_parameters_is_told_how_many_it_needs() {
     // メソッドのシグネチャはクラスが決めるので、`()` を取る関数に変える help は出せない。クラスの row がエフェクトを
     // 許す矢印まで引数を書けば、本体の row がその矢印の row になる
-    let class =
-        "class Combine a where\n  combine : a -> a -> <IO> a\n\ninstance Combine Int where\n";
+    let class = "class Combine a where\n  combine : a -> a -> <IO, Panic> a\n\ninstance Combine Int where\n";
     let help = "define `combine` with 2 parameters, so that it performs `IO` when it is called";
     for body in [
         "  combine =\n    println \"x\"\n    fn x y -> x + y",
@@ -175,7 +174,7 @@ fn a_method_defined_with_too_few_parameters_is_told_how_many_it_needs() {
 #[test]
 fn a_method_whose_class_row_lacks_the_effect_is_told_to_change_the_class() {
     // どの矢印の row もエフェクトを許さなければ、引数を書いても直らない。ユーザーのクラスならクラスの row を足す
-    let text = "class Combine a where\n  combine : a -> a -> a\n\ninstance Combine Int where\n  combine =\n    println \"x\"\n    fn x y -> x + y";
+    let text = "class Combine a where\n  combine : a -> a -> <Panic> a\n\ninstance Combine Int where\n  combine =\n    println \"x\"\n    fn x y -> x + y";
     assert_eq!(
         codes_and_helps(text),
         [(
@@ -201,7 +200,7 @@ fn a_method_with_parameters_is_told_to_change_the_class() {
             .flat_map(|diagnostic| diagnostic.help)
             .collect()
     };
-    let text = "class Combine a where\n  combine : a -> a -> a\n  twice : a -> a\n  twice x =\n    println \"x\"\n    combine x x\n\ninstance Combine Int where\n  combine x y =\n    println \"x\"\n    x + y";
+    let text = "class Combine a where\n  combine : a -> a -> <Panic> a\n  twice : a -> <Panic> a\n  twice x =\n    println \"x\"\n    combine x x\n\ninstance Combine Int where\n  combine x y =\n    println \"x\"\n    x + y";
     assert_eq!(
         helps(text),
         [
@@ -348,7 +347,7 @@ fn ordinary_instances_and_defaults_have_no_kind_error() {
 #[test]
 fn constrained_polymorphic_recursion_is_rejected() {
     let text = format!(
-        "{SAME}depth : Same a => Int -> a -> Int\ndepth n x = if n == 0 then 0 else depth (n - 1) (x, x)"
+        "{SAME}depth : Same a => Int -> a -> <Panic> Int\ndepth n x = if n == 0 then 0 else depth (n - 1) (x, x)"
     );
     let checked = check(&text);
     insta::assert_snapshot!(eml_test_support::full(checked.files(), &checked.diagnostics), @"
@@ -358,7 +357,7 @@ fn constrained_polymorphic_recursion_is_rejected() {
     E2006 7:35 no instance of `Same` for `(a, a)`
       7:35 `depth` requires `Same (a, a)`
     ");
-    let text = "class C a where\n  m : Show2 b => a -> Int -> b -> Int\n\nclass Show2 a where\n  show2 : a -> Int\n\ninstance C Int where\n  m x n y = if n == 0 then show2 y else m x (n - 1) (y, y)";
+    let text = "class C a where\n  m : Show2 b => a -> Int -> b -> <Panic> Int\n\nclass Show2 a where\n  show2 : a -> Int\n\ninstance C Int where\n  m x n y = if n == 0 then show2 y else m x (n - 1) (y, y)";
     assert!(
         lines(text).iter().any(|line| line.starts_with("E2012")),
         "{:?}",

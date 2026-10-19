@@ -549,7 +549,7 @@ fn later_inputs_and_functions_refer_to_a_binding() {
     let lowered = lower(
         &[
             (1, "let n = 3"),
-            (2, "f : Int -> Int\nf x = x + n"),
+            (2, "f : Int -> <Panic> Int\nf x = x + n"),
             (3, "f n"),
         ],
         &[],
@@ -562,7 +562,7 @@ fn later_inputs_and_functions_refer_to_a_binding() {
     input$1 () = 3
     let n = root 1 <- input$1
     -- <input 2>
-    f : Int -> Int
+    f : Int -> <Panic> Int
     f x#0 = (+ x#0 @<input 1>.n)
     -- <input 3>
     input$3 : <no signature>

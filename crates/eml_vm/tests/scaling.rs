@@ -44,10 +44,10 @@ fn every_operation_looks_up_its_evidence() {
         "",
         "data Box a = | Box a",
         "",
-        "hide : Int -> a -> Box a",
+        "hide : Int -> a -> <Panic> Box a",
         "hide n x = if n <= 0 then Box x else hide (n - 1) x",
         "",
-        "main : Unit -> <IO> Unit",
+        "main : Unit -> <IO, Panic> Unit",
         "main () =",
         "  let Box b = hide 0 (fn () -> ask () + ask () + ask ())",
         "  let n = handle b () with",
@@ -79,9 +79,9 @@ fn evaluating_a_literal_copies_nothing() {
     let source = format!(
         "same : String -> Int\n\
          same s = match s with\n  | \"{literal}\" -> 1\n  | _ -> 0\n\n\
-         count : Int -> Int -> Int\n\
+         count : Int -> Int -> <Panic> Int\n\
          count n acc = if n == 0 then acc else count (n - 1) (acc + same \"{literal}\")\n\n\
-         main : Unit -> <IO> Unit\n\
+         main : Unit -> <IO, Panic> Unit\n\
          main () = println (show (count {n} 0))\n"
     );
     let stats = stats(&source, &format!("{n}\n"));
@@ -95,10 +95,10 @@ fn evaluating_a_literal_copies_nothing() {
 /// Perceus は `dup` を入れず、2回目からの `++` には RC が 1 の左辺が届く。
 fn growing_string(n: usize) -> String {
     format!(
-        "grow : Int -> String -> String\n\
+        "grow : Int -> String -> <Panic> String\n\
          grow n acc = if n == 0 then acc else grow (n - 1) (acc ++ \"x\")\n\
          \n\
-         main : Unit -> <IO> Unit\n\
+         main : Unit -> <IO, Panic> Unit\n\
          main () = println (grow {n} \"s\")\n"
     )
 }
@@ -118,7 +118,7 @@ fn appending_to_a_unique_string_copies_only_the_right_side() {
 const ASK_RECURSION: &str = "effect Ask where
   ask : Unit -> Int
 
-count : Int -> <Ask> Int
+count : Int -> <Ask, Panic> Int
 count n = if n == 0 then 0 else ask () + count (n - 1)
 ";
 
@@ -133,7 +133,7 @@ fn a_perform_under_one_handler_looks_at_one_evidence() {
     // `evv` は `Ask` の evidence だけなので、`ask` ごとに1つたどる
     let n = 2000;
     let rest = format!(
-        "main : Unit -> <IO> Unit
+        "main : Unit -> <IO, Panic> Unit
 main () =
   let r = handle count {n} with
             | ctl ask () k -> k 1
@@ -152,7 +152,7 @@ fn a_perform_passes_an_inner_evidence_of_another_effect_once() {
         "effect Tell where
   tell : Int -> Unit
 
-main : Unit -> <IO> Unit
+main : Unit -> <IO, Panic> Unit
 main () =
   let r = handle (handle count {n} with
                     | ctl tell _ k -> k ()) with
@@ -175,10 +175,10 @@ fn a_perform_in_a_masked_callback_skips_the_inner_evidence_once() {
         "run : (Unit -> <e> a) -> <Ask | e> a
 run cb = cb ()
 
-go : Unit -> <Ask> Int
+go : Unit -> <Ask, Panic> Int
 go () = count {n}
 
-main : Unit -> <IO> Unit
+main : Unit -> <IO, Panic> Unit
 main () =
   let r = handle (handle run go with
                     | ctl ask () k -> k 2) with
@@ -200,14 +200,14 @@ fn immediate_operations_cost_the_same_at_any_depth() {
   get : Unit -> Int
   put : Int -> Unit
 
-down : Int -> <Counter> Int
+down : Int -> <Counter, Panic> Int
 down n = if n == 0 then
     put (get () + 1)
     put (get () + 1)
     get ()
   else down (n - 1) + 0
 
-main : Unit -> <IO> Unit
+main : Unit -> <IO, Panic> Unit
 main () =
   let (r, _) =
     handle down {depth} from 0 with
@@ -239,10 +239,10 @@ fn a_resuming_operation_builds_a_frame_per_level() {
             "effect Ask where
   ask : Unit -> Int
 
-down : Int -> <Ask> Int
+down : Int -> <Ask, Panic> Int
 down n = if n == 0 then ask () else down (n - 1) + 0
 
-main : Unit -> <IO> Unit
+main : Unit -> <IO, Panic> Unit
 main () =
   let r =
     handle down {depth} with
@@ -272,10 +272,10 @@ fn unwinding_work_is_linear_in_depth() {
         let text = format!(
             "import Fail (Fail(..))
 
-down : Int -> <Fail String> Int
+down : Int -> <Fail String, Panic> Int
 down n = if n == 0 then Fail.fail \"bottom\" else 1 + down (n - 1)
 
-main : Unit -> <IO> Unit
+main : Unit -> <IO, Panic> Unit
 main () = println (show (Fail.to_result (fn () -> down {depth})))
 "
         );
@@ -300,14 +300,14 @@ fn a_generic_handler_with_a_printing_callback_does_not_yield() {
     let text = format!(
         "import Yield (Yield(..))
 
-produce : Int -> <Yield Int> Unit
+produce : Int -> <Yield Int, Panic> Unit
 produce n =
   if n == 0 then ()
   else
     yield n
     produce (n - 1)
 
-main : Unit -> <IO> Unit
+main : Unit -> <IO, Panic> Unit
 main () = Yield.for_each (fn () -> produce {COUNT}) (fn n -> println (show n))
 "
     );
@@ -323,20 +323,20 @@ fn list_traversal(n: u64, traverse: &str) -> String {
   | Nil
   | Cons a (List a)
 
-range : Int -> Int -> List Int
+range : Int -> Int -> <Panic> List Int
 range lo hi = if lo > hi then Nil else Cons lo (range (lo + 1) hi)
 
-sum : List Int -> Int
+sum : List Int -> <Panic> Int
 sum xs = match xs with
   | Nil -> 0
   | Cons x rest -> x + sum rest
 
-length : List a -> Int
+length : List a -> <Panic> Int
 length xs = match xs with
   | Nil -> 0
   | Cons _ rest -> 1 + length rest
 
-main : Unit -> <IO> Unit
+main : Unit -> <IO, Panic> Unit
 main () =
 {traverse}
 "
@@ -403,13 +403,13 @@ fn a_loop_through_a_function_value_that_returns_int_keeps_the_stack_and_heap_fla
     assert_flat(peaks(|n| {
         (
             format!(
-                "loop : (Int -> Int) -> Int -> Int
+                "loop : (Int -> <Panic> Int) -> Int -> <Panic> Int
 loop f n = if n == 0 then 0 else f (n - 1)
 
-go : Int -> Int
+go : Int -> <Panic> Int
 go n = loop go n
 
-main : Unit -> <IO> Unit
+main : Unit -> <IO, Panic> Unit
 main () = println (show (go {n}))
 "
             ),
@@ -424,13 +424,13 @@ fn a_loop_through_a_function_value_that_returns_bool_keeps_the_stack_and_heap_fl
     assert_flat(peaks(|n| {
         (
             format!(
-                "is_even : (Int -> Bool) -> Int -> Bool
+                "is_even : (Int -> <Panic> Bool) -> Int -> <Panic> Bool
 is_even odd n = if n == 0 then True else odd (n - 1)
 
-is_odd : Int -> Bool
+is_odd : Int -> <Panic> Bool
 is_odd n = if n == 0 then False else is_even is_odd (n - 1)
 
-main : Unit -> <IO> Unit
+main : Unit -> <IO, Panic> Unit
 main () = if is_odd {n} then println \"odd\" else println \"even\"
 "
             ),
@@ -444,13 +444,13 @@ fn a_loop_through_a_function_value_that_returns_unit_keeps_the_stack_and_heap_fl
     assert_flat(peaks(|n| {
         (
             format!(
-                "tick : (Int -> <IO> Unit) -> Int -> <IO> Unit
+                "tick : (Int -> <IO, Panic> Unit) -> Int -> <IO, Panic> Unit
 tick f n = if n == 0 then println \"done\" else f (n - 1)
 
-run : Int -> <IO> Unit
+run : Int -> <IO, Panic> Unit
 run n = tick run n
 
-main : Unit -> <IO> Unit
+main : Unit -> <IO, Panic> Unit
 main () = run {n}
 "
             ),
@@ -466,13 +466,13 @@ fn a_loop_with_an_unused_let_between_the_call_and_its_result_keeps_the_stack_and
     assert_flat(peaks(|n| {
         (
             format!(
-                "loop : (Int -> Int) -> Int -> Int
+                "loop : (Int -> <Panic> Int) -> Int -> <Panic> Int
 loop f n = if n == 0 then 0 else let r = f (n - 1) in let s = \"unused\" in r
 
-go : Int -> Int
+go : Int -> <Panic> Int
 go n = loop go n
 
-main : Unit -> <IO> Unit
+main : Unit -> <IO, Panic> Unit
 main () = println (show (go {n}))
 "
             ),
@@ -489,10 +489,10 @@ fn a_loop_whose_clause_resumes_in_tail_position_keeps_the_stack_and_heap_flat() 
                 "effect Ask where
   ask : Unit -> Int
 
-sum_asks : Int -> Int -> <Ask> Int
+sum_asks : Int -> Int -> <Ask, Panic> Int
 sum_asks n acc = if n == 0 then acc else sum_asks (n - 1) (acc + ask ())
 
-main : Unit -> <IO> Unit
+main : Unit -> <IO, Panic> Unit
 main () =
   let r = handle sum_asks {n} 0 with
             | ctl ask () k -> k 2
@@ -514,7 +514,7 @@ fn immediate_operations_under_deep_recursion_keep_the_peak_linear() {
         stats(
             &format!(
                 "{ASK_RECURSION}
-main : Unit -> <IO> Unit
+main : Unit -> <IO, Panic> Unit
 main () =
   let r = handle count {n} with
             | ctl ask () k -> k 1
@@ -558,13 +558,13 @@ fn a_function_value_loop_under_a_handler_keeps_the_stack_and_heap_flat() {
                 "effect Ask where
   ask : Unit -> Int
 
-loop : (Int -> <Ask> Int) -> Int -> <Ask> Int
+loop : (Int -> <Ask, Panic> Int) -> Int -> <Ask, Panic> Int
 loop f n = if n == 0 then ask () else f (n - 1)
 
-go : Int -> <Ask> Int
+go : Int -> <Ask, Panic> Int
 go n = loop go n
 
-main : Unit -> <IO> Unit
+main : Unit -> <IO, Panic> Unit
 main () =
   let r = handle go {n} with
             | ctl ask () k -> k 0
@@ -581,10 +581,10 @@ fn a_direct_self_tail_call_keeps_the_stack_and_heap_flat() {
     assert_flat(peaks(|n| {
         (
             format!(
-                "loop : Int -> Int -> Int
+                "loop : Int -> Int -> <Panic> Int
 loop n acc = if n == 0 then acc else loop (n - 1) (acc + 1)
 
-main : Unit -> <IO> Unit
+main : Unit -> <IO, Panic> Unit
 main () = println (show (loop {n} 0))
 "
             ),
@@ -600,10 +600,10 @@ fn a_tail_apply_from_lambda_to_lambda_grows_the_heap_only_by_its_closures() {
     let (short, long) = peaks(|n| {
         (
             format!(
-                "count_down : Int -> (Int -> Int) -> Int
+                "count_down : Int -> (Int -> <Panic> Int) -> <Panic> Int
 count_down n k = if n == 0 then k 0 + k 0 else count_down (n - 1) (fn m -> k (m + 1))
 
-main : Unit -> <IO> Unit
+main : Unit -> <IO, Panic> Unit
 main () = println (show (count_down {n} (fn m -> m)))
 "
             ),
@@ -629,19 +629,19 @@ fn a_retained_owner_does_not_cross_a_call() {
                 "data P =
   | P (List Int) String
 
-range : Int -> List Int
+range : Int -> <Panic> List Int
 range k = if k == 0 then [] else k :: range (k - 1)
 
-make : Int -> P
+make : Int -> <Panic> P
 make n = P (range 50) (show n)
 
-walk : Int -> String
+walk : Int -> <Panic> String
 walk n = if n == 0 then \"\" else match make n with
   | P _ s ->
     let r = walk (n - 1)
     r ++ s
 
-main : Unit -> <IO> Unit
+main : Unit -> <IO, Panic> Unit
 main () = println (walk {n})
 "
             ),
@@ -669,10 +669,10 @@ fn an_int_in_a_type_variable_field_is_boxed_and_unboxed() {
         "",
         "data Box a = | Box a",
         "",
-        "hide : Int -> a -> Box a",
+        "hide : Int -> a -> <Panic> Box a",
         "hide n x = if n <= 0 then Box x else hide (n - 1) x",
         "",
-        "main : Unit -> <IO> Unit",
+        "main : Unit -> <IO, Panic> Unit",
         "main () =",
         "  let Box w = hide 0 (Wrap 1)",
         "  println (show (unwrap w + 1))",
@@ -686,7 +686,7 @@ fn an_int_in_a_type_variable_field_is_boxed_and_unboxed() {
 #[test]
 fn a_program_with_only_scalar_positions_boxes_nothing() {
     let stats = stats(
-        "main : Unit -> <IO> Unit\nmain () = println (show (1 + 2))",
+        "main : Unit -> <IO, Panic> Unit\nmain () = println (show (1 + 2))",
         "3\n",
     );
     assert_eq!((stats.boxes, stats.unboxes), (0, 0), "{stats:?}");
@@ -695,10 +695,10 @@ fn a_program_with_only_scalar_positions_boxes_nothing() {
 /// `range n acc` は `0 :: 1 :: … :: acc` を作る。末尾の再帰で、後ろの要素から積む。
 fn list_program(n: u64, body: &str) -> String {
     [
-        "range : Int -> List Int -> List Int",
+        "range : Int -> List Int -> <Panic> List Int",
         "range n acc = if n == 0 then acc else range (n - 1) (n - 1 :: acc)",
         "",
-        "main : Unit -> <IO> Unit",
+        "main : Unit -> <IO, Panic> Unit",
         &format!("main () =\n  let xs = range {n} Nil\n  {body}"),
     ]
     .join("\n")
@@ -749,7 +749,7 @@ fn derived_comparisons_walk_a_long_list_without_growing_the_stack_or_heap() {
 fn a_long_list_literal_runs() {
     let items: Vec<String> = (0..10000).map(|i| (i % 10).to_string()).collect();
     let text = format!(
-        "sum : List Int -> Int -> Int\nsum xs acc = match xs with\n  | [] -> acc\n  | x :: rest -> sum rest (acc + x)\n\nmain : Unit -> <IO> Unit\nmain () = println (show (sum [{}] 0))",
+        "sum : List Int -> Int -> <Panic> Int\nsum xs acc = match xs with\n  | [] -> acc\n  | x :: rest -> sum rest (acc + x)\n\nmain : Unit -> <IO, Panic> Unit\nmain () = println (show (sum [{}] 0))",
         items.join(", ")
     );
     stats(&text, "45000\n");
@@ -867,46 +867,46 @@ fn if_switches(function: &eml_lir::LirFn) -> usize {
 const LOCAL_FUNCTION_PAIRS: [(&str, &str, &str); 4] = [
     (
         "\
-helper : Int -> Int -> Int -> Int
+helper : Int -> Int -> Int -> <Panic> Int
 helper n k acc = if k == 0 then acc + n else helper n (k - 1) (acc + k)
 
-outer : Int -> Int
+outer : Int -> <Panic> Int
 outer n = helper n n 0
 
-main : Unit -> <IO> Unit
+main : Unit -> <IO, Panic> Unit
 main () = println (show (outer 5))
 ",
         "\
-outer : Int -> Int
+outer : Int -> <Panic> Int
 outer n =
   let go k acc = if k == 0 then acc + n else go (k - 1) (acc + k)
   go n 0
 
-main : Unit -> <IO> Unit
+main : Unit -> <IO, Panic> Unit
 main () = println (show (outer 5))
 ",
         "20\n",
     ),
     (
         "\
-square : Int -> Int -> Int
+square : Int -> Int -> <Panic> Int
 square n k = k * k + n
 
-countdown : Int -> Int -> <IO> Unit
+countdown : Int -> Int -> <IO, Panic> Unit
 countdown n i =
   if i == 0 then ()
   else
     println (show (square n i))
     countdown n (i - 1)
 
-run : Int -> <IO> Unit
+run : Int -> <IO, Panic> Unit
 run n = countdown n n
 
-main : Unit -> <IO> Unit
+main : Unit -> <IO, Panic> Unit
 main () = run 3
 ",
         "\
-run : Int -> <IO> Unit
+run : Int -> <IO, Panic> Unit
 run n =
   let square k = k * k + n
   let countdown i =
@@ -916,7 +916,7 @@ run n =
       countdown (i - 1)
   countdown n
 
-main : Unit -> <IO> Unit
+main : Unit -> <IO, Panic> Unit
 main () = run 3
 ",
         "12\n7\n4\n",
@@ -926,28 +926,28 @@ main () = run 3
 effect Ask where
   ask : Unit -> Int
 
-bump : Int -> Int -> Int
+bump : Int -> Int -> <Panic> Int
 bump n x = x + n
 
-outer : Int -> <IO> Int
+outer : Int -> <IO, Panic> Int
 outer n =
   handle ask () + 1 with
     | ctl ask () k -> k (bump n 1)
 
-main : Unit -> <IO> Unit
+main : Unit -> <IO, Panic> Unit
 main () = println (show (outer 5))
 ",
         "\
 effect Ask where
   ask : Unit -> Int
 
-outer : Int -> <IO> Int
+outer : Int -> <IO, Panic> Int
 outer n =
   let bump x = x + n
   handle ask () + 1 with
     | ctl ask () k -> k (bump 1)
 
-main : Unit -> <IO> Unit
+main : Unit -> <IO, Panic> Unit
 main () = println (show (outer 5))
 ",
         "7\n",
@@ -957,28 +957,28 @@ main () = println (show (outer 5))
 effect Ask where
   ask : Unit -> Int
 
-bump : Int -> Int -> Int
+bump : Int -> Int -> <Panic> Int
 bump n x = x + n
 
-outer : Int -> <IO> Int
+outer : Int -> <IO, Panic> Int
 outer n =
   handle bump n (ask ()) with
     | ctl ask () k -> k 1
 
-main : Unit -> <IO> Unit
+main : Unit -> <IO, Panic> Unit
 main () = println (show (outer 2))
 ",
         "\
 effect Ask where
   ask : Unit -> Int
 
-outer : Int -> <IO> Int
+outer : Int -> <IO, Panic> Int
 outer n =
   let bump x = x + n
   handle bump (ask ()) with
     | ctl ask () k -> k 1
 
-main : Unit -> <IO> Unit
+main : Unit -> <IO, Panic> Unit
 main () = println (show (outer 2))
 ",
         "3\n",

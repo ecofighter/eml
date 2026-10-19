@@ -8,10 +8,10 @@ stop n =
   println "stop at \{n}"
   exit 6
 
-body : Unit -> <Probe> Int
+body : Unit -> <Probe, Panic> Int
 body () = probe 1 + probe 2
 
-main : Unit -> <IO> Unit
+main : Unit -> <IO, Panic> Unit
 main () =
   let r =
     handle body () from Fs.open "input.txt" with

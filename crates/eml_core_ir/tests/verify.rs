@@ -220,12 +220,12 @@ rest xs = match xs with
   | Nil -> xs
   | Cons _ t -> t
 
-size : List Int -> Int
+size : List Int -> <Panic> Int
 size xs = match xs with
   | Nil -> 0
   | Cons _ t -> 1 + size t
 
-main : Unit -> <IO> Unit
+main : Unit -> <IO, Panic> Unit
 main () =
   println (label (Some \"a\"))
   println (Prelude.show (size (rest (Cons 1 Nil))))

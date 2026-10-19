@@ -6,7 +6,7 @@ pub extern read_all : Unit -> <IO> String
 extern read_line_raw : Unit -> <IO> String
 
 -- 行の終わり (`\n` か `\r\n`) を除いた1行で、終わりなら `None` である
-pub read_line : Unit -> <IO> Option String
+pub read_line : Unit -> <IO, Panic> Option String
 read_line () =
   let line = read_line_raw ()
   if String.byte_length line == 0 then None else Some (String.trim_line_end line)

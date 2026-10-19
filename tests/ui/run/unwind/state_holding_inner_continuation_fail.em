@@ -5,7 +5,7 @@ import Fail (Fail(..))
 
 data R =
   | Done Int
-  | Paused (Int -> R)
+  | Paused (Int -> <Panic> R)
 
 effect Ask where
   multi ask : Unit -> Int
@@ -13,23 +13,23 @@ effect Ask where
 effect Keep where
   stash : R -> Unit
 
-step : Unit -> R
+step : Unit -> <Panic> R
 step () =
   handle Done (ask () + 1) with
     | ctl ask () k -> Paused k
 
-body : Unit -> <Keep, Fail String> Int
+body : Unit -> <Keep, Fail String, Panic> Int
 body () =
   stash (step ())
   Fail.fail "stop"
 
-outer : Unit -> <Fail String> Int
+outer : Unit -> <Fail String, Panic> Int
 outer () =
   handle body () from Done 0 with
     | ctl stash v k _ -> k () v
     | return x _ -> x
 
-main : Unit -> <IO> Unit
+main : Unit -> <IO, Panic> Unit
 main () =
   println (show (Fail.to_result outer))
   println "after"

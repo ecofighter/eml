@@ -14,7 +14,7 @@ pick () =
   Fs.close f
   r
 
-main : Unit -> <IO> Unit
+main : Unit -> <IO, Panic> Unit
 main () =
   let r = Fail.to_result (fn () ->
     handle pick () with

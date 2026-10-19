@@ -15,7 +15,7 @@ yield_all xs =
         yield x
         yield_all rest
 
-file_lines : String -> <IO> Iter <IO> String
+file_lines : String -> <IO, Panic> Iter <IO, Panic> String
 file_lines path =
   let f = Fs.open path
   let (f, text) = Fs.read_all f
@@ -26,7 +26,7 @@ file_lines path =
         println "closed by the return clause"
         Done
 
-first_line : Iter <IO> String -> <IO> String
+first_line : Iter <IO, Panic> String -> <IO> String
 first_line it =
   match it with
     | Done -> "no lines"
@@ -34,7 +34,7 @@ first_line it =
         drop rest
         line
 
-print_all : Iter <IO> String -> <IO> Unit
+print_all : Iter <IO, Panic> String -> <IO, Panic> Unit
 print_all it =
   match it with
     | Done -> println "done"
@@ -42,7 +42,7 @@ print_all it =
         println line
         print_all (next ())
 
-main : Unit -> <IO> Unit
+main : Unit -> <IO, Panic> Unit
 main () =
   println (first_line (file_lines "lines.txt"))
   print_all (file_lines "lines.txt")

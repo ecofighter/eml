@@ -7,6 +7,7 @@ use eml_core_ir::Pass;
 fn a_let_input_puts_its_value_in_a_root() {
     insta::assert_snapshot!(session_core_text(&["let x = 41"], Pass::Translate), @"
     effect Prelude.IO { never io_failed(enum, obj) -> never }
+    effect Prelude.Panic { never panicked(obj) -> never }
     fn input$1(p.0: unit) -> int {
       return 41
     }
@@ -24,6 +25,7 @@ fn a_binding_is_read_from_its_root_and_the_result_is_returned_as_text() {
     // し、書くのは `Repl` である
     insta::assert_snapshot!(session_core_text(&["let x = 41", "x + 1"], Pass::Translate), @r#"
     effect Prelude.IO { never io_failed(enum, obj) -> never }
+    effect Prelude.Panic { never panicked(obj) -> never }
     fn input$2(p.0: unit) -> int {
       let r.1: int = prim root_get[1]()
       let t.2: int = extern Prelude.+(r.1, 1)
@@ -63,7 +65,11 @@ fn roots_are_boxed_and_unboxed_after_the_lir_passes() {
 #[test]
 fn a_function_definition_reads_a_binding_from_its_root() {
     let shown = session_core_text(
-        &["let base = 10", "f : Int -> Int\nf n = n + base", "f 1"],
+        &[
+            "let base = 10",
+            "f : Int -> <Panic> Int\nf n = n + base",
+            "f 1",
+        ],
         Pass::Translate,
     );
     insta::assert_snapshot!(function(&shown, "f"), @r"
@@ -232,9 +238,9 @@ fn a_redefined_function_is_named_after_its_input_and_old_callers_keep_the_old_on
     // 前の版の名前は後の入力で変わらない。`g` は入力 2 の時点の `f` を呼び続ける
     let shown = session_core_text(
         &[
-            "f : Int -> Int\nf n = n",
-            "g : Int -> Int\ng n = f n",
-            "f : Int -> Int\nf n = n + 1",
+            "f : Int -> <Panic> Int\nf n = n",
+            "g : Int -> <Panic> Int\ng n = f n",
+            "f : Int -> <Panic> Int\nf n = n + 1",
             "g (f 1)",
         ],
         Pass::Translate,

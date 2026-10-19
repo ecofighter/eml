@@ -2,13 +2,13 @@
 -- 巻き戻しで1回ずつ閉じる。
 import Fail (Fail(..))
 
-deep : Int -> <Fail String, IO> Int
+deep : Int -> <Fail String, IO, Panic> Int
 deep n =
   let f = Fs.open "input.txt"
   let r = if n == 0 then Fail.fail "stop" else deep (n - 1) + 1
   Fs.close f
   r
 
-main : Unit -> <IO> Unit
+main : Unit -> <IO, Panic> Unit
 main () =
   println (show (Fail.to_result (fn () -> deep 3)))

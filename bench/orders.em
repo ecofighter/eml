@@ -2,7 +2,7 @@
 -- S13e の既知クロージャの特殊化が、`orders_by_hand.em` に近づける対象である。
 data Order = | Order { id : Int, qty : Int, price : Int }
 
-make : Int -> List Order
+make : Int -> <Panic> List Order
 make n =
   let go i seed acc =
     if i == 0 then acc
@@ -11,7 +11,7 @@ make n =
       go (i - 1) next (Order { id = i, qty = next % 10, price = next % 1000 } :: acc)
   go n 42 Nil
 
-main : Unit -> <IO> Unit
+main : Unit -> <IO, Panic> Unit
 main () =
   let orders = make 100000
   let big = List.filter (fn o -> o.qty > 5) orders

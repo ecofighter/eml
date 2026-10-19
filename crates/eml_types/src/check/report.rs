@@ -2,8 +2,8 @@ use std::collections::HashSet;
 
 use eml_diagnostics::{Diagnostic, FileId, Label, SourceFiles, TextEdit, TextRange, TextSize};
 use eml_hir::{
-    Body, ConstructorId, ExprId, ExprKind, FunctionKind, OperationId, PatId, Program, Res, RowRef,
-    Signature, TypeRefKind,
+    Body, ConstructorId, EffectId, ExprId, ExprKind, FunctionKind, OperationId, PatId, Program,
+    Res, RowRef, Signature, TypeRefKind,
 };
 
 use crate::codes;
@@ -70,7 +70,7 @@ pub(super) enum Origin {
 #[derive(Debug, Clone)]
 pub(super) enum AmbientSource {
     Signature,
-    /// REPL の入力の本体。入力は `IO` だけを起こせる
+    /// REPL の入力の本体。入力は `IO` と `Panic` だけを起こせる
     /// (docs/spec/types.md の「REPL の入力」)。
     Input,
     /// ラムダの最後の矢印の row。ラムダの期待する型の由来を持つ。
@@ -181,6 +181,9 @@ impl BodyCheck<'_, '_> {
         let included = self.with_kind_origin(range, KindReason::Unified, |this| {
             this.table.include_row(&row, &ambient)
         });
+        // fix は、名前を書けば足りるエフェクトのラベルにだけ付ける。row 変数は書く場所が違い、型引数のあるエフェクトは
+        // 型引数を決められない
+        let mut fixable = None;
         let missing: Vec<String> = match included {
             Ok(mask) => {
                 if !mask.is_empty() {
@@ -193,6 +196,7 @@ impl BodyCheck<'_, '_> {
             Err(UnifyError::MissingEffects(mut effects)) => {
                 let mut seen = HashSet::new();
                 effects.retain(|effect| seen.insert(*effect));
+                fixable = Some(effects.clone());
                 effects
                     .iter()
                     .map(|e| self.program.names.effect(*e).to_string())
@@ -298,14 +302,25 @@ impl BodyCheck<'_, '_> {
                     self.body_arrow_range(),
                     "the row of this signature does not include it",
                 ));
-                match help {
+                let diagnostic = match help {
                     Some(help) => diagnostic.with_help(help),
+                    None => diagnostic,
+                };
+                // メソッドのシグネチャはクラスのものなので、本体の側では直せない
+                let edit = fixable
+                    .filter(|_| method.is_none())
+                    .and_then(|effects| self.row_edit(&effects));
+                match edit {
+                    Some(edit) => diagnostic.with_fix(
+                        format!("add {quoted} to the signature of `{function}`"),
+                        vec![edit],
+                    ),
                     None => diagnostic,
                 }
             }
             AmbientSource::Input => Diagnostic::error(
                 codes::INPUT_EFFECT,
-                format!("{name} performs {quoted}, but an input may perform only `IO`"),
+                format!("{name} performs {quoted}, but an input may perform only `IO` and `Panic`"),
                 Label::new(file, range, format!("this call performs {quoted}")),
             )
             .with_help(format!(
@@ -355,6 +370,69 @@ impl BodyCheck<'_, '_> {
         };
         self.diagnostics.push(diagnostic);
         false
+    }
+
+    /// 本体の row を持つ矢印の row に `effects` のラベルを足す編集 (docs/implementation/diagnostics.md の E2002)。書いた
+    /// row があれば `>` か `|` の前に、なければ `->` の後ろに `<…> ` を入れる。矢印のない本体と、型引数か row の
+    /// 引数を持つエフェクトには作らない。
+    fn row_edit(&self, effects: &[EffectId]) -> Option<TextEdit> {
+        let parameterized = |&effect: &EffectId| {
+            let generics = &self.program[effect].generics;
+            !generics.type_vars.is_empty() || !generics.row_vars.is_empty()
+        };
+        if effects.is_empty() || effects.iter().any(parameterized) {
+            return None;
+        }
+        let labels: Vec<String> = effects
+            .iter()
+            .map(|&effect| self.program.names.effect(effect).to_string())
+            .collect();
+        let labels = labels.join(", ");
+        let signature = self.function.signature.as_ref()?;
+        let arrow = self.body_arrow()?;
+        let TypeRefKind::Fn { param, row, .. } = &signature.types[arrow].kind else {
+            return None;
+        };
+        let text = self.files.text(self.file);
+        let (at, replacement) = match row {
+            RowRef::Closed { effects, range } => {
+                let written = text.get(std::ops::Range::<usize>::from(*range))?;
+                if !written.ends_with('>') {
+                    return None;
+                }
+                let separator = if effects.is_empty() { "" } else { ", " };
+                (usize::from(range.end()) - 1, format!("{separator}{labels}"))
+            }
+            // 末尾の row 変数の前に置く。`<e>` には `|` がないので、`<` の直後に `Panic | ` と書く
+            RowRef::Open { range, .. } => {
+                let written = text.get(std::ops::Range::<usize>::from(*range))?;
+                match written.rfind('|') {
+                    Some(bar) => (
+                        usize::from(range.start()) + written[..bar].trim_end().len(),
+                        format!(", {labels}"),
+                    ),
+                    None if written.starts_with('<') => {
+                        (usize::from(range.start()) + 1, format!("{labels} | "))
+                    }
+                    None => return None,
+                }
+            }
+            // 括弧の中の型の範囲は括弧を含まないので、戻り値の型の位置からは書けない。引数の型の後ろで最初の `->` を探す
+            RowRef::Omitted => {
+                let from = usize::from(signature.types[*param].range.end());
+                let to = usize::from(signature.types[arrow].range.end());
+                let after = from + text.get(from..to)?.find("->")? + 2;
+                let spaces = text[after..].len() - text[after..].trim_start_matches(' ').len();
+                (after + spaces, format!("<{labels}> "))
+            }
+            RowRef::Error => return None,
+        };
+        let at = TextSize::try_from(at).ok()?;
+        Some(TextEdit {
+            file: self.file,
+            range: TextRange::empty(at),
+            replacement,
+        })
     }
 
     /// フィールドの宣言の名前の位置と、「field `name` of `Person`」の言い方。期待する型は宣言に書いてあるので、別の

@@ -3,20 +3,20 @@ data List a =
   | Nil
   | Cons a (List a)
 
-length : List a -> Int
+length : List a -> <Panic> Int
 length xs = match xs with
   | Nil -> 0
   | Cons _ rest -> 1 + length rest
 
-sum : List Int -> Int
+sum : List Int -> <Panic> Int
 sum xs = match xs with
   | Nil -> 0
   | Cons x rest -> x + sum rest
 
-range : Int -> Int -> List Int
+range : Int -> Int -> <Panic> List Int
 range lo hi = if lo > hi then Nil else Cons lo (range (lo + 1) hi)
 
-main : Unit -> <IO> Unit
+main : Unit -> <IO, Panic> Unit
 main () =
   let xs = range 1 10
   println (show (length xs))

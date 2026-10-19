@@ -36,7 +36,7 @@ fn stderr(output: &Output) -> String {
 /// パイプからの読みではプロンプトを書かないので、標準出力は値だけである。
 #[test]
 fn repl_prints_values_and_keeps_definitions() {
-    let output = repl("1 + 2\ninc : Int -> Int\ninc x = x + 1\n\ninc 41\n");
+    let output = repl("1 + 2\ninc : Int -> <Panic> Int\ninc x = x + 1\n\ninc 41\n");
     assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
     assert_eq!(stdout(&output), "3\n42\n");
     assert_eq!(stderr(&output), "");
@@ -92,7 +92,7 @@ fn command_errors_are_reported_and_nothing_is_evaluated() {
 
 #[test]
 fn a_block_is_read_as_one_input() {
-    let output = repl(":{\ninc : Int -> Int\n\ninc x = x + 1\n:}\ninc 1\n");
+    let output = repl(":{\ninc : Int -> <Panic> Int\n\ninc x = x + 1\n:}\ninc 1\n");
     assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
     assert_eq!(stdout(&output), "2\n");
 }
@@ -135,7 +135,7 @@ fn repl_in(dir: &Path, args: &[&str], input: &str) -> Output {
     child.wait_with_output().unwrap()
 }
 
-const UTIL: &str = "pub two : Int -> Int\ntwo x = x + 2\n";
+const UTIL: &str = "pub two : Int -> <Panic> Int\ntwo x = x + 2\n";
 
 /// import の根は `:load` のファイルのディレクトリである (docs/spec/repl.md の「ファイルの読み込み」)。
 #[test]
@@ -145,12 +145,12 @@ fn load_reads_imports_next_to_the_file() {
         &[
             (
                 "app/main.em",
-                "import Util\nfour : Int\nfour = Util.two 2\n",
+                "import Util\nfour : Unit -> <Panic> Int\nfour () = Util.two 2\n",
             ),
             ("app/Util.em", UTIL),
         ],
     );
-    let output = repl_in(&dir, &[], ":load app/main.em\nfour\n");
+    let output = repl_in(&dir, &[], ":load app/main.em\nfour ()\n");
     std::fs::remove_dir_all(&dir).unwrap();
     assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
     assert_eq!(stdout(&output), "4\n");
@@ -305,7 +305,7 @@ fn load_without_an_argument_empties_the_session() {
 /// CRLF の行末は、`\r` を除いて読む (docs/spec/repl.md の「行の編集」)。
 #[test]
 fn repl_reads_crlf_input() {
-    let output = repl("inc : Int -> Int\r\ninc x = x + 1\r\n\r\ninc 1\r\n");
+    let output = repl("inc : Int -> <Panic> Int\r\ninc x = x + 1\r\n\r\ninc 1\r\n");
     assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
     assert_eq!(stdout(&output), "2\n");
 }
@@ -353,7 +353,10 @@ fn a_result_arrives_before_the_next_read() {
     let dir = temp_project("result-flush", &[]);
     let mut session = Session::start(&dir);
     session.send("(1, fn x -> x + 1)\n");
-    assert_eq!(session.out_line(), "(1, <fn>) : (Int, Int -> Int)\n");
+    assert_eq!(
+        session.out_line(),
+        "(1, <fn>) : (Int, Int -> <Panic> Int)\n"
+    );
     session.send("2 + 3\n");
     assert_eq!(session.out_line(), "5\n");
     let (out, err, code) = session.finish();
@@ -485,7 +488,7 @@ mod interrupts {
         let mut repl = LiveRepl::start(&dir, &[]);
         // 定義を受け付けた後で SIGINT を送るので、定義が取り消されることはない
         repl.send(
-            "spin : Int -> <IO> Unit\nspin n =\n  println (show n)\n  spin (n + 1)\n\n\"defined\"",
+            "spin : Int -> <IO, Panic> Unit\nspin n =\n  println (show n)\n  spin (n + 1)\n\n\"defined\"",
         );
         repl.expect_out("\"defined\"");
         repl.send("spin 0");

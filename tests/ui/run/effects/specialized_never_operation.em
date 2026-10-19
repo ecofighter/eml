@@ -4,14 +4,14 @@ effect Walk where
   step : Int -> Unit
   never stop : Unit -> a
 
-walk : Int -> <Walk> Unit
+walk : Int -> <Walk, Panic> Unit
 walk i =
   if i == 3 then stop ()
   else
     step i
     walk (i + 1)
 
-count : Int -> Int -> <Walk> Int
+count : Int -> Int -> <Walk, Panic> Int
 count i acc =
   if i > 4 then stop () else
     step i
@@ -20,13 +20,13 @@ count i acc =
 check : Int -> <Walk> Int
 check i = if i == 3 then stop () else i
 
-walk_checked : Int -> <Walk> Unit
+walk_checked : Int -> <Walk, Panic> Unit
 walk_checked i =
   let j = check i
   step j
   walk_checked (i + 1)
 
-main : Unit -> <IO> Unit
+main : Unit -> <IO, Panic> Unit
 main () =
   handle walk 1 with
     | fn step n -> println "step \{n}"

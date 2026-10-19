@@ -9,7 +9,7 @@ effect Log where
   log : String -> Unit
 
 data Saved =
-  | Saved (Int -> <Log> Saved)
+  | Saved (Int -> <Log, Panic> Saved)
   | Value Int
 
 between : Unit -> <Ask, Log> Int
@@ -17,7 +17,7 @@ between () =
   log "between"
   ask ()
 
-capture : Unit -> <Log> Saved
+capture : Unit -> <Log, Panic> Saved
 capture () =
   handle Value (ask () + between ()) with
     | ctl ask () k ->
@@ -30,14 +30,14 @@ describe s =
     | Saved _ -> "saved"
     | Value n -> show n
 
-logging : String -> (Unit -> <Log> Saved) -> <IO> Saved
+logging : String -> (Unit -> <Log, Panic> Saved) -> <IO, Panic> Saved
 logging name body =
   handle body () with
     | ctl log s k ->
       println (name ++ ": " ++ s)
       k ()
 
-main : Unit -> <IO> Unit
+main : Unit -> <IO, Panic> Unit
 main () =
   match logging "outer" capture with
     | Saved k ->

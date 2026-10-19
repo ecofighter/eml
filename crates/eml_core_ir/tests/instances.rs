@@ -67,13 +67,13 @@ fn one_function_used_at_k_types_has_k_instances() {
 
 #[test]
 fn polymorphic_recursion_is_uniform() {
-    let text = "depth : Int -> a -> Int\ndepth n x = if n == 0 then 0 else 1 + depth (n - 1) (x, x)\n\nmain : Unit -> <IO> Unit\nmain () = println (show (depth 3 1))";
+    let text = "depth : Int -> a -> <Panic> Int\ndepth n x = if n == 0 then 0 else 1 + depth (n - 1) (x, x)\n\nmain : Unit -> <IO, Panic> Unit\nmain () = println (show (depth 3 1))";
     assert_eq!(instances_of(text, "depth"), ["depth@[_]"]);
 }
 
 #[test]
 fn mutual_polymorphic_recursion_is_uniform() {
-    let text = "f : Int -> a -> Int\nf n x = if n == 0 then 0 else g (n - 1) (x, x)\n\ng : Int -> b -> Int\ng n y = f n y\n\nmain : Unit -> <IO> Unit\nmain () = println (show (f 3 1))";
+    let text = "f : Int -> a -> <Panic> Int\nf n x = if n == 0 then 0 else g (n - 1) (x, x)\n\ng : Int -> b -> <Panic> Int\ng n y = f n y\n\nmain : Unit -> <IO, Panic> Unit\nmain () = println (show (f 3 1))";
     assert_eq!(instances_of(text, "f"), ["f@[_]"]);
     assert_eq!(instances_of(text, "g"), ["g@[_]"]);
 }
@@ -81,13 +81,13 @@ fn mutual_polymorphic_recursion_is_uniform() {
 #[test]
 fn recursion_through_a_function_value_is_found() {
     // 自分を値として渡して呼ぶ形も、値の参照が具体化の表に入るので、大きくなる辺になる
-    let text = "call : (Int -> b -> Int) -> Int -> b -> Int\ncall f n x = f n x\n\ndepth : Int -> a -> Int\ndepth n x = if n == 0 then 0 else call depth (n - 1) (x, x)\n\nmain : Unit -> <IO> Unit\nmain () = println (show (depth 3 1))";
+    let text = "call : (Int -> b -> <Panic> Int) -> Int -> b -> <Panic> Int\ncall f n x = f n x\n\ndepth : Int -> a -> <Panic> Int\ndepth n x = if n == 0 then 0 else call depth (n - 1) (x, x)\n\nmain : Unit -> <IO, Panic> Unit\nmain () = println (show (depth 3 1))";
     assert_eq!(instances_of(text, "depth"), ["depth@[_]"]);
 }
 
 #[test]
 fn only_the_growing_position_is_uniform() {
-    let text = "walk : Int -> a -> b -> b\nwalk n x y = if n == 0 then y else walk (n - 1) (x, x) y\n\nmain : Unit -> <IO> Unit\nmain () = println (show (walk 3 1 5))";
+    let text = "walk : Int -> a -> b -> <Panic> b\nwalk n x y = if n == 0 then y else walk (n - 1) (x, x) y\n\nmain : Unit -> <IO, Panic> Unit\nmain () = println (show (walk 3 1 5))";
     assert_eq!(instances_of(text, "walk"), ["walk@[_, Int]"]);
     let shown = core_text(text, Pass::Translate);
     let header = function(&shown, "walk@[_, Int]");
@@ -166,7 +166,7 @@ fn a_long_shared_type_argument_gets_a_hash_name() {
 
 #[test]
 fn a_row_polymorphic_function_has_an_instance_per_row_bit() {
-    let text = "effect Ask where\n  ask : Unit -> Int\n\ntwice : (Unit -> <e> Int) -> <e> Int\ntwice f = f () + f ()\n\npure : Unit -> Int\npure () = twice (fn () -> 1)\n\nmain : Unit -> <IO> Unit\nmain () =\n  println (show (pure ()))\n  println (show (handle twice ask with\n    | ctl ask () k -> k 2))";
+    let text = "effect Ask where\n  ask : Unit -> Int\n\ntwice : (Unit -> <e> Int) -> <Panic | e> Int\ntwice f = f () + f ()\n\npure : Unit -> <Panic> Int\npure () = twice (fn () -> 1)\n\nmain : Unit -> <IO, Panic> Unit\nmain () =\n  println (show (pure ()))\n  println (show (handle twice ask with\n    | ctl ask () k -> k 2))";
     let shown = core_text(text, Pass::Translate);
     // 純粋な instance は今の名前で印がなく、yield しうる instance は `<e>` を持つ
     insta::assert_snapshot!(function(&shown, "twice"), @"
@@ -189,7 +189,7 @@ fn a_row_polymorphic_function_has_an_instance_per_row_bit() {
 
 #[test]
 fn only_the_set_row_variables_are_named_in_signature_order() {
-    let text = "effect Ask where\n  ask : Unit -> Int\n\nboth : (Unit -> <e> Int) -> (Unit -> <f> Int) -> <f> Int\nboth a b = b ()\n\nrun : Unit -> <Ask> Int\nrun () = both (fn () -> 1) ask + both ask ask\n\nmain : Unit -> <IO> Unit\nmain () = println (show (handle run () with\n    | ctl ask () k -> k 2))";
+    let text = "effect Ask where\n  ask : Unit -> Int\n\nboth : (Unit -> <e> Int) -> (Unit -> <f> Int) -> <f> Int\nboth a b = b ()\n\nrun : Unit -> <Ask, Panic> Int\nrun () = both (fn () -> 1) ask + both ask ask\n\nmain : Unit -> <IO, Panic> Unit\nmain () = println (show (handle run () with\n    | ctl ask () k -> k 2))";
     let program = eml_test_support::core_until(text, Pass::Translate);
     let names: Vec<&str> = program
         .functions
@@ -207,13 +207,13 @@ fn a_hash_name_keeps_its_row_bits() {
     // ビットが付く
     let n = 64;
     let mut text = String::from(
-        "effect Ask where\n  ask : Unit -> Int\n\nident : a -> a\nident x = x\n\ntap : a -> (Unit -> <e> Int) -> <e> a\ntap x g =\n  let _ = g ()\n  x\n\nrun : Unit -> <Ask> Int\nrun () =\n  let f0 = ident\n",
+        "effect Ask where\n  ask : Unit -> Int\n\nident : a -> a\nident x = x\n\ntap : a -> (Unit -> <e> Int) -> <e> a\ntap x g =\n  let _ = g ()\n  x\n\nrun : Unit -> <Ask, Panic> Int\nrun () =\n  let f0 = ident\n",
     );
     for i in 1..=n {
         text.push_str(&format!("  let f{i} = f{} ident\n", i - 1));
     }
     text.push_str(&format!(
-        "  let _ = tap f1 ask\n  f{n} 5\n\nmain : Unit -> <IO> Unit\nmain () = println (show (handle run () with\n    | ctl ask () k -> k 2))"
+        "  let _ = tap f1 ask\n  f{n} 5\n\nmain : Unit -> <IO, Panic> Unit\nmain () = println (show (handle run () with\n    | ctl ask () k -> k 2))"
     ));
     assert_eq!(instances_of(&text, "tap"), ["tap@#25dc3bd8ddbc9f49<e>"]);
 }
@@ -222,7 +222,7 @@ fn a_hash_name_keeps_its_row_bits() {
 fn tap_program(short: bool) -> String {
     let n = 64;
     let mut text = String::from(
-        "effect Ask where\n  ask : Unit -> Int\n\nident : a -> a\nident x = x\n\ntap : a -> (Unit -> <e> Int) -> <e> a\ntap x g =\n  let _ = g ()\n  x\n\nrun : Unit -> <Ask> Int\nrun () =\n  let f0 = ident\n",
+        "effect Ask where\n  ask : Unit -> Int\n\nident : a -> a\nident x = x\n\ntap : a -> (Unit -> <e> Int) -> <e> a\ntap x g =\n  let _ = g ()\n  x\n\nrun : Unit -> <Ask, Panic> Int\nrun () =\n  let f0 = ident\n",
     );
     if short {
         text.push_str("  let _ = tap 1 ask\n");
@@ -231,7 +231,7 @@ fn tap_program(short: bool) -> String {
         text.push_str(&format!("  let f{i} = f{} ident\n", i - 1));
     }
     text.push_str(&format!(
-        "  let _ = tap f1 ask\n  f{n} 5\n\nmain : Unit -> <IO> Unit\nmain () = println (show (handle run () with\n    | ctl ask () k -> k 2))"
+        "  let _ = tap f1 ask\n  f{n} 5\n\nmain : Unit -> <IO, Panic> Unit\nmain () = println (show (handle run () with\n    | ctl ask () k -> k 2))"
     ));
     text
 }
@@ -278,7 +278,7 @@ fn a_prelude_type_is_not_qualified_even_when_another_module_shares_its_name() {
 fn a_method_reference_passes_its_row_bits_to_the_method_function() {
     // instance のメソッドの関数と既定のメソッドの関数は、メソッドのシグネチャと同じ順の row 変数を持つ。pure の中の
     // 呼び出しは純粋な instance に、run の中の呼び出しは `<e>` の instance に向かう
-    let text = "effect Ask where\n  ask : Unit -> Int\n\nclass Runner a where\n  run_with : a -> (Unit -> <e> Int) -> <e> Int\n  run_default : a -> (Unit -> <e> Int) -> <e> Int\n  run_default x g = g ()\n\ninstance Runner Int where\n  run_with n g = g () + n\n\nrun : Unit -> <Ask> Int\nrun () = run_with 1 ask + run_default 1 ask\n\npure : Unit -> Int\npure () = run_with 2 (fn () -> 3) + run_default 2 (fn () -> 3)\n\nmain : Unit -> <IO> Unit\nmain () =\n  println (show (pure ()))\n  println (show (handle run () with\n    | ctl ask () k -> k 2))";
+    let text = "effect Ask where\n  ask : Unit -> Int\n\nclass Runner a where\n  run_with : a -> (Unit -> <e> Int) -> <Panic | e> Int\n  run_default : a -> (Unit -> <e> Int) -> <e> Int\n  run_default x g = g ()\n\ninstance Runner Int where\n  run_with n g = g () + n\n\nrun : Unit -> <Ask, Panic> Int\nrun () = run_with 1 ask + run_default 1 ask\n\npure : Unit -> <Panic> Int\npure () = run_with 2 (fn () -> 3) + run_default 2 (fn () -> 3)\n\nmain : Unit -> <IO, Panic> Unit\nmain () =\n  println (show (pure ()))\n  println (show (handle run () with\n    | ctl ask () k -> k 2))";
     let program = eml_test_support::core_until(text, Pass::Translate);
     let mut names: Vec<(&str, bool)> = program
         .functions
@@ -325,7 +325,7 @@ fn a_clause_lambda_over_an_operation_row_variable_may_yield() {
 
 #[test]
 fn an_apply_is_split_after_an_arrow_that_may_yield() {
-    let text = "effect Ask where\n  ask : Unit -> Int\n\nadder : Int -> <Ask> (Int -> Int)\nadder x =\n  let n = ask ()\n  fn y -> x + y + n\n\nrun : (Int -> <Ask> (Int -> Int)) -> <Ask> Int\nrun h = h 1 2\n\nmain : Unit -> <IO> Unit\nmain () =\n  let r =\n    handle run adder with\n      | ctl ask () k -> k 10\n  println (show r)";
+    let text = "effect Ask where\n  ask : Unit -> Int\n\nadder : Int -> <Ask> (Int -> <Panic> Int)\nadder x =\n  let n = ask ()\n  fn y -> x + y + n\n\nrun : (Int -> <Ask> (Int -> <Panic> Int)) -> <Ask, Panic> Int\nrun h = h 1 2\n\nmain : Unit -> <IO, Panic> Unit\nmain () =\n  let r =\n    handle run adder with\n      | ctl ask () k -> k 10\n  println (show r)";
     let shown = core_text(text, Pass::Translate);
     // h 1 で yield しうるので、1つ目の apply の後で分け、1つ目に印を付ける
     insta::assert_snapshot!(function(&shown, "run"), @"
@@ -339,7 +339,7 @@ fn an_apply_is_split_after_an_arrow_that_may_yield() {
 
 #[test]
 fn monomorphic_programs_keep_their_function_order_and_names() {
-    let text = "double : Int -> Int\ndouble n = n + n\n\nmain : Unit -> <IO> Unit\nmain () = println (show (double 2))";
+    let text = "double : Int -> <Panic> Int\ndouble n = n + n\n\nmain : Unit -> <IO, Panic> Unit\nmain () = println (show (double 2))";
     let program = eml_test_support::core_until(text, Pass::Translate);
     let names: Vec<&str> = program
         .functions
@@ -397,6 +397,7 @@ fn a_row_polymorphic_entry_may_yield() {
     // 入口の row のビットはすべて立つので、`go<e>` と入口の関数が yield しうる
     insta::assert_snapshot!(core_text_with_entry(text, "go"), @r#"
     effect Prelude.IO { never io_failed(enum, obj) -> never }
+    effect Prelude.Panic { never panicked(obj) -> never }
     effect Ask { ask(unit) -> int }
     yields fn "go<e>"(p.0: unit) -> int {
       return 1
@@ -527,10 +528,10 @@ fn instances_that_differ_only_in_linearity_have_different_names() {
     // `k` は `File` を捕まえるので矢印が `Lin` になる。`inc` の宣言の一番外の矢印は `Unr` で、参照の row は開いて
     // いるので、`main` の中で呼ぶと `<IO>` になる。2つの型引数は線形性だけが違い、名前は矢印の線形性を `once` で書くので、
     // 番号付きの名前に落ちない (docs/spec/core-ir.md の「変換の規則」)
-    let text = "id : a -> a\nid x = x\n\ninc : Int -> Int\ninc x = x + 1\n\nmain : Unit -> <IO> Unit\nmain () =\n  let h = Fs.open \"a.txt\"\n  let k = fn n ->\n    Fs.close h\n    n\n  let one = id k\n  let a = one 1\n  let i = id inc\n  println (show (i a))";
+    let text = "id : a -> a\nid x = x\n\ninc : Int -> <Panic> Int\ninc x = x + 1\n\nmain : Unit -> <IO, Panic> Unit\nmain () =\n  let h = Fs.open \"a.txt\"\n  let k = fn n ->\n    Fs.close h\n    n\n  let one = id k\n  let a = one 1\n  let i = id inc\n  println (show (i a))";
     assert_eq!(
         instances_of(text, "id"),
-        ["id@[once Int -> <IO> Int]", "id@[Int -> Int]"]
+        ["id@[once Int -> <IO> Int]", "id@[Int -> <Panic> Int]"]
     );
 }
 
@@ -538,21 +539,21 @@ fn instances_that_differ_only_in_linearity_have_different_names() {
 fn a_function_called_with_lin_and_unr_closures_has_one_instance() {
     // instance の鍵は型引数だけで、呼ばれる側の矢印の変数は鍵に入らない。`apply` の `f` の矢印は instance の中で
     // `Poly` になる (docs/spec/types.md の「instance での評価」)
-    let text = "apply : (a -> <e> b) -> a -> <e> b\napply f x = f x\n\nmain : Unit -> <IO> Unit\nmain () =\n  let h = Fs.open \"a.txt\"\n  let a = apply (fn n ->\n    Fs.close h\n    n) 1\n  let b = apply (fn n -> n + 1) a\n  println (show b)";
+    let text = "apply : (a -> <e> b) -> a -> <e> b\napply f x = f x\n\nmain : Unit -> <IO, Panic> Unit\nmain () =\n  let h = Fs.open \"a.txt\"\n  let a = apply (fn n ->\n    Fs.close h\n    n) 1\n  let b = apply (fn n -> n + 1) a\n  println (show b)";
     assert_eq!(instances_of(text, "apply"), ["apply@[Int, Int]"]);
 }
 
 /// spec の「instance での評価」の `f` の例。
-const F_EXAMPLE: &str = "f : a -> (a -> <IO> Int) -> (Int -> <IO> Int) -> Int -> <IO> Int\nf x eat g n =\n  if n == 0 then g (eat x)\n  else\n    let k = fn y -> g (eat x + y)\n    f k (fn h -> h 1) (fn z -> z) (n - 1)\n\nshut_with : Fs.File -> Int -> <IO> Int\nshut_with file z =\n  Fs.close file\n  z\n\nmain : Unit -> <IO> Unit\nmain () =\n  let file = Fs.open \"a.txt\"\n  let n = f 1 (fn y -> y) (shut_with file) 3\n  println (show n)";
+const F_EXAMPLE: &str = "f : a -> (a -> <IO, Panic> Int) -> (Int -> <IO> Int) -> Int -> <IO, Panic> Int\nf x eat g n =\n  if n == 0 then g (eat x)\n  else\n    let k = fn y -> g (eat x + y)\n    f k (fn h -> h 1) (fn z -> z) (n - 1)\n\nshut_with : Fs.File -> Int -> <IO> Int\nshut_with file z =\n  Fs.close file\n  z\n\nmain : Unit -> <IO, Panic> Unit\nmain () =\n  let file = Fs.open \"a.txt\"\n  let n = f 1 (fn y -> y) (shut_with file) 3\n  println (show n)";
 
 #[test]
 fn a_type_variable_above_a_poly_arrow_makes_the_recursive_call_poly() {
     // spec の「instance での評価」の `f` の例。`k` の矢印は `μ_a` と同じ成分にあり、`f@[Int]` で `g` の矢印の
-    // `Poly` が `μ_a` に伝わるので、再帰の呼び出しの型引数は `poly Int -> <IO> Int` になる
+    // `Poly` が `μ_a` に伝わるので、再帰の呼び出しの型引数は `poly Int -> <IO, Panic> Int` になる
     let text = F_EXAMPLE;
     assert_eq!(
         instances_of(text, "f"),
-        ["f@[Int]", "f@[poly Int -> <IO> Int]"]
+        ["f@[Int]", "f@[poly Int -> <IO, Panic> Int]"]
     );
 }
 
@@ -576,7 +577,7 @@ fn a_closure_with_a_file_passed_as_a_type_variable_lowers() {
         names,
         [
             "f@[Int]{1=main$lambda0, 2=shut_with/1}",
-            "f@#7d810ee743b0d10c"
+            "f@#498bf0410c16bec3"
         ]
     );
 }
@@ -601,7 +602,7 @@ fn a_top_level_function_in_a_once_field_lowers() {
     // `Task worker` の `worker` の型は一番外側の矢印が `once` で、`worker` のシグネチャの `Unr` と食い違う。参照の一番
     // 外側の矢印は参照ごとの変数なので、translate の参照の検査はそこを比べない (docs/spec/types.md の「トップレベルの関数の参照」)
     // `Task worker` は `hide` を通して `match` に届けるので、`worker` は値のまま残る
-    let text = "data Box a = | Box a\n\nhide : Int -> a -> Box a\nhide n x = if n <= 0 then Box x else hide (n - 1) x\n\ndata Task =\n  | Task (once Unit -> <IO> Unit)\n\nworker : Unit -> <IO> Unit\nworker () = println \"work\"\n\nget_worker : Unit -> (Unit -> <IO> Unit)\nget_worker () = worker\n\nmain : Unit -> <IO> Unit\nmain () =\n  match hide 0 (Task worker) with\n    | Box (Task f) -> f ()\n  get_worker () ()";
+    let text = "data Box a = | Box a\n\nhide : Int -> a -> <Panic> Box a\nhide n x = if n <= 0 then Box x else hide (n - 1) x\n\ndata Task =\n  | Task (once Unit -> <IO> Unit)\n\nworker : Unit -> <IO> Unit\nworker () = println \"work\"\n\nget_worker : Unit -> (Unit -> <IO> Unit)\nget_worker () = worker\n\nmain : Unit -> <IO, Panic> Unit\nmain () =\n  match hide 0 (Task worker) with\n    | Box (Task f) -> f ()\n  get_worker () ()";
     let program = eml_test_support::lir(text);
     let names: Vec<&str> = program
         .functions

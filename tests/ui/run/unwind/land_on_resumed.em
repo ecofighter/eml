@@ -4,7 +4,7 @@ effect Ctl where
   ask : Unit -> Int
   never stop : Int -> a
 
-body : Unit -> <Ctl, IO> Int
+body : Unit -> <Ctl, IO, Panic> Int
 body () =
   let a = ask ()
   println "asked \{a}"
@@ -13,7 +13,7 @@ body () =
   Fs.close f
   a + r
 
-main : Unit -> <IO> Unit
+main : Unit -> <IO, Panic> Unit
 main () =
   let r = handle body () with
     | ctl ask () k -> k 10 + 1

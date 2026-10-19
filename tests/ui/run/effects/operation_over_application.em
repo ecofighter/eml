@@ -2,10 +2,10 @@
 effect Reader r where
   ask : Unit -> r
 
-use_it : Unit -> <Reader (Int -> Int)> Int
+use_it : Unit -> <Reader (Int -> <Panic> Int), Panic> Int
 use_it () = ask () 5
 
-main : Unit -> <IO> Unit
+main : Unit -> <IO, Panic> Unit
 main () =
   let n =
     handle use_it () with

@@ -3,14 +3,14 @@ source: crates/eml_cli/tests/repl.rs
 expression: checked.render()
 input_file: crates/eml_cli/tests/repl/redefinition/functions.repl
 ---
-> f : Int -> Int
+> f : Int -> <Panic> Int
 . f x = x + 1
 .
-> g : Int -> Int
+> g : Int -> <Panic> Int
 . g x = f x * 10
 .
 > let h = f
-> f : Int -> Int
+> f : Int -> <Panic> Int
 . f x = x + 100
 .
 > f 1
@@ -20,7 +20,7 @@ input_file: crates/eml_cli/tests/repl/redefinition/functions.repl
 > h 1
 2
 > let base = 1
-> add : Int -> Int
+> add : Int -> <Panic> Int
 . add x = x + base
 .
 > let base = 1000

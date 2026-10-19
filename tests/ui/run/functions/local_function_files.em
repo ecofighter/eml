@@ -30,7 +30,7 @@ in_use () =
   finish n
   println "in use"
 
-in_handle : Unit -> <IO> Unit
+in_handle : Unit -> <IO, Panic> Unit
 in_handle () =
   let f = Fs.open "input.txt"
   let finish () =
@@ -41,7 +41,7 @@ in_handle () =
       | ctl ask () k -> k 41
   println ("in handle " ++ show (n + 1))
 
-read_twice : Unit -> <IO> Unit
+read_twice : Unit -> <IO, Panic> Unit
 read_twice () =
   let go f n =
     if n == 0 then Fs.close f
@@ -51,7 +51,7 @@ read_twice () =
   go (Fs.open "input.txt") 3
   println "passed along"
 
-main : Unit -> <IO> Unit
+main : Unit -> <IO, Panic> Unit
 main () =
   in_body ()
   in_lambda ()

@@ -4,10 +4,10 @@ data List a =
   | Nil
   | Cons a (List a)
 
-build : Int -> List Int -> List Int
+build : Int -> List Int -> <Panic> List Int
 build n acc = if n == 0 then acc else build (n - 1) (Cons n acc)
 
-total : List Int -> Int
+total : List Int -> <Panic> Int
 total xs = match xs with
   | Nil -> 0
   | Cons x rest -> x + total rest
@@ -17,7 +17,7 @@ first_or_zero xs = match xs with
   | Nil -> 0
   | Cons x _ -> x
 
-main : Unit -> <IO> Unit
+main : Unit -> <IO, Panic> Unit
 main () =
   println (show (total (build 100000 Nil)))
   println (show (first_or_zero (build 100000 Nil)))

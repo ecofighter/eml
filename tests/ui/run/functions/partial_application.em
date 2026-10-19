@@ -6,13 +6,13 @@ greet greeting name = greeting ++ ", " ++ name
 hello : String -> String
 hello = greet "hello"
 
-add : Int -> Int -> Int
+add : Int -> Int -> <Panic> Int
 add a b = a + b
 
-adder : Int -> Int -> Int
+adder : Int -> Int -> <Panic> Int
 adder x = add x
 
-main : Unit -> <IO> Unit
+main : Unit -> <IO, Panic> Unit
 main () =
   let hi = greet "hi"
   println (hi "alice")

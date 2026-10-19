@@ -24,9 +24,9 @@ input_file: tests/ui/check-fail/kinds/once_declaration.em
 [E1050] Error: the outermost arrow of `inc` cannot be `once`
    ╭─[ check-fail/kinds/once_declaration.em:9:7 ]
    │
- 9 │ inc : once Int -> Int
-   │       ───────┬───────  
-   │              ╰───────── `inc` can be called any number of times
+ 9 │ inc : once Int -> <Panic> Int
+   │       ───────────┬───────────  
+   │                  ╰───────────── `inc` can be called any number of times
    │ 
    │ Help: remove `once`
 ───╯

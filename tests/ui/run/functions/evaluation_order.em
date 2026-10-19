@@ -1,7 +1,7 @@
 -- 呼び出しは、呼ばれる式がどれでも、括弧があってもなくても、引数をすべて評価してから矢印を順に適用する
 -- (docs/spec/expressions.md の「関数適用」)。そのため `g` の出力が `f` と `w` の本体の出力より先に出る。パイプの左の値は
 -- 最初に評価する。
-f : Int -> <IO> (Int -> <IO> Int)
+f : Int -> <IO> (Int -> <IO, Panic> Int)
 f a =
   println "f"
   fn b -> a + b
@@ -11,12 +11,12 @@ g () =
   println "g"
   1
 
-w : Int -> <IO> (Int -> <IO> Int)
+w : Int -> <IO> (Int -> <IO, Panic> Int)
 w = fn a ->
   println "w"
   fn b -> a + b
 
-main : Unit -> <IO> Unit
+main : Unit -> <IO, Panic> Unit
 main () =
   println (show ((f 1) (g ())))
   println (show (f 1 (g ())))

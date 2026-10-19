@@ -15,7 +15,7 @@ fn diagnostics(rest: &str) -> String {
 
 #[test]
 fn a_value_used_twice_points_at_both_uses() {
-    let rest = "twice : Unit -> Int\ntwice () =\n  handle ask () with\n    | ctl ask () k ->\n        let j = k\n        j 1 + j 2";
+    let rest = "twice : Unit -> <Panic> Int\ntwice () =\n  handle ask () with\n    | ctl ask () k ->\n        let j = k\n        j 1 + j 2";
     insta::assert_snapshot!(diagnostics(rest), @"
     E3002 12:15 `j` must be used exactly once, but it is used more than once
       12:15 used again here
@@ -98,7 +98,7 @@ fn a_continuation_unused_on_some_paths_points_at_the_clause() {
 
 #[test]
 fn a_body_with_a_type_error_reports_no_linearity_errors() {
-    let rest = "broken : Unit -> Int\nbroken () =\n  handle ask () with\n    | ctl ask () k ->\n        let j = k\n        j \"no\" + j 2";
+    let rest = "broken : Unit -> <Panic> Int\nbroken () =\n  handle ask () with\n    | ctl ask () k ->\n        let j = k\n        j \"no\" + j 2";
     let checked = check(&format!("{HEADER}{rest}"));
     let codes: Vec<String> = checked
         .diagnostics
@@ -322,7 +322,7 @@ fn the_fix_for_a_shadowed_value_goes_before_the_shadowing_let() {
 #[test]
 fn a_same_name_in_an_unrelated_lambda_keeps_the_fix() {
     // ラムダの引数の `j` は、`drop j` を入れる位置では見えないので、外側の `j` を隠さない
-    let rest = "lambda_name : Unit -> Int\nlambda_name () =\n  handle ask () with\n    | ctl ask () k ->\n        let j = k\n        let f = fn j -> j + 1\n        f 0";
+    let rest = "lambda_name : Unit -> <Panic> Int\nlambda_name () =\n  handle ask () with\n    | ctl ask () k ->\n        let j = k\n        let f = fn j -> j + 1\n        f 0";
     insta::assert_snapshot!(diagnostics(rest), @r"
     E3003 11:13 `j` must be used exactly once, but it is not used
       11:13 `j` is bound here
@@ -340,7 +340,7 @@ fn a_same_name_in_an_unrelated_lambda_keeps_the_fix() {
 fn a_shadowing_let_after_a_lambda_with_the_same_name() {
     // ラムダの引数の `j` を飛ばして、同じブロックの後の `let` を隠した束縛として指す。最後の文の位置ではその `let` が
     // 見えているので、fix は付けない
-    let rest = "skip : Unit -> Int\nskip () =\n  handle ask () with\n    | ctl ask () k ->\n        let j = k\n        let f = fn j -> j + 1\n        let j = 1\n        f j";
+    let rest = "skip : Unit -> <Panic> Int\nskip () =\n  handle ask () with\n    | ctl ask () k ->\n        let j = k\n        let f = fn j -> j + 1\n        let j = 1\n        f j";
     insta::assert_snapshot!(diagnostics(rest), @r"
     E3003 11:13 `j` must be used exactly once, but it is not used
       11:13 `j` is bound here
@@ -353,7 +353,7 @@ fn a_shadowing_let_after_a_lambda_with_the_same_name() {
 
 #[test]
 fn a_value_used_twice_inside_one_branch() {
-    let rest = "inbranch : Unit -> Int\ninbranch () =\n  handle ask () with\n    | ctl ask () k ->\n        let j = k\n        if flag () then j 1 + j 2 else j 0";
+    let rest = "inbranch : Unit -> <Panic> Int\ninbranch () =\n  handle ask () with\n    | ctl ask () k ->\n        let j = k\n        if flag () then j 1 + j 2 else j 0";
     insta::assert_snapshot!(diagnostics(rest), @"
     E3002 12:31 `j` must be used exactly once, but it is used more than once
       12:31 used again here
@@ -389,7 +389,7 @@ fn an_unused_arm_pattern_variable_points_at_the_end_of_the_arm() {
 #[test]
 fn a_continuation_used_twice_on_one_path_is_a_double_use() {
     // 2回使う経路があれば、使わない経路があっても E3005 ではなく E3002 にする
-    let rest = "twice_or_none : Unit -> Int\ntwice_or_none () =\n  handle ask () with\n    | ctl ask () k -> if flag () then k 1 + k 2 else 0";
+    let rest = "twice_or_none : Unit -> <Panic> Int\ntwice_or_none () =\n  handle ask () with\n    | ctl ask () k -> if flag () then k 1 + k 2 else 0";
     insta::assert_snapshot!(diagnostics(rest), @"
     E3002 10:45 `k` must be used exactly once, but it is used more than once
       10:45 used again here
@@ -933,7 +933,7 @@ fn a_user_file_type_and_the_std_file_are_told_apart_by_canonical_names() {
 
 #[test]
 fn a_recursive_local_function_cannot_capture_a_file() {
-    let text = "main : Unit -> <IO> Unit\nmain () =\n  let f = Fs.open \"a\"\n  let go n = if n == 0 then Fs.close f else go (n - 1)\n  go 3";
+    let text = "main : Unit -> <IO, Panic> Unit\nmain () =\n  let f = Fs.open \"a\"\n  let go n = if n == 0 then Fs.close f else go (n - 1)\n  go 3";
     insta::assert_snapshot!(check_full(text), @"
     E3003 3:7 `f` must be used exactly once, but some paths do not use it
       3:7 `f` is bound here
@@ -949,7 +949,7 @@ fn a_recursive_local_function_cannot_capture_a_file() {
 
 #[test]
 fn a_recursive_local_function_passes_a_file_as_an_argument() {
-    let text = "main : Unit -> <IO> Unit\nmain () =\n  let go f n = if n == 0 then Fs.close f else go f (n - 1)\n  go (Fs.open \"a\") 3";
+    let text = "main : Unit -> <IO, Panic> Unit\nmain () =\n  let go f n = if n == 0 then Fs.close f else go f (n - 1)\n  go (Fs.open \"a\") 3";
     assert_eq!(check_short(text), Vec::<String>::new());
 }
 
@@ -977,7 +977,7 @@ fn a_non_recursive_local_function_is_like_a_lambda() {
 #[test]
 fn a_captured_type_variable_becomes_unr() {
     // 再帰するローカル関数が型変数の値を捕まえると、外側のスキームに `Unr` が残る
-    let text = "rep : a -> Int -> List a\nrep x n =\n  let go k acc = if k == 0 then acc else go (k - 1) (x :: acc)\n  go n []";
+    let text = "rep : a -> Int -> <Panic> List a\nrep x n =\n  let go k acc = if k == 0 then acc else go (k - 1) (x :: acc)\n  go n []";
     insta::assert_snapshot!(crate::common::kinds(text, "rep"), @"  kinds: a <= Unr");
 }
 
@@ -1040,7 +1040,7 @@ fn a_fn_clause_continuation_held_across_multi_is_e3006() {
 
 #[test]
 fn a_mutually_recursive_function_cannot_capture_a_file() {
-    let text = "main : Unit -> <IO> Unit\nmain () =\n  let f = Fs.open \"a\"\n  let even n = if n == 0 then Fs.close f else odd (n - 1)\n  and odd n = if n == 0 then () else even (n - 1)\n  even 3";
+    let text = "main : Unit -> <IO, Panic> Unit\nmain () =\n  let f = Fs.open \"a\"\n  let even n = if n == 0 then Fs.close f else odd (n - 1)\n  and odd n = if n == 0 then () else even (n - 1)\n  even 3";
     insta::assert_snapshot!(check_full(text), @"
     E3003 3:7 `f` must be used exactly once, but some paths do not use it
       3:7 `f` is bound here
@@ -1065,7 +1065,7 @@ fn a_non_recursive_and_group_member_can_capture_a_file() {
 /// 型が `Lin` のときだけで、そのときは E3001 がすでに出ているためである。
 #[test]
 fn a_member_without_a_reference_points_at_the_first_one_in_the_group() {
-    let text = "main : Unit -> <IO> Unit\nmain () =\n  let f = Fs.open \"a\"\n  let close_at () = Fs.close f\n  and go n = if n == 0 then close_at () else go (n - 1)\n  go 3";
+    let text = "main : Unit -> <IO, Panic> Unit\nmain () =\n  let f = Fs.open \"a\"\n  let close_at () = Fs.close f\n  and go n = if n == 0 then close_at () else go (n - 1)\n  go 3";
     insta::assert_snapshot!(check_full(text), @"
     E3001 5:29 a recursive local function cannot capture a linear value
       5:29 `go` refers to `close_at` here, so it may be called any number of times
@@ -1078,7 +1078,7 @@ fn a_member_without_a_reference_points_at_the_first_one_in_the_group() {
 /// 一方だけが他方を呼ぶ組も再帰する組である。呼ばれる側を組の外で使わなくても、E3003 は連鎖させない。
 #[test]
 fn a_member_called_only_by_its_partner_is_not_reported_unused() {
-    let text = "main : Unit -> <IO> Unit\nmain () =\n  let f = Fs.open \"a\"\n  let close_it () = Fs.close f\n  and run () = close_it ()\n  run ()";
+    let text = "main : Unit -> <IO, Panic> Unit\nmain () =\n  let f = Fs.open \"a\"\n  let close_it () = Fs.close f\n  and run () = close_it ()\n  run ()";
     insta::assert_snapshot!(check_full(text), @"
     E3001 5:16 a recursive local function cannot capture a linear value
       5:16 `run` refers to `close_it` here, so it may be called any number of times
@@ -1092,7 +1092,7 @@ fn a_member_called_only_by_its_partner_is_not_reported_unused() {
 /// `close_it` を secondary で名指しする。
 #[test]
 fn a_member_beside_a_self_recursive_one_is_named() {
-    let text = "main : Unit -> <IO> Unit\nmain () =\n  let f = Fs.open \"a\"\n  let close_it () = Fs.close f\n  and loop n = if n == 0 then 0 else loop (n - 1)\n  println (show (loop 3))\n  close_it ()";
+    let text = "main : Unit -> <IO, Panic> Unit\nmain () =\n  let f = Fs.open \"a\"\n  let close_it () = Fs.close f\n  and loop n = if n == 0 then 0 else loop (n - 1)\n  println (show (loop 3))\n  close_it ()";
     insta::assert_snapshot!(check_full(text), @"
     E3001 5:38 a recursive local function cannot capture a linear value
       5:38 `loop` refers to `loop` here, so it may be called any number of times
@@ -1160,7 +1160,7 @@ fn a_variable_consumed_after_the_call_is_not_dropped() {
 #[test]
 fn only_the_first_diverging_call_is_recorded() {
     let text = format!(
-        "{FAIL}g : Int -> Int -> Int\ng a b = a + b\n\ntwo : Fs.File -> <Fail> Int\ntwo f = g (fail \"a\") (fail \"b\")"
+        "{FAIL}g : Int -> Int -> <Panic> Int\ng a b = a + b\n\ntwo : Fs.File -> <Fail, Panic> Int\ntwo f = g (fail \"a\") (fail \"b\")"
     );
     insta::assert_snapshot!(implicit_drops(&text), @"8:12 [f]");
 }

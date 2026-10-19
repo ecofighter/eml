@@ -22,7 +22,7 @@ read_text path =
   text
 
 -- 行の終わり (`\n` か `\r\n`) を除いた1行で、終わりなら `None` である。`Stdin.read_line` と同じである
-pub read_line : File -> <IO> (File, Option String)
+pub read_line : File -> <IO, Panic> (File, Option String)
 read_line file =
   let (file, line) = read_line_raw file
   if String.byte_length line == 0 then (file, None) else (file, Some (String.trim_line_end line))

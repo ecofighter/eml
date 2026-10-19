@@ -30,15 +30,15 @@ blacken t = match t with
   | _ -> t
 
 -- 線形合同法で次の種を作り、種の下位の桁を木に入れる
-build : Int -> Int -> Tree -> Tree
+build : Int -> Int -> Tree -> <Panic> Tree
 build n seed t = if n == 0 then t else
   let next = (seed * 1103515245 + 12345) % 2147483648
   build (n - 1) next (blacken (ins (next % 10000000) t))
 
-count : Tree -> Int
+count : Tree -> <Panic> Int
 count t = match t with
   | Leaf -> 0
   | Node _ l _ r -> count l + 1 + count r
 
-main : Unit -> <IO> Unit
+main : Unit -> <IO, Panic> Unit
 main () = println (show (count (build 10000 42 Leaf)))

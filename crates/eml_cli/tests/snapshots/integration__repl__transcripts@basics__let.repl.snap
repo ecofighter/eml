@@ -10,7 +10,7 @@ input_file: crates/eml_cli/tests/repl/basics/let.repl
 evaluated
 > ten + ten
 20
-> add_once : Int -> Int
+> add_once : Int -> <Panic> Int
 . add_once x = x + ten
 .
 > add_once 5

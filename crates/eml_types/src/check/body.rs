@@ -1,6 +1,6 @@
 use std::collections::{HashMap, HashSet};
 
-use eml_diagnostics::{Diagnostic, FileId, Label, TextRange};
+use eml_diagnostics::{Diagnostic, FileId, Label, SourceFiles, TextRange};
 use eml_hir::{
     Body, Closure, ConstructorId, ExprId, ExprKind, Function, Literal, LocalFunction, LocalId,
     MatchArm, OperationId, PatId, PatKind, Program, Res, Segment, Stmt, TypeRefId, TypeRefKind,
@@ -63,6 +63,8 @@ pub(crate) struct BodyTyping {
 
 pub(super) struct BodyCheck<'a, 'c> {
     pub(super) program: &'a Program,
+    /// E2002 の fix が、書いた row の中の位置をソースの文字列から読む。
+    pub(super) files: &'a SourceFiles,
     /// 検査している本体のモジュールのファイル。診断が指す。
     pub(super) file: FileId,
     pub(super) function: &'a Function,
@@ -144,7 +146,7 @@ impl BodyCheck<'_, '_> {
     }
 
     /// 本体の row を持つシグネチャの矢印。引数がないときと、引数の数だけ矢印をたどれないときは `None` である。
-    fn body_arrow(&self) -> Option<TypeRefId> {
+    pub(super) fn body_arrow(&self) -> Option<TypeRefId> {
         let signature = self.function.signature.as_ref()?;
         let mut id = signature.ty;
         for _ in 1..self.body.params.len() {

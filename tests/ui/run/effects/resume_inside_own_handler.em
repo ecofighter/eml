@@ -1,12 +1,12 @@
 -- A continuation is resumed inside the extent of its own handler; each run of the handler keeps its own state.
-data Re = | Re (Re -> Int -> Int)
+data Re = | Re (Re -> Int -> <Panic> Int)
 
 effect G where
   multi grab : Unit -> Re
   get : Unit -> Int
   put : Int -> Unit
 
-body : Unit -> <G> Int
+body : Unit -> <G, Panic> Int
 body () =
   let r = grab ()
   let n = get ()
@@ -18,7 +18,7 @@ body () =
         inner + get ()
   else n
 
-run : Unit -> Int
+run : Unit -> <Panic> Int
 run () =
   handle body () from 0 with
     | ctl grab () k st -> k (Re k) st
@@ -26,5 +26,5 @@ run () =
     | ctl put n k _ -> k () n
     | return x _ -> x
 
-main : Unit -> <IO> Unit
+main : Unit -> <IO, Panic> Unit
 main () = println (show (run ()))

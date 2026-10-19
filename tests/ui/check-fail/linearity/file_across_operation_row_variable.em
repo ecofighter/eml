@@ -11,7 +11,7 @@ body () =
   match mk () with
     | (run, _) -> run (fn () -> if pick () then 1 else 2)
 
-main : Unit -> <IO> Unit
+main : Unit -> <IO, Panic> Unit
 main () =
   let r =
     handle (handle body () with

@@ -6,7 +6,7 @@ ident x = x
 effect Ask where
   ask : Unit -> Int
 
-main : Unit -> <IO> Unit
+main : Unit -> <IO, Panic> Unit
 main () =
   let f0 = ident
   let f1 = f0 ident

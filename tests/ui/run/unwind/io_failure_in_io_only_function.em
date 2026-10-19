@@ -7,14 +7,14 @@ missing () =
   Fs.close f
   0
 
-outer : Unit -> <IO> Int
+outer : Unit -> <IO, Panic> Int
 outer () =
   let f = Fs.open "input.txt"
   let r = missing () + 1
   Fs.close f
   r
 
-main : Unit -> <IO> Unit
+main : Unit -> <IO, Panic> Unit
 main () =
   match try_io outer with
     | Ok r -> println "ok \{r}"

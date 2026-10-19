@@ -14,7 +14,7 @@ body () =
     Fs.close f
     r
 
-main : Unit -> <IO> Unit
+main : Unit -> <IO, Panic> Unit
 main () =
   let r = handle body () with
     | ctl pick () k -> k 1 + k 2

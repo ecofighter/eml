@@ -3,15 +3,15 @@ data Opt =
   | None
   | Some Int
 
-describe : Opt -> Int
+describe : Opt -> <Panic> Int
 describe o = match o with
   | None -> weight o
   | Some n -> n
 
-weight : Opt -> Int
+weight : Opt -> <Panic> Int
 weight o = match o with
   | None -> 0
   | Some n -> n + 1
 
-main : Unit -> <IO> Unit
+main : Unit -> <IO, Panic> Unit
 main () = println (show (describe None + describe (Some 3)))

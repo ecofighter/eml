@@ -1,2 +1,2 @@
-pub twice : Int -> Int
+pub twice : Int -> <Panic> Int
 twice n = n * 2

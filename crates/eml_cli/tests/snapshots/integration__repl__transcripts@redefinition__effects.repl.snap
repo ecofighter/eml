@@ -6,10 +6,10 @@ input_file: crates/eml_cli/tests/repl/redefinition/effects.repl
 > effect Ask where
 .   ask : Unit -> Int
 .
-> asker : Unit -> <Ask> Int
+> asker : Unit -> <Ask, Panic> Int
 . asker () = ask () + 1
 .
-> run_old : Unit -> Int
+> run_old : Unit -> <Panic> Int
 . run_old () =
 .   handle asker () with
 .     | ctl ask () k -> k 10
@@ -22,7 +22,7 @@ input_file: crates/eml_cli/tests/repl/redefinition/effects.repl
 > handle asker () with
 .   | ctl ask () k -> k 20
 .
-E2015 <input 6> 1:8 `asker` performs `Ask#1`, but an input may perform only `IO`
+E2015 <input 6> 1:8 `asker` performs `Ask#1`, but an input may perform only `IO` and `Panic`
   <input 6> 1:8 this call performs `Ask#1`
   help: handle `Ask#1` inside the input, as in `handle … with …`
 > handle ask () * 2 with

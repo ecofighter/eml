@@ -3,7 +3,7 @@
 effect Tick where
   tick : Unit -> Unit
 
-deep : Int -> <Tick, IO> Int
+deep : Int -> <Tick, IO, Panic> Int
 deep n =
   let f = Fs.open "input.txt"
   tick ()
@@ -11,7 +11,7 @@ deep n =
   Fs.close f
   r
 
-main : Unit -> <IO> Unit
+main : Unit -> <IO, Panic> Unit
 main () =
   let g = Fs.open "input.txt"
   let result =

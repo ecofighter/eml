@@ -3,7 +3,7 @@ data List a =
   | Nil
   | Cons a (List a)
 
-len : List a -> Int
+len : List a -> <Panic> Int
 len Nil = 0
 len (Cons _ rest) = 1 + len rest
 
@@ -12,11 +12,11 @@ describe 0 = "zero"
 describe 1 = "one"
 describe _ = "many"
 
-zip_sum : List Int -> List Int -> Int
+zip_sum : List Int -> List Int -> <Panic> Int
 zip_sum (Cons x xs) (Cons y ys) = x + y + zip_sum xs ys
 zip_sum _ _ = 0
 
-main : Unit -> <IO> Unit
+main : Unit -> <IO, Panic> Unit
 main () =
   let xs = Cons 1 (Cons 2 (Cons 3 Nil))
   println (show (len xs))

@@ -13,20 +13,20 @@ greet lang = match lang with
   | "ja" -> "konnichiwa"
   | other -> "? " ++ other
 
-bonus : Int -> Int
+bonus : Int -> <Panic> Int
 bonus n = match greet (if n % 2 == 0 then "en" else "fr") with
   | "hello" -> 1
   | _ -> 0
 
-count_hellos : Int -> Int -> Int
+count_hellos : Int -> Int -> <Panic> Int
 count_hellos n acc = if n == 0 then acc else count_hellos (n - 1) (acc + bonus n)
 
-tagged : (String, Int) -> Int
+tagged : (String, Int) -> <Panic> Int
 tagged p = match p with
   | ("a", 0) -> 10
   | (s, n) -> n + 100
 
-main : Unit -> <IO> Unit
+main : Unit -> <IO, Panic> Unit
 main () =
   println (describe 0)
   println (describe 1)

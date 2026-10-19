@@ -423,7 +423,7 @@ fn main() -> unit {{
 ///   resumer yielder asker
 ///   masked asker
 ///
-/// main : Unit -> <IO> Unit
+/// main : Unit -> <IO, Panic> Unit
 /// main () =
 ///   handle (handle body () with
 ///             | ctl ask () k -> k "inner") with
@@ -465,7 +465,7 @@ fn a_mask_skips_outer_handlers_only() {
 /// effect Ask where
 ///   ask : Unit -> Int
 ///
-/// main : Unit -> <IO> Unit
+/// main : Unit -> <IO, Panic> Unit
 /// main () =
 ///   let r = handle (handle choose () with
 ///                     | ctl ask () k -> k 0

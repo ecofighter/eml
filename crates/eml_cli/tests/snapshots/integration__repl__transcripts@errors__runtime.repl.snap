@@ -15,15 +15,15 @@ E1001 <input 3> 1:1 cannot find value `x`
 > let y = 7
 > y * 6
 42
-> build : Int -> List Int -> List Int
+> build : Int -> List Int -> <Panic> List Int
 . build n acc = if n == 0 then acc else build (n - 1) (n :: acc)
 .
-> size : List Int -> Int
+> size : List Int -> <Panic> Int
 . size xs = match xs with
 .   | [] -> 0
 .   | _ :: rest -> 1 + size rest
 .
-> check : List Int -> Int -> Int
+> check : List Int -> Int -> <Panic> Int
 . check xs d = 100 / d + size xs
 .
 > check (build 3 []) 0

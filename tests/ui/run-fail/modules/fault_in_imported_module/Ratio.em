@@ -1,2 +1,2 @@
-pub ratio : Int -> Int -> Int
+pub ratio : Int -> Int -> <Panic> Int
 ratio a b = a / b

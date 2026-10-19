@@ -6,19 +6,19 @@ data List a =
   | Nil
   | Cons a (List a)
 
-sum : List Int -> Int
+sum : List Int -> <Panic> Int
 sum xs = match xs with
   | Nil -> 0
   | Cons x rest -> x + sum rest
 
-go : List Int -> <Choice> Int
+go : List Int -> <Choice, Panic> Int
 go xs =
   let b = choose ()
   match xs with
     | Nil -> 0
     | Cons x rest -> (if b then x else 0) + sum rest
 
-main : Unit -> <IO> Unit
+main : Unit -> <IO, Panic> Unit
 main () =
   let r = handle go (Cons 1 (Cons 2 (Cons 3 Nil))) with
     | ctl choose () k -> k True + k False

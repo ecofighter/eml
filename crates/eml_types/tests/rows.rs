@@ -226,14 +226,14 @@ fn a_row_reached_only_from_a_capture_closes() {
 #[test]
 fn a_deferred_self_call_reports_against_the_row_at_the_call() {
     // 自分への呼び出しの包含は本体の後で確かめるが、診断は呼び出しの位置の今の row (純粋なラムダ) を指す
-    let text = "effect Ask where\n  ask : Unit -> Int\n\npure_apply : (Unit -> Int) -> Int\npure_apply f = f ()\n\ng : Int -> <Ask> Int\ng n =\n  let go k = if k == 0 then ask () else pure_apply (fn () -> go (k - 1))\n  go n";
+    let text = "effect Ask where\n  ask : Unit -> Int\n\npure_apply : (Unit -> <Panic> Int) -> <Panic> Int\npure_apply f = f ()\n\ng : Int -> <Ask, Panic> Int\ng n =\n  let go k = if k == 0 then ask () else pure_apply (fn () -> go (k - 1))\n  go n";
     insta::assert_snapshot!(check_text(text), @"
     ask : Unit -> <Ask> Int
-    pure_apply : (Unit -> Int) -> Int
-      f#0 : Unit -> Int
-    g : Int -> <Ask> Int
+    pure_apply : (Unit -> <Panic> Int) -> <Panic> Int
+      f#0 : Unit -> <Panic> Int
+    g : Int -> <Ask, Panic> Int
       n#0 : Int
-      go#1 : Int -> <Ask> Int
+      go#1 : Int -> <Ask, Panic> Int
       k#2 : Int
     ---
     E2002 9:62 `go` performs `Ask`, which this lambda does not allow
@@ -258,8 +258,7 @@ fn a_row_reached_only_from_a_parameter_closes() {
 fn a_rigid_tail_in_a_local_function_does_not_depend_on_call_order() {
     // 引数 `h` の row の rigid な `e` は、`ask` のラベルを足し終えてから `go` の row の末尾に束縛するので、呼ぶ順序に
     // よらず通る (docs/spec/types.md の「推論」)
-    let head =
-        "effect Ask where\n  ask : Unit -> Int\n\nf : (Unit -> <e> Int) -> <Ask | e> Int\nf h =\n";
+    let head = "effect Ask where\n  ask : Unit -> Int\n\nf : (Unit -> <e> Int) -> <Ask, Panic | e> Int\nf h =\n";
     for go in ["h () + ask () + k", "ask () + h () + k"] {
         let out = check_text(&format!("{head}  let go k = {go}\n  go 1"));
         assert!(!out.contains("E2"), "{out}");
@@ -269,7 +268,7 @@ fn a_rigid_tail_in_a_local_function_does_not_depend_on_call_order() {
 #[test]
 fn a_let_bound_lambda_is_called_inside_and_outside_a_handler_in_any_order() {
     // 呼び出しは row の包含なので、`g` の row は最初の呼び出しの今の row に決まらない
-    let head = "effect Ask where\n  ask : Unit -> Int\n\nf : Unit -> <IO> Int\nf () =\n  let g = fn () -> 1\n";
+    let head = "effect Ask where\n  ask : Unit -> Int\n\nf : Unit -> <IO, Panic> Int\nf () =\n  let g = fn () -> 1\n";
     let handled = "(handle g () + ask () with | fn ask () -> 2)";
     for body in [format!("{handled} + g ()"), format!("g () + {handled}")] {
         let out = check_text(&format!("{head}  {body}"));

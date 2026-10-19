@@ -740,6 +740,8 @@ fn run_extern<M: Mode>(
                 let code = ctx.proc_status(task.get(arg(0)), task.get(arg(1)))?;
                 task.set_raw(dst, code);
             }
+            // `exit` と同じく VM が自分で実行する extern である。`Panic` の evidence への道は S14a の次の段で作る
+            Extern::Panic => return Err(VmFault::Internal("panic is not implemented")),
             Extern::Exit
             | Extern::IntNeg
             | Extern::IntAdd

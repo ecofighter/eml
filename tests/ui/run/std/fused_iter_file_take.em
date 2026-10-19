@@ -6,7 +6,7 @@
 import Iter
 import Yield (Yield(..))
 
-numbers : Int -> Unit -> <Yield Int, IO> Unit
+numbers : Int -> Unit -> <Yield Int, IO, Panic> Unit
 numbers n () =
   let go file i =
     if i > n then Fs.close file
@@ -15,7 +15,7 @@ numbers n () =
       go file (i + 1)
   go (Fs.open "numbers.txt") 1
 
-main : Unit -> <IO> Unit
+main : Unit -> <IO, Panic> Unit
 main () =
   Fs.write_text "numbers.txt" "x\n"
   println (show (Iter.fold (fn a b -> a + b) 0 (Iter.generate (numbers 5))))

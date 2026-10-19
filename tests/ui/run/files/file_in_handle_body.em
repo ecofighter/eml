@@ -7,7 +7,7 @@ use_file f =
   Fs.close f
   ask ()
 
-main : Unit -> <IO> Unit
+main : Unit -> <IO, Panic> Unit
 main () =
   let f = Fs.open "input.txt"
   let n =

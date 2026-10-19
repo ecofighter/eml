@@ -3,10 +3,10 @@
 effect Tick where
   tick : Unit -> Int
 
-body : Unit -> <Tick> Int
+body : Unit -> <Tick, Panic> Int
 body () = tick () + tick ()
 
-main : Unit -> <IO> Unit
+main : Unit -> <IO, Panic> Unit
 main () =
   let r = handle body () from (Fs.open "input.txt", 0) with
     | ctl tick () k st ->

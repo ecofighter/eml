@@ -9,7 +9,7 @@ effect Name where
 bit : Bool -> Int
 bit b = if b then 1 else 0
 
-describe : Unit -> <Choice, Name> String
+describe : Unit -> <Choice, Name, Panic> String
 describe () =
   let prefix = name ()
   let a = bit (choose ())
@@ -17,23 +17,23 @@ describe () =
   let c = bit (choose ())
   prefix ++ ":" ++ show (a * 4 + b * 2 + c)
 
-labelled : Unit -> <Choice> String
+labelled : Unit -> <Choice, Panic> String
 labelled () =
   handle describe () with
     | ctl name () k -> k "bits"
 
-every : Unit -> String
+every : Unit -> <Panic> String
 every () =
   handle labelled () with
     | ctl choose () k -> k False ++ " " ++ k True
 
-paths : Unit -> Int
+paths : Unit -> <Panic> Int
 paths () =
   handle labelled () with
     | ctl choose () k -> k False + k True
     | return s -> 1
 
-main : Unit -> <IO> Unit
+main : Unit -> <IO, Panic> Unit
 main () =
   println (every ())
   println (show (paths ()))

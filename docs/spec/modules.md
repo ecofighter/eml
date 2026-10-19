@@ -12,7 +12,7 @@
 - 入口のモジュールの名前は、ファイル名によらず `Main` である。入口のモジュールは、どの名前でも import できない
 - `Prelude`、`Main`、`Std` は予約したモジュール名である。根に `Prelude.em`、`Main.em`、`Std.em` があっても import できない
 - `Prelude` (`Bool`、`List`、`Option`、`Result`、`println` など) を暗黙に取り込む (下の「Prelude」)
-- エントリポイントは、入口のモジュールの `main : Unit -> <IO> Unit` とする。終了コードは標準ライブラリの `exit` で扱う ([標準ライブラリへの申し送り](../future/stdlib.md))
+- エントリポイントは、入口のモジュールの `main` とする。型は `Unit -> <…> Unit` で、row のラベルは `IO` と `Panic` だけ (順は問わず、どちらも省ける) で、row 変数の末尾を持たない。`Unit -> Unit`、`Unit -> <IO> Unit`、`Unit -> <Panic> Unit`、`Unit -> <IO, Panic> Unit` のどれでもよい。ほかの型は E2004 にする。終了コードは標準ライブラリの `exit` で扱う ([標準ライブラリへの申し送り](../future/stdlib.md))
 - 公開するものには `pub` を付ける ([宣言](declarations.md) の「`pub`」と、下の「公開の範囲」)
 
 ```

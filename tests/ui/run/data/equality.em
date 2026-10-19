@@ -2,7 +2,7 @@
 yes_no : Bool -> String
 yes_no b = if b then "yes" else "no"
 
-main : Unit -> <IO> Unit
+main : Unit -> <IO, Panic> Unit
 main () =
   let name = "eml"
   println (yes_no (1 + 1 == 2))

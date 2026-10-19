@@ -6,7 +6,7 @@ data Options =
   | Options { invert : Bool, numbered : Bool, count_only : Bool, pattern : String }
 
 -- 先頭のフラグとパターンを読み、残りをファイル名として返す
-parse_args : Options -> List String -> Option (Options, List String)
+parse_args : Options -> List String -> <Panic> Option (Options, List String)
 parse_args opts args =
   match args with
     | "-v" :: rest -> parse_args { opts | invert = True } rest
@@ -18,7 +18,7 @@ parse_args opts args =
     | Nil -> None
 
 -- 標準入力を、全体を読まずに1行ずつ流す。行番号は1から数える
-stdin_lines : Unit -> <Yield (Int, String), IO> Unit
+stdin_lines : Unit -> <Yield (Int, String), IO, Panic> Unit
 stdin_lines () =
   let go n =
     match Stdin.read_line () with
@@ -28,7 +28,7 @@ stdin_lines () =
       | None -> ()
   go 1
 
-numbered_lines : List String -> <Yield (Int, String)> Unit
+numbered_lines : List String -> <Yield (Int, String), Panic> Unit
 numbered_lines lines =
   let go n rest =
     match rest with
@@ -39,7 +39,7 @@ numbered_lines lines =
   go 1 lines
 
 -- 流れてきた行のうち選ぶものを出し、選んだ数を返す
-matching : Options -> String -> (Unit -> <Yield (Int, String), IO | e> Unit) -> <IO | e> Int
+matching : Options -> String -> (Unit -> <Yield (Int, String), IO, Panic | e> Unit) -> <IO, Panic | e> Int
 matching opts prefix lines =
   let step count (n, line) =
     if String.contains opts.pattern line != opts.invert then
@@ -53,7 +53,7 @@ matching opts prefix lines =
   count
 
 -- 1つの入力を探し、選んだ数を返す。開けないか読めなければ `None` である
-search : Options -> String -> String -> <IO> Option Int
+search : Options -> String -> String -> <IO, Panic> Option Int
 search opts prefix name =
   let found =
     use try_io
@@ -70,7 +70,7 @@ search opts prefix name =
       eprintln "grep: \{e}"
       None
 
-main : Unit -> <IO> Unit
+main : Unit -> <IO, Panic> Unit
 main () =
   let none = Options { invert = False, numbered = False, count_only = False, pattern = "" }
   match parse_args none (Env.args ()) with

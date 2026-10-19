@@ -40,14 +40,14 @@ fn operations_are_values_and_can_be_partially_applied() {
 
 #[test]
 fn a_handler_removes_its_effect_and_types_the_continuation() {
-    let text = "effect Ask where\n  ask : String -> Int\n\nrun : Unit -> <Ask, IO> Int\nrun () =\n  let n = ask \"n\"\n  println \"asked\"\n  n + 1\n\nmain : Unit -> <IO> Unit\nmain () =\n  let total =\n    handle run () with\n      | ctl ask key k -> k 41\n      | return x -> show x\n  println total";
+    let text = "effect Ask where\n  ask : String -> Int\n\nrun : Unit -> <Ask, IO, Panic> Int\nrun () =\n  let n = ask \"n\"\n  println \"asked\"\n  n + 1\n\nmain : Unit -> <IO, Panic> Unit\nmain () =\n  let total =\n    handle run () with\n      | ctl ask key k -> k 41\n      | return x -> show x\n  println total";
     insta::assert_snapshot!(check_text(text), @"
     ask : String -> <Ask> Int
-    run : Unit -> <Ask, IO> Int
+    run : Unit -> <Ask, IO, Panic> Int
       n#0 : Int
-    main : Unit -> <IO> Unit
+    main : Unit -> <IO, Panic> Unit
       key#0 : String
-      k#1 : once Int -> <IO> String
+      k#1 : once Int -> <IO, Panic> String
       x#2 : Int
       total#3 : String
     ");
@@ -57,7 +57,7 @@ fn a_handler_removes_its_effect_and_types_the_continuation() {
 #[test]
 fn a_continuation_is_a_function() {
     let stateless = "effect Ask where\n  ask : Unit -> Int\n\nrun : Unit -> <IO> String\nrun () =\n  handle ask () with\n    | ctl ask () k -> k 1\n    | return x -> show x";
-    let stateful = "effect Tick where\n  tick : Unit -> Int\n\nrun : Unit -> Int\nrun () =\n  handle tick () from \"s\" with\n    | ctl tick () k st -> k 1 st\n    | return x _ -> x";
+    let stateful = "effect Tick where\n  tick : Unit -> Int\n\nrun : Unit -> <Panic> Int\nrun () =\n  handle tick () from \"s\" with\n    | ctl tick () k st -> k 1 st\n    | return x _ -> x";
     insta::assert_snapshot!(check_text(stateless), @"
     ask : Unit -> <Ask> Int
     run : Unit -> <IO> String
@@ -66,8 +66,8 @@ fn a_continuation_is_a_function() {
     ");
     insta::assert_snapshot!(check_text(stateful), @"
     tick : Unit -> <Tick> Int
-    run : Unit -> Int
-      k#0 : once Int -> once String -> Int
+    run : Unit -> <Panic> Int
+      k#0 : once Int -> once String -> <Panic> Int
       st#1 : String
       x#2 : Int
     ");
@@ -96,13 +96,13 @@ fn a_partial_continuation_capturing_a_linear_value_is_linear() {
 /// (docs/spec/effects.md)。
 #[test]
 fn a_partial_continuation_of_a_once_operation_with_a_state_is_linear() {
-    let text = "effect Ask where\n  ask : Unit -> Int\n\nrun : Unit -> Int\nrun () =\n  handle ask () from 0 with\n    | ctl ask () k st ->\n        let g = k 1\n        let a = g st\n        let b = g st\n        a + b\n    | return x _ -> x";
+    let text = "effect Ask where\n  ask : Unit -> Int\n\nrun : Unit -> <Panic> Int\nrun () =\n  handle ask () from 0 with\n    | ctl ask () k st ->\n        let g = k 1\n        let a = g st\n        let b = g st\n        a + b\n    | return x _ -> x";
     insta::assert_snapshot!(check_text(text), @"
     ask : Unit -> <Ask> Int
-    run : Unit -> Int
-      k#0 : once Int -> once Int -> Int
+    run : Unit -> <Panic> Int
+      k#0 : once Int -> once Int -> <Panic> Int
       st#1 : Int
-      g#2 : once Int -> Int
+      g#2 : once Int -> <Panic> Int
       a#3 : Int
       b#4 : Int
       x#5 : Int
@@ -168,11 +168,11 @@ fn the_body_of_a_handler_may_perform_only_the_handled_effect_and_the_outer_row()
 
 #[test]
 fn a_continuation_of_a_once_operation_must_be_used_exactly_once() {
-    let text = "effect Ask where\n  ask : Unit -> Int\n\ntwice : Unit -> Int\ntwice () =\n  handle ask () with\n    | ctl ask () k -> k 1 + k 2\n\nunused : Unit -> Int\nunused () =\n  handle ask () with\n    | ctl ask () k -> 0\n\ndiscarded : Unit -> Int\ndiscarded () =\n  handle ask () with\n    | ctl ask () _ -> 0\n\ncaptured : Unit -> <Ask> Int\ncaptured () =\n  handle ask () with\n    | ctl ask () k ->\n        handle ask () with\n          | ctl ask () inner -> k (inner 1)";
+    let text = "effect Ask where\n  ask : Unit -> Int\n\ntwice : Unit -> <Panic> Int\ntwice () =\n  handle ask () with\n    | ctl ask () k -> k 1 + k 2\n\nunused : Unit -> Int\nunused () =\n  handle ask () with\n    | ctl ask () k -> 0\n\ndiscarded : Unit -> Int\ndiscarded () =\n  handle ask () with\n    | ctl ask () _ -> 0\n\ncaptured : Unit -> <Ask> Int\ncaptured () =\n  handle ask () with\n    | ctl ask () k ->\n        handle ask () with\n          | ctl ask () inner -> k (inner 1)";
     insta::assert_snapshot!(check_text(text), @"
     ask : Unit -> <Ask> Int
-    twice : Unit -> Int
-      k#0 : once Int -> Int
+    twice : Unit -> <Panic> Int
+      k#0 : once Int -> <Panic> Int
       $r#1 : Int
     unused : Unit -> Int
       k#0 : once Int -> Int
@@ -241,7 +241,7 @@ fn a_body_with_a_reported_error_does_not_report_linear_values() {
 
 #[test]
 fn a_continuation_cannot_pass_through_a_polymorphic_operation_parameter() {
-    let text = "effect Ask where\n  ask : Unit -> Int\n\neffect Sink where\n  sink : a -> Unit\n\neffect Pair where\n  pair : a -> (a -> a -> b) -> b\n\nsunk : Unit -> <Sink> Int\nsunk () =\n  handle ask () with\n    | ctl ask () k ->\n        sink k\n        0\n\npaired : Unit -> <Pair> Int\npaired () =\n  handle ask () with\n    | ctl ask () k ->\n        let f = pair 1 (fn x y -> fn u -> k (x + y))\n        f ()";
+    let text = "effect Ask where\n  ask : Unit -> Int\n\neffect Sink where\n  sink : a -> Unit\n\neffect Pair where\n  pair : a -> (a -> a -> b) -> b\n\nsunk : Unit -> <Sink> Int\nsunk () =\n  handle ask () with\n    | ctl ask () k ->\n        sink k\n        0\n\npaired : Unit -> <Pair, Panic> Int\npaired () =\n  handle ask () with\n    | ctl ask () k ->\n        let f = pair 1 (fn x y -> fn u -> k (x + y))\n        f ()";
     insta::assert_snapshot!(check_text(text), @"
     ask : Unit -> <Ask> Int
     sink : a -> <Sink> Unit
@@ -251,12 +251,12 @@ fn a_continuation_cannot_pass_through_a_polymorphic_operation_parameter() {
     sunk : Unit -> <Sink> Int
       k#0 : once Int -> <Sink> Int
       $r#1 : Int
-    paired : Unit -> <Pair> Int
-      k#0 : once Int -> <Pair> Int
+    paired : Unit -> <Pair, Panic> Int
+      k#0 : once Int -> <Pair, Panic> Int
       x#1 : Int
       y#2 : Int
       u#3 : Unit
-      f#4 : once Unit -> <Pair> Int
+      f#4 : once Unit -> <Panic, Pair> Int
       $r#5 : Int
     ---
     E3001 14:9 a linear value is passed to `sink`, which may use it more than once or not at all
@@ -289,13 +289,13 @@ fn a_clause_dropped_by_an_error_does_not_cause_linear_misuse() {
 
 #[test]
 fn type_parameters_of_an_effect_are_not_fixed_to_unr() {
-    let text = "effect State s where\n  get : Unit -> s\n  put : s -> Unit\n\neffect Store s where\n  store : a -> s -> Unit\n\ncounter : Unit -> <State Int> Int\ncounter () =\n  put (get () + 1)\n  get ()";
+    let text = "effect State s where\n  get : Unit -> s\n  put : s -> Unit\n\neffect Store s where\n  store : a -> s -> Unit\n\ncounter : Unit -> <State Int, Panic> Int\ncounter () =\n  put (get () + 1)\n  get ()";
     insta::assert_snapshot!(check_text(text), @r"
     get : Unit -> <State s> s
     put : s -> <State s> Unit
     store : a -> s -> <Store s> Unit
       kinds: a <= Unr
-    counter : Unit -> <State Int> Int
+    counter : Unit -> <State Int, Panic> Int
     ");
 }
 
@@ -351,24 +351,24 @@ fn a_function_type_with_other_effect_arguments_is_a_mismatch() {
 
 #[test]
 fn a_continuation_of_a_multi_operation_may_be_called_twice() {
-    let text = "effect Choice where\n  multi choose : Unit -> Bool\n\nboth : Unit -> Int\nboth () =\n  handle (if choose () then 1 else 2) with\n    | ctl choose () k -> k True + k False";
+    let text = "effect Choice where\n  multi choose : Unit -> Bool\n\nboth : Unit -> <Panic> Int\nboth () =\n  handle (if choose () then 1 else 2) with\n    | ctl choose () k -> k True + k False";
     insta::assert_snapshot!(check_text(text), @"
     choose : Unit -> <Choice> Bool
-    both : Unit -> Int
-      k#0 : Bool -> Int
+    both : Unit -> <Panic> Int
+      k#0 : Bool -> <Panic> Int
       $r#1 : Int
     ");
 }
 
 #[test]
 fn the_return_clause_of_a_multi_handler_cannot_capture_a_linear_value() {
-    let text = "effect Ask where\n  ask : Unit -> Int\n\neffect Choice where\n  multi choose : Unit -> Bool\n\ncaptured : Unit -> Int\ncaptured () =\n  handle ask () with\n    | ctl ask () k ->\n        handle (if choose () then 1 else 2) with\n          | ctl choose () c -> c True + c False\n          | return n -> k n";
+    let text = "effect Ask where\n  ask : Unit -> Int\n\neffect Choice where\n  multi choose : Unit -> Bool\n\ncaptured : Unit -> <Panic> Int\ncaptured () =\n  handle ask () with\n    | ctl ask () k ->\n        handle (if choose () then 1 else 2) with\n          | ctl choose () c -> c True + c False\n          | return n -> k n";
     insta::assert_snapshot!(check_text(text), @"
     ask : Unit -> <Ask> Int
     choose : Unit -> <Choice> Bool
-    captured : Unit -> Int
-      k#0 : once Int -> Int
-      c#1 : Bool -> Int
+    captured : Unit -> <Panic> Int
+      k#0 : once Int -> <Panic> Int
+      c#1 : Bool -> <Panic> Int
       n#2 : Int
       $r#3 : Int
     ---
@@ -386,13 +386,13 @@ fn the_return_clause_of_a_multi_handler_cannot_capture_a_linear_value() {
 /// `table` の単体テスト `an_extern_effect_is_performed_at_most_once` が確かめる。
 #[test]
 fn a_linear_value_may_be_kept_across_an_io_call_in_a_multi_clause() {
-    let text = "effect Choice where\n  multi choose : Unit -> Bool\n\nsay : String -> <IO> Unit\nsay s = println s\n\nboth : Unit -> <IO> Int\nboth () =\n  handle (if choose () then 1 else 2) with\n    | ctl choose () k ->\n        let file = Fs.open \"a\"\n        say \"x\"\n        Fs.close file\n        k True + k False";
+    let text = "effect Choice where\n  multi choose : Unit -> Bool\n\nsay : String -> <IO> Unit\nsay s = println s\n\nboth : Unit -> <IO, Panic> Int\nboth () =\n  handle (if choose () then 1 else 2) with\n    | ctl choose () k ->\n        let file = Fs.open \"a\"\n        say \"x\"\n        Fs.close file\n        k True + k False";
     insta::assert_snapshot!(check_text(text), @"
     choose : Unit -> <Choice> Bool
     say : String -> <IO> Unit
       s#0 : String
-    both : Unit -> <IO> Int
-      k#0 : Bool -> <IO> Int
+    both : Unit -> <IO, Panic> Int
+      k#0 : Bool -> <IO, Panic> Int
       file#1 : File
       $r#2 : Int
     ");
@@ -400,12 +400,12 @@ fn a_linear_value_may_be_kept_across_an_io_call_in_a_multi_clause() {
 
 #[test]
 fn the_return_clause_of_a_multi_handler_may_capture_an_unrestricted_value() {
-    let text = "effect Choice where\n  multi choose : Unit -> Bool\n\ncaptured : Int -> Int\ncaptured base =\n  handle (if choose () then 1 else 2) with\n    | ctl choose () c -> c True + c False\n    | return n -> n + base";
+    let text = "effect Choice where\n  multi choose : Unit -> Bool\n\ncaptured : Int -> <Panic> Int\ncaptured base =\n  handle (if choose () then 1 else 2) with\n    | ctl choose () c -> c True + c False\n    | return n -> n + base";
     insta::assert_snapshot!(check_text(text), @"
     choose : Unit -> <Choice> Bool
-    captured : Int -> Int
+    captured : Int -> <Panic> Int
       base#0 : Int
-      c#1 : Bool -> Int
+      c#1 : Bool -> <Panic> Int
       n#2 : Int
     ");
 }
@@ -424,7 +424,7 @@ fn continuations_of_handlers_with_a_state_carry_the_state() {
 
 #[test]
 fn a_continuation_with_a_state_is_called_through_a_lambda_and_more_than_once() {
-    let text = "effect Choose where\n  multi choose : Unit -> Bool\n\nf : Unit -> Int\nf () =\n  handle (if choose () then 1 else 2) from 0 with\n    | ctl choose () k st ->\n        let again = fn c -> c True (st + 1)\n        again k + k False (st + 2)\n    | return x st -> x + st";
+    let text = "effect Choose where\n  multi choose : Unit -> Bool\n\nf : Unit -> <Panic> Int\nf () =\n  handle (if choose () then 1 else 2) from 0 with\n    | ctl choose () k st ->\n        let again = fn c -> c True (st + 1)\n        again k + k False (st + 2)\n    | return x st -> x + st";
     let checked = eml_test_support::check(text);
     assert!(checked.diagnostics.is_empty(), "{:?}", checked.diagnostics);
 }
@@ -467,7 +467,7 @@ fn a_continuation_with_a_state_called_without_it_in_a_lambda_is_a_mismatch() {
 
 #[test]
 fn a_handler_of_an_unknown_effect_still_checks_its_initial_state() {
-    let text = "f : Unit -> Int\nf () =\n  handle 1 from (1 + \"a\") with\n    | ctl nope () k st -> k 1 st\n    | return x st -> x";
+    let text = "f : Unit -> <Panic> Int\nf () =\n  handle 1 from (1 + \"a\") with\n    | ctl nope () k st -> k 1 st\n    | return x st -> x";
     let checked = eml_test_support::check(text);
     let codes: Vec<String> = checked
         .diagnostics
@@ -828,13 +828,13 @@ fn a_linear_closure_cannot_enter_an_arrow_in_both_directions_of_the_result() {
 /// 再開しない (docs/spec/types.md の「呼び出しの包含を解く」)。
 #[test]
 fn a_pure_local_call_inside_multi_keeps_a_file() {
-    let text = "effect Choice where\n  multi choose : Unit -> Bool\n\nheld : Unit -> <Choice, IO> Unit\nheld () =\n  let f = Fs.open \"a\"\n  let count n = if n == 0 then 0 else count (n - 1)\n  let x = count 3\n  Fs.close f\n  if choose () then println (show x) else ()";
+    let text = "effect Choice where\n  multi choose : Unit -> Bool\n\nheld : Unit -> <Choice, IO, Panic> Unit\nheld () =\n  let f = Fs.open \"a\"\n  let count n = if n == 0 then 0 else count (n - 1)\n  let x = count 3\n  Fs.close f\n  if choose () then println (show x) else ()";
     assert_eq!(check_short(text), Vec::<String>::new());
 }
 
 #[test]
 fn a_linear_local_function_held_across_multi_is_e3006() {
-    let text = "effect Choice where\n  multi choose : Unit -> Bool\n\nheld : Unit -> <Choice, IO> Unit\nheld () =\n  let f = Fs.open \"a\"\n  let close () = Fs.close f\n  let b = choose ()\n  close ()";
+    let text = "effect Choice where\n  multi choose : Unit -> Bool\n\nheld : Unit -> <Choice, IO, Panic> Unit\nheld () =\n  let f = Fs.open \"a\"\n  let close () = Fs.close f\n  let b = choose ()\n  close ()";
     insta::assert_snapshot!(check_full(text), @"
     E3006 8:11 `close` must be used exactly once, but it is kept alive across a call that may resume more than once
       8:11 this call may perform `choose`, a `multi` operation
@@ -873,13 +873,13 @@ fn a_stateful_fn_clause_body_mismatch_names_the_pair() {
 /// 「呼び出しの包含を解く」)。
 #[test]
 fn a_group_effect_reaches_every_member() {
-    let text = "effect Ask where\n  ask : Unit -> Int\n\nrun : Int -> <Ask> Int\nrun n =\n  let f x = if x == 0 then 0 else g (x - 1)\n  and g y = ask () + f y\n  f n";
+    let text = "effect Ask where\n  ask : Unit -> Int\n\nrun : Int -> <Ask, Panic> Int\nrun n =\n  let f x = if x == 0 then 0 else g (x - 1)\n  and g y = ask () + f y\n  f n";
     insta::assert_snapshot!(check_text(text), @"
     ask : Unit -> <Ask> Int
-    run : Int -> <Ask> Int
+    run : Int -> <Ask, Panic> Int
       n#0 : Int
-      f#1 : Int -> <Ask> Int
-      g#2 : Int -> <Ask> Int
+      f#1 : Int -> <Panic, Ask> Int
+      g#2 : Int -> <Ask, Panic> Int
       x#3 : Int
       y#4 : Int
     ");
@@ -888,15 +888,15 @@ fn a_group_effect_reaches_every_member() {
 /// 組の関数は関数ごとに row を持つので、`f` の中で張った handler が処理する `Ask` は `f` の row に出ない。
 #[test]
 fn a_handler_inside_a_group_keeps_its_effect_inside() {
-    let text = "effect Ask where\n  ask : Unit -> Int\n\nrun : Int -> Int\nrun m =\n  let f n = handle g n with\n    | fn ask () -> 1\n  and g n = if n == 0 then ask () else f (n - 1)\n  f m";
+    let text = "effect Ask where\n  ask : Unit -> Int\n\nrun : Int -> <Panic> Int\nrun m =\n  let f n = handle g n with\n    | fn ask () -> 1\n  and g n = if n == 0 then ask () else f (n - 1)\n  f m";
     insta::assert_snapshot!(check_text(text), @"
     ask : Unit -> <Ask> Int
-    run : Int -> Int
+    run : Int -> <Panic> Int
       m#0 : Int
-      f#1 : Int -> Int
-      g#2 : Int -> <Ask> Int
+      f#1 : Int -> <Panic> Int
+      g#2 : Int -> <Ask, Panic> Int
       n#3 : Int
-      $k#4 : once Int -> Int
+      $k#4 : once Int -> <Panic> Int
       $r#5 : Int
       $r#6 : Int
       n#7 : Int
@@ -906,14 +906,14 @@ fn a_handler_inside_a_group_keeps_its_effect_inside() {
 /// `h` の `Ask` は、`g` に届いてから `f` に届く。固定点は呼び出しを2回以上たどる。
 #[test]
 fn a_three_member_fixpoint() {
-    let text = "effect Ask where\n  ask : Unit -> Int\n\nrun : Int -> <Ask> Int\nrun n =\n  let f x = if x == 0 then 0 else g (x - 1)\n  and g x = h x\n  and h x = ask () + f x\n  f n";
+    let text = "effect Ask where\n  ask : Unit -> Int\n\nrun : Int -> <Ask, Panic> Int\nrun n =\n  let f x = if x == 0 then 0 else g (x - 1)\n  and g x = h x\n  and h x = ask () + f x\n  f n";
     insta::assert_snapshot!(check_text(text), @"
     ask : Unit -> <Ask> Int
-    run : Int -> <Ask> Int
+    run : Int -> <Ask, Panic> Int
       n#0 : Int
-      f#1 : Int -> <Ask> Int
-      g#2 : Int -> <Ask> Int
-      h#3 : Int -> <Ask> Int
+      f#1 : Int -> <Panic, Ask> Int
+      g#2 : Int -> <Ask, Panic> Int
+      h#3 : Int -> <Ask, Panic> Int
       x#4 : Int
       x#5 : Int
       x#6 : Int
@@ -924,7 +924,7 @@ fn a_three_member_fixpoint() {
 /// (docs/spec/types.md の「推論」)。
 #[test]
 fn a_rigid_ambient_takes_the_labels_of_a_group_first() {
-    let text = "effect Ask where\n  ask : Unit -> Int\n\nrun : (Unit -> <e> Int) -> <Ask | e> Int\nrun h =\n  let f n = h () + g n\n  and g n = ask () + n\n  f 1";
+    let text = "effect Ask where\n  ask : Unit -> Int\n\nrun : (Unit -> <e> Int) -> <Ask, Panic | e> Int\nrun h =\n  let f n = h () + g n\n  and g n = ask () + n\n  f 1";
     insta::assert_snapshot!(check_full(text), @"");
 }
 
@@ -932,15 +932,15 @@ fn a_rigid_ambient_takes_the_labels_of_a_group_first() {
 /// `even` を呼ぶ `odd` にも届く。`odd` の row を内側の組で先に閉じると、`walk` の `Ask` が入らない。
 #[test]
 fn a_nested_group_calls_the_enclosing_recursive_function() {
-    let text = "effect Ask where\n  ask : Unit -> Int\n\nrun : Int -> <Ask> Int\nrun m =\n  let walk n =\n    let even k = if k == 0 then walk (n - 1) else odd (k - 1)\n    and odd k = if k == 0 then 0 else even (k - 1)\n    if n == 0 then ask () else even n\n  walk m";
+    let text = "effect Ask where\n  ask : Unit -> Int\n\nrun : Int -> <Ask, Panic> Int\nrun m =\n  let walk n =\n    let even k = if k == 0 then walk (n - 1) else odd (k - 1)\n    and odd k = if k == 0 then 0 else even (k - 1)\n    if n == 0 then ask () else even n\n  walk m";
     insta::assert_snapshot!(check_text(text), @"
     ask : Unit -> <Ask> Int
-    run : Int -> <Ask> Int
+    run : Int -> <Ask, Panic> Int
       m#0 : Int
-      walk#1 : Int -> <Ask> Int
+      walk#1 : Int -> <Ask, Panic> Int
       n#2 : Int
-      even#3 : Int -> <Ask> Int
-      odd#4 : Int -> <Ask> Int
+      even#3 : Int -> <Panic, Ask> Int
+      odd#4 : Int -> <Panic, Ask> Int
       k#5 : Int
       k#6 : Int
     ");
@@ -950,7 +950,7 @@ fn a_nested_group_calls_the_enclosing_recursive_function() {
 /// row に足すと、`g` の row も伸びる。有限の row の解はないので、固定点は足すのをやめ、包含が E2002 を報告する。
 #[test]
 fn a_group_member_sharing_its_tail_with_the_caller_stops_the_fixpoint() {
-    let text = "effect Ask where\n  ask : Unit -> Int\n\nrun_ask : (Unit -> <Ask | e> Int) -> <e> Int\nrun_ask action = handle action () with\n  | fn ask () -> 1\n\nrun : Unit -> Int\nrun () =\n  let f n = run_ask g + g ()\n  and g () = ask () + f 0\n  f 1";
+    let text = "effect Ask where\n  ask : Unit -> Int\n\nrun_ask : (Unit -> <Ask | e> Int) -> <e> Int\nrun_ask action = handle action () with\n  | fn ask () -> 1\n\nrun : Unit -> <Panic> Int\nrun () =\n  let f n = run_ask g + g ()\n  and g () = ask () + f 0\n  f 1";
     insta::assert_snapshot!(check_full(text), @"
     E2002 12:3 `f` performs `Ask`, which the signature of `run` does not allow
       12:3 this call performs `Ask`
@@ -963,7 +963,7 @@ fn a_group_member_sharing_its_tail_with_the_caller_stops_the_fixpoint() {
 /// 固定点は止まり、包含が E2002 を報告する。
 #[test]
 fn a_growing_cycle_of_calls_stops_the_fixpoint() {
-    let text = "effect Ask where\n  ask : Unit -> Int\n\nwrap : (Unit -> <e> Int) -> <Ask | e> Int\nwrap action = ask () + action ()\n\nrun : Int -> <Ask> Int\nrun m =\n  let f n = wrap (fn () -> g n)\n  and g n = f n\n  f m";
+    let text = "effect Ask where\n  ask : Unit -> Int\n\nwrap : (Unit -> <e> Int) -> <Ask, Panic | e> Int\nwrap action = ask () + action ()\n\nrun : Int -> <Ask, Panic> Int\nrun m =\n  let f n = wrap (fn () -> g n)\n  and g n = f n\n  f m";
     insta::assert_snapshot!(check_full(text), @"
     E2002 9:13 `wrap` performs `Ask`, which this lambda does not allow
       9:13 this call performs `Ask`

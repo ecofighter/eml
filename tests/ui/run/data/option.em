@@ -8,10 +8,10 @@ describe o = match o with
   | None -> "none"
   | Some n -> "some " ++ show n
 
-safe_div : Int -> Int -> Option Int
+safe_div : Int -> Int -> <Panic> Option Int
 safe_div a b = if b == 0 then None else Some (a / b)
 
-main : Unit -> <IO> Unit
+main : Unit -> <IO, Panic> Unit
 main () =
   println (describe (safe_div 10 2))
   println (describe (safe_div 1 0))

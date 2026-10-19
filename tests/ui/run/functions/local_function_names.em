@@ -4,10 +4,10 @@
 effect Ask where
   ask : Unit -> Int
 
-apply : (Int -> Int) -> Int -> Int
+apply : (Int -> <Panic> Int) -> Int -> <Panic> Int
 apply f x = f x
 
-run : Unit -> <IO> Int
+run : Unit -> <IO, Panic> Int
 run () =
   let boxed n = n + 1
   let k0 n = n * 2
@@ -19,6 +19,6 @@ run () =
   let l = (fn x -> lambda0 x) 4
   direct + as_values + h + l
 
-main : Unit -> <IO> Unit
+main : Unit -> <IO, Panic> Unit
 main () =
   println (show (run ()))

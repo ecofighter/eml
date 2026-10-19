@@ -3,15 +3,15 @@
 infixl 6 <+>
 
 class Join a where
-  (<+>) : a -> a -> a
+  (<+>) : a -> a -> <Panic> a
 
 instance Join Int where
   a <+> b = a + b
 
-apply_twice : (Int -> Int) -> Int -> Int
+apply_twice : (Int -> <Panic> Int) -> Int -> <Panic> Int
 apply_twice f x = f (f x)
 
-main : Unit -> <IO> Unit
+main : Unit -> <IO, Panic> Unit
 main () =
   println (show (apply_twice (<+> 10) 1))
   println (show (apply_twice ((<+>) 5) 0))

@@ -365,7 +365,7 @@ fn an_expression_prints_its_value() {
 fn a_definition_is_kept_for_later_inputs() {
     let mut console = Console::new(&RunConfig::default());
     assert_eq!(
-        console.eval("inc : Int -> Int\ninc x = x + 1"),
+        console.eval("inc : Int -> <Panic> Int\ninc x = x + 1"),
         (Outcome::Accepted, String::new(), vec![])
     );
     assert_eq!(console.eval("inc 41").1, "42\n");
@@ -375,7 +375,7 @@ fn a_definition_is_kept_for_later_inputs() {
 fn a_rejected_input_leaves_the_session_unchanged() {
     let mut console = Console::new(&RunConfig::default());
     assert_eq!(
-        console.eval("bad : Int -> Int\nbad x = x + \"s\""),
+        console.eval("bad : Int -> <Panic> Int\nbad x = x + \"s\""),
         (Outcome::Rejected, String::new(), vec!["E2001".to_string()])
     );
     assert_eq!(console.eval("bad 1").2, ["E1001"]);
@@ -444,7 +444,7 @@ fn the_session_continues_after_the_memory_limit() {
             .with_debug_heap(debug_heap)
             .with_control(control);
         let mut console = Console::new(&config);
-        let build = "build : Int -> List Int -> List Int\n\
+        let build = "build : Int -> List Int -> <Panic> List Int\n\
                      build n acc = if n == 0 then acc else build (n - 1) (n :: acc)";
         assert_eq!(console.eval(build).0, Outcome::Accepted);
         let (outcome, _, _) = console.eval("let big = build 1000000 []");
@@ -576,7 +576,7 @@ fn a_runtime_error_inside_a_handler_leaves_no_handler_behind() {
 fn output_before_a_runtime_error_is_flushed() {
     let mut console = Console::new(&RunConfig::default());
     let (outcome, _, codes) =
-        console.eval("boom : Unit -> <IO> Int\nboom () =\n  println \"before\"\n  1 / 0");
+        console.eval("boom : Unit -> <IO, Panic> Int\nboom () =\n  println \"before\"\n  1 / 0");
     assert_eq!(outcome, Outcome::Accepted, "{codes:?}");
     let (outcome, output, _) = console.eval("boom ()");
     assert!(matches!(outcome, Outcome::Failed(_)), "{outcome:?}");
@@ -751,10 +751,10 @@ fn a_file_left_open_by_an_interrupt_is_closed_by_recovery() {
             HostRef::new(Arc::new(host)),
         );
         for input in [
-            "keep : Int -> Fs.File -> Fs.File\nkeep n f = if n > 0 then keep (n - 1) f else f",
+            "keep : Int -> Fs.File -> <Panic> Fs.File\nkeep n f = if n > 0 then keep (n - 1) f else f",
             "read : Unit -> <IO> String\nread () =\n  let f = Fs.open \"a.txt\"\n  \
              let (f, text) = Fs.read_all f\n  Fs.close f\n  text",
-            "read_kept : Unit -> <IO> String\nread_kept () =\n  let f = keep 0 (Fs.open \"a.txt\")\n  \
+            "read_kept : Unit -> <IO, Panic> String\nread_kept () =\n  let f = keep 0 (Fs.open \"a.txt\")\n  \
              let (f, text) = Fs.read_all f\n  Fs.close f\n  text",
         ] {
             let evaluated = repl.eval(input);
@@ -810,7 +810,7 @@ impl ModuleSource for InterruptingSource {
     fn read(&self, path: &ModulePath) -> Result<String, ReadError> {
         self.control.interrupt();
         if path.0 == ["Util"] {
-            Ok("pub two : Int -> Int\ntwo x = x + 2\n".to_string())
+            Ok("pub two : Int -> <Panic> Int\ntwo x = x + 2\n".to_string())
         } else {
             Err(ReadError::NotFound)
         }
@@ -826,7 +826,7 @@ fn an_interrupt_before_the_run_cancels_the_input() {
     let config = RunConfig::default().with_control(Arc::clone(&control));
     let mut console = Console::with_source(&config, Box::new(InterruptingSource { control }));
     assert_eq!(
-        console.eval("import Util\none : Int -> Int\none x = Util.two x - 1"),
+        console.eval("import Util\none : Int -> <Panic> Int\none x = Util.two x - 1"),
         (Outcome::Interrupted, String::new(), vec![])
     );
     assert_eq!(console.eval("one 1").2, ["E1001"]);
@@ -834,9 +834,9 @@ fn an_interrupt_before_the_run_cancels_the_input() {
 
 /// 下の回復のテストが使う定義。`build` も `total` も末尾呼び出しなので、長いリストでも VM のスタックが
 /// 伸びない。
-const BUILD: &str = "build : Int -> List Int -> List Int\n\
+const BUILD: &str = "build : Int -> List Int -> <Panic> List Int\n\
                      build n acc = if n == 0 then acc else build (n - 1) (n :: acc)";
-const TOTAL: &str = "total : List Int -> Int -> Int\n\
+const TOTAL: &str = "total : List Int -> Int -> <Panic> Int\n\
                      total xs acc = match xs with\n  | [] -> acc\n  | x :: rest -> total rest (acc + x)";
 /// 引数を左から評価するので、`1 / 0` で止まるときに作ったリストがスタックに残る。回復しなければ検査モードの `close`
 /// がそれをリークとして報告する。
@@ -1009,7 +1009,7 @@ fn an_empty_file_leaves_an_empty_session() {
 /// 警告は繰り返さない (spec の C1)。
 #[test]
 fn later_inputs_keep_the_file_path_and_its_warnings_once() {
-    let file = "half : Int -> Int\nhalf n = match n with\n  | x -> 10 / x\n  | 0 -> 0\n";
+    let file = "half : Int -> <Panic> Int\nhalf n = match n with\n  | x -> 10 / x\n  | 0 -> 0\n";
     let (host, _) = capture_host(Default::default());
     let (mut repl, evaluated) = Repl::with_file(
         &RunConfig::default(),
@@ -1052,7 +1052,7 @@ fn an_interrupted_file_is_not_accepted() {
     let (mut repl, evaluated) = Repl::with_file(
         &config,
         "main.em",
-        "import Util\none : Int -> Int\none x = Util.two x - 1\n",
+        "import Util\none : Int -> <Panic> Int\none x = Util.two x - 1\n",
         Box::new(InterruptingSource { control }),
         host,
     );
@@ -1121,7 +1121,7 @@ fn type_of_closes_the_row_of_a_self_call_under_its_own_handler() {
         "let go k = if k == 0 then 0 else ask () + (handle go (k - 1) with | fn ask () -> 1) in go",
     );
     assert_eq!(codes(&typed.diagnostics), Vec::<String>::new());
-    assert_eq!(typed.ty.as_deref(), Some("Int -> <Ask> Int"));
+    assert_eq!(typed.ty.as_deref(), Some("Int -> <Ask, Panic> Int"));
 }
 
 /// 後で報告する誤り (線形性) だけの問い合わせでも、型を返さない。
@@ -1148,7 +1148,7 @@ fn type_of_clears_a_stale_interrupt() {
 #[test]
 fn a_long_list_of_functions_is_cut_by_the_budget() {
     let mut console = Console::new(&RunConfig::default().with_debug_heap(true));
-    let fns = "fns : Int -> List (Int -> Int) -> List (Int -> Int)\n\
+    let fns = "fns : Int -> List (Int -> Int) -> <Panic> List (Int -> Int)\n\
                fns n acc = if n == 0 then acc else fns (n - 1) ((fn x -> x) :: acc)";
     assert_eq!(console.eval(fns).0, Outcome::Accepted);
     let (outcome, output, _) = console.eval("fns 100000 []");
@@ -1260,12 +1260,12 @@ fn units_and_fieldless_constructors_are_written() {
         assert_eq!(console.eval("[(), ()]").1, "[(), ()]\n");
         assert_eq!(
             console.eval("((), fn x -> x + 1)").1,
-            "((), <fn>) : (Unit, Int -> Int)\n"
+            "((), <fn>) : (Unit, Int -> <Panic> Int)\n"
         );
         assert_eq!(console.eval("data E = | E {} | F").0, Outcome::Accepted);
         assert_eq!(
             console.eval("(E {}, F, fn x -> x + 1)").1,
-            "(E {}, F, <fn>) : (E, E, Int -> Int)\n"
+            "(E {}, F, <fn>) : (E, E, Int -> <Panic> Int)\n"
         );
         assert_eq!(
             console.repl.close().leaks,
@@ -1276,14 +1276,23 @@ fn units_and_fieldless_constructors_are_written() {
 }
 
 /// 表示関数が呼んだ利用者の `show` の実行時エラーは、入力の実行時エラーになり、セッションは続く
-/// (docs/spec/repl.md の「結果の表示」)。
+/// (docs/spec/repl.md の「結果の表示」)。`show` の row は空で `Panic` を起こせないので、型に出ない停止 (確保量の上限)
+/// で止める。
 #[test]
 fn a_runtime_error_in_a_show_inside_a_display_fails_the_input() {
     for debug_heap in [true, false] {
-        let mut console = Console::new(&RunConfig::default().with_debug_heap(debug_heap));
+        let control = Arc::new(Control::new(Limits {
+            max_bytes: 1 << 22,
+            ..Limits::default()
+        }));
+        let config = RunConfig::default()
+            .with_debug_heap(debug_heap)
+            .with_control(control);
+        let mut console = Console::new(&config);
         for input in [
             "data Bad = | Bad",
-            "instance Show Bad where\n  show _ = show (1 / 0)",
+            "grow : String -> String\ngrow s = grow (s ++ s)",
+            "instance Show Bad where\n  show _ = grow \"x\"",
         ] {
             let (outcome, _, codes) = console.eval(input);
             assert_eq!(outcome, Outcome::Accepted, "{input}: {codes:?}");
@@ -1292,7 +1301,12 @@ fn a_runtime_error_in_a_show_inside_a_display_fails_the_input() {
         let Outcome::Failed(error) = outcome else {
             panic!("expected a runtime error, got {outcome:?}");
         };
-        assert_eq!(error.to_string(), "division by zero\n  at <input 2>:2:20");
+        assert!(
+            error
+                .to_string()
+                .starts_with("the memory limit is exceeded"),
+            "{error}"
+        );
         assert_eq!(output, "");
         assert_eq!(console.eval("1 + 1").1, "2\n");
         assert_eq!(
@@ -1309,9 +1323,9 @@ fn a_runtime_error_in_a_show_inside_a_display_fails_the_input() {
 fn a_result_is_cut_after_ten_thousand_chars() {
     let mut console = Console::new(&RunConfig::default());
     for input in [
-        "rep : Int -> String -> String\nrep n s = if n == 0 then s else rep (n - 1) (s ++ \"x\")",
+        "rep : Int -> String -> <Panic> String\nrep n s = if n == 0 then s else rep (n - 1) (s ++ \"x\")",
         "data Big = | Big Int",
-        "instance Show Big where\n  show (Big n) = rep n \"\"",
+        "instance Show Big where\n  show (Big n) = match try_panic (fn () -> rep n \"\") with\n    | Ok s -> s\n    | Err message -> message",
     ] {
         let (outcome, _, codes) = console.eval(input);
         assert_eq!(outcome, Outcome::Accepted, "{input}: {codes:?}");
@@ -1328,7 +1342,7 @@ fn a_result_is_cut_after_ten_thousand_chars() {
     // 切った所で開いたままの括弧は閉じているとみなす
     assert_eq!(
         typed,
-        format!("({} ... : (Big, Int -> Int)\n", "x".repeat(9_999))
+        format!("({} ... : (Big, Int -> <Panic> Int)\n", "x".repeat(9_999))
     );
 }
 

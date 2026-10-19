@@ -24,22 +24,22 @@ safe n =
 checked : Int -> <Fail> Int
 checked n = if n > 10 then fail "too big" else n
 
-sum_two : Unit -> <Ask> Int
+sum_two : Unit -> <Ask, Panic> Int
 sum_two () = ask () + ask ()
 
-ask_checked : Int -> <Fail> Int
+ask_checked : Int -> <Fail, Panic> Int
 ask_checked answer =
   handle sum_two () with
     | ctl ask () k ->
         let n = checked answer
         k n
 
-bounded : Int -> String
+bounded : Int -> <Panic> String
 bounded answer =
   handle show (ask_checked answer) with
     | ctl fail message -> "aborted: " ++ message
 
-main : Unit -> <IO> Unit
+main : Unit -> <IO, Panic> Unit
 main () =
   println (safe 3)
   println (safe 0)

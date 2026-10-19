@@ -1,5 +1,5 @@
 -- String の関数 (docs/spec/stdlib.md)。位置は UTF-8 のバイトの位置である
-main : Unit -> <IO> Unit
+main : Unit -> <IO, Panic> Unit
 main () =
   println (show (String.byte_length "a日b"))
   println (show (String.byte_at 1 "a日b"))

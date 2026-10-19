@@ -5,7 +5,7 @@ data Box a =
 unbox : Box String -> String
 unbox (Box s) = s
 
-main : Unit -> <IO> Unit
+main : Unit -> <IO, Panic> Unit
 main () =
   let Box n = Box 41
   println (show (n + 1))

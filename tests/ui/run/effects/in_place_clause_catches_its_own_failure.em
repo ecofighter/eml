@@ -2,10 +2,10 @@
 effect Ask where
   ask : Unit -> Int
 
-body : Unit -> <Ask> Int
+body : Unit -> <Ask, Panic> Int
 body () = ask () + 1
 
-handled : Unit -> <IO> Int
+handled : Unit -> <IO, Panic> Int
 handled () =
   handle body () with
     | fn ask () ->
@@ -15,5 +15,5 @@ handled () =
           println "clause caught: \{e}"
           7
 
-main : Unit -> <IO> Unit
+main : Unit -> <IO, Panic> Unit
 main () = println "got \{handled ()}"

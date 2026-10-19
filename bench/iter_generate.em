@@ -2,7 +2,7 @@
 import Yield (Yield(..))
 import Iter
 
-nums : Int -> Unit -> <Yield Int> Unit
+nums : Int -> Unit -> <Yield Int, Panic> Unit
 nums n () =
   let go i =
     if i > n then ()
@@ -11,6 +11,6 @@ nums n () =
       go (i + 1)
   go 1
 
-main : Unit -> <IO> Unit
+main : Unit -> <IO, Panic> Unit
 main () =
   println "\{Iter.fold (fn acc x -> acc + x) 0 (Iter.generate (nums 100000))}"

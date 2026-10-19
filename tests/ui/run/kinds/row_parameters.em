@@ -1,5 +1,5 @@
--- row の型引数を持つ `Iter` を、`<IO>` の生産者、外側に handler がある `Count` の生産者、純粋な生産者の3通りで
--- 引く。総称な `take` はどの row でも同じ関数で、n 個を返した後は生産者を進めない
+-- row の型引数を持つ `Iter` を、`<IO>` の生産者、外側に handler がある `Count` の生産者、`Panic` だけを起こす生産者の
+-- 3通りで引く。総称な `take` はどの row でも同じ関数で、n 個を返した後は生産者を進めない
 -- (docs/spec/types.md の「row の型引数」)。
 data Iter <e> a =
   | Done
@@ -17,7 +17,7 @@ generate producer =
     | ctl yield x k -> More x k
     | return () -> Done
 
-take : Int -> Iter <e> a -> <e> Iter <e> a
+take : Int -> Iter <Panic | e> a -> <Panic | e> Iter <Panic | e> a
 take n it =
   if n <= 0 then
     drop it
@@ -45,13 +45,13 @@ print_all it =
         println "got \{x}"
         print_all (next ())
 
-noisy : Int -> <Yield Int, IO> Unit
+noisy : Int -> <Yield Int, IO, Panic> Unit
 noisy i =
   println "produce \{i}"
   yield i
   noisy (i + 1)
 
-counted : Int -> Int -> <Yield Int, Count> Unit
+counted : Int -> Int -> <Yield Int, Count, Panic> Unit
 counted i n =
   if i > n then ()
   else
@@ -59,25 +59,25 @@ counted i n =
     yield (i * 10)
     counted (i + 1) n
 
-pure_count : Int -> Int -> <Yield Int> Unit
+pure_count : Int -> Int -> <Yield Int, Panic> Unit
 pure_count i n =
   if i > n then ()
   else
     yield i
     pure_count (i + 1) n
 
-empty : Iter <> Int
+empty : Iter <Panic> Int
 empty = Done
 
-main : Unit -> <IO> Unit
+main : Unit -> <IO, Panic> Unit
 main () =
-  let io : Iter <IO> Int = generate (fn () -> noisy 1)
+  let io : Iter <IO, Panic> Int = generate (fn () -> noisy 1)
   print_all (take 3 io)
   let report =
     handle to_list (take 3 (generate (fn () -> counted 1 5))) from 0 with
       | ctl tick () k n -> k () (n + 1)
       | return xs n -> "\{show xs} after \{n} ticks"
   println report
-  let pure : Iter <> Int = generate (fn () -> pure_count 1 4)
+  let pure : Iter <Panic> Int = generate (fn () -> pure_count 1 4)
   println (show (to_list (take 10 pure)))
   println (show (to_list (take 2 empty)))

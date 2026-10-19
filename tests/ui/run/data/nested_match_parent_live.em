@@ -4,18 +4,18 @@ data List a =
   | Nil
   | Cons a (List a)
 
-length : List a -> Int
+length : List a -> <Panic> Int
 length xs = match xs with
   | Nil -> 0
   | Cons _ rest -> 1 + length rest
 
-describe : List (List String) -> String
+describe : List (List String) -> <Panic> String
 describe w = match w with
   | Cons (Cons a _) _ -> a
   | Cons Nil _ -> show (length w)
   | Nil -> "empty"
 
-main : Unit -> <IO> Unit
+main : Unit -> <IO, Panic> Unit
 main () =
   println (describe (Cons (Cons "a" (Cons "b" Nil)) Nil))
   println (describe (Cons Nil (Cons Nil Nil)))

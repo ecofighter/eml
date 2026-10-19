@@ -7,14 +7,14 @@ data List a =
   | Nil
   | Cons a (List a)
 
-first_two : List (Option Int) -> String
+first_two : List (Option Int) -> <Panic> String
 first_two xs = match xs with
   | Cons (Some a) (Cons (Some b) _) -> "both " ++ show (a + b)
   | Cons None (Cons (Some b) _) -> "second " ++ show b
   | Cons _ _ -> "other"
   | Nil -> "empty"
 
-main : Unit -> <IO> Unit
+main : Unit -> <IO, Panic> Unit
 main () =
   println (first_two (Cons (Some 1) (Cons (Some 2) Nil)))
   println (first_two (Cons None (Cons (Some 3) (Cons None Nil))))

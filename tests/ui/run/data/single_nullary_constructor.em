@@ -3,10 +3,10 @@
 data Token =
   | Token
 
-spend : Token -> Int -> Int
+spend : Token -> Int -> <Panic> Int
 spend Token n = n + 1
 
-main : Unit -> <IO> Unit
+main : Unit -> <IO, Panic> Unit
 main () =
   let Token = Token
   let t = Token

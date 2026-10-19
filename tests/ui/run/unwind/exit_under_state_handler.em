@@ -7,12 +7,12 @@ stop n =
   println "stop at \{n}"
   exit 5
 
-count : Unit -> <State Int, IO> Unit
+count : Unit -> <State Int, IO, Panic> Unit
 count () =
   State.put (State.get () + 1)
   stop (State.get ())
 
-main : Unit -> <IO> Unit
+main : Unit -> <IO, Panic> Unit
 main () =
   let (_, n) = State.run 0 count
   println "never \{n}"

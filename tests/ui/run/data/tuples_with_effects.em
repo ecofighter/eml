@@ -8,7 +8,7 @@ both () =
   let s = pick ("left", "right")
   (s ++ "!", 1)
 
-collect : Unit -> (String, Int)
+collect : Unit -> <Panic> (String, Int)
 collect () =
   handle both () with
     | ctl pick (a, b) k ->
@@ -16,7 +16,7 @@ collect () =
       let (y, m) = k b
       (x ++ " " ++ y, n + m)
 
-main : Unit -> <IO> Unit
+main : Unit -> <IO, Panic> Unit
 main () =
   let (text, count) = collect ()
   println text

@@ -2,7 +2,7 @@ import Yield (Yield(..))
 import List
 import Std.State (State(..))
 
-count_to : Int -> Unit -> <Yield Int> Unit
+count_to : Int -> Unit -> <Yield Int, Panic> Unit
 count_to n () =
   let go i =
     if i > n then ()
@@ -11,7 +11,7 @@ count_to n () =
       go (i + 1)
   go 1
 
-produce : Int -> Unit -> <Yield (List Int)> Unit
+produce : Int -> Unit -> <Yield (List Int), Panic> Unit
 produce n () =
   let go i =
     if i > n then ()
@@ -20,15 +20,15 @@ produce n () =
       go (i + 1)
   go 1
 
-sum_lengths : (Unit -> <Yield (List Int) | e> Unit) -> <e> Int
+sum_lengths : (Unit -> <Yield (List Int), Panic | e> Unit) -> <Panic | e> Int
 sum_lengths p = Yield.fold (fn acc xs -> acc + List.length xs) 0 p
 
-map_lists : (a -> b) -> (Unit -> <Yield (List a) | e> Unit) -> <Yield (List b) | e> Unit
+map_lists : (a -> <Panic> b) -> (Unit -> <Yield (List a) | e> Unit) -> <Yield (List b), Panic | e> Unit
 map_lists f producer =
   handle producer () with
     | fn yield xs -> yield (List.map f xs)
 
-main : Unit -> <IO> Unit
+main : Unit -> <IO, Panic> Unit
 main () =
   let (total, _) = State.run 0 (fn () -> Yield.fold (fn acc x -> acc + x) 0 (count_to 1000))
   println (show total)

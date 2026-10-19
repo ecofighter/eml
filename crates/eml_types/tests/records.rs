@@ -39,7 +39,7 @@ const PERSON: &str = "data Person = | Person { name : String, age : Int }\n\n";
 #[test]
 fn projection_and_update_resolve_by_type() {
     let text = format!(
-        "{PERSON}f : Person -> (String, Person)\nf p = (p.name, {{ p | age = p.age + 1 }})"
+        "{PERSON}f : Person -> <Panic> (String, Person)\nf p = (p.name, {{ p | age = p.age + 1 }})"
     );
     assert_eq!(diagnostics(&text), "");
 }
@@ -198,7 +198,7 @@ fn a_projection_uses_its_base_once() {
     ");
 }
 
-const PEOPLE: &str = "data Person = | Person { name : String, age : Int }\n\nmap : (a -> b) -> List a -> List b\nmap f xs = match xs with\n  | [] -> []\n  | x :: rest -> f x :: map f rest\n\n";
+const PEOPLE: &str = "data Person = | Person { name : String, age : Int }\n\nmap : (a -> <e> b) -> List a -> <e> List b\nmap f xs = match xs with\n  | [] -> []\n  | x :: rest -> f x :: map f rest\n\n";
 
 #[test]
 fn lambda_arguments_are_checked_after_the_others() {
@@ -211,7 +211,7 @@ fn lambda_arguments_are_checked_after_the_others() {
         let text = format!("{PEOPLE}f : List Person -> List String\nf people = {body}");
         assert_eq!(diagnostics(&text), "", "{body}");
     }
-    let text = format!("{PEOPLE}f : List Int -> List Int\nf xs = map (+ 1) xs");
+    let text = format!("{PEOPLE}f : List Int -> <Panic> List Int\nf xs = map (+ 1) xs");
     assert_eq!(diagnostics(&text), "");
 }
 

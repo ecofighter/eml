@@ -2,11 +2,11 @@
 data Pair a b =
   | Pair a b
 
-adder : Pair Int String -> (Int -> String)
+adder : Pair Int String -> (Int -> <Panic> String)
 adder p = match p with
   | Pair n label -> fn m -> label ++ " " ++ show (n + m)
 
-main : Unit -> <IO> Unit
+main : Unit -> <IO, Panic> Unit
 main () =
   let f = adder (Pair 1 "sum")
   println (f 2)

@@ -3,10 +3,10 @@
 effect Ask where
   ask : Unit -> Int
 
-pick : (Unit -> <e> Int) -> (Unit -> <f> Int) -> <f> Int
+pick : (Unit -> <e> Int) -> (Unit -> <f> Int) -> <Panic | f> Int
 pick _ second = second () + 1
 
-main : Unit -> <IO> Unit
+main : Unit -> <IO, Panic> Unit
 main () =
   println (show (pick (fn () -> 1) (fn () -> 2)))
   let r =

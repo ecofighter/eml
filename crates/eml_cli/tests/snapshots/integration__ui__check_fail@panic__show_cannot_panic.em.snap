@@ -1,0 +1,18 @@
+---
+source: crates/eml_cli/tests/ui.rs
+expression: rendered
+input_file: tests/ui/check-fail/panic/show_cannot_panic.em
+---
+[E2002] Error: `/` performs `Panic`, which the signature of `Show Ratio.show` does not allow
+   ╭─[ check-fail/panic/show_cannot_panic.em:6:26 ]
+   │
+ 6 │     | Ratio n d -> show (n / d)
+   │                          ──┬──  
+   │                            ╰──── this call performs `Panic`
+   │
+   ├─[ check-fail/panic/show_cannot_panic.em:6:26 ]
+   │
+ 5 │   show r = match r with
+   │   ──┬─  
+   │     ╰─── the row of this signature does not include it
+───╯

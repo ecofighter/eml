@@ -3,10 +3,10 @@
 effect Ask where
   ask : Int -> Int
 
-run : Unit -> <Ask> Int
+run : Unit -> <Ask, Panic> Int
 run () = ask 1 + ask 10
 
-main : Unit -> <IO> Unit
+main : Unit -> <IO, Panic> Unit
 main () =
   let r = handle run () with
     | ctl ask n k ->

@@ -7,8 +7,8 @@ spend t =
   match t with
     | Token -> 1
 
-twice : Token -> Int
+twice : Token -> <Panic> Int
 twice t = spend t + spend t
 
-main : Unit -> <IO> Unit
+main : Unit -> <IO, Panic> Unit
 main () = println (show (twice Token))

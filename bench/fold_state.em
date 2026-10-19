@@ -2,7 +2,7 @@
 import Yield (Yield(..))
 import Std.State (State(..))
 
-count_to : Int -> Unit -> <Yield Int> Unit
+count_to : Int -> Unit -> <Yield Int, Panic> Unit
 count_to n () =
   let go i =
     if i > n then ()
@@ -11,7 +11,7 @@ count_to n () =
       go (i + 1)
   go 1
 
-main : Unit -> <IO> Unit
+main : Unit -> <IO, Panic> Unit
 main () =
   let (t, _) = State.run 0 (fn () -> Yield.fold (fn acc x -> acc + x) 0 (count_to 100000))
   println (show t)

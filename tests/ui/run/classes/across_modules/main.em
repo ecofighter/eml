@@ -3,5 +3,5 @@
 import Shapes (Area(..))
 import Squares (Square(..))
 
-main : Unit -> <IO> Unit
+main : Unit -> <IO, Panic> Unit
 main () = println (show (Square 2 <+> Square 3 + 1))

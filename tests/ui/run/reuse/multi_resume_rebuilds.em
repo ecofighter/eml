@@ -5,15 +5,15 @@ effect Choice where
 
 data P = | P Int Int deriving (Show)
 
-make : Int -> P
+make : Int -> <Panic> P
 make n = if n == 0 then P 1 2 else make (n - 1)
 
-flip : P -> <Choice> P
+flip : P -> <Choice, Panic> P
 flip p =
   match p with
     | P a b -> if choose () then P b a else P a (b + 10)
 
-main : Unit -> <IO> Unit
+main : Unit -> <IO, Panic> Unit
 main () =
   let ps =
     handle [flip (make 3)] with

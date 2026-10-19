@@ -14,12 +14,12 @@ walk t = match t with
   | Leaf -> ""
   | Node l v r -> walk l ++ show v ++ ";" ++ walk r
 
-size : Tree a -> Int
+size : Tree a -> <Panic> Int
 size t = match t with
   | Leaf -> 0
   | Node l _ r -> size l + 1 + size r
 
-main : Unit -> <IO> Unit
+main : Unit -> <IO, Panic> Unit
 main () =
   let t = insert 5 (insert 2 (insert 8 (insert 1 (insert 9 Leaf))))
   println (walk t)

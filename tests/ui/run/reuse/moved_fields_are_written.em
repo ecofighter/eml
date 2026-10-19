@@ -6,21 +6,21 @@ data T = | T String String String
 
 data Q = | Q Int Int Int
 
-swap_n : Int -> P a -> P a
+swap_n : Int -> P a -> <Panic> P a
 swap_n n p =
   if n == 0 then p
   else
     match p with
       | P a b -> swap_n (n - 1) (P b a)
 
-rotate_n : Int -> T -> T
+rotate_n : Int -> T -> <Panic> T
 rotate_n n t =
   if n == 0 then t
   else
     match t with
       | T a b c -> rotate_n (n - 1) (T c a b)
 
-rotate_q : Int -> Q -> Q
+rotate_q : Int -> Q -> <Panic> Q
 rotate_q n q =
   if n == 0 then q
   else
@@ -36,7 +36,7 @@ show_t t = match t with | T a b c -> "T \{a} \{b} \{c}"
 show_q : Q -> String
 show_q q = match q with | Q a b c -> "Q \{a} \{b} \{c}"
 
-main : Unit -> <IO> Unit
+main : Unit -> <IO, Panic> Unit
 main () =
   let n = List.length ["x"]
   println (show_p (swap_n n (P "a" "b")))

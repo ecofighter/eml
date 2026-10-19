@@ -2,14 +2,14 @@
 effect Ask where
   ask : Unit -> Int
 
-body : Unit -> <Ask> Int
+body : Unit -> <Ask, Panic> Int
 body () =
   let a = ask ()
   let b = ask ()
   let c = ask ()
   a + b + c
 
-main : Unit -> <IO> Unit
+main : Unit -> <IO, Panic> Unit
 main () =
   let r =
     handle body () from 10 with

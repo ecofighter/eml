@@ -45,7 +45,7 @@ map f xs =
 ### 組
 
 ```haskell
-parity : Int -> Bool
+parity : Int -> <Panic> Bool
 parity n =
   let even k = if k == 0 then True else odd (k - 1)
   and odd k = if k == 0 then False else even (k - 1)
@@ -156,7 +156,7 @@ match ys with
 data Person =
   | Person { name : String, age : Int }
 
-older : Person -> Person
+older : Person -> <Panic> Person
 older p = { p | age = p.age + 1 }
 
 -- map : (a -> b) -> List a -> List b

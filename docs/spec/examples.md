@@ -55,7 +55,7 @@ summarize path =
     \{render Markdown errors}
     """
 
-main : Unit -> <IO> Unit
+main : Unit -> <IO, Panic> Unit
 main () =
   match Env.args () with
     | [path] ->
@@ -94,7 +94,7 @@ run_state init action =
     | fn put st2 _ -> ((), st2)
     | return x st -> (x, st)
 
-counter : Unit -> <State Int> Int
+counter : Unit -> <State Int, Panic> Int
 counter () =
   let n = get ()
   put (n + 1)

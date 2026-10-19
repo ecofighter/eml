@@ -13,13 +13,13 @@ f action =
           | ctl log m k2 ->
               k2 ()
 
-act : Unit -> <Ask, Log> Int
+act : Unit -> <Ask, Log, Panic> Int
 act () =
   let n = ask ()
   log "after"
   n + 1
 
-main : Unit -> <IO> Unit
+main : Unit -> <IO, Panic> Unit
 main () =
   let r = handle f act with
             | ctl log m k ->

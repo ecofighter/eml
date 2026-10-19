@@ -4,26 +4,26 @@
 > let s = Circle
 > data Shape = | Square
 > s
-> inc : Int -> Int
+> inc : Int -> <Panic> Int
 . inc x = x + 1
 .
 > inc
 > fn x -> x * 2
 # 前置と中置のコンストラクタ、レコード
-> data Box = | Box (Int -> Int)
+> data Box = | Box (Int -> <Panic> Int)
 > Box inc
 # fixity を宣言していない中置のコンストラクタは `infixl 9` である
-> data P = | (Int -> Int) :+ Int
+> data P = | (Int -> <Panic> Int) :+ Int
 > inc :+ 2
 > Some (inc :+ 2)
-> data R = | R { f : Int -> Int, n : Int }
+> data R = | R { f : Int -> <Panic> Int, n : Int }
 > R { f = inc, n = -3 }
 # `Show` を持つ部分は `show_prec` で書く。文字列は引用符付き、負の数はコンストラクタの引数の位置で括弧に入る
-> data V = | V Int (Int -> Int)
+> data V = | V Int (Int -> <Panic> Int)
 > (1, "a", (), V (-3) inc, Some (-2), inc)
 # リスト
 > [fn x -> x, inc]
-> let none : List (Int -> Int) = []
+> let none : List (Int -> <Panic> Int) = []
 > none
 > [[inc], [], [inc, inc]]
 # 文脈が型引数で解けない型は、instance を使わずに構造で書く
@@ -34,28 +34,28 @@
 > Wrap inc
 > Wrap 1
 # 予算で切れる値。300 個の関数のリストは 299 個と `...` を書く
-> fns : Int -> List (Int -> Int) -> List (Int -> Int)
+> fns : Int -> List (Int -> <Panic> Int) -> <Panic> List (Int -> <Panic> Int)
 . fns n acc = if n == 0 then acc else fns (n - 1) (inc :: acc)
 .
 > fns 300 []
 # 部分を共有した深い木
-> data T = | Leaf (Int -> Int) | Node T T
-> grow : Int -> T -> T
+> data T = | Leaf (Int -> <Panic> Int) | Node T T
+> grow : Int -> T -> <Panic> T
 . grow n t = if n == 0 then t else grow (n - 1) (Node t t)
 .
 > grow 20 (Leaf inc)
 # `Show` を持つリストも予算で切れ、整形される
-> upto : Int -> List Int -> List Int
+> upto : Int -> List Int -> <Panic> List Int
 . upto n acc = if n == 0 then acc else upto (n - 1) (n :: acc)
 .
 > upto 1000 []
 # 深さで切れる値と、深さで切れた要素のリストが予算で止まること
-> data L = | LNil | LCons (Int -> Int) L
-> chain : Int -> L -> L
+> data L = | LNil | LCons (Int -> <Panic> Int) L
+> chain : Int -> L -> <Panic> L
 . chain n l = if n == 0 then l else chain (n - 1) (LCons inc l)
 .
 > chain 150 LNil
-> copies : Int -> L -> List L -> List L
+> copies : Int -> L -> List L -> <Panic> List L
 . copies n l acc = if n == 0 then acc else copies (n - 1) l (l :: acc)
 .
 > copies 1000 (chain 150 LNil) []
@@ -85,5 +85,5 @@
 .
 > [Weird, Weird, Weird, Weird, Weird, Weird, Weird, Weird, Weird, Weird, Weird, Weird]
 # 80 列を超える結果は、括弧の位置で行に分ける
-> data Person = | Person { name : String, age : Int, greet : Int -> Int }
+> data Person = | Person { name : String, age : Int, greet : Int -> <Panic> Int }
 > [Person { name = "Alice", age = 30, greet = inc }, Person { name = "Bob", age = 25, greet = inc }]

@@ -57,7 +57,7 @@ filter_map f it =
           | None -> next (filter_map f rest))
 
 -- n 個を渡した後の `next` で残りを捨てる。`File` が閉じるのはそのときになる
-pub take : Int -> Iter <e> a -> Iter <e> a
+pub take : Int -> Iter <e> a -> Iter <Panic | e> a
 take n it =
   Iter (fn () ->
     if n <= 0 then
@@ -85,7 +85,7 @@ zip left right =
             None
           | Some (y, right_rest) -> Some ((x, y), zip left_rest right_rest))
 
-pub enumerate : Int -> Iter <e> a -> Iter <e> (Int, a)
+pub enumerate : Int -> Iter <e> a -> Iter <Panic | e> (Int, a)
 enumerate start it =
   Iter (fn () ->
     match next it with

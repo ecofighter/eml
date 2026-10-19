@@ -5,16 +5,16 @@ data Person =
   deriving (Show)
 
 data Hooks =
-  | Hooks { label : String, on_save : Int -> Int }
+  | Hooks { label : String, on_save : Int -> <Panic> Int }
 
-birthday : Person -> Person
+birthday : Person -> <Panic> Person
 birthday p = match p with
   | Person { name, age } -> Person {
       name,
       age = age + 1,
     }
 
-main : Unit -> <IO> Unit
+main : Unit -> <IO, Panic> Unit
 main () =
   let p = Person {
     name =

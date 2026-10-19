@@ -11,7 +11,7 @@ inner () =
   handle ask () with
     | fn ask () -> if choose () then 1 else 2
 
-main : Unit -> <IO> Unit
+main : Unit -> <IO, Panic> Unit
 main () =
   let total =
     handle inner () with

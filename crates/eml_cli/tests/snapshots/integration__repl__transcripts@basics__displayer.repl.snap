@@ -8,25 +8,25 @@ input_file: crates/eml_cli/tests/repl/basics/displayer.repl
 > data Shape = | Square
 > s
 Circle : Shape#1
-> inc : Int -> Int
+> inc : Int -> <Panic> Int
 . inc x = x + 1
 .
 > inc
-<fn> : Int -> Int
+<fn> : Int -> <Panic> Int
 > fn x -> x * 2
-<fn> : Int -> Int
-> data Box = | Box (Int -> Int)
+<fn> : Int -> <Panic> Int
+> data Box = | Box (Int -> <Panic> Int)
 > Box inc
 Box <fn> : Box
-> data P = | (Int -> Int) :+ Int
+> data P = | (Int -> <Panic> Int) :+ Int
 > inc :+ 2
 <fn> :+ 2 : P
 > Some (inc :+ 2)
 Some (<fn> :+ 2) : Option P
-> data R = | R { f : Int -> Int, n : Int }
+> data R = | R { f : Int -> <Panic> Int, n : Int }
 > R { f = inc, n = -3 }
 R { f = <fn>, n = -3 } : R
-> data V = | V Int (Int -> Int)
+> data V = | V Int (Int -> <Panic> Int)
 > (1, "a", (), V (-3) inc, Some (-2), inc)
 ( 1
 , "a"
@@ -34,23 +34,23 @@ R { f = <fn>, n = -3 } : R
 , V (-3) <fn>
 , Some (-2)
 , <fn>
-) : (Int, String, Unit, V, Option Int, Int -> Int)
+) : (Int, String, Unit, V, Option Int, Int -> <Panic> Int)
 > [fn x -> x, inc]
-[<fn>, <fn>] : List (Int -> Int)
-> let none : List (Int -> Int) = []
+[<fn>, <fn>] : List (Int -> <Panic> Int)
+> let none : List (Int -> <Panic> Int) = []
 > none
-[] : List (Int -> Int)
+[] : List (Int -> <Panic> Int)
 > [[inc], [], [inc, inc]]
-[[<fn>], [], [<fn>, <fn>]] : List (List (Int -> Int))
+[[<fn>], [], [<fn>, <fn>]] : List (List (Int -> <Panic> Int))
 > data Wrap a = | Wrap a
 > instance Show a => Show (Wrap a) where
 .   show (Wrap x) = "wrapped " ++ show x
 .
 > Wrap inc
-Wrap <fn> : Wrap (Int -> Int)
+Wrap <fn> : Wrap (Int -> <Panic> Int)
 > Wrap 1
 wrapped 1
-> fns : Int -> List (Int -> Int) -> List (Int -> Int)
+> fns : Int -> List (Int -> <Panic> Int) -> <Panic> List (Int -> <Panic> Int)
 . fns n acc = if n == 0 then acc else fns (n - 1) (inc :: acc)
 .
 > fns 300 []
@@ -77,9 +77,9 @@ wrapped 1
 , <fn>, <fn>, <fn>, <fn>, <fn>, <fn>, <fn>, <fn>, <fn>, <fn>, <fn>, <fn>, <fn>
 , <fn>, <fn>, <fn>, <fn>, <fn>, <fn>, <fn>, <fn>, <fn>, <fn>, <fn>, <fn>, <fn>
 , <fn>, <fn>, <fn>, <fn>, <fn>, <fn>, <fn>, <fn>, <fn>, <fn>, <fn>, <fn>, <fn>
-, ... ] : List (Int -> Int)
-> data T = | Leaf (Int -> Int) | Node T T
-> grow : Int -> T -> T
+, ... ] : List (Int -> <Panic> Int)
+> data T = | Leaf (Int -> <Panic> Int) | Node T T
+> grow : Int -> T -> <Panic> T
 . grow n t = if n == 0 then t else grow (n - 1) (Node t t)
 .
 > grow 20 (Leaf inc)
@@ -169,7 +169,7 @@ Node
                                     (Node (Node (Leaf <fn>) (Leaf <fn>))
                                       (Node (Leaf <fn>)
                                         (Leaf ...)))))) ...)) ...) ...) ...) ...) ...) ...) ...) ...) ...) ...) ...) ...) ... : T
-> upto : Int -> List Int -> List Int
+> upto : Int -> List Int -> <Panic> List Int
 . upto n acc = if n == 0 then acc else upto (n - 1) (n :: acc)
 .
 > upto 1000 []
@@ -191,8 +191,8 @@ Node
 , 262, 263, 264, 265, 266, 267, 268, 269, 270, 271, 272, 273, 274, 275, 276, 277
 , 278, 279, 280, 281, 282, 283, 284, 285, 286, 287, 288, 289, 290, 291, 292, 293
 , 294, 295, 296, 297, 298, 299, ... ]
-> data L = | LNil | LCons (Int -> Int) L
-> chain : Int -> L -> L
+> data L = | LNil | LCons (Int -> <Panic> Int) L
+> chain : Int -> L -> <Panic> L
 . chain n l = if n == 0 then l else chain (n - 1) (LCons inc l)
 .
 > chain 150 LNil
@@ -296,7 +296,7 @@ LCons <fn>
                                                                                                                                                                                                   (LCons <fn>
                                                                                                                                                                                                     (LCons <fn>
                                                                                                                                                                                                       (LCons ... ...))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))) : L
-> copies : Int -> L -> List L -> List L
+> copies : Int -> L -> List L -> <Panic> List L
 . copies n l acc = if n == 0 then acc else copies (n - 1) l (l :: acc)
 .
 > copies 1000 (chain 150 LNil) []
@@ -453,15 +453,15 @@ LCons <fn>
 ] : List L
 > data Nest a = | NNil | NCons a (Nest (a, a))
 > NCons inc (NCons (inc, inc) NNil)
-NCons <fn> (NCons (<fn>, <fn>) NNil) : Nest (Int -> Int)
+NCons <fn> (NCons (<fn>, <fn>) NNil) : Nest (Int -> <Panic> Int)
 > data Bx = | Bx Int
 > (Bx 1, inc)
-(Bx 1, <fn>) : (Bx, Int -> Int)
+(Bx 1, <fn>) : (Bx, Int -> <Panic> Int)
 > instance Show Bx where
 .   show (Bx n) = "bx" ++ show n
 .
 > (Bx 1, inc)
-(bx1, <fn>) : (Bx, Int -> Int)
+(bx1, <fn>) : (Bx, Int -> <Panic> Int)
 > data Odd = | Odd
 > instance Show Odd where
 .   show _ = "show"
@@ -472,14 +472,14 @@ show
 > [Odd]
 [show]
 > (Odd, inc)
-(prec, <fn>) : (Odd, Int -> Int)
+(prec, <fn>) : (Odd, Int -> <Panic> Int)
 > data Weird = | Weird
 > instance Show Weird where
 .   show _ = "(a, b"
 .
 > [Weird, Weird, Weird, Weird, Weird, Weird, Weird, Weird, Weird, Weird, Weird, Weird]
 [(a, b, (a, b, (a, b, (a, b, (a, b, (a, b, (a, b, (a, b, (a, b, (a, b, (a, b, (a, b]
-> data Person = | Person { name : String, age : Int, greet : Int -> Int }
+> data Person = | Person { name : String, age : Int, greet : Int -> <Panic> Int }
 > [Person { name = "Alice", age = 30, greet = inc }, Person { name = "Bob", age = 25, greet = inc }]
 [ Person { name = "Alice", age = 30, greet = <fn> }
 , Person { name = "Bob", age = 25, greet = <fn> }

@@ -1,12 +1,12 @@
 import State (State(..))
 
-counter : Unit -> <State Int> Int
+counter : Unit -> <State Int, Panic> Int
 counter () =
   State.put (State.get () + 1)
   State.put (State.get () * 10)
   State.get () + 1
 
-count_up : Int -> Unit -> <State Int> Unit
+count_up : Int -> Unit -> <State Int, Panic> Unit
 count_up n () =
   let go i =
     if i > n then ()
@@ -15,7 +15,7 @@ count_up n () =
       go (i + 1)
   go 1
 
-main : Unit -> <IO> Unit
+main : Unit -> <IO, Panic> Unit
 main () =
   let (result, final) = State.run 1 counter
   println "\{result} \{final}"

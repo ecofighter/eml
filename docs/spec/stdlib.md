@@ -61,7 +61,7 @@ try_io action =
 - `try_io action` は `action ()` を呼び、IO の失敗がなければ `Ok` に包んで返す。IO の失敗があれば、そこで `action` の実行を止め、途中のフレームが持っていた値を後始末して `Err` を返す
 - 捕まえるのは、いちばん内側の `try_io` である。`IO` は `mask` に入らないので、row の上の位置でなく、実行の時点で外側にある最も近い `try_io` が捕まえる。例外と同じ動きである。たとえば `wrap : (Unit -> <e> a) -> <IO | e> Result IOError a` が、受け取ったコールバックを `try_io` の中で呼ぶと、コールバックの IO の失敗も `wrap` の `try_io` が捕まえる。ほかのエフェクトなら `mask` がコールバックの操作を外側へ通すが、`IO` ではそうしない
 - handler の節は handle の外側の `evv` で動く ([エフェクトと handler](effects.md) の「健全性」)。そのため、handle の本体の中にある `try_io` は、その handler の節の中で起きた IO の失敗を捕まえない。handle より外側の `try_io` が捕まえる
-- `try_io` は、`exit`、書き出しの失敗、算術の誤り、位置の範囲の誤り、割り込み、確保量と深さの上限、検査モードのヒープの誤りを捕まえない
+- `try_io` は、`exit`、書き出しの失敗、`Panic` (算術の誤り、位置の範囲の誤り、`panic`)、割り込み、確保量と深さの上限、検査モードのヒープの誤りを捕まえない
 
 捕まえる失敗と `kind` は次のとおりである。`message` は、[LIR](lir.md) の「実行時エラー」の文言と1文字も違わない。
 
@@ -74,6 +74,28 @@ try_io action =
 書き出しの失敗 (`Output`) を捕まえないのは、標準出力をまとめて書くためである ([オブジェクトモデル](object-model.md) の「Host」)。書けなかったことが分かるのは、後でバッファがあふれた `println` か、読みや起動の前の書き出しか、プログラムの終わりの書き出しになる。そのため、`try_io (fn () -> println s)` は書けなくても `Ok` を返しうるし、関係のない別の `try_io` が失敗を受け取りうる。どこで捕まるかが決まらないので、実行時エラーのままにする。
 
 `try_io` で捕まえなかった IO の失敗は、実行時エラーである。位置を付けて表示し、終了コード 1 で止まる。このときは後始末をしない。プロセスが終わるので、OS が開いたファイルを閉じる。
+
+## `try_panic`
+
+```haskell
+pub extern effect Panic where
+  never panicked : String -> a
+
+pub extern panic : String -> <Panic> a
+
+pub try_panic : (Unit -> <Panic | e> a) -> <e> Result String a
+try_panic action =
+  handle action () with
+    | ctl panicked message -> Err message
+    | return x -> Ok x
+```
+
+- `panic message` は `Panic` を起こす。`exit` と同じく戻らない
+- `try_panic action` は `action ()` を呼び、`Panic` がなければ `Ok` に包んで返す。`Panic` が起きれば、そこで `action` の実行を止め、途中のフレームが持っていた値を後始末して `Err` を返す。`Err` が持つのは誤りの文言である。`panic message` なら `message` で、組み込みの誤りなら実行時エラーの文言 ([LIR](lir.md) の「実行時エラー」、下の「実行時エラー」) である。誤りの種類と位置は返さない
+- `try_io` と違い、結果の row から `Panic` を除く。`Panic` を起こすのは値と入力で決まる誤りなので、捕まえた後に残す理由がない
+- 捕まえるのは、`try_io` と同じく実行の時点で外側にある最も近い `try_panic` である。`Panic` は `mask` に入らない。handle の本体の中にある `try_panic` は、その handler の節の中で起きた `Panic` を捕まえず、handle より外側の `try_panic` が捕まえる
+- `try_panic` は、IO の失敗、`exit`、書き出しの失敗、割り込み、確保量と深さの上限、検査モードのヒープの誤りを捕まえない。`try_io` も `Panic` を捕まえない
+- `try_panic` で捕まえなかった `Panic` は、今までと同じ実行時エラーである。`panic message` は `panicked: message` の文言に位置を付けて表示する
 
 ## `exit`
 
@@ -97,7 +119,7 @@ pub extern exit : Int -> <IO> a
 | `filter_map` | `(a -> <e> Option b) -> List a -> <e> List b` |
 | `fold` | `(b -> a -> <e> b) -> b -> List a -> <e> b` |
 | `each` | `(a -> <e> Unit) -> List a -> <e> Unit` |
-| `length` | `List a -> Int` |
+| `length` | `List a -> <Panic> Int` |
 | `reverse` | `List a -> List a` |
 | `append` | `List a -> List a -> List a` |
 
@@ -110,20 +132,20 @@ pub extern exit : Int -> <IO> a
 | 関数 | 型 | 実装 |
 |---|---|---|
 | `byte_length` | `String -> Int` | extern |
-| `byte_at` | `Int -> String -> Int` | extern |
-| `slice` | `Int -> Int -> String -> String` | extern |
-| `find` | `String -> String -> Option Int` | eml |
-| `contains`、`starts_with`、`ends_with` | `String -> String -> Bool` | eml |
-| `split` | `String -> String -> List String` | eml |
-| `lines` | `String -> List String` | eml |
+| `byte_at` | `Int -> String -> <Panic> Int` | extern |
+| `slice` | `Int -> Int -> String -> <Panic> String` | extern |
+| `find` | `String -> String -> <Panic> Option Int` | eml |
+| `contains`、`starts_with`、`ends_with` | `String -> String -> <Panic> Bool` | eml |
+| `split` | `String -> String -> <Panic> List String` | eml |
+| `lines` | `String -> <Panic> List String` | eml |
 | `join` | `String -> List String -> String` | eml |
-| `trim` | `String -> String` | eml |
-| `trim_line_end` | `String -> String` | eml |
-| `to_int` | `String -> Option Int` | eml |
+| `trim` | `String -> <Panic> String` | eml |
+| `trim_line_end` | `String -> <Panic> String` | eml |
+| `to_int` | `String -> <Panic> Option Int` | eml |
 
 - `byte_length s` は UTF-8 のバイトの数である
-- `byte_at i s` は位置 `i` のバイト (0〜255) である。`0 <= i < byte_length s` でなければ実行時エラーにする
-- `slice start end s` は、位置 `start` から `end` の手前までの部分の文字列である。`0 <= start <= end <= byte_length s` でないときと、`start` か `end` が文字の境界でないときは実行時エラーにする。文字の境界は、文字列の端か、UTF-8 の続きのバイト (`0x80`〜`0xBF`) でない位置である
+- `byte_at i s` は位置 `i` のバイト (0〜255) である。`0 <= i < byte_length s` でなければ `Panic` を起こす
+- `slice start end s` は、位置 `start` から `end` の手前までの部分の文字列である。`0 <= start <= end <= byte_length s` でないときと、`start` か `end` が文字の境界でないときは `Panic` を起こす。文字の境界は、文字列の端か、UTF-8 の続きのバイト (`0x80`〜`0xBF`) でない位置である
 - `find needle s` は、`needle` が最初に現れる位置である。空の `needle` は `Some 0` である
 - `contains needle s`、`starts_with prefix s`、`ends_with suffix s` は、名前のとおりの判定である。バイトで比べるので、文字の境界でない位置で比べても誤りにならない
 - `split sep s` は、`sep` で区切った部分を順に返す。Rust の `str::split` と同じく、続いた区切りは空の部分を作り、`split "," ""` は `[""]` である。空の `sep` は区切らず `[s]` を返す
@@ -132,13 +154,14 @@ pub extern exit : Int -> <IO> a
 - `trim s` は、両端の ASCII の空白 (空白、`\t`、`\n`、`\x0B`、`\x0C`、`\r`) を除く。Unicode の空白は除かない
 - `trim_line_end s` は、最後の行の終わり (`\n` か `\r\n`) を1つ除く。行の終わりで終わらなければ `s` をそのまま返し、`trim_line_end ""` は `""` である。`Stdin.read_line` と `Fs.read_line` が、読んだ行の終わりを除くのに使う
 - `to_int s` は、Rust の `i64::from_str` と同じ形を読む。省略できる符号 `+` か `-` の後に、1つ以上の ASCII の数字が続く形である。空白は許さない。範囲を超えれば `None` で、`"-9223372036854775808"` は読める
+- `byte_length` と `join` のほかの関数は、`byte_at`、`slice`、std の中だけの `find_from` か算術を使うので、型の上では `Panic` を起こしうる
 - 部分文字列の照合は素朴な方法で、`needle` の長さと探す範囲の長さの積に比例する時間がかかる
 
 ## `Env`
 
 | 関数 | 型 |
 |---|---|
-| `args` | `Unit -> <IO> List String` |
+| `args` | `Unit -> <IO, Panic> List String` |
 | `get` | `String -> <IO> Option String` |
 
 - `args ()` は、上の「起動」の引数である。REPL では `[]` を返す
@@ -150,7 +173,7 @@ pub extern exit : Int -> <IO> a
 | 関数 | 型 |
 |---|---|
 | `read_all` | `Unit -> <IO> String` |
-| `read_line` | `Unit -> <IO> Option String` |
+| `read_line` | `Unit -> <IO, Panic> Option String` |
 
 - `read_all ()` は、標準入力の残りをすべて読む
 - `read_line ()` は1行を読み、行の終わり (`\n` か `\r\n`) を `String.trim_line_end` で除いて返す。EOF なら `None` を返す。行の終わりのない最後の行も1行として返す
@@ -163,7 +186,7 @@ pub extern exit : Int -> <IO> a
 |---|---|
 | `read_text` | `String -> <IO> String` |
 | `write_text` | `String -> String -> <IO> Unit` |
-| `read_line` | `File -> <IO> (File, Option String)` |
+| `read_line` | `File -> <IO, Panic> (File, Option String)` |
 
 `open`、`read_all`、`close` と `File` は [エフェクトと handler](effects.md) の「組み込みの `IO`」にある。
 
@@ -177,7 +200,7 @@ pub extern exit : Int -> <IO> a
 
 | 関数 | 型 |
 |---|---|
-| `run` | `String -> List String -> <IO> Int` |
+| `run` | `String -> List String -> <IO, Panic> Int` |
 
 - `run program args` は、`PATH` から `program` を探して子のプロセスを起動し、終わるのを待って終了コードを返す。子はシェルを介さず、標準入出力と環境を受け継ぐ。シグナルで終わった子の終了コードは、シェルと同じく 128 + シグナルの番号にする
 - 起動の前に標準出力を書き出す。子と eml の出力が順に並ぶようにするためである。eml が標準入力から先読みしてバッファに持っているバイトは、子には届かない
@@ -193,14 +216,14 @@ pub extern exit : Int -> <IO> a
 import Yield (Yield(..))
 import Iter
 
-numbers : Unit -> <Yield Int> Unit
+numbers : Unit -> <Yield Int, Panic> Unit
 numbers () =
   let go n =
     yield n
     go (n + 1)
   go 1
 
-main : Unit -> <IO> Unit
+main : Unit -> <IO, Panic> Unit
 main () =
   Iter.each (fn n -> println (show n)) (Iter.take 3 (Iter.generate numbers))
 ```
@@ -275,9 +298,9 @@ pub data Iter <e> a = | Iter (once Unit -> <e> Option (a, Iter <e> a))
 | `map` | `(a -> <e> b) -> Iter <e> a -> Iter <e> b` |
 | `filter` | `(a -> <e> Bool) -> Iter <e> a -> Iter <e> a` |
 | `filter_map` | `(a -> <e> Option b) -> Iter <e> a -> Iter <e> b` |
-| `take` | `Int -> Iter <e> a -> Iter <e> a` |
+| `take` | `Int -> Iter <e> a -> Iter <Panic \| e> a` |
 | `zip` | `Iter <e> a -> Iter <e> b -> Iter <e> (a, b)` |
-| `enumerate` | `Int -> Iter <e> a -> Iter <e> (Int, a)` |
+| `enumerate` | `Int -> Iter <e> a -> Iter <Panic \| e> (Int, a)` |
 | `each` | `(a -> <e> Unit) -> Iter <e> a -> <e> Unit` |
 | `fold` | `(b -> a -> <e> b) -> b -> Iter <e> a -> <e> b` |
 | `to_list` | `Iter <e> a -> <e> List a` |
@@ -305,7 +328,7 @@ pub data Iter <e> a = | Iter (once Unit -> <e> Option (a, Iter <e> a))
 
 標準ライブラリの extern の誤りの文言は次のとおりである。I/O の失敗の理由は `not found`、`permission denied`、`not available`、`I/O error` のどれかである。位置は extern を呼んだ所で、標準ライブラリの関数の中の extern なら `<std>/…` の位置になる。
 
-I/O の失敗の一部は `try_io` で捕まえられる (上の「`try_io`」)。捕まえなかった失敗は、この表の文言の実行時エラーになる。
+I/O の失敗の一部は `try_io` で捕まえられる (上の「`try_io`」)。`byte_at` と `slice` の誤りは `Panic` で、`try_panic` で捕まえられる (上の「`try_panic`」)。捕まえなかった失敗は、この表の文言の実行時エラーになる。
 
 | 失敗 | 文言 |
 |---|---|

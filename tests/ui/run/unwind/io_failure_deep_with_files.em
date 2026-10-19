@@ -5,14 +5,14 @@ missing () =
   Fs.close (Fs.open "missing.txt")
   0
 
-deep : Int -> <IO> Int
+deep : Int -> <IO, Panic> Int
 deep n =
   let f = Fs.open "input.txt"
   let r = if n == 0 then missing () else deep (n - 1) + 1
   Fs.close f
   r
 
-main : Unit -> <IO> Unit
+main : Unit -> <IO, Panic> Unit
 main () =
   match try_io (fn () -> deep 3) with
     | Ok r -> println "ok \{r}"

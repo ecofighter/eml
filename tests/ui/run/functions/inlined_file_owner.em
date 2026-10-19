@@ -8,7 +8,7 @@ with_file name =
   Fs.close f
   String.byte_length text
 
-main : Unit -> <IO> Unit
+main : Unit -> <IO, Panic> Unit
 main () =
   let a = with_file "input.txt"
   let b = with_file "input.txt"

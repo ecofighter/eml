@@ -62,7 +62,7 @@ effect Fail where
 - `IO` は、Prelude が `pub extern effect IO where never io_failed : IOErrorKind -> String -> a` と宣言する extern のエフェクトである。操作 `io_failed` は Prelude の外から見えず、Prelude の `try_io` だけが handle する ([標準ライブラリ](stdlib.md) の「`try_io`」)。
 - `IO` を起こすのは、`IO` を row に持つ extern の関数 (`println` など) である。extern の関数は handler を通らず、その場で実行して値を返す。ただし、`try_io` が捕まえる種類の誤りで失敗すると、VM が `io_failed` の節の入口を呼んで中断を始める。`exit` はいつも中断を始める ([VM](vm.md) の「IO の失敗と `exit`」)。中断は継続を作らずに巻き戻しで進むので、`IO` を起こす extern の呼び出しは yield の地点でなく ([Core IR](core-ir.md) の「IO の extern」)、`IO` は yield しうるラベルでない ([型と Kind](types.md) の「row の具体化の記録」)。
 - extern の関数の呼び出しは、操作の呼び出しと違って `perform` 命令にならない ([Core IR](core-ir.md))。多重度は `once` として扱う。
-- handler の節の先頭に、`IO` を起こす extern の関数の名前を書いたらエラーにする (E1009)。節の先頭の名前は、まず操作として引き、見つからないときだけ extern の関数を引く。`IO` を起こす extern の関数が見つかれば E1009 で、それ以外 (純粋な extern の関数) は E1001 である。ユーザーが定義した同名の関数は、`Prelude` の extern の関数を隠さない ([モジュールと名前解決](modules.md) の「名前の解決」)。
+- handler の節の先頭に、`IO` を起こす extern の関数の名前を書いたらエラーにする (E1009)。節の先頭の名前は、まず操作として引き、見つからないときだけ extern の関数を引く。extern のエフェクト (`IO` か `Panic`) を起こす extern の関数が見つかれば E1009 で、それ以外 (純粋な extern の関数) は E1001 である。ユーザーが定義した同名の関数は、`Prelude` の extern の関数を隠さない ([モジュールと名前解決](modules.md) の「名前の解決」)。
 
 `IO` を起こす extern の関数のうち、線形なファイルを扱うものは次のとおりである。ほかの標準ライブラリの関数 (`eprintln`、`Env`、`Stdin`、`Fs.write_text`、`Proc.run` など) は [標準ライブラリ](stdlib.md) にある。
 
@@ -86,6 +86,15 @@ extern のエフェクトは、型検査では普通のエフェクトと次の�
 重なりを1つにまとめ、`mask` に入れなくてよいのは、`IO` の操作が `never` の `io_failed` だけで、捕まえるのが例外と同じく実行の時点で最も近い `try_io` だからである。どちらの `IO` に届いても、捕まえる `try_io` は同じになる。
 
 組み込みのリソースは、どのスレッドで後始末してもよいものに限る。現状の `File` はこれを満たす ([マルチコア対応の設計](../future/multicore.md))。
+
+## 組み込みの `Panic`
+
+- `Panic` は、Prelude が `pub extern effect Panic where never panicked : String -> a` と宣言する extern のエフェクトである。`IO` と同じく、操作 `panicked` は Prelude の外から見えず、Prelude の `try_panic` だけが handle する ([標準ライブラリ](stdlib.md) の「`try_panic`」)。利用者は、Prelude の `panic : String -> <Panic> a` で起こし、`try_panic` で捕まえる
+- `Panic` が表すのは、値と入力で決まる誤りである。整数の桁あふれとゼロ除算、文字列の範囲外の位置と文字の境界でない切り出し、範囲外のスクリプトの引数、利用者の `panic` がこれに当たる。これらを起こしうる extern の関数 (`+`、`-`、`*`、`/`、`%`、前置の `-` が呼ぶ `negate`、`String.byte_at`、`String.slice`、std の中だけの `String.find_from` と `Env.arg`) は、最後の矢印の row に `Panic` を持つ。`Env.arg` の row は `<IO, Panic>` である
+- ヒープの誤り、内部の誤り、割り込み、深さと確保量の上限、標準出力への書き出しの失敗は、型に出さない。どの呼び出しでも起きうるか、起きた位置が決まらないためである
+- `panic` は、`exit` と同じく戻らない extern の関数である。結果の型は量化した型変数なので、手前で `Lin` の値を手放さなくてよい ([線形性](linearity.md) の「暗黙の後始末」)
+- 型検査では `IO` と同じく扱う。row の中で重なったラベルは1つにまとめ、`mask` に入れず、多重度は `once` である。操作は `never` の `panicked` だけなので、`Panic` は yield しうるラベルでない ([型と Kind](types.md) の「row の具体化の記録」)。row に `Panic` を足しても、yield の確かめは増えない
+- トップレベルの値の本体と、`Eq`、`Ord`、`Show` のメソッドの row は空なので、そこでは `Panic` を起こせない ([宣言](declarations.md) の「シグネチャと等式」)。`main` の row と REPL の入力の row は `Panic` を許す ([モジュールと名前解決](modules.md) の「モジュール」、[型と Kind](types.md) の「REPL の入力」)
 
 ## handler の意味
 

@@ -30,8 +30,7 @@ fn uniform_functions(text: &str) -> Vec<(String, usize)> {
 
 #[test]
 fn polymorphic_recursion_without_constraints_is_uniform() {
-    let text =
-        "depth : Int -> a -> Int\ndepth n x = if n == 0 then 0 else 1 + depth (n - 1) (x, x)";
+    let text = "depth : Int -> a -> <Panic> Int\ndepth n x = if n == 0 then 0 else 1 + depth (n - 1) (x, x)";
     assert_eq!(uniform_functions(text), [("depth".to_string(), 0)]);
 }
 
@@ -46,7 +45,7 @@ fn another_method_of_the_same_instance_at_a_larger_type_is_not_a_cycle() {
 #[test]
 fn growth_through_a_method_variable_is_found() {
     // instance が `b` の値を写すか捨てると E2011 になるので、`b` によらず `Unr` な `Proxy b` を大きくする
-    let text = "data Proxy b = | Proxy\n\ngrow : Proxy b -> Proxy (b, b)\ngrow _ = Proxy\n\nclass C a where\n  m : a -> Int -> Proxy b -> Int\n\ninstance C Int where\n  m x n p = if n == 0 then 0 else m x (n - 1) (grow p)";
+    let text = "data Proxy b = | Proxy\n\ngrow : Proxy b -> Proxy (b, b)\ngrow _ = Proxy\n\nclass C a where\n  m : a -> Int -> Proxy b -> <Panic> Int\n\ninstance C Int where\n  m x n p = if n == 0 then 0 else m x (n - 1) (grow p)";
     assert_eq!(uniform_functions(text), [("C Int.m".to_string(), 0)]);
 }
 

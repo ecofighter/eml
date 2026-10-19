@@ -4,7 +4,7 @@
 .   10
 .
 > ten + ten
-> add_once : Int -> Int
+> add_once : Int -> <Panic> Int
 . add_once x = x + ten
 .
 > add_once 5

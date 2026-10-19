@@ -8,7 +8,7 @@ effect State s where
   get : Unit -> s
   put : s -> Unit
 
-twice : (Unit -> <e> Int) -> (Unit -> <e> Int) -> <State Int | e> Int
+twice : (Unit -> <e> Int) -> (Unit -> <e> Int) -> <State Int, Panic | e> Int
 twice a b =
   let x = a ()
   let y = b ()
@@ -17,7 +17,7 @@ twice a b =
 flip : Unit -> <Choice, State Int> Int
 flip () = if choose () then get () else 0
 
-main : Unit -> <IO> Unit
+main : Unit -> <IO, Panic> Unit
 main () =
   let r = handle (handle (handle twice flip flip from 100 with
                             | ctl get () k st -> k st st

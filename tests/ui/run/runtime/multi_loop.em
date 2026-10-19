@@ -3,10 +3,10 @@
 effect Choice where
   multi choose : Unit -> Bool
 
-loop : Int -> Int -> <Choice> Int
+loop : Int -> Int -> <Choice, Panic> Int
 loop n acc = if n == 0 then acc else if choose () then loop (n - 1) (acc + 1) else acc
 
-main : Unit -> <IO> Unit
+main : Unit -> <IO, Panic> Unit
 main () =
   let total =
     handle loop 10000 0 with

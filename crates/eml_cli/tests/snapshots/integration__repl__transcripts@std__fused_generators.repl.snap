@@ -4,7 +4,7 @@ expression: checked.render()
 input_file: crates/eml_cli/tests/repl/std/fused_generators.repl
 ---
 > import Yield (Yield(..))
-> nums : Int -> Unit -> <Yield Int> Unit
+> nums : Int -> Unit -> <Yield Int, Panic> Unit
 . nums n () =
 .   let go i =
 .     if i > n then ()

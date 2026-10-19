@@ -1,8 +1,8 @@
 -- A comma in the middle of a line ends the lambda body opened by `->`, as it does when the lambda is on one line.
-apply : (Int -> Int) -> Int -> Int
+apply : (Int -> <Panic> Int) -> Int -> <Panic> Int
 apply f x = f x
 
-main : Unit -> <IO> Unit
+main : Unit -> <IO, Panic> Unit
 main () =
   let pair = (fn x ->
       let y = x + 1

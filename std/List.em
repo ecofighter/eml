@@ -12,7 +12,7 @@ reverse_onto acc (x :: rest) = reverse_onto (x :: acc) rest
 pub append : List a -> List a -> List a
 append xs ys = reverse_onto ys (reverse xs)
 
-pub length : List a -> Int
+pub length : List a -> <Panic> Int
 length xs =
   let go n ys =
     match ys with

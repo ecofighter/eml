@@ -5,7 +5,7 @@ data Shape =
   | Dot Int
   | Empty
 
-area : Shape -> Int
+area : Shape -> <Panic> Int
 area s = match s with
   | Circle { radius } -> 3 * radius * radius
   | Rect { width, height } -> width * height
@@ -17,7 +17,7 @@ width_of s = match s with
   | Rect { width } -> width
   | _ -> 0
 
-main : Unit -> <IO> Unit
+main : Unit -> <IO, Panic> Unit
 main () =
   println (show (area (Circle { radius = 2 })))
   println (show (area (Rect { width = 3, height = 4 })))

@@ -9,11 +9,11 @@ noisy n =
   println ("eval " ++ show n)
   n
 
-sum : List Int -> Int
+sum : List Int -> <Panic> Int
 sum [] = 0
 sum (x :: rest) = x + sum rest
 
-main : Unit -> <IO> Unit
+main : Unit -> <IO, Panic> Unit
 main () =
   let xs = [
     1,

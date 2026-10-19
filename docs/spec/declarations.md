@@ -7,7 +7,7 @@
 ## シグネチャと等式
 
 ```haskell
-len : List a -> Int
+len : List a -> <Panic> Int
 len [] = 0
 len (_ :: rest) = 1 + len rest
 ```
@@ -24,6 +24,7 @@ len (_ :: rest) = 1 + len rest
 - 複数の等式は、HIR で「引数のタプルに対する `match`」1つに脱糖する。網羅性と線形性の検査は、その `match` に対して行う
 - ローカルの `let` は、注釈なしで推論する
 - 引数のない値 (`pi : Int`、`pi = 3`) も書ける。「引数のない関数は `()` を取る」という規約は、エフェクトを持つ計算に使う
+- 値の本体は空の row `<>` で検査する。値は参照するたびに計算する純粋な式で、型に row を書く場所がないためである。そのため、値の本体で `Panic` を起こしうる計算 (`80 * 2` など) をすると E2002 になる。E2002 の help は、`()` を取る関数にするよう促す ([エフェクトと handler](effects.md) の「組み込みの `Panic`」)
 
 シグネチャを複数の行に分けるときは、`->` を行の先頭に置く。
 
@@ -173,8 +174,8 @@ dir </> name = join_path dir name
 
 | 演算子 | 型と意味 |
 |---|---|
-| `+` `-` `*` `/` `%` | `Int -> Int -> Int`。`Int` は 64 ビットの符号付き整数で、オーバーフローとゼロ除算は実行時エラーにする。`/` と `%` は Rust と同じく、商を 0 の方向に切り捨てる (`%` の結果は被除数と同じ符号になる) |
-| 単項の `-` (`negate`) | `Int -> Int`。オーバーフローは実行時エラー |
+| `+` `-` `*` `/` `%` | `Int -> Int -> <Panic> Int`。`Int` は 64 ビットの符号付き整数で、オーバーフローとゼロ除算は `Panic` を起こす。`try_panic` が捕まえなければ実行時エラーになる。`/` と `%` は Rust と同じく、商を 0 の方向に切り捨てる (`%` の結果は被除数と同じ符号になる) |
+| 単項の `-` (`negate`) | `Int -> <Panic> Int`。オーバーフローは `Panic` を起こす |
 | `==` `!=` | `Eq a => a -> a -> Bool`。クラス `Eq` のメソッドである。`Eq` の instance のない型 (関数型、instance のない `data` の型、制約のないシグネチャの型変数) の値を比べると E2006 にする |
 | `<` `<=` `>` `>=` | `Ord a => a -> a -> Bool`。クラス `Ord` のメソッドで、`compare` からの既定を持つ |
 | `++` | `String -> String -> String` |
@@ -287,6 +288,7 @@ pub class Show a where
 - `Show` の `show` は既定を持たない。`show` と `show_prec` を互いの既定にすると、どちらも書かない instance が止まらなくなるためである
 - `show_prec d x` の `d` は、`x` を置く位置の優先度である。関数適用の引数の位置は 11 である。導出した `Show` は、これで入れ子の値と中置のコンストラクタに括弧を付ける (上の「`deriving`」)
 - `show` は読み戻せる形、`display` は人が読む形を返す。補間の穴は `display` を呼ぶ ([式](expressions.md) の「補間」)。`display` の既定は `show` である。Prelude の instance では `String` だけが上書きし、文字列をそのまま返す。Haskell の `Show` が `String` の表示のために `showList` を持つのと同じく、クラスのメソッドで `String` だけを特別に扱う
+- `Eq`、`Ord`、`Show` のメソッドの型は row を持たない。そのため、instance の本体で `Panic` を起こしうる計算をすると E2002 になる。要るときは、本体の中で `try_panic` を使う。導出した instance は `Panic` を起こさない。利用者が宣言するクラスのメソッドの row は、宣言に書いたとおりである
 - `display` はクラスの普通のメソッドなので、ユーザーが呼ぶことも、instance で上書きすることもできる。導出した instance、タプルと `Unit` の instance、`List` の手書きの instance は既定の `display` を使う。そのため `display (Some "x")` は `Some "x"` で、引用符が付かないのは値そのものが `String` のときだけである
 
 Prelude は、標準のデータ型 `List`、`Option`、`Result` も宣言する。

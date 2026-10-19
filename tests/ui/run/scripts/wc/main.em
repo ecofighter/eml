@@ -8,7 +8,7 @@ data Counts =
   | Counts { lines : Int, words : Int, bytes : Int }
 
 -- 先頭のフラグを読み、残りをファイル名として返す。フラグの位置の知らない `-x` は使い方の誤りである
-parse_args : Shown -> List String -> Option (Shown, List String)
+parse_args : Shown -> List String -> <Panic> Option (Shown, List String)
 parse_args shown args =
   match args with
     | "-l" :: rest -> parse_args { shown | lines = True } rest
@@ -22,7 +22,7 @@ parse_args shown args =
 is_space : Int -> Bool
 is_space b = b == 32 || (b >= 9 && b <= 13)
 
-count : String -> Counts
+count : String -> <Panic> Counts
 count text =
   let n = String.byte_length text
   let go i lines words in_word =
@@ -35,7 +35,7 @@ count text =
       else go (i + 1) lines words True
   go 0 0 0 False
 
-add : Counts -> Counts -> Counts
+add : Counts -> Counts -> <Panic> Counts
 add a b = Counts { lines = a.lines + b.lines, words = a.words + b.words, bytes = a.bytes + b.bytes }
 
 -- 選んだ数を行、語、バイトの順に並べ、名前があれば続ける
@@ -59,7 +59,7 @@ read_input name =
     text
 
 -- 名前のある入力を順に数えて出し、合計と、開けない入力があったかを返す
-count_files : Shown -> List String -> <IO> (Counts, Bool)
+count_files : Shown -> List String -> <IO, Panic> (Counts, Bool)
 count_files shown names =
   let go total failed rest =
     match rest with
@@ -75,7 +75,7 @@ count_files shown names =
             go total True more
   go (Counts { lines = 0, words = 0, bytes = 0 }) False names
 
-main : Unit -> <IO> Unit
+main : Unit -> <IO, Panic> Unit
 main () =
   let none = Shown { lines = False, words = False, bytes = False }
   match parse_args none (Env.args ()) with

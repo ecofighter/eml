@@ -10,10 +10,10 @@ keep : Inner -> Int
 keep i = match i with
   | Inner _ n -> n
 
-go : Outer -> String
+go : Outer -> <Panic> String
 go o = match o with
   | Outer i m -> match i with
       | Inner s n -> let k = keep i in s ++ show (k + n + m)
 
-main : Unit -> <IO> Unit
+main : Unit -> <IO, Panic> Unit
 main () = println (go (Outer (Inner "z" 1) 2))

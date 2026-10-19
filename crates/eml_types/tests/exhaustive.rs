@@ -115,8 +115,7 @@ fn refutable_clause_parameters() {
 
 #[test]
 fn a_refutable_equation_points_at_the_signature() {
-    let text =
-        "data Option a = | None | Some a\n\nget : Option Int -> Int -> Int\nget (Some n) m = n + m";
+    let text = "data Option a = | None | Some a\n\nget : Option Int -> Int -> <Panic> Int\nget (Some n) m = n + m";
     insta::assert_snapshot!(diagnostics(text), @"
     E4002 3:1 the equation of `get` does not cover every argument
       3:1 `get` is not defined for some arguments
@@ -229,7 +228,7 @@ fn literals_with_a_wildcard_cover_every_value() {
 
 #[test]
 fn tuple_patterns_are_irrefutable() {
-    let text = "swap : (Int, String) -> (String, Int)\nswap p =\n  let (a, b) = p\n  (b, a)\n\nfirst : (Int, Int) -> Int\nfirst (x, _) = x\n\npick : (Int, Int) -> Int\npick p = (fn (a, b) -> a + b) p";
+    let text = "swap : (Int, String) -> (String, Int)\nswap p =\n  let (a, b) = p\n  (b, a)\n\nfirst : (Int, Int) -> Int\nfirst (x, _) = x\n\npick : (Int, Int) -> <Panic> Int\npick p = (fn (a, b) -> a + b) p";
     assert_eq!(diagnostics(text), "");
 }
 

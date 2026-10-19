@@ -1022,17 +1022,21 @@ fn extern_index(scopes: &[ModuleScope]) -> ExternIndex {
             Some((ty, id?))
         })
         .collect();
-    let canonical = ExternEffect::Io.row().name;
-    let io = find(
-        scopes,
-        canonical,
-        |scope| &scope.types,
-        |item| match item {
-            TypeItem::Effect(id) => Some(id),
-            TypeItem::Type(_) | TypeItem::Class(_) => None,
-        },
-    )
-    .unwrap_or_else(|| panic!("the standard library does not declare the effect `{canonical}`"));
+    let effect = |effect: ExternEffect| {
+        let canonical = effect.row().name;
+        find(
+            scopes,
+            canonical,
+            |scope| &scope.types,
+            |item| match item {
+                TypeItem::Effect(id) => Some(id),
+                TypeItem::Type(_) | TypeItem::Class(_) => None,
+            },
+        )
+        .unwrap_or_else(|| panic!("the standard library does not declare the effect `{canonical}`"))
+    };
+    let io = effect(ExternEffect::Io);
+    let panic = effect(ExternEffect::Panic);
     let canonical = Extern::IntNeg.row().name;
     let negate = find(
         scopes,
@@ -1047,7 +1051,12 @@ fn extern_index(scopes: &[ModuleScope]) -> ExternIndex {
         },
     )
     .unwrap_or_else(|| panic!("the standard library does not declare the function `{canonical}`"));
-    ExternIndex { types, io, negate }
+    ExternIndex {
+        types,
+        io,
+        panic,
+        negate,
+    }
 }
 
 /// 名前の表から表示名の表を作る。HIR の診断は `lower` の途中で出るので、`Program` より先に作る。重複した宣言の部品も

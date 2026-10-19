@@ -6,7 +6,7 @@ input_file: crates/eml_cli/tests/repl/declarations/effects.repl
 > effect Counter where
 .   tick : Unit -> Int
 .
-> count : Unit -> <Counter> Int
+> count : Unit -> <Counter, Panic> Int
 . count () = tick () + tick ()
 .
 > handle count () with

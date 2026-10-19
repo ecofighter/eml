@@ -3,14 +3,14 @@ source: crates/eml_cli/tests/repl.rs
 expression: checked.render()
 input_file: crates/eml_cli/tests/repl/redefinition/local_functions.repl
 ---
-> f : Int -> Int
+> f : Int -> <Panic> Int
 . f n =
 .   let go k = k + 1
 .   go n
 .
 > f 1
 2
-> f : Int -> Int
+> f : Int -> <Panic> Int
 . f n =
 .   let go k acc = if k == 0 then acc else go (k - 1) (acc + k)
 .   go n 0

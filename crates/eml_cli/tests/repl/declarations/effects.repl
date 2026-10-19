@@ -2,7 +2,7 @@
 > effect Counter where
 .   tick : Unit -> Int
 .
-> count : Unit -> <Counter> Int
+> count : Unit -> <Counter, Panic> Int
 . count () = tick () + tick ()
 .
 > handle count () with

@@ -38,9 +38,9 @@ input_file: tests/ui/check-fail/kinds/argument_sorts.em
      │                     ──┬─  
      │                       ╰─── this is a row
      │
-     ├─[ <std>/Prelude.em:123:15 ]
+     ├─[ <std>/Prelude.em:131:15 ]
      │
- 123 │ pub data List a =
+ 131 │ pub data List a =
      │               ┬  
      │               ╰── declared as a type parameter here
 ─────╯

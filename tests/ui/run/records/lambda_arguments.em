@@ -2,12 +2,12 @@
 data Person =
   | Person { name : String, age : Int }
 
-map : (a -> b) -> List a -> List b
+map : (a -> <Panic> b) -> List a -> <Panic> List b
 map f xs = match xs with
   | [] -> []
   | x :: rest -> f x :: map f rest
 
-main : Unit -> <IO> Unit
+main : Unit -> <IO, Panic> Unit
 main () =
   let people = [Person { name = "ann", age = 30 }, Person { name = "bob", age = 41 }]
   println (show (map (.name) people))

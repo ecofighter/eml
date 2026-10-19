@@ -8,7 +8,7 @@ map_list xs f = match xs with
   | [] -> []
   | x :: rest -> f x :: map_list rest f
 
-main : Unit -> <IO> Unit
+main : Unit -> <IO, Panic> Unit
 main () =
   let p = Person { name = "ann", age = 30 }
   println p.name

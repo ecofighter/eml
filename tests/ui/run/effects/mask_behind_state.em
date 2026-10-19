@@ -11,7 +11,7 @@ tagged tag action =
       println "\{tag}: \{s}"
       k ()
 
-twice : (Unit -> <e> Unit) -> (Unit -> <Log | e> a) -> <Log | e> a
+twice : (Unit -> <e> Unit) -> (Unit -> <Log | e> a) -> <Log, Panic | e> a
 twice cb action =
   handle action () from 1 with
     | ctl log s k n ->
@@ -23,7 +23,7 @@ twice cb action =
           k2 ()
     | return x _ -> x
 
-main : Unit -> <IO> Unit
+main : Unit -> <IO, Panic> Unit
 main () =
   use tagged "P2"
   use tagged "P1"

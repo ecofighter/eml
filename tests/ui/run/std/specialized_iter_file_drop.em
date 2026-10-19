@@ -3,7 +3,7 @@
 import Iter
 import Yield (Yield(..))
 
-lines : String -> Unit -> <Yield String, IO> Unit
+lines : String -> Unit -> <Yield String, IO, Panic> Unit
 lines path () =
   let go file =
     match Fs.read_line file with
@@ -13,7 +13,7 @@ lines path () =
         go file
   go (Fs.open path)
 
-main : Unit -> <IO> Unit
+main : Unit -> <IO, Panic> Unit
 main () =
   Fs.write_text "lines.txt" "one\ntwo\nthree\nfour\n"
   Iter.each (fn line -> println line) (Iter.take 2 (Iter.generate (lines "lines.txt")))

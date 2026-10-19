@@ -215,7 +215,7 @@ fn a_stateful_continuation_keeps_its_own_label_at_its_last_arrow() {
 effect Log where
   log : String -> Unit
 
-twice : (Unit -> <e> Unit) -> (Unit -> <Log | e> a) -> <Log | e> a
+twice : (Unit -> <e> Unit) -> (Unit -> <Log | e> a) -> <Log, Panic | e> a
 twice cb action =
   handle action () from 1 with
     | ctl log s k n ->
@@ -242,7 +242,7 @@ fn a_continuation_under_a_handler_of_its_own_effect_keeps_its_own_label() {
 effect Log where
   log : String -> Unit
 
-twice : (Unit -> <e> Unit) -> (Unit -> <Log | e> a) -> <Log | e> a
+twice : (Unit -> <e> Unit) -> (Unit -> <Log | e> a) -> <Log, Panic | e> a
 twice cb action =
   handle action () with
     | ctl log s k ->
@@ -317,7 +317,7 @@ outer action =
 fn a_self_call_under_its_own_handler_has_no_mask() {
     // 自分への呼び出しの包含は、外からの `go n` の包含が `go` の row を閉じた後に確かめる。閉じた row は rigid な末尾を
     // 持たないので `mask` が要らない
-    let text = "effect Ask where\n  ask : Unit -> Int\n\ncount : Int -> <IO> Int\ncount n =\n  let go k =\n    if k == 0 then 0\n    else handle ask () + go (k - 1) with | ctl ask () r -> r 1\n  go n";
+    let text = "effect Ask where\n  ask : Unit -> Int\n\ncount : Int -> <IO, Panic> Int\ncount n =\n  let go k =\n    if k == 0 then 0\n    else handle ask () + go (k - 1) with | ctl ask () r -> r 1\n  go n";
     assert_eq!(masks(text, "count"), "");
 }
 
@@ -336,11 +336,11 @@ fn resuming_under_a_handler_of_the_same_effect() {
     // は要らない。rigid な末尾では `L@1` が内側の handler を残すので、どちらも同じ handler に届く
     // (docs/spec/types.md の「呼び出しの包含を解く」)
     let in_lambda = format!(
-        "{L}in_lambda : Unit -> <L> Int\nin_lambda () =\n  let f = fn () ->\n    op () + (handle op () with\n      | ctl op () k -> handle k 1 with\n          | fn op () -> 2)\n  f ()\n"
+        "{L}in_lambda : Unit -> <L, Panic> Int\nin_lambda () =\n  let f = fn () ->\n    op () + (handle op () with\n      | ctl op () k -> handle k 1 with\n          | fn op () -> 2)\n  f ()\n"
     );
     assert_eq!(masks(&in_lambda, "in_lambda"), "");
     let in_signature = format!(
-        "{L}in_signature : (Unit -> <e> Int) -> <L | e> Int\nin_signature h =\n  op () + (handle op () with\n    | ctl op () k -> handle k (h ()) with\n        | fn op () -> 2)\n"
+        "{L}in_signature : (Unit -> <e> Int) -> <L, Panic | e> Int\nin_signature h =\n  op () + (handle op () with\n    | ctl op () k -> handle k (h ()) with\n        | fn op () -> 2)\n"
     );
     insta::assert_snapshot!(masks(&in_signature, "in_signature"), @"
     7:29#0 [L@1]

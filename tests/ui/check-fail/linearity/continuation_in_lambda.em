@@ -2,7 +2,7 @@
 effect Ask where
   ask : Unit -> Int
 
-twice : Unit -> Int
+twice : Unit -> <Panic> Int
 twice () =
   handle ask () with
     | ctl ask () k ->

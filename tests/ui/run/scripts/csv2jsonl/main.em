@@ -9,11 +9,11 @@ data Row =
   | Row { line : Int, fields : List String }
 
 -- `at` 以降で最初の `byte` の位置。なければ `n` である
-find_byte : Int -> Int -> String -> Int -> Int
+find_byte : Int -> Int -> String -> Int -> <Panic> Int
 find_byte byte at text n =
   if at >= n || String.byte_at at text == byte then at else find_byte byte (at + 1) text n
 
-count_byte : Int -> String -> Int
+count_byte : Int -> String -> <Panic> Int
 count_byte byte s =
   let n = String.byte_length s
   let go i acc = if i >= n then acc else go (i + 1) (if String.byte_at i s == byte then acc + 1 else acc)
@@ -23,7 +23,7 @@ count_byte byte s =
 -- 1つの `let … and …` の組の関数にする (docs/spec/expressions.md の「ローカル関数」)。`row_line` は行が始まる入力の
 -- 行の番号、`line` は今読んでいる入力の行の番号で、引用符の中の改行の分だけ `row_line` から進む。欄は `fields` に
 -- 逆順に積む
-rows : String -> <Yield Row, Fail (Int, String)> Unit
+rows : String -> <Yield Row, Fail (Int, String), Panic> Unit
 rows text =
   let n = String.byte_length text
   let row_start at line =
@@ -64,20 +64,20 @@ rows text =
   row_start 0 1
 
 -- 引用符で囲まない欄の終わり (`,` か `\n` の位置、なければ `n`)
-unquoted_end : Int -> String -> Int -> Int
+unquoted_end : Int -> String -> Int -> <Panic> Int
 unquoted_end at text n =
   if at >= n then n
   else
     let b = String.byte_at at text
     if b == 44 || b == 10 then at else unquoted_end (at + 1) text n
 
-without_cr : String -> String
+without_cr : String -> <Panic> String
 without_cr s =
   let n = String.byte_length s
   if n > 0 && String.byte_at (n - 1) s == 13 then String.slice 0 (n - 1) s else s
 
 -- `json.dumps` と同じエスケープで、JSON の文字列にする
-json_string : String -> String
+json_string : String -> <Panic> String
 json_string s =
   let n = String.byte_length s
   -- `start` から `i` の手前までは、エスケープの要らないバイトの列である
@@ -90,7 +90,7 @@ json_string s =
       else go start (i + 1) acc
   go 0 0 "\""
 
-escape : Int -> String
+escape : Int -> <Panic> String
 escape b =
   match b with
     | 34 -> "\\\""
@@ -102,10 +102,10 @@ escape b =
     | 9 -> "\\t"
     | _ -> "\\u00" ++ hex_digit (b / 16) ++ hex_digit (b % 16)
 
-hex_digit : Int -> String
+hex_digit : Int -> <Panic> String
 hex_digit d = String.slice d (d + 1) "0123456789abcdef"
 
-index_of : String -> List String -> Option Int
+index_of : String -> List String -> <Panic> Option Int
 index_of x xs =
   let go i rest =
     match rest with
@@ -113,14 +113,14 @@ index_of x xs =
       | y :: more -> if x == y then Some i else go (i + 1) more
   go 0 xs
 
-nth : Int -> List a -> Option a
+nth : Int -> List a -> <Panic> Option a
 nth i xs =
   match xs with
     | Nil -> None
     | x :: rest -> if i == 0 then Some x else nth (i - 1) rest
 
 -- 選んだ列の位置。ヘッダにない列名は終了コード 2 の誤りである
-column_indexes : List String -> List String -> <Fail (Int, String)> List Int
+column_indexes : List String -> List String -> <Fail (Int, String), Panic> List Int
 column_indexes header columns =
   List.map
     (fn name ->
@@ -129,7 +129,7 @@ column_indexes header columns =
         | None -> fail (2, "unknown column `\{name}`"))
     columns
 
-json_line : List String -> List Int -> Row -> String
+json_line : List String -> List Int -> Row -> <Panic> String
 json_line columns indexes row =
   let pick name i =
     match nth i row.fields with
@@ -147,7 +147,7 @@ zip xs ys =
   go Nil xs ys
 
 -- 最初の行をヘッダにし、残りの行を JSON Lines の文字列に変換する。状態は、ヘッダを読んだ後の列の位置と出力である
-convert : List String -> (Unit -> <Yield Row, Fail (Int, String) | e> Unit) -> <Fail (Int, String) | e> String
+convert : List String -> (Unit -> <Yield Row, Fail (Int, String) | e> Unit) -> <Fail (Int, String), Panic | e> String
 convert columns body =
   handle body () from (None, "") with
     | ctl yield row k (picked, out) ->
@@ -171,7 +171,7 @@ read_text path =
   Fs.close f
   text
 
-main : Unit -> <IO> Unit
+main : Unit -> <IO, Panic> Unit
 main () =
   match Env.args () with
     | ["--columns", names, source, target] ->

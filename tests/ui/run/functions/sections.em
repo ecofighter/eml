@@ -1,14 +1,14 @@
 -- Operator references and sections are lambdas; `(==)` compares by the type it is used at.
-apply : (Int -> Int) -> Int -> Int
+apply : (Int -> <Panic> Int) -> Int -> <Panic> Int
 apply f x = f x
 
-apply2 : (a -> a -> b) -> a -> a -> b
+apply2 : (a -> a -> <Panic> b) -> a -> a -> <Panic> b
 apply2 f x y = f x y
 
 check : (String -> Bool) -> String -> String
 check p s = if p s then "yes" else "no"
 
-main : Unit -> <IO> Unit
+main : Unit -> <IO, Panic> Unit
 main () =
   println (show (apply (+ 1) 41))
   println (show (apply (100 -) 1))

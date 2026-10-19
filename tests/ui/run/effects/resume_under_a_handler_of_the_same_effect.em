@@ -4,7 +4,7 @@
 effect L where
   op : Unit -> Int
 
-rigid : (Unit -> <e> Int) -> <L | e> Int
+rigid : (Unit -> <e> Int) -> <L, Panic | e> Int
 rigid h =
   handle op () with
     | ctl op () k ->
@@ -12,7 +12,7 @@ rigid h =
           | fn op () -> 100
     | return x -> x + op ()
 
-main : Unit -> <IO> Unit
+main : Unit -> <IO, Panic> Unit
 main () =
   let inferred = fn () ->
     handle op () with

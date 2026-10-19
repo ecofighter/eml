@@ -25,7 +25,7 @@ pick a b s = match (if a then None else if b then Some s else Some "x") with
   | None -> "none"
   | Some t -> "some " ++ t
 
-main : Unit -> <IO> Unit
+main : Unit -> <IO, Panic> Unit
 main () =
   println (describe (Some "v"))
   println (describe None)

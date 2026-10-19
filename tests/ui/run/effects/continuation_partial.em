@@ -5,7 +5,7 @@ effect Ask where
 later : (Int -> <e> Int) -> Int -> <e> Int
 later f s = f s
 
-main : Unit -> <IO> Unit
+main : Unit -> <IO, Panic> Unit
 main () =
   let r =
     handle ask () * 2 from 0 with

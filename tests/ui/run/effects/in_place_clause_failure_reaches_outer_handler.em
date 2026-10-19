@@ -5,15 +5,15 @@ import Fail (Fail(..))
 effect Ask where
   ask : Unit -> Int
 
-body : Unit -> <Ask> Result String Int
+body : Unit -> <Ask, Panic> Result String Int
 body () = Fail.to_result (fn () -> ask () + 1)
 
-handled : Unit -> <Fail String> Result String Int
+handled : Unit -> <Fail String, Panic> Result String Int
 handled () =
   handle body () with
     | fn ask () -> Fail.fail "from the clause"
 
-main : Unit -> <IO> Unit
+main : Unit -> <IO, Panic> Unit
 main () =
   match Fail.to_result handled with
     | Ok (Ok n) -> println "ok \{n}"

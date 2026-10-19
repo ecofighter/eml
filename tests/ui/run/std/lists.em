@@ -1,10 +1,10 @@
 -- List の関数 (docs/spec/stdlib.md)。効果のある関数は要素の順に呼ぶ
-logged : Int -> <IO> Int
+logged : Int -> <IO, Panic> Int
 logged x =
   println "visit \{x}"
   x * 10
 
-main : Unit -> <IO> Unit
+main : Unit -> <IO, Panic> Unit
 main () =
   let xs = [1, 2, 3, 4]
   println (show (List.map logged xs))

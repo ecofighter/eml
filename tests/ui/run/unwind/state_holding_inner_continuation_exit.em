@@ -2,7 +2,7 @@
 -- 指すので、evidence と状態は輪になる。巻き戻しが外側の handler を外すときに状態を取り出して手放し、輪を切る。
 data R =
   | Done Int
-  | Paused (Int -> R)
+  | Paused (Int -> <Panic> R)
 
 effect Ask where
   multi ask : Unit -> Int
@@ -10,17 +10,17 @@ effect Ask where
 effect Keep where
   stash : R -> Unit
 
-step : Unit -> R
+step : Unit -> <Panic> R
 step () =
   handle Done (ask () + 1) with
     | ctl ask () k -> Paused k
 
-body : Unit -> <Keep, IO> Int
+body : Unit -> <Keep, IO, Panic> Int
 body () =
   stash (step ())
   exit 3
 
-main : Unit -> <IO> Unit
+main : Unit -> <IO, Panic> Unit
 main () =
   let r =
     handle body () from Done 0 with

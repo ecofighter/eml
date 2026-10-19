@@ -104,7 +104,7 @@ fn a_row_variable_beside_io_is_var() {
 
 #[test]
 fn a_row_variable_of_the_definition_is_var() {
-    let text = "twice : (Unit -> <e> Int) -> <e> Int\ntwice f = f () + f ()";
+    let text = "twice : (Unit -> <e> Int) -> <Panic | e> Int\ntwice f = f () + f ()";
     insta::assert_snapshot!(bodies(text, "twice"), @"
     body Var(0)
     2:11#0 Never
@@ -116,7 +116,7 @@ fn a_row_variable_of_the_definition_is_var() {
 
 #[test]
 fn the_rows_of_a_reference_follow_the_signature_order() {
-    let text = "twice : (Unit -> <e> Int) -> <e> Int\ntwice f = f () + f ()\n\nmain : Unit -> <IO> Unit\nmain () = println (show (twice (fn () -> 1)))";
+    let text = "twice : (Unit -> <e> Int) -> <Panic | e> Int\ntwice f = f () + f ()\n\nmain : Unit -> <IO, Panic> Unit\nmain () = println (show (twice (fn () -> 1)))";
     insta::assert_snapshot!(rows(text, "main"), @"
     5:11 println []
     5:20 show []
@@ -136,7 +136,7 @@ fn a_reference_classifies_each_row_variable_against_the_enclosing_definition() {
 
 #[test]
 fn an_operation_row_variable_in_a_clause_always_yields() {
-    let text = "effect Run where\n  run : (Unit -> <e> Int) -> Int\n\nbody : Unit -> <Run> Int\nbody () = run (fn () -> 1)\n\nmain : Unit -> <IO> Unit\nmain () =\n  let r =\n    handle body () with\n      | ctl run f k ->\n        let g = fn () -> f () + 1\n        k 7\n  println (show r)";
+    let text = "effect Run where\n  run : (Unit -> <e> Int) -> Int\n\nbody : Unit -> <Run> Int\nbody () = run (fn () -> 1)\n\nmain : Unit -> <IO, Panic> Unit\nmain () =\n  let r =\n    handle body () with\n      | ctl run f k ->\n        let g = fn () -> f () + 1\n        k 7\n  println (show r)";
     // 節の中のラムダ g の row は操作の row 変数で、main の row 変数ではない
     insta::assert_snapshot!(bodies(text, "main"), @"
     body Never
@@ -153,7 +153,8 @@ fn an_operation_row_variable_in_a_clause_always_yields() {
 
 #[test]
 fn an_unresolved_row_variable_never_yields() {
-    let text = "main : Unit -> <IO> Unit\nmain () =\n  let h = fn f -> f 1 + 1\n  println \"x\"";
+    let text =
+        "main : Unit -> <IO, Panic> Unit\nmain () =\n  let h = fn f -> f 1 + 1\n  println \"x\"";
     insta::assert_snapshot!(bodies(text, "main"), @"
     body Never
     3:11 Never
@@ -193,7 +194,8 @@ fn the_second_row_variable_and_a_swapped_reference_keep_the_signature_order() {
 #[test]
 fn a_pure_local_function_in_an_io_body_never_yields() {
     // row を閉じるので、`<IO>` の本体の中でも純粋なローカル関数の本体は yield しない
-    let text = "main : Unit -> <IO> Unit\nmain () =\n  let inc x = x + 1\n  println (show (inc 1))";
+    let text =
+        "main : Unit -> <IO, Panic> Unit\nmain () =\n  let inc x = x + 1\n  println (show (inc 1))";
     insta::assert_snapshot!(bodies(text, "main"), @"
     body Never
     3:3 Never
@@ -205,14 +207,14 @@ fn a_pure_local_function_in_an_io_body_never_yields() {
     ");
 }
 
-const COUNT_TO: &str = "import Yield (Yield(..))\nimport State (State(..))\nimport List\n\ncount_to : Int -> Unit -> <Yield Int> Unit\ncount_to n () =\n  let go i =\n    if i > n then ()\n    else\n      yield i\n      go (i + 1)\n  go 1\n\n";
+const COUNT_TO: &str = "import Yield (Yield(..))\nimport State (State(..))\nimport List\n\ncount_to : Int -> Unit -> <Yield Int, Panic> Unit\ncount_to n () =\n  let go i =\n    if i > n then ()\n    else\n      yield i\n      go (i + 1)\n  go 1\n\n";
 
 #[test]
 fn a_pure_callback_under_state_does_not_make_fold_yield() {
     // `fold` の row は純粋なラムダからしかエフェクトを受けないので、外側の `State` を受けずに `<>` に閉じる
     // (docs/spec/types.md の「推論」)
     let text = format!(
-        "{COUNT_TO}main : Unit -> <IO> Unit\nmain () =\n  let (t, _) = State.run 0 (fn () -> Yield.fold (fn acc x -> acc + x) 0 (count_to 10))\n  println (show t)"
+        "{COUNT_TO}main : Unit -> <IO, Panic> Unit\nmain () =\n  let (t, _) = State.run 0 (fn () -> Yield.fold (fn acc x -> acc + x) 0 (count_to 10))\n  println (show t)"
     );
     let rows = rows(&text, "main");
     assert!(
@@ -225,7 +227,7 @@ fn a_pure_callback_under_state_does_not_make_fold_yield() {
 fn a_callee_row_shared_with_a_rigid_producer_stays_var() {
     // `fold` の row は生産者 `p` の row の rigid な `e` と同じ変数なので、閉じずにシグネチャの `e` になる
     let text = format!(
-        "{COUNT_TO}sum : (Unit -> <Yield Int | e> Unit) -> <e> Int\nsum p = Yield.fold (fn acc x -> acc + x) 0 p"
+        "{COUNT_TO}sum : (Unit -> <Yield Int, Panic | e> Unit) -> <Panic | e> Int\nsum p = Yield.fold (fn acc x -> acc + x) 0 p"
     );
     let rows = rows(&text, "sum");
     assert!(rows.contains("fold [Var(0)]"), "{rows}");
@@ -236,7 +238,7 @@ fn a_lambda_shared_by_two_generic_calls_stays_pure() {
     // `g` の row は `map` の row と単一化され、`filter` に渡すラムダの中の呼び出しで `filter` の row に含まれる。どちらも
     // 外側の `State` を受けない
     let text = format!(
-        "{COUNT_TO}f : List Int -> <State Int> Int\nf xs =\n  let g = fn x -> x + 1\n  List.length (List.map g xs) + List.length (List.filter (fn y -> g y > 0) xs)"
+        "{COUNT_TO}f : List Int -> <State Int, Panic> Int\nf xs =\n  let g = fn x -> x + 1\n  List.length (List.map g xs) + List.length (List.filter (fn y -> g y > 0) xs)"
     );
     let rows = rows(&text, "f");
     for name in ["map", "filter"] {

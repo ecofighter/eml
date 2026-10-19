@@ -3,15 +3,15 @@
 import Counter (Counter(..))
 import State
 
-count : Unit -> <Counter> Int
+count : Unit -> <Counter, Panic> Int
 count () = tick () + tick ()
 
-bump : Unit -> <State.State Int> Int
+bump : Unit -> <State.State Int, Panic> Int
 bump () =
   State.put (State.get () + 1)
   State.get ()
 
-main : Unit -> <IO> Unit
+main : Unit -> <IO, Panic> Unit
 main () =
   let n =
     handle count () with

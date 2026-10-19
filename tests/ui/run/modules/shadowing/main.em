@@ -2,7 +2,7 @@
 -- reach the hidden definitions.
 import Util (twice)
 
-twice : Int -> Int
+twice : Int -> <Panic> Int
 twice n = n + n + n
 
 not : Bool -> Bool
@@ -11,7 +11,7 @@ not b = b
 show_bool : Bool -> String
 show_bool b = if b then "True" else "False"
 
-main : Unit -> <IO> Unit
+main : Unit -> <IO, Panic> Unit
 main () =
   println (show (twice 5))
   println (show (Util.twice 5))

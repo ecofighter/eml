@@ -20,7 +20,7 @@ stages : List String
 stages = ["build", "test", "package", "upload"]
 
 -- 設定の1行を読む。空の行と `#` で始まる行は飛ばす
-parse_line : Config -> Int -> String -> Result String Config
+parse_line : Config -> Int -> String -> <Panic> Result String Config
 parse_line config number line =
   if line == "" || String.starts_with "#" line then Ok config
   else
@@ -35,7 +35,7 @@ parse_line config number line =
           Ok { config | steps = (key, value) :: config.steps }
         else Err "line \{number}: unknown key `\{key}`"
 
-parse_config : String -> String -> Result String Config
+parse_config : String -> String -> <Panic> Result String Config
 parse_config path text =
   let go config number lines =
     match lines with
@@ -81,12 +81,12 @@ pipeline config =
   use step "upload" (command_of config "upload")
   Done
 
-real_run : (Unit -> <Run, IO | e> a) -> <IO | e> a
+real_run : (Unit -> <Run, IO | e> a) -> <IO, Panic | e> a
 real_run body =
   handle body () with
     | ctl run cmd k -> k (try_io (fn () -> Proc.run "sh" ["-c", cmd]))
 
-dry_run : (Unit -> <Run, IO | e> a) -> <IO | e> a
+dry_run : (Unit -> <Run, IO | e> a) -> <IO, Panic | e> a
 dry_run body =
   handle body () with
     | ctl run _ k -> k (Ok 0)
@@ -115,7 +115,7 @@ read_text path =
   Fs.close f
   text
 
-deploy : Bool -> Config -> <IO> Unit
+deploy : Bool -> Config -> <IO, Panic> Unit
 deploy dry config =
   println "deploy \{config.name}"
   let runner = if dry then dry_run else real_run
@@ -137,7 +137,7 @@ deploy dry config =
     | Failed _ code -> exit code
     | Broken _ -> exit 2
 
-main : Unit -> <IO> Unit
+main : Unit -> <IO, Panic> Unit
 main () =
   let (dry, args) = match Env.args () with
     | "--dry-run" :: rest -> (True, rest)

@@ -18,9 +18,10 @@ pub enum Linearity {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Purity {
     Pure,
-    /// 実行時エラーで止まりうる (整数のオーバーフローとゼロ除算)。
-    MayFail,
-    /// extern のエフェクトを起こす。どのエフェクトかは宣言の型から読む。
+    /// `Panic` を起こしうる (整数の桁あふれとゼロ除算、文字列の範囲外の添字、利用者の `panic`)。
+    Panics,
+    /// `IO` を起こす。`Std.Env.arg` のように、`Panic` も起こしうる行がある。どのエフェクトかは宣言の型から読む
+    /// (docs/spec/effects.md の「組み込みの `Panic`」)。
     Effectful,
 }
 
@@ -133,11 +134,13 @@ impl ExternType {
     }
 }
 
-/// extern のエフェクト。`Effectful` の extern の関数が起こす。`IO` の隠れた `never` の操作 `io_failed` は Prelude の
-/// 宣言が持ち、Prelude の `try_io` だけが handle する。表の行は名前だけを持つ (docs/spec/effects.md の「組み込みの `IO`」)。
+/// extern のエフェクト。`IO` は `Effectful` の extern の関数が起こし、`Panic` は `Panics` の行と `Std.Env.arg` が起こす。
+/// どちらも隠れた `never` の操作 (`io_failed`、`panicked`) を Prelude の宣言が持ち、Prelude の `try_io`、`try_panic`
+/// だけが handle する。表の行は名前だけを持つ (docs/spec/effects.md の「組み込みの `IO`」「組み込みの `Panic`」)。
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum ExternEffect {
     Io,
+    Panic,
 }
 
 pub struct EffectRow {
@@ -145,11 +148,14 @@ pub struct EffectRow {
 }
 
 impl ExternEffect {
-    pub const ALL: &[ExternEffect] = &[ExternEffect::Io];
+    pub const ALL: &[ExternEffect] = &[ExternEffect::Io, ExternEffect::Panic];
 
     pub fn row(self) -> EffectRow {
         match self {
             ExternEffect::Io => EffectRow { name: "Prelude.IO" },
+            ExternEffect::Panic => EffectRow {
+                name: "Prelude.Panic",
+            },
         }
     }
 
@@ -200,6 +206,7 @@ pub enum Extern {
     WriteText,
     ProcStatus,
     Exit,
+    Panic,
 }
 
 pub struct FunctionRow {
@@ -260,6 +267,7 @@ impl Extern {
         Extern::WriteText,
         Extern::ProcStatus,
         Extern::Exit,
+        Extern::Panic,
     ];
 
     pub fn row(self) -> FunctionRow {
@@ -314,12 +322,12 @@ impl Extern {
             ),
             Extern::Close => kinded("Std.Fs.close", &[Obj], &[Lin], Unit, Unr, Purity::Effectful),
             Extern::IntShow => row("Prelude.Show Int.show", &[Int], Obj, Purity::Pure),
-            Extern::IntNeg => row("Prelude.negate", &[Int], Int, Purity::MayFail),
-            Extern::IntAdd => row("Prelude.+", &[Int, Int], Int, Purity::MayFail),
-            Extern::IntSub => row("Prelude.-", &[Int, Int], Int, Purity::MayFail),
-            Extern::IntMul => row("Prelude.*", &[Int, Int], Int, Purity::MayFail),
-            Extern::IntDiv => row("Prelude./", &[Int, Int], Int, Purity::MayFail),
-            Extern::IntMod => row("Prelude.%", &[Int, Int], Int, Purity::MayFail),
+            Extern::IntNeg => row("Prelude.negate", &[Int], Int, Purity::Panics),
+            Extern::IntAdd => row("Prelude.+", &[Int, Int], Int, Purity::Panics),
+            Extern::IntSub => row("Prelude.-", &[Int, Int], Int, Purity::Panics),
+            Extern::IntMul => row("Prelude.*", &[Int, Int], Int, Purity::Panics),
+            Extern::IntDiv => row("Prelude./", &[Int, Int], Int, Purity::Panics),
+            Extern::IntMod => row("Prelude.%", &[Int, Int], Int, Purity::Panics),
             Extern::IntEq => row("Prelude.Eq Int.==", &[Int, Int], Enum, Purity::Pure),
             Extern::IntNe => row("Prelude.Eq Int.!=", &[Int, Int], Enum, Purity::Pure),
             Extern::IntCompare => row("Prelude.Ord Int.compare", &[Int, Int], Enum, Purity::Pure),
@@ -341,13 +349,13 @@ impl Extern {
             Extern::BoolNe => row("Prelude.Eq Bool.!=", &[Enum, Enum], Enum, Purity::Pure),
             Extern::Eprintln => row("Prelude.eprintln", &[Obj], Unit, Purity::Effectful),
             Extern::StrByteLength => row("Std.String.byte_length", &[Obj], Int, Purity::Pure),
-            Extern::StrByteAt => row("Std.String.byte_at", &[Int, Obj], Int, Purity::MayFail),
-            Extern::StrSlice => row("Std.String.slice", &[Int, Int, Obj], Obj, Purity::MayFail),
+            Extern::StrByteAt => row("Std.String.byte_at", &[Int, Obj], Int, Purity::Panics),
+            Extern::StrSlice => row("Std.String.slice", &[Int, Int, Obj], Obj, Purity::Panics),
             Extern::StrFindFrom => row(
                 "Std.String.find_from",
                 &[Obj, Int, Obj],
                 Int,
-                Purity::MayFail,
+                Purity::Panics,
             ),
             Extern::EnvArgCount => row("Std.Env.arg_count", &[Unit], Int, Purity::Effectful),
             Extern::EnvArg => row("Std.Env.arg", &[Int], Obj, Purity::Effectful),
@@ -367,6 +375,16 @@ impl Extern {
                 param_kinds: &[Linearity::Unr],
                 ret_kind: Linearity::Unr,
                 purity: Purity::Effectful,
+            },
+            // `exit` と同じく VM が自分で実行し、文字列を `Panic` の `panicked` の節に渡す
+            // (docs/spec/vm.md の「IO の失敗と `exit`」)
+            Extern::Panic => FunctionRow {
+                name: "Prelude.panic",
+                params: &[Repr::Obj],
+                ret: OpRet::Never,
+                param_kinds: &[Linearity::Unr],
+                ret_kind: Linearity::Unr,
+                purity: Purity::Panics,
             },
         }
     }

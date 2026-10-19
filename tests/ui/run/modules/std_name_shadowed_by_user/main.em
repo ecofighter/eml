@@ -2,7 +2,7 @@
 -- (docs/spec/modules.md)。
 import Iter (next)
 
-main : Unit -> <IO> Unit
+main : Unit -> <IO, Panic> Unit
 main () =
   println (show (Iter.next 1))
   println (show (next 2))

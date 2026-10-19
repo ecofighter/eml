@@ -8,7 +8,7 @@ traced label value =
   println label
   value
 
-main : Unit -> <IO> Unit
+main : Unit -> <IO, Panic> Unit
 main () =
   let p = Person { name = "ann", age = 30, city = "oslo" }
   let older = { p | age = p.age + 1 }

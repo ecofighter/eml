@@ -3,12 +3,12 @@
 effect Fail where
   never fail : String -> a
 
-run : (Unit -> <e> Int) -> <Fail | e> Int
+run : (Unit -> <e> Int) -> <Fail, Panic | e> Int
 run cb =
   let x = cb ()
   if x == 0 then fail "inner" else x + 1
 
-main : Unit -> <IO> Unit
+main : Unit -> <IO, Panic> Unit
 main () =
   let r = handle (handle run (fn () -> fail "outer") with
                     | ctl fail s -> "inner handler caught \{s}"

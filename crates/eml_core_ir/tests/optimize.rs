@@ -8,7 +8,7 @@ use crate::common::{core_text, function};
 /// 1階のプログラムは、小さな `main` が入口に展開されるほかは変わらない。
 #[test]
 fn optimize_keeps_a_first_order_program() {
-    let text = "main : Unit -> <IO> Unit\nmain () = println (show (1 + 2))";
+    let text = "main : Unit -> <IO, Panic> Unit\nmain () = println (show (1 + 2))";
     let body = |shown: &str, name: &str| {
         let code = function(shown, name);
         code.lines().skip(1).collect::<Vec<_>>().join("\n")
@@ -47,8 +47,7 @@ fn entry$main() -> int {
 
 #[test]
 fn a_known_lambda_is_called_directly() {
-    let text =
-        "main : Unit -> <IO> Unit\nmain () =\n  let f = fn x -> x + 1\n  println (show (f 2))";
+    let text = "main : Unit -> <IO, Panic> Unit\nmain () =\n  let f = fn x -> x + 1\n  println (show (f 2))";
     insta::assert_snapshot!(function(&core_text(text, Pass::Optimize), "entry$main"), @r#"
     fn entry$main() -> unit {
       let t.1: int = extern Prelude.+(2, 1)
@@ -61,7 +60,7 @@ fn a_known_lambda_is_called_directly() {
 
 #[test]
 fn a_partial_application_is_called_directly() {
-    let text = "add : Int -> Int -> Int\nadd x y = x + y\n\nmain : Unit -> <IO> Unit\nmain () =\n  let g = add 1\n  println (show (g 2))";
+    let text = "add : Int -> Int -> <Panic> Int\nadd x y = x + y\n\nmain : Unit -> <IO, Panic> Unit\nmain () =\n  let g = add 1\n  println (show (g 2))";
     insta::assert_snapshot!(function(&core_text(text, Pass::Optimize), "entry$main"), @r#"
     fn entry$main() -> unit {
       let t.1: int = extern Prelude.+(1, 2)
@@ -74,7 +73,7 @@ fn a_partial_application_is_called_directly() {
 
 #[test]
 fn an_under_saturated_known_apply_builds_a_closure() {
-    let text = "add3 : Int -> Int -> Int -> Int\nadd3 x y z = x + y + z\n\nmain : Unit -> <IO> Unit\nmain () =\n  let g = add3 1\n  let h = g 2\n  println (show (h 3))";
+    let text = "add3 : Int -> Int -> Int -> <Panic> Int\nadd3 x y z = x + y + z\n\nmain : Unit -> <IO, Panic> Unit\nmain () =\n  let g = add3 1\n  let h = g 2\n  println (show (h 3))";
     insta::assert_snapshot!(function(&core_text(text, Pass::Optimize), "entry$main"), @r#"
     fn entry$main() -> unit {
       let t.1: int = extern Prelude.+(1, 2)
@@ -89,7 +88,7 @@ fn an_under_saturated_known_apply_builds_a_closure() {
 #[test]
 fn yield_as_a_value_becomes_a_perform() {
     let text = format!(
-        "import Yield (Yield(..))\n\nproduce : Unit -> <Yield Int> Unit\nproduce () =\n  let y = yield\n  y 1\n{HIDE}\nmain : Unit -> <IO> Unit\nmain () =\n  match hide 0 produce with\n    | Box p -> println (show (Yield.collect p))"
+        "import Yield (Yield(..))\n\nproduce : Unit -> <Yield Int> Unit\nproduce () =\n  let y = yield\n  y 1\n{HIDE}\nmain : Unit -> <IO, Panic> Unit\nmain () =\n  match hide 0 produce with\n    | Box p -> println (show (Yield.collect p))"
     );
     let shown = core_text(&text, Pass::Optimize);
     assert!(!shown.contains("call op$"), "{shown}");
@@ -132,7 +131,7 @@ main () =
 #[test]
 fn a_constructor_value_becomes_a_con() {
     // `con` を `hide` に渡し、既知のコンストラクタの規則で解けないようにする
-    let text = "data Pair = | Pair Int Int\n\nfirst : Pair -> Int\nfirst (Pair a _) = a\n{HIDE}\nmain : Unit -> <IO> Unit\nmain () =\n  let p = Pair 1\n  match hide 0 (p 2) with\n    | Box q -> println (show (first q))";
+    let text = "data Pair = | Pair Int Int\n\nfirst : Pair -> Int\nfirst (Pair a _) = a\n{HIDE}\nmain : Unit -> <IO, Panic> Unit\nmain () =\n  let p = Pair 1\n  match hide 0 (p 2) with\n    | Box q -> println (show (first q))";
     let text = text.replace("{HIDE}", HIDE);
     let text = text.as_str();
     insta::assert_snapshot!(function(&core_text(text, Pass::Optimize), "entry$main"), @r#"
@@ -151,7 +150,7 @@ fn a_constructor_value_becomes_a_con() {
 #[test]
 fn a_caller_without_yield_points_stops_yielding() {
     // `f` は自分を呼ぶので展開されず、印を付け直した関数として残る
-    let text = "import State (State(..))\n\nf : Int -> <State Int> Int\nf n =\n  let g = fn x -> x + n\n  if n == 0 then g 1 else f (n - 1)\n\nmain : Unit -> <IO> Unit\nmain () =\n  let (r, _) = State.run 0 (fn () -> f 2)\n  println (show r)";
+    let text = "import State (State(..))\n\nf : Int -> <State Int, Panic> Int\nf n =\n  let g = fn x -> x + n\n  if n == 0 then g 1 else f (n - 1)\n\nmain : Unit -> <IO, Panic> Unit\nmain () =\n  let (r, _) = State.run 0 (fn () -> f 2)\n  println (show r)";
     let yields = |pass| {
         let program = eml_test_support::core_until(text, pass);
         let f = program
@@ -169,10 +168,10 @@ fn a_caller_without_yield_points_stops_yielding() {
 fn an_over_saturated_known_apply_calls_then_applies_the_rest() {
     // `adder` は自分を呼ぶので展開されず、呼び出しが返す閉包は呼ぶ側から見えない
     let text = "\
-adder : Int -> Int -> (Int -> Int)
+adder : Int -> Int -> <Panic> (Int -> <Panic> Int)
 adder n x = if n <= 0 then (fn y -> x + y) else adder (n - 1) x
 
-main : Unit -> <IO> Unit
+main : Unit -> <IO, Panic> Unit
 main () =
   let f = adder 0
   println (show (f 1 2))
@@ -192,7 +191,7 @@ main () =
 /// 作らないためである。
 #[test]
 fn a_closure_whose_applies_are_all_rewritten_is_dropped() {
-    let text = "add : Int -> Int -> Int\nadd x y = x + y\n\nmain : Unit -> <IO> Unit\nmain () =\n  let g = add 1\n  println (show (g 2))";
+    let text = "add : Int -> Int -> <Panic> Int\nadd x y = x + y\n\nmain : Unit -> <IO, Panic> Unit\nmain () =\n  let g = add 1\n  println (show (g 2))";
     let shown = core_text(text, Pass::Optimize);
     assert!(!shown.contains("closure add("), "{shown}");
     let lir = eml_test_support::lir(text);
@@ -210,7 +209,7 @@ fn a_closure_whose_applies_are_all_rewritten_is_dropped() {
 const HIDE: &str = "
 data Box a = | Box a
 
-hide : Int -> a -> Box a
+hide : Int -> a -> <Panic> Box a
 hide n x = if n <= 0 then Box x else hide (n - 1) x
 ";
 
@@ -225,8 +224,7 @@ fn names(text: &str, pass: Pass) -> Vec<String> {
 
 #[test]
 fn map_is_copied_for_a_known_lambda() {
-    let text =
-        "main : Unit -> <IO> Unit\nmain () = println (show (List.map (fn x -> x * 2) [1, 2, 3]))";
+    let text = "main : Unit -> <IO, Panic> Unit\nmain () = println (show (List.map (fn x -> x * 2) [1, 2, 3]))";
     let shown = core_text(text, Pass::Optimize);
     let go = function(&shown, "Std.List.map@[Int, Int]$let$go{0=main$lambda0}");
     assert!(!go.contains("apply"), "{go}");
@@ -259,7 +257,7 @@ import Yield (Yield(..))
 emit : List String -> Unit -> <Yield String> Unit
 emit lines () = List.each yield lines
 {HIDE}
-main : Unit -> <IO> Unit
+main : Unit -> <IO, Panic> Unit
 main () =
   match hide 0 (emit [\"a\"]) with
     | Box p -> println (show (Yield.collect p))
@@ -302,7 +300,7 @@ fn a_recursive_call_reuses_the_copy() {
 
 #[test]
 fn captures_become_parameters() {
-    let text = "main : Unit -> <IO> Unit\nmain () =\n  let k = 3\n  println (show (List.map (fn x -> x * k) [1, 2, 3]))";
+    let text = "main : Unit -> <IO, Panic> Unit\nmain () =\n  let k = 3\n  println (show (List.map (fn x -> x * k) [1, 2, 3]))";
     let shown = core_text(text, Pass::Optimize);
     assert!(!shown.contains("closure"), "{shown}");
     insta::assert_snapshot!(format!(
@@ -347,7 +345,7 @@ fn captures_become_parameters() {
 #[test]
 fn a_closure_captured_by_a_closure_is_specialized() {
     let text = format!(
-        "{HIDE}\nmain : Unit -> <IO> Unit\nmain () =\n  let Box it = hide 0 (Iter.from_list [1, 2, 3])\n  let Box mapped = hide 0 (Iter.map (fn x -> x + 1) it)\n  println (show (Iter.to_list mapped))"
+        "{HIDE}\nmain : Unit -> <IO, Panic> Unit\nmain () =\n  let Box it = hide 0 (Iter.from_list [1, 2, 3])\n  let Box mapped = hide 0 (Iter.map (fn x -> x + 1) it)\n  println (show (Iter.to_list mapped))"
     );
     let shown = core_text(&text, Pass::Optimize);
     insta::assert_snapshot!(function(&shown, "Std.Iter.map@[Int, Int]$lambda0{0=main$lambda0}"), @r#"
@@ -379,12 +377,12 @@ import Yield (Yield(..))
 emit : Int -> <Yield Int> Unit
 emit x = yield x
 
-nums : Int -> Unit -> <Yield Int> Unit
+nums : Int -> Unit -> <Yield Int, Panic> Unit
 nums n () =
   emit n
   emit (n + 1)
 
-main : Unit -> <IO> Unit
+main : Unit -> <IO, Panic> Unit
 main () = println (show (Iter.to_list (Iter.generate (nums 3))))
 ";
     let program = eml_test_support::core_until(text, Pass::Optimize);
@@ -410,10 +408,10 @@ main () = println (show (Iter.to_list (Iter.generate (nums 3))))
 #[test]
 fn a_closure_only_stored_in_data_is_not_specialized() {
     let text = "\
-wrap : Int -> (Int -> Int) -> Option (Int -> Int)
+wrap : Int -> (Int -> <Panic> Int) -> <Panic> Option (Int -> <Panic> Int)
 wrap n f = if n <= 0 then Some f else wrap (n - 1) (fn x -> x)
 
-main : Unit -> <IO> Unit
+main : Unit -> <IO, Panic> Unit
 main () =
   match wrap 0 (fn x -> x + 1) with
     | Some g -> println (show (g 1))
@@ -443,9 +441,8 @@ main () =
 /// 複製の名前とコードは鍵だけで決まり、ほかの関数の有無や作った順によらない (docs/spec/vm.md の「追記」)。
 #[test]
 fn a_copy_does_not_depend_on_the_rest_of_the_program() {
-    let a =
-        "main : Unit -> <IO> Unit\nmain () =\n  println (show (List.map (fn x -> x + 1) [1, 2]))";
-    let b = "other : List Int -> List Int\nother ys = List.map (fn y -> y * 2) ys\n\nmain : Unit -> <IO> Unit\nmain () =\n  println (show (List.map (fn x -> x + 1) [1, 2]))\n  println (show (other [3]))";
+    let a = "main : Unit -> <IO, Panic> Unit\nmain () =\n  println (show (List.map (fn x -> x + 1) [1, 2]))";
+    let b = "other : List Int -> <Panic> List Int\nother ys = List.map (fn y -> y * 2) ys\n\nmain : Unit -> <IO, Panic> Unit\nmain () =\n  println (show (List.map (fn x -> x + 1) [1, 2]))\n  println (show (other [3]))";
     let name = "Std.List.map@[Int, Int]$let$go{0=main$lambda0}";
     assert_eq!(
         function(&core_text(a, Pass::Optimize), name),
@@ -460,15 +457,15 @@ fn two_handler_copies_keep_their_own_clauses() {
         "\
 import Yield (Yield(..))
 
-nums : Int -> Unit -> <Yield Int> Unit
+nums : Int -> Unit -> <Yield Int, Panic> Unit
 nums n () =
   yield n
   yield (n + 1)
 
-other : Int -> Unit -> <Yield Int> Unit
+other : Int -> Unit -> <Yield Int, Panic> Unit
 other n () = yield (n * 10)
 {HIDE}
-main : Unit -> <IO> Unit
+main : Unit -> <IO, Panic> Unit
 main () =
   match hide 0 (nums 3) with
     | Box p -> Yield.for_each p (fn x -> println \"\\{{x}}\")
@@ -531,12 +528,12 @@ fn a_clause_copy_in_a_translated_function_is_internal() {
         "\
 import Yield (Yield(..))
 
-nums : Unit -> <Yield Int> Unit
+nums : Unit -> <Yield Int, Panic> Unit
 nums () =
   yield 1
   yield 2
 {HIDE}
-main : Unit -> <IO> Unit
+main : Unit -> <IO, Panic> Unit
 main () =
   let f = fn x -> x + 1
   match hide 0 nums with
@@ -567,16 +564,16 @@ main () =
 #[test]
 fn closures_with_different_capture_counts_get_different_copies() {
     let text = "\
-apply_to : (Int -> Int) -> Int -> Int
+apply_to : (Int -> <Panic> Int) -> Int -> <Panic> Int
 apply_to f x = if x > 9 then apply_to f (x - 1) else f x
 
-add3 : Int -> Int -> Int -> Int
+add3 : Int -> Int -> Int -> <Panic> Int
 add3 a b c = a + b + c
 
-pick : (Int -> Int -> Int) -> Int -> Int
+pick : (Int -> Int -> <Panic> Int) -> Int -> <Panic> Int
 pick g n = if n > 0 then pick g (n - 1) else g 1 2
 
-main : Unit -> <IO> Unit
+main : Unit -> <IO, Panic> Unit
 main () =
   println (show (apply_to (add3 1 2) 3))
   println (show (pick (add3 1) 0))
@@ -594,15 +591,15 @@ data Nested a =
   | Flat a
   | Nest (Nested (List a))
 
-map_nested : (a -> b) -> Nested a -> Nested b
+map_nested : (a -> <Panic> b) -> Nested a -> <Panic> Nested b
 map_nested f n = match n with
   | Flat x -> Flat (f x)
   | Nest inner -> Nest (map_nested (List.map f) inner)
 
-add3 : Int -> Int -> Int -> Int
+add3 : Int -> Int -> Int -> <Panic> Int
 add3 a b c = a + b + c
 
-main : Unit -> <IO> Unit
+main : Unit -> <IO, Panic> Unit
 main () =
   let r1 = map_nested (add3 1 2) (Flat 10)
   let r2 = map_nested (add3 1) (Flat 10)
@@ -635,7 +632,7 @@ fn handler_copies(shown: &str) -> String {
 const NUMS: &str = "\
 import Yield (Yield(..))
 
-nums : Int -> Unit -> <Yield Int> Unit
+nums : Int -> Unit -> <Yield Int, Panic> Unit
 nums n () =
   let go i =
     if i > n then ()
@@ -665,7 +662,7 @@ fn push_fold_has_no_handle_left() {
 #[test]
 fn for_each_is_specialized() {
     let text = format!(
-        "{NUMS}\nmain : Unit -> <IO> Unit\nmain () = Yield.for_each (nums 3) (fn x -> println \"\\{{x}}\")\n"
+        "{NUMS}\nmain : Unit -> <IO, Panic> Unit\nmain () = Yield.for_each (nums 3) (fn x -> println \"\\{{x}}\")\n"
     );
     let shown = core_text(&text, Pass::Optimize);
     assert!(!shown.contains("handle "), "{shown}");
@@ -701,14 +698,14 @@ fn a_stateful_handler_threads_its_state() {
     let text = "\
 import Std.State (State(..))
 
-count : Int -> <State Int> Unit
+count : Int -> <State Int, Panic> Unit
 count n =
   if n == 0 then ()
   else
     put (get () + 1)
     count (n - 1)
 
-main : Unit -> <IO> Unit
+main : Unit -> <IO, Panic> Unit
 main () =
   let (_, st) = State.run 0 (fn () -> count 5)
   println (show st)
@@ -754,17 +751,17 @@ fn a_non_tail_yielding_frame_keeps_the_handle() {
         "\
 import Yield (Yield(..))
 
-emit2 : Int -> <Yield Int> Unit
+emit2 : Int -> <Yield Int, Panic> Unit
 emit2 i =
   yield i
   yield (i + 1)
 
-nums : Unit -> <Yield Int> Unit
+nums : Unit -> <Yield Int, Panic> Unit
 nums () =
   emit2 1
   emit2 3
 
-main : Unit -> <IO> Unit
+main : Unit -> <IO, Panic> Unit
 main () = Yield.for_each nums (fn x -> println \"\\{x}\")
 ",
     );
@@ -793,13 +790,13 @@ fn a_nested_handle_keeps_the_handle() {
     let text = "\
 import Yield (Yield(..))
 
-nums : Unit -> <Yield Int> Unit
+nums : Unit -> <Yield Int, Panic> Unit
 nums () =
   yield 1
   handle (yield 2) with
     | fn yield x -> yield (x + 1)
 
-main : Unit -> <IO> Unit
+main : Unit -> <IO, Panic> Unit
 main () = Yield.for_each nums (fn x -> println \"\\{x}\")
 ";
     let shown = core_text(text, Pass::Optimize);
@@ -817,10 +814,10 @@ fn an_unknown_producer_keeps_the_handle() {
         "{NUMS}
 data Box a = | Box a
 
-hide : Int -> a -> Box a
+hide : Int -> a -> <Panic> Box a
 hide n x = if n <= 0 then Box x else hide (n - 1) x
 
-main : Unit -> <IO> Unit
+main : Unit -> <IO, Panic> Unit
 main () =
   match hide 0 (nums 3) with
     | Box p -> Yield.for_each p (fn x -> println \"\\{{x}}\")
@@ -852,16 +849,16 @@ main () =
 #[test]
 fn handler_copies_do_not_depend_on_the_rest_of_the_program() {
     let a = format!(
-        "{NUMS}\nmain : Unit -> <IO> Unit\nmain () = println (show (Yield.fold (fn acc x -> acc + x) 0 (nums 3)))\n"
+        "{NUMS}\nmain : Unit -> <IO, Panic> Unit\nmain () = println (show (Yield.fold (fn acc x -> acc + x) 0 (nums 3)))\n"
     );
     let b = format!(
         "{NUMS}
-other : Int -> Unit -> <Yield Int> Unit
+other : Int -> Unit -> <Yield Int, Panic> Unit
 other n () =
   yield n
   yield (n * 2)
 
-main : Unit -> <IO> Unit
+main : Unit -> <IO, Panic> Unit
 main () =
   println (show (Yield.fold (fn acc x -> acc + x) 0 (nums 3)))
   println (show (Yield.fold (fn acc x -> acc * x) 1 (other 4)))
@@ -910,7 +907,7 @@ picks () =
   pick A
   pick (B 3)
 
-main : Unit -> <IO> Unit
+main : Unit -> <IO, Panic> Unit
 main () =
   handle picks () with
     | fn pick t -> match t with
@@ -946,7 +943,7 @@ main () =
 fn iter_generate_has_no_yield_left() {
     let text = format!(
         "{NUMS}{HIDE}
-main : Unit -> <IO> Unit
+main : Unit -> <IO, Panic> Unit
 main () =
   let Box it = hide 0 (Iter.generate (nums 100000))
   println \"\\{{Iter.fold (fn acc x -> acc + x) 0 it}}\"
@@ -974,7 +971,7 @@ main () =
 #[test]
 fn a_continuation_captures_its_live_variables() {
     let text = format!(
-        "{NUMS}{HIDE}\nmain : Unit -> <IO> Unit\nmain () =\n  let Box it = hide 0 (Iter.generate (nums 3))\n  println (show (Iter.to_list it))\n"
+        "{NUMS}{HIDE}\nmain : Unit -> <IO, Panic> Unit\nmain () =\n  let Box it = hide 0 (Iter.generate (nums 3))\n  println (show (Iter.to_list it))\n"
     );
     let shown = core_text(&text, Pass::Optimize);
     let name = shown
@@ -1014,13 +1011,13 @@ fn a_helper_that_performs_a_never_operation_keeps_the_handle() {
 check : Int -> <Walk> Int
 check i = if i == 3 then stop () else i
 
-walk : Int -> <Walk> Unit
+walk : Int -> <Walk, Panic> Unit
 walk i =
   let j = check i
   step j
   walk (i + 1)
 
-main : Unit -> <IO> Unit
+main : Unit -> <IO, Panic> Unit
 main () =
   handle walk 1 with
     | fn step n -> println (show n)
@@ -1037,14 +1034,14 @@ main () =
 fn a_never_operation_calls_its_clause() {
     let text = format!(
         "{WALK}
-walk : Int -> <Walk> Unit
+walk : Int -> <Walk, Panic> Unit
 walk i =
   if i == 3 then stop ()
   else
     step i
     walk (i + 1)
 
-main : Unit -> <IO> Unit
+main : Unit -> <IO, Panic> Unit
 main () =
   handle walk 1 with
     | fn step n -> println (show n)
@@ -1066,7 +1063,7 @@ fn continuations_across_join_blocks_stay_linear_in_size() {
             .map(|i| format!("  if n > {i} then yield {i} else ()\n"))
             .collect();
         let text = format!(
-            "import Yield (Yield(..))\n\ngen : Int -> Unit -> <Yield Int> Unit\ngen n () =\n{lines}  ()\n\nmain : Unit -> <IO> Unit\nmain () = println (show (Yield.fold (fn a b -> a + b) 0 (gen 7)))\n"
+            "import Yield (Yield(..))\n\ngen : Int -> Unit -> <Yield Int> Unit\ngen n () =\n{lines}  ()\n\nmain : Unit -> <IO, Panic> Unit\nmain () = println (show (Yield.fold (fn a b -> a + b) 0 (gen 7)))\n"
         );
         let shown = core_text(&text, Pass::Optimize);
         assert!(!shown.contains("handle "), "{shown}");
@@ -1083,8 +1080,7 @@ fn continuations_across_join_blocks_stay_linear_in_size() {
 /// (docs/spec/core-ir.md の「インライン化」)。
 #[test]
 fn a_known_lambda_is_inlined_into_its_copy() {
-    let text =
-        "main : Unit -> <IO> Unit\nmain () = println (show (List.map (fn x -> x * 2) [1, 2, 3]))";
+    let text = "main : Unit -> <IO, Panic> Unit\nmain () = println (show (List.map (fn x -> x * 2) [1, 2, 3]))";
     let shown = core_text(text, Pass::Optimize);
     let go = function(&shown, "Std.List.map@[Int, Int]$let$go{0=main$lambda0}");
     assert!(!go.contains("main$lambda0("), "{go}");
@@ -1115,13 +1111,13 @@ fn calls(shown: &str, name: &str) -> bool {
 #[test]
 fn pipe_operators_are_inlined() {
     let text = "\
-inc : Int -> Int
+inc : Int -> <Panic> Int
 inc x = x + 1
 
-double : Int -> Int
+double : Int -> <Panic> Int
 double x = x * 2
 
-main : Unit -> <IO> Unit
+main : Unit -> <IO, Panic> Unit
 main () =
   println (show ([1, 2, 3] |> List.length))
   println (show ((inc >> double) 4))
@@ -1135,10 +1131,10 @@ main () =
 #[test]
 fn a_recursive_function_is_not_inlined() {
     let text = "\
-count : Int -> Int -> Int
+count : Int -> Int -> <Panic> Int
 count acc n = if n == 0 then acc else count (acc + 1) (n - 1)
 
-main : Unit -> <IO> Unit
+main : Unit -> <IO, Panic> Unit
 main () = println (show (count 0 3))
 ";
     let shown = core_text(text, Pass::Optimize);
@@ -1153,12 +1149,12 @@ fn a_function_with_a_handle_is_not_inlined() {
 effect Ask where
   ask : Unit -> Int
 
-answer : (Unit -> <Ask> Int) -> Int
+answer : (Unit -> <Ask> Int) -> <Panic> Int
 answer f =
   handle f () + 1 with
     | ctl ask () k -> k 41
 {HIDE}
-main : Unit -> <IO> Unit
+main : Unit -> <IO, Panic> Unit
 main () =
   match hide 0 (fn () -> ask ()) with
     | Box f -> println (show (answer f))
@@ -1174,24 +1170,24 @@ main () =
 #[test]
 fn inlining_does_not_depend_on_the_rest_of_the_program() {
     let a = "\
-inc : Int -> Int
+inc : Int -> <Panic> Int
 inc x = x + 1
 
-main : Unit -> <IO> Unit
+main : Unit -> <IO, Panic> Unit
 main () =
   println (show (List.map (fn x -> inc x) [1, 2]))
 ";
     let b = "\
-inc : Int -> Int
+inc : Int -> <Panic> Int
 inc x = x + 1
 
-twice : Int -> Int
+twice : Int -> <Panic> Int
 twice x = inc (inc x)
 
-other : List Int -> List Int
+other : List Int -> <Panic> List Int
 other ys = List.map (fn y -> twice y) ys
 
-main : Unit -> <IO> Unit
+main : Unit -> <IO, Panic> Unit
 main () =
   println (show (List.map (fn x -> inc x) [1, 2]))
   println (show (other [3]))
@@ -1208,16 +1204,16 @@ main () =
 #[test]
 fn nested_inlining_grows_linearly_with_the_call_depth() {
     let size = |depth: usize| {
-        let mut text = String::from("f0 : Int -> Int\nf0 x = x + 1\n\n");
+        let mut text = String::from("f0 : Int -> <Panic> Int\nf0 x = x + 1\n\n");
         for i in 1..=depth {
             let calls: Vec<String> = (0..6).map(|k| format!("f{} (x + {k})", i - 1)).collect();
             text.push_str(&format!(
-                "f{i} : Int -> Int\nf{i} x = {}\n\n",
+                "f{i} : Int -> <Panic> Int\nf{i} x = {}\n\n",
                 calls.join(" + ")
             ));
         }
         text.push_str(&format!(
-            "main : Unit -> <IO> Unit\nmain () = println (display (f{depth} 1))"
+            "main : Unit -> <IO, Panic> Unit\nmain () = println (display (f{depth} 1))"
         ));
         core_text(&text, Pass::Optimize).lines().count()
     };
@@ -1252,7 +1248,7 @@ main () =
 some : Int -> Option Int
 some x = Some x
 
-main : Unit -> <IO> Unit
+main : Unit -> <IO, Panic> Unit
 main () =
   let n = match some 3 with
     | Some x -> x
@@ -1274,7 +1270,7 @@ fn a_con_returned_by_an_inlined_function_resolves() {
 pick : Bool -> Option Int
 pick b = if b then Some 1 else None
 
-main : Unit -> <IO> Unit
+main : Unit -> <IO, Panic> Unit
 main () =
   let c = List.length (Env.args ()) > 0
   match pick c with
@@ -1311,7 +1307,7 @@ fn a_con_with_two_uses_is_not_opened() {
 some : Int -> Option Int
 some x = Some x
 
-main : Unit -> <IO> Unit
+main : Unit -> <IO, Panic> Unit
 main () =
   let it = some 3
   let n = List.length [it]
@@ -1390,7 +1386,7 @@ fn a_tuple_from_both_arms_of_an_if_is_threaded() {
 pair : Bool -> (Int, Int)
 pair c = if c then (1, 2) else (3, 4)
 
-main : Unit -> <IO> Unit
+main : Unit -> <IO, Panic> Unit
 main () =
   let c = List.length (Env.args ()) > 0
   let (a, b) = pair c
@@ -1489,7 +1485,7 @@ fn a_fold_over_a_file_producer_is_fused() {
     let text = "\
 import Yield (Yield(..))
 
-numbers : Int -> Unit -> <Yield Int, IO> Unit
+numbers : Int -> Unit -> <Yield Int, IO, Panic> Unit
 numbers n () =
   let go file i =
     if i > n then Fs.close file
@@ -1498,7 +1494,7 @@ numbers n () =
       go file (i + 1)
   go (Fs.open \"numbers.txt\") 1
 
-main : Unit -> <IO> Unit
+main : Unit -> <IO, Panic> Unit
 main () =
   println (show (Iter.fold (fn a b -> a + b) 0 (Iter.generate (numbers 5))))
   println (show (Iter.fold (fn a b -> a + b) 0 (Iter.map (fn x -> x * 2) (Iter.generate (numbers 5)))))
@@ -1523,12 +1519,12 @@ main () =
 #[test]
 fn a_self_applying_closure_stops_inlining() {
     let text = "\
-data Fix = | Fix (Fix -> Int -> Int)
+data Fix = | Fix (Fix -> Int -> <Panic> Int)
 
-fix_apply : Fix -> Int -> Int
+fix_apply : Fix -> Int -> <Panic> Int
 fix_apply (Fix f) x = f (Fix f) x
 
-main : Unit -> <IO> Unit
+main : Unit -> <IO, Panic> Unit
 main () =
   let lam = fn self n -> if n == 0 then 0 else fix_apply self (n - 1) + 2
   println (show (fix_apply (Fix lam) 10))
@@ -1543,9 +1539,9 @@ fn self_applying(name: &str, calls: usize) -> String {
         .map(|k| format!("g (Fix g) (n - {k})"))
         .collect();
     format!(
-        "data Fix = | Fix (Fix -> Int -> Int)
+        "data Fix = | Fix (Fix -> Int -> <Panic> Int)
 
-{name} : Int -> Int
+{name} : Int -> <Panic> Int
 {name} m =
   let lam = fn self n -> match self with
     | Fix g -> if n <= 0 then 1 else {}
@@ -1563,7 +1559,7 @@ fn self_applying(name: &str, calls: usize) -> String {
 fn inlining_fusion_created_calls_stays_within_a_budget() {
     for calls in [2, 3, 4] {
         let text = format!(
-            "{}\nmain : Unit -> <IO> Unit\nmain () = println (show (spin 5))\n",
+            "{}\nmain : Unit -> <IO, Panic> Unit\nmain () = println (show (spin 5))\n",
             self_applying("spin", calls)
         );
         let started = std::time::Instant::now();
@@ -1584,7 +1580,7 @@ fn inlining_fusion_created_calls_stays_within_a_budget() {
 fn the_growth_budget_binds_per_function() {
     let text = format!(
         "{NUMS}\n{}
-main : Unit -> <IO> Unit
+main : Unit -> <IO, Panic> Unit
 main () =
   println (show (spin 5))
   println (show (Iter.fold (fn acc x -> acc + x) 0 (Iter.generate (nums 10))))
@@ -1604,13 +1600,13 @@ main () =
 fn fusion_does_not_depend_on_the_rest_of_the_program() {
     let a = format!(
         "{NUMS}
-main : Unit -> <IO> Unit
+main : Unit -> <IO, Panic> Unit
 main () = println (show (Iter.fold (fn acc x -> acc + x) 0 (Iter.generate (nums 10))))
 "
     );
     let b = format!(
         "{NUMS}
-evens : Int -> Unit -> <Yield Int> Unit
+evens : Int -> Unit -> <Yield Int, Panic> Unit
 evens n () =
   let go i =
     if i > n then ()
@@ -1619,7 +1615,7 @@ evens n () =
       go (i + 1)
   go 1
 
-main : Unit -> <IO> Unit
+main : Unit -> <IO, Panic> Unit
 main () =
   println (show (Iter.fold (fn acc x -> acc + x) 0 (Iter.generate (nums 10))))
   println (show (Iter.fold (fn acc x -> acc + x) 0 (Iter.generate (evens 10))))
@@ -1638,10 +1634,10 @@ main () =
 /// `Iter` を作り合う2つの関数 `ping` と `pong` (2つの関数の輪) と、`Iter` を引く側の関数。どちらも相手の `Iter` を
 /// `Iter.map` で包んで返すので、`Iter.map` の閉包の複製の鍵に、輪の相手の閉包の複製を持つ `Iter` の形が入る。
 const CYCLES: &str = "
-add : Int -> Int -> Int
+add : Int -> Int -> <Panic> Int
 add a b = a + b
 
-double : Int -> Int
+double : Int -> <Panic> Int
 double x = x * 2
 
 ping : (Int -> <e> Int) -> Iter <e> Int -> Iter <e> Int
@@ -1686,7 +1682,7 @@ fn copies_in_cycles_do_not_depend_on_the_entry_into_the_cycle() {
     let a = format!(
         "import Iter (Iter(..))
 {NUMS}{CYCLES}
-main : Unit -> <IO> Unit
+main : Unit -> <IO, Panic> Unit
 main () =
   println (show (Iter.to_list (Iter.take 3 (Iter.map double (Iter.generate (nums 10))))))
   println (show (Iter.fold add 0 (Iter.take 3 (ping double (Iter.generate (nums 10))))))
@@ -1695,7 +1691,7 @@ main () =
     let b = format!(
         "import Iter (Iter(..))
 {NUMS}{CYCLES}
-main : Unit -> <IO> Unit
+main : Unit -> <IO, Panic> Unit
 main () =
   println (show (Iter.to_list (Iter.zip (Iter.map double (Iter.generate (nums 10))) (Iter.generate (nums 3)))))
   println (show (Iter.fold add 0 (Iter.take 3 (Iter.map double (Iter.generate (nums 10))))))

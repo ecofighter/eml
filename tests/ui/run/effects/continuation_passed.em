@@ -5,7 +5,7 @@ effect Ask where
 apply_to : (Int -> <e> a) -> Int -> <e> a
 apply_to f n = f n
 
-main : Unit -> <IO> Unit
+main : Unit -> <IO, Panic> Unit
 main () =
   let r =
     handle ask () + 1 with

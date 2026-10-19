@@ -1,7 +1,7 @@
 import Yield (Yield(..))
 import List
 
-count_to : Int -> Unit -> <Yield Int> Unit
+count_to : Int -> Unit -> <Yield Int, Panic> Unit
 count_to n () =
   let go i =
     if i > n then ()
@@ -18,12 +18,12 @@ qualified () =
 print_item : Int -> <IO> Unit
 print_item x = println (show x)
 
-with_use : Unit -> <IO> Unit
+with_use : Unit -> <IO, Panic> Unit
 with_use () =
   use x <- Yield.for_each (count_to 2)
   println "got \{x}"
 
-main : Unit -> <IO> Unit
+main : Unit -> <IO, Panic> Unit
 main () =
   Yield.for_each (count_to 3) print_item
   with_use ()

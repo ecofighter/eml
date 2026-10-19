@@ -2,12 +2,12 @@
 -- 生きている token は巻き戻しで手放す。
 data Stats = | Stats { count : Int, total : Int }
 
-probe : Int -> Int -> <IO> Unit
+probe : Int -> Int -> <IO, Panic> Unit
 probe depth count =
   if depth == 0 then (if count > 3 then Fs.close (Fs.open "missing.txt") else ())
   else probe (depth - 1) count
 
-step : Stats -> <IO> Stats
+step : Stats -> <IO, Panic> Stats
 step st =
   match st with
     | Stats { count, total } ->
@@ -15,7 +15,7 @@ step st =
       probe 5 next
       Stats { count = next, total = total + next }
 
-run : Int -> Stats -> <IO> Stats
+run : Int -> Stats -> <IO, Panic> Stats
 run n st =
   if n == 0 then st
   else
@@ -23,7 +23,7 @@ run n st =
     println "count \{st.count}"
     run (n - 1) st
 
-main : Unit -> <IO> Unit
+main : Unit -> <IO, Panic> Unit
 main () =
   match try_io (fn () -> run (List.length [1, 2, 3, 4, 5, 6]) (Stats { count = 0, total = 0 })) with
     | Ok st -> println "total \{st.total}"

@@ -151,7 +151,7 @@ fn a_clause_variable_is_a_different_type_from_the_function_variable_of_the_same_
 
 #[test]
 fn desugared_references_are_recorded_at_the_operator() {
-    let text = "both : Int -> Bool -> Bool\nboth n b = n == 1 && b\n\nnegated : Int -> Int\nnegated n = - n\n\nsection : Unit -> Int -> Bool\nsection () = (== 1)";
+    let text = "both : Int -> Bool -> Bool\nboth n b = n == 1 && b\n\nnegated : Int -> <Panic> Int\nnegated n = - n\n\nsection : Unit -> Int -> Bool\nsection () = (== 1)";
     let checked = check(text);
     insta::assert_snapshot!(table(&checked, "Main", "both"), @"
     2:14 == [Int]
@@ -187,7 +187,7 @@ fn locals_and_constructor_patterns_are_not_recorded() {
 
 #[test]
 fn every_reference_to_an_item_with_a_signature_is_recorded() {
-    let text = "data Pair a b = | Pair a b\n\neffect Ask where\n  ask : Unit -> Int\n\nmixed : Int -> Bool -> <Ask> Pair Int Bool\nmixed n b =\n  let m = - n + ask ()\n  let p = (> 0)\n  let q = (n -)\n  Pair (m * 2) (b && p m || q 1 == 0)";
+    let text = "data Pair a b = | Pair a b\n\neffect Ask where\n  ask : Unit -> Int\n\nmixed : Int -> Bool -> <Ask, Panic> Pair Int Bool\nmixed n b =\n  let m = - n + ask ()\n  let p = (> 0)\n  let q = (n -)\n  Pair (m * 2) (b && p m || q 1 == 0)";
     let checked = check(text);
     assert!(
         checked.diagnostics.is_empty(),

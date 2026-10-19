@@ -3,7 +3,7 @@
 effect Ask where
   ask : Unit -> Int
 
-sum_asks : Int -> Int -> String -> <Ask> String
+sum_asks : Int -> Int -> String -> <Ask, Panic> String
 sum_asks n acc prefix =
   if n == 0 then prefix ++ show acc
   else
@@ -11,7 +11,7 @@ sum_asks n acc prefix =
     let x = ask ()
     sum_asks (n - 1) (acc + x + bonus) prefix
 
-main : Unit -> <IO> Unit
+main : Unit -> <IO, Panic> Unit
 main () =
   let result =
     handle sum_asks 100000 0 "total: " with

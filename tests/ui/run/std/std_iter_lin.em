@@ -14,7 +14,7 @@ tickets ns = Iter.map (fn n -> Ticket n) (Iter.from_list ns)
 show_zipped : Iter <IO> (Ticket, Ticket) -> <IO> Unit
 show_zipped it = Iter.each (fn (a, b) -> println "\{spend a} \{spend b}") it
 
-main : Unit -> <IO> Unit
+main : Unit -> <IO, Panic> Unit
 main () =
   show_zipped (Iter.zip (tickets [1, 2, 3]) (tickets [4]))
   println "right ended"

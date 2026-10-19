@@ -1,6 +1,6 @@
 # `Show` を持たない型は、値の後に型を書く
 > fn x -> x + 1
-> inc : Int -> Int
+> inc : Int -> <Panic> Int
 . inc x = x + 1
 .
 > inc

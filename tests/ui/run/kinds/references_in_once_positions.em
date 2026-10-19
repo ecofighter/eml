@@ -16,13 +16,13 @@ apply_twice m x y =
   match m with
     | Many f -> (f x, f y)
 
-run_once : (once Int -> Int) -> Int -> Int
+run_once : (once Int -> <Panic> Int) -> Int -> <Panic> Int
 run_once f x = f x
 
-inc : Int -> Int
+inc : Int -> <Panic> Int
 inc x = x + 1
 
-main : Unit -> <IO> Unit
+main : Unit -> <IO, Panic> Unit
 main () =
   println (show (apply_once (Once inc) 1))
   println (show (apply_twice (Many inc) 1 2))

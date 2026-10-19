@@ -3,7 +3,7 @@ source: crates/eml_cli/tests/repl.rs
 expression: checked.render()
 input_file: crates/eml_cli/tests/repl/errors/diagnostics.repl
 ---
-> bad : Int -> Int
+> bad : Int -> <Panic> Int
 . bad x = x + "s"
 .
 E2001 <input 1> 2:13 mismatched types
@@ -27,7 +27,7 @@ E2016 <input 5> 1:5 `file` cannot keep a value of the linear type `File`
 .   ask : Unit -> Int
 .
 > ask ()
-E2015 <input 7> 1:1 `ask` performs `Ask`, but an input may perform only `IO`
+E2015 <input 7> 1:1 `ask` performs `Ask`, but an input may perform only `IO` and `Panic`
   <input 7> 1:1 this call performs `Ask`
   help: handle `Ask` inside the input, as in `handle … with …`
 > fine : Unit -> <IO> Unit

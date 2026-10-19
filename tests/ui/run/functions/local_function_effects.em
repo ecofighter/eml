@@ -7,7 +7,7 @@ effect Ask where
 effect Choice where
   multi choose : Unit -> Bool
 
-inside_and_outside : Unit -> <IO> Unit
+inside_and_outside : Unit -> <IO, Panic> Unit
 inside_and_outside () =
   let inc n = n + 1
   println (show (inc 1))
@@ -16,14 +16,14 @@ inside_and_outside () =
   println (show r)
   println (show (inc 2))
 
-outside_then_inside : Unit -> <IO> Unit
+outside_then_inside : Unit -> <IO, Panic> Unit
 outside_then_inside () =
   let inc n = n + 1
   let r = handle inc (ask ()) with
     | ctl ask () k -> k 5
   println (show (r + inc 1))
 
-nested_handlers : Int -> <IO> Int
+nested_handlers : Int -> <IO, Panic> Int
 nested_handlers n =
   let go k =
     if k == 0 then 0
@@ -31,14 +31,14 @@ nested_handlers n =
       | ctl ask () r -> r k
   go n
 
-clause_captures_k : Unit -> <IO> Int
+clause_captures_k : Unit -> <IO, Panic> Int
 clause_captures_k () =
   handle ask () + 1 with
     | ctl ask () k ->
         let finish v = k v
         finish 1
 
-pure_under_multi : Unit -> <IO> Unit
+pure_under_multi : Unit -> <IO, Panic> Unit
 pure_under_multi () =
   let f = Fs.open "input.txt"
   let double n = n + n
@@ -47,14 +47,14 @@ pure_under_multi () =
   Fs.close f
   println (show b)
 
-recursive_resuming_k_twice : Unit -> Int
+recursive_resuming_k_twice : Unit -> <Panic> Int
 recursive_resuming_k_twice () =
   handle (if choose () then 1 else 10) with
     | ctl choose () k ->
         let both n = if n == 0 then 0 else k True + k False + both (n - 1)
         both 2
 
-main : Unit -> <IO> Unit
+main : Unit -> <IO, Panic> Unit
 main () =
   inside_and_outside ()
   outside_then_inside ()

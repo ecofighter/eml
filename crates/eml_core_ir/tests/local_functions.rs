@@ -20,16 +20,16 @@ const PAIRS: [Pair; 4] = [
         top: "\
 data Box a = | Box a
 
-hide : Int -> a -> Box a
+hide : Int -> a -> <Panic> Box a
 hide n x = if n <= 0 then Box x else hide (n - 1) x
 
-helper : Int -> Int -> Int -> Int
+helper : Int -> Int -> Int -> <Panic> Int
 helper n k acc = if k == 0 then acc + n else helper n (k - 1) (acc + k)
 
-outer : Int -> Int
+outer : Int -> <Panic> Int
 outer n = helper n n 0
 
-main : Unit -> <IO> Unit
+main : Unit -> <IO, Panic> Unit
 main () =
   let Box outer = hide 0 outer
   println (show (outer 5))
@@ -37,15 +37,15 @@ main () =
         local: "\
 data Box a = | Box a
 
-hide : Int -> a -> Box a
+hide : Int -> a -> <Panic> Box a
 hide n x = if n <= 0 then Box x else hide (n - 1) x
 
-outer : Int -> Int
+outer : Int -> <Panic> Int
 outer n =
   let go k acc = if k == 0 then acc + n else go (k - 1) (acc + k)
   go n 0
 
-main : Unit -> <IO> Unit
+main : Unit -> <IO, Panic> Unit
 main () =
   let Box outer = hide 0 outer
   println (show (outer 5))
@@ -58,23 +58,23 @@ main () =
         top: "\
 data Box a = | Box a
 
-hide : Int -> a -> Box a
+hide : Int -> a -> <Panic> Box a
 hide n x = if n <= 0 then Box x else hide (n - 1) x
 
-square : Int -> Int -> Int
+square : Int -> Int -> <Panic> Int
 square n k = k * k + n
 
-countdown : Int -> Int -> <IO> Unit
+countdown : Int -> Int -> <IO, Panic> Unit
 countdown n i =
   if i == 0 then ()
   else
     println (show (square n i))
     countdown n (i - 1)
 
-run : Int -> <IO> Unit
+run : Int -> <IO, Panic> Unit
 run n = countdown n n
 
-main : Unit -> <IO> Unit
+main : Unit -> <IO, Panic> Unit
 main () =
   let Box run = hide 0 run
   run 3
@@ -82,10 +82,10 @@ main () =
         local: "\
 data Box a = | Box a
 
-hide : Int -> a -> Box a
+hide : Int -> a -> <Panic> Box a
 hide n x = if n <= 0 then Box x else hide (n - 1) x
 
-run : Int -> <IO> Unit
+run : Int -> <IO, Panic> Unit
 run n =
   let square k = k * k + n
   let countdown i =
@@ -95,7 +95,7 @@ run n =
       countdown (i - 1)
   countdown n
 
-main : Unit -> <IO> Unit
+main : Unit -> <IO, Panic> Unit
 main () =
   let Box run = hide 0 run
   run 3
@@ -111,21 +111,21 @@ main () =
         top: "\
 data Box a = | Box a
 
-hide : Int -> a -> Box a
+hide : Int -> a -> <Panic> Box a
 hide n x = if n <= 0 then Box x else hide (n - 1) x
 
 effect Ask where
   ask : Unit -> Int
 
-bump : Int -> Int -> Int
+bump : Int -> Int -> <Panic> Int
 bump n x = x + n
 
-outer : Int -> <IO> Int
+outer : Int -> <IO, Panic> Int
 outer n =
   handle ask () + 1 with
     | ctl ask () k -> k (bump n 1)
 
-main : Unit -> <IO> Unit
+main : Unit -> <IO, Panic> Unit
 main () =
   let Box outer = hide 0 outer
   println (show (outer 5))
@@ -133,19 +133,19 @@ main () =
         local: "\
 data Box a = | Box a
 
-hide : Int -> a -> Box a
+hide : Int -> a -> <Panic> Box a
 hide n x = if n <= 0 then Box x else hide (n - 1) x
 
 effect Ask where
   ask : Unit -> Int
 
-outer : Int -> <IO> Int
+outer : Int -> <IO, Panic> Int
 outer n =
   let bump x = x + n
   handle ask () + 1 with
     | ctl ask () k -> k (bump 1)
 
-main : Unit -> <IO> Unit
+main : Unit -> <IO, Panic> Unit
 main () =
   let Box outer = hide 0 outer
   println (show (outer 5))
@@ -158,21 +158,21 @@ main () =
         top: "\
 data Box a = | Box a
 
-hide : Int -> a -> Box a
+hide : Int -> a -> <Panic> Box a
 hide n x = if n <= 0 then Box x else hide (n - 1) x
 
 effect Ask where
   ask : Unit -> Int
 
-bump : Int -> Int -> Int
+bump : Int -> Int -> <Panic> Int
 bump n x = x + n
 
-outer : Int -> <IO> Int
+outer : Int -> <IO, Panic> Int
 outer n =
   handle bump n (ask ()) with
     | ctl ask () k -> k 1
 
-main : Unit -> <IO> Unit
+main : Unit -> <IO, Panic> Unit
 main () =
   let Box outer = hide 0 outer
   println (show (outer 2))
@@ -180,19 +180,19 @@ main () =
         local: "\
 data Box a = | Box a
 
-hide : Int -> a -> Box a
+hide : Int -> a -> <Panic> Box a
 hide n x = if n <= 0 then Box x else hide (n - 1) x
 
 effect Ask where
   ask : Unit -> Int
 
-outer : Int -> <IO> Int
+outer : Int -> <IO, Panic> Int
 outer n =
   let bump x = x + n
   handle bump (ask ()) with
     | ctl ask () k -> k 1
 
-main : Unit -> <IO> Unit
+main : Unit -> <IO, Panic> Unit
 main () =
   let Box outer = hide 0 outer
   println (show (outer 2))
@@ -303,10 +303,10 @@ fn a_lifted_function_has_the_same_lir_as_a_top_level_helper() {
 const STD_PROGRAM: &str = "\
 data Box a = | Box a
 
-hide : Int -> a -> Box a
+hide : Int -> a -> <Panic> Box a
 hide n x = if n <= 0 then Box x else hide (n - 1) x
 
-main : Unit -> <IO> Unit
+main : Unit -> <IO, Panic> Unit
 main () =
   let xs = [1, 2, 3]
   let Box inc = hide 0 (fn x -> x + 1)
@@ -523,11 +523,12 @@ fn std_public_functions_keep_their_lir() {
     b8:
       jump b9(1)
     b9(t.7: int):
-      let t.8: enum = extern "Prelude.Ord Int.>="(t.7, t.1)
-      switch t.8 Prelude.Bool { #0 -> b10, #1 -> b11 }
+      let t.8: int = extern Prelude.-(-9223372036854775807, 1)
+      let t.9: enum = extern "Prelude.Ord Int.>="(t.7, t.1)
+      switch t.9 Prelude.Bool { #0 -> b10, #1 -> b11 }
     b10:
-      let t.9: enum = extern "Prelude.Eq Int.=="(t.4, 45)
-      tail call F25(s.0, t.1, t.7, t.9, 0)
+      let t.10: enum = extern "Prelude.Eq Int.=="(t.4, 45)
+      tail call F25(s.0, t.1, t.8, t.7, t.10, 0)
     b11:
       decref s.0
       return #0
@@ -776,57 +777,53 @@ fn std_public_functions_keep_their_lir() {
     b10:
       return stop.2
     }
-    fn F25(s.0: obj, len.1: int, i.2: int, negative.3: enum, acc.4: int) -> tobj {
-      let t.5: enum = extern "Prelude.Ord Int.>="(i.2, len.1)
-      switch t.5 Prelude.Bool { #0 -> b1, #1 -> b2 }
+    fn F25(s.0: obj, len.1: int, min_int.2: int, i.3: int, negative.4: enum, acc.5: int) -> tobj {
+      let t.6: enum = extern "Prelude.Ord Int.>="(i.3, len.1)
+      switch t.6 Prelude.Bool { #0 -> b1, #1 -> b2 }
     b1:
       dup s.0
-      let t.6: int = extern Std.String.byte_at(i.2, s.0)
-      let t.7: int = extern Prelude.-(t.6, 48)
-      let t.8: enum = extern "Prelude.Ord Int.<"(t.7, 0)
-      switch t.8 Prelude.Bool { #0 -> b7, #1 -> b8 }
+      let t.7: int = extern Std.String.byte_at(i.3, s.0)
+      let t.8: int = extern Prelude.-(t.7, 48)
+      let t.9: enum = extern "Prelude.Ord Int.<"(t.8, 0)
+      switch t.9 Prelude.Bool { #0 -> b7, #1 -> b8 }
     b2:
       decref s.0
-      switch negative.3 Prelude.Bool { #0 -> b3, #1 -> b4 }
+      switch negative.4 Prelude.Bool { #0 -> b3, #1 -> b4 }
     b3:
-      let t.9: int = extern Prelude.-(0, 9223372036854775807)
-      let t.10: int = extern Prelude.-(t.9, 1)
-      let t.11: enum = extern "Prelude.Eq Int.=="(acc.4, t.10)
-      switch t.11 Prelude.Bool { #0 -> b5, #1 -> b6 }
+      let t.10: enum = extern "Prelude.Eq Int.=="(acc.5, min_int.2)
+      switch t.10 Prelude.Bool { #0 -> b5, #1 -> b6 }
     b4:
-      let acc.12: tobj = box acc.4
-      let d.13: tobj = con Prelude.Option #1(acc.12)
-      return d.13
+      let acc.11: tobj = box acc.5
+      let d.12: tobj = con Prelude.Option #1(acc.11)
+      return d.12
     b5:
-      let t.14: int = extern Prelude.-(0, acc.4)
-      let t.15: tobj = box t.14
-      let d.16: tobj = con Prelude.Option #1(t.15)
-      return d.16
+      let t.13: int = extern Prelude.-(0, acc.5)
+      let t.14: tobj = box t.13
+      let d.15: tobj = con Prelude.Option #1(t.14)
+      return d.15
     b6:
       return #0
     b7:
-      let t.17: enum = extern "Prelude.Ord Int.>"(t.7, 9)
-      switch t.17 Prelude.Bool { #0 -> b9, #1 -> b10 }
+      let t.16: enum = extern "Prelude.Ord Int.>"(t.8, 9)
+      switch t.16 Prelude.Bool { #0 -> b9, #1 -> b10 }
     b8:
       decref s.0
       jump b11()
     b9:
-      let t.18: int = extern Prelude.-(0, 9223372036854775807)
-      let t.19: int = extern Prelude.-(t.18, 1)
-      let t.20: int = extern Prelude.+(t.19, t.7)
-      let t.21: int = extern Prelude./(t.20, 10)
-      let t.22: enum = extern "Prelude.Ord Int.<"(acc.4, t.21)
-      switch t.22 Prelude.Bool { #0 -> b12, #1 -> b13 }
+      let t.17: int = extern Prelude.+(min_int.2, t.8)
+      let t.18: int = extern Prelude./(t.17, 10)
+      let t.19: enum = extern "Prelude.Ord Int.<"(acc.5, t.18)
+      switch t.19 Prelude.Bool { #0 -> b12, #1 -> b13 }
     b10:
       decref s.0
       jump b11()
     b11:
       return #0
     b12:
-      let t.23: int = extern Prelude.+(i.2, 1)
-      let t.24: int = extern Prelude.*(acc.4, 10)
-      let t.25: int = extern Prelude.-(t.24, t.7)
-      tail call F25(s.0, len.1, t.23, negative.3, t.25)
+      let t.20: int = extern Prelude.+(i.3, 1)
+      let t.21: int = extern Prelude.*(acc.5, 10)
+      let t.22: int = extern Prelude.-(t.21, t.8)
+      tail call F25(s.0, len.1, min_int.2, t.20, negative.4, t.22)
     b13:
       decref s.0
       return #0

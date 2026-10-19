@@ -6,7 +6,7 @@ effect Ask where
 class Run a where
   run : once a -> Int
 
-inc : once Int -> Int
+inc : once Int -> <Panic> Int
 inc x = x + 1
 
 apply_once : (once Int -> Int) -> Int

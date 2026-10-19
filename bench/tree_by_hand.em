@@ -12,22 +12,22 @@ insert x t = match t with
     else Node l v r
 
 -- 線形合同法で次の種を作り、種の下位の桁を木に入れる
-build : Int -> Int -> Tree Int -> Tree Int
+build : Int -> Int -> Tree Int -> <Panic> Tree Int
 build n seed t = if n == 0 then t else
   let next = (seed * 1103515245 + 12345) % 2147483648
   build (n - 1) next (insert (next % 1000000) t)
 
-size : Tree a -> Int
+size : Tree a -> <Panic> Int
 size t = match t with
   | Leaf -> 0
   | Node l _ r -> size l + 1 + size r
 
-fold_sum : Int -> Tree Int -> Int
+fold_sum : Int -> Tree Int -> <Panic> Int
 fold_sum acc t = match t with
   | Leaf -> acc
   | Node l v r -> fold_sum (fold_sum acc l + v) r
 
-main : Unit -> <IO> Unit
+main : Unit -> <IO, Panic> Unit
 main () =
   let t = build 15000 42 Leaf
   println (show (size t) ++ " " ++ show (fold_sum 0 t))

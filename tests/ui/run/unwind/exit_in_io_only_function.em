@@ -6,21 +6,21 @@ third () =
   Fs.close f
   r
 
-second : Unit -> <IO> Int
+second : Unit -> <IO, Panic> Int
 second () =
   let f = Fs.open "input.txt"
   let r = third () + 1
   Fs.close f
   r
 
-first : Unit -> <IO> Int
+first : Unit -> <IO, Panic> Int
 first () =
   let f = Fs.open "input.txt"
   let r = second () + 1
   Fs.close f
   r
 
-main : Unit -> <IO> Unit
+main : Unit -> <IO, Panic> Unit
 main () =
   println "start"
   println (show (first ()))

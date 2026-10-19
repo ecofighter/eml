@@ -3,20 +3,20 @@
 effect Ask where
   ask : Unit -> Int
 
-body : Unit -> <Ask, IO> String
+body : Unit -> <Ask, IO, Panic> String
 body () =
   match try_io (fn () -> ask () + 1) with
     | Ok n -> "body ok: \{n}"
     | Err e -> "body caught: \{e}"
 
-handled : Unit -> <IO> String
+handled : Unit -> <IO, Panic> String
 handled () =
   handle body () with
     | fn ask () ->
       Fs.close (Fs.open "missing.txt")
       1
 
-main : Unit -> <IO> Unit
+main : Unit -> <IO, Panic> Unit
 main () =
   match try_io handled with
     | Ok text -> println text

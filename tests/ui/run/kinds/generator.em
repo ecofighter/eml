@@ -13,7 +13,7 @@ generate producer =
     | ctl yield x k -> More x k
     | return () -> Done
 
-count : Int -> Int -> <Yield Int> Unit
+count : Int -> Int -> <Yield Int, Panic> Unit
 count i n =
   if i > n then ()
   else
@@ -37,7 +37,7 @@ take_two it =
               drop rest
               [x, y]
 
-main : Unit -> <IO> Unit
+main : Unit -> <IO, Panic> Unit
 main () =
   println (show (to_list (generate (fn () -> count 1 5))))
   println (show (take_two (generate (fn () -> count 1 5))))

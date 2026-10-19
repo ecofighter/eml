@@ -3,13 +3,13 @@ data Stack =
   | Nil
   | Push Int Stack
 
-describe : List Int -> String
+describe : List Int -> <Panic> String
 describe [] = "empty"
 describe [x] = "one: " ++ show x
 describe [x, y] = "two: " ++ show (x + y)
 describe (x :: rest) = "many, starting with " ++ show x
 
-nested : List (List Int) -> Int
+nested : List (List Int) -> <Panic> Int
 nested [[a], [], [b, c]] = a + b + c
 nested _ = 0
 
@@ -19,7 +19,7 @@ is_empty xs = match xs with
   | [] -> True
   | _ -> False
 
-main : Unit -> <IO> Unit
+main : Unit -> <IO, Panic> Unit
 main () =
   println (describe Prelude.Nil)
   println (describe (1 :: Prelude.Nil))

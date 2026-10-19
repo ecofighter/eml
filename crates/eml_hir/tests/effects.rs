@@ -127,7 +127,7 @@ fn type_arguments_of_effects_in_an_open_row_are_checked() {
 #[test]
 fn a_function_after_an_operation_of_the_same_name_is_a_duplicate() {
     // 不具合2: 関数が操作を上書きし、節の `run` が E1001 になっていた
-    let text = "effect E where\n  run : Int -> Int\n\nrun : Int -> Int\nrun x = x\n\nf : Unit -> Int\nf () = handle run 1 with\n  | ctl run x k -> k x";
+    let text = "effect E where\n  run : Int -> Int\n\nrun : Int -> <Panic> Int\nrun x = x\n\nf : Unit -> Int\nf () = handle run 1 with\n  | ctl run x k -> k x";
     assert_eq!(
         diagnostics(text),
         ["E1003 4:1 `run` is defined more than once"]
@@ -421,9 +421,10 @@ fn a_qualified_extern_function_in_a_clause_cannot_be_handled() {
 #[test]
 fn a_pure_extern_function_in_a_clause_is_not_an_operation() {
     // extern のエフェクトを起こさない extern の関数は E1009 の対象ではないので、見つからない操作の E1001 のままにする。
-    // Prelude の公開の extern の関数で名前が小文字のものは IO を起こすので、`negate` を公開した Prelude で確かめる
+    // Prelude の公開の extern の関数で名前が小文字のものは `IO` か `Panic` を起こすので、`negate` を公開して row を空に
+    // した Prelude で確かめる
     let prelude = eml_hir::PRELUDE_SOURCE.replace(
-        "\nextern negate : Int -> Int",
+        "\nextern negate : Int -> <Panic> Int",
         "\npub extern negate : Int -> Int",
     );
     assert_ne!(prelude, eml_hir::PRELUDE_SOURCE);

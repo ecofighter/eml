@@ -160,7 +160,7 @@ fn notes_name_builtin_types_by_their_display_names() {
     let text = "data Bool = | Yes | No\n\ndata Unit = | U\n\nmain : Unit -> <IO> Prelude.Unit\nmain u = ()\n\ncondition : Bool -> Int\ncondition b = if b then 1 else 0\n\ncompare : Bool -> Prelude.Bool\ncompare b = b == b\n\nwithout_else : Prelude.Bool -> Prelude.Unit\nwithout_else b = if b then 1\n\nstatement : Int -> Int\nstatement n =\n  n\n  n\n\nunit_pattern : Int -> Int\nunit_pattern () = 1";
     let checked = eml_test_support::check(text);
     insta::assert_snapshot!(eml_test_support::full(checked.files(), &checked.diagnostics), @"
-    E2004 5:8 `main` must have type `Prelude.Unit -> <IO> Prelude.Unit`
+    E2004 5:8 `main` must have type `Prelude.Unit -> <IO, Panic> Prelude.Unit`, with either label optional
       5:8 found `Main.Unit -> <IO> Prelude.Unit`
     E2001 9:18 mismatched types
       9:18 expected `Prelude.Bool`, found `Main.Bool`
@@ -183,7 +183,7 @@ fn notes_name_builtin_types_by_their_display_names() {
 #[test]
 fn each_module_reads_its_own_syntax() {
     // 2行目のシグネチャは、どちらのファイルでもバイト 9 から 27 にある
-    let entry = "import A\npub h : Int -> Int\nh x = x + 1\n";
+    let entry = "import A\npub h : Int -> <Panic> Int\nh x = x + 1\n";
     let module = "-- 34567\npub k : a   ->   a\nk x = x\n";
     let checked = eml_test_support::check_files(entry, &[("A.em", module)]);
     assert!(checked.diagnostics.is_empty(), "{:?}", checked.diagnostics);

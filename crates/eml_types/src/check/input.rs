@@ -1,11 +1,11 @@
 //! REPL の入力の関数の検査 (docs/spec/types.md の「REPL の入力」)。入力は
-//! `Unit -> <IO> T` の関数 (`:type` の問い合わせは `Unit -> <ρ> T`) で、`T` をシグネチャなしで、局所の `let` と同じく
+//! `Unit -> <IO, Panic> T` の関数 (`:type` の問い合わせは `Unit -> <ρ> T`) で、`T` をシグネチャなしで、局所の `let` と同じく
 //! 単相に推論する。入力の関数はほかの関数から参照されないので、1つだけの SCC として、ほかの関数と同じ道で Kind を解いて
 //! 書き出す。
 
 use std::collections::{HashMap, HashSet};
 
-use eml_diagnostics::{Diagnostic, Label};
+use eml_diagnostics::{Diagnostic, Label, SourceFiles};
 use eml_hir::{FunctionId, Generics, InputKind, Program, ValueItem};
 
 use crate::context::Context;
@@ -25,6 +25,7 @@ use super::{PendingBody, Signatures, query};
 /// 入力の関数の本体を検査する。`check_body` と同じく、Kind の制約を持った本体を返す。
 pub(super) fn check_input<'c>(
     program: &Program,
+    files: &SourceFiles,
     context: &'c Context,
     signatures: &Signatures,
     id: FunctionId,
@@ -36,15 +37,20 @@ pub(super) fn check_input<'c>(
     let mut table = Table::new(context);
     let result = table.fresh_var();
     let ambient = match kind {
-        // 問い合わせは `IO` に閉じない。E2015 は起きない
+        // 問い合わせは `<IO, Panic>` に閉じない。E2015 は起きない
         InputKind::Query => Row {
             labels: Vec::new(),
             tail: Tail::Var(table.fresh_row_var()),
         },
-        InputKind::Expr | InputKind::Let(_) => Row::closed(vec![RowLabel {
-            effect: program.io(),
-            args: Vec::new(),
-        }]),
+        InputKind::Expr | InputKind::Let(_) => Row::closed(
+            [program.io(), program.panic()]
+                .into_iter()
+                .map(|effect| RowLabel {
+                    effect,
+                    args: Vec::new(),
+                })
+                .collect(),
+        ),
     };
     let unit = table.unit;
     let own = table.function_with(
@@ -62,6 +68,7 @@ pub(super) fn check_input<'c>(
     let mut diagnostics = Vec::new();
     let mut checker = BodyCheck {
         program,
+        files,
         file,
         function,
         body,
@@ -194,10 +201,13 @@ pub(super) fn finish_input(
     let function_ty = types.intern(TypeKind::Fn {
         param: types.unit(),
         lin: Lin::Unr,
-        effects: vec![EffectLabel {
-            id: program.io(),
-            args: Vec::new(),
-        }],
+        effects: [program.io(), program.panic()]
+            .into_iter()
+            .map(|id| EffectLabel {
+                id,
+                args: Vec::new(),
+            })
+            .collect(),
         tail: None,
         ret: ty,
     });
@@ -447,7 +457,7 @@ mod tests {
         // `Show (List a)` があっても、要素の関数型が `Show` を持たないので型だけを表示する
         assert_eq!(
             shown_input(&program, &typed).1,
-            InputDisplay::Typed("List (Int -> Int)".to_string())
+            InputDisplay::Typed("List (Int -> <Panic> Int)".to_string())
         );
     }
 
@@ -460,7 +470,7 @@ mod tests {
         assert_eq!(diagnostics, Vec::<String>::new());
         assert_eq!(
             shown_input(&program, &typed).1,
-            InputDisplay::Typed("Wrap (Int -> Int)".to_string())
+            InputDisplay::Typed("Wrap (Int -> <Panic> Int)".to_string())
         );
         let (program, typed, diagnostics) = session(&[wrap, instance, "Wrap 1"]);
         assert_eq!(diagnostics, Vec::<String>::new());
@@ -481,7 +491,7 @@ mod tests {
         let (_, _, diagnostics) = session(&["effect Ask where\n  ask : Unit -> Int", "ask ()"]);
         assert_eq!(
             diagnostics,
-            ["E2015 `ask` performs `Ask`, but an input may perform only `IO`"]
+            ["E2015 `ask` performs `Ask`, but an input may perform only `IO` and `Panic`"]
         );
     }
 
@@ -521,15 +531,18 @@ mod tests {
         // 残った矢印の Kind 変数は `Unr` に決まる。束縛の型は後の入力の宣言の型なので、Kind 変数を残さない
         let (program, typed, diagnostics) = session(&["let inc = fn x -> x + 1", "inc 3"]);
         assert_eq!(diagnostics, Vec::<String>::new());
-        assert_eq!(binding_type(&program, &typed, "inc"), "Int -> Int");
+        assert_eq!(binding_type(&program, &typed, "inc"), "Int -> <Panic> Int");
         let input = last_input(&program, &typed);
         assert_eq!(input.display, InputDisplay::Value);
     }
 
     #[test]
     fn a_function_definition_reads_a_binding() {
-        let (program, typed, diagnostics) =
-            session(&["let base = 10", "f : Int -> Int\nf n = n + base", "f 1"]);
+        let (program, typed, diagnostics) = session(&[
+            "let base = 10",
+            "f : Int -> <Panic> Int\nf n = n + base",
+            "f 1",
+        ]);
         assert_eq!(diagnostics, Vec::<String>::new());
         let f = program
             .functions()

@@ -4,7 +4,7 @@ infixr 5 <+>
 (<+>) : String -> String -> String
 a <+> b = a ++ "/" ++ b
 
-(<->) : Int -> Int -> Int
+(<->) : Int -> Int -> <Panic> Int
 a <-> b = a - b
 
 data P =
@@ -13,7 +13,7 @@ data P =
 
 infixr 5 :+
 
-total : P -> Int
+total : P -> <Panic> Int
 total p = match p with
   | E -> 0
   | n :+ rest -> n + total rest
@@ -26,7 +26,7 @@ loud () =
   println "loud evaluated"
   True
 
-main : Unit -> <IO> Unit
+main : Unit -> <IO, Panic> Unit
 main () =
   println ("a" <+> "b" <+> "c")
   println (show (10 <-> 3 <-> 2))

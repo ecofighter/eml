@@ -15,10 +15,10 @@ no leaks
 E1001 <input 3> 1:1 cannot find value `k`
   <input 3> 1:1 not found in this scope
 > :type area
-area : Shape -> Int
+area : Shape -> <Panic> Int
 > data Shape = | Dot
 > :type area
-area : Shape#1 -> Int
+area : Shape#1 -> <Panic> Int
 > half 0
 runtime error: division by zero
   at shapes.em:11:13

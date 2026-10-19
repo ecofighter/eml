@@ -3,31 +3,31 @@ source: crates/eml_cli/tests/repl.rs
 expression: checked.render()
 input_file: crates/eml_cli/tests/repl/generics/local_function_abi.repl
 ---
-> d : Int -> Int
+> d : Int -> <Panic> Int
 . d x =
 .   let g y = y + 1
 .   let fs = [g]
 .   g x + List.length fs
 .
-> x1 : Int -> Int
+> x1 : Int -> <Panic> Int
 . x1 n = d n
 .
-> x2 : Int -> Int
+> x2 : Int -> <Panic> Int
 . x2 n = x1 n
 .
-> x3 : Int -> Int
+> x3 : Int -> <Panic> Int
 . x3 n = x2 n
 .
-> x4 : Int -> Int
+> x4 : Int -> <Panic> Int
 . x4 n = x3 n
 .
-> x5 : Int -> Int
+> x5 : Int -> <Panic> Int
 . x5 n = x4 n
 .
-> x6 : Int -> Int
+> x6 : Int -> <Panic> Int
 . x6 n = x5 n
 .
-> x7 : Int -> Int
+> x7 : Int -> <Panic> Int
 . x7 n = x6 n
 .
 > d 5

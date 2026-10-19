@@ -3,12 +3,12 @@ effect Counter where
   get : Unit -> Int
   put : Int -> Unit
 
-count : Int -> <Counter> Int
+count : Int -> <Counter, Panic> Int
 count n = if n == 0 then 0 else
   put (get () + 1)
   count (n - 1)
 
-main : Unit -> <IO> Unit
+main : Unit -> <IO, Panic> Unit
 main () =
   let (_, final) =
     handle count 100000 from 0 with

@@ -9,14 +9,14 @@ instance Describe Int where
 data Box a = | Box a
 
 class Fold f where
-  fold : f -> b -> (b -> Int -> b) -> b
+  fold : f -> b -> (b -> Int -> <Panic> b) -> <Panic> b
   tagged : Describe b => f -> b -> String
 
 instance Fold (Box b) where
   fold (Box _) acc step = step acc 1
   tagged (Box _) x = "box:" ++ describe x
 
-main : Unit -> <IO> Unit
+main : Unit -> <IO, Panic> Unit
 main () =
   println (show (fold (Box "x") 41 (fn acc n -> acc + n)))
   println (tagged (Box True) 7)

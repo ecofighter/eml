@@ -43,16 +43,24 @@ pub extern eprintln : String -> <IO> Unit
 -- (docs/spec/stdlib.md の「`exit`」)
 pub extern exit : Int -> <IO> a
 
+-- 組み込みの `Panic`。値と入力で決まる実行時エラー (整数の桁あふれとゼロ除算、文字列の範囲外の添字) と `panic` が
+-- 起こす。`IO` と同じく、操作の `panicked` は Prelude の外から見えず、`try_panic` だけが handle する
+-- (docs/spec/effects.md の「組み込みの `Panic`」)
+pub extern effect Panic where
+  never panicked : String -> a
+-- 文言を持って `Panic` を起こす。`exit` と同じく戻らない
+pub extern panic : String -> <Panic> a
+
 pub not : Bool -> Bool
 not True = False
 not False = True
 -- 前置の `-` の脱糖が呼ぶ。`pub` でないので、ユーザーは名前で書けない
-extern negate : Int -> Int
-pub extern (+) : Int -> Int -> Int
-pub extern (-) : Int -> Int -> Int
-pub extern (*) : Int -> Int -> Int
-pub extern (/) : Int -> Int -> Int
-pub extern (%) : Int -> Int -> Int
+extern negate : Int -> <Panic> Int
+pub extern (+) : Int -> Int -> <Panic> Int
+pub extern (-) : Int -> Int -> <Panic> Int
+pub extern (*) : Int -> Int -> <Panic> Int
+pub extern (/) : Int -> Int -> <Panic> Int
+pub extern (%) : Int -> Int -> <Panic> Int
 
 pub class Eq a where
   (==) : a -> a -> Bool
@@ -157,6 +165,14 @@ pub try_io : (Unit -> <IO | e> a) -> <IO | e> Result IOError a
 try_io action =
   handle action () with
     | ctl io_failed kind message -> Err (IOError { kind = kind, message = message })
+    | return x -> Ok x
+
+-- `Panic` を `Err` にする。捕まえるのは実行の時点で最も近い `try_panic` で、`Err` は誤りの文言を持つ
+-- (docs/spec/stdlib.md の「`try_panic`」)
+pub try_panic : (Unit -> <Panic | e> a) -> <e> Result String a
+try_panic action =
+  handle action () with
+    | ctl panicked message -> Err message
     | return x -> Ok x
 
 instance Show a => Show (List a) where

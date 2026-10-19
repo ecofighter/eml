@@ -27,10 +27,10 @@ build xs t =
     | [] -> t
     | x :: rest -> build rest (insert x t)
 
-bump : Int -> Stats -> Stats
+bump : Int -> Stats -> <Panic> Stats
 bump n st = if n == 0 then st else bump (n - 1) { st | count = st.count + 1, total = st.total + n }
 
-main : Unit -> <IO> Unit
+main : Unit -> <IO, Panic> Unit
 main () =
   let old = build [5, 8, 2] Leaf
   let new = build [9, 1, 6] old

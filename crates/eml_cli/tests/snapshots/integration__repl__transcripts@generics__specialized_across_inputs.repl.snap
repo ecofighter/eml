@@ -3,7 +3,7 @@ source: crates/eml_cli/tests/repl.rs
 expression: checked.render()
 input_file: crates/eml_cli/tests/repl/generics/specialized_across_inputs.repl
 ---
-> twice : (a -> a) -> a -> a
+> twice : (a -> <Panic> a) -> a -> <Panic> a
 . twice f x = f (f x)
 .
 > twice (fn x -> x + 1) 3

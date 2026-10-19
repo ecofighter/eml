@@ -4,17 +4,17 @@
 effect Ask where
   ask : Unit -> Int
 
-sum_to : Int -> Int
+sum_to : Int -> <Panic> Int
 sum_to n =
   let go k acc = if k == 0 then acc else go (k - 1) (acc + k)
   go n 0
 
-build : Int -> List Int
+build : Int -> <Panic> List Int
 build n =
   let go k acc = if k == 0 then acc else go (k - 1) (k :: acc)
   go n []
 
-total : List Int -> Int
+total : List Int -> <Panic> Int
 total xs =
   let go ys acc =
     match ys with
@@ -38,7 +38,7 @@ show_all xs =
       | y :: rest -> show y :: go rest
   go xs
 
-apply_twice : (Int -> Int) -> Int -> Int
+apply_twice : (Int -> <Panic> Int) -> Int -> <Panic> Int
 apply_twice f x =
   let twice g = fn y -> g (g y)
   twice f x
@@ -52,28 +52,28 @@ pair_up a b =
 pairs : Unit -> (Int, String)
 pairs () = pair_up 1 "one"
 
-over_applied : Int -> Int
+over_applied : Int -> <Panic> Int
 over_applied n =
   let mk m = fn k -> m + k
   mk n 10
 
-partially_applied : Int -> List Int
+partially_applied : Int -> <Panic> List Int
 partially_applied n =
   let add x y = x + y
   let add_n = add n
   List.map add_n [1, 2, 3]
 
-passes_itself : Int -> Int
+passes_itself : Int -> <Panic> Int
 passes_itself n =
   let go f k = if k == 0 then f 0 else go (fn x -> f x + 1) (k - 1)
   go (fn x -> x) n
 
-called_twice : Int -> Int
+called_twice : Int -> <Panic> Int
 called_twice n =
   let step k = if k == 0 then n else step (k - 1)
   step 3 + step 2
 
-never_called_outside : Int -> Int
+never_called_outside : Int -> <Panic> Int
 never_called_outside n =
   let loop k = if k == 0 then n else loop (k - 1)
   n + 1
@@ -83,7 +83,7 @@ polymorphic_outer x f =
   let go y = f y
   go x
 
-with_handler : Unit -> <IO> Int
+with_handler : Unit -> <IO, Panic> Int
 with_handler () =
   let go y = y + 1
   handle go 1 + ask () with
@@ -95,17 +95,17 @@ higher_order () =
   handle app (fn () -> ask ()) with
     | ctl ask () k -> k 7
 
-walk : Int -> <IO> Unit
+walk : Int -> <IO, Panic> Unit
 walk n =
   let each k = if k == 0 then () else walk (k - 1)
   if n == 0 then println "x" else each n
 
-annotated_parameter : Int -> Int
+annotated_parameter : Int -> <Panic> Int
 annotated_parameter n =
   let go (acc : Int) k = if k == 0 then acc else go (acc + k) (k - 1)
   go 0 n
 
-main : Unit -> <IO> Unit
+main : Unit -> <IO, Panic> Unit
 main () =
   println (show (sum_to 100000))
   println (show (total (build 100000)))

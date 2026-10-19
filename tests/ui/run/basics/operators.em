@@ -7,7 +7,7 @@ noisy b =
 show_bool : Bool -> String
 show_bool b = if b then "True" else "False"
 
-main : Unit -> <IO> Unit
+main : Unit -> <IO, Panic> Unit
 main () =
   println (show (1 + 2 * 3 - 4))
   println (show (-2 * 3))

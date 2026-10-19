@@ -20,12 +20,11 @@ fn exported(text: &str) -> String {
 #[test]
 fn a_lambda_that_captures_nothing_is_unr() {
     // `main` は宣言自身の変数を持たないので、`f` の矢印は SCC の最小解をそのまま使う。下限がないので `Unr` になる
-    let text =
-        "main : Unit -> <IO> Unit\nmain () =\n  let f = fn x -> x + 1\n  println (show (f 1))";
+    let text = "main : Unit -> <IO, Panic> Unit\nmain () =\n  let f = fn x -> x + 1\n  println (show (f 1))";
     insta::assert_snapshot!(exported(text), @"
-    main : Unit -> <IO> Unit
+    main : Unit -> <IO, Panic> Unit
       x#0 : Int
-      f#1 : Int -> Int
+      f#1 : Int -> <Panic> Int
     ");
 }
 
@@ -66,9 +65,9 @@ fn a_body_variable_in_an_own_variable_component_takes_its_var() {
     // 規則」の1つ目で `poly1` になる。最初のラムダの `g` も同じ型の変数を通るので同じ矢印である。
     // `use_g` の番号: 0 = `g` の矢印、1 = `g` を受けた後の矢印。注釈 `(g : Int -> Int)` の矢印は `g` の矢印と単一化して
     // 等しいので、同じ成分の `poly0` になる
-    let text = "f : (a -> <IO> Unit) -> a -> Int -> <IO> Unit\nf eat x n = if n == 0 then eat x else f (fn g -> eat (g ())) (fn () -> x) (n - 1)\n\nuse_g : (Int -> Int) -> Int -> Int\nuse_g g x =\n  let h = (g : Int -> Int)\n  h x";
+    let text = "f : (a -> <IO> Unit) -> a -> Int -> <IO, Panic> Unit\nf eat x n = if n == 0 then eat x else f (fn g -> eat (g ())) (fn () -> x) (n - 1)\n\nuse_g : (Int -> Int) -> Int -> Int\nuse_g g x =\n  let h = (g : Int -> Int)\n  h x";
     insta::assert_snapshot!(exported(text), @"
-    f : (poly0 a -> <IO> Unit) -> poly2 a -> poly3 Int -> <IO> Unit
+    f : (poly0 a -> <IO> Unit) -> poly2 a -> poly3 Int -> <IO, Panic> Unit
       eat#0 : poly0 a -> <IO> Unit
       x#1 : a
       n#2 : Int
@@ -157,7 +156,7 @@ fn std_public_functions_keep_their_schemes() {
     // 型を直接読む。`display_linear` は矢印の線形性を書くが、`Flexible` と `OpVar` の Kind と宣言の Kind の制約は書かないので、
     // この表で確かめるのは矢印の線形性までである。
     let checked = check(
-        "main : Unit -> <IO> Unit\nmain () = List.each (fn x -> println (String.join \",\" [\"a\"])) (String.lines \"a\")",
+        "main : Unit -> <IO, Panic> Unit\nmain () = List.each (fn x -> println (String.join \",\" [\"a\"])) (String.lines \"a\")",
     );
     assert!(checked.diagnostics.is_empty());
     let public = [
@@ -189,17 +188,17 @@ fn std_public_functions_keep_their_schemes() {
         ));
     }
     insta::assert_snapshot!(shown, @"
-    Std.List.length : List a -> Int
+    Std.List.length : List a -> <Panic> Int
     Std.List.map : (a -> <e> b) -> poly3 List a -> <e> List b
     Std.List.filter : (a -> <e> Bool) -> poly2 List a -> <e> List a
     Std.List.filter_map : (a -> <e> Option b) -> poly3 List a -> <e> List b
-    Std.String.starts_with : String -> poly0 String -> Bool
-    Std.String.ends_with : String -> poly0 String -> Bool
-    Std.String.split : String -> poly0 String -> List String
-    Std.String.lines : String -> List String
+    Std.String.starts_with : String -> poly0 String -> <Panic> Bool
+    Std.String.ends_with : String -> poly0 String -> <Panic> Bool
+    Std.String.split : String -> poly0 String -> <Panic> List String
+    Std.String.lines : String -> <Panic> List String
     Std.String.join : String -> poly0 List String -> String
-    Std.String.trim : String -> String
-    Std.String.to_int : String -> Option Int
+    Std.String.trim : String -> <Panic> String
+    Std.String.to_int : String -> <Panic> Option Int
     ");
 }
 

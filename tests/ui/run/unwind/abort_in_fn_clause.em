@@ -5,10 +5,10 @@ import Fail (Fail(..))
 effect Probe where
   probe : Int -> Int
 
-body : Unit -> <Probe, Fail Fs.File> Int
+body : Unit -> <Probe, Fail Fs.File, Panic> Int
 body () = probe 1 + probe 2
 
-inner : Unit -> <Fail Fs.File, IO> Int
+inner : Unit -> <Fail Fs.File, IO, Panic> Int
 inner () =
   handle body () from Fs.open "input.txt" with
     | fn probe n f -> if n == 2 then Fail.fail f else (n, f)
@@ -16,7 +16,7 @@ inner () =
       Fs.close f
       x
 
-main : Unit -> <IO> Unit
+main : Unit -> <IO, Panic> Unit
 main () =
   match Fail.to_result inner with
     | Ok n -> println "ok \{n}"

@@ -3,7 +3,7 @@
 //! extern が作る値のタグと、translate が作る配置も照らし合わせる。
 
 use eml_core_ir::type_repr;
-use eml_extern::{Extern, ExternType, Linearity, OpRet};
+use eml_extern::{Extern, ExternType, Linearity, OpRet, Purity};
 use eml_hir::{Function, FunctionKind, MethodImpl, TypeDefId, ValueItem};
 use eml_lir::{FALSE, TRUE, TUPLE};
 use eml_test_support::Checked;
@@ -23,6 +23,12 @@ probe_unit u = u
 
 probe_file : Fs.File -> Fs.File
 probe_file f = f
+
+probe_panic : Unit -> <Panic> Int
+probe_panic () = panic \"x\"
+
+probe_try_panic : Unit -> Result String Int
+probe_try_panic () = try_panic probe_panic
 
 main : Unit -> <IO> Unit
 main () = println \"x\"
@@ -175,6 +181,46 @@ fn every_extern_function_row_has_the_reprs_of_its_std_signature() {
             ),
         }
     }
+}
+
+#[test]
+fn faulting_rows_carry_panic() {
+    // 行の `purity` は、std の型の最後の外側の矢印の row と合う。`Panics` は `Panic` を起こし `IO` を起こさない。
+    // `Effectful` は `IO` を起こし、`Std.Env.arg` のように `Panic` も起こしうる。`Pure` は何も起こさない
+    // (docs/spec/effects.md の「組み込みの `Panic`」)
+    let checked = checked();
+    let program = &checked.program;
+    let (io, panic) = (program.io(), program.panic());
+    let mut store = checked.typed.types.clone();
+    for &e in Extern::ALL {
+        let row = e.row();
+        let mut ty = row_type(&checked, &mut store, e);
+        let mut labels = Vec::new();
+        for _ in row.params {
+            let TypeKind::Fn {
+                effects, tail, ret, ..
+            } = store.kind(ty)
+            else {
+                panic!("`{}` has an arrow per parameter", row.name);
+            };
+            assert_eq!(*tail, None, "{}", row.name);
+            labels = effects.iter().map(|label| label.id).collect();
+            ty = *ret;
+        }
+        match row.purity {
+            Purity::Pure => assert!(labels.is_empty(), "{}", row.name),
+            Purity::Panics => assert_eq!(labels, [panic], "{}", row.name),
+            Purity::Effectful => assert!(labels.contains(&io), "{}", row.name),
+        }
+    }
+    // `panic` は Prelude の `pub` の extern の関数で、`PROBES` が名前で呼べる
+    let (_, function) = program
+        .functions()
+        .find(|(_, function)| function.kind == FunctionKind::Extern(Some(Extern::Panic)))
+        .expect("`Prelude.panic` is declared");
+    assert_eq!(function.name, "panic");
+    assert_eq!(Extern::Panic.row().purity, Purity::Panics);
+    assert_eq!(Extern::Panic.row().ret, OpRet::Never);
 }
 
 #[test]

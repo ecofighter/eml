@@ -200,10 +200,10 @@ fn a_live_token_is_dropped_on_exit() {
 #[test]
 fn std_list_map_reuses_its_cells() {
     let text = "\
-range : Int -> Int -> List Int
+range : Int -> Int -> <Panic> List Int
 range lo hi = if lo > hi then [] else lo :: range (lo + 1) hi
 
-main : Unit -> <IO> Unit
+main : Unit -> <IO, Panic> Unit
 main () =
   let ys = List.map (fn x -> x * 3 + 1) (range 1 1000)
   println (show (List.length ys))

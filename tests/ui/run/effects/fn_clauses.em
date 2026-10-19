@@ -20,28 +20,28 @@ with_ask n action =
   handle action () with
     | fn ask () -> n
 
-asked : Unit -> Int
+asked : Unit -> <Panic> Int
 asked () = with_ask 20 (fn () -> ask () + ask () + 2)
 
-all_true : Unit -> Int
+all_true : Unit -> <Panic> Int
 all_true () =
   handle (if choose () then 1 else 0) + (if choose () then 10 else 0) with
     | fn choose () -> True
 
-logged : Unit -> <Log> Int
+logged : Unit -> <Log, Panic> Int
 logged () =
   handle ask () * 2 with
     | fn ask () ->
         log "asked once"
         21
 
-divide : Int -> <Input> Int
+divide : Int -> <Input, Panic> Int
 divide d =
   if d == 0 then stop "division by zero"
   else if d < 0 then skip ()
   else next () / d
 
-attempt : Int -> String
+attempt : Int -> <Panic> String
 attempt d =
   handle divide d with
     | fn next () -> 84
@@ -49,14 +49,14 @@ attempt d =
     | ctl stop message -> "failed: " ++ message
     | return x -> "ok: " ++ show x
 
-nested : Unit -> Int
+nested : Unit -> <Panic> Int
 nested () =
   handle ask () + 1 with
     | fn ask () ->
         handle ask () * 10 with
           | fn ask () -> 4
 
-main : Unit -> <IO> Unit
+main : Unit -> <IO, Panic> Unit
 main () =
   println (show (asked ()))
   println (show (all_true ()))

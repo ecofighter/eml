@@ -109,13 +109,13 @@ fn every_extern_function_is_declared_once_in_std() {
             signature
         };
         assert_eq!(signature.arity(), row.params.len(), "{}", row.name);
-        // `Effectful` の行だけが、最後の外側の矢印に extern のエフェクトを書く。ほかの矢印の row はどれも空である
+        // `Pure` でない行だけが、最後の外側の矢印に extern のエフェクトを書く。ほかの矢印の row はどれも空である
         let last = last_outer_arrow(signature);
         for (id, ty) in signature.types.iter() {
             let TypeRefKind::Fn { row: effects, .. } = &ty.kind else {
                 continue;
             };
-            if row.purity == Purity::Effectful && Some(id) == last {
+            if row.purity != Purity::Pure && Some(id) == last {
                 let RowRef::Closed { effects, .. } = effects else {
                     panic!("{} has no closed row on its last arrow", row.name);
                 };
@@ -165,6 +165,7 @@ fn every_extern_effect_is_declared_once_in_std() {
         assert!(def.generics.type_vars.is_empty(), "{}", row.name);
         let indexed = match e {
             ExternEffect::Io => program.io(),
+            ExternEffect::Panic => program.panic(),
         };
         assert_eq!(indexed, id, "{}", row.name);
     }

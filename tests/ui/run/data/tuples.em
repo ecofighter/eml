@@ -7,7 +7,7 @@ data Option a =
 swap : (Int, String) -> (String, Int)
 swap (n, s) = (s, n)
 
-sum_pair : (Int, Int) -> Int
+sum_pair : (Int, Int) -> <Panic> Int
 sum_pair p =
   let (a, b) = p
   a + b
@@ -20,10 +20,10 @@ describe o = match o with
   | Some (name, n) -> name ++ "=" ++ show n
   | None -> "missing"
 
-nested : ((Int, Int), String) -> String
+nested : ((Int, Int), String) -> <Panic> String
 nested ((a, b), label) = label ++ show (a * b)
 
-main : Unit -> <IO> Unit
+main : Unit -> <IO, Panic> Unit
 main () =
   let (s, n) = swap (1, "one")
   println (s ++ " " ++ show n)

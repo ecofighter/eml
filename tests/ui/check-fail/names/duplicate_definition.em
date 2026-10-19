@@ -1,5 +1,5 @@
 -- E1003: the second signature of `twice`.
-twice : Int -> Int
+twice : Int -> <Panic> Int
 twice x = x + x
 
 main : Unit -> <IO> Unit

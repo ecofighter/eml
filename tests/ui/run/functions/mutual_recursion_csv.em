@@ -10,7 +10,7 @@ comma_byte = 44
 newline_byte : Int
 newline_byte = 10
 
-parse : String -> List (List String)
+parse : String -> <Panic> List (List String)
 parse s =
   let n = String.byte_length s
   let start i row rows =
@@ -42,12 +42,12 @@ parse s =
     if i == n then List.reverse done else start i [] done
   if n == 0 then [] else start 0 [] []
 
-print_rows : String -> <IO> Unit
+print_rows : String -> <IO, Panic> Unit
 print_rows text =
   List.each (fn row -> println (String.join "|" row)) (parse text)
   println "--"
 
-main : Unit -> <IO> Unit
+main : Unit -> <IO, Panic> Unit
 main () =
   print_rows "name,age,quote\nAda,36,\"Hello, world\"\n\"Bob \"\"B\"\" Ross\",52,\"\"\n"
   print_rows "last,,x\n\"a,b\",\"c\"\"\",d\ntrailing,"

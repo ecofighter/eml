@@ -8,7 +8,7 @@ mapl f xs =
     | [] -> []
     | x :: rest -> f x :: mapl f rest
 
-main : Unit -> <IO> Unit
+main : Unit -> <IO, Panic> Unit
 main () =
   println (show (mapl (fn x -> x + 1) [1, 2, 3]))
   let r =

@@ -116,7 +116,7 @@ fn g(t.0: obj) -> obj {
 
 #[test]
 fn pure_extern_and_tail_call_are_not() {
-    // 止まりうる extern (`MayFail`) も、エフェクトを起こさないので点でない
+    // `Panic` を起こす extern (`Panics`) は、`Effectful` でないので点でない
     let text = "\
 fn g(x.0: obj) -> obj {
   return x.0

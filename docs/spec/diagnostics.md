@@ -119,7 +119,7 @@ struct Fix {
 | E2001 | `TYPE_MISMATCH` | 型の不一致。呼び出しの row のエフェクトの型引数が今の row と一致しない場合を含む |
 | E2002 | `EFFECT_NOT_IN_ROW` | シグネチャの row に含まれないエフェクトを起こした。ラムダの本体の場合を含む |
 | E2003 | `MISSING_MAIN` | 入口のモジュールに `main` がない。import した `main` は数えない。`eml run` のときだけ出す |
-| E2004 | `INVALID_MAIN_TYPE` | `main` のシグネチャが `Unit -> <IO> Unit` でない |
+| E2004 | `INVALID_MAIN_TYPE` | `main` のシグネチャが、row のラベルが `IO` と `Panic` だけの `Unit -> <…> Unit` でない ([モジュールと名前解決](modules.md) の「モジュール」) |
 | E2005 | `INFINITE_TYPE` | 無限の型 (単一化の occurs check)。row のラベルの型引数を通して、型変数か row 変数が自分自身の中に現れる場合を含む |
 | E2006 | `NO_INSTANCE` | 制約 `C T` を満たす instance がない。上位クラスの instance がないこと、導出した instance のフィールドの型が instance を持たないことを含む ([型と Kind](types.md) の「制約の解決」) |
 | E2009 | `AMBIGUOUS_CONSTRAINT` | 制約の型が最後まで決まらない。`:type` の問い合わせでは、型に現れない型変数を `Unit` とみなして解けないとき |
@@ -128,7 +128,7 @@ struct Fix {
 | E2012 | `CONSTRAINED_POLYMORPHIC_RECURSION` | 一様な位置の型変数が制約を持つ ([Core IR](core-ir.md) の「一様な位置と制約付きの多相再帰」) |
 | E2013 | `FIELD_NEEDS_KNOWN_TYPE` | 射影か更新の時点で、値の型が決まっていない ([型と Kind](types.md) の「フィールドの解決」) |
 | E2014 | `NO_SUCH_FIELD` | 射影か更新のフィールドが、その型にない。コンストラクタが2つ以上の型への射影と更新、タプルの更新を含む |
-| E2015 | `INPUT_EFFECT` | REPL の `let` の束縛か式の入力の row が `<IO>` に収まらない ([型と Kind](types.md) の「REPL の入力」)。`:type` の問い合わせには当てない |
+| E2015 | `INPUT_EFFECT` | REPL の `let` の束縛か式の入力の row が `<IO, Panic>` に収まらない ([型と Kind](types.md) の「REPL の入力」)。`:type` の問い合わせには当てない |
 | E2016 | `INPUT_LINEAR` | REPL の `let` の束縛か式の入力の型が `Unr` でない。`:type` の問い合わせには当てない |
 | E2017 | `BINDING_AMBIGUOUS` | REPL の `let` の束縛の型に、決まらない型変数が残った |
 | E2018 | `INPUT_CHANGES_UNIFORM` | REPL の入力が、前の入力の関数か instance の一様な位置を変える。`eml_cli` の `Repl` が `eml_types::input_changes_uniform` で作る |

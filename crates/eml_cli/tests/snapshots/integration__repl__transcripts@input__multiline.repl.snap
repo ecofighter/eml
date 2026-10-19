@@ -3,20 +3,20 @@ source: crates/eml_cli/tests/repl.rs
 expression: checked.render()
 input_file: crates/eml_cli/tests/repl/input/multiline.repl
 ---
-> twice : Int -> Int
+> twice : Int -> <Panic> Int
 . twice x =
 .   let y = x + x
 .   y
 .
 > twice 21
 42
-> fact : Int -> Int
+> fact : Int -> <Panic> Int
 . fact 0 = 1
 . fact n = n * fact (n - 1)
 .
 > fact 5
 120
-> sq : Int -> Int; sq x = x * x
+> sq : Int -> <Panic> Int; sq x = x * x
 .
 > sq 7
 49

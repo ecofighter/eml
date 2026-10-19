@@ -4,13 +4,13 @@ effect Mixed where
   single : Unit -> Int
   multi many : Unit -> Int
 
-counted : Fs.File -> <Mixed, IO> Int
+counted : Fs.File -> <Mixed, IO, Panic> Int
 counted f =
   let n = single ()
   Fs.close f
   n + many ()
 
-main : Unit -> <IO> Unit
+main : Unit -> <IO, Panic> Unit
 main () =
   let total =
     handle counted (Fs.open "../files/input.txt") with

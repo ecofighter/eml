@@ -2,10 +2,10 @@
 > effect Ask where
 .   ask : Unit -> Int
 .
-> asker : Unit -> <Ask> Int
+> asker : Unit -> <Ask, Panic> Int
 . asker () = ask () + 1
 .
-> run_old : Unit -> Int
+> run_old : Unit -> <Panic> Int
 . run_old () =
 .   handle asker () with
 .     | ctl ask () k -> k 10

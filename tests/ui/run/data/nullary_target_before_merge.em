@@ -8,12 +8,12 @@ size o = match o with
   | None -> 0
   | Some s -> 1
 
-f : Opt -> Int
+f : Opt -> <Panic> Int
 f o =
   let k = match o with
     | None -> 0
     | Some s -> 1
   k + size o
 
-main : Unit -> <IO> Unit
+main : Unit -> <IO, Panic> Unit
 main () = println (show (f None + f (Some "a")))

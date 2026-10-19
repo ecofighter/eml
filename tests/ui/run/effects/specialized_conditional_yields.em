@@ -2,7 +2,7 @@
 -- なる (docs/spec/core-ir.md の「handler の複製」)。合流の後でも、前に束縛した変数を読む
 import Yield (Yield(..))
 
-gen : Int -> Unit -> <Yield Int> Unit
+gen : Int -> Unit -> <Yield Int, Panic> Unit
 gen n () =
   let m = n * 10
   if n > 1 then yield 1 else ()
@@ -10,7 +10,7 @@ gen n () =
   if n > 3 then yield 3 else yield 4
   yield (m + n)
 
-main : Unit -> <IO> Unit
+main : Unit -> <IO, Panic> Unit
 main () =
   println (show (Yield.fold (fn a b -> a + b) 0 (gen 2)))
   println (show (Yield.fold (fn a b -> a + b) 0 (gen 5)))

@@ -101,9 +101,9 @@ fn undecided_operands_are_reported_and_errors_are_not() {
 #[test]
 fn an_undecided_operand_is_not_reported_when_the_body_has_another_error() {
     // `g` の引数の型は `1 + g` の誤りが直れば決まる。E2009 は連鎖なので出さない
-    let text = "broken : Unit -> Int\nbroken () =\n  let g = fn x -> x == x\n  1 + g";
+    let text = "broken : Unit -> <Panic> Int\nbroken () =\n  let g = fn x -> x == x\n  1 + g";
     insta::assert_snapshot!(check_text(text), @"
-    broken : Unit -> Int
+    broken : Unit -> <Panic> Int
       x#0 : _
       g#1 : _ -> <_> Bool
     ---

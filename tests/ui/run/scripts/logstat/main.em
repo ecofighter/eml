@@ -26,7 +26,7 @@ skew tree =
     | _ -> tree
 
 -- 右の孫が同じ段なら、右の子を1段上げる
-split : Tree k v -> Tree k v
+split : Tree k v -> <Panic> Tree k v
 split tree =
   match tree with
     | Node level a k v (Node right_level b rk rv (Node grand_level c gk gv d)) ->
@@ -36,7 +36,7 @@ split tree =
     | _ -> tree
 
 -- `k` の値を `f` で更新する。なければ `f None` を入れる
-upsert : Ord k => k -> (Option v -> v) -> Tree k v -> Tree k v
+upsert : Ord k => k -> (Option v -> <Panic> v) -> Tree k v -> <Panic> Tree k v
 upsert key f tree =
   match tree with
     | Leaf -> Node 1 Leaf key (f None) Leaf
@@ -56,7 +56,7 @@ entries tree =
   go tree Nil
 
 -- 安定なマージソート。`before a b` は `a` を `b` より前に置くときに `True` である
-sort_by : (a -> a -> Bool) -> List a -> List a
+sort_by : (a -> a -> Bool) -> List a -> <Panic> List a
 sort_by before xs =
   let merge acc left right =
     match (left, right) with
@@ -70,7 +70,7 @@ sort_by before xs =
     let (left, right) = split_at (n / 2) xs
     merge Nil (sort_by before left) (sort_by before right)
 
-split_at : Int -> List a -> (List a, List a)
+split_at : Int -> List a -> <Panic> (List a, List a)
 split_at n xs =
   let go i acc rest =
     match rest with
@@ -78,10 +78,10 @@ split_at n xs =
       | Nil -> (List.reverse acc, Nil)
   go n Nil xs
 
-take : Int -> List a -> List a
+take : Int -> List a -> <Panic> List a
 take n xs = (split_at n xs).0
 
-stdin_lines : Unit -> <Yield String, IO> Unit
+stdin_lines : Unit -> <Yield String, IO, Panic> Unit
 stdin_lines () =
   match Stdin.read_line () with
     | Some line ->
@@ -92,7 +92,7 @@ stdin_lines () =
 each_line : List String -> <Yield String> Unit
 each_line lines = List.each yield lines
 
-parse : Int -> String -> Parsed
+parse : Int -> String -> <Panic> Parsed
 parse number line =
   match String.split " " line with
     | [_, _, path, status, duration] ->
@@ -102,7 +102,7 @@ parse number line =
     | _ -> Malformed number
 
 -- 流れてきた行を解析して記録する。行番号を状態に持つ
-parsing : (Unit -> <Yield String, Record | e> Unit) -> <Record | e> Unit
+parsing : (Unit -> <Yield String, Record | e> Unit) -> <Record, Panic | e> Unit
 parsing lines =
   handle lines () from 1 with
     | fn yield line number -> (record (parse number line), number + 1)
@@ -119,13 +119,13 @@ data Stats =
     , max : Int
     }
 
-increment : Option Int -> Int
+increment : Option Int -> <Panic> Int
 increment n =
   match n with
     | Some c -> c + 1
     | None -> 1
 
-add : Stats -> Parsed -> <IO> Stats
+add : Stats -> Parsed -> <IO, Panic> Stats
 add st parsed =
   match parsed with
     | Malformed number ->
@@ -140,14 +140,14 @@ add st parsed =
       , max = if st.count == 0 || d > st.max then d else st.max
       }
 
-aggregate : (Unit -> <Record, IO | e> Unit) -> <IO | e> Stats
+aggregate : (Unit -> <Record, IO | e> Unit) -> <IO, Panic | e> Stats
 aggregate body =
   let empty = Stats { total = 0, malformed = 0, statuses = Leaf, paths = Leaf, count = 0, sum = 0, max = 0 }
   handle body () from empty with
     | fn record parsed st -> ((), add st parsed)
     | return _ st -> st
 
-report : Int -> Stats -> <IO> Unit
+report : Int -> Stats -> <IO, Panic> Unit
 report top st =
   println "lines \{st.total}"
   println "malformed \{st.malformed}"
@@ -159,7 +159,7 @@ report top st =
   println "duration avg \{average} max \{st.max}"
 
 -- `-n` の値と `--whole` を読む。誤りなら `None` である
-parse_args : (Int, Bool) -> List String -> Option (Int, Bool)
+parse_args : (Int, Bool) -> List String -> <Panic> Option (Int, Bool)
 parse_args (top, whole) args =
   match args with
     | Nil -> Some (top, whole)
@@ -170,7 +170,7 @@ parse_args (top, whole) args =
         | None -> None
     | _ -> None
 
-main : Unit -> <IO> Unit
+main : Unit -> <IO, Panic> Unit
 main () =
   match parse_args (10, False) (Env.args ()) with
     | None ->

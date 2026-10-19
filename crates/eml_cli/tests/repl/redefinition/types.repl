@@ -2,7 +2,7 @@
 > data Shape = | Circle Int
 > let old = Circle 1
 > data Shape = | Square Int
-> area : Shape -> Int
+> area : Shape -> <Panic> Int
 . area s = match s with
 .   | Square n -> n * n
 .

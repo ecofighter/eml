@@ -7,7 +7,7 @@ noisy n =
   println "eval \{n}"
   n
 
-main : Unit -> <IO> Unit
+main : Unit -> <IO, Panic> Unit
 main () =
   let name = "eml"
   println "Hello, \{name}!"

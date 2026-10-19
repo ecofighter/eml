@@ -2,7 +2,7 @@
 data Box a =
   | Box { item : a, n : Int }
 
-main : Unit -> <IO> Unit
+main : Unit -> <IO, Panic> Unit
 main () =
   let b = { Box { item = 41, n = 1 } | n = 2 }
   match b with

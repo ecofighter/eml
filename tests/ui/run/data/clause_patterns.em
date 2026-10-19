@@ -5,18 +5,18 @@ data Box a =
 effect Ask where
   ask : Box Int -> Int
 
-program : Unit -> <Ask> (Box Int)
+program : Unit -> <Ask, Panic> (Box Int)
 program () =
   let a = ask (Box 20)
   let b = ask (Box 1)
   Box (a + b)
 
-answer : Unit -> Int
+answer : Unit -> <Panic> Int
 answer () =
   handle program () with
     | ctl ask (Box q) k -> k (q * 2)
     | return (Box r) -> r
 
-main : Unit -> <IO> Unit
+main : Unit -> <IO, Panic> Unit
 main () =
   println (show (answer ()))

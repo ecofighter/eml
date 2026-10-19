@@ -216,12 +216,12 @@ fn a_runtime_error_in_fast_mode_exits_with_one() {
 /// 終わらない自己末尾呼び出しのループで、行を出力し続ける。
 #[cfg(unix)]
 const SPIN: &str = "\
-spin : Int -> <IO> Unit
+spin : Int -> <IO, Panic> Unit
 spin n =
   println (show n)
   spin (n + 1)
 
-main : Unit -> <IO> Unit
+main : Unit -> <IO, Panic> Unit
 main () = spin 0
 ";
 
@@ -377,7 +377,7 @@ fn repeated_interrupts_end_a_program_waiting_in_a_read_with_130() {
 
 /// 引数を1行に書く。
 const SHOW_ARGS: &str = "\
-main : Unit -> <IO> Unit
+main : Unit -> <IO, Panic> Unit
 main () = println (show (Env.args ()))
 ";
 
@@ -440,7 +440,7 @@ fn a_misspelled_flag_is_a_usage_error() {
 fn a_script_reads_the_standard_input_and_writes_the_standard_error() {
     use std::io::Write;
     let text = "\
-main : Unit -> <IO> Unit
+main : Unit -> <IO, Panic> Unit
 main () =
   eprintln \"to stderr\"
   println (show (Stdin.read_line ()))
@@ -574,7 +574,7 @@ fn an_interrupt_stops_a_program_waiting_for_a_child_with_130() {
     use std::time::{Duration, Instant};
 
     let text = "\
-main : Unit -> <IO> Unit
+main : Unit -> <IO, Panic> Unit
 main () = println (show (Proc.run \"sh\" [\"-c\", \"echo started >&2; exec sleep 30\"]))
 ";
     let dir = temp_project("cli-sigint-child", &[("main.em", text)]);
@@ -620,7 +620,7 @@ fn repeated_interrupts_end_a_program_waiting_for_the_standard_input_with_130() {
     use std::time::{Duration, Instant};
 
     let text = "\
-main : Unit -> <IO> Unit
+main : Unit -> <IO, Panic> Unit
 main () =
   eprintln \"ready\"
   println (show (Stdin.read_line ()))

@@ -3,19 +3,19 @@
 apply : (a -> <e> b) -> a -> <e> b
 apply f x = f x
 
-twice : (a -> a) -> a -> a
+twice : (a -> <Panic> a) -> a -> <Panic> a
 twice f x = f (f x)
 
-inc : Int -> Int
+inc : Int -> <Panic> Int
 inc n = n + 1
 
-double : Int -> Int
+double : Int -> <Panic> Int
 double n = n * 2
 
 id : a -> a
 id x = x
 
-main : Unit -> <IO> Unit
+main : Unit -> <IO, Panic> Unit
 main () =
   println (show (apply inc 1))
   println (show (twice inc 5))

@@ -8,13 +8,13 @@ closer n f =
   Fs.close f
   n
 
-pick : Int -> <Choose, IO> (Fs.File -> <IO> Int)
+pick : Int -> <Choose, IO, Panic> (Fs.File -> <IO> Int)
 pick n = if choose () then closer n else closer (n + 1)
 
-body : Unit -> <Choose, IO> Int
+body : Unit -> <Choose, IO, Panic> Int
 body () = pick 1 (Fs.open "input.txt")
 
-main : Unit -> <IO> Unit
+main : Unit -> <IO, Panic> Unit
 main () =
   let r = handle body () with
     | ctl choose () k -> k True + k False

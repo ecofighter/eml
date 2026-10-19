@@ -1,6 +1,6 @@
 # 式の入力だけが使った標準ライブラリのモジュールは、次の入力では読み込まない。前の入力の定義は変わらず、
 # E2018 にもならない (docs/spec/modules.md の「REPL のセッション」)
-> double : Int -> Int
+> double : Int -> <Panic> Int
 . double x = x * 2
 .
 > fn (path : String) -> Fs.open path

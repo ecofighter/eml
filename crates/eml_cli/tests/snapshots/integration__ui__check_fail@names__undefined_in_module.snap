@@ -4,16 +4,16 @@ expression: rendered
 input_file: tests/ui/check-fail/names/undefined_in_module/main.em
 ---
 [E1002] Error: cannot find type `Count` in module `Lib`
-   ╭─[ check-fail/names/undefined_in_module/main.em:4:7 ]
+   ╭─[ check-fail/names/undefined_in_module/main.em:4:23 ]
    │
- 4 │ two : Lib.Count
-   │       ────┬────  
-   │           ╰────── not found in this module
+ 4 │ two : Unit -> <Panic> Lib.Count
+   │                       ────┬────  
+   │                           ╰────── not found in this module
 ───╯
 [E1001] Error: cannot find value `uno` in module `Lib`
-   ╭─[ check-fail/names/undefined_in_module/main.em:5:17 ]
+   ╭─[ check-fail/names/undefined_in_module/main.em:5:20 ]
    │
- 5 │ two = Lib.one + Lib.uno
-   │                 ───┬───  
-   │                    ╰───── not found in this module
+ 5 │ two () = Lib.one + Lib.uno
+   │                    ───┬───  
+   │                       ╰───── not found in this module
 ───╯

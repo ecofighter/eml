@@ -12,7 +12,7 @@ run_state init action =
     | fn put st2 _ -> ((), st2)
     | return x st -> (x, st)
 
-counter : Unit -> <State Int> Int
+counter : Unit -> <State Int, Panic> Int
 counter () =
   put (get () + 1)
   put (get () * 10)
@@ -29,10 +29,10 @@ spend t =
 effect Tick where
   tick : Unit -> Int
 
-ticks : Unit -> <Tick> Int
+ticks : Unit -> <Tick, Panic> Int
 ticks () = tick () + tick () + tick ()
 
-main : Unit -> <IO> Unit
+main : Unit -> <IO, Panic> Unit
 main () =
   let (result, final) = run_state 1 counter
   println "\{result} \{final}"

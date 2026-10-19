@@ -3,15 +3,15 @@
 twice : String -> String
 twice s = s ++ s
 
-count : Int -> Int
+count : Int -> <Panic> Int
 count n = if n == 0 then 0 else 1 + count (n - 1)
 
-label : Bool -> Int -> String -> String
+label : Bool -> Int -> String -> <Panic> String
 label b n s =
   let t = if b then twice s else s
   t ++ show (n + count 3)
 
-main : Unit -> <IO> Unit
+main : Unit -> <IO, Panic> Unit
 main () =
   let s = "ab"
   let t = twice s

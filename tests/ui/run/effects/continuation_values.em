@@ -2,10 +2,10 @@
 effect Ask where
   ask : Unit -> Int
 
-add_two : Unit -> <Ask> Int
+add_two : Unit -> <Ask, Panic> Int
 add_two () = ask () + ask ()
 
-main : Unit -> <IO> Unit
+main : Unit -> <IO, Panic> Unit
 main () =
   let passed =
     handle add_two () with

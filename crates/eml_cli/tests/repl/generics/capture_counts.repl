@@ -4,12 +4,12 @@
 .   | Flat a
 .   | Nest (Nested (List a))
 .
-> map_nested : (a -> b) -> Nested a -> Nested b
+> map_nested : (a -> <Panic> b) -> Nested a -> <Panic> Nested b
 . map_nested f n = match n with
 .   | Flat x -> Flat (f x)
 .   | Nest inner -> Nest (map_nested (List.map f) inner)
 .
-> add3 : Int -> Int -> Int -> Int
+> add3 : Int -> Int -> Int -> <Panic> Int
 . add3 a b c = a + b + c
 .
 > get : Nested a -> Option a

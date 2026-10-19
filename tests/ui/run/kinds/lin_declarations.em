@@ -43,7 +43,7 @@ contents q =
   match q with
     | Queue xs -> xs
 
-work : Worker -> Worker
+work : Worker -> <Panic> Worker
 work w =
   let Worker { queue, name, count } = w
   Worker { queue = push count queue, name = name ++ "!", count = count + 1 }
@@ -59,7 +59,7 @@ is_empty l =
     | [] -> True
     | _ -> False
 
-main : Unit -> <IO> Unit
+main : Unit -> <IO, Panic> Unit
 main () =
   let token = Token
   println (spend token)

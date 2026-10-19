@@ -4,10 +4,10 @@ data Seq a =
   | Done
   | a :> Seq a
 
-total : Seq Int -> Int
+total : Seq Int -> <Panic> Int
 total s = match s with
   | Done -> 0
   | x :> rest -> x + total rest
 
-main : Unit -> <IO> Unit
+main : Unit -> <IO, Panic> Unit
 main () = println (show (total (1 :> (2 :> (3 :> Done)))))

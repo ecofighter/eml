@@ -1,7 +1,7 @@
 -- `orders.em` のラムダを各ループに書き込んだ手書きの版。自動の特殊化が目指す下限になる。
 data Order = | Order { id : Int, qty : Int, price : Int }
 
-make : Int -> List Order
+make : Int -> <Panic> List Order
 make n =
   let go i seed acc =
     if i == 0 then acc
@@ -18,7 +18,7 @@ filter_big xs =
       | x :: rest -> if (x : Order).qty > 5 then go (x :: acc) rest else go acc rest
   go Nil xs
 
-map_total : List Order -> List Int
+map_total : List Order -> <Panic> List Int
 map_total xs =
   let go acc ys =
     match ys with
@@ -26,11 +26,11 @@ map_total xs =
       | Order { qty = q, price = p } :: rest -> go (q * p :: acc) rest
   go Nil xs
 
-fold_sum : Int -> List Int -> Int
+fold_sum : Int -> List Int -> <Panic> Int
 fold_sum acc Nil = acc
 fold_sum acc (x :: rest) = fold_sum (acc + x) rest
 
-main : Unit -> <IO> Unit
+main : Unit -> <IO, Panic> Unit
 main () =
   let orders = make 100000
   let big = filter_big orders

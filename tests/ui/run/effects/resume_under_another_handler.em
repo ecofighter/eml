@@ -4,10 +4,10 @@ effect Ask where
   multi ask : Unit -> Int
 
 data Saved =
-  | Saved (Int -> Saved)
+  | Saved (Int -> <Panic> Saved)
   | Value Int
 
-capture : Unit -> Saved
+capture : Unit -> <Panic> Saved
 capture () =
   handle Value (ask () + ask ()) with
     | ctl ask () k -> Saved k
@@ -18,7 +18,7 @@ describe s =
     | Saved _ -> "saved"
     | Value n -> show n
 
-main : Unit -> <IO> Unit
+main : Unit -> <IO, Panic> Unit
 main () =
   match capture () with
     | Saved k ->

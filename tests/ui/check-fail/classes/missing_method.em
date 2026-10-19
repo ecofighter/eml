@@ -1,7 +1,7 @@
 -- E1036: an instance must define every method that has no default.
 class Size a where
   size : a -> Int
-  double : a -> Int
+  double : a -> <Panic> Int
   double x = size x * 2
 
 data Color =

@@ -3,7 +3,7 @@
 effect Ask where
   ask : Unit -> Int
 
-main : Unit -> <IO> Unit
+main : Unit -> <IO, Panic> Unit
 main () =
   let n =
     handle ask () + 1 with

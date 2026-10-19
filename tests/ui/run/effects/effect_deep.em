@@ -7,14 +7,14 @@ effect Counter where
 effect Log where
   log : String -> Unit
 
-count_three : Unit -> <Counter> Int
+count_three : Unit -> <Counter, Panic> Int
 count_three () =
   let a = tick ()
   let b = tick ()
   let c = tick ()
   a + b + c
 
-inner_and_outer : Unit -> <Counter> Int
+inner_and_outer : Unit -> <Counter, Panic> Int
 inner_and_outer () =
   let outer = tick ()
   let inner =
@@ -27,7 +27,7 @@ logged_tick () =
   log "before"
   tick ()
 
-main : Unit -> <IO> Unit
+main : Unit -> <IO, Panic> Unit
 main () =
   let total =
     handle count_three () with

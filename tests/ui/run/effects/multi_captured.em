@@ -3,13 +3,13 @@
 effect Ask where
   multi ask : Unit -> Int
 
-plus_one : Unit -> <Ask> Int
+plus_one : Unit -> <Ask, Panic> Int
 plus_one () = ask () + 1
 
-twice : (Int -> <e> Int) -> <e> Int
+twice : (Int -> <e> Int) -> <Panic | e> Int
 twice f = f 10 + f 20
 
-main : Unit -> <IO> Unit
+main : Unit -> <IO, Panic> Unit
 main () =
   let captured =
     handle plus_one () with

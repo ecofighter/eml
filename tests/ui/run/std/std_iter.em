@@ -1,7 +1,7 @@
 import Yield (Yield(..))
 import Iter
 
-noisy : Int -> Unit -> <IO, Yield Int> Unit
+noisy : Int -> Unit -> <IO, Yield Int, Panic> Unit
 noisy n () =
   let go i =
     if i > n then ()
@@ -11,7 +11,7 @@ noisy n () =
       go (i + 1)
   go 1
 
-nums : Int -> Unit -> <Yield Int> Unit
+nums : Int -> Unit -> <Yield Int, Panic> Unit
 nums n () =
   let go i =
     if i > n then ()
@@ -26,7 +26,7 @@ empty () = ()
 show_pairs : List (Int, Int) -> String
 show_pairs xs = show xs
 
-laziness : Unit -> <IO> Unit
+laziness : Unit -> <IO, Panic> Unit
 laziness () =
   println "build"
   let it = Iter.take 2 (Iter.map (fn x -> x * 10) (Iter.generate (noisy 5)))
@@ -37,7 +37,7 @@ laziness () =
       println "first \{x}"
       drop rest
 
-main : Unit -> <IO> Unit
+main : Unit -> <IO, Panic> Unit
 main () =
   laziness ()
   println (show (Iter.to_list (Iter.generate (nums 3))))

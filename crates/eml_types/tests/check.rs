@@ -3,13 +3,13 @@ use eml_hir::ValueItem;
 
 #[test]
 fn signatures_and_local_types() {
-    let text = "add : Int -> Int -> Int\nadd a b =\n  let sum = a + b\n  sum\n\nmain : Unit -> <IO> Unit\nmain () =\n  let message = \"sum: \" ++ show (add 1 2)\n  println message";
+    let text = "add : Int -> Int -> <Panic> Int\nadd a b =\n  let sum = a + b\n  sum\n\nmain : Unit -> <IO, Panic> Unit\nmain () =\n  let message = \"sum: \" ++ show (add 1 2)\n  println message";
     insta::assert_snapshot!(check_text(text), @r"
-    add : Int -> Int -> Int
+    add : Int -> Int -> <Panic> Int
       a#0 : Int
       b#1 : Int
       sum#2 : Int
-    main : Unit -> <IO> Unit
+    main : Unit -> <IO, Panic> Unit
       message#0 : String
     ");
 }
@@ -69,14 +69,14 @@ fn if_without_else_must_be_unit() {
 #[test]
 fn main_type_and_parameter_count() {
     let text = "main : Int -> Int\nmain n = n\n\ntwo : Int -> Int\ntwo a b = a";
-    insta::assert_snapshot!(check_text(text), @r"
+    insta::assert_snapshot!(check_text(text), @"
     main : Int -> Int
       n#0 : Int
     two : Int -> Int
       a#0 : Int
       b#1 : {error}
     ---
-    E2004 1:8 `main` must have type `Unit -> <IO> Unit`
+    E2004 1:8 `main` must have type `Unit -> <IO, Panic> Unit`, with either label optional
       1:8 found `Int -> Int`
     E2001 5:7 `two` has 2 parameters but its signature has 1 arrow
       5:7 this parameter has no arrow in the signature
@@ -85,15 +85,107 @@ fn main_type_and_parameter_count() {
 }
 
 #[test]
+fn main_may_perform_nothing() {
+    // `main` の row は、`IO` と `Panic` のどちらも省ける (docs/spec/modules.md の「モジュール」)
+    assert_eq!(
+        check_short("main : Unit -> Unit\nmain () = ()"),
+        Vec::<String>::new()
+    );
+}
+
+#[test]
+fn main_may_perform_only_panic() {
+    let text = "main : Unit -> <Panic> Unit\nmain () = panic \"stop\"";
+    assert_eq!(check_short(text), Vec::<String>::new());
+}
+
+#[test]
+fn main_may_perform_io_and_panic() {
+    let text = "main : Unit -> <IO, Panic> Unit\nmain () = println (show (1 + 2))";
+    assert_eq!(check_short(text), Vec::<String>::new());
+}
+
+#[test]
+fn main_with_a_row_variable_is_rejected() {
+    let text = "main : Unit -> <IO | e> Unit\nmain () = println \"x\"";
+    assert_eq!(
+        check_short(text),
+        ["E2004 1:8 `main` must have type `Unit -> <IO, Panic> Unit`, with either label optional"]
+    );
+}
+
+fn fix_text(text: &str) -> String {
+    let checked = eml_test_support::check(text);
+    eml_test_support::fixes(checked.files(), &checked.diagnostics)
+}
+
+#[test]
+fn the_e2002_fix_adds_a_row_after_the_arrow() {
+    // 書いていない row は、矢印の後ろに足す
+    insta::assert_snapshot!(fix_text("inc : Int -> Int\ninc n = n + 1"), @r#"
+    E2002 2:9 add `Panic` to the signature of `inc`
+      1:14..1:14 "<Panic> "
+    "#);
+}
+
+#[test]
+fn the_e2002_fix_adds_the_label_to_the_row_of_the_body_arrow() {
+    // 本体の row は、引数の数だけたどった矢印の row である
+    let text = "add : Int -> Int -> <IO> Int\nadd a b =\n  println \"add\"\n  a + b\n\nempty : Int -> <> Int\nempty n = n * 2";
+    insta::assert_snapshot!(fix_text(text), @r#"
+    E2002 4:3 add `Panic` to the signature of `add`
+      1:24..1:24 ", Panic"
+    E2002 7:11 add `Panic` to the signature of `empty`
+      6:17..6:17 "Panic"
+    "#);
+}
+
+#[test]
+fn the_e2002_fix_puts_the_label_before_the_row_variable() {
+    let text = "call : (Unit -> <e> Int) -> <e> Int\ncall f = f () + 1\n\nlog : (Unit -> <IO | e> Int) -> <IO | e> Int\nlog f = f () - 1";
+    insta::assert_snapshot!(fix_text(text), @r#"
+    E2002 2:10 add `Panic` to the signature of `call`
+      1:30..1:30 "Panic | "
+    E2002 5:9 add `Panic` to the signature of `log`
+      4:36..4:36 ", Panic"
+    "#);
+}
+
+#[test]
+fn the_e2002_fix_is_missing_for_an_effect_with_type_arguments() {
+    // 型引数を書けないので fix を付けない。`IO` のように型引数のないエフェクトには付ける
+    let text = "effect State s where\n  get : Unit -> s\n\ncount : Unit -> Int\ncount () = get ()\n\nsay : String -> Unit\nsay s = println s";
+    insta::assert_snapshot!(fix_text(text), @r#"
+    E2002 8:9 add `IO` to the signature of `say`
+      7:17..7:17 "<IO> "
+    "#);
+}
+
+#[test]
+fn the_e2002_fix_is_missing_without_an_arrow_of_its_own() {
+    // 値は矢印を持たず、メソッドのシグネチャはクラスのものなので、どちらにも fix を付けない
+    let text = "width : Int\nwidth = 80 * 2\n\ndata Ratio = | Ratio Int Int\n\ninstance Show Ratio where\n  show r = match r with\n    | Ratio n d -> show (n / d)";
+    let checked = eml_test_support::check(text);
+    assert_eq!(
+        eml_test_support::short(checked.files(), &checked.diagnostics)
+            .iter()
+            .map(|line| &line[..5])
+            .collect::<Vec<_>>(),
+        ["E2002", "E2002"]
+    );
+    assert_eq!(fix_text(text), "");
+}
+
+#[test]
 fn function_values_and_partial_application() {
-    let text = "add : Int -> Int -> Int\nadd a b = a + b\n\npartial : Unit -> Int\npartial () =\n  let f = add 1\n  let g = add\n  0\n\ncurried : Int -> Int -> Int\ncurried a = a";
-    insta::assert_snapshot!(check_text(text), @r"
-    add : Int -> Int -> Int
+    let text = "add : Int -> Int -> <Panic> Int\nadd a b = a + b\n\npartial : Unit -> Int\npartial () =\n  let f = add 1\n  let g = add\n  0\n\ncurried : Int -> Int -> Int\ncurried a = a";
+    insta::assert_snapshot!(check_text(text), @"
+    add : Int -> Int -> <Panic> Int
       a#0 : Int
       b#1 : Int
     partial : Unit -> Int
-      f#0 : Int -> <_> Int
-      g#1 : Int -> <_> Int -> <_> Int
+      f#0 : Int -> <Panic | _> Int
+      g#1 : Int -> <_> Int -> <Panic | _> Int
     curried : Int -> Int -> Int
       a#0 : Int
     ---
@@ -105,9 +197,9 @@ fn function_values_and_partial_application() {
 
 #[test]
 fn name_errors_do_not_cascade() {
-    let text = "f : Int -> Int\nf x = g (x + undefined_thing) 1\nb : Bool\nb = 1 < 2 < 3";
+    let text = "f : Int -> <Panic> Int\nf x = g (x + undefined_thing) 1\nb : Bool\nb = 1 < 2 < 3";
     insta::assert_snapshot!(check_text(text), @r"
-    f : Int -> Int
+    f : Int -> <Panic> Int
       x#0 : Int
     b : Bool
     ---
@@ -122,11 +214,12 @@ fn name_errors_do_not_cascade() {
 
 #[test]
 fn too_many_arguments_and_non_functions() {
-    let text = "one : Int -> Int\none x = x\n\nbad : Unit -> Int\nbad () = one 1 2 + True 3";
+    let text =
+        "one : Int -> Int\none x = x\n\nbad : Unit -> <Panic> Int\nbad () = one 1 2 + True 3";
     insta::assert_snapshot!(check_text(text), @r"
     one : Int -> Int
       x#0 : Int
-    bad : Unit -> Int
+    bad : Unit -> <Panic> Int
     ---
     E2001 5:16 `one` takes 1 argument but 2 were given
       5:16 unexpected argument
@@ -183,25 +276,25 @@ fn annotations_in_the_body_refer_to_the_signature() {
 
 #[test]
 fn equations_may_return_functions_and_calls_may_pass_more_arguments() {
-    let text = "add : Int -> Int -> Int\nadd a b = a + b\n\nadder : Int -> Int -> Int\nadder x = add x\n\ninc : Int -> Int\ninc = adder 1\n\nthree : Unit -> Int\nthree () = adder 1 2 + inc 1";
-    insta::assert_snapshot!(check_text(text), @r"
-    add : Int -> Int -> Int
+    let text = "add : Int -> Int -> <Panic> Int\nadd a b = a + b\n\nadder : Int -> Int -> <Panic> Int\nadder x = add x\n\ninc : Int -> <Panic> Int\ninc = adder 1\n\nthree : Unit -> <Panic> Int\nthree () = adder 1 2 + inc 1";
+    insta::assert_snapshot!(check_text(text), @"
+    add : Int -> Int -> <Panic> Int
       a#0 : Int
       b#1 : Int
-    adder : Int -> Int -> Int
+    adder : Int -> Int -> <Panic> Int
       x#0 : Int
-    inc : Int -> Int
-    three : Unit -> Int
+    inc : Int -> <Panic> Int
+    three : Unit -> <Panic> Int
     ");
 }
 
 #[test]
 fn lambdas_are_checked_against_the_expected_type_or_inferred() {
-    let text = "apply : (Int -> Int) -> Int\napply f = f 1\n\nmain : Unit -> <IO> Unit\nmain () =\n  let n = apply (fn x -> x + 1)\n  let id = fn y -> y\n  let s = id \"s\"\n  let k = fn (z : Int) _ -> z\n  println (show (k n s))";
+    let text = "apply : (Int -> <Panic> Int) -> <Panic> Int\napply f = f 1\n\nmain : Unit -> <IO, Panic> Unit\nmain () =\n  let n = apply (fn x -> x + 1)\n  let id = fn y -> y\n  let s = id \"s\"\n  let k = fn (z : Int) _ -> z\n  println (show (k n s))";
     insta::assert_snapshot!(check_text(text), @"
-    apply : (Int -> Int) -> Int
-      f#0 : Int -> Int
-    main : Unit -> <IO> Unit
+    apply : (Int -> <Panic> Int) -> <Panic> Int
+      f#0 : Int -> <Panic> Int
+    main : Unit -> <IO, Panic> Unit
       x#0 : Int
       n#1 : Int
       y#2 : String
@@ -214,11 +307,11 @@ fn lambdas_are_checked_against_the_expected_type_or_inferred() {
 
 #[test]
 fn annotated_lambda_parameters_must_match_and_arities_must_agree() {
-    let text = "apply : (Int -> Int) -> Int\napply f = f 1\n\nbad : Unit -> Int\nbad () = apply (fn (x : String) -> 1) + apply (fn a b -> a)";
+    let text = "apply : (Int -> Int) -> Int\napply f = f 1\n\nbad : Unit -> <Panic> Int\nbad () = apply (fn (x : String) -> 1) + apply (fn a b -> a)";
     insta::assert_snapshot!(check_text(text), @r"
     apply : (Int -> Int) -> Int
       f#0 : Int -> Int
-    bad : Unit -> Int
+    bad : Unit -> <Panic> Int
       x#0 : String
       a#1 : Int
       b#2 : {error}
@@ -273,13 +366,13 @@ fn kinds_follow_from_how_values_are_used() {
 
 #[test]
 fn kinds_are_shared_within_a_strongly_connected_component() {
-    let text = "ping : a -> Int -> a\nping x n = if n == 0 then x else pong (first x x) (n - 1)\n\npong : b -> Int -> b\npong y n = ping y n\n\nfirst : c -> c -> c\nfirst u v = u";
+    let text = "ping : a -> Int -> <Panic> a\nping x n = if n == 0 then x else pong (first x x) (n - 1)\n\npong : b -> Int -> <Panic> b\npong y n = ping y n\n\nfirst : c -> c -> c\nfirst u v = u";
     insta::assert_snapshot!(check_text(text), @r"
-    ping : a -> Int -> a
+    ping : a -> Int -> <Panic> a
       kinds: a <= Unr
       x#0 : a
       n#1 : Int
-    pong : b -> Int -> b
+    pong : b -> Int -> <Panic> b
       kinds: b <= Unr
       y#0 : b
       n#1 : Int
@@ -292,17 +385,17 @@ fn kinds_are_shared_within_a_strongly_connected_component() {
 
 #[test]
 fn kinds_are_shared_around_a_ring_of_functions() {
-    let text = "f0 : a -> Int -> a\nf0 x n = if n == 0 then x else f1 x (n - 1)\n\nf1 : b -> Int -> b\nf1 y n = if n == 0 then y else f2 y (n - 1)\n\nf2 : c -> Int -> c\nf2 z n = if n == 0 then first z z else f0 z (n - 1)\n\nfirst : d -> d -> d\nfirst u v = u";
+    let text = "f0 : a -> Int -> <Panic> a\nf0 x n = if n == 0 then x else f1 x (n - 1)\n\nf1 : b -> Int -> <Panic> b\nf1 y n = if n == 0 then y else f2 y (n - 1)\n\nf2 : c -> Int -> <Panic> c\nf2 z n = if n == 0 then first z z else f0 z (n - 1)\n\nfirst : d -> d -> d\nfirst u v = u";
     insta::assert_snapshot!(check_text(text), @r"
-    f0 : a -> Int -> a
+    f0 : a -> Int -> <Panic> a
       kinds: a <= Unr
       x#0 : a
       n#1 : Int
-    f1 : b -> Int -> b
+    f1 : b -> Int -> <Panic> b
       kinds: b <= Unr
       y#0 : b
       n#1 : Int
-    f2 : c -> Int -> c
+    f2 : c -> Int -> <Panic> c
       kinds: c <= Unr
       z#0 : c
       n#1 : Int
@@ -341,13 +434,13 @@ fn captured_values_count_inside_the_lambda_body() {
 
 #[test]
 fn a_callee_that_is_not_a_name_is_described_without_quotes() {
-    let text = "inc : Int -> Int\ninc n = n + 1\n\neach : (String -> Unit) -> Unit\neach f = f \"a\"\n\nbad : Bool -> Int\nbad b = (if b then 1 else 2) 3 + (if b then inc else inc) \"x\" + (if b then inc else inc) 1 2\n\nloud : Bool -> Unit\nloud b =\n  (if b then println else println) \"x\"\n  (if b then each else each) (fn s -> println s)";
+    let text = "inc : Int -> <Panic> Int\ninc n = n + 1\n\neach : (String -> Unit) -> Unit\neach f = f \"a\"\n\nbad : Bool -> <Panic> Int\nbad b = (if b then 1 else 2) 3 + (if b then inc else inc) \"x\" + (if b then inc else inc) 1 2\n\nloud : Bool -> Unit\nloud b =\n  (if b then println else println) \"x\"\n  (if b then each else each) (fn s -> println s)";
     insta::assert_snapshot!(check_text(text), @"
-    inc : Int -> Int
+    inc : Int -> <Panic> Int
       n#0 : Int
     each : (String -> Unit) -> Unit
       f#0 : String -> Unit
-    bad : Bool -> Int
+    bad : Bool -> <Panic> Int
       b#0 : Bool
     loud : Bool -> Unit
       b#0 : Bool
@@ -389,7 +482,7 @@ fn extern_schemes_are_exported() {
             .to_string()
     };
     assert_eq!(ty("println"), "String -> <IO> Unit");
-    assert_eq!(ty("+"), "Int -> Int -> Int");
+    assert_eq!(ty("+"), "Int -> Int -> <Panic> Int");
     assert_eq!(ty(">>"), "(a -> <e> b) -> (b -> <e> c) -> a -> <e> c");
     // コンストラクタは extern ではなく、Prelude の `data Bool` のスキームとして書き出す
     assert_eq!(
@@ -431,15 +524,15 @@ fn operation_types_are_exported() {
 #[test]
 fn later_stage_constructs_add_no_type_errors() {
     // E0004 の跡 (`<missing>` の値) を型検査に通しても、誤りを重ねて出さない。
-    let text = "counter : Unit -> Int\ncounter () = 0\n\nf : Int -> Int\nf n =\n  let first = 1.5\n  let plus = (+)\n  0";
+    let text = "counter : Unit -> Int\ncounter () = 0\n\nf : Int -> <Panic> Int\nf n =\n  let first = 1.5\n  let plus = (+)\n  0";
     insta::assert_snapshot!(check_text(text), @"
     counter : Unit -> Int
-    f : Int -> Int
+    f : Int -> <Panic> Int
       n#0 : Int
       first#1 : {error}
       $a#2 : Int
       $b#3 : Int
-      plus#4 : Int -> <_> Int -> <_> Int
+      plus#4 : Int -> <_> Int -> <Panic | _> Int
     ---
     E0004 6:15 floating-point literals are not supported yet
       6:15 this is implemented in a later stage
@@ -589,33 +682,33 @@ fn stacked_constructor_patterns_report_the_nesting_limit_without_overflowing() {
 
 #[test]
 fn a_local_function_is_monomorphic_and_recursive() {
-    let text = "f : Int -> Int\nf n =\n  let go k acc = if k == 0 then acc else go (k - 1) (acc + k)\n  go n 0\n\nmain : Unit -> <IO> Unit\nmain () = println (show (f 3))";
+    let text = "f : Int -> <Panic> Int\nf n =\n  let go k acc = if k == 0 then acc else go (k - 1) (acc + k)\n  go n 0\n\nmain : Unit -> <IO, Panic> Unit\nmain () = println (show (f 3))";
     insta::assert_snapshot!(check_text(text), @"
-    f : Int -> Int
+    f : Int -> <Panic> Int
       n#0 : Int
-      go#1 : Int -> Int -> Int
+      go#1 : Int -> Int -> <Panic> Int
       k#2 : Int
       acc#3 : Int
-    main : Unit -> <IO> Unit
+    main : Unit -> <IO, Panic> Unit
     ");
 }
 
 #[test]
 fn a_pure_local_function_is_called_inside_and_outside_a_handler() {
     // row を閉じるので、どちらを先に呼んでも通る
-    let text = "effect Ask where\n  ask : Unit -> Int\n\nmain : Unit -> <IO> Unit\nmain () =\n  let inc x = x + 1\n  let n = handle inc (ask ()) with | ctl ask () k -> k 1\n  println (show (inc n))";
+    let text = "effect Ask where\n  ask : Unit -> Int\n\nmain : Unit -> <IO, Panic> Unit\nmain () =\n  let inc x = x + 1\n  let n = handle inc (ask ()) with | ctl ask () k -> k 1\n  println (show (inc n))";
     assert_eq!(check_short(text), Vec::<String>::new());
 }
 
 #[test]
 fn a_local_function_recurses_under_its_own_handler() {
-    let text = "effect Ask where\n  ask : Unit -> Int\n\ncount : Int -> <IO> Int\ncount n =\n  let go k =\n    if k == 0 then 0\n    else handle ask () + go (k - 1) with | ctl ask () r -> r 1\n  go n\n\nmain : Unit -> <IO> Unit\nmain () = println (show (count 3))";
+    let text = "effect Ask where\n  ask : Unit -> Int\n\ncount : Int -> <IO, Panic> Int\ncount n =\n  let go k =\n    if k == 0 then 0\n    else handle ask () + go (k - 1) with | ctl ask () r -> r 1\n  go n\n\nmain : Unit -> <IO, Panic> Unit\nmain () = println (show (count 3))";
     assert_eq!(check_short(text), Vec::<String>::new());
 }
 
 #[test]
 fn a_local_function_value_is_opened() {
-    let text = "effect Ask where\n  ask : Unit -> Int\n\nmain : Unit -> <IO> Unit\nmain () =\n  let inc x = x + 1\n  let ys = handle List.map inc [ask ()] with | ctl ask () k -> k 1\n  println (show ys)";
+    let text = "effect Ask where\n  ask : Unit -> Int\n\nmain : Unit -> <IO, Panic> Unit\nmain () =\n  let inc x = x + 1\n  let ys = handle List.map inc [ask ()] with | ctl ask () k -> k 1\n  println (show ys)";
     assert_eq!(check_short(text), Vec::<String>::new());
 }
 
@@ -634,7 +727,7 @@ fn an_undetermined_projection_in_a_local_function_is_e2013() {
 #[test]
 fn a_higher_order_local_function_takes_the_effect_of_its_argument() {
     // 引数のラムダの `Ask` は、本体の `f ()` の包含で `app` の row に入る
-    let text = "effect Ask where\n  ask : Unit -> Int\n\nmain : Unit -> <IO> Unit\nmain () =\n  let app f = f ()\n  let n = handle app (fn () -> ask ()) with | ctl ask () k -> k 1\n  println (show n)";
+    let text = "effect Ask where\n  ask : Unit -> Int\n\nmain : Unit -> <IO, Panic> Unit\nmain () =\n  let app f = f ()\n  let n = handle app (fn () -> ask ()) with | ctl ask () k -> k 1\n  println (show n)";
     assert_eq!(check_short(text), Vec::<String>::new());
 }
 
@@ -642,18 +735,18 @@ fn a_higher_order_local_function_takes_the_effect_of_its_argument() {
 fn a_nested_local_function_calling_the_outer_one_keeps_its_row_open() {
     // `walk` の `IO` は、`each` の中の `walk` の呼び出しの包含で `each` の row に入る。`each` の row を先に閉じると、
     // `walk` の `IO` が入らない
-    let text = "main : Unit -> <IO> Unit\nmain () =\n  let walk n =\n    let each k = if k == 0 then () else walk (k - 1)\n    if n == 0 then println \"x\" else each n\n  walk 3";
+    let text = "main : Unit -> <IO, Panic> Unit\nmain () =\n  let walk n =\n    let each k = if k == 0 then () else walk (k - 1)\n    if n == 0 then println \"x\" else each n\n  walk 3";
     assert_eq!(check_short(text), Vec::<String>::new());
 }
 
 #[test]
 fn mutually_recursive_local_functions_check() {
-    let text = "parity : Int -> Bool\nparity n =\n  let even k = if k == 0 then True else odd (k - 1)\n  and odd k = if k == 0 then False else even (k - 1)\n  even n";
+    let text = "parity : Int -> <Panic> Bool\nparity n =\n  let even k = if k == 0 then True else odd (k - 1)\n  and odd k = if k == 0 then False else even (k - 1)\n  even n";
     insta::assert_snapshot!(check_text(text), @"
-    parity : Int -> Bool
+    parity : Int -> <Panic> Bool
       n#0 : Int
-      even#1 : Int -> Bool
-      odd#2 : Int -> Bool
+      even#1 : Int -> <Panic> Bool
+      odd#2 : Int -> <Panic> Bool
       k#3 : Int
       k#4 : Int
     ");
@@ -677,13 +770,13 @@ fn types_by_name(text: &str) -> Vec<String> {
 
 #[test]
 fn a_one_way_and_group_types_like_sequential_lets() {
-    let group = "run : Int -> Int\nrun n =\n  let f x = g x\n  and g y = y + 1\n  f n";
-    let sequential = "run : Int -> Int\nrun n =\n  let g y = y + 1\n  let f x = g x\n  f n";
+    let group = "run : Int -> <Panic> Int\nrun n =\n  let f x = g x\n  and g y = y + 1\n  f n";
+    let sequential = "run : Int -> <Panic> Int\nrun n =\n  let g y = y + 1\n  let f x = g x\n  f n";
     insta::assert_snapshot!(check_text(group), @"
-    run : Int -> Int
+    run : Int -> <Panic> Int
       n#0 : Int
-      f#1 : Int -> Int
-      g#2 : Int -> Int
+      f#1 : Int -> <Panic> Int
+      g#2 : Int -> <Panic> Int
       x#3 : Int
       y#4 : Int
     ");
@@ -694,7 +787,7 @@ fn a_one_way_and_group_types_like_sequential_lets() {
 /// 回しても止まり、順に書いた `let` と同じ型になる。
 #[test]
 fn a_group_through_a_higher_order_function_types_like_sequential_lets() {
-    let prelude = "effect Ask where\n  ask : Unit -> Int\n\nwrap : (Unit -> <e> Int) -> <Ask | e> Int\nwrap action = ask () + action ()\n\nrun : Int -> <Ask> Int\nrun m =\n";
+    let prelude = "effect Ask where\n  ask : Unit -> Int\n\nwrap : (Unit -> <e> Int) -> <Ask, Panic | e> Int\nwrap action = ask () + action ()\n\nrun : Int -> <Ask, Panic> Int\nrun m =\n";
     let handled = "  handle h m with\n    | fn ask () -> 1";
     let group = format!(
         "{prelude}  let f n = ask () + n\n  and g n = wrap (fn () -> f n)\n  and h n = g n\n{handled}"
@@ -704,17 +797,17 @@ fn a_group_through_a_higher_order_function_types_like_sequential_lets() {
     );
     insta::assert_snapshot!(check_text(&group), @"
     ask : Unit -> <Ask> Int
-    wrap : (Unit -> <e> Int) -> <Ask | e> Int
+    wrap : (Unit -> <e> Int) -> <Ask, Panic | e> Int
       action#0 : Unit -> <e> Int
-    run : Int -> <Ask> Int
+    run : Int -> <Ask, Panic> Int
       m#0 : Int
-      f#1 : Int -> <Ask> Int
-      g#2 : Int -> <Ask, Ask> Int
-      h#3 : Int -> <Ask, Ask> Int
+      f#1 : Int -> <Ask, Panic> Int
+      g#2 : Int -> <Ask, Panic, Ask> Int
+      h#3 : Int -> <Ask, Panic, Ask> Int
       n#4 : Int
       n#5 : Int
       n#6 : Int
-      $k#7 : once Int -> <Ask> Int
+      $k#7 : once Int -> <Ask, Panic> Int
       $r#8 : Int
       $r#9 : Int
     ");
@@ -723,8 +816,9 @@ fn a_group_through_a_higher_order_function_types_like_sequential_lets() {
 
 #[test]
 fn a_lambda_called_before_it_is_passed_as_a_pure_function() {
-    // `g 1` は `g` の row を `<IO>` に単一化せず、包含として残す。`g` の row は `apply_pure` に渡すときに `<>` に決まる
-    let text = "apply_pure : (Int -> Int) -> Int -> Int\napply_pure f x = f x\n\npassed_after_call : Unit -> <IO> Int\npassed_after_call () =\n  let g = fn x -> x + 1\n  let a = g 1\n  apply_pure g a";
+    // `g 1` は `g` の row を `<IO, Panic>` に単一化せず、包含として残す。`g` の row は `apply_pure` に渡すときに `<Panic>` に
+    // 決まる
+    let text = "apply_pure : (Int -> <Panic> Int) -> Int -> <Panic> Int\napply_pure f x = f x\n\npassed_after_call : Unit -> <IO, Panic> Int\npassed_after_call () =\n  let g = fn x -> x + 1\n  let a = g 1\n  apply_pure g a";
     assert_eq!(check_short(text), Vec::<String>::new());
 }
 
@@ -747,7 +841,7 @@ fn projecting_the_result_of_a_higher_order_local_function_needs_an_annotation() 
 fn a_label_arriving_through_an_argument_unifies_with_the_ambient() {
     // `State s` は解くときに `run` の row に入る。その型引数 `s` は、クラスの制約を解く前に今の row の `State Int` と
     // 単一化される
-    let text = "effect State s where\n  get : Unit -> s\n\nf : Unit -> <State Int> Int\nf () =\n  let run h = h ()\n  run get + 1";
+    let text = "effect State s where\n  get : Unit -> s\n\nf : Unit -> <State Int, Panic> Int\nf () =\n  let run h = h ()\n  run get + 1";
     assert_eq!(check_short(text), Vec::<String>::new());
 }
 
@@ -761,7 +855,7 @@ fn a_label_arriving_through_an_argument_decides_a_class_constraint() {
 
 #[test]
 fn a_partially_applied_local_function_is_passed_to_map() {
-    let text = "import List\n\nf : List Int -> List Int\nf xs =\n  let add x y = x + y\n  List.map (add 1) xs";
+    let text = "import List\n\nf : List Int -> <Panic> List Int\nf xs =\n  let add x y = x + y\n  List.map (add 1) xs";
     assert_eq!(check_short(text), Vec::<String>::new());
 }
 
@@ -769,6 +863,6 @@ fn a_partially_applied_local_function_is_passed_to_map() {
 fn a_local_function_performing_and_handling_its_effect_around_its_self_call() {
     // `go` の row はエフェクトの集まりなので、自分の handler の中の自分への呼び出しは、末尾を共有しても閉じて通る。呼ばない
     // `go` でも同じである
-    let text = "effect Ask where\n  ask : Unit -> Int\n\ncalled : Int -> <Ask> Int\ncalled n =\n  let go k = if k == 0 then ask () else ask () + (handle go (k - 1) with | fn ask () -> 10)\n  go n\n\nuncalled : Int -> <Ask> Int\nuncalled n =\n  let go k = if k == 0 then ask () else ask () + (handle go (k - 1) with | fn ask () -> 10)\n  n";
+    let text = "effect Ask where\n  ask : Unit -> Int\n\ncalled : Int -> <Ask, Panic> Int\ncalled n =\n  let go k = if k == 0 then ask () else ask () + (handle go (k - 1) with | fn ask () -> 10)\n  go n\n\nuncalled : Int -> <Ask> Int\nuncalled n =\n  let go k = if k == 0 then ask () else ask () + (handle go (k - 1) with | fn ask () -> 10)\n  n";
     assert_eq!(check_short(text), Vec::<String>::new());
 }

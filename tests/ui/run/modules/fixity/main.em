@@ -2,7 +2,7 @@
 -- both, the first line would print 9.
 import Ops ((<+>), (<**>))
 
-main : Unit -> <IO> Unit
+main : Unit -> <IO, Panic> Unit
 main () =
   println (show (1 <+> 2 <**> 3))
   println (show (2 <**> 3 <+> 4))

@@ -1,5 +1,5 @@
 -- 引数と環境変数 (docs/spec/stdlib.md)。入力は env.args と env.env で与える
-main : Unit -> <IO> Unit
+main : Unit -> <IO, Panic> Unit
 main () =
   println (show (Env.args ()))
   println (show (Env.get "GREETING"))

@@ -126,13 +126,14 @@ pub(crate) fn check_module(
             let result = match program[id].kind {
                 FunctionKind::Input(kind) => Some(input::check_input(
                     program,
+                    files,
                     &context,
                     &signatures,
                     id,
                     kind,
                     &mut types,
                 )),
-                _ => check_body(program, &context, &signatures, id, &mut types),
+                _ => check_body(program, files, &context, &signatures, id, &mut types),
             };
             if let Some((body, found)) = result {
                 diagnostics.extend(found);
@@ -461,6 +462,7 @@ pub(crate) fn signatures(program: &Program, context: &Context) -> Signatures {
 /// (docs/spec/types.md の「推論」)。シグネチャと本体の両方がある関数だけを検査する。
 pub(crate) fn check_body<'c>(
     program: &Program,
+    files: &SourceFiles,
     context: &'c Context,
     signatures: &Signatures,
     id: FunctionId,
@@ -492,6 +494,7 @@ pub(crate) fn check_body<'c>(
     let mut diagnostics = Vec::new();
     let mut checker = BodyCheck {
         program,
+        files,
         file,
         function,
         body,
@@ -964,22 +967,47 @@ fn check_main(
         return;
     }
     let found = shape.export(types, None);
-    let expected = types.intern(TypeKind::Fn {
-        param: types.unit(),
-        lin: Lin::Unr,
-        effects: vec![EffectLabel {
-            id: program.io(),
-            args: Vec::new(),
-        }],
-        tail: None,
-        ret: types.unit(),
-    });
-    // 同じ形の型は同じ ID なので、ID を比べれば型を比べたことになる
-    if !types.contains_error(found) && found != expected {
+    // row のラベルは `IO` と `Panic` のどちらも省けて、順は問わない (docs/spec/modules.md の「モジュール」)
+    let allowed = [program.io(), program.panic()];
+    let main_type = |types: &mut TypeStore, effects: Vec<EffectLabel>| {
+        types.intern(TypeKind::Fn {
+            param: types.unit(),
+            lin: Lin::Unr,
+            effects,
+            tail: None,
+            ret: types.unit(),
+        })
+    };
+    let fits = match types.kind(found) {
+        TypeKind::Fn {
+            effects,
+            tail: None,
+            ..
+        } if effects
+            .iter()
+            .all(|label| allowed.contains(&label.id) && label.args.is_empty()) =>
+        {
+            // 同じ形の型は同じ ID なので、書いたラベルで作った型と ID を比べれば、ほかの部分を比べたことになる
+            let effects = effects.clone();
+            found == main_type(types, effects)
+        }
+        _ => false,
+    };
+    if !types.contains_error(found) && !fits {
+        let expected = main_type(
+            types,
+            allowed
+                .iter()
+                .map(|&id| EffectLabel {
+                    id,
+                    args: Vec::new(),
+                })
+                .collect(),
+        );
         diagnostics.push(Diagnostic::error(
             codes::INVALID_MAIN_TYPE,
             format!(
-                "`main` must have type `{}`",
+                "`main` must have type `{}`, with either label optional",
                 types.display(expected, &program.names)
             ),
             Label::new(

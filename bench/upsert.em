@@ -16,7 +16,7 @@ skew tree =
     | _ -> tree
 
 -- 右の孫が同じ段なら、右の子を1段上げる
-split : Tree k v -> Tree k v
+split : Tree k v -> <Panic> Tree k v
 split tree =
   match tree with
     | Node level a k v (Node right_level b rk rv (Node grand_level c gk gv d)) ->
@@ -26,7 +26,7 @@ split tree =
     | _ -> tree
 
 -- `k` の値を `f` で更新する。なければ `f None` を入れる
-upsert : Ord k => k -> (Option v -> v) -> Tree k v -> Tree k v
+upsert : Ord k => k -> (Option v -> <Panic> v) -> Tree k v -> <Panic> Tree k v
 upsert key f tree =
   match tree with
     | Leaf -> Node 1 Leaf key (f None) Leaf
@@ -46,7 +46,7 @@ entries tree =
   go tree Nil
 
 -- 安定なマージソート。`before a b` は `a` を `b` より前に置くときに `True` である
-sort_by : (a -> a -> Bool) -> List a -> List a
+sort_by : (a -> a -> Bool) -> List a -> <Panic> List a
 sort_by before xs =
   let merge acc left right =
     match (left, right) with
@@ -60,7 +60,7 @@ sort_by before xs =
     let (left, right) = split_at (n / 2) xs
     merge Nil (sort_by before left) (sort_by before right)
 
-split_at : Int -> List a -> (List a, List a)
+split_at : Int -> List a -> <Panic> (List a, List a)
 split_at n xs =
   let go i acc rest =
     match rest with
@@ -68,18 +68,18 @@ split_at n xs =
       | Nil -> (List.reverse acc, Nil)
   go n Nil xs
 
-take : Int -> List a -> List a
+take : Int -> List a -> <Panic> List a
 take n xs = (split_at n xs).0
 
 -- 件数を1増やす (なければ1にする)
-increment : Option Int -> Int
+increment : Option Int -> <Panic> Int
 increment old =
   match old with
     | None -> 1
     | Some n -> n + 1
 
 -- 疑似乱数から作った20000個のキー (種類は最大2000個) を数える
-count_keys : Int -> Int -> Tree String Int -> Tree String Int
+count_keys : Int -> Int -> Tree String Int -> <Panic> Tree String Int
 count_keys n seed tree =
   if n == 0 then tree
   else
@@ -87,7 +87,7 @@ count_keys n seed tree =
     let key = "k" ++ show ((next / 65536) % 2000)
     count_keys (n - 1) next (upsert key increment tree)
 
-main : Unit -> <IO> Unit
+main : Unit -> <IO, Panic> Unit
 main () =
   let tree = count_keys 20000 42 Leaf
   let by_count = sort_by (fn (_, a) (_, b) -> a > b) (entries tree)

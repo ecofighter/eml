@@ -15,7 +15,7 @@ effect Say where
 effect Pick where
   pick : T -> Unit
 
-flags : (Int -> Int) -> Unit -> <Yield Bool> Int
+flags : (Int -> <Panic> Int) -> Unit -> <Yield Bool, Panic> Int
 flags g () =
   yield True
   yield False
@@ -32,7 +32,7 @@ picks () =
   pick A
   pick (B 3)
 
-main : Unit -> <IO> Unit
+main : Unit -> <IO, Panic> Unit
 main () =
   let Box g = Box (fn x -> x + 1)
   let r = handle flags g () from 0 with

@@ -3,7 +3,7 @@ data Option a =
   | None
   | Some a
 
-add : Int -> Int -> Int
+add : Int -> Int -> <Panic> Int
 add a b = match (a, b) with
   | (x, y) -> x + y
 
@@ -17,14 +17,14 @@ size o = match o with
   | None -> 0
   | Some _ -> 1
 
-pick : Bool -> Int
+pick : Bool -> <Panic> Int
 pick c =
   let n = match (if c then Some 10 else Some 20) with
     | Some n -> n
     | None -> 0
   n + 1
 
-whole : Bool -> Int
+whole : Bool -> <Panic> Int
 whole c =
   let n = match (if c then Some 1 else None) with
     | None -> 0
@@ -36,7 +36,7 @@ data Color =
   | Green
   | Blue
 
-score : Bool -> Int
+score : Bool -> <Panic> Int
 score b =
   let n = match (if b then Red else Green) with
     | Red -> 1
@@ -46,21 +46,21 @@ score b =
 find : Int -> Option Int
 find k = if k > 0 then Some k else None
 
-mixed : Bool -> Int -> Int
+mixed : Bool -> Int -> <Panic> Int
 mixed c k =
   let n = match (if c then Some 1 else find k) with
     | Some v -> v + 10
     | None -> 0
   n + 1
 
-mixed_whole : Bool -> Int -> Int
+mixed_whole : Bool -> Int -> <Panic> Int
 mixed_whole c k =
   let n = match (if c then Some 1 else find k) with
     | None -> 0
     | x -> size x
   n + 1
 
-main : Unit -> <IO> Unit
+main : Unit -> <IO, Panic> Unit
 main () =
   println (show (add 1 2))
   println (show (unwrap 7))
