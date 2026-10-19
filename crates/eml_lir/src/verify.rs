@@ -65,8 +65,9 @@ enum Level {
 }
 
 /// Perceus の後の関数を所有の段で確かめながら、巻き戻しの地点ごとの所有を書き留める (`unwind::points_all`)。
-/// 表はプログラムに1回だけ作る。
+/// 表と「中断しうる」の不動点は、プログラムに1回だけ求める。
 pub(crate) fn unwind_points(program: &Program) -> Vec<Result<Vec<UnwindPoint>, VerifyError>> {
+    let aborts = unwind::may_abort(program);
     with_tables(program, |tables| {
         program
             .functions
@@ -76,7 +77,10 @@ pub(crate) fn unwind_points(program: &Program) -> Vec<Result<Vec<UnwindPoint>, V
                     .and_then(|dominators| {
                         let mut checker =
                             Checker::new(program, tables, function, Level::Ownership, dominators);
-                        checker.points = Some(Vec::new());
+                        checker.unwind = Some(Recorder {
+                            aborts: &aborts,
+                            points: Vec::new(),
+                        });
                         checker.run()
                     })
                     .map(|points| points.expect("the checker was given a list"))
@@ -233,7 +237,13 @@ struct Checker<'a> {
     /// token ごとの、元の値とそのコンストラクタ。`owners` と同じく、変数は1回だけ定義されるので関数に1つの表にする。
     token_sources: Vec<Option<(VarId, Ctor)>>,
     /// 巻き戻しの地点ごとの所有を書き留める先。`unwind_points` だけが与える。
-    points: Option<Vec<UnwindPoint>>,
+    unwind: Option<Recorder<'a>>,
+}
+
+/// 巻き戻しの地点を決める関数ごとの「中断しうる」(`unwind::may_abort`) と、書き留めた地点。
+struct Recorder<'a> {
+    aborts: &'a [bool],
+    points: Vec<UnwindPoint>,
 }
 
 impl<'a> Checker<'a> {
@@ -263,7 +273,7 @@ impl<'a> Checker<'a> {
             owners: vec![None; function.vars.len()],
             origins: vec![None; function.vars.len()],
             token_sources: vec![None; function.vars.len()],
-            points: None,
+            unwind: None,
         }
     }
 
@@ -289,7 +299,7 @@ impl<'a> Checker<'a> {
             }
             self.check_block(index, block, owned)?;
         }
-        Ok(self.points)
+        Ok(self.unwind.map(|recorder| recorder.points))
     }
 
     /// `clause` の印の関数の値 (`&g` と `closure g(..)` の変数) は、`ev_set_clause` の2つ目の引数にだけ使える。入口の
@@ -355,8 +365,8 @@ impl<'a> Checker<'a> {
                 index: at as i64,
             };
             self.check_stmt(&mut owned, stmt)?;
-            if let Some(points) = &mut self.points
-                && let Some((var, landing)) = unwind::point(stmt)
+            if let Some(Recorder { aborts, points }) = &mut self.unwind
+                && let Some((var, landing)) = unwind::point(stmt, aborts)
             {
                 // 束縛した変数は命令が戻ってから現れるので、巻き戻しで手放すものに入れない
                 let (tokens, owned): (Vec<_>, Vec<_>) = owned

@@ -678,24 +678,24 @@ fn unwind_points() {
     iter_pipeline_by_hand: 11
     list: 9
     loop: 4
-    orders: 13
-    orders_by_hand: 13
+    orders: 12
+    orders_by_hand: 12
     push_fold: 4
     push_fold_by_hand: 4
-    rbtree: 15
+    rbtree: 12
     records: 9
     state: 4
     std_list: 13
     sum_loop: 4
-    tree: 18
-    tree_by_hand: 18
+    tree: 15
+    tree_by_hand: 15
     tree_map: 20
-    upsert: 31
-    upsert_by_hand: 31
-    scripts/wc: 54
+    upsert: 23
+    upsert_by_hand: 23
+    scripts/wc: 44
     scripts/grep: 59
-    scripts/logstat: 111
-    scripts/csv2jsonl: 110
-    scripts/deploy: 124
+    scripts/logstat: 101
+    scripts/csv2jsonl: 106
+    scripts/deploy: 108
     ");
 }

@@ -77,7 +77,7 @@ pub try_panic : (Unit -> <Panic | e> a) -> <e> Result String a
 
 ### 実行
 
-- VM は、`Panics` の行の extern の誤りと、`panic` の呼び出しを、`IO` の失敗と同じ道で扱う ([VM](../../spec/vm.md) の「IO の失敗」)。`ctx.ev_find(Panic)` で `Panic` の evidence を探し、あれば `ev_clause[Panic.panicked]` に `(ev, message)` を渡して呼ぶ。その節の `yield_abort` が巻き戻しを始める。`CodeBase` は、`Prelude.IO` と同じく `Prelude.Panic` のエフェクトの番号を持つ
+- VM は、`Panics` の行の extern の誤りと、`panic` の呼び出しを、`IO` の失敗と同じ道で扱う ([VM](../../spec/vm.md) の「extern の中断」)。`ctx.ev_find(Panic)` で `Panic` の evidence を探し、あれば `ev_clause[Panic.panicked]` に `(ev, message)` を渡して呼ぶ。その節の `yield_abort` が巻き戻しを始める。`CodeBase` は、`Prelude.IO` と同じく `Prelude.Panic` のエフェクトの番号を持つ
 - evidence がなければ、今と同じ実行時エラーにする。文言と位置の表示 (`{fault}\n  at path:line:column`) は変えない。利用者の `panic` の文言は `panicked: {message}` とする (私の判断)
 - 算術の専用の命令も、誤りのときは同じ道を通る。専用の命令は巻き戻しの地点になり、巻き戻しの表に行が足りる。速い道の命令の数は変わらない
 - `panic` は、`exit` と同じく VM が自分で実行する。引数の文字列をそのまま `panicked` の節に渡し、evidence がなければ文言を写して実行時エラー (`VmFault::Panicked`) にする。`eml_rt` には、`Panic` に渡す誤りを選ぶ `Fault::panics` (`io_error_kind` に当たるもの) だけを足す。`eml_rt` を変えるので、Verus の検証と `verusfmt` の検査も通す
@@ -119,7 +119,7 @@ LIR の関数ごとに、中断しうる (`never` の操作、`IO` の失敗、`
 - [標準ライブラリ](../../spec/stdlib.md): `panic`、`try_panic`、`Panic` を起こす std の関数の型
 - [モジュールと名前解決](../../spec/modules.md): `main` の型
 - [型と Kind](../../spec/types.md): REPL の入力の row
-- [VM](../../spec/vm.md): 「中断と実行時エラーの分担」「IO の失敗」に `Panic` を足す
+- [VM](../../spec/vm.md): 「中断と実行時エラーの分担」「extern の中断」に `Panic` を足す
 - [LIR](../../spec/lir.md) と [Core IR](../../spec/core-ir.md): 中断しうるかの不動点、巻き戻しの地点、「実行時エラー」、under の形
 - [オブジェクトモデル](../../spec/object-model.md): `Fault::panics`
 - [マルチコア対応の設計](../../future/multicore.md): 「実行時エラーの報告の決定性」
