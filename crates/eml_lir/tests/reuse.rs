@@ -477,6 +477,115 @@ fn a_moved_release_without_a_partner_stays_put() {
     ));
 }
 
+/// 2つの `release` が同じブロックで上がる。`blocker` は2つの `con` の間に置く文である。
+fn two_moves(blocker: &str) -> String {
+    format!(
+        "layout P {{ P(tobj, tobj) }}
+layout T {{ T(tobj, tobj, tobj, int) }}
+fn f(x.0: obj, y.1: obj, p.2: tobj, q.3: tobj) -> obj {{
+  unpack x.0 P #0(a.4: tobj, b.5: tobj)
+  unpack y.1 P #0(c.6: tobj, d.7: tobj)
+  dup p.2
+  let e.8: obj = con P #0(p.2, q.3)
+{blocker}  let g.10: obj = con P #0(p.2, e.8)
+  release x.0 P #0(a.4, _)
+  release y.1 P #0(_, d.7)
+  let h.11: obj = con T #0(g.10, a.4, d.7, n.9)
+  return h.11
+}}
+"
+    )
+}
+
+#[test]
+fn two_releases_move_up_in_one_block() {
+    // 間に何もなければ、先の `release` が前の `con` へ、後の `release` が後ろの `con` へ上がり、順は変わらない
+    let text = two_moves("").replace("  let e.8", "  let n.9: int = unbox b.5\n  let e.8");
+    insta::assert_snapshot!(function(&reuse_text(&text), "f"), @"
+    fn f(x.0: obj, y.1: obj, p.2: tobj, q.3: tobj) -> obj {
+      unpack x.0 P #0(a.4: tobj, b.5: tobj)
+      unpack y.1 P #0(c.6: tobj, d.7: tobj)
+      dup p.2
+      let n.9: int = unbox b.5
+      let r.12: token = release x.0 P #0(a.4, _)
+      let e.8: obj = con P #0(p.2, q.3) reuse r.12 in place
+      let r.13: token = release y.1 P #0(_, d.7)
+      let g.10: obj = con P #0(p.2, e.8) reuse r.13 in place
+      let h.11: obj = con T #0(g.10, a.4, d.7, n.9)
+      return h.11
+    }
+    ");
+    // x の残さないフィールド b.5 を2つの `con` の間で読むので、x の `release` は後ろの `con` までしか上がらない。y の
+    // `release` は前の `con` へ上がるので、2つの `release` の順が入れ替わる
+    let text = two_moves("  let n.9: int = unbox b.5\n");
+    insta::assert_snapshot!(function(&reuse_text(&text), "f"), @"
+    fn f(x.0: obj, y.1: obj, p.2: tobj, q.3: tobj) -> obj {
+      unpack x.0 P #0(a.4: tobj, b.5: tobj)
+      unpack y.1 P #0(c.6: tobj, d.7: tobj)
+      dup p.2
+      let r.13: token = release y.1 P #0(_, d.7)
+      let e.8: obj = con P #0(p.2, q.3) reuse r.13 in place
+      let n.9: int = unbox b.5
+      let r.12: token = release x.0 P #0(a.4, _)
+      let g.10: obj = con P #0(p.2, e.8) reuse r.12 in place
+      let h.11: obj = con T #0(g.10, a.4, d.7, n.9)
+      return h.11
+    }
+    ");
+}
+
+#[test]
+fn a_moved_decref_source() {
+    // レコードの更新の形で、`decref` が新しい `con` の後にある
+    let text = "\
+layout Stats { Stats(int, int) }
+fn bump(st.0: obj) -> obj {
+  unpack st.0 Stats #0(n.1: int, k.2: int)
+  let m.3: int = extern Prelude.+(n.1, 1)
+  let d.4: obj = con Stats #0(m.3, 0)
+  decref st.0
+  return d.4
+}
+";
+    insta::assert_snapshot!(reuse_text(text), @"
+    layout Stats { Stats(int, int) }
+    fn bump(st.0: obj) -> obj {
+      unpack st.0 Stats #0(n.1: int, k.2: int)
+      let m.3: int = extern Prelude.+(n.1, 1)
+      let r.5: token = release st.0 Stats #0(_, _)
+      let d.4: obj = con Stats #0(m.3, 0) reuse r.5 in place
+      return d.4
+    }
+    ");
+}
+
+#[test]
+fn a_moved_source_keeps_its_skips() {
+    // 残すフィールド a.2 は、上げた `release` の後に所有になるので、`con` は元と同じ位置の a.2 を書かない
+    let text = format!(
+        "{P2}fn f(x.0: obj, q.1: obj) -> obj {{
+  unpack x.0 P #0(a.2: obj, b.3: obj)
+  dup a.2
+  let d.4: obj = con P #0(a.2, q.1)
+  release x.0 P #0(a.2, _)
+  let e.5: obj = con P #0(d.4, a.2)
+  return e.5
+}}
+"
+    );
+    insta::assert_snapshot!(reuse_text(&text), @"
+    layout P { P(obj, obj) }
+    fn f(x.0: obj, q.1: obj) -> obj {
+      unpack x.0 P #0(a.2: obj, b.3: obj)
+      dup a.2
+      let r.6: token = release x.0 P #0(a.2, _)
+      let d.4: obj = con P #0(=a.2, q.1) reuse r.6 in place
+      let e.5: obj = con P #0(d.4, a.2)
+      return e.5
+    }
+    ");
+}
+
 #[test]
 fn reuse_of_a_function_does_not_depend_on_the_rest_of_the_program() {
     let f = "\

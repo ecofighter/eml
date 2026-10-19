@@ -3266,3 +3266,64 @@ fn a_skip_at_another_position_is_rejected() {
         )
     );
 }
+
+/// 名前のない `release` は、その道で `x` の構築子が分かっていなければならない。違う構築子で手放すと、fast mode は
+/// 子を違う形で手放し、記憶がおかしくなる (docs/spec/lir.md の「verifier」)。
+#[test]
+fn a_token_release_of_an_unknown_constructor_is_rejected() {
+    let text = format!(
+        "{P2}fn f(x.0: obj, y.1: obj) -> obj {{
+  dup y.1
+  let r.2: token = release x.0 P #0(_, _)
+  let d.3: obj = con P #0(y.1, y.1) reuse r.2
+  return d.3
+}}
+"
+    );
+    assert_eq!(
+        check(&text),
+        Err(
+            "`x.0` is released as `P` #0, but its constructor is not known on this path in `f`"
+                .to_string()
+        )
+    );
+}
+
+/// `x` を、`c` で分かれた行き先の b1 と b2 で `left` と `right` が分解し、合流する b3 で token にする。
+fn token_after_join(left: &str, right: &str) -> String {
+    format!(
+        "{BOOL}{P2}fn f(x.0: obj, y.1: obj, c.2: enum) -> obj {{
+  switch c.2 Prelude.Bool {{ #0 -> b1, #1 -> b2 }}
+b1:
+{left}  jump b3()
+b2:
+{right}  jump b3()
+b3:
+  dup y.1
+  let r.7: token = release x.0 P #0(_, _)
+  let d.8: obj = con P #0(y.1, y.1) reuse r.7
+  return d.8
+}}
+"
+    )
+}
+
+#[test]
+fn a_token_release_known_through_a_join_verifies() {
+    let left = "  unpack x.0 P #0(a.3: obj, b.4: obj)\n";
+    let right = "  unpack x.0 P #0(a.5: obj, b.6: obj)\n";
+    assert_eq!(check(&token_after_join(left, right)), Ok(()));
+}
+
+/// 合流するブロックで分かっている構築子は、入るすべての道で分かっているものだけである。
+#[test]
+fn a_token_release_known_on_one_incoming_path_is_rejected() {
+    let left = "  unpack x.0 P #0(a.3: obj, b.4: obj)\n";
+    assert_eq!(
+        check(&token_after_join(left, "")),
+        Err(
+            "`x.0` is released as `P` #0, but its constructor is not known on this path in `f`"
+                .to_string()
+        )
+    );
+}

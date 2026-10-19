@@ -1619,7 +1619,8 @@ b2:
             token: Some(VarId(7)),
         }
     );
-    // token を定義する `release` は、token を定義する
+    // 生存解析と VM のスロットの割り当ては、定義を `defs` から知る。token がここに出ないと、token の変数がスロットを
+    // 持たない
     assert_eq!(stmts[0].defs(), [VarId(7)]);
     assert_eq!(program.functions[0].repr(VarId(7)), Repr::Token);
     assert_eq!(program.functions[0].mark(VarId(7)), Mark::Unr);

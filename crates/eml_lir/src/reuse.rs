@@ -251,9 +251,11 @@ impl<'a> Planner<'a> {
         }
     }
 
-    /// 元の文を、同じブロックの前にある、まだ token を受けていない同じ語の数の `con` の直前へ上げ、その `con` と組に
-    /// する。いちばん前の `con` を選ぶ。間の文 (`con` を含む) が元の値か残さないフィールドを使うときと、yield しうる
-    /// 呼び出しがあるときは上げない。上げた元はすぐに組になるので、元の文に戻すことはない (docs/spec/lir.md の「reuse」)。
+    /// 元の文から同じブロックを前へたどり、越えられない最初の文で止まる。越えられないのは、元の値か、元の値を分解して
+    /// 束縛した変数 (名前を書いて残すフィールドそのものを除く。残すフィールドをさらに分解した変数は含む) を使う文と、
+    /// yield しうる呼び出しである。止まった文より後ろの、まだ token を受けていない同じ語の数の `con` のうち、いちばん前の
+    /// ものの直前へ元の文を上げ、その `con` と組にする。そうした `con` がなければ上げない。上げた元はすぐに組になるので、元の文に
+    /// 戻すことはない (docs/spec/lir.md の「組の選び方」)。
     fn move_up(&mut self, (block, at): At, id: usize, kept: &[Option<VarId>]) -> bool {
         let words = self.tokens[id].words;
         let Some(&(first, _)) = self.unpaired.iter().find(|&&(_, w)| w == words) else {
@@ -481,7 +483,8 @@ fn for_each_case_ctor(term: &Term, mut f: impl FnMut(VarId, Ctor, &[VarId], Bloc
         default: _,
     } = term
     {
-        for case in cases {
+        // フィールドのない構築子は箱でなく即値で、元にも分解の元にもならない。数えても写す状態が大きくなるだけである
+        for case in cases.iter().filter(|case| !case.fields.is_empty()) {
             if let CasePattern::Tag(tag) = case.pattern {
                 let ctor = Ctor {
                     layout: *layout,

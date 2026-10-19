@@ -1516,7 +1516,7 @@ S13e-4 の設計 (`docs/superpowers/specs/2026-10-19-s13e4-reuse-design.md`) の
 - `bench/` に、試作のプログラムを写した4つ (`records.em`、`rbtree.em`、`tree_map.em`、`std_list.em`) を足した。要素の数は、debug ビルドの検査モードで1本が 0.2〜0.4 秒で終わるように縮めた (上の「基準のプログラム」)
 - `list`、`tree`、`upsert`、`orders` と足した4つで、`RunStats` の `reuses` が 0 より大きい。`crates/eml_vm/tests/bench.rs` の `rebuilding_programs_reuse_boxes` が確かめる
 - `tree` と足した4つで、基準からの命令の数の減り方が、試作と同じかそれ以上である (下の「基準のプログラムの命令の数」)
-- `upsert` の reuse は 312,764 回で、試作のブロックの中だけの値 (107,670) より多い。関数の中で動的に数えた上限 (312,764) と同じで、差はない。試作が組めなかったのは、`release` が `match compare …` の前にあり、作り直しがそれぞれの腕の中にある形だった。実装では token が `switch` の行き先へ流れるので、どの腕の `con` も同じ token を使える
+- `upsert` の reuse は 312,764 回で、試作のブロックの中だけの値 (107,670) より多い。関数の中で動的に数えた上限 (312,764) と同じで、差はない。試作で残りを組めなかったのは、`release` が `match compare …` の前にあり、作り直しがそれぞれの腕の中にある形だったためである。実装では token が `switch` の行き先へ流れるので、どの腕の `con` も同じ token を使える
 - reuse の命令を出さないプログラムの命令の数は、基準からの増加が最大で 0.33% (`fib`) で、0.5% に収まった
 - `logstat` と `logstat --whole` の全体の命令の数は、基準から +0.09% と -0.11% で、1% に収まった (下の「スクリプト」)
 - 中断が生きている token を通る UI テスト (`tests/ui/run/unwind/reuse_token_exit.em`、`tests/ui/run/unwind/reuse_token_io_failure.em`、`tests/ui/run/unwind/io_extern_as_value.em`) は、検査モードでリークなしに通る

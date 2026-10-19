@@ -202,6 +202,12 @@ struct Site {
 /// (docs/spec/object-model.md の「reuse」)。
 type Owned = BTreeMap<VarId, u32>;
 
+/// 道ごとの、構築子が分かっている変数。タグの case の行き先はその scrutinee の、`unpack` はその値の構築子を知る。
+/// 変数は1回だけ定義され、データは変わらないので、事実は道の上で消えない。合流するブロックでは、入るすべての道で
+/// 分かっているものだけが残る。reuse のパスと同じ求め方である (crates/eml_lir/src/reuse.rs)。フィールドのない
+/// 構築子は箱でなく即値で、手放すことがないので数えない。
+type Known = HashMap<VarId, Ctor>;
+
 struct Checker<'a> {
     program: &'a Program,
     function: &'a LirFn,
@@ -216,6 +222,9 @@ struct Checker<'a> {
     /// まだ着いていないブロックの入口の所有。`switch` の行き先は1本の辺から、合流するブロックは最初の `jump` から
     /// 作る。
     pending: HashMap<u32, Owned>,
+    /// 今の道の `Known` と、まだ着いていないブロックの入口の `Known`。`pending` と同じ辺で写す。
+    known: Known,
+    pending_known: HashMap<u32, Known>,
     /// フィールドの持ち主と出どころ。持ち主は、分解した値が束縛の時点で所有を持っていればその値、なければその値の
     /// 持ち主である。変数は1回だけ定義されるので (R5)、経路ごとではなく関数に1つの表にする
     /// (docs/spec/lir.md の「verifier」)。
@@ -249,6 +258,8 @@ impl<'a> Checker<'a> {
             },
             live_in: std::cell::OnceCell::new(),
             pending: HashMap::new(),
+            known: Known::new(),
+            pending_known: HashMap::new(),
             owners: vec![None; function.vars.len()],
             origins: vec![None; function.vars.len()],
             token_sources: vec![None; function.vars.len()],
@@ -268,6 +279,7 @@ impl<'a> Checker<'a> {
                     .remove(&index)
                     .expect("R3 and R4 give every block an edge from an earlier block")
             };
+            self.known = self.pending_known.remove(&index).unwrap_or_default();
             self.at = Site {
                 block: index,
                 index: -1,
@@ -454,6 +466,7 @@ impl<'a> Checker<'a> {
                 )?;
                 self.cx.field_reprs(layout, ctor.tag, constructor, fields)?;
                 self.read(owned, *value, "unpacked")?;
+                self.known.insert(*value, *ctor);
                 self.bind_fields(owned, *value, *ctor, fields, self.at)
             }
             Stmt::Dup(var) => {
@@ -703,6 +716,7 @@ impl<'a> Checker<'a> {
                 for &arg in args {
                     self.consume(&mut owned, arg)?;
                 }
+                self.merge_known(*target);
                 self.merge(*target, owned)
             }
             Term::Switch {
@@ -734,16 +748,22 @@ impl<'a> Checker<'a> {
                         index: -1,
                     };
                     // 配置とタグは `switch_layout` が確かめた
+                    let mut known = self.known.clone();
                     if let (Atom::Var(value), Some(layout), CasePattern::Tag(tag)) =
                         (*scrutinee, *layout, case.pattern)
                     {
                         let ctor = Ctor { layout, tag };
+                        if !case.fields.is_empty() {
+                            known.insert(value, ctor);
+                        }
                         self.bind_fields(&mut entry, value, ctor, &case.fields, site)?;
                     }
                     self.pending.insert(case.target.0, entry);
+                    self.pending_known.insert(case.target.0, known);
                 }
                 if let Some(default) = default {
                     self.pending.insert(default.0, owned);
+                    self.pending_known.insert(default.0, self.known.clone());
                 }
                 Ok(())
             }
@@ -765,6 +785,17 @@ impl<'a> Checker<'a> {
             ));
         }
         Ok(())
+    }
+
+    /// 合流するブロックの入口の `Known` は、入るすべての `jump` の道で分かっているものの共通部分である。
+    fn merge_known(&mut self, target: BlockId) {
+        let known = std::mem::take(&mut self.known);
+        match self.pending_known.get_mut(&target.0) {
+            Some(first) => first.retain(|var, ctor| known.get(var) == Some(ctor)),
+            None => {
+                self.pending_known.insert(target.0, known);
+            }
+        }
     }
 
     /// `jump` の実引数は、行き先の引数と Repr が互換で (R7)、印も互換である (V2)。
@@ -933,6 +964,12 @@ impl<'a> Checker<'a> {
     /// `release x L #t(p1, .., pn)`。x の参照を1つ手放し、名前を書いた変数が参照を1つずつ受け取る。名前を書いた変数は、
     /// x を同じ配置とタグで分解したときの、同じ位置のフィールドである (docs/spec/lir.md)。残す位置のない `release` は
     /// `decref` と同じなので、token を定義する形でだけ認める。
+    ///
+    /// 箱の子は `L #t` の形で手放され、token の語の数も `L #t` で決まるので、違う構築子なら fast mode で記憶がおかしくなる
+    /// (docs/spec/lir.md の「verifier」)。残すフィールドがあれば、その出どころが、x を `L #t` として分解したことを示す。
+    /// 残すフィールドのない `release` (token だけを作る形) には示すものがないので、その道で x の構築子が `L #t` だと
+    /// 分かっていることを求める。出どころで示せる `release` には求めない。両立しない2つの `switch` を通る死んだ道では、
+    /// 分かっている構築子が出どころの構築子と食い違うことがあり、Perceus はそこにも `release` を出すためである。
     fn release(
         &self,
         owned: &mut Owned,
@@ -959,6 +996,14 @@ impl<'a> Checker<'a> {
             fields.len(),
             constructor,
         )?;
+        if fields.iter().all(Option::is_none) && self.known.get(&value) != Some(&ctor) {
+            return Err(format!(
+                "`{}` is released as `{}` #{}, but its constructor is not known on this path",
+                self.cx.name(value),
+                layout.name,
+                ctor.tag
+            ));
+        }
         for (slot, field) in fields.iter().enumerate() {
             let Some(field) = *field else { continue };
             self.visible(field)?;

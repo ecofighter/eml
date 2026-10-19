@@ -585,7 +585,8 @@ reuse のパスは、Perceus が手放す箱を token にし、同じ物理的�
   - 分解 (case のフィールド、`unpack`): 値は見えて有効な RC の対象の変数である。RC の対象のフィールドは所有の数0で始まる。借りた変数への `switch` と `unpack` も受け入れる
   - 読む (`switch` の scrutinee、`unpack` の値、`unbox` のオペランド、`prim` の借用の引数、`dup` の対象): 見えて有効である。所有の数を変えない。ただし `dup v` は v の所有の数を1つ増やす。`prim` の借用の引数が変数でない値なら、消費と同じ検査 (関数の値の番号) だけを通す
   - 消費と `decref v`: 見えて、v の所有の数が1つ以上である。1つ減らす。1つの命令の中では左から順に当てる
-  - `release x L #t(p1, .., pn)`: 名前が1つ以上ある。x の所有の数が1つ以上である。名前を書いた各 pi は見えて、Repr が RC の対象で、出どころが `(x, L #t, i)` である。その後、x を1つ減らし、各 pi を1つ増やす。1つの位置には1つの名前しか書けないので、同じフィールドを2つの変数が引き継ぐことはない
+  - `release x L #t(p1, .., pn)`: 名前が1つ以上あるか、token を定義する。x の所有の数が1つ以上である。名前を書いた各 pi は見えて、Repr が RC の対象で、出どころが `(x, L #t, i)` である。その後、x を1つ減らし、各 pi を1つ増やす。1つの位置には1つの名前しか書けないので、同じフィールドを2つの変数が引き継ぐことはない
+  - 名前のない `release` では、その道で x の構築子が `L #t` だと分かっている。箱の子は `L #t` の形で手放され、token の語の数も `L #t` で決まるので、違う構築子なら fast mode で記憶がおかしくなるためである。分かっている構築子は reuse のパスと同じく道ごとに持つ。タグの case の行き先はその scrutinee の、`unpack` はその値の構築子を知り、合流するブロックには入るすべての道で分かっているものだけが残る。フィールドのない構築子は数えない。名前のある `release` には求めない。出どころが x を `L #t` として分解したことを示すうえ、両立しない2つの `switch` を通る死んだ道では、分かっている構築子が出どころと食い違うことがあるためである
   - token: token の変数は、token を定義する `release` でだけ定義する。経路でまだ使っていない token は所有の数1として持ち、所有と同じ写し方で `switch` の行き先へ渡す。どの経路でも、token を受ける `con` か `drop_token` で、ちょうど1回使う。token は値の位置 (上の「token の流れ」) に現れず、`jump`、`return`、`tail` の時点と、yield しうる呼び出しの直後に生きていない
   - token を受ける `con`: 物理的な語の数は token の元の構築子と同じである。`in place` なら、元と同じ配置の同じタグで、`lin` ビットの条件を満たす。書かない印の数は引数の数と同じで、書かない引数は、元の値を分解して束縛した変数で、語の種類と物理的な位置が元と同じである
   - 借りた変数 (所有の数0) は消費できないので、`jump` で渡されることはない。呼び出しの後も見えたままで、持ち主が所有されていれば有効である。持ち主を呼び出しの引数として消費すると、その後の借りた変数の使いは拒まれる。定義が支配する合流のブロックでも見えたままで、持ち主がどの辺でも所有されていれば有効である
@@ -601,6 +602,7 @@ reuse のパスは、Perceus が手放す箱を token にし、同じ物理的�
   - `` `x.1` is {duplicated|switched on|unpacked|unboxed|lent to `prim ev_evv`} after its owner `d.0` was given up ``: 無効な変数を読んだ。`prim` の借用の引数では、基本操作をテキストの形 (即値を含む) で書く
   - `` `x.1` is not field 0 of `d.0` as `Option` #1 ``: `release` の名前の出どころが違う
   - `` a release of `d.0` keeps no field `` と `` `x.1` is kept but is not reference counted ``: `release` の名前の誤り
+  - `` `x.0` is released as `P` #0, but its constructor is not known on this path ``: 名前のない `release` の構築子が、その道で分かっていない
   - token: `` the token `r.4` is used twice ``、`` the token `r.4` is used as a value ``、`` the token `r.4` is still live at a return `` (`a tail call`、``a jump to b1`` も同じ形)、`` the token `r.3` is live after `g`, which may yield ``
   - token を受ける `con`: ``a con of `Q` #0 has 3 words, but the token `r.4` holds 2 words``、``a con of `Q` #0 rebuilds the token `r.4` in place, but the token comes from `P` #0``、``a con of `P` #0 rebuilds the token `r.3` in place, but `x.0` is lin and `d.4` is poly``、``argument 0 of a con of `P` #0 is skipped, but `b.3` is not at the same position in the box of the token `r.4` ``
   - 持ち主のない変数を読むか消費するか手放したときと、持ち主も手放した変数を消費するか手放したときは、今までと同じく `` `x.1` is {used|released|duplicated|switched on|unpacked|unboxed|lent to `prim ev_evv`} after it was moved `` で報告する

@@ -213,3 +213,28 @@ main () =
     let stats = result.unwrap_or_else(|error| panic!("{error}"));
     assert!(stats.reuses >= 2000, "{stats:?}");
 }
+
+/// 中断が生きている token を通る UI テストで、reuse が本当に起きていること。`run` に埋め込まれた `step` が `Stats`
+/// の箱を token にし、中断しうる呼び出し (`check`、`probe`) をまたいで作り直すので、中断の前の3回は箱を使い回し、
+/// 中断の回は token が生きたまま巻き戻る。reuse が起きなくなると、UI テストは巻き戻しの token を確かめないまま
+/// 通ってしまう (docs/spec/vm.md の「巻き戻し」)。
+#[test]
+fn the_unwinding_ui_tests_reuse_boxes() {
+    for (name, text, output) in [
+        (
+            "reuse_token_exit",
+            include_str!("../../../tests/ui/run/unwind/reuse_token_exit.em"),
+            "count 1\ncount 2\ncount 3\n",
+        ),
+        (
+            "reuse_token_io_failure",
+            include_str!("../../../tests/ui/run/unwind/reuse_token_io_failure.em"),
+            "count 1\ncount 2\ncount 3\nErr cannot open `missing.txt`: not found\n",
+        ),
+    ] {
+        let (out, result) = eml_test_support::run_stats(text);
+        assert_eq!(out, output, "{name}: {result:?}");
+        let stats = result.unwrap_or_else(|error| panic!("{name}: {error}"));
+        assert!(stats.reuses > 0, "{name}: {stats:?}");
+    }
+}
