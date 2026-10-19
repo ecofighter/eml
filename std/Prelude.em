@@ -138,7 +138,8 @@ instance Eq Float where
   extern (!=)
 
 -- 比較の演算子は IEEE 754 のとおりで、NaN が絡むと偽になる。`compare` だけは全順序 (`-0.0` は `0.0` より小さく、
--- NaN は最も大きい) で、並べ替えが NaN を含んでも順序として成り立つ (docs/spec/declarations.md の「Prelude のクラス」)
+-- NaN は最も大きい) で、並べ替えが NaN を含んでも順序として成り立つ。演算が作る NaN はいつも正の quiet NaN なので、
+-- どのプラットフォームでも NaN は `inf` より大きい (docs/spec/declarations.md の「Prelude のクラス」)
 instance Ord Float where
   extern compare
   extern (<)

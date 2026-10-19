@@ -1166,7 +1166,7 @@ unsafe fn call<M: Mode>(
     let compare = |f: fn(i64, i64) -> i64| tag_bool(f(int(0), int(1)));
     let float = |i: usize| Args::float(&inputs[i]);
     let float_arith =
-        |f: fn(f64, f64) -> f64| Outcome::Float(format!("{:?}", f(float(0), float(1))));
+        |f: fn(f64, f64) -> f64| Outcome::Float(table::float_outcome(f(float(0), float(1))));
     let float_test = |f: fn(f64, f64) -> i64| tag_bool(f(float(0), float(1)));
     unsafe {
         let one = |ctx: &mut crate::Ctx<M>, args: &mut Args| args.string(ctx, &inputs[0], root);
@@ -1193,7 +1193,9 @@ unsafe fn call<M: Mode>(
             "Prelude.Num Float.*" => float_arith(float_mul),
             "Prelude.Div Float./" => float_arith(float_div),
             "Prelude.Div Float.%" => float_arith(float_rem),
-            "Prelude.Num Float.negate" => Outcome::Float(format!("{:?}", float_negate(float(0)))),
+            "Prelude.Num Float.negate" => {
+                Outcome::Float(table::float_outcome(float_negate(float(0))))
+            }
             "Prelude.Eq Float.==" => float_test(float_eq),
             "Prelude.Eq Float.!=" => float_test(float_ne),
             "Prelude.Ord Float.<" => float_test(float_lt),

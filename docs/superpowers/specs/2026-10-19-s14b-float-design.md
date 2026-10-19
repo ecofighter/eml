@@ -140,6 +140,7 @@ pub class Div a where
 ### 種類1 (通過と失敗の変更)
 
 - 浮動小数のリテラルの E0004 を確かめていたのは、Rust の単体テスト2つ (`crates/eml_hir/tests/lower.rs` と `crates/eml_types/tests/check.rs` の該当箇所) である。UI の `check-fail` には該当するテストがない。この2つは、浮動小数のリテラルが通ることを確かめる形に変えるか、文字のリテラルの E0004 を確かめる形に変える。計画で1つずつ挙げる
+- `crates/eml_syntax/tests/literals.rs` の `unsupported_literals_have_no_value` から、`1.5` が値を持たない (`None`) ことの確かめを外す。浮動小数のリテラルが値を持つようになったためである。値は、新しいテスト `float_literals_round_to_the_nearest_value` で確かめる
 
 ### 種類2 (期待値の変更)
 
@@ -148,6 +149,9 @@ pub class Div a where
 - `+ - * / %` と `negate` が `Num` と `Div` のメソッドになるので、extern の行の名前 (`Prelude.Num Int.+` など) が IR のダンプと extern の表のテストで変わる
 - 型の誤りの文言で、算術の演算子の型を表示する所 (制約 `Num a` を含む形になる)
 - `eml_rt` の期待値の表に `Float` の行が増える
+- 浮動小数のリテラルを未対応の例に使っていた E0004 のスナップショットのテスト2つ (`crates/eml_hir/tests/lower.rs` の `constructs_of_later_stages_are_not_yet_supported` と `crates/eml_types/tests/check.rs` の `later_stage_constructs_add_no_type_errors`) を、文字のリテラル `'c'` に変える。E0004 の文言が文字のリテラルのものになる
+- `crates/eml_hir/tests/externs.rs` の `every_extern_function_is_declared_once_in_std` も、`Pure` の行の最後の矢印の row が空であることを求める。`faulting_rows_carry_panic` と同じ理由で、instance の `extern` で結んだ `Pure` の行は `Panic` だけを持ってよいに緩める
+- Prelude に `Float` の instance を足すので、`check-fail/kinds/argument_sorts.em` のスナップショットが指す Prelude の `List` の行が下にずれる
 
 ### 足すテスト
 

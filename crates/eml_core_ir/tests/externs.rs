@@ -107,7 +107,8 @@ fn row_type(checked: &Checked, types: &mut TypeStore, e: Extern) -> TypeId {
     types.substitute(declared, &mut Substitution::partial([(var, head)]))
 }
 
-/// 行 `e` を instance の `extern` が結んでいるか。
+/// 行 `e` を instance の `extern` が結んでいるか。どの行も std のちょうど1か所から指されるので、extern の関数が結んで
+/// いなければ instance の `extern` が結んでいる。
 fn method_bound(checked: &Checked, e: Extern) -> bool {
     !checked
         .program

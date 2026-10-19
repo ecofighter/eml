@@ -24,7 +24,8 @@ pub enum Arg {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Outcome {
     Int(i64),
-    /// 浮動小数の結果の Rust の `{:?}`。NaN はどれも `NaN` と書くので、符号と中身がプラットフォームで違っても同じになる
+    /// 浮動小数の結果 (`float_outcome`)。Rust の `{:?}` で書く。正の quiet NaN (`f64::NAN`) でない NaN は、`{:?}` が
+    /// `NaN` と書いて区別しないので、ビット列を添えて書く。表の NaN はどれも `NaN` なので、そろえ忘れると表と合わない
     Float(String),
     Bool(bool),
     Order(&'static str),
@@ -276,7 +277,7 @@ fn parse_outcome(text: &str) -> Result<Outcome, String> {
         .ok_or_else(|| format!("a result without a kind: {text}"))?;
     Ok(match kind {
         "i" => Outcome::Int(parse_int(value)?),
-        "x" => Outcome::Float(format!("{:?}", parse_float(value)?)),
+        "x" => Outcome::Float(float_outcome(parse_float(value)?)),
         "b" => Outcome::Bool(parse_bool(value)?),
         "o" => Outcome::Order(match value {
             "LT" => "LT",
@@ -302,6 +303,15 @@ fn parse_outcome(text: &str) -> Result<Outcome, String> {
 
 fn parse_int(text: &str) -> Result<i64, String> {
     text.parse().map_err(|_| format!("not an integer: {text}"))
+}
+
+/// 浮動小数の結果の書き方。`f64::NAN` でない NaN は `NaN(0x…)` と書き、表の `NaN` と合わないようにする
+pub fn float_outcome(x: f64) -> String {
+    if x.is_nan() && x.to_bits() != f64::NAN.to_bits() {
+        format!("NaN({:#018x})", x.to_bits())
+    } else {
+        format!("{x:?}")
+    }
 }
 
 /// Rust の `{:?}` で書いた浮動小数。書き戻して同じ文字列になるものだけを受ける

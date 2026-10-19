@@ -825,7 +825,7 @@ fn script_externs_go_through_the_host<M: Mode>() {
 // T12
 
 /// 浮動小数の演算と `compare`。特別な値 (±0、±無限大、NaN、非正規化数) を含む組で、Rust の演算と同じビット列を返す。
-/// NaN の結果は NaN であることだけを比べる。符号と中身はプラットフォームで違う
+/// NaN の結果は、Rust の結果の符号と中身によらず、正の quiet NaN (`f64::NAN`) のビット列でなければならない
 #[test]
 fn float_operations_match_rust() {
     use crate::externs::*;
@@ -840,12 +840,11 @@ fn float_operations_match_rust() {
         f64::INFINITY,
         f64::NEG_INFINITY,
         f64::NAN,
+        -f64::NAN,
     ];
     let same = |got: f64, want: f64| {
-        assert!(
-            got.to_bits() == want.to_bits() || (got.is_nan() && want.is_nan()),
-            "{got:?} != {want:?}"
-        )
+        let want = if want.is_nan() { f64::NAN } else { want };
+        assert_eq!(got.to_bits(), want.to_bits(), "{got:?} != {want:?}")
     };
     for a in values {
         same(float_negate(a), -a);

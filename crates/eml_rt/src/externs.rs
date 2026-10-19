@@ -426,45 +426,60 @@ pub fn bool_ne(a: i64, b: i64) -> (r: i64)
 
 // `Float` の算術と `compare`。Verus は `f64` の算術に前提を満たせない仕様しか持たず、`%` と `total_cmp` には仕様が
 // ないので、本体を確かめずに信頼する (docs/spec/object-model.md の「`unsafe` の核」の T12)。値は IEEE 754 の倍精度の
-// とおりで、どれも誤りを返さない。結果は期待値の表で確かめる
+// とおりで、どれも誤りを返さない。結果は期待値の表で確かめる。NaN の結果は、どれも正の quiet NaN (`f64::NAN`) に
+// そろえる。Rust は演算の結果の NaN の符号を決めず、x86_64 では符号の立った NaN になるので、そろえないと `compare`
+// の答えがプラットフォームで変わるためである (docs/spec/declarations.md の「Prelude のクラス」)
 #[verifier::external_body]
 #[inline]
 pub fn float_add(a: f64, b: f64) -> f64 {
-    a + b
+    canonical_nan(a + b)
 }
 
 #[verifier::external_body]
 #[inline]
 pub fn float_sub(a: f64, b: f64) -> f64 {
-    a - b
+    canonical_nan(a - b)
 }
 
 #[verifier::external_body]
 #[inline]
 pub fn float_mul(a: f64, b: f64) -> f64 {
-    a * b
+    canonical_nan(a * b)
 }
 
 #[verifier::external_body]
 #[inline]
 pub fn float_div(a: f64, b: f64) -> f64 {
-    a / b
+    canonical_nan(a / b)
 }
 
 /// C の `fmod` と同じく、結果は割られる数の符号を持つ (Rust の `%`)。
 #[verifier::external_body]
 #[inline]
 pub fn float_rem(a: f64, b: f64) -> f64 {
-    a % b
+    canonical_nan(a % b)
 }
 
+/// NaN の符号も反転せず、正の NaN を返す。
 #[verifier::external_body]
 #[inline]
 pub fn float_negate(a: f64) -> f64 {
-    -a
+    canonical_nan(-a)
 }
 
-/// 全順序 (`f64::total_cmp`)。`-0.0` は `0.0` より小さく、正の NaN はどの値より大きい
+/// NaN を正の quiet NaN (`f64::NAN`) にそろえ、ほかの値はそのまま返す。
+#[verifier::external_body]
+#[inline]
+pub fn canonical_nan(x: f64) -> f64 {
+    if x.is_nan() {
+        f64::NAN
+    } else {
+        x
+    }
+}
+
+/// 全順序 (`f64::total_cmp`)。`-0.0` は `0.0` より小さく、正の NaN はどの値より大きい。演算が作る NaN はどれも正の
+/// NaN にそろえてあるので (上の `canonical_nan`)、NaN は `inf` より大きい
 /// (docs/spec/declarations.md の「Prelude のクラス」)。
 #[verifier::external_body]
 #[inline]

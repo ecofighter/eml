@@ -175,7 +175,7 @@ dir </> name = join_path dir name
 | 演算子 | 型と意味 |
 |---|---|
 | `+` `-` `*` | `Num a => a -> a -> <Panic> a`。クラス `Num` のメソッドである。`Int` は 64 ビットの符号付き整数で、`Int` の instance ではオーバーフローが `Panic` を起こす。`try_panic` が捕まえなければ実行時エラーになる。`Float` は IEEE 754 の倍精度の浮動小数で、`Float` の instance は IEEE 754 のとおりに計算し、`Panic` を起こさない |
-| `/` `%` | `Div a => a -> a -> <Panic> a`。クラス `Div` のメソッドである。`Int` の instance では、オーバーフローとゼロ除算が `Panic` を起こす。Rust と同じく、商を 0 の方向に切り捨てる (`%` の結果は被除数と同じ符号になる)。`Float` の instance では、0 で割ると `inf`、`-inf`、`nan` になる。`%` は Rust の `f64` の `%` (C の `fmod`) で、結果は被除数と同じ符号になる (Python の `%` とは違う) |
+| `/` `%` | `Div a => a -> a -> <Panic> a`。クラス `Div` のメソッドである。`Int` の instance では、オーバーフローとゼロ除算が `Panic` を起こす。Rust と同じく、商を 0 の方向に切り捨てる (`%` の結果は被除数と同じ符号になる)。`Float` の instance では、0 で割ると `inf`、`-inf`、`nan` になる (`nan` は正の quiet NaN。下の「Prelude のクラス」)。`%` は Rust の `f64` の `%` (C の `fmod`) で、結果は被除数と同じ符号になる (Python の `%` とは違う) |
 | 単項の `-` (`negate`) | `Num a => a -> <Panic> a`。`Num` のメソッド `negate` を呼ぶ。`Int` の instance では、オーバーフローが `Panic` を起こす。`Float` の instance は符号を反転する (`negate 0.0` は `-0.0`) |
 | `==` `!=` | `Eq a => a -> a -> Bool`。クラス `Eq` のメソッドである。`Eq` の instance のない型 (関数型、instance のない `data` の型、制約のないシグネチャの型変数) の値を比べると E2006 にする。`Float` は IEEE 754 のとおりに比べる (下の「Prelude のクラス」) |
 | `<` `<=` `>` `>=` | `Ord a => a -> a -> Bool`。クラス `Ord` のメソッドで、`compare` からの既定を持つ。`Float` の instance は IEEE 754 のとおりに比べ、`compare` とは食い違うことがある (下の「Prelude のクラス」) |
@@ -299,7 +299,7 @@ pub class Show a where
 - `Num` と `Div` は、互いを上位クラスに持たない。Prelude は `Int` と `Float` の instance を置き、メソッドを instance の中の `extern` で表の行 (`Prelude.Num Int.+`、`Prelude.Num Float.+` など) に結ぶ。単相化で instance が決まるので、`Int` と `Float` の算術は VM の専用の命令になる ([VM](vm.md) の「基本操作と extern」)
 - `Num` と `Div` のメソッドの型は `<Panic>` を持つ。メソッドの型はクラスで1つなので、`Panic` を起こさない instance のメソッド (`Float` の算術) も、型の上では `<Panic>` を持つ。`Float` の算術の表の行は `Pure` である
 - 整数のリテラルは `Int`、浮動小数のリテラルは `Float` である。`fromInteger` に当たる脱糖も defaulting もないので、何も型を決めない算術 (使わないラムダ `fn x -> x + x` など) は E2009 になる。`Int` と `Float` を混ぜた演算 (`1 + 1.5`) は E2001 である
-- `Eq Float` と `Ord Float` の比較の演算子 (`==`、`!=`、`<`、`<=`、`>`、`>=`) は IEEE 754 のとおりである。NaN はどの値とも等しくなく、NaN が絡むと `!=` のほかは偽になる。`0.0 == -0.0` は真である。`compare` だけは全順序 (Rust の `f64::total_cmp`) で、`-nan < -inf < … < -0.0 < 0.0 < … < inf < nan` と並べる。並べ替えが NaN を含んでも順序として成り立つためである。そのため `Float` では、NaN と ±0 のときだけ、`==` と `compare … == EQ` の答えが食い違う (`0.0 == -0.0` は真だが、`compare (-0.0) 0.0` は `LT` である)。Prelude のほかの instance では、2つは食い違わない
+- `Eq Float` と `Ord Float` の比較の演算子 (`==`、`!=`、`<`、`<=`、`>`、`>=`) は IEEE 754 のとおりである。NaN はどの値とも等しくなく、NaN が絡むと `!=` のほかは偽になる。`0.0 == -0.0` は真である。`compare` だけは全順序 (Rust の `f64::total_cmp`) で、`-nan < -inf < … < -0.0 < 0.0 < … < inf < nan` と並べる。`Float` の演算が作る NaN は、どれもいつも正の quiet NaN (Rust の `f64::NAN`、ビット列 `0x7FF8000000000000`) にそろえる。そのため、どのプラットフォームでも `compare` は計算で得た NaN を `inf` より大きく並べる。並べ替えが NaN を含んでも順序として成り立つためである。そのため `Float` では、NaN と ±0 のときだけ、`==` と `compare … == EQ` の答えが食い違う (`0.0 == -0.0` は真だが、`compare (-0.0) 0.0` は `LT` である)。Prelude のほかの instance では、2つは食い違わない
 - `Float` を含む複合の値の大小も、この例外に従う。導出した `Ord` とタプルの instance は `compare` だけを生成し、`<`、`<=`、`>`、`>=` はクラスの既定の実装が `compare` を通して決めるので、全順序に従う。`-0.0 < 0.0` は偽だが、`Some (-0.0) < Some 0.0` は真で、`(0.0, 1) < (-0.0, 2)` は偽である (最後の例は Python のタプルの比較と違う)。導出した `Eq` とタプルの `==` はフィールドごとの `==` なので IEEE 754 のままで、`Some nan == Some nan` は偽である
 - 利用者は自分の型 (ベクトルなど) に `Num` と `Div` の instance を書ける。前置の `-` は、その型の instance の `negate` を呼ぶ
 - `Show` の `show` は既定を持たない。`show` と `show_prec` を互いの既定にすると、どちらも書かない instance が止まらなくなるためである

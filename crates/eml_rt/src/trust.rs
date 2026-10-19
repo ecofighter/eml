@@ -140,6 +140,7 @@ const TRUSTED: &[(&str, &str)] = &[
     ("externs.rs: external_body float_rem", "T12"),
     ("externs.rs: external_body float_negate", "T12"),
     ("externs.rs: external_body float_compare", "T12"),
+    ("externs.rs: external_body canonical_nan", "T12"),
     ("alloc.rs: Drop for Pages", "T4"),
     ("heap/walk.rs: Drop for Heap", "T4"),
     ("frozen.rs: Drop for Frozen", "T4"),
