@@ -182,10 +182,17 @@ fn a_method_whose_class_row_lacks_the_effect_is_told_to_change_the_class() {
             vec!["the signature of `combine` comes from the class `Combine`; add `IO` to its row there, as in `-> <IO> ...`".to_string()]
         )]
     );
-    // 標準ライブラリのクラスは書き換えられず、矢印のないメソッドには row がないので、help を出さない
+    // 標準ライブラリのクラスは書き換えられないので、クラスの row を足すよう案内せず、メソッドが起こせないことを知らせる
     let text =
         "data C = | C\n\ninstance Show C where\n  show =\n    println \"x\"\n    fn _ -> \"o\"";
-    assert_eq!(codes_and_helps(text), [("E2002".to_string(), vec![])]);
+    assert_eq!(
+        codes_and_helps(text),
+        [(
+            "E2002".to_string(),
+            vec!["methods of `Show` cannot perform `IO`".to_string()]
+        )]
+    );
+    // 矢印のないメソッドには row がないので、help を出さない
     let text = "class Zero a where\n  zero : a\n\ninstance Zero Int where\n  zero =\n    println \"x\"\n    1";
     assert_eq!(codes_and_helps(text), [("E2002".to_string(), vec![])]);
 }
@@ -208,15 +215,9 @@ fn a_method_with_parameters_is_told_to_change_the_class() {
             "the signature of `combine` comes from the class `Combine`; add `IO` to its row there, as in `-> <IO> ...`",
         ]
     );
-    // 標準ライブラリのクラスは書き換えられないので、help を出さない
+    // 標準ライブラリのクラスは書き換えられないので、メソッドが起こせないことを知らせる
     let text = "data C = | C\n\ninstance Show C where\n  show _ =\n    println \"x\"\n    \"C\"";
-    let checked = check(text);
-    let found: Vec<(String, usize)> = checked
-        .diagnostics
-        .iter()
-        .map(|diagnostic| (diagnostic.code.to_string(), diagnostic.help.len()))
-        .collect();
-    assert_eq!(found, [("E2002".to_string(), 0)]);
+    assert_eq!(helps(text), ["methods of `Show` cannot perform `IO`"]);
 }
 
 #[test]

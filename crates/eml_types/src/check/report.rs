@@ -267,16 +267,22 @@ impl BodyCheck<'_, '_> {
                                     method.name
                                 ))
                             }
-                            None => (method.signature.arity() > 0
-                                && !self.program.origin(method.class.module).is_std())
-                                .then(|| {
-                                    format!(
-                                        "the signature of `{}` comes from the class `{}`; add {quoted} to its row there, as in `-> <{}> ...`",
-                                        method.name,
-                                        self.program.names.class(method.class),
-                                        missing.join(", ")
-                                    )
-                                }),
+                            None if self.program.origin(method.class.module).is_std() => {
+                                let class = self.program.names.class(method.class);
+                                Some(if missing == ["Panic"] {
+                                    format!("methods of `{class}` cannot perform {quoted}; catch it inside the body with `try_panic`")
+                                } else {
+                                    format!("methods of `{class}` cannot perform {quoted}")
+                                })
+                            }
+                            None => (method.signature.arity() > 0).then(|| {
+                                format!(
+                                    "the signature of `{}` comes from the class `{}`; add {quoted} to its row there, as in `-> <{}> ...`",
+                                    method.name,
+                                    self.program.names.class(method.class),
+                                    missing.join(", ")
+                                )
+                            }),
                         }
                     }
                     // 引数のない関数は矢印を持たず、row を足す先がない。`()` を取る関数にする規則を案内する
@@ -290,6 +296,14 @@ impl BodyCheck<'_, '_> {
                         missing.join(", ")
                     )),
                 };
+                let secondary = match method {
+                    Some(method) => format!(
+                        "the class `{}` fixes the row of `{}`",
+                        self.program.names.class(method.class),
+                        method.name
+                    ),
+                    None => "the row of this signature does not include it".to_string(),
+                };
                 let diagnostic = Diagnostic::error(
                     codes::EFFECT_NOT_IN_ROW,
                     format!(
@@ -300,7 +314,7 @@ impl BodyCheck<'_, '_> {
                 .with_secondary(Label::new(
                     self.file(),
                     self.body_arrow_range(),
-                    "the row of this signature does not include it",
+                    secondary,
                 ));
                 let diagnostic = match help {
                     Some(help) => diagnostic.with_help(help),

@@ -601,7 +601,7 @@ fn step_failed<M: Mode>(
         _ => return Err(fault),
     };
     match fault {
-        VmFault::Extern(fault) => failed(code, ctx, task, dst, fault, false),
+        VmFault::Extern(fault) => failed(code, ctx, task, dst, fault, Purity::Panics),
         other => Err(other),
     }
 }
@@ -618,14 +618,7 @@ fn extern_call<M: Mode>(
     match run_extern(code, ctx, task, counts, dst, at) {
         Err(VmFault::Extern(fault)) => {
             let ext = Extern::ALL[code.operands[at as usize] as usize];
-            failed(
-                code,
-                ctx,
-                task,
-                dst,
-                fault,
-                ext.row().purity == Purity::Effectful,
-            )
+            failed(code, ctx, task, dst, fault, ext.row().purity)
         }
         other => other,
     }
@@ -641,13 +634,17 @@ fn failed<M: Mode>(
     task: &mut Task,
     dst: Slot,
     fault: Fault,
-    effectful: bool,
+    purity: Purity,
 ) -> Result<(), VmFault> {
-    let caught = if fault.panics() {
+    // `Pure` の行の extern は巻き戻しの地点を持たないので、誤りを返しても中断にしない (docs/spec/vm.md の「extern の中断」)
+    let caught = if fault.panics() && purity != Purity::Pure {
         abort_to(code, ctx, task, dst, ExternEffect::Panic, PANICKED, |ctx| {
             [ctx.fresh_string(&fault.to_string())]
         })?
-    } else if let Some(kind) = fault.io_error_kind().filter(|_| effectful) {
+    } else if let Some(kind) = fault
+        .io_error_kind()
+        .filter(|_| purity == Purity::Effectful)
+    {
         abort_to(code, ctx, task, dst, ExternEffect::Io, IO_FAILED, |ctx| {
             [
                 Word::from_bits(kind as usize),

@@ -14,5 +14,7 @@ input_file: tests/ui/check-fail/panic/show_cannot_panic.em
    │
  5 │   show r = match r with
    │   ──┬─  
-   │     ╰─── the row of this signature does not include it
+   │     ╰─── the class `Show` fixes the row of `show`
+   │ 
+   │ Help: methods of `Show` cannot perform `Panic`; catch it inside the body with `try_panic`
 ───╯
