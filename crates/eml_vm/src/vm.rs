@@ -29,7 +29,7 @@ pub struct Task {
     pub(crate) entry: u32,
     /// `Finish` が結果を手放さずに残す。`Machine::run_shown` が、実行の後に結果の文字列を写して手放す。
     pub(crate) keep_result: bool,
-    /// `exit` の終了コード。立っていれば、中断が `Finish` まで届く (docs/spec/vm.md の「IO の失敗と `exit`」)。
+    /// `exit` の終了コード。立っていれば、中断が `Finish` まで届く (docs/spec/vm.md の「extern の中断」)。
     pub(crate) exit: Option<i64>,
 }
 
@@ -181,7 +181,9 @@ pub(crate) fn run<M: Mode>(
         match step(code, ctx, task, counts, pc) {
             Ok(true) => {}
             Ok(false) => return Ok(()),
-            Err(fault) => return Err(Failure { fault, pc }),
+            Err(fault) => {
+                step_failed(code, ctx, task, pc, fault).map_err(|fault| Failure { fault, pc })?
+            }
         }
     }
 }
@@ -256,6 +258,7 @@ fn step<M: Mode>(
             // バイトコードに後ろ向きの辺ができるので、ここも安全点にする (docs/spec/vm.md の「呼び出しと戻り」)
             ctx.poll(task.depth())?;
         }
+        // 誤りは `run` が `Panic` に届ける (`step_failed`)
         Op::IntAdd { dst, a, b } => task.set_raw(dst, externs::int_add(task.raw(a), task.raw(b))?),
         Op::IntSub { dst, a, b } => task.set_raw(dst, externs::int_sub(task.raw(a), task.raw(b))?),
         Op::IntMul { dst, a, b } => task.set_raw(dst, externs::int_mul(task.raw(a), task.raw(b))?),
@@ -557,7 +560,7 @@ fn unwind<M: Mode>(
 fn finish<M: Mode>(code: &CodeBase<M>, ctx: &mut Ctx<M>, task: &Task) -> Result<(), VmFault> {
     if task.exit.is_some() {
         // 途中のフレームは巻き戻しで片付けてある。入口の結果はダミーなので手放さない。中断の途中の `evv` には
-        // 意味がないので、空に戻す (docs/spec/vm.md の「IO の失敗と `exit`」)
+        // 意味がないので、空に戻す (docs/spec/vm.md の「extern の中断」)
         unsafe {
             ctx.yield_finish()?;
             ctx.evv_set(Word::UNIT)?;
@@ -571,10 +574,39 @@ fn finish<M: Mode>(code: &CodeBase<M>, ctx: &mut Ctx<M>, task: &Task) -> Result<
     Ok(())
 }
 
-/// `Prelude.IO` の操作 `io_failed` の番号。Prelude の宣言の唯一の操作である (docs/spec/vm.md の「IO の失敗と `exit`」)。
+/// 中断の操作の番号。Prelude の `IO` (`io_failed`) と `Panic` (`panicked`) は、どちらも操作を1つだけ宣言する
+/// (docs/spec/vm.md の「`IO` と `Panic` への中断」)。
 const IO_FAILED: usize = 0;
+const PANICKED: usize = 0;
 
-/// 算術と比較以外の extern。`try_io` の捕まえる誤りは `io_failed` で届ける。
+/// 命令 `pc` が返した誤り。算術の専用の命令の誤りなら、ほかの extern の誤りと同じく `Panic` に届け、届かなければ
+/// 誤りを返す。ほかの命令の誤りはそのまま返す。命令の中でなく `run` の誤りの道で届けるのは、`step` の速い道の命令の
+/// 列を変えないためである (docs/spec/vm.md の「`IO` と `Panic` への中断」)。
+#[cold]
+#[inline(never)]
+fn step_failed<M: Mode>(
+    code: &CodeBase<M>,
+    ctx: &mut Ctx<M>,
+    task: &mut Task,
+    pc: Pc,
+    fault: VmFault,
+) -> Result<(), VmFault> {
+    let dst = match code.code[pc as usize] {
+        Op::IntAdd { dst, .. }
+        | Op::IntSub { dst, .. }
+        | Op::IntMul { dst, .. }
+        | Op::IntDiv { dst, .. }
+        | Op::IntRem { dst, .. }
+        | Op::IntNeg { dst, .. } => dst,
+        _ => return Err(fault),
+    };
+    match fault {
+        VmFault::Extern(fault) => failed(code, ctx, task, dst, fault, false),
+        other => Err(other),
+    }
+}
+
+/// 算術と比較以外の extern。
 fn extern_call<M: Mode>(
     code: &CodeBase<M>,
     ctx: &mut Ctx<M>,
@@ -586,41 +618,77 @@ fn extern_call<M: Mode>(
     match run_extern(code, ctx, task, counts, dst, at) {
         Err(VmFault::Extern(fault)) => {
             let ext = Extern::ALL[code.operands[at as usize] as usize];
-            match fault.io_error_kind() {
-                Some(kind) if ext.row().purity == Purity::Effectful => {
-                    io_failed(code, ctx, task, dst, kind, fault)
-                }
-                _ => Err(VmFault::Extern(fault)),
-            }
+            failed(
+                code,
+                ctx,
+                task,
+                dst,
+                fault,
+                ext.row().purity == Purity::Effectful,
+            )
         }
         other => other,
     }
 }
 
-/// IO の失敗を、実行の時点で最も近い `try_io` に届ける。`try_io` がなければ、今までどおり実行時エラーにする。
-/// `io_failed` の節の入口は `never` の節の入口なので、`yield_abort` で巻き戻しを始めて戻らない。extern の命令の
-/// フレームは入口の呼び出し元になり、extern の地点の表で片付く。入口が戻らないので、安全点も置かない
-/// (docs/spec/vm.md の「IO の失敗」)。失敗した extern は引数をすでに消費している。
-fn io_failed<M: Mode>(
+/// extern の誤りを、誤りの種類で決まる中断に変える。`Panic` に渡す誤りは、行の `purity` によらず `try_panic` に届ける
+/// (`Env.arg` は `Effectful` だが、範囲の外の位置は `Panic` である)。`try_io` の捕まえる誤りは、`Effectful` の行の
+/// ものだけを届ける。捕まえる handler がなければ、今までどおり実行時エラーにする。失敗した extern は引数をすでに消費
+/// している。
+fn failed<M: Mode>(
     code: &CodeBase<M>,
     ctx: &mut Ctx<M>,
     task: &mut Task,
     dst: Slot,
-    kind: i64,
     fault: Fault,
+    effectful: bool,
 ) -> Result<(), VmFault> {
-    let Some(&io) = code.index.effects.get(ExternEffect::Io.row().name) else {
-        return Err(VmFault::Extern(fault));
+    let caught = if fault.panics() {
+        abort_to(code, ctx, task, dst, ExternEffect::Panic, PANICKED, |ctx| {
+            [ctx.fresh_string(&fault.to_string())]
+        })?
+    } else if let Some(kind) = fault.io_error_kind().filter(|_| effectful) {
+        abort_to(code, ctx, task, dst, ExternEffect::Io, IO_FAILED, |ctx| {
+            [
+                Word::from_bits(kind as usize),
+                ctx.fresh_string(&fault.to_string()),
+            ]
+        })?
+    } else {
+        false
     };
-    let Some(ev) = (unsafe { ctx.ev_find(io) })? else {
-        return Err(VmFault::Extern(fault));
+    if caught {
+        Ok(())
+    } else {
+        Err(VmFault::Extern(fault))
+    }
+}
+
+/// 実行の時点で最も近い `effect` の handler の、`never` の操作 `op` の節の入口を、evidence と `args` で呼ぶ。evidence
+/// がなければ何もせずに `false` を返し、`args` も作らない。入口は `never` の節の入口なので、`yield_abort` で巻き戻しを
+/// 始めて戻らない。中断を起こした命令のフレームは入口の呼び出し元になり、その命令の地点の表の行で片付く。入口が戻らない
+/// ので、安全点も置かない (docs/spec/vm.md の「`IO` と `Panic` への中断」)。
+fn abort_to<M: Mode, const N: usize>(
+    code: &CodeBase<M>,
+    ctx: &mut Ctx<M>,
+    task: &mut Task,
+    dst: Slot,
+    effect: ExternEffect,
+    op: usize,
+    args: impl FnOnce(&mut Ctx<M>) -> [Word; N],
+) -> Result<bool, VmFault> {
+    let Some(&number) = code.index.effects.get(effect.row().name) else {
+        return Ok(false);
+    };
+    let Some(ev) = (unsafe { ctx.ev_find(number) })? else {
+        return Ok(false);
     };
     // `ev_find` が `dup` した evidence を、節の入口の引数として渡す。`ev_clause` はそれを借りる
-    let clause = unsafe { ctx.ev_clause(ev, IO_FAILED) }?;
-    let message = ctx.fresh_string(&fault.to_string());
+    let clause = unsafe { ctx.ev_clause(ev, op) }?;
+    let args = args(ctx);
     task.scratch.clear();
-    task.scratch
-        .extend([ev, Word::from_bits(kind as usize), message]);
+    task.scratch.push(ev);
+    task.scratch.extend(args);
     let ret = task.pc;
     apply::apply(
         code,
@@ -629,7 +697,8 @@ fn io_failed<M: Mode>(
         clause,
         apply::Target::Frame { ret, dst },
         true,
-    )
+    )?;
+    Ok(true)
 }
 
 /// 行の番号の `match` で `Ctx` のメソッドを呼ぶ (docs/spec/object-model.md の「extern」)。
@@ -645,6 +714,17 @@ fn run_extern<M: Mode>(
     let arg = |i: usize| ops[2 + i] as Slot;
     // 語の引数は、LIR の所有の規則により VM が持つ参照で、extern がそれを消費する
     let ext = Extern::ALL[ops[0] as usize];
+    if ext == Extern::Panic {
+        let message = task.get(arg(0));
+        if abort_to(code, ctx, task, dst, ExternEffect::Panic, PANICKED, |_| {
+            [message]
+        })? {
+            return Ok(());
+        }
+        // 捕まえる `try_panic` がないので、文言を写して実行時エラーにする。写すと文字列の参照も手放す
+        let text = unsafe { ctx.copy_string(message, usize::MAX) }?;
+        return Err(VmFault::Panicked(text));
+    }
     if ext == Extern::Exit {
         task.exit = Some(task.raw(arg(0)));
         unsafe { ctx.exit_abort() }?;
@@ -740,9 +820,8 @@ fn run_extern<M: Mode>(
                 let code = ctx.proc_status(task.get(arg(0)), task.get(arg(1)))?;
                 task.set_raw(dst, code);
             }
-            // `exit` と同じく VM が自分で実行する extern である。`Panic` の evidence への道は S14a の次の段で作る
-            Extern::Panic => return Err(VmFault::Internal("panic is not implemented")),
-            Extern::Exit
+            Extern::Panic
+            | Extern::Exit
             | Extern::IntNeg
             | Extern::IntAdd
             | Extern::IntSub

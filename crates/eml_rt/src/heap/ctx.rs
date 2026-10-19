@@ -1123,7 +1123,7 @@ impl<M: Mode> Ctx<M> {
     }
 
     /// `exit` の中断を始める。宛先は不死のダミーの物体で、どの `prompt$` の evidence とも違うので、中断は実行の底
-    /// (`Finish`) まで届く。節と κ は `()` である (docs/spec/vm.md の「IO の失敗と `exit`」)。
+    /// (`Finish`) まで届く。節と κ は `()` である (docs/spec/vm.md の「extern の中断」)。
     ///
     /// # Safety
     /// `heap_mut` の前提を守っている。yield していない (検査モードは `YieldMisuse` を返す)。
@@ -2379,7 +2379,7 @@ impl<M: Mode> Ctx<M> {
 
     /// `ev_lookup` と同じく今の `evv` を先頭からたどり、エフェクト `effect` の最初の evidence を `dup` して返す。
     /// なければ `None` を返す。VM は、IO の失敗を届ける `try_io` があるかをこれで確かめる
-    /// (docs/spec/vm.md の「IO の失敗と `exit`」)。`evidence_steps` は、見つからなくてもたどった節点を数える。
+    /// (docs/spec/vm.md の「extern の中断」)。`evidence_steps` は、見つからなくてもたどった節点を数える。
     ///
     /// # Safety
     /// `heap_mut` の前提を守っている。検査モードは、形の違う節点や上限を超える長さに `BadEvidence` を返す。

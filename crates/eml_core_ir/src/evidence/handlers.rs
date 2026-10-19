@@ -320,8 +320,9 @@ fn runs_in_place(program: &Program, clause: &CoreFn, operation: &OperationInfo) 
 /// すぐに再開する節の関数 g を、その場で入口にする。引数を「捕獲、evidence、操作の引数」にし、状態は入口の先頭で
 /// evidence の欄から取り出す。末尾の `resume k(v, s)` は、状態を欄に戻して v を返す形にする。本体が何かを呼ぶなら
 /// under の形にし、入口の先頭で `evv` を evidence の外側に替え、`return` の前に戻す。節の本体は handler の外側で
-/// 動くので、本体の中の中断と `perform` が handle の本体の中の handler に届かないようにするためである。何も呼ばない
-/// 節では `evv` を読む命令がないので、替えない (docs/spec/core-ir.md の「`perform` と節の3つの形」)。
+/// 動くので、本体の中の中断と `perform` が handle の本体の中の handler に届かないようにするためである。何も呼ばず、
+/// `Pure` の extern だけを使う節では `evv` を読む命令がないので、替えない (docs/spec/core-ir.md の
+/// 「`perform` と節の3つの形」)。
 fn into_entry(program: &mut Program, clause: FnIdx, effect: u32, op: u32) {
     let operation = operation(&program.effects, effect, op);
     let operation_params = operation.params.len();
@@ -464,8 +465,9 @@ fn into_entry(program: &mut Program, clause: FnIdx, effect: u32, op: u32) {
     function.clause = Some((effect, op));
 }
 
-/// 節の本体が、末尾の `resume` のほかに呼び出しか、`Effectful` の extern を持つか。`resumes` は末尾の `resume` の
-/// 位置である。
+/// 節の本体が、末尾の `resume` のほかに呼び出しか、`Pure` でない extern を持つか。`resumes` は末尾の `resume` の
+/// 位置である。IO の失敗と `Panic` は handle の外の `try_io` と `try_panic` が捕まえるので、そうした extern を持つ節も
+/// under の形にする (docs/spec/core-ir.md の「`perform` と節の3つの形」)。
 fn calls_anything(clause: &CoreFn, resumes: &[(usize, usize)]) -> bool {
     clause.blocks.iter().enumerate().any(|(index, block)| {
         block.stmts.iter().enumerate().any(|(at, stmt)| match stmt {
@@ -481,7 +483,7 @@ fn calls_anything(clause: &CoreFn, resumes: &[(usize, usize)]) -> bool {
                         args: _,
                         at: _,
                     },
-            } => ext.row().purity == Purity::Effectful,
+            } => ext.row().purity != Purity::Pure,
             _ => false,
         })
     })

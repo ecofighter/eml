@@ -1,0 +1,8 @@
+# 捕まえない `panic` は実行時エラーになり、セッションは続く。次の入力の `try_panic` は誤りを捕まえ、その次の入力も
+# 普通に動く。回復が残った物体を消すので、`close` はリークを報告しない
+> check : Int -> <Panic> Int
+. check n = if n > 2 then panic "boom" else n
+.
+> check 5
+> try_panic (fn () -> check 5)
+> check 1 + 2

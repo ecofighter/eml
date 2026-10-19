@@ -671,31 +671,31 @@ fn unwind_points() {
     }
     insta::assert_snapshot!(lines.join("\n"), @"
     empty: 0
-    fib: 4
-    fold_state: 2
-    iter_generate: 2
-    iter_pipeline: 4
-    iter_pipeline_by_hand: 4
-    list: 6
-    loop: 2
-    orders: 5
-    orders_by_hand: 5
-    push_fold: 2
-    push_fold_by_hand: 2
-    rbtree: 8
-    records: 2
-    state: 2
-    std_list: 6
-    sum_loop: 2
-    tree: 10
-    tree_by_hand: 10
-    tree_map: 11
-    upsert: 19
-    upsert_by_hand: 19
-    scripts/wc: 37
-    scripts/grep: 29
-    scripts/logstat: 56
-    scripts/csv2jsonl: 44
-    scripts/deploy: 103
+    fib: 7
+    fold_state: 4
+    iter_generate: 5
+    iter_pipeline: 11
+    iter_pipeline_by_hand: 11
+    list: 9
+    loop: 4
+    orders: 13
+    orders_by_hand: 13
+    push_fold: 4
+    push_fold_by_hand: 4
+    rbtree: 15
+    records: 9
+    state: 4
+    std_list: 13
+    sum_loop: 4
+    tree: 18
+    tree_by_hand: 18
+    tree_map: 20
+    upsert: 31
+    upsert_by_hand: 31
+    scripts/wc: 54
+    scripts/grep: 59
+    scripts/logstat: 111
+    scripts/csv2jsonl: 110
+    scripts/deploy: 124
     ");
 }

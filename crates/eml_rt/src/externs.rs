@@ -123,6 +123,21 @@ impl Fault {
             | Fault::Stopped(_) => None,
         }
     }
+
+    /// `try_panic` が捕まえる誤りか。値と入力で決まる誤り (算術と範囲の外の位置) だけを `Panic` にする。ヒープの誤り、
+    /// 書き出しの誤り、止めたことは、どの呼び出しでも起きうるか起きた位置が決まらないので、型に出さない停止のままにする
+    /// (docs/spec/stdlib.md の「`try_panic`」)。
+    pub fn panics(&self) -> bool {
+        match self {
+            Fault::Arith(_) | Fault::Index(_) => true,
+            Fault::Heap(_)
+            | Fault::Output(_)
+            | Fault::Io { op: _, name: _, reason: _ }
+            | Fault::Stdin(_)
+            | Fault::NotUtf8(_)
+            | Fault::Stopped(_) => false,
+        }
+    }
 }
 
 fn reason_kind(reason: IoReason) -> i64 {

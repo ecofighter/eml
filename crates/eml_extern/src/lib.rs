@@ -367,7 +367,7 @@ impl Extern {
             }
             Extern::WriteText => row("Std.Fs.write_text", &[Obj, Obj], Unit, Purity::Effectful),
             Extern::ProcStatus => row("Std.Proc.status", &[Obj, Obj], Int, Purity::Effectful),
-            // 戻らない extern。VM が実行の底まで中断する (docs/spec/vm.md の「IO の失敗と `exit`」)
+            // 戻らない extern。VM が実行の底まで中断する (docs/spec/vm.md の「extern の中断」)
             Extern::Exit => FunctionRow {
                 name: "Prelude.exit",
                 params: &[Repr::Int],
@@ -377,7 +377,7 @@ impl Extern {
                 purity: Purity::Effectful,
             },
             // `exit` と同じく VM が自分で実行し、文字列を `Panic` の `panicked` の節に渡す
-            // (docs/spec/vm.md の「IO の失敗と `exit`」)
+            // (docs/spec/vm.md の「extern の中断」)
             Extern::Panic => FunctionRow {
                 name: "Prelude.panic",
                 params: &[Repr::Obj],

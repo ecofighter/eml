@@ -1,0 +1,13 @@
+---
+source: crates/eml_cli/tests/ui.rs
+expression: "format!(\"--- stdout ---\\n{stdout}--- stderr ---\\n{diagnostics}{stderr}{written}{exit}\")"
+input_file: tests/ui/run/panic/panic_inside_iter.em
+---
+--- stdout ---
+Err "division by zero"
+Ok 1
+Err "division by zero"
+Ok 1
+--- stderr ---
+--- written: numbers.txt ---
+x

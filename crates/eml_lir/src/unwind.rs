@@ -24,7 +24,7 @@ pub struct UnwindPoint {
 }
 
 /// 関数ごとの巻き戻しの地点。`FnIdx` の番号で引き、各関数の地点はブロックの順、文の順に並ぶ。地点は末尾でない
-/// 呼び出し、`Effectful` の extern、`prim yield_abort` である。所有の段の verifier が拒む関数は、地点の代わりにその
+/// 呼び出し、`Pure` でない extern (誤りが `try_io` か `try_panic` まで巻き戻す)、`prim yield_abort` である。所有の段の verifier が拒む関数は、地点の代わりにその
 /// 誤りを返す。VM は verifier を通さない IR も読み込むので (VM 自身の見張りを確かめるテスト)、panic せず、拒まれた
 /// 関数を表のない関数として扱えるようにする。プログラム全体を1回で求めるのは、検査の表 (関数ごとの要約) を作り直さない
 /// ためである。
@@ -39,7 +39,7 @@ pub(crate) fn point(stmt: &Stmt) -> Option<(VarId, Option<VarId>)> {
     };
     let landing = match rhs {
         Rhs::Call(call) => call.prompt(),
-        Rhs::Extern { ext, .. } if ext.row().purity == Purity::Effectful => None,
+        Rhs::Extern { ext, .. } if ext.row().purity != Purity::Pure => None,
         Rhs::Prim(Prim::YieldAbort, _) => None,
         _ => return None,
     };

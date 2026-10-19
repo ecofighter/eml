@@ -60,7 +60,7 @@ effect Fail where
 ## 組み込みの `IO`
 
 - `IO` は、Prelude が `pub extern effect IO where never io_failed : IOErrorKind -> String -> a` と宣言する extern のエフェクトである。操作 `io_failed` は Prelude の外から見えず、Prelude の `try_io` だけが handle する ([標準ライブラリ](stdlib.md) の「`try_io`」)。
-- `IO` を起こすのは、`IO` を row に持つ extern の関数 (`println` など) である。extern の関数は handler を通らず、その場で実行して値を返す。ただし、`try_io` が捕まえる種類の誤りで失敗すると、VM が `io_failed` の節の入口を呼んで中断を始める。`exit` はいつも中断を始める ([VM](vm.md) の「IO の失敗と `exit`」)。中断は継続を作らずに巻き戻しで進むので、`IO` を起こす extern の呼び出しは yield の地点でなく ([Core IR](core-ir.md) の「IO の extern」)、`IO` は yield しうるラベルでない ([型と Kind](types.md) の「row の具体化の記録」)。
+- `IO` を起こすのは、`IO` を row に持つ extern の関数 (`println` など) である。extern の関数は handler を通らず、その場で実行して値を返す。ただし、`try_io` が捕まえる種類の誤りで失敗すると、VM が `io_failed` の節の入口を呼んで中断を始める。`exit` はいつも中断を始める ([VM](vm.md) の「extern の中断」)。中断は継続を作らずに巻き戻しで進むので、`IO` を起こす extern の呼び出しは yield の地点でなく ([Core IR](core-ir.md) の「IO の extern」)、`IO` は yield しうるラベルでない ([型と Kind](types.md) の「row の具体化の記録」)。
 - extern の関数の呼び出しは、操作の呼び出しと違って `perform` 命令にならない ([Core IR](core-ir.md))。多重度は `once` として扱う。
 - handler の節の先頭に、`IO` を起こす extern の関数の名前を書いたらエラーにする (E1009)。節の先頭の名前は、まず操作として引き、見つからないときだけ extern の関数を引く。extern のエフェクト (`IO` か `Panic`) を起こす extern の関数が見つかれば E1009 で、それ以外 (純粋な extern の関数) は E1001 である。ユーザーが定義した同名の関数は、`Prelude` の extern の関数を隠さない ([モジュールと名前解決](modules.md) の「名前の解決」)。
 

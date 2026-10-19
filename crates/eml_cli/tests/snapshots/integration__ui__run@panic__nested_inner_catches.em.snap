@@ -1,0 +1,8 @@
+---
+source: crates/eml_cli/tests/ui.rs
+expression: "format!(\"--- stdout ---\\n{stdout}--- stderr ---\\n{diagnostics}{stderr}{written}{exit}\")"
+input_file: tests/ui/run/panic/nested_inner_catches.em
+---
+--- stdout ---
+Ok "inner caught: division by zero"
+--- stderr ---

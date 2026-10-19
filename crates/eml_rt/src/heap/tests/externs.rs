@@ -58,6 +58,43 @@ fn io_faults_map_to_their_kinds() {
     );
 }
 
+/// `try_panic` に渡すのは算術と範囲の外の位置の誤りだけで、IO の失敗とは重ならない。
+#[test]
+fn only_arith_and_index_faults_panic() {
+    let index = |fault| Fault::Index(Box::new(fault));
+    let panicking = [
+        Fault::Arith(ArithFault::DivisionByZero),
+        Fault::Arith(ArithFault::IntegerOverflow),
+        index(IndexFault::String { index: 3, len: 1 }),
+        index(IndexFault::Slice {
+            start: 0,
+            end: 3,
+            len: 1,
+        }),
+        index(IndexFault::Boundary { start: 0, end: 1 }),
+        index(IndexFault::Arg { index: 5, count: 0 }),
+    ];
+    for fault in &panicking {
+        assert!(fault.panics(), "{fault:?}");
+        assert_eq!(fault.io_error_kind(), None, "{fault:?}");
+    }
+    let others = [
+        Fault::Heap(HeapError::WrongKind),
+        Fault::Output("broken pipe".into()),
+        Fault::Io {
+            op: IoOp::Open,
+            name: "x".into(),
+            reason: IoReason::NotFound,
+        },
+        Fault::Stdin(IoReason::Other),
+        Fault::NotUtf8(Box::new(Utf8Source::Stdin)),
+        Fault::Stopped(Stop::Interrupted),
+    ];
+    for fault in &others {
+        assert!(!fault.panics(), "{fault:?}");
+    }
+}
+
 #[test]
 fn arithmetic_matches_checked_rust() {
     for a in EDGES {

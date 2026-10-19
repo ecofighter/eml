@@ -1,0 +1,17 @@
+---
+source: crates/eml_cli/tests/repl.rs
+expression: checked.render()
+input_file: crates/eml_cli/tests/repl/errors/panic.repl
+---
+> check : Int -> <Panic> Int
+. check n = if n > 2 then panic "boom" else n
+.
+> check 5
+runtime error: panicked: boom
+  at <input 1>:2:25
+> try_panic (fn () -> check 5)
+Err "boom"
+> check 1 + 2
+3
+--- close ---
+no leaks

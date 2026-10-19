@@ -1,0 +1,11 @@
+---
+source: crates/eml_cli/tests/ui.rs
+expression: "format!(\"--- stdout ---\\n{stdout}--- stderr ---\\n{diagnostics}{stderr}{written}{exit}\")"
+input_file: tests/ui/run/panic/catches_slice_out_of_range.em
+---
+--- stdout ---
+Err "string slice 1..9 is out of range for length 3"
+Err "string index 5 is out of range for length 3"
+Err "string slice 0..1 is not on a character boundary"
+Ok "b"
+--- stderr ---

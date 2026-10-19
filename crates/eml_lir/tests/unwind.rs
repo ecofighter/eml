@@ -116,7 +116,6 @@ fn g(t.0: obj) -> obj {
 
 #[test]
 fn pure_extern_and_tail_call_are_not() {
-    // `Panic` を起こす extern (`Panics`) は、`Effectful` でないので点でない
     let text = "\
 fn g(x.0: obj) -> obj {
   return x.0
@@ -124,11 +123,27 @@ fn g(x.0: obj) -> obj {
 fn f(n.0: int, s.1: obj) -> obj {
   let m.2: obj = extern \"Prelude.Show Int.show\"(n.0)
   decref m.2
-  let q.3: int = extern Prelude.+(n.0, 2)
   tail call g(s.1)
 }
 ";
     assert_eq!(points_of(text, "f"), []);
+}
+
+/// `Panic` を起こす extern (`Panics`) も、誤りのとき `try_panic` まで巻き戻すので点である
+/// (docs/spec/vm.md の「巻き戻しの表」)。
+#[test]
+fn panicking_extern_is_a_point() {
+    let text = "\
+fn f(n.0: int, s.1: obj) -> obj {
+  let q.2: int = extern Prelude.+(n.0, 2)
+  let t.3: obj = extern Prelude.panic(s.1)
+  return t.3
+}
+";
+    assert_eq!(
+        points_of(text, "f"),
+        [point(0, 0, &[(1, 1)], None), point(0, 1, &[], None)]
+    );
 }
 
 #[test]

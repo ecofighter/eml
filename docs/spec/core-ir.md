@@ -162,7 +162,7 @@ box の挿入が足す変数の印は、[LIR](lir.md) の「box の挿入」に�
 
 ### 変換の規則
 
-- extern の関数の引数のそろった呼び出しは、`extern` 命令 (`Rhs::Extern`) にする。extern は、その場で実行して値を返す1階の命令で、eml のコードを呼び返さず、継続のフレームも積まない。ただし、`try_io` が捕まえる種類の誤りで失敗すると VM が `io_failed` の節の入口を呼び、`exit` は中断を始める ([VM](vm.md) の「IO の失敗と `exit`」)。`mask` は持たない。引数の所有権は、コンストラクタの呼び出しと同じく命令に移る。どの extern があり、引数と結果の Repr が何で、純粋かどうかは処理系の表 (`eml_extern`) が決める。
+- extern の関数の引数のそろった呼び出しは、`extern` 命令 (`Rhs::Extern`) にする。extern は、その場で実行して値を返す1階の命令で、eml のコードを呼び返さず、継続のフレームも積まない。ただし、`try_io` が捕まえる種類の誤りで失敗すると VM が `io_failed` の節の入口を呼び、`Panic` を起こす誤りで失敗するか `panic` を呼ぶと `panicked` の節の入口を呼び、`exit` は中断を始める ([VM](vm.md) の「extern の中断」)。`mask` は持たない。引数の所有権は、コンストラクタの呼び出しと同じく命令に移る。どの extern があり、引数と結果の Repr が何で、純粋かどうかは処理系の表 (`eml_extern`) が決める。
 - 表面の構文には `perform` はない。HIR から Core IR への変換で、操作の呼び出しを `perform` 命令に変える。
 - クロージャは「関数 + すでに渡された先頭の引数の並び」で表す。ラムダは、捕まえた変数を先頭の引数に持つ関数に持ち上げる。ラムダの捕獲と部分適用は、どちらもこの形のクロージャになる。
 - 関数値の呼び出しは、実行時に引数の個数を比べる eval/apply 方式で行う。個数が揃えば呼び、足りなければ引数を足した新しいクロージャを作り、余れば先頭の分で呼んだ結果に残りを適用する。呼ぶ相手が分かっている呼び出しは、変換の時点で同じ場合分けをする。
@@ -664,7 +664,7 @@ EP は、使うときだけ次の関数をプログラムに1つずつ足す。�
   - `yields` の印の立った `apply`
   - 再開する操作 (`once` と `multi`) の `Call::Clause`
   - `mask` 付きの呼び出し (下の「`mask` の包み」)
-- `never` の操作の `Call::Clause` と `Effectful` の extern は、yield の地点にしない。どちらも中断を始めることがあるが、中断は継続を作らずに巻き戻しで進み、呼び出しの後には戻らないためである (下の「`never` の中断」と「IO の extern」)
+- `never` の操作の `Call::Clause` と `Pure` でない extern (`Panics` と `Effectful`) は、yield の地点にしない。どちらも中断を始めることがあるが、中断は継続を作らずに巻き戻しで進み、呼び出しの後には戻らないためである (下の「`never` の中断」と「IO の extern」)
 - 末尾の位置の呼び出し ([LIR](lir.md) の「末尾の位置の呼び出し」の、形だけで決まる定義) は、yield の地点にしない。呼ばれた側の yield は、そのまま呼び出し元へ返るためである。EP はこの定義を Core IR の上の写しで判定する。末尾の位置の `never` の操作の `clause` は、縮約が `tail clause` にする
 - yield の地点 `let x = <呼び出し>` の直後でブロックを切り、次の形にする
 
@@ -797,7 +797,7 @@ in-place の入口は、translate が作った節の関数 g から、EP が節�
 
   入口の関数 `g$entry` (`clause` の印) は g の写しである。引数は、捕獲、evidence `ev`、操作の引数の順にし、g の `k` と状態の引数を除く。状態は入口の先頭の `ev_take_state(ev)` で得る。末尾の `let r = resume k(v, s)` と `return r` を、`ev_set_state(ev, s)` と `return v` に替える。`yields` の印は g の印を写す。g は使われなくなるので消す
 
-  g の本体が、最後の末尾の `resume` のほかに呼び出し (`Rhs::Call`。直接の呼び出し、`apply`、`perform`、`handle`) か `Effectful` の extern を1つでも持てば、入口を under の形にする。入口の先頭 (状態を取り出す前) で `evv` を evidence の外側の `evv` に替え、各 `return v` の前 (`ev_set_state(ev, s)` の後) で元に戻す。
+  g の本体が、最後の末尾の `resume` のほかに呼び出し (`Rhs::Call`。直接の呼び出し、`apply`、`perform`、`handle`) か `Pure` でない extern (`Panics` と `Effectful`) を1つでも持てば、入口を under の形にする。入口の先頭 (状態を取り出す前) で `evv` を evidence の外側の `evv` に替え、各 `return v` の前 (`ev_set_state(ev, s)` の後) で元に戻す。
 
   ```
     let w = prim evv_get()
@@ -810,9 +810,9 @@ in-place の入口は、translate が作った節の関数 g から、EP が節�
     return v
   ```
 
-  under の形の本体は、yield で handler に移ってから動く節 (下の再開する節。`prompt$` が `evv` を handle の外側の `evv` に戻してから呼ぶ) と同じ `evv` で動く。本体の中の `perform`、`handle`、`mask` は handle の外側の row の handler を見る。本体の中で起きた中断 (`fail`、IO の失敗) も、handle の本体の中の `to_result` や `try_io` ではなく、handle の外の handler に届く。本体は yield しないので、再開の後に evidence を探し直す仕組みは要らない。中断が入口のフレームを外すときは、入口が持つ `w` を巻き戻しの表が手放す ([VM](vm.md) の「巻き戻し」)。そのときの `evv` は、着地した `prompt$` が正しい値に戻す ([LIR](lir.md) の「`evv` の不変条件」)
+  under の形の本体は、yield で handler に移ってから動く節 (下の再開する節。`prompt$` が `evv` を handle の外側の `evv` に戻してから呼ぶ) と同じ `evv` で動く。本体の中の `perform`、`handle`、`mask` は handle の外側の row の handler を見る。本体の中で起きた中断 (`fail`、IO の失敗、`Panic`) も、handle の本体の中の `to_result`、`try_io`、`try_panic` ではなく、handle の外の handler に届く。本体は yield しないので、再開の後に evidence を探し直す仕組みは要らない。中断が入口のフレームを外すときは、入口が持つ `w` を巻き戻しの表が手放す ([VM](vm.md) の「巻き戻し」)。そのときの `evv` は、着地した `prompt$` が正しい値に戻す ([LIR](lir.md) の「`evv` の不変条件」)
 
-  何も呼ばない節 (`State` の `get` と `put`) は、under の形にしない。`evv` を読む命令がなく、中断も起こさないので、`perform` の場所の `evv` のまま動かしてよい
+  何も呼ばず、`Pure` の extern だけを使う節 (`State` の `get` と `put`) は、under の形にしない。`evv` を読む命令がなく、中断も起こさないので、`perform` の場所の `evv` のまま動かしてよい。数を数える節 (`fn tick () st -> ((), st + 1)`) は `+` が `Panic` を起こしうるので under の形になり、桁あふれは handle の外の `try_panic` に届く
 - **再開する節** (`once` と `multi` の操作のうち、上に当たらない節): 入口の関数は、捕獲、`ev`、操作の引数を受け、`c = closure g(捕獲, 操作の引数)` を作り、`yield_to(ev, c, &id$)` を呼んで、ダミーを返す。入口はいつも yield を始めるので、g の印によらず `yields` の印を立てる。`prompt$` が後で `apply c(k, st)` を呼ぶ。yield しうる外のエフェクトを呼ぶすぐに再開する節もここに入り、節の本体は handle の外側の `evv` で動く。under の形は、本体が yield しないすぐに再開する節だけに使う。yield する本体を under で動かすと、yield と再開のたびに `evv` を替え直す包みが要る。そのうえ再開で evidence を作り直すと、包みと節の本体が古い evidence を持ち続けるので、探し直す仕組みも要るためである
 - **`never` の節**: 入口は c を同じ形で作り、`yield_abort(ev, c)` を呼んで中断を始める。最初の κ は渡さず、`yields` の印も立てない。中断は κ を組み立てず、VM がタスクのスタックを巻き戻すので、入口を呼んだ側に yield は返らないためである (下の「`never` の中断」)。`prompt$` が着地の後に `apply c(st)` を呼ぶ。入口の `ret` は `obj` で、`yield_abort` の後に `prim dummy()` を返す形のままにする。`yield_abort` は戻らないので、この `return` には実行が届かない。`never` の操作の `clause` の束縛は、`OpRet::Never` なので位置と比べない。`clause` の後へ制御は戻らないので、その束縛を使う所にも実行は届かない
 - handle の場所では、節の値 c_i がどの関数のクロージャかを知る必要がある。translate は節を `&g` か、同じ関数の中の `closure g(..)` で渡すので、EP はそれを読む。そうでない形は内部の誤りとしてパニックする
@@ -822,14 +822,14 @@ in-place の入口は、translate が作った節の関数 g から、EP が節�
 
 - 中断は κ を組み立てない。`yield_abort` が yield の状態に宛先の evidence と節の本体を入れると、VM がタスクのスタックを、着地の印の evidence が宛先と同じ `apply` まで巻き戻す ([VM](vm.md) の「巻き戻し」)。外すフレームが持つ値は、巻き戻しの表で手放す。`File` はこの解放で閉じる
 - 途中のフレームは、生きている `Lin` の値に `decref` も `drop` も置かない。生きている値は、巻き戻しの表に載るためである
-- 中断を始めうる命令 (`never` の操作の `clause` と `IO` の extern) は yield の地点にせず、その後に yield の確かめと遅い道を置かない (上の「yield の地点」)。`IO` と、すべての操作が `never` のエフェクトは、yield しうるラベルでもない ([型と Kind](types.md) の「row の具体化の記録」)。そのため、それらだけを row に持つ関数は `yields` でなく、その中で中断が起きてよい。巻き戻しは `yields` の印によらず、表で途中のフレームを片付ける
+- 中断を始めうる命令 (`never` の操作の `clause` と `Pure` でない extern) は yield の地点にせず、その後に yield の確かめと遅い道を置かない (上の「yield の地点」)。`IO` と、すべての操作が `never` のエフェクトは、yield しうるラベルでもない ([型と Kind](types.md) の「row の具体化の記録」)。そのため、それらだけを row に持つ関数は `yields` でなく、その中で中断が起きてよい。巻き戻しは `yields` の印によらず、表で途中のフレームを片付ける
 - `prompt$` の中断の経路は、`return` の節のクロージャ `ret` を `drop` する。捕まえていた `File` はこの解放で閉じる (上の「EP の明示の `drop`」)
 
 #### IO の extern
 
-- `IO` を起こす extern (表の行の `purity` が `Effectful`) の呼び出しは、yield の地点でない。直後に yield の確認も遅い道も置かない。`try_io` が捕まえる種類の誤りで失敗すると、VM が `io_failed` の節の入口を呼んで中断を始め、`exit` はいつも中断を始める ([VM](vm.md) の「IO の失敗と `exit`」)。どちらの中断も巻き戻しで進み、extern の後には戻らない (上の「`never` の中断」)
+- `IO` を起こす extern (表の行の `purity` が `Effectful`) と `Panic` を起こす extern (`Panics`) の呼び出しは、yield の地点でない。直後に yield の確認も遅い道も置かない。`try_io` が捕まえる種類の誤りで失敗すると、VM が `io_failed` の節の入口を呼んで中断を始める。`Panic` を起こす誤りで失敗したときと `panic` は、`panicked` の節の入口を呼んで中断を始める。`exit` はいつも中断を始める ([VM](vm.md) の「extern の中断」)。どの中断も巻き戻しで進み、extern の後には戻らない (上の「`never` の中断」)
 - `IO` は yield しうるラベルでないので、`IO` だけを row に持つ関数は `yields` でない ([型と Kind](types.md) の「row の具体化の記録」)。`yields` でない関数も `IO` の extern を呼んでよい
-- すぐに再開する節の条件 (「`perform` と節の3つの形」) では、`IO` の extern の呼び出しを yield の地点に数えない。`IO` の extern を呼ぶ節の入口は under の形にするので、節の本体は handle の外側の `evv` で動き、節の IO の失敗は handle の本体の中の `try_io` でなく、handle の外の `try_io` に届く
+- すぐに再開する節の条件 (「`perform` と節の3つの形」) では、`Pure` でない extern の呼び出しを yield の地点に数えない。そうした extern を呼ぶ節の入口は under の形にするので、節の本体は handle の外側の `evv` で動き、節の IO の失敗と `Panic` は handle の本体の中の `try_io` と `try_panic` でなく、handle の外の `try_io` と `try_panic` に届く
 - extern の関数を包む関数 (`$externN`) は、行が `Effectful` でも `yields` でない。extern を呼んで返すだけだからである
 - `IO` は、Prelude の最初のエフェクトとして、いつもエフェクトの表にある。番号は 0 である。`try_io` の handle、`io_failed` の節、`prompt$` は、普通の `never` の操作の handle と同じ形に変換する
 

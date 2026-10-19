@@ -9,6 +9,8 @@ use eml_rt::{ArithFault, Fault, HeapError, Stop};
 pub enum VmFault {
     /// extern、基本操作、ヒープの操作の誤り。
     Extern(Fault),
+    /// 捕まえる `try_panic` のない利用者の `panic` と、その文言 (docs/spec/vm.md の「`IO` と `Panic` への中断」)。
+    Panicked(String),
     /// 安全点で、割り込みか上限で止めた。
     Stopped(Stop),
     /// verifier を通った IR では起きないはずの誤り。
@@ -19,6 +21,7 @@ impl fmt::Display for VmFault {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             VmFault::Extern(fault) => write!(f, "{fault}"),
+            VmFault::Panicked(message) => write!(f, "panicked: {message}"),
             VmFault::Stopped(stop) => write!(f, "{stop}"),
             VmFault::Internal(what) => write!(f, "internal error: {what}"),
         }

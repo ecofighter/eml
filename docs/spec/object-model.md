@@ -737,7 +737,7 @@ token の表の項目は、`into_token` と `release_reuse` が添字を使い�
 
 ## extern
 
-`eml_extern` の表の関数の行のうち `exit` を除く39個を、`eml_rt` に語の ABI で1回だけ書く。S10 の VM と、後のネイティブのコードが同じ関数を呼ぶ。ヒープを使わない算術と比較は module `externs` の関数で、文字列と I/O の extern は `Ctx` のメソッドである。純粋な extern は、結果をバイト列や整数の spec に対して Verus で証明する。`exit` は VM が実行する。終了コードを覚えて、`Ctx::exit_abort` で中断を始める ([VM](vm.md) の「IO の失敗と `exit`」)。
+`eml_extern` の表の関数の行のうち `exit` と `panic` を除く39個を、`eml_rt` に語の ABI で1回だけ書く。S10 の VM と、後のネイティブのコードが同じ関数を呼ぶ。ヒープを使わない算術と比較は module `externs` の関数で、文字列と I/O の extern は `Ctx` のメソッドである。純粋な extern は、結果をバイト列や整数の spec に対して Verus で証明する。`exit` と `panic` は VM が実行する。`exit` は終了コードを覚えて、`Ctx::exit_abort` で中断を始める。`panic` は文言を `panicked` の節の入口に渡す ([VM](vm.md) の「extern の中断」)。
 
 行の番号 (`eml_extern::Extern`) から関数を引く表は `eml_rt` に置かない。VM が行の番号の `match` で各関数を呼ぶ。`match` は飛び先の表になるので、関数ポインタの表と同じ速さである。
 
@@ -785,6 +785,8 @@ token の表の項目は、`into_token` と `release_reuse` が添字を使い�
 | `Stopped(Stop)` | `File` の読み (`Fs.read_all` と `read_line_raw`) と標準入力の読みが読む途中で、`Proc.status` が子を起動する前か待つ間に、止める語か確保量の上限に当たった | `interrupted`、`the memory limit is exceeded`、`the call depth limit is exceeded` (`Stop` の表示) |
 
 `Fault::io_error_kind` は、`try_io` が捕まえる誤り (`Io`、`Stdin`、`NotUtf8`) に `IOErrorKind` のタグ (`IO_NOT_FOUND` 0 から `IO_OTHER` 4) を返し、ほかには `None` を返す ([標準ライブラリ](stdlib.md) の「`try_io`」)。
+
+`Fault::panics` は、`try_panic` が捕まえる誤り (`Arith` と `Index`) で真を返し、ほかでは偽を返す ([標準ライブラリ](stdlib.md) の「`try_panic`」)。値と入力で決まる誤りだけを `Panic` にし、どの呼び出しでも起きうるか起きた位置が決まらない誤り (`Heap`、`Output`、`Stopped`) は型に出さない。`io_error_kind` が `Some` を返す誤りとは重ならない。VM はこの2つで、誤りを `Panic` に届けるか、`IO` に届けるか、実行時エラーにするかを決める ([VM](vm.md) の「`IO` と `Panic` への中断」)。
 
 - `name` は extern に渡されたパスの文字列そのもの (`file_root` をつなぐ前) か、`Run` ならプログラムの名前である
 - `NotAvailable` は、その実行の Host が持たない入出力である。REPL の標準入力と、組み込み先の Host が実装しなかったメソッドが当たる (下の「Host」)

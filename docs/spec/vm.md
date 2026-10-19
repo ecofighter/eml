@@ -223,11 +223,11 @@ token は1語の値で、フレームのスロットに置く ([オブジェク�
 
 ## 巻き戻し
 
-中断 (`never` の操作、`try_io` が捕まえる IO の失敗、`exit`) は、継続を組み立てずに、タスクのスタックを宛先のフレームまで巻き戻す ([LIR](lir.md) の「実行の意味」)。外すフレームが持つ値は、コード生成が作る表で手放す。
+中断 (`never` の操作、`try_io` が捕まえる IO の失敗、`try_panic` が捕まえる `Panic`、`exit`) は、継続を組み立てずに、タスクのスタックを宛先のフレームまで巻き戻す ([LIR](lir.md) の「実行の意味」)。外すフレームが持つ値は、コード生成が作る表で手放す。
 
 ### 巻き戻しの表
 
-- 巻き戻しの地点は、末尾でない呼び出し (`call`、`apply`、`clause`)、`Effectful` の extern の命令 (`exit` を含む)、`prim yield_abort` である。中断はこのどれかの命令の中か、その呼ばれる側で始まるので、中断が通るフレームはいつも地点の命令の直後で止まっている
+- 巻き戻しの地点は、末尾でない呼び出し (`call`、`apply`、`clause`)、`Pure` でない extern の命令 (`exit`、`panic`、算術の専用の命令を含む)、`prim yield_abort` である。中断はこのどれかの命令の中か、その呼ばれる側で始まるので、中断が通るフレームはいつも地点の命令の直後で止まっている
 - 地点ごとの所有は、`eml_lir::unwind::points_all(program) -> Vec<Result<Vec<UnwindPoint>, VerifyError>>` が関数ごとに求める。各関数の `UnwindPoint { block, stmt, owned, tokens, landing }` は、ブロックの順、文の順に並ぶ
   - `owned` は、地点の命令の直後に所有している RC の対象の変数と、その所有の数 (1 以上) の列で、変数の番号の昇順に並ぶ。命令が束縛する変数 (呼び出しの結果、extern の行き先) は含めない。命令が戻らなければ、その変数はまだないためである
   - `tokens` は、地点の命令の直後に生きている token の変数の列で、変数の番号の昇順に並ぶ。token は RC の対象でないので `owned` には入れない。token は yield しうる呼び出しの後で生きていないので、着地の印を持つ地点の `tokens` はいつも空である
@@ -244,7 +244,7 @@ token は1語の値で、フレームのスロットに置く ([オブジェク�
 
 - `prim yield_abort(ev, c)` (`Op::YieldAbort { ev, clause }`): `never` の節の入口が呼ぶ。`Ctx::yield_abort` で yield の状態に宛先と節の本体を入れ、`ev` を宛先にして巻き戻す。命令は戻らないので、結果のスロットを持たない
 - `exit n`: 下の「`exit`」
-- `try_io` が捕まえる IO の失敗: 下の「IO の失敗」。VM は `io_failed` の節の入口を呼ぶだけで、入口の `yield_abort` が巻き戻す
+- `try_io` が捕まえる IO の失敗と、`try_panic` が捕まえる `Panic`: 下の「`IO` と `Panic` への中断」。VM は `io_failed` か `panicked` の節の入口を呼ぶだけで、入口の `yield_abort` が巻き戻す
 
 巻き戻しは次の繰り返しである。宛先と着地の印の evidence は、語の値で比べる。
 
@@ -253,7 +253,7 @@ token は1語の値で、フレームのスロットに置く ([オブジェク�
 3. そうでなければ、`pc` で表の行を引く。行がなければ内部の誤り (`a frame stops outside an unwind point`) にする。行が着地のスロットを持ち、その語が宛先と同じなら、着地する。直前に外したフレームの見出しにある結果のスロットにダミーの物体を書き、`pc` から続けて、巻き戻しを終える。着地しないとき、行が着地のスロットを持てば、まずその evidence の状態を `Ctx::ev_take_state` で取り出して `Heap::decref` で手放す。それから、行のスロットをそれぞれ所有の数だけ `Heap::decref` で手放す。`Lin` の物体でも誤りにならず、`File` はここで閉じる。最後に、行の token のスロットをそれぞれ `Heap::drop_token` で手放す。手放さないと token の箱が残り、検査モードの漏れの検査で見つかる
 4. フレームを外す。見出しから戻り先と結果のスロットと呼び出し元の `frame_size` を読み、`base` を呼び出し元のものに戻し、`pc` を戻り先にする。1. に戻る
 
-- 中断を始めたフレームの行は、着地のスロットを持たない。始めた命令は `yield_abort` か extern で、どちらも着地の印を持たないためである。そのため、着地するのはいつも1つ以上のフレームを外した後で、結果のスロットは直前に外したフレームの見出しにある。VM はこれをデバッグビルドで確かめる
+- 中断を始めたフレームの行は、着地のスロットを持たない。始めた命令は `yield_abort`、extern、算術の専用の命令のどれかで、どれも着地の印を持たないためである。そのため、着地するのはいつも1つ以上のフレームを外した後で、結果のスロットは直前に外したフレームの見出しにある。VM はこれをデバッグビルドで確かめる
 - 巻き戻しの間は安全点を置かず、`Ctx::poll` を呼ばない。仕事は外すフレームの数と手放す値の数で終わり、着地の後の `prompt$` の呼び出しで次の安全点に当たる
 - 巻き戻しの間は物体を作らない。宛先は着地するフレームが所有し続けるので、手放した物体の番地が宛先と取り違えられることはない
 - 巻き戻しは `evv` に触れない ([LIR](lir.md) の「`evv` の不変条件」)。外すフレームが持つ evidence、`return` の節のクロージャ、`mask` の包みが覚えた外側の `evv` は、そのフレームの所有のスロットなので表で手放す。パラメータ付き handler の状態は evidence の欄にあるので、着地せずに外す handle と `resume$` のフレームでは、手順の 3. で着地のスロットの evidence から取り出して手放す。状態がその handler の継続を持つと、継続から evidence へ戻る参照の輪になり、evidence を手放すだけでは解放されないためである ([LIR](lir.md) の「evidence」)。`prompt$` の状態 3 も同じように状態を取り出す。その handler の継続がほかに生き残っていても、再開は `resume$` で新しい evidence と状態を作るので、取り出した古い状態はもう読まれない
@@ -263,23 +263,28 @@ token は1語の値で、フレームのスロットに置く ([オブジェク�
 
 ### 中断と実行時エラーの分担
 
-- `never` の操作、`try_io` が捕まえる IO の失敗、`exit` は中断で、巻き戻しで後始末する。外すフレームの値を手放すので、検査モードの漏れの検査も通る
-- オーバーフロー、ゼロ除算、`try_io` が捕まえない extern の誤り、ヒープの誤り、止めたこと (割り込み、深さと確保量の上限) は実行時エラーで、巻き戻さずに評価全体を止める ([LIR](lir.md) の「実行時エラー」)。`eml run` はそのまま終わり、REPL は回復で後始末する (上の「追記」、[オブジェクトモデル](object-model.md) の「回復」)
+- `never` の操作、`try_io` が捕まえる IO の失敗、`try_panic` が捕まえる `Panic`、`exit` は中断で、巻き戻しで後始末する。外すフレームの値を手放すので、検査モードの漏れの検査も通る
+- 捕まえる `try_panic` のない `Panic` (オーバーフロー、ゼロ除算、範囲の外の位置、利用者の `panic`)、捕まえる `try_io` のない IO の失敗、どちらにも渡さない extern の誤り (書き出しの誤り)、ヒープの誤り、止めたこと (割り込み、深さと確保量の上限) は実行時エラーで、巻き戻さずに評価全体を止める ([LIR](lir.md) の「実行時エラー」)。`eml run` はそのまま終わり、REPL は回復で後始末する (上の「追記」、[オブジェクトモデル](object-model.md) の「回復」)
 - 中断の途中では安全点を通らないので、巻き戻しは割り込みや上限で止まらない。着地した後の安全点で止まれば、その実行時エラーになる
 
-## IO の失敗と `exit`
+## extern の中断
 
-### IO の失敗
+### `IO` と `Panic` への中断
 
-- `Op::Extern` が `try_io` の捕まえる `Fault` ([標準ライブラリ](stdlib.md) の「`try_io`」) を返し、その行の `purity` が `Effectful` なら、`ctx.ev_find(IO)` で `IO` の evidence を探す
-  - なければ、ほかの extern の誤りと同じ実行時エラー (`VmFault::Extern`) にする
-  - あれば、`kind` のタグと `message` の文字列を作り、`ev_clause[IO.io_failed]` で節の入口を得て、`clause` の呼び出しと同じ形で `(ev, kind, message)` を渡して呼ぶ。見出しの結果のスロットは extern の行き先で、戻り先は extern の次の命令である
-  - `Effectful` でない行がこの `Fault` を返したら、実行時エラーにする。表にはそういう行はない
-- 入口は `never` の節の入口なので、`yield_abort` で巻き戻しを始め、戻らない。extern の命令のフレームは入口の呼び出し元になり、extern の地点の表の行で片付く。巻き戻しが `try_io` の `prompt$` の前の `apply` に着地する (上の「巻き戻し」)。extern の行き先には何も書かない
-- extern の命令の後には yield の確かめがない ([Core IR](core-ir.md) の「IO の extern」)。失敗した extern の後へは制御が戻らないので、確かめは要らない。囲む関数は `yields` でなくてもよく、`IO` だけを row に持つ関数の中の失敗も、同じ巻き戻しで `try_io` に届く
-- 節の入口を呼んだ後に安全点を置かない。入口は戻らないので、捕まえる失敗と同時に来た割り込み (Ctrl-C) は、着地の後の次の安全点で拾う
+- extern の命令 (`Op::Extern`) か算術の専用の命令が `Fault` を返すと、VM は誤りの種類で届け先を決める
+  - `Fault::panics` が真の誤り (算術の誤りと範囲の外の位置。[オブジェクトモデル](object-model.md) の「extern」) は、行の `purity` によらず `Panic` に届ける。`Env.arg` の行は `Effectful` だが、範囲の外の位置は `Panic` である。操作は `panicked` で、引数は誤りの文言 (`Fault` の表示) の文字列である
+  - `try_io` が捕まえる誤り ([標準ライブラリ](stdlib.md) の「`try_io`」) は、行の `purity` が `Effectful` のときだけ `IO` に届ける。操作は `io_failed` で、引数は `kind` のタグと文言の文字列である。`Effectful` でない行がこの `Fault` を返したら、実行時エラーにする。表にはそういう行はない
+  - ほかの誤り (書き出しの誤り、ヒープの誤り、止めたこと) は、実行時エラー (`VmFault::Extern`) にする
+- 届けるときは、`ctx.ev_find` でそのエフェクトの evidence を探す
+  - なければ、ほかの extern の誤りと同じ実行時エラー (`VmFault::Extern`) にする。文言と位置の表示は、`Panic` を足す前と同じである
+  - あれば、引数の文字列を作り、`ev_clause[op]` で節の入口を得て、`clause` の呼び出しと同じ形で `(ev, 引数…)` を渡して呼ぶ。見出しの結果のスロットは命令の行き先で、戻り先は命令の次の命令である。evidence がないときは引数の文字列を作らない
+- `panic s` の `Op::Extern` は、`exit` と同じく VM が自分で実行する。`s` をそのまま `panicked` の引数にして、上と同じく `Panic` に届ける。evidence がなければ、`Ctx::copy_string` で `s` の中身を写して `s` を手放し、`VmFault::Panicked` の実行時エラーにする。表示は `panicked: {message}` で、位置は `panic` の呼び出しの位置である
+- 入口は `never` の節の入口なので、`yield_abort` で巻き戻しを始め、戻らない。誤りを返した命令のフレームは入口の呼び出し元になり、その命令の地点の表の行で片付く。巻き戻しが `try_io` か `try_panic` の `prompt$` の前の `apply` に着地する (上の「巻き戻し」)。命令の行き先には何も書かない
+- 算術の専用の命令も巻き戻しの地点なので、表の行を持つ。命令は誤りを今までどおり命令の繰り返し (`run`) に返し、繰り返しの誤りの道が `#[cold]` の関数で `Panic` に届ける。命令の中で届けないのは、速い道の命令の列を変えないためである
+- extern の命令の後には yield の確かめがない ([Core IR](core-ir.md) の「IO の extern」)。誤りを返した命令の後へは制御が戻らないので、確かめは要らない。囲む関数は `yields` でなくてもよく、`IO` か `Panic` だけを row に持つ関数の中の誤りも、同じ巻き戻しで `try_io` か `try_panic` に届く
+- 節の入口を呼んだ後に安全点を置かない。入口は戻らないので、捕まえる誤りと同時に来た割り込み (Ctrl-C) は、着地の後の次の安全点で拾う
 - 失敗した extern の引数は、[オブジェクトモデル](object-model.md) の「誤りのときの約束」のとおり、extern がすでに消費している
-- `CodeBase` は、`Prelude.IO` のエフェクトの番号を持つ。翻訳したプログラムでは `IO` はいつも表にある。手書きの IR で表に `IO` がなければ、いつも実行時エラーにする。`Machine` が入力を足すとき (REPL) は、エフェクトの番号の付け替えと同じく引き直す
+- `CodeBase` は、`Prelude.IO` と `Prelude.Panic` のエフェクトの番号を、エフェクトの名前の表 (`Index`) から引く。翻訳したプログラムでは、どちらもいつも表にある。手書きの IR で表になければ、いつも実行時エラーにする。`Machine` が入力を足すとき (REPL) は、エフェクトの番号の付け替えと同じく引き直す
 
 ### `exit`
 
@@ -293,8 +298,8 @@ token は1語の値で、フレームのスロットに置く ([オブジェク�
 
 ## 誤り、止めること、終わり
 
-- 実行時エラー `RuntimeError` は、誤り (`VmFault`)、関数の名前、省略できる位置を持つ `Fault` と、検査モードのリークの `Leak` と、回復の失敗の `Unrecovered` (「追記」) である。`VmFault` は、extern、基本操作、ヒープの操作の誤り (`Extern(Fault)`)、安全点で止めたこと (`Stopped(Stop)`)、verifier を通った IR では起きないはずの誤り (`Internal`) の3つである
-- 表示の形は次のとおりである。位置があれば `{fault}\n  at path:line:column`、なければ ``{fault} in `function` ``、リークは `memory leak: objects were not freed: {n} {name}, …`、内部の誤りの `{fault}` は `internal error: {what}` である
+- 実行時エラー `RuntimeError` は、誤り (`VmFault`)、関数の名前、省略できる位置を持つ `Fault` と、検査モードのリークの `Leak` と、回復の失敗の `Unrecovered` (「追記」) である。`VmFault` は、extern、基本操作、ヒープの操作の誤り (`Extern(Fault)`)、捕まえる `try_panic` のない利用者の `panic` (`Panicked(String)`)、安全点で止めたこと (`Stopped(Stop)`)、verifier を通った IR では起きないはずの誤り (`Internal`) の4つである
+- 表示の形は次のとおりである。位置があれば `{fault}\n  at path:line:column`、なければ ``{fault} in `function` ``、リークは `memory leak: objects were not freed: {n} {name}, …`、内部の誤りの `{fault}` は `internal error: {what}`、利用者の `panic` の `{fault}` は `panicked: {message}` である
 - 関数の名前は、命令の位置から `FnEntry` の範囲を二分探索して引く。`Finish` と `ApplyRest` はどの関数にも属さないので、そこで起きた誤りには、最後に戻った関数の名前を付ける。VM は `Ret` のたびにその位置を `Task::last_ret` に覚える。末尾の位置の部分適用が作ったクロージャを返すときも、関数の中で起きたなら同じく覚える
 - 位置は `locations` から命令の位置で引く。表に載せるのは、位置を持つ extern の呼び出しから作った命令である。専用の算術と比較の命令も含む。`run-fail` の UI テストの多くは `/` と `+` の誤りの位置を表示している
 - `Arith`、`Output`、`Io`、`NotUtf8`、`Heap(_)` の文言は `eml_rt` のものを使う ([オブジェクトモデル](object-model.md) の「誤り」)。extern の結果と文言は、`crates/eml_rt/src/heap/tests/expected.txt` の表が固定する ([テスト戦略](../implementation/testing.md) の「期待値の表」)
@@ -302,7 +307,7 @@ token は1語の値で、フレームのスロットに置く ([オブジェク�
 - 割り込みで止めたときの表示も、ほかの実行時エラーと同じ形である。安全点で止めたときは ``interrupted in `f` `` (`f` は止めたときの関数)、extern (`File` の読み、標準入力の読み、`Proc.run`) の中で止めたときは位置付きの `interrupted` である。`RuntimeError::interrupted()` は、安全点の `Stopped(Stop::Interrupted)` と、extern の中で止めた `Extern(Fault::Stopped(Stop::Interrupted))` の両方で真を返す。CLI が終了コードを決めるのに使う (「上限と割り込み」)
 - 繰り返しが誤りで終わっても、`Finish` に着いても、`Machine::run` は `Ctx::flush` を呼んでから結果を返す。`> out 2>&1` のときに出力と誤りの順を保つためである
 - 中断の巻き戻しで起きた誤りには、中断を始めた命令の関数の名前と、その命令の位置があれば位置を付ける (「巻き戻し」)
-- `exit` で終わったときは、先に上の「IO の失敗と `exit`」の手順で中断を片付ける
+- `exit` で終わったときは、先に上の「`exit`」の手順で中断を片付ける
 - `Finish` に着いたら、次の順に処理する
   1. 入口の関数の結果を手放す。Repr が `obj` か `tobj` のときだけ `decref` する。`run_shown` では手放さずに残し、繰り返しを抜けた直後に `Ctx::copy_string` で写して手放す。写すときの誤りは、次の書き出しの誤りより先に返す。後の手順の確かめ (リークと不変条件) は、手放した後のヒープを見る
   2. flush する。誤りなら、位置なしで返す

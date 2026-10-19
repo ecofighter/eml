@@ -1,0 +1,10 @@
+---
+source: crates/eml_cli/tests/ui.rs
+expression: "format!(\"--- stdout ---\\n{stdout}--- stderr ---\\n{diagnostics}{stderr}{written}{exit}\")"
+input_file: tests/ui/run/panic/panic_through_list_map.em
+---
+--- stdout ---
+Err "division by zero"
+Err "big 5"
+Ok [12, 6, 4]
+--- stderr ---

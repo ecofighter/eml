@@ -1,0 +1,11 @@
+---
+source: crates/eml_cli/tests/ui.rs
+expression: "format!(\"--- stdout ---\\n{stdout}--- stderr ---\\n{diagnostics}{stderr}{written}{exit}\")"
+input_file: tests/ui/run/panic/file_released_on_panic.em
+---
+--- stdout ---
+caught: division by zero
+ok 28
+--- stderr ---
+--- written: input.txt ---
+x
