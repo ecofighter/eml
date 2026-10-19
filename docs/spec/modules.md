@@ -109,10 +109,10 @@ pub effect State where
 -- main.em
 import State
 
-counter : Unit -> <State.State> Int
+counter : Unit -> <State.State, Panic> Int
 counter () = State.get () + 1
 
-run : Int -> Int
+run : Int -> <Panic> Int
 run n =
   handle counter () with
     | fn State.get () -> n

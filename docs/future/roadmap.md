@@ -16,7 +16,7 @@
 
 | 段 | 中身 | 前提 | 完了の条件 |
 |---|---|---|---|
-| S14 数値計算の整備 | 実行時エラーの型 `Panic`、`Float` と `Num`、`Array` と `Lin` の `MutArray`、小さな単一コンストラクタの型の構造体の表現、数値計算の計測 | S13 | 数値計算の計測のプログラムが Python の版と一緒に `bench/scripts.sh` で動き、結果を [計測の基準](../implementation/benchmarks.md) に記録する |
+| S14 数値計算の整備 | 実行時エラーの型 `Panic`、`Float` と `Num`、`Array` と `Lin` の `MutArray`、小さな単一コンストラクタの型の構造体の表現、数値計算の計測 | S13 | 数値計算の計測のプログラムが Python の版と一緒に `bench/scripts.sh` で動き、結果を [計測の基準](../implementation/benchmarks.md) に記録する。S14a は済み |
 
 S14 の後は、言語の項目を次の順に並べる。
 
@@ -48,13 +48,13 @@ S14 は、ネイティブ化の前に、数値計算で Python と比べる基�
 
 設計は `docs/superpowers/specs/2026-10-19-s14-numeric-design.md` にある。S14 を次の5つの作業に分けて順に進める。
 
-| 作業 | 中身 |
-|---|---|
-| S14a | `Panic`。値と入力で決まる実行時エラーを型に出し、中断しうるかの印で巻き戻しの地点を決める |
-| S14b | `Float` と `Num` / `Div` |
-| S14c | `Array` と `Lin` の `MutArray`、`freeze` |
-| S14d | 数値計算の計測。構造体の表現の前の基準を記録する |
-| S14e | 小さな単一コンストラクタの型の構造体の表現 |
+| 作業 | 中身 | 状態 |
+|---|---|---|
+| S14a | `Panic`。値と入力で決まる実行時エラーを型に出し、中断しうるかの印で巻き戻しの地点を決める | 済み。`+ - * / %`、`negate`、文字列の位置の extern と `Env.arg` が `<Panic>` を持ち、その誤りと利用者の `panic` を `try_panic` が巻き戻しで捕まえる。巻き戻しの表の行は、中断しない関数の呼び出しの分だけ減った。決めたこと (`Panic` の宣言、`main` と REPL の入力の row、トップレベルの値と `Eq`、`Ord`、`Show` のメソッドの空の row、負のリテラル) は [エフェクトと handler](../spec/effects.md) の「組み込みの `Panic`」、[標準ライブラリ](../spec/stdlib.md) の「`try_panic`」、[宣言](../spec/declarations.md) の「シグネチャと等式」と「Prelude のクラス」、[式](../spec/expressions.md) の「演算子の列と単項マイナス」、[モジュールと名前解決](../spec/modules.md) の「モジュール」、[型と Kind](../spec/types.md) の「REPL の入力」にある。実行の道は [VM](../spec/vm.md) の「中断と実行時エラーの分担」と「extern の中断」に、`Fault::panics` は [オブジェクトモデル](../spec/object-model.md) の「extern」に、中断しうるかの不動点と巻き戻しの地点は [LIR](../spec/lir.md) の「巻き戻しの地点」に、under の形は [Core IR](../spec/core-ir.md) の「`perform` と節の3つの形」に、計測は [計測の基準](../implementation/benchmarks.md) の「S14a」にある |
+| S14b | `Float` と `Num` / `Div` | |
+| S14c | `Array` と `Lin` の `MutArray`、`freeze` | |
+| S14d | 数値計算の計測。構造体の表現の前の基準を記録する | |
+| S14e | 小さな単一コンストラクタの型の構造体の表現 | |
 
 ### 決めたこと
 

@@ -44,7 +44,7 @@ try action =
         None
     | return x -> Some x
 
-summarize : String -> <IO, Fail> Unit
+summarize : String -> <IO, Fail, Panic> Unit
 summarize path =
   let entries = Fs.read_lines path |> filter_map parse_entry
   let errors = entries |> filter (fn e -> is_error e.level) |> map (.msg)
@@ -70,7 +70,7 @@ main () =
 補間を含む。
 
 ```haskell
-grep : String -> String -> <IO> Unit
+grep : String -> String -> <IO, Panic> Unit
 grep pat path =
   let f = Fs.open path
   let (f, text) = Fs.read_all f
