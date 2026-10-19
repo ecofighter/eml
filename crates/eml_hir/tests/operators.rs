@@ -23,9 +23,43 @@ fn prefix_minus_has_precedence_six() {
     n : Int
     n = (negate (* 2 3))
     m : Int
-    m = (+ (negate 2) 3)
+    m = (+ -2 3)
     k : Bool
-    k = (@Prelude.== 1 (negate 2))
+    k = (@Prelude.== 1 -2)
+    ");
+}
+
+#[test]
+fn negative_int_literal_is_a_literal() {
+    insta::assert_snapshot!(lower_text("n : Int\nn = -1\nm : Int\nm = - 1"), @"
+    n : Int
+    n = -1
+    m : Int
+    m = -1
+    ");
+}
+
+#[test]
+fn negated_parenthesized_literal_is_still_negate() {
+    insta::assert_snapshot!(lower_text("n : Int\nn = -(1)"), @"
+    n : Int
+    n = (negate 1)
+    ");
+}
+
+#[test]
+fn binary_minus_before_literal_is_unchanged() {
+    insta::assert_snapshot!(lower_text("f : Int -> Int\nf x = x -1"), @"
+    f : Int -> Int
+    f x#0 = (- x#0 1)
+    ");
+}
+
+#[test]
+fn negated_variable_is_negate() {
+    insta::assert_snapshot!(lower_text("f : Int -> Int\nf x = -x"), @"
+    f : Int -> Int
+    f x#0 = (negate x#0)
     ");
 }
 
@@ -64,9 +98,9 @@ fn non_associative_operators_cannot_be_chained() {
 
 #[test]
 fn prefix_minus_after_a_tighter_operator_needs_parentheses() {
-    insta::assert_snapshot!(lower_text("n : Int\nn = 2 * -3"), @r"
+    insta::assert_snapshot!(lower_text("n : Int\nn = 2 * -3"), @"
     n : Int
-    n = (* 2 (negate 3))
+    n = (* 2 -3)
     ---
     E1006 2:9 a prefix `-` cannot appear here without parentheses
     ");
@@ -207,7 +241,7 @@ fn operator_references_and_sections_become_lambdas() {
     d : Bool -> Bool -> Bool
     d = (fn $a#0 $b#1 -> (if $a#0 $b#1 Prelude.False))
     e : Int
-    e = (negate 1)
+    e = -1
     ");
 }
 
@@ -240,7 +274,7 @@ fn a_prefix_minus_in_a_section_operand_follows_the_operator_sequence_rules() {
     );
     insta::assert_snapshot!(lower_text("d : Int -> Int\nd = (- 2 +)"), @"
     d : Int -> Int
-    d = (fn $x#0 -> (+ (negate 2) $x#0))
+    d = (fn $x#0 -> (+ -2 $x#0))
     ");
 }
 

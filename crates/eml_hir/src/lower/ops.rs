@@ -7,12 +7,12 @@ use super::expr::BodyLowering;
 use super::{NameKind, NameUse, ambiguous, unresolved};
 use crate::codes;
 use crate::def_map::{NameRef, Resolved};
-use crate::hir::{ExprId, ExprKind, Res, ValueItem};
+use crate::hir::{ExprId, ExprKind, Literal, Res, ValueItem};
 use crate::item_tree::{Assoc, Fixity};
 
 #[derive(Clone)]
 enum Piece {
-    Operand(ExprId),
+    Operand(ExprId, bool),
     Operator(Operator),
 }
 
@@ -50,7 +50,11 @@ impl BodyLowering<'_> {
             match element {
                 OpSeqElement::Operand(expr) => {
                     let expr_range = expr.range();
-                    pieces.push(Piece::Operand(self.lower_expr(Some(expr), expr_range)));
+                    let written_literal = matches!(expr, ast::Expr::Literal(_));
+                    let id = self.lower_expr(Some(expr), expr_range);
+                    let direct = written_literal
+                        && matches!(self.exprs[id].kind, ExprKind::Literal(Literal::Int(_)));
+                    pieces.push(Piece::Operand(id, direct));
                 }
                 OpSeqElement::Operator(token) => {
                     let text = token.text().to_string();
@@ -143,7 +147,19 @@ impl BodyLowering<'_> {
                         Label::new(self.file, range, "put the negation in parentheses"),
                     ));
                 }
+                let literal_at = cursor.pos;
                 let operand = self.climb(cursor, NEGATE_PRECEDENCE + 1, None);
+                // 負の数のリテラルとして1つにまとめる。`negate` の呼び出しにしないのは、`Panic` を起こさない
+                // 定数にするため (docs/spec/expressions.md の「演算子の列と単項マイナス」)。
+                if cursor.pos == literal_at + 1
+                    && matches!(cursor.pieces[literal_at], Piece::Operand(_, true))
+                    && let ExprKind::Literal(Literal::Int(n)) = self.exprs[operand].kind
+                {
+                    return self.alloc(
+                        ExprKind::Literal(Literal::Int(-n)),
+                        range.cover(self.exprs[operand].range),
+                    );
+                }
                 let callee = self.alloc(
                     ExprKind::Path(Res::Item(ValueItem::Function(self.negate))),
                     range,
@@ -157,7 +173,7 @@ impl BodyLowering<'_> {
                     whole,
                 )
             }
-            Some(Piece::Operand(expr)) => {
+            Some(Piece::Operand(expr, _)) => {
                 cursor.pos += 1;
                 expr
             }
