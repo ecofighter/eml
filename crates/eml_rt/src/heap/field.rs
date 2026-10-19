@@ -100,7 +100,7 @@ impl Core {
             self.settled_state(h) == BlockState::Live,
         ensures
             p_extended(self.perm(h)) ==> p_init(self.perm(h), 0),
-            p_kind(self.perm(h)) == Kind::BigInt ==> p_init(self.perm(h), 0),
+            p_kind(self.perm(h)).boxes_value() ==> p_init(self.perm(h), 0),
             p_kind(self.perm(h)) == Kind::String ==> string_wf(self.perm(h), self.cap(h)),
             p_first(self.perm(h)) + p_count(self.perm(h)) <= self.cap(h),
     {

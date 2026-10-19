@@ -217,7 +217,7 @@ impl FnBuilder {
                 };
                 let forwards = match value {
                     Atom::Var(var) => self.vars[var.0 as usize].mark == mark,
-                    Atom::Int(_) | Atom::Unit | Atom::Tag(_) | Atom::Fn(_) => true,
+                    Atom::Int(_) | Atom::Float(_) | Atom::Unit | Atom::Tag(_) | Atom::Fn(_) => true,
                 };
                 if forwards {
                     blocks[source].term = Some(Term::Return(value));

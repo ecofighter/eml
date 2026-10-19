@@ -211,12 +211,24 @@ pub enum Op {
         dst: Slot,
         src: Slot,
     },
-    /// 定数の `box`。値はコード生成の時点で即値か不死の `BigInt` にしてある。
+    /// `float` の `box`。いつも `Float` の物体を確保する。
+    BoxFloat {
+        dst: Slot,
+        src: Slot,
+    },
+    /// 定数の `box`。値はコード生成の時点で即値か、不死の `BigInt` か `Float` の物体にしてある。
     BoxConst {
         dst: Slot,
         index: u32,
     },
+    /// `int` か `enum` を取り出す `unbox`。即値か `BigInt` の物体を読む。
     Unbox {
+        dst: Slot,
+        src: Slot,
+    },
+    /// `float` を取り出す `unbox`。`Float` の物体かダミーを読む。束縛する変数の Repr はコード生成で分かるので、命令を
+    /// 分けて、実行時に種類で分けない。
+    UnboxFloat {
         dst: Slot,
         src: Slot,
     },

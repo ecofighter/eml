@@ -495,7 +495,7 @@ impl Converter<'_> {
                 }
                 self.impossible(atom, expected)
             }
-            Atom::Int(_) if expected == Repr::TObj => {
+            Atom::Int(_) | Atom::Float(_) if expected == Repr::TObj => {
                 let boxed = self.fresh("b".to_string(), Repr::TObj);
                 out.push(Stmt::Let {
                     var: boxed,
@@ -547,6 +547,7 @@ impl Converter<'_> {
                 self.function.repr(var).name()
             ),
             Atom::Int(n) => n.to_string(),
+            Atom::Float(x) => x.to_string(),
             Atom::Unit => "()".to_string(),
             Atom::Tag(tag) => format!("#{tag}"),
             // 変換の間は関数の並びを可変で借りているので、ほかの関数の名前を引けない。verifier が名前のない関数に使う

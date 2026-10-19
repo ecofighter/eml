@@ -18,6 +18,9 @@ probe_int x = x
 probe_string : String -> String
 probe_string s = s
 
+probe_float : Float -> Float
+probe_float x = x
+
 probe_unit : Unit -> Unit
 probe_unit u = u
 
@@ -38,6 +41,7 @@ main () = println \"x\"
 fn probe(ty: ExternType) -> &'static str {
     match ty {
         ExternType::Int => "probe_int",
+        ExternType::Float => "probe_float",
         ExternType::String => "probe_string",
         ExternType::Unit => "probe_unit",
         ExternType::File => "probe_file",

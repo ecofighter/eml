@@ -3,7 +3,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use eml_lir::Loc;
+use eml_lir::{FloatBits, Loc};
 use eml_rt::{Control, Frozen, HeapError, MaskItem, Mode, Word};
 
 use crate::error::{RuntimeError, SourceLocation};
@@ -70,6 +70,8 @@ pub(crate) struct Index {
     pub(crate) raws: HashMap<i64, u32>,
     /// `tobj` の `Int` の値から定数の番号。
     pub(crate) boxed: HashMap<i64, u32>,
+    /// `tobj` の `Float` のビット列から定数の番号。
+    pub(crate) boxed_floats: HashMap<FloatBits, u32>,
 }
 
 #[derive(Debug, PartialEq, Eq)]

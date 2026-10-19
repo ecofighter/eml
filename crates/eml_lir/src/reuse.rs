@@ -390,7 +390,7 @@ impl<'a> Planner<'a> {
                             && from.positions[slot] == shape.positions[index]
                     })
                 }
-                Atom::Int(_) | Atom::Unit | Atom::Tag(_) | Atom::Fn(_) => false,
+                Atom::Int(_) | Atom::Float(_) | Atom::Unit | Atom::Tag(_) | Atom::Fn(_) => false,
             })
             .collect()
     }

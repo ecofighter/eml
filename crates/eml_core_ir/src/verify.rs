@@ -226,7 +226,7 @@ impl<'a> Checker<'a> {
                     Some(&target) => target,
                     None => return,
                 },
-                Atom::Int(_) | Atom::Unit | Atom::Tag(_) => return,
+                Atom::Int(_) | Atom::Float(_) | Atom::Unit | Atom::Tag(_) => return,
             };
             if result.is_ok()
                 && let Some(clause) = self.cx.clause_of(target)
@@ -488,7 +488,7 @@ impl<'a> Checker<'a> {
                 "a function value refers to the unknown function #{}",
                 target.0
             )),
-            Atom::Fn(_) | Atom::Int(_) | Atom::Unit | Atom::Tag(_) => Ok(()),
+            Atom::Fn(_) | Atom::Int(_) | Atom::Float(_) | Atom::Unit | Atom::Tag(_) => Ok(()),
         }
     }
 
@@ -836,7 +836,7 @@ impl<'a> Checker<'a> {
         let (function, passed) = match atom {
             Atom::Fn(function) => (function, 0),
             Atom::Var(var) => self.cx.closure(var)?,
-            Atom::Int(_) | Atom::Unit | Atom::Tag(_) => return None,
+            Atom::Int(_) | Atom::Float(_) | Atom::Unit | Atom::Tag(_) => return None,
         };
         let params = self
             .program

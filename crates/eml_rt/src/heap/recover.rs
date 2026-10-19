@@ -761,6 +761,20 @@ impl<M: Mode> Heap<M> {
                 }
                 Ok(())
             },
+            Kind::Float => {
+                let x = self.core.slot_get(h, 0).bits() as u64;
+                let nw = new.alloc_float(x);
+                proof {
+                    new.lemma_target_made(n0, *self, ws0, out, d0, nw, a);
+                    self.lemma_source_insert(d0, old(frames)@, a, Some(nw));
+                }
+                done.insert(a, Some(nw));
+                words.push(nw);
+                proof {
+                    assert(words@.drop_last() =~= ws0);
+                }
+                Ok(())
+            },
             _ => Err(HeapError::Unrecoverable),
         }
     }

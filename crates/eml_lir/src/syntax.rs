@@ -9,8 +9,9 @@ use std::collections::HashMap;
 use std::fmt::Write as _;
 
 use crate::{
-    Atom, BlockId, Case, CasePattern, Ctor, EffectInfo, FnIdx, Immediates, Layout, LayoutCtor,
-    LayoutId, Loc, Mark, MaskItem, OpRet, OperationInfo, ParseError, Prim, Repr, VarId, VarInfo,
+    Atom, BlockId, Case, CasePattern, Ctor, EffectInfo, FloatBits, FnIdx, Immediates, Layout,
+    LayoutCtor, LayoutId, Loc, Mark, MaskItem, OpRet, OperationInfo, ParseError, Prim, Repr, VarId,
+    VarInfo,
 };
 
 /// エフェクトの名前。表にない番号は `#N` で書く。誤りを含む IR も表示でき、`parse` が読み戻せて、verifier がその番号を
@@ -101,7 +102,14 @@ pub struct Token {
 
 const PUNCTS: &[char] = &['(', ')', '{', '}', '[', ']', ','];
 
-const REPRS: [Repr; 5] = [Repr::Obj, Repr::TObj, Repr::Int, Repr::Enum, Repr::Unit];
+const REPRS: [Repr; 6] = [
+    Repr::Obj,
+    Repr::TObj,
+    Repr::Int,
+    Repr::Float,
+    Repr::Enum,
+    Repr::Unit,
+];
 
 pub fn lex(text: &str) -> Result<Vec<Token>, ParseError> {
     let mut tokens = Vec::new();
@@ -243,6 +251,25 @@ fn int_word(word: &str, line: usize) -> Result<bool, ParseError> {
         ));
     }
     Ok(true)
+}
+
+/// 浮動小数の定数の書き方。`inf`、`-inf`、`NaN` と、数字か `-` と数字で始まる整数でない語を浮動小数の定数として
+/// 読み、Rust の `{:?}` で表示し直すと同じ語になるものだけを受ける。変数の名前は数字で始まらないので、`x.0` は変数の
+/// ままである。数字で始まるのに表示と違う形の語 (`1.50`、`1e+16`、`2x`) は、変数の形の誤りにせず、ここで報告する。
+/// 整数の語は先に `int_word` が取る。
+fn float_word(word: &str, line: usize) -> Result<Option<FloatBits>, ParseError> {
+    let digits = word.strip_prefix('-').unwrap_or(word);
+    let numeric = digits.starts_with(|c: char| c.is_ascii_digit());
+    if !numeric && !matches!(word, "inf" | "-inf" | "NaN") {
+        return Ok(None);
+    }
+    match word.parse::<f64>() {
+        Ok(value) if format!("{value:?}") == word => Ok(Some(FloatBits::new(value))),
+        _ => Err(error(
+            line,
+            format!("`{word}` is not written as a float prints (Rust `{{:?}}`)"),
+        )),
+    }
 }
 
 /// 関数の中で読んだ変数。番号を名前から切り出すので、同じ番号の変数が同じ名前で書かれているかを確かめる。
@@ -950,6 +977,9 @@ impl<'t> Reader<'t> {
                 .map(Atom::Int)
                 .map_err(|_| error(line, format!("`{word}` does not fit in an Int")));
         }
+        if let Some(bits) = float_word(&word, line)? {
+            return Ok(Atom::Float(bits));
+        }
         Ok(Atom::Var(self.var_named(state, &word, None, line)?))
     }
 
@@ -1012,7 +1042,9 @@ impl<'t> Reader<'t> {
             .ok_or_else(|| {
                 error(
                     line,
-                    format!("expected a repr (obj, tobj, int, enum or unit), found `{word}`"),
+                    format!(
+                        "expected a repr (obj, tobj, int, float, enum or unit), found `{word}`"
+                    ),
                 )
             })
     }
@@ -1441,6 +1473,7 @@ impl<'p> Writer<'p> {
         match atom {
             Atom::Var(v) => self.var(vars, *v),
             Atom::Int(n) => n.to_string(),
+            Atom::Float(x) => x.to_string(),
             Atom::Unit => "()".to_string(),
             Atom::Tag(tag) => format!("#{tag}"),
             Atom::Fn(target) => format!("&{}", self.callee(*target)),

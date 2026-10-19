@@ -13,7 +13,7 @@ use std::collections::HashMap;
 
 use crate::{Call, CoreFn, Program, Rhs, Term};
 use eml_lir::{
-    Atom, BlockId, Case, CasePattern, FnIdx, Mark, MaskItem, Prim, Repr, VarId, VarInfo,
+    Atom, BlockId, Case, CasePattern, FloatBits, FnIdx, Mark, MaskItem, Prim, Repr, VarId, VarInfo,
 };
 
 use split::split;
@@ -190,6 +190,7 @@ fn dummy(ret: Repr, bind: impl FnOnce(VarInfo, Rhs) -> VarId) -> Atom {
             Rhs::Prim(Prim::Dummy, Vec::new()),
         )),
         Repr::Int => Atom::Int(0),
+        Repr::Float => Atom::Float(FloatBits(0)),
         Repr::Enum => Atom::Tag(0),
         Repr::Unit => Atom::Unit,
         Repr::Token => unreachable!("only the LIR reuse pass makes tokens"),

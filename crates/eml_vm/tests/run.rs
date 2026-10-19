@@ -324,3 +324,85 @@ fn leaks_are_displayed_with_the_object_counts() {
         "memory leak: objects were not freed: 2 Closure, 1 String"
     );
 }
+
+/// 浮動小数のビット列を `Int` として表示する。verifier は値を作った配置を確かめないので
+/// (`a_value_read_with_another_layout_passes_the_verifier_and_faults`)、`float` のフィールドの箱を `int` の
+/// 配置で分解して、同じ生の語を読む。`Show Float` は後の作業で足す。
+const FLOAT_BITS: &str = "\
+layout List { Nil, Cons(tobj, tobj) }
+layout Pair { Pair(tobj, tobj) }
+layout F { F(float) }
+layout I { I(int) }
+layout F2 { F2(float, float) }
+layout I2 { I2(int, int) }
+";
+
+/// `box 1.5` を1要素のリストに入れて取り出し、`unbox` して `box` し直し、もう一度 `unbox` してビット列を表示する。
+#[test]
+fn boxed_float_survives_a_list() {
+    let text = format!(
+        "{FLOAT_BITS}\
+fn main() -> unit {{
+  let b.0: tobj = box 1.5
+  let l.1: tobj = con List #1(b.0, #0)
+  switch l.1 List {{ #0 -> b1, #1(x.2: tobj, r.3: tobj) -> b2 }}
+b1:
+  decref l.1
+  return ()
+b2:
+  release l.1 List #1(x.2, _)
+  let f.4: float = unbox x.2
+  decref x.2
+  let c.5: tobj = box f.4
+  let g.6: float = unbox c.5
+  decref c.5
+  let p.7: obj = con F #0(g.6)
+  unpack p.7 I #0(n.8: int)
+  decref p.7
+  let s.9: obj = extern \"Prelude.Show Int.show\"(n.8)
+  let o.10: unit = extern Prelude.println(s.9)
+  return o.10
+}}
+"
+    );
+    assert_eq!(
+        run_lir(&text),
+        (format!("{}\n", 1.5f64.to_bits() as i64), Ok(()))
+    );
+}
+
+/// `0.0` と `-0.0` は `==` で等しいが、ビット列が違う。定数の表はビット列で引くので、2つを1つにまとめない。箱の定数と
+/// 生の定数の両方で確かめる。
+#[test]
+fn zero_and_negative_zero_constants_stay_distinct() {
+    let text = format!(
+        "{FLOAT_BITS}\
+fn main() -> unit {{
+  let a.0: tobj = box 0.0
+  let b.1: tobj = box -0.0
+  let p.2: obj = con Pair #0(a.0, b.1)
+  unpack p.2 Pair #0(x.3: tobj, y.4: tobj)
+  let f.5: float = unbox x.3
+  let g.6: float = unbox y.4
+  decref p.2
+  let q.7: obj = con F2 #0(f.5, g.6)
+  unpack q.7 I2 #0(m.8: int, n.9: int)
+  decref q.7
+  let r.10: obj = con F2 #0(0.0, -0.0)
+  unpack r.10 I2 #0(j.11: int, k.12: int)
+  decref r.10
+  let s.13: obj = extern \"Prelude.Show Int.show\"(m.8)
+  let o.14: unit = extern Prelude.println(s.13)
+  let s.15: obj = extern \"Prelude.Show Int.show\"(n.9)
+  let o.16: unit = extern Prelude.println(s.15)
+  let s.17: obj = extern \"Prelude.Show Int.show\"(j.11)
+  let o.18: unit = extern Prelude.println(s.17)
+  let s.19: obj = extern \"Prelude.Show Int.show\"(k.12)
+  let o.20: unit = extern Prelude.println(s.19)
+  return o.20
+}}
+"
+    );
+    let min = i64::MIN;
+    assert_eq!(run_lir(&text), (format!("0\n{min}\n0\n{min}\n"), Ok(())));
+}

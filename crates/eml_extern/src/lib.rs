@@ -34,6 +34,8 @@ pub enum Repr {
     /// 即値 (引数のないコンストラクタのタグ、捕まえた変数のない関数) か、ヒープの物体を指す値。
     TObj,
     Int,
+    /// IEEE 754 の倍精度の浮動小数。変数、ブロックの引数、`con` のフィールドでは生の 64 ビットで持つ。
+    Float,
     /// 引数のないコンストラクタだけの data のタグ。
     Enum,
     Unit,
@@ -44,14 +46,13 @@ pub enum Repr {
 
 impl Repr {
     /// 箱を要するスカラー。`tobj` の位置との間で `box` と `unbox` を要する。`unit` は命令なしで `tobj` と行き来する
-    /// ので入らない。規則と verifier の文言はこの1つの定義から作るので、後の `Float` の Repr もここに足す
-    /// (docs/spec/lir.md の「値の表現」)。
-    pub const BOXED_SCALARS: [Repr; 2] = [Repr::Int, Repr::Enum];
+    /// ので入らない。規則と verifier の文言はこの1つの定義から作る (docs/spec/lir.md の「値の表現」)。
+    pub const BOXED_SCALARS: [Repr; 3] = [Repr::Int, Repr::Float, Repr::Enum];
 
     pub fn is_rc(self) -> bool {
         match self {
             Repr::Obj | Repr::TObj => true,
-            Repr::Int | Repr::Enum | Repr::Unit | Repr::Token => false,
+            Repr::Int | Repr::Float | Repr::Enum | Repr::Unit | Repr::Token => false,
         }
     }
 
@@ -76,6 +77,7 @@ impl Repr {
             Repr::Obj => "obj",
             Repr::TObj => "tobj",
             Repr::Int => "int",
+            Repr::Float => "float",
             Repr::Enum => "enum",
             Repr::Unit => "unit",
             Repr::Token => "token",
@@ -94,6 +96,7 @@ pub enum OpRet {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum ExternType {
     Int,
+    Float,
     String,
     Unit,
     File,
@@ -110,6 +113,7 @@ pub struct TypeRow {
 impl ExternType {
     pub const ALL: &[ExternType] = &[
         ExternType::Int,
+        ExternType::Float,
         ExternType::String,
         ExternType::Unit,
         ExternType::File,
@@ -123,6 +127,7 @@ impl ExternType {
         };
         match self {
             ExternType::Int => row("Prelude.Int", Linearity::Unr, Repr::Int),
+            ExternType::Float => row("Prelude.Float", Linearity::Unr, Repr::Float),
             ExternType::String => row("Prelude.String", Linearity::Unr, Repr::Obj),
             ExternType::Unit => row("Prelude.Unit", Linearity::Unr, Repr::Unit),
             ExternType::File => row("Std.Fs.File", Linearity::Lin, Repr::Obj),

@@ -5,6 +5,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use eml_lir::FloatBits;
 use eml_rt::{Control, Frozen, Heap, Kind, Meta, Mode, Word};
 
 use crate::code::{CompileError, Index};
@@ -14,6 +15,7 @@ pub(crate) struct Constants<'c, M: Mode> {
     strings: &'c mut HashMap<String, u32>,
     raws: &'c mut HashMap<i64, u32>,
     boxed: &'c mut HashMap<i64, u32>,
+    boxed_floats: &'c mut HashMap<FloatBits, u32>,
     region: &'c Option<Arc<Frozen<M>>>,
     control: &'c Arc<Control>,
     /// 新しい物体を作る作業用のヒープ。最初の物体を作るときに作る。
@@ -32,6 +34,7 @@ impl<'c, M: Mode> Constants<'c, M> {
             strings: &mut index.strings,
             raws: &mut index.raws,
             boxed: &mut index.boxed,
+            boxed_floats: &mut index.boxed_floats,
             region,
             control,
             builder: None,
@@ -94,6 +97,24 @@ impl<'c, M: Mode> Constants<'c, M> {
         };
         let index = self.push(w);
         self.boxed.insert(n, index);
+        index
+    }
+
+    /// `tobj` の `Float`。いつも不死の `Float` の物体にする。表はビット列で引くので、`0.0` と `-0.0` を別の定数にする。
+    pub(crate) fn boxed_float(&mut self, x: FloatBits) -> u32 {
+        if let Some(&index) = self.boxed_floats.get(&x) {
+            return index;
+        }
+        // 作業用のヒープの構築中の物体で、ほかの操作の前に値の語を書き終える (docs/spec/object-model.md の「核の操作」)
+        let w = unsafe {
+            let heap = self.heap();
+            let w = heap.alloc_immortal(1, Meta::new(0, 0, Kind::Float, false));
+            heap.set_raw(w, 0, x.0)
+                .expect("a fresh Float takes its value");
+            w
+        };
+        let index = self.push(w);
+        self.boxed_floats.insert(x, index);
         index
     }
 

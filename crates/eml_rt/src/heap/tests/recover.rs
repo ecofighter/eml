@@ -114,6 +114,30 @@ fn recovery_keeps_only_what_the_roots_reach<M: Mode>() {
     assert_eq!(mortal(ctx.heap()), 0);
 }
 
+/// 回復は `Float` の箱を、同じビット列の新しい箱に写す。
+fn recovery_copies_floats<M: Mode>() {
+    let mut ctx = ctx::<M>();
+    let bits = [1.5f64.to_bits(), (-0.0f64).to_bits(), 0x7ff8_0000_0000_0001];
+    unsafe {
+        let heap = ctx.heap_mut();
+        let ws: Vec<Word> = bits.iter().map(|&b| heap.alloc_float(b)).collect();
+        for (i, w) in ws.into_iter().enumerate() {
+            ctx.root_set(i as u32, w).unwrap();
+        }
+        ctx.recover().unwrap();
+    }
+    assert_eq!(mortal(ctx.heap()), 3);
+    for (i, &b) in bits.iter().enumerate() {
+        let w = root(&mut ctx, i as u32);
+        unsafe {
+            assert_eq!(ctx.heap().meta(w).unwrap().kind(), Kind::Float);
+            assert_eq!(ctx.heap().unbox_float(w), Ok(b));
+        }
+    }
+    release_roots(&mut ctx);
+    assert_eq!(mortal(ctx.heap()), 0);
+}
+
 /// evv と yield の状態が残っていても、回復は空に戻し、それらの物体も消す。
 fn recovery_empties_the_evv_and_the_yield_state<M: Mode>() {
     let mut ctx = ctx::<M>();
@@ -233,6 +257,7 @@ mod counting {
 both_modes!(
     recovery_keeps_only_what_the_roots_reach,
     recovery_empties_the_evv_and_the_yield_state,
+    recovery_copies_floats,
     recovery_refuses_what_it_cannot_copy,
     recovery_needs_no_memory_in_proportion_to_the_old_heap,
 );

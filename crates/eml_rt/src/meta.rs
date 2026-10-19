@@ -21,11 +21,14 @@ pub enum Kind {
     BigInt = 1,
     Foreign = 2,
     String = 3,
+    /// `Float` の箱。値の語 (`f64` のビット列) を1つ持つ。`Int` の即値のような空きのビットがないので、`box` はいつも
+    /// 確保する (docs/spec/object-model.md の「種類」)。
+    Float = 4,
     /// 確保器が空いたブロックに付ける。生きている物体はこの種類を持たない。
     Free = 15,
 }
 
-/// 種類のビットが表す種類。0、1、2、3、15 のほかは `Meta` の型の不変条件で除く。
+/// 種類のビットが表す種類。0、1、2、3、4、15 のほかは `Meta` の型の不変条件で除く。
 pub open spec fn kind_of(bits: u32) -> Kind {
     if bits == 0 {
         Kind::Data
@@ -35,13 +38,15 @@ pub open spec fn kind_of(bits: u32) -> Kind {
         Kind::Foreign
     } else if bits == 3 {
         Kind::String
+    } else if bits == 4 {
+        Kind::Float
     } else {
         Kind::Free
     }
 }
 
 pub open spec fn known_kind(bits: u32) -> bool {
-    bits == 0 || bits == 1 || bits == 2 || bits == 3 || bits == 15
+    bits == 0 || bits == 1 || bits == 2 || bits == 3 || bits == 4 || bits == 15
 }
 
 // 種類ごとの欄。破棄処理の欄だけは、箱を空けるたびに読むので、この `match` でなく `Meta::has_finalizer` が持つ
@@ -59,9 +64,15 @@ impl Kind {
             1 => Kind::BigInt,
             2 => Kind::Foreign,
             3 => Kind::String,
+            4 => Kind::Float,
             15 => Kind::Free,
             _ => unreachable!("an unknown object kind {bits}"),
         }
+    }
+
+    /// 値の語を1つ持つ箱の種類。生きている箱は 0 語目に値を書いてある (docs/spec/object-model.md の「種類」)。
+    pub open spec fn boxes_value(self) -> bool {
+        self == Kind::BigInt || self == Kind::Float
     }
 
     /// リークの報告の種類の名前。
@@ -71,6 +82,7 @@ impl Kind {
             Kind::BigInt => "BigInt",
             Kind::Foreign => "Foreign",
             Kind::String => "String",
+            Kind::Float => "Float",
             Kind::Free => "Free",
         }
     }

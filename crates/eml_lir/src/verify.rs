@@ -327,7 +327,7 @@ impl<'a> Checker<'a> {
                     Some(&target) => target,
                     None => return,
                 },
-                Atom::Int(_) | Atom::Unit | Atom::Tag(_) => return,
+                Atom::Int(_) | Atom::Float(_) | Atom::Unit | Atom::Tag(_) => return,
             };
             if result.is_ok()
                 && let Some(clause) = self.cx.clause_of(target)
@@ -663,7 +663,7 @@ impl<'a> Checker<'a> {
                             == constructor.fields[index].is_rc()
                         && from_shape.positions[origin.slot] == shape.positions[index]
                 }),
-                Atom::Int(_) | Atom::Unit | Atom::Tag(_) | Atom::Fn(_) => false,
+                Atom::Int(_) | Atom::Float(_) | Atom::Unit | Atom::Tag(_) | Atom::Fn(_) => false,
             };
             if !kept {
                 return Err(format!(
@@ -1072,7 +1072,9 @@ impl<'a> Checker<'a> {
                     target.0
                 ));
             }
-            Atom::Fn(_) | Atom::Int(_) | Atom::Unit | Atom::Tag(_) => return Ok(()),
+            Atom::Fn(_) | Atom::Int(_) | Atom::Float(_) | Atom::Unit | Atom::Tag(_) => {
+                return Ok(());
+            }
         };
         if self.level != Level::Ownership || !self.function.repr(var).is_rc() {
             return self.visible(var);
@@ -1185,12 +1187,12 @@ impl<'a> Checker<'a> {
                 }
                 let boxable = match *atom {
                     Atom::Var(operand) => self.function.repr(operand).needs_box(),
-                    Atom::Int(_) => true,
+                    Atom::Int(_) | Atom::Float(_) => true,
                     Atom::Unit | Atom::Tag(_) | Atom::Fn(_) => false,
                 };
                 if !boxable {
                     return Err(format!(
-                        "{} is boxed, but only {} values and Int constants can be",
+                        "{} is boxed, but only {} values and Int and Float constants can be",
                         self.cx.typed_atom_text(*atom),
                         boxed_scalars("and")
                     ));

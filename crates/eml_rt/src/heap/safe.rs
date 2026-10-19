@@ -131,7 +131,7 @@ impl Core {
             &&& p_extended(p) ==> self.cap(h) >= 1 && p_init(p, 0)
             &&& p_first(p) + p_count(p) <= self.cap(h)
         }
-        &&& st == BlockState::Live || st == BlockState::Dying ==> (p_kind(p) == Kind::BigInt
+        &&& st == BlockState::Live || st == BlockState::Dying ==> (p_kind(p).boxes_value()
             ==> self.cap(h) >= 1 && p_init(p, 0))
         &&& st == BlockState::Live || st == BlockState::Dying ==> (p_kind(p) == Kind::String
             ==> string_wf(p, self.cap(h)))
@@ -413,7 +413,7 @@ impl Core {
                 assert(s0.safe_kept_wf((b, i)));
             }
         }
-        if p_kind(p) == Kind::BigInt {
+        if p_kind(p).boxes_value() {
             assert(p.slots.contains_key(0));
         }
         assert(self.model@.state =~= s0.model@.state.insert(b, self.state(b)));
@@ -645,7 +645,7 @@ impl Core {
                 }
             }
         }
-        if p_kind(q) == Kind::BigInt && s0.state(h) == BlockState::Live {
+        if p_kind(q).boxes_value() && s0.state(h) == BlockState::Live {
             assert(p_init(q, 0));
             assert(p.slots.contains_key(0));
             if i != 0 {
@@ -971,8 +971,8 @@ impl Core {
         self.lemma_safe_restate(s0, h);
     }
 
-    /// 構築中の物体はないか、書き終えている。走査する語はどれも「書いた」か「残した」で、`BigInt` なら値の語が書いて
-    /// ある。`settleable` のうち、安全に要る部分である。
+    /// 構築中の物体はないか、書き終えている。走査する語はどれも「書いた」か「残した」で、`BigInt` と `Float` なら値の
+    /// 語が書いてある。`settleable` のうち、安全に要る部分である。
     pub(crate) open spec fn safe_settleable(&self) -> bool {
         match self.model@.building {
             None => true,
@@ -980,7 +980,7 @@ impl Core {
                 &&& forall|i: int| #[trigger]
                     self.scanned(b, i) ==> self.model@.written[b].contains(i)
                         || self.model@.kept.contains((b, i))
-                &&& self.kind(b) == Kind::BigInt ==> p_init(self.perm(b), 0)
+                &&& self.kind(b).boxes_value() ==> p_init(self.perm(b), 0)
             },
         }
     }
@@ -994,7 +994,7 @@ impl Core {
             self.state(h) == BlockState::Live || self.state(h) == BlockState::Building,
         ensures
             p_extended(self.perm(h)) ==> p_init(self.perm(h), 0),
-            p_kind(self.perm(h)) == Kind::BigInt ==> self.cap(h) >= 1 && p_init(self.perm(h), 0),
+            p_kind(self.perm(h)).boxes_value() ==> self.cap(h) >= 1 && p_init(self.perm(h), 0),
             p_kind(self.perm(h)) == Kind::String ==> string_wf(self.perm(h), self.cap(h)),
             p_first(self.perm(h)) + p_count(self.perm(h)) <= self.cap(h),
     {
@@ -1004,7 +1004,7 @@ impl Core {
         }
         reveal(Core::building_wf);
         self.lemma_safe_at(h);
-        if p_kind(self.perm(h)) == Kind::BigInt {
+        if p_kind(self.perm(h)).boxes_value() {
             assert(self.perm(h).slots.contains_key(0));
         }
     }
@@ -1096,7 +1096,7 @@ impl Core {
             &&& p_extended(p) ==> self.cap(h) >= 1 && p_init(p, 0)
             &&& p_first(p) + p_count(p) <= self.cap(h)
         }
-        &&& st == BlockState::Live || st == BlockState::Dying ==> (p_kind(p) == Kind::BigInt
+        &&& st == BlockState::Live || st == BlockState::Dying ==> (p_kind(p).boxes_value()
             ==> self.cap(h) >= 1 && p_init(p, 0))
         &&& st == BlockState::Live || st == BlockState::Dying ==> (p_kind(p) == Kind::String
             ==> string_wf(p, self.cap(h)))

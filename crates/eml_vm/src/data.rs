@@ -418,3 +418,21 @@ pub(crate) fn unbox<M: Mode>(
         Ok(unsafe { ctx.heap().unbox_int(w) }?)
     }
 }
+
+/// `float` の `unbox`。`Float` の箱はいつも物体で、ダミーはビット列 0 (`0.0`) を読む。
+#[inline]
+pub(crate) fn unbox_float<M: Mode>(
+    ctx: &Ctx<M>,
+    w: Word,
+    counts: &mut RunCounts,
+) -> Result<u64, VmFault> {
+    if M::CHECKED {
+        counts.unboxes += 1;
+        // verifier を通った IR の `float` の `unbox` は、`box` した `Float` かダミーを受ける。検査モードは前提を
+        // 確かめるので、即値を物体として読む前に断る
+        if !w.is_ptr() {
+            return Err(VmFault::Internal("an unbox of float reads an immediate"));
+        }
+    }
+    Ok(unsafe { ctx.heap().unbox_float(w) }?)
+}

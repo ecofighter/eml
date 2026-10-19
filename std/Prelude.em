@@ -15,6 +15,7 @@ pub infixr 9 >>, <<
 
 -- 組み込みの型。値の表し方と Kind は extern の表の行が決める
 pub extern data Int
+pub extern data Float
 pub extern data String
 pub extern data Unit
 

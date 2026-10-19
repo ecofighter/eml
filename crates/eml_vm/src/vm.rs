@@ -322,6 +322,13 @@ fn step<M: Mode>(
             }
             task.set(dst, Word::imm(task.raw(src)));
         }
+        Op::BoxFloat { dst, src } => {
+            if M::CHECKED {
+                counts.boxes += 1;
+            }
+            let w = unsafe { ctx.heap_mut() }.alloc_float(task.raw(src) as u64);
+            task.set(dst, w);
+        }
         Op::BoxConst { dst, index } => {
             if M::CHECKED {
                 counts.boxes += 1;
@@ -331,6 +338,10 @@ fn step<M: Mode>(
         Op::Unbox { dst, src } => {
             let n = data::unbox(ctx, task.get(src), counts)?;
             task.set_raw(dst, n);
+        }
+        Op::UnboxFloat { dst, src } => {
+            let bits = data::unbox_float(ctx, task.get(src), counts)?;
+            task.set_raw(dst, bits as i64);
         }
         Op::Extern { dst, at } => extern_call(code, ctx, task, counts, dst, at)?,
         // 基本操作 (docs/spec/lir.md の「基本操作」) は `Ctx` の同じ名前のメソッドを呼ぶ。引数の語は、LIR の所有の規則に

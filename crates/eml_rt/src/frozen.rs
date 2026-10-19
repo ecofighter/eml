@@ -129,7 +129,7 @@ impl RegionPerms {
         &&& p_kind(p) != Kind::Foreign
         &&& p_extended(p) ==> cap >= 1 && p_init(p, 0)
         &&& p_first(p) + p_count(p) <= cap
-        &&& p_kind(p) == Kind::BigInt ==> cap >= 1 && p_init(p, 0)
+        &&& p_kind(p).boxes_value() ==> cap >= 1 && p_init(p, 0)
         &&& p_kind(p) == Kind::String ==> string_wf(p, cap)
         &&& p.prefix matches Some(q) ==> q.first.is_init() && q.state.is_init()
         &&& p.prefix is Some ==> p_code(p) == 1 && p_owner(p) == UNCOUNTED

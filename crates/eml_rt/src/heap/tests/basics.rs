@@ -87,6 +87,39 @@ fn the_dummy_ignores_dup_and_decref_and_unboxes_to_zero<M: Mode>() {
     assert_eq!(heap.live_objects(), vec![dummy]);
 }
 
+/// `Float` の箱はいつも確保し、ビット列をそのまま持つ。`-0.0` と NaN のペイロードも変わらない。検査モードでは、
+/// `Int` と `Float` の箱を取り違えた読み出しを断る。
+fn float_box_round_trips<M: Mode>() {
+    let mut heap = Heap::<M>::new();
+    let nan = 0x7ff8_0000_dead_beef_u64;
+    for bits in [1.5f64.to_bits(), (-0.0f64).to_bits(), 0, nan] {
+        let w = heap.alloc_float(bits);
+        assert!(w.is_ptr());
+        unsafe {
+            assert_eq!(heap.unbox_float(w), Ok(bits));
+            assert_eq!(heap.meta(w).unwrap().kind(), Kind::Float);
+            if M::CHECKED {
+                assert_eq!(heap.unbox_int(w), Err(HeapError::WrongKind));
+            }
+            heap.decref(w).unwrap();
+        }
+    }
+    if M::CHECKED {
+        let big = heap.alloc_int(i64::MAX);
+        unsafe {
+            assert_eq!(heap.unbox_float(big), Err(HeapError::WrongKind));
+            heap.decref(big).unwrap();
+        }
+    }
+    assert_eq!(mortal(&heap), 0);
+}
+
+/// yield 中に返るダミーは、`float` の位置で `unbox` しても読める。ビット列 0 は `0.0` である。
+fn unbox_float_accepts_the_dummy<M: Mode>() {
+    let heap = Heap::<M>::new();
+    assert_eq!(unsafe { heap.unbox_float(heap.dummy()) }, Ok(0));
+}
+
 fn an_extended_scan_object_frees_all_its_children<M: Mode>() {
     let mut heap = Heap::<M>::new();
     let n = 300;
@@ -298,6 +331,8 @@ both_modes!(
     a_deep_chain_does_not_overflow_the_stack,
     a_big_int_is_boxed_only_outside_63_bits,
     the_dummy_ignores_dup_and_decref_and_unboxes_to_zero,
+    float_box_round_trips,
+    unbox_float_accepts_the_dummy,
     an_extended_scan_object_frees_all_its_children,
     a_foreign_value_is_finalized_exactly_once,
     dropping_the_heap_finalizes_live_foreign_values,

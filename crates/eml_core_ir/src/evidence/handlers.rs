@@ -233,7 +233,7 @@ fn clause_target(function: &CoreFn, value: Atom) -> FnIdx {
                 } if *var == value => Some(*target),
                 _ => None,
             }),
-        Atom::Int(_) | Atom::Unit | Atom::Tag(_) => None,
+        Atom::Int(_) | Atom::Float(_) | Atom::Unit | Atom::Tag(_) => None,
     };
     closure.unwrap_or_else(|| {
         panic!(
@@ -573,6 +573,7 @@ fn fresh(vars: &mut Vec<VarInfo>, name: &str, repr: Repr, mark: Mark) -> VarId {
 fn atom_repr(atom: Atom) -> Repr {
     match atom {
         Atom::Int(_) => Repr::Int,
+        Atom::Float(_) => Repr::Float,
         Atom::Unit => Repr::Unit,
         Atom::Tag(_) => Repr::Enum,
         Atom::Fn(_) | Atom::Var(_) => Repr::TObj,

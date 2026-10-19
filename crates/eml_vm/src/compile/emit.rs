@@ -204,16 +204,22 @@ impl<'a, M: Mode> Emitter<'a, '_, M> {
                 dst,
                 value: small(n),
             },
-            Atom::Int(n) => match i32::try_from(n) {
-                Ok(value) => Op::LoadRaw { dst, value },
-                Err(_) => Op::LoadConst {
-                    dst,
-                    index: self.constants.raw(n),
-                },
-            },
+            Atom::Int(n) => self.load_raw(dst, n),
+            // 生の語はビット列なので、`Int` の定数と同じ表で引く。`0.0` と `-0.0` はビット列が違う
+            Atom::Float(x) => self.load_raw(dst, x.0 as i64),
             Atom::Var(_) => unreachable!("load takes a constant"),
         };
         self.out.push(op);
+    }
+
+    fn load_raw(&mut self, dst: Slot, n: i64) -> Op {
+        match i32::try_from(n) {
+            Ok(value) => Op::LoadRaw { dst, value },
+            Err(_) => Op::LoadConst {
+                dst,
+                index: self.constants.raw(n),
+            },
+        }
     }
 
     fn block(&mut self, id: BlockId) {
@@ -432,7 +438,15 @@ impl<'a, M: Mode> Emitter<'a, '_, M> {
                         dst,
                         index: self.constants.boxed_int(n),
                     },
+                    Atom::Float(x) => Op::BoxConst {
+                        dst,
+                        index: self.constants.boxed_float(x),
+                    },
                     Atom::Var(v) if self.repr(v) == Repr::Enum => Op::BoxEnum {
+                        dst,
+                        src: self.slot(v),
+                    },
+                    Atom::Var(v) if self.repr(v) == Repr::Float => Op::BoxFloat {
                         dst,
                         src: self.slot(v),
                     },
@@ -449,7 +463,11 @@ impl<'a, M: Mode> Emitter<'a, '_, M> {
                     panic!("an unbox of a constant does not pass the verifier")
                 };
                 let src = self.slot(*v);
-                self.out.push(Op::Unbox { dst, src });
+                self.out.push(if self.repr(var) == Repr::Float {
+                    Op::UnboxFloat { dst, src }
+                } else {
+                    Op::Unbox { dst, src }
+                });
             }
             Rhs::MakeClosure(f, args) => {
                 let callee = self.program.function(*f);

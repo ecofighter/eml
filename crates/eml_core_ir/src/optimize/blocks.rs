@@ -72,7 +72,8 @@ pub(crate) fn constant_target(term: &Term) -> Option<BlockId> {
     let pattern = match *scrutinee {
         Atom::Tag(tag) => CasePattern::Tag(tag),
         Atom::Int(value) => CasePattern::Int(value),
-        Atom::Var(_) | Atom::Unit | Atom::Fn(_) => return None,
+        // `float` の値で分ける `switch` はない
+        Atom::Var(_) | Atom::Float(_) | Atom::Unit | Atom::Fn(_) => return None,
     };
     let matched = cases.iter().find(|case| case.pattern == pattern);
     debug_assert!(

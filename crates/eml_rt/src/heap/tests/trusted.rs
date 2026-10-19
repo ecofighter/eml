@@ -286,6 +286,10 @@ fn every_core_operation_once<M: Mode>() {
         let d = heap.dummy();
         heap.dup(d).unwrap();
         heap.decref(d).unwrap();
+        let x = heap.alloc_float((-0.0f64).to_bits());
+        assert_eq!(heap.unbox_float(x), Ok((-0.0f64).to_bits()));
+        assert_eq!(heap.unbox_float(d), Ok(0));
+        heap.decref(x).unwrap();
     }
     // 生きているのは、ダミーと不死の物体だけである
     assert_eq!(heap.live_objects().len(), 2);

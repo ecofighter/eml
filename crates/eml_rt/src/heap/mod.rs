@@ -1,8 +1,8 @@
 //! ヒープ: 確保、RC、解放の連鎖、フィールドの読み書き
 //! (docs/spec/object-model.md の「核の操作」)。語を受ける操作と、ペイロードを
 //! 呼ぶ側が書く `alloc` と `alloc_immortal` は `unsafe fn` で、安全の条件は docs/spec/object-model.md の「核の操作」にある。その条件の
-//! 「生きている物体」は、`meta` に合うペイロード (走査する語、`scan` が 255 なら数の語、`BigInt` なら値) をすべて書いた
-//! 物体を指す。データの生の語はこの条件に入らない。「付けた塊」は、ヒープに付けた凍結した塊とその祖先の塊である
+//! 「生きている物体」は、`meta` に合うペイロード (走査する語、`scan` が 255 なら数の語、`BigInt` と `Float` なら値) を
+//! すべて書いた物体を指す。データの生の語はこの条件に入らない。「付けた塊」は、ヒープに付けた凍結した塊とその祖先の塊である
 //! (docs/spec/object-model.md の「凍結した領域」)。検査モードは、確かめられる違反を `Err` で返す。各メソッドの
 //! `# Safety` には、速いモードが確かめず検査モードが `Err` にする条件も書く。
 
@@ -906,7 +906,7 @@ impl<M: Mode> Heap<M> {
     ///
     /// # Safety
     /// `meta` の種類は `Foreign`、`String`、`Free` のどれでもなく、`scan` は 255 でなく、走査する語はペイロードに収まる。呼ぶ側は、
-    /// ほかのヒープの操作の前に、`meta` に合うペイロード (走査する語、`BigInt` なら値) を書く。
+    /// ほかのヒープの操作の前に、`meta` に合うペイロード (走査する語、`BigInt` と `Float` なら値) を書く。
     #[inline]
     pub unsafe fn alloc(&mut self, payload_words: usize, meta: Meta) -> (w: Word)
         requires
@@ -1401,6 +1401,47 @@ impl<M: Mode> Heap<M> {
                 w
             },
         }
+    }
+
+    /// `Float` を `tobj` に入れる。`Int` の即値のような空きのビットがないので、いつも `Float` の物体にする。値の語は
+    /// `f64` のビット列で、浮動小数の算術をしないので、`-0.0` と NaN のペイロードもそのまま残る
+    /// (docs/spec/object-model.md の「種類」)。
+    pub fn alloc_float(&mut self, bits: u64) -> (w: Word)
+        requires
+            old(self).wf(),
+            old(self).safe_settleable(),
+            !M::CHECKED ==> old(self).settleable(),
+        ensures
+            final(self).made(*old(self), w) && final(self).kind_of(w) == Kind::Float
+                && !final(self).lin_of(w) && final(self).owned(w),
+            final(self).float_bits(w) == bits,
+            M::CHECKED ==> final(self).words_kept(*old(self)),
+    {
+        self.settle();
+        let ghost s1 = *self;
+        let (h, Tracked(perm)) = self.alloc_header(1, 1, Meta::new(0, 0, Kind::Float, false));
+        let tracked mut perm = perm;
+        let tracked mut slot = perm.slots.tracked_remove(0);
+        ptr_mut_write(slot_ptr(h, 0), Tracked(&mut slot), Word::from_bits(bits as usize));
+        proof {
+            perm.slots.tracked_insert(0, slot);
+        }
+        let ghost mid = self.core;
+        proof {
+            check::lemma_alive_code();
+        }
+        self.core.publish(Ghost(h), Tracked(perm), Ghost(BlockState::Live), Ghost(self.worker));
+        let w = Word::from_ptr(h);
+        proof {
+            if old(self).consistent() && old(self).settleable() {
+                self.lemma_dummy_kept(s1);
+                self.core.lemma_frame_chain(mid, s1.core, old(self).core);
+            } else {
+                self.lemma_published_safe(s1);
+            }
+            crate::word::lemma_aligned_is_ptr(w.bits_spec());
+        }
+        w
     }
 }
 
@@ -2943,6 +2984,11 @@ impl<M: Mode> Heap<M> {
         }
     }
 
+    /// `tobj` の `Float` のビット列。物体の値の語である。
+    pub closed spec fn float_bits(&self, w: Word) -> u64 {
+        p_word(self.core.perm(w.bits_spec()), 0).bits_spec() as u64
+    }
+
     /// `w` の物体は、ほかのスレッドが読めない。構築中か、rc が正の生きている物体である。
     pub closed spec fn writable(&self, w: Word) -> bool {
         let h = w.bits_spec();
@@ -3739,6 +3785,50 @@ impl<M: Mode> Heap<M> {
         }
         let x = self.core.slot_get(h, 0);
         Ok(x.bits() as i64)
+    }
+
+    /// `tobj` の `Float` のビット列を読む。yield の間に返るダミー (値 0 の `BigInt`) も受け、ビット列 0 (`0.0`) を
+    /// 読む。呼び出し元はダミーの値を使わずに捨てる (docs/spec/object-model.md の「ダミーの値」)。
+    ///
+    /// # Safety
+    /// `w` は、このヒープか付けた塊の生きている `Float` の物体か、ダミーを指す。
+    pub unsafe fn unbox_float(&self, w: Word) -> (r: Result<u64, HeapError>)
+        requires
+            self.wf(),
+            self.safe_settleable(),
+            w.is_ptr_spec(),
+            self.word_in(w),
+            !M::CHECKED ==> self.settleable() && self.readable(w) && (self.kind_of(w) == Kind::Float
+                || w == self.dummy_word()),
+        ensures
+            r matches Ok(b) ==> b == self.float_bits(w),
+            self.consistent() && self.settleable() && self.readable(w) && (self.kind_of(w)
+                == Kind::Float || w == self.dummy_word()) ==> r is Ok,
+    {
+        let h = self.header_of(w);
+        proof {
+            if self.consistent() && self.settleable() && self.readable(w) {
+                self.core.lemma_readable(w);
+            }
+        }
+        self.checked_live(h)?;
+        if M::CHECKED {
+            let kind = self.core.meta_get(h).kind();
+            let dummy = matches!(kind, Kind::BigInt) && w.bits() == self.dummy.bits();
+            if !matches!(kind, Kind::Float) && !dummy {
+                return Err(HeapError::WrongKind);
+            }
+        }
+        proof {
+            if self.consistent() && self.settleable() && self.readable(w) {
+                self.core.lemma_live_block(h@.addr);
+            }
+            if M::CHECKED {
+                self.core.lemma_safe_live_block(h@.addr);
+            }
+        }
+        let x = self.core.slot_get(h, 0);
+        Ok(x.bits() as u64)
     }
 }
 

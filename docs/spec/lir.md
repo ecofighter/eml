@@ -88,9 +88,10 @@ R1 と R2 から、ブロックの番号の順は辺の向きに沿った順 (�
 ### 値の表現
 
 - 変数は値の表現 (Repr) を持つ。Repr は Core IR で型から決まり ([Core IR](core-ir.md) の「型の Repr」)、LIR にそのまま写る。Kind は Repr とは別に、印として持つ (下の「Kind の印」)
-- Repr は `int`、`enum`、`unit`、`obj`、`tobj` の5つである。`obj` はつねにヒープの物体を指す。`tobj` は、即値 (タグか関数の値) かヒープの物体を指す。RC の対象は `obj` と `tobj` の変数で、Perceus はこの変数にだけ RC の命令を付ける。reuse のパスが足す token の Repr `token` は、値ではない (下の「reuse」)
-- 局所の変数はスカラーのまま持ち、呼ぶ側か呼ばれる側が具体的な型を知らない位置 (一様な位置) だけを参照にする。一様な位置の Repr は `tobj` である。Lean の IR と同じ方式である。`int`、`enum`、`unit` の変数は、VM ではタグのないスロットに、ネイティブではレジスタに置ける。値を受ける位置の Repr は下の「位置の規則」が決め、変数の Repr と互換でなければ、box の挿入 (下の「box の挿入」) が変換を入れる
-- `tobj` の位置との間で `box` と `unbox` を要するスカラーの Repr を、箱を要するスカラーと呼ぶ。今は `int` と `enum` で、後の `Float` の Repr もここに入る。規則と verifier の文言は、この集合の1つの定義 (`Repr::BOXED_SCALARS`) から作る。`Float` を足すときに、規則を1つずつ探して直さずに済むためである。命令なしで `tobj` と行き来するスカラーは `unit` だけである。`obj` と `tobj` の間は、命令なしで渡せる
+- Repr は `int`、`float`、`enum`、`unit`、`obj`、`tobj` の6つである。`obj` はつねにヒープの物体を指す。`tobj` は、即値 (タグか関数の値) かヒープの物体を指す。RC の対象は `obj` と `tobj` の変数で、Perceus はこの変数にだけ RC の命令を付ける。reuse のパスが足す token の Repr `token` は、値ではない (下の「reuse」)
+- 局所の変数はスカラーのまま持ち、呼ぶ側か呼ばれる側が具体的な型を知らない位置 (一様な位置) だけを参照にする。一様な位置の Repr は `tobj` である。Lean の IR と同じ方式である。`int`、`float`、`enum`、`unit` の変数は、VM ではタグのないスロットに、ネイティブではレジスタに置ける。値を受ける位置の Repr は下の「位置の規則」が決め、変数の Repr と互換でなければ、box の挿入 (下の「box の挿入」) が変換を入れる
+- `tobj` の位置との間で `box` と `unbox` を要するスカラーの Repr を、箱を要するスカラーと呼ぶ。今は `int`、`float`、`enum` である。規則と verifier の文言は、この集合の1つの定義 (`Repr::BOXED_SCALARS`) から作る。Repr を足すときに、規則を1つずつ探して直さずに済むためである。命令なしで `tobj` と行き来するスカラーは `unit` だけである。`obj` と `tobj` の間は、命令なしで渡せる
+- `float` は IEEE 754 の倍精度の浮動小数で、生の 64 ビットにビット列を持つ。`float` の case のリテラルはないので、`switch` の scrutinee にならない (リテラルの `switch` は `int` か `obj` の文字列)。`float` の定数は、`0.0` と `-0.0` や NaN のペイロードを区別するために、値でなくビット列 (`FloatBits`) で持って比べる
 - 2つの Repr a と b は、次のどれかのとき互換 (`Repr::compatible`) である
   - a と b が同じ
   - a と b がどちらも参照 (`obj` か `tobj`)
@@ -100,14 +101,14 @@ R1 と R2 から、ブロックの番号の順は辺の向きに沿った順 (�
 - 互換の位置では、互換であればよい。`jump` の実引数と行き先の引数、`return` の値と `ret`、直接の呼び出しの引数と結果、`closure` の引数、`apply` のオペランドと結果 (相手は `tobj`)、`clause` の引数と結果 (相手は操作の表の Repr)、`prim` の引数と結果 (相手は基本操作の表の Repr)、宣言した Repr が `tobj` のフィールド、`tail` の結果と呼び出し元の `ret`、関数の値として使う関数の引数と `ret` (相手は `tobj`) である
   - `jump` と `return` を正確にしても、バックエンドが得るものはない。互換な2つの Repr は、機械の形が同じだからである。正確にすると、後のインライン化と contification が作る形を書けない。たとえば `tobj` を返す `id` を `let t: obj = call id(x)` の所でインライン化すると、`id` の `return x` は、`tobj` の x を `obj` の引数へ渡す `jump` になる
 - 定数の当てはめも、位置の種類に従う
-  - 正確な位置では、`Int` の定数は `int`、`()` は `unit`、タグ `#N` は `enum` か `tobj`、関数の値 `&f` は `tobj` に収まる
-  - 互換の位置では、これに加えて `()` が `tobj` にも収まる。`Int` の定数は `tobj` に収まらないので、`let b = box 5` を置いて b を渡す
+  - 正確な位置では、`Int` の定数は `int`、`Float` の定数は `float`、`()` は `unit`、タグ `#N` は `enum` か `tobj`、関数の値 `&f` は `tobj` に収まる
+  - 互換の位置では、これに加えて `()` が `tobj` にも収まる。`Int` と `Float` の定数は `tobj` に収まらないので、`let b = box 5` を置いて b を渡す
   - LIR の範囲の段と所有の段の verifier では、`&f` は f が一様なときだけ収まる (下の「位置の規則」)。Core IR の verifier と LIR の入口の段では一様かを見ない。translate は、一様でない関数の `&f` を `jump` の実引数に出しうるからである (`let h = if c then double else inc` の `jump b3(&double)`)
-  - `#N` が `tobj` に収まるのに `enum` の変数が収まらないのは、定数ならコンパイルの時点で `tobj` の形に書けるからである。`Int` の定数を同じ扱いにしないのは、`box` が確保しうる (ネイティブの 64 ビットの `Int`、後の `Float`) からである
-- `box a` の a は、箱を要するスカラーの変数か、`Int` の定数である。束縛の Repr は `tobj` である。`unit` の変数、`()`、`#N`、`&f`、参照の変数は拒む。どれも命令なしで `tobj` に収まるので、1つの値の書き方を1つに保つ
+  - `#N` が `tobj` に収まるのに `enum` の変数が収まらないのは、定数ならコンパイルの時点で `tobj` の形に書けるからである。`Int` と `Float` の定数を同じ扱いにしないのは、`box` が確保しうる (ネイティブの 64 ビットの `Int`、`Float`) からである
+- `box a` の a は、箱を要するスカラーの変数か、`Int` か `Float` の定数である。束縛の Repr は `tobj` である。`unit` の変数、`()`、`#N`、`&f`、参照の変数は拒む。どれも命令なしで `tobj` に収まるので、1つの値の書き方を1つに保つ
 - `unbox a` の a は、`tobj` の変数である。束縛の Repr は箱を要するスカラーである。`obj` の変数は拒む。`obj` はつねにヒープの物体を指し、スカラーを入れた値にならない。定数と、`unit` の束縛も拒む
 - `int` と `enum` を明示する理由
-  - `box` は確保しうる (ネイティブの 64 ビットの `Int`、後の `Float`)。所有している `tobj` を `unbox` した後には `decref` が要る。どちらも Perceus と所有の検査に見えなければならない
+  - `box` は確保しうる (ネイティブの 64 ビットの `Int`、`Float`)。所有している `tobj` を `unbox` した後には `decref` が要る。どちらも Perceus と所有の検査に見えなければならない
   - `Int` を命令なしで通すと、「小さい `Int` は `tobj` の即値」を LIR の層で決めることになる。`tobj` の `Int` の表し方は、ランタイムが決める ([オブジェクトモデル](object-model.md) の「語」)
   - `enum` を明示するのは、タグを `tobj` の中でどう表すかを、バックエンドに任せるためである
 - `unit` を命令なしにするのは、値が `()` の1つだけで、変換がデータも確保も RC も持たないためである
@@ -356,11 +357,11 @@ handle の実行と、継続の再開のたびに、新しい evidence を作る
 ### ダミーの値
 
 - yield 中に返す値は、呼び出し元が使わずに捨てる
-- 関数の `ret` が `obj` か `tobj` なら `prim dummy()` の値を、`int` なら `0` を、`enum` なら `#0` を、`unit` なら `()` を返す。`tobj` にも物体を使うのは、互換の位置を通って `obj` の変数に入ることがあるためである (`ret` が `tobj` の関数の結果を `obj` の変数で受ける形)
+- 関数の `ret` が `obj` か `tobj` なら `prim dummy()` の値を、`int` なら `0` を、`float` なら `0.0` を、`enum` なら `#0` を、`unit` なら `()` を返す。`tobj` にも物体を使うのは、互換の位置を通って `obj` の変数に入ることがあるためである (`ret` が `tobj` の関数の結果を `obj` の変数で受ける形)
 - ダミーは、変換と RC の命令に当たる。EP は遅い道の先頭で、使わない x を `drop` し ([Core IR](core-ir.md) の「yield の地点」)、box の挿入は呼び出しの結果を受け直す `unbox` と `box` を呼び出しの直後 (yield の確認の前) に置く。box の挿入が足す `f$boxed` は yield の確認を持たないので、`f` が返したダミーを `box` してから返す (`never` の操作で失敗する関数を値として使う形)。そのため、実行時は次を守る。S9 の `eml_rt` も同じ約束を守る
   - `dummy` の値は、`dup`、`decref`、`drop` で何も起こさない
   - `unbox` は、ダミーを受けても誤りにせず、何かの値を返す。その値は捨てられる
-  - `box` は、ダミーを受けたらダミーを返す。`0` と `#0` は普通に箱に入れ、その値は捨てられる
+  - `box` は、ダミーを受けたらダミーを返す。`0`、`0.0`、`#0` は普通に箱に入れ、その値は捨てられる
 - 中断が着地したときは、着地の印の付いた `apply` の結果に `prim dummy()` の値が入る。`apply` の結果は `tobj` なので、Repr の違いは起きない。続く `prompt$` は、状態 2 の経路の先頭でこの値を `drop` する ([Core IR](core-ir.md) の「handle と `prompt$`」)
 - 中断で外すフレームには値を返さない。`never` の節の入口は `yield_abort` の後にダミーを返す形をしているが、その `return` には実行が届かない。`IO` の extern が失敗して `io_failed` の節を呼んだときも、extern の行き先には何も書かない ([VM](vm.md) の「巻き戻し」)
 - box の挿入が、yield の地点の結果の変換を確認の後に置く形は採らない。box の挿入に EP の形を知る特別な規則が要るためである
@@ -632,11 +633,11 @@ reuse のパスは、Perceus が手放す箱を token にし、同じ物理的�
   - `clause` の印の関数: `` `g$entry` is a clause of `Counter.put`, but its parameter 2 is tobj ``、`` `g$entry` is a clause of `Counter.get`, but it returns tobj ``
   - `tail` の結果: ``a tail call to `g` returns int, but this function returns tobj``、``a tail apply returns tobj, but this function returns int``、``a tail clause of `Counter.get` returns int, but this function returns tobj``。呼び出し元を "this function" と書き、呼ばれる側を指す "the function" と分ける
   - `tobj` のフィールド: R8 の文言を `tobj` に広げる。``field 0 of `Option` #1 is `x.3` (int), but the layout has tobj``、``argument 0 of a con of `Option` #1 is 5, but the layout has tobj``
-- 範囲の段と所有の段の `box` と `unbox` の文言は次のとおりである。`int and enum` と `int or enum` の部分は、箱を要するスカラーの定義から作る
-  - `box` のオペランド: `` `u.1` (unit) is boxed, but only int and enum values and Int constants can be ``、``() is boxed, but only int and enum values and Int constants can be`` (`#1`、`&g` も同じ形)
+- 範囲の段と所有の段の `box` と `unbox` の文言は次のとおりである。`int, float and enum` と `int, float or enum` の部分は、箱を要するスカラーの定義から作る
+  - `box` のオペランド: `` `u.1` (unit) is boxed, but only int, float and enum values and Int and Float constants can be ``、``() is boxed, but only int, float and enum values and Int and Float constants can be`` (`#1`、`&g` も同じ形)
   - `box` の束縛: `` `b.2` (int) is bound to a box, which is tobj ``
   - `unbox` のオペランド: `` `p.0` (obj) is unboxed, but only tobj can be ``、``5 is unboxed, but only tobj can be``
-  - `unbox` の束縛: `` `n.2` (tobj) is bound to an unbox, which gives int or enum ``
+  - `unbox` の束縛: `` `n.2` (tobj) is bound to an unbox, which gives int, float or enum ``
 - 引き継ぐ検査は次のとおりである。2つの IR のすべての段で走る。直接呼び出しとクロージャの引数の数、文字列定数と関数の番号が表にあること、`extern` 命令の引数の数、case の種類 (1つの `switch` の case が同じ種類であること、リテラルの case がフィールドを持たないこと)、`switch` が行き先を1つ以上持つこと、フィールドを束縛する case を持つ `switch` の scrutinee が RC の対象 (`obj` か `tobj`) の変数であること、リテラルの `switch` の `default`。Core IR のエフェクトの命令の検査は [Core IR](core-ir.md) の「verifier」にある
 - 基本操作と `clause` の検査は次のとおりである。Core IR の EP の段と、LIR の3つの段のすべてで走る
   - `prim` の即値のエフェクトと操作がエフェクトの表にあり、引数の数が表の行と同じである。`evv_mask` の項目は、呼び出しの `mask` と同じく空でなく、番号の真に昇順に並び (同じエフェクトの項目が2つない)、どの項目も1つ以上の evidence を飛ばす (``the effects of `prim evv_mask[Counter, State]` are not in ascending order``、`` `prim evv_mask[]` masks no effect ``、``an item of `prim evv_mask[State*0]` skips no handler``)
@@ -693,7 +694,7 @@ LIR を実行する [VM](vm.md) と後のネイティブのコードは、次の
   - `drop_token r` は、token の箱を空ける (`drop_token`)。空の token なら何もしない
 - `prim` は、上の「基本操作」の表のとおりに文脈と evidence を読み書きする。借用の引数は呼ぶ側が持ったままなので手放さず、ほかの引数は所有した参照として受け取り、結果に残さないものを手放す。結果は所有した参照である。`evv_mask` が残すリストの残りと、`ev_renew` が新しい evidence に入れる入口の表は、基本操作が自分で `dup` する
 - `clause` は `apply` と同じく関数の値を呼ぶ。操作の ABI は値の表し方を変えないためである (上の「節の呼び出し」)
-- ダミーの値 (`prim dummy()`、`0`、`#0`、`()`) は、上の「ダミーの値」の約束を守る。`dup`、`decref`、`drop` は何も起こさず、`box` と `unbox` は誤りにしない
+- ダミーの値 (`prim dummy()`、`0`、`0.0`、`#0`、`()`) は、上の「ダミーの値」の約束を守る。`dup`、`decref`、`drop` は何も起こさず、`box` と `unbox` は誤りにしない
 - `drop k` は、継続のクロージャが捕まえていた値を、解放の連鎖で1回ずつ解放する。`Lin` の値の破棄処理は物体の解放そのものなので、捕まっていた `File` は、この解放で読み出し口が捨てられて閉じる ([オブジェクトモデル](object-model.md) の「`File`」)
 - 中断 (`never` の操作、`try_io` が捕まえる IO の失敗、`try_panic` が捕まえる `Panic`、`exit`) は継続を組み立てず、タスクのスタックを巻き戻す。外すフレームが、中断の通った命令 (下の「巻き戻しの地点」) の直後に所有している RC の対象の値を、所有の数だけ手放し、生きている token を `drop_token` で手放す。`File` はこの解放で閉じる。着地の印の evidence が中断の宛先と同じ `apply` (上の「着地の印」) に着いたら、その結果にダミーを入れ、次の文から続ける。`exit` の中断の宛先はどの印とも合わないので、実行の底まで巻き戻す。手順は [VM](vm.md) の「巻き戻し」にある
 - 下の「実行時エラー」は巻き戻さず、評価全体を止める。分担は [VM](vm.md) の「中断と実行時エラーの分担」にある

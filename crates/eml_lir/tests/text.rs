@@ -1,7 +1,7 @@
 //! LIR のテキストの形 (docs/implementation/testing.md の「LIR のテキストの形」)。`parse` が読んだものを
 //! `pretty` で表示すると元のテキストに戻ることと、構文の誤りの報告を確かめる。
 
-use eml_lir::{Atom, CasePattern, Ctor, FnIdx, LayoutId, MaskItem, OpRet, Prim, VarId};
+use eml_lir::{Atom, CasePattern, Ctor, FloatBits, FnIdx, LayoutId, MaskItem, OpRet, Prim, VarId};
 use eml_lir::{BlockId, Loc, Mark, ParseError, Repr, Reuse, verify};
 use eml_lir::{Call, Program, Rhs, Stmt, Term, parse, pretty, pretty_with_positions};
 
@@ -743,7 +743,7 @@ fn a_binder_needs_a_repr() {
     let error = parse_error("fn f(x.0: boxed) -> int {\n  return x.0\n}\n");
     assert_eq!(
         error.message,
-        "expected a repr (obj, tobj, int, enum or unit), found `boxed`"
+        "expected a repr (obj, tobj, int, float, enum or unit), found `boxed`"
     );
 
     let error = parse_error("fn f(x.0: int) {\n  return x.0\n}\n");
@@ -788,7 +788,7 @@ fn an_operation_needs_its_reprs() {
     let error = parse_error("effect E { ask(x) -> tobj }\n");
     assert_eq!(
         error.message,
-        "expected a repr (obj, tobj, int, enum or unit), found `x`"
+        "expected a repr (obj, tobj, int, float, enum or unit), found `x`"
     );
 }
 
@@ -854,6 +854,56 @@ fn integers_are_written_as_they_print() {
         );
     }
     round_trip("fn f() -> int {\n  return -10\n}\n");
+}
+
+/// `float` の定数は Rust の `{:?}` の形で書く。`inf`、`-inf`、`NaN` と、数字か `-` と数字で始まる整数でない語が定数
+/// である。`x.0` は名前が数字で始まらないので、変数のままである。
+#[test]
+fn float_constants_round_trip() {
+    let program = round_trip(
+        "\
+layout F { F(float, float, float, float, float, float, float) }
+fn f(x.0: float) -> obj {
+  let y.1: obj = con F #0(1.5, -0.0, 1e16, inf, -inf, NaN, x.0)
+  return y.1
+}
+",
+    );
+    let Stmt::Let {
+        rhs: Rhs::Con { args, .. },
+        ..
+    } = &program.functions[0].blocks[0].stmts[0]
+    else {
+        panic!("expected a con");
+    };
+    let bits = |x: f64| Atom::Float(FloatBits(x.to_bits()));
+    assert_eq!(
+        args[..],
+        [
+            bits(1.5),
+            bits(-0.0),
+            bits(1e16),
+            bits(f64::INFINITY),
+            bits(f64::NEG_INFINITY),
+            bits(f64::NAN),
+            v(0),
+        ]
+    );
+    assert_eq!(program.functions[0].vars[0].repr, Repr::Float);
+    assert!(!Repr::Float.is_rc() && Repr::Float.needs_box());
+}
+
+/// 数字か `-` と数字で始まり、整数でも表示と同じ形の浮動小数でもない語は、浮動小数の書き方の誤りにする。
+#[test]
+fn floats_are_written_as_they_print() {
+    for word in ["1.50", "-1.50", "1e+16", "1.0e16", "1E16", "1.", "2x"] {
+        let error = parse_error(&format!("fn f() -> float {{\n  return {word}\n}}\n"));
+        assert_eq!(error.line, 2, "{word}");
+        assert_eq!(
+            error.message,
+            format!("`{word}` is not written as a float prints (Rust `{{:?}}`)"),
+        );
+    }
 }
 
 #[test]
@@ -1184,7 +1234,7 @@ fn malformed_layouts_are_errors_with_their_lines() {
     assert_eq!(error.line, 1);
     assert_eq!(
         error.message,
-        "expected a repr (obj, tobj, int, enum or unit), found `tob`"
+        "expected a repr (obj, tobj, int, float, enum or unit), found `tob`"
     );
 
     // 参照の `#0` は表の番号と読むので、この名前の配置は名前で引けない

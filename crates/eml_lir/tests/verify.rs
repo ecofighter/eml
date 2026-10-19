@@ -1205,6 +1205,17 @@ fn a_literal_switch_is_on_the_repr_of_its_literals() {
             "switch () { 1 -> b1, _ -> b2 }",
             "() is switched on Int literals",
         ),
+        // `float` には case のリテラルがないので、どのリテラルの `switch` にもならない
+        (
+            "x.0: float",
+            "switch x.0 { 1 -> b1, _ -> b2 }",
+            "`x.0` (float) is switched on Int literals",
+        ),
+        (
+            "",
+            "switch 1.5 { 1 -> b1, _ -> b2 }",
+            "1.5 is switched on Int literals",
+        ),
     ];
     for (params, switch, message) in cases {
         assert_eq!(layout_error(&switching("", params, switch)), message);
@@ -2100,7 +2111,7 @@ fn int_and_enum_values_and_int_constants_are_boxed_and_unboxed() {
 }
 
 #[test]
-fn only_int_and_enum_values_and_int_constants_are_boxed() {
+fn only_boxed_scalar_values_and_int_and_float_constants_are_boxed() {
     for (operand, shown) in [
         ("u.0", "`u.0` (unit)"),
         ("p.1", "`p.1` (obj)"),
@@ -2113,7 +2124,7 @@ fn only_int_and_enum_values_and_int_constants_are_boxed() {
             "fn f(u.0: unit, p.1: obj, t.2: tobj) -> tobj {{\n  let b.3: tobj = box {operand}\n  return b.3\n}}\n"
         );
         let expected = Err(format!(
-            "{shown} is boxed, but only int and enum values and Int constants can be in `f`"
+            "{shown} is boxed, but only int, float and enum values and Int and Float constants can be in `f`"
         ));
         assert_eq!(check_scopes(&text), expected, "{operand}");
         assert_eq!(check(&text), expected, "{operand}");
@@ -2154,14 +2165,14 @@ fn only_tobj_values_are_unboxed() {
 }
 
 #[test]
-fn an_unbox_gives_an_int_or_an_enum() {
+fn an_unbox_gives_a_boxed_scalar() {
     for repr in ["unit", "tobj", "obj"] {
         let text =
             format!("fn f(t.0: tobj) -> unit {{\n  let m.1: {repr} = unbox t.0\n  return ()\n}}\n");
         assert_eq!(
             check_scopes(&text),
             Err(format!(
-                "`m.1` ({repr}) is bound to an unbox, which gives int or enum in `f`"
+                "`m.1` ({repr}) is bound to an unbox, which gives int, float or enum in `f`"
             )),
             "{repr}"
         );

@@ -299,7 +299,7 @@ pub enum Rhs {
     },
     /// 値の所有権を受け取って捨てる。値は `()` である。
     Drop(Atom),
-    /// 箱を要するスカラー (`Repr::BOXED_SCALARS`) の値か `Int` の定数を、`tobj` の値にする。オペランドを消費し、所有
+    /// 箱を要するスカラー (`Repr::BOXED_SCALARS`) の値か、`Int` か `Float` の定数を、`tobj` の値にする。オペランドを消費し、所有
     /// した `tobj` を作る。スカラーの種類はオペランドの Repr で決まる (docs/spec/lir.md の「値の表現」)。
     Box(Atom),
     /// `tobj` の値から、箱を要するスカラーを取り出す。`switch` の scrutinee と同じく値を読むだけで、所有権を受け取ら
@@ -703,10 +703,34 @@ pub struct Loc {
     pub column: u32,
 }
 
+/// `float` の定数のビット列。`f64` は `Eq` と `Hash` を持たず、`0.0 == -0.0` で NaN が自分と等しくないので、定数は
+/// ビット列で比べる。定数の表で `0.0` と `-0.0` をまとめないためである (docs/spec/lir.md の「値の表現」)。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct FloatBits(pub u64);
+
+impl FloatBits {
+    pub fn new(value: f64) -> FloatBits {
+        FloatBits(value.to_bits())
+    }
+
+    pub fn value(self) -> f64 {
+        f64::from_bits(self.0)
+    }
+}
+
+/// IR のテキストの形。Rust の `{:?}` の形 (`1.5`、`1e16`、`-0.0`、`inf`、`NaN`) で、`parse` が読み戻す
+/// (docs/implementation/testing.md の「LIR のテキストの形」)。
+impl std::fmt::Display for FloatBits {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{:?}", self.value())
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Atom {
     Var(VarId),
     Int(i64),
+    Float(FloatBits),
     Unit,
     Tag(u32),
     /// 捕まえた変数のない関数の値。クロージャを確保しない。RC の対象ではない (docs/spec/core-ir.md)。
@@ -719,6 +743,7 @@ impl Atom {
         match self {
             Atom::Var(var) => vars[var.0 as usize].repr == expected,
             Atom::Int(_) => expected == Repr::Int,
+            Atom::Float(_) => expected == Repr::Float,
             Atom::Unit => expected == Repr::Unit,
             // 引数のないコンストラクタは、`enum` のタグにも、`tobj` の即値にもなる
             Atom::Tag(_) => matches!(expected, Repr::Enum | Repr::TObj),
@@ -727,14 +752,14 @@ impl Atom {
     }
 
     /// 互換の位置 (`jump`、`return`、呼び出しのオペランド、`closure` の引数、`tobj` のフィールド) に、命令なしで
-    /// 収まる値。変数は Repr が互換なときに収まる。定数は `fits` に加えて、`()` が `tobj` にも収まる。`Int` の定数は
-    /// `tobj` に収まらないので、box の挿入が `box` する (docs/spec/lir.md の「値の表現」)。box の挿入と verifier が
+    /// 収まる値。変数は Repr が互換なときに収まる。定数は `fits` に加えて、`()` が `tobj` にも収まる。`Int` と `Float`
+    /// の定数は `tobj` に収まらないので、box の挿入が `box` する (docs/spec/lir.md の「値の表現」)。box の挿入と verifier が
     /// 同じ規則で位置を比べるように、ここで1回だけ定義する。
     pub fn fits_compatible(self, vars: &[VarInfo], expected: Repr) -> bool {
         match self {
             Atom::Var(var) => vars[var.0 as usize].repr.compatible(expected),
             Atom::Unit => expected.compatible(Repr::Unit),
-            Atom::Int(_) | Atom::Tag(_) | Atom::Fn(_) => self.fits(vars, expected),
+            Atom::Int(_) | Atom::Float(_) | Atom::Tag(_) | Atom::Fn(_) => self.fits(vars, expected),
         }
     }
 }

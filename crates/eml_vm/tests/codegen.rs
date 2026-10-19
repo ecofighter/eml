@@ -575,3 +575,36 @@ fn sink(q.0: obj) -> unit {
         21  ret s1
     ");
 }
+
+/// `float` の箱。定数の `box` は不死の `Float` の定数を写し、変数の `box` は `box_float` で確保し、`unbox` は束縛する
+/// 変数の Repr で `unbox_float` を選ぶ。生の定数はビット列を `int` の定数と同じ形で読む。
+#[test]
+fn floats_are_boxed_and_unboxed_by_their_own_instructions() {
+    insta::assert_snapshot!(disasm("\
+layout P { P(float, tobj) }
+fn main() -> unit {
+  let a.0: tobj = box 0.0
+  let b.1: tobj = box -0.0
+  let f.2: float = unbox b.1
+  decref b.1
+  let c.3: tobj = box f.2
+  let p.4: obj = con P #0(-0.0, c.3)
+  decref p.4
+  decref a.0
+  return ()
+}
+"), @"
+    fn main (arity 0, frame 4)
+         2  box_const s0, c0
+         3  box_const s1, c1
+         4  unbox_float s2, s1
+         5  decref s1
+         6  box_float s1, s2
+         7  load_const s3, c2
+         8  con s1 = #0 (1 scanned, 1 raw) [raw @1 -> s3, @0 -> s1]
+         9  decref s1
+        10  decref s0
+        11  load_imm s3, 0
+        12  ret s3
+    ");
+}

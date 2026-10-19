@@ -326,7 +326,7 @@ impl Core {
     }
 
     /// 構築中の物体はないか、書き終えている。書き終えたとは、走査する語がどれも「書いた」か「残した」で、`BigInt`
-    /// なら値の語が書いてあることである。「残した」語の参照は呼ぶ側が持つ。
+    /// と `Float` なら値の語が書いてあることである。「残した」語の参照は呼ぶ側が持つ。
     pub(crate) open spec fn settleable(&self) -> bool {
         match self.model@.building {
             None => true,
@@ -334,7 +334,7 @@ impl Core {
                 &&& forall|i: int| #[trigger]
                     self.scanned(b, i) ==> self.model@.written[b].contains(i)
                         || self.model@.kept.contains((b, i))
-                &&& self.kind(b) == Kind::BigInt ==> p_init(self.perm(b), 0)
+                &&& self.kind(b).boxes_value() ==> p_init(self.perm(b), 0)
                 &&& forall|i: int| #[trigger]
                     self.model@.kept.contains((b, i)) ==> self.kept_ok(b, p_word(self.perm(b), i))
                 &&& forall|t: usize|
@@ -447,7 +447,7 @@ impl Core {
             &&& p_extended(p) ==> self.cap(h) >= 1 && p_init(p, 0)
             &&& p_first(p) + p_count(p) <= self.cap(h)
         }
-        &&& st == BlockState::Live || st == BlockState::Dying ==> (p_kind(p) == Kind::BigInt
+        &&& st == BlockState::Live || st == BlockState::Dying ==> (p_kind(p).boxes_value()
             ==> self.cap(h) >= 1 && p_init(p, 0))
         &&& st == BlockState::Live || st == BlockState::Dying ==> (p_kind(p) == Kind::String
             ==> string_wf(p, self.cap(h)))

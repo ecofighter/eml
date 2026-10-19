@@ -474,7 +474,7 @@ impl<'a> Context<'a> {
     pub fn mark_passes(&self, atom: Atom, expected: Mark) -> bool {
         match atom {
             Atom::Var(var) => self.never[var.0 as usize] || self.mark(var).compatible(expected),
-            Atom::Int(_) | Atom::Unit | Atom::Tag(_) | Atom::Fn(_) => true,
+            Atom::Int(_) | Atom::Float(_) | Atom::Unit | Atom::Tag(_) | Atom::Fn(_) => true,
         }
     }
 
@@ -744,7 +744,7 @@ impl<'a> Context<'a> {
                 self.repr(var).name()
             )),
             Atom::Var(_) => Ok(()),
-            Atom::Int(_) | Atom::Unit | Atom::Tag(_) | Atom::Fn(_) => {
+            Atom::Int(_) | Atom::Float(_) | Atom::Unit | Atom::Tag(_) | Atom::Fn(_) => {
                 Err("a switch on a constant binds fields".to_string())
             }
         }
@@ -929,7 +929,7 @@ impl<'a> Context<'a> {
         let target = match args[1] {
             Atom::Fn(target) => Some(target),
             Atom::Var(var) => self.closure(var).map(|(function, _)| function),
-            Atom::Int(_) | Atom::Unit | Atom::Tag(_) => None,
+            Atom::Int(_) | Atom::Float(_) | Atom::Unit | Atom::Tag(_) => None,
         };
         if let Some(function) =
             target.and_then(|target| self.tables.functions.get(target.0 as usize))
@@ -1036,6 +1036,7 @@ impl<'a> Context<'a> {
         match atom {
             Atom::Var(var) => format!("`{}`", self.name(var)),
             Atom::Int(n) => n.to_string(),
+            Atom::Float(x) => x.to_string(),
             Atom::Unit => "()".to_string(),
             Atom::Tag(tag) => format!("#{tag}"),
             Atom::Fn(target) => match self.tables.functions.get(target.0 as usize) {
