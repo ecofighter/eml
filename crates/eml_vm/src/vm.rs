@@ -81,6 +81,15 @@ impl Task {
         self.set(slot, Word::from_bits(n as usize));
     }
 
+    /// `float` の値は、スロットに `f64` のビット列で置く (docs/spec/vm.md の「スロットとスタック」)。
+    pub(crate) fn float(&self, slot: Slot) -> f64 {
+        f64::from_bits(self.get(slot).bits() as u64)
+    }
+
+    pub(crate) fn set_float(&mut self, slot: Slot, x: f64) {
+        self.set(slot, Word::from_bits(x.to_bits() as usize));
+    }
+
     /// 使っている語の数。安全点の深さである (docs/spec/object-model.md の「実行の制御」)。
     pub(crate) fn depth(&self) -> usize {
         self.base + self.frame_size
@@ -273,6 +282,40 @@ fn step<M: Mode>(
         Op::IntGe { dst, a, b } => task.set_raw(dst, externs::int_ge(task.raw(a), task.raw(b))),
         Op::IntCompare { dst, a, b } => {
             task.set_raw(dst, externs::int_compare(task.raw(a), task.raw(b)))
+        }
+        Op::FloatAdd { dst, a, b } => {
+            task.set_float(dst, externs::float_add(task.float(a), task.float(b)))
+        }
+        Op::FloatSub { dst, a, b } => {
+            task.set_float(dst, externs::float_sub(task.float(a), task.float(b)))
+        }
+        Op::FloatMul { dst, a, b } => {
+            task.set_float(dst, externs::float_mul(task.float(a), task.float(b)))
+        }
+        Op::FloatDiv { dst, a, b } => {
+            task.set_float(dst, externs::float_div(task.float(a), task.float(b)))
+        }
+        Op::FloatRem { dst, a, b } => {
+            task.set_float(dst, externs::float_rem(task.float(a), task.float(b)))
+        }
+        Op::FloatNeg { dst, a } => task.set_float(dst, externs::float_negate(task.float(a))),
+        Op::FloatEq { dst, a, b } => {
+            task.set_raw(dst, externs::float_eq(task.float(a), task.float(b)))
+        }
+        Op::FloatNe { dst, a, b } => {
+            task.set_raw(dst, externs::float_ne(task.float(a), task.float(b)))
+        }
+        Op::FloatLt { dst, a, b } => {
+            task.set_raw(dst, externs::float_lt(task.float(a), task.float(b)))
+        }
+        Op::FloatLe { dst, a, b } => {
+            task.set_raw(dst, externs::float_le(task.float(a), task.float(b)))
+        }
+        Op::FloatGt { dst, a, b } => {
+            task.set_raw(dst, externs::float_gt(task.float(a), task.float(b)))
+        }
+        Op::FloatGe { dst, a, b } => {
+            task.set_raw(dst, externs::float_ge(task.float(a), task.float(b)))
         }
         Op::BoolEq { dst, a, b } => task.set_raw(dst, externs::bool_eq(task.raw(a), task.raw(b))),
         Op::BoolNe { dst, a, b } => task.set_raw(dst, externs::bool_ne(task.raw(a), task.raw(b))),
@@ -828,6 +871,10 @@ fn run_extern<M: Mode>(
                 let code = ctx.proc_status(task.get(arg(0)), task.get(arg(1)))?;
                 task.set_raw(dst, code);
             }
+            Extern::FloatCompare => task.set_raw(
+                dst,
+                externs::float_compare(task.float(arg(0)), task.float(arg(1))),
+            ),
             Extern::Panic
             | Extern::Exit
             | Extern::IntNeg
@@ -843,6 +890,18 @@ fn run_extern<M: Mode>(
             | Extern::IntLe
             | Extern::IntGt
             | Extern::IntGe
+            | Extern::FloatNeg
+            | Extern::FloatAdd
+            | Extern::FloatSub
+            | Extern::FloatMul
+            | Extern::FloatDiv
+            | Extern::FloatMod
+            | Extern::FloatEq
+            | Extern::FloatNe
+            | Extern::FloatLt
+            | Extern::FloatLe
+            | Extern::FloatGt
+            | Extern::FloatGe
             | Extern::BoolEq
             | Extern::BoolNe => {
                 return Err(VmFault::Internal(

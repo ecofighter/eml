@@ -608,3 +608,30 @@ fn main() -> unit {
         12  ret s3
     ");
 }
+
+/// `Float` の算術と比較の演算子は専用の命令になり、`compare` はほかの extern と同じ `extern` の命令になる
+/// (docs/spec/vm.md の「基本操作と extern」)。
+#[test]
+fn float_arithmetic_and_comparisons_get_their_own_instructions() {
+    insta::assert_snapshot!(disasm("\
+fn main(a.0: float, b.1: float) -> enum {
+  let c.2: float = extern \"Prelude.Num Float.+\"(a.0, b.1)
+  let d.3: float = extern \"Prelude.Div Float.%\"(c.2, 1.5)
+  let e.4: float = extern \"Prelude.Num Float.negate\"(d.3)
+  let f.5: enum = extern \"Prelude.Ord Float.<\"(e.4, a.0)
+  let g.6: enum = extern \"Prelude.Ord Float.compare\"(a.0, b.1)
+  let h.7: enum = extern \"Prelude.Eq Bool.==\"(f.5, g.6)
+  return h.7
+}
+"), @"
+    fn main (arity 2, frame 4)
+         2  float_add s2, s0, s1
+         3  load_const s3, c0
+         4  float_rem s2, s2, s3
+         5  float_neg s2, s2
+         6  float_lt s2, s2, s0
+         7  extern s0 = Prelude.Ord Float.compare(s0, s1)
+         8  bool_eq s0, s2, s0
+         9  ret s0
+    ");
+}

@@ -25,6 +25,30 @@ pub enum Purity {
     Effectful,
 }
 
+/// `Float` のリテラルと `float` の定数のビット列。`f64` は `Eq` と `Hash` を持たず、`0.0 == -0.0` で NaN が自分と
+/// 等しくないので、定数はビット列で比べる。定数の表で `0.0` と `-0.0` をまとめないためである
+/// (docs/spec/lir.md の「値の表現」)。HIR のリテラルも持つので、依存のないこの crate に置き、`eml_lir` が再公開する。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct FloatBits(pub u64);
+
+impl FloatBits {
+    pub fn new(value: f64) -> FloatBits {
+        FloatBits(value.to_bits())
+    }
+
+    pub fn value(self) -> f64 {
+        f64::from_bits(self.0)
+    }
+}
+
+/// IR のテキストの形。Rust の `{:?}` の形 (`1.5`、`1e16`、`-0.0`、`inf`、`NaN`) で、`parse` が読み戻す
+/// (docs/implementation/testing.md の「LIR のテキストの形」)。
+impl std::fmt::Display for FloatBits {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{:?}", self.value())
+    }
+}
+
 /// 値の表現。IR の変数と extern の行が持ち、RC の対象かどうかもここから決まる (docs/spec/lir.md)。
 /// extern の行が持つので、依存のないこの crate に置き、`eml_lir` が再公開する。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -190,6 +214,19 @@ pub enum Extern {
     IntLe,
     IntGt,
     IntGe,
+    FloatNeg,
+    FloatAdd,
+    FloatSub,
+    FloatMul,
+    FloatDiv,
+    FloatMod,
+    FloatEq,
+    FloatNe,
+    FloatCompare,
+    FloatLt,
+    FloatLe,
+    FloatGt,
+    FloatGe,
     StrConcat,
     StrEq,
     StrNe,
@@ -251,6 +288,19 @@ impl Extern {
         Extern::IntLe,
         Extern::IntGt,
         Extern::IntGe,
+        Extern::FloatNeg,
+        Extern::FloatAdd,
+        Extern::FloatSub,
+        Extern::FloatMul,
+        Extern::FloatDiv,
+        Extern::FloatMod,
+        Extern::FloatEq,
+        Extern::FloatNe,
+        Extern::FloatCompare,
+        Extern::FloatLt,
+        Extern::FloatLe,
+        Extern::FloatGt,
+        Extern::FloatGe,
         Extern::StrConcat,
         Extern::StrEq,
         Extern::StrNe,
@@ -277,7 +327,7 @@ impl Extern {
 
     pub fn row(self) -> FunctionRow {
         use Linearity::{Lin, Unr};
-        use Repr::{Enum, Int, Obj, Unit};
+        use Repr::{Enum, Float, Int, Obj, Unit};
         // 引数の Repr と Kind を同じ長さの配列で受け、`params` と `param_kinds` の長さを型で揃える
         fn kinded<const N: usize>(
             name: &'static str,
@@ -340,6 +390,26 @@ impl Extern {
             Extern::IntLe => row("Prelude.Ord Int.<=", &[Int, Int], Enum, Purity::Pure),
             Extern::IntGt => row("Prelude.Ord Int.>", &[Int, Int], Enum, Purity::Pure),
             Extern::IntGe => row("Prelude.Ord Int.>=", &[Int, Int], Enum, Purity::Pure),
+            // `Float` の算術は `Panic` を起こさない。メソッドの型はクラスで1つなので `<Panic>` を持つが、行は `Pure` である
+            // (docs/spec/declarations.md の「Prelude のクラス」)
+            Extern::FloatNeg => row("Prelude.Num Float.negate", &[Float], Float, Purity::Pure),
+            Extern::FloatAdd => row("Prelude.Num Float.+", &[Float, Float], Float, Purity::Pure),
+            Extern::FloatSub => row("Prelude.Num Float.-", &[Float, Float], Float, Purity::Pure),
+            Extern::FloatMul => row("Prelude.Num Float.*", &[Float, Float], Float, Purity::Pure),
+            Extern::FloatDiv => row("Prelude.Div Float./", &[Float, Float], Float, Purity::Pure),
+            Extern::FloatMod => row("Prelude.Div Float.%", &[Float, Float], Float, Purity::Pure),
+            Extern::FloatEq => row("Prelude.Eq Float.==", &[Float, Float], Enum, Purity::Pure),
+            Extern::FloatNe => row("Prelude.Eq Float.!=", &[Float, Float], Enum, Purity::Pure),
+            Extern::FloatCompare => row(
+                "Prelude.Ord Float.compare",
+                &[Float, Float],
+                Enum,
+                Purity::Pure,
+            ),
+            Extern::FloatLt => row("Prelude.Ord Float.<", &[Float, Float], Enum, Purity::Pure),
+            Extern::FloatLe => row("Prelude.Ord Float.<=", &[Float, Float], Enum, Purity::Pure),
+            Extern::FloatGt => row("Prelude.Ord Float.>", &[Float, Float], Enum, Purity::Pure),
+            Extern::FloatGe => row("Prelude.Ord Float.>=", &[Float, Float], Enum, Purity::Pure),
             Extern::StrConcat => row("Prelude.++", &[Obj, Obj], Obj, Purity::Pure),
             Extern::StrEq => row("Prelude.Eq String.==", &[Obj, Obj], Enum, Purity::Pure),
             Extern::StrNe => row("Prelude.Eq String.!=", &[Obj, Obj], Enum, Purity::Pure),

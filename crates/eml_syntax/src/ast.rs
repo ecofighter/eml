@@ -397,9 +397,10 @@ impl OpSeq {
 }
 
 /// リテラルの値。HIR はトークンの種類を見ずに、これで値を受け取る。
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum LiteralValue {
     Int(i64),
+    Float(f64),
     String(String),
 }
 
@@ -408,13 +409,14 @@ impl Literal {
         self.syntax.first_token()
     }
 
-    /// 浮動小数と文字の未対応のリテラル、範囲外の整数、閉じていない raw 文字列は `None` を返す。未対応の
-    /// リテラルは HIR が E0004 を出し、ほかは字句解析が報告済みである。raw 文字列のほかの文字列は `StringLit` で、
+    /// 文字の未対応のリテラル、範囲外の整数、閉じていない raw 文字列は `None` を返す。未対応のリテラルは HIR が
+    /// E0004 を出し、ほかは字句解析が報告済みである。raw 文字列のほかの文字列は `StringLit` で、
     /// `Literal` ではない。
     pub fn value(&self) -> Option<LiteralValue> {
         let token = self.token()?;
         match token.kind() {
             SyntaxKind::INT => crate::literal::int_value(token.text()).map(LiteralValue::Int),
+            SyntaxKind::FLOAT => crate::literal::float_value(token.text()).map(LiteralValue::Float),
             SyntaxKind::RAW_STRING => {
                 crate::literal::raw_value(token.text()).map(LiteralValue::String)
             }
@@ -1224,7 +1226,7 @@ impl LiteralPat {
             .find(|token| {
                 matches!(
                     token.kind(),
-                    SyntaxKind::INT | SyntaxKind::CHAR | SyntaxKind::RAW_STRING
+                    SyntaxKind::INT | SyntaxKind::FLOAT | SyntaxKind::CHAR | SyntaxKind::RAW_STRING
                 )
             })
     }
@@ -1254,6 +1256,10 @@ impl LiteralPat {
             SyntaxKind::INT => {
                 let n = crate::literal::int_value(token.text())?;
                 Some(LiteralValue::Int(if negative { -n } else { n }))
+            }
+            SyntaxKind::FLOAT => {
+                let x = crate::literal::float_value(token.text())?;
+                Some(LiteralValue::Float(if negative { -x } else { x }))
             }
             SyntaxKind::RAW_STRING => {
                 crate::literal::raw_value(token.text()).map(LiteralValue::String)

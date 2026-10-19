@@ -107,6 +107,14 @@ fn row_type(checked: &Checked, types: &mut TypeStore, e: Extern) -> TypeId {
     types.substitute(declared, &mut Substitution::partial([(var, head)]))
 }
 
+/// 行 `e` を instance の `extern` が結んでいるか。
+fn method_bound(checked: &Checked, e: Extern) -> bool {
+    !checked
+        .program
+        .functions()
+        .any(|(_, function)| function.kind == FunctionKind::Extern(Some(e)))
+}
+
 /// 型引数のない型 `head` を指す、型の表の型。テストは型の表に型を作れないので、宣言の型の中から探す。
 fn head_type(checked: &Checked, head: TypeDefId) -> TypeId {
     let types = &checked.typed.types;
@@ -190,7 +198,8 @@ fn every_extern_function_row_has_the_reprs_of_its_std_signature() {
 #[test]
 fn faulting_rows_carry_panic() {
     // 行の `purity` は、std の型の最後の外側の矢印の row と合う。`Panics` は `Panic` を起こし `IO` を起こさない。
-    // `Effectful` は `IO` を起こし、`Std.Env.arg` のように `Panic` も起こしうる。`Pure` は何も起こさない
+    // `Effectful` は `IO` を起こし、`Std.Env.arg` のように `Panic` も起こしうる。`Pure` は何も起こさない。ただし
+    // instance の `extern` で結んだ `Pure` の行は、クラスのメソッドの型が書く `Panic` だけを持ってよい (`Num Float`)
     // (docs/spec/effects.md の「組み込みの `Panic`」)
     let checked = checked();
     let program = &checked.program;
@@ -212,6 +221,9 @@ fn faulting_rows_carry_panic() {
             ty = *ret;
         }
         match row.purity {
+            Purity::Pure if method_bound(&checked, e) => {
+                assert!(labels.is_empty() || labels == [panic], "{}", row.name)
+            }
             Purity::Pure => assert!(labels.is_empty(), "{}", row.name),
             Purity::Panics => assert_eq!(labels, [panic], "{}", row.name),
             Purity::Effectful => assert!(labels.contains(&io), "{}", row.name),

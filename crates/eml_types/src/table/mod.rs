@@ -227,6 +227,7 @@ pub(crate) struct Table<'c> {
     kind_origin: Provenance,
     multiplicity: Bounds<Multiplicity>,
     pub int: Ty,
+    pub float: Ty,
     pub string: Ty,
     pub bool: Ty,
     pub unit: Ty,
@@ -298,6 +299,7 @@ impl<'c> Table<'c> {
             kind_origin: Provenance::Declaration,
             multiplicity: Bounds::default(),
             int: Ty(0),
+            float: Ty(0),
             string: Ty(0),
             bool: Ty(0),
             unit: Ty(0),
@@ -308,6 +310,11 @@ impl<'c> Table<'c> {
         };
         table.int = table.alloc(TyShape::Con(
             table.extern_type(ExternType::Int),
+            Vec::new(),
+            Vec::new(),
+        ));
+        table.float = table.alloc(TyShape::Con(
+            table.extern_type(ExternType::Float),
             Vec::new(),
             Vec::new(),
         ));

@@ -90,7 +90,7 @@ fn signatures_and_equations_are_paired_by_name() {
 
 #[test]
 fn constructs_of_later_stages_are_not_yet_supported() {
-    let text = "f : Int -> Int\nf x =\n  let first = 1.5\n  let plus : Int -> Int -> <Panic> Int = (+)\n  let y = x in y";
+    let text = "f : Int -> Int\nf x =\n  let first = 'c'\n  let plus : Int -> Int -> <Panic> Int = (+)\n  let y = x in y";
     insta::assert_snapshot!(lower_text(text), @"
     f : Int -> Int
     f x#0 = {
@@ -102,7 +102,7 @@ fn constructs_of_later_stages_are_not_yet_supported() {
       }
     }
     ---
-    E0004 3:15 floating-point literals are not supported yet
+    E0004 3:15 character literals are not supported yet
     ");
 }
 
@@ -353,11 +353,10 @@ fn type_declarations_are_not_supported_yet() {
 #[test]
 fn later_stage_literals_are_not_supported_yet() {
     assert_eq!(
-        diagnostics("x : Int\nx = (1.5, 'c', `ls`)"),
+        diagnostics("x : Int\nx = ('c', `ls`)"),
         [
-            "E0004 2:6 floating-point literals are not supported yet",
-            "E0004 2:11 character literals are not supported yet",
-            "E0004 2:16 command literals are not supported yet",
+            "E0004 2:6 character literals are not supported yet",
+            "E0004 2:11 command literals are not supported yet",
         ]
     );
 }

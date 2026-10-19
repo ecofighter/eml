@@ -742,7 +742,7 @@ token の表の項目は、`into_token` と `release_reuse` が添字を使い�
 
 ## extern
 
-`eml_extern` の表の関数の行のうち `exit` と `panic` を除く39個を、`eml_rt` に語の ABI で1回だけ書く。S10 の VM と、後のネイティブのコードが同じ関数を呼ぶ。ヒープを使わない算術と比較は module `externs` の関数で、文字列と I/O の extern は `Ctx` のメソッドである。純粋な extern は、結果をバイト列や整数の spec に対して Verus で証明する。`exit` と `panic` は VM が実行する。`exit` は終了コードを覚えて、`Ctx::exit_abort` で中断を始める。`panic` は文言を `panicked` の節の入口に渡す ([VM](vm.md) の「extern の中断」)。
+`eml_extern` の表の関数の行のうち `exit` と `panic` を除く52個を、`eml_rt` に語の ABI で1回だけ書く。S10 の VM と、後のネイティブのコードが同じ関数を呼ぶ。ヒープを使わない算術と比較は module `externs` の関数で、文字列と I/O の extern は `Ctx` のメソッドである。純粋な extern は、結果をバイト列や整数の spec に対して Verus で証明する。`exit` と `panic` は VM が実行する。`exit` は終了コードを覚えて、`Ctx::exit_abort` で中断を始める。`panic` は文言を `panicked` の節の入口に渡す ([VM](vm.md) の「extern の中断」)。
 
 行の番号 (`eml_extern::Extern`) から関数を引く表は `eml_rt` に置かない。VM が行の番号の `match` で各関数を呼ぶ。`match` は飛び先の表になるので、関数ポインタの表と同じ速さである。
 
@@ -750,6 +750,8 @@ token の表の項目は、`into_token` と `release_reuse` が添字を使い�
 |---|---|
 | `Prelude.Num Int.+`、`-`、`*`、`negate`、`Prelude.Div Int./`、`%` | `int_add`、`int_sub`、`int_mul`、`int_div`、`int_rem`、`int_negate` |
 | `Prelude.Eq Int.==`、`!=`、`Prelude.Ord Int.<`、`<=`、`>`、`>=`、`compare` | `int_eq`、`int_ne`、`int_lt`、`int_le`、`int_gt`、`int_ge`、`int_compare` |
+| `Prelude.Num Float.+`、`-`、`*`、`negate`、`Prelude.Div Float./`、`%` | `float_add`、`float_sub`、`float_mul`、`float_div`、`float_rem`、`float_negate` |
+| `Prelude.Eq Float.==`、`!=`、`Prelude.Ord Float.<`、`<=`、`>`、`>=`、`compare` | `float_eq`、`float_ne`、`float_lt`、`float_le`、`float_gt`、`float_ge`、`float_compare` |
 | `Prelude.Eq Bool.==`、`!=` | `bool_eq`、`bool_ne` |
 | `Prelude.Eq String.==`、`!=`、`Prelude.Ord String.compare` | `Ctx::string_eq`、`string_ne`、`string_compare` |
 | `Prelude.++` | `Ctx::string_append` |
@@ -822,6 +824,11 @@ token の表の項目は、`into_token` と `release_reuse` が添字を使い�
 - `negate` は `0.checked_sub(a)` で作る。vstd に `checked_neg` の spec がないためである
 - `/` と `%` は、`rust_div` と `rust_rem` の spec (0 の方向に切り捨て、余りの符号は割られる数に合わせる) で約束する。0 で割れば `DivisionByZero`、`MIN / -1` と `MIN % -1` は `IntegerOverflow` である
 - 比較の6つと `compare`、`Bool` の `==` と `!=` は、タグの値で約束する。`Bool` の引数には前提を置かず、タグの値の等しさで比べる
+
+浮動小数の extern は、引数と結果を `f64` で受け渡す。VM はスロットのビット列を `f64::from_bits` で戻して渡す。
+
+- 比較の6つ (`==`、`!=`、`<`、`<=`、`>`、`>=`) は `verus!` の中に書き、結果が `Bool` のタグであることだけを約束する。vstd は `f64` の比較の演算子に仕様を持つが、値を表さないためである
+- 算術 (`+`、`-`、`*`、`/`、`%`、`negate`) と全順序の `compare` は、T12 (下の「`unsafe` の核」) で信頼する。`compare` は結果が `Ordering` のタグであることを約束する。値は期待値の表で確かめる ([テスト戦略](../implementation/testing.md) の「期待値の表」)。どれも誤りを返さない
 
 文字列の extern は、結果を ghost のバイト列の spec で約束する。文字列のバイト列は、T10 の「ペイロードを `str` として借りる関数」で借りて読む。
 
@@ -958,6 +965,7 @@ Verus で確かめない部分は、次の信頼の一覧にまとめる。`exte
 | T9 | Verus、Z3、rustc、vstd (その std の約束を含む) | 道具そのもの | なし |
 | T10 | 文字列のバイトの読み書き。`String` のブロックの権限を受けてペイロードにバイトを写す関数と、ペイロードを `str` として借りる関数と、その位置を返す関数。約束は、権限が渡したポインタの `String` のブロックのもので、長さの語とバイト列の語を持つとき、メモリのバイト列が権限の ghost のバイト列に等しいこと、写すのは長さの語の後ろの容量の中だけで、長さの語の値と権限の位置を変えないこと。写す元のバイト列が写す先と重ならないことを前提にする。このヒープの文字列から写すときは写す先がいつも別のブロックで、`string_push` の `s` は、呼ぶ側の約束により left 自身の中身を指さない | Verus の権限は語の単位で、語の中のバイトの位置を扱わない | 語に揃わない位置への追記、大きい物体のページをまたぐ長さ、大きい左辺からの作り直し、空の文字列、多バイトの文字、1ページの長さを含む自分自身との連結 (`x ++ x`)、ほかの文字列の中身を指す `s` の追記、`string` で読んだ位置の使用が終わった後の追記、`String.show` が区間を写すこと (区間が先頭、途中、末尾にあり、多バイトの文字と接する場合)、2つの借用の規則での読み書き |
 | T11 | Host の実装と、それを呼ぶ関数。`HostRef` とその `Clone`、Host の `write_line` と `flush` を呼ぶ関数、不透明な `File`、Host の `open` を呼ぶ関数、`File` を区切りごとに (行の読みでは次の `\n` まで) 読んで UTF-8 を確かめる関数 `read_text`、引数の数と引数を写す `host_arg_count` と `host_arg`、環境変数を読む `host_env_has` と `host_env_var`、標準入力を読む `host_read_stdin`、ファイルを書く `host_write_file`、子を起動する `host_run`。中身は何も約束しない (書いた中身、読めた中身、返した値のどれも)。約束するのは、`Fault` を返す橋が `Fault::Heap` を返さないことだけで、本体を読めば分かる。`read_text` の `File` を借りる前提は、`foreign_unique` で確かめる (上の「extern」) | Verus は `dyn Host`、`io::Error`、`dyn BufRead` を扱わず、OS とのやりとりの中身は証明の外にある。中身は期待値の表で確かめる ([テスト戦略](../implementation/testing.md) の「期待値の表」) | メモリの Host を通る `println` と `flush`、`open`、`read_all` (区切りをまたぐ長さ、長さの見込みのない読み手、短い読み、途中の読みの誤り、UTF-8 でない中身、止める語 (区切りの前と、止める語が立った後の `Interrupted`))、`read_line_raw` (区切りをまたぐ行、`\r\n` で終わる行、空の行、行の終わりのない最後の行、終わり、途中の読みの誤り、UTF-8 でない行、止める語)、`close`。引数、環境変数、標準入力の行と残り、ファイルの書き込み、子の起動の橋 |
+| T12 | 浮動小数の演算と書式。`Float` の算術 (`float_add`、`float_sub`、`float_mul`、`float_div`、`float_rem`、`float_negate`) と、全順序の `float_compare`。本体は Rust の `f64` の演算子と `f64::total_cmp` を呼ぶだけで、値は IEEE 754 の倍精度のとおりである。約束するのは、`float_compare` の結果が `Ordering` のタグであることだけである (上の「extern」) | vstd の `f64` の算術の仕様は、前提 (`add_req` など) を満たす実装を持たないので呼べない。`%`、`total_cmp`、ビット列との変換は仕様を持たない。値は期待値の表で確かめる | 特別な値 (±0、最小の正規化数と非正規化数、`MAX`、±無限大、NaN) の組で、各関数が Rust の演算と同じビット列 (NaN の結果は NaN であること) を返し、`float_compare` が `total_cmp` と同じ答えを返すこと |
 
 T10 の約束は、関数そのものの外の次の2つにも頼る。
 

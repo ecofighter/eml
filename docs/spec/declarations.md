@@ -174,18 +174,18 @@ dir </> name = join_path dir name
 
 | 演算子 | 型と意味 |
 |---|---|
-| `+` `-` `*` | `Num a => a -> a -> <Panic> a`。クラス `Num` のメソッドである。`Int` は 64 ビットの符号付き整数で、`Int` の instance ではオーバーフローが `Panic` を起こす。`try_panic` が捕まえなければ実行時エラーになる |
-| `/` `%` | `Div a => a -> a -> <Panic> a`。クラス `Div` のメソッドである。`Int` の instance では、オーバーフローとゼロ除算が `Panic` を起こす。Rust と同じく、商を 0 の方向に切り捨てる (`%` の結果は被除数と同じ符号になる) |
-| 単項の `-` (`negate`) | `Num a => a -> <Panic> a`。`Num` のメソッド `negate` を呼ぶ。`Int` の instance では、オーバーフローが `Panic` を起こす |
-| `==` `!=` | `Eq a => a -> a -> Bool`。クラス `Eq` のメソッドである。`Eq` の instance のない型 (関数型、instance のない `data` の型、制約のないシグネチャの型変数) の値を比べると E2006 にする |
-| `<` `<=` `>` `>=` | `Ord a => a -> a -> Bool`。クラス `Ord` のメソッドで、`compare` からの既定を持つ |
+| `+` `-` `*` | `Num a => a -> a -> <Panic> a`。クラス `Num` のメソッドである。`Int` は 64 ビットの符号付き整数で、`Int` の instance ではオーバーフローが `Panic` を起こす。`try_panic` が捕まえなければ実行時エラーになる。`Float` は IEEE 754 の倍精度の浮動小数で、`Float` の instance は IEEE 754 のとおりに計算し、`Panic` を起こさない |
+| `/` `%` | `Div a => a -> a -> <Panic> a`。クラス `Div` のメソッドである。`Int` の instance では、オーバーフローとゼロ除算が `Panic` を起こす。Rust と同じく、商を 0 の方向に切り捨てる (`%` の結果は被除数と同じ符号になる)。`Float` の instance では、0 で割ると `inf`、`-inf`、`nan` になる。`%` は Rust の `f64` の `%` (C の `fmod`) で、結果は被除数と同じ符号になる (Python の `%` とは違う) |
+| 単項の `-` (`negate`) | `Num a => a -> <Panic> a`。`Num` のメソッド `negate` を呼ぶ。`Int` の instance では、オーバーフローが `Panic` を起こす。`Float` の instance は符号を反転する (`negate 0.0` は `-0.0`) |
+| `==` `!=` | `Eq a => a -> a -> Bool`。クラス `Eq` のメソッドである。`Eq` の instance のない型 (関数型、instance のない `data` の型、制約のないシグネチャの型変数) の値を比べると E2006 にする。`Float` は IEEE 754 のとおりに比べる (下の「Prelude のクラス」) |
+| `<` `<=` `>` `>=` | `Ord a => a -> a -> Bool`。クラス `Ord` のメソッドで、`compare` からの既定を持つ。`Float` の instance は IEEE 754 のとおりに比べ、`compare` とは食い違うことがある (下の「Prelude のクラス」) |
 | `++` | `String -> String -> String` |
 | `&&` `\|\|` | `Bool -> Bool -> Bool`。短絡評価する。HIR で `a && b` を `if a then b else False` に、`a \|\| b` を `if a then True else b` に脱糖する |
 | `\|>` `<\|` | `x \|> f` は Prelude の関数 `x \|> f = f x` の呼び出しである。引数を左から評価するので、`x` を先に評価する。評価の順は [式](expressions.md) の「関数適用」に従う。`f <\| x` は Prelude の関数 `f <\| x = f x` の呼び出しである |
 | `>>` `<<` | 関数合成 |
 | `::` | `a -> List a -> List a`。Prelude の `List` のコンストラクタ |
 
-`&&`、`||`、`|>`、`<|`、`>>`、`<<` と関数 `not` は、Prelude に eml で本体を書いた関数である。ただし `&&` と `||` は、上の表のとおり HIR が短絡評価の `if` に脱糖する。演算子の参照もラムダにしたうえで同じく脱糖するので、この2つの本体は呼ばれない。`::` は Prelude の `List` のコンストラクタである。比較と算術の演算子は、クラスのメソッドとして instance の定義を呼ぶ。`Int`、`String`、`Bool` の instance は、メソッドを instance の中の `extern` で表の行に結ぶ (上の「`extern`」)。残りの演算子 `++` は、Prelude の `extern` の関数で、処理系が実装を持つ。
+`&&`、`||`、`|>`、`<|`、`>>`、`<<` と関数 `not` は、Prelude に eml で本体を書いた関数である。ただし `&&` と `||` は、上の表のとおり HIR が短絡評価の `if` に脱糖する。演算子の参照もラムダにしたうえで同じく脱糖するので、この2つの本体は呼ばれない。`::` は Prelude の `List` のコンストラクタである。比較と算術の演算子は、クラスのメソッドとして instance の定義を呼ぶ。`Int`、`Float`、`String`、`Bool` の instance は、メソッドを instance の中の `extern` で表の行に結ぶ (上の「`extern`」)。残りの演算子 `++` は、Prelude の `extern` の関数で、処理系が実装を持つ。
 
 ## クラスと instance
 
@@ -296,9 +296,11 @@ pub class Show a where
   display x = show x
 ```
 
-- `Num` と `Div` は、互いを上位クラスに持たない。Prelude は `Int` の instance を置き、メソッドを instance の中の `extern` で表の行 (`Prelude.Num Int.+` など) に結ぶ。単相化で instance が決まるので、`Int` の算術は VM の専用の命令になる ([VM](vm.md) の「基本操作と extern」)
-- `Num` と `Div` のメソッドの型は `<Panic>` を持つ。メソッドの型はクラスで1つなので、`Panic` を起こさない instance のメソッドも、型の上では `<Panic>` を持つ
-- 整数のリテラルは `Int` である。`fromInteger` に当たる脱糖も defaulting もないので、何も型を決めない算術 (使わないラムダ `fn x -> x + x` など) は E2009 になる
+- `Num` と `Div` は、互いを上位クラスに持たない。Prelude は `Int` と `Float` の instance を置き、メソッドを instance の中の `extern` で表の行 (`Prelude.Num Int.+`、`Prelude.Num Float.+` など) に結ぶ。単相化で instance が決まるので、`Int` と `Float` の算術は VM の専用の命令になる ([VM](vm.md) の「基本操作と extern」)
+- `Num` と `Div` のメソッドの型は `<Panic>` を持つ。メソッドの型はクラスで1つなので、`Panic` を起こさない instance のメソッド (`Float` の算術) も、型の上では `<Panic>` を持つ。`Float` の算術の表の行は `Pure` である
+- 整数のリテラルは `Int`、浮動小数のリテラルは `Float` である。`fromInteger` に当たる脱糖も defaulting もないので、何も型を決めない算術 (使わないラムダ `fn x -> x + x` など) は E2009 になる。`Int` と `Float` を混ぜた演算 (`1 + 1.5`) は E2001 である
+- `Eq Float` と `Ord Float` の比較の演算子 (`==`、`!=`、`<`、`<=`、`>`、`>=`) は IEEE 754 のとおりである。NaN はどの値とも等しくなく、NaN が絡むと `!=` のほかは偽になる。`0.0 == -0.0` は真である。`compare` だけは全順序 (Rust の `f64::total_cmp`) で、`-nan < -inf < … < -0.0 < 0.0 < … < inf < nan` と並べる。並べ替えが NaN を含んでも順序として成り立つためである。そのため `Float` では、NaN と ±0 のときだけ、`==` と `compare … == EQ` の答えが食い違う (`0.0 == -0.0` は真だが、`compare (-0.0) 0.0` は `LT` である)。Prelude のほかの instance では、2つは食い違わない
+- `Float` を含む複合の値の大小も、この例外に従う。導出した `Ord` とタプルの instance は `compare` だけを生成し、`<`、`<=`、`>`、`>=` はクラスの既定の実装が `compare` を通して決めるので、全順序に従う。`-0.0 < 0.0` は偽だが、`Some (-0.0) < Some 0.0` は真で、`(0.0, 1) < (-0.0, 2)` は偽である (最後の例は Python のタプルの比較と違う)。導出した `Eq` とタプルの `==` はフィールドごとの `==` なので IEEE 754 のままで、`Some nan == Some nan` は偽である
 - 利用者は自分の型 (ベクトルなど) に `Num` と `Div` の instance を書ける。前置の `-` は、その型の instance の `negate` を呼ぶ
 - `Show` の `show` は既定を持たない。`show` と `show_prec` を互いの既定にすると、どちらも書かない instance が止まらなくなるためである
 - `show_prec d x` の `d` は、`x` を置く位置の優先度である。関数適用の引数の位置は 11 である。導出した `Show` は、これで入れ子の値と中置のコンストラクタに括弧を付ける (上の「`deriving`」)

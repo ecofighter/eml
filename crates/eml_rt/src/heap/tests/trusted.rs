@@ -822,6 +822,49 @@ fn script_externs_go_through_the_host<M: Mode>() {
     assert_eq!(mortal(ctx.heap()), 0);
 }
 
+// T12
+
+/// 浮動小数の演算と `compare`。特別な値 (±0、±無限大、NaN、非正規化数) を含む組で、Rust の演算と同じビット列を返す。
+/// NaN の結果は NaN であることだけを比べる。符号と中身はプラットフォームで違う
+#[test]
+fn float_operations_match_rust() {
+    use crate::externs::*;
+    let values = [
+        0.0,
+        -0.0,
+        1.5,
+        -2.5,
+        f64::MIN_POSITIVE,
+        5e-324,
+        f64::MAX,
+        f64::INFINITY,
+        f64::NEG_INFINITY,
+        f64::NAN,
+    ];
+    let same = |got: f64, want: f64| {
+        assert!(
+            got.to_bits() == want.to_bits() || (got.is_nan() && want.is_nan()),
+            "{got:?} != {want:?}"
+        )
+    };
+    for a in values {
+        same(float_negate(a), -a);
+        for b in values {
+            same(float_add(a, b), a + b);
+            same(float_sub(a, b), a - b);
+            same(float_mul(a, b), a * b);
+            same(float_div(a, b), a / b);
+            same(float_rem(a, b), a % b);
+            let order = match a.total_cmp(&b) {
+                std::cmp::Ordering::Less => LT,
+                std::cmp::Ordering::Equal => EQ,
+                std::cmp::Ordering::Greater => GT,
+            };
+            assert_eq!(float_compare(a, b), order, "{a:?} {b:?}");
+        }
+    }
+}
+
 both_modes!(
     pages_are_aligned_and_returned,
     large_objects_get_their_own_page,

@@ -1,6 +1,7 @@
 //! 演算子の列を fixity の表で木に組み直す (docs/spec/expressions.md の「演算子の列と単項マイナス」)。
 
 use eml_diagnostics::{Diagnostic, Label, TextRange, TextSize};
+use eml_extern::FloatBits;
 use eml_syntax::ast::{self, OpSeqElement};
 
 use super::expr::BodyLowering;
@@ -53,7 +54,10 @@ impl BodyLowering<'_> {
                     let written_literal = matches!(expr, ast::Expr::Literal(_));
                     let id = self.lower_expr(Some(expr), expr_range);
                     let direct = written_literal
-                        && matches!(self.exprs[id].kind, ExprKind::Literal(Literal::Int(_)));
+                        && matches!(
+                            self.exprs[id].kind,
+                            ExprKind::Literal(Literal::Int(_) | Literal::Float(_))
+                        );
                     pieces.push(Piece::Operand(id, direct));
                 }
                 OpSeqElement::Operator(token) => {
@@ -153,12 +157,20 @@ impl BodyLowering<'_> {
                 // 定数にするため (docs/spec/expressions.md の「演算子の列と単項マイナス」)。
                 if cursor.pos == literal_at + 1
                     && matches!(cursor.pieces[literal_at], Piece::Operand(_, true))
-                    && let ExprKind::Literal(Literal::Int(n)) = self.exprs[operand].kind
                 {
-                    return self.alloc(
-                        ExprKind::Literal(Literal::Int(-n)),
-                        range.cover(self.exprs[operand].range),
-                    );
+                    let negated = match self.exprs[operand].kind {
+                        ExprKind::Literal(Literal::Int(n)) => Some(Literal::Int(-n)),
+                        ExprKind::Literal(Literal::Float(x)) => {
+                            Some(Literal::Float(FloatBits::new(-x.value())))
+                        }
+                        _ => None,
+                    };
+                    if let Some(literal) = negated {
+                        return self.alloc(
+                            ExprKind::Literal(literal),
+                            range.cover(self.exprs[operand].range),
+                        );
+                    }
                 }
                 let callee = self.alloc(
                     ExprKind::Path(Res::Item(ValueItem::Method(self.lang.negate))),

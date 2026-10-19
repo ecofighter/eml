@@ -109,7 +109,10 @@ fn every_extern_function_is_declared_once_in_std() {
             signature
         };
         assert_eq!(signature.arity(), row.params.len(), "{}", row.name);
-        // `Pure` でない行だけが、最後の外側の矢印に extern のエフェクトを書く。ほかの矢印の row はどれも空である
+        // `Pure` でない行だけが、最後の外側の矢印に extern のエフェクトを書く。ほかの矢印の row はどれも空である。
+        // ただし、instance の `extern` で結んだ `Pure` の行は、クラスのメソッドの型が書く `Panic` を持ってよい
+        // (`Num Float` の `+` は `Panic` を起こさないが、`Num` の `+` の型は `<Panic>` を持つ)
+        let method_bound = functions.is_empty();
         let last = last_outer_arrow(signature);
         for (id, ty) in signature.types.iter() {
             let TypeRefKind::Fn { row: effects, .. } = &ty.kind else {
@@ -127,6 +130,15 @@ fn every_extern_function_is_declared_once_in_std() {
                         row.name
                     );
                 }
+            } else if row.purity == Purity::Pure && method_bound && Some(id) == last {
+                let only_panic = match effects {
+                    RowRef::Omitted => true,
+                    RowRef::Closed { effects, .. } => effects.iter().all(|effect| {
+                        program[effect.effect].kind == EffectKind::Extern(Some(ExternEffect::Panic))
+                    }),
+                    RowRef::Open { .. } | RowRef::Error => false,
+                };
+                assert!(only_panic, "{} has an effect besides Panic", row.name);
             } else {
                 let empty = match effects {
                     RowRef::Omitted => true,

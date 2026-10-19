@@ -298,6 +298,7 @@ impl Printer<'_> {
         match &body.exprs[id].kind {
             ExprKind::Missing => "<missing>".to_string(),
             ExprKind::Literal(Literal::Int(n)) => n.to_string(),
+            ExprKind::Literal(Literal::Float(x)) => x.to_string(),
             ExprKind::Literal(Literal::String(s)) => format!("{s:?}"),
             ExprKind::Literal(Literal::Unit) => "()".to_string(),
             ExprKind::Path(res) => self.res(body, *res),
@@ -556,6 +557,7 @@ impl Printer<'_> {
                 format!("({})", elements.join(", "))
             }
             PatKind::Literal(Literal::Int(n)) => n.to_string(),
+            PatKind::Literal(Literal::Float(x)) => x.to_string(),
             PatKind::Literal(Literal::String(s)) => format!("{s:?}"),
             PatKind::Literal(Literal::Unit) => "()".to_string(),
             PatKind::Annot { pat, ty } => {

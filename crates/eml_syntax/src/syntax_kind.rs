@@ -10,8 +10,8 @@ pub enum SyntaxKind {
     SHEBANG,
 
     INT,
-    // FLOAT と CHAR は、使われた位置で E0004 を出せるように字句だけ先に用意している。
     FLOAT,
+    // CHAR は、使われた位置で E0004 を出せるように字句だけ先に用意している。
     CHAR,
     /// 中に構造がないので、1つのトークンにする。
     RAW_STRING,

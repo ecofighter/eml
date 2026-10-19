@@ -122,6 +122,30 @@ instance Ord Int where
   extern (>)
   extern (>=)
 
+-- `Float` の算術は IEEE 754 のとおりで、`Panic` を起こさない。`%` の結果は割られる数の符号を持つ (C の `fmod`)
+instance Num Float where
+  extern (+)
+  extern (-)
+  extern (*)
+  extern negate
+
+instance Div Float where
+  extern (/)
+  extern (%)
+
+instance Eq Float where
+  extern (==)
+  extern (!=)
+
+-- 比較の演算子は IEEE 754 のとおりで、NaN が絡むと偽になる。`compare` だけは全順序 (`-0.0` は `0.0` より小さく、
+-- NaN は最も大きい) で、並べ替えが NaN を含んでも順序として成り立つ (docs/spec/declarations.md の「Prelude のクラス」)
+instance Ord Float where
+  extern compare
+  extern (<)
+  extern (<=)
+  extern (>)
+  extern (>=)
+
 -- 負の数は、関数適用の引数の位置 (優先度 7 より強い) で括弧に入れる (Haskell の `showsPrec` と同じ)
 instance Show Int where
   extern show

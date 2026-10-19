@@ -4,7 +4,7 @@
 use std::fmt;
 
 use eml_extern::{Extern, Linearity};
-pub use eml_extern::{OpRet, Repr};
+pub use eml_extern::{FloatBits, OpRet, Repr};
 
 mod boxing;
 pub mod check;
@@ -701,29 +701,6 @@ pub struct Loc {
     pub file: u32,
     pub line: u32,
     pub column: u32,
-}
-
-/// `float` の定数のビット列。`f64` は `Eq` と `Hash` を持たず、`0.0 == -0.0` で NaN が自分と等しくないので、定数は
-/// ビット列で比べる。定数の表で `0.0` と `-0.0` をまとめないためである (docs/spec/lir.md の「値の表現」)。
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct FloatBits(pub u64);
-
-impl FloatBits {
-    pub fn new(value: f64) -> FloatBits {
-        FloatBits(value.to_bits())
-    }
-
-    pub fn value(self) -> f64 {
-        f64::from_bits(self.0)
-    }
-}
-
-/// IR のテキストの形。Rust の `{:?}` の形 (`1.5`、`1e16`、`-0.0`、`inf`、`NaN`) で、`parse` が読み戻す
-/// (docs/implementation/testing.md の「LIR のテキストの形」)。
-impl std::fmt::Display for FloatBits {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{:?}", self.value())
-    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

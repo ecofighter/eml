@@ -1092,6 +1092,13 @@ impl Args {
         }
     }
 
+    fn float(arg: &Arg) -> f64 {
+        match arg {
+            Arg::Float(bits) => f64::from_bits(*bits),
+            _ => panic!("not a float argument: {arg:?}"),
+        }
+    }
+
     /// 文字列の引数の参照を1つ作る。定数は VM の `const` と同じく不死の物体にする
     unsafe fn string<M: Mode>(&mut self, ctx: &mut crate::Ctx<M>, arg: &Arg, root: &Path) -> Word {
         unsafe {
@@ -1157,6 +1164,10 @@ unsafe fn call<M: Mode>(
         Ok(Outcome::Int(f(int(0), int(1))?))
     };
     let compare = |f: fn(i64, i64) -> i64| tag_bool(f(int(0), int(1)));
+    let float = |i: usize| Args::float(&inputs[i]);
+    let float_arith =
+        |f: fn(f64, f64) -> f64| Outcome::Float(format!("{:?}", f(float(0), float(1))));
+    let float_test = |f: fn(f64, f64) -> i64| tag_bool(f(float(0), float(1)));
     unsafe {
         let one = |ctx: &mut crate::Ctx<M>, args: &mut Args| args.string(ctx, &inputs[0], root);
         let two = |ctx: &mut crate::Ctx<M>, args: &mut Args| {
@@ -1177,6 +1188,19 @@ unsafe fn call<M: Mode>(
             "Prelude.Ord Int.>" => compare(int_gt),
             "Prelude.Ord Int.>=" => compare(int_ge),
             "Prelude.Ord Int.compare" => tag_order(int_compare(int(0), int(1))),
+            "Prelude.Num Float.+" => float_arith(float_add),
+            "Prelude.Num Float.-" => float_arith(float_sub),
+            "Prelude.Num Float.*" => float_arith(float_mul),
+            "Prelude.Div Float./" => float_arith(float_div),
+            "Prelude.Div Float.%" => float_arith(float_rem),
+            "Prelude.Num Float.negate" => Outcome::Float(format!("{:?}", float_negate(float(0)))),
+            "Prelude.Eq Float.==" => float_test(float_eq),
+            "Prelude.Eq Float.!=" => float_test(float_ne),
+            "Prelude.Ord Float.<" => float_test(float_lt),
+            "Prelude.Ord Float.<=" => float_test(float_le),
+            "Prelude.Ord Float.>" => float_test(float_gt),
+            "Prelude.Ord Float.>=" => float_test(float_ge),
+            "Prelude.Ord Float.compare" => tag_order(float_compare(float(0), float(1))),
             "Prelude.Eq Bool.==" => compare(bool_eq),
             "Prelude.Eq Bool.!=" => compare(bool_ne),
             "Prelude.Show Int.show" => {

@@ -1,7 +1,7 @@
 use std::collections::{BTreeSet, HashMap, HashSet};
 
 use eml_diagnostics::{TextRange, TextSize};
-use eml_extern::{Extern, ExternEffect, ExternType};
+use eml_extern::{Extern, ExternEffect, ExternType, FloatBits};
 use la_arena::{Arena, ArenaMap, Idx};
 
 use crate::item_tree::Fixity;
@@ -823,6 +823,8 @@ pub enum ClauseSource {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Literal {
     Int(i64),
+    /// 値をビット列で持ち、`Eq` を導出できるようにする。`0.0` と `-0.0` は別のリテラルである。
+    Float(FloatBits),
     String(String),
     Unit,
 }

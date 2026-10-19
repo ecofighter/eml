@@ -554,6 +554,7 @@ impl FnLowering<'_> {
                 unreachable!("a program without errors has no missing expressions")
             }
             ExprKind::Literal(Literal::Int(n)) => Atom::Int(*n),
+            ExprKind::Literal(Literal::Float(x)) => Atom::Float(*x),
             ExprKind::Literal(Literal::Unit) => Atom::Unit,
             ExprKind::Literal(Literal::String(text)) => {
                 let index = self.program.strings.intern(text);

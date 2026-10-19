@@ -6,6 +6,8 @@ use std::path::{Path, PathBuf};
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Arg {
     Int(i64),
+    /// 浮動小数のビット列。表には Rust の `{:?}` で書き、読み戻すと同じビット列になる値だけを使う
+    Float(u64),
     Bool(bool),
     /// 定数の文字列
     Const(String),
@@ -22,6 +24,8 @@ pub enum Arg {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Outcome {
     Int(i64),
+    /// 浮動小数の結果の Rust の `{:?}`。NaN はどれも `NaN` と書くので、符号と中身がプラットフォームで違っても同じになる
+    Float(String),
     Bool(bool),
     Order(&'static str),
     Str(String),
@@ -121,6 +125,40 @@ pub const INT_BINARY: [&str; 12] = [
     "Prelude.Ord Int.>=",
 ];
 
+/// 浮動小数の端の値。±0、±1、小数、`MAX`、`MIN`、最小の正規化数と非正規化数、±無限大、NaN
+pub const FLOAT_EDGES: [f64; 14] = [
+    0.0,
+    -0.0,
+    1.0,
+    -1.0,
+    0.1,
+    1.5,
+    -7.5,
+    f64::MAX,
+    f64::MIN,
+    f64::MIN_POSITIVE,
+    5e-324,
+    f64::INFINITY,
+    f64::NEG_INFINITY,
+    f64::NAN,
+];
+
+/// 浮動小数を2つ取る行
+pub const FLOAT_BINARY: [&str; 12] = [
+    "Prelude.Num Float.+",
+    "Prelude.Num Float.-",
+    "Prelude.Num Float.*",
+    "Prelude.Div Float./",
+    "Prelude.Div Float.%",
+    "Prelude.Eq Float.==",
+    "Prelude.Eq Float.!=",
+    "Prelude.Ord Float.compare",
+    "Prelude.Ord Float.<",
+    "Prelude.Ord Float.<=",
+    "Prelude.Ord Float.>",
+    "Prelude.Ord Float.>=",
+];
+
 /// 文字列を2つ取る行
 pub const STRING_BINARY: [&str; 4] = [
     "Prelude.Eq String.==",
@@ -161,6 +199,19 @@ impl Rng {
 fn random_ints(n: usize) -> Vec<i64> {
     let mut rng = Rng::new();
     (0..n).map(|_| rng.int()).collect()
+}
+
+/// ビット列が一様な浮動小数。NaN は表に書くと中身が変わるので除く
+fn random_floats(n: usize) -> Vec<f64> {
+    let mut rng = Rng::new();
+    let mut floats = Vec::new();
+    while floats.len() < n {
+        let x = f64::from_bits(rng.next());
+        if !x.is_nan() {
+            floats.push(x);
+        }
+    }
+    floats
 }
 
 fn random_strings() -> Vec<String> {
@@ -208,6 +259,7 @@ fn parse_arg(text: &str) -> Result<Arg, String> {
         .ok_or_else(|| format!("an argument without a kind: {text}"))?;
     Ok(match kind {
         "i" => Arg::Int(parse_int(value)?),
+        "x" => Arg::Float(parse_float(value)?.to_bits()),
         "b" => Arg::Bool(parse_bool(value)?),
         "s" => Arg::Const(quoted(value)?),
         "u" => Arg::Unique(quoted(value)?),
@@ -224,6 +276,7 @@ fn parse_outcome(text: &str) -> Result<Outcome, String> {
         .ok_or_else(|| format!("a result without a kind: {text}"))?;
     Ok(match kind {
         "i" => Outcome::Int(parse_int(value)?),
+        "x" => Outcome::Float(format!("{:?}", parse_float(value)?)),
         "b" => Outcome::Bool(parse_bool(value)?),
         "o" => Outcome::Order(match value {
             "LT" => "LT",
@@ -251,6 +304,14 @@ fn parse_int(text: &str) -> Result<i64, String> {
     text.parse().map_err(|_| format!("not an integer: {text}"))
 }
 
+/// Rust の `{:?}` で書いた浮動小数。書き戻して同じ文字列になるものだけを受ける
+fn parse_float(text: &str) -> Result<f64, String> {
+    text.parse::<f64>()
+        .ok()
+        .filter(|x| format!("{x:?}") == text)
+        .ok_or_else(|| format!("not a float written by `{{:?}}`: {text}"))
+}
+
 fn parse_bool(text: &str) -> Result<bool, String> {
     match text {
         "True" => Ok(true),
@@ -271,6 +332,7 @@ pub fn line(case: &Case) -> String {
     let mut fields = vec![case.name.clone()];
     fields.extend(case.args.iter().map(|a| match a {
         Arg::Int(v) => format!("i:{v}"),
+        Arg::Float(bits) => format!("x:{:?}", f64::from_bits(*bits)),
         Arg::Bool(b) => format!("b:{}", bool_name(*b)),
         Arg::Const(s) => format!("s:{s:?}"),
         Arg::Unique(s) => format!("u:{s:?}"),
@@ -280,6 +342,7 @@ pub fn line(case: &Case) -> String {
     }));
     let outcome = match &digest(case.outcome.clone()) {
         Outcome::Int(v) => format!("i:{v}"),
+        Outcome::Float(x) => format!("x:{x}"),
         Outcome::Bool(b) => format!("b:{}", bool_name(*b)),
         Outcome::Order(o) => format!("o:{o}"),
         Outcome::Str(s) => format!("s:{s:?}"),
@@ -347,6 +410,21 @@ pub fn inputs() -> Vec<(String, Vec<Arg>)> {
         for a in EDGES.into_iter().chain(random_ints(RANDOM_INTS)) {
             push(name, vec![Arg::Int(a)]);
         }
+    }
+    let floats = random_floats(2 * RANDOM_INTS);
+    let float = |x: f64| Arg::Float(x.to_bits());
+    for name in FLOAT_BINARY {
+        for a in FLOAT_EDGES {
+            for b in FLOAT_EDGES {
+                push(name, vec![float(a), float(b)]);
+            }
+        }
+        for pair in floats.chunks(2) {
+            push(name, vec![float(pair[0]), float(pair[1])]);
+        }
+    }
+    for a in FLOAT_EDGES.into_iter().chain(random_floats(RANDOM_INTS)) {
+        push("Prelude.Num Float.negate", vec![float(a)]);
     }
     for name in ["Prelude.Eq Bool.==", "Prelude.Eq Bool.!="] {
         for a in [false, true] {

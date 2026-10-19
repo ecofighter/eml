@@ -836,8 +836,10 @@ pub(crate) fn effect_number(e: u32) -> u16 {
 
 /// 算術と比較の extern の専用の命令 (docs/spec/vm.md の「基本操作と extern」)。
 fn arithmetic(ext: Extern, dst: Slot, args: &[Slot]) -> Option<Op> {
-    if let (Extern::IntNeg, [a]) = (ext, args) {
-        return Some(Op::IntNeg { dst, a: *a });
+    match (ext, args) {
+        (Extern::IntNeg, [a]) => return Some(Op::IntNeg { dst, a: *a }),
+        (Extern::FloatNeg, [a]) => return Some(Op::FloatNeg { dst, a: *a }),
+        _ => {}
     }
     let [a, b] = *args else { return None };
     Some(match ext {
@@ -853,6 +855,17 @@ fn arithmetic(ext: Extern, dst: Slot, args: &[Slot]) -> Option<Op> {
         Extern::IntGt => Op::IntGt { dst, a, b },
         Extern::IntGe => Op::IntGe { dst, a, b },
         Extern::IntCompare => Op::IntCompare { dst, a, b },
+        Extern::FloatAdd => Op::FloatAdd { dst, a, b },
+        Extern::FloatSub => Op::FloatSub { dst, a, b },
+        Extern::FloatMul => Op::FloatMul { dst, a, b },
+        Extern::FloatDiv => Op::FloatDiv { dst, a, b },
+        Extern::FloatMod => Op::FloatRem { dst, a, b },
+        Extern::FloatEq => Op::FloatEq { dst, a, b },
+        Extern::FloatNe => Op::FloatNe { dst, a, b },
+        Extern::FloatLt => Op::FloatLt { dst, a, b },
+        Extern::FloatLe => Op::FloatLe { dst, a, b },
+        Extern::FloatGt => Op::FloatGt { dst, a, b },
+        Extern::FloatGe => Op::FloatGe { dst, a, b },
         Extern::BoolEq => Op::BoolEq { dst, a, b },
         Extern::BoolNe => Op::BoolNe { dst, a, b },
         Extern::Println
@@ -862,6 +875,8 @@ fn arithmetic(ext: Extern, dst: Slot, args: &[Slot]) -> Option<Op> {
         | Extern::Close
         | Extern::IntShow
         | Extern::IntNeg
+        | Extern::FloatNeg
+        | Extern::FloatCompare
         | Extern::StrConcat
         | Extern::StrEq
         | Extern::StrNe

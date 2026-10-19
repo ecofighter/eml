@@ -1,6 +1,7 @@
 use std::collections::HashSet;
 
 use eml_diagnostics::{Diagnostic, FileId, Label, TextRange};
+use eml_extern::FloatBits;
 use eml_syntax::{SyntaxKind, SyntaxToken, ast};
 use la_arena::{Arena, ArenaMap};
 
@@ -302,6 +303,7 @@ impl<'a> BodyLowering<'a> {
                 let kind = literal.value().map_or(ExprKind::Missing, |value| {
                     ExprKind::Literal(match value {
                         ast::LiteralValue::Int(n) => Literal::Int(n),
+                        ast::LiteralValue::Float(x) => Literal::Float(FloatBits::new(x)),
                         ast::LiteralValue::String(s) => Literal::String(s),
                     })
                 });
@@ -737,6 +739,7 @@ impl<'a> BodyLowering<'a> {
             ast::Pat::InfixConPat(infix) => return self.lower_infix_pat(infix, range),
             ast::Pat::LiteralPat(literal) => match literal.value() {
                 Some(ast::LiteralValue::Int(n)) => PatKind::Literal(Literal::Int(n)),
+                Some(ast::LiteralValue::Float(_)) => self.float_pattern(range),
                 Some(ast::LiteralValue::String(s)) => PatKind::Literal(Literal::String(s)),
                 None => match literal.token().and_then(|token| {
                     Some((token.text_range(), unsupported_literal(token.kind())?))
@@ -1060,6 +1063,17 @@ impl<'a> BodyLowering<'a> {
         PatKind::Missing
     }
 
+    /// 浮動小数のリテラルのパターン (E1052)。`==` で比べるよう案内する。`0.0` と `-0.0`、NaN のように、`==` と
+    /// ビット列の一致が食い違う値があるので、パターンには書かせない (docs/spec/exhaustiveness.md)。
+    fn float_pattern(&mut self, range: TextRange) -> PatKind {
+        self.diagnostics.push(Diagnostic::error(
+            codes::FLOAT_PATTERN,
+            "floating-point literals cannot be patterns; compare with `==` instead",
+            Label::new(self.file, range, "a floating-point literal"),
+        ));
+        PatKind::Missing
+    }
+
     pub(super) fn alloc(&mut self, kind: ExprKind, range: TextRange) -> ExprId {
         self.exprs.alloc(Expr { kind, range })
     }
@@ -1073,11 +1087,10 @@ fn arguments(n: usize) -> String {
     }
 }
 
-/// S14 (浮動小数) と `Char` の項目 (文字) で実装するリテラル。
+/// `Char` の項目 (文字) で実装するリテラル。
 /// パーサは CST を組み、HIR が E0004 を出す (docs/implementation/status.md の「未対応の構文と E0004」)。
 fn unsupported_literal(kind: SyntaxKind) -> Option<&'static str> {
     Some(match kind {
-        SyntaxKind::FLOAT => "floating-point literals are not supported yet",
         SyntaxKind::CHAR => "character literals are not supported yet",
         _ => return None,
     })

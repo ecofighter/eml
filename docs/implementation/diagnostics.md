@@ -29,6 +29,7 @@ E0xxx は `eml_syntax::codes` (E0004 だけは `eml_diagnostics`)、E1xxx は `e
 | E1020 | `EQUATION_ARITY_MISMATCH` | 等式ごとに引数の個数が違う。個数の違う等式の関数名を primary、最初の等式の関数名を secondary にする |
 | E1021 | `DUPLICATE_FIXITY` | 同じ演算子への2回目の fixity の宣言。1つの宣言に同じ演算子を2回並べた場合を含む。2回目の宣言の演算子を primary、1回目を secondary にする |
 | E1051 | `CLAUSE_KEYWORD` | 3つの場合がある。(1) キーワードのない操作の節: 見出しは「this clause needs `fn` or `ctl`」で、`\|` から操作の名前までを指してラベルを「this clause」にする。note「a `fn` clause resumes with the value of its body, and a `ctl` clause resumes only by calling `k`」と、操作の名前の前に `ctl ` を足す fix「write `ctl`」を付ける。節は `ctl` の節として下ろす。(2) `never` の操作の `fn` の節: 見出しは「a `never` operation cannot have a `fn` clause」で、`fn` を指してラベルを「`fail` is a `never` operation」にする。note「a `never` operation never resumes, so its clause must be `ctl`」と help「write `ctl` instead of `fn`」を付け、節は `ctl` の節として下ろす。(3) `return` の節のキーワード: 見出しは「a `return` clause takes neither `fn` nor `ctl`」で、キーワードを指してラベルを「remove this `fn`」(または `ctl`) にする |
+| E1052 | `FLOAT_PATTERN` | 見出しは「floating-point literals cannot be patterns; compare with `==` instead」で、負号を含むリテラルのパターン全体を指してラベルを「a floating-point literal」にする。パターンは欠けたパターンとして下ろす |
 | E1022 | `FIXITY_WITHOUT_DEFINITION` | このモジュールで定義していない演算子への fixity の宣言。標準ライブラリの演算子の fixity を変えようとした場合を含む。宣言の演算子を指す |
 | E1023 | `INVALID_SECTION` | 優先順位の合わないセクション (`(* a + b)` や `(+ a + b)`)。セクション全体を指し、被演算子を括弧で囲むよう help で伝える |
 | E1024 | `USE_AT_END_OF_BLOCK` | ブロックの最後の文が `use` である (包む残りがない)。`use` の文を指す |

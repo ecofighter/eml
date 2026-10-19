@@ -138,6 +138,65 @@ pub enum Op {
         a: Slot,
         b: Slot,
     },
+    FloatAdd {
+        dst: Slot,
+        a: Slot,
+        b: Slot,
+    },
+    FloatSub {
+        dst: Slot,
+        a: Slot,
+        b: Slot,
+    },
+    FloatMul {
+        dst: Slot,
+        a: Slot,
+        b: Slot,
+    },
+    FloatDiv {
+        dst: Slot,
+        a: Slot,
+        b: Slot,
+    },
+    FloatRem {
+        dst: Slot,
+        a: Slot,
+        b: Slot,
+    },
+    FloatNeg {
+        dst: Slot,
+        a: Slot,
+    },
+    FloatEq {
+        dst: Slot,
+        a: Slot,
+        b: Slot,
+    },
+    FloatNe {
+        dst: Slot,
+        a: Slot,
+        b: Slot,
+    },
+    FloatLt {
+        dst: Slot,
+        a: Slot,
+        b: Slot,
+    },
+    FloatLe {
+        dst: Slot,
+        a: Slot,
+        b: Slot,
+    },
+    FloatGt {
+        dst: Slot,
+        a: Slot,
+        b: Slot,
+    },
+    FloatGe {
+        dst: Slot,
+        a: Slot,
+        b: Slot,
+    },
     BoolEq {
         dst: Slot,
         a: Slot,

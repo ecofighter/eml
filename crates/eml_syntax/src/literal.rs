@@ -47,6 +47,12 @@ pub(crate) fn int_value(text: &str) -> Option<i64> {
     i64::from_str_radix(body, radix).ok()
 }
 
+/// `FLOAT` トークンの値。`_` を除いて Rust の `f64` の読み取りに渡し、最も近い値に丸める。大きすぎる値は無限大になる
+/// (docs/spec/lexical.md の「数値と文字」)。
+pub(crate) fn float_value(text: &str) -> Option<f64> {
+    text.replace('_', "").parse().ok()
+}
+
 /// `ESCAPE` のトークンの本文 (`\n`、`\u{41}` など) が表す文字。不正なものと、行末の `\` は `None` で、どれも
 /// lexer が報告済みか、文字列が閉じていない。
 pub(crate) fn escape_value(text: &str) -> Option<char> {

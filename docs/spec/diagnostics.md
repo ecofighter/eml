@@ -53,7 +53,7 @@ struct Fix {
 | E0001 | `UNEXPECTED_CHARACTER` | eml のソースとして認識できない文字 |
 | E0002 | `UNTERMINATED_STRING` | 閉じていない文字列リテラル (複数行の文字列、raw 文字列、コマンドリテラルを含む) と、閉じていない補間の穴 ([字句](lexical.md) の「改行での回復」) |
 | E0003 | `EXPECTED_ITEM` | トップレベルで項目の始まりでないトークン |
-| E0004 | `NOT_YET_SUPPORTED` | 後の段階で実装する構文 (浮動小数と文字のリテラル、コマンドリテラル、型の別名 `type`、Kind の宣言 `: Unr`、row の型引数を持つ型の instance と `deriving`) |
+| E0004 | `NOT_YET_SUPPORTED` | 後の段階で実装する構文 (文字のリテラル、コマンドリテラル、型の別名 `type`、Kind の宣言 `: Unr`、row の型引数を持つ型の instance と `deriving`) |
 | E0005 | `UNTERMINATED_BLOCK_COMMENT` | 閉じていないブロックコメント |
 | E0006 | `TAB_INDENTATION` | インデントにタブを使った |
 | E0007 | `INVALID_NUMBER` | 不正な数値リテラル |
@@ -116,6 +116,7 @@ struct Fix {
 | E1049 | `UNKNOWN_KIND` | `data T : K` の `K` が Kind の名前でない (`Lin` でも `Unr` でもない) ([型と Kind](types.md) の「`Lin` の宣言」) |
 | E1050 | `ONCE_DECLARATION` | トップレベルの関数と値、extern の関数、クラスのメソッド、操作のシグネチャの一番外側の矢印に `once` を書いた ([型と Kind](types.md) の「1回だけ呼べる関数の型」) |
 | E1051 | `CLAUSE_KEYWORD` | 操作の節に `fn` も `ctl` も書いていない (`ctl ` を足す fix を付ける)、`never` の操作の節に `fn` を書いた、`return` の節に `fn` か `ctl` を書いた ([式](expressions.md) の「handler」) |
+| E1052 | `FLOAT_PATTERN` | パターンに浮動小数のリテラル (`1.5`、`-2.5`) を書いた。比べるときは `==` を使う ([網羅性](exhaustiveness.md)) |
 | E2001 | `TYPE_MISMATCH` | 型の不一致。呼び出しの row のエフェクトの型引数が今の row と一致しない場合を含む |
 | E2002 | `EFFECT_NOT_IN_ROW` | シグネチャの row に含まれないエフェクトを起こした。ラムダの本体の場合を含む |
 | E2003 | `MISSING_MAIN` | 入口のモジュールに `main` がない。import した `main` は数えない。`eml run` のときだけ出す |
@@ -152,7 +153,7 @@ E2008 は欠番である。もとは `MASK_CONFLICT` (呼び出し先が自分�
 
 E2006 は、もとは `NOT_COMPARABLE` (`==` か `!=` で、`Int`、`String`、`Bool` のどれでもない型の値を比べた) だった。型クラスを入れたときに、E2007 のように欠番にせず、名前と意味を改めて使い続けることにした。新しい意味 (instance がない) は、もとの意味を含む一般化だからである。`==` の位置に出る場合も、演算子でなくクラスの言葉で言う。
 
-E0004 (`NOT_YET_SUPPORTED`) は、まだ実装していない構文に使う。コマンドリテラルの段で入れる構文、字句として予約した浮動小数と文字のリテラル (S14 と `Char` の項目)、型の別名の `type` の宣言、Kind の宣言の `: Unr`、row の型引数を持つ型の instance と `deriving` である。どの段階でも「後で実装する」という同じ意味なので、番号を分けない。HIR 以降の段階は、対応していない構文を、診断を出さずに無視することはしない。見つけた段階で E0004 を出して回復する。
+E0004 (`NOT_YET_SUPPORTED`) は、まだ実装していない構文に使う。コマンドリテラルの段で入れる構文、字句として予約した文字のリテラル (`Char` の項目)、型の別名の `type` の宣言、Kind の宣言の `: Unr`、row の型引数を持つ型の instance と `deriving` である。どの段階でも「後で実装する」という同じ意味なので、番号を分けない。HIR 以降の段階は、対応していない構文を、診断を出さずに無視することはしない。見つけた段階で E0004 を出して回復する。
 
 ## 他の言語の書き方へのヒント
 

@@ -424,6 +424,135 @@ pub fn bool_ne(a: i64, b: i64) -> (r: i64)
     }
 }
 
+// `Float` の算術と `compare`。Verus は `f64` の算術に前提を満たせない仕様しか持たず、`%` と `total_cmp` には仕様が
+// ないので、本体を確かめずに信頼する (docs/spec/object-model.md の「`unsafe` の核」の T12)。値は IEEE 754 の倍精度の
+// とおりで、どれも誤りを返さない。結果は期待値の表で確かめる
+#[verifier::external_body]
+#[inline]
+pub fn float_add(a: f64, b: f64) -> f64 {
+    a + b
+}
+
+#[verifier::external_body]
+#[inline]
+pub fn float_sub(a: f64, b: f64) -> f64 {
+    a - b
+}
+
+#[verifier::external_body]
+#[inline]
+pub fn float_mul(a: f64, b: f64) -> f64 {
+    a * b
+}
+
+#[verifier::external_body]
+#[inline]
+pub fn float_div(a: f64, b: f64) -> f64 {
+    a / b
+}
+
+/// C の `fmod` と同じく、結果は割られる数の符号を持つ (Rust の `%`)。
+#[verifier::external_body]
+#[inline]
+pub fn float_rem(a: f64, b: f64) -> f64 {
+    a % b
+}
+
+#[verifier::external_body]
+#[inline]
+pub fn float_negate(a: f64) -> f64 {
+    -a
+}
+
+/// 全順序 (`f64::total_cmp`)。`-0.0` は `0.0` より小さく、正の NaN はどの値より大きい
+/// (docs/spec/declarations.md の「Prelude のクラス」)。
+#[verifier::external_body]
+#[inline]
+pub fn float_compare(a: f64, b: f64) -> (r: i64)
+    ensures
+        r == LT || r == EQ || r == GT,
+{
+    match a.total_cmp(&b) {
+        std::cmp::Ordering::Less => LT,
+        std::cmp::Ordering::Equal => EQ,
+        std::cmp::Ordering::Greater => GT,
+    }
+}
+
+// 比較の演算子は IEEE 754 のとおりで、NaN が絡むと `!=` のほかは偽である。vstd が比較の仕様を持つので、
+// `verus!` の中で確かめる。値は約束せず、結果が `Bool` のタグであることだけを約束する
+#[inline]
+pub fn float_eq(a: f64, b: f64) -> (r: i64)
+    ensures
+        r == FALSE || r == TRUE,
+{
+    if a == b {
+        TRUE
+    } else {
+        FALSE
+    }
+}
+
+#[inline]
+pub fn float_ne(a: f64, b: f64) -> (r: i64)
+    ensures
+        r == FALSE || r == TRUE,
+{
+    if a != b {
+        TRUE
+    } else {
+        FALSE
+    }
+}
+
+#[inline]
+pub fn float_lt(a: f64, b: f64) -> (r: i64)
+    ensures
+        r == FALSE || r == TRUE,
+{
+    if a < b {
+        TRUE
+    } else {
+        FALSE
+    }
+}
+
+#[inline]
+pub fn float_le(a: f64, b: f64) -> (r: i64)
+    ensures
+        r == FALSE || r == TRUE,
+{
+    if a <= b {
+        TRUE
+    } else {
+        FALSE
+    }
+}
+
+#[inline]
+pub fn float_gt(a: f64, b: f64) -> (r: i64)
+    ensures
+        r == FALSE || r == TRUE,
+{
+    if a > b {
+        TRUE
+    } else {
+        FALSE
+    }
+}
+
+#[inline]
+pub fn float_ge(a: f64, b: f64) -> (r: i64)
+    ensures
+        r == FALSE || r == TRUE,
+{
+    if a >= b {
+        TRUE
+    } else {
+        FALSE
+    }
+}
+
 } // verus!
 // 文言は docs/spec/lir.md の「実行時エラー」の一覧と1文字も違わないようにする
 impl fmt::Display for ArithFault {

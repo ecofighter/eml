@@ -1,0 +1,23 @@
+---
+source: crates/eml_cli/tests/ui.rs
+expression: "format!(\"--- stdout ---\\n{stdout}--- stderr ---\\n{diagnostics}{stderr}{written}{exit}\")"
+input_file: tests/ui/run/float/comparison.em
+---
+--- stdout ---
+False
+True
+False
+False
+False
+True
+False
+True
+LT
+LT
+EQ
+LT
+GT
+True
+False
+False
+--- stderr ---

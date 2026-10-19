@@ -945,6 +945,7 @@ impl FnLowering<'_> {
             Literal::Int(n) => CasePattern::Int(*n),
             Literal::String(text) => CasePattern::String(self.program.strings.intern(text)),
             Literal::Unit => unreachable!("`()` is a wildcard pattern, not a literal pattern"),
+            Literal::Float(_) => unreachable!("HIR reports a floating-point literal pattern"),
         }
     }
 }

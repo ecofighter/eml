@@ -4,12 +4,12 @@ pub(super) fn at_apat_start(p: &Parser) -> bool {
     at_apat_start_at(p, 0)
 }
 
-/// `-` は、整数が続くときだけ負の数のリテラルとして apat を始める。
+/// `-` は、数が続くときだけ負の数のリテラルとして apat を始める。浮動小数のリテラルのパターンは HIR が E1052 にする。
 pub(super) fn at_apat_start_at(p: &Parser, n: usize) -> bool {
     match p.nth(n) {
-        UNDERSCORE | LIDENT | UIDENT | INT | STRING_START | RAW_STRING | CHAR => true,
+        UNDERSCORE | LIDENT | UIDENT | INT | FLOAT | STRING_START | RAW_STRING | CHAR => true,
         kind if kind.is_opening_bracket() => true,
-        MINUS => p.nth(n + 1) == INT,
+        MINUS => matches!(p.nth(n + 1), INT | FLOAT),
         _ => false,
     }
 }
@@ -17,8 +17,8 @@ pub(super) fn at_apat_start_at(p: &Parser, n: usize) -> bool {
 /// 項目の種類を決める先読みに使うので、括弧は対応する閉じ括弧までを数える。
 pub(super) fn apat_len(p: &Parser) -> Option<usize> {
     match p.current() {
-        UNDERSCORE | LIDENT | INT | RAW_STRING | CHAR => Some(1),
-        MINUS if p.nth(1) == INT => Some(2),
+        UNDERSCORE | LIDENT | INT | FLOAT | RAW_STRING | CHAR => Some(1),
+        MINUS if matches!(p.nth(1), INT | FLOAT) => Some(2),
         UIDENT => {
             let mut n = 1;
             while p.nth(n) == DOT && p.nth(n + 1) == UIDENT {
@@ -166,7 +166,7 @@ pub(super) fn apat(p: &mut Parser) -> bool {
                 CON_PAT
             }
         }
-        INT | RAW_STRING | CHAR => {
+        INT | FLOAT | RAW_STRING | CHAR => {
             p.bump_any();
             LITERAL_PAT
         }
@@ -176,9 +176,9 @@ pub(super) fn apat(p: &mut Parser) -> bool {
             string.complete(p, STRING_LIT);
             LITERAL_PAT
         }
-        MINUS if p.nth(1) == INT => {
+        MINUS if matches!(p.nth(1), INT | FLOAT) => {
             p.bump(MINUS);
-            p.bump(INT);
+            p.bump_any();
             LITERAL_PAT
         }
         L_PAREN => paren_pat(p),

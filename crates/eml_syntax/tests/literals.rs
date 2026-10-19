@@ -83,9 +83,29 @@ fn strings_reported_by_the_lexer_have_no_value() {
 
 #[test]
 fn unsupported_literals_have_no_value() {
-    // 浮動小数と文字は値を持たない。E0004 は HIR が出す。
-    assert_eq!(value("1.5"), None);
+    // 文字は値を持たない。E0004 は HIR が出す。
     assert_eq!(value("'a'"), None);
+}
+
+#[test]
+fn float_literals_round_to_the_nearest_value() {
+    // `_` を除き、Rust の `f64` の読み取りと同じく最も近い値に丸める。大きすぎる値は無限大になる
+    // (docs/spec/lexical.md の「数値と文字」)
+    for (literal, expected) in [
+        ("1.5", 1.5),
+        ("1e9", 1e9),
+        ("2.5e-3", 2.5e-3),
+        ("1E+2", 100.0),
+        ("1_000.5", 1000.5),
+        ("0.1", 0.1),
+        ("1e400", f64::INFINITY),
+    ] {
+        assert_eq!(
+            value(literal),
+            Some(LiteralValue::Float(expected)),
+            "{literal}"
+        );
+    }
 }
 
 #[test]
