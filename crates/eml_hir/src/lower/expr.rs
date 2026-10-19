@@ -1077,7 +1077,7 @@ fn arguments(n: usize) -> String {
     }
 }
 
-/// `Float`、`Char`、`Num` の段 (浮動小数、文字) で実装するリテラル。
+/// S14 (浮動小数) と `Char` の項目 (文字) で実装するリテラル。
 /// パーサは CST を組み、HIR が E0004 を出す (docs/implementation/status.md の「未対応の構文と E0004」)。
 fn unsupported_literal(kind: SyntaxKind) -> Option<&'static str> {
     Some(match kind {

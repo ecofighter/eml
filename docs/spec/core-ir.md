@@ -47,7 +47,7 @@
   | 引数のないコンストラクタとフィールドを持つコンストラクタが混ざる data | `tobj` |
   | 関数 (関数の値 `&f` は即値)、型変数 | `tobj` |
 
-- 多相な位置 (総称的なフィールド、`apply` の結果) の束縛も、具体化した型から Repr を決める。値を受ける位置の Repr は [LIR](lir.md) の「位置の規則」が決め、変数の Repr と互換でなければ、box の挿入が変換を入れる。`Float` の Repr は、`Float` の型とリテラルと一緒に入れる ([ロードマップ](../future/roadmap.md) の「`Float`、`Char`、`Num`」)
+- 多相な位置 (総称的なフィールド、`apply` の結果) の束縛も、具体化した型から Repr を決める。値を受ける位置の Repr は [LIR](lir.md) の「位置の規則」が決め、変数の Repr と互換でなければ、box の挿入が変換を入れる。`Float` の Repr は、`Float` の型とリテラルと一緒に入れる ([ロードマップ](../future/roadmap.md) の「S14 数値計算の整備」)
 - 局所の変数とブロックの引数の Repr は、具体化した型の Repr である
 - translate が決める関数のシグネチャは、具体化した型の Repr である。トップレベルの関数は instance の代入をかけた宣言の型から (下の「変換の規則」)、`op$`、`con$`、`$externN` はスキームから、ラムダ、節、handle の本体は使う所の型から決める。`cont$` と `cont$state` はすべて `tobj` である。EP が作る関数のシグネチャは、下の「evidence passing」の各項目で決まる
 
@@ -493,6 +493,7 @@ translate の包む関数 (`op$`、`con$`、`cont$`、`cont$state`) は、名前
 
 本体が既知の関数になった `let x = handle E(init, body) { clauses } return ret` を、経路の関数の handler ごとの複製の呼び出しに替える。以下では、この handle を H と書く。`Iter.generate` と `Yield.fold` の handle の本体は、上の「複製」で既知になる。特殊化した handle は evidence を作らず、H 宛ての `perform` は yield しない。
 
+- 特殊化する handle は、std の印でなく Core IR の形で見分ける。将来の `Async` のスケジューラが、待っているタスクの `k` を返す形で書かれれば、同じ規則で特殊化できるようにするためである
 - 既知の閉包への特殊化と1回目の `yields` の付け直しの後に動き、そのあともう一度印を付け直してから、届かない関数を落とす。複製と継続の関数は、1回目の付け直しの後のコードから作る。そのコードは名前ごとに決まっているので、どの handle を特殊化するかも、複製のコードも、handle を含む関数と経路の関数のコードだけで決まる ([VM](vm.md) の「追記」)
 - 状態つきの handler は、`init` が `()` でない handler である。`from ()` の状態つきの handler は、状態のない handler と同じに扱う。状態の値が `()` なので、渡しても省いても同じである
 - そのため、`from ()` の handler の、`k` を値として使う節 (`Iter k`) は特殊化しない。translate はその節で `k` を `cont$state` で包むが、状態のない handler として扱うと包む関数が `cont$` でないので、下の条件の最後に当たる

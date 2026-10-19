@@ -170,7 +170,7 @@ pub extern exit : Int -> <IO> a
 - `read_text path` は、ファイル全体を文字列として読む。`open`、`read_all`、`close` で書いた関数である
 - `write_text path text` は、ファイルを作るか切り詰めて、`text` を書く
 - `read_line file` は、今の位置から1行を読み、行の終わり (`\n` か `\r\n`) を `String.trim_line_end` で除いて、同じ `File` と組にして返す。終わりなら `None` を返す。行の終わりのない最後の行も1行として返す。`Stdin.read_line` と同じである
-- `read_line` は、`File` を持ったまま1行ずつ読む生産者を書くための関数で、後のバイト列と `Array` の段でハンドルの API に置き換わりうる ([ロードマップ](../future/roadmap.md) の「バイト列と `Array`」)。std の中だけの extern `read_line_raw : File -> <IO> (File, String)` の上に書いてある。`read_line_raw` は行の終わりを含む1行を返し、終わりなら空の文字列を返す (上の「extern の境界」の番兵)。読み方は `read_all` と同じく `File` の `BufRead` から読み、64 KiB を超える行も、割り込みと確保量の上限を見ながら読む ([オブジェクトモデル](object-model.md) の「`File`」)
+- `read_line` は、`File` を持ったまま1行ずつ読む生産者を書くための関数で、後のバイト列とハンドルの項目でハンドルの API に置き換わりうる ([ロードマップ](../future/roadmap.md) の「バイト列とハンドル」)。std の中だけの extern `read_line_raw : File -> <IO> (File, String)` の上に書いてある。`read_line_raw` は行の終わりを含む1行を返し、終わりなら空の文字列を返す (上の「extern の境界」の番兵)。読み方は `read_all` と同じく `File` の `BufRead` から読み、64 KiB を超える行も、割り込みと確保量の上限を見ながら読む ([オブジェクトモデル](object-model.md) の「`File`」)
 - 読めないときと UTF-8 でない行の誤りは、文言も `try_io` での捕まえ方も `read_all` と同じである ([LIR](lir.md) の「実行時エラー」)。誤りのときは `read_all` と同じく、`File` をそこで閉じる
 
 ## `Proc`
@@ -297,7 +297,7 @@ pub data Iter <e> a = | Iter (once Unit -> <e> Option (a, Iter <e> a))
 
 `Iter` を使うときは、次の3つに注意する。
 
-- 速さ: 末尾再帰の生産者を `generate` で引く形は、S13e-2 の handler への特殊化 ([Core IR](core-ir.md) の「handler への特殊化」) で yield しなくなり、S13e-3 の融合 ([Core IR](core-ir.md) の「`con` の値の形についての特殊化」) で、`fold` で引く形と `map` を重ねた形は1要素ごとに何も確保しないループになった。`filter` を重ねた形では、残した要素ごとに4つの確保 (`Some`、組、`Iter`、閉包) が残る。末尾でない再帰の生産者 (木の走査など) は、今も1要素ごとに yield する ([ロードマップ](../future/roadmap.md) の「S13 実例による判断」)
+- 速さ: 末尾再帰の生産者を `generate` で引く形は、S13e-2 の handler への特殊化 ([Core IR](core-ir.md) の「handler への特殊化」) で yield しなくなり、S13e-3 の融合 ([Core IR](core-ir.md) の「`con` の値の形についての特殊化」) で、`fold` で引く形と `map` を重ねた形は1要素ごとに何も確保しないループになった。`filter` を重ねた形では、残した要素ごとに4つの確保 (`Some`、組、`Iter`、閉包) が残る。末尾でない再帰の生産者 (木の走査など) は、今も1要素ごとに yield する ([実装の現在地](../implementation/status.md) の「深さと性能」)
 - エフェクトの届く先: 生産者のエフェクトは、`Iter.generate` を呼んだ場所ではなく、`next` を呼んだ場所の handler に届く。そのため、`try_io` は `Iter.generate` ではなく、消費するループを包む (`try_io (fn () -> Iter.each f (Iter.generate producer))`)
 - `multi` の操作: `yield` は `once` の操作なので、`Yield.for_each` の要素ごとの関数の中で `multi` の操作を起こすと E3006 になる。`yield` の継続を持ったまま、`multi` の操作をまたぐためである ([エフェクトと handler](effects.md) の「継続の多重度と持ち越し規則」)。多回の再開ができるジェネレータを用意しないことの帰結である
 
