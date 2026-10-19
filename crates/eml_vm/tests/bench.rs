@@ -3,7 +3,7 @@
 
 use std::path::{Path, PathBuf};
 
-use eml_test_support::run_stats;
+use eml_test_support::{lir, lir_files, run_stats};
 use eml_vm::RunStats;
 
 /// テストを持つ基準のプログラム。`bench/` にプログラムを足したら、ここと下のテストの関数の両方に足す。
@@ -643,4 +643,59 @@ fn specialization_matches_hand_written_rc() {
             "{name} against {by_hand}: (rc_increments, rc_decrements)"
         );
     }
+}
+
+/// 巻き戻しの地点の総数。S14a が値に依存する実行時エラーを `Panic` に移すと、地点の数が動く。
+fn unwind_point_count(program: &eml_lir::Program) -> usize {
+    eml_lir::unwind::points_all(program)
+        .iter()
+        .filter_map(|points| points.as_ref().ok())
+        .map(Vec::len)
+        .sum()
+}
+
+#[test]
+fn unwind_points() {
+    let scripts = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/ui/run/scripts");
+    let mut lines = Vec::new();
+    for name in PROGRAMS {
+        let text = std::fs::read_to_string(bench_dir().join(format!("{name}.em"))).unwrap();
+        lines.push(format!("{name}: {}", unwind_point_count(&lir(&text))));
+    }
+    for name in ["wc", "grep", "logstat", "csv2jsonl", "deploy"] {
+        let text = std::fs::read_to_string(scripts.join(name).join("main.em")).unwrap();
+        lines.push(format!(
+            "scripts/{name}: {}",
+            unwind_point_count(&lir_files(&text, &[]))
+        ));
+    }
+    insta::assert_snapshot!(lines.join("\n"), @"
+    empty: 0
+    fib: 4
+    fold_state: 2
+    iter_generate: 2
+    iter_pipeline: 4
+    iter_pipeline_by_hand: 4
+    list: 6
+    loop: 2
+    orders: 5
+    orders_by_hand: 5
+    push_fold: 2
+    push_fold_by_hand: 2
+    rbtree: 8
+    records: 2
+    state: 2
+    std_list: 6
+    sum_loop: 2
+    tree: 10
+    tree_by_hand: 10
+    tree_map: 11
+    upsert: 19
+    upsert_by_hand: 19
+    scripts/wc: 37
+    scripts/grep: 29
+    scripts/logstat: 56
+    scripts/csv2jsonl: 44
+    scripts/deploy: 103
+    ");
 }
