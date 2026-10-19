@@ -84,7 +84,7 @@ fn an_apply_in_ir_text_boxes_its_argument_and_rebinds_its_result() {
     let text = "\
 fn f(c.0: tobj, n.1: int) -> int {
   let r.2: int = apply c.0(n.1)
-  let s.3: int = extern Prelude.+(r.2, 1)
+  let s.3: int = extern \"Prelude.Num Int.+\"(r.2, 1)
   return s.3
 }
 ";
@@ -93,7 +93,7 @@ fn f(c.0: tobj, n.1: int) -> int {
       let n.4: tobj = box n.1
       let r.5: tobj = apply c.0(n.4)
       let r.2: int = unbox r.5
-      let s.3: int = extern Prelude.+(r.2, 1)
+      let s.3: int = extern \"Prelude.Num Int.+\"(r.2, 1)
       return s.3
     }
     ");
@@ -324,7 +324,7 @@ fn main(h.0: obj lin) -> obj lin {
 /// (`extern`) で使う。`both` が真なら、`b3` も `int` の位置で使う。
 fn case_field_in_branches(both: bool) -> String {
     let b3 = if both {
-        "  let s.3: int = extern Prelude.+(y.2, 2)\n  let u.6: tobj = con Option #1(s.3)\n  return u.6\n"
+        "  let s.3: int = extern \"Prelude.Num Int.+\"(y.2, 2)\n  let u.6: tobj = con Option #1(s.3)\n  return u.6\n"
     } else {
         "  let u.6: tobj = con Option #1(y.2)\n  return u.6\n"
     };
@@ -340,7 +340,7 @@ b2:
   switch c.1 Prelude.Bool {{ #0 -> b3, #1 -> b4 }}
 b3:
 {b3}b4:
-  let t.4: int = extern Prelude.+(y.2, 1)
+  let t.4: int = extern \"Prelude.Num Int.+\"(y.2, 1)
   let v.5: tobj = con Option #1(t.4)
   return v.5
 }}
@@ -364,7 +364,7 @@ fn a_case_field_is_unboxed_in_the_one_branch_that_uses_it_as_a_scalar() {
       return u.6
     b4:
       let y.2: int = unbox y.7
-      let t.4: int = extern Prelude.+(y.2, 1)
+      let t.4: int = extern \"Prelude.Num Int.+\"(y.2, 1)
       let t.8: tobj = box t.4
       let v.5: tobj = con Option #1(t.8)
       return v.5
@@ -384,12 +384,12 @@ fn a_case_field_used_as_a_scalar_in_two_branches_is_unboxed_at_their_common_domi
       let y.2: int = unbox y.7
       switch c.1 Prelude.Bool { #0 -> b3, #1 -> b4 }
     b3:
-      let s.3: int = extern Prelude.+(y.2, 2)
+      let s.3: int = extern \"Prelude.Num Int.+\"(y.2, 2)
       let s.8: tobj = box s.3
       let u.6: tobj = con Option #1(s.8)
       return u.6
     b4:
-      let t.4: int = extern Prelude.+(y.2, 1)
+      let t.4: int = extern \"Prelude.Num Int.+\"(y.2, 1)
       let t.9: tobj = box t.4
       let v.5: tobj = con Option #1(t.9)
       return v.5
@@ -444,7 +444,7 @@ b5:
 b6:
   jump b7(2)
 b7(t.4: int):
-  let r.5: int = extern Prelude.+(t.4, {join})
+  let r.5: int = extern \"Prelude.Num Int.+\"(t.4, {join})
   return r.5
 }}
 "
@@ -473,7 +473,7 @@ fn a_case_field_used_after_a_join_is_unboxed_before_the_join() {
     b6:
       jump b7(2)
     b7(t.4: int):
-      let r.5: int = extern Prelude.+(t.4, y.3)
+      let r.5: int = extern \"Prelude.Num Int.+\"(t.4, y.3)
       return r.5
     }
     ");
@@ -500,7 +500,7 @@ fn a_case_field_passed_as_a_jump_argument_is_unboxed_in_the_jumping_block() {
     b6:
       jump b7(2)
     b7(t.4: int):
-      let r.5: int = extern Prelude.+(t.4, 1)
+      let r.5: int = extern \"Prelude.Num Int.+\"(t.4, 1)
       return r.5
     }
     ");

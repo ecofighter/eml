@@ -20,13 +20,13 @@ fn evidence_text(text: &str) -> String {
 
 #[test]
 fn a_function_that_does_not_yield_is_unchanged() {
-    let text = "fn g() -> int {\n  return 1\n}\nfn f() -> int {\n  let x.0: int = call g()\n  let y.1: int = extern \"Prelude.+\"(x.0, 1)\n  return y.1\n}\n";
+    let text = "fn g() -> int {\n  return 1\n}\nfn f() -> int {\n  let x.0: int = call g()\n  let y.1: int = extern \"Prelude.Num Int.+\"(x.0, 1)\n  return y.1\n}\n";
     assert_eq!(evidence_text(text), pretty(&parse(text).unwrap()));
 }
 
 #[test]
 fn a_yield_point_continues_in_a_continuation_function() {
-    let text = "yields fn g() -> int {\n  return 1\n}\nyields fn f(a.0: int) -> int {\n  let x.1: int = call g()\n  let y.2: int = extern \"Prelude.+\"(x.1, a.0)\n  return y.2\n}\n";
+    let text = "yields fn g() -> int {\n  return 1\n}\nyields fn f(a.0: int) -> int {\n  let x.1: int = call g()\n  let y.2: int = extern \"Prelude.Num Int.+\"(x.1, a.0)\n  return y.2\n}\n";
     let shown = evidence_text(text);
     insta::assert_snapshot!(function(&shown, "f"), @"
     yields fn f(a.0: int) -> int {
@@ -40,13 +40,13 @@ fn a_yield_point_continues_in_a_continuation_function() {
       let u.7: unit = prim yield_cont_set(k.6)
       return 0
     b2:
-      let y.2: int = extern Prelude.+(x.1, a.0)
+      let y.2: int = extern \"Prelude.Num Int.+\"(x.1, a.0)
       return y.2
     }
     ");
     insta::assert_snapshot!(function(&shown, "f$k0"), @"
     internal yields fn f$k0(a.0: int, x.1: int) -> int {
-      let y.2: int = extern Prelude.+(x.1, a.0)
+      let y.2: int = extern \"Prelude.Num Int.+\"(x.1, a.0)
       return y.2
     }
     ");
@@ -85,7 +85,7 @@ yields fn g(n.0: int) -> int {
 yields fn f(a.0: int) -> int {
   let x.1: int = call g(a.0)
   let y.2: int = call g(x.1)
-  let z.3: int = extern \"Prelude.+\"(y.2, a.0)
+  let z.3: int = extern \"Prelude.Num Int.+\"(y.2, a.0)
   return z.3
 }
 ";
@@ -112,7 +112,7 @@ yields fn f(a.0: int) -> int {
       let u.13: unit = prim yield_cont_set(k.12)
       return 0
     b4:
-      let z.3: int = extern Prelude.+(y.2, a.0)
+      let z.3: int = extern \"Prelude.Num Int.+\"(y.2, a.0)
       return z.3
     }
     ");
@@ -134,7 +134,7 @@ yields fn f(a.0: int) -> int {
     ");
     insta::assert_snapshot!(function(&shown, "f$k1"), @"
     internal yields fn f$k1(a.0: int, y.1: int) -> int {
-      let z.2: int = extern Prelude.+(y.1, a.0)
+      let z.2: int = extern \"Prelude.Num Int.+\"(y.1, a.0)
       return z.2
     }
     ");
@@ -160,7 +160,7 @@ b3:
   return a.1
 b4:
   let y.4: int = call g(v.3)
-  let z.5: int = extern \"Prelude.+\"(y.4, x.2)
+  let z.5: int = extern \"Prelude.Num Int.+\"(y.4, x.2)
   return z.5
 }
 ";
@@ -191,7 +191,7 @@ b4:
     ");
     insta::assert_snapshot!(function(&shown, "f$k1"), @"
     internal yields fn f$k1(x.0: int, y.1: int) -> int {
-      let z.2: int = extern Prelude.+(y.1, x.0)
+      let z.2: int = extern \"Prelude.Num Int.+\"(y.1, x.0)
       return z.2
     }
     ");
@@ -209,12 +209,12 @@ yields fn f(a.0: int) -> int {
   let x.1: int = call g()
   switch a.0 { 0 -> b1, _ -> b2 }
 b1:
-  let p.2: int = extern \"Prelude.+\"(x.1, 1)
+  let p.2: int = extern \"Prelude.Num Int.+\"(x.1, 1)
   jump b3(p.2)
 b2:
   jump b3(x.1)
 b3(v.3: int):
-  let w.4: int = extern \"Prelude.+\"(v.3, a.0)
+  let w.4: int = extern \"Prelude.Num Int.+\"(v.3, a.0)
   return w.4
 }
 ";
@@ -233,12 +233,12 @@ b3(v.3: int):
     b2:
       switch a.0 { 0 -> b3, _ -> b4 }
     b3:
-      let p.2: int = extern Prelude.+(x.1, 1)
+      let p.2: int = extern \"Prelude.Num Int.+\"(x.1, 1)
       jump b5(p.2)
     b4:
       jump b5(x.1)
     b5(v.3: int):
-      let w.4: int = extern Prelude.+(v.3, a.0)
+      let w.4: int = extern \"Prelude.Num Int.+\"(v.3, a.0)
       return w.4
     }
     ");
@@ -246,7 +246,7 @@ b3(v.3: int):
     internal yields fn f$k0(a.0: int, x.1: int) -> int {
       switch a.0 { 0 -> b1, _ -> b2 }
     b1:
-      let p.2: int = extern Prelude.+(x.1, 1)
+      let p.2: int = extern \"Prelude.Num Int.+\"(x.1, 1)
       let r.3: int = call f$j3(a.0, p.2)
       return r.3
     b2:
@@ -256,7 +256,7 @@ b3(v.3: int):
     ");
     insta::assert_snapshot!(function(&shown, "f$j3"), @"
     yields fn f$j3(a.0: int, v.1: int) -> int {
-      let w.2: int = extern Prelude.+(v.1, a.0)
+      let w.2: int = extern \"Prelude.Num Int.+\"(v.1, a.0)
       return w.2
     }
     ");
@@ -278,7 +278,7 @@ b2:
   jump b3(a.0)
 b3(v.2: int):
   let w.3: int = call g(v.2)
-  let z.4: int = extern \"Prelude.+\"(w.3, x.1)
+  let z.4: int = extern \"Prelude.Num Int.+\"(w.3, x.1)
   return z.4
 }
 ";
@@ -312,7 +312,7 @@ b3(v.2: int):
     ");
     insta::assert_snapshot!(function(&shown, "f$k1"), @"
     internal yields fn f$k1(x.0: int, w.1: int) -> int {
-      let z.2: int = extern Prelude.+(w.1, x.0)
+      let z.2: int = extern \"Prelude.Num Int.+\"(w.1, x.0)
       return z.2
     }
     ");
@@ -481,12 +481,12 @@ yields fn g() -> int {
 }
 yields fn f() -> int {
   let x.0: int = call g()
-  let y.1: int = extern \"Prelude.+\"(x.0, 1)
+  let y.1: int = extern \"Prelude.Num Int.+\"(x.0, 1)
   return y.1
 }
 yields fn h() -> int {
   let x.0: int = call g()
-  let y.1: int = extern \"Prelude.+\"(x.0, 2)
+  let y.1: int = extern \"Prelude.Num Int.+\"(x.0, 2)
   return y.1
 }
 ";
@@ -592,7 +592,7 @@ fn a_resume_becomes_an_apply() {
     insta::assert_snapshot!(function(&shown, "main$handle0$ask"), @"
     internal fn main$handle0$ask(p.0: unit, k.1: tobj lin, p.2: unit) -> int {
       let t.3: int = apply k.1(10, ())
-      let t.4: int = extern Prelude.*(t.3, 2)
+      let t.4: int = extern \"Prelude.Num Int.*\"(t.3, 2)
       return t.4
     }
     ");
@@ -656,7 +656,7 @@ fn a_perform_looks_up_evidence_and_calls_its_clause() {
       let u.8: unit = prim yield_cont_set(k.7)
       return 0
     b2:
-      let t.2: int = extern Prelude.+(t.1, 1)
+      let t.2: int = extern \"Prelude.Num Int.+\"(t.1, 1)
       return t.2
     }
     ");
@@ -794,7 +794,7 @@ fn a_resume_in_a_yielding_function_becomes_a_yielding_apply() {
       let u.8: unit = prim yield_cont_set(k.7)
       return 0
     b2:
-      let t.4: int = extern Prelude.*(t.3, 2)
+      let t.4: int = extern \"Prelude.Num Int.*\"(t.3, 2)
       return t.4
     }
     ");
@@ -812,7 +812,7 @@ fn a_pure_instance_of_a_row_polymorphic_function_has_no_yield_check() {
     fn twice(f.0: tobj) -> int {
       let t.1: int = apply f.0(())
       let t.2: int = apply f.0(())
-      let t.3: int = extern Prelude.+(t.1, t.2)
+      let t.3: int = extern \"Prelude.Num Int.+\"(t.1, t.2)
       return t.3
     }
     ");
@@ -838,7 +838,7 @@ fn a_pure_instance_of_a_row_polymorphic_function_has_no_yield_check() {
       let u.13: unit = prim yield_cont_set(k.12)
       return 0
     b4:
-      let t.3: int = extern Prelude.+(t.1, t.2)
+      let t.3: int = extern "Prelude.Num Int.+"(t.1, t.2)
       return t.3
     }
     "#);
@@ -975,7 +975,7 @@ fn an_io_extern_is_not_a_yield_point() {
       let u.10: unit = prim yield_cont_set(k.9)
       return 0
     b2:
-      let t.4: int = extern Prelude.+(t.3, 1)
+      let t.4: int = extern "Prelude.Num Int.+"(t.3, 1)
       return t.4
     }
     "#);
@@ -1007,7 +1007,7 @@ fn a_never_clause_call_is_not_a_yield_point() {
       let u.13: unit = prim yield_cont_set(k.12)
       return 0
     b2:
-      let t.4: int = extern Prelude.+(t.2, t.3)
+      let t.4: int = extern "Prelude.Num Int.+"(t.2, t.3)
       return t.4
     }
     "#);
@@ -1060,7 +1060,7 @@ fn a_masked_call_in_a_non_yielding_function_has_no_slow_path() {
       let u.5: unit = prim evv_set(w.4)
       let t.1: int = apply cb.0(())
       let u.6: unit = prim evv_set(w.3)
-      let t.2: int = extern Prelude.+(t.1, 1)
+      let t.2: int = extern \"Prelude.Num Int.+\"(t.1, 1)
       return t.2
     }
     ");

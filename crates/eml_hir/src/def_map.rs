@@ -5,7 +5,7 @@
 use std::collections::{HashMap, HashSet};
 
 use eml_diagnostics::{Diagnostic, ErrorCode, FileId, Label, TextRange};
-use eml_extern::{Extern, ExternEffect, ExternType};
+use eml_extern::{ExternEffect, ExternType};
 use la_arena::{Idx, RawIdx};
 
 use crate::codes;
@@ -977,6 +977,7 @@ fn lang_items(prelude: &ModuleScope) -> LangItems {
         cons: constructor("::"),
         display: method("display"),
         show_method: method("show"),
+        negate: method("negate"),
     }
 }
 
@@ -1037,26 +1038,7 @@ fn extern_index(scopes: &[ModuleScope]) -> ExternIndex {
     };
     let io = effect(ExternEffect::Io);
     let panic = effect(ExternEffect::Panic);
-    let canonical = Extern::IntNeg.row().name;
-    let negate = find(
-        scopes,
-        canonical,
-        |scope| &scope.values,
-        |item| match item {
-            ValueItem::Function(id) => Some(id),
-            ValueItem::Operation(_)
-            | ValueItem::Constructor(_)
-            | ValueItem::Method(_)
-            | ValueItem::Binding(_) => None,
-        },
-    )
-    .unwrap_or_else(|| panic!("the standard library does not declare the function `{canonical}`"));
-    ExternIndex {
-        types,
-        io,
-        panic,
-        negate,
-    }
+    ExternIndex { types, io, panic }
 }
 
 /// 名前の表から表示名の表を作る。HIR の診断は `lower` の途中で出るので、`Program` より先に作る。重複した宣言の部品も

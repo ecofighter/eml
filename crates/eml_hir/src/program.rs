@@ -422,11 +422,6 @@ impl Program {
         self.externs.panic
     }
 
-    /// 前置の `-` の脱糖が呼ぶ extern の関数。
-    pub fn negate(&self) -> FunctionId {
-        self.externs.negate
-    }
-
     pub fn file(&self, module: ModuleId) -> FileId {
         self.modules[module].file
     }

@@ -157,7 +157,7 @@ fn desugared_references_are_recorded_at_the_operator() {
     2:14 == [Int]
     2:19 False []
     ");
-    insta::assert_snapshot!(table(&checked, "Main", "negated"), @"5:13 negate []");
+    insta::assert_snapshot!(table(&checked, "Main", "negated"), @"5:13 negate [Int]");
     insta::assert_snapshot!(table(&checked, "Main", "section"), @"8:15 == [Int]");
 }
 

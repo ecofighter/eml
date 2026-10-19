@@ -90,12 +90,12 @@ fn signatures_and_equations_are_paired_by_name() {
 
 #[test]
 fn constructs_of_later_stages_are_not_yet_supported() {
-    let text = "f : Int -> Int\nf x =\n  let first = 1.5\n  let plus = (+)\n  let y = x in y";
+    let text = "f : Int -> Int\nf x =\n  let first = 1.5\n  let plus : Int -> Int -> <Panic> Int = (+)\n  let y = x in y";
     insta::assert_snapshot!(lower_text(text), @"
     f : Int -> Int
     f x#0 = {
       let first#1 = <missing>
-      let plus#4 = (fn $a#2 $b#3 -> (+ $a#2 $b#3))
+      let plus#4 : Int -> Int -> <Panic> Int = (fn $a#2 $b#3 -> (@Prelude.+ $a#2 $b#3))
       {
         let y#5 = x#0
         y#5
@@ -180,10 +180,10 @@ fn operator_definitions_and_qualified_names() {
 #[test]
 fn lambdas_bind_their_parameters_only_in_the_body() {
     let text = "f : Int -> Int\nf x =\n  let g = fn y (z : Int) _ -> x + y\n  y";
-    insta::assert_snapshot!(lower_text(text), @r"
+    insta::assert_snapshot!(lower_text(text), @"
     f : Int -> Int
     f x#0 = {
-      let g#3 = (fn y#1 (z#2 : Int) _ -> (+ x#0 y#1))
+      let g#3 = (fn y#1 (z#2 : Int) _ -> (@Prelude.+ x#0 y#1))
       <missing>
     }
     ---
@@ -194,20 +194,20 @@ fn lambdas_bind_their_parameters_only_in_the_body() {
 #[test]
 fn a_lambda_can_be_an_argument() {
     let text = "call : Int -> (Int -> Int) -> Int\ncall n f = f n\n\ng : Int -> Int\ng n = call n (fn x -> x + 1)";
-    insta::assert_snapshot!(lower_text(text), @r"
+    insta::assert_snapshot!(lower_text(text), @"
     call : Int -> (Int -> Int) -> Int
     call n#0 f#1 = (f#1 n#0)
     g : Int -> Int
-    g n#0 = (@call n#0 (fn x#1 -> (+ x#1 1)))
+    g n#0 = (@call n#0 (fn x#1 -> (@Prelude.+ x#1 1)))
     ");
 }
 
 #[test]
 fn several_equations_become_a_match_on_the_arguments() {
     let text = "f : Int -> Int -> Int\nf 0 y = y\nf x y = x + y";
-    insta::assert_snapshot!(lower_text(text), @r"
+    insta::assert_snapshot!(lower_text(text), @"
     f : Int -> Int -> Int
-    f $0#0 $1#1 = (match ($0#0, $1#1) with | (0, y#2) -> y#2 | (x#3, y#4) -> (+ x#3 y#4))
+    f $0#0 $1#1 = (match ($0#0, $1#1) with | (0, y#2) -> y#2 | (x#3, y#4) -> (@Prelude.+ x#3 y#4))
     ");
 }
 
@@ -247,7 +247,7 @@ fn equations_must_take_the_same_number_of_arguments() {
 #[test]
 fn use_passes_the_rest_of_the_block_as_the_last_argument() {
     let text = "wrap : Int -> (Unit -> Int) -> Int\nwrap n k = k ()\n\nbind : (Int -> Int) -> Int\nbind k = k 1\n\nf : Unit -> Int\nf () =\n  use wrap 1\n  use x <- bind\n  x + 2";
-    insta::assert_snapshot!(lower_text(text), @r"
+    insta::assert_snapshot!(lower_text(text), @"
     wrap : Int -> (Unit -> Int) -> Int
     wrap n#0 k#1 = (k#1 ())
     bind : (Int -> Int) -> Int
@@ -256,7 +256,7 @@ fn use_passes_the_rest_of_the_block_as_the_last_argument() {
     f () = {
       (@wrap 1 (fn () -> {
         (@bind (fn x#0 -> {
-          (+ x#0 2)
+          (@Prelude.+ x#0 2)
         }))
       }))
     }
@@ -275,11 +275,11 @@ fn use_at_the_end_of_a_block_has_nothing_to_wrap() {
 #[test]
 fn let_in_is_a_block_with_one_let() {
     let text = "f : Int -> Int\nf x = let y : Int = x + 1 in y * 2";
-    insta::assert_snapshot!(lower_text(text), @r"
+    insta::assert_snapshot!(lower_text(text), @"
     f : Int -> Int
     f x#0 = {
-      let y#1 : Int = (+ x#0 1)
-      (* y#1 2)
+      let y#1 : Int = (@Prelude.+ x#0 1)
+      (@Prelude.* y#1 2)
     }
     ");
 }
@@ -515,7 +515,7 @@ fn qualified_names_resolve_in_every_position() {
     assert_eq!(module_report(entry, &modules), "");
     let shown = lower_files_text(entry, &modules);
     assert!(
-        shown.contains("counter () = (+ (@State.State.get ()) 1)"),
+        shown.contains("counter () = (@Prelude.+ (@State.State.get ()) 1)"),
         "{shown}"
     );
     assert!(
@@ -561,10 +561,10 @@ fn names_missing_from_a_module_say_which_module() {
 
 #[test]
 fn the_prelude_qualifier_reaches_hidden_and_public_names_only() {
-    // `pub` でない Prelude の `negate` は、定義がないものとして E1001 にし、Prelude の中の位置を出さない
-    let entry = "not : Bool -> Bool\nnot b = b\n\nf : Bool -> Bool\nf b = Prelude.not b\n\ng : Int\ng = Prelude.negate 1";
+    // `pub` でない Prelude の `show_rest` は、定義がないものとして E1001 にし、Prelude の中の位置を出さない
+    let entry = "not : Bool -> Bool\nnot b = b\n\nf : Bool -> Bool\nf b = Prelude.not b\n\ng : String\ng = Prelude.show_rest \"\" [1]";
     insta::assert_snapshot!(module_report(entry, &[]), @r"
-    E1001 test.em 8:5 cannot find value `negate` in module `Prelude`
+    E1001 test.em 8:5 cannot find value `show_rest` in module `Prelude`
       test.em 8:5 not found in this module
     ");
     let shown = lower_files_text(entry, &[]);
@@ -601,7 +601,7 @@ fn merged_qualifiers_look_in_every_module() {
       test.em 2:1 one of the definitions is imported here
     ");
     let shown = lower_files_text(entry, &modules);
-    assert!(shown.contains("f = (+ @A.x @B.y)"), "{shown}");
+    assert!(shown.contains("f = (@Prelude.+ @A.x @B.y)"), "{shown}");
 }
 
 #[test]
@@ -834,7 +834,7 @@ fn a_local_function_sees_itself() {
     insta::assert_snapshot!(lower_text(text), @"
     f : Int -> Int
     f n#0 = {
-      let go#1 k#2 = (if (@Prelude.== k#2 0) 0 (go#1 (- k#2 1)))
+      let go#1 k#2 = (if (@Prelude.== k#2 0) 0 (go#1 (@Prelude.- k#2 1)))
       (go#1 n#0)
     }
     ");
@@ -846,7 +846,7 @@ fn a_parameter_hides_the_local_function() {
     insta::assert_snapshot!(lower_text(text), @"
     f : Int -> Int
     f n#0 = {
-      let go#1 go#2 = (+ go#2 1)
+      let go#1 go#2 = (@Prelude.+ go#2 1)
       (go#1 n#0)
     }
     ");
@@ -858,7 +858,7 @@ fn a_pattern_let_after_a_local_function_sees_the_function() {
     insta::assert_snapshot!(lower_text(text), @"
     f : Int -> Int
     f n#0 = {
-      let go#1 k#2 = (+ k#2 n#0)
+      let go#1 k#2 = (@Prelude.+ k#2 n#0)
       let go#3 = (go#1 1)
       go#3
     }
@@ -871,7 +871,7 @@ fn a_pattern_let_does_not_see_itself() {
     insta::assert_snapshot!(lower_text(text), @"
     f : Int -> Int
     f x#0 = {
-      let x#1 = (+ x#0 1)
+      let x#1 = (@Prelude.+ x#0 1)
       x#1
     }
     ");

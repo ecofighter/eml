@@ -195,7 +195,9 @@ fn every_extern_declaration_in_std_names_a_row() {
     for (e, name, _) in instance_externs(&program) {
         assert_eq!(e.row().name, name);
     }
-    assert_eq!(program[program.negate()].name, "negate");
+    let negate = &program[program.lang.negate];
+    assert_eq!(negate.name, "negate");
+    assert_eq!(program[negate.class].name, "Num");
 }
 
 #[test]

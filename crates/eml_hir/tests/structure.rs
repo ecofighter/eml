@@ -126,7 +126,7 @@ fn a_lambda_captures_what_its_nested_lambdas_capture() {
 #[test]
 fn prelude_extern_signatures_are_extern_functions() {
     let module = module("f : Int\nf = 1");
-    for name in ["negate", "+"] {
+    for name in ["println", "++"] {
         let function = function(&module, name);
         assert!(
             matches!(function.kind, FunctionKind::Extern(Some(_))),
@@ -145,7 +145,7 @@ fn prelude_extern_signatures_are_extern_functions() {
         assert!(module.body(function_id(&module, name)).is_some(), "{name}");
     }
     assert_eq!(function(&module, "f").kind, FunctionKind::Defined);
-    assert_eq!(module.arity(function_id(&module, "+")), Some(2));
+    assert_eq!(module.arity(function_id(&module, "++")), Some(2));
     assert_eq!(module.arity(function_id(&module, ">>")), Some(2));
 }
 
@@ -165,14 +165,14 @@ fn prelude_functions_with_equations_are_not_extern() {
     assert_eq!(program[twice].kind, FunctionKind::Defined);
     assert!(program.body(twice).is_some());
     assert_eq!(
-        program[function_id(&program, "negate")].kind,
-        FunctionKind::Extern(Some(eml_extern::Extern::IntNeg))
+        program[function_id(&program, "++")].kind,
+        FunctionKind::Extern(Some(eml_extern::Extern::StrConcat))
     );
 }
 
 #[test]
 fn internal_builtins_cannot_be_named() {
-    let lowered = eml_test_support::lower("f : Int -> Int\nf x = negate x");
+    let lowered = eml_test_support::lower("f : Int -> Int\nf x = panicked \"stop\"");
     let codes: Vec<String> = lowered
         .diagnostics
         .iter()
@@ -214,15 +214,15 @@ fn the_prelude_and_the_entry_are_separate_modules() {
     assert_eq!(lowered.files().path(prelude.file), eml_hir::PRELUDE_PATH);
     assert_eq!(entry.file, lowered.file());
     // Prelude の item は Prelude のモジュールに、ユーザーの関数は入口のモジュールにある
-    let (plus, _) = program.functions().find(|(_, f)| f.name == "+").unwrap();
+    let (concat, _) = program.functions().find(|(_, f)| f.name == "++").unwrap();
     let (f, _) = program.functions().find(|(_, f)| f.name == "f").unwrap();
-    assert_eq!(plus.module, program.prelude);
+    assert_eq!(concat.module, program.prelude);
     assert_eq!(f.module, program.entry);
     assert_eq!(program.lang.bool.module, program.prelude);
     // 本体は入口のモジュールの表にある
     assert!(program.body(f).is_some());
-    assert!(program.body(plus).is_none());
-    assert_eq!(program.arity(plus), Some(2));
+    assert!(program.body(concat).is_none());
+    assert_eq!(program.arity(concat), Some(2));
     // `f` は引数のない値である
     assert_eq!(program.arity(f), Some(0));
 }

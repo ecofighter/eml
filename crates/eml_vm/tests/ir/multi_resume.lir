@@ -60,7 +60,7 @@ internal yields clause Ask.ask fn main$handle0$ask$entry(e.4: obj, p.0: unit) ->
 internal yields fn main$handle0$return(x.3: tobj, p.1: unit) -> tobj {
   let x.0: int = unbox x.3
   decref x.3
-  let t.2: int = extern Prelude.+(x.0, 100)
+  let t.2: int = extern "Prelude.Num Int.+"(x.0, 100)
   let t.4: tobj = box t.2
   return t.4
 }
@@ -95,7 +95,7 @@ b3:
   return b.21
 b4:
   decref t.17
-  let t.5: int = extern Prelude.+(t.3, t.4)
+  let t.5: int = extern "Prelude.Num Int.+"(t.3, t.4)
   let t.22: tobj = box t.5
   return t.22
 }
@@ -214,7 +214,7 @@ b2:
   return r.13
 }
 internal yields fn main$handle1$choose$k1(t.0: int, t.1: int) -> int {
-  let t.2: int = extern Prelude.+(t.0, t.1)
+  let t.2: int = extern "Prelude.Num Int.+"(t.0, t.1)
   return t.2
 }
 internal yields fn main$handle1$choose$k1$boxed(t.0: tobj, t.1: tobj) -> tobj {

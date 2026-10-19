@@ -164,13 +164,13 @@ fn g(p.0: unit) -> unit {
 fn files_are_remapped_by_path() {
     let first = "\
 fn main() -> unit {
-  let n.0: int = extern \"Prelude.+\"(1, 2) @\"a.em\":1:1
+  let n.0: int = extern \"Prelude.Num Int.+\"(1, 2) @\"a.em\":1:1
   return ()
 }
 ";
     let second = "\
 fn second() -> unit {
-  let n.0: int = extern \"Prelude./\"(1, 0) @\"b.em\":2:3
+  let n.0: int = extern \"Prelude.Div Int./\"(1, 0) @\"b.em\":2:3
   return ()
 }
 ";
@@ -303,7 +303,7 @@ fn main() -> unit {
   let e.1: obj = prim ev_new[A]((), w.0)
   let w.2: tobj = prim evv_push(w.0, e.1)
   let u.3: unit = prim evv_set(w.2)
-  let n.4: int = extern \"Prelude.%\"(1, 0)
+  let n.4: int = extern \"Prelude.Div Int.%\"(1, 0)
   return ()
 }
 ";
@@ -341,7 +341,7 @@ fn count(n.0: int) -> unit {
   let d.1: enum = extern \"Prelude.Eq Int.==\"(n.0, 100000)
   switch d.1 Bool { #0 -> b1, #1 -> b2 }
 b1:
-  let m.2: int = extern \"Prelude.+\"(n.0, 1)
+  let m.2: int = extern \"Prelude.Num Int.+\"(n.0, 1)
   tail call count(m.2)
 b2:
   let s.3: obj = const \"done\"
@@ -400,7 +400,7 @@ fn main() -> unit {
 ";
     let fail = "\
 fn fail() -> unit {
-  let n.0: int = extern \"Prelude.%\"(1, 0)
+  let n.0: int = extern \"Prelude.Div Int.%\"(1, 0)
   return ()
 }
 ";
@@ -442,7 +442,7 @@ fn main() -> unit {
   let p.0: obj = const \"a.txt\"
   let h.1: obj lin = extern \"Std.Fs.open\"(p.0)
   let u.2: unit = prim root_set[1](h.1)
-  let n.3: int = extern \"Prelude.%\"(1, 0)
+  let n.3: int = extern \"Prelude.Div Int.%\"(1, 0)
   return ()
 }
 ";

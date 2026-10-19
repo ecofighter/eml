@@ -482,7 +482,7 @@ fn extern_schemes_are_exported() {
             .to_string()
     };
     assert_eq!(ty("println"), "String -> <IO> Unit");
-    assert_eq!(ty("+"), "Int -> Int -> <Panic> Int");
+    assert_eq!(ty("++"), "String -> String -> String");
     assert_eq!(ty(">>"), "(a -> <e> b) -> (b -> <e> c) -> a -> <e> c");
     // コンストラクタは extern ではなく、Prelude の `data Bool` のスキームとして書き出す
     assert_eq!(
@@ -524,7 +524,7 @@ fn operation_types_are_exported() {
 #[test]
 fn later_stage_constructs_add_no_type_errors() {
     // E0004 の跡 (`<missing>` の値) を型検査に通しても、誤りを重ねて出さない。
-    let text = "counter : Unit -> Int\ncounter () = 0\n\nf : Int -> <Panic> Int\nf n =\n  let first = 1.5\n  let plus = (+)\n  0";
+    let text = "counter : Unit -> Int\ncounter () = 0\n\nf : Int -> <Panic> Int\nf n =\n  let first = 1.5\n  let plus : Int -> Int -> <Panic> Int = (+)\n  0";
     insta::assert_snapshot!(check_text(text), @"
     counter : Unit -> Int
     f : Int -> <Panic> Int
@@ -532,7 +532,7 @@ fn later_stage_constructs_add_no_type_errors() {
       first#1 : {error}
       $a#2 : Int
       $b#3 : Int
-      plus#4 : Int -> <_> Int -> <Panic | _> Int
+      plus#4 : Int -> Int -> <Panic> Int
     ---
     E0004 6:15 floating-point literals are not supported yet
       6:15 this is implemented in a later stage

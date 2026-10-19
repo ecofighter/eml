@@ -1164,12 +1164,12 @@ unsafe fn call<M: Mode>(
             (a, args.string(ctx, &inputs[1], root))
         };
         Ok(match name {
-            "Prelude.+" => arith(int_add)?,
-            "Prelude.-" => arith(int_sub)?,
-            "Prelude.*" => arith(int_mul)?,
-            "Prelude./" => arith(int_div)?,
-            "Prelude.%" => arith(int_rem)?,
-            "Prelude.negate" => Outcome::Int(int_negate(int(0))?),
+            "Prelude.Num Int.+" => arith(int_add)?,
+            "Prelude.Num Int.-" => arith(int_sub)?,
+            "Prelude.Num Int.*" => arith(int_mul)?,
+            "Prelude.Div Int./" => arith(int_div)?,
+            "Prelude.Div Int.%" => arith(int_rem)?,
+            "Prelude.Num Int.negate" => Outcome::Int(int_negate(int(0))?),
             "Prelude.Eq Int.==" => compare(int_eq),
             "Prelude.Eq Int.!=" => compare(int_ne),
             "Prelude.Ord Int.<" => compare(int_lt),

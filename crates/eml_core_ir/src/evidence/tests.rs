@@ -170,7 +170,7 @@ yields fn f(a.0: int, h.1: tobj) -> int {
   let x.5: int = call p()
   let u.6: unit = prim evv_set(w.2)
   let r.7: tobj = yields apply h.1(())
-  let s.8: int = extern Prelude.+(x.5, a.0)
+  let s.8: int = extern \"Prelude.Num Int.+\"(x.5, a.0)
   return s.8
 }
 ",
@@ -204,12 +204,12 @@ yields fn f(a.0: int, h.1: tobj) -> int {
     b2:
       let u.6: unit = prim evv_set(w.2)
       let r.7: tobj = yields apply h.1(())
-      let s.8: int = extern Prelude.+(x.5, a.0)
+      let s.8: int = extern "Prelude.Num Int.+"(x.5, a.0)
       return s.8
     }
     internal yields fn f$k0(a.0: int, h.1: tobj, x.2: int) -> int {
       let r.3: tobj = yields apply h.1(())
-      let s.4: int = extern Prelude.+(x.2, a.0)
+      let s.4: int = extern "Prelude.Num Int.+"(x.2, a.0)
       return s.4
     }
     yields fn "mask$[State]"(k.0: tobj poly, v.1: tobj poly) -> tobj poly {

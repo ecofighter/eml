@@ -152,7 +152,7 @@ fn f(n.0: int, s.1: obj) -> obj {
 fn panicking_extern_is_a_point() {
     let text = "\
 fn f(n.0: int, s.1: obj) -> obj {
-  let q.2: int = extern Prelude.+(n.0, 2)
+  let q.2: int = extern \"Prelude.Num Int.+\"(n.0, 2)
   let t.3: obj = extern Prelude.panic(s.1)
   return t.3
 }
@@ -270,7 +270,7 @@ fn f(a.0: obj, b.1: obj) -> obj {
 fn tail_call_propagates_abort() {
     let text = "\
 fn g(n.0: int) -> int {
-  let m.1: int = extern Prelude.+(n.0, 1)
+  let m.1: int = extern \"Prelude.Num Int.+\"(n.0, 1)
   return m.1
 }
 fn f(n.0: int) -> int {

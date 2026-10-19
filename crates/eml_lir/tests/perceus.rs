@@ -288,7 +288,7 @@ fn an_unused_call_result_is_released() {
     let text = "\
 fn run(s.0: obj, n.1: int) -> int {
   let r.2: obj = call echo(s.0)
-  let m.3: int = extern Prelude.+(n.1, 1)
+  let m.3: int = extern \"Prelude.Num Int.+\"(n.1, 1)
   return m.3
 }
 fn echo(s.0: obj) -> obj {
@@ -299,7 +299,7 @@ fn echo(s.0: obj) -> obj {
     fn run(s.0: obj, n.1: int) -> int {
       let r.2: obj = call echo(s.0)
       decref r.2
-      let m.3: int = extern Prelude.+(n.1, 1)
+      let m.3: int = extern \"Prelude.Num Int.+\"(n.1, 1)
       return m.3
     }
     fn echo(s.0: obj) -> obj {
@@ -414,7 +414,7 @@ fn an_unboxed_value_that_dies_is_released_after_the_unbox() {
     let text = "\
 fn f(b.0: tobj) -> int {
   let n.1: int = unbox b.0
-  let m.2: int = extern Prelude.+(n.1, 1)
+  let m.2: int = extern \"Prelude.Num Int.+\"(n.1, 1)
   return m.2
 }
 ";
@@ -422,7 +422,7 @@ fn f(b.0: tobj) -> int {
     fn f(b.0: tobj) -> int {
       let n.1: int = unbox b.0
       decref b.0
-      let m.2: int = extern Prelude.+(n.1, 1)
+      let m.2: int = extern \"Prelude.Num Int.+\"(n.1, 1)
       return m.2
     }
     ");

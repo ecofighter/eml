@@ -48,7 +48,7 @@ fn unused_bindings_that_can_fail_or_act_are_kept() {
     // `/` はゼロ除算で止まりうる。extern のエフェクト、呼び出し、`drop` も、使われなくても消さない
     let text = "\
 fn f(x.0: int, s.1: obj, t.2: obj) -> int {
-  let q.3: int = extern Prelude./(x.0, 0)
+  let q.3: int = extern \"Prelude.Div Int./\"(x.0, 0)
   let u.4: unit = extern Prelude.println(s.1)
   let r.5: int = call g(x.0)
   let d.6: unit = drop t.2

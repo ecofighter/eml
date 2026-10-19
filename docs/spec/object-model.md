@@ -743,7 +743,7 @@ token の表の項目は、`into_token` と `release_reuse` が添字を使い�
 
 | 行 | 関数 |
 |---|---|
-| `Prelude.+`、`-`、`*`、`/`、`%`、`negate` | `int_add`、`int_sub`、`int_mul`、`int_div`、`int_rem`、`int_negate` |
+| `Prelude.Num Int.+`、`-`、`*`、`negate`、`Prelude.Div Int./`、`%` | `int_add`、`int_sub`、`int_mul`、`int_div`、`int_rem`、`int_negate` |
 | `Prelude.Eq Int.==`、`!=`、`Prelude.Ord Int.<`、`<=`、`>`、`>=`、`compare` | `int_eq`、`int_ne`、`int_lt`、`int_le`、`int_gt`、`int_ge`、`int_compare` |
 | `Prelude.Eq Bool.==`、`!=` | `bool_eq`、`bool_ne` |
 | `Prelude.Eq String.==`、`!=`、`Prelude.Ord String.compare` | `Ctx::string_eq`、`string_ne`、`string_compare` |

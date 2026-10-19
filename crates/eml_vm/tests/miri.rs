@@ -40,7 +40,7 @@ b2:
   return v.6
 }
 fn add(a.0: int, b.1: int) -> int {
-  let c.2: int = extern \"Prelude.+\"(a.0, b.1)
+  let c.2: int = extern \"Prelude.Num Int.+\"(a.0, b.1)
   return c.2
 }
 ";

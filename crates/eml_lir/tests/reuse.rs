@@ -57,7 +57,7 @@ layout Cell { Cell(int, int, obj) }
 fn bump(x.0: obj) -> obj {
   unpack x.0 Cell #0(n.1: int, k.2: int, s.3: obj)
   release x.0 Cell #0(_, _, s.3)
-  let m.4: int = extern Prelude.+(n.1, 1)
+  let m.4: int = extern \"Prelude.Num Int.+\"(n.1, 1)
   let d.5: obj = con Cell #0(m.4, k.2, s.3)
   return d.5
 }
@@ -67,7 +67,7 @@ fn bump(x.0: obj) -> obj {
     fn bump(x.0: obj) -> obj {
       unpack x.0 Cell #0(n.1: int, k.2: int, s.3: obj)
       let r.6: token = release x.0 Cell #0(_, _, s.3)
-      let m.4: int = extern Prelude.+(n.1, 1)
+      let m.4: int = extern \"Prelude.Num Int.+\"(n.1, 1)
       let d.5: obj = con Cell #0(m.4, =k.2, =s.3) reuse r.6 in place
       return d.5
     }
@@ -137,7 +137,7 @@ layout Stats { Stats(int, int) }
 fn count(st.0: obj) -> obj {
   unpack st.0 Stats #0(n.1: int, k.2: int)
   decref st.0
-  let m.3: int = extern Prelude.+(n.1, 1)
+  let m.3: int = extern \"Prelude.Num Int.+\"(n.1, 1)
   let d.4: obj = con Stats #0(m.3, k.2)
   return d.4
 }
@@ -147,7 +147,7 @@ fn count(st.0: obj) -> obj {
     fn count(st.0: obj) -> obj {
       unpack st.0 Stats #0(n.1: int, k.2: int)
       let r.5: token = release st.0 Stats #0(_, _)
-      let m.3: int = extern Prelude.+(n.1, 1)
+      let m.3: int = extern \"Prelude.Num Int.+\"(n.1, 1)
       let d.4: obj = con Stats #0(m.3, =k.2) reuse r.5 in place
       return d.4
     }
@@ -341,7 +341,7 @@ b3:
 b4:
   return t.13
 b5:
-  let t.53: int = extern Prelude.+(right_level.42, 1)
+  let t.53: int = extern \"Prelude.Num Int.+\"(right_level.42, 1)
   release t.13 Tree #1(_, a.38, k.39, v.96, x.41)
   release x.41 Tree #1(_, b.43, rk.44, rv.97, x.46)
   release x.46 Tree #1(_, c.48, gk.49, gv.98, d.51)
@@ -365,7 +365,7 @@ b6:
     b4:
       return t.13
     b5:
-      let t.53: int = extern Prelude.+(right_level.42, 1)
+      let t.53: int = extern \"Prelude.Num Int.+\"(right_level.42, 1)
       let r.99: token = release t.13 Tree #1(_, a.38, k.39, v.96, x.41)
       let r.100: token = release x.41 Tree #1(_, b.43, rk.44, rv.97, x.46)
       let r.101: token = release x.46 Tree #1(_, c.48, gk.49, gv.98, d.51)
@@ -404,8 +404,8 @@ fn a_release_after_a_con_moves_up_to_it() {
     let text = map_loop(
         "",
         "  let x.3: int = unbox x.12
-  let t.10: int = extern Prelude.*(x.3, 3)
-  let t.11: int = extern Prelude.+(t.10, 1)
+  let t.10: int = extern \"Prelude.Num Int.*\"(x.3, 3)
+  let t.11: int = extern \"Prelude.Num Int.+\"(t.10, 1)
   let t.13: tobj = box t.11
   let d.7: tobj = con Prelude.List #1(t.13, acc.1)
   release ys.2 Prelude.List #1(_, rest.4)
@@ -420,8 +420,8 @@ fn a_release_after_a_con_moves_up_to_it() {
       return acc.1
     b2:
       let x.3: int = unbox x.12
-      let t.10: int = extern Prelude.*(x.3, 3)
-      let t.11: int = extern Prelude.+(t.10, 1)
+      let t.10: int = extern \"Prelude.Num Int.*\"(x.3, 3)
+      let t.11: int = extern \"Prelude.Num Int.+\"(t.10, 1)
       let t.13: tobj = box t.11
       let r.14: token = release ys.2 Prelude.List #1(_, rest.4)
       let d.7: tobj = con Prelude.List #1(t.13, acc.1) reuse r.14 in place
@@ -439,7 +439,7 @@ fn a_release_does_not_move_above_a_use_of_an_unkept_field() {
   let d.7: tobj = con Prelude.List #1(acc.1, acc.1)
   let x.3: int = unbox x.12
   release ys.2 Prelude.List #1(_, rest.4)
-  let t.10: int = extern Prelude.*(x.3, 3)
+  let t.10: int = extern \"Prelude.Num Int.*\"(x.3, 3)
   tail call go(d.7, rest.4)
 ",
     ));
@@ -541,7 +541,7 @@ fn a_moved_decref_source() {
 layout Stats { Stats(int, int) }
 fn bump(st.0: obj) -> obj {
   unpack st.0 Stats #0(n.1: int, k.2: int)
-  let m.3: int = extern Prelude.+(n.1, 1)
+  let m.3: int = extern \"Prelude.Num Int.+\"(n.1, 1)
   let d.4: obj = con Stats #0(m.3, 0)
   decref st.0
   return d.4
@@ -551,7 +551,7 @@ fn bump(st.0: obj) -> obj {
     layout Stats { Stats(int, int) }
     fn bump(st.0: obj) -> obj {
       unpack st.0 Stats #0(n.1: int, k.2: int)
-      let m.3: int = extern Prelude.+(n.1, 1)
+      let m.3: int = extern \"Prelude.Num Int.+\"(n.1, 1)
       let r.5: token = release st.0 Stats #0(_, _)
       let d.4: obj = con Stats #0(m.3, 0) reuse r.5 in place
       return d.4

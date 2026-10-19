@@ -181,7 +181,7 @@ fn f(x.0: int) -> int {
 b1:
   jump b3(x.0)
 b2:
-  let t.2: int = extern Prelude.+(x.0, 1) @"main.em":2:20
+  let t.2: int = extern "Prelude.Num Int.+"(x.0, 1) @"main.em":2:20
   jump b3(t.2)
 b3(t.3: int):
   return t.3
@@ -210,7 +210,7 @@ b3(t.3: int):
 - 終端は、`return a`、`tail <呼び出し>`、`jump bN(..)`、`switch a L { .. }` (タグの case を持つとき) か `switch a { .. }` のどれかである。`jump` は、引数がなくても括弧を書く (`jump b1()`)。
 - `switch` は `switch o.0 Option { #0 -> b1, #1(n.2: tobj) -> b2 }` や `switch n.0 { 1 -> b1, 2 -> b2, _ -> b3 }` と書き、`String` の case は `"a" -> b1` と書く。タグの case を持つ `switch` は、scrutinee と `{` の間に配置を書く。リテラルの `switch` と、case のない `switch` には書かない。フィールドのない case は `#0` と書く。`#0()` も読むが、表示は `#0` になる。case の書き方で、読み直して表示が変わる形はこれだけである。case のない `switch` は `switch a {}` と書く。行き先のない `switch` は verifier が誤りにする。
 - `apply ()(…)` は、呼ばれる値が `()` の `apply` である。誤りを含む IR の表示も読み戻すためである。
-- extern の呼び出しは `extern <正式な名前>(…)` と書く (`let t.2: unit = extern Prelude.println(s.1)`、`extern Prelude.+(a.0, b.1)`、`extern Std.Fs.open(p.0)`)。空白などを含む正式な名前は、関数の名前と同じ規則で引用符で囲む (`extern "Prelude.Eq Int.=="(a.0, b.1)`)。instance の `extern` の行の名前がこれに当たる。`parse` は `extern` の後でも、語の代わりに文字列を読む。`parse` は正式な名前を `eml_extern` の表で引き、引数はいくつでも読む。引数の数と、引数と結果の repr が表と合うかは verifier が確かめる。誤りを含む IR も読み戻して verifier に報告させるためである。位置は、呼び出しの後に `@"パス":行:列` と書く。
+- extern の呼び出しは `extern <正式な名前>(…)` と書く (`let t.2: unit = extern Prelude.println(s.1)`、`extern Prelude.++(a.0, b.1)`、`extern Std.Fs.open(p.0)`)。空白などを含む正式な名前は、関数の名前と同じ規則で引用符で囲む (`extern "Prelude.Eq Int.=="(a.0, b.1)`)。instance の `extern` の行の名前がこれに当たる。`parse` は `extern` の後でも、語の代わりに文字列を読む。`parse` は正式な名前を `eml_extern` の表で引き、引数はいくつでも読む。引数の数と、引数と結果の repr が表と合うかは verifier が確かめる。誤りを含む IR も読み戻して verifier に報告させるためである。位置は、呼び出しの後に `@"パス":行:列` と書く。
 - 文字列は `"` で囲み、エスケープ `\"`、`\'`、`\\`、`\n`、`\r`、`\t`、`\0`、`\u{…}` を読む。
 - 末尾呼び出しの後には何も書かない。`tail` の後の `mask` は、ほかの未知の語と同じく `parse` が誤りにする (``line 3: expected a call, found `mask` ``)
 - 操作は名前のほかに `#N` (操作の番号) でも書ける。エフェクトにない番号も書けるので、誤りを含む IR を verifier に渡すテストに使う。`pretty` も、エフェクトにない番号の操作を `#N` で表示する。

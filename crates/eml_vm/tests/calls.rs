@@ -233,7 +233,7 @@ fn count(n.0: int) -> unit {
   let d.1: enum = extern \"Prelude.Eq Int.==\"(n.0, 100000)
   switch d.1 Bool { #0 -> b1, #1 -> b2 }
 b1:
-  let m.2: int = extern \"Prelude.+\"(n.0, 1)
+  let m.2: int = extern \"Prelude.Num Int.+\"(n.0, 1)
   tail call count(m.2)
 b2:
   return ()
@@ -292,7 +292,7 @@ fn down(n.0: int) -> unit {
   let d.1: enum = extern \"Prelude.Eq Int.==\"(n.0, 0)
   switch d.1 Bool { #0 -> b1, #1 -> b2 }
 b1:
-  let m.2: int = extern \"Prelude.-\"(n.0, 1)
+  let m.2: int = extern \"Prelude.Num Int.-\"(n.0, 1)
   let r.3: unit = call down(m.2)
   return r.3
 b2:
@@ -497,7 +497,7 @@ fn build(n.0: int, acc.1: tobj) -> unit {{
   let d.2: enum = extern \"Prelude.Eq Int.==\"(n.0, 0)
   switch d.2 Bool {{ #0 -> b1, #1 -> b2 }}
 b1:
-  let m.3: int = extern \"Prelude.-\"(n.0, 1)
+  let m.3: int = extern \"Prelude.Num Int.-\"(n.0, 1)
   let c.4: tobj = con List #1(#0, acc.1)
   tail call build(m.3, c.4)
 b2:

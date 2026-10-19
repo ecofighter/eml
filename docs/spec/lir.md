@@ -607,7 +607,7 @@ reuse のパスは、Perceus が手放す箱を token にし、同じ物理的�
   - token を受ける `con`: ``a con of `Q` #0 has 3 words, but the token `r.4` holds 2 words``、``a con of `Q` #0 rebuilds the token `r.4` in place, but the token comes from `P` #0``、``a con of `P` #0 rebuilds the token `r.3` in place, but `x.0` is lin and `d.4` is poly``、``argument 0 of a con of `P` #0 is skipped, but `b.3` is not at the same position in the box of the token `r.4` ``
   - 持ち主のない変数を読むか消費するか手放したときと、持ち主も手放した変数を消費するか手放したときは、今までと同じく `` `x.1` is {used|released|duplicated|switched on|unpacked|unboxed|lent to `prim ev_evv`} after it was moved `` で報告する
 - R7 と R8 のうち境界の検査でないものは、2つの IR のすべての段で走り、どの段でも次の文言で報告する (`release` は LIR の所有の段にだけ現れる)。境界の検査と、`box` と `unbox` の規則は、範囲の段と所有の段で走る。どの文言の後にも、ほかの誤りと同じく `` in `f` `` が付く
-  - R7 の extern: ``argument 0 of `Prelude.+` is `s.0` (obj), but the extern takes int``、``argument 1 of `Prelude.+` is (), but the extern takes int``、`` `t.1` (obj) is bound to `Prelude.<`, which returns enum ``。引数の数を確かめた後で、引数を左から、最後に束縛する変数を比べる
+  - R7 の extern: ``argument 0 of `Prelude.Num Int.+` is `s.0` (obj), but the extern takes int``、``argument 1 of `Prelude.Num Int.+` is (), but the extern takes int``、`` `t.1` (obj) is bound to `Prelude.<`, which returns enum ``。引数の数を確かめた後で、引数を左から、最後に束縛する変数を比べる
   - 表にない配置: ``a con refers to the unknown layout #3`` (`a switch`、`an unpack`、`a release` も同じ形)
   - `switch` の配置の有無: `a switch with tag cases has no layout`、``a switch without tag cases has the layout `Prelude.Bool` ``
   - タグの範囲: ``a con names #2, but `Prelude.Bool` has 2 constructors`` (`a case`、`an unpack`、`a release` も同じ形)

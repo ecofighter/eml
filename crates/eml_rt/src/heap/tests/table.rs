@@ -107,11 +107,11 @@ pub const STRINGS: [&str; 17] = [
 
 /// 整数を2つ取る行
 pub const INT_BINARY: [&str; 12] = [
-    "Prelude.+",
-    "Prelude.-",
-    "Prelude.*",
-    "Prelude./",
-    "Prelude.%",
+    "Prelude.Num Int.+",
+    "Prelude.Num Int.-",
+    "Prelude.Num Int.*",
+    "Prelude.Div Int./",
+    "Prelude.Div Int.%",
     "Prelude.Eq Int.==",
     "Prelude.Eq Int.!=",
     "Prelude.Ord Int.compare",
@@ -343,7 +343,7 @@ pub fn inputs() -> Vec<(String, Vec<Arg>)> {
             push(name, vec![Arg::Int(pair[0]), Arg::Int(pair[1])]);
         }
     }
-    for name in ["Prelude.negate", "Prelude.Show Int.show"] {
+    for name in ["Prelude.Num Int.negate", "Prelude.Show Int.show"] {
         for a in EDGES.into_iter().chain(random_ints(RANDOM_INTS)) {
             push(name, vec![Arg::Int(a)]);
         }

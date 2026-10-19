@@ -50,7 +50,7 @@ fn a_known_lambda_is_called_directly() {
     let text = "main : Unit -> <IO, Panic> Unit\nmain () =\n  let f = fn x -> x + 1\n  println (show (f 2))";
     insta::assert_snapshot!(function(&core_text(text, Pass::Optimize), "entry$main"), @r#"
     fn entry$main() -> unit {
-      let t.1: int = extern Prelude.+(2, 1)
+      let t.1: int = extern "Prelude.Num Int.+"(2, 1)
       let t.2: obj = extern "Prelude.Show Int.show"(t.1)
       let t.3: unit = extern Prelude.println(t.2)
       return t.3
@@ -63,7 +63,7 @@ fn a_partial_application_is_called_directly() {
     let text = "add : Int -> Int -> <Panic> Int\nadd x y = x + y\n\nmain : Unit -> <IO, Panic> Unit\nmain () =\n  let g = add 1\n  println (show (g 2))";
     insta::assert_snapshot!(function(&core_text(text, Pass::Optimize), "entry$main"), @r#"
     fn entry$main() -> unit {
-      let t.1: int = extern Prelude.+(1, 2)
+      let t.1: int = extern "Prelude.Num Int.+"(1, 2)
       let t.2: obj = extern "Prelude.Show Int.show"(t.1)
       let t.3: unit = extern Prelude.println(t.2)
       return t.3
@@ -76,8 +76,8 @@ fn an_under_saturated_known_apply_builds_a_closure() {
     let text = "add3 : Int -> Int -> Int -> <Panic> Int\nadd3 x y z = x + y + z\n\nmain : Unit -> <IO, Panic> Unit\nmain () =\n  let g = add3 1\n  let h = g 2\n  println (show (h 3))";
     insta::assert_snapshot!(function(&core_text(text, Pass::Optimize), "entry$main"), @r#"
     fn entry$main() -> unit {
-      let t.1: int = extern Prelude.+(1, 2)
-      let t.2: int = extern Prelude.+(t.1, 3)
+      let t.1: int = extern "Prelude.Num Int.+"(1, 2)
+      let t.2: int = extern "Prelude.Num Int.+"(t.1, 3)
       let t.3: obj = extern "Prelude.Show Int.show"(t.2)
       let t.4: unit = extern Prelude.println(t.3)
       return t.4
@@ -240,7 +240,7 @@ fn map_is_copied_for_a_known_lambda() {
       let t.9: tobj = call "Std.List.reverse_onto@[Int]"(#0, acc.1)
       return t.9
     b2:
-      let t.10: int = extern Prelude.*(x.3, 2)
+      let t.10: int = extern "Prelude.Num Int.*"(x.3, 2)
       let d.7: tobj = con Prelude.List #1(t.10, acc.1)
       let t.8: tobj = call "Std.List.map@[Int, Int]$let$go{0=main$lambda0}"(d.7, rest.4)
       return t.8
@@ -334,7 +334,7 @@ fn captures_become_parameters() {
       let t.10: tobj = call "Std.List.reverse_onto@[Int]"(#0, acc.1)
       return t.10
     b2:
-      let t.11: int = extern Prelude.*(x.3, k.9)
+      let t.11: int = extern "Prelude.Num Int.*"(x.3, k.9)
       let d.7: tobj = con Prelude.List #1(t.11, acc.1)
       let t.8: tobj = call "Std.List.map@[Int, Int]$let$go{0=main$lambda0/1}"(k.9, d.7, rest.4)
       return t.8
@@ -358,7 +358,7 @@ fn a_closure_captured_by_a_closure_is_specialized() {
       return #0
     b2:
       unpack x.4 (,) #0(x.5: int, rest.6: obj lin)
-      let t.14: int = extern Prelude.+(x.5, 1)
+      let t.14: int = extern "Prelude.Num Int.+"(x.5, 1)
       let c.15: tobj lin = closure "Std.Iter.map@[Int, Int]$lambda0{0=main$lambda0}"(rest.6)
       let d.16: obj lin = con Std.Iter.Iter #0(c.15)
       let d.10: obj lin = con (,) #0(t.14, d.16)
@@ -655,7 +655,7 @@ fn push_fold_has_no_handle_left() {
     );
     // 畳み込みのラムダは直接の呼び出しになり、そのあと展開される
     let copies = handler_copies(&shown);
-    assert!(copies.contains("extern Prelude.+("), "{shown}");
+    assert!(copies.contains("extern \"Prelude.Num Int.+\"("), "{shown}");
     assert!(!copies.contains("apply"), "{shown}");
 }
 
@@ -685,7 +685,7 @@ fn for_each_is_specialized() {
     }
 
     fn "nums$let$go{H=Std.Yield.for_each@#0450afda50afc4ec}$h0"(n.0: int, i.1: int, t.2: unit) -> unit {
-      let t.3: int = extern Prelude.+(i.1, 1)
+      let t.3: int = extern "Prelude.Num Int.+"(i.1, 1)
       let t.4: unit = call "nums$let$go{H=Std.Yield.for_each@#0450afda50afc4ec}"(n.0, t.3)
       return t.4
     }
@@ -725,13 +725,13 @@ main () =
     }
 
     fn "count{H=Std.State.run@#c7a76c0c3d933166}$h1"(n.0: int, t.1: unit, st.3: int) -> obj {
-      let t.2: int = extern Prelude.-(n.0, 1)
+      let t.2: int = extern "Prelude.Num Int.-"(n.0, 1)
       let t.4: obj = call "count{H=Std.State.run@#c7a76c0c3d933166}"(t.2, st.3)
       return t.4
     }
 
     fn "count{H=Std.State.run@#c7a76c0c3d933166}$h0"(n.0: int, t.1: int, st.3: int) -> obj {
-      let t.2: int = extern Prelude.+(t.1, 1)
+      let t.2: int = extern "Prelude.Num Int.+"(t.1, 1)
       let t.4: obj = call "count{H=Std.State.run@#c7a76c0c3d933166}$h1"(n.0, (), t.2)
       return t.4
     }
@@ -981,7 +981,7 @@ fn a_continuation_captures_its_live_variables() {
     let name = name.split('"').nth(1).unwrap().to_string();
     insta::assert_snapshot!(function(&shown, &name), @r#"
     internal fn "nums$let$go{H=Std.Iter.generate@#8c179e1f604536f1}$h0"(n.0: int, i.1: int, t.2: unit) -> tobj lin {
-      let t.3: int = extern Prelude.+(i.1, 1)
+      let t.3: int = extern "Prelude.Num Int.+"(i.1, 1)
       let t.5: enum = extern "Prelude.Ord Int.>"(t.3, n.0)
       switch t.5 Prelude.Bool { #0 -> b1, #1 -> b2 }
     b1:
@@ -1091,7 +1091,7 @@ fn a_known_lambda_is_inlined_into_its_copy() {
       let t.9: tobj = call "Std.List.reverse_onto@[Int]"(#0, acc.1)
       return t.9
     b2:
-      let t.10: int = extern Prelude.*(x.3, 2)
+      let t.10: int = extern "Prelude.Num Int.*"(x.3, 2)
       let d.7: tobj = con Prelude.List #1(t.10, acc.1)
       let t.8: tobj = call "Std.List.map@[Int, Int]$let$go{0=main$lambda0}"(d.7, rest.4)
       return t.8
@@ -1468,7 +1468,7 @@ fn iter_pipeline_fuses_map_into_the_fold_and_generate_into_the_filter() {
             .unwrap_or_else(|| panic!("no {prefix} loop in\n{}", core_text(text, Pass::Optimize)))
     };
     let fold = named("Std.Iter.fold@");
-    assert!(fold.contains("extern Prelude.*("), "{fold}");
+    assert!(fold.contains("extern \"Prelude.Num Int.*\"("), "{fold}");
     for allocation in ["con Std.Iter.Iter", "con Prelude.Option", "closure "] {
         assert!(!fold.contains(allocation), "{allocation} in\n{fold}");
     }

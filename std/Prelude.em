@@ -54,13 +54,18 @@ pub extern panic : String -> <Panic> a
 pub not : Bool -> Bool
 not True = False
 not False = True
--- 前置の `-` の脱糖が呼ぶ。`pub` でないので、ユーザーは名前で書けない
-extern negate : Int -> <Panic> Int
-pub extern (+) : Int -> Int -> <Panic> Int
-pub extern (-) : Int -> Int -> <Panic> Int
-pub extern (*) : Int -> Int -> <Panic> Int
-pub extern (/) : Int -> Int -> <Panic> Int
-pub extern (%) : Int -> Int -> <Panic> Int
+
+-- 算術のクラス。メソッドの型はクラスで1つなので、`Panic` を起こさない instance も `<Panic>` を持つ。前置の `-` は
+-- `negate` を呼ぶ (docs/spec/declarations.md の「Prelude のクラス」)
+pub class Num a where
+  (+) : a -> a -> <Panic> a
+  (-) : a -> a -> <Panic> a
+  (*) : a -> a -> <Panic> a
+  negate : a -> <Panic> a
+
+pub class Div a where
+  (/) : a -> a -> <Panic> a
+  (%) : a -> a -> <Panic> a
 
 pub class Eq a where
   (==) : a -> a -> Bool
@@ -94,6 +99,16 @@ pub class Show a where
   show_prec _ x = show x
   display : a -> String
   display x = show x
+
+instance Num Int where
+  extern (+)
+  extern (-)
+  extern (*)
+  extern negate
+
+instance Div Int where
+  extern (/)
+  extern (%)
 
 instance Eq Int where
   extern (==)

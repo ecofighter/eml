@@ -315,7 +315,7 @@ impl<'a> ItemLowering<'a> {
         }
     }
 
-    /// extern の宣言が指す表の行。標準ライブラリでは正式な名前 (`Prelude.+`) で表を引き、ない名前は `std/` の誤りなので
+    /// extern の宣言が指す表の行。標準ライブラリでは正式な名前 (`Prelude.++`) で表を引き、ない名前は `std/` の誤りなので
     /// panic する。ユーザーのモジュールでは E1033 を出して `None` にする。宣言は extern として読むので、E1005 や E1025 は
     /// 重ねない。
     fn extern_row<T>(
@@ -365,7 +365,6 @@ fn lower_bodies(
             def_map.resolver(module),
             modules,
             def_map.lang(),
-            def_map.externs().negate,
             generics,
             diagnostics,
         )
@@ -429,7 +428,6 @@ fn lower_bodies(
             def_map.resolver(module),
             modules,
             def_map.lang(),
-            def_map.externs().negate,
             &mut generics,
             diagnostics,
         )

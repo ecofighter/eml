@@ -23,7 +23,7 @@ fn a_lambda_used_only_as_a_value_is_made_uniform_in_place() {
     insta::assert_snapshot!(function(&shown, "main$lambda0"), @"
     internal fn main$lambda0(n.2: tobj) -> tobj {
       let n.0: int = unbox n.2
-      let t.1: int = extern Prelude.+(n.0, 1)
+      let t.1: int = extern \"Prelude.Num Int.+\"(n.0, 1)
       let t.3: tobj = box t.1
       return t.3
     }
@@ -84,7 +84,7 @@ fn a_top_level_function_used_only_as_a_value_gets_a_boxed_wrapper() {
     let shown = lir_text(&text, eml_lir::Pass::Boxing);
     insta::assert_snapshot!(function(&shown, "inc"), @"
     fn inc(n.0: int) -> int {
-      let t.1: int = extern Prelude.+(n.0, 1)
+      let t.1: int = extern \"Prelude.Num Int.+\"(n.0, 1)
       return t.1
     }
     ");
@@ -170,7 +170,7 @@ fn fields_are_rebound_at_the_head_of_the_case_target_and_after_an_unpack() {
       return 0
     b2:
       let v.1: int = unbox v.3
-      let t.2: int = extern Prelude.+(v.1, 1)
+      let t.2: int = extern \"Prelude.Num Int.+\"(v.1, 1)
       return t.2
     }
     ");
@@ -179,7 +179,7 @@ fn fields_are_rebound_at_the_head_of_the_case_target_and_after_an_unpack() {
       unpack p.0 (,) #0(a.4: tobj, b.5: tobj)
       let a.1: int = unbox a.4
       let b.2: int = unbox b.5
-      let t.3: int = extern Prelude.+(a.1, b.2)
+      let t.3: int = extern \"Prelude.Num Int.+\"(a.1, b.2)
       return t.3
     }
     ");
@@ -228,7 +228,7 @@ fn a_value_unboxed_by_the_pass_is_passed_on_without_a_new_box() {
       let t.2: int = unbox t.6
       let t.7: tobj = apply f.0(t.6)
       let t.3: int = unbox t.7
-      let t.4: int = extern Prelude.+(t.3, 1)
+      let t.4: int = extern \"Prelude.Num Int.+\"(t.3, 1)
       return t.4
     }
     ");
@@ -255,8 +255,8 @@ fn a_monomorphic_int_loop_has_no_box() {
       let t.2: enum = extern \"Prelude.Eq Int.==\"(n.0, 0)
       switch t.2 Prelude.Bool { #0 -> b1, #1 -> b2 }
     b1:
-      let t.3: int = extern Prelude.-(n.0, 1)
-      let t.4: int = extern Prelude.+(acc.1, 1)
+      let t.3: int = extern \"Prelude.Num Int.-\"(n.0, 1)
+      let t.4: int = extern \"Prelude.Num Int.+\"(acc.1, 1)
       let t.5: int = call loop(t.3, t.4)
       return t.5
     b2:
@@ -357,7 +357,7 @@ fn t3_raises_the_ret_along_a_chain_of_tail_calls() {
       let x.6: tobj = box x.1
       tail apply f.0(x.6)
     b2:
-      let t.3: int = extern Prelude.-(x.1, 1)
+      let t.3: int = extern "Prelude.Num Int.-"(x.1, 1)
       tail call apply_to(f.0, t.3)
     }
     "#);
@@ -388,7 +388,7 @@ fn t3_raises_the_ret_along_a_chain_of_tail_calls() {
       let b.14: tobj = box 2
       let t.15: tobj = apply through.6(g.2, b.14)
       let t.8: int = unbox t.15
-      let t.9: int = extern Prelude.+(t.7, t.8)
+      let t.9: int = extern "Prelude.Num Int.+"(t.7, t.8)
       let t.10: obj = extern "Prelude.Show Int.show"(t.9)
       let t.11: unit = extern Prelude.println(t.10)
       return t.11

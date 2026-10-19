@@ -2,9 +2,9 @@ use crate::common::{diagnostics, lower_text};
 
 #[test]
 fn precedence_and_left_associativity() {
-    insta::assert_snapshot!(lower_text("f : Int -> Int\nf x = 1 + 2 * x - 3"), @r"
+    insta::assert_snapshot!(lower_text("f : Int -> Int\nf x = 1 + 2 * x - 3"), @"
     f : Int -> Int
-    f x#0 = (- (+ 1 (* 2 x#0)) 3)
+    f x#0 = (@Prelude.- (@Prelude.+ 1 (@Prelude.* 2 x#0)) 3)
     ");
 }
 
@@ -21,9 +21,9 @@ fn prefix_minus_has_precedence_six() {
     let text = "n : Int\nn = - 2 * 3\nm : Int\nm = - 2 + 3\nk : Bool\nk = 1 == -2";
     insta::assert_snapshot!(lower_text(text), @"
     n : Int
-    n = (negate (* 2 3))
+    n = (@Prelude.negate (@Prelude.* 2 3))
     m : Int
-    m = (+ -2 3)
+    m = (@Prelude.+ -2 3)
     k : Bool
     k = (@Prelude.== 1 -2)
     ");
@@ -43,7 +43,7 @@ fn negative_int_literal_is_a_literal() {
 fn negated_parenthesized_literal_is_still_negate() {
     insta::assert_snapshot!(lower_text("n : Int\nn = -(1)"), @"
     n : Int
-    n = (negate 1)
+    n = (@Prelude.negate 1)
     ");
 }
 
@@ -51,7 +51,7 @@ fn negated_parenthesized_literal_is_still_negate() {
 fn binary_minus_before_literal_is_unchanged() {
     insta::assert_snapshot!(lower_text("f : Int -> Int\nf x = x -1"), @"
     f : Int -> Int
-    f x#0 = (- x#0 1)
+    f x#0 = (@Prelude.- x#0 1)
     ");
 }
 
@@ -59,7 +59,7 @@ fn binary_minus_before_literal_is_unchanged() {
 fn negated_variable_is_negate() {
     insta::assert_snapshot!(lower_text("f : Int -> Int\nf x = -x"), @"
     f : Int -> Int
-    f x#0 = (negate x#0)
+    f x#0 = (@Prelude.negate x#0)
     ");
 }
 
@@ -100,7 +100,7 @@ fn non_associative_operators_cannot_be_chained() {
 fn prefix_minus_after_a_tighter_operator_needs_parentheses() {
     insta::assert_snapshot!(lower_text("n : Int\nn = 2 * -3"), @"
     n : Int
-    n = (* 2 -3)
+    n = (@Prelude.* 2 -3)
     ---
     E1006 2:9 a prefix `-` cannot appear here without parentheses
     ");
@@ -115,7 +115,7 @@ fn unknown_operators_and_missing_operands() {
     y : Int
     y = (Prelude.:: 1 2)
     z : Int
-    z = (+ 1 <missing>)
+    z = (@Prelude.+ 1 <missing>)
     ---
     E1001 2:7 cannot find operator `<+>`
     E0011 6:8 expected an expression
@@ -196,9 +196,9 @@ fn constructor_patterns_with_conflicting_fixities_need_parentheses() {
 fn user_operators_are_functions_with_their_own_fixity() {
     let text =
         "infixr 5 <+>\n(<+>) : Int -> Int -> Int\na <+> b = a + b\n\nf : Int\nf = 1 <+> 2 <+> 3";
-    insta::assert_snapshot!(lower_text(text), @r"
+    insta::assert_snapshot!(lower_text(text), @"
     <+> : Int -> Int -> Int
-    <+> a#0 b#1 = (+ a#0 b#1)
+    <+> a#0 b#1 = (@Prelude.+ a#0 b#1)
     f : Int
     f = (@<+> 1 (@<+> 2 3))
     ");
@@ -208,11 +208,11 @@ fn user_operators_are_functions_with_their_own_fixity() {
 fn a_user_operator_without_a_fixity_is_infixl_9() {
     // ユーザーの `+` は Prelude の `+` を隠し、宣言がないので `infixl 9` になる。`*` (7) より強く結合する
     let text = "(+) : Int -> Int -> Int\na + b = a - b\n\nf : Int\nf = 1 * 2 + 3";
-    insta::assert_snapshot!(lower_text(text), @r"
+    insta::assert_snapshot!(lower_text(text), @"
     + : Int -> Int -> Int
-    + a#0 b#1 = (- a#0 b#1)
+    + a#0 b#1 = (@Prelude.- a#0 b#1)
     f : Int
-    f = (* 1 (@+ 2 3))
+    f = (@Prelude.* 1 (@+ 2 3))
     ");
 }
 
@@ -233,11 +233,11 @@ fn operator_references_and_sections_become_lambdas() {
     let text = "a : Int -> Int -> Int\na = (+)\nb : Int -> Int\nb = (+ 1)\nc : Int -> Int\nc = (10 -)\nd : Bool -> Bool -> Bool\nd = (&&)\ne : Int\ne = (- 1)";
     insta::assert_snapshot!(lower_text(text), @"
     a : Int -> Int -> Int
-    a = (fn $a#0 $b#1 -> (+ $a#0 $b#1))
+    a = (fn $a#0 $b#1 -> (@Prelude.+ $a#0 $b#1))
     b : Int -> Int
-    b = (fn $x#0 -> (+ $x#0 1))
+    b = (fn $x#0 -> (@Prelude.+ $x#0 1))
     c : Int -> Int
-    c = (fn $x#0 -> (- 10 $x#0))
+    c = (fn $x#0 -> (@Prelude.- 10 $x#0))
     d : Bool -> Bool -> Bool
     d = (fn $a#0 $b#1 -> (if $a#0 $b#1 Prelude.False))
     e : Int
@@ -250,11 +250,11 @@ fn a_section_operand_may_be_an_operator_sequence_that_binds_tighter() {
     let text = "a : Int -> Int\na = (+ 2 * 3)\nb : Int -> Int\nb = (2 * 3 +)\nc : Int -> Int\nc = (1 + 2 +)\nd : String -> String\nd = (++ \"a\" ++ \"b\")";
     insta::assert_snapshot!(lower_text(text), @r#"
     a : Int -> Int
-    a = (fn $x#0 -> (+ $x#0 (* 2 3)))
+    a = (fn $x#0 -> (@Prelude.+ $x#0 (@Prelude.* 2 3)))
     b : Int -> Int
-    b = (fn $x#0 -> (+ (* 2 3) $x#0))
+    b = (fn $x#0 -> (@Prelude.+ (@Prelude.* 2 3) $x#0))
     c : Int -> Int
-    c = (fn $x#0 -> (+ (+ 1 2) $x#0))
+    c = (fn $x#0 -> (@Prelude.+ (@Prelude.+ 1 2) $x#0))
     d : String -> String
     d = (fn $x#0 -> (++ $x#0 (++ "a" "b")))
     "#);
@@ -274,7 +274,7 @@ fn a_prefix_minus_in_a_section_operand_follows_the_operator_sequence_rules() {
     );
     insta::assert_snapshot!(lower_text("d : Int -> Int\nd = (- 2 +)"), @"
     d : Int -> Int
-    d = (fn $x#0 -> (+ -2 $x#0))
+    d = (fn $x#0 -> (@Prelude.+ -2 $x#0))
     ");
 }
 

@@ -506,7 +506,7 @@ fn an_expression_input_becomes_an_input_function() {
     assert!(function.signature.is_none());
     insta::assert_snapshot!(eml_hir::pretty(&lowered.program), @"
     input$1 : <no signature>
-    input$1 () = (+ 1 2)
+    input$1 () = (@Prelude.+ 1 2)
     ");
 }
 
@@ -528,7 +528,7 @@ fn a_let_input_binds_a_name_to_its_root() {
     );
     insta::assert_snapshot!(eml_hir::pretty(&lowered.program), @"
     input$1 : <no signature>
-    input$1 () = (+ 1 2)
+    input$1 () = (@Prelude.+ 1 2)
     let x = root 1 <- input$1
     ");
 }
@@ -563,7 +563,7 @@ fn later_inputs_and_functions_refer_to_a_binding() {
     let n = root 1 <- input$1
     -- <input 2>
     f : Int -> <Panic> Int
-    f x#0 = (+ x#0 @<input 1>.n)
+    f x#0 = (@Prelude.+ x#0 @<input 1>.n)
     -- <input 3>
     input$3 : <no signature>
     input$3 () = (@<input 2>.f @<input 1>.n)
@@ -582,7 +582,7 @@ fn a_binding_does_not_see_itself() {
     let x = root 1 <- input$1
     -- <input 2>
     input$2 : <no signature>
-    input$2 () = (+ @<input 1>.x 1)
+    input$2 () = (@Prelude.+ @<input 1>.x 1)
     let x = root 2 <- input$2
     ");
     let lowered = lower(&[(1, "let y = y")], &[]);

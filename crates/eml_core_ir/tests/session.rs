@@ -28,7 +28,7 @@ fn a_binding_is_read_from_its_root_and_the_result_is_returned_as_text() {
     effect Prelude.Panic { never panicked(obj) -> never }
     fn input$2(p.0: unit) -> int {
       let r.1: int = prim root_get[1]()
-      let t.2: int = extern Prelude.+(r.1, 1)
+      let t.2: int = extern "Prelude.Num Int.+"(r.1, 1)
       return t.2
     }
     fn entry$input$2() -> obj {
@@ -55,7 +55,7 @@ fn roots_are_boxed_and_unboxed_after_the_lir_passes() {
       let r.4: tobj = prim root_get[1]()
       let r.2: int = unbox r.4
       decref r.4
-      let t.3: int = extern Prelude.+(r.2, 1)
+      let t.3: int = extern "Prelude.Num Int.+"(r.2, 1)
       let s.1: obj = extern "Prelude.Show Int.show"(t.3)
       return s.1
     }
@@ -72,13 +72,13 @@ fn a_function_definition_reads_a_binding_from_its_root() {
         ],
         Pass::Translate,
     );
-    insta::assert_snapshot!(function(&shown, "f"), @r"
+    insta::assert_snapshot!(function(&shown, "f"), @r#"
     fn f(n.0: int) -> int {
       let r.1: int = prim root_get[1]()
-      let t.2: int = extern Prelude.+(n.0, r.1)
+      let t.2: int = extern "Prelude.Num Int.+"(n.0, r.1)
       return t.2
     }
-    ");
+    "#);
 }
 
 #[test]
@@ -113,7 +113,7 @@ fn a_structural_input_calls_its_display_function() {
       let c.5: enum = extern "Prelude.Eq Int.=="(budget.1, 0)
       switch c.5 Prelude.Bool { #0 -> b1, #1 -> b2 }
     b1:
-      let n.9: int = extern Prelude.-(budget.1, 1)
+      let n.9: int = extern "Prelude.Num Int.-"(budget.1, 1)
       let c.10: enum = extern "Prelude.Ord Int.>="(depth.2, 100)
       switch c.10 Prelude.Bool { #0 -> b3, #1 -> b4 }
     b2:
@@ -122,7 +122,7 @@ fn a_structural_input_calls_its_display_function() {
       let r.8: obj = con (,) #0(s.7, budget.1)
       return r.8
     b3:
-      let n.14: int = extern Prelude.+(depth.2, 1)
+      let n.14: int = extern "Prelude.Num Int.+"(depth.2, 1)
       unpack x.4 B #0(a.15: tobj, a.16: int)
       let c.17: enum = extern "Prelude.Ord Int.>"(prec.3, 10)
       switch c.17 Prelude.Bool { #0 -> b5, #1 -> b6 }
@@ -145,7 +145,7 @@ fn a_structural_input_calls_its_display_function() {
       let c.25: enum = extern "Prelude.Eq Int.=="(n.9, 0)
       switch c.25 Prelude.Bool { #0 -> b8, #1 -> b9 }
     b8:
-      let n.28: int = extern Prelude.-(n.9, 1)
+      let n.28: int = extern "Prelude.Num Int.-"(n.9, 1)
       let c.29: enum = extern "Prelude.Ord Int.>="(n.14, 100)
       switch c.29 Prelude.Bool { #0 -> b10, #1 -> b11 }
     b9:
@@ -166,7 +166,7 @@ fn a_structural_input_calls_its_display_function() {
       let c.38: enum = extern "Prelude.Eq Int.=="(budget.35, 0)
       switch c.38 Prelude.Bool { #0 -> b13, #1 -> b14 }
     b13:
-      let n.41: int = extern Prelude.-(budget.35, 1)
+      let n.41: int = extern "Prelude.Num Int.-"(budget.35, 1)
       let c.42: enum = extern "Prelude.Ord Int.>="(n.14, 100)
       switch c.42 Prelude.Bool { #0 -> b15, #1 -> b16 }
     b14:
@@ -253,7 +253,7 @@ fn a_redefined_function_is_named_after_its_input_and_old_callers_keep_the_old_on
     ");
     insta::assert_snapshot!(function(&shown, "f#3"), @r#"
     fn "f#3"(n.0: int) -> int {
-      let t.1: int = extern Prelude.+(n.0, 1)
+      let t.1: int = extern "Prelude.Num Int.+"(n.0, 1)
       return t.1
     }
     "#);

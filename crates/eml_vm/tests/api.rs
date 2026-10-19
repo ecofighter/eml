@@ -86,7 +86,7 @@ fn count(n.0: int) -> unit {
   let d.1: enum = extern \"Prelude.Eq Int.==\"(n.0, 100000)
   switch d.1 Bool { #0 -> b1, #1 -> b2 }
 b1:
-  let m.2: int = extern \"Prelude.+\"(n.0, 1)
+  let m.2: int = extern \"Prelude.Num Int.+\"(n.0, 1)
   tail call count(m.2)
 b2:
   return ()

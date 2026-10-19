@@ -7,7 +7,7 @@ fn holes_call_the_prelude_display() {
     let text = "f : Int -> String\nf n = \"a\\\"\\{n}b\\{n + 1}\"";
     insta::assert_snapshot!(lower_text(text), @r#"
     f : Int -> String
-    f n#0 = "a\"\{(@Prelude.display n#0)}b\{(@Prelude.display (+ n#0 1))}"
+    f n#0 = "a\"\{(@Prelude.display n#0)}b\{(@Prelude.display (@Prelude.+ n#0 1))}"
     "#);
 }
 

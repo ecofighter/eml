@@ -173,7 +173,7 @@ fn a_row_polymorphic_function_has_an_instance_per_row_bit() {
     fn twice(f.0: tobj) -> int {
       let t.1: int = apply f.0(())
       let t.2: int = apply f.0(())
-      let t.3: int = extern Prelude.+(t.1, t.2)
+      let t.3: int = extern \"Prelude.Num Int.+\"(t.1, t.2)
       return t.3
     }
     ");
@@ -181,7 +181,7 @@ fn a_row_polymorphic_function_has_an_instance_per_row_bit() {
     yields fn "twice<e>"(f.0: tobj) -> int {
       let t.1: int = yields apply f.0(())
       let t.2: int = yields apply f.0(())
-      let t.3: int = extern Prelude.+(t.1, t.2)
+      let t.3: int = extern "Prelude.Num Int.+"(t.1, t.2)
       return t.3
     }
     "#);
@@ -317,7 +317,7 @@ fn a_clause_lambda_over_an_operation_row_variable_may_yield() {
     insta::assert_snapshot!(function(&shown, "main$lambda0"), @"
     internal yields fn main$lambda0(f.0: tobj, p.1: unit) -> int {
       let t.2: int = yields apply f.0(())
-      let t.3: int = extern Prelude.+(t.2, 1)
+      let t.3: int = extern \"Prelude.Num Int.+\"(t.2, 1)
       return t.3
     }
     ");

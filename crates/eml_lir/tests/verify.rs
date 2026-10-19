@@ -34,7 +34,7 @@ fn f(x.0: int) -> int {
 b1:
   jump b3(x.0)
 b2:
-  let t.2: int = extern Prelude.+(x.0, 1) @\"main.em\":2:20
+  let t.2: int = extern \"Prelude.Num Int.+\"(x.0, 1) @\"main.em\":2:20
   jump b3(t.2)
 b3(t.3: int):
   return t.3
@@ -102,7 +102,7 @@ b1:
 b2:
   jump b3(1)
 b3(r.3: int):
-  let u.4: int = extern Prelude.+(n.0, r.3)
+  let u.4: int = extern \"Prelude.Num Int.+\"(n.0, r.3)
   return u.4
 }}
 "
@@ -286,10 +286,10 @@ fn a_variable_defined_in_two_blocks_is_rejected() {
 fn f(x.0: int) -> int {
   switch x.0 { 1 -> b1, _ -> b2 }
 b1:
-  let t.1: int = extern Prelude.+(x.0, 1)
+  let t.1: int = extern \"Prelude.Num Int.+\"(x.0, 1)
   jump b3()
 b2:
-  let t.1: int = extern Prelude.+(x.0, 2)
+  let t.1: int = extern \"Prelude.Num Int.+\"(x.0, 2)
   jump b3()
 b3:
   return t.1
@@ -334,8 +334,8 @@ fn a_variable_used_outside_its_scope_is_rejected() {
 fn a_variable_used_before_its_definition_is_rejected() {
     let text = "\
 fn f(x.0: int) -> int {
-  let a.1: int = extern Prelude.+(b.2, 1)
-  let b.2: int = extern Prelude.+(x.0, 1)
+  let a.1: int = extern \"Prelude.Num Int.+\"(b.2, 1)
+  let b.2: int = extern \"Prelude.Num Int.+\"(x.0, 1)
   return a.1
 }
 ";
@@ -347,7 +347,8 @@ fn f(x.0: int) -> int {
 
 #[test]
 fn a_variable_used_in_its_own_definition_is_rejected() {
-    let text = "fn f() -> int {\n  let a.0: int = extern Prelude.+(a.0, 1)\n  return a.0\n}\n";
+    let text =
+        "fn f() -> int {\n  let a.0: int = extern \"Prelude.Num Int.+\"(a.0, 1)\n  return a.0\n}\n";
     assert_eq!(
         check_scopes(text),
         Err("`a.0` is used outside its scope in `f`".to_string())
@@ -360,7 +361,7 @@ fn a_variable_of_another_branch_is_rejected() {
 fn f(x.0: int) -> int {
   switch x.0 { 1 -> b1, _ -> b2 }
 b1:
-  let t.1: int = extern Prelude.+(x.0, 1)
+  let t.1: int = extern \"Prelude.Num Int.+\"(x.0, 1)
   jump b3(t.1)
 b2:
   jump b3(t.1)
@@ -380,7 +381,7 @@ fn a_merge_block_does_not_see_a_variable_defined_on_one_path() {
 fn f(x.0: int) -> int {
   switch x.0 { 1 -> b1, _ -> b2 }
 b1:
-  let t.1: int = extern Prelude.+(x.0, 1)
+  let t.1: int = extern \"Prelude.Num Int.+\"(x.0, 1)
   jump b3()
 b2:
   jump b3()
@@ -487,7 +488,7 @@ fn scopes_keep_variables_in_scope_after_a_call() {
     let text = format!(
         "{K}fn f(n.0: int) -> int {{
   let t.1: int = call k(n.0)
-  let t.2: int = extern Prelude.+(n.0, t.1)
+  let t.2: int = extern \"Prelude.Num Int.+\"(n.0, t.1)
   return t.2
 }}
 "
@@ -692,21 +693,19 @@ fn rejected_at_both_levels(text: &str) -> String {
 
 #[test]
 fn an_extern_argument_of_another_repr_is_rejected() {
-    let text =
-        "fn f(s.0: obj) -> int {\n  let t.1: int = extern Prelude.+(s.0, 1)\n  return t.1\n}\n";
+    let text = "fn f(s.0: obj) -> int {\n  let t.1: int = extern \"Prelude.Num Int.+\"(s.0, 1)\n  return t.1\n}\n";
     assert_eq!(
         rejected_at_both_levels(text),
-        "argument 0 of `Prelude.+` is `s.0` (obj), but the extern takes int in `f`"
+        "argument 0 of `Prelude.Num Int.+` is `s.0` (obj), but the extern takes int in `f`"
     );
 }
 
 #[test]
 fn an_extern_argument_constant_that_does_not_fit_is_rejected() {
-    let text =
-        "fn f(n.0: int) -> int {\n  let t.1: int = extern Prelude.+(n.0, ())\n  return t.1\n}\n";
+    let text = "fn f(n.0: int) -> int {\n  let t.1: int = extern \"Prelude.Num Int.+\"(n.0, ())\n  return t.1\n}\n";
     assert_eq!(
         rejected_at_both_levels(text),
-        "argument 1 of `Prelude.+` is (), but the extern takes int in `f`"
+        "argument 1 of `Prelude.Num Int.+` is (), but the extern takes int in `f`"
     );
 }
 
@@ -2001,10 +2000,10 @@ fn a_closure_with_every_argument_is_rejected() {
 #[test]
 fn an_extern_with_the_wrong_number_of_arguments_is_rejected() {
     // テキストの形は引数をいくつでも読み、数は verifier が表の値と比べる
-    let text = "fn f(a.0: int) -> int {\n  let t.1: int = extern Prelude.+(a.0)\n  return t.1\n}\n";
+    let text = "fn f(a.0: int) -> int {\n  let t.1: int = extern \"Prelude.Num Int.+\"(a.0)\n  return t.1\n}\n";
     assert_eq!(
         check(text),
-        Err("`Prelude.+` takes 2 arguments but is given 1 in `f`".to_string())
+        Err("`Prelude.Num Int.+` takes 2 arguments but is given 1 in `f`".to_string())
     );
 }
 

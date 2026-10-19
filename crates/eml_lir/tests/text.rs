@@ -31,7 +31,7 @@ fn f(x.0: int) -> int {
 b1:
   jump b3(x.0)
 b2:
-  let t.2: int = extern Prelude.+(x.0, 1) @\"main.em\":2:20
+  let t.2: int = extern \"Prelude.Num Int.+\"(x.0, 1) @\"main.em\":2:20
   jump b3(t.2)
 b3(t.3: int):
   return t.3
@@ -73,9 +73,9 @@ fn positions_are_printed_only_on_request() {
 fn paths_are_numbered_in_order_of_appearance() {
     let text = "\
 fn f(x.0: int) -> int {
-  let a.1: int = extern Prelude.+(x.0, 1) @\"b.em\":1:1
-  let b.2: int = extern Prelude.+(a.1, 1) @\"a.em\":3:4
-  let c.3: int = extern Prelude.+(b.2, 1) @\"b.em\":5:6
+  let a.1: int = extern \"Prelude.Num Int.+\"(x.0, 1) @\"b.em\":1:1
+  let b.2: int = extern \"Prelude.Num Int.+\"(a.1, 1) @\"a.em\":3:4
+  let c.3: int = extern \"Prelude.Num Int.+\"(b.2, 1) @\"b.em\":5:6
   return c.3
 }
 ";

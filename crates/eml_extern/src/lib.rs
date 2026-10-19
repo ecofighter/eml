@@ -2,7 +2,7 @@
 //! LIR、VM はこの表を引き、名前の文字列を照らし合わせない。ネイティブ化では、この表がランタイムとの ABI の一覧に
 //! なる (docs/future/roadmap.md)。
 //!
-//! 行の正式な名前は、`std/` の宣言をモジュールの正式な名前で修飾したもの (`Prelude.Int`、`Prelude.+`) である。
+//! 行の正式な名前は、`std/` の宣言をモジュールの正式な名前で修飾したもの (`Prelude.Int`、`Prelude.++`) である。
 //! instance の `extern` で結ぶメソッドの行は、モジュール、クラス、型、メソッドの名前を並べた `Prelude.Eq Int.==` の
 //! 形である。どの行も、`std/` の extern の宣言か instance の `extern` のちょうど1つから指されることは、`eml_hir` の
 //! 結合テストが確かめる。行の Repr が std の宣言の型の Repr と同じであることは、`eml_core_ir` の結合テストが確かめる。
@@ -322,12 +322,12 @@ impl Extern {
             ),
             Extern::Close => kinded("Std.Fs.close", &[Obj], &[Lin], Unit, Unr, Purity::Effectful),
             Extern::IntShow => row("Prelude.Show Int.show", &[Int], Obj, Purity::Pure),
-            Extern::IntNeg => row("Prelude.negate", &[Int], Int, Purity::Panics),
-            Extern::IntAdd => row("Prelude.+", &[Int, Int], Int, Purity::Panics),
-            Extern::IntSub => row("Prelude.-", &[Int, Int], Int, Purity::Panics),
-            Extern::IntMul => row("Prelude.*", &[Int, Int], Int, Purity::Panics),
-            Extern::IntDiv => row("Prelude./", &[Int, Int], Int, Purity::Panics),
-            Extern::IntMod => row("Prelude.%", &[Int, Int], Int, Purity::Panics),
+            Extern::IntNeg => row("Prelude.Num Int.negate", &[Int], Int, Purity::Panics),
+            Extern::IntAdd => row("Prelude.Num Int.+", &[Int, Int], Int, Purity::Panics),
+            Extern::IntSub => row("Prelude.Num Int.-", &[Int, Int], Int, Purity::Panics),
+            Extern::IntMul => row("Prelude.Num Int.*", &[Int, Int], Int, Purity::Panics),
+            Extern::IntDiv => row("Prelude.Div Int./", &[Int, Int], Int, Purity::Panics),
+            Extern::IntMod => row("Prelude.Div Int.%", &[Int, Int], Int, Purity::Panics),
             Extern::IntEq => row("Prelude.Eq Int.==", &[Int, Int], Enum, Purity::Pure),
             Extern::IntNe => row("Prelude.Eq Int.!=", &[Int, Int], Enum, Purity::Pure),
             Extern::IntCompare => row("Prelude.Ord Int.compare", &[Int, Int], Enum, Purity::Pure),

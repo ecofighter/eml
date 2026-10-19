@@ -48,7 +48,7 @@ fn a_continuation_entered_by_two_jumps_is_a_merge_block() {
     b2:
       jump b3(1)
     b3(t.1: int):
-      let t.2: int = extern Prelude.+(t.1, 1)
+      let t.2: int = extern \"Prelude.Num Int.+\"(t.1, 1)
       return t.2
     }
     ");
@@ -180,7 +180,7 @@ fn a_chain_of_returned_continuations_folds_in_one_pass() {
     fn h(a.0: enum, b.1: enum, x.2: int) -> int {
       switch a.0 Prelude.Bool { #0 -> b1, #1 -> b2 }
     b1:
-      let t.6: int = extern Prelude.+(x.2, 2)
+      let t.6: int = extern \"Prelude.Num Int.+\"(x.2, 2)
       let t.7: int = call f(t.6)
       return t.7
     b2:
@@ -201,7 +201,7 @@ fn every_extern_call_carries_the_position_of_its_callee() {
     let text = "main : Unit -> <IO, Panic> Unit\nmain () =\n  let n = 10 / 2\n  println (show n)";
     insta::assert_snapshot!(function(&core_text_with_positions(text), "main"), @r#"
     fn main(p.0: unit) -> unit {
-      let t.1: int = extern Prelude./(10, 2) @"test.em":3:14
+      let t.1: int = extern "Prelude.Div Int./"(10, 2) @"test.em":3:14
       let t.2: obj = extern "Prelude.Show Int.show"(t.1) @"test.em":4:12
       let t.3: unit = extern Prelude.println(t.2) @"test.em":4:3
       return t.3
@@ -355,7 +355,7 @@ fn handlers_are_lifted_with_their_return_reprs() {
       return t.3
     }
     internal fn main$handle0$return(x.0: int, p.1: unit) -> int {
-      let t.2: int = extern Prelude.+(x.0, 1)
+      let t.2: int = extern "Prelude.Num Int.+"(x.0, 1)
       return t.2
     }
     fn entry$main() -> unit {
@@ -404,7 +404,7 @@ fn lower_until_stops_after_the_named_pass() {
     insta::assert_snapshot!(function(&lir_text(text, eml_lir::Pass::Contract), "entry$main"), @r#"
     fn entry$main() -> unit {
       let s.1: obj = const "used"
-      let t.2: int = extern Prelude.+(1, 1)
+      let t.2: int = extern "Prelude.Num Int.+"(1, 1)
       let t.3: unit = extern Prelude.println(s.1)
       let t.4: obj = extern "Prelude.Show Int.show"(t.2)
       let t.5: obj = extern Prelude.++(s.1, t.4)
@@ -415,7 +415,7 @@ fn lower_until_stops_after_the_named_pass() {
     insta::assert_snapshot!(function(&lir_text(text, eml_lir::Pass::Perceus), "entry$main"), @r#"
     fn entry$main() -> unit {
       let s.1: obj = const "used"
-      let t.2: int = extern Prelude.+(1, 1)
+      let t.2: int = extern "Prelude.Num Int.+"(1, 1)
       dup s.1
       let t.3: unit = extern Prelude.println(s.1)
       let t.4: obj = extern "Prelude.Show Int.show"(t.2)
@@ -464,7 +464,7 @@ fn a_destructuring_let_of_an_if_builds_no_tuple() {
     b2:
       jump b3(a.1, b.2)
     b3(lo.3: int, hi.4: int):
-      let t.5: int = extern Prelude.-(hi.4, lo.3)
+      let t.5: int = extern \"Prelude.Num Int.-\"(hi.4, lo.3)
       return t.5
     }
     ");
@@ -637,7 +637,7 @@ fn a_constructor_bound_by_let_is_known_later() {
       let d.1: tobj = con Option #1(x.0)
       let s.2: obj = const "built"
       let t.3: unit = extern Prelude.println(s.2)
-      let t.4: int = extern Prelude.+(x.0, 1)
+      let t.4: int = extern "Prelude.Num Int.+"(x.0, 1)
       return t.4
     }
     "#);
@@ -645,7 +645,7 @@ fn a_constructor_bound_by_let_is_known_later() {
     fn unwrap(x.0: int) -> int {
       let s.2: obj = const "built"
       let t.3: unit = extern Prelude.println(s.2)
-      let t.4: int = extern Prelude.+(x.0, 1)
+      let t.4: int = extern "Prelude.Num Int.+"(x.0, 1)
       return t.4
     }
     "#);
@@ -656,8 +656,8 @@ fn a_tuple_literal_is_taken_apart_without_building_it() {
     let text = "shift : Int -> Int -> <Panic> Int\nshift x y =\n  let (a, b) = (y, x + 1)\n  a - b\n\nmain : Unit -> <IO, Panic> Unit\nmain () = println (show (shift 1 2))";
     insta::assert_snapshot!(function(&core_text(text, Pass::Translate), "shift"), @"
     fn shift(x.0: int, y.1: int) -> int {
-      let t.2: int = extern Prelude.+(x.0, 1)
-      let t.3: int = extern Prelude.-(y.1, t.2)
+      let t.2: int = extern \"Prelude.Num Int.+\"(x.0, 1)
+      let t.3: int = extern \"Prelude.Num Int.-\"(y.1, t.2)
       return t.3
     }
     ");
@@ -678,7 +678,7 @@ fn equations_take_their_parameters_as_columns() {
     b2:
       jump b5()
     b3:
-      let t.4: int = extern Prelude.+(a.2, b.3)
+      let t.4: int = extern \"Prelude.Num Int.+\"(a.2, b.3)
       return t.4
     b4:
       jump b5()
@@ -800,7 +800,7 @@ fn a_lone_constructor_without_fields_is_a_wildcard() {
     let text = "data Token =\n  | Token\n\nspend : Token -> Int -> <Panic> Int\nspend Token n =\n  let Token = Token\n  match Token with\n    | Token -> n + 1\n\nmain : Unit -> <IO, Panic> Unit\nmain () = println (show (spend Token 1))";
     insta::assert_snapshot!(function(&core_text(text, Pass::Translate), "spend"), @"
     fn spend(p.0: enum, n.1: int) -> int {
-      let t.2: int = extern Prelude.+(n.1, 1)
+      let t.2: int = extern \"Prelude.Num Int.+\"(n.1, 1)
       return t.2
     }
     ");
@@ -860,7 +860,7 @@ fn user_effects_are_numbered_after_io() {
     yields fn "needs_a<e>"(f.0: tobj poly) -> int {
       let t.1: int = perform A.ask(())
       let t.2: int = mask [A] yields apply f.0(())
-      let t.3: int = extern Prelude.+(t.1, t.2)
+      let t.3: int = extern "Prelude.Num Int.+"(t.1, t.2)
       return t.3
     }
     yields fn told(p.0: unit) -> int {
@@ -1037,7 +1037,7 @@ fn recursion_and_top_level_values() {
       let t.1: enum = extern "Prelude.Eq Int.=="(n.0, 0)
       switch t.1 Prelude.Bool { #0 -> b1, #1 -> b2 }
     b1:
-      let t.3: int = extern Prelude.-(n.0, 1)
+      let t.3: int = extern "Prelude.Num Int.-"(n.0, 1)
       let t.4: int = call count(t.3)
       return t.4
     b2:
@@ -1064,7 +1064,7 @@ fn partial_and_extra_arguments_use_closures() {
     effect Prelude.IO { never io_failed(enum, obj) -> never }
     effect Prelude.Panic { never panicked(obj) -> never }
     fn add(a.0: int, b.1: int) -> int {
-      let t.2: int = extern Prelude.+(a.0, b.1)
+      let t.2: int = extern "Prelude.Num Int.+"(a.0, b.1)
       return t.2
     }
     fn adder(x.0: int) -> tobj poly {
@@ -1076,7 +1076,7 @@ fn partial_and_extra_arguments_use_closures() {
       let t.2: int = apply c.1(2)
       let t.3: tobj = call adder(3)
       let t.4: int = apply t.3(4)
-      let t.5: int = extern Prelude.+(t.2, t.4)
+      let t.5: int = extern "Prelude.Num Int.+"(t.2, t.4)
       let t.6: obj = extern "Prelude.Show Int.show"(t.5)
       let t.7: unit = extern Prelude.println(t.6)
       return t.7
@@ -1177,7 +1177,7 @@ fn a_zero_arity_callee_is_evaluated_before_its_arguments() {
     }
     fn main(p.0: unit) -> unit {
       let five.1: tobj = call five()
-      let t.2: int = extern Prelude.+(1, 2)
+      let t.2: int = extern "Prelude.Num Int.+"(1, 2)
       let t.3: int = apply five.1(t.2)
       let t.4: obj = extern "Prelude.Show Int.show"(t.3)
       let t.5: unit = extern Prelude.println(t.4)
@@ -1264,7 +1264,7 @@ fn handlers_are_lifted_to_closures() {
       return t.3
     }
     internal fn main$handle0$return(x.0: int, p.1: unit) -> int {
-      let t.2: int = extern Prelude.+(x.0, 1)
+      let t.2: int = extern "Prelude.Num Int.+"(x.0, 1)
       return t.2
     }
     fn entry$main() -> unit {
@@ -1374,7 +1374,7 @@ fn tail_and_non_tail_matches() {
     b2:
       jump b3(m.1)
     b3(t.2: int):
-      let t.3: int = extern Prelude.+(t.2, 1)
+      let t.3: int = extern \"Prelude.Num Int.+\"(t.2, 1)
       return t.3
     }
     ");
@@ -1403,7 +1403,7 @@ fn constructor_patterns_in_let_lambda_and_equation_parameters() {
     insta::assert_snapshot!(function(&shown, "by_let"), @"
     fn by_let(b.0: obj) -> int {
       unpack b.0 Box #0(m.1: int)
-      let t.2: int = extern Prelude.+(m.1, 1)
+      let t.2: int = extern \"Prelude.Num Int.+\"(m.1, 1)
       return t.2
     }
     ");
@@ -1612,16 +1612,16 @@ fn a_handler_with_a_state_passes_its_initial_value_and_takes_the_state_from_its_
     internal yields fn main$handle0(p.0: unit) -> int {
       let t.1: int = perform Ask.ask(())
       let t.2: int = perform Ask.ask(())
-      let t.3: int = extern Prelude.+(t.1, t.2)
+      let t.3: int = extern "Prelude.Num Int.+"(t.1, t.2)
       return t.3
     }
     internal fn main$handle0$ask(p.0: unit, k.1: tobj lin, st.2: int) -> int {
-      let t.3: int = extern Prelude.+(st.2, 1)
+      let t.3: int = extern "Prelude.Num Int.+"(st.2, 1)
       let t.4: int = resume k.1(st.2, t.3)
       return t.4
     }
     internal fn main$handle0$return(x.0: int, st.1: int) -> int {
-      let t.2: int = extern Prelude.*(x.0, st.1)
+      let t.2: int = extern "Prelude.Num Int.*"(x.0, st.1)
       return t.2
     }
     fn entry$main() -> unit {
@@ -1660,7 +1660,7 @@ fn effects_are_numbered_in_declaration_order() {
     fn main(p.0: unit) -> unit {
       let t.1: int = handle A((), &main$handle0) { a: &main$handle0$a } return &main$handle0$return
       let t.2: int = handle B((), &main$handle1) { b: &main$handle1$b } return &main$handle1$return
-      let t.3: int = extern Prelude.+(t.1, t.2)
+      let t.3: int = extern "Prelude.Num Int.+"(t.1, t.2)
       let t.4: obj = extern "Prelude.Show Int.show"(t.3)
       let t.5: unit = extern Prelude.println(t.4)
       return t.5
@@ -1735,7 +1735,7 @@ fn an_arm_reached_by_one_leaf_sits_at_the_leaf() {
     b1:
       return 0
     b2:
-      let t.3: int = extern Prelude.*(w.1, h.2)
+      let t.3: int = extern "Prelude.Num Int.*"(w.1, h.2)
       return t.3
     }
     fn pick(a.0: int, b.1: int) -> int {
@@ -1749,14 +1749,14 @@ fn an_arm_reached_by_one_leaf_sits_at_the_leaf() {
     b4:
       jump b5(a.0)
     b5(n.2: int):
-      let t.3: int = extern Prelude.*(n.2, 2)
+      let t.3: int = extern "Prelude.Num Int.*"(n.2, 2)
       return t.3
     }
     fn main(p.0: unit) -> unit {
       let d.1: tobj = con Shape #1(2, 3)
       let t.2: int = call area(d.1)
       let t.3: int = call pick(0, 1)
-      let t.4: int = extern Prelude.+(t.2, t.3)
+      let t.4: int = extern "Prelude.Num Int.+"(t.2, t.3)
       let t.5: obj = extern "Prelude.Show Int.show"(t.4)
       let t.6: unit = extern Prelude.println(t.5)
       return t.6
@@ -2011,7 +2011,7 @@ fn a_continuation_with_an_expression_argument_is_resumed_once() {
     );
     assert_eq!(shown.matches("resume ").count(), 1, "{shown}");
     assert!(
-        shown.find("extern Prelude.+(").unwrap() < shown.find("resume ").unwrap(),
+        shown.find("extern \"Prelude.Num Int.+\"(").unwrap() < shown.find("resume ").unwrap(),
         "{shown}"
     );
     assert!(!shown.contains("cont$"), "{shown}");
@@ -2162,7 +2162,7 @@ fn externs_are_called_by_their_canonical_name() {
     let text = "apply : (a -> <e> b) -> a -> <e> b\napply f x = f x\n\neq : Int -> Int -> Bool\neq = (==)\n\nmain : Unit -> <IO, Panic> Unit\nmain () =\n  let _ = (1 + 2, \"a\" == \"b\", True != False, eq 1 2)\n  println (apply show 3)";
     let shown = core_text(text, Pass::Translate);
     for expected in [
-        "extern Prelude.+(1, 2)",
+        "extern \"Prelude.Num Int.+\"(1, 2)",
         "extern \"Prelude.Eq String.==\"(",
         "extern \"Prelude.Eq Bool.!=\"(#1, #0)",
         "extern \"Prelude.Eq Int.==\"(",
@@ -2224,7 +2224,7 @@ fn a_wildcard_arm_does_not_block_the_known_tags() {
     b2:
       jump b3(1)
     b3(t.1: int):
-      let t.2: int = extern Prelude.+(t.1, 1)
+      let t.2: int = extern \"Prelude.Num Int.+\"(t.1, 1)
       return t.2
     }
     ");
@@ -2268,7 +2268,7 @@ fn a_known_and_an_unknown_value_share_an_arm() {
     b5(v.3: int):
       jump b6(v.3)
     b6(t.4: int):
-      let t.5: int = extern Prelude.+(t.4, 1)
+      let t.5: int = extern \"Prelude.Num Int.+\"(t.4, 1)
       return t.5
     }
     ");
@@ -2288,7 +2288,7 @@ fn a_known_tag_reaching_a_default_that_uses_the_scrutinee_passes_the_value() {
     b2:
       jump b3(1)
     b3(t.2: int):
-      let t.3: int = extern Prelude.+(t.2, 1)
+      let t.3: int = extern \"Prelude.Num Int.+\"(t.2, 1)
       return t.3
     }
     ");
@@ -2678,7 +2678,7 @@ fn a_list_literal_evaluates_left_to_right_and_builds_from_the_right() {
     let text = "f : Int -> <Panic> List Int\nf x = [x + 1, x]\n\nmain : Unit -> <IO, Panic> Unit\nmain () = println (show (f 1))";
     insta::assert_snapshot!(function(&core_text(text, Pass::Translate), "f"), @"
     fn f(x.0: int) -> tobj {
-      let t.1: int = extern Prelude.+(x.0, 1)
+      let t.1: int = extern \"Prelude.Num Int.+\"(x.0, 1)
       let d.2: tobj = con Prelude.List #1(x.0, #0)
       let d.3: tobj = con Prelude.List #1(t.1, d.2)
       return d.3
@@ -2715,7 +2715,7 @@ fn record_construction_evaluates_in_source_order_and_builds_in_declaration_order
     let text = "data P = | P { a : Int, b : Int }\n\nf : Int -> <Panic> P\nf x = P { b = x + 1, a = x }\n\nmain : Unit -> <IO, Panic> Unit\nmain () = drop (f 1)";
     insta::assert_snapshot!(function(&core_text(text, Pass::Translate), "f"), @"
     fn f(x.0: int) -> obj {
-      let t.1: int = extern Prelude.+(x.0, 1)
+      let t.1: int = extern \"Prelude.Num Int.+\"(x.0, 1)
       let d.2: obj = con P #0(x.0, t.1)
       return d.2
     }
@@ -2749,7 +2749,7 @@ fn a_projection_of_a_type_variable_field_is_unboxed() {
     fn f(b.0: obj) -> int {
       unpack b.0 Box #0(f.3: tobj)
       let f.1: int = unbox f.3
-      let t.2: int = extern Prelude.+(f.1, 1)
+      let t.2: int = extern \"Prelude.Num Int.+\"(f.1, 1)
       return t.2
     }
     ");
@@ -2760,7 +2760,7 @@ fn an_update_evaluates_its_fields_and_builds_a_new_value() {
     let text = "data P = | P { a : Int, b : Int, c : Int }\n\nf : P -> Int -> <Panic> P\nf p n = { p | c = n + 1, a = n }\n\nmain : Unit -> <IO, Panic> Unit\nmain () = drop (f (P { a = 1, b = 2, c = 3 }) 4)";
     insta::assert_snapshot!(function(&core_text(text, Pass::Translate), "f"), @"
     fn f(p.0: obj, n.1: int) -> obj {
-      let t.2: int = extern Prelude.+(n.1, 1)
+      let t.2: int = extern \"Prelude.Num Int.+\"(n.1, 1)
       unpack p.0 P #0(f.3: int, f.4: int, f.5: int)
       let d.6: obj = con P #0(n.1, f.4, t.2)
       return d.6
@@ -2776,7 +2776,7 @@ fn a_generic_update_keeps_the_fields_at_their_instantiated_types() {
       let d.1: obj = con Box #0(41, 1)
       unpack d.1 Box #0(f.2: int, f.3: int)
       let d.4: obj = con Box #0(f.2, 2)
-      let t.5: int = extern Prelude.+(f.2, 1)
+      let t.5: int = extern "Prelude.Num Int.+"(f.2, 1)
       let t.6: obj = extern "Prelude.Show Int.show"(t.5)
       let t.7: unit = extern Prelude.println(t.6)
       return t.7
@@ -2813,11 +2813,11 @@ fn a_handle_body_and_clause_closures_take_the_join_of_their_captures() {
     fn main(p.0: unit) -> unit {
       let s.1: obj = const "a.txt"
       let t.2: obj lin = extern Std.Fs.open(s.1)
-      let t.3: int = extern Prelude.+(40, 1)
+      let t.3: int = extern "Prelude.Num Int.+"(40, 1)
       let c.4: tobj lin = closure main$handle0(t.2)
       let c.5: tobj = closure main$handle0$ask(t.3)
       let t.6: int = handle Ask((), c.4) { ask: c.5 } return &main$handle0$return
-      let t.7: int = extern Prelude.+(t.6, 1)
+      let t.7: int = extern "Prelude.Num Int.+"(t.6, 1)
       let t.8: obj = extern "Prelude.Show Int.show"(t.7)
       let t.9: unit = extern Prelude.println(t.8)
       return t.9
@@ -2985,7 +2985,7 @@ fn equal_non_unr_occurrences_are_built_apart() {
       let t.7: unit = call close_opt(d.5)
       let t.8: int = call use_ints(d.6)
       let t.9: int = call use_ints(d.6)
-      let t.10: int = extern Prelude.+(t.8, t.9)
+      let t.10: int = extern "Prelude.Num Int.+"(t.8, t.9)
       let t.11: obj = extern "Prelude.Show Int.show"(t.10)
       let t.12: unit = extern Prelude.println(t.11)
       return t.12
@@ -3171,7 +3171,7 @@ fn a_linear_constructor_variable_destructured_in_both_branches_is_taken_apart_in
       switch c.0 Prelude.Bool { #0 -> b1, #1 -> b2 }
     b1:
       unpack d.2 (,) #0(b.10: tobj lin, m.11: int)
-      let t.12: int = extern Prelude.+(m.11, 1)
+      let t.12: int = extern "Prelude.Num Int.+"(m.11, 1)
       let t.13: obj = extern "Prelude.Show Int.show"(t.12)
       let t.14: unit = extern Prelude.println(t.13)
       let t.15: unit = call close_all(b.10)
@@ -3212,8 +3212,8 @@ fn a_local_function_is_lifted_and_called_directly() {
       let t.3: enum = extern "Prelude.Eq Int.=="(k.1, 0)
       switch t.3 Prelude.Bool { #0 -> b1, #1 -> b2 }
     b1:
-      let t.4: int = extern Prelude.-(k.1, 1)
-      let t.5: int = extern Prelude.+(acc.2, base.0)
+      let t.4: int = extern "Prelude.Num Int.-"(k.1, 1)
+      let t.5: int = extern "Prelude.Num Int.+"(acc.2, base.0)
       let t.6: int = call f$let$go(base.0, t.4, t.5)
       return t.6
     b2:
@@ -3275,7 +3275,7 @@ fn nested_local_functions_pass_outer_captures() {
       let t.2: enum = extern "Prelude.Eq Int.=="(j.1, 0)
       switch t.2 Prelude.Bool { #0 -> b1, #1 -> b2 }
     b1:
-      let t.3: int = extern Prelude.-(j.1, 1)
+      let t.3: int = extern "Prelude.Num Int.-"(j.1, 1)
       let t.4: int = call f$let$outer(a.0, t.3)
       return t.4
     b2:
@@ -3294,7 +3294,7 @@ fn mutually_recursive_functions_share_their_captures() {
       let t.3: enum = extern "Prelude.Eq Int.=="(k.2, a.0)
       switch t.3 Prelude.Bool { #0 -> b1, #1 -> b2 }
     b1:
-      let t.4: int = extern Prelude.-(k.2, 1)
+      let t.4: int = extern "Prelude.Num Int.-"(k.2, 1)
       let t.5: enum = call f$let$odd(a.0, b.1, t.4)
       return t.5
     b2:
@@ -3306,7 +3306,7 @@ fn mutually_recursive_functions_share_their_captures() {
       let t.3: enum = extern "Prelude.Eq Int.=="(k.2, b.1)
       switch t.3 Prelude.Bool { #0 -> b1, #1 -> b2 }
     b1:
-      let t.4: int = extern Prelude.-(k.2, 1)
+      let t.4: int = extern "Prelude.Num Int.-"(k.2, 1)
       let t.5: enum = call f$let$even(a.0, b.1, t.4)
       return t.5
     b2:
@@ -3394,7 +3394,7 @@ fn a_lin_enum_variable_is_unr() {
       let t.1: int = unbox t.5
       decref t.5
       let t.3: int = call spend_after(0, t.0)
-      let t.2: int = extern Prelude.+(t.3, t.1)
+      let t.2: int = extern \"Prelude.Num Int.+\"(t.3, t.1)
       let t.6: tobj = box t.2
       return t.6
     }
@@ -3442,7 +3442,7 @@ fn a_non_returning_call_drops_the_open_file_first() {
       let s.1: obj = const "a"
       let t.2: obj lin = extern Std.Fs.open(s.1)
       let s.3: obj = const "b"
-      let t.4: int = extern Prelude.+(1, 1)
+      let t.4: int = extern "Prelude.Num Int.+"(1, 1)
       let u.5: unit = drop t.2
       let t.6: unit = extern Prelude.exit(t.4)
       return t.6

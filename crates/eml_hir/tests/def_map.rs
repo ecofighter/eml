@@ -89,9 +89,11 @@ fn the_entry_sees_only_public_prelude_names() {
         resolver.value(Plain("println")),
         Resolved::Found(_)
     ));
-    // `negate` は `pub` でないので名前で引けない。extern の索引からは引ける
-    assert_eq!(resolver.value(Plain("negate")), Resolved::NotFound);
-    assert_eq!(map.externs().negate.module, map.prelude());
+    // `negate` は `Num` の `pub` のメソッドなので、前置の `-` の脱糖と同じものを名前でも引ける
+    assert_eq!(
+        resolver.value(Plain("negate")),
+        Resolved::Found(ValueItem::Method(map.lang().negate))
+    );
     assert_eq!(resolver.value(Plain("io_failed")), Resolved::NotFound);
     assert_eq!(resolver.operation(Plain("io_failed")), Resolved::NotFound);
     assert_eq!(
@@ -230,7 +232,7 @@ fn qualified_names_look_only_in_the_qualifier_modules() {
     );
     assert_eq!(found_in(&map, resolver.value(Plain("not"))), Some("Main"));
     assert_eq!(
-        resolver.value(qualified("Prelude", "negate")),
+        resolver.value(qualified("Prelude", "show_rest")),
         Resolved::NotFound
     );
     assert_eq!(

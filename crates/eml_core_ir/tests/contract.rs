@@ -74,8 +74,8 @@ fn calls_in_tail_position_are_tail_calls() {
       let t.2: enum = extern \"Prelude.Eq Int.==\"(n.0, 0)
       switch t.2 Prelude.Bool { #0 -> b1, #1 -> b2 }
     b1:
-      let t.3: int = extern Prelude.-(n.0, 1)
-      let t.4: int = extern Prelude.+(acc.1, 1)
+      let t.3: int = extern \"Prelude.Num Int.-\"(n.0, 1)
+      let t.4: int = extern \"Prelude.Num Int.+\"(acc.1, 1)
       tail call loop(t.3, t.4)
     b2:
       return acc.1
@@ -99,8 +99,8 @@ fn a_local_self_call_is_a_tail_call() {
       let t.3: enum = extern "Prelude.Eq Int.=="(k.1, 0)
       switch t.3 Prelude.Bool { #0 -> b1, #1 -> b2 }
     b1:
-      let t.4: int = extern Prelude.-(k.1, 1)
-      let t.5: int = extern Prelude.+(acc.2, base.0)
+      let t.4: int = extern "Prelude.Num Int.-"(k.1, 1)
+      let t.5: int = extern "Prelude.Num Int.+"(acc.2, base.0)
       tail call f$let$go(base.0, t.4, t.5)
     b2:
       return acc.2

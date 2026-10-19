@@ -29,7 +29,7 @@ fn main() -> unit {
   return u.2
 }
 fn add(a.0: int, b.1: int) -> int {
-  let c.2: int = extern \"Prelude.+\"(a.0, b.1)
+  let c.2: int = extern \"Prelude.Num Int.+\"(a.0, b.1)
   return c.2
 }
 ";
@@ -40,7 +40,7 @@ fn add(a.0: int, b.1: int) -> int {
 fn an_int_wider_than_the_immediate_is_a_constant() {
     let text = "\
 fn main() -> unit {
-  let n.0: int = extern \"Prelude.+\"(4611686018427387904, 1)
+  let n.0: int = extern \"Prelude.Num Int.+\"(4611686018427387904, 1)
   let s.1: obj = extern \"Prelude.Show Int.show\"(n.0)
   let u.2: unit = extern Prelude.println(s.1)
   return u.2
@@ -68,7 +68,7 @@ fn say(s.0: obj) -> unit {
 fn a_division_by_zero_carries_the_position_of_the_extern() {
     let text = "\
 fn main() -> unit {
-  let n.0: int = extern \"Prelude./\"(1, 0) @\"main.em\":2:3
+  let n.0: int = extern \"Prelude.Div Int./\"(1, 0) @\"main.em\":2:3
   let s.1: obj = extern \"Prelude.Show Int.show\"(n.0)
   let u.2: unit = extern Prelude.println(s.1)
   return u.2
@@ -97,7 +97,7 @@ fn output_before_an_error_is_flushed() {
 fn main() -> unit {
   let s.0: obj = const \"before\"
   let u.1: unit = extern Prelude.println(s.0)
-  let n.2: int = extern \"Prelude.%\"(1, 0)
+  let n.2: int = extern \"Prelude.Div Int.%\"(1, 0)
   let t.3: obj = extern \"Prelude.Show Int.show\"(n.2)
   let v.4: unit = extern Prelude.println(t.3)
   return v.4
@@ -161,7 +161,7 @@ fn extern_all_follows_the_declaration_order() {
 fn an_unused_call_result_does_not_overwrite_a_live_value() {
     let text = "\
 fn main() -> unit {
-  let k.0: int = extern \"Prelude.+\"(1, 2)
+  let k.0: int = extern \"Prelude.Num Int.+\"(1, 2)
   let r.1: int = call one()
   let s.2: obj = extern \"Prelude.Show Int.show\"(k.0)
   let u.3: unit = extern Prelude.println(s.2)
@@ -178,11 +178,11 @@ fn one() -> int {
 fn swapped_block_arguments_arrive_swapped() {
     let text = "\
 fn main() -> unit {
-  let x.0: int = extern \"Prelude.+\"(1, 0)
-  let y.1: int = extern \"Prelude.+\"(2, 0)
+  let x.0: int = extern \"Prelude.Num Int.+\"(1, 0)
+  let y.1: int = extern \"Prelude.Num Int.+\"(2, 0)
   jump b1(y.1, x.0)
 b1(p.2: int, q.3: int):
-  let d.4: int = extern \"Prelude.-\"(p.2, q.3)
+  let d.4: int = extern \"Prelude.Num Int.-\"(p.2, q.3)
   let s.5: obj = extern \"Prelude.Show Int.show\"(d.4)
   let u.6: unit = extern Prelude.println(s.5)
   return u.6
@@ -211,11 +211,11 @@ b1:
 b2:
   jump b3(0)
 b3(m.3: int):
-  let c.4: int = extern Prelude.+(m.3, n.0)
+  let c.4: int = extern \"Prelude.Num Int.+\"(m.3, n.0)
   return c.4
 }
 fn double(x.0: int) -> int {
-  let y.1: int = extern Prelude.+(x.0, x.0)
+  let y.1: int = extern \"Prelude.Num Int.+\"(x.0, x.0)
   return y.1
 }
 ";
@@ -229,7 +229,7 @@ fn a_fault_outside_an_extern_has_no_position() {
     let text = "\
 layout (,) { (,)(tobj, tobj) }
 fn main() -> unit {
-  let n.0: int = extern Prelude.+(1, 2) @\"main.em\":1:1
+  let n.0: int = extern \"Prelude.Num Int.+\"(1, 2) @\"main.em\":1:1
   let d.1: obj = con (,) #0(n.0, n.0)
   decref d.1
   decref d.1

@@ -170,12 +170,13 @@ dir </> name = join_path dir name
 - 合成演算子 `.` は採用しない (`.` は射影とモジュール修飾に使うため)
 - 単項の `!` はない。否定は関数 `not` で書く
 
-標準の演算子の型と意味は次のとおり。`==`、`!=`、`<`、`<=`、`>`、`>=` は Prelude のクラス `Eq` と `Ord` のメソッドで、型ごとの instance が比べ方を決める (下の「Prelude のクラス」)。算術の演算子と `++` は、`Prelude` の `extern` の関数で、型を1つに固定する。`Num` のクラスは S14 で入れる ([ロードマップ](../future/roadmap.md) の「段の列」)。
+標準の演算子の型と意味は次のとおり。`==`、`!=`、`<`、`<=`、`>`、`>=` は Prelude のクラス `Eq` と `Ord` のメソッドで、型ごとの instance が比べ方を決める (下の「Prelude のクラス」)。算術の演算子 `+`、`-`、`*` と、前置の `-` が呼ぶ `negate` は Prelude のクラス `Num` の、`/` と `%` はクラス `Div` のメソッドである。`++` は `Prelude` の `extern` の関数で、型を1つに固定する。
 
 | 演算子 | 型と意味 |
 |---|---|
-| `+` `-` `*` `/` `%` | `Int -> Int -> <Panic> Int`。`Int` は 64 ビットの符号付き整数で、オーバーフローとゼロ除算は `Panic` を起こす。`try_panic` が捕まえなければ実行時エラーになる。`/` と `%` は Rust と同じく、商を 0 の方向に切り捨てる (`%` の結果は被除数と同じ符号になる) |
-| 単項の `-` (`negate`) | `Int -> <Panic> Int`。オーバーフローは `Panic` を起こす |
+| `+` `-` `*` | `Num a => a -> a -> <Panic> a`。クラス `Num` のメソッドである。`Int` は 64 ビットの符号付き整数で、`Int` の instance ではオーバーフローが `Panic` を起こす。`try_panic` が捕まえなければ実行時エラーになる |
+| `/` `%` | `Div a => a -> a -> <Panic> a`。クラス `Div` のメソッドである。`Int` の instance では、オーバーフローとゼロ除算が `Panic` を起こす。Rust と同じく、商を 0 の方向に切り捨てる (`%` の結果は被除数と同じ符号になる) |
+| 単項の `-` (`negate`) | `Num a => a -> <Panic> a`。`Num` のメソッド `negate` を呼ぶ。`Int` の instance では、オーバーフローが `Panic` を起こす |
 | `==` `!=` | `Eq a => a -> a -> Bool`。クラス `Eq` のメソッドである。`Eq` の instance のない型 (関数型、instance のない `data` の型、制約のないシグネチャの型変数) の値を比べると E2006 にする |
 | `<` `<=` `>` `>=` | `Ord a => a -> a -> Bool`。クラス `Ord` のメソッドで、`compare` からの既定を持つ |
 | `++` | `String -> String -> String` |
@@ -184,7 +185,7 @@ dir </> name = join_path dir name
 | `>>` `<<` | 関数合成 |
 | `::` | `a -> List a -> List a`。Prelude の `List` のコンストラクタ |
 
-`&&`、`||`、`|>`、`<|`、`>>`、`<<` と関数 `not` は、Prelude に eml で本体を書いた関数である。ただし `&&` と `||` は、上の表のとおり HIR が短絡評価の `if` に脱糖する。演算子の参照もラムダにしたうえで同じく脱糖するので、この2つの本体は呼ばれない。`::` は Prelude の `List` のコンストラクタである。比較の演算子は、クラスのメソッドとして instance の定義を呼ぶ。`Int`、`String`、`Bool` の instance は、メソッドを instance の中の `extern` で表の行に結ぶ (上の「`extern`」)。残りの演算子は、Prelude の `extern` の関数で、処理系が実装を持つ。
+`&&`、`||`、`|>`、`<|`、`>>`、`<<` と関数 `not` は、Prelude に eml で本体を書いた関数である。ただし `&&` と `||` は、上の表のとおり HIR が短絡評価の `if` に脱糖する。演算子の参照もラムダにしたうえで同じく脱糖するので、この2つの本体は呼ばれない。`::` は Prelude の `List` のコンストラクタである。比較と算術の演算子は、クラスのメソッドとして instance の定義を呼ぶ。`Int`、`String`、`Bool` の instance は、メソッドを instance の中の `extern` で表の行に結ぶ (上の「`extern`」)。残りの演算子 `++` は、Prelude の `extern` の関数で、処理系が実装を持つ。
 
 ## クラスと instance
 
@@ -264,6 +265,16 @@ pub data Ordering =
   | GT
   deriving (Eq, Ord, Show)
 
+pub class Num a where
+  (+) : a -> a -> <Panic> a
+  (-) : a -> a -> <Panic> a
+  (*) : a -> a -> <Panic> a
+  negate : a -> <Panic> a
+
+pub class Div a where
+  (/) : a -> a -> <Panic> a
+  (%) : a -> a -> <Panic> a
+
 pub class Eq a where
   (==) : a -> a -> Bool
   (!=) : a -> a -> Bool
@@ -285,6 +296,10 @@ pub class Show a where
   display x = show x
 ```
 
+- `Num` と `Div` は、互いを上位クラスに持たない。Prelude は `Int` の instance を置き、メソッドを instance の中の `extern` で表の行 (`Prelude.Num Int.+` など) に結ぶ。単相化で instance が決まるので、`Int` の算術は VM の専用の命令になる ([VM](vm.md) の「基本操作と extern」)
+- `Num` と `Div` のメソッドの型は `<Panic>` を持つ。メソッドの型はクラスで1つなので、`Panic` を起こさない instance のメソッドも、型の上では `<Panic>` を持つ
+- 整数のリテラルは `Int` である。`fromInteger` に当たる脱糖も defaulting もないので、何も型を決めない算術 (使わないラムダ `fn x -> x + x` など) は E2009 になる
+- 利用者は自分の型 (ベクトルなど) に `Num` と `Div` の instance を書ける。前置の `-` は、その型の instance の `negate` を呼ぶ
 - `Show` の `show` は既定を持たない。`show` と `show_prec` を互いの既定にすると、どちらも書かない instance が止まらなくなるためである
 - `show_prec d x` の `d` は、`x` を置く位置の優先度である。関数適用の引数の位置は 11 である。導出した `Show` は、これで入れ子の値と中置のコンストラクタに括弧を付ける (上の「`deriving`」)
 - `show` は読み戻せる形、`display` は人が読む形を返す。補間の穴は `display` を呼ぶ ([式](expressions.md) の「補間」)。`display` の既定は `show` である。Prelude の instance では `String` だけが上書きし、文字列をそのまま返す。Haskell の `Show` が `String` の表示のために `showList` を持つのと同じく、クラスのメソッドで `String` だけを特別に扱う
@@ -348,4 +363,4 @@ Prelude の instance は次のとおりである。
 - `pub data` は、型とコンストラクタを公開する。コンストラクタを隠した抽象型は、将来の課題とする ([ロードマップ](../future/roadmap.md))
 - `pub` を付けた item の型に、同じモジュールの `pub` でない型かエフェクトが現れたら E1032 にする。制約に書いた `pub` でないクラスも同じである ([モジュールと名前解決](modules.md) の「公開の範囲」)
 
-標準ライブラリのモジュールは、ユーザーに見せる名前を `pub` で選ぶ。`pub` でない item (`Prelude` の `negate` など) はユーザーには見えず、処理系だけが引く。モジュールの規則は [モジュールと名前解決](modules.md) にある。
+標準ライブラリのモジュールは、ユーザーに見せる名前を `pub` で選ぶ。`pub` でない item (`Prelude` の `show_rest` など) はユーザーには見えず、処理系だけが引く。モジュールの規則は [モジュールと名前解決](modules.md) にある。

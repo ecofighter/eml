@@ -97,7 +97,7 @@ fn main() -> unit {
   let n.1: int = call pick(s.0)
   let s.2: obj = const \"b\"
   let n.3: int = call pick(s.2)
-  let t.4: int = extern Prelude.+(n.1, n.3)
+  let t.4: int = extern \"Prelude.Num Int.+\"(n.1, n.3)
   let t.5: obj = extern \"Prelude.Show Int.show\"(t.4)
   let o.6: unit = extern Prelude.println(t.5)
   return o.6
@@ -224,7 +224,7 @@ fn an_unpack_of_a_value_that_is_not_an_object_is_an_internal_error() {
     let text = "\
 layout Box { Box(tobj) }
 fn main() -> unit {
-  let n.0: int = extern Prelude.+(1, 2)
+  let n.0: int = extern \"Prelude.Num Int.+\"(1, 2)
   unpack n.0 Box #0(a.1: obj)
   return ()
 }
@@ -364,7 +364,7 @@ fn a_release_of_a_value_that_is_not_an_object_is_an_internal_error() {
     let text = "\
 layout Box { Box(tobj) }
 fn main() -> unit {
-  let n.0: int = extern Prelude.+(1, 2)
+  let n.0: int = extern \"Prelude.Num Int.+\"(1, 2)
   release n.0 Box #0(n.0)
   return ()
 }
@@ -465,7 +465,7 @@ b3:
 fn a_drop_of_a_raw_value_does_nothing() {
     let text = "\
 fn main() -> unit {
-  let n.0: int = extern \"Prelude.+\"(1, 1)
+  let n.0: int = extern \"Prelude.Num Int.+\"(1, 1)
   let u.1: unit = drop n.0
   let v.2: unit = drop #2
   return v.2
@@ -481,7 +481,7 @@ fn main() -> unit {
   let b.0: tobj = box 9223372036854775807
   let n.1: int = unbox b.0
   decref b.0
-  let m.2: int = extern \"Prelude.-\"(n.1, 1)
+  let m.2: int = extern \"Prelude.Num Int.-\"(n.1, 1)
   let c.3: tobj = box m.2
   let k.4: int = unbox c.3
   decref c.3
@@ -569,7 +569,7 @@ fn an_int_variable_switch_matches_negative_and_wide_keys() {
         let text = format!(
             "\
 fn main() -> unit {{
-  let n.0: int = extern \"Prelude.+\"({n}, 0)
+  let n.0: int = extern \"Prelude.Num Int.+\"({n}, 0)
   switch n.0 {{ -3 -> b1, 5000000000 -> b2, _ -> b3 }}
 b1:
   let s.1: obj = const \"negative\"

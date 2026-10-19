@@ -161,7 +161,7 @@ impl BodyLowering<'_> {
                     );
                 }
                 let callee = self.alloc(
-                    ExprKind::Path(Res::Item(ValueItem::Function(self.negate))),
+                    ExprKind::Path(Res::Item(ValueItem::Method(self.lang.negate))),
                     range,
                 );
                 let whole = range.cover(self.exprs[operand].range);

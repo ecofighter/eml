@@ -1,5 +1,5 @@
 use crate::common::{diagnostics, lower_text};
-use eml_test_support::{lower_clean, short};
+use eml_test_support::lower_clean;
 
 #[test]
 fn effects_and_operations_are_items() {
@@ -251,7 +251,7 @@ fn a_handler_with_a_state_is_printed_with_its_initial_state() {
       ask : Unit -> Int
     f : Unit -> Int
     f () = {
-      (handle (@Ask.ask ()) from 0 with | ask () k#0 st#1 -> (k#0 st#1 (+ st#1 1)) | return x#2 st#3 -> (+ x#2 st#3))
+      (handle (@Ask.ask ()) from 0 with | ask () k#0 st#1 -> (k#0 st#1 (@Prelude.+ st#1 1)) | return x#2 st#3 -> (@Prelude.+ x#2 st#3))
     }
     ");
 }
@@ -421,19 +421,12 @@ fn a_qualified_extern_function_in_a_clause_cannot_be_handled() {
 #[test]
 fn a_pure_extern_function_in_a_clause_is_not_an_operation() {
     // extern のエフェクトを起こさない extern の関数は E1009 の対象ではないので、見つからない操作の E1001 のままにする。
-    // Prelude の公開の extern の関数で名前が小文字のものは `IO` か `Panic` を起こすので、`negate` を公開して row を空に
-    // した Prelude で確かめる
-    let prelude = eml_hir::PRELUDE_SOURCE.replace(
-        "\nextern negate : Int -> <Panic> Int",
-        "\npub extern negate : Int -> Int",
-    );
-    assert_ne!(prelude, eml_hir::PRELUDE_SOURCE);
-    let text = "f : Unit -> Int\nf () = handle 1 with\n  | ctl negate x k -> k 1";
-    let lowered =
-        eml_test_support::lower_with_std(&[("Prelude.em", &prelude), eml_hir::STD[1]], text);
+    // Prelude の公開の extern の関数で名前が小文字のものは `IO` か `Panic` を起こすので、row が空の `Std.String` の
+    // `byte_length` で確かめる
+    let text = "import String (byte_length)\n\nf : Unit -> Int\nf () = handle 1 with\n  | ctl byte_length x k -> k 1";
     assert_eq!(
-        short(lowered.files(), &lowered.diagnostics),
-        ["E1001 3:9 cannot find effect operation `negate`"]
+        diagnostics(text),
+        ["E1001 5:9 cannot find effect operation `byte_length`"]
     );
 }
 
@@ -540,9 +533,9 @@ fn a_fn_clause_lowers_to_a_resuming_clause() {
     g : Unit -> Int
     g () = {
       (handle (@Ask.ask ()) from 0 with | ask () $k#1 st#0 -> {
-        let ($v#2, $st#3) = (st#0, (+ st#0 1))
+        let ($v#2, $st#3) = (st#0, (@Prelude.+ st#0 1))
         ($k#1 $v#2 $st#3)
-      } | return x#4 st#5 -> (+ x#4 st#5))
+      } | return x#4 st#5 -> (@Prelude.+ x#4 st#5))
     }
     ");
     let lowered = lower_clean(text);

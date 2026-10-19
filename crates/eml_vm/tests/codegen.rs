@@ -12,7 +12,7 @@ fn main() -> unit {
   return u.2
 }
 fn add(a.0: int, b.1: int) -> int {
-  let c.2: int = extern \"Prelude.+\"(a.0, b.1)
+  let c.2: int = extern \"Prelude.Num Int.+\"(a.0, b.1)
   return c.2
 }
 "), @"
@@ -33,9 +33,9 @@ fn add(a.0: int, b.1: int) -> int {
 fn values_that_do_not_overlap_share_a_slot() {
     insta::assert_snapshot!(disasm("\
 fn main() -> unit {
-  let a.0: int = extern \"Prelude.+\"(1, 2)
-  let b.1: int = extern \"Prelude.+\"(a.0, 3)
-  let c.2: int = extern \"Prelude.+\"(b.1, 4)
+  let a.0: int = extern \"Prelude.Num Int.+\"(1, 2)
+  let b.1: int = extern \"Prelude.Num Int.+\"(a.0, 3)
+  let c.2: int = extern \"Prelude.Num Int.+\"(b.1, 4)
   let s.3: obj = extern \"Prelude.Show Int.show\"(c.2)
   let u.4: unit = extern Prelude.println(s.3)
   return u.4
@@ -61,7 +61,7 @@ fn main() -> unit {
 fn a_dead_call_result_takes_a_slot_of_its_own() {
     insta::assert_snapshot!(disasm_unverified("\
 fn main() -> unit {
-  let k.0: int = extern \"Prelude.+\"(1, 2)
+  let k.0: int = extern \"Prelude.Num Int.+\"(1, 2)
   let r.1: int = call one()
   let s.2: obj = extern \"Prelude.Show Int.show\"(k.0)
   let u.3: unit = extern Prelude.println(s.2)
@@ -90,11 +90,11 @@ fn one() -> int {
 fn swapped_block_arguments_go_through_the_scratch_slot() {
     insta::assert_snapshot!(disasm("\
 fn main() -> unit {
-  let x.0: int = extern \"Prelude.+\"(1, 0)
-  let y.1: int = extern \"Prelude.+\"(2, 0)
+  let x.0: int = extern \"Prelude.Num Int.+\"(1, 0)
+  let y.1: int = extern \"Prelude.Num Int.+\"(2, 0)
   jump b1(y.1, x.0)
 b1(p.2: int, q.3: int):
-  let d.4: int = extern \"Prelude.-\"(p.2, q.3)
+  let d.4: int = extern \"Prelude.Num Int.-\"(p.2, q.3)
   let s.5: obj = extern \"Prelude.Show Int.show\"(d.4)
   let u.6: unit = extern Prelude.println(s.5)
   return u.6
@@ -243,10 +243,10 @@ fn main() -> unit {
 fn a_jump_loads_constants_after_moving_variables() {
     insta::assert_snapshot!(disasm("\
 fn main() -> unit {
-  let x.0: int = extern \"Prelude.+\"(1, 2)
+  let x.0: int = extern \"Prelude.Num Int.+\"(1, 2)
   jump b1(5, x.0)
 b1(a.1: int, b.2: int):
-  let c.3: int = extern \"Prelude.+\"(a.1, b.2)
+  let c.3: int = extern \"Prelude.Num Int.+\"(a.1, b.2)
   let s.4: obj = extern \"Prelude.Show Int.show\"(c.3)
   let u.5: unit = extern Prelude.println(s.4)
   return u.5
@@ -314,8 +314,8 @@ b1:
 fn a_wide_constant_is_stored_once() {
     insta::assert_snapshot!(disasm("\
 fn main() -> unit {
-  let a.0: int = extern \"Prelude.+\"(5000000000, 1)
-  let b.1: int = extern \"Prelude.+\"(a.0, 5000000000)
+  let a.0: int = extern \"Prelude.Num Int.+\"(5000000000, 1)
+  let b.1: int = extern \"Prelude.Num Int.+\"(a.0, 5000000000)
   let s.2: obj = extern \"Prelude.Show Int.show\"(b.1)
   let u.3: unit = extern Prelude.println(s.2)
   return u.3
@@ -339,7 +339,7 @@ fn a_switch_without_cases_is_a_goto() {
     insta::assert_snapshot!(disasm("\
 layout Bool { False, True }
 fn main() -> unit {
-  let n.0: int = extern \"Prelude.+\"(1, 2)
+  let n.0: int = extern \"Prelude.Num Int.+\"(1, 2)
   let d.1: enum = extern \"Prelude.Eq Int.==\"(n.0, 3)
   switch d.1 Bool { #0 -> b2, #1 -> b1 }
 b1:

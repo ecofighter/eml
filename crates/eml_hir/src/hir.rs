@@ -203,9 +203,12 @@ pub struct LangItems {
     /// REPL が式の入力の結果を表示する `Show` の `show`。ユーザーが同じ名前を定義しても、Prelude のものを呼ぶ
     /// (docs/spec/core-ir.md の「REPL の入力」)。
     pub show_method: MethodId,
+    /// 前置の `-` の脱糖が呼ぶ `Num` のメソッド。ユーザーが同じ名前を定義しても、脱糖は Prelude のものを呼ぶ
+    /// (docs/spec/expressions.md の「演算子の列と単項マイナス」)。
+    pub negate: MethodId,
 }
 
-/// extern の表の行から、標準ライブラリの宣言を引く索引。使い手のある行 (extern の型、`IO`、`Panic`、`negate`) だけを
+/// extern の表の行から、標準ライブラリの宣言を引く索引。使い手のある行 (extern の型、`IO`、`Panic`) だけを
 /// 持つ。型は、読み込んだモジュールが宣言するものだけを持つ (docs/spec/modules.md の「標準ライブラリ」)。
 #[derive(Debug, Clone)]
 pub struct ExternIndex {
@@ -214,8 +217,6 @@ pub struct ExternIndex {
     pub io: EffectId,
     /// `IO` と同じく、`main` の型と REPL の入力の row の検査が引く (docs/spec/modules.md の「モジュール」)。
     pub panic: EffectId,
-    /// 前置の `-` の脱糖が呼ぶ。Prelude で `pub` にしないので、ユーザーは名前で書けない。
-    pub negate: FunctionId,
 }
 
 impl ExternIndex {

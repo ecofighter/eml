@@ -34,7 +34,7 @@ fn strings_are_dupped_and_decreffed() {
       let t.2: enum = extern "Prelude.Ord Int.<="(n.0, 0)
       switch t.2 Prelude.Bool { #0 -> b1, #1 -> b2 }
     b1:
-      let t.4: int = extern Prelude.-(n.0, 1)
+      let t.4: int = extern "Prelude.Num Int.-"(n.0, 1)
       tail call "hide@[String -> String]{1=twice}"(t.4)
     b2:
       let d.3: obj = con Box #0(&twice)
@@ -246,7 +246,7 @@ fn a_discarded_call_result_is_released() {
       let s.4: obj = const "z"
       return s.4
     b2:
-      let t.2: int = extern Prelude.-(n.0, 1)
+      let t.2: int = extern "Prelude.Num Int.-"(n.0, 1)
       tail call f(t.2)
     }
     fn entry$main() -> unit {
