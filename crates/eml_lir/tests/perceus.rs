@@ -1221,3 +1221,35 @@ fn h(p.0: obj) -> obj {
     }
     ");
 }
+
+#[test]
+fn perceus_leaves_a_borrowed_extern_argument_owned() {
+    // `Std.Array.get` は配列を借りるので、後でまた使う `again` の `a.0` も `dup` しない。`last` の `a.0` は呼び出しの
+    // 直後で `decref` する (docs/spec/lir.md の「extern の借用」)
+    let shown = perceus_text(
+        "\
+fn again(a.0: obj) -> obj {
+  let x.1: tobj = extern \"Std.Array.get\"(a.0, 0)
+  let b.2: obj = extern \"Std.Array.set\"(a.0, 1, x.1)
+  return b.2
+}
+fn last(a.0: obj) -> tobj {
+  let x.1: tobj = extern \"Std.Array.get\"(a.0, 0)
+  return x.1
+}
+",
+    );
+    assert!(!shown.contains("dup a.0"), "{shown}");
+    insta::assert_snapshot!(shown, @"
+    fn again(a.0: obj) -> obj {
+      let x.1: tobj = extern Std.Array.get(a.0, 0)
+      let b.2: obj = extern Std.Array.set(a.0, 1, x.1)
+      return b.2
+    }
+    fn last(a.0: obj) -> tobj {
+      let x.1: tobj = extern Std.Array.get(a.0, 0)
+      decref a.0
+      return x.1
+    }
+    ");
+}

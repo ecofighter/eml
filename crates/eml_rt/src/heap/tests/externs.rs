@@ -1175,6 +1175,51 @@ impl Args {
             }
         }
     }
+
+    /// 配列の引数の参照を1つ作る。共有した配列は `dup` し、残った参照は結果を読んだ後で手放す
+    unsafe fn array<M: Mode>(&mut self, ctx: &mut crate::Ctx<M>, arg: &Arg) -> Word {
+        let Arg::Array {
+            elements,
+            lin,
+            shared,
+        } = arg
+        else {
+            panic!("not an array argument: {arg:?}");
+        };
+        unsafe {
+            let mut w = ctx
+                .array_make(elements.len() as i64, Word::imm(0), *lin)
+                .unwrap();
+            for (i, &e) in elements.iter().enumerate() {
+                w = ctx.array_set(w, i as i64, Word::imm(e)).unwrap();
+            }
+            if *shared {
+                ctx.heap_mut().dup(w).unwrap();
+                self.release.push(w);
+            }
+            w
+        }
+    }
+
+    /// 借りて渡す配列の引数。呼んだ側の参照は結果を読んだ後で手放す
+    unsafe fn lent_array<M: Mode>(&mut self, ctx: &mut crate::Ctx<M>, arg: &Arg) -> Word {
+        let w = unsafe { self.array(ctx, arg) };
+        self.release.push(w);
+        w
+    }
+}
+
+/// 配列の結果を読み、手放す。要素は整数の即値である
+unsafe fn take_array<M: Mode>(ctx: &mut crate::Ctx<M>, w: Word) -> Outcome {
+    unsafe {
+        let lin = ctx.heap().meta(w).unwrap().lin();
+        let len = ctx.array_length(w).unwrap();
+        let elements = (0..len)
+            .map(|i| ctx.array_get(w, i).unwrap().imm_value())
+            .collect();
+        ctx.heap_mut().decref(w).unwrap();
+        Outcome::Array { elements, lin }
+    }
 }
 
 fn tag_bool(tag: i64) -> Outcome {
@@ -1357,6 +1402,38 @@ unsafe fn call<M: Mode>(
                 let n = args.string(ctx, &inputs[0], root);
                 let a = args.string(ctx, &inputs[2], root);
                 Outcome::Int(ctx.string_find_from(n, int(1), a)?)
+            }
+            "Std.Array.make" | "Std.MutArray.make" => {
+                let lin = name == "Std.MutArray.make";
+                let w = ctx.array_make(int(0), Word::imm(int(1)), lin)?;
+                take_array(ctx, w)
+            }
+            "Std.MutArray.empty" => {
+                let w = ctx.array_empty(true)?;
+                take_array(ctx, w)
+            }
+            "Std.Array.length" | "Std.MutArray.length" => {
+                let a = args.lent_array(ctx, &inputs[0]);
+                Outcome::Int(ctx.array_length(a)?)
+            }
+            "Std.Array.get" | "Std.MutArray.read" => {
+                let a = args.lent_array(ctx, &inputs[0]);
+                Outcome::Int(ctx.array_get(a, int(1))?.imm_value())
+            }
+            "Std.Array.set" | "Std.MutArray.write" => {
+                let a = args.array(ctx, &inputs[0]);
+                let w = ctx.array_set(a, int(1), Word::imm(int(2)))?;
+                take_array(ctx, w)
+            }
+            "Std.Array.thaw" => {
+                let a = args.array(ctx, &inputs[0]);
+                let w = ctx.array_thaw(a)?;
+                take_array(ctx, w)
+            }
+            "Std.MutArray.freeze" => {
+                let a = args.array(ctx, &inputs[0]);
+                let w = ctx.array_freeze(a)?;
+                take_array(ctx, w)
             }
             name => panic!("an extern the table does not know: {name}"),
         })

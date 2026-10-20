@@ -2,8 +2,6 @@
 //! すべてのブロックに末尾呼び出しの規則を当てる。末尾呼び出しを作るのはこのパスだけである。RC の命令がまだないので、
 //! 所有権を扱わずに書き換えられる。
 
-use eml_extern::Purity;
-
 use crate::{
     Atom, Block, Call, EffectInfo, LirFn, Mark, OpRet, Program, Repr, Rhs, Stmt, Term, operation,
 };
@@ -129,7 +127,8 @@ fn remove_dead_lets(function: &mut LirFn) -> bool {
     removed
 }
 
-/// 消してもよい右辺。値を作るだけで、エフェクトも実行時エラーも起こさない。extern は表の行が `Pure` のものだけである。
+/// 消してもよい右辺。値を作るだけで、エフェクトも実行時エラーも起こさない。extern は表の行が消せるもの
+/// (`FunctionRow::removable`) だけである。
 /// `con` と `closure` が所有権を受け取る値が `unr` なら、消すと Perceus がその値の生存の終わりに `decref` を入れるので、
 /// 解放が早まるだけである。translate が開いた `unr` でない変数の `con` は、消さなければならない。その `lin` の引数は
 /// 葉も読むので、残すと Perceus が `lin` の `con` を `decref` し、V1 が拒む。縮約は使われない純粋な `let` をすべて消し、
@@ -148,7 +147,7 @@ pub(crate) fn pure(rhs: &Rhs) -> bool {
             ext,
             args: _,
             at: _,
-        } => ext.row().purity == Purity::Pure,
+        } => ext.row().removable(),
         Rhs::Prim(prim, _) => prim.pure(),
         Rhs::Call(_) | Rhs::Drop(_) => false,
     }

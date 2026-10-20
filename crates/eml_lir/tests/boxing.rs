@@ -505,3 +505,34 @@ fn a_case_field_passed_as_a_jump_argument_is_unboxed_in_the_jumping_block() {
     }
     ");
 }
+
+#[test]
+fn boxing_converts_extern_tobj_boundaries() {
+    // 型変数の位置の引数と結果は `tobj` である。`int` の結果は受け直して `unbox` し、`int` の引数は `box` する
+    // (docs/spec/lir.md の「box の挿入」)
+    let text = "\
+fn read(a.0: obj, i.1: int) -> int {
+  let x.2: int = extern \"Std.Array.get\"(a.0, i.1)
+  return x.2
+}
+fn fill(n.0: int, v.1: int) -> obj {
+  let a.2: obj = extern \"Std.Array.make\"(n.0, v.1)
+  return a.2
+}
+";
+    let shown = boxing_text(text);
+    insta::assert_snapshot!(function(&shown, "read"), @"
+    fn read(a.0: obj, i.1: int) -> int {
+      let x.3: tobj = extern Std.Array.get(a.0, i.1)
+      let x.2: int = unbox x.3
+      return x.2
+    }
+    ");
+    insta::assert_snapshot!(function(&shown, "fill"), @"
+    fn fill(n.0: int, v.1: int) -> obj {
+      let v.3: tobj = box v.1
+      let a.2: obj = extern Std.Array.make(n.0, v.3)
+      return a.2
+    }
+    ");
+}

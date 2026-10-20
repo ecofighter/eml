@@ -3450,3 +3450,51 @@ fn a_non_returning_call_drops_the_open_file_first() {
     "#);
     lir_text(text, eml_lir::Pass::Perceus);
 }
+
+#[test]
+fn read_lowers_to_a_borrowed_get_and_a_pair() {
+    // `MutArray.read` の行は配列を借りて要素だけを返し、translate がその結果と配列を `con` で組にする。組を受けて
+    // すぐ開く形では、最適化の既知のコンストラクタで組が消える (docs/spec/core-ir.md の「組を返す extern」)
+    let text = "\
+first : MutArray Int -> <Panic> (Int, MutArray Int)
+first m =
+  let (v, m2) = MutArray.read m 0
+  (v + 1, m2)
+
+main : Unit -> <IO, Panic> Unit
+main () =
+  let (v, m) = first (MutArray.make 3 7)
+  let _ = MutArray.freeze m
+  println (show v)
+";
+    let translated = function(&core_text(text, Pass::Translate), "first");
+    assert!(
+        translated.contains("extern Std.MutArray.read(m.0, 0)"),
+        "{translated}"
+    );
+    assert!(translated.contains("con (,)"), "{translated}");
+    insta::assert_snapshot!(translated, @r#"
+    fn first(m.0: obj lin) -> obj lin {
+      let t.1: int = extern Std.MutArray.read(m.0, 0)
+      let d.2: obj lin = con (,) #0(t.1, m.0)
+      unpack d.2 (,) #0(v.3: int, m2.4: obj lin)
+      let t.5: int = extern "Prelude.Num Int.+"(v.3, 1)
+      let d.6: obj lin = con (,) #0(t.5, m2.4)
+      return d.6
+    }
+    "#);
+    // `first` は入口に展開される。使われない `freeze` も、`Lin` の配列を消費するので消さない
+    let optimized = function(&core_text(text, Pass::Optimize), "entry$main");
+    assert!(!optimized.contains("con"), "{optimized}");
+    insta::assert_snapshot!(optimized, @r#"
+    fn entry$main() -> unit {
+      let t.1: obj lin = extern Std.MutArray.make(3, 7)
+      let t.2: int = extern Std.MutArray.read(t.1, 0)
+      let t.3: int = extern "Prelude.Num Int.+"(t.2, 1)
+      let t.4: obj = extern Std.MutArray.freeze(t.1)
+      let t.5: obj = extern "Prelude.Show Int.show"(t.3)
+      let t.6: unit = extern Prelude.println(t.5)
+      return t.6
+    }
+    "#);
+}

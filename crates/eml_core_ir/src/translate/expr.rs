@@ -199,12 +199,11 @@ impl FnLowering<'_> {
             return self.closure(wrapper, args, closure_mark);
         }
         let rest = args.split_off(arity);
-        let (name, rhs) = self.saturated_rhs(id, callee, args);
         if rest.is_empty() {
-            return self.bind_typed(name, ty, rhs);
+            return self.saturated(id, callee, args, ty);
         }
         let (_, function_ty) = split_arrows(self.ctx.store, callee_ty, arity);
-        let function = self.bind_typed(name, function_ty, rhs);
+        let function = self.saturated(id, callee, args, function_ty);
         self.apply(id, callee_ty, function, arity, rest, ty)
     }
 
@@ -325,15 +324,10 @@ impl FnLowering<'_> {
         }
     }
 
-    /// 引数がちょうどそろったときの命令と、その結果を束縛する変数の名前。
+    /// 引数がちょうどそろったときの命令を足し、型 `ty` の結果を返す。
     /// `mask` を付けるのは本体のある関数だけである。extern の関数、操作、コンストラクタは、型検査が row を開かずに
     /// 宣言のまま含めるので、`mask` が記録されない。
-    fn saturated_rhs(
-        &mut self,
-        id: ExprId,
-        callee: Callee,
-        args: Vec<Atom>,
-    ) -> (&'static str, Rhs) {
+    fn saturated(&mut self, id: ExprId, callee: Callee, args: Vec<Atom>, ty: TypeId) -> Atom {
         // `Extern`、`Perform`、`Con` は `mask` を持てない (docs/spec/core-ir.md)。型検査が `mask` を記録するように
         // 変わると、ここで気づかないうちに落とすことになる
         debug_assert!(
@@ -343,7 +337,7 @@ impl FnLowering<'_> {
             ) || (0..args.len()).all(|arrow| self.mask(id, arrow).is_empty()),
             "an extern, operation or constructor call has no recorded mask"
         );
-        match callee {
+        let (name, rhs) = match callee {
             // 前の矢印は部分適用でエフェクトを起こさないので、最後の矢印の `mask` だけを使う (docs/spec/core-ir.md)
             // 引数を受けない関数 (等式が引数を持たない instance のメソッド) の呼び出しは、引数のないトップレベルの値を
             // 参照するのと同じく `mask` を持たない
@@ -366,7 +360,10 @@ impl FnLowering<'_> {
             }
             Callee::Extern { row, callee } => {
                 let at = Some(self.loc(callee));
-                ("t", Rhs::Extern { ext: row, args, at })
+                let (hir, store) = (self.ctx.hir, self.ctx.store);
+                return self
+                    .program
+                    .extern_call(&mut self.builder, hir, store, row, args, at, ty);
             }
             Callee::Operation(op) => ("t", plain_call(perform_call(self.ctx.hir, op, args))),
             // 状態ありの最初の矢印は row が空の部分適用なので、関数と同じく最後の矢印の `mask` を使う
@@ -384,7 +381,8 @@ impl FnLowering<'_> {
                     args,
                 },
             ),
-        }
+        };
+        self.bind_typed(name, ty, rhs)
     }
 
     /// `call_steps` の手順どおりに評価し、続けて並ぶ矢印を1回の呼び出しにする (docs/spec/expressions.md の「関数適用」)。

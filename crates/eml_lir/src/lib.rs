@@ -332,19 +332,20 @@ impl Rhs {
         }
     }
 
-    /// 値の使いのうち、参照を1つ受け取る「消費」。`unbox` の値と基本操作の借用の引数は読むだけなので数えない
-    /// (docs/spec/lir.md の「ブロックの列」と「基本操作」)。
+    /// 値の使いのうち、参照を1つ受け取る「消費」。`unbox` の値と、基本操作と extern の借用の引数は読むだけなので
+    /// 数えない (docs/spec/lir.md の「ブロックの列」「基本操作」「extern の借用」)。
     pub fn for_each_consumed(&self, mut f: impl FnMut(Atom)) {
-        match self {
-            Rhs::Unbox(_) => {}
-            Rhs::Prim(prim, args) => {
-                let borrowed = prim.row().borrowed;
-                for (&atom, &borrowed) in args.iter().zip(borrowed) {
-                    if !borrowed {
-                        f(atom);
-                    }
+        let mut unborrowed = |args: &[Atom], borrowed: &[bool]| {
+            for (&atom, &borrowed) in args.iter().zip(borrowed) {
+                if !borrowed {
+                    f(atom);
                 }
             }
+        };
+        match self {
+            Rhs::Unbox(_) => {}
+            Rhs::Prim(prim, args) => unborrowed(args, prim.row().borrowed),
+            Rhs::Extern { ext, args, at: _ } => unborrowed(args, ext.row().borrowed),
             _ => self.for_each_atom(f),
         }
     }

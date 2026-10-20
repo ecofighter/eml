@@ -915,7 +915,18 @@ fn arithmetic(ext: Extern, dst: Slot, args: &[Slot]) -> Option<Op> {
         | Extern::WriteText
         | Extern::ProcStatus
         | Extern::Exit
-        | Extern::Panic => return None,
+        | Extern::Panic
+        | Extern::ArrayMake
+        | Extern::ArrayLength
+        | Extern::ArrayGet
+        | Extern::ArraySet
+        | Extern::ArrayThaw
+        | Extern::MutArrayMake
+        | Extern::MutArrayEmpty
+        | Extern::MutArrayLength
+        | Extern::MutArrayRead
+        | Extern::MutArrayWrite
+        | Extern::MutArrayFreeze => return None,
     })
 }
 

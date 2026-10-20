@@ -610,15 +610,21 @@ impl Converter<'_> {
                         self.boxed_from.insert(var, *from);
                         None
                     }
-                    // extern の引数と結果は表の行と同じ Repr で、translate の出力ですでに合っている。戻らない extern の
-                    // 束縛には制御が届かないので、使う所も変換しない (docs/spec/lir.md の「戻らない extern」)
-                    Rhs::Extern {
-                        ext,
-                        args: _,
-                        at: _,
-                    } => {
-                        self.never[var.0 as usize] = ext.row().ret == OpRet::Never;
-                        None
+                    // extern の引数と結果は、基本操作と同じく行の Repr の互換の位置である。型変数の位置は `tobj` なので、
+                    // 具体化した型の Repr との間で `box` と `unbox` が要る。戻らない extern の束縛には制御が届かない
+                    // ので、受け直さず、使う所も変換しない (docs/spec/lir.md の「box の挿入」と「戻らない extern」)
+                    Rhs::Extern { ext, args, at: _ } => {
+                        let row = ext.row();
+                        for (arg, &param) in args.iter_mut().zip(row.params) {
+                            *arg = self.convert(*arg, param, out);
+                        }
+                        match row.ret {
+                            OpRet::Repr(ret) => Some(ret),
+                            OpRet::Never => {
+                                self.never[var.0 as usize] = true;
+                                None
+                            }
+                        }
                     }
                     Rhs::ConstString(_) | Rhs::Drop(_) | Rhs::Box(_) | Rhs::Unbox(_) => None,
                 };

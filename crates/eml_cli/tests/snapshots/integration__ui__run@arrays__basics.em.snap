@@ -1,0 +1,35 @@
+---
+source: crates/eml_cli/tests/ui.rs
+expression: "format!(\"--- stdout ---\\n{stdout}--- stderr ---\\n{diagnostics}{stderr}{written}{exit}\")"
+input_file: tests/ui/run/arrays/basics.em
+---
+--- stdout ---
+[0, 0, 0]
+[0, 5, 0]
+(5, 3)
+[0, 1, 4, 9, 16]
+["x", "y", "z"]
+0
+[]
+Err "array index 3 is out of range for length 3"
+Err "array index -1 is out of range for length 3"
+Err "array index 3 is out of range for length 3"
+Err "array length -2 is negative"
+Err "array length -1 is negative"
+(9, 3, [9, 5, 0], [0, 5, 0])
+[9, 5, 7]
+0
+tabulate 0
+tabulate 1
+tabulate 2
+20
+["0", "10", "20"]
+["z", "z"]
+Err "array length -1 is negative"
+Ok 0
+Err "array index 5 is out of range for length 2"
+Err "array index 2 is out of range for length 2"
+((1, 2), ("a", "b"))
+q2
+[2, 3]
+--- stderr ---

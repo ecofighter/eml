@@ -7,7 +7,7 @@ use eml_hir::{
     ConstructorId, EffectDef, EffectId, FunctionId, Items, ModuleId, ModuleOrigin, OpMultiplicity,
     OperationId, Program as HirProgram, TypeDefId, TypeDefKind, ValueItem,
 };
-use eml_types::{TypeId, TypeStore, TypedProgram};
+use eml_types::{TypeId, TypeKind, TypeStore, TypedProgram};
 
 use crate::{Call, CoreFn, Rhs, Stmt, Term};
 use eml_lir::{
@@ -372,22 +372,64 @@ impl ProgramBuilder {
         at: Loc,
     ) -> FnIdx {
         let (param_types, result_type) = split_arrows(types, ty, row.row().params.len());
-        let params = param_types
+        let function = self.reserve(param_types.len());
+        let mut builder = FnBuilder::new();
+        let args = param_types
             .iter()
-            .map(|&ty| var_info("p", types, ty, hir))
+            .map(|&ty| Atom::Var(builder.param(var_info("p", types, ty, hir))))
             .collect();
+        let result = self.extern_call(&mut builder, hir, types, row, args, Some(at), result_type);
+        builder.terminate(Term::Return(result));
+        let info = var_info("t", types, result_type, hir);
         // `IO` を起こす extern も、失敗すると継続を作らずに巻き戻すので yield の地点でない。包む関数は extern を呼ぶだけ
         // なので yield しない (docs/spec/core-ir.md の「IO の extern」)
-        self.simple(
-            name,
-            false,
-            params,
-            |args| Rhs::Extern {
-                ext: row,
-                args,
-                at: Some(at),
+        let core = builder.finish(name, true, false, info.repr, info.mark);
+        self.finish(function, core);
+        function
+    }
+
+    /// extern の行 `ext` を呼び、型 `ty` の値を返す文を足す。`with_arg` の行は、行の結果と引数を `con` で組にする。
+    /// extern は借りた配列を消費しないので、組がその配列を受け取る (docs/spec/core-ir.md の「組を返す extern」)。
+    #[expect(clippy::too_many_arguments, reason = "the parts of one extern call")]
+    pub(super) fn extern_call(
+        &mut self,
+        builder: &mut FnBuilder,
+        hir: &HirProgram,
+        types: &TypeStore,
+        ext: Extern,
+        args: Vec<Atom>,
+        at: Option<Loc>,
+        ty: TypeId,
+    ) -> Atom {
+        let bind = |builder: &mut FnBuilder, info: VarInfo, rhs: Rhs| {
+            let var = builder.var(info);
+            builder.emit(Stmt::Let { var, rhs });
+            Atom::Var(var)
+        };
+        let Some(k) = ext.row().with_arg else {
+            let info = var_info("t", types, ty, hir);
+            return bind(builder, info, Rhs::Extern { ext, args, at });
+        };
+        let TypeKind::Tuple(elements) = types.kind(ty) else {
+            unreachable!("an extern with `with_arg` returns a pair")
+        };
+        let lent = args[k];
+        let value = bind(
+            builder,
+            var_info("t", types, elements[0], hir),
+            Rhs::Extern { ext, args, at },
+        );
+        let ctor = Ctor {
+            layout: self.tuple_layout(2),
+            tag: TUPLE,
+        };
+        bind(
+            builder,
+            var_info("d", types, ty, hir),
+            Rhs::Con {
+                ctor,
+                args: vec![value, lent],
             },
-            var_info("t", types, result_type, hir),
         )
     }
 

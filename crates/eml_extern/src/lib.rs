@@ -282,6 +282,17 @@ pub enum Extern {
     ProcStatus,
     Exit,
     Panic,
+    ArrayMake,
+    ArrayLength,
+    ArrayGet,
+    ArraySet,
+    ArrayThaw,
+    MutArrayMake,
+    MutArrayEmpty,
+    MutArrayLength,
+    MutArrayRead,
+    MutArrayWrite,
+    MutArrayFreeze,
 }
 
 pub struct FunctionRow {
@@ -299,6 +310,27 @@ pub struct FunctionRow {
     pub param_kinds: &'static [Linearity],
     pub ret_kind: Linearity,
     pub purity: Purity,
+    /// 引数ごとの借用の印。長さは `params` と同じである。印の立つ引数を extern は読むだけで消費せず、失敗したときも
+    /// 呼んだ側が持ったままである。配列を借りて読む行だけが持つ (docs/spec/lir.md の「extern の借用」)。
+    pub borrowed: &'static [bool],
+    /// `Some(k)` の行は、宣言の型では結果と引数 `k` の組を返す。行の結果 (`ret`、`ret_kind`) は組の最初の要素で、
+    /// translate が呼び出しの後に `con` で組を作る。組を受けてすぐ開く所では、最適化の既知のコンストラクタで組が
+    /// 消える (docs/spec/core-ir.md の「組を返す extern」)。
+    pub with_arg: Option<usize>,
+}
+
+impl FunctionRow {
+    /// 結果を使わない呼び出しを消してよい行。`Pure` で、借りずに受ける `Lin` の引数を持たない行である。`Lin` の値を
+    /// 消費する呼び出しを消すと、その値を手放す命令がなくなり、Perceus が `lin` の変数を `decref` するためである
+    /// (docs/spec/lir.md の「縮約」)。
+    pub fn removable(&self) -> bool {
+        self.purity == Purity::Pure
+            && self
+                .param_kinds
+                .iter()
+                .zip(self.borrowed)
+                .all(|(&kind, &borrowed)| borrowed || kind == Linearity::Unr)
+    }
 }
 
 impl Extern {
@@ -376,11 +408,22 @@ impl Extern {
         Extern::ProcStatus,
         Extern::Exit,
         Extern::Panic,
+        Extern::ArrayMake,
+        Extern::ArrayLength,
+        Extern::ArrayGet,
+        Extern::ArraySet,
+        Extern::ArrayThaw,
+        Extern::MutArrayMake,
+        Extern::MutArrayEmpty,
+        Extern::MutArrayLength,
+        Extern::MutArrayRead,
+        Extern::MutArrayWrite,
+        Extern::MutArrayFreeze,
     ];
 
     pub fn row(self) -> FunctionRow {
         use Linearity::{Lin, Unr};
-        use Repr::{Enum, Float, Int, Obj, Unit};
+        use Repr::{Enum, Float, Int, Obj, TObj, Unit};
         // 引数の Repr と Kind を同じ長さの配列で受け、`params` と `param_kinds` の長さを型で揃える
         fn kinded<const N: usize>(
             name: &'static str,
@@ -397,10 +440,30 @@ impl Extern {
                 param_kinds,
                 ret_kind,
                 purity,
+                borrowed: const { &[false; N] },
+                with_arg: None,
             }
         }
-        // 標準ライブラリで線形な値を扱うのは `Fs` の `open`、`read_all`、`read_line_raw`、`close` だけなので、ほかの行は
-        // すべて `Unr` にする
+        // 配列を借りて読む行。結果はどれも `Unr` である (要素の型変数は `Unr` に固定する)
+        fn lending<const N: usize>(
+            name: &'static str,
+            params: &'static [Repr; N],
+            param_kinds: &'static [Linearity; N],
+            ret: Repr,
+            purity: Purity,
+            with_arg: Option<usize>,
+        ) -> FunctionRow {
+            let mut row = kinded(name, params, param_kinds, ret, Unr, purity);
+            // 借りるのは先頭の配列だけである
+            row.borrowed = const {
+                let mut borrowed = [false; N];
+                borrowed[0] = true;
+                &{ borrowed }
+            };
+            row.with_arg = with_arg;
+            row
+        }
+        // 線形な値を扱わない行は、すべて `Unr` にする
         fn row<const N: usize>(
             name: &'static str,
             params: &'static [Repr; N],
@@ -523,6 +586,8 @@ impl Extern {
                 param_kinds: &[Linearity::Unr],
                 ret_kind: Linearity::Unr,
                 purity: Purity::Effectful,
+                borrowed: &[false],
+                with_arg: None,
             },
             // `exit` と同じく VM が自分で実行し、文字列を `Panic` の `panicked` の節に渡す
             // (docs/spec/vm.md の「extern の中断」)
@@ -533,7 +598,73 @@ impl Extern {
                 param_kinds: &[Linearity::Unr],
                 ret_kind: Linearity::Unr,
                 purity: Purity::Panics,
+                borrowed: &[false],
+                with_arg: None,
             },
+            // 配列の要素は型変数の位置なので `tobj` である。型変数は `Unr` に固定するので、`Array` の Kind も `Unr` に
+            // なる。`MutArray` はいつも `Lin` である (docs/spec/stdlib.md の「`Std.Array`」)
+            Extern::ArrayMake => row("Std.Array.make", &[Int, TObj], Obj, Purity::Panics),
+            Extern::ArrayLength => {
+                lending("Std.Array.length", &[Obj], &[Unr], Int, Purity::Pure, None)
+            }
+            Extern::ArrayGet => lending(
+                "Std.Array.get",
+                &[Obj, Int],
+                &[Unr, Unr],
+                TObj,
+                Purity::Panics,
+                None,
+            ),
+            Extern::ArraySet => row("Std.Array.set", &[Obj, Int, TObj], Obj, Purity::Panics),
+            Extern::ArrayThaw => kinded("Std.Array.thaw", &[Obj], &[Unr], Obj, Lin, Purity::Pure),
+            Extern::MutArrayMake => kinded(
+                "Std.MutArray.make",
+                &[Int, TObj],
+                &[Unr, Unr],
+                Obj,
+                Lin,
+                Purity::Panics,
+            ),
+            Extern::MutArrayEmpty => kinded(
+                "Std.MutArray.empty",
+                &[Unit],
+                &[Unr],
+                Obj,
+                Lin,
+                Purity::Pure,
+            ),
+            Extern::MutArrayLength => lending(
+                "Std.MutArray.length",
+                &[Obj],
+                &[Lin],
+                Int,
+                Purity::Pure,
+                Some(0),
+            ),
+            Extern::MutArrayRead => lending(
+                "Std.MutArray.read",
+                &[Obj, Int],
+                &[Lin, Unr],
+                TObj,
+                Purity::Panics,
+                Some(0),
+            ),
+            Extern::MutArrayWrite => kinded(
+                "Std.MutArray.write",
+                &[Obj, Int, TObj],
+                &[Lin, Unr, Unr],
+                Obj,
+                Lin,
+                Purity::Panics,
+            ),
+            Extern::MutArrayFreeze => kinded(
+                "Std.MutArray.freeze",
+                &[Obj],
+                &[Lin],
+                Obj,
+                Unr,
+                Purity::Pure,
+            ),
         }
     }
 

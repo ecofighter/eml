@@ -3,8 +3,6 @@
 //! LIR の純粋な右辺は `box` と `unbox` を含むが、EP の出力にはその2つがないので、EP の出力の上では2つの写しが同じ
 //! 答えを返す。
 
-use eml_extern::Purity;
-
 use crate::{Block, Call, Rhs, Stmt, Term};
 use eml_lir::Atom;
 
@@ -34,7 +32,8 @@ pub(crate) fn tail_position_call(block: &Block) -> Option<(usize, &Call)> {
     None
 }
 
-/// 消してもよい右辺。値を作るだけで、エフェクトも実行時エラーも起こさない。extern は表の行が `Pure` のものだけである。
+/// 消してもよい右辺。値を作るだけで、エフェクトも実行時エラーも起こさない。extern は表の行が消せるもの
+/// (`FunctionRow::removable`) だけである。
 /// `con` と `closure` が所有権を受け取る値は、消すと Perceus がその値の生存の終わりに `decref` を入れるので、解放が
 /// 早まるだけである。
 pub(crate) fn pure(rhs: &Rhs) -> bool {
@@ -44,7 +43,7 @@ pub(crate) fn pure(rhs: &Rhs) -> bool {
             ext,
             args: _,
             at: _,
-        } => ext.row().purity == Purity::Pure,
+        } => ext.row().removable(),
         Rhs::Prim(prim, _) => prim.pure(),
         Rhs::Call { call: _, mask: _ } | Rhs::Drop(_) => false,
     }

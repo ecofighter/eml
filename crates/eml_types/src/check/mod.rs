@@ -685,6 +685,12 @@ fn declaration_schemes(
         let arity = signature.arity();
         let problem = declaration_problem(context, shape, &signature.generics, |table, own| {
             table.closure_kinds(own.ty, arity, &[]);
+            // 引数に現れる型変数は `Unr` である。本体がないので、extern が引数をどう使うかを Kind に推論できない。
+            // 結果だけに現れる型変数 (`exit`、`MutArray.empty`) は縛らない
+            // (docs/spec/declarations.md の「`extern`」)
+            for var in param_type_vars(signature, arity) {
+                table.kind_at_most(own.rigids.ty(var), Bound::Const(Linearity::Unr));
+            }
         });
         problems.push((ValueItem::Function(id), problem));
     }
@@ -751,6 +757,52 @@ fn declaration_schemes(
         schemes.insert(*decl, scheme);
     }
     schemes
+}
+
+/// シグネチャの一番外側の `arity` 個の矢印の引数の型に現れる型変数。row の型引数も含む。
+fn param_type_vars(signature: &Signature, arity: usize) -> Vec<TypeVarId> {
+    let mut pending = Vec::new();
+    let mut spine = signature.ty;
+    for _ in 0..arity {
+        let TypeRefKind::Fn { param, ret, .. } = &signature.types[spine].kind else {
+            break;
+        };
+        pending.push(*param);
+        spine = *ret;
+    }
+    let mut vars = Vec::new();
+    let push_row = |row: &RowRef, pending: &mut Vec<TypeRefId>| match row {
+        RowRef::Closed { effects, .. } | RowRef::Open { effects, .. } => {
+            for effect in effects {
+                pending.extend(&effect.args);
+            }
+        }
+        RowRef::Omitted | RowRef::Error => {}
+    };
+    while let Some(ty) = pending.pop() {
+        match &signature.types[ty].kind {
+            TypeRefKind::Var(var) => {
+                if !vars.contains(var) {
+                    vars.push(*var);
+                }
+            }
+            TypeRefKind::Con(_, args, rows) => {
+                pending.extend(args);
+                for row in rows {
+                    push_row(row, &mut pending);
+                }
+            }
+            TypeRefKind::Fn {
+                param, row, ret, ..
+            } => {
+                pending.extend([*param, *ret]);
+                push_row(row, &mut pending);
+            }
+            TypeRefKind::Tuple(elements) => pending.extend(elements),
+            TypeRefKind::Error => {}
+        }
+    }
+    vars
 }
 
 /// 宣言の形を使い捨ての表に置き、宣言から出る制約だけを足した Kind の問題。

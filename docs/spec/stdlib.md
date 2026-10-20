@@ -191,6 +191,48 @@ pub extern exit : Int -> <IO> a
 - `parse s` は、前後の Unicode の空白を除き、Rust の `f64::from_str` が受ける形を読む。符号、10進と指数の形 (`1.5`、`.5`、`5.`、`1E-5`、`1e+16`)、大文字小文字を問わない `inf`、`infinity`、`nan` である。Python の `float` と違い、数字の間の `_` は受けない。読めなければ `None` で、大きすぎる値は無限大になる。`parse (show x)` は、どの `x` でも同じ値を返す
 - `parse` は、std の中だけの2つの `Pure` の extern で書いてある。`can_parse : String -> Bool` が読めるかを返し、`parse_raw : String -> Float` が値を返す (読めなければ NaN。読めた `nan` と区別するため、`parse` は NaN のときだけ `can_parse` を呼ぶ) (上の「extern の境界」)
 
+## `Std.Array`
+
+| 名前 | 型 | 実装 |
+|---|---|---|
+| `make` | `Int -> a -> <Panic> Array a` | extern |
+| `tabulate` | `Int -> (Int -> <e> a) -> <Panic \| e> Array a` | eml (`MutArray.freeze (MutArray.tabulate n f)`) |
+| `from_list` | `List a -> Array a` | eml |
+| `to_list` | `Array a -> List a` | eml |
+| `length` | `Array a -> Int` | extern (配列を借りる) |
+| `get` | `Array a -> Int -> <Panic> a` | extern (配列を借りる) |
+| `set` | `Array a -> Int -> a -> <Panic> Array a` | extern |
+| `thaw` | `Array a -> MutArray a` | extern |
+
+型 `Array a` と `MutArray a` は Prelude の extern の型で、関数は `Std.Array` と `Std.MutArray` に置く。`Std.Float` と同じく、モジュールで修飾して使う (`Array.length a`)。
+
+- `Array` は意味の上で書き換わらない。`Array a` の Kind は要素の Kind に従うが、extern の関数の引数の型変数は `Unr` に固定される ([宣言](declarations.md) の「`extern`」) ので、`Lin` の要素の配列にはどの関数も使えない
+- `make n x` は、長さ `n` で、どの要素も `x` の配列である。`n` が負なら `Panic` を起こす。`n` が 0 なら `x` を手放して空の配列を返す
+- `tabulate n f` は、`i` 番目の要素を `f i` にした配列である。`f` を添字の順に呼ぶ。`n` が負なら、`f` を呼ばずに `make` と同じ `Panic` を起こす
+- `get a i` は `i` 番目の要素である。添字が範囲の外なら `Panic` を起こす
+- `set a i x` は、`i` 番目を `x` に替えた配列である。`a` が一意 (RC が 1) ならその場で書き換え、共有されていれば写す。写すときは、残す要素の参照を1つずつ増やす
+- `thaw a` は、一意な `a` をそのまま `MutArray` にし、共有されていれば写して `MutArray` にする
+- `from_list` と `to_list` は、添字が範囲の外にならないので `Panic` を起こさない。中で `MutArray` の関数と算術を使うので、型の上の `Panic` を `try_panic` で除いてある
+- `length` と `get` は配列を借りるので、読むたびに配列の参照を受け渡さない ([LIR](lir.md) の「extern の借用」)
+
+## `Std.MutArray`
+
+| 名前 | 型 | 実装 |
+|---|---|---|
+| `make` | `Int -> a -> <Panic> MutArray a` | extern |
+| `tabulate` | `Int -> (Int -> <e> a) -> <Panic \| e> MutArray a` | eml |
+| `empty` | `Unit -> MutArray a` | extern |
+| `length` | `MutArray a -> (Int, MutArray a)` | extern (配列を借りて組を返す) |
+| `read` | `MutArray a -> Int -> <Panic> (a, MutArray a)` | extern (配列を借りて組を返す) |
+| `write` | `MutArray a -> Int -> a -> <Panic> MutArray a` | extern |
+| `freeze` | `MutArray a -> Array a` | extern |
+
+- `MutArray a` の Kind は要素によらず `Lin` で、線形に受け渡して使う。物体は作るときに `lin` ビットを立てる ([オブジェクトモデル](object-model.md) の「配列」)
+- `make` と `tabulate` は `Std.Array` の同じ名前の関数と同じである。`empty ()` は長さ 0 の配列である
+- `length` と `read` は配列を借りて読み、結果と配列の組を返す。組は translate が作り、組を受けてすぐ開く所では最適化で消えるので、読むたびの確保は残らない ([Core IR](core-ir.md) の「組を返す extern」)。`read` は要素の参照を1つ増やす
+- `write m i x` は、`i` 番目をその場で `x` に替える。添字が範囲の外なら `Panic` を起こす
+- `freeze m` は、写さずに `lin` ビットを下ろして `Array` にする
+
 ## `Env`
 
 | 関数 | 型 |
@@ -362,7 +404,7 @@ pub data Iter <e> a = | Iter (once Unit -> <e> Option (a, Iter <e> a))
 
 標準ライブラリの extern の誤りの文言は次のとおりである。I/O の失敗の理由は `not found`、`permission denied`、`not available`、`I/O error` のどれかである。位置は extern を呼んだ所で、標準ライブラリの関数の中の extern なら `<std>/…` の位置になる。
 
-I/O の失敗の一部は `try_io` で捕まえられる (上の「`try_io`」)。`byte_at` と `slice` の誤りと、`Std.Float` の変換と `to_fixed` の誤りは `Panic` で、`try_panic` で捕まえられる (上の「`try_panic`」)。捕まえなかった失敗は、この表の文言の実行時エラーになる。
+I/O の失敗の一部は `try_io` で捕まえられる (上の「`try_io`」)。`byte_at` と `slice` の誤りと、`Std.Float` の変換と `to_fixed` の誤りと、配列の添字と長さの誤りは `Panic` で、`try_panic` で捕まえられる (上の「`try_panic`」)。捕まえなかった失敗は、この表の文言の実行時エラーになる。
 
 | 失敗 | 文言 |
 |---|---|
@@ -371,6 +413,8 @@ I/O の失敗の一部は `try_io` で捕まえられる (上の「`try_io`」)�
 | `slice` の境界 | ``string slice 1..3 is not on a character boundary`` |
 | `Float.truncate`、`floor`、`ceil`、`round` の範囲の外 | `` float `1e+19` does not fit in `Int` `` (値は `show` の形) |
 | `Float.to_fixed` の桁数 | `` `to_fixed` takes 0 to 100 digits, not 101 `` |
+| 配列の添字の範囲の外 (`get`、`set`、`read`、`write`) | ``array index 3 is out of range for length 3`` |
+| 配列の負の長さ (`make`、`tabulate`) | ``array length -1 is negative`` |
 | `Fs.write_text` | ``cannot write `out.txt`: permission denied`` |
 | `Proc.run` の起動 | ``cannot run `rsync`: not found`` |
 | 標準入力の読み | ``cannot read the standard input: not available`` |

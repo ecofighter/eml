@@ -935,6 +935,37 @@ fn run_extern<M: Mode>(
                 let parsed = ctx.string_to_float(task.get(arg(0)))?;
                 task.set_float(dst, parsed.unwrap_or(f64::NAN));
             }
+            // 配列の行は、借りる引数 (`FunctionRow::borrowed`) を手放さない。失敗しても、借りた配列は呼んだ側の
+            // スロットに残り、巻き戻しの表が手放す (docs/spec/lir.md の「extern の借用」)
+            Extern::ArrayMake | Extern::MutArrayMake => {
+                let lin = ext == Extern::MutArrayMake;
+                let w = ctx.array_make(task.raw(arg(0)), task.get(arg(1)), lin)?;
+                task.set(dst, w);
+            }
+            Extern::MutArrayEmpty => {
+                let w = ctx.array_empty(true)?;
+                task.set(dst, w);
+            }
+            Extern::ArrayLength | Extern::MutArrayLength => {
+                let n = ctx.array_length(task.get(arg(0)))?;
+                task.set_raw(dst, n);
+            }
+            Extern::ArrayGet | Extern::MutArrayRead => {
+                let w = ctx.array_get(task.get(arg(0)), task.raw(arg(1)))?;
+                task.set(dst, w);
+            }
+            Extern::ArraySet | Extern::MutArrayWrite => {
+                let w = ctx.array_set(task.get(arg(0)), task.raw(arg(1)), task.get(arg(2)))?;
+                task.set(dst, w);
+            }
+            Extern::ArrayThaw => {
+                let w = ctx.array_thaw(task.get(arg(0)))?;
+                task.set(dst, w);
+            }
+            Extern::MutArrayFreeze => {
+                let w = ctx.array_freeze(task.get(arg(0)))?;
+                task.set(dst, w);
+            }
             Extern::Panic
             | Extern::Exit
             | Extern::IntNeg

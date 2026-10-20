@@ -750,7 +750,9 @@ impl<'a> Context<'a> {
         }
     }
 
-    /// extern の引数の数と Repr は表の行と同じで、束縛する変数の Repr は行の結果と同じである (R7)。
+    /// extern の引数の数は表の行と同じである。範囲の段と所有の段では、引数と結果の Repr と印を、直接の呼び出しと
+    /// 同じく互換の位置として行と比べる (R7)。型変数の位置の `tobj` の引数と結果は、box の挿入より前は具体化した型の
+    /// Repr のままである (docs/spec/lir.md の「extern の行」)。
     pub fn check_extern(&self, var: VarId, ext: Extern, args: &[Atom]) -> Result<(), String> {
         let row = ext.row();
         if args.len() != row.params.len() {
@@ -761,8 +763,11 @@ impl<'a> Context<'a> {
                 args.len()
             ));
         }
+        if !self.boundaries {
+            return args.iter().try_for_each(|&arg| self.fn_atom(arg));
+        }
         for (index, (&arg, &expected)) in args.iter().zip(row.params).enumerate() {
-            if !arg.fits(self.vars, expected) {
+            if !self.passes(arg, expected)? {
                 return Err(format!(
                     "argument {index} of `{}` is {}, but the extern takes {}",
                     row.name,
@@ -770,19 +775,16 @@ impl<'a> Context<'a> {
                     expected.name()
                 ));
             }
-            self.fn_atom(arg)?;
         }
-        if self.boundaries {
-            for (index, (&arg, &kind)) in args.iter().zip(row.param_kinds).enumerate() {
-                let expected = Mark::from(kind);
-                if !self.mark_passes(arg, expected) {
-                    return Err(format!(
-                        "argument {index} of `{}` is {}, but the extern takes {}",
-                        row.name,
-                        self.marked_atom_text(arg),
-                        expected.name()
-                    ));
-                }
+        for (index, (&arg, &kind)) in args.iter().zip(row.param_kinds).enumerate() {
+            let expected = Mark::from(kind);
+            if !self.mark_passes(arg, expected) {
+                return Err(format!(
+                    "argument {index} of `{}` is {}, but the extern takes {}",
+                    row.name,
+                    self.marked_atom_text(arg),
+                    expected.name()
+                ));
             }
         }
         // 戻らない extern の束縛は位置でなく、translate が具体化した型の Repr と印を持つ
@@ -791,7 +793,7 @@ impl<'a> Context<'a> {
             return Ok(());
         };
         let repr = self.repr(var);
-        if repr != ret {
+        if !repr.compatible(ret) {
             return Err(format!(
                 "`{}` ({}) is bound to `{}`, which returns {}",
                 self.name(var),
@@ -799,9 +801,6 @@ impl<'a> Context<'a> {
                 row.name,
                 ret.name()
             ));
-        }
-        if !self.boundaries {
-            return Ok(());
         }
         self.bound_mark(var, Mark::from(row.ret_kind), || format!("`{}`", row.name))
     }

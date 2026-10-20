@@ -19,6 +19,13 @@ pub enum Arg {
     Rel(String),
     /// 同じ名前を `file_root` につないだ絶対パス
     Abs(String),
+    /// 整数を要素に持つ配列。`lin` は `MutArray` の `lin` ビットで、`shared` なら `dup` して渡し、残った参照は結果を
+    /// 読んだ後で手放す
+    Array {
+        elements: Vec<i64>,
+        lin: bool,
+        shared: bool,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -34,6 +41,11 @@ pub enum Outcome {
     Out(String),
     /// 位置を除いた誤りの文言
     Err(String),
+    /// 整数を要素に持つ配列と、その `lin` ビット
+    Array {
+        elements: Vec<i64>,
+        lin: bool,
+    },
     /// `HASHED_OVER` バイトより長い文字列の結果 (`Str` か `Out`) のバイト数と FNV-1a の値。1 MiB の中身をそのまま
     /// 書くと、表が読めない大きさになる
     Hashed {
@@ -346,6 +358,11 @@ fn parse_arg(text: &str) -> Result<Arg, String> {
         "d" => Arg::Shared(quoted(value)?),
         "f" => Arg::Rel(quoted(value)?),
         "a" => Arg::Abs(quoted(value)?),
+        "A" | "D" | "M" => Arg::Array {
+            elements: parse_ints(value)?,
+            lin: kind == "M",
+            shared: kind == "D",
+        },
         _ => return Err(format!("an unknown argument kind: {text}")),
     })
 }
@@ -367,6 +384,10 @@ fn parse_outcome(text: &str) -> Result<Outcome, String> {
         "s" => Outcome::Str(quoted(value)?),
         "out" => Outcome::Out(quoted(value)?),
         "err" => Outcome::Err(quoted(value)?),
+        "A" | "M" => Outcome::Array {
+            elements: parse_ints(value)?,
+            lin: kind == "M",
+        },
         "h" => {
             let (len, hash) = value
                 .split_once(':')
@@ -382,6 +403,23 @@ fn parse_outcome(text: &str) -> Result<Outcome, String> {
 
 fn parse_int(text: &str) -> Result<i64, String> {
     text.parse().map_err(|_| format!("not an integer: {text}"))
+}
+
+/// `[1,2,3]` の形の整数の並び
+fn parse_ints(text: &str) -> Result<Vec<i64>, String> {
+    let inner = text
+        .strip_prefix('[')
+        .and_then(|t| t.strip_suffix(']'))
+        .ok_or_else(|| format!("not a bracketed list: {text}"))?;
+    if inner.is_empty() {
+        return Ok(Vec::new());
+    }
+    inner.split(',').map(parse_int).collect()
+}
+
+fn ints_text(elements: &[i64]) -> String {
+    let parts: Vec<String> = elements.iter().map(|e| e.to_string()).collect();
+    format!("[{}]", parts.join(","))
 }
 
 /// 浮動小数の結果の書き方。`f64::NAN` でない NaN は `NaN(0x…)` と書き、表の `NaN` と合わないようにする
@@ -428,6 +466,18 @@ pub fn line(case: &Case) -> String {
         Arg::Shared(s) => format!("d:{s:?}"),
         Arg::Rel(s) => format!("f:{s:?}"),
         Arg::Abs(s) => format!("a:{s:?}"),
+        Arg::Array {
+            elements,
+            lin,
+            shared,
+        } => {
+            let kind = match (lin, shared) {
+                (true, _) => "M",
+                (false, true) => "D",
+                (false, false) => "A",
+            };
+            format!("{kind}:{}", ints_text(elements))
+        }
     }));
     let outcome = match &digest(case.outcome.clone()) {
         Outcome::Int(v) => format!("i:{v}"),
@@ -438,6 +488,9 @@ pub fn line(case: &Case) -> String {
         Outcome::Out(s) => format!("out:{s:?}"),
         Outcome::Err(s) => format!("err:{s:?}"),
         Outcome::Hashed { len, hash } => format!("h:{len}:{hash:016x}"),
+        Outcome::Array { elements, lin } => {
+            format!("{}:{}", if *lin { "M" } else { "A" }, ints_text(elements))
+        }
     };
     fields.push(format!("=> {outcome}"));
     fields.join("\t")
@@ -694,6 +747,49 @@ pub fn inputs() -> Vec<(String, Vec<Arg>)> {
     }
     for path in ["plain.txt", "crlf.txt", "empty.txt"] {
         push("Std.Fs.read_line_raw2", rel(path));
+    }
+    // 配列。長さは負、0、1、3 で、添字は端と、その外側の 1 つずつと、`Int` の両端である。共有された配列の `set` と
+    // `thaw` は写す
+    let array = |elements: &[i64], lin: bool, shared: bool| Arg::Array {
+        elements: elements.to_vec(),
+        lin,
+        shared,
+    };
+    for name in ["Std.Array.make", "Std.MutArray.make"] {
+        for n in [-1, 0, 1, 3] {
+            push(name, vec![Arg::Int(n), Arg::Int(7)]);
+        }
+    }
+    push("Std.MutArray.empty", vec![]);
+    let xs = [10, 20, 30];
+    for elements in [&[][..], &[5], &xs] {
+        push("Std.Array.length", vec![array(elements, false, false)]);
+        push("Std.MutArray.length", vec![array(elements, true, false)]);
+    }
+    for i in [-1, 0, 2, 3, i64::MIN, i64::MAX] {
+        push("Std.Array.get", vec![array(&xs, false, false), Arg::Int(i)]);
+        push(
+            "Std.MutArray.read",
+            vec![array(&xs, true, false), Arg::Int(i)],
+        );
+    }
+    push("Std.Array.get", vec![array(&xs, false, true), Arg::Int(1)]);
+    for i in [-1, 0, 2, 3] {
+        for (lin, shared) in [(false, false), (false, true)] {
+            push(
+                "Std.Array.set",
+                vec![array(&xs, lin, shared), Arg::Int(i), Arg::Int(9)],
+            );
+        }
+        push(
+            "Std.MutArray.write",
+            vec![array(&xs, true, false), Arg::Int(i), Arg::Int(9)],
+        );
+    }
+    for elements in [&[][..], &xs] {
+        push("Std.Array.thaw", vec![array(elements, false, false)]);
+        push("Std.Array.thaw", vec![array(elements, false, true)]);
+        push("Std.MutArray.freeze", vec![array(elements, true, false)]);
     }
     inputs
 }

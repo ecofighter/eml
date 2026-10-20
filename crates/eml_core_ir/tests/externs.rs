@@ -150,30 +150,30 @@ fn head_type(checked: &Checked, head: TypeDefId) -> TypeId {
     )
 }
 
-fn has_type_var(types: &TypeStore, ty: TypeId) -> bool {
-    match types.kind(ty) {
-        TypeKind::Con {
-            id: _,
-            args,
-            rows: _,
-        } => args.iter().any(|&arg| has_type_var(types, arg)),
-        TypeKind::Tuple(elements) => elements.iter().any(|&ty| has_type_var(types, ty)),
-        TypeKind::Fn {
-            param,
-            lin: _,
-            effects: _,
-            tail: _,
-            ret,
-        } => has_type_var(types, *param) || has_type_var(types, *ret),
-        TypeKind::Rigid(_) | TypeKind::OpVar(_, _) | TypeKind::Flexible(_) => true,
-        TypeKind::Error => false,
-    }
+/// 行の結果と比べる std の型。`with_arg` の行の宣言の型は結果と引数の組なので、組の最初の要素である。2つ目の要素は
+/// 引数 `k` の型と同じである (docs/spec/core-ir.md の「組を返す extern」)。
+fn row_result(
+    types: &TypeStore,
+    name: &str,
+    with_arg: Option<usize>,
+    params: &[TypeId],
+    ty: TypeId,
+) -> TypeId {
+    let Some(k) = with_arg else {
+        return ty;
+    };
+    let TypeKind::Tuple(elements) = types.kind(ty) else {
+        panic!("`{name}` returns a pair");
+    };
+    assert_eq!(elements.len(), 2, "{name}");
+    assert_eq!(elements[1], params[k], "{name}");
+    elements[0]
 }
 
 #[test]
 fn every_extern_function_row_has_the_reprs_of_its_std_signature() {
-    // 行の Repr は引数の型と結果の型から比べる。型変数を持てるのは、戻らない extern の結果だけである
-    // (docs/spec/lir.md の「戻らない extern」)
+    // 行の Repr は引数の型と結果の型から比べる。型変数の位置は `tobj` である。戻らない extern の結果は、どの型にも
+    // なる型変数である (docs/spec/lir.md の「戻らない extern」)
     let checked = checked();
     let mut store = checked.typed.types.clone();
     for &e in Extern::ALL {
@@ -181,26 +181,54 @@ fn every_extern_function_row_has_the_reprs_of_its_std_signature() {
         let mut ty = row_type(&checked, &mut store, e);
         let types = &store;
         let mut params = Vec::new();
+        let mut param_types = Vec::new();
         for _ in row.params {
             let TypeKind::Fn { param, ret, .. } = types.kind(ty) else {
                 panic!("`{}` has an arrow per parameter", row.name);
             };
-            assert!(!has_type_var(types, *param), "{}", row.name);
             params.push(type_repr(types, *param, &checked.program));
+            param_types.push(*param);
             ty = *ret;
         }
         assert_eq!(params, row.params, "{}", row.name);
+        assert_eq!(row.borrowed.len(), row.params.len(), "{}", row.name);
         match row.ret {
             OpRet::Repr(ret) => {
-                assert!(!has_type_var(types, ty), "{}", row.name);
-                assert_eq!(type_repr(types, ty, &checked.program), ret, "{}", row.name);
+                let result = row_result(types, row.name, row.with_arg, &param_types, ty);
+                assert_eq!(
+                    type_repr(types, result, &checked.program),
+                    ret,
+                    "{}",
+                    row.name
+                );
             }
             OpRet::Never => assert!(
-                has_type_var(types, ty),
+                matches!(types.kind(ty), TypeKind::Rigid(_)),
                 "`{}` never returns, so its result is a type variable",
                 row.name
             ),
         }
+    }
+}
+
+/// 表の値そのもの。配列を借りるのは、配列を読む4つの行の配列の引数だけで、組を返すのは `Std.MutArray` の2つの行
+/// だけである。
+#[test]
+fn only_the_array_readers_borrow() {
+    for &e in Extern::ALL {
+        let row = e.row();
+        let expected: (&[bool], Option<usize>) = match row.name {
+            "Std.Array.length" => (&[true], None),
+            "Std.Array.get" => (&[true, false], None),
+            "Std.MutArray.length" => (&[true], Some(0)),
+            "Std.MutArray.read" => (&[true, false], Some(0)),
+            _ => {
+                assert!(!row.borrowed.contains(&true), "{}", row.name);
+                assert_eq!(row.with_arg, None, "{}", row.name);
+                continue;
+            }
+        };
+        assert_eq!((row.borrowed, row.with_arg), expected, "{}", row.name);
     }
 }
 
@@ -258,29 +286,40 @@ fn every_extern_function_row_has_the_kinds_of_its_std_signature() {
         let types = &store;
         assert_eq!(row.param_kinds.len(), row.params.len(), "{}", row.name);
         let mut params = Vec::new();
+        let mut param_types = Vec::new();
         for _ in row.params {
             let TypeKind::Fn { param, ret, .. } = types.kind(ty) else {
                 panic!("`{}` has an arrow per parameter", row.name);
             };
-            params.push(kind_of(types.linearity(*param)));
+            params.push(kind_of(types.linearity_or_poly(*param)));
+            param_types.push(*param);
             ty = *ret;
         }
         assert_eq!(params, row.param_kinds, "{}", row.name);
         if let OpRet::Repr(_) = row.ret {
-            assert_eq!(kind_of(types.linearity(ty)), row.ret_kind, "{}", row.name);
+            let result = row_result(types, row.name, row.with_arg, &param_types, ty);
+            assert_eq!(
+                kind_of(types.linearity_or_poly(result)),
+                row.ret_kind,
+                "{}",
+                row.name
+            );
         }
     }
 }
 
+/// 型変数に依存する型 (`Poly`) は、extern のスキームが引数の型変数を `Unr` に固定するので `Unr` の行と合う。結果
+/// だけに現れる型変数は固定しないが、結果がその型変数に依存する行 (`MutArray.empty` の `MutArray a`) は `Lin` である
+/// (docs/spec/declarations.md の「`extern`」)。
 fn kind_of(lin: Lin) -> Linearity {
     match lin {
-        Lin::Unr => Linearity::Unr,
+        Lin::Unr | Lin::Poly => Linearity::Unr,
         Lin::Lin => Linearity::Lin,
-        Lin::Poly | Lin::Var(_) => panic!("an extern row has no polymorphic kind"),
+        Lin::Var(_) => panic!("an extern row has no kind variable"),
     }
 }
 
-/// 表の値そのもの。`Fs` の4つ以外は、引数も結果も `Unr` である。
+/// 表の値そのもの。`Fs` の4つと `MutArray` を扱う7つ以外は、引数も結果も `Unr` である。
 #[test]
 fn only_the_file_functions_carry_a_lin() {
     use Linearity::{Lin, Unr};
@@ -291,6 +330,13 @@ fn only_the_file_functions_carry_a_lin() {
             "Std.Fs.read_all" => (&[Lin], Lin),
             "Std.Fs.read_line_raw" => (&[Lin], Lin),
             "Std.Fs.close" => (&[Lin], Unr),
+            "Std.Array.thaw" => (&[Unr], Lin),
+            "Std.MutArray.make" => (&[Unr, Unr], Lin),
+            "Std.MutArray.empty" => (&[Unr], Lin),
+            "Std.MutArray.length" => (&[Lin], Unr),
+            "Std.MutArray.read" => (&[Lin, Unr], Unr),
+            "Std.MutArray.write" => (&[Lin, Unr, Unr], Lin),
+            "Std.MutArray.freeze" => (&[Lin], Unr),
             _ => {
                 assert!(
                     row.param_kinds.iter().all(|&kind| kind == Unr),

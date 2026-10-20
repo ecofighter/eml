@@ -1062,6 +1062,25 @@ impl<'a> Checker<'a> {
         Ok(())
     }
 
+    /// 借用の印 `borrowed` が立つ引数を読む。
+    fn read_borrowed(
+        &self,
+        owned: &mut Owned,
+        args: &[Atom],
+        borrowed: &[bool],
+        lent: &str,
+    ) -> Result<(), String> {
+        for (&arg, &borrowed) in args.iter().zip(borrowed) {
+            match arg {
+                Atom::Var(arg) if borrowed => self.read(owned, arg, lent)?,
+                // 変数でない値は所有を持たないので、消費と同じ検査 (関数の番号) だけを通す
+                _ if borrowed => self.consume(owned, arg)?,
+                _ => {}
+            }
+        }
+        Ok(())
+    }
+
     /// 値を使う。所有の検査の段では、RC の対象なら所有を1つ渡す。
     fn consume(&self, owned: &mut Owned, atom: Atom) -> Result<(), String> {
         let var = match atom {
@@ -1147,20 +1166,18 @@ impl<'a> Checker<'a> {
                     "captures",
                 )?;
             }
-            Rhs::Extern { ext, args, at: _ } => self.cx.check_extern(var, *ext, args)?,
+            Rhs::Extern { ext, args, at: _ } => {
+                self.cx.check_extern(var, *ext, args)?;
+                // 借用の引数は基本操作と同じく読む使いである (docs/spec/lir.md の「extern の借用」)
+                let lent = format!("lent to `{}`", ext.row().name);
+                self.read_borrowed(owned, args, ext.row().borrowed, &lent)?;
+            }
             Rhs::Prim(prim, args) => {
                 self.cx.check_prim(var, prim, args)?;
                 // 借用の引数は `unbox` のオペランドと同じく読む使いで、所有の数を変えない
                 // (docs/spec/lir.md の「基本操作」)
                 let lent = format!("lent to `prim {}`", prim_text(&self.program.effects, prim));
-                for (&arg, &borrowed) in args.iter().zip(prim.row().borrowed) {
-                    match arg {
-                        Atom::Var(arg) if borrowed => self.read(owned, arg, &lent)?,
-                        // 変数でない値は所有を持たないので、消費と同じ検査 (関数の番号) だけを通す
-                        _ if borrowed => self.consume(owned, arg)?,
-                        _ => {}
-                    }
-                }
+                self.read_borrowed(owned, args, prim.row().borrowed, &lent)?;
             }
             Rhs::ConstString(index) => {
                 if *index as usize >= self.program.strings.len() {

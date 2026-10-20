@@ -138,7 +138,7 @@ box の挿入が足す変数の印は、[LIR](lir.md) の「box の挿入」に�
 
 #### 表の印の列
 
-- extern の行 (`eml_extern::FunctionRow`) は、`params` と `ret` と並べて `param_kinds: &'static [Linearity]` と `ret_kind: Linearity` を持つ。extern の関数は、戻らない extern (`exit`) の結果を除いて多相でないので、2値の `Linearity` で足りる。`exit` の結果の印は、行の `ret_kind` でなく、translate が具体化した結果の型から決める ([LIR](lir.md) の「戻らない extern」)
+- extern の行 (`eml_extern::FunctionRow`) は、`params` と `ret` と並べて `param_kinds: &'static [Linearity]` と `ret_kind: Linearity` を持つ。extern の関数の引数に現れる型変数は、スキームで `Unr` に固定される ([宣言](declarations.md) の「`extern`」)。そのため、型変数の位置 (`Std.Array.get` の要素) と、Kind が要素に従う `Array a` は `Unr` で、2値の `Linearity` で足りる。`exit` の結果の印は、行の `ret_kind` でなく、translate が具体化した結果の型から決める ([LIR](lir.md) の「戻らない extern」)
 
   | 行 | 引数 | 結果 |
   |---|---|---|
@@ -146,9 +146,16 @@ box の挿入が足す変数の印は、[LIR](lir.md) の「box の挿入」に�
   | `Std.Fs.read_all` | `Lin` | `Lin` (`(File, String)`) |
   | `Std.Fs.read_line_raw` | `Lin` | `Lin` (`(File, String)`) |
   | `Std.Fs.close` | `Lin` | `Unr` |
+  | `Std.Array.thaw` | `Unr` | `Lin` (`MutArray a`) |
+  | `Std.MutArray.make` | `Unr`、`Unr` | `Lin` |
+  | `Std.MutArray.empty` | `Unr` | `Lin` |
+  | `Std.MutArray.length` | `Lin` | `Unr` (`Int`) |
+  | `Std.MutArray.read` | `Lin`、`Unr` | `Unr` (要素) |
+  | `Std.MutArray.write` | `Lin`、`Unr`、`Unr` | `Lin` |
+  | `Std.MutArray.freeze` | `Lin` | `Unr` (`Array a`) |
   | ほかのすべての行 | すべて `Unr` | `Unr` |
 
-  `std/` のシグネチャとの結び付けは、Repr と同じテスト (`crates/eml_core_ir/tests/externs.rs`) で、`TypeStore::linearity` を使って確かめる。行の型は、戻らない extern の結果を除いて型変数を含まないので、相対的な型は現れない。戻らない extern の結果は、テストも行と比べない ([LIR](lir.md) の「戻らない extern」)
+  `with_arg` の行 (`Std.MutArray.length` と `read`) の結果の列は、組の最初の要素の Kind である (下の「組を返す extern」)。`std/` のシグネチャとの結び付けは、Repr と同じテスト (`crates/eml_core_ir/tests/externs.rs`) で、`TypeStore::linearity_or_poly` を使って確かめる。型変数に依存する宣言の型 (`Array a`、`a`) は `Poly` と読めるが、型変数は `Unr` に固定されているので、`Unr` の行と合うものとして比べる。`MutArray a` は型変数によらず `Lin` と読める。戻らない extern の結果は、テストも行と比べない ([LIR](lir.md) の「戻らない extern」)
 - 基本操作の表の印の列は [LIR](lir.md) の「基本操作」にある。EP が自分の変数に付ける印と同じなので、`prim` の V2 が EP 自身を確かめる
 - 操作の表 (`OperationInfo`) は、Repr の `params` と `ret` と並べて、引数と戻り値の印の列 (`param_marks`、`ret_mark`) を持つ。操作の宣言の型を、相対的な型も読める読み方で読み、`Rigid` と `Var` に依存する値を `poly` にする。呼ぶ側から節へ渡る位置の矢印は宣言で `Unr` に固定されている ([エフェクトと handler](effects.md) の「handler の意味」) ので `unr` になる。V2 は `clause` の呼び出しと、`clause` の印の付いた関数の引数と戻り値を、この列と比べる。テキストの形では、効果の宣言が列を書く ([テスト戦略](../implementation/testing.md) の「LIR のテキストの形」)
 
@@ -160,6 +167,12 @@ box の挿入が足す変数の印は、[LIR](lir.md) の「box の挿入」に�
 - translate は、命令を出すそれぞれの所で、コンストラクタか型から配置を決める。値の型からは決めない。配置は最初に使った順に表に入れる。translate の後のパス (EP と LIR のパス) は表を変えないので、使われなくなった配置が残ることがある。番号は1回の変換の中だけで意味を持つ。VM は実行時に配置の番号を使わないので、REPL の追記も配置の番号を引き直さない ([VM](vm.md) の「追記」)
 - extern が作るデータは、比べる extern と `Std.Env.has` の `Bool`、`compare` の extern の `Ordering`、`Fs.read_all` と `read_line_raw` の組である。`Bool` は機械の定数 `FALSE` と `TRUE` で、`Ordering` は `LT`、`EQ`、`GT` で作る。そのタグが `Prelude.Bool` と `Prelude.Ordering` の宣言の順と合うことを、テストが確かめる。組の配置は大きさだけで決まる。そのため、extern の行は配置を持たない。名前的なデータ (`List`、`Option`、`Result`) は extern が作らず、標準ライブラリの eml が包む ([標準ライブラリ](stdlib.md) の「extern の境界」)
 - 名前付きのレコードは、ほかの `data` と同じく、型ごとの配置に入る。名前付きのフィールドを持つコンストラクタも、フィールドの名前は持たず、宣言の順のフィールドの Repr の列を持つ
+
+### 組を返す extern
+
+- `Std.MutArray.length` と `read` は、宣言の型では結果と配列の組を返す (`MutArray a -> Int -> <Panic> (a, MutArray a)`)。extern は引数を消費するので、組を作る extern にすると、読むたびに組を確保する。そこで行は配列を借り (`FunctionRow::borrowed`)、要素だけを返し、`with_arg: Some(0)` を持つ ([LIR](lir.md) の「extern の借用」)
+- translate は、`with_arg: Some(k)` の行の引数のそろった呼び出しを、行の結果を束縛する `extern` 命令と、その結果と引数 k を組にする `con` にする。`let t.1: int = extern Std.MutArray.read(m.0, 0)` と `let d.2: obj lin = con (,) #0(t.1, m.0)` の形である。extern は m.0 を借りるだけなので、m.0 を消費するのは `con` だけである。`$externN` も同じ形の本体を持つ。どちらも同じ関数 (`ProgramBuilder::extern_call`) が作る
+- 組を受けてすぐ開く所 (`let (v, m) = MutArray.read m i`) では、最適化の既知のコンストラクタ (下の「既知のコンストラクタ」) で組が消え、確保が残らない
 
 ### 変換の規則
 
@@ -218,7 +231,7 @@ box の挿入が足す変数の印は、[LIR](lir.md) の「box の挿入」に�
   - `mask` が効くのは呼び出しそのものだけで、引数の評価には効かない。Core IR の呼び出しの引数は値 (アトム) なので、引数は呼び出しより前の文で評価し終えている。そのため、これは形から決まる。
 - `mask` は translate の出力にだけある。EP が `evv_mask` の包みに置き換える (下の「`mask` の包み」)。包みは戻りで `evv` を戻すので、`mask` 付きの末尾の位置の呼び出しは末尾呼び出しにならない。
 - 変換の段の verifier は、`mask` のエフェクトの番号がエフェクトの表にあること、番号が真に昇順に並んでいること (同じエフェクトの項目が2つないこと)、どの項目も m が 1 以上であること、`mask` が `handle`、`perform`、`clause` に付いていないことを確かめる (``a mask is not in ascending order``、``a mask item of `State` skips no handler``)。EP の後の段は、`mask` が残っていれば誤りにする。
-- extern のエフェクト (`IO`) も、ほかのエフェクトと同じく Core IR のエフェクトの表に入る。番号は下の「IO の extern」にある。`mask` は extern のエフェクトを持たない。また verifier は、`extern` 命令の引数の数と、引数と結果の Repr を表の行と比べる。
+- extern のエフェクト (`IO`) も、ほかのエフェクトと同じく Core IR のエフェクトの表に入る。番号は下の「IO の extern」にある。`mask` は extern のエフェクトを持たない。また verifier は、`extern` 命令の引数の数を表の行と比べる。引数と結果の Repr は、box の挿入の後の LIR の範囲の段と所有の段で比べる ([LIR](lir.md) の「extern の行」)。
 - handle の本体、操作の節、`return` の節は、ラムダと同じく、捕まえた変数を先頭の引数に持つ関数に持ち上げ、そのクロージャか関数の値を `handle` に渡す。本体の関数は `()` を受ける。節はエフェクトの操作の順に並べる。操作を値として使うときは、`perform` を呼ぶだけの関数 (`op$…`) で包む。
 - 変換は、節ごとに `k` の使い方を HIR で調べ、次の2つの形のどちらかにする。
   - 直接の形: 節の本体のどこでも (入れ子のラムダや handle の本体の中を含む)、`k` の使用がすべて引数をそろえた直接の呼び出し (`k v`、状態ありなら `k v st`) か `drop k` なら、クロージャを作らない。その呼び出しを、生の継続への `Call::Resume` にする。生の継続をラムダや handle の本体が捕まえても、`Call::Resume` で再開できる。引数が余る呼び出し (`r` が関数型のときの `k v x`) は、`Call::Resume` の結果への `apply` を続ける。`mask` は、その呼び出しの最後の矢印の記録を付ける。持ち上げたローカル関数の引数に生の `k` を渡す呼び出しは、この形に当たらない。呼び出し先の `return` のブロックが `k` の末尾の `resume` で終わらないので、節はその場で動かない (下の「ローカル関数の持ち上げ」)。
