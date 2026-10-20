@@ -16,7 +16,7 @@
 
 | 段 | 中身 | 前提 | 完了の条件 |
 |---|---|---|---|
-| S14 数値計算の整備 | 実行時エラーの型 `Panic`、`Float` と `Num`、`Array` と `Lin` の `MutArray`、小さな単一コンストラクタの型の構造体の表現、数値計算の計測 | S13 | 数値計算の計測のプログラムが Python の版と一緒に `bench/scripts.sh` で動き、結果を [計測の基準](../implementation/benchmarks.md) に記録する。S14a は済み |
+| S14 数値計算の整備 | 実行時エラーの型 `Panic`、`Float` と `Num`、`Array` と `Lin` の `MutArray`、小さな単一コンストラクタの型の構造体の表現、数値計算の計測 | S13 | 数値計算の計測のプログラムが Python の版と一緒に `bench/scripts.sh` で動き、結果を [計測の基準](../implementation/benchmarks.md) に記録する。S14a と S14b は済み |
 
 S14 の後は、言語の項目を次の順に並べる。
 
@@ -44,14 +44,14 @@ S14 の後は、言語の項目を次の順に並べる。
 
 2026-10-19 の議論で、S13 の最後の作業だった S13f を解消し、数値計算に要るものをまとめて S14 にした。S13f の項目のうち、std のデータ構造は下の「UTF-8 と標準ライブラリ」に、`String.byte_at` の借用は「処理系」の借用パラメータに、診断の3つは「診断」と「処理系」の「実行時エラーの backtrace」に移した。数値計算の計測は S14 の完了の条件にした。
 
-S14 は、ネイティブ化の前に、数値計算で Python と比べる基準を作る段である。今の言語には `Float` も配列もないので、`Int` とリストと再帰で書ける計算しか測れない。そこで、`Float`、配列、写しの起きない書き換え、確保のない小さな値をまとめて入れ、その上で計測のプログラムを書く。その前に、値と入力で決まる実行時エラーを、型に現れるエフェクト `Panic` にする。
+S14 は、ネイティブ化の前に、数値計算で Python と比べる基準を作る段である。S14 の前の言語には `Float` も配列もなく、`Int` とリストと再帰で書ける計算しか測れなかった。そこで、`Float`、配列、写しの起きない書き換え、確保のない小さな値をまとめて入れ、その上で計測のプログラムを書く。その前に、値と入力で決まる実行時エラーを、型に現れるエフェクト `Panic` にする。
 
 設計は `docs/superpowers/specs/2026-10-19-s14-numeric-design.md` にある。S14 を次の5つの作業に分けて順に進める。
 
 | 作業 | 中身 | 状態 |
 |---|---|---|
 | S14a | `Panic`。値と入力で決まる実行時エラーを型に出し、中断しうるかの印で巻き戻しの地点を決める | 済み。`+ - * / %`、`negate`、文字列の位置の extern と `Env.arg` が `<Panic>` を持ち、その誤りと利用者の `panic` を `try_panic` が巻き戻しで捕まえる。巻き戻しの表の行は、中断しない関数の呼び出しの分だけ減った。決めたこと (`Panic` の宣言、`main` と REPL の入力の row、トップレベルの値と `Eq`、`Ord`、`Show` のメソッドの空の row、負のリテラル) は [エフェクトと handler](../spec/effects.md) の「組み込みの `Panic`」、[標準ライブラリ](../spec/stdlib.md) の「`try_panic`」、[宣言](../spec/declarations.md) の「シグネチャと等式」と「Prelude のクラス」、[式](../spec/expressions.md) の「演算子の列と単項マイナス」、[モジュールと名前解決](../spec/modules.md) の「モジュール」、[型と Kind](../spec/types.md) の「REPL の入力」にある。実行の道は [VM](../spec/vm.md) の「中断と実行時エラーの分担」と「extern の中断」に、`Fault::panics` は [オブジェクトモデル](../spec/object-model.md) の「extern」に、中断しうるかの不動点と巻き戻しの地点は [LIR](../spec/lir.md) の「巻き戻しの地点」に、under の形は [Core IR](../spec/core-ir.md) の「`perform` と節の3つの形」に、計測は [計測の基準](../implementation/benchmarks.md) の「S14a」にある |
-| S14b | `Float` と `Num` / `Div` | |
+| S14b | `Float` と `Num` / `Div` | 済み。`Int` の算術を Prelude のクラス `Num` (`+ - *`、`negate`) と `Div` (`/`、`%`) の instance にし、`Float` (IEEE 754 の倍精度) の型、リテラル、算術と比較、Python の `repr` と同じ表示、`Std.Float` を入れた。`bench/` のプログラムの `RunStats` は変わらない。決めたこと (クラスと instance、`Float` の比較の演算子と `compare` の全順序の例外、表示) は [宣言](../spec/declarations.md) の「Prelude のクラス」にある。リテラルは [字句](../spec/lexical.md) の「数値と文字」と [式](../spec/expressions.md) の「演算子の列と単項マイナス」に、型は [型と Kind](../spec/types.md) の「数の型」に、パターンの E1052 は [網羅性](../spec/exhaustiveness.md) の「検査パス」に、`Std.Float` は [標準ライブラリ](../spec/stdlib.md) の「`Std.Float`」にある。実行の道では、Repr `float` が [LIR](../spec/lir.md) の「値の表現」に、`Float` の箱が [オブジェクトモデル](../spec/object-model.md) の「種類」に、専用の命令が [VM](../spec/vm.md) の「基本操作と extern」に、信頼の一覧の T12 がオブジェクトモデルの「`unsafe` の核」にある。計測は [計測の基準](../implementation/benchmarks.md) の「S14b」にある |
 | S14c | `Array` と `Lin` の `MutArray`、`freeze` | |
 | S14d | 数値計算の計測。構造体の表現の前の基準を記録する | |
 | S14e | 小さな単一コンストラクタの型の構造体の表現 | |
@@ -72,6 +72,11 @@ S14 は、ネイティブ化の前に、数値計算で Python と比べる基�
 - `Float` の Repr と、`eml_rt` の語での `Float` の表現を、型とリテラルと同じ作業で入れる。型とリテラルより前に入れると、テストできない死んだコードになるためである
 - 除算は、クラス `Div` (`/` と `%`) に `Int` と `Float` の instance を置く形にする。`Int` の `/` は今と同じく 0 の側へ切り捨てる。`Num` と `Div` のメソッドは `<Panic>` を持つ (ユーザーが 2026-10-19 に決めた)
 - `+ - * < <= > >=` と前置の `-` (`negate`) は `Num` と `Ord` のクラスで解決する。算術は `Int` と `Float`、順序の比較は `Int`、`Float`、`String` に使える (`Char` は後の「`Char`」の項目で足す)。何も型を決めないオペランドは、型クラスの規則どおり曖昧さのエラー (E2009) にする
+- S14b で、次の論点に答えた。
+  - `Float` の型ごとの意味: `/` と `%` は `Div Float` にあり、IEEE 754 のとおりで `Panic` を起こさない (0 で割ると `inf`、`-inf`、`nan`。`%` は C の `fmod`)。比較の演算子は IEEE 754 のとおりで、`compare` だけを全順序にした。法則から外れるのは、NaN で `==` が反射律を満たさないことと、NaN と ±0 で `==` と `compare … == EQ` が食い違うことだけである ([宣言](../spec/declarations.md) の「Prelude のクラス」)
+  - `negate` は `Num` の `pub` のメソッドで、利用者は自分の型の `Num` の instance に書ける。前置の `-` はその instance の `negate` を呼ぶ ([宣言](../spec/declarations.md) の「Prelude のクラス」、[式](../spec/expressions.md) の「演算子の列と単項マイナス」)
+  - `Float` のリテラルはパターンに書けず (E1052)、`switch` にも現れない ([網羅性](../spec/exhaustiveness.md) の「検査パス」)
+  - 多相な位置の `Float` は `eml_rt` の `Float` の箱で、`float` の位置では生の 64 ビットである ([LIR](../spec/lir.md) の「値の表現」、[オブジェクトモデル](../spec/object-model.md) の「種類」)
 
 #### `Array` と `MutArray`
 
@@ -95,11 +100,7 @@ S14 は、ネイティブ化の前に、数値計算で Python と比べる基�
 
 ### 論点
 
-- `Float` の型ごとの意味: `/` と `%` の有無、`==` と NaN の結果、`Eq` / `Ord` の法則
-- `negate` をユーザーに見せるか
-- `Float` をリテラルのパターンと `switch` から外すこと
-- 多相な位置での `Float` の表現と、`eml_rt` の語での表現 (方向は、`tobj` では `BigInt` と同じく箱、`float` の位置では生の 64 ビット)
-- 型から決める呼び出しの規約 (ユーザーが 2026-10-18 に、`Float` の項目かネイティブ化で考えると決めた): S13e-3 で、関数の ABI を名前で決め、値として生まれる関数をいつも一様にした ([LIR](../spec/lir.md) の「一様な関数」)。そのため、展開されない内部の関数を直接呼ぶ所は、呼び出しごとにスカラーを `box` と `unbox` で受け渡す ([計測の基準](../implementation/benchmarks.md) の「S13e-3」)。この費用をなくすため、閉包の ABI を矢印の型から決め、変換の包みを一様な `_:poly` の境目だけに置く形を考える。総称な `apply` の道には、`FnEntry` に引数の Repr を持たせて変換させる。捕獲は生の語のまま持ち、データのフィールドは今と同じく一様に保つ
+- 型から決める呼び出しの規約 (ユーザーが 2026-10-18 に、`Float` の項目かネイティブ化で考えると決めた。S14b では入れず、`tobj` の位置の `Float` はいつも箱に入れる。S14e の設計で扱う): S13e-3 で、関数の ABI を名前で決め、値として生まれる関数をいつも一様にした ([LIR](../spec/lir.md) の「一様な関数」)。そのため、展開されない内部の関数を直接呼ぶ所は、呼び出しごとにスカラーを `box` と `unbox` で受け渡す ([計測の基準](../implementation/benchmarks.md) の「S13e-3」)。この費用をなくすため、閉包の ABI を矢印の型から決め、変換の包みを一様な `_:poly` の境目だけに置く形を考える。総称な `apply` の道には、`FnEntry` に引数の Repr を持たせて変換させる。捕獲は生の語のまま持ち、データのフィールドは今と同じく一様に保つ
 - 範囲外の添字は `Panic` にする。`Option` を返す版を足すか
 - `MutArray` の作り方 (同じ値で埋めるか、関数で埋めるか)、`Array` から `MutArray` を得る道、`Lin` の要素を持つ `Array` と `MutArray` の API
 - `poly` の物体の `lin` ビットの実行時の伝播 ([マルチコア対応の設計](multicore.md) の「未決の論点と将来の拡張」で、`MutArray` の項目で決めるとしていた)
@@ -235,7 +236,7 @@ UTF-8 の核の extern を入れ、標準ライブラリを広げる。`std/` �
 - Kind 推論の検証: `eml_types/src/kind/` の束の上の計算 (最小解、多相化で残す制約、持ち越し、含意、instance での値) を vstd だけに依存する葉の crate に移し、Verus で証明する。型検査と evidence passing の変換は Verus で扱わない。S10 の後に、LIR の verifier と VM の組で `eml_rt` の前提を証明するかを検討する。詳細は [Verus で検証する範囲](verification.md) にある
 - インクリメンタル化: 各段階をクエリ (salsa など) に載せ替える。各段階を純粋な関数にしているのはこのため ([コンパイラの構成](../implementation/architecture.md))
 - LSP: 診断、hover (型と row の表示)、補完、code action。診断の構造体は、LSP の診断と code action に変換できる形にしてある ([診断](../spec/diagnostics.md))。前提: インクリメンタル化
-- ネイティブ化: LIR から Cranelift でネイティブのコードを出す。LIR のブロックの列とブロック引数は、Cranelift のブロック引数に1対1で写る。多相な位置の `Int` の表現は S9 で決めた語の表現を、`Float` の表現は S14 で決める表現を前提にする。VM とネイティブは `eml_rt` の値とヒープを共有し、関数表 `FnEntry` を接続点にして混ぜて動かせる。たとえば、標準ライブラリだけをネイティブにし、ユーザーのコードをバイトコードで動かす。VM からネイティブの関数を呼ぶときは `f$boxed` の一様な入口を使う。`eml_extern` の表は、`eml_rt` の語の ABI の関数になる。ネイティブの `par` がバイトコードの閉包を worker で呼ぶには、VM の並列化 (下の「マルチコア対応」) が要る。前提: S10、S14、借用パラメータ
+- ネイティブ化: LIR から Cranelift でネイティブのコードを出す。LIR のブロックの列とブロック引数は、Cranelift のブロック引数に1対1で写る。多相な位置の `Int` の表現は S9 で決めた語の表現を、`Float` の表現は S14b で決めた表現 (`float` の位置では生の 64 ビット、`tobj` では箱) を前提にする。VM とネイティブは `eml_rt` の値とヒープを共有し、関数表 `FnEntry` を接続点にして混ぜて動かせる。たとえば、標準ライブラリだけをネイティブにし、ユーザーのコードをバイトコードで動かす。VM からネイティブの関数を呼ぶときは `f$boxed` の一様な入口を使う。`eml_extern` の表は、`eml_rt` の語の ABI の関数になる。ネイティブの `par` がバイトコードの閉包を worker で呼ぶには、VM の並列化 (下の「マルチコア対応」) が要る。前提: S10、S14、借用パラメータ
   - 完了の条件: 実用的なプログラム (S12d のスクリプトと、S14 で足す数値計算の計測) で、Python 3.14 の1.5倍以下の実時間になる (上の「段の列」の速さの目標)。S13 の試作では、`wc` の内側のループを LIR のまま写したコードで約1.2倍、借用とインライン化を足すと約0.45倍だった ([計測の基準](../implementation/benchmarks.md) の「S13 の前の試作」)。確保の多い `logstat` は測っていないので、借用パラメータと reuse analysis (下の「Perceus の最適化」) の効果を見て詰める
   - Cranelift の mid-end は制御フローをほとんど変えないので、jump threading と既知のコンストラクタの畳み込みは Core IR の側で行う
   - VM は、中断 (`never` の操作、`try_io` が捕まえる IO の失敗、`exit`) を、コード生成が作る呼び出しの位置ごとの表でタスクのスタックを巻き戻して行い、実行時エラー (オーバーフロー、ゼロ除算) は巻き戻さずに評価全体を止める ([VM](../spec/vm.md) の「巻き戻し」と「中断と実行時エラーの分担」)。ネイティブのコードで中断を巻き戻すには、同じ表を Cranelift のコードの呼び出しの位置ごとに持たせる
