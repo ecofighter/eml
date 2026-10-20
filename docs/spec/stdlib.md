@@ -117,6 +117,17 @@ pub extern exit : Int -> <IO> a
 - `exit 1`、`exit 2`、`exit 130` の終了コードは、CLI の実行時エラー (1)、使い方の誤り (2)、割り込み (130) と区別できない。スクリプトが選んだことなので、そのまま受け入れる
 - REPL では、`exit` は入力を終えるだけで、REPL は次の入力へ進む。詳しくは [REPL の端末](repl.md) の「割り込みと実行時エラー」にある
 
+## `for` と `while`
+
+```haskell
+pub for : Int -> Int -> (Int -> <e> Unit) -> <Panic | e> Unit
+pub while : (Unit -> <e> Bool) -> (Unit -> <e> Unit) -> <e> Unit
+```
+
+- `for lo hi body` は、`lo` 以上 `hi` 未満の `i` で、小さい順に `body i` を呼ぶ。`lo` が `hi` 以上なら `body` を呼ばない。`<Panic>` は添字の足し算から来る
+- `while cond body` は、`cond ()` が `True` を返す間、`body ()` を呼ぶ。最初の `cond ()` が `False` なら `body` を呼ばない
+- どちらも Prelude の eml のコードで、本体を末尾でなく呼んでから、自分を末尾で呼ぶ。本体と条件の閉包は、既知の閉包の複製 ([Core IR](core-ir.md) の「複製」) で直接の呼び出しになる。そのため、本体が handler に触れるなら、本体は状態を渡す形の経路に入る ([Core IR](core-ir.md) の「handler への特殊化」)
+
 ## `List`
 
 | 関数 | 型 |

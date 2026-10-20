@@ -9,12 +9,16 @@ use eml_lir::{Atom, FnIdx};
 use super::known::{known_closures, wrapper};
 
 /// 印を付け直さない関数。handle の本体、節、`return` の節の関数は、印の規則が本体の中身でなく handle で決まる
-/// (docs/spec/core-ir.md の「`yields` の印」)。包む関数は直接呼ばれず、どの文脈からも値として呼ばれる。
+/// (docs/spec/core-ir.md の「`yields` の印」)。包む関数の形の関数は、値として使われる間だけ印を保つ。値はどの文脈
+/// からも呼ばれ、ABI は名前で決まるためである。handle を特殊化した後の `return` の節のように、直接呼ばれるだけに
+/// なった関数は、ほかの関数と同じく固定点で印を決める。
 pub(crate) fn kept_marks(program: &Program) -> HashSet<FnIdx> {
+    let values = value_references(program);
     let mut keep = HashSet::new();
     for (index, function) in program.functions.iter().enumerate() {
-        if wrapper(function).is_some() {
-            keep.insert(FnIdx(index as u32));
+        let idx = FnIdx(index as u32);
+        if wrapper(function).is_some() && values.contains(&idx) {
+            keep.insert(idx);
         }
         let known = known_closures(function);
         let target = |atom: Atom| match atom {
@@ -45,6 +49,37 @@ pub(crate) fn kept_marks(program: &Program) -> HashSet<FnIdx> {
         }
     }
     keep
+}
+
+/// 値として使われる関数。`closure f(..)` と `&f` の関数で、直接の呼び出しの呼ぶ相手は含めない。
+fn value_references(program: &Program) -> HashSet<FnIdx> {
+    let mut values = HashSet::new();
+    for block in program
+        .functions
+        .iter()
+        .flat_map(|function| &function.blocks)
+    {
+        for stmt in &block.stmts {
+            if let Stmt::Let {
+                var: _,
+                rhs: Rhs::MakeClosure(function, _),
+            } = stmt
+            {
+                values.insert(*function);
+            }
+            stmt.for_each_atom(|atom| add_value(&mut values, atom));
+        }
+        block
+            .term
+            .for_each_atom(|atom| add_value(&mut values, atom));
+    }
+    values
+}
+
+fn add_value(values: &mut HashSet<FnIdx>, atom: Atom) {
+    if let Atom::Fn(function) = atom {
+        values.insert(function);
+    }
 }
 
 /// `yields` を最小の固定点で付け直す。translate の印が立ち、本体に yield の地点 (再開できる `perform`、`yields` の
@@ -105,7 +140,7 @@ fn yields_locally(function: &CoreFn) -> bool {
         })
 }
 
-fn direct_callees(function: &CoreFn) -> impl Iterator<Item = FnIdx> + '_ {
+pub(super) fn direct_callees(function: &CoreFn) -> impl Iterator<Item = FnIdx> + '_ {
     function
         .blocks
         .iter()

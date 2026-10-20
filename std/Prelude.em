@@ -251,6 +251,23 @@ x |> f = f x
 pub (<|) : (a -> <e> b) -> a -> <e> b
 f <| x = f x
 
+-- `lo` 以上 `hi` 未満の添字で、順に `body` を呼ぶ。`Panic` は添字の足し算から来る
+-- (docs/spec/stdlib.md の「`for` と `while`」)
+pub for : Int -> Int -> (Int -> <e> Unit) -> <Panic | e> Unit
+for lo hi body =
+  if lo < hi then
+    body lo
+    for (lo + 1) hi body
+  else ()
+
+-- `cond ()` が `True` を返す間、`body ()` を呼ぶ
+pub while : (Unit -> <e> Bool) -> (Unit -> <e> Unit) -> <e> Unit
+while cond body =
+  if cond () then
+    body ()
+    while cond body
+  else ()
+
 -- 要素を持つ組み込みの型。Array の Kind は要素に従い、MutArray は常に Lin (docs/spec/types.md)
 pub extern data Array a
 pub extern data MutArray a

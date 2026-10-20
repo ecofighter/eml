@@ -999,6 +999,27 @@ fn nested_handlers_are_specialized_inside_out() {
     let shown = core_text(STATE_NESTED, Pass::Optimize);
     assert!(!shown.contains("handle "), "{shown}");
     assert!(shown.lines().any(nested_copy), "{shown}");
+    let all = handler_copies(&shown);
+    let nested: Vec<&str> = all
+        .split("\n\n")
+        .filter(|copy| copy.lines().next().is_some_and(nested_copy))
+        .map(str::trim)
+        .collect();
+    insta::assert_snapshot!(nested.join("\n\n"), @r#"
+    fn "loop{H=count@#3090723f4081c669}@#41424a60520c7b81"(i.0: int, n.1: int, c.6: int, st.9: int) -> obj {
+      let t.2: enum = extern "Prelude.Ord Int.>"(i.0, n.1)
+      switch t.2 Prelude.Bool { #0 -> b1, #1 -> b2 }
+    b1:
+      let t.14: int = extern "Prelude.Num Int.+"(c.6, 1)
+      let t.15: int = extern "Prelude.Num Int.+"(st.9, i.0)
+      let t.4: int = extern "Prelude.Num Int.+"(i.0, 1)
+      let t.12: obj = call "loop{H=count@#3090723f4081c669}@#41424a60520c7b81"(t.4, n.1, t.14, t.15)
+      return t.12
+    b2:
+      let d.13: obj = con (,) #0(c.6, st.9)
+      return d.13
+    }
+    "#);
 }
 
 /// 後の回の複製も、その回の初めのコードから作るので、名前でコードが決まる (docs/spec/vm.md の「追記」)。
@@ -2018,4 +2039,234 @@ fn entry$main() -> int {
       return t.7
     }
     "#);
+}
+
+/// H に触れない `yields` の関数は経路に入れず、呼び出しをそのまま残す (docs/spec/core-ir.md の「handler への
+/// 特殊化」)。`noise` は外側の `Std.State` だけを起こすので、`Tick` の複製を作らない。
+#[test]
+fn a_callee_that_does_not_touch_the_handler_is_not_copied() {
+    let text = "\
+import Std.State (State(..))
+
+effect Tick where
+  tick : Unit -> Unit
+
+noise : Int -> <State Int, Panic> Unit
+noise n =
+  if n == 0 then ()
+  else
+    put (get () + n)
+    noise (n - 1)
+
+loop : Int -> <State Int, Tick, Panic> Unit
+loop i =
+  if i == 0 then ()
+  else
+    noise 3
+    tick ()
+    loop (i - 1)
+
+count : (Unit -> <Tick | e> a) -> <Panic | e> (a, Int)
+count action =
+  handle action () from 0 with
+    | fn tick () c -> ((), c + 1)
+    | return x c -> (x, c)
+
+main : Unit -> <IO, Panic> Unit
+main () =
+  let ((_, ticks), total) = State.run 0 (fn () -> count (fn () -> loop 10))
+  println \"\\{total} \\{ticks}\"
+";
+    let shown = core_text(text, Pass::Optimize);
+    assert!(!shown.contains("handle "), "{shown}");
+    let names: Vec<&str> = shown
+        .lines()
+        .filter(|line| line.contains("fn \""))
+        .filter_map(|line| line.split('"').nth(1))
+        .collect();
+    // `Tick` の handler の `return` の節は `count` の複製の中にある
+    let tick = |name: &str| name.contains("{H=count@");
+    assert!(
+        names
+            .iter()
+            .all(|name| !(name.starts_with("noise{") && tick(name))),
+        "{shown}"
+    );
+    let looped = names
+        .iter()
+        .find(|name| name.starts_with("loop{") && tick(name))
+        .unwrap_or_else(|| panic!("{shown}"));
+    let code = function(&shown, looped);
+    let callee = code
+        .lines()
+        .filter_map(|line| line.split("call \"").nth(1))
+        .find(|callee| callee.starts_with("noise"))
+        .unwrap_or_else(|| panic!("{code}"));
+    assert!(!tick(callee), "{code}");
+}
+
+/// 状態つきの3つの handler を重ねたループ (`tests/ui/run/effects/state_passing_many_handlers.em` と同じプログラム)。
+/// `step` は3つのエフェクトをどれも起こし、`loop` から末尾でなく呼ばれる。
+const MANY_HANDLERS: &str =
+    include_str!("../../../tests/ui/run/effects/state_passing_many_handlers.em");
+
+/// 入れ子の handler の複製は、値の並びを1つのタプルで返す (docs/spec/core-ir.md の「handler の複製」)。`step` は
+/// `Unit` を返すので、3回目の複製は3つの状態の `(,,)` を返し、組の中に組を入れない。
+#[test]
+fn nested_handlers_return_one_tuple() {
+    let shown = core_text(MANY_HANDLERS, Pass::Optimize);
+    assert!(!shown.contains("handle "), "{shown}");
+    let copies: Vec<&str> = shown
+        .lines()
+        .filter(|line| nested_copy(line))
+        .filter_map(|line| line.split('"').nth(1))
+        .collect();
+    let step = copies
+        .iter()
+        .find(|name| name.starts_with("step{"))
+        .unwrap_or_else(|| panic!("{shown}"));
+    let looped = copies
+        .iter()
+        .find(|name| name.starts_with("loop{"))
+        .unwrap_or_else(|| panic!("{shown}"));
+    let step = function(&shown, step);
+    let looped = function(&shown, looped);
+    for code in [&step, &looped] {
+        assert!(!code.contains("con (,) "), "{shown}");
+    }
+    insta::assert_snapshot!(format!("{step}\n{looped}"), @r#"
+    fn "step{H=run_c@#16721f776dc3b3e5}{H=run_b@#f19715733acc9a50}@#d06ed3ed0f858a82"(k.0: int, s.7: int, s.11: int, s.17: int) -> obj {
+      let t.1: enum = extern "Prelude.Eq Int.=="(k.0, 0)
+      switch t.1 Prelude.Bool { #0 -> b1, #1 -> b2 }
+    b1:
+      let t.18: int = extern "Prelude.Num Int.+"(s.17, 1)
+      let t.12: int = extern "Prelude.Num Int.+"(s.11, 1)
+      let t.8: int = extern "Prelude.Num Int.+"(s.7, 1)
+      let t.5: int = extern "Prelude.Num Int.-"(k.0, 1)
+      let t.22: obj = call "step{H=run_c@#16721f776dc3b3e5}{H=run_b@#f19715733acc9a50}@#d06ed3ed0f858a82"(t.5, t.8, t.12, t.18)
+      return t.22
+    b2:
+      let d.25: obj = con (,,) #0(s.7, s.11, s.17)
+      return d.25
+    }
+
+    fn "loop{H=run_c@#16721f776dc3b3e5}{H=run_b@#f19715733acc9a50}@#e9f1b383dd022326"(i.0: int, s.5: int, s.8: int, s.13: int) -> obj {
+      let t.1: enum = extern "Prelude.Eq Int.=="(i.0, 0)
+      switch t.1 Prelude.Bool { #0 -> b1, #1 -> b2 }
+    b1:
+      let t.14: obj = call "step{H=run_c@#16721f776dc3b3e5}{H=run_b@#f19715733acc9a50}@#d06ed3ed0f858a82"(1, s.5, s.8, s.13)
+      unpack t.14 (,,) #0(t.15: int, t.16: int, s.17: int)
+      let t.3: int = extern "Prelude.Num Int.-"(i.0, 1)
+      let t.18: obj = call "loop{H=run_c@#16721f776dc3b3e5}{H=run_b@#f19715733acc9a50}@#e9f1b383dd022326"(t.3, t.15, t.16, s.17)
+      return t.18
+    b2:
+      let d.21: obj = con (,,) #0(s.5, s.8, s.13)
+      return d.21
+    }
+    "#);
+}
+
+/// 経路の関数の中の `try_panic` は handle を持つので、H に触れる関数として経路に入り、外側の状態つきの handler を
+/// 特殊化しない (docs/spec/core-ir.md の「handler への特殊化」)。
+#[test]
+fn a_try_panic_on_the_path_still_keeps_the_handle() {
+    let text = "\
+effect Tick where
+  tick : Unit -> Unit
+
+guarded : Unit -> <Tick> Unit
+guarded () =
+  let _ = try_panic (fn () -> tick ())
+  ()
+
+loop : Int -> <Tick, Panic> Unit
+loop i =
+  if i == 0 then ()
+  else
+    guarded ()
+    loop (i - 1)
+
+count : (Unit -> <Tick | e> a) -> <Panic | e> (a, Int)
+count action =
+  handle action () from 0 with
+    | fn tick () c -> ((), c + 1)
+    | return x c -> (x, c)
+
+main : Unit -> <IO, Panic> Unit
+main () =
+  let (_, ticks) = count (fn () -> loop 3)
+  println (show ticks)
+";
+    let shown = core_text(text, Pass::Optimize);
+    assert!(shown.contains("handle Tick("), "{shown}");
+    assert!(!shown.contains("{H="), "{shown}");
+}
+
+/// `var` を手で脱糖したふるい。`Marks` は `MutArray Bool` を、`J` は `Int` を状態に持つ。節は `var` の脱糖と同じ形で、
+/// 範囲は `length` と `panic` で確かめる。`for` と `while` の本体は既知の閉包として直接の呼び出しになって経路に入り、
+/// 内側の `J` から順に、どちらの handle も消える。
+#[test]
+fn while_and_for_bodies_become_known_closures() {
+    let text = "\
+effect Marks where
+  take : Unit -> MutArray Bool
+  length : Unit -> Int
+  read : Int -> Bool
+  write : Int -> Bool -> Unit
+
+effect J where
+  get : Unit -> Int
+  set : Int -> Unit
+
+checked : Int -> <Marks, Panic> Unit
+checked i =
+  let n = length ()
+  if i < 0 || i >= n then panic \"index out of range\" else ()
+
+cross : Int -> Int -> <Marks, Panic> Unit
+cross i n =
+  handle while (fn () -> get () < n) (fn () ->
+      let j = get ()
+      checked j
+      write j False
+      set (j + i)) from i * i with
+    | fn get () s -> (s, s)
+    | fn set v _ -> ((), v)
+    | return x _ -> x
+
+count_primes : Array Bool -> Int -> Int -> Int -> <Panic> Int
+count_primes marks i n acc =
+  if i >= n then acc
+  else count_primes marks (i + 1) n (if Array.get marks i then acc + 1 else acc)
+
+sieve : Int -> <Marks, Panic> Int
+sieve n =
+  for 2 n (fn i ->
+    if i * i < n then
+      checked i
+      if read i then cross i n else ()
+    else ())
+  count_primes (MutArray.freeze (take ())) 2 n 0
+
+main : Unit -> <IO, Panic> Unit
+main () =
+  let n = 100
+  let primes =
+    handle sieve n from MutArray.make n True with
+      | fn take () m -> (m, MutArray.empty ())
+      | fn length () m -> MutArray.length m
+      | fn read i m -> MutArray.read m i
+      | fn write i v m -> ((), MutArray.write m i v)
+      | return x m ->
+        let _ = MutArray.freeze m
+        x
+  println (show primes)
+";
+    let shown = core_text(text, Pass::Optimize);
+    assert!(
+        shown
+            .lines()
+            .all(|line| !line.contains("handle ") && !line.contains("perform ")),
+        "{shown}"
+    );
 }

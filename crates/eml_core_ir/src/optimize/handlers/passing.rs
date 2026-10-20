@@ -1,55 +1,102 @@
 //! 状態を渡す形の handler の複製 (docs/spec/core-ir.md の「handler の複製」)。どの節もすぐに再開する handler の
 //! 経路の関数 f を、状態を変数で持ち回る1つの関数 `f{H}` に写す。H 宛ての `perform` には節の本体を展開し、その
 //! `resume` を `perform` の後ろのブロックへのジャンプにする。経路の関数の呼び出しは、末尾かどうかによらず複製の
-//! 呼び出しにし、次の状態を結果で受ける。継続の関数と合流のブロックの関数は作らない。
+//! 呼び出しにし、次の状態を結果の値の並び (`Returned`) で受ける。H に触れない関数の呼び出しはそのまま残す。継続の
+//! 関数と合流のブロックの関数は作らない。
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use super::super::blocks;
 use super::super::known::fresh;
-use super::{Copies, KnownFn, Shape, piece, targeted};
+use super::{Copies, KnownFn, Shape, Table, piece, targeted};
 use crate::tail::tail_position_call;
 use crate::{Block, Call, CoreFn, Program, Rhs, Stmt, Term};
 use eml_lir::{
     Atom, BlockId, Ctor, FnIdx, Layout, LayoutCtor, LayoutId, Mark, Repr, TUPLE, VarId, VarInfo,
 };
 
-/// 複製 `f{H}` の結果の形。f と handler だけで決まるので、名前が同じ複製はいつも同じ形の結果を返す。
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum Returned {
-    /// 状態のない handler: f の結果をそのまま返す。
-    Plain,
-    /// 状態つきの handler で、f の結果が `unit` のとき: 次の状態だけを返す。`Unit` を返す関数が、呼ばれるたびに組を
-    /// 確保しないためである。
-    StateOnly,
-    /// それ以外: f の結果と次の状態の組 `(,)` を返す。
-    Pair,
+/// 複製 `f{H}` が返す値の並び。複製の元の名前と handler で決まるので、名前が同じ複製はいつも同じ形の結果を返す
+/// (docs/spec/core-ir.md の「handler の複製」)。元が基の関数なら、並びは f の結果 (Repr が `unit` でなければ) で、元が
+/// 前の回の状態を渡す形の複製なら、その複製の並びである。状態つきの handler は、それに状態を1つ足す。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct Returned {
+    pub(super) values: Vec<(Repr, Mark)>,
 }
 
-pub(super) fn returned(function: &CoreFn, stateful: bool) -> Returned {
-    if !stateful {
-        Returned::Plain
-    } else if function.ret == Repr::Unit {
-        Returned::StateOnly
-    } else {
-        Returned::Pair
+impl Returned {
+    /// 並びを返す結果の Repr と印。値がなければ `()` を、1つならその値を返す。`Unit` を返す関数が、呼ばれるたびに
+    /// 組を確保しないためである。2つ以上なら、その大きさのタプルを1つ作って返す。外側の handler ごとに組を重ねない
+    /// ためである。
+    pub(super) fn info(&self) -> VarInfo {
+        let (repr, mark) = match self.values[..] {
+            [] => (Repr::Unit, Mark::Unr),
+            [value] => value,
+            _ => (
+                Repr::Obj,
+                self.values
+                    .iter()
+                    .fold(Mark::Unr, |joined, &(_, mark)| joined.join(mark)),
+            ),
+        };
+        VarInfo {
+            name: "t".to_string(),
+            repr,
+            mark,
+        }
     }
 }
 
-/// 組の配置 `(,)`。translate がタプルに使う配置と同じ形で、なければ足す (`tuple_layout(2)`)。
-pub(super) fn pair_layout(program: &mut Program) -> LayoutId {
+/// `function` を元にした複製の並び。`state` は状態つきの handler の状態の Repr と印で、`None` なら元の並びを返す。
+/// 末尾の経路の形の複製は、`return` の節の結果を返すので、基の関数と同じに扱う。
+pub(super) fn returned(
+    table: &Table,
+    function: FnIdx,
+    program: &Program,
+    state: Option<(Repr, Mark)>,
+) -> Returned {
+    let mut values = match table.returns.get(&function) {
+        Some(copy) => copy.values.clone(),
+        None => {
+            let function = program.function(function);
+            if function.ret == Repr::Unit {
+                Vec::new()
+            } else {
+                vec![(function.ret, function.ret_mark)]
+            }
+        }
+    };
+    values.extend(state);
+    Returned { values }
+}
+
+/// タプルの大きさごとの配置。
+pub(super) type Tuples = HashMap<usize, LayoutId>;
+
+fn tuple(tuples: &Tuples, size: usize) -> Ctor {
+    Ctor {
+        layout: *tuples
+            .get(&size)
+            .expect("the round adds the tuple layouts its copies use"),
+        tag: TUPLE,
+    }
+}
+
+/// `size` 個の要素のタプルの配置。translate がタプルに使う配置と同じ形 (フィールドはどれも `tobj`) で、配置の表に
+/// なければ足す。
+pub(super) fn tuple_layout(program: &mut Program, size: usize) -> LayoutId {
+    let name = format!("({})", ",".repeat(size - 1));
     if let Some(index) = program
         .layouts
         .iter()
-        .position(|layout| layout.name == "(,)")
+        .position(|layout| layout.name == name)
     {
         return LayoutId(index as u32);
     }
     program.layouts.push(Layout {
-        name: "(,)".to_string(),
+        name: name.clone(),
         constructors: vec![LayoutCtor {
-            name: "(,)".to_string(),
-            fields: vec![Repr::TObj, Repr::TObj],
+            name,
+            fields: vec![Repr::TObj; size],
         }],
     });
     LayoutId(program.layouts.len() as u32 - 1)
@@ -60,19 +107,90 @@ pub(super) fn state_info(ret: &CoreFn) -> VarInfo {
     ret.vars[ret.params()[ret.params().len() - 1].0 as usize].clone()
 }
 
-/// `shape` の形の複製の結果の Repr と印。`state` は状態つきの handler の状態の引数である。
-pub(super) fn result_info(function: &CoreFn, shape: Returned, state: Option<&VarInfo>) -> VarInfo {
-    let (repr, mark) = match (shape, state) {
-        (Returned::Plain, _) => (function.ret, function.ret_mark),
-        (Returned::StateOnly, Some(state)) => (state.repr, state.mark),
-        (Returned::Pair, Some(state)) => (Repr::Obj, function.ret_mark.join(state.mark)),
-        (_, None) => unreachable!("only a stateful handler threads a state"),
+/// 複製の呼び出し `call` の結果を受ける文。`base` は呼ぶ複製の元の並びで、`state` は状態つきの handler の状態の
+/// 引数である。返すのは、文と、元の関数の結果を束縛した変数と、次の状態である。元の結果は `value` が作る変数に
+/// 束縛し、並びが空なら束縛しない (結果は `()` である)。並びが2つ以上なら、受けたタプルを開いてから元の結果の
+/// タプルを作り直す。作り直したタプルは、そのすぐ後ろで前の回の複製のコードが開くので、融合の既知の
+/// コンストラクタで消える。
+pub(super) fn receive(
+    vars: &mut Vec<VarInfo>,
+    call: Rhs,
+    base: &Returned,
+    value: impl FnOnce(&mut Vec<VarInfo>) -> VarId,
+    state: Option<&VarInfo>,
+    tuples: &Tuples,
+) -> (Vec<Stmt>, Option<VarId>, Option<VarId>) {
+    let Some(state) = state else {
+        let value = value(vars);
+        return (
+            vec![Stmt::Let {
+                var: value,
+                rhs: call,
+            }],
+            Some(value),
+            None,
+        );
     };
-    VarInfo {
-        name: "t".to_string(),
-        repr,
-        mark,
+    let count = base.values.len();
+    if count == 0 {
+        let next = fresh(vars, state.clone());
+        return (
+            vec![Stmt::Let {
+                var: next,
+                rhs: call,
+            }],
+            None,
+            Some(next),
+        );
     }
+    let mut values = base.values.clone();
+    values.push((state.repr, state.mark));
+    let received = fresh(vars, Returned { values }.info());
+    let mut stmts = vec![Stmt::Let {
+        var: received,
+        rhs: call,
+    }];
+    if count == 1 {
+        let value = value(vars);
+        let next = fresh(vars, state.clone());
+        stmts.push(Stmt::Unpack {
+            value: received,
+            ctor: tuple(tuples, 2),
+            fields: vec![value, next],
+        });
+        return (stmts, Some(value), Some(next));
+    }
+    let fields: Vec<VarId> = base
+        .values
+        .iter()
+        .map(|&(repr, mark)| {
+            fresh(
+                vars,
+                VarInfo {
+                    name: "t".to_string(),
+                    repr,
+                    mark,
+                },
+            )
+        })
+        .collect();
+    let next = fresh(vars, state.clone());
+    let mut unpacked = fields.clone();
+    unpacked.push(next);
+    stmts.push(Stmt::Unpack {
+        value: received,
+        ctor: tuple(tuples, count + 1),
+        fields: unpacked,
+    });
+    let value = value(vars);
+    stmts.push(Stmt::Let {
+        var: value,
+        rhs: Rhs::Con {
+            ctor: tuple(tuples, count),
+            args: fields.into_iter().map(Atom::Var).collect(),
+        },
+    });
+    (stmts, Some(value), Some(next))
 }
 
 /// 展開した節の末尾の `resume k(v, s)` は、`perform` の後ろのブロックへのジャンプになる。ジャンプの実引数には box の
@@ -141,14 +259,24 @@ pub(super) fn resumes_fit(
 /// f のブロックを順に写す。ブロックごとに、H 宛ての `perform` の数だけ、節の入口より後ろのブロックと、続きの
 /// ブロック C を足すので、写す前に、元のブロックが新しい並びのどこから始まるかを決めておく。状態は今の値を表す
 /// 変数で持ち回り、`jump` の行き先には状態の引数を足して今の状態を渡す。`switch` の行き先は入る辺が1本なので、
-/// `switch` の地点の状態で始まる (docs/spec/lir.md の「構造の規則」の R3)。
+/// `switch` の地点の状態で始まる (docs/spec/lir.md の「構造の規則」の R3)。作った複製の並びは、後の回の複製のために
+/// 表に残す。
 pub(super) fn build(copies: &mut Copies, index: FnIdx, function: FnIdx, shape: &Shape) {
     let program = copies.program;
     let source = program.function(function);
     let ret = program.function(shape.ret());
     let state = shape.stateful.then(|| state_info(ret));
-    let own = returned(source, shape.stateful);
-    let result = result_info(source, own, state.as_ref());
+    let base = returned(copies.table, function, program, None);
+    let own = returned(
+        copies.table,
+        function,
+        program,
+        state.as_ref().map(|state| (state.repr, state.mark)),
+    );
+    let result = own.info();
+    copies.table.returns.insert(index, own);
+    let touching = copies.touching[&shape.effect].as_slice();
+    let tuples = copies.tuples;
     let mut code = CoreFn {
         name: copies.name(function, shape),
         internal: false,
@@ -217,8 +345,7 @@ pub(super) fn build(copies: &mut Copies, index: FnIdx, function: FnIdx, shape: &
         }
     }
 
-    let pair = copies.pair.map(|layout| Ctor { layout, tag: TUPLE });
-    // `StateOnly` の複製の結果の値は `()` なので、受けた変数の使いを `()` にする。使う所は定義より後ろにある
+    // 並びが空の複製の結果の値は `()` なので、受けた変数の使いを `()` にする。使う所は定義より後ろにある
     let mut units: HashSet<VarId> = HashSet::new();
     let mut entered: Vec<Option<VarId>> = vec![None; source.blocks.len()];
     let mut blocks: Vec<Block> = Vec::with_capacity(next as usize);
@@ -301,9 +428,12 @@ pub(super) fn build(copies: &mut Copies, index: FnIdx, function: FnIdx, shape: &
                         term: Term::Return(Atom::Unit),
                     };
                 }
-                Call::Direct(target, args) if program.function(*target).yields => {
+                // H に触れない関数は経路の外なので、呼び出しをそのまま残す (`path`)
+                Call::Direct(target, args)
+                    if program.function(*target).yields && touching[target.0 as usize] =>
+                {
                     debug_assert!(mask.is_empty(), "a path has no masked call");
-                    let callee = returned(program.function(*target), shape.stateful);
+                    let callee = returned(copies.table, *target, program, None);
                     let copy = copies.copy(*target, shape);
                     let mut args = args.clone();
                     args.extend(all_captures.iter().copied());
@@ -312,8 +442,11 @@ pub(super) fn build(copies: &mut Copies, index: FnIdx, function: FnIdx, shape: &
                         call: Call::Direct(copy, args),
                         mask: Vec::new(),
                     };
-                    // 結果の形が違う末尾の呼び出しは、末尾でない呼び出しとして受け直し、下の `return` で f の形にする
-                    if tail == Some(at) && callee == own {
+                    // 状態のない handler の複製は元の結果をそのまま返す。状態つきでは、並びの大きさが違う末尾の
+                    // 呼び出しを末尾でない呼び出しとして受け直し、下の `return` で f の並びにする
+                    if tail == Some(at)
+                        && (!shape.stateful || callee.values.len() == base.values.len())
+                    {
                         let returned = fresh(&mut code.vars, result.clone());
                         current.stmts.push(Stmt::Let {
                             var: returned,
@@ -323,37 +456,20 @@ pub(super) fn build(copies: &mut Copies, index: FnIdx, function: FnIdx, shape: &
                         ended = true;
                         break;
                     }
-                    match callee {
-                        Returned::Plain => current.stmts.push(Stmt::Let {
-                            var,
-                            rhs: call(args),
-                        }),
-                        Returned::StateOnly => {
-                            let next = fresh(&mut code.vars, state.clone().expect("a state"));
-                            current.stmts.push(Stmt::Let {
-                                var: next,
-                                rhs: call(args),
-                            });
-                            units.insert(var);
-                            current_state = Some(next);
-                        }
-                        Returned::Pair => {
-                            let received = fresh(
-                                &mut code.vars,
-                                result_info(program.function(*target), callee, state.as_ref()),
-                            );
-                            let next = fresh(&mut code.vars, state.clone().expect("a state"));
-                            current.stmts.push(Stmt::Let {
-                                var: received,
-                                rhs: call(args),
-                            });
-                            current.stmts.push(Stmt::Unpack {
-                                value: received,
-                                ctor: pair.expect("a stateful passing handler has the pair layout"),
-                                fields: vec![var, next],
-                            });
-                            current_state = Some(next);
-                        }
+                    let (stmts, value, next) = receive(
+                        &mut code.vars,
+                        call(args),
+                        &callee,
+                        |_| var,
+                        state.as_ref(),
+                        tuples,
+                    );
+                    current.stmts.extend(stmts);
+                    if value.is_none() {
+                        units.insert(var);
+                    }
+                    if next.is_some() {
+                        current_state = next;
                     }
                 }
                 _ => current.stmts.push(stmt),
@@ -365,7 +481,7 @@ pub(super) fn build(copies: &mut Copies, index: FnIdx, function: FnIdx, shape: &
             match &mut term {
                 Term::Return(value) => {
                     let value = *value;
-                    term = finish(&mut code, &mut current, own, value, current_state, pair);
+                    term = finish(&mut code, &mut current, &base, value, current_state, tuples);
                 }
                 Term::Jump { target, args } => {
                     *target = starts[target.0 as usize];
@@ -393,25 +509,29 @@ fn unit(units: &HashSet<VarId>, atom: &mut Atom) {
     }
 }
 
-/// f の `return value` を、複製の結果の形 `own` の `return` にする。`StateOnly` で捨てる `unr` でない値は `drop` する。
-/// `unr` でない値には Perceus が `decref` を出せないためである (docs/spec/lir.md の「Kind の印の検査」の V1)。組の
-/// 印は、結果の印に値の印を結んだものにする。`return` は値と結果の印が互換であればよいので、値の印が結果の印を
-/// 超えることがあり、組の作る所の検査はその値の印も求めるためである。
+/// f の `return value` を、複製の結果の並びの `return` にする。`base` は f の並びである。並びが空なら今の状態を返し、
+/// 捨てる `unr` でない値は `drop` する。`unr` でない値には Perceus が `decref` を出せないためである
+/// (docs/spec/lir.md の「Kind の印の検査」の V1)。そうでなければ、f の並びと今の状態のタプルを返す。f の並びが2つ
+/// 以上なら value はそのタプルなので、開いてから並べ直す。タプルの印は、結果の印に要素の印を結んだものにする。
+/// `return` は値と結果の印が互換であればよいので、値の印が結果の印を超えることがあり、タプルを作る所の検査はその
+/// 値の印も求めるためである。
 fn finish(
     code: &mut CoreFn,
     block: &mut Block,
-    own: Returned,
+    base: &Returned,
     value: Atom,
     state: Option<VarId>,
-    pair: Option<Ctor>,
+    tuples: &Tuples,
 ) -> Term {
+    let Some(state) = state else {
+        return Term::Return(value);
+    };
     let mark = |code: &CoreFn, atom: Atom| match atom {
         Atom::Var(var) => code.mark(var),
         _ => Mark::Unr,
     };
-    match own {
-        Returned::Plain => Term::Return(value),
-        Returned::StateOnly => {
+    let mut args = match base.values.len() {
+        0 => {
             if mark(code, value) != Mark::Unr {
                 let dropped = fresh(
                     &mut code.vars,
@@ -426,27 +546,53 @@ fn finish(
                     rhs: Rhs::Drop(value),
                 });
             }
-            Term::Return(Atom::Var(state.expect("a state")))
+            return Term::Return(Atom::Var(state));
         }
-        Returned::Pair => {
-            let state = state.expect("a state");
-            let built_mark = code.ret_mark.join(mark(code, value));
-            let built = fresh(
-                &mut code.vars,
-                VarInfo {
-                    name: "d".to_string(),
-                    repr: Repr::Obj,
-                    mark: built_mark,
-                },
-            );
-            block.stmts.push(Stmt::Let {
-                var: built,
-                rhs: Rhs::Con {
-                    ctor: pair.expect("a stateful passing handler has the pair layout"),
-                    args: vec![value, Atom::Var(state)],
-                },
+        1 => vec![value],
+        count => {
+            let Atom::Var(returned) = value else {
+                unreachable!("a copy returns its tuple in a variable");
+            };
+            let fields: Vec<VarId> = base
+                .values
+                .iter()
+                .map(|&(repr, mark)| {
+                    fresh(
+                        &mut code.vars,
+                        VarInfo {
+                            name: "t".to_string(),
+                            repr,
+                            mark,
+                        },
+                    )
+                })
+                .collect();
+            block.stmts.push(Stmt::Unpack {
+                value: returned,
+                ctor: tuple(tuples, count),
+                fields: fields.clone(),
             });
-            Term::Return(Atom::Var(built))
+            fields.into_iter().map(Atom::Var).collect()
         }
-    }
+    };
+    args.push(Atom::Var(state));
+    let built_mark = args
+        .iter()
+        .fold(code.ret_mark, |joined, &arg| joined.join(mark(code, arg)));
+    let built = fresh(
+        &mut code.vars,
+        VarInfo {
+            name: "d".to_string(),
+            repr: Repr::Obj,
+            mark: built_mark,
+        },
+    );
+    block.stmts.push(Stmt::Let {
+        var: built,
+        rhs: Rhs::Con {
+            ctor: tuple(tuples, args.len()),
+            args,
+        },
+    });
+    Term::Return(Atom::Var(built))
 }

@@ -973,3 +973,18 @@ fn a_growing_cycle_of_calls_stops_the_fixpoint() {
       help: add `Ask` to the row of the signature of `run`, as in `-> <Ask> ...`
     ");
 }
+
+/// Prelude の `for` は本体のエフェクトを通し、添字の足し算の `Panic` を足す
+/// (docs/spec/stdlib.md の「`for` と `while`」)。
+#[test]
+fn for_passes_the_body_effects_and_adds_panic() {
+    let text = "show_all : Int -> <IO, Panic> Unit\nshow_all n = for 0 n (fn i -> println (show i))\n\nno_panic : Int -> <IO> Unit\nno_panic n = for 0 n (fn i -> println (show i))";
+    insta::assert_snapshot!(check_short(text).join("\n"), @"E2002 5:14 `for` performs `Panic`, which the signature of `no_panic` does not allow");
+}
+
+/// `while` は条件と本体のエフェクトだけを通す。
+#[test]
+fn while_passes_the_condition_and_body_effects() {
+    let text = "effect Ask where\n  ask : Unit -> Bool\n\nloud : Unit -> <Ask, IO> Unit\nloud () = while (fn () -> ask ()) (fn () -> println \"again\")\n\nspin : Unit -> Unit\nspin () = while (fn () -> False) (fn () -> ())";
+    assert_eq!(check_short(text), Vec::<String>::new());
+}

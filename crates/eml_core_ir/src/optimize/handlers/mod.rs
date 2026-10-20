@@ -2,8 +2,9 @@
 //! 関数の handler ごとの複製の呼び出しに替える。形は handler の節の形で決まり、2つある (`Form`)。
 //!
 //! - 状態を渡す形 (`passing`): どの操作も再開し、どの節もすぐに再開する handler の形。経路は、末尾かどうかによらず
-//!   `yields` の関数の直接の呼び出しでたどる。複製は状態を変数で持ち回り、`perform` には節の本体を展開して、その
-//!   `resume` を `perform` の後ろのブロックへのジャンプにする。`return` の節は handle の地点で呼ぶ
+//!   H に触れる (`touch`) `yields` の関数の直接の呼び出しでたどる。複製は状態を変数で持ち回り、`perform` には節の
+//!   本体を展開して、その `resume` を `perform` の後ろのブロックへのジャンプにする。`return` の節は handle の地点で
+//!   呼ぶ
 //! - 末尾の経路の形: それ以外の handler の形。経路は末尾の呼び出しだけでたどる。複製の中の `perform` は、すぐに
 //!   再開する節なら節の本体をその場に展開した形にする。それ以外の節なら、継続の関数の閉包を `k` として節の写し
 //!   `<g>{k}` を末尾で呼ぶ形にし、`never` の操作なら、後ろを捨てて節の関数を末尾で呼ぶ形にする
@@ -14,6 +15,7 @@
 
 mod passing;
 mod piece;
+mod touch;
 
 use std::collections::{BTreeSet, HashMap};
 
@@ -24,9 +26,10 @@ use super::{kept_marks, recompute_yields};
 use crate::liveness::{insert_var, live_after_term, step_back};
 use crate::tail::tail_position_call;
 use crate::{Call, CoreFn, Program, Rhs, Stmt, Term};
-use eml_lir::{Atom, BlockId, FnIdx, LayoutId, Mark, OperationInfo, Repr, VarId, VarInfo};
+use eml_lir::{Atom, BlockId, FnIdx, Mark, OperationInfo, Repr, VarId, VarInfo};
 
-use passing::Returned;
+use passing::{Returned, Tuples};
+use touch::touching;
 
 /// `let x = handle …` の文で、本体が既知の閉包か関数の値であるもの。
 #[derive(Debug, Clone, Copy)]
@@ -170,6 +173,8 @@ struct Handler {
     /// 操作の順の節の形。
     forms: Vec<ClauseForm>,
     form: Form,
+    /// 経路の関数。最初が本体である。
+    path: Vec<FnIdx>,
 }
 
 impl Handler {
@@ -242,29 +247,47 @@ struct Table {
     /// この回に作った関数ごとの、もとの関数。番号を取った順に並ぶ。`f{H}`、`$hN`、`$hjJ` は f から、`<g>{k}` は g
     /// から作る。
     sources: Vec<FnIdx>,
+    /// 状態を渡す形の複製ごとの、返す値の並び。後の回の複製の並びは、元の複製の並びから決まる。
+    returns: HashMap<FnIdx, Returned>,
 }
 
 /// 1回分の特殊化。その回の初めのコードで特殊化できる handle がなければ、何も変えずに `false` を返す。
 fn round(program: &mut Program, translated: &[bool], table: &mut Table) -> bool {
     let count = program.functions.len();
+    // エフェクトごとの、H に触れる関数。その回の初めのコードで決める
+    let mut touch: HashMap<u32, Vec<bool>> = HashMap::new();
     let handlers: Vec<Handler> = (0..count)
         .flat_map(|owner| sites(program, FnIdx(owner as u32)))
-        .filter_map(|site| eligible(program, translated, site))
+        .filter_map(|site| eligible(program, translated, site, &mut touch))
         .collect();
     if handlers.is_empty() {
         return false;
     }
-    // 組の配置は、複製が `program` を借りる前に足しておく
-    let pair = handlers
-        .iter()
-        .any(|handler| handler.form == Form::Passing && handler.stateful())
-        .then(|| passing::pair_layout(program));
+    // タプルの配置は、複製が `program` を借りる前に足しておく。状態つきの handler の経路の関数ごとに、元の並びを
+    // 開くタプルと、状態を足した並びを返すタプルを使う
+    let mut sizes = BTreeSet::new();
+    for handler in &handlers {
+        if handler.form != Form::Passing || !handler.stateful() {
+            continue;
+        }
+        for &function in &handler.path {
+            let base = passing::returned(table, function, program, None)
+                .values
+                .len();
+            sizes.extend([base, base + 1].into_iter().filter(|&size| size >= 2));
+        }
+    }
+    let tuples: Tuples = sizes
+        .into_iter()
+        .map(|size| (size, passing::tuple_layout(program, size)))
+        .collect();
     let mut copies = Copies {
         program,
         table,
         created: Vec::new(),
         pending: Vec::new(),
-        pair,
+        touching: &touch,
+        tuples: &tuples,
     };
     let calls: Vec<FnIdx> = handlers
         .iter()
@@ -291,7 +314,10 @@ fn round(program: &mut Program, translated: &[bool], table: &mut Table) -> bool 
     let mut rewrites: Vec<(Site, Vec<Stmt>)> = handlers
         .iter()
         .zip(calls)
-        .map(|(handler, copy)| (handler.site, site_stmts(program, handler, copy, pair)))
+        .map(|(handler, copy)| {
+            let stmts = site_stmts(program, table, handler, copy, &tuples);
+            (handler.site, stmts)
+        })
         .collect();
     rewrites.sort_by_key(|(site, _)| std::cmp::Reverse((site.owner.0, site.block.0, site.stmt)));
     for (site, stmts) in rewrites {
@@ -321,13 +347,14 @@ fn round(program: &mut Program, translated: &[bool], table: &mut Table) -> bool 
 }
 
 /// handle の地点 `let x = handle …` を置き換える文。末尾の経路の形では、本体の複製の結果がそのまま x になる。
-/// 状態を渡す形では、複製は `return` の節を呼ばないので、複製の結果 (`passing::Returned`) を開いてから、ここで
-/// `return` の節を結果と状態で呼ぶ。
+/// 状態を渡す形では、複製は `return` の節を呼ばないので、複製の結果の並び (`passing::Returned`) を開いてから、
+/// ここで `return` の節を本体の結果と状態で呼ぶ。
 fn site_stmts(
     program: &mut Program,
+    table: &Table,
     handler: &Handler,
     copy: FnIdx,
-    pair: Option<LayoutId>,
+    tuples: &Tuples,
 ) -> Vec<Stmt> {
     let owner = &program.functions[handler.site.owner.0 as usize];
     let Stmt::Let { var: x, rhs: _ } =
@@ -360,55 +387,28 @@ fn site_stmts(
     if stateful {
         args.push(handler.init);
     }
-    let body = program.function(handler.body.function);
-    let shape = passing::returned(body, stateful);
+    let base = passing::returned(table, handler.body.function, program, None);
     let state = stateful.then(|| passing::state_info(program.function(ret.function)));
-    let result = passing::result_info(body, shape, state.as_ref());
+    let body = program.function(handler.body.function);
     let body_result = VarInfo {
         name: "t".to_string(),
         repr: body.ret,
         mark: body.ret_mark,
     };
     let vars = &mut program.functions[handler.site.owner.0 as usize].vars;
-    let mut stmts = Vec::new();
-    let (value, state) = match shape {
-        Returned::Plain => {
-            let value = fresh(vars, body_result);
-            stmts.push(Stmt::Let {
-                var: value,
-                rhs: call(copy, args),
-            });
-            (Atom::Var(value), Atom::Unit)
-        }
-        Returned::StateOnly => {
-            let state = fresh(vars, state.expect("a state"));
-            stmts.push(Stmt::Let {
-                var: state,
-                rhs: call(copy, args),
-            });
-            (Atom::Unit, Atom::Var(state))
-        }
-        Returned::Pair => {
-            let received = fresh(vars, result);
-            let value = fresh(vars, body_result);
-            let state = fresh(vars, state.expect("a state"));
-            stmts.push(Stmt::Let {
-                var: received,
-                rhs: call(copy, args),
-            });
-            stmts.push(Stmt::Unpack {
-                value: received,
-                ctor: eml_lir::Ctor {
-                    layout: pair.expect("a stateful passing handler has the pair layout"),
-                    tag: eml_lir::TUPLE,
-                },
-                fields: vec![value, state],
-            });
-            (Atom::Var(value), Atom::Var(state))
-        }
-    };
+    let (mut stmts, value, state) = passing::receive(
+        vars,
+        call(copy, args),
+        &base,
+        |vars| fresh(vars, body_result),
+        state.as_ref(),
+        tuples,
+    );
     let mut ret_args = ret.captures.clone();
-    ret_args.extend([value, state]);
+    ret_args.extend([
+        value.map_or(Atom::Unit, Atom::Var),
+        state.map_or(Atom::Unit, Atom::Var),
+    ]);
     stmts.push(Stmt::Let {
         var: x,
         rhs: call(ret.function, ret_args),
@@ -446,7 +446,12 @@ fn sites(program: &Program, owner: FnIdx) -> Vec<Site> {
 }
 
 /// `site` の handle を特殊化してよいなら、その中身。判断は handle を含む関数と経路の関数のコードだけで決まる。
-fn eligible(program: &Program, translated: &[bool], site: Site) -> Option<Handler> {
+fn eligible(
+    program: &Program,
+    translated: &[bool],
+    site: Site,
+    touch: &mut HashMap<u32, Vec<bool>>,
+) -> Option<Handler> {
     let owner = program.function(site.owner);
     let Stmt::Let {
         var: _,
@@ -551,7 +556,13 @@ fn eligible(program: &Program, translated: &[bool], site: Site) -> Option<Handle
     } else {
         Form::Tail
     };
-    let path = path(program, translated, body.function, *effect, form)?;
+    let touching = (form == Form::Passing).then(|| {
+        touch
+            .entry(*effect)
+            .or_insert_with(|| touching(program, *effect))
+            .as_slice()
+    });
+    let path = path(program, translated, body.function, *effect, form, touching)?;
     if !performs_fit(program, &path, *effect, operations, &forms) {
         return None;
     }
@@ -575,11 +586,13 @@ fn eligible(program: &Program, translated: &[bool], site: Site) -> Option<Handle
         closures,
         forms,
         form,
+        path,
     })
 }
 
 /// handle の本体から、既知の直接の呼び出しでたどれる `yields` の関数 (経路の関数)。末尾の経路の形 (`Form::Tail`) は
-/// 末尾の位置の呼び出しだけを、状態を渡す形は末尾かどうかによらずすべての呼び出しをたどる。経路の条件
+/// 末尾の位置の呼び出しだけを、状態を渡す形は末尾かどうかによらず、H に触れる関数 (`touching`) への呼び出しだけを
+/// たどる。H に触れない関数は H の evidence を引かないので、呼び出しをそのまま残してよい。経路の条件
 /// (docs/spec/core-ir.md の「handler への特殊化」) に反する関数があれば `None` を返す。
 /// 経路の外の `perform` が H に届くかは、呼ぶ相手と `apply` の `yields` の印で安全側に判断できる。yield しうる操作を
 /// 持つエフェクトの `perform` は、それを含む関数の印に必ず表れるためである (docs/spec/types.md の「row の具体化の
@@ -595,6 +608,7 @@ fn path(
     body: FnIdx,
     effect: u32,
     form: Form,
+    touching: Option<&[bool]>,
 ) -> Option<Vec<FnIdx>> {
     let info = &program.effects[effect as usize];
     if info.operations.iter().all(|operation| !operation.resumable) {
@@ -621,7 +635,10 @@ fn path(
                 match call {
                     Call::Handle { .. } | Call::Resume { .. } | Call::Clause { .. } => return None,
                     Call::Apply { yields: true, .. } => return None,
-                    Call::Direct(target, _) if program.function(*target).yields => {
+                    Call::Direct(target, _)
+                        if program.function(*target).yields
+                            && touching.is_none_or(|touching| touching[target.0 as usize]) =>
+                    {
                         if form == Form::Tail && tail != Some(at) {
                             return None;
                         }
@@ -717,8 +734,10 @@ struct Copies<'a> {
     /// `program.functions` の後ろに足す関数。番号を取った順に並ぶ。
     created: Vec<Option<CoreFn>>,
     pending: Vec<(FnIdx, FnIdx, Shape)>,
-    /// 状態つきの handler を状態を渡す形で特殊化するときの、組の配置 (`passing::pair_layout`)。
-    pair: Option<LayoutId>,
+    /// エフェクトごとの、H に触れる関数 (`touch::touching`)。状態を渡す形の handler のエフェクトの分がある。
+    touching: &'a HashMap<u32, Vec<bool>>,
+    /// 状態を渡す形の複製が使うタプルの配置 (`passing::tuple_layout`)。
+    tuples: &'a Tuples,
 }
 
 impl Copies<'_> {
