@@ -11,5 +11,9 @@ runtime error: array index 5 is out of range for length 3
 [0, 0, 0]
 > a
 <extern> : Array Int
+> (a, 1)
+(<extern>, 1) : (Array Int, Int)
+> Some a
+Some <extern> : Option (Array Int)
 --- close ---
 no leaks

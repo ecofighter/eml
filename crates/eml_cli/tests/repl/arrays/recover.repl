@@ -1,5 +1,7 @@
-# 実行時エラーの回復は配列を写し直し、`Show` のない `Array Int` は型だけを表示する
+# 実行時エラーの回復は配列を写し直す。`Show` のない `Array Int` は `<extern>` と型を表示し、入れ子の位置でも同じに書く
 > let a = Array.make 3 0
 > Array.get a 5
 > Array.to_list a
 > a
+> (a, 1)
+> Some a
