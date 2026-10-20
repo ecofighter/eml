@@ -3337,3 +3337,20 @@ fn a_token_release_known_on_one_incoming_path_is_rejected() {
         )
     );
 }
+
+/// 入口の段でも、`tobj` でない行の位置には同じ Repr だけが渡せる。`Prelude.++` の引数は `obj` である。
+#[test]
+fn an_int_argument_for_an_obj_extern_parameter_is_rejected_at_the_entry_level() {
+    let text = "fn f(n.0: int, s.1: obj) -> obj {
+  let t.2: obj = extern Prelude.++(n.0, s.1)
+  return t.2
+}
+";
+    assert_eq!(
+        check_lowered(text),
+        Err(
+            "argument 0 of `Prelude.++` is `n.0` (int), but the extern takes obj in `f`"
+                .to_string()
+        )
+    );
+}

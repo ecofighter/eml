@@ -245,6 +245,7 @@ while : (Unit -> <e> Bool) -> (Unit -> <e> Unit) -> <e> Unit
 - S14c-2 で、すぐに再開する節だけの状態つきの handler は、末尾の経路でも新しい形になる。そのため、`crates/eml_vm/tests/bench.rs` の `RunStats` の期待値 (確保の回数など) と、`crates/eml_core_ir/tests` の特殊化の IR のスナップショットが変わる。特殊化の自動と手書きの組 (`specialization_matches_hand_written_work`、`specialization_matches_hand_written_rc`) の手書きの側も、新しい形に合わせて書き直す。範囲は「すぐに再開する節だけの handler を特殊化するテストのすべて」である
 - extern の行と std のシグネチャを結ぶテスト (`crates/eml_core_ir/tests/externs.rs` の型変数の確かめ、`crates/eml_hir/tests/externs.rs`) を、型変数の引数と型引数を持つ extern の型を許す形に緩める
 - `extern data` の型引数の E0011 を確かめるテストを、型引数を許す形に変える
+- `crates/eml_cli/tests/snapshots/integration__ui__check_fail@kinds__extern_kind.em.snap` の E0011 の文面を、"cannot have parameters, `=` or `where`" から "cannot have `:`, `=` or `where`" に変え、ラベルも "only the name and its type parameters" に変える。`extern data` が型引数を受け付けるようになったためである
 - `std/Env.em` の extern の改名で、名前を含む期待値が変わる所
 
 ### 足すテスト

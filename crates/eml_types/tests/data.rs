@@ -226,4 +226,12 @@ fn array_is_covariant() {
     };
     let list = codes_of(&pass("List"));
     assert_eq!(codes_of(&pass("Array")), list);
+    assert_eq!(list, ["E3001"]);
+
+    let accepted = |ty: &str| {
+        format!(
+            "g : {ty} (once Unit -> Int) -> {ty} (once Unit -> Int)\ng a = a\n\nh : {ty} (Unit -> Int) -> {ty} (once Unit -> Int)\nh a = g a"
+        )
+    };
+    assert_eq!(codes_of(&accepted("Array")), Vec::<String>::new());
 }

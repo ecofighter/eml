@@ -72,6 +72,7 @@ fn every_extern_type_is_declared_once_in_std() {
             ty.row().name
         );
         assert_eq!(program.extern_type(ty), id);
+        assert_eq!(def.params.len(), ty.row().params, "{}", ty.row().name);
     }
 }
 

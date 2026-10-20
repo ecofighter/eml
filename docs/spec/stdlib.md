@@ -209,6 +209,7 @@ pub extern exit : Int -> <IO> a
 - `Array` は意味の上で書き換わらない。`Array a` の Kind は要素の Kind に従うが、extern の関数の引数の型変数は `Unr` に固定される ([宣言](declarations.md) の「`extern`」) ので、`Lin` の要素の配列にはどの関数も使えない
 - `make n x` は、長さ `n` で、どの要素も `x` の配列である。`n` が負なら `Panic` を起こす。`n` が 0 なら `x` を手放して空の配列を返す
 - `tabulate n f` は、`i` 番目の要素を `f i` にした配列である。`f` を添字の順に呼ぶ。`n` が負なら、`f` を呼ばずに `make` と同じ `Panic` を起こす
+- `tabulate` は `Lin` の `MutArray` の上に作ってあるので、`e` に `multi` の操作が含まれると E3006 になる。`List.map` はそのような `f` も受け付ける
 - `get a i` は `i` 番目の要素である。添字が範囲の外なら `Panic` を起こす
 - `set a i x` は、`i` 番目を `x` に替えた配列である。`a` が一意 (RC が 1) ならその場で書き換え、共有されていれば写す。写すときは、残す要素の参照を1つずつ増やす
 - `thaw a` は、一意な `a` をそのまま `MutArray` にし、共有されていれば写して `MutArray` にする
@@ -229,6 +230,7 @@ pub extern exit : Int -> <IO> a
 
 - `MutArray a` の Kind は要素によらず `Lin` で、線形に受け渡して使う。物体は作るときに `lin` ビットを立てる ([オブジェクトモデル](object-model.md) の「配列」)
 - `make` と `tabulate` は `Std.Array` の同じ名前の関数と同じである。`empty ()` は長さ 0 の配列である
+- `tabulate` は `Lin` の配列を引き回すので、`Std.Array.tabulate` と同じく、`e` に `multi` の操作が含まれると E3006 になる
 - `length` と `read` は配列を借りて読み、結果と配列の組を返す。組は translate が作り、組を受けてすぐ開く所では最適化で消えるので、読むたびの確保は残らない ([Core IR](core-ir.md) の「組を返す extern」)。`read` は要素の参照を1つ増やす
 - `write m i x` は、`i` 番目をその場で `x` に替える。添字が範囲の外なら `Panic` を起こす
 - `freeze m` は、写さずに `lin` ビットを下ろして `Array` にする

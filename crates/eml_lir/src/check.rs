@@ -6,7 +6,7 @@
 use std::collections::{HashMap, HashSet};
 use std::mem::discriminant;
 
-use eml_extern::Extern;
+use eml_extern::{Extern, FunctionRow};
 
 use crate::syntax::{effect_text, operation_text, prim_text};
 use crate::{
@@ -764,7 +764,7 @@ impl<'a> Context<'a> {
             ));
         }
         if !self.boundaries {
-            return args.iter().try_for_each(|&arg| self.fn_atom(arg));
+            return self.check_extern_exact(var, &row, args);
         }
         for (index, (&arg, &expected)) in args.iter().zip(row.params).enumerate() {
             if !self.passes(arg, expected)? {
@@ -803,6 +803,40 @@ impl<'a> Context<'a> {
             ));
         }
         self.bound_mark(var, Mark::from(row.ret_kind), || format!("`{}`", row.name))
+    }
+
+    /// 入口の段では、行の Repr が `tobj` でない位置の引数と結果の Repr は行と同じである。`tobj` の位置は、型変数の
+    /// 位置として具体化した型の Repr のまま渡され、box の挿入が合わせる。
+    fn check_extern_exact(
+        &self,
+        var: VarId,
+        row: &FunctionRow,
+        args: &[Atom],
+    ) -> Result<(), String> {
+        for (index, (&arg, &expected)) in args.iter().zip(row.params).enumerate() {
+            if expected != Repr::TObj && !arg.fits(self.vars, expected) {
+                return Err(format!(
+                    "argument {index} of `{}` is {}, but the extern takes {}",
+                    row.name,
+                    self.typed_atom_text(arg),
+                    expected.name()
+                ));
+            }
+            self.fn_atom(arg)?;
+        }
+        if let OpRet::Repr(ret) = row.ret
+            && ret != Repr::TObj
+            && self.repr(var) != ret
+        {
+            return Err(format!(
+                "`{}` ({}) is bound to `{}`, which returns {}",
+                self.name(var),
+                self.repr(var).name(),
+                row.name,
+                ret.name()
+            ));
+        }
+        Ok(())
     }
 
     /// 呼び出しの結果の印 `result` は、束縛する変数の印と互換である (V2)。`callee` は誤りの文で呼ばれる側を指す句である。

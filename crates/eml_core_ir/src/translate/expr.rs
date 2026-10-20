@@ -138,7 +138,8 @@ impl FnLowering<'_> {
     }
 
     /// 値として使う extern の参照 `site` ごとの包む関数 (docs/spec/core-ir.md)。型は参照の式の型から取る。extern の
-    /// 関数の宣言の型とは開いた row の末尾だけが違い、Repr は同じである。
+    /// 関数の宣言の型とは開いた row の末尾だけが違う。型変数の位置の Repr は、参照の型では `int` などで行では
+    /// `tobj` と違いうるが、box の挿入が合わせる (docs/spec/lir.md の「extern の行」)。
     fn extern_wrapper(&mut self, site: ExprId, row: Extern) -> FnIdx {
         let number = self.ctx.numbering.externs[site];
         let name = format!("{}$extern{number}", self.ctx.root_name);
