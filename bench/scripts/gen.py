@@ -68,7 +68,10 @@ def main():
     if directory:
         os.makedirs(directory, exist_ok=True)
     write = write_log if args.kind == "log" else write_csv
-    write(args.output, args.kib * 1024, random.Random(12))
+    # 途中で止まると、途中までのファイルが計測に使われてしまう。最後まで書いてから名前を付ける
+    partial = args.output + ".tmp"
+    write(partial, args.kib * 1024, random.Random(12))
+    os.replace(partial, args.output)
 
 
 main()

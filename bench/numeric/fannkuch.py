@@ -52,4 +52,11 @@ def fannkuch(n):
     print(f"Pfannkuchen({n}) = {max_flips}")
 
 
-fannkuch(int(sys.argv[1]))
+def main():
+    n = int(sys.argv[1])
+    if n < 1:
+        sys.exit("usage: fannkuch.py SIZE")
+    fannkuch(n)
+
+
+main()

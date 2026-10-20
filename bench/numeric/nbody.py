@@ -83,6 +83,8 @@ def advance(pos, vel, mass):
 
 def main():
     steps = int(sys.argv[1])
+    if steps < 1:
+        sys.exit("usage: nbody.py SIZE")
     pos, vel, mass = bodies()
     offset_momentum(vel, mass)
     print(f"{energy(pos, vel, mass):.9f}")

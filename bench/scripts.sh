@@ -29,7 +29,8 @@ input() {
     path="$data/data-${kib}k.csv"
   fi
   if [[ ! -f "$path" ]]; then
-    python3 -I "$root/bench/scripts/gen.py" "$kind" "$kib" "$path" >&2
+    # コマンド置換の中では `set -e` が効かないので、失敗を返り値で伝える
+    python3 -I "$root/bench/scripts/gen.py" "$kind" "$kib" "$path" >&2 || return 1
   fi
   echo "$path"
 }

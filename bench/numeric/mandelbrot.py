@@ -15,6 +15,8 @@ def inside(cr, ci):
 
 def main():
     n = int(sys.argv[1])
+    if n < 1:
+        sys.exit("usage: mandelbrot.py SIZE")
     size = float(n)
     count = 0
     for y in range(n):

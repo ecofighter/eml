@@ -36,6 +36,8 @@ def mul_atav(v):
 
 def main():
     n = int(sys.argv[1])
+    if n < 1:
+        sys.exit("usage: spectral_norm.py SIZE")
     u = [1.0] * n
     v = u
     for _ in range(10):

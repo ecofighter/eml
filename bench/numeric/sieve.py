@@ -13,7 +13,10 @@ def sieve(n):
 
 
 def main():
-    marks = sieve(int(sys.argv[1]))
+    n = int(sys.argv[1])
+    if n < 1:
+        sys.exit("usage: sieve.py SIZE")
+    marks = sieve(n)
     print(sum(1 for i in range(2, len(marks)) if marks[i]))
 
 
