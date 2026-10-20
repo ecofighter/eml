@@ -204,7 +204,7 @@ struct Usage<'a, 'c> {
     inside: HashMap<VarId, u32>,
     /// 入れ子になった関数 (ラムダ、局所関数、handle の本体と節) の深さ。取り出しは最後の式と同じ深さでだけ許す。
     depth: u32,
-    /// E3008 を出した変数。取り出しの回数の誤りを重ねて出さない。
+    /// 取り出しを数えない使い方の E3008 を出した変数。取り出しの回数の誤りを重ねて出さない。
     misused: HashSet<VarId>,
 }
 
@@ -491,15 +491,22 @@ impl<'a> Usage<'a, '_> {
     }
 
     /// 最後の式の中では、配列の変数を取り出すほかに使えない。取り出しは変数を空の配列に替えるためである
-    /// (docs/spec/linearity.md の「配列の変数」)。
+    /// (docs/spec/linearity.md の「配列の変数」)。この使い方は取り出しの数を変えないので、取り出しの回数の誤りも
+    /// 重ねて出す。
     fn beside_take(&mut self, var: VarId, at: TextRange) {
         if self.is_array(var) && self.inside.contains_key(&var) {
-            self.misuse(var, at, VarMisuse::UsedBesideTake);
+            self.report_misuse(var, at, VarMisuse::UsedBesideTake);
         }
     }
 
+    /// 取り出しを数えない使い方の E3008。この変数には、取り出しの回数の誤りを重ねて出さない。
     fn misuse(&mut self, var: VarId, at: TextRange, misuse: VarMisuse) -> Uses {
         self.misused.insert(var);
+        self.report_misuse(var, at, misuse);
+        Uses::new()
+    }
+
+    fn report_misuse(&mut self, var: VarId, at: TextRange, misuse: VarMisuse) {
         let data = &self.body.vars[var];
         let reason = KindReason::ArrayVarMisused {
             name: data.name.clone(),
@@ -507,7 +514,6 @@ impl<'a> Usage<'a, '_> {
             misuse,
         };
         self.array_var_error(var, at, reason);
-        Uses::new()
     }
 
     /// 範囲を数え終える。取り出しは経路ごとにちょうど1回で、戻らない呼び出しで終わる経路は取り出さなくてよい。

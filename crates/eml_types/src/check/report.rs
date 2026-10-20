@@ -1001,10 +1001,10 @@ pub(super) fn linear_misuse(
                 ),
                 VarMisuse::UsedBesideTake => (
                     format!(
-                        "the array variable `{name}` is used in the last expression besides being taken"
+                        "the array variable `{name}` cannot be read or written in the last expression of its block"
                     ),
                     format!("`{name}` is used here"),
-                    "the last expression takes the array out of the variable, so it cannot also read or write it",
+                    "the last expression must take the array out of the variable, so it cannot also read or write it",
                     format!("read or write `{name}` in a statement before the last expression"),
                 ),
                 VarMisuse::Assigned => (

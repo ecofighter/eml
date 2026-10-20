@@ -580,3 +580,29 @@ f () =
     ]
     "#);
 }
+
+/// 最後の式が配列の変数を添字で読むだけで取り出さない。添字は取り出しのほかの使い方なので E3008 になり、取り出しの数は
+/// 変わらないので、取り出さない経路の E3003 も出る (docs/spec/linearity.md の「配列の変数」)。
+#[test]
+fn an_index_in_a_last_expression_without_a_take_is_e3008_and_e3003() {
+    let text = "\
+f : Unit -> <Panic> Int
+f () =
+  let bad =
+    var a = MutArray.make 2 0
+    a[5]
+  bad
+";
+    insta::assert_snapshot!(check_full(text), @"
+    E3003 4:5 the array variable `a` is not taken on this path
+      4:5 `a` is declared here
+      5:5 this last expression does not take `a`
+      note: taking an array variable hands over its array, so every path of the last expression takes it exactly once
+      help: end the block with an expression that takes `a`, such as `MutArray.freeze a` or `drop a`
+    E3008 5:5 the array variable `a` cannot be read or written in the last expression of its block
+      5:5 `a` is used here
+      4:5 `a` is declared here
+      note: the last expression must take the array out of the variable, so it cannot also read or write it
+      help: read or write `a` in a statement before the last expression
+    ");
+}
