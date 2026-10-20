@@ -126,6 +126,7 @@ fn placeholder() -> CoreFn {
     CoreFn {
         name: String::new(),
         internal: false,
+        role: eml_lir::Role::Typed,
         yields: false,
         clause: None,
         vars: Vec::new(),

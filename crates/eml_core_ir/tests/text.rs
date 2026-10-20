@@ -2,7 +2,7 @@
 //! `pretty` で表示すると元のテキストに戻ることと、構文の誤りの報告を確かめる。
 
 use eml_core_ir::{Call, Program, Rhs, Stmt, parse, pretty};
-use eml_lir::{Atom, BlockId, Mark, MaskItem, ParseError, VarId};
+use eml_lir::{Atom, BlockId, Mark, MaskItem, ParseError, Repr, Role, Site, VarId};
 
 /// 読んで表示し直すと元に戻ることを確かめ、読んだプログラムを返す。
 fn round_trip(text: &str) -> Program {
@@ -175,8 +175,8 @@ fn a_mask_reads_back() {
         "\
 effect Main.State { get(tobj) -> tobj, put(tobj) -> tobj }
 fn entry$main(c.0: tobj) -> tobj {
-  let t.1: tobj = mask [Main.State*2] apply c.0(())
-  let t.2: tobj = mask [Main.State] apply t.1(())
+  let t.1: tobj = mask [Main.State*2] apply c.0((): unit)
+  let t.2: tobj = mask [Main.State] apply t.1((): unit)
   return t.2
 }
 ",
@@ -383,10 +383,10 @@ b3:
 #[test]
 fn yields_marks_round_trip() {
     round_trip(
-        "yields fn f(c.0: tobj) -> tobj {\n  let t.1: tobj = yields apply c.0(())\n  return t.1\n}\n",
+        "yields fn f(c.0: tobj) -> tobj {\n  let t.1: tobj = yields apply c.0((): unit)\n  return t.1\n}\n",
     );
     round_trip(
-        "effect Ask { ask(unit) -> tobj }\ninternal yields fn g(c.0: tobj) -> tobj {\n  let t.1: tobj = mask [Ask] yields apply c.0(())\n  return t.1\n}\n",
+        "effect Ask { ask(unit) -> tobj }\ninternal yields fn g(c.0: tobj) -> tobj {\n  let t.1: tobj = mask [Ask] yields apply c.0((): unit)\n  return t.1\n}\n",
     );
 }
 
@@ -545,7 +545,7 @@ fn a_mask_with_two_items_reads_back() {
 effect State { get(unit) -> tobj }
 effect Yield { y(unit) -> tobj }
 fn f(c.0: tobj) -> tobj {
-  let t.2: tobj = mask [State, Yield@1] yields apply c.0(())
+  let t.2: tobj = mask [State, Yield@1] yields apply c.0((): unit)
   return t.2
 }
 ",
@@ -568,7 +568,7 @@ fn f(c.0: tobj) -> tobj {
 #[test]
 fn prompt_marker_round_trips() {
     let program = round_trip(
-        "fn f(b.1: tobj, ev.2: obj) -> obj {\n  let x.3: tobj poly = yields apply b.1(()) prompt ev.2\n  return ev.2\n}\n",
+        "fn f(b.1: tobj, ev.2: obj) -> obj {\n  let x.3: tobj poly = yields apply b.1((): unit) prompt ev.2\n  return ev.2\n}\n",
     );
     let Stmt::Let {
         rhs: Rhs::Call { call, .. },
@@ -581,4 +581,89 @@ fn prompt_marker_round_trips() {
     let mut atoms = Vec::new();
     call.for_each_atom(|atom| atoms.push(atom));
     assert_eq!(atoms, vec![v(1), Atom::Unit]);
+}
+
+/// 役割は `fn` の前に `role R` で書き、`Typed` は何も書かない。`apply` の場所は、型どおりなら定数の引数にだけ
+/// `: repr` を書き、変数の引数の Repr は変数から読む。EP の一様な場所は `uniform apply` と書く
+/// (docs/superpowers/specs/2026-10-21-s14e-abi-struct-design.md の「関数の ABI」「`apply` の ABI」)。
+#[test]
+fn roles_and_sites_round_trip() {
+    let program = round_trip(
+        "\
+fn f(c.0: tobj, x.1: int) -> tobj {
+  let t.2: tobj = apply c.0(#1: tobj, x.1)
+  let t.3: tobj = uniform apply t.2(x.1, ())
+  return t.3
+}
+internal yields role body fn b(p.0: unit) -> tobj {
+  return ()
+}
+internal role clause fn g(x.0: tobj, k.1: tobj, s.2: unit) -> tobj {
+  return x.0
+}
+internal role return fn r(x.0: tobj, s.1: unit) -> tobj {
+  return x.0
+}
+internal yields role cont fn f$k0(a.0: int, x.1: tobj) -> tobj {
+  return x.1
+}
+",
+    );
+    let roles: Vec<Role> = program.functions.iter().map(|f| f.role).collect();
+    assert_eq!(
+        roles,
+        [
+            Role::Typed,
+            Role::Body,
+            Role::Clause,
+            Role::Return,
+            Role::Continuation
+        ]
+    );
+    let sites: Vec<&Site> = program.functions[0].blocks[0]
+        .stmts
+        .iter()
+        .map(|stmt| match stmt {
+            Stmt::Let {
+                rhs:
+                    Rhs::Call {
+                        call: Call::Apply { site, .. },
+                        ..
+                    },
+                ..
+            } => site,
+            _ => panic!("expected an apply"),
+        })
+        .collect();
+    assert_eq!(
+        sites,
+        [&Site::Typed(vec![Repr::TObj, Repr::Int]), &Site::Uniform]
+    );
+}
+
+/// `: repr` は型どおりの場所の定数の引数にだけ書く。書き方を1つにするためである。
+#[test]
+fn a_site_repr_is_written_on_the_constants_of_a_typed_apply_only() {
+    let head = "fn f(c.0: tobj, x.1: int) -> tobj {\n";
+    let error = parse_error(&format!(
+        "{head}  let t.2: tobj = apply c.0(1)\n  return t.2\n}}\n"
+    ));
+    assert_eq!(
+        error.message,
+        "the constant argument `1` of a typed apply needs `: repr`"
+    );
+    let error = parse_error(&format!(
+        "{head}  let t.2: tobj = apply c.0(x.1: int)\n  return t.2\n}}\n"
+    ));
+    assert_eq!(
+        error.message,
+        "the variable argument `x.1` of an apply takes its repr from the variable"
+    );
+    let error = parse_error(&format!(
+        "{head}  let t.2: tobj = uniform apply c.0(1: int)\n  return t.2\n}}\n"
+    ));
+    assert_eq!(
+        error.message,
+        "a uniform apply writes no repr on its arguments"
+    );
 }

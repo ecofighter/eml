@@ -461,7 +461,7 @@ impl ProgramBuilder {
             core_name(hir, target_id.module, &hir[target_id].name)
         );
         // どちらの形でも、入口の関数の型は `Unit -> ...` である
-        let (_, result_type) = split_arrows(types, target_type, 1);
+        let (params, result_type) = split_arrows(types, target_type, 1);
         let mut builder = FnBuilder::new();
         let unit = vec![Atom::Unit];
         let call = if self.arity(target) == 0 {
@@ -472,6 +472,7 @@ impl ProgramBuilder {
             });
             Call::Apply {
                 callee: Atom::Var(value),
+                site: builder.typed_site(&unit, |_| repr(types, params[0], hir)),
                 args: unit,
                 yields,
                 prompt: None,
@@ -555,6 +556,9 @@ impl ProgramBuilder {
                 });
                 plain_call(Call::Apply {
                     callee: Atom::Var(function),
+                    site: builder.typed_site(&[value], |_| {
+                        unreachable!("the shown value is the variable of the entry's result")
+                    }),
                     args: vec![value],
                     yields: false,
                     prompt: None,

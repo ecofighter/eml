@@ -61,6 +61,7 @@ impl<'p> Printer<'p> {
             internal: function.internal,
             yields: function.yields,
             clause: function.clause,
+            role: function.role,
             params: function.params().to_vec(),
             ret: function.ret,
             ret_mark: function.ret_mark,
@@ -159,13 +160,8 @@ impl<'p> Printer<'p> {
                 args,
                 yields,
                 prompt,
-            } => format!(
-                "{}apply {}({}){}",
-                if *yields { "yields " } else { "" },
-                w.atom(vars, callee),
-                w.atoms(vars, args),
-                prompt.map_or(String::new(), |v| format!(" prompt {}", w.var(vars, v)))
-            ),
+                site,
+            } => w.apply(vars, (callee, args), *yields, *prompt, site),
             Call::Handle {
                 effect,
                 init,

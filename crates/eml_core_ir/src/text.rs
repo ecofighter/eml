@@ -50,9 +50,23 @@ impl Parser<'_> {
             blocks.push(self.block(&mut state, params)?);
         }
         let vars = self.reader.function_vars(state, blocks.len())?;
+        for stmt in blocks.iter_mut().flat_map(|block| &mut block.stmts) {
+            if let Stmt::Let {
+                var: _,
+                rhs:
+                    Rhs::Call {
+                        call: Call::Apply { args, site, .. },
+                        mask: _,
+                    },
+            } = stmt
+            {
+                syntax::fill_site(site, args, &vars);
+            }
+        }
         Ok(CoreFn {
             name: header.name,
             internal: header.internal,
+            role: header.role,
             yields: header.yields,
             clause: header.clause,
             vars,
@@ -137,7 +151,15 @@ impl Parser<'_> {
         };
         if matches!(
             keyword,
-            "mask" | "call" | "yields" | "apply" | "handle" | "perform" | "resume" | "clause"
+            "mask"
+                | "call"
+                | "yields"
+                | "uniform"
+                | "apply"
+                | "handle"
+                | "perform"
+                | "resume"
+                | "clause"
         ) {
             let (mask, call) = self.masked_call(state)?;
             return Ok(Rhs::Call { call, mask });
@@ -208,7 +230,7 @@ impl Parser<'_> {
         let line = self.reader.line();
         let mask = self.mask()?;
         if !mask.is_empty()
-            && !["call", "yields", "apply", "resume"]
+            && !["call", "yields", "uniform", "apply", "resume"]
                 .iter()
                 .any(|w| self.reader.at_word(w))
         {
@@ -221,20 +243,22 @@ impl Parser<'_> {
     fn call(&mut self, state: &mut FnState) -> Result<Call, ParseError> {
         let line = self.reader.line();
         let word = self.reader.word()?;
+        if let Some((yields, uniform)) = self.reader.apply_head(&word)? {
+            let (callee, args, prompt, site) = self.reader.apply(state, uniform)?;
+            return Ok(Call::Apply {
+                callee,
+                args,
+                yields,
+                prompt,
+                site,
+            });
+        }
         match word.as_str() {
             "call" => {
                 let callee = self.reader.function_name()?;
                 let args = self.reader.list('(', ')', |p| p.atom(state))?;
                 Ok(Call::Direct(callee, args))
             }
-            "yields" => {
-                if !self.reader.at_word("apply") {
-                    return Err(self.reader.error_here("expected `apply` after `yields`"));
-                }
-                self.reader.bump();
-                self.apply(state, true)
-            }
-            "apply" => self.apply(state, false),
             "handle" => self.handle(state),
             "perform" => {
                 let never = self.reader.eat_never();
@@ -280,24 +304,6 @@ impl Parser<'_> {
             }
             _ => Err(error(line, format!("expected a call, found `{word}`"))),
         }
-    }
-
-    /// `apply` の後の、呼ぶ値と引数。
-    fn apply(&mut self, state: &mut FnState, yields: bool) -> Result<Call, ParseError> {
-        let callee = self.reader.atom(state)?;
-        let args = self.reader.list('(', ')', |p| p.atom(state))?;
-        let prompt = if self.reader.at_word("prompt") {
-            self.reader.bump();
-            Some(self.reader.var(state)?)
-        } else {
-            None
-        };
-        Ok(Call::Apply {
-            callee,
-            args,
-            yields,
-            prompt,
-        })
     }
 
     /// `handle E(init, body) { op: clause, .. } return ret`。

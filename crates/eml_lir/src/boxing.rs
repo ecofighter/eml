@@ -309,6 +309,7 @@ fn boxed(function: &LirFn, target: FnIdx) -> LirFn {
     LirFn {
         name: format!("{}$boxed", function.name),
         internal: function.internal,
+        role: function.role,
         yields: function.yields,
         clause: None,
         vars,

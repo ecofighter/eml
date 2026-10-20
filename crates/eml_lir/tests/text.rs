@@ -2,7 +2,7 @@
 //! `pretty` で表示すると元のテキストに戻ることと、構文の誤りの報告を確かめる。
 
 use eml_lir::{Atom, CasePattern, Ctor, FloatBits, FnIdx, LayoutId, MaskItem, OpRet, Prim, VarId};
-use eml_lir::{BlockId, Loc, Mark, ParseError, Repr, Reuse, verify};
+use eml_lir::{BlockId, Loc, Mark, ParseError, Repr, Reuse, Role, Site, verify};
 use eml_lir::{Call, Program, Rhs, Stmt, Term, parse, pretty, pretty_with_positions};
 
 /// 読んで表示し直すと元に戻ることを確かめ、読んだプログラムを返す。
@@ -262,7 +262,7 @@ fn a_tail_call_round_trips() {
     let program = round_trip(
         "\
 fn f(c.0: tobj) -> int {
-  tail apply c.0(1)
+  tail apply c.0(1: int)
 }
 ",
     );
@@ -273,6 +273,7 @@ fn f(c.0: tobj) -> int {
             args: vec![Atom::Int(1)],
             yields: false,
             prompt: None,
+            site: Site::Typed(vec![Repr::Int]),
         })
     );
 }
@@ -281,7 +282,7 @@ fn f(c.0: tobj) -> int {
 #[test]
 fn a_tail_call_takes_no_mask() {
     let error = parse_error(
-        "effect State { get(tobj) -> tobj }\nfn f(c.0: tobj) -> int {\n  tail mask [State] apply c.0(1)\n}\n",
+        "effect State { get(tobj) -> tobj }\nfn f(c.0: tobj) -> int {\n  tail mask [State] apply c.0(1: int)\n}\n",
     );
     assert_eq!(error.to_string(), "line 3: expected a call, found `mask`");
 }
@@ -437,7 +438,7 @@ fn quoted_function_names_round_trip() {
         "\
 fn \"id@[Int, String]\"(x.0: int) -> int {
   let c.1: tobj = closure \"id@[Int, String]\"(x.0)
-  let r.2: tobj = apply c.1(&\"id@[Int, String]\")
+  let r.2: tobj = apply c.1(&\"id@[Int, String]\": tobj)
   let y.3: int = call \"id@[Int, String]\"(x.0)
   tail call \"id@[Int, String]\"(y.3)
 }
@@ -660,7 +661,7 @@ fn an_apply_round_trips() {
     let program = round_trip(
         "\
 fn f(c.0: tobj) -> int {
-  let t.1: int = apply c.0(1, 2)
+  let t.1: int = apply c.0(1: int, 2: int)
   tail apply ()(t.1)
 }
 ",
@@ -675,6 +676,7 @@ fn f(c.0: tobj) -> int {
                 args: vec![Atom::Int(1), Atom::Int(2)],
                 yields: false,
                 prompt: None,
+                site: Site::Typed(vec![Repr::Int, Repr::Int]),
             }),
         }
     );
@@ -685,6 +687,7 @@ fn f(c.0: tobj) -> int {
             args: vec![v(1)],
             yields: false,
             prompt: None,
+            site: Site::Typed(vec![Repr::Int]),
         })
     );
 }
@@ -805,7 +808,7 @@ fn a_function_value_round_trips_even_before_its_definition() {
         "\
 fn f() -> int {
   let c.0: tobj = closure g()
-  tail apply &g(1)
+  tail apply &g(1: int)
 }
 fn g(x.0: int) -> int {
   return x.0
@@ -1446,7 +1449,7 @@ fn effect_instructions_are_not_lir() {
             "expected a right-hand side, found `resume`",
         ),
         (
-            "effect Ask { ask(tobj) -> tobj }\nfn f(c.0: tobj) -> tobj {\n  let t.1: tobj = mask [Ask] apply c.0(())\n  return t.1\n}\n",
+            "effect Ask { ask(tobj) -> tobj }\nfn f(c.0: tobj) -> tobj {\n  let t.1: tobj = mask [Ask] apply c.0((): unit)\n  return t.1\n}\n",
             3,
             "expected a right-hand side, found `mask`",
         ),
@@ -1619,7 +1622,7 @@ fn a_mask_item_that_skips_nothing_is_an_error() {
 #[test]
 fn prompt_marker_round_trips() {
     let program = round_trip(
-        "fn f(b.1: tobj, ev.2: obj) -> obj {\n  let x.3: tobj poly = yields apply b.1(()) prompt ev.2\n  return ev.2\n}\n",
+        "fn f(b.1: tobj, ev.2: obj) -> obj {\n  let x.3: tobj poly = yields apply b.1((): unit) prompt ev.2\n  return ev.2\n}\n",
     );
     let Stmt::Let {
         rhs: Rhs::Call(call),
@@ -1735,4 +1738,54 @@ fn f(p.0: obj) -> unit {
             token: Some(VarId(1)),
         }
     );
+}
+
+/// 役割と `apply` の場所は Core IR と同じ形で書く。`tail` の後の `apply` も場所を持つ
+/// (docs/superpowers/specs/2026-10-21-s14e-abi-struct-design.md の「関数の ABI」「`apply` の ABI」)。
+#[test]
+fn roles_and_sites_round_trip() {
+    let program = round_trip(
+        "\
+fn f(c.0: tobj, x.1: int) -> tobj {
+  let t.2: tobj = apply c.0(#1: tobj, x.1)
+  tail uniform apply t.2(x.1, ())
+}
+internal yields role body fn b(p.0: unit) -> tobj {
+  return ()
+}
+internal role clause fn g(x.0: tobj, k.1: tobj, s.2: unit) -> tobj {
+  return x.0
+}
+internal role return fn r(x.0: tobj, s.1: unit) -> tobj {
+  return x.0
+}
+internal yields role cont fn f$k0(a.0: int, x.1: tobj) -> tobj {
+  return x.1
+}
+",
+    );
+    let roles: Vec<Role> = program.functions.iter().map(|f| f.role).collect();
+    assert_eq!(
+        roles,
+        [
+            Role::Typed,
+            Role::Body,
+            Role::Clause,
+            Role::Return,
+            Role::Continuation
+        ]
+    );
+    let f = &program.functions[0];
+    let Stmt::Let {
+        rhs: Rhs::Call(Call::Apply { site, .. }),
+        ..
+    } = &f.blocks[0].stmts[0]
+    else {
+        panic!("expected an apply");
+    };
+    assert_eq!(site, &Site::Typed(vec![Repr::TObj, Repr::Int]));
+    let Term::TailCall(Call::Apply { site, .. }) = &f.blocks[0].term else {
+        panic!("expected a tail apply");
+    };
+    assert_eq!(site, &Site::Uniform);
 }

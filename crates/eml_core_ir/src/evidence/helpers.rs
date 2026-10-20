@@ -7,7 +7,7 @@
 use crate::builder::FnBuilder;
 use crate::{Call, CoreFn, Program, Rhs, Stmt, Term};
 use eml_lir::syntax::mask_text;
-use eml_lir::{Atom, BlockId, Case, CasePattern, FnIdx, Mark, MaskItem, Prim, Repr, VarId};
+use eml_lir::{Atom, BlockId, Case, CasePattern, FnIdx, Mark, MaskItem, Prim, Repr, Site, VarId};
 
 use super::{call, captured_mark, direct, dummy, named, yield_switch};
 
@@ -270,11 +270,14 @@ fn apply_marked(
     args: Vec<Atom>,
     prompt: Option<VarId>,
 ) -> VarId {
+    // 補助の関数の `apply` は EP の一様な場所である
+    // (docs/superpowers/specs/2026-10-21-s14e-abi-struct-design.md の「`apply` の ABI」)
     let rhs = call(Call::Apply {
         callee: Atom::Var(callee),
         args,
         yields: true,
         prompt,
+        site: Site::Uniform,
     });
     bind(b, name, Repr::TObj, Mark::Poly, rhs)
 }

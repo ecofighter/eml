@@ -44,12 +44,12 @@ fn a_yield_point_continues_in_a_continuation_function() {
       return y.2
     }
     ");
-    insta::assert_snapshot!(function(&shown, "f$k0"), @"
-    internal yields fn f$k0(a.0: int, x.1: int) -> int {
-      let y.2: int = extern \"Prelude.Num Int.+\"(x.1, a.0)
+    insta::assert_snapshot!(function(&shown, "f$k0"), @r#"
+    internal yields role cont fn f$k0(a.0: int, x.1: int) -> int {
+      let y.2: int = extern "Prelude.Num Int.+"(x.1, a.0)
       return y.2
     }
-    ");
+    "#);
 }
 
 #[test]
@@ -117,7 +117,7 @@ yields fn f(a.0: int) -> int {
     }
     ");
     insta::assert_snapshot!(function(&shown, "f$k0"), @"
-    internal yields fn f$k0(a.0: int, x.1: int) -> int {
+    internal yields role cont fn f$k0(a.0: int, x.1: int) -> int {
       let y.2: int = call g(x.1)
       let y.3: int = prim yielding()
       switch y.3 { 0 -> b2, _ -> b1 }
@@ -132,12 +132,12 @@ yields fn f(a.0: int) -> int {
       return r.8
     }
     ");
-    insta::assert_snapshot!(function(&shown, "f$k1"), @"
-    internal yields fn f$k1(a.0: int, y.1: int) -> int {
-      let z.2: int = extern \"Prelude.Num Int.+\"(y.1, a.0)
+    insta::assert_snapshot!(function(&shown, "f$k1"), @r#"
+    internal yields role cont fn f$k1(a.0: int, y.1: int) -> int {
+      let z.2: int = extern "Prelude.Num Int.+"(y.1, a.0)
       return z.2
     }
-    ");
+    "#);
 }
 
 #[test]
@@ -166,7 +166,7 @@ b4:
 ";
     let shown = evidence_text(text);
     insta::assert_snapshot!(function(&shown, "f$k0"), @"
-    internal yields fn f$k0(o.0: tobj, a.1: int, x.2: int) -> int {
+    internal yields role cont fn f$k0(o.0: tobj, a.1: int, x.2: int) -> int {
       switch o.0 Option { #0 -> b1, #1(v.3: int) -> b2 }
     b1:
       return x.2
@@ -189,12 +189,12 @@ b4:
       return r.10
     }
     ");
-    insta::assert_snapshot!(function(&shown, "f$k1"), @"
-    internal yields fn f$k1(x.0: int, y.1: int) -> int {
-      let z.2: int = extern \"Prelude.Num Int.+\"(y.1, x.0)
+    insta::assert_snapshot!(function(&shown, "f$k1"), @r#"
+    internal yields role cont fn f$k1(x.0: int, y.1: int) -> int {
+      let z.2: int = extern "Prelude.Num Int.+"(y.1, x.0)
       return z.2
     }
-    ");
+    "#);
 }
 
 #[test]
@@ -242,18 +242,18 @@ b3(v.3: int):
       return w.4
     }
     ");
-    insta::assert_snapshot!(function(&shown, "f$k0"), @"
-    internal yields fn f$k0(a.0: int, x.1: int) -> int {
+    insta::assert_snapshot!(function(&shown, "f$k0"), @r#"
+    internal yields role cont fn f$k0(a.0: int, x.1: int) -> int {
       switch a.0 { 0 -> b1, _ -> b2 }
     b1:
-      let p.2: int = extern \"Prelude.Num Int.+\"(x.1, 1)
+      let p.2: int = extern "Prelude.Num Int.+"(x.1, 1)
       let r.3: int = call f$j3(a.0, p.2)
       return r.3
     b2:
       let r.4: int = call f$j3(a.0, x.1)
       return r.4
     }
-    ");
+    "#);
     insta::assert_snapshot!(function(&shown, "f$j3"), @"
     yields fn f$j3(a.0: int, v.1: int) -> int {
       let w.2: int = extern \"Prelude.Num Int.+\"(v.1, a.0)
@@ -284,7 +284,7 @@ b3(v.2: int):
 ";
     let shown = evidence_text(text);
     insta::assert_snapshot!(function(&shown, "f$k0"), @"
-    internal yields fn f$k0(a.0: int, x.1: int) -> int {
+    internal yields role cont fn f$k0(a.0: int, x.1: int) -> int {
       switch a.0 { 0 -> b1, _ -> b2 }
     b1:
       let r.2: int = call f$j3(x.1, x.1)
@@ -310,12 +310,12 @@ b3(v.2: int):
       return r.8
     }
     ");
-    insta::assert_snapshot!(function(&shown, "f$k1"), @"
-    internal yields fn f$k1(x.0: int, w.1: int) -> int {
-      let z.2: int = extern \"Prelude.Num Int.+\"(w.1, x.0)
+    insta::assert_snapshot!(function(&shown, "f$k1"), @r#"
+    internal yields role cont fn f$k1(x.0: int, w.1: int) -> int {
+      let z.2: int = extern "Prelude.Num Int.+"(w.1, x.0)
       return z.2
     }
-    ");
+    "#);
 }
 
 #[test]
@@ -349,7 +349,7 @@ yields fn f(h.0: tobj, a.1: tobj) -> tobj {
     }
     ");
     insta::assert_snapshot!(function(&shown, "f$k0"), @"
-    internal yields fn f$k0(h.0: tobj, x.1: tobj, y.2: tobj) -> tobj {
+    internal yields role cont fn f$k0(h.0: tobj, x.1: tobj, y.2: tobj) -> tobj {
       let z.3: tobj = apply h.0(y.2)
       return x.1
     }
@@ -495,7 +495,7 @@ yields fn h() -> int {
     assert!(!shown.contains("fn id$("), "{shown}");
     insta::assert_snapshot!(function(&shown, "compose$"), @"
     yields fn compose$(k.0: tobj poly, c.1: tobj poly, x.2: tobj poly) -> tobj poly {
-      let r.3: tobj poly = yields apply k.0(x.2)
+      let r.3: tobj poly = yields uniform apply k.0(x.2)
       let y.4: int = prim yielding()
       switch y.4 { 0 -> b2, _ -> b1 }
     b1:
@@ -506,7 +506,7 @@ yields fn h() -> int {
       let d.9: obj poly = prim dummy()
       return d.9
     b2:
-      let t.10: tobj poly = yields apply c.1(r.3)
+      let t.10: tobj poly = yields uniform apply c.1(r.3)
       return t.10
     }
     ");
@@ -538,7 +538,7 @@ fn a_handle_installs_evidence_and_calls_prompt() {
       let u.9: unit = prim ev_set_clause[Ask.ask](ev.8, &main$handle0$ask$entry)
       let w.10: tobj = prim evv_push(w.7, ev.8)
       let u.11: unit = prim evv_set(w.10)
-      let x.12: tobj poly = yields apply c.3(()) prompt ev.8
+      let x.12: tobj poly = yields uniform apply c.3(()) prompt ev.8
       let t.4: int = call prompt$(ev.8, &main$handle0$return, x.12)
       let t.5: obj = extern "Prelude.Show Int.show"(t.4)
       let t.6: unit = extern Prelude.println(t.5)
@@ -589,13 +589,13 @@ fn a_resume_becomes_an_apply() {
         "{ASK}{HIDE}main : Unit -> <IO, Panic> Unit\nmain () =\n  let Box b = hide 0 (fn () -> ask () + 1)\n  let r =\n    handle b () with\n      | ctl ask () k ->\n        let v = k 10\n        v * 2\n  println (show r)"
     );
     let shown = core_text(&text, Pass::Evidence);
-    insta::assert_snapshot!(function(&shown, "main$handle0$ask"), @"
-    internal fn main$handle0$ask(p.0: unit, k.1: tobj lin, p.2: unit) -> int {
-      let t.3: int = apply k.1(10, ())
-      let t.4: int = extern \"Prelude.Num Int.*\"(t.3, 2)
+    insta::assert_snapshot!(function(&shown, "main$handle0$ask"), @r#"
+    internal role clause fn main$handle0$ask(p.0: unit, k.1: tobj lin, p.2: unit) -> int {
+      let t.3: int = uniform apply k.1(10, ())
+      let t.4: int = extern "Prelude.Num Int.*"(t.3, 2)
       return t.4
     }
-    ");
+    "#);
 }
 
 #[test]
@@ -709,7 +709,7 @@ fn a_masked_call_restores_the_evidence_list_and_wraps_the_continuation() {
       let w.7: tobj = prim evv_get()
       let w.8: tobj = prim evv_mask[State](w.7)
       let u.9: unit = prim evv_set(w.8)
-      let t.2: obj = yields apply cb.0(())
+      let t.2: obj = yields apply cb.0((): unit)
       let y.17: int = prim yielding()
       switch y.17 { 0 -> b4, _ -> b3 }
     b3:
@@ -728,7 +728,7 @@ fn a_masked_call_restores_the_evidence_list_and_wraps_the_continuation() {
     }
     "#);
     insta::assert_snapshot!(function(&shown, &format!("{run}$k1")), @r#"
-    internal yields fn "run<e>$k1"(t.0: int, t.1: obj) -> obj {
+    internal yields role cont fn "run<e>$k1"(t.0: int, t.1: obj) -> obj {
       let t.2: obj = extern "Prelude.Show Int.show"(t.0)
       let t.3: obj = extern Prelude.++(t.1, t.2)
       return t.3
@@ -746,11 +746,11 @@ fn a_masked_call_in_a_continuation_restores_the_evidence_list_before_it_continue
     let shown = core_text(&text, Pass::Evidence);
     let run = instance_name(&shown, "run");
     insta::assert_snapshot!(function(&shown, &format!("{run}$k0")), @r#"
-    internal yields fn "run<e>$k0"(cb.0: tobj, t.1: obj) -> obj {
+    internal yields role cont fn "run<e>$k0"(cb.0: tobj, t.1: obj) -> obj {
       let w.3: tobj = prim evv_get()
       let w.4: tobj = prim evv_mask[State](w.3)
       let u.5: unit = prim evv_set(w.4)
-      let t.2: obj = yields apply cb.0(())
+      let t.2: obj = yields apply cb.0((): unit)
       let y.7: int = prim yielding()
       switch y.7 { 0 -> b2, _ -> b1 }
     b1:
@@ -768,7 +768,7 @@ fn a_masked_call_in_a_continuation_restores_the_evidence_list_before_it_continue
     }
     "#);
     insta::assert_snapshot!(function(&shown, &format!("{run}$k1")), @r#"
-    internal yields fn "run<e>$k1"(t.0: obj, t.1: obj) -> obj {
+    internal yields role cont fn "run<e>$k1"(t.0: obj, t.1: obj) -> obj {
       let t.2: obj = extern Prelude.++(t.0, t.1)
       return t.2
     }
@@ -783,9 +783,9 @@ fn a_resume_in_a_yielding_function_becomes_a_yielding_apply() {
         "{ASK}{HIDE}effect Log where\n  log : Int -> Unit\n\nf : Unit -> <Log, Panic> Int\nf () =\n  let Box b = hide 0 (fn () -> ask () + 1)\n  handle b () with\n    | ctl ask () k ->\n      let v = k 10\n      v * 2\n\nmain : Unit -> <IO, Panic> Unit\nmain () =\n  let r = handle f () with\n            | ctl log _ k -> k ()\n  println (show r)"
     );
     let shown = core_text(&text, Pass::Evidence);
-    insta::assert_snapshot!(function(&shown, "f$handle0$ask"), @"
-    internal yields fn f$handle0$ask(p.0: unit, k.1: tobj lin, p.2: unit) -> int {
-      let t.3: int = yields apply k.1(10, ())
+    insta::assert_snapshot!(function(&shown, "f$handle0$ask"), @r#"
+    internal yields role clause fn f$handle0$ask(p.0: unit, k.1: tobj lin, p.2: unit) -> int {
+      let t.3: int = yields uniform apply k.1(10, ())
       let y.5: int = prim yielding()
       switch y.5 { 0 -> b2, _ -> b1 }
     b1:
@@ -794,10 +794,10 @@ fn a_resume_in_a_yielding_function_becomes_a_yielding_apply() {
       let u.8: unit = prim yield_cont_set(k.7)
       return 0
     b2:
-      let t.4: int = extern \"Prelude.Num Int.*\"(t.3, 2)
+      let t.4: int = extern "Prelude.Num Int.*"(t.3, 2)
       return t.4
     }
-    ");
+    "#);
 }
 
 /// row のビットで純粋と決まった instance は `yields` でないので、EP は yield の確認を足さない
@@ -810,15 +810,15 @@ fn a_pure_instance_of_a_row_polymorphic_function_has_no_yield_check() {
     let shown = core_text(&text, Pass::Evidence);
     insta::assert_snapshot!(function(&shown, "twice"), @"
     fn twice(f.0: tobj) -> int {
-      let t.1: int = apply f.0(())
-      let t.2: int = apply f.0(())
+      let t.1: int = apply f.0((): unit)
+      let t.2: int = apply f.0((): unit)
       let t.3: int = extern \"Prelude.Num Int.+\"(t.1, t.2)
       return t.3
     }
     ");
     insta::assert_snapshot!(function(&shown, "twice<e>"), @r#"
     yields fn "twice<e>"(f.0: tobj) -> int {
-      let t.1: int = yields apply f.0(())
+      let t.1: int = yields apply f.0((): unit)
       let y.4: int = prim yielding()
       switch y.4 { 0 -> b2, _ -> b1 }
     b1:
@@ -828,7 +828,7 @@ fn a_pure_instance_of_a_row_polymorphic_function_has_no_yield_check() {
       let u.8: unit = prim yield_cont_set(k.7)
       return 0
     b2:
-      let t.2: int = yields apply f.0(())
+      let t.2: int = yields apply f.0((): unit)
       let y.9: int = prim yielding()
       switch y.9 { 0 -> b4, _ -> b3 }
     b3:
@@ -1058,7 +1058,7 @@ fn a_masked_call_in_a_non_yielding_function_has_no_slow_path() {
       let w.3: tobj = prim evv_get()
       let w.4: tobj = prim evv_mask[Fail](w.3)
       let u.5: unit = prim evv_set(w.4)
-      let t.1: int = apply cb.0(())
+      let t.1: int = apply cb.0((): unit)
       let u.6: unit = prim evv_set(w.3)
       let t.2: int = extern \"Prelude.Num Int.+\"(t.1, 1)
       return t.2
@@ -1219,4 +1219,75 @@ fn a_fn_clause_that_fails_runs_in_place() {
       return t.7
     }
     "#);
+}
+
+/// EP が作る `apply` は一様な場所である。補助の関数の中、`Call::Resume` から作る再開、`cont$` の中の再開、handle の
+/// 本体の呼び出しがどれも `uniform apply` になる。`perform` の後を受ける `f$k0` は `Continuation` の役割を持つ
+/// (docs/superpowers/specs/2026-10-21-s14e-abi-struct-design.md の「関数の ABI」「`apply` の ABI」)。
+#[test]
+fn ep_applies_are_uniform_sites() {
+    use eml_core_ir::{Call, CoreFn, Rhs, Stmt};
+    use eml_lir::{Role, Site};
+    let text = format!(
+        "{ASK}{HIDE}main : Unit -> <IO, Panic> Unit
+main () =
+  let Box b = hide 0 (fn () -> ask () + 1)
+  let r =
+    handle b () with
+      | ctl ask () k ->
+        let v = k 10
+        v * 2
+  let s =
+    handle b () with
+      | ctl ask () k ->
+        let Box j = hide 0 k
+        j 20
+  println (show (r + s))"
+    );
+    let program = eml_test_support::core_until(&text, Pass::Evidence);
+    let shown = pretty(&program);
+    let function = |name: &str| -> &CoreFn {
+        program
+            .functions
+            .iter()
+            .find(|function| function.name == name)
+            .unwrap_or_else(|| panic!("no `{name}` in\n{shown}"))
+    };
+    let applies = |function: &CoreFn| -> Vec<(Site, bool)> {
+        function
+            .blocks
+            .iter()
+            .flat_map(|block| &block.stmts)
+            .filter_map(|stmt| match stmt {
+                Stmt::Let {
+                    rhs:
+                        Rhs::Call {
+                            call: call @ Call::Apply { site, .. },
+                            ..
+                        },
+                    ..
+                } => Some((site.clone(), call.prompt().is_some())),
+                _ => None,
+            })
+            .collect()
+    };
+    for name in ["prompt$", "resume$", "cont$", "main$handle0$ask"] {
+        let sites = applies(function(name));
+        assert!(!sites.is_empty(), "`{name}` applies\n{shown}");
+        assert!(
+            sites.iter().all(|(site, _)| *site == Site::Uniform),
+            "`{name}`\n{shown}"
+        );
+    }
+    let bodies: Vec<Site> = applies(function("main"))
+        .into_iter()
+        .filter(|(_, prompt)| *prompt)
+        .map(|(site, _)| site)
+        .collect();
+    assert_eq!(bodies, [Site::Uniform, Site::Uniform], "{shown}");
+    assert_eq!(
+        function("main$lambda0$k0").role,
+        Role::Continuation,
+        "{shown}"
+    );
 }

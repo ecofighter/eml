@@ -121,8 +121,8 @@ main () =
       k ()
 ";
     insta::assert_snapshot!(function(&core_text(text, Pass::Optimize), "render$handle0"), @"
-    internal yields fn render$handle0(p.0: unit) -> unit {
-      let t.1: unit = mask [Yield@1] yields apply &op$yield(1)
+    internal yields role body fn render$handle0(p.0: unit) -> unit {
+      let t.1: unit = mask [Yield@1] yields apply &op$yield(1: int)
       return t.1
     }
     ");
@@ -179,7 +179,7 @@ main () =
     insta::assert_snapshot!(function(&core_text(text, Pass::Optimize), "entry$main"), @r#"
     fn entry$main() -> unit {
       let t.1: tobj poly = call adder(0, 1)
-      let t.2: int = apply t.1(2)
+      let t.2: int = apply t.1(2: int)
       let t.3: obj = extern "Prelude.Show Int.show"(t.2)
       let t.4: unit = extern Prelude.println(t.3)
       return t.4
@@ -351,7 +351,7 @@ fn a_closure_captured_by_a_closure_is_specialized() {
     insta::assert_snapshot!(function(&shown, "Std.Iter.map@[Int, Int]$lambda0{0=main$lambda0}"), @r#"
     internal fn "Std.Iter.map@[Int, Int]$lambda0{0=main$lambda0}"(it.1: obj lin, p.2: unit) -> tobj lin {
       unpack it.1 Std.Iter.Iter #0(pull.12: tobj lin)
-      let t.13: tobj lin = apply pull.12(())
+      let t.13: tobj lin = apply pull.12((): unit)
       switch t.13 Prelude.Option { #0 -> b1, #1(x.4: obj lin) -> b2 }
     b1:
       let u.7: unit = drop t.13
@@ -430,7 +430,7 @@ main () =
     b1:
       return ()
     b2:
-      let t.3: int = apply g.2(1)
+      let t.3: int = apply g.2(1: int)
       let t.4: obj = extern "Prelude.Show Int.show"(t.3)
       let t.5: unit = extern Prelude.println(t.4)
       return t.5
@@ -2394,3 +2394,72 @@ b5:
     }
     "#);
 }
+
+/// handler への特殊化が作る関数 (`f{H}` と、節の写し `<g>{k}`) は役割を持たない。直接呼ばれるか、特殊化した経路の
+/// 中で型どおりに呼ばれるためである。`<g>{k}` の中の `k` への `apply` も型どおりの場所である
+/// (docs/superpowers/specs/2026-10-21-s14e-abi-struct-design.md の「関数の ABI」)。
+#[test]
+fn handler_specialization_functions_are_typed() {
+    use eml_lir::{Role, Site};
+    let program =
+        eml_test_support::core_until(include_str!("../../../bench/state_loop.em"), Pass::Optimize);
+    let shown = pretty(&program);
+    let copies: Vec<&eml_core_ir::CoreFn> = program
+        .functions
+        .iter()
+        .filter(|function| function.name.contains("{H="))
+        .collect();
+    assert!(!copies.is_empty(), "{shown}");
+    assert!(
+        copies.iter().all(|function| function.role == Role::Typed),
+        "{shown}"
+    );
+
+    let program = eml_test_support::core_until(CLAUSE_WITH_K, Pass::Optimize);
+    let shown = pretty(&program);
+    let copy = program
+        .functions
+        .iter()
+        .find(|function| function.name.ends_with("{k}"))
+        .unwrap_or_else(|| panic!("no `<g>{{k}}` in\n{shown}"));
+    assert_eq!(copy.role, Role::Typed, "{shown}");
+    let sites: Vec<&Site> = copy
+        .blocks
+        .iter()
+        .flat_map(|block| &block.stmts)
+        .filter_map(|stmt| match stmt {
+            Stmt::Let {
+                rhs:
+                    Rhs::Call {
+                        call: Call::Apply { site, .. },
+                        ..
+                    },
+                ..
+            } => Some(site),
+            _ => None,
+        })
+        .collect();
+    assert!(!sites.is_empty(), "{shown}");
+    assert!(
+        sites.iter().all(|site| matches!(site, Site::Typed(_))),
+        "{shown}"
+    );
+}
+
+/// 節の写し `<g>{k}` が展開されずに残るプログラム。`state_loop` の節はすぐに再開するので写しを作らない。この節は `k` を
+/// 末尾でなく呼ぶので写しになり、本体が展開の上限より大きいので複製に展開されない。
+const CLAUSE_WITH_K: &str = "\
+effect Ask where
+  ask : Unit -> Int
+
+sum : Int -> Int -> <Ask, Panic> Int
+sum acc n = if n <= 0 then acc else sum (acc + ask ()) (n - 1)
+
+main : Unit -> <IO, Panic> Unit
+main () =
+  let r = handle sum 0 3 with
+    | ctl ask () k ->
+      let v = k 10
+      v * 1 + v * 2 + v * 3 + v * 4 + v * 5 + v * 6 + v * 7 + v * 8 + v * 9 + v * 10 + v * 11 + v * 12 + v * 13 + v * 14 + v * 15 + v * 16 + v * 17 + v * 18 + v * 19 + v * 20 + v * 21 + v * 22 + v * 23 + v * 24 + v * 25 + v * 26 + v * 27 + v * 28 + v * 29
+  println (show r)
+";

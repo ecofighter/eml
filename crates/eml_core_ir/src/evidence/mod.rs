@@ -13,7 +13,8 @@ use std::collections::HashMap;
 
 use crate::{Call, CoreFn, Program, Rhs, Term};
 use eml_lir::{
-    Atom, BlockId, Case, CasePattern, FloatBits, FnIdx, Mark, MaskItem, Prim, Repr, VarId, VarInfo,
+    Atom, BlockId, Case, CasePattern, FloatBits, FnIdx, Mark, MaskItem, Prim, Repr, Role, VarId,
+    VarInfo,
 };
 
 use split::split;
@@ -131,6 +132,7 @@ fn reserve(program: &mut Program, name: &str) -> FnIdx {
     program.functions.push(CoreFn {
         name: name.to_string(),
         internal: false,
+        role: Role::Typed,
         yields: true,
         clause: None,
         vars: Vec::new(),

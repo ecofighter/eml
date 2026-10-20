@@ -492,7 +492,7 @@ fn main() -> unit {
 }
 yields fn land(b.0: tobj, ev.1: obj, s.2: obj) -> unit {
   dup s.2
-  let x.3: tobj = yields apply b.0(()) prompt ev.1
+  let x.3: tobj = yields apply b.0((): unit) prompt ev.1
   decref x.3
   decref ev.1
   let t.4: obj = extern \"Prelude.++\"(s.2, s.2)

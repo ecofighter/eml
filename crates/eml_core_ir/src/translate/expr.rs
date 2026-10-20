@@ -10,7 +10,7 @@ use eml_types::{FieldTarget, IndexTarget, TypeId, TypeKind, VarClass};
 
 use crate::builder::FnBuilder;
 use crate::{Call, Rhs, Stmt, Term};
-use eml_lir::{Atom, Ctor, FnIdx, Mark, MaskItem, Prim, Repr, TUPLE, VarId};
+use eml_lir::{Atom, Ctor, FnIdx, Mark, MaskItem, Prim, Repr, Role, TUPLE, VarId};
 
 use super::pattern::Known;
 use super::program::{
@@ -235,18 +235,21 @@ impl FnLowering<'_> {
         for run in arrows.chunk_by(|a, b| a.0 == b.0 && !a.1) {
             let yields = run.iter().any(|&(_, yields)| yields);
             end += run.len();
-            let part = args.by_ref().take(run.len()).collect();
-            let part_ty = if end == last {
-                ty
-            } else {
-                split_arrows(self.ctx.store, callee_ty, end).1
-            };
+            let part: Vec<Atom> = args.by_ref().take(run.len()).collect();
+            let (params, rest) = split_arrows(self.ctx.store, callee_ty, end);
+            let part_ty = if end == last { ty } else { rest };
+            // 定数の引数の Repr は、その矢印の引数の型から決める
+            let params = &params[end - run.len()..];
+            let site = self.builder.typed_site(&part, |index| {
+                repr(self.ctx.store, params[index], self.ctx.hir)
+            });
             let rhs = masked_call(
                 Call::Apply {
                     callee: function,
                     args: part,
                     yields,
                     prompt: None,
+                    site,
                 },
                 run[0].0.clone(),
             );
@@ -656,6 +659,7 @@ impl FnLowering<'_> {
                 // 本体の row は扱うエフェクトを含むので、本体はいつも yield しうる
                 let handled_closure = self.lift(
                     prefix.clone(),
+                    Role::Body,
                     true,
                     body.closure_captures(handled),
                     &unit,
@@ -675,9 +679,14 @@ impl FnLowering<'_> {
                         .find(|clause| clause.op == op)
                         .expect("a program without errors has a clause for every operation");
                     let name = format!("{prefix}${}", self.ctx.hir[op].name);
-                    closures.push(self.lift_clause(name, &clause.closure, stateless));
+                    closures.push(self.lift_clause(name, Role::Clause, &clause.closure, stateless));
                 }
-                let ret = self.lift_clause(format!("{prefix}$return"), &ret.closure, stateless);
+                let ret = self.lift_clause(
+                    format!("{prefix}$return"),
+                    Role::Return,
+                    &ret.closure,
+                    stateless,
+                );
                 let call = Call::Handle {
                     effect: effect_index(self.ctx.hir, effect),
                     init: init_atom,
@@ -877,6 +886,7 @@ impl FnLowering<'_> {
                 let lambda_mark = mark(self.ctx.store, lambda_ty, self.ctx.hir);
                 self.lift(
                     name,
+                    Role::Typed,
                     yields,
                     captured,
                     &params,
@@ -904,7 +914,13 @@ impl FnLowering<'_> {
     /// handler の節か `return` の節を持ち上げる。状態のない handler の節は、最後の引数で状態の `()` を受ける
     /// (docs/spec/core-ir.md)。節は handle の外側の row、つまり handle を含む関数の row で動くので、その関数と同じ印に
     /// する (docs/spec/core-ir.md の「`yields` の印」)。
-    fn lift_clause(&mut self, name: String, closure: &Closure, stateless: bool) -> Atom {
+    fn lift_clause(
+        &mut self,
+        name: String,
+        role: Role,
+        closure: &Closure,
+        stateless: bool,
+    ) -> Atom {
         let mut params: Vec<Param> = closure
             .params
             .iter()
@@ -928,6 +944,7 @@ impl FnLowering<'_> {
         );
         self.lift(
             name,
+            role,
             self.yields,
             captured,
             &params,
@@ -955,6 +972,7 @@ impl FnLowering<'_> {
         // 範囲の row は変数のエフェクトを含むので、範囲はいつも yield しうる
         let body = self.lift(
             prefix.clone(),
+            Role::Body,
             true,
             self.ctx.body.scope_captures(scope),
             &[(None, Repr::Unit, Mark::Unr)],
@@ -988,10 +1006,12 @@ impl FnLowering<'_> {
     }
 
     /// HIR に元のない内部の関数を作り、その値を返す。`body` は引数から本体の文を足し、返す値を返す。節は handle を
-    /// 含む関数の row で動くので、その関数と同じ `yields` の印にする。
+    /// 含む関数の row で動くので、その関数と同じ `yields` の印にする。`var` の節と `return` の節は、handle の節と
+    /// 同じ役割 `role` を持つ (docs/superpowers/specs/2026-10-21-s14e-abi-struct-design.md の「関数の ABI」)。
     fn synthesized(
         &mut self,
         name: String,
+        role: Role,
         params: &[(&str, (Repr, Mark))],
         ret: (Repr, Mark),
         body: impl FnOnce(&mut FnBuilder, &mut ProgramBuilder, &[Atom]) -> Atom,
@@ -1004,7 +1024,8 @@ impl FnLowering<'_> {
             .collect();
         let value = body(&mut builder, &mut *self.program, &args);
         builder.terminate(Term::Return(value));
-        let core = builder.finish(name, true, self.yields, ret.0, ret.1);
+        let mut core = builder.finish(name, true, self.yields, ret.0, ret.1);
+        core.role = role;
         self.program.finish(function, core);
         Atom::Fn(function)
     }
@@ -1031,70 +1052,76 @@ impl FnLowering<'_> {
         // 変数の操作はどれも1回だけ再開する
         params.push(("k", (Repr::TObj, Mark::Lin)));
         params.push(("st", state));
-        self.synthesized(name, &params, result, |builder, program, args| {
-            let (k, st) = (args[args.len() - 2], args[args.len() - 1]);
-            let (value, next) = match op {
-                VarOp::Get => (st, st),
-                VarOp::Set => (Atom::Unit, args[0]),
-                VarOp::Take => {
-                    let empty = bind(
-                        builder,
-                        named("h", state.0, state.1),
-                        Rhs::Prim(Prim::EmptyMutArray, Vec::new()),
-                    );
-                    (st, empty)
-                }
-                VarOp::Length | VarOp::Read => {
-                    let (ext, lent, value) = match op {
-                        VarOp::Length => (Extern::MutArrayLength, vec![st], int),
-                        _ => (Extern::MutArrayRead, vec![st, args[0]], element),
-                    };
-                    let pair = program.lending_call(
-                        builder,
-                        ext,
-                        lent,
-                        None,
-                        named("t", value.0, value.1),
-                        named("d", Repr::Obj, state.1),
-                    );
-                    let Atom::Var(pair) = pair else {
-                        unreachable!("a lending call binds its pair")
-                    };
-                    // 組は融合の既知のコンストラクタで消える
-                    let fields = vec![
-                        builder.var(named("f", value.0, value.1)),
-                        builder.var(named("st", state.0, state.1)),
-                    ];
-                    builder.emit(Stmt::Unpack {
-                        value: pair,
-                        ctor: Ctor {
-                            layout: program.tuple_layout(2),
-                            tag: TUPLE,
-                        },
-                        fields: fields.clone(),
-                    });
-                    (Atom::Var(fields[0]), Atom::Var(fields[1]))
-                }
-                VarOp::Write => {
-                    let written = bind(
-                        builder,
-                        named("st", state.0, state.1),
-                        Rhs::Extern {
-                            ext: Extern::MutArrayWrite,
-                            args: vec![st, args[0], args[1]],
-                            at: None,
-                        },
-                    );
-                    (Atom::Unit, written)
-                }
-            };
-            let call = Call::Resume {
-                k,
-                arg: value,
-                state: next,
-            };
-            bind(builder, named("t", result.0, result.1), plain_call(call))
-        })
+        self.synthesized(
+            name,
+            Role::Clause,
+            &params,
+            result,
+            |builder, program, args| {
+                let (k, st) = (args[args.len() - 2], args[args.len() - 1]);
+                let (value, next) = match op {
+                    VarOp::Get => (st, st),
+                    VarOp::Set => (Atom::Unit, args[0]),
+                    VarOp::Take => {
+                        let empty = bind(
+                            builder,
+                            named("h", state.0, state.1),
+                            Rhs::Prim(Prim::EmptyMutArray, Vec::new()),
+                        );
+                        (st, empty)
+                    }
+                    VarOp::Length | VarOp::Read => {
+                        let (ext, lent, value) = match op {
+                            VarOp::Length => (Extern::MutArrayLength, vec![st], int),
+                            _ => (Extern::MutArrayRead, vec![st, args[0]], element),
+                        };
+                        let pair = program.lending_call(
+                            builder,
+                            ext,
+                            lent,
+                            None,
+                            named("t", value.0, value.1),
+                            named("d", Repr::Obj, state.1),
+                        );
+                        let Atom::Var(pair) = pair else {
+                            unreachable!("a lending call binds its pair")
+                        };
+                        // 組は融合の既知のコンストラクタで消える
+                        let fields = vec![
+                            builder.var(named("f", value.0, value.1)),
+                            builder.var(named("st", state.0, state.1)),
+                        ];
+                        builder.emit(Stmt::Unpack {
+                            value: pair,
+                            ctor: Ctor {
+                                layout: program.tuple_layout(2),
+                                tag: TUPLE,
+                            },
+                            fields: fields.clone(),
+                        });
+                        (Atom::Var(fields[0]), Atom::Var(fields[1]))
+                    }
+                    VarOp::Write => {
+                        let written = bind(
+                            builder,
+                            named("st", state.0, state.1),
+                            Rhs::Extern {
+                                ext: Extern::MutArrayWrite,
+                                args: vec![st, args[0], args[1]],
+                                at: None,
+                            },
+                        );
+                        (Atom::Unit, written)
+                    }
+                };
+                let call = Call::Resume {
+                    k,
+                    arg: value,
+                    state: next,
+                };
+                bind(builder, named("t", result.0, result.1), plain_call(call))
+            },
+        )
     }
 
     /// 変数の `return` の節。`Unr` の変数は状態を捨て、配列の変数は残った状態を `drop` してから範囲の値を返す。
@@ -1107,7 +1134,7 @@ impl FnLowering<'_> {
         result: (Repr, Mark),
     ) -> Atom {
         let params = [("x", value), ("st", state)];
-        self.synthesized(name, &params, result, |builder, _, args| {
+        self.synthesized(name, Role::Return, &params, result, |builder, _, args| {
             if class == VarClass::Array {
                 bind(
                     builder,

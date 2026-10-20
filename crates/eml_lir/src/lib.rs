@@ -65,6 +65,8 @@ pub struct LirFn {
     /// 内部の関数。値として生まれる関数で、ABI は名前で決まり、いつも一様である。box の挿入はこの印だけを読む
     /// (`eml_core_ir::CoreFn::internal`、docs/spec/lir.md の「一様な関数」)。テキストの形では `internal fn` と書く。
     pub internal: bool,
+    /// EP のしくみの中での役割。テキストの形では `fn` の直前に `role R` と書く (`Role`)。
+    pub role: Role,
     /// 本体が yield しうる (docs/spec/core-ir.md の「`yields` の印」)。
     /// テキストの形では `internal` の後に `yields fn` と書く。
     pub yields: bool,
@@ -78,6 +80,68 @@ pub struct LirFn {
     pub ret_mark: Mark,
     /// `blocks[0]` が入口で、その引数が関数の引数である。辺はすべて番号の大きいブロックへ向かう。
     pub blocks: Vec<Block>,
+}
+
+/// 関数が EP のしくみの中で受け持つ役割。EP が総称に呼ぶ位置 (最後の `uniform_params` 個の引数と、
+/// `uniform_ret` なら結果) を一様にする。捕獲はその前に来る。役割は translate と EP が関数を作るときに付け、名前で
+/// 決まる。そのため、名前が同じ関数はいつも同じ ABI になる
+/// (docs/superpowers/specs/2026-10-21-s14e-abi-struct-design.md の「関数の ABI」)。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum Role {
+    /// 一様な位置を持たない。テキストには何も書かない。
+    Typed,
+    /// handle と `var` の範囲の本体。`()` の引数と結果が一様である。
+    Body,
+    /// `prompt$` が呼ぶ操作の節の関数。`k`、状態、結果が一様である。
+    Clause,
+    /// `return` の節。値、状態、結果が一様である。
+    Return,
+    /// 継続の関数 `f$kN`。再開の値と結果が一様である。`f$kN` は生きている変数の後に再開の値を受け、状態は受けない。
+    Continuation,
+}
+
+impl Role {
+    pub const ALL: [Role; 5] = [
+        Role::Typed,
+        Role::Body,
+        Role::Clause,
+        Role::Return,
+        Role::Continuation,
+    ];
+
+    /// 一様にする、最後の引数の数。
+    pub fn uniform_params(self) -> usize {
+        match self {
+            Role::Typed => 0,
+            Role::Body | Role::Continuation => 1,
+            Role::Clause | Role::Return => 2,
+        }
+    }
+
+    pub fn uniform_ret(self) -> bool {
+        self != Role::Typed
+    }
+
+    /// テキストの形の `role` の後の語。`Typed` は書かない。
+    pub fn name(self) -> Option<&'static str> {
+        match self {
+            Role::Typed => None,
+            Role::Body => Some("body"),
+            Role::Clause => Some("clause"),
+            Role::Return => Some("return"),
+            Role::Continuation => Some("cont"),
+        }
+    }
+}
+
+/// `apply` が引数を渡す規約。`Typed` は引数ごとの Repr で、その場所の矢印の型から決まる。変数の引数の Repr は変数の
+/// Repr と同じで (verifier が確かめる)、定数の引数の Repr は translate が型から決める。`#0` が `enum` か `tobj` かを
+/// 決めるためである。`Uniform` は EP が作る一様な場所である。結果の Repr は束縛の Repr で、末尾の位置では含む関数の
+/// `ret` である (docs/superpowers/specs/2026-10-21-s14e-abi-struct-design.md の「`apply` の ABI」)。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Site {
+    Typed(Vec<Repr>),
+    Uniform,
 }
 
 impl LirFn {
@@ -400,6 +464,8 @@ pub enum Call {
         /// フレームまで VM のスタックを巻き戻す。`v` は呼び出しが消費も読みもしないので `for_each_atom` は
         /// 見せず、呼び出しの後も生きている `obj` の変数である (docs/spec/lir.md の「着地の印」)。
         prompt: Option<VarId>,
+        /// 引数を渡す規約 (`Site`)。
+        site: Site,
     },
     /// 操作の in-place の入口のクロージャ `callee` を呼ぶ。`args` の先頭は evidence (`obj`)、残りは操作の引数で、
     /// 引数と結果の Repr は操作の表の `params` と `ret` から取る。`mask` は持たない
@@ -430,6 +496,7 @@ impl Call {
                 args,
                 yields: _,
                 prompt: _,
+                site: _,
             }
             | Call::Clause {
                 effect: _,
@@ -451,6 +518,7 @@ impl Call {
                 args,
                 yields: _,
                 prompt: _,
+                site: _,
             }
             | Call::Clause {
                 effect: _,

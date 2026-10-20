@@ -49,9 +49,28 @@ impl Parser<'_> {
             blocks.push(self.block(&mut state, params)?);
         }
         let vars = self.reader.function_vars(state, blocks.len())?;
+        for block in &mut blocks {
+            let calls = block.stmts.iter_mut().filter_map(|stmt| match stmt {
+                Stmt::Let {
+                    var: _,
+                    rhs: Rhs::Call(call),
+                } => Some(call),
+                _ => None,
+            });
+            let tail = match &mut block.term {
+                Term::TailCall(call) => Some(call),
+                _ => None,
+            };
+            for call in calls.chain(tail) {
+                if let Call::Apply { args, site, .. } = call {
+                    syntax::fill_site(site, args, &vars);
+                }
+            }
+        }
         Ok(LirFn {
             name: header.name,
             internal: header.internal,
+            role: header.role,
             yields: header.yields,
             clause: header.clause,
             vars,
@@ -205,7 +224,7 @@ impl Parser<'_> {
             Some(word) => word,
             _ => return Err(self.reader.error_here("expected a right-hand side")),
         };
-        if matches!(keyword, "call" | "yields" | "apply" | "clause") {
+        if matches!(keyword, "call" | "yields" | "uniform" | "apply" | "clause") {
             return Ok(Rhs::Call(self.call(state)?));
         }
         self.reader.bump();
@@ -250,20 +269,22 @@ impl Parser<'_> {
     fn call(&mut self, state: &mut FnState) -> Result<Call, ParseError> {
         let line = self.reader.line();
         let word = self.reader.word()?;
+        if let Some((yields, uniform)) = self.reader.apply_head(&word)? {
+            let (callee, args, prompt, site) = self.reader.apply(state, uniform)?;
+            return Ok(Call::Apply {
+                callee,
+                args,
+                yields,
+                prompt,
+                site,
+            });
+        }
         match word.as_str() {
             "call" => {
                 let callee = self.reader.function_name()?;
                 let args = self.reader.list('(', ')', |p| p.atom(state))?;
                 Ok(Call::Direct(callee, args))
             }
-            "yields" => {
-                if !self.reader.at_word("apply") {
-                    return Err(self.reader.error_here("expected `apply` after `yields`"));
-                }
-                self.reader.bump();
-                self.apply(state, true)
-            }
-            "apply" => self.apply(state, false),
             "clause" => {
                 let (effect, op) = self.reader.operation_ref()?;
                 let callee = self.reader.atom(state)?;
@@ -277,23 +298,5 @@ impl Parser<'_> {
             }
             _ => Err(error(line, format!("expected a call, found `{word}`"))),
         }
-    }
-
-    /// `apply` の後の、呼ぶ値と引数。
-    fn apply(&mut self, state: &mut FnState, yields: bool) -> Result<Call, ParseError> {
-        let callee = self.reader.atom(state)?;
-        let args = self.reader.list('(', ')', |p| p.atom(state))?;
-        let prompt = if self.reader.at_word("prompt") {
-            self.reader.bump();
-            Some(self.reader.var(state)?)
-        } else {
-            None
-        };
-        Ok(Call::Apply {
-            callee,
-            args,
-            yields,
-            prompt,
-        })
     }
 }

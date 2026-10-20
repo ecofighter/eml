@@ -844,7 +844,7 @@ fn f() -> tobj {{
     for body in [
         "  let d.0: tobj = con Option #1(&k)\n  return d.0\n",
         "  let c.0: tobj = closure g(&k)\n  return c.0\n",
-        "  let c.0: tobj = closure g(())\n  let t.1: tobj = apply c.0(&k)\n  return t.1\n",
+        "  let c.0: tobj = closure g(())\n  let t.1: tobj = apply c.0(&k: tobj)\n  return t.1\n",
     ] {
         let text = format!(
             "{OPTION}fn f() -> tobj {{\n{body}}}\nfn g(a.0: tobj, b.1: unit) -> tobj {{\n  return a.0\n}}\n{K}"
@@ -912,7 +912,7 @@ fn the_operands_of_uniform_calls_are_compatible_with_tobj() {
     for (params, body, message) in [
         (
             "c.0: tobj, n.1: int",
-            "  let t.2: tobj = apply n.1(())\n  return t.2\n",
+            "  let t.2: tobj = apply n.1((): unit)\n  return t.2\n",
             "the callee of an apply is `n.1` (int), but an apply takes tobj",
         ),
         (
@@ -953,7 +953,7 @@ fn the_results_of_uniform_calls_are_bound_to_variables_compatible_with_tobj() {
     for (params, body, message) in [
         (
             "",
-            "  let t.0: int = apply &i(())\n  return ()\n",
+            "  let t.0: int = apply &i((): unit)\n  return ()\n",
             "`t.0` (int) is bound to an apply, which returns tobj",
         ),
         (
@@ -980,7 +980,10 @@ fn the_result_of_a_tail_call_is_compatible_with_the_function() {
         format!("{ASK}fn f({params}) -> {ret} {{\n  tail {call}\n}}\n{K}{UNIFORM}")
     };
     // `unit` を返す関数は、`tobj` を返す呼び出しで終われる
-    assert_eq!(check(&tail("unit", "c.0: tobj", "apply c.0(())")), Ok(()));
+    assert_eq!(
+        check(&tail("unit", "c.0: tobj", "apply c.0((): unit)")),
+        Ok(())
+    );
     for (ret, params, call, message) in [
         (
             "tobj",
@@ -991,7 +994,7 @@ fn the_result_of_a_tail_call_is_compatible_with_the_function() {
         (
             "int",
             "c.0: tobj",
-            "apply c.0(())",
+            "apply c.0((): unit)",
             "a tail apply returns tobj, but this function returns int",
         ),
         (
@@ -1334,7 +1337,7 @@ fn a_borrowed_field_cannot_be_consumed() {
         "  let t.4: obj = con Box #0(x.2)\n  return t.4\n",
         "  let t.4: obj = extern Prelude.++(x.2, x.2)\n  return t.4\n",
         "  let t.4: obj = apply c.1(x.2)\n  return t.4\n",
-        "  let t.4: obj = apply x.2(())\n  return t.4\n",
+        "  let t.4: obj = apply x.2((): unit)\n  return t.4\n",
     ] {
         assert_eq!(
             check(&borrowing_arm(body)),
@@ -2029,7 +2032,7 @@ fn the_lowered_level_rejects_tail_calls() {
             "a tail call is formed before contract in `f`",
         ),
         (
-            "fn f(c.0: tobj) -> tobj {\n  tail apply c.0(())\n}\n",
+            "fn f(c.0: tobj) -> tobj {\n  tail apply c.0((): unit)\n}\n",
             "a tail apply is formed before contract in `f`",
         ),
     ] {
@@ -2515,7 +2518,7 @@ fn a_clause_function_is_only_put_into_a_handler_table() {
     );
     assert_eq!(
         check_lowered(&format!(
-            "{COUNTER}fn f(c.0: tobj) -> tobj {{\n  let t.1: tobj = apply c.0(&g)\n  return t.1\n}}\n{PUT_CLAUSE}"
+            "{COUNTER}fn f(c.0: tobj) -> tobj {{\n  let t.1: tobj = apply c.0(&g: tobj)\n  return t.1\n}}\n{PUT_CLAUSE}"
         )),
         used_as_value
     );
@@ -2973,7 +2976,7 @@ fn marked(body: &str, ev: &str) -> String {
 #[test]
 fn prompt_marker_is_accepted() {
     let text = marked(
-        "  let x.2: tobj = yields apply b.0(()) prompt ev.1\n  decref x.2\n  return ev.1\n",
+        "  let x.2: tobj = yields apply b.0((): unit) prompt ev.1\n  decref x.2\n  return ev.1\n",
         "ev.1: obj",
     );
     assert_eq!(check(&text), Ok(()));
@@ -2981,7 +2984,8 @@ fn prompt_marker_is_accepted() {
 
 #[test]
 fn prompt_marker_in_tail_position_is_rejected() {
-    let text = "fn f(b.0: tobj, ev.1: obj) -> tobj {\n  tail yields apply b.0(()) prompt ev.1\n}\n";
+    let text =
+        "fn f(b.0: tobj, ev.1: obj) -> tobj {\n  tail yields apply b.0((): unit) prompt ev.1\n}\n";
     assert_eq!(
         check_scopes(text),
         Err(
@@ -2994,7 +2998,7 @@ fn prompt_marker_in_tail_position_is_rejected() {
 #[test]
 fn prompt_marker_on_a_dead_variable_is_rejected() {
     let text = marked(
-        "  let x.2: tobj = yields apply b.0(()) prompt ev.1\n  return ()\n",
+        "  let x.2: tobj = yields apply b.0((): unit) prompt ev.1\n  return ()\n",
         "ev.1: obj",
     )
     .replace("-> obj", "-> unit");
@@ -3009,7 +3013,7 @@ fn prompt_marker_on_a_dead_variable_is_rejected() {
 
 #[test]
 fn prompt_marker_on_a_non_obj_variable_is_rejected() {
-    let text = "fn f(b.0: tobj, ev.1: tobj) -> tobj {\n  let x.2: tobj = yields apply b.0(()) prompt ev.1\n  decref x.2\n  return ev.1\n}\n";
+    let text = "fn f(b.0: tobj, ev.1: tobj) -> tobj {\n  let x.2: tobj = yields apply b.0((): unit) prompt ev.1\n  decref x.2\n  return ev.1\n}\n";
     assert_eq!(
         check_scopes(text),
         Err("`ev.1` is the prompt marker of an apply, but it is tobj, not obj in `f`".to_string())
@@ -3019,7 +3023,7 @@ fn prompt_marker_on_a_non_obj_variable_is_rejected() {
 #[test]
 fn prompt_marker_on_an_unowned_variable_is_rejected() {
     let text = marked(
-        "  decref ev.1\n  let x.2: tobj = yields apply b.0(()) prompt ev.1\n  decref x.2\n  return ev.1\n",
+        "  decref ev.1\n  let x.2: tobj = yields apply b.0((): unit) prompt ev.1\n  decref x.2\n  return ev.1\n",
         "ev.1: obj",
     );
     assert_eq!(
@@ -3037,7 +3041,7 @@ fn prompt_marker_used_only_in_a_sibling_branch_is_rejected() {
         "{BOOL}fn f(b.0: tobj, ev.1: obj, c.2: enum, e.3: obj) -> obj {{
   switch c.2 Prelude.Bool {{ #0 -> b1, #1 -> b2 }}
 b1:
-  let x.4: tobj = yields apply b.0(()) prompt ev.1
+  let x.4: tobj = yields apply b.0((): unit) prompt ev.1
   return e.3
 b2:
   return ev.1
@@ -3056,7 +3060,7 @@ b2:
 #[test]
 fn prompt_marker_passed_only_to_a_jump_is_accepted() {
     let text = "fn f(b.0: tobj, ev.1: obj) -> obj {
-  let x.2: tobj = yields apply b.0(()) prompt ev.1
+  let x.2: tobj = yields apply b.0((): unit) prompt ev.1
   jump b1(ev.1)
 b1(p.3: obj):
   return p.3
@@ -3350,6 +3354,42 @@ fn an_int_argument_for_an_obj_extern_parameter_is_rejected_at_the_entry_level() 
         check_lowered(text),
         Err(
             "argument 0 of `Prelude.++` is `n.0` (int), but the extern takes obj in `f`"
+                .to_string()
+        )
+    );
+}
+
+/// 入口の段では、型どおりの `apply` の場所の変数の Repr が変数と同じである。box の挿入の後の段は、引数を変換した
+/// 変数と場所を比べない (docs/superpowers/specs/2026-10-21-s14e-abi-struct-design.md の「`apply` の ABI」)。
+#[test]
+fn a_site_entry_must_match_its_variable() {
+    use eml_lir::{Call, Repr, Site};
+    let mut program = read(
+        "fn f(x.0: tobj, c.1: tobj) -> tobj {\n  let t.2: tobj = apply c.1(x.0)\n  return t.2\n}\n",
+    );
+    assert_eq!(verify_lowered(&program), Ok(()));
+    let Stmt::Let {
+        rhs: Rhs::Call(Call::Apply { site, .. }),
+        ..
+    } = &mut program.functions[0].blocks[0].stmts[0]
+    else {
+        panic!("expected an apply");
+    };
+    *site = Site::Typed(vec![Repr::Int]);
+    assert_eq!(
+        verify_lowered(&program).map_err(|error| error.message),
+        Err("the apply site gives `x.0` int but the variable is tobj".to_string())
+    );
+    assert_eq!(verify_scopes(&program), Ok(()));
+}
+
+/// 役割が一様にする引数の数は、関数の引数の数を超えない。
+#[test]
+fn a_role_takes_no_more_uniform_parameters_than_the_function_has() {
+    assert_eq!(
+        check_lowered("internal role return fn r(x.0: tobj) -> tobj {\n  return x.0\n}\n"),
+        Err(
+            "the role return makes 2 parameters uniform, but the function takes 1 in `r`"
                 .to_string()
         )
     );

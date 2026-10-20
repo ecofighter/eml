@@ -5,7 +5,7 @@
 use eml_extern::Extern;
 use eml_lir::{
     Atom, BlockId, Case, Ctor, EffectInfo, FnIdx, Layout, LayoutId, Loc, Mark, MaskItem, Prim,
-    Repr, VarId, VarInfo,
+    Repr, Role, Site, VarId, VarInfo,
 };
 
 mod builder;
@@ -64,6 +64,8 @@ pub struct CoreFn {
     /// 名前が同じ関数がどのプログラムでも同じ ABI になるためである (docs/spec/vm.md の「追記」)。テキストの形では
     /// `internal fn` と書く (docs/spec/core-ir.md)。
     pub internal: bool,
+    /// EP のしくみの中での役割 (`eml_lir::Role`)。テキストの形では `fn` の直前に `role R` と書く。
+    pub role: Role,
     /// 本体が yield しうる (docs/spec/core-ir.md の「`yields` の印」)。
     /// テキストの形では `internal` の後に `yields fn` と書く。
     pub yields: bool,
@@ -355,6 +357,8 @@ pub enum Call {
         /// フレームまで VM のスタックを巻き戻す。`v` は呼び出しが消費も読みもしないので `for_each_atom` は
         /// 見せず、呼び出しの後も生きている `obj` の変数である (docs/spec/lir.md の「着地の印」)。
         prompt: Option<VarId>,
+        /// 引数を渡す規約 (`eml_lir::Site`)。
+        site: Site,
     },
     /// handler を設け、本体の関数に `()` を適用する。translate だけが出し、EP が基本操作と `prompt$` の呼び出しに
     /// 置き換える (docs/spec/core-ir.md の「handle と `prompt$`」)。本体と節と `return` の節は、捕まえた変数を先頭の
@@ -414,6 +418,7 @@ impl Call {
                 args,
                 yields: _,
                 prompt: _,
+                site: _,
             }
             | Call::Clause {
                 effect: _,
@@ -458,6 +463,7 @@ impl Call {
                 args,
                 yields: _,
                 prompt: _,
+                site: _,
             }
             | Call::Clause {
                 effect: _,

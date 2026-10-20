@@ -26,8 +26,8 @@
 use std::collections::{BTreeMap, HashMap};
 
 use crate::check::{
-    BlockShape, Context, Dominators, FnSummary, Tables, TermShape, boxed_scalars, clause_function,
-    field_count, shape,
+    self, BlockShape, Context, Dominators, FnSummary, Tables, TermShape, boxed_scalars,
+    clause_function, field_count, shape,
 };
 use crate::liveness;
 use crate::reuse;
@@ -95,7 +95,7 @@ pub(crate) fn unwind_points(program: &Program) -> Vec<Result<Vec<UnwindPoint>, V
 
 fn verify_at(program: &Program, level: Level) -> Result<(), VerifyError> {
     with_tables(program, |tables| {
-        // `clause` の印の関数の ABI は、参照ごとでなく関数ごとに1回だけ確かめる
+        // `clause` の印の関数の ABI と役割は、参照ごとでなく関数ごとに1回だけ確かめる
         for function in &program.functions {
             clause_function(
                 &program.effects,
@@ -109,6 +109,7 @@ fn verify_at(program: &Program, level: Level) -> Result<(), VerifyError> {
                 function.ret_mark,
                 level >= Level::Scopes,
             )
+            .and_then(|()| check::role(function.role, function.params().len()))
             .map_err(|message| VerifyError {
                 function: function.name.clone(),
                 message,
@@ -1322,6 +1323,10 @@ impl<'a> Checker<'a> {
             }
         }
         self.consume_all(owned, |f| call.for_each_atom(f))?;
+        if let Call::Apply { args, site, .. } = call {
+            self.cx
+                .check_site(args, site, self.level == Level::Lowered)?;
+        }
         match call.prompt() {
             Some(marker) => self.check_prompt(owned, call, marker),
             None => Ok(()),
@@ -1418,6 +1423,7 @@ impl<'a> Checker<'a> {
                 args,
                 yields: _,
                 prompt: _,
+                site: _,
             } => {
                 let uniform = operands("an apply");
                 uniform(&|| "the callee".to_string(), *callee)?;

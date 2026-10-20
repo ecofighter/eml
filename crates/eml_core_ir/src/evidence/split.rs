@@ -10,7 +10,7 @@ use std::ops::Range;
 use crate::liveness::{insert_var, live_after_term, live_in, step_back};
 use crate::tail::tail_position_call;
 use crate::{Block, Call, CoreFn, Program, Rhs, Stmt, Term};
-use eml_lir::{Atom, BlockId, FnIdx, Mark, MaskItem, Prim, Repr, VarId, VarInfo, operation};
+use eml_lir::{Atom, BlockId, FnIdx, Mark, MaskItem, Prim, Repr, Role, VarId, VarInfo, operation};
 
 use super::{Helpers, captured_mark, direct, dummy, named, reserve, yield_switch};
 
@@ -141,6 +141,7 @@ fn yield_points(
                     args: _,
                     yields,
                     prompt: _,
+                    site: _,
                 } => *yields,
                 Call::Clause { effect, op, .. } => {
                     operation(&program.effects, *effect, *op).resumable
@@ -290,12 +291,19 @@ impl<'a> Splitter<'a> {
     }
 
     /// 継続の関数 `f$kN` は κ に合成する値として生まれるので内部の関数にし、直接呼ばれるだけの合流のブロックの関数
-    /// `f$jJ` は内部の関数にしない (`internal`、docs/spec/lir.md の「一様な関数」)。
+    /// `f$jJ` は内部の関数にしない (`internal`、docs/spec/lir.md の「一様な関数」)。`f$kN` は再開の値を一様に受ける
+    /// `Continuation` の役割を持ち、`f$jJ` は役割を持たない
+    /// (docs/superpowers/specs/2026-10-21-s14e-abi-struct-design.md の「関数の ABI」)。
     fn continuation(&self, idx: FnIdx, program: &Program, body: Out, internal: bool) -> CoreFn {
         let (vars, blocks) = body.compact();
         CoreFn {
             name: program.function(idx).name.clone(),
             internal,
+            role: if internal {
+                Role::Continuation
+            } else {
+                Role::Typed
+            },
             yields: true,
             clause: None,
             vars,

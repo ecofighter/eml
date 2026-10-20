@@ -265,9 +265,12 @@ fn lambdas_and_handlers_are_numbered_in_expression_order() {
         .lines()
         .filter_map(|line| {
             let line = line.strip_prefix("internal ").unwrap_or(line);
-            line.strip_prefix("yields ")
-                .unwrap_or(line)
-                .strip_prefix("fn ")
+            let line = line.strip_prefix("yields ").unwrap_or(line);
+            let line = line
+                .strip_prefix("role ")
+                .and_then(|rest| rest.split_once(' '))
+                .map_or(line, |(_, rest)| rest);
+            line.strip_prefix("fn ")
         })
         .map(|line| &line[..line.find('(').expect("a parameter list")])
         .collect();
@@ -300,7 +303,7 @@ fn reprs_follow_the_types() {
     fn make(n.0: int, b.1: enum, s.2: obj) -> tobj {
       let d.3: obj = con (,) #0(n.0, s.2)
       let c.4: tobj = closure make$lambda0(n.0)
-      let t.5: int = apply c.4(1)
+      let t.5: int = apply c.4(1: int)
       let d.6: tobj = con Shape #1(t.5)
       let t.7: unit = drop d.3
       return d.6
@@ -324,7 +327,7 @@ fn the_entry_applies_a_point_free_main_to_unit() {
     }
     fn entry$main() -> unit {
       let f.0: tobj = call main()
-      let t.1: unit = apply f.0(())
+      let t.1: unit = apply f.0((): unit)
       return t.1
     }
     "#);
@@ -345,16 +348,16 @@ fn handlers_are_lifted_with_their_return_reprs() {
       let t.5: unit = extern Prelude.println(t.4)
       return t.5
     }
-    internal yields fn main$handle0(p.0: unit) -> int {
+    internal yields role body fn main$handle0(p.0: unit) -> int {
       let s.1: obj = const "x"
       let t.2: int = perform Ask.ask(s.1)
       return t.2
     }
-    internal fn main$handle0$ask(key.0: obj, k.1: tobj lin, p.2: unit) -> int {
+    internal role clause fn main$handle0$ask(key.0: obj, k.1: tobj lin, p.2: unit) -> int {
       let t.3: int = resume k.1(1, ())
       return t.3
     }
-    internal fn main$handle0$return(x.0: int, p.1: unit) -> int {
+    internal role return fn main$handle0$return(x.0: int, p.1: unit) -> int {
       let t.2: int = extern "Prelude.Num Int.+"(x.0, 1)
       return t.2
     }
@@ -370,7 +373,7 @@ fn a_continuation_passed_to_a_function_is_wrapped() {
     let text = "effect Ask where\n  ask : Unit -> Int\n\ntwice : (Int -> <e> Int) -> <e> Int\ntwice f = f 1\n\nmain : Unit -> <IO> Unit\nmain () =\n  let n =\n    handle ask () with\n      | ctl ask () k -> twice k\n  println (show n)";
     let shown = core_text(text, Pass::Translate);
     insta::assert_snapshot!(function(&shown, "main$handle0$ask"), @"
-    internal fn main$handle0$ask(p.0: unit, k.1: tobj lin, p.2: unit) -> int {
+    internal role clause fn main$handle0$ask(p.0: unit, k.1: tobj lin, p.2: unit) -> int {
       let c.3: tobj lin = closure cont$(k.1)
       let t.4: int = call twice(c.3)
       return t.4
@@ -859,7 +862,7 @@ fn user_effects_are_numbered_after_io() {
     effect B { tell(int) -> unit }
     yields fn "needs_a<e>"(f.0: tobj poly) -> int {
       let t.1: int = perform A.ask(())
-      let t.2: int = mask [A] yields apply f.0(())
+      let t.2: int = mask [A] yields apply f.0((): unit)
       let t.3: int = extern "Prelude.Num Int.+"(t.1, t.2)
       return t.3
     }
@@ -873,26 +876,26 @@ fn user_effects_are_numbered_after_io() {
       let t.3: unit = extern Prelude.println(t.2)
       return t.3
     }
-    internal yields fn main$handle1(p.0: unit) -> int {
+    internal yields role body fn main$handle1(p.0: unit) -> int {
       let t.1: int = handle A((), &main$handle0) { ask: &main$handle0$ask } return &main$handle0$return
       return t.1
     }
-    internal yields fn main$handle0(p.0: unit) -> int {
+    internal yields role body fn main$handle0(p.0: unit) -> int {
       let t.1: int = call "needs_a<e>"(&told)
       return t.1
     }
-    internal yields fn main$handle0$ask(p.0: unit, k.1: tobj lin, p.2: unit) -> int {
+    internal yields role clause fn main$handle0$ask(p.0: unit, k.1: tobj lin, p.2: unit) -> int {
       let t.3: int = resume k.1(1, ())
       return t.3
     }
-    internal yields fn main$handle0$return($r.0: int, p.1: unit) -> int {
+    internal yields role return fn main$handle0$return($r.0: int, p.1: unit) -> int {
       return $r.0
     }
-    internal fn main$handle1$tell(m.0: int, k.1: tobj lin, p.2: unit) -> int {
+    internal role clause fn main$handle1$tell(m.0: int, k.1: tobj lin, p.2: unit) -> int {
       let t.3: int = resume k.1((), ())
       return t.3
     }
-    internal fn main$handle1$return($r.0: int, p.1: unit) -> int {
+    internal role return fn main$handle1$return($r.0: int, p.1: unit) -> int {
       return $r.0
     }
     fn entry$main() -> unit {
@@ -959,19 +962,19 @@ fn names_outside_the_entry_are_qualified_with_their_module() {
       return t.4
     }
     yields fn Report.Csv.parse(p.0: unit) -> obj {
-      let t.1: int = yields apply &op$Report.Csv.next(())
+      let t.1: int = yields apply &op$Report.Csv.next((): unit)
       let t.2: obj = apply &con$Report.Csv.Row(t.1)
       return t.2
     }
-    internal yields fn main$handle0(p.0: unit) -> obj {
+    internal yields role body fn main$handle0(p.0: unit) -> obj {
       let t.1: obj = call Report.Csv.parse(())
       return t.1
     }
-    internal fn main$handle0$next(p.0: unit, k.1: tobj lin, p.2: unit) -> obj {
+    internal role clause fn main$handle0$next(p.0: unit, k.1: tobj lin, p.2: unit) -> obj {
       let t.3: obj = resume k.1(1, ())
       return t.3
     }
-    internal fn main$handle0$return(r.0: obj, p.1: unit) -> obj {
+    internal role return fn main$handle0$return(r.0: obj, p.1: unit) -> obj {
       return r.0
     }
     internal fn main$extern0(p.0: obj) -> unit {
@@ -1073,9 +1076,9 @@ fn partial_and_extra_arguments_use_closures() {
     }
     fn main(p.0: unit) -> unit {
       let c.1: tobj = closure add(1)
-      let t.2: int = apply c.1(2)
+      let t.2: int = apply c.1(2: int)
       let t.3: tobj = call adder(3)
-      let t.4: int = apply t.3(4)
+      let t.4: int = apply t.3(4: int)
       let t.5: int = extern "Prelude.Num Int.+"(t.2, t.4)
       let t.6: obj = extern "Prelude.Show Int.show"(t.5)
       let t.7: unit = extern Prelude.println(t.6)
@@ -1254,16 +1257,16 @@ fn handlers_are_lifted_to_closures() {
       let t.5: unit = extern Prelude.println(t.4)
       return t.5
     }
-    internal yields fn main$handle0(p.0: unit) -> int {
+    internal yields role body fn main$handle0(p.0: unit) -> int {
       let s.1: obj = const "x"
       let t.2: int = perform Ask.ask(s.1)
       return t.2
     }
-    internal fn main$handle0$ask(key.0: obj, k.1: tobj lin, p.2: unit) -> int {
+    internal role clause fn main$handle0$ask(key.0: obj, k.1: tobj lin, p.2: unit) -> int {
       let t.3: int = resume k.1(1, ())
       return t.3
     }
-    internal fn main$handle0$return(x.0: int, p.1: unit) -> int {
+    internal role return fn main$handle0$return(x.0: int, p.1: unit) -> int {
       let t.2: int = extern "Prelude.Num Int.+"(x.0, 1)
       return t.2
     }
@@ -1327,7 +1330,7 @@ fn a_constructor_used_as_a_function_value_is_wrapped() {
     insta::assert_snapshot!(function(&shown, "pairs"), @"
     fn pairs(n.0: int) -> obj {
       let c.1: tobj = closure con$Pair(n.0)
-      let t.2: obj = apply c.1(2)
+      let t.2: obj = apply c.1(2: int)
       return t.2
     }
     ");
@@ -1450,14 +1453,14 @@ fn constructor_patterns_in_handler_clause_parameters() {
     let text = "data Box a = | Box a\n\neffect Give where\n  give : Box Int -> Int\n\nrun : Unit -> Int\nrun () =\n  handle Box (give (Box 1)) with\n    | ctl give (Box n) k -> k n\n    | return (Box r) -> r\n\nmain : Unit -> <IO> Unit\nmain () = println (show (run ()))";
     let shown = core_text(text, Pass::Translate);
     insta::assert_snapshot!(function(&shown, "run$handle0$give"), @"
-    internal fn run$handle0$give(p.0: obj, k.1: tobj lin, p.2: unit) -> int {
+    internal role clause fn run$handle0$give(p.0: obj, k.1: tobj lin, p.2: unit) -> int {
       unpack p.0 Box #0(n.3: int)
       let t.4: int = resume k.1(n.3, ())
       return t.4
     }
     ");
     insta::assert_snapshot!(function(&shown, "run$handle0$return"), @"
-    internal fn run$handle0$return(p.0: obj, p.1: unit) -> int {
+    internal role return fn run$handle0$return(p.0: obj, p.1: unit) -> int {
       unpack p.0 Box #0(r.2: int)
       return r.2
     }
@@ -1609,18 +1612,18 @@ fn a_handler_with_a_state_passes_its_initial_value_and_takes_the_state_from_its_
       let t.3: unit = extern Prelude.println(t.2)
       return t.3
     }
-    internal yields fn main$handle0(p.0: unit) -> int {
+    internal yields role body fn main$handle0(p.0: unit) -> int {
       let t.1: int = perform Ask.ask(())
       let t.2: int = perform Ask.ask(())
       let t.3: int = extern "Prelude.Num Int.+"(t.1, t.2)
       return t.3
     }
-    internal fn main$handle0$ask(p.0: unit, k.1: tobj lin, st.2: int) -> int {
+    internal role clause fn main$handle0$ask(p.0: unit, k.1: tobj lin, st.2: int) -> int {
       let t.3: int = extern "Prelude.Num Int.+"(st.2, 1)
       let t.4: int = resume k.1(st.2, t.3)
       return t.4
     }
-    internal fn main$handle0$return(x.0: int, st.1: int) -> int {
+    internal role return fn main$handle0$return(x.0: int, st.1: int) -> int {
       let t.2: int = extern "Prelude.Num Int.*"(x.0, st.1)
       return t.2
     }
@@ -1665,26 +1668,26 @@ fn effects_are_numbered_in_declaration_order() {
       let t.5: unit = extern Prelude.println(t.4)
       return t.5
     }
-    internal yields fn main$handle0(p.0: unit) -> int {
+    internal yields role body fn main$handle0(p.0: unit) -> int {
       let t.1: int = perform A.a(())
       return t.1
     }
-    internal fn main$handle0$a(p.0: unit, k.1: tobj lin, p.2: unit) -> int {
+    internal role clause fn main$handle0$a(p.0: unit, k.1: tobj lin, p.2: unit) -> int {
       let t.3: int = resume k.1(1, ())
       return t.3
     }
-    internal fn main$handle0$return($r.0: int, p.1: unit) -> int {
+    internal role return fn main$handle0$return($r.0: int, p.1: unit) -> int {
       return $r.0
     }
-    internal yields fn main$handle1(p.0: unit) -> int {
+    internal yields role body fn main$handle1(p.0: unit) -> int {
       let t.1: int = perform B.b(())
       return t.1
     }
-    internal fn main$handle1$b(p.0: unit, k.1: tobj lin, p.2: unit) -> int {
+    internal role clause fn main$handle1$b(p.0: unit, k.1: tobj lin, p.2: unit) -> int {
       let t.3: int = resume k.1(2, ())
       return t.3
     }
-    internal fn main$handle1$return($r.0: int, p.1: unit) -> int {
+    internal role return fn main$handle1$return($r.0: int, p.1: unit) -> int {
       return $r.0
     }
     fn entry$main() -> unit {
@@ -1842,7 +1845,7 @@ fn a_masked_callback_call() {
     insta::assert_snapshot!(function(&core_text(&text, Pass::Translate), "run@[Int]"), @r#"
     yields fn "run@[Int]"(cb.0: tobj poly) -> int {
       let t.1: int = perform State.get(())
-      let t.2: int = mask [State] apply cb.0(())
+      let t.2: int = mask [State] apply cb.0((): unit)
       return t.2
     }
     "#);
@@ -1871,8 +1874,8 @@ main () =
       k ()
 ";
     insta::assert_snapshot!(function(&core_text(text, Pass::Translate), "render$handle0"), @"
-    internal yields fn render$handle0(g.0: tobj poly, p.1: unit) -> unit {
-      let t.2: unit = mask [Yield@1] yields apply g.0(())
+    internal yields role body fn render$handle0(g.0: tobj poly, p.1: unit) -> unit {
+      let t.2: unit = mask [Yield@1] yields apply g.0((): unit)
       return t.2
     }
     ");
@@ -1902,8 +1905,8 @@ fn arrows_with_different_masks_are_applied_apart() {
     );
     insta::assert_snapshot!(function(&core_text(&text, Pass::Translate), "h"), @"
     yields fn h(f.0: tobj poly) -> int {
-      let t.1: tobj poly = mask [State] apply f.0(1)
-      let t.2: int = yields apply t.1(2)
+      let t.1: tobj poly = mask [State] apply f.0(1: int)
+      let t.2: int = yields apply t.1(2: int)
       return t.2
     }
     ");
@@ -1916,7 +1919,7 @@ fn a_continuation_call_in_its_clause_has_no_mask() {
         "{STATE}run : (Unit -> <State Int | e> a) -> <e> a\nrun action =\n  handle action () from 0 with\n    | ctl get () k st -> k st st\n    | ctl put n k _ -> k () n\n    | return x _ -> x\n\nmain : Unit -> <IO> Unit\nmain () = println (show (run (fn () -> get ())))\n"
     );
     insta::assert_snapshot!(function(&core_text(&text, Pass::Translate), "run@[Int]$handle0$get"), @r#"
-    internal fn "run@[Int]$handle0$get"(p.0: unit, k.1: tobj lin, st.2: int) -> int {
+    internal role clause fn "run@[Int]$handle0$get"(p.0: unit, k.1: tobj lin, st.2: int) -> int {
       let t.3: int = resume k.1(st.2, st.2)
       return t.3
     }
@@ -1958,7 +1961,7 @@ main () =
 ";
     // handle の番号は HIR の式の ID の順なので、内側の handle が `f<e>$handle0` になる
     insta::assert_snapshot!(function(&core_text(text, Pass::Translate), "f<e>$handle0"), @r#"
-    internal yields fn "f<e>$handle0"(k.0: tobj lin, p.1: unit) -> int {
+    internal yields role body fn "f<e>$handle0"(k.0: tobj lin, p.1: unit) -> int {
       let t.2: int = mask [Log] resume k.0(1, ())
       return t.2
     }
@@ -2115,7 +2118,10 @@ fn a_continuation_applied_to_extra_arguments_is_resumed_then_applied() {
         shown.contains("let t.3: tobj = resume k.1(1, ())"),
         "{shown}"
     );
-    assert!(shown.contains("let t.4: int = apply t.3(2)"), "{shown}");
+    assert!(
+        shown.contains("let t.4: int = apply t.3(2: int)"),
+        "{shown}"
+    );
     assert!(!shown.contains("cont$"), "{shown}");
 }
 
@@ -2496,7 +2502,7 @@ fn an_instance_method_with_fewer_parameters_is_called_then_applied() {
     insta::assert_snapshot!(function(&shown, "main"), @r#"
     fn main(p.0: unit) -> unit {
       let t.1: tobj = call "Combine Int.combine"()
-      let t.2: int = apply t.1(1, 2)
+      let t.2: int = apply t.1(1: int, 2: int)
       let t.3: obj = extern "Prelude.Show Int.show"(t.2)
       let t.4: unit = extern Prelude.println(t.3)
       return t.4
@@ -2824,7 +2830,7 @@ fn a_handle_body_and_clause_closures_take_the_join_of_their_captures() {
     }
     "#);
     insta::assert_snapshot!(function(&ir, "main$handle0"), @"
-    internal yields fn main$handle0(f.0: obj lin, p.1: unit) -> int {
+    internal yields role body fn main$handle0(f.0: obj lin, p.1: unit) -> int {
       let t.2: int = call use_file(f.0)
       return t.2
     }
@@ -3387,18 +3393,18 @@ fn a_lin_enum_variable_is_unr() {
     }
     ");
     let lir = lir_text(text, eml_lir::Pass::Perceus);
-    insta::assert_snapshot!(function(&lir, "hold$k0"), @"
-    internal yields fn hold$k0(t.4: tobj, t.5: tobj) -> tobj {
+    insta::assert_snapshot!(function(&lir, "hold$k0"), @r#"
+    internal yields role cont fn hold$k0(t.4: tobj, t.5: tobj) -> tobj {
       let t.0: enum = unbox t.4
       decref t.4
       let t.1: int = unbox t.5
       decref t.5
       let t.3: int = call spend_after(0, t.0)
-      let t.2: int = extern \"Prelude.Num Int.+\"(t.3, t.1)
+      let t.2: int = extern "Prelude.Num Int.+"(t.3, t.1)
       let t.6: tobj = box t.2
       return t.6
     }
-    ");
+    "#);
 }
 
 #[test]
@@ -3512,7 +3518,7 @@ fn a_var_lowers_to_a_handle() {
       let t.1: unit = handle var$0$x(1, &main$var0) { get: &main$var0$get, set: &main$var0$set } return &main$var0$return
       return t.1
     }
-    internal yields fn main$var0(p.0: unit) -> unit {
+    internal yields role body fn main$var0(p.0: unit) -> unit {
       let t.1: int = perform var$0$x.get(())
       let t.2: int = extern "Prelude.Num Int.+"(t.1, 1)
       let t.3: unit = perform var$0$x.set(t.2)
@@ -3521,15 +3527,15 @@ fn a_var_lowers_to_a_handle() {
       let t.6: unit = extern Prelude.println(t.5)
       return t.6
     }
-    internal fn main$var0$get(p.0: unit, k.1: tobj lin, st.2: int) -> unit {
+    internal role clause fn main$var0$get(p.0: unit, k.1: tobj lin, st.2: int) -> unit {
       let t.3: unit = resume k.1(st.2, st.2)
       return t.3
     }
-    internal fn main$var0$set(v.0: int, k.1: tobj lin, st.2: int) -> unit {
+    internal role clause fn main$var0$set(v.0: int, k.1: tobj lin, st.2: int) -> unit {
       let t.3: unit = resume k.1((), v.0)
       return t.3
     }
-    internal fn main$var0$return(x.0: unit, st.1: int) -> unit {
+    internal role return fn main$var0$return(x.0: unit, st.1: int) -> unit {
       return x.0
     }
     fn entry$main() -> unit {
@@ -3537,4 +3543,86 @@ fn a_var_lowers_to_a_handle() {
       return t.0
     }
     "#);
+}
+
+/// ラムダは役割を持たず、handle と `var` の範囲の本体は `Body`、節は `Clause`、`return` の節は `Return` になる。
+/// `apply` の場所は、変数の引数には変数の Repr を、定数の引数にはその矢印の引数の型の Repr を並べる。`None` は
+/// `#0` だが、`Option Int` の位置なので `enum` でなく `tobj` になる
+/// (docs/superpowers/specs/2026-10-21-s14e-abi-struct-design.md の「関数の ABI」「`apply` の ABI」)。
+#[test]
+fn lambda_and_handler_roles() {
+    use eml_core_ir::{Call, Rhs, Stmt, pretty};
+    use eml_lir::{Repr, Role, Site};
+    let text = "\
+effect Tick where
+  tick : Int -> Unit
+
+main : Unit -> <IO, Panic> Unit
+main () =
+  let g = fn o -> match o with
+    | None -> 0
+    | Some y -> y
+  let n = g None
+  let f = fn x -> x + 1
+  let m = f n
+  let r = handle tick m from 0 with
+    | fn tick d st -> ((), st + d)
+    | return x st -> st
+  var c = r
+  c <- c + 1
+  println (show c)
+";
+    let program = eml_test_support::core_until(text, Pass::Translate);
+    let role = |name: &str| {
+        program
+            .functions
+            .iter()
+            .find(|function| function.name == name)
+            .unwrap_or_else(|| panic!("no `{name}` in\n{}", pretty(&program)))
+            .role
+    };
+    for (name, expected) in [
+        ("main", Role::Typed),
+        ("main$lambda0", Role::Typed),
+        ("main$lambda1", Role::Typed),
+        ("main$handle0", Role::Body),
+        ("main$handle0$tick", Role::Clause),
+        ("main$handle0$return", Role::Return),
+        ("main$var0", Role::Body),
+        ("main$var0$get", Role::Clause),
+        ("main$var0$set", Role::Clause),
+        ("main$var0$return", Role::Return),
+    ] {
+        assert_eq!(role(name), expected, "{name}\n{}", pretty(&program));
+    }
+    let main = program
+        .functions
+        .iter()
+        .find(|function| function.name == "main")
+        .expect("main");
+    let sites: Vec<&Site> = main
+        .blocks
+        .iter()
+        .flat_map(|block| &block.stmts)
+        .filter_map(|stmt| match stmt {
+            Stmt::Let {
+                rhs:
+                    Rhs::Call {
+                        call: Call::Apply { site, .. },
+                        ..
+                    },
+                ..
+            } => Some(site),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        sites,
+        [
+            &Site::Typed(vec![Repr::TObj]),
+            &Site::Typed(vec![Repr::Int])
+        ],
+        "{}",
+        pretty(&program)
+    );
 }

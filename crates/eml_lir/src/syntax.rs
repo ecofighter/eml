@@ -10,8 +10,8 @@ use std::fmt::Write as _;
 
 use crate::{
     Atom, BlockId, Case, CasePattern, Ctor, EffectInfo, FloatBits, FnIdx, Immediates, Layout,
-    LayoutCtor, LayoutId, Loc, Mark, MaskItem, OpRet, OperationInfo, ParseError, Prim, Repr, VarId,
-    VarInfo,
+    LayoutCtor, LayoutId, Loc, Mark, MaskItem, OpRet, OperationInfo, ParseError, Prim, Repr, Role,
+    Site, VarId, VarInfo,
 };
 
 /// エフェクトの名前。表にない番号は `#N` で書く。誤りを含む IR も表示でき、`parse` が読み戻せて、verifier がその番号を
@@ -287,12 +287,13 @@ pub struct FnState {
     targets: Vec<(u32, usize)>,
 }
 
-/// `[internal] [yields] [clause E.op] fn name(params) -> repr` の欄。
+/// `[internal] [yields] [clause E.op] [role R] fn name(params) -> repr` の欄。
 pub struct FnHeader {
     pub name: String,
     pub internal: bool,
     pub yields: bool,
     pub clause: Option<(u32, u32)>,
+    pub role: Role,
     pub params: Vec<VarId>,
     pub ret: Repr,
     pub ret_mark: Mark,
@@ -549,8 +550,8 @@ impl<'t> Reader<'t> {
         Ok(())
     }
 
-    /// `[internal] [yields] [clause E.op] fn name(params) -> repr {` を読む。入口のブロックとラベルの付いたブロックの
-    /// 列が続く。
+    /// `[internal] [yields] [clause E.op] [role R] fn name(params) -> repr {` を読む。入口のブロックとラベルの付いた
+    /// ブロックの列が続く。
     pub fn function_header(&mut self, state: &mut FnState) -> Result<FnHeader, ParseError> {
         let internal = self.at_word("internal");
         if internal {
@@ -566,6 +567,12 @@ impl<'t> Reader<'t> {
         } else {
             None
         };
+        let role = if self.at_word("role") {
+            self.pos += 1;
+            self.role()?
+        } else {
+            Role::Typed
+        };
         self.expect_word("fn")?;
         let name = self.name()?;
         let params = self.list('(', ')', |p| p.binder(state))?;
@@ -578,10 +585,138 @@ impl<'t> Reader<'t> {
             internal,
             yields,
             clause,
+            role,
             params,
             ret,
             ret_mark,
         })
+    }
+
+    /// `role` の後の語。`Typed` は `role` を書かないので、ここでは読まない。
+    fn role(&mut self) -> Result<Role, ParseError> {
+        let line = self.line();
+        let word = self.word()?;
+        Role::ALL
+            .into_iter()
+            .find(|role| role.name() == Some(word.as_str()))
+            .ok_or_else(|| {
+                error(
+                    line,
+                    format!("expected a role (body, clause, return or cont), found `{word}`"),
+                )
+            })
+    }
+
+    /// `call` が読んだ語 `word` が `apply` の頭 (`[yields] [uniform] apply`) なら、`apply` までを読んで
+    /// (`yields`, `uniform`) を返す。ほかの語なら `None` を返す。
+    pub fn apply_head(&mut self, word: &str) -> Result<Option<(bool, bool)>, ParseError> {
+        let yields = word == "yields";
+        let uniform = word == "uniform" || (yields && self.at_word("uniform"));
+        if !(yields || uniform || word == "apply") {
+            return Ok(None);
+        }
+        if yields && uniform {
+            self.pos += 1;
+        }
+        if word != "apply" {
+            if !self.at_word("apply") {
+                let last = if uniform { "uniform" } else { "yields" };
+                return Err(self.error_here(format!("expected `apply` after `{last}`")));
+            }
+            self.pos += 1;
+        }
+        Ok(Some((yields, uniform)))
+    }
+
+    /// `apply` の後の、呼ぶ値、引数、着地の印と、引数を渡す場所。型どおりの場所は定数の引数にだけ `: repr` を書く。
+    /// 書き方を1つにするためである。変数の引数の Repr は、関数を読み終えてから `fill_site` が変数から埋める。
+    pub fn apply(
+        &mut self,
+        state: &mut FnState,
+        uniform: bool,
+    ) -> Result<(Atom, Vec<Atom>, Option<VarId>, Site), ParseError> {
+        let callee = self.atom(state)?;
+        let args = self.list('(', ')', |p| p.apply_arg(state, uniform))?;
+        let prompt = if self.at_word("prompt") {
+            self.pos += 1;
+            Some(self.var(state)?)
+        } else {
+            None
+        };
+        let site = if uniform {
+            Site::Uniform
+        } else {
+            Site::Typed(args.iter().map(|&(_, repr)| repr).collect())
+        };
+        Ok((
+            callee,
+            args.into_iter().map(|(atom, _)| atom).collect(),
+            prompt,
+            site,
+        ))
+    }
+
+    /// `apply` の引数1つと、場所に入れる Repr。変数の Repr は仮に `unit` にしておく。
+    fn apply_arg(
+        &mut self,
+        state: &mut FnState,
+        uniform: bool,
+    ) -> Result<(Atom, Repr), ParseError> {
+        let line = self.line();
+        let start = self.pos;
+        // `#1:` のように、`:` は前の語に付いて1つの語になる。`()` と `&"name"` の後では離れた語になる
+        let joined = self
+            .peek_word()
+            .and_then(|word| word.strip_suffix(':'))
+            .filter(|head| !head.is_empty())
+            .map(str::to_string);
+        let (atom, annotated) = match joined {
+            Some(head) => {
+                self.pos += 1;
+                (self.atom_word(state, &head, line)?, true)
+            }
+            None => {
+                let atom = self.atom(state)?;
+                let annotated = self.at_word(":");
+                if annotated {
+                    self.pos += 1;
+                }
+                (atom, annotated)
+            }
+        };
+        let text = || {
+            let text: String = self.tokens[start..self.pos]
+                .iter()
+                .map(|token| match &token.tok {
+                    Tok::Word(word) => word.clone(),
+                    Tok::Str(value) => format!("{value:?}"),
+                    Tok::Punct(c) => c.to_string(),
+                })
+                .collect();
+            text.trim_end_matches(':').to_string()
+        };
+        match (atom, annotated) {
+            (_, true) if uniform => Err(error(
+                line,
+                "a uniform apply writes no repr on its arguments",
+            )),
+            (Atom::Var(_), true) => Err(error(
+                line,
+                format!(
+                    "the variable argument `{}` of an apply takes its repr from the variable",
+                    text()
+                ),
+            )),
+            (_, true) => Ok((atom, self.repr()?)),
+            (_, false) if uniform || matches!(atom, Atom::Var(_)) => Ok((atom, Repr::Unit)),
+            (_, false) => Err(error(
+                line,
+                format!(
+                    "the constant argument `{}` of a typed apply needs `: repr`",
+                    text()
+                ),
+            )),
+        }
     }
 
     /// 関数を閉じる `}`。
@@ -965,22 +1100,27 @@ impl<'t> Reader<'t> {
             self.pos += 1;
             return Ok(Atom::Fn(self.resolve_function(&name, line)?));
         }
+        self.atom_word(state, &word, line)
+    }
+
+    /// 1つの語で書いたアトム。
+    fn atom_word(&self, state: &mut FnState, word: &str, line: usize) -> Result<Atom, ParseError> {
         if let Some(name) = word.strip_prefix('&') {
             return Ok(Atom::Fn(self.resolve_function(name, line)?));
         }
-        if let Some(tag) = tag_number(&word) {
+        if let Some(tag) = tag_number(word) {
             return Ok(Atom::Tag(tag));
         }
-        if int_word(&word, line)? {
+        if int_word(word, line)? {
             return word
                 .parse()
                 .map(Atom::Int)
                 .map_err(|_| error(line, format!("`{word}` does not fit in an Int")));
         }
-        if let Some(bits) = float_word(&word, line)? {
+        if let Some(bits) = float_word(word, line)? {
             return Ok(Atom::Float(bits));
         }
-        Ok(Atom::Var(self.var_named(state, &word, None, line)?))
+        Ok(Atom::Var(self.var_named(state, word, None, line)?))
     }
 
     /// `con` の引数。`reuse` を持つ `con` が書かない引数は、`=name.N` と書く。
@@ -1262,6 +1402,18 @@ impl<'t> Reader<'t> {
     }
 }
 
+/// 型どおりの場所の、変数の引数の Repr を変数の表から埋める。テキストは変数の引数の Repr を書かないので、関数を
+/// 読み終えて変数の表ができてから埋める。
+pub fn fill_site(site: &mut Site, args: &[Atom], vars: &[VarInfo]) {
+    if let Site::Typed(reprs) = site {
+        for (repr, atom) in reprs.iter_mut().zip(args) {
+            if let Atom::Var(var) = atom {
+                *repr = vars[var.0 as usize].repr;
+            }
+        }
+    }
+}
+
 pub fn error(line: usize, message: impl Into<String>) -> ParseError {
     ParseError {
         line,
@@ -1366,14 +1518,18 @@ impl<'p> Writer<'p> {
         }
     }
 
-    /// `[internal] [yields] [clause E.op] fn name(params) -> repr {` の行。
+    /// `[internal] [yields] [clause E.op] [role R] fn name(params) -> repr {` の行。
     pub fn function_head(&self, header: &FnHeader, vars: &[VarInfo], out: &mut String) {
         let clause = header.clause.map_or_else(String::new, |(effect, op)| {
             format!("clause {} ", operation_text(self.effects, effect, op))
         });
+        let role = header
+            .role
+            .name()
+            .map_or_else(String::new, |name| format!("role {name} "));
         writeln!(
             out,
-            "{}{}{clause}fn {}({}) -> {}{} {{",
+            "{}{}{clause}{role}fn {}({}) -> {}{} {{",
             if header.internal { "internal " } else { "" },
             if header.yields { "yields " } else { "" },
             function_name(&header.name),
@@ -1459,6 +1615,36 @@ impl<'p> Writer<'p> {
     /// 呼ぶ関数の名前。
     pub fn callee(&self, target: FnIdx) -> Cow<'p, str> {
         function_name(self.functions[target.0 as usize])
+    }
+
+    /// `[yields] [uniform] apply callee(args) [prompt v]`。型どおりの場所は、定数の引数にだけ `: repr` を書く。
+    pub fn apply(
+        &self,
+        vars: &[VarInfo],
+        (callee, args): (&Atom, &[Atom]),
+        yields: bool,
+        prompt: Option<VarId>,
+        site: &Site,
+    ) -> String {
+        let (uniform, reprs) = match site {
+            Site::Uniform => ("uniform ", &[][..]),
+            Site::Typed(reprs) => ("", &reprs[..]),
+        };
+        let args: Vec<String> = args
+            .iter()
+            .enumerate()
+            .map(|(index, atom)| match (atom, reprs.get(index)) {
+                (Atom::Var(_), _) | (_, None) => self.atom(vars, atom),
+                (_, Some(repr)) => format!("{}: {}", self.atom(vars, atom), repr.name()),
+            })
+            .collect();
+        format!(
+            "{}{uniform}apply {}({}){}",
+            if yields { "yields " } else { "" },
+            self.atom(vars, callee),
+            args.join(", "),
+            prompt.map_or(String::new(), |v| format!(" prompt {}", self.var(vars, v)))
+        )
     }
 
     pub fn atoms(&self, vars: &[VarInfo], atoms: &[Atom]) -> String {

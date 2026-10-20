@@ -5,7 +5,7 @@
 use std::mem;
 
 use crate::{Block, CoreFn, Stmt, Term};
-use eml_lir::{Atom, BlockId, Mark, Repr, VarId, VarInfo};
+use eml_lir::{Atom, BlockId, Mark, Repr, Role, Site, VarId, VarInfo};
 
 /// 値の渡し先になる、まだブロックになっていない位置。そこへ向かう開いたままのブロックを集め、ラベルを持つ式を
 /// 変換し終えたら `resolve` で扱いを決める。
@@ -60,6 +60,20 @@ impl FnBuilder {
 
     pub(crate) fn repr(&self, var: VarId) -> Repr {
         self.vars[var.0 as usize].repr
+    }
+
+    /// 型どおりの `apply` の場所。変数の引数は変数の Repr にし、定数の引数は `constant` が引数の位置から決める Repr に
+    /// する (docs/superpowers/specs/2026-10-21-s14e-abi-struct-design.md の「`apply` の ABI」)。
+    pub(crate) fn typed_site(&self, args: &[Atom], constant: impl Fn(usize) -> Repr) -> Site {
+        Site::Typed(
+            args.iter()
+                .enumerate()
+                .map(|(index, atom)| match atom {
+                    Atom::Var(var) => self.repr(*var),
+                    _ => constant(index),
+                })
+                .collect(),
+        )
     }
 
     /// 関数の引数。入口のブロックの引数になる。
@@ -175,7 +189,8 @@ impl FnBuilder {
     /// 消える。消したブロックを詰めて、番号を振り直す。末尾呼び出しはここでは作らず、縮約に任せる (docs/spec/core-ir.md)。
     /// 印の互換は推移的でないので、`a` が定数か、`a` の印が `p` の印と同じときだけ変える
     /// (docs/spec/lir.md の「Kind の印」、docs/spec/core-ir.md の「変換の規則」)。
-    /// `internal` は内部の関数の印 (`CoreFn::internal`) である。
+    /// `internal` は内部の関数の印 (`CoreFn::internal`) である。作る関数は役割を持たない (`Role::Typed`)。EP の役割を
+    /// 持つ関数は、呼ぶ側が役割を付ける。
     pub(crate) fn finish(
         self,
         name: String,
@@ -252,6 +267,7 @@ impl FnBuilder {
         CoreFn {
             name,
             internal,
+            role: Role::Typed,
             yields,
             clause: None,
             vars: self.vars,

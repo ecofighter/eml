@@ -12,7 +12,8 @@ use super::{Copies, KnownFn, Shape, Table, piece, targeted};
 use crate::tail::tail_position_call;
 use crate::{Block, Call, CoreFn, Program, Rhs, Stmt, Term};
 use eml_lir::{
-    Atom, BlockId, Ctor, FnIdx, Layout, LayoutCtor, LayoutId, Mark, Repr, TUPLE, VarId, VarInfo,
+    Atom, BlockId, Ctor, FnIdx, Layout, LayoutCtor, LayoutId, Mark, Repr, Role, TUPLE, VarId,
+    VarInfo,
 };
 
 /// 複製 `f{H}` が返す値の並び。複製の元の名前と handler で決まるので、名前が同じ複製はいつも同じ形の結果を返す
@@ -280,6 +281,7 @@ pub(super) fn build(copies: &mut Copies, index: FnIdx, function: FnIdx, shape: &
     let mut code = CoreFn {
         name: copies.name(function, shape),
         internal: false,
+        role: Role::Typed,
         yields: source.yields,
         clause: None,
         vars: source.vars.clone(),

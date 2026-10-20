@@ -62,7 +62,7 @@ fn helpers_have_their_final_form() {
       switch s.5 { 0 -> b1, 1 -> b2, 2 -> b3, _ -> b4 }
     b1:
       let st.6: tobj poly = prim ev_take_state(ev.0)
-      let r.7: tobj poly = yields apply ret.1(x.2, st.6)
+      let r.7: tobj poly = yields uniform apply ret.1(x.2, st.6)
       return r.7
     b2:
       let u.8: unit = drop x.2
@@ -70,14 +70,14 @@ fn helpers_have_their_final_form() {
       let c.10: tobj poly = prim yield_finish()
       let st.11: tobj poly = prim ev_take_state(ev.0)
       let k.12: tobj poly = closure resume$(ev.0, ret.1, k.9)
-      let r.13: tobj poly = yields apply c.10(k.12, st.11)
+      let r.13: tobj poly = yields uniform apply c.10(k.12, st.11)
       return r.13
     b3:
       let u.14: unit = drop ret.1
       let u.15: unit = drop x.2
       let c.16: tobj poly = prim yield_finish()
       let st.17: tobj poly = prim ev_take_state(ev.0)
-      let r.18: tobj poly = yields apply c.16(st.17)
+      let r.18: tobj poly = yields uniform apply c.16(st.17)
       return r.18
     b4:
       let u.19: unit = drop x.2
@@ -93,7 +93,7 @@ fn helpers_have_their_final_form() {
       let w.6: tobj = prim evv_get()
       let w.7: tobj = prim evv_push(w.6, e.5)
       let u.8: unit = prim evv_set(w.7)
-      let x.9: tobj poly = yields apply k.2(v.3) prompt e.5
+      let x.9: tobj poly = yields uniform apply k.2(v.3) prompt e.5
       let r.10: tobj poly = call prompt$(e.5, ret.1, x.9)
       return r.10
     }
@@ -105,7 +105,7 @@ fn helpers_have_their_final_form() {
       let w.2: tobj = prim evv_get()
       let m.3: tobj = prim evv_mask[State](w.2)
       let u.4: unit = prim evv_set(m.3)
-      let r.5: tobj poly = yields apply k.0(v.1)
+      let r.5: tobj poly = yields uniform apply k.0(v.1)
       let y.6: int = prim yielding()
       switch y.6 { 0 -> b2, _ -> b1 }
     b1:
@@ -169,7 +169,7 @@ yields fn f(a.0: int, h.1: tobj) -> int {
   let u.4: unit = prim evv_set(m.3)
   let x.5: int = call p()
   let u.6: unit = prim evv_set(w.2)
-  let r.7: tobj = yields apply h.1(())
+  let r.7: tobj = yields apply h.1((): unit)
   let s.8: int = extern \"Prelude.Num Int.+\"(x.5, a.0)
   return s.8
 }
@@ -203,12 +203,12 @@ yields fn f(a.0: int, h.1: tobj) -> int {
       return 0
     b2:
       let u.6: unit = prim evv_set(w.2)
-      let r.7: tobj = yields apply h.1(())
+      let r.7: tobj = yields apply h.1((): unit)
       let s.8: int = extern "Prelude.Num Int.+"(x.5, a.0)
       return s.8
     }
-    internal yields fn f$k0(a.0: int, h.1: tobj, x.2: int) -> int {
-      let r.3: tobj = yields apply h.1(())
+    internal yields role cont fn f$k0(a.0: int, h.1: tobj, x.2: int) -> int {
+      let r.3: tobj = yields apply h.1((): unit)
       let s.4: int = extern "Prelude.Num Int.+"(x.2, a.0)
       return s.4
     }
@@ -216,7 +216,7 @@ yields fn f(a.0: int, h.1: tobj) -> int {
       let w.2: tobj = prim evv_get()
       let m.3: tobj = prim evv_mask[State](w.2)
       let u.4: unit = prim evv_set(m.3)
-      let r.5: tobj poly = yields apply k.0(v.1)
+      let r.5: tobj poly = yields uniform apply k.0(v.1)
       let y.6: int = prim yielding()
       switch y.6 { 0 -> b2, _ -> b1 }
     b1:
@@ -231,7 +231,7 @@ yields fn f(a.0: int, h.1: tobj) -> int {
       return r.5
     }
     yields fn compose$(k.0: tobj poly, c.1: tobj poly, x.2: tobj poly) -> tobj poly {
-      let r.3: tobj poly = yields apply k.0(x.2)
+      let r.3: tobj poly = yields uniform apply k.0(x.2)
       let y.4: int = prim yielding()
       switch y.4 { 0 -> b2, _ -> b1 }
     b1:
@@ -242,7 +242,7 @@ yields fn f(a.0: int, h.1: tobj) -> int {
       let d.9: obj poly = prim dummy()
       return d.9
     b2:
-      let t.10: tobj poly = yields apply c.1(r.3)
+      let t.10: tobj poly = yields uniform apply c.1(r.3)
       return t.10
     }
     "#);
@@ -278,12 +278,12 @@ yields fn f(c.0: tobj, e.1: obj) -> tobj {
       let w.3: tobj = clause State.get c.0(e.1, ())
       return w.3
     }
-    internal yields fn f$k0(c.0: tobj, e.1: obj, v.2: tobj) -> tobj {
+    internal yields role cont fn f$k0(c.0: tobj, e.1: obj, v.2: tobj) -> tobj {
       let w.3: tobj = clause State.get c.0(e.1, ())
       return w.3
     }
     yields fn compose$(k.0: tobj poly, c.1: tobj poly, x.2: tobj poly) -> tobj poly {
-      let r.3: tobj poly = yields apply k.0(x.2)
+      let r.3: tobj poly = yields uniform apply k.0(x.2)
       let y.4: int = prim yielding()
       switch y.4 { 0 -> b2, _ -> b1 }
     b1:
@@ -294,7 +294,7 @@ yields fn f(c.0: tobj, e.1: obj) -> tobj {
       let d.9: obj poly = prim dummy()
       return d.9
     b2:
-      let t.10: tobj poly = yields apply c.1(r.3)
+      let t.10: tobj poly = yields uniform apply c.1(r.3)
       return t.10
     }
     ");

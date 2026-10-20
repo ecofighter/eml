@@ -11,7 +11,7 @@ use eml_extern::{Extern, FunctionRow};
 use crate::syntax::{effect_text, operation_text, prim_text};
 use crate::{
     Atom, BlockId, Case, CasePattern, Ctor, EffectInfo, FnIdx, Immediates, Layout, LayoutCtor,
-    LayoutId, Mark, OpRet, Prim, Repr, VarId, VarInfo,
+    LayoutId, Mark, OpRet, Prim, Repr, Role, Site, VarId, VarInfo,
 };
 
 /// 関数が一様でない理由。`tobj` と互換でない最初の引数か、`ret` である。
@@ -38,6 +38,18 @@ pub fn non_uniform(
             (!repr.compatible(Repr::TObj)).then_some(NonUniform::Param(index, repr))
         })
         .or_else(|| (!ret.compatible(Repr::TObj)).then_some(NonUniform::Ret(ret)))
+}
+
+/// 役割が一様にする最後の引数の数は、関数の引数の数を超えない
+/// (docs/superpowers/specs/2026-10-21-s14e-abi-struct-design.md の「関数の ABI」)。
+pub fn role(role: Role, params: usize) -> Result<(), String> {
+    match role.name() {
+        Some(name) if role.uniform_params() > params => Err(format!(
+            "the role {name} makes {} parameters uniform, but the function takes {params}",
+            role.uniform_params()
+        )),
+        _ => Ok(()),
+    }
 }
 
 /// `clause` の印の関数は、捕獲の後に evidence と操作の引数を受け、操作の結果を返す。境界の段では、捕獲が `tobj`、
@@ -451,6 +463,38 @@ impl<'a> Context<'a> {
     pub fn clause_of(&self, target: FnIdx) -> Option<String> {
         let (effect, op) = self.tables.functions.get(target.0 as usize)?.clause?;
         Some(operation_text(self.tables.effects, effect, op))
+    }
+
+    /// 型どおりの `apply` の場所は、引数ごとに1つの Repr を持つ。`variables` の段では、変数の引数の Repr が変数の
+    /// Repr と同じであることも確かめる。box の挿入は引数を変換した変数に替えるので、その後の段では比べない
+    /// (docs/superpowers/specs/2026-10-21-s14e-abi-struct-design.md の「`apply` の ABI」)。
+    pub fn check_site(&self, args: &[Atom], site: &Site, variables: bool) -> Result<(), String> {
+        let Site::Typed(reprs) = site else {
+            return Ok(());
+        };
+        if reprs.len() != args.len() {
+            return Err(format!(
+                "the apply site lists {} reprs for {} arguments",
+                reprs.len(),
+                args.len()
+            ));
+        }
+        if !variables {
+            return Ok(());
+        }
+        for (&atom, &repr) in args.iter().zip(reprs) {
+            if let Atom::Var(var) = atom
+                && self.repr(var) != repr
+            {
+                return Err(format!(
+                    "the apply site gives `{}` {} but the variable is {}",
+                    self.name(var),
+                    repr.name(),
+                    self.repr(var).name()
+                ));
+            }
+        }
+        Ok(())
     }
 
     /// 互換の位置に収まる値。規則は box の挿入と同じ `Atom::fits_compatible` で、`never` の操作の `perform` と

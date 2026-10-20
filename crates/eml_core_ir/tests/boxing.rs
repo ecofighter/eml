@@ -151,7 +151,7 @@ fn a_function_made_uniform_by_t3_gets_no_boxed_wrapper() {
     assert!(!shown.contains("call_with$boxed"), "{shown}");
     insta::assert_snapshot!(function(&shown, "call_with"), @"
     fn call_with(f.0: tobj poly) -> tobj {
-      let t.2: tobj = apply f.0(())
+      let t.2: tobj = apply f.0((): unit)
       let t.1: int = unbox t.2
       return t.2
     }
@@ -404,7 +404,7 @@ fn a_tail_call_off_any_loop_may_stay_an_ordinary_call() {
         "effect Ask where\n  ask : Unit -> Int\n\n{HIDE}answer : Int -> <Ask, Panic> Int\nanswer n =\n  if n > 0 then answer (n - 1)\n  else\n    let Box q = hide 0 ask\n    q () + 1\n\nmain : Unit -> <IO, Panic> Unit\nmain () =\n  let r = handle answer 0 with\n    | ctl ask () k -> k 1\n  println (show r)"
     );
     insta::assert_snapshot!(function(&lir_text(&text, eml_lir::Pass::Contract), "main$handle0"), @"
-    internal yields fn main$handle0(p.0: unit) -> tobj {
+    internal yields role body fn main$handle0(p.0: unit) -> tobj {
       let t.1: int = call answer(0)
       let t.2: tobj = box t.1
       return t.2

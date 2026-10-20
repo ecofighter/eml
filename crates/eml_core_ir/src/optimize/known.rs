@@ -5,7 +5,7 @@ use std::collections::{HashMap, HashSet};
 
 use super::specialize::{ClosureShape, Key, Specializer};
 use crate::{Call, CoreFn, Rhs, Stmt, Term};
-use eml_lir::{Atom, Ctor, FnIdx, Mark, MaskItem, Repr, VarId, VarInfo};
+use eml_lir::{Atom, Ctor, FnIdx, Mark, MaskItem, Repr, Site, VarId, VarInfo};
 
 /// 呼ぶ相手と、すでに渡した先頭の引数が分かっている関数の値。
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -532,6 +532,7 @@ fn uses(function: &CoreFn) -> HashMap<VarId, Vec<Use>> {
                                     args,
                                     yields: _,
                                     prompt: _,
+                                    site: _,
                                 },
                             mask,
                         },
@@ -680,6 +681,7 @@ pub(crate) fn replace(
             args,
             yields,
             prompt,
+            site,
         } => {
             let closure = match *callee {
                 Atom::Fn(target) => KnownClosure {
@@ -708,7 +710,8 @@ pub(crate) fn replace(
                 return Some(vec![Stmt::Let { var, rhs }]);
             }
             // 余った引数は、translate の既知の呼び出しと同じく、結果の関数の値に `apply` する。`mask` が空のときだけ
-            // ここに来るので、分けても `mask` の掛かる範囲は変わらない
+            // ここに来るので、分けても `mask` の掛かる範囲は変わらない。余った引数は `apply` の引数の後ろの部分なので、
+            // 場所も後ろの部分を写す
             let result = fresh(
                 vars,
                 VarInfo {
@@ -724,6 +727,12 @@ pub(crate) fn replace(
                     rhs: Rhs::Call {
                         call: Call::Apply {
                             callee: Atom::Var(result),
+                            site: match site {
+                                Site::Typed(reprs) => {
+                                    Site::Typed(reprs[reprs.len() - rest.len()..].to_vec())
+                                }
+                                Site::Uniform => Site::Uniform,
+                            },
                             args: rest,
                             yields: *yields,
                             prompt: *prompt,

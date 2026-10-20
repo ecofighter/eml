@@ -171,7 +171,7 @@ fn by_call(x.0: int) -> int {
   return r.1
 }
 fn by_apply(f.0: tobj) -> tobj {
-  let r.1: tobj = apply f.0(())
+  let r.1: tobj = apply f.0((): unit)
   return r.1
 }
 yields fn by_clause(c.0: tobj, e.1: obj, s.2: obj) -> tobj {
@@ -189,7 +189,7 @@ fn not_returned(x.0: int) -> int {
       tail call by_call(x.0)
     }
     fn by_apply(f.0: tobj) -> tobj {
-      tail apply f.0(())
+      tail apply f.0((): unit)
     }
     yields fn by_clause(c.0: tobj, e.1: obj, s.2: obj) -> tobj {
       tail clause Ask.ask c.0(e.1, s.2)
@@ -283,7 +283,7 @@ fn h(s.0: obj) -> obj lin {
   return f.1
 }
 fn k(c.0: tobj) -> tobj lin {
-  let r.1: tobj poly = apply c.0(())
+  let r.1: tobj poly = apply c.0((): unit)
   return r.1
 }
 ";
@@ -302,7 +302,7 @@ fn k(c.0: tobj) -> tobj lin {
       return f.1
     }
     fn k(c.0: tobj) -> tobj lin {
-      tail apply c.0(())
+      tail apply c.0((): unit)
     }
     ");
 }

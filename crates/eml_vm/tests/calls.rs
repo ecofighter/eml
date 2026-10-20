@@ -332,7 +332,7 @@ fn a_closure_with_many_captures_applies_in_order() {
         "  let f.{n}: tobj = closure last({})\n",
         captured.join(", ")
     );
-    text += &format!("  let r.{}: tobj = apply f.{n}(())\n", n + 1);
+    text += &format!("  let r.{}: tobj = apply f.{n}((): unit)\n", n + 1);
     text += &format!("  let k.{}: int = unbox r.{}\n", n + 2, n + 1);
     text += &format!("  decref r.{}\n", n + 1);
     text += &format!(
@@ -439,7 +439,7 @@ fn applying_a_string_is_not_a_function() {
     let text = "\
 fn main() -> unit {
   let s.0: obj = const \"hello\"
-  let r.1: tobj = apply s.0(())
+  let r.1: tobj = apply s.0((): unit)
   return ()
 }
 ";

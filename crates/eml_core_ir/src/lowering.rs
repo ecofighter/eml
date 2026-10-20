@@ -26,6 +26,7 @@ fn function(function: CoreFn) -> eml_lir::LirFn {
     let CoreFn {
         name,
         internal,
+        role,
         yields,
         clause,
         vars,
@@ -36,6 +37,7 @@ fn function(function: CoreFn) -> eml_lir::LirFn {
     eml_lir::LirFn {
         name,
         internal,
+        role,
         yields,
         clause,
         vars,
@@ -124,11 +126,13 @@ fn call(call: Call) -> eml_lir::Call {
             args,
             yields,
             prompt,
+            site,
         } => eml_lir::Call::Apply {
             callee,
             args,
             yields,
             prompt,
+            site,
         },
         Call::Clause {
             effect,

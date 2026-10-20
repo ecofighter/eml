@@ -171,16 +171,16 @@ fn a_row_polymorphic_function_has_an_instance_per_row_bit() {
     // 純粋な instance は今の名前で印がなく、yield しうる instance は `<e>` を持つ
     insta::assert_snapshot!(function(&shown, "twice"), @"
     fn twice(f.0: tobj) -> int {
-      let t.1: int = apply f.0(())
-      let t.2: int = apply f.0(())
+      let t.1: int = apply f.0((): unit)
+      let t.2: int = apply f.0((): unit)
       let t.3: int = extern \"Prelude.Num Int.+\"(t.1, t.2)
       return t.3
     }
     ");
     insta::assert_snapshot!(function(&shown, "twice<e>"), @r#"
     yields fn "twice<e>"(f.0: tobj) -> int {
-      let t.1: int = yields apply f.0(())
-      let t.2: int = yields apply f.0(())
+      let t.1: int = yields apply f.0((): unit)
+      let t.2: int = yields apply f.0((): unit)
       let t.3: int = extern "Prelude.Num Int.+"(t.1, t.2)
       return t.3
     }
@@ -316,7 +316,7 @@ fn a_clause_lambda_over_an_operation_row_variable_may_yield() {
     // g の row は操作の row 変数で、main の row 変数ではないので、g は yield しうる
     insta::assert_snapshot!(function(&shown, "main$lambda0"), @"
     internal yields fn main$lambda0(f.0: tobj, p.1: unit) -> int {
-      let t.2: int = yields apply f.0(())
+      let t.2: int = yields apply f.0((): unit)
       let t.3: int = extern \"Prelude.Num Int.+\"(t.2, 1)
       return t.3
     }
@@ -330,8 +330,8 @@ fn an_apply_is_split_after_an_arrow_that_may_yield() {
     // h 1 で yield しうるので、1つ目の apply の後で分け、1つ目に印を付ける
     insta::assert_snapshot!(function(&shown, "run"), @"
     yields fn run(h.0: tobj poly) -> int {
-      let t.1: tobj poly = yields apply h.0(1)
-      let t.2: int = apply t.1(2)
+      let t.1: tobj poly = yields apply h.0(1: int)
+      let t.2: int = apply t.1(2: int)
       return t.2
     }
     ");
@@ -416,7 +416,7 @@ fn a_point_free_entry_takes_its_mark_from_its_first_arrow() {
     insta::assert_snapshot!(function(&core_text_with_entry(text, "act"), "entry$act"), @"
     yields fn entry$act() -> int {
       let f.0: tobj = call act()
-      let t.1: int = yields apply f.0(())
+      let t.1: int = yields apply f.0((): unit)
       return t.1
     }
     ");
@@ -429,7 +429,7 @@ fn a_point_free_entry_whose_first_arrow_has_its_own_row_variable_may_yield() {
     insta::assert_snapshot!(function(&core_text_with_entry(text, "go"), "entry$go"), @r#"
     yields fn entry$go() -> int {
       let f.0: tobj = call "go<e>"()
-      let t.1: int = yields apply f.0(())
+      let t.1: int = yields apply f.0((): unit)
       return t.1
     }
     "#);

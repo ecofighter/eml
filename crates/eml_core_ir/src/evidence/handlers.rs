@@ -11,8 +11,8 @@ use crate::tail::tail_position_call;
 use crate::{Call, CoreFn, Program, Rhs, Stmt, Term};
 use eml_extern::Purity;
 use eml_lir::{
-    Atom, BlockId, FnIdx, Mark, MaskItem, OpRet, OperationInfo, Prim, Repr, VarId, VarInfo,
-    operation,
+    Atom, BlockId, FnIdx, Mark, MaskItem, OpRet, OperationInfo, Prim, Repr, Role, Site, VarId,
+    VarInfo, operation,
 };
 
 use super::split::Annotations;
@@ -155,12 +155,14 @@ pub(super) fn lower(
                     call: Call::Resume { k, arg, state },
                     mask,
                 } => {
-                    // 再開した計算の yield は、`k` の外側の row、つまりこの関数の row を通る
+                    // 再開した計算の yield は、`k` の外側の row、つまりこの関数の row を通る。再開は EP の一様な場所である
+                    // (docs/superpowers/specs/2026-10-21-s14e-abi-struct-design.md の「`apply` の ABI」)
                     let apply = Call::Apply {
                         callee: k,
                         args: vec![arg, state],
                         yields,
                         prompt: None,
+                        site: Site::Uniform,
                     };
                     out.masked_call(&mut annotations, id, var, apply, mask, yields);
                 }
@@ -295,6 +297,7 @@ fn runs_in_place(program: &Program, clause: &CoreFn, operation: &OperationInfo) 
                                 args: _,
                                 yields,
                                 prompt: _,
+                                site: _,
                             } => *yields,
                         }
                 }
@@ -463,6 +466,9 @@ fn into_entry(program: &mut Program, clause: FnIdx, effect: u32, op: u32) {
     function.ret_mark = ret_mark;
     function.name.push_str("$entry");
     function.clause = Some((effect, op));
+    // 入口は操作の ABI で呼ばれ、`prompt$` に呼ばれる節の役割を持たない
+    // (docs/superpowers/specs/2026-10-21-s14e-abi-struct-design.md の「関数の ABI」)
+    function.role = Role::Typed;
 }
 
 /// 節の本体が、末尾の `resume` のほかに呼び出しか、`Pure` でない extern を持つか。`resumes` は末尾の `resume` の
@@ -652,6 +658,7 @@ impl Out<'_> {
                 args: vec![Atom::Unit],
                 yields: true,
                 prompt: Some(evidence),
+                site: Site::Uniform,
             }),
         );
         self.stmts.push(Stmt::Let {

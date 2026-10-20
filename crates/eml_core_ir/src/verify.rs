@@ -74,12 +74,14 @@ fn verify_at(program: &Program, level: Level) -> Result<(), VerifyError> {
         strings: &program.strings,
         functions: &functions,
     };
-    // `clause` の印の関数の ABI は、参照ごとでなく関数ごとに1回だけ確かめる
+    // `clause` の印の関数の ABI と役割は、参照ごとでなく関数ごとに1回だけ確かめる
     for function in &program.functions {
-        clause_function(program, function, level).map_err(|message| VerifyError {
-            function: function.name.clone(),
-            message,
-        })?;
+        clause_function(program, function, level)
+            .and_then(|()| eml_lir::check::role(function.role, function.params().len()))
+            .map_err(|message| VerifyError {
+                function: function.name.clone(),
+                message,
+            })?;
     }
     for function in &program.functions {
         shape(&block_shapes(function))
@@ -678,7 +680,12 @@ impl<'a> Checker<'a> {
                 state: _,
             } => {}
         }
-        self.use_all(|f| call.for_each_atom(f))
+        self.use_all(|f| call.for_each_atom(f))?;
+        // Core IR のパスは引数を変換した変数に替えないので、どの段でも変数と場所を比べる
+        match call {
+            Call::Apply { args, site, .. } => self.cx.check_site(args, site, true),
+            _ => Ok(()),
+        }
     }
 
     /// 着地の印 `prompt v` の検査。印は EP だけが出し、末尾の位置の呼び出しには付かず、`v` は呼び出しの後も

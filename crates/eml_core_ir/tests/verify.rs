@@ -467,7 +467,7 @@ fn a_mask_must_name_known_effects_in_order() {
     let unknown = "\
 effect Main.State { get(tobj) -> tobj, put(tobj) -> tobj }
 fn entry$main(c.0: tobj) -> tobj {
-  let t.1: tobj = mask [#5] apply c.0(())
+  let t.1: tobj = mask [#5] apply c.0((): unit)
   return t.1
 }
 ";
@@ -475,7 +475,7 @@ fn entry$main(c.0: tobj) -> tobj {
 effect Main.A { a(tobj) -> tobj }
 effect Main.B { b(tobj) -> tobj }
 fn entry$main(c.0: tobj) -> tobj {
-  let t.1: tobj = mask [Main.B, Main.A] apply c.0(())
+  let t.1: tobj = mask [Main.B, Main.A] apply c.0((): unit)
   return t.1
 }
 ";
@@ -494,7 +494,7 @@ fn a_mask_names_each_effect_once() {
     let text = "\
 effect Main.A { a(tobj) -> tobj }
 fn entry$main(c.0: tobj) -> tobj {
-  let t.1: tobj = mask [Main.A, Main.A@1] apply c.0(())
+  let t.1: tobj = mask [Main.A, Main.A@1] apply c.0((): unit)
   return t.1
 }
 ";
@@ -509,7 +509,7 @@ fn a_mask_item_skips_some_handler() {
     let text = "\
 effect Main.A { a(tobj) -> tobj }
 fn entry$main(c.0: tobj) -> tobj {
-  let t.1: tobj = mask [Main.A] apply c.0(())
+  let t.1: tobj = mask [Main.A] apply c.0((): unit)
   return t.1
 }
 ";
@@ -534,8 +534,8 @@ fn a_mask_may_skip_one_effect_twice() {
 effect Main.A { a(tobj) -> tobj }
 effect Main.B { b(tobj) -> tobj }
 fn entry$main(c.0: tobj) -> tobj {
-  let t.1: tobj = mask [Main.A*2, Main.B] apply c.0(())
-  let t.2: tobj = mask [Main.B] apply t.1(())
+  let t.1: tobj = mask [Main.A*2, Main.B] apply c.0((): unit)
+  let t.2: tobj = mask [Main.B] apply t.1((): unit)
   return t.2
 }
 ";
@@ -626,7 +626,7 @@ fn effect_instructions() -> [(String, &'static str); 4] {
         ),
         (
             format!(
-                "{ASK}fn f(c.0: tobj) -> tobj {{\n  let t.1: tobj = mask [Ask] apply c.0(())\n  return t.1\n}}\n"
+                "{ASK}fn f(c.0: tobj) -> tobj {{\n  let t.1: tobj = mask [Ask] apply c.0((): unit)\n  return t.1\n}}\n"
             ),
             "a mask remains after the evidence pass in `f`",
         ),
@@ -798,7 +798,7 @@ fn a_clause_function_is_only_put_into_a_handler_table() {
     );
     assert_eq!(
         check_evidence(&format!(
-            "{COUNTER}fn f(c.0: tobj) -> tobj {{\n  let t.1: tobj = apply c.0(&g)\n  return t.1\n}}\n{PUT_CLAUSE}"
+            "{COUNTER}fn f(c.0: tobj) -> tobj {{\n  let t.1: tobj = apply c.0(&g: tobj)\n  return t.1\n}}\n{PUT_CLAUSE}"
         )),
         used_as_value
     );
@@ -934,7 +934,7 @@ fn marked(body: &str, ev: &str, ret: &str) -> String {
 #[test]
 fn prompt_marker_is_accepted_after_the_evidence_pass() {
     let text = marked(
-        "  let x.2: tobj = yields apply b.0(()) prompt ev.1\n  return ev.1\n",
+        "  let x.2: tobj = yields apply b.0((): unit) prompt ev.1\n  return ev.1\n",
         "ev.1: obj",
         "obj",
     );
@@ -944,7 +944,7 @@ fn prompt_marker_is_accepted_after_the_evidence_pass() {
 #[test]
 fn prompt_marker_is_rejected_before_the_evidence_pass() {
     let text = marked(
-        "  let x.2: tobj = yields apply b.0(()) prompt ev.1\n  return ev.1\n",
+        "  let x.2: tobj = yields apply b.0((): unit) prompt ev.1\n  return ev.1\n",
         "ev.1: obj",
         "obj",
     );
@@ -957,7 +957,7 @@ fn prompt_marker_is_rejected_before_the_evidence_pass() {
 #[test]
 fn prompt_marker_in_tail_position_is_rejected() {
     let text = marked(
-        "  let x.2: tobj = yields apply b.0(()) prompt ev.1\n  return x.2\n",
+        "  let x.2: tobj = yields apply b.0((): unit) prompt ev.1\n  return x.2\n",
         "ev.1: obj",
         "tobj",
     );
@@ -970,7 +970,7 @@ fn prompt_marker_in_tail_position_is_rejected() {
 #[test]
 fn prompt_marker_on_a_dead_variable_is_rejected() {
     let text = marked(
-        "  let x.2: tobj = yields apply b.0(()) prompt ev.1\n  return ()\n",
+        "  let x.2: tobj = yields apply b.0((): unit) prompt ev.1\n  return ()\n",
         "ev.1: obj",
         "unit",
     );
@@ -986,7 +986,7 @@ fn prompt_marker_on_a_dead_variable_is_rejected() {
 #[test]
 fn prompt_marker_on_a_non_obj_variable_is_rejected() {
     let text = marked(
-        "  let x.2: tobj = yields apply b.0(()) prompt ev.1\n  return ev.1\n",
+        "  let x.2: tobj = yields apply b.0((): unit) prompt ev.1\n  return ev.1\n",
         "ev.1: tobj",
         "tobj",
     );
@@ -1001,7 +1001,7 @@ fn prompt_marker_used_only_in_a_sibling_branch_is_rejected() {
     let text = "layout Prelude.Bool { False, True }\nfn f(b.0: tobj, ev.1: obj, c.2: enum, e.3: obj) -> obj {
   switch c.2 Prelude.Bool { #0 -> b1, #1 -> b2 }
 b1:
-  let x.4: tobj = yields apply b.0(()) prompt ev.1
+  let x.4: tobj = yields apply b.0((): unit) prompt ev.1
   return e.3
 b2:
   return ev.1
@@ -1019,11 +1019,60 @@ b2:
 #[test]
 fn prompt_marker_passed_only_to_a_jump_is_accepted() {
     let text = "fn f(b.0: tobj, ev.1: obj) -> obj {
-  let x.2: tobj = yields apply b.0(()) prompt ev.1
+  let x.2: tobj = yields apply b.0((): unit) prompt ev.1
   jump b1(ev.1)
 b1(p.3: obj):
   return p.3
 }
 ";
     assert_eq!(check_evidence(text), Ok(()));
+}
+
+/// 型どおりの `apply` の場所は、変数の引数の Repr を変数と同じにする。テキストは変数の Repr を場所に読むので、
+/// 読んだ後に場所を書き換えて食い違いを作る
+/// (docs/superpowers/specs/2026-10-21-s14e-abi-struct-design.md の「`apply` の ABI」)。
+#[test]
+fn a_site_entry_must_match_its_variable() {
+    use eml_lir::{Repr, Site};
+    let mut program = read(
+        "fn f(x.0: tobj, c.1: tobj) -> tobj {\n  let t.2: tobj = apply c.1(x.0)\n  return t.2\n}\n",
+    );
+    assert_eq!(verify_translated(&program), Ok(()));
+    *site_of(&mut program) = Site::Typed(vec![Repr::Int]);
+    assert_eq!(
+        verify_translated(&program).map_err(|error| error.message),
+        Err("the apply site gives `x.0` int but the variable is tobj".to_string())
+    );
+    *site_of(&mut program) = Site::Typed(Vec::new());
+    assert_eq!(
+        verify_translated(&program).map_err(|error| error.message),
+        Err("the apply site lists 0 reprs for 1 arguments".to_string())
+    );
+}
+
+fn site_of(program: &mut Program) -> &mut eml_lir::Site {
+    let Stmt::Let {
+        rhs:
+            Rhs::Call {
+                call: eml_core_ir::Call::Apply { site, .. },
+                ..
+            },
+        ..
+    } = &mut program.functions[0].blocks[0].stmts[0]
+    else {
+        panic!("expected an apply");
+    };
+    site
+}
+
+/// 役割が一様にする引数の数は、関数の引数の数を超えない。
+#[test]
+fn a_role_takes_no_more_uniform_parameters_than_the_function_has() {
+    assert_eq!(
+        check_translated("internal role clause fn g(s.0: unit) -> tobj {\n  return ()\n}\n"),
+        Err(
+            "the role clause makes 2 parameters uniform, but the function takes 1 in `g`"
+                .to_string()
+        )
+    );
 }
