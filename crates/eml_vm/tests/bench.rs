@@ -7,7 +7,7 @@ use eml_test_support::{lir, lir_files, run_stats};
 use eml_vm::RunStats;
 
 /// テストを持つ基準のプログラム。`bench/` にプログラムを足したら、ここと下のテストの関数の両方に足す。
-const PROGRAMS: [&str; 31] = [
+const PROGRAMS: [&str; 32] = [
     "empty",
     "fannkuch_by_hand",
     "fannkuch_var",
@@ -18,6 +18,7 @@ const PROGRAMS: [&str; 31] = [
     "iter_pipeline_by_hand",
     "list",
     "loop",
+    "mandelbrot",
     "nbody",
     "orders",
     "orders_by_hand",
@@ -668,6 +669,27 @@ fn std_list() {
 }
 
 #[test]
+fn mandelbrot() {
+    insta::assert_debug_snapshot!(stats("mandelbrot", "6518\n"), @"
+    RunStats {
+        evidence_steps: 0,
+        yields: 0,
+        yield_frames: 0,
+        unwound_frames: 0,
+        string_bytes_copied: 4,
+        rc_increments: 0,
+        rc_decrements: 32769,
+        boxes: 0,
+        unboxes: 0,
+        allocations: 32770,
+        reuses: 399752,
+        peak_objects: 3,
+        peak_stack: 45,
+    }
+    ");
+}
+
+#[test]
 fn nbody() {
     insta::assert_debug_snapshot!(stats("nbody", "-0.169075164\n-0.169087605\n"), @"
     RunStats {
@@ -922,6 +944,7 @@ fn unwind_points() {
     iter_pipeline_by_hand: 11
     list: 9
     loop: 4
+    mandelbrot: 27
     nbody: 91
     orders: 12
     orders_by_hand: 12
