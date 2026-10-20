@@ -415,6 +415,9 @@ impl<'a> BodyLowering<'a> {
             ast::Expr::FieldSection(section) => self.lower_field_section(&section, range),
             ast::Expr::RecordExpr(record) => self.lower_record(&record, range),
             ast::Expr::UpdateExpr(update) => self.lower_update(&update, range),
+            // S14c-3 の作業 3 で HIR の形を足すまでは E0004 にして、後の段階にこの構文を渡さない
+            ast::Expr::AssignExpr(_) => self.unsupported(range, "assignment is not supported yet"),
+            ast::Expr::IndexExpr(_) => self.unsupported(range, "indexing is not supported yet"),
         }
     }
 
@@ -546,6 +549,14 @@ impl<'a> BodyLowering<'a> {
                     let ty = stmt.ty().map(|ty| self.lower_type(Some(ty), stmt_range));
                     let pat = self.lower_pat(stmt.pat(), stmt_range);
                     stmts.push(Stmt::Let { pat, ty, init });
+                }
+                ast::Stmt::VarStmt(_) => {
+                    let expr = self.unsupported(stmt_range, "`var` is not supported yet");
+                    if index + 1 == all.len() {
+                        tail = Some(expr);
+                    } else {
+                        stmts.push(Stmt::Expr(expr));
+                    }
                 }
                 ast::Stmt::UseStmt(stmt) => {
                     tail = Some(self.lower_use(stmt, &all[index + 1..], range));

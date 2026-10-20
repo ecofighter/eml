@@ -1456,3 +1456,397 @@ fn and_with_a_capitalized_name_keeps_it_out_of_the_parameters() {
     E0011 1:24 expected a name
     "#);
 }
+
+/// `var` はブロックの文で、名前を1つだけ束縛する (docs/spec/grammar.md の `stmt`)。
+#[test]
+fn var_statements() {
+    let text = lines(&["main () =", "  var x = 1", "  var y : Int = x", "  y"]);
+    insta::assert_snapshot!(shape(&text), @r#"
+    SOURCE_FILE
+      EQUATION
+        NAME
+          LIDENT "main"
+        UNIT_PAT
+          L_PAREN "("
+          R_PAREN ")"
+        EQ "="
+        BLOCK
+          VAR_STMT
+            VAR_KW "var"
+            NAME
+              LIDENT "x"
+            EQ "="
+            LITERAL
+              INT "1"
+          VAR_STMT
+            VAR_KW "var"
+            NAME
+              LIDENT "y"
+            COLON ":"
+            PATH_TYPE
+              PATH
+                NAME_REF
+                  UIDENT "Int"
+            EQ "="
+            PATH_EXPR
+              PATH
+                NAME_REF
+                  LIDENT "x"
+          EXPR_STMT
+            PATH_EXPR
+              PATH
+                NAME_REF
+                  LIDENT "y"
+    "#);
+}
+
+/// `:=` は `expr` の段の式なので、ラムダの本体と `if` の枝に括弧なしで書ける。
+#[test]
+fn assignment_in_a_lambda_body_and_if_branches() {
+    let text = lines(&[
+        "main () =",
+        "  for 0 n (fn i -> a[i] := i)",
+        "  if c then x := 1 else x := 2",
+    ]);
+    insta::assert_snapshot!(shape(&text), @r#"
+    SOURCE_FILE
+      EQUATION
+        NAME
+          LIDENT "main"
+        UNIT_PAT
+          L_PAREN "("
+          R_PAREN ")"
+        EQ "="
+        BLOCK
+          EXPR_STMT
+            APP_EXPR
+              PATH_EXPR
+                PATH
+                  NAME_REF
+                    LIDENT "for"
+              LITERAL
+                INT "0"
+              PATH_EXPR
+                PATH
+                  NAME_REF
+                    LIDENT "n"
+              PAREN_EXPR
+                L_PAREN "("
+                LAMBDA_EXPR
+                  FN_KW "fn"
+                  BIND_PAT
+                    NAME
+                      LIDENT "i"
+                  THIN_ARROW "->"
+                  ASSIGN_EXPR
+                    INDEX_EXPR
+                      PATH_EXPR
+                        PATH
+                          NAME_REF
+                            LIDENT "a"
+                      L_BRACK "["
+                      PATH_EXPR
+                        PATH
+                          NAME_REF
+                            LIDENT "i"
+                      R_BRACK "]"
+                    COLON_EQ ":="
+                    PATH_EXPR
+                      PATH
+                        NAME_REF
+                          LIDENT "i"
+                R_PAREN ")"
+          EXPR_STMT
+            IF_EXPR
+              IF_KW "if"
+              PATH_EXPR
+                PATH
+                  NAME_REF
+                    LIDENT "c"
+              THEN_KW "then"
+              ASSIGN_EXPR
+                PATH_EXPR
+                  PATH
+                    NAME_REF
+                      LIDENT "x"
+                COLON_EQ ":="
+                LITERAL
+                  INT "1"
+              ELSE_KW "else"
+              ASSIGN_EXPR
+                PATH_EXPR
+                  PATH
+                    NAME_REF
+                      LIDENT "x"
+                COLON_EQ ":="
+                LITERAL
+                  INT "2"
+    "#);
+}
+
+/// 行末の `:=` は `=` と同じくブロックを開く (docs/spec/layout.md の規則 3)。
+#[test]
+fn a_line_final_colon_eq_opens_a_block() {
+    let text = lines(&["main () =", "  x :=", "    let y = 1", "    y + 1", "  x"]);
+    insta::assert_snapshot!(shape(&text), @r#"
+    SOURCE_FILE
+      EQUATION
+        NAME
+          LIDENT "main"
+        UNIT_PAT
+          L_PAREN "("
+          R_PAREN ")"
+        EQ "="
+        BLOCK
+          EXPR_STMT
+            ASSIGN_EXPR
+              PATH_EXPR
+                PATH
+                  NAME_REF
+                    LIDENT "x"
+              COLON_EQ ":="
+              BLOCK
+                LET_STMT
+                  LET_KW "let"
+                  BIND_PAT
+                    NAME
+                      LIDENT "y"
+                  EQ "="
+                  LITERAL
+                    INT "1"
+                EXPR_STMT
+                  OP_SEQ
+                    PATH_EXPR
+                      PATH
+                        NAME_REF
+                          LIDENT "y"
+                    OP "+"
+                    LITERAL
+                      INT "1"
+          EXPR_STMT
+            PATH_EXPR
+              PATH
+                NAME_REF
+                  LIDENT "x"
+    "#);
+}
+
+#[test]
+fn index_binds_tighter_than_application() {
+    let text = lines(&[
+        "main () =",
+        "  f xs[i]",
+        "  a[i][j]",
+        "  t.0[i]",
+        "  (f x)[0]",
+    ]);
+    insta::assert_snapshot!(shape(&text), @r#"
+    SOURCE_FILE
+      EQUATION
+        NAME
+          LIDENT "main"
+        UNIT_PAT
+          L_PAREN "("
+          R_PAREN ")"
+        EQ "="
+        BLOCK
+          EXPR_STMT
+            APP_EXPR
+              PATH_EXPR
+                PATH
+                  NAME_REF
+                    LIDENT "f"
+              INDEX_EXPR
+                PATH_EXPR
+                  PATH
+                    NAME_REF
+                      LIDENT "xs"
+                L_BRACK "["
+                PATH_EXPR
+                  PATH
+                    NAME_REF
+                      LIDENT "i"
+                R_BRACK "]"
+          EXPR_STMT
+            INDEX_EXPR
+              INDEX_EXPR
+                PATH_EXPR
+                  PATH
+                    NAME_REF
+                      LIDENT "a"
+                L_BRACK "["
+                PATH_EXPR
+                  PATH
+                    NAME_REF
+                      LIDENT "i"
+                R_BRACK "]"
+              L_BRACK "["
+              PATH_EXPR
+                PATH
+                  NAME_REF
+                    LIDENT "j"
+              R_BRACK "]"
+          EXPR_STMT
+            INDEX_EXPR
+              FIELD_EXPR
+                PATH_EXPR
+                  PATH
+                    NAME_REF
+                      LIDENT "t"
+                DOT "."
+                INT "0"
+              L_BRACK "["
+              PATH_EXPR
+                PATH
+                  NAME_REF
+                    LIDENT "i"
+              R_BRACK "]"
+          EXPR_STMT
+            INDEX_EXPR
+              PAREN_EXPR
+                L_PAREN "("
+                APP_EXPR
+                  PATH_EXPR
+                    PATH
+                      NAME_REF
+                        LIDENT "f"
+                  PATH_EXPR
+                    PATH
+                      NAME_REF
+                        LIDENT "x"
+                R_PAREN ")"
+              L_BRACK "["
+              LITERAL
+                INT "0"
+              R_BRACK "]"
+    "#);
+}
+
+/// 前に空白があれば、今までどおりリストを渡す関数適用である。
+#[test]
+fn a_spaced_bracket_is_an_argument() {
+    insta::assert_snapshot!(shape("main () = f [i]"), @r#"
+    SOURCE_FILE
+      EQUATION
+        NAME
+          LIDENT "main"
+        UNIT_PAT
+          L_PAREN "("
+          R_PAREN ")"
+        EQ "="
+        APP_EXPR
+          PATH_EXPR
+            PATH
+              NAME_REF
+                LIDENT "f"
+          LIST_EXPR
+            L_BRACK "["
+            PATH_EXPR
+              PATH
+                NAME_REF
+                  LIDENT "i"
+            R_BRACK "]"
+    "#);
+}
+
+/// 行頭の `[` の前には、レイアウト段の仮想トークンが幅 0 で接している。仮想トークンは添字の前のトークンに数えない。
+#[test]
+fn a_line_initial_bracket_is_not_an_index() {
+    let text = lines(&["main () =", "  x", "  [1, 2]"]);
+    insta::assert_snapshot!(shape(&text), @r#"
+    SOURCE_FILE
+      EQUATION
+        NAME
+          LIDENT "main"
+        UNIT_PAT
+          L_PAREN "("
+          R_PAREN ")"
+        EQ "="
+        BLOCK
+          EXPR_STMT
+            PATH_EXPR
+              PATH
+                NAME_REF
+                  LIDENT "x"
+          EXPR_STMT
+            LIST_EXPR
+              L_BRACK "["
+              LITERAL
+                INT "1"
+              COMMA ","
+              LITERAL
+                INT "2"
+              R_BRACK "]"
+    "#);
+}
+
+#[test]
+fn var_with_a_pattern_is_an_error() {
+    let text = lines(&["main () =", "  var (a, b) = p", "  a"]);
+    insta::assert_snapshot!(shape(&text), @r#"
+    SOURCE_FILE
+      EQUATION
+        NAME
+          LIDENT "main"
+        UNIT_PAT
+          L_PAREN "("
+          R_PAREN ")"
+        EQ "="
+        BLOCK
+          VAR_STMT
+            VAR_KW "var"
+            ERROR
+              L_PAREN "("
+              LIDENT "a"
+              COMMA ","
+              LIDENT "b"
+              R_PAREN ")"
+              EQ "="
+              LIDENT "p"
+          EXPR_STMT
+            PATH_EXPR
+              PATH
+                NAME_REF
+                  LIDENT "a"
+    ---
+    E0011 2:7 expected a variable name
+    "#);
+}
+
+#[test]
+fn colon_eq_in_the_value_is_an_error() {
+    let text = lines(&["main () =", "  x := y := 1", "  x"]);
+    insta::assert_snapshot!(shape(&text), @r#"
+    SOURCE_FILE
+      EQUATION
+        NAME
+          LIDENT "main"
+        UNIT_PAT
+          L_PAREN "("
+          R_PAREN ")"
+        EQ "="
+        BLOCK
+          EXPR_STMT
+            ASSIGN_EXPR
+              PATH_EXPR
+                PATH
+                  NAME_REF
+                    LIDENT "x"
+              COLON_EQ ":="
+              PATH_EXPR
+                PATH
+                  NAME_REF
+                    LIDENT "y"
+              ERROR
+                COLON_EQ ":="
+                LITERAL
+                  INT "1"
+          EXPR_STMT
+            PATH_EXPR
+              PATH
+                NAME_REF
+                  LIDENT "x"
+    ---
+    E0011 2:10 the value of an assignment cannot contain `:=`
+    "#);
+}

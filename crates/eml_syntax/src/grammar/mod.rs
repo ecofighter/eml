@@ -263,6 +263,7 @@ fn token_name(kind: SyntaxKind) -> &'static str {
         PIPE => "`|`",
         THIN_ARROW => "`->`",
         LEFT_ARROW => "`<-`",
+        COLON_EQ => "`:=`",
         R_PAREN => "`)`",
         R_BRACK => "`]`",
         R_BRACE => "`}`",

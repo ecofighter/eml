@@ -63,6 +63,7 @@ pub(crate) fn operator_kind(op: &str) -> SyntaxKind {
         "<-" => LEFT_ARROW,
         ".." => DOT2,
         "=>" => FAT_ARROW,
+        ":=" => COLON_EQ,
         "-" => MINUS,
         _ if op.starts_with(':') => CONOP,
         _ => OP,
@@ -422,6 +423,14 @@ impl Lexer<'_> {
                 self.push(operator_kind(rest), self.pos + rest.len());
                 return;
             }
+            Ok(Raw::Op) if slice.len() > 2 && slice.starts_with(":=") => {
+                // `x :=-1` を `x := -1` と読むため、`-><` と同じく `:=` をいつも独立したトークンにする。
+                // そのため `:=` で始まるコンストラクタの演算子は定義できない (docs/spec/lexical.md の「演算子」)。
+                self.push(COLON_EQ, self.pos + 2);
+                let rest = &slice[2..];
+                self.push(operator_kind(rest), self.pos + rest.len());
+                return;
+            }
             Ok(Raw::Op) => operator_kind(slice),
             Ok(Raw::LParen) => L_PAREN,
             Ok(Raw::RParen) => R_PAREN,
@@ -587,6 +596,7 @@ fn keyword(ident: &str) -> Option<SyntaxKind> {
         "class" => CLASS_KW,
         "instance" => INSTANCE_KW,
         "deriving" => DERIVING_KW,
+        "var" => VAR_KW,
         _ => return None,
     })
 }

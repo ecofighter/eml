@@ -70,7 +70,7 @@ fn resume_is_an_ordinary_name() {
 fn all_keywords() {
     let text = "data type effect where pub extern import as infixl infixr infix \
                 let in if then else match with handle from drop return \
-                never once multi use fn ctl and forall class instance deriving";
+                never once multi use fn ctl and forall class instance deriving var";
     assert_eq!(
         kinds(text),
         [
@@ -107,6 +107,7 @@ fn all_keywords() {
             "CLASS_KW",
             "INSTANCE_KW",
             "DERIVING_KW",
+            "VAR_KW",
         ]
     );
 }
@@ -163,6 +164,26 @@ fn an_arrow_followed_by_an_angle_is_split() {
     assert_eq!(kinds("-><>"), ["THIN_ARROW", "OP"]);
     assert_eq!(kinds("-><-"), ["THIN_ARROW", "LEFT_ARROW"]);
     assert_eq!(kinds("a --><  b"), ["LIDENT", "OP", "LIDENT"]);
+}
+
+#[test]
+fn colon_eq_is_reserved() {
+    assert_eq!(
+        kinds("x := 1 :: xs : T"),
+        [
+            "LIDENT", "COLON_EQ", "INT", "CONOP", "LIDENT", "COLON", "UIDENT"
+        ]
+    );
+}
+
+/// `:=` で始まる演算子の並びは、`-><` と同じく `:=` と残りに分けて切る (docs/spec/lexical.md の「演算子」)。
+#[test]
+fn a_colon_eq_run_is_split() {
+    assert_eq!(kinds(":=-1"), ["COLON_EQ", "MINUS", "INT"]);
+    assert_eq!(kinds("x :=-1"), ["LIDENT", "COLON_EQ", "MINUS", "INT"]);
+    assert_eq!(kinds("a :=> b"), ["LIDENT", "COLON_EQ", "OP", "LIDENT"]);
+    // `:` で始まる他の並びは、今までどおりコンストラクタの演算子である
+    assert_eq!(kinds("a :+= b"), ["LIDENT", "CONOP", "LIDENT"]);
 }
 
 #[test]

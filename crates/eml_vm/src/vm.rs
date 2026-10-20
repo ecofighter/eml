@@ -878,7 +878,7 @@ fn run_extern<M: Mode>(
                 let b = ctx.env_has(task.get(arg(0)))?;
                 task.set_raw(dst, b);
             }
-            Extern::EnvVar => {
+            Extern::EnvLookup => {
                 let w = ctx.env_var(task.get(arg(0)))?;
                 task.set(dst, w);
             }

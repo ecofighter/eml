@@ -116,6 +116,7 @@ ast_node! {
     Block => BLOCK,
     LetStmt => LET_STMT,
     UseStmt => USE_STMT,
+    VarStmt => VAR_STMT,
     ExprStmt => EXPR_STMT,
     IfExpr => IF_EXPR,
     MatchExpr => MATCH_EXPR,
@@ -131,6 +132,8 @@ ast_node! {
     AppExpr => APP_EXPR,
     DropExpr => DROP_EXPR,
     FieldExpr => FIELD_EXPR,
+    AssignExpr => ASSIGN_EXPR,
+    IndexExpr => INDEX_EXPR,
     PathExpr => PATH_EXPR,
     Literal => LITERAL,
     StringLit => STRING_LIT,
@@ -191,14 +194,14 @@ ast_enum! {
 }
 
 ast_enum! {
-    Stmt { LetStmt, UseStmt, ExprStmt }
+    Stmt { LetStmt, UseStmt, VarStmt, ExprStmt }
 }
 
 ast_enum! {
     /// `body ::= block(stmt) | expr` を1つの型で受けられるように、字下げしたブロック (`Block`) も式に含める。
     Expr {
         Block, IfExpr, MatchExpr, HandleExpr, LambdaExpr, LetExpr, OpSeq, AppExpr,
-        DropExpr, FieldExpr, PathExpr, Literal, StringLit, CommandLit, UnitExpr, ParenExpr, TupleExpr, ListExpr, AnnotExpr, OpRef,
+        DropExpr, FieldExpr, AssignExpr, IndexExpr, PathExpr, Literal, StringLit, CommandLit, UnitExpr, ParenExpr, TupleExpr, ListExpr, AnnotExpr, OpRef,
         LeftSection, RightSection, FieldSection, RecordExpr, UpdateExpr,
     }
 }
@@ -609,6 +612,21 @@ impl UseStmt {
 
     pub fn expr(&self) -> Option<Expr> {
         support::child(&self.syntax)
+    }
+}
+
+impl VarStmt {
+    pub fn name(&self) -> Option<Name> {
+        support::child(&self.syntax)
+    }
+
+    pub fn ty(&self) -> Option<Type> {
+        support::child(&self.syntax)
+    }
+
+    /// `=` の後の初期値。
+    pub fn init(&self) -> Option<Expr> {
+        child_between(&self.syntax, Some(SyntaxKind::EQ), None)
     }
 }
 
@@ -1066,6 +1084,28 @@ impl FieldExpr {
     /// `.` の後の名前 (`LIDENT`) か番号 (`INT`)。
     pub fn field(&self) -> Option<SyntaxToken> {
         field_token(&self.syntax)
+    }
+}
+
+impl AssignExpr {
+    /// `:=` の左辺。名前か添字かは HIR が確かめる。
+    pub fn target(&self) -> Option<Expr> {
+        child_between(&self.syntax, None, Some(SyntaxKind::COLON_EQ))
+    }
+
+    pub fn value(&self) -> Option<Expr> {
+        child_between(&self.syntax, Some(SyntaxKind::COLON_EQ), None)
+    }
+}
+
+impl IndexExpr {
+    /// `e[i]` の `e`。
+    pub fn base(&self) -> Option<Expr> {
+        child_between(&self.syntax, None, Some(SyntaxKind::L_BRACK))
+    }
+
+    pub fn index(&self) -> Option<Expr> {
+        child_between(&self.syntax, Some(SyntaxKind::L_BRACK), None)
     }
 }
 

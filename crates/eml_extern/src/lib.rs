@@ -275,7 +275,7 @@ pub enum Extern {
     EnvArgCount,
     EnvArg,
     EnvHas,
-    EnvVar,
+    EnvLookup,
     StdinReadAll,
     StdinReadLine,
     WriteText,
@@ -401,7 +401,7 @@ impl Extern {
         Extern::EnvArgCount,
         Extern::EnvArg,
         Extern::EnvHas,
-        Extern::EnvVar,
+        Extern::EnvLookup,
         Extern::StdinReadAll,
         Extern::StdinReadLine,
         Extern::WriteText,
@@ -571,7 +571,7 @@ impl Extern {
             Extern::EnvArgCount => row("Std.Env.arg_count", &[Unit], Int, Purity::Effectful),
             Extern::EnvArg => row("Std.Env.arg", &[Int], Obj, Purity::Effectful),
             Extern::EnvHas => row("Std.Env.has", &[Obj], Enum, Purity::Effectful),
-            Extern::EnvVar => row("Std.Env.var", &[Obj], Obj, Purity::Effectful),
+            Extern::EnvLookup => row("Std.Env.lookup", &[Obj], Obj, Purity::Effectful),
             Extern::StdinReadAll => row("Std.Stdin.read_all", &[Unit], Obj, Purity::Effectful),
             Extern::StdinReadLine => {
                 row("Std.Stdin.read_line_raw", &[Unit], Obj, Purity::Effectful)

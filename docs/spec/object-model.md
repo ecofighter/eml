@@ -787,7 +787,7 @@ token の表の項目は、`into_token` と `release_reuse` が添字を使い�
 | `Std.Fs.read_all`、`read_line_raw` | `Ctx::fs_read` (`line` が偽と真) |
 | `Std.Fs.write_text` | `Ctx::fs_write_text` |
 | `Std.String.byte_length`、`byte_at`、`slice`、`find_from` | `Ctx::string_byte_length`、`string_byte_at`、`string_slice`、`string_find_from` |
-| `Std.Env.arg_count`、`arg`、`has`、`var` | `Ctx::env_arg_count`、`env_arg`、`env_has`、`env_var` |
+| `Std.Env.arg_count`、`arg`、`has`、`lookup` | `Ctx::env_arg_count`、`env_arg`、`env_has`、`env_var` |
 | `Std.Stdin.read_all`、`read_line_raw` | `Ctx::stdin_read` (`line` が偽と真) |
 | `Std.Proc.status` | `Ctx::proc_status` |
 
@@ -967,7 +967,7 @@ pub struct Opened {
 - `Fs.read_all`: ファイルの長さ
 - `Fs.read_line_raw`: 読んだ行の長さ (行の終わりを含む)
 - `String.slice`: 結果の長さ
-- `Env.arg`、`Env.var`、標準入力の読み: 写した文字列の長さ
+- `Env.arg`、`Env.lookup`、標準入力の読み: 写した文字列の長さ
 - `++`: 左が一意 (rc 1 の局所の物体) なら右の長さだけを数え、容量が足りずに作り直しても同じである。左が共有か不死なら、両辺の長さを数える
 
 ## `unsafe` の核

@@ -3,7 +3,7 @@ extern arg_count : Unit -> <IO> Int
 extern arg : Int -> <IO, Panic> String
 extern has : String -> <IO> Bool
 -- 設定されていなければ空の文字列である
-extern var : String -> <IO> String
+extern lookup : String -> <IO> String
 
 -- `eml` とスクリプトのパスより後ろの引数
 pub args : Unit -> <IO, Panic> List String
@@ -14,4 +14,4 @@ collect_args : Int -> List String -> <IO, Panic> List String
 collect_args n acc = if n == 0 then acc else collect_args (n - 1) (arg (n - 1) :: acc)
 
 pub get : String -> <IO> Option String
-get name = if has name then Some (var name) else None
+get name = if has name then Some (lookup name) else None

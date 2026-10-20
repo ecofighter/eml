@@ -926,7 +926,7 @@ fn arithmetic(ext: Extern, dst: Slot, args: &[Slot]) -> Option<Op> {
         | Extern::EnvArgCount
         | Extern::EnvArg
         | Extern::EnvHas
-        | Extern::EnvVar
+        | Extern::EnvLookup
         | Extern::StdinReadAll
         | Extern::StdinReadLine
         | Extern::WriteText

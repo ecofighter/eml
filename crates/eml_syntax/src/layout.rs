@@ -29,8 +29,9 @@ enum BracketKind {
 }
 
 /// 規則 3 の開始トークン。
-pub(crate) const BLOCK_STARTERS: [SyntaxKind; 6] =
-    [EQ, THIN_ARROW, WITH_KW, THEN_KW, ELSE_KW, WHERE_KW];
+pub(crate) const BLOCK_STARTERS: [SyntaxKind; 7] = [
+    EQ, COLON_EQ, THIN_ARROW, WITH_KW, THEN_KW, ELSE_KW, WHERE_KW,
+];
 
 /// 列はバイトではなく、0 始まりの文字数で数える。
 struct Item {
@@ -572,6 +573,22 @@ mod tests {
         assert_eq!(
             layout_of("f =\n  a\n  b\ng"),
             "f = <OPEN> a <SEP> b <CLOSE> <SEP> g"
+        );
+    }
+
+    #[test]
+    fn colon_eq_at_end_of_line_opens_a_block() {
+        assert_eq!(
+            layout_of("f =\n  x :=\n    a\n  x"),
+            "f = <OPEN> x := <OPEN> a <CLOSE> <SEP> x <CLOSE>"
+        );
+    }
+
+    #[test]
+    fn colon_eq_aborts_an_unclosed_row() {
+        assert_eq!(
+            layout_of("f = (fn () ->\n    x : A -> <IO := h, 1)"),
+            "f = ( fn ( ) -> <OPEN> x : A -> < IO := h <CLOSE> , 1 )"
         );
     }
 

@@ -173,6 +173,19 @@ impl<'t> Parser<'t> {
         }
     }
 
+    /// 前のトークンが本物で、今のトークンに空白なしで接していれば、その種類を返す。仮想トークンは幅 0 で次の
+    /// トークンの先頭に置かれるので、`touches_prev` だけでは行頭のトークンも前に接していると判定される。
+    pub(crate) fn touching_prev(&self) -> Option<SyntaxKind> {
+        let prev = self.behind(1)?;
+        (!prev.is_virtual() && self.touches_prev()).then_some(prev)
+    }
+
+    /// `n` 個前のトークンの種類。
+    pub(crate) fn behind(&self, n: usize) -> Option<SyntaxKind> {
+        let at = self.pos.checked_sub(n)?;
+        self.tokens.get(at).map(|token| token.kind)
+    }
+
     pub(crate) fn touches_next(&self) -> bool {
         match (self.tokens.get(self.pos), self.tokens.get(self.pos + 1)) {
             (Some(current), Some(next)) => current.range.end() == next.range.start(),

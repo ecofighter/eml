@@ -59,6 +59,10 @@ fn stmt_inner(p: &mut Parser) -> bool {
             use_stmt(p);
             true
         }
+        VAR_KW => {
+            var_stmt(p);
+            true
+        }
         _ => {
             let m = p.start();
             if expr(p) {
@@ -85,6 +89,28 @@ fn let_stmt(p: &mut Parser) {
     } else {
         m.complete(p, LET_STMT);
     }
+}
+
+/// `var` の後には名前を1つだけ書く。パターンを書けば、文の終わりまでを `ERROR` にする (docs/spec/grammar.md の
+/// `stmt`)。
+fn var_stmt(p: &mut Parser) {
+    let m = p.start();
+    p.bump(VAR_KW);
+    if p.at(LIDENT) {
+        name(p);
+        if p.eat(COLON) {
+            types::type_(p);
+        }
+        if expect(p, EQ) {
+            body(p);
+        }
+    } else {
+        expected(p, "a variable name");
+        let rest = p.start();
+        skip_to_sep(p, true);
+        rest.complete(p, ERROR);
+    }
+    m.complete(p, VAR_STMT);
 }
 
 /// `let` の次が名前と引数の先頭なら関数の形である。`-` は演算子として読ませ、`let f -1 = …` を関数にしない
@@ -233,16 +259,74 @@ pub(super) fn expr(p: &mut Parser) -> bool {
     nested(p, true, expr_inner)
 }
 
+/// `:=` は優先順位が最も低いので、`expr` の段でだけ読む。括弧の中の `op_expr` には現れない
+/// (docs/spec/grammar.md の `expr`)。
 fn expr_inner(p: &mut Parser) -> bool {
+    if p.at_ts(EXPR_FORMS) {
+        expr_form(p);
+        return true;
+    }
+    let m = p.start();
+    if op_expr(p, false) == OpExpr::Nothing {
+        m.abandon(p);
+        return false;
+    }
+    if p.at(COLON_EQ) {
+        assignment_value(p);
+        m.complete(p, ASSIGN_EXPR);
+    } else {
+        m.abandon(p);
+    }
+    true
+}
+
+fn expr_form(p: &mut Parser) {
     match p.current() {
         IF_KW => if_expr(p),
         MATCH_KW => match_expr(p),
         HANDLE_KW => handle_expr(p),
         FN_KW => lambda(p),
         LET_KW => let_expr(p),
-        _ => return op_expr(p, false) != OpExpr::Nothing,
+        kind => unreachable!("{kind:?} does not start an expression form"),
     }
-    true
+}
+
+/// `expr` と同じく1段に数えて読むが、`:=` を取り込まない。
+fn expr_without_assignment(p: &mut Parser) -> bool {
+    nested(p, true, |p| {
+        if p.at_ts(EXPR_FORMS) {
+            expr_form(p);
+            true
+        } else {
+            op_expr(p, false) != OpExpr::Nothing
+        }
+    })
+}
+
+/// 行末の `:=` はブロックを開くので、右辺は `body` と同じく、ブロックか式である。ブロックの中の文の `:=` は
+/// それぞれの文の代入である。右辺の式の続きに書いた `:=` は誤りにして、その後ろを `ERROR` に入れる
+/// (docs/spec/grammar.md の `expr`)。
+fn assignment_value(p: &mut Parser) {
+    p.bump(COLON_EQ);
+    if p.at(LAYOUT_OPEN) {
+        body(p);
+        return;
+    }
+    if !expr_without_assignment(p) {
+        expected(p, "an expression");
+        return;
+    }
+    if p.at(COLON_EQ) {
+        p.error(
+            codes::SYNTAX_ERROR,
+            "the value of an assignment cannot contain `:=`",
+            "write each assignment as its own statement",
+        );
+        let rest = p.start();
+        p.bump(COLON_EQ);
+        expr(p);
+        rest.complete(p, ERROR);
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -387,28 +471,58 @@ fn app(p: &mut Parser) {
 
 /// 連鎖は再帰せずに深い木を作るので、各段を入れ子の深さに数える。先頭の atom は連鎖の段の数だけ深くなるので、
 /// 各段はその高さを下に確保して数える。数えないと、長い連鎖の木の解放がスタックを溢れさせる (docs/spec/grammar.md)。
+/// 添字の式は後の段の下にも来るので、確保する高さには添字の式の高さに1段足したものも含める。
 fn postfix(p: &mut Parser) -> bool {
-    let (Some(mut lhs), height) = p.measure(atom) else {
+    let (Some(mut lhs), mut height) = p.measure(atom) else {
         return false;
     };
     let mut entered = 0;
-    while p.at(DOT) && matches!(p.nth(1), LIDENT | INT) {
-        if !enter_link(p, height, &mut entered) {
+    loop {
+        if p.at(DOT) && matches!(p.nth(1), LIDENT | INT) {
+            if !enter_link(p, height, &mut entered) {
+                break;
+            }
+            let m = lhs.precede(p);
+            dot(p);
+            if p.at(INT) {
+                field_index(p);
+            } else {
+                p.bump(LIDENT);
+            }
+            lhs = m.complete(p, FIELD_EXPR);
+        } else if p.at(L_BRACK) && at_index(p) {
+            if !enter_link(p, height, &mut entered) {
+                break;
+            }
+            let m = lhs.precede(p);
+            p.bump(L_BRACK);
+            let (parsed, index_height) = p.measure(element);
+            if !parsed {
+                expected(p, "an expression");
+            }
+            height = height.max(index_height + 1);
+            close_bracket(p, R_BRACK);
+            lhs = m.complete(p, INDEX_EXPR);
+        } else {
             break;
         }
-        let m = lhs.precede(p);
-        dot(p);
-        if p.at(INT) {
-            field_index(p);
-        } else {
-            p.bump(LIDENT);
-        }
-        lhs = m.complete(p, FIELD_EXPR);
     }
     for _ in 0..entered {
         p.leave();
     }
     true
+}
+
+/// `[` が前のトークンに空白なしで続くときだけ、添字と読む。字句を変えずに `x[i]` と `x [i]` を区別するためである。
+/// 前のトークンは名前、閉じ括弧、射影の番号 (`t.0[i]` の `0`) に限る。レイアウト段の仮想トークンは幅 0 で次の
+/// トークンの先頭に置かれるので、本物のトークンだけを見る。そうしないと、行頭の `[` が前に接していると読まれる
+/// (docs/spec/grammar.md の `postfix`)。
+fn at_index(p: &Parser) -> bool {
+    match p.touching_prev() {
+        Some(LIDENT | UIDENT | R_PAREN | R_BRACK | R_BRACE) => true,
+        Some(INT) => p.behind(2) == Some(DOT),
+        _ => false,
+    }
 }
 
 fn atom(p: &mut Parser) -> Option<CompletedMarker> {
@@ -669,7 +783,7 @@ fn paren_expr(p: &mut Parser) -> SyntaxKind {
             if p.at(R_PAREN) && count >= 2 {
                 break;
             }
-            if !expr(p) {
+            if !expr_without_assignment(p) {
                 expected(p, "an expression");
                 break;
             }

@@ -97,6 +97,24 @@ fn moderate_field_access_chain_is_fine() {
 }
 
 #[test]
+fn long_index_chain_reports_one_error() {
+    assert_one_nesting_error(&format!("x = a{}", "[0]".repeat(30_000)));
+}
+
+#[test]
+fn moderate_index_chain_is_fine() {
+    assert!(diagnostics(&format!("x = a{}", "[0]".repeat(200))).is_empty());
+}
+
+/// 先に読んだ添字の式は、後の添字の段の下に来る。
+#[test]
+fn a_tall_index_is_counted_under_the_later_indexes() {
+    let sum = vec!["i"; 130].join(" + ");
+    assert!(diagnostics(&format!("x = a[{sum}]")).is_empty());
+    assert_one_nesting_error(&format!("x = a[{sum}]{}", "[0]".repeat(130)));
+}
+
+#[test]
 fn long_operator_chain_reports_one_error() {
     assert_one_nesting_error(&format!("x = a{}", " || a".repeat(30_000)));
 }

@@ -74,10 +74,38 @@ fn block_statements() {
         .map(|stmt| match stmt {
             Stmt::LetStmt(_) => "let",
             Stmt::UseStmt(_) => "use",
+            Stmt::VarStmt(_) => "var",
             Stmt::ExprStmt(_) => "expr",
         })
         .collect();
     assert_eq!(stmts, ["let", "use", "expr"]);
+}
+
+#[test]
+fn var_assignment_and_index_accessors() {
+    let file = source("main () =\n  var x : Int = 1\n  a[i] := x");
+    let Some(Expr::Block(block)) = first_equation(&file).body() else {
+        panic!("expected a block body");
+    };
+    let stmts: Vec<Stmt> = block.stmts().collect();
+    let Stmt::VarStmt(var) = &stmts[0] else {
+        panic!("expected a var statement");
+    };
+    assert_eq!(var.name().unwrap().token().text(), "x");
+    assert!(matches!(var.ty(), Some(Type::PathType(_))));
+    assert!(matches!(var.init(), Some(Expr::Literal(_))));
+    let Stmt::ExprStmt(stmt) = &stmts[1] else {
+        panic!("expected an expression statement");
+    };
+    let Some(Expr::AssignExpr(assign)) = stmt.expr() else {
+        panic!("expected an assignment");
+    };
+    let Some(Expr::IndexExpr(index)) = assign.target() else {
+        panic!("expected an index target");
+    };
+    assert_eq!(index.base().unwrap().syntax().text().to_string(), "a");
+    assert_eq!(index.index().unwrap().syntax().text().to_string(), "i");
+    assert_eq!(assign.value().unwrap().syntax().text().to_string(), "x");
 }
 
 #[test]
