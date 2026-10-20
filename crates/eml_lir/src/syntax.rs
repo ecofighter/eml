@@ -267,7 +267,7 @@ fn float_word(word: &str, line: usize) -> Result<Option<FloatBits>, ParseError> 
         Ok(value) if format!("{value:?}") == word => Ok(Some(FloatBits::new(value))),
         _ => Err(error(
             line,
-            format!("`{word}` is not written as a float prints (Rust `{{:?}}`)"),
+            format!("`{word}` is not a float constant in Rust `{{:?}}` form"),
         )),
     }
 }

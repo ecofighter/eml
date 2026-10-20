@@ -36,10 +36,13 @@ pub is_nan : Float -> Bool
 is_nan x = x != x
 
 -- 前後の空白を除き、符号、10進と指数の形、`inf`、`infinity`、`nan` (大文字小文字を問わない) を読む。`_` は受けない。
--- extern は `Option` を作らないので、読めるかと値を別の extern で求める (docs/spec/stdlib.md の「extern の境界」)
+-- extern は `Option` を作らないので、読めない文字列は `parse_raw` が NaN で返す。読めた結果も NaN になりうる
+-- (`nan`) ので、NaN のときだけ `can_parse` で読めたかを確かめる (docs/spec/stdlib.md の「extern の境界」)
 pub parse : String -> Option Float
-parse s = if can_parse s then Some (parse_raw s) else None
+parse s =
+  let x = parse_raw s
+  if x == x || can_parse s then Some x else None
 
 extern can_parse : String -> Bool
--- 読めない文字列には呼ばない
+-- 読めない文字列には NaN を返す
 extern parse_raw : String -> Float

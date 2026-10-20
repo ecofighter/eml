@@ -901,7 +901,7 @@ fn floats_are_written_as_they_print() {
         assert_eq!(error.line, 2, "{word}");
         assert_eq!(
             error.message,
-            format!("`{word}` is not written as a float prints (Rust `{{:?}}`)"),
+            format!("`{word}` is not a float constant in Rust `{{:?}}` form"),
         );
     }
 }

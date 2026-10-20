@@ -635,8 +635,9 @@ pub fn float_repr(x: f64) -> String {
     let mantissa_len = shortest.find('e').expect("`{:e}` writes an exponent");
     let digit_count = shortest[..mantissa_len].bytes().filter(|b| b.is_ascii_digit()).count();
     let rounded = format!("{x:.prec$e}", prec = digit_count - 1);
-    // 2 の冪では、往復できる区間が下側だけ狭い。正しく丸めた桁がその外に出たら読み戻せないので、`{:e}` の桁を使う
-    let sci = if rounded.parse::<f64>() == Ok(x) {
+    // 2 の冪では、往復できる区間が下側だけ狭い。正しく丸めた桁がその外に出たら読み戻せないので、`{:e}` の桁を使う。
+    // 2つの桁が同じなら `{:e}` が往復を保証しているので、読み戻して確かめるのは違うときだけにする
+    let sci = if rounded == shortest || rounded.parse::<f64>() == Ok(x) {
         rounded
     } else {
         shortest
