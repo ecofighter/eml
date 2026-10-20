@@ -1,10 +1,10 @@
-# スクリプトの計測の入力を作る (docs/implementation/benchmarks.md の「スクリプトの計測」)。種を固定するので、同じ
-# 大きさを指定すれば毎回同じファイルになる。
+# スクリプトの計測の入力を1つ作る (docs/implementation/benchmarks.md の「スクリプトの計測」)。ファイルごとに種を固定する
+# ので、同じ種類と大きさを指定すれば毎回同じファイルになる。
 #
-#   python3 -I bench/scripts/gen.py OUTDIR [--mb 30]
+#   python3 -I bench/scripts/gen.py {log|csv} KIB OUTPUT
 #
-# OUTDIR/access.log はアクセスログ (`時刻 メソッド パス ステータス 応答時間`)、OUTDIR/data.csv はヘッダ付きの CSV で、
-# それぞれ約 `--mb` MB である。
+# `log` はアクセスログ (`時刻 メソッド パス ステータス 応答時間`)、`csv` はヘッダ付きの CSV で、どちらも約 KIB KiB である。
+# 計測の行ごとに eml の実時間が約 300 ms になる大きさが違うので、ファイルを1つずつ作る
 import argparse
 import os
 import random
@@ -60,14 +60,15 @@ def write_csv(path, size, rng):
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("outdir")
-    parser.add_argument("--mb", type=int, default=30)
+    parser.add_argument("kind", choices=["log", "csv"])
+    parser.add_argument("kib", type=int)
+    parser.add_argument("output")
     args = parser.parse_args()
-    os.makedirs(args.outdir, exist_ok=True)
-    rng = random.Random(12)
-    size = args.mb * 1024 * 1024
-    write_log(os.path.join(args.outdir, "access.log"), size, rng)
-    write_csv(os.path.join(args.outdir, "data.csv"), size, rng)
+    directory = os.path.dirname(args.output)
+    if directory:
+        os.makedirs(directory, exist_ok=True)
+    write = write_log if args.kind == "log" else write_csv
+    write(args.output, args.kib * 1024, random.Random(12))
 
 
 main()
