@@ -687,8 +687,10 @@ fn for_each_is_specialized() {
     "#);
 }
 
-/// 状態つきの handler では、複製が状態を最後の引数で受け、展開した節の次の状態をブロックの引数で後ろへ渡す。`count` は
-/// `Unit` を返すので、複製は次の状態だけを返す (docs/spec/core-ir.md の「handler の複製」)。
+/// 状態つきの handler では、複製が状態を最後の引数で受ける。`count` は `Unit` を返すので、複製は次の状態だけを返す
+/// (docs/spec/core-ir.md の「handler の複製」)。展開した節は次の状態をブロックの引数で後ろへ渡すが、ここではそのブロックに
+/// 入る辺が1本なので、融合 (S13e-3) がブロックをつないで引数は残らない。状態を受けるブロックの引数は、2本の辺が入る
+/// `a_conditional_perform_passes_the_state_to_the_join` が固定する。
 #[test]
 fn a_stateful_handler_threads_its_state() {
     let text = "\
@@ -727,23 +729,7 @@ main () =
 /// `bump` の複製を末尾でなく呼んで次の状態を受け、そのあと自分を末尾で呼ぶ。
 #[test]
 fn a_non_tail_put_is_specialized() {
-    let text = "\
--- 末尾でない `put` を `Std.State` の handler の下で回すループ (S14c-2)。`bump` の呼び出しは末尾でない
-import Std.State (State(..))
-
-bump : Int -> <State Int, Panic> Unit
-bump i = put (get () + i)
-
-loop : Int -> Int -> <State Int, Panic> Unit
-loop i n =
-  if i > n then ()
-  else
-    bump i
-    loop (i + 1) n
-
-main : Unit -> <IO, Panic> Unit
-main () = println (show (State.exec 0 (fn () -> loop 1 100000)))
-";
+    let text = include_str!("../../../bench/state_loop.em");
     let shown = core_text(text, Pass::Optimize);
     assert!(
         shown
@@ -987,46 +973,14 @@ main () =
 }
 
 /// `bench/state_nested.em` のプログラム。状態つきの2つの handler (`Std.State` と `Tick`) が重なる。
-const STATE_NESTED: &str = "\
--- 2つの状態つきの handler を重ねたループ (S14c-2)。内側の `Tick` の handler から先に特殊化される
-import Std.State (State(..))
-
-effect Tick where
-  tick : Unit -> Unit
-
-step : Int -> <State Int, Tick, Panic> Unit
-step i =
-  tick ()
-  put (get () + i)
-
-loop : Int -> Int -> <State Int, Tick, Panic> Unit
-loop i n =
-  if i > n then ()
-  else
-    step i
-    loop (i + 1) n
-
-count : (Unit -> <Tick | e> a) -> <Panic | e> (a, Int)
-count action =
-  handle action () from 0 with
-    | fn tick () c -> ((), c + 1)
-    | return x c -> (x, c)
-
-counted : Unit -> <State Int, Panic> Int
-counted () =
-  let (_, ticks) = count (fn () -> loop 1 100000)
-  ticks
-
-main : Unit -> <IO, Panic> Unit
-main () =
-  let (ticks, total) = State.run 0 counted
-  println \"\\{total} \\{ticks}\"
-";
+const STATE_NESTED: &str = include_str!("../../../bench/state_nested.em");
 
 /// 内側の複製 `f{H=…}` の複製の名前か。名前は `f{H=…}{H=…}` で、64字を超えると内側の複製の名前にハッシュを付けた
 /// `f{H=…}@#<16 hex>` になる (docs/spec/core-ir.md の「handler の複製」)。
 fn nested_copy(line: &str) -> bool {
-    line.contains("fn \"") && (line.contains("}{H=") || line.contains("}@#"))
+    line.contains("fn \"")
+        && line.contains("{H=")
+        && (line.contains("}{H=") || line.contains("}@#"))
 }
 
 /// 入れ子の handler は内側から特殊化する (docs/spec/core-ir.md の「handler への特殊化」)。内側の `Tick` の handle が

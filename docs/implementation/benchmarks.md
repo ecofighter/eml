@@ -44,7 +44,7 @@
 
 ## 回数のテスト
 
-`crates/eml_vm/tests/bench.rs` は、プログラムごとに1つのテストで、VM の検査モードで走らせ、出力を確かめ、`RunStats` の全項目 (S13e で足した `allocations` と、S13e-4 で足した `reuses` を含む) をインラインスナップショットで固定する。`bench/` のファイルの一覧と、テストのプログラムの一覧が一致することも確かめる。`specialization_matches_hand_written_work` は、自動の版と `_by_hand` の版の5つの組で、`allocations`、`boxes`、`unboxes` が同じことを確かめる (S13e-1 の完了の条件。下の「S13e-1」)。`handler_specialization_removes_yields_and_evidence` は、`iter_generate` と `iter_pipeline` の `yields` と、`push_fold` と `fold_state` の `evidence_steps` が0であることを確かめる (S13e-2 の完了の条件。下の「S13e-2」)。`specialization_matches_hand_written_rc` は5つの組で RC の回数が同じことを、`iter_allocations_do_not_grow_with_the_input` と `iter_generate_allocates_as_much_as_the_direct_loop` は `Iter` で引く形の確保の数を確かめる (S13e-3 の完了の条件。下の「S13e-3」)。`rebuilding_programs_reuse_boxes` は、関数の中で手放して作り直す8つのプログラムで `reuses` が 0 より大きいことを確かめる (S13e-4 の完了の条件。下の「S13e-4」)。回数は機械の速さに左右されないので、ふだんの `cargo test` で流す。
+`crates/eml_vm/tests/bench.rs` は、プログラムごとに1つのテストで、VM の検査モードで走らせ、出力を確かめ、`RunStats` の全項目 (S13e で足した `allocations` と、S13e-4 で足した `reuses` を含む) をインラインスナップショットで固定する。`bench/` のファイルの一覧と、テストのプログラムの一覧が一致することも確かめる。`specialization_matches_hand_written_work` は、自動の版と `_by_hand` の版の6つの組で、`allocations`、`boxes`、`unboxes` が同じことを確かめる (S13e-1 の完了の条件。下の「S13e-1」。6つ目の `state_loop` の組は S14c-2 の完了の条件で、下の「S14c-2」)。`handler_specialization_removes_yields_and_evidence` は、`iter_generate` と `iter_pipeline` の `yields` と、`push_fold` と `fold_state` の `evidence_steps` が0であることを確かめる (S13e-2 の完了の条件。下の「S13e-2」)。`state_loop` と `state_nested` の `evidence_steps` が0であることも確かめる (S14c-2 の完了の条件)。`specialization_matches_hand_written_rc` は6つの組で RC の回数が同じことを、`iter_allocations_do_not_grow_with_the_input` と `iter_generate_allocates_as_much_as_the_direct_loop` は `Iter` で引く形の確保の数を確かめる (S13e-3 の完了の条件。下の「S13e-3」)。`rebuilding_programs_reuse_boxes` は、関数の中で手放して作り直す8つのプログラムで `reuses` が 0 より大きいことを確かめる (S13e-4 の完了の条件。下の「S13e-4」)。回数は機械の速さに左右されないので、ふだんの `cargo test` で流す。
 
 段の前後の回数は、このスナップショットの差分で残る。回数を変える変更は、その段の spec に期待値の変更として書く ([テスト戦略](testing.md) の「テストの変更の運用」)。S10a までの記録の回数は S10b で消したインタプリタのもので、`rc_increments`、`rc_decrements`、`peak_objects` は VM と数え方が違う (下の「S10a (VM)」)。`peak_stack` は S10b で足した欄で、それより前の記録にはない。
 
@@ -1979,3 +1979,149 @@ S14b (`Float` と、算術のクラス `Num` と `Div`。[宣言](../spec/declar
 S14c-1 (`Array` と `MutArray` の核。[標準ライブラリ](../spec/stdlib.md) の「`Std.Array`」と「`Std.MutArray`」) の前と後で、`RunStats` を比べた。
 
 `bench/` のどのプログラムでも、`RunStats` (検査モード) と巻き戻しの表の行の数は1つも変わらなかった (`crates/eml_vm/tests/bench.rs` のスナップショットは、S14b の後から変わっていない)。配列は Prelude の extern の型と `Std.Array`、`Std.MutArray` の関数を足しただけで、配列を使わないプログラムの道には触れていない。配列を使うプログラムの計測は S14d で足す。
+
+### S14c-2
+
+S14c-2 (すぐに再開する節だけの handler の、状態を渡す形の特殊化。[Core IR](../spec/core-ir.md) の「handler への特殊化」) の前と後で、`RunStats` と `bench/run.sh` の命令の数を比べた。基準は、S14c-2 の計画を書いたコミット e19347bc である。後の値は、S14c-2 の実装を終えたコミット c2e34728 に、この作業で足した `bench/` の3つのプログラムを加えた作業ツリーで測った。基準でも、同じ3つのプログラムを基準のコードで流した。測った機種が S14b までと違うので、命令の数は S14b の表と比べられない。
+
+- 機種: Mac17,2 (Apple M5)
+- OS: macOS 27.0.1 (26A434)
+- rustc: rustc 1.98.1 (48a229cea 2026-09-01)
+
+#### 足したプログラム
+
+- `state_loop`: 末尾でない `put` を、`Std.State` の handler の下で 10 万回回すループ。S14c-2 の完了の条件のプログラムである
+- `state_loop_by_hand`: 同じループで、状態を引数で手で渡す版。`run_by_hand` と `exec_by_hand` が `State.run` と `State.exec` をなぞる。`specialization_matches_hand_written_work` と `specialization_matches_hand_written_rc` の6つ目の組である
+- `state_nested`: `Std.State` と、状態つきの `Tick` の handler を重ねたループ。入れ子の handler を内側から特殊化する回 ([Core IR](../spec/core-ir.md) の「入れ子の handler」) を確かめる
+
+`crates/eml_core_ir/tests/optimize.rs` の `a_non_tail_put_is_specialized` と `nested_handlers_are_specialized_inside_out` は、`state_loop.em` と `state_nested.em` を `include_str!` で読む。
+
+#### 完了の条件
+
+- `state_loop` と `state_nested` の `evidence_steps` は 0 になった。`handler_specialization_removes_yields_and_evidence` が確かめる
+- `state_loop` と `state_loop_by_hand` は、`RunStats` のすべての欄が一致した。確保、`box`、`unbox`、RC の回数の一致は、上の2つの組のテストが確かめる。手書きの版は計画に書いた形のままで、合わせるために直していない
+
+#### 実行の仕事の回数
+
+足した2つのプログラムの `RunStats` (検査モード) は次のとおりである。基準では、`bump` と `step` の呼び出しが末尾でないので、末尾の経路の形が handle を断り、EP の道に残っていた。`get` と `put` のたびに evidence を引いて節を呼び、handler の状態を箱に入れて出していた。後では、`loop` の複製が状態を `int` の引数で受け、`get` と `put` は状態の足し算になる (`a_non_tail_put_is_specialized` のスナップショット)。`state_nested` の組 `(,)` は、ループを出る所で1回だけ作る。
+
+| プログラム | 欄 | 基準 | 後 |
+|---|---|---:|---:|
+| `state_loop` | `evidence_steps` | 200000 | 0 |
+| | `rc_increments` / `rc_decrements` | 200001 / 200006 | 0 / 1 |
+| | `boxes` / `unboxes` | 100001 / 100001 | 0 / 0 |
+| | `allocations` | 6 | 2 |
+| | `peak_objects` / `peak_stack` | 4 / 30 | 2 / 16 |
+| `state_nested` | `evidence_steps` | 500000 | 0 |
+| | `rc_increments` / `rc_decrements` | 500005 / 500016 | 0 / 4 |
+| | `boxes` / `unboxes` | 200002 / 200002 | 2 / 2 |
+| | `allocations` | 12 | 5 |
+| | `peak_objects` / `peak_stack` | 7 / 44 | 4 / 20 |
+
+- ほかのプログラムの `RunStats` は1つも変わらなかった。`state`、`fold_state`、`push_fold`、`push_fold_by_hand` の handler は基準でも末尾の経路の形で特殊化されていて、状態を渡す形に変わっても、確保と RC の回数は同じである
+- 巻き戻しの表の行は、`state_loop` が 12 から 4 に、`state_nested` が 17 から 5 に減った。スクリプトでは `scripts/logstat` が 101 から 98 に減った。`parsing` の `Yield` の handler が状態を渡す形になり、続いて、経路がその handle を含む関数を通る `aggregate` の handler も、2回目の回で特殊化されるようになったためである。ほかの行は変わらない
+
+#### 基準のプログラムの命令の数
+
+基準と後の release ビルドで、`bench/run.sh` を1回ずつ流した。抜き出した基準の木はリポジトリの外にあるので、コミットの欄を引数で受けるように変えた写しで、両方を流した。測り方は変えていない。
+
+| プログラム | 基準の実行の分 | 後の実行の分 | 増減 |
+|---|---:|---:|---:|
+| `fib` | 85605500 | 85585728 | -0.02% |
+| `fold_state` | 76437001 | 49700708 | -34.98% |
+| `iter_generate` | 60081067 | 60151273 | +0.12% |
+| `iter_pipeline` | 197114409 | 197615993 | +0.25% |
+| `iter_pipeline_by_hand` | 198429895 | 198703830 | +0.14% |
+| `list` | 158288631 | 157952907 | -0.21% |
+| `loop` | 165347189 | 165407833 | +0.04% |
+| `orders` | 245407429 | 245139128 | -0.11% |
+| `orders_by_hand` | 245117264 | 244894040 | -0.09% |
+| `push_fold` | 73193726 | 46373769 | -36.64% |
+| `push_fold_by_hand` | 73509838 | 46654427 | -36.53% |
+| `rbtree` | 215627696 | 215781043 | +0.07% |
+| `records` | 124618053 | 124668803 | +0.04% |
+| `state` | 79242092 | 37725464 | -52.39% |
+| `state_loop` | 179927564 | 39375874 | -78.12% |
+| `state_loop_by_hand` | 37109431 | 37256685 | +0.40% |
+| `state_nested` | 280577110 | 51203201 | -81.75% |
+| `std_list` | 152888958 | 152903003 | +0.01% |
+| `sum_loop` | 35305393 | 35235938 | -0.20% |
+| `tree` | 191705975 | 191795209 | +0.05% |
+| `tree_by_hand` | 191119345 | 191160603 | +0.02% |
+| `tree_map` | 139414869 | 139471858 | +0.04% |
+| `upsert` | 464062993 | 463978416 | -0.02% |
+| `upsert_by_hand` | 462358686 | 462419685 | +0.01% |
+
+- `state_loop` は 78.1%、`state_nested` は 81.8% 減った。上の `RunStats` の分である
+- `state`、`fold_state`、`push_fold`、`push_fold_by_hand` も 35% から 52% 減った。`RunStats` は変わらないので、減ったのは関数の呼び出しの分である。末尾の経路の形は、`perform` ごとにその後ろを継続の関数 `$hN` に切り出していた。基準の `state` では、1回の繰り返しで `count{H}` から `$h0`、`$h1` を通って `count{H}` に戻る3つの末尾呼び出しをしていた (`push_fold` は2つ)。状態を渡す形は節を展開して `perform` の後ろへジャンプするので、ループの複製は繰り返しごとに自分を1回末尾で呼ぶだけになる
+- ほかのプログラムの増減は -0.21% から +0.40% までである。`empty` の命令の数は 42770951 から 42460605 に、-0.73% 変わった。どちらも揺れの範囲である
+
+`state_loop` の実行の分は `state_loop_by_hand` より 5.7% (2119189 命令) 多い。2つの最後の LIR は、ループの中の2つの足し算の順のほかは同じである。差は繰り返しの回数によらない固定の費用で、次のことで確かめた。
+
+- 繰り返しを 100 万回にした2つの版では、命令の数の差は 2259034 で、10 万回のときとほぼ同じだった
+- `eml check` の命令の数の差は 1550367 である。`state_loop` だけが `Std.State` を読み込んで検査するためである。残りは、`Std.State` の関数を Core IR に下ろして特殊化する仕事と見ている
+- 手書きの版を、`bump i st` を `i + 1` より先に評価する形に書き換えても、差は縮まらなかった (命令の数は 79673877 から 79443471)。足し算の順は差の原因でない
+
+#### 受け入れた後退
+
+どの節もすぐに再開する handler のうち、`perform` の結果と節の末尾の `resume k(v, s)` の Repr か印が合わないものは、状態を渡す形の条件 (`resumes_fit`) に当たり、EP の道に残る。S13e-2 の末尾の経路の形は、経路がすべて末尾の呼び出しなら、こうした handler も特殊化していた。1つの handler に2つの形を持たないために、この後退を受け入れた ([Core IR](../spec/core-ir.md) の「handler への特殊化」)。`bench/` のプログラムには当たるものがない (`RunStats` は変わらなかった)。`crates/eml_core_ir/tests/optimize.rs` の `a_resume_value_of_another_repr_keeps_the_handle` が、この handle が残ることを固定する。
+
+`bench/run.sh` の写しを後の作業ツリーで流した出力は、次のとおりである。
+
+| プログラム | instructions retired | 実行の分 | 実時間 (s) |
+|---|---:|---:|---:|
+| `empty` | 42460605 | | 0.00 |
+| `fib` | 128046333 | 85585728 | 0.00 |
+| `fold_state` | 92161313 | 49700708 | 0.00 |
+| `iter_generate` | 102611878 | 60151273 | 0.00 |
+| `iter_pipeline` | 240076598 | 197615993 | 0.01 |
+| `iter_pipeline_by_hand` | 241164435 | 198703830 | 0.01 |
+| `list` | 200413512 | 157952907 | 0.00 |
+| `loop` | 207868438 | 165407833 | 0.00 |
+| `orders` | 287599733 | 245139128 | 0.01 |
+| `orders_by_hand` | 287354645 | 244894040 | 0.01 |
+| `push_fold` | 88834374 | 46373769 | 0.00 |
+| `push_fold_by_hand` | 89115032 | 46654427 | 0.00 |
+| `rbtree` | 258241648 | 215781043 | 0.01 |
+| `records` | 167129408 | 124668803 | 0.00 |
+| `state` | 80186069 | 37725464 | 0.00 |
+| `state_loop` | 81836479 | 39375874 | 0.00 |
+| `state_loop_by_hand` | 79717290 | 37256685 | 0.00 |
+| `state_nested` | 93663806 | 51203201 | 0.00 |
+| `std_list` | 195363608 | 152903003 | 0.00 |
+| `sum_loop` | 77696543 | 35235938 | 0.00 |
+| `tree` | 234255814 | 191795209 | 0.01 |
+| `tree_by_hand` | 233621208 | 191160603 | 0.01 |
+| `tree_map` | 181932463 | 139471858 | 0.00 |
+| `upsert` | 506439021 | 463978416 | 0.02 |
+| `upsert_by_hand` | 504880290 | 462419685 | 0.02 |
+
+基準のコミット e19347bc の出力は、次のとおりである。
+
+| プログラム | instructions retired | 実行の分 | 実時間 (s) |
+|---|---:|---:|---:|
+| `empty` | 42770951 | | 0.00 |
+| `fib` | 128376451 | 85605500 | 0.00 |
+| `fold_state` | 119207952 | 76437001 | 0.00 |
+| `iter_generate` | 102852018 | 60081067 | 0.00 |
+| `iter_pipeline` | 239885360 | 197114409 | 0.01 |
+| `iter_pipeline_by_hand` | 241200846 | 198429895 | 0.01 |
+| `list` | 201059582 | 158288631 | 0.00 |
+| `loop` | 208118140 | 165347189 | 0.00 |
+| `orders` | 288178380 | 245407429 | 0.01 |
+| `orders_by_hand` | 287888215 | 245117264 | 0.01 |
+| `push_fold` | 115964677 | 73193726 | 0.00 |
+| `push_fold_by_hand` | 116280789 | 73509838 | 0.00 |
+| `rbtree` | 258398647 | 215627696 | 0.01 |
+| `records` | 167389004 | 124618053 | 0.00 |
+| `state` | 122013043 | 79242092 | 0.00 |
+| `state_loop` | 222698515 | 179927564 | 0.00 |
+| `state_loop_by_hand` | 79880382 | 37109431 | 0.00 |
+| `state_nested` | 323348061 | 280577110 | 0.01 |
+| `std_list` | 195659909 | 152888958 | 0.00 |
+| `sum_loop` | 78076344 | 35305393 | 0.00 |
+| `tree` | 234476926 | 191705975 | 0.01 |
+| `tree_by_hand` | 233890296 | 191119345 | 0.01 |
+| `tree_map` | 182185820 | 139414869 | 0.00 |
+| `upsert` | 506833944 | 464062993 | 0.02 |
+| `upsert_by_hand` | 505129637 | 462358686 | 0.02 |

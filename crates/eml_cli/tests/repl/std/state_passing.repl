@@ -1,0 +1,37 @@
+# 前の入力の `Std.State` のループを、後の入力で1つの handler の下と、2つの handler を重ねた下で回す。状態を渡す形の
+# 複製は追記の「同じ名前なら同じコード」の確かめを通る (docs/spec/vm.md の「追記」)
+> import Std.State (State(..))
+# 末尾でない `put` のループ (`bench/state_loop.em`)。複製の名前とコードは、handle と経路の関数だけで決まる
+> bump : Int -> <State Int, Panic> Unit
+. bump i = put (get () + i)
+. loop : Int -> Int -> <State Int, Panic> Unit
+. loop i n =
+.   if i > n then ()
+.   else
+.     bump i
+.     loop (i + 1) n
+.
+> State.exec 0 (fn () -> loop 1 10)
+# 内側の `Tick` の handler から先に特殊化し、外側の `State.run` の handler は内側の複製の複製を作る
+> effect Tick where
+.   tick : Unit -> Unit
+. count : (Unit -> <Tick | e> a) -> <Panic | e> (a, Int)
+. count action =
+.   handle action () from 0 with
+.     | fn tick () c -> ((), c + 1)
+.     | return x c -> (x, c)
+.
+> State.run 0 (fn () -> let (_, t) = count (fn () -> loop 1 4) in t)
+# `tick` も起こすループ (`bench/state_nested.em`)
+> step : Int -> <State Int, Tick, Panic> Unit
+. step i =
+.   tick ()
+.   put (get () + i)
+. ticking : Int -> Int -> <State Int, Tick, Panic> Unit
+. ticking i n =
+.   if i > n then ()
+.   else
+.     step i
+.     ticking (i + 1) n
+.
+> State.run 0 (fn () -> let (_, t) = count (fn () -> ticking 1 4) in t)

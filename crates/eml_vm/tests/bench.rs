@@ -7,7 +7,7 @@ use eml_test_support::{lir, lir_files, run_stats};
 use eml_vm::RunStats;
 
 /// テストを持つ基準のプログラム。`bench/` にプログラムを足したら、ここと下のテストの関数の両方に足す。
-const PROGRAMS: [&str; 22] = [
+const PROGRAMS: [&str; 25] = [
     "empty",
     "fib",
     "fold_state",
@@ -23,6 +23,9 @@ const PROGRAMS: [&str; 22] = [
     "rbtree",
     "records",
     "state",
+    "state_loop",
+    "state_loop_by_hand",
+    "state_nested",
     "std_list",
     "sum_loop",
     "tree",
@@ -32,8 +35,9 @@ const PROGRAMS: [&str; 22] = [
     "upsert_by_hand",
 ];
 
-/// 自動の版と手で特殊化した `_by_hand` の版の組と、両方の出力。
-const PAIRS: [(&str, &str, &str); 5] = [
+/// 自動の版と手で特殊化した `_by_hand` の版の組と、両方の出力。`state_loop` の組は S14c-2 の完了の条件で、状態を渡す形の
+/// 特殊化と、状態を手で渡す版を比べる (docs/implementation/benchmarks.md の「S14c-2」)。
+const PAIRS: [(&str, &str, &str); 6] = [
     ("orders", "orders_by_hand", "150308561\n"),
     ("push_fold", "push_fold_by_hand", "5000050000\n"),
     (
@@ -43,6 +47,7 @@ const PAIRS: [(&str, &str, &str); 5] = [
     ),
     ("tree", "tree_by_hand", "14898 7454478318\n"),
     ("upsert", "upsert_by_hand", "2000 k1182 23\n"),
+    ("state_loop", "state_loop_by_hand", "5000050000\n"),
 ];
 
 fn bench_dir() -> PathBuf {
@@ -212,6 +217,69 @@ fn state() {
 }
 
 #[test]
+fn state_loop() {
+    insta::assert_debug_snapshot!(stats("state_loop", "5000050000\n"), @"
+    RunStats {
+        evidence_steps: 0,
+        yields: 0,
+        yield_frames: 0,
+        unwound_frames: 0,
+        string_bytes_copied: 10,
+        rc_increments: 0,
+        rc_decrements: 1,
+        boxes: 0,
+        unboxes: 0,
+        allocations: 2,
+        reuses: 0,
+        peak_objects: 2,
+        peak_stack: 16,
+    }
+    ");
+}
+
+#[test]
+fn state_loop_by_hand() {
+    insta::assert_debug_snapshot!(stats("state_loop_by_hand", "5000050000\n"), @"
+    RunStats {
+        evidence_steps: 0,
+        yields: 0,
+        yield_frames: 0,
+        unwound_frames: 0,
+        string_bytes_copied: 10,
+        rc_increments: 0,
+        rc_decrements: 1,
+        boxes: 0,
+        unboxes: 0,
+        allocations: 2,
+        reuses: 0,
+        peak_objects: 2,
+        peak_stack: 16,
+    }
+    ");
+}
+
+#[test]
+fn state_nested() {
+    insta::assert_debug_snapshot!(stats("state_nested", "5000050000 100000\n"), @"
+    RunStats {
+        evidence_steps: 0,
+        yields: 0,
+        yield_frames: 0,
+        unwound_frames: 0,
+        string_bytes_copied: 23,
+        rc_increments: 0,
+        rc_decrements: 4,
+        boxes: 2,
+        unboxes: 2,
+        allocations: 5,
+        reuses: 0,
+        peak_objects: 4,
+        peak_stack: 20,
+    }
+    ");
+}
+
+#[test]
 fn tree() {
     insta::assert_debug_snapshot!(stats("tree", "14898 7454478318\n"), @"
     RunStats {
@@ -291,6 +359,12 @@ fn handler_specialization_removes_yields_and_evidence() {
     assert_eq!(fold.evidence_steps, 0, "{fold:?}");
     let pipeline = stats("iter_pipeline", "166671666700000\n");
     assert_eq!(pipeline.yields, 0, "{pipeline:?}");
+    // S14c-2 の完了の条件 (docs/implementation/benchmarks.md の「S14c-2」)。末尾でない `put` のループと、状態つきの
+    // handler を2つ重ねたループも、状態を渡す形に特殊化されて evidence を引かない
+    let state_loop = stats("state_loop", "5000050000\n");
+    assert_eq!(state_loop.evidence_steps, 0, "{state_loop:?}");
+    let nested = stats("state_nested", "5000050000 100000\n");
+    assert_eq!(nested.evidence_steps, 0, "{nested:?}");
 }
 
 #[test]
@@ -631,7 +705,7 @@ fn specialization_matches_hand_written_work() {
 }
 
 /// S13e-3 の完了の条件 (docs/implementation/benchmarks.md の「S13e-3」)。インライン化と融合の後は、自動の版と
-/// `_by_hand` の版の5つの組で、RC の回数も同じになる。
+/// `_by_hand` の版の6つの組で、RC の回数も同じになる。
 #[test]
 fn specialization_matches_hand_written_rc() {
     for (name, by_hand, output) in PAIRS {
@@ -685,6 +759,9 @@ fn unwind_points() {
     rbtree: 12
     records: 9
     state: 4
+    state_loop: 4
+    state_loop_by_hand: 4
+    state_nested: 5
     std_list: 13
     sum_loop: 4
     tree: 15

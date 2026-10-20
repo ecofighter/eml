@@ -1,0 +1,42 @@
+---
+source: crates/eml_cli/tests/repl.rs
+expression: checked.render()
+input_file: crates/eml_cli/tests/repl/std/state_passing.repl
+---
+> import Std.State (State(..))
+> bump : Int -> <State Int, Panic> Unit
+. bump i = put (get () + i)
+. loop : Int -> Int -> <State Int, Panic> Unit
+. loop i n =
+.   if i > n then ()
+.   else
+.     bump i
+.     loop (i + 1) n
+.
+> State.exec 0 (fn () -> loop 1 10)
+55
+> effect Tick where
+.   tick : Unit -> Unit
+. count : (Unit -> <Tick | e> a) -> <Panic | e> (a, Int)
+. count action =
+.   handle action () from 0 with
+.     | fn tick () c -> ((), c + 1)
+.     | return x c -> (x, c)
+.
+> State.run 0 (fn () -> let (_, t) = count (fn () -> loop 1 4) in t)
+(0, 10)
+> step : Int -> <State Int, Tick, Panic> Unit
+. step i =
+.   tick ()
+.   put (get () + i)
+. ticking : Int -> Int -> <State Int, Tick, Panic> Unit
+. ticking i n =
+.   if i > n then ()
+.   else
+.     step i
+.     ticking (i + 1) n
+.
+> State.run 0 (fn () -> let (_, t) = count (fn () -> ticking 1 4) in t)
+(4, 10)
+--- close ---
+no leaks
