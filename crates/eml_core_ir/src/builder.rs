@@ -65,15 +65,18 @@ impl FnBuilder {
     /// 型どおりの `apply` の場所。変数の引数は変数の Repr にし、定数の引数は `constant` が引数の位置から決める Repr に
     /// する (docs/superpowers/specs/2026-10-21-s14e-abi-struct-design.md の「`apply` の ABI」)。
     pub(crate) fn typed_site(&self, args: &[Atom], constant: impl Fn(usize) -> Repr) -> Site {
-        Site::Typed(
-            args.iter()
-                .enumerate()
-                .map(|(index, atom)| match atom {
-                    Atom::Var(var) => self.repr(*var),
-                    _ => constant(index),
-                })
-                .collect(),
-        )
+        Site::Typed(self.typed_reprs(args, constant))
+    }
+
+    /// `typed_site` の Repr の並び。`resume` の場所にも使う。
+    pub(crate) fn typed_reprs(&self, args: &[Atom], constant: impl Fn(usize) -> Repr) -> Vec<Repr> {
+        args.iter()
+            .enumerate()
+            .map(|(index, atom)| match atom {
+                Atom::Var(var) => self.repr(*var),
+                _ => constant(index),
+            })
+            .collect()
     }
 
     /// 関数の引数。入口のブロックの引数になる。

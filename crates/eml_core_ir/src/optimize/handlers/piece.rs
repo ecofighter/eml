@@ -236,7 +236,10 @@ pub(crate) fn clause_blocks(
                     var: _,
                     rhs:
                         Rhs::Call {
-                            call: Call::Resume { k: _, arg, state },
+                            call:
+                                Call::Resume {
+                                    k: _, arg, state, ..
+                                },
                             mask: _,
                         },
                 } = stmt
@@ -391,22 +394,19 @@ pub(crate) fn clause_with_k(
                     k: callee,
                     arg,
                     state,
+                    ref site,
                 } = *call
             {
                 debug_assert_eq!(callee, Atom::Var(k), "a clause resumes only its own `k`");
-                let args = if stateful {
-                    vec![arg, state]
+                // 場所は、`resume` が型から決めたものを写す。定数の値の形からは決めない。`None` は `enum` の形だが、
+                // `Option Int` を受ける `k` には `tobj` で渡るためである
+                // (docs/superpowers/specs/2026-10-21-s14e-abi-struct-design.md の「`apply` の ABI」)
+                let (args, reprs) = if stateful {
+                    (vec![arg, state], site.clone())
                 } else {
-                    vec![arg]
+                    (vec![arg], site[..1].to_vec())
                 };
-                let site = Site::Typed(
-                    args.iter()
-                        .map(|atom| match atom {
-                            Atom::Var(var) => copy.vars[var.0 as usize].repr,
-                            constant => constant_repr(*constant),
-                        })
-                        .collect(),
-                );
+                let site = Site::Typed(reprs);
                 *call = Call::Apply {
                     callee,
                     args,
@@ -418,16 +418,4 @@ pub(crate) fn clause_with_k(
         }
     }
     copy
-}
-
-/// 定数の値の形から決める Repr。引数のないコンストラクタは `enum` のタグにする。
-fn constant_repr(constant: Atom) -> Repr {
-    match constant {
-        Atom::Int(_) => Repr::Int,
-        Atom::Float(_) => Repr::Float,
-        Atom::Unit => Repr::Unit,
-        Atom::Tag(_) => Repr::Enum,
-        Atom::Fn(_) => Repr::TObj,
-        Atom::Var(_) => unreachable!("a variable takes the repr of the variable"),
-    }
 }

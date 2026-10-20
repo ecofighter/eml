@@ -16,7 +16,7 @@ use crate::optimize::specialize::{
     ArgShape, ClosureShape, FieldShape, Key, MAX_KEY_DEPTH, copy_name, key_depth,
 };
 use crate::{Call, CoreFn, Rhs, Stmt, Term};
-use eml_lir::{Atom, CasePattern, Ctor, FnIdx, Mark, VarId, VarInfo};
+use eml_lir::{Atom, CasePattern, Ctor, FnIdx, Mark, Role, VarId, VarInfo};
 
 /// 鍵の位置ごとの形と、その位置の値の代わりに複製へ渡す実引数。
 type Plan = Vec<(usize, ArgShape, Vec<Atom>)>;
@@ -416,6 +416,16 @@ impl Fuser<'_> {
     fn build(&self, key: &Key, name: String) -> CoreFn {
         let mut function = self.functions[key.callee.0 as usize].clone();
         function.name = name;
+        // 役割は末尾の引数を一様にする。一様な位置を開くと末尾の引数の並びが変わるので、複製は型どおりに呼ぶ関数にする
+        // (docs/superpowers/specs/2026-10-21-s14e-abi-struct-design.md の「関数の ABI」)
+        let first_uniform = function.params().len() - function.role.uniform_params();
+        if key
+            .args
+            .iter()
+            .any(|&(position, _)| position >= first_uniform)
+        {
+            function.role = Role::Typed;
+        }
         let mut params = Vec::new();
         let mut rebuilt = Vec::new();
         for (position, param) in function.params().to_vec().into_iter().enumerate() {

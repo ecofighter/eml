@@ -4,7 +4,8 @@ use eml_extern::{Extern, ExternType};
 use eml_hir::EvalStep;
 use eml_hir::{
     Closure, ConstructorId, ExprId, ExprKind, FunctionId, FunctionKind, IndexBase, Literal,
-    LocalId, OperationId, Program as HirProgram, Res, Segment, ValueItem, VarId as HirVar,
+    LocalId, OpMultiplicity, OperationId, Program as HirProgram, Res, Segment, ValueItem,
+    VarId as HirVar,
 };
 use eml_types::{FieldTarget, IndexTarget, TypeId, TypeKind, VarClass};
 
@@ -46,9 +47,11 @@ enum Callee {
     Operation(OperationId),
     Constructor(ConstructorId),
     /// 直接の形の節の `k`。`k` は生の継続で、`arity` は状態のない handler で1、状態のある handler で2である。
+    /// `ty` は `k` の型で、`resume` の場所の Repr を決める。
     Continuation {
         k: Atom,
         arity: usize,
+        ty: TypeId,
     },
     /// 持ち上げたローカル関数 `local`。`arity` は宣言した引数の数で、持ち上げの捕まえる変数は呼ぶ位置で先に足す
     /// (docs/spec/core-ir.md の「ローカル関数の持ち上げ」)。
@@ -295,7 +298,7 @@ impl FnLowering<'_> {
             Callee::Extern { row, callee: _ } => row.row().params.len(),
             Callee::Operation(op) => self.ctx.hir[op].arity,
             Callee::Constructor(ctor) => self.ctx.hir[ctor].fields.len(),
-            Callee::Continuation { k: _, arity } => arity,
+            Callee::Continuation { arity, .. } => arity,
             Callee::Local { arity, .. } => arity,
         }
     }
@@ -324,7 +327,7 @@ impl FnLowering<'_> {
                     .constructor_wrapper(self.ctx.hir, self.ctx.store, ctor)
             }
             // 引数の足りない `k` の呼び出しは `k` を関数の値として使うことになり、節を包む形にする (`continuation_forms`)
-            Callee::Continuation { k: _, arity: _ } => {
+            Callee::Continuation { .. } => {
                 unreachable!("a continuation in the direct form is always saturated")
             }
             Callee::Local { target, .. } => target,
@@ -374,12 +377,28 @@ impl FnLowering<'_> {
             }
             Callee::Operation(op) => ("t", plain_call(perform_call(self.ctx.hir, op, args))),
             // 状態ありの最初の矢印は row が空の部分適用なので、関数と同じく最後の矢印の `mask` を使う
-            Callee::Continuation { k, arity: _ } => {
+            Callee::Continuation { k, arity: _, ty } => {
                 let mask = self.mask(id, args.len() - 1);
+                // 場所の Repr は `apply` と同じく `k` の矢印の型から決める。状態のない handler の状態は `()` である
+                let (params, _) = split_arrows(self.ctx.store, ty, args.len());
+                let mut reprs: Vec<Repr> = params
+                    .iter()
+                    .map(|&param| repr(self.ctx.store, param, self.ctx.hir))
+                    .collect();
+                reprs.resize(2, Repr::Unit);
                 let mut args = args.into_iter();
                 let arg = args.next().expect("a continuation takes a value");
                 let state = args.next().unwrap_or(Atom::Unit);
-                ("t", masked_call(Call::Resume { k, arg, state }, mask))
+                let site = self
+                    .builder
+                    .typed_reprs(&[arg, state], |index| reprs[index]);
+                let call = Call::Resume {
+                    k,
+                    arg,
+                    state,
+                    site,
+                };
+                ("t", masked_call(call, mask))
             }
             Callee::Constructor(ctor) => (
                 "d",
@@ -521,6 +540,7 @@ impl FnLowering<'_> {
                     ContinuationForm::Direct => Callee::Continuation {
                         k,
                         arity: self.ctx.body.continuations[*local],
+                        ty: callee_ty,
                     },
                     // 包んだ `k` はクロージャなので、ほかの関数値と同じく矢印ごとの `mask` で `apply` する
                     ContinuationForm::Wrapped => {
@@ -679,7 +699,14 @@ impl FnLowering<'_> {
                         .find(|clause| clause.op == op)
                         .expect("a program without errors has a clause for every operation");
                     let name = format!("{prefix}${}", self.ctx.hir[op].name);
-                    closures.push(self.lift_clause(name, Role::Clause, &clause.closure, stateless));
+                    // `never` の操作の節は、`prompt$` から状態だけを受ける
+                    // (docs/superpowers/specs/2026-10-21-s14e-abi-struct-design.md の「関数の ABI」)
+                    let role = if self.ctx.hir[op].multiplicity == OpMultiplicity::Never {
+                        Role::Abort
+                    } else {
+                        Role::Clause
+                    };
+                    closures.push(self.lift_clause(name, role, &clause.closure, stateless));
                 }
                 let ret = self.lift_clause(
                     format!("{prefix}$return"),
@@ -1114,10 +1141,13 @@ impl FnLowering<'_> {
                         (Atom::Unit, written)
                     }
                 };
+                // 定数で再開するのは `set` と `write` の結果の `()` だけである
+                let site = builder.typed_reprs(&[value, next], |_| Repr::Unit);
                 let call = Call::Resume {
                     k,
                     arg: value,
                     state: next,
+                    site,
                 };
                 bind(builder, named("t", result.0, result.1), plain_call(call))
             },

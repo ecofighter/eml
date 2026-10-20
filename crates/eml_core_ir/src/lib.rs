@@ -382,7 +382,16 @@ pub enum Call {
     },
     /// 継続を再開する。`state` は再開した handler の次の状態で、値は handle 式の値である。translate だけが出し、EP が
     /// `apply` に置き換える (docs/spec/core-ir.md の「再開と状態」)。
-    Resume { k: Atom, arg: Atom, state: Atom },
+    ///
+    /// `site` は再開の値と状態の Repr で、型どおりの `apply` の場所 (`eml_lir::Site::Typed`) と同じく translate が型から
+    /// 決める。handler への特殊化が `resume` を `apply` に変えるときに場所として写す
+    /// (docs/superpowers/specs/2026-10-21-s14e-abi-struct-design.md の「`apply` の ABI」)。
+    Resume {
+        k: Atom,
+        arg: Atom,
+        state: Atom,
+        site: Vec<Repr>,
+    },
     /// 操作の in-place の入口のクロージャ `callee` を呼ぶ。`args` の先頭は evidence (`obj`)、残りは操作の引数で、
     /// 引数と結果の Repr は操作の表の `params` と `ret` から取る。`mask` は持たない
     /// (docs/spec/lir.md の「節の呼び出し」)。
@@ -441,7 +450,12 @@ impl Call {
                 clauses.iter().for_each(|&atom| f(atom));
                 f(*ret);
             }
-            Call::Resume { k, arg, state } => {
+            Call::Resume {
+                k,
+                arg,
+                state,
+                site: _,
+            } => {
                 f(*k);
                 f(*arg);
                 f(*state);
@@ -486,7 +500,12 @@ impl Call {
                 clauses.iter_mut().for_each(&mut f);
                 f(ret);
             }
-            Call::Resume { k, arg, state } => {
+            Call::Resume {
+                k,
+                arg,
+                state,
+                site: _,
+            } => {
                 f(k);
                 f(arg);
                 f(state);

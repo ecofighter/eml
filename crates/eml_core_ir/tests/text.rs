@@ -142,8 +142,8 @@ fn a_resume_round_trips() {
         "\
 effect State { get(tobj) -> tobj, put(tobj) -> tobj }
 fn f(k.0: tobj, s.1: int) -> int {
-  let t.2: int = mask [State] resume k.0(1, s.1)
-  let t.3: int = resume ()(t.2, ())
+  let t.2: int = mask [State] resume k.0(1: int, s.1)
+  let t.3: int = resume ()(t.2, (): unit)
   return t.3
 }
 ",
@@ -158,6 +158,7 @@ fn f(k.0: tobj, s.1: int) -> int {
                     k: v(0),
                     arg: Atom::Int(1),
                     state: v(1),
+                    site: vec![Repr::Int, Repr::Int],
                 },
                 mask: vec![MaskItem {
                     effect: 0,
@@ -186,7 +187,7 @@ fn entry$main(c.0: tobj) -> tobj {
 effect Main.State { get(tobj) -> tobj, put(tobj) -> tobj }
 fn f(c.0: tobj, k.1: tobj) -> int {
   let t.2: int = mask [#3] call f(c.0, k.1)
-  let t.3: int = mask [Main.State] resume k.1(t.2, ())
+  let t.3: int = mask [Main.State] resume k.1(t.2, (): unit)
   let t.4: int = mask [Main.State] call f(c.0, t.3)
   return t.4
 }
@@ -401,7 +402,7 @@ fn a_yields_mark_on_anything_but_apply_is_an_error() {
     );
 
     let error = parse_error(
-        "effect Ask { ask(unit) -> tobj }\nfn f(k.0: tobj) -> int {\n  let t.1: int = mask [Ask] yields resume k.0(1, ())\n  return t.1\n}\n",
+        "effect Ask { ask(unit) -> tobj }\nfn f(k.0: tobj) -> int {\n  let t.1: int = mask [Ask] yields resume k.0(1: int, (): unit)\n  return t.1\n}\n",
     );
     assert_eq!(error.line, 3);
     assert_eq!(
@@ -475,7 +476,7 @@ yields fn f(s.0: tobj, o.1: tobj, c.2: tobj, k.3: tobj) -> tobj {
   let t.10: tobj = mask [State] yields apply c.2(r.9)
   let p.11: tobj = perform State.get(())
   let q.12: tobj = perform never Fail.fail(p.11)
-  let v.13: tobj = resume k.3(q.12, ())
+  let v.13: tobj = resume k.3(q.12, (): unit)
   let h.14: tobj = handle State(s.0, c.2) { get: c.2, put: c.2 } return c.2
   let n.15: tobj = con Option #1(h.14)
   let x.16: tobj = closure g(n.15)
@@ -604,6 +605,9 @@ internal role clause fn g(x.0: tobj, k.1: tobj, s.2: unit) -> tobj {
 internal role return fn r(x.0: tobj, s.1: unit) -> tobj {
   return x.0
 }
+internal role abort fn a(m.0: tobj, s.1: unit) -> tobj {
+  return m.0
+}
 internal yields role cont fn f$k0(a.0: int, x.1: tobj) -> tobj {
   return x.1
 }
@@ -617,6 +621,7 @@ internal yields role cont fn f$k0(a.0: int, x.1: tobj) -> tobj {
             Role::Body,
             Role::Clause,
             Role::Return,
+            Role::Abort,
             Role::Continuation
         ]
     );

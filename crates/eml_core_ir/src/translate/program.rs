@@ -269,8 +269,15 @@ impl ProgramBuilder {
                 let k = args.next().expect("k");
                 let arg = args.next().expect("v");
                 let state = args.next().unwrap_or(Atom::Unit);
+                // 値と状態の引数は `tobj` で、状態のない handler の状態は `()` である
+                let site = vec![Repr::TObj, if stateful { Repr::TObj } else { Repr::Unit }];
                 Rhs::Call {
-                    call: Call::Resume { k, arg, state },
+                    call: Call::Resume {
+                        k,
+                        arg,
+                        state,
+                        site,
+                    },
                     mask: Vec::new(),
                 }
             },

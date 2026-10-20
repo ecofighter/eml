@@ -469,12 +469,23 @@ impl<'a> Context<'a> {
     /// Repr と同じであることも確かめる。box の挿入は引数を変換した変数に替えるので、その後の段では比べない
     /// (docs/superpowers/specs/2026-10-21-s14e-abi-struct-design.md の「`apply` の ABI」)。
     pub fn check_site(&self, args: &[Atom], site: &Site, variables: bool) -> Result<(), String> {
-        let Site::Typed(reprs) = site else {
-            return Ok(());
-        };
+        match site {
+            Site::Typed(reprs) => self.check_reprs("apply", args, reprs, variables),
+            Site::Uniform => Ok(()),
+        }
+    }
+
+    /// 型どおりの場所 (`apply` か Core IR の `resume`) の検査。`check_site` と同じ規則で、`what` は誤りの文に書く。
+    pub fn check_reprs(
+        &self,
+        what: &str,
+        args: &[Atom],
+        reprs: &[Repr],
+        variables: bool,
+    ) -> Result<(), String> {
         if reprs.len() != args.len() {
             return Err(format!(
-                "the apply site lists {} reprs for {} arguments",
+                "the {what} site lists {} reprs for {} arguments",
                 reprs.len(),
                 args.len()
             ));
@@ -487,7 +498,7 @@ impl<'a> Context<'a> {
                 && self.repr(var) != repr
             {
                 return Err(format!(
-                    "the apply site gives `{}` {} but the variable is {}",
+                    "the {what} site gives `{}` {} but the variable is {}",
                     self.name(var),
                     repr.name(),
                     self.repr(var).name()

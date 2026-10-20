@@ -152,7 +152,13 @@ pub(super) fn lower(
                     mask: _,
                 } => out.perform(var, effect, op, args),
                 Rhs::Call {
-                    call: Call::Resume { k, arg, state },
+                    call:
+                        Call::Resume {
+                            k,
+                            arg,
+                            state,
+                            site: _,
+                        },
                     mask,
                 } => {
                     // 再開した計算の yield は、`k` の外側の row、つまりこの関数の row を通る。再開は EP の一様な場所である
@@ -263,7 +269,7 @@ fn runs_in_place(program: &Program, clause: &CoreFn, operation: &OperationInfo) 
             Term::Return(_) => {
                 let resumed = matches!(
                     tail,
-                    Some((_, Call::Resume { k: Atom::Var(var), arg: _, state: _ })) if *var == k
+                    Some((_, Call::Resume { k: Atom::Var(var), .. })) if *var == k
                 );
                 if !resumed {
                     return false;
@@ -385,6 +391,7 @@ fn into_entry(program: &mut Program, clause: FnIdx, effect: u32, op: u32) {
                             k: _,
                             arg,
                             state: resumed,
+                            site: _,
                         },
                     mask: _,
                 },

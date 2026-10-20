@@ -86,7 +86,7 @@ pub(crate) fn wrapper(function: &CoreFn) -> Option<Wrapper> {
         }),
         Rhs::Con { ctor, args } if *args == params => Some(Wrapper::Con(*ctor)),
         Rhs::Call {
-            call: Call::Resume { k, arg, state },
+            call: Call::Resume { k, arg, state, .. },
             mask,
         } if mask.is_empty() => match params[..] {
             [pk, pv] if (*k, *arg, *state) == (pk, pv, Atom::Unit) => {
@@ -673,7 +673,7 @@ pub(crate) fn replace(
     match call {
         Call::Direct(target, args) => {
             let callee = &callees[target.0 as usize];
-            let rhs = instruction(callee.wrapper?, args.clone(), mask)?;
+            let rhs = instruction(vars, callee.wrapper?, args.clone(), mask)?;
             Some(vec![Stmt::Let { var, rhs }])
         }
         Call::Apply {
@@ -705,7 +705,7 @@ pub(crate) fn replace(
                 }]);
             }
             let rest = given.split_off(callee.arity);
-            let rhs = saturated(closure.function, callee, given, mask);
+            let rhs = saturated(vars, closure.function, callee, given, mask);
             if rest.is_empty() {
                 return Some(vec![Stmt::Let { var, rhs }]);
             }
@@ -748,10 +748,16 @@ pub(crate) fn replace(
 
 /// 引数のそろった呼び出し。包む関数は直接呼ばず、包んでいる命令に戻す。`op$` と `con$` を直接呼ばないことで、box の
 /// 挿入がそれらをいつもその場で一様にする (docs/spec/core-ir.md の「REPL の入力」)。
-fn saturated(target: FnIdx, callee: &Callee, args: Vec<Atom>, mask: &[MaskItem]) -> Rhs {
+fn saturated(
+    vars: &[VarInfo],
+    target: FnIdx,
+    callee: &Callee,
+    args: Vec<Atom>,
+    mask: &[MaskItem],
+) -> Rhs {
     callee
         .wrapper
-        .and_then(|wrapper| instruction(wrapper, args.clone(), mask))
+        .and_then(|wrapper| instruction(vars, wrapper, args.clone(), mask))
         .unwrap_or_else(|| Rhs::Call {
             call: Call::Direct(target, args),
             mask: mask.to_vec(),
@@ -759,7 +765,12 @@ fn saturated(target: FnIdx, callee: &Callee, args: Vec<Atom>, mask: &[MaskItem])
 }
 
 /// 包む関数の命令に `args` を渡す右辺。`perform` は `mask` を持てないので、`mask` があれば `None` を返す。
-fn instruction(wrapper: Wrapper, args: Vec<Atom>, mask: &[MaskItem]) -> Option<Rhs> {
+fn instruction(
+    vars: &[VarInfo],
+    wrapper: Wrapper,
+    args: Vec<Atom>,
+    mask: &[MaskItem],
+) -> Option<Rhs> {
     match wrapper {
         Wrapper::Perform {
             effect,
@@ -776,13 +787,27 @@ fn instruction(wrapper: Wrapper, args: Vec<Atom>, mask: &[MaskItem]) -> Option<R
         }),
         // `con` はエフェクトを起こさないので `mask` は要らない
         Wrapper::Con(ctor) => Some(Rhs::Con { ctor, args }),
-        Wrapper::Resume { stateful: _ } => {
+        Wrapper::Resume { stateful } => {
             let mut args = args.into_iter();
             let k = args.next().expect("a continuation wrapper takes k");
             let arg = args.next().expect("a continuation wrapper takes a value");
             let state = args.next().unwrap_or(Atom::Unit);
+            // 定数の引数の Repr は、`cont$` の引数の Repr (`tobj`) である。状態のない handler の状態は `()` である
+            let state_repr = if stateful { Repr::TObj } else { Repr::Unit };
+            let site = [(arg, Repr::TObj), (state, state_repr)]
+                .into_iter()
+                .map(|(atom, param)| match atom {
+                    Atom::Var(var) => vars[var.0 as usize].repr,
+                    _ => param,
+                })
+                .collect();
             Some(Rhs::Call {
-                call: Call::Resume { k, arg, state },
+                call: Call::Resume {
+                    k,
+                    arg,
+                    state,
+                    site,
+                },
                 mask: mask.to_vec(),
             })
         }

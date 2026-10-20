@@ -602,7 +602,9 @@ impl<'t> Reader<'t> {
             .ok_or_else(|| {
                 error(
                     line,
-                    format!("expected a role (body, clause, return or cont), found `{word}`"),
+                    format!(
+                        "expected a role (body, clause, abort, return or cont), found `{word}`"
+                    ),
                 )
             })
     }
@@ -656,8 +658,8 @@ impl<'t> Reader<'t> {
         ))
     }
 
-    /// `apply` の引数1つと、場所に入れる Repr。変数の Repr は仮に `unit` にしておく。
-    fn apply_arg(
+    /// `apply` と Core IR の `resume` の引数1つと、場所に入れる Repr。変数の Repr は仮に `unit` にしておく。
+    pub fn apply_arg(
         &mut self,
         state: &mut FnState,
         uniform: bool,
@@ -1406,10 +1408,15 @@ impl<'t> Reader<'t> {
 /// 読み終えて変数の表ができてから埋める。
 pub fn fill_site(site: &mut Site, args: &[Atom], vars: &[VarInfo]) {
     if let Site::Typed(reprs) = site {
-        for (repr, atom) in reprs.iter_mut().zip(args) {
-            if let Atom::Var(var) = atom {
-                *repr = vars[var.0 as usize].repr;
-            }
+        fill_reprs(reprs, args, vars);
+    }
+}
+
+/// 引数ごとの Repr の並び (`apply` の場所と Core IR の `resume` の場所) の、変数の引数の Repr を埋める。
+pub fn fill_reprs(reprs: &mut [Repr], args: &[Atom], vars: &[VarInfo]) {
+    for (repr, atom) in reprs.iter_mut().zip(args) {
+        if let Atom::Var(var) = atom {
+            *repr = vars[var.0 as usize].repr;
         }
     }
 }
@@ -1630,21 +1637,25 @@ impl<'p> Writer<'p> {
             Site::Uniform => ("uniform ", &[][..]),
             Site::Typed(reprs) => ("", &reprs[..]),
         };
-        let args: Vec<String> = args
-            .iter()
+        format!(
+            "{}{uniform}apply {}({}){}",
+            if yields { "yields " } else { "" },
+            self.atom(vars, callee),
+            self.typed_atoms(vars, args, reprs),
+            prompt.map_or(String::new(), |v| format!(" prompt {}", self.var(vars, v)))
+        )
+    }
+
+    /// 引数の並び。定数の引数にだけ、`reprs` の同じ位置の Repr を `: repr` と書く。
+    pub fn typed_atoms(&self, vars: &[VarInfo], args: &[Atom], reprs: &[Repr]) -> String {
+        args.iter()
             .enumerate()
             .map(|(index, atom)| match (atom, reprs.get(index)) {
                 (Atom::Var(_), _) | (_, None) => self.atom(vars, atom),
                 (_, Some(repr)) => format!("{}: {}", self.atom(vars, atom), repr.name()),
             })
-            .collect();
-        format!(
-            "{}{uniform}apply {}({}){}",
-            if yields { "yields " } else { "" },
-            self.atom(vars, callee),
-            args.join(", "),
-            prompt.map_or(String::new(), |v| format!(" prompt {}", self.var(vars, v)))
-        )
+            .collect::<Vec<_>>()
+            .join(", ")
     }
 
     pub fn atoms(&self, vars: &[VarInfo], atoms: &[Atom]) -> String {

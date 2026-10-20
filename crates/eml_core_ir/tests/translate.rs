@@ -354,7 +354,7 @@ fn handlers_are_lifted_with_their_return_reprs() {
       return t.2
     }
     internal role clause fn main$handle0$ask(key.0: obj, k.1: tobj lin, p.2: unit) -> int {
-      let t.3: int = resume k.1(1, ())
+      let t.3: int = resume k.1(1: int, (): unit)
       return t.3
     }
     internal role return fn main$handle0$return(x.0: int, p.1: unit) -> int {
@@ -381,7 +381,7 @@ fn a_continuation_passed_to_a_function_is_wrapped() {
     ");
     insta::assert_snapshot!(function(&shown, "cont$"), @"
     internal yields fn cont$(k.0: tobj poly, v.1: tobj poly) -> tobj poly {
-      let t.2: tobj poly = resume k.0(v.1, ())
+      let t.2: tobj poly = resume k.0(v.1, (): unit)
       return t.2
     }
     ");
@@ -885,14 +885,14 @@ fn user_effects_are_numbered_after_io() {
       return t.1
     }
     internal yields role clause fn main$handle0$ask(p.0: unit, k.1: tobj lin, p.2: unit) -> int {
-      let t.3: int = resume k.1(1, ())
+      let t.3: int = resume k.1(1: int, (): unit)
       return t.3
     }
     internal yields role return fn main$handle0$return($r.0: int, p.1: unit) -> int {
       return $r.0
     }
     internal role clause fn main$handle1$tell(m.0: int, k.1: tobj lin, p.2: unit) -> int {
-      let t.3: int = resume k.1((), ())
+      let t.3: int = resume k.1((): unit, (): unit)
       return t.3
     }
     internal role return fn main$handle1$return($r.0: int, p.1: unit) -> int {
@@ -971,7 +971,7 @@ fn names_outside_the_entry_are_qualified_with_their_module() {
       return t.1
     }
     internal role clause fn main$handle0$next(p.0: unit, k.1: tobj lin, p.2: unit) -> obj {
-      let t.3: obj = resume k.1(1, ())
+      let t.3: obj = resume k.1(1: int, (): unit)
       return t.3
     }
     internal role return fn main$handle0$return(r.0: obj, p.1: unit) -> obj {
@@ -1263,7 +1263,7 @@ fn handlers_are_lifted_to_closures() {
       return t.2
     }
     internal role clause fn main$handle0$ask(key.0: obj, k.1: tobj lin, p.2: unit) -> int {
-      let t.3: int = resume k.1(1, ())
+      let t.3: int = resume k.1(1: int, (): unit)
       return t.3
     }
     internal role return fn main$handle0$return(x.0: int, p.1: unit) -> int {
@@ -1455,7 +1455,7 @@ fn constructor_patterns_in_handler_clause_parameters() {
     insta::assert_snapshot!(function(&shown, "run$handle0$give"), @"
     internal role clause fn run$handle0$give(p.0: obj, k.1: tobj lin, p.2: unit) -> int {
       unpack p.0 Box #0(n.3: int)
-      let t.4: int = resume k.1(n.3, ())
+      let t.4: int = resume k.1(n.3, (): unit)
       return t.4
     }
     ");
@@ -1673,7 +1673,7 @@ fn effects_are_numbered_in_declaration_order() {
       return t.1
     }
     internal role clause fn main$handle0$a(p.0: unit, k.1: tobj lin, p.2: unit) -> int {
-      let t.3: int = resume k.1(1, ())
+      let t.3: int = resume k.1(1: int, (): unit)
       return t.3
     }
     internal role return fn main$handle0$return($r.0: int, p.1: unit) -> int {
@@ -1684,7 +1684,7 @@ fn effects_are_numbered_in_declaration_order() {
       return t.1
     }
     internal role clause fn main$handle1$b(p.0: unit, k.1: tobj lin, p.2: unit) -> int {
-      let t.3: int = resume k.1(2, ())
+      let t.3: int = resume k.1(2: int, (): unit)
       return t.3
     }
     internal role return fn main$handle1$return($r.0: int, p.1: unit) -> int {
@@ -1962,7 +1962,7 @@ main () =
     // handle の番号は HIR の式の ID の順なので、内側の handle が `f<e>$handle0` になる
     insta::assert_snapshot!(function(&core_text(text, Pass::Translate), "f<e>$handle0"), @r#"
     internal yields role body fn "f<e>$handle0"(k.0: tobj lin, p.1: unit) -> int {
-      let t.2: int = mask [Log] resume k.0(1, ())
+      let t.2: int = mask [Log] resume k.0(1: int, (): unit)
       return t.2
     }
     "#);
@@ -2001,7 +2001,7 @@ fn handled(extra: &str, handle: &str) -> String {
 #[test]
 fn a_continuation_called_directly_is_resumed() {
     let shown = handled("", "    handle ask () with\n      | ctl ask () k -> k 1");
-    assert!(shown.contains("resume k.1(1, ())"), "{shown}");
+    assert!(shown.contains("resume k.1(1: int, (): unit)"), "{shown}");
     assert!(!shown.contains("cont$"), "{shown}");
 }
 
@@ -2115,7 +2115,7 @@ fn a_continuation_applied_to_extra_arguments_is_resumed_then_applied() {
     );
     let shown = core_text(&text, Pass::Translate);
     assert!(
-        shown.contains("let t.3: tobj = resume k.1(1, ())"),
+        shown.contains("let t.3: tobj = resume k.1(1: int, (): unit)"),
         "{shown}"
     );
     assert!(
@@ -3532,7 +3532,7 @@ fn a_var_lowers_to_a_handle() {
       return t.3
     }
     internal role clause fn main$var0$set(v.0: int, k.1: tobj lin, st.2: int) -> unit {
-      let t.3: unit = resume k.1((), v.0)
+      let t.3: unit = resume k.1((): unit, v.0)
       return t.3
     }
     internal role return fn main$var0$return(x.0: unit, st.1: int) -> unit {
@@ -3545,7 +3545,8 @@ fn a_var_lowers_to_a_handle() {
     "#);
 }
 
-/// ラムダは役割を持たず、handle と `var` の範囲の本体は `Body`、節は `Clause`、`return` の節は `Return` になる。
+/// ラムダは役割を持たず、handle と `var` の範囲の本体は `Body`、節は `Clause`、`never` の操作の節は `Abort`、
+/// `return` の節は `Return` になる。
 /// `apply` の場所は、変数の引数には変数の Repr を、定数の引数にはその矢印の引数の型の Repr を並べる。`None` は
 /// `#0` だが、`Option Int` の位置なので `enum` でなく `tobj` になる
 /// (docs/superpowers/specs/2026-10-21-s14e-abi-struct-design.md の「関数の ABI」「`apply` の ABI」)。
@@ -3556,6 +3557,9 @@ fn lambda_and_handler_roles() {
     let text = "\
 effect Tick where
   tick : Int -> Unit
+
+effect Fail where
+  never fail : String -> a
 
 main : Unit -> <IO, Panic> Unit
 main () =
@@ -3570,7 +3574,9 @@ main () =
     | return x st -> st
   var c = r
   c <- c + 1
-  println (show c)
+  let s = handle (if c > 0 then fail \"big\" else c) with
+    | ctl fail message -> 0
+  println (show s)
 ";
     let program = eml_test_support::core_until(text, Pass::Translate);
     let role = |name: &str| {
@@ -3592,6 +3598,8 @@ main () =
         ("main$var0$get", Role::Clause),
         ("main$var0$set", Role::Clause),
         ("main$var0$return", Role::Return),
+        ("main$handle1", Role::Body),
+        ("main$handle1$fail", Role::Abort),
     ] {
         assert_eq!(role(name), expected, "{name}\n{}", pretty(&program));
     }

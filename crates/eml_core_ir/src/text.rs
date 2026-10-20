@@ -51,16 +51,30 @@ impl Parser<'_> {
         }
         let vars = self.reader.function_vars(state, blocks.len())?;
         for stmt in blocks.iter_mut().flat_map(|block| &mut block.stmts) {
-            if let Stmt::Let {
-                var: _,
-                rhs:
-                    Rhs::Call {
-                        call: Call::Apply { args, site, .. },
-                        mask: _,
-                    },
-            } = stmt
-            {
-                syntax::fill_site(site, args, &vars);
+            match stmt {
+                Stmt::Let {
+                    var: _,
+                    rhs:
+                        Rhs::Call {
+                            call: Call::Apply { args, site, .. },
+                            mask: _,
+                        },
+                } => syntax::fill_site(site, args, &vars),
+                Stmt::Let {
+                    var: _,
+                    rhs:
+                        Rhs::Call {
+                            call:
+                                Call::Resume {
+                                    k: _,
+                                    arg,
+                                    state,
+                                    site,
+                                },
+                            mask: _,
+                        },
+                } => syntax::fill_reprs(site, &[*arg, *state], &vars),
+                _ => {}
             }
         }
         Ok(CoreFn {
@@ -278,17 +292,19 @@ impl Parser<'_> {
                     args,
                 })
             }
+            // 値と状態は `apply` の引数と同じく、定数にだけ `: repr` を書く
             "resume" => {
                 let k = self.reader.atom(state)?;
                 self.reader.expect_punct('(')?;
-                let arg = self.reader.atom(state)?;
+                let (arg, arg_repr) = self.reader.apply_arg(state, false)?;
                 self.reader.expect_punct(',')?;
-                let next = self.reader.atom(state)?;
+                let (next, next_repr) = self.reader.apply_arg(state, false)?;
                 self.reader.expect_punct(')')?;
                 Ok(Call::Resume {
                     k,
                     arg,
                     state: next,
+                    site: vec![arg_repr, next_repr],
                 })
             }
             "clause" => {

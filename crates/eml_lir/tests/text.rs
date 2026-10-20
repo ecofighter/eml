@@ -1759,6 +1759,9 @@ internal role clause fn g(x.0: tobj, k.1: tobj, s.2: unit) -> tobj {
 internal role return fn r(x.0: tobj, s.1: unit) -> tobj {
   return x.0
 }
+internal role abort fn a(m.0: tobj, s.1: unit) -> tobj {
+  return m.0
+}
 internal yields role cont fn f$k0(a.0: int, x.1: tobj) -> tobj {
   return x.1
 }
@@ -1772,6 +1775,7 @@ internal yields role cont fn f$k0(a.0: int, x.1: tobj) -> tobj {
             Role::Body,
             Role::Clause,
             Role::Return,
+            Role::Abort,
             Role::Continuation
         ]
     );

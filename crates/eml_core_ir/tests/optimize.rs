@@ -1963,7 +1963,7 @@ internal yields fn body(p.0: unit) -> int {
   return t.1
 }
 internal fn ask(c.0: tobj, p.1: unit, k.2: tobj, s.3: unit) -> tobj {
-  let t.4: tobj = resume k.2(c.0, ())
+  let t.4: tobj = resume k.2(c.0, (): unit)
   return t.4
 }
 internal fn ret(x.0: tobj, s.1: unit) -> tobj {
@@ -2014,7 +2014,7 @@ b2:
 }
 internal fn tick(p.0: unit, k.1: tobj, s.2: int) -> tobj {
   let n.3: int = extern \"Prelude.Num Int.+\"(s.2, 1)
-  let t.4: tobj = resume k.1((), n.3)
+  let t.4: tobj = resume k.1((): unit, n.3)
   return t.4
 }
 internal fn ret(x.0: tobj, s.1: int) -> int {
@@ -2463,3 +2463,90 @@ main () =
       v * 1 + v * 2 + v * 3 + v * 4 + v * 5 + v * 6 + v * 7 + v * 8 + v * 9 + v * 10 + v * 11 + v * 12 + v * 13 + v * 14 + v * 15 + v * 16 + v * 17 + v * 18 + v * 19 + v * 20 + v * 21 + v * 22 + v * 23 + v * 24 + v * 25 + v * 26 + v * 27 + v * 28 + v * 29
   println (show r)
 ";
+
+/// 節の写し `<g>{k}` の `k` への `apply` は、`resume` の場所を写す。`None` は `#0` で値の形は `enum` だが、
+/// `Option Int` を受ける `k` には `tobj` で渡る (docs/superpowers/specs/2026-10-21-s14e-abi-struct-design.md の
+/// 「`apply` の ABI」)。
+#[test]
+fn a_clause_copy_applies_k_at_the_site_of_the_resume() {
+    use eml_lir::{Repr, Site};
+    let text = CLAUSE_WITH_K
+        .replace("ask : Unit -> Int", "ask : Unit -> Option Int")
+        .replace(
+            "sum acc n = if n <= 0 then acc else sum (acc + ask ()) (n - 1)",
+            "sum acc n = match ask () with\n  | None -> acc\n  | Some x -> sum (acc + x) (n - 1)",
+        )
+        .replace("let v = k 10", "let v = k None");
+    let program = eml_test_support::core_until(&text, Pass::Optimize);
+    let shown = pretty(&program);
+    let copy = program
+        .functions
+        .iter()
+        .find(|function| function.name.ends_with("{k}"))
+        .unwrap_or_else(|| panic!("no `<g>{{k}}` in\n{shown}"));
+    let sites: Vec<&Site> = copy
+        .blocks
+        .iter()
+        .flat_map(|block| &block.stmts)
+        .filter_map(|stmt| match stmt {
+            Stmt::Let {
+                rhs:
+                    Rhs::Call {
+                        call: Call::Apply { args, site, .. },
+                        ..
+                    },
+                ..
+            } if args.first() == Some(&Atom::Tag(0)) => Some(site),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(sites, [&Site::Typed(vec![Repr::TObj])], "{shown}");
+}
+
+/// `con` の複製は、一様な引数の位置を開くと引数の並びが変わるので役割を落とす。一様でない位置だけを開く複製は、
+/// 末尾の一様な引数がそのまま残るので役割を写す
+/// (docs/superpowers/specs/2026-10-21-s14e-abi-struct-design.md の「関数の ABI」)。
+#[test]
+fn a_con_copy_keeps_its_role_only_when_the_uniform_parameters_stay() {
+    use eml_lir::Role;
+    let mut program = parse(
+        "\
+layout Box { Box(tobj, int) }
+fn inc(x.0: int) -> int {
+  return x.0
+}
+internal role return fn r(x.0: int, s.1: tobj) -> int {
+  unpack s.1 Box #0(f.2: tobj, n.5: int)
+  let y.3: int = apply f.2(n.5)
+  let z.4: int = call r(y.3, s.1)
+  return z.4
+}
+internal role clause fn g(b.0: tobj, k.1: tobj, s.2: unit) -> int {
+  unpack b.0 Box #0(f.3: tobj, n.6: int)
+  let y.4: int = apply f.3(n.6)
+  let z.5: int = call g(b.0, k.1, s.2)
+  return z.5
+}
+fn entry$main(k.0: tobj) -> int {
+  let b.1: tobj = con Box #0(&inc, 5)
+  let t.2: int = call r(1, b.1)
+  let c.3: tobj = con Box #0(&inc, 6)
+  let t.4: int = call g(c.3, k.0, ())
+  return t.4
+}
+",
+    )
+    .unwrap_or_else(|error| panic!("{error}"));
+    optimize(&mut program);
+    let shown = pretty(&program);
+    let role = |prefix: &str| {
+        program
+            .functions
+            .iter()
+            .find(|function| function.name.starts_with(prefix))
+            .unwrap_or_else(|| panic!("no `{prefix}` copy in\n{shown}"))
+            .role
+    };
+    assert_eq!(role("r{"), Role::Typed, "{shown}");
+    assert_eq!(role("g{"), Role::Clause, "{shown}");
+}

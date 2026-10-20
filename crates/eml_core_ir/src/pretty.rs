@@ -207,11 +207,15 @@ impl<'p> Printer<'p> {
                     w.atoms(vars, args)
                 )
             }
-            Call::Resume { k, arg, state } => format!(
-                "resume {}({}, {})",
+            Call::Resume {
+                k,
+                arg,
+                state,
+                site,
+            } => format!(
+                "resume {}({})",
                 w.atom(vars, k),
-                w.atom(vars, arg),
-                w.atom(vars, state)
+                w.typed_atoms(vars, &[*arg, *state], site)
             ),
             Call::Clause {
                 effect,

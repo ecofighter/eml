@@ -283,7 +283,7 @@ fn body(u.0: unit) -> int {
   return 1
 }
 fn clause(x.0: int, k.1: tobj) -> int {
-  let t.2: int = resume k.1(x.0, ())
+  let t.2: int = resume k.1(x.0, (): unit)
   return t.2
 }
 fn ret(x.0: int, s.1: unit) -> int {
@@ -620,7 +620,7 @@ fn effect_instructions() -> [(String, &'static str); 4] {
             "a handler remains after the evidence pass in `f`",
         ),
         (
-            "fn f(k.0: tobj) -> tobj {\n  let t.1: tobj = resume k.0((), ())\n  return t.1\n}\n"
+            "fn f(k.0: tobj) -> tobj {\n  let t.1: tobj = resume k.0((): unit, (): unit)\n  return t.1\n}\n"
                 .to_string(),
             "a resume remains after the evidence pass in `f`",
         ),
@@ -1061,6 +1061,42 @@ fn site_of(program: &mut Program) -> &mut eml_lir::Site {
     } = &mut program.functions[0].blocks[0].stmts[0]
     else {
         panic!("expected an apply");
+    };
+    site
+}
+
+/// `resume` の場所は値と状態の2つの Repr を持ち、変数の引数の Repr を変数と同じにする
+/// (docs/superpowers/specs/2026-10-21-s14e-abi-struct-design.md の「`apply` の ABI」)。
+#[test]
+fn a_resume_site_entry_must_match_its_variable() {
+    use eml_lir::Repr;
+    let mut program = read(
+        "fn f(x.0: tobj, k.1: tobj) -> tobj {\n  let t.2: tobj = resume k.1(x.0, (): unit)\n  return t.2\n}\n",
+    );
+    assert_eq!(verify_translated(&program), Ok(()));
+    *resume_site_of(&mut program) = vec![Repr::Int, Repr::Unit];
+    assert_eq!(
+        verify_translated(&program).map_err(|error| error.message),
+        Err("the resume site gives `x.0` int but the variable is tobj".to_string())
+    );
+    *resume_site_of(&mut program) = vec![Repr::TObj];
+    assert_eq!(
+        verify_translated(&program).map_err(|error| error.message),
+        Err("the resume site lists 1 reprs for 2 arguments".to_string())
+    );
+}
+
+fn resume_site_of(program: &mut Program) -> &mut Vec<eml_lir::Repr> {
+    let Stmt::Let {
+        rhs:
+            Rhs::Call {
+                call: eml_core_ir::Call::Resume { site, .. },
+                ..
+            },
+        ..
+    } = &mut program.functions[0].blocks[0].stmts[0]
+    else {
+        panic!("expected a resume");
     };
     site
 }

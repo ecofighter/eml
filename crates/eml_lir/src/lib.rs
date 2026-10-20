@@ -92,8 +92,11 @@ pub enum Role {
     Typed,
     /// handle と `var` の範囲の本体。`()` の引数と結果が一様である。
     Body,
-    /// `prompt$` が呼ぶ操作の節の関数。`k`、状態、結果が一様である。
+    /// `prompt$` が呼ぶ、再開する操作の節の関数。`k`、状態、結果が一様である。
     Clause,
+    /// `prompt$` が呼ぶ、`never` の操作の節の関数。`prompt$` は操作の引数を捕まえたクロージャに状態だけを渡すので、
+    /// 状態と結果が一様である。
+    Abort,
     /// `return` の節。値、状態、結果が一様である。
     Return,
     /// 継続の関数 `f$kN`。再開の値と結果が一様である。`f$kN` は生きている変数の後に再開の値を受け、状態は受けない。
@@ -101,10 +104,11 @@ pub enum Role {
 }
 
 impl Role {
-    pub const ALL: [Role; 5] = [
+    pub const ALL: [Role; 6] = [
         Role::Typed,
         Role::Body,
         Role::Clause,
+        Role::Abort,
         Role::Return,
         Role::Continuation,
     ];
@@ -113,7 +117,7 @@ impl Role {
     pub fn uniform_params(self) -> usize {
         match self {
             Role::Typed => 0,
-            Role::Body | Role::Continuation => 1,
+            Role::Body | Role::Abort | Role::Continuation => 1,
             Role::Clause | Role::Return => 2,
         }
     }
@@ -128,6 +132,7 @@ impl Role {
             Role::Typed => None,
             Role::Body => Some("body"),
             Role::Clause => Some("clause"),
+            Role::Abort => Some("abort"),
             Role::Return => Some("return"),
             Role::Continuation => Some("cont"),
         }
