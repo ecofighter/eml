@@ -4,7 +4,7 @@
 //! 本体の型を書き出すときの変数の値は `summary` にある。
 
 use eml_diagnostics::{FileId, TextRange, TextSize};
-use eml_hir::{DisplayNames, OperationId};
+use eml_hir::{DisplayNames, OperationId, VarId};
 
 use crate::store::{TypeId, TypeStore};
 use crate::table::Row;
@@ -177,6 +177,13 @@ pub(crate) enum KindReason {
     /// 更新の式である。書き手の `_` と区別して、フィールドの名前で報告する
     /// (docs/implementation/diagnostics.md の「線形性の診断」)。
     DiscardedField { name: String, site: DiscardSite },
+    /// `Unr` の変数に分けた `var` の変数の型。由来の範囲は `var` の文である。`ty` は変数の型で、破れたときの文言に出す
+    /// (docs/spec/types.md の「`var` の変数」)。
+    VarValue {
+        var: VarId,
+        name: String,
+        ty: TypeId,
+    },
 }
 
 /// フィールドを捨てた式の種類。E3004 の言い方と help を変える。
@@ -270,6 +277,9 @@ impl KindReason {
             ),
             KindReason::DiscardedField { name, site } => {
                 (11, vec![text(name), number(site.order_key())])
+            }
+            KindReason::VarValue { var, name, .. } => {
+                (13, vec![text(name), number(var.into_raw().into_u32())])
             }
             KindReason::OperationType { name, side, lambda } => {
                 let lambda = match lambda {

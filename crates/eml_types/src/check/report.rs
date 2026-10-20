@@ -13,6 +13,7 @@ use crate::kind::{
 };
 use crate::store::TypeStore;
 use crate::table::{Exporter, Label as RowLabel, Row, Ty, UnifyError};
+use eml_extern::ExternType;
 
 use super::body::BodyCheck;
 
@@ -62,6 +63,21 @@ pub(super) enum Origin {
         op: String,
         stateful: bool,
     },
+    /// `var` の変数の型。変数の名前と `var` の文の範囲を持つ。
+    VarType {
+        name: String,
+        decl: TextRange,
+    },
+    /// 変数でない式の添字の左側。
+    IndexBase,
+    /// 添字で読み書きする `var` の変数。変数の名前と `var` の文の範囲、書き込みかどうかを持つ。
+    IndexedVar {
+        name: String,
+        decl: TextRange,
+        write: bool,
+    },
+    /// 添字 `[i]` の `i`。
+    Index,
     /// 推論で決まる型。根拠の場所はない。
     Inferred,
 }
@@ -195,7 +211,12 @@ impl BodyCheck<'_, '_> {
             // 上限まで足したラベルが並ぶので、名前を重ねると読みにくい (docs/spec/types.md の「呼び出しの包含を解く」)
             Err(UnifyError::MissingEffects(mut effects)) => {
                 let mut seen = HashSet::new();
-                effects.retain(|effect| seen.insert(*effect));
+                effects.retain(|effect| seen.insert(*effect) && !self.escaped_var(*effect, range));
+                // 範囲の外で `var` のラベルが足りないのは、変数を使う関数が範囲の外へ出たためで、E2019 が報告する
+                // (docs/spec/types.md の「範囲の外へ出る閉包」)
+                if effects.is_empty() {
+                    return false;
+                }
                 fixable = Some(effects.clone());
                 effects
                     .iter()
@@ -563,6 +584,29 @@ impl BodyCheck<'_, '_> {
             Origin::LambdaBody => diagnostic.with_note(
                 "the body of a lambda must have the return type the lambda is expected to have",
             ),
+            Origin::VarType { name, decl } => diagnostic.with_secondary(Label::new(
+                file,
+                *decl,
+                format!("the type of `{name}` comes from here"),
+            )),
+            Origin::IndexBase => diagnostic.with_note(
+                "only an `Array` value can be indexed; keep a `MutArray` in a `var` variable to index it",
+            ),
+            Origin::IndexedVar { name, decl, write } => diagnostic
+                .with_secondary(Label::new(
+                    file,
+                    *decl,
+                    format!("the type of `{name}` comes from here"),
+                ))
+                .with_note(if *write {
+                    "only a `var` variable that holds a `MutArray` can be written by index"
+                } else {
+                    "only a `var` variable that holds an `Array` or a `MutArray` can be indexed"
+                }),
+            Origin::Index => {
+                let int = names.ty(self.program.extern_type(ExternType::Int));
+                diagnostic.with_note(format!("an index must have type `{int}`"))
+            }
             Origin::Inferred => diagnostic,
         };
         self.diagnostics.push(diagnostic);
@@ -835,6 +879,24 @@ pub(super) fn linear_misuse(
             "a linear value is used where an unrestricted value is expected".to_string(),
             "this expression".to_string(),
         ),
+        KindReason::VarValue { name, ty, .. } => Diagnostic::error(
+            codes::VAR_KIND,
+            format!(
+                "the variable `{name}` has the linear type `{}`",
+                types.display(*ty, &program.names)
+            ),
+            Label::new(
+                file,
+                range,
+                "a `var` variable must be unrestricted or a `MutArray`",
+            ),
+        )
+        .with_note(
+            "reading a `var` variable copies its value, so only a `MutArray` variable can hold a linear value",
+        )
+        .with_help(format!(
+            "bind the value with `let` and pass `{name}` on instead of keeping it in a `var` variable"
+        )),
     }
 }
 

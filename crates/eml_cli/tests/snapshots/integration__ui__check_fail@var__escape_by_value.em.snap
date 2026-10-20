@@ -1,0 +1,20 @@
+---
+source: crates/eml_cli/tests/ui.rs
+expression: rendered
+input_file: tests/ui/check-fail/var/escape_by_value.em
+---
+[E2019] Error: a function that uses the variable `x` can escape its scope
+   ╭─[ check-fail/var/escape_by_value.em:6:5 ]
+   │
+ 6 │     fn () -> x
+   │     ─────┬────  
+   │          ╰────── the value of the scope can hold a function that uses `x`
+   │
+   ├─[ check-fail/var/escape_by_value.em:6:5 ]
+   │
+ 5 │     var x = 1
+   │     ────┬────  
+   │         ╰────── the scope of `x` starts here
+   │ 
+   │ Note: each run of a `var` statement makes a new variable, so a function that uses one must not outlive its scope
+───╯

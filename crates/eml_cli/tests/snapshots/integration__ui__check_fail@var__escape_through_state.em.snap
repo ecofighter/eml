@@ -1,0 +1,14 @@
+---
+source: crates/eml_cli/tests/ui.rs
+expression: rendered
+input_file: tests/ui/check-fail/var/escape_through_state.em
+---
+[E2019] Error: a function that uses the variable `x` can escape its scope
+   ╭─[ check-fail/var/escape_through_state.em:8:7 ]
+   │
+ 8 │       var x = i
+   │       ────┬────  
+   │           ╰────── the effect `State (Unit -> <var x | _> Int)` outside the scope can carry a function that uses `x`
+   │ 
+   │ Note: each run of a `var` statement makes a new variable, so a function that uses one must not outlive its scope
+───╯

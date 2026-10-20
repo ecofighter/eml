@@ -134,12 +134,14 @@ struct Fix {
 | E2016 | `INPUT_LINEAR` | REPL の `let` の束縛か式の入力の型が `Unr` でない。`:type` の問い合わせには当てない |
 | E2017 | `BINDING_AMBIGUOUS` | REPL の `let` の束縛の型に、決まらない型変数が残った |
 | E2018 | `INPUT_CHANGES_UNIFORM` | REPL の入力が、前の入力の関数か instance の一様な位置を変える。`eml_cli` の `Repl` が `eml_types::input_changes_uniform` で作る |
+| E2019 | `VAR_ESCAPES` | `var` の変数を使う関数が範囲の外へ出うる。ノードの値の型、ノードの場所の row、範囲の外の束縛の型のどれかに、変数のエフェクトが現れる ([型と Kind](types.md) の「範囲の外へ出る閉包」) |
 | E3001 | `LINEAR_VALUE_MISUSED` | 線形な値の誤った使い方のうち、E3002〜E3005 に当たらないもの (関数への受け渡し、型の単一化、ラムダや節の捕獲、再帰するローカル関数の組の関数の捕獲、操作の型が節に求める制約) |
 | E3002 | `LINEAR_VALUE_USED_TWICE` | 線形な値を、ある経路で2回以上使った |
 | E3003 | `LINEAR_VALUE_NOT_CONSUMED` | 線形な値を、ある経路で使わなかった |
 | E3004 | `LINEAR_VALUE_DISCARDED` | 線形な値を `_` で受けた。状態のある handler で省いた `return` の節が `Lin` の状態を捨てた場合、分解のパターンに書かないフィールド、射影で取り出さない残りのフィールド、更新で上書きされる古い値が線形な場合を含む |
 | E3005 | `CONTINUATION_NOT_HANDLED` | `once` の操作の節の `k` を、ある経路で呼びも `drop` もしなかった |
 | E3006 | `LINEAR_VALUE_KEPT_ACROSS_MULTI` | 線形な値を持ったまま、`multi` の操作を起こしうる呼び出し、`handle` をまたいだ (持ち越し規則)。呼んだ関数のスキームを通る持ち越しと、`once` の操作の `fn` の節の隠れた継続を本体の中の呼び出しがまたぐ場合を含む |
+| E3007 | `VAR_KIND` | `var` の変数の型が `Unr` でも `MutArray` でもない ([型と Kind](types.md) の「変数の分類」) |
 | E4001 | `NON_EXHAUSTIVE_MATCH` | 網羅されていない `match` |
 | E4002 | `NON_EXHAUSTIVE_EQUATION` | 網羅されていない等式 |
 | E4003 | `REFUTABLE_PATTERN` | 反駁可能な `let` の左辺、ラムダの引数、ローカル関数の引数、handler の節の引数と `return` の節の引数のパターン |

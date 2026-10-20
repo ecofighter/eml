@@ -20,8 +20,8 @@ use crate::store::{EffectLabel, Lin, TypeKind, TypeStore};
 use crate::table::{Exporter, RigidVar, Row, Table, TyShape};
 use crate::ty::Linearity;
 use crate::{
-    BodyTypes, DeclType, InputType, Instantiation, RowYield, TypedProgram, Uniform, Update, carry,
-    codes, exhaustive, scc, uniform, usage,
+    BodyTypes, DeclType, InputType, Instantiation, RowYield, TypedProgram, Uniform, Update,
+    VarType, carry, codes, exhaustive, scc, uniform, usage,
 };
 use constraints::{Defaulting, Failure, show_constraint, solve};
 
@@ -33,6 +33,7 @@ mod inclusion;
 mod input;
 mod query;
 mod report;
+mod var;
 
 use body::BodyCheck;
 pub(crate) use body::{BodyTyping, CallRows};
@@ -514,8 +515,17 @@ pub(crate) fn check_body<'c>(
     checker.check_function(own.ty);
     checker.solve_inclusions(&[]);
     checker.solve_constraints(Defaulting::None);
-    let typing = checker.typing;
+    let mut typing = checker.typing;
     let instances = checker.instances;
+    var::classify(
+        program,
+        file,
+        body,
+        &mut table,
+        types,
+        &mut typing,
+        &mut diagnostics,
+    );
     // 頭が線形な instance (E2010) のメソッドは、頭の値を `Unr` とみなして書いた本体なので、線形性の診断を重ねない
     // (docs/spec/types.md の「`Unr` のクラス」)
     let linear_head = matches!(function.kind, FunctionKind::InstanceMethod(instance, _)
@@ -562,7 +572,7 @@ pub(crate) fn export_body(
     } = pending;
     // 式、局所変数、パターン、具体化の型は表の同じ節点を共有するので、1つの `Exporter` で書き出し、各節点を1回だけ
     // 書き出す。`joins` の番号は初めて現れた順に振るので、この書き出しの順 (式、局所変数、パターン、具体化、更新、
-    // 捨てたフィールド) が番号を決める (docs/spec/types.md の
+    // 捨てたフィールド、`var` の変数) が番号を決める (docs/spec/types.md の
     // 「宣言の Kind 変数の番号」)
     let mut exporter = Exporter::solved(&table, types, kinds);
     let mut body_types = BodyTypes::default();
@@ -632,6 +642,14 @@ pub(crate) fn export_body(
             .collect();
         body_types.discarded.insert(expr, discarded);
     }
+    for (var, scope) in typing.vars.iter() {
+        let var_type = VarType {
+            ty: exporter.export(scope.ty),
+            class: typing.var_classes[var],
+        };
+        body_types.vars.insert(var, var_type);
+    }
+    body_types.indexes = typing.indexes;
     (body_types, exporter.into_joins())
 }
 

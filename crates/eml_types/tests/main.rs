@@ -21,4 +21,5 @@ mod scaling;
 mod strings;
 mod tuples;
 mod uniform;
+mod vars;
 mod yields;

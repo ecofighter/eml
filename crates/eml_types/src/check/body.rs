@@ -4,7 +4,7 @@ use eml_diagnostics::{Diagnostic, FileId, Label, SourceFiles, TextRange};
 use eml_hir::{
     Body, Closure, ConstructorId, ExprId, ExprKind, Function, Literal, LocalFunction, LocalId,
     MatchArm, OperationId, PatId, PatKind, Program, Res, Segment, Stmt, TypeRefId, TypeRefKind,
-    ValueItem,
+    ValueItem, VarId,
 };
 use la_arena::ArenaMap;
 
@@ -14,11 +14,12 @@ use crate::kind::{KindOrigin, KindReason, Provenance, Span};
 use crate::shape::{Instantiated, Rigids, lower_type};
 use crate::store::TypeStore;
 use crate::table::{Row, RowVar, Table, Tail, Ty, TyShape, UnifyError};
-use crate::{FieldTarget, Update, codes};
+use crate::{FieldTarget, IndexTarget, Update, VarClass, codes};
 
 use super::Signatures;
 use super::inclusion::Inclusion;
 use super::report::{AmbientSource, Origin, callee_subject};
+use super::var::VarScope;
 
 /// 呼び出しの row。持ち越しのパスが読む (docs/spec/effects.md の「継続の多重度と持ち越し規則」)。
 #[derive(Debug, Clone)]
@@ -59,6 +60,12 @@ pub(crate) struct BodyTyping {
     pub updates: ArenaMap<ExprId, Update<Ty>>,
     /// 射影と更新が捨てるフィールドの番号と型。使用回数のパスが `_` で受けた値と同じく `Unr` の制約を出す。
     pub discarded: ArenaMap<ExprId, Vec<(u32, Ty)>>,
+    /// `var` の変数のノードと型 (docs/spec/types.md の「`var` の変数」)。
+    pub vars: ArenaMap<VarId, VarScope>,
+    /// 変数の分類。推論を終えた後に `var::classify` が入れる。
+    pub var_classes: ArenaMap<VarId, VarClass>,
+    /// 添字のノードの読み方。
+    pub indexes: ArenaMap<ExprId, IndexTarget>,
 }
 
 pub(super) struct BodyCheck<'a, 'c> {
@@ -240,6 +247,12 @@ impl BodyCheck<'_, '_> {
                 let found = self.call(id, *callee, args, Expectation::Has(expected, origin));
                 self.typing.exprs.insert(id, found);
             }
+            ExprKind::Var {
+                var, init, body, ..
+            } => {
+                self.var_scope(id, *var, *init, *body, Expectation::Has(expected, origin));
+                self.typing.exprs.insert(id, expected);
+            }
             ExprKind::Lambda(Closure {
                 params,
                 body: lambda_body,
@@ -401,26 +414,18 @@ impl BodyCheck<'_, '_> {
                 self.infer_expr(*value);
                 self.table.unit
             }
-            // S14c-3 の作業 4 で型を付けるまでは E0004 にする。中は検査せずに誤りの型にして、診断を連鎖させない
-            ExprKind::Var { var, .. } => {
-                let range = body.vars[*var].range;
-                self.not_yet_supported(range, "`var` is not supported yet")
+            ExprKind::Var {
+                var, init, body, ..
+            } => self.var_scope(id, *var, *init, *body, Expectation::None),
+            ExprKind::VarGet(var) => self.var_get(id, *var),
+            ExprKind::Assign { var, value } => self.assign(id, *var, *value),
+            ExprKind::IndexAssign { var, index, value } => {
+                self.index_assign(id, *var, *index, *value)
             }
-            ExprKind::VarGet(_) | ExprKind::Assign { .. } | ExprKind::IndexAssign { .. } => {
-                self.not_yet_supported(expr.range, "`var` is not supported yet")
-            }
-            ExprKind::Index { .. } => {
-                self.not_yet_supported(expr.range, "indexing is not supported yet")
-            }
+            ExprKind::Index { base, index } => self.index(id, *base, *index),
         };
         self.typing.exprs.insert(id, ty);
         ty
-    }
-
-    fn not_yet_supported(&mut self, range: TextRange, message: &str) -> Ty {
-        self.diagnostics
-            .push(Diagnostic::not_yet_supported(self.file, range, message));
-        self.table.error
     }
 
     /// 期待する型があれば、両方の枝をその型で検査する。なければ then 節の型を推論し、else 節をそれに合わせる。
@@ -1070,7 +1075,7 @@ impl BodyCheck<'_, '_> {
         }
     }
 
-    fn expect(&mut self, range: TextRange, expected: Ty, found: Ty, origin: &Origin) {
+    pub(super) fn expect(&mut self, range: TextRange, expected: Ty, found: Ty, origin: &Origin) {
         let unified = self.with_kind_origin(range, KindReason::Unified, |this| {
             this.table.unify(found, expected)
         });

@@ -276,9 +276,25 @@ impl Carrying<'_, '_> {
             ExprKind::List(elements) => self.list(elements, after),
             ExprKind::Interpolation(segments) => self.interpolation(segments, after),
             ExprKind::Drop(value) => self.expr(*value, after),
-            // S14c-3 の作業 4 で変数の範囲を handle と同じく扱うまでは、部分式を評価の順にたどるだけにする
-            ExprKind::Var { init, body, .. } => {
-                let live = self.expr(*body, after);
+            // 変数の範囲を、状態が初期値の handle と同じく扱う。範囲の後で使う値と変数の値は、外側の row をまたぐ
+            // (docs/spec/types.md の「`var` の変数」)
+            ExprKind::Var {
+                var,
+                init,
+                body: scope,
+                ..
+            } => {
+                if let Some(CallRows::Handle { outer, .. }) = typing.calls.get(id) {
+                    let outer = Across::Row(outer.clone());
+                    self.carry(id, after, &outer, &CallKind::Handle);
+                    if let Some(scope) = typing.vars.get(*var) {
+                        let value = CarriedValue::HandlerState {
+                            init: body.exprs[*init].range,
+                        };
+                        self.carry_value(id, scope.ty, value, &outer, &CallKind::Handle);
+                    }
+                }
+                let live = self.expr(*scope, after);
                 self.expr(*init, &live)
             }
             ExprKind::VarGet(_) => after.clone(),

@@ -22,7 +22,7 @@ use std::collections::HashMap;
 use eml_diagnostics::{Diagnostic, FileId, Label, SourceFiles, TextRange, TextSize};
 use eml_hir::{
     ConstructorId, EffectId, ExprId, Function, FunctionId, ItemMap, LocalId, PatId, Program,
-    ValueItem,
+    ValueItem, VarId,
 };
 use la_arena::ArenaMap;
 
@@ -46,6 +46,7 @@ pub mod codes {
     pub const LINEAR_VALUE_DISCARDED: ErrorCode = ErrorCode(3004);
     pub const CONTINUATION_NOT_HANDLED: ErrorCode = ErrorCode(3005);
     pub const LINEAR_VALUE_KEPT_ACROSS_MULTI: ErrorCode = ErrorCode(3006);
+    pub const VAR_KIND: ErrorCode = ErrorCode(3007);
     pub const TYPE_MISMATCH: ErrorCode = ErrorCode(2001);
     pub const EFFECT_NOT_IN_ROW: ErrorCode = ErrorCode(2002);
     pub const MISSING_MAIN: ErrorCode = ErrorCode(2003);
@@ -62,6 +63,7 @@ pub mod codes {
     pub const INPUT_LINEAR: ErrorCode = ErrorCode(2016);
     pub const BINDING_AMBIGUOUS: ErrorCode = ErrorCode(2017);
     pub const INPUT_CHANGES_UNIFORM: ErrorCode = ErrorCode(2018);
+    pub const VAR_ESCAPES: ErrorCode = ErrorCode(2019);
     pub const NON_EXHAUSTIVE_MATCH: ErrorCode = ErrorCode(4001);
     pub const NON_EXHAUSTIVE_EQUATION: ErrorCode = ErrorCode(4002);
     pub const REFUTABLE_PATTERN: ErrorCode = ErrorCode(4003);
@@ -231,6 +233,36 @@ pub struct BodyTypes {
     /// しない局所変数で、番号の順に並ぶ。型や HIR の誤りがある本体では記録しない
     /// (docs/spec/linearity.md の「線形性の検査パス」)。
     pub implicit_drops: HashMap<ExprId, Vec<LocalId>>,
+    /// `var` の変数の型と分類。型は宣言の本体の中の型で、instance の型引数で写す前のものである
+    /// (docs/spec/types.md の「`var` の変数」)。
+    pub vars: ArenaMap<VarId, VarType>,
+    /// 添字のノード (`ExprKind::Index`) ごとの読み方 (docs/spec/types.md の「`var` の変数」)。
+    pub indexes: ArenaMap<ExprId, IndexTarget>,
+}
+
+/// `var` の変数の分類。推論を終えた後の変数の型で、型検査が決める (docs/spec/types.md の「`var` の変数」)。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum VarClass {
+    /// 値を複製して読む変数。型の Kind は `Unr` である。
+    Unr,
+    /// `MutArray` を持つ配列の変数。
+    Array,
+}
+
+/// `var` の変数の型と分類。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct VarType {
+    pub ty: TypeId,
+    pub class: VarClass,
+}
+
+/// 添字 `e[i]` の読み方 (docs/spec/types.md の「`var` の変数」)。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum IndexTarget {
+    /// `Array` の値を `Std.Array.get` で読む。式の添字と、その時点で型が `Array _` だった変数の添字である。
+    Array,
+    /// 配列の変数の要素を読む。
+    ArrayVar,
 }
 
 /// 更新が作り直すコンストラクタ。`T` は型検査の中では表の型で、書き出した後は `TypeId` である。

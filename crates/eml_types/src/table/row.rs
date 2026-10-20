@@ -326,6 +326,41 @@ impl Table<'_> {
         })
     }
 
+    /// エフェクト `effect` のラベルが型 `ty` の中の row に現れるか。ラベルの型引数の中までたどる。`var` の地点の
+    /// エフェクトが範囲の外へ出るかを調べる (docs/spec/types.md の「範囲の外へ出る閉包」)。
+    pub fn effect_occurs(&self, effect: EffectId, ty: Ty) -> bool {
+        let _walk = self.start_walk();
+        self.effect_occurs_in(effect, ty)
+    }
+
+    /// `effect_occurs` の row 版。row のラベルそのものと、ラベルの型引数を調べる。
+    pub fn effect_occurs_in_row(&self, effect: EffectId, row: &Row) -> bool {
+        let _walk = self.start_walk();
+        self.effect_occurs_within(effect, row)
+    }
+
+    fn effect_occurs_within(&self, effect: EffectId, row: &Row) -> bool {
+        self.resolve_row(row).labels.iter().any(|label| {
+            label.effect == effect
+                || label
+                    .args
+                    .iter()
+                    .any(|&arg| self.effect_occurs_in(effect, arg))
+        })
+    }
+
+    /// `row_occurs_in` と同じく、2回目に訪れた代表は調べ終えている。
+    fn effect_occurs_in(&self, effect: EffectId, ty: Ty) -> bool {
+        let ty = self.resolve(ty);
+        if !self.first_visit(ty) {
+            return false;
+        }
+        self.shapes[ty.0 as usize].any_child(|child| match child {
+            Child::Ty(child) => self.effect_occurs_in(effect, child),
+            Child::Row(row) => self.effect_occurs_within(effect, row),
+        })
+    }
+
     /// 呼び出し先の row `callee` のエフェクトが、今の row `ambient` にすべて含まれることを確かめる
     /// (docs/spec/types.md の「推論」)。推論用の末尾はそのまま単一化し、閉じた末尾は残りを新しい row 変数で受けて
     /// 単一化する。rigid な末尾は束縛できないので、ラベルを取り除いた残りの末尾が同じ変数であることを確かめる。

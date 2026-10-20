@@ -1,0 +1,14 @@
+---
+source: crates/eml_cli/tests/ui.rs
+expression: rendered
+input_file: tests/ui/check-fail/var/lin_element.em
+---
+[E3001] Error: a linear value is used where an unrestricted value is expected
+   ╭─[ check-fail/var/lin_element.em:5:3 ]
+   │
+ 5 │   a[0] := Fs.open "input.txt"
+   │   ─────────────┬─────────────  
+   │                ╰─────────────── this expression
+   │ 
+   │ Note: linear values, such as files, the continuation of a `once` operation and closures that capture one, must be used exactly once
+───╯

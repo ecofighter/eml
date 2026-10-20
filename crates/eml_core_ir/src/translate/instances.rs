@@ -493,6 +493,9 @@ impl Collector<'_> {
                 lambda_yields: body.lambda_yields.clone(),
                 arrow_yields: body.arrow_yields.clone(),
                 implicit_drops: body.implicit_drops.clone(),
+                // 変数の型は宣言の中の型のまま持つ (`eml_types::VarType`)
+                vars: body.vars.clone(),
+                indexes: body.indexes.clone(),
             };
             debug_assert!(
                 types

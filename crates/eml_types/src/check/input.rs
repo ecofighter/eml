@@ -110,7 +110,7 @@ pub(super) fn check_input<'c>(
         let context = checker.split_residuals(residuals, &shown);
         query::render(program, checker.table, result, &context)
     });
-    let typing = checker.typing;
+    let mut typing = checker.typing;
     let instances = checker.instances;
     default_unsolved(&mut table, &typing, result, kind == InputKind::Expr);
     // 問い合わせの row (ρ) が `default_unsolved` の後も開いていれば、ここで閉じる。`closed_shape` に開いた row を
@@ -120,6 +120,15 @@ pub(super) fn check_input<'c>(
             .close_row(var)
             .expect("an unsolved row variable closes to `<>`");
     }
+    super::var::classify(
+        program,
+        file,
+        body,
+        &mut table,
+        types,
+        &mut typing,
+        &mut diagnostics,
+    );
     let reliable = usage::reliable(body, diagnostics.is_empty());
     let implicit_drops =
         usage::constrain(program, file, body, &typing, &mut table, types, reliable);
