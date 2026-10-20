@@ -14,6 +14,7 @@ pub use crate::program::{
 pub type ExprId = Idx<Expr>;
 pub type PatId = Idx<Pat>;
 pub type LocalId = Idx<Local>;
+pub type VarId = Idx<Var>;
 pub type TypeRefId = Idx<TypeRef>;
 
 #[derive(Debug)]
@@ -149,6 +150,9 @@ pub enum EffectKind {
     /// `extern effect`。extern の関数が起こすラベルで、操作は宣言したモジュールの外から見えない。ユーザーのモジュールの
     /// extern (E1033) は行を持たない。
     Extern(Option<ExternEffect>),
+    /// `var` の地点ごとに HIR が作るエフェクト。名前空間に入らず、型引数も操作も持たない。変数の型は `var` のノードの
+    /// 側の表に持つ (docs/spec/expressions.md の「`var`」)。`function` は地点を本体に持つ関数である。
+    Var { function: FunctionId, var: VarId },
 }
 
 /// 操作の多重度 (docs/spec/effects.md)。
@@ -443,6 +447,29 @@ pub struct Body {
     /// 下ろした `fn` の節。型検査が、本体の型の誤りを隠れた `k` の引数の誤りではなく「`fn` の節の本体」の誤りとして
     /// 報告するために使う (docs/spec/expressions.md の「handler」)。
     pub fn_clauses: Vec<FnClause>,
+    /// `var` の変数。地点の順 (合成のエフェクトの番号の順) に並ぶ。
+    pub vars: Arena<Var>,
+}
+
+/// `var x = e` の変数。局所変数ではないので、閉包は捕まえない。閉包は `effect` のラベルを通して変数に届く
+/// (docs/spec/expressions.md の「`var`」)。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Var {
+    pub name: String,
+    pub ty: Option<TypeRefId>,
+    pub effect: EffectId,
+    /// `var` の文の範囲。
+    pub range: TextRange,
+    /// 地点で見えている局所変数と外側の変数 (E2019 の「範囲の外で束縛したもの」)
+    pub outer_locals: Vec<LocalId>,
+    pub outer_vars: Vec<VarId>,
+}
+
+/// 添字 `e[i]` の左側。`var` の名前そのものなら `Var` で、それ以外の式は `Expr` である。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum IndexBase {
+    Var(VarId),
+    Expr(ExprId),
 }
 
 /// `ctl` の節の形に下ろした `fn` の節の記録。`k` は隠れた継続 `$k`、`body` は書いた本体の式 (下ろした節の本体のブロックの
@@ -458,7 +485,7 @@ impl Body {
     /// 式の直接の子を、ソースの順に `f` に渡す。子を辿る規則はここだけに置く。
     pub fn walk_child_exprs(&self, id: ExprId, mut f: impl FnMut(ExprId)) {
         match &self.exprs[id].kind {
-            ExprKind::Missing | ExprKind::Literal(_) | ExprKind::Path(_) => {}
+            ExprKind::Missing | ExprKind::Literal(_) | ExprKind::Path(_) | ExprKind::VarGet(_) => {}
             ExprKind::Call { callee, args, .. } => {
                 f(*callee);
                 for &arg in args {
@@ -539,6 +566,22 @@ impl Body {
                 segments.iter().filter_map(Segment::hole).for_each(f);
             }
             ExprKind::Drop(value) => f(*value),
+            // `last` は `body` の中にあるので、ここでは辿らない
+            ExprKind::Var { init, body, .. } => {
+                f(*init);
+                f(*body);
+            }
+            ExprKind::Assign { value, .. } => f(*value),
+            ExprKind::IndexAssign { index, value, .. } => {
+                f(*index);
+                f(*value);
+            }
+            ExprKind::Index { base, index } => {
+                if let IndexBase::Expr(base) = base {
+                    f(*base);
+                }
+                f(*index);
+            }
         }
     }
 
@@ -723,6 +766,33 @@ pub enum ExprKind {
     /// (docs/spec/expressions.md の「補間」)。
     Interpolation(Vec<Segment>),
     Drop(ExprId),
+    /// `var x = e` と、同じブロックの後ろの文。`body` は残りの文と最後の式の `Block` で、値は `body` の値である。
+    /// `last` は元のブロックの最後の式で、同じブロックのどの `var` も同じ式を指す。ブロックが文で終われば `None` である
+    /// (docs/spec/expressions.md の「`var`」)。
+    Var {
+        var: VarId,
+        init: ExprId,
+        body: ExprId,
+        last: Option<ExprId>,
+    },
+    /// `var` の名前の参照。
+    VarGet(VarId),
+    /// `x := e`。
+    Assign {
+        var: VarId,
+        value: ExprId,
+    },
+    /// `x[i] := e`。
+    IndexAssign {
+        var: VarId,
+        index: ExprId,
+        value: ExprId,
+    },
+    /// `e[i]`。
+    Index {
+        base: IndexBase,
+        index: ExprId,
+    },
 }
 
 /// 補間の部分。`Hole` は HIR が組んだ `display e` の呼び出しである

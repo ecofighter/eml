@@ -7,8 +7,8 @@ use std::collections::{BTreeSet, HashMap};
 
 use eml_diagnostics::FileId;
 use eml_hir::{
-    Body, EvalStep, ExprId, ExprKind, LocalId, OpMultiplicity, OperationId, PatId, Program, Res,
-    Segment, Stmt,
+    Body, EvalStep, ExprId, ExprKind, IndexBase, LocalId, OpMultiplicity, OperationId, PatId,
+    Program, Res, Segment, Stmt,
 };
 
 use crate::check::{BodyTyping, CallRows};
@@ -276,6 +276,18 @@ impl Carrying<'_, '_> {
             ExprKind::List(elements) => self.list(elements, after),
             ExprKind::Interpolation(segments) => self.interpolation(segments, after),
             ExprKind::Drop(value) => self.expr(*value, after),
+            // S14c-3 の作業 4 で変数の範囲を handle と同じく扱うまでは、部分式を評価の順にたどるだけにする
+            ExprKind::Var { init, body, .. } => {
+                let live = self.expr(*body, after);
+                self.expr(*init, &live)
+            }
+            ExprKind::VarGet(_) => after.clone(),
+            ExprKind::Assign { value, .. } => self.expr(*value, after),
+            ExprKind::IndexAssign { index, value, .. } => self.parts(&[*index, *value], after),
+            ExprKind::Index { base, index } => match base {
+                IndexBase::Var(_) => self.expr(*index, after),
+                IndexBase::Expr(base) => self.parts(&[*base, *index], after),
+            },
         }
     }
 

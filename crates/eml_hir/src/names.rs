@@ -87,6 +87,11 @@ impl DisplayNames {
         self.types[&id].as_str()
     }
 
+    /// HIR が合成したエフェクトの表示名。`var` の地点のエフェクトは名前空間に入らないので、名前の衝突を数えない。
+    pub fn insert_effect(&mut self, id: EffectId, text: String) {
+        self.effects.insert(id, text);
+    }
+
     pub fn effect(&self, id: EffectId) -> &str {
         self.effects[&id].as_str()
     }

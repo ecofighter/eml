@@ -814,6 +814,12 @@ impl FnLowering<'_> {
                 let value = self.atom(*value);
                 self.bind("t", Repr::Unit, Mark::Unr, Rhs::Drop(value))
             }
+            // 型検査が E0004 を報告するので、ここには来ない
+            ExprKind::Var { .. }
+            | ExprKind::VarGet(_)
+            | ExprKind::Assign { .. }
+            | ExprKind::IndexAssign { .. }
+            | ExprKind::Index { .. } => unreachable!("var lands in S14c-3 Task 5"),
             ExprKind::Lambda(closure) => {
                 let Closure {
                     params,

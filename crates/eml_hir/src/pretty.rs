@@ -81,6 +81,18 @@ fn items(program: &Program, module: &Module, out: &mut String) {
         let keyword = match effect.kind {
             EffectKind::Defined => "effect",
             EffectKind::Extern(_) => "extern effect",
+            EffectKind::Var { function, var } => {
+                let name = &program.body(function).expect("a var site's body").vars[var].name;
+                writeln!(
+                    out,
+                    "var effect {} = {name}#v{} in {}",
+                    effect.name,
+                    u32::from(var.into_raw()),
+                    program[function].name
+                )
+                .unwrap();
+                continue;
+            }
         };
         if params.is_empty() {
             writeln!(out, "{keyword} {}", effect.name).unwrap();
@@ -480,6 +492,42 @@ impl Printer<'_> {
                 }
             }
             ExprKind::Drop(value) => format!("(drop {})", self.expr(body, *value, indent)),
+            ExprKind::Var {
+                var,
+                init,
+                body: scoped,
+                ..
+            } => {
+                let name = var_name(body, *var);
+                let init = self.expr(body, *init, indent);
+                let scoped = self.expr(body, *scoped, indent);
+                match body.vars[*var].ty {
+                    Some(ty) => format!(
+                        "(var {name} : {} = {init} in {scoped})",
+                        self.ty(&body.types, ty)
+                    ),
+                    None => format!("(var {name} = {init} in {scoped})"),
+                }
+            }
+            ExprKind::VarGet(var) => var_name(body, *var),
+            ExprKind::Assign { var, value } => format!(
+                "({} := {})",
+                var_name(body, *var),
+                self.expr(body, *value, indent)
+            ),
+            ExprKind::IndexAssign { var, index, value } => format!(
+                "({}[{}] := {})",
+                var_name(body, *var),
+                self.expr(body, *index, indent),
+                self.expr(body, *value, indent)
+            ),
+            ExprKind::Index { base, index } => {
+                let base = match base {
+                    IndexBase::Var(var) => var_name(body, *var),
+                    IndexBase::Expr(base) => self.expr(body, *base, indent),
+                };
+                format!("{base}[{}]", self.expr(body, *index, indent))
+            }
         }
     }
 
@@ -656,4 +704,9 @@ fn local_name(body: &Body, local: LocalId) -> String {
         body.locals[local].name,
         u32::from(local.into_raw())
     )
+}
+
+/// `var` の変数は局所変数と見分けられるよう番号の前に `v` を付ける。
+fn var_name(body: &Body, var: VarId) -> String {
+    format!("{}#v{}", body.vars[var].name, u32::from(var.into_raw()))
 }

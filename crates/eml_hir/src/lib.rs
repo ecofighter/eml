@@ -101,4 +101,5 @@ pub mod codes {
     pub const ONCE_DECLARATION: ErrorCode = ErrorCode(1050);
     pub const CLAUSE_KEYWORD: ErrorCode = ErrorCode(1051);
     pub const FLOAT_PATTERN: ErrorCode = ErrorCode(1052);
+    pub const ASSIGN_TARGET: ErrorCode = ErrorCode(1053);
 }

@@ -44,6 +44,9 @@ impl Context {
                 // その場で1回だけ戻るので `Once` である (docs/spec/types.md の「Kind」)
                 let multiplicity = match effect.kind {
                     EffectKind::Extern(_) => Multiplicity::Once,
+                    // `var` のエフェクトは操作を持たないが、変数の操作はどれもすぐに再開する。`Never` にすると、
+                    // yield しないラベルとして扱われてしまう (docs/spec/expressions.md の「`var`」)
+                    EffectKind::Var { .. } => Multiplicity::Once,
                     EffectKind::Defined => effect
                         .operations
                         .iter()

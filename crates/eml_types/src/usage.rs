@@ -6,8 +6,8 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 
 use eml_diagnostics::{FileId, TextRange, TextSize};
 use eml_hir::{
-    Body, ClauseSource, Closure, ConstructorId, ExprId, ExprKind, LocalFunction, LocalGroup,
-    LocalId, PatId, PatKind, Program, Res, Segment, Stmt,
+    Body, ClauseSource, Closure, ConstructorId, ExprId, ExprKind, IndexBase, LocalFunction,
+    LocalGroup, LocalId, PatId, PatKind, Program, Res, Segment, Stmt,
 };
 
 use crate::FieldTarget;
@@ -382,6 +382,17 @@ impl<'a> Usage<'a, '_> {
             }
             ExprKind::Drop(value) => self.expr(*value),
             ExprKind::Lambda(closure) => self.closure(id, closure, &[]).0,
+            // S14c-3 の作業 6 で変数の規則を足すまでは、部分式を評価の順に数えるだけにする。変数は局所変数ではない
+            ExprKind::Var { init, body, .. } => self.in_order([*init, *body].into_iter()),
+            ExprKind::VarGet(_) => Uses::new(),
+            ExprKind::Assign { value, .. } => self.expr(*value),
+            ExprKind::IndexAssign { index, value, .. } => {
+                self.in_order([*index, *value].into_iter())
+            }
+            ExprKind::Index { base, index } => match base {
+                IndexBase::Var(_) => self.expr(*index),
+                IndexBase::Expr(base) => self.in_order([*base, *index].into_iter()),
+            },
         }
     }
 

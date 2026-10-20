@@ -117,6 +117,7 @@ struct Fix {
 | E1050 | `ONCE_DECLARATION` | トップレベルの関数と値、extern の関数、クラスのメソッド、操作のシグネチャの一番外側の矢印に `once` を書いた ([型と Kind](types.md) の「1回だけ呼べる関数の型」) |
 | E1051 | `CLAUSE_KEYWORD` | 操作の節に `fn` も `ctl` も書いていない (`ctl ` を足す fix を付ける)、`never` の操作の節に `fn` を書いた、`return` の節に `fn` か `ctl` を書いた ([式](expressions.md) の「handler」) |
 | E1052 | `FLOAT_PATTERN` | パターンに浮動小数のリテラル (`1.5`、`-2.5`) を書いた。比べるときは `==` を使う ([網羅性](exhaustiveness.md)) |
+| E1053 | `ASSIGN_TARGET` | `:=` の左辺が `var` の名前でも、`var` の名前の添字でもない ([式](expressions.md) の「`var`」) |
 | E2001 | `TYPE_MISMATCH` | 型の不一致。呼び出しの row のエフェクトの型引数が今の row と一致しない場合を含む |
 | E2002 | `EFFECT_NOT_IN_ROW` | シグネチャの row に含まれないエフェクトを起こした。ラムダの本体の場合を含む |
 | E2003 | `MISSING_MAIN` | 入口のモジュールに `main` がない。import した `main` は数えない。`eml run` のときだけ出す |

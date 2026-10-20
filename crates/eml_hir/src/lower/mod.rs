@@ -16,7 +16,7 @@ use std::collections::HashMap;
 use eml_diagnostics::{Diagnostic, ErrorCode, FileId, Label, TextRange};
 use eml_extern::Extern;
 use eml_syntax::{AstPtr, SyntaxNode, SyntaxToken, ast};
-use la_arena::{Arena, ArenaMap, Idx};
+use la_arena::{Arena, ArenaMap, Idx, RawIdx};
 
 use crate::codes;
 use crate::def_map::{DefMap, NameRef, Resolved, Resolver, module_id, not_in_module, private_name};
@@ -118,6 +118,16 @@ pub fn lower(def_map: &DefMap, modules: &[LoadedModule]) -> (Program, Vec<Diagno
         );
         arena[module].bodies = bodies;
     }
+    // `var` の合成のエフェクトは本体を下ろすときに置くので、DefMap の表示名の表にはない
+    let mut names = def_map.display_names().clone();
+    for (module, data) in arena.iter() {
+        for (local, effect) in data.items.effects.iter() {
+            if let EffectKind::Var { function, var } = effect.kind {
+                let name = &data.bodies[function.local].vars[var].name;
+                names.insert_effect(ItemId::new(module, local), format!("var {name}"));
+            }
+        }
+    }
     (
         Program {
             modules: arena,
@@ -125,7 +135,7 @@ pub fn lower(def_map: &DefMap, modules: &[LoadedModule]) -> (Program, Vec<Diagno
             entry: def_map.entry(),
             lang,
             externs: def_map.externs().clone(),
-            names: def_map.display_names().clone(),
+            names,
             instance_index,
         },
         diagnostics,
@@ -354,6 +364,7 @@ fn lower_bodies(
     diagnostics: &mut Vec<Diagnostic>,
 ) -> ArenaMap<Idx<Function>, Body> {
     let mut bodies = ArenaMap::default();
+    let mut var_sites = 0;
     let lower = |modules: &mut Arena<Module>,
                  diagnostics: &mut Vec<Diagnostic>,
                  generics: &mut Generics,
@@ -362,6 +373,7 @@ fn lower_bodies(
             .iter()
             .map(|(ptr, range)| (ptr.to_node(root), *range))
             .collect();
+        let first_var_effect = next_effect(modules, module);
         BodyLowering::new(
             tree.file,
             def_map.resolver(module),
@@ -369,6 +381,7 @@ fn lower_bodies(
             def_map.lang(),
             generics,
             diagnostics,
+            first_var_effect,
         )
         .lower_equations(&equations)
     };
@@ -414,6 +427,7 @@ fn lower_bodies(
         if let Some(signature) = &mut modules[module].items.functions[id.local].signature {
             signature.generics = hidden.unwrap_or(generics);
         }
+        declare_var_effects(modules, id, &body, &mut var_sites);
         bodies.insert(id.local, body);
     }
     if let (Some(input), Some(id)) = (&tree.input, def_map.input_function(module)) {
@@ -425,6 +439,7 @@ fn lower_bodies(
             }
         };
         let mut generics = Generics::default();
+        let first_var_effect = next_effect(modules, module);
         let body = BodyLowering::new(
             tree.file,
             def_map.resolver(module),
@@ -432,8 +447,10 @@ fn lower_bodies(
             def_map.lang(),
             &mut generics,
             diagnostics,
+            first_var_effect,
         )
         .lower_input(expr, ty, input.range);
+        declare_var_effects(modules, id, &body, &mut var_sites);
         bodies.insert(id.local, body);
     }
     for body in pending {
@@ -448,6 +465,32 @@ fn lower_bodies(
         }
     }
     bodies
+}
+
+/// モジュールに次に置くエフェクトの番号。
+fn next_effect(modules: &Arena<Module>, module: ModuleId) -> EffectId {
+    let next = u32::try_from(modules[module].items.effects.len()).expect("fewer than 2^32 effects");
+    ItemId::new(module, Idx::from_raw(RawIdx::from_u32(next)))
+}
+
+/// 本体の `var` の地点ごとに、合成のエフェクトを置く。`k` はモジュールの中の地点の番号で、本体を下ろした順に数える。
+/// 捨てる本体の地点は置かない。どこからも参照されないためである (docs/spec/expressions.md の「`var`」)。
+fn declare_var_effects(
+    modules: &mut Arena<Module>,
+    function: FunctionId,
+    body: &Body,
+    sites: &mut usize,
+) {
+    for (var, data) in body.vars.iter() {
+        let local = modules[function.module].items.effects.alloc(EffectDef {
+            name: format!("var${sites}${}", data.name),
+            generics: Generics::default(),
+            operations: Vec::new(),
+            kind: EffectKind::Var { function, var },
+        });
+        debug_assert_eq!(ItemId::new(function.module, local), data.effect);
+        *sites += 1;
+    }
 }
 
 /// E1033。`extern` を外すと E1005 や E1025 になるので、自動の修正にはせず help で示すだけにする。

@@ -401,9 +401,26 @@ impl BodyCheck<'_, '_> {
                 self.infer_expr(*value);
                 self.table.unit
             }
+            // S14c-3 の作業 4 で型を付けるまでは E0004 にする。中は検査せずに誤りの型にして、診断を連鎖させない
+            ExprKind::Var { var, .. } => {
+                let range = body.vars[*var].range;
+                self.not_yet_supported(range, "`var` is not supported yet")
+            }
+            ExprKind::VarGet(_) | ExprKind::Assign { .. } | ExprKind::IndexAssign { .. } => {
+                self.not_yet_supported(expr.range, "`var` is not supported yet")
+            }
+            ExprKind::Index { .. } => {
+                self.not_yet_supported(expr.range, "indexing is not supported yet")
+            }
         };
         self.typing.exprs.insert(id, ty);
         ty
+    }
+
+    fn not_yet_supported(&mut self, range: TextRange, message: &str) -> Ty {
+        self.diagnostics
+            .push(Diagnostic::not_yet_supported(self.file, range, message));
+        self.table.error
     }
 
     /// 期待する型があれば、両方の枝をその型で検査する。なければ then 節の型を推論し、else 節をそれに合わせる。

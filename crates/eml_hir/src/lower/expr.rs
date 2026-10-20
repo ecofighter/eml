@@ -3,10 +3,10 @@ use std::collections::HashSet;
 use eml_diagnostics::{Diagnostic, FileId, Label, TextRange};
 use eml_extern::FloatBits;
 use eml_syntax::{SyntaxKind, SyntaxToken, ast};
-use la_arena::{Arena, ArenaMap};
+use la_arena::{Arena, ArenaMap, Idx, RawIdx};
 
 use super::types::{TypeLowering, Vars};
-use super::{NameKind, NameUse, path_name, unresolved};
+use super::{NameKind, NameUse, PathName, path_name, unresolved};
 use crate::codes;
 use crate::def_map::{NameRef, Resolved, Resolver};
 use crate::hir::*;
@@ -40,10 +40,21 @@ pub(super) struct BodyLowering<'a> {
     /// `fn` の節の本体 (入れ子のラムダを含む) を変換しているか。そこで `k` が見つからなければ、E1001 に `ctl` を
     /// 勧める note を付ける (docs/implementation/diagnostics.md の E1001)。
     pub(super) in_fn_clause: bool,
-    /// 内側の束縛ほど後ろにある。後の `let` が前の同じ名前を隠す (docs/spec/expressions.md)。
-    pub(super) scope: Vec<(String, LocalId)>,
+    /// 内側の束縛ほど後ろにある。後の `let` や `var` が前の同じ名前を隠す (docs/spec/expressions.md)。
+    pub(super) scope: Vec<(String, Binding)>,
     /// 今変換しているパターンの組が `scope` に積み始めた位置。組の中で同じ名前を2回束縛したら E1017 にする。
     group_start: usize,
+    vars: Arena<Var>,
+    /// 本体の最初の `var` の地点が使う、合成のエフェクトの番号。本体を下ろした後で `lower_bodies` が `vars` の順に
+    /// この番号からエフェクトを置く。本体の変換はモジュールの表を書き換えられないためである。
+    first_var_effect: EffectId,
+}
+
+/// スコープの名前が指すもの。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum Binding {
+    Local(LocalId),
+    Var(VarId),
 }
 
 impl<'a> BodyLowering<'a> {
@@ -70,6 +81,7 @@ impl<'a> BodyLowering<'a> {
         lang: LangItems,
         generics: &'a mut Generics,
         diagnostics: &'a mut Vec<Diagnostic>,
+        first_var_effect: EffectId,
     ) -> Self {
         BodyLowering {
             file,
@@ -92,6 +104,8 @@ impl<'a> BodyLowering<'a> {
             in_fn_clause: false,
             scope: Vec::new(),
             group_start: 0,
+            vars: Arena::new(),
+            first_var_effect,
         }
     }
 
@@ -150,6 +164,7 @@ impl<'a> BodyLowering<'a> {
             defining: self.defining,
             local_groups: Vec::new(),
             fn_clauses: self.fn_clauses,
+            vars: self.vars,
         };
         // 組は名前を束縛してから本体を変換するので、局所変数の番号の順が外側の組を先にする
         let mut local_groups: Vec<LocalGroup> = groups
@@ -415,9 +430,17 @@ impl<'a> BodyLowering<'a> {
             ast::Expr::FieldSection(section) => self.lower_field_section(&section, range),
             ast::Expr::RecordExpr(record) => self.lower_record(&record, range),
             ast::Expr::UpdateExpr(update) => self.lower_update(&update, range),
-            // S14c-3 の作業 3 で HIR の形を足すまでは E0004 にして、後の段階にこの構文を渡さない
-            ast::Expr::AssignExpr(_) => self.unsupported(range, "assignment is not supported yet"),
-            ast::Expr::IndexExpr(_) => self.unsupported(range, "indexing is not supported yet"),
+            ast::Expr::AssignExpr(assign) => self.lower_assign(&assign, range),
+            ast::Expr::IndexExpr(index) => {
+                let base = match index.base() {
+                    Some(ast::Expr::PathExpr(path)) if let Some(var) = self.var_of(&path) => {
+                        IndexBase::Var(var)
+                    }
+                    base => IndexBase::Expr(self.lower_expr(base, range)),
+                };
+                let index = self.lower_expr(index.index(), range);
+                self.alloc(ExprKind::Index { base, index }, range)
+            }
         }
     }
 
@@ -444,18 +467,9 @@ impl<'a> BodyLowering<'a> {
         kind: NameKind,
         range: TextRange,
     ) -> ExprId {
-        // 局所の束縛は、修飾しない名前だけが引く (docs/spec/modules.md の「名前の解決」)
-        let local = match at.name {
-            NameRef::Plain(text) => self
-                .scope
-                .iter()
-                .rev()
-                .find(|(local, _)| local == text)
-                .map(|&(_, local)| local),
-            NameRef::Qualified { .. } => None,
-        };
-        let res = match local {
-            Some(local) => Res::Local(local),
+        let res = match self.scope_lookup(at.name) {
+            Some(Binding::Local(local)) => Res::Local(local),
+            Some(Binding::Var(var)) => return self.alloc(ExprKind::VarGet(var), range),
             None => match self.items.value(at.name) {
                 Resolved::Found(item) => Res::Item(item),
                 other => {
@@ -477,6 +491,67 @@ impl<'a> BodyLowering<'a> {
             },
         };
         self.alloc(ExprKind::Path(res), range)
+    }
+
+    /// 局所の束縛は、修飾しない名前だけが引く (docs/spec/modules.md の「名前の解決」)。
+    fn scope_lookup(&self, name: NameRef<'_>) -> Option<Binding> {
+        match name {
+            NameRef::Plain(text) => self
+                .scope
+                .iter()
+                .rev()
+                .find(|(bound, _)| bound == text)
+                .map(|&(_, binding)| binding),
+            NameRef::Qualified { .. } => None,
+        }
+    }
+
+    /// 修飾しない名前が `var` の変数を指せば、その変数。
+    fn var_of(&self, path: &ast::PathExpr) -> Option<VarId> {
+        let PathName::Plain(name) = path_name(path.path()) else {
+            return None;
+        };
+        match self.scope_lookup(NameRef::Plain(name.text()))? {
+            Binding::Var(var) => Some(var),
+            Binding::Local(_) => None,
+        }
+    }
+
+    /// `:=` の左辺は `var` の名前か、`var` の名前の添字に限る。それ以外は E1053 にする。左辺は変換しない。左辺の
+    /// 名前の誤りを E1053 に重ねないためである (docs/spec/expressions.md の「`var`」)。
+    fn lower_assign(&mut self, assign: &ast::AssignExpr, range: TextRange) -> ExprId {
+        let target = assign.target();
+        let place = match &target {
+            Some(ast::Expr::PathExpr(path)) => self.var_of(path).map(|var| (var, None)),
+            Some(ast::Expr::IndexExpr(index)) => match index.base() {
+                Some(ast::Expr::PathExpr(path)) => {
+                    self.var_of(&path).map(|var| (var, Some(index.index())))
+                }
+                _ => None,
+            },
+            _ => None,
+        };
+        match place {
+            Some((var, None)) => {
+                let value = self.lower_expr(assign.value(), range);
+                self.alloc(ExprKind::Assign { var, value }, range)
+            }
+            Some((var, Some(index))) => {
+                let index = self.lower_expr(index, range);
+                let value = self.lower_expr(assign.value(), range);
+                self.alloc(ExprKind::IndexAssign { var, index, value }, range)
+            }
+            None => {
+                let target_range = target.as_ref().map_or(range, |target| target.range());
+                self.diagnostics.push(Diagnostic::error(
+                    codes::ASSIGN_TARGET,
+                    "only a `var` variable or an index of one can be assigned",
+                    Label::new(self.file, target_range, "not a `var` variable"),
+                ));
+                self.lower_expr(assign.value(), range);
+                self.alloc(ExprKind::Missing, range)
+            }
+        }
     }
 
     /// `(f a) b` を、引数の揃った1つの呼び出しとして型検査できるように、入れ子の呼び出しを平たくする。
@@ -550,14 +625,23 @@ impl<'a> BodyLowering<'a> {
                     let pat = self.lower_pat(stmt.pat(), stmt_range);
                     stmts.push(Stmt::Let { pat, ty, init });
                 }
-                ast::Stmt::VarStmt(_) => {
-                    let expr = self.unsupported(stmt_range, "`var` is not supported yet");
-                    if index + 1 == all.len() {
-                        tail = Some(expr);
-                    } else {
-                        stmts.push(Stmt::Expr(expr));
+                ast::Stmt::VarStmt(stmt) => match stmt.name() {
+                    Some(name) => {
+                        tail = Some(self.lower_var(stmt, &name, &all[index + 1..], range));
+                        end = index + 1;
+                        break;
                     }
-                }
+                    // 名前のない `var` はパーサが報告済み。残りの文は変数のない文として続ける
+                    None => {
+                        self.lower_expr(stmt.init(), stmt_range);
+                        let expr = self.alloc(ExprKind::Missing, stmt_range);
+                        if index + 1 == all.len() {
+                            tail = Some(expr);
+                        } else {
+                            stmts.push(Stmt::Expr(expr));
+                        }
+                    }
+                },
                 ast::Stmt::UseStmt(stmt) => {
                     tail = Some(self.lower_use(stmt, &all[index + 1..], range));
                     end = index + 1;
@@ -574,6 +658,88 @@ impl<'a> BodyLowering<'a> {
                 last_start,
             },
             range,
+        )
+    }
+
+    /// `var x = e` を同じブロックの残りの文と最後の式を本体に持つ `Var` のノードにする。`use` と同じく残りを入れ子の
+    /// ブロックにする。変数の範囲がその文より後ろのすべてだからである (docs/spec/expressions.md の「`var`」)。
+    fn lower_var(
+        &mut self,
+        stmt: &ast::VarStmt,
+        name: &ast::Name,
+        rest: &[ast::Stmt],
+        block_range: TextRange,
+    ) -> ExprId {
+        let stmt_range = stmt.range();
+        let outer_locals = self
+            .scope
+            .iter()
+            .filter_map(|&(_, binding)| match binding {
+                Binding::Local(local) => Some(local),
+                Binding::Var(_) => None,
+            })
+            .collect();
+        let outer_vars = self
+            .scope
+            .iter()
+            .filter_map(|&(_, binding)| match binding {
+                Binding::Var(var) => Some(var),
+                Binding::Local(_) => None,
+            })
+            .collect();
+        // 初期値より先に置く。地点の番号を `var` を書いた順にするためである
+        let ordinal = u32::try_from(self.vars.len()).expect("fewer than 2^32 vars");
+        let base = u32::from(self.first_var_effect.local.into_raw());
+        let effect = ItemId::new(
+            self.first_var_effect.module,
+            Idx::from_raw(RawIdx::from_u32(base + ordinal)),
+        );
+        let name = name.token().text().to_string();
+        let var = self.vars.alloc(Var {
+            name: name.clone(),
+            ty: None,
+            effect,
+            range: stmt_range,
+            outer_locals,
+            outer_vars,
+        });
+        // 右辺の `x` は外側の `x` を指す (`let` と同じ)
+        let init = self.lower_expr(stmt.init(), stmt_range);
+        self.vars[var].ty = stmt.ty().map(|ty| self.lower_type(Some(ty), stmt_range));
+        let mark = self.scope.len();
+        self.scope.push((name, Binding::Var(var)));
+        let wrapped = TextRange::new(stmt_range.start(), block_range.end());
+        let body = match rest.first() {
+            Some(first) => self.lower_stmts(
+                rest,
+                TextRange::new(first.range().start(), block_range.end()),
+            ),
+            None => self.alloc(
+                ExprKind::Block {
+                    stmts: Vec::new(),
+                    tail: None,
+                    last_start: None,
+                },
+                TextRange::empty(stmt_range.end()),
+            ),
+        };
+        self.scope.truncate(mark);
+        let last = match &self.exprs[body].kind {
+            ExprKind::Block { tail, .. } => tail.map(|tail| match self.exprs[tail].kind {
+                ExprKind::Var { last, .. } => last,
+                _ => Some(tail),
+            }),
+            _ => unreachable!("the rest of a block lowers to a block"),
+        }
+        .flatten();
+        self.alloc(
+            ExprKind::Var {
+                var,
+                init,
+                body,
+                last,
+            },
+            wrapped,
         )
     }
 
@@ -785,9 +951,14 @@ impl<'a> BodyLowering<'a> {
 
     /// 変数を今の組に束縛する。組の中で同じ名前を2回束縛したら E1017 にする。
     pub(super) fn bind(&mut self, name: String, range: TextRange) -> PatKind {
-        if let Some(&(_, first)) = self.scope[self.group_start..]
-            .iter()
-            .find(|(bound, _)| *bound == name)
+        // 組の中で積むのはパターンの変数だけなので、`var` は見つからない
+        if let Some(first) =
+            self.scope[self.group_start..]
+                .iter()
+                .find_map(|&(ref bound, binding)| match binding {
+                    Binding::Local(local) if *bound == name => Some(local),
+                    _ => None,
+                })
         {
             let first = self.locals[first].range;
             self.duplicate_binding(&name, first, range);
@@ -796,7 +967,7 @@ impl<'a> BodyLowering<'a> {
             name: name.clone(),
             range,
         });
-        self.scope.push((name, local));
+        self.scope.push((name, Binding::Local(local)));
         PatKind::Bind(local)
     }
 

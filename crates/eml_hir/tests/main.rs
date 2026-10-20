@@ -20,3 +20,4 @@ mod session;
 mod strings;
 mod structure;
 mod tuples;
+mod vars;
