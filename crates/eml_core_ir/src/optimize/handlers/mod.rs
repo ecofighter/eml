@@ -1,12 +1,18 @@
-//! handler への特殊化 (docs/spec/core-ir.md の「handler への特殊化」)。本体が既知の関数になった `handle` のうち、
-//! `perform` までの経路が末尾呼び出しだけでできたものを、経路の関数の handler ごとの複製の呼び出しに替える。
-//! 複製の中の `perform` は、すぐに再開する節なら節の本体をその場に展開した形にする。それ以外の節なら、継続の関数の閉包を
-//! `k` として節の写し `<g>{k}` を末尾で呼ぶ形にし、`never` の操作なら、後ろを捨てて節の関数を末尾で呼ぶ形にする。
+//! handler への特殊化 (docs/spec/core-ir.md の「handler への特殊化」)。本体が既知の関数になった `handle` を、経路の
+//! 関数の handler ごとの複製の呼び出しに替える。形は handler の節の形で決まり、2つある (`Form`)。
+//!
+//! - 状態を渡す形 (`passing`): どの操作も再開し、どの節もすぐに再開する handler の形。経路は、末尾かどうかによらず
+//!   `yields` の関数の直接の呼び出しでたどる。複製は状態を変数で持ち回り、`perform` には節の本体を展開して、その
+//!   `resume` を `perform` の後ろのブロックへのジャンプにする。`return` の節は handle の地点で呼ぶ
+//! - 末尾の経路の形: それ以外の handler の形。経路は末尾の呼び出しだけでたどる。複製の中の `perform` は、すぐに
+//!   再開する節なら節の本体をその場に展開した形にする。それ以外の節なら、継続の関数の閉包を `k` として節の写し
+//!   `<g>{k}` を末尾で呼ぶ形にし、`never` の操作なら、後ろを捨てて節の関数を末尾で呼ぶ形にする
 //!
 //! 複製と継続の関数は、`specialize` と最初の `yields` の付け直しの後のコードから作る。そのコードは名前ごとに決まって
 //! いるので、どの handle を特殊化するかも、複製のコードも、handle を含む関数と経路の関数のコードだけで決まる
 //! (docs/spec/vm.md の「追記」)。
 
+mod passing;
 mod piece;
 
 use std::collections::{BTreeSet, HashMap};
@@ -17,7 +23,9 @@ use super::specialize::limited;
 use crate::liveness::{insert_var, live_after_term, step_back};
 use crate::tail::tail_position_call;
 use crate::{Call, CoreFn, Program, Rhs, Stmt, Term};
-use eml_lir::{Atom, BlockId, FnIdx, Mark, OperationInfo, Repr, VarId, VarInfo};
+use eml_lir::{Atom, BlockId, FnIdx, LayoutId, Mark, OperationInfo, Repr, VarId, VarInfo};
+
+use passing::Returned;
 
 /// `let x = handle …` の文で、本体が既知の閉包か関数の値であるもの。
 #[derive(Debug, Clone, Copy)]
@@ -96,6 +104,17 @@ impl ClauseForm {
     }
 }
 
+/// 特殊化の形。handler の節の形だけで決まるので、1つの handle はいつも1つの形になる
+/// (docs/spec/core-ir.md の「handler への特殊化」)。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Form {
+    /// 経路を末尾の呼び出しでたどり、`perform` ごとに続きを継続の関数に切り出す形 (S13e-2)。
+    Tail,
+    /// どの操作も再開し、どの節もすぐに再開する handler の形。経路を末尾かどうかによらずたどり、状態を変数で持ち回る
+    /// (`passing`)。
+    Passing,
+}
+
 /// 再開する操作の、それ以外の節の `k` の出現が、`resume k(..)` の呼ばれる値、`k` を包む `cont$` か `cont$state` の
 /// 捕獲 (`stateful` と合う方)、`drop k` だけか。この3つは、`k` を継続の関数の閉包に替えた写し (`piece::clause_with_k`)
 /// でもそのまま書ける。生の継続を入れ子の関数が捕獲する形は、その関数の `resume` も書き換えることになるので扱わない。
@@ -149,6 +168,7 @@ struct Handler {
     closures: Vec<VarId>,
     /// 操作の順の節の形。
     forms: Vec<ClauseForm>,
+    form: Form,
 }
 
 impl Handler {
@@ -176,6 +196,7 @@ struct Shape {
     /// 操作の順の節の形。
     forms: Vec<ClauseForm>,
     stateful: bool,
+    form: Form,
 }
 
 impl Shape {
@@ -198,14 +219,20 @@ pub(crate) fn handlers(program: &mut Program, translated: &[bool]) {
     if handlers.is_empty() {
         return;
     }
+    // 組の配置は、複製が `program` を借りる前に足しておく
+    let pair = handlers
+        .iter()
+        .any(|handler| handler.form == Form::Passing && handler.stateful())
+        .then(|| passing::pair_layout(program));
     let mut copies = Copies {
         program,
         table: HashMap::new(),
         clause_copies: HashMap::new(),
         created: Vec::new(),
         pending: Vec::new(),
+        pair,
     };
-    let calls: Vec<(FnIdx, Vec<Atom>)> = handlers
+    let calls: Vec<FnIdx> = handlers
         .iter()
         .map(|handler| {
             let shape = Shape {
@@ -217,32 +244,27 @@ pub(crate) fn handlers(program: &mut Program, translated: &[bool]) {
                     .collect(),
                 forms: handler.forms.clone(),
                 stateful: handler.stateful(),
+                form: handler.form,
             };
-            let copy = copies.copy(handler.body.function, &shape);
-            let mut args = handler.body.captures.clone();
-            args.push(Atom::Unit);
-            args.extend(handler.clauses.iter().flat_map(|clause| &clause.captures));
-            if shape.stateful {
-                args.push(handler.init);
-            }
-            (copy, args)
+            copies.copy(handler.body.function, &shape)
         })
         .collect();
     while let Some((index, function, shape)) = copies.pending.pop() {
         copies.build(index, function, &shape);
     }
     let created = std::mem::take(&mut copies.created);
-    for (handler, (copy, args)) in handlers.iter().zip(calls) {
-        let owner = &mut program.functions[handler.site.owner.0 as usize];
-        let Stmt::Let { var: _, rhs } =
-            &mut owner.blocks[handler.site.block.0 as usize].stmts[handler.site.stmt]
-        else {
-            unreachable!("a site is a `let`");
-        };
-        *rhs = Rhs::Call {
-            call: Call::Direct(copy, args),
-            mask: Vec::new(),
-        };
+    // 状態を渡す形の地点は文が増えるので、関数ごとに後ろの地点から置き換え、前の地点の位置を保つ
+    let mut rewrites: Vec<(Site, Vec<Stmt>)> = handlers
+        .iter()
+        .zip(calls)
+        .map(|(handler, copy)| (handler.site, site_stmts(program, handler, copy, pair)))
+        .collect();
+    rewrites.sort_by_key(|(site, _)| std::cmp::Reverse((site.owner.0, site.block.0, site.stmt)));
+    for (site, stmts) in rewrites {
+        let owner = &mut program.functions[site.owner.0 as usize];
+        owner.blocks[site.block.0 as usize]
+            .stmts
+            .splice(site.stmt..=site.stmt, stmts);
     }
     for handler in &handlers {
         let owner = &mut program.functions[handler.site.owner.0 as usize];
@@ -261,6 +283,102 @@ pub(crate) fn handlers(program: &mut Program, translated: &[bool]) {
             .into_iter()
             .map(|function| function.expect("every reserved copy is built")),
     );
+}
+
+/// handle の地点 `let x = handle …` を置き換える文。末尾の経路の形では、本体の複製の結果がそのまま x になる。
+/// 状態を渡す形では、複製は `return` の節を呼ばないので、複製の結果 (`passing::Returned`) を開いてから、ここで
+/// `return` の節を結果と状態で呼ぶ。
+fn site_stmts(
+    program: &mut Program,
+    handler: &Handler,
+    copy: FnIdx,
+    pair: Option<LayoutId>,
+) -> Vec<Stmt> {
+    let owner = &program.functions[handler.site.owner.0 as usize];
+    let Stmt::Let { var: x, rhs: _ } =
+        owner.blocks[handler.site.block.0 as usize].stmts[handler.site.stmt]
+    else {
+        unreachable!("a site is a `let`");
+    };
+    let (ret, operations) = handler
+        .clauses
+        .split_last()
+        .expect("a handler has a return clause");
+    let mut args = handler.body.captures.clone();
+    args.push(Atom::Unit);
+    let call = |function, args| Rhs::Call {
+        call: Call::Direct(function, args),
+        mask: Vec::new(),
+    };
+    if handler.form == Form::Tail {
+        args.extend(handler.clauses.iter().flat_map(|clause| &clause.captures));
+        if handler.stateful() {
+            args.push(handler.init);
+        }
+        return vec![Stmt::Let {
+            var: x,
+            rhs: call(copy, args),
+        }];
+    }
+    args.extend(operations.iter().flat_map(|clause| &clause.captures));
+    let stateful = handler.stateful();
+    if stateful {
+        args.push(handler.init);
+    }
+    let body = program.function(handler.body.function);
+    let shape = passing::returned(body, stateful);
+    let state = stateful.then(|| passing::state_info(program.function(ret.function)));
+    let result = passing::result_info(body, shape, state.as_ref());
+    let body_result = VarInfo {
+        name: "t".to_string(),
+        repr: body.ret,
+        mark: body.ret_mark,
+    };
+    let vars = &mut program.functions[handler.site.owner.0 as usize].vars;
+    let mut stmts = Vec::new();
+    let (value, state) = match shape {
+        Returned::Plain => {
+            let value = fresh(vars, body_result);
+            stmts.push(Stmt::Let {
+                var: value,
+                rhs: call(copy, args),
+            });
+            (Atom::Var(value), Atom::Unit)
+        }
+        Returned::StateOnly => {
+            let state = fresh(vars, state.expect("a state"));
+            stmts.push(Stmt::Let {
+                var: state,
+                rhs: call(copy, args),
+            });
+            (Atom::Unit, Atom::Var(state))
+        }
+        Returned::Pair => {
+            let received = fresh(vars, result);
+            let value = fresh(vars, body_result);
+            let state = fresh(vars, state.expect("a state"));
+            stmts.push(Stmt::Let {
+                var: received,
+                rhs: call(copy, args),
+            });
+            stmts.push(Stmt::Unpack {
+                value: received,
+                ctor: eml_lir::Ctor {
+                    layout: pair.expect("a stateful passing handler has the pair layout"),
+                    tag: eml_lir::TUPLE,
+                },
+                fields: vec![value, state],
+            });
+            (Atom::Var(value), Atom::Var(state))
+        }
+    };
+    let mut ret_args = ret.captures.clone();
+    ret_args.extend([value, state]);
+    stmts.push(Stmt::Let {
+        var: x,
+        rhs: call(ret.function, ret_args),
+    });
+    stmts
 }
 
 /// 関数の中の、本体が既知の handle。
@@ -391,8 +509,26 @@ fn eligible(program: &Program, translated: &[bool], site: Site) -> Option<Handle
         }
         forms.push(form);
     }
-    let path = path(program, translated, body.function, *effect)?;
+    // すぐに再開する節だけの handler は、経路がすべて末尾の呼び出しでも状態を渡す形にする。1つの handler に2つの
+    // 形を持たないためである
+    let form = if forms.iter().all(|&form| form == ClauseForm::Resuming) {
+        Form::Passing
+    } else {
+        Form::Tail
+    };
+    let path = path(program, translated, body.function, *effect, form)?;
     if !performs_fit(program, &path, *effect, operations, &forms) {
+        return None;
+    }
+    if form == Form::Passing
+        && !passing::resumes_fit(
+            program,
+            &path,
+            *effect,
+            operations,
+            stateful.then_some(state),
+        )
+    {
         return None;
     }
     Some(Handler {
@@ -403,10 +539,12 @@ fn eligible(program: &Program, translated: &[bool], site: Site) -> Option<Handle
         clauses,
         closures,
         forms,
+        form,
     })
 }
 
-/// handle の本体から、末尾の位置の既知の直接の呼び出しだけでたどれる `yields` の関数 (経路の関数)。経路の条件
+/// handle の本体から、既知の直接の呼び出しでたどれる `yields` の関数 (経路の関数)。末尾の経路の形 (`Form::Tail`) は
+/// 末尾の位置の呼び出しだけを、状態を渡す形は末尾かどうかによらずすべての呼び出しをたどる。経路の条件
 /// (docs/spec/core-ir.md の「handler への特殊化」) に反する関数があれば `None` を返す。
 /// 経路の外の `perform` が H に届くかは、呼ぶ相手と `apply` の `yields` の印で安全側に判断できる。yield しうる操作を
 /// 持つエフェクトの `perform` は、それを含む関数の印に必ず表れるためである (docs/spec/types.md の「row の具体化の
@@ -416,7 +554,13 @@ fn eligible(program: &Program, translated: &[bool], site: Site) -> Option<Handle
 /// 印を失う。扱うエフェクトが `never` の操作を持つときは、呼ぶ相手を translate の印 (`translated`) で見て、印の
 /// 立った経路の外の関数を呼ぶ handle を残す。translate の印は関数の row から決まり、エフェクトのラベルは再開する操作を
 /// 持てば yield しうるので、その `perform` を見落とさない。印は名前ごとに決まるので、判断も名前ごとに決まる。
-fn path(program: &Program, translated: &[bool], body: FnIdx, effect: u32) -> Option<Vec<FnIdx>> {
+fn path(
+    program: &Program,
+    translated: &[bool],
+    body: FnIdx,
+    effect: u32,
+    form: Form,
+) -> Option<Vec<FnIdx>> {
     let info = &program.effects[effect as usize];
     if info.operations.iter().all(|operation| !operation.resumable) {
         return None;
@@ -443,7 +587,7 @@ fn path(program: &Program, translated: &[bool], body: FnIdx, effect: u32) -> Opt
                     Call::Handle { .. } | Call::Resume { .. } | Call::Clause { .. } => return None,
                     Call::Apply { yields: true, .. } => return None,
                     Call::Direct(target, _) if program.function(*target).yields => {
-                        if tail != Some(at) {
+                        if form == Form::Tail && tail != Some(at) {
                             return None;
                         }
                         if !path.contains(target) {
@@ -540,6 +684,8 @@ struct Copies<'a> {
     /// `program.functions` の後ろに足す関数。番号を取った順に並ぶ。
     created: Vec<Option<CoreFn>>,
     pending: Vec<(FnIdx, FnIdx, Shape)>,
+    /// 状態つきの handler を状態を渡す形で特殊化するときの、組の配置 (`passing::pair_layout`)。
+    pair: Option<LayoutId>,
 }
 
 impl Copies<'_> {
@@ -590,7 +736,16 @@ impl Copies<'_> {
         limited(name, format!("{name}{{H={ret}}}"))
     }
 
-    /// 複製 `f{H}` を作る。引数は f の引数、節と `return` の節の捕獲 (節の順)、状態つきなら状態の順にする。
+    /// 複製 `f{H}` を作る。形は handler の形で決まる。
+    fn build(&mut self, index: FnIdx, function: FnIdx, shape: &Shape) {
+        match shape.form {
+            Form::Tail => self.build_tail(index, function, shape),
+            Form::Passing => passing::build(self, index, function, shape),
+        }
+    }
+
+    /// 末尾の経路の形の複製 `f{H}` を作る。引数は f の引数、節と `return` の節の捕獲 (節の順)、状態つきなら状態の
+    /// 順にする。
     ///
     /// H 宛ての `perform` は、どれもそこで複製を終える。再開する操作では、`perform` より後ろを継続の関数 `f{H}$hN`
     /// に切り出す。すぐに再開する節は本体を展開して、その `resume` を `f{H}$hN` の末尾呼び出しにする。それ以外の節は、
@@ -610,7 +765,7 @@ impl Copies<'_> {
     /// ある。生存はブロックを後ろから1回だけたどって求め、`perform` はそのたどる途中で書き換える。辺はすべて番号の
     /// 大きいブロックへ向かうので、`perform` の後ろと合流のブロックの生存は、そこへ着いたときには書き換えた後のコード
     /// で決まっている。`perform` ごとに続きを末尾までたどると、`perform` の数の2乗の手間になるためである。
-    fn build(&mut self, index: FnIdx, function: FnIdx, shape: &Shape) {
+    fn build_tail(&mut self, index: FnIdx, function: FnIdx, shape: &Shape) {
         let program = self.program;
         let ret = program.function(shape.ret());
         let mut code = program.function(function).clone();

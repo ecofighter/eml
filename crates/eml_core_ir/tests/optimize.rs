@@ -669,30 +669,26 @@ fn for_each_is_specialized() {
     insta::assert_snapshot!(format!("{}\n{}", function(&shown, "entry$main"), handler_copies(&shown)), @r#"
     fn entry$main() -> unit {
       let t.1: unit = call "nums$let$go{H=Std.Yield.for_each@#0450afda50afc4ec}"(3, 1)
-      return t.1
+      return ()
     }
 
     fn "nums$let$go{H=Std.Yield.for_each@#0450afda50afc4ec}"(n.0: int, i.1: int) -> unit {
       let t.2: enum = extern "Prelude.Ord Int.>"(i.1, n.0)
       switch t.2 Prelude.Bool { #0 -> b1, #1 -> b2 }
     b1:
-      let t.10: obj = extern "Prelude.Show Int.show"(i.1)
-      let t.11: unit = extern Prelude.println(t.10)
-      let t.9: unit = call "nums$let$go{H=Std.Yield.for_each@#0450afda50afc4ec}$h0"(n.0, i.1, t.11)
-      return t.9
+      let t.8: obj = extern "Prelude.Show Int.show"(i.1)
+      let t.9: unit = extern Prelude.println(t.8)
+      let t.4: int = extern "Prelude.Num Int.+"(i.1, 1)
+      let t.7: unit = call "nums$let$go{H=Std.Yield.for_each@#0450afda50afc4ec}"(n.0, t.4)
+      return t.7
     b2:
       return ()
-    }
-
-    fn "nums$let$go{H=Std.Yield.for_each@#0450afda50afc4ec}$h0"(n.0: int, i.1: int, t.2: unit) -> unit {
-      let t.3: int = extern "Prelude.Num Int.+"(i.1, 1)
-      let t.4: unit = call "nums$let$go{H=Std.Yield.for_each@#0450afda50afc4ec}"(n.0, t.3)
-      return t.4
     }
     "#);
 }
 
-/// 状態つきの handler では、複製が状態を最後の引数で受け、節の展開が次の状態を継続の関数に渡す。
+/// 状態つきの handler では、複製が状態を最後の引数で受け、展開した節の次の状態をブロックの引数で後ろへ渡す。`count` は
+/// `Unit` を返すので、複製は次の状態だけを返す (docs/spec/core-ir.md の「handler の複製」)。
 #[test]
 fn a_stateful_handler_threads_its_state() {
     let text = "\
@@ -713,27 +709,132 @@ main () =
     let shown = core_text(text, Pass::Optimize);
     assert!(!shown.contains("handle "), "{shown}");
     insta::assert_snapshot!(handler_copies(&shown), @r#"
-    fn "count{H=Std.State.run@#c7a76c0c3d933166}"(n.0: int, st.7: int) -> obj {
+    fn "count{H=Std.State.run@#c7a76c0c3d933166}"(n.0: int, st.7: int) -> int {
       let t.1: enum = extern "Prelude.Eq Int.=="(n.0, 0)
       switch t.1 Prelude.Bool { #0 -> b1, #1 -> b2 }
     b1:
-      let t.11: obj = call "count{H=Std.State.run@#c7a76c0c3d933166}$h0"(n.0, st.7, st.7)
-      return t.11
+      let t.3: int = extern "Prelude.Num Int.+"(st.7, 1)
+      let t.5: int = extern "Prelude.Num Int.-"(n.0, 1)
+      let t.10: int = call "count{H=Std.State.run@#c7a76c0c3d933166}"(t.5, t.3)
+      return t.10
     b2:
-      let d.12: obj = con (,) #0((), st.7)
-      return d.12
+      return st.7
     }
+    "#);
+}
 
-    fn "count{H=Std.State.run@#c7a76c0c3d933166}$h1"(n.0: int, t.1: unit, st.3: int) -> obj {
-      let t.2: int = extern "Prelude.Num Int.-"(n.0, 1)
-      let t.4: obj = call "count{H=Std.State.run@#c7a76c0c3d933166}"(t.2, st.3)
-      return t.4
+/// 末尾でない `put` のループ (`bench/state_loop.em` と同じプログラム) も、状態を渡す形で特殊化される。`loop` の複製は
+/// `bump` の複製を末尾でなく呼んで次の状態を受け、そのあと自分を末尾で呼ぶ。
+#[test]
+fn a_non_tail_put_is_specialized() {
+    let text = "\
+-- 末尾でない `put` を `Std.State` の handler の下で回すループ (S14c-2)。`bump` の呼び出しは末尾でない
+import Std.State (State(..))
+
+bump : Int -> <State Int, Panic> Unit
+bump i = put (get () + i)
+
+loop : Int -> Int -> <State Int, Panic> Unit
+loop i n =
+  if i > n then ()
+  else
+    bump i
+    loop (i + 1) n
+
+main : Unit -> <IO, Panic> Unit
+main () = println (show (State.exec 0 (fn () -> loop 1 100000)))
+";
+    let shown = core_text(text, Pass::Optimize);
+    assert!(
+        shown
+            .lines()
+            .all(|line| !line.contains("handle ") && !line.contains("perform Std.State")),
+        "{shown}"
+    );
+    // `bump` の複製は小さいので、融合 (S13e-3) が `loop` の複製に展開し、`bump` の `get` と `put` は状態の足し算に
+    // なる
+    insta::assert_snapshot!(handler_copies(&shown), @r#"
+    fn "loop{H=Std.State.run@#c7a76c0c3d933166}"(i.0: int, n.1: int, st.6: int) -> int {
+      let t.2: enum = extern "Prelude.Ord Int.>"(i.0, n.1)
+      switch t.2 Prelude.Bool { #0 -> b1, #1 -> b2 }
+    b1:
+      let t.9: int = extern "Prelude.Num Int.+"(st.6, i.0)
+      let t.4: int = extern "Prelude.Num Int.+"(i.0, 1)
+      let t.8: int = call "loop{H=Std.State.run@#c7a76c0c3d933166}"(t.4, n.1, t.9)
+      return t.8
+    b2:
+      return st.6
     }
+    "#);
+}
 
-    fn "count{H=Std.State.run@#c7a76c0c3d933166}$h0"(n.0: int, t.1: int, st.3: int) -> obj {
-      let t.2: int = extern "Prelude.Num Int.+"(t.1, 1)
-      let t.4: obj = call "count{H=Std.State.run@#c7a76c0c3d933166}$h1"(n.0, (), t.2)
-      return t.4
+/// `if` の片方の腕だけが `put` する。合流のブロックは状態を引数で受け、2つの腕はそれぞれの今の状態を渡す。
+#[test]
+fn a_conditional_perform_passes_the_state_to_the_join() {
+    let text = "\
+import Std.State (State(..))
+
+tally : List Int -> <State Int, Panic> Unit
+tally xs = match xs with
+  | Nil -> ()
+  | x :: rest ->
+    if x % 2 == 0 then put (get () + x) else ()
+    tally rest
+
+main : Unit -> <IO, Panic> Unit
+main () = println (show (State.exec 0 (fn () -> tally [1, 2, 3, 4, 5, 6])))
+";
+    let shown = core_text(text, Pass::Optimize);
+    assert!(!shown.contains("handle "), "{shown}");
+    insta::assert_snapshot!(handler_copies(&shown), @r#"
+    fn "tally{H=Std.State.run@#c7a76c0c3d933166}"(xs.0: tobj, st.10: int) -> int {
+      switch xs.0 Prelude.List { #0 -> b1, #1(x.1: int, rest.2: tobj) -> b2 }
+    b1:
+      return st.10
+    b2:
+      let t.3: int = extern "Prelude.Div Int.%"(x.1, 2)
+      let t.4: enum = extern "Prelude.Eq Int.=="(t.3, 0)
+      switch t.4 Prelude.Bool { #0 -> b3, #1 -> b4 }
+    b3:
+      jump b5((), st.10)
+    b4:
+      let t.6: int = extern "Prelude.Num Int.+"(st.10, x.1)
+      jump b5((), t.6)
+    b5(t.8: unit, st.13: int):
+      let t.14: int = call "tally{H=Std.State.run@#c7a76c0c3d933166}"(rest.2, st.13)
+      return t.14
+    }
+    "#);
+}
+
+/// 結果が `Unit` でない経路の関数の複製は、`return` で結果と次の状態の組を作って返す。
+#[test]
+fn a_pair_result_is_built_at_return() {
+    let text = "\
+import Std.State (State(..))
+
+count : Int -> <State Int, Panic> Int
+count n = if n == 0 then 0 else
+  put (get () + 1)
+  count (n - 1)
+
+main : Unit -> <IO, Panic> Unit
+main () = println (show (State.exec 0 (fn () -> count 5)))
+";
+    let shown = core_text(text, Pass::Optimize);
+    assert!(!shown.contains("handle "), "{shown}");
+    insta::assert_snapshot!(handler_copies(&shown), @r#"
+    fn "count{H=Std.State.run@#6d0e8cc9f0bb1f6e}"(n.0: int, st.7: int) -> obj {
+      let t.1: enum = extern "Prelude.Eq Int.=="(n.0, 0)
+      switch t.1 Prelude.Bool { #0 -> b1, #1 -> b2 }
+    b1:
+      let t.3: int = extern "Prelude.Num Int.+"(st.7, 1)
+      let t.5: int = extern "Prelude.Num Int.-"(n.0, 1)
+      let t.10: obj = call "count{H=Std.State.run@#6d0e8cc9f0bb1f6e}"(t.5, t.3)
+      return t.10
+    b2:
+      let d.11: obj = con (,) #0(0, st.7)
+      return d.11
     }
     "#);
 }
@@ -745,10 +846,7 @@ fn keeps_the_handle(text: &str) {
     assert!(!shown.contains("{H="), "{shown}");
 }
 
-#[test]
-fn a_non_tail_yielding_frame_keeps_the_handle() {
-    keeps_the_handle(
-        "\
+const EMIT2: &str = "\
 import Yield (Yield(..))
 
 emit2 : Int -> <Yield Int, Panic> Unit
@@ -760,11 +858,25 @@ nums : Unit -> <Yield Int, Panic> Unit
 nums () =
   emit2 1
   emit2 3
+";
 
-main : Unit -> <IO, Panic> Unit
-main () = Yield.for_each nums (fn x -> println \"\\{x}\")
-",
+/// `k` を値として使う節の handler (`Iter.generate`) は末尾の経路の形のままなので、末尾でない `yields` の呼び出しが
+/// 経路にあれば handle を残す。
+#[test]
+fn a_non_tail_yielding_frame_keeps_the_handle() {
+    keeps_the_handle(&format!(
+        "{EMIT2}\nmain : Unit -> <IO, Panic> Unit\nmain () = println (show (Iter.to_list (Iter.generate nums)))\n"
+    ));
+}
+
+/// すぐに再開する節だけの handler は、末尾でない `yields` の呼び出しをたどって特殊化する。
+#[test]
+fn a_non_tail_yielding_frame_is_specialized_when_clauses_resume() {
+    let text = format!(
+        "{EMIT2}\nmain : Unit -> <IO, Panic> Unit\nmain () = Yield.for_each nums (fn x -> println \"\\{{x}}\")\n"
     );
+    let shown = core_text(&text, Pass::Optimize);
+    assert!(!shown.contains("handle "), "{shown}");
 }
 
 #[test]
@@ -1712,4 +1824,104 @@ main () =
             .any(|x| maps.iter().any(|y| x != y && refers(x, y) && refers(y, x))),
         "no shared cycle of Iter.map copies in {shared:#?}"
     );
+}
+
+/// IR のテキストを読み、`optimize` の後の表示を返す。変換の段の verifier を通ることも確かめる。
+fn optimized(text: &str) -> String {
+    let mut program = parse(text).unwrap_or_else(|error| panic!("{error}"));
+    optimize(&mut program);
+    let shown = pretty(&program);
+    eml_core_ir::verify_translated(&program).unwrap_or_else(|error| panic!("{error}\n{shown}"));
+    shown
+}
+
+/// 状態を渡す形では、展開した節の末尾の `resume k(v, s)` を `perform` の後ろへのジャンプにする。ジャンプの実引数には
+/// box の挿入が変換を入れないので、v の Repr が `perform` の結果と互換でなければ handle を残す
+/// (docs/spec/core-ir.md の「handler への特殊化」)。
+#[test]
+fn a_resume_value_of_another_repr_keeps_the_handle() {
+    let shown = optimized(
+        "\
+effect Ask { ask(unit) -> tobj }
+internal yields fn body(p.0: unit) -> int {
+  let t.1: int = perform Ask.ask(())
+  return t.1
+}
+internal fn ask(c.0: tobj, p.1: unit, k.2: tobj, s.3: unit) -> tobj {
+  let t.4: tobj = resume k.2(c.0, ())
+  return t.4
+}
+internal fn ret(x.0: tobj, s.1: unit) -> tobj {
+  return x.0
+}
+fn entry$main() -> tobj {
+  let s.0: obj = const \"x\"
+  let c.1: tobj = closure ask(s.0)
+  let t.2: tobj = handle Ask((), &body) { ask: c.1 } return &ret
+  return t.2
+}
+",
+    );
+    assert!(shown.contains("handle "), "{shown}");
+    assert!(!shown.contains("{H="), "{shown}");
+}
+
+/// `unit` を返す f が、組を返す経路の関数 g を末尾で呼ぶ。複製の結果の形が違うので、f の複製は g の複製を末尾でなく
+/// 呼んで組を開き、次の状態を返す。
+#[test]
+fn a_tail_call_across_result_shapes_is_adapted() {
+    let shown = optimized(
+        "\
+effect Count { tick(unit) -> unit }
+internal yields fn body(p.0: unit) -> tobj {
+  let t.1: unit = call f(3)
+  return t.1
+}
+yields fn f(n.0: int) -> unit {
+  switch n.0 { 0 -> b1, _ -> b2 }
+b1:
+  let t.1: tobj = call g(3)
+  return t.1
+b2:
+  let m.2: int = extern \"Prelude.Num Int.-\"(n.0, 1)
+  let t.3: unit = call f(m.2)
+  return t.3
+}
+yields fn g(n.0: int) -> tobj {
+  let t.1: unit = perform Count.tick(())
+  switch n.0 { 0 -> b1, _ -> b2 }
+b1:
+  return ()
+b2:
+  let m.2: int = extern \"Prelude.Num Int.-\"(n.0, 1)
+  let t.3: tobj = call g(m.2)
+  return t.3
+}
+internal fn tick(p.0: unit, k.1: tobj, s.2: int) -> tobj {
+  let n.3: int = extern \"Prelude.Num Int.+\"(s.2, 1)
+  let t.4: tobj = resume k.1((), n.3)
+  return t.4
+}
+internal fn ret(x.0: tobj, s.1: int) -> int {
+  return s.1
+}
+fn entry$main() -> int {
+  let t.0: int = handle Count(0, &body) { tick: &tick } return &ret
+  return t.0
+}
+",
+    );
+    insta::assert_snapshot!(function(&shown, "\"f{H=ret}\""), @r#"
+    fn "f{H=ret}"(n.0: int, s.4: int) -> int {
+      switch n.0 { 0 -> b1, _ -> b2 }
+    b1:
+      let t.5: obj = call "g{H=ret}"(3, s.4)
+      unpack t.5 (,) #0(t.1: tobj, s.6: int)
+      return s.6
+    b2:
+      let m.2: int = extern "Prelude.Num Int.-"(n.0, 1)
+      let t.7: int = call "f{H=ret}"(m.2, s.4)
+      return t.7
+    }
+    "#);
 }

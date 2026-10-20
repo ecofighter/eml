@@ -1,7 +1,7 @@
 //! handler の複製の部品 (docs/spec/core-ir.md の「handler の複製」)。
 //! `perform` の地点からの続きを継続の関数にし、合流のブロックからの続きを合流のブロックの関数にする (`region`)。
-//! すぐに再開する節の本体を `perform` の地点に展開し (`inline_clause`)、引数を置き換えて定数になった `switch` を
-//! 合う行き先へのジャンプにする (`blocks::constant_target`)。`k` を値として使う節は、`k` に継続の関数の閉包を受ける写し
+//! すぐに再開する節の本体を写して (`clause_blocks`) `perform` の地点に展開し (`inline_clause`)、引数を置き換えて
+//! 定数になった `switch` を合う行き先へのジャンプにする (`blocks::constant_target`)。`k` を値として使う節は、`k` に継続の関数の閉包を受ける写し
 //! `<g>{k}` にする (`clause_with_k`)。展開で辺の入らなくなったブロックは、最後に落とす (`blocks::prune`)。
 
 use std::collections::{BTreeSet, HashMap, HashSet};
@@ -128,13 +128,9 @@ pub(crate) fn region(
 }
 
 /// `target` の `at` の文 (`perform`) の場所に、すぐに再開する節の関数 `clause` の本体を写して展開する。ブロックの
-/// `perform` から後ろは捨て、節の入口のブロックの文を続ける。節のほかのブロックは後ろに足す。節の変数は新しい変数に
-/// し、引数は置き換える。`args` は捕獲と操作の引数で、状態の引数は `state` に、末尾の `resume k(v, s)` は
-/// `resume(v, s)` の右辺にする。`resume` の結果は `target` が返す値なので、その変数の Repr と印は `target` の戻り値に
-/// そろえる。`resume` から `return` までの純粋な `let` は使われないので写さない。
-///
-/// 写した文は、どれも H 宛てとして書き換えない。節の中の `perform` は、もとの意味でも handler の外側で動くためである
-/// (docs/spec/core-ir.md の「handler の特殊化で意味が変わらない理由」)。
+/// `perform` から後ろは捨て、節の入口のブロックの文を続ける。節のほかのブロックは後ろに足す。`args` は捕獲と操作の
+/// 引数で、状態の引数は `state` に、末尾の `resume k(v, s)` は `resume(v, s)` の右辺にする (`clause_blocks`)。
+/// `resume` の結果は `target` が返す値なので、その変数の Repr と印は `target` の戻り値にそろえる。
 pub(crate) fn inline_clause(
     target: &mut CoreFn,
     at: (BlockId, usize),
@@ -143,11 +139,59 @@ pub(crate) fn inline_clause(
     state: Atom,
     resume: impl Fn(Atom, Atom) -> Rhs,
 ) {
+    let returned = VarInfo {
+        name: "t".to_string(),
+        repr: target.ret,
+        mark: target.ret_mark,
+    };
+    let base = target.blocks.len() as u32;
+    let copied = clause_blocks(
+        &mut target.vars,
+        clause,
+        args,
+        state,
+        base,
+        |vars, value, state| {
+            let var = fresh(vars, returned.clone());
+            (
+                vec![Stmt::Let {
+                    var,
+                    rhs: resume(value, state),
+                }],
+                Term::Return(Atom::Var(var)),
+            )
+        },
+    );
+    let mut copied = copied.into_iter();
+    let entry = copied.next().expect("a function has an entry block");
+    let host = &mut target.blocks[at.0.0 as usize];
+    host.stmts.truncate(at.1);
+    host.stmts.extend(entry.stmts);
+    host.term = entry.term;
+    target.blocks.extend(copied);
+}
+
+/// すぐに再開する節の関数 `clause` の本体のブロックを写す。節の変数は `vars` に足す新しい変数にし、引数は置き換える。
+/// `args` は捕獲と操作の引数で、状態の引数は `state` にする。返すブロックの 0 番目は入口で、その文と終端は呼ぶ側が
+/// 地点のブロックに続ける。節の i 番目 (i > 0) のブロックは `BlockId(base + i - 1)` に置く前提で行き先を振る。
+/// 末尾の `resume k(v, s)` は、`resume(vars, v, s)` が返す文と終端にする。`resume` から `return` までの純粋な
+/// `let` は使われないので写さない。
+///
+/// 写した文は、どれも H 宛てとして書き換えない。節の中の `perform` は、もとの意味でも handler の外側で動くためである
+/// (docs/spec/core-ir.md の「handler の特殊化で意味が変わらない理由」)。
+pub(crate) fn clause_blocks(
+    vars: &mut Vec<VarInfo>,
+    clause: &CoreFn,
+    args: &[Atom],
+    state: Atom,
+    base: u32,
+    mut resume: impl FnMut(&mut Vec<VarInfo>, Atom, Atom) -> (Vec<Stmt>, Term),
+) -> Vec<Block> {
     let params = clause.params();
     let count = params.len();
     let k = params[count - 2];
-    // 捕獲の引数は複製の引数そのもので、展開した本体と、継続の関数に渡す生きている変数の両方に現れうる。2か所で
-    // 使ってよいのは、操作の節の捕獲が `Unr` に限られるためである (E3001、docs/spec/linearity.md)。呼ぶ側が確かめる
+    // 捕獲の引数は複製の引数そのもので、展開した本体と、続きに渡す値の両方に現れうる。2か所で使ってよいのは、操作の
+    // 節の捕獲が `Unr` に限られるためである (E3001、docs/spec/linearity.md)。呼ぶ側が確かめる
     let mut substitution: HashMap<VarId, Atom> = params[..count - 2]
         .iter()
         .copied()
@@ -155,21 +199,16 @@ pub(crate) fn inline_clause(
         .collect();
     substitution.insert(params[count - 1], state);
     let mut copy = Copy {
-        vars: &mut target.vars,
+        vars,
         source: &clause.vars,
         substitution,
         k,
     };
 
-    let base = target.blocks.len() as u32;
-    let block_of = |block: BlockId| match block.0 {
-        0 => at.0,
-        index => BlockId(base + index - 1),
-    };
-    let returned = VarInfo {
-        name: "t".to_string(),
-        repr: target.ret,
-        mark: target.ret_mark,
+    // 入口のブロックには辺が入らないので、行き先になるのは 1 番目から後ろのブロックだけである
+    let block_of = |block: BlockId| {
+        debug_assert_ne!(block, BlockId::ENTRY, "no edge enters the entry block");
+        BlockId(base + block.0 - 1)
     };
     let mut copied = Vec::with_capacity(clause.blocks.len());
     for (index, block) in clause.blocks.iter().enumerate() {
@@ -201,10 +240,10 @@ pub(crate) fn inline_clause(
                 else {
                     panic!("an immediately resuming clause ends in `resume`");
                 };
-                let var = fresh(copy.vars, returned.clone());
-                let rhs = resume(copy.atom(*arg), copy.atom(*state));
-                stmts.push(Stmt::Let { var, rhs });
-                term = Some(Term::Return(Atom::Var(var)));
+                let (value, state) = (copy.atom(*arg), copy.atom(*state));
+                let (tail, end) = resume(&mut *copy.vars, value, state);
+                stmts.extend(tail);
+                term = Some(end);
                 break;
             }
             stmts.push(copy.stmt(stmt));
@@ -216,13 +255,7 @@ pub(crate) fn inline_clause(
             term,
         });
     }
-    let mut copied = copied.into_iter();
-    let entry = copied.next().expect("a function has an entry block");
-    let host = &mut target.blocks[at.0.0 as usize];
-    host.stmts.truncate(at.1);
-    host.stmts.extend(entry.stmts);
-    host.term = entry.term;
-    target.blocks.extend(copied);
+    copied
 }
 
 /// 節の本体を写すときの変数の対応。

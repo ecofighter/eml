@@ -694,7 +694,7 @@ fn unwind_points() {
     upsert_by_hand: 23
     scripts/wc: 44
     scripts/grep: 59
-    scripts/logstat: 101
+    scripts/logstat: 105
     scripts/csv2jsonl: 106
     scripts/deploy: 108
     ");
