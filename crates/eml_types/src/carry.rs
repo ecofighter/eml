@@ -11,6 +11,7 @@ use eml_hir::{
     Program, Res, Segment, Stmt,
 };
 
+use crate::VarClass;
 use crate::check::{BodyTyping, CallRows};
 use crate::kind::{
     Across, Bound, CallKind, CarriedValue, KindOrigin, KindReason, Provenance, Span,
@@ -276,8 +277,9 @@ impl Carrying<'_, '_> {
             ExprKind::List(elements) => self.list(elements, after),
             ExprKind::Interpolation(segments) => self.interpolation(segments, after),
             ExprKind::Drop(value) => self.expr(*value, after),
-            // 変数の範囲を、状態が初期値の handle と同じく扱う。範囲の後で使う値と変数の値は、外側の row をまたぐ
-            // (docs/spec/types.md の「`var` の変数」)
+            // 変数の範囲は handle の本体になる。範囲の後で使う値は外側の row をまたぐ。配列の変数は、`Lin` の状態を
+            // 持つ handle と同じく、状態の配列も外側の row をまたぐ (docs/spec/linearity.md の「配列の変数」)。
+            // 範囲の中の値は、handle の本体と同じく範囲の中だけで数える
             ExprKind::Var {
                 var,
                 init,
@@ -286,15 +288,20 @@ impl Carrying<'_, '_> {
             } => {
                 if let Some(CallRows::Handle { outer, .. }) = typing.calls.get(id) {
                     let outer = Across::Row(outer.clone());
-                    self.carry(id, after, &outer, &CallKind::Handle);
-                    if let Some(scope) = typing.vars.get(*var) {
-                        let value = CarriedValue::HandlerState {
-                            init: body.exprs[*init].range,
+                    self.carry(id, after, &outer, &CallKind::Var);
+                    if typing.var_classes.get(*var) == Some(&VarClass::Array)
+                        && let Some(state) = typing.vars.get(*var)
+                    {
+                        let data = &body.vars[*var];
+                        let value = CarriedValue::VarState {
+                            name: data.name.clone(),
+                            decl: data.range,
                         };
-                        self.carry_value(id, scope.ty, value, &outer, &CallKind::Handle);
+                        self.carry_value(id, state.ty, value, &outer, &CallKind::Var);
                     }
                 }
-                let live = self.expr(*scope, after);
+                let mut live = after.clone();
+                live.extend(self.expr(*scope, &Live::new()));
                 self.expr(*init, &live)
             }
             ExprKind::VarGet(_) => after.clone(),

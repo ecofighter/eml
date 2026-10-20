@@ -327,3 +327,177 @@ main () =
     ]
     "#);
 }
+
+#[test]
+fn taking_on_both_branches_is_accepted() {
+    let text = "\
+f : Bool -> <Panic> Array Int
+f c =
+  var a = MutArray.make 3 0
+  a[0] := 1
+  if c then MutArray.freeze a else MutArray.freeze a
+";
+    insta::assert_debug_snapshot!(check_short(text), @"[]");
+}
+
+#[test]
+fn a_diverging_branch_need_not_take() {
+    let text = "\
+f : Bool -> <IO, Panic> Array Int
+f c =
+  var a = MutArray.make 3 0
+  if c then exit 1 else MutArray.freeze a
+";
+    insta::assert_debug_snapshot!(check_short(text), @"[]");
+}
+
+#[test]
+fn a_last_expression_that_diverges_need_not_take() {
+    let text = "\
+f : Unit -> <IO, Panic> Unit
+f () =
+  var a = MutArray.make 3 0
+  a[0] := 1
+  exit 2
+";
+    insta::assert_debug_snapshot!(check_short(text), @"[]");
+}
+
+#[test]
+fn every_match_arm_takes() {
+    let text = "\
+f : Int -> <Panic> Array Int
+f n =
+  var a = MutArray.make 3 0
+  match n with
+    | 0 -> MutArray.freeze a
+    | _ -> Array.from_list [n, Array.length (MutArray.freeze a)]
+";
+    insta::assert_debug_snapshot!(check_short(text), @"[]");
+}
+
+#[test]
+fn a_branch_that_does_not_take_is_e3003() {
+    let text = "\
+f : Bool -> <Panic> Unit
+f c =
+  var a = MutArray.make 3 0
+  if c then drop a else ()
+";
+    insta::assert_snapshot!(check_full(text), @"
+    E3003 3:3 the array variable `a` is not taken on some paths
+      3:3 `a` is declared here
+      4:25 this branch does not take `a`
+      note: taking an array variable hands over its array, so every path of the last expression takes it exactly once
+      help: end the block with an expression that takes `a`, such as `MutArray.freeze a` or `drop a`
+    ");
+}
+
+#[test]
+fn an_omitted_else_does_not_take() {
+    let text = "\
+f : Bool -> <Panic> Unit
+f c =
+  var a = MutArray.make 3 0
+  if c then drop a
+";
+    insta::assert_snapshot!(check_full(text), @"
+    E3003 3:3 the array variable `a` is not taken on some paths
+      3:3 `a` is declared here
+      4:3 the omitted `else` does not take `a`
+      note: taking an array variable hands over its array, so every path of the last expression takes it exactly once
+      help: end the block with an expression that takes `a`, such as `MutArray.freeze a` or `drop a`
+    ");
+}
+
+#[test]
+fn a_take_in_a_handle_body_is_e3008() {
+    let text = "\
+effect Ask where
+  ask : Unit -> Int
+
+f : Unit -> <Panic> Array Int
+f () =
+  var a = MutArray.make 3 0
+  handle MutArray.freeze a with
+    | ctl ask () k -> k 1
+";
+    insta::assert_debug_snapshot!(check_short(text), @r#"
+    [
+        "E3008 7:26 the array variable `a` cannot be taken inside a function",
+    ]
+    "#);
+}
+
+#[test]
+fn a_take_after_a_use_is_e3008() {
+    let text = "\
+run : (Unit -> <e> a) -> <e> a
+run f = f ()
+
+f : Unit -> <Panic> Array Int
+f () =
+  var a = MutArray.make 3 0
+  use run
+  MutArray.freeze a
+";
+    insta::assert_debug_snapshot!(check_short(text), @r#"
+    [
+        "E3008 8:19 the array variable `a` cannot be taken inside a function",
+    ]
+    "#);
+}
+
+#[test]
+fn a_type_error_suppresses_the_take_rules() {
+    let text = "\
+f : Unit -> <Panic> Unit
+f () =
+  var a = MutArray.make 3 0
+  let s : String = 1
+  ()
+";
+    insta::assert_debug_snapshot!(check_short(text), @r#"
+    [
+        "E2001 4:20 mismatched types",
+    ]
+    "#);
+}
+
+#[test]
+fn an_unr_var_may_be_read_anywhere() {
+    let text = "\
+f : Unit -> <Panic> (Int, Int)
+f () =
+  var n = 1
+  let g () = n
+  (n, g ())
+";
+    insta::assert_debug_snapshot!(check_short(text), @"[]");
+}
+
+#[test]
+fn a_value_kept_across_a_var_scope_is_e3006() {
+    let text = "\
+effect Choose where
+  multi choose : Unit -> Bool
+
+g : Unit -> <Choose, IO, Panic> Unit
+g () =
+  let f = Fs.open \"x\"
+  let r =
+    var n = 0
+    if choose () then n := 1 else ()
+    n
+  Fs.close f
+  println (show r)
+";
+    insta::assert_snapshot!(check_full(text), @"
+    E3006 8:5 `f` must be used exactly once, but it is kept alive across a call that may resume more than once
+      8:5 the scope of this `var` may perform `choose`, a `multi` operation
+      6:7 `f` is bound here
+      2:9 `choose` is declared `multi` here
+      note: a continuation of a `multi` operation can be resumed more than once, and each resumption would use the value again
+      help: finish using `f` before the scope of this `var`
+    ");
+}

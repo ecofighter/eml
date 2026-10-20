@@ -18,8 +18,7 @@ specialized i =
   var a = MutArray.make 3 0
   for 0 3 (fn j -> a[j] := j)
   let n = a[i]
-  drop a
-  n
+  (fn _ -> n) (MutArray.freeze a)
 
 main : Unit -> <IO, Panic> Unit
 main () =

@@ -1,0 +1,22 @@
+---
+source: crates/eml_cli/tests/ui.rs
+expression: rendered
+input_file: tests/ui/check-fail/var/taken_before_last.em
+---
+[E3008] Error: the array variable `a` can be taken only in the last expression of its block
+   ╭─[ check-fail/var/taken_before_last.em:5:27 ]
+   │
+ 5 │   let b = MutArray.freeze a
+   │                           ┬  
+   │                           ╰── `a` is taken here
+   │
+   ├─[ check-fail/var/taken_before_last.em:5:27 ]
+   │
+ 4 │   var a = MutArray.make 3 0
+   │   ────────────┬────────────  
+   │               ╰────────────── `a` is declared here
+   │ 
+   │ Help: read and write `a` with indexing, and take it in the last expression of the block
+   │ 
+   │ Note: taking an array variable hands over its array and leaves the variable empty, so only the last expression may take it
+───╯

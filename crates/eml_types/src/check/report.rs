@@ -9,7 +9,7 @@ use eml_hir::{
 use crate::codes;
 use crate::kind::{
     CallKind, CarriedInner, CarriedValue, DiscardSite, InnerLabel, KindOrigin, KindReason,
-    OperationSide, Span, UnusedPath,
+    OperationSide, Span, UntakenPath, UnusedPath, VarMisuse,
 };
 use crate::store::TypeStore;
 use crate::table::{Exporter, Label as RowLabel, Row, Ty, UnifyError};
@@ -928,8 +928,107 @@ pub(super) fn linear_misuse(
         .with_help(format!(
             "bind the value with `let` and pass `{name}` on instead of keeping it in a `var` variable"
         )),
+        KindReason::VarTakenTwice {
+            name,
+            first,
+            second,
+        } => Diagnostic::error(
+            codes::LINEAR_VALUE_USED_TWICE,
+            format!("the array variable `{name}` is taken twice on this path"),
+            Label::new(file, *second, "taken again here"),
+        )
+        .with_secondary(Label::new(file, *first, "first taken here"))
+        .with_note(VAR_TAKE_NOTE),
+        KindReason::VarNotTaken { name, path } => {
+            let (how, label) = match *path {
+                UntakenPath::Branch(range) => (
+                    "on some paths",
+                    Label::new(file, range, format!("this branch does not take `{name}`")),
+                ),
+                UntakenPath::NoElse(range) => (
+                    "on some paths",
+                    Label::new(
+                        file,
+                        range,
+                        format!("the omitted `else` does not take `{name}`"),
+                    ),
+                ),
+                UntakenPath::Last(range) => (
+                    "on this path",
+                    Label::new(
+                        file,
+                        range,
+                        format!("this last expression does not take `{name}`"),
+                    ),
+                ),
+                UntakenPath::NoLast(range) => (
+                    "on this path",
+                    Label::new(
+                        file,
+                        range,
+                        "the block ends with a statement, so it has no last expression",
+                    ),
+                ),
+            };
+            Diagnostic::error(
+                codes::LINEAR_VALUE_NOT_CONSUMED,
+                format!("the array variable `{name}` is not taken {how}"),
+                Label::new(file, range, format!("`{name}` is declared here")),
+            )
+            .with_secondary(label)
+            .with_note(VAR_TAKE_NOTE)
+            .with_help(format!(
+                "end the block with an expression that takes `{name}`, such as `MutArray.freeze {name}` or `drop {name}`"
+            ))
+        }
+        KindReason::ArrayVarMisused { name, decl, misuse } => {
+            let (message, label, note, help) = match misuse {
+                VarMisuse::TakenOutsideLast => (
+                    format!(
+                        "the array variable `{name}` can be taken only in the last expression of its block"
+                    ),
+                    format!("`{name}` is taken here"),
+                    "taking an array variable hands over its array and leaves the variable empty, so only the last expression may take it",
+                    format!(
+                        "read and write `{name}` with indexing, and take it in the last expression of the block"
+                    ),
+                ),
+                VarMisuse::TakenInFunction => (
+                    format!("the array variable `{name}` cannot be taken inside a function"),
+                    format!("`{name}` is taken here, inside a function"),
+                    "a function may run any number of times, so the array could be taken more than once or not at all",
+                    format!("take `{name}` in the last expression itself, outside every function"),
+                ),
+                VarMisuse::UsedBesideTake => (
+                    format!(
+                        "the array variable `{name}` is used in the last expression besides being taken"
+                    ),
+                    format!("`{name}` is used here"),
+                    "the last expression takes the array out of the variable, so it cannot also read or write it",
+                    format!("read or write `{name}` in a statement before the last expression"),
+                ),
+                VarMisuse::Assigned => (
+                    format!("the array variable `{name}` cannot be assigned with `:=`"),
+                    format!("this assigns to `{name}`"),
+                    "assigning would discard the old array, which is a linear value",
+                    format!(
+                        "write the elements with `{name}[i] := e`, or keep the new array in another `var`"
+                    ),
+                ),
+            };
+            Diagnostic::error(codes::ARRAY_VAR_MISUSED, message, Label::new(file, range, label))
+                .with_secondary(Label::new(
+                    file,
+                    *decl,
+                    format!("`{name}` is declared here"),
+                ))
+                .with_note(note)
+                .with_help(help)
+        }
     }
 }
+
+const VAR_TAKE_NOTE: &str = "taking an array variable hands over its array, so every path of the last expression takes it exactly once";
 
 /// `offset` が行の最初のトークンのとき、その行の字下げ。行の先頭から `offset` までが空白とタブだけなら、それをそのまま
 /// 写す。ほかの文字 (`{- c -}` や前の文) があれば、`offset` の前に行を入れられないので `None` を返す。
@@ -972,10 +1071,12 @@ fn carried_across(
         CarriedValue::FnClauseContinuation { .. } => {
             "the continuation of this `fn` clause".to_string()
         }
+        CarriedValue::VarState { name, .. } => format!("the array variable `{name}`"),
     };
     let what = match call {
         CallKind::Call => "this call",
         CallKind::Handle => "this handle",
+        CallKind::Var => "the scope of this `var`",
     };
     let operation = multi;
     let primary = match operation {
@@ -1016,6 +1117,11 @@ fn carried_across(
             *clause,
             "the continuation of this `fn` clause",
         )),
+        CarriedValue::VarState { name, decl } => diagnostic.with_secondary(Label::new(
+            file,
+            *decl,
+            format!("`{name}` holds its array until the end of its scope"),
+        )),
     };
     if let Some(op) = operation {
         let declared = &program[op];
@@ -1039,6 +1145,10 @@ fn carried_across(
         // 継続は本体の値で再開するまで生きているので、本体の中では使い終えられない
         CarriedValue::FnClauseContinuation { .. } => {
             "perform this call outside the `fn` clause".to_string()
+        }
+        // 範囲の中では変数がいつも配列を持つので、範囲の中では使い終えられない
+        CarriedValue::VarState { name, .. } => {
+            format!("perform the `multi` operation outside the scope of `{name}`")
         }
     };
     diagnostic.with_note(CARRY_NOTE).with_help(help)

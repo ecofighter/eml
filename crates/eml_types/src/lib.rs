@@ -47,6 +47,7 @@ pub mod codes {
     pub const CONTINUATION_NOT_HANDLED: ErrorCode = ErrorCode(3005);
     pub const LINEAR_VALUE_KEPT_ACROSS_MULTI: ErrorCode = ErrorCode(3006);
     pub const VAR_KIND: ErrorCode = ErrorCode(3007);
+    pub const ARRAY_VAR_MISUSED: ErrorCode = ErrorCode(3008);
     pub const TYPE_MISMATCH: ErrorCode = ErrorCode(2001);
     pub const EFFECT_NOT_IN_ROW: ErrorCode = ErrorCode(2002);
     pub const MISSING_MAIN: ErrorCode = ErrorCode(2003);

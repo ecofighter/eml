@@ -1,0 +1,22 @@
+---
+source: crates/eml_cli/tests/ui.rs
+expression: rendered
+input_file: tests/ui/check-fail/var/taken_in_a_lambda.em
+---
+[E3008] Error: the array variable `a` cannot be taken inside a function
+   ╭─[ check-fail/var/taken_in_a_lambda.em:6:29 ]
+   │
+ 6 │   (fn () -> MutArray.freeze a) ()
+   │                             ┬  
+   │                             ╰── `a` is taken here, inside a function
+   │
+   ├─[ check-fail/var/taken_in_a_lambda.em:6:29 ]
+   │
+ 4 │   var a = MutArray.make 3 0
+   │   ────────────┬────────────  
+   │               ╰────────────── `a` is declared here
+   │ 
+   │ Help: take `a` in the last expression itself, outside every function
+   │ 
+   │ Note: a function may run any number of times, so the array could be taken more than once or not at all
+───╯

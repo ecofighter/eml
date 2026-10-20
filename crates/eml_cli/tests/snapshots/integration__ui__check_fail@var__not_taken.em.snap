@@ -1,0 +1,20 @@
+---
+source: crates/eml_cli/tests/ui.rs
+expression: rendered
+input_file: tests/ui/check-fail/var/not_taken.em
+---
+[E3003] Error: the array variable `a` is not taken on this path
+   ╭─[ check-fail/var/not_taken.em:5:3 ]
+   │
+ 5 │   var a = MutArray.make 3 0
+   │   ────────────┬────────────  
+   │               ╰────────────── `a` is declared here
+   │ 
+ 7 │   ()
+   │   ─┬  
+   │    ╰── this last expression does not take `a`
+   │ 
+   │ Help: end the block with an expression that takes `a`, such as `MutArray.freeze a` or `drop a`
+   │ 
+   │ Note: taking an array variable hands over its array, so every path of the last expression takes it exactly once
+───╯

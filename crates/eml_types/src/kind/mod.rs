@@ -184,6 +184,59 @@ pub(crate) enum KindReason {
         name: String,
         ty: TypeId,
     },
+    /// 配列の変数を、ある経路で2回以上取り出した。由来の範囲は `var` の文で、`first` と `second` はその経路の1回目と
+    /// 2回目の取り出しである (docs/spec/linearity.md の「配列の変数」)。
+    VarTakenTwice {
+        name: String,
+        first: TextRange,
+        second: TextRange,
+    },
+    /// 配列の変数を、ある経路で取り出さなかった。由来の範囲は `var` の文である。
+    VarNotTaken { name: String, path: UntakenPath },
+    /// 配列の変数の、取り出しの規則に合わない使い方 (E3008)。由来の範囲はその式で、`decl` は `var` の文である。
+    ArrayVarMisused {
+        name: String,
+        decl: TextRange,
+        misuse: VarMisuse,
+    },
+}
+
+/// 配列の変数を取り出さなかった経路。E3003 の secondary が指す。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum UntakenPath {
+    /// `if` の枝、または `match` の枝の本体。
+    Branch(TextRange),
+    /// `else` のない `if`。
+    NoElse(TextRange),
+    /// どの経路でも取り出さなかった。範囲は最後の式である。
+    Last(TextRange),
+    /// ブロックが文で終わり、最後の式がない。範囲はブロックの終わりの長さ0の範囲である。
+    NoLast(TextRange),
+}
+
+impl UntakenPath {
+    fn order_key(self) -> Vec<KeyPart> {
+        let (kind, range) = match self {
+            UntakenPath::Branch(range) => (0, range),
+            UntakenPath::NoElse(range) => (1, range),
+            UntakenPath::Last(range) => (2, range),
+            UntakenPath::NoLast(range) => (3, range),
+        };
+        [vec![number(kind)], span(range)].concat()
+    }
+}
+
+/// E3008 に当たる配列の変数の使い方 (docs/spec/linearity.md の「配列の変数」)。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum VarMisuse {
+    /// 変数のブロックの最後の式の外で取り出した。
+    TakenOutsideLast,
+    /// 最後の式の中の関数 (ラムダ、局所関数、handle の本体と節、`use` の残り、セクション) で取り出した。
+    TakenInFunction,
+    /// 最後の式の中で、取り出しのほかに変数を使った。
+    UsedBesideTake,
+    /// `x := e` で代入した。
+    Assigned,
 }
 
 /// フィールドを捨てた式の種類。E3004 の言い方と help を変える。
@@ -281,6 +334,18 @@ impl KindReason {
             KindReason::VarValue { var, name, .. } => {
                 (13, vec![text(name), number(var.into_raw().into_u32())])
             }
+            KindReason::VarTakenTwice {
+                name,
+                first,
+                second,
+            } => (14, [vec![text(name)], span(*first), span(*second)].concat()),
+            KindReason::VarNotTaken { name, path } => {
+                (15, [vec![text(name)], path.order_key()].concat())
+            }
+            KindReason::ArrayVarMisused { name, decl, misuse } => (
+                16,
+                [vec![text(name)], span(*decl), vec![number(*misuse as u32)]].concat(),
+            ),
             KindReason::OperationType { name, side, lambda } => {
                 let lambda = match lambda {
                     None => vec![number(0)],
@@ -361,6 +426,9 @@ pub(crate) enum CarriedValue {
     /// `fn` の節の隠れた継続 `$k`。書き手は名前を知らないので、節の範囲で指す (docs/spec/effects.md の
     /// 「継続の多重度と持ち越し規則」)。
     FnClauseContinuation { clause: TextRange },
+    /// 配列の変数の状態。範囲の実行中は変数の handler の evidence にある (docs/spec/linearity.md の「配列の変数」)。
+    /// `decl` は `var` の文の範囲である。
+    VarState { name: String, decl: TextRange },
 }
 
 impl CarriedValue {
@@ -373,6 +441,7 @@ impl CarriedValue {
             CarriedValue::Temporary(range) => *range,
             CarriedValue::HandlerState { init } => *init,
             CarriedValue::FnClauseContinuation { clause } => *clause,
+            CarriedValue::VarState { decl, .. } => *decl,
         }
     }
 
@@ -386,6 +455,7 @@ impl CarriedValue {
             }
             CarriedValue::HandlerState { .. } => vec![number(3)],
             CarriedValue::FnClauseContinuation { .. } => vec![number(4)],
+            CarriedValue::VarState { name, .. } => vec![number(5), text(name)],
         };
         [span(self.key()), rest].concat()
     }
@@ -403,6 +473,8 @@ pub(crate) enum Across {
 pub(crate) enum CallKind {
     Call,
     Handle,
+    /// `var` の範囲。変数の handle と同じく、範囲の実行が外側の row をまたぐ。
+    Var,
 }
 
 impl CallKind {
@@ -410,6 +482,7 @@ impl CallKind {
         match self {
             CallKind::Call => vec![number(0)],
             CallKind::Handle => vec![number(1)],
+            CallKind::Var => vec![number(2)],
         }
     }
 }
@@ -448,7 +521,10 @@ impl CarriedInner {
     pub fn of(origin: &KindOrigin) -> CarriedInner {
         let label = match &origin.reason {
             KindReason::CarriedAcross {
-                value: CarriedValue::Local { name, .. } | CarriedValue::ReturnCapture { name, .. },
+                value:
+                    CarriedValue::Local { name, .. }
+                    | CarriedValue::ReturnCapture { name, .. }
+                    | CarriedValue::VarState { name, .. },
                 ..
             } => InnerLabel::Kept(name.clone()),
             KindReason::CarriedThrough { name, .. } => InnerLabel::Through(name.clone()),
@@ -640,6 +716,46 @@ mod tests {
             KindReason::DiscardedField {
                 name: "name".to_string(),
                 site: DiscardSite::Pattern,
+            },
+            across(
+                CarriedValue::VarState {
+                    name: "a".to_string(),
+                    decl: range(1, 2),
+                },
+                Some(op(0)),
+                CallKind::Var,
+            ),
+            across(local("f", 1), Some(op(0)), CallKind::Var),
+            KindReason::VarTakenTwice {
+                name: "a".to_string(),
+                first: range(1, 2),
+                second: range(3, 4),
+            },
+            KindReason::VarNotTaken {
+                name: "a".to_string(),
+                path: UntakenPath::Branch(range(1, 2)),
+            },
+            KindReason::VarNotTaken {
+                name: "a".to_string(),
+                path: UntakenPath::NoElse(range(1, 2)),
+            },
+            KindReason::VarNotTaken {
+                name: "a".to_string(),
+                path: UntakenPath::Last(range(1, 2)),
+            },
+            KindReason::VarNotTaken {
+                name: "a".to_string(),
+                path: UntakenPath::NoLast(range(1, 1)),
+            },
+            KindReason::ArrayVarMisused {
+                name: "a".to_string(),
+                decl: range(1, 2),
+                misuse: VarMisuse::TakenOutsideLast,
+            },
+            KindReason::ArrayVarMisused {
+                name: "a".to_string(),
+                decl: range(1, 2),
+                misuse: VarMisuse::Assigned,
             },
         ]
     }

@@ -7,21 +7,27 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use eml_diagnostics::{FileId, TextRange, TextSize};
 use eml_hir::{
     Body, ClauseSource, Closure, ConstructorId, ExprId, ExprKind, IndexBase, LocalFunction,
-    LocalGroup, LocalId, PatId, PatKind, Program, Res, Segment, Stmt,
+    LocalGroup, LocalId, PatId, PatKind, Program, Res, Segment, Stmt, VarId,
 };
 
-use crate::FieldTarget;
 use crate::check::BodyTyping;
 use crate::diverge::diverging_call;
-use crate::kind::{Bound, DiscardSite, KindOrigin, KindReason, Provenance, Span, UnusedPath};
+use crate::kind::{
+    Bound, DiscardSite, KindOrigin, KindReason, Provenance, Span, UntakenPath, UnusedPath,
+    VarMisuse,
+};
 use crate::store::TypeStore;
 use crate::table::{Exporter, Table};
 use crate::ty::Linearity;
+use crate::{FieldTarget, VarClass};
 
 /// 制御フローの経路ごとの変数の使い方。
 #[derive(Debug, Default)]
 struct Uses {
     locals: HashMap<LocalId, Use>,
+    /// 配列の変数の取り出し。取り出しは、範囲の中にある線形な局所変数の消費と同じく経路ごとに数える
+    /// (docs/spec/linearity.md の「配列の変数」)。
+    takes: HashMap<VarId, Use>,
     /// すべての経路が戻らない呼び出しで終わるときの、経路ごとに評価の順で最初の呼び出し。戻る経路があれば空である。
     /// 後ろの呼び出しには実行が届かないので、手放すのは最初の呼び出しの前だけにする
     /// (docs/spec/linearity.md の「戻らない経路の検査」)。
@@ -42,7 +48,7 @@ impl FromIterator<(LocalId, Use)> for Uses {
     fn from_iter<I: IntoIterator<Item = (LocalId, Use)>>(locals: I) -> Uses {
         Uses {
             locals: locals.into_iter().collect(),
-            diverges: Vec::new(),
+            ..Uses::default()
         }
     }
 }
@@ -119,6 +125,18 @@ pub(crate) fn constrain(
     for locals in by_name.values_mut() {
         locals.sort_by_key(|&local| body.locals[local].range.start());
     }
+    let mut lasts: HashMap<ExprId, Vec<VarId>> = HashMap::new();
+    for (_, expr) in body.exprs.iter() {
+        if let ExprKind::Var {
+            var,
+            last: Some(last),
+            ..
+        } = expr.kind
+            && typing.var_classes.get(var) == Some(&VarClass::Array)
+        {
+            lasts.entry(last).or_default().push(var);
+        }
+    }
     let mut usage = Usage {
         program,
         file,
@@ -131,6 +149,10 @@ pub(crate) fn constrain(
         scopes: HashMap::new(),
         omitted_states: HashSet::new(),
         implicit_drops: HashMap::new(),
+        lasts,
+        inside: HashMap::new(),
+        depth: 0,
+        misused: HashSet::new(),
     };
     let uses = usage.expr(body.root);
     for &param in &body.params {
@@ -176,6 +198,14 @@ struct Usage<'a, 'c> {
     omitted_states: HashSet<PatId>,
     /// 戻らない呼び出しの前で暗黙に手放す変数 (`BodyTypes::implicit_drops`)。数えられる本体でだけ記録する。
     implicit_drops: HashMap<ExprId, Vec<LocalId>>,
+    /// 配列の変数のブロックの最後の式から、その変数への対応。同じブロックの変数は同じ式を指す。
+    lasts: HashMap<ExprId, Vec<VarId>>,
+    /// 今たどっている最後の式の変数と、その最後の式に入ったときの `depth`。
+    inside: HashMap<VarId, u32>,
+    /// 入れ子になった関数 (ラムダ、局所関数、handle の本体と節) の深さ。取り出しは最後の式と同じ深さでだけ許す。
+    depth: u32,
+    /// E3008 を出した変数。取り出しの回数の誤りを重ねて出さない。
+    misused: HashSet<VarId>,
 }
 
 impl<'a> Usage<'a, '_> {
@@ -190,6 +220,20 @@ impl<'a> Usage<'a, '_> {
     }
 
     fn expr(&mut self, id: ExprId) -> Uses {
+        let Some(vars) = self.lasts.get(&id).cloned() else {
+            return self.expr_kind(id);
+        };
+        for &var in &vars {
+            self.inside.insert(var, self.depth);
+        }
+        let uses = self.expr_kind(id);
+        for var in vars {
+            self.inside.remove(&var);
+        }
+        uses
+    }
+
+    fn expr_kind(&mut self, id: ExprId) -> Uses {
         let body = self.body;
         let at = body.exprs[id].range;
         match &body.exprs[id].kind {
@@ -298,7 +342,7 @@ impl<'a> Usage<'a, '_> {
                 if let Some(init) = init {
                     uses = self.expr(*init);
                 }
-                let inner = self.expr(handled.body);
+                let inner = self.nested(handled.body);
                 let captured = self.captured_once(handled, inner, body.exprs[handled.body].range);
                 sequence(&mut uses, captured);
                 if ret.source == ClauseSource::Omitted
@@ -306,14 +350,14 @@ impl<'a> Usage<'a, '_> {
                 {
                     self.omitted_states.insert(state);
                 }
-                let inner = self.expr(ret.closure.body);
+                let inner = self.nested(ret.closure.body);
                 let captured =
                     self.captured_once(&ret.closure, inner, body.exprs[ret.closure.body].range);
                 sequence(&mut uses, captured);
                 let mut clause_captures: BTreeMap<LocalId, TextRange> = BTreeMap::new();
                 for clause in clauses {
                     let clause_body = clause.closure.body;
-                    let mut inner = self.expr(clause_body);
+                    let mut inner = self.nested(clause_body);
                     for &pat in &clause.closure.params {
                         if Some(pat) == clause.k() {
                             self.check_continuation(pat, &inner, clause.range, clause_body);
@@ -382,17 +426,134 @@ impl<'a> Usage<'a, '_> {
             }
             ExprKind::Drop(value) => self.expr(*value),
             ExprKind::Lambda(closure) => self.closure(id, closure, &[]).0,
-            // 変数は局所変数ではないので、部分式を評価の順に数える (docs/spec/expressions.md の「`var`」)
-            ExprKind::Var { init, body, .. } => self.in_order([*init, *body].into_iter()),
-            ExprKind::VarGet(_) => Uses::new(),
-            ExprKind::Assign { value, .. } => self.expr(*value),
-            ExprKind::IndexAssign { index, value, .. } => {
+            ExprKind::Var {
+                var,
+                init,
+                body: scope,
+                last,
+            } => {
+                let mut uses = self.expr(*init);
+                let mut inner = self.expr(*scope);
+                if self.is_array(*var) {
+                    self.check_take(*var, &mut inner, *scope, *last);
+                }
+                sequence(&mut uses, inner);
+                uses
+            }
+            ExprKind::VarGet(var) => {
+                if !self.is_array(*var) {
+                    return Uses::new();
+                }
+                match self.inside.get(var) {
+                    Some(&depth) if depth == self.depth => Uses {
+                        takes: HashMap::from([(*var, Use::once(at))]),
+                        ..Uses::default()
+                    },
+                    Some(_) => self.misuse(*var, at, VarMisuse::TakenInFunction),
+                    None => self.misuse(*var, at, VarMisuse::TakenOutsideLast),
+                }
+            }
+            ExprKind::Assign { var, value } => {
+                if self.is_array(*var) {
+                    self.misuse(*var, at, VarMisuse::Assigned);
+                }
+                self.expr(*value)
+            }
+            ExprKind::IndexAssign { var, index, value } => {
+                self.beside_take(*var, at);
                 self.in_order([*index, *value].into_iter())
             }
             ExprKind::Index { base, index } => match base {
-                IndexBase::Var(_) => self.expr(*index),
+                IndexBase::Var(var) => {
+                    self.beside_take(*var, at);
+                    self.expr(*index)
+                }
                 IndexBase::Expr(base) => self.in_order([*base, *index].into_iter()),
             },
+        }
+    }
+
+    /// 持ち上げる関数 (ラムダ、局所関数、handle の本体と節) の本体。中の取り出しは最後の式の中でも E3008 にする
+    /// (docs/spec/linearity.md の「配列の変数」)。中で宣言した変数の取り出しは、その `var` のノードで数え終えている。
+    fn nested(&mut self, root: ExprId) -> Uses {
+        self.depth += 1;
+        let uses = self.expr(root);
+        self.depth -= 1;
+        debug_assert!(
+            uses.takes.is_empty(),
+            "a function takes no outer array variable"
+        );
+        uses
+    }
+
+    fn is_array(&self, var: VarId) -> bool {
+        self.typing.var_classes.get(var) == Some(&VarClass::Array)
+    }
+
+    /// 最後の式の中では、配列の変数を取り出すほかに使えない。取り出しは変数を空の配列に替えるためである
+    /// (docs/spec/linearity.md の「配列の変数」)。
+    fn beside_take(&mut self, var: VarId, at: TextRange) {
+        if self.is_array(var) && self.inside.contains_key(&var) {
+            self.misuse(var, at, VarMisuse::UsedBesideTake);
+        }
+    }
+
+    fn misuse(&mut self, var: VarId, at: TextRange, misuse: VarMisuse) -> Uses {
+        self.misused.insert(var);
+        let data = &self.body.vars[var];
+        let reason = KindReason::ArrayVarMisused {
+            name: data.name.clone(),
+            decl: data.range,
+            misuse,
+        };
+        self.array_var_error(var, at, reason);
+        Uses::new()
+    }
+
+    /// 範囲を数え終える。取り出しは経路ごとにちょうど1回で、戻らない呼び出しで終わる経路は取り出さなくてよい。
+    /// 状態の配列は、変数の handle が中断の経路で捨てるので、暗黙の後始末に記録しない
+    /// (docs/spec/linearity.md の「配列の変数」)。
+    fn check_take(&mut self, var: VarId, uses: &mut Uses, scope: ExprId, last: Option<ExprId>) {
+        let used = uses.takes.remove(&var).unwrap_or_default();
+        if self.misused.contains(&var) {
+            return;
+        }
+        let data = &self.body.vars[var];
+        let name = data.name.clone();
+        let decl = data.range;
+        let reason = if used.max >= 2 {
+            KindReason::VarTakenTwice {
+                name,
+                first: used.first.expect("a taken variable has a first take"),
+                second: used
+                    .second
+                    .expect("a variable taken twice on some path has a second take"),
+            }
+        } else if used.min == 0 {
+            if used.max == 0 && !uses.diverges.is_empty() {
+                return;
+            }
+            let range = |id: ExprId| self.body.exprs[id].range;
+            let path = match (last, used.missing) {
+                (None, _) => UntakenPath::NoLast(TextRange::empty(self.scope_end(scope))),
+                (Some(_), Some(Missing::Branch(branch))) => UntakenPath::Branch(range(branch)),
+                (Some(_), Some(Missing::NoElse(if_expr))) => UntakenPath::NoElse(range(if_expr)),
+                (Some(last), None) => UntakenPath::Last(range(last)),
+            };
+            KindReason::VarNotTaken { name, path }
+        } else {
+            return;
+        };
+        self.array_var_error(var, decl, reason);
+    }
+
+    /// 配列の変数の型は `MutArray` で、いつも `Lin` である。`Unr` の制約はかならず破れ、`reason` のとおりに報告される。
+    fn array_var_error(&mut self, var: VarId, at: TextRange, reason: KindReason) {
+        if let Some(scope) = self.typing.vars.get(var) {
+            let ty = scope.ty;
+            self.with_origin(at, reason, |table| {
+                table.kind_at_most(ty, Bound::Const(Linearity::Unr))
+            });
         }
     }
 
@@ -474,7 +635,7 @@ impl<'a> Usage<'a, '_> {
             params,
             body: lambda_body,
         } = closure;
-        let mut inner = self.expr(*lambda_body);
+        let mut inner = self.nested(*lambda_body);
         for &param in params {
             self.check_pat(param, &inner, *lambda_body);
             remove_bound(body, param, &mut inner);
@@ -708,33 +869,33 @@ impl<'a> Usage<'a, '_> {
                     }
                     None => Use::unused(*path),
                 };
-                joined = Some(match joined {
-                    None => used,
-                    Some(j) => {
-                        let min = j.min.min(used.min);
-                        let (first, second) = if used.max > j.max {
-                            (used.first, used.second)
-                        } else {
-                            (j.first, j.second)
-                        };
-                        let missing = match (min, j.min) {
-                            (0, 0) => j.missing,
-                            (0, _) => used.missing,
-                            _ => None,
-                        };
-                        Use {
-                            min,
-                            max: j.max.max(used.max),
-                            first,
-                            second,
-                            missing,
-                        }
-                    }
-                });
+                joined = Some(either(joined, used));
             }
             out.locals.insert(
                 local,
                 joined.expect("a local of some branch is used on that branch"),
+            );
+        }
+        let mut vars: Vec<VarId> = branches
+            .iter()
+            .flat_map(|(uses, _)| uses.takes.keys().copied())
+            .collect();
+        vars.sort();
+        vars.dedup();
+        for var in vars {
+            let mut joined: Option<Use> = None;
+            for (uses, path) in &branches {
+                let used = match uses.takes.get(&var) {
+                    Some(&used) => used,
+                    // 戻らない枝は取り出さなくてよい。状態の配列は変数の handle が捨てるので、手放す記録もしない
+                    None if !uses.diverges.is_empty() => continue,
+                    None => Use::unused(*path),
+                };
+                joined = Some(either(joined, used));
+            }
+            out.takes.insert(
+                var,
+                joined.expect("a variable of some branch is taken on that branch"),
             );
         }
         if branches.iter().all(|(uses, _)| !uses.diverges.is_empty()) {
@@ -907,23 +1068,55 @@ fn sequence(uses: &mut Uses, next: Uses) {
         uses.diverges = next.diverges;
     }
     for (local, b) in next.locals {
-        let a = uses.locals.entry(local).or_default();
-        let min = (a.min + b.min).min(2);
-        let max = (a.max + b.max).min(2);
-        let second = a
-            .second
-            .or(if a.first.is_some() { b.first } else { None })
-            .or(b.second);
-        *a = Use {
-            min,
-            max,
-            first: a.first.or(b.first),
-            second,
-            missing: if min == 0 {
-                a.missing.or(b.missing)
-            } else {
-                None
-            },
-        };
+        then(uses.locals.entry(local).or_default(), b);
     }
+    for (var, b) in next.takes {
+        then(uses.takes.entry(var).or_default(), b);
+    }
+}
+
+/// 分岐の2つの枝の使い方を合わせる。使った位置は回数の多い枝から取り、使わなかった経路は前の枝から取る。
+fn either(joined: Option<Use>, used: Use) -> Use {
+    let Some(j) = joined else {
+        return used;
+    };
+    let min = j.min.min(used.min);
+    let (first, second) = if used.max > j.max {
+        (used.first, used.second)
+    } else {
+        (j.first, j.second)
+    };
+    let missing = match (min, j.min) {
+        (0, 0) => j.missing,
+        (0, _) => used.missing,
+        _ => None,
+    };
+    Use {
+        min,
+        max: j.max.max(used.max),
+        first,
+        second,
+        missing,
+    }
+}
+
+/// 続けて実行する2つの部分のうち、後の部分の使い方 `b` を前の部分の使い方 `a` に足す。
+fn then(a: &mut Use, b: Use) {
+    let min = (a.min + b.min).min(2);
+    let max = (a.max + b.max).min(2);
+    let second = a
+        .second
+        .or(if a.first.is_some() { b.first } else { None })
+        .or(b.second);
+    *a = Use {
+        min,
+        max,
+        first: a.first.or(b.first),
+        second,
+        missing: if min == 0 {
+            a.missing.or(b.missing)
+        } else {
+            None
+        },
+    };
 }
