@@ -166,24 +166,30 @@ fn an_arrow_followed_by_an_angle_is_split() {
     assert_eq!(kinds("a --><  b"), ["LIDENT", "OP", "LIDENT"]);
 }
 
+/// 代入は `<-` で書くので、`:=` は `:` で始まるほかの並びと同じく、コンストラクタの演算子である
+/// (docs/spec/lexical.md の「演算子」)。
 #[test]
-fn colon_eq_is_reserved() {
+fn colon_eq_is_a_constructor_operator() {
     assert_eq!(
-        kinds("x := 1 :: xs : T"),
+        kinds("x <- 1 :: xs : T"),
         [
-            "LIDENT", "COLON_EQ", "INT", "CONOP", "LIDENT", "COLON", "UIDENT"
+            "LIDENT",
+            "LEFT_ARROW",
+            "INT",
+            "CONOP",
+            "LIDENT",
+            "COLON",
+            "UIDENT"
         ]
     );
+    assert_eq!(kinds("a := b"), ["LIDENT", "CONOP", "LIDENT"]);
 }
 
-/// `:=` で始まる演算子の並びは、`-><` と同じく `:=` と残りに分けて切る (docs/spec/lexical.md の「演算子」)。
+/// `<-` で始まる長い並びは、1つの演算子のまま切る。`<->` のような演算子を定義できるようにするためである。
 #[test]
-fn a_colon_eq_run_is_split() {
-    assert_eq!(kinds(":=-1"), ["COLON_EQ", "MINUS", "INT"]);
-    assert_eq!(kinds("x :=-1"), ["LIDENT", "COLON_EQ", "MINUS", "INT"]);
-    assert_eq!(kinds("a :=> b"), ["LIDENT", "COLON_EQ", "OP", "LIDENT"]);
-    // `:` で始まる他の並びは、今までどおりコンストラクタの演算子である
-    assert_eq!(kinds("a :+= b"), ["LIDENT", "CONOP", "LIDENT"]);
+fn a_left_arrow_run_stays_one_operator() {
+    assert_eq!(kinds("a <-> b"), ["LIDENT", "OP", "LIDENT"]);
+    assert_eq!(kinds("x <- -1"), ["LIDENT", "LEFT_ARROW", "MINUS", "INT"]);
 }
 
 #[test]

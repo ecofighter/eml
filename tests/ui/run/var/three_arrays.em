@@ -5,9 +5,9 @@ build n =
   var b = MutArray.make n 0
   var c = MutArray.make n 0
   for 0 n (fn i ->
-    a[i] := i
-    b[i] := i * i)
-  for 0 n (fn i -> c[i] := a[i] + b[i])
+    a[i] <- i
+    b[i] <- i * i)
+  for 0 n (fn i -> c[i] <- a[i] + b[i])
   (MutArray.freeze a, MutArray.freeze b, MutArray.freeze c)
 
 main : Unit -> <IO, Panic> Unit

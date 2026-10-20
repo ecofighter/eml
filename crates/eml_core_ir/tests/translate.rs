@@ -3503,7 +3503,7 @@ main () =
 /// 末尾の `resume` で終わる。変数の使いは操作の `perform` である (docs/spec/core-ir.md の「`var` の変換」)。
 #[test]
 fn a_var_lowers_to_a_handle() {
-    let text = "main : Unit -> <IO, Panic> Unit\nmain () =\n  var x = 1\n  x := x + 1\n  println (show x)\n";
+    let text = "main : Unit -> <IO, Panic> Unit\nmain () =\n  var x = 1\n  x <- x + 1\n  println (show x)\n";
     insta::assert_snapshot!(core_text(text, Pass::Translate), @r#"
     effect Prelude.IO { never io_failed(enum, obj) -> never }
     effect Prelude.Panic { never panicked(obj) -> never }

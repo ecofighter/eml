@@ -511,12 +511,12 @@ impl Printer<'_> {
             }
             ExprKind::VarGet(var) => var_name(body, *var),
             ExprKind::Assign { var, value } => format!(
-                "({} := {})",
+                "({} <- {})",
                 var_name(body, *var),
                 self.expr(body, *value, indent)
             ),
             ExprKind::IndexAssign { var, index, value } => format!(
-                "({}[{}] := {})",
+                "({}[{}] <- {})",
                 var_name(body, *var),
                 self.expr(body, *index, indent),
                 self.expr(body, *value, indent)

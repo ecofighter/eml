@@ -2,5 +2,5 @@
 main : Unit -> <IO, Panic> Unit
 main () =
   var n = 1
-  n[0] := 2
+  n[0] <- 2
   println "\{n}"

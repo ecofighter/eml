@@ -290,8 +290,8 @@ box の挿入が足す変数の印は、[LIR](lir.md) の「box の挿入」に�
   - `write` は `Std.MutArray.write` の行で書き、`resume k((), st2)` である
 - `return` の節は値と状態を受けて値を返す。`Unr` の変数は状態を捨てる。配列の変数は残った状態を `drop` してから返す
 - 変数を使う所は、どれも L の `perform` にする。型検査は変数の使いを閉じた row で含めるので、ほかの操作の `perform` と同じく `mask` を記録しない
-  - `x` は、`Unr` の変数なら `get` を、配列の変数なら `take` を `perform` する。`x := e` は、`e` を評価してから `set` を `perform` する
-  - 配列の変数の `x[i]` は `i` を評価し、`length` を `perform` し、`extern Prelude.check_index(i, n)` で範囲を確かめてから、`read(i)` を `perform` する。`x[i] := e` は `i`、`e` の順に評価し、同じく範囲を確かめてから `write(i, v)` を `perform` する。`check_index` の位置は添字のノードの先頭である
+  - `x` は、`Unr` の変数なら `get` を、配列の変数なら `take` を `perform` する。`x <- e` は、`e` を評価してから `set` を `perform` する
+  - 配列の変数の `x[i]` は `i` を評価し、`length` を `perform` し、`extern Prelude.check_index(i, n)` で範囲を確かめてから、`read(i)` を `perform` する。`x[i] <- e` は `i`、`e` の順に評価し、同じく範囲を確かめてから `write(i, v)` を `perform` する。`check_index` の位置は添字のノードの先頭である
   - `Array` の値の添字 (`IndexTarget::Array`) は、左側が変数なら `get` を `perform` し、式なら評価してから、`i` を評価し、`Std.Array.get` の行を直接呼ぶ。そのため `Std.Array` を読み込まなくてよい
 - 範囲の外の `Panic` は、使う所の `check_index` が起こし、節の中では起こらない。節の入口は状態を evidence から取り出してから本体を動かすので、節の中で `Panic` が起こると、範囲の内側の `try_panic` が捕まえた後に変数の状態が失われるためである。`Panic` は使う所から起こるので、使う所に最も近い `try_panic` に届く。特殊化した版でも同じである。`check_index` の結果を `Unit` にするのは、戻らない呼び出しの前の `drop` (上の「戻らない呼び出しの前の `drop`」) を translate が置かずに済むようにするためである
 - 節の入口の形は EP の規則のままにする。`read` と `write` の節は `Panics` の extern を呼ぶので under の形になる (下の「`perform` と節の3つの形」) が、範囲は確かめてあるので中断しない

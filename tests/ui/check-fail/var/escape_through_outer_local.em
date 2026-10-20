@@ -3,5 +3,5 @@ main : Unit -> <IO> Unit
 main () =
   var f = fn () -> 0
   var x = 1
-  f := fn () -> x
+  f <- fn () -> x
   println "done"

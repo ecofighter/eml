@@ -2,12 +2,12 @@
 main : Unit -> <IO, Panic> Unit
 main () =
   var n = 0
-  let bump k = n := n + k
+  let bump k = n <- n + k
   bump 3
   bump 4
   let go i =
     if i < 5 then
-      n := n + i
+      n <- n + i
       go (i + 1)
     else ()
   go 0

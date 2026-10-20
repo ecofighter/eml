@@ -85,7 +85,7 @@ run_heap : (forall h. Unit -> <Heap h | e> a) -> <e> a
 
 | やりたいこと | 書き方 |
 |---|---|
-| `Lin` の値を書き換えたい | `Ref` を使わず、値を線形に受け渡す。一意なので、Perceus の reuse でその場の書き換えにコンパイルできる (例: `Lin` の `MutArray` の `write : MutArray a -> Int -> a -> MutArray a`)。S14c-3 からは、`MutArray` を `var` に入れれば、受け渡しを書かずに `a[i] := e` と書ける。変数の状態は handler が持ち、受け渡しは状態を渡す形の特殊化が作る |
+| `Lin` の値を書き換えたい | `Ref` を使わず、値を線形に受け渡す。一意なので、Perceus の reuse でその場の書き換えにコンパイルできる (例: `Lin` の `MutArray` の `write : MutArray a -> Int -> a -> MutArray a`)。S14c-3 からは、`MutArray` を `var` に入れれば、受け渡しを書かずに `a[i] <- e` と書ける。変数の状態は handler が持ち、受け渡しは状態を渡す形の特殊化が作る |
 | 一つのリソースを色々な場所から使いたい | リソースを handler に持たせる。handler が所有して操作を提供し、`return` 節で後始末する。構文としては [式](../spec/expressions.md) の「パラメータ付き handler」が基本になる |
 | 一意性だけが理由の `Lin` (後始末のない可変バッファなど) を、使い終わったら共有したい | 型ごとに `freeze` を用意する (例: `freeze : MutArray a -> Array a`)。後始末を持つ型には定義しない |
 

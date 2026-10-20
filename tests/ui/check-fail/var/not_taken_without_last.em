@@ -2,7 +2,7 @@
 fill : Unit -> <Panic> Unit
 fill () =
   var a = MutArray.make 3 0
-  a[0] := 1
+  a[0] <- 1
   let n = a[0]
 
 main : Unit -> <IO, Panic> Unit

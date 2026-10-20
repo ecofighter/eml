@@ -36,7 +36,7 @@ fn var_named<'b>(body: &'b Body, name: &str) -> (VarId, &'b Var) {
 
 #[test]
 fn a_var_scopes_the_rest_of_the_block() {
-    let text = "g : Int -> Unit\ng _ = ()\n\nf : Unit -> Int\nf () =\n  g 0\n  var x = 1\n  g x\n  x := 2\n  x";
+    let text = "g : Int -> Unit\ng _ = ()\n\nf : Unit -> Int\nf () =\n  g 0\n  var x = 1\n  g x\n  x <- 2\n  x";
     insta::assert_snapshot!(lower_text(text), @"
     var effect var$0$x = x#v0 in f
     g : Int -> Unit
@@ -46,7 +46,7 @@ fn a_var_scopes_the_rest_of_the_block() {
       (@g 0)
       (var x#v0 = 1 in {
         (@g x#v0)
-        (x#v0 := 2)
+        (x#v0 <- 2)
         x#v0
       })
     }
@@ -164,7 +164,7 @@ fn a_var_makes_one_effect_per_site() {
 
 #[test]
 fn uses_lower_to_var_nodes() {
-    let text = "f : Int -> Int\nf i =\n  var a = i\n  var n : Int = 0\n  n := a[i]\n  a[i] := n\n  let g = fn () -> n\n  let n = 5\n  n";
+    let text = "f : Int -> Int\nf i =\n  var a = i\n  var n : Int = 0\n  n <- a[i]\n  a[i] <- n\n  let g = fn () -> n\n  let n = 5\n  n";
     insta::assert_snapshot!(lower_text(text), @"
     var effect var$0$a = a#v0 in f
     var effect var$1$n = n#v1 in f
@@ -172,8 +172,8 @@ fn uses_lower_to_var_nodes() {
     f i#0 = {
       (var a#v0 = i#0 in {
         (var n#v1 : Int = 0 in {
-          (n#v1 := a#v0[i#0])
-          (a#v0[i#0] := n#v1)
+          (n#v1 <- a#v0[i#0])
+          (a#v0[i#0] <- n#v1)
           let g#1 = (fn () -> n#v1)
           let n#2 = 5
           n#2
@@ -199,7 +199,7 @@ fn a_var_init_sees_the_outer_binding() {
 
 #[test]
 fn a_non_var_assignment_target_is_e1053() {
-    let text = "f : Int -> Int\nf x =\n  let y = 1\n  y := 1\n  f x := 1\n  y[0] := 2\n  x";
+    let text = "f : Int -> Int\nf x =\n  let y = 1\n  y <- 1\n  f x <- 1\n  y[0] <- 2\n  x";
     insta::assert_snapshot!(diagnostics(text).join("\n"), @"
     E1053 4:3 only a `var` variable or an index of one can be assigned
     E1053 5:3 only a `var` variable or an index of one can be assigned

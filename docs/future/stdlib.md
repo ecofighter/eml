@@ -33,5 +33,5 @@
 - 並行処理のライブラリ: `Async` の handler、`spawn`、channel
 - 並行処理用の共有の可変状態: channel や atomic な参照などのプリミティブを、`IO` か `Async` の側に用意する。`Heap` では、並行タスクの間で共有する可変状態を書けないため
 - `freeze`: 一意性だけが理由の `Lin` な型 (後始末のない可変バッファなど) には、型ごとに `freeze` を用意する (例: `freeze : MutArray a -> Array a`)。後始末を持つ型には定義しない
-- 配列: `Array a` と `Bytes` は意味が不変の値で、RC が 1 ならその場で書き換える (`Array` は S14c-1 で入れた、`Bytes` はバイト列とハンドルの項目)。写しが起きないことを型で保証する `Lin` の `MutArray` も S14c-1 で入れた。`write : MutArray a -> Int -> a -> <Panic> MutArray a` のように値を線形に受け渡す API を持つ ([標準ライブラリ](../spec/stdlib.md) の「`Std.MutArray`」)。S14c-3 で、`MutArray` を `var` に入れて `a[i]` と `a[i] := e` で読み書きする書き方を入れた ([式](../spec/expressions.md) の「`var`」)。範囲外の添字は、`Std.MutArray.read` と同じ文言の `Panic` になる。並列の書き換えのための分割と結合のプリミティブは、マルチコア対応で足す
+- 配列: `Array a` と `Bytes` は意味が不変の値で、RC が 1 ならその場で書き換える (`Array` は S14c-1 で入れた、`Bytes` はバイト列とハンドルの項目)。写しが起きないことを型で保証する `Lin` の `MutArray` も S14c-1 で入れた。`write : MutArray a -> Int -> a -> <Panic> MutArray a` のように値を線形に受け渡す API を持つ ([標準ライブラリ](../spec/stdlib.md) の「`Std.MutArray`」)。S14c-3 で、`MutArray` を `var` に入れて `a[i]` と `a[i] <- e` で読み書きする書き方を入れた ([式](../spec/expressions.md) の「`var`」)。範囲外の添字は、`Std.MutArray.read` と同じ文言の `Panic` になる。並列の書き換えのための分割と結合のプリミティブは、マルチコア対応で足す
 - `trace` は用意しない: row に現れないデバッグ出力の抜け道は作らない

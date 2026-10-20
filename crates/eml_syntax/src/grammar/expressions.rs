@@ -259,7 +259,7 @@ pub(super) fn expr(p: &mut Parser) -> bool {
     nested(p, true, expr_inner)
 }
 
-/// `:=` は優先順位が最も低いので、`expr` の段でだけ読む。括弧の中の `op_expr` には現れない
+/// 代入の `<-` は優先順位が最も低いので、`expr` の段でだけ読む。括弧の中の `op_expr` には現れない
 /// (docs/spec/grammar.md の `expr`)。
 fn expr_inner(p: &mut Parser) -> bool {
     if p.at_ts(EXPR_FORMS) {
@@ -271,8 +271,9 @@ fn expr_inner(p: &mut Parser) -> bool {
         m.abandon(p);
         return false;
     }
-    if p.at(COLON_EQ) {
-        assignment_value(p);
+    if p.at(LEFT_ARROW) {
+        p.bump(LEFT_ARROW);
+        arrow_value(p, "the value of an assignment cannot contain `<-`");
         m.complete(p, ASSIGN_EXPR);
     } else {
         m.abandon(p);
@@ -291,7 +292,7 @@ fn expr_form(p: &mut Parser) {
     }
 }
 
-/// `expr` と同じく1段に数えて読むが、`:=` を取り込まない。
+/// `expr` と同じく1段に数えて読むが、代入の `<-` を取り込まない。
 fn expr_without_assignment(p: &mut Parser) -> bool {
     nested(p, true, |p| {
         if p.at_ts(EXPR_FORMS) {
@@ -303,27 +304,21 @@ fn expr_without_assignment(p: &mut Parser) -> bool {
     })
 }
 
-/// 行末の `:=` はブロックを開くので、右辺は `body` と同じく、ブロックか式である。ブロックの中の文の `:=` は
-/// それぞれの文の代入である。右辺の式の続きに書いた `:=` は誤りにして、その後ろを `ERROR` に入れる
-/// (docs/spec/grammar.md の `expr`)。
-fn assignment_value(p: &mut Parser) {
-    p.bump(COLON_EQ);
-    if p.at(LAYOUT_OPEN) {
-        body(p);
-        return;
-    }
+/// `<-` の右辺を読む。代入でも `use` でも、`<-` は左辺が右辺から値を受け取る意味だけに使うので、右辺の式の続きに
+/// 書いた `<-` は誤りにして、その後ろを `ERROR` に入れる (docs/spec/grammar.md の `expr`)。
+fn arrow_value(p: &mut Parser, message: &str) {
     if !expr_without_assignment(p) {
         expected(p, "an expression");
         return;
     }
-    if p.at(COLON_EQ) {
+    if p.at(LEFT_ARROW) {
         p.error(
             codes::SYNTAX_ERROR,
-            "the value of an assignment cannot contain `:=`",
+            message,
             "write each assignment as its own statement",
         );
         let rest = p.start();
-        p.bump(COLON_EQ);
+        p.bump(LEFT_ARROW);
         expr(p);
         rest.complete(p, ERROR);
     }
@@ -938,7 +933,11 @@ fn use_stmt(p: &mut Parser) {
         if !patterns::pattern(p) {
             expected(p, "a pattern");
         }
-        expect(p, LEFT_ARROW);
+        if expect(p, LEFT_ARROW) {
+            arrow_value(p, "the value of a `use` cannot contain `<-`");
+            m.complete(p, USE_STMT);
+            return;
+        }
     }
     if !expr(p) {
         expected(p, "an expression");

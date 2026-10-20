@@ -12,9 +12,9 @@ fannkuch n =
   var done = False
   while (fn () -> not done) (fn () ->
     while (fn () -> r != 1) (fn () ->
-      count[r - 1] := r
-      r := r - 1)
-    for 0 n (fn i -> perm[i] := perm1[i])
+      count[r - 1] <- r
+      r <- r - 1)
+    for 0 n (fn i -> perm[i] <- perm1[i])
     var flips = 0
     var k = perm[0]
     while (fn () -> k != 0) (fn () ->
@@ -22,27 +22,27 @@ fannkuch n =
       var hi = k
       while (fn () -> lo < hi) (fn () ->
         let t = perm[lo]
-        perm[lo] := perm[hi]
-        perm[hi] := t
-        lo := lo + 1
-        hi := hi - 1)
-      flips := flips + 1
-      k := perm[0])
-    if flips > max_flips then max_flips := flips
-    checksum := checksum + (if parity % 2 == 0 then flips else 0 - flips)
+        perm[lo] <- perm[hi]
+        perm[hi] <- t
+        lo <- lo + 1
+        hi <- hi - 1)
+      flips <- flips + 1
+      k <- perm[0])
+    if flips > max_flips then max_flips <- flips
+    checksum <- checksum + (if parity % 2 == 0 then flips else 0 - flips)
     var more = True
     while (fn () -> more) (fn () ->
       if r == n then
-        done := True
-        more := False
+        done <- True
+        more <- False
       else
         let perm0 = perm1[0]
-        for 0 r (fn i -> perm1[i] := perm1[i + 1])
-        perm1[r] := perm0
-        count[r] := count[r] - 1
-        if count[r] > 0 then more := False
-        else r := r + 1)
-    parity := parity + 1)
+        for 0 r (fn i -> perm1[i] <- perm1[i + 1])
+        perm1[r] <- perm0
+        count[r] <- count[r] - 1
+        if count[r] > 0 then more <- False
+        else r <- r + 1)
+    parity <- parity + 1)
   report n (MutArray.freeze perm1) (MutArray.freeze perm) (MutArray.freeze count) checksum max_flips
 
 -- 3本の配列を受け取って捨て、結果を書く

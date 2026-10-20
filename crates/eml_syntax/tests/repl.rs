@@ -261,19 +261,18 @@ fn a_block_opening_last_token_continues() {
     }
 }
 
-/// 規則 2。行末の `:=` も `=` と同じくブロックを開く。
+/// 行末の `<-` はブロックの開始トークンではないので、その行で入力が終わる (docs/spec/layout.md の「REPL の入力の終わり」)。
 #[test]
-fn a_line_final_colon_eq_continues() {
-    incomplete("x :=");
-    incomplete("a[i] :=\n");
-    complete("x := 1");
+fn a_line_final_left_arrow_ends_the_input() {
+    complete("x <-");
+    complete("x <- 1");
 }
 
-/// `:=` は予約記号なので、`x := 1` は演算子の等式ではなく、式の入力である。
+/// `<-` は予約記号なので、`x <- 1` は演算子の等式ではなく、式の入力である。
 #[test]
 fn an_assignment_is_an_expression_input() {
-    assert_eq!(kind("x := 1"), REPL_EXPR);
-    assert_eq!(kind("a[i] := 2"), REPL_EXPR);
+    assert_eq!(kind("x <- 1"), REPL_EXPR);
+    assert_eq!(kind("a[i] <- 2"), REPL_EXPR);
 }
 
 /// 規則 3。規則 3 のブロックの中の最後の行と、シグネチャか等式で終わる item の並びは、空行で終わる。

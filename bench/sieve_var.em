@@ -7,14 +7,14 @@ sieve n =
     if marks[i] then
       var j = i * i
       while (fn () -> j < n) (fn () ->
-        marks[j] := False
-        j := j + i))
+        marks[j] <- False
+        j <- j + i))
   MutArray.freeze marks
 
 count : Array Bool -> <Panic> Int
 count marks =
   var c = 0
-  for 2 (Array.length marks) (fn i -> if marks[i] then c := c + 1)
+  for 2 (Array.length marks) (fn i -> if marks[i] then c <- c + 1)
   c
 
 main : Unit -> <IO, Panic> Unit

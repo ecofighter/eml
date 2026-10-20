@@ -6,7 +6,7 @@ input_file: tests/ui/check-fail/var/assign_target.em
 [E1053] Error: only a `var` variable or an index of one can be assigned
    ╭─[ check-fail/var/assign_target.em:5:3 ]
    │
- 5 │   n := 2
+ 5 │   n <- 2
    │   ┬  
    │   ╰── not a `var` variable
 ───╯

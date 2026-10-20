@@ -2,5 +2,5 @@
 main : Unit -> <IO> Unit
 main () =
   let n = 1
-  n := 2
+  n <- 2
   println "\{n}"

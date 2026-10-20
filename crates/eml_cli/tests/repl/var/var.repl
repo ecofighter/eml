@@ -2,12 +2,12 @@
 # 同じ名前の同じコードとして追記する
 > (fn () ->
 .   var s = 0
-.   for 0 5 (fn i -> s := s + i)
+.   for 0 5 (fn i -> s <- s + i)
 .   s) ()
 > sum_to : Int -> <Panic> Int
 . sum_to n =
 .   var x = 0
-.   for 0 n (fn i -> x := x + i)
+.   for 0 n (fn i -> x <- x + i)
 .   x
 .
 > (sum_to 10, sum_to 100)

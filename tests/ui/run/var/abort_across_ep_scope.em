@@ -7,8 +7,8 @@ inner : Int -> <Panic> Int
 inner i =
   var a = MutArray.make 3 0
   match try_panic (fn () -> a[9]) with
-    | Ok n -> a[0] := n
-    | Err _ -> a[0] := 1
+    | Ok n -> a[0] <- n
+    | Err _ -> a[0] <- 1
   let n = a[i]
   discard (MutArray.freeze a) n
 

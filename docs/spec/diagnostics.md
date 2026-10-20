@@ -117,7 +117,7 @@ struct Fix {
 | E1050 | `ONCE_DECLARATION` | トップレベルの関数と値、extern の関数、クラスのメソッド、操作のシグネチャの一番外側の矢印に `once` を書いた ([型と Kind](types.md) の「1回だけ呼べる関数の型」) |
 | E1051 | `CLAUSE_KEYWORD` | 操作の節に `fn` も `ctl` も書いていない (`ctl ` を足す fix を付ける)、`never` の操作の節に `fn` を書いた、`return` の節に `fn` か `ctl` を書いた ([式](expressions.md) の「handler」) |
 | E1052 | `FLOAT_PATTERN` | パターンに浮動小数のリテラル (`1.5`、`-2.5`) を書いた。比べるときは `==` を使う ([網羅性](exhaustiveness.md)) |
-| E1053 | `ASSIGN_TARGET` | `:=` の左辺が `var` の名前でも、`var` の名前の添字でもない ([式](expressions.md) の「`var`」) |
+| E1053 | `ASSIGN_TARGET` | `<-` の左辺が `var` の名前でも、`var` の名前の添字でもない ([式](expressions.md) の「`var`」) |
 | E2001 | `TYPE_MISMATCH` | 型の不一致。呼び出しの row のエフェクトの型引数が今の row と一致しない場合を含む |
 | E2002 | `EFFECT_NOT_IN_ROW` | シグネチャの row に含まれないエフェクトを起こした。ラムダの本体の場合を含む |
 | E2003 | `MISSING_MAIN` | 入口のモジュールに `main` がない。import した `main` は数えない。`eml run` のときだけ出す |
@@ -142,7 +142,7 @@ struct Fix {
 | E3005 | `CONTINUATION_NOT_HANDLED` | `once` の操作の節の `k` を、ある経路で呼びも `drop` もしなかった |
 | E3006 | `LINEAR_VALUE_KEPT_ACROSS_MULTI` | 線形な値を持ったまま、`multi` の操作を起こしうる呼び出し、`handle` をまたいだ (持ち越し規則)。呼んだ関数のスキームを通る持ち越しと、`once` の操作の `fn` の節の隠れた継続を本体の中の呼び出しがまたぐ場合を含む |
 | E3007 | `VAR_KIND` | `var` の変数の型が `Unr` でも `MutArray` でもない ([型と Kind](types.md) の「変数の分類」) |
-| E3008 | `ARRAY_VAR_MISUSED` | 配列の変数の使い方が取り出しの規則に合わない。最後の式の外や関数の中での取り出し、最後の式の中での取り出しのほかの使い方、配列の変数への `:=` である ([線形性](linearity.md) の「配列の変数」) |
+| E3008 | `ARRAY_VAR_MISUSED` | 配列の変数の使い方が取り出しの規則に合わない。最後の式の外や関数の中での取り出し、最後の式の中での取り出しのほかの使い方、配列の変数への `<-` である ([線形性](linearity.md) の「配列の変数」) |
 | E4001 | `NON_EXHAUSTIVE_MATCH` | 網羅されていない `match` |
 | E4002 | `NON_EXHAUSTIVE_EQUATION` | 網羅されていない等式 |
 | E4003 | `REFUTABLE_PATTERN` | 反駁可能な `let` の左辺、ラムダの引数、ローカル関数の引数、handler の節の引数と `return` の節の引数のパターン |

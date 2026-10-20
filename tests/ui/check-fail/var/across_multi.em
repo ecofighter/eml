@@ -5,7 +5,7 @@ effect Choose where
 pick : Unit -> <Choose, Panic> Int
 pick () =
   var a = MutArray.make 2 0
-  a[0] := if choose () then 1 else 2
+  a[0] <- if choose () then 1 else 2
   Array.get (MutArray.freeze a) 0
 
 main : Unit -> <IO, Panic> Unit

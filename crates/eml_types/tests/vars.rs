@@ -53,7 +53,7 @@ fn a_scalar_var_types() {
 main : Unit -> <IO, Panic> Unit
 main () =
   var n = 0
-  n := n + 1
+  n <- n + 1
   println \"\\{n}\"
 ";
     insta::assert_snapshot!(vars(text), @"main: var n : Int (Unr)");
@@ -65,7 +65,7 @@ fn a_mutarray_var_types_with_reads_writes_and_an_extraction() {
 main : Unit -> <IO, Panic> Unit
 main () =
   var a = MutArray.make 3 0
-  a[0] := 1
+  a[0] <- 1
   let v = a[1]
   println \"\\{v}\"
   println \"\\{Array.length (MutArray.freeze a)}\"
@@ -135,7 +135,7 @@ fn a_lin_element_is_e3001() {
 main : Unit -> <IO, Panic> Unit
 main () =
   var a = MutArray.empty ()
-  a[0] := Fs.open \"x\"
+  a[0] <- Fs.open \"x\"
   drop a
 ";
     insta::assert_debug_snapshot!(check_short(text), @r#"
@@ -151,7 +151,7 @@ fn a_self_referencing_var_has_no_infinite_type() {
 main : Unit -> <IO, Panic> Unit
 main () =
   var fs = MutArray.make 2 (fn () -> 0)
-  fs[0] := (fn () -> fs[1] ())
+  fs[0] <- (fn () -> fs[1] ())
   drop (MutArray.freeze fs)
 ";
     insta::assert_snapshot!(vars(text), @"
@@ -218,7 +218,7 @@ fn an_inner_function_may_carry_the_label() {
 main : Unit -> <IO, Panic> Unit
 main () =
   var n = 0
-  let bump () = n := n + 1
+  let bump () = n <- n + 1
   bump ()
   bump ()
   println \"\\{n}\"
@@ -235,7 +235,7 @@ main () =
   let g = f
   let g = g
   var x = 1
-  f := fn () -> x
+  f <- fn () -> x
 ";
     insta::assert_debug_snapshot!(check_short(text), @r#"
     [
@@ -334,7 +334,7 @@ fn taking_on_both_branches_is_accepted() {
 f : Bool -> <Panic> Array Int
 f c =
   var a = MutArray.make 3 0
-  a[0] := 1
+  a[0] <- 1
   if c then MutArray.freeze a else MutArray.freeze a
 ";
     insta::assert_debug_snapshot!(check_short(text), @"[]");
@@ -357,7 +357,7 @@ fn a_last_expression_that_diverges_need_not_take() {
 f : Unit -> <IO, Panic> Unit
 f () =
   var a = MutArray.make 3 0
-  a[0] := 1
+  a[0] <- 1
   exit 2
 ";
     insta::assert_debug_snapshot!(check_short(text), @"[]");
@@ -487,7 +487,7 @@ g () =
   let f = Fs.open \"x\"
   let r =
     var n = 0
-    if choose () then n := 1 else ()
+    if choose () then n <- 1 else ()
     n
   Fs.close f
   println (show r)
@@ -509,8 +509,8 @@ f : Unit -> <Panic> (Array Int, Array Int)
 f () =
   var a = MutArray.make 3 0
   var b = MutArray.make 2 0
-  a[0] := 1
-  b[1] := 2
+  a[0] <- 1
+  b[1] <- 2
   (MutArray.freeze a, MutArray.freeze b)
 ";
     insta::assert_debug_snapshot!(check_short(text), @"[]");
@@ -545,7 +545,7 @@ f : Unit -> <Panic> (Int, Array Int)
 f () =
   var a = MutArray.make 3 0
   let first () = a[0]
-  a[0] := 5
+  a[0] <- 5
   (first (), MutArray.freeze a)
 ";
     insta::assert_debug_snapshot!(check_short(text), @"[]");

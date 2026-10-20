@@ -1088,13 +1088,13 @@ impl FieldExpr {
 }
 
 impl AssignExpr {
-    /// `:=` の左辺。名前か添字かは HIR が確かめる。
+    /// `<-` の左辺。名前か添字かは HIR が確かめる。
     pub fn target(&self) -> Option<Expr> {
-        child_between(&self.syntax, None, Some(SyntaxKind::COLON_EQ))
+        child_between(&self.syntax, None, Some(SyntaxKind::LEFT_ARROW))
     }
 
     pub fn value(&self) -> Option<Expr> {
-        child_between(&self.syntax, Some(SyntaxKind::COLON_EQ), None)
+        child_between(&self.syntax, Some(SyntaxKind::LEFT_ARROW), None)
     }
 }
 

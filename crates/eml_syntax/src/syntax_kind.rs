@@ -86,8 +86,6 @@ pub enum SyntaxKind {
     DOT2,
     /// 制約の文脈の終わり。予約の記号で、ユーザーは演算子として定義できない (docs/spec/lexical.md の「演算子」)。
     FAT_ARROW,
-    /// 代入。`:` で始まるが、コンストラクタの演算子ではない予約の記号である (docs/spec/lexical.md の「演算子」)。
-    COLON_EQ,
 
     OP,
     CONOP,
@@ -173,7 +171,7 @@ pub enum SyntaxKind {
     APP_EXPR,
     DROP_EXPR,
     FIELD_EXPR,
-    /// `lhs := e`。子は左辺の式と右辺の式である。
+    /// `lhs <- e`。子は左辺の式と右辺の式である。
     ASSIGN_EXPR,
     /// 後置の添字 `e[i]`。子は添字をとる式と添字の式である。
     INDEX_EXPR,

@@ -1008,11 +1008,11 @@ pub(super) fn linear_misuse(
                     format!("read or write `{name}` in a statement before the last expression"),
                 ),
                 VarMisuse::Assigned => (
-                    format!("the array variable `{name}` cannot be assigned with `:=`"),
+                    format!("the array variable `{name}` cannot be assigned with `<-`"),
                     format!("this assigns to `{name}`"),
                     "assigning would discard the old array, which is a linear value",
                     format!(
-                        "write the elements with `{name}[i] := e`, or keep the new array in another `var`"
+                        "write the elements with `{name}[i] <- e`, or keep the new array in another `var`"
                     ),
                 ),
             };

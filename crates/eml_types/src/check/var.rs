@@ -83,7 +83,7 @@ impl BodyCheck<'_, '_> {
         self.var_type(var)
     }
 
-    /// `x := e`。
+    /// `x <- e`。
     pub(super) fn assign(&mut self, id: ExprId, var: VarId, value: ExprId) -> Ty {
         let ty = self.var_type(var);
         let origin = self.var_origin(var);
@@ -92,7 +92,7 @@ impl BodyCheck<'_, '_> {
         self.table.unit
     }
 
-    /// `x[i] := e`。変数の型を `MutArray E` と単一化する。
+    /// `x[i] <- e`。変数の型を `MutArray E` と単一化する。
     pub(super) fn index_assign(
         &mut self,
         id: ExprId,

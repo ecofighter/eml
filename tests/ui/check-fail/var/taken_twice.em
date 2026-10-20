@@ -2,7 +2,7 @@
 both : Unit -> <Panic> (Array Int, Array Int)
 both () =
   var a = MutArray.make 3 0
-  a[0] := 1
+  a[0] <- 1
   (MutArray.freeze a, MutArray.freeze a)
 
 main : Unit -> <IO, Panic> Unit

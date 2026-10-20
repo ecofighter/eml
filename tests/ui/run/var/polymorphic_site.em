@@ -3,7 +3,7 @@
 remember : a -> a -> <Panic> a
 remember x y =
   var last = x
-  for 0 3 (fn _ -> last := y)
+  for 0 3 (fn _ -> last <- y)
   last
 
 main : Unit -> <IO, Panic> Unit

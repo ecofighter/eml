@@ -783,12 +783,12 @@ pub enum ExprKind {
     },
     /// `var` の名前の参照。
     VarGet(VarId),
-    /// `x := e`。
+    /// `x <- e`。
     Assign {
         var: VarId,
         value: ExprId,
     },
-    /// `x[i] := e`。
+    /// `x[i] <- e`。
     IndexAssign {
         var: VarId,
         index: ExprId,

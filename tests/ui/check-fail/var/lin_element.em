@@ -2,5 +2,5 @@
 main : Unit -> <IO, Panic> Unit
 main () =
   var a = MutArray.empty ()
-  a[0] := Fs.open "input.txt"
+  a[0] <- Fs.open "input.txt"
   drop a

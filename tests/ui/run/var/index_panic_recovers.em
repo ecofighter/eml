@@ -4,19 +4,19 @@
 recover : Unit -> <Panic> List Int
 recover () =
   var a = MutArray.make 3 0
-  match try_panic (fn () -> a[7] := 1) with
+  match try_panic (fn () -> a[7] <- 1) with
     | Ok _ -> ()
-    | Err _ -> a[0] := 1
+    | Err _ -> a[0] <- 1
   match try_panic (fn () -> a[9]) with
-    | Ok n -> a[1] := n
-    | Err _ -> a[1] := 2
-  a[2] := 3
+    | Ok n -> a[1] <- n
+    | Err _ -> a[1] <- 2
+  a[2] <- 3
   Array.to_list (MutArray.freeze a)
 
 specialized : Int -> <Panic> Int
 specialized i =
   var a = MutArray.make 3 0
-  for 0 3 (fn j -> a[j] := j)
+  for 0 3 (fn j -> a[j] <- j)
   let n = a[i]
   (fn _ -> n) (MutArray.freeze a)
 

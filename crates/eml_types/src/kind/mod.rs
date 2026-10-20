@@ -235,7 +235,7 @@ pub(crate) enum VarMisuse {
     TakenInFunction,
     /// 最後の式の中で、取り出しのほかに変数を使った。
     UsedBesideTake,
-    /// `x := e` で代入した。
+    /// `x <- e` で代入した。
     Assigned,
 }
 

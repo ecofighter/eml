@@ -83,7 +83,7 @@ fn block_statements() {
 
 #[test]
 fn var_assignment_and_index_accessors() {
-    let file = source("main () =\n  var x : Int = 1\n  a[i] := x");
+    let file = source("main () =\n  var x : Int = 1\n  a[i] <- x");
     let Some(Expr::Block(block)) = first_equation(&file).body() else {
         panic!("expected a block body");
     };

@@ -517,7 +517,7 @@ impl<'a> BodyLowering<'a> {
         }
     }
 
-    /// `:=` の左辺は `var` の名前か、`var` の名前の添字に限る。それ以外は E1053 にする。左辺は変換しない。左辺の
+    /// `<-` の左辺は `var` の名前か、`var` の名前の添字に限る。それ以外は E1053 にする。左辺は変換しない。左辺の
     /// 名前の誤りを E1053 に重ねないためである (docs/spec/expressions.md の「`var`」)。
     fn lower_assign(&mut self, assign: &ast::AssignExpr, range: TextRange) -> ExprId {
         let target = assign.target();

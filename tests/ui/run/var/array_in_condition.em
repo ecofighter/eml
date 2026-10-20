@@ -5,8 +5,8 @@ main () =
   let arr =
     var a = MutArray.make 10 0
     while (fn () -> i < 10 && a[i] == 0) (fn () ->
-      a[i] := i * i
-      i := i + 1)
+      a[i] <- i * i
+      i <- i + 1)
     MutArray.freeze a
   println (show (Array.get arr 9))
   println (show i)

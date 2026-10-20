@@ -2,6 +2,6 @@
 main : Unit -> <IO, Panic> Unit
 main () =
   var a = MutArray.make 3 0
-  a[0] := 1
+  a[0] <- 1
   println (show a[5])
   drop a

@@ -713,6 +713,44 @@ fn let_in_with_a_block_on_the_right() {
     "#);
 }
 
+/// `use` の右辺も、代入の右辺と同じく続きに `<-` を書けない。`<-` はどちらも、左辺が右辺から値を受け取る意味だけに使う。
+#[test]
+fn left_arrow_in_the_value_of_a_use_is_an_error() {
+    let text = lines(&["main () =", "  use p <- f <- 1", "  p"]);
+    insta::assert_snapshot!(shape(&text), @r#"
+    SOURCE_FILE
+      EQUATION
+        NAME
+          LIDENT "main"
+        UNIT_PAT
+          L_PAREN "("
+          R_PAREN ")"
+        EQ "="
+        BLOCK
+          USE_STMT
+            USE_KW "use"
+            BIND_PAT
+              NAME
+                LIDENT "p"
+            LEFT_ARROW "<-"
+            PATH_EXPR
+              PATH
+                NAME_REF
+                  LIDENT "f"
+            ERROR
+              LEFT_ARROW "<-"
+              LITERAL
+                INT "1"
+          EXPR_STMT
+            PATH_EXPR
+              PATH
+                NAME_REF
+                  LIDENT "p"
+    ---
+    E0011 2:14 the value of a `use` cannot contain `<-`
+    "#);
+}
+
 #[test]
 fn use_statements() {
     let text = lines(&[
@@ -1500,13 +1538,13 @@ fn var_statements() {
     "#);
 }
 
-/// `:=` は `expr` の段の式なので、ラムダの本体と `if` の枝に括弧なしで書ける。
+/// 代入は `expr` の段の式なので、ラムダの本体と `if` の枝に括弧なしで書ける。
 #[test]
 fn assignment_in_a_lambda_body_and_if_branches() {
     let text = lines(&[
         "main () =",
-        "  for 0 n (fn i -> a[i] := i)",
-        "  if c then x := 1 else x := 2",
+        "  for 0 n (fn i -> a[i] <- i)",
+        "  if c then x <- 1 else x <- 2",
     ]);
     insta::assert_snapshot!(shape(&text), @r#"
     SOURCE_FILE
@@ -1550,7 +1588,7 @@ fn assignment_in_a_lambda_body_and_if_branches() {
                           NAME_REF
                             LIDENT "i"
                       R_BRACK "]"
-                    COLON_EQ ":="
+                    LEFT_ARROW "<-"
                     PATH_EXPR
                       PATH
                         NAME_REF
@@ -1569,7 +1607,7 @@ fn assignment_in_a_lambda_body_and_if_branches() {
                   PATH
                     NAME_REF
                       LIDENT "x"
-                COLON_EQ ":="
+                LEFT_ARROW "<-"
                 LITERAL
                   INT "1"
               ELSE_KW "else"
@@ -1578,16 +1616,16 @@ fn assignment_in_a_lambda_body_and_if_branches() {
                   PATH
                     NAME_REF
                       LIDENT "x"
-                COLON_EQ ":="
+                LEFT_ARROW "<-"
                 LITERAL
                   INT "2"
     "#);
 }
 
-/// 行末の `:=` は `=` と同じくブロックを開く (docs/spec/layout.md の規則 3)。
+/// 行末の `<-` はブロックを開かない。右辺は、深く字下げした次の行に式の続きとして書く (docs/spec/layout.md の規則 1)。
 #[test]
-fn a_line_final_colon_eq_opens_a_block() {
-    let text = lines(&["main () =", "  x :=", "    let y = 1", "    y + 1", "  x"]);
+fn a_line_final_left_arrow_continues_the_line() {
+    let text = lines(&["main () =", "  x <-", "    y + 1", "  x"]);
     insta::assert_snapshot!(shape(&text), @r#"
     SOURCE_FILE
       EQUATION
@@ -1604,25 +1642,15 @@ fn a_line_final_colon_eq_opens_a_block() {
                 PATH
                   NAME_REF
                     LIDENT "x"
-              COLON_EQ ":="
-              BLOCK
-                LET_STMT
-                  LET_KW "let"
-                  BIND_PAT
-                    NAME
+              LEFT_ARROW "<-"
+              OP_SEQ
+                PATH_EXPR
+                  PATH
+                    NAME_REF
                       LIDENT "y"
-                  EQ "="
-                  LITERAL
-                    INT "1"
-                EXPR_STMT
-                  OP_SEQ
-                    PATH_EXPR
-                      PATH
-                        NAME_REF
-                          LIDENT "y"
-                    OP "+"
-                    LITERAL
-                      INT "1"
+                OP "+"
+                LITERAL
+                  INT "1"
           EXPR_STMT
             PATH_EXPR
               PATH
@@ -1814,8 +1842,8 @@ fn var_with_a_pattern_is_an_error() {
 }
 
 #[test]
-fn colon_eq_in_the_value_is_an_error() {
-    let text = lines(&["main () =", "  x := y := 1", "  x"]);
+fn left_arrow_in_the_value_is_an_error() {
+    let text = lines(&["main () =", "  x <- y <- 1", "  x"]);
     insta::assert_snapshot!(shape(&text), @r#"
     SOURCE_FILE
       EQUATION
@@ -1832,13 +1860,13 @@ fn colon_eq_in_the_value_is_an_error() {
                 PATH
                   NAME_REF
                     LIDENT "x"
-              COLON_EQ ":="
+              LEFT_ARROW "<-"
               PATH_EXPR
                 PATH
                   NAME_REF
                     LIDENT "y"
               ERROR
-                COLON_EQ ":="
+                LEFT_ARROW "<-"
                 LITERAL
                   INT "1"
           EXPR_STMT
@@ -1847,6 +1875,6 @@ fn colon_eq_in_the_value_is_an_error() {
                 NAME_REF
                   LIDENT "x"
     ---
-    E0011 2:10 the value of an assignment cannot contain `:=`
+    E0011 2:10 the value of an assignment cannot contain `<-`
     "#);
 }

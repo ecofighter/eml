@@ -5,7 +5,7 @@ g n read_outer =
   var x = n * 100
   if n == 0 then read_outer () + x
   else
-    x := x + 1
+    x <- x + 1
     g (n - 1) (fn () -> x) + read_outer ()
 
 main : Unit -> <IO, Panic> Unit

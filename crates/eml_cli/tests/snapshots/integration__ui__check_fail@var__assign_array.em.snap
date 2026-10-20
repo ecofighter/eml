@@ -3,10 +3,10 @@ source: crates/eml_cli/tests/ui.rs
 expression: rendered
 input_file: tests/ui/check-fail/var/assign_array.em
 ---
-[E3008] Error: the array variable `a` cannot be assigned with `:=`
+[E3008] Error: the array variable `a` cannot be assigned with `<-`
    ╭─[ check-fail/var/assign_array.em:5:3 ]
    │
- 5 │   a := MutArray.make 4 0
+ 5 │   a <- MutArray.make 4 0
    │   ───────────┬──────────  
    │              ╰──────────── this assigns to `a`
    │
@@ -16,7 +16,7 @@ input_file: tests/ui/check-fail/var/assign_array.em
    │   ────────────┬────────────  
    │               ╰────────────── `a` is declared here
    │ 
-   │ Help: write the elements with `a[i] := e`, or keep the new array in another `var`
+   │ Help: write the elements with `a[i] <- e`, or keep the new array in another `var`
    │ 
    │ Note: assigning would discard the old array, which is a linear value
 ───╯
