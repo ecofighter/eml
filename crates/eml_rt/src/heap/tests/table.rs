@@ -30,6 +30,8 @@ pub enum Arg {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Outcome {
+    /// `()` を返す extern の結果
+    Unit,
     Int(i64),
     /// 浮動小数の結果 (`float_outcome`)。Rust の `{:?}` で書く。正の quiet NaN (`f64::NAN`) でない NaN は、`{:?}` が
     /// `NaN` と書いて区別しないので、ビット列を添えて書く。表の NaN はどれも `NaN` なので、そろえ忘れると表と合わない
@@ -372,6 +374,7 @@ fn parse_outcome(text: &str) -> Result<Outcome, String> {
         .split_once(':')
         .ok_or_else(|| format!("a result without a kind: {text}"))?;
     Ok(match kind {
+        "unit" if value == "()" => Outcome::Unit,
         "i" => Outcome::Int(parse_int(value)?),
         "x" => Outcome::Float(float_outcome(parse_float(value)?)),
         "b" => Outcome::Bool(parse_bool(value)?),
@@ -480,6 +483,7 @@ pub fn line(case: &Case) -> String {
         }
     }));
     let outcome = match &digest(case.outcome.clone()) {
+        Outcome::Unit => "unit:()".to_string(),
         Outcome::Int(v) => format!("i:{v}"),
         Outcome::Float(x) => format!("x:{x}"),
         Outcome::Bool(b) => format!("b:{}", bool_name(*b)),
@@ -790,6 +794,16 @@ pub fn inputs() -> Vec<(String, Vec<Arg>)> {
         push("Std.Array.thaw", vec![array(elements, false, false)]);
         push("Std.Array.thaw", vec![array(elements, false, true)]);
         push("Std.MutArray.freeze", vec![array(elements, true, false)]);
+    }
+    // `var` の配列の変数の添字の検査。長さは 0、1、3 と `Int` の最大で、添字は端と、その外側の 1 つずつと、`Int` の
+    // 両端である
+    for len in [0, 1, 3, i64::MAX] {
+        let mut indexes = vec![i64::MIN, -1, 0, len - 1, len, i64::MAX];
+        indexes.sort_unstable();
+        indexes.dedup();
+        for i in indexes {
+            push("Prelude.check_index", vec![Arg::Int(i), Arg::Int(len)]);
+        }
     }
     inputs
 }

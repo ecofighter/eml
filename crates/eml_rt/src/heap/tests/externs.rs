@@ -1298,6 +1298,10 @@ unsafe fn call<M: Mode>(
             "Prelude.Div Int./" => arith(int_div)?,
             "Prelude.Div Int.%" => arith(int_rem)?,
             "Prelude.Num Int.negate" => Outcome::Int(int_negate(int(0))?),
+            "Prelude.check_index" => {
+                check_index(int(0), int(1))?;
+                Outcome::Unit
+            }
             "Prelude.Eq Int.==" => compare(int_eq),
             "Prelude.Eq Int.!=" => compare(int_ne),
             "Prelude.Ord Int.<" => compare(int_lt),
