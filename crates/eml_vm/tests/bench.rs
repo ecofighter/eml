@@ -681,7 +681,7 @@ fn sieve_var() {
         allocations: 2265,
         reuses: 0,
         peak_objects: 3,
-        peak_stack: 27,
+        peak_stack: 30,
     }
     ");
 }
@@ -723,7 +723,7 @@ fn fannkuch_var() {
         allocations: 38678,
         reuses: 0,
         peak_objects: 5,
-        peak_stack: 55,
+        peak_stack: 54,
     }
     ");
 }
@@ -870,7 +870,7 @@ fn unwind_points() {
     insta::assert_snapshot!(lines.join("\n"), @"
     empty: 0
     fannkuch_by_hand: 39
-    fannkuch_var: 62
+    fannkuch_var: 81
     fib: 7
     fold_state: 4
     iter_generate: 5
@@ -885,7 +885,7 @@ fn unwind_points() {
     rbtree: 12
     records: 9
     sieve_by_hand: 14
-    sieve_var: 15
+    sieve_var: 34
     state: 4
     state_loop: 4
     state_loop_by_hand: 4

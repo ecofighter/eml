@@ -147,6 +147,7 @@ S14d では今の 30 MB の入力で測ったスクリプトの値も、記録�
 ### 種類2 (期待値の変更)
 
 - `crates/eml_vm/tests/bench.rs` の `sieve_var` と `fannkuch_var` の `RunStats` のスナップショット。`main` が `Env.args` を呼ぶようになるためである
+- 同じ理由で、`bench.rs` の `unwind_points` の `sieve_var` と `fannkuch_var` の行 (巻き戻しの表の行の数)。`Std.Env` の引数を読むコードがプログラムに入るので、どちらも 19 行増える
 - 同じ理由で `var_matches_hand_written_work` の表 `RESIDUAL` の値が変われば、その値。空の引数の並びは確保しないので、変わらない見込みである
 
 ### 足すテスト

@@ -1,4 +1,4 @@
--- `var` で書いた fannkuch-redux の小さな版 (n = 7、S14c-3 の完了の条件)。配列の変数を3本使う。
+-- `var` で書いた fannkuch-redux (既定は n = 7、S14c-3 の完了の条件)。n を引数で受ける。配列の変数を3本使う。
 -- `fannkuch_by_hand.em` は、同じ計算で状態をすべて末尾再帰の局所関数に受け渡す版である
 fannkuch : Int -> <IO, Panic> Unit
 fannkuch n =
@@ -52,4 +52,19 @@ report n _ _ _ checksum max_flips =
   println "Pfannkuchen(\{n}) = \{max_flips}"
 
 main : Unit -> <IO, Panic> Unit
-main () = fannkuch 7
+main () = fannkuch (size 7)
+
+-- 引数がなければ既定の大きさを使う。`bench/scripts.sh` は大きな大きさを引数で渡す
+-- (docs/implementation/benchmarks.md の「スクリプトの計測」)
+size : Int -> <IO, Panic> Int
+size default =
+  match Env.args () with
+    | Nil -> default
+    | [arg] ->
+      match String.to_int arg with
+        | Some n -> if n >= 1 then n else usage ()
+        | None -> usage ()
+    | _ -> usage ()
+
+usage : Unit -> <Panic> Int
+usage () = panic "usage: fannkuch_var [SIZE]"
