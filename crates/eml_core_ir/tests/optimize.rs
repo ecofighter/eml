@@ -2302,3 +2302,95 @@ fn nested_vars_are_specialized_inside_out() {
     fn "Prelude.while<e>{0=sieve$lambda0/1, 1=sieve$lambda1/1}@#55b5caa901e2f263"(n.5: int, i.6: int, st.7: int, st.12: obj lin) -> obj lin {
     "#);
 }
+
+/// `unpack` と `jump` だけの合流のブロック M のフィールドを、M の先で使う。`resolve_known` が内側の `con` を開いて
+/// ブロックを分けると、この形の M ができる (状態を渡す複製の組を開いて元の組を作り直す所がそうなる)。M を飛ばして
+/// 先へ直接つなぐと `z.7` が定義されないので、M を分ける作り方をとる。1本目の `jump` が M を分け、同じ回の
+/// 2本目の `jump` は分けた M を直接つなぐ (docs/spec/core-ir.md の「既知のコンストラクタ」)。
+#[test]
+fn threading_an_unpack_keeps_fields_used_past_the_join() {
+    let shown = optimized(
+        "layout Prelude.Bool { False, True }
+layout Triple { T(int, int, int) }
+layout Pair { P(int, int) }
+fn entry$main(a.0: enum, n.1: int) -> int {
+  switch a.0 Prelude.Bool { #0 -> b1, #1 -> b2 }
+b1:
+  let t.2: obj = con Triple #0(n.1, 2, 3)
+  jump b3(t.2)
+b2:
+  let t.3: obj = con Triple #0(4, n.1, 6)
+  jump b3(t.3)
+b3(p.4: obj):
+  unpack p.4 Triple #0(x.5: int, y.6: int, z.7: int)
+  let q.8: obj = con Pair #0(x.5, y.6)
+  unpack q.8 Pair #0(u.9: int, v.10: int)
+  let s.11: int = extern \"Prelude.Num Int.+\"(u.9, z.7)
+  let s.12: int = extern \"Prelude.Num Int.+\"(s.11, v.10)
+  return s.12
+}
+",
+    );
+    insta::assert_snapshot!(shown, @r#"
+    layout Prelude.Bool { False, True }
+    layout Triple { T(int, int, int) }
+    layout Pair { P(int, int) }
+    fn entry$main(a.0: enum, n.1: int) -> int {
+      switch a.0 Prelude.Bool { #0 -> b1, #1 -> b2 }
+    b1:
+      jump b3(n.1, 2, 3)
+    b2:
+      jump b3(4, n.1, 6)
+    b3(x.5: int, y.6: int, z.7: int):
+      let s.11: int = extern "Prelude.Num Int.+"(x.5, z.7)
+      let s.12: int = extern "Prelude.Num Int.+"(s.11, y.6)
+      return s.12
+    }
+    "#);
+}
+
+/// `switch` で選ばれる行き先 C が `jump` だけになっても、C のフィールドを C の先で使うなら、C を飛ばさずに分ける。
+#[test]
+fn threading_a_switch_keeps_fields_used_past_the_case() {
+    let shown = optimized(
+        "layout Prelude.Bool { False, True }
+layout Opt { None, Some(int, int, int) }
+layout Pair { P(int, int) }
+fn entry$main(a.0: enum, n.1: int) -> int {
+  switch a.0 Prelude.Bool { #0 -> b1, #1 -> b2 }
+b1:
+  let t.2: obj = con Opt #1(n.1, 2, 3)
+  jump b3(t.2)
+b2:
+  let t.3: obj = con Opt #1(4, n.1, 6)
+  jump b3(t.3)
+b3(p.4: obj):
+  switch p.4 Opt { #0 -> b4, #1(x.5: int, y.6: int, z.7: int) -> b5 }
+b4:
+  return 0
+b5:
+  let q.8: obj = con Pair #0(x.5, y.6)
+  unpack q.8 Pair #0(u.9: int, v.10: int)
+  let s.11: int = extern \"Prelude.Num Int.+\"(u.9, z.7)
+  let s.12: int = extern \"Prelude.Num Int.+\"(s.11, v.10)
+  return s.12
+}
+",
+    );
+    insta::assert_snapshot!(shown, @r#"
+    layout Prelude.Bool { False, True }
+    layout Opt { None, Some(int, int, int) }
+    layout Pair { P(int, int) }
+    fn entry$main(a.0: enum, n.1: int) -> int {
+      switch a.0 Prelude.Bool { #0 -> b1, #1 -> b2 }
+    b1:
+      jump b3(n.1, 2, 3)
+    b2:
+      jump b3(4, n.1, 6)
+    b3(x.5: int, y.6: int, z.7: int):
+      let s.11: int = extern "Prelude.Num Int.+"(x.5, z.7)
+      let s.12: int = extern "Prelude.Num Int.+"(s.11, y.6)
+      return s.12
+    }
+    "#);
+}

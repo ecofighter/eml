@@ -301,11 +301,14 @@ fn entry(uses: &[usize], block: &Block) -> Option<Entry> {
 /// `jump N(…)` だけを残し、残りを M の引数とフィールドを受ける N に移す。M が支配していた所はどれも N が支配するので、
 /// N の引数に元の変数を使えば、本体の使いは書き換えなくてよい。
 ///
-/// すでにこの形に分けた C と M (`jump` だけで終わる) は、新しいブロックを作らずに `jump` の行き先へ直接つなぐ。届かなく
-/// なった M と C は、呼ぶ側が `prune` で落とす。何かつなぎ替えたかを返す。
+/// `jump` だけで終わる C と M のうち、受けた値をその `jump` でしか使わないものは、新しいブロックを作らずに `jump` の
+/// 行き先へ直接つなぐ (`forward`)。届かなくなった M と C は、呼ぶ側が `prune` で落とす。何かつなぎ替えたかを返す。
+///
+/// 使う数 `uses` は、この回の書き換えのたびに合わせ直す。この回で分けた M と C へ向かう別の `jump` も、同じ回で
+/// 直接つなぐためである。分けた M と C の新しい変数は、`jump` で1回ずつ使う。
 pub(super) fn thread_jumps(function: &mut CoreFn) -> bool {
     let known = known_cons(function);
-    let uses = uses(function);
+    let mut uses = uses(function);
     let count = function.blocks.len();
     let mut added: Vec<(usize, Block)> = Vec::new();
     let mut opened = HashSet::new();
@@ -323,15 +326,16 @@ pub(super) fn thread_jumps(function: &mut CoreFn) -> bool {
             continue;
         };
         let threaded = match form {
-            Entry::Switch(position) => {
-                thread_switch(function, &uses, &known, &mut added, target, &args, position)
-            }
-            Entry::Unpack(position) => {
-                thread_unpack(function, &uses, &known, &mut added, target, &args, position)
-            }
+            Entry::Switch(position) => thread_switch(
+                function, &mut uses, &known, &mut added, target, &args, position,
+            ),
+            Entry::Unpack(position) => thread_unpack(
+                function, &mut uses, &known, &mut added, target, &args, position,
+            ),
         };
         if let Some((jump, con)) = threaded {
-            function.blocks[index].term = jump;
+            let old = std::mem::replace(&mut function.blocks[index].term, jump);
+            retally(&mut uses, &old, &function.blocks[index].term);
             opened.extend(con);
             changed = true;
         }
@@ -344,7 +348,7 @@ pub(super) fn thread_jumps(function: &mut CoreFn) -> bool {
 /// `switch` で始まる `M` への `jump` を、選ばれる行き先の本体へつなぐ。新しい `jump` と、開いた `con` の変数を返す。
 fn thread_switch(
     function: &mut CoreFn,
-    uses: &[usize],
+    uses: &mut Vec<usize>,
     known: &HashMap<VarId, (Ctor, Vec<Atom>)>,
     added: &mut Vec<(usize, Block)>,
     target: usize,
@@ -396,6 +400,7 @@ fn thread_switch(
             args: forwarded,
         },
     ) = (&block.stmts[..], &block.term)
+        && used_only_in(uses, block, &fields)
     {
         let substitution: HashMap<VarId, Atom> =
             fields.iter().copied().zip(values.iter().copied()).collect();
@@ -414,7 +419,7 @@ fn thread_switch(
     }
     let copies: Vec<VarId> = fields
         .iter()
-        .map(|&field| copy_var(function, field))
+        .map(|&field| jump_arg(function, uses, field))
         .collect();
     let join = BlockId((function.blocks.len() + added.len()) as u32);
     let body = std::mem::replace(
@@ -501,7 +506,7 @@ fn uses_in(block: &Block, var: VarId) -> usize {
 /// `unpack` で始まる `M` への `jump` を、`unpack` の後ろの部分へつなぐ。
 fn thread_unpack(
     function: &mut CoreFn,
-    uses: &[usize],
+    uses: &mut Vec<usize>,
     known: &HashMap<VarId, (Ctor, Vec<Atom>)>,
     added: &mut Vec<(usize, Block)>,
     target: usize,
@@ -528,6 +533,8 @@ fn thread_unpack(
             args: forwarded,
         },
     ) = (&block.stmts[..], &block.term)
+        && used_only_in(uses, block, fields)
+        && used_only_in(uses, block, &block.params)
     {
         let substitution: HashMap<VarId, Atom> = block
             .params
@@ -560,13 +567,13 @@ fn thread_unpack(
             if at == position {
                 param
             } else {
-                copy_var(function, param)
+                jump_arg(function, uses, param)
             }
         })
         .collect();
     let copies: Vec<VarId> = fields
         .iter()
-        .map(|&field| copy_var(function, field))
+        .map(|&field| jump_arg(function, uses, field))
         .collect();
     let mut body = std::mem::replace(
         &mut function.blocks[target],
@@ -620,8 +627,9 @@ fn thread_unpack(
     ))
 }
 
-/// すでに `jump` だけで終わる C か M へ向かう `jump` を、新しいブロックを作らずにその `jump` の行き先 `next` へ直接
-/// つなぐ。`substitution` は、C か M が受け取る値を `jump` の側の値に置き換える。
+/// `jump` だけで終わる C か M へ向かう `jump` を、新しいブロックを作らずにその `jump` の行き先 `next` へ直接つなぐ。
+/// `substitution` は、C か M が受け取る値を `jump` の側の値に置き換える。呼ぶ側は、C か M の受けた値をその `jump`
+/// でしか使わないことを確かめておく (`used_only_in`)。
 fn forward(
     function: &CoreFn,
     added: &[(usize, Block)],
@@ -655,10 +663,36 @@ fn block_params<'a>(function: &'a CoreFn, added: &'a [(usize, Block)], id: Block
     }
 }
 
-/// `var` と同じ名前、Repr、印の新しい変数。
-fn copy_var(function: &mut CoreFn, var: VarId) -> VarId {
+/// `vars` をどれも、`block` の中でしか使わないか。C か M を飛ばして行き先へ直接つなぐと、C か M で受けた値は
+/// 飛ばした経路で定義されない。そこで、受けた値をその先のブロックで使うときは直接つながず、分ける作り方をとる。
+/// `resolve_known` が `unpack` の位置でブロックを分けると、`unpack` と `jump` だけの M ができる。その M の
+/// フィールドは、分けた後ろのブロックとその先で使われていることがある。
+fn used_only_in(uses: &[usize], block: &Block, vars: &[VarId]) -> bool {
+    vars.iter()
+        .all(|&var| uses[var.0 as usize] == uses_in(block, var))
+}
+
+/// `var` と同じ名前、Repr、印の新しい変数で、分けた C か M の `jump` で1回だけ使うもの。
+fn jump_arg(function: &mut CoreFn, uses: &mut Vec<usize>, var: VarId) -> VarId {
     let info = function.vars[var.0 as usize].clone();
-    fresh(&mut function.vars, info)
+    let copy = fresh(&mut function.vars, info);
+    debug_assert_eq!(uses.len(), copy.0 as usize);
+    uses.push(1);
+    copy
+}
+
+/// 終端を `old` から `new` に替えたときの、使う数の付け替え。
+fn retally(uses: &mut [usize], old: &Term, new: &Term) {
+    old.for_each_atom(|atom| {
+        if let Atom::Var(var) = atom {
+            uses[var.0 as usize] -= 1;
+        }
+    });
+    new.for_each_atom(|atom| {
+        if let Atom::Var(var) = atom {
+            uses[var.0 as usize] += 1;
+        }
+    });
 }
 
 fn substituted(atoms: &[Atom], substitution: &HashMap<VarId, Atom>) -> Vec<Atom> {
