@@ -309,3 +309,21 @@ f xs = xs[0]
       note: only an `Array` value can be indexed; keep a `MutArray` in a `var` variable to index it
     ");
 }
+
+#[test]
+fn an_escaped_call_still_reports_its_other_missing_effects() {
+    let text = "\
+main : Unit -> <IO> Unit
+main () =
+  let g =
+    var x = 1
+    fn () -> x + 1
+  println \"\\{g ()}\"
+";
+    insta::assert_debug_snapshot!(check_short(text), @r#"
+    [
+        "E2019 5:5 a function that uses the variable `x` can escape its scope",
+        "E2002 6:14 `g` performs `Panic`, which the signature of `main` does not allow",
+    ]
+    "#);
+}

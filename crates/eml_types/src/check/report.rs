@@ -16,6 +16,7 @@ use crate::table::{Exporter, Label as RowLabel, Row, Ty, UnifyError};
 use eml_extern::ExternType;
 
 use super::body::BodyCheck;
+use super::var::Withheld;
 
 /// 型の不一致の由来。診断のラベルと note を決める (docs/implementation/diagnostics.md の「型エラー」)。
 #[derive(Debug, Clone)]
@@ -211,9 +212,27 @@ impl BodyCheck<'_, '_> {
             // 上限まで足したラベルが並ぶので、名前を重ねると読みにくい (docs/spec/types.md の「呼び出しの包含を解く」)
             Err(UnifyError::MissingEffects(mut effects)) => {
                 let mut seen = HashSet::new();
-                effects.retain(|effect| seen.insert(*effect) && !self.escaped_var(*effect, range));
-                // 範囲の外で `var` のラベルが足りないのは、変数を使う関数が範囲の外へ出たためで、E2019 が報告する
+                effects.retain(|effect| seen.insert(*effect));
+                // 範囲の外で `var` のラベルが足りないのは、変数を使う関数が範囲の外へ出たためである。その誤りは同じ
+                // 本体がその変数の E2019 として報告するので、この E2002 は取っておき、E2019 が出なかったときにだけ出す
                 // (docs/spec/types.md の「範囲の外へ出る閉包」)
+                let (escaped, rest): (Vec<EffectId>, Vec<EffectId>) = effects
+                    .into_iter()
+                    .partition(|&effect| self.escaped_var(effect, range).is_some());
+                if report && !escaped.is_empty() {
+                    let vars = escaped
+                        .iter()
+                        .filter_map(|&effect| self.escaped_var(effect, range))
+                        .collect();
+                    let shown: Vec<String> = escaped
+                        .iter()
+                        .map(|e| self.program.names.effect(*e).to_string())
+                        .collect();
+                    // 変数のエフェクトはシグネチャに書けないので、fix は付けない
+                    let diagnostic = self.missing_effects(&shown, None, range, name);
+                    self.typing.withheld.push(Withheld { vars, diagnostic });
+                }
+                let effects = rest;
                 if effects.is_empty() {
                     return false;
                 }
@@ -260,10 +279,24 @@ impl BodyCheck<'_, '_> {
         if !report {
             return false;
         }
+        let diagnostic = self.missing_effects(&missing, fixable, range, name);
+        self.diagnostics.push(diagnostic);
+        false
+    }
+
+    /// 今の row に足りないエフェクトの E2002 (入力では E2015)。`missing` は足りないものの表示、`fixable` は fix で
+    /// 足すエフェクトである。
+    fn missing_effects(
+        &mut self,
+        missing: &[String],
+        fixable: Option<Vec<EffectId>>,
+        range: TextRange,
+        name: &str,
+    ) -> Diagnostic {
         let quoted: Vec<String> = missing.iter().map(|name| format!("`{name}`")).collect();
         let quoted = quoted.join(", ");
         let file = self.file();
-        let diagnostic = match &self.ambient_source {
+        match &self.ambient_source {
             AmbientSource::Signature => {
                 let function = &self.function.name;
                 let method = match self.function.kind {
@@ -279,7 +312,7 @@ impl BodyCheck<'_, '_> {
                     // 直す先はクラスのシグネチャである。標準ライブラリのクラスは書き換えられず、矢印のないメソッドには
                     // row がないので、help を出さない
                     Some(method) => {
-                        match allowing_arrow(self.program, &method.signature, self.body.params.len(), &missing) {
+                        match allowing_arrow(self.program, &method.signature, self.body.params.len(), missing) {
                             Some(arrow) => {
                                 let count = arrow + 1;
                                 let noun = if count == 1 { "parameter" } else { "parameters" };
@@ -402,9 +435,7 @@ impl BodyCheck<'_, '_> {
                     _ => diagnostic,
                 }
             }
-        };
-        self.diagnostics.push(diagnostic);
-        false
+        }
     }
 
     /// 本体の row を持つ矢印の row に `effects` のラベルを足す編集 (docs/implementation/diagnostics.md の E2002)。書いた

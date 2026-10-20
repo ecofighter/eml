@@ -498,6 +498,7 @@ pub(crate) fn check_body<'c>(
         files,
         file,
         function,
+        function_id: id,
         body,
         rigids: &own.rigids,
         signatures,

@@ -2,9 +2,9 @@ use std::collections::{HashMap, HashSet};
 
 use eml_diagnostics::{Diagnostic, FileId, Label, SourceFiles, TextRange};
 use eml_hir::{
-    Body, Closure, ConstructorId, ExprId, ExprKind, Function, Literal, LocalFunction, LocalId,
-    MatchArm, OperationId, PatId, PatKind, Program, Res, Segment, Stmt, TypeRefId, TypeRefKind,
-    ValueItem, VarId,
+    Body, Closure, ConstructorId, ExprId, ExprKind, Function, FunctionId, Literal, LocalFunction,
+    LocalId, MatchArm, OperationId, PatId, PatKind, Program, Res, Segment, Stmt, TypeRefId,
+    TypeRefKind, ValueItem, VarId,
 };
 use la_arena::ArenaMap;
 
@@ -19,7 +19,7 @@ use crate::{FieldTarget, IndexTarget, Update, VarClass, codes};
 use super::Signatures;
 use super::inclusion::Inclusion;
 use super::report::{AmbientSource, Origin, callee_subject};
-use super::var::VarScope;
+use super::var::{VarScope, Withheld};
 
 /// 呼び出しの row。持ち越しのパスが読む (docs/spec/effects.md の「継続の多重度と持ち越し規則」)。
 #[derive(Debug, Clone)]
@@ -66,6 +66,8 @@ pub(crate) struct BodyTyping {
     pub var_classes: ArenaMap<VarId, VarClass>,
     /// 添字のノードの読み方。
     pub indexes: ArenaMap<ExprId, IndexTarget>,
+    /// 範囲の外で `var` のラベルが足りなかった呼び出しの E2002。`var::classify` が E2019 と照らして出すかを決める。
+    pub withheld: Vec<Withheld>,
 }
 
 pub(super) struct BodyCheck<'a, 'c> {
@@ -75,6 +77,7 @@ pub(super) struct BodyCheck<'a, 'c> {
     /// 検査している本体のモジュールのファイル。診断が指す。
     pub(super) file: FileId,
     pub(super) function: &'a Function,
+    pub(super) function_id: FunctionId,
     pub(super) body: &'a Body,
     pub(super) rigids: &'a Rigids,
     /// 全宣言の閉じた型の形。本体の検査が呼び出し先について見るのは、これだけである (docs/spec/types.md の「推論」)。

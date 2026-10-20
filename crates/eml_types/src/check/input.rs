@@ -71,6 +71,7 @@ pub(super) fn check_input<'c>(
         files,
         file,
         function,
+        function_id: id,
         body,
         rigids: &rigids,
         signatures,

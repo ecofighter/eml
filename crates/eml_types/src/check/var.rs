@@ -4,7 +4,11 @@
 
 use eml_diagnostics::{Diagnostic, FileId, Label as DiagnosticLabel, TextRange};
 use eml_extern::ExternType;
-use eml_hir::{Body, EffectId, EffectKind, ExprId, ExprKind, IndexBase, Program, VarId};
+use std::collections::HashSet;
+
+use eml_hir::{
+    Body, EffectId, EffectKind, ExprId, ExprKind, FunctionId, IndexBase, Program, VarId,
+};
 
 use crate::kind::{Bound, KindOrigin, KindReason, Provenance, Span};
 use crate::shape::lower_type;
@@ -227,20 +231,53 @@ impl BodyCheck<'_, '_> {
         }
     }
 
-    /// `effect` が `var` の地点のエフェクトで、`range` の位置がその範囲の外か。範囲の外でそのラベルを求める呼び出しは、
-    /// 変数を使う関数が範囲の外へ出たときにだけ起こる。
-    pub(super) fn escaped_var(&self, effect: EffectId, range: TextRange) -> bool {
-        let EffectKind::Var { var, .. } = self.program[effect].kind else {
-            return false;
-        };
-        let Some(scope) = self.typing.vars.get(var) else {
-            return false;
-        };
-        let ExprKind::Var { body: inner, .. } = self.body.exprs[scope.node].kind else {
-            unreachable!("a var scope is a var node")
-        };
-        !self.body.exprs[inner].range.contains_range(range)
+    /// `effect` がこの本体の `var` の地点のエフェクトで、`range` の位置がその範囲の外なら、その変数を返す。範囲の外で
+    /// そのラベルを求める呼び出しは、変数を使う関数が範囲の外へ出たときにだけ起こる。
+    pub(super) fn escaped_var(&self, effect: EffectId, range: TextRange) -> Option<VarId> {
+        let typing = &self.typing;
+        let body = self.body;
+        outside_scope(&self.program[effect].kind, self.function_id, range, |var| {
+            let scope = typing.vars.get(var)?;
+            let ExprKind::Var { body: inner, .. } = body.exprs[scope.node].kind else {
+                unreachable!("a var scope is a var node")
+            };
+            Some(body.exprs[inner].range)
+        })
     }
+}
+
+/// 取っておいた E2002。範囲の外で `vars` のラベルが足りなかった呼び出しの診断で、同じ本体がそれらの変数のどれかに
+/// E2019 を出さなかったときにだけ出す (docs/spec/types.md の「範囲の外へ出る閉包」)。
+pub(crate) struct Withheld {
+    pub vars: Vec<VarId>,
+    pub diagnostic: Diagnostic,
+}
+
+/// `kind` が本体 `function` の `var` の地点のエフェクトで、`range` がその範囲 (`scope` が返す範囲) の外なら、その
+/// 変数を返す。`VarId` は本体ごとの番号なので、ほかの本体の地点は数えない。
+fn outside_scope(
+    kind: &EffectKind,
+    function: FunctionId,
+    range: TextRange,
+    scope: impl FnOnce(VarId) -> Option<TextRange>,
+) -> Option<VarId> {
+    let EffectKind::Var {
+        function: site,
+        var,
+    } = *kind
+    else {
+        return None;
+    };
+    if site != function {
+        return None;
+    }
+    let inner = scope(var)?;
+    (!inner.contains_range(range)).then_some(var)
+}
+
+/// 取っておいた E2002 を出すか。足りなかった変数のどれかに E2019 が出なかったときに出す。
+fn releases(withheld: &[VarId], escaped: &HashSet<VarId>) -> bool {
+    withheld.iter().any(|var| !escaped.contains(var))
 }
 
 /// 本体の推論と包含とクラスの制約を解いた後、Kind の問題を解く前に、各変数を型で分ける。`Unr` の変数には `T ≤ Unr`
@@ -279,12 +316,19 @@ pub(super) fn classify(
             table.set_kind_origin(previous);
         }
     }
+    let mut escaped = HashSet::new();
     for (var, _) in body.vars.iter() {
         let Some(scope) = typing.vars.get(var).copied() else {
             continue;
         };
         if let Some(diagnostic) = escape(program, file, body, table, types, typing, var, scope) {
             diagnostics.push(diagnostic);
+            escaped.insert(var);
+        }
+    }
+    for withheld in std::mem::take(&mut typing.withheld) {
+        if releases(&withheld.vars, &escaped) {
+            diagnostics.push(withheld.diagnostic);
         }
     }
 }
@@ -387,4 +431,71 @@ fn escape(
         ),
     );
     Some(error(label).with_secondary(declared))
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::HashSet;
+
+    use eml_diagnostics::TextRange;
+    use eml_hir::{EffectKind, FunctionId, ItemId, ModuleId, VarId};
+    use la_arena::{Idx, RawIdx};
+
+    use super::{outside_scope, releases};
+
+    fn function(index: u32) -> FunctionId {
+        ItemId::new(
+            ModuleId::from_raw(RawIdx::from_u32(1)),
+            Idx::from_raw(RawIdx::from_u32(index)),
+        )
+    }
+
+    fn var(index: u32) -> VarId {
+        Idx::from_raw(RawIdx::from_u32(index))
+    }
+
+    fn range(start: u32, end: u32) -> TextRange {
+        TextRange::new(start.into(), end.into())
+    }
+
+    /// 型の上では、ほかの本体の `var` のラベルがこの本体に届くプログラムは作れない (トップレベルの関数の型は
+    /// シグネチャで決まり、`L` を書けない)。そのため、取っておく条件をここで直接確かめる。
+    #[test]
+    fn only_a_use_outside_a_scope_of_this_body_is_withheld() {
+        let site = EffectKind::Var {
+            function: function(0),
+            var: var(0),
+        };
+        let scope = |_| Some(range(10, 20));
+        assert_eq!(
+            outside_scope(&site, function(0), range(30, 31), scope),
+            Some(var(0))
+        );
+        assert_eq!(
+            outside_scope(&site, function(0), range(12, 13), scope),
+            None
+        );
+        // 同じ番号の変数でも、ほかの本体の地点なら取っておかない
+        assert_eq!(
+            outside_scope(&site, function(1), range(30, 31), scope),
+            None
+        );
+        assert_eq!(
+            outside_scope(&site, function(0), range(30, 31), |_| None),
+            None
+        );
+        assert_eq!(
+            outside_scope(&EffectKind::Defined, function(0), range(30, 31), scope),
+            None
+        );
+    }
+
+    #[test]
+    fn a_withheld_e2002_is_released_unless_every_var_got_e2019() {
+        let escaped: HashSet<VarId> = [var(0)].into_iter().collect();
+        assert!(!releases(&[var(0)], &escaped));
+        assert!(releases(&[var(1)], &escaped));
+        assert!(releases(&[var(0), var(1)], &escaped));
+        assert!(releases(&[var(0)], &HashSet::new()));
+    }
 }
