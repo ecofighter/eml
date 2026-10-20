@@ -10,4 +10,6 @@ GT
 EQ
 LT
 LT
+0.0
+-0.0
 --- stderr ---

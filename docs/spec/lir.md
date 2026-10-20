@@ -722,6 +722,7 @@ LIR を実行する [VM](vm.md) と後のネイティブのコードは、次の
 次の場合は実行を止めて実行時エラーにする。CLI の終了コードは 1 で、割り込みで止まったときだけ 130 である ([VM](vm.md) の「上限と割り込み」)。
 
 - `Int` のオーバーフローとゼロ除算 ([宣言](declarations.md) の標準の演算子の表)
+- `Std.Float` の `truncate`、`floor`、`ceil`、`round` の結果が `Int` に収まらないとき (`` float `<x>` does not fit in `Int` ``。`x` は `show` の形)、`Float.to_fixed` の桁数が 0 から 100 の外のとき (`` `to_fixed` takes 0 to 100 digits, not <n> ``) ([標準ライブラリ](stdlib.md) の「`Std.Float`」)
 - `Fs.open` が開けないとき (``cannot open `<path>`: <reason>``)、`Fs.read_all` か `Fs.read_line` が読めないとき (``cannot read `<path>`: <reason>``)、`Fs.write_text` が書けないとき (``cannot write `<path>`: <reason>``)、`Proc.run` が子を起動できないとき (``cannot run `<program>`: <reason>``)、標準入力を読めないとき (``cannot read the standard input: <reason>``)。`reason` は `not found`、`permission denied`、`not available`、`I/O error` のどれかである
 - 読んだ内容が UTF-8 でないとき。ファイル (``` `<path>` is not valid UTF-8 ```)、標準入力 (`the standard input is not valid UTF-8`)、引数 (`argument <index> is not valid UTF-8`。`Env.args ()` のリストの 0 から数えた位置)、環境変数 (``environment variable `<name>` is not valid UTF-8``) である
 - 文字列の位置が範囲の外のとき (`string index <index> is out of range for length <len>`)、`String.slice` の範囲が文字列の外のとき (`string slice <start>..<end> is out of range for length <len>`) と、端が文字の境界にないとき (`string slice <start>..<end> is not on a character boundary`)、`Env.arg` の位置が範囲の外のとき (`argument index <index> is out of range for <count> arguments`)。最後のものは標準ライブラリの中だけで起きる ([標準ライブラリ](stdlib.md) の「実行時エラー」)
@@ -731,7 +732,7 @@ LIR を実行する [VM](vm.md) と後のネイティブのコードは、次の
 - 内部の誤り (`internal error: …`)。verifier を通った IR では起きないはずの形を、VM の見張りが見つけたときである ([VM](vm.md) の「誤り、止めること、終わり」)
 - 利用者の `panic s` を捕まえる `try_panic` がないとき (`panicked: <s>`)
 
-`try_io` の中で起きた I/O の失敗の一部は、実行時エラーにせず `try_io` に届ける。オーバーフロー、ゼロ除算、範囲の外の位置は `Panic` で、`try_panic` の中で起きたら実行時エラーにせず `try_panic` に届ける ([VM](vm.md) の「`IO` と `Panic` への中断」)。上の一覧の文言は、捕まえる `try_io` か `try_panic` がないときの表示で、`try_panic` が返す `Err` の文言でもある。
+`try_io` の中で起きた I/O の失敗の一部は、実行時エラーにせず `try_io` に届ける。オーバーフロー、ゼロ除算、`Float` の変換と `to_fixed` の誤り、範囲の外の位置は `Panic` で、`try_panic` の中で起きたら実行時エラーにせず `try_panic` に届ける ([VM](vm.md) の「`IO` と `Panic` への中断」)。上の一覧の文言は、捕まえる `try_io` か `try_panic` がないときの表示で、`try_panic` が返す `Err` の文言でもある。
 
 extern の実装は、VM と後のネイティブのコードが使う `eml_rt` にある ([オブジェクトモデル](object-model.md) の「extern」)。誤りの文言は `eml_rt` のもので、上の一覧と1文字も違わない。
 

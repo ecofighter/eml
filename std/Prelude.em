@@ -152,6 +152,15 @@ instance Show Int where
   extern show
   show_prec d n = if d > 6 && n < 0 then "(" ++ show n ++ ")" else show n
 
+-- Python の `repr` と同じ形で書く。`-` で始まる表示 (`-0.0` と `-inf` も) は、`Int` と同じく引数の位置で括弧に入れる
+-- (docs/spec/declarations.md の「Prelude のクラス」)
+instance Show Float where
+  extern show
+  show_prec d x = if d > 6 && shows_minus x then "(" ++ show x ++ ")" else show x
+
+-- `show x` が `-` で始まるか。`x < 0.0` は `-0.0` で偽になるので、符号を読む `Pure` の extern で見分ける
+extern shows_minus : Float -> Bool
+
 instance Eq String where
   extern (==)
   extern (!=)

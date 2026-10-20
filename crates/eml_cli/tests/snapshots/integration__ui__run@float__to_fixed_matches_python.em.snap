@@ -1,0 +1,15 @@
+---
+source: crates/eml_cli/tests/ui.rs
+expression: "format!(\"--- stdout ---\\n{stdout}--- stderr ---\\n{diagnostics}{stderr}{written}{exit}\")"
+input_file: tests/ui/run/float/to_fixed_matches_python.em
+---
+--- stdout ---
+2
+4
+1.00
+0.333333333
+-0.000
+inf
+nan
+0.10000000000000000555
+--- stderr ---

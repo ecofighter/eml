@@ -875,6 +875,66 @@ fn run_extern<M: Mode>(
                 dst,
                 externs::float_compare(task.float(arg(0)), task.float(arg(1))),
             ),
+            Extern::FloatShow => {
+                let w = ctx.float_show(task.float(arg(0)));
+                task.set(dst, w);
+            }
+            Extern::FloatShowsMinus => {
+                task.set_raw(dst, externs::float_shows_minus(task.float(arg(0))))
+            }
+            Extern::FloatOfInt => task.set_float(dst, externs::float_of_int(task.raw(arg(0)))),
+            Extern::FloatTruncate | Extern::FloatFloor | Extern::FloatCeil | Extern::FloatRound => {
+                let convert = match ext {
+                    Extern::FloatTruncate => externs::float_truncate,
+                    Extern::FloatFloor => externs::float_floor,
+                    Extern::FloatCeil => externs::float_ceil,
+                    _ => externs::float_round,
+                };
+                let n = convert(task.float(arg(0))).map_err(Fault::Arith)?;
+                task.set_raw(dst, n);
+            }
+            Extern::FloatSqrt
+            | Extern::FloatAbs
+            | Extern::FloatSin
+            | Extern::FloatCos
+            | Extern::FloatExp
+            | Extern::FloatLog => {
+                let f = match ext {
+                    Extern::FloatSqrt => externs::float_sqrt,
+                    Extern::FloatAbs => externs::float_abs,
+                    Extern::FloatSin => externs::float_sin,
+                    Extern::FloatCos => externs::float_cos,
+                    Extern::FloatExp => externs::float_exp,
+                    _ => externs::float_log,
+                };
+                task.set_float(dst, f(task.float(arg(0))));
+            }
+            Extern::FloatPow => task.set_float(
+                dst,
+                externs::float_pow(task.float(arg(0)), task.float(arg(1))),
+            ),
+            Extern::FloatInfinity => task.set_float(dst, externs::float_infinity()),
+            Extern::FloatNan => task.set_float(dst, externs::float_nan()),
+            Extern::FloatToFixed => {
+                let w = ctx.float_to_fixed(task.raw(arg(0)), task.float(arg(1)))?;
+                task.set(dst, w);
+            }
+            Extern::FloatCanParse => {
+                let parsed = ctx.string_to_float(task.get(arg(0)))?;
+                task.set_raw(
+                    dst,
+                    if parsed.is_some() {
+                        externs::TRUE
+                    } else {
+                        externs::FALSE
+                    },
+                );
+            }
+            // `Std.Float.parse` は読める文字列にだけ呼ぶ。読めない文字列には NaN を返す
+            Extern::FloatParseRaw => {
+                let parsed = ctx.string_to_float(task.get(arg(0)))?;
+                task.set_float(dst, parsed.unwrap_or(f64::NAN));
+            }
             Extern::Panic
             | Extern::Exit
             | Extern::IntNeg

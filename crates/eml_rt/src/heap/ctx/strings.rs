@@ -19,7 +19,9 @@ use super::super::Heap;
 use super::proof::*;
 use super::*;
 use crate::alloc::too_large;
-use crate::externs::{EQ, FALSE, Fault, GT, LT, TRUE};
+use crate::externs::{
+    ArithFault, EQ, FALSE, Fault, GT, LT, TRUE, float_fixed, float_parse, float_repr,
+};
 
 verus! {
 
@@ -1046,6 +1048,117 @@ impl<M: Mode> Ctx<M> {
             }
         }
         w
+    }
+
+    /// `Show Float` の `show`。Python の `repr` と同じ形の文字列を作り、呼ぶ側がその参照を持つ。書式は T12 の
+    /// `float_repr` が作る (docs/spec/object-model.md の「`unsafe` の核」)。
+    pub fn float_show(&mut self, x: f64) -> (w: Word)
+        requires
+            old(self).wf(),
+        ensures
+            final(self).wf(),
+            final(self).evv_spec() == old(self).evv_spec(),
+            final(self).yield_spec() == old(self).yield_spec(),
+            final(self).is_string(w),
+            old(self).held_ok() ==> {
+                &&& final(self).held_ok()
+                &&& final(self).holds(w)
+                &&& final(self).evolved_by(*old(self), |x: usize| 0int, Set::empty())
+            },
+    {
+        let text = float_repr(x);
+        self.fresh_string(text.as_str())
+    }
+
+    /// `Float.to_fixed`。小数点以下 `digits` 桁の文字列を作り、呼ぶ側がその参照を持つ。桁数が 0 から 100 の外なら、
+    /// 何も作らずに誤りを返す。書式は T12 の `float_fixed` が作る。
+    // 範囲を比較で書くのは、vstd の `Range::contains` の約束を信頼せずに済むようにするためである
+    #[allow(clippy::manual_range_contains)]
+    pub fn float_to_fixed(&mut self, digits: i64, x: f64) -> (r: Result<Word, Fault>)
+        requires
+            old(self).wf(),
+        ensures
+            final(self).wf(),
+            final(self).evv_spec() == old(self).evv_spec(),
+            final(self).yield_spec() == old(self).yield_spec(),
+            r is Err ==> *final(self) == *old(self) && r == Err::<Word, Fault>(
+                Fault::Arith(ArithFault::FixedDigits(digits)),
+            ),
+            r matches Ok(w) ==> final(self).is_string(w),
+            r matches Ok(w) ==> (old(self).held_ok() ==> {
+                &&& final(self).held_ok()
+                &&& final(self).holds(w)
+                &&& final(self).evolved_by(*old(self), |x: usize| 0int, Set::empty())
+            }),
+    {
+        if digits < 0 || digits > 100 {
+            return Err(Fault::Arith(ArithFault::FixedDigits(digits)));
+        }
+        let text = float_fixed(digits as usize, x);
+        Ok(self.fresh_string(text.as_str()))
+    }
+
+    /// `Float.parse` の読み。`s` の参照を受け取って手放し、読めた値か、読めなければ `None` を返す。読みは T12 の
+    /// `float_parse` がする。
+    ///
+    /// # Safety
+    /// `copy_string` と同じ。
+    pub unsafe fn string_to_float(&mut self, s: Word) -> (r: Result<Option<f64>, Fault>)
+        requires
+            old(self).wf(),
+            old(self).heap_spec().word_in(s),
+            !M::CHECKED ==> old(self).is_string(s) && old(self).holds(s),
+        ensures
+            final(self).wf(),
+            final(self).evv_spec() == old(self).evv_spec(),
+            final(self).yield_spec() == old(self).yield_spec(),
+            r is Ok || (r matches Err(Fault::Heap(_))),
+            (r matches Err(Fault::Heap(_))) ==> final(self).heap_spec().settled_heap() == old(
+                self,
+            ).heap_spec().settled_heap(),
+            !M::CHECKED ==> r is Ok,
+            old(self).held_ok() && old(self).is_string(s) && old(self).holds(s) ==> r is Ok || (
+            r matches Err(Fault::Heap(e)) && chain_err(Err::<(), HeapError>(e))),
+            old(self).held_ok() && old(self).is_string(s) && old(self).holds(s) && r is Ok ==> {
+                &&& final(self).held_ok()
+                &&& final(self).evolved_by(*old(self), |x: usize| -points(s, x), Set::empty())
+            },
+    {
+        let ghost s0 = *self;
+        let ghost c = s0.held_ok() && s0.is_string(s) && s0.holds(s);
+        if M::CHECKED && !s.is_ptr() {
+            return Err(Fault::Heap(HeapError::WrongKind));
+        }
+        self.heap.settle();
+        let ghost h1 = self.heap;
+        let hs = self.heap.header_of(s);
+        proof {
+            lemma_settled_twice(s0.heap);
+            assert(h1.words_kept(s0.heap));
+            h1.lemma_text_spec(s);
+            s0.heap.lemma_text_spec(s);
+            if c {
+                s0.lemma_settled_string(h1, s);
+            }
+        }
+        if let Err(e) = self.heap.checked_string(hs) {
+            proof {
+                self.lemma_words_kept(s0);
+            }
+            return Err(Fault::Heap(e));
+        }
+        let value = float_parse(self.heap.string_text(s));
+        self.heap.release_text(hs, Ghost(s), Ghost(c));
+        proof {
+            if M::CHECKED {
+                lemma_words_trans(self.heap, h1, s0.heap);
+                self.lemma_words_kept(s0);
+            }
+            if c {
+                self.lemma_printed(s0, h1, s);
+            }
+        }
+        Ok(value)
     }
 
     /// `String.show`。`s` を `"` で囲み、エスケープした文字列を作る。`s` の参照を受け取って手放し、結果の参照を返す。

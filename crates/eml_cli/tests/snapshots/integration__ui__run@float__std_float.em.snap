@@ -1,0 +1,27 @@
+---
+source: crates/eml_cli/tests/ui.rs
+expression: "format!(\"--- stdout ---\\n{stdout}--- stderr ---\\n{diagnostics}{stderr}{written}{exit}\")"
+input_file: tests/ui/run/float/std_float.em
+---
+--- stdout ---
+3.0
+-2
+-3
+3
+0
+1.4142135623730951
+0.0
+0.0
+1.0
+2.718281828459045
+0.0
+1024.0
+3.141592653589793
+True
+Some 1.5
+Some (-inf)
+None
+None
+Err "float `nan` does not fit in `Int`"
+Err "`to_fixed` takes 0 to 100 digits, not 101"
+--- stderr ---

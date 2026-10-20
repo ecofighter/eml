@@ -1,0 +1,11 @@
+# `Float` の式の値は `Show Float` で書く。`let` に置いた `Float` は、実行時エラーの後の回復でも根から写され、後の
+# 入力から読める
+> 1.5 + 2.0
+> :type 1.5
+> Some (-0.5)
+> let keep = 2.5
+> let several = [0.1, -0.0, 1.0 / 0.0]
+> 1 / 0
+> keep
+> several
+> keep * 2.0

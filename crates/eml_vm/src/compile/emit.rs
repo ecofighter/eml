@@ -877,6 +877,25 @@ fn arithmetic(ext: Extern, dst: Slot, args: &[Slot]) -> Option<Op> {
         | Extern::IntNeg
         | Extern::FloatNeg
         | Extern::FloatCompare
+        | Extern::FloatShow
+        | Extern::FloatShowsMinus
+        | Extern::FloatOfInt
+        | Extern::FloatTruncate
+        | Extern::FloatFloor
+        | Extern::FloatCeil
+        | Extern::FloatRound
+        | Extern::FloatSqrt
+        | Extern::FloatAbs
+        | Extern::FloatSin
+        | Extern::FloatCos
+        | Extern::FloatExp
+        | Extern::FloatLog
+        | Extern::FloatPow
+        | Extern::FloatInfinity
+        | Extern::FloatNan
+        | Extern::FloatToFixed
+        | Extern::FloatCanParse
+        | Extern::FloatParseRaw
         | Extern::StrConcat
         | Extern::StrEq
         | Extern::StrNe

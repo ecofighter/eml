@@ -864,6 +864,92 @@ fn float_operations_match_rust() {
     }
 }
 
+/// 浮動小数の変換、数学の関数、書式、読み。各関数が Rust の `f64` の関数と同じ値 (NaN は `f64::NAN` のビット列) を
+/// 返し、書式が Python の `repr` と `f"{x:.{n}f}"` の形で、読みが書式の結果を同じビット列に読み戻すこと
+#[test]
+fn float_conversions_and_formats_match_rust() {
+    use crate::externs::*;
+    let values = [
+        0.0,
+        -0.0,
+        0.1,
+        2.5,
+        -3.5,
+        1e16,
+        1e-5,
+        f64::MIN_POSITIVE,
+        5e-324,
+        f64::MAX,
+        f64::INFINITY,
+        f64::NEG_INFINITY,
+        f64::NAN,
+        -f64::NAN,
+    ];
+    let same = |got: f64, want: f64| {
+        let want = if want.is_nan() { f64::NAN } else { want };
+        assert_eq!(got.to_bits(), want.to_bits(), "{got:?} != {want:?}")
+    };
+    // Miri は libm の関数 (`sin` など) の結果に、決まらない小さな誤差を足す。非正規化数の結果では符号も変わりうる。
+    // そのため、それらの有限で 0 でない結果は、相対の誤差が 1e-12 以内か、どちらも非正規化数の大きさかだけを比べる
+    let near = |got: f64, want: f64| {
+        if want.is_nan() || want.is_infinite() || want == 0.0 {
+            same(got, want)
+        } else {
+            let tiny = got.abs() < f64::MIN_POSITIVE && want.abs() < f64::MIN_POSITIVE;
+            assert!(
+                tiny || (got - want).abs() <= want.abs() * 1e-12,
+                "{got:?} !~ {want:?}"
+            )
+        }
+    };
+    let int = |t: f64, x: f64| {
+        if (-9223372036854775808.0..9223372036854775808.0).contains(&t) {
+            Ok(t as i64)
+        } else {
+            Err(ArithFault::FloatToInt(x.to_bits()))
+        }
+    };
+    for x in values {
+        same(float_sqrt(x), x.sqrt());
+        same(float_abs(x), x.abs());
+        near(float_sin(x), x.sin());
+        near(float_cos(x), x.cos());
+        near(float_exp(x), x.exp());
+        near(float_log(x), x.ln());
+        for y in values {
+            near(float_pow(x, y), x.powf(y));
+        }
+        assert_eq!(float_truncate(x), int(x.trunc(), x));
+        assert_eq!(float_floor(x), int(x.floor(), x));
+        assert_eq!(float_ceil(x), int(x.ceil(), x));
+        assert_eq!(float_round(x), int(x.round_ties_even(), x));
+        let minus = x.is_sign_negative() && !x.is_nan();
+        assert_eq!(float_shows_minus(x), if minus { TRUE } else { FALSE });
+        let shown = float_repr(x);
+        assert_eq!(shown.starts_with('-'), minus, "{shown}");
+        let back = float_parse(&shown).unwrap();
+        same(back, x);
+        assert_eq!(
+            float_fixed(3, x),
+            if x.is_nan() {
+                "nan".to_string()
+            } else {
+                format!("{x:.3}")
+            }
+        );
+    }
+    for i in [0, 1, -1, i64::MAX, i64::MIN, (1 << 53) + 1] {
+        same(float_of_int(i), i as f64);
+    }
+    same(float_infinity(), f64::INFINITY);
+    same(float_nan(), f64::NAN);
+    assert_eq!(float_repr(1e16), "1e+16");
+    assert_eq!(float_repr(1e-5), "1e-05");
+    assert_eq!(float_repr(123456.0), "123456.0");
+    assert_eq!(float_parse(" 1_0 "), None);
+    same(float_parse("-nan").unwrap(), f64::NAN);
+}
+
 both_modes!(
     pages_are_aligned_and_returned,
     large_objects_get_their_own_page,

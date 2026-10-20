@@ -742,7 +742,7 @@ token の表の項目は、`into_token` と `release_reuse` が添字を使い�
 
 ## extern
 
-`eml_extern` の表の関数の行のうち `exit` と `panic` を除く52個を、`eml_rt` に語の ABI で1回だけ書く。S10 の VM と、後のネイティブのコードが同じ関数を呼ぶ。ヒープを使わない算術と比較は module `externs` の関数で、文字列と I/O の extern は `Ctx` のメソッドである。純粋な extern は、結果をバイト列や整数の spec に対して Verus で証明する。`exit` と `panic` は VM が実行する。`exit` は終了コードを覚えて、`Ctx::exit_abort` で中断を始める。`panic` は文言を `panicked` の節の入口に渡す ([VM](vm.md) の「extern の中断」)。
+`eml_extern` の表の関数の行のうち `exit` と `panic` を除く71個を、`eml_rt` に語の ABI で1回だけ書く。S10 の VM と、後のネイティブのコードが同じ関数を呼ぶ。ヒープを使わない算術と比較は module `externs` の関数で、文字列と I/O の extern は `Ctx` のメソッドである。純粋な extern は、結果をバイト列や整数の spec に対して Verus で証明する。`exit` と `panic` は VM が実行する。`exit` は終了コードを覚えて、`Ctx::exit_abort` で中断を始める。`panic` は文言を `panicked` の節の入口に渡す ([VM](vm.md) の「extern の中断」)。
 
 行の番号 (`eml_extern::Extern`) から関数を引く表は `eml_rt` に置かない。VM が行の番号の `match` で各関数を呼ぶ。`match` は飛び先の表になるので、関数ポインタの表と同じ速さである。
 
@@ -752,6 +752,10 @@ token の表の項目は、`into_token` と `release_reuse` が添字を使い�
 | `Prelude.Eq Int.==`、`!=`、`Prelude.Ord Int.<`、`<=`、`>`、`>=`、`compare` | `int_eq`、`int_ne`、`int_lt`、`int_le`、`int_gt`、`int_ge`、`int_compare` |
 | `Prelude.Num Float.+`、`-`、`*`、`negate`、`Prelude.Div Float./`、`%` | `float_add`、`float_sub`、`float_mul`、`float_div`、`float_rem`、`float_negate` |
 | `Prelude.Eq Float.==`、`!=`、`Prelude.Ord Float.<`、`<=`、`>`、`>=`、`compare` | `float_eq`、`float_ne`、`float_lt`、`float_le`、`float_gt`、`float_ge`、`float_compare` |
+| `Prelude.shows_minus`、`Std.Float.of_int`、`truncate`、`floor`、`ceil`、`round` | `float_shows_minus`、`float_of_int`、`float_truncate`、`float_floor`、`float_ceil`、`float_round` |
+| `Std.Float.sqrt`、`abs`、`sin`、`cos`、`exp`、`log`、`pow`、`infinity_value`、`nan_value` | `float_sqrt`、`float_abs`、`float_sin`、`float_cos`、`float_exp`、`float_log`、`float_pow`、`float_infinity`、`float_nan` |
+| `Prelude.Show Float.show`、`Std.Float.to_fixed` | `Ctx::float_show`、`float_to_fixed` |
+| `Std.Float.can_parse`、`parse_raw` | `Ctx::string_to_float` (読めたかと、読めた値。読めなければ `parse_raw` は NaN を返す) |
 | `Prelude.Eq Bool.==`、`!=` | `bool_eq`、`bool_ne` |
 | `Prelude.Eq String.==`、`!=`、`Prelude.Ord String.compare` | `Ctx::string_eq`、`string_ne`、`string_compare` |
 | `Prelude.++` | `Ctx::string_append` |
@@ -765,7 +769,7 @@ token の表の項目は、`into_token` と `release_reuse` が添字を使い�
 | `Std.Stdin.read_all`、`read_line_raw` | `Ctx::stdin_read` (`line` が偽と真) |
 | `Std.Proc.status` | `Ctx::proc_status` |
 
-`unit` の引数を持つ行 (`Std.Env.arg_count`、`Std.Stdin.read_all`、`read_line_raw`) は、VM が引数を読まずに呼ぶ。
+`unit` の引数を持つ行 (`Std.Env.arg_count`、`Std.Stdin.read_all`、`read_line_raw`、`Std.Float.infinity_value`、`nan_value`) は、VM が引数を読まずに呼ぶ。
 
 ### 語の ABI
 
@@ -829,6 +833,8 @@ token の表の項目は、`into_token` と `release_reuse` が添字を使い�
 
 - 比較の6つ (`==`、`!=`、`<`、`<=`、`>`、`>=`) は `verus!` の中に書き、結果が `Bool` のタグであることだけを約束する。vstd は `f64` の比較の演算子に仕様を持つが、値を表さないためである
 - 算術 (`+`、`-`、`*`、`/`、`%`、`negate`) と全順序の `compare` は、T12 (下の「`unsafe` の核」) で信頼する。算術の結果が NaN なら、いつも正の quiet NaN (`f64::NAN`) を返す (`canonical_nan`)。Rust は演算の結果の NaN の符号を決めず、x86_64 では符号の立った NaN になるので、そろえないと `compare` の答えがプラットフォームで変わるためである ([宣言](declarations.md) の「Prelude のクラス」)。`compare` は結果が `Ordering` のタグであることを約束する。値は期待値の表で確かめる ([テスト戦略](../implementation/testing.md) の「期待値の表」)。どれも誤りを返さない
+- `Std.Float` の変換 (`of_int`、`truncate`、`floor`、`ceil`、`round`)、数学の関数 (`sqrt`、`abs`、`sin`、`cos`、`exp`、`log`、`pow`)、`infinity_value`、`nan_value`、`Prelude.shows_minus` も T12 で信頼する。本体は Rust の `f64` の関数を呼ぶだけである。数学の関数の NaN の結果も、`canonical_nan` で正の quiet NaN にそろえる。`truncate` などの4つは、結果が `Int` の範囲 `[-2^63, 2^63)` を外れれば (NaN と ±無限大も) `ArithFault::FloatToInt` を返す。誤りは元の値のビット列を持ち、文言 ``float `1e+19` does not fit in `Int` `` の値は `show` の形で書く。`shows_minus` は結果が `Bool` のタグであることを約束する
+- `Show Float` の `show`、`to_fixed`、`parse` の書式と読みも T12 で信頼する。`float_repr` が Python の `repr` の形を、`float_fixed` が Python の `f"{x:.{n}f}"` の形を、Rust の `format!` で作る。`float_parse` は前後の空白を除いて `str::parse` で読む。結果の文字列は `Ctx::float_show` と `float_to_fixed` が `fresh_string` で作り、`string_to_float` は文字列の引数を `env_has` と同じく借りて読んで手放す。この3つは `verus!` の中で確かめる。`to_fixed` の桁数が 0 から 100 の外なら、何も作らずに `ArithFault::FixedDigits` を返す
 
 文字列の extern は、結果を ghost のバイト列の spec で約束する。文字列のバイト列は、T10 の「ペイロードを `str` として借りる関数」で借りて読む。
 
@@ -965,7 +971,7 @@ Verus で確かめない部分は、次の信頼の一覧にまとめる。`exte
 | T9 | Verus、Z3、rustc、vstd (その std の約束を含む) | 道具そのもの | なし |
 | T10 | 文字列のバイトの読み書き。`String` のブロックの権限を受けてペイロードにバイトを写す関数と、ペイロードを `str` として借りる関数と、その位置を返す関数。約束は、権限が渡したポインタの `String` のブロックのもので、長さの語とバイト列の語を持つとき、メモリのバイト列が権限の ghost のバイト列に等しいこと、写すのは長さの語の後ろの容量の中だけで、長さの語の値と権限の位置を変えないこと。写す元のバイト列が写す先と重ならないことを前提にする。このヒープの文字列から写すときは写す先がいつも別のブロックで、`string_push` の `s` は、呼ぶ側の約束により left 自身の中身を指さない | Verus の権限は語の単位で、語の中のバイトの位置を扱わない | 語に揃わない位置への追記、大きい物体のページをまたぐ長さ、大きい左辺からの作り直し、空の文字列、多バイトの文字、1ページの長さを含む自分自身との連結 (`x ++ x`)、ほかの文字列の中身を指す `s` の追記、`string` で読んだ位置の使用が終わった後の追記、`String.show` が区間を写すこと (区間が先頭、途中、末尾にあり、多バイトの文字と接する場合)、2つの借用の規則での読み書き |
 | T11 | Host の実装と、それを呼ぶ関数。`HostRef` とその `Clone`、Host の `write_line` と `flush` を呼ぶ関数、不透明な `File`、Host の `open` を呼ぶ関数、`File` を区切りごとに (行の読みでは次の `\n` まで) 読んで UTF-8 を確かめる関数 `read_text`、引数の数と引数を写す `host_arg_count` と `host_arg`、環境変数を読む `host_env_has` と `host_env_var`、標準入力を読む `host_read_stdin`、ファイルを書く `host_write_file`、子を起動する `host_run`。中身は何も約束しない (書いた中身、読めた中身、返した値のどれも)。約束するのは、`Fault` を返す橋が `Fault::Heap` を返さないことだけで、本体を読めば分かる。`read_text` の `File` を借りる前提は、`foreign_unique` で確かめる (上の「extern」) | Verus は `dyn Host`、`io::Error`、`dyn BufRead` を扱わず、OS とのやりとりの中身は証明の外にある。中身は期待値の表で確かめる ([テスト戦略](../implementation/testing.md) の「期待値の表」) | メモリの Host を通る `println` と `flush`、`open`、`read_all` (区切りをまたぐ長さ、長さの見込みのない読み手、短い読み、途中の読みの誤り、UTF-8 でない中身、止める語 (区切りの前と、止める語が立った後の `Interrupted`))、`read_line_raw` (区切りをまたぐ行、`\r\n` で終わる行、空の行、行の終わりのない最後の行、終わり、途中の読みの誤り、UTF-8 でない行、止める語)、`close`。引数、環境変数、標準入力の行と残り、ファイルの書き込み、子の起動の橋 |
-| T12 | 浮動小数の演算と書式。`Float` の算術 (`float_add`、`float_sub`、`float_mul`、`float_div`、`float_rem`、`float_negate`)、NaN をそろえる `canonical_nan`、全順序の `float_compare`。本体は Rust の `f64` の演算子と `f64::total_cmp` を呼ぶだけで、値は IEEE 754 の倍精度のとおりである。ただし算術の NaN の結果は、`canonical_nan` が正の quiet NaN (`f64::NAN`) にそろえる。約束するのは、`float_compare` の結果が `Ordering` のタグであることだけである (上の「extern」) | vstd の `f64` の算術の仕様は、前提 (`add_req` など) を満たす実装を持たないので呼べない。`%`、`total_cmp`、ビット列との変換は仕様を持たない。値は期待値の表で確かめる | 特別な値 (±0、最小の正規化数と非正規化数、`MAX`、±無限大、NaN) の組で、各関数が Rust の演算と同じビット列 (NaN の結果は `f64::NAN` のビット列) を返し、`float_compare` が `total_cmp` と同じ答えを返すこと |
+| T12 | 浮動小数の演算と書式。`Float` の算術 (`float_add`、`float_sub`、`float_mul`、`float_div`、`float_rem`、`float_negate`)、NaN をそろえる `canonical_nan`、全順序の `float_compare`、`Std.Float` の変換 (`float_of_int`、`float_truncate`、`float_floor`、`float_ceil`、`float_round` と、範囲を確かめる `float_to_int`)、数学の関数 (`float_sqrt`、`float_abs`、`float_sin`、`float_cos`、`float_exp`、`float_log`、`float_pow`)、`float_infinity`、`float_nan`、`float_shows_minus`、書式 (`float_repr`、`float_fixed`) と読み (`float_parse`)。本体は Rust の `f64` の演算子と関数、`f64::total_cmp`、`format!`、`str::parse` を呼ぶだけで、値は IEEE 754 の倍精度のとおりである。ただし NaN の結果は、`canonical_nan` が正の quiet NaN (`f64::NAN`) にそろえる。約束するのは、`float_compare` の結果が `Ordering` のタグであること、`float_shows_minus` の結果が `Bool` のタグであることだけである (上の「extern」) | vstd の `f64` の算術の仕様は、前提 (`add_req` など) を満たす実装を持たないので呼べない。`%`、`total_cmp`、ビット列との変換、整数との変換、数学の関数、書式と読みは仕様を持たない。値は期待値の表で確かめる。書式は Python の出力とも照らし合わせる (`tests/ui/run/float/`) | 特別な値 (±0、最小の正規化数と非正規化数、`MAX`、±無限大、NaN) の組で、各関数が Rust の演算と同じビット列 (NaN の結果は `f64::NAN` のビット列) を返し、`float_compare` が `total_cmp` と同じ答えを返すこと。変換が Rust の丸めと同じ値か同じ誤りを返し、`float_repr` の結果を `float_parse` が同じビット列に読み戻すこと。Miri は数学の関数 (`sin` など) の結果に決まらない小さな誤差を足すので、それらは近さだけを比べる |
 
 T10 の約束は、関数そのものの外の次の2つにも頼る。
 

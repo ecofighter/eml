@@ -148,9 +148,21 @@ fn bools_compare_by_tag() {
 /// 文言は docs/spec/lir.md の「実行時エラー」の一覧のとおりである。
 #[test]
 fn faults_print_their_listed_texts() {
-    let cases: [(Fault, &str); 19] = [
+    let cases: [(Fault, &str); 22] = [
         (ArithFault::DivisionByZero.into(), "division by zero"),
         (ArithFault::IntegerOverflow.into(), "integer overflow"),
+        (
+            ArithFault::FloatToInt(f64::NAN.to_bits()).into(),
+            "float `nan` does not fit in `Int`",
+        ),
+        (
+            ArithFault::FloatToInt(1e19f64.to_bits()).into(),
+            "float `1e+19` does not fit in `Int`",
+        ),
+        (
+            ArithFault::FixedDigits(101).into(),
+            "`to_fixed` takes 0 to 100 digits, not 101",
+        ),
         (
             Fault::Output("disk full".into()),
             "cannot write the output: disk full",
@@ -1168,6 +1180,7 @@ unsafe fn call<M: Mode>(
     let float_arith =
         |f: fn(f64, f64) -> f64| Outcome::Float(table::float_outcome(f(float(0), float(1))));
     let float_test = |f: fn(f64, f64) -> i64| tag_bool(f(float(0), float(1)));
+    let float_result = |x: f64| Outcome::Float(table::float_outcome(x));
     unsafe {
         let one = |ctx: &mut crate::Ctx<M>, args: &mut Args| args.string(ctx, &inputs[0], root);
         let two = |ctx: &mut crate::Ctx<M>, args: &mut Args| {
@@ -1203,6 +1216,37 @@ unsafe fn call<M: Mode>(
             "Prelude.Ord Float.>" => float_test(float_gt),
             "Prelude.Ord Float.>=" => float_test(float_ge),
             "Prelude.Ord Float.compare" => tag_order(float_compare(float(0), float(1))),
+            "Prelude.Show Float.show" => {
+                let w = ctx.float_show(float(0));
+                take_text(ctx, w)
+            }
+            "Prelude.shows_minus" => tag_bool(float_shows_minus(float(0))),
+            "Std.Float.of_int" => float_result(float_of_int(int(0))),
+            "Std.Float.truncate" => Outcome::Int(float_truncate(float(0))?),
+            "Std.Float.floor" => Outcome::Int(float_floor(float(0))?),
+            "Std.Float.ceil" => Outcome::Int(float_ceil(float(0))?),
+            "Std.Float.round" => Outcome::Int(float_round(float(0))?),
+            "Std.Float.sqrt" => float_result(float_sqrt(float(0))),
+            "Std.Float.abs" => float_result(float_abs(float(0))),
+            "Std.Float.sin" => float_result(float_sin(float(0))),
+            "Std.Float.cos" => float_result(float_cos(float(0))),
+            "Std.Float.exp" => float_result(float_exp(float(0))),
+            "Std.Float.log" => float_result(float_log(float(0))),
+            "Std.Float.pow" => float_arith(float_pow),
+            "Std.Float.infinity_value" => float_result(float_infinity()),
+            "Std.Float.nan_value" => float_result(float_nan()),
+            "Std.Float.to_fixed" => {
+                let w = ctx.float_to_fixed(int(0), float(1))?;
+                take_text(ctx, w)
+            }
+            "Std.Float.can_parse" => {
+                let a = one(ctx, args);
+                Outcome::Bool(ctx.string_to_float(a)?.is_some())
+            }
+            "Std.Float.parse_raw" => {
+                let a = one(ctx, args);
+                float_result(ctx.string_to_float(a)?.unwrap_or(f64::NAN))
+            }
             "Prelude.Eq Bool.==" => compare(bool_eq),
             "Prelude.Eq Bool.!=" => compare(bool_ne),
             "Prelude.Show Int.show" => {

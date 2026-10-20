@@ -1,0 +1,10 @@
+---
+source: crates/eml_cli/tests/ui.rs
+expression: "format!(\"--- stdout ---\\n{stdout}--- stderr ---\\n{diagnostics}{stderr}--- runtime error ---\\n{error}\\n{written}\")"
+input_file: tests/ui/run-fail/float/truncate_out_of_range.em
+---
+--- stdout ---
+--- stderr ---
+--- runtime error ---
+float `1e+19` does not fit in `Int`
+  at run-fail/float/truncate_out_of_range.em:3:26

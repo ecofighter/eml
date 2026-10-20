@@ -20,7 +20,7 @@ eml run --debug-heap wc.em -l input.txt
 
 ## extern の境界
 
-標準ライブラリの extern は小さい核にとどめ、便利な関数は eml で書く。extern の境界では、スカラー (`Int`、`Bool`、`Unit`)、文字列、`Foreign` だけを受け渡し、`List` と `Option` は eml の側で組む。`eml_rt` がデータの配置を知らないで済むようにするためである ([Core IR](core-ir.md) の「translate の配置」)。そのため、`pub` でない extern は番兵 (見つからない位置の -1、終わりの空の文字列など) を返すことがある。番兵は標準ライブラリの中に閉じ込め、利用者には `Option` で見せる。
+標準ライブラリの extern は小さい核にとどめ、便利な関数は eml で書く。extern の境界では、スカラー (`Int`、`Float`、`Bool`、`Unit`)、文字列、`Foreign` だけを受け渡し、`List` と `Option` は eml の側で組む。`eml_rt` がデータの配置を知らないで済むようにするためである ([Core IR](core-ir.md) の「translate の配置」)。そのため、`pub` でない extern は番兵 (見つからない位置の -1、終わりの空の文字列など) を返すことがある。番兵は標準ライブラリの中に閉じ込め、利用者には `Option` で見せる。
 
 文字の型がまだないので、文字列の位置は UTF-8 のバイトの位置 (`Int`) で表す。引数の順は、対象を最後に置く。`line |> String.split ","` と部分適用で使えるようにするためである。
 
@@ -163,6 +163,33 @@ pub extern exit : Int -> <IO> a
 - `to_int s` は、Rust の `i64::from_str` と同じ形を読む。省略できる符号 `+` か `-` の後に、1つ以上の ASCII の数字が続く形である。空白は許さない。範囲を超えれば `None` で、`"-9223372036854775808"` は読める
 - `byte_length` と `join` のほかの関数は、`byte_at`、`slice`、std の中だけの `find_from` か算術を使うので、型の上では `Panic` を起こしうる
 - 部分文字列の照合は素朴な方法で、`needle` の長さと探す範囲の長さの積に比例する時間がかかる
+
+## `Std.Float`
+
+| 名前 | 型 | 実装 |
+|---|---|---|
+| `of_int` | `Int -> Float` | extern |
+| `truncate`、`floor`、`ceil`、`round` | `Float -> <Panic> Int` | extern |
+| `sqrt`、`abs`、`sin`、`cos`、`exp`、`log` | `Float -> Float` | extern |
+| `pow` | `Float -> Float -> Float` | extern |
+| `pi` | `Float` | eml (`3.141592653589793`) |
+| `infinity`、`nan` | `Float` | eml (std の中だけの extern を呼ぶ) |
+| `is_nan` | `Float -> Bool` | eml |
+| `to_fixed` | `Int -> Float -> <Panic> String` | extern |
+| `parse` | `String -> Option Float` | eml |
+
+`String` と同じく、モジュールで修飾して使う (`Float.sqrt x`)。Prelude の名前を増やさないため、Prelude には入れない。
+
+- `of_int i` は、`i` に最も近い `Float` である。ちょうど中間なら、仮数の最後のビットが偶数の側を選ぶ
+- `truncate` は 0 の側へ切り捨てる。`floor` は床、`ceil` は天井である。`round` は最も近い整数で、ちょうど中間なら偶数の側を選ぶ (Python の `round` と同じで、`round 2.5` は `2`)
+- 4つの変換は、NaN、±無限大、`Int` の範囲 `[-2^63, 2^63)` を外れる結果で `Panic` を起こす。文言は `` float `1e+19` does not fit in `Int` `` で、値は `show` と同じ形で書く (下の「実行時エラー」)
+- `sqrt`、`abs`、`sin`、`cos`、`exp`、`log` (自然対数)、`pow x y` (`x` の `y` 乗) は、Rust の `f64` の関数と同じ値を返す。定義域の外は `nan` である。`sqrt` と `abs` のほかは、値の最後の桁がプラットフォームの数学のライブラリで変わりうる
+- 計算が作る NaN は、`Float` の算術と同じく、どれも正の quiet NaN である。そのため `compare` で、NaN はどの値よりも大きい ([宣言](declarations.md) の「Prelude のクラス」)
+- `infinity` と `nan` はリテラルを持たない。値の本体は `<>` に限るので、std の中だけの `Pure` の extern `infinity_value` と `nan_value` (`Unit -> Float`) を呼んで作る
+- `is_nan x` は `x != x` である。NaN だけが自分と等しくない
+- `to_fixed n x` は、小数点以下 `n` 桁の文字列で、Python の `f"{x:.{n}f}"` と同じである。10進の値を正しく丸め、ちょうど中間なら偶数の側を選ぶ (`to_fixed 0 2.5` は `"2"`、`to_fixed 2 1.005` は `"1.00"`)。特別な値は `inf`、`-inf`、`nan` と書き、`-0.0` は `-` を付ける。`n` が 0 から 100 の外なら `Panic` を起こす
+- `parse s` は、前後の Unicode の空白を除き、Rust の `f64::from_str` が受ける形を読む。符号、10進と指数の形 (`1.5`、`.5`、`5.`、`1E-5`、`1e+16`)、大文字小文字を問わない `inf`、`infinity`、`nan` である。Python の `float` と違い、数字の間の `_` は受けない。読めなければ `None` で、大きすぎる値は無限大になる。`parse (show x)` は、どの `x` でも同じ値を返す
+- `parse` は、std の中だけの2つの `Pure` の extern で書いてある。`can_parse : String -> Bool` が読めるかを返し、`parse_raw : String -> Float` が値を返す (上の「extern の境界」)
 
 ## `Env`
 
@@ -335,13 +362,15 @@ pub data Iter <e> a = | Iter (once Unit -> <e> Option (a, Iter <e> a))
 
 標準ライブラリの extern の誤りの文言は次のとおりである。I/O の失敗の理由は `not found`、`permission denied`、`not available`、`I/O error` のどれかである。位置は extern を呼んだ所で、標準ライブラリの関数の中の extern なら `<std>/…` の位置になる。
 
-I/O の失敗の一部は `try_io` で捕まえられる (上の「`try_io`」)。`byte_at` と `slice` の誤りは `Panic` で、`try_panic` で捕まえられる (上の「`try_panic`」)。捕まえなかった失敗は、この表の文言の実行時エラーになる。
+I/O の失敗の一部は `try_io` で捕まえられる (上の「`try_io`」)。`byte_at` と `slice` の誤りと、`Std.Float` の変換と `to_fixed` の誤りは `Panic` で、`try_panic` で捕まえられる (上の「`try_panic`」)。捕まえなかった失敗は、この表の文言の実行時エラーになる。
 
 | 失敗 | 文言 |
 |---|---|
 | `byte_at` の範囲の外 | ``string index 5 is out of range for length 3`` |
 | `slice` の範囲の外 | ``string slice 2..9 is out of range for length 3`` |
 | `slice` の境界 | ``string slice 1..3 is not on a character boundary`` |
+| `Float.truncate`、`floor`、`ceil`、`round` の範囲の外 | `` float `1e+19` does not fit in `Int` `` (値は `show` の形) |
+| `Float.to_fixed` の桁数 | `` `to_fixed` takes 0 to 100 digits, not 101 `` |
 | `Fs.write_text` | ``cannot write `out.txt`: permission denied`` |
 | `Proc.run` の起動 | ``cannot run `rsync`: not found`` |
 | 標準入力の読み | ``cannot read the standard input: not available`` |

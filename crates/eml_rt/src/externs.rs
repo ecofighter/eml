@@ -45,6 +45,10 @@ pub const IO_OTHER: i64 = 4;
 pub enum ArithFault {
     DivisionByZero,
     IntegerOverflow,
+    /// `Int` に収まらない `Float` を `Int` に変えようとした。値はビット列で持ち、`Eq` を保つ。
+    FloatToInt(u64),
+    /// `Float.to_fixed` の桁数が 0 から 100 の外にある。
+    FixedDigits(i64),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -494,6 +498,196 @@ pub fn float_compare(a: f64, b: f64) -> (r: i64)
     }
 }
 
+/// `Float.of_int`。最も近い値に丸め、ちょうど中間なら偶数の側を選ぶ (Rust の `as`)。
+#[verifier::external_body]
+#[inline]
+pub fn float_of_int(i: i64) -> f64 {
+    i as f64
+}
+
+/// 0 の側へ切り捨てる。結果が `Int` に収まらなければ (NaN、±無限大も)、元の値を持つ誤りを返す。
+#[verifier::external_body]
+#[inline]
+pub fn float_truncate(x: f64) -> Result<i64, ArithFault> {
+    float_to_int(x.trunc(), x)
+}
+
+#[verifier::external_body]
+#[inline]
+pub fn float_floor(x: f64) -> Result<i64, ArithFault> {
+    float_to_int(x.floor(), x)
+}
+
+#[verifier::external_body]
+#[inline]
+pub fn float_ceil(x: f64) -> Result<i64, ArithFault> {
+    float_to_int(x.ceil(), x)
+}
+
+/// ちょうど中間なら偶数の側を選ぶ (Python の `round` と同じ)。
+#[verifier::external_body]
+#[inline]
+pub fn float_round(x: f64) -> Result<i64, ArithFault> {
+    float_to_int(x.round_ties_even(), x)
+}
+
+/// 整数の値 `t` を `Int` にする。`Int` の範囲は `[-2^63, 2^63)` で、両端は `f64` でちょうど表せる。NaN はどちらの
+/// 比較も偽なので誤りになる。
+#[verifier::external_body]
+#[inline]
+fn float_to_int(t: f64, x: f64) -> Result<i64, ArithFault> {
+    if (-9223372036854775808.0..9223372036854775808.0).contains(&t) {
+        Ok(t as i64)
+    } else {
+        Err(ArithFault::FloatToInt(x.to_bits()))
+    }
+}
+
+// 数学の関数。値は Rust の `f64` のとおりで、定義域の外は NaN である。NaN は算術と同じく正の quiet NaN にそろえる
+#[verifier::external_body]
+#[inline]
+pub fn float_sqrt(x: f64) -> f64 {
+    canonical_nan(x.sqrt())
+}
+
+#[verifier::external_body]
+#[inline]
+pub fn float_abs(x: f64) -> f64 {
+    canonical_nan(x.abs())
+}
+
+#[verifier::external_body]
+#[inline]
+pub fn float_sin(x: f64) -> f64 {
+    canonical_nan(x.sin())
+}
+
+#[verifier::external_body]
+#[inline]
+pub fn float_cos(x: f64) -> f64 {
+    canonical_nan(x.cos())
+}
+
+#[verifier::external_body]
+#[inline]
+pub fn float_exp(x: f64) -> f64 {
+    canonical_nan(x.exp())
+}
+
+/// 自然対数。
+#[verifier::external_body]
+#[inline]
+pub fn float_log(x: f64) -> f64 {
+    canonical_nan(x.ln())
+}
+
+/// `x` の `y` 乗。
+#[verifier::external_body]
+#[inline]
+pub fn float_pow(x: f64, y: f64) -> f64 {
+    canonical_nan(x.powf(y))
+}
+
+#[verifier::external_body]
+#[inline]
+pub fn float_infinity() -> f64 {
+    f64::INFINITY
+}
+
+#[verifier::external_body]
+#[inline]
+pub fn float_nan() -> f64 {
+    f64::NAN
+}
+
+/// `show x` が `-` で始まるか。符号の立った値 (`-0.0` と `-inf` も) なら真で、NaN は `nan` と書くので偽である。
+#[verifier::external_body]
+#[inline]
+pub fn float_shows_minus(x: f64) -> (r: i64)
+    ensures
+        r == FALSE || r == TRUE,
+{
+    if x.is_sign_negative() && !x.is_nan() {
+        TRUE
+    } else {
+        FALSE
+    }
+}
+
+/// `Show Float` の文字列。Python の `repr` と同じ形である (docs/spec/declarations.md の「Prelude のクラス」)。往復
+/// できる最短の桁数を `{:e}` で求め、その桁数で正しく丸めた桁を `{:.*e}` で求める。`{:e}` は最短の桁の候補が2つ
+/// あると中間から上を選ぶが、Python は値に近い方 (ちょうど中間なら偶数の側) を選ぶためである。10進の指数が -4 以上
+/// 16 未満なら固定小数点で、ほかは指数の形で書く。
+#[verifier::external_body]
+pub fn float_repr(x: f64) -> String {
+    if x.is_nan() {
+        return "nan".to_string();
+    }
+    if x.is_infinite() {
+        return if x > 0.0 {
+            "inf"
+        } else {
+            "-inf"
+        }.to_string();
+    }
+    let shortest = format!("{x:e}");
+    let mantissa_len = shortest.find('e').expect("`{:e}` writes an exponent");
+    let digit_count = shortest[..mantissa_len].bytes().filter(|b| b.is_ascii_digit()).count();
+    let sci = format!("{x:.prec$e}", prec = digit_count - 1);
+    let (mantissa, exp) = sci.split_once('e').expect("`{:e}` writes an exponent");
+    let exp: i32 = exp.parse().expect("`{:e}` writes a decimal exponent");
+    let (sign, mantissa) = match mantissa.strip_prefix('-') {
+        Some(m) => ("-", m),
+        None => ("", mantissa),
+    };
+    let digits: String = mantissa.replace('.', "");
+    let mut out = String::from(sign);
+    if (-4..16).contains(&exp) {
+        if exp >= 0 {
+            let int_len = exp as usize + 1;
+            if digits.len() <= int_len {
+                out.push_str(&digits);
+                out.extend(std::iter::repeat_n('0', int_len - digits.len()));
+                out.push_str(".0");
+            } else {
+                out.push_str(&digits[..int_len]);
+                out.push('.');
+                out.push_str(&digits[int_len..]);
+            }
+        } else {
+            out.push_str("0.");
+            out.extend(std::iter::repeat_n('0', (-exp - 1) as usize));
+            out.push_str(&digits);
+        }
+    } else {
+        out.push_str(&digits[..1]);
+        if digits.len() > 1 {
+            out.push('.');
+            out.push_str(&digits[1..]);
+        }
+        out.push_str(&format!("e{}{:02}", if exp < 0 { '-' } else { '+' }, exp.unsigned_abs()));
+    }
+    out
+}
+
+/// 小数点以下 `digits` 桁の文字列。Python の `f"{x:.{digits}f}"` と同じく、10進の値を正しく丸める (ちょうど中間なら
+/// 偶数の側)。Rust は NaN を `NaN` と書くので、Python と同じ `nan` にする。
+#[verifier::external_body]
+pub fn float_fixed(digits: usize, x: f64) -> String {
+    if x.is_nan() {
+        "nan".to_string()
+    } else {
+        format!("{x:.digits$}")
+    }
+}
+
+/// `Float.parse` の読み。前後の Unicode の空白を除き、Rust の `f64::from_str` が受ける形 (符号、10進と指数の形、大文字
+/// 小文字を問わない `inf`、`infinity`、`nan`) を読む。`_` は受けない。NaN は正の quiet NaN にそろえる。
+#[verifier::external_body]
+pub fn float_parse(text: &str) -> Option<f64> {
+    text.trim().parse::<f64>().ok().map(canonical_nan)
+}
+
 // 比較の演算子は IEEE 754 のとおりで、NaN が絡むと `!=` のほかは偽である。vstd が比較の仕様を持つので、
 // `verus!` の中で確かめる。値は約束せず、結果が `Bool` のタグであることだけを約束する
 #[inline]
@@ -572,10 +766,16 @@ pub fn float_ge(a: f64, b: f64) -> (r: i64)
 // 文言は docs/spec/lir.md の「実行時エラー」の一覧と1文字も違わないようにする
 impl fmt::Display for ArithFault {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(match self {
-            ArithFault::DivisionByZero => "division by zero",
-            ArithFault::IntegerOverflow => "integer overflow",
-        })
+        match self {
+            ArithFault::DivisionByZero => f.write_str("division by zero"),
+            ArithFault::IntegerOverflow => f.write_str("integer overflow"),
+            ArithFault::FloatToInt(bits) => write!(
+                f,
+                "float `{}` does not fit in `Int`",
+                float_repr(f64::from_bits(*bits))
+            ),
+            ArithFault::FixedDigits(n) => write!(f, "`to_fixed` takes 0 to 100 digits, not {n}"),
+        }
     }
 }
 

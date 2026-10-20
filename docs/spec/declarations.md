@@ -302,6 +302,7 @@ pub class Show a where
 - `Eq Float` と `Ord Float` の比較の演算子 (`==`、`!=`、`<`、`<=`、`>`、`>=`) は IEEE 754 のとおりである。NaN はどの値とも等しくなく、NaN が絡むと `!=` のほかは偽になる。`0.0 == -0.0` は真である。`compare` だけは全順序 (Rust の `f64::total_cmp`) で、`-nan < -inf < … < -0.0 < 0.0 < … < inf < nan` と並べる。`Float` の演算が作る NaN は、どれもいつも正の quiet NaN (Rust の `f64::NAN`、ビット列 `0x7FF8000000000000`) にそろえる。そのため、どのプラットフォームでも `compare` は計算で得た NaN を `inf` より大きく並べる。並べ替えが NaN を含んでも順序として成り立つためである。そのため `Float` では、NaN と ±0 のときだけ、`==` と `compare … == EQ` の答えが食い違う (`0.0 == -0.0` は真だが、`compare (-0.0) 0.0` は `LT` である)。Prelude のほかの instance では、2つは食い違わない
 - `Float` を含む複合の値の大小も、この例外に従う。導出した `Ord` とタプルの instance は `compare` だけを生成し、`<`、`<=`、`>`、`>=` はクラスの既定の実装が `compare` を通して決めるので、全順序に従う。`-0.0 < 0.0` は偽だが、`Some (-0.0) < Some 0.0` は真で、`(0.0, 1) < (-0.0, 2)` は偽である (最後の例は Python のタプルの比較と違う)。導出した `Eq` とタプルの `==` はフィールドごとの `==` なので IEEE 754 のままで、`Some nan == Some nan` は偽である
 - 利用者は自分の型 (ベクトルなど) に `Num` と `Div` の instance を書ける。前置の `-` は、その型の instance の `negate` を呼ぶ
+- `Show Float` の `show` は、Python の `repr` と同じ形である。往復できる最短の10進の桁を使う。桁の候補が2つあれば値に近い方を、ちょうど中間なら偶数の側を選ぶ。10進の指数 `e` (先頭の桁の位) が `-4 <= e < 16` なら固定小数点で書き、整数の値にも `.0` を付ける (`3.0`、`0.1`、`123456.0`、`1000000000000000.0`)。それ以外は `d[.ddd]e±XX` の形で、指数には符号と2桁以上の数字を付ける (`1e-05`、`1e+16`、`1.5e+16`、`5e-324`)。特別な値は `inf`、`-inf`、`nan`、`-0.0` で、`-nan` とは書かない。読み戻しは `Std.Float.parse` でできる ([標準ライブラリ](stdlib.md) の「`Std.Float`」)。計測の出力を Python の版と照らし合わせるため、Python に合わせる
 - `Show` の `show` は既定を持たない。`show` と `show_prec` を互いの既定にすると、どちらも書かない instance が止まらなくなるためである
 - `show_prec d x` の `d` は、`x` を置く位置の優先度である。関数適用の引数の位置は 11 である。導出した `Show` は、これで入れ子の値と中置のコンストラクタに括弧を付ける (上の「`deriving`」)
 - `show` は読み戻せる形、`display` は人が読む形を返す。補間の穴は `display` を呼ぶ ([式](expressions.md) の「補間」)。`display` の既定は `show` である。Prelude の instance では `String` だけが上書きし、文字列をそのまま返す。Haskell の `Show` が `String` の表示のために `showList` を持つのと同じく、クラスのメソッドで `String` だけを特別に扱う
@@ -342,6 +343,7 @@ Prelude の instance は次のとおりである。
 | `Eq Int` | `extern (==)`、`extern (!=)` |
 | `Ord Int` | `extern compare`、`extern (<)`、`extern (<=)`、`extern (>)`、`extern (>=)` |
 | `Show Int` | `extern show`。`show_prec` は Prelude に書き、`d > 6` で負の数なら括弧で囲む (`Some (-1)`) |
+| `Show Float` | `extern show`。Python の `repr` と同じ形で表示する (上の「Prelude のクラス」)。`show_prec` は Prelude に書き、`d > 6` で表示が `-` で始まるなら括弧で囲む (`Some (-1.5)`、`Some (-0.0)`、`Some (-inf)`)。`-` で始まるかは、Prelude の中だけの `Pure` の extern `shows_minus : Float -> Bool` で見分ける。`x < 0.0` は `-0.0` で偽になるためである |
 | `Eq String` | `extern (==)`、`extern (!=)` |
 | `Ord String` | `extern compare`。順はバイト順で、妥当な UTF-8 ではコードポイントの順と一致する。`<` などは既定のメソッドを通る |
 | `Show String` | `extern show`。下のエスケープで表示する。`display s = s` で、文字列をそのまま返す。恒等関数で足りるので、extern にしない |

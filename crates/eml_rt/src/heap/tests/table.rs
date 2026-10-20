@@ -144,6 +144,63 @@ pub const FLOAT_EDGES: [f64; 14] = [
     f64::NAN,
 ];
 
+/// `Int` への変換の端の値。ちょうど中間の値と、`Int` の範囲の両端の内と外
+pub const FLOAT_TO_INT: [f64; 12] = [
+    2.5,
+    3.5,
+    -0.5,
+    0.5,
+    -2.7,
+    2.1,
+    // 2^63 より小さい最大の値、2^63、-2^63、-2^63 より大きい側の外の値
+    9223372036854774784.0,
+    9223372036854775808.0,
+    -9223372036854775808.0,
+    -9223372036854777856.0,
+    1e19,
+    -1e19,
+];
+
+/// 数学の関数の入力。結果がプラットフォームの libm によらない値に限る (乱数の値は libm で最後の桁が変わりうる)
+pub const MATH_EDGES: [f64; 9] = [
+    0.0,
+    -0.0,
+    1.0,
+    -1.0,
+    2.0,
+    0.5,
+    f64::INFINITY,
+    f64::NEG_INFINITY,
+    f64::NAN,
+];
+
+/// `Float.parse` の入力。空白、符号、`inf` と `nan` の綴り、`_`、読めない形を含む
+pub const FLOAT_TEXTS: [&str; 23] = [
+    "1.5",
+    " 1.5 ",
+    "-inf",
+    "+Infinity",
+    "nan",
+    "NaN",
+    "-nan",
+    "1e5",
+    "1E-5",
+    ".5",
+    "5.",
+    "1_0",
+    "abc",
+    "",
+    " ",
+    "0x10",
+    "1e400",
+    "-0.0",
+    "\u{2003}2\u{a0}",
+    "1.7976931348623157e+308",
+    "5e-324",
+    "1e",
+    "--1",
+];
+
 /// 浮動小数を2つ取る行
 pub const FLOAT_BINARY: [&str; 12] = [
     "Prelude.Num Float.+",
@@ -436,6 +493,72 @@ pub fn inputs() -> Vec<(String, Vec<Arg>)> {
     for a in FLOAT_EDGES.into_iter().chain(random_floats(RANDOM_INTS)) {
         push("Prelude.Num Float.negate", vec![float(a)]);
     }
+    for name in ["Prelude.Show Float.show", "Prelude.shows_minus"] {
+        for a in FLOAT_EDGES.into_iter().chain(random_floats(RANDOM_INTS)) {
+            push(name, vec![float(a)]);
+        }
+    }
+    for a in EDGES.into_iter().chain(random_ints(RANDOM_INTS)) {
+        push("Std.Float.of_int", vec![Arg::Int(a)]);
+    }
+    for name in [
+        "Std.Float.truncate",
+        "Std.Float.floor",
+        "Std.Float.ceil",
+        "Std.Float.round",
+    ] {
+        for a in FLOAT_EDGES
+            .into_iter()
+            .chain(FLOAT_TO_INT)
+            .chain(random_floats(RANDOM_INTS))
+        {
+            push(name, vec![float(a)]);
+        }
+    }
+    for name in ["Std.Float.sqrt", "Std.Float.abs"] {
+        for a in FLOAT_EDGES.into_iter().chain(random_floats(RANDOM_INTS)) {
+            push(name, vec![float(a)]);
+        }
+    }
+    for name in [
+        "Std.Float.sin",
+        "Std.Float.cos",
+        "Std.Float.exp",
+        "Std.Float.log",
+    ] {
+        for a in MATH_EDGES {
+            push(name, vec![float(a)]);
+        }
+    }
+    for a in MATH_EDGES {
+        for b in MATH_EDGES.into_iter().chain([-1.5]) {
+            push("Std.Float.pow", vec![float(a), float(b)]);
+        }
+    }
+    push("Std.Float.infinity_value", vec![]);
+    push("Std.Float.nan_value", vec![]);
+    for n in [-1, 0, 2, 17, 100, 101] {
+        for a in FLOAT_EDGES {
+            push("Std.Float.to_fixed", vec![Arg::Int(n), float(a)]);
+        }
+    }
+    for (n, a) in [
+        (0, 2.5),
+        (0, 3.5),
+        (0, -0.5),
+        (2, 1.005),
+        (9, 1.0 / 3.0),
+        (20, 0.1),
+    ] {
+        push("Std.Float.to_fixed", vec![Arg::Int(n), float(a)]);
+    }
+    for name in ["Std.Float.can_parse", "Std.Float.parse_raw"] {
+        for text in FLOAT_TEXTS {
+            push(name, vec![Arg::Const(text.to_string())]);
+        }
+    }
+    push("Std.Float.parse_raw", vec![Arg::Unique("2.5".into())]);
+    push("Std.Float.parse_raw", vec![Arg::Shared("2.5".into())]);
     for name in ["Prelude.Eq Bool.==", "Prelude.Eq Bool.!="] {
         for a in [false, true] {
             for b in [false, true] {
