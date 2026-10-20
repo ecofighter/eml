@@ -3745,6 +3745,104 @@ impl<M: Mode> Heap<M> {
         unsafe { self.foreign(w) }
     }
 
+    /// `set_lin` の後の状態。`w` の物体の `meta` の `lin` ビットだけが `lin` になり、ほかは変わらない。
+    pub closed spec fn relinked(&self, old: Heap<M>, w: Word, lin: bool) -> bool {
+        let h = w.bits_spec();
+        &&& self.dummy == old.dummy
+        &&& self.region == old.region
+        &&& self.worker == old.worker
+        &&& self.tokens == old.tokens
+        &&& self.building == old.building
+        &&& w.is_ptr_spec()
+        &&& old.core.dom().contains(h)
+        &&& old.core.state(h) == BlockState::Live
+        &&& old.core.model@.building is None
+        &&& self.core.meta_changed(old.core, h)
+        &&& bits_wf(self.core.meta_bits(h))
+        &&& bits_lin(self.core.meta_bits(h)) == lin
+        &&& bits_tag(self.core.meta_bits(h)) == bits_tag(old.core.meta_bits(h))
+        &&& bits_scan(self.core.meta_bits(h)) == bits_scan(old.core.meta_bits(h))
+        &&& bits_kind(self.core.meta_bits(h)) == bits_kind(old.core.meta_bits(h))
+    }
+
+    /// 一意な `Data` の物体の `lin` ビットを `lin` にする。tag、scan、種類、rc は変えない。`MutArray.freeze` と
+    /// `Array.thaw` が、物体を写さずに `Array` と `MutArray` を行き来するのに使う (docs/spec/object-model.md の「配列」)。
+    /// 一意な物体はほかの物体から辺で指されず、ほかのスレッドも読めないので、`lin` ビットを変えても誰の前提も崩れない。
+    ///
+    /// # Safety
+    /// `w` はこのヒープか付けた塊の生きている物体を指す。速いモードでは、`w` は `Data` の物体で、rc が 1 で、持ち主は
+    /// 今の worker である (検査モードは確かめ、`Data` でなければ `WrongKind` を、rc が 1 でなければ `NotUnique` を返す)。
+    pub unsafe fn set_lin(&mut self, w: Word, lin: bool) -> (r: Result<(), HeapError>)
+        requires
+            old(self).wf(),
+            old(self).safe_settleable(),
+            w.is_ptr_spec(),
+            old(self).word_in(w),
+            !M::CHECKED ==> old(self).settleable() && old(self).readable(w) && old(self).kind_of(w)
+                == Kind::Data && old(self).rc_value(w) == 1 && old(self).owned(w),
+        ensures
+            final(self).wf(),
+            final(self).settled(),
+            r is Err ==> *final(self) == old(self).settled_heap(),
+            !M::CHECKED ==> r is Ok,
+            old(self).consistent() && old(self).settleable() && old(self).readable(w) && old(
+                self,
+            ).kind_of(w) == Kind::Data && old(self).rc_value(w) == 1 && old(self).owned(w)
+                ==> r is Ok,
+            r is Ok ==> final(self).relinked(old(self).settled_heap(), w, lin),
+            r is Ok && old(self).consistent() && old(self).settleable()
+                ==> final(self).consistent(),
+            M::CHECKED ==> final(self).words_kept(*old(self)),
+    {
+        let ghost c = self.consistent() && self.settleable() && self.readable(w) && self.kind_of(w)
+            == Kind::Data && self.rc_value(w) == 1 && self.owned(w);
+        let ghost c0 = self.consistent() && self.settleable();
+        self.settle();
+        let ghost s1 = *self;
+        let h = self.header_of(w);
+        proof {
+            self.lemma_checks_pass(w);
+            reveal(Core::building_wf);
+        }
+        self.checked_live(h)?;
+        let m = self.core.meta_get(h);
+        if M::CHECKED {
+            if !matches!(m.kind(), Kind::Data) {
+                return Err(HeapError::WrongKind);
+            }
+            let rc = self.core.rc_get(h);
+            if rc != 1 {
+                return Err(HeapError::NotUnique);
+            }
+            self.checked_owner(h, rc)?;
+        }
+        proof {
+            if c {
+                old(self).core.lemma_settled_view();
+            }
+            assert(self.core.rc_of(h@.addr) == 1);
+            if !self.core.dom().contains(h@.addr) {
+                self.core.lemma_region_at(h@.addr);
+            }
+            assert(self.core.state(h@.addr) == BlockState::Live);
+        }
+        let ghost s0 = self.core;
+        self.core.meta_put(h, m.with_lin(lin));
+        proof {
+            m.lemma_fields();
+            self.core.lemma_meta_set(s0, h@.addr);
+            let d = self.dummy.bits_spec();
+            if self.core.dom().contains(d) && d != h@.addr {
+                assert(self.core.perms@[d] == s0.perms@[d]);
+            }
+            if c0 {
+                assert(self.core.quiet());
+                assert(self.dummy_wf());
+            }
+        }
+        Ok(())
+    }
+
     /// `tobj` の `Int` を読む。即値なら右シフトし、物体なら `BigInt` の中身を読む。
     ///
     /// # Safety

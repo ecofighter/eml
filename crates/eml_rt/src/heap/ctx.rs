@@ -26,6 +26,7 @@ use crate::word::lemma_unit_bits;
 #[cfg(verus_only)]
 use proof::*;
 
+mod arrays;
 mod io;
 mod positions;
 // 証明の部品だけを置くので、検証のときだけ読む
@@ -169,6 +170,49 @@ spec fn kept_for<M: Mode>(h1: Heap<M>, h0: Heap<M>, x: Set<usize>) -> bool {
         #![trigger h0.dup_passes(v)]
         #![trigger h1.dup_passes(v)]
         h0.dup_passes(v) ==> h1.dup_passes(v)
+}
+
+/// ブロック `b` は、`h0` と `lin` ビットのほかは同じ `meta` を持ち、rc の符号と持ち主も同じである。
+spec fn same_head_lin<M: Mode>(h1: Heap<M>, h0: Heap<M>, b: usize) -> bool {
+    let m1 = h1.core.perm(b).meta.value();
+    let m0 = h0.core.perm(b).meta.value();
+    &&& bits_tag(m1) == bits_tag(m0)
+    &&& bits_scan(m1) == bits_scan(m0)
+    &&& bits_kind(m1) == bits_kind(m0)
+    &&& (h1.core.rc_of(b) > 0) == (h0.core.rc_of(b) > 0)
+    &&& (h1.core.rc_of(b) < 0) == (h0.core.rc_of(b) < 0)
+    &&& h1.core.rc_of(b) > 0 ==> h1.core.model@.owner[b] == h0.core.model@.owner[b]
+}
+
+/// `moved` と同じ変化のうち、ブロック `a` だけは `meta` の `lin` ビットも変わってよいもの。`set_lin` で物体を写さずに
+/// `Array` と `MutArray` を行き来した後の形である (docs/spec/object-model.md の「配列」)。
+spec fn moved_lin<M: Mode>(
+    h1: Heap<M>,
+    h0: Heap<M>,
+    d: spec_fn(usize) -> int,
+    x: Set<usize>,
+    a: usize,
+) -> bool {
+    let v0 = h0.core.settled_view();
+    let v1 = h1.core.settled_view();
+    &&& h1.dummy == h0.dummy
+    &&& h1.region == h0.region
+    &&& h1.worker == h0.worker
+    &&& h1.core.env == h0.core.env
+    &&& forall|b: usize|
+        #![trigger live(h1, b), live(h0, b)]
+        live(h0, b) && live(h1, b) ==> {
+            &&& b != a ==> same_head(h1, h0, b)
+            &&& same_head_lin(h1, h0, b)
+            &&& !x.contains(b) ==> h1.core.perm(b).slots == h0.core.perm(b).slots
+        }
+    &&& forall|b: usize|
+        #![trigger live(h0, b)]
+        live(h0, b) && (v0.rc_of(b) == 0 || v0.ext(b) + d(b) >= 1) ==> {
+            &&& live(h1, b)
+            &&& h1.core.block(b) == h0.core.block(b)
+            &&& v0.rc_of(b) != 0 ==> v1.ext(b) == v0.ext(b) + d(b)
+        }
 }
 
 /// `h0` で生きているブロックは、`h1` でも同じブロックのまま生きている。借りた語も読めるままである。
@@ -827,6 +871,17 @@ impl<M: Mode> Ctx<M> {
         x: Set<usize>,
     ) -> bool {
         moved(self.heap, old.heap, d, x)
+    }
+
+    /// `evolved_by` と同じ変化のうち、配列 `a` の `lin` ビットも変わってよいもの (`freeze` と `thaw`)。
+    pub closed spec fn evolved_lin(
+        &self,
+        old: Ctx<M>,
+        d: spec_fn(usize) -> int,
+        x: Set<usize>,
+        a: Word,
+    ) -> bool {
+        moved_lin(self.heap, old.heap, d, x, a.bits_spec())
     }
 
     /// `Ctx` の語と `ws` の語のうち、物体 `b` を指すものの数。

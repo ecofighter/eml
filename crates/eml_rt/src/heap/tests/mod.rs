@@ -18,6 +18,7 @@ macro_rules! both_modes {
     };
 }
 
+mod arrays;
 mod basics;
 mod checked;
 mod control;

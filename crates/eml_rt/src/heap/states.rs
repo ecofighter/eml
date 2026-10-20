@@ -589,6 +589,10 @@ impl Core {
                 != BlockState::Dying by {
                 if b != a {
                     assert(s0.dom().contains(b));
+                    assert(s1.state(b) == s0.state(b));
+                    assert(self.state(b) == s1.state(b));
+                } else {
+                    assert(self.state(a) == BlockState::Token);
                 }
             }
         }

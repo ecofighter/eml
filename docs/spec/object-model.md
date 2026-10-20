@@ -58,7 +58,7 @@ meta: u32         tag (16 ビット) | scan (8 ビット) | info (8 ビット)
 - `scan` は、走査する語 (`obj` と `tobj` の値) の数である。0 から 254 はそのまま数を表す。255 は「数がペイロードにある」印で、そのときは走査の始まりの位置の生の1語が数を持ち、走査する語はその次から並ぶ。走査する語が 255 個以上の物体 (フィールドの多いデータ、EP の継続のクロージャが捕まえる多くの値) も、同じヘッダで扱うためである。継続のクロージャはコンパイラが作るので、数の上限をユーザーの誤りにできない
 - `info` は、最上位のビットが `lin` ビット (下の「`lin` ビット」)、下位の4ビットが種類である。残りの3ビットは予約し、0 にする
 - ヘッダを `rc` と `meta` の2つに分けるのは、reuse の書き込みを少なくするためである。確保は rc と `meta` の2つの欄を続けて書く。reuse でコンストラクタが変わるときは `meta` の 32 ビットの1回の store で済み、rc は 1 のままなので書かない。同じコンストラクタの reuse は、ヘッダに何も書かない
-- `meta` は atomic でない。`meta` を書くのは、確保と、一意な箱の reuse と、解放だけである。どれも、ほかのスレッドがその物体を読めないときに起きる
+- `meta` は atomic でない。`meta` を書くのは、確保と、一意な箱の reuse と、解放と、一意な配列の `lin` ビットを変える `set_lin` だけである (下の「配列」)。どれも、ほかのスレッドがその物体を読めないときに起きる
 - `rc` の欄は整数の型で持ち、atomic の読み書きは欄を受ける関数が `AtomicI32::from_ptr` を通して行う (下の「`unsafe` の核」の T2)。Verus は atomic の型の欄を扱わないためである。配置は `AtomicI32` と同じである
 - ヘッダの大きさは、数字の 8 でなく `size_of::<Header>()` で書く。ヘッダの形を変えたときに、数え直す所を1か所にするためである
 - 物体の大きさはヘッダに持たない。確保器のページが持つ (下の「確保器」)
@@ -105,7 +105,7 @@ meta: u32         tag (16 ビット) | scan (8 ビット) | info (8 ビット)
 - クロージャ、evidence の入口の表、evidence、`evv` の節点は種類を分けず、`Data` にする (下の「物体の形」)
 - `Float` は `BigInt` と同じ形の1語の箱で、種類だけを分ける。検査モードの `unbox_int` と `unbox_float` が取り違えを `WrongKind` で断れるようにするためである。`Float` には `Int` の即値のような空きのビットがないので、`box` はいつも確保する (`alloc_float`)。値の語はビット列のまま書いて読み、浮動小数の算術をしないので、`-0.0` と NaN のペイロードもそのまま残る。生きている箱は値の語を書いてある。不変条件は `BigInt` と `Float` を1つの述語 (`Kind::boxes_value`) で扱う
 - `unbox_float` は、`Float` の物体のほかにダミー (値 0 の `BigInt`) も受け、ビット列 0 (`0.0`) を返す。yield 中に返るダミーが `float` の位置で `unbox` されることがあるためである (上の「ダミーの値」、[LIR](lir.md) の「ダミーの値」)。検査モードは、ダミーでない `BigInt` を `WrongKind` で断る
-- 後の項目の種類の見通しは次のとおりである。`Bytes` は `String` と同じ形 (長さとバイト列) を使える。`Array` は別の種類が要る。種類の数の上限 16 には余裕がある
+- 後の項目の種類の見通しは次のとおりである。`Bytes` は `String` と同じ形 (長さとバイト列) を使える。種類の数の上限 16 には余裕がある。`Array` と `MutArray` は種類を足さず、`Data` の形を使う (下の「配列」)
 
 回復 (下の「回復」) は、根から届く物体を種類ごとに次のように写す。
 
@@ -272,7 +272,7 @@ VM の `con` と `closure` は、束縛する変数の印が `lin` なら、`all
 | 操作 | 安全の前提 | モデルの前提 | 検査する前提 (検査モードの `Err`) |
 |---|---|---|---|
 | どの操作も | 語は即値か、このヒープのブロックか、このヒープに付けた塊とその祖先のブロックである。構築中の物体は書き終えている (`set_field` と `set_raw` を除く) | 読むだけの操作の語は、モデルで生きている物体 (参照の数が正か、不死) を指す | 物体は生きている (`UseAfterFree`)。rc が正の物体を書き換えるか rc を読んで判定するなら、持ち主は今の worker である (`WrongOwner`) |
-| 物体を受ける操作 (`meta`、`field`、`set_field`、`raw`、`set_raw`、`scanned_len`、`scanned`、`free_block`、`release`、`release_reuse`、`into_token`、`foreign`、`foreign_unique`、`string`、`string_push`、`string_concat`) | 語はポインタである (即値でも `Word::EMPTY` でもない) | | |
+| 物体を受ける操作 (`meta`、`field`、`set_field`、`raw`、`set_raw`、`scanned_len`、`scanned`、`set_lin`、`free_block`、`release`、`release_reuse`、`into_token`、`foreign`、`foreign_unique`、`string`、`string_push`、`string_concat`) | 語はポインタである (即値でも `Word::EMPTY` でもない) | | |
 | `alloc` / `alloc_immortal` / `con_at` | `meta` の種類は `Foreign`、`String`、`Free` のどれでもない。`scan` は 255 でなく、走査する語はペイロードに収まる | | |
 | `field` / `set_field` | | `set_field` が書く語は、呼ぶ側が数えた参照を持つ | i 語目は走査する語である (`OutOfBounds`)。`set_field` の物体は、ほかのスレッドが読めない (局所か、構築中。`NotWritable`) |
 | `scanned` | | | i は `scanned_len` より小さい (`OutOfBounds`) |
@@ -283,6 +283,7 @@ VM の `con` と `closure` は、束縛する変数の印が `lin` なら、`all
 | `decref` / `release` / `release_reuse` | | 呼ぶ側が参照を1つ持つ。残さない子は呼ぶ側の参照と数える | 不死の物体の参照は `acquire_immortal` か `dup` で作った (`ImmortalOverRelease`)。共有の物体は `lin` ビットを持たない (`LinShared`)。`release` と `release_reuse` の物体はデータで、tag と走査する語の数が名指したものである (`WrongLayout`)。残さない子は `decref` の、`is_last` が偽のときの残す子は `dup` の検査する前提を満たす |
 | `acquire_immortal` | | | 物体は不死である (`NotImmortal`) |
 | `foreign_unique` | 返すポインタを使うのは、この物体の参照を手放すか、ほかの参照を作るまでの間だけである | | rc が 1 である (`NotUnique`。共有の物体も断る) |
+| `set_lin` | | 呼ぶ側が唯一の参照を持つ | 物体は `Data` である (`WrongKind`)。rc が 1 である (`NotUnique`。共有の物体も断る) |
 | `free_block` | | 呼ぶ側が最後の参照を持ち、子の参照はもう処理してある | rc が 1 か -1 である (`NotLast`)。種類は破棄処理を持たない (`FinalizerSkipped`) |
 | `into_token` | | 呼ぶ側が唯一の参照を持ち、子の参照はもう処理してある | token にできる種類である (`NotTokenable`)。rc が 1 である (`NotUnique`) |
 | `con_at` / `reuse_in_place` / `drop_token` | | token の箱の「残した」語 (`con_at` と `reuse_in_place` で書き直さない語) の参照を呼ぶ側が持つ | token はまだ使っていない (`StaleToken`)。`con_at` の箱は `payload_words` の物体のこのモードでの級にある (`WrongClass`。同じ物理的な語の数の物体から作った token なら、どちらのモードでも満たす)。`reuse_in_place` の `meta` の tag、scan、種類は箱と同じで (`WrongMeta`)、箱が `lin` ビットを持つなら `meta` も持つ (`LinBitKept`) |
@@ -392,6 +393,26 @@ left が一意 (is_unique)
 - 検査モードの誤りは、語を受ける操作の共通の誤り (`UseAfterFree`、`WrongOwner`)、種類が `String` でないときの `WrongKind`、数が 0 の不死の物体の手放し (`ImmortalOverRelease`) である。どの誤りも最初の確保より前に返すので、`Err` のときヒープは変わらない。文字列は子を持たないので、left と right の `decref` の誤りをすべて先に確かめられる。left と right が同じ物体で rc が 1 のとき (参照を2つ持つという前提を破った呼び出し) も、2回の `decref` を続けて確かめるので、ここで断る。後の手放しは、先に確かめたので誤りにならない
 - モデルが合っていて前提がすべて成り立つときの結果は、`decref` と同じく、`Ok` か、モデルが照らさない誤り (下の「検査モードの約束」) である。モデルは不死の物体の外の参照の数を持たないので、不死の left の `ImmortalOverRelease` はモデルの前提の下でも返りうる
 - extern の比較、`++`、`println` は、文字列を借りて読むか、`string_concat` を使う。足した核の操作は、`String.show` が結果を1回で確保するための `alloc_string_room` だけである。`String.show` の区間の写しは、写す元の文字列を借りた `&str` を vstd の `str::split_at` で切って渡すので、T10 の関数は変わらない (下の「extern」)
+
+## 配列
+
+`Array a` と `MutArray a` は同じ形の物体である。tag 0 の `Data` で、要素を走査する語として順に並べ、生の語は持たない。要素が 255 個以上なら、ほかの `Data` と同じく数の語を先に置く (上の「ヘッダ」)。要素の位置は一様な位置なので、`Int` は即値で、`Float` は箱で入る。`MutArray` の物体は `lin` ビットを持つ。種類を分けないので、回復は `lin` ビットのない配列を `Data` として写し、`MutArray` を `lin` ビットの物体として断る (上の「種類」の回復の表)。
+
+配列の extern は `Ctx` のメソッドである (`heap/ctx/arrays.rs`)。
+
+| メソッド | 引数の所有 | 動作 |
+|---|---|---|
+| `array_make(n, x, lin)` | `x` を消費する | どの要素も `x` の、長さ `n` の新しい配列を返す。要素ごとに `x` を `dup` し、最後の要素には受け取った参照を入れる。`n` が 0 なら `x` を手放し、負なら `x` を手放して `Index` を返す |
+| `array_empty(lin)` | | 長さ 0 の新しい配列を返す |
+| `array_length(a)` | `a` を借りる | 長さを返す |
+| `array_get(a, i)` | `a` を借りる | i 番目の要素を `dup` して返す |
+| `array_set(a, i, x)` | `a` と `x` を消費する | i 番目を `x` にした配列を返す。`a` が一意 (`is_unique`) なら、その場で書き換えて `a` を返し、前の要素を手放す。一意でなければ、要素を `dup` して新しい物体に写し、`a` を手放す。写しは `a` の `lin` ビットを引き継ぐ |
+| `array_freeze(m)` / `array_thaw(a)` | 消費する | `lin` ビットを下ろすか立てた配列を返す。一意なら `set_lin` でその場で変え、同じ語を返す。一意でなければ、要素を `dup` して写した物体にビットを付け、元を手放す |
+
+- 添字が範囲の外なら、`get` は何も変えずに、`set` は `a` と `x` を手放してから、`Fault::Index` を返す。範囲と長さは、確保より前に確かめる
+- `MutArray` はいつも一意なので、共有の物体の `freeze` は型の誤りである。検査モードは `NotUnique` で断り、速いモードは写す。速いモードが写すのは、VM が確かめられない前提 (一意であること) をメソッドに置かないためである
+- `set_lin` は、一意な物体の `meta` の `lin` ビットだけを書き換え、tag、scan、種類、rc は変えない。一意な物体はほかの物体から辺で指されず、ほかのスレッドも読めない。そのため、ビットを変えても、`evv` のリストと evidence の形や、`Ctx` の持つ語の条件は崩れない。Verus はこの変化を、`evolved_by` の代わりに `evolved_lin` (`a` だけは `meta` の `lin` ビットも変わってよい変化) で書いて証明する
+- 写しも書き換えも語の単位なので、信頼の一覧に行を足さない
 
 ## 凍結した領域
 
@@ -543,10 +564,10 @@ token (`Token`) はどちらのモードでも1語である。S10 の VM のレ�
 - `share` のたどりで、同じ `lin` の物体に2回届くこと (`LinReachedTwice`)
 - 所有者の不一致 (`WrongOwner`)。正の rc の物体への `dup`、`decref`、`set_field`、`set_raw`、`is_unique`、`is_last`、`free_block`、`into_token`、`release`、`release_reuse`、`foreign_unique`、`string_push`、`string_concat` が、今の worker ID と違う所有者の物体に対して行われたとき
 - ほかのスレッドが読みうる物体への書き込み (`NotWritable`)。`set_field` と `set_raw` は、rc が 0 以下 (不死か共有) で構築中でない物体を断る。凍結した塊の物体と、書き終えたヒープ自身の不死の物体もこれに当たる。前置きの状態は構築中と生存を分けないので、検査モードのヒープは構築中の物体の番地を持ち、それと比べて見分ける
-- token の誤り。token にできない種類の `into_token` (`NotTokenable`)、一意でない物体の `into_token` (`NotUnique`。rc が 1 でない物体の `foreign_unique` も同じ誤りにする)、空けた表の項目の使用、箱の状態が token でないこと、世代の番号の不一致 (`StaleToken`。token を受ける操作が断る。同じ token の2回の使用と ABA の形)、級の合わない `con_at` (`WrongClass`)、`reuse_in_place` の `meta` の tag と scan と種類が箱と違うこと (`WrongMeta`)、`reuse_in_place` で箱が `lin` ビットを持ち新しい `meta` が持たないこと (`LinBitKept`)
+- token の誤り。token にできない種類の `into_token` (`NotTokenable`)、一意でない物体の `into_token` (`NotUnique`。rc が 1 でない物体の `foreign_unique` と `set_lin` も同じ誤りにする)、空けた表の項目の使用、箱の状態が token でないこと、世代の番号の不一致 (`StaleToken`。token を受ける操作が断る。同じ token の2回の使用と ABA の形)、級の合わない `con_at` (`WrongClass`)、`reuse_in_place` の `meta` の tag と scan と種類が箱と違うこと (`WrongMeta`)、`reuse_in_place` で箱が `lin` ビットを持ち新しい `meta` が持たないこと (`LinBitKept`)
 - `free_block` を、破棄処理を持つ種類の物体に使うこと (`FinalizerSkipped`) と、最後の参照でない物体に使うこと (`NotLast`)
 - `release` と `release_reuse` で、物体がデータでないか、タグと走査する語の数が名指したものと違うこと (`WrongLayout`)
-- `unbox_int`、`foreign`、`foreign_unique`、`string`、`string_push`、`string_concat` で、物体の種類が違うこと (`WrongKind`)。`foreign` と `foreign_unique` は値の型も照らし、速いモードでも同じ誤りを返す (上の「核の操作」)
+- `unbox_int`、`foreign`、`foreign_unique`、`string`、`string_push`、`string_concat`、`set_lin` で、物体の種類が違うこと (`WrongKind`)。`foreign` と `foreign_unique` は値の型も照らし、速いモードでも同じ誤りを返す (上の「核の操作」)
 - 添字の範囲の外 (`OutOfBounds`)。`field` と `set_field` は、添字が走査する語を指さないことを断る。`raw` と `set_raw` は、添字が走査する語の後のブロックの中の語を指さないことを断り、ペイロードが不透明な物体 (`Foreign` と `String`) を `WrongKind` で断る。`scanned` は、添字が走査する語の数以上であることを断る。走査する語に生の値を書くと、解放の連鎖がその値をポインタとして読み、`Foreign` の破棄処理の表を上書きすると、破棄処理が正しくない関数のポインタを呼ぶ。`String` の長さの語を書き換えると、`string` が容量の外を読む。どれも検査モードの安全を崩すので、断る
 - `Ctx` の基本操作の誤り (下の「実行文脈 `Ctx`」)
   - 節点、evidence、入口の表の形が違うこと、入口の欄の番号が入口の数以上であること、入口の欄に2回入れること、`evv` の長さが上限を超えること、`ev_new` のエフェクトの番号が 65535 であること、`ev_set_clause` で `lin` ビットの立った節の本体を入れること (`BadEvidence`)
@@ -792,7 +813,7 @@ token の表の項目は、`into_token` と `release_reuse` が添字を使い�
 | `Io { op, name, reason }` | `op` は `Open`、`Read`、`Write`、`Run`、`reason` は `IoReason` (`NotFound`、`PermissionDenied`、`NotAvailable`、`Other`) | ``cannot open `{name}`: {reason}``、``cannot read `{name}`: {reason}``、``cannot write `{name}`: {reason}``、``cannot run `{name}`: {reason}``。理由は `not found`、`permission denied`、`not available`、`I/O error` |
 | `Stdin(IoReason)` | 標準入力の読みの誤り | ``cannot read the standard input: {reason}`` |
 | `NotUtf8(Box<Utf8Source>)` | 読んだ中身が UTF-8 でない。`Utf8Source` はファイル (パス)、標準入力、引数 (`Env.args ()` の位置)、環境変数 (名前) | ``` `{path}` is not valid UTF-8 ```、`the standard input is not valid UTF-8`、`argument {index} is not valid UTF-8`、``environment variable `{name}` is not valid UTF-8`` |
-| `Index(Box<IndexFault>)` | 範囲の外の位置。`IndexFault` は、文字列の位置 (`byte_at`、`find_from`)、`slice` の範囲、`slice` の境界、`Env.arg` の位置 | ``string index {index} is out of range for length {len}``、``string slice {start}..{end} is out of range for length {len}``、``string slice {start}..{end} is not on a character boundary``、``argument index {index} is out of range for {count} arguments`` |
+| `Index(Box<IndexFault>)` | 範囲の外の位置。`IndexFault` は、文字列の位置 (`byte_at`、`find_from`)、`slice` の範囲、`slice` の境界、`Env.arg` の位置、配列の添字 (`get`、`set`、`read`、`write`)、`make` の負の長さ | ``string index {index} is out of range for length {len}``、``string slice {start}..{end} is out of range for length {len}``、``string slice {start}..{end} is not on a character boundary``、``argument index {index} is out of range for {count} arguments``、``array index {index} is out of range for length {len}``、``array length {len} is negative`` |
 | `Stopped(Stop)` | `File` の読み (`Fs.read_all` と `read_line_raw`) と標準入力の読みが読む途中で、`Proc.status` が子を起動する前か待つ間に、止める語か確保量の上限に当たった | `interrupted`、`the memory limit is exceeded`、`the call depth limit is exceeded` (`Stop` の表示) |
 
 `Fault::io_error_kind` は、`try_io` が捕まえる誤り (`Io`、`Stdin`、`NotUtf8`) に `IOErrorKind` のタグ (`IO_NOT_FOUND` 0 から `IO_OTHER` 4) を返し、ほかには `None` を返す ([標準ライブラリ](stdlib.md) の「`try_io`」)。

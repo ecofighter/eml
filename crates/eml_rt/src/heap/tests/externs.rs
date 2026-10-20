@@ -73,6 +73,8 @@ fn only_arith_and_index_faults_panic() {
         }),
         index(IndexFault::Boundary { start: 0, end: 1 }),
         index(IndexFault::Arg { index: 5, count: 0 }),
+        index(IndexFault::Array { index: 3, len: 3 }),
+        index(IndexFault::Length { len: -1 }),
     ];
     for fault in &panicking {
         assert!(fault.panics(), "{fault:?}");
@@ -148,7 +150,7 @@ fn bools_compare_by_tag() {
 /// 文言は docs/spec/lir.md の「実行時エラー」の一覧のとおりである。
 #[test]
 fn faults_print_their_listed_texts() {
-    let cases: [(Fault, &str); 22] = [
+    let cases: [(Fault, &str); 24] = [
         (ArithFault::DivisionByZero.into(), "division by zero"),
         (ArithFault::IntegerOverflow.into(), "integer overflow"),
         (
@@ -246,6 +248,14 @@ fn faults_print_their_listed_texts() {
         (
             Fault::Index(Box::new(IndexFault::Arg { index: 3, count: 2 })),
             "argument index 3 is out of range for 2 arguments",
+        ),
+        (
+            Fault::Index(Box::new(IndexFault::Array { index: -1, len: 4 })),
+            "array index -1 is out of range for length 4",
+        ),
+        (
+            Fault::Index(Box::new(IndexFault::Length { len: -2 })),
+            "array length -2 is negative",
         ),
         (
             HeapError::WrongKind.into(),

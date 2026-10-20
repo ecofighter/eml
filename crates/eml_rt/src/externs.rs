@@ -92,6 +92,10 @@ pub enum IndexFault {
     Boundary { start: i64, end: i64 },
     /// `Env.arg` の位置。
     Arg { index: i64, count: i64 },
+    /// 配列の添字 (`Array.get`、`Array.set`、`MutArray.read`、`MutArray.write`)。
+    Array { index: i64, len: i64 },
+    /// `make` に渡した負の長さ。
+    Length { len: i64 },
 }
 
 /// extern の誤り。位置は VM が付けるので持たない。24 バイトに収めるため (`faults_stay_small`)、まれな誤りの中身は
@@ -844,6 +848,10 @@ impl fmt::Display for Fault {
                         "argument index {index} is out of range for {count} arguments"
                     )
                 }
+                IndexFault::Array { index, len } => {
+                    write!(f, "array index {index} is out of range for length {len}")
+                }
+                IndexFault::Length { len } => write!(f, "array length {len} is negative"),
             },
             Fault::Stopped(s) => write!(f, "{s}"),
         }

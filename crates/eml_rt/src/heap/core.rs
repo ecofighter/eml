@@ -23,7 +23,7 @@ use crate::cell::{
 use crate::meta::{BlockPerm, field_ptr};
 use crate::meta::{Header, Meta, meta_ptr, prefix_first_ptr, prefix_state_ptr, rc_ptr, slot_ptr};
 #[cfg(verus_only)]
-use crate::meta::{bits_kind, bits_scan, bits_tag};
+use crate::meta::{bits_kind, bits_lin, bits_scan, bits_tag, bits_wf};
 #[cfg(verus_only)]
 use crate::rc::{Obj, decref_next, dup_next, lemma_decref, lemma_dup};
 use crate::word::Word;
@@ -629,6 +629,49 @@ impl Core {
         proof {
             self.perms.borrow_mut().tracked_insert(h@.addr, p);
         }
+    }
+
+    /// `meta` を書く。モデルは替えない。これを使うのは `set_lin` だけである。
+    #[inline]
+    pub(crate) fn meta_put(&mut self, h: *mut Header, m: Meta)
+        requires
+            old(self).sound(),
+            old(self).dom().contains(h@.addr),
+            h == old(self).block(h@.addr),
+        ensures
+            final(self).meta_changed(*old(self), h@.addr),
+            final(self).meta_bits(h@.addr) == m.bits_spec(),
+            bits_wf(final(self).meta_bits(h@.addr)),
+            bits_kind(final(self).meta_bits(h@.addr)) == m.kind_spec(),
+            bits_scan(final(self).meta_bits(h@.addr)) == m.scan_spec(),
+            bits_tag(final(self).meta_bits(h@.addr)) == m.tag_spec(),
+            bits_lin(final(self).meta_bits(h@.addr)) == m.lin_spec(),
+    {
+        let ghost s0 = *self;
+        proof {
+            self.lemma_shape(h@.addr);
+        }
+        let tracked mut p = self.perms.borrow_mut().tracked_remove(h@.addr);
+        ptr_mut_write(meta_ptr(h), Tracked(&mut p.meta), m.bits());
+        proof {
+            self.perms.borrow_mut().tracked_insert(h@.addr, p);
+            assert(self.perms@.dom() =~= s0.perms@.dom());
+        }
+    }
+
+    /// `old` から、ブロック `h` の `meta` の値だけが変わった。
+    pub(crate) open spec fn meta_changed(&self, old: Core, h: usize) -> bool {
+        &&& self.pages == old.pages
+        &&& self.env == old.env
+        &&& self.model == old.model
+        &&& self.perms@.dom() == old.perms@.dom()
+        &&& forall|b: usize| b != h ==> #[trigger] self.perms@[b] == old.perms@[b]
+        &&& self.perm(h).rc == old.perm(h).rc
+        &&& self.perm(h).slots == old.perm(h).slots
+        &&& self.perm(h).prefix == old.perm(h).prefix
+        &&& self.perm(h).text == old.perm(h).text
+        &&& self.perm(h).meta.ptr() == old.perm(h).meta.ptr()
+        &&& self.perm(h).meta.is_init()
     }
 
     /// 共有の数を1つ進める (`dup`)。
