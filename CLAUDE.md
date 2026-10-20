@@ -37,8 +37,8 @@ cargo verus verify -p eml_rt         # Verus proofs of eml_rt
 verusfmt --verus-only --check $(git ls-files 'crates/eml_rt/src/*.rs')   # format inside verus! (rustfmt does the rest)
 bench/run.sh                         # instruction counts of the bench/ programs (macOS, release)
 bench/rt.sh                          # eml_rt fast-mode instruction counts (macOS)
-bench/scripts.sh                     # the scripts under tests/ui/run/scripts/ against their Python versions: wall time and peak RSS (macOS)
-bench/scripts/compare.sh --fixture wc   # a script's eml vs Python stdout and exit code on its UI-test inputs (or: compare.sh NAME ARGS... < input)
+bench/scripts.sh                     # the scripts under tests/ui/run/scripts/ and the numeric bench/ programs against their Python versions, each row sized to ~300 ms of eml time: wall time and peak RSS (macOS)
+bench/scripts/compare.sh --fixture wc   # a script's eml vs Python stdout and exit code on its UI-test inputs (or: compare.sh NAME ARGS... < input, compare.sh --paths EML PY ARGS... < input)
 ```
 
 The full list, with the scaling tests, is in docs/implementation/testing.md の「よく使うコマンド」.

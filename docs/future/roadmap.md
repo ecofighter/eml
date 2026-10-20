@@ -16,7 +16,7 @@
 
 | 段 | 中身 | 前提 | 完了の条件 |
 |---|---|---|---|
-| S14 数値計算の整備 | 実行時エラーの型 `Panic`、`Float` と `Num`、`Array` と `Lin` の `MutArray`、小さな単一コンストラクタの型の構造体の表現、数値計算の計測 | S13 | 数値計算の計測のプログラムが Python の版と一緒に `bench/scripts.sh` で動き、結果を [計測の基準](../implementation/benchmarks.md) に記録する。S14a、S14b、S14c は済み |
+| S14 数値計算の整備 | 実行時エラーの型 `Panic`、`Float` と `Num`、`Array` と `Lin` の `MutArray`、小さな単一コンストラクタの型の構造体の表現、数値計算の計測 | S13 | 数値計算の計測のプログラムが Python の版と一緒に `bench/scripts.sh` で動き、結果を [計測の基準](../implementation/benchmarks.md) に記録する。S14a〜S14d は済み |
 
 S14 の後は、言語の項目を次の順に並べる。
 
@@ -53,7 +53,7 @@ S14 は、ネイティブ化の前に、数値計算で Python と比べる基�
 | S14a | `Panic`。値と入力で決まる実行時エラーを型に出し、中断しうるかの印で巻き戻しの地点を決める | 済み。`+ - * / %`、`negate`、文字列の位置の extern と `Env.arg` が `<Panic>` を持ち、その誤りと利用者の `panic` を `try_panic` が巻き戻しで捕まえる。巻き戻しの表の行は、中断しない関数の呼び出しの分だけ減った。決めたこと (`Panic` の宣言、`main` と REPL の入力の row、トップレベルの値と `Eq`、`Ord`、`Show` のメソッドの空の row、負のリテラル) は [エフェクトと handler](../spec/effects.md) の「組み込みの `Panic`」、[標準ライブラリ](../spec/stdlib.md) の「`try_panic`」、[宣言](../spec/declarations.md) の「シグネチャと等式」と「Prelude のクラス」、[式](../spec/expressions.md) の「演算子の列と単項マイナス」、[モジュールと名前解決](../spec/modules.md) の「モジュール」、[型と Kind](../spec/types.md) の「REPL の入力」にある。実行の道は [VM](../spec/vm.md) の「中断と実行時エラーの分担」と「extern の中断」に、`Fault::panics` は [オブジェクトモデル](../spec/object-model.md) の「extern」に、中断しうるかの不動点と巻き戻しの地点は [LIR](../spec/lir.md) の「巻き戻しの地点」に、under の形は [Core IR](../spec/core-ir.md) の「`perform` と節の3つの形」に、計測は [計測の基準](../implementation/benchmarks.md) の「S14a」にある |
 | S14b | `Float` と `Num` / `Div` | 済み。`Int` の算術を Prelude のクラス `Num` (`+ - *`、`negate`) と `Div` (`/`、`%`) の instance にし、`Float` (IEEE 754 の倍精度) の型、リテラル、算術と比較、Python の `repr` と同じ表示、`Std.Float` を入れた。`bench/` のプログラムの `RunStats` は変わらない。決めたこと (クラスと instance、`Float` の比較の演算子と `compare` の全順序の例外、表示) は [宣言](../spec/declarations.md) の「Prelude のクラス」にある。リテラルは [字句](../spec/lexical.md) の「数値と文字」と [式](../spec/expressions.md) の「演算子の列と単項マイナス」に、型は [型と Kind](../spec/types.md) の「数の型」に、パターンの E1052 は [網羅性](../spec/exhaustiveness.md) の「検査パス」に、`Std.Float` は [標準ライブラリ](../spec/stdlib.md) の「`Std.Float`」にある。実行の道では、Repr `float` が [LIR](../spec/lir.md) の「値の表現」に、`Float` の箱が [オブジェクトモデル](../spec/object-model.md) の「種類」に、専用の命令が [VM](../spec/vm.md) の「基本操作と extern」に、信頼の一覧の T12 がオブジェクトモデルの「`unsafe` の核」にある。計測は [計測の基準](../implementation/benchmarks.md) の「S14b」にある |
 | S14c | `Array` と `Lin` の `MutArray`、`freeze`、局所的な可変変数 `var` | 済み。S14c-1 (`Array` と `MutArray` の核) では、`Std.Array` と `Std.MutArray` を入れ、物体は `Data` の形の配列で、`lin` ビットが `MutArray` を表す。`set` と `write` は一意ならその場で書き換え、共有されていれば写す。範囲外の添字と負の長さは `Panic` で、`try_panic` が捕まえる。`get`、`length`、`set` は専用の VM の命令で動き、`bench/` のプログラムの `RunStats` は変わらない。決めたことは [標準ライブラリ](../spec/stdlib.md) の「`Std.Array`」と「`Std.MutArray`」、[宣言](../spec/declarations.md) の「`extern`」、[オブジェクトモデル](../spec/object-model.md) の「配列」、[VM](../spec/vm.md) の「基本操作と extern」にある。計測は [計測の基準](../implementation/benchmarks.md) の「S14c-1」にある。S14c-2 (状態を渡す形の handler への特殊化) も済み。どの節もすぐに再開する handler は、末尾でない呼び出しを経路に含めて特殊化し、状態をブロックと複製の結果で持ち回る。重なった handler は内側から回を重ねて特殊化する。`Std.State` を末尾でない `put` で使うループ (`bench/state_loop.em`) の `evidence_steps` は 0 になり、手で状態を渡す版と、確保、`box`、`unbox`、RC の回数が一致した。決めたこと (2つの形、複製の結果の形、入れ子の handler の回、複製の名前) は [Core IR](../spec/core-ir.md) の「handler への特殊化」に、計測は [計測の基準](../implementation/benchmarks.md) の「S14c-2」にある。S14c-3 (`var`、`<-`、添字、`for`、`while`) も済み。`var` の地点ごとに合成のエフェクトを作り、その handler が変数の値を状態として持つ。translate が変数を型で `Unr` の変数と配列の変数に分けて handle、節、`perform` を組み、状態を渡す形の特殊化がループを evidence のない複製にする。状態を渡す形は、H に触れない関数を経路に入れず、入れ子の handler の複製の結果を値の並びで決めるように広げた。ふるいと fannkuch-redux の小さな版を `var` で書いた版の `evidence_steps` は 0 で、手書きの版との確保の差は、経路の関数の末尾でない呼び出しから戻るタプルだけである (S14e で消す)。決めたことは [式](../spec/expressions.md) の「`var`」、[型と Kind](../spec/types.md) の「`var` の変数」、[線形性](../spec/linearity.md) の「配列の変数」、[エフェクトと handler](../spec/effects.md) の「`var` のエフェクト」、[標準ライブラリ](../spec/stdlib.md) の「`for` と `while`」、[Core IR](../spec/core-ir.md) の「`var` の変換」と「handler への特殊化」にある。計測は [計測の基準](../implementation/benchmarks.md) の「S14c-3」にある |
-| S14d | 数値計算の計測。構造体の表現の前の基準を記録する | |
+| S14d | 数値計算の計測。構造体の表現の前の基準を記録する | 済み。nbody、spectral-norm、mandelbrot を `bench/` に足し、`sieve_var` と `fannkuch_var` に大きさの引数を足して、5つを `bench/scripts.sh` で Python の版と比べた。nbody と mandelbrot は、ベクトルと複素数を小さな値の型 (`Vec3`、`Complex`) で書く。比べの大きさは、行ごとに eml の実時間が約 300 ms になるように決め、大きく外れたら決め直す (ユーザーが 2026-10-21 に決めた)。S12d のスクリプトの行にも当て、入力を行ごとの大きさで作るようにした。数値計算では、nbody と spectral-norm が Python の約半分の実時間で、mandelbrot は同じ、fannkuch-redux は 2.4 倍、ふるいは 1.8 倍である。規則は [計測の基準](../implementation/benchmarks.md) の「スクリプトの計測」に、結果、S14e が消す確保と消さない確保、書いてみて分かったことは「S14d」にある |
 | S14e | 小さな単一コンストラクタの型の構造体の表現 | |
 
 ### 決めたこと
@@ -98,6 +98,7 @@ S14 は、ネイティブ化の前に、数値計算で Python と比べる基�
 #### 計測
 
 - 数値計算の計測を、Python の版と一緒に `bench/scripts.sh` に足す。ネイティブ化の完了の条件 (下の「処理系」の「ネイティブ化」) の基準にするためである
+- 計測のプログラムは、nbody、spectral-norm、mandelbrot、fannkuch-redux、エラトステネスのふるいの5つにした (S14d)
 
 ### 論点
 
@@ -108,11 +109,10 @@ S14 は、ネイティブ化の前に、数値計算で Python と比べる基�
 - 構造体にする型の条件 (語の数の上限、`Lin` のフィールド、row の型引数を持つ型)。複数の値を返す形の LIR と VM での表し方。EP の継続の捕獲と yield の道での構造体の扱い
 - `var` の残る制限 (S14c-3 では入れなかった。必要になったら扱う)
   - 配列の変数の長さを、範囲の途中で読む書き方がない。今は長さを変数とは別に持つ
-  - 配列の変数を、範囲の途中でトップレベルの関数に貸す書き方がない。今は範囲の中の局所関数で書くか、変数にする前に線形に受け渡す
+  - 配列の変数を、範囲の途中でトップレベルの関数に貸す書き方がない。今は範囲の中の局所関数で書くか、変数にする前に線形に受け渡す。S14d の nbody も、1 回進める計算をトップレベルの関数に分けられなかった
   - 取り出して変えて戻す `x <- f x` は、配列の変数では E3008 になる
   - 範囲の外で定義した局所関数に、変数を使う閉包を渡すと、局所関数の型に変数のエフェクトが現れるので E2019 になる
   - 配列の変数の範囲の E3006 は、`Lin` の状態を持つ handle と同じく、範囲を囲む本体の row で決める。そのため、row に `multi` のラベルを持つ関数では、範囲の中でそのラベルを何も `perform` しなくても、どの配列の変数も断る。範囲が実際に起こす row で持ち越しを確かめる形に細かくする余地がある ([線形性](../spec/linearity.md) の「配列の変数」)
-- 計測に選ぶプログラム。候補は、`Float` を使う nbody、spectral-norm、mandelbrot と、`MutArray` を使う fannkuch-redux、エラトステネスのふるいである
 
 ## S14 の後の言語の項目
 
@@ -249,6 +249,7 @@ UTF-8 の核の extern を入れ、標準ライブラリを広げる。`std/` �
   - ネイティブのコードの中で起きた実行時エラーを、評価全体の中断にする方法は未設計である。旗を立てて戻る方式は効果を持たない関数にも確認を足し、巻き戻しは Cranelift のコードに展開情報を要する。中断と同じ呼び出しの位置ごとの表で巻き戻す形が候補になる
   - extern の C ABI の入口 (`extern "C"`) は、この項目で足す。今の extern は、引数がどれも 64 ビットの語で数が決まっているので、そのまま移せる。Host と読み手は panic しうるので、入口で `catch_unwind` する。`extern "C"` を越える panic はプロセスを落とすためである。`Fault` を `Ctx` の欄に置いて状態の語を返す形にするかは、`Ctx` の配置 (yield の状態は `#[repr(C)]`) の決まりと一緒に決める ([オブジェクトモデル](../spec/object-model.md) の「extern」)
   - 定数の静的なデータは、凍結した領域と同じ約束 (rc 0、書き込まない、検査ビルドでは前置きを持つ) に乗る ([オブジェクトモデル](../spec/object-model.md) の「凍結した領域」)。検査モードの範囲の確かめのようにページの頭を読む道は、起動時に `freeze` で定数を作る形か、静的なデータに容量を持たせる形で扱う
+- スカラーの要素を生で持つ配列: 配列の要素は一様な位置なので、`Array Float` と `MutArray Float` の要素は書くたびに `Float` の箱に入る。S14d の spectral-norm では、確保のほとんどがこの箱だった ([計測の基準](../implementation/benchmarks.md) の「S14d」)。S14e の構造体の表現もこの箱を消さない。要素の型から配列の物体の形を決め、`Float` や `Int` を生の語で並べる形を考える
 - Core IR の上の最適化パス: 引数が定数の関数の特殊化、純粋な extern の定数畳み込み。既知の閉包への `apply` を `call` に置き換えることと既知の閉包への特殊化は、S13e-1 で入れた ([Core IR](../spec/core-ir.md) の「最適化」)。EP より前の Core IR に置き、関数単位の作業リストで動かす。枝の部分木を置き換えると、S3b-1 までの `simplify` のように長い `else if` の連鎖で2乗の時間がかかるためである。CPS のラムダの位置の変換 (試作で 200,125 回) は、既知の閉包への特殊化で減らす。Repr が同じ instance (`List Int` と `List String` の instance など、同じ形のコードになるもの) をまとめるのも、このパスに置く ([Core IR](../spec/core-ir.md) の「変換の規則」)
   - 再帰する生産者の継続についての特殊化: S13e-3 の融合は、`Iter.filter` が要素を飛ばすループのような再帰する関数の結果を見通せない。再帰する関数は展開しないので、ループが作って返す `Some ((x, Iter k))` が、残した要素ごとの確保として残る。これをなくすには、呼び出しの後の継続を関数に切り出し、再帰する呼び出し先をその継続について複製する。複製の `return` は継続の呼び出しになり、自分を末尾で呼ぶ所は同じ継続を持ったまま呼ぶ。こうすると、消費者と生産者が互いを末尾で呼ぶ確保のないループになる。S13e で後に回した、末尾でない再帰の生産者 (木の走査など。[実装の現在地](../implementation/status.md) の「深さと性能」) と一緒に考える (ユーザーが 2026-10-19 に後に回すと決めた)
 - evidence passing の最適化 ([Core IR](../spec/core-ir.md) の「evidence passing」)。どれも EP と実行時の中に閉じ、型検査と translate は変わらない
