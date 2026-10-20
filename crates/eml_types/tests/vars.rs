@@ -501,3 +501,82 @@ g () =
       help: finish using `f` before the scope of this `var`
     ");
 }
+
+#[test]
+fn nested_vars_share_the_last_expression() {
+    let text = "\
+f : Unit -> <Panic> (Array Int, Array Int)
+f () =
+  var a = MutArray.make 3 0
+  var b = MutArray.make 2 0
+  a[0] := 1
+  b[1] := 2
+  (MutArray.freeze a, MutArray.freeze b)
+";
+    insta::assert_debug_snapshot!(check_short(text), @"[]");
+}
+
+#[test]
+fn taking_one_of_two_nested_vars_twice_is_e3002_and_e3003() {
+    let text = "\
+f : Unit -> <Panic> (Array Int, Array Int)
+f () =
+  var a = MutArray.make 3 0
+  var b = MutArray.make 2 0
+  (MutArray.freeze a, MutArray.freeze a)
+";
+    insta::assert_snapshot!(check_full(text), @"
+    E3003 4:3 the array variable `b` is not taken on this path
+      4:3 `b` is declared here
+      5:3 this last expression does not take `b`
+      note: taking an array variable hands over its array, so every path of the last expression takes it exactly once
+      help: end the block with an expression that takes `b`, such as `MutArray.freeze b` or `drop b`
+    E3002 5:39 the array variable `a` is taken twice on this path
+      5:39 taken again here
+      5:20 first taken here
+      note: taking an array variable hands over its array, so every path of the last expression takes it exactly once
+    ");
+}
+
+#[test]
+fn a_closure_made_earlier_may_be_called_in_the_last_expression() {
+    let text = "\
+f : Unit -> <Panic> (Int, Array Int)
+f () =
+  var a = MutArray.make 3 0
+  let first () = a[0]
+  a[0] := 5
+  (first (), MutArray.freeze a)
+";
+    insta::assert_debug_snapshot!(check_short(text), @"[]");
+}
+
+#[test]
+fn a_take_in_a_local_function_of_the_last_expression_is_e3008() {
+    let text = "\
+f : Unit -> <Panic> Array Int
+f () =
+  var a = MutArray.make 3 0
+  let g () = MutArray.freeze a in g ()
+";
+    insta::assert_debug_snapshot!(check_short(text), @r#"
+    [
+        "E3008 4:30 the array variable `a` cannot be taken inside a function",
+    ]
+    "#);
+}
+
+#[test]
+fn a_take_in_a_section_of_the_last_expression_is_e3008() {
+    let text = "\
+f : Unit -> <Panic> Int
+f () =
+  var a = MutArray.make 3 0
+  (MutArray.freeze a |>) Array.length
+";
+    insta::assert_debug_snapshot!(check_short(text), @r#"
+    [
+        "E3008 4:20 the array variable `a` cannot be taken inside a function",
+    ]
+    "#);
+}

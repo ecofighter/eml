@@ -1,0 +1,29 @@
+---
+source: crates/eml_cli/tests/repl.rs
+expression: checked.render()
+input_file: crates/eml_cli/tests/repl/var/two_inputs.repl
+---
+> count_up : Int -> <Panic> Int
+. count_up n =
+.   var x = 0
+.   for 0 n (fn _ -> x := x + 1)
+.   x
+.
+> squares : Int -> <Panic> Array Int
+. squares n =
+.   var x = MutArray.make n 0
+.   for 0 n (fn i -> x[i] := i * i)
+.   MutArray.freeze x
+.
+> (count_up 4, Array.to_list (squares 4))
+(4, [0, 1, 4, 9])
+> count_up : Int -> <Panic> Int
+. count_up n =
+.   var x = 10
+.   for 0 n (fn _ -> x := x + 2)
+.   x
+.
+> (count_up 4, Array.to_list (squares 4))
+(18, [0, 1, 4, 9])
+--- close ---
+no leaks
