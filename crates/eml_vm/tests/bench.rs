@@ -7,8 +7,10 @@ use eml_test_support::{lir, lir_files, run_stats};
 use eml_vm::RunStats;
 
 /// テストを持つ基準のプログラム。`bench/` にプログラムを足したら、ここと下のテストの関数の両方に足す。
-const PROGRAMS: [&str; 25] = [
+const PROGRAMS: [&str; 29] = [
     "empty",
+    "fannkuch_by_hand",
+    "fannkuch_var",
     "fib",
     "fold_state",
     "iter_generate",
@@ -22,6 +24,8 @@ const PROGRAMS: [&str; 25] = [
     "push_fold_by_hand",
     "rbtree",
     "records",
+    "sieve_by_hand",
+    "sieve_var",
     "state",
     "state_loop",
     "state_loop_by_hand",
@@ -661,6 +665,126 @@ fn std_list() {
     ");
 }
 
+#[test]
+fn sieve_var() {
+    insta::assert_debug_snapshot!(stats("sieve_var", "2262\n"), @"
+    RunStats {
+        evidence_steps: 0,
+        yields: 0,
+        yield_frames: 0,
+        unwound_frames: 0,
+        string_bytes_copied: 4,
+        rc_increments: 0,
+        rc_decrements: 2264,
+        boxes: 2262,
+        unboxes: 39996,
+        allocations: 2265,
+        reuses: 0,
+        peak_objects: 3,
+        peak_stack: 27,
+    }
+    ");
+}
+
+#[test]
+fn sieve_by_hand() {
+    insta::assert_debug_snapshot!(stats("sieve_by_hand", "2262\n"), @"
+    RunStats {
+        evidence_steps: 0,
+        yields: 0,
+        yield_frames: 0,
+        unwound_frames: 0,
+        string_bytes_copied: 4,
+        rc_increments: 0,
+        rc_decrements: 2,
+        boxes: 0,
+        unboxes: 39996,
+        allocations: 3,
+        reuses: 0,
+        peak_objects: 2,
+        peak_stack: 25,
+    }
+    ");
+}
+
+#[test]
+fn fannkuch_var() {
+    insta::assert_debug_snapshot!(stats("fannkuch_var", "228\nPfannkuchen(7) = 16\n"), @"
+    RunStats {
+        evidence_steps: 0,
+        yields: 0,
+        yield_frames: 0,
+        unwound_frames: 0,
+        string_bytes_copied: 25,
+        rc_increments: 0,
+        rc_decrements: 38677,
+        boxes: 79549,
+        unboxes: 66068,
+        allocations: 38678,
+        reuses: 0,
+        peak_objects: 5,
+        peak_stack: 55,
+    }
+    ");
+}
+
+#[test]
+fn fannkuch_by_hand() {
+    insta::assert_debug_snapshot!(stats("fannkuch_by_hand", "228\nPfannkuchen(7) = 16\n"), @"
+    RunStats {
+        evidence_steps: 0,
+        yields: 0,
+        yield_frames: 0,
+        unwound_frames: 0,
+        string_bytes_copied: 25,
+        rc_increments: 0,
+        rc_decrements: 8,
+        boxes: 20947,
+        unboxes: 40866,
+        allocations: 9,
+        reuses: 0,
+        peak_objects: 4,
+        peak_stack: 21,
+    }
+    ");
+}
+
+/// S14c-3 の完了の条件 (docs/implementation/benchmarks.md の「S14c-3」)。`var` で書いた版と、`MutArray` を線形に
+/// 受け渡して手で書いた版の組と、両方の出力。
+const VAR_PAIRS: [(&str, &str, &str); 2] = [
+    ("sieve_var", "sieve_by_hand", "2262\n"),
+    (
+        "fannkuch_var",
+        "fannkuch_by_hand",
+        "228\nPfannkuchen(7) = 16\n",
+    ),
+];
+
+/// `var` の版が手書きの版より多く確保する数。経路の関数の末尾でない呼び出しから2つ以上の値が戻る所のタプルで、
+/// S14e まで残る。ふるいは素数ごとに1つ、fannkuch-redux は順列ごとに4つと、裏返しごとに1つと、外側のループの
+/// 1つである。呼び出しの場所ごとの内訳は docs/implementation/benchmarks.md の「S14c-3」にある。
+const RESIDUAL: [(&str, u64); 2] = [("sieve_var", 2262), ("fannkuch_var", 38669)];
+
+#[test]
+fn var_matches_hand_written_work() {
+    for (name, by_hand, output) in VAR_PAIRS {
+        let written = stats(name, output);
+        let hand = stats(by_hand, output);
+        assert_eq!(written.evidence_steps, 0, "{name}: {written:?}");
+        assert_eq!(written.yields, 0, "{name}: {written:?}");
+        let residual = RESIDUAL
+            .iter()
+            .find(|(program, _)| *program == name)
+            .map(|(_, residual)| *residual)
+            .expect("a residual for every pair");
+        assert_eq!(
+            written.allocations - hand.allocations,
+            residual,
+            "{name} against {by_hand}: allocations"
+        );
+    }
+}
+
 /// S13e-4 の完了の条件 (docs/implementation/benchmarks.md の「S13e-4」)。関数の中で手放して作り直す8つのプログラムで、
 /// `con` が手放した箱を使い回す (docs/spec/lir.md の「reuse」)。
 #[test]
@@ -745,6 +869,8 @@ fn unwind_points() {
     }
     insta::assert_snapshot!(lines.join("\n"), @"
     empty: 0
+    fannkuch_by_hand: 39
+    fannkuch_var: 62
     fib: 7
     fold_state: 4
     iter_generate: 5
@@ -758,6 +884,8 @@ fn unwind_points() {
     push_fold_by_hand: 4
     rbtree: 12
     records: 9
+    sieve_by_hand: 14
+    sieve_var: 15
     state: 4
     state_loop: 4
     state_loop_by_hand: 4

@@ -37,6 +37,10 @@
 | `rbtree.em` | 赤黒木に1万個の `Int` を入れる。`balance` は組み直す節を受ける (S13e-4 で足した) | 同じ関数の中で節を作り直す reuse |
 | `tree_map.em` | 8191 節の完全二分木の全節を、`incr` で20回作り直す (S13e-4 で足した) | 書かないフィールドとその場の書き換え |
 | `std_list.em` | 2万要素のリストに、std の `List.map` と `List.filter` を5回通す (S13e-4 で足した) | std のリストの関数の reuse |
+| `sieve_var.em` | 20000 より小さい素数の数を、`var` で書いたふるいで数える (S14c-3 で足した) | 入れ子の `var` の、状態を渡す形の特殊化 |
+| `sieve_by_hand.em` | `MutArray` を末尾再帰のループに線形に受け渡した版 | `sieve_var.em` の下限 |
+| `fannkuch_var.em` | fannkuch-redux (n = 7) を、3本の配列の変数と10本の `Unr` の変数で書く (S14c-3 で足した) | 何重にも入れ子になった `var` と、配列の添字 |
+| `fannkuch_by_hand.em` | 状態をすべて末尾再帰の局所関数に受け渡した版 | `fannkuch_var.em` の下限 |
 
 `_by_hand` の版は、対応する自動の版と同じ出力を出す。特殊化の効果は、自動の版の `RunStats` が手書きの版に近づくことで測る。
 
@@ -44,7 +48,7 @@
 
 ## 回数のテスト
 
-`crates/eml_vm/tests/bench.rs` は、プログラムごとに1つのテストで、VM の検査モードで走らせ、出力を確かめ、`RunStats` の全項目 (S13e で足した `allocations` と、S13e-4 で足した `reuses` を含む) をインラインスナップショットで固定する。`bench/` のファイルの一覧と、テストのプログラムの一覧が一致することも確かめる。`specialization_matches_hand_written_work` は、自動の版と `_by_hand` の版の6つの組で、`allocations`、`boxes`、`unboxes` が同じことを確かめる (S13e-1 の完了の条件。下の「S13e-1」。6つ目の `state_loop` の組は S14c-2 の完了の条件で、下の「S14c-2」)。`handler_specialization_removes_yields_and_evidence` は、`iter_generate` と `iter_pipeline` の `yields` と、`push_fold` と `fold_state` の `evidence_steps` が0であることを確かめる (S13e-2 の完了の条件。下の「S13e-2」)。`state_loop` と `state_nested` の `evidence_steps` が0であることも確かめる (S14c-2 の完了の条件)。`specialization_matches_hand_written_rc` は6つの組で RC の回数が同じことを、`iter_allocations_do_not_grow_with_the_input` と `iter_generate_allocates_as_much_as_the_direct_loop` は `Iter` で引く形の確保の数を確かめる (S13e-3 の完了の条件。下の「S13e-3」)。`rebuilding_programs_reuse_boxes` は、関数の中で手放して作り直す8つのプログラムで `reuses` が 0 より大きいことを確かめる (S13e-4 の完了の条件。下の「S13e-4」)。回数は機械の速さに左右されないので、ふだんの `cargo test` で流す。
+`crates/eml_vm/tests/bench.rs` は、プログラムごとに1つのテストで、VM の検査モードで走らせ、出力を確かめ、`RunStats` の全項目 (S13e で足した `allocations` と、S13e-4 で足した `reuses` を含む) をインラインスナップショットで固定する。`bench/` のファイルの一覧と、テストのプログラムの一覧が一致することも確かめる。`specialization_matches_hand_written_work` は、自動の版と `_by_hand` の版の6つの組で、`allocations`、`boxes`、`unboxes` が同じことを確かめる (S13e-1 の完了の条件。下の「S13e-1」。6つ目の `state_loop` の組は S14c-2 の完了の条件で、下の「S14c-2」)。`handler_specialization_removes_yields_and_evidence` は、`iter_generate` と `iter_pipeline` の `yields` と、`push_fold` と `fold_state` の `evidence_steps` が0であることを確かめる (S13e-2 の完了の条件。下の「S13e-2」)。`state_loop` と `state_nested` の `evidence_steps` が0であることも確かめる (S14c-2 の完了の条件)。`specialization_matches_hand_written_rc` は6つの組で RC の回数が同じことを、`iter_allocations_do_not_grow_with_the_input` と `iter_generate_allocates_as_much_as_the_direct_loop` は `Iter` で引く形の確保の数を確かめる (S13e-3 の完了の条件。下の「S13e-3」)。`rebuilding_programs_reuse_boxes` は、関数の中で手放して作り直す8つのプログラムで `reuses` が 0 より大きいことを確かめる (S13e-4 の完了の条件。下の「S13e-4」)。`var_matches_hand_written_work` は、`var` で書いた版と手書きの版の2つの組で、`var` の版の `evidence_steps` と `yields` が0であることと、確保の数の差が表 `RESIDUAL` の値に等しいことを確かめる (S14c-3 の完了の条件。下の「S14c-3」)。回数は機械の速さに左右されないので、ふだんの `cargo test` で流す。
 
 段の前後の回数は、このスナップショットの差分で残る。回数を変える変更は、その段の spec に期待値の変更として書く ([テスト戦略](testing.md) の「テストの変更の運用」)。S10a までの記録の回数は S10b で消したインタプリタのもので、`rc_increments`、`rc_decrements`、`peak_objects` は VM と数え方が違う (下の「S10a (VM)」)。`peak_stack` は S10b で足した欄で、それより前の記録にはない。
 
@@ -2125,3 +2129,143 @@ S14c-2 (すぐに再開する節だけの handler の、状態を渡す形の特
 | `tree_map` | 182185820 | 139414869 | 0.00 |
 | `upsert` | 506833944 | 464062993 | 0.02 |
 | `upsert_by_hand` | 505129637 | 462358686 | 0.02 |
+
+### S14c-3
+
+S14c-3 (`var`、`:=`、添字、`for`、`while`。[式](../spec/expressions.md) の「`var`」と [Core IR](../spec/core-ir.md) の「`var` の変換」) の完了の条件を、`bench/` に足した2つの組で確かめた。値は、S14c-3 の実装を終えたコミット 9150e891 に、この作業で足した `bench/` の4つのプログラムを加えた作業ツリーで測った。足したプログラムは S14c-3 の前には書けないので、基準のコードでは流していない。ほかのプログラムの `RunStats` と巻き戻しの表の行は、S14c-3 の間に1つも変わらなかった (`crates/eml_vm/tests/bench.rs` のスナップショットは、S14c-2 の後から変わっていない)。そこで命令の数は、上の「S14c-2」の後の値と比べる。
+
+- 機種: Mac17,2 (Apple M5)
+- OS: macOS 27.0.1 (26A434)
+- rustc: rustc 1.98.1 (48a229cea 2026-09-01)
+
+#### 足したプログラム
+
+- `sieve_var`: 20000 より小さい素数の数を、`var` で書いたエラトステネスのふるいで数える。S14c の設計の `sieve` (`for` と、入れ子の `var j` と `while`) に、`var` で数える `count` を足した
+- `sieve_by_hand`: 同じふるいで、`MutArray` を末尾再帰のループに線形に受け渡す版
+- `fannkuch_var`: fannkuch-redux の小さな版 (n = 7)。3本の配列の変数 `perm1`、`perm`、`count` と、10本の `Unr` の変数を `for` と `while` で書き換える。結果は範囲の最後の式で書く
+- `fannkuch_by_hand`: 同じ計算で、状態をすべて末尾再帰の局所関数の組 (`let … and …`) に受け渡す版。ループの間の移りも末尾呼び出しなので、組を作らない
+
+#### 完了の条件
+
+`var_matches_hand_written_work` が、2つの組で次のことを確かめる。
+
+- `var` の版の `evidence_steps` と `yields` が 0 である。どの `var` の handle も状態を渡す形に特殊化され、最適化した Core IR に `handle` と `perform` が残らない
+- `var` の版の確保の数から手書きの版の確保の数を引いた値が、表 `RESIDUAL` の値に等しい。値は、ふるいが 2262、fannkuch-redux が 38669 である
+
+差はどれも、経路の関数の末尾でない呼び出しから2つ以上の値が戻る所のタプルである (S14c の設計の「速さの見込みと残る差」)。S14e で構造体の表現が入れば消える。どちらのプログラムも `Float` の状態を持たないので、`Float` の箱の確保はない。タプルのフィールドは一様な位置なので、`Int` の状態は `box` と `unbox` を通る。`Int` は即値なので、これは確保にならない。2つの版に共通する確保 (配列、結果を書く文字列、`empty` も作る1つ) は、ふるいで3回、fannkuch-redux で9回である。
+
+#### 差の内訳
+
+最適化した Core IR (`Pass::Optimize`) で、経路の関数の `con` を1つずつ数えた。手書きの版の最適化した Core IR には `con` がない。
+
+ふるいの差 2262 は、次の1か所から来る。
+
+| 呼ぶ所 | 呼ばれる複製 | 返すタプル | 回数 |
+|---|---|---|---:|
+| `marks` の `for` の複製 | `j < n` の `while` の複製 | `(j, marks)` | 素数ごとに1つ。2262 |
+
+- `for` の本体の閉包は、`marks[i]` が `True` の `i` で `var j` の範囲に入る。内側の `j` の handle が先に特殊化され、外側の `marks` の handler がその複製の複製を作るので、`while` の複製は `j` と `marks` の2つの状態を返す
+- `marks` の `for` の複製は配列を、`c` の `for` の複製は `Int` を1つだけ返すので、確保しない。取り出しが状態に置く空の配列は凍結した領域の定数なので、確保に数えない
+
+fannkuch-redux の差 38669 (4 × 5040 + 18508 + 1) は、次の6か所から来る。
+
+| 呼ぶ所 | 呼ばれる複製 | 返すタプル | 回数 |
+|---|---|---|---:|
+| 外側の `while` の複製 | `r != 1` の `while` の複製 | `(r, count)` | 順列ごとに1つ。5040 |
+| 外側の `while` の複製 | `perm` に写す `for` の複製 | `(perm, perm1)` | 順列ごとに1つ。5040 |
+| 外側の `while` の複製 | `k != 0` の `while` の複製 | `(k, flips, perm)` | 順列ごとに1つ。5040 |
+| 外側の `while` の複製 | `more` の `while` の複製 | `(more, done, r, count, perm1)` | 順列ごとに1つ。5040 |
+| `k != 0` の `while` の複製 | `lo < hi` の `while` の複製 | `(hi, lo, perm)` | 裏返しごとに1つ。18508 |
+| `main` | 外側の `while` の複製 | 8つの状態の組 | 1 |
+
+- 順列の数は 7! = 5040 で、裏返しの数は、5040 個の順列の裏返しの回数の合計 18508 である。どちらも、同じループを Python で書いて数えた
+- `perm1` を回す `for` の複製は `perm1` だけを返すので、確保しない
+- `var` の版では、`fannkuch` と最後の式の `report` が `main` に展開される。手書きの版は、最後の局所関数から `report` を末尾で呼ぶ。どちらも結果の組を作らないので、差はタプルの分だけになる
+
+RC の回数の差も、タプルを手放す分に等しい (`rc_decrements` は、ふるいが 2264 と 2、fannkuch-redux が 38677 と 8)。
+
+#### 実行の仕事の回数
+
+| プログラム | `rc_decrements` | `boxes` | `unboxes` | `allocations` | `peak_objects` / `peak_stack` |
+|---|---:|---:|---:|---:|---|
+| `sieve_var` | 2264 | 2262 | 39996 | 2265 | 3 / 27 |
+| `sieve_by_hand` | 2 | 0 | 39996 | 3 | 2 / 25 |
+| `fannkuch_var` | 38677 | 79549 | 66068 | 38678 | 5 / 55 |
+| `fannkuch_by_hand` | 8 | 20947 | 40866 | 9 | 4 / 21 |
+
+どの版も `evidence_steps`、`yields`、`rc_increments`、`reuses` は 0 である。巻き戻しの表の行は、`sieve_var` が 15、`sieve_by_hand` が 14、`fannkuch_var` が 62、`fannkuch_by_hand` が 39 である。
+
+#### 基準のプログラムの命令の数
+
+`var` の版の実行の分は、手書きの版より、ふるいで 15.6% (9202950 命令)、fannkuch-redux で 53.6% (76685869 命令) 多い。タプルの確保と手放しと、フィールドの `box` と `unbox` のほかに、添字1つあたりの extern の呼び出しの数も違う。`var` の版の添字は、使う所で `Std.MutArray.length` と `Prelude.check_index` を呼んでから、`read` か `write` を呼ぶ (最適化した Core IR で、添字1つに3つの extern の呼び出しがある)。手書きの版は `read` か `write` を1回呼ぶだけで、範囲はその中で確かめる。
+
+ほかのプログラムの実行の分を、上の「S14c-2」の後の値と比べると、次のとおりである。
+
+| プログラム | S14c-2 の後の実行の分 | 後の実行の分 | 増減 |
+|---|---:|---:|---:|
+| `fib` | 85585728 | 85521520 | -0.08% |
+| `fold_state` | 49700708 | 49691552 | -0.02% |
+| `iter_generate` | 60151273 | 60229733 | +0.13% |
+| `iter_pipeline` | 197615993 | 197741745 | +0.06% |
+| `iter_pipeline_by_hand` | 198703830 | 198589334 | -0.06% |
+| `list` | 157952907 | 157882920 | -0.04% |
+| `loop` | 165407833 | 165240848 | -0.10% |
+| `orders` | 245139128 | 245012908 | -0.05% |
+| `orders_by_hand` | 244894040 | 244721836 | -0.07% |
+| `push_fold` | 46373769 | 46293693 | -0.17% |
+| `push_fold_by_hand` | 46654427 | 46640136 | -0.03% |
+| `rbtree` | 215781043 | 215602749 | -0.08% |
+| `records` | 124668803 | 124516077 | -0.12% |
+| `state` | 37725464 | 37541016 | -0.49% |
+| `state_loop` | 39375874 | 39325512 | -0.13% |
+| `state_loop_by_hand` | 37256685 | 37075475 | -0.49% |
+| `state_nested` | 51203201 | 51271579 | +0.13% |
+| `std_list` | 152903003 | 152779031 | -0.08% |
+| `sum_loop` | 35235938 | 35211210 | -0.07% |
+| `tree` | 191795209 | 191618239 | -0.09% |
+| `tree_by_hand` | 191160603 | 190993215 | -0.09% |
+| `tree_map` | 139471858 | 139572180 | +0.07% |
+| `upsert` | 463978416 | 465252445 | +0.27% |
+| `upsert_by_hand` | 462419685 | 463690013 | +0.27% |
+
+- 増減は -0.49% から +0.27% までで、揺れの範囲である。`RunStats` は変わっていない
+- `empty` の命令の数は、42460605 から 44106604 に +3.88% 増えた。`empty` は標準ライブラリのコンパイルの分を含み、S14c-3 で Prelude に `for`、`while`、`check_index` が増えた。実行の分は `empty` を引いた値なので、この増加を含まない
+
+`bench/run.sh` を作業ツリーで流した出力は、次のとおりである。コミットの欄の `-dirty` は、足した4つのプログラムと `bench.rs` の変更の分である。
+
+- 機種: Mac17,2 (Apple M5)
+- OS: macOS 27.0.1 (26A434)
+- rustc: rustc 1.98.1 (48a229cea 2026-09-01)
+- コミット: 9150e89-dirty
+
+| プログラム | instructions retired | 実行の分 | 実時間 (s) |
+|---|---:|---:|---:|
+| `empty` | 44106604 | | 0.00 |
+| `fannkuch_by_hand` | 187129353 | 143022749 | 0.00 |
+| `fannkuch_var` | 263815222 | 219708618 | 0.01 |
+| `fib` | 129628124 | 85521520 | 0.00 |
+| `fold_state` | 93798156 | 49691552 | 0.00 |
+| `iter_generate` | 104336337 | 60229733 | 0.00 |
+| `iter_pipeline` | 241848349 | 197741745 | 0.01 |
+| `iter_pipeline_by_hand` | 242695938 | 198589334 | 0.01 |
+| `list` | 201989524 | 157882920 | 0.00 |
+| `loop` | 209347452 | 165240848 | 0.00 |
+| `orders` | 289119512 | 245012908 | 0.01 |
+| `orders_by_hand` | 288828440 | 244721836 | 0.01 |
+| `push_fold` | 90400297 | 46293693 | 0.00 |
+| `push_fold_by_hand` | 90746740 | 46640136 | 0.00 |
+| `rbtree` | 259709353 | 215602749 | 0.01 |
+| `records` | 168622681 | 124516077 | 0.00 |
+| `sieve_by_hand` | 103231987 | 59125383 | 0.00 |
+| `sieve_var` | 112434937 | 68328333 | 0.00 |
+| `state` | 81647620 | 37541016 | 0.00 |
+| `state_loop` | 83432116 | 39325512 | 0.00 |
+| `state_loop_by_hand` | 81182079 | 37075475 | 0.00 |
+| `state_nested` | 95378183 | 51271579 | 0.00 |
+| `std_list` | 196885635 | 152779031 | 0.00 |
+| `sum_loop` | 79317814 | 35211210 | 0.00 |
+| `tree` | 235724843 | 191618239 | 0.01 |
+| `tree_by_hand` | 235099819 | 190993215 | 0.01 |
+| `tree_map` | 183678784 | 139572180 | 0.00 |
+| `upsert` | 509359049 | 465252445 | 0.02 |
+| `upsert_by_hand` | 507796617 | 463690013 | 0.02 |
