@@ -91,7 +91,11 @@ fn yield_as_a_value_becomes_a_perform() {
         "import Yield (Yield(..))\n\nproduce : Unit -> <Yield Int> Unit\nproduce () =\n  let y = yield\n  y 1\n{HIDE}\nmain : Unit -> <IO, Panic> Unit\nmain () =\n  match hide 0 produce with\n    | Box p -> println (show (Yield.collect p))"
     );
     let shown = core_text(&text, Pass::Optimize);
-    assert!(!shown.contains("call op$"), "{shown}");
+    // 型引数を持つ包む関数の名前は引用符で囲んで表示される (`call "op$Std.Yield.Yield.yield@[Int]"(..)`)
+    assert!(
+        !shown.contains("call op$") && !shown.contains("call \"op$"),
+        "{shown}"
+    );
     insta::assert_snapshot!(function(&shown, "produce"), @"
     yields fn produce(p.0: unit) -> unit {
       let t.1: unit = perform Std.Yield.Yield.yield(1)
@@ -1173,7 +1177,11 @@ main () =
     // 節の写し `<g>{k}` は小さいので、それを呼ぶ handler の複製に展開される
     let copies = handler_copies(&shown);
     assert!(copies.contains("con Std.Iter.Iter #0(k"), "{copies}");
-    assert!(!shown.contains("closure cont$"), "{shown}");
+    // 型ごとの `cont$` の名前は型引数を持つので、いつも引用符で囲んで表示される (`closure "cont$@[..]"(..)`)
+    assert!(
+        !shown.contains("closure cont$") && !shown.contains("closure \"cont$"),
+        "{shown}"
+    );
 }
 
 /// 継続の関数は、`perform` の後で生きている変数を捕獲し、再開の値を最後に受ける。
