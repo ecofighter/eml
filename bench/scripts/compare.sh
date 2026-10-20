@@ -2,7 +2,9 @@
 # スクリプトの eml の版と Python の版を、今のディレクトリで同じ引数と同じ標準入力で動かし、標準出力と終了コードを
 # 比べる (docs/implementation/benchmarks.md の「スクリプトの計測」)。標準エラーの文言は比べない。
 #
-#   compare.sh NAME [ARG...]     標準入力をそのまま両方に渡す
+#   compare.sh --paths EML_FILE PY_FILE [ARG...]
+#                                eml のプログラムと Python の版を、パスで渡す。標準入力をそのまま両方に渡す
+#   compare.sh NAME [ARG...]     tests/ui/run/scripts/NAME/main.em と bench/scripts/NAME.py を `--paths` で比べる
 #   compare.sh --fixture NAME    tests/ui/run/scripts/NAME/ の写しの中で、main.args を引数に、main.stdin を標準入力に
 #                                する。各側は自分の写しの中で動き、書いたファイルも比べる (リポジトリにファイルを残さない)
 #
@@ -16,8 +18,20 @@ work="$(mktemp -d)"
 trap 'rm -rf "$work"' EXIT
 
 fixture=""
-if [[ "${1:-}" == "--fixture" ]]; then
+if [[ "${1:-}" == "--paths" ]]; then
+  if [[ $# -lt 3 ]]; then
+    echo "usage: compare.sh --paths EML_FILE PY_FILE [ARG...]" >&2
+    exit 2
+  fi
+  eml_file="$2"
+  py_file="$3"
+  shift 3
+  args=("$@")
+  cat > "$work/stdin"
+elif [[ "${1:-}" == "--fixture" ]]; then
   name="$2"
+  eml_file="$root/tests/ui/run/scripts/$name/main.em"
+  py_file="$root/bench/scripts/$name.py"
   fixture="$root/tests/ui/run/scripts/$name"
   cd "$fixture"
   args=()
@@ -34,9 +48,19 @@ if [[ "${1:-}" == "--fixture" ]]; then
 else
   name="$1"
   shift
+  eml_file="$root/tests/ui/run/scripts/$name/main.em"
+  py_file="$root/bench/scripts/$name.py"
   args=("$@")
   cat > "$work/stdin"
 fi
+
+# どちらかのファイルがないと両方が同じ形で失敗し、比べが一致してしまうので、先に確かめる
+for file in "$eml_file" "$py_file"; do
+  if [[ ! -f "$file" ]]; then
+    echo "compare.sh: $file がない" >&2
+    exit 2
+  fi
+done
 
 # 側 `$1` のコマンド (`$2` 以降) を動かし、標準出力、`@OUT` の中身、終了コードを `$work/$1` に書く
 run_side() {
@@ -70,8 +94,8 @@ run_side() {
   printf -- '--- exit: %s ---\n' "$code" >> "$work/$side"
 }
 
-run_side eml "$eml" run "$root/tests/ui/run/scripts/$name/main.em" ${args[@]+"${args[@]}"}
-run_side python python3 -I "$root/bench/scripts/$name.py" ${args[@]+"${args[@]}"}
+run_side eml "$eml" run "$eml_file" ${args[@]+"${args[@]}"}
+run_side python python3 -I "$py_file" ${args[@]+"${args[@]}"}
 
 if cmp -s "$work/eml" "$work/python"; then
   echo same
