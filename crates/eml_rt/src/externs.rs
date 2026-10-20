@@ -616,8 +616,9 @@ pub fn float_shows_minus(x: f64) -> (r: i64)
 
 /// `Show Float` の文字列。Python の `repr` と同じ形である (docs/spec/declarations.md の「Prelude のクラス」)。往復
 /// できる最短の桁数を `{:e}` で求め、その桁数で正しく丸めた桁を `{:.*e}` で求める。`{:e}` は最短の桁の候補が2つ
-/// あると中間から上を選ぶが、Python は値に近い方 (ちょうど中間なら偶数の側) を選ぶためである。10進の指数が -4 以上
-/// 16 未満なら固定小数点で、ほかは指数の形で書く。
+/// あると中間から上を選ぶが、Python は値に近い方 (ちょうど中間なら偶数の側) を選ぶためである。正しく丸めた桁が
+/// 読み戻せないとき (2 の冪の一部) は、`{:e}` の桁を使う。10進の指数が -4 以上 16 未満なら固定小数点で、ほかは
+/// 指数の形で書く。
 #[verifier::external_body]
 pub fn float_repr(x: f64) -> String {
     if x.is_nan() {
@@ -633,7 +634,13 @@ pub fn float_repr(x: f64) -> String {
     let shortest = format!("{x:e}");
     let mantissa_len = shortest.find('e').expect("`{:e}` writes an exponent");
     let digit_count = shortest[..mantissa_len].bytes().filter(|b| b.is_ascii_digit()).count();
-    let sci = format!("{x:.prec$e}", prec = digit_count - 1);
+    let rounded = format!("{x:.prec$e}", prec = digit_count - 1);
+    // 2 の冪では、往復できる区間が下側だけ狭い。正しく丸めた桁がその外に出たら読み戻せないので、`{:e}` の桁を使う
+    let sci = if rounded.parse::<f64>() == Ok(x) {
+        rounded
+    } else {
+        shortest
+    };
     let (mantissa, exp) = sci.split_once('e').expect("`{:e}` writes an exponent");
     let exp: i32 = exp.parse().expect("`{:e}` writes a decimal exponent");
     let (sign, mantissa) = match mantissa.strip_prefix('-') {

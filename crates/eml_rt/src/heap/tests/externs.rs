@@ -266,6 +266,35 @@ fn faults_print_their_listed_texts() {
     );
 }
 
+/// `Show Float` の表示は、どの ±2^k (非正規化数も) でも読み戻すと同じビット列になる。2 の冪では往復できる区間が
+/// 下側だけ狭く、正しく丸めた最短の桁がその外に出ることがあるためである。2^-1017 と 2^89 は Python の `repr` と同じ
+/// 桁になる
+#[test]
+fn every_power_of_two_shows_and_reads_back() {
+    for k in -1074..1024 {
+        let bits = if k >= -1022 {
+            ((k + 1023) as u64) << 52
+        } else {
+            1 << (k + 1074)
+        };
+        for x in [f64::from_bits(bits), -f64::from_bits(bits)] {
+            let shown = float_repr(x);
+            assert_eq!(
+                float_parse(&shown).map(f64::to_bits),
+                Some(x.to_bits()),
+                "{shown}"
+            );
+            let mantissa = shown.split('e').next().unwrap();
+            assert!(
+                !mantissa.contains('.') || !mantissa.ends_with('0') || mantissa.ends_with(".0"),
+                "{shown}"
+            );
+        }
+    }
+    assert_eq!(float_repr(2f64.powi(-1017)), "7.120236347223045e-307");
+    assert_eq!(float_repr(2f64.powi(89)), "6.189700196426902e+26");
+}
+
 /// 算術の誤りは2つのレジスタで返り、`Fault` は 24 バイトに収まる。
 #[test]
 fn faults_stay_small() {

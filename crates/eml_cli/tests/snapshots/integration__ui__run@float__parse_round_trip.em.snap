@@ -4,5 +4,5 @@ expression: "format!(\"--- stdout ---\\n{stdout}--- stderr ---\\n{diagnostics}{s
 input_file: tests/ui/run/float/parse_round_trip.em
 ---
 --- stdout ---
-[True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True]
+[True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True, True]
 --- stderr ---

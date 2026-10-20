@@ -17,6 +17,9 @@ main () =
   println (show 1e22)
   println (show 5e-324)
   println (show 1.7976931348623157e308)
+  -- 2^-1017 と 2^89。2 の冪では往復できる区間が下側だけ狭く、正しく丸めた最短の桁では読み戻せない
+  println (show 7.120236347223045e-307)
+  println (show 6.189700196426902e26)
   println (show 2.5)
   println (show 3.5)
   println (show (Float.round 2.5))

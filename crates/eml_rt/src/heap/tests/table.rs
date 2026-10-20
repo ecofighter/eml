@@ -161,17 +161,39 @@ pub const FLOAT_TO_INT: [f64; 12] = [
     -1e19,
 ];
 
-/// 数学の関数の入力。結果がプラットフォームの libm によらない値に限る (乱数の値は libm で最後の桁が変わりうる)
-pub const MATH_EDGES: [f64; 9] = [
+/// `sin`、`cos`、`exp`、`log` の入力。C の規格 (Annex F) が結果を決めている値に限る。ほかの値の結果は超越数で、
+/// libm によって最後の桁が変わりうるためである。`log` は `1.0` (結果は `0.0`) も使う
+pub const MATH_EDGES: [f64; 5] = [0.0, -0.0, f64::INFINITY, f64::NEG_INFINITY, f64::NAN];
+
+/// `pow` の底と指数。どの組も結果がちょうど表せる (`pow 2.0 10.0` は `1024.0`) か、Annex F が決めている
+pub const POW_BASES: [f64; 8] = [
     0.0,
     -0.0,
     1.0,
     -1.0,
     2.0,
-    0.5,
     f64::INFINITY,
     f64::NEG_INFINITY,
     f64::NAN,
+];
+
+pub const POW_EXPONENTS: [f64; 9] = [
+    0.0,
+    -0.0,
+    1.0,
+    2.0,
+    10.0,
+    -1.0,
+    f64::INFINITY,
+    f64::NEG_INFINITY,
+    f64::NAN,
+];
+
+/// 正しく丸めた最短の桁が往復できない 2 の冪の指数。Python の `repr` は、ここで `{:.*e}` と違う桁を選ぶ
+pub const POW2_EXPONENTS: [i32; 46] = [
+    -1017, -1007, -957, -921, -808, -791, -788, -778, -705, -695, -662, -652, -549, -509, -496,
+    -489, -383, -366, -296, -140, -97, -77, -44, -24, 89, 122, 132, 172, 182, 275, 305, 345, 378,
+    398, 405, 481, 534, 544, 554, 574, 594, 710, 803, 863, 896, 976,
 ];
 
 /// `Float.parse` の入力。空白、符号、`inf` と `nan` の綴り、`_`、読めない形を含む
@@ -498,6 +520,9 @@ pub fn inputs() -> Vec<(String, Vec<Arg>)> {
             push(name, vec![float(a)]);
         }
     }
+    for k in POW2_EXPONENTS {
+        push("Prelude.Show Float.show", vec![float(2f64.powi(k))]);
+    }
     for a in EDGES.into_iter().chain(random_ints(RANDOM_INTS)) {
         push("Std.Float.of_int", vec![Arg::Int(a)]);
     }
@@ -530,8 +555,9 @@ pub fn inputs() -> Vec<(String, Vec<Arg>)> {
             push(name, vec![float(a)]);
         }
     }
-    for a in MATH_EDGES {
-        for b in MATH_EDGES.into_iter().chain([-1.5]) {
+    push("Std.Float.log", vec![float(1.0)]);
+    for a in POW_BASES {
+        for b in POW_EXPONENTS {
             push("Std.Float.pow", vec![float(a), float(b)]);
         }
     }

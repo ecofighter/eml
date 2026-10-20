@@ -889,13 +889,14 @@ fn float_conversions_and_formats_match_rust() {
         let want = if want.is_nan() { f64::NAN } else { want };
         assert_eq!(got.to_bits(), want.to_bits(), "{got:?} != {want:?}")
     };
-    // Miri は libm の関数 (`sin` など) の結果に、決まらない小さな誤差を足す。非正規化数の結果では符号も変わりうる。
-    // そのため、それらの有限で 0 でない結果は、相対の誤差が 1e-12 以内か、どちらも非正規化数の大きさかだけを比べる
+    // Miri は libm の関数 (`sin` など) の結果に、決まらない小さな誤差を足す。非正規化数か 0 の結果では、符号も 0 か
+    // どうかも変わりうる。そのため、それらの有限の結果は、どちらも非正規化数か 0 の大きさか、相対の誤差が 1e-12 以内
+    // かだけを比べる
     let near = |got: f64, want: f64| {
-        if want.is_nan() || want.is_infinite() || want == 0.0 {
+        let tiny = got.abs() < f64::MIN_POSITIVE && want.abs() < f64::MIN_POSITIVE;
+        if want.is_nan() || want.is_infinite() {
             same(got, want)
         } else {
-            let tiny = got.abs() < f64::MIN_POSITIVE && want.abs() < f64::MIN_POSITIVE;
             assert!(
                 tiny || (got - want).abs() <= want.abs() * 1e-12,
                 "{got:?} !~ {want:?}"
@@ -943,6 +944,22 @@ fn float_conversions_and_formats_match_rust() {
     }
     same(float_infinity(), f64::INFINITY);
     same(float_nan(), f64::NAN);
+    // 2 の冪では往復できる区間が下側だけ狭い。正しく丸めた最短の桁が読み戻せない 2 の冪でも、表示を読み戻すと同じ
+    // ビット列になる。すべての ±2^k は Miri では遅いので、`externs.rs` の単体テストが流す。`powi` は Miri が誤差を
+    // 足すので、2 の冪はビット列から作る
+    let pow2 = |k: i32| f64::from_bits(((k + 1023) as u64) << 52);
+    for k in super::table::POW2_EXPONENTS {
+        for x in [pow2(k), -pow2(k)] {
+            let shown = float_repr(x);
+            assert_eq!(
+                float_parse(&shown).map(f64::to_bits),
+                Some(x.to_bits()),
+                "{shown}"
+            );
+        }
+    }
+    assert_eq!(float_repr(pow2(-1017)), "7.120236347223045e-307");
+    assert_eq!(float_repr(pow2(89)), "6.189700196426902e+26");
     assert_eq!(float_repr(1e16), "1e+16");
     assert_eq!(float_repr(1e-5), "1e-05");
     assert_eq!(float_repr(123456.0), "123456.0");
