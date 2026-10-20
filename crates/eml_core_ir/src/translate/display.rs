@@ -174,6 +174,7 @@ impl Display<'_> {
                 )
             }
             Part::Function => self.string("<fn>"),
+            Part::Extern => self.string("<extern>"),
             Part::Ellipsis => self.string("..."),
             Part::Display(_) => unreachable!("a display part calls its function"),
         };

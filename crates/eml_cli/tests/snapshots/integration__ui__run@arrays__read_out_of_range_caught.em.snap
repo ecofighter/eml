@@ -1,0 +1,9 @@
+---
+source: crates/eml_cli/tests/ui.rs
+expression: "format!(\"--- stdout ---\\n{stdout}--- stderr ---\\n{diagnostics}{stderr}{written}{exit}\")"
+input_file: tests/ui/run/arrays/read_out_of_range_caught.em
+---
+--- stdout ---
+Err "array index 7 is out of range for length 3"
+y
+--- stderr ---

@@ -494,6 +494,7 @@ impl ProgramBuilder {
                     Shown::Show(show) => self.show(&mut builder, show, value),
                     // 値は捨てる。入力の関数は呼んであるので、式の中の `println` は動いている
                     Shown::Function => builder.string(&mut self.strings, "<fn>"),
+                    Shown::Extern => builder.string(&mut self.strings, "<extern>"),
                 };
                 (text, Repr::Obj, Mark::Unr)
             }
@@ -577,6 +578,8 @@ pub(super) enum Shown {
     Show(ShowTarget),
     /// 関数の値。`<fn>` を返す。
     Function,
+    /// `Show` を持たない extern の型の値。`<extern>` を返す。
+    Extern,
 }
 
 /// `show` の行き先。

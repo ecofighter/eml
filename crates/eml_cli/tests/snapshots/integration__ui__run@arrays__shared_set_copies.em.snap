@@ -1,0 +1,9 @@
+---
+source: crates/eml_cli/tests/ui.rs
+expression: "format!(\"--- stdout ---\\n{stdout}--- stderr ---\\n{diagnostics}{stderr}{written}{exit}\")"
+input_file: tests/ui/run/arrays/shared_set_copies.em
+---
+--- stdout ---
+[0.5, 1.5, 2.5]
+[0.5, 9.5, 2.5]
+--- stderr ---

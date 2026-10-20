@@ -95,6 +95,8 @@ pub(super) enum Part<T = Target, I = InstanceId> {
     Show(T),
     /// 関数。`<fn>` と書く。
     Function,
+    /// `Show` を持たない extern の型 (`Array` など)。中身を読めないので `<extern>` と書く。
+    Extern,
     /// 表示関数を作らない型 (段と数の上限を超えた型)。`...` と書く。
     Ellipsis,
     /// 構造で書く。表示関数を呼ぶ。
@@ -108,6 +110,7 @@ impl FoundPart {
         match self {
             Part::Show(target) => Part::Show(target.renumber(renumbered)),
             Part::Function => Part::Function,
+            Part::Extern => Part::Extern,
             Part::Ellipsis => Part::Ellipsis,
             Part::Display(index) => Part::Display(InstanceId(renumbered[index])),
         }
@@ -622,6 +625,12 @@ impl Collector<'_> {
         if matches!(self.store.kind(ty), TypeKind::Fn { .. }) {
             return Part::Function;
         }
+        if let TypeKind::Con { id, .. } = self.store.kind(ty)
+            && matches!(hir[*id].kind, TypeDefKind::Extern(_))
+            && !eml_types::satisfies(hir, &self.store, hir.lang.show, ty)
+        {
+            return Part::Extern;
+        }
         // 文脈が型引数で解けない instance は、解決すると使えない instance を指すので、先に `satisfies` で分ける
         let show = hir.lang.show;
         let structural = !eml_types::satisfies(hir, &self.store, show, ty)
@@ -670,9 +679,9 @@ impl Collector<'_> {
                 TypeDefKind::Data { .. } => {
                     DisplayForm::Data(id, self.constructor_fields(id, &args))
                 }
-                // `Show` を持たない extern の型は今は `File` だけで、式の入力の結果にならない (E2016)
-                TypeDefKind::Extern(_) => panic!(
-                    "internal error: the displayer reaches the extern type `{}` without `Show`",
+                // `Show` を持つ extern の型は `display_part` が `show_prec` で書くので、ここへは届かない
+                TypeDefKind::Extern(_) => unreachable!(
+                    "the extern type `{}` is written without a display function",
                     hir[id].name
                 ),
             },

@@ -1973,3 +1973,9 @@ S14b (`Float` と、算術のクラス `Num` と `Div`。[宣言](../spec/declar
 | `tree_map` | 181655876 | 139058662 | 0.00 |
 | `upsert` | 496809425 | 454212211 | 0.02 |
 | `upsert_by_hand` | 495123867 | 452526653 | 0.02 |
+
+### S14c-1
+
+S14c-1 (`Array` と `MutArray` の核。[標準ライブラリ](../spec/stdlib.md) の「`Std.Array`」と「`Std.MutArray`」) の前と後で、`RunStats` を比べた。
+
+`bench/` のどのプログラムでも、`RunStats` (検査モード) と巻き戻しの表の行の数は1つも変わらなかった (`crates/eml_vm/tests/bench.rs` のスナップショットは、S14b の後から変わっていない)。配列は Prelude の extern の型と `Std.Array`、`Std.MutArray` の関数を足しただけで、配列を使わないプログラムの道には触れていない。配列を使うプログラムの計測は S14d で足す。

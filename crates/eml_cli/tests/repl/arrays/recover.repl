@@ -1,0 +1,5 @@
+# 実行時エラーの回復は配列を写し直し、`Show` のない `Array Int` は型だけを表示する
+> let a = Array.make 3 0
+> Array.get a 5
+> Array.to_list a
+> a

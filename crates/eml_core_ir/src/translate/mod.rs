@@ -459,6 +459,7 @@ fn entry_after(
                 }
                 Part::Show(Target::Extern(row)) => Shown::Show(ShowTarget::Extern(row)),
                 Part::Function => Shown::Function,
+                Part::Extern => Shown::Extern,
                 Part::Ellipsis => unreachable!("the value of an input is never cut"),
             };
             EntryAfter::Shown(shown)

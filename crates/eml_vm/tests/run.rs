@@ -2,7 +2,7 @@
 //! 終わりの処理 (docs/spec/vm.md の「呼び出しと戻り」と「誤り、止めること、終わり」)。
 
 use eml_rt::{ArithFault, Fault, HeapError};
-use eml_test_support::execute;
+use eml_test_support::{execute, run_stats};
 use eml_vm::{RuntimeError, SourceLocation, VmFault};
 
 use crate::common::{parse, run_lir, run_unverified};
@@ -405,4 +405,27 @@ fn main() -> unit {{
     );
     let min = i64::MIN;
     assert_eq!(run_lir(&text), (format!("0\n{min}\n0\n{min}\n"), Ok(())));
+}
+
+/// `thaw` は共有された配列だけを写す (docs/spec/object-model.md の「配列」)。写しは確保が 1 つ増えるので、
+/// 配列を後で使う版と使わない版の `allocations` の差はちょうど 1 になる。
+#[test]
+fn thaw_copies_only_shared_arrays() {
+    let unique = "main : Unit -> <IO, Panic> Unit
+main () =
+  let a = Array.make 3 0
+  let n = Array.length (MutArray.freeze (Array.thaw a))
+  println (show (n + 0))
+";
+    let shared = "main : Unit -> <IO, Panic> Unit
+main () =
+  let a = Array.make 3 0
+  let n = Array.length (MutArray.freeze (Array.thaw a))
+  println (show (Array.length a + n))
+";
+    let allocations = |text: &str| {
+        let (_, result) = run_stats(text);
+        result.expect("the program runs").allocations
+    };
+    assert_eq!(allocations(shared), allocations(unique) + 1);
 }

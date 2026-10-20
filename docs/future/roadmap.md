@@ -16,7 +16,7 @@
 
 | 段 | 中身 | 前提 | 完了の条件 |
 |---|---|---|---|
-| S14 数値計算の整備 | 実行時エラーの型 `Panic`、`Float` と `Num`、`Array` と `Lin` の `MutArray`、小さな単一コンストラクタの型の構造体の表現、数値計算の計測 | S13 | 数値計算の計測のプログラムが Python の版と一緒に `bench/scripts.sh` で動き、結果を [計測の基準](../implementation/benchmarks.md) に記録する。S14a と S14b は済み |
+| S14 数値計算の整備 | 実行時エラーの型 `Panic`、`Float` と `Num`、`Array` と `Lin` の `MutArray`、小さな単一コンストラクタの型の構造体の表現、数値計算の計測 | S13 | 数値計算の計測のプログラムが Python の版と一緒に `bench/scripts.sh` で動き、結果を [計測の基準](../implementation/benchmarks.md) に記録する。S14a と S14b と S14c-1 は済み |
 
 S14 の後は、言語の項目を次の順に並べる。
 
@@ -52,7 +52,7 @@ S14 は、ネイティブ化の前に、数値計算で Python と比べる基�
 |---|---|---|
 | S14a | `Panic`。値と入力で決まる実行時エラーを型に出し、中断しうるかの印で巻き戻しの地点を決める | 済み。`+ - * / %`、`negate`、文字列の位置の extern と `Env.arg` が `<Panic>` を持ち、その誤りと利用者の `panic` を `try_panic` が巻き戻しで捕まえる。巻き戻しの表の行は、中断しない関数の呼び出しの分だけ減った。決めたこと (`Panic` の宣言、`main` と REPL の入力の row、トップレベルの値と `Eq`、`Ord`、`Show` のメソッドの空の row、負のリテラル) は [エフェクトと handler](../spec/effects.md) の「組み込みの `Panic`」、[標準ライブラリ](../spec/stdlib.md) の「`try_panic`」、[宣言](../spec/declarations.md) の「シグネチャと等式」と「Prelude のクラス」、[式](../spec/expressions.md) の「演算子の列と単項マイナス」、[モジュールと名前解決](../spec/modules.md) の「モジュール」、[型と Kind](../spec/types.md) の「REPL の入力」にある。実行の道は [VM](../spec/vm.md) の「中断と実行時エラーの分担」と「extern の中断」に、`Fault::panics` は [オブジェクトモデル](../spec/object-model.md) の「extern」に、中断しうるかの不動点と巻き戻しの地点は [LIR](../spec/lir.md) の「巻き戻しの地点」に、under の形は [Core IR](../spec/core-ir.md) の「`perform` と節の3つの形」に、計測は [計測の基準](../implementation/benchmarks.md) の「S14a」にある |
 | S14b | `Float` と `Num` / `Div` | 済み。`Int` の算術を Prelude のクラス `Num` (`+ - *`、`negate`) と `Div` (`/`、`%`) の instance にし、`Float` (IEEE 754 の倍精度) の型、リテラル、算術と比較、Python の `repr` と同じ表示、`Std.Float` を入れた。`bench/` のプログラムの `RunStats` は変わらない。決めたこと (クラスと instance、`Float` の比較の演算子と `compare` の全順序の例外、表示) は [宣言](../spec/declarations.md) の「Prelude のクラス」にある。リテラルは [字句](../spec/lexical.md) の「数値と文字」と [式](../spec/expressions.md) の「演算子の列と単項マイナス」に、型は [型と Kind](../spec/types.md) の「数の型」に、パターンの E1052 は [網羅性](../spec/exhaustiveness.md) の「検査パス」に、`Std.Float` は [標準ライブラリ](../spec/stdlib.md) の「`Std.Float`」にある。実行の道では、Repr `float` が [LIR](../spec/lir.md) の「値の表現」に、`Float` の箱が [オブジェクトモデル](../spec/object-model.md) の「種類」に、専用の命令が [VM](../spec/vm.md) の「基本操作と extern」に、信頼の一覧の T12 がオブジェクトモデルの「`unsafe` の核」にある。計測は [計測の基準](../implementation/benchmarks.md) の「S14b」にある |
-| S14c | `Array` と `Lin` の `MutArray`、`freeze` | |
+| S14c | `Array` と `Lin` の `MutArray`、`freeze` | S14c-1 (`Array` と `MutArray` の核) は済み。`Std.Array` と `Std.MutArray` を入れ、物体は `Data` の形の配列で、`lin` ビットが `MutArray` を表す。`set` と `write` は一意ならその場で書き換え、共有されていれば写す。範囲外の添字と負の長さは `Panic` で、`try_panic` が捕まえる。`get`、`length`、`set` は専用の VM の命令で動き、`bench/` のプログラムの `RunStats` は変わらない。決めたことは [標準ライブラリ](../spec/stdlib.md) の「`Std.Array`」と「`Std.MutArray`」、[宣言](../spec/declarations.md) の「`extern`」、[オブジェクトモデル](../spec/object-model.md) の「配列」、[VM](../spec/vm.md) の「基本操作と extern」にある。計測は [計測の基準](../implementation/benchmarks.md) の「S14c-1」にある |
 | S14d | 数値計算の計測。構造体の表現の前の基準を記録する | |
 | S14e | 小さな単一コンストラクタの型の構造体の表現 | |
 
@@ -101,8 +101,8 @@ S14 は、ネイティブ化の前に、数値計算で Python と比べる基�
 ### 論点
 
 - 型から決める呼び出しの規約 (ユーザーが 2026-10-18 に、`Float` の項目かネイティブ化で考えると決めた。S14b では入れず、`tobj` の位置の `Float` はいつも箱に入れる。S14e の設計で扱う): S13e-3 で、関数の ABI を名前で決め、値として生まれる関数をいつも一様にした ([LIR](../spec/lir.md) の「一様な関数」)。そのため、展開されない内部の関数を直接呼ぶ所は、呼び出しごとにスカラーを `box` と `unbox` で受け渡す ([計測の基準](../implementation/benchmarks.md) の「S13e-3」)。この費用をなくすため、閉包の ABI を矢印の型から決め、変換の包みを一様な `_:poly` の境目だけに置く形を考える。総称な `apply` の道には、`FnEntry` に引数の Repr を持たせて変換させる。捕獲は生の語のまま持ち、データのフィールドは今と同じく一様に保つ
-- 範囲外の添字は `Panic` にする。`Option` を返す版を足すか
-- `MutArray` の作り方 (同じ値で埋めるか、関数で埋めるか)、`Array` から `MutArray` を得る道、`Lin` の要素を持つ `Array` と `MutArray` の API
+- 範囲外の添字は `Panic` にした (S14c-1)。`Option` を返す版は足していない。必要になったときに足す
+- `MutArray` の作り方は、同じ値で埋める `make` と、関数で埋める `tabulate` の両方にした。`Array` から `MutArray` を得る道は `thaw` である (S14c-1)。`Lin` の要素を持つ `Array` と `MutArray` の API は、まだ決めていない。extern の関数の引数の型変数は `Unr` に固定しているので、今は `Lin` の要素の配列にどの関数も使えない
 - `poly` の物体の `lin` ビットの実行時の伝播 ([マルチコア対応の設計](multicore.md) の「未決の論点と将来の拡張」で、`MutArray` の項目で決めるとしていた)
 - 構造体にする型の条件 (語の数の上限、`Lin` のフィールド、row の型引数を持つ型)。複数の値を返す形の LIR と VM での表し方。EP の継続の捕獲と yield の道での構造体の扱い
 - 計測に選ぶプログラム。候補は、`Float` を使う nbody、spectral-norm、mandelbrot と、`MutArray` を使う fannkuch-redux、エラトステネスのふるいである
