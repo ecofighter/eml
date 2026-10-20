@@ -20,6 +20,13 @@ fn show(x.0: float) -> unit {
 }
 ";
 
+const HALF: &str = "\
+fn half(x.0: float) -> float {
+  let y.1: float = extern \"Prelude.Div Float./\"(x.0, 2.0)
+  return y.1
+}
+";
+
 const INC: &str = "\
 fn inc(x.0: int) -> int {
   let y.1: int = extern \"Prelude.Num Int.+\"(x.0, 1)
@@ -128,7 +135,8 @@ fn add(a.0: int, s.1: obj, b.2: int) -> unit {
 
 /// 1つの `apply` が `make` と、`make` の返すクロージャの両方に `int` を渡す。余る引数は `ApplyRest` のフレームに
 /// 場所の Repr のまま預け、後の適用は場所のシグネチャで種類を比べる。`leave` の中で `exit` すると、巻き戻しはそのフレームの
-/// 参照の引数だけを手放す。生の語を `decref` すると、ビット列をポインタとして読んでしまう。`verifier` の拒む関数は巻き戻しの
+/// 参照の引数だけを手放す。生の語を `decref` すると、ビット列をポインタとして読んでしまう。参照の引数は `++` で作った
+/// 文字列なので、手放さなければ検査モードがリークとして報告する。`verifier` の拒む関数は巻き戻しの
 /// 表を持たないので、`main` は末尾の `apply` で自分のフレームを `ApplyRest` のフレームに替える。
 #[test]
 fn apply_rest_keeps_raw_words() {
@@ -149,8 +157,10 @@ fn main() -> unit {{
     let exiting = format!(
         "\
 fn main() -> unit {{
-  let s.0: obj = const \"sum \"
-  tail apply &leave(1: int, s.0, 2: int)
+  let a.0: obj = const \"sum\"
+  let b.1: obj = const \" \"
+  let s.2: obj = extern \"Prelude.++\"(a.0, b.1)
+  tail apply &leave(1: int, s.2, 2: int)
 }}
 fn leave(x.0: int) -> tobj {{
   let z.1: unit = extern Prelude.exit(3)
@@ -248,4 +258,91 @@ fn sum({}) -> int {{
     // 0 から 18 までの和と 100
     assert_eq!(out, "271\n");
     assert_eq!((stats.conversions, stats.boxes), (0, 0), "{stats:?}");
+}
+
+/// 一意な箱で受けた `float` を一様な場所から渡すと、取り出した後で箱を空ける。定数の `box` は不死の物体になるので、
+/// 計算した値を箱に入れる。
+#[test]
+fn a_uniform_site_frees_a_unique_box() {
+    let text = format!(
+        "\
+fn main() -> unit {{
+  let x.0: float = extern \"Prelude.Num Float.+\"(2.0, 0.5)
+  let b.1: tobj = box x.0
+  let r.2: float = uniform apply &half(b.1)
+  tail call show(r.2)
+}}
+{HALF}{SHOW_FLOAT}"
+    );
+    let (out, stats) = run_typed_apply(&text);
+    let stats = stats.unwrap();
+    assert_eq!(out, "1.25\n");
+    // `show` と `println` が文字列の確保を2つと `decref` を1つする。残りは箱の確保と、変換が箱を空ける `decref` である
+    assert_eq!(
+        (
+            stats.conversions,
+            stats.boxes,
+            stats.unboxes,
+            stats.allocations,
+            stats.rc_decrements
+        ),
+        (1, 1, 1, 3, 2),
+        "{stats:?}"
+    );
+}
+
+/// 共有の箱は取り出した後に `decref` するだけで、呼ぶ側の参照は残る。
+#[test]
+fn a_uniform_site_decrefs_a_shared_box() {
+    let text = format!(
+        "\
+fn main() -> unit {{
+  let x.0: float = extern \"Prelude.Num Float.+\"(2.0, 0.5)
+  let b.1: tobj = box x.0
+  dup b.1
+  let r.2: float = uniform apply &half(b.1)
+  let y.3: float = unbox b.1
+  decref b.1
+  let z.4: float = extern \"Prelude.Num Float.+\"(r.2, y.3)
+  tail call show(z.4)
+}}
+{HALF}{SHOW_FLOAT}"
+    );
+    let (out, stats) = run_typed_apply(&text);
+    let stats = stats.unwrap();
+    assert_eq!(out, "3.75\n");
+    assert_eq!(
+        (stats.conversions, stats.boxes, stats.unboxes),
+        (1, 1, 2),
+        "{stats:?}"
+    );
+}
+
+/// 型どおりの場所の `float` と `int` を一様な関数に渡すと、それぞれ箱に入れる。`float` の箱は物体を確保する。
+#[test]
+fn a_typed_site_boxes_into_a_uniform_function() {
+    let text = format!(
+        "\
+fn main() -> unit {{
+  let r.0: tobj = apply &first(2.5: float, 7: int)
+  let x.1: float = unbox r.0
+  decref r.0
+  tail call show(x.1)
+}}
+fn first(a.0: tobj, b.1: tobj) -> tobj {{
+  decref b.1
+  return a.0
+}}
+{SHOW_FLOAT}"
+    );
+    let (out, stats) = run_typed_apply(&text);
+    let stats = stats.unwrap();
+    assert_eq!(out, "2.5\n");
+    assert_eq!(
+        (stats.conversions, stats.boxes, stats.unboxes),
+        (1, 2, 1),
+        "{stats:?}"
+    );
+    // `show` と `println` の確保が2つ、`float` の箱が1つ。`int` の 7 は即値の箱である
+    assert_eq!(stats.allocations, 3, "{stats:?}");
 }

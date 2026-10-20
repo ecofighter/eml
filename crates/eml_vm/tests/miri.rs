@@ -2,7 +2,7 @@
 //! の `unsafe fn` を呼ぶので、核の操作の前提を守っていることを確かめる。メモリの Host だけを使い、ファイルを開かない。
 //! 確かめる道: 直接の呼び出しと戻り、`con` と `switch` と `release`、部分適用と余った引数、基本操作 (evidence を作って
 //! 引く)、ヒープの文字列の extern、2つのプログラムを1つの `Machine` に続けて読み込み、2つ目の塊を付け替えること、
-//! 文字列を返す入口の結果を写すこと、`exit` の巻き戻し、型どおりの `apply` と生の語の捕獲、両方のモード。
+//! 文字列を返す入口の結果を写すこと、`exit` の巻き戻し、型どおりの `apply` と生の語の捕獲、`apply` の箱の変換、両方のモード。
 
 use eml_vm::{AnyMachine, RunConfig, capture_host, execute};
 
@@ -282,4 +282,25 @@ fn scale(k.0: float, x.1: float) -> float {
 }
 ";
     assert_eq!(run_typed_apply(text), "10.0\n");
+}
+
+/// 一様な場所が一意な `float` の箱を渡すと、`apply` が中身を取り出して箱を空け、関数が結果を箱に入れずに返す
+/// (`convert_word`)。
+#[test]
+fn a_uniform_apply_unboxes_into_a_typed_function() {
+    let text = "\
+fn main() -> unit {
+  let x.0: float = extern \"Prelude.Num Float.+\"(2.0, 0.5)
+  let b.1: tobj = box x.0
+  let r.2: float = uniform apply &half(b.1)
+  let s.3: obj = extern \"Prelude.Show Float.show\"(r.2)
+  let u.4: unit = extern Prelude.println(s.3)
+  return u.4
+}
+fn half(x.0: float) -> float {
+  let y.1: float = extern \"Prelude.Div Float./\"(x.0, 2.0)
+  return y.1
+}
+";
+    assert_eq!(run_typed_apply(text), "1.25\n");
 }
