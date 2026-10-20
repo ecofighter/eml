@@ -2,7 +2,7 @@
 //! 関数は一様でなく、`apply` の場所は引数と結果の Repr を持つ。速い道では箱を作らず、呼ぶ所と関数の Repr が合わない
 //! 引数だけを `box` か `unbox` で変える。捕まえた値と部分適用の引数は関数の引数の Repr のまま持つ。
 
-use crate::common::{disasm_unverified, run_typed_apply, run_unverified};
+use crate::common::{disasm, run_lir_stats, run_unverified};
 
 const SHOW_INT: &str = "\
 fn show(n.0: int) -> unit {
@@ -45,28 +45,35 @@ fn main() -> unit {{
 }}
 {INC}{SHOW_INT}"
     );
-    let (out, stats) = run_typed_apply(&text);
+    let (out, stats) = run_lir_stats(&text);
     let stats = stats.unwrap();
     assert_eq!(out, "11\n");
     assert_eq!((stats.conversions, stats.boxes), (0, 0), "{stats:?}");
 }
 
-/// 一様な場所は引数を `tobj` で渡すので、`int` を受ける関数の前で `unbox` する。箱は消費する。
+/// 一様な場所は引数と結果を `tobj` で渡す。`int` を受ける関数の前で引数を `unbox` し (箱は消費する)、`int` の結果は
+/// 変換のフレームが箱に入れてから渡す。
 #[test]
-fn a_uniform_site_boxes_into_a_typed_function() {
+fn a_uniform_site_converts_into_and_out_of_a_typed_function() {
     let text = format!(
         "\
 fn main() -> unit {{
   let b.0: tobj = box 10
-  let r.1: int = uniform apply &inc(b.0)
-  tail call show(r.1)
+  let r.1: tobj = uniform apply &inc(b.0)
+  let n.2: int = unbox r.1
+  decref r.1
+  tail call show(n.2)
 }}
 {INC}{SHOW_INT}"
     );
-    let (out, stats) = run_typed_apply(&text);
+    let (out, stats) = run_lir_stats(&text);
     let stats = stats.unwrap();
     assert_eq!(out, "11\n");
-    assert_eq!((stats.conversions, stats.unboxes), (1, 1), "{stats:?}");
+    assert_eq!(
+        (stats.conversions, stats.boxes, stats.unboxes),
+        (1, 2, 2),
+        "{stats:?}"
+    );
 }
 
 /// 捕まえた `float` は生の語のまま持つので、箱を作らない。
@@ -85,7 +92,7 @@ fn scale(k.0: float, x.1: float) -> float {{
 }}
 {SHOW_FLOAT}"
     );
-    let (out, stats) = run_typed_apply(&text);
+    let (out, stats) = run_lir_stats(&text);
     let stats = stats.unwrap();
     assert_eq!(out, "10.0\n");
     assert_eq!(stats.boxes, 0, "{stats:?}");
@@ -112,7 +119,7 @@ fn add3(s.0: obj, a.1: int, b.2: int, c.3: int) -> obj {
   return r.7
 }
 ";
-    let (out, stats) = run_typed_apply(text);
+    let (out, stats) = run_lir_stats(text);
     let stats = stats.unwrap();
     assert_eq!(out, "sum 6\n");
     assert_eq!((stats.boxes, stats.conversions), (0, 0), "{stats:?}");
@@ -149,7 +156,7 @@ fn main() -> unit {{
 }}
 {MAKE}"
     );
-    let (out, stats) = run_typed_apply(&text);
+    let (out, stats) = run_lir_stats(&text);
     let stats = stats.unwrap();
     assert_eq!(out, "sum 3\n");
     assert_eq!((stats.boxes, stats.conversions), (0, 0), "{stats:?}");
@@ -169,7 +176,7 @@ fn leave(x.0: int) -> tobj {{
 }}
 {MAKE}"
     );
-    let (out, stats) = run_typed_apply(&exiting);
+    let (out, stats) = run_lir_stats(&exiting);
     let stats = stats.unwrap();
     assert_eq!(out, "");
     // `leave` と `ApplyRest` の枠の2つ
@@ -253,28 +260,28 @@ fn sum({}) -> int {{
         );
     }
     text += &format!("  return s.{}\n}}\n{SHOW_INT}", 2 * n - 2);
-    let (out, stats) = run_typed_apply(&text);
+    let (out, stats) = run_lir_stats(&text);
     let stats = stats.unwrap();
     // 0 から 18 までの和と 100
     assert_eq!(out, "271\n");
     assert_eq!((stats.conversions, stats.boxes), (0, 0), "{stats:?}");
 }
 
-/// 一意な箱で受けた `float` を一様な場所から渡すと、取り出した後で箱を空ける。定数の `box` は不死の物体になるので、
-/// 計算した値を箱に入れる。
+/// 一意な箱で受けた `float` を、場所が `tobj` とする引数から渡すと、取り出した後で箱を空ける。定数の `box` は不死の
+/// 物体になるので、計算した値を箱に入れる。
 #[test]
-fn a_uniform_site_frees_a_unique_box() {
+fn a_boxed_argument_frees_a_unique_box() {
     let text = format!(
         "\
 fn main() -> unit {{
   let x.0: float = extern \"Prelude.Num Float.+\"(2.0, 0.5)
   let b.1: tobj = box x.0
-  let r.2: float = uniform apply &half(b.1)
+  let r.2: float = apply &half(b.1)
   tail call show(r.2)
 }}
 {HALF}{SHOW_FLOAT}"
     );
-    let (out, stats) = run_typed_apply(&text);
+    let (out, stats) = run_lir_stats(&text);
     let stats = stats.unwrap();
     assert_eq!(out, "1.25\n");
     // `show` と `println` が文字列の確保を2つと `decref` を1つする。残りは箱の確保と、変換が箱を空ける `decref` である
@@ -293,14 +300,14 @@ fn main() -> unit {{
 
 /// 共有の箱は取り出した後に `decref` するだけで、呼ぶ側の参照は残る。
 #[test]
-fn a_uniform_site_decrefs_a_shared_box() {
+fn a_boxed_argument_decrefs_a_shared_box() {
     let text = format!(
         "\
 fn main() -> unit {{
   let x.0: float = extern \"Prelude.Num Float.+\"(2.0, 0.5)
   let b.1: tobj = box x.0
   dup b.1
-  let r.2: float = uniform apply &half(b.1)
+  let r.2: float = apply &half(b.1)
   let y.3: float = unbox b.1
   decref b.1
   let z.4: float = extern \"Prelude.Num Float.+\"(r.2, y.3)
@@ -308,7 +315,7 @@ fn main() -> unit {{
 }}
 {HALF}{SHOW_FLOAT}"
     );
-    let (out, stats) = run_typed_apply(&text);
+    let (out, stats) = run_lir_stats(&text);
     let stats = stats.unwrap();
     assert_eq!(out, "3.75\n");
     assert_eq!(
@@ -335,7 +342,7 @@ fn first(a.0: tobj, b.1: tobj) -> tobj {{
 }}
 {SHOW_FLOAT}"
     );
-    let (out, stats) = run_typed_apply(&text);
+    let (out, stats) = run_lir_stats(&text);
     let stats = stats.unwrap();
     assert_eq!(out, "2.5\n");
     assert_eq!(
@@ -368,7 +375,7 @@ fn main() -> unit {{
 }}
 {BOXED}{SHOW_INT}"
     );
-    let (out, stats) = run_typed_apply(&text);
+    let (out, stats) = run_lir_stats(&text);
     let stats = stats.unwrap();
     assert_eq!(out, "21\n");
     assert_eq!(
@@ -393,7 +400,7 @@ fn main() -> unit {{
 }}
 {HALF}{SHOW_FLOAT}"
     );
-    let (out, stats) = run_typed_apply(&text);
+    let (out, stats) = run_lir_stats(&text);
     let stats = stats.unwrap();
     assert_eq!(out, "1.25\n");
     // 引数の `unbox` と結果の `box` が1つの `apply` の変換である
@@ -441,7 +448,7 @@ b2:
 #[test]
 fn tail_applies_compose_conversions() {
     let run = |n: u64| {
-        let (out, stats) = run_typed_apply(&even_odd(n));
+        let (out, stats) = run_lir_stats(&even_odd(n));
         // n が奇数なら `odd(0)` が箱の 1 を返す
         assert_eq!(out, "1\n");
         stats.unwrap()
@@ -453,6 +460,126 @@ fn tail_applies_compose_conversions() {
         (2001, 1, 1),
         "{long:?}"
     );
+}
+
+/// `even_odd` の輪を直接の末尾呼び出しで書く。結果の変換はコード生成が命令に持たせ、実行時の変換に数えない。`even`
+/// から `odd` へは変換のフレームを積み、`odd` から `even` へはそのフレームと合成して恒等になるので外す。そのため、
+/// フレームの数は反復の数によらない。
+#[test]
+fn direct_tail_calls_compose_their_conversions() {
+    let text = |n: u64| {
+        format!(
+            "\
+layout Bool {{ False, True }}
+fn main() -> unit {{
+  let r.0: int = call even({n})
+  tail call show(r.0)
+}}
+fn even(n.0: int) -> int {{
+  let d.1: enum = extern \"Prelude.Eq Int.==\"(n.0, 0)
+  switch d.1 Bool {{ #0 -> b1, #1 -> b2 }}
+b1:
+  let m.2: int = extern \"Prelude.Num Int.-\"(n.0, 1)
+  tail call odd(m.2)
+b2:
+  return 0
+}}
+fn odd(n.0: int) -> tobj {{
+  let d.1: enum = extern \"Prelude.Eq Int.==\"(n.0, 0)
+  switch d.1 Bool {{ #0 -> b1, #1 -> b2 }}
+b1:
+  let m.2: int = extern \"Prelude.Num Int.-\"(n.0, 1)
+  tail call even(m.2)
+b2:
+  let b.3: tobj = box 1
+  return b.3
+}}
+{SHOW_INT}"
+        )
+    };
+    let shown = disasm(&text(1));
+    assert!(
+        shown.contains("tail_call odd(s0) convert word -> int"),
+        "{shown}"
+    );
+    assert!(
+        shown.contains("tail_call even(s0) convert int -> word"),
+        "{shown}"
+    );
+    let run = |n: u64| {
+        let (out, stats) = run_lir_stats(&text(n));
+        assert_eq!(out, "1\n");
+        stats.unwrap()
+    };
+    let (short, long) = (run(1001), run(2001));
+    assert_eq!(short.peak_stack, long.peak_stack, "{short:?} {long:?}");
+    assert_eq!(
+        (long.conversions, long.boxes, long.unboxes),
+        (0, 1, 1),
+        "{long:?}"
+    );
+}
+
+/// 操作の結果が `int` の末尾の `clause` は、`tobj` を返す `walk` から変換のフレームを積む。節の関数 `stepper` は
+/// `int` を返し、`tobj` を返す `walk` を末尾で呼ぶので、その変換はフレームと合成して恒等になり、フレームを外す。
+/// そのため、`walk` と節の関数の輪はスタックを伸ばさない。
+#[test]
+fn a_tail_clause_composes_its_conversion() {
+    let text = |n: u64| {
+        format!(
+            "\
+layout Bool {{ False, True }}
+effect Step {{ step(int) -> int }}
+fn main() -> unit {{
+  let w.0: tobj = prim evv_get()
+  dup w.0
+  dup w.0
+  let e.1: obj = prim ev_new[Step]((), w.0)
+  let u.2: unit = prim ev_set_clause[Step.step](e.1, &stepper)
+  dup e.1
+  let w.3: tobj = prim evv_push(w.0, e.1)
+  let u.4: unit = prim evv_set(w.3)
+  let r.5: tobj = call walk(e.1, {n})
+  let u.6: unit = prim evv_set(w.0)
+  let k.7: int = unbox r.5
+  decref r.5
+  tail call show(k.7)
+}}
+yields fn walk(e.0: obj, n.1: int) -> tobj {{
+  let d.2: enum = extern \"Prelude.Eq Int.==\"(n.1, 0)
+  switch d.2 Bool {{ #0 -> b1, #1 -> b2 }}
+b1:
+  let c.3: tobj = prim ev_clause[Step.step](e.0)
+  tail clause Step.step c.3(e.0, n.1)
+b2:
+  decref e.0
+  let b.4: tobj = box 7
+  return b.4
+}}
+internal yields clause Step.step fn stepper(e.0: obj, n.1: int) -> int {{
+  let m.2: int = extern \"Prelude.Num Int.-\"(n.1, 1)
+  tail call walk(e.0, m.2)
+}}
+{SHOW_INT}"
+        )
+    };
+    let shown = disasm(&text(1));
+    assert!(
+        shown.contains("tail_clause s2(s0, s1) convert int -> word"),
+        "{shown}"
+    );
+    assert!(
+        shown.contains("tail_call walk(s0, s1) convert word -> int"),
+        "{shown}"
+    );
+    let run = |n: u64| {
+        let (out, stats) = run_lir_stats(&text(n));
+        assert_eq!(out, "7\n");
+        stats.unwrap()
+    };
+    let (short, long) = (run(1000), run(2000));
+    assert_eq!(short.peak_stack, long.peak_stack, "{short:?} {long:?}");
+    assert_eq!(long.conversions, 0, "{long:?}");
 }
 
 /// `f` は `tobj` を返し、`int` の場所から入る。`f` が `int` を返す `g` を末尾で `apply` すると、変換は `int` から
@@ -477,7 +604,7 @@ fn g(x.0: int) -> int {{
 "
         )
     };
-    let (out, stats) = run_typed_apply(&text(""));
+    let (out, stats) = run_lir_stats(&text(""));
     let stats = stats.unwrap();
     assert_eq!(out, "5\n");
     assert_eq!(
@@ -486,10 +613,10 @@ fn g(x.0: int) -> int {{
         "{stats:?}"
     );
     // `apply` の変換は実行時に決まるので、末尾の `apply` の命令は変換を持たない
-    let shown = disasm_unverified(&text(""));
+    let shown = disasm(&text(""));
     assert!(!shown.contains("convert"), "{shown}");
 
-    let (out, stats) = run_typed_apply(&text("  let z.3: unit = extern Prelude.exit(0)\n"));
+    let (out, stats) = run_lir_stats(&text("  let z.3: unit = extern Prelude.exit(0)\n"));
     let stats = stats.unwrap();
     assert_eq!(out, "5\n");
     assert_eq!(stats.unwound_frames, 1, "{stats:?}");
@@ -513,11 +640,11 @@ fn wrap(x.0: int) -> tobj {{
 {INC}{SHOW_INT}"
     );
     assert!(
-        disasm_unverified(&text).contains("tail_call inc(s0) convert int -> word"),
+        disasm(&text).contains("tail_call inc(s0) convert int -> word"),
         "{}",
-        disasm_unverified(&text)
+        disasm(&text)
     );
-    let (out, stats) = run_typed_apply(&text);
+    let (out, stats) = run_lir_stats(&text);
     let stats = stats.unwrap();
     assert_eq!(out, "42\n");
     assert_eq!(
@@ -560,13 +687,13 @@ fn leave(e.0: obj) -> float {{
   let c.4: tobj = prim yield_finish()
   decref c.4
 ";
-    let (out, stats) = run_typed_apply(&text(finish));
+    let (out, stats) = run_lir_stats(&text(finish));
     let stats = stats.unwrap();
     assert_eq!(out, "done\n");
     assert_eq!((stats.conversions, stats.boxes), (1, 0), "{stats:?}");
 
     // yield しなければ、同じ変換のフレームが `0.0` を箱に入れる
-    let (out, stats) = run_typed_apply(&text(""));
+    let (out, stats) = run_lir_stats(&text(""));
     let stats = stats.unwrap();
     assert_eq!(out, "done\n");
     assert_eq!((stats.conversions, stats.boxes), (1, 1), "{stats:?}");
@@ -604,7 +731,7 @@ fn abort(e.0: obj) -> int {
   return 0
 }
 ";
-    let (out, stats) = run_typed_apply(text);
+    let (out, stats) = run_lir_stats(text);
     let stats = stats.unwrap();
     assert_eq!(out, "landed\n");
     // `abort` と変換のフレーム
@@ -635,4 +762,60 @@ fn leave(x.0: int) -> int {
         result.unwrap_err().to_string(),
         "internal error: the evidence list or a yield is left at the end in `leave`"
     );
+}
+
+/// 変換の道を確かめる UI テストのプログラムが、実際にその道を通ることを確かめる。UI テストは出力だけを比べるので、
+/// optimize が関数の値を特殊化すると、変換を通らなくなっても気づけないためである。`panic_through_conversion` は
+/// 誤りで止まり `RunStats` を返さないので、ゼロ除算を除いた同じ道の実行で数える。
+#[test]
+fn ui_programs_take_the_conversion_paths_they_describe() {
+    let ui = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/ui");
+    let stats = |path: &str, edit: Option<(&str, &str)>, expected: &str| {
+        let mut text = std::fs::read_to_string(ui.join(path))
+            .unwrap_or_else(|error| panic!("{path}: {error}"));
+        if let Some((from, to)) = edit {
+            text = text.replace(from, to);
+        }
+        let (out, result) = eml_test_support::run_stats(&text);
+        assert_eq!(out, expected, "{path}: {result:?}");
+        result.unwrap_or_else(|error| panic!("{path}: {error}"))
+    };
+    let none = None;
+    for (path, edit, expected) in [
+        (
+            "run/functions/polymorphic_recursion_with_function_values.em",
+            none,
+            "20\n4.5\nhi!!\n",
+        ),
+        (
+            "run/functions/function_value_made_inside_a_uniform_instance.em",
+            none,
+            "5\n1.5\nfirst\n",
+        ),
+        (
+            "run/functions/function_values_inside_data_called_generically.em",
+            none,
+            "15\n2.0\nb-a\n",
+        ),
+        (
+            "run/unwind/abort_through_conversion.em",
+            none,
+            "Ok 10\nErr \"zero\"\n",
+        ),
+        (
+            "run-fail/panic/panic_through_conversion.em",
+            Some(("divide 0", "divide 1")),
+            "20\n100\n",
+        ),
+    ] {
+        let stats = stats(path, edit, expected);
+        assert!(stats.conversions > 0, "{path}: {stats:?}");
+    }
+    // 捕まえた `Float` と部分適用の `Float` は生の語のまま持つので、変換も箱もない
+    let stats = stats(
+        "run/functions/float_closure_partial_application.em",
+        none,
+        "3.75\n2.25\n7.5\n",
+    );
+    assert_eq!((stats.conversions, stats.boxes), (0, 0), "{stats:?}");
 }

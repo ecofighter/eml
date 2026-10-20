@@ -57,12 +57,11 @@ impl Program {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CoreFn {
     pub name: String,
-    /// 内部の関数。値として生まれる関数で、ABI は名前で決まり、いつも一様である (引数と `ret` がすべて `tobj` と
-    /// 互換。docs/spec/lir.md の「一様な関数」)。translate のラムダ、handle の本体、節と `return` の節、包む関数
+    /// 内部の関数。値として生まれる関数である。translate のラムダ、handle の本体、節と `return` の節、包む関数
     /// (`op$`、`con$`、`$externN`、`cont$`、`cont$state`) と、optimize と EP が値として作る関数 (値として生まれた関数の
-    /// 複製、`k` として渡す継続の関数、`f$kN`) が当たる。box の挿入はこの印だけを読み、プログラムの中の使い方は読まない。
-    /// 名前が同じ関数がどのプログラムでも同じ ABI になるためである (docs/spec/vm.md の「追記」)。テキストの形では
-    /// `internal fn` と書く (docs/spec/core-ir.md)。
+    /// 複製、`k` として渡す継続の関数、`f$kN`) が当たる。ABI は決めない。ABI は型と役割 (`role`) で決まる
+    /// (docs/superpowers/specs/2026-10-21-s14e-abi-struct-design.md の「関数の ABI」)。optimize の複製の名前などが
+    /// この印を読む。テキストの形では `internal fn` と書く (docs/spec/core-ir.md)。
     pub internal: bool,
     /// EP のしくみの中での役割 (`eml_lir::Role`)。テキストの形では `fn` の直前に `role R` と書く。
     pub role: Role,

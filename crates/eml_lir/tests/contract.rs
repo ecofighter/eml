@@ -202,9 +202,10 @@ fn not_returned(x.0: int) -> int {
 }
 
 #[test]
-fn a_call_whose_result_is_not_compatible_with_the_ret_is_not_a_tail_call() {
-    // `g` の `unit` は `r.0` の `tobj` と、`r.0` は `f` の `obj` と互換である。互換は推移的でないので、`unit` と `obj`
-    // を直接つなぐ末尾呼び出しにはしない
+fn an_incompatible_tail_position_call_becomes_tail() {
+    // `g` の `unit` は `f` の `obj` と互換でないが、末尾の位置の呼び出しは結果の Repr によらず末尾呼び出しになる。
+    // 結果の変換は VM の変換のフレームが行う
+    // (docs/superpowers/specs/2026-10-21-s14e-abi-struct-design.md の「box の挿入」)
     let text = "\
 fn f() -> obj {
   let r.0: tobj = call g()
@@ -214,14 +215,20 @@ fn g() -> unit {
   return ()
 }
 ";
-    assert_eq!(contract_text(text), text);
+    insta::assert_snapshot!(contract_text(text), @"
+    fn f() -> obj {
+      tail call g()
+    }
+    fn g() -> unit {
+      return ()
+    }
+    ");
 }
 
 #[test]
 fn a_clause_call_returned_at_the_end_becomes_a_tail_call() {
-    // 節の呼び出しの結果は操作の `ret` である。`Counter.get` の `int` は `f` の `int` の `ret` と互換なので末尾呼び出し
-    // になる。`g` では `Counter.put` の `unit` が `u.3` の `tobj` を通して `obj` の `ret` につながるが、`unit` と `obj`
-    // は互換でないので末尾呼び出しにならない
+    // 節の呼び出しも、結果の Repr によらず末尾呼び出しになる。`g` では `Counter.put` の `unit` の結果が `obj` の
+    // `ret` と互換でないが、末尾呼び出しにする
     let text = "\
 effect Counter { get(unit) -> int, put(int) -> unit }
 yields fn f(c.0: tobj, e.1: obj) -> int {
@@ -239,8 +246,7 @@ yields fn g(c.0: tobj, e.1: obj, n.2: int) -> obj {
       tail clause Counter.get c.0(e.1, ())
     }
     yields fn g(c.0: tobj, e.1: obj, n.2: int) -> obj {
-      let u.3: tobj = clause Counter.put c.0(e.1, n.2)
-      return u.3
+      tail clause Counter.put c.0(e.1, n.2)
     }
     ");
 }

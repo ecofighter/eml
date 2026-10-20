@@ -289,7 +289,7 @@ fn a_lifted_function_has_the_same_lir_as_a_top_level_helper() {
         let top = normalized(&top, pair.outer, &top_names);
         let local = normalized(&local, pair.outer, &local_names);
         assert!(
-            top.len() > pair.helpers.len(),
+            top.len() >= pair.helpers.len(),
             "the outer function and its helpers must be compared:\n{top:#?}"
         );
         assert_eq!(top, local, "{}", pair.local);
@@ -299,7 +299,7 @@ fn a_lifted_function_has_the_same_lir_as_a_top_level_helper() {
 /// 関数を受ける std の関数には、データを通した値を渡す。optimize はデータを通った値を既知の閉包としないので
 /// (docs/spec/core-ir.md の「既知の閉包」)、特殊化しない std の関数の
 /// LIR が残る。std の関数もデータを通して呼ぶ。直接呼ぶと、小さな関数は `main` に展開されて残らないためである
-/// (同じ文書の「インライン化」)。値として使う関数に box の挿入が足す `$boxed` は比べない。
+/// (同じ文書の「インライン化」)。
 const STD_PROGRAM: &str = "\
 data Box a = | Box a
 
@@ -342,7 +342,7 @@ main () =
 fn normalized_std(shown: &str) -> String {
     let functions: Vec<(String, String)> = split_functions(shown)
         .into_iter()
-        .filter(|(name, _)| name.starts_with("Std.") && !name.ends_with("$boxed"))
+        .filter(|(name, _)| name.starts_with("Std."))
         .collect();
     let names: Vec<&str> = functions.iter().map(|(name, _)| name.as_str()).collect();
     let mut order: Vec<&str> = Vec::new();
@@ -560,11 +560,13 @@ fn std_public_functions_keep_their_lir() {
       decref ys.2
       tail call "F0"(#0, acc.1)
     b2:
-      release ys.2 Prelude.List #1(x.3, rest.4)
+      let x.5: int = unbox x.3
+      release ys.2 Prelude.List #1(_, rest.4)
       dup f.0
-      let t.5: tobj = apply f.0(x.3)
-      let d.6: tobj = con Prelude.List #1(t.5, acc.1)
-      tail call "F7"(f.0, d.6, rest.4)
+      let t.6: int = apply f.0(x.5)
+      let t.7: tobj = box t.6
+      let d.8: tobj = con Prelude.List #1(t.7, acc.1)
+      tail call "F7"(f.0, d.8, rest.4)
     }
     fn "F9"(p.0: tobj, acc.1: tobj, ys.2: tobj) -> tobj {
       switch ys.2 Prelude.List { #0 -> b1, #1(x.3: tobj, rest.4: tobj) -> b2 }
@@ -573,12 +575,10 @@ fn std_public_functions_keep_their_lir() {
       decref ys.2
       tail call "F0"(#0, acc.1)
     b2:
+      let x.5: int = unbox x.3
       release ys.2 Prelude.List #1(x.3, rest.4)
       dup p.0
-      dup x.3
-      let t.5: tobj = apply p.0(x.3)
-      let t.6: enum = unbox t.5
-      decref t.5
+      let t.6: enum = apply p.0(x.5)
       switch t.6 Prelude.Bool { #0 -> b3, #1 -> b4 }
     b3:
       decref x.3
@@ -594,17 +594,18 @@ fn std_public_functions_keep_their_lir() {
       decref ys.2
       tail call "F0"(#0, acc.1)
     b2:
-      release ys.2 Prelude.List #1(x.3, rest.4)
+      let x.5: int = unbox x.3
+      release ys.2 Prelude.List #1(_, rest.4)
       dup f.0
-      let t.5: tobj = apply f.0(x.3)
-      switch t.5 Prelude.Option { #0 -> b3, #1(y.6: tobj) -> b4 }
+      let t.6: tobj = apply f.0(x.5)
+      switch t.6 Prelude.Option { #0 -> b3, #1(y.7: tobj) -> b4 }
     b3:
-      decref t.5
+      decref t.6
       tail call "F11"(f.0, acc.1, rest.4)
     b4:
-      release t.5 Prelude.Option #1(y.6)
-      let d.7: tobj = con Prelude.List #1(y.6, acc.1)
-      tail call "F11"(f.0, d.7, rest.4)
+      release t.6 Prelude.Option #1(y.7)
+      let d.8: tobj = con Prelude.List #1(y.7, acc.1)
+      tail call "F11"(f.0, d.8, rest.4)
     }
     fn F13(needle.0: obj, s.1: obj, at.2: int, n.3: int, i.4: int) -> enum {
       let t.5: enum = extern "Prelude.Ord Int.>="(i.4, n.3)

@@ -388,6 +388,23 @@ fn peaks(program: impl Fn(u64) -> (String, String)) -> (RunStats, RunStats) {
     (run(PEAK_SHORT), run(PEAK_LONG))
 }
 
+/// 関数の値をデータに通して隠す定義。optimize はデータを通った値を既知の閉包としないので
+/// (docs/spec/core-ir.md の「既知の閉包」)、取り出した値への呼び出しは特殊化されない。
+const HIDE: &str = "
+data Box a = | Box a
+
+hide : Int -> a -> <Panic> Box a
+hide n x = if n <= 0 then Box x else hide (n - 1) x
+";
+
+/// ソースから作ったコードの逆アセンブル。コード生成が決める変換 (`convert`) を確かめるため。
+fn disassembly(text: &str) -> String {
+    let control = std::sync::Arc::new(eml_vm::Control::new(eml_vm::Limits::default()));
+    let code = eml_vm::compile::<eml_rt::Fast>(&lir(text), control)
+        .unwrap_or_else(|error| panic!("{error:?}"));
+    eml_vm::disassemble(&code)
+}
+
 /// 反復の数を2倍にしても、スタックの語の数の最大もヒープの物体の数の最大も変わらないことを確かめる。末尾呼び出しを
 /// 失えばスタックが、反復ごとに物体を残せばヒープが伸びる。
 fn assert_flat((short, long): (RunStats, RunStats)) {
@@ -992,66 +1009,81 @@ fn a_local_function_runs_like_a_top_level_helper() {
     }
 }
 
-/// 結果の Repr が呼び出し元の `ret` と互換でない末尾の位置の呼び出しを通るループ。`count` は `State Int` の `get` で
-/// 終わり、`relay` は多相再帰があるので型変数の位置が一様 (`_`) で、`back` の `int` の結果を `tobj` の場所で受ける。
-/// どちらも変換のフレームを合成するので、スタックは反復の数によらない
-/// (docs/superpowers/specs/2026-10-21-s14e-abi-struct-design.md の「box の挿入」)。
+/// 結果の Repr が呼び出し元の `ret` と互換でない末尾の位置の呼び出しを通るループ。どれも変換のフレームを合成するので、
+/// スタックは反復の数によらない (docs/superpowers/specs/2026-10-21-s14e-abi-struct-design.md の「box の挿入」)。
+/// - `count` は `State Int` の `get` で終わる。本体をデータに通して隠すので handler に特殊化されず、`tobj` を返す
+///   操作の末尾の `clause` が `int` を返す `count` の結果になる (コード生成が決める変換)。
+/// - `relay` は多相再帰があるので型変数の位置が一様 (`_`) で、`back` の `int` の結果を `tobj` の場所で受ける。
+///   `back` を名前で渡すと、optimize が `relay` を `back` に特殊化し、直接の末尾呼び出しの輪になる。データに通して
+///   渡すと、末尾の `apply` の輪になり、反復ごとに実行時の変換が起きる。
 #[test]
 fn incompatible_tail_calls_keep_the_stack_flat() {
-    assert_flat(peaks(|n| {
-        (
-            format!(
-                "import Std.State (State(..))
-
+    let count = |n: u64| {
+        format!(
+            "import Std.State (State(..))
+{HIDE}
 count : Int -> <State Int, Panic> Int
 count n = if n == 0 then get () else
   put (get () + 1)
   count (n - 1)
 
 main : Unit -> <IO, Panic> Unit
-main () = println (show (State.eval 0 (fn () -> count {n})))
+main () =
+  let Box body = hide 0 (fn () -> count {n})
+  println (show (State.eval 0 body))
 "
-            ),
-            format!("{n}\n"),
         )
-    }));
-    assert_flat(peaks(|n| {
-        (
-            format!(
-                "relay : Int -> (Int -> <Panic> a) -> <Panic> a
+    };
+    assert!(
+        disassembly(&count(1)).contains("tail_clause s1(s0, s4) convert word -> int"),
+        "{}",
+        disassembly(&count(1))
+    );
+    assert_flat(peaks(|n| (count(n), format!("{n}\n"))));
+    let relay = |n: u64, back: &str| {
+        format!(
+            "relay : Int -> (Int -> <Panic> a) -> <Panic> a
 relay n k =
   if n < 0 then
     match relay n (fn m -> (k m, ())) with
       | (x, _) -> x
   else k (n - 1)
-
+{HIDE}
 back : Int -> <Panic> Int
-back n = if n == 0 then 0 else relay n back
+back n = if n == 0 then 0 else {back}
 
 main : Unit -> <IO, Panic> Unit
 main () = println (show (back {n}))
 "
-            ),
+        )
+    };
+    let direct = |n| relay(n, "relay n back");
+    assert!(
+        disassembly(&direct(1)).contains("tail_call back(s0) convert int -> word"),
+        "{}",
+        disassembly(&direct(1))
+    );
+    assert_flat(peaks(|n| (direct(n), "0\n".to_string())));
+    let (short, long) = peaks(|n| {
+        (
+            relay(n, "match hide 0 back with\n  | Box b -> relay n b"),
             "0\n".to_string(),
         )
-    }));
+    });
+    assert_eq!(long.conversions, PEAK_LONG, "{long:?}");
+    assert_flat((short, long));
 }
 
 /// 特殊化しない handler の節が末尾で再開するループ。本体の関数の値をデータに通して隠すので、optimize は handler に
-/// 特殊化せず、操作は EP の道を通る (`evidence_steps` が 0 より大きい)。
+/// 特殊化せず、操作は EP の道を通る (`evidence_steps` が 0 より大きい)。結果が一様な本体は `int` を返す `sum_asks` を
+/// 末尾で呼び、その結果をコード生成が決めた変換のフレームが箱に入れる。
 #[test]
 fn an_unspecialized_clause_resuming_in_tail_position_keeps_the_stack_flat() {
-    let (short, long) = peaks(|n| {
-        (
-            format!(
-                "effect Ask where
+    let program = |n: u64| {
+        format!(
+            "effect Ask where
   ask : Unit -> Int
-
-data Box a = | Box a
-
-hide : Int -> a -> <Panic> Box a
-hide n x = if n <= 0 then Box x else hide (n - 1) x
-
+{HIDE}
 sum_asks : Int -> Int -> <Ask, Panic> Int
 sum_asks n acc = if n == 0 then acc else sum_asks (n - 1) (acc + ask ())
 
@@ -1063,10 +1095,14 @@ main () =
       | ctl ask () k -> k 2
   println (show r)
 "
-            ),
-            format!("{}\n", 2 * n),
         )
-    });
+    };
+    assert!(
+        disassembly(&program(1)).contains("tail_call sum_asks(s1, s0) convert int -> word"),
+        "{}",
+        disassembly(&program(1))
+    );
+    let (short, long) = peaks(|n| (program(n), format!("{}\n", 2 * n)));
     assert!(long.evidence_steps > 0, "{long:?}");
     assert_flat((short, long));
 }
@@ -1101,7 +1137,12 @@ b2:
 "
         )
     };
-    let run = |n: u64, config: &eml_vm::RunConfig| execute(&crate::common::parse(&text(n)), config);
+    let program = |n: u64| {
+        let program = crate::common::parse(&text(n));
+        eml_lir::verify(&program).unwrap_or_else(|error| panic!("{error}"));
+        program
+    };
+    let run = |n: u64, config: &eml_vm::RunConfig| execute(&program(n), config);
     let checked = || eml_vm::RunConfig::default().with_debug_heap(true);
     let stats = |n: u64| {
         let (out, result) = run(n, &checked());
@@ -1111,7 +1152,7 @@ b2:
     let (short, long) = (stats(PEAK_SHORT), stats(PEAK_LONG));
     assert_eq!(long.conversions, PEAK_LONG, "{long:?}");
     let control = std::sync::Arc::new(eml_vm::Control::new(eml_vm::Limits::default()));
-    let code = eml_vm::compile::<eml_rt::Fast>(&crate::common::parse(&text(1)), control).unwrap();
+    let code = eml_vm::compile::<eml_rt::Fast>(&program(1), control).unwrap();
     let down = code.functions().iter().find(|f| f.name == "down").unwrap();
     // 1段は `down` のフレームと変換のフレーム (1つのスロット) で、どちらも見出しの2語を持つ
     let per_level = u64::from(down.frame_size) + 2 + 1 + 2;

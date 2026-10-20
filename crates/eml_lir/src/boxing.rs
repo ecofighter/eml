@@ -1,8 +1,9 @@
 //! translate と縮約の間の box の挿入のパス (docs/spec/lir.md の「box の挿入」)。プログラム全体を1回で扱い、関数の
-//! ABI を決めてから、Repr の違う位置の間に `box` と `unbox` を入れる。手順は、分類、T3 (`ret` を上げる)、一様化と
-//! `f$boxed`、変換の順である。型は読まず、呼ばれる関数のシグネチャ、内部の印と `clause` の印、配置の表、操作の表、
-//! 基本操作の表だけを読む。入力は EP の出力を写した LIR で、`tail`、`box`、`unbox`、RC の命令はない
-//! (`passes_until` の入口で `verify_lowered` が確かめる)。
+//! ABI を決めてから、Repr の違う位置の間に `box` と `unbox` を入れる。関数の ABI は具体化した型と役割だけで決まる。
+//! 手順は、役割による一様化と、位置ごとの変換である
+//! (docs/superpowers/specs/2026-10-21-s14e-abi-struct-design.md の「box の挿入」)。型は読まず、呼ばれる関数の
+//! シグネチャ、役割と `clause` の印、`apply` の場所、配置の表、操作の表、基本操作の表だけを読む。入力は EP の出力を
+//! 写した LIR で、`tail`、`box`、`unbox`、RC の命令はない (`passes_until` の入口で `verify_lowered` が確かめる)。
 //!
 //! 変数は具体化した型の Repr を持ち、値を受ける位置の Repr と互換でなければ変換する。変換は箱を要するスカラーと
 //! `tobj` の間だけで、`unit` と `obj` は命令なしで `tobj` と行き来する (docs/spec/lir.md の「値の表現」)。
@@ -14,20 +15,17 @@ use crate::check::shape;
 use crate::contract::pure;
 use crate::verify::block_shapes;
 use crate::{
-    Atom, Block, BlockId, Call, CasePattern, EffectInfo, FnIdx, Layout, LirFn, Mark, OpRet,
-    OperationInfo, Program, Repr, Rhs, Stmt, Term, VarId, VarInfo, operation,
+    Atom, Block, BlockId, Call, CasePattern, EffectInfo, Layout, LirFn, Mark, OpRet, OperationInfo,
+    Program, Repr, Rhs, Site, Stmt, Term, VarId, VarInfo, operation,
 };
 
 pub fn boxing(program: &mut Program) {
-    let values = values(program);
-    // 内部の関数の一様な ABI は名前で決まるので、T3 より前に決める。T3 は末尾で呼ぶ関数の最後の `ret` を読む
     for function in &mut program.functions {
-        if function.internal && function.clause.is_none() && !uniform(function) {
-            uniformize_in_place(function);
+        match function.clause {
+            Some((effect, op)) => conform_clause(function, operation(&program.effects, effect, op)),
+            None => conform_role(function),
         }
     }
-    raise_tail_returns(&mut program.functions, &program.effects);
-    uniformize(program, &values);
     // 変換はほかの関数を `signatures` でだけ見るので、関数を1つずつ書き換えながら表を共有で借りられる
     let signatures: Vec<Signature> = program.functions.iter().map(Signature::of).collect();
     for function in &mut program.functions {
@@ -45,86 +43,12 @@ pub fn boxing(program: &mut Program) {
     }
 }
 
-/// 関数ごとに、値として参照されるか (`&f`、`closure f` の対象) を記録する。
-fn values(program: &Program) -> Vec<bool> {
-    let count = program.functions.len();
-    let mut values = vec![false; count];
-    let mut note_value = |atom: Atom| {
-        if let Atom::Fn(target) = atom {
-            values[target.0 as usize] = true;
-        }
-    };
-    for function in &program.functions {
-        for block in &function.blocks {
-            for stmt in &block.stmts {
-                stmt.for_each_atom(&mut note_value);
-                if let Stmt::Let {
-                    var: _,
-                    rhs: Rhs::MakeClosure(target, _),
-                } = stmt
-                {
-                    note_value(Atom::Fn(*target));
-                }
-            }
-            block.term.for_each_atom(&mut note_value);
-        }
-    }
-    values
-}
-
-/// T3。`ret` が箱を要するスカラーで、末尾の位置の呼び出しのどれかの結果が `ret` と互換でない関数の `ret` を `tobj` に
-/// する。そうしないと結果を `unbox` するために呼び出しが末尾呼び出しでなくなり、関数の値を通るループがフレームを積む。
-/// 上げた関数を末尾の位置で直接呼ぶ関数も、同じ規則で上げる。`ret` はスカラーから `tobj` へ1回だけ動くので、
-/// 各関数は多くとも1回作業の列に積まれ、各辺は1回だけ見る (docs/spec/lir.md の「位置の規則」と「box の挿入」)。
-fn raise_tail_returns(functions: &mut [LirFn], effects: &[EffectInfo]) {
-    let mut callers: Vec<Vec<usize>> = vec![Vec::new(); functions.len()];
-    let mut raised = Vec::new();
-    for (index, function) in functions.iter().enumerate() {
-        let mut raise = false;
-        for block in &function.blocks {
-            // `never` の操作の呼び出しは戻らないので、結果を `ret` と比べない (docs/spec/lir.md の「位置の規則」)
-            let result = match tail_position_call(block).map(|(_, call)| call) {
-                Some(Call::Direct(target, _)) => {
-                    callers[target.0 as usize].push(index);
-                    functions[target.0 as usize].ret
-                }
-                Some(Call::Clause {
-                    effect,
-                    op,
-                    callee: _,
-                    args: _,
-                }) => match operation(effects, *effect, *op).ret {
-                    OpRet::Repr(repr) => repr,
-                    OpRet::Never => continue,
-                },
-                Some(_) => Repr::TObj,
-                None => continue,
-            };
-            raise |= !result.compatible(function.ret);
-        }
-        if raise && function.ret.needs_box() {
-            raised.push(index);
-        }
-    }
-    for &index in &raised {
-        functions[index].ret = Repr::TObj;
-    }
-    while let Some(callee) = raised.pop() {
-        for &caller in &callers[callee] {
-            if functions[caller].ret.needs_box() {
-                functions[caller].ret = Repr::TObj;
-                raised.push(caller);
-            }
-        }
-    }
-}
-
 /// 末尾の位置の呼び出しと、その文の位置。ブロックの終端が `return x` で、同じブロックに `let x = <呼び出し>` が
 /// あり、その後の文がすべて純粋な `let` であるときの、その呼び出しである。後ろの純粋な `let` は `return` が使わない
 /// ので縮約が消し、そこで末尾呼び出しになる (docs/spec/lir.md の「末尾の位置の呼び出し」)。形で決めるので、`never` の操作の
 /// 節の呼び出しも含む。EP は、Core IR の上の同じ判定 (`eml_core_ir` の tail.rs) で、この呼び出しを yield の地点に
 /// しない (docs/spec/core-ir.md の「yield の地点」)。
-fn tail_position_call(block: &Block) -> Option<(usize, &Call)> {
+pub(crate) fn tail_position_call(block: &Block) -> Option<(usize, &Call)> {
     let Term::Return(Atom::Var(returned)) = block.term else {
         return None;
     };
@@ -145,83 +69,35 @@ fn tail_position_call(block: &Block) -> Option<(usize, &Call)> {
     None
 }
 
-/// 一様な関数は、引数と `ret` の Repr がすべて `tobj` と互換である。`apply` は、関数ごとの Repr を知らずに関数の値を
-/// 呼ぶ。
-fn uniform(function: &LirFn) -> bool {
-    function.ret.compatible(Repr::TObj)
-        && function
-            .params()
-            .iter()
-            .all(|&param| function.repr(param).compatible(Repr::TObj))
-}
-
 /// 一様な位置で値を受ける Repr。箱を要するスカラーは `tobj` になり、`obj` と `unit` はそのままである。
 fn uniform_repr(repr: Repr) -> Repr {
     if repr.needs_box() { Repr::TObj } else { repr }
 }
 
-/// 内部でない関数のうち、値として参照され、T3 の後でも一様でないものに、一様な `f$boxed` を足して、値の参照を
-/// すべてそちらへ向ける。関数そのものの形は変えない。内部の関数は `boxing` の初めにその場で一様にしてあり、直接の
-/// 呼び出しは呼ぶ側で `box` と `unbox` を通す。どちらも ABI を名前で決まる印だけで決め、ほかの定義が値として参照するか
-/// 直接呼ぶかで変えないためである (docs/spec/lir.md の「一様な関数」)。`clause` の印の関数は `apply` で呼ばれず、節の呼び出しが操作の ABI で
-/// 呼ぶので、一様にせずに操作の ABI に合わせる。
-fn uniformize(program: &mut Program, values: &[bool]) {
-    let count = values.len();
-    let mut redirect: Vec<Option<FnIdx>> = vec![None; count];
-    for index in 0..count {
-        if let Some((effect, op)) = program.functions[index].clause {
-            conform_clause(
-                &mut program.functions[index],
-                operation(&program.effects, effect, op),
-            );
-            continue;
-        }
-        let function = &program.functions[index];
-        if values[index] && !uniform(function) {
-            let wrapper = boxed(function, FnIdx(index as u32));
-            redirect[index] = Some(FnIdx(program.functions.len() as u32));
-            program.functions.push(wrapper);
-        }
-    }
-    if redirect.iter().all(Option::is_none) {
-        return;
-    }
-    let point = |target: &mut FnIdx| {
-        if let Some(Some(wrapper)) = redirect.get(target.0 as usize) {
-            *target = *wrapper;
-        }
-    };
-    for function in &mut program.functions {
-        for block in &mut function.blocks {
-            for stmt in &mut block.stmts {
-                if let Stmt::Let { var: _, rhs } = stmt {
-                    if let Rhs::MakeClosure(target, _) = rhs {
-                        point(target);
-                    }
-                    rhs.for_each_atom_mut(|atom| {
-                        if let Atom::Fn(target) = atom {
-                            point(target);
-                        }
-                    });
-                }
-            }
-            block.term.for_each_atom_mut(|atom| {
-                if let Atom::Fn(target) = atom {
-                    point(target);
-                }
-            });
-        }
-    }
-}
-
-/// 箱を要するスカラーの引数を `tobj` で受け、`ret` も一様にする。
-fn uniformize_in_place(function: &mut LirFn) {
-    let expected: Vec<Repr> = function
-        .params()
+/// 役割が一様にする位置 (最後の `uniform_params` 個の引数と、`uniform_ret` なら `ret`) を一様な Repr にする。EP の
+/// しくみはこれらの位置を総称に呼ぶためである。捕獲を含むほかの位置は、型どおりの Repr のままにする
+/// (docs/superpowers/specs/2026-10-21-s14e-abi-struct-design.md の「関数の ABI」)。
+fn conform_role(function: &mut LirFn) {
+    let role = function.role;
+    let params = function.params();
+    let typed = params.len() - role.uniform_params();
+    let expected: Vec<Repr> = params
         .iter()
-        .map(|&param| uniform_repr(function.repr(param)))
+        .enumerate()
+        .map(|(position, &param)| {
+            let repr = function.repr(param);
+            if position < typed {
+                repr
+            } else {
+                uniform_repr(repr)
+            }
+        })
         .collect();
-    let ret = uniform_repr(function.ret);
+    let ret = if role.uniform_ret() {
+        uniform_repr(function.ret)
+    } else {
+        function.ret
+    };
     conform(function, &expected, ret);
 }
 
@@ -286,49 +162,6 @@ fn conform(function: &mut LirFn, expected: &[Repr], ret: Repr) {
     function.ret = ret;
 }
 
-/// `f$boxed`。引数を一様な Repr で受けて `f` を直接呼び、結果を返す。本体は変換の前の形で作り、変換はほかの関数と
-/// 同じく `Converter` が入れる。`f` の `ret` が一様なら、縮約がこの呼び出しを末尾呼び出しにする。引数と戻り値は `f` と
-/// 同じ値なので、`f` の印を写す。
-fn boxed(function: &LirFn, target: FnIdx) -> LirFn {
-    let mut vars: Vec<VarInfo> = function
-        .params()
-        .iter()
-        .map(|&param| VarInfo {
-            name: function.vars[param.0 as usize].name.clone(),
-            repr: uniform_repr(function.repr(param)),
-            mark: function.vars[param.0 as usize].mark,
-        })
-        .collect();
-    let params: Vec<VarId> = (0..vars.len() as u32).map(VarId).collect();
-    vars.push(VarInfo {
-        name: "t".to_string(),
-        repr: function.ret,
-        mark: function.ret_mark,
-    });
-    let result = VarId(vars.len() as u32 - 1);
-    LirFn {
-        name: format!("{}$boxed", function.name),
-        internal: function.internal,
-        role: function.role,
-        yields: function.yields,
-        clause: None,
-        vars,
-        ret: uniform_repr(function.ret),
-        ret_mark: function.ret_mark,
-        blocks: vec![Block {
-            params: params.clone(),
-            stmts: vec![Stmt::Let {
-                var: result,
-                rhs: Rhs::Call(Call::Direct(
-                    target,
-                    params.into_iter().map(Atom::Var).collect(),
-                )),
-            }],
-            term: Term::Return(Atom::Var(result)),
-        }],
-    }
-}
-
 /// 直接の呼び出しと `closure` が引数に期待する Repr と、直接の呼び出しの結果の Repr。
 struct Signature {
     params: Vec<Repr>,
@@ -367,16 +200,22 @@ impl Converter<'_> {
     fn run(mut self) {
         let mut fields = Vec::new();
         for index in 0..self.function.blocks.len() {
+            let tail = tail_position_call(&self.function.blocks[index]).map(|(at, _)| at);
             let stmts = std::mem::take(&mut self.function.blocks[index].stmts);
             let mut out = Vec::new();
-            for stmt in stmts {
-                self.stmt(stmt, &mut out);
+            for (at, stmt) in stmts.into_iter().enumerate() {
+                self.stmt(stmt, tail == Some(at), &mut out);
             }
             let mut term = std::mem::replace(
                 &mut self.function.blocks[index].term,
                 Term::Return(Atom::Unit),
             );
-            self.term(&mut term, &mut out, &mut fields);
+            // 末尾の位置の呼び出しの `return` に変換を入れると、`return` の値が変換の束縛になり、末尾の位置の形が
+            // 消える。結果の変換は VM の変換のフレームが行う
+            // (docs/superpowers/specs/2026-10-21-s14e-abi-struct-design.md の「box の挿入」)
+            if tail.is_none() {
+                self.term(&mut term, &mut out, &mut fields);
+            }
             let block = &mut self.function.blocks[index];
             block.stmts = out;
             block.term = term;
@@ -562,14 +401,24 @@ impl Converter<'_> {
         );
     }
 
-    fn stmt(&mut self, stmt: Stmt, out: &mut Vec<Stmt>) {
+    /// `tail` は、文が末尾の位置の呼び出しの `let` であることである。
+    fn stmt(&mut self, stmt: Stmt, tail: bool, out: &mut Vec<Stmt>) {
         match stmt {
             Stmt::Let { var, mut rhs } => {
                 let given = match &mut rhs {
                     Rhs::Call(call) => {
-                        let given = self.call(call, out);
+                        let given = self.call(call, self.function.repr(var), out);
                         // 結果を受け直さない呼び出しは、`never` の操作の節の呼び出しだけである
                         self.never[var.0 as usize] = given.is_none();
+                        // 末尾の位置の呼び出しの束縛は受け直さず、呼ばれる側の結果の Repr にする。後ろの純粋な `let`
+                        // がこの変数を使えば、変換はそちらに入り、縮約が消す
+                        if tail && let Some(given) = given {
+                            if !self.function.repr(var).compatible(given) {
+                                self.function.vars[var.0 as usize].repr = given;
+                            }
+                            out.push(Stmt::Let { var, rhs });
+                            return;
+                        }
                         given
                     }
                     Rhs::MakeClosure(target, args) => {
@@ -602,7 +451,7 @@ impl Converter<'_> {
                         }
                         Some(row.ret)
                     }
-                    // 入力にある `unbox` と `box` は、その場で一様にした関数と `clause` の印の関数の入口のものだけである
+                    // 入力にある `unbox` と `box` は、役割と `clause` の印の関数の入口で引数を合わせたものだけである
                     Rhs::Unbox(Atom::Var(from)) => {
                         self.unboxed_from.insert(var, *from);
                         None
@@ -663,10 +512,11 @@ impl Converter<'_> {
     }
 
     /// 呼び出しのアトムを変換し、結果を受ける Repr を返す。直接の呼び出しは呼ばれる関数の引数と `ret`、節の呼び出しは
-    /// 先頭の evidence が `obj` で、残りの引数と結果が操作の表の Repr である。関数値の適用は一様な `tobj` である。
-    /// `never` の操作の節の呼び出しは戻らないので、結果を受け直さず `None` を返す
-    /// (docs/spec/lir.md の「box の挿入」)。
-    fn call(&mut self, call: &mut Call, out: &mut Vec<Stmt>) -> Option<Repr> {
+    /// 先頭の evidence が `obj` で、残りの引数と結果が操作の表の Repr である。`apply` は型どおりの場所なら場所の
+    /// Repr の並びと束縛の Repr `bound`、一様な場所なら `tobj` である。`never` の操作の節の呼び出しは戻らないので、
+    /// 結果を受け直さず `None` を返す (docs/spec/lir.md の「box の挿入」、
+    /// docs/superpowers/specs/2026-10-21-s14e-abi-struct-design.md の「`apply` の ABI」)。
+    fn call(&mut self, call: &mut Call, bound: Repr, out: &mut Vec<Stmt>) -> Option<Repr> {
         match call {
             Call::Direct(target, args) => {
                 let target = target.0 as usize;
@@ -676,9 +526,24 @@ impl Converter<'_> {
                 }
                 Some(self.signatures[target].ret)
             }
-            Call::Apply { .. } => {
-                call.for_each_atom_mut(|atom| *atom = self.convert(*atom, Repr::TObj, out));
-                Some(Repr::TObj)
+            Call::Apply {
+                callee, args, site, ..
+            } => {
+                *callee = self.convert(*callee, Repr::TObj, out);
+                match site {
+                    Site::Typed(reprs) => {
+                        for (arg, &repr) in args.iter_mut().zip(reprs.iter()) {
+                            *arg = self.convert(*arg, repr, out);
+                        }
+                        Some(bound)
+                    }
+                    Site::Uniform => {
+                        for arg in args.iter_mut() {
+                            *arg = self.convert(*arg, Repr::TObj, out);
+                        }
+                        Some(Repr::TObj)
+                    }
+                }
             }
             Call::Clause {
                 effect,

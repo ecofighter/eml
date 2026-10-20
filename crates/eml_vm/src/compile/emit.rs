@@ -519,8 +519,13 @@ impl<'a, M: Mode> Emitter<'a, '_, M> {
                 let at = self.clause_operands(call);
                 self.out.push(Op::Clause { dst, at });
             }
-            Rhs::Call(call @ Call::Apply { .. }) => {
-                let at = self.apply_operands(call, self.repr(var));
+            Rhs::Call(call @ Call::Apply { site, .. }) => {
+                // 一様な場所の結果は `tobj` で、box の挿入が束縛をそれに合わせてある
+                let ret = match site {
+                    Site::Typed(_) => self.repr(var),
+                    Site::Uniform => Repr::TObj,
+                };
+                let at = self.apply_operands(call, ret);
                 self.out.push(Op::Apply { dst, at });
             }
             Rhs::Prim(prim, args) => {
@@ -653,9 +658,9 @@ impl<'a, M: Mode> Emitter<'a, '_, M> {
         )
     }
 
-    /// `apply` のオペランド [呼ばれる値, n, 場所のシグネチャ, 引数…]。場所のシグネチャは変数の引数を変数の Repr で、
-    /// 定数の引数を `apply` が持つ Repr で、結果を `ret` で持つ。一様な場所の引数はすべて `tobj` である。`ret` は束縛の
-    /// Repr で、末尾の位置では関数の `ret` である
+    /// `apply` のオペランド [呼ばれる値, n, 場所のシグネチャ, 引数…]。場所のシグネチャは引数を `apply` が持つ Repr で、
+    /// 結果を `ret` で持つ。一様な場所の引数はすべて `tobj` である。`ret` は型どおりの
+    /// 場所では束縛の Repr、一様な場所では `tobj` で、末尾の位置ではどちらも関数の `ret` である
     /// (docs/superpowers/specs/2026-10-21-s14e-abi-struct-design.md の「`apply` の ABI」)。
     fn apply_operands(&mut self, call: &Call, ret: Repr) -> u32 {
         let Call::Apply {
@@ -664,15 +669,9 @@ impl<'a, M: Mode> Emitter<'a, '_, M> {
         else {
             unreachable!("apply operands are made for an apply")
         };
+        // 変数の引数の場所の Repr は変数の Repr と同じである (verifier が確かめる)
         let params: Vec<Repr> = match site {
-            Site::Typed(reprs) => args
-                .iter()
-                .zip(reprs)
-                .map(|(&arg, &repr)| match arg {
-                    Atom::Var(var) => self.repr(var),
-                    _ => repr,
-                })
-                .collect(),
+            Site::Typed(reprs) => reprs.clone(),
             Site::Uniform => vec![Repr::TObj; args.len()],
         };
         let callee = self.atom(*callee, Repr::TObj);

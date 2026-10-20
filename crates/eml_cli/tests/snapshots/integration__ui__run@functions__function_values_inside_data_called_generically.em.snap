@@ -1,0 +1,10 @@
+---
+source: crates/eml_cli/tests/ui.rs
+expression: "format!(\"--- stdout ---\\n{stdout}--- stderr ---\\n{diagnostics}{stderr}{written}{exit}\")"
+input_file: tests/ui/run/functions/function_values_inside_data_called_generically.em
+---
+--- stdout ---
+15
+2.0
+b-a
+--- stderr ---

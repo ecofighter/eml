@@ -2406,17 +2406,6 @@ fn lifted_functions_are_named_after_their_instance() {
     }
 }
 
-#[test]
-fn a_boxed_wrapper_is_named_after_its_instance() {
-    // 部分適用はデータを通して渡し、optimize が `apply_to` を特殊化して `inc@[Unit]` を直接呼ばないようにする
-    let text = "data Box a = | Box a\n\nhide : Int -> a -> <Panic> Box a\nhide n x = if n <= 0 then Box x else hide (n - 1) x\n\ninc : a -> Int -> <Panic> Int\ninc _ n = n + 1\n\napply_to : (Int -> <Panic> Int) -> Int -> <Panic> Int\napply_to f x = f x\n\nmain : Unit -> <IO, Panic> Unit\nmain () =\n  let Box g = hide 0 (inc ())\n  println (show (apply_to g 1))";
-    let shown = lir_text(text, eml_lir::Pass::Boxing);
-    assert!(
-        shown.contains("\"inc@[Unit]$boxed\""),
-        "no wrapper in\n{shown}"
-    );
-}
-
 const SAME: &str = "class Same a where\n  same : a -> a -> Bool\n  differ : a -> a -> Bool\n  differ x y = not (same x y)\n\ndata Color =\n  | Red\n  | Green\n\ninstance Same Color where\n  same Red Red = True\n  same Green Green = True\n  same _ _ = False\n\n";
 
 #[test]
@@ -3394,15 +3383,13 @@ fn a_lin_enum_variable_is_unr() {
     ");
     let lir = lir_text(text, eml_lir::Pass::Perceus);
     insta::assert_snapshot!(function(&lir, "hold$k0"), @r#"
-    internal yields role cont fn hold$k0(t.4: tobj, t.5: tobj) -> tobj {
-      let t.0: enum = unbox t.4
+    internal yields role cont fn hold$k0(t.0: enum, t.4: tobj) -> tobj {
+      let t.1: int = unbox t.4
       decref t.4
-      let t.1: int = unbox t.5
-      decref t.5
       let t.3: int = call spend_after(0, t.0)
       let t.2: int = extern "Prelude.Num Int.+"(t.3, t.1)
-      let t.6: tobj = box t.2
-      return t.6
+      let t.5: tobj = box t.2
+      return t.5
     }
     "#);
 }

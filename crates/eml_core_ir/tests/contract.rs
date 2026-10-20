@@ -82,10 +82,9 @@ fn calls_in_tail_position_are_tail_calls() {
     }
     ");
     insta::assert_snapshot!(function(&shown, "call_twice"), @"
-    fn call_twice(f.0: tobj, x.1: int) -> tobj {
-      let x.4: tobj = box x.1
-      let t.5: tobj = apply f.0(x.4)
-      tail apply f.0(t.5)
+    fn call_twice(f.0: tobj, x.1: int) -> int {
+      let t.2: int = apply f.0(x.1)
+      tail apply f.0(t.2)
     }
     ");
 }

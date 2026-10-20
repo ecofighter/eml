@@ -1,0 +1,10 @@
+---
+source: crates/eml_cli/tests/ui.rs
+expression: "format!(\"--- stdout ---\\n{stdout}--- stderr ---\\n{diagnostics}{stderr}{written}{exit}\")"
+input_file: tests/ui/run/functions/float_closure_partial_application.em
+---
+--- stdout ---
+3.75
+2.25
+7.5
+--- stderr ---

@@ -1,0 +1,10 @@
+---
+source: crates/eml_cli/tests/ui.rs
+expression: "format!(\"--- stdout ---\\n{stdout}--- stderr ---\\n{diagnostics}{stderr}{written}{exit}\")"
+input_file: tests/ui/run/functions/polymorphic_recursion_with_function_values.em
+---
+--- stdout ---
+20
+4.5
+hi!!
+--- stderr ---

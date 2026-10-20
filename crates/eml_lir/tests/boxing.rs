@@ -1,8 +1,8 @@
-//! box の挿入のパス (docs/spec/lir.md の「box の挿入」)。手で書いた LIR を入力にする。T3 の時間は IR のテキストで
-//! 確かめる。ソースからパイプラインを通すテストは `eml_core_ir` の tests/boxing.rs にある。
+//! box の挿入のパス (docs/spec/lir.md の「box の挿入」)。手で書いた LIR を入力にする。ソースからパイプラインを通す
+//! テストは `eml_core_ir` の tests/boxing.rs にある。
 
 use crate::common::function;
-use eml_lir::{Repr, boxing, parse, pretty, verify_lowered, verify_scopes};
+use eml_lir::{Pass, boxing, parse, passes_until, pretty, verify_lowered, verify_scopes};
 
 /// 入力が入口の段の verifier を、出力が範囲の段の verifier を通ることも確かめる。
 fn boxing_text(text: &str) -> String {
@@ -46,55 +46,143 @@ fn f() -> int {
 }
 
 #[test]
-fn t3_takes_time_linear_in_the_chain() {
-    // `f_i` は `f_{i+1}` を末尾の位置で呼び、最後の関数は `apply` を末尾の位置で呼ぶ。呼ばれる側の番号が大きいので、
-    // 変わらなくなるまで全体を繰り返す形では、1回に1つしか上がらず2乗の時間になる
-    const N: usize = 30_000;
-    let mut text = String::new();
-    for i in 0..N - 1 {
-        text.push_str(&format!(
-            "fn f{i}(x.0: int) -> int {{\n  let r.1: int = call f{}(x.0)\n  return r.1\n}}\n",
-            i + 1
-        ));
-    }
-    text.push_str(&format!(
-        "fn f{}(x.0: int) -> int {{\n  let r.1: int = apply &k(x.0)\n  return r.1\n}}\n",
-        N - 1
-    ));
-    text.push_str("fn k(x.0: tobj) -> tobj {\n  return x.0\n}\n");
-    let mut program = parse(&text).unwrap_or_else(|error| panic!("{error}"));
-    assert_eq!(verify_lowered(&program), Ok(()));
-    let start = std::time::Instant::now();
-    boxing(&mut program);
-    let elapsed = start.elapsed();
-    assert!(
-        elapsed < std::time::Duration::from_secs(5),
-        "took {elapsed:?}"
-    );
-    assert!(
-        program.functions[..N]
-            .iter()
-            .all(|function| function.ret == Repr::TObj)
-    );
-}
-
-#[test]
-fn an_apply_in_ir_text_boxes_its_argument_and_rebinds_its_result() {
-    // 結果を `tobj` の新しい変数で受け、元の変数を直後の `unbox` で定義する。使う所の変数は書き換えない
+fn a_typed_apply_converts_only_a_constant_to_its_entry() {
+    // 型どおりの場所は引数と結果を場所の Repr で渡すので、変数の引数も結果も変換しない。場所が `tobj` とする定数だけを
+    // `box` し、場所の Repr は変換した後の値を表す
+    // (docs/superpowers/specs/2026-10-21-s14e-abi-struct-design.md の「`apply` の ABI」)
     let text = "\
 fn f(c.0: tobj, n.1: int) -> int {
-  let r.2: int = apply c.0(n.1)
+  let r.2: int = apply c.0(n.1, 5: tobj)
   let s.3: int = extern \"Prelude.Num Int.+\"(r.2, 1)
   return s.3
 }
 ";
-    insta::assert_snapshot!(boxing_text(text), @"
+    insta::assert_snapshot!(boxing_text(text), @r#"
+    fn f(c.0: tobj, n.1: int) -> int {
+      let b.4: tobj = box 5
+      let r.2: int = apply c.0(n.1, b.4)
+      let s.3: int = extern "Prelude.Num Int.+"(r.2, 1)
+      return s.3
+    }
+    "#);
+}
+
+#[test]
+fn a_uniform_site_converts_its_arguments_and_result() {
+    // EP の一様な場所は引数も結果も `tobj` である。結果を `tobj` の新しい変数で受け、元の変数を直後の `unbox` で
+    // 定義する。使う所の変数は書き換えない
+    let text = "\
+fn f(c.0: tobj, n.1: int) -> int {
+  let r.2: int = uniform apply c.0(n.1)
+  let s.3: int = extern \"Prelude.Num Int.+\"(r.2, 1)
+  return s.3
+}
+";
+    insta::assert_snapshot!(boxing_text(text), @r#"
     fn f(c.0: tobj, n.1: int) -> int {
       let n.4: tobj = box n.1
-      let r.5: tobj = apply c.0(n.4)
+      let r.5: tobj = uniform apply c.0(n.4)
       let r.2: int = unbox r.5
-      let s.3: int = extern \"Prelude.Num Int.+\"(r.2, 1)
+      let s.3: int = extern "Prelude.Num Int.+"(r.2, 1)
       return s.3
+    }
+    "#);
+}
+
+#[test]
+fn a_direct_call_to_a_lambda_converts_nothing() {
+    // 内部の関数も型どおりの ABI を持つので、展開しないラムダを直接呼ぶ所に `box` も `unbox` も入らない
+    // (docs/superpowers/specs/2026-10-21-s14e-abi-struct-design.md の「関数の ABI」)
+    let text = "\
+internal fn main$lambda0(x.0: float) -> float {
+  let y.1: float = extern \"Prelude.Num Float.+\"(x.0, 1.0)
+  return y.1
+}
+fn main(x.0: float) -> float {
+  let r.1: float = call main$lambda0(x.0)
+  let s.2: float = extern \"Prelude.Num Float.+\"(r.1, 2.0)
+  return s.2
+}
+";
+    insta::assert_snapshot!(boxing_text(text), @r#"
+    internal fn main$lambda0(x.0: float) -> float {
+      let y.1: float = extern "Prelude.Num Float.+"(x.0, 1.0)
+      return y.1
+    }
+    fn main(x.0: float) -> float {
+      let r.1: float = call main$lambda0(x.0)
+      let s.2: float = extern "Prelude.Num Float.+"(r.1, 2.0)
+      return s.2
+    }
+    "#);
+}
+
+#[test]
+fn a_role_boxes_only_its_uniform_positions() {
+    // 節の関数は `k` と状態と結果だけが一様である。捕まえた `n` と操作の引数 `x` は `int` のまま受ける
+    // (docs/superpowers/specs/2026-10-21-s14e-abi-struct-design.md の「関数の ABI」)
+    let text = "\
+internal role clause fn g(n.0: int, x.1: int, k.2: tobj, s.3: int) -> int {
+  let t.4: int = extern \"Prelude.Num Int.+\"(n.0, x.1)
+  let r.5: int = extern \"Prelude.Num Int.+\"(t.4, s.3)
+  return r.5
+}
+";
+    insta::assert_snapshot!(boxing_text(text), @r#"
+    internal role clause fn g(n.0: int, x.1: int, k.2: tobj, s.6: tobj) -> tobj {
+      let s.3: int = unbox s.6
+      let t.4: int = extern "Prelude.Num Int.+"(n.0, x.1)
+      let r.5: int = extern "Prelude.Num Int.+"(t.4, s.3)
+      let r.7: tobj = box r.5
+      return r.7
+    }
+    "#);
+}
+
+#[test]
+fn closure_arguments_convert_to_the_callee_params() {
+    // `closure` の引数は直接の呼び出しの引数と同じく、呼ばれる関数の引数の Repr へ変換する。`_` の instance の部分
+    // 適用では、`int` の `5` を `box` して捕まえる
+    let text = "\
+fn \"depth@[_]\"(x.0: tobj, n.1: int) -> int {
+  return n.1
+}
+fn main() -> int {
+  let c.0: tobj = closure \"depth@[_]\"(5)
+  let r.1: int = apply c.0(2: int)
+  return r.1
+}
+";
+    insta::assert_snapshot!(function(&boxing_text(text), "main"), @r#"
+    fn main() -> int {
+      let b.2: tobj = box 5
+      let c.0: tobj = closure "depth@[_]"(b.2)
+      let r.1: int = apply c.0(2: int)
+      return r.1
+    }
+    "#);
+}
+
+#[test]
+fn an_incompatible_tail_call_becomes_tail() {
+    // `g` は `tobj` を返し、`f` は `int` を返す。末尾の位置の呼び出しの束縛と `return` には変換を入れないので、縮約が
+    // `tail` にする。結果の変換は VM の変換のフレームが行う
+    // (docs/superpowers/specs/2026-10-21-s14e-abi-struct-design.md の「box の挿入」)
+    let text = "\
+fn g(x.0: tobj) -> tobj {
+  return x.0
+}
+fn f(n.0: int) -> int {
+  let r.1: int = call g(n.0)
+  return r.1
+}
+";
+    let mut program = parse(text).unwrap_or_else(|error| panic!("{error}"));
+    passes_until(&mut program, Pass::Contract);
+    insta::assert_snapshot!(function(&pretty(&program), "f"), @"
+    fn f(n.0: int) -> int {
+      let n.2: tobj = box n.0
+      tail call g(n.2)
     }
     ");
 }
@@ -145,15 +233,15 @@ fn a_prim_result_is_rebound_to_its_row_repr() {
 
 #[test]
 fn a_clause_call_uses_the_reprs_of_its_operation() {
-    // `put` の `int` の引数へ `tobj` の n.2 を `unbox` して渡し、`get` の `int` の結果を受け直して `box` する
+    // `put` の `int` の引数へ `tobj` の n.2 を `unbox` して渡す。`get` は末尾の位置で呼ぶので、結果を受け直さず、
+    // 束縛を操作の `int` にする
     let text = "effect Counter { get(unit) -> int, put(int) -> unit }\nyields fn f(c.0: tobj, e.1: obj, n.2: tobj) -> tobj {\n  let u.3: unit = clause Counter.put c.0(e.1, n.2)\n  let c.4: tobj = prim ev_clause[Counter.get](e.1)\n  let m.5: tobj = clause Counter.get c.4(e.1, ())\n  return m.5\n}\n";
     insta::assert_snapshot!(function(&boxing_text(text), "f"), @"
     yields fn f(c.0: tobj, e.1: obj, n.2: tobj) -> tobj {
       let n.6: int = unbox n.2
       let u.3: unit = clause Counter.put c.0(e.1, n.6)
       let c.4: tobj = prim ev_clause[Counter.get](e.1)
-      let m.7: int = clause Counter.get c.4(e.1, ())
-      let m.5: tobj = box m.7
+      let m.5: int = clause Counter.get c.4(e.1, ())
       return m.5
     }
     ");
@@ -272,50 +360,6 @@ fn a_never_clause_function_returns_obj() {
     internal yields clause Fail.fail fn g(e.0: obj, s.1: tobj) -> obj {
       let d.2: obj = prim dummy()
       return d.2
-    }
-    ");
-}
-
-#[test]
-fn t3_takes_the_result_of_a_tail_clause_from_its_operation() {
-    // `Counter.get` の `int` の結果は `int` の `ret` と互換なので上げない。`State.get` の `tobj` の結果は互換でないので、
-    // `ret` を `tobj` に上げる
-    let text = "effect Counter { get(unit) -> int, put(int) -> unit }\neffect State { get(unit) -> tobj, put(tobj) -> unit }\nyields fn f(c.0: tobj, e.1: obj) -> int {\n  let m.2: int = clause Counter.get c.0(e.1, ())\n  return m.2\n}\nyields fn g(c.0: tobj, e.1: obj) -> int {\n  let m.2: int = clause State.get c.0(e.1, ())\n  return m.2\n}\n";
-    let shown = boxing_text(text);
-    insta::assert_snapshot!(function(&shown, "f"), @"
-    yields fn f(c.0: tobj, e.1: obj) -> int {
-      let m.2: int = clause Counter.get c.0(e.1, ())
-      return m.2
-    }
-    ");
-    insta::assert_snapshot!(function(&shown, "g"), @"
-    yields fn g(c.0: tobj, e.1: obj) -> tobj {
-      let m.3: tobj = clause State.get c.0(e.1, ())
-      let m.2: int = unbox m.3
-      return m.3
-    }
-    ");
-}
-
-#[test]
-fn a_boxed_wrapper_copies_the_marks_of_its_function() {
-    // `f$boxed` の引数と戻り値は `f` と同じ値なので、`f` の印を写す。`box` と `unbox` で足す変数はスカラーなので
-    // `unr` である (docs/spec/lir.md の「box の挿入」)
-    let text = "\
-fn f(n.0: int, h.1: obj lin) -> obj lin {
-  return h.1
-}
-fn main(h.0: obj lin) -> obj lin {
-  let g.1: tobj = closure f(1)
-  let r.2: tobj poly = apply g.1(h.0)
-  return r.2
-}
-";
-    insta::assert_snapshot!(function(&boxing_text(text), "f$boxed"), @"
-    fn f$boxed(n.0: tobj, h.1: obj lin) -> obj lin {
-      let n.3: int = unbox n.0
-      let t.2: obj lin = call f(n.3, h.1)
-      return t.2
     }
     ");
 }

@@ -13,12 +13,6 @@ fn run_both(text: &str) -> String {
     run_program(&program)
 }
 
-/// verifier を通さずに両方のモードで実行する。今の verifier は box の挿入の後の段で `apply` の引数と結果を `tobj` と
-/// 比べるので、型どおりの `apply` を書いた IR を通さないためである。
-fn run_typed_apply(text: &str) -> String {
-    run_program(&eml_lir::parse(text).unwrap_or_else(|error| panic!("{error}")))
-}
-
 fn run_program(program: &eml_lir::Program) -> String {
     let mut outputs = Vec::new();
     for debug_heap in [true, false] {
@@ -282,18 +276,18 @@ fn scale(k.0: float, x.1: float) -> float {
   return y.2
 }
 ";
-    assert_eq!(run_typed_apply(text), "10.0\n");
+    assert_eq!(run_both(text), "10.0\n");
 }
 
-/// 一様な場所が一意な `float` の箱を渡すと、`apply` が中身を取り出して箱を空け、関数が結果を箱に入れずに返す
-/// (`convert_word`)。
+/// 場所が `tobj` とする引数で一意な `float` の箱を渡すと、`apply` が中身を取り出して箱を空け、関数が結果を箱に入れずに
+/// 返す (`convert_word`)。
 #[test]
-fn a_uniform_apply_unboxes_into_a_typed_function() {
+fn a_boxed_argument_unboxes_into_a_typed_function() {
     let text = "\
 fn main() -> unit {
   let x.0: float = extern \"Prelude.Num Float.+\"(2.0, 0.5)
   let b.1: tobj = box x.0
-  let r.2: float = uniform apply &half(b.1)
+  let r.2: float = apply &half(b.1)
   let s.3: obj = extern \"Prelude.Show Float.show\"(r.2)
   let u.4: unit = extern Prelude.println(s.3)
   return u.4
@@ -303,7 +297,7 @@ fn half(x.0: float) -> float {
   return y.1
 }
 ";
-    assert_eq!(run_typed_apply(text), "1.25\n");
+    assert_eq!(run_both(text), "1.25\n");
 }
 
 /// 変換のフレームを通る戻り。`half` の `float` の結果を一様な場所のために箱に入れ (`Float` の物体を確保する)、
@@ -343,5 +337,5 @@ fn inc(x.0: int) -> int {
   return y.1
 }
 ";
-    assert_eq!(run_typed_apply(text), "1.25\n22\n");
+    assert_eq!(run_both(text), "1.25\n22\n");
 }

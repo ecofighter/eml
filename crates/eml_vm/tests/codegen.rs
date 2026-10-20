@@ -663,7 +663,7 @@ fn main(a.0: obj, m.1: obj) -> unit {
 }
 
 /// `apply` は場所のシグネチャを持つ。変数の引数は変数の Repr、定数の引数は `apply` の Repr で、結果は束縛の Repr、末尾の
-/// 位置では関数の `ret` である。一様な場所の引数は `tobj` である
+/// 位置では関数の `ret` である。一様な場所の引数と結果は `tobj` である
 /// (docs/superpowers/specs/2026-10-21-s14e-abi-struct-design.md の「`apply` の ABI」)。
 #[test]
 fn an_apply_carries_its_site_signature() {
@@ -681,7 +681,7 @@ fn main(f.0: tobj, x.1: float) -> int {
         15  load_raw s3, 2
         16  apply s1 = s0(s1, s3) : (float, int) -> int
         17  box_int s2, s1
-        18  apply s2 = s0(s2) : (tobj) -> unit
+        18  apply s2 = s0(s2) : (tobj) -> tobj
         19  load_raw s3, 1
         20  tail_apply s0(s1, s3) : (int, enum) -> int
     ");

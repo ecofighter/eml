@@ -67,9 +67,18 @@ fn bench_dir() -> PathBuf {
 
 /// `debug_heap` 付きで走らせ、出力を確かめてから回数を返す。リークと実行時エラーは panic にする。
 fn stats(name: &str, expected: &str) -> RunStats {
-    let path = bench_dir().join(format!("{name}.em"));
-    let text = std::fs::read_to_string(&path)
-        .unwrap_or_else(|error| panic!("{}: {error}", path.display()));
+    stats_at(&bench_dir().join(format!("{name}.em")), expected)
+}
+
+/// `stats` と同じく、`tests/ui/run/` の下の UI テストのプログラムを走らせる。`path` はそこからの相対パスである。
+fn ui_stats(path: &str, expected: &str) -> RunStats {
+    let ui = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/ui/run");
+    stats_at(&ui.join(path), expected)
+}
+
+fn stats_at(path: &Path, expected: &str) -> RunStats {
+    let text =
+        std::fs::read_to_string(path).unwrap_or_else(|error| panic!("{}: {error}", path.display()));
     let (out, result) = run_stats(&text);
     // 実行時エラーやリークで止まると出力も欠けるので、出力の差だけでなく止まった理由も見せる
     assert_eq!(out, expected, "{result:?}");
@@ -111,14 +120,14 @@ fn apply_float() {
         unwound_frames: 0,
         string_bytes_copied: 3,
         rc_increments: 0,
-        rc_decrements: 200001,
-        boxes: 200000,
-        unboxes: 200000,
+        rc_decrements: 1,
+        boxes: 0,
+        unboxes: 0,
         conversions: 0,
-        allocations: 200002,
+        allocations: 2,
         reuses: 0,
         peak_objects: 2,
-        peak_stack: 23,
+        peak_stack: 19,
     }
     ");
 }
@@ -134,13 +143,13 @@ fn apply_int() {
         string_bytes_copied: 6,
         rc_increments: 0,
         rc_decrements: 1,
-        boxes: 200000,
-        unboxes: 200000,
+        boxes: 0,
+        unboxes: 0,
         conversions: 0,
         allocations: 2,
         reuses: 0,
         peak_objects: 2,
-        peak_stack: 23,
+        peak_stack: 19,
     }
     ");
 }
@@ -155,14 +164,14 @@ fn ep_float() {
         unwound_frames: 0,
         string_bytes_copied: 12,
         rc_increments: 400005,
-        rc_decrements: 500013,
-        boxes: 300003,
-        unboxes: 300001,
+        rc_decrements: 400013,
+        boxes: 100003,
+        unboxes: 100001,
         conversions: 0,
-        allocations: 100009,
+        allocations: 9,
         reuses: 0,
         peak_objects: 8,
-        peak_stack: 50,
+        peak_stack: 44,
     }
     ");
 }
@@ -491,8 +500,8 @@ fn iter_pipeline() {
         string_bytes_copied: 15,
         rc_increments: 0,
         rc_decrements: 200001,
-        boxes: 150001,
-        unboxes: 250000,
+        boxes: 50000,
+        unboxes: 50000,
         conversions: 0,
         allocations: 200002,
         reuses: 0,
@@ -513,8 +522,8 @@ fn iter_pipeline_by_hand() {
         string_bytes_copied: 15,
         rc_increments: 0,
         rc_decrements: 200001,
-        boxes: 150001,
-        unboxes: 250000,
+        boxes: 50000,
+        unboxes: 50000,
         conversions: 0,
         allocations: 200002,
         reuses: 0,
@@ -1066,9 +1075,9 @@ fn unwind_points() {
     }
     insta::assert_snapshot!(lines.join("\n"), @"
     apply_float: 9
-    apply_int: 13
+    apply_int: 11
     empty: 0
-    ep_float: 14
+    ep_float: 11
     fannkuch_by_hand: 39
     fannkuch_var: 81
     fib: 7
@@ -1107,4 +1116,32 @@ fn unwind_points() {
     scripts/csv2jsonl: 106
     scripts/deploy: 108
     ");
+}
+
+/// 型から決める呼び出しの規約の引き換え (docs/superpowers/specs/2026-10-21-s14e-abi-struct-design.md の
+/// 「引き換えにすること」)。特殊化されない `List.map` が、受けた `Float` をそのまま返す関数の値を型どおりに呼ぶので、
+/// 要素ごとに `Float` の箱が1つ増える。その回数を固定して記録する。
+#[test]
+fn trade_offs() {
+    insta::assert_debug_snapshot!(
+        ui_stats("functions/unspecialized_map_passes_floats.em", "49.5\n"),
+        @"
+    RunStats {
+        evidence_steps: 0,
+        yields: 0,
+        yield_frames: 0,
+        unwound_frames: 0,
+        string_bytes_copied: 4,
+        rc_increments: 0,
+        rc_decrements: 23,
+        boxes: 20,
+        unboxes: 20,
+        conversions: 0,
+        allocations: 24,
+        reuses: 20,
+        peak_objects: 21,
+        peak_stack: 24,
+    }
+    "
+    );
 }

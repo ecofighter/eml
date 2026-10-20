@@ -3,20 +3,20 @@
 //! 所有権を扱わずに書き換えられる。
 
 use crate::{
-    Atom, Block, Call, EffectInfo, LirFn, Mark, OpRet, Program, Repr, Rhs, Stmt, Term, operation,
+    Atom, Block, Call, EffectInfo, LirFn, Mark, OpRet, Program, Rhs, Stmt, Term, operation,
 };
 
 pub fn contract(program: &mut Program) {
-    let rets: Vec<(Repr, Mark)> = program
+    let ret_marks: Vec<Mark> = program
         .functions
         .iter()
-        .map(|function| (function.ret, function.ret_mark))
+        .map(|function| function.ret_mark)
         .collect();
     for function in &mut program.functions {
         remove_dead_lets(function);
-        let ret = (function.ret, function.ret_mark);
+        let ret_mark = function.ret_mark;
         for block in &mut function.blocks {
-            tail_call(block, ret, &rets, &program.effects);
+            tail_call(block, ret_mark, &ret_marks, &program.effects);
         }
         // 1回のパスで不動点に達することを確かめる (docs/spec/lir.md の「縮約」)。確かめるパスも IR を書き換えうるので、
         // その副作用を `debug_assert!` の式に隠さない
@@ -31,17 +31,13 @@ pub fn contract(program: &mut Program) {
     }
 }
 
-/// `let x = <呼び出し>` の後の終端が `return x` で、呼び出しの結果が関数の `ret` と互換なら、その2つを末尾呼び出しに
-/// する。互換は推移的でないので、x を通してつながっていた2つの位置が、直接つないでも互換かを確かめる。結果は、直接の
-/// 呼び出しなら呼ばれる関数の `ret`、節の呼び出しなら操作の `ret`、関数値の適用なら `tobj` である。`never` の操作の
-/// 節の呼び出しは戻らないので、どの `ret` とも互換とする。印の互換も推移的でないので、結果の印 (関数値の適用なら
-/// `poly`) と関数の戻り値の印も同じく比べる (docs/spec/lir.md の「縮約」と「Kind の印」)。
-fn tail_call(
-    block: &mut Block,
-    (ret, ret_mark): (Repr, Mark),
-    rets: &[(Repr, Mark)],
-    effects: &[EffectInfo],
-) {
+/// `let x = <呼び出し>` の後の終端が `return x` なら、その2つを末尾呼び出しにする。結果の Repr が関数の `ret` と
+/// 互換でなくてもよい。結果の変換は VM の変換のフレームが行い、末尾呼び出しの間で合成する
+/// (docs/superpowers/specs/2026-10-21-s14e-abi-struct-design.md の「box の挿入」)。印の互換は推移的でないので、
+/// x を通してつながっていた結果の印 (関数値の適用なら `poly`) と関数の戻り値の印を直接つないでも互換かを確かめる。
+/// `never` の操作の節の呼び出しは戻らないので、どの戻り値の印とも互換とする
+/// (docs/spec/lir.md の「縮約」と「Kind の印」)。
+fn tail_call(block: &mut Block, ret_mark: Mark, ret_marks: &[Mark], effects: &[EffectInfo]) {
     let Term::Return(Atom::Var(returned)) = block.term else {
         return;
     };
@@ -55,9 +51,9 @@ fn tail_call(
     if *var != returned {
         return;
     }
-    let result = match call {
-        Call::Direct(target, _) => Some(rets[target.0 as usize]),
-        Call::Apply { .. } => Some((Repr::TObj, Mark::Poly)),
+    let result_mark = match call {
+        Call::Direct(target, _) => Some(ret_marks[target.0 as usize]),
+        Call::Apply { .. } => Some(Mark::Poly),
         Call::Clause {
             effect,
             op,
@@ -66,14 +62,12 @@ fn tail_call(
         } => {
             let operation = operation(effects, *effect, *op);
             match operation.ret {
-                OpRet::Repr(repr) => Some((repr, operation.ret_mark)),
+                OpRet::Repr(_) => Some(operation.ret_mark),
                 OpRet::Never => None,
             }
         }
     };
-    let compatible =
-        result.is_none_or(|(repr, mark)| repr.compatible(ret) && mark.compatible(ret_mark));
-    if !compatible {
+    if !result_mark.is_none_or(|mark| mark.compatible(ret_mark)) {
         return;
     }
     let Some(Stmt::Let {

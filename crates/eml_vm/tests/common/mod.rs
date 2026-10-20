@@ -19,14 +19,13 @@ fn verified(text: &str) -> Program {
 /// 速いモードは前提を確かめないので、検査モードが通らなかった IR では走らせない
 /// (docs/implementation/testing.md の「`eml_vm` のテスト」)。
 pub fn run_lir(text: &str) -> (String, Result<(), RuntimeError>) {
-    let (out, result) = run_both(&verified(text));
+    let (out, result) = run_lir_stats(text);
     (out, result.map(|_| ()))
 }
 
-/// verifier を通さずに `run_lir` と同じく両方のモードで実行し、検査モードの `RunStats` を返す。今の verifier は box の
-/// 挿入の後の段で `apply` の引数と結果を `tobj` と比べるので、型どおりの `apply` を書いた IR を通さないためである。
-pub fn run_typed_apply(text: &str) -> (String, Result<RunStats, RuntimeError>) {
-    run_both(&parse(text))
+/// `run_lir` と同じく実行し、検査モードの `RunStats` を返す。
+pub fn run_lir_stats(text: &str) -> (String, Result<RunStats, RuntimeError>) {
+    run_both(&verified(text))
 }
 
 fn run_both(program: &Program) -> (String, Result<RunStats, RuntimeError>) {

@@ -2,7 +2,7 @@
 //! `unpack` の Repr、`jump` と `return` の Repr の互換、extern の引数と結果の Repr、`box` と `unbox` のオペランドと
 //! 束縛の Repr (R7)、データの配置 (R8) と、引き継いだ検査 (直接呼び出しと extern の引数の数、case の種類)、基本操作と
 //! 節の呼び出しの形を確かめる (`verify_scopes`)。R7 と R8 には境界の検査も入る。呼び出しの引数と結果、`closure` の
-//! 引数、`tail` の結果、`tobj` のフィールドを比べる。box の挿入の前の入口の段では、
+//! 引数、`tobj` のフィールドを比べる。`tail` の結果は印だけを比べる。box の挿入の前の入口の段では、
 //! 境界を確かめずに、`box`、`unbox`、`tail` と、Perceus が入れるものがまだないことを確かめる (`verify_lowered`)。
 //! Perceus の後は、RC の対象の所有の多重集合 (R6) も確かめる (`verify`)。`switch`、`unpack`、`unbox` は値を読む
 //! だけである。`switch` と `unpack` のフィールドは値から借りて始まり、自分か持ち主が所有を持つ間だけ有効である。
@@ -25,6 +25,8 @@
 
 use std::collections::{BTreeMap, HashMap};
 
+use crate::Site as ApplySite;
+use crate::boxing::tail_position_call;
 use crate::check::{
     self, BlockShape, Context, Dominators, FnSummary, Tables, TermShape, boxed_scalars,
     clause_function, field_count, shape,
@@ -380,7 +382,7 @@ impl<'a> Checker<'a> {
             block: index,
             index: block.stmts.len() as i64,
         };
-        self.check_term(owned, &block.term)
+        self.check_term(owned, block)
     }
 
     fn check_stmt(&mut self, owned: &mut Owned, stmt: &Stmt) -> Result<(), String> {
@@ -668,7 +670,8 @@ impl<'a> Checker<'a> {
         Ok(())
     }
 
-    fn check_term(&mut self, mut owned: Owned, term: &Term) -> Result<(), String> {
+    fn check_term(&mut self, mut owned: Owned, block: &Block) -> Result<(), String> {
+        let term = &block.term;
         let mut atoms = Vec::new();
         term.for_each_atom(|atom| atoms.push(atom));
         self.no_token_values(&atoms)?;
@@ -688,7 +691,11 @@ impl<'a> Checker<'a> {
         match term {
             Term::Return(atom) => {
                 self.consume(&mut owned, *atom)?;
-                if !self.cx.passes(*atom, self.function.ret) {
+                // 末尾の位置の呼び出しの束縛は呼ばれる側の結果の Repr を持ち、縮約がこの形を `tail` にする。それまでの
+                // 範囲の段では、互換でない `return` をこの形のときだけ許す
+                // (docs/superpowers/specs/2026-10-21-s14e-abi-struct-design.md の「box の挿入」)
+                let tail = self.level == Level::Scopes && tail_position_call(block).is_some();
+                if !tail && !self.cx.passes(*atom, self.function.ret) {
                     return Err(format!(
                         "{} is returned from a function that returns {}",
                         self.cx.typed_atom_text(*atom),
@@ -1304,9 +1311,19 @@ impl<'a> Checker<'a> {
                     OpRet::Never => None,
                 }
             }
-            // 関数の値は型変数の位置なので、結果の印はいつも `poly` で、どの受け手とも合う
-            Call::Apply { .. } => Some((Repr::TObj, Mark::Poly)),
+            // 型どおりの場所の結果は束縛の Repr で、一様な場所の結果は `tobj` である。関数の値は型変数の位置なので、
+            // 結果の印はいつも `poly` で、どの受け手とも合う
+            Call::Apply { site, .. } => match (site, receiver) {
+                (ApplySite::Typed(_), Receiver::Bound(var)) => {
+                    Some((self.function.repr(var), Mark::Poly))
+                }
+                (ApplySite::Typed(_), Receiver::Tail) => Some((self.function.ret, Mark::Poly)),
+                (ApplySite::Uniform, _) => Some((Repr::TObj, Mark::Poly)),
+            },
         };
+        if let Call::Apply { args, site, .. } = call {
+            self.cx.check_site(args, site)?;
+        }
         if self.cx.boundaries {
             self.check_operands(call)?;
             if let Some(result) = result {
@@ -1314,10 +1331,6 @@ impl<'a> Checker<'a> {
             }
         }
         self.consume_all(owned, |f| call.for_each_atom(f))?;
-        if let Call::Apply { args, site, .. } = call {
-            self.cx
-                .check_site(args, site, self.level == Level::Lowered)?;
-        }
         match call.prompt() {
             Some(marker) => self.check_prompt(owned, call, marker),
             None => Ok(()),
@@ -1367,8 +1380,8 @@ impl<'a> Checker<'a> {
         live.contains(&var)
     }
 
-    /// 呼び出しのオペランドを左から比べる (R7)。直接の呼び出しは、呼ばれる関数の引数と比べる。関数値の適用の
-    /// オペランドは一様な位置なので、`tobj` と比べる。呼び出しの形は確かめてある。印も同じ所で比べる (V2)。関数値の
+    /// 呼び出しのオペランドを左から比べる (R7)。直接の呼び出しは、呼ばれる関数の引数と比べる。関数値の適用は、呼ぶ
+    /// 値を `tobj` と、引数を場所の Repr と比べる。呼び出しの形は確かめてある。印も同じ所で比べる (V2)。関数値の
     /// 適用の位置の印はいつも `poly` なので、印を比べない。
     fn check_operands(&self, call: &Call) -> Result<(), String> {
         // 誤りの文で呼び出しを指す句 (`an apply`) は呼び出しの形で決まるので、比べる処理を形ごとに作る
@@ -1409,17 +1422,33 @@ impl<'a> Checker<'a> {
                     }
                 }
             }
+            // 呼ぶ値は `tobj` である。型どおりの場所の引数は場所の Repr と、一様な場所の引数は `tobj` と比べる
             Call::Apply {
                 callee,
                 args,
                 yields: _,
                 prompt: _,
-                site: _,
+                site,
             } => {
                 let uniform = operands("an apply");
                 uniform(&|| "the callee".to_string(), *callee)?;
                 for (index, &arg) in args.iter().enumerate() {
-                    uniform(&|| format!("argument {index}"), arg)?;
+                    let expected = match site {
+                        ApplySite::Typed(reprs) => reprs[index],
+                        ApplySite::Uniform => Repr::TObj,
+                    };
+                    if !self.cx.passes(arg, expected) {
+                        let taker = match site {
+                            ApplySite::Typed(_) => "its site",
+                            ApplySite::Uniform => "an apply",
+                        };
+                        return Err(format!(
+                            "argument {index} of {} is {}, but {taker} takes {}",
+                            self.call_text(call, false),
+                            self.cx.typed_atom_text(arg),
+                            expected.name()
+                        ));
+                    }
                 }
             }
             // 節の呼び出しは操作の ABI で呼ぶので、先頭の evidence は `obj`、残りは操作の表の Repr と比べる
@@ -1488,8 +1517,10 @@ impl<'a> Checker<'a> {
         }
     }
 
-    /// 呼び出しの結果 (直接の呼び出しなら呼ばれる関数の `ret`、節の呼び出しなら操作の `ret`、`apply` なら `tobj`) は、
-    /// 束縛する変数か、`tail` なら呼び出し元の `ret` と互換である (R7)。結果の印も同じく互換である (V2)。
+    /// 呼び出しの結果 (直接の呼び出しなら呼ばれる関数の `ret`、節の呼び出しなら操作の `ret`、`apply` なら場所の結果)
+    /// は、束縛する変数と互換である (R7)。`tail` の結果の Repr は呼び出し元の `ret` と互換でなくてよい。VM の変換の
+    /// フレームが変換するためである (docs/superpowers/specs/2026-10-21-s14e-abi-struct-design.md の「box の挿入」)。
+    /// 結果の印は、束縛する変数か呼び出し元の戻り値の印と互換である (V2)。
     fn check_result(
         &self,
         call: &Call,
@@ -1513,15 +1544,6 @@ impl<'a> Checker<'a> {
             }
             Receiver::Tail => {
                 // 呼び出し元を "this function" と書き、呼ばれる側を指す "the function" と分ける
-                let ret = self.function.ret;
-                if !result.compatible(ret) {
-                    return Err(format!(
-                        "{} returns {}, but this function returns {}",
-                        self.call_text(call, true),
-                        result.name(),
-                        ret.name()
-                    ));
-                }
                 let ret_mark = self.function.ret_mark;
                 if result_mark.compatible(ret_mark) {
                     return Ok(());

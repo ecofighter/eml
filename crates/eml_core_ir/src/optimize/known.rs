@@ -467,8 +467,7 @@ impl Rewriter<'_> {
 }
 
 /// 書き換えた閉包のうち、使う所が残らなかったものの `closure` を消す。残すと、`unr` でない閉包の捕獲を閉包と直接の
-/// 呼び出しの2か所で消費する IR になり、box の挿入も値として参照された関数に `f$boxed` を作る
-/// (docs/spec/core-ir.md の「既知の閉包」)。定義は使う所を
+/// 呼び出しの2か所で消費する IR になる (docs/spec/core-ir.md の「既知の閉包」)。定義は使う所を
 /// 支配し、辺は前へ向かうので、後ろから1回たどれば、消した `closure` だけが捕獲していた、書き換えた閉包も消える。
 fn drop_unused_closures(function: &mut CoreFn, rewritten: &HashSet<VarId>) {
     if rewritten.is_empty() {
@@ -746,8 +745,8 @@ pub(crate) fn replace(
     }
 }
 
-/// 引数のそろった呼び出し。包む関数は直接呼ばず、包んでいる命令に戻す。`op$` と `con$` を直接呼ばないことで、box の
-/// 挿入がそれらをいつもその場で一様にする (docs/spec/core-ir.md の「REPL の入力」)。
+/// 引数のそろった呼び出し。包む関数は直接呼ばず、包んでいる命令に戻す。`op$` と `con$` は値と部分適用でだけ使われる
+/// (docs/spec/core-ir.md の「REPL の入力」)。
 fn saturated(
     vars: &[VarInfo],
     target: FnIdx,

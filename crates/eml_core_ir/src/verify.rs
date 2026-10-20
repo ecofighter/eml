@@ -676,13 +676,13 @@ impl<'a> Checker<'a> {
         self.use_all(|f| call.for_each_atom(f))?;
         // Core IR のパスは引数を変換した変数に替えないので、どの段でも変数と場所を比べる
         match call {
-            Call::Apply { args, site, .. } => self.cx.check_site(args, site, true),
+            Call::Apply { args, site, .. } => self.cx.check_site(args, site),
             Call::Resume {
                 k: _,
                 arg,
                 state,
                 site,
-            } => self.cx.check_reprs("resume", &[*arg, *state], site, true),
+            } => self.cx.check_reprs("resume", &[*arg, *state], site),
             _ => Ok(()),
         }
     }

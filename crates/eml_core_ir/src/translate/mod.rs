@@ -293,8 +293,8 @@ fn lower_local_functions(ctx: BodyCtx<'_>, program: &mut ProgramBuilder) {
                 .expect("every lambda has its row classified"),
         );
         let captured = ctx.typed_captures(&function.captured);
-        // ローカル関数は直接呼ばれるために生まれるので、内部の関数でない。値として使う所には box の挿入が `f$boxed` を
-        // 作る (docs/spec/lir.md の「一様な関数」)
+        // ローカル関数は直接呼ばれるために生まれるので、内部の関数でない。値として使う所も、型どおりの ABI のまま
+        // 同じ関数を指す (docs/superpowers/specs/2026-10-21-s14e-abi-struct-design.md の「関数の ABI」)
         let core = FnLowering::new(ctx, program, yields).lower(
             &name,
             false,

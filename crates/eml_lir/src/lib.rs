@@ -62,8 +62,8 @@ impl Program {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LirFn {
     pub name: String,
-    /// 内部の関数。値として生まれる関数で、ABI は名前で決まり、いつも一様である。box の挿入はこの印だけを読む
-    /// (`eml_core_ir::CoreFn::internal`、docs/spec/lir.md の「一様な関数」)。テキストの形では `internal fn` と書く。
+    /// 内部の関数。値として生まれる関数である (`eml_core_ir::CoreFn::internal`)。ABI は決めず、box の挿入は読まない。
+    /// ABI は引数と `ret` の型どおりの Repr と役割 (`role`) で決まる。テキストの形では `internal fn` と書く。
     pub internal: bool,
     /// EP のしくみの中での役割。テキストの形では `fn` の直前に `role R` と書く (`Role`)。
     pub role: Role,
