@@ -8,7 +8,7 @@ M1 (言語の全体を一通り通す vertical slice と、本番の構文の最
 
 ### 実装したもの
 
-- 基本型: `Int`、`Bool`、`String`、`Unit`。`Bool` は Prelude の `data Bool = | False | True` で、キーワード `true` / `false` はない。単項の `!` はなく、関数 `not` を使う
+- 基本型: `Int`、`Float`、`Bool`、`String`、`Unit`。`Bool` は Prelude の `data Bool = | False | True` で、キーワード `true` / `false` はない。単項の `!` はなく、関数 `not` を使う
 - タプルと射影 `t.0`、型引数を持つ代数的データ型 (`data`)、`match` と入れ子のパターン、`Int` と `String` のリテラルのパターン
 - 名前付きのレコード: `data` のコンストラクタの名前付きのフィールド、作る式 `Person { name = "a", age = 3 }` と省略形、射影 `p.name`、更新 `{ p | age = 31 }`、分解のパターン、フィールドのセクション `(.name)` と `(.0)`、導出した `Show` の `Person { … }` の表示 ([直積型とレコード](../spec/records.md))。呼び出しの引数のラムダは、ほかの引数の後に型を検査する ([型と Kind](../spec/types.md) の「引数のラムダを後で検査する」)
 - Prelude の `List`、`Option`、`Result` と、その `Eq`、`Ord`、`Show` の instance ([宣言](../spec/declarations.md) の「Prelude のクラス」)。リストのリテラル `[…]` とパターン、コンストラクタ `::` (`infixr 5`。Prelude だけが宣言できる、E1044) ([式](../spec/expressions.md) の「リスト」)。リストを扱う関数 (`map`、`length` など) はまだない
@@ -22,8 +22,11 @@ M1 (言語の全体を一通り通す vertical slice と、本番の構文の最
 - 位置つきの `mask`: 型検査が呼び出しごとに決め、エフェクトごとに内側の n 個の handler を残して続く m 個を飛ばす。`Yield Int` を受けて `Yield String` を出すような、型を変換する handler を書ける ([エフェクトと handler](../spec/effects.md) の「handler の意味」、[型と Kind](../spec/types.md) の「推論」)
 - `extern` の宣言と `eml_extern` の表。`Int`、`String`、`Unit`、`IO`、`println`、算術の演算子などは Prelude の `extern` である。`Int`、`String`、`Bool` の比較と表示のメソッドは、instance の中の `extern` で表の行に結ぶ。`IO` を、`println` と標準ライブラリのモジュール `Fs` の `open`、`read_all`、`close` などが起こし、`Fs.File` は線形型である。ユーザーは `IO` を handle できず (Prelude の `try_io` だけが handle する)、`extern` を書けない (E1033) ([エフェクトと handler](../spec/effects.md) の「組み込みの `IO`」)
 - IO の失敗と終了: Prelude の `try_io : (Unit -> <IO | e> a) -> <IO | e> Result IOError a` が、IO の extern の失敗 (書き出しの失敗を除く) を `IOError { kind, message }` の値にする。`exit : Int -> <IO> a` は途中のフレームの値を後始末し、終了コード `n & 255` で終わる。REPL では入力を終えるだけである ([標準ライブラリ](../spec/stdlib.md) の「`try_io`」と「`exit`」)
-- 標準ライブラリのツリー: リポジトリの `std/` (`Prelude.em`、`Fs.em`、`List.em`、`String.em`、`Env.em`、`Stdin.em`、`Proc.em`、`Yield.em`、`Fail.em`、`State.em`、`Iter.em`) をバイナリに埋め込む。Prelude はいつも読み込み、ほかのモジュールは import か修飾子で使うものだけを読み込む。`Fs.open` のように import なしで修飾付きで使え、`import Std.Fs` でも読める。予約した根は `Std` である ([モジュールと名前解決](../spec/modules.md) の「標準ライブラリ」)
+- 標準ライブラリのツリー: リポジトリの `std/` (`Prelude.em`、`Fs.em`、`List.em`、`String.em`、`Env.em`、`Stdin.em`、`Proc.em`、`Float.em`、`Array.em`、`MutArray.em`、`Yield.em`、`Fail.em`、`State.em`、`Iter.em`) をバイナリに埋め込む。Prelude はいつも読み込み、ほかのモジュールは import か修飾子で使うものだけを読み込む。`Fs.open` のように import なしで修飾付きで使え、`import Std.Fs` でも読める。予約した根は `Std` である ([モジュールと名前解決](../spec/modules.md) の「標準ライブラリ」)
 - std のエフェクトと `Iter`: エフェクトのモジュール `Yield` (`for_each`、`fold`、`collect`)、`Fail` (`to_result`、`to_option`)、`State` (`run`、`eval`、`exec`) と、`once` の継続で作る引いて使うジェネレータ `Iter` とその変換。`File` から1行ずつ読む `Fs.read_line` ([標準ライブラリ](../spec/stdlib.md) の「エフェクトのモジュール」と「`Fs`」)。S12d の `grep`、`logstat`、`csv2jsonl` は std のエフェクトを使い、`csv2jsonl` の CSV の読み取りは `let … and …` の組で書く
+- `Float` (IEEE 754 の倍精度) のリテラル、算術、比較と、Python の `repr` の形の表示。変換と数学の関数は `Std.Float` にある ([宣言](../spec/declarations.md) の「Prelude のクラス」、[標準ライブラリ](../spec/stdlib.md) の「`Std.Float`」)
+- 配列: 変えられない `Array a` (`Std.Array`) と、線形な `MutArray a` (`Std.MutArray`) ([標準ライブラリ](../spec/stdlib.md) の「`Std.Array`」と「`Std.MutArray`」)
+- ブロックの中の `var` と代入 `x <- e`、添字の読み `x[i]` と書き込み `x[i] <- e`、Prelude の `for` と `while` ([式](../spec/expressions.md) の「`var`」、[標準ライブラリ](../spec/stdlib.md) の「`for` と `while`」)
 - 線形性、持ち越し規則、網羅性の検査。`fail` や `exit` のような戻らない呼び出しで終わる経路では、消費しない `Lin` の値を手放さなくてよい ([線形性](../spec/linearity.md) の「暗黙の後始末」)
 - 型クラス: `class` (上位クラス、既定のメソッド、メソッド自身の型変数と制約)、`instance` (文脈、標準ライブラリの中の `extern`)、シグネチャの制約 `Eq a =>`、`deriving (Eq, Ord, Show)`、Prelude のクラス `Eq`、`Ord`、`Show` と `Ordering`、タプルと `Unit` の構造的な instance。証拠は単相化で決め、実行時の辞書は持たない ([宣言](../spec/declarations.md) の「クラスと instance」、[型と Kind](../spec/types.md) の「制約」)
 - モジュール: 入口のファイルのディレクトリを根にして import をたどる読み込み、`pub`、修飾した名前、別名、import の並び、`T(..)` と `E(..)`、修飾子の合流、モジュールとしての Prelude と `Prelude.` の修飾、import の循環の禁止 (E1027)、公開の範囲の検査 (E1032) ([モジュールと名前解決](../spec/modules.md))
@@ -32,9 +35,9 @@ M1 (言語の全体を一通り通す vertical slice と、本番の構文の最
 
 ### まだないもの
 
-- 浮動小数と文字 (字句として予約し、使うと E0004。S14 と `Char` の項目)
+- 文字 (字句として予約し、使うと E0004。`Char` の項目)
 - まだ実装していない構文: 型の別名 `type` ([ロードマップ](../future/roadmap.md) の「言語機能と構文」)、コマンドリテラル (コマンドリテラルの段)。字句と文法の置き場所を用意してあり、使うと E0004 (未対応) を出して回復する。どの層が E0004 を出すかは下の「未対応の構文と E0004」にある
-- 配列 (S14)。バイト列と標準入出力のハンドル (バイト列とハンドルの項目)。文字の型を使う文字列の関数、連想配列、並べ替えなどの標準ライブラリ (UTF-8 と標準ライブラリの段)
+- バイト列と標準入出力のハンドル (バイト列とハンドルの項目)。文字の型を使う文字列の関数、連想配列、並べ替えなどの標準ライブラリ (UTF-8 と標準ライブラリの段)
 - ユーザーが書く extern (FFI)
 - 可変参照 `Ref`、再エクスポート (`pub import`)、抽象型、修飾した演算子の構文、`data` のフィールドの矢印の線形性の多相、`: Unr` の宣言、row の型引数の省略、`Lin` の型を受けるクラス、or パターン、ガード、as パターン、Perceus の借用の最適化、関数をまたぐ reuse、LSP、フォーマッタ、ネイティブ化 ([ロードマップ](../future/roadmap.md) の「その後の項目」)
 
@@ -43,7 +46,7 @@ M1 (言語の全体を一通り通す vertical slice と、本番の構文の最
 
 ### 未対応の構文と E0004
 
-まだ実装していない構文は、パーサが CST まで組み、HIR が E0004 (未対応) を出す。意味を与える最初の段階が未対応を判定するという方針である。HIR が E0004 を出すのは、`type` の宣言、浮動小数、文字、コマンドリテラルである。パーサが E0004 を出す構文はない。未対応のリテラル (浮動小数、文字、コマンドリテラル) の E0004 は、すべて HIR が出す。コマンドリテラルは lexer が文字列と同じ形のトークンに分け ([字句](../spec/lexical.md) の「コマンドリテラル」)、HIR がリテラル全体に E0004 を1件出す。穴の中の式は lower しない。
+まだ実装していない構文は、パーサが CST まで組み、HIR が E0004 (未対応) を出す。意味を与える最初の段階が未対応を判定するという方針である。HIR が E0004 を出すのは、`type` の宣言、文字、コマンドリテラルである。パーサが E0004 を出す構文はない。未対応のリテラル (文字、コマンドリテラル) の E0004 は、すべて HIR が出す。コマンドリテラルは lexer が文字列と同じ形のトークンに分け ([字句](../spec/lexical.md) の「コマンドリテラル」)、HIR がリテラル全体に E0004 を1件出す。穴の中の式は lower しない。
 
 型の位置の `[` と `{`、コンストラクタのない `{ … }` は、未対応の構文でなく、構文の誤り (E0011) である。リストの型は `List a` と書き、レコードは `data` で宣言する ([文法](../spec/grammar.md) の「文法上の補足」)。
 

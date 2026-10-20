@@ -377,13 +377,13 @@ display$N$k (acc: String, budget: Int, depth: Int, prec: Int, x: T) -> (String, 
 
 - 書き方の決め方: 部分の型 `T` ごとに、次の順で部分の種類 `Part` を決める
   - 関数型は `Function` (`<fn>`) である
+  - `Show` を持たない extern の型は `Extern` (`<extern>`) である。中身を読めないためである。`File` の値は式の入力の結果に現れない (E2016)
   - `eml_types::satisfies(Show, T)` が偽なら、構造で書く (`Display`)。このとき instance を解決しない。文脈が型引数で解けないので、`resolve` が返す instance は `method_target` で使えないためである
   - `eml_types::resolve(Show, T)` が、タプル (`Resolution::Tuple`)、導出した instance (`InstanceOrigin::Derived`)、頭が `LangItems` の `list` の instance のどれかなら、構造で書く
   - ほかは `Show` で、`show_prec` の行き先を `Collector::method_target` で解決する。入力の値そのものと `List` の要素では、`show` の行き先を解決する
-  - `Show` を持たない extern の型に届けば内部の誤りにする。式の入力の結果に `File` は現れないためである (E2016)
 - 形: `acc` に書いた結果を後ろに足し、残りの予算と組にして返す。Prelude の `show_rest` と同じく、左辺を一意な文字列として伸ばすので、書く量に比例する時間で済む ([オブジェクトモデル](object-model.md) の「文字列の操作」)。括弧も `acc` に先に足すので、入れ子の括弧で写しが増えない。結果の組 `(String, Int)` は2要素のタプルの配置 (`obj` で、フィールドは `tobj`) で返し、呼び出し側は `unpack` で受ける。組を解放した後の文字列は一意なので、次の連結もその場で伸ばせる
 - 関数の始めで、`budget` が 0 なら `...` を足して返す (予算は 0 のまま)。`depth` が 100 以上なら `...` を足し、予算を1つ使って返す。どちらでもなければ予算を1つ使って値を書く
-- 部分は、それを持つ値より1段深い (`depth + 1`) ところで、上の予算と深さの検査を受ける。`Show`、`Function`、`Ellipsis` (下の段と数の上限で表示関数を作らない型。`...` と書く) の部分は関数を作らず、呼び出し側でその場に組み、検査もその場で行う。`Display(k)` の部分は、表示関数 `display$N$k` を `depth + 1` で呼ぶ。`Show` の部分は、行き先 (`show_prec prec x`、`List` の要素なら `show x`) の結果を `acc` に足す。方程式の引数がメソッドより少ない instance のメソッドは、導出の生成器の `call_target` と同じく、返った関数に残りを適用する
+- 部分は、それを持つ値より1段深い (`depth + 1`) ところで、上の予算と深さの検査を受ける。`Show`、`Function`、`Extern`、`Ellipsis` (下の段と数の上限で表示関数を作らない型。`...` と書く) の部分は関数を作らず、呼び出し側でその場に組み、検査もその場で行う。`Display(k)` の部分は、表示関数 `display$N$k` を `depth + 1` で呼ぶ。`Show` の部分は、行き先 (`show_prec prec x`、`List` の要素なら `show x`) の結果を `acc` に足す。方程式の引数がメソッドより少ない instance のメソッドは、導出の生成器の `call_target` と同じく、返った関数に残りを適用する
 - タプル、`data` のコンストラクタ、レコードは、導出した `Show` と同じ優先度と括弧で組む ([宣言](declarations.md) の「`deriving`」)。値の形は、導出の生成器と同じく型とフィールドの型から作る (`derive.rs` の `shape`)。`List` は、要素をたどる補助の関数 `display$N$k$rest(acc, budget, child, xs)` で背骨をたどる。要素は `depth + 1` (`child`) で書き、要素の前に予算が尽きていれば `...` を書いて閉じる。補助の関数は自分を末尾で呼ぶので、縮約が末尾呼び出しにする
 - 名前: 入力の番号 N と、入力の中で見つけた順の番号 k から作る。型から名前を作らない理由は2つある
   - 後の入力が `instance Show Box` を足すと、前からある型 (`(Box, Int -> Int)`) の書き方が変わる。名前を型だけで決めると、同じ名前で違うコードができ、「同じ名前の関数はいつも同じコードになる」規則 (上の「変換の規則」) が破れる。入力の番号は使い回さないので、表示関数はその入力にだけある
