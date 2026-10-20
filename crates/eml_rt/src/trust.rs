@@ -94,6 +94,7 @@ const TRUSTED: &[(&str, &str)] = &[
     ("alloc.rs: external_body dealloc_page", "T1"),
     ("alloc.rs: external_body charge_pages", "T1"),
     ("alloc.rs: external_body refund_pages", "T1"),
+    ("alloc.rs: external_body over_budget", "T1"),
     ("alloc.rs: external_body too_large", "T5"),
     ("alloc.rs: external_body too_many_words", "T5"),
     ("alloc.rs: external_body bad_page_layout", "T5"),

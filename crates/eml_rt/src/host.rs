@@ -243,7 +243,7 @@ impl StopOnInterrupt<'_> {
             let bits = control.stop_bits();
             if bits != 0 {
                 Err(Failure::Stopped(stop_reason(bits)))
-            } else if control.bytes().saturating_add(held) > control.limits().max_bytes {
+            } else if control.over_budget(held) {
                 Err(Failure::Stopped(Stop::MemoryLimit))
             } else {
                 Ok(())

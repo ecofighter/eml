@@ -3047,6 +3047,12 @@ fn refund_pages(control: &Control, bytes: usize) {
     control.refund(bytes)
 }
 
+/// `bytes` を確保すると確保量の上限を超えるか (T1)。値について何も約束しないので、どちらを返しても証明は崩れない。
+#[verifier::external_body]
+pub(crate) fn over_budget(control: &Control, bytes: usize) -> bool {
+    control.over_budget(bytes)
+}
+
 // 止める関数 (信頼の一覧の T5)。どれも状態を変える前に呼ぶ (T7)
 #[verifier::external_body]
 #[cold]

@@ -108,6 +108,11 @@ impl Control {
         }
     }
 
+    /// 今の確保量に `bytes` を足すと上限を超えるか。確保より前に大きさが分かるとき、確保を試す前に止めるのに使う。
+    pub(crate) fn over_budget(&self, bytes: usize) -> bool {
+        self.bytes().saturating_add(bytes) > self.limits.max_bytes
+    }
+
     pub(crate) fn refund(&self, bytes: usize) {
         self.bytes.fetch_sub(bytes, Ordering::Relaxed);
     }

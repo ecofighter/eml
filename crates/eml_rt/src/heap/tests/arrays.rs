@@ -1,10 +1,13 @@
 //! 配列の物体 (docs/spec/object-model.md の「配列」)。`Array` と `MutArray` は同じ形の `Data` の物体で、`MutArray`
 //! は `lin` ビットを持つ。
 
+use std::sync::Arc;
+
 use super::ctx::ctx;
+use super::host::host;
 use super::mortal;
 use crate::externs::{Fault, IndexFault};
-use crate::{Ctx, HeapError, Mode, Word};
+use crate::{Control, Ctx, HeapError, Limits, Mode, Stop, Word};
 
 fn int(n: i64) -> Word {
     Word::imm(n)
@@ -196,6 +199,96 @@ fn freezing_a_shared_array<M: Mode>() {
     assert_eq!(mortal(ctx.heap()), 0);
 }
 
+/// 長さ 1 の `make` は、受け取った `x` の参照をそのまま入れ、`dup` しない。`lin` の物体も入る。
+fn make_one_stores_x_without_a_dup<M: Mode>() {
+    let mut ctx = ctx::<M>();
+    unsafe {
+        let x = ctx.heap_mut().alloc_data(0, 0, 0, true);
+        let a = ctx.array_make(1, x, false).unwrap();
+        assert_eq!(ctx.array_length(a), Ok(1));
+        assert_eq!(mortal(ctx.heap()), 2);
+        release(&mut ctx, a);
+    }
+    assert_eq!(mortal(ctx.heap()), 0);
+}
+
+/// 検査モードは、`lin` の物体を2つ以上の要素に入れる `make` を、確保の前に `LinDup` で断る。
+fn checked_mode_refuses_a_lin_element_before_allocating<M: Mode>() {
+    if !M::CHECKED {
+        return;
+    }
+    let mut ctx = ctx::<M>();
+    unsafe {
+        let x = ctx.heap_mut().alloc_data(0, 0, 0, true);
+        assert_eq!(
+            ctx.array_make(2, x, false),
+            Err(Fault::Heap(HeapError::LinDup))
+        );
+        assert_eq!(mortal(ctx.heap()), 1);
+        release(&mut ctx, x);
+    }
+    assert_eq!(mortal(ctx.heap()), 0);
+}
+
+/// 確保器が作れない長さと、確保量の上限を超える長さの `make` は、何も確保せずに `x` を手放して止まる。
+fn oversized_make_stops_before_allocating<M: Mode>() {
+    let stopped = Err(Fault::Stopped(Stop::MemoryLimit));
+    let mut ctx = ctx::<M>();
+    unsafe {
+        let s = ctx.heap_mut().alloc_string("x");
+        assert_eq!(ctx.array_make(i64::MAX, s, false), stopped);
+    }
+    assert_eq!(mortal(ctx.heap()), 0);
+    let limits = Limits {
+        max_bytes: 1 << 20,
+        ..Limits::default()
+    };
+    let mut ctx = Ctx::<M>::new(Arc::new(Control::new(limits)), host(&Arc::default()));
+    unsafe {
+        let s = ctx.heap_mut().alloc_string("x");
+        assert_eq!(ctx.array_make((1 << 20) / 8 + 1, s, true), stopped);
+        assert_eq!(mortal(ctx.heap()), 0);
+        let a = ctx.array_make(10, int(1), false).unwrap();
+        release(&mut ctx, a);
+    }
+    assert_eq!(mortal(ctx.heap()), 0);
+}
+
+/// 数の語を持つ配列の `thaw` と `freeze` の写しも、要素を同じ位置に並べる。
+fn relin_copies_of_extended_arrays<M: Mode>() {
+    let mut ctx = ctx::<M>();
+    unsafe {
+        let mut a = ctx.array_make(300, int(0), false).unwrap();
+        for i in [0, 254, 255, 299] {
+            a = ctx.array_set(a, i, int(i + 1)).unwrap();
+        }
+        ctx.heap_mut().dup(a).unwrap();
+        let m = ctx.array_thaw(a).unwrap();
+        assert_ne!(m, a);
+        assert!(lin_of(&ctx, m));
+        assert_eq!(ctx.array_length(m), Ok(300));
+        for i in [0, 254, 255, 299] {
+            assert_eq!(get(&mut ctx, m, i), int(i + 1));
+        }
+        assert_eq!(get(&mut ctx, m, 100), int(0));
+        if !M::CHECKED {
+            // 共有の物体の `freeze` を写すのは速いモードだけである
+            ctx.heap_mut().dup(a).unwrap();
+            let b = ctx.array_freeze(a).unwrap();
+            assert_ne!(b, a);
+            assert!(!lin_of(&ctx, b));
+            assert_eq!(ctx.array_length(b), Ok(300));
+            for i in [0, 254, 255, 299] {
+                assert_eq!(get(&mut ctx, b, i), int(i + 1));
+            }
+            release(&mut ctx, b);
+        }
+        release(&mut ctx, a);
+        release(&mut ctx, m);
+    }
+    assert_eq!(mortal(ctx.heap()), 0);
+}
+
 fn checked_mode_rejects_a_lin_dup_of_a_mut_array<M: Mode>() {
     if !M::CHECKED {
         return;
@@ -218,5 +311,9 @@ both_modes!(
     empty_and_zero_length_arrays,
     freeze_and_thaw_flip_the_lin_bit,
     freezing_a_shared_array,
+    make_one_stores_x_without_a_dup,
+    checked_mode_refuses_a_lin_element_before_allocating,
+    oversized_make_stops_before_allocating,
+    relin_copies_of_extended_arrays,
     checked_mode_rejects_a_lin_dup_of_a_mut_array,
 );

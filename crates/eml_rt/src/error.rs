@@ -55,9 +55,7 @@ impl fmt::Display for HeapError {
             HeapError::NotTokenable => {
                 f.write_str("an object of this kind cannot become a reuse token")
             }
-            HeapError::NotUnique => {
-                f.write_str("a reuse token is made from an object that is not unique")
-            }
+            HeapError::NotUnique => f.write_str("an object that must be unique is shared"),
             HeapError::NotWritable => f.write_str(
                 "set_field or set_raw writes an object that is neither local nor being built",
             ),

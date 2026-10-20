@@ -11,6 +11,7 @@ use super::super::model::lemma_indeg_pos;
 #[cfg(verus_only)]
 use super::proof::*;
 use super::*;
+use crate::alloc::over_budget;
 use crate::externs::{Fault, IndexFault};
 
 verus! {
@@ -831,6 +832,9 @@ fn fill<M: Mode>(
     Ok(())
 }
 
+/// `make` で作れる長さの上限。これより長い配列のブロックは、確保器が作れる語の数 (2^32 未満) を超えうる。
+const MAX_LEN: usize = 0xFFFF_0000;
+
 impl<M: Mode> Ctx<M> {
     /// 配列の要素に入れられる値。`dup` できる。
     pub closed spec fn storable(&self, x: Word) -> bool {
@@ -931,6 +935,57 @@ impl<M: Mode> Ctx<M> {
         self.lemma_fresh_holds(old, t);
     }
 
+    /// 引数 `x` の参照を手放して、誤り `f` を返す。
+    unsafe fn refuse(&mut self, x: Word, f: Fault) -> (r: Result<Word, Fault>)
+        requires
+            old(self).wf(),
+            old(self).heap_spec().word_in(x),
+            !M::CHECKED ==> old(self).holds(x),
+            !(f matches Fault::Heap(_)),
+        ensures
+            final(self).wf(),
+            final(self).evv_spec() == old(self).evv_spec(),
+            final(self).yield_spec() == old(self).yield_spec(),
+            r == Err::<Word, Fault>(f) || (r matches Err(Fault::Heap(_))),
+            !M::CHECKED ==> r == Err::<Word, Fault>(f),
+            old(self).held_ok() && old(self).holds(x) ==> {
+                &&& r matches Err(Fault::Heap(e)) ==> chain_err(Err::<(), HeapError>(e))
+                &&& !(r matches Err(Fault::Heap(_))) ==> {
+                    &&& final(self).held_ok()
+                    &&& final(self).evolved_by(*old(self), |b: usize| -points(x, b), Set::empty())
+                }
+            },
+    {
+        let ghost s0 = *self;
+        let ghost ws = seq![x];
+        let ghost c = s0.held_ok() && s0.holds(x);
+        proof {
+            assert(ws[0] == x);
+            if c {
+                s0.lemma_arg_ready(ws, 0);
+                assert forall|b: usize| #[trigger] -points(x, b) >= -points_in(ws, b) by {
+                    lemma_points_in(ws, b);
+                }
+            }
+        }
+        if let Err(e) = unsafe { self.heap.decref(x) } {
+            proof {
+                self.lemma_words_kept(s0);
+            }
+            return Err(Fault::Heap(e));
+        }
+        proof {
+            if M::CHECKED {
+                self.lemma_words_kept(s0);
+            }
+            if c {
+                lemma_decref_moved(self.heap, s0.heap, x);
+                self.lemma_kept_ok(s0, ws, |b: usize| -points(x, b));
+            }
+        }
+        Err(f)
+    }
+
     /// `Array.make` と `MutArray.make`。`x` の参照を受け取り、どの要素も `x` の、長さ `n` の新しい配列を返す。
     /// `MutArray` なら `lin` を真にする。`n` が負なら、`x` を手放して `Fault::Index` を返す。`n` が 0 なら `x` を手放す。
     ///
@@ -946,13 +1001,15 @@ impl<M: Mode> Ctx<M> {
             final(self).wf(),
             final(self).evv_spec() == old(self).evv_spec(),
             final(self).yield_spec() == old(self).yield_spec(),
-            r is Ok || (r matches Err(Fault::Index(_))) || (r matches Err(Fault::Heap(_))),
+            r is Ok || (r matches Err(Fault::Index(_))) || r == Err::<Word, Fault>(
+                Fault::Stopped(Stop::MemoryLimit),
+            ) || (r matches Err(Fault::Heap(_))),
             !M::CHECKED ==> !(r matches Err(Fault::Heap(_))),
             old(self).held_ok() && old(self).holds(x) && old(self).storable(x) ==> {
                 &&& r matches Err(Fault::Heap(e)) ==> chain_err(Err::<(), HeapError>(e))
                 &&& !(r matches Err(Fault::Heap(_))) ==> {
                     &&& n < 0 ==> (r matches Err(Fault::Index(_)))
-                    &&& n >= 0 ==> (r matches Ok(w) && {
+                    &&& n >= 0 && !(r matches Err(Fault::Stopped(_))) ==> (r matches Ok(w) && {
                         &&& final(self).holds(w)
                         &&& final(self).is_array(w)
                         &&& final(self).array_len(w) == n
@@ -981,24 +1038,14 @@ impl<M: Mode> Ctx<M> {
             }
         }
         if n < 0 {
-            if let Err(e) = unsafe { self.heap.decref(x) } {
-                proof {
-                    self.lemma_words_kept(s0);
-                }
-                return Err(Fault::Heap(e));
-            }
-            proof {
-                if M::CHECKED {
-                    self.lemma_words_kept(s0);
-                }
-                if c {
-                    lemma_decref_moved(self.heap, hs, x);
-                    self.lemma_kept_ok(s0, ws, dx);
-                }
-            }
-            return Err(Fault::Index(Box::new(IndexFault::Length { len: n })));
+            return unsafe { self.refuse(x, Fault::Index(Box::new(IndexFault::Length { len: n }))) };
         }
         let k = n as usize;
+        // 確保器が作れない大きさと、確保量の上限を超える大きさは、確保を試す前に止める。確保器に任せると、プロセスが
+        // panic で落ちるか、上限を報告する前に OS に止められるためである (docs/spec/object-model.md の「配列」)
+        if k > MAX_LEN || over_budget(&self.control, (k + 4) * 8) {
+            return unsafe { self.refuse(x, Fault::Stopped(Stop::MemoryLimit)) };
+        }
         let first: usize = if k >= 255 {
             1
         } else {
