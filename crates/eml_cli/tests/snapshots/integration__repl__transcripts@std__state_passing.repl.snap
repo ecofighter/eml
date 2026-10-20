@@ -38,5 +38,21 @@ input_file: crates/eml_cli/tests/repl/std/state_passing.repl
 .
 > State.run 0 (fn () -> let (_, t) = count (fn () -> ticking 1 4) in t)
 (4, 10)
+> run_loop : Int -> <Panic> Int
+. run_loop n = State.exec 0 (fn () -> loop 1 n)
+.
+> nested : Int -> <Panic> (Int, Int)
+. nested n = State.run 0 (fn () -> let (_, t) = count (fn () -> ticking 1 n) in t)
+.
+> run_loop 10
+55
+> nested 4
+(4, 10)
+> 1 + 1
+2
+> run_loop 10
+55
+> nested 4
+(4, 10)
 --- close ---
 no leaks

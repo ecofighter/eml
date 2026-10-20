@@ -35,3 +35,16 @@
 .     ticking (i + 1) n
 .
 > State.run 0 (fn () -> let (_, t) = count (fn () -> ticking 1 4) in t)
+# 定義の入力に handle を入れ、後の入力で2回ずつ評価する。2回目の入力は同じ名前の複製を作り直すので、状態を渡す形の
+# 複製にも「同じ名前なら同じコード」が成り立つことを固定する (docs/spec/vm.md の「追記」)
+> run_loop : Int -> <Panic> Int
+. run_loop n = State.exec 0 (fn () -> loop 1 n)
+.
+> nested : Int -> <Panic> (Int, Int)
+. nested n = State.run 0 (fn () -> let (_, t) = count (fn () -> ticking 1 n) in t)
+.
+> run_loop 10
+> nested 4
+> 1 + 1
+> run_loop 10
+> nested 4

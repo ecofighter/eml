@@ -725,8 +725,8 @@ main () =
     "#);
 }
 
-/// 末尾でない `put` のループ (`bench/state_loop.em` と同じプログラム) も、状態を渡す形で特殊化される。`loop` の複製は
-/// `bump` の複製を末尾でなく呼んで次の状態を受け、そのあと自分を末尾で呼ぶ。
+/// 末尾でない `put` のループ (`bench/state_loop.em` と同じプログラム) も、状態を渡す形で特殊化される。`handle` が
+/// 消え、`loop` の複製が状態を引数で受けることを、スナップショットで固定する。
 #[test]
 fn a_non_tail_put_is_specialized() {
     let text = include_str!("../../../bench/state_loop.em");
@@ -975,12 +975,20 @@ main () =
 /// `bench/state_nested.em` のプログラム。状態つきの2つの handler (`Std.State` と `Tick`) が重なる。
 const STATE_NESTED: &str = include_str!("../../../bench/state_nested.em");
 
-/// 内側の複製 `f{H=…}` の複製の名前か。名前は `f{H=…}{H=…}` で、64字を超えると内側の複製の名前にハッシュを付けた
-/// `f{H=…}@#<16 hex>` になる (docs/spec/core-ir.md の「handler の複製」)。
+/// 後の回の handler の複製の名前か。内側の複製 `f{H=…}` の複製の名前は `f{H=…}{H=…}` で、64字を超えると内側の
+/// 複製の名前にハッシュを付けた `f{H=…}@#<16 hex>` になる (docs/spec/core-ir.md の「handler の複製」)。ハッシュのない
+/// 名前は `{H=` を2つ以上持つものを取り、S13e-1 の複製の最初の回の複製 `f{0=…}{H=…}` は取らない。ハッシュの名前は、
+/// ハッシュの前の部分に `{H=` を持つものを取る。ただし、長い S13e-1 の複製の最初の回の複製 `f{0=…}{H=…}@#<16 hex>`
+/// も同じ形なので、これだけは見分けられない。
 fn nested_copy(line: &str) -> bool {
-    line.contains("fn \"")
-        && line.contains("{H=")
-        && (line.contains("}{H=") || line.contains("}@#"))
+    let Some(name) = line.split('"').nth(1).filter(|_| line.contains("fn \"")) else {
+        return false;
+    };
+    let (base, hashed) = match name.rsplit_once("@#") {
+        Some((base, hash)) if hash.len() == 16 => (base, true),
+        _ => (name, false),
+    };
+    base.matches("{H=").count() >= if hashed { 1 } else { 2 }
 }
 
 /// 入れ子の handler は内側から特殊化する (docs/spec/core-ir.md の「handler への特殊化」)。内側の `Tick` の handle が
@@ -1030,7 +1038,8 @@ main () =
 }
 
 /// 状態を渡す形を確かめる UI テストのプログラムが、その形で特殊化されることを確かめる。`lin_state` の handle は
-/// 消え、`under_generator` では `Std.State` の handle が消えて、外側の `Iter.generate` の handle だけが残る。
+/// 消え、`under_generator` では `Std.State` の handle が消えて、外側の `Iter.generate` の handle だけが残る。`panic` では
+/// `Std.State` の handle が消えて、`try_panic` の handle だけが残る。
 #[test]
 fn passing_ui_programs_are_specialized() {
     let lin_state = core_text(
@@ -1053,6 +1062,21 @@ fn passing_ui_programs_are_specialized() {
         "{owners:?}\n{generator}"
     );
     assert!(generator.contains("fn \"sums{H="), "{generator}");
+    let panic = core_text(
+        include_str!("../../../tests/ui/run/effects/state_passing_panic.em"),
+        Pass::Optimize,
+    );
+    let handles: Vec<&str> = panic
+        .lines()
+        .filter(|line| line.contains("fn \""))
+        .filter_map(|line| line.split('"').nth(1))
+        .filter(|name| function(&panic, name).contains("handle "))
+        .collect();
+    assert!(
+        handles.len() == 1 && handles[0].starts_with("Prelude.try_panic@"),
+        "{handles:?}\n{panic}"
+    );
+    assert!(panic.contains("{H=Std.State."), "{panic}");
 }
 
 /// 定数の操作の引数を節の本体に展開すると、その定数で分ける `switch` ができる。合う case へのジャンプにして、読み直した
