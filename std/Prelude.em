@@ -250,3 +250,7 @@ pub (|>) : a -> (a -> <e> b) -> <e> b
 x |> f = f x
 pub (<|) : (a -> <e> b) -> a -> <e> b
 f <| x = f x
+
+-- 要素を持つ組み込みの型。Array の Kind は要素に従い、MutArray は常に Lin (docs/spec/types.md)
+pub extern data Array a
+pub extern data MutArray a

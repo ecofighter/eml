@@ -250,11 +250,14 @@ fn data_item(p: &mut Parser, m: Marker) {
     m.complete(p, DATA_ITEM);
 }
 
-/// extern_decl ::= 'data' UIDENT。型引数、`=`、`where` は E0011 にする。型引数は名前として読み、残りは項目の終わり
-/// まで読み飛ばす (docs/spec/grammar.md の `item`)。
+/// extern_decl ::= 'data' UIDENT LIDENT*。`Array a` のように要素の型を持つ型があるので型引数は書ける。`=`、`where`、
+/// Kind の注釈は E0011 にして、項目の終わりまで読み飛ばす (docs/spec/grammar.md の `item`)。
 fn extern_data(p: &mut Parser, m: Marker) {
     p.bump(DATA_KW);
     expect_name(p, UIDENT);
+    while p.at(LIDENT) {
+        name(p);
+    }
     reject_extern_tail(p, "data");
     m.complete(p, DATA_ITEM);
 }
@@ -284,18 +287,14 @@ fn extern_effect(p: &mut Parser, m: Marker) {
     m.complete(p, EFFECT_ITEM);
 }
 
-/// extern の `data` に型引数、`=`、`where` は書けない (docs/spec/declarations.md の「`extern`」)。
-/// 誤って書いた型引数も名前として読む。使う位置の型引数の数 (E1015) が書いたとおりになり、誤りが連鎖しない。
+/// extern の `data` に `=`、`where`、Kind の注釈は書けない (docs/spec/declarations.md の「`extern`」)。
 fn reject_extern_tail(p: &mut Parser, keyword: &str) {
-    if p.at(LIDENT) || p.at(COLON) || p.at(EQ) || p.at(PIPE) || p.at(WHERE_KW) {
+    if p.at(COLON) || p.at(EQ) || p.at(PIPE) || p.at(WHERE_KW) {
         p.error(
             codes::SYNTAX_ERROR,
-            format!("`extern {keyword}` cannot have parameters, `=` or `where`"),
-            "an extern declaration is only the name",
+            format!("`extern {keyword}` cannot have `:`, `=` or `where`"),
+            "an extern declaration is only the name and its type parameters",
         );
-        while p.at(LIDENT) {
-            name(p);
-        }
         skip_to_sep(p, false);
     }
 }

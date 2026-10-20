@@ -201,3 +201,29 @@ fn a_lin_declaration_makes_the_type_linear() {
         ["E3002", "E3004"]
     );
 }
+
+fn codes_of(text: &str) -> Vec<String> {
+    check_short(text)
+        .iter()
+        .map(|d| d[..5].to_string())
+        .collect()
+}
+
+#[test]
+fn array_kind_follows_its_element() {
+    let dup = |ty: &str| format!("f : {ty} -> ({ty}, {ty})\nf a = (a, a)");
+    assert_eq!(codes_of(&dup("Array Fs.File")), ["E3002"]);
+    assert_eq!(codes_of(&dup("Array Int")), Vec::<String>::new());
+    assert_eq!(codes_of(&dup("MutArray Int")), ["E3002"]);
+}
+
+#[test]
+fn array_is_covariant() {
+    let pass = |ty: &str| {
+        format!(
+            "g : {ty} (Unit -> Int) -> Int\ng _ = 0\n\nh : {ty} (once Unit -> Int) -> Int\nh a = g a"
+        )
+    };
+    let list = codes_of(&pass("List"));
+    assert_eq!(codes_of(&pass("Array")), list);
+}

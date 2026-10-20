@@ -27,6 +27,12 @@ probe_unit u = u
 probe_file : Fs.File -> Fs.File
 probe_file f = f
 
+probe_array : Array Int -> Array Int
+probe_array a = a
+
+probe_mut_array : MutArray Int -> MutArray Int
+probe_mut_array a = a
+
 probe_panic : Unit -> <Panic> Int
 probe_panic () = panic \"x\"
 
@@ -45,6 +51,8 @@ fn probe(ty: ExternType) -> &'static str {
         ExternType::String => "probe_string",
         ExternType::Unit => "probe_unit",
         ExternType::File => "probe_file",
+        ExternType::Array => "probe_array",
+        ExternType::MutArray => "probe_mut_array",
     }
 }
 

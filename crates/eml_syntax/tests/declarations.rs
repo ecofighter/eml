@@ -516,9 +516,9 @@ fn extern_on_other_items_is_one_error_each() {
     [
         "\"extern type T = Int\" => [\"E0011 1:1 `extern` cannot be written on this item\"]",
         "\"extern infixl 6 +\" => [\"E0011 1:1 `extern` cannot be written on this item\"]",
-        "\"extern data T = | A\" => [\"E0011 1:15 `extern data` cannot have parameters, `=` or `where`\"]",
+        "\"extern data T = | A\" => [\"E0011 1:15 `extern data` cannot have `:`, `=` or `where`\"]",
         "\"extern effect E where\\n  op : Unit -> Unit\" => []",
-        "\"extern data T a\" => [\"E0011 1:15 `extern data` cannot have parameters, `=` or `where`\"]",
+        "\"extern data T a\" => []",
         "\"extern effect E a\" => [\"E0011 1:17 `extern effect` cannot have parameters or `=`\"]",
         "\"extern pub f : Int\" => [\"E0011 1:1 `extern` cannot be written before `pub`\"]",
         "\"extern f x = x\" => [\"E0011 1:1 `extern` cannot be written on this item\"]",
@@ -556,7 +556,7 @@ fn misplaced_extern_is_one_error_at_extern() {
 }
 
 #[test]
-fn parameters_of_extern_data_are_still_names() {
+fn parameters_of_extern_data_are_names() {
     insta::assert_snapshot!(shape("extern data T a"), @r#"
     SOURCE_FILE
       DATA_ITEM
@@ -566,8 +566,6 @@ fn parameters_of_extern_data_are_still_names() {
           UIDENT "T"
         NAME
           LIDENT "a"
-    ---
-    E0011 1:15 `extern data` cannot have parameters, `=` or `where`
     "#);
 }
 
@@ -664,6 +662,6 @@ fn a_row_parameter_is_one_name() {
 fn extern_data_cannot_declare_a_kind() {
     assert_eq!(
         diagnostics("extern data File : Lin"),
-        ["E0011 1:18 `extern data` cannot have parameters, `=` or `where`"]
+        ["E0011 1:18 `extern data` cannot have `:`, `=` or `where`"]
     );
 }

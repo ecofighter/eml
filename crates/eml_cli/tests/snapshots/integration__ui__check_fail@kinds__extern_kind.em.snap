@@ -12,10 +12,10 @@ input_file: tests/ui/check-fail/kinds/extern_kind.em
    │ 
    │ Help: remove `extern` and define the declaration in eml
 ───╯
-[E0011] Error: `extern data` cannot have parameters, `=` or `where`
+[E0011] Error: `extern data` cannot have `:`, `=` or `where`
    ╭─[ check-fail/kinds/extern_kind.em:2:20 ]
    │
  2 │ extern data Handle : Lin
    │                    ┬  
-   │                    ╰── an extern declaration is only the name
+   │                    ╰── an extern declaration is only the name and its type parameters
 ───╯

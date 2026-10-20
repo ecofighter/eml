@@ -321,12 +321,9 @@ fn parameters_written_on_a_user_extern_type_count_at_use_sites() {
     let text = "extern data T a\n\nf : T Int -> T Int\nf x = x";
     assert_eq!(
         diagnostics(text),
-        [
-            "E1033 1:1 `extern` is only allowed in the standard library",
-            "E0011 1:15 `extern data` cannot have parameters, `=` or `where`",
-        ]
+        ["E1033 1:1 `extern` is only allowed in the standard library",]
     );
-    // 型も書いた型引数を持つ。def_map が数える型引数の数と、型検査が見る `generics` をそろえるため
+    // 型引数は書いたとおりに持つ。def_map が数える型引数の数と、型検査が見る `generics` をそろえるため
     let lowered = eml_test_support::lower(text);
     let (_, def) = lowered
         .program

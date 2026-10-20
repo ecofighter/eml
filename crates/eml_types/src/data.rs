@@ -58,15 +58,22 @@ pub(crate) fn data_kinds(program: &Program) -> ItemMap<TypeDef, DataKind> {
         .types()
         .map(|(id, def)| {
             let arity = def.generics.type_vars.len();
+            // 型引数を持つ extern の型の Kind は、`Lin` の行を除いて引数に従う。本体がないので、使われ方は行が決める
+            // (docs/spec/types.md)
+            let follows_args = matches!(def.kind, TypeDefKind::Extern(Some(ty))
+                if ty.row().params > 0 && ty.row().linearity == Linearity::Unr);
             let kind = DataKind {
-                params: vec![false; arity],
+                params: vec![follows_args; arity],
                 lin: match def.kind {
                     TypeDefKind::Extern(Some(ty)) => ty.row().linearity == Linearity::Lin,
                     TypeDefKind::Extern(None) => false,
                     TypeDefKind::Data { constructors: _ } => def.lin,
                 },
-                // extern の型の型引数は誤り (E0011) の跡で、使われ方が分からないので、安全な側の両方向にする
+                // 行のない extern の型の型引数は誤り (E1033) の跡で、使われ方が分からないので、安全な側の両方向にする
                 variance: match def.kind {
+                    TypeDefKind::Extern(Some(ty)) if ty.row().params > 0 => {
+                        vec![Variance::Co; arity]
+                    }
                     TypeDefKind::Extern(_) => vec![Variance::Both; arity],
                     TypeDefKind::Data { constructors: _ } => vec![Variance::Absent; arity],
                 },

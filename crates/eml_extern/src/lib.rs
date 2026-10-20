@@ -7,7 +7,8 @@
 //! 形である。どの行も、`std/` の extern の宣言か instance の `extern` のちょうど1つから指されることは、`eml_hir` の
 //! 結合テストが確かめる。行の Repr が std の宣言の型の Repr と同じであることは、`eml_core_ir` の結合テストが確かめる。
 
-/// 型の Kind。extern の型は型引数を持たないので、`Unr` か `Lin` だけで決まる。
+/// 型の Kind。型引数のない extern の型は `Unr` か `Lin` で決まる。型引数を持つ型 (`TypeRow::params > 0`) の `Unr` は
+/// 「引数の Kind の join」を表し、`Lin` は引数によらず常に `Lin` である (docs/spec/types.md)。
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Linearity {
     Unr,
@@ -124,11 +125,15 @@ pub enum ExternType {
     String,
     Unit,
     File,
+    Array,
+    MutArray,
 }
 
 pub struct TypeRow {
     pub name: &'static str,
     pub linearity: Linearity,
+    /// 型引数の数。型引数はすべて共変で、`Unr` の行の Kind は引数の Kind に従う。
+    pub params: usize,
     /// 値の Repr。translate は extern の型の Repr をここから読む。型検査は `Unit` を要素のないタプルにするので、translate は
     /// `Unit` の行を読まない。この行が要素のないタプルの Repr と同じであることは、結合テストが確かめる。
     pub repr: Repr,
@@ -141,13 +146,20 @@ impl ExternType {
         ExternType::String,
         ExternType::Unit,
         ExternType::File,
+        ExternType::Array,
+        ExternType::MutArray,
     ];
 
     pub fn row(self) -> TypeRow {
         let row = |name, linearity, repr| TypeRow {
             name,
             linearity,
+            params: 0,
             repr,
+        };
+        let generic = |name, linearity| TypeRow {
+            params: 1,
+            ..row(name, linearity, Repr::Obj)
         };
         match self {
             ExternType::Int => row("Prelude.Int", Linearity::Unr, Repr::Int),
@@ -155,6 +167,8 @@ impl ExternType {
             ExternType::String => row("Prelude.String", Linearity::Unr, Repr::Obj),
             ExternType::Unit => row("Prelude.Unit", Linearity::Unr, Repr::Unit),
             ExternType::File => row("Std.Fs.File", Linearity::Lin, Repr::Obj),
+            ExternType::Array => generic("Prelude.Array", Linearity::Unr),
+            ExternType::MutArray => generic("Prelude.MutArray", Linearity::Lin),
         }
     }
 

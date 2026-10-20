@@ -22,7 +22,7 @@ item        ::= 'pub'? ('extern' extern_decl | decl)
               | instance_item
 decl        ::= signature | data_item | type_item | effect_item | fixity_item | class_item
 
-extern_decl ::= signature | 'data' UIDENT | 'effect' UIDENT ('where' block(op_decl))?
+extern_decl ::= signature | 'data' UIDENT LIDENT* | 'effect' UIDENT ('where' block(op_decl))?
 signature   ::= var ':' context? type
 var         ::= LIDENT | '(' OP ')'
 equation    ::= LIDENT apat* '=' body
@@ -112,7 +112,7 @@ command     ::= CMD_START (CMD_TEXT | ESCAPE | '\{' '..'? expr INTERP_END)* CMD_
 ## 文法上の補足
 
 - `import_item` は、ファイルの先頭で宣言より前に書く。宣言の後の `import_item` は E0011 にする。`import_name` の `'(' OP ')'` は `:` で始まらない演算子なので、`((:+))` も E0011 にする。CST はどちらも組む ([モジュールと名前解決](modules.md) の「import」)
-- `extern` は宣言の修飾子で、`pub` の後に書く。後ろに続けられるのは、等式のないシグネチャ、`=` と Kind の宣言のない型引数なしの `data`、型引数なしの `effect` だけである。`effect` には、普通の `effect` と同じく `where` と操作の並びを書ける。ほかの形 (`extern type`、`extern infixl`、`extern data T = …`、`extern effect E = …`、型引数のある `data` と `effect`、`extern pub`) は E0011 にする。`extern` を書けるのは標準ライブラリのモジュールだけで、ユーザーのモジュールに書くと HIR で E1033 になる ([宣言](declarations.md) の「`extern`」)
+- `extern` は宣言の修飾子で、`pub` の後に書く。後ろに続けられるのは、等式のないシグネチャ、`=` と Kind の宣言のない `data` (型引数は型変数の名前だけ)、型引数なしの `effect` だけである。`effect` には、普通の `effect` と同じく `where` と操作の並びを書ける。ほかの形 (`extern type`、`extern infixl`、`extern data T = …`、`extern effect E = …`、型引数のある `effect`、`extern pub`) は E0011 にする。`extern` を書けるのは標準ライブラリのモジュールだけで、ユーザーのモジュールに書くと HIR で E1033 になる ([宣言](declarations.md) の「`extern`」)
 - 文脈 `context` は、型として読める形 (`Eq a`、`(Eq a, Show b)`) の後に `=>` を書いたものである。parser は、`signature` と `op_decl` の `:` の後と、`class` と `instance` のキーワードの後で、括弧の入れ子の外の `=>` が型の終わりより前にあるかを先読みし、あれば文脈として読む。括弧の外の `->`、`=`、`where` とブロックの始まりは文脈の後ろにしか現れないので、そこで先読みをやめる (中置のコンストラクタの `alt` の先読みと同じ形)。CST は `CONTEXT` の節点の下に、制約ごとの `CONSTRAINT` を置く。制約の形 (クラスの名前と1つの型変数) は HIR で検査する (E1040)
 - 文脈の構文があるのは、`signature` (トップレベルの関数、extern の関数、クラスのメソッド)、`op_decl`、`class` と `instance` の頭である。extern のシグネチャと操作のシグネチャの文脈は、構文として読んだうえで HIR が E1040 にする ([宣言](declarations.md) の「宣言の検査」)。本体の型の明示 `(e : T)`、ラムダの引数の型、`data` のフィールドの型には文脈の構文がなく、そこに書いた `=>` は E0011 になる
 - `pub` は `class` に付けられる。`pub instance` は E0011 にする。instance は名前を持たず、いつもプログラム全体で見えるためである ([モジュールと名前解決](modules.md) の「instance の一貫性」)。`class` と `instance` のブロックの中の `pub` も E0011 にする。メソッドはクラスと一緒に公開するためである
