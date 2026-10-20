@@ -7,8 +7,11 @@ use eml_test_support::{lir, lir_files, run_stats};
 use eml_vm::RunStats;
 
 /// テストを持つ基準のプログラム。`bench/` にプログラムを足したら、ここと下のテストの関数の両方に足す。
-const PROGRAMS: [&str; 32] = [
+const PROGRAMS: [&str; 36] = [
+    "apply_float",
+    "apply_int",
     "empty",
+    "ep_float",
     "fannkuch_by_hand",
     "fannkuch_var",
     "fib",
@@ -26,6 +29,7 @@ const PROGRAMS: [&str; 32] = [
     "push_fold_by_hand",
     "rbtree",
     "records",
+    "records_wide",
     "sieve_by_hand",
     "sieve_var",
     "spectral_norm",
@@ -95,6 +99,93 @@ fn every_program_in_bench_has_a_test() {
             "`{name}` has no test function"
         );
     }
+}
+
+#[test]
+fn apply_float() {
+    insta::assert_debug_snapshot!(stats("apply_float", "2.0\n"), @"
+    RunStats {
+        evidence_steps: 0,
+        yields: 0,
+        yield_frames: 0,
+        unwound_frames: 0,
+        string_bytes_copied: 3,
+        rc_increments: 0,
+        rc_decrements: 200001,
+        boxes: 200000,
+        unboxes: 200000,
+        allocations: 200002,
+        reuses: 0,
+        peak_objects: 2,
+        peak_stack: 23,
+    }
+    ");
+}
+
+#[test]
+fn apply_int() {
+    insta::assert_debug_snapshot!(stats("apply_int", "100000\n"), @"
+    RunStats {
+        evidence_steps: 0,
+        yields: 0,
+        yield_frames: 0,
+        unwound_frames: 0,
+        string_bytes_copied: 6,
+        rc_increments: 0,
+        rc_decrements: 1,
+        boxes: 200000,
+        unboxes: 200000,
+        allocations: 2,
+        reuses: 0,
+        peak_objects: 2,
+        peak_stack: 23,
+    }
+    ");
+}
+
+#[test]
+fn ep_float() {
+    insta::assert_debug_snapshot!(stats("ep_float", "2500025000.0\n"), @"
+    RunStats {
+        evidence_steps: 200000,
+        yields: 0,
+        yield_frames: 0,
+        unwound_frames: 0,
+        string_bytes_copied: 12,
+        rc_increments: 400005,
+        rc_decrements: 500013,
+        boxes: 300003,
+        unboxes: 300001,
+        allocations: 100009,
+        reuses: 0,
+        peak_objects: 8,
+        peak_stack: 50,
+    }
+    ");
+}
+
+#[test]
+fn records_wide() {
+    insta::assert_debug_snapshot!(
+        stats("records_wide", "100000 49764648 999 223 33086607712 50000 678\n"),
+        @"
+    RunStats {
+        evidence_steps: 0,
+        yields: 0,
+        yield_frames: 0,
+        unwound_frames: 0,
+        string_bytes_copied: 78,
+        rc_increments: 0,
+        rc_decrements: 11,
+        boxes: 0,
+        unboxes: 0,
+        allocations: 12,
+        reuses: 100000,
+        peak_objects: 5,
+        peak_stack: 41,
+    }
+    "
+    );
 }
 
 #[test]
@@ -861,6 +952,10 @@ fn rebuilding_programs_reuse_boxes() {
         ("upsert", "2000 k1182 23\n"),
         ("orders", "150308561\n"),
         ("records", "100000 49764648 999 223\n"),
+        (
+            "records_wide",
+            "100000 49764648 999 223 33086607712 50000 678\n",
+        ),
         ("rbtree", "9997\n"),
         ("tree_map", "33714156\n"),
         ("std_list", "887099805\n"),
@@ -934,7 +1029,10 @@ fn unwind_points() {
         ));
     }
     insta::assert_snapshot!(lines.join("\n"), @"
+    apply_float: 9
+    apply_int: 13
     empty: 0
+    ep_float: 14
     fannkuch_by_hand: 39
     fannkuch_var: 81
     fib: 7
@@ -952,6 +1050,7 @@ fn unwind_points() {
     push_fold_by_hand: 4
     rbtree: 12
     records: 9
+    records_wide: 13
     sieve_by_hand: 14
     sieve_var: 34
     spectral_norm: 71
