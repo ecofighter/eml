@@ -49,7 +49,7 @@ fn shared_wrappers_are_never_called_directly() {
         .map(|function| function.name.as_str())
         .filter(|name| is_shared_wrapper(name))
         .collect();
-    assert_eq!(names, ["op$ask", "con$P", "cont$"]);
+    assert_eq!(names, ["op$ask", "con$P", "cont$@[Int, Int]"]);
     let shared = |target: &FnIdx| is_shared_wrapper(&program.functions[target.0 as usize].name);
     for function in &program.functions {
         for block in &function.blocks {

@@ -819,3 +819,20 @@ fn ui_programs_take_the_conversion_paths_they_describe() {
     );
     assert_eq!((stats.conversions, stats.boxes), (0, 0), "{stats:?}");
 }
+
+/// 値として使うコンストラクタは型ごとの instance (`con$Some@[Int]`) なので、型どおりの `apply` は速い道を通る。
+/// スキームから決めた包む関数 (引数が `tobj`) では、呼ぶたびに引数を変換していた
+/// (docs/superpowers/specs/2026-10-21-s14e-abi-struct-design.md の「関数の ABI」)。残る `box` は `Some` の
+/// フィールドに `Int` を入れる箱である。
+#[test]
+fn a_constructor_value_applied_at_its_type_does_not_convert() {
+    let text = "data Box a = | Box a\n\nhide : Int -> a -> <Panic> Box a\nhide n x = if n <= 0 then Box x else hide (n - 1) x\n\nget : Option Int -> Int\nget o = match o with\n  | Some n -> n\n  | None -> 0\n\nloop : (Int -> Option Int) -> Int -> Int -> <Panic> Int\nloop f i acc = if i == 0 then acc else loop f (i - 1) (acc + get (f i))\n\nmain : Unit -> <IO, Panic> Unit\nmain () =\n  let Box f = hide 0 Some\n  println (show (loop f 1000 0))";
+    let (out, result) = eml_test_support::run_stats(text);
+    assert_eq!(out, "500500\n", "{result:?}");
+    let stats = result.unwrap_or_else(|error| panic!("{error}"));
+    assert_eq!(
+        (stats.conversions, stats.boxes, stats.unboxes),
+        (0, 1000, 1000),
+        "{stats:?}"
+    );
+}

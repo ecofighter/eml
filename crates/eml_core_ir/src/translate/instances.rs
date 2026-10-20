@@ -171,6 +171,8 @@ pub(super) struct Instances {
     pub(super) display: Option<Part>,
     /// 型検査の型の表に、代入の結果を足した表。
     pub(super) store: TypeStore,
+    /// instance の名前と、変換が作る型ごとの包む関数の名前 (`wrapper_name`) に使う表。
+    pub(super) names: NameTable,
 }
 
 /// 見つけた順の instance。番号の順は、すべて見つけてから決める。
@@ -993,6 +995,23 @@ fn instance_name(
     }
 }
 
+/// translate の包む関数 (`op$`、`con$`、`cont$`、`cont$state`) の名前。ほかの instance と同じく型引数を書き、型変数の
+/// ないスキームでは `base` のままにする。包む関数は引数と結果の Repr を具体化した型から決めるので、名前が型引数を
+/// 持たないと、同じ名前の関数が違うコードになるためである
+/// (docs/superpowers/specs/2026-10-21-s14e-abi-struct-design.md の「関数の ABI」)。
+pub(super) fn wrapper_name(
+    store: &TypeStore,
+    names: &NameTable,
+    base: &str,
+    args: &[TypeId],
+) -> String {
+    if args.is_empty() {
+        base.to_string()
+    } else {
+        instance_name(store, names, base, args, "")
+    }
+}
+
 /// 生成する関数の、鍵を付ける前の名前 (docs/spec/core-ir.md の「メソッドの解決」)。
 /// 手で書いた instance のメソッドと同じ形で、導出した instance は型を定義したモジュールで、タプルと `Unit` は
 /// Prelude で修飾する。補助の `tag$` は `con$` と同じ修飾の規則に従う。
@@ -1163,6 +1182,7 @@ fn order(
         entry: InstanceId(renumbered[entry]),
         display: display.map(|part| part.renumber(&renumbered)),
         store,
+        names,
     }
 }
 

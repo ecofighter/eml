@@ -1069,9 +1069,8 @@ fn a_masked_call_in_a_non_yielding_function_has_no_slow_path() {
 #[test]
 fn continuations_of_many_yield_points_stay_linear_in_size() {
     // 継続の関数の大きさは元のコードの2倍ほどに収まる (docs/spec/core-ir.md の「継続の関数」)。`ask` 1つにつき、`f` は
-    // 呼び出しと確認と遅い道で7個、継続の関数 `f$kN` は引数を足して9個、boxing が足す `f$kN$boxed` は4個の変数を
-    // 持つ。N = 2000 で測ると合わせて 40069 個 (20N 個ほど) になる。継続の関数が元の関数の変数の表を丸ごと写すと、
-    // N^2 個ほどになる
+    // 呼び出しと確認と遅い道で7個、継続の関数 `f$kN` は12個の変数を持つ。N = 2000 で測ると合わせて 38078 個 (19N 個
+    // ほど) になる。継続の関数が元の関数の変数の表を丸ごと写すと、N^2 個ほどになる
     const COUNT: usize = 2000;
     let text = format!(
         "{ASK}{HIDE}f : Unit -> <Ask> Int\nf () =\n{}  0\n\nmain : Unit -> <IO, Panic> Unit\nmain () =\n  let Box g = hide 0 f\n  let r = handle g () with\n            | ctl ask () k -> k 1\n  println (show r)",
@@ -1271,7 +1270,7 @@ main () =
             })
             .collect()
     };
-    for name in ["prompt$", "resume$", "cont$", "main$handle0$ask"] {
+    for name in ["prompt$", "resume$", "cont$@[Int, Int]", "main$handle0$ask"] {
         let sites = applies(function(name));
         assert!(!sites.is_empty(), "`{name}` applies\n{shown}");
         assert!(

@@ -120,12 +120,12 @@ main () =
       println s
       k ()
 ";
-    insta::assert_snapshot!(function(&core_text(text, Pass::Optimize), "render$handle0"), @"
+    insta::assert_snapshot!(function(&core_text(text, Pass::Optimize), "render$handle0"), @r#"
     internal yields role body fn render$handle0(p.0: unit) -> unit {
-      let t.1: unit = mask [Yield@1] yields apply &op$yield(1: int)
+      let t.1: unit = mask [Yield@1] yields apply &"op$yield@[Int]"(1: int)
       return t.1
     }
-    ");
+    "#);
 }
 
 #[test]
@@ -187,21 +187,12 @@ main () =
     "#);
 }
 
-/// 書き換えで使われなくなった `closure` は残さない。値として参照されなくなった `add` に、box の挿入が `add$boxed` を
-/// 作らないためである。
+/// 書き換えで使われなくなった `closure` は残さない。
 #[test]
 fn a_closure_whose_applies_are_all_rewritten_is_dropped() {
     let text = "add : Int -> Int -> <Panic> Int\nadd x y = x + y\n\nmain : Unit -> <IO, Panic> Unit\nmain () =\n  let g = add 1\n  println (show (g 2))";
     let shown = core_text(text, Pass::Optimize);
     assert!(!shown.contains("closure add("), "{shown}");
-    let lir = eml_test_support::lir(text);
-    assert!(
-        lir.functions
-            .iter()
-            .all(|function| function.name != "add$boxed"),
-        "{}",
-        eml_lir::pretty(&lir)
-    );
 }
 
 /// 値をデータに入れて取り出す。取り出した値は既知の閉包でないので、handle の本体に届いても handler への特殊化の
@@ -520,8 +511,7 @@ main () =
 }
 
 /// translate の関数の中で既知の閉包を捕まえた節の複製も、持ち主の handle が値として使うだけなので `internal` にする。
-/// そうしないと box の挿入が `$boxed` を挟み、yield するたびに `box` と `unbox` が増える
-/// (docs/spec/core-ir.md の「handle を含む関数の複製」)。
+/// 複製は複製元の節の `internal` の印を写す (docs/spec/core-ir.md の「鍵と名前」「handle を含む関数の複製」)。
 #[test]
 fn a_clause_copy_in_a_translated_function_is_internal() {
     let text = format!(
@@ -549,14 +539,6 @@ main () =
         .find(|function| function.name == "main$handle0$yield{0=main$lambda0}")
         .unwrap_or_else(|| panic!("{}", pretty(&program)));
     assert!(copy.internal, "{}", pretty(&program));
-    let lir = eml_test_support::lir(&text);
-    assert!(
-        lir.functions
-            .iter()
-            .all(|function| !function.name.ends_with("}$boxed")),
-        "{}",
-        eml_lir::pretty(&lir)
-    );
 }
 
 /// 同じ関数の閉包でも、捕獲の数が違えば鍵が違う。名前にも捕獲の数を書き、同じ名前の関数が2つにならないようにする

@@ -672,7 +672,7 @@ pub(crate) fn replace(
     match call {
         Call::Direct(target, args) => {
             let callee = &callees[target.0 as usize];
-            let rhs = instruction(vars, callee.wrapper?, args.clone(), mask)?;
+            let rhs = instruction(vars, callee, args.clone(), mask)?;
             Some(vec![Stmt::Let { var, rhs }])
         }
         Call::Apply {
@@ -754,23 +754,21 @@ fn saturated(
     args: Vec<Atom>,
     mask: &[MaskItem],
 ) -> Rhs {
-    callee
-        .wrapper
-        .and_then(|wrapper| instruction(vars, wrapper, args.clone(), mask))
-        .unwrap_or_else(|| Rhs::Call {
-            call: Call::Direct(target, args),
-            mask: mask.to_vec(),
-        })
+    instruction(vars, callee, args.clone(), mask).unwrap_or_else(|| Rhs::Call {
+        call: Call::Direct(target, args),
+        mask: mask.to_vec(),
+    })
 }
 
-/// 包む関数の命令に `args` を渡す右辺。`perform` は `mask` を持てないので、`mask` があれば `None` を返す。
+/// 包む関数 `callee` の命令に `args` を渡す右辺。包む関数でないか、`perform` に `mask` が付くなら `None` を返す。
+/// `perform` は `mask` を持てないためである。
 fn instruction(
     vars: &[VarInfo],
-    wrapper: Wrapper,
+    callee: &Callee,
     args: Vec<Atom>,
     mask: &[MaskItem],
 ) -> Option<Rhs> {
-    match wrapper {
+    match callee.wrapper? {
         Wrapper::Perform {
             effect,
             op,
@@ -791,9 +789,14 @@ fn instruction(
             let k = args.next().expect("a continuation wrapper takes k");
             let arg = args.next().expect("a continuation wrapper takes a value");
             let state = args.next().unwrap_or(Atom::Unit);
-            // 定数の引数の Repr は、`cont$` の引数の Repr (`tobj`) である。状態のない handler の状態は `()` である
-            let state_repr = if stateful { Repr::TObj } else { Repr::Unit };
-            let site = [(arg, Repr::TObj), (state, state_repr)]
+            // 定数の引数の Repr は型ごとの `cont$` の引数の Repr である。translate の `resume` の場所と同じく
+            // `k` の型から決まる。状態のない handler の状態は `()` である
+            let state_repr = if stateful {
+                callee.params[2].repr
+            } else {
+                Repr::Unit
+            };
+            let site = [(arg, callee.params[1].repr), (state, state_repr)]
                 .into_iter()
                 .map(|(atom, param)| match atom {
                     Atom::Var(var) => vars[var.0 as usize].repr,

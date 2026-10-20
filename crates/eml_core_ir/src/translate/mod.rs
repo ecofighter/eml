@@ -30,7 +30,8 @@ use eml_lir::{Atom, Case, CasePattern, FALSE, FnIdx, Loc, Mark, Repr, Role, TRUE
 
 use crate::builder::{FnBuilder, Label};
 use expr::extern_row;
-use instances::{InstanceKind, Part, Target};
+use instances::{InstanceKind, Part, Target, wrapper_name};
+use names::NameTable;
 use pattern::{Known, MatchCtx, Occ, Scrutinee, destructures};
 use program::{EntryAfter, ProgramBuilder, ShowTarget, Shown, effect_table};
 use types::{mark, named, repr, split_arrows, var_info};
@@ -382,6 +383,7 @@ pub(crate) fn translate(
             targets: &function.targets,
             indices: &indices,
             root_name: &instance.name,
+            names: &instances.names,
             numbering: &numbers,
             continuation_forms: &forms,
             references: &references,
@@ -522,6 +524,8 @@ struct BodyCtx<'a> {
     indices: &'a [FnIdx],
     /// ラムダ、handle、extern を包む関数の名前に使う、トップレベルの関数の instance の名前。
     root_name: &'a str,
+    /// 型ごとの包む関数の名前に使う表 (`instances::wrapper_name`)。
+    names: &'a NameTable,
     numbering: &'a Numbering,
     /// 本体の中の節の `k` の変換の形。持ち上げた入れ子の関数も同じ表を見て、捕まえた `k` を同じ形で扱う。
     continuation_forms: &'a ArenaMap<LocalId, ContinuationForm>,
@@ -691,9 +695,7 @@ impl<'a> FnLowering<'a> {
         }
         // 引数の変数をすべて作ってから包み、分解する。関数の引数の番号を、ほかの変数より前にそろえるため
         for (local, var) in wrapped {
-            let wrapper = self
-                .program
-                .continuation_wrapper(body.continuations[local] == 2);
+            let wrapper = self.continuation_wrapper(local);
             // 包んだ `k` は生の継続と同じ値なので、`k` の型の矢印の線形性で決める
             let k_mark = mark(self.ctx.store, self.ctx.types.locals[local], self.ctx.hir);
             let closure = self.closure(wrapper, vec![Atom::Var(var)], k_mark);
@@ -706,6 +708,20 @@ impl<'a> FnLowering<'a> {
         let (ret, ret_mark) = ret;
         self.builder
             .finish(name.to_string(), internal, self.yields, ret, ret_mark)
+    }
+
+    /// 節の `k` (局所変数 `local`) を包む、`k` の型ごとの関数。名前の型引数は、再開の値と状態 (状態のある handler
+    /// だけ) と結果の型である (docs/superpowers/specs/2026-10-21-s14e-abi-struct-design.md の「関数の ABI」)。
+    fn continuation_wrapper(&mut self, local: LocalId) -> FnIdx {
+        let (hir, store) = (self.ctx.hir, self.ctx.store);
+        let arity = self.ctx.body.continuations[local];
+        let (params, result) = split_arrows(store, self.ctx.types.locals[local], arity);
+        let base = if arity == 2 { "cont$state" } else { "cont$" };
+        let mut args = params.clone();
+        args.push(result);
+        let name = wrapper_name(store, self.ctx.names, base, &args);
+        self.program
+            .continuation_wrapper(hir, store, name, &params, result)
     }
 
     /// `root` を、捕まえた変数を先頭の引数に持つ関数に持ち上げ、そのクロージャを作る (docs/spec/core-ir.md)。ラムダと、

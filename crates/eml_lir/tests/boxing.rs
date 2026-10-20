@@ -295,7 +295,7 @@ fn a_clause_function_keeps_its_captures_uniform() {
 
 #[test]
 fn a_never_clause_call_is_not_rebound() {
-    // `never` の操作の節の呼び出しは戻らないので、`int` の束縛を受け直さず、`return` にも変換を入れない。T3 も見ない
+    // `never` の操作の節の呼び出しは戻らないので、`int` の束縛を受け直さず、`return` にも変換を入れない
     let text = "effect Fail { never fail(tobj) -> never }\nyields fn f(c.0: tobj, e.1: obj, s.2: obj) -> int {\n  let r.3: int = clause Fail.fail c.0(e.1, s.2)\n  return r.3\n}\n";
     insta::assert_snapshot!(function(&boxing_text(text), "f"), @"
     yields fn f(c.0: tobj, e.1: obj, s.2: obj) -> int {
@@ -307,14 +307,14 @@ fn a_never_clause_call_is_not_rebound() {
 
 #[test]
 fn the_uses_of_a_never_clause_binder_are_not_converted() {
-    // `int` の束縛を `tobj` の位置 (`apply` の引数と `tobj` の `ret` の `return`) へ渡しても `box` しない。使いには制御が
+    // `int` の束縛を `tobj` の位置 (一様な `apply` の引数と `tobj` の `ret` の `return`) へ渡しても `box` しない。使いには制御が
     // 届かないからである
-    let text = "effect Fail { never fail(tobj) -> never }\nyields fn f(c.0: tobj, e.1: obj, s.2: obj, k.3: tobj) -> tobj {\n  let r.4: int = clause Fail.fail c.0(e.1, s.2)\n  let t.5: tobj = apply k.3(r.4)\n  return t.5\n}\nyields fn g(c.0: tobj, e.1: obj, s.2: obj) -> tobj {\n  let r.3: int = clause Fail.fail c.0(e.1, s.2)\n  return r.3\n}\n";
+    let text = "effect Fail { never fail(tobj) -> never }\nyields fn f(c.0: tobj, e.1: obj, s.2: obj, k.3: tobj) -> tobj {\n  let r.4: int = clause Fail.fail c.0(e.1, s.2)\n  let t.5: tobj = uniform apply k.3(r.4)\n  return t.5\n}\nyields fn g(c.0: tobj, e.1: obj, s.2: obj) -> tobj {\n  let r.3: int = clause Fail.fail c.0(e.1, s.2)\n  return r.3\n}\n";
     let shown = boxing_text(text);
     insta::assert_snapshot!(function(&shown, "f"), @"
     yields fn f(c.0: tobj, e.1: obj, s.2: obj, k.3: tobj) -> tobj {
       let r.4: int = clause Fail.fail c.0(e.1, s.2)
-      let t.5: tobj = apply k.3(r.4)
+      let t.5: tobj = uniform apply k.3(r.4)
       return t.5
     }
     ");

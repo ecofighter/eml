@@ -614,3 +614,84 @@ fn a_top_level_function_in_a_once_field_lowers() {
     // (docs/spec/core-ir.md の「インライン化」)
     assert_eq!(names, ["hide@[Task]", "worker"]);
 }
+
+/// `Pass::Translate` の後の、`base` の包む関数の見出しの行。`base` だけの名前と、`base@[…]` の名前を表示の順に並べる。
+fn wrapper_headers(text: &str, base: &str) -> Vec<String> {
+    let shown = core_text(text, Pass::Translate);
+    let plain = format!("fn {base}(");
+    let quoted = format!("fn \"{base}\"(");
+    let instance = format!("fn \"{base}@[");
+    shown
+        .lines()
+        .filter(|line| {
+            [&plain, &quoted, &instance]
+                .iter()
+                .any(|start| line.contains(*start))
+        })
+        .map(str::to_string)
+        .collect()
+}
+
+const APPLY_TO: &str = "apply_to : (a -> <e> b) -> a -> <e> b\napply_to f x = f x\n\n";
+
+/// `con$`、`op$`、`cont$` は型ごとの instance で、名前に型引数を書き、引数と結果を具体化した型の Repr で持つ。スキームの
+/// 型変数を `tobj` にすると、型どおりの `apply` が呼ぶたびに実行時の変換を通るためである
+/// (docs/superpowers/specs/2026-10-21-s14e-abi-struct-design.md の「関数の ABI」)。
+#[test]
+fn wrappers_are_per_type_instances() {
+    let text = format!(
+        "{APPLY_TO}main : Unit -> <IO> Unit\nmain () =\n  let _ = apply_to Some 1\n  let _ = apply_to Some \"s\"\n  ()"
+    );
+    assert_eq!(
+        wrapper_headers(&text, "con$Prelude.Some"),
+        [
+            "internal fn \"con$Prelude.Some@[Int]\"(p.0: int) -> tobj {",
+            "internal fn \"con$Prelude.Some@[String]\"(p.0: obj) -> tobj {",
+        ]
+    );
+}
+
+#[test]
+fn operation_wrappers_are_per_type_instances() {
+    let text = "effect Read a where\n  read : Unit -> a\n\nuse_float : (Unit -> <Read Float> Float) -> <Read Float> Float\nuse_float f = f ()\n\nuse_int : (Unit -> <Read Int> Int) -> <Read Int> Int\nuse_int f = f ()\n\nmain : Unit -> <IO> Unit\nmain () =\n  let x = handle use_float read with\n    | ctl read () k -> k 0.5\n  let n = handle use_int read with\n    | ctl read () k -> k 1\n  println (show x ++ show n)";
+    assert_eq!(
+        wrapper_headers(text, "op$read"),
+        [
+            "internal yields fn \"op$read@[Float]\"(p.0: unit) -> float {",
+            "internal yields fn \"op$read@[Int]\"(p.0: unit) -> int {",
+        ]
+    );
+}
+
+/// `$externN` は参照する場所ごとの関数で、名前の根の instance の型で引数と結果の Repr を持つ。
+#[test]
+fn extern_wrappers_take_the_types_of_their_instance() {
+    let text = format!(
+        "{APPLY_TO}describe : Show a => a -> String\ndescribe x = apply_to show x\n\nmain : Unit -> <IO> Unit\nmain () = println (describe 1 ++ describe 1.5)"
+    );
+    assert_eq!(
+        wrapper_headers(&text, "describe@[Int]$extern0")
+            .into_iter()
+            .chain(wrapper_headers(&text, "describe@[Float]$extern0"))
+            .collect::<Vec<_>>(),
+        [
+            "internal fn \"describe@[Int]$extern0\"(p.0: int) -> obj {",
+            "internal fn \"describe@[Float]$extern0\"(p.0: float) -> obj {",
+        ]
+    );
+}
+
+#[test]
+fn continuation_wrappers_are_per_type_instances() {
+    let text = "effect Ask where\n  ask : Unit -> Float\n\ntwice : (Float -> <e> Int) -> <e> Int\ntwice f = f 1.5\n\nlater : (Float -> Int -> <e> Int) -> <e> Int\nlater f = f 2.5 1\n\nmain : Unit -> <IO, Panic> Unit\nmain () =\n  let n =\n    handle (if ask () > 0.0 then 1 else 0) with\n      | ctl ask () k -> twice k\n  let m =\n    handle (if ask () > 0.0 then 1 else 0) from 0 with\n      | ctl ask () k st -> later k\n      | return x _ -> x\n  println (show (n + m))";
+    assert_eq!(
+        wrapper_headers(text, "cont$"),
+        ["internal yields fn \"cont$@[Float, Int]\"(k.0: tobj poly, v.1: float) -> int {"]
+    );
+    assert_eq!(
+        wrapper_headers(text, "cont$state"),
+        [
+            "internal yields fn \"cont$state@[Float, Int, Int]\"(k.0: tobj poly, v.1: float, s.2: int) -> int {"
+        ]
+    );
+}

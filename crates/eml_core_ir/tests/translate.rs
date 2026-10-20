@@ -372,19 +372,19 @@ fn handlers_are_lifted_with_their_return_reprs() {
 fn a_continuation_passed_to_a_function_is_wrapped() {
     let text = "effect Ask where\n  ask : Unit -> Int\n\ntwice : (Int -> <e> Int) -> <e> Int\ntwice f = f 1\n\nmain : Unit -> <IO> Unit\nmain () =\n  let n =\n    handle ask () with\n      | ctl ask () k -> twice k\n  println (show n)";
     let shown = core_text(text, Pass::Translate);
-    insta::assert_snapshot!(function(&shown, "main$handle0$ask"), @"
+    insta::assert_snapshot!(function(&shown, "main$handle0$ask"), @r#"
     internal role clause fn main$handle0$ask(p.0: unit, k.1: tobj lin, p.2: unit) -> int {
-      let c.3: tobj lin = closure cont$(k.1)
+      let c.3: tobj lin = closure "cont$@[Int, Int]"(k.1)
       let t.4: int = call twice(c.3)
       return t.4
     }
-    ");
-    insta::assert_snapshot!(function(&shown, "cont$"), @"
-    internal yields fn cont$(k.0: tobj poly, v.1: tobj poly) -> tobj poly {
-      let t.2: tobj poly = resume k.0(v.1, (): unit)
+    "#);
+    insta::assert_snapshot!(function(&shown, "cont$@[Int, Int]"), @r#"
+    internal yields fn "cont$@[Int, Int]"(k.0: tobj poly, v.1: int) -> int {
+      let t.2: int = resume k.0(v.1, (): unit)
       return t.2
     }
-    ");
+    "#);
 }
 
 #[test]
@@ -1327,19 +1327,19 @@ fn constructors_with_fields_build_values() {
 fn a_constructor_used_as_a_function_value_is_wrapped() {
     let text = "data Pair a b =\n  | Pair a b\n\npairs : Int -> Pair Int Int\npairs n =\n  let make = Pair n\n  make 2\n\nmain : Unit -> <IO> Unit\nmain () =\n  let _ = pairs 1\n  ()";
     let shown = core_text(text, Pass::Translate);
-    insta::assert_snapshot!(function(&shown, "pairs"), @"
+    insta::assert_snapshot!(function(&shown, "pairs"), @r#"
     fn pairs(n.0: int) -> obj {
-      let c.1: tobj = closure con$Pair(n.0)
+      let c.1: tobj = closure "con$Pair@[Int, Int]"(n.0)
       let t.2: obj = apply c.1(2: int)
       return t.2
     }
-    ");
-    insta::assert_snapshot!(function(&shown, "con$Pair"), @"
-    internal fn con$Pair(p.0: tobj poly, p.1: tobj poly) -> obj poly {
-      let d.2: obj poly = con Pair #0(p.0, p.1)
+    "#);
+    insta::assert_snapshot!(function(&shown, "con$Pair@[Int, Int]"), @r#"
+    internal fn "con$Pair@[Int, Int]"(p.0: int, p.1: int) -> obj {
+      let d.2: obj = con Pair #0(p.0, p.1)
       return d.2
     }
-    ");
+    "#);
 }
 
 #[test]
@@ -2087,13 +2087,16 @@ fn a_partial_continuation_is_wrapped_with_the_state_wrapper() {
         "later : (Int -> <e> Int) -> Int -> <e> Int\nlater f s = f s\n\n",
         "    handle ask () from 0 with\n      | ctl ask () k st -> later (k 1) st\n      | return x _ -> x",
     );
-    assert!(shown.contains("closure cont$state(k"), "{shown}");
-    insta::assert_snapshot!(function(&shown, "cont$state"), @"
-    internal yields fn cont$state(k.0: tobj poly, v.1: tobj poly, s.2: tobj poly) -> tobj poly {
-      let t.3: tobj poly = resume k.0(v.1, s.2)
+    assert!(
+        shown.contains("closure \"cont$state@[Int, Int, Int]\"(k"),
+        "{shown}"
+    );
+    insta::assert_snapshot!(function(&shown, "cont$state@[Int, Int, Int]"), @r#"
+    internal yields fn "cont$state@[Int, Int, Int]"(k.0: tobj poly, v.1: int, s.2: int) -> int {
+      let t.3: int = resume k.0(v.1, s.2)
       return t.3
     }
-    ");
+    "#);
 }
 
 /// `drop k` だけなら包まない。
@@ -2887,22 +2890,23 @@ fn derived_generators_are_unr() {
 }
 
 #[test]
-fn wrappers_read_declaration_types_conservatively() {
-    // `op$` と `con$` は宣言の型を代入せずに読むので、型変数に依存する位置は `poly` になる
+fn wrappers_take_the_reprs_and_marks_of_their_instance() {
+    // `op$` と `con$` は型ごとの instance なので、型変数の位置も具体化した型の Repr と印になる
+    // (docs/superpowers/specs/2026-10-21-s14e-abi-struct-design.md の「関数の ABI」)
     let text = "effect Pass e where\n  pass : e -> Fs.File -> e\n\ndata Box a = | Box a Fs.File\n\nuse_op : (Int -> Fs.File -> <Pass Int, IO> Int) -> <Pass Int, IO> Int\nuse_op op = op 1 (Fs.open \"a.txt\")\n\nmain : Unit -> <IO> Unit\nmain () =\n  let n = handle use_op pass with\n    | ctl pass x g k ->\n        Fs.close g\n        k x\n  let mk = Box n\n  match mk (Fs.open \"a.txt\") with\n    | Box m f ->\n        Fs.close f\n        println (show m)";
     let ir = core_text(text, Pass::Translate);
-    insta::assert_snapshot!(function(&ir, "op$pass"), @"
-    internal yields fn op$pass(p.0: tobj poly, p.1: obj lin) -> tobj poly {
-      let t.2: tobj poly = perform Pass.pass(p.0, p.1)
+    insta::assert_snapshot!(function(&ir, "op$pass@[Int]"), @r#"
+    internal yields fn "op$pass@[Int]"(p.0: int, p.1: obj lin) -> int {
+      let t.2: int = perform Pass.pass(p.0, p.1)
       return t.2
     }
-    ");
-    insta::assert_snapshot!(function(&ir, "con$Box"), @"
-    internal fn con$Box(p.0: tobj poly, p.1: obj lin) -> obj lin {
+    "#);
+    insta::assert_snapshot!(function(&ir, "con$Box@[Int]"), @r#"
+    internal fn "con$Box@[Int]"(p.0: int, p.1: obj lin) -> obj lin {
       let d.2: obj lin = con Box #0(p.0, p.1)
       return d.2
     }
-    ");
+    "#);
 }
 
 const CLOSE_ALL: &str = "close_all : List Fs.File -> <IO> Unit\nclose_all [] = println \"closed\"\nclose_all (f :: rest) =\n  Fs.close f\n  close_all rest\n\n";

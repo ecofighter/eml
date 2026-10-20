@@ -18,7 +18,7 @@ use eml_lir::{
 use crate::builder::FnBuilder;
 
 use super::display::BUDGET;
-use super::types::{declared_mark, declared_var_info, mark, named, repr, split_arrows, var_info};
+use super::types::{declared_mark, mark, named, repr, split_arrows, var_info};
 
 /// 文字列リテラルと表示用のパスの表。同じ文字列には同じ番号を返す。
 #[derive(Default)]
@@ -81,16 +81,11 @@ pub(super) struct ProgramBuilder {
     /// IR が名指す data の型とタプルの配置 (`Program.layouts`)。最初に使った順に番号を振る。
     pub(super) layouts: Vec<Layout>,
     layout_ids: HashMap<LayoutKey, LayoutId>,
-    /// 操作のスキームの型。操作を包む関数の変数の Repr と印を決める。
-    operation_types: HashMap<OperationId, TypeId>,
-    operation_wrappers: HashMap<OperationId, FnIdx>,
-    /// コンストラクタのスキームの型。コンストラクタを包む関数の変数の Repr と印を決める。
+    /// コンストラクタのスキームの型。data の型の配置のフィールドの Repr を決める。
     constructor_types: HashMap<ConstructorId, TypeId>,
-    constructor_wrappers: HashMap<ConstructorId, FnIdx>,
-    /// 状態のない handler 用の、継続を包む関数。
-    stateless_continuation_wrapper: Option<FnIdx>,
-    /// 状態のある handler 用の、継続を包む関数。
-    stateful_continuation_wrapper: Option<FnIdx>,
+    /// 型ごとの包む関数 (`op$`、`con$`、`cont$`、`cont$state`) を名前で引く表。名前は型引数を含むので、同じ名前なら
+    /// 同じコードである。
+    wrappers: HashMap<String, FnIdx>,
 }
 
 impl ProgramBuilder {
@@ -102,15 +97,6 @@ impl ProgramBuilder {
             files: Interner::default(),
             layouts: Vec::new(),
             layout_ids: HashMap::new(),
-            operation_types: typed
-                .decls
-                .iter()
-                .filter_map(|(decl, declared)| match decl {
-                    ValueItem::Operation(id) => Some((*id, declared.ty)),
-                    _ => None,
-                })
-                .collect(),
-            operation_wrappers: HashMap::new(),
             constructor_types: typed
                 .decls
                 .iter()
@@ -119,9 +105,7 @@ impl ProgramBuilder {
                     _ => None,
                 })
                 .collect(),
-            constructor_wrappers: HashMap::new(),
-            stateless_continuation_wrapper: None,
-            stateful_continuation_wrapper: None,
+            wrappers: HashMap::new(),
         }
     }
 
@@ -241,36 +225,41 @@ impl ProgramBuilder {
 
     /// 節の `k` を関数の値として使うときに、生の継続を捕まえて包む関数を作る。状態のない handler 用の `cont$` は
     /// `(k, v)` を、状態のある handler 用の `cont$state` は `(k, v, s)` を受け、`resume` を末尾呼び出しする
-    /// (docs/spec/core-ir.md)。それぞれ1つだけ作る。
-    pub(super) fn continuation_wrapper(&mut self, stateful: bool) -> FnIdx {
-        let cached = if stateful {
-            self.stateful_continuation_wrapper
-        } else {
-            self.stateless_continuation_wrapper
-        };
-        if let Some(function) = cached {
+    /// (docs/spec/core-ir.md)。`k` の型ごとに1つ作る。`params` は `k` の型の、再開の値と状態の型で、`result` は結果の
+    /// 型である。`name` はそれらの型を型引数に書いた名前である。
+    pub(super) fn continuation_wrapper(
+        &mut self,
+        hir: &HirProgram,
+        types: &TypeStore,
+        name: String,
+        params: &[TypeId],
+        result: TypeId,
+    ) -> FnIdx {
+        if let Some(&function) = self.wrappers.get(&name) {
             return function;
         }
-        // 再開に渡す値と状態の型は節ごとに違うので、型変数と同じく `tobj` と `poly` にする。生の継続も `once` の
-        // 操作なら `Lin`、`multi` なら `Unr` で、すべての handler が共有するこの関数では決まらない
-        let param = |name: &str| named(name, Repr::TObj, Mark::Poly);
-        let mut params = vec![param("k"), param("v")];
-        if stateful {
-            params.push(param("s"));
-        }
-        let name = if stateful { "cont$state" } else { "cont$" };
+        let stateful = params.len() == 2;
+        let reprs: Vec<Repr> = params.iter().map(|&ty| repr(types, ty, hir)).collect();
+        // 生の継続は `once` の操作なら `Lin`、`multi` なら `Unr` で、`k` の値の型からは決まらないので `poly` にする
+        let mut infos = vec![named("k", Repr::TObj, Mark::Poly)];
+        infos.extend(
+            params
+                .iter()
+                .zip(["v", "s"])
+                .map(|(&ty, name)| var_info(name, types, ty, hir)),
+        );
         // どの文脈からも呼ばれるので、yield しうるとみなす
         let function = self.simple(
-            name.to_string(),
+            name.clone(),
             true,
-            params,
+            infos,
             |args| {
                 let mut args = args.into_iter();
                 let k = args.next().expect("k");
                 let arg = args.next().expect("v");
                 let state = args.next().unwrap_or(Atom::Unit);
-                // 値と状態の引数は `tobj` で、状態のない handler の状態は `()` である
-                let site = vec![Repr::TObj, if stateful { Repr::TObj } else { Repr::Unit }];
+                // 再開の場所の Repr は `k` の型から決める。状態のない handler の状態は `()` である
+                let site = vec![reprs[0], if stateful { reprs[1] } else { Repr::Unit }];
                 Rhs::Call {
                     call: Call::Resume {
                         k,
@@ -281,81 +270,74 @@ impl ProgramBuilder {
                     mask: Vec::new(),
                 }
             },
-            param("t"),
+            var_info("t", types, result, hir),
         );
-        if stateful {
-            self.stateful_continuation_wrapper = Some(function);
-        } else {
-            self.stateless_continuation_wrapper = Some(function);
-        }
+        self.wrappers.insert(name, function);
         function
     }
 
-    /// 操作を値や部分適用で使うときの関数を作る。本体は `perform` の末尾呼び出しである。操作ごとに1つだけ作る。
+    /// 操作を値や部分適用で使うときの関数を作る。本体は `perform` の末尾呼び出しである。具体化した操作の型 `ty`
+    /// ごとに1つ作り、`name` はその型引数を書いた名前である。
     pub(super) fn operation_wrapper(
         &mut self,
         hir: &HirProgram,
         types: &TypeStore,
         op: OperationId,
+        name: String,
+        ty: TypeId,
     ) -> FnIdx {
-        if let Some(&function) = self.operation_wrappers.get(&op) {
+        if let Some(&function) = self.wrappers.get(&name) {
             return function;
         }
-        let operation = &hir[op];
-        let ty = *self
-            .operation_types
-            .get(&op)
-            .expect("every operation has a scheme");
-        let (param_types, result_type) = split_arrows(types, ty, operation.arity);
+        let (param_types, result_type) = split_arrows(types, ty, hir[op].arity);
         let params = param_types
             .iter()
-            .map(|&ty| declared_var_info("p", types, ty, hir))
+            .map(|&ty| var_info("p", types, ty, hir))
             .collect();
-        let name = format!("op${}", core_name(hir, op.module, &operation.name));
         let function = self.simple(
-            name,
+            name.clone(),
             true,
             params,
             |args| Rhs::Call {
                 call: perform_call(hir, op, args),
                 mask: Vec::new(),
             },
-            declared_var_info("t", types, result_type, hir),
+            var_info("t", types, result_type, hir),
         );
-        self.operation_wrappers.insert(op, function);
+        self.wrappers.insert(name, function);
         function
     }
 
-    /// コンストラクタを値や部分適用で使うときに、値を作って返すだけの関数を作る。コンストラクタごとに1つだけ作る。
+    /// コンストラクタを値や部分適用で使うときに、値を作って返すだけの関数を作る。具体化したコンストラクタの型 `ty`
+    /// ごとに1つ作り、`name` はその型引数を書いた名前である。
     pub(super) fn constructor_wrapper(
         &mut self,
         hir: &HirProgram,
         types: &TypeStore,
         ctor: ConstructorId,
+        name: String,
+        ty: TypeId,
     ) -> FnIdx {
-        if let Some(&function) = self.constructor_wrappers.get(&ctor) {
+        if let Some(&function) = self.wrappers.get(&name) {
             return function;
         }
-        let constructor = &hir[ctor];
-        let ty = self.constructor_type(ctor);
-        let (param_types, result_type) = split_arrows(types, ty, constructor.fields.len());
+        let (param_types, result_type) = split_arrows(types, ty, hir[ctor].fields.len());
         let params = param_types
             .iter()
-            .map(|&ty| declared_var_info("p", types, ty, hir))
+            .map(|&ty| var_info("p", types, ty, hir))
             .collect();
-        let name = format!("con${}", core_name(hir, ctor.module, &constructor.name));
         let ctor_id = self.ctor(hir, types, ctor);
         let function = self.simple(
-            name,
+            name.clone(),
             false,
             params,
             |args| Rhs::Con {
                 ctor: ctor_id,
                 args,
             },
-            declared_var_info("d", types, result_type, hir),
+            var_info("d", types, result_type, hir),
         );
-        self.constructor_wrappers.insert(ctor, function);
+        self.wrappers.insert(name, function);
         function
     }
 
@@ -688,6 +670,17 @@ fn defines(items: &Items, name: &str) -> bool {
         || items.classes.values().any(|item| item.name == name)
         || items.methods.values().any(|item| item.name == name)
         || items.bindings.values().any(|item| item.name == name)
+}
+
+/// 包む関数の名前の根。`op$` と `con$` に操作とコンストラクタの名前を続ける。
+pub(super) fn wrapper_base(hir: &HirProgram, item: ValueItem) -> String {
+    match item {
+        ValueItem::Operation(op) => format!("op${}", core_name(hir, op.module, &hir[op].name)),
+        ValueItem::Constructor(ctor) => {
+            format!("con${}", core_name(hir, ctor.module, &hir[ctor].name))
+        }
+        _ => unreachable!("only operations and constructors have wrappers named after them"),
+    }
 }
 
 /// 操作の呼び出し。操作の番号は、エフェクトの宣言の中の順番である。

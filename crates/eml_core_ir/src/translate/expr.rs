@@ -13,9 +13,11 @@ use crate::builder::FnBuilder;
 use crate::{Call, Rhs, Stmt, Term};
 use eml_lir::{Atom, Ctor, FnIdx, Mark, MaskItem, Prim, Repr, Role, TUPLE, VarId};
 
+use super::instances::wrapper_name;
 use super::pattern::Known;
 use super::program::{
     ProgramBuilder, VarOp, bind, effect_index, perform_call, plain_call, var_perform_call,
+    wrapper_base,
 };
 use super::types::{mark, named, repr, split_arrows, var_info};
 use super::{ContinuationForm, Exit, FnLowering, Param};
@@ -44,8 +46,15 @@ enum Callee {
         row: Extern,
         callee: ExprId,
     },
-    Operation(OperationId),
-    Constructor(ConstructorId),
+    /// 操作とコンストラクタ。`callee` は参照の式で、包む関数の型引数と型を取る。
+    Operation {
+        op: OperationId,
+        callee: ExprId,
+    },
+    Constructor {
+        ctor: ConstructorId,
+        callee: ExprId,
+    },
     /// 直接の形の節の `k`。`k` は生の継続で、`arity` は状態のない handler で1、状態のある handler で2である。
     /// `ty` は `k` の型で、`resume` の場所の Repr を決める。
     Continuation {
@@ -155,6 +164,30 @@ impl FnLowering<'_> {
             .extern_wrapper(self.ctx.hir, self.ctx.store, ty, row, name, at)
     }
 
+    /// 値か部分適用で使う操作かコンストラクタ `item` の、参照 `reference` の型ごとの包む関数
+    /// (docs/superpowers/specs/2026-10-21-s14e-abi-struct-design.md の「関数の ABI」)。名前には参照が具体化した型引数を
+    /// 書き、引数と結果の Repr は参照の型から決める。参照の型はスキームにその型引数を入れた型なので、名前が同じなら
+    /// コードも同じである。
+    fn item_wrapper(&mut self, item: ValueItem, reference: ExprId) -> FnIdx {
+        let (hir, store) = (self.ctx.hir, self.ctx.store);
+        let args = &self
+            .ctx
+            .types
+            .instantiations
+            .get(reference)
+            .expect("every reference to an item is instantiated")
+            .args;
+        let name = wrapper_name(store, self.ctx.names, &wrapper_base(hir, item), args);
+        let ty = self.ty(reference);
+        match item {
+            ValueItem::Operation(op) => self.program.operation_wrapper(hir, store, op, name, ty),
+            ValueItem::Constructor(ctor) => {
+                self.program.constructor_wrapper(hir, store, ctor, name, ty)
+            }
+            _ => unreachable!("only operations and constructors are wrapped by item"),
+        }
+    }
+
     /// 呼ぶ相手の引数の個数と比べ、揃えば命令にし、足りなければ包む関数のクロージャにし、余れば命令の結果に残りを
     /// 適用する (docs/spec/core-ir.md の eval/apply)。呼ばれる式の種類によらず、この1か所で場合分けする。
     /// `id` は呼び出しの式で、`args` は矢印 0 から渡す。既知の呼ばれる式は最初のまとまりで呼ぶためである。
@@ -175,7 +208,7 @@ impl FnLowering<'_> {
             let (mut captured, closure_ty) = split_arrows(self.ctx.store, callee_ty, args.len());
             if cfg!(debug_assertions) {
                 match callee {
-                    Callee::Function(_) | Callee::Constructor(_) => {
+                    Callee::Function(_) | Callee::Constructor { .. } => {
                         self.ctx
                             .check_captures(closure_ty, &captured, "partial application");
                     }
@@ -194,7 +227,9 @@ impl FnLowering<'_> {
                         self.ctx
                             .check_captures(closure_ty, &captured, "partial application");
                     }
-                    Callee::Extern { .. } | Callee::Operation(_) | Callee::Continuation { .. } => {}
+                    Callee::Extern { .. }
+                    | Callee::Operation { .. }
+                    | Callee::Continuation { .. } => {}
                 }
             }
             let wrapper = self.callee_wrapper(callee);
@@ -296,8 +331,8 @@ impl FnLowering<'_> {
         match callee {
             Callee::Function(target) => self.program.arity(target),
             Callee::Extern { row, callee: _ } => row.row().params.len(),
-            Callee::Operation(op) => self.ctx.hir[op].arity,
-            Callee::Constructor(ctor) => self.ctx.hir[ctor].fields.len(),
+            Callee::Operation { op, .. } => self.ctx.hir[op].arity,
+            Callee::Constructor { ctor, .. } => self.ctx.hir[ctor].fields.len(),
             Callee::Continuation { arity, .. } => arity,
             Callee::Local { arity, .. } => arity,
         }
@@ -318,13 +353,9 @@ impl FnLowering<'_> {
         match callee {
             Callee::Function(target) => target,
             Callee::Extern { row, callee } => self.extern_wrapper(callee, row),
-            Callee::Operation(op) => {
-                self.program
-                    .operation_wrapper(self.ctx.hir, self.ctx.store, op)
-            }
-            Callee::Constructor(ctor) => {
-                self.program
-                    .constructor_wrapper(self.ctx.hir, self.ctx.store, ctor)
+            Callee::Operation { op, callee } => self.item_wrapper(ValueItem::Operation(op), callee),
+            Callee::Constructor { ctor, callee } => {
+                self.item_wrapper(ValueItem::Constructor(ctor), callee)
             }
             // 引数の足りない `k` の呼び出しは `k` を関数の値として使うことになり、節を包む形にする (`continuation_forms`)
             Callee::Continuation { .. } => {
@@ -375,7 +406,7 @@ impl FnLowering<'_> {
                     .program
                     .extern_call(&mut self.builder, hir, store, row, args, at, ty);
             }
-            Callee::Operation(op) => ("t", plain_call(perform_call(self.ctx.hir, op, args))),
+            Callee::Operation { op, .. } => ("t", plain_call(perform_call(self.ctx.hir, op, args))),
             // 状態ありの最初の矢印は row が空の部分適用なので、関数と同じく最後の矢印の `mask` を使う
             Callee::Continuation { k, arity: _, ty } => {
                 let mask = self.mask(id, args.len() - 1);
@@ -400,7 +431,7 @@ impl FnLowering<'_> {
                 };
                 ("t", masked_call(call, mask))
             }
-            Callee::Constructor(ctor) => (
+            Callee::Constructor { ctor, .. } => (
                 "d",
                 Rhs::Con {
                     ctor: self.program.ctor(self.ctx.hir, self.ctx.store, ctor),
@@ -524,8 +555,13 @@ impl FnLowering<'_> {
                 Some(row) => Callee::Extern { row, callee },
                 None => Callee::Function(self.ctx.target(callee)),
             },
-            ExprKind::Path(Res::Item(ValueItem::Operation(op))) => Callee::Operation(*op),
-            ExprKind::Path(Res::Item(ValueItem::Constructor(ctor))) => Callee::Constructor(*ctor),
+            ExprKind::Path(Res::Item(ValueItem::Operation(op))) => {
+                Callee::Operation { op: *op, callee }
+            }
+            ExprKind::Path(Res::Item(ValueItem::Constructor(ctor))) => Callee::Constructor {
+                ctor: *ctor,
+                callee,
+            },
             ExprKind::Path(Res::Local(local)) if self.ctx.lifted.contains_idx(*local) => {
                 let lifted = &self.ctx.lifted[*local];
                 Callee::Local {
@@ -619,19 +655,15 @@ impl FnLowering<'_> {
                 let ty = self.ty(id);
                 self.bind_typed("r", ty, Rhs::Prim(Prim::RootGet(root), Vec::new()))
             }
-            ExprKind::Path(Res::Item(ValueItem::Operation(op))) => Atom::Fn(
-                self.program
-                    .operation_wrapper(self.ctx.hir, self.ctx.store, *op),
-            ),
+            ExprKind::Path(Res::Item(ValueItem::Operation(op))) => {
+                Atom::Fn(self.item_wrapper(ValueItem::Operation(*op), id))
+            }
             ExprKind::Path(Res::Item(ValueItem::Constructor(ctor))) => {
                 let constructor = &self.ctx.hir[*ctor];
                 if constructor.fields.is_empty() {
                     Atom::Tag(constructor.tag)
                 } else {
-                    Atom::Fn(
-                        self.program
-                            .constructor_wrapper(self.ctx.hir, self.ctx.store, *ctor),
-                    )
+                    Atom::Fn(self.item_wrapper(ValueItem::Constructor(*ctor), id))
                 }
             }
             ExprKind::Call { callee, .. } => {
