@@ -75,8 +75,7 @@ impl Parser<'_> {
             yields: header.yields,
             clause: header.clause,
             vars,
-            ret: header.ret,
-            ret_mark: header.ret_mark,
+            rets: vec![(header.ret, header.ret_mark)],
             blocks,
         })
     }

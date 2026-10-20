@@ -95,9 +95,9 @@ fn conform_role(function: &mut LirFn) {
         })
         .collect();
     let ret = if role.uniform_ret() {
-        uniform_repr(function.ret)
+        uniform_repr(function.rets[0].0)
     } else {
-        function.ret
+        function.rets[0].0
     };
     conform(function, &expected, ret);
 }
@@ -160,7 +160,7 @@ fn conform(function: &mut LirFn, expected: &[Repr], ret: Repr) {
     function.blocks[BlockId::ENTRY.0 as usize]
         .stmts
         .splice(0..0, conversions);
-    function.ret = ret;
+    function.rets[0].0 = ret;
 }
 
 /// 直接の呼び出しと `closure` が引数に期待する Repr と、直接の呼び出しの結果の Repr。
@@ -177,7 +177,7 @@ impl Signature {
                 .iter()
                 .map(|&param| function.repr(param))
                 .collect(),
-            ret: function.ret,
+            ret: function.rets[0].0,
         }
     }
 }
@@ -572,7 +572,7 @@ impl Converter<'_> {
     fn term(&mut self, term: &mut Term, out: &mut Vec<Stmt>, fields: &mut Vec<(u32, Stmt)>) {
         match term {
             Term::Return(atom) => {
-                *atom = self.convert(*atom, self.function.ret, out);
+                *atom = self.convert(*atom, self.function.rets[0].0, out);
             }
             Term::Jump { target, args } => {
                 let target = *target;

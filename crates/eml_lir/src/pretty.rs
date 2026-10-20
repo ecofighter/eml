@@ -60,8 +60,8 @@ impl<'p> Printer<'p> {
             clause: function.clause,
             role: function.role,
             params: function.params().to_vec(),
-            ret: function.ret,
-            ret_mark: function.ret_mark,
+            ret: function.rets[0].0,
+            ret_mark: function.rets[0].1,
         };
         self.writer.function_head(&header, &function.vars, out);
         for (index, block) in function.blocks.iter().enumerate() {

@@ -68,7 +68,7 @@ pub(crate) fn function<M: Mode>(
             .iter()
             .map(|&param| function.repr(param))
             .collect(),
-        ret: vec![function.ret],
+        ret: function.rets.iter().map(|&(repr, _)| repr).collect(),
     });
     Ok(FnEntry {
         name: function.name.clone(),
@@ -695,7 +695,7 @@ impl<'a, M: Mode> Emitter<'a, '_, M> {
     /// 呼ぶ関数と呼び出し元の `ret` から静的に決まるので、命令に持たせる
     /// (docs/superpowers/specs/2026-10-21-s14e-abi-struct-design.md の「VM」)。
     fn result_conversion(&self, ret: Repr) -> u32 {
-        let (from, to) = (class(ret), class(self.function.ret));
+        let (from, to) = (class(ret), class(self.function.rets[0].0));
         if from == to {
             return NONE;
         }
@@ -726,7 +726,7 @@ impl<'a, M: Mode> Emitter<'a, '_, M> {
     fn term(&mut self, block: BlockId, term: &Term) {
         match term {
             Term::Return(atom) => {
-                let src = self.atom(*atom, self.function.ret);
+                let src = self.atom(*atom, self.function.rets[0].0);
                 self.out.push(Op::Ret { src });
             }
             Term::TailCall(Call::Direct(f, args)) => {
@@ -735,7 +735,7 @@ impl<'a, M: Mode> Emitter<'a, '_, M> {
                     self.self_tail_patches.push(at as usize);
                     self.out.push(Op::TailSelf { at });
                 } else {
-                    let conversion = self.result_conversion(self.program.function(*f).ret);
+                    let conversion = self.result_conversion(self.program.function(*f).rets[0].0);
                     self.out.operands([conversion]);
                     self.out.push(Op::TailCall { at });
                 }
@@ -751,7 +751,7 @@ impl<'a, M: Mode> Emitter<'a, '_, M> {
                 self.out.push(Op::TailClause { at });
             }
             Term::TailCall(call) => {
-                let at = self.apply_operands(call, self.function.ret);
+                let at = self.apply_operands(call, self.function.rets[0].0);
                 self.out.push(Op::TailApply { at });
             }
             Term::Jump { target, args } => self.jump(block, *target, args),

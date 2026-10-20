@@ -49,7 +49,7 @@ fn positions_are_printed_only_on_request() {
     assert_eq!(program.files, ["main.em"]);
     let f = &program.functions[0];
     assert_eq!(f.params(), [VarId(0)]);
-    assert_eq!(f.ret, Repr::Int);
+    assert_eq!(f.rets[0].0, Repr::Int);
     assert_eq!(f.blocks.len(), 4);
     assert_eq!(f.block(BlockId(3)).params, [VarId(3)]);
     assert_eq!(
@@ -127,7 +127,7 @@ fn f(a.0: Vec3{float, float, float}, p.1: (,){int, obj lin} lin) -> Vec3{float, 
         panic!("expected a struct, found {:?}", vars[0].repr);
     };
     assert_eq!(vars[2].repr, vars[0].repr);
-    assert_eq!(program.functions[0].ret, vars[0].repr);
+    assert_eq!(program.functions[0].rets[0].0, vars[0].repr);
     assert_eq!(
         *program.structs.shape(vec3),
         StructShape {
@@ -1546,7 +1546,7 @@ b3(j.7: tobj poly):
 fn marks_round_trip_through_the_text_form() {
     let program = round_trip(MARKED);
     let f = &program.functions[0];
-    assert_eq!(f.ret_mark, Mark::Poly);
+    assert_eq!(f.rets[0].1, Mark::Poly);
     let marks: Vec<Mark> = f.vars.iter().map(|var| var.mark).collect();
     assert_eq!(
         marks,
@@ -1574,7 +1574,7 @@ fn a_written_unr_mark_is_an_error() {
 #[test]
 fn marks_default_to_unr_when_omitted() {
     let program = round_trip(SPEC_EXAMPLE.replace(" @\"main.em\":2:20", "").as_str());
-    assert!(program.functions.iter().all(|f| f.ret_mark == Mark::Unr));
+    assert!(program.functions.iter().all(|f| f.rets[0].1 == Mark::Unr));
     assert!(
         program
             .functions

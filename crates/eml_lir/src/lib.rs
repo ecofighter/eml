@@ -78,9 +78,8 @@ pub struct LirFn {
     /// (docs/spec/lir.md の「入口の関数の印」)。
     pub clause: Option<(u32, u32)>,
     pub vars: Vec<VarInfo>,
-    /// 直接の呼び出しの結果の Repr。
-    pub ret: Repr,
-    pub ret_mark: Mark,
+    /// 直接の呼び出しの結果の Repr と印の並び。長さは1以上である。値が1つの関数は要素を1つ持つ。
+    pub rets: Vec<(Repr, Mark)>,
     /// `blocks[0]` が入口で、その引数が関数の引数である。辺はすべて番号の大きいブロックへ向かう。
     pub blocks: Vec<Block>,
 }

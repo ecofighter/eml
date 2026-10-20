@@ -43,8 +43,7 @@ fn function(function: CoreFn) -> eml_lir::LirFn {
         yields,
         clause,
         vars,
-        ret,
-        ret_mark,
+        rets: vec![(ret, ret_mark)],
         blocks: blocks.into_iter().map(block).collect(),
     }
 }

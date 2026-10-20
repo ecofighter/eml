@@ -10,11 +10,11 @@ pub fn contract(program: &mut Program) {
     let ret_marks: Vec<Mark> = program
         .functions
         .iter()
-        .map(|function| function.ret_mark)
+        .map(|function| function.rets[0].1)
         .collect();
     for function in &mut program.functions {
         remove_dead_lets(function);
-        let ret_mark = function.ret_mark;
+        let ret_mark = function.rets[0].1;
         for block in &mut function.blocks {
             tail_call(block, ret_mark, &ret_marks, &program.effects);
         }

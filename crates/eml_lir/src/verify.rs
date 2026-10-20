@@ -107,8 +107,8 @@ fn verify_at(program: &Program, level: Level) -> Result<(), VerifyError> {
                     .params()
                     .iter()
                     .map(|&param| (param, &function.vars[param.0 as usize])),
-                function.ret,
-                function.ret_mark,
+                function.rets[0].0,
+                function.rets[0].1,
                 level >= Level::Scopes,
             )
             .and_then(|()| check::role(function.role, function.params().len()))
@@ -661,18 +661,18 @@ impl<'a> Checker<'a> {
                 // 範囲の段では、互換でない `return` をこの形のときだけ許す
                 // (docs/superpowers/specs/2026-10-21-s14e-abi-struct-design.md の「box の挿入」)
                 let tail = self.level == Level::Scopes && tail_position_call(block).is_some();
-                if !tail && !self.cx.passes(*atom, self.function.ret) {
+                if !tail && !self.cx.passes(*atom, self.function.rets[0].0) {
                     return Err(format!(
                         "{} is returned from a function that returns {}",
                         self.cx.typed_atom_text(*atom),
-                        self.cx.repr_text(self.function.ret)
+                        self.cx.repr_text(self.function.rets[0].0)
                     ));
                 }
-                if !self.cx.mark_passes(*atom, self.function.ret_mark) {
+                if !self.cx.mark_passes(*atom, self.function.rets[0].1) {
                     return Err(format!(
                         "{} is returned from a function that returns {}",
                         self.cx.marked_atom_text(*atom),
-                        self.function.ret_mark.name()
+                        self.function.rets[0].1.name()
                     ));
                 }
                 self.nothing_owned(&owned)
@@ -1265,7 +1265,7 @@ impl<'a> Checker<'a> {
                         args.len()
                     ));
                 }
-                Some((target.ret, target.ret_mark))
+                Some(target.rets[0])
             }
             Call::Clause {
                 effect,
@@ -1302,7 +1302,9 @@ impl<'a> Checker<'a> {
                 (ApplySite::Typed(_), Receiver::Bound(var)) => {
                     Some((self.function.repr(var), Mark::Poly))
                 }
-                (ApplySite::Typed(_), Receiver::Tail) => Some((self.function.ret, Mark::Poly)),
+                (ApplySite::Typed(_), Receiver::Tail) => {
+                    Some((self.function.rets[0].0, Mark::Poly))
+                }
                 (ApplySite::Uniform, _) => Some((Repr::TObj, Mark::Poly)),
             },
         };
@@ -1529,7 +1531,7 @@ impl<'a> Checker<'a> {
             }
             Receiver::Tail => {
                 // 呼び出し元を "this function" と書き、呼ばれる側を指す "the function" と分ける
-                let ret_mark = self.function.ret_mark;
+                let ret_mark = self.function.rets[0].1;
                 if result_mark.compatible(ret_mark) {
                     return Ok(());
                 }
