@@ -37,6 +37,8 @@ pub enum Prim {
     Dummy,
     RootGet(u32),
     RootSet(u32),
+    /// 不死の空の `MutArray`。`var` の配列の変数を取り出した後の状態である (docs/spec/lir.md の「基本操作」)。
+    EmptyMutArray,
 }
 
 /// 基本操作の引数と結果の Repr。引数と結果は、直接の呼び出しと同じく互換の位置である。
@@ -107,6 +109,7 @@ kinds! {
     Prim::Dummy => "dummy", Prim::Dummy;
     Prim::RootGet(_) => "root_get", Prim::RootGet(0);
     Prim::RootSet(_) => "root_set", Prim::RootSet(0);
+    Prim::EmptyMutArray => "empty_mut_array", Prim::EmptyMutArray;
 }
 
 impl Prim {
@@ -140,12 +143,13 @@ impl Prim {
             | Prim::YieldContTake
             | Prim::YieldContSet
             | Prim::YieldFinish
-            | Prim::Dummy => Immediates::None,
+            | Prim::Dummy
+            | Prim::EmptyMutArray => Immediates::None,
         }
     }
 
     pub fn row(&self) -> PrimRow {
-        use Mark::{Poly, Unr};
+        use Mark::{Lin, Poly, Unr};
         use Repr::{Int, Obj, TObj, Unit};
         const NONE: &[bool] = &[];
         const NO_MARKS: &[Mark] = &[];
@@ -185,6 +189,8 @@ impl Prim {
             // 根に置くのは `Unr` の値だけなので、どちらの位置も `unr` である
             Prim::RootGet(_) => (&[], NONE, TObj, NO_MARKS, Unr),
             Prim::RootSet(_) => (&[TObj], &[false], Unit, &[Unr], Unr),
+            // 結果は `MutArray` の値なので `lin` である
+            Prim::EmptyMutArray => (&[], NONE, Obj, NO_MARKS, Lin),
         };
         PrimRow {
             params,
@@ -195,10 +201,10 @@ impl Prim {
         }
     }
 
-    /// `root_get` は根を読んで `dup` するだけなので、結果が使われなければ縮約が消してよい。ほかの基本操作は実行の
-    /// 文脈か evidence か根を書き換えるので消さない。
+    /// `root_get` は根を読んで `dup` するだけで、`empty_mut_array` は定数を読むだけなので、結果が使われなければ
+    /// 縮約が消してよい。ほかの基本操作は実行の文脈か evidence か根を書き換えるので消さない。
     pub fn pure(&self) -> bool {
-        matches!(self, Prim::RootGet(_))
+        matches!(self, Prim::RootGet(_) | Prim::EmptyMutArray)
     }
 }
 
@@ -235,12 +241,12 @@ mod tests {
         }
     }
 
-    /// 状態、κ、節の本体の位置だけが `poly` で、ほかは `unr` である。根の位置も `unr` である
-    /// (docs/spec/lir.md の「基本操作」)。
+    /// 状態、κ、節の本体の位置だけが `poly` で、ほかは `unr` である。根の位置も `unr` である。空の配列の結果だけが
+    /// `lin` である (docs/spec/lir.md の「基本操作」)。
     #[test]
     fn the_marks_of_the_primitives_follow_the_spec_table() {
-        use Mark::{Poly, Unr};
-        let table: [(&str, &[Mark], Mark); 22] = [
+        use Mark::{Lin, Poly, Unr};
+        let table: [(&str, &[Mark], Mark); 23] = [
             ("evv_get", &[], Unr),
             ("evv_set", &[Unr], Unr),
             ("evv_push", &[Unr, Unr], Unr),
@@ -263,6 +269,7 @@ mod tests {
             ("dummy", &[], Poly),
             ("root_get", &[], Unr),
             ("root_set", &[Unr], Unr),
+            ("empty_mut_array", &[], Lin),
         ];
         assert_eq!(table.len(), KINDS.len());
         for (name, params, ret) in table {

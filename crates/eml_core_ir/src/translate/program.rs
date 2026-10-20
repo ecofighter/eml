@@ -4,10 +4,10 @@ use std::collections::HashMap;
 
 use eml_extern::{Extern, ExternType};
 use eml_hir::{
-    ConstructorId, EffectDef, EffectId, FunctionId, Items, ModuleId, ModuleOrigin, OpMultiplicity,
-    OperationId, Program as HirProgram, TypeDefId, TypeDefKind, ValueItem,
+    ConstructorId, EffectDef, EffectId, EffectKind, FunctionId, Items, ModuleId, ModuleOrigin,
+    OpMultiplicity, OperationId, Program as HirProgram, TypeDefId, TypeDefKind, ValueItem,
 };
-use eml_types::{TypeId, TypeKind, TypeStore, TypedProgram};
+use eml_types::{TypeId, TypeKind, TypeStore, TypedProgram, VarClass, VarType};
 
 use crate::{Call, CoreFn, Rhs, Stmt, Term};
 use eml_lir::{
@@ -401,31 +401,38 @@ impl ProgramBuilder {
         at: Option<Loc>,
         ty: TypeId,
     ) -> Atom {
-        let bind = |builder: &mut FnBuilder, info: VarInfo, rhs: Rhs| {
-            let var = builder.var(info);
-            builder.emit(Stmt::Let { var, rhs });
-            Atom::Var(var)
-        };
-        let Some(k) = ext.row().with_arg else {
+        if ext.row().with_arg.is_none() {
             let info = var_info("t", types, ty, hir);
             return bind(builder, info, Rhs::Extern { ext, args, at });
-        };
+        }
         let TypeKind::Tuple(elements) = types.kind(ty) else {
             unreachable!("an extern with `with_arg` returns a pair")
         };
+        let value = var_info("t", types, elements[0], hir);
+        let pair = var_info("d", types, ty, hir);
+        self.lending_call(builder, ext, args, at, value, pair)
+    }
+
+    /// `with_arg` の行 `ext` を呼び、行の結果 (変数 `value`) と借りた引数の組 (変数 `pair`) を返す。
+    pub(super) fn lending_call(
+        &mut self,
+        builder: &mut FnBuilder,
+        ext: Extern,
+        args: Vec<Atom>,
+        at: Option<Loc>,
+        value: VarInfo,
+        pair: VarInfo,
+    ) -> Atom {
+        let k = ext.row().with_arg.expect("a lending row returns a pair");
         let lent = args[k];
-        let value = bind(
-            builder,
-            var_info("t", types, elements[0], hir),
-            Rhs::Extern { ext, args, at },
-        );
+        let value = bind(builder, value, Rhs::Extern { ext, args, at });
         let ctor = Ctor {
             layout: self.tuple_layout(2),
             tag: TUPLE,
         };
         bind(
             builder,
-            var_info("d", types, ty, hir),
+            pair,
             Rhs::Con {
                 ctor,
                 args: vec![value, lent],
@@ -589,6 +596,13 @@ pub(super) enum ShowTarget {
     Extern(Extern),
 }
 
+/// `rhs` の結果を新しい変数 `info` に束縛する。
+pub(super) fn bind(builder: &mut FnBuilder, info: VarInfo, rhs: Rhs) -> Atom {
+    let var = builder.var(info);
+    builder.emit(Stmt::Let { var, rhs });
+    Atom::Var(var)
+}
+
 /// `rhs` の結果を `unit` の新しい変数に束縛する。
 fn unit_var(builder: &mut FnBuilder, rhs: Rhs) -> Atom {
     let var = builder.var(named("u", Repr::Unit, Mark::Unr));
@@ -681,8 +695,64 @@ pub(super) fn perform_call(hir: &HirProgram, op: OperationId, args: Vec<Atom>) -
     }
 }
 
+/// `var` の変数の操作。`Unr` の変数は `Get` と `Set`、配列の変数は `Take`、`Length`、`Read`、`Write` を、この順に
+/// 持つ。表の中の位置が操作の番号である (docs/spec/core-ir.md の「`var` の変換」)。
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(super) enum VarOp {
+    Get,
+    Set,
+    Take,
+    Length,
+    Read,
+    Write,
+}
+
+impl VarOp {
+    pub(super) fn of(class: VarClass) -> &'static [VarOp] {
+        match class {
+            VarClass::Unr => &[VarOp::Get, VarOp::Set],
+            VarClass::Array => &[VarOp::Take, VarOp::Length, VarOp::Read, VarOp::Write],
+        }
+    }
+
+    pub(super) fn name(self) -> &'static str {
+        match self {
+            VarOp::Get => "get",
+            VarOp::Set => "set",
+            VarOp::Take => "take",
+            VarOp::Length => "length",
+            VarOp::Read => "read",
+            VarOp::Write => "write",
+        }
+    }
+
+    fn index(self) -> u32 {
+        match self {
+            VarOp::Get | VarOp::Take => 0,
+            VarOp::Set | VarOp::Length => 1,
+            VarOp::Read => 2,
+            VarOp::Write => 3,
+        }
+    }
+}
+
+/// `var` のエフェクト `effect` の操作 `op` の呼び出し。どの操作も再開する。
+pub(super) fn var_perform_call(
+    hir: &HirProgram,
+    effect: EffectId,
+    op: VarOp,
+    args: Vec<Atom>,
+) -> Call {
+    Call::Perform {
+        effect: effect_index(hir, effect),
+        op: op.index(),
+        resumable: true,
+        args,
+    }
+}
+
 /// エフェクトの表。`effect_index` と同じ順に並べる。操作の Repr は操作のスキームの型から決め、型変数は `repr` が
-/// `tobj` にする (docs/spec/lir.md の「エフェクトの位置」)。
+/// `tobj` にする (docs/spec/lir.md の「エフェクトの位置」)。`var` のエフェクトの操作は、変数の宣言の中の型から決める。
 pub(super) fn effect_table(
     hir: &HirProgram,
     types: &TypeStore,
@@ -691,29 +761,73 @@ pub(super) fn effect_table(
     core_effects(hir)
         .map(|(id, effect)| EffectInfo {
             name: core_name(hir, id.module, &effect.name),
-            operations: effect
-                .operations
-                .iter()
-                .map(|&op| {
-                    let operation = &hir[op];
-                    let ty = typed.decls[&ValueItem::Operation(op)].ty;
-                    let (params, result) = split_arrows(types, ty, operation.arity);
-                    let resumable = operation.multiplicity != OpMultiplicity::Never;
-                    let mark = |ty| declared_mark(types, ty, hir);
-                    OperationInfo {
-                        name: operation.name.clone(),
-                        params: params.iter().map(|&ty| repr(types, ty, hir)).collect(),
-                        param_marks: params.iter().map(|&ty| mark(ty)).collect(),
-                        ret_mark: if resumable { mark(result) } else { Mark::Poly },
-                        ret: if resumable {
-                            OpRet::Repr(repr(types, result, hir))
-                        } else {
-                            OpRet::Never
-                        },
-                        resumable,
-                    }
-                })
-                .collect(),
+            operations: match effect.kind {
+                EffectKind::Var { function, var } => {
+                    let var = typed
+                        .bodies
+                        .get(function)
+                        .expect("every body is type-checked")
+                        .vars[var];
+                    var_operations(hir, types, var)
+                }
+                EffectKind::Defined | EffectKind::Extern(_) => effect
+                    .operations
+                    .iter()
+                    .map(|&op| {
+                        let operation = &hir[op];
+                        let ty = typed.decls[&ValueItem::Operation(op)].ty;
+                        let (params, result) = split_arrows(types, ty, operation.arity);
+                        let resumable = operation.multiplicity != OpMultiplicity::Never;
+                        let mark = |ty| declared_mark(types, ty, hir);
+                        OperationInfo {
+                            name: operation.name.clone(),
+                            params: params.iter().map(|&ty| repr(types, ty, hir)).collect(),
+                            param_marks: params.iter().map(|&ty| mark(ty)).collect(),
+                            ret_mark: if resumable { mark(result) } else { Mark::Poly },
+                            ret: if resumable {
+                                OpRet::Repr(repr(types, result, hir))
+                            } else {
+                                OpRet::Never
+                            },
+                            resumable,
+                        }
+                    })
+                    .collect(),
+            },
+        })
+        .collect()
+}
+
+/// `var` の変数の操作の表。変数の型 `s` は宣言の中の型で、instance で写さずに読む。地点の表は1つなので、instance
+/// ごとの Repr との変換は box の挿入に任せる (docs/spec/core-ir.md の「`var` の変換」)。配列の変数の要素 `e` は
+/// `MutArray e` の型引数である。
+fn var_operations(hir: &HirProgram, types: &TypeStore, var: VarType) -> Vec<OperationInfo> {
+    let slot = |ty| (repr(types, ty, hir), declared_mark(types, ty, hir));
+    let state = slot(var.ty);
+    let element = || match types.kind(var.ty) {
+        TypeKind::Con { args, .. } => slot(args[0]),
+        _ => unreachable!("an array variable holds a `MutArray`"),
+    };
+    let unit = (Repr::Unit, Mark::Unr);
+    let int = (Repr::Int, Mark::Unr);
+    VarOp::of(var.class)
+        .iter()
+        .map(|&op| {
+            let (params, ret) = match op {
+                VarOp::Get | VarOp::Take => (vec![unit], state),
+                VarOp::Set => (vec![state], unit),
+                VarOp::Length => (vec![unit], int),
+                VarOp::Read => (vec![int], element()),
+                VarOp::Write => (vec![int, element()], unit),
+            };
+            OperationInfo {
+                name: op.name().to_string(),
+                params: params.iter().map(|&(repr, _)| repr).collect(),
+                param_marks: params.iter().map(|&(_, mark)| mark).collect(),
+                ret: OpRet::Repr(ret.0),
+                ret_mark: ret.1,
+                resumable: true,
+            }
         })
         .collect()
 }

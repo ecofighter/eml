@@ -293,6 +293,7 @@ pub enum Extern {
     MutArrayRead,
     MutArrayWrite,
     MutArrayFreeze,
+    CheckIndex,
 }
 
 pub struct FunctionRow {
@@ -419,6 +420,7 @@ impl Extern {
         Extern::MutArrayRead,
         Extern::MutArrayWrite,
         Extern::MutArrayFreeze,
+        Extern::CheckIndex,
     ];
 
     pub fn row(self) -> FunctionRow {
@@ -665,6 +667,9 @@ impl Extern {
                 Unr,
                 Purity::Pure,
             ),
+            // `var` の配列の変数の添字を、使う所で確かめる。節の中で `Panic` を起こさないためである
+            // (docs/spec/core-ir.md の「`var` の変換」)
+            Extern::CheckIndex => row("Prelude.check_index", &[Int, Int], Unit, Purity::Panics),
         }
     }
 

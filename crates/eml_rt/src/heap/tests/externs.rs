@@ -97,6 +97,26 @@ fn only_arith_and_index_faults_panic() {
     }
 }
 
+/// 範囲の中なら `()`、外なら `MutArray.read` と同じ文言の誤りである。長さ 0 の配列ではどの添字も範囲の外になる。
+#[test]
+fn check_index_accepts_only_positions_inside_the_length() {
+    for (index, len) in [(0, 1), (2, 3), (0, i64::MAX)] {
+        assert_eq!(check_index(index, len), Ok(()), "{index} {len}");
+    }
+    for (index, len) in [(3, 3), (-1, 3), (0, 0), (i64::MIN, 0), (i64::MAX, 2)] {
+        let fault = check_index(index, len).unwrap_err();
+        assert_eq!(
+            fault,
+            Fault::Index(Box::new(IndexFault::Array { index, len }))
+        );
+        assert!(fault.panics());
+    }
+    assert_eq!(
+        check_index(0, 0).unwrap_err().to_string(),
+        "array index 0 is out of range for length 0"
+    );
+}
+
 #[test]
 fn arithmetic_matches_checked_rust() {
     for a in EDGES {

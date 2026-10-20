@@ -2270,3 +2270,35 @@ main () =
         "{shown}"
     );
 }
+
+/// `for` と `while` で書いた `var` のふるいは、変数の handler がすべて状態を渡す形に特殊化され、`handle` も
+/// `perform` も残らない (docs/spec/core-ir.md の「`var` の変換」)。
+#[test]
+fn a_var_loop_is_specialized() {
+    let shown = core_text(
+        include_str!("../../../tests/ui/run/var/sieve.em"),
+        Pass::Optimize,
+    );
+    assert!(!shown.contains("handle "), "{shown}");
+    assert!(!shown.contains("perform "), "{shown}");
+}
+
+/// 入れ子の `var` は内側から特殊化する。内側の `j` の複製を作った後の回で、外側の `marks` の複製の経路はその複製を
+/// 通る。`while` の複製は `j` と `marks` の両方の状態を受ける。名前は 64 文字を超えるので構造の hash になり、
+/// 見出しの引数が入れ子を示す (docs/spec/core-ir.md の「入れ子の handler」)。
+#[test]
+fn nested_vars_are_specialized_inside_out() {
+    let shown = core_text(
+        include_str!("../../../tests/ui/run/var/sieve.em"),
+        Pass::Optimize,
+    );
+    let copies: Vec<&str> = shown
+        .lines()
+        .filter(|line| line.starts_with("fn \""))
+        .collect();
+    insta::assert_snapshot!(copies.join("\n"), @r#"
+    fn "Prelude.for<e>{2=count$lambda0/1}{H=count$var0$return}"(lo.0: int, hi.1: int, marks.7: obj, st.8: int) -> int {
+    fn "Prelude.for<e>{2=sieve$lambda2/1}{H=sieve$var0$return}"(lo.0: int, hi.1: int, n.7: int, st.8: obj lin) -> obj lin {
+    fn "Prelude.while<e>{0=sieve$lambda0/1, 1=sieve$lambda1/1}@#55b5caa901e2f263"(n.5: int, i.6: int, st.7: int, st.12: obj lin) -> obj lin {
+    "#);
+}

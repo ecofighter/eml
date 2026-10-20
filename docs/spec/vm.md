@@ -37,7 +37,7 @@ VM は、LIR をレジスタ型のバイトコードに変換し、`eml_rt` の 
 | `code` | 全関数の命令列 (`Op`)。先頭に組み込みの命令 `Finish` (位置 0) と `ApplyRest` (位置 1) を置く |
 | `operands` | 長さの変わるオペランド (`u32` の並び)。呼び出しの関数の番号と引数のスロット、extern の行の番号と引数、`con` のフィールド、switch の表、`release` のフィールド、`ev_new` の操作の数など |
 | `mask_lists` | `evv_mask` の項目の並び (`eml_rt::MaskItem` の並び。エフェクトの番号、n、m)。`Ctx::evv_mask` が `&[MaskItem]` を受けるので、写さずに渡せるように分けて持つ |
-| `constants` | 定数の語。文字列のリテラル、`i32` に収まらない生の `Int` と `Float` の定数 (ビット列)、`box` の定数 (`Int` は 63 ビットに収まれば即値、収まらなければ不死の `BigInt`。`Float` はいつも不死の `Float`) |
+| `constants` | 定数の語。文字列のリテラル、`i32` に収まらない生の `Int` と `Float` の定数 (ビット列)、`box` の定数 (`Int` は 63 ビットに収まれば即値、収まらなければ不死の `BigInt`。`Float` はいつも不死の `Float`)、`empty_mut_array` の不死の空の `MutArray` |
 | `region` | 定数を置いた凍結した塊の鎖の先頭 `Option<Arc<Frozen<M>>>`。定数の物体をまだ作っていなければ `None` |
 | `locations` | 命令の位置から源の位置 (`Loc`) への表。命令の位置の昇順に並ぶ (「誤り、止めること、終わり」) |
 | `unwinds` | 巻き戻しの表。巻き戻しの地点の命令の次の位置で引く行を、位置の昇順に並べる (「巻き戻し」) |
@@ -64,7 +64,7 @@ REPL (`eml_cli::Repl`) は入力ごとにプログラム全体を lowering し�
 - `Machine::close()` は実行の状態を閉じる。根の参照は VM が持つので、`Ctx::take_roots` で取り出して先に手放す。検査モードでは、その後にヒープの不変条件を確かめ、残った物体をリークとして返す
 - 名前が同じ関数は、いつも同じコードになる。`load` はこの規則に頼って、関数を名前で照らす。すでにある名前の関数は前の番号を使い、ない名前の関数だけを変換して末尾に足す。新しいコードの中の番号は、次のように引き直す
   - 関数の番号: 名前で引く
-  - 文字列の定数と、生の整数と浮動小数と `box` の整数と浮動小数の定数: 中身で引く。浮動小数はビット列で引くので、`0.0` と `-0.0` は別の定数になる。前に読み込んだ定数は同じ番号を使う。新しい物体があるときだけ、作業用のヒープに今の先頭の塊を付けてから物体を作り、凍結する。新しい塊は前の塊を親に持つので、鎖が伸びる。新しい物体のない入力では塊を作らない。塊は使う大きさの級ごとに少なくとも1ページを持つためである
+  - 文字列の定数と、生の整数と浮動小数と `box` の整数と浮動小数の定数: 中身で引く。空の `MutArray` は1つだけ作り、その番号を使い続ける。浮動小数はビット列で引くので、`0.0` と `-0.0` は別の定数になる。前に読み込んだ定数は同じ番号を使う。新しい物体があるときだけ、作業用のヒープに今の先頭の塊を付けてから物体を作り、凍結する。新しい塊は前の塊を親に持つので、鎖が伸びる。新しい物体のない入力では塊を作らない。塊は使う大きさの級ごとに少なくとも1ページを持つためである
   - エフェクトの番号: 名前で引き、なければ次の番号を振る。`Program.effects` の添字は HIR の順で決まり、セッションにエフェクトを足すと後ろのエフェクトの添字がずれるためである。`evv_mask` の項目のエフェクトも引き直し、昇順に並べ直す。並べ直すときは、項目 (エフェクト、n、m) を1つの単位として動かす
   - 位置のファイルの番号: パスで引き、なければ `files` の末尾に足す
   - 配置の番号は、命令列を作るときに形を引くだけで、命令列に残らないので引き直さない
@@ -215,10 +215,10 @@ token は1語の値で、フレームのスロットに置く ([オブジェク�
 
 ### 基本操作と extern
 
-- `prim` は、基本操作ごとの命令で、`Ctx` の同じ名前のメソッドを呼ぶ。`dummy` だけは `Heap::dummy` である。即値 (エフェクトの番号、操作の番号) と `ev_new` の操作の数は、コード生成の時点で命令か `operands` に書く。`evv_mask` の項目の並びは `mask_lists` に置く。逆アセンブラは項目を Core IR のテキストと同じ書き方で、エフェクトを番号にして書く (`evv_mask s3, [0@1, 1] s2`)。結果が `unit` の基本操作は、結果のスロットに `()` を書く
+- `prim` は、基本操作ごとの命令で、`Ctx` の同じ名前のメソッドを呼ぶ。`dummy` は `Heap::dummy` である。`empty_mut_array` は、`lin` ビットを立てた長さ 0 の `Data` (`alloc_immortal(0, Meta::new(0, 0, Kind::Data, true))`) を凍結した領域の定数として持ち、`LoadConst` でその語を写す。長さが 0 なので、添字を確かめて読み書きする所はこの物体を書き換えない。`var` の取り出しは経路ごとに1回なので、`freeze` されることもなく、RC の命令は領域の物体に何もしない ([オブジェクトモデル](object-model.md) の「凍結した領域」)。即値 (エフェクトの番号、操作の番号) と `ev_new` の操作の数は、コード生成の時点で命令か `operands` に書く。`evv_mask` の項目の並びは `mask_lists` に置く。逆アセンブラは項目を Core IR のテキストと同じ書き方で、エフェクトを番号にして書く (`evv_mask s3, [0@1, 1] s2`)。結果が `unit` の基本操作は、結果のスロットに `()` を書く
 - エフェクトの番号は 65535 より小さくなければならない。evidence の tag はエフェクトの番号 + 1 だからである ([オブジェクトモデル](object-model.md) の「evidence の3つの物体」)。速いモードの `ev_new` はこれを確かめない。コード生成は、これをコンパイラの内部の不変条件として panic で確かめ、`CompileError` にはしない
 - 算術と比較の extern は、それぞれ専用の命令にする。`Int` の13個 (`+ - * / % negate`、比較6つと `compare`) は `IntAdd`、`IntCompare` など、`Float` の12個 (`+ - * / % negate` と比較6つ) は `FloatAdd`、`FloatNeg`、`FloatLt` など、`Bool` の `==` と `!=` は `BoolEq` と `BoolNe` である。`eml_rt::externs` の `#[inline]` の関数を、命令の中に展開して呼ぶ。結果は生のビット列でスロットに書く。`Float` の命令は誤りを返さないので、`Panic` へ中断する道 (「`IO` と `Panic` への中断」) を通らない
-- 配列の行も専用の命令にする。`Std.Array.get` と `Std.MutArray.read` は `ArrayGet { dst, a, b }`、2つの `length` は `ArrayLength { dst, a }`、`Std.Array.set` と `Std.MutArray.write` は `ArraySet { dst, at }` である (`MutArray` の行は、LIR では借りた配列への `length` と `get` で、組は translate が作る)。`ArraySet` は引数が3つで `Op` の8バイトに収まらないため、`operands[at..]` に [配列, 添字, 値] を置く。`ArrayGet` と `ArrayLength` は配列を借りたままにし、誤りのときも手放さない (巻き戻しの表が手放す)。`ArraySet` は配列と値を消費する。誤りは `Int` の算術と同じく命令の繰り返しの誤りの道が `Panic` に届け、`ArrayGet` と `ArraySet` は `Panics` の行なので巻き戻しの地点である。残りの配列の行 (`make`、`empty`、`thaw`、`freeze`) は汎用の `Op::Extern` で動かす
+- 配列の行も専用の命令にする。`Std.Array.get` と `Std.MutArray.read` は `ArrayGet { dst, a, b }`、2つの `length` は `ArrayLength { dst, a }`、`Std.Array.set` と `Std.MutArray.write` は `ArraySet { dst, at }` である (`MutArray` の行は、LIR では借りた配列への `length` と `get` で、組は translate が作る)。`ArraySet` は引数が3つで `Op` の8バイトに収まらないため、`operands[at..]` に [配列, 添字, 値] を置く。`ArrayGet` と `ArrayLength` は配列を借りたままにし、誤りのときも手放さない (巻き戻しの表が手放す)。`ArraySet` は配列と値を消費する。誤りは `Int` の算術と同じく命令の繰り返しの誤りの道が `Panic` に届け、`ArrayGet` と `ArraySet` は `Panics` の行なので巻き戻しの地点である。残りの配列の行 (`make`、`empty`、`thaw`、`freeze`) と `Prelude.check_index` は汎用の `Op::Extern` で動かす。`check_index` は `Panics` の行なので、範囲の外の誤りは使う所から `Panic` に届く ([Core IR](core-ir.md) の「`var` の変換」)
 - ほかの extern (`Float` の `compare`、文字列、表示、`println`、`Fs`) は `Extern { dst, at }` の1つの命令にする。`operands[at..]` は [行の番号, 引数の数, 引数のスロット…] で、行の番号の `match` で `Ctx` のメソッドを呼ぶ
 - VM は `Ctx` の基本操作の合間に、`Ctx` が持つ語とそこからたどれる物体に触れない (`heap_mut()` の前提)
 - `Bool`、`Ordering`、組のタグの定数が `eml_rt::externs` と `eml_lir` で同じであることを、`eml_vm` のテスト (`tags.rs`) で確かめる。VM の `Bool` と `compare` の命令がこれに頼るためである

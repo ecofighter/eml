@@ -72,6 +72,8 @@ pub(crate) struct Index {
     pub(crate) boxed: HashMap<i64, u32>,
     /// `tobj` の `Float` のビット列から定数の番号。
     pub(crate) boxed_floats: HashMap<FloatBits, u32>,
+    /// 不死の空の `MutArray` の定数の番号。最初に使うときに作る。
+    pub(crate) empty_mut_array: Option<u32>,
 }
 
 #[derive(Debug, PartialEq, Eq)]

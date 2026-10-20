@@ -1,0 +1,11 @@
+---
+source: crates/eml_cli/tests/ui.rs
+assertion_line: 254
+expression: "format!(\"--- stdout ---\\n{stdout}--- stderr ---\\n{diagnostics}{stderr}{written}{exit}\")"
+input_file: tests/ui/run/var/last_expression_reads.em
+---
+--- stdout ---
+[0, 2, 4, 6]
+132
+6
+--- stderr ---

@@ -605,6 +605,10 @@ impl<'a, M: Mode> Emitter<'a, '_, M> {
             Prim::YieldContSet => Op::YieldContSet { dst, k: a[0] },
             Prim::YieldFinish => Op::YieldFinish { dst },
             Prim::Dummy => Op::Dummy { dst },
+            Prim::EmptyMutArray => Op::LoadConst {
+                dst,
+                index: self.constants.empty_mut_array(),
+            },
             Prim::RootGet(root) => Op::RootGet { dst, root: *root },
             Prim::RootSet(root) => {
                 let at = self.out.operands([*root, u32::from(a[0])]);
@@ -943,7 +947,8 @@ fn arithmetic(ext: Extern, dst: Slot, args: &[Slot]) -> Option<Op> {
         | Extern::MutArrayLength
         | Extern::MutArrayRead
         | Extern::MutArrayWrite
-        | Extern::MutArrayFreeze => return None,
+        | Extern::MutArrayFreeze
+        | Extern::CheckIndex => return None,
     })
 }
 

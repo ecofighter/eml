@@ -1,0 +1,10 @@
+---
+source: crates/eml_cli/tests/ui.rs
+assertion_line: 254
+expression: "format!(\"--- stdout ---\\n{stdout}--- stderr ---\\n{diagnostics}{stderr}{written}{exit}\")"
+input_file: tests/ui/run/var/index_panic_reaches_use_site.em
+---
+--- stdout ---
+array index 5 is out of range for length 3
+1
+--- stderr ---

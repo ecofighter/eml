@@ -271,3 +271,7 @@ while cond body =
 -- 要素を持つ組み込みの型。Array の Kind は要素に従い、MutArray は常に Lin (docs/spec/types.md)
 pub extern data Array a
 pub extern data MutArray a
+
+-- `var` の配列の変数の添字 `index` が長さ `len` の範囲の中か確かめ、外なら `MutArray.read` と同じ文言の `Panic` を
+-- 起こす。translate だけが呼ぶ (docs/spec/core-ir.md の「`var` の変換」)
+extern check_index : Int -> Int -> <Panic> Unit

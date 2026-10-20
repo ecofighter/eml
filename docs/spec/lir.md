@@ -298,8 +298,8 @@ handle の実行と、継続の再開のたびに、新しい evidence を作る
   - 借用の引数は、`unbox` のオペランドと同じく読む使いである (上の「ブロックの列」)。借りた変数をそのまま渡せる。`ev_take_state` と `ev_set_state` は、借りた evidence の状態の欄を書き換える (上の「evidence」)
   - 表は引数ごとの借用の印 (`PrimRow::borrowed`) を `params` と並べて持ち、長さは `params` と同じである
 - 表は `eml_lir` に置き (`Prim::row`)、`eml_extern` には入れない。`eml_extern` の表は `std/` と1対1に結び付けるテストを持ち、基本操作はソースに現れないためである。Core IR も同じ `Prim` を使う
-- 基本操作は純粋でないとみなし、縮約は消さない。例外は `root_get` で、根を読むだけなので、結果を使わなければ消す
-- `eml_rt` の `Ctx` は、`dummy` を除く基本操作をメソッドとして実装し、動作を Verus で証明する ([オブジェクトモデル](object-model.md) の「実行文脈 `Ctx`」)。即値はメソッドの引数になる。`ev_new` は、エフェクトの番号のほかに入口の数も引数で受ける。VM とネイティブのコードは、エフェクトの操作の数をコードの定数として持つためである
+- 基本操作は純粋でないとみなし、縮約は消さない。例外は `root_get` と `empty_mut_array` で、根か定数を読むだけなので、結果を使わなければ消す
+- `eml_rt` の `Ctx` は、`dummy` と `empty_mut_array` を除く基本操作をメソッドとして実装し、動作を Verus で証明する ([オブジェクトモデル](object-model.md) の「実行文脈 `Ctx`」)。即値はメソッドの引数になる。`ev_new` は、エフェクトの番号のほかに入口の数も引数で受ける。VM とネイティブのコードは、エフェクトの操作の数をコードの定数として持つためである
 
 | 基本操作 | 引数 | 借用 | 結果 | 動作 |
 |---|---|---|---|---|
@@ -325,8 +325,9 @@ handle の実行と、継続の再開のたびに、新しい evidence を作る
 | `root_get[i]` | なし | | `tobj` | 根 i を `dup` して返す ([オブジェクトモデル](object-model.md) の「セッションの根」)。REPL の translate が出す |
 | `root_set[i]` | `tobj` | なし | `unit` | 値を根 i に置く。根 i は空でなければならない |
 | `dummy` | なし | | `obj` | ダミーの物体 (下の「ダミーの値」) |
+| `empty_mut_array` | なし | | `obj` | 長さ 0 の `MutArray` の不死の物体。`var` の配列の変数を取り出した後の状態で、translate が `take` の節に出す ([Core IR](core-ir.md) の「`var` の変換」)。VM は凍結した領域の定数の語を返す ([VM](vm.md) の「`CodeBase` と `FnEntry`」) |
 
-- 表は、引数と結果の Kind の印も持つ (`PrimRow::param_marks`、`ret_mark`)。evidence と `evv` の位置は `unr`、状態、κ、節の本体の位置は `poly` である。`ev_set_clause` の入口のクロージャは、`ev_clause` が `dup` して返すので `unr` である。V2 が `prim` の引数と結果をこの列と比べる (下の「verifier」)
+- 表は、引数と結果の Kind の印も持つ (`PrimRow::param_marks`、`ret_mark`)。evidence と `evv` の位置は `unr`、状態、κ、節の本体の位置は `poly` である。`ev_set_clause` の入口のクロージャは、`ev_clause` が `dup` して返すので `unr` である。`empty_mut_array` の結果は `MutArray` の値なので `lin` である。V2 が `prim` の引数と結果をこの列と比べる (下の「verifier」)
 
   | 基本操作 | 引数の印 | 結果の印 |
   |---|---|---|
@@ -342,6 +343,7 @@ handle の実行と、継続の再開のたびに、新しい evidence を作る
   | `yield_cont_take` / `yield_cont_set` / `yield_finish` | なし / `poly` / なし | `poly` / `unr` / `poly` |
   | `root_get` / `root_set` | なし / `unr` | `unr` |
   | `dummy` | なし | `poly` |
+  | `empty_mut_array` | なし | `lin` |
 
 - `ev_set_clause` と `ev_clause` の即値は、操作をエフェクトで修飾して書く (`ev_clause[State.get]`)。テキストの形で操作の名前をエフェクトで修飾するためである
 - `yielding` と `yield_status` の結果を `int` にするのは、リテラルの `switch` で分けるためである。`Bool` で分けると、EP が配置の表に `Prelude.Bool` を足すことになり、translate の後のパスは配置の表を変えないという規則 ([Core IR](core-ir.md) の「translate の配置」) を崩す
@@ -440,7 +442,7 @@ handle の実行と、継続の再開のたびに、新しい evidence を作る
 
 ### 縮約
 
-- 使われない純粋な `let` を消す。純粋なのは `const`、`con`、`closure`、`box`、`unbox`、`prim root_get` と、表の行が `Pure` の `extern` である。ただし、`Lin` の引数を借りずに受ける `Pure` の行 (`Std.MutArray.freeze`) は消さない (`FunctionRow::removable`)。消すと `Lin` の値を手放す命令がなくなり、Perceus がその変数を `decref` して V1 が拒むためである。呼び出し、`Panics` と `Effectful` の `extern`、`prim`、`drop` は、使われなくても消さない。ほかの基本操作は実行の文脈か evidence を読み書きするので、純粋でないとみなす。使われない `box` を消しても確保が1つ減るだけで、`unbox` は読むだけなので、どちらも評価の順を変えない
+- 使われない純粋な `let` を消す。純粋なのは `const`、`con`、`closure`、`box`、`unbox`、`prim root_get`、`prim empty_mut_array` と、表の行が `Pure` の `extern` である。ただし、`Lin` の引数を借りずに受ける `Pure` の行 (`Std.MutArray.freeze`) は消さない (`FunctionRow::removable`)。消すと `Lin` の値を手放す命令がなくなり、Perceus がその変数を `decref` して V1 が拒むためである。呼び出し、`Panics` と `Effectful` の `extern`、`prim`、`drop` は、使われなくても消さない。ほかの基本操作は実行の文脈か evidence を読み書きするので、純粋でないとみなす。使われない `box` を消しても確保が1つ減るだけで、`unbox` は読むだけなので、どちらも評価の順を変えない
 - 縮約は、使われない純粋な `let` をすべて消し、いつも Perceus より前に走る。Perceus はこれに頼る。translate が開いた `unr` でない `con` の変数 ([Core IR](core-ir.md) の「translate が決める印」) は、使われない `con` として残り、その `lin` の引数は葉も読む。Perceus の入力にこの `con` が残ると、Perceus がその `lin` の `con` を `decref` し、V1 が拒む。そのため、Perceus の入力には、`unr` でない引数を持つ使われない `con` と `closure` がない
 - ブロックを後ろから、文を後ろから見る1回のパスで、関数全体の使用の数を使う。定義は使う位置を支配し、辺は番号の大きいブロックへ向かうので、`let` を見る時点でその変数の使用はすべて見終わっている。消した `let` だけが使っていた束縛も同じパスで消えるので、1回で不動点に達する。デバッグビルドでは、2回目のパスが何も変えないことを確かめる
 - 末尾呼び出しを作るのは縮約だけである。使われない `let` を消した後で、すべてのブロックに末尾呼び出しの規則を当てる。`let x = <呼び出し>` の直後の終端が `return x` で、呼び出しの結果と関数の `ret` が互換なら、2つを `tail` にする。結果は、直接の呼び出しなら呼ばれる関数の `ret`、`clause` なら操作の表の `ret`、`apply` なら `tobj` で、`never` の操作の `clause` はどの `ret` とも互換とする。文を消したかに関わらずすべてのブロックを1回見るので、時間はブロックの数に比例する

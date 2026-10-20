@@ -616,6 +616,12 @@ impl Body {
         self.captures(closure.body, &closure.params)
     }
 
+    /// `var` の範囲 `scope` が捕まえる局所変数。Core IR は範囲を handle の本体と同じく関数に持ち上げる
+    /// (docs/spec/core-ir.md の「`var` の変換」)。
+    pub fn scope_captures(&self, scope: ExprId) -> Vec<LocalId> {
+        self.captures(scope, &[])
+    }
+
     /// `root` の中で参照する局所変数のうち、`root` の中でも `bound` でも束縛していないもの。`LocalId` の順に並べる。
     /// ラムダと handle の本体と節は、捕まえた変数を先頭の引数に持つ関数に持ち上げるので (docs/spec/core-ir.md)、
     /// 入れ子のラムダや節が捕まえる変数は外側も捕まえる。式の木は作業リストでたどる。

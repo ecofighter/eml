@@ -3,16 +3,19 @@
 use eml_extern::{Extern, ExternType};
 use eml_hir::EvalStep;
 use eml_hir::{
-    Closure, ConstructorId, ExprId, ExprKind, FunctionId, FunctionKind, Literal, LocalId,
-    OperationId, Program as HirProgram, Res, Segment, ValueItem,
+    Closure, ConstructorId, ExprId, ExprKind, FunctionId, FunctionKind, IndexBase, Literal,
+    LocalId, OperationId, Program as HirProgram, Res, Segment, ValueItem, VarId as HirVar,
 };
-use eml_types::{FieldTarget, TypeId};
+use eml_types::{FieldTarget, IndexTarget, TypeId, TypeKind, VarClass};
 
-use crate::{Call, Rhs, Stmt};
+use crate::builder::FnBuilder;
+use crate::{Call, Rhs, Stmt, Term};
 use eml_lir::{Atom, Ctor, FnIdx, Mark, MaskItem, Prim, Repr, TUPLE, VarId};
 
 use super::pattern::Known;
-use super::program::{effect_index, perform_call, plain_call};
+use super::program::{
+    ProgramBuilder, VarOp, bind, effect_index, perform_call, plain_call, var_perform_call,
+};
 use super::types::{mark, named, repr, split_arrows, var_info};
 use super::{ContinuationForm, Exit, FnLowering, Param};
 
@@ -814,12 +817,36 @@ impl FnLowering<'_> {
                 let value = self.atom(*value);
                 self.bind("t", Repr::Unit, Mark::Unr, Rhs::Drop(value))
             }
-            // 型検査が E0004 を報告するので、ここには来ない
-            ExprKind::Var { .. }
-            | ExprKind::VarGet(_)
-            | ExprKind::Assign { .. }
-            | ExprKind::IndexAssign { .. }
-            | ExprKind::Index { .. } => unreachable!("var lands in S14c-3 Task 5"),
+            ExprKind::Var {
+                var,
+                init,
+                body: scope,
+                last: _,
+            } => self.var_scope(id, *var, *init, *scope),
+            // `Unr` の変数は値を読み、配列の変数は取り出す (docs/spec/core-ir.md の「`var` の変換」)
+            ExprKind::VarGet(var) => {
+                let op = match self.ctx.types.vars[*var].class {
+                    VarClass::Unr => VarOp::Get,
+                    VarClass::Array => VarOp::Take,
+                };
+                let ty = self.ty(id);
+                let result = (
+                    repr(self.ctx.store, ty, self.ctx.hir),
+                    mark(self.ctx.store, ty, self.ctx.hir),
+                );
+                self.var_perform(id, *var, op, vec![Atom::Unit], result)
+            }
+            ExprKind::Assign { var, value } => {
+                let value = self.atom(*value);
+                self.var_perform(id, *var, VarOp::Set, vec![value], UNIT)
+            }
+            ExprKind::IndexAssign { var, index, value } => {
+                let index = self.atom(*index);
+                let value = self.atom(*value);
+                self.check_index(id, *var, index);
+                self.var_perform(id, *var, VarOp::Write, vec![index, value], UNIT)
+            }
+            ExprKind::Index { base, index } => self.index(id, *base, *index),
             ExprKind::Lambda(closure) => {
                 let Closure {
                     params,
@@ -909,4 +936,269 @@ impl FnLowering<'_> {
             None,
         )
     }
+
+    /// `var x = e` の範囲 `scope` を、状態つきの handle にする。範囲は handle の本体と同じく `()` を受ける関数に
+    /// 持ち上げ、節と `return` の節は変数の分類から組む。節は HIR に元がないので、`lift_clause` と同じ並びの関数を
+    /// 直接作る (docs/spec/core-ir.md の「`var` の変換」)。
+    fn var_scope(&mut self, id: ExprId, var: HirVar, init: ExprId, scope: ExprId) -> Atom {
+        // 初期値は範囲の外で、範囲を持ち上げる前に評価する
+        let init_atom = self.atom(init);
+        let (store, hir) = (self.ctx.store, self.ctx.hir);
+        // 初期値の型は instance の代入をかけた変数の型である
+        let var_ty = self.ty(init);
+        let state = (repr(store, var_ty, hir), mark(store, var_ty, hir));
+        let scope_ty = self.ty(scope);
+        let scope_ret = (repr(store, scope_ty, hir), mark(store, scope_ty, hir));
+        let ty = self.ty(id);
+        let result = (repr(store, ty, hir), mark(store, ty, hir));
+        let prefix = format!("{}$var{}", self.ctx.root_name, u32::from(var.into_raw()));
+        // 範囲の row は変数のエフェクトを含むので、範囲はいつも yield しうる
+        let body = self.lift(
+            prefix.clone(),
+            true,
+            self.ctx.body.scope_captures(scope),
+            &[(None, Repr::Unit, Mark::Unr)],
+            scope,
+            scope_ret,
+            None,
+        );
+        let class = self.ctx.types.vars[var].class;
+        let element = match (class, store.kind(var_ty)) {
+            (VarClass::Array, TypeKind::Con { args, .. }) => {
+                (repr(store, args[0], hir), mark(store, args[0], hir))
+            }
+            _ => UNIT,
+        };
+        let clauses = VarOp::of(class)
+            .iter()
+            .map(|&op| {
+                let name = format!("{prefix}${}", op.name());
+                self.var_clause(name, op, state, element, result)
+            })
+            .collect();
+        let ret = self.var_return(format!("{prefix}$return"), class, scope_ret, state, result);
+        let call = Call::Handle {
+            effect: effect_index(hir, self.ctx.body.vars[var].effect),
+            init: init_atom,
+            body,
+            clauses,
+            ret,
+        };
+        self.bind("t", result.0, result.1, plain_call(call))
+    }
+
+    /// HIR に元のない内部の関数を作り、その値を返す。`body` は引数から本体の文を足し、返す値を返す。節は handle を
+    /// 含む関数の row で動くので、その関数と同じ `yields` の印にする。
+    fn synthesized(
+        &mut self,
+        name: String,
+        params: &[(&str, (Repr, Mark))],
+        ret: (Repr, Mark),
+        body: impl FnOnce(&mut FnBuilder, &mut ProgramBuilder, &[Atom]) -> Atom,
+    ) -> Atom {
+        let function = self.program.reserve(params.len());
+        let mut builder = FnBuilder::new();
+        let args: Vec<Atom> = params
+            .iter()
+            .map(|&(name, (repr, mark))| Atom::Var(builder.param(named(name, repr, mark))))
+            .collect();
+        let value = body(&mut builder, &mut *self.program, &args);
+        builder.terminate(Term::Return(value));
+        let core = builder.finish(name, true, self.yields, ret.0, ret.1);
+        self.program.finish(function, core);
+        Atom::Fn(function)
+    }
+
+    /// 変数の操作 `op` の節。引数は操作の引数、`k`、状態の順で、本体は `mask` のない末尾の `resume k(v, s)` で
+    /// 終わる。状態を渡す形の特殊化が「すぐに再開する節」として受け付ける形である。節は `Panic` を起こさない。
+    /// 添字の範囲は使う所の `check_index` が確かめてある (docs/spec/core-ir.md の「`var` の変換」)。
+    fn var_clause(
+        &mut self,
+        name: String,
+        op: VarOp,
+        state: (Repr, Mark),
+        element: (Repr, Mark),
+        result: (Repr, Mark),
+    ) -> Atom {
+        let int = (Repr::Int, Mark::Unr);
+        let args: &[(&str, (Repr, Mark))] = match op {
+            VarOp::Get | VarOp::Take | VarOp::Length => &[("p", UNIT)],
+            VarOp::Set => &[("v", state)],
+            VarOp::Read => &[("i", int)],
+            VarOp::Write => &[("i", int), ("v", element)],
+        };
+        let mut params = args.to_vec();
+        // 変数の操作はどれも1回だけ再開する
+        params.push(("k", (Repr::TObj, Mark::Lin)));
+        params.push(("st", state));
+        self.synthesized(name, &params, result, |builder, program, args| {
+            let (k, st) = (args[args.len() - 2], args[args.len() - 1]);
+            let (value, next) = match op {
+                VarOp::Get => (st, st),
+                VarOp::Set => (Atom::Unit, args[0]),
+                VarOp::Take => {
+                    let empty = bind(
+                        builder,
+                        named("h", state.0, state.1),
+                        Rhs::Prim(Prim::EmptyMutArray, Vec::new()),
+                    );
+                    (st, empty)
+                }
+                VarOp::Length | VarOp::Read => {
+                    let (ext, lent, value) = match op {
+                        VarOp::Length => (Extern::MutArrayLength, vec![st], int),
+                        _ => (Extern::MutArrayRead, vec![st, args[0]], element),
+                    };
+                    let pair = program.lending_call(
+                        builder,
+                        ext,
+                        lent,
+                        None,
+                        named("t", value.0, value.1),
+                        named("d", Repr::Obj, state.1),
+                    );
+                    let Atom::Var(pair) = pair else {
+                        unreachable!("a lending call binds its pair")
+                    };
+                    // 組は融合の既知のコンストラクタで消える
+                    let fields = vec![
+                        builder.var(named("f", value.0, value.1)),
+                        builder.var(named("st", state.0, state.1)),
+                    ];
+                    builder.emit(Stmt::Unpack {
+                        value: pair,
+                        ctor: Ctor {
+                            layout: program.tuple_layout(2),
+                            tag: TUPLE,
+                        },
+                        fields: fields.clone(),
+                    });
+                    (Atom::Var(fields[0]), Atom::Var(fields[1]))
+                }
+                VarOp::Write => {
+                    let written = bind(
+                        builder,
+                        named("st", state.0, state.1),
+                        Rhs::Extern {
+                            ext: Extern::MutArrayWrite,
+                            args: vec![st, args[0], args[1]],
+                            at: None,
+                        },
+                    );
+                    (Atom::Unit, written)
+                }
+            };
+            let call = Call::Resume {
+                k,
+                arg: value,
+                state: next,
+            };
+            bind(builder, named("t", result.0, result.1), plain_call(call))
+        })
+    }
+
+    /// 変数の `return` の節。`Unr` の変数は状態を捨て、配列の変数は残った状態を `drop` してから範囲の値を返す。
+    fn var_return(
+        &mut self,
+        name: String,
+        class: VarClass,
+        value: (Repr, Mark),
+        state: (Repr, Mark),
+        result: (Repr, Mark),
+    ) -> Atom {
+        let params = [("x", value), ("st", state)];
+        self.synthesized(name, &params, result, |builder, _, args| {
+            if class == VarClass::Array {
+                bind(
+                    builder,
+                    named("u", Repr::Unit, Mark::Unr),
+                    Rhs::Drop(args[1]),
+                );
+            }
+            args[0]
+        })
+    }
+
+    /// 変数の使いを、変数のエフェクトの操作 `op` の `perform` にする。型検査は変数の使いを閉じた row で含めるので、
+    /// ほかの `perform` と同じく `mask` を記録しない。
+    fn var_perform(
+        &mut self,
+        site: ExprId,
+        var: HirVar,
+        op: VarOp,
+        args: Vec<Atom>,
+        result: (Repr, Mark),
+    ) -> Atom {
+        debug_assert!(
+            self.mask(site, 0).is_empty(),
+            "a use of a variable has no recorded mask"
+        );
+        let effect = self.ctx.body.vars[var].effect;
+        let call = var_perform_call(self.ctx.hir, effect, op, args);
+        self.bind("t", result.0, result.1, plain_call(call))
+    }
+
+    /// 配列の変数の添字 `index` を、長さを読んで `check_index` で確かめる。範囲の外の `Panic` は使う所 `site` から
+    /// 起こるので、使う所に最も近い `try_panic` が捕まえる (docs/spec/core-ir.md の「`var` の変換」)。
+    fn check_index(&mut self, site: ExprId, var: HirVar, index: Atom) {
+        let length = self.var_perform(
+            site,
+            var,
+            VarOp::Length,
+            vec![Atom::Unit],
+            (Repr::Int, Mark::Unr),
+        );
+        let at = Some(self.loc(site));
+        let rhs = Rhs::Extern {
+            ext: Extern::CheckIndex,
+            args: vec![index, length],
+            at,
+        };
+        self.bind("u", Repr::Unit, Mark::Unr, rhs);
+    }
+
+    /// `e[i]`。配列の変数は長さで確かめてから `read` を `perform` する。`Array` の値は `Std.Array.get` の行を直接
+    /// 呼ぶので、`Std.Array` を読み込まなくてよい (docs/spec/core-ir.md の「`var` の変換」)。
+    fn index(&mut self, id: ExprId, base: IndexBase, index: ExprId) -> Atom {
+        let ty = self.ty(id);
+        let element = (
+            repr(self.ctx.store, ty, self.ctx.hir),
+            mark(self.ctx.store, ty, self.ctx.hir),
+        );
+        match (self.ctx.types.indexes[id], base) {
+            (IndexTarget::ArrayVar, IndexBase::Var(var)) => {
+                let index = self.atom(index);
+                self.check_index(id, var, index);
+                self.var_perform(id, var, VarOp::Read, vec![index], element)
+            }
+            (IndexTarget::ArrayVar, IndexBase::Expr(_)) => {
+                unreachable!("only a variable is an array variable")
+            }
+            (IndexTarget::Array, base) => {
+                let array = match base {
+                    // 要素は `Unr` なので、`Array` の値も `Unr` である
+                    IndexBase::Var(var) => {
+                        let array = (ExternType::Array.row().repr, Mark::Unr);
+                        self.var_perform(id, var, VarOp::Get, vec![Atom::Unit], array)
+                    }
+                    IndexBase::Expr(base) => self.atom(base),
+                };
+                let index = self.atom(index);
+                let at = Some(self.loc(id));
+                let (hir, store) = (self.ctx.hir, self.ctx.store);
+                self.program.extern_call(
+                    &mut self.builder,
+                    hir,
+                    store,
+                    Extern::ArrayGet,
+                    vec![array, index],
+                    at,
+                    ty,
+                )
+            }
+        }
+    }
 }
+
+/// `unit` の値の Repr と印。
+const UNIT: (Repr, Mark) = (Repr::Unit, Mark::Unr);

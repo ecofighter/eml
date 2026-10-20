@@ -116,7 +116,8 @@ fn continuation_forms(body: &Body) -> ArenaMap<LocalId, ContinuationForm> {
         .collect()
 }
 
-/// 本体の中で関数を作る式の番号。`$lambdaN`、`$handleN`、`$externN` の N である。変換の順に依らず、同じ instance
+/// 本体の中で関数を作る式の番号。`$lambdaN`、`$handleN`、`$externN` の N である。`var` の範囲の `$varN` の N は、
+/// 本体の中の変数の番号 (`eml_hir::Body::vars` の順) である。変換の順に依らず、同じ instance
 /// なら同じ名前になるように、本体を変換する前に式の ID の順で振る (docs/spec/core-ir.md)。extern で結んだメソッドの
 /// 参照は行き先が instance ごとに違うので、`$externN` の番号は同じ本体でも instance ごとに変わりうる。
 struct Numbering {

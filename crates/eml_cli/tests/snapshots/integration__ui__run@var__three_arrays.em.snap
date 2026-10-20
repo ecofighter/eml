@@ -1,0 +1,11 @@
+---
+source: crates/eml_cli/tests/ui.rs
+assertion_line: 254
+expression: "format!(\"--- stdout ---\\n{stdout}--- stderr ---\\n{diagnostics}{stderr}{written}{exit}\")"
+input_file: tests/ui/run/var/three_arrays.em
+---
+--- stdout ---
+[0, 1, 2, 3, 4]
+[0, 1, 4, 9, 16]
+[0, 2, 6, 12, 20]
+--- stderr ---

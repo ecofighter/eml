@@ -977,6 +977,10 @@ fn run_extern<M: Mode>(
                 let w = ctx.array_freeze(task.get(arg(0)))?;
                 task.set(dst, w);
             }
+            Extern::CheckIndex => {
+                externs::check_index(task.raw(arg(0)), task.raw(arg(1)))?;
+                task.set(dst, Word::UNIT);
+            }
             Extern::Panic
             | Extern::Exit
             | Extern::IntNeg

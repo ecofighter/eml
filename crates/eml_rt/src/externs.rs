@@ -399,6 +399,24 @@ pub fn int_compare(a: i64, b: i64) -> (r: i64)
     }
 }
 
+/// `var` の配列の変数の添字が範囲の中か。範囲の外なら、`MutArray.read` と同じ誤りを返す
+/// (docs/spec/object-model.md の「extern」)。
+#[inline]
+pub fn check_index(index: i64, len: i64) -> (r: Result<(), Fault>)
+    ensures
+        r is Ok <==> 0 <= index < len,
+        r is Err ==> (r matches Err(Fault::Index(fault)) && *fault == (IndexFault::Array {
+            index,
+            len,
+        })),
+{
+    if 0 <= index && index < len {
+        Ok(())
+    } else {
+        Err(Fault::Index(Box::new(IndexFault::Array { index, len })))
+    }
+}
+
 /// タグだけを比べるので、引数が `FALSE` か `TRUE` であることを前提にしない。
 #[inline]
 pub fn bool_eq(a: i64, b: i64) -> (r: i64)

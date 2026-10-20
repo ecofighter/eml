@@ -27,7 +27,7 @@
 | エフェクト (translate の出力だけ) | `perform op args`、`handle E(init, body) { 節 } return r`、`resume k(v, s)` (内部の命令)、`drop k`、呼び出しの `mask` |
 | evidence passing の出力 | `prim` (基本操作)、`clause` (節の呼び出し) |
 
-- `perform`、`handle`、`resume`、呼び出しの `mask` は translate だけが出し、evidence passing (EP) が基本操作と節の呼び出しに置き換える (下の「evidence passing」)。`clause` と、REPL の根の2つ (`root_get`、`root_set`) を除く `prim` は EP だけが出す
+- `perform`、`handle`、`resume`、呼び出しの `mask` は translate だけが出し、evidence passing (EP) が基本操作と節の呼び出しに置き換える (下の「evidence passing」)。`clause` と、REPL の根の2つ (`root_get`、`root_set`) と `var` の節の空の配列 (`empty_mut_array`) を除く `prim` は EP だけが出す
 - LIR との違いは、RC の命令 (`dup`、`decref`、`release`)、`box` と `unbox`、末尾呼び出し `tail` を持たないことと、エフェクトの命令と `mask` を持つことである。RC の命令などは LIR のパスだけが入れる
 - 関数は、名前、内部の関数かどうかの印 (`internal`。[LIR](lir.md) の「一様な関数」)、yield しうるかの印 (`yields`。下の「`yields` の印」)、入口の関数の印 (`clause`。[LIR](lir.md) の「入口の関数の印」)、変数の表、`ret` と `ret_mark`、ブロックの列を持つ。プログラムは、関数、入口、文字列の表、配置の表、エフェクトの表、ファイルの表を持つ。どちらも LIR と同じ欄で、LIR への変換がそのまま写す (下の「Core IR から LIR への変換」)
 - ブロックの列の意味 (アトム、`con`、`jump`、`switch`、`unpack`、フィールドの束縛、消費と読む) は、LIR と同じである ([LIR](lir.md) の「ブロックの列」)。RC の命令、`box`、`unbox`、`tail` の項目は Core IR に当たらない。エフェクトの命令の引数は、ほかの呼び出しの引数と同じく消費である
@@ -217,7 +217,7 @@ box の挿入が足す変数の印は、[LIR](lir.md) の「box の挿入」に�
   - 型変数を持つ関数の instance の名前は、元の名前 (モジュールの修飾を含む) に `@[型引数, …]` を付けた形である (`map@[Int, String]`、`Prelude.>>@[Int, Int, Int]`、`length@[List Int]`)。一様な位置の型引数 (`Flexible`) は `_` と書く (`depth@[_]`)。矢印の線形性は、`Lin` を `once a -> b`、`Poly` を `poly a -> b`、`Unr` を `a -> b` と書く ([型と Kind](types.md) の「Kind の書き出し」)。線形性だけが違う具体化は、別の instance として別の名前になる (`id@[once Int -> Int]` と `id@[Int -> Int]`)。一様な位置と操作ごとの型変数も Kind を書く (`_:poly`、`a:lin`。`Unr` は書かない)。Kind だけが違う鍵の名前を重ねないためである。名前は型引数だけで決まり、ほかの instance の有無や見つけた順によらない。REPL の追記が、名前が同じ関数はいつも同じコードになることに頼るためである ([VM](vm.md) の「追記」)
   - 型引数の型とクラスの名前は、名前のための表 (`NameTable`) で書く。診断の表示名は名前が重なるときだけ修飾するので、ほかのモジュールや後の入力が同じ名前を定義すると表示が変わり、名前が型引数だけで決まらなくなるためである。表は、Prelude の型とクラスを修飾しない (`Int`、`Show`)。Prelude は固定なので、修飾しなくても重なりは入力で変わらない。入口のモジュールと REPL のセッションの型とクラスは中段の名前 (下の「REPL の入力」) で書き、Prelude の型かクラスと同じ名前のものは `Main.` で修飾する (`Main.Bool`)。ほかのモジュールの型とクラスは、モジュール名で修飾する (`Std.Fs.File`)
   - `@[` と `]` の間が 64 文字を超える instance は、`@[…]` の代わりに、型引数の構造から計算する 64 ビットのハッシュを16桁の16進数で `@#` の後に書く (`ident@#3fa91c0d5e2b7a10`)。部分を共有する型の型引数で、名前が指数の長さになるのを防ぐためである。ハッシュは、表示と同じ情報 (名前、矢印の線形性、row、Kind) を、型の DAG の節ごとに1回だけ計算する。`TypeId` にはよらない。debug ビルドは、プログラムの中で名前が重ならないことを確かめる。入力をまたいだハッシュの衝突は、REPL の debug ビルドの一致の確かめだけが捕まえる。64 ビットの衝突は起きにくいので、release ビルドでは受け入れる
-  - 型変数を持たない関数の名前は、元の名前のままである。立ったビットの row 変数は、名前の後ろに `<e>` の形で書く (下の「row のビットと instance の鍵」)。ラムダ、handle の本体と節、`$externN` の名前は、instance の名前を根にする (`twice@[Int]$lambda0`)。ローカル関数の名前は `<instance の名前>$let$<ローカル関数の名前>` で、同じ instance の中で名前が重なるときは、HIR の順で2つ目から `#2`、`#3` を付ける (`map@[Int, Int]$let$go`、`$let$go#2`。下の「ローカル関数の持ち上げ」)。box の挿入が足す `f$boxed` も、instance の名前に付ける (`inc@[Unit]$boxed`)。入口を呼ぶ関数の名前は、instance の名前でなく元の名前から作る (`entry$first`)。位置を持たない実行時エラー ([LIR](lir.md) の「実行時エラー」) は、instance の名前を出す
+  - 型変数を持たない関数の名前は、元の名前のままである。立ったビットの row 変数は、名前の後ろに `<e>` の形で書く (下の「row のビットと instance の鍵」)。ラムダ、handle の本体と節、`var` の範囲と節、`$externN` の名前は、instance の名前を根にする (`twice@[Int]$lambda0`、下の「`var` の変換」)。ローカル関数の名前は `<instance の名前>$let$<ローカル関数の名前>` で、同じ instance の中で名前が重なるときは、HIR の順で2つ目から `#2`、`#3` を付ける (`map@[Int, Int]$let$go`、`$let$go#2`。下の「ローカル関数の持ち上げ」)。box の挿入が足す `f$boxed` も、instance の名前に付ける (`inc@[Unit]$boxed`)。入口を呼ぶ関数の名前は、instance の名前でなく元の名前から作る (`entry$first`)。位置を持たない実行時エラー ([LIR](lir.md) の「実行時エラー」) は、instance の名前を出す
   - instance の本体は、本体の型 (式、局所変数、パターン、参照の型引数) に instance の代入をかけた型で変換する。代入をかけた後には型変数も Kind 変数も残らない (debug ビルドで確かめる)。型変数を持たず、定数に畳まれない宣言自身の Kind 変数も持たない関数は、本体の型を写さずに型検査の表をそのまま使う。このとき本体の型に現れる変数は節の `OpVar` だけで、その Kind は定数である。写さない関数の本体に Kind 変数が残っていないことも、debug ビルドで確かめる。トップレベルの関数の引数と `ret` の Repr は、宣言の型に代入をかけた型から決める。メソッドの解決も、代入をかけた型引数から行う。ラムダ、ローカル関数、handle の本体、節は、外側の instance の型を使う。節の型変数は `Flexible` になるので、節の中のコードは一様なままである
   - データの配置、`op$`、`con$`、`cont$`、`cont$state` は、instance によらずスキームから作る。データの配置まで型ごとに分けると、一様な位置を通るコードと配置が食い違うためである (上の「translate の配置」)
 - テキストの形 ([テスト戦略](../implementation/testing.md) の「Core IR のテキストの形」) は関数とエフェクトを名前で引くので、モジュールをまたいで名前が重なってはいけない。入口以外のモジュールでは、関数、操作を包む関数、コンストラクタを包む関数、エフェクトの表の名前に `モジュール名.` を付ける (`Report.Csv.parse`、`con$Report.Csv.Row`)。標準ライブラリのモジュールもこの規則に含め、正式な名前を使う (`Prelude.not`、ラムダは `Prelude.>>$lambda0`)。入口のモジュールの名前には付けない (`parse`、`op$get`)。extern の呼び出し (`extern <正式な名前>(…)`) は、正式な名前をそのまま使う (`extern Std.Fs.open`)。
@@ -268,6 +268,33 @@ box の挿入が足す変数の印は、[LIR](lir.md) の「box の挿入」に�
 - 値としての参照は、使う位置ごとに閉包を作る。別の関数のループの中でローカル関数を値として渡すと、反復のたびに閉包を作り直す。トップレベルの補助関数に閉包を引数で渡す書き方なら、作るのは1回である
 - ローカル関数を呼ぶラムダは、呼ぶローカル関数の捕まえる値をすべて捕まえる。ローカル関数の閉包を1つ捕まえるより、閉包の語と `dup` が増えることがある。EP の継続の閉包 (`f$kN`) も同じである
 - ローカル関数は、外側の instance ごとに複製する。外側の型引数に関わらないローカル関数でも、外側の instance の数だけできる
+
+### `var` の変換
+
+`var x = e` のノード ([式](expressions.md) の「`var`」) は、地点の合成のエフェクト L を扱う状態つきの handle にする。状態の初期値は `e` である。操作の表、節、`perform` は、型検査が決めた変数の分類 (`BodyTypes::vars`。[型と Kind](types.md) の「`var` の変数」) から組む。
+
+- 初期値は範囲の外で、範囲を持ち上げる前に評価する。範囲 (`var` の文より後ろの文と最後の式) は、handle の本体と同じく、捕まえた変数を先頭の引数に持ち `()` を受ける関数に持ち上げる。範囲の関数はいつも `yields` である
+- 関数の名前は instance の名前を根にし、範囲は `<instance の名前>$var<N>`、節は `$var<N>$<操作>`、`return` の節は `$var<N>$return` にする (`main$var0$get`)。N は本体の中の変数の番号 (`Body::vars` の順) である
+- エフェクトの名前は HIR の項目の名前 `var$<k>$<x>` を、ほかのエフェクトと同じくモジュールで修飾する。セッションのモジュールでは、前の入力が同じ名前を定義していれば `#N` を足す (下の「REPL の入力」)。地点ごとに名前が違うので、VM がエフェクトを名前で引いても、外側の地点の閉包が内側の地点の handler に届かない
+- 操作の表は地点ごとに1つで、Repr と印を変数の宣言の中の型 `s` (instance の代入をかけない型) から決める。型変数の位置は `tobj` と `poly` になり、instance ごとの Repr との変換は box の挿入が入れる。操作の番号は次の表の並びの位置である
+
+  | 変数の分類 | 操作 |
+  |---|---|
+  | `Unr` の変数 | `get(unit) -> s`、`set(s) -> unit` |
+  | 配列の変数 (`s` は `MutArray e` で、`obj lin`) | `take(unit) -> s`、`length(unit) -> int`、`read(int) -> e`、`write(int, e) -> unit` |
+
+- 節は HIR に元がないので、translate が直接組む。引数は HIR から持ち上げた節と同じく、操作の引数、`k`、状態の順である。`k` は `tobj lin` で、どの操作も1回だけ再開する。状態の引数は初期値の型 (instance の代入をかけた変数の型) の Repr と印を持ち、`return` の節の状態の引数と同じである。節の本体は `mask` のない末尾の `resume k(v, s)` で終わり、`k` をそこで1回だけ使う。状態を渡す形の特殊化が受け付ける、すぐに再開する節の形である (下の「handler の節の形」)
+  - `get` は `resume k(st, st)`、`set` は `resume k((), v)` である
+  - `take` は `let h = prim empty_mut_array()` の後に `resume k(st, h)` である。取り出した後の状態は確保しない不死の空の配列になる ([LIR](lir.md) の「基本操作」)
+  - `length` と `read` は `Std.MutArray.length` と `read` の行を、上の「組を返す extern」と同じ形で配列を借りて呼び、組を `unpack` で開いてから、値と配列で再開する。組は融合の既知のコンストラクタで消える
+  - `write` は `Std.MutArray.write` の行で書き、`resume k((), st2)` である
+- `return` の節は値と状態を受けて値を返す。`Unr` の変数は状態を捨てる。配列の変数は残った状態を `drop` してから返す
+- 変数を使う所は、どれも L の `perform` にする。型検査は変数の使いを閉じた row で含めるので、ほかの操作の `perform` と同じく `mask` を記録しない
+  - `x` は、`Unr` の変数なら `get` を、配列の変数なら `take` を `perform` する。`x := e` は、`e` を評価してから `set` を `perform` する
+  - 配列の変数の `x[i]` は `i` を評価し、`length` を `perform` し、`extern Prelude.check_index(i, n)` で範囲を確かめてから、`read(i)` を `perform` する。`x[i] := e` は `i`、`e` の順に評価し、同じく範囲を確かめてから `write(i, v)` を `perform` する。`check_index` の位置は添字のノードの先頭である
+  - `Array` の値の添字 (`IndexTarget::Array`) は、左側が変数なら `get` を `perform` し、式なら評価してから、`i` を評価し、`Std.Array.get` の行を直接呼ぶ。そのため `Std.Array` を読み込まなくてよい
+- 範囲の外の `Panic` は、使う所の `check_index` が起こし、節の中では起こらない。節の入口は状態を evidence から取り出してから本体を動かすので、節の中で `Panic` が起こると、範囲の内側の `try_panic` が捕まえた後に変数の状態が失われるためである。`Panic` は使う所から起こるので、使う所に最も近い `try_panic` に届く。特殊化した版でも同じである。`check_index` の結果を `Unit` にするのは、戻らない呼び出しの前の `drop` (上の「戻らない呼び出しの前の `drop`」) を translate が置かずに済むようにするためである
+- 節の入口の形は EP の規則のままにする。`read` と `write` の節は `Panics` の extern を呼ぶので under の形になる (下の「`perform` と節の3つの形」) が、範囲は確かめてあるので中断しない
 
 ### row のビットと instance の鍵
 
@@ -426,7 +453,7 @@ REPL の入力から作る関数 `input$N` (N は入力の番号) は、`()` を
 - `let x = e` の入力の `entry$input$N` は、結果を `prim root_set[N]` で根に置く。根の番号は入力の番号である ([オブジェクトモデル](object-model.md) の「セッションの根」)
 - 前の入力の `let` の束縛への参照は、どこにあっても `prim root_get[i]()` になる。関数の定義の本体からも参照できる。値の Repr と根の `tobj` の変換は、box の挿入が入れる
 - `:type` の問い合わせの入力の関数 (`InputKind::Query`) は translate に渡らない。`Repl` が lowering しないためで、渡れば内部の誤りである
-- 変換の段の verifier は、translate が出す基本操作として `root_get` と `root_set` だけを受ける (下の「verifier」)
+- 変換の段の verifier は、translate が出す基本操作として `root_get` と `root_set` と、`var` の節の `empty_mut_array` だけを受ける (下の「verifier」)
 - セッションの item は、種類 (型、コンストラクタ、エフェクト、操作、クラス、メソッド、instance、関数) によらず中段の名前を持つ。前の入力が同じ名前の item を (名前空間によらず) 定義していなければ名前そのもの、定義していれば定義した入力の番号を付けた `名前#N` である。前の入力は変わらないので、前の版の名前は後の入力で変わらない。名前空間の違う同じ名前の item (型とそのコンストラクタ) は IR の別の表に入るので重ならない。エフェクトの名前、`op$E.op`、`con$A`、配置の名前、`mask$[E]` も中段の名前から作る。セッションのモジュールの名前 (`<input N>`) は接頭辞にしない
 - `#` を含む関数の名前は、テキストの形では空白を含む名前と同じく引用符で囲む ([テスト戦略](../implementation/testing.md) の「LIR のテキストの形」)。エフェクトと配置の名前は、`#` を含んでも1つの語として読めるので囲まない
 - `op$`、`con$`、`cont$`、`cont$state` は複数の定義が値として使う `internal` の関数である。どれも値と部分適用でだけ使われ、直接は呼ばれないので、box の挿入はいつもその場で一様にする (`cont$` と `cont$state` は初めから一様である)。`optimize` もこれらを直接呼ばない。引数のそろった `apply` は包んでいる命令に戻し、これらを複製しない (下の「最適化」の「包む関数」)。どのプログラムでも同じコードになるので、REPL の追記と食い違わない。直接は呼ばれないことを、テストで固定する
@@ -930,7 +957,7 @@ b_fast:
 ## verifier
 
 - Core IR の verifier は2つの段を持つ。段はパスの順に並ぶ
-  - 変換の段 (`verify_translated`) は translate と `optimize` の後にかける。[LIR](lir.md) の「構造の規則」の印のない部分と、引き継ぐ検査を確かめる。EP が作るもの (REPL の根の `root_get` と `root_set` を除く `prim`、`clause`、`clause` の印の関数) を拒む (`` `prim evv_get` is used before the evidence pass ``、`a clause call is used before the evidence pass`、``a clause of `Counter.get` is defined before the evidence pass``)
+  - 変換の段 (`verify_translated`) は translate と `optimize` の後にかける。[LIR](lir.md) の「構造の規則」の印のない部分と、引き継ぐ検査を確かめる。EP が作るもの (REPL の根の `root_get` と `root_set` と、`var` の節の `empty_mut_array` を除く `prim`、`clause`、`clause` の印の関数) を拒む (`` `prim evv_get` is used before the evidence pass ``、`a clause call is used before the evidence pass`、``a clause of `Counter.get` is defined before the evidence pass``)
   - EP の段 (`verify_evidence`) は EP の後にかける。変換の段の検査から EP が作るものの拒否を除き、基本操作と `clause` の検査 ([LIR](lir.md) の「verifier」) を足す。`handle`、`perform`、`resume` と、呼び出しの `mask` を拒む (``a perform remains after the evidence pass``。`a handler`、`a resume`、`a mask` も同じ形)
 - 着地の印 ([LIR](lir.md) の「着地の印」) も EP が作るものなので、変換の段は拒む (`a prompt marker appears before the evidence pass`)。EP の段は、`apply` のほかの検査の後に、印の変数 v が見えること、印の付いた `apply` が末尾の位置 ([LIR](lir.md) の「末尾の位置の呼び出し」) にないこと、v の Repr が `obj` であること、v が呼び出しの直後で生きていることを、この順に確かめる (``an apply with the prompt marker `ev.2` is in a tail position, which leaves no frame to land on``、`` `ev.2` is the prompt marker of an apply, but it is tobj, not obj ``、`` `ev.2` is the prompt marker of an apply, but it is not used after the call ``)。生きているかは、生存解析の入口の集合を関数ごとに1回だけ求め、ブロックの終端と後ろの文から逆にたどって決める。印の変数は呼び出しの使いではないので、生存解析は印を使いに数えない
 - 印の検査は、Core IR の2つの段で、`jump` と `return` の V2 と、作る所の検査を行う。それ以外の受け渡しは、境界に合うようになってから LIR の範囲の段で比べる。`perform`、`handle`、`resume` の受け渡しは比べず、EP がそれらを `clause` と基本操作に置き換えた後の段で比べる。`never` の操作の `perform` (変換の段) と `clause` (EP の段) の結果を束縛する変数は、使いに制御が届かないので、V2 と作る所の検査の対象にしない。V1 は `dup` と `decref` が Core IR にないので走らない ([LIR](lir.md) の「Kind の印の検査」)

@@ -414,10 +414,11 @@ left が一意 (is_unique)
 - `MutArray` はいつも一意なので、共有の物体の `freeze` は型の誤りである。検査モードは `NotUnique` で断り、速いモードは写す。速いモードが写すのは、VM が確かめられない前提 (一意であること) をメソッドに置かないためである
 - `set_lin` は、一意な物体の `meta` の `lin` ビットだけを書き換え、tag、scan、種類、rc は変えない。一意な物体はほかの物体から辺で指されず、ほかのスレッドも読めない。そのため、ビットを変えても、`evv` のリストと evidence の形や、`Ctx` の持つ語の条件は崩れない。Verus はこの変化を、`evolved_by` の代わりに `evolved_lin` (`a` だけは `meta` の `lin` ビットも変わってよい変化) で書いて証明する
 - 写しも書き換えも語の単位なので、信頼の一覧に行を足さない
+- `var` の配列の変数を取り出した後の状態は、VM が凍結した領域に1つだけ置く、`lin` ビットを立てた長さ 0 の配列である (下の「凍結した領域」)。`alloc_immortal` は `lin` ビットのある `Data` を作れ、凍結は参照の数が 0 の物体を受け付けるので、このために `eml_rt` に足すものはない。長さが 0 なので、添字を確かめてから読み書きする `var` の節はこの物体を書き換えない ([Core IR](core-ir.md) の「`var` の変換」)
 
 ## 凍結した領域
 
-不死の定数 (文字列リテラル、即値に収まらない `Int` の定数、それらを指すデータ) は、どのヒープにも属さない凍結した領域に置く。どのヒープも、領域の定数を指す語を受け付ける。定数を共有の領域に置く理由は次のとおりである。
+不死の定数 (文字列リテラル、即値に収まらない `Int` の定数、`var` の配列の変数が取り出された後に持つ空の `MutArray`、それらを指すデータ) は、どのヒープにも属さない凍結した領域に置く。どのヒープも、領域の定数を指す語を受け付ける。定数を共有の領域に置く理由は次のとおりである。
 
 - ネイティブ化では、文字列リテラルは、バイナリの読み出し専用のデータに置いた rc 0 の物体にするのが自然である (Lean、Koka と同じ)。どのヒープにも属さない物体なので、ヒープの操作は、自分のページにない rc 0 の物体を受け付ける必要がある
 - `share` は不死の物体でたどりを止めるので、`par` で値を別の worker に渡すと、受け手は渡し手のヒープの不死の物体を指す語を受け取る。自分のヒープにない不死の物体を受け付ける条件は、いずれ要る
@@ -764,7 +765,7 @@ token の表の項目は、`into_token` と `release_reuse` が添字を使い�
 
 ## extern
 
-`eml_extern` の表の関数の行のうち `exit` と `panic` を除く71個を、`eml_rt` に語の ABI で1回だけ書く。S10 の VM と、後のネイティブのコードが同じ関数を呼ぶ。ヒープを使わない算術と比較は module `externs` の関数で、文字列と I/O の extern は `Ctx` のメソッドである。純粋な extern は、結果をバイト列や整数の spec に対して Verus で証明する。`exit` と `panic` は VM が実行する。`exit` は終了コードを覚えて、`Ctx::exit_abort` で中断を始める。`panic` は文言を `panicked` の節の入口に渡す ([VM](vm.md) の「extern の中断」)。
+`eml_extern` の表の関数の行のうち `exit` と `panic` を除く83個を、`eml_rt` に語の ABI で1回だけ書く。S10 の VM と、後のネイティブのコードが同じ関数を呼ぶ。ヒープを使わない算術と比較は module `externs` の関数で、文字列と I/O の extern は `Ctx` のメソッドである。純粋な extern は、結果をバイト列や整数の spec に対して Verus で証明する。`exit` と `panic` は VM が実行する。`exit` は終了コードを覚えて、`Ctx::exit_abort` で中断を始める。`panic` は文言を `panicked` の節の入口に渡す ([VM](vm.md) の「extern の中断」)。
 
 行の番号 (`eml_extern::Extern`) から関数を引く表は `eml_rt` に置かない。VM が行の番号の `match` で各関数を呼ぶ。`match` は飛び先の表になるので、関数ポインタの表と同じ速さである。
 
@@ -779,6 +780,7 @@ token の表の項目は、`into_token` と `release_reuse` が添字を使い�
 | `Prelude.Show Float.show`、`Std.Float.to_fixed` | `Ctx::float_show`、`float_to_fixed` |
 | `Std.Float.can_parse`、`parse_raw` | `Ctx::string_to_float` (読めたかと、読めた値。読めなければ `parse_raw` は NaN を返す) |
 | `Prelude.Eq Bool.==`、`!=` | `bool_eq`、`bool_ne` |
+| `Prelude.check_index` | `check_index` (`0 <= index < len` なら `Ok(())`、そうでなければ `Std.MutArray.read` と同じ `IndexFault::Array`) |
 | `Prelude.Eq String.==`、`!=`、`Prelude.Ord String.compare` | `Ctx::string_eq`、`string_ne`、`string_compare` |
 | `Prelude.++` | `Ctx::string_append` |
 | `Prelude.Show Int.show`、`Prelude.Show String.show` | `Ctx::int_show`、`string_show` |

@@ -534,9 +534,12 @@ impl<'a> Checker<'a> {
             }
             Rhs::Extern { ext, args, at: _ } => self.cx.check_extern(var, *ext, args)?,
             Rhs::Prim(prim, args) => {
-                // 根の基本操作は translate が作る (docs/spec/lir.md の「基本操作」)
+                // 根の基本操作と、`var` の節の空の配列は translate が作る (docs/spec/lir.md の「基本操作」)
                 if self.level == Level::Translated
-                    && !matches!(prim, Prim::RootGet(_) | Prim::RootSet(_))
+                    && !matches!(
+                        prim,
+                        Prim::RootGet(_) | Prim::RootSet(_) | Prim::EmptyMutArray
+                    )
                 {
                     return Err(format!(
                         "`prim {}` is used before the evidence pass",

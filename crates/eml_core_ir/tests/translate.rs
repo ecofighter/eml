@@ -3498,3 +3498,43 @@ main () =
     }
     "#);
 }
+
+/// `var` の範囲は状態つきの handle になる。範囲は `()` を受ける関数に持ち上げ、`Unr` の変数の節 `get` と `set` は
+/// 末尾の `resume` で終わる。変数の使いは操作の `perform` である (docs/spec/core-ir.md の「`var` の変換」)。
+#[test]
+fn a_var_lowers_to_a_handle() {
+    let text = "main : Unit -> <IO, Panic> Unit\nmain () =\n  var x = 1\n  x := x + 1\n  println (show x)\n";
+    insta::assert_snapshot!(core_text(text, Pass::Translate), @r#"
+    effect Prelude.IO { never io_failed(enum, obj) -> never }
+    effect Prelude.Panic { never panicked(obj) -> never }
+    effect var$0$x { get(unit) -> int, set(int) -> unit }
+    fn main(p.0: unit) -> unit {
+      let t.1: unit = handle var$0$x(1, &main$var0) { get: &main$var0$get, set: &main$var0$set } return &main$var0$return
+      return t.1
+    }
+    internal yields fn main$var0(p.0: unit) -> unit {
+      let t.1: int = perform var$0$x.get(())
+      let t.2: int = extern "Prelude.Num Int.+"(t.1, 1)
+      let t.3: unit = perform var$0$x.set(t.2)
+      let t.4: int = perform var$0$x.get(())
+      let t.5: obj = extern "Prelude.Show Int.show"(t.4)
+      let t.6: unit = extern Prelude.println(t.5)
+      return t.6
+    }
+    internal fn main$var0$get(p.0: unit, k.1: tobj lin, st.2: int) -> unit {
+      let t.3: unit = resume k.1(st.2, st.2)
+      return t.3
+    }
+    internal fn main$var0$set(v.0: int, k.1: tobj lin, st.2: int) -> unit {
+      let t.3: unit = resume k.1((), v.0)
+      return t.3
+    }
+    internal fn main$var0$return(x.0: unit, st.1: int) -> unit {
+      return x.0
+    }
+    fn entry$main() -> unit {
+      let t.0: unit = call main(())
+      return t.0
+    }
+    "#);
+}
