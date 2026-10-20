@@ -291,6 +291,22 @@ pub enum Op {
         dst: Slot,
         src: Slot,
     },
+    /// `Std.Array.get` と `Std.MutArray.read`。配列 `a` は借りたまま、添字 `b` の要素の参照を `dst` に置く。
+    ArrayGet {
+        dst: Slot,
+        a: Slot,
+        b: Slot,
+    },
+    /// `Std.Array.length` と `Std.MutArray.length`。配列 `a` は借りたまま。
+    ArrayLength {
+        dst: Slot,
+        a: Slot,
+    },
+    /// `Std.Array.set` と `Std.MutArray.write`。`operands[at..]` は [配列, 添字, 値]。配列と値を消費する。
+    ArraySet {
+        dst: Slot,
+        at: u32,
+    },
     /// 算術と比較以外の extern。`operands[at..]` は [行の番号, 引数の数, 引数のスロット…]。
     Extern {
         dst: Slot,

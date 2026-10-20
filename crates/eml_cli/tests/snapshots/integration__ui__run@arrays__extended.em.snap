@@ -1,0 +1,17 @@
+---
+source: crates/eml_cli/tests/ui.rs
+expression: "format!(\"--- stdout ---\\n{stdout}--- stderr ---\\n{diagnostics}{stderr}{written}{exit}\")"
+input_file: tests/ui/run/arrays/extended.em
+---
+--- stdout ---
+45
+(45, 55)
+[0, 1, 4, 9, 16, 25]
+(["alpha", "beta", "gamma"], ["alpha", "beta!", "gamma"], "beta")
+(7, 3)
+(3, 99)
+Err "array index 3 is out of range for length 3"
+["alpha", "beta", "gamma"]
+Err "array index 5 is out of range for length 3"
+"gamma"
+--- stderr ---

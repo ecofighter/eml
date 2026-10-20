@@ -635,3 +635,29 @@ fn main(a.0: float, b.1: float) -> enum {
          9  ret s0
     ");
 }
+
+/// 配列の `length` / `get` / `read` / `set` / `write` は専用の命令になり、汎用の `extern` を通らない
+/// (docs/spec/vm.md の「基本操作と extern」)。
+#[test]
+fn array_rows_use_dedicated_ops() {
+    let text = disasm_unverified(
+        "\
+fn main(a.0: obj, m.1: obj) -> unit {
+  let n.2: int = extern Std.Array.length(a.0)
+  let x.3: tobj = extern Std.Array.get(a.0, n.2)
+  let k.4: int = extern Std.MutArray.length(m.1)
+  let y.5: tobj = extern Std.MutArray.read(m.1, k.4)
+  let b.6: obj = extern Std.Array.set(a.0, n.2, x.3)
+  let c.7: obj = extern Std.MutArray.write(m.1, k.4, y.5)
+  return ()
+}
+",
+    );
+    for op in ["array_length", "array_get", "array_set"] {
+        assert!(text.contains(op), "{op} is missing:\n{text}");
+    }
+    assert!(
+        !text.contains("extern"),
+        "an array row stayed generic:\n{text}"
+    );
+}

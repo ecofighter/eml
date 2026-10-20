@@ -347,6 +347,20 @@ impl<'a, M: Mode> Emitter<'a, '_, M> {
         items
     }
 
+    /// 配列の行の専用の命令 (docs/spec/vm.md の「基本操作と extern」)。`set` だけは3つのオペランドが `Op` の8バイトに
+    /// 入らないので、`operands` に置く。
+    fn array_op(&mut self, ext: Extern, dst: Slot, slots: &[Slot]) -> Option<Op> {
+        Some(match (ext, slots) {
+            (Extern::ArrayLength | Extern::MutArrayLength, &[a]) => Op::ArrayLength { dst, a },
+            (Extern::ArrayGet | Extern::MutArrayRead, &[a, b]) => Op::ArrayGet { dst, a, b },
+            (Extern::ArraySet | Extern::MutArrayWrite, &[_, _, _]) => {
+                let at = self.out.operands(slots.iter().map(|&s| u32::from(s)));
+                Op::ArraySet { dst, at }
+            }
+            _ => return None,
+        })
+    }
+
     fn rhs(&mut self, var: VarId, rhs: &Rhs) {
         let dst = self.slot(var);
         match rhs {
@@ -362,6 +376,9 @@ impl<'a, M: Mode> Emitter<'a, '_, M> {
                     .map(|(&arg, &repr)| self.atom(arg, repr))
                     .collect();
                 let op = arithmetic(*ext, dst, &slots).unwrap_or_else(|| {
+                    if let Some(op) = self.array_op(*ext, dst, &slots) {
+                        return op;
+                    }
                     let at = self.out.operands(
                         [*ext as u32, slots.len() as u32]
                             .into_iter()

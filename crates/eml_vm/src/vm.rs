@@ -386,6 +386,25 @@ fn step<M: Mode>(
             let bits = data::unbox_float(ctx, task.get(src), counts)?;
             task.set_raw(dst, bits as i64);
         }
+        // 配列の行は借りる引数を手放さない。誤りは `step_failed` が `Panic` に届ける
+        Op::ArrayGet { dst, a, b } => {
+            let w = unsafe { ctx.array_get(task.get(a), task.raw(b)) }?;
+            task.set(dst, w);
+        }
+        Op::ArrayLength { dst, a } => {
+            let n = unsafe { ctx.array_length(task.get(a)) }?;
+            task.set_raw(dst, n);
+        }
+        Op::ArraySet { dst, at } => {
+            let o = &code.operands[at as usize..];
+            let (a, i, x) = (
+                task.get(o[0] as Slot),
+                task.raw(o[1] as Slot),
+                task.get(o[2] as Slot),
+            );
+            let w = unsafe { ctx.array_set(a, i, x) }?;
+            task.set(dst, w);
+        }
         Op::Extern { dst, at } => extern_call(code, ctx, task, counts, dst, at)?,
         // 基本操作 (docs/spec/lir.md の「基本操作」) は `Ctx` の同じ名前のメソッドを呼ぶ。引数の語は、LIR の所有の規則に
         // より VM が持つ参照か借りた語で、基本操作の契約 (docs/spec/object-model.md の「基本操作の契約」) のとおりに
@@ -645,17 +664,21 @@ fn step_failed<M: Mode>(
     pc: Pc,
     fault: VmFault,
 ) -> Result<(), VmFault> {
-    let dst = match code.code[pc as usize] {
+    let (dst, purity) = match code.code[pc as usize] {
         Op::IntAdd { dst, .. }
         | Op::IntSub { dst, .. }
         | Op::IntMul { dst, .. }
         | Op::IntDiv { dst, .. }
         | Op::IntRem { dst, .. }
-        | Op::IntNeg { dst, .. } => dst,
+        | Op::IntNeg { dst, .. }
+        | Op::ArrayGet { dst, .. }
+        | Op::ArraySet { dst, .. } => (dst, Purity::Panics),
+        // `length` の行は `Pure` で巻き戻しの地点を持たない
+        Op::ArrayLength { dst, .. } => (dst, Purity::Pure),
         _ => return Err(fault),
     };
     match fault {
-        VmFault::Extern(fault) => failed(code, ctx, task, dst, fault, Purity::Panics),
+        VmFault::Extern(fault) => failed(code, ctx, task, dst, fault, purity),
         other => Err(other),
     }
 }
@@ -946,18 +969,6 @@ fn run_extern<M: Mode>(
                 let w = ctx.array_empty(true)?;
                 task.set(dst, w);
             }
-            Extern::ArrayLength | Extern::MutArrayLength => {
-                let n = ctx.array_length(task.get(arg(0)))?;
-                task.set_raw(dst, n);
-            }
-            Extern::ArrayGet | Extern::MutArrayRead => {
-                let w = ctx.array_get(task.get(arg(0)), task.raw(arg(1)))?;
-                task.set(dst, w);
-            }
-            Extern::ArraySet | Extern::MutArrayWrite => {
-                let w = ctx.array_set(task.get(arg(0)), task.raw(arg(1)), task.get(arg(2)))?;
-                task.set(dst, w);
-            }
             Extern::ArrayThaw => {
                 let w = ctx.array_thaw(task.get(arg(0)))?;
                 task.set(dst, w);
@@ -994,9 +1005,15 @@ fn run_extern<M: Mode>(
             | Extern::FloatGt
             | Extern::FloatGe
             | Extern::BoolEq
-            | Extern::BoolNe => {
+            | Extern::BoolNe
+            | Extern::ArrayLength
+            | Extern::MutArrayLength
+            | Extern::ArrayGet
+            | Extern::MutArrayRead
+            | Extern::ArraySet
+            | Extern::MutArrayWrite => {
                 return Err(VmFault::Internal(
-                    "an arithmetic extern reached the generic extern instruction",
+                    "a dedicated-instruction extern reached the generic extern instruction",
                 ));
             }
         }

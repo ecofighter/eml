@@ -218,6 +218,7 @@ token は1語の値で、フレームのスロットに置く ([オブジェク�
 - `prim` は、基本操作ごとの命令で、`Ctx` の同じ名前のメソッドを呼ぶ。`dummy` だけは `Heap::dummy` である。即値 (エフェクトの番号、操作の番号) と `ev_new` の操作の数は、コード生成の時点で命令か `operands` に書く。`evv_mask` の項目の並びは `mask_lists` に置く。逆アセンブラは項目を Core IR のテキストと同じ書き方で、エフェクトを番号にして書く (`evv_mask s3, [0@1, 1] s2`)。結果が `unit` の基本操作は、結果のスロットに `()` を書く
 - エフェクトの番号は 65535 より小さくなければならない。evidence の tag はエフェクトの番号 + 1 だからである ([オブジェクトモデル](object-model.md) の「evidence の3つの物体」)。速いモードの `ev_new` はこれを確かめない。コード生成は、これをコンパイラの内部の不変条件として panic で確かめ、`CompileError` にはしない
 - 算術と比較の extern は、それぞれ専用の命令にする。`Int` の13個 (`+ - * / % negate`、比較6つと `compare`) は `IntAdd`、`IntCompare` など、`Float` の12個 (`+ - * / % negate` と比較6つ) は `FloatAdd`、`FloatNeg`、`FloatLt` など、`Bool` の `==` と `!=` は `BoolEq` と `BoolNe` である。`eml_rt::externs` の `#[inline]` の関数を、命令の中に展開して呼ぶ。結果は生のビット列でスロットに書く。`Float` の命令は誤りを返さないので、`Panic` へ中断する道 (「`IO` と `Panic` への中断」) を通らない
+- 配列の行も専用の命令にする。`Std.Array.get` と `Std.MutArray.read` は `ArrayGet { dst, a, b }`、2つの `length` は `ArrayLength { dst, a }`、`Std.Array.set` と `Std.MutArray.write` は `ArraySet { dst, at }` である (`MutArray` の行は、LIR では借りた配列への `length` と `get` で、組は translate が作る)。`ArraySet` は引数が3つで `Op` の8バイトに収まらないため、`operands[at..]` に [配列, 添字, 値] を置く。`ArrayGet` と `ArrayLength` は配列を借りたままにし、誤りのときも手放さない (巻き戻しの表が手放す)。`ArraySet` は配列と値を消費する。誤りは `Int` の算術と同じく命令の繰り返しの誤りの道が `Panic` に届け、`ArrayGet` と `ArraySet` は `Panics` の行なので巻き戻しの地点である。残りの配列の行 (`make`、`empty`、`thaw`、`freeze`) は汎用の `Op::Extern` で動かす
 - ほかの extern (`Float` の `compare`、文字列、表示、`println`、`Fs`) は `Extern { dst, at }` の1つの命令にする。`operands[at..]` は [行の番号, 引数の数, 引数のスロット…] で、行の番号の `match` で `Ctx` のメソッドを呼ぶ
 - VM は `Ctx` の基本操作の合間に、`Ctx` が持つ語とそこからたどれる物体に触れない (`heap_mut()` の前提)
 - `Bool`、`Ordering`、組のタグの定数が `eml_rt::externs` と `eml_lir` で同じであることを、`eml_vm` のテスト (`tags.rs`) で確かめる。VM の `Bool` と `compare` の命令がこれに頼るためである
@@ -228,7 +229,7 @@ token は1語の値で、フレームのスロットに置く ([オブジェク�
 
 ### 巻き戻しの表
 
-- 巻き戻しの地点は、中断しうる関数の末尾でない `call`、末尾でない `apply` と `clause`、`Pure` でない extern の命令 (`exit`、`panic`、`Int` の算術の専用の命令を含む)、`prim yield_abort` である ([LIR](lir.md) の「巻き戻しの地点」)。中断はこのどれかの命令の中か、その呼ばれる側で始まり、中断しない関数の中では始まらない。そのため、中断が通るフレームはいつも地点の命令の直後で止まっている。中断しない関数の `call` は表の行を持たない
+- 巻き戻しの地点は、中断しうる関数の末尾でない `call`、末尾でない `apply` と `clause`、`Pure` でない extern の命令 (`exit`、`panic`、`Int` の算術と配列の専用の命令を含む)、`prim yield_abort` である ([LIR](lir.md) の「巻き戻しの地点」)。中断はこのどれかの命令の中か、その呼ばれる側で始まり、中断しない関数の中では始まらない。そのため、中断が通るフレームはいつも地点の命令の直後で止まっている。中断しない関数の `call` は表の行を持たない
 - 地点ごとの所有は、`eml_lir::unwind::points_all(program) -> Vec<Result<Vec<UnwindPoint>, VerifyError>>` が関数ごとに求める。各関数の `UnwindPoint { block, stmt, owned, tokens, landing }` は、ブロックの順、文の順に並ぶ
   - `owned` は、地点の命令の直後に所有している RC の対象の変数と、その所有の数 (1 以上) の列で、変数の番号の昇順に並ぶ。命令が束縛する変数 (呼び出しの結果、extern の行き先) は含めない。命令が戻らなければ、その変数はまだないためである
   - `tokens` は、地点の命令の直後に生きている token の変数の列で、変数の番号の昇順に並ぶ。token は RC の対象でないので `owned` には入れない。token は yield しうる呼び出しの後で生きていないので、着地の印を持つ地点の `tokens` はいつも空である

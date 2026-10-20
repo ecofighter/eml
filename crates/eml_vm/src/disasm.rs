@@ -330,6 +330,9 @@ impl<'a> View<'a> {
                 let o = ops(at);
                 format!("root_set s{dst}, r{}, s{}", o[0], o[1])
             }
+            Op::ArrayGet { dst, a, b } => bin("array_get", dst, a, b),
+            Op::ArrayLength { dst, a } => format!("array_length s{dst}, s{a}"),
+            Op::ArraySet { dst, at } => format!("array_set s{dst} = {}", slots(&ops(at)[..3])),
             Op::Extern { dst, at } => format!(
                 "extern s{dst} = {}({})",
                 Extern::ALL[ops(at)[0] as usize].row().name,
