@@ -16,7 +16,7 @@
 
 | 段 | 中身 | 前提 | 完了の条件 |
 |---|---|---|---|
-| S14 数値計算の整備 | 実行時エラーの型 `Panic`、`Float` と `Num`、`Array` と `Lin` の `MutArray`、小さな単一コンストラクタの型の構造体の表現、数値計算の計測 | S13 | 数値計算の計測のプログラムが Python の版と一緒に `bench/scripts.sh` で動き、結果を [計測の基準](../implementation/benchmarks.md) に記録する。S14a、S14b、S14c-1、S14c-2 は済み |
+| S14 数値計算の整備 | 実行時エラーの型 `Panic`、`Float` と `Num`、`Array` と `Lin` の `MutArray`、小さな単一コンストラクタの型の構造体の表現、数値計算の計測 | S13 | 数値計算の計測のプログラムが Python の版と一緒に `bench/scripts.sh` で動き、結果を [計測の基準](../implementation/benchmarks.md) に記録する。S14a、S14b、S14c は済み |
 
 S14 の後は、言語の項目を次の順に並べる。
 
@@ -52,7 +52,7 @@ S14 は、ネイティブ化の前に、数値計算で Python と比べる基�
 |---|---|---|
 | S14a | `Panic`。値と入力で決まる実行時エラーを型に出し、中断しうるかの印で巻き戻しの地点を決める | 済み。`+ - * / %`、`negate`、文字列の位置の extern と `Env.arg` が `<Panic>` を持ち、その誤りと利用者の `panic` を `try_panic` が巻き戻しで捕まえる。巻き戻しの表の行は、中断しない関数の呼び出しの分だけ減った。決めたこと (`Panic` の宣言、`main` と REPL の入力の row、トップレベルの値と `Eq`、`Ord`、`Show` のメソッドの空の row、負のリテラル) は [エフェクトと handler](../spec/effects.md) の「組み込みの `Panic`」、[標準ライブラリ](../spec/stdlib.md) の「`try_panic`」、[宣言](../spec/declarations.md) の「シグネチャと等式」と「Prelude のクラス」、[式](../spec/expressions.md) の「演算子の列と単項マイナス」、[モジュールと名前解決](../spec/modules.md) の「モジュール」、[型と Kind](../spec/types.md) の「REPL の入力」にある。実行の道は [VM](../spec/vm.md) の「中断と実行時エラーの分担」と「extern の中断」に、`Fault::panics` は [オブジェクトモデル](../spec/object-model.md) の「extern」に、中断しうるかの不動点と巻き戻しの地点は [LIR](../spec/lir.md) の「巻き戻しの地点」に、under の形は [Core IR](../spec/core-ir.md) の「`perform` と節の3つの形」に、計測は [計測の基準](../implementation/benchmarks.md) の「S14a」にある |
 | S14b | `Float` と `Num` / `Div` | 済み。`Int` の算術を Prelude のクラス `Num` (`+ - *`、`negate`) と `Div` (`/`、`%`) の instance にし、`Float` (IEEE 754 の倍精度) の型、リテラル、算術と比較、Python の `repr` と同じ表示、`Std.Float` を入れた。`bench/` のプログラムの `RunStats` は変わらない。決めたこと (クラスと instance、`Float` の比較の演算子と `compare` の全順序の例外、表示) は [宣言](../spec/declarations.md) の「Prelude のクラス」にある。リテラルは [字句](../spec/lexical.md) の「数値と文字」と [式](../spec/expressions.md) の「演算子の列と単項マイナス」に、型は [型と Kind](../spec/types.md) の「数の型」に、パターンの E1052 は [網羅性](../spec/exhaustiveness.md) の「検査パス」に、`Std.Float` は [標準ライブラリ](../spec/stdlib.md) の「`Std.Float`」にある。実行の道では、Repr `float` が [LIR](../spec/lir.md) の「値の表現」に、`Float` の箱が [オブジェクトモデル](../spec/object-model.md) の「種類」に、専用の命令が [VM](../spec/vm.md) の「基本操作と extern」に、信頼の一覧の T12 がオブジェクトモデルの「`unsafe` の核」にある。計測は [計測の基準](../implementation/benchmarks.md) の「S14b」にある |
-| S14c | `Array` と `Lin` の `MutArray`、`freeze` | S14c-1 (`Array` と `MutArray` の核) は済み。`Std.Array` と `Std.MutArray` を入れ、物体は `Data` の形の配列で、`lin` ビットが `MutArray` を表す。`set` と `write` は一意ならその場で書き換え、共有されていれば写す。範囲外の添字と負の長さは `Panic` で、`try_panic` が捕まえる。`get`、`length`、`set` は専用の VM の命令で動き、`bench/` のプログラムの `RunStats` は変わらない。決めたことは [標準ライブラリ](../spec/stdlib.md) の「`Std.Array`」と「`Std.MutArray`」、[宣言](../spec/declarations.md) の「`extern`」、[オブジェクトモデル](../spec/object-model.md) の「配列」、[VM](../spec/vm.md) の「基本操作と extern」にある。計測は [計測の基準](../implementation/benchmarks.md) の「S14c-1」にある。S14c-2 (状態を渡す形の handler への特殊化) も済み。どの節もすぐに再開する handler は、末尾でない呼び出しを経路に含めて特殊化し、状態をブロックと複製の結果で持ち回る。重なった handler は内側から回を重ねて特殊化する。`Std.State` を末尾でない `put` で使うループ (`bench/state_loop.em`) の `evidence_steps` は 0 になり、手で状態を渡す版と、確保、`box`、`unbox`、RC の回数が一致した。決めたこと (2つの形、複製の結果の形、入れ子の handler の回、複製の名前) は [Core IR](../spec/core-ir.md) の「handler への特殊化」に、計測は [計測の基準](../implementation/benchmarks.md) の「S14c-2」にある |
+| S14c | `Array` と `Lin` の `MutArray`、`freeze`、局所的な可変変数 `var` | 済み。S14c-1 (`Array` と `MutArray` の核) では、`Std.Array` と `Std.MutArray` を入れ、物体は `Data` の形の配列で、`lin` ビットが `MutArray` を表す。`set` と `write` は一意ならその場で書き換え、共有されていれば写す。範囲外の添字と負の長さは `Panic` で、`try_panic` が捕まえる。`get`、`length`、`set` は専用の VM の命令で動き、`bench/` のプログラムの `RunStats` は変わらない。決めたことは [標準ライブラリ](../spec/stdlib.md) の「`Std.Array`」と「`Std.MutArray`」、[宣言](../spec/declarations.md) の「`extern`」、[オブジェクトモデル](../spec/object-model.md) の「配列」、[VM](../spec/vm.md) の「基本操作と extern」にある。計測は [計測の基準](../implementation/benchmarks.md) の「S14c-1」にある。S14c-2 (状態を渡す形の handler への特殊化) も済み。どの節もすぐに再開する handler は、末尾でない呼び出しを経路に含めて特殊化し、状態をブロックと複製の結果で持ち回る。重なった handler は内側から回を重ねて特殊化する。`Std.State` を末尾でない `put` で使うループ (`bench/state_loop.em`) の `evidence_steps` は 0 になり、手で状態を渡す版と、確保、`box`、`unbox`、RC の回数が一致した。決めたこと (2つの形、複製の結果の形、入れ子の handler の回、複製の名前) は [Core IR](../spec/core-ir.md) の「handler への特殊化」に、計測は [計測の基準](../implementation/benchmarks.md) の「S14c-2」にある。S14c-3 (`var`、`:=`、添字、`for`、`while`) も済み。`var` の地点ごとに合成のエフェクトを作り、その handler が変数の値を状態として持つ。translate が変数を型で `Unr` の変数と配列の変数に分けて handle、節、`perform` を組み、状態を渡す形の特殊化がループを evidence のない複製にする。状態を渡す形は、H に触れない関数を経路に入れず、入れ子の handler の複製の結果を値の並びで決めるように広げた。ふるいと fannkuch-redux の小さな版を `var` で書いた版の `evidence_steps` は 0 で、手書きの版との確保の差は、経路の関数の末尾でない呼び出しから戻るタプルだけである (S14e で消す)。決めたことは [式](../spec/expressions.md) の「`var`」、[型と Kind](../spec/types.md) の「`var` の変数」、[線形性](../spec/linearity.md) の「配列の変数」、[エフェクトと handler](../spec/effects.md) の「`var` のエフェクト」、[標準ライブラリ](../spec/stdlib.md) の「`for` と `while`」、[Core IR](../spec/core-ir.md) の「`var` の変換」と「handler への特殊化」にある。計測は [計測の基準](../implementation/benchmarks.md) の「S14c-3」にある |
 | S14d | 数値計算の計測。構造体の表現の前の基準を記録する | |
 | S14e | 小さな単一コンストラクタの型の構造体の表現 | |
 
@@ -84,6 +84,7 @@ S14 は、ネイティブ化の前に、数値計算で Python と比べる基�
 - `Lin` の `MutArray a` を入れる。一意なので書き換えはいつもその場で行われ、写しが起きないことを型で保証できる。数値計算のループの速さが、実行時に RC が 1 かどうかで変わらないようにするためである。API は、値を線形に受け渡す形にする (`write : MutArray a -> Int -> a -> MutArray a`)
 - `freeze : MutArray a -> Array a` を入れる。`MutArray` は後始末を持たないためである ([標準ライブラリへの申し送り](stdlib.md) の `freeze`)
 - `MutArray` を重ならない部分に分ける分割と結合のプリミティブは、`par` と一緒に使うものなので、マルチコア対応に残す (下の「マルチコア対応」)
+- 線形に受け渡す形はループのたびに配列を引数と返り値で回すので読みにくい。そこで、`MutArray` の上に、エフェクトで作る局所的な可変変数 `var` を入れた。変数ごとに新しいエフェクトを作り、その handler が値を状態として持つ。`var` を使うループは、状態を渡す形の handler への特殊化で、線形に受け渡す版と同じく evidence を引かずに動く (ユーザーが 2026-10-20 に決めた。S14c-3)
 
 #### 小さな単一コンストラクタの型の構造体の表現
 
@@ -105,6 +106,12 @@ S14 は、ネイティブ化の前に、数値計算で Python と比べる基�
 - `MutArray` の作り方は、同じ値で埋める `make` と、関数で埋める `tabulate` の両方にした。`Array` から `MutArray` を得る道は `thaw` である (S14c-1)。`Lin` の要素を持つ `Array` と `MutArray` の API は、まだ決めていない。extern の関数の引数の型変数は `Unr` に固定しているので、今は `Lin` の要素の配列にどの関数も使えない
 - `poly` の物体の `lin` ビットの実行時の伝播 ([マルチコア対応の設計](multicore.md) の「未決の論点と将来の拡張」で、`MutArray` の項目で決めるとしていた)
 - 構造体にする型の条件 (語の数の上限、`Lin` のフィールド、row の型引数を持つ型)。複数の値を返す形の LIR と VM での表し方。EP の継続の捕獲と yield の道での構造体の扱い
+- `var` の残る制限 (S14c-3 では入れなかった。必要になったら扱う)
+  - 配列の変数の長さを、範囲の途中で読む書き方がない。今は長さを変数とは別に持つ
+  - 配列の変数を、範囲の途中でトップレベルの関数に貸す書き方がない。今は範囲の中の局所関数で書くか、変数にする前に線形に受け渡す
+  - 取り出して変えて戻す `x := f x` は、配列の変数では E3008 になる
+  - 範囲の外で定義した局所関数に、変数を使う閉包を渡すと、局所関数の型に変数のエフェクトが現れるので E2019 になる
+  - 配列の変数の範囲の E3006 は、`Lin` の状態を持つ handle と同じく、範囲を囲む本体の row で決める。そのため、row に `multi` のラベルを持つ関数では、範囲の中でそのラベルを何も `perform` しなくても、どの配列の変数も断る。範囲が実際に起こす row で持ち越しを確かめる形に細かくする余地がある ([線形性](../spec/linearity.md) の「配列の変数」)
 - 計測に選ぶプログラム。候補は、`Float` を使う nbody、spectral-norm、mandelbrot と、`MutArray` を使う fannkuch-redux、エラトステネスのふるいである
 
 ## S14 の後の言語の項目
@@ -214,7 +221,6 @@ UTF-8 の核の extern を入れ、標準ライブラリを広げる。`std/` �
 - トップレベルの値のコンパイル時の計算: S14a で、トップレベルの値の本体を `<>` に限り、`Panic` を起こしうる計算 (`Int` と `Float` の算術を含む) を書けなくした。定数畳み込みとコンパイル時の計算を入れ、コンパイル時に `Panic` を起こさずに値が決まる本体を許す。コンパイル時に `Panic` を起こす本体は、コンパイルの誤りにする。下の「トップレベルの値を一度だけ評価すること」と、「処理系」の「Core IR の上の最適化パス」の純粋な extern の定数畳み込みと一緒に設計する (ユーザーが 2026-10-19 に計画に入れると決めた)
 - トップレベルの値を一度だけ評価すること: 今は参照するたびに計算する ([Core IR](../spec/core-ir.md))。一度だけ評価するのは、単相で `Unr` の値に限る。起動時に評価するか初めて使うときに評価するかと、実行時エラーの報告の仕方も決める。REPL で入力をまたいで残す束縛の評価と、意味を揃えるかも一緒に決める。評価した値を凍結すると塊が増える (下の「REPL」)
 - 可変参照 (方針は決定済み): 値 `Ref h a` と組み込みのエフェクト `Heap h` を持ち、`IO` と分離する。`run_heap` は rank-2 の組み込みとして特別扱いする。`Ref` には `Unr` の値だけを入れ、multi-shot で再開したときの状態は共有する ([マルチコア対応の設計](multicore.md) の「可変状態」)。入れ子の `run_heap` の中から外側の `Ref` を使うには、同じエフェクトのインスタンスを区別する必要がある。名前付きの handler が要るかどうかを、入れるときに決める
-- 局所的な可変変数の糖衣構文: Koka の `var` のように、関数の中に閉じた可変変数を `Heap` を外に見せずに書けるようにする。前提: 可変参照
 - フィールドの変換の糖衣: `{ p | age = _ + 1 }` のような、関数でフィールドを書き換える構文。`Lin` なレコードでも、分解せずに書けるようにする。今の更新は上書きされる古い値を捨てるので、`Lin` なフィールドは分解して組み直すしかない ([直積型とレコード](../spec/records.md) の「線形性の規則」)
 - 型の別名: `type Name = T`。構文は予約してあり、今は `type` の宣言を HIR が E0004 にする ([宣言](../spec/declarations.md) の「`data` と `type`」)。別名を展開する位置 (HIR か型検査か)、型引数を持つ別名、診断での表示 (別名で書くか展開して書くか) を決める
 - 抽象型: コンストラクタを公開しない `pub data`。名前付きのフィールドも、コンストラクタと一緒に隠す規則を決める。今は射影と更新がフィールドの見える範囲を検査しない ([モジュールと名前解決](../spec/modules.md) の「名前空間」)

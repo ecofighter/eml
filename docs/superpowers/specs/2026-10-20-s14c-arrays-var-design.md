@@ -320,7 +320,7 @@ while : (Unit -> <e> Bool) -> (Unit -> <e> Unit) -> <e> Unit
 - [エフェクトと handler](../../spec/effects.md): `var` のエフェクト
 - [標準ライブラリ](../../spec/stdlib.md): `Std.Array`、`Std.MutArray`、`for`、`while`
 - [Core IR](../../spec/core-ir.md): 状態を渡す形の特殊化。S14c-3 では、`var` の脱糖、合成のエフェクトの名前、経路から H に触れない関数を外すこと、値の並びで決める複製の結果
-- [LIR](../../spec/lir.md)、[VM](../../spec/vm.md)、[オブジェクトモデル](../../spec/object-model.md): 配列の物体、専用の命令、`lin` ビットの上げ下げ、回復。S14c-3 では、不死の空の配列の primitive と、`var` の節を under の形にしないこと
+- [LIR](../../spec/lir.md)、[VM](../../spec/vm.md)、[オブジェクトモデル](../../spec/object-model.md): 配列の物体、専用の命令、`lin` ビットの上げ下げ、回復。S14c-3 では、不死の空の配列の primitive
 - [診断](../../spec/diagnostics.md): 新しい番号
 - [ロードマップ](../../future/roadmap.md): S14 の作業の表で S14c を済みにし、`Array` と `MutArray` の論点の答えを書く。「言語機能と構文」の「局所的な可変変数の糖衣構文」(前提は可変参照) を、S14c でエフェクトで入れたものとして消す。[マルチコア対応](../../future/multicore.md) と [標準ライブラリへの申し送り](../../future/stdlib.md) の `MutArray` の記述も直す
 - [計測の基準](../../implementation/benchmarks.md): S14c の節
