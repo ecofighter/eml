@@ -212,7 +212,7 @@ Normative computation:
 
 - [ ] **Step 1: Run `bench/run.sh`** and keep its output.
 - [ ] **Step 2: Count the allocations S14e will remove.**
-  - For `nbody` and `mandelbrot` at the default size, use the optimized Core IR (`Pass::Optimize`) or a count in the program. Split `allocations` into two parts: `Vec3` / `Complex` construction (4 and 3 objects each) and boxed array elements, which S14e will not remove.
+  - For `nbody` and `mandelbrot` at the default size, use the optimized Core IR (`Pass::Optimize`) or a count in the program. Split `allocations` into two parts: `Vec3` / `Complex` construction (1 object each; the `Float` fields are raw), which S14e removes, and writes into arrays (boxed `Float`s, and after S14e boxed `Vec3`s), which S14e will not remove.
   - Do the same for `spectral_norm`, where every allocation should be an array element box or an array.
 - [ ] **Step 3: Update `benchmarks.md`.**
   - 「基準のプログラム」: add the three new programs, and the size argument on `sieve_var` and `fannkuch_var`.
