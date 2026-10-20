@@ -15,6 +15,8 @@ tabulate n f =
   let fill i m =
     if i == n then m else fill (i + 1) (write m i (f i))
   if n <= 0 then
+    -- `make` が返す `Lin` の配列は捨てられないので、`freeze` で消費する。結果を捨てられる `Array.make` は、
+    -- `Std.Array` がこのモジュールを import しているので、呼ぶと import が循環する
     let _ = freeze (make n ())
     empty ()
   else

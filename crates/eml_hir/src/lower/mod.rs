@@ -9,6 +9,8 @@ mod record;
 mod section;
 mod types;
 
+pub use types::visit_type_vars;
+
 use std::collections::HashMap;
 
 use eml_diagnostics::{Diagnostic, ErrorCode, FileId, Label, TextRange};

@@ -15,7 +15,7 @@ pub use eval::{EvalStep, call_steps, known_arity};
 pub use hir::*;
 pub use item_tree::*;
 pub use load::*;
-pub use lower::lower;
+pub use lower::{lower, visit_type_vars};
 pub use names::DisplayNames;
 pub use pretty::pretty;
 pub use program::*;

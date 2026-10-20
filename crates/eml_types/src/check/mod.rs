@@ -761,46 +761,18 @@ fn declaration_schemes(
 
 /// シグネチャの一番外側の `arity` 個の矢印の引数の型に現れる型変数。row の型引数も含む。
 fn param_type_vars(signature: &Signature, arity: usize) -> Vec<TypeVarId> {
-    let mut pending = Vec::new();
+    let mut vars = Vec::new();
     let mut spine = signature.ty;
     for _ in 0..arity {
         let TypeRefKind::Fn { param, ret, .. } = &signature.types[spine].kind else {
             break;
         };
-        pending.push(*param);
+        eml_hir::visit_type_vars(&signature.types, *param, &mut |var| {
+            if !vars.contains(&var) {
+                vars.push(var);
+            }
+        });
         spine = *ret;
-    }
-    let mut vars = Vec::new();
-    let push_row = |row: &RowRef, pending: &mut Vec<TypeRefId>| match row {
-        RowRef::Closed { effects, .. } | RowRef::Open { effects, .. } => {
-            for effect in effects {
-                pending.extend(&effect.args);
-            }
-        }
-        RowRef::Omitted | RowRef::Error => {}
-    };
-    while let Some(ty) = pending.pop() {
-        match &signature.types[ty].kind {
-            TypeRefKind::Var(var) => {
-                if !vars.contains(var) {
-                    vars.push(*var);
-                }
-            }
-            TypeRefKind::Con(_, args, rows) => {
-                pending.extend(args);
-                for row in rows {
-                    push_row(row, &mut pending);
-                }
-            }
-            TypeRefKind::Fn {
-                param, row, ret, ..
-            } => {
-                pending.extend([*param, *ret]);
-                push_row(row, &mut pending);
-            }
-            TypeRefKind::Tuple(elements) => pending.extend(elements),
-            TypeRefKind::Error => {}
-        }
     }
     vars
 }

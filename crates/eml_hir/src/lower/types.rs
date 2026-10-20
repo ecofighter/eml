@@ -356,11 +356,7 @@ impl TypeLowering<'_> {
 
 /// 型に現れる型変数を、現れるたびに `visit` に渡す。関数型の row に書いたエフェクトの型引数も、型に現れるものに
 /// 数える (docs/spec/declarations.md の「宣言の検査」)。木の深さは E0013 で抑えられているので再帰でたどる。
-pub(super) fn visit_type_vars(
-    types: &Arena<TypeRef>,
-    id: TypeRefId,
-    visit: &mut impl FnMut(TypeVarId),
-) {
+pub fn visit_type_vars(types: &Arena<TypeRef>, id: TypeRefId, visit: &mut impl FnMut(TypeVarId)) {
     match &types[id].kind {
         TypeRefKind::Error => {}
         TypeRefKind::Var(var) => visit(*var),
