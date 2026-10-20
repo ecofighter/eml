@@ -7,7 +7,7 @@ use eml_test_support::{lir, lir_files, run_stats};
 use eml_vm::RunStats;
 
 /// テストを持つ基準のプログラム。`bench/` にプログラムを足したら、ここと下のテストの関数の両方に足す。
-const PROGRAMS: [&str; 30] = [
+const PROGRAMS: [&str; 31] = [
     "empty",
     "fannkuch_by_hand",
     "fannkuch_var",
@@ -27,6 +27,7 @@ const PROGRAMS: [&str; 30] = [
     "records",
     "sieve_by_hand",
     "sieve_var",
+    "spectral_norm",
     "state",
     "state_loop",
     "state_loop_by_hand",
@@ -688,6 +689,27 @@ fn nbody() {
 }
 
 #[test]
+fn spectral_norm() {
+    insta::assert_debug_snapshot!(stats("spectral_norm", "1.274219991\n"), @"
+    RunStats {
+        evidence_steps: 0,
+        yields: 0,
+        yield_frames: 0,
+        unwound_frames: 0,
+        string_bytes_copied: 11,
+        rc_increments: 398371,
+        rc_decrements: 402427,
+        boxes: 4003,
+        unboxes: 400402,
+        allocations: 4057,
+        reuses: 0,
+        peak_objects: 304,
+        peak_stack: 53,
+    }
+    ");
+}
+
+#[test]
 fn sieve_var() {
     insta::assert_debug_snapshot!(stats("sieve_var", "2262\n"), @"
     RunStats {
@@ -909,6 +931,7 @@ fn unwind_points() {
     records: 9
     sieve_by_hand: 14
     sieve_var: 34
+    spectral_norm: 71
     state: 4
     state_loop: 4
     state_loop_by_hand: 4
