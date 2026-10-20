@@ -14,4 +14,13 @@ Err "array index 3 is out of range for length 3"
 ["alpha", "beta", "gamma"]
 Err "array index 5 is out of range for length 3"
 "gamma"
+([0, 508, 510, 598], 300)
+[0, -254, -255, -299]
+([1000, 1254, 1255, 1299], [0, 508, 510, 598])
+(7, 510, 300)
+(1, 255, 256, 300, 300)
+Err "array index 300 is out of range for length 300"
+Err "array index 300 is out of range for length 300"
+Err "array index 300 is out of range for length 300"
+Err "array index 300 is out of range for length 300"
 --- stderr ---

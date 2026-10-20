@@ -38,3 +38,30 @@ main () =
   let r2 = try_panic (fn () -> Array.length (Array.set words 5 "x"))
   println (show r2)
   println (show (Array.get words 2))
+  -- 300 要素の配列は長さの語が拡張される。境界の添字 0, 254, 255, 299 を、一意な場合 (その場) と共有された場合 (写し)
+  -- の両方で読み書きする
+  let big = Array.tabulate 300 (fn i -> i * 2)
+  let edges = [0, 254, 255, 299]
+  println (show (List.map (fn i -> Array.get big i) edges, Array.length big))
+  let unique = List.fold (fn arr i -> Array.set arr i (0 - i)) (Array.tabulate 300 (fn i -> i * 2)) edges
+  println (show (List.map (fn i -> Array.get unique i) edges))
+  let copied = List.fold (fn arr i -> Array.set arr i (i + 1000)) big edges
+  println (show (List.map (fn i -> Array.get copied i) edges, List.map (fn i -> Array.get big i) edges))
+  let shared = Array.set big 255 7
+  println (show (Array.get shared 255, Array.get big 255, Array.length shared))
+  let bm = fill (MutArray.make 300 0) 0
+  let bm = List.fold (fn m i -> MutArray.write m i (i + 1)) bm edges
+  let (r0, bm) = MutArray.read bm 0
+  let (r254, bm) = MutArray.read bm 254
+  let (r255, bm) = MutArray.read bm 255
+  let (r299, bm) = MutArray.read bm 299
+  let (bn, bm) = MutArray.length bm
+  println (show (r0, r254, r255, r299, bn))
+  let _ = MutArray.freeze bm
+  println (show (try_panic (fn () -> Array.get big 300)))
+  println (show (try_panic (fn () -> Array.length (Array.set big 300 1))))
+  println (show (try_panic (fn () ->
+    let (v, m) = MutArray.read (MutArray.make 300 0) 300
+    let _ = MutArray.freeze m
+    v)))
+  println (show (try_panic (fn () -> Array.length (MutArray.freeze (MutArray.write (MutArray.make 300 0) 300 1)))))
