@@ -2,7 +2,7 @@
 //! 関数は一様でなく、`apply` の場所は引数と結果の Repr を持つ。速い道では箱を作らず、呼ぶ所と関数の Repr が合わない
 //! 引数だけを `box` か `unbox` で変える。捕まえた値と部分適用の引数は関数の引数の Repr のまま持つ。
 
-use crate::common::{run_typed_apply, run_unverified};
+use crate::common::{disasm_unverified, run_typed_apply, run_unverified};
 
 const SHOW_INT: &str = "\
 fn show(n.0: int) -> unit {
@@ -345,4 +345,294 @@ fn first(a.0: tobj, b.1: tobj) -> tobj {{
     );
     // `show` と `println` の確保が2つ、`float` の箱が1つ。`int` の 7 は即値の箱である
     assert_eq!(stats.allocations, 3, "{stats:?}");
+}
+
+/// `int` を返す `boxed` を一様な結果の関数として呼ぶ。
+const BOXED: &str = "\
+fn boxed(x.0: int) -> tobj {
+  let y.1: int = extern \"Prelude.Num Int.+\"(x.0, 1)
+  let b.2: tobj = box y.1
+  return b.2
+}
+";
+
+/// 呼ぶ所の結果が `int` で、関数の結果が `tobj` なら、`apply` は変換のフレームを1つ積んでから入る。関数が戻ると、
+/// 変換のフレームが箱から取り出して呼ぶ所の結果のスロットに書く。
+#[test]
+fn a_result_mismatch_pushes_one_conversion_frame() {
+    let text = format!(
+        "\
+fn main() -> unit {{
+  let r.0: int = apply &boxed(20: int)
+  tail call show(r.0)
+}}
+{BOXED}{SHOW_INT}"
+    );
+    let (out, stats) = run_typed_apply(&text);
+    let stats = stats.unwrap();
+    assert_eq!(out, "21\n");
+    assert_eq!(
+        (stats.conversions, stats.boxes, stats.unboxes),
+        (1, 1, 1),
+        "{stats:?}"
+    );
+}
+
+/// 一様な場所の結果は `tobj` なので、`float` を返す関数の結果を変換のフレームが箱に入れる。
+#[test]
+fn a_uniform_site_boxes_the_result_of_a_typed_function() {
+    let text = format!(
+        "\
+fn main() -> unit {{
+  let x.0: float = extern \"Prelude.Num Float.+\"(2.0, 0.5)
+  let b.1: tobj = box x.0
+  let r.2: tobj = uniform apply &half(b.1)
+  let y.3: float = unbox r.2
+  decref r.2
+  tail call show(y.3)
+}}
+{HALF}{SHOW_FLOAT}"
+    );
+    let (out, stats) = run_typed_apply(&text);
+    let stats = stats.unwrap();
+    assert_eq!(out, "1.25\n");
+    // 引数の `unbox` と結果の `box` が1つの `apply` の変換である
+    assert_eq!(
+        (stats.conversions, stats.boxes, stats.unboxes),
+        (1, 2, 2),
+        "{stats:?}"
+    );
+}
+
+/// `even` は `int` を、`odd` は `tobj` を返し、互いを末尾の `apply` で呼ぶ。`even` から `odd` へは変換のフレームを積み、
+/// `odd` から `even` へはそのフレームと合成して恒等になるので外す。そのため、フレームの数は反復の数によらず、`box` と
+/// `unbox` は最後の結果の1回ずつだけである。
+fn even_odd(n: u64) -> String {
+    format!(
+        "\
+layout Bool {{ False, True }}
+fn main() -> unit {{
+  let r.0: int = apply &even({n}: int)
+  tail call show(r.0)
+}}
+fn even(n.0: int) -> int {{
+  let d.1: enum = extern \"Prelude.Eq Int.==\"(n.0, 0)
+  switch d.1 Bool {{ #0 -> b1, #1 -> b2 }}
+b1:
+  let m.2: int = extern \"Prelude.Num Int.-\"(n.0, 1)
+  tail apply &odd(m.2)
+b2:
+  return 0
+}}
+fn odd(n.0: int) -> tobj {{
+  let d.1: enum = extern \"Prelude.Eq Int.==\"(n.0, 0)
+  switch d.1 Bool {{ #0 -> b1, #1 -> b2 }}
+b1:
+  let m.2: int = extern \"Prelude.Num Int.-\"(n.0, 1)
+  tail apply &even(m.2)
+b2:
+  let b.3: tobj = box 1
+  return b.3
+}}
+{SHOW_INT}"
+    )
+}
+
+#[test]
+fn tail_applies_compose_conversions() {
+    let run = |n: u64| {
+        let (out, stats) = run_typed_apply(&even_odd(n));
+        // n が奇数なら `odd(0)` が箱の 1 を返す
+        assert_eq!(out, "1\n");
+        stats.unwrap()
+    };
+    let (short, long) = (run(1001), run(2001));
+    assert_eq!(short.peak_stack, long.peak_stack, "{short:?} {long:?}");
+    assert_eq!(
+        (long.conversions, long.boxes, long.unboxes),
+        (2001, 1, 1),
+        "{long:?}"
+    );
+}
+
+/// `f` は `tobj` を返し、`int` の場所から入る。`f` が `int` を返す `g` を末尾で `apply` すると、変換は `int` から
+/// `int` への恒等になるので、変換のフレームを外し、`g` が `main` の見出しを引き継ぐ。`g` の中の `exit` が外すのは
+/// `g` のフレームだけである。
+#[test]
+fn a_composed_identity_pops_the_frame() {
+    let text = |exit: &str| {
+        format!(
+            "\
+fn main() -> int {{
+  tail apply &f(5: int)
+}}
+fn f(x.0: int) -> tobj {{
+  tail apply &g(x.0)
+}}
+fn g(x.0: int) -> int {{
+  let s.1: obj = extern \"Prelude.Show Int.show\"(x.0)
+  let u.2: unit = extern Prelude.println(s.1)
+{exit}  return x.0
+}}
+"
+        )
+    };
+    let (out, stats) = run_typed_apply(&text(""));
+    let stats = stats.unwrap();
+    assert_eq!(out, "5\n");
+    assert_eq!(
+        (stats.conversions, stats.boxes, stats.unboxes),
+        (2, 0, 0),
+        "{stats:?}"
+    );
+    // `apply` の変換は実行時に決まるので、末尾の `apply` の命令は変換を持たない
+    let shown = disasm_unverified(&text(""));
+    assert!(!shown.contains("convert"), "{shown}");
+
+    let (out, stats) = run_typed_apply(&text("  let z.3: unit = extern Prelude.exit(0)\n"));
+    let stats = stats.unwrap();
+    assert_eq!(out, "5\n");
+    assert_eq!(stats.unwound_frames, 1, "{stats:?}");
+}
+
+/// 結果の Repr が呼び出し元の `ret` と違う直接の末尾呼び出しは、コード生成が決めた変換のフレームを積む。設計どおりの
+/// 変換なので `conversions` には数えない。
+#[test]
+fn a_direct_tail_call_converts_its_result() {
+    let text = format!(
+        "\
+fn main() -> unit {{
+  let r.0: tobj = call wrap(41)
+  let n.1: int = unbox r.0
+  decref r.0
+  tail call show(n.1)
+}}
+fn wrap(x.0: int) -> tobj {{
+  tail call inc(x.0)
+}}
+{INC}{SHOW_INT}"
+    );
+    assert!(
+        disasm_unverified(&text).contains("tail_call inc(s0) convert int -> word"),
+        "{}",
+        disasm_unverified(&text)
+    );
+    let (out, stats) = run_typed_apply(&text);
+    let stats = stats.unwrap();
+    assert_eq!(out, "42\n");
+    assert_eq!(
+        (stats.conversions, stats.boxes, stats.unboxes),
+        (0, 1, 1),
+        "{stats:?}"
+    );
+}
+
+/// yield 中に戻った値は使われずに捨てられるので、変換のフレームは値を箱に入れず、`tobj` のダミーを書く。`leave` は
+/// yield を始めて `float` のダミーを返す。
+#[test]
+fn yielding_through_a_conversion_frame_writes_a_dummy() {
+    let text = |yield_to: &str| {
+        format!(
+            "\
+effect E {{ op(unit) -> unit }}
+fn main() -> unit {{
+  let w.0: tobj = prim evv_get()
+  let e.1: obj = prim ev_new[E]((), w.0)
+  let r.2: tobj = uniform apply &leave(e.1)
+  decref r.2
+{yield_to}  let s.5: obj = const \"done\"
+  let u.6: unit = extern Prelude.println(s.5)
+  return u.6
+}}
+fn leave(e.0: obj) -> float {{
+{}  return 0.0
+}}
+",
+            if yield_to.is_empty() {
+                "  decref e.0\n"
+            } else {
+                "  let u.1: unit = prim yield_to(e.0, (), ())\n"
+            }
+        )
+    };
+    let finish = "  let k.3: tobj = prim yield_cont_take()
+  decref k.3
+  let c.4: tobj = prim yield_finish()
+  decref c.4
+";
+    let (out, stats) = run_typed_apply(&text(finish));
+    let stats = stats.unwrap();
+    assert_eq!(out, "done\n");
+    assert_eq!((stats.conversions, stats.boxes), (1, 0), "{stats:?}");
+
+    // yield しなければ、同じ変換のフレームが `0.0` を箱に入れる
+    let (out, stats) = run_typed_apply(&text(""));
+    let stats = stats.unwrap();
+    assert_eq!(out, "done\n");
+    assert_eq!((stats.conversions, stats.boxes), (1, 1), "{stats:?}");
+}
+
+/// `never` の節の入口に当たる `abort` が、変換のフレームの下で中断する。`middle` の末尾の `apply` は `int` を返す
+/// `abort` に変換のフレームを積むので、巻き戻しは `abort` と変換のフレームを外して `main` の `apply` に着地する。
+/// 変換のフレームは何も持たない。`abort` のフレームは文字列を持つので、手放さなければ検査モードがリークとして報告する。
+#[test]
+fn an_abort_unwinds_a_conversion_frame() {
+    let text = "\
+effect E { never op(unit) -> never }
+fn main() -> unit {
+  let w.0: tobj = prim evv_get()
+  let e.1: obj = prim ev_new[E]((), w.0)
+  dup e.1
+  let u.2: tobj = uniform apply &middle(e.1) prompt e.1
+  decref u.2
+  decref e.1
+  let c.3: tobj = prim yield_finish()
+  decref c.3
+  let s.4: obj = const \"landed\"
+  let u.5: unit = extern Prelude.println(s.4)
+  return u.5
+}
+fn middle(e.0: obj) -> tobj {
+  tail apply &abort(e.0)
+}
+fn abort(e.0: obj) -> int {
+  let a.1: obj = const \"held\"
+  let b.2: obj = const \" here\"
+  let s.3: obj = extern \"Prelude.++\"(a.1, b.2)
+  let u.4: unit = prim yield_abort(e.0, ())
+  let v.5: unit = extern Prelude.println(s.3)
+  return 0
+}
+";
+    let (out, stats) = run_typed_apply(text);
+    let stats = stats.unwrap();
+    assert_eq!(out, "landed\n");
+    // `abort` と変換のフレーム
+    assert_eq!(stats.unwound_frames, 2, "{stats:?}");
+}
+
+/// 変換の命令列はどの関数にも属さないので、その戻りは最後に戻った関数を替えない。`leave` は `evv` を残して `int` を
+/// 返し、変換のフレームが箱に入れて `Finish` へ戻る。`Finish` で起きた誤りには、変換でなく `leave` の名前を付ける。
+/// `evv` を残すのは verifier の見ない誤りなので、VM 自身の見張りを確かめるため通さずに実行する。
+#[test]
+fn a_conversion_return_keeps_the_function_that_returned_last() {
+    let text = "\
+effect E { op(unit) -> unit }
+fn main() -> tobj {
+  tail apply &leave(1: int)
+}
+fn leave(x.0: int) -> int {
+  let w.1: tobj = prim evv_get()
+  dup w.1
+  let e.2: obj = prim ev_new[E]((), w.1)
+  let w.3: tobj = prim evv_push(w.1, e.2)
+  let u.4: unit = prim evv_set(w.3)
+  return x.0
+}
+";
+    let (_, result) = run_unverified(text);
+    assert_eq!(
+        result.unwrap_err().to_string(),
+        "internal error: the evidence list or a yield is left at the end in `leave`"
+    );
 }

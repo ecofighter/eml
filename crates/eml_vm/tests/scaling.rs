@@ -991,3 +991,144 @@ fn a_local_function_runs_like_a_top_level_helper() {
         assert_eq!(stats(top, out), stats(local, out), "{local}");
     }
 }
+
+/// 結果の Repr が呼び出し元の `ret` と互換でない末尾の位置の呼び出しを通るループ。`count` は `State Int` の `get` で
+/// 終わり、`relay` は多相再帰があるので型変数の位置が一様 (`_`) で、`back` の `int` の結果を `tobj` の場所で受ける。
+/// どちらも変換のフレームを合成するので、スタックは反復の数によらない
+/// (docs/superpowers/specs/2026-10-21-s14e-abi-struct-design.md の「box の挿入」)。
+#[test]
+fn incompatible_tail_calls_keep_the_stack_flat() {
+    assert_flat(peaks(|n| {
+        (
+            format!(
+                "import Std.State (State(..))
+
+count : Int -> <State Int, Panic> Int
+count n = if n == 0 then get () else
+  put (get () + 1)
+  count (n - 1)
+
+main : Unit -> <IO, Panic> Unit
+main () = println (show (State.eval 0 (fn () -> count {n})))
+"
+            ),
+            format!("{n}\n"),
+        )
+    }));
+    assert_flat(peaks(|n| {
+        (
+            format!(
+                "relay : Int -> (Int -> <Panic> a) -> <Panic> a
+relay n k =
+  if n < 0 then
+    match relay n (fn m -> (k m, ())) with
+      | (x, _) -> x
+  else k (n - 1)
+
+back : Int -> <Panic> Int
+back n = if n == 0 then 0 else relay n back
+
+main : Unit -> <IO, Panic> Unit
+main () = println (show (back {n}))
+"
+            ),
+            "0\n".to_string(),
+        )
+    }));
+}
+
+/// 特殊化しない handler の節が末尾で再開するループ。本体の関数の値をデータに通して隠すので、optimize は handler に
+/// 特殊化せず、操作は EP の道を通る (`evidence_steps` が 0 より大きい)。
+#[test]
+fn an_unspecialized_clause_resuming_in_tail_position_keeps_the_stack_flat() {
+    let (short, long) = peaks(|n| {
+        (
+            format!(
+                "effect Ask where
+  ask : Unit -> Int
+
+data Box a = | Box a
+
+hide : Int -> a -> <Panic> Box a
+hide n x = if n <= 0 then Box x else hide (n - 1) x
+
+sum_asks : Int -> Int -> <Ask, Panic> Int
+sum_asks n acc = if n == 0 then acc else sum_asks (n - 1) (acc + ask ())
+
+main : Unit -> <IO, Panic> Unit
+main () =
+  let Box body = hide 0 (fn () -> sum_asks {n} 0)
+  let r =
+    handle body () with
+      | ctl ask () k -> k 2
+  println (show r)
+"
+            ),
+            format!("{}\n", 2 * n),
+        )
+    });
+    assert!(long.evidence_steps > 0, "{long:?}");
+    assert_flat((short, long));
+}
+
+/// 非末尾の再帰の各段が、結果の合わない `apply` で自分を呼ぶ。各段は関数のフレームと変換のフレームを1つずつ積み、
+/// どちらも深さに数える。小さい深さの上限では、ふつうの深さの誤りで止まる。
+#[test]
+fn non_tail_conversions_count_in_the_stack() {
+    let text = |n: u64| {
+        format!(
+            "\
+layout Bool {{ False, True }}
+fn main() -> unit {{
+  let r.0: int = call down({n})
+  let s.1: obj = extern \"Prelude.Show Int.show\"(r.0)
+  let u.2: unit = extern Prelude.println(s.1)
+  return u.2
+}}
+fn down(n.0: int) -> int {{
+  let d.1: enum = extern \"Prelude.Eq Int.==\"(n.0, 0)
+  switch d.1 Bool {{ #0 -> b1, #1 -> b2 }}
+b1:
+  let m.2: int = extern \"Prelude.Num Int.-\"(n.0, 1)
+  let r.3: tobj = apply &down(m.2)
+  let k.4: int = unbox r.3
+  decref r.3
+  let s.5: int = extern \"Prelude.Num Int.+\"(k.4, 1)
+  return s.5
+b2:
+  return 0
+}}
+"
+        )
+    };
+    let run = |n: u64, config: &eml_vm::RunConfig| execute(&crate::common::parse(&text(n)), config);
+    let checked = || eml_vm::RunConfig::default().with_debug_heap(true);
+    let stats = |n: u64| {
+        let (out, result) = run(n, &checked());
+        assert_eq!(out, format!("{n}\n"));
+        result.unwrap_or_else(|error| panic!("{error}"))
+    };
+    let (short, long) = (stats(PEAK_SHORT), stats(PEAK_LONG));
+    assert_eq!(long.conversions, PEAK_LONG, "{long:?}");
+    let control = std::sync::Arc::new(eml_vm::Control::new(eml_vm::Limits::default()));
+    let code = eml_vm::compile::<eml_rt::Fast>(&crate::common::parse(&text(1)), control).unwrap();
+    let down = code.functions().iter().find(|f| f.name == "down").unwrap();
+    // 1段は `down` のフレームと変換のフレーム (1つのスロット) で、どちらも見出しの2語を持つ
+    let per_level = u64::from(down.frame_size) + 2 + 1 + 2;
+    assert_eq!(
+        long.peak_stack - short.peak_stack,
+        per_level * (PEAK_LONG - PEAK_SHORT),
+        "{short:?} {long:?}"
+    );
+
+    let limited =
+        checked().with_control(std::sync::Arc::new(eml_vm::Control::new(eml_vm::Limits {
+            max_depth: 1000,
+            ..eml_vm::Limits::default()
+        })));
+    let (_, result) = run(100_000, &limited);
+    assert_eq!(
+        result.unwrap_err().to_string(),
+        "the call depth limit is exceeded in `down`"
+    );
+}

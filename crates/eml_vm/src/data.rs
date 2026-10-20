@@ -6,6 +6,7 @@ use crate::RunCounts;
 use crate::code::CodeBase;
 use crate::error::VmFault;
 use crate::op::{KEEP, NONE, RAW, SKIP, Slot};
+use crate::sig::Scalar;
 use crate::vm::Task;
 
 /// 走査する語が 255 個以上の物体の、ペイロードの先頭の数の語の分 (docs/spec/object-model.md の「ヘッダ」)。
@@ -435,4 +436,41 @@ pub(crate) fn unbox_float<M: Mode>(
         }
     }
     Ok(unsafe { ctx.heap().unbox_float(w) }?)
+}
+
+/// 生の語のスカラー `w` を箱に入れる。`apply` の変換と変換のフレームが使う。`enum` の箱は即値である。
+pub(crate) fn box_scalar<M: Mode>(
+    ctx: &mut Ctx<M>,
+    counts: &mut RunCounts,
+    w: Word,
+    scalar: Scalar,
+) -> Word {
+    if M::CHECKED {
+        counts.boxes += 1;
+    }
+    // 作る箱は新しい物体なので、`Ctx` の持つ語には触れない
+    let heap = unsafe { ctx.heap_mut() };
+    match scalar {
+        Scalar::Int => heap.alloc_int(w.bits() as i64),
+        Scalar::Float => heap.alloc_float(w.bits() as u64),
+        Scalar::Enum => Word::imm(w.bits() as i64),
+    }
+}
+
+/// 箱 `w` からスカラーを取り出し、箱を手放す。一様な値から取り出す変換は値を消費する。スカラーは中身に参照を持たない
+/// ので、取り出した後に箱を `decref` すれば、一意なら箱を空けることになる
+/// (docs/superpowers/specs/2026-10-21-s14e-abi-struct-design.md の「VM」)。
+pub(crate) fn unbox_scalar<M: Mode>(
+    ctx: &mut Ctx<M>,
+    counts: &mut RunCounts,
+    w: Word,
+    scalar: Scalar,
+) -> Result<Word, VmFault> {
+    let bits = match scalar {
+        Scalar::Float => unbox_float(ctx, w, counts)?,
+        Scalar::Int | Scalar::Enum => unbox(ctx, w, counts)? as u64,
+    };
+    // 箱は VM が参照を持つ値で、手放すのはその箱だけである
+    unsafe { ctx.heap_mut().decref(w) }?;
+    Ok(Word::from_bits(bits as usize))
 }

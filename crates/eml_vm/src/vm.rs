@@ -11,8 +11,8 @@ use crate::apply;
 use crate::code::CodeBase;
 use crate::data;
 use crate::error::VmFault;
-use crate::op::{APPLY_REST, FINISH, Op, Pc, Slot};
-use crate::sig::SigId;
+use crate::op::{APPLY_REST, CONVERSION_FRAME_SIZE, FINISH, NONE, Op, Pc, Slot};
+use crate::sig::{Scalar, SigId};
 
 /// 1つのタスクの実行の状態。
 pub struct Task {
@@ -230,7 +230,11 @@ fn step<M: Mode>(
         }
         Op::TailCall { at } => {
             let o = ops(at);
-            task.load_scratch(slots(&o[2..2 + o[1] as usize]));
+            let n = o[1] as usize;
+            task.load_scratch(slots(&o[2..2 + n]));
+            if o[2 + n] != NONE {
+                tail_convert(code, task, o[2 + n])?;
+            }
             task.enter_in_place(code, o[0]);
             ctx.poll(task.depth())?;
         }
@@ -242,6 +246,9 @@ fn step<M: Mode>(
             apply::apply_rest(code, ctx, task, counts)?;
             ctx.poll(task.depth())?;
         }
+        Op::Receive { .. } => receive_executed()?,
+        Op::RetBox { src, scalar } => convert_return(ctx, task, counts, src, scalar, true)?,
+        Op::RetUnbox { src, scalar } => convert_return(ctx, task, counts, src, scalar, false)?,
         Op::Closure { dst, at } => {
             let o = ops(at);
             let (f, lin, n) = (o[0], o[1] != 0, o[2] as usize);
@@ -542,7 +549,7 @@ fn apply_call<M: Mode>(
     Ok(())
 }
 
-/// `clause` の命令。オペランドは [呼ばれる値, n, 引数…] である。
+/// `clause` の命令。オペランドは [呼ばれる値, n, 引数…] で、末尾の位置ではその後に結果の変換を持つ。
 fn clause_call<M: Mode>(
     code: &CodeBase<M>,
     ctx: &mut Ctx<M>,
@@ -551,8 +558,12 @@ fn clause_call<M: Mode>(
     target: apply::Target,
 ) -> Result<(), VmFault> {
     let o = &code.operands[at as usize..];
-    task.load_scratch(slots(&o[2..2 + o[1] as usize]));
+    let n = o[1] as usize;
+    task.load_scratch(slots(&o[2..2 + n]));
     let callee = task.get(o[0] as Slot);
+    if matches!(target, apply::Target::Tail) && o[2 + n] != NONE {
+        tail_convert(code, task, o[2 + n])?;
+    }
     apply::apply_clause(code, ctx, task, callee, target)?;
     ctx.poll(task.depth())?;
     Ok(())
@@ -569,6 +580,80 @@ fn call<M: Mode>(code: &CodeBase<M>, task: &mut Task, dst: Slot, at: u32) {
         task.stack[base + i] = task.stack[caller + slot as usize];
     }
     task.pc = entry.start;
+}
+
+/// 受ける命令は変換の命令列の前に置くだけで、実行しない。誤りを `step` の腕で直に返すと速い道の命令の列が変わるので
+/// (`bench/run.sh` で数が増えた)、外の関数で作る。
+#[cold]
+#[inline(never)]
+fn receive_executed() -> Result<(), VmFault> {
+    Err(VmFault::Internal("a receive instruction is executed"))
+}
+
+/// 変換のフレームの戻り。`boxing` なら `src` のスカラーを箱に入れ、そうでなければ箱から取り出して箱を手放し、呼び出し
+/// 元へ返す。yield 中に戻った値は使われずに捨てられるので、箱に入れて確保しないように、渡す Repr のダミーを書く
+/// (docs/spec/lir.md の「ダミーの値」)。戻りの安全点は `Ret` と同じだが、`last_ret` は残す。変換の命令列はどの関数にも
+/// 属さないので、その後の組み込みの命令の誤りには、変換の前に戻った関数の名前を付けるためである。速い道の `step` の
+/// 命令の列を変えないように、外に出す。
+#[cold]
+#[inline(never)]
+fn convert_return<M: Mode>(
+    ctx: &mut Ctx<M>,
+    task: &mut Task,
+    counts: &mut RunCounts,
+    src: Slot,
+    scalar: Scalar,
+    boxing: bool,
+) -> Result<(), VmFault> {
+    let w = task.get(src);
+    let value = match (ctx.yielding() != 0, boxing) {
+        (true, true) => ctx.heap().dummy(),
+        // 受けた値はダミーなので手放さない。`int`、`float`、`enum` のダミーはどれもビット列 0 である
+        (true, false) => Word::from_bits(0),
+        (false, true) => data::box_scalar(ctx, counts, w, scalar),
+        (false, false) => data::unbox_scalar(ctx, counts, w, scalar)?,
+    };
+    task.return_value(value);
+    ctx.poll(task.depth())?;
+    Ok(())
+}
+
+/// 末尾の呼び出しの結果に変換 `c2` が要るとき、呼ばれる側が今のフレームの位置に入れるように、変換のフレームを
+/// 整える (docs/superpowers/specs/2026-10-21-s14e-abi-struct-design.md の「VM」の「変換の合成」)。今のフレームの戻り先が
+/// 変換のフレーム c1 なら、c1 を c1 と c2 の合成に替え、合成が恒等なら c1 を外して呼ばれる側に c1 の見出しを引き継が
+/// せる。そうでなければ、今のフレームの位置に変換のフレームを置き、呼ばれる側をその上に積む。そのため変換のフレームは、
+/// 本当のフレーム1つにつき多くとも1つで、末尾の呼び出しの輪をたどってもスタックは伸びない。引数はすでに scratch に
+/// 読んであるので、今のフレームのスロットを上書きしてよい。
+#[cold]
+#[inline(never)]
+pub(crate) fn tail_convert<M: Mode>(
+    code: &CodeBase<M>,
+    task: &mut Task,
+    c2: Pc,
+) -> Result<(), VmFault> {
+    let (ret, dst, caller_size) = read_header(task.stack[task.base - 2]);
+    let Some(c1) = code.conversions.at(ret) else {
+        task.frame_size = CONVERSION_FRAME_SIZE;
+        task.push_frame(c2, 0, 0);
+        return Ok(());
+    };
+    let c2 = code.conversions.at(c2).ok_or(VmFault::Internal(
+        "a tail call converts through a position that is not a conversion",
+    ))?;
+    // 両端はいつも同じ型の Repr なので、c2 が渡す種類は c1 が受ける種類で、合成は恒等か1つの変換になる
+    if c2.to != c1.from {
+        return Err(apply::DIFFERENT_TYPES);
+    }
+    if c2.from == c1.to {
+        task.base = task.stack[task.base - 1].bits();
+        task.frame_size = caller_size;
+        return Ok(());
+    }
+    let composed = code
+        .conversion(c2.from, c1.to)
+        .ok_or(apply::DIFFERENT_TYPES)?;
+    task.stack[task.base - 2] = header(composed, dst, caller_size);
+    Ok(())
 }
 
 /// 中断を始めた命令の後で、タスクのスタックを巻き戻す (docs/spec/vm.md の「巻き戻しの手順」)。`task.pc` は中断を
@@ -596,6 +681,8 @@ fn unwind<M: Mode>(
                     unsafe { ctx.heap_mut().decref(task.get(slot)) }?;
                 }
             }
+            // 変換のフレームは何も持たない。着地するフレームは、その見出しの結果のスロットに書く
+            pc if code.is_conversion(pc) => {}
             pc => {
                 let entry = code
                     .unwind_at(pc)

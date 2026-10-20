@@ -25,6 +25,48 @@ pub(crate) enum Class {
     Enum,
 }
 
+impl Class {
+    /// 逆アセンブラと一致の確かめが変換を中身で書くための名前。
+    pub(crate) fn name(self) -> &'static str {
+        match self {
+            Class::Word => "word",
+            Class::Int => "int",
+            Class::Float => "float",
+            Class::Enum => "enum",
+        }
+    }
+
+    /// 箱を要するスカラーの種類。語のまま渡せる種類には `None` を返す。
+    pub(crate) fn scalar(self) -> Option<Scalar> {
+        match self {
+            Class::Word => None,
+            Class::Int => Some(Scalar::Int),
+            Class::Float => Some(Scalar::Float),
+            Class::Enum => Some(Scalar::Enum),
+        }
+    }
+}
+
+/// 箱を要するスカラーの種類。変換の命令が持つ。構造体の種類は持たないので、命令の 8 バイトに収まる。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Scalar {
+    Int,
+    Float,
+    Enum,
+}
+
+impl Scalar {
+    pub(crate) const ALL: [Scalar; 3] = [Scalar::Int, Scalar::Float, Scalar::Enum];
+
+    pub(crate) fn class(self) -> Class {
+        match self {
+            Scalar::Int => Class::Int,
+            Scalar::Float => Class::Float,
+            Scalar::Enum => Class::Enum,
+        }
+    }
+}
+
 pub(crate) fn class(repr: Repr) -> Class {
     match repr {
         Repr::Obj | Repr::TObj | Repr::Unit | Repr::Token => Class::Word,

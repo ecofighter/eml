@@ -1,6 +1,8 @@
 //! VM の命令 (docs/spec/vm.md の「命令の形」)。命令は 8 バイトで、長さの変わるオペランドは `CodeBase::operands` に
 //! 置いて添字で指す。
 
+use crate::sig::Scalar;
+
 /// フレームの中のスロットの番号。
 pub type Slot = u16;
 /// `CodeBase::code` の中の命令の位置。
@@ -11,8 +13,15 @@ pub const FINISH: Pc = 0;
 /// 余った引数を適用する組み込みの命令。そのフレームは [結果, n, 場所のシグネチャ, 残りの引数の最初の位置, 引数…] で、
 /// 引数は場所のシグネチャの Repr のまま持つ (docs/superpowers/specs/2026-10-21-s14e-abi-struct-design.md の「VM」)。
 pub const APPLY_REST: Pc = 1;
-/// 組み込みの命令の数。関数の命令はこの後に並ぶ。
-pub const BUILTINS: Pc = 2;
+/// 箱を要するスカラーと一様な値の間の変換の命令列の、最初の位置。命令列は `CodeBase::new` が作る
+/// (docs/superpowers/specs/2026-10-21-s14e-abi-struct-design.md の「VM」)。
+pub const CONVERSIONS: Pc = 2;
+/// 組み込みの命令の数。関数の命令はこの後に並ぶ。変換の命令列は、受ける命令と変換して戻る命令の2つを6組持つ。
+pub const BUILTINS: Pc = CONVERSIONS + 2 * 6;
+/// 変換のフレームの大きさ。受ける値と作業用のスロットの数の最大で、どの変換も同じ大きさにする。合成でフレームを
+/// 置き換えるとき、上のフレームをずらさずに済むためである。命令列を作るときに、使うスロットがこの中にあることを
+/// 確かめる。
+pub const CONVERSION_FRAME_SIZE: usize = 1;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Op {
@@ -46,11 +55,28 @@ pub enum Op {
         dst: Slot,
         at: u32,
     },
+    /// `operands[at..]` は [関数の番号, 引数の数, 引数のスロット…, 結果の変換]。結果の変換は変換の命令列の位置か
+    /// `NONE` である。
     TailCall {
         at: u32,
     },
     Finish,
     ApplyRest,
+    /// 変換の命令列の先頭の直前に置く、受けるスロットの命令。`operands[at..]` は [値の数, スロット…]。実行はしない。
+    /// 戻りが値を書くスロットを、戻り先の直前の命令から読めるようにするためにある。
+    Receive {
+        at: u32,
+    },
+    /// 変換のフレームの本体。`src` のスカラーを箱に入れて呼び出し元へ返す。
+    RetBox {
+        src: Slot,
+        scalar: Scalar,
+    },
+    /// 変換のフレームの本体。`src` の箱からスカラーを取り出し、箱を手放して呼び出し元へ返す。
+    RetUnbox {
+        src: Slot,
+        scalar: Scalar,
+    },
     /// `operands[at..]` は [関数の番号, lin, 引数の数, 引数のスロット…]。
     Closure {
         dst: Slot,
@@ -69,6 +95,7 @@ pub enum Op {
         dst: Slot,
         at: u32,
     },
+    /// `operands[at..]` は [呼ばれる値のスロット, 引数の数, 引数のスロット…, 結果の変換]。
     TailClause {
         at: u32,
     },

@@ -2,7 +2,8 @@
 //! の `unsafe fn` を呼ぶので、核の操作の前提を守っていることを確かめる。メモリの Host だけを使い、ファイルを開かない。
 //! 確かめる道: 直接の呼び出しと戻り、`con` と `switch` と `release`、部分適用と余った引数、基本操作 (evidence を作って
 //! 引く)、ヒープの文字列の extern、2つのプログラムを1つの `Machine` に続けて読み込み、2つ目の塊を付け替えること、
-//! 文字列を返す入口の結果を写すこと、`exit` の巻き戻し、型どおりの `apply` と生の語の捕獲、`apply` の箱の変換、両方のモード。
+//! 文字列を返す入口の結果を写すこと、`exit` の巻き戻し、型どおりの `apply` と生の語の捕獲、`apply` の箱の変換、
+//! 変換のフレーム、両方のモード。
 
 use eml_vm::{AnyMachine, RunConfig, capture_host, execute};
 
@@ -303,4 +304,44 @@ fn half(x.0: float) -> float {
 }
 ";
     assert_eq!(run_typed_apply(text), "1.25\n");
+}
+
+/// 変換のフレームを通る戻り。`half` の `float` の結果を一様な場所のために箱に入れ (`Float` の物体を確保する)、
+/// `boxed` の箱の結果を `int` の場所のために取り出して箱を空ける。`wrap` から `inc` への末尾の `apply` は、`main` が
+/// 積んだ変換のフレームと合成して恒等になり、そのフレームを外す。
+#[test]
+fn a_conversion_frame_round_trip() {
+    let text = "\
+fn main() -> unit {
+  let x.0: float = extern \"Prelude.Num Float.+\"(2.0, 0.5)
+  let b.1: tobj = box x.0
+  let r.2: tobj = uniform apply &half(b.1)
+  let y.3: float = unbox r.2
+  decref r.2
+  let s.4: obj = extern \"Prelude.Show Float.show\"(y.3)
+  let u.5: unit = extern Prelude.println(s.4)
+  let n.6: int = apply &boxed(20: int)
+  let m.7: int = apply &wrap(n.6)
+  let t.8: obj = extern \"Prelude.Show Int.show\"(m.7)
+  let v.9: unit = extern Prelude.println(t.8)
+  return v.9
+}
+fn half(x.0: float) -> float {
+  let y.1: float = extern \"Prelude.Div Float./\"(x.0, 2.0)
+  return y.1
+}
+fn boxed(x.0: int) -> tobj {
+  let y.1: int = extern \"Prelude.Num Int.+\"(x.0, 1)
+  let b.2: tobj = box y.1
+  return b.2
+}
+fn wrap(x.0: int) -> tobj {
+  tail apply &inc(x.0)
+}
+fn inc(x.0: int) -> int {
+  let y.1: int = extern \"Prelude.Num Int.+\"(x.0, 1)
+  return y.1
+}
+";
+    assert_eq!(run_typed_apply(text), "1.25\n22\n");
 }

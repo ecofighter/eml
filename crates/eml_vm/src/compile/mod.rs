@@ -12,7 +12,7 @@ use eml_lir::unwind::UnwindPoint;
 use eml_lir::{FnIdx, Loc, Program};
 use eml_rt::{Control, MaskItem, Mode};
 
-use crate::code::{CodeBase, CompileError, FnEntry, Index, Unwind};
+use crate::code::{CodeBase, CompileError, Conversions, FnEntry, Index, Unwind, builtins};
 use crate::disasm;
 use crate::op::{Op, Pc};
 use crate::sig::Signatures;
@@ -29,6 +29,8 @@ pub(crate) struct Out {
     /// `CodeBase::signatures` を借りたもの。一致の確かめで書いた写しを消しても、引いたシグネチャは残してよい。中身で
     /// 引くので、同じ中身は同じ番号になるためである。
     pub(crate) signatures: Signatures,
+    /// `CodeBase::conversions` を借りたもの。直接の末尾呼び出しの結果の変換を引く。
+    pub(crate) conversions: Conversions,
 }
 
 impl Out {
@@ -90,11 +92,13 @@ pub fn compile<M: Mode>(
 impl<M: Mode> CodeBase<M> {
     /// 組み込みの命令だけを持つ空の表。
     pub fn new(control: Arc<Control>) -> CodeBase<M> {
+        let (code, operands, conversions) = builtins();
         CodeBase {
             functions: Vec::new(),
-            code: vec![Op::Finish, Op::ApplyRest],
-            operands: Vec::new(),
+            code,
+            operands,
             signatures: Signatures::default(),
+            conversions,
             mask_lists: Vec::new(),
             constants: Vec::new(),
             region: None,
@@ -117,6 +121,7 @@ impl<M: Mode> CodeBase<M> {
             code,
             operands,
             signatures,
+            conversions,
             mask_lists,
             constants,
             region,
@@ -133,6 +138,7 @@ impl<M: Mode> CodeBase<M> {
             locations: mem::take(locations),
             unwinds: mem::take(unwinds),
             signatures: mem::take(signatures),
+            conversions: mem::take(conversions),
         };
         let mut pool = Constants::new(constants, index, region, control);
         let strings = &program.strings;
@@ -177,6 +183,7 @@ impl<M: Mode> CodeBase<M> {
         *locations = out.locations;
         *unwinds = out.unwinds;
         *signatures = out.signatures;
+        *conversions = out.conversions;
         result?;
         if let Some(chunk) = frozen? {
             *region = Some(chunk);
@@ -278,6 +285,7 @@ fn check_known<M: Mode>(
                 locations: &out.locations,
                 unwinds: &out.unwinds,
                 signatures: &out.signatures,
+                conversions: &out.conversions,
                 functions,
                 files,
             }

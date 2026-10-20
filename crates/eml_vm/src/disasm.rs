@@ -7,7 +7,7 @@ use eml_extern::Extern;
 use eml_lir::Loc;
 use eml_rt::{MaskItem, Mode};
 
-use crate::code::{CodeBase, FnEntry, Unwind};
+use crate::code::{CodeBase, Conversions, FnEntry, Unwind};
 use crate::op::{KEEP, NONE, Op, Pc, RAW, SKIP};
 use crate::sig::{SigId, Signatures};
 
@@ -36,6 +36,7 @@ pub(crate) struct View<'a> {
     pub(crate) locations: &'a [(Pc, Loc)],
     pub(crate) unwinds: &'a [(Pc, Unwind)],
     pub(crate) signatures: &'a Signatures,
+    pub(crate) conversions: &'a Conversions,
     pub(crate) functions: &'a [FnEntry],
     pub(crate) files: &'a [String],
 }
@@ -95,6 +96,7 @@ impl<'a> View<'a> {
             locations: &code.locations,
             unwinds: &code.unwinds,
             signatures: &code.signatures,
+            conversions: &code.conversions,
             functions: &code.functions,
             files: &code.files,
         }
@@ -187,6 +189,15 @@ impl<'a> View<'a> {
         )
     }
 
+    /// 末尾の呼び出しの結果の変換。位置は追記で変わりうるので、種類の組で書く。なければ空である。
+    fn conversion(&self, pc: u32) -> String {
+        match self.conversions.at(pc) {
+            Some(c) => format!(" convert {} -> {}", c.from.name(), c.to.name()),
+            None if pc == NONE => String::new(),
+            None => format!(" convert ?{pc}"),
+        }
+    }
+
     /// 命令のテキスト。命令の位置 (飛び先と、自己末尾呼び出しの入口) は `origin` からの位置で書く。
     fn line(&self, pc: Pc, origin: Pc) -> String {
         let ops = |at: u32| &self.operands[at as usize..];
@@ -207,9 +218,24 @@ impl<'a> View<'a> {
             Op::Call { dst, at } => {
                 format!("call s{dst} = {}({})", name(ops(at)[0]), args(at, 2))
             }
-            Op::TailCall { at } => format!("tail_call {}({})", name(ops(at)[0]), args(at, 2)),
+            Op::TailCall { at } => {
+                let o = ops(at);
+                format!(
+                    "tail_call {}({}){}",
+                    name(o[0]),
+                    args(at, 2),
+                    self.conversion(o[2 + o[1] as usize])
+                )
+            }
             Op::Finish => "finish".to_string(),
             Op::ApplyRest => "apply_rest".to_string(),
+            Op::Receive { at } => format!("receive [{}]", args(at, 1)),
+            Op::RetBox { src, scalar } => {
+                format!("ret_box {} s{src}", scalar.class().name())
+            }
+            Op::RetUnbox { src, scalar } => {
+                format!("ret_unbox {} s{src}", scalar.class().name())
+            }
             Op::Closure { dst, at } => {
                 let o = ops(at);
                 let lin = if o[1] != 0 { " lin" } else { "" };
@@ -220,7 +246,15 @@ impl<'a> View<'a> {
             Op::Clause { dst, at } => {
                 format!("clause s{dst} = s{}({})", ops(at)[0], args(at, 2))
             }
-            Op::TailClause { at } => format!("tail_clause s{}({})", ops(at)[0], args(at, 2)),
+            Op::TailClause { at } => {
+                let o = ops(at);
+                format!(
+                    "tail_clause s{}({}){}",
+                    o[0],
+                    args(at, 2),
+                    self.conversion(o[2 + o[1] as usize])
+                )
+            }
             Op::TailSelf { at } => {
                 format!("tail_self {}({})", ops(at)[0] - origin, args(at, 2))
             }

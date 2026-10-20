@@ -9,11 +9,13 @@ use crate::RunCounts;
 use crate::code::{CodeBase, FnEntry};
 use crate::data::{self, count_word};
 use crate::error::VmFault;
-use crate::op::{APPLY_REST, Pc, Slot};
+use crate::op::{APPLY_REST, CONVERSION_FRAME_SIZE, Pc, Slot};
 use crate::sig::{SLOW_SITE, SigId, class};
-use crate::vm::Task;
+use crate::vm::{self, Task};
 
 const NOT_A_FUNCTION: VmFault = VmFault::Internal("applying a value that is not a function");
+pub(crate) const DIFFERENT_TYPES: VmFault =
+    VmFault::Internal("an apply converts between the reprs of different types");
 
 /// 適用の結果の行き先。
 pub(crate) enum Target {
@@ -73,7 +75,7 @@ pub(crate) fn apply<M: Mode>(
         // 関数ではずらす量が 64 に届かない。詰められない関数では `wrapping_shr` が回り込むが、その語はどの場所の語とも
         // 等しくならない (`crate::sig`)
         if entry.key.wrapping_shr(4 * k as u32) != site.key {
-            convert(code, ctx, task, counts, entry, k, site, true)?;
+            return apply_converted(code, ctx, task, counts, (f, k, closure), site, target);
         }
         return enter(code, ctx, task, f, k, closure, target);
     }
@@ -276,8 +278,53 @@ fn take_captures<M: Mode>(
     Ok(())
 }
 
+/// 種類が合わないちょうどの数の適用。引数を変え、結果が合わなければ変換のフレームを用意してから入る。速い道の命令の
+/// 列を変えないように、`apply` の外に置く。
+#[cold]
+#[inline(never)]
+fn apply_converted<M: Mode>(
+    code: &CodeBase<M>,
+    ctx: &mut Ctx<M>,
+    task: &mut Task,
+    counts: &mut RunCounts,
+    (f, k, closure): (usize, usize, Option<Closure>),
+    site: Site,
+    target: Target,
+) -> Result<(), VmFault> {
+    let entry = &code.functions[f];
+    let target = match convert(code, ctx, task, counts, entry, k, site, true)? {
+        Some(result) => convert_result(code, task, result, target)?,
+        None => target,
+    };
+    enter(code, ctx, task, f, k, closure, target)
+}
+
+/// 結果を変換 `result` で受ける行き先。今のフレームの上に呼ぶなら、変換のフレームを積んで、その受けるスロットを
+/// 行き先にする。末尾の位置なら、今のフレームの戻り先と合成する (`vm::tail_convert`)。
+fn convert_result<M: Mode>(
+    code: &CodeBase<M>,
+    task: &mut Task,
+    result: Pc,
+    target: Target,
+) -> Result<Target, VmFault> {
+    match target {
+        Target::Frame { ret, dst } => {
+            task.push_frame(ret, dst, CONVERSION_FRAME_SIZE);
+            Ok(Target::Frame {
+                ret: result,
+                dst: 0,
+            })
+        }
+        Target::Tail => {
+            vm::tail_convert(code, task, result)?;
+            Ok(Target::Tail)
+        }
+    }
+}
+
 /// 呼ぶ所と関数の種類が合わないか、シグネチャを語に詰められないときの道。渡す引数を関数の引数の Repr へ変える。
-/// `whole` (ちょうどの数の適用) なら結果の種類も比べる。合わない組が1つでもあれば `conversions` に1回数える。
+/// `whole` (ちょうどの数の適用) なら結果の種類も比べ、合わなければ結果の変換の命令列を返す。合わない組が1つでも
+/// あれば `conversions` に1回数える。
 #[cold]
 #[inline(never)]
 #[expect(clippy::too_many_arguments, reason = "the decoded parts of one apply")]
@@ -290,20 +337,22 @@ fn convert<M: Mode>(
     k: usize,
     site: Site,
     whole: bool,
-) -> Result<(), VmFault> {
+) -> Result<Option<Pc>, VmFault> {
     let callee = code.signatures.get(entry.sig);
     let at = code.signatures.get(site.sig);
-    let mut mismatched = false;
+    let mut result = None;
     if whole {
         for (&from, &to) in callee.ret.iter().zip(&at.ret) {
             if class(from) != class(to) {
                 check_pair(from, to)?;
-                return Err(VmFault::Internal(
-                    "an apply needs a result conversion, which is not supported yet",
-                ));
+                result = Some(
+                    code.conversion(class(from), class(to))
+                        .ok_or(DIFFERENT_TYPES)?,
+                );
             }
         }
     }
+    let mut mismatched = result.is_some();
     let pairs = at.params[site.offset..].iter().zip(&callee.params[k..]);
     for (slot, (&from, &to)) in task.scratch.iter_mut().zip(pairs) {
         if class(from) != class(to) {
@@ -314,7 +363,7 @@ fn convert<M: Mode>(
     if M::CHECKED && mismatched {
         counts.conversions += 1;
     }
-    Ok(())
+    Ok(result)
 }
 
 /// 合わない組は同じ型の一様な Repr と箱を要するスカラーの組である。単相化した2つの場所は同じ型を見ているためである
@@ -324,15 +373,11 @@ fn check_pair(from: Repr, to: Repr) -> Result<(), VmFault> {
     if boxes(from, to) || boxes(to, from) {
         Ok(())
     } else {
-        Err(VmFault::Internal(
-            "an apply converts between the reprs of different types",
-        ))
+        Err(DIFFERENT_TYPES)
     }
 }
 
-/// 値 `w` を Repr `from` から `to` へ変える。一様な値から取り出すときは値を消費する。スカラーは中身に参照を持たない
-/// ので、取り出した後に箱を `decref` すれば、一意なら箱を空けることになる
-/// (docs/superpowers/specs/2026-10-21-s14e-abi-struct-design.md の「VM」)。
+/// 値 `w` を Repr `from` から `to` へ変える。一様な値から取り出すときは値を消費する。
 fn convert_word<M: Mode>(
     ctx: &mut Ctx<M>,
     counts: &mut RunCounts,
@@ -341,26 +386,12 @@ fn convert_word<M: Mode>(
     to: Repr,
 ) -> Result<Word, VmFault> {
     check_pair(from, to)?;
-    if from == Repr::TObj {
-        let converted = if to == Repr::Float {
-            Word::from_bits(data::unbox_float(ctx, w, counts)? as usize)
-        } else {
-            Word::from_bits(data::unbox(ctx, w, counts)? as usize)
-        };
-        // 箱は VM が参照を持つ値で、手放すのはその箱だけである
-        unsafe { ctx.heap_mut().decref(w) }?;
-        return Ok(converted);
+    // `check_pair` を通った組は、片方が `tobj` で、もう片方が箱を要するスカラーである
+    match (class(from).scalar(), class(to).scalar()) {
+        (None, Some(scalar)) => data::unbox_scalar(ctx, counts, w, scalar),
+        (Some(scalar), _) => Ok(data::box_scalar(ctx, counts, w, scalar)),
+        (None, None) => Ok(w),
     }
-    if M::CHECKED {
-        counts.boxes += 1;
-    }
-    // 作る箱は新しい物体なので、`Ctx` の持つ語には触れない
-    let heap = unsafe { ctx.heap_mut() };
-    Ok(match from {
-        Repr::Int => heap.alloc_int(w.bits() as i64),
-        Repr::Float => heap.alloc_float(w.bits() as u64),
-        _ => Word::imm(w.bits() as i64),
-    })
 }
 
 fn deliver<M: Mode>(code: &CodeBase<M>, task: &mut Task, target: Target, value: Word) {

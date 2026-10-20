@@ -7,8 +7,8 @@ use eml_lir::{FloatBits, Loc};
 use eml_rt::{Control, Frozen, HeapError, MaskItem, Mode, Word};
 
 use crate::error::{RuntimeError, SourceLocation};
-use crate::op::{BUILTINS, Op, Pc, Slot};
-use crate::sig::{SigId, Signatures};
+use crate::op::{BUILTINS, CONVERSION_FRAME_SIZE, CONVERSIONS, Op, Pc, Slot};
+use crate::sig::{Class, Scalar, SigId, Signatures};
 use crate::vm::{Failure, Task};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -38,6 +38,83 @@ pub(crate) struct Unwind {
     pub(crate) landing: Option<Slot>,
 }
 
+/// 変換の命令列。受ける命令の次の `start` から `end` の前までで、`from` の種類の値を受けて `to` の種類で返す。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct Conversion {
+    pub(crate) start: Pc,
+    pub(crate) end: Pc,
+    pub(crate) from: Class,
+    pub(crate) to: Class,
+}
+
+/// 変換の命令列の表。組の中身で一意にする (docs/superpowers/specs/2026-10-21-s14e-abi-struct-design.md の「VM」)。
+/// 引くのは変換の要る遅い道だけなので、並びを順に見る。
+#[derive(Default)]
+pub(crate) struct Conversions {
+    list: Vec<Conversion>,
+}
+
+impl Conversions {
+    /// `from` から `to` への変換の命令列の先頭。同じ種類の間と、違う型の Repr の間には変換がない。
+    pub(crate) fn find(&self, from: Class, to: Class) -> Option<Pc> {
+        self.list
+            .iter()
+            .find(|c| (c.from, c.to) == (from, to))
+            .map(|c| c.start)
+    }
+
+    /// 命令列の先頭が `pc` の変換。フレームの見出しの戻り先と、命令の変換のオペランドを引く。
+    pub(crate) fn at(&self, pc: Pc) -> Option<&Conversion> {
+        self.list.iter().find(|c| c.start == pc)
+    }
+
+    /// `pc` が変換の命令列の中か。
+    pub(crate) fn contains(&self, pc: Pc) -> bool {
+        self.list.iter().any(|c| c.start <= pc && pc < c.end)
+    }
+}
+
+/// 組み込みの命令とオペランドと変換の表。`Finish`、`ApplyRest` の後に、スカラーごとに箱へ入れる変換と取り出す変換を
+/// 置く。各命令列の直前には受ける命令を置き、受けるスロットは変換のフレームのスロット 0 である。
+pub(crate) fn builtins() -> (Vec<Op>, Vec<u32>, Conversions) {
+    const RECEIVE: u32 = 0;
+    let operands = vec![1, 0];
+    let mut code = vec![Op::Finish, Op::ApplyRest];
+    let mut conversions = Conversions::default();
+    debug_assert_eq!(code.len(), CONVERSIONS as usize);
+    for scalar in Scalar::ALL {
+        for boxing in [true, false] {
+            code.push(Op::Receive { at: RECEIVE });
+            let start = code.len() as Pc;
+            let (op, from, to) = if boxing {
+                (Op::RetBox { src: 0, scalar }, scalar.class(), Class::Word)
+            } else {
+                (Op::RetUnbox { src: 0, scalar }, Class::Word, scalar.class())
+            };
+            code.push(op);
+            conversions.list.push(Conversion {
+                start,
+                end: code.len() as Pc,
+                from,
+                to,
+            });
+        }
+    }
+    // 変換のフレームはどれも同じ大きさなので、命令列の使うスロットがその中にあることをここで確かめる
+    debug_assert!(
+        operands[1..=operands[0] as usize]
+            .iter()
+            .all(|&slot| (slot as usize) < CONVERSION_FRAME_SIZE)
+            && code.iter().all(|op| match op {
+                Op::RetBox { src, .. } | Op::RetUnbox { src, .. } =>
+                    usize::from(*src) < CONVERSION_FRAME_SIZE,
+                _ => true,
+            })
+    );
+    debug_assert_eq!(code.len(), BUILTINS as usize);
+    (code, operands, conversions)
+}
+
 /// 実行中は読むだけの表。後の並列 VM の worker がそのまま共有できるように、`Sync` に保つ
 /// (docs/future/multicore.md の「VM の並列化の備え」の制約2)。入力の境目では `load` で追記する
 /// (docs/spec/vm.md の「追記」)。
@@ -47,6 +124,8 @@ pub struct CodeBase<M: Mode> {
     pub(crate) operands: Vec<u32>,
     /// 関数と `apply` の場所のシグネチャ。中身で引くので、追記の間も番号は変わらない。
     pub(crate) signatures: Signatures,
+    /// 変換の命令列。
+    pub(crate) conversions: Conversions,
     /// `EvvMask` が参照する、mask の項目の並び。
     pub(crate) mask_lists: Vec<MaskItem>,
     pub(crate) constants: Vec<Word>,
@@ -108,13 +187,26 @@ impl<M: Mode> CodeBase<M> {
             .any(|repr| repr.is_rc())
     }
 
-    /// 命令の位置を含む関数。組み込みの命令はどの関数にも属さない。関数は命令の位置の順に並ぶ。
+    /// `from` から `to` への変換の命令列の先頭。
+    pub(crate) fn conversion(&self, from: Class, to: Class) -> Option<Pc> {
+        self.conversions.find(from, to)
+    }
+
+    /// `pc` が変換の命令列の中か。
+    pub(crate) fn is_conversion(&self, pc: Pc) -> bool {
+        self.conversions.contains(pc)
+    }
+
+    /// 命令の位置を含む関数。組み込みの命令と変換の命令列はどの関数にも属さない。関数は命令の位置の順に並ぶ。関数の
+    /// 間に置く変換の命令列を前の関数と取り違えないように、範囲の終わりも比べる。
     pub(crate) fn function_at(&self, pc: Pc) -> Option<&FnEntry> {
         if pc < BUILTINS {
             return None;
         }
         let after = self.functions.partition_point(|f| f.start <= pc);
-        self.functions.get(after.checked_sub(1)?)
+        self.functions
+            .get(after.checked_sub(1)?)
+            .filter(|f| pc < f.end)
     }
 
     pub(crate) fn location(&self, pc: Pc) -> Option<Loc> {

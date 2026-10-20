@@ -1,6 +1,6 @@
 //! 関数ごとの命令の生成 (docs/spec/vm.md の「命令ごとの実行」)。定数の atom は、命令の前に一時のスロットへ読み込む。
 
-use eml_extern::Extern;
+use eml_extern::{Extern, OpRet};
 use eml_lir::unwind::UnwindPoint;
 use eml_lir::{
     Atom, BlockId, Call, Ctor, FnIdx, LayoutCtor, LirFn, Loc, Program, Repr, Rhs, Shape, Site,
@@ -13,7 +13,7 @@ use super::slots::{Slots, allocate};
 use super::{Links, Out};
 use crate::code::{CompileError, FnEntry, Unwind};
 use crate::op::{KEEP, NONE, Op, Pc, RAW, SKIP, Slot};
-use crate::sig::Signature;
+use crate::sig::{Signature, class};
 
 pub(crate) fn function<M: Mode>(
     program: &Program,
@@ -692,6 +692,23 @@ impl<'a, M: Mode> Emitter<'a, '_, M> {
         )
     }
 
+    /// 末尾の呼び出しの結果 `ret` を、この関数の `ret` へ変える変換の命令列の位置。変換が要らなければ `NONE` である。
+    /// 呼ぶ関数と呼び出し元の `ret` から静的に決まるので、命令に持たせる
+    /// (docs/superpowers/specs/2026-10-21-s14e-abi-struct-design.md の「VM」)。
+    fn result_conversion(&self, ret: Repr) -> u32 {
+        let (from, to) = (class(ret), class(self.function.ret));
+        if from == to {
+            return NONE;
+        }
+        let conversion = self.out.conversions.find(from, to);
+        // 両端は同じ型の Repr なので、verifier を通った IR ではいつも変換がある
+        debug_assert!(
+            conversion.is_some(),
+            "a tail call converts between the reprs of different types"
+        );
+        conversion.unwrap_or(NONE)
+    }
+
     /// 直接の呼び出しのオペランド [関数の番号, 引数の数, 引数のスロット…]。
     pub(crate) fn call_operands(&mut self, f: eml_lir::FnIdx, args: &[Atom]) -> u32 {
         let callee = self.program.function(f);
@@ -719,11 +736,19 @@ impl<'a, M: Mode> Emitter<'a, '_, M> {
                     self.self_tail_patches.push(at as usize);
                     self.out.push(Op::TailSelf { at });
                 } else {
+                    let conversion = self.result_conversion(self.program.function(*f).ret);
+                    self.out.operands([conversion]);
                     self.out.push(Op::TailCall { at });
                 }
             }
-            Term::TailCall(call @ Call::Clause { .. }) => {
+            Term::TailCall(call @ Call::Clause { effect, op, .. }) => {
                 let at = self.clause_operands(call);
+                // `never` の操作の `clause` は戻らないので、変換も合成もしない (docs/spec/lir.md の「`never` の操作」)
+                let conversion = match eml_lir::operation(&self.program.effects, *effect, *op).ret {
+                    OpRet::Repr(ret) => self.result_conversion(ret),
+                    OpRet::Never => NONE,
+                };
+                self.out.operands([conversion]);
                 self.out.push(Op::TailClause { at });
             }
             Term::TailCall(call) => {
