@@ -896,7 +896,8 @@ main () = Yield.for_each (gen (fn () -> println \"cb\")) (fn x -> println \"\\{x
     );
 }
 
-/// 経路に handle があれば特殊化しない。内側の handle は特殊化してよいので、外側の `Yield.for_each` の handle だけを見る。
+/// 経路に特殊化しない handle が残れば、外側の handle も特殊化しない。`try_panic` の handle は `never` の操作だけの
+/// エフェクトなので特殊化されず、外側の `Yield.for_each` の handle が残る。
 #[test]
 fn a_nested_handle_keeps_the_handle() {
     let text = "\
@@ -905,8 +906,8 @@ import Yield (Yield(..))
 nums : Unit -> <Yield Int, Panic> Unit
 nums () =
   yield 1
-  handle (yield 2) with
-    | fn yield x -> yield (x + 1)
+  let _ = try_panic (fn () -> yield 2)
+  yield 3
 
 main : Unit -> <IO, Panic> Unit
 main () = Yield.for_each nums (fn x -> println \"\\{x}\")
@@ -983,6 +984,121 @@ main () =
     for copy in copies.split("\n\n") {
         assert!(b.contains(copy.trim()), "{copy}\n---\n{b}");
     }
+}
+
+/// `bench/state_nested.em` のプログラム。状態つきの2つの handler (`Std.State` と `Tick`) が重なる。
+const STATE_NESTED: &str = "\
+-- 2つの状態つきの handler を重ねたループ (S14c-2)。内側の `Tick` の handler から先に特殊化される
+import Std.State (State(..))
+
+effect Tick where
+  tick : Unit -> Unit
+
+step : Int -> <State Int, Tick, Panic> Unit
+step i =
+  tick ()
+  put (get () + i)
+
+loop : Int -> Int -> <State Int, Tick, Panic> Unit
+loop i n =
+  if i > n then ()
+  else
+    step i
+    loop (i + 1) n
+
+count : (Unit -> <Tick | e> a) -> <Panic | e> (a, Int)
+count action =
+  handle action () from 0 with
+    | fn tick () c -> ((), c + 1)
+    | return x c -> (x, c)
+
+counted : Unit -> <State Int, Panic> Int
+counted () =
+  let (_, ticks) = count (fn () -> loop 1 100000)
+  ticks
+
+main : Unit -> <IO, Panic> Unit
+main () =
+  let (ticks, total) = State.run 0 counted
+  println \"\\{total} \\{ticks}\"
+";
+
+/// 内側の複製 `f{H=…}` の複製の名前か。名前は `f{H=…}{H=…}` で、64字を超えると内側の複製の名前にハッシュを付けた
+/// `f{H=…}@#<16 hex>` になる (docs/spec/core-ir.md の「handler の複製」)。
+fn nested_copy(line: &str) -> bool {
+    line.contains("fn \"") && (line.contains("}{H=") || line.contains("}@#"))
+}
+
+/// 入れ子の handler は内側から特殊化する (docs/spec/core-ir.md の「handler への特殊化」)。内側の `Tick` の handle が
+/// 複製の呼び出しに変わると、外側の `State.run` の経路は内側の複製を通ってたどれるようになり、外側の handler は
+/// 内側の複製の複製を作る。
+#[test]
+fn nested_handlers_are_specialized_inside_out() {
+    let shown = core_text(STATE_NESTED, Pass::Optimize);
+    assert!(!shown.contains("handle "), "{shown}");
+    assert!(shown.lines().any(nested_copy), "{shown}");
+}
+
+/// 後の回の複製も、その回の初めのコードから作るので、名前でコードが決まる (docs/spec/vm.md の「追記」)。
+#[test]
+fn nested_handler_copies_do_not_depend_on_the_rest_of_the_program() {
+    let main = "main : Unit -> <IO, Panic> Unit
+main () =
+  let (ticks, total) = State.run 0 counted
+  println \"\\{total} \\{ticks}\"
+";
+    let other = "double : Int -> <State Int, Panic> Unit
+double n =
+  if n <= 0 then ()
+  else
+    put (get () * 2)
+    double (n - 1)
+
+main : Unit -> <IO, Panic> Unit
+main () =
+  let (ticks, total) = State.run 0 counted
+  println \"\\{total} \\{ticks}\"
+  println (show (State.exec 1 (fn () -> double 10)))
+";
+    assert!(STATE_NESTED.ends_with(main));
+    let a = core_text(STATE_NESTED, Pass::Optimize);
+    let b = core_text(&STATE_NESTED.replace(main, other), Pass::Optimize);
+    let all = handler_copies(&a);
+    let copies: Vec<&str> = all
+        .split("\n\n")
+        .filter(|copy| copy.lines().next().is_some_and(nested_copy))
+        .map(str::trim)
+        .collect();
+    assert!(!copies.is_empty(), "{a}");
+    for copy in copies {
+        assert!(b.contains(copy), "{copy}\n---\n{b}");
+    }
+}
+
+/// 状態を渡す形を確かめる UI テストのプログラムが、その形で特殊化されることを確かめる。`lin_state` の handle は
+/// 消え、`under_generator` では `Std.State` の handle が消えて、外側の `Iter.generate` の handle だけが残る。
+#[test]
+fn passing_ui_programs_are_specialized() {
+    let lin_state = core_text(
+        include_str!("../../../tests/ui/run/effects/state_passing_lin_state.em"),
+        Pass::Optimize,
+    );
+    assert!(!lin_state.contains("handle "), "{lin_state}");
+    let generator = core_text(
+        include_str!("../../../tests/ui/run/effects/state_passing_under_generator.em"),
+        Pass::Optimize,
+    );
+    let owners: Vec<&str> = generator
+        .lines()
+        .filter(|line| line.contains("fn \""))
+        .filter_map(|line| line.split('"').nth(1))
+        .filter(|name| function(&generator, name).contains("handle "))
+        .collect();
+    assert!(
+        owners.len() == 1 && owners[0].starts_with("Std.Iter.generate@"),
+        "{owners:?}\n{generator}"
+    );
+    assert!(generator.contains("fn \"sums{H="), "{generator}");
 }
 
 /// 定数の操作の引数を節の本体に展開すると、その定数で分ける `switch` ができる。合う case へのジャンプにして、読み直した

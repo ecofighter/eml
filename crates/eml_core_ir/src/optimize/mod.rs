@@ -20,14 +20,14 @@ pub(crate) use yields::{kept_marks, recompute_yields};
 pub fn optimize(program: &mut Program) {
     specialize::specialize(program);
     // handler への特殊化は、付け直す前の印も読む (`handlers::path`)
-    let translated: Vec<bool> = program
+    let mut translated: Vec<bool> = program
         .functions
         .iter()
         .map(|function| function.yields)
         .collect();
     let keep = kept_marks(program);
     recompute_yields(program, &keep);
-    handlers::handlers(program, &translated);
+    handlers::handlers(program, &mut translated);
     let keep = kept_marks(program);
     recompute_yields(program, &keep);
     fuse::fuse(program);

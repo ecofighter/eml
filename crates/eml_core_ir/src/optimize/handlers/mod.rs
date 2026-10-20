@@ -8,9 +8,9 @@
 //!   再開する節なら節の本体をその場に展開した形にする。それ以外の節なら、継続の関数の閉包を `k` として節の写し
 //!   `<g>{k}` を末尾で呼ぶ形にし、`never` の操作なら、後ろを捨てて節の関数を末尾で呼ぶ形にする
 //!
-//! 複製と継続の関数は、`specialize` と最初の `yields` の付け直しの後のコードから作る。そのコードは名前ごとに決まって
-//! いるので、どの handle を特殊化するかも、複製のコードも、handle を含む関数と経路の関数のコードだけで決まる
-//! (docs/spec/vm.md の「追記」)。
+//! 入れ子の handler は内側から、回を重ねて特殊化する (`handlers`)。複製と継続の関数は、その回の初めのコードから
+//! 作る。そのコードは名前ごとに決まっているので、どの handle を特殊化するかも、複製のコードも、handle を含む関数と
+//! 経路の関数のコードだけで決まる (docs/spec/vm.md の「追記」)。
 
 mod passing;
 mod piece;
@@ -20,6 +20,7 @@ use std::collections::{BTreeSet, HashMap};
 use super::blocks;
 use super::known::{Wrapper, fresh, known_closures, wrapper};
 use super::specialize::limited;
+use super::{kept_marks, recompute_yields};
 use crate::liveness::{insert_var, live_after_term, step_back};
 use crate::tail::tail_position_call;
 use crate::{Call, CoreFn, Program, Rhs, Stmt, Term};
@@ -209,15 +210,49 @@ impl Shape {
 }
 
 /// handle を特殊化する。handle を含む関数はその場で書き換え、複製と継続の関数は後ろに足す。`translated` は、
-/// `yields` の印を付け直す前の、関数ごとの印である (`path`)。
-pub(crate) fn handlers(program: &mut Program, translated: &[bool]) {
+/// `yields` の印を付け直す前の、関数ごとの印である (`path`)。作った関数には、もとの関数の印を足していく。
+///
+/// 経路はどの `handle` も断るので、入れ子の handler は内側から特殊化される。1回ごとに、その回の初めのコードから
+/// 特殊化できる handle をすべて特殊化し、印を付け直してから次の回に進む。内側の handle が複製の呼び出しに変わると、
+/// 外側の handler の経路はその複製を通ってたどれるようになる。変わる handle がなくなったら止める
+/// (docs/spec/core-ir.md の「handler への特殊化」)。
+pub(crate) fn handlers(program: &mut Program, translated: &mut Vec<bool>) {
+    let mut table = Table::default();
+    while round(program, translated, &mut table) {
+        let inherited: Vec<bool> = table
+            .sources
+            .drain(..)
+            .map(|source| translated[source.0 as usize])
+            .collect();
+        translated.extend(inherited);
+        debug_assert_eq!(translated.len(), program.functions.len());
+        let keep = kept_marks(program);
+        recompute_yields(program, &keep);
+    }
+}
+
+/// 回をまたいで持つ複製の表。同じ鍵の複製は一度だけ作る。経路の関数は `handle` を持たないので、後の回で書き換え
+/// られることはなく、前の回に作った複製はそのまま使える。
+#[derive(Default)]
+struct Table {
+    /// 経路の関数と `return` の節の関数ごとの複製 `f{H}`。
+    copies: HashMap<(FnIdx, FnIdx), FnIdx>,
+    /// 節の関数ごとの、`k` を閉包で受ける写し `<g>{k}`。
+    clause_copies: HashMap<FnIdx, FnIdx>,
+    /// この回に作った関数ごとの、もとの関数。番号を取った順に並ぶ。`f{H}`、`$hN`、`$hjJ` は f から、`<g>{k}` は g
+    /// から作る。
+    sources: Vec<FnIdx>,
+}
+
+/// 1回分の特殊化。その回の初めのコードで特殊化できる handle がなければ、何も変えずに `false` を返す。
+fn round(program: &mut Program, translated: &[bool], table: &mut Table) -> bool {
     let count = program.functions.len();
     let handlers: Vec<Handler> = (0..count)
         .flat_map(|owner| sites(program, FnIdx(owner as u32)))
         .filter_map(|site| eligible(program, translated, site))
         .collect();
     if handlers.is_empty() {
-        return;
+        return false;
     }
     // 組の配置は、複製が `program` を借りる前に足しておく
     let pair = handlers
@@ -226,8 +261,7 @@ pub(crate) fn handlers(program: &mut Program, translated: &[bool]) {
         .then(|| passing::pair_layout(program));
     let mut copies = Copies {
         program,
-        table: HashMap::new(),
-        clause_copies: HashMap::new(),
+        table,
         created: Vec::new(),
         pending: Vec::new(),
         pair,
@@ -283,6 +317,7 @@ pub(crate) fn handlers(program: &mut Program, translated: &[bool]) {
             .into_iter()
             .map(|function| function.expect("every reserved copy is built")),
     );
+    true
 }
 
 /// handle の地点 `let x = handle …` を置き換える文。末尾の経路の形では、本体の複製の結果がそのまま x になる。
@@ -675,12 +710,10 @@ fn targeted(function: &CoreFn, effect: u32) -> impl Iterator<Item = (BlockId, us
         })
 }
 
-/// 複製の表。複製と継続の関数は、作る前に番号を取っておき、書き換える前のプログラムから作る。
+/// 1回分の複製の作り手。複製と継続の関数は、作る前に番号を取っておき、その回の書き換える前のプログラムから作る。
 struct Copies<'a> {
     program: &'a Program,
-    table: HashMap<(FnIdx, FnIdx), FnIdx>,
-    /// 節の関数ごとの、`k` を閉包で受ける写し `<g>{k}`。
-    clause_copies: HashMap<FnIdx, FnIdx>,
+    table: &'a mut Table,
     /// `program.functions` の後ろに足す関数。番号を取った順に並ぶ。
     created: Vec<Option<CoreFn>>,
     pending: Vec<(FnIdx, FnIdx, Shape)>,
@@ -689,8 +722,10 @@ struct Copies<'a> {
 }
 
 impl Copies<'_> {
-    fn reserve(&mut self) -> FnIdx {
+    /// 番号を取る。`source` は作る関数のもとの関数で、その translate の印を受け継ぐ (`path`)。
+    fn reserve(&mut self, source: FnIdx) -> FnIdx {
         self.created.push(None);
+        self.table.sources.push(source);
         FnIdx((self.program.functions.len() + self.created.len() - 1) as u32)
     }
 
@@ -702,11 +737,11 @@ impl Copies<'_> {
     /// 経路の関数 `function` の、handler `shape` の複製の番号。
     fn copy(&mut self, function: FnIdx, shape: &Shape) -> FnIdx {
         let key = (function, shape.ret());
-        if let Some(&copy) = self.table.get(&key) {
+        if let Some(&copy) = self.table.copies.get(&key) {
             return copy;
         }
-        let copy = self.reserve();
-        self.table.insert(key, copy);
+        let copy = self.reserve(function);
+        self.table.copies.insert(key, copy);
         self.pending.push((copy, function, shape.clone()));
         copy
     }
@@ -714,11 +749,11 @@ impl Copies<'_> {
     /// 節の関数 `clause` の、`k` を閉包で受ける写し `<g>{k}` の番号。節の関数はちょうど1つの handle に属するので、
     /// 写しの鍵は節の関数だけで、状態つきかどうかもそれで決まる。
     fn clause_copy(&mut self, clause: FnIdx, stateful: bool) -> FnIdx {
-        if let Some(&copy) = self.clause_copies.get(&clause) {
+        if let Some(&copy) = self.table.clause_copies.get(&clause) {
             return copy;
         }
-        let copy = self.reserve();
-        self.clause_copies.insert(clause, copy);
+        let copy = self.reserve(clause);
+        self.table.clause_copies.insert(clause, copy);
         let program = self.program;
         let function = program.function(clause);
         let name = limited(&function.name, format!("{}{{k}}", function.name));
@@ -839,6 +874,7 @@ impl Copies<'_> {
         }
 
         let mut copy = Rewrite {
+            source: function,
             joins: piece::joins(&code.blocks),
             live_in: vec![Vec::new(); code.blocks.len()],
             code,
@@ -943,7 +979,7 @@ impl Copies<'_> {
             );
             return;
         }
-        let continuation = self.reserve();
+        let continuation = self.reserve(copy.source);
         let mut params = live.clone();
         params.push(result);
         params.extend(copy.state);
@@ -1044,6 +1080,7 @@ impl Copies<'_> {
     /// J の関数を、`jump` の実引数、J の入口で生きている変数、状態の順で末尾で呼ぶ形にする。
     fn region(&mut self, copy: &mut Rewrite, at: (BlockId, usize), params: Vec<VarId>) -> CoreFn {
         let Rewrite {
+            source,
             code,
             joins,
             state,
@@ -1055,7 +1092,7 @@ impl Copies<'_> {
         piece::region(code, at, params, joins, |join, args| {
             let function = *join_functions.entry(join).or_insert_with(|| {
                 pending.push(join);
-                self.reserve()
+                self.reserve(*source)
             });
             let mut args = args.to_vec();
             args.extend(join_live(code, live_in, join, *state).map(Atom::Var));
@@ -1067,6 +1104,8 @@ impl Copies<'_> {
 
 /// 書き換えている複製 `f{H}` と、そのブロックの表。
 struct Rewrite {
+    /// もとの経路の関数 f。
+    source: FnIdx,
     code: CoreFn,
     /// 節の順の、節の捕獲の引数。最後が `return` の節である。
     captures: Vec<Vec<Atom>>,

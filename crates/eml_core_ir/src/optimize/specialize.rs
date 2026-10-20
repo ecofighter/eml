@@ -294,14 +294,28 @@ pub(crate) fn copy_name(callees: &[Callee], layouts: &[Layout], key: &Key) -> St
 /// 上限を超えた複製の名前 `name` を、呼び出し先 `callee` の名前の `@` より前の部分に、`name` 全体のハッシュを付けた
 /// `<base>@#<16 hex>` にする。上限以内ならそのまま返す。handler への特殊化の複製も同じ形にする
 /// (docs/spec/core-ir.md の「鍵と名前」)。
+///
+/// `@` は鍵の `{…}` の外で探す。後の回の handler の複製は内側の複製 `f{H=…}` を呼び出し先にするので、鍵の中の `@`
+/// で切ると、`{` の閉じない名前になるためである。
 pub(crate) fn limited(callee: &str, name: String) -> String {
     if name.chars().count() <= NAME_LIMIT {
         return name;
     }
-    let base = callee.split('@').next().unwrap_or(callee);
+    let mut depth = 0usize;
+    let end = callee
+        .char_indices()
+        .find(|&(_, c)| {
+            match c {
+                '{' => depth += 1,
+                '}' => depth = depth.saturating_sub(1),
+                _ => {}
+            }
+            c == '@' && depth == 0
+        })
+        .map_or(callee.len(), |(at, _)| at);
     let mut state = Fnv::new();
     state.text(&name);
-    format!("{base}@#{:016x}", state.0)
+    format!("{}@#{:016x}", &callee[..end], state.0)
 }
 
 /// 引数を特殊化してよい位置。本体でその引数を `apply` するか、直接の呼び出しに渡すか、`closure` で捕まえるか、
