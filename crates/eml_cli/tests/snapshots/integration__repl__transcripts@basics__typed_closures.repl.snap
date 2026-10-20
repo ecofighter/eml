@@ -1,0 +1,14 @@
+---
+source: crates/eml_cli/tests/repl.rs
+expression: checked.render()
+input_file: crates/eml_cli/tests/repl/basics/typed_closures.repl
+---
+> scale : Float -> Float -> <Panic> Float
+. scale k x = k * x
+.
+> println (show (List.map (scale 2.0) [1.0, -0.0, 2.5]))
+[2.0, -0.0, 5.0]
+> List.map (scale 0.5) [4.0]
+[2.0]
+--- close ---
+no leaks

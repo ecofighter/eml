@@ -61,6 +61,7 @@
     - Constant `CONVERSION_FRAME_SIZE` in `op.rs`.
 - Test changes:
   - **Kind 1:** exactly the spec's 「種類1」 list. Task 5 deletes the six tests, Task 1 adds the `records_wide` row, Task 11 deletes the `records` row. If another pass/fail change appears, add it to the spec's 「種類1」 with the reason and ask the user before committing.
+    - Task 3 deletes or rewrites the four `crates/eml_lir/tests/verify.rs` tests of the removed `non_uniform` rule, because S14e-1 drops the requirement that value-used functions be uniform (`apply` converts at run time). It deletes `a_function_value_passed_to_a_block_is_uniform` and `a_function_value_that_is_dropped_or_switched_on_is_uniform`. It rewrites `a_function_used_as_a_value_is_uniform` as `a_function_value_need_not_be_uniform` and `a_closure_of_a_function_that_is_not_uniform_is_rejected_before_its_arguments` as `a_closure_checks_its_argument_scopes`: their rejections become `Ok(())`, and their other assertions stay.
   - **Kind 2:** within the spec's 「種類2」 scope, as each task states. A changed stdout, stderr or outcome of an existing UI test is a bug, never a snapshot update.
 - Gate per task:
   - the task's test commands, then `cargo test`, `cargo clippy --all-targets`, `cargo fmt --check`;

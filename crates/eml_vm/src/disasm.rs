@@ -9,6 +9,7 @@ use eml_rt::{MaskItem, Mode};
 
 use crate::code::{CodeBase, FnEntry, Unwind};
 use crate::op::{KEEP, NONE, Op, Pc, RAW, SKIP};
+use crate::sig::{SigId, Signatures};
 
 pub fn disassemble<M: Mode>(code: &CodeBase<M>) -> String {
     let view = View::of(code);
@@ -34,6 +35,7 @@ pub(crate) struct View<'a> {
     pub(crate) mask_lists: &'a [MaskItem],
     pub(crate) locations: &'a [(Pc, Loc)],
     pub(crate) unwinds: &'a [(Pc, Unwind)],
+    pub(crate) signatures: &'a Signatures,
     pub(crate) functions: &'a [FnEntry],
     pub(crate) files: &'a [String],
 }
@@ -92,6 +94,7 @@ impl<'a> View<'a> {
             mask_lists: &code.mask_lists,
             locations: &code.locations,
             unwinds: &code.unwinds,
+            signatures: &code.signatures,
             functions: &code.functions,
             files: &code.files,
         }
@@ -156,6 +159,34 @@ impl<'a> View<'a> {
         format!("{{ {} }}", parts.join(", "))
     }
 
+    /// シグネチャを中身で書く。番号は読み込みの順で変わるので書かない。
+    fn signature(&self, id: u32) -> String {
+        let sig = self.signatures.get(SigId(id));
+        let names = |reprs: &[eml_lir::Repr]| {
+            reprs
+                .iter()
+                .map(|repr| repr.name())
+                .collect::<Vec<_>>()
+                .join(", ")
+        };
+        let ret = match sig.ret.as_slice() {
+            [one] => one.name().to_string(),
+            many => format!("({})", names(many)),
+        };
+        format!("({}) -> {ret}", names(&sig.params))
+    }
+
+    /// `apply` のオペランド [呼ばれる値, n, 場所のシグネチャ, 引数…]。
+    fn apply(&self, o: &[u32]) -> String {
+        let n = o[1] as usize;
+        format!(
+            "s{}({}) : {}",
+            o[0],
+            slots(&o[3..3 + n]),
+            self.signature(o[2])
+        )
+    }
+
     /// 命令のテキスト。命令の位置 (飛び先と、自己末尾呼び出しの入口) は `origin` からの位置で書く。
     fn line(&self, pc: Pc, origin: Pc) -> String {
         let ops = |at: u32| &self.operands[at as usize..];
@@ -184,8 +215,8 @@ impl<'a> View<'a> {
                 let lin = if o[1] != 0 { " lin" } else { "" };
                 format!("closure s{dst} = {}({}){lin}", name(o[0]), args(at, 3))
             }
-            Op::Apply { dst, at } => format!("apply s{dst} = s{}({})", ops(at)[0], args(at, 2)),
-            Op::TailApply { at } => format!("tail_apply s{}({})", ops(at)[0], args(at, 2)),
+            Op::Apply { dst, at } => format!("apply s{dst} = {}", self.apply(ops(at))),
+            Op::TailApply { at } => format!("tail_apply {}", self.apply(ops(at))),
             Op::Clause { dst, at } => {
                 format!("clause s{dst} = s{}({})", ops(at)[0], args(at, 2))
             }

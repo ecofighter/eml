@@ -8,7 +8,8 @@ pub type Pc = u32;
 
 /// いちばん下のフレームの戻り先。
 pub const FINISH: Pc = 0;
-/// 余った引数を適用する組み込みの命令。
+/// 余った引数を適用する組み込みの命令。そのフレームは [結果, n, 場所のシグネチャ, 残りの引数の最初の位置, 引数…] で、
+/// 引数は場所のシグネチャの Repr のまま持つ (docs/superpowers/specs/2026-10-21-s14e-abi-struct-design.md の「VM」)。
 pub const APPLY_REST: Pc = 1;
 /// 組み込みの命令の数。関数の命令はこの後に並ぶ。
 pub const BUILTINS: Pc = 2;
@@ -55,7 +56,7 @@ pub enum Op {
         dst: Slot,
         at: u32,
     },
-    /// `operands[at..]` は [呼ばれる値のスロット, 引数の数, 引数のスロット…]。
+    /// `operands[at..]` は [呼ばれる値のスロット, 引数の数, 場所のシグネチャ, 引数のスロット…]。
     Apply {
         dst: Slot,
         at: u32,
@@ -63,6 +64,7 @@ pub enum Op {
     TailApply {
         at: u32,
     },
+    /// `operands[at..]` は [呼ばれる値のスロット, 引数の数, 引数のスロット…]。引数は操作の ABI の Repr である。
     Clause {
         dst: Slot,
         at: u32,

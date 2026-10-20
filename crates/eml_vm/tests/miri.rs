@@ -2,18 +2,28 @@
 //! の `unsafe fn` を呼ぶので、核の操作の前提を守っていることを確かめる。メモリの Host だけを使い、ファイルを開かない。
 //! 確かめる道: 直接の呼び出しと戻り、`con` と `switch` と `release`、部分適用と余った引数、基本操作 (evidence を作って
 //! 引く)、ヒープの文字列の extern、2つのプログラムを1つの `Machine` に続けて読み込み、2つ目の塊を付け替えること、
-//! 文字列を返す入口の結果を写すこと、`exit` の巻き戻し、両方のモード。
+//! 文字列を返す入口の結果を写すこと、`exit` の巻き戻し、型どおりの `apply` と生の語の捕獲、両方のモード。
 
 use eml_vm::{AnyMachine, RunConfig, capture_host, execute};
 
 fn run_both(text: &str) -> String {
     let program = eml_lir::parse(text).unwrap_or_else(|error| panic!("{error}"));
     eml_lir::verify(&program).unwrap_or_else(|error| panic!("{error}"));
+    run_program(&program)
+}
+
+/// verifier を通さずに両方のモードで実行する。今の verifier は box の挿入の後の段で `apply` の引数と結果を `tobj` と
+/// 比べるので、型どおりの `apply` を書いた IR を通さないためである。
+fn run_typed_apply(text: &str) -> String {
+    run_program(&eml_lir::parse(text).unwrap_or_else(|error| panic!("{error}")))
+}
+
+fn run_program(program: &eml_lir::Program) -> String {
     let mut outputs = Vec::new();
     for debug_heap in [true, false] {
         let (host, out) = capture_host(Default::default());
         let config = RunConfig::default().with_debug_heap(debug_heap);
-        execute(&program, &config, host).unwrap_or_else(|error| panic!("{error}"));
+        execute(program, &config, host).unwrap_or_else(|error| panic!("{error}"));
         outputs.push(out.contents());
     }
     assert_eq!(outputs[0], outputs[1]);
@@ -253,4 +263,23 @@ fn bottom(n.0: int) -> unit {
         let unwound = if debug_heap { 4 } else { 0 };
         assert_eq!(finished.stats.unwound_frames, unwound);
     }
+}
+
+/// 捕まえた `float` を生の語に書き、`apply` で引数の順に読み出す (`make_closure` と `take_captures`)。
+#[test]
+fn typed_apply_with_raw_captures() {
+    let text = "\
+fn main() -> unit {
+  let c.0: tobj = closure scale(2.5)
+  let r.1: float = apply c.0(4.0: float)
+  let s.2: obj = extern \"Prelude.Show Float.show\"(r.1)
+  let u.3: unit = extern Prelude.println(s.2)
+  return u.3
+}
+fn scale(k.0: float, x.1: float) -> float {
+  let y.2: float = extern \"Prelude.Num Float.*\"(k.0, x.1)
+  return y.2
+}
+";
+    assert_eq!(run_typed_apply(text), "10.0\n");
 }

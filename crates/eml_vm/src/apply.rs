@@ -1,12 +1,19 @@
-//! 関数の値の適用とクロージャ (docs/spec/vm.md の「呼び出しと戻り」)。引数は `Task::scratch` に置いて渡す。
+//! 関数の値の適用とクロージャ (docs/spec/vm.md の「呼び出しと戻り」)。引数は `Task::scratch` に置いて渡す。呼ぶ所の
+//! シグネチャと関数の `FnEntry` の Repr が合わなければ、引数を実行時に変える
+//! (docs/superpowers/specs/2026-10-21-s14e-abi-struct-design.md の「VM」)。
 
+use eml_lir::Repr;
 use eml_rt::{Ctx, Mode, Word};
 
-use crate::code::CodeBase;
-use crate::data::count_word;
+use crate::RunCounts;
+use crate::code::{CodeBase, FnEntry};
+use crate::data::{self, count_word};
 use crate::error::VmFault;
 use crate::op::{APPLY_REST, Pc, Slot};
+use crate::sig::{SLOW_SITE, SigId, class};
 use crate::vm::Task;
+
+const NOT_A_FUNCTION: VmFault = VmFault::Internal("applying a value that is not a function");
 
 /// 適用の結果の行き先。
 pub(crate) enum Target {
@@ -16,102 +23,344 @@ pub(crate) enum Target {
     Tail,
 }
 
-/// `callee` を `task.scratch` の引数に適用する。`clause` なら、引数の数はいつも入口の関数の引数の数と等しい。
-/// `clause` の引数は操作の ABI の Repr (生の `int` を含む) を持つので、部分適用でクロージャの走査する語に入れては
-/// ならないためである。
+/// `apply` を呼ぶ所。`scratch` の引数は場所のシグネチャの引数の `offset` 番目からである。`offset` が 0 でないのは
+/// `ApplyRest` が残りの引数を適用するときである。
+#[derive(Clone, Copy)]
+pub(crate) struct Site {
+    sig: SigId,
+    offset: usize,
+    /// 場所のシグネチャの種類を詰めた語を、`offset` の分ずらしたもの。
+    key: u64,
+}
+
+impl Site {
+    #[inline]
+    pub(crate) fn new<M: Mode>(code: &CodeBase<M>, sig: SigId, offset: usize) -> Site {
+        let key = code.signatures.site_key(sig);
+        // 詰められない語はずらすと詰めた語に見えうるので、そのまま残す
+        let key = if offset == 0 || key == SLOW_SITE {
+            key
+        } else {
+            key >> (4 * offset)
+        };
+        Site { sig, offset, key }
+    }
+}
+
+/// 呼ばれる値がヒープのクロージャのときの、その語と走査する語の数。
+#[derive(Clone, Copy)]
+struct Closure {
+    w: Word,
+    scanned: usize,
+}
+
+/// `callee` を `task.scratch` の引数に適用する。捕まえた値の数と渡す引数の数の和が関数の引数の数と等しく、種類が
+/// 合えば、今と同じ道で入る (速い道)。
 pub(crate) fn apply<M: Mode>(
+    code: &CodeBase<M>,
+    ctx: &mut Ctx<M>,
+    task: &mut Task,
+    counts: &mut RunCounts,
+    callee: Word,
+    site: Site,
+    target: Target,
+) -> Result<(), VmFault> {
+    let (f, k, closure) = decode(ctx, callee)?;
+    let entry = lookup(code, f, k, closure)?;
+    let (arity, n) = (usize::from(entry.arity), task.scratch.len());
+    if k + n == arity {
+        // 関数の語を捕まえた値の分ずらすと、渡す引数と結果の種類の語になる。`k` は関数の引数の数より小さいので、詰めた
+        // 関数ではずらす量が 64 に届かない。詰められない関数では `wrapping_shr` が回り込むが、その語はどの場所の語とも
+        // 等しくならない (`crate::sig`)
+        if entry.key.wrapping_shr(4 * k as u32) != site.key {
+            convert(code, ctx, task, counts, entry, k, site, true)?;
+        }
+        return enter(code, ctx, task, f, k, closure, target);
+    }
+    let Some(missing) = arity.checked_sub(k) else {
+        return Err(NOT_A_FUNCTION);
+    };
+    convert(code, ctx, task, counts, entry, k, site, false)?;
+    // 部分適用のクロージャの `lin` ビットはもとのクロージャから写す。捕まえた値を取り出すと物体を手放すので、先に読む
+    let lin = match closure {
+        Some(closure) if n < missing => unsafe { ctx.heap().meta(closure.w) }?.lin(),
+        _ => false,
+    };
+    if let Some(closure) = closure {
+        let params = &code.signatures.get(entry.sig).params[..k];
+        task.scratch
+            .splice(0..0, std::iter::repeat_n(Word::UNIT, k));
+        take_captures(ctx, closure, params, &mut task.scratch[..k])?;
+    }
+    if n < missing {
+        let closure = make_closure(code, ctx, f as u32, lin, &task.scratch)?;
+        task.scratch.clear();
+        deliver(code, task, target, closure);
+        return Ok(());
+    }
+    let rest = n - missing;
+    let size = 4 + rest;
+    if size > usize::from(u16::MAX) {
+        return Err(VmFault::Internal("too many arguments are left over"));
+    }
+    // 余った引数は結果を受けて適用する `ApplyRest` のフレームに預ける。引数は場所の Repr のままなので、後の適用と
+    // 巻き戻しが語の Repr を知れるように、場所のシグネチャと残りの引数の最初の位置も置く
+    let base = match target {
+        Target::Frame { ret, dst } => task.push_frame(ret, dst, size),
+        Target::Tail => {
+            task.frame_size = size;
+            task.reserve(task.base + size);
+            task.base
+        }
+    };
+    task.stack[base + 1] = Word::from_bits(rest);
+    task.stack[base + 2] = Word::from_bits(site.sig.0 as usize);
+    task.stack[base + 3] = Word::from_bits(site.offset + missing);
+    for (i, w) in task.scratch.drain(arity..).enumerate() {
+        task.stack[base + 4 + i] = w;
+    }
+    let size = usize::from(entry.frame_size);
+    task.push_frame(APPLY_REST, 0, size);
+    task.enter_in_place(code, f as u32);
+    Ok(())
+}
+
+/// `clause` で入口のクロージャ `callee` を呼ぶ。引数は操作の ABI の Repr で、入口の関数の引数と同じ Repr なので比べない。
+/// 引数の数はいつも入口の関数の引数の数と等しい。部分適用で生の `int` をクロージャに入れることもない。
+pub(crate) fn apply_clause<M: Mode>(
     code: &CodeBase<M>,
     ctx: &mut Ctx<M>,
     task: &mut Task,
     callee: Word,
     target: Target,
-    clause: bool,
 ) -> Result<(), VmFault> {
-    let not_a_function = VmFault::Internal("applying a value that is not a function");
-    let (f, lin) = if callee.is_imm() {
-        (callee.imm_value(), false)
-    } else {
-        // VM は `callee` の参照を1つ持つ。中身を取り出した後、その参照を手放すか箱を空ける
-        let heap = unsafe { ctx.heap_mut() };
-        unsafe {
-            let lin = heap.meta(callee)?.lin();
-            let len = heap.scanned_len(callee)?;
-            // 走査する語のない物体の0番目を読むと、断る誤りが範囲外の誤りになる
-            if M::CHECKED && len == 0 {
-                return Err(not_a_function);
-            }
-            let function = heap.scanned(callee, 0)?;
-            if M::CHECKED && !function.is_imm() {
-                return Err(not_a_function);
-            }
-            let captured: Result<Vec<Word>, _> =
-                (1..len).map(|i| heap.scanned(callee, i)).collect();
-            let captured = captured?;
-            if heap.is_last(callee)? {
-                heap.free_block(callee)?;
-            } else {
-                for &w in &captured {
-                    heap.dup(w)?;
-                }
-                heap.decref(callee)?;
-            }
-            task.scratch.splice(0..0, captured);
-            (function.imm_value(), lin)
-        }
-    };
-    let entry = usize::try_from(f)
-        .ok()
-        .and_then(|f| code.functions.get(f))
-        .ok_or(not_a_function)?;
-    let (f, arity, total) = (f as u32, usize::from(entry.arity), task.scratch.len());
-    if clause && total != arity {
+    let (f, k, closure) = decode(ctx, callee)?;
+    let entry = lookup(code, f, k, closure)?;
+    if k + task.scratch.len() != usize::from(entry.arity) {
         return Err(VmFault::Internal(
             "a clause gets a different number of arguments than its function takes",
         ));
     }
-    match total.cmp(&arity) {
-        std::cmp::Ordering::Equal => enter(code, task, f, target),
-        std::cmp::Ordering::Less => {
-            let closure = make_closure(ctx, f, lin, &task.scratch)?;
-            task.scratch.clear();
-            deliver(code, task, target, closure);
+    enter(code, ctx, task, f, k, closure, target)
+}
+
+/// 呼ばれる値から、関数の番号、捕まえた値の数、クロージャの物体を読む。捕まえた値の数は `&f` の即値の上の 32 ビットに
+/// 詰めてあるので、1回の読み込みで関数と数が分かる (docs/superpowers/specs/2026-10-21-s14e-abi-struct-design.md の
+/// 「VM」)。
+#[inline(always)]
+fn decode<M: Mode>(ctx: &Ctx<M>, callee: Word) -> Result<(usize, usize, Option<Closure>), VmFault> {
+    let split = |imm: i64| {
+        let bits = imm as u64;
+        ((bits & 0xFFFF_FFFF) as usize, (bits >> 32) as usize)
+    };
+    if callee.is_imm() {
+        let (f, k) = split(callee.imm_value());
+        if M::CHECKED && k != 0 {
+            return Err(NOT_A_FUNCTION);
         }
-        std::cmp::Ordering::Greater => {
-            let n = total - arity;
-            let size = 2 + n;
-            if size > usize::from(u16::MAX) {
-                return Err(VmFault::Internal("too many arguments are left over"));
-            }
-            // 余った引数は、結果を受けて適用する `ApplyRest` のフレームに預ける
-            let base = match target {
-                Target::Frame { ret, dst } => task.push_frame(ret, dst, size),
-                Target::Tail => {
-                    task.frame_size = size;
-                    task.reserve(task.base + size);
-                    task.base
+        return Ok((f, 0, None));
+    }
+    // `callee` は VM が参照を持つ物体である
+    let heap = ctx.heap();
+    unsafe {
+        let scanned = heap.scanned_len(callee)?;
+        // 走査する語のない物体の0番目を読むと、断る誤りが範囲外の誤りになる
+        if M::CHECKED && scanned == 0 {
+            return Err(NOT_A_FUNCTION);
+        }
+        let function = heap.scanned(callee, 0)?;
+        if M::CHECKED && !function.is_imm() {
+            return Err(NOT_A_FUNCTION);
+        }
+        let (f, k) = split(function.imm_value());
+        Ok((f, k, Some(Closure { w: callee, scanned })))
+    }
+}
+
+/// 関数の番号の `FnEntry`。検査モードでは、`&f` の即値に詰めた捕まえた値の数が、クロージャの物体の走査する語の数と
+/// 合うことも確かめる。
+#[inline(always)]
+fn lookup<M: Mode>(
+    code: &CodeBase<M>,
+    f: usize,
+    k: usize,
+    closure: Option<Closure>,
+) -> Result<&FnEntry, VmFault> {
+    let entry = code.functions.get(f).ok_or(NOT_A_FUNCTION)?;
+    if M::CHECKED
+        && let Some(closure) = closure
+    {
+        let params = &code.signatures.get(entry.sig).params;
+        let refs = params
+            .get(..k)
+            .filter(|_| k < params.len())
+            .map(|captured| captured.iter().filter(|repr| repr.is_rc()).count());
+        if refs.map(|refs| 1 + refs) != Some(closure.scanned) {
+            return Err(VmFault::Internal(
+                "the capture count packed with a function does not match its closure",
+            ));
+        }
+    }
+    Ok(entry)
+}
+
+/// 捕まえた値と scratch の引数で `f` に入る。捕まえた値は一時の列を通さず、クロージャから新しいフレームへ直に写す。
+#[inline(always)]
+fn enter<M: Mode>(
+    code: &CodeBase<M>,
+    ctx: &mut Ctx<M>,
+    task: &mut Task,
+    f: usize,
+    k: usize,
+    closure: Option<Closure>,
+    target: Target,
+) -> Result<(), VmFault> {
+    let entry = &code.functions[f];
+    let size = usize::from(entry.frame_size);
+    let base = match target {
+        Target::Frame { ret, dst } => task.push_frame(ret, dst, size),
+        Target::Tail => {
+            task.reserve(task.base + size);
+            task.frame_size = size;
+            task.base
+        }
+    };
+    if let Some(closure) = closure {
+        let params = &code.signatures.get(entry.sig).params[..k];
+        take_captures(ctx, closure, params, &mut task.stack[base..base + k])?;
+    }
+    let Task { stack, scratch, .. } = task;
+    for (i, w) in scratch.drain(..).enumerate() {
+        stack[base + k + i] = w;
+    }
+    task.pc = entry.start;
+    Ok(())
+}
+
+/// クロージャの捕まえた値を、関数の引数の順に `dst` に写し、VM の持つクロージャの参照を手放す。参照の捕獲は `&f` の後の
+/// 走査する語に、ほかの捕獲は生の語に、それぞれ引数の順に並ぶ (docs/spec/object-model.md の「クロージャ」)。
+#[inline]
+fn take_captures<M: Mode>(
+    ctx: &mut Ctx<M>,
+    closure: Closure,
+    params: &[Repr],
+    dst: &mut [Word],
+) -> Result<(), VmFault> {
+    // 読むのは `closure` の語だけで、`Ctx` の持つ語には触れない
+    let heap = unsafe { ctx.heap_mut() };
+    let w = closure.w;
+    unsafe {
+        let last = heap.is_last(w)?;
+        let mut scanned = 1;
+        let mut raw = count_word(closure.scanned as u32) as usize + closure.scanned;
+        for (slot, &repr) in dst.iter_mut().zip(params) {
+            *slot = if repr.is_rc() {
+                let field = heap.scanned(w, scanned)?;
+                scanned += 1;
+                if !last {
+                    heap.dup(field)?;
                 }
+                field
+            } else {
+                let bits = heap.raw(w, raw)?;
+                raw += 1;
+                Word::from_bits(bits as usize)
             };
-            task.stack[base + 1] = Word::from_bits(n);
-            for (i, w) in task.scratch.drain(arity..).enumerate() {
-                task.stack[base + 2 + i] = w;
-            }
-            let rest = Target::Frame {
-                ret: APPLY_REST,
-                dst: 0,
-            };
-            enter(code, task, f, rest);
+        }
+        if last {
+            heap.free_block(w)?;
+        } else {
+            heap.decref(w)?;
         }
     }
     Ok(())
 }
 
-/// scratch の引数で `f` に入る。
-fn enter<M: Mode>(code: &CodeBase<M>, task: &mut Task, f: u32, target: Target) {
-    if let Target::Frame { ret, dst } = target {
-        let size = usize::from(code.functions[f as usize].frame_size);
-        task.push_frame(ret, dst, size);
+/// 呼ぶ所と関数の種類が合わないか、シグネチャを語に詰められないときの道。渡す引数を関数の引数の Repr へ変える。
+/// `whole` (ちょうどの数の適用) なら結果の種類も比べる。合わない組が1つでもあれば `conversions` に1回数える。
+#[cold]
+#[inline(never)]
+#[expect(clippy::too_many_arguments, reason = "the decoded parts of one apply")]
+fn convert<M: Mode>(
+    code: &CodeBase<M>,
+    ctx: &mut Ctx<M>,
+    task: &mut Task,
+    counts: &mut RunCounts,
+    entry: &FnEntry,
+    k: usize,
+    site: Site,
+    whole: bool,
+) -> Result<(), VmFault> {
+    let callee = code.signatures.get(entry.sig);
+    let at = code.signatures.get(site.sig);
+    let mut mismatched = false;
+    if whole {
+        for (&from, &to) in callee.ret.iter().zip(&at.ret) {
+            if class(from) != class(to) {
+                check_pair(from, to)?;
+                return Err(VmFault::Internal(
+                    "an apply needs a result conversion, which is not supported yet",
+                ));
+            }
+        }
     }
-    task.enter_in_place(code, f);
+    let pairs = at.params[site.offset..].iter().zip(&callee.params[k..]);
+    for (slot, (&from, &to)) in task.scratch.iter_mut().zip(pairs) {
+        if class(from) != class(to) {
+            *slot = convert_word(ctx, counts, *slot, from, to)?;
+            mismatched = true;
+        }
+    }
+    if M::CHECKED && mismatched {
+        counts.conversions += 1;
+    }
+    Ok(())
+}
+
+/// 合わない組は同じ型の一様な Repr と箱を要するスカラーの組である。単相化した2つの場所は同じ型を見ているためである
+/// (docs/superpowers/specs/2026-10-21-s14e-abi-struct-design.md の「`apply` の ABI」)。
+fn check_pair(from: Repr, to: Repr) -> Result<(), VmFault> {
+    let boxes = |a: Repr, b: Repr| a == Repr::TObj && b.needs_box();
+    if boxes(from, to) || boxes(to, from) {
+        Ok(())
+    } else {
+        Err(VmFault::Internal(
+            "an apply converts between the reprs of different types",
+        ))
+    }
+}
+
+/// 値 `w` を Repr `from` から `to` へ変える。一様な値から取り出すときは値を消費する。スカラーは中身に参照を持たない
+/// ので、取り出した後に箱を `decref` すれば、一意なら箱を空けることになる
+/// (docs/superpowers/specs/2026-10-21-s14e-abi-struct-design.md の「VM」)。
+fn convert_word<M: Mode>(
+    ctx: &mut Ctx<M>,
+    counts: &mut RunCounts,
+    w: Word,
+    from: Repr,
+    to: Repr,
+) -> Result<Word, VmFault> {
+    check_pair(from, to)?;
+    if from == Repr::TObj {
+        let converted = if to == Repr::Float {
+            Word::from_bits(data::unbox_float(ctx, w, counts)? as usize)
+        } else {
+            Word::from_bits(data::unbox(ctx, w, counts)? as usize)
+        };
+        // 箱は VM が参照を持つ値で、手放すのはその箱だけである
+        unsafe { ctx.heap_mut().decref(w) }?;
+        return Ok(converted);
+    }
+    if M::CHECKED {
+        counts.boxes += 1;
+    }
+    // 作る箱は新しい物体なので、`Ctx` の持つ語には触れない
+    let heap = unsafe { ctx.heap_mut() };
+    Ok(match from {
+        Repr::Int => heap.alloc_int(w.bits() as i64),
+        Repr::Float => heap.alloc_float(w.bits() as u64),
+        _ => Word::imm(w.bits() as i64),
+    })
 }
 
 fn deliver<M: Mode>(code: &CodeBase<M>, task: &mut Task, target: Target, value: Word) {
@@ -132,23 +381,46 @@ fn deliver<M: Mode>(code: &CodeBase<M>, task: &mut Task, target: Target, value: 
     }
 }
 
-/// `f` と先頭の引数からクロージャを作る (docs/spec/object-model.md の「クロージャ」)。
+/// `f` と先頭の引数からクロージャを作る。走査する語に `&f` と参照の引数を、生の語にほかの引数を、`f` の引数の順に
+/// 並べる。`&f` の即値には引数の数を詰める (docs/spec/object-model.md の「クロージャ」)。
 #[inline]
 pub(crate) fn make_closure<M: Mode>(
+    code: &CodeBase<M>,
     ctx: &mut Ctx<M>,
     f: u32,
     lin: bool,
     args: &[Word],
 ) -> Result<Word, VmFault> {
-    let scanned = 1 + args.len();
+    let entry = &code.functions[f as usize];
+    let params = code
+        .signatures
+        .get(entry.sig)
+        .params
+        .get(..args.len())
+        .ok_or(VmFault::Internal(
+            "a closure has more arguments than its function takes",
+        ))?;
+    let refs = params.iter().filter(|repr| repr.is_rc()).count();
+    let scanned = 1 + refs;
     let offset = count_word(scanned as u32) as usize;
     // 作る物体だけに書き、`Ctx` の持つ語には触れない
     let heap = unsafe { ctx.heap_mut() };
-    let w = heap.alloc_data(0, scanned, 0, lin);
+    let w = heap.alloc_data(0, scanned, args.len() - refs, lin);
+    let (mut next_scanned, mut next_raw) = (offset + 1, offset + scanned);
     unsafe {
-        heap.set_field(w, offset, Word::imm(f.into()))?;
-        for (i, &arg) in args.iter().enumerate() {
-            heap.set_field(w, offset + 1 + i, arg)?;
+        heap.set_field(
+            w,
+            offset,
+            Word::imm(i64::from(f) | (args.len() as i64) << 32),
+        )?;
+        for (&arg, &repr) in args.iter().zip(params) {
+            if repr.is_rc() {
+                heap.set_field(w, next_scanned, arg)?;
+                next_scanned += 1;
+            } else {
+                heap.set_raw(w, next_raw, arg.bits() as u64)?;
+                next_raw += 1;
+            }
         }
     }
     Ok(w)
@@ -160,9 +432,25 @@ pub(crate) fn apply_rest<M: Mode>(
     code: &CodeBase<M>,
     ctx: &mut Ctx<M>,
     task: &mut Task,
+    counts: &mut RunCounts,
 ) -> Result<(), VmFault> {
     let callee = task.get(0);
     let n = task.get(1).bits();
-    task.load_scratch((2..2 + n).map(|i| i as Slot));
-    apply(code, ctx, task, callee, Target::Tail, false)
+    let site = Site::new(code, SigId(task.get(2).bits() as u32), task.get(3).bits());
+    task.load_scratch((4..4 + n).map(|i| i as Slot));
+    apply(code, ctx, task, counts, callee, site, Target::Tail)
+}
+
+/// `ApplyRest` のフレームの引数のうち、参照の引数のスロット。巻き戻しはまだ渡していないこれらだけを手放す。生の語を
+/// `decref` すると、ビット列をポインタとして読んでしまう。
+pub(crate) fn rest_references<'c, M: Mode>(
+    code: &'c CodeBase<M>,
+    task: &Task,
+) -> impl Iterator<Item = Slot> + 'c {
+    let n = task.get(1).bits();
+    let sig = code.signatures.get(SigId(task.get(2).bits() as u32));
+    let offset = task.get(3).bits();
+    (0..n)
+        .filter(move |&i| sig.params[offset + i].is_rc())
+        .map(|i| (4 + i) as Slot)
 }

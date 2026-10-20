@@ -12,6 +12,7 @@ use crate::code::CodeBase;
 use crate::data;
 use crate::error::VmFault;
 use crate::op::{APPLY_REST, FINISH, Op, Pc, Slot};
+use crate::sig::SigId;
 
 /// 1つのタスクの実行の状態。
 pub struct Task {
@@ -238,27 +239,27 @@ fn step<M: Mode>(
             return Ok(false);
         }
         Op::ApplyRest => {
-            apply::apply_rest(code, ctx, task)?;
+            apply::apply_rest(code, ctx, task, counts)?;
             ctx.poll(task.depth())?;
         }
         Op::Closure { dst, at } => {
             let o = ops(at);
             let (f, lin, n) = (o[0], o[1] != 0, o[2] as usize);
             task.load_scratch(slots(&o[3..3 + n]));
-            let w = apply::make_closure(ctx, f, lin, &task.scratch)?;
+            let w = apply::make_closure(code, ctx, f, lin, &task.scratch)?;
             task.scratch.clear();
             task.set(dst, w);
         }
         Op::Apply { dst, at } => {
             let target = apply::Target::Frame { ret: task.pc, dst };
-            apply_call(code, ctx, task, at, target, false)?;
+            apply_call(code, ctx, task, counts, at, target)?;
         }
         Op::Clause { dst, at } => {
             let target = apply::Target::Frame { ret: task.pc, dst };
-            apply_call(code, ctx, task, at, target, true)?;
+            clause_call(code, ctx, task, at, target)?;
         }
-        Op::TailApply { at } => apply_call(code, ctx, task, at, apply::Target::Tail, false)?,
-        Op::TailClause { at } => apply_call(code, ctx, task, at, apply::Target::Tail, true)?,
+        Op::TailApply { at } => apply_call(code, ctx, task, counts, at, apply::Target::Tail)?,
+        Op::TailClause { at } => clause_call(code, ctx, task, at, apply::Target::Tail)?,
         Op::TailSelf { at } => {
             let o = ops(at);
             task.load_scratch(slots(&o[2..2 + o[1] as usize]));
@@ -520,27 +521,41 @@ fn slots(list: &[u32]) -> impl Iterator<Item = Slot> {
     list.iter().map(|&slot| slot as Slot)
 }
 
-/// `apply` と `clause` の命令。`clause` は照合した命令の種類から受ける。
+/// `apply` の命令。オペランドは [呼ばれる値, n, 場所のシグネチャ, 引数…] である。引数は全部読んでから書くので、結果の
+/// スロットがオペランドのスロットと同じ色でもよい (docs/spec/vm.md の「スロットの割り当て」)。`step` に展開するのは
+/// `bench/apply_int.em` の命令の数がそのほうが少なかったためである。
+#[inline(always)]
 fn apply_call<M: Mode>(
+    code: &CodeBase<M>,
+    ctx: &mut Ctx<M>,
+    task: &mut Task,
+    counts: &mut RunCounts,
+    at: u32,
+    target: apply::Target,
+) -> Result<(), VmFault> {
+    let o = &code.operands[at as usize..];
+    task.load_scratch(slots(&o[3..3 + o[1] as usize]));
+    let callee = task.get(o[0] as Slot);
+    let site = apply::Site::new(code, SigId(o[2]), 0);
+    apply::apply(code, ctx, task, counts, callee, site, target)?;
+    ctx.poll(task.depth())?;
+    Ok(())
+}
+
+/// `clause` の命令。オペランドは [呼ばれる値, n, 引数…] である。
+fn clause_call<M: Mode>(
     code: &CodeBase<M>,
     ctx: &mut Ctx<M>,
     task: &mut Task,
     at: u32,
     target: apply::Target,
-    clause: bool,
 ) -> Result<(), VmFault> {
-    let callee = load_args(code, task, at);
-    apply::apply(code, ctx, task, callee, target, clause)?;
-    ctx.poll(task.depth())?;
-    Ok(())
-}
-
-/// `[呼ばれる値, n, 引数…]` から引数を scratch に移し、呼ばれる値を返す。全部読んでから書くので、結果のスロットが
-/// オペランドのスロットと同じ色でもよい (docs/spec/vm.md の「スロットの割り当て」)。
-fn load_args<M: Mode>(code: &CodeBase<M>, task: &mut Task, at: u32) -> Word {
     let o = &code.operands[at as usize..];
     task.load_scratch(slots(&o[2..2 + o[1] as usize]));
-    task.get(o[0] as Slot)
+    let callee = task.get(o[0] as Slot);
+    apply::apply_clause(code, ctx, task, callee, target)?;
+    ctx.poll(task.depth())?;
+    Ok(())
 }
 
 /// 呼ぶ側の上に呼ばれる側のフレームを作り、引数を写して先頭へ進む。呼ぶ側のスロットはスタックに残る。
@@ -576,10 +591,9 @@ fn unwind<M: Mode>(
             FINISH if task.exit.is_some() => return Ok(()),
             FINISH => return Err(VmFault::Internal("an abort reached the bottom of the task")),
             APPLY_REST => {
-                // 余った引数は、まだ渡していないこの枠の参照である
-                let n = task.get(1).bits();
-                for i in 0..n {
-                    unsafe { ctx.heap_mut().decref(task.get((2 + i) as Slot)) }?;
+                // 余った参照の引数はまだ渡していないこの枠の参照である
+                for slot in apply::rest_references(code, task) {
+                    unsafe { ctx.heap_mut().decref(task.get(slot)) }?;
                 }
             }
             pc => {
@@ -640,7 +654,7 @@ fn finish<M: Mode>(code: &CodeBase<M>, ctx: &mut Ctx<M>, task: &Task) -> Result<
         }
         return Ok(());
     }
-    if code.functions[task.entry as usize].ret_rc && !task.keep_result {
+    if code.ret_rc(task.entry) && !task.keep_result {
         // 結果は入口の関数が返した、VM の持つ参照である
         unsafe { ctx.heap_mut().decref(task.get(0)) }?;
     }
@@ -764,14 +778,7 @@ fn abort_to<M: Mode, const N: usize>(
     task.scratch.push(ev);
     task.scratch.extend(args);
     let ret = task.pc;
-    apply::apply(
-        code,
-        ctx,
-        task,
-        clause,
-        apply::Target::Frame { ret, dst },
-        true,
-    )?;
+    apply::apply_clause(code, ctx, task, clause, apply::Target::Frame { ret, dst })?;
     Ok(true)
 }
 

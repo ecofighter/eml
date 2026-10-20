@@ -812,7 +812,9 @@ fn g(a.0: tobj, b.1: tobj) -> tobj {{
 }
 
 #[test]
-fn a_function_used_as_a_value_is_uniform() {
+fn a_function_value_need_not_be_uniform() {
+    // `apply` が実行時に Repr を変えるので、引数や結果が一様でない関数も関数の値になる
+    // (docs/superpowers/specs/2026-10-21-s14e-abi-struct-design.md の「VM」)
     let value = |atom: &str| {
         format!(
             "\
@@ -827,16 +829,10 @@ fn f() -> tobj {{
 {UNIFORM}"
         )
     };
-    assert_eq!(check(&value("&i")), Ok(()));
-    assert_eq!(
-        rejected_at_both_levels(&value("&k")),
-        "`k` is used as a function value, but its parameter 0 is int in `f`"
-    );
-    assert_eq!(
-        rejected_at_both_levels(&value("&h")),
-        "`h` is used as a function value, but it returns int in `f`"
-    );
-    // 位置に収まるかを先に、一様かを後で確かめる。`&k` は `int` の位置に収まらない
+    for atom in ["&i", "&k", "&h"] {
+        assert_eq!(check(&value(atom)), Ok(()));
+    }
+    // 関数の値は位置に収まるかを確かめる。`&k` は `int` の位置に収まらない
     assert_eq!(
         rejected_at_both_levels(&format!("fn f() -> int {{\n  return &k\n}}\n{K}")),
         "&k is returned from a function that returns int in `f`"
@@ -849,46 +845,18 @@ fn f() -> tobj {{
         let text = format!(
             "{OPTION}fn f() -> tobj {{\n{body}}}\nfn g(a.0: tobj, b.1: unit) -> tobj {{\n  return a.0\n}}\n{K}"
         );
-        assert_eq!(
-            rejected_at_both_levels(&text),
-            "`k` is used as a function value, but its parameter 0 is int in `f`"
-        );
+        assert_eq!(check(&text), Ok(()));
     }
 }
 
 #[test]
-fn a_function_value_passed_to_a_block_is_uniform() {
-    // translate は `if c then double else inc` を `jump b3(&double)` にする。一様にするのは box の挿入である
-    let text = format!("fn f() -> tobj {{\n  jump b1(&k)\nb1(h.0: tobj):\n  return h.0\n}}\n{K}");
-    assert_eq!(
-        rejected_at_both_levels(&text),
-        "`k` is used as a function value, but its parameter 0 is int in `f`"
-    );
-}
-
-#[test]
-fn a_function_value_that_is_dropped_or_switched_on_is_uniform() {
-    // 値を呼び出しに渡さない `drop` と case のない `switch` でも、`&k` は関数の値である
-    for body in [
-        "  let u.0: unit = drop &k\n  return u.0\n",
-        "  switch &k { _ -> b1 }\nb1:\n  return ()\n",
-    ] {
-        let text = format!("fn f() -> unit {{\n{body}}}\n{K}");
-        assert_eq!(
-            rejected_at_both_levels(&text),
-            "`k` is used as a function value, but its parameter 0 is int in `f`"
-        );
-    }
-}
-
-#[test]
-fn a_closure_of_a_function_that_is_not_uniform_is_rejected_before_its_arguments() {
-    // 引数の数の後で対象が一様かを確かめ、その後で引数の Repr と範囲を確かめる
-    let closure = |g: &str| {
+fn a_closure_checks_its_argument_scopes() {
+    // 一様でない関数のクロージャも作れる。引数の範囲は確かめる
+    let closure = |g: &str, arg: &str| {
         format!(
             "\
 fn f() -> tobj {{
-  let c.0: tobj = closure g(c.0)
+  let c.0: tobj = closure g({arg})
   return c.0
 }}
 fn g(a.0: {g}, b.1: {g}) -> {g} {{
@@ -897,12 +865,9 @@ fn g(a.0: {g}, b.1: {g}) -> {g} {{
 "
         )
     };
+    assert_eq!(check(&closure("int", "5")), Ok(()));
     assert_eq!(
-        rejected_at_both_levels(&closure("int")),
-        "`g` is used as a function value, but its parameter 0 is int in `f`"
-    );
-    assert_eq!(
-        rejected_at_both_levels(&closure("tobj")),
+        rejected_at_both_levels(&closure("tobj", "c.0")),
         "`c.0` is used outside its scope in `f`"
     );
 }

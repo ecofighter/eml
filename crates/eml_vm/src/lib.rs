@@ -14,6 +14,7 @@ mod disasm;
 mod error;
 mod hosts;
 mod op;
+mod sig;
 mod vm;
 
 pub use code::{CodeBase, CompileError, FnEntry};
@@ -39,6 +40,9 @@ pub struct RunStats {
     pub rc_decrements: u64,
     pub boxes: u64,
     pub unboxes: u64,
+    /// 呼ぶ所のシグネチャと関数の `FnEntry` が合わず、実行時に引数か結果を変えた `apply` の数。変換の `box` と
+    /// `unbox` は `boxes` と `unboxes` にも数える。
+    pub conversions: u64,
     pub allocations: u64,
     /// token の箱を使った `con` の回数。空の token で確保した `con` は数えない。
     pub reuses: u64,
@@ -60,6 +64,7 @@ pub(crate) struct RunCounts {
     pub(crate) unwound_frames: u64,
     pub(crate) boxes: u64,
     pub(crate) unboxes: u64,
+    pub(crate) conversions: u64,
     pub(crate) reuses: u64,
 }
 
@@ -257,7 +262,7 @@ impl<M: Mode> Machine<M> {
         let (code, ctx) = (&self.code, &mut self.ctx);
         let mut task = Task::new(code, entry, self.max_depth);
         if shown.is_some() {
-            if !code.functions[entry as usize].ret_rc {
+            if !code.ret_rc(entry) {
                 return Err(code.error(
                     vm::Failure {
                         fault: VmFault::Internal("a shown entry does not return a string"),
@@ -323,6 +328,7 @@ impl<M: Mode> Machine<M> {
             rc_decrements: h.rc_decrements,
             boxes: counts.boxes,
             unboxes: counts.unboxes,
+            conversions: counts.conversions,
             allocations: h.allocations,
             reuses: counts.reuses,
             peak_objects: h.peak_objects,

@@ -2,7 +2,7 @@
 //! `unpack` の Repr、`jump` と `return` の Repr の互換、extern の引数と結果の Repr、`box` と `unbox` のオペランドと
 //! 束縛の Repr (R7)、データの配置 (R8) と、引き継いだ検査 (直接呼び出しと extern の引数の数、case の種類)、基本操作と
 //! 節の呼び出しの形を確かめる (`verify_scopes`)。R7 と R8 には境界の検査も入る。呼び出しの引数と結果、`closure` の
-//! 引数、関数の値の対象が一様であること、`tail` の結果、`tobj` のフィールドを比べる。box の挿入の前の入口の段では、
+//! 引数、`tail` の結果、`tobj` のフィールドを比べる。box の挿入の前の入口の段では、
 //! 境界を確かめずに、`box`、`unbox`、`tail` と、Perceus が入れるものがまだないことを確かめる (`verify_lowered`)。
 //! Perceus の後は、RC の対象の所有の多重集合 (R6) も確かめる (`verify`)。`switch`、`unpack`、`unbox` は値を読む
 //! だけである。`switch` と `unpack` のフィールドは値から借りて始まり、自分か持ち主が所有を持つ間だけ有効である。
@@ -135,13 +135,9 @@ fn with_tables<R>(program: &Program, f: impl FnOnce(Tables<'_>) -> R) -> R {
     let functions: Vec<FnSummary> = program
         .functions
         .iter()
-        .map(|function| {
-            FnSummary::new(
-                &function.name,
-                function.clause,
-                param_reprs(function),
-                function.ret,
-            )
+        .map(|function| FnSummary {
+            name: &function.name,
+            clause: function.clause,
         })
         .collect();
     let tables = Tables {
@@ -152,10 +148,6 @@ fn with_tables<R>(program: &Program, f: impl FnOnce(Tables<'_>) -> R) -> R {
         functions: &functions,
     };
     f(tables)
-}
-
-fn param_reprs(function: &LirFn) -> impl ExactSizeIterator<Item = Repr> + '_ {
-    function.params().iter().map(|&param| function.repr(param))
 }
 
 /// 辺の規則の検査 (`shape`) に渡す、ブロックの形。
@@ -696,7 +688,7 @@ impl<'a> Checker<'a> {
         match term {
             Term::Return(atom) => {
                 self.consume(&mut owned, *atom)?;
-                if !self.cx.passes(*atom, self.function.ret)? {
+                if !self.cx.passes(*atom, self.function.ret) {
                     return Err(format!(
                         "{} is returned from a function that returns {}",
                         self.cx.typed_atom_text(*atom),
@@ -812,7 +804,7 @@ impl<'a> Checker<'a> {
     /// `jump` の実引数は、行き先の引数と Repr が互換で (R7)、印も互換である (V2)。
     fn check_passed(&self, target: BlockId, arg: Atom, param: VarId) -> Result<(), String> {
         let expected = self.function.repr(param);
-        if self.cx.passes(arg, expected)? {
+        if self.cx.passes(arg, expected) {
             let mark = self.function.mark(param);
             if self.cx.mark_passes(arg, mark) {
                 return Ok(());
@@ -1138,10 +1130,9 @@ impl<'a> Checker<'a> {
                     ));
                 }
                 if self.cx.boundaries {
-                    self.cx.function_value(*index)?;
                     for (index, (&arg, &param)) in args.iter().zip(target.params()).enumerate() {
                         let expected = target.repr(param);
-                        if !self.cx.passes(arg, expected)? {
+                        if !self.cx.passes(arg, expected) {
                             return Err(format!(
                                 "argument {index} of a closure of `{}` is {}, but the function takes {}",
                                 target.name,
@@ -1193,7 +1184,7 @@ impl<'a> Checker<'a> {
                     self.check_reuse(owned, var, *ctor, args, reuse)?;
                 }
             }
-            Rhs::Drop(atom) => self.cx.fn_atom(*atom)?,
+            Rhs::Drop(_) => {}
             // `unit` の値、`()`、`#N`、`&f`、参照は命令なしで `tobj` に収まるので、`box` しない。1つの値の書き方を1つに保つ
             // (docs/spec/lir.md の「値の表現」)
             Rhs::Box(atom) => {
@@ -1383,7 +1374,7 @@ impl<'a> Checker<'a> {
         // 誤りの文で呼び出しを指す句 (`an apply`) は呼び出しの形で決まるので、比べる処理を形ごとに作る
         let operands = |taker: &'static str| {
             move |role: &dyn Fn() -> String, atom: Atom| -> Result<(), String> {
-                if self.cx.passes(atom, Repr::TObj)? {
+                if self.cx.passes(atom, Repr::TObj) {
                     return Ok(());
                 }
                 Err(format!(
@@ -1399,7 +1390,7 @@ impl<'a> Checker<'a> {
                 let target = &self.program.functions[target.0 as usize];
                 for (index, (&arg, &param)) in args.iter().zip(target.params()).enumerate() {
                     let expected = target.repr(param);
-                    if !self.cx.passes(arg, expected)? {
+                    if !self.cx.passes(arg, expected) {
                         return Err(format!(
                             "argument {index} of `{}` is {}, but the function takes {}",
                             target.name,
@@ -1440,7 +1431,7 @@ impl<'a> Checker<'a> {
             } => {
                 let operation = operation(&self.program.effects, *effect, *op);
                 let what = self.call_text(call, false);
-                if !self.cx.passes(*callee, Repr::TObj)? {
+                if !self.cx.passes(*callee, Repr::TObj) {
                     return Err(format!(
                         "the callee of {what} is {}, but a clause takes tobj",
                         self.cx.typed_atom_text(*callee)
@@ -1467,7 +1458,7 @@ impl<'a> Checker<'a> {
                     } else {
                         "the operation"
                     };
-                    if !self.cx.passes(arg, repr)? {
+                    if !self.cx.passes(arg, repr) {
                         return Err(format!(
                             "argument {index} of {what} is {}, but {taker} takes {}",
                             self.cx.typed_atom_text(arg),

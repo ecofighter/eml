@@ -1,0 +1,7 @@
+# 前の入力で定義した関数の部分適用を、後の入力で関数の値として使う。後の入力のコード生成もシグネチャを中身で引くので、
+# 同じ名前の関数は同じシグネチャを指す
+> scale : Float -> Float -> <Panic> Float
+. scale k x = k * x
+.
+> println (show (List.map (scale 2.0) [1.0, -0.0, 2.5]))
+> List.map (scale 0.5) [4.0]

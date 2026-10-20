@@ -506,7 +506,7 @@ yields fn land(b.0: tobj, ev.1: obj, s.2: obj) -> unit {
     fn land (arity 3, frame 4)
          4  dup s2
          5  load_imm s3, 0
-         6  apply s0 = s0(s3) unwind [s1, s2*2] land s1
+         6  apply s0 = s0(s3) : (unit) -> tobj unwind [s1, s2*2] land s1
          7  decref s0
          8  decref s1
          9  extern s0 = Prelude.++(s2, s2)
@@ -660,4 +660,29 @@ fn main(a.0: obj, m.1: obj) -> unit {
         !text.contains("extern"),
         "an array row stayed generic:\n{text}"
     );
+}
+
+/// `apply` は場所のシグネチャを持つ。変数の引数は変数の Repr、定数の引数は `apply` の Repr で、結果は束縛の Repr、末尾の
+/// 位置では関数の `ret` である。一様な場所の引数は `tobj` である
+/// (docs/superpowers/specs/2026-10-21-s14e-abi-struct-design.md の「`apply` の ABI」)。
+#[test]
+fn an_apply_carries_its_site_signature() {
+    insta::assert_snapshot!(disasm_unverified("\
+fn main(f.0: tobj, x.1: float) -> int {
+  dup f.0
+  let a.2: int = apply f.0(x.1, 2: int)
+  let b.3: tobj = box a.2
+  let c.4: unit = uniform apply f.0(b.3)
+  tail apply f.0(a.2, #1: enum)
+}
+"), @"
+    fn main (arity 2, frame 4)
+         2  dup s0
+         3  load_raw s3, 2
+         4  apply s1 = s0(s1, s3) : (float, int) -> int
+         5  box_int s2, s1
+         6  apply s2 = s0(s2) : (tobj) -> unit
+         7  load_raw s3, 1
+         8  tail_apply s0(s1, s3) : (int, enum) -> int
+    ");
 }

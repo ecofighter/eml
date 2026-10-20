@@ -14,32 +14,6 @@ use crate::{
     LayoutId, Mark, OpRet, Prim, Repr, Role, Site, VarId, VarInfo,
 };
 
-/// 関数が一様でない理由。`tobj` と互換でない最初の引数か、`ret` である。
-#[derive(Clone, Copy)]
-pub enum NonUniform {
-    Param(usize, Repr),
-    Ret(Repr),
-}
-
-/// 一様な関数は、引数と `ret` がすべて `tobj` と互換である。関数の値を呼ぶ `apply` は、関数ごとの Repr を知らないため
-/// である (docs/spec/lir.md の「位置の規則」)。`clause` の印の関数は関数の値として呼ばれず、操作の ABI に
-/// 合わせるので、ここでは見ない (`clause_function`)。
-pub fn non_uniform(
-    clause: Option<(u32, u32)>,
-    params: impl Iterator<Item = Repr>,
-    ret: Repr,
-) -> Option<NonUniform> {
-    if clause.is_some() {
-        return None;
-    }
-    params
-        .enumerate()
-        .find_map(|(index, repr)| {
-            (!repr.compatible(Repr::TObj)).then_some(NonUniform::Param(index, repr))
-        })
-        .or_else(|| (!ret.compatible(Repr::TObj)).then_some(NonUniform::Ret(ret)))
-}
-
 /// 役割が一様にする最後の引数の数は、関数の引数の数を超えない
 /// (docs/superpowers/specs/2026-10-21-s14e-abi-struct-design.md の「関数の ABI」)。
 pub fn role(role: Role, params: usize) -> Result<(), String> {
@@ -369,24 +343,6 @@ impl GrowingTree {
 pub struct FnSummary<'a> {
     pub name: &'a str,
     pub clause: Option<(u32, u32)>,
-    /// 関数の値として使えない理由。一様な関数は `None` である。
-    pub non_uniform: Option<NonUniform>,
-}
-
-impl<'a> FnSummary<'a> {
-    pub fn new(
-        name: &'a str,
-        clause: Option<(u32, u32)>,
-        params: impl Iterator<Item = Repr>,
-        ret: Repr,
-    ) -> Self {
-        // 一様かどうかも関数ごとに1回だけ求める。参照ごとに引数をたどると、参照の数と引数の数の積の時間になる
-        FnSummary {
-            name,
-            clause,
-            non_uniform: non_uniform(clause, params, ret),
-        }
-    }
 }
 
 /// verifier を始めるときに1回だけ求める、プログラム全体の表。
@@ -407,7 +363,7 @@ pub struct Context<'a> {
     pub tables: Tables<'a>,
     /// 検査する関数の変数の表。
     pub vars: &'a [VarInfo],
-    /// 境界 (呼び出しの引数と結果、`closure` の引数、関数の値の対象が一様であること、`tobj` のフィールド) を比べるか。
+    /// 境界 (呼び出しの引数と結果、`closure` の引数、`tobj` のフィールド) を比べるか。
     /// box の挿入の後の段だけで比べる。extern、基本操作、`clause` の印も、この段だけで比べる。
     pub boundaries: bool,
     /// 変数の番号ごとの、`never` の操作の `perform` か `clause` の束縛か、戻らない extern の束縛かどうか。束縛の使いには
@@ -509,18 +465,14 @@ impl<'a> Context<'a> {
     }
 
     /// 互換の位置に収まる値。規則は box の挿入と同じ `Atom::fits_compatible` で、`never` の操作の `perform` と
-    /// `clause` の束縛と、戻らない extern の束縛は、それに加えて、どの位置にも収まる。範囲の段と所有の段では、収まった
-    /// `&g` の g が一様でなければ誤りにする。境界を比べない段では見ない。translate は、一様でない g の `&g` を `jump` に
-    /// 渡しうるからである。
-    pub fn passes(&self, atom: Atom, expected: Repr) -> Result<bool, String> {
-        let passes = match atom {
+    /// `clause` の束縛と、戻らない extern の束縛は、それに加えて、どの位置にも収まる。関数の値として使う関数は一様で
+    /// なくてよい。`apply` が実行時に Repr を変えるためである
+    /// (docs/superpowers/specs/2026-10-21-s14e-abi-struct-design.md の「VM」)。
+    pub fn passes(&self, atom: Atom, expected: Repr) -> bool {
+        match atom {
             Atom::Var(var) if self.never[var.0 as usize] => true,
             _ => atom.fits_compatible(self.vars, expected),
-        };
-        if passes {
-            self.fn_atom(atom)?;
         }
-        Ok(passes)
     }
 
     /// 印が `expected` の受け手に渡せる値 (V2)。定数はどの印とも合う。`None` を `lin` の引数に渡すことがあるためである。
@@ -559,39 +511,6 @@ impl<'a> Context<'a> {
             what(),
             joined.name()
         ))
-    }
-
-    /// 範囲の段と所有の段で、`&g` の g が一様かを確かめる。IR のどこにある `&g` も関数の値なので
-    /// (docs/spec/lir.md の「位置の規則」)、互換の位置のほかに、extern の引数、`drop`、case のない `switch` の
-    /// scrutinee でも呼ぶ。
-    pub fn fn_atom(&self, atom: Atom) -> Result<(), String> {
-        match atom {
-            Atom::Fn(target) if self.boundaries => self.function_value(target),
-            _ => Ok(()),
-        }
-    }
-
-    /// 関数の値として使う関数 (`&g`、`closure g`) は一様である (docs/spec/lir.md の「位置の規則」)。番号が表にない
-    /// 関数は、IR ごとの verifier が断る。
-    pub fn function_value(&self, target: FnIdx) -> Result<(), String> {
-        let Some(FnSummary {
-            name,
-            clause: _,
-            non_uniform: Some(reason),
-        }) = self.tables.functions.get(target.0 as usize)
-        else {
-            return Ok(());
-        };
-        Err(match *reason {
-            NonUniform::Param(index, repr) => format!(
-                "`{name}` is used as a function value, but its parameter {index} is {}",
-                repr.name()
-            ),
-            NonUniform::Ret(repr) => format!(
-                "`{name}` is used as a function value, but it returns {}",
-                repr.name()
-            ),
-        })
     }
 
     /// 配置の番号を表で引く。`what` は誤りの文の主語 (`a con`) である。
@@ -680,7 +599,7 @@ impl<'a> Context<'a> {
                 return self.literal_scrutinee(scrutinee, Repr::Obj, "String");
             }
             // case のない `switch` は `default` へ進むだけで、値を比べない
-            (None, None) => return self.fn_atom(scrutinee),
+            (None, None) => return Ok(()),
         };
         let Atom::Var(var) = scrutinee else {
             return Err(format!(
@@ -822,7 +741,7 @@ impl<'a> Context<'a> {
             return self.check_extern_exact(var, &row, args);
         }
         for (index, (&arg, &expected)) in args.iter().zip(row.params).enumerate() {
-            if !self.passes(arg, expected)? {
+            if !self.passes(arg, expected) {
                 return Err(format!(
                     "argument {index} of `{}` is {}, but the extern takes {}",
                     row.name,
@@ -877,7 +796,6 @@ impl<'a> Context<'a> {
                     expected.name()
                 ));
             }
-            self.fn_atom(arg)?;
         }
         if let OpRet::Repr(ret) = row.ret
             && ret != Repr::TObj
@@ -971,7 +889,7 @@ impl<'a> Context<'a> {
             return Ok(());
         }
         for (index, (&arg, &expected)) in args.iter().zip(row.params).enumerate() {
-            if !self.passes(arg, expected)? {
+            if !self.passes(arg, expected) {
                 return Err(format!(
                     "argument {index} of `prim {name}` is {}, but the primitive takes {}",
                     self.typed_atom_text(arg),
@@ -1081,7 +999,7 @@ impl<'a> Context<'a> {
         }
         for (index, (&arg, &declared)) in args.iter().zip(&constructor.fields).enumerate() {
             let fits = if declared == Repr::TObj {
-                !self.boundaries || self.passes(arg, declared)?
+                !self.boundaries || self.passes(arg, declared)
             } else {
                 arg.fits(self.vars, declared)
             };

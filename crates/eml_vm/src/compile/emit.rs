@@ -3,8 +3,8 @@
 use eml_extern::Extern;
 use eml_lir::unwind::UnwindPoint;
 use eml_lir::{
-    Atom, BlockId, Call, Ctor, FnIdx, LayoutCtor, LirFn, Loc, Program, Repr, Rhs, Shape, Stmt,
-    Term, VarId,
+    Atom, BlockId, Call, Ctor, FnIdx, LayoutCtor, LirFn, Loc, Program, Repr, Rhs, Shape, Site,
+    Stmt, Term, VarId,
 };
 use eml_rt::{MaskItem, Mode};
 
@@ -13,6 +13,7 @@ use super::slots::{Slots, allocate};
 use super::{Links, Out};
 use crate::code::{CompileError, FnEntry, Unwind};
 use crate::op::{KEEP, NONE, Op, Pc, RAW, SKIP, Slot};
+use crate::sig::Signature;
 
 pub(crate) fn function<M: Mode>(
     program: &Program,
@@ -61,13 +62,22 @@ pub(crate) fn function<M: Mode>(
     let frame_size =
         u16::try_from(usize::from(emitter.slots.colors) + usize::from(emitter.max_temps))
             .map_err(|_| too_many())?;
+    let sig = emitter.out.signatures.intern(Signature {
+        params: function
+            .params()
+            .iter()
+            .map(|&param| function.repr(param))
+            .collect(),
+        ret: vec![function.ret],
+    });
     Ok(FnEntry {
         name: function.name.clone(),
         start,
         end: emitter.out.pc(),
         arity: u16::try_from(function.params().len()).map_err(|_| too_many())?,
         frame_size,
-        ret_rc: function.ret.is_rc(),
+        sig,
+        key: emitter.out.signatures.fn_key(sig),
     })
 }
 
@@ -505,14 +515,13 @@ impl<'a, M: Mode> Emitter<'a, '_, M> {
                 );
                 self.out.push(Op::Closure { dst, at });
             }
-            Rhs::Call(call @ (Call::Apply { .. } | Call::Clause { .. })) => {
-                let at = self.value_call_operands(call);
-                let op = if matches!(call, Call::Clause { .. }) {
-                    Op::Clause { dst, at }
-                } else {
-                    Op::Apply { dst, at }
-                };
-                self.out.push(op);
+            Rhs::Call(call @ Call::Clause { .. }) => {
+                let at = self.clause_operands(call);
+                self.out.push(Op::Clause { dst, at });
+            }
+            Rhs::Call(call @ Call::Apply { .. }) => {
+                let at = self.apply_operands(call, self.repr(var));
+                self.out.push(Op::Apply { dst, at });
             }
             Rhs::Prim(prim, args) => {
                 let row = prim.row();
@@ -617,26 +626,21 @@ impl<'a, M: Mode> Emitter<'a, '_, M> {
         }
     }
 
-    /// `apply` と `clause` のオペランド [呼ばれる値, n, 引数…]。`apply` の位置は一様 (`tobj`)、`clause` の引数は操作の
-    /// 表の Repr で、先頭の evidence は `obj` である (docs/spec/lir.md の「節の呼び出し」)。
-    fn value_call_operands(&mut self, call: &Call) -> u32 {
-        let (callee, args, reprs): (Atom, &[Atom], Vec<Repr>) = match call {
-            Call::Apply { callee, args, .. } => (*callee, args, vec![Repr::TObj; args.len()]),
-            Call::Clause {
-                effect,
-                op,
-                callee,
-                args,
-            } => {
-                let operation = eml_lir::operation(&self.program.effects, *effect, *op);
-                let reprs = std::iter::once(Repr::Obj)
-                    .chain(operation.params.iter().copied())
-                    .collect();
-                (*callee, args, reprs)
-            }
-            Call::Direct(..) => unreachable!("a direct call has its own instruction"),
+    /// `clause` のオペランド [呼ばれる値, n, 引数…]。引数は操作の表の Repr で、先頭の evidence は `obj` である
+    /// (docs/spec/lir.md の「節の呼び出し」)。
+    fn clause_operands(&mut self, call: &Call) -> u32 {
+        let Call::Clause {
+            effect,
+            op,
+            callee,
+            args,
+        } = call
+        else {
+            unreachable!("clause operands are made for a clause")
         };
-        let callee = self.atom(callee, Repr::TObj);
+        let operation = eml_lir::operation(&self.program.effects, *effect, *op);
+        let reprs = std::iter::once(Repr::Obj).chain(operation.params.iter().copied());
+        let callee = self.atom(*callee, Repr::TObj);
         let slots: Vec<Slot> = args
             .iter()
             .zip(reprs)
@@ -644,6 +648,45 @@ impl<'a, M: Mode> Emitter<'a, '_, M> {
             .collect();
         self.out.operands(
             [u32::from(callee), slots.len() as u32]
+                .into_iter()
+                .chain(slots.iter().map(|&s| u32::from(s))),
+        )
+    }
+
+    /// `apply` のオペランド [呼ばれる値, n, 場所のシグネチャ, 引数…]。場所のシグネチャは変数の引数を変数の Repr で、
+    /// 定数の引数を `apply` が持つ Repr で、結果を `ret` で持つ。一様な場所の引数はすべて `tobj` である。`ret` は束縛の
+    /// Repr で、末尾の位置では関数の `ret` である
+    /// (docs/superpowers/specs/2026-10-21-s14e-abi-struct-design.md の「`apply` の ABI」)。
+    fn apply_operands(&mut self, call: &Call, ret: Repr) -> u32 {
+        let Call::Apply {
+            callee, args, site, ..
+        } = call
+        else {
+            unreachable!("apply operands are made for an apply")
+        };
+        let params: Vec<Repr> = match site {
+            Site::Typed(reprs) => args
+                .iter()
+                .zip(reprs)
+                .map(|(&arg, &repr)| match arg {
+                    Atom::Var(var) => self.repr(var),
+                    _ => repr,
+                })
+                .collect(),
+            Site::Uniform => vec![Repr::TObj; args.len()],
+        };
+        let callee = self.atom(*callee, Repr::TObj);
+        let slots: Vec<Slot> = args
+            .iter()
+            .zip(&params)
+            .map(|(&arg, &repr)| self.atom(arg, repr))
+            .collect();
+        let sig = self.out.signatures.intern(Signature {
+            params,
+            ret: vec![ret],
+        });
+        self.out.operands(
+            [u32::from(callee), slots.len() as u32, sig.0]
                 .into_iter()
                 .chain(slots.iter().map(|&s| u32::from(s))),
         )
@@ -679,14 +722,13 @@ impl<'a, M: Mode> Emitter<'a, '_, M> {
                     self.out.push(Op::TailCall { at });
                 }
             }
+            Term::TailCall(call @ Call::Clause { .. }) => {
+                let at = self.clause_operands(call);
+                self.out.push(Op::TailClause { at });
+            }
             Term::TailCall(call) => {
-                let at = self.value_call_operands(call);
-                let op = if matches!(call, Call::Clause { .. }) {
-                    Op::TailClause { at }
-                } else {
-                    Op::TailApply { at }
-                };
-                self.out.push(op);
+                let at = self.apply_operands(call, self.function.ret);
+                self.out.push(Op::TailApply { at });
             }
             Term::Jump { target, args } => self.jump(block, *target, args),
             Term::Switch {

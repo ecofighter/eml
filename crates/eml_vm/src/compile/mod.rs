@@ -15,6 +15,7 @@ use eml_rt::{Control, MaskItem, Mode};
 use crate::code::{CodeBase, CompileError, FnEntry, Index, Unwind};
 use crate::disasm;
 use crate::op::{Op, Pc};
+use crate::sig::Signatures;
 use constants::Constants;
 
 /// 命令とオペランドを書く先。関数をまたいで1つにする。`load` の間だけ `CodeBase` の列を借りて末尾に書く。
@@ -25,6 +26,9 @@ pub(crate) struct Out {
     pub(crate) mask_lists: Vec<MaskItem>,
     pub(crate) locations: Vec<(Pc, Loc)>,
     pub(crate) unwinds: Vec<(Pc, Unwind)>,
+    /// `CodeBase::signatures` を借りたもの。一致の確かめで書いた写しを消しても、引いたシグネチャは残してよい。中身で
+    /// 引くので、同じ中身は同じ番号になるためである。
+    pub(crate) signatures: Signatures,
 }
 
 impl Out {
@@ -90,6 +94,7 @@ impl<M: Mode> CodeBase<M> {
             functions: Vec::new(),
             code: vec![Op::Finish, Op::ApplyRest],
             operands: Vec::new(),
+            signatures: Signatures::default(),
             mask_lists: Vec::new(),
             constants: Vec::new(),
             region: None,
@@ -111,6 +116,7 @@ impl<M: Mode> CodeBase<M> {
             functions,
             code,
             operands,
+            signatures,
             mask_lists,
             constants,
             region,
@@ -126,6 +132,7 @@ impl<M: Mode> CodeBase<M> {
             mask_lists: mem::take(mask_lists),
             locations: mem::take(locations),
             unwinds: mem::take(unwinds),
+            signatures: mem::take(signatures),
         };
         let mut pool = Constants::new(constants, index, region, control);
         let strings = &program.strings;
@@ -169,6 +176,7 @@ impl<M: Mode> CodeBase<M> {
         *mask_lists = out.mask_lists;
         *locations = out.locations;
         *unwinds = out.unwinds;
+        *signatures = out.signatures;
         result?;
         if let Some(chunk) = frozen? {
             *region = Some(chunk);
@@ -269,13 +277,15 @@ fn check_known<M: Mode>(
                 mask_lists: &out.mask_lists,
                 locations: &out.locations,
                 unwinds: &out.unwinds,
+                signatures: &out.signatures,
                 functions,
                 files,
             }
             .function(entry)
         };
-        let same = (old.arity, old.frame_size, old.ret_rc)
-            == (again.arity, again.frame_size, again.ret_rc)
+        let sig = |entry: &FnEntry| out.signatures.get(entry.sig);
+        let same = (old.arity, old.frame_size) == (again.arity, again.frame_size)
+            && sig(old) == sig(&again)
             && view(old) == view(&again);
         out.truncate(lengths);
         if !same {

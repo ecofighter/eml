@@ -8,6 +8,7 @@ use eml_rt::{Control, Frozen, HeapError, MaskItem, Mode, Word};
 
 use crate::error::{RuntimeError, SourceLocation};
 use crate::op::{BUILTINS, Op, Pc, Slot};
+use crate::sig::{SigId, Signatures};
 use crate::vm::{Failure, Task};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -16,10 +17,13 @@ pub struct FnEntry {
     /// 命令列の範囲 `[start, end)`。
     pub start: Pc,
     pub end: Pc,
+    /// 引数の数。クロージャの捕まえた値も引数に数える。
     pub arity: u16,
     pub frame_size: u16,
-    /// `ret` が RC の Repr か。入口の関数として呼んだとき、`Finish` が結果を手放すかを決める。
-    pub ret_rc: bool,
+    /// 引数と結果の Repr。入口の関数として呼んだとき `Finish` が結果を手放すかも、これで決まる。
+    pub(crate) sig: SigId,
+    /// `sig` の種類を詰めた語 (`Signatures::fn_key`)。`apply` の速い道が `FnEntry` と一緒に読めるように、ここにも置く。
+    pub(crate) key: u64,
 }
 
 /// 巻き戻しの地点の表の1行 (docs/spec/vm.md の「巻き戻しの表」)。
@@ -41,6 +45,8 @@ pub struct CodeBase<M: Mode> {
     pub(crate) functions: Vec<FnEntry>,
     pub(crate) code: Vec<Op>,
     pub(crate) operands: Vec<u32>,
+    /// 関数と `apply` の場所のシグネチャ。中身で引くので、追記の間も番号は変わらない。
+    pub(crate) signatures: Signatures,
     /// `EvvMask` が参照する、mask の項目の並び。
     pub(crate) mask_lists: Vec<MaskItem>,
     pub(crate) constants: Vec<Word>,
@@ -90,6 +96,16 @@ pub enum CompileError {
 impl<M: Mode> CodeBase<M> {
     pub fn functions(&self) -> &[FnEntry] {
         &self.functions
+    }
+
+    /// 関数の結果が RC の Repr か。
+    pub(crate) fn ret_rc(&self, f: u32) -> bool {
+        let entry = &self.functions[f as usize];
+        self.signatures
+            .get(entry.sig)
+            .ret
+            .iter()
+            .any(|repr| repr.is_rc())
     }
 
     /// 命令の位置を含む関数。組み込みの命令はどの関数にも属さない。関数は命令の位置の順に並ぶ。

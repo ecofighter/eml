@@ -1,7 +1,7 @@
 //! Core IR の不変条件の検査 (docs/spec/core-ir.md の「verifier」)。ブロックの列の形 (R1〜R4)、変数の定義と支配 (R5、R6)、
 //! `unpack` の Repr、`jump` と `return` の Repr の互換、extern の引数と結果の Repr (R7)、データの配置 (R8) と、
-//! 引き継いだ検査 (直接呼び出しと extern の引数の数、case の種類) を確かめる。境界 (呼び出しの引数と結果、関数の値の
-//! 対象が一様であること、`tobj` のフィールド) は、box の挿入の後の LIR の段だけで比べる。
+//! 引き継いだ検査 (直接呼び出しと extern の引数の数、case の種類) を確かめる。境界 (呼び出しの引数と結果、`tobj` の
+//! フィールド) は、box の挿入の後の LIR の段だけで比べる。
 //! 段は2つある。translate の直後は、EP が作る基本操作、節の呼び出し、`clause` の印がまだないことと、エフェクトの
 //! 命令の形 (`mask` の順、`handle` の節の数、再開できるかどうか) を確かめる (`verify_translated`)。EP の後は、
 //! `handle`、`perform`、`resume`、`mask` が残っていないことと、基本操作と節の呼び出しの形を確かめる
@@ -58,13 +58,9 @@ fn verify_at(program: &Program, level: Level) -> Result<(), VerifyError> {
     let functions: Vec<FnSummary> = program
         .functions
         .iter()
-        .map(|function| {
-            FnSummary::new(
-                &function.name,
-                function.clause,
-                param_reprs(function),
-                function.ret,
-            )
+        .map(|function| FnSummary {
+            name: &function.name,
+            clause: function.clause,
         })
         .collect();
     let tables = Tables {
@@ -92,10 +88,6 @@ fn verify_at(program: &Program, level: Level) -> Result<(), VerifyError> {
             })?;
     }
     Ok(())
-}
-
-fn param_reprs(function: &CoreFn) -> impl ExactSizeIterator<Item = Repr> + '_ {
-    function.params().iter().map(|&param| function.repr(param))
 }
 
 /// EP より前に `clause` の印はない。印の関数の ABI は `eml_lir::check::clause_function` が確かめる。
@@ -353,7 +345,7 @@ impl<'a> Checker<'a> {
         match term {
             Term::Return(atom) => {
                 self.use_atom(*atom)?;
-                if !self.cx.passes(*atom, self.function.ret)? {
+                if !self.cx.passes(*atom, self.function.ret) {
                     return Err(format!(
                         "{} is returned from a function that returns {}",
                         self.cx.typed_atom_text(*atom),
@@ -418,7 +410,7 @@ impl<'a> Checker<'a> {
     /// `jump` と `return` だけである (docs/spec/lir.md の「Kind の印の検査」)。
     fn check_passed(&self, target: BlockId, arg: Atom, param: VarId) -> Result<(), String> {
         let expected = self.function.repr(param);
-        if self.cx.passes(arg, expected)? {
+        if self.cx.passes(arg, expected) {
             let mark = self.function.mark(param);
             if self.cx.mark_passes(arg, mark) {
                 return Ok(());
