@@ -778,8 +778,8 @@ fn var_matches_hand_written_work() {
             .map(|(_, residual)| *residual)
             .expect("a residual for every pair");
         assert_eq!(
-            written.allocations - hand.allocations,
-            residual,
+            written.allocations,
+            hand.allocations + residual,
             "{name} against {by_hand}: allocations"
         );
     }
