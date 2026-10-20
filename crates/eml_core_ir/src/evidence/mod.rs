@@ -183,12 +183,18 @@ fn yield_switch(yielding: VarId, fast: BlockId, slow: BlockId) -> Term {
 
 /// yield 中に返すダミーの値。呼び出し元は使わずに捨てる。`tobj` にも物体を使うのは、互換の位置を通って `obj` の
 /// 変数に入ることがあるためである (docs/spec/lir.md の「ダミーの値」)。印が `poly` なのは、戻り値の印が `lin` の
-/// 関数からも返すためである。
+/// 関数からも返すためである。構造体の `ret` には、構造体の変数にダミーの物体を束縛して返す。box の挿入がこの束縛を
+/// `unbox` で受け直すので、開いた後は葉のダミーになる
+/// (docs/superpowers/specs/2026-10-21-s14e-abi-struct-design.md の「Core IR」の EP)。
 /// `bind` は物体を作る `let` を置き、その変数を返す。
 fn dummy(ret: Repr, bind: impl FnOnce(VarInfo, Rhs) -> VarId) -> Atom {
     match ret {
-        Repr::Obj | Repr::TObj => Atom::Var(bind(
-            named("d", Repr::Obj, Prim::Dummy.row().ret_mark),
+        Repr::Obj | Repr::TObj | Repr::Struct(_) => Atom::Var(bind(
+            named(
+                "d",
+                if ret == Repr::TObj { Repr::Obj } else { ret },
+                Prim::Dummy.row().ret_mark,
+            ),
             Rhs::Prim(Prim::Dummy, Vec::new()),
         )),
         Repr::Int => Atom::Int(0),

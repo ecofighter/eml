@@ -2,7 +2,7 @@
 //! `pretty` で表示すると元のテキストに戻ることと、構文の誤りの報告を確かめる。
 
 use eml_lir::{Atom, CasePattern, Ctor, FloatBits, FnIdx, LayoutId, MaskItem, OpRet, Prim, VarId};
-use eml_lir::{BlockId, Loc, Mark, ParseError, Repr, Reuse, Role, Site, verify};
+use eml_lir::{BlockId, Loc, Mark, ParseError, Repr, Reuse, Role, Site, StructShape, verify};
 use eml_lir::{Call, Program, Rhs, Stmt, Term, parse, pretty, pretty_with_positions};
 
 /// 読んで表示し直すと元に戻ることを確かめ、読んだプログラムを返す。
@@ -104,6 +104,64 @@ fn f(a.0: obj, b.1: tobj, c.2: int, d.3: enum, e.4: unit) -> unit {
     );
     assert!(Repr::Obj.is_rc() && Repr::TObj.is_rc());
     assert!(!Repr::Int.is_rc() && !Repr::Enum.is_rc() && !Repr::Unit.is_rc());
+}
+
+/// 構造体の Repr は配置の名前と、フィールドごとの Repr と印で書く。同じ中身の形は1つの番号になる
+/// (docs/superpowers/specs/2026-10-21-s14e-abi-struct-design.md の「構造体の Repr」)。
+#[test]
+fn struct_text_round_trips() {
+    let program = round_trip(
+        "\
+layout Vec3 { Vec3(float, float, float) }
+layout (,) { (,)(tobj, tobj) }
+fn f(a.0: Vec3{float, float, float}, p.1: (,){int, obj lin} lin) -> Vec3{float, float, float} {
+  let b.2: Vec3{float, float, float} = con Vec3 #0(1.5, 2.5, 3.5)
+  let q.3: (,){Vec3{float, float, float}, unit} = con (,) #0(b.2, ())
+  unpack p.1 (,) #0(n.4: int, s.5: obj lin)
+  return a.0
+}
+",
+    );
+    let vars = &program.functions[0].vars;
+    let Repr::Struct(vec3) = vars[0].repr else {
+        panic!("expected a struct, found {:?}", vars[0].repr);
+    };
+    assert_eq!(vars[2].repr, vars[0].repr);
+    assert_eq!(program.functions[0].ret, vars[0].repr);
+    assert_eq!(
+        *program.structs.shape(vec3),
+        StructShape {
+            layout: LayoutId(0),
+            fields: vec![(Repr::Float, Mark::Unr); 3],
+        }
+    );
+    let Repr::Struct(pair) = vars[1].repr else {
+        panic!("expected a struct, found {:?}", vars[1].repr);
+    };
+    assert_eq!(
+        *program.structs.shape(pair),
+        StructShape {
+            layout: LayoutId(1),
+            fields: vec![(Repr::Int, Mark::Unr), (Repr::Obj, Mark::Lin)],
+        }
+    );
+    let Repr::Struct(nested) = vars[3].repr else {
+        panic!("expected a struct, found {:?}", vars[3].repr);
+    };
+    assert_eq!(
+        program.structs.shape(nested).fields,
+        [(Repr::Struct(vec3), Mark::Unr), (Repr::Unit, Mark::Unr)]
+    );
+    assert_eq!(Repr::Struct(vec3).name(), "struct");
+    assert!(Repr::Struct(vec3).needs_box() && !Repr::Struct(vec3).is_rc());
+    // 構造体の配置は宣言した配置でなければならない
+    assert_eq!(
+        parse_error("fn f(a.0: Vec3{float}) -> unit {\n  return ()\n}\n"),
+        ParseError {
+            line: 1,
+            message: "unknown layout `Vec3`".to_string(),
+        }
+    );
 }
 
 #[test]

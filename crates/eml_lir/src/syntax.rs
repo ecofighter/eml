@@ -11,7 +11,7 @@ use std::fmt::Write as _;
 use crate::{
     Atom, BlockId, Case, CasePattern, Ctor, EffectInfo, FloatBits, FnIdx, Immediates, Layout,
     LayoutCtor, LayoutId, Loc, Mark, MaskItem, OpRet, OperationInfo, ParseError, Prim, Repr, Role,
-    Site, VarId, VarInfo,
+    Site, StructShape, Structs, VarId, VarInfo,
 };
 
 /// エフェクトの名前。表にない番号は `#N` で書く。誤りを含む IR も表示でき、`parse` が読み戻せて、verifier がその番号を
@@ -85,6 +85,38 @@ pub fn function_name(name: &str) -> Cow<'_, str> {
     }
 }
 
+/// 配置の名前。表にない番号は、エフェクトと同じく `#N` で書く。
+pub fn layout_text(layouts: &[Layout], id: LayoutId) -> String {
+    layouts
+        .get(id.0 as usize)
+        .map_or_else(|| format!("#{}", id.0), |layout| layout.name.clone())
+}
+
+/// Repr のテキストの形。構造体は形の中身を `Vec3{float, float, float}` と書く。再帰は形の深さだけである
+/// (docs/superpowers/specs/2026-10-21-s14e-abi-struct-design.md の「構造体の Repr」)。
+pub fn repr_text(layouts: &[Layout], structs: &Structs, repr: Repr) -> String {
+    let Repr::Struct(id) = repr else {
+        return repr.name().to_string();
+    };
+    let shape = structs.shape(id);
+    let fields: Vec<String> = shape
+        .fields
+        .iter()
+        .map(|&(field, mark)| {
+            format!(
+                "{}{}",
+                repr_text(layouts, structs, field),
+                mark_suffix(mark)
+            )
+        })
+        .collect();
+    format!(
+        "{}{{{}}}",
+        layout_text(layouts, shape.layout),
+        fields.join(", ")
+    )
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum Tok {
     /// 空白、括弧、`,`、`"` を含まない字の並び。関数の名前は演算子の字を含むので、名前の字で区切らずに
@@ -102,7 +134,8 @@ pub struct Token {
 
 const PUNCTS: &[char] = &['(', ')', '{', '}', '[', ']', ','];
 
-const REPRS: [Repr; 6] = [
+/// テキストの形で名前を書く、値の Repr。構造体は形の中身を書き、token は reuse のパスだけが作るので別に扱う。
+pub(crate) const REPRS: [Repr; 6] = [
     Repr::Obj,
     Repr::TObj,
     Repr::Int,
@@ -304,6 +337,7 @@ pub struct Tables {
     pub entry: FnIdx,
     pub strings: Vec<String>,
     pub layouts: Vec<Layout>,
+    pub structs: Structs,
     pub effects: Vec<EffectInfo>,
     pub files: Vec<String>,
 }
@@ -314,6 +348,8 @@ pub struct Reader<'t> {
     pos: usize,
     layouts: Vec<Layout>,
     layout_ids: HashMap<String, LayoutId>,
+    /// 読んだ構造体の形。同じ中身の形は読んだ所によらず1つの番号になる。
+    structs: Structs,
     effects: Vec<EffectInfo>,
     effect_ids: HashMap<String, u32>,
     functions: HashMap<String, FnIdx>,
@@ -330,6 +366,7 @@ impl<'t> Reader<'t> {
             pos: 0,
             layouts: Vec::new(),
             layout_ids: HashMap::new(),
+            structs: Structs::default(),
             effects: Vec::new(),
             effect_ids: HashMap::new(),
             functions: HashMap::new(),
@@ -370,6 +407,7 @@ impl<'t> Reader<'t> {
             entry,
             strings: self.strings,
             layouts: self.layouts,
+            structs: self.structs,
             effects: self.effects,
             files: self.files,
         })
@@ -1174,6 +1212,9 @@ impl<'t> Reader<'t> {
     }
 
     pub fn repr(&mut self) -> Result<Repr, ParseError> {
+        if self.at_struct() {
+            return self.struct_repr();
+        }
         let line = self.line();
         let word = self.word()?;
         // token は値の Repr でなく、LIR の reuse のパスだけが作るので、誤りの文の一覧には並べない
@@ -1189,6 +1230,22 @@ impl<'t> Reader<'t> {
                     ),
                 )
             })
+    }
+
+    /// 構造体の Repr は、配置の名前か `#N` の直後に `{` が来る。Repr の名前の後の `{` は関数の本体の始まりである。
+    fn at_struct(&self) -> bool {
+        let named = matches!(self.peek(), Some(Tok::Word(word))
+            if !REPRS.iter().chain([&Repr::Token]).any(|repr| repr.name() == word));
+        (named && self.peek_at(1) == Some(&Tok::Punct('{'))) || self.at_tuple_name()
+    }
+
+    /// `L{repr mark, ..}`。形は読んだ順に表に入れ、同じ中身の形は同じ番号にする。
+    fn struct_repr(&mut self) -> Result<Repr, ParseError> {
+        let layout = self.layout_ref()?;
+        let fields = self.list('{', '}', |p| Ok((p.repr()?, p.mark()?)))?;
+        Ok(Repr::Struct(
+            self.structs.intern(StructShape { layout, fields }),
+        ))
     }
 
     fn var_named(
@@ -1244,8 +1301,8 @@ impl<'t> Reader<'t> {
                     line,
                     format!(
                         "`{word}` is bound both as `{}` and `{}`",
-                        known.name(),
-                        repr.name()
+                        repr_text(&self.layouts, &self.structs, known),
+                        repr_text(&self.layouts, &self.structs, repr)
                     ),
                 ));
             }
@@ -1431,6 +1488,7 @@ pub fn error(line: usize, message: impl Into<String>) -> ParseError {
 /// テキストの表示の部品。宣言と関数の頭、ラベル、アトムなど、2つの IR に共通する形を書く。
 pub struct Writer<'p> {
     layouts: &'p [Layout],
+    structs: &'p Structs,
     effects: &'p [EffectInfo],
     strings: &'p [String],
     files: &'p [String],
@@ -1443,6 +1501,7 @@ impl<'p> Writer<'p> {
     /// `positions` が真なら、extern の呼び出しに `@"path":line:column` を付ける。
     pub fn new(
         layouts: &'p [Layout],
+        structs: &'p Structs,
         effects: &'p [EffectInfo],
         strings: &'p [String],
         files: &'p [String],
@@ -1451,6 +1510,7 @@ impl<'p> Writer<'p> {
     ) -> Writer<'p> {
         Writer {
             layouts,
+            structs,
             effects,
             strings,
             files,
@@ -1469,8 +1529,8 @@ impl<'p> Writer<'p> {
                     if ctor.fields.is_empty() {
                         ctor.name.clone()
                     } else {
-                        let fields: Vec<&str> =
-                            ctor.fields.iter().map(|repr| repr.name()).collect();
+                        let fields: Vec<String> =
+                            ctor.fields.iter().map(|&repr| self.repr(repr)).collect();
                         format!("{}({})", ctor.name, fields.join(", "))
                     }
                 })
@@ -1496,7 +1556,7 @@ impl<'p> Writer<'p> {
                         .params
                         .iter()
                         .zip(&op.param_marks)
-                        .map(|(repr, &mark)| format!("{}{}", repr.name(), mark_suffix(mark)))
+                        .map(|(&repr, &mark)| format!("{}{}", self.repr(repr), mark_suffix(mark)))
                         .collect();
                     format!(
                         "{}{}({}) -> {}",
@@ -1505,7 +1565,7 @@ impl<'p> Writer<'p> {
                         params.join(", "),
                         match op.ret {
                             OpRet::Repr(repr) =>
-                                format!("{}{}", repr.name(), mark_suffix(op.ret_mark)),
+                                format!("{}{}", self.repr(repr), mark_suffix(op.ret_mark)),
                             OpRet::Never => "never".to_string(),
                         }
                     )
@@ -1541,7 +1601,7 @@ impl<'p> Writer<'p> {
             if header.yields { "yields " } else { "" },
             function_name(&header.name),
             self.binders(vars, &header.params),
-            header.ret.name(),
+            self.repr(header.ret),
             mark_suffix(header.ret_mark)
         )
         .unwrap();
@@ -1558,9 +1618,11 @@ impl<'p> Writer<'p> {
 
     /// 配置の名前。表にない番号は、エフェクトと同じく `#N` で書く。
     pub fn layout(&self, id: LayoutId) -> String {
-        self.layouts
-            .get(id.0 as usize)
-            .map_or_else(|| format!("#{}", id.0), |layout| layout.name.clone())
+        layout_text(self.layouts, id)
+    }
+
+    pub fn repr(&self, repr: Repr) -> String {
+        repr_text(self.layouts, self.structs, repr)
     }
 
     pub fn ctor(&self, ctor: Ctor) -> String {
@@ -1652,7 +1714,7 @@ impl<'p> Writer<'p> {
             .enumerate()
             .map(|(index, atom)| match (atom, reprs.get(index)) {
                 (Atom::Var(_), _) | (_, None) => self.atom(vars, atom),
-                (_, Some(repr)) => format!("{}: {}", self.atom(vars, atom), repr.name()),
+                (_, Some(&repr)) => format!("{}: {}", self.atom(vars, atom), self.repr(repr)),
             })
             .collect::<Vec<_>>()
             .join(", ")
@@ -1687,7 +1749,7 @@ impl<'p> Writer<'p> {
         format!(
             "{}: {}{}",
             self.var(vars, v),
-            info.repr.name(),
+            self.repr(info.repr),
             mark_suffix(info.mark)
         )
     }

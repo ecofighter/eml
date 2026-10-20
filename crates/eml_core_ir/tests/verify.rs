@@ -1112,3 +1112,125 @@ fn a_role_takes_no_more_uniform_parameters_than_the_function_has() {
         )
     );
 }
+
+// 構造体
+
+const VEC3: &str = "layout Vec3 { Vec3(float, float, float) }\n";
+
+/// 構造体の値を分けるのは `unpack` だけで、タグの `switch` の scrutinee にならない
+/// (docs/superpowers/specs/2026-10-21-s14e-abi-struct-design.md の「Core IR」)。
+#[test]
+fn a_struct_is_never_a_switch_scrutinee() {
+    let rejected = format!(
+        "{VEC3}fn f(v.0: Vec3{{float, float, float}}) -> unit {{
+  switch v.0 {{ _ -> b1 }}
+b1:
+  return ()
+}}
+"
+    );
+    assert_eq!(
+        check_translated(&rejected),
+        Err(
+            "`v.0` (Vec3{float, float, float}) is switched on, but a struct is split by an unpack in `f`"
+                .to_string()
+        )
+    );
+    let tagged = format!(
+        "{VEC3}fn f(v.0: Vec3{{float, float, float}}) -> unit {{
+  switch v.0 Vec3 {{ #0(x.1: float, y.2: float, z.3: float) -> b1 }}
+b1:
+  return ()
+}}
+"
+    );
+    assert_eq!(
+        check_translated(&tagged),
+        Err(
+            "`v.0` (Vec3{float, float, float}) is switched on, but a struct is split by an unpack in `f`"
+                .to_string()
+        )
+    );
+    let unpacked = format!(
+        "{VEC3}fn f(v.0: Vec3{{float, float, float}}) -> float {{
+  unpack v.0 Vec3 #0(x.1: float, y.2: float, z.3: float)
+  return y.2
+}}
+"
+    );
+    assert_eq!(check_translated(&unpacked), Ok(()));
+    assert_eq!(check_evidence(&unpacked), Ok(()));
+    // フィールドの Repr は配置でなく形のものである
+    let wrong_field = unpacked
+        .replace("y.2: float", "y.2: int")
+        .replace("return y.2", "return x.1");
+    assert_eq!(
+        check_translated(&wrong_field),
+        Err("field 1 of `Vec3` #0 is `y.2` (int), but the struct has float in `f`".to_string())
+    );
+}
+
+/// 構造体の `con` の引数は、配置の宣言した Repr でなく形のフィールドの Repr と、正確な位置として比べる
+/// (docs/superpowers/specs/2026-10-21-s14e-abi-struct-design.md の「Core IR」)。
+#[test]
+fn a_struct_con_is_checked_against_its_shape() {
+    let pair = |n: &str, s: &str| {
+        format!(
+            "layout (,) {{ (,)(tobj, tobj) }}
+{VEC3}fn f(n.0: {n}, s.1: {s}) -> (,){{int, obj}} {{
+  let p.2: (,){{int, obj}} = con (,) #0(n.0, s.1)
+  return p.2
+}}
+"
+        )
+    };
+    assert_eq!(check_translated(&pair("int", "obj")), Ok(()));
+    assert_eq!(
+        check_translated(&pair("float", "obj")),
+        Err(
+            "argument 0 of a con of `(,)` #0 is `n.0` (float), but the struct has int in `f`"
+                .to_string()
+        )
+    );
+    // 形の `obj` は正確な位置なので、`tobj` の値を受けない
+    assert_eq!(
+        check_translated(&pair("int", "tobj")),
+        Err(
+            "argument 1 of a con of `(,)` #0 is `s.1` (tobj), but the struct has obj in `f`"
+                .to_string()
+        )
+    );
+    let other_layout =
+        pair("int", "obj").replace("con (,) #0(n.0, s.1)", "con Vec3 #0(1.5, 2.5, 3.5)");
+    assert_eq!(
+        check_translated(&other_layout),
+        Err(
+            "`p.2` ((,){int, obj}) is bound to a con of `Vec3`, but its struct has the layout `(,)` in `f`"
+                .to_string()
+        )
+    );
+    // 引数の印の結びは、構造体の変数の印以下である (作る所の検査)
+    let lin = "layout (,) { (,)(tobj, tobj) }
+fn f(n.0: int, s.1: obj lin) -> (,){int, obj lin} {
+  let p.2: (,){int, obj lin} = con (,) #0(n.0, s.1)
+  return p.2
+}
+";
+    assert_eq!(
+        check_translated(lin),
+        Err(
+            "`p.2` (unr) is bound to a con of `(,)` #0, whose arguments join to lin in `f`"
+                .to_string()
+        )
+    );
+    assert_eq!(
+        check_translated(
+            &lin.replace("-> (,){int, obj lin} {", "-> (,){int, obj lin} lin {")
+                .replace(
+                    "let p.2: (,){int, obj lin} =",
+                    "let p.2: (,){int, obj lin} lin ="
+                )
+        ),
+        Ok(())
+    );
+}

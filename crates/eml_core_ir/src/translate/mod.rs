@@ -434,6 +434,7 @@ pub(crate) fn translate(
         entry: entry_fn,
         strings: builder.strings.values,
         layouts: builder.layouts,
+        structs: eml_lir::Structs::default(),
         effects: effect_table(hir, store, typed),
         files: builder.files.values,
     }

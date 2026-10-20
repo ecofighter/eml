@@ -24,9 +24,7 @@ use std::collections::HashMap;
 use crate::liveness;
 use crate::tail::tail_position_call;
 use crate::{Block, Call, CoreFn, Program, Rhs, Stmt, Term};
-use eml_lir::check::{
-    BlockShape, Context, Dominators, FnSummary, Tables, TermShape, field_count, shape,
-};
+use eml_lir::check::{BlockShape, Context, Dominators, FnSummary, Tables, TermShape, shape};
 use eml_lir::syntax::{effect_text, operation_text, prim_text};
 use eml_lir::{
     Atom, BlockId, CasePattern, EffectInfo, FnIdx, Layout, MaskItem, OpRet, Prim, Repr, VarId,
@@ -66,6 +64,7 @@ fn verify_at(program: &Program, level: Level) -> Result<(), VerifyError> {
     let tables = Tables {
         layouts: &program.layouts,
         layout_reprs: &layout_reprs,
+        structs: &program.structs,
         effects: &program.effects,
         strings: &program.strings,
         functions: &functions,
@@ -299,42 +298,7 @@ impl<'a> Checker<'a> {
                 ctor,
                 fields,
             } => {
-                let repr = self.function.repr(*value);
-                if repr != Repr::Obj {
-                    return Err(format!(
-                        "`{}` ({}) is unpacked, but only obj can be",
-                        self.cx.name(*value),
-                        repr.name()
-                    ));
-                }
-                let (layout, layout_repr, constructor) = self.cx.ctor(*ctor, "an unpack")?;
-                if layout_repr != Repr::Obj {
-                    return Err(format!(
-                        "`{}` (obj) is unpacked as `{}`, which is {}",
-                        self.cx.name(*value),
-                        layout.name,
-                        layout_repr.name()
-                    ));
-                }
-                if layout.constructors.len() != 1 {
-                    return Err(format!(
-                        "an unpack of `{}` names `{}`, which has {} constructors",
-                        self.cx.name(*value),
-                        layout.name,
-                        layout.constructors.len()
-                    ));
-                }
-                field_count(
-                    format!(
-                        "an unpack of `{}` as `{}` #{}",
-                        self.cx.name(*value),
-                        layout.name,
-                        ctor.tag
-                    ),
-                    fields.len(),
-                    constructor,
-                )?;
-                self.cx.field_reprs(layout, ctor.tag, constructor, fields)?;
+                self.cx.check_unpack(*value, *ctor, fields)?;
                 self.visible(*value)?;
                 self.define_all(fields, self.at)
             }
@@ -349,7 +313,7 @@ impl<'a> Checker<'a> {
                     return Err(format!(
                         "{} is returned from a function that returns {}",
                         self.cx.typed_atom_text(*atom),
-                        self.function.ret.name()
+                        self.cx.repr_text(self.function.ret)
                     ));
                 }
                 if !self.cx.mark_passes(*atom, self.function.ret_mark) {
@@ -380,6 +344,7 @@ impl<'a> Checker<'a> {
                 if cases.is_empty() && default.is_none() {
                     return Err("a switch has no targets".to_string());
                 }
+                self.cx.switch_scrutinee(*scrutinee)?;
                 self.cx.switch_cases(cases)?;
                 self.cx.literal_default(cases, *default)?;
                 if cases.iter().any(|case| !case.fields.is_empty()) {
@@ -428,16 +393,16 @@ impl<'a> Checker<'a> {
                 "a jump to b{} passes `{}` ({}) to `{}` ({})",
                 target.0,
                 self.cx.name(var),
-                self.function.repr(var).name(),
+                self.cx.repr_text(self.function.repr(var)),
                 self.cx.name(param),
-                expected.name()
+                self.cx.repr_text(expected)
             ),
             _ => format!(
                 "a jump to b{} passes {} to `{}` ({})",
                 target.0,
                 self.cx.atom_text(arg),
                 self.cx.name(param),
-                expected.name()
+                self.cx.repr_text(expected)
             ),
         })
     }

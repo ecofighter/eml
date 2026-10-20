@@ -23,7 +23,7 @@ use std::collections::{HashMap, HashSet};
 
 use crate::tail::pure;
 use crate::{Call, CoreFn, Program, Rhs, Stmt};
-use eml_lir::{Atom, FnIdx, Layout, VarId};
+use eml_lir::{Atom, FnIdx, Layout, Structs, VarId};
 
 use super::blocks;
 use super::known::Callee;
@@ -67,6 +67,7 @@ enum Status {
 pub(super) struct Fuser<'a> {
     functions: &'a mut Vec<CoreFn>,
     layouts: &'a [Layout],
+    structs: &'a Structs,
     callees: Vec<Callee>,
     graph: Graph,
     /// `fuse` に入った時点の関数の数。これより後ろは融合の段が作った複製である。
@@ -101,6 +102,7 @@ pub(crate) fn fuse(program: &mut Program) {
     let mut cx = Fuser {
         functions: &mut program.functions,
         layouts: &program.layouts,
+        structs: &program.structs,
         callees,
         graph,
         base: count,
@@ -150,7 +152,13 @@ impl Fuser<'_> {
                 self.status[target] == Status::Done && self.inlinable[target]
             };
             // 最初の走査は、自分の直接の呼び出しの数に比例してしか育たないので、予算を置かない
-            inline::inline_calls(&mut function, self.functions, &chosen, usize::MAX);
+            inline::inline_calls(
+                &mut function,
+                self.functions,
+                self.structs,
+                &chosen,
+                usize::MAX,
+            );
         } else {
             self.refer_all(&function);
         }
@@ -186,10 +194,10 @@ impl Fuser<'_> {
                 blocks::fold_constant_switches(function);
                 blocks::prune(function);
             }
-            changed |= known_con::resolve_known(function);
+            changed |= known_con::resolve_known(function, self.structs);
             // 解いた `switch` のほかの行き先は、開いて消した `con` をまだ使っているので、jump threading の前に落とす
             blocks::prune(function);
-            changed |= known_con::thread_jumps(function);
+            changed |= known_con::thread_jumps(function, self.structs);
             blocks::prune(function);
             let (rewritten, mut produced) = known_con::call_known_closures(function, &self.callees);
             changed |= rewritten;
@@ -201,7 +209,7 @@ impl Fuser<'_> {
                 let chosen = |var: VarId, target: FnIdx| {
                     produced.contains(&var) && self.inlinable_from_here(target.0 as usize)
                 };
-                if inline::inline_calls(function, self.functions, &chosen, limit) {
+                if inline::inline_calls(function, self.functions, self.structs, &chosen, limit) {
                     changed = true;
                     rounds += 1;
                     // 展開した本体が参照する複製も、この関数から参照する

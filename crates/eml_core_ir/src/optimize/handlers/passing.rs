@@ -230,7 +230,7 @@ pub(super) fn resumes_fit(
                     },
                     atom => (&source.vars, atom),
                 };
-                atom.fits_compatible(vars, expected.repr)
+                atom.fits_compatible(vars, &program.structs, expected.repr)
                     && match atom {
                         Atom::Var(var) => vars[var.0 as usize].mark.compatible(expected.mark),
                         _ => true,

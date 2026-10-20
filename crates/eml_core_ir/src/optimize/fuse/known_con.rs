@@ -14,7 +14,7 @@ use crate::optimize::known::{
     Callee, KnownClosure, apply_rewritable, fresh, known_closures, replace,
 };
 use crate::{Block, Call, CoreFn, Rhs, Stmt, Term};
-use eml_lir::{Atom, BlockId, Case, CasePattern, Ctor, Mark, VarId};
+use eml_lir::{Atom, BlockId, Case, CasePattern, Ctor, Mark, Structs, VarId};
 
 /// `con` が束縛した変数と、そのコンストラクタと引数。
 pub(super) fn known_cons(function: &CoreFn) -> HashMap<VarId, (Ctor, Vec<Atom>)> {
@@ -77,15 +77,15 @@ fn decide(
 }
 
 /// `arg` を `param` へ渡してよいか (docs/spec/lir.md の「構造の規則」の R7 と「Kind の印の検査」の V2)。定数の印は
-/// どの受け手とも互換である。
-fn passes(function: &CoreFn, arg: Atom, param: VarId) -> bool {
+/// どの受け手とも互換である。構造体は verifier と同じく `Structs::compatible` で比べる。
+fn passes(function: &CoreFn, structs: &Structs, arg: Atom, param: VarId) -> bool {
     let repr = function.repr(param);
     match arg {
         Atom::Var(var) => {
-            function.repr(var).compatible(repr)
+            structs.compatible(function.repr(var), repr)
                 && function.mark(var).compatible(function.mark(param))
         }
-        constant => constant.fits_compatible(&function.vars, repr),
+        constant => constant.fits_compatible(&function.vars, structs, repr),
     }
 }
 
@@ -97,13 +97,20 @@ fn non_unr(function: &CoreFn, atom: Atom) -> bool {
 /// 開く前は Perceus が `con` の値を親から手放せたが、開いた後に残るのは引数の変数だけで、`Unr` でない変数は
 /// `decref` できない (docs/spec/lir.md の「Kind の印の検査」の V1)。そこで、`Unr` でない引数は使われるフィールドに
 /// 移るときだけ開く。
-fn opens(function: &CoreFn, uses: &[usize], args: &[Atom], fields: &[VarId]) -> bool {
+fn opens(
+    function: &CoreFn,
+    structs: &Structs,
+    uses: &[usize],
+    args: &[Atom],
+    fields: &[VarId],
+) -> bool {
     if fields.is_empty() {
         return !args.iter().any(|&arg| non_unr(function, arg));
     }
     fields.len() == args.len()
         && args.iter().zip(fields).all(|(&arg, &field)| {
-            passes(function, arg, field) && (!non_unr(function, arg) || uses[field.0 as usize] > 0)
+            passes(function, structs, arg, field)
+                && (!non_unr(function, arg) || uses[field.0 as usize] > 0)
         })
 }
 
@@ -116,7 +123,7 @@ fn opens(function: &CoreFn, uses: &[usize], args: &[Atom], fields: &[VarId]) -> 
 /// `merge_jumps` は jump threading より先に動くので、`jump` の側で解くはずだった `switch` は、合流のブロックを
 /// つなぐと `con` の変数を直接分ける `switch` になるためである。選ばれない行き先は届かなくなるので、呼ぶ側が
 /// `prune` で落とす。
-pub(super) fn resolve_known(function: &mut CoreFn) -> bool {
+pub(super) fn resolve_known(function: &mut CoreFn, structs: &Structs) -> bool {
     let known = known_cons(function);
     if known.is_empty() {
         return false;
@@ -146,7 +153,7 @@ pub(super) fn resolve_known(function: &mut CoreFn) -> bool {
             continue;
         };
         if !scrutinee_skipped(function, &uses, index, target)
-            || !opens(function, &uses, args, &fields)
+            || !opens(function, structs, &uses, args, &fields)
         {
             continue;
         }
@@ -174,7 +181,7 @@ pub(super) fn resolve_known(function: &mut CoreFn) -> bool {
             let Some((var, (built, args))) = single_con(&known, &uses, Atom::Var(*value)) else {
                 continue;
             };
-            if built == ctor && opens(function, &uses, args, fields) {
+            if built == ctor && opens(function, structs, &uses, args, fields) {
                 splits[index].push((position, args.clone()));
                 opened.insert(var);
             }
@@ -306,7 +313,7 @@ fn entry(uses: &[usize], block: &Block) -> Option<Entry> {
 ///
 /// 使う数 `uses` は、この回の書き換えのたびに合わせ直す。この回で分けた M と C へ向かう別の `jump` も、同じ回で
 /// 直接つなぐためである。分けた M と C の新しい変数は、`jump` で1回ずつ使う。
-pub(super) fn thread_jumps(function: &mut CoreFn) -> bool {
+pub(super) fn thread_jumps(function: &mut CoreFn, structs: &Structs) -> bool {
     let known = known_cons(function);
     let mut uses = uses(function);
     let count = function.blocks.len();
@@ -327,10 +334,10 @@ pub(super) fn thread_jumps(function: &mut CoreFn) -> bool {
         };
         let threaded = match form {
             Entry::Switch(position) => thread_switch(
-                function, &mut uses, &known, &mut added, target, &args, position,
+                function, structs, &mut uses, &known, &mut added, target, &args, position,
             ),
             Entry::Unpack(position) => thread_unpack(
-                function, &mut uses, &known, &mut added, target, &args, position,
+                function, structs, &mut uses, &known, &mut added, target, &args, position,
             ),
         };
         if let Some((jump, con)) = threaded {
@@ -346,8 +353,10 @@ pub(super) fn thread_jumps(function: &mut CoreFn) -> bool {
 }
 
 /// `switch` で始まる `M` への `jump` を、選ばれる行き先の本体へつなぐ。新しい `jump` と、開いた `con` の変数を返す。
+#[expect(clippy::too_many_arguments, reason = "the state of one threaded jump")]
 fn thread_switch(
     function: &mut CoreFn,
+    structs: &Structs,
     uses: &mut Vec<usize>,
     known: &HashMap<VarId, (Ctor, Vec<Atom>)>,
     added: &mut Vec<(usize, Block)>,
@@ -406,6 +415,7 @@ fn thread_switch(
             fields.iter().copied().zip(values.iter().copied()).collect();
         return forward(
             function,
+            structs,
             added,
             *next,
             forwarded,
@@ -414,7 +424,7 @@ fn thread_switch(
             con,
         );
     }
-    if !fields.is_empty() && !opens(function, uses, &values, &fields) {
+    if !fields.is_empty() && !opens(function, structs, uses, &values, &fields) {
         return None;
     }
     let copies: Vec<VarId> = fields
@@ -504,8 +514,10 @@ fn uses_in(block: &Block, var: VarId) -> usize {
 }
 
 /// `unpack` で始まる `M` への `jump` を、`unpack` の後ろの部分へつなぐ。
+#[expect(clippy::too_many_arguments, reason = "the state of one threaded jump")]
 fn thread_unpack(
     function: &mut CoreFn,
+    structs: &Structs,
     uses: &mut Vec<usize>,
     known: &HashMap<VarId, (Ctor, Vec<Atom>)>,
     added: &mut Vec<(usize, Block)>,
@@ -545,6 +557,7 @@ fn thread_unpack(
             .collect();
         return forward(
             function,
+            structs,
             added,
             *next,
             forwarded,
@@ -553,7 +566,7 @@ fn thread_unpack(
             Some(var),
         );
     }
-    if !opens(function, uses, values, fields) {
+    if !opens(function, structs, uses, values, fields) {
         return None;
     }
     let values = values.clone();
@@ -630,8 +643,10 @@ fn thread_unpack(
 /// `jump` だけで終わる C か M へ向かう `jump` を、新しいブロックを作らずにその `jump` の行き先 `next` へ直接つなぐ。
 /// `substitution` は、C か M が受け取る値を `jump` の側の値に置き換える。呼ぶ側は、C か M の受けた値をその `jump`
 /// でしか使わないことを確かめておく (`used_only_in`)。
+#[expect(clippy::too_many_arguments, reason = "the state of one threaded jump")]
 fn forward(
     function: &CoreFn,
+    structs: &Structs,
     added: &[(usize, Block)],
     next: BlockId,
     forwarded: &[Atom],
@@ -643,7 +658,7 @@ fn forward(
     let fits = args
         .iter()
         .zip(block_params(function, added, next))
-        .all(|(&arg, &param)| passes(function, arg, param))
+        .all(|(&arg, &param)| passes(function, structs, arg, param))
         && carried(function, values, &args);
     fits.then_some((Term::Jump { target: next, args }, con))
 }

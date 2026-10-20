@@ -1,10 +1,11 @@
 //! LIR (docs/spec/lir.md)。EP の後の Core IR から写す、エフェクトの命令を持たない層で、box、RC、末尾呼び出しを
 //! 明示する。VM とネイティブの共通の入力になる。
 
+use std::collections::HashMap;
 use std::fmt;
 
 use eml_extern::{Extern, Linearity};
-pub use eml_extern::{FloatBits, OpRet, Repr};
+pub use eml_extern::{FloatBits, OpRet, Repr, StructId};
 
 mod boxing;
 pub mod check;
@@ -41,6 +42,8 @@ pub struct Program {
     /// データの配置の表。`con`、`switch`、`unpack`、`release` が `LayoutId` で引く。translate は最初に使った順に入れる
     /// (docs/spec/core-ir.md の「translate の配置」)。
     pub layouts: Vec<Layout>,
+    /// 構造体の形の表。`Repr::Struct` の番号が引く。
+    pub structs: Structs,
     /// エフェクトの表。添字は `Call::Clause` と基本操作の即値のエフェクトの番号で、HIR の `EffectId` の添字と同じで
     /// ある。
     pub effects: Vec<EffectInfo>,
@@ -368,11 +371,13 @@ pub enum Rhs {
     },
     /// 値の所有権を受け取って捨てる。値は `()` である。
     Drop(Atom),
-    /// 箱を要するスカラー (`Repr::BOXED_SCALARS`) の値か、`Int` か `Float` の定数を、`tobj` の値にする。オペランドを消費し、所有
-    /// した `tobj` を作る。スカラーの種類はオペランドの Repr で決まる (docs/spec/lir.md の「値の表現」)。
+    /// 箱を要する値 (`Repr::needs_box`) か、`Int` か `Float` の定数を箱に入れる。オペランドを消費し、所有した箱を作る。
+    /// 箱の種類はオペランドの Repr で決まる (docs/spec/lir.md の「値の表現」)。スカラーの箱は `tobj` で、構造体の箱は
+    /// 配置の `con` と同じ形のヒープの物体なので `obj` である
+    /// (docs/superpowers/specs/2026-10-21-s14e-abi-struct-design.md の「箱に入れる位置」)。
     Box(Atom),
-    /// `tobj` の値から、箱を要するスカラーを取り出す。`switch` の scrutinee と同じく値を読むだけで、所有権を受け取ら
-    /// ない。スカラーの種類は束縛する変数の Repr で決まる。
+    /// 箱から、箱を要する値を取り出す。`switch` の scrutinee と同じく値を読むだけで、所有権を受け取らない。取り出す値の
+    /// 種類は束縛する変数の Repr で決まる。スカラーは `tobj` から、構造体は `obj` か `tobj` から取り出す。
     Unbox(Atom),
     /// evidence passing の基本操作。借用の印 (`PrimRow::borrowed`) が立つ引数は読むだけで、ほかの引数は extern と同じく
     /// 消費する。結果は所有した値である (docs/spec/lir.md の「基本操作」)。
@@ -625,6 +630,126 @@ impl LayoutCtor {
     }
 }
 
+/// 構造体の形。配置と、フィールドごとの Repr と Kind の印を持つ。フィールドの Repr は具体化した型から決まり、入れ子の
+/// 構造体のフィールドは `Repr::Struct` になる。配置の宣言した Repr とは別に持つ
+/// (docs/superpowers/specs/2026-10-21-s14e-abi-struct-design.md の「構造体の Repr」)。
+/// テキストの形は `Vec3{float, float, float}`、`(,){int, obj lin}` である。
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct StructShape {
+    pub layout: LayoutId,
+    pub fields: Vec<(Repr, Mark)>,
+}
+
+/// 構造体の形の表。同じ中身の形には同じ番号を付ける。形は具体化した型から決まり、型は instance の名前に入って
+/// いるので、名前が同じ関数はいつも同じ ABI になる。番号は1つの Program の中だけで意味を持つ
+/// (docs/superpowers/specs/2026-10-21-s14e-abi-struct-design.md の「構造体の Repr」)。
+#[derive(Clone, Default)]
+pub struct Structs {
+    shapes: Vec<StructShape>,
+    ids: HashMap<StructShape, StructId>,
+}
+
+impl Structs {
+    pub fn intern(&mut self, shape: StructShape) -> StructId {
+        if let Some(&id) = self.ids.get(&shape) {
+            return id;
+        }
+        let id = StructId(self.shapes.len() as u32);
+        self.shapes.push(shape.clone());
+        self.ids.insert(shape, id);
+        id
+    }
+
+    pub fn shape(&self, id: StructId) -> &StructShape {
+        &self.shapes[id.0 as usize]
+    }
+
+    /// 番号の順の形。
+    pub fn shapes(&self) -> &[StructShape] {
+        &self.shapes
+    }
+
+    /// 形の葉を深さ優先にフィールドの順で並べる。`unit` の葉も位置を保つために含める。入れ子の構造体の葉の印は、
+    /// 葉の印とフィールドの印の小さいほうにする。構造体の変数を開くときの葉の印の規則を、入れ子のフィールドにも
+    /// 当てたものである (docs/superpowers/specs/2026-10-21-s14e-abi-struct-design.md の「Kind の印と RC」)。
+    /// 再帰は形の深さだけである。
+    pub fn leaves(&self, id: StructId) -> Vec<(Repr, Mark)> {
+        let mut leaves = Vec::new();
+        self.push_leaves(id, Mark::Lin, &mut leaves);
+        leaves
+    }
+
+    fn push_leaves(&self, id: StructId, bound: Mark, leaves: &mut Vec<(Repr, Mark)>) {
+        for &(repr, mark) in &self.shape(id).fields {
+            let mark = mark.meet(bound);
+            match repr {
+                Repr::Struct(inner) => self.push_leaves(inner, mark, leaves),
+                _ => leaves.push((repr, mark)),
+            }
+        }
+    }
+
+    /// 開いた後の葉の語の数。`unit` の葉は語を持たないので数えない。
+    pub fn words(&self, id: StructId) -> usize {
+        self.leaves(id)
+            .iter()
+            .filter(|(repr, _)| *repr != Repr::Unit)
+            .count()
+    }
+
+    /// 印が `unr` でない、RC の対象の葉を持つか。「RC の対象」で後始末を決めている所は、この述語が真の構造体も含める
+    /// (docs/superpowers/specs/2026-10-21-s14e-abi-struct-design.md の「Kind の印と RC」)。
+    pub fn has_non_unr_rc_leaf(&self, id: StructId) -> bool {
+        self.leaves(id)
+            .iter()
+            .any(|&(repr, mark)| repr.is_rc() && mark != Mark::Unr)
+    }
+
+    /// 印を除いて同じ Repr。構造体どうしは骨組み (配置と、葉の Repr) が同じときに等しい。正確な位置で Repr を比べる
+    /// 所が使う。状態を渡す形の複製が値の印から作る形と、型から作る形とで、印だけが違うことがあるためである
+    /// (docs/superpowers/specs/2026-10-21-s14e-abi-struct-design.md の「構造体の Repr」)。
+    pub fn same(&self, a: Repr, b: Repr) -> bool {
+        match (a, b) {
+            (Repr::Struct(a), Repr::Struct(b)) => {
+                let (a, b) = (self.shape(a), self.shape(b));
+                a.layout == b.layout
+                    && a.fields.len() == b.fields.len()
+                    && a.fields
+                        .iter()
+                        .zip(&b.fields)
+                        .all(|(&(a, _), &(b, _))| self.same(a, b))
+            }
+            _ => a == b,
+        }
+    }
+
+    /// 互換の位置で命令なしで値を渡せる2つの Repr。構造体どうしは骨組みが同じときだけ互換で、印は葉ごとに印の
+    /// 規則で比べる。ほかは `Repr::compatible` と同じである
+    /// (docs/superpowers/specs/2026-10-21-s14e-abi-struct-design.md の「構造体の Repr」)。
+    pub fn compatible(&self, a: Repr, b: Repr) -> bool {
+        match (a, b) {
+            (Repr::Struct(_), Repr::Struct(_)) => self.same(a, b),
+            _ => a.compatible(b),
+        }
+    }
+}
+
+/// 番号は中身から決まるので、等しさは番号の順の形で比べる。
+impl PartialEq for Structs {
+    fn eq(&self, other: &Structs) -> bool {
+        self.shapes == other.shapes
+    }
+}
+
+impl Eq for Structs {}
+
+/// 番号から形を引く表は形の並びから決まるので、形の並びだけを書く。`HashMap` を書かないので、表示の順も決まる。
+impl fmt::Debug for Structs {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_list().entries(&self.shapes).finish()
+    }
+}
+
 /// data の値の Repr。フィールドのないコンストラクタだけなら `enum`、どれもフィールドを持てば `obj`、混ざれば `tobj`
 /// である。コンストラクタのない型は `enum` になる。
 pub fn data_repr(arities: impl IntoIterator<Item = usize>) -> Repr {
@@ -712,6 +837,11 @@ impl Mark {
             (self, other),
             (Mark::Unr, Mark::Lin) | (Mark::Lin, Mark::Unr)
         )
+    }
+
+    /// 2つの印の小さいほう。順序は `Unr` < `Poly` < `Lin`。
+    pub fn meet(self, other: Mark) -> Mark {
+        if self.at_least(other) { other } else { self }
     }
 
     /// `self` が `other` 以上か (`self >= other`)。順序は `Unr` < `Poly` < `Lin`。
@@ -805,10 +935,10 @@ impl Atom {
     /// 互換の位置 (`jump`、`return`、呼び出しのオペランド、`closure` の引数、`tobj` のフィールド) に、命令なしで
     /// 収まる値。変数は Repr が互換なときに収まる。定数は `fits` に加えて、`()` が `tobj` にも収まる。`Int` と `Float`
     /// の定数は `tobj` に収まらないので、box の挿入が `box` する (docs/spec/lir.md の「値の表現」)。box の挿入と verifier が
-    /// 同じ規則で位置を比べるように、ここで1回だけ定義する。
-    pub fn fits_compatible(self, vars: &[VarInfo], expected: Repr) -> bool {
+    /// 同じ規則で位置を比べるように、ここで1回だけ定義する。構造体の変数は `Structs::compatible` で比べる。
+    pub fn fits_compatible(self, vars: &[VarInfo], structs: &Structs, expected: Repr) -> bool {
         match self {
-            Atom::Var(var) => vars[var.0 as usize].repr.compatible(expected),
+            Atom::Var(var) => structs.compatible(vars[var.0 as usize].repr, expected),
             Atom::Unit => expected.compatible(Repr::Unit),
             Atom::Int(_) | Atom::Float(_) | Atom::Tag(_) | Atom::Fn(_) => self.fits(vars, expected),
         }
@@ -864,3 +994,115 @@ impl fmt::Display for ParseError {
 }
 
 impl std::error::Error for ParseError {}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn shape(layout: u32, fields: &[(Repr, Mark)]) -> StructShape {
+        StructShape {
+            layout: LayoutId(layout),
+            fields: fields.to_vec(),
+        }
+    }
+
+    #[test]
+    fn structs_intern_by_content() {
+        let mut structs = Structs::default();
+        let vec3 = || shape(0, &[(Repr::Float, Mark::Unr); 3]);
+        let a = structs.intern(vec3());
+        let b = structs.intern(vec3());
+        assert_eq!(a, b);
+        assert_eq!(*structs.shape(a), vec3());
+        // 印だけが違う形も、中身が違うので別の番号になる
+        let lin = structs.intern(shape(1, &[(Repr::Int, Mark::Unr), (Repr::Obj, Mark::Lin)]));
+        let poly = structs.intern(shape(1, &[(Repr::Int, Mark::Unr), (Repr::Obj, Mark::Poly)]));
+        assert_ne!(lin, poly);
+        assert_ne!(a, lin);
+        assert_eq!(structs.intern(vec3()), a);
+    }
+
+    #[test]
+    fn compatibility_ignores_marks() {
+        let mut structs = Structs::default();
+        let lin = Repr::Struct(
+            structs.intern(shape(0, &[(Repr::Int, Mark::Unr), (Repr::Obj, Mark::Lin)])),
+        );
+        let poly = Repr::Struct(
+            structs.intern(shape(0, &[(Repr::Int, Mark::Unr), (Repr::Obj, Mark::Poly)])),
+        );
+        assert!(structs.compatible(lin, poly) && structs.compatible(poly, lin));
+        // `Repr::compatible` は形を見ないので、番号の違う構造体を互換と言わない
+        assert!(!lin.compatible(poly) && lin.compatible(lin));
+        let int = Repr::Struct(
+            structs.intern(shape(0, &[(Repr::Int, Mark::Unr), (Repr::Obj, Mark::Unr)])),
+        );
+        let float = Repr::Struct(structs.intern(shape(
+            0,
+            &[(Repr::Float, Mark::Unr), (Repr::Obj, Mark::Unr)],
+        )));
+        assert!(!structs.compatible(int, float));
+        // 配置の違う形と、入れ子の形の骨組みも比べる
+        let other = Repr::Struct(
+            structs.intern(shape(1, &[(Repr::Int, Mark::Unr), (Repr::Obj, Mark::Unr)])),
+        );
+        assert!(!structs.compatible(int, other));
+        let outer = |structs: &mut Structs, inner: Repr| {
+            Repr::Struct(structs.intern(shape(2, &[(inner, Mark::Poly), (Repr::Unit, Mark::Unr)])))
+        };
+        let (a, b, c) = (
+            outer(&mut structs, lin),
+            outer(&mut structs, poly),
+            outer(&mut structs, float),
+        );
+        assert!(structs.compatible(a, b) && !structs.compatible(a, c));
+        // 構造体は `obj` とも `tobj` とも命令なしで行き来しない。構造体でない Repr は `Repr::compatible` のままである
+        for word in [Repr::Obj, Repr::TObj, Repr::Unit] {
+            assert!(!structs.compatible(int, word) && !structs.compatible(word, int));
+        }
+        assert!(
+            structs.compatible(Repr::Obj, Repr::TObj) && !structs.compatible(Repr::Int, Repr::TObj)
+        );
+    }
+
+    #[test]
+    fn nested_leaves_are_depth_first() {
+        let mut structs = Structs::default();
+        let inner = structs.intern(shape(
+            0,
+            &[
+                (Repr::Float, Mark::Unr),
+                (Repr::Unit, Mark::Unr),
+                (Repr::Obj, Mark::Lin),
+            ],
+        ));
+        let outer = structs.intern(shape(
+            1,
+            &[
+                (Repr::Int, Mark::Unr),
+                (Repr::Struct(inner), Mark::Poly),
+                (Repr::Enum, Mark::Unr),
+            ],
+        ));
+        // 入れ子の葉の印は、葉の印とフィールドの印の小さいほうである
+        assert_eq!(
+            structs.leaves(outer),
+            [
+                (Repr::Int, Mark::Unr),
+                (Repr::Float, Mark::Unr),
+                (Repr::Unit, Mark::Unr),
+                (Repr::Obj, Mark::Poly),
+                (Repr::Enum, Mark::Unr),
+            ]
+        );
+        assert_eq!(structs.words(inner), 2);
+        assert_eq!(structs.words(outer), 4);
+        assert!(structs.has_non_unr_rc_leaf(inner) && structs.has_non_unr_rc_leaf(outer));
+        let unr = structs.intern(shape(2, &[(Repr::Obj, Mark::Unr), (Repr::Int, Mark::Unr)]));
+        assert!(!structs.has_non_unr_rc_leaf(unr));
+        // RC の対象でない葉の印は見ない
+        let lin_scalar =
+            structs.intern(shape(2, &[(Repr::Int, Mark::Lin), (Repr::Unit, Mark::Unr)]));
+        assert!(!structs.has_non_unr_rc_leaf(lin_scalar));
+    }
+}

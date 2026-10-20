@@ -3364,3 +3364,64 @@ fn a_role_takes_no_more_uniform_parameters_than_the_function_has() {
         )
     );
 }
+
+// 構造体
+
+const VEC3: &str = "layout Vec3 { Vec3(float, float, float) }\n";
+
+/// 入口の段と box の挿入の後の段は構造体の変数を受ける。印だけが違う形どうしは互換である
+/// (docs/superpowers/specs/2026-10-21-s14e-abi-struct-design.md の「LIR」の verifier)。
+#[test]
+fn the_lowered_and_scopes_stages_accept_structs() {
+    let text = format!(
+        "{PAIR}{VEC3}fn f(v.0: Vec3{{float, float, float}}, s.1: obj) -> (,){{Vec3{{float, float, float}}, obj poly}} {{
+  unpack v.0 Vec3 #0(x.2: float, y.3: float, z.4: float)
+  let w.5: Vec3{{float, float, float}} = con Vec3 #0(z.4, y.3, x.2)
+  let p.6: (,){{Vec3{{float, float, float}}, obj}} = con (,) #0(w.5, s.1)
+  let q.7: (,){{Vec3{{float, float, float}}, obj poly}} = call g(p.6)
+  return q.7
+}}
+fn g(p.0: (,){{Vec3{{float, float, float}}, obj poly}}) -> (,){{Vec3{{float, float, float}}, obj}} {{
+  jump b1(p.0)
+b1(q.1: (,){{Vec3{{float, float, float}}, obj}}):
+  return q.1
+}}
+"
+    );
+    assert_eq!(check_lowered(&text), Ok(()));
+    assert_eq!(check_scopes(&text), Ok(()));
+    // 骨組みの違う形は互換でない
+    let float = text.replace(
+        "b1(q.1: (,){Vec3{float, float, float}, obj}):",
+        "b1(q.1: (,){Vec3{float, float, float}, tobj}):",
+    );
+    assert_eq!(
+        check_lowered(&float),
+        Err(
+            "a jump to b1 passes `p.0` ((,){Vec3{float, float, float}, obj poly}) to `q.1` ((,){Vec3{float, float, float}, tobj}) in `g`"
+                .to_string()
+        )
+    );
+}
+
+/// 構造体の箱は配置の `con` と同じ形のヒープの物体なので、`box` の束縛は `obj` である。`unbox` は `obj` からも
+/// `tobj` からも構造体を取り出す (docs/superpowers/specs/2026-10-21-s14e-abi-struct-design.md の「LIR」の box の挿入)。
+#[test]
+fn a_struct_box_is_obj() {
+    let text = |boxed: &str, from: &str| {
+        format!(
+            "{VEC3}fn f(v.0: Vec3{{float, float, float}}, t.1: {from}) -> Vec3{{float, float, float}} {{
+  let b.2: {boxed} = box v.0
+  let u.3: Vec3{{float, float, float}} = unbox t.1
+  return u.3
+}}
+"
+        )
+    };
+    assert_eq!(check_scopes(&text("obj", "obj")), Ok(()));
+    assert_eq!(check_scopes(&text("obj", "tobj")), Ok(()));
+    assert_eq!(
+        check_scopes(&text("tobj", "obj")),
+        Err("`b.2` (tobj) is bound to a box of a struct, which is obj in `f`".to_string())
+    );
+}

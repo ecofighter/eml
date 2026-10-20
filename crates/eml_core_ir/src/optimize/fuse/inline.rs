@@ -5,7 +5,7 @@
 
 use crate::tail::tail_position_call;
 use crate::{Block, Call, CoreFn, Rhs, Stmt, Term};
-use eml_lir::{Atom, BlockId, FnIdx, Mark, Repr, VarId, VarInfo};
+use eml_lir::{Atom, BlockId, FnIdx, Mark, Repr, Structs, VarId, VarInfo};
 
 use crate::optimize::known::fresh;
 
@@ -72,6 +72,7 @@ struct Site {
 pub(super) fn inline_calls(
     function: &mut CoreFn,
     functions: &[CoreFn],
+    structs: &Structs,
     chosen: &dyn Fn(VarId, FnIdx) -> bool,
     limit: usize,
 ) -> bool {
@@ -82,6 +83,7 @@ pub(super) fn inline_calls(
                 function,
                 BlockId(block as u32),
                 functions,
+                structs,
                 chosen,
                 &mut room,
             )
@@ -174,6 +176,7 @@ fn sites(
     function: &CoreFn,
     block: BlockId,
     functions: &[CoreFn],
+    structs: &Structs,
     chosen: &dyn Fn(VarId, FnIdx) -> bool,
     room: &mut usize,
 ) -> Vec<Site> {
@@ -198,14 +201,14 @@ fn sites(
             let callee = &functions[target.0 as usize];
             let at = (block, index);
             let grown = size(callee);
-            if grown > *room || !fits(function, at, callee, args) {
+            if grown > *room || !fits(function, at, callee, args, structs) {
                 return None;
             }
             *room -= grown;
             Some(Site {
                 index,
                 callee: *target,
-                tail: stays_tail(function, at, callee, args),
+                tail: stays_tail(function, at, callee, args, structs),
             })
         })
         .collect()
@@ -220,7 +223,13 @@ fn sites(
 ///   定数は、引数の Repr の値になれればよい
 /// - 本体の `return` の値は、呼び出しの結果の変数へ渡す `jump` の実引数になる。末尾の位置の呼び出しなら、呼ぶ側の
 ///   `return` の値にしてもよい。どちらかの受け手と互換でなければ展開しない
-fn fits(function: &CoreFn, at: (BlockId, usize), callee: &CoreFn, args: &[Atom]) -> bool {
+fn fits(
+    function: &CoreFn,
+    at: (BlockId, usize),
+    callee: &CoreFn,
+    args: &[Atom],
+    structs: &Structs,
+) -> bool {
     if callee.yields && !function.yields {
         return false;
     }
@@ -241,9 +250,9 @@ fn fits(function: &CoreFn, at: (BlockId, usize), callee: &CoreFn, args: &[Atom])
         function,
         callee,
         args,
-        function.repr(result),
-        function.mark(result),
-    ) || stays_tail(function, at, callee, args)
+        (function.repr(result), function.mark(result)),
+        structs,
+    ) || stays_tail(function, at, callee, args, structs)
 }
 
 /// 末尾の位置の呼び出しで、本体の `return` をそのまま呼ぶ側の `return` にしてよいか。
@@ -252,14 +261,28 @@ fn stays_tail(
     (block, index): (BlockId, usize),
     callee: &CoreFn,
     args: &[Atom],
+    structs: &Structs,
 ) -> bool {
     tail_position_call(function.block(block)).is_some_and(|(at, _)| at == index)
-        && returns_pass(function, callee, args, function.ret, function.ret_mark)
+        && returns_pass(
+            function,
+            callee,
+            args,
+            (function.ret, function.ret_mark),
+            structs,
+        )
 }
 
 /// 本体のどの `return` の値も、Repr が `repr`、印が `mark` の受け手に渡せるか (R7 と V2)。戻らない呼び出しの束縛は、
-/// verifier と同じくどの受け手にも渡せる (docs/spec/lir.md の「Kind の印の検査」)。
-fn returns_pass(function: &CoreFn, callee: &CoreFn, args: &[Atom], repr: Repr, mark: Mark) -> bool {
+/// verifier と同じくどの受け手にも渡せる (docs/spec/lir.md の「Kind の印の検査」)。構造体は verifier と同じく
+/// `Structs::compatible` で比べる。
+fn returns_pass(
+    function: &CoreFn,
+    callee: &CoreFn,
+    args: &[Atom],
+    (repr, mark): (Repr, Mark),
+    structs: &Structs,
+) -> bool {
     let params = callee.params();
     let never = never_bound(callee);
     callee.blocks.iter().all(|block| {
@@ -271,13 +294,16 @@ fn returns_pass(function: &CoreFn, callee: &CoreFn, args: &[Atom], repr: Repr, m
             Atom::Var(var) => match params.iter().position(|&param| param == var) {
                 Some(position) => match args[position] {
                     Atom::Var(arg) => {
-                        function.repr(arg).compatible(repr) && function.mark(arg).compatible(mark)
+                        structs.compatible(function.repr(arg), repr)
+                            && function.mark(arg).compatible(mark)
                     }
-                    constant => constant.fits_compatible(&function.vars, repr),
+                    constant => constant.fits_compatible(&function.vars, structs, repr),
                 },
-                None => callee.repr(var).compatible(repr) && callee.mark(var).compatible(mark),
+                None => {
+                    structs.compatible(callee.repr(var), repr) && callee.mark(var).compatible(mark)
+                }
             },
-            constant => constant.fits_compatible(&callee.vars, repr),
+            constant => constant.fits_compatible(&callee.vars, structs, repr),
         }
     })
 }

@@ -54,6 +54,31 @@ fn h(s.0: int, b.1: tobj, a.2: tobj, x.3: tobj, r.4: tobj) -> int {
     );
 }
 
+/// 構造体の Repr は LIR と同じく、配置の名前と、フィールドごとの Repr と印で書く
+/// (docs/superpowers/specs/2026-10-21-s14e-abi-struct-design.md の「構造体の Repr」)。
+#[test]
+fn struct_text_round_trips() {
+    let program = round_trip(
+        "\
+layout Vec3 { Vec3(float, float, float) }
+fn f(a.0: Vec3{float, float, float}, x.1: float) -> Vec3{float, float, float} {
+  unpack a.0 Vec3 #0(p.2: float, q.3: float, r.4: float)
+  let b.5: Vec3{float, float, float} = con Vec3 #0(x.1, q.3, r.4)
+  return b.5
+}
+",
+    );
+    let vars = &program.functions[0].vars;
+    let Repr::Struct(vec3) = vars[0].repr else {
+        panic!("expected a struct, found {:?}", vars[0].repr);
+    };
+    assert_eq!(vars[5].repr, vars[0].repr);
+    assert_eq!(
+        program.structs.shape(vec3).fields,
+        [(Repr::Float, Mark::Unr); 3]
+    );
+}
+
 #[test]
 fn a_perform_round_trips() {
     let program = round_trip(

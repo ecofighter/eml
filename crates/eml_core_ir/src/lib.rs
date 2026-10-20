@@ -5,7 +5,7 @@
 use eml_extern::Extern;
 use eml_lir::{
     Atom, BlockId, Case, Ctor, EffectInfo, FnIdx, Layout, LayoutId, Loc, Mark, MaskItem, Prim,
-    Repr, Role, Site, VarId, VarInfo,
+    Repr, Role, Site, Structs, VarId, VarInfo,
 };
 
 mod builder;
@@ -41,6 +41,8 @@ pub struct Program {
     /// データの配置の表。`con`、`switch`、`unpack` (LIR では `release` も) が `LayoutId` で引く。translate は最初に
     /// 使った順に入れる (docs/spec/core-ir.md の「translate の配置」)。
     pub layouts: Vec<Layout>,
+    /// 構造体の形の表 (`eml_lir::Structs`)。`Repr::Struct` の番号が引き、LIR へそのまま写す。
+    pub structs: Structs,
     /// エフェクトの表。添字は `Call::Handle`、`Call::Perform`、`Call::Clause`、基本操作の即値のエフェクトの番号で、
     /// HIR の `EffectId` の添字と同じである。
     pub effects: Vec<EffectInfo>,

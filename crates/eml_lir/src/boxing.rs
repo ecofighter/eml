@@ -16,7 +16,7 @@ use crate::contract::pure;
 use crate::verify::block_shapes;
 use crate::{
     Atom, Block, BlockId, Call, CasePattern, EffectInfo, Layout, LirFn, Mark, OpRet, OperationInfo,
-    Program, Repr, Rhs, Site, Stmt, Term, VarId, VarInfo, operation,
+    Program, Repr, Rhs, Site, Stmt, Structs, Term, VarId, VarInfo, operation,
 };
 
 pub fn boxing(program: &mut Program) {
@@ -34,6 +34,7 @@ pub fn boxing(program: &mut Program) {
             function,
             signatures: &signatures,
             layouts: &program.layouts,
+            structs: &program.structs,
             effects: &program.effects,
             unboxed_from: HashMap::new(),
             boxed_from: HashMap::new(),
@@ -186,6 +187,7 @@ struct Converter<'a> {
     function: &'a mut LirFn,
     signatures: &'a [Signature],
     layouts: &'a [Layout],
+    structs: &'a Structs,
     effects: &'a [EffectInfo],
     /// `let v = unbox w` の v から w。v を `tobj` の位置へ渡すときは、`box` を作らずに w を渡す。
     unboxed_from: HashMap<VarId, VarId>,
@@ -343,7 +345,7 @@ impl Converter<'_> {
                 });
                 Atom::Var(boxed)
             }
-            _ if atom.fits_compatible(&self.function.vars, expected) => atom,
+            _ if atom.fits_compatible(&self.function.vars, self.structs, expected) => atom,
             _ => self.impossible(atom, expected),
         }
     }

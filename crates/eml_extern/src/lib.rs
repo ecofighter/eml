@@ -67,26 +67,38 @@ pub enum Repr {
     /// reuse の token。解放した箱を指すか、空を表す1語で、RC の対象ではない。LIR の reuse のパスだけが作り、extern の
     /// 行、配置、操作の表、Core IR には現れない (docs/spec/object-model.md の「reuse」)。
     Token,
+    /// 構造体の値。番号は Program の形の表 (`eml_lir::Structs`) を引く。形を番号で指すのは、`Repr` を `Copy` に保つため
+    /// である。extern の行、配置、操作の表には現れない
+    /// (docs/superpowers/specs/2026-10-21-s14e-abi-struct-design.md の「構造体の Repr」)。
+    Struct(StructId),
 }
 
-impl Repr {
-    /// 箱を要するスカラー。`tobj` の位置との間で `box` と `unbox` を要する。`unit` は命令なしで `tobj` と行き来する
-    /// ので入らない。規則と verifier の文言はこの1つの定義から作る (docs/spec/lir.md の「値の表現」)。
-    pub const BOXED_SCALARS: [Repr; 3] = [Repr::Int, Repr::Float, Repr::Enum];
+/// 形の表の番号。表は同じ中身の形に同じ番号を付けるので、番号が等しいことと中身が等しいことは同じである。番号は
+/// 1つの Program の中だけで意味を持つ。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct StructId(pub u32);
 
+impl Repr {
     pub fn is_rc(self) -> bool {
         match self {
             Repr::Obj | Repr::TObj => true,
-            Repr::Int | Repr::Float | Repr::Enum | Repr::Unit | Repr::Token => false,
+            Repr::Int | Repr::Float | Repr::Enum | Repr::Unit | Repr::Token | Repr::Struct(_) => {
+                false
+            }
         }
     }
 
+    /// 箱を要する Repr。一様な位置との間で `box` と `unbox` を要する。`unit` は命令なしで `tobj` と行き来するので
+    /// 入らない。box の挿入の規則と verifier はこの述語から作る (docs/spec/lir.md の「値の表現」、
+    /// docs/superpowers/specs/2026-10-21-s14e-abi-struct-design.md の「構造体の Repr」)。
     pub fn needs_box(self) -> bool {
-        Repr::BOXED_SCALARS.contains(&self)
+        matches!(self, Repr::Int | Repr::Float | Repr::Enum | Repr::Struct(_))
     }
 
     /// 互換の位置で、命令なしで値を渡せる2つの Repr。同じ Repr、参照どうし、`unit` と `tobj` である。推移的でない
     /// (`unit` と `obj` は互換でない) ので、どの検査も実際の2つの位置を比べる (docs/spec/lir.md の「値の表現」)。
+    /// 構造体どうしは番号が等しいときだけ互換とする。形を見ないので、印だけが違う形は互換にならない。形の表を
+    /// 持つ所は `eml_lir::Structs::compatible` で比べる。
     pub fn compatible(self, other: Repr) -> bool {
         self == other
             || (self.is_rc() && other.is_rc())
@@ -96,7 +108,8 @@ impl Repr {
             )
     }
 
-    /// テキストの形での名前 (docs/implementation/testing.md の「LIR のテキストの形」)。
+    /// テキストの形での名前 (docs/implementation/testing.md の「LIR のテキストの形」)。構造体は `struct` を返す。形の
+    /// 中身は表を引かないと書けないので、構造体のテキストの形は `eml_lir` が書く。
     pub fn name(self) -> &'static str {
         match self {
             Repr::Obj => "obj",
@@ -106,6 +119,7 @@ impl Repr {
             Repr::Enum => "enum",
             Repr::Unit => "unit",
             Repr::Token => "token",
+            Repr::Struct(_) => "struct",
         }
     }
 }

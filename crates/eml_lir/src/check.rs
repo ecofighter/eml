@@ -8,10 +8,10 @@ use std::mem::discriminant;
 
 use eml_extern::{Extern, FunctionRow};
 
-use crate::syntax::{effect_text, operation_text, prim_text};
+use crate::syntax::{REPRS, effect_text, layout_text, operation_text, prim_text, repr_text};
 use crate::{
     Atom, BlockId, Case, CasePattern, Ctor, EffectInfo, FnIdx, Immediates, Layout, LayoutCtor,
-    LayoutId, Mark, OpRet, Prim, Repr, Role, Site, VarId, VarInfo,
+    LayoutId, Mark, OpRet, Prim, Repr, Role, Site, StructId, StructShape, Structs, VarId, VarInfo,
 };
 
 /// 役割が一様にする最後の引数の数は、関数の引数の数を超えない
@@ -351,6 +351,7 @@ pub struct Tables<'a> {
     pub layouts: &'a [Layout],
     /// `layouts` と同じ順の、配置の Repr。
     pub layout_reprs: &'a [Repr],
+    pub structs: &'a Structs,
     pub effects: &'a [EffectInfo],
     pub strings: &'a [String],
     /// プログラムの関数と同じ順の、関数の要約。
@@ -391,6 +392,24 @@ impl<'a> Context<'a> {
 
     fn repr(&self, var: VarId) -> Repr {
         self.vars[var.0 as usize].repr
+    }
+
+    /// 誤りの文に書く Repr。構造体は形の中身を書く。
+    pub fn repr_text(&self, repr: Repr) -> String {
+        repr_text(self.tables.layouts, self.tables.structs, repr)
+    }
+
+    /// 互換の位置の Repr の比べ。印だけが違う構造体の形も互換である (`Structs::compatible`)。
+    pub fn compatible(&self, a: Repr, b: Repr) -> bool {
+        self.tables.structs.compatible(a, b)
+    }
+
+    /// 正確な位置に収まる値 (`Atom::fits`)。構造体の変数は、印だけが違う形の位置にも収まる (`Structs::same`)。
+    fn fits_exactly(&self, atom: Atom, expected: Repr) -> bool {
+        match atom {
+            Atom::Var(var) => self.tables.structs.same(self.repr(var), expected),
+            _ => atom.fits(self.vars, expected),
+        }
     }
 
     pub fn mark(&self, var: VarId) -> Mark {
@@ -442,13 +461,13 @@ impl<'a> Context<'a> {
         }
         for (&atom, &repr) in args.iter().zip(reprs) {
             if let Atom::Var(var) = atom
-                && self.repr(var) != repr
+                && !self.tables.structs.same(self.repr(var), repr)
             {
                 return Err(format!(
                     "the {what} site gives `{}` {} but the variable is {}",
                     self.name(var),
-                    repr.name(),
-                    self.repr(var).name()
+                    self.repr_text(repr),
+                    self.repr_text(self.repr(var))
                 ));
             }
         }
@@ -462,7 +481,7 @@ impl<'a> Context<'a> {
     pub fn passes(&self, atom: Atom, expected: Repr) -> bool {
         match atom {
             Atom::Var(var) if self.never[var.0 as usize] => true,
-            _ => atom.fits_compatible(self.vars, expected),
+            _ => atom.fits_compatible(self.vars, self.tables.structs, expected),
         }
     }
 
@@ -532,6 +551,105 @@ impl<'a> Context<'a> {
         }
     }
 
+    /// `unpack` の値は、配置の Repr が `obj` でコンストラクタが1つの値か、構造体である。配置のフィールドは R8 で、
+    /// 構造体のフィールドは形と比べる (docs/spec/lir.md の「構造の規則」の R8、
+    /// docs/superpowers/specs/2026-10-21-s14e-abi-struct-design.md の「Core IR」の verifier)。
+    pub fn check_unpack(&self, value: VarId, ctor: Ctor, fields: &[VarId]) -> Result<(), String> {
+        let repr = self.repr(value);
+        let shape = match repr {
+            Repr::Obj => None,
+            Repr::Struct(id) => Some(self.tables.structs.shape(id)),
+            _ => {
+                return Err(format!(
+                    "`{}` ({}) is unpacked, but only obj can be",
+                    self.name(value),
+                    repr.name()
+                ));
+            }
+        };
+        let (layout, layout_repr, constructor) = self.ctor(ctor, "an unpack")?;
+        match shape {
+            Some(shape) if shape.layout != ctor.layout => {
+                return Err(format!(
+                    "`{}` ({}) is unpacked as `{}`, but its struct has the layout `{}`",
+                    self.name(value),
+                    self.repr_text(repr),
+                    layout.name,
+                    layout_text(self.tables.layouts, shape.layout)
+                ));
+            }
+            None if layout_repr != Repr::Obj => {
+                return Err(format!(
+                    "`{}` (obj) is unpacked as `{}`, which is {}",
+                    self.name(value),
+                    layout.name,
+                    layout_repr.name()
+                ));
+            }
+            _ => {}
+        }
+        if layout.constructors.len() != 1 {
+            return Err(format!(
+                "an unpack of `{}` names `{}`, which has {} constructors",
+                self.name(value),
+                layout.name,
+                layout.constructors.len()
+            ));
+        }
+        let subject = || {
+            format!(
+                "an unpack of `{}` as `{}` #{}",
+                self.name(value),
+                layout.name,
+                ctor.tag
+            )
+        };
+        field_count(subject(), fields.len(), constructor)?;
+        match shape {
+            Some(shape) => {
+                struct_field_count(subject(), fields.len(), shape)?;
+                self.struct_fields(layout, ctor.tag, shape, fields)
+            }
+            None => self.field_reprs(layout, ctor.tag, constructor, fields),
+        }
+    }
+
+    /// 構造体の `unpack` のフィールドは、形のフィールドと印を除いて同じ Repr の変数である。
+    fn struct_fields(
+        &self,
+        layout: &Layout,
+        tag: u32,
+        shape: &StructShape,
+        fields: &[VarId],
+    ) -> Result<(), String> {
+        for (slot, (&field, &(declared, _))) in fields.iter().zip(&shape.fields).enumerate() {
+            let repr = self.repr(field);
+            if !self.tables.structs.same(repr, declared) {
+                return Err(format!(
+                    "field {slot} of `{}` #{tag} is `{}` ({}), but the struct has {}",
+                    layout.name,
+                    self.name(field),
+                    self.repr_text(repr),
+                    self.repr_text(declared)
+                ));
+            }
+        }
+        Ok(())
+    }
+
+    /// 構造体の値を分けるのは `unpack` だけで、`switch` の scrutinee にならない
+    /// (docs/superpowers/specs/2026-10-21-s14e-abi-struct-design.md の「Core IR」)。
+    pub fn switch_scrutinee(&self, scrutinee: Atom) -> Result<(), String> {
+        match scrutinee {
+            Atom::Var(var) if matches!(self.repr(var), Repr::Struct(_)) => Err(format!(
+                "`{}` ({}) is switched on, but a struct is split by an unpack",
+                self.name(var),
+                self.repr_text(self.repr(var))
+            )),
+            _ => Ok(()),
+        }
+    }
+
     /// case と `unpack` のフィールドは、宣言した Repr が `tobj` でなければ、その Repr の変数である。`tobj` の
     /// フィールドは、範囲の段と所有の段で、`tobj` と互換な変数である (R8)。
     pub fn field_reprs(
@@ -553,7 +671,7 @@ impl<'a> Context<'a> {
                     "field {slot} of `{}` #{tag} is `{}` ({}), but the layout has {}",
                     layout.name,
                     self.name(field),
-                    repr.name(),
+                    self.repr_text(repr),
                     declared.name()
                 ));
             }
@@ -604,7 +722,7 @@ impl<'a> Context<'a> {
             return Err(format!(
                 "`{}` ({}) is switched on as `{}`, which is {}",
                 self.name(var),
-                repr.name(),
+                self.repr_text(repr),
                 layout.name,
                 layout_repr.name()
             ));
@@ -758,11 +876,11 @@ impl<'a> Context<'a> {
             return Ok(());
         };
         let repr = self.repr(var);
-        if !repr.compatible(ret) {
+        if !self.compatible(repr, ret) {
             return Err(format!(
                 "`{}` ({}) is bound to `{}`, which returns {}",
                 self.name(var),
-                repr.name(),
+                self.repr_text(repr),
                 row.name,
                 ret.name()
             ));
@@ -795,7 +913,7 @@ impl<'a> Context<'a> {
             return Err(format!(
                 "`{}` ({}) is bound to `{}`, which returns {}",
                 self.name(var),
-                self.repr(var).name(),
+                self.repr_text(self.repr(var)),
                 row.name,
                 ret.name()
             ));
@@ -889,11 +1007,11 @@ impl<'a> Context<'a> {
             }
         }
         let repr = self.repr(var);
-        if !repr.compatible(row.ret) {
+        if !self.compatible(repr, row.ret) {
             return Err(format!(
                 "`{}` ({}) is bound to `prim {name}`, which returns {}",
                 self.name(var),
-                repr.name(),
+                self.repr_text(repr),
                 row.ret.name()
             ));
         }
@@ -963,7 +1081,7 @@ impl<'a> Context<'a> {
 
     /// `con` のフィールドの数は、コンストラクタと同じである。束縛する変数の Repr は配置の Repr と同じで、宣言した
     /// Repr が `tobj` でないフィールドの値はその Repr に収まる。`tobj` のフィールドの値は、範囲の段と所有の段で、
-    /// 互換の位置として収まる (R8)。
+    /// 互換の位置として収まる (R8)。構造体を束縛する `con` は、配置の宣言でなく形と比べる (`struct_con`)。
     pub fn check_con(&self, var: VarId, ctor: Ctor, args: &[Atom]) -> Result<(), String> {
         // フィールドのないコンストラクタの値は、`#N` の1つの書き方にそろえる (docs/spec/lir.md の「ブロックの列」)
         if args.is_empty() {
@@ -979,6 +1097,15 @@ impl<'a> Context<'a> {
             constructor,
         )?;
         let repr = self.repr(var);
+        if let Repr::Struct(id) = repr {
+            self.struct_con(var, id, layout, ctor, args)?;
+            return self.check_built(
+                var,
+                args,
+                || format!("a con of `{}` #{}", layout.name, ctor.tag),
+                "arguments",
+            );
+        }
         if repr != layout_repr {
             return Err(format!(
                 "`{}` ({}) is bound to a con of `{}`, which is {}",
@@ -1010,6 +1137,45 @@ impl<'a> Context<'a> {
             || format!("a con of `{}` #{}", layout.name, ctor.tag),
             "arguments",
         )
+    }
+
+    /// 構造体の `con` は形の配置を指し、引数は形のフィールドの Repr に正確な位置として収まる。配置の宣言した Repr
+    /// とは比べない (docs/superpowers/specs/2026-10-21-s14e-abi-struct-design.md の「Core IR」の translate)。
+    fn struct_con(
+        &self,
+        var: VarId,
+        id: StructId,
+        layout: &Layout,
+        ctor: Ctor,
+        args: &[Atom],
+    ) -> Result<(), String> {
+        let shape = self.tables.structs.shape(id);
+        if shape.layout != ctor.layout {
+            return Err(format!(
+                "`{}` ({}) is bound to a con of `{}`, but its struct has the layout `{}`",
+                self.name(var),
+                self.repr_text(Repr::Struct(id)),
+                layout.name,
+                layout_text(self.tables.layouts, shape.layout)
+            ));
+        }
+        struct_field_count(
+            format!("a con of `{}` #{}", layout.name, ctor.tag),
+            args.len(),
+            shape,
+        )?;
+        for (index, (&arg, &(declared, _))) in args.iter().zip(&shape.fields).enumerate() {
+            if !self.fits_exactly(arg, declared) {
+                return Err(format!(
+                    "argument {index} of a con of `{}` #{} is {}, but the struct has {}",
+                    layout.name,
+                    ctor.tag,
+                    self.typed_atom_text(arg),
+                    self.repr_text(declared)
+                ));
+            }
+        }
+        Ok(())
     }
 
     pub fn effect(&self, effect: u32) -> Result<&'a EffectInfo, String> {
@@ -1054,7 +1220,7 @@ impl<'a> Context<'a> {
     /// 変数には Repr を添える (`` `c.1` (int) ``)。定数は `atom_text` と同じである。
     pub fn typed_atom_text(&self, atom: Atom) -> String {
         match atom {
-            Atom::Var(var) => format!("`{}` ({})", self.name(var), self.repr(var).name()),
+            Atom::Var(var) => format!("`{}` ({})", self.name(var), self.repr_text(self.repr(var))),
             _ => self.atom_text(atom),
         }
     }
@@ -1068,15 +1234,31 @@ impl<'a> Context<'a> {
     }
 }
 
-/// 箱を要するスカラーの Repr の名前を、文言に並べる形 (`int and enum`) にする。
+/// 箱を要するスカラーの Repr の名前を、文言に並べる形 (`int and enum`) にする。名前を持つ Repr のうち箱を要するもの
+/// なので、規則と同じ `Repr::needs_box` から作る。
 pub fn boxed_scalars(conjunction: &str) -> String {
-    let names: Vec<&str> = Repr::BOXED_SCALARS.iter().map(|repr| repr.name()).collect();
+    let names: Vec<&str> = REPRS
+        .iter()
+        .filter(|repr| repr.needs_box())
+        .map(|repr| repr.name())
+        .collect();
     let (last, rest) = names.split_last().expect("some scalars need a box");
     if rest.is_empty() {
         last.to_string()
     } else {
         format!("{} {conjunction} {last}", rest.join(", "))
     }
+}
+
+/// 構造体のフィールドの数の食い違い。配置のコンストラクタの数は `field_count` が先に比べる。
+fn struct_field_count(subject: String, given: usize, shape: &StructShape) -> Result<(), String> {
+    if given == shape.fields.len() {
+        return Ok(());
+    }
+    Err(format!(
+        "{subject} has {given} fields, but the struct has {}",
+        shape.fields.len()
+    ))
 }
 
 /// フィールドの数の食い違いを、命令の言い方 (``a con of `L` #t`` など) を主語にして報告する (R8)。

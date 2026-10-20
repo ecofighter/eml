@@ -27,6 +27,7 @@ pub fn parse(text: &str) -> Result<Program, ParseError> {
         entry: tables.entry,
         strings: tables.strings,
         layouts: tables.layouts,
+        structs: tables.structs,
         effects: tables.effects,
         files: tables.files,
     })

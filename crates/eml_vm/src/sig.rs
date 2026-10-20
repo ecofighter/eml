@@ -73,6 +73,9 @@ pub(crate) fn class(repr: Repr) -> Class {
         Repr::Int => Class::Int,
         Repr::Float => Class::Float,
         Repr::Enum => Class::Enum,
+        // 開くパスがコード生成より前に構造体を葉に開くので、VM には構造体の Repr が来ない
+        // (docs/superpowers/specs/2026-10-21-s14e-abi-struct-design.md の「LIR」)
+        Repr::Struct(_) => unreachable!("a struct reaches the VM before the flatten pass"),
     }
 }
 

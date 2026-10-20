@@ -37,6 +37,7 @@ impl<'p> Printer<'p> {
             program,
             writer: Writer::new(
                 &program.layouts,
+                &program.structs,
                 &program.effects,
                 &program.strings,
                 &program.files,

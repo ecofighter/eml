@@ -145,6 +145,7 @@ fn with_tables<R>(program: &Program, f: impl FnOnce(Tables<'_>) -> R) -> R {
     let tables = Tables {
         layouts: &program.layouts,
         layout_reprs: &layout_reprs,
+        structs: &program.structs,
         effects: &program.effects,
         strings: &program.strings,
         functions: &functions,
@@ -434,42 +435,7 @@ impl<'a> Checker<'a> {
                 ctor,
                 fields,
             } => {
-                let repr = self.function.repr(*value);
-                if repr != Repr::Obj {
-                    return Err(format!(
-                        "`{}` ({}) is unpacked, but only obj can be",
-                        self.cx.name(*value),
-                        repr.name()
-                    ));
-                }
-                let (layout, layout_repr, constructor) = self.cx.ctor(*ctor, "an unpack")?;
-                if layout_repr != Repr::Obj {
-                    return Err(format!(
-                        "`{}` (obj) is unpacked as `{}`, which is {}",
-                        self.cx.name(*value),
-                        layout.name,
-                        layout_repr.name()
-                    ));
-                }
-                if layout.constructors.len() != 1 {
-                    return Err(format!(
-                        "an unpack of `{}` names `{}`, which has {} constructors",
-                        self.cx.name(*value),
-                        layout.name,
-                        layout.constructors.len()
-                    ));
-                }
-                field_count(
-                    format!(
-                        "an unpack of `{}` as `{}` #{}",
-                        self.cx.name(*value),
-                        layout.name,
-                        ctor.tag
-                    ),
-                    fields.len(),
-                    constructor,
-                )?;
-                self.cx.field_reprs(layout, ctor.tag, constructor, fields)?;
+                self.cx.check_unpack(*value, *ctor, fields)?;
                 self.read(owned, *value, "unpacked")?;
                 self.known.insert(*value, *ctor);
                 self.bind_fields(owned, *value, *ctor, fields, self.at)
@@ -699,7 +665,7 @@ impl<'a> Checker<'a> {
                     return Err(format!(
                         "{} is returned from a function that returns {}",
                         self.cx.typed_atom_text(*atom),
-                        self.function.ret.name()
+                        self.cx.repr_text(self.function.ret)
                     ));
                 }
                 if !self.cx.mark_passes(*atom, self.function.ret_mark) {
@@ -738,6 +704,7 @@ impl<'a> Checker<'a> {
                 if cases.is_empty() && default.is_none() {
                     return Err("a switch has no targets".to_string());
                 }
+                self.cx.switch_scrutinee(*scrutinee)?;
                 self.cx.switch_cases(cases)?;
                 self.cx.literal_default(cases, *default)?;
                 if cases.iter().any(|case| !case.fields.is_empty()) {
@@ -829,16 +796,16 @@ impl<'a> Checker<'a> {
                 "a jump to b{} passes `{}` ({}) to `{}` ({})",
                 target.0,
                 self.cx.name(var),
-                self.function.repr(var).name(),
+                self.cx.repr_text(self.function.repr(var)),
                 self.cx.name(param),
-                expected.name()
+                self.cx.repr_text(expected)
             ),
             _ => format!(
                 "a jump to b{} passes {} to `{}` ({})",
                 target.0,
                 self.cx.atom_text(arg),
                 self.cx.name(param),
-                expected.name()
+                self.cx.repr_text(expected)
             ),
         })
     }
@@ -1144,7 +1111,7 @@ impl<'a> Checker<'a> {
                                 "argument {index} of a closure of `{}` is {}, but the function takes {}",
                                 target.name,
                                 self.cx.typed_atom_text(arg),
-                                expected.name()
+                                self.cx.repr_text(expected)
                             ));
                         }
                         let mark = target.mark(param);
@@ -1213,16 +1180,28 @@ impl<'a> Checker<'a> {
                         boxed_scalars("and")
                     ));
                 }
+                // 構造体の箱は配置の `con` と同じ形のヒープの物体なので `obj` である
+                // (docs/superpowers/specs/2026-10-21-s14e-abi-struct-design.md の「箱に入れる位置」)
+                let (boxed, of) = match *atom {
+                    Atom::Var(operand)
+                        if matches!(self.function.repr(operand), Repr::Struct(_)) =>
+                    {
+                        (Repr::Obj, "a box of a struct")
+                    }
+                    _ => (Repr::TObj, "a box"),
+                };
                 let repr = self.function.repr(var);
-                if repr != Repr::TObj {
+                if repr != boxed {
                     return Err(format!(
-                        "`{}` ({}) is bound to a box, which is tobj",
+                        "`{}` ({}) is bound to {of}, which is {}",
                         self.cx.name(var),
-                        repr.name()
+                        self.cx.repr_text(repr),
+                        boxed.name()
                     ));
                 }
             }
-            // `obj` はつねにヒープの物体を指すので、スカラーを入れた値にならない
+            // `obj` はつねにヒープの物体を指すので、スカラーを入れた値にならない。構造体の箱は `obj` なので、構造体は
+            // `obj` からも取り出す
             Rhs::Unbox(atom) => {
                 if self.level < Level::Scopes {
                     return Err(format!(
@@ -1230,8 +1209,14 @@ impl<'a> Checker<'a> {
                         self.cx.atom_text(*atom)
                     ));
                 }
+                let gives_struct = matches!(self.function.repr(var), Repr::Struct(_));
                 let operand = match *atom {
-                    Atom::Var(operand) if self.function.repr(operand) == Repr::TObj => operand,
+                    Atom::Var(operand)
+                        if self.function.repr(operand) == Repr::TObj
+                            || (gives_struct && self.function.repr(operand) == Repr::Obj) =>
+                    {
+                        operand
+                    }
                     _ => {
                         return Err(format!(
                             "{} is unboxed, but only tobj can be",
@@ -1408,7 +1393,7 @@ impl<'a> Checker<'a> {
                             "argument {index} of `{}` is {}, but the function takes {}",
                             target.name,
                             self.cx.typed_atom_text(arg),
-                            expected.name()
+                            self.cx.repr_text(expected)
                         ));
                     }
                     let mark = target.mark(param);
@@ -1446,7 +1431,7 @@ impl<'a> Checker<'a> {
                             "argument {index} of {} is {}, but {taker} takes {}",
                             self.call_text(call, false),
                             self.cx.typed_atom_text(arg),
-                            expected.name()
+                            self.cx.repr_text(expected)
                         ));
                     }
                 }
@@ -1530,13 +1515,13 @@ impl<'a> Checker<'a> {
         match receiver {
             Receiver::Bound(var) => {
                 let repr = self.function.repr(var);
-                if !repr.compatible(result) {
+                if !self.cx.compatible(repr, result) {
                     return Err(format!(
                         "`{}` ({}) is bound to {}, which returns {}",
                         self.cx.name(var),
-                        repr.name(),
+                        self.cx.repr_text(repr),
                         self.call_text(call, false),
-                        result.name()
+                        self.cx.repr_text(result)
                     ));
                 }
                 self.cx

@@ -9,6 +9,7 @@ pub fn to_lir(program: Program) -> eml_lir::Program {
         entry,
         strings,
         layouts,
+        structs,
         effects,
         files,
     } = program;
@@ -17,6 +18,7 @@ pub fn to_lir(program: Program) -> eml_lir::Program {
         entry,
         strings,
         layouts,
+        structs,
         effects,
         files,
     }
