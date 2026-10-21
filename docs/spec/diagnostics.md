@@ -26,7 +26,7 @@ struct Fix {
 
 - CLI では `ariadne` で表示する。将来の LSP では、同じ構造体から LSP の診断と code action に変換する。
 - `Diagnostic`、`FileId`、`SourceFiles` は `eml_diagnostics` に置く。`eml_diagnostics` は `rowan` に依存しない ([コンパイラの構成](../implementation/architecture.md))。
-- 番号の定数は、段階ごとの `codes` モジュールに定義する (例: `eml_syntax::codes`)。E0004 (未対応) は、構文、HIR、型検査のどの段階でも同じ意味で使うので、番号とラベルを `eml_diagnostics` に置く (`NOT_YET_SUPPORTED`、`Diagnostic::not_yet_supported`)。
+- 番号の定数は、段階ごとの `codes` モジュールに定義する (例: `eml_syntax::codes`)。E0004 (未対応) は、どの段階が出しても同じ意味なので、番号とラベルを `eml_diagnostics` に置く (`NOT_YET_SUPPORTED`、`Diagnostic::not_yet_supported`)。
 - 補足の情報は、独立した診断ではなく `notes` と `help` に入れる。そのため `Severity` は `Error` と `Warning` の2つだけにする。
 - `TextRange` は、読み込み時に先頭の BOM を除いたテキストのバイト位置である ([字句](lexical.md))。
 

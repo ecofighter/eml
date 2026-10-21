@@ -73,7 +73,7 @@ These invariants hold across crates; keep them when you change anything:
 - Two IR layers with separate types: Core IR is the semantic layer, LIR is Core IR after evidence passing with RC, boxing and tail calls explicit. Each crate's `pipeline.rs` knows only its own pass order. Verifiers and linearity checks run in debug builds after the passes, so a pass that breaks an IR rule fails loudly there.
 - A function's name fixes its code and ABI: instance names depend only on type arguments, optimize's copies are keyed and named by what they specialize, `internal` marks the ABI by name, and the REPL appends code by name under "same name, same code". Do not make a function's code depend on the rest of the program.
 - The VM is single-threaded but keeps the constraints that let it run in parallel later (docs/future/multicore.md).
-- Diagnostic codes are defined in a per-stage `codes` module (e.g. `eml_syntax::codes`, E0xxx). E0004 (not yet supported) is used by every stage, so it lives in `eml_diagnostics` (`NOT_YET_SUPPORTED`, `Diagnostic::not_yet_supported`).
+- Diagnostic codes are defined in a per-stage `codes` module (e.g. `eml_syntax::codes`, E0xxx). E0004 (not yet supported) means the same at every stage, so it lives in `eml_diagnostics` (`NOT_YET_SUPPORTED`, `Diagnostic::not_yet_supported`).
 
 The crate-to-spec reading map is in `docs/README.md` (「読む順」). Topics that span crates:
 

@@ -23,7 +23,7 @@ E0xxx は `eml_syntax::codes` (E0004 だけは `eml_diagnostics`)、E1xxx は `e
 | E1009 | `UNHANDLEABLE_EFFECT` | handler の節の先頭の名前が、extern のエフェクトを起こす extern の関数である。見出しは「`IO` cannot be handled」で、エフェクトの名前を入れる。ラベルは「`println` is an extern function with the effect `IO`」である。節の先頭の名前を指す。操作として引けなかったときだけ、extern の関数だけに絞って引き直す |
 | E1010 | `CLAUSE_ARITY` | 見出しは「the clause for `op` takes n parameters, but this one has m」で、節の操作の名前を指す。`fn` の節では見出しを「the `fn` clause for `op` takes …」にし、note は `k` に触れない (「the `fn` clause takes the arguments of `op`」、パラメータ付き handler では「… and then the state」)。`ctl` の節の note は、操作の引数、継続 `k`、状態の順に受け取ることを書く。`never` の操作では、操作の引数 (と状態) だけを受け取ることを書く |
 | E1013 | `MISSING_CLAUSE` | 節のない操作がある。操作の節が1つもない handler も含む。primary は `handle` で、節の追加を help で示す。help の節は `ctl` の形 (`\| ctl op _ k -> ...`、`never` の操作では `\| ctl op _ -> ...`) で書く |
-| E1017 | `DUPLICATE_BINDING` | 1つのパターン、または1つの等式の引数の並び、ラムダの引数の並び、あるいは handler の節の引数の並び (操作の引数と `k`) の中で、同じ変数名を2回束縛した。ローカル関数の組の中で同じ名前を2回定義した場合も含む。2つ目の束縛を primary、1つ目を secondary にする。組の中の参照は1つ目の定義を指すものとして続ける |
+| E1017 | `DUPLICATE_BINDING` | 1つのパターン、または1つの等式の引数の並び、ラムダの引数の並び、あるいは handler の節の引数の並び (操作の引数と `k`) の中で、同じ変数名を2回束縛した。ローカル関数の組の中で同じ名前を2回定義した場合と、ローカル関数の引数の並びの中で同じ変数名を2回束縛した場合も含む。2つ目の束縛を primary、1つ目を secondary にする。組の中の参照は1つ目の定義を指すものとして続ける |
 | E1018 | `NON_CONSECUTIVE_EQUATIONS` | 同じ名前の等式が連続していない (間に別の item がある)。離れた等式の関数名を primary、直前の等式の並びの最後の等式の関数名を secondary にする。等式をシグネチャの直後にまとめるよう help で伝える。instance の等式はシグネチャを持たないので、help は等式をまとめることだけを伝える |
 | E1019 | `SIGNATURE_NOT_ADJACENT` | シグネチャと最初の等式が隣り合っていない。最初の等式の関数名を primary、シグネチャの関数名を secondary にする。等式をシグネチャの直後に置くよう help で伝える |
 | E1020 | `EQUATION_ARITY_MISMATCH` | 等式ごとに引数の個数が違う。個数の違う等式の関数名を primary、最初の等式の関数名を secondary にする |
@@ -31,7 +31,7 @@ E0xxx は `eml_syntax::codes` (E0004 だけは `eml_diagnostics`)、E1xxx は `e
 | E1051 | `CLAUSE_KEYWORD` | 3つの場合がある。(1) キーワードのない操作の節: 見出しは「this clause needs `fn` or `ctl`」で、`\|` から操作の名前までを指してラベルを「this clause」にする。note「a `fn` clause resumes with the value of its body, and a `ctl` clause resumes only by calling `k`」と、操作の名前の前に `ctl ` を足す fix「write `ctl`」を付ける。節は `ctl` の節として下ろす。(2) `never` の操作の `fn` の節: 見出しは「a `never` operation cannot have a `fn` clause」で、`fn` を指してラベルを「`fail` is a `never` operation」にする。note「a `never` operation never resumes, so its clause must be `ctl`」と help「write `ctl` instead of `fn`」を付け、節は `ctl` の節として下ろす。(3) `return` の節のキーワード: 見出しは「a `return` clause takes neither `fn` nor `ctl`」で、キーワードを指してラベルを「remove this `fn`」(または `ctl`) にする |
 | E1052 | `FLOAT_PATTERN` | 見出しは「floating-point literals cannot be patterns; compare with `==` instead」で、負号を含むリテラルのパターン全体を指してラベルを「a floating-point literal」にする。パターンは欠けたパターンとして下ろす |
 | E1053 | `ASSIGN_TARGET` | 見出しは「only a `var` variable or an index of one can be assigned」で、左辺を指してラベルを「not a `var` variable」にする。左辺は下ろさない。左辺の名前の誤りを重ねて報告しないためである。右辺は下ろし、代入は欠けた式にする |
-| E1022 | `FIXITY_WITHOUT_DEFINITION` | このモジュールで定義していない演算子への fixity の宣言。標準ライブラリの演算子の fixity を変えようとした場合を含む。宣言の演算子を指す |
+| E1022 | `FIXITY_WITHOUT_DEFINITION` | このモジュールで定義していない演算子への fixity の宣言。標準ライブラリの演算子の fixity を変えようとした場合を含む。REPL では、この入力で定義していない演算子への宣言で、文言も「この入力」と言う。宣言の演算子を指す |
 | E1023 | `INVALID_SECTION` | 優先順位の合わないセクション (`(* a + b)` や `(+ a + b)`)。セクション全体を指し、被演算子を括弧で囲むよう help で伝える |
 | E1024 | `USE_AT_END_OF_BLOCK` | ブロックの最後の文が `use` である (包む残りがない)。`use` の文を指す |
 | E1025 | `MISSING_CONSTRUCTORS` | `data` にコンストラクタがない (`=` のない `data`)。`data` の名前を指す。`extern data` は対象にならず、`extern` でなければ標準ライブラリを含むどのモジュールでも出す |
@@ -114,7 +114,7 @@ E0xxx は `eml_syntax::codes` (E0004 だけは `eml_diagnostics`)、E1xxx は `e
 | E4002 | 網羅されていない等式 | Error | primary はシグネチャの関数名、secondary は各等式の先頭。漏れている引数の並びの例 (`f None _`) を note で示し、fix で最後の等式の後への等式の追加を提案する (fix は、どの型にもなる仮置きの式を言語に入れるときに一緒に入れる) |
 | E4004 | 到達しない枝 | Warning | その枝のパターン |
 | E4005 | 到達しない等式 | Warning | その等式の引数のパターン |
-| E4003 | 反駁可能な `let` / ラムダの引数 / handler の節と `return` の節の引数のパターン | Error | そのパターン |
+| E4003 | 反駁可能な `let` / ローカル関数の引数 / ラムダの引数 / handler の節と `return` の節の引数のパターン | Error | そのパターン |
 
 等式の場合はソースに `match` 式がないので、指す場所を等式に合わせて決めている。handler の節はラムダと同じく持ち上げる関数で、引数のパターンも同じ経路でコンパイルするため、ラムダの引数と同じ E4003 にする。
 

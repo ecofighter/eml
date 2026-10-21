@@ -76,7 +76,7 @@ effect Fail where
 
 ファイルの操作は標準ライブラリのモジュール `Fs` にあり、`Fs.open` のように import なしで修飾付きで使える ([モジュールと名前解決](modules.md) の「標準ライブラリ」)。`println` は `Prelude` にある。
 
-- `open` の相対パスは、実行の設定 (`RunConfig::file_root`) の基準ディレクトリから解釈する。CLI の `run` はカレントディレクトリを基準にする。絶対パスはそのまま開く。`file_root` の既定 (空のパス) はカレントディレクトリを指す。
+- `open` の相対パスは、Host の基準ディレクトリ (`file_root`。[オブジェクトモデル](object-model.md) の `StdHost` の項) から解釈する。CLI の `run` はカレントディレクトリを基準にする。絶対パスはそのまま開く。`file_root` の既定 (空のパス) はカレントディレクトリを指す。
 - `read_all` は現在の位置から最後までを UTF-8 として読み、同じ `File` と組にして返す。1行ずつ読む `Fs.read_line` は、std の中だけの extern の上に eml で書いた関数で、[標準ライブラリ](stdlib.md) の「`Fs`」にある。
 - `close f` と `drop f` は、どちらも `File` の破棄処理 (オブジェクトの解放) を呼ぶ。
 - 開けない、読めない、UTF-8 でないときは、`try_io` が捕まえなければ実行時エラーにする ([LIR](lir.md) の「実行時エラー」、[標準ライブラリ](stdlib.md) の「`try_io`」)。
