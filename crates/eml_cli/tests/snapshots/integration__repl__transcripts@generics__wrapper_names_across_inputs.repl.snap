@@ -1,0 +1,24 @@
+---
+source: crates/eml_cli/tests/repl.rs
+expression: checked.render()
+input_file: crates/eml_cli/tests/repl/generics/wrapper_names_across_inputs.repl
+---
+> data Box a = | Box a
+> hide : Int -> a -> <Panic> Box a
+. hide n x = if n <= 0 then Box x else hide (n - 1) x
+.
+> match hide 0 Some with | Box g -> g 4
+Some 4
+> con : Int -> Int
+. con x = x
+.
+> op : Int -> Int
+. op x = x
+.
+> cont : Int -> Int
+. cont x = x
+.
+> match hide 0 Some with | Box g -> g (con (op (cont 5)))
+Some 5
+--- close ---
+no leaks

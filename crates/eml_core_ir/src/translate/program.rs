@@ -84,7 +84,7 @@ pub(super) struct ProgramBuilder {
     layout_ids: HashMap<LayoutKey, LayoutId>,
     /// コンストラクタのスキームの型。data の型の配置のフィールドの Repr を決める。
     constructor_types: HashMap<ConstructorId, TypeId>,
-    /// 型ごとの包む関数 (`op$`、`con$`、`cont$`、`cont$state`) を名前で引く表。名前は型引数を含むので、同じ名前なら
+    /// 型ごとの包む関数 (`$op$`、`$con$`、`$cont$`、`$cont$state`) を名前で引く表。名前は型引数を含むので、同じ名前なら
     /// 同じコードである。
     wrappers: HashMap<String, FnIdx>,
     struct_types: StructTypes,
@@ -311,8 +311,8 @@ impl ProgramBuilder {
         function
     }
 
-    /// 節の `k` を関数の値として使うときに、生の継続を捕まえて包む関数を作る。状態のない handler 用の `cont$` は
-    /// `(k, v)` を、状態のある handler 用の `cont$state` は `(k, v, s)` を受け、`resume` を末尾呼び出しする
+    /// 節の `k` を関数の値として使うときに、生の継続を捕まえて包む関数を作る。状態のない handler 用の `$cont$` は
+    /// `(k, v)` を、状態のある handler 用の `$cont$state` は `(k, v, s)` を受け、`resume` を末尾呼び出しする
     /// (docs/spec/core-ir.md)。`k` の型ごとに1つ作る。`params` は `k` の型の、再開の値と状態の型で、`result` は結果の
     /// 型である。`name` はそれらの型を型引数に書いた名前である。
     pub(super) fn continuation_wrapper(
@@ -797,12 +797,12 @@ fn defines(items: &Items, name: &str) -> bool {
         || items.bindings.values().any(|item| item.name == name)
 }
 
-/// 包む関数の名前の根。`op$` と `con$` に操作とコンストラクタの名前を続ける。
+/// 包む関数の名前の根。`$op$` と `$con$` に操作とコンストラクタの名前を続ける。
 pub(super) fn wrapper_base(hir: &HirProgram, item: ValueItem) -> String {
     match item {
-        ValueItem::Operation(op) => format!("op${}", core_name(hir, op.module, &hir[op].name)),
+        ValueItem::Operation(op) => format!("$op${}", core_name(hir, op.module, &hir[op].name)),
         ValueItem::Constructor(ctor) => {
-            format!("con${}", core_name(hir, ctor.module, &hir[ctor].name))
+            format!("$con${}", core_name(hir, ctor.module, &hir[ctor].name))
         }
         _ => unreachable!("only operations and constructors have wrappers named after them"),
     }

@@ -374,13 +374,13 @@ fn a_continuation_passed_to_a_function_is_wrapped() {
     let shown = core_text(text, Pass::Translate);
     insta::assert_snapshot!(function(&shown, "main$handle0$ask"), @r#"
     internal uniform from 0 fn main$handle0$ask(p.0: unit, k.1: tobj lin, p.2: unit) -> int {
-      let c.3: tobj lin = closure "cont$@[Int, Int]"(k.1)
+      let c.3: tobj lin = closure "$cont$@[Int, Int]"(k.1)
       let t.4: int = call twice(c.3)
       return t.4
     }
     "#);
-    insta::assert_snapshot!(function(&shown, "cont$@[Int, Int]"), @r#"
-    internal yields uniform from 0 fn "cont$@[Int, Int]"(k.0: tobj poly, v.1: int) -> int {
+    insta::assert_snapshot!(function(&shown, "$cont$@[Int, Int]"), @r#"
+    internal yields uniform from 0 fn "$cont$@[Int, Int]"(k.0: tobj poly, v.1: int) -> int {
       let t.2: int = resume k.0(v.1, ())
       return t.2
     }
@@ -962,8 +962,8 @@ fn names_outside_the_entry_are_qualified_with_their_module() {
       return t.4
     }
     yields fn Report.Csv.parse(p.0: unit) -> Report.Csv.Row{int} {
-      let t.1: int = yields apply &op$Report.Csv.next(())
-      let t.2: Report.Csv.Row{int} = apply &con$Report.Csv.Row(t.1)
+      let t.1: int = yields apply &$op$Report.Csv.next(())
+      let t.2: Report.Csv.Row{int} = apply &$con$Report.Csv.Row(t.1)
       return t.2
     }
     internal yields uniform from 0 fn main$handle0(p.0: unit) -> Report.Csv.Row{int} {
@@ -981,11 +981,11 @@ fn names_outside_the_entry_are_qualified_with_their_module() {
       let t.1: unit = extern Prelude.println(p.0)
       return t.1
     }
-    internal yields uniform from 0 fn op$Report.Csv.next(p.0: unit) -> int {
+    internal yields uniform from 0 fn $op$Report.Csv.next(p.0: unit) -> int {
       let t.1: int = perform Report.Csv.Parse.next(p.0)
       return t.1
     }
-    internal uniform from 0 fn con$Report.Csv.Row(p.0: int) -> Report.Csv.Row{int} {
+    internal uniform from 0 fn $con$Report.Csv.Row(p.0: int) -> Report.Csv.Row{int} {
       let d.1: Report.Csv.Row{int} = con Report.Csv.Row #0(p.0)
       return d.1
     }
@@ -998,12 +998,12 @@ fn names_outside_the_entry_are_qualified_with_their_module() {
 
 #[test]
 fn an_entry_operation_does_not_collide_with_a_prelude_operation() {
-    // 入口の `println` という操作を包む関数は `op$println` で、Prelude の `println` を包む関数は参照する場所の名前を
+    // 入口の `println` という操作を包む関数は `$op$println` で、Prelude の `println` を包む関数は参照する場所の名前を
     // 持つ `main$extern0` なので、名前が重ならない (docs/spec/core-ir.md)
     let text = "effect Log where\n  println : String -> Unit\n\neach : (String -> <e> Unit) -> <e> Unit\neach f = f \"x\"\n\nlogged : Unit -> <Log> Unit\nlogged () = each println\n\nmain : Unit -> <IO> Unit\nmain () =\n  handle logged () with\n    | ctl println s k -> k ()\n  each Prelude.println";
     let shown = core_text(text, Pass::Translate);
-    insta::assert_snapshot!(function(&shown, "op$println"), @"
-    internal yields uniform from 0 fn op$println(p.0: obj) -> unit {
+    insta::assert_snapshot!(function(&shown, "$op$println"), @"
+    internal yields uniform from 0 fn $op$println(p.0: obj) -> unit {
       let t.1: unit = perform Log.println(p.0)
       return t.1
     }
@@ -1284,14 +1284,14 @@ fn operations_as_values_and_drop() {
     insta::assert_snapshot!(function(&shown, "run"), @r#"
     yields fn run(p.0: unit) -> unit {
       let s.1: obj = const "info"
-      let c.2: tobj = closure op$log(s.1)
+      let c.2: tobj = closure $op$log(s.1)
       let s.3: obj = const "a"
       let t.4: unit = yields apply c.2(s.3)
       return t.4
     }
     "#);
-    insta::assert_snapshot!(function(&shown, "op$log"), @"
-    internal yields uniform from 0 fn op$log(p.0: obj, p.1: obj) -> unit {
+    insta::assert_snapshot!(function(&shown, "$op$log"), @"
+    internal yields uniform from 0 fn $op$log(p.0: obj, p.1: obj) -> unit {
       let t.2: unit = perform Log.log(p.0, p.1)
       return t.2
     }
@@ -1329,13 +1329,13 @@ fn a_constructor_used_as_a_function_value_is_wrapped() {
     let shown = core_text(text, Pass::Translate);
     insta::assert_snapshot!(function(&shown, "pairs"), @r#"
     fn pairs(n.0: int) -> Pair{int, int} {
-      let c.1: tobj = closure "con$Pair@[Int, Int]"(n.0)
+      let c.1: tobj = closure "$con$Pair@[Int, Int]"(n.0)
       let t.2: Pair{int, int} = apply c.1(2)
       return t.2
     }
     "#);
-    insta::assert_snapshot!(function(&shown, "con$Pair@[Int, Int]"), @r#"
-    internal uniform from 0 fn "con$Pair@[Int, Int]"(p.0: int, p.1: int) -> Pair{int, int} {
+    insta::assert_snapshot!(function(&shown, "$con$Pair@[Int, Int]"), @r#"
+    internal uniform from 0 fn "$con$Pair@[Int, Int]"(p.0: int, p.1: int) -> Pair{int, int} {
       let d.2: Pair{int, int} = con Pair #0(p.0, p.1)
       return d.2
     }
@@ -2002,7 +2002,7 @@ fn handled(extra: &str, handle: &str) -> String {
 fn a_continuation_called_directly_is_resumed() {
     let shown = handled("", "    handle ask () with\n      | ctl ask () k -> k 1");
     assert!(shown.contains("resume k.1(1, ())"), "{shown}");
-    assert!(!shown.contains("cont$"), "{shown}");
+    assert!(!shown.contains("$cont$"), "{shown}");
 }
 
 /// 状態のある handler の `k st (st + 1)` は、引数を評価してから1つの `resume` になる。
@@ -2017,7 +2017,7 @@ fn a_continuation_with_an_expression_argument_is_resumed_once() {
         shown.find("extern \"Prelude.Num Int.+\"(").unwrap() < shown.find("resume ").unwrap(),
         "{shown}"
     );
-    assert!(!shown.contains("cont$"), "{shown}");
+    assert!(!shown.contains("$cont$"), "{shown}");
 }
 
 /// 入れ子の handle の本体が `k` を捕まえて直接呼ぶ形も、生の継続のまま `resume` する。
@@ -2028,10 +2028,10 @@ fn a_continuation_called_inside_an_inner_handle_is_resumed() {
         "    handle ask () with\n      | ctl ask () k ->\n          handle k 1 with\n            | ctl log _ j -> j ()",
     );
     assert!(shown.contains("resume k"), "{shown}");
-    assert!(!shown.contains("cont$"), "{shown}");
+    assert!(!shown.contains("$cont$"), "{shown}");
 }
 
-/// 入れ子のラムダが `k` を飽和で呼ぶだけなら、ラムダの関数の中でも生の継続を `resume` し、`cont$` で包まない
+/// 入れ子のラムダが `k` を飽和で呼ぶだけなら、ラムダの関数の中でも生の継続を `resume` し、`$cont$` で包まない
 /// (docs/spec/core-ir.md)。
 #[test]
 fn a_continuation_called_saturated_in_a_lambda_is_resumed_there() {
@@ -2040,7 +2040,7 @@ fn a_continuation_called_saturated_in_a_lambda_is_resumed_there() {
         "    handle ask () with\n      | ctl ask () k ->\n          let f = fn x -> k x\n          f 1",
     );
     assert!(shown.contains("resume k"), "{shown}");
-    assert!(!shown.contains("cont$"), "{shown}");
+    assert!(!shown.contains("$cont$"), "{shown}");
 }
 
 /// 状態のある `k v st` の `mask` は、継続の呼び出しの矢印 1 に記録された row から付く。
@@ -2080,7 +2080,7 @@ main () =
     assert!(shown.contains("mask [Log] resume k"), "{shown}");
 }
 
-/// 状態のある `k v` の部分適用は、`cont$state` のクロージャに包む。
+/// 状態のある `k v` の部分適用は、`$cont$state` のクロージャに包む。
 #[test]
 fn a_partial_continuation_is_wrapped_with_the_state_wrapper() {
     let shown = handled(
@@ -2088,11 +2088,11 @@ fn a_partial_continuation_is_wrapped_with_the_state_wrapper() {
         "    handle ask () from 0 with\n      | ctl ask () k st -> later (k 1) st\n      | return x _ -> x",
     );
     assert!(
-        shown.contains("closure \"cont$state@[Int, Int, Int]\"(k"),
+        shown.contains("closure \"$cont$state@[Int, Int, Int]\"(k"),
         "{shown}"
     );
-    insta::assert_snapshot!(function(&shown, "cont$state@[Int, Int, Int]"), @r#"
-    internal yields uniform from 0 fn "cont$state@[Int, Int, Int]"(k.0: tobj poly, v.1: int, s.2: int) -> int {
+    insta::assert_snapshot!(function(&shown, "$cont$state@[Int, Int, Int]"), @r#"
+    internal yields uniform from 0 fn "$cont$state@[Int, Int, Int]"(k.0: tobj poly, v.1: int, s.2: int) -> int {
       let t.3: int = resume k.0(v.1, s.2)
       return t.3
     }
@@ -2106,7 +2106,7 @@ fn a_dropped_continuation_is_not_wrapped() {
         "",
         "    handle ask () with\n      | ctl ask () k ->\n          drop k\n          0",
     );
-    assert!(!shown.contains("cont$"), "{shown}");
+    assert!(!shown.contains("$cont$"), "{shown}");
     assert!(!shown.contains("resume "), "{shown}");
 }
 
@@ -2122,7 +2122,7 @@ fn a_continuation_applied_to_extra_arguments_is_resumed_then_applied() {
         "{shown}"
     );
     assert!(shown.contains("let t.4: int = apply t.3(2)"), "{shown}");
-    assert!(!shown.contains("cont$"), "{shown}");
+    assert!(!shown.contains("$cont$"), "{shown}");
 }
 
 /// 値として包んだ `k` を、型検査が `mask` を記録した位置で呼ぶと、`apply` に `mask` が付く。
@@ -2887,18 +2887,18 @@ fn derived_generators_are_unr() {
 
 #[test]
 fn wrappers_take_the_reprs_and_marks_of_their_instance() {
-    // `op$` と `con$` は型ごとの instance なので、型変数の位置も具体化した型の Repr と印になる
+    // `$op$` と `$con$` は型ごとの instance なので、型変数の位置も具体化した型の Repr と印になる
     // (docs/spec/lir.md の「関数の ABI」)
     let text = "effect Pass e where\n  pass : e -> Fs.File -> e\n\ndata Box a = | Box a Fs.File\n\nuse_op : (Int -> Fs.File -> <Pass Int, IO> Int) -> <Pass Int, IO> Int\nuse_op op = op 1 (Fs.open \"a.txt\")\n\nmain : Unit -> <IO> Unit\nmain () =\n  let n = handle use_op pass with\n    | ctl pass x g k ->\n        Fs.close g\n        k x\n  let mk = Box n\n  match mk (Fs.open \"a.txt\") with\n    | Box m f ->\n        Fs.close f\n        println (show m)";
     let ir = core_text(text, Pass::Translate);
-    insta::assert_snapshot!(function(&ir, "op$pass@[Int]"), @r#"
-    internal yields uniform from 0 fn "op$pass@[Int]"(p.0: int, p.1: obj lin) -> int {
+    insta::assert_snapshot!(function(&ir, "$op$pass@[Int]"), @r#"
+    internal yields uniform from 0 fn "$op$pass@[Int]"(p.0: int, p.1: obj lin) -> int {
       let t.2: int = perform Pass.pass(p.0, p.1)
       return t.2
     }
     "#);
-    insta::assert_snapshot!(function(&ir, "con$Box@[Int]"), @r#"
-    internal uniform from 0 fn "con$Box@[Int]"(p.0: int, p.1: obj lin) -> Box{int, obj lin} lin {
+    insta::assert_snapshot!(function(&ir, "$con$Box@[Int]"), @r#"
+    internal uniform from 0 fn "$con$Box@[Int]"(p.0: int, p.1: obj lin) -> Box{int, obj lin} lin {
       let d.2: Box{int, obj lin} lin = con Box #0(p.0, p.1)
       return d.2
     }

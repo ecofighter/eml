@@ -46,7 +46,7 @@ pub(crate) use types::tuple_struct;
 enum ContinuationForm {
     /// `k` を生の継続のまま持ち、呼び出しを `Call::Resume` にする。`k` を捕まえた入れ子の関数でも生の継続のままである。
     Direct,
-    /// 節の入口で、生の継続を `cont$` か `cont$state` のクロージャに包み、それを `k` とする。
+    /// 節の入口で、生の継続を `$cont$` か `$cont$state` のクロージャに包み、それを `k` とする。
     Wrapped,
 }
 
@@ -738,7 +738,7 @@ impl<'a> FnLowering<'a> {
         let (hir, store) = (self.ctx.hir, self.ctx.store);
         let arity = self.ctx.body.continuations[local];
         let (params, result) = split_arrows(store, self.ctx.types.locals[local], arity);
-        let base = if arity == 2 { "cont$state" } else { "cont$" };
+        let base = if arity == 2 { "$cont$state" } else { "$cont$" };
         let mut args = params.clone();
         args.push(result);
         let name = wrapper_name(store, self.ctx.names, base, &args);

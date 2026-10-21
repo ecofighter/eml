@@ -34,14 +34,14 @@ fn a_lambda_used_only_as_a_value_keeps_its_typed_abi() {
 
 /// 複数の定義が値として使う、translate の共有の関数の名前の接頭辞。
 fn is_shared_wrapper(name: &str) -> bool {
-    ["op$", "con$", "cont$"]
+    ["$op$", "$con$", "$cont$"]
         .iter()
         .any(|prefix| name.starts_with(prefix))
 }
 
 #[test]
 fn shared_wrappers_are_never_called_directly() {
-    // `op$`、`con$`、`cont$` は値と部分適用でだけ使われ、直接は呼ばれない。どのプログラムでも同じコードになるので、
+    // `$op$`、`$con$`、`$cont$` は値と部分適用でだけ使われ、直接は呼ばれない。どのプログラムでも同じコードになるので、
     // 名前で照らす追記で使い回せる (docs/spec/core-ir.md の「REPL の入力」)
     let text = "data Pair = | P Int Int\n\ndata Box a = | Box a\n\neffect Ask where\n  ask : Int -> Int\n\nhide : Int -> a -> <Panic> Box a\nhide n x = if n <= 0 then Box x else hide (n - 1) x\n\nfirst : Pair -> Int\nfirst p = match p with\n  | P a _ -> a\n\nrun : Unit -> <Ask, Panic> Int\nrun () =\n  let Box g = hide 0 ask\n  let Box f = hide 0 P\n  let Box h = hide 0 (P 3)\n  first (f 1 2) + first (h 4) + g 1\n\nmain : Unit -> <IO, Panic> Unit\nmain () =\n  let r = handle run () with\n            | ctl ask n k ->\n              let Box resume = hide 0 k\n              resume (n + 1)\n  println (show r)";
     let program = eml_test_support::lir(text);
@@ -51,7 +51,7 @@ fn shared_wrappers_are_never_called_directly() {
         .map(|function| function.name.as_str())
         .filter(|name| is_shared_wrapper(name))
         .collect();
-    assert_eq!(names, ["op$ask", "con$P", "cont$@[Int, Int]"]);
+    assert_eq!(names, ["$op$ask", "$con$P", "$cont$@[Int, Int]"]);
     let shared = |target: &FnIdx| is_shared_wrapper(&program.functions[target.0 as usize].name);
     for function in &program.functions {
         for block in &function.blocks {

@@ -1318,7 +1318,7 @@ fn a_fn_clause_that_fails_runs_in_place() {
     "#);
 }
 
-/// 補助の関数の中、`Call::Resume` から作る再開、`cont$` の中の再開、handle の本体の呼び出しがどれも `apply` になり、
+/// 補助の関数の中、`Call::Resume` から作る再開、`$cont$` の中の再開、handle の本体の呼び出しがどれも `apply` になり、
 /// handle の本体の `apply` は着地の印を持つ。`perform` の後を受ける `f$k0` は最後の1個の引数と結果が一様である
 /// (docs/spec/lir.md の「関数の ABI」)。
 #[test]
@@ -1367,7 +1367,12 @@ main () =
             })
             .collect()
     };
-    for name in ["prompt$", "resume$", "cont$@[Int, Int]", "main$handle0$ask"] {
+    for name in [
+        "prompt$",
+        "resume$",
+        "$cont$@[Int, Int]",
+        "main$handle0$ask",
+    ] {
         let sites = applies(function(name));
         assert!(!sites.is_empty(), "`{name}` applies\n{shown}");
     }

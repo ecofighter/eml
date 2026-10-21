@@ -1,0 +1,17 @@
+# 包む関数の名前は `$` で始まり、利用者の関数の名前の後ろに `$` を続けた形にならない。そのため、後の入力で `con`、
+# `op`、`cont` という関数を定義しても、前の入力の `$con$…` の持ち主にならず、そのコードは変わらない
+> data Box a = | Box a
+> hide : Int -> a -> <Panic> Box a
+. hide n x = if n <= 0 then Box x else hide (n - 1) x
+.
+> match hide 0 Some with | Box g -> g 4
+> con : Int -> Int
+. con x = x
+.
+> op : Int -> Int
+. op x = x
+.
+> cont : Int -> Int
+. cont x = x
+.
+> match hide 0 Some with | Box g -> g (con (op (cont 5)))

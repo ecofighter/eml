@@ -346,7 +346,7 @@ impl Copy<'_> {
 
 /// `k` を値として受ける節の写し `<g>{k}`。`k` には、生の継続でなく、継続の関数の閉包が来る
 /// (docs/spec/core-ir.md の「handler の複製」)。`k` の引数は位置をそのままに、
-/// Repr を `tobj` にして印を保つ。`k` を包む `closure cont$(k)` と `closure cont$state(k)` (`resumes` が見分ける) は
+/// Repr を `tobj` にして印を保つ。`k` を包む `closure $cont$(k)` と `closure $cont$state(k)` (`resumes` が見分ける) は
 /// 消して、使う所を `k` そのものにする。継続の関数の閉包は包む関数と同じ引数を受けるので、包む必要がないためである。
 /// `resume k(v, s)` は、状態のない handler では `apply k(v)` に、状態つきでは `apply k(v, s)` にする。`mask` は
 /// そのまま残す。EP が `resume` から作る `apply` と同じく、印は節の関数の `yields` の印にする (docs/spec/core-ir.md の

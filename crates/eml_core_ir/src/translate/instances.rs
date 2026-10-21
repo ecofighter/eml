@@ -972,7 +972,7 @@ fn instance_name(
     }
 }
 
-/// translate の包む関数 (`op$`、`con$`、`cont$`、`cont$state`) の名前。ほかの instance と同じく型引数を書き、型変数の
+/// translate の包む関数 (`$op$`、`$con$`、`$cont$`、`$cont$state`) の名前。ほかの instance と同じく型引数を書き、型変数の
 /// ないスキームでは `base` のままにする。包む関数は引数と結果の Repr を具体化した型から決めるので、名前が型引数を
 /// 持たないと、同じ名前の関数が違うコードになるためである
 /// (docs/spec/lir.md の「関数の ABI」)。
@@ -991,7 +991,7 @@ pub(super) fn wrapper_name(
 
 /// 生成する関数の、鍵を付ける前の名前 (docs/spec/core-ir.md の「メソッドの解決」)。
 /// 手で書いた instance のメソッドと同じ形で、導出した instance は型を定義したモジュールで、タプルと `Unit` は
-/// Prelude で修飾する。補助の `tag$` は `con$` と同じ修飾の規則に従う。
+/// Prelude で修飾する。補助の `tag$` は `$con$` と同じ修飾の規則に従う。
 fn generated_base(hir: &HirProgram, names: &NameTable, generated: &Generated) -> String {
     let (class, method) = match generated.method {
         GeneratedMethod::Eq => (hir.lang.eq, "=="),

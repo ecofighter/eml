@@ -7,8 +7,9 @@ use eml_lir::{Atom, FnIdx};
 
 /// translate が持ち上げた値として生まれる関数と、その持ち主の番号。持ち主は、名前の `$` の前の部分を名前に持つ、
 /// 内部でない関数のうち最も長いものである。translate は持ち上げた関数を `<根>$…` と名付け、根の instance と一緒に
-/// 出すので、持ち上げた関数があれば持ち主も translate の出力にある。持ち主のない関数 (`con$`、`op$`、`cont$` の
-/// 包み) はどこからでも参照されるので、ここでは扱わない。optimize の前の、translate の出力に使う。
+/// 出すので、持ち上げた関数があれば持ち主も translate の出力にある。包む関数 (`$con$`、`$op$`、`$cont$`) は
+/// どこからでも参照されるので、名前を `$` で始めて持ち主に当たらないようにしてある (docs/spec/core-ir.md の
+/// 「直接だけ呼ばれる持ち上げた関数」)。optimize の前の、translate の出力に使う。
 pub(crate) fn lifted(program: &Program) -> Vec<(FnIdx, FnIdx)> {
     let roots: HashMap<&str, FnIdx> = program
         .functions

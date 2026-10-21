@@ -634,7 +634,7 @@ fn wrapper_headers(text: &str, base: &str) -> Vec<String> {
 
 const APPLY_TO: &str = "apply_to : (a -> <e> b) -> a -> <e> b\napply_to f x = f x\n\n";
 
-/// `con$`、`op$`、`cont$` は型ごとの instance で、名前に型引数を書き、引数と結果を具体化した型の Repr で持つ。値として
+/// `$con$`、`$op$`、`$cont$` は型ごとの instance で、名前に型引数を書き、引数と結果を具体化した型の Repr で持つ。値として
 /// 生まれるので `split` は捕まえた値の数 (0) で、一様な位置にそろえるのは box の挿入である
 /// (docs/spec/lir.md の「関数の ABI」)。
 #[test]
@@ -643,10 +643,10 @@ fn wrappers_are_per_type_instances() {
         "{APPLY_TO}main : Unit -> <IO> Unit\nmain () =\n  let _ = apply_to Some 1\n  let _ = apply_to Some \"s\"\n  ()"
     );
     assert_eq!(
-        wrapper_headers(&text, "con$Prelude.Some"),
+        wrapper_headers(&text, "$con$Prelude.Some"),
         [
-            "internal uniform from 0 fn \"con$Prelude.Some@[Int]\"(p.0: int) -> tobj {",
-            "internal uniform from 0 fn \"con$Prelude.Some@[String]\"(p.0: obj) -> tobj {",
+            "internal uniform from 0 fn \"$con$Prelude.Some@[Int]\"(p.0: int) -> tobj {",
+            "internal uniform from 0 fn \"$con$Prelude.Some@[String]\"(p.0: obj) -> tobj {",
         ]
     );
 }
@@ -655,10 +655,10 @@ fn wrappers_are_per_type_instances() {
 fn operation_wrappers_are_per_type_instances() {
     let text = "effect Read a where\n  read : Unit -> a\n\nuse_float : (Unit -> <Read Float> Float) -> <Read Float> Float\nuse_float f = f ()\n\nuse_int : (Unit -> <Read Int> Int) -> <Read Int> Int\nuse_int f = f ()\n\nmain : Unit -> <IO> Unit\nmain () =\n  let x = handle use_float read with\n    | ctl read () k -> k 0.5\n  let n = handle use_int read with\n    | ctl read () k -> k 1\n  println (show x ++ show n)";
     assert_eq!(
-        wrapper_headers(text, "op$read"),
+        wrapper_headers(text, "$op$read"),
         [
-            "internal yields uniform from 0 fn \"op$read@[Float]\"(p.0: unit) -> float {",
-            "internal yields uniform from 0 fn \"op$read@[Int]\"(p.0: unit) -> int {",
+            "internal yields uniform from 0 fn \"$op$read@[Float]\"(p.0: unit) -> float {",
+            "internal yields uniform from 0 fn \"$op$read@[Int]\"(p.0: unit) -> int {",
         ]
     );
 }
@@ -685,15 +685,15 @@ fn extern_wrappers_take_the_types_of_their_instance() {
 fn continuation_wrappers_are_per_type_instances() {
     let text = "effect Ask where\n  ask : Unit -> Float\n\ntwice : (Float -> <e> Int) -> <e> Int\ntwice f = f 1.5\n\nlater : (Float -> Int -> <e> Int) -> <e> Int\nlater f = f 2.5 1\n\nmain : Unit -> <IO, Panic> Unit\nmain () =\n  let n =\n    handle (if ask () > 0.0 then 1 else 0) with\n      | ctl ask () k -> twice k\n  let m =\n    handle (if ask () > 0.0 then 1 else 0) from 0 with\n      | ctl ask () k st -> later k\n      | return x _ -> x\n  println (show (n + m))";
     assert_eq!(
-        wrapper_headers(text, "cont$"),
+        wrapper_headers(text, "$cont$"),
         [
-            "internal yields uniform from 0 fn \"cont$@[Float, Int]\"(k.0: tobj poly, v.1: float) -> int {"
+            "internal yields uniform from 0 fn \"$cont$@[Float, Int]\"(k.0: tobj poly, v.1: float) -> int {"
         ]
     );
     assert_eq!(
-        wrapper_headers(text, "cont$state"),
+        wrapper_headers(text, "$cont$state"),
         [
-            "internal yields uniform from 0 fn \"cont$state@[Float, Int, Int]\"(k.0: tobj poly, v.1: float, s.2: int) -> int {"
+            "internal yields uniform from 0 fn \"$cont$state@[Float, Int, Int]\"(k.0: tobj poly, v.1: float, s.2: int) -> int {"
         ]
     );
 }

@@ -60,7 +60,7 @@ impl Program {
 pub struct CoreFn {
     pub name: String,
     /// 内部の関数。値として生まれる関数である。translate のラムダ、handle の本体、節と `return` の節、包む関数
-    /// (`op$`、`con$`、`$externN`、`cont$`、`cont$state`) と、optimize と EP が値として作る関数 (値として生まれた関数の
+    /// (`$op$`、`$con$`、`$externN`、`$cont$`、`$cont$state`) と、optimize と EP が値として作る関数 (値として生まれた関数の
     /// 複製、`k` として渡す継続の関数、`f$kN`) が当たる。ABI は決めない。ABI は型と一様な位置 (`split`) で決まる
     /// (docs/spec/lir.md の「関数の ABI」)。optimize の複製の名前などが
     /// この印を読む。テキストの形では `internal fn` と書く (docs/spec/core-ir.md)。

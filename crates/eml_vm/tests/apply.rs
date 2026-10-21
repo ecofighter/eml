@@ -259,7 +259,7 @@ fn leave(x.0: tobj) -> tobj {
     );
 }
 
-/// 値として使うコンストラクタは型ごとの instance (`con$Some@[Int]`) で、一様な ABI を持つので、`apply` は変換しない
+/// 値として使うコンストラクタは型ごとの instance (`$con$Some@[Int]`) で、一様な ABI を持つので、`apply` は変換しない
 /// (docs/spec/lir.md の「関数の ABI」)。`box` は `apply` に渡す `Int` の箱で、`Some` のフィールドはその箱を
 /// そのまま受ける。
 #[test]

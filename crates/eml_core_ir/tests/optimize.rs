@@ -91,9 +91,9 @@ fn yield_as_a_value_becomes_a_perform() {
         "import Yield (Yield(..))\n\nproduce : Unit -> <Yield Int> Unit\nproduce () =\n  let y = yield\n  y 1\n{HIDE}\nmain : Unit -> <IO, Panic> Unit\nmain () =\n  match hide 0 produce with\n    | Box p -> println (show (Yield.collect p))"
     );
     let shown = core_text(&text, Pass::Optimize);
-    // 型引数を持つ包む関数の名前は引用符で囲んで表示される (`call "op$Std.Yield.Yield.yield@[Int]"(..)`)
+    // 型引数を持つ包む関数の名前は引用符で囲んで表示される (`call "$op$Std.Yield.Yield.yield@[Int]"(..)`)
     assert!(
-        !shown.contains("call op$") && !shown.contains("call \"op$"),
+        !shown.contains("call $op$") && !shown.contains("call \"$op$"),
         "{shown}"
     );
     insta::assert_snapshot!(function(&shown, "produce"), @"
@@ -126,7 +126,7 @@ main () =
 ";
     insta::assert_snapshot!(function(&core_text(text, Pass::Optimize), "render$handle0"), @r#"
     internal yields uniform from 0 fn render$handle0(p.0: unit) -> unit {
-      let t.1: unit = mask [Yield@1] yields apply &"op$yield@[Int]"(1)
+      let t.1: unit = mask [Yield@1] yields apply &"$op$yield@[Int]"(1)
       return t.1
     }
     "#);
@@ -1177,9 +1177,9 @@ main () =
     // 節の写し `<g>{k}` は小さいので、それを呼ぶ handler の複製に展開される
     let copies = handler_copies(&shown);
     assert!(copies.contains("con Std.Iter.Iter #0(k"), "{copies}");
-    // 型ごとの `cont$` の名前は型引数を持つので、いつも引用符で囲んで表示される (`closure "cont$@[..]"(..)`)
+    // 型ごとの `$cont$` の名前は型引数を持つので、いつも引用符で囲んで表示される (`closure "$cont$@[..]"(..)`)
     assert!(
-        !shown.contains("closure cont$") && !shown.contains("closure \"cont$"),
+        !shown.contains("closure $cont$") && !shown.contains("closure \"$cont$"),
         "{shown}"
     );
 }
@@ -3031,4 +3031,29 @@ main () = match hide 0 user with
     let (split, code) = lambda(&direct);
     assert_eq!(split, None, "{code}");
     assert_eq!(lambda(&value), (split, code));
+}
+
+/// 包む関数の名前は `$` で始まるので、利用者の関数 `con` は `$con$…` の持ち主にならず、`split` は外れない
+/// (docs/spec/core-ir.md の「直接だけ呼ばれる持ち上げた関数」)。
+#[test]
+fn a_user_function_named_con_does_not_own_a_constructor_wrapper() {
+    let program = eml_test_support::core_until(
+        &format!(
+            "{HIDE}
+con : Int -> Int
+con x = x
+
+main : Unit -> <IO, Panic> Unit
+main () = match hide 0 Some with
+  | Box g -> println (show (g (con 4)))
+"
+        ),
+        Pass::Optimize,
+    );
+    let wrapper = program
+        .functions
+        .iter()
+        .find(|function| function.name == "$con$Prelude.Some@[Int]")
+        .unwrap_or_else(|| panic!("no constructor wrapper in\n{}", pretty(&program)));
+    assert_eq!(wrapper.split, Some(0));
 }

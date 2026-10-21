@@ -37,7 +37,7 @@ pub(crate) fn known_closures(function: &CoreFn) -> HashMap<VarId, KnownClosure> 
         .collect()
 }
 
-/// translate の包む関数 (`op$`、`con$`、`cont$`、`cont$state`) が包んでいる命令。
+/// translate の包む関数 (`$op$`、`$con$`、`$cont$`、`$cont$state`) が包んでいる命令。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Wrapper {
     Perform {
@@ -750,7 +750,7 @@ pub(crate) fn replace(
     }
 }
 
-/// 引数のそろった呼び出し。包む関数は直接呼ばず、包んでいる命令に戻す。`op$` と `con$` は値と部分適用でだけ使われる
+/// 引数のそろった呼び出し。包む関数は直接呼ばず、包んでいる命令に戻す。`$op$` と `$con$` は値と部分適用でだけ使われる
 /// (docs/spec/core-ir.md の「REPL の入力」)。
 fn saturated(target: FnIdx, callee: &Callee, args: Vec<Atom>, mask: &[MaskItem]) -> Rhs {
     instruction(callee, args.clone(), mask).unwrap_or_else(|| Rhs::Call {

@@ -127,7 +127,7 @@ enum Form {
     Passing,
 }
 
-/// 再開する操作の、それ以外の節の `k` の出現が、`resume k(..)` の呼ばれる値、`k` を包む `cont$` か `cont$state` の
+/// 再開する操作の、それ以外の節の `k` の出現が、`resume k(..)` の呼ばれる値、`k` を包む `$cont$` か `$cont$state` の
 /// 捕獲 (`stateful` と合う方)、`drop k` だけか。この3つは、`k` を継続の関数の閉包に替えた写し (`piece::clause_with_k`)
 /// でもそのまま書ける。生の継続を入れ子の関数が捕獲する形は、その関数の `resume` も書き換えることになるので扱わない。
 fn keeps_k(program: &Program, clause: &CoreFn, stateful: bool) -> bool {
@@ -160,7 +160,7 @@ fn keeps_k(program: &Program, clause: &CoreFn, stateful: bool) -> bool {
     uses == fitting
 }
 
-/// `function` が生の継続を包む関数 (`cont$` か `cont$state`) なら、状態つきの方か。
+/// `function` が生の継続を包む関数 (`$cont$` か `$cont$state`) なら、状態つきの方か。
 fn resumes(program: &Program, function: FnIdx) -> Option<bool> {
     match wrapper(program.function(function)) {
         Some(Wrapper::Resume { stateful }) => Some(stateful),
