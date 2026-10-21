@@ -2,6 +2,9 @@
 # スクリプトの eml の版と Python の版を、今のディレクトリで同じ引数と同じ標準入力で動かし、標準出力と終了コードを
 # 比べる (docs/implementation/benchmarks.md の「スクリプトの計測」)。標準エラーの文言は比べない。
 #
+#   compare.sh [--rust] ...      先頭に `--rust` を置くと、相手を Python の版から `bench/scripts/rust/NAME.rs` に替える。
+#                                `rustc --edition 2024 -C opt-level=3` で `target/bench-scripts/rust/NAME` に build してから
+#                                動かす。`--paths` では PY_FILE の名前 (拡張子を除く) から NAME を決める
 #   compare.sh --paths EML_FILE PY_FILE [ARG...]
 #                                eml のプログラムと Python の版を、パスで渡す。標準入力をそのまま両方に渡す
 #   compare.sh NAME [ARG...]     tests/ui/run/scripts/NAME/main.em と bench/scripts/NAME.py を `--paths` で比べる
@@ -16,6 +19,12 @@ root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 eml="${EML:-$root/target/debug/eml}"
 work="$(mktemp -d)"
 trap 'rm -rf "$work"' EXIT
+
+rust=0
+if [[ "${1:-}" == "--rust" ]]; then
+  rust=1
+  shift
+fi
 
 fixture=""
 if [[ "${1:-}" == "--paths" ]]; then
@@ -52,6 +61,11 @@ else
   py_file="$root/bench/scripts/$name.py"
   args=("$@")
   cat > "$work/stdin"
+fi
+
+if [[ $rust == 1 ]]; then
+  rust_name="$(basename "$py_file" .py)"
+  py_file="$root/bench/scripts/rust/$rust_name.rs"
 fi
 
 # どちらかのファイルがないと両方が同じ形で失敗し、比べが一致してしまうので、先に確かめる
@@ -94,13 +108,22 @@ run_side() {
   printf -- '--- exit: %s ---\n' "$code" >> "$work/$side"
 }
 
-run_side eml "$eml" run "$eml_file" ${args[@]+"${args[@]}"}
-run_side python python3 -I "$py_file" ${args[@]+"${args[@]}"}
+other=(python3 -I "$py_file")
+other_label=python
+if [[ $rust == 1 ]]; then
+  mkdir -p "$root/target/bench-scripts/rust"
+  rustc --edition 2024 -C opt-level=3 -o "$root/target/bench-scripts/rust/$rust_name" "$py_file"
+  other=("$root/target/bench-scripts/rust/$rust_name")
+  other_label=rust
+fi
 
-if cmp -s "$work/eml" "$work/python"; then
+run_side eml "$eml" run "$eml_file" ${args[@]+"${args[@]}"}
+run_side "$other_label" "${other[@]}" ${args[@]+"${args[@]}"}
+
+if cmp -s "$work/eml" "$work/$other_label"; then
   echo same
 else
-  diff -u --label eml --label python "$work/eml" "$work/python" || true
+  diff -u --label eml --label "$other_label" "$work/eml" "$work/$other_label" || true
   echo "--- eml stderr ---"
   cat "$work/eml.err"
   exit 1
