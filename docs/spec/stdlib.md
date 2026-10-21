@@ -98,12 +98,12 @@ try_panic action =
 - `try_panic` は、IO の失敗、`exit`、書き出しの失敗、割り込み、確保量と深さの上限、検査モードのヒープの誤りを捕まえない。`try_io` も `Panic` を捕まえない
 - `try_panic` で捕まえなかった `Panic` は、今までと同じ実行時エラーである。`panic message` は `panicked: message` の文言に位置を付けて表示する
 
-`Panic` を起こすのは、`panic` と、次の誤りを返す組み込みの関数である。VM は `Fault::panics` で誤りを選び、extern の行の `purity` によらず `try_panic` に届ける ([VM](vm.md) の「`IO` と `Panic` への中断」)。`message` は、[LIR](lir.md) の「実行時エラー」の文言と1文字も違わない。
+`Panic` を起こすのは、`panic` と、次の誤りを返す組み込みの関数である。VM は `Fault::panics` で誤りを選び、`Pure` でない行の誤りのうち `Fault::panics` が真のものを `Panic` に届ける。`Pure` の行は巻き戻しの地点を持たないので届けない ([VM](vm.md) の「`IO` と `Panic` への中断」)。`message` は、[LIR](lir.md) の「実行時エラー」の文言と1文字も違わない。
 
 | `Fault` | 起こす関数 |
 |---|---|
-| `Arith(_)` | `+`、`-`、`*`、`/`、`%`、単項の `-` |
-| `Index(_)` | `String.byte_at`、`String.slice`、`String.find_from` と、それらを使う std の関数。`Env.arg` の範囲の外の位置も `Index` だが、`Env.arg` は std の中だけで使うので、利用者のプログラムでは起きない |
+| `Arith(_)` | `+`、`-`、`*`、`/`、`%`、単項の `-`。`Float.truncate`、`Float.floor`、`Float.ceil`、`Float.round` (`Int` に収まらない値) と `Float.to_fixed` (桁数) |
+| `Index(_)` | `String.byte_at`、`String.slice`、`String.find_from` と、それらを使う std の関数。`Array.get`、`Array.set`、`Array.make`、`MutArray.read`、`MutArray.write`、`MutArray.make` (添字の範囲と負の長さ) と、添字の式が使う `check_index`。`Env.arg` の範囲の外の位置も `Index` だが、`Env.arg` は std の中だけで使うので、利用者のプログラムでは起きない |
 
 ## `exit`
 

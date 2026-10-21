@@ -90,7 +90,7 @@ extern のエフェクトは、型検査では普通のエフェクトと次の�
 ## 組み込みの `Panic`
 
 - `Panic` は、Prelude が `pub extern effect Panic where never panicked : String -> a` と宣言する extern のエフェクトである。`IO` と同じく、操作 `panicked` は Prelude の外から見えず、Prelude の `try_panic` だけが handle する ([標準ライブラリ](stdlib.md) の「`try_panic`」)。利用者は、Prelude の `panic : String -> <Panic> a` で起こし、`try_panic` で捕まえる
-- `Panic` が表すのは、値と入力で決まる誤りである。整数の桁あふれとゼロ除算、文字列の範囲外の位置と文字の境界でない切り出し、範囲外のスクリプトの引数、利用者の `panic` がこれに当たる。これらを起こしうる関数は、最後の矢印の row に `Panic` を持つ。`Num` と `Div` のメソッド (`+`、`-`、`*`、`/`、`%`、前置の `-` が呼ぶ `negate`) と、extern の関数 `String.byte_at`、`String.slice`、std の中だけの `String.find_from` と `Env.arg` がこれに当たる。`Env.arg` の row は `<IO, Panic>` である
+- `Panic` が表すのは、値と入力で決まる誤りである。整数の桁あふれとゼロ除算、文字列の範囲外の位置と文字の境界でない切り出し、範囲外のスクリプトの引数、利用者の `panic` がこれに当たる。これらを起こしうる関数は、最後の矢印の row に `Panic` を持つ。`Num` と `Div` のメソッド (`+`、`-`、`*`、`/`、`%`、前置の `-` が呼ぶ `negate`) と、extern の関数 `String.byte_at` がこれに当たる。一覧は [標準ライブラリ](stdlib.md) の「`try_panic`」の表にある。`Env.arg` の row は `<IO, Panic>` である
 - ヒープの誤り、内部の誤り、割り込み、深さと確保量の上限、標準出力への書き出しの失敗は、型に出さない。どの呼び出しでも起きうるか、起きた位置が決まらないためである
 - `panic` は、`exit` と同じく戻らない extern の関数である。結果の型は量化した型変数なので、手前で `Lin` の値を手放さなくてよい ([線形性](linearity.md) の「暗黙の後始末」)
 - 型検査では `IO` と同じく扱う。row の中で重なったラベルは1つにまとめ、`mask` に入れず、多重度は `once` である。操作は `never` の `panicked` だけなので、`Panic` は yield しうるラベルでない ([型と Kind](types.md) の「row の具体化の記録」)。row に `Panic` を足しても、yield の確かめは増えない
