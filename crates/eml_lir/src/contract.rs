@@ -2,6 +2,7 @@
 //! すべてのブロックに末尾呼び出しの規則を当てる。末尾呼び出しを作るのはこのパスだけである。RC の命令がまだないので、
 //! 所有権を扱わずに書き換えられる。
 
+use crate::boxing::tail_position_call;
 use crate::{
     Atom, Block, Call, EffectInfo, LirFn, Mark, OpRet, Program, Rhs, Stmt, Term, VarId, operation,
 };
@@ -115,8 +116,10 @@ fn remove_dead_lets(function: &mut LirFn) -> bool {
         block.term.for_each_atom(&mut count);
     }
     let mut removed = false;
+    let vars = &function.vars;
     for block in function.blocks.iter_mut().rev() {
         let mut keep = vec![true; block.stmts.len()];
+        let tail_at = tail_position_call(block).map(|(at, _)| at);
         for (position, stmt) in block.stmts.iter_mut().enumerate().rev() {
             match stmt {
                 Stmt::Let { var, rhs } if uses[var.0 as usize] == 0 && pure(rhs) => {
@@ -127,9 +130,12 @@ fn remove_dead_lets(function: &mut LirFn) -> bool {
                         }
                     });
                 }
-                // 構造体の `unbox` は箱を読むだけの純粋な `let` である。使われない葉は `_` にして読まず、葉がどれも
-                // 使われなければ文ごと消す。開くパスの覗き穴が残す使われない `unbox` が消え、末尾の位置の呼び出しの
-                // 形が保たれる (docs/superpowers/specs/2026-10-21-s14e-abi-struct-design.md の「LIR」)
+                // 構造体の `unbox` は箱を読むだけの純粋な `let` である。使われない葉は `_` にして読まない。葉がどれも
+                // 使われない `unbox` は、箱が `unr` か、末尾の位置の呼び出しの後ろにあれば消す。後者は開くパスの
+                // 覗き穴が残すもので、消すと末尾の位置の呼び出しの形が保たれる
+                // (docs/superpowers/specs/2026-10-21-s14e-abi-struct-design.md の「LIR」)。`unr` でない箱の
+                // `unbox` は残す。Perceus はこの文で箱を知り、箱を手放す所を `decref` (V1 が拒む) でなく `drop` に
+                // する。末尾の位置では箱を呼び出しの結果として返すので、手放す所がない
                 Stmt::UnboxStruct { value, fields, .. } => {
                     for field in fields.iter_mut() {
                         if field.is_some_and(|var| uses[var.0 as usize] == 0) {
@@ -137,7 +143,10 @@ fn remove_dead_lets(function: &mut LirFn) -> bool {
                             removed = true;
                         }
                     }
-                    if fields.iter().all(Option::is_none) {
+                    if fields.iter().all(Option::is_none)
+                        && (vars[value.0 as usize].mark == Mark::Unr
+                            || tail_at.is_some_and(|at| position > at))
+                    {
                         keep[position] = false;
                         uses[value.0 as usize] -= 1;
                     }

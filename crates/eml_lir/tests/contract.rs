@@ -422,3 +422,47 @@ fn h(k.0: obj, x.1: float) -> (,){float, float} {
     }
     ");
 }
+
+#[test]
+fn an_unused_unbox_of_a_lin_box_after_a_tail_position_call_is_removed() {
+    // 縮約が使われない `m.5` を消すと、構造体の `unbox` の葉はどれも使われなくなる。箱をそのまま返す末尾の位置
+    // では、この `unbox` を箱が `lin` でも消す。箱は呼び出しの結果として返るので、Perceus が手放す所はない
+    let text = "\
+layout Tok { Tok(int, float) }
+internal role body fn f(k.0: obj, u.1: unit) -> Tok{int, float} lin {
+  let t.2: Tok{int, float} lin = uniform apply k.0(1)
+  unpack t.2 Tok #0(n.3: int, x.4: float)
+  let m.5: enum = extern \"Prelude.Ord Int.<\"(n.3, 1)
+  return t.2
+}
+";
+    insta::assert_snapshot!(function(&passes_text(text, Pass::Contract), "f"), @"
+    internal role body fn f(k.0: obj, u.1: unit) -> tobj lin {
+      let b.6: tobj = box 1
+      tail uniform apply k.0(b.6)
+    }
+    ");
+}
+
+#[test]
+fn a_multi_value_call_with_an_incompatible_mark_is_not_tail() {
+    // 呼ばれる側の葉は `unr` で、呼ぶ側の結果の葉は `lin` である。束縛の `poly` の葉を通せばどちらとも受け渡せるが、
+    // `tail` にすると `unr` と `lin` を直接つなぐので、値の数が同じなら印を値ごとに比べて `let` と `return` のまま残す
+    let text = "\
+layout P { P(obj, obj) }
+fn g(a.0: obj, b.1: obj) -> P{obj, obj} {
+  let v.2: P{obj, obj} = con P #0(a.0, b.1)
+  return v.2
+}
+fn f(a.0: obj, b.1: obj) -> P{obj lin, obj} lin {
+  let v.2: P{obj poly, obj} poly = call g(a.0, b.1)
+  return v.2
+}
+";
+    insta::assert_snapshot!(function(&passes_text(text, Pass::Contract), "f"), @"
+    fn f(a.0: obj, b.1: obj) -> (obj lin, obj) source(obj, obj) -> P{obj lin, obj} {
+      let (v.0.3: obj poly, v.1.4: obj) = call g(a.0, b.1)
+      return (v.0.3, v.1.4)
+    }
+    ");
+}

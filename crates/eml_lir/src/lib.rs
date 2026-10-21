@@ -184,6 +184,22 @@ impl LirFn {
     pub fn mark(&self, var: VarId) -> Mark {
         self.vars[var.0 as usize].mark
     }
+
+    /// 構造体の `unbox` が読む箱を、`VarId` の番号で引く表。Perceus はその箱を手放す所で `drop` か印の付いた
+    /// `release` を選び、reuse と verifier は `release` の印を合わせる
+    /// (docs/superpowers/specs/2026-10-21-s14e-abi-struct-design.md の「ダミーの約束を広げる」)。変数は1回だけ
+    /// 定義されるので (R5)、関数に1つの表にする。表にない番号の変数は、verifier が別に誤りとして報告する。
+    pub fn struct_boxes(&self) -> Vec<bool> {
+        let mut boxes = vec![false; self.vars.len()];
+        for stmt in self.blocks.iter().flat_map(|block| &block.stmts) {
+            if let Stmt::UnboxStruct { value, .. } = stmt
+                && let Some(slot) = boxes.get_mut(value.0 as usize)
+            {
+                *slot = true;
+            }
+        }
+        boxes
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

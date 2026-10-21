@@ -28,12 +28,7 @@ pub fn perceus(program: &mut Program) {
 
 fn insert_rc(function: &mut LirFn, layouts: &[Layout]) {
     let live_in = live_in(function);
-    let mut unboxed = vec![false; function.vars.len()];
-    for stmt in function.blocks.iter().flat_map(|block| &block.stmts) {
-        if let Stmt::UnboxStruct { value, .. } = stmt {
-            unboxed[value.0 as usize] = true;
-        }
-    }
+    let unboxed = function.struct_boxes();
     let mut fields = Fields {
         layouts,
         rc: function.vars.iter().map(|var| var.repr.is_rc()).collect(),

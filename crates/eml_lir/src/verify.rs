@@ -435,7 +435,7 @@ impl<'a> Checker<'a> {
             owners: vec![None; function.vars.len()],
             origins: vec![None; function.vars.len()],
             token_sources: vec![None; function.vars.len()],
-            unboxed: unboxed_values(function),
+            unboxed: function.struct_boxes(),
             unwind: None,
         }
     }
@@ -2047,19 +2047,6 @@ impl<'a> Checker<'a> {
 }
 
 /// 入口の段が拒む `tail` の言い方。
-/// 構造体の `unbox` が読む変数の印を、`VarId` の番号で引く表にする。
-fn unboxed_values(function: &LirFn) -> Vec<bool> {
-    let mut unboxed = vec![false; function.vars.len()];
-    for stmt in function.blocks.iter().flat_map(|block| &block.stmts) {
-        if let Stmt::UnboxStruct { value, .. } = stmt
-            && let Some(slot) = unboxed.get_mut(value.0 as usize)
-        {
-            *slot = true;
-        }
-    }
-    unboxed
-}
-
 fn tail_text(call: &Call) -> &'static str {
     match call {
         Call::Direct(_, _) => "a tail call",

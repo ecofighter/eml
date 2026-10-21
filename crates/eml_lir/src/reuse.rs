@@ -105,7 +105,6 @@ struct Planner<'a> {
 impl<'a> Planner<'a> {
     fn new(program: &'a Program, function: &'a LirFn, shapes: &'a [Vec<Shape>]) -> Self {
         let mut origins = vec![None; function.vars.len()];
-        let mut unboxed = vec![false; function.vars.len()];
         let mut bind = |value: VarId, ctor: Ctor, slot: usize, field: VarId| {
             origins[field.0 as usize] = Some((value, ctor, slot));
         };
@@ -126,7 +125,6 @@ impl<'a> Planner<'a> {
                         ctor,
                         fields,
                     } => {
-                        unboxed[value.0 as usize] = true;
                         for (slot, field) in fields.iter().enumerate() {
                             if let Some(field) = *field {
                                 bind(*value, *ctor, slot, field);
@@ -148,7 +146,7 @@ impl<'a> Planner<'a> {
             function,
             shapes,
             origins,
-            unboxed,
+            unboxed: function.struct_boxes(),
             tokens: Vec::new(),
             pairings: HashMap::new(),
             available: vec![Vec::new(); blocks],

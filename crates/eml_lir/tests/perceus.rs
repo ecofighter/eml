@@ -1370,3 +1370,78 @@ internal role body fn dupped(p.0: (,){float, float} lin) -> obj lin {
     }
     ");
 }
+
+#[test]
+fn a_lin_box_whose_leaves_are_unused_is_still_dropped_on_its_path() {
+    // 葉をどれも読まない構造体の `unbox` も、`lin` の箱なら縮約は消さない。Perceus はこの文で箱を知り、`b1` の道で
+    // `decref` (V1 が拒む) でなく `drop` で手放す
+    let text = "\
+layout Tok { Tok(int, float) }
+layout Prelude.Bool { False, True }
+internal role body fn f(k.0: obj, c.1: enum, u.2: unit) -> Tok{int, float} lin {
+  let t.3: Tok{int, float} lin = uniform apply k.0(1)
+  unpack t.3 Tok #0(n.4: int, x.5: float)
+  switch c.1 Prelude.Bool { #0 -> b1, #1 -> b2 }
+b1:
+  let s.6: Tok{int, float} lin = con Tok #0(1, 2.0)
+  return s.6
+b2:
+  return t.3
+}
+";
+    insta::assert_snapshot!(function(&passes_text(text, Pass::Perceus), "f"), @"
+    internal role body fn f(k.0: obj, c.1: enum, u.2: unit) -> tobj lin {
+      let b.7: tobj = box 1
+      let t.8: tobj lin = uniform apply k.0(b.7)
+      let (_, _) = unbox t.8 Tok
+      switch c.1 Prelude.Bool { #0 -> b1, #1 -> b2 }
+    b1:
+      let u.12: unit = drop t.8
+      let s.9: obj lin = con Tok #0(1, 2.0)
+      return s.9
+    b2:
+      return t.8
+    }
+    ");
+}
+
+#[test]
+fn a_lin_box_unboxed_before_a_switch_is_released_with_the_leaf_its_path_uses() {
+    // 入口で取り出した RC の葉を `b1` だけが使う。`b1` は葉に名前を書いた `release unboxed` で箱を解き、`b2` は箱を
+    // そのまま返す
+    let text = "\
+layout Tok { Tok(tobj, float) }
+layout Prelude.Bool { False, True }
+fn g(s.0: obj) -> int {
+  return 1
+}
+internal role body fn f(k.0: obj, c.1: enum, u.2: unit) -> Tok{obj, float} lin {
+  let t.3: Tok{obj, float} lin = uniform apply k.0(1)
+  unpack t.3 Tok #0(s.4: obj, x.5: float)
+  switch c.1 Prelude.Bool { #0 -> b1, #1 -> b2 }
+b1:
+  let m.6: int = call g(s.4)
+  let o.7: obj = const \"x\"
+  let r.8: Tok{obj, float} lin = con Tok #0(o.7, x.5)
+  return r.8
+b2:
+  return t.3
+}
+";
+    insta::assert_snapshot!(function(&passes_text(text, Pass::Perceus), "f"), @r#"
+    internal role body fn f(k.0: obj, c.1: enum, u.2: unit) -> tobj lin {
+      let b.9: tobj = box 1
+      let t.10: tobj lin = uniform apply k.0(b.9)
+      let (t.0.12: obj, t.1.13: float) = unbox t.10 Tok
+      switch c.1 Prelude.Bool { #0 -> b1, #1 -> b2 }
+    b1:
+      release unboxed t.10 Tok #0(t.0.12, _)
+      let m.6: int = call g(t.0.12)
+      let o.7: obj = const "x"
+      let r.11: obj lin = con Tok #0(o.7, t.1.13)
+      return r.11
+    b2:
+      return t.10
+    }
+    "#);
+}
