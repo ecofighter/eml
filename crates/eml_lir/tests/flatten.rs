@@ -253,28 +253,6 @@ fn f(t.0: T{obj lin, int, tobj poly} lin) -> unit {
 }
 
 #[test]
-fn a_lin_box_without_rc_leaves_is_dropped() {
-    // `lin` の箱の葉に `unr` でない RC の葉がなく、箱をほかに消費しないなら、構造体の `unbox` の後に `drop` を置く。
-    // Perceus の `decref` (V1 が拒む) でなく `drop` で手放すためである
-    // (docs/superpowers/specs/2026-10-21-s14e-abi-struct-design.md の「LIR」)
-    let text = "\
-layout Tok { Tok(int, float) }
-internal role body fn f(t.0: Tok{int, float} lin) -> int {
-  unpack t.0 Tok #0(a.1: int, b.2: float)
-  return a.1
-}
-";
-    insta::assert_snapshot!(function(&flatten_text(text), "f"), @"
-    internal role body fn f(t.3: tobj lin) -> tobj {
-      let (t.0.5: int, _) = unbox t.3 Tok
-      let t.7: unit = drop t.3
-      let a.4: tobj = box t.0.5
-      return a.4
-    }
-    ");
-}
-
-#[test]
 fn a_nested_struct_is_unboxed_from_its_tobj_field() {
     // 箱の `tobj` のフィールドにある入れ子の構造体は、外の `unbox` に続く構造体の `unbox` で開く。入れ子の葉をどれも
     // 使わなければ、その `unbox` は消え、外の `unbox` もそのフィールドを読まない
@@ -313,23 +291,29 @@ internal role body fn outer(b.0: {ball}) -> float {{
 }
 
 #[test]
-fn a_lin_box_consumed_elsewhere_or_with_rc_leaves_is_not_dropped() {
-    // 箱をほかで消費する (`return` が受け直す前の箱を返す) ときと、`unr` でない RC の葉を持つときは、構造体の `unbox`
-    // の後に `drop` を置かない
+fn a_struct_unbox_leaves_the_lin_box_to_perceus() {
+    // 構造体の `unbox` の後に、開くパスは `lin` の箱を手放す `drop` を置かない。箱を消費するかは道ごとに違うので、
+    // 道ごとに手放すのは Perceus である (docs/superpowers/specs/2026-10-21-s14e-abi-struct-design.md の「LIR」)
     let text = "\
 layout Tok { Tok(int, float) }
-layout Res { Res(int, tobj) }
+internal role body fn f(t.0: Tok{int, float} lin) -> int {
+  unpack t.0 Tok #0(a.1: int, b.2: float)
+  return a.1
+}
 internal role body fn kept(t.0: Tok{int, float} lin) -> Tok{int, float} lin {
   unpack t.0 Tok #0(a.1: int, b.2: float)
   let c.3: unit = extern Prelude.check_index(a.1, a.1)
   return t.0
 }
-internal role body fn owning(t.0: Res{int, obj lin} lin) -> int {
-  unpack t.0 Res #0(a.1: int, h.2: obj lin)
-  return a.1
-}
 ";
     let shown = flatten_text(text);
+    insta::assert_snapshot!(function(&shown, "f"), @"
+    internal role body fn f(t.3: tobj lin) -> tobj {
+      let (t.0.5: int, _) = unbox t.3 Tok
+      let a.4: tobj = box t.0.5
+      return a.4
+    }
+    ");
     insta::assert_snapshot!(function(&shown, "kept"), @"
     internal role body fn kept(t.4: tobj lin) -> tobj lin {
       let (t.0.5: int, _) = unbox t.4 Tok
@@ -337,19 +321,11 @@ internal role body fn owning(t.0: Res{int, obj lin} lin) -> int {
       return t.4
     }
     ");
-    insta::assert_snapshot!(function(&shown, "owning"), @"
-    internal role body fn owning(t.3: tobj lin) -> tobj {
-      let (t.0.5: int, _) = unbox t.3 Res
-      let a.4: tobj = box t.0.5
-      return a.4
-    }
-    ");
 }
 
 #[test]
-fn a_box_taken_from_a_struct_leaf_is_dropped_by_the_leaf() {
-    // 構造体の葉にある `lin` の箱から構造体を取り出すと、`drop` は葉の変数を手放す。箱をほかで消費するかは、葉に
-    // 置き換えた後の関数で数える
+fn a_box_taken_from_a_struct_leaf_is_unboxed_from_the_leaf() {
+    // 構造体の葉にある箱から構造体を取り出すと、`unbox` は葉の変数から読む
     let text = format!(
         "{VEC3}layout W {{ W(tobj, int) }}
 fn g(v.0: Vec3{{float, float, float}} lin) -> float {{
@@ -367,7 +343,6 @@ fn f(s.0: W{{tobj lin, int}} lin) -> float {{
     insta::assert_snapshot!(function(&flatten_text(&text), "f"), @r#"
     fn f(s.0.6: tobj lin, s.1.7: int) -> float source(W{tobj lin, int}) -> float {
       let (t.0.8: float, t.1.9: float, t.2.10: float) = unbox s.0.6 Vec3
-      let s.0.11: unit = drop s.0.6
       let r.3: float = call g(t.0.8, t.1.9, t.2.10)
       let q.4: float = extern "Prelude.Num Float.+"(r.3, 1.0)
       return q.4
@@ -376,9 +351,8 @@ fn f(s.0: W{{tobj lin, int}} lin) -> float {{
 }
 
 #[test]
-fn a_box_unboxed_in_two_branches_is_dropped_in_each() {
-    // box の挿入は使う所ごとに取り出すので、二つの枝はそれぞれ構造体を取り出して `drop` を置く。箱をほかで消費するかは、
-    // 置いた `drop` の後で届く所に限って数える
+fn a_box_used_in_two_branches_is_unboxed_in_each() {
+    // box の挿入は使う所ごとに取り出すので、二つの枝はそれぞれ構造体を取り出す
     let text = format!(
         "{VEC3}layout W {{ W(tobj, int) }}
 layout Prelude.Bool {{ False, True }}
@@ -397,45 +371,20 @@ b2:
   let u.6: float = extern \"Prelude.Num Float.+\"(q.5, 1.0)
   return u.6
 }}
-fn mixed(s.0: W{{tobj lin, int}} lin, c.1: enum) -> tobj lin {{
-  unpack s.0 W #0(t.2: tobj lin, n.3: int)
-  switch c.1 Prelude.Bool {{ #0 -> b1, #1 -> b2 }}
-b1:
-  return t.2
-b2:
-  let r.4: float = call g(t.2)
-  return #0
-}}
 "
     );
-    let shown = flatten_text(&text);
-    insta::assert_snapshot!(function(&shown, "f"), @r#"
+    insta::assert_snapshot!(function(&flatten_text(&text), "f"), @r#"
     fn f(s.0.9: tobj lin, s.1.10: int, c.1: enum) -> float source(W{tobj lin, int}, enum) -> float {
       switch c.1 Prelude.Bool { #0 -> b1, #1 -> b2 }
     b1:
       let (t.0.11: float, t.1.12: float, t.2.13: float) = unbox s.0.9 Vec3
-      let s.0.14: unit = drop s.0.9
       let r.4: float = call g(t.0.11, t.1.12, t.2.13)
       return r.4
     b2:
-      let (t.0.15: float, t.1.16: float, t.2.17: float) = unbox s.0.9 Vec3
-      let s.0.18: unit = drop s.0.9
-      let q.5: float = call g(t.0.15, t.1.16, t.2.17)
+      let (t.0.14: float, t.1.15: float, t.2.16: float) = unbox s.0.9 Vec3
+      let q.5: float = call g(t.0.14, t.1.15, t.2.16)
       let u.6: float = extern "Prelude.Num Float.+"(q.5, 1.0)
       return u.6
     }
     "#);
-    // 片方の枝が箱を返しても、取り出すだけの枝では箱を手放す
-    insta::assert_snapshot!(function(&shown, "mixed"), @"
-    fn mixed(s.0.6: tobj lin, s.1.7: int, c.1: enum) -> tobj lin source(W{tobj lin, int}, enum) -> tobj {
-      switch c.1 Prelude.Bool { #0 -> b1, #1 -> b2 }
-    b1:
-      return s.0.6
-    b2:
-      let (t.0.8: float, t.1.9: float, t.2.10: float) = unbox s.0.6 Vec3
-      let s.0.11: unit = drop s.0.6
-      let r.4: float = call g(t.0.8, t.1.9, t.2.10)
-      return #0
-    }
-    ");
 }

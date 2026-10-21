@@ -17,8 +17,8 @@
 use std::collections::{HashMap, HashSet};
 
 use crate::{
-    Atom, Block, BlockId, Call, Ctor, EffectInfo, FloatBits, Layout, LirFn, Mark, OpRet, Prim,
-    Program, Repr, Rhs, Site, SourceSig, Stmt, StructId, Structs, Term, VarId, VarInfo, operation,
+    Atom, Call, Ctor, EffectInfo, FloatBits, Layout, LirFn, Mark, OpRet, Prim, Program, Repr, Rhs,
+    Site, SourceSig, Stmt, StructId, Structs, Term, VarId, VarInfo, operation,
 };
 
 pub fn flatten(program: &mut Program) {
@@ -65,9 +65,6 @@ struct Flattener<'a> {
     from_field: HashMap<VarId, VarId>,
     /// 入れ子の構造体の箱を受けた `tobj` のフィールドの変数。それを開く構造体の `unbox` は、葉がどれも使われなければ消す。
     nested_boxes: HashSet<VarId>,
-    /// 構造体の `unbox` の後に置いた `drop` の結果の変数から、手放す箱。箱を開いた後の関数のほかの所で消費すれば、
-    /// 最後にその `drop` を外す。
-    box_drops: HashMap<VarId, VarId>,
 }
 
 impl<'a> Flattener<'a> {
@@ -90,7 +87,6 @@ impl<'a> Flattener<'a> {
             subst: HashMap::new(),
             from_field: HashMap::new(),
             nested_boxes: HashSet::new(),
-            box_drops: HashMap::new(),
         }
     }
 
@@ -151,7 +147,6 @@ impl<'a> Flattener<'a> {
             block.term = term;
         }
         self.remove_unused_reads();
-        self.remove_consumed_box_drops();
         // 開いた構造体の変数はどこからも参照されないので、表から外す。読み戻した表の使われない番号と同じ形にする
         for info in &mut self.function.vars {
             if matches!(info.repr, Repr::Struct(_)) {
@@ -396,20 +391,10 @@ impl<'a> Flattener<'a> {
                 let boxed = self.single_var(*boxed);
                 let VarInfo { name, mark, .. } = self.function.vars[var.0 as usize].clone();
                 let leaves = self.unbox_struct(boxed, id, &name, 0, mark, out);
+                // 箱はここで手放さず、Perceus が道ごとに手放す。box の挿入は取り出しを使う所の支配点に置くので、
+                // 箱を消費するかは道ごとに違い、この文の後に `drop` を置くかは一つに決まらない
+                // (docs/superpowers/specs/2026-10-21-s14e-abi-struct-design.md の「LIR」)
                 self.leaves.insert(var, leaves);
-                // `lin` の箱は Perceus の `decref` (V1 が拒む) でなく `drop` で手放す。`unr` でない RC の葉があれば、
-                // その葉を使う所が箱の中身を受け取るので置かない
-                // (docs/superpowers/specs/2026-10-21-s14e-abi-struct-design.md の「LIR」)。箱をほかで消費するかは、
-                // 開いた後の関数全体を見るまで分からない。箱は構造体の葉 (置き換えた変数) でもありうるためである。
-                // そこで先に置き、最後に `remove_consumed_box_drops` が外す
-                if self.function.mark(boxed) != Mark::Unr && !self.structs.has_non_unr_rc_leaf(id) {
-                    let dropped = self.fresh(self.name(boxed), Repr::Unit, Mark::Unr);
-                    out.push(Stmt::Let {
-                        var: dropped,
-                        rhs: Rhs::Drop(Atom::Var(boxed)),
-                    });
-                    self.box_drops.insert(dropped, boxed);
-                }
             }
             _ => panic!(
                 "internal error: flatten cannot bind the struct `{}.{}` in `{}`",
@@ -705,66 +690,6 @@ impl<'a> Flattener<'a> {
                 block.stmts.retain(|_| keep.next() == Some(true));
             }
         }
-    }
-}
-
-impl Flattener<'_> {
-    /// 構造体の `unbox` の後に置いた `drop` のうち、そこから届く所で箱を消費するものを外す。
-    fn remove_consumed_box_drops(&mut self) {
-        if self.box_drops.is_empty() {
-            return;
-        }
-        let blocks = &self.function.blocks;
-        let mut removed = HashSet::new();
-        for (index, block) in blocks.iter().enumerate() {
-            for (at, stmt) in block.stmts.iter().enumerate() {
-                if let Stmt::Let { var, rhs: _ } = stmt
-                    && let Some(&boxed) = self.box_drops.get(var)
-                    && self.consumed_after(blocks, index, at + 1, boxed)
-                {
-                    removed.insert(*var);
-                }
-            }
-        }
-        for block in &mut self.function.blocks {
-            block
-                .stmts
-                .retain(|stmt| !matches!(stmt, Stmt::Let { var, rhs: _ } if removed.contains(var)));
-        }
-    }
-
-    /// `block` の `at` 番目の文から先で、`boxed` を消費するか。box の挿入は使う所ごとに取り出すので、同じ箱の
-    /// `drop` は枝ごとに置かれる。関数全体で数えると、ほかの枝の `drop` や消費まで数えて判断を誤るので、届く所に
-    /// 限り、置いた `drop` は数えない
-    fn consumed_after(&self, blocks: &[Block], block: usize, at: usize, boxed: VarId) -> bool {
-        let consumes = |stmts: &[Stmt], term: &Term| {
-            let mut found = false;
-            let mut check = |atom: Atom| found |= atom == Atom::Var(boxed);
-            for stmt in stmts {
-                if !matches!(stmt, Stmt::Let { var, rhs: _ } if self.box_drops.contains_key(var)) {
-                    stmt.for_each_consumed(&mut check);
-                }
-            }
-            term.for_each_consumed(&mut check);
-            found
-        };
-        let first = &blocks[block];
-        if consumes(&first.stmts[at..], &first.term) {
-            return true;
-        }
-        let mut seen = HashSet::new();
-        let mut pending: Vec<BlockId> = first.term.successors().collect();
-        while let Some(next) = pending.pop() {
-            if !seen.insert(next) {
-                continue;
-            }
-            let next = &blocks[next.0 as usize];
-            if consumes(&next.stmts, &next.term) {
-                return true;
-            }
-            pending.extend(next.term.successors());
-        }
-        false
     }
 }
 

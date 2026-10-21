@@ -3578,4 +3578,19 @@ fn a_source_result_is_a_struct_on_a_flattened_apply() {
         check_scopes(&unopened),
         Err("an apply has a source result before flatten in `f`".to_string())
     );
+    // 一様な場所の結果は `tobj` の1語なので、源の結果を持たない。テキストには書けないので、読んだものを書き換える
+    use eml_lir::{Call, Site};
+    let mut uniform = read(&many(&format!(" -> {vec3}")));
+    let Stmt::LetMany {
+        call: Call::Apply { site, .. },
+        ..
+    } = &mut uniform.functions[0].blocks[0].stmts[0]
+    else {
+        panic!("expected an apply bound to several values");
+    };
+    *site = Site::Uniform;
+    assert_eq!(
+        verify_flattened(&uniform).map_err(|error| error.message),
+        Err("an apply with a uniform site has a source result".to_string())
+    );
 }

@@ -1671,7 +1671,7 @@ impl<'a> Checker<'a> {
         }
     }
 
-    /// `apply` の `source_ret` の検査。構造体の結果を葉で受ける場所だけが、開いた後の段で持つ
+    /// `apply` の `source_ret` の検査。構造体の結果を葉で受ける型どおりの場所だけが、開いた後の段で持つ
     /// (docs/superpowers/specs/2026-10-21-s14e-abi-struct-design.md の「VM」)。
     fn check_source_ret(
         &self,
@@ -1682,6 +1682,9 @@ impl<'a> Checker<'a> {
         match source_ret {
             Some(_) if self.level < Level::Flattened => {
                 Err("an apply has a source result before flatten".to_string())
+            }
+            Some(_) if matches!(site, ApplySite::Uniform) => {
+                Err("an apply with a uniform site has a source result".to_string())
             }
             Some(Repr::Struct(_)) => Ok(()),
             Some(repr) => Err(format!(
