@@ -15,7 +15,8 @@ use std::collections::{BTreeSet, HashMap, HashSet};
 
 use crate::liveness::{insert_var, live_after_term, live_in, step_back};
 use crate::{
-    Atom, Block, BlockId, CasePattern, Ctor, Layout, LirFn, Program, Rhs, Stmt, Term, VarId,
+    Atom, Block, BlockId, CasePattern, Ctor, Layout, LirFn, Mark, Program, Repr, Rhs, Stmt, Term,
+    VarId, VarInfo,
 };
 
 /// 変換と contract の後に、プログラム全体に1回だけかける。入力は RC の命令を持たない。
@@ -27,11 +28,20 @@ pub fn perceus(program: &mut Program) {
 
 fn insert_rc(function: &mut LirFn, layouts: &[Layout]) {
     let live_in = live_in(function);
+    let mut unboxed = vec![false; function.vars.len()];
+    for stmt in function.blocks.iter().flat_map(|block| &block.stmts) {
+        if let Stmt::UnboxStruct { value, .. } = stmt {
+            unboxed[value.0 as usize] = true;
+        }
+    }
     let mut fields = Fields {
         layouts,
         rc: function.vars.iter().map(|var| var.repr.is_rc()).collect(),
+        marks: function.vars.iter().map(|var| var.mark).collect(),
+        unboxed,
         parent: vec![None; function.vars.len()],
         owner: vec![None; function.vars.len()],
+        drops: Vec::new(),
     };
     // `switch` の行き先には、その `switch` の辺1本だけが入る (R3)。行き先は `switch` のブロックを前からたどり終えた
     // 所有を引き継ぐので、行き先に着くまでここに置く
@@ -65,6 +75,7 @@ fn insert_rc(function: &mut LirFn, layouts: &[Layout]) {
         block.stmts = stmts;
         switch_entries.extend(fields.switch_entries(&state, &block.term, &live_in));
     }
+    function.vars.append(&mut fields.drops);
 }
 
 /// 経路ごとの状態。借用は「持ち主を持ち、所有に入っていない」こと、保持は「所有で、生きていない」ことから決まる。
@@ -120,10 +131,17 @@ struct Parent {
 struct Fields<'a> {
     layouts: &'a [Layout],
     rc: Vec<bool>,
+    marks: Vec<Mark>,
+    /// 構造体の `unbox` が読む箱。箱は構造体の変数の印を持ち、`lin` か `poly` なら `decref` できない (V1) ので、
+    /// 手放す所で `drop` にする。名前を書いて解く `release` には印を付ける。VM がダミーを受けても何もしない命令に
+    /// するためである (docs/superpowers/specs/2026-10-21-s14e-abi-struct-design.md の「ダミーの約束を広げる」)。
+    unboxed: Vec<bool>,
     parent: Vec<Option<Parent>>,
     /// 束縛の時点の持ち主。verifier と同じく、親が所有されていれば親、そうでなければ親の持ち主である
     /// (docs/spec/lir.md の「verifier」)。後で親が所有になっても変えない。
     owner: Vec<Option<VarId>>,
+    /// 箱を手放す `drop` が束縛する `unit` の変数。関数の変数の表の後ろに足す。
+    drops: Vec<VarInfo>,
 }
 
 /// ある命令で必要な変数。命令の後で生きている変数と、命令が使う (消費するか読む) 変数である。
@@ -155,21 +173,33 @@ impl Fields<'_> {
         self.rc(var) && self.owner(var).is_some() && !owned.contains(&var)
     }
 
-    fn bind(&mut self, owned: &BTreeSet<VarId>, value: VarId, ctor: Ctor, fields: &[VarId]) {
+    /// `fields` はフィールドの位置と変数の組で、構造体の `unbox` は読まない位置を飛ばす。
+    fn bind(
+        &mut self,
+        owned: &BTreeSet<VarId>,
+        value: VarId,
+        ctor: Ctor,
+        fields: impl Iterator<Item = (usize, VarId)>,
+    ) {
         let owner = if owned.contains(&value) {
             Some(value)
         } else {
             self.owner(value)
         };
-        for (slot, &field) in fields.iter().enumerate() {
+        for (slot, field) in fields {
             self.parent[field.0 as usize] = Some(Parent { value, ctor, slot });
             self.owner[field.0 as usize] = owner;
         }
     }
 
     /// 束縛したフィールドのうち、生きている RC の対象を、借りた変数として持ち主に属させる。
-    fn lend(&self, state: &mut State, fields: &[VarId], is_live: impl Fn(VarId) -> bool) {
-        for &field in fields {
+    fn lend(
+        &self,
+        state: &mut State,
+        fields: impl Iterator<Item = VarId>,
+        is_live: impl Fn(VarId) -> bool,
+    ) {
+        for field in fields {
             if self.rc(field)
                 && is_live(field)
                 && let Some(owner) = self.owner(field)
@@ -193,7 +223,7 @@ impl Fields<'_> {
 
     /// ブロックの入口で、所有していて死んでいる変数 (使わない引数、ほかの行き先だけが使う変数、フィールドを使わない
     /// scrutinee) を番号の順に捨てる。生きている変数が属している変数は、保持して後で手放す。
-    fn enter(&self, state: &mut State, live: &BTreeSet<VarId>, out: &mut Vec<Stmt>) {
+    fn enter(&mut self, state: &mut State, live: &BTreeSet<VarId>, out: &mut Vec<Stmt>) {
         state.lent.retain(|_, vars| {
             vars.retain(|var| live.contains(var));
             !vars.is_empty()
@@ -206,8 +236,28 @@ impl Fields<'_> {
             .collect();
         for var in dead {
             state.owned.remove(&var);
-            out.push(Stmt::Decref(var));
+            self.discard(var, out);
         }
+    }
+
+    /// 所有していて、属する生きている変数のない `var` を手放す。構造体の `unbox` の箱で `unr` でないものは `drop` に
+    /// する。葉を借りていた箱だが、ここでは生きている葉がないので、箱ごと手放してよい
+    /// (docs/superpowers/specs/2026-10-21-s14e-abi-struct-design.md の「LIR」)。
+    fn discard(&mut self, var: VarId, out: &mut Vec<Stmt>) {
+        if !self.unboxed[var.0 as usize] || self.marks[var.0 as usize] == Mark::Unr {
+            out.push(Stmt::Decref(var));
+            return;
+        }
+        let unit = VarId((self.rc.len() + self.drops.len()) as u32);
+        self.drops.push(VarInfo {
+            name: "u".to_string(),
+            repr: Repr::Unit,
+            mark: Mark::Unr,
+        });
+        out.push(Stmt::Let {
+            var: unit,
+            rhs: Rhs::Drop(Atom::Var(var)),
+        });
     }
 
     /// 文の前に所有を取る命令と消費の数の `dup` を、文の後に死んだ所有の `decref` を置く。`live` は文の後で生きている
@@ -234,7 +284,7 @@ impl Fields<'_> {
             Stmt::Let {
                 rhs: Rhs::Call(_),
                 ..
-            }
+            } | Stmt::LetMany { .. }
         ) {
             take.extend(
                 state
@@ -267,16 +317,39 @@ impl Fields<'_> {
             }
         }
         match &stmt {
-            Stmt::Let { var, rhs: _ } if self.rc(*var) => {
-                state.owned.insert(*var);
+            Stmt::Let { .. } | Stmt::LetMany { .. } => {
+                state.owned.extend(stmt.defs().filter(|&var| self.rc(var)));
             }
             Stmt::Unpack {
                 value,
                 ctor,
                 fields,
             } => {
-                self.bind(&state.owned, *value, *ctor, fields);
-                self.lend(state, fields, |var| live.contains(&var));
+                self.bind(
+                    &state.owned,
+                    *value,
+                    *ctor,
+                    fields.iter().copied().enumerate(),
+                );
+                self.lend(state, fields.iter().copied(), |var| live.contains(&var));
+            }
+            // 構造体の `unbox` の葉は、`unpack` のフィールドと同じく箱から借りる
+            // (docs/superpowers/specs/2026-10-21-s14e-abi-struct-design.md の「LIR」)
+            Stmt::UnboxStruct {
+                value,
+                ctor,
+                fields,
+            } => {
+                let named = || {
+                    fields
+                        .iter()
+                        .enumerate()
+                        .filter_map(|(slot, field)| field.map(|field| (slot, field)))
+                };
+                self.bind(&state.owned, *value, *ctor, named());
+                self.lend(state, named().map(|(_, field)| field), |var| {
+                    live.contains(&var)
+                });
             }
             _ => {}
         }
@@ -289,7 +362,7 @@ impl Fields<'_> {
             if state.owned.contains(&var) && !live.contains(&var) && !state.lent.contains_key(&var)
             {
                 state.owned.remove(&var);
-                out.push(Stmt::Decref(var));
+                self.discard(var, out);
             }
         }
     }
@@ -297,7 +370,13 @@ impl Fields<'_> {
     /// `return`、`tail`、`jump` の前に置く命令。実引数と、`jump` の行き先の入口で生きている借りた変数の所有を取り、
     /// 消費の数の `dup` を置き、保持している変数を手放す。合流するブロックは所有だけで始まるので、どの辺でも所有は
     /// 行き先の入口の生存集合と一致する。`switch` は scrutinee を読むだけなので、何も置かない。
-    fn term(&self, state: &mut State, term: &Term, after: &BTreeSet<VarId>, out: &mut Vec<Stmt>) {
+    fn term(
+        &mut self,
+        state: &mut State,
+        term: &Term,
+        after: &BTreeSet<VarId>,
+        out: &mut Vec<Stmt>,
+    ) {
         if matches!(term, Term::Switch { .. }) {
             return;
         }
@@ -336,7 +415,7 @@ impl Fields<'_> {
             .collect();
         for var in kept {
             owned.remove(&var);
-            out.push(Stmt::Decref(var));
+            self.discard(var, out);
         }
         debug_assert!(
             owned.iter().eq(after.iter().filter(|&&var| self.rc(var))),
@@ -368,9 +447,15 @@ impl Fields<'_> {
                 // 飛ばすと `release` が抜けるので、止める
                 let layout = layout.expect("a switch with tag cases has a layout");
                 if let Atom::Var(value) = *scrutinee {
-                    self.bind(&state.owned, value, Ctor { layout, tag }, &case.fields);
+                    let ctor = Ctor { layout, tag };
+                    self.bind(
+                        &state.owned,
+                        value,
+                        ctor,
+                        case.fields.iter().copied().enumerate(),
+                    );
                     let live = &live_in[case.target.0 as usize];
-                    self.lend(&mut entry, &case.fields, |var| {
+                    self.lend(&mut entry, case.fields.iter().copied(), |var| {
                         live.binary_search(&var).is_ok()
                     });
                 }
@@ -382,7 +467,7 @@ impl Fields<'_> {
     }
 
     /// 借りた変数の所有を、番号の順に取る。持ち主がこの命令で要るなら `dup` し、要らないなら持ち主を解く。
-    fn take(&self, state: &mut State, mut vars: Vec<VarId>, need: &Need, out: &mut Vec<Stmt>) {
+    fn take(&mut self, state: &mut State, mut vars: Vec<VarId>, need: &Need, out: &mut Vec<Stmt>) {
         vars.retain(|&var| self.borrowed(&state.owned, var));
         vars.sort_unstable();
         vars.dedup();
@@ -408,7 +493,7 @@ impl Fields<'_> {
 
     /// 保持している `owner` を解き、それに属する必要な変数をすべて所有にする
     /// (docs/spec/lir.md の「持ち主を解く」)。
-    fn resolve(&self, state: &mut State, owner: VarId, need: &Need, out: &mut Vec<Stmt>) {
+    fn resolve(&mut self, state: &mut State, owner: VarId, need: &Need, out: &mut Vec<Stmt>) {
         // 命令の前で生きている、`owner` に属する変数は、どれもこの命令で必要である。命令の前の生存集合は、命令の後の
         // 生存集合と命令が使う変数の和に含まれるためである
         let needed = state.lent.remove(&owner).unwrap_or_default();
@@ -486,7 +571,7 @@ impl Fields<'_> {
                 })
                 .collect();
             if named.iter().all(Option::is_none) {
-                out.push(Stmt::Decref(value));
+                self.discard(value, out);
                 continue;
             }
             stack.extend(
@@ -502,7 +587,7 @@ impl Fields<'_> {
                 ctor,
                 fields: named,
                 token: None,
-                unboxed: false,
+                unboxed: self.unboxed[value.0 as usize],
             });
         }
         owned.remove(&owner);

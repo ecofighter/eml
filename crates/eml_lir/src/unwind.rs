@@ -33,22 +33,27 @@ pub fn points_all(program: &Program) -> Vec<Result<Vec<UnwindPoint>, VerifyError
     verify::unwind_points(program)
 }
 
-/// 文が巻き戻しの地点なら、文が束縛する変数と着地の印を返す。`aborts` は `may_abort` の結果である。中断しない
-/// 関数の呼び出しは、中断が通らないので地点にしない。
-pub(crate) fn point(stmt: &Stmt, aborts: &[bool]) -> Option<(VarId, Option<VarId>)> {
-    let Stmt::Let { var, rhs } = stmt else {
-        return None;
+/// 文が巻き戻しの地点なら、文が束縛する変数と着地の印を返す。複数の値を返す呼び出しは、葉をすべて束縛する
+/// (docs/superpowers/specs/2026-10-21-s14e-abi-struct-design.md の「LIR」の後のパス)。`aborts` は `may_abort` の
+/// 結果である。中断しない関数の呼び出しは、中断が通らないので地点にしない。
+pub(crate) fn point<'s>(stmt: &'s Stmt, aborts: &[bool]) -> Option<(&'s [VarId], Option<VarId>)> {
+    let (vars, abort, landing) = match stmt {
+        Stmt::Let { var, rhs } => {
+            let landing = match rhs {
+                Rhs::Call(call) => call.prompt(),
+                _ => None,
+            };
+            (std::slice::from_ref(var), rhs_abort(rhs), landing)
+        }
+        Stmt::LetMany { vars, call } => (&vars[..], call_abort(call), call.prompt()),
+        _ => return None,
     };
-    let point = match rhs_abort(rhs) {
+    let point = match abort {
         Abort::Never => false,
         Abort::Always => true,
         Abort::If(callee) => aborts[callee.0 as usize],
     };
-    let landing = match rhs {
-        Rhs::Call(call) => call.prompt(),
-        _ => None,
-    };
-    point.then_some((*var, landing))
+    point.then_some((vars, landing))
 }
 
 /// 関数ごとに、中断しうるか (`never` の操作、`IO` の失敗、`exit`、`Panic`) を `FnIdx` の番号で返す。最小の不動点で、
@@ -63,6 +68,7 @@ pub fn may_abort(program: &Program) -> Vec<bool> {
         for block in &function.blocks {
             let rhss = block.stmts.iter().filter_map(|stmt| match stmt {
                 Stmt::Let { var: _, rhs } => Some(rhs_abort(rhs)),
+                Stmt::LetMany { vars: _, call } => Some(call_abort(call)),
                 _ => None,
             });
             let tail = match &block.term {

@@ -388,3 +388,23 @@ b2:
     }
     "#);
 }
+
+#[test]
+fn a_box_from_a_tail_position_call_is_returned_as_one_value() {
+    // 構造体を返す関数でも、一様な場所の末尾の位置の呼び出しの束縛は `tobj` で、葉に開かずに1つの値のまま返す。
+    // 縮約がこれを末尾呼び出しにし、箱から構造体への変換は VM の変換のフレームが行う
+    let text = "\
+layout (,) { (,)(tobj, tobj) }
+fn f(k.0: obj) -> (,){float, float} {
+  let p.1: (,){float, float} = uniform apply k.0(1)
+  return p.1
+}
+";
+    insta::assert_snapshot!(function(&flatten_text(text), "f"), @"
+    fn f(k.0: obj) -> (float, float) source(obj) -> (,){float, float} {
+      let b.2: tobj = box 1
+      let p.1: tobj = uniform apply k.0(b.2)
+      return p.1
+    }
+    ");
+}

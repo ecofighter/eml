@@ -1,9 +1,9 @@
 //! reuse のパス (docs/spec/lir.md の「reuse」)。入力は Perceus の後の LIR で、入力と出力の両方が所有の段の verifier を
 //! 通ることも確かめる。
 
-use eml_lir::{parse, pretty, reuse, verify};
+use eml_lir::{Pass, parse, pretty, reuse, verify};
 
-use crate::common::function;
+use crate::common::{function, passes_text};
 
 fn reuse_text(text: &str) -> String {
     let mut program = parse(text).unwrap_or_else(|error| panic!("{error}"));
@@ -611,4 +611,51 @@ fn h(y.0: obj, z.1: obj) -> obj {
     let alone = reuse_text(&format!("{P2}{f}"));
     let together = reuse_text(&format!("{P2}{other}{f}"));
     assert_eq!(function(&alone, "f"), function(&together, "f"));
+}
+
+#[test]
+fn swapping_tuple_elements_still_reuses_the_box() {
+    // 構造体の `unbox` の箱を解く `release unboxed` も reuse の元になる。組の要素を入れ替えて箱に戻す形では、今までの
+    // `release` と `con … reuse` の組が構造体の後も残る
+    // (docs/superpowers/specs/2026-10-21-s14e-abi-struct-design.md の「LIR」)
+    let text = "\
+layout (,) { (,)(tobj, tobj) }
+internal role body fn swap(p.0: (,){float, float}) -> (,){float, float} {
+  unpack p.0 (,) #0(a.1: float, b.2: float)
+  let q.3: (,){float, float} = con (,) #0(b.2, a.1)
+  return q.3
+}
+";
+    insta::assert_snapshot!(function(&passes_text(text, Pass::Reuse), "swap"), @"
+    internal role body fn swap(p.4: tobj) -> tobj {
+      let (p.0.6: tobj, p.1.8: tobj) = unbox p.4 (,)
+      let r.10: token = release unboxed p.4 (,) #0(p.0.6, p.1.8)
+      let q.5: obj = con (,) #0(p.1.8, p.0.6) reuse r.10 in place
+      return q.5
+    }
+    ");
+}
+
+#[test]
+fn a_decref_of_an_unboxed_box_becomes_a_marked_token() {
+    // 葉をどれも残さない箱は、Perceus が `decref` で手放す。構築子は構造体の `unbox` で分かっているので reuse の元に
+    // なり、token を作る `release` にも印を付ける。箱がダミーなら空の token を作るためである
+    let text = "\
+layout Tok { Tok(int, float) }
+internal role body fn bump(t.0: Tok{int, float}) -> Tok{int, float} {
+  unpack t.0 Tok #0(n.1: int, x.2: float)
+  let m.3: int = extern \"Prelude.Num Int.+\"(n.1, 1)
+  let s.4: Tok{int, float} = con Tok #0(m.3, x.2)
+  return s.4
+}
+";
+    insta::assert_snapshot!(function(&passes_text(text, Pass::Reuse), "bump"), @r#"
+    internal role body fn bump(t.5: tobj) -> tobj {
+      let (t.0.7: int, t.1.8: float) = unbox t.5 Tok
+      let r.9: token = release unboxed t.5 Tok #0(_, _)
+      let m.3: int = extern "Prelude.Num Int.+"(t.0.7, 1)
+      let s.6: obj = con Tok #0(m.3, =t.1.8) reuse r.9 in place
+      return s.6
+    }
+    "#);
 }

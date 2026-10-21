@@ -3,7 +3,9 @@
 //! 確かめる。ソースからパイプラインを通すテストは `eml_core_ir` の tests/perceus.rs にある。
 
 use eml_lir::liveness::live_in;
-use eml_lir::{VarId, parse, perceus, pretty, verify, verify_scopes};
+use eml_lir::{Pass, VarId, parse, perceus, pretty, verify, verify_scopes};
+
+use crate::common::{function, passes_text};
 
 fn perceus_text(text: &str) -> String {
     let mut program = parse(text).unwrap_or_else(|error| panic!("{error}"));
@@ -1250,6 +1252,121 @@ fn last(a.0: obj) -> tobj {
       let x.1: tobj = extern Std.Array.get(a.0, 0)
       decref a.0
       return x.1
+    }
+    ");
+}
+
+#[test]
+fn an_unboxed_box_is_released_with_its_named_leaves() {
+    // 構造体の `unbox` の葉は、`unpack` のフィールドと同じく箱から借りる。箱が死んで葉が要る所では、葉に名前を書いた
+    // `release unboxed` で箱を解く。印の付いた `release` は、箱がダミーでも何もしない
+    // (docs/superpowers/specs/2026-10-21-s14e-abi-struct-design.md の「ダミーの約束を広げる」)
+    let text = "\
+layout (,) { (,)(tobj, tobj) }
+fn g(a.0: obj) -> obj {
+  return a.0
+}
+internal role body fn f(p.0: (,){obj, obj}) -> obj {
+  unpack p.0 (,) #0(a.1: obj, b.2: obj)
+  let c.3: obj = call g(a.1)
+  let d.4: obj = extern Prelude.++(c.3, b.2)
+  return d.4
+}
+";
+    insta::assert_snapshot!(function(&passes_text(text, Pass::Perceus), "f"), @"
+    internal role body fn f(p.5: tobj) -> obj {
+      let (p.0.6: obj, p.1.7: obj) = unbox p.5 (,)
+      release unboxed p.5 (,) #0(p.0.6, p.1.7)
+      let c.3: obj = call g(p.0.6)
+      let d.4: obj = extern Prelude.++(c.3, p.1.7)
+      return d.4
+    }
+    ");
+}
+
+#[test]
+fn a_lin_box_unboxed_before_a_switch_is_dropped_only_where_it_is_not_consumed() {
+    // box の挿入は構造体の `unbox` を使う所の支配点 (入口) に置く。`b2` は箱をそのまま返して消費し、`b1` は葉だけを
+    // 使う。`lin` の箱は `decref` できない (V1) ので、`b1` の道でだけ `drop` で手放す。RC の対象の葉がないので、
+    // 名前を書く葉もない
+    let text = "\
+layout Tok { Tok(int, float) }
+layout Prelude.Bool { False, True }
+fn g(n.0: int) -> int {
+  return n.0
+}
+internal role body fn f(k.0: obj, c.1: enum, u.2: unit) -> Tok{int, float} lin {
+  let t.3: Tok{int, float} lin = uniform apply k.0(1)
+  unpack t.3 Tok #0(n.4: int, x.5: float)
+  switch c.1 Prelude.Bool { #0 -> b1, #1 -> b2 }
+b1:
+  let m.6: int = call g(n.4)
+  let s.7: Tok{int, float} lin = con Tok #0(m.6, x.5)
+  return s.7
+b2:
+  return t.3
+}
+";
+    insta::assert_snapshot!(function(&passes_text(text, Pass::Perceus), "f"), @"
+    internal role body fn f(k.0: obj, c.1: enum, u.2: unit) -> tobj lin {
+      let b.8: tobj = box 1
+      let t.9: tobj lin = uniform apply k.0(b.8)
+      let (t.0.11: int, t.1.12: float) = unbox t.9 Tok
+      switch c.1 Prelude.Bool { #0 -> b1, #1 -> b2 }
+    b1:
+      let u.13: unit = drop t.9
+      let m.6: int = call g(t.0.11)
+      let s.10: obj lin = con Tok #0(m.6, t.1.12)
+      return s.10
+    b2:
+      return t.9
+    }
+    ");
+}
+
+#[test]
+fn a_borrowed_leaf_word_is_named_or_dupped_around_its_lin_box() {
+    // 箱の `tobj` のフィールドの語を、開くパスは箱に戻す葉にそのまま渡す (葉の単位の覗き穴)。この語も箱から借りる。
+    // `named` では箱がもう要らないので、語に名前を書いた `release unboxed` で箱を解いてから、2つ目の使いの分を
+    // `dup` する。`dupped` では箱が後で消費されるので、箱を解かずに語を `dup` する。どちらも `lin` の箱を `decref`
+    // しない
+    let text = "\
+layout (,) { (,)(tobj, tobj) }
+layout Option { None, Some(tobj) }
+internal role body fn named(p.0: (,){float, float} lin) -> tobj {
+  unpack p.0 (,) #0(a.1: float, b.2: float)
+  let q.3: (,){float, float} = con (,) #0(a.1, a.1)
+  let o.4: tobj = con Option #1(q.3)
+  return o.4
+}
+internal role body fn dupped(p.0: (,){float, float} lin) -> obj lin {
+  unpack p.0 (,) #0(a.1: float, b.2: float)
+  let q.3: (,){float, float} = con (,) #0(a.1, a.1)
+  let o.4: tobj = con Option #1(q.3)
+  let r.5: obj lin = con (,) #0(o.4, p.0)
+  return r.5
+}
+";
+    let shown = passes_text(text, Pass::Perceus);
+    insta::assert_snapshot!(function(&shown, "named"), @"
+    internal role body fn named(p.5: tobj lin) -> tobj {
+      let (p.0.7: tobj, _) = unbox p.5 (,)
+      release unboxed p.5 (,) #0(p.0.7, _)
+      dup p.0.7
+      let q.6: obj = con (,) #0(p.0.7, p.0.7)
+      let o.4: tobj = con Option #1(q.6)
+      return o.4
+    }
+    ");
+    insta::assert_snapshot!(function(&shown, "dupped"), @"
+    internal role body fn dupped(p.6: tobj lin) -> obj lin {
+      let (p.0.8: tobj, _) = unbox p.6 (,)
+      dup p.0.8
+      dup p.0.8
+      let q.7: obj = con (,) #0(p.0.8, p.0.8)
+      let o.4: tobj = con Option #1(q.7)
+      let r.5: obj lin = con (,) #0(o.4, p.6)
+      return r.5
     }
     ");
 }

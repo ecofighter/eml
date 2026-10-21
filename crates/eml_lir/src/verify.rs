@@ -393,6 +393,11 @@ struct Checker<'a> {
     origins: Vec<Option<Origin>>,
     /// token ごとの、元の値とそのコンストラクタ。`owners` と同じく、変数は1回だけ定義されるので関数に1つの表にする。
     token_sources: Vec<Option<(VarId, Ctor)>>,
+    /// 構造体の `unbox` が読む箱。その `release` だけが `unboxed` の印を持ち、いつも持つ。VM は印の付いた `release`
+    /// を、ダミーを受けても何もしない命令にするためである
+    /// (docs/superpowers/specs/2026-10-21-s14e-abi-struct-design.md の「ダミーの約束を広げる」)。変数は1回だけ
+    /// 定義されるので (R5)、関数に1つの表にする。
+    unboxed: Vec<bool>,
     /// 巻き戻しの地点ごとの所有を書き留める先。`unwind_points` だけが与える。
     unwind: Option<Recorder<'a>>,
 }
@@ -430,6 +435,7 @@ impl<'a> Checker<'a> {
             owners: vec![None; function.vars.len()],
             origins: vec![None; function.vars.len()],
             token_sources: vec![None; function.vars.len()],
+            unboxed: unboxed_values(function),
             unwind: None,
         }
     }
@@ -523,12 +529,12 @@ impl<'a> Checker<'a> {
             };
             self.check_stmt(&mut owned, stmt)?;
             if let Some(Recorder { aborts, points }) = &mut self.unwind
-                && let Some((var, landing)) = unwind::point(stmt, aborts)
+                && let Some((vars, landing)) = unwind::point(stmt, aborts)
             {
                 // 束縛した変数は命令が戻ってから現れるので、巻き戻しで手放すものに入れない
                 let (tokens, owned): (Vec<_>, Vec<_>) = owned
                     .iter()
-                    .filter(|&(&held, _)| held != var)
+                    .filter(|&(held, _)| !vars.contains(held))
                     .map(|(&var, &count)| (var, count))
                     .partition(|&(held, _)| function.repr(held) == Repr::Token);
                 points.push(UnwindPoint {
@@ -672,9 +678,24 @@ impl<'a> Checker<'a> {
                 ctor,
                 fields,
                 token,
-                unboxed: _,
+                unboxed,
             } => {
                 self.rc_allowed(*value, "released with its fields")?;
+                match (*unboxed, self.unboxed[value.0 as usize]) {
+                    (false, true) => {
+                        return Err(format!(
+                            "`{}` is unboxed as a struct, but its release is not marked unboxed",
+                            self.cx.name(*value)
+                        ));
+                    }
+                    (true, false) => {
+                        return Err(format!(
+                            "`{}` is released as unboxed, but it is not unboxed as a struct",
+                            self.cx.name(*value)
+                        ));
+                    }
+                    _ => {}
+                }
                 self.release(owned, *value, *ctor, fields, token.is_some())?;
                 match *token {
                     Some(token) => self.define_token(owned, token, *value, *ctor),
@@ -2026,6 +2047,19 @@ impl<'a> Checker<'a> {
 }
 
 /// 入口の段が拒む `tail` の言い方。
+/// 構造体の `unbox` が読む変数の印を、`VarId` の番号で引く表にする。
+fn unboxed_values(function: &LirFn) -> Vec<bool> {
+    let mut unboxed = vec![false; function.vars.len()];
+    for stmt in function.blocks.iter().flat_map(|block| &block.stmts) {
+        if let Stmt::UnboxStruct { value, .. } = stmt
+            && let Some(slot) = unboxed.get_mut(value.0 as usize)
+        {
+            *slot = true;
+        }
+    }
+    unboxed
+}
+
 fn tail_text(call: &Call) -> &'static str {
     match call {
         Call::Direct(_, _) => "a tail call",

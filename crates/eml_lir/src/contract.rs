@@ -3,20 +3,20 @@
 //! 所有権を扱わずに書き換えられる。
 
 use crate::{
-    Atom, Block, Call, EffectInfo, LirFn, Mark, OpRet, Program, Rhs, Stmt, Term, operation,
+    Atom, Block, Call, EffectInfo, LirFn, Mark, OpRet, Program, Rhs, Stmt, Term, VarId, operation,
 };
 
 pub fn contract(program: &mut Program) {
-    let ret_marks: Vec<Mark> = program
+    let ret_marks: Vec<Vec<Mark>> = program
         .functions
         .iter()
-        .map(|function| function.rets[0].1)
+        .map(|function| function.rets.iter().map(|&(_, mark)| mark).collect())
         .collect();
     for function in &mut program.functions {
         remove_dead_lets(function);
-        let ret_mark = function.rets[0].1;
+        let rets: Vec<Mark> = function.rets.iter().map(|&(_, mark)| mark).collect();
         for block in &mut function.blocks {
-            tail_call(block, ret_mark, &ret_marks, &program.effects);
+            tail_call(block, &rets, &ret_marks, &program.effects);
         }
         // 1回のパスで不動点に達することを確かめる (docs/spec/lir.md の「縮約」)。確かめるパスも IR を書き換えうるので、
         // その副作用を `debug_assert!` の式に隠さない
@@ -31,29 +31,39 @@ pub fn contract(program: &mut Program) {
     }
 }
 
-/// `let x = <呼び出し>` の後の終端が `return x` なら、その2つを末尾呼び出しにする。結果の Repr が関数の `ret` と
+/// `let x = <呼び出し>` の後の終端が `return x` なら、その2つを末尾呼び出しにする。複数の値を返す呼び出しは、
+/// `let (x.0, .., x.n) = <呼び出し>` の後の `return (x.0, .., x.n)` (同じ並び、同じ順) を同じく末尾呼び出しにする
+/// (docs/superpowers/specs/2026-10-21-s14e-abi-struct-design.md の「LIR」の後のパス)。結果の Repr が関数の結果と
 /// 互換でなくてもよい。結果の変換は VM の変換のフレームが行い、末尾呼び出しの間で合成する
 /// (docs/superpowers/specs/2026-10-21-s14e-abi-struct-design.md の「box の挿入」)。印の互換は推移的でないので、
-/// x を通してつながっていた結果の印 (関数値の適用なら `poly`) と関数の戻り値の印を直接つないでも互換かを確かめる。
-/// `never` の操作の節の呼び出しは戻らないので、どの戻り値の印とも互換とする
-/// (docs/spec/lir.md の「縮約」と「Kind の印」)。
-fn tail_call(block: &mut Block, ret_mark: Mark, ret_marks: &[Mark], effects: &[EffectInfo]) {
-    let Term::Return(Atom::Var(returned)) = block.term else {
-        return;
+/// x を通してつながっていた結果の印 (関数値の適用なら `poly`) と関数の戻り値の印を、値ごとに直接つないでも互換かを
+/// 確かめる。値の数が違う形 (構造体と箱の間) の印は変換のフレームが受け渡すので比べない。`never` の操作の節の
+/// 呼び出しは戻らないので、どの戻り値の印とも互換とする (docs/spec/lir.md の「縮約」と「Kind の印」)。
+fn tail_call(block: &mut Block, rets: &[Mark], ret_marks: &[Vec<Mark>], effects: &[EffectInfo]) {
+    let returned: &[Atom] = match &block.term {
+        Term::Return(atom) => std::slice::from_ref(atom),
+        Term::ReturnMany(atoms) => atoms,
+        _ => return,
     };
-    let Some(Stmt::Let {
-        var,
-        rhs: Rhs::Call(call),
-    }) = block.stmts.last()
-    else {
-        return;
+    let (vars, call): (&[VarId], &Call) = match block.stmts.last() {
+        Some(Stmt::Let {
+            var,
+            rhs: Rhs::Call(call),
+        }) => (std::slice::from_ref(var), call),
+        Some(Stmt::LetMany { vars, call }) => (vars, call),
+        _ => return,
     };
-    if *var != returned {
+    if vars.len() != returned.len()
+        || vars
+            .iter()
+            .zip(returned)
+            .any(|(&var, &atom)| atom != Atom::Var(var))
+    {
         return;
     }
-    let result_mark = match call {
-        Call::Direct(target, _) => Some(ret_marks[target.0 as usize]),
-        Call::Apply { .. } => Some(Mark::Poly),
+    let result_marks = match call {
+        Call::Direct(target, _) => Some(ret_marks[target.0 as usize].clone()),
+        Call::Apply { .. } => Some(vec![Mark::Poly; vars.len()]),
         Call::Clause {
             effect,
             op,
@@ -62,20 +72,28 @@ fn tail_call(block: &mut Block, ret_mark: Mark, ret_marks: &[Mark], effects: &[E
         } => {
             let operation = operation(effects, *effect, *op);
             match operation.ret {
-                OpRet::Repr(_) => Some(operation.ret_mark),
+                OpRet::Repr(_) => Some(vec![operation.ret_mark]),
                 OpRet::Never => None,
             }
         }
     };
-    if !result_mark.is_none_or(|mark| mark.compatible(ret_mark)) {
+    let compatible = result_marks.is_none_or(|marks| {
+        marks.len() != rets.len()
+            || marks
+                .iter()
+                .zip(rets)
+                .all(|(&mark, &ret)| mark.compatible(ret))
+    });
+    if !compatible {
         return;
     }
-    let Some(Stmt::Let {
-        var: _,
-        rhs: Rhs::Call(call),
-    }) = block.stmts.pop()
-    else {
-        unreachable!("the last statement was checked above");
+    let call = match block.stmts.pop() {
+        Some(Stmt::Let {
+            var: _,
+            rhs: Rhs::Call(call),
+        })
+        | Some(Stmt::LetMany { vars: _, call }) => call,
+        _ => unreachable!("the last statement was checked above"),
     };
     block.term = Term::TailCall(call);
 }
@@ -99,17 +117,32 @@ fn remove_dead_lets(function: &mut LirFn) -> bool {
     let mut removed = false;
     for block in function.blocks.iter_mut().rev() {
         let mut keep = vec![true; block.stmts.len()];
-        for (position, stmt) in block.stmts.iter().enumerate().rev() {
-            if let Stmt::Let { var, rhs } = stmt
-                && uses[var.0 as usize] == 0
-                && pure(rhs)
-            {
-                keep[position] = false;
-                rhs.for_each_atom(|atom| {
-                    if let Atom::Var(used) = atom {
-                        uses[used.0 as usize] -= 1;
+        for (position, stmt) in block.stmts.iter_mut().enumerate().rev() {
+            match stmt {
+                Stmt::Let { var, rhs } if uses[var.0 as usize] == 0 && pure(rhs) => {
+                    keep[position] = false;
+                    rhs.for_each_atom(|atom| {
+                        if let Atom::Var(used) = atom {
+                            uses[used.0 as usize] -= 1;
+                        }
+                    });
+                }
+                // 構造体の `unbox` は箱を読むだけの純粋な `let` である。使われない葉は `_` にして読まず、葉がどれも
+                // 使われなければ文ごと消す。開くパスの覗き穴が残す使われない `unbox` が消え、末尾の位置の呼び出しの
+                // 形が保たれる (docs/superpowers/specs/2026-10-21-s14e-abi-struct-design.md の「LIR」)
+                Stmt::UnboxStruct { value, fields, .. } => {
+                    for field in fields.iter_mut() {
+                        if field.is_some_and(|var| uses[var.0 as usize] == 0) {
+                            *field = None;
+                            removed = true;
+                        }
                     }
-                });
+                    if fields.iter().all(Option::is_none) {
+                        keep[position] = false;
+                        uses[value.0 as usize] -= 1;
+                    }
+                }
+                _ => {}
             }
         }
         if keep.contains(&false) {

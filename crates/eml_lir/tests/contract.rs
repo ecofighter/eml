@@ -2,7 +2,8 @@
 //! 末尾呼び出しの規則を当てることを、IR のテキストで確かめる。ソースから縮約までを通すテストは `eml_core_ir` の
 //! tests/contract.rs にある。
 
-use eml_lir::{contract, parse, pretty, verify_scopes};
+use crate::common::{function, passes_text};
+use eml_lir::{Pass, contract, parse, pretty, verify_scopes};
 
 /// 入力と出力が、どちらも scope の段の verifier を通ることも確かめる。
 fn contract_text(text: &str) -> String {
@@ -327,6 +328,97 @@ fn f(x.0: tobj) -> unit {
     fn f(x.0: tobj) -> unit {
       let u.2: unit = prim root_set[1](x.0)
       return ()
+    }
+    ");
+}
+
+const VEC3: &str = "layout Vec3 { Vec3(float, float, float) }\n";
+
+#[test]
+fn a_multi_value_call_returned_in_order_becomes_tail() {
+    // `let (x.0, .., x.n) = <呼び出し>` の直後の `return (x.0, .., x.n)` は、同じ並びで同じ順なら末尾呼び出しになる。
+    // 構造体を返す型どおりの `apply` も同じである
+    // (docs/superpowers/specs/2026-10-21-s14e-abi-struct-design.md の「LIR」の後のパス)
+    let text = format!(
+        "{VEC3}fn g(x.0: float) -> Vec3{{float, float, float}} {{
+  let v.1: Vec3{{float, float, float}} = con Vec3 #0(x.0, x.0, 1.0)
+  return v.1
+}}
+fn f(x.0: float) -> Vec3{{float, float, float}} {{
+  let v.1: Vec3{{float, float, float}} = call g(x.0)
+  return v.1
+}}
+fn h(k.0: obj, x.1: float) -> Vec3{{float, float, float}} {{
+  let v.2: Vec3{{float, float, float}} = apply k.0(x.1)
+  return v.2
+}}
+"
+    );
+    let shown = passes_text(&text, Pass::Contract);
+    insta::assert_snapshot!(function(&shown, "f"), @"
+    fn f(x.0: float) -> (float, float, float) source(float) -> Vec3{float, float, float} {
+      tail call g(x.0)
+    }
+    ");
+    insta::assert_snapshot!(function(&shown, "h"), @"
+    fn h(k.0: obj, x.1: float) -> (float, float, float) source(obj, float) -> Vec3{float, float, float} {
+      tail apply k.0(x.1) source(float) -> Vec3{float, float, float}
+    }
+    ");
+}
+
+#[test]
+fn a_reordered_return_is_not_tail() {
+    // 値の順を入れ替えて返すなら、呼び出しの結果をそのまま返すのではないので、末尾呼び出しにしない
+    let text = format!(
+        "{VEC3}fn g(x.0: float) -> Vec3{{float, float, float}} {{
+  let v.1: Vec3{{float, float, float}} = con Vec3 #0(x.0, x.0, 1.0)
+  return v.1
+}}
+fn f(x.0: float) -> Vec3{{float, float, float}} {{
+  let v.1: Vec3{{float, float, float}} = call g(x.0)
+  unpack v.1 Vec3 #0(a.2: float, b.3: float, c.4: float)
+  let w.5: Vec3{{float, float, float}} = con Vec3 #0(b.3, a.2, c.4)
+  return w.5
+}}
+"
+    );
+    insta::assert_snapshot!(function(&passes_text(&text, Pass::Contract), "f"), @"
+    fn f(x.0: float) -> (float, float, float) source(float) -> Vec3{float, float, float} {
+      let (v.0.6: float, v.1.7: float, v.2.8: float) = call g(x.0)
+      return (v.1.7, v.0.6, v.2.8)
+    }
+    ");
+}
+
+#[test]
+fn an_unused_struct_unbox_is_removed_and_the_call_becomes_tail() {
+    // `g` の入口で引数を受け直す `unbox` は、box の挿入の覗き穴が箱をそのまま渡すので使われない。`h` の `apply` の
+    // 結果を受け直す `unbox` は、葉をどれも使わない。構造体の `unbox` は純粋な `let` なので縮約がどちらも消し、
+    // その後の呼び出しは末尾呼び出しになる
+    let text = "\
+layout (,) { (,)(tobj, tobj) }
+internal role body fn g(k.0: obj, p.1: (,){float, float}) -> tobj {
+  let r.2: tobj = uniform apply k.0(p.1)
+  return r.2
+}
+fn h(k.0: obj, x.1: float) -> (,){float, float} {
+  let p.2: (,){float, float} = uniform apply k.0(x.1)
+  let q.3: (,){float, float} = call h(k.0, 2.0)
+  return q.3
+}
+";
+    let shown = passes_text(text, Pass::Contract);
+    insta::assert_snapshot!(function(&shown, "g"), @"
+    internal role body fn g(k.0: obj, p.3: tobj) -> tobj {
+      tail uniform apply k.0(p.3)
+    }
+    ");
+    insta::assert_snapshot!(function(&shown, "h"), @"
+    fn h(k.0: obj, x.1: float) -> (float, float) source(obj, float) -> (,){float, float} {
+      let x.4: tobj = box x.1
+      let p.5: tobj = uniform apply k.0(x.4)
+      tail call h(k.0, 2.0)
     }
     ");
 }

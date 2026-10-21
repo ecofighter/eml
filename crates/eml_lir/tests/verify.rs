@@ -3594,3 +3594,35 @@ fn a_source_result_is_a_struct_on_a_flattened_apply() {
         Err("an apply with a uniform site has a source result".to_string())
     );
 }
+
+/// 構造体の `unbox` の箱を手放す `release` だけが `unboxed` の印を持ち、その箱の `release` はいつも印を持つ。VM は
+/// 印の付いた `release` を、ダミーを受けても何もしない別の命令にする
+/// (docs/superpowers/specs/2026-10-21-s14e-abi-struct-design.md の「ダミーの約束を広げる」)。
+#[test]
+fn only_the_box_of_a_struct_unbox_is_released_unboxed() {
+    let text = |unbox: &str, release: &str| {
+        format!(
+            "layout P {{ P(obj, obj) }}
+fn f(w.0: obj) -> obj {{
+  {unbox}
+  {release} w.0 P #0(a.1, _)
+  return a.1
+}}
+"
+        )
+    };
+    let unbox = "let (a.1: obj, _) = unbox w.0 P";
+    let unpack = "unpack w.0 P #0(a.1: obj, b.2: obj)";
+    assert_eq!(check(&text(unbox, "release unboxed")), Ok(()));
+    assert_eq!(
+        check(&text(unbox, "release")),
+        Err(
+            "`w.0` is unboxed as a struct, but its release is not marked unboxed in `f`"
+                .to_string()
+        )
+    );
+    assert_eq!(
+        check(&text(unpack, "release unboxed")),
+        Err("`w.0` is released as unboxed, but it is not unboxed as a struct in `f`".to_string())
+    );
+}

@@ -61,6 +61,8 @@ struct Token {
     ctor: Ctor,
     fields: usize,
     words: u32,
+    /// `decref` の元を token の `release` に書き換えるときに付ける、構造体の `unbox` の箱の印。
+    unboxed: bool,
     /// 元の文を上げる先。同じブロックの、この token を受ける `con` の文の番号である。
     moved_to: Option<usize>,
 }
@@ -86,6 +88,10 @@ struct Planner<'a> {
     shapes: &'a [Vec<Shape>],
     /// フィールドの出どころ (分解した値、構築子、位置)。変数は1回だけ定義されるので (R5)、関数に1つの表にする。
     origins: Vec<Option<(VarId, Ctor, usize)>>,
+    /// 構造体の `unbox` が読む箱。その `decref` から作る token の `release` にも、Perceus の `release` と同じ印を
+    /// 付ける。箱がダミーなら空の token を作るためである
+    /// (docs/superpowers/specs/2026-10-21-s14e-abi-struct-design.md の「ダミーの約束を広げる」)。
+    unboxed: Vec<bool>,
     tokens: Vec<Token>,
     /// token を受ける `con` の位置と、その受け方。
     pairings: HashMap<At, Pairing>,
@@ -99,24 +105,41 @@ struct Planner<'a> {
 impl<'a> Planner<'a> {
     fn new(program: &'a Program, function: &'a LirFn, shapes: &'a [Vec<Shape>]) -> Self {
         let mut origins = vec![None; function.vars.len()];
-        let mut bind = |value: VarId, ctor: Ctor, fields: &[VarId]| {
-            for (slot, field) in fields.iter().enumerate() {
-                origins[field.0 as usize] = Some((value, ctor, slot));
-            }
+        let mut unboxed = vec![false; function.vars.len()];
+        let mut bind = |value: VarId, ctor: Ctor, slot: usize, field: VarId| {
+            origins[field.0 as usize] = Some((value, ctor, slot));
         };
         for block in &function.blocks {
             for stmt in &block.stmts {
-                if let Stmt::Unpack {
-                    value,
-                    ctor,
-                    fields,
-                } = stmt
-                {
-                    bind(*value, *ctor, fields);
+                match stmt {
+                    Stmt::Unpack {
+                        value,
+                        ctor,
+                        fields,
+                    } => {
+                        for (slot, &field) in fields.iter().enumerate() {
+                            bind(*value, *ctor, slot, field);
+                        }
+                    }
+                    Stmt::UnboxStruct {
+                        value,
+                        ctor,
+                        fields,
+                    } => {
+                        unboxed[value.0 as usize] = true;
+                        for (slot, field) in fields.iter().enumerate() {
+                            if let Some(field) = *field {
+                                bind(*value, *ctor, slot, field);
+                            }
+                        }
+                    }
+                    _ => {}
                 }
             }
             for_each_case_ctor(&block.term, |value, ctor, fields, _| {
-                bind(value, ctor, fields)
+                for (slot, &field) in fields.iter().enumerate() {
+                    bind(value, ctor, slot, field);
+                }
             });
         }
         let blocks = function.blocks.len();
@@ -125,6 +148,7 @@ impl<'a> Planner<'a> {
             function,
             shapes,
             origins,
+            unboxed,
             tokens: Vec::new(),
             pairings: HashMap::new(),
             available: vec![Vec::new(); blocks],
@@ -187,7 +211,9 @@ impl<'a> Planner<'a> {
 
     fn stmt(&mut self, path: &mut Path, at: At, stmt: &Stmt) {
         match stmt {
-            Stmt::Unpack { value, ctor, .. } => {
+            // 構造体の `unbox` も `unpack` と同じく箱の構築子を知らせる
+            // (docs/superpowers/specs/2026-10-21-s14e-abi-struct-design.md の「LIR」)
+            Stmt::Unpack { value, ctor, .. } | Stmt::UnboxStruct { value, ctor, .. } => {
                 path.known.insert(*value, *ctor);
             }
             Stmt::Release {
@@ -216,7 +242,12 @@ impl<'a> Planner<'a> {
             Stmt::Let {
                 var: _,
                 rhs: Rhs::Call(call),
-            } if may_yield(self.program, self.function, call) => path.tokens.clear(),
+            }
+            | Stmt::LetMany { vars: _, call }
+                if may_yield(self.program, self.function, call) =>
+            {
+                path.tokens.clear()
+            }
             _ => {}
         }
     }
@@ -245,6 +276,7 @@ impl<'a> Planner<'a> {
             ctor,
             fields: shape.positions.len(),
             words,
+            unboxed: self.unboxed[value.0 as usize],
             moved_to: None,
         });
         if !self.move_up(at, id, kept) {
@@ -301,7 +333,8 @@ impl<'a> Planner<'a> {
         if let Stmt::Let {
             rhs: Rhs::Call(call),
             ..
-        } = stmt
+        }
+        | Stmt::LetMany { call, .. } = stmt
             && may_yield(self.program, self.function, call)
         {
             return true;
@@ -532,7 +565,7 @@ impl Plan {
                         ctor: token.ctor,
                         fields: vec![None; token.fields],
                         token: Some(var),
-                        unboxed: false,
+                        unboxed: token.unboxed,
                     }
                 }
                 ref other => {

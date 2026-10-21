@@ -600,6 +600,13 @@ impl<'a> Flattener<'a> {
         match term {
             Term::Return(atom) => {
                 let returned = match (self.ret, atom) {
+                    // 構造体を返す関数でも、末尾の位置の呼び出しの束縛は呼ばれる側の結果の Repr (一様な場所なら
+                    // `tobj`) を持ち、1つの値のまま返る。箱と構造体の間の変換は VM の変換のフレームが行う
+                    (Repr::Struct(_), Atom::Var(var))
+                        if !matches!(self.function.repr(var), Repr::Struct(_)) =>
+                    {
+                        return Term::Return(self.single(atom));
+                    }
                     (Repr::Struct(_), _) => self.ret,
                     // 末尾の位置の呼び出しの束縛は呼ばれる側の結果の Repr を持つので、構造体を返さない関数でも
                     // 構造体の変数を返しうる。結果の変換は VM の変換のフレームが行う
