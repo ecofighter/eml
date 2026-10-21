@@ -76,7 +76,7 @@
 - `unwind_points`: `bench/` と `tests/ui/run/scripts/` のプログラムの巻き戻しの表の行の数を固定する
 - `trade_offs`: 呼び出しの規約と構造体の表現の引き換えの形の回数を固定する (下の「呼び出しの規約の引き換え」と「構造体の表現の引き換え」)
 
-回数を変える変更は、期待値の変更として段の作業文書に書く ([テスト戦略](testing.md) の「テストの変更の運用」)。
+回数を変える変更は、期待値の変更として段の設計 (`docs/plans/`) に書く ([テスト戦略](testing.md) の「テストの変更の運用」)。
 
 ## 測り方
 
@@ -94,7 +94,7 @@ valgrind が arm64 の macOS で動かないので、callgrind は使わない�
 
 `empty.em` の命令の数は、フロントエンド、コード生成、起動の分である。ほかのプログラムの値からこれを引くと、実行の分の目安になる。実時間は 0.01 秒単位なので、命令の数を主に見る。
 
-`bench/rt.sh` は、`eml_rt` の速いモードを測る ([オブジェクトモデル](../spec/object-model.md))。`crates/eml_rt/examples/rt_bench.rs` を release ビルドにし、次の14の計測を `bench/run.sh` と同じ方法で3回ずつ走らせて、同じ形の表を出す。`bench/` のプログラムでなく、ヒープの操作を直接呼ぶ。
+`bench/rt.sh` は、`eml_rt` の速いモードを測る ([オブジェクトモデル](../spec/object-model.md))。`crates/eml_rt/examples/rt_bench.rs` を release ビルドにし、次の14の計測を `bench/run.sh` と同じ方法で3回ずつ走らせて、命令の数と実時間の表を出す。`bench/` のプログラムでなく、ヒープの操作を直接呼ぶ。
 
 | 計測 | 中身 |
 |---|---|
