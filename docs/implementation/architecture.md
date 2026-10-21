@@ -61,7 +61,7 @@ eml/
 
 - `version`、`edition = "2024"`、依存する crate のバージョンは、workspace のルートの `Cargo.toml` でまとめて管理する
 - `flake.nix` は、workspace のルートの `Cargo.lock` を使って `eml_cli` だけを組み立て、`eml` バイナリを作る
-- nixpkgs は nixos-unstable を追う。Rust の toolchain は、stable も nightly も flake が fenix から取る。stable は Verus が求める版 (今は 1.98.1) に揃え、ふだんの devShell、`nix build`、Verus が同じ版を使う。nightly は Miri の devShell (`nix develop .#miri`) だけが使う ([テスト戦略](testing.md) の「Miri」)
+- nixpkgs は nixos-unstable を追う。Rust の toolchain は、stable も nightly も flake が fenix から取る。stable は Verus が求める版 (1.98.1) に揃え、ふだんの devShell、`nix build`、Verus が同じ版を使う。nightly は Miri の devShell (`nix develop .#miri`) だけが使う ([テスト戦略](testing.md) の「Miri」)
 - Verus と verusfmt は、release の archive を flake の input にし、`nix/verus.nix` と `nix/verusfmt.nix` が展開してふだんの devShell に入れる ([テスト戦略](testing.md) の「Verus」)
 - `eml_rt` は vstd に依存するので、`Cargo.lock` に vstd とその依存が入る。`eml_cli` は `eml_vm` を通して `eml_rt` に依存するので、vstd は `eml` バイナリにも入る。`eml_rt` の `verus!` の中は verusfmt で、外は `cargo fmt` で整える
 - 2つの devShell の shellHook は、`CARGO_HOME` を `${XDG_CACHE_HOME:-$HOME/.cache}/eml-cargo-home` にする。cargo は外部のサブコマンドを PATH より先に `$CARGO_HOME/bin` から探すので、rustup が入っていると `~/.cargo/bin` の `cargo-clippy` や `cargo-miri` (rustup のプロキシ) が fenix のものより先に当たるためである。そのため、devShell は crate の取得の置き場所を別に持ち、最初の1回は crate を取り直す
@@ -85,7 +85,7 @@ eml_extern       extern の表 (型、エフェクト、関数)。依存を持�
 
 - 段階の連なりに `eml_rt` は入らず、`eml_vm` だけが依存する。`eml_rt` は workspace のほかの crate に依存しない
 - `eml_lir` は `eml_extern` だけに依存する葉の crate である。`eml_core_ir` (LIR への変換とパスの順番のため)、`eml_vm`、`eml_cli` が依存する。`eml_vm` が読む IR は `eml_lir` だけなので、フロントエンドなしにビルドできる。2つの IR が共有する型 (`Atom`、`VarInfo`、`Layout`、`Prim`、`EffectInfo` など) と定数、テキスト形式と verifier の共通の部品も `eml_lir` に置き、`eml_core_ir` は再公開しない。使う側は `eml_lir` から読む。`Repr` も `eml_lir` が再公開するものを使う
-- `eml_diagnostics` は、診断を出す crate のすべてから使う。今は `eml_core_ir`、`eml_lir`、`eml_vm`、`eml_rt` が診断を出さず、`eml_extern` は何にも依存しない。`eml_core_ir` だけは、extern の呼び出しの位置を行と列にするために `SourceFiles` を使うので依存する。残りの4つは依存しない
+- `eml_diagnostics` は、診断を出す crate のすべてから使う。`eml_core_ir`、`eml_lir`、`eml_vm`、`eml_rt` が診断を出さず、`eml_extern` は何にも依存しない。`eml_core_ir` だけは、extern の呼び出しの位置を行と列にするために `SourceFiles` を使うので依存する。残りの4つは依存しない
 - `eml_extern` は表だけを持つ。`eml_hir`、`eml_types`、`eml_core_ir`、`eml_lir`、`eml_vm` が引く。`eml_extern` を一番下に置くのは、どの段階も実装を表の行で引くようにして、名前の文字列で実装を探す処理をなくすためである
 - `eml_cli` は `eml_diagnostics` と `eml_hir` に常に依存し、下流の段階を feature で足す。`types` は `eml_types`、`core` は `eml_core_ir` と `eml_lir`、`run` は `eml_vm` と、端末の行の編集の `rustyline` と、SIGINT のハンドラと物理メモリを読む `libc` を足す。`eml_lir` はフロントエンドに依存しないので、段階の feature は増やさない。既定は `run` で、バイナリ `eml` は `run` がなければ作らない (`required-features`)。ワークスペースの `eml_cli` の依存は既定の feature を外してあり、依存する側が段階を選ぶ
 - `eml_test_support` は開発専用の crate で、パイプラインに入らない。各 crate の結合テストが dev-dependency として使う。パイプラインは `eml_cli::Session` で組み、段階を feature (`hir` < `types` < `core` < `run`) で選ぶ。各 feature は、`eml_cli` の同じ段階までの feature を有効にする。各 crate は自分の段階までを有効にする。破壊的な変更の途中で下流の crate がまだ組み立たなくても、変更している段階のテストを流せるようにするため ([テスト戦略](testing.md))
@@ -197,7 +197,7 @@ HIR への変換では、名前解決に加えて、名前の重複と未定義�
 - 補間の穴は、名前を引かずに `LangItems` の `display` (`Show` のメソッド) を指す。リストの構文と同じく、ユーザーが自分の `display` を定義しても、補間の意味は変わらない。`++` は extern なので `LangItems` に入れず、translate が表の行を直接使う。穴のある文字列は `ExprKind::Interpolation(Vec<Segment>)` で持つ。`Segment` は `Text(String)` か `Hole(ExprId)` で、穴が1つ以上あるので列は空でない。`Hole` の式は、HIR が組んだ `display e` の呼び出し (`ExprKind::Call` と、`lang.display` を指す `ExprKind::Path`) で、`Call` と `Path` の範囲は `\{…}` の全体である。型検査はこれをメソッドの参照として普通に扱い、translate は普通に instance を解決する。穴の式が欠けていれば (`"\{}"`)、`Missing` の式を引数にする。穴のない文字列は、複数行の文字列と raw 文字列も含めて `Literal::String` にする
 - `StringLit::parts()` が `None` の文字列は、全体を `Missing` にし、穴の中の式は lower しない。lexer が報告済みの誤りのある文字列では、穴の中の名前や型の誤りを重ねて報告しないためである。パターンでは、`LiteralPat::value()` が `None` のもの (穴のある文字列と、`parts()` が `None` の文字列) を `PatKind::Missing` にする。どれもパーサか lexer が報告済みである。コマンドリテラルは、リテラル全体に E0004 を1件出して `Missing` にし、穴の中の式は lower しない。誤りを E0004 の1件にするためである
 - HIR のダンプ (`pretty`) は、`Interpolation` を `"` で囲み、`Text` を文字列のリテラルと同じ規則 (Rust の `{:?}` のエスケープ) で引用符なしに書き、`Hole` を `\{` と `}` の間に式のダンプで書く (`"a\{(@Prelude.display x)}b"`)
-- 名前付きのフィールドは `Constructor::field_names: Option<Vec<FieldName>>` に持つ。`FieldName` は名前と位置で、位置のコンストラクタは `None`、`{}` で宣言したコンストラクタは `Some([])` である。フィールドの型は今までどおり `fields` にあり、名前と同じ数である。フィールドの名前は `DefMap` の名前の表に入れない
+- 名前付きのフィールドは `Constructor::field_names: Option<Vec<FieldName>>` に持つ。`FieldName` は名前と位置で、位置のコンストラクタは `None`、`{}` で宣言したコンストラクタは `Some([])` である。フィールドの型は `fields` にあり、名前と同じ数である。フィールドの名前は `DefMap` の名前の表に入れない
 - レコードの変換は `lower/record.rs` に置く。作る式は `ExprKind::Record { ctor, fields: Vec<(u32, ExprId)> }` で、並びはソースの順、`u32` は宣言の中のフィールドの番号である。translate が書いた順に評価するために、ソースの順で持つ。フィールドが0個の `A {}` は、コンストラクタの参照 `ExprKind::Path` にする。更新は `ExprKind::Update { base, fields: Vec<(FieldName, ExprId)> }` で、フィールドは名前のまま持つ。HIR が検査するのは重複 (E1045) だけで、名前は型検査が引く。射影は `ExprKind::Field { base, field: FieldUse }` で、`FieldUse` は名前か番号 (`FieldKey`) と位置である。不正な番号はパーサが報告済みなので、その射影は `Missing` にする
 - レコードのパターンは、宣言の順の引数を持つ `PatKind::Con` に組む。中のパターンはソースの順に変換する。局所変数の番号と E1017 の順を、書いた順にそろえるためである (リストのパターンと同じ)。書かないフィールドは、範囲がパターン全体の `Wildcard` にし、本体の表 `Body::omitted_fields: ArenaMap<PatId, (ConstructorId, u32)>` に記録する。線形性の診断が、書き手の `_` と区別して、フィールドの名前で報告するためである
 - フィールドのセクション `(.f)` は、`lower/section.rs` が、隠れた局所変数 `$p` を引数に持つ `fn $p -> $p.f` のラムダに組む。隠れた局所変数は `Local::is_hidden` で分かり、E2013 の help がセクションの言い方を選ぶのに使う
@@ -229,7 +229,7 @@ HIR への変換では、名前解決に加えて、名前の重複と未定義�
   1. instance の検査、シグネチャを閉じた形 `Shape` にすること、本体のない宣言のスキーム、`check_main`、等式のない関数の空のスキームを先に行う。SCC の順に解くとき、呼ぶ側を解く時点で呼ばれる側のスキームがそろっていなければならないためである
   2. 呼び出しグラフの SCC ごとに、呼ばれる側から順に次を行う。(a) 各メンバーの本体を、新しい推論の表で、全宣言の `Shape` だけを見て検査する (段1)。Kind の制約は `take_problem` で取り出すだけで、表は残す。(b) その SCC の Kind を解く (`solve_scc`)。(c) 解と本体の変数の要約 (`kind/summary.rs`) を使って各メンバーの本体の型を書き出し、表を捨てる
   3. メソッドの Kind の検査、違反の報告、宣言ごとの結果、一様な位置、網羅性の検査を行う
-  - 同時に生きている推論の表は、処理中の SCC のメンバーの分だけである。ふつうは1つで、大きな SCC でもすべての Kind の制約を同時に持つ今までの大きさの程度に収まる
+  - 同時に生きている推論の表は、処理中の SCC のメンバーの分だけである。ふつうは1つで、大きな SCC でもすべての Kind の制約を同時に持つ程度の大きさに収まる
   - 要約の仕事は、メンバーごとに、書き出す変数から下に届く範囲 (自分の宣言自身の変数を含む成分で止まる) の大きさである。強連結成分の DAG を下にたどり、「下に届く宣言自身の変数の集合」を成分ごとに覚える。宣言自身の変数を持たないメンバーは、たどらずに SCC 全体の最小解の値を使う。大きな SCC で2乗にならないことは、`eml_types` の `scaling` テストが確かめる
   - 本体の書き出した型は、その SCC の解 (呼ばれる側から複写したスキームを含む) に依存する。salsa に移すときは、本体の型を本体ごとの query ではなく、SCC ごとの query の出力にする
 - `Shape` は推論の表を指さず、変数をスキームの中の番号で持つ。参照するたびに具体化し、段1は呼び出し先の制約を複写せずに Kind の具体化の記録 (`Instance`) を残して、段2が展開する。extern の関数、操作、コンストラクタの型も、ユーザーの関数と同じ経路で `Shape` に閉じる
@@ -302,7 +302,7 @@ HIR への変換では、名前解決に加えて、名前の重複と未定義�
   - タグの case を持つのに配置のない `switch` を見たら、その `switch` の所でパニックする (`a_tag_switch_without_a_layout_stops_perceus` が確かめる)
 - reuse (`eml_lir` の `reuse.rs`) は、関数ごとに `Planner` がブロックを番号の順に1回たどって組を決め、`Plan::apply` がまとめて書き換える ([LIR](../spec/lir.md) の「reuse」)。道ごとの状態 (`Path`) は、構築子が分かっている変数と使える token の並びで、`switch` の行き先へ写し、合流するブロックでは構築子の事実を入る道の共通部分にし、token を空にする。たどり終えてから、どの道でも使わなかった元を元の文に戻し、一部の道でだけ使う token の `drop_token` を行き先の入口に置く。yield しうる呼び出しは `may_yield` が決め、verifier も同じ関数で、yield しうる呼び出しの後に token が生きていないことを確かめる
 - パス、verifier、`pretty`、`parse`、VM のコード生成は、ブロックと文の並びをループでたどり、IR の大きさに比例して再帰しない。生存解析は、ブロックを後ろからたどる1回のループで、ブロックごとの入口の生存集合を側の表 (`liveness::live_in`) に返す。辺がすべて前向きなので、不動点の計算は要らない
-- 縮約 (`eml_lir` の `contract.rs`) は、使われない純粋な `let` を消し、その後ですべてのブロックに末尾呼び出しの規則を当てるパスである。末尾呼び出しを作るのは縮約だけで、呼び出しの結果が関数の `ret` と互換でなくても `tail` にする。結果の変換は VM の変換のフレームが行う ([LIR](../spec/lir.md) の「末尾の位置の呼び出し」)。S3b-1 までの `simplify` の書き換え (合流の畳み込み、値が分かっているコンストラクタへの `switch`、case-of-case、末尾呼び出し) は、translate が組み立てるときに行う。`simplify` は書き換えのたびに枝の部分木を置き換えたので、長い `else if` の連鎖で2乗の時間がかかり、続きを `switch` の枝の中へ移して入れ子を深くした
+- 縮約 (`eml_lir` の `contract.rs`) は、使われない純粋な `let` を消し、その後ですべてのブロックに末尾呼び出しの規則を当てるパスである。末尾呼び出しを作るのは縮約だけで、呼び出しの結果が関数の `ret` と互換でなくても `tail` にする。結果の変換は VM の変換のフレームが行う ([LIR](../spec/lir.md) の「末尾の位置の呼び出し」)。合流の畳み込み、値が分かっているコンストラクタへの `switch`、case-of-case、末尾呼び出しの書き換えは、translate が組み立てるときに行う。組み立てた後に別のパスで書き換えると、書き換えのたびに枝の部分木を置き換えるので、長い `else if` の連鎖で2乗の時間がかかるためである
 - `eml_vm` は、コード生成 (`compile/`) と実行に分かれる。`compile/` では、`slots.rs` が文の単位の生存から干渉グラフを作ってスロットを塗り、`moves.rs` がブロック引数への並列な代入を `Move` の列に直し、`emit.rs` が関数ごとに命令を出し、`constants.rs` が定数を作業用のヒープに作って凍結する ([VM](../spec/vm.md) の「スロットの割り当て」と「`CodeBase` と `FnEntry`」)。実行は `vm.rs` の、命令を `match` で分ける1つのループである。関数の値の適用と、呼ぶ所と関数の Repr が合わないときの引数の変換は `apply.rs`、シグネチャと構造体の形の表は `sig.rs`、結果を変える変換のフレームの命令列は `code.rs` の組み込みの表、データの命令は `data.rs` にあり、基本操作の命令も `vm.rs` の `match` の腕で `Ctx` のメソッドを呼ぶ。命令の型は `op.rs`、実行時エラーの型と表示の文言は `error.rs`、`eml run` と REPL とテストが使う Host は `hosts.rs` にある。逆アセンブラは `disasm.rs` である
 - VM は状態を `Ctx` と `Task` だけに置き、Rust の再帰を使わない。呼び出しのスタックは `Task` のデータである ([マルチコア対応の設計](../future/multicore.md) の「VM の並列化の備え」の制約5)
 - 位置を持つ `extern` 命令から作った命令にだけ、`CodeBase::locations` で源の位置 (`SourceLocation`) を付ける ([LIR](../spec/lir.md) の「実行時エラー」)
@@ -346,7 +346,7 @@ HIR への変換では、名前解決に加えて、名前の重複と未定義�
 - `FileId` と `SourceFiles` (`FileId` → パスとテキスト) は `eml_diagnostics` に置く。`SourceFiles` には読み込みの段が読んだすべてのファイルが入る。`FileId` はモジュールの番号と同じ順である
 - `TextRange` は `text-size` crate を直接使う (`rowan` が再公開しているものと同じ型)。`eml_diagnostics` は `rowan` に依存しない
 - `SourceFiles::add` は、テキストの先頭の BOM を取り除いてから保存する ([字句](../spec/lexical.md))。lexer、レイアウト段、表示は BOM を扱わない
-- 将来クエリ化するときは、`SourceFiles` を salsa の入力に置き換え、必要なら別の crate に切り出す
+- インクリメンタル化 ([ロードマップ](../future/roadmap.md) の「処理系」) では、`SourceFiles` を salsa の入力に置き換え、必要なら別の crate に切り出す
 
 ## CLI と lib API
 
