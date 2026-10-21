@@ -116,8 +116,8 @@ fn unbox_becomes_a_multi_def_with_unused_leaves_skipped() {
 
 #[test]
 fn unit_leaves_make_no_variables() {
-    // `unit` の葉は変数を作らず、使う所は `()` になる。`unit` でない葉が1つだけの構造体は、値を1つ受け渡す。それでも
-    // 関数と `apply` の場所は源の Repr `P{unit, int}` を持つ。VM が `int` の箱でなく `P` の箱と行き来するためである
+    // `unit` の葉は変数を作らず、使う所は `()` になる。`unit` でない葉が1つだけの構造体は、値を1つ受け渡す。`apply` の
+    // 引数と結果は一様なので、`int` の箱でなく `P` の箱で受け渡す
     let text = "\
 layout P { P(tobj, int) }
 fn g(p.0: P{unit, int}) -> P{unit, int} {
@@ -140,9 +140,11 @@ fn f(n.0: int, c.6: tobj) -> unit {
     ");
     insta::assert_snapshot!(function(&shown, "f"), @"
     fn f(n.0: int, c.6: tobj) -> unit {
-      let q.1.8: int = call g(n.0)
-      let w.1.9: int = apply c.6(q.1.8) source(P{unit, int}) -> P{unit, int}
-      let r.5: unit = extern Prelude.check_index(w.1.9, w.1.9)
+      let q.1.10: int = call g(n.0)
+      let q.8: obj = con P #0((), q.1.10)
+      let w.9: tobj = apply c.6(q.8)
+      let (_, w.1.11: int) = unbox w.9 P
+      let r.5: unit = extern Prelude.check_index(w.1.11, w.1.11)
       return ()
     }
     ");
@@ -150,8 +152,9 @@ fn f(n.0: int, c.6: tobj) -> unit {
 
 #[test]
 fn calls_applies_and_returns_carry_leaves() {
-    // 関数の引数、直接の呼び出しと `apply` と `closure` の引数、ブロックの引数と `jump` の実引数を葉の並びに開く。
-    // 構造体の結果は複数の値の `let` で受け、`return` は値の並びを返す。関数の結果も値の並びになる
+    // 関数の引数、直接の呼び出しの引数、ブロックの引数と `jump` の実引数を葉の並びに開く。構造体の結果は複数の値の
+    // `let` で受け、`return` は値の並びを返す。関数の結果も値の並びになる。`apply` の引数と結果と、一様な版を指す
+    // `closure` の引数は一様なので、構造体の箱で渡す
     let vec3 = "Vec3{float, float, float}";
     let text = format!(
         "{VEC3}fn add(a.0: {vec3}, b.1: {vec3}) -> {vec3} {{
@@ -184,14 +187,18 @@ b1(m.6: {vec3}):
     }
     "#);
     insta::assert_snapshot!(function(&shown, "f"), @"
-    fn f(a.0.7: float, a.1.8: float, a.2.9: float, c.1: tobj) -> (float, float, float) source(Vec3{float, float, float}, tobj) -> Vec3{float, float, float} {
-      let (s.0.13: float, s.1.14: float, s.2.15: float) = call add(a.0.7, a.1.8, a.2.9, a.0.7, a.1.8, a.2.9)
-      let (t.0.16: float, t.1.17: float, t.2.18: float) = apply c.1(s.0.13, s.1.14, s.2.15) source(Vec3{float, float, float}) -> Vec3{float, float, float}
-      let k.4: tobj = closure add(t.0.16, t.1.17, t.2.18)
-      let (r.0.19: float, r.1.20: float, r.2.21: float) = apply k.4(a.0.7, a.1.8, a.2.9) source(Vec3{float, float, float}) -> Vec3{float, float, float}
-      jump b1(r.0.19, r.1.20, r.2.21)
-    b1(m.0.10: float, m.1.11: float, m.2.12: float):
-      return (m.0.10, m.1.11, m.2.12)
+    fn f(a.0.11: float, a.1.12: float, a.2.13: float, c.1: tobj) -> (float, float, float) source(Vec3{float, float, float}, tobj) -> Vec3{float, float, float} {
+      let (s.0.17: float, s.1.18: float, s.2.19: float) = call add(a.0.11, a.1.12, a.2.13, a.0.11, a.1.12, a.2.13)
+      let s.7: obj = con Vec3 #0(s.0.17, s.1.18, s.2.19)
+      let t.8: tobj = apply c.1(s.7)
+      let (_, _, _) = unbox t.8 Vec3
+      let k.4: tobj = closure add$uniform(t.8)
+      let a.9: obj = con Vec3 #0(a.0.11, a.1.12, a.2.13)
+      let r.10: tobj = apply k.4(a.9)
+      let (r.0.23: float, r.1.24: float, r.2.25: float) = unbox r.10 Vec3
+      jump b1(r.0.23, r.1.24, r.2.25)
+    b1(m.0.14: float, m.1.15: float, m.2.16: float):
+      return (m.0.14, m.1.15, m.2.16)
     }
     ");
 }
@@ -390,21 +397,24 @@ b2:
 }
 
 #[test]
-fn a_box_from_a_tail_position_call_is_returned_as_one_value() {
-    // 構造体を返す関数でも、一様な場所の末尾の位置の呼び出しの束縛は `tobj` で、葉に開かずに1つの値のまま返す。
-    // 縮約がこれを末尾呼び出しにし、箱から構造体への変換は VM の変換のフレームが行う
+fn a_box_from_a_tail_position_apply_is_opened_to_its_leaves() {
+    // 構造体を返す関数の末尾の位置の `apply` も、結果は `tobj` の箱である。ほかの束縛と同じく箱を葉に開いて返すので、
+    // 縮約は末尾呼び出しにしない (docs/spec/lir.md の「末尾の位置の呼び出し」)
     let text = "\
 layout (,) { (,)(tobj, tobj) }
 fn f(k.0: obj) -> (,){float, float} {
-  let p.1: (,){float, float} = uniform apply k.0(1)
+  let p.1: (,){float, float} = apply k.0(1)
   return p.1
 }
 ";
     insta::assert_snapshot!(function(&flatten_text(text), "f"), @"
     fn f(k.0: obj) -> (float, float) source(obj) -> (,){float, float} {
       let b.2: tobj = box 1
-      let p.1: tobj = uniform apply k.0(b.2)
-      return p.1
+      let p.3: tobj = apply k.0(b.2)
+      let (p.0.4: tobj, p.1.6: tobj) = unbox p.3 (,)
+      let p.0.5: float = unbox p.0.4
+      let p.1.7: float = unbox p.1.6
+      return (p.0.5, p.1.7)
     }
     ");
 }

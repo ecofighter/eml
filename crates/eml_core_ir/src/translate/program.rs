@@ -282,7 +282,8 @@ impl ProgramBuilder {
 
     /// 引数を受け、`rhs` の値を返すだけの内部の関数を作る。包む関数に使う。呼び出しの右辺は縮約が末尾呼び出しにする。
     /// `yields` は作る関数の印である (docs/spec/core-ir.md の
-    /// 「`yields` の印」)。
+    /// 「`yields` の印」)。包む関数は捕獲を持たない値として生まれるので、引数と結果はすべて一様である
+    /// (docs/spec/lir.md の「関数の ABI」)。
     fn simple(
         &mut self,
         name: String,
@@ -304,7 +305,8 @@ impl ProgramBuilder {
             rhs: rhs(args),
         });
         builder.terminate(Term::Return(Atom::Var(var)));
-        let core = builder.finish(name, true, yields, ret, ret_mark);
+        let mut core = builder.finish(name, true, yields, ret, ret_mark);
+        core.split = Some(0);
         self.finish(function, core);
         function
     }
@@ -324,8 +326,6 @@ impl ProgramBuilder {
         if let Some(&function) = self.wrappers.get(&name) {
             return function;
         }
-        let stateful = params.len() == 2;
-        let reprs: Vec<Repr> = params.iter().map(|&ty| self.repr(hir, types, ty)).collect();
         // 生の継続は `once` の操作なら `Lin`、`multi` なら `Unr` で、`k` の値の型からは決まらないので `poly` にする
         let mut infos = vec![named("k", Repr::TObj, Mark::Poly)];
         infos.extend(
@@ -344,16 +344,10 @@ impl ProgramBuilder {
                 let mut args = args.into_iter();
                 let k = args.next().expect("k");
                 let arg = args.next().expect("v");
+                // 状態のない handler の状態は `()` である
                 let state = args.next().unwrap_or(Atom::Unit);
-                // 再開の場所の Repr は `k` の型から決める。状態のない handler の状態は `()` である
-                let site = vec![reprs[0], if stateful { reprs[1] } else { Repr::Unit }];
                 Rhs::Call {
-                    call: Call::Resume {
-                        k,
-                        arg,
-                        state,
-                        site,
-                    },
+                    call: Call::Resume { k, arg, state },
                     mask: Vec::new(),
                 }
             },
@@ -463,8 +457,9 @@ impl ProgramBuilder {
         builder.terminate(Term::Return(result));
         let info = self.var_info("t", hir, types, result_type);
         // `IO` を起こす extern も、失敗すると継続を作らずに巻き戻すので yield の地点でない。包む関数は extern を呼ぶだけ
-        // なので yield しない (docs/spec/core-ir.md の「IO の extern」)
-        let core = builder.finish(name, true, false, info.repr, info.mark);
+        // なので yield しない (docs/spec/core-ir.md の「IO の extern」)。値として生まれるので、引数と結果は一様である
+        let mut core = builder.finish(name, true, false, info.repr, info.mark);
+        core.split = Some(0);
         self.finish(function, core);
         function
     }
@@ -542,10 +537,9 @@ impl ProgramBuilder {
             core_name(hir, target_id.module, &hir[target_id].name)
         );
         // どちらの形でも、入口の関数の型は `Unit -> ...` である
-        let (params, result_type) = split_arrows(types, target_type, 1);
+        let (_, result_type) = split_arrows(types, target_type, 1);
         let mut builder = FnBuilder::new();
         let unit = vec![Atom::Unit];
-        let param = self.repr(hir, types, params[0]);
         let call = if self.arity(target) == 0 {
             let info = self.var_info("f", hir, types, target_type);
             let value = builder.var(info);
@@ -555,7 +549,6 @@ impl ProgramBuilder {
             });
             Call::Apply {
                 callee: Atom::Var(value),
-                site: builder.typed_site(&unit, |_| param),
                 args: unit,
                 yields,
                 prompt: None,
@@ -642,9 +635,6 @@ impl ProgramBuilder {
                 });
                 plain_call(Call::Apply {
                     callee: Atom::Var(function),
-                    site: builder.typed_site(&[value], |_| {
-                        unreachable!("the shown value is the variable of the entry's result")
-                    }),
                     args: vec![value],
                     yields: false,
                     prompt: None,

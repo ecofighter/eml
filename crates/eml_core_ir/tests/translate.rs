@@ -227,11 +227,11 @@ fn each_reference_to_an_extern_as_a_value_gets_its_own_wrapper() {
       let t.4: unit = apply &main$extern1(s.3)
       return t.4
     }
-    internal fn main$extern0(p.0: obj) -> unit {
+    internal uniform from 0 fn main$extern0(p.0: obj) -> unit {
       let t.1: unit = extern Prelude.println(p.0) @"test.em":6:9
       return t.1
     }
-    internal fn main$extern1(p.0: obj) -> unit {
+    internal uniform from 0 fn main$extern1(p.0: obj) -> unit {
       let t.1: unit = extern Prelude.println(p.0) @"test.em":7:13
       return t.1
     }
@@ -287,7 +287,7 @@ fn lambdas_and_handlers_are_numbered_in_expression_order() {
     entry$main
     ");
     insta::assert_snapshot!(function(&shown, "main$lambda1"), @"
-    internal fn main$lambda1(x.0: int) -> tobj {
+    internal uniform from 0 fn main$lambda1(x.0: int) -> tobj {
       let c.1: tobj = closure main$lambda0(x.0)
       return c.1
     }
@@ -303,7 +303,7 @@ fn reprs_follow_the_types() {
     fn make(n.0: int, b.1: enum, s.2: obj) -> tobj {
       let d.3: (,){int, obj} = con (,) #0(n.0, s.2)
       let c.4: tobj = closure make$lambda0(n.0)
-      let t.5: int = apply c.4(1: int)
+      let t.5: int = apply c.4(1)
       let d.6: tobj = con Shape #1(t.5)
       let t.7: unit = drop d.3
       return d.6
@@ -320,14 +320,14 @@ fn the_entry_applies_a_point_free_main_to_unit() {
     fn main() -> tobj {
       return &main$lambda0
     }
-    internal fn main$lambda0(p.0: unit) -> unit {
+    internal uniform from 0 fn main$lambda0(p.0: unit) -> unit {
       let s.1: obj = const "point-free"
       let t.2: unit = extern Prelude.println(s.1)
       return t.2
     }
     fn entry$main() -> unit {
       let f.0: tobj = call main()
-      let t.1: unit = apply f.0((): unit)
+      let t.1: unit = apply f.0(())
       return t.1
     }
     "#);
@@ -353,8 +353,8 @@ fn handlers_are_lifted_with_their_return_reprs() {
       let t.2: int = perform Ask.ask(s.1)
       return t.2
     }
-    internal uniform from 1 fn main$handle0$ask(key.0: obj, k.1: tobj lin, p.2: unit) -> int {
-      let t.3: int = resume k.1(1: int, (): unit)
+    internal uniform from 0 fn main$handle0$ask(key.0: obj, k.1: tobj lin, p.2: unit) -> int {
+      let t.3: int = resume k.1(1, ())
       return t.3
     }
     internal uniform from 0 fn main$handle0$return(x.0: int, p.1: unit) -> int {
@@ -373,15 +373,15 @@ fn a_continuation_passed_to_a_function_is_wrapped() {
     let text = "effect Ask where\n  ask : Unit -> Int\n\ntwice : (Int -> <e> Int) -> <e> Int\ntwice f = f 1\n\nmain : Unit -> <IO> Unit\nmain () =\n  let n =\n    handle ask () with\n      | ctl ask () k -> twice k\n  println (show n)";
     let shown = core_text(text, Pass::Translate);
     insta::assert_snapshot!(function(&shown, "main$handle0$ask"), @r#"
-    internal uniform from 1 fn main$handle0$ask(p.0: unit, k.1: tobj lin, p.2: unit) -> int {
+    internal uniform from 0 fn main$handle0$ask(p.0: unit, k.1: tobj lin, p.2: unit) -> int {
       let c.3: tobj lin = closure "cont$@[Int, Int]"(k.1)
       let t.4: int = call twice(c.3)
       return t.4
     }
     "#);
     insta::assert_snapshot!(function(&shown, "cont$@[Int, Int]"), @r#"
-    internal yields fn "cont$@[Int, Int]"(k.0: tobj poly, v.1: int) -> int {
-      let t.2: int = resume k.0(v.1, (): unit)
+    internal yields uniform from 0 fn "cont$@[Int, Int]"(k.0: tobj poly, v.1: int) -> int {
+      let t.2: int = resume k.0(v.1, ())
       return t.2
     }
     "#);
@@ -842,7 +842,7 @@ fn an_extern_function_with_an_effect_used_as_a_value_is_wrapped_with_its_extern_
     let text = "each : (String -> <IO> Unit) -> <IO> Unit\neach f = f \"x\"\n\nmain : Unit -> <IO> Unit\nmain () = each println";
     let shown = core_text(text, Pass::Translate);
     insta::assert_snapshot!(function(&shown, "main$extern0"), @"
-    internal fn main$extern0(p.0: obj) -> unit {
+    internal uniform from 0 fn main$extern0(p.0: obj) -> unit {
       let t.1: unit = extern Prelude.println(p.0)
       return t.1
     }
@@ -862,7 +862,7 @@ fn user_effects_are_numbered_after_io() {
     effect B { tell(int) -> unit }
     yields fn "needs_a<e>"(f.0: tobj poly) -> int {
       let t.1: int = perform A.ask(())
-      let t.2: int = mask [A] yields apply f.0((): unit)
+      let t.2: int = mask [A] yields apply f.0(())
       let t.3: int = extern "Prelude.Num Int.+"(t.1, t.2)
       return t.3
     }
@@ -884,15 +884,15 @@ fn user_effects_are_numbered_after_io() {
       let t.1: int = call "needs_a<e>"(&told)
       return t.1
     }
-    internal yields uniform from 1 fn main$handle0$ask(p.0: unit, k.1: tobj lin, p.2: unit) -> int {
-      let t.3: int = resume k.1(1: int, (): unit)
+    internal yields uniform from 0 fn main$handle0$ask(p.0: unit, k.1: tobj lin, p.2: unit) -> int {
+      let t.3: int = resume k.1(1, ())
       return t.3
     }
     internal yields uniform from 0 fn main$handle0$return($r.0: int, p.1: unit) -> int {
       return $r.0
     }
-    internal uniform from 1 fn main$handle1$tell(m.0: int, k.1: tobj lin, p.2: unit) -> int {
-      let t.3: int = resume k.1((): unit, (): unit)
+    internal uniform from 0 fn main$handle1$tell(m.0: int, k.1: tobj lin, p.2: unit) -> int {
+      let t.3: int = resume k.1((), ())
       return t.3
     }
     internal uniform from 0 fn main$handle1$return($r.0: int, p.1: unit) -> int {
@@ -962,7 +962,7 @@ fn names_outside_the_entry_are_qualified_with_their_module() {
       return t.4
     }
     yields fn Report.Csv.parse(p.0: unit) -> Report.Csv.Row{int} {
-      let t.1: int = yields apply &op$Report.Csv.next((): unit)
+      let t.1: int = yields apply &op$Report.Csv.next(())
       let t.2: Report.Csv.Row{int} = apply &con$Report.Csv.Row(t.1)
       return t.2
     }
@@ -970,22 +970,22 @@ fn names_outside_the_entry_are_qualified_with_their_module() {
       let t.1: Report.Csv.Row{int} = call Report.Csv.parse(())
       return t.1
     }
-    internal uniform from 1 fn main$handle0$next(p.0: unit, k.1: tobj lin, p.2: unit) -> Report.Csv.Row{int} {
-      let t.3: Report.Csv.Row{int} = resume k.1(1: int, (): unit)
+    internal uniform from 0 fn main$handle0$next(p.0: unit, k.1: tobj lin, p.2: unit) -> Report.Csv.Row{int} {
+      let t.3: Report.Csv.Row{int} = resume k.1(1, ())
       return t.3
     }
     internal uniform from 0 fn main$handle0$return(r.0: Report.Csv.Row{int}, p.1: unit) -> Report.Csv.Row{int} {
       return r.0
     }
-    internal fn main$extern0(p.0: obj) -> unit {
+    internal uniform from 0 fn main$extern0(p.0: obj) -> unit {
       let t.1: unit = extern Prelude.println(p.0)
       return t.1
     }
-    internal yields fn op$Report.Csv.next(p.0: unit) -> int {
+    internal yields uniform from 0 fn op$Report.Csv.next(p.0: unit) -> int {
       let t.1: int = perform Report.Csv.Parse.next(p.0)
       return t.1
     }
-    internal fn con$Report.Csv.Row(p.0: int) -> Report.Csv.Row{int} {
+    internal uniform from 0 fn con$Report.Csv.Row(p.0: int) -> Report.Csv.Row{int} {
       let d.1: Report.Csv.Row{int} = con Report.Csv.Row #0(p.0)
       return d.1
     }
@@ -1003,13 +1003,13 @@ fn an_entry_operation_does_not_collide_with_a_prelude_operation() {
     let text = "effect Log where\n  println : String -> Unit\n\neach : (String -> <e> Unit) -> <e> Unit\neach f = f \"x\"\n\nlogged : Unit -> <Log> Unit\nlogged () = each println\n\nmain : Unit -> <IO> Unit\nmain () =\n  handle logged () with\n    | ctl println s k -> k ()\n  each Prelude.println";
     let shown = core_text(text, Pass::Translate);
     insta::assert_snapshot!(function(&shown, "op$println"), @"
-    internal yields fn op$println(p.0: obj) -> unit {
+    internal yields uniform from 0 fn op$println(p.0: obj) -> unit {
       let t.1: unit = perform Log.println(p.0)
       return t.1
     }
     ");
     insta::assert_snapshot!(function(&shown, "main$extern0"), @"
-    internal fn main$extern0(p.0: obj) -> unit {
+    internal uniform from 0 fn main$extern0(p.0: obj) -> unit {
       let t.1: unit = extern Prelude.println(p.0)
       return t.1
     }
@@ -1076,9 +1076,9 @@ fn partial_and_extra_arguments_use_closures() {
     }
     fn main(p.0: unit) -> unit {
       let c.1: tobj = closure add(1)
-      let t.2: int = apply c.1(2: int)
+      let t.2: int = apply c.1(2)
       let t.3: tobj = call adder(3)
-      let t.4: int = apply t.3(4: int)
+      let t.4: int = apply t.3(4)
       let t.5: int = extern "Prelude.Num Int.+"(t.2, t.4)
       let t.6: obj = extern "Prelude.Show Int.show"(t.5)
       let t.7: unit = extern Prelude.println(t.6)
@@ -1119,12 +1119,12 @@ fn builtins_used_as_values_are_wrapped() {
       let t.3: unit = call "apply@[String, Unit]"(&main$extern0, t.2)
       return t.3
     }
-    internal fn "Prelude.>>@[Bool, Bool, Bool]$lambda0"(f.0: tobj poly, g.1: tobj poly, x.2: enum) -> enum {
+    internal uniform from 2 fn "Prelude.>>@[Bool, Bool, Bool]$lambda0"(f.0: tobj poly, g.1: tobj poly, x.2: enum) -> enum {
       let t.3: enum = apply f.0(x.2)
       let t.4: enum = apply g.1(t.3)
       return t.4
     }
-    internal fn main$extern0(p.0: obj) -> unit {
+    internal uniform from 0 fn main$extern0(p.0: obj) -> unit {
       let t.1: unit = extern Prelude.println(p.0)
       return t.1
     }
@@ -1154,7 +1154,7 @@ fn lambdas_are_lifted_with_their_captures_first() {
       let t.6: unit = extern Prelude.println(s.1)
       return t.6
     }
-    internal fn main$lambda0(s.0: obj, t.1: obj) -> obj {
+    internal uniform from 1 fn main$lambda0(s.0: obj, t.1: obj) -> obj {
       let t.2: obj = extern Prelude.++(t.1, s.0)
       return t.2
     }
@@ -1262,8 +1262,8 @@ fn handlers_are_lifted_to_closures() {
       let t.2: int = perform Ask.ask(s.1)
       return t.2
     }
-    internal uniform from 1 fn main$handle0$ask(key.0: obj, k.1: tobj lin, p.2: unit) -> int {
-      let t.3: int = resume k.1(1: int, (): unit)
+    internal uniform from 0 fn main$handle0$ask(key.0: obj, k.1: tobj lin, p.2: unit) -> int {
+      let t.3: int = resume k.1(1, ())
       return t.3
     }
     internal uniform from 0 fn main$handle0$return(x.0: int, p.1: unit) -> int {
@@ -1291,7 +1291,7 @@ fn operations_as_values_and_drop() {
     }
     "#);
     insta::assert_snapshot!(function(&shown, "op$log"), @"
-    internal yields fn op$log(p.0: obj, p.1: obj) -> unit {
+    internal yields uniform from 0 fn op$log(p.0: obj, p.1: obj) -> unit {
       let t.2: unit = perform Log.log(p.0, p.1)
       return t.2
     }
@@ -1330,12 +1330,12 @@ fn a_constructor_used_as_a_function_value_is_wrapped() {
     insta::assert_snapshot!(function(&shown, "pairs"), @r#"
     fn pairs(n.0: int) -> Pair{int, int} {
       let c.1: tobj = closure "con$Pair@[Int, Int]"(n.0)
-      let t.2: Pair{int, int} = apply c.1(2: int)
+      let t.2: Pair{int, int} = apply c.1(2)
       return t.2
     }
     "#);
     insta::assert_snapshot!(function(&shown, "con$Pair@[Int, Int]"), @r#"
-    internal fn "con$Pair@[Int, Int]"(p.0: int, p.1: int) -> Pair{int, int} {
+    internal uniform from 0 fn "con$Pair@[Int, Int]"(p.0: int, p.1: int) -> Pair{int, int} {
       let d.2: Pair{int, int} = con Pair #0(p.0, p.1)
       return d.2
     }
@@ -1417,7 +1417,7 @@ fn constructor_patterns_in_let_lambda_and_equation_parameters() {
     }
     ");
     insta::assert_snapshot!(function(&shown, "by_lambda$lambda0"), @"
-    internal fn by_lambda$lambda0(p.0: Box{int}) -> int {
+    internal uniform from 0 fn by_lambda$lambda0(p.0: Box{int}) -> int {
       unpack p.0 Box #0(k.1: int)
       return k.1
     }
@@ -1453,9 +1453,9 @@ fn constructor_patterns_in_handler_clause_parameters() {
     let text = "data Box a = | Box a\n\neffect Give where\n  give : Box Int -> Int\n\nrun : Unit -> Int\nrun () =\n  handle Box (give (Box 1)) with\n    | ctl give (Box n) k -> k n\n    | return (Box r) -> r\n\nmain : Unit -> <IO> Unit\nmain () = println (show (run ()))";
     let shown = core_text(text, Pass::Translate);
     insta::assert_snapshot!(function(&shown, "run$handle0$give"), @"
-    internal uniform from 1 fn run$handle0$give(p.0: Box{int}, k.1: tobj lin, p.2: unit) -> int {
+    internal uniform from 0 fn run$handle0$give(p.0: Box{int}, k.1: tobj lin, p.2: unit) -> int {
       unpack p.0 Box #0(n.3: int)
-      let t.4: int = resume k.1(n.3, (): unit)
+      let t.4: int = resume k.1(n.3, ())
       return t.4
     }
     ");
@@ -1618,7 +1618,7 @@ fn a_handler_with_a_state_passes_its_initial_value_and_takes_the_state_from_its_
       let t.3: int = extern "Prelude.Num Int.+"(t.1, t.2)
       return t.3
     }
-    internal uniform from 1 fn main$handle0$ask(p.0: unit, k.1: tobj lin, st.2: int) -> int {
+    internal uniform from 0 fn main$handle0$ask(p.0: unit, k.1: tobj lin, st.2: int) -> int {
       let t.3: int = extern "Prelude.Num Int.+"(st.2, 1)
       let t.4: int = resume k.1(st.2, t.3)
       return t.4
@@ -1672,8 +1672,8 @@ fn effects_are_numbered_in_declaration_order() {
       let t.1: int = perform A.a(())
       return t.1
     }
-    internal uniform from 1 fn main$handle0$a(p.0: unit, k.1: tobj lin, p.2: unit) -> int {
-      let t.3: int = resume k.1(1: int, (): unit)
+    internal uniform from 0 fn main$handle0$a(p.0: unit, k.1: tobj lin, p.2: unit) -> int {
+      let t.3: int = resume k.1(1, ())
       return t.3
     }
     internal uniform from 0 fn main$handle0$return($r.0: int, p.1: unit) -> int {
@@ -1683,8 +1683,8 @@ fn effects_are_numbered_in_declaration_order() {
       let t.1: int = perform B.b(())
       return t.1
     }
-    internal uniform from 1 fn main$handle1$b(p.0: unit, k.1: tobj lin, p.2: unit) -> int {
-      let t.3: int = resume k.1(2: int, (): unit)
+    internal uniform from 0 fn main$handle1$b(p.0: unit, k.1: tobj lin, p.2: unit) -> int {
+      let t.3: int = resume k.1(2, ())
       return t.3
     }
     internal uniform from 0 fn main$handle1$return($r.0: int, p.1: unit) -> int {
@@ -1845,7 +1845,7 @@ fn a_masked_callback_call() {
     insta::assert_snapshot!(function(&core_text(&text, Pass::Translate), "run@[Int]"), @r#"
     yields fn "run@[Int]"(cb.0: tobj poly) -> int {
       let t.1: int = perform State.get(())
-      let t.2: int = mask [State] apply cb.0((): unit)
+      let t.2: int = mask [State] apply cb.0(())
       return t.2
     }
     "#);
@@ -1875,7 +1875,7 @@ main () =
 ";
     insta::assert_snapshot!(function(&core_text(text, Pass::Translate), "render$handle0"), @"
     internal yields uniform from 1 fn render$handle0(g.0: tobj poly, p.1: unit) -> unit {
-      let t.2: unit = mask [Yield@1] yields apply g.0((): unit)
+      let t.2: unit = mask [Yield@1] yields apply g.0(())
       return t.2
     }
     ");
@@ -1905,8 +1905,8 @@ fn arrows_with_different_masks_are_applied_apart() {
     );
     insta::assert_snapshot!(function(&core_text(&text, Pass::Translate), "h"), @"
     yields fn h(f.0: tobj poly) -> int {
-      let t.1: tobj poly = mask [State] apply f.0(1: int)
-      let t.2: int = yields apply t.1(2: int)
+      let t.1: tobj poly = mask [State] apply f.0(1)
+      let t.2: int = yields apply t.1(2)
       return t.2
     }
     ");
@@ -1919,7 +1919,7 @@ fn a_continuation_call_in_its_clause_has_no_mask() {
         "{STATE}run : (Unit -> <State Int | e> a) -> <e> a\nrun action =\n  handle action () from 0 with\n    | ctl get () k st -> k st st\n    | ctl put n k _ -> k () n\n    | return x _ -> x\n\nmain : Unit -> <IO> Unit\nmain () = println (show (run (fn () -> get ())))\n"
     );
     insta::assert_snapshot!(function(&core_text(&text, Pass::Translate), "run@[Int]$handle0$get"), @r#"
-    internal uniform from 1 fn "run@[Int]$handle0$get"(p.0: unit, k.1: tobj lin, st.2: int) -> int {
+    internal uniform from 0 fn "run@[Int]$handle0$get"(p.0: unit, k.1: tobj lin, st.2: int) -> int {
       let t.3: int = resume k.1(st.2, st.2)
       return t.3
     }
@@ -1962,7 +1962,7 @@ main () =
     // handle の番号は HIR の式の ID の順なので、内側の handle が `f<e>$handle0` になる
     insta::assert_snapshot!(function(&core_text(text, Pass::Translate), "f<e>$handle0"), @r#"
     internal yields uniform from 1 fn "f<e>$handle0"(k.0: tobj lin, p.1: unit) -> int {
-      let t.2: int = mask [Log] resume k.0(1: int, (): unit)
+      let t.2: int = mask [Log] resume k.0(1, ())
       return t.2
     }
     "#);
@@ -2001,7 +2001,7 @@ fn handled(extra: &str, handle: &str) -> String {
 #[test]
 fn a_continuation_called_directly_is_resumed() {
     let shown = handled("", "    handle ask () with\n      | ctl ask () k -> k 1");
-    assert!(shown.contains("resume k.1(1: int, (): unit)"), "{shown}");
+    assert!(shown.contains("resume k.1(1, ())"), "{shown}");
     assert!(!shown.contains("cont$"), "{shown}");
 }
 
@@ -2092,7 +2092,7 @@ fn a_partial_continuation_is_wrapped_with_the_state_wrapper() {
         "{shown}"
     );
     insta::assert_snapshot!(function(&shown, "cont$state@[Int, Int, Int]"), @r#"
-    internal yields fn "cont$state@[Int, Int, Int]"(k.0: tobj poly, v.1: int, s.2: int) -> int {
+    internal yields uniform from 0 fn "cont$state@[Int, Int, Int]"(k.0: tobj poly, v.1: int, s.2: int) -> int {
       let t.3: int = resume k.0(v.1, s.2)
       return t.3
     }
@@ -2118,13 +2118,10 @@ fn a_continuation_applied_to_extra_arguments_is_resumed_then_applied() {
     );
     let shown = core_text(&text, Pass::Translate);
     assert!(
-        shown.contains("let t.3: tobj = resume k.1(1: int, (): unit)"),
+        shown.contains("let t.3: tobj = resume k.1(1, ())"),
         "{shown}"
     );
-    assert!(
-        shown.contains("let t.4: int = apply t.3(2: int)"),
-        "{shown}"
-    );
+    assert!(shown.contains("let t.4: int = apply t.3(2)"), "{shown}");
     assert!(!shown.contains("cont$"), "{shown}");
 }
 
@@ -2494,7 +2491,7 @@ fn an_instance_method_with_fewer_parameters_is_called_then_applied() {
     insta::assert_snapshot!(function(&shown, "main"), @r#"
     fn main(p.0: unit) -> unit {
       let t.1: tobj = call "Combine Int.combine"()
-      let t.2: int = apply t.1(1: int, 2: int)
+      let t.2: int = apply t.1(1, 2)
       let t.3: obj = extern "Prelude.Show Int.show"(t.2)
       let t.4: unit = extern Prelude.println(t.3)
       return t.4
@@ -2540,13 +2537,13 @@ fn extern_methods_used_as_values_are_wrapped_per_instance() {
     }
     "#);
     insta::assert_snapshot!(function(&shown, "shown@[Int]$extern0"), @r#"
-    internal fn "shown@[Int]$extern0"(p.0: int) -> obj {
+    internal uniform from 0 fn "shown@[Int]$extern0"(p.0: int) -> obj {
       let t.1: obj = extern "Prelude.Show Int.show"(p.0)
       return t.1
     }
     "#);
     insta::assert_snapshot!(function(&shown, "shown@[String]$extern0"), @r#"
-    internal fn "shown@[String]$extern0"(p.0: obj) -> obj {
+    internal uniform from 0 fn "shown@[String]$extern0"(p.0: obj) -> obj {
       let t.1: obj = extern "Prelude.Show String.show"(p.0)
       return t.1
     }
@@ -2558,7 +2555,7 @@ fn extern_methods_used_as_values_are_wrapped_per_instance() {
     }
     "#);
     insta::assert_snapshot!(function(&shown, "main$extern0"), @r#"
-    internal fn main$extern0(p.0: int, p.1: int) -> enum {
+    internal uniform from 0 fn main$extern0(p.0: int, p.1: int) -> enum {
       let t.2: enum = extern "Prelude.Ord Int.compare"(p.0, p.1)
       return t.2
     }
@@ -2895,13 +2892,13 @@ fn wrappers_take_the_reprs_and_marks_of_their_instance() {
     let text = "effect Pass e where\n  pass : e -> Fs.File -> e\n\ndata Box a = | Box a Fs.File\n\nuse_op : (Int -> Fs.File -> <Pass Int, IO> Int) -> <Pass Int, IO> Int\nuse_op op = op 1 (Fs.open \"a.txt\")\n\nmain : Unit -> <IO> Unit\nmain () =\n  let n = handle use_op pass with\n    | ctl pass x g k ->\n        Fs.close g\n        k x\n  let mk = Box n\n  match mk (Fs.open \"a.txt\") with\n    | Box m f ->\n        Fs.close f\n        println (show m)";
     let ir = core_text(text, Pass::Translate);
     insta::assert_snapshot!(function(&ir, "op$pass@[Int]"), @r#"
-    internal yields fn "op$pass@[Int]"(p.0: int, p.1: obj lin) -> int {
+    internal yields uniform from 0 fn "op$pass@[Int]"(p.0: int, p.1: obj lin) -> int {
       let t.2: int = perform Pass.pass(p.0, p.1)
       return t.2
     }
     "#);
     insta::assert_snapshot!(function(&ir, "con$Box@[Int]"), @r#"
-    internal fn "con$Box@[Int]"(p.0: int, p.1: obj lin) -> Box{int, obj lin} lin {
+    internal uniform from 0 fn "con$Box@[Int]"(p.0: int, p.1: obj lin) -> Box{int, obj lin} lin {
       let d.2: Box{int, obj lin} lin = con Box #0(p.0, p.1)
       return d.2
     }
@@ -3243,7 +3240,7 @@ fn a_lambda_calling_a_local_function_captures_its_captures() {
     let text = "f : Int -> List Int -> <Panic> List Int\nf base xs =\n  let add x = x + base\n  List.map (fn x -> add x) xs\n\nmain : Unit -> <IO, Panic> Unit\nmain () = println (show (f 1 [1]))";
     let shown = core_text(text, Pass::Translate);
     insta::assert_snapshot!(function(&shown, "f$lambda0"), @"
-    internal fn f$lambda0(base.0: int, x.1: int) -> int {
+    internal uniform from 1 fn f$lambda0(base.0: int, x.1: int) -> int {
       let t.2: int = call f$let$add(base.0, x.1)
       return t.2
     }
@@ -3351,7 +3348,7 @@ fn a_local_function_passed_as_a_value_inside_use() {
     // `List.each` は関数を先に受けるので、`use` で書けるようにリストを先に受ける補助関数を置く
     let text = "for_each : List Int -> (Int -> <IO, Panic> Unit) -> <IO, Panic> Unit\nfor_each xs g = List.each g xs\n\nf : Int -> List Int -> <IO, Panic> Unit\nf base xs =\n  let add x = x + base\n  use x <- for_each xs\n  println (show (List.map add [x]))\n\nmain : Unit -> <IO, Panic> Unit\nmain () = f 1 [1, 2]";
     insta::assert_snapshot!(function(&core_text(text, Pass::Translate), "f$lambda0"), @r#"
-    internal fn f$lambda0(base.0: int, x.1: int) -> unit {
+    internal uniform from 1 fn f$lambda0(base.0: int, x.1: int) -> unit {
       let c.2: tobj = closure f$let$add(base.0)
       let d.3: tobj = con Prelude.List #1(x.1, #0)
       let t.4: tobj = call "Std.List.map@[Int, Int]"(c.2, d.3)
@@ -3534,12 +3531,12 @@ fn a_var_lowers_to_a_handle() {
       let t.6: unit = extern Prelude.println(t.5)
       return t.6
     }
-    internal uniform from 1 fn main$var0$get(p.0: unit, k.1: tobj lin, st.2: int) -> unit {
+    internal uniform from 0 fn main$var0$get(p.0: unit, k.1: tobj lin, st.2: int) -> unit {
       let t.3: unit = resume k.1(st.2, st.2)
       return t.3
     }
-    internal uniform from 1 fn main$var0$set(v.0: int, k.1: tobj lin, st.2: int) -> unit {
-      let t.3: unit = resume k.1((): unit, v.0)
+    internal uniform from 0 fn main$var0$set(v.0: int, k.1: tobj lin, st.2: int) -> unit {
+      let t.3: unit = resume k.1((), v.0)
       return t.3
     }
     internal uniform from 0 fn main$var0$return(x.0: unit, st.1: int) -> unit {
@@ -3552,15 +3549,11 @@ fn a_var_lowers_to_a_handle() {
     "#);
 }
 
-/// ラムダは `split` を持たず、handle と `var` の範囲の本体は最後の1個、節は最後の2個、`never` の操作の節は最後の1個、
-/// `return` の節は最後の2個の引数が一様になる。
-/// `apply` の場所は、変数の引数には変数の Repr を、定数の引数にはその矢印の引数の型の Repr を並べる。`None` は
-/// `#0` だが、`Option Int` の位置なので `enum` でなく `tobj` になる
-/// (docs/spec/lir.md の「関数の ABI」と「`apply` の場所」)。
+/// 値として生まれる関数 (ラムダ、handle と `var` の範囲の本体、節、`return` の節) は、捕獲より後ろの引数と結果が
+/// 一様になる。トップレベルの関数は `split` を持たない (docs/spec/lir.md の「関数の ABI」)。
 #[test]
 fn lambda_and_handler_splits() {
-    use eml_core_ir::{Call, Rhs, Stmt, pretty};
-    use eml_lir::{Repr, Site};
+    use eml_core_ir::pretty;
     let text = "\
 effect Tick where
   tick : Int -> Unit
@@ -3598,50 +3591,20 @@ main () =
     };
     for (name, expected) in [
         ("main", None),
-        ("main$lambda0", None),
-        ("main$lambda1", None),
+        ("main$lambda0", Some(1)),
+        ("main$lambda1", Some(1)),
         ("main$handle0", Some(1)),
-        ("main$handle0$tick", Some(2)),
+        ("main$handle0$tick", Some(3)),
         ("main$handle0$return", Some(2)),
         ("main$var0", Some(1)),
-        ("main$var0$get", Some(2)),
-        ("main$var0$set", Some(2)),
+        ("main$var0$get", Some(3)),
+        ("main$var0$set", Some(3)),
         ("main$var0$return", Some(2)),
         ("main$handle1", Some(1)),
-        ("main$handle1$fail", Some(1)),
+        ("main$handle1$fail", Some(2)),
     ] {
         assert_eq!(uniform_tail(name), expected, "{name}\n{}", pretty(&program));
     }
-    let main = program
-        .functions
-        .iter()
-        .find(|function| function.name == "main")
-        .expect("main");
-    let sites: Vec<&Site> = main
-        .blocks
-        .iter()
-        .flat_map(|block| &block.stmts)
-        .filter_map(|stmt| match stmt {
-            Stmt::Let {
-                rhs:
-                    Rhs::Call {
-                        call: Call::Apply { site, .. },
-                        ..
-                    },
-                ..
-            } => Some(site),
-            _ => None,
-        })
-        .collect();
-    assert_eq!(
-        sites,
-        [
-            &Site::Typed(vec![Repr::TObj]),
-            &Site::Typed(vec![Repr::Int])
-        ],
-        "{}",
-        pretty(&program)
-    );
 }
 
 /// 関数 `name` の中で名前が `var` の最初の変数 (引数か `let`) の、Repr と印の書き方。括弧と中括弧の外の `,`、`)`、

@@ -622,14 +622,6 @@ pub(super) fn call_target(
                 return builder.bind_unr("t", ret, plain_call(Call::Direct(function, args)));
             }
             let value = builder.bind_unr("t", Repr::TObj, plain_call(Call::Direct(function, args)));
-            // 導出したメソッドに渡す定数は、`Int` の引数の優先度だけである
-            let site = builder.typed_site(&rest, |index| {
-                debug_assert!(
-                    matches!(rest[index], Atom::Int(_)),
-                    "a derived method passes Int constants"
-                );
-                Repr::Int
-            });
             builder.bind_unr(
                 "t",
                 ret,
@@ -638,7 +630,6 @@ pub(super) fn call_target(
                     args: rest,
                     yields: false,
                     prompt: None,
-                    site,
                 }),
             )
         }

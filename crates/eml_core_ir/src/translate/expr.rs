@@ -4,8 +4,7 @@ use eml_extern::{Extern, ExternType};
 use eml_hir::EvalStep;
 use eml_hir::{
     Closure, ConstructorId, ExprId, ExprKind, FunctionId, FunctionKind, IndexBase, Literal,
-    LocalId, OpMultiplicity, OperationId, Program as HirProgram, Res, Segment, ValueItem,
-    VarId as HirVar,
+    LocalId, OperationId, Program as HirProgram, Res, Segment, ValueItem, VarId as HirVar,
 };
 use eml_types::{FieldTarget, IndexTarget, TypeId, TypeKind, VarClass};
 
@@ -21,16 +20,6 @@ use super::program::{
 };
 use super::types::{mark, named, split_arrows};
 use super::{ContinuationForm, Exit, FnLowering, Param};
-
-// EP が総称に呼ぶ関数の、一様にする最後の引数の数 (docs/spec/lir.md の「関数の ABI」)。結果はいつも一様である。
-/// handle と `var` の範囲の本体は `()` の引数を一様にする。
-const BODY_UNIFORM: usize = 1;
-/// 再開する操作の節は `k` と状態を一様にする。
-const CLAUSE_UNIFORM: usize = 2;
-/// `never` の操作の節は、状態だけを一様にする。
-const ABORT_UNIFORM: usize = 1;
-/// `return` の節は値と状態を一様にする。
-const RETURN_UNIFORM: usize = 2;
 
 /// extern の関数なら、その表の行。誤りのないプログラムの extern は、どれも標準ライブラリの宣言で行を持つ。
 pub(super) fn extern_row(hir: &HirProgram, function: FunctionId) -> Option<Extern> {
@@ -66,11 +55,9 @@ enum Callee {
         callee: ExprId,
     },
     /// 直接の形の節の `k`。`k` は生の継続で、`arity` は状態のない handler で1、状態のある handler で2である。
-    /// `ty` は `k` の型で、`resume` の場所の Repr を決める。
     Continuation {
         k: Atom,
         arity: usize,
-        ty: TypeId,
     },
     /// 持ち上げたローカル関数 `local`。`arity` は宣言した引数の数で、持ち上げの捕まえる変数は呼ぶ位置で先に足す
     /// (docs/spec/core-ir.md の「ローカル関数の持ち上げ」)。
@@ -314,21 +301,14 @@ impl FnLowering<'_> {
             let yields = run.iter().any(|&(_, yields)| yields);
             end += run.len();
             let part: Vec<Atom> = args.by_ref().take(run.len()).collect();
-            let (params, rest) = split_arrows(self.ctx.store, callee_ty, end);
+            let (_, rest) = split_arrows(self.ctx.store, callee_ty, end);
             let part_ty = if end == last { ty } else { rest };
-            // 定数の引数の Repr は、その矢印の引数の型から決める
-            let reprs: Vec<Repr> = params[end - run.len()..]
-                .iter()
-                .map(|&param| self.type_repr(param))
-                .collect();
-            let site = self.builder.typed_site(&part, |index| reprs[index]);
             let rhs = masked_call(
                 Call::Apply {
                     callee: function,
                     args: part,
                     yields,
                     prompt: None,
-                    site,
                 },
                 run[0].0.clone(),
             );
@@ -449,25 +429,13 @@ impl FnLowering<'_> {
             }
             Callee::Operation { op, .. } => ("t", plain_call(perform_call(self.ctx.hir, op, args))),
             // 状態ありの最初の矢印は row が空の部分適用なので、関数と同じく最後の矢印の `mask` を使う
-            Callee::Continuation { k, arity: _, ty } => {
+            Callee::Continuation { k, arity: _ } => {
                 let mask = self.mask(id, args.len() - 1);
-                // 場所の Repr は `apply` と同じく `k` の矢印の型から決める。状態のない handler の状態は `()` である
-                let (params, _) = split_arrows(self.ctx.store, ty, args.len());
-                let mut reprs: Vec<Repr> =
-                    params.iter().map(|&param| self.type_repr(param)).collect();
-                reprs.resize(2, Repr::Unit);
+                // 状態のない handler の状態は `()` である
                 let mut args = args.into_iter();
                 let arg = args.next().expect("a continuation takes a value");
                 let state = args.next().unwrap_or(Atom::Unit);
-                let site = self
-                    .builder
-                    .typed_reprs(&[arg, state], |index| reprs[index]);
-                let call = Call::Resume {
-                    k,
-                    arg,
-                    state,
-                    site,
-                };
+                let call = Call::Resume { k, arg, state };
                 ("t", masked_call(call, mask))
             }
             Callee::Constructor { ctor, .. } => (
@@ -615,7 +583,6 @@ impl FnLowering<'_> {
                     ContinuationForm::Direct => Callee::Continuation {
                         k,
                         arity: self.ctx.body.continuations[*local],
-                        ty: callee_ty,
                     },
                     // 包んだ `k` はクロージャなので、ほかの関数値と同じく矢印ごとの `mask` で `apply` する
                     ContinuationForm::Wrapped => {
@@ -749,7 +716,6 @@ impl FnLowering<'_> {
                 // 本体の row は扱うエフェクトを含むので、本体はいつも yield しうる
                 let handled_closure = self.lift(
                     prefix.clone(),
-                    BODY_UNIFORM,
                     true,
                     body.closure_captures(handled),
                     &unit,
@@ -769,21 +735,9 @@ impl FnLowering<'_> {
                         .find(|clause| clause.op == op)
                         .expect("a program without errors has a clause for every operation");
                     let name = format!("{prefix}${}", self.ctx.hir[op].name);
-                    // `never` の操作の節は、`prompt$` から状態だけを受ける
-                    // (docs/spec/lir.md の「関数の ABI」)
-                    let uniform_tail = if self.ctx.hir[op].multiplicity == OpMultiplicity::Never {
-                        ABORT_UNIFORM
-                    } else {
-                        CLAUSE_UNIFORM
-                    };
-                    closures.push(self.lift_clause(name, uniform_tail, &clause.closure, stateless));
+                    closures.push(self.lift_clause(name, &clause.closure, stateless));
                 }
-                let ret = self.lift_clause(
-                    format!("{prefix}$return"),
-                    RETURN_UNIFORM,
-                    &ret.closure,
-                    stateless,
-                );
+                let ret = self.lift_clause(format!("{prefix}$return"), &ret.closure, stateless);
                 let call = Call::Handle {
                     effect: effect_index(self.ctx.hir, effect),
                     init: init_atom,
@@ -980,7 +934,6 @@ impl FnLowering<'_> {
                 let lambda_mark = mark(self.ctx.store, lambda_ty, self.ctx.hir);
                 self.lift(
                     name,
-                    0,
                     yields,
                     captured,
                     &params,
@@ -1008,13 +961,7 @@ impl FnLowering<'_> {
     /// handler の節か `return` の節を持ち上げる。状態のない handler の節は、最後の引数で状態の `()` を受ける
     /// (docs/spec/core-ir.md)。節は handle の外側の row、つまり handle を含む関数の row で動くので、その関数と同じ印に
     /// する (docs/spec/core-ir.md の「`yields` の印」)。
-    fn lift_clause(
-        &mut self,
-        name: String,
-        uniform_tail: usize,
-        closure: &Closure,
-        stateless: bool,
-    ) -> Atom {
+    fn lift_clause(&mut self, name: String, closure: &Closure, stateless: bool) -> Atom {
         let mut params: Vec<Param> = closure
             .params
             .iter()
@@ -1038,7 +985,6 @@ impl FnLowering<'_> {
         );
         self.lift(
             name,
-            uniform_tail,
             self.yields,
             captured,
             &params,
@@ -1066,7 +1012,6 @@ impl FnLowering<'_> {
         // 範囲の row は変数のエフェクトを含むので、範囲はいつも yield しうる
         let body = self.lift(
             prefix.clone(),
-            BODY_UNIFORM,
             true,
             self.ctx.body.scope_captures(scope),
             &[(None, Repr::Unit, Mark::Unr)],
@@ -1098,12 +1043,11 @@ impl FnLowering<'_> {
     }
 
     /// HIR に元のない内部の関数を作り、その値を返す。`body` は引数から本体の文を足し、返す値を返す。節は handle を
-    /// 含む関数の row で動くので、その関数と同じ `yields` の印にする。`var` の節と `return` の節は、handle の節と
-    /// 同じ一様な位置 `uniform_tail` を持つ (docs/spec/lir.md の「関数の ABI」)。
+    /// 含む関数の row で動くので、その関数と同じ `yields` の印にする。捕獲を持たない値として生まれる関数なので、引数と
+    /// 結果はすべて一様である (docs/spec/lir.md の「関数の ABI」)。
     fn synthesized(
         &mut self,
         name: String,
-        uniform_tail: usize,
         params: &[(&str, (Repr, Mark))],
         ret: (Repr, Mark),
         body: impl FnOnce(&mut FnBuilder, &mut ProgramBuilder, &[Atom]) -> Atom,
@@ -1117,7 +1061,7 @@ impl FnLowering<'_> {
         let value = body(&mut builder, &mut *self.program, &args);
         builder.terminate(Term::Return(value));
         let mut core = builder.finish(name, true, self.yields, ret.0, ret.1);
-        core.set_uniform_tail(uniform_tail);
+        core.split = Some(0);
         self.program.finish(function, core);
         Atom::Fn(function)
     }
@@ -1144,79 +1088,70 @@ impl FnLowering<'_> {
         // 変数の操作はどれも1回だけ再開する
         params.push(("k", (Repr::TObj, Mark::Lin)));
         params.push(("st", state));
-        self.synthesized(
-            name,
-            CLAUSE_UNIFORM,
-            &params,
-            result,
-            |builder, program, args| {
-                let (k, st) = (args[args.len() - 2], args[args.len() - 1]);
-                let (value, next) = match op {
-                    VarOp::Get => (st, st),
-                    VarOp::Set => (Atom::Unit, args[0]),
-                    VarOp::Take => {
-                        let empty = bind(
-                            builder,
-                            named("h", state.0, state.1),
-                            Rhs::Prim(Prim::EmptyMutArray, Vec::new()),
-                        );
-                        (st, empty)
-                    }
-                    VarOp::Length | VarOp::Read => {
-                        let (ext, lent, value) = match op {
-                            VarOp::Length => (Extern::MutArrayLength, vec![st], int),
-                            _ => (Extern::MutArrayRead, vec![st, args[0]], element),
-                        };
-                        // 型を持たない組なので、語の数の条件だけで構造体にする
-                        // (docs/spec/core-ir.md の「構造体にする型」)
-                        let layout = program.tuple_layout(2);
-                        let pair_repr = program.tuple_struct(layout, vec![value, state]);
-                        let pair = program.lending_call(
-                            builder,
-                            ext,
-                            lent,
-                            None,
-                            named("t", value.0, value.1),
-                            named("d", pair_repr, state.1),
-                        );
-                        let Atom::Var(pair) = pair else {
-                            unreachable!("a lending call binds its pair")
-                        };
-                        let fields = vec![
-                            builder.var(named("f", value.0, value.1)),
-                            builder.var(named("st", state.0, state.1)),
-                        ];
-                        builder.emit(Stmt::Unpack {
-                            value: pair,
-                            ctor: Ctor { layout, tag: TUPLE },
-                            fields: fields.clone(),
-                        });
-                        (Atom::Var(fields[0]), Atom::Var(fields[1]))
-                    }
-                    VarOp::Write => {
-                        let written = bind(
-                            builder,
-                            named("st", state.0, state.1),
-                            Rhs::Extern {
-                                ext: Extern::MutArrayWrite,
-                                args: vec![st, args[0], args[1]],
-                                at: None,
-                            },
-                        );
-                        (Atom::Unit, written)
-                    }
-                };
-                // 定数で再開するのは `set` と `write` の結果の `()` だけである
-                let site = builder.typed_reprs(&[value, next], |_| Repr::Unit);
-                let call = Call::Resume {
-                    k,
-                    arg: value,
-                    state: next,
-                    site,
-                };
-                bind(builder, named("t", result.0, result.1), plain_call(call))
-            },
-        )
+        self.synthesized(name, &params, result, |builder, program, args| {
+            let (k, st) = (args[args.len() - 2], args[args.len() - 1]);
+            let (value, next) = match op {
+                VarOp::Get => (st, st),
+                VarOp::Set => (Atom::Unit, args[0]),
+                VarOp::Take => {
+                    let empty = bind(
+                        builder,
+                        named("h", state.0, state.1),
+                        Rhs::Prim(Prim::EmptyMutArray, Vec::new()),
+                    );
+                    (st, empty)
+                }
+                VarOp::Length | VarOp::Read => {
+                    let (ext, lent, value) = match op {
+                        VarOp::Length => (Extern::MutArrayLength, vec![st], int),
+                        _ => (Extern::MutArrayRead, vec![st, args[0]], element),
+                    };
+                    // 型を持たない組なので、語の数の条件だけで構造体にする
+                    // (docs/spec/core-ir.md の「構造体にする型」)
+                    let layout = program.tuple_layout(2);
+                    let pair_repr = program.tuple_struct(layout, vec![value, state]);
+                    let pair = program.lending_call(
+                        builder,
+                        ext,
+                        lent,
+                        None,
+                        named("t", value.0, value.1),
+                        named("d", pair_repr, state.1),
+                    );
+                    let Atom::Var(pair) = pair else {
+                        unreachable!("a lending call binds its pair")
+                    };
+                    let fields = vec![
+                        builder.var(named("f", value.0, value.1)),
+                        builder.var(named("st", state.0, state.1)),
+                    ];
+                    builder.emit(Stmt::Unpack {
+                        value: pair,
+                        ctor: Ctor { layout, tag: TUPLE },
+                        fields: fields.clone(),
+                    });
+                    (Atom::Var(fields[0]), Atom::Var(fields[1]))
+                }
+                VarOp::Write => {
+                    let written = bind(
+                        builder,
+                        named("st", state.0, state.1),
+                        Rhs::Extern {
+                            ext: Extern::MutArrayWrite,
+                            args: vec![st, args[0], args[1]],
+                            at: None,
+                        },
+                    );
+                    (Atom::Unit, written)
+                }
+            };
+            let call = Call::Resume {
+                k,
+                arg: value,
+                state: next,
+            };
+            bind(builder, named("t", result.0, result.1), plain_call(call))
+        })
     }
 
     /// 変数の `return` の節。`Unr` の変数は状態を捨て、配列の変数は残った状態を `drop` してから範囲の値を返す。
@@ -1229,7 +1164,7 @@ impl FnLowering<'_> {
         result: (Repr, Mark),
     ) -> Atom {
         let params = [("x", value), ("st", state)];
-        self.synthesized(name, RETURN_UNIFORM, &params, result, |builder, _, args| {
+        self.synthesized(name, &params, result, |builder, _, args| {
             if class == VarClass::Array {
                 bind(
                     builder,

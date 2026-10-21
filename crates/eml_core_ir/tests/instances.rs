@@ -171,16 +171,16 @@ fn a_row_polymorphic_function_has_an_instance_per_row_bit() {
     // 純粋な instance は今の名前で印がなく、yield しうる instance は `<e>` を持つ
     insta::assert_snapshot!(function(&shown, "twice"), @"
     fn twice(f.0: tobj) -> int {
-      let t.1: int = apply f.0((): unit)
-      let t.2: int = apply f.0((): unit)
+      let t.1: int = apply f.0(())
+      let t.2: int = apply f.0(())
       let t.3: int = extern \"Prelude.Num Int.+\"(t.1, t.2)
       return t.3
     }
     ");
     insta::assert_snapshot!(function(&shown, "twice<e>"), @r#"
     yields fn "twice<e>"(f.0: tobj) -> int {
-      let t.1: int = yields apply f.0((): unit)
-      let t.2: int = yields apply f.0((): unit)
+      let t.1: int = yields apply f.0(())
+      let t.2: int = yields apply f.0(())
       let t.3: int = extern "Prelude.Num Int.+"(t.1, t.2)
       return t.3
     }
@@ -314,13 +314,13 @@ fn a_clause_lambda_over_an_operation_row_variable_may_yield() {
     let text = "effect Run where\n  run : (Unit -> <e> Int) -> Int\n\nbody : Unit -> <Run> Int\nbody () = run (fn () -> 1)\n\nmain : Unit -> <IO> Unit\nmain () =\n  let r =\n    handle body () with\n      | ctl run f k ->\n        let g = fn () -> f () + 1\n        k 7\n  println (show r)";
     let shown = core_text(text, Pass::Translate);
     // g の row は操作の row 変数で、main の row 変数ではないので、g は yield しうる
-    insta::assert_snapshot!(function(&shown, "main$lambda0"), @"
-    internal yields fn main$lambda0(f.0: tobj, p.1: unit) -> int {
-      let t.2: int = yields apply f.0((): unit)
-      let t.3: int = extern \"Prelude.Num Int.+\"(t.2, 1)
+    insta::assert_snapshot!(function(&shown, "main$lambda0"), @r#"
+    internal yields uniform from 1 fn main$lambda0(f.0: tobj, p.1: unit) -> int {
+      let t.2: int = yields apply f.0(())
+      let t.3: int = extern "Prelude.Num Int.+"(t.2, 1)
       return t.3
     }
-    ");
+    "#);
 }
 
 #[test]
@@ -330,8 +330,8 @@ fn an_apply_is_split_after_an_arrow_that_may_yield() {
     // h 1 で yield しうるので、1つ目の apply の後で分け、1つ目に印を付ける
     insta::assert_snapshot!(function(&shown, "run"), @"
     yields fn run(h.0: tobj poly) -> int {
-      let t.1: tobj poly = yields apply h.0(1: int)
-      let t.2: int = apply t.1(2: int)
+      let t.1: tobj poly = yields apply h.0(1)
+      let t.2: int = apply t.1(2)
       return t.2
     }
     ");
@@ -416,7 +416,7 @@ fn a_point_free_entry_takes_its_mark_from_its_first_arrow() {
     insta::assert_snapshot!(function(&core_text_with_entry(text, "act"), "entry$act"), @"
     yields fn entry$act() -> int {
       let f.0: tobj = call act()
-      let t.1: int = yields apply f.0((): unit)
+      let t.1: int = yields apply f.0(())
       return t.1
     }
     ");
@@ -429,7 +429,7 @@ fn a_point_free_entry_whose_first_arrow_has_its_own_row_variable_may_yield() {
     insta::assert_snapshot!(function(&core_text_with_entry(text, "go"), "entry$go"), @r#"
     yields fn entry$go() -> int {
       let f.0: tobj = call "go<e>"()
-      let t.1: int = yields apply f.0((): unit)
+      let t.1: int = yields apply f.0(())
       return t.1
     }
     "#);
@@ -634,8 +634,8 @@ fn wrapper_headers(text: &str, base: &str) -> Vec<String> {
 
 const APPLY_TO: &str = "apply_to : (a -> <e> b) -> a -> <e> b\napply_to f x = f x\n\n";
 
-/// `con$`、`op$`、`cont$` は型ごとの instance で、名前に型引数を書き、引数と結果を具体化した型の Repr で持つ。スキームの
-/// 型変数を `tobj` にすると、型どおりの `apply` が呼ぶたびに実行時の変換を通るためである
+/// `con$`、`op$`、`cont$` は型ごとの instance で、名前に型引数を書き、引数と結果を具体化した型の Repr で持つ。値として
+/// 生まれるので `split` は捕まえた値の数 (0) で、一様な位置にそろえるのは box の挿入である
 /// (docs/spec/lir.md の「関数の ABI」)。
 #[test]
 fn wrappers_are_per_type_instances() {
@@ -645,8 +645,8 @@ fn wrappers_are_per_type_instances() {
     assert_eq!(
         wrapper_headers(&text, "con$Prelude.Some"),
         [
-            "internal fn \"con$Prelude.Some@[Int]\"(p.0: int) -> tobj {",
-            "internal fn \"con$Prelude.Some@[String]\"(p.0: obj) -> tobj {",
+            "internal uniform from 0 fn \"con$Prelude.Some@[Int]\"(p.0: int) -> tobj {",
+            "internal uniform from 0 fn \"con$Prelude.Some@[String]\"(p.0: obj) -> tobj {",
         ]
     );
 }
@@ -657,8 +657,8 @@ fn operation_wrappers_are_per_type_instances() {
     assert_eq!(
         wrapper_headers(text, "op$read"),
         [
-            "internal yields fn \"op$read@[Float]\"(p.0: unit) -> float {",
-            "internal yields fn \"op$read@[Int]\"(p.0: unit) -> int {",
+            "internal yields uniform from 0 fn \"op$read@[Float]\"(p.0: unit) -> float {",
+            "internal yields uniform from 0 fn \"op$read@[Int]\"(p.0: unit) -> int {",
         ]
     );
 }
@@ -675,8 +675,8 @@ fn extern_wrappers_take_the_types_of_their_instance() {
             .chain(wrapper_headers(&text, "describe@[Float]$extern0"))
             .collect::<Vec<_>>(),
         [
-            "internal fn \"describe@[Int]$extern0\"(p.0: int) -> obj {",
-            "internal fn \"describe@[Float]$extern0\"(p.0: float) -> obj {",
+            "internal uniform from 0 fn \"describe@[Int]$extern0\"(p.0: int) -> obj {",
+            "internal uniform from 0 fn \"describe@[Float]$extern0\"(p.0: float) -> obj {",
         ]
     );
 }
@@ -686,12 +686,14 @@ fn continuation_wrappers_are_per_type_instances() {
     let text = "effect Ask where\n  ask : Unit -> Float\n\ntwice : (Float -> <e> Int) -> <e> Int\ntwice f = f 1.5\n\nlater : (Float -> Int -> <e> Int) -> <e> Int\nlater f = f 2.5 1\n\nmain : Unit -> <IO, Panic> Unit\nmain () =\n  let n =\n    handle (if ask () > 0.0 then 1 else 0) with\n      | ctl ask () k -> twice k\n  let m =\n    handle (if ask () > 0.0 then 1 else 0) from 0 with\n      | ctl ask () k st -> later k\n      | return x _ -> x\n  println (show (n + m))";
     assert_eq!(
         wrapper_headers(text, "cont$"),
-        ["internal yields fn \"cont$@[Float, Int]\"(k.0: tobj poly, v.1: float) -> int {"]
+        [
+            "internal yields uniform from 0 fn \"cont$@[Float, Int]\"(k.0: tobj poly, v.1: float) -> int {"
+        ]
     );
     assert_eq!(
         wrapper_headers(text, "cont$state"),
         [
-            "internal yields fn \"cont$state@[Float, Int, Int]\"(k.0: tobj poly, v.1: float, s.2: int) -> int {"
+            "internal yields uniform from 0 fn \"cont$state@[Float, Int, Int]\"(k.0: tobj poly, v.1: float, s.2: int) -> int {"
         ]
     );
 }

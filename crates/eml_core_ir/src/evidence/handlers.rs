@@ -11,7 +11,7 @@ use crate::tail::tail_position_call;
 use crate::{Call, CoreFn, Program, Rhs, Stmt, Term};
 use eml_extern::Purity;
 use eml_lir::{
-    Atom, BlockId, FnIdx, Mark, MaskItem, OpRet, OperationInfo, Prim, Repr, Site, VarId, VarInfo,
+    Atom, BlockId, FnIdx, Mark, MaskItem, OpRet, OperationInfo, Prim, Repr, VarId, VarInfo,
     operation,
 };
 
@@ -152,23 +152,15 @@ pub(super) fn lower(
                     mask: _,
                 } => out.perform(var, effect, op, args),
                 Rhs::Call {
-                    call:
-                        Call::Resume {
-                            k,
-                            arg,
-                            state,
-                            site: _,
-                        },
+                    call: Call::Resume { k, arg, state },
                     mask,
                 } => {
-                    // 再開した計算の yield は、`k` の外側の row、つまりこの関数の row を通る。再開は EP の一様な場所である
-                    // (docs/spec/lir.md の「`apply` の場所」)
+                    // 再開した計算の yield は、`k` の外側の row、つまりこの関数の row を通る
                     let apply = Call::Apply {
                         callee: k,
                         args: vec![arg, state],
                         yields,
                         prompt: None,
-                        site: Site::Uniform,
                     };
                     out.masked_call(&mut annotations, id, var, apply, mask, yields);
                 }
@@ -303,7 +295,6 @@ fn runs_in_place(program: &Program, clause: &CoreFn, operation: &OperationInfo) 
                                 args: _,
                                 yields,
                                 prompt: _,
-                                site: _,
                             } => *yields,
                         }
                 }
@@ -391,7 +382,6 @@ fn into_entry(program: &mut Program, clause: FnIdx, effect: u32, op: u32) {
                             k: _,
                             arg,
                             state: resumed,
-                            site: _,
                         },
                     mask: _,
                 },
@@ -665,7 +655,6 @@ impl Out<'_> {
                 args: vec![Atom::Unit],
                 yields: true,
                 prompt: Some(evidence),
-                site: Site::Uniform,
             }),
         );
         self.stmts.push(Stmt::Let {

@@ -8,7 +8,7 @@ use std::collections::{BTreeSet, HashMap, HashSet};
 
 use crate::tail::tail_position_call;
 use crate::{Block, Call, CoreFn, Rhs, Stmt, Term};
-use eml_lir::{Atom, BlockId, FnIdx, Repr, Site, VarId, VarInfo};
+use eml_lir::{Atom, BlockId, FnIdx, Repr, VarId, VarInfo};
 
 use super::super::blocks::constant_target;
 use super::super::known::fresh;
@@ -350,8 +350,7 @@ impl Copy<'_> {
 /// そのまま残す。EP が `resume` から作る `apply` と同じく、印は節の関数の `yields` の印にする (docs/spec/core-ir.md の
 /// 「`apply` の印と分け方」)。`k` の出現がこの3つの形だけであることは、呼ぶ側が確かめてある。写しは handler の
 /// 複製から直接呼ばれるために生まれるので、内部の関数でなく、`split` も持たない。`k` への `apply` は EP の再開と同じ形
-/// だが、継続の関数を型どおりに呼ぶ場所である。場所の Repr は、`resume` が型から決めた場所を写す
-/// (docs/spec/lir.md の「関数の ABI」と「`apply` の場所」)。
+/// で、ほかの `apply` と同じく一様である (docs/spec/lir.md の「関数の ABI」)。
 pub(crate) fn clause_with_k(
     clause: &CoreFn,
     name: String,
@@ -392,25 +391,19 @@ pub(crate) fn clause_with_k(
                     k: callee,
                     arg,
                     state,
-                    ref site,
                 } = *call
             {
                 debug_assert_eq!(callee, Atom::Var(k), "a clause resumes only its own `k`");
-                // 場所は、`resume` が型から決めたものを写す。定数の値の形からは決めない。`None` は `enum` の形だが、
-                // `Option Int` を受ける `k` には `tobj` で渡るためである
-                // (docs/spec/lir.md の「`apply` の場所」)
-                let (args, reprs) = if stateful {
-                    (vec![arg, state], site.clone())
+                let args = if stateful {
+                    vec![arg, state]
                 } else {
-                    (vec![arg], site[..1].to_vec())
+                    vec![arg]
                 };
-                let site = Site::Typed(reprs);
                 *call = Call::Apply {
                     callee,
                     args,
                     yields: clause.yields,
                     prompt: None,
-                    site,
                 };
             }
         }

@@ -126,7 +126,7 @@ main () =
 ";
     insta::assert_snapshot!(function(&core_text(text, Pass::Optimize), "render$handle0"), @r#"
     internal yields uniform from 0 fn render$handle0(p.0: unit) -> unit {
-      let t.1: unit = mask [Yield@1] yields apply &"op$yield@[Int]"(1: int)
+      let t.1: unit = mask [Yield@1] yields apply &"op$yield@[Int]"(1)
       return t.1
     }
     "#);
@@ -183,7 +183,7 @@ main () =
     insta::assert_snapshot!(function(&core_text(text, Pass::Optimize), "entry$main"), @r#"
     fn entry$main() -> unit {
       let t.1: tobj poly = call adder(0, 1)
-      let t.2: int = apply t.1(2: int)
+      let t.2: int = apply t.1(2)
       let t.3: obj = extern "Prelude.Show Int.show"(t.2)
       let t.4: unit = extern Prelude.println(t.3)
       return t.4
@@ -344,9 +344,9 @@ fn a_closure_captured_by_a_closure_is_specialized() {
     );
     let shown = core_text(&text, Pass::Optimize);
     insta::assert_snapshot!(function(&shown, "Std.Iter.map@[Int, Int]$lambda0{0=main$lambda0}"), @r#"
-    internal fn "Std.Iter.map@[Int, Int]$lambda0{0=main$lambda0}"(it.1: obj lin, p.2: unit) -> tobj lin {
+    internal uniform from 1 fn "Std.Iter.map@[Int, Int]$lambda0{0=main$lambda0}"(it.1: obj lin, p.2: unit) -> tobj lin {
       unpack it.1 Std.Iter.Iter #0(pull.12: tobj lin)
-      let t.13: tobj lin = apply pull.12((): unit)
+      let t.13: tobj lin = apply pull.12(())
       switch t.13 Prelude.Option { #0 -> b1, #1(x.4: (,){int, obj lin} lin) -> b2 }
     b1:
       let u.7: unit = drop t.13
@@ -425,7 +425,7 @@ main () =
     b1:
       return ()
     b2:
-      let t.3: int = apply g.2(1: int)
+      let t.3: int = apply g.2(1)
       let t.4: obj = extern "Prelude.Show Int.show"(t.3)
       let t.5: unit = extern Prelude.println(t.4)
       return t.5
@@ -1197,7 +1197,7 @@ fn a_continuation_captures_its_live_variables() {
         .unwrap_or_else(|| panic!("{shown}"));
     let name = name.split('"').nth(1).unwrap().to_string();
     insta::assert_snapshot!(function(&shown, &name), @r#"
-    internal fn "nums$let$go{H=Std.Iter.generate@#8c179e1f604536f1}$h0"(n.0: int, i.1: int, t.2: unit) -> tobj lin {
+    internal uniform from 2 fn "nums$let$go{H=Std.Iter.generate@#8c179e1f604536f1}$h0"(n.0: int, i.1: int, t.2: unit) -> tobj lin {
       let t.3: int = extern "Prelude.Num Int.+"(i.1, 1)
       let t.5: enum = extern "Prelude.Ord Int.>"(t.3, n.0)
       switch t.5 Prelude.Bool { #0 -> b1, #1 -> b2 }
@@ -1953,7 +1953,7 @@ internal yields fn body(p.0: unit) -> int {
   return t.1
 }
 internal fn ask(c.0: tobj, p.1: unit, k.2: tobj, s.3: unit) -> tobj {
-  let t.4: tobj = resume k.2(c.0, (): unit)
+  let t.4: tobj = resume k.2(c.0, ())
   return t.4
 }
 internal fn ret(x.0: tobj, s.1: unit) -> tobj {
@@ -2004,7 +2004,7 @@ b2:
 }
 internal fn tick(p.0: unit, k.1: tobj, s.2: int) -> tobj {
   let n.3: int = extern \"Prelude.Num Int.+\"(s.2, 1)
-  let t.4: tobj = resume k.1((): unit, n.3)
+  let t.4: tobj = resume k.1((), n.3)
   return t.4
 }
 internal fn ret(x.0: tobj, s.1: int) -> int {
@@ -2386,11 +2386,9 @@ b5:
 }
 
 /// handler への特殊化が作る関数 (`f{H}` と、節の写し `<g>{k}`) は `split` を持たない。直接呼ばれるか、特殊化した経路の
-/// 中で型どおりに呼ばれるためである。`<g>{k}` の中の `k` への `apply` も型どおりの場所である
-/// (docs/spec/lir.md の「関数の ABI」)。
+/// 中で型どおりに呼ばれるためである。`<g>{k}` は `k` を `apply` で呼ぶ (docs/spec/lir.md の「関数の ABI」)。
 #[test]
 fn handler_specialization_functions_are_typed() {
-    use eml_lir::Site;
     let program =
         eml_test_support::core_until(include_str!("../../../bench/state_loop.em"), Pass::Optimize);
     let shown = pretty(&program);
@@ -2413,27 +2411,24 @@ fn handler_specialization_functions_are_typed() {
         .find(|function| function.name.ends_with("{k}"))
         .unwrap_or_else(|| panic!("no `<g>{{k}}` in\n{shown}"));
     assert_eq!(copy.split, None, "{shown}");
-    let sites: Vec<&Site> = copy
+    let applies = copy
         .blocks
         .iter()
         .flat_map(|block| &block.stmts)
-        .filter_map(|stmt| match stmt {
-            Stmt::Let {
-                rhs:
-                    Rhs::Call {
-                        call: Call::Apply { site, .. },
+        .filter(|stmt| {
+            matches!(
+                stmt,
+                Stmt::Let {
+                    rhs: Rhs::Call {
+                        call: Call::Apply { .. },
                         ..
                     },
-                ..
-            } => Some(site),
-            _ => None,
+                    ..
+                }
+            )
         })
-        .collect();
-    assert!(!sites.is_empty(), "{shown}");
-    assert!(
-        sites.iter().all(|site| matches!(site, Site::Typed(_))),
-        "{shown}"
-    );
+        .count();
+    assert!(applies > 0, "{shown}");
 }
 
 /// 節の写し `<g>{k}` が展開されずに残るプログラム。`state_loop` の節はすぐに再開するので写しを作らない。この節は `k` を
@@ -2454,49 +2449,11 @@ main () =
   println (show r)
 ";
 
-/// 節の写し `<g>{k}` の `k` への `apply` は、`resume` の場所を写す。`None` は `#0` で値の形は `enum` だが、
-/// `Option Int` を受ける `k` には `tobj` で渡る (docs/spec/lir.md の「`apply` の場所」)。
+/// `con` の複製は、開いた位置より後ろの一様な引数だけを一様に保ち、結果は一様なまま写す。一様な引数の位置を開く `r` の
+/// 複製は一様な引数が残らない。一様でない位置だけを開く `g` の複製は、末尾の一様な引数がそのまま残るので `split` を
+/// 引数の増減だけずらす (docs/spec/core-ir.md の「`con` の値の形についての特殊化」)。
 #[test]
-fn a_clause_copy_applies_k_at_the_site_of_the_resume() {
-    use eml_lir::{Repr, Site};
-    let text = CLAUSE_WITH_K
-        .replace("ask : Unit -> Int", "ask : Unit -> Option Int")
-        .replace(
-            "sum acc n = if n <= 0 then acc else sum (acc + ask ()) (n - 1)",
-            "sum acc n = match ask () with\n  | None -> acc\n  | Some x -> sum (acc + x) (n - 1)",
-        )
-        .replace("let v = k 10", "let v = k None");
-    let program = eml_test_support::core_until(&text, Pass::Optimize);
-    let shown = pretty(&program);
-    let copy = program
-        .functions
-        .iter()
-        .find(|function| function.name.ends_with("{k}"))
-        .unwrap_or_else(|| panic!("no `<g>{{k}}` in\n{shown}"));
-    let sites: Vec<&Site> = copy
-        .blocks
-        .iter()
-        .flat_map(|block| &block.stmts)
-        .filter_map(|stmt| match stmt {
-            Stmt::Let {
-                rhs:
-                    Rhs::Call {
-                        call: Call::Apply { args, site, .. },
-                        ..
-                    },
-                ..
-            } if args.first() == Some(&Atom::Tag(0)) => Some(site),
-            _ => None,
-        })
-        .collect();
-    assert_eq!(sites, [&Site::Typed(vec![Repr::TObj])], "{shown}");
-}
-
-/// `con` の複製は、一様な引数の位置を開くと引数の並びが変わるので一様な位置を落とす。一様でない位置だけを開く複製は、
-/// 末尾の一様な引数がそのまま残るので `split` を引数の増減だけずらして写す
-/// (docs/spec/core-ir.md の「`con` の値の形についての特殊化」)。
-#[test]
-fn a_con_copy_keeps_its_split_only_when_the_uniform_parameters_stay() {
+fn a_con_copy_keeps_the_uniform_parameters_after_the_opened_ones() {
     let mut program = parse(
         "\
 layout Box { Box(tobj, int) }
@@ -2535,7 +2492,7 @@ fn entry$main(k.0: tobj) -> int {
             .unwrap_or_else(|| panic!("no `{prefix}` copy in\n{shown}"));
         copy.split.map(|at| copy.params().len() - at as usize)
     };
-    assert_eq!(uniform_tail("r{"), None, "{shown}");
+    assert_eq!(uniform_tail("r{"), Some(0), "{shown}");
     assert_eq!(uniform_tail("g{"), Some(2), "{shown}");
 }
 
@@ -2666,7 +2623,7 @@ b2:
 }
 internal fn tick(p.0: unit, k.1: tobj, s.2: int) -> tobj {
   let n.3: int = extern \"Prelude.Num Int.+\"(s.2, 1)
-  let t.4: tobj = resume k.1((): unit, n.3)
+  let t.4: tobj = resume k.1((), n.3)
   return t.4
 }
 internal fn ret(x.0: tobj, s.1: int) -> int {
@@ -2754,7 +2711,7 @@ b2:
 }
 internal fn tick(p.0: unit, k.1: tobj, s.2: int) -> tobj {
   let n.3: int = extern \"Prelude.Num Int.+\"(s.2, 1)
-  let t.4: tobj = resume k.1((): unit, n.3)
+  let t.4: tobj = resume k.1((), n.3)
   return t.4
 }
 internal fn ret(x.0: tobj, s.1: int) -> int {
@@ -2838,7 +2795,7 @@ internal fn h(a.0: int, b.1: int, x.2: int) -> int {
   return t.4
 }
 internal uniform from 1 fn r(f.0: tobj, s.1: tobj) -> tobj {
-  let t.2: int = apply f.0(1: int)
+  let t.2: int = apply f.0(1)
   switch t.2 { 0 -> b1, _ -> b2 }
 b1:
   return s.1
@@ -2863,4 +2820,48 @@ fn entry$main() -> tobj {
         .unwrap_or_else(|| panic!("no `r` copy in\n{shown}"));
     assert_eq!(copy.params().len(), 3, "{shown}");
     assert_eq!(copy.split, Some(2), "{shown}");
+}
+
+/// 持ち上げた関数の ABI は、持ち主の一族のコードだけで決まる。`user` のラムダは `keep` の複製が値として持つだけで、
+/// `user` の中では値にならないので型どおりになる。`user` を直接呼ぶプログラムと、値として使うプログラムで、ラムダの
+/// `split` もコードも同じである。名前が同じならコードも同じという追記の規則を、この決め方も守る
+/// (docs/spec/core-ir.md の「直接だけ呼ばれる持ち上げた関数」)。
+#[test]
+fn a_lifted_function_gets_the_same_abi_in_every_program() {
+    let common = format!(
+        "{HIDE}
+keep : Int -> (Int -> <Panic> Int) -> <Panic> Box (Int -> <Panic> Int)
+keep n f = if n <= 0 then Box f else keep (n - 1) f
+
+user : Int -> <Panic> Box (Int -> <Panic> Int)
+user n = keep 0 (fn x -> x + n)
+"
+    );
+    let direct = format!(
+        "{common}
+main : Unit -> <IO, Panic> Unit
+main () = match user 3 with
+  | Box g -> println (show (g 4))
+"
+    );
+    let value = format!(
+        "{common}
+main : Unit -> <IO, Panic> Unit
+main () = match hide 0 user with
+  | Box u -> match u 3 with
+    | Box g -> println (show (g 4))
+"
+    );
+    let lambda = |text: &str| {
+        let program = eml_test_support::core_until(text, Pass::Optimize);
+        let lambda = program
+            .functions
+            .iter()
+            .find(|function| function.name == "user$lambda0")
+            .unwrap_or_else(|| panic!("no `user$lambda0` in\n{}", pretty(&program)));
+        (lambda.split, function(&pretty(&program), "user$lambda0"))
+    };
+    let (split, code) = lambda(&direct);
+    assert_eq!(split, None, "{code}");
+    assert_eq!(lambda(&value), (split, code));
 }

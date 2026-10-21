@@ -64,7 +64,8 @@ fn returning_a_field_of_a_call_result_is_not_a_tail_call() {
 
 #[test]
 fn calls_in_tail_position_are_tail_calls() {
-    // ラムダはデータを通して渡し、optimize が `call_twice` を特殊化しないようにする。`apply` の末尾呼び出しを見るためである
+    // ラムダはデータを通して渡し、optimize が `call_twice` を特殊化しないようにする。`int` を返す `call_twice` の末尾の
+    // 位置の `apply` は結果が `tobj` なので、末尾呼び出しにならない (docs/spec/lir.md の「末尾の位置の呼び出し」)
     let text = "data Box a = | Box a\n\nhide : Int -> a -> <Panic> Box a\nhide n x = if n <= 0 then Box x else hide (n - 1) x\n\nloop : Int -> Int -> <Panic> Int\nloop n acc = if n == 0 then acc else loop (n - 1) (acc + 1)\n\ncall_twice : (Int -> <Panic> Int) -> Int -> <Panic> Int\ncall_twice f x = f (f x)\n\nmain : Unit -> <IO, Panic> Unit\nmain () =\n  let Box f = hide 0 (fn x -> x + 1)\n  let Box call_twice = hide 0 call_twice\n  println (show (loop 3 0 + call_twice f 1))";
     let shown = lir_text(text, eml_lir::Pass::Contract);
     insta::assert_snapshot!(function(&shown, "loop"), @"
@@ -81,8 +82,11 @@ fn calls_in_tail_position_are_tail_calls() {
     ");
     insta::assert_snapshot!(function(&shown, "call_twice"), @"
     fn call_twice(f.0: tobj, x.1: int) -> int {
-      let t.2: int = apply f.0(x.1)
-      tail apply f.0(t.2)
+      let x.4: tobj = box x.1
+      let t.5: tobj = apply f.0(x.4)
+      let t.6: tobj = apply f.0(t.5)
+      let t.3: int = unbox t.6
+      return t.3
     }
     ");
 }

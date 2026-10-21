@@ -635,21 +635,9 @@ impl<'a> Checker<'a> {
                 k: _,
                 arg: _,
                 state: _,
-                site: _,
             } => {}
         }
-        self.use_all(|f| call.for_each_atom(f))?;
-        // Core IR のパスは引数を変換した変数に替えないので、どの段でも変数と場所を比べる
-        match call {
-            Call::Apply { args, site, .. } => self.cx.check_site(args, site),
-            Call::Resume {
-                k: _,
-                arg,
-                state,
-                site,
-            } => self.cx.check_reprs("resume", &[*arg, *state], site),
-            _ => Ok(()),
-        }
+        self.use_all(|f| call.for_each_atom(f))
     }
 
     /// 着地の印 `prompt v` の検査。印は EP だけが出し、末尾の位置の呼び出しには付かず、`v` は呼び出しの後も
@@ -747,7 +735,6 @@ impl<'a> Checker<'a> {
                 k: _,
                 arg: _,
                 state: _,
-                site: _,
             } => {}
         }
         if let Some(unknown) = mask

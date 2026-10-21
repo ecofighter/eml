@@ -25,8 +25,6 @@
 
 use std::collections::{BTreeMap, HashMap};
 
-use crate::Site as ApplySite;
-use crate::boxing::tail_position_call;
 use crate::check::{
     self, BlockShape, Context, Dominators, FnSummary, Tables, TermShape, boxed_scalars,
     clause_function, field_count, shape,
@@ -51,18 +49,11 @@ pub fn verify_scopes(program: &Program) -> Result<(), VerifyError> {
     verify_at(program, Level::Scopes)
 }
 
-/// 開くパスの後で Perceus より前の LIR を確かめる。範囲の段の検査に加えて、構造体がどこにも残らないことを確かめ、
+/// 開くパスの後で Perceus より前の LIR (縮約の後も) を確かめる。範囲の段の検査に加えて、構造体がどこにも残らないことを確かめ、
 /// 複数の値の `let` と `return` と構造体の `unbox` を受ける
 /// (docs/spec/lir.md の「verifier」)。
 pub fn verify_flattened(program: &Program) -> Result<(), VerifyError> {
     verify_at(program, Level::Flattened)
-}
-
-/// 縮約の後で Perceus より前の LIR を確かめる。開いた後の段の検査に加えて、互換でない `return` を末尾の位置の
-/// 呼び出しの形でも拒む。縮約がその形を `tail` にしなかったなら、`return` は変換なしに関数の `ret` を返すためである
-/// (docs/spec/lir.md の「verifier」)。
-pub fn verify_contracted(program: &Program) -> Result<(), VerifyError> {
-    verify_at(program, Level::Contracted)
 }
 
 /// box の挿入の前の LIR を確かめる。範囲の段と同じ形と範囲を確かめ、境界は比べない。box の挿入と縮約が作るもの
@@ -73,14 +64,12 @@ pub fn verify_lowered(program: &Program) -> Result<(), VerifyError> {
 }
 
 /// 検査の段。段はパスの順に直線に並ぶ。入口の段の LIR には、box の挿入と縮約が作るものがまだない。開くパスより前の
-/// LIR には構造体が残り、複数の値の命令がまだない。縮約より前の LIR には、`tail` にする前の互換でない `return` が
-/// 残りうる。Perceus より前の LIR には、所有を確かめる材料 (`dup`、`decref`、`release`) がまだない。
+/// LIR には構造体が残り、複数の値の命令がまだない。Perceus より前の LIR には、所有を確かめる材料 (`dup`、`decref`、`release`) がまだない。
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 enum Level {
     Lowered,
     Scopes,
     Flattened,
-    Contracted,
     Ownership,
 }
 
@@ -139,6 +128,13 @@ fn verify_at(program: &Program, level: Level) -> Result<(), VerifyError> {
                 level >= Level::Scopes,
             )
             .and_then(|()| check::split(function.split, function.params().len()))
+            .and_then(|()| {
+                if level >= Level::Scopes {
+                    variant_name(program, function)
+                } else {
+                    Ok(())
+                }
+            })
             .map_err(|message| VerifyError {
                 function: function.name.clone(),
                 message,
@@ -154,8 +150,86 @@ fn verify_at(program: &Program, level: Level) -> Result<(), VerifyError> {
                     message,
                 })?;
         }
+        // 値の参照の規則は、参照の形 (`closure` の引数の数など) を本体の検査が確かめた後に見る
+        if level >= Level::Scopes {
+            for function in &program.functions {
+                value_references(program, function).map_err(|message| VerifyError {
+                    function: function.name.clone(),
+                    message,
+                })?;
+            }
+        }
         Ok(())
     })
+}
+
+/// 一様な位置で値を受ける Repr (`obj`、`tobj`、`unit`) か。
+fn is_uniform(repr: Repr) -> bool {
+    matches!(repr, Repr::Obj | Repr::TObj | Repr::Unit)
+}
+
+/// 捕獲を `captured` 個受けた後の引数と、結果がどれも一様か。
+fn uniform_beyond(function: &LirFn, captured: usize) -> bool {
+    function.rets.len() == 1
+        && is_uniform(function.rets[0].0)
+        && function
+            .params()
+            .iter()
+            .skip(captured)
+            .all(|&param| is_uniform(function.repr(param)))
+}
+
+/// `<f>$uniform` という名前の関数は版で、`<f>` があるときだけ存在し、すべて一様な ABI を持つ
+/// (docs/spec/lir.md の「関数の ABI」)。
+fn variant_name(program: &Program, function: &LirFn) -> Result<(), String> {
+    let Some(base) = function.name.strip_suffix("$uniform") else {
+        return Ok(());
+    };
+    if !program.functions.iter().any(|other| other.name == base) {
+        return Err(format!("the variant has no function `{base}`"));
+    }
+    if function.split.is_some() || function.clause.is_some() || !uniform_beyond(function, 0) {
+        return Err("the variant does not have the uniform ABI".to_string());
+    }
+    Ok(())
+}
+
+/// 値として参照する関数は、捕獲より後ろの引数と結果が一様である。`clause` の印の関数は操作の ABI で呼ばれるので
+/// 除く (docs/spec/lir.md の「関数の ABI」)。表にない番号は本体の検査が報告する。
+fn value_references(program: &Program, function: &LirFn) -> Result<(), String> {
+    let check = |target: FnIdx, captured: usize| -> Result<(), String> {
+        match program.functions.get(target.0 as usize) {
+            Some(callee) if callee.clause.is_none() && !uniform_beyond(callee, captured) => {
+                Err(format!(
+                    "`{}` is used as a value with {captured} captures, but its later parameters and its result are not all uniform",
+                    callee.name
+                ))
+            }
+            _ => Ok(()),
+        }
+    };
+    let mut result = Ok(());
+    let mut atom = |atom: Atom| {
+        if let Atom::Fn(target) = atom
+            && result.is_ok()
+        {
+            result = check(target, 0);
+        }
+    };
+    for block in &function.blocks {
+        for stmt in &block.stmts {
+            if let Stmt::Let {
+                var: _,
+                rhs: Rhs::MakeClosure(target, args),
+            } = stmt
+            {
+                check(*target, args.len())?;
+            }
+            stmt.for_each_atom(&mut atom);
+        }
+        block.term.for_each_atom(&mut atom);
+    }
+    result
 }
 
 /// 開いた後の段では、配置のフィールドに構造体は来ない。構造体の型を宣言したフィールドは `tobj` である
@@ -896,7 +970,7 @@ impl<'a> Checker<'a> {
         match term {
             Term::Return(atom) => {
                 self.consume(&mut owned, *atom)?;
-                self.check_returned(block, std::slice::from_ref(atom))?;
+                self.check_returned(std::slice::from_ref(atom))?;
                 self.nothing_owned(&owned)
             }
             Term::ReturnMany(atoms) => {
@@ -909,7 +983,7 @@ impl<'a> Checker<'a> {
                 for &atom in atoms {
                     self.consume(&mut owned, atom)?;
                 }
-                self.check_returned(block, atoms)?;
+                self.check_returned(atoms)?;
                 self.nothing_owned(&owned)
             }
             Term::TailCall(call) => {
@@ -1035,33 +1109,11 @@ impl<'a> Checker<'a> {
         Ok(())
     }
 
-    /// 開いた後の段で、源の Repr を葉の Repr の並びに開く。構造体は `unit` でない葉に、ほかはそのものになる。開く前の
-    /// 段では開かない。
-    fn opened(&self, repr: Repr) -> Vec<Repr> {
-        match repr {
-            Repr::Struct(id) if self.level >= Level::Flattened => {
-                opened_leaves(&self.program.structs, id)
-            }
-            _ => vec![repr],
-        }
-    }
-
-    fn opened_all(&self, reprs: &[Repr]) -> Vec<Repr> {
-        reprs.iter().flat_map(|&repr| self.opened(repr)).collect()
-    }
-
-    /// `return` の値の並びは、関数の結果の並びと長さが同じで、値ごとに Repr が互換で印も互換である。末尾の位置の
-    /// 呼び出しの束縛は呼ばれる側の結果の Repr を持ち、縮約がこの形を `tail` にする。縮約より前の段では、互換でない
-    /// `return` をこの形のときだけ許す。構造体と箱の間の違いでは、並びの長さも違いうる
+    /// `return` の値の並びは、関数の結果の並びと長さが同じで、値ごとに Repr が互換で印も互換である
     /// (docs/spec/lir.md の「末尾の位置の呼び出し」)。
-    fn check_returned(&self, block: &Block, atoms: &[Atom]) -> Result<(), String> {
+    fn check_returned(&self, atoms: &[Atom]) -> Result<(), String> {
         let rets = &self.function.rets;
-        let tail = matches!(self.level, Level::Scopes | Level::Flattened)
-            && tail_position_call(block).is_some();
         if atoms.len() != rets.len() {
-            if tail {
-                return Ok(());
-            }
             return Err(format!(
                 "a return gives {} values, but the function returns {}",
                 atoms.len(),
@@ -1069,7 +1121,7 @@ impl<'a> Checker<'a> {
             ));
         }
         for (&atom, &(repr, mark)) in atoms.iter().zip(rets) {
-            if !tail && !self.cx.passes(atom, repr) {
+            if !self.cx.passes(atom, repr) {
                 return Err(format!(
                     "{} is returned from a function that returns {}",
                     self.cx.typed_atom_text(atom),
@@ -1637,56 +1689,10 @@ impl<'a> Checker<'a> {
                     OpRet::Never => None,
                 }
             }
-            // 型どおりの場所の結果は束縛の Repr で、一様な場所の結果は `tobj` である。関数の値は型変数の位置なので、
-            // 結果の印はいつも `poly` で、どの受け手とも合う
-            // 構造体の結果を葉で受ける場所は、源の Repr を `source_ret` に持つ
-            Call::Apply {
-                site: ApplySite::Typed(_),
-                source_ret: Some(ret),
-                ..
-            } if !matches!(receiver, Receiver::Tail) => Some(
-                self.opened(*ret)
-                    .into_iter()
-                    .map(|repr| (repr, Mark::Poly))
-                    .collect(),
-            ),
-            Call::Apply { site, .. } => match (site, receiver) {
-                (ApplySite::Typed(_), Receiver::Bound(var)) => {
-                    Some(vec![(self.function.repr(var), Mark::Poly)])
-                }
-                (ApplySite::Typed(_), Receiver::Many(vars)) => Some(
-                    vars.iter()
-                        .map(|&var| (self.function.repr(var), Mark::Poly))
-                        .collect(),
-                ),
-                (ApplySite::Typed(_), Receiver::Tail) => Some(
-                    self.function
-                        .rets
-                        .iter()
-                        .map(|&(repr, _)| (repr, Mark::Poly))
-                        .collect(),
-                ),
-                (ApplySite::Uniform, _) => Some(vec![(Repr::TObj, Mark::Poly)]),
-            },
+            // `apply` の結果は一様な `tobj` である。関数の値は型変数の位置なので、結果の印はいつも `poly` で、どの受け手
+            // とも合う (docs/spec/lir.md の「関数の ABI」)
+            Call::Apply { .. } => Some(vec![(Repr::TObj, Mark::Poly)]),
         };
-        if let Call::Apply {
-            args,
-            site,
-            source_ret,
-            ..
-        } = call
-        {
-            self.check_source_ret(site, *source_ret, receiver)?;
-            // 開いた後の場所は源の引数ごとの Repr を持ち、引数はそれを葉に開いた並びである
-            // (docs/spec/lir.md の「開く」)
-            match site {
-                ApplySite::Typed(reprs) if self.level >= Level::Flattened => {
-                    self.cx
-                        .check_reprs("apply", args, &self.opened_all(reprs))?
-                }
-                _ => self.cx.check_site(args, site)?,
-            }
-        }
         if self.cx.boundaries {
             self.check_operands(call)?;
             if let Some(result) = result {
@@ -1696,35 +1702,6 @@ impl<'a> Checker<'a> {
         self.consume_all(owned, |f| call.for_each_atom(f))?;
         match call.prompt() {
             Some(marker) => self.check_prompt(owned, call, marker),
-            None => Ok(()),
-        }
-    }
-
-    /// `apply` の `source_ret` の検査。構造体の結果を葉で受ける型どおりの場所だけが、開いた後の段で持つ
-    /// (docs/spec/lir.md の「開く」)。
-    fn check_source_ret(
-        &self,
-        site: &ApplySite,
-        source_ret: Option<Repr>,
-        receiver: Receiver,
-    ) -> Result<(), String> {
-        match source_ret {
-            Some(_) if self.level < Level::Flattened => {
-                Err("an apply has a source result before flatten".to_string())
-            }
-            Some(_) if matches!(site, ApplySite::Uniform) => {
-                Err("an apply with a uniform site has a source result".to_string())
-            }
-            Some(Repr::Struct(_)) => Ok(()),
-            Some(repr) => Err(format!(
-                "the source result of an apply is {}, not a struct",
-                repr.name()
-            )),
-            None if matches!((site, receiver), (ApplySite::Typed(_), Receiver::Many(_)))
-                && self.level >= Level::Flattened =>
-            {
-                Err("a typed apply bound to several values has no source result".to_string())
-            }
             None => Ok(()),
         }
     }
@@ -1773,7 +1750,7 @@ impl<'a> Checker<'a> {
     }
 
     /// 呼び出しのオペランドを左から比べる (R7)。直接の呼び出しは、呼ばれる関数の引数と比べる。関数値の適用は、呼ぶ
-    /// 値を `tobj` と、引数を場所の Repr と比べる。呼び出しの形は確かめてある。印も同じ所で比べる (V2)。関数値の
+    /// 値と引数を `tobj` と比べる。呼び出しの形は確かめてある。印も同じ所で比べる (V2)。関数値の
     /// 適用の位置の印はいつも `poly` なので、印を比べない。
     fn check_operands(&self, call: &Call) -> Result<(), String> {
         // 誤りの文で呼び出しを指す句 (`an apply`) は呼び出しの形で決まるので、比べる処理を形ごとに作る
@@ -1814,38 +1791,17 @@ impl<'a> Checker<'a> {
                     }
                 }
             }
-            // 呼ぶ値は `tobj` である。型どおりの場所の引数は場所の Repr と、一様な場所の引数は `tobj` と比べる
+            // 呼ぶ値と引数はどれも `tobj` と比べる (docs/spec/lir.md の「関数の ABI」)
             Call::Apply {
                 callee,
                 args,
                 yields: _,
                 prompt: _,
-                site,
-                source_ret: _,
             } => {
                 let uniform = operands("an apply");
                 uniform(&|| "the callee".to_string(), *callee)?;
-                let reprs = match site {
-                    ApplySite::Typed(reprs) => self.opened_all(reprs),
-                    ApplySite::Uniform => Vec::new(),
-                };
                 for (index, &arg) in args.iter().enumerate() {
-                    let expected = match site {
-                        ApplySite::Typed(_) => reprs[index],
-                        ApplySite::Uniform => Repr::TObj,
-                    };
-                    if !self.cx.passes(arg, expected) {
-                        let taker = match site {
-                            ApplySite::Typed(_) => "its site",
-                            ApplySite::Uniform => "an apply",
-                        };
-                        return Err(format!(
-                            "argument {index} of {} is {}, but {taker} takes {}",
-                            self.call_text(call, false),
-                            self.cx.typed_atom_text(arg),
-                            self.cx.repr_text(expected)
-                        ));
-                    }
+                    uniform(&|| format!("argument {index}"), arg)?;
                 }
             }
             // 節の呼び出しは操作の ABI で呼ぶので、先頭の evidence は `obj`、残りは操作の表の Repr と比べる
@@ -1914,9 +1870,9 @@ impl<'a> Checker<'a> {
         }
     }
 
-    /// 呼び出しの結果 (直接の呼び出しなら呼ばれる関数の `ret`、節の呼び出しなら操作の `ret`、`apply` なら場所の結果)
-    /// は、束縛する変数と互換である (R7)。`tail` の結果の Repr は呼び出し元の `ret` と互換でなくてよい。VM の変換の
-    /// フレームが変換するためである (docs/spec/lir.md の「末尾の位置の呼び出し」)。
+    /// 呼び出しの結果 (直接の呼び出しなら呼ばれる関数の `ret`、節の呼び出しなら操作の `ret`、`apply` なら `tobj`)
+    /// は、束縛する変数と互換である (R7)。`tail` の結果は呼び出し元の `rets` と互換である
+    /// (docs/spec/lir.md の「末尾の位置の呼び出し」)。
     /// 結果の印は、束縛する変数か呼び出し元の戻り値の印と互換である (V2)。
     fn check_result(
         &self,
@@ -1956,12 +1912,23 @@ impl<'a> Checker<'a> {
                 Ok(())
             }
             Receiver::Tail => {
-                // 構造体と箱の間の変換では並びの長さが違い、印は変換のフレームが受け渡す
-                // (docs/spec/vm.md の「変換のフレーム」)
-                if results.len() != self.function.rets.len() {
-                    return Ok(());
+                // 末尾呼び出しの結果はそのまま呼び出し元の結果になるので、並びも Repr も `rets` と合う
+                // (docs/spec/lir.md の「末尾の位置の呼び出し」)
+                let rets = &self.function.rets;
+                let fits = results.len() == rets.len()
+                    && results
+                        .iter()
+                        .zip(rets)
+                        .all(|(&(result, _), &(ret, _))| self.cx.compatible(result, ret));
+                if !fits {
+                    return Err(format!(
+                        "{} returns {}, but this function returns {}",
+                        self.call_text(call, true),
+                        rets_text(&self.program.layouts, &self.program.structs, results),
+                        rets_text(&self.program.layouts, &self.program.structs, rets)
+                    ));
                 }
-                for (&(_, result_mark), &(_, ret_mark)) in results.iter().zip(&self.function.rets) {
+                for (&(_, result_mark), &(_, ret_mark)) in results.iter().zip(rets) {
                     // 呼び出し元を "this function" と書き、呼ばれる側を指す "the function" と分ける
                     if !Mark::passes_to(result_mark, ret_mark) {
                         return Err(format!(

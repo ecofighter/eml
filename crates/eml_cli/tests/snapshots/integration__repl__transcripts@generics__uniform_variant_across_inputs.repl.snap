@@ -1,0 +1,18 @@
+---
+source: crates/eml_cli/tests/repl.rs
+expression: checked.render()
+input_file: crates/eml_cli/tests/repl/generics/uniform_variant_across_inputs.repl
+---
+> data Box a = | Box a
+> hide : Int -> a -> <Panic> Box a
+. hide n x = if n <= 0 then Box x else hide (n - 1) x
+.
+> f : Int -> <Panic> Int
+. f x = x * 2 + 1
+.
+> match hide 0 f with | Box g -> g 20
+41
+> f 5
+11
+--- close ---
+no leaks

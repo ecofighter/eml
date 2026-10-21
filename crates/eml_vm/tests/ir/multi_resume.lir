@@ -9,7 +9,7 @@ yields fn main(p.0: unit) -> unit {
   dup ev.5
   let w.7: tobj = prim evv_push(w.4, ev.5)
   let u.8: unit = prim evv_set(w.7)
-  let x.9: tobj poly = yields apply &main$handle1((): unit) prompt ev.5
+  let x.9: tobj poly = yields apply &main$handle1(()) prompt ev.5
   let t.18: tobj = call prompt$(ev.5, &main$handle1$return, x.9)
   let t.1: int = unbox t.18
   decref t.18
@@ -41,7 +41,7 @@ internal yields fn main$handle1(p.0: unit) -> tobj {
   dup ev.3
   let w.5: tobj = prim evv_push(w.2, ev.3)
   let u.6: unit = prim evv_set(w.5)
-  let x.7: tobj poly = yields apply &main$handle0((): unit) prompt ev.3
+  let x.7: tobj poly = yields apply &main$handle0(()) prompt ev.3
   tail call prompt$(ev.3, &main$handle0$return, x.7)
 }
 internal yields fn main$handle0(p.0: unit) -> tobj {
@@ -67,7 +67,7 @@ internal yields fn main$handle0$return(x.3: tobj, p.1: unit) -> tobj {
 internal yields fn main$handle1$choose(p.0: unit, k.1: tobj, p.2: unit) -> tobj {
   let b.16: tobj = box 1
   dup k.1
-  let t.17: tobj = yields apply k.1(b.16, (): unit)
+  let t.17: tobj = yields apply k.1(b.16, ())
   let t.3: int = unbox t.17
   let y.6: int = prim yielding()
   switch y.6 { 0 -> b2, _ -> b1 }
@@ -81,7 +81,7 @@ b1:
   return b.18
 b2:
   let b.19: tobj = box 2
-  let t.20: tobj = yields apply k.1(b.19, (): unit)
+  let t.20: tobj = yields apply k.1(b.19, ())
   let t.4: int = unbox t.20
   decref t.20
   let y.11: int = prim yielding()
@@ -195,7 +195,7 @@ b2:
 internal yields fn main$handle1$choose$k0(k.0: tobj, t.9: tobj) -> tobj {
   let t.1: int = unbox t.9
   let b.10: tobj = box 2
-  let t.11: tobj = yields apply k.0(b.10, (): unit)
+  let t.11: tobj = yields apply k.0(b.10, ())
   let t.2: int = unbox t.11
   decref t.11
   let y.3: int = prim yielding()

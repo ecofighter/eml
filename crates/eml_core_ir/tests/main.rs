@@ -4,6 +4,7 @@
 mod common;
 
 mod boxing;
+mod census;
 mod contract;
 mod evidence;
 mod externs;

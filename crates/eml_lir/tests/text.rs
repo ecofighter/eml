@@ -2,7 +2,7 @@
 //! `pretty` で表示すると元のテキストに戻ることと、構文の誤りの報告を確かめる。
 
 use eml_lir::{Atom, CasePattern, Ctor, FloatBits, FnIdx, LayoutId, MaskItem, OpRet, Prim, VarId};
-use eml_lir::{BlockId, Loc, Mark, ParseError, Repr, Reuse, Site, StructShape, verify};
+use eml_lir::{BlockId, Loc, Mark, ParseError, Repr, Reuse, StructShape, verify};
 use eml_lir::{Call, Program, Rhs, Stmt, Term, parse, pretty, pretty_with_positions};
 
 /// 読んで表示し直すと元に戻ることを確かめ、読んだプログラムを返す。
@@ -321,7 +321,7 @@ fn a_tail_call_round_trips() {
     let program = round_trip(
         "\
 fn f(c.0: tobj) -> int {
-  tail apply c.0(1: int)
+  tail apply c.0(1)
 }
 ",
     );
@@ -332,8 +332,6 @@ fn f(c.0: tobj) -> int {
             args: vec![Atom::Int(1)],
             yields: false,
             prompt: None,
-            site: Site::Typed(vec![Repr::Int]),
-            source_ret: None,
         })
     );
 }
@@ -342,7 +340,7 @@ fn f(c.0: tobj) -> int {
 #[test]
 fn a_tail_call_takes_no_mask() {
     let error = parse_error(
-        "effect State { get(tobj) -> tobj }\nfn f(c.0: tobj) -> int {\n  tail mask [State] apply c.0(1: int)\n}\n",
+        "effect State { get(tobj) -> tobj }\nfn f(c.0: tobj) -> int {\n  tail mask [State] apply c.0(1)\n}\n",
     );
     assert_eq!(error.to_string(), "line 3: expected a call, found `mask`");
 }
@@ -498,7 +496,7 @@ fn quoted_function_names_round_trip() {
         "\
 fn \"id@[Int, String]\"(x.0: int) -> int {
   let c.1: tobj = closure \"id@[Int, String]\"(x.0)
-  let r.2: tobj = apply c.1(&\"id@[Int, String]\": tobj)
+  let r.2: tobj = apply c.1(&\"id@[Int, String]\")
   let y.3: int = call \"id@[Int, String]\"(x.0)
   tail call \"id@[Int, String]\"(y.3)
 }
@@ -721,7 +719,7 @@ fn an_apply_round_trips() {
     let program = round_trip(
         "\
 fn f(c.0: tobj) -> int {
-  let t.1: int = apply c.0(1: int, 2: int)
+  let t.1: int = apply c.0(1, 2)
   tail apply ()(t.1)
 }
 ",
@@ -736,8 +734,6 @@ fn f(c.0: tobj) -> int {
                 args: vec![Atom::Int(1), Atom::Int(2)],
                 yields: false,
                 prompt: None,
-                site: Site::Typed(vec![Repr::Int, Repr::Int]),
-                source_ret: None,
             }),
         }
     );
@@ -748,8 +744,6 @@ fn f(c.0: tobj) -> int {
             args: vec![v(1)],
             yields: false,
             prompt: None,
-            site: Site::Typed(vec![Repr::Int]),
-            source_ret: None,
         })
     );
 }
@@ -870,7 +864,7 @@ fn a_function_value_round_trips_even_before_its_definition() {
         "\
 fn f() -> int {
   let c.0: tobj = closure g()
-  tail apply &g(1: int)
+  tail apply &g(1)
 }
 fn g(x.0: int) -> int {
   return x.0
@@ -1511,7 +1505,7 @@ fn effect_instructions_are_not_lir() {
             "expected a right-hand side, found `resume`",
         ),
         (
-            "effect Ask { ask(tobj) -> tobj }\nfn f(c.0: tobj) -> tobj {\n  let t.1: tobj = mask [Ask] apply c.0((): unit)\n  return t.1\n}\n",
+            "effect Ask { ask(tobj) -> tobj }\nfn f(c.0: tobj) -> tobj {\n  let t.1: tobj = mask [Ask] apply c.0(())\n  return t.1\n}\n",
             3,
             "expected a right-hand side, found `mask`",
         ),
@@ -1685,7 +1679,7 @@ fn a_mask_item_that_skips_nothing_is_an_error() {
 #[test]
 fn prompt_marker_round_trips() {
     let program = round_trip(
-        "fn f(b.1: tobj, ev.2: obj) -> obj {\n  let x.3: tobj poly = yields apply b.1((): unit) prompt ev.2\n  return ev.2\n}\n",
+        "fn f(b.1: tobj, ev.2: obj) -> obj {\n  let x.3: tobj poly = yields apply b.1(()) prompt ev.2\n  return ev.2\n}\n",
     );
     let Stmt::Let {
         rhs: Rhs::Call(call),
@@ -1805,15 +1799,14 @@ fn f(p.0: obj) -> unit {
     );
 }
 
-/// `split` と `apply` の場所は Core IR と同じ形で書く。`tail` の後の `apply` も場所を持つ
-/// (docs/spec/lir.md の「関数の ABI」と「`apply` の場所」)。
+/// `split` は Core IR と同じ形で書く (docs/spec/lir.md の「関数の ABI」)。
 #[test]
 fn splits_and_sites_round_trip() {
     let program = round_trip(
         "\
 fn f(c.0: tobj, x.1: int) -> tobj {
-  let t.2: tobj = apply c.0(#1: tobj, x.1)
-  tail uniform apply t.2(x.1, ())
+  let t.2: tobj = apply c.0(#1, x.1)
+  tail apply t.2(x.1, ())
 }
 internal yields uniform from 0 fn b(p.0: unit) -> tobj {
   return ()
@@ -1834,19 +1827,6 @@ internal yields uniform from 1 fn f$k0(a.0: int, x.1: tobj) -> tobj {
     );
     let splits: Vec<Option<u32>> = program.functions.iter().map(|f| f.split).collect();
     assert_eq!(splits, [None, Some(0), Some(1), Some(0), Some(1), Some(1)]);
-    let f = &program.functions[0];
-    let Stmt::Let {
-        rhs: Rhs::Call(Call::Apply { site, .. }),
-        ..
-    } = &f.blocks[0].stmts[0]
-    else {
-        panic!("expected an apply");
-    };
-    assert_eq!(site, &Site::Typed(vec![Repr::TObj, Repr::Int]));
-    let Term::TailCall(Call::Apply { site, .. }) = &f.blocks[0].term else {
-        panic!("expected a tail apply");
-    };
-    assert_eq!(site, &Site::Uniform);
 }
 
 /// 開くパスが作る複数の値の形 (複数の値の結果、`let`、`return`、構造体の `unbox`、`release unboxed`) は、表示した
@@ -1878,26 +1858,17 @@ fn f(w.0: tobj, x.1: float) -> (obj lin, float) {
         f.blocks[0].stmts[3].defs().collect::<Vec<_>>(),
         [VarId(4), VarId(5)]
     );
-    // 開いた後の関数と `apply` の場所は源の Repr を `source(..)` に書く。場所を書いた `apply` の定数の引数には
-    // `: repr` を書かない
+    // 開いた後の関数は源の Repr を `source(..)` に書く
     let program = round_trip(
         "\
 layout P { P(tobj, float) }
 fn g(c.0: tobj, x.1: float) -> float source(tobj, P{unit, float}) -> float {
-  let r.2: float = apply c.0(1.5, x.1) source(float, P{unit, float})
-  return r.2
+  return x.1
 }
 ",
     );
     let function = &program.functions[0];
     assert!(function.source.is_some());
-    assert_eq!(
-        parse_error(
-            "fn g(c.0: tobj) -> float {\n  let r.1: float = apply c.0(1.5: float) source(float)\n  return r.1\n}\n"
-        )
-        .message,
-        "an apply with `source(..)` writes no repr on its arguments"
-    );
     // 書き方を1つにするため、値が1つの結果と `return` と呼び出しの束縛は括弧で書かない
     for (text, message) in [
         (

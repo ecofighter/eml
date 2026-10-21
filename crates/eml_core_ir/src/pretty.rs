@@ -161,8 +161,7 @@ impl<'p> Printer<'p> {
                 args,
                 yields,
                 prompt,
-                site,
-            } => w.apply(vars, (callee, args), *yields, *prompt, (site, None)),
+            } => w.apply(vars, (callee, args), *yields, *prompt),
             Call::Handle {
                 effect,
                 init,
@@ -208,15 +207,10 @@ impl<'p> Printer<'p> {
                     w.atoms(vars, args)
                 )
             }
-            Call::Resume {
-                k,
-                arg,
-                state,
-                site,
-            } => format!(
+            Call::Resume { k, arg, state } => format!(
                 "resume {}({})",
                 w.atom(vars, k),
-                w.typed_atoms(vars, &[*arg, *state], site)
+                w.atoms(vars, &[*arg, *state])
             ),
             Call::Clause {
                 effect,

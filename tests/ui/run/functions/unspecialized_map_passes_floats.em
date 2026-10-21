@@ -1,7 +1,7 @@
--- 型から決める呼び出しの規約の引き換えの形 (docs/implementation/benchmarks.md の
--- 「呼び出しの規約の引き換え」)。データに通した `List.map` は特殊化されず、データに通した関数の値を型どおりの `Float` で
--- 呼ぶ。`keep` が受けた `Float` をそのまま返す要素でも、`map` はリストの要素の箱から取り出して渡し、戻った値を新しい
--- 箱に入れる。要素ごとの箱の数は `crates/eml_vm/tests/bench.rs` の `trade_offs` が固定する。
+-- 呼び出しの規約の引き換えの形 (docs/implementation/benchmarks.md の「呼び出しの規約の引き換え」)。データに通した
+-- `List.map` は特殊化されず、一様な版を通って、データに通した関数の値を呼ぶ。関数の値は引数と結果が一様なので、`map`
+-- はリストの要素の箱をそのまま渡す。`keep` は箱から `Float` を取り出して比べ、結果を箱に入れて返す
+-- (docs/spec/lir.md の「関数の ABI」)。要素ごとの箱の数は `crates/eml_vm/tests/bench.rs` の `trade_offs` が固定する。
 data Box a = | Box a
 
 hide : Int -> a -> <Panic> Box a

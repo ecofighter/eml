@@ -254,12 +254,12 @@ b3(v.3: int):
       return r.4
     }
     "#);
-    insta::assert_snapshot!(function(&shown, "f$j3"), @"
-    yields fn f$j3(a.0: int, v.1: int) -> int {
-      let w.2: int = extern \"Prelude.Num Int.+\"(v.1, a.0)
+    insta::assert_snapshot!(function(&shown, "f$j3"), @r#"
+    yields uniform from 2 fn f$j3(a.0: int, v.1: int) -> int {
+      let w.2: int = extern "Prelude.Num Int.+"(v.1, a.0)
       return w.2
     }
-    ");
+    "#);
 }
 
 #[test]
@@ -295,7 +295,7 @@ b3(v.2: int):
     }
     ");
     insta::assert_snapshot!(function(&shown, "f$j3"), @"
-    yields fn f$j3(x.0: int, v.1: int) -> int {
+    yields uniform from 2 fn f$j3(x.0: int, v.1: int) -> int {
       let w.2: int = call g(v.1)
       let y.3: int = prim yielding()
       switch y.3 { 0 -> b2, _ -> b1 }
@@ -529,7 +529,7 @@ yields fn h() -> int {
     assert!(!shown.contains("fn id$("), "{shown}");
     insta::assert_snapshot!(function(&shown, "compose$"), @"
     yields fn compose$(k.0: tobj poly, c.1: tobj poly, x.2: tobj poly) -> tobj poly {
-      let r.3: tobj poly = yields uniform apply k.0(x.2)
+      let r.3: tobj poly = yields apply k.0(x.2)
       let y.4: int = prim yielding()
       switch y.4 { 0 -> b2, _ -> b1 }
     b1:
@@ -540,7 +540,7 @@ yields fn h() -> int {
       let d.9: obj poly = prim dummy()
       return d.9
     b2:
-      let t.10: tobj poly = yields uniform apply c.1(r.3)
+      let t.10: tobj poly = yields apply c.1(r.3)
       return t.10
     }
     ");
@@ -636,7 +636,7 @@ fn a_handle_installs_evidence_and_calls_prompt() {
       let u.9: unit = prim ev_set_clause[Ask.ask](ev.8, &main$handle0$ask$entry)
       let w.10: tobj = prim evv_push(w.7, ev.8)
       let u.11: unit = prim evv_set(w.10)
-      let x.12: tobj poly = yields uniform apply c.3(()) prompt ev.8
+      let x.12: tobj poly = yields apply c.3(()) prompt ev.8
       let t.4: int = call prompt$(ev.8, &main$handle0$return, x.12)
       let t.5: obj = extern "Prelude.Show Int.show"(t.4)
       let t.6: unit = extern Prelude.println(t.5)
@@ -688,8 +688,8 @@ fn a_resume_becomes_an_apply() {
     );
     let shown = core_text(&text, Pass::Evidence);
     insta::assert_snapshot!(function(&shown, "main$handle0$ask"), @r#"
-    internal uniform from 1 fn main$handle0$ask(p.0: unit, k.1: tobj lin, p.2: unit) -> int {
-      let t.3: int = uniform apply k.1(10, ())
+    internal uniform from 0 fn main$handle0$ask(p.0: unit, k.1: tobj lin, p.2: unit) -> int {
+      let t.3: int = apply k.1(10, ())
       let t.4: int = extern "Prelude.Num Int.*"(t.3, 2)
       return t.4
     }
@@ -741,7 +741,7 @@ fn a_perform_looks_up_evidence_and_calls_its_clause() {
         "{ASK}{HIDE}main : Unit -> <IO, Panic> Unit\nmain () =\n  let Box b = hide 0 (fn () -> ask () + 1)\n  let r =\n    handle b () with\n      | ctl ask () k -> k 41\n  println (show r)"
     );
     let shown = core_text(&text, Pass::Evidence);
-    insta::assert_snapshot!(function(&shown, "main$lambda0"), @"
+    insta::assert_snapshot!(function(&shown, "main$lambda0"), @r#"
     internal yields fn main$lambda0(p.0: unit) -> int {
       let ev.3: obj = prim ev_lookup[Ask]()
       let c.4: tobj = prim ev_clause[Ask.ask](ev.3)
@@ -754,10 +754,10 @@ fn a_perform_looks_up_evidence_and_calls_its_clause() {
       let u.8: unit = prim yield_cont_set(k.7)
       return 0
     b2:
-      let t.2: int = extern \"Prelude.Num Int.+\"(t.1, 1)
+      let t.2: int = extern "Prelude.Num Int.+"(t.1, 1)
       return t.2
     }
-    ");
+    "#);
 }
 
 /// `name` の instance の関数の名前。row の変数を持つ instance は `"run<e>"` のように引用符付きで表示される。
@@ -807,7 +807,7 @@ fn a_masked_call_restores_the_evidence_list_and_wraps_the_continuation() {
       let w.7: tobj = prim evv_get()
       let w.8: tobj = prim evv_mask[State](w.7)
       let u.9: unit = prim evv_set(w.8)
-      let t.2: obj = yields apply cb.0((): unit)
+      let t.2: obj = yields apply cb.0(())
       let y.17: int = prim yielding()
       switch y.17 { 0 -> b4, _ -> b3 }
     b3:
@@ -848,7 +848,7 @@ fn a_masked_call_in_a_continuation_restores_the_evidence_list_before_it_continue
       let w.3: tobj = prim evv_get()
       let w.4: tobj = prim evv_mask[State](w.3)
       let u.5: unit = prim evv_set(w.4)
-      let t.2: obj = yields apply cb.0((): unit)
+      let t.2: obj = yields apply cb.0(())
       let y.7: int = prim yielding()
       switch y.7 { 0 -> b2, _ -> b1 }
     b1:
@@ -882,8 +882,8 @@ fn a_resume_in_a_yielding_function_becomes_a_yielding_apply() {
     );
     let shown = core_text(&text, Pass::Evidence);
     insta::assert_snapshot!(function(&shown, "f$handle0$ask"), @r#"
-    internal yields uniform from 1 fn f$handle0$ask(p.0: unit, k.1: tobj lin, p.2: unit) -> int {
-      let t.3: int = yields uniform apply k.1(10, ())
+    internal yields uniform from 0 fn f$handle0$ask(p.0: unit, k.1: tobj lin, p.2: unit) -> int {
+      let t.3: int = yields apply k.1(10, ())
       let y.5: int = prim yielding()
       switch y.5 { 0 -> b2, _ -> b1 }
     b1:
@@ -908,15 +908,15 @@ fn a_pure_instance_of_a_row_polymorphic_function_has_no_yield_check() {
     let shown = core_text(&text, Pass::Evidence);
     insta::assert_snapshot!(function(&shown, "twice"), @"
     fn twice(f.0: tobj) -> int {
-      let t.1: int = apply f.0((): unit)
-      let t.2: int = apply f.0((): unit)
+      let t.1: int = apply f.0(())
+      let t.2: int = apply f.0(())
       let t.3: int = extern \"Prelude.Num Int.+\"(t.1, t.2)
       return t.3
     }
     ");
     insta::assert_snapshot!(function(&shown, "twice<e>"), @r#"
     yields fn "twice<e>"(f.0: tobj) -> int {
-      let t.1: int = yields apply f.0((): unit)
+      let t.1: int = yields apply f.0(())
       let y.4: int = prim yielding()
       switch y.4 { 0 -> b2, _ -> b1 }
     b1:
@@ -926,7 +926,7 @@ fn a_pure_instance_of_a_row_polymorphic_function_has_no_yield_check() {
       let u.8: unit = prim yield_cont_set(k.7)
       return 0
     b2:
-      let t.2: int = yields apply f.0((): unit)
+      let t.2: int = yields apply f.0(())
       let y.9: int = prim yielding()
       switch y.9 { 0 -> b4, _ -> b3 }
     b3:
@@ -1156,7 +1156,7 @@ fn a_masked_call_in_a_non_yielding_function_has_no_slow_path() {
       let w.3: tobj = prim evv_get()
       let w.4: tobj = prim evv_mask[Fail](w.3)
       let u.5: unit = prim evv_set(w.4)
-      let t.1: int = apply cb.0((): unit)
+      let t.1: int = apply cb.0(())
       let u.6: unit = prim evv_set(w.3)
       let t.2: int = extern \"Prelude.Num Int.+\"(t.1, 1)
       return t.2
@@ -1318,13 +1318,12 @@ fn a_fn_clause_that_fails_runs_in_place() {
     "#);
 }
 
-/// EP が作る `apply` は一様な場所である。補助の関数の中、`Call::Resume` から作る再開、`cont$` の中の再開、handle の
-/// 本体の呼び出しがどれも `uniform apply` になる。`perform` の後を受ける `f$k0` は最後の1個の引数と結果が一様である
-/// (docs/spec/lir.md の「関数の ABI」と「`apply` の場所」)。
+/// 補助の関数の中、`Call::Resume` から作る再開、`cont$` の中の再開、handle の本体の呼び出しがどれも `apply` になり、
+/// handle の本体の `apply` は着地の印を持つ。`perform` の後を受ける `f$k0` は最後の1個の引数と結果が一様である
+/// (docs/spec/lir.md の「関数の ABI」)。
 #[test]
-fn ep_applies_are_uniform_sites() {
+fn ep_calls_closures_through_apply() {
     use eml_core_ir::{Call, CoreFn, Rhs, Stmt};
-    use eml_lir::Site;
     let text = format!(
         "{ASK}{HIDE}main : Unit -> <IO, Panic> Unit
 main () =
@@ -1350,7 +1349,7 @@ main () =
             .find(|function| function.name == name)
             .unwrap_or_else(|| panic!("no `{name}` in\n{shown}"))
     };
-    let applies = |function: &CoreFn| -> Vec<(Site, bool)> {
+    let applies = |function: &CoreFn| -> Vec<bool> {
         function
             .blocks
             .iter()
@@ -1359,11 +1358,11 @@ main () =
                 Stmt::Let {
                     rhs:
                         Rhs::Call {
-                            call: call @ Call::Apply { site, .. },
+                            call: call @ Call::Apply { .. },
                             ..
                         },
                     ..
-                } => Some((site.clone(), call.prompt().is_some())),
+                } => Some(call.prompt().is_some()),
                 _ => None,
             })
             .collect()
@@ -1371,17 +1370,12 @@ main () =
     for name in ["prompt$", "resume$", "cont$@[Int, Int]", "main$handle0$ask"] {
         let sites = applies(function(name));
         assert!(!sites.is_empty(), "`{name}` applies\n{shown}");
-        assert!(
-            sites.iter().all(|(site, _)| *site == Site::Uniform),
-            "`{name}`\n{shown}"
-        );
     }
-    let bodies: Vec<Site> = applies(function("main"))
+    let bodies = applies(function("main"))
         .into_iter()
-        .filter(|(_, prompt)| *prompt)
-        .map(|(site, _)| site)
-        .collect();
-    assert_eq!(bodies, [Site::Uniform, Site::Uniform], "{shown}");
+        .filter(|&prompt| prompt)
+        .count();
+    assert_eq!(bodies, 2, "{shown}");
     let continuation = function("main$lambda0$k0");
     assert_eq!(
         continuation.split,

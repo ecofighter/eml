@@ -180,11 +180,9 @@ impl Specializer {
         }
         let mut function = self.translated[key.callee.0 as usize].clone();
         function.name = self.copy_name(&key);
-        // 複製は呼び出し先の `internal` の印と一様な引数の数を写す。値として生まれた関数 (ラムダ、節と `return` の節) の複製は
-        // 内部の関数で、ほかの関数の複製は内部の関数でない (docs/spec/core-ir.md の「鍵と名前」)
-        let uniform_tail = function
-            .split
-            .map(|at| function.params().len() - at as usize);
+        // 複製は呼び出し先の `internal` の印を写し、`split` は開いた位置から決める。値として生まれた関数 (ラムダ、節と
+        // `return` の節) の複製は内部の関数で、ほかの関数の複製は内部の関数でない (docs/spec/core-ir.md の「鍵と名前」)
+        let mut widths = Vec::new();
         let mut params = Vec::new();
         let mut opened = HashMap::new();
         for (position, param) in function.params().to_vec().into_iter().enumerate() {
@@ -195,6 +193,7 @@ impl Specializer {
             let ArgShape::Closure(shape) = shape else {
                 unreachable!("known-closure keys hold only closures");
             };
+            widths.push((position, shape.captures.len()));
             let limit = function.mark(param);
             let names = &self.callees[shape.function.0 as usize].params;
             let captures = shape
@@ -222,9 +221,7 @@ impl Specializer {
             );
         }
         function.blocks[0].params = params;
-        if let Some(tail) = uniform_tail {
-            function.set_uniform_tail(tail);
-        }
+        function.split = function.copy_split(&widths);
         let copy = FnIdx(self.callees.len() as u32);
         self.callees.push(Callee::of(&function));
         self.depths.push(self.key_depth(&key));

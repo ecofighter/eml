@@ -46,34 +46,11 @@ fn f() -> int {
 }
 
 #[test]
-fn a_typed_apply_converts_only_a_constant_to_its_entry() {
-    // 型どおりの場所は引数と結果を場所の Repr で渡すので、変数の引数も結果も変換しない。場所が `tobj` とする定数だけを
-    // `box` し、場所の Repr は変換した後の値を表す
-    // (docs/spec/lir.md の「`apply` の場所」)
+fn an_apply_boxes_constant_arguments_like_variables() {
+    // `apply` の引数はどれも `tobj` なので、変数の引数も定数の引数も `box` する (docs/spec/lir.md の「box の挿入」)
     let text = "\
 fn f(c.0: tobj, n.1: int) -> int {
-  let r.2: int = apply c.0(n.1, 5: tobj)
-  let s.3: int = extern \"Prelude.Num Int.+\"(r.2, 1)
-  return s.3
-}
-";
-    insta::assert_snapshot!(boxing_text(text), @r#"
-    fn f(c.0: tobj, n.1: int) -> int {
-      let b.4: tobj = box 5
-      let r.2: int = apply c.0(n.1, b.4)
-      let s.3: int = extern "Prelude.Num Int.+"(r.2, 1)
-      return s.3
-    }
-    "#);
-}
-
-#[test]
-fn a_uniform_site_converts_its_arguments_and_result() {
-    // EP の一様な場所は引数も結果も `tobj` である。結果を `tobj` の新しい変数で受け、元の変数を直後の `unbox` で
-    // 定義する。使う所の変数は書き換えない
-    let text = "\
-fn f(c.0: tobj, n.1: int) -> int {
-  let r.2: int = uniform apply c.0(n.1)
+  let r.2: int = apply c.0(n.1, 5)
   let s.3: int = extern \"Prelude.Num Int.+\"(r.2, 1)
   return s.3
 }
@@ -81,7 +58,30 @@ fn f(c.0: tobj, n.1: int) -> int {
     insta::assert_snapshot!(boxing_text(text), @r#"
     fn f(c.0: tobj, n.1: int) -> int {
       let n.4: tobj = box n.1
-      let r.5: tobj = uniform apply c.0(n.4)
+      let b.5: tobj = box 5
+      let r.6: tobj = apply c.0(n.4, b.5)
+      let r.2: int = unbox r.6
+      let s.3: int = extern "Prelude.Num Int.+"(r.2, 1)
+      return s.3
+    }
+    "#);
+}
+
+#[test]
+fn an_apply_converts_its_arguments_and_result() {
+    // `apply` は引数も結果も `tobj` である。結果を `tobj` の新しい変数で受け、元の変数を直後の `unbox` で定義する。
+    // 使う所の変数は書き換えない
+    let text = "\
+fn f(c.0: tobj, n.1: int) -> int {
+  let r.2: int = apply c.0(n.1)
+  let s.3: int = extern \"Prelude.Num Int.+\"(r.2, 1)
+  return s.3
+}
+";
+    insta::assert_snapshot!(boxing_text(text), @r#"
+    fn f(c.0: tobj, n.1: int) -> int {
+      let n.4: tobj = box n.1
+      let r.5: tobj = apply c.0(n.4)
       let r.2: int = unbox r.5
       let s.3: int = extern "Prelude.Num Int.+"(r.2, 1)
       return s.3
@@ -141,33 +141,34 @@ internal uniform from 2 fn g(n.0: int, x.1: int, k.2: tobj, s.3: int) -> int {
 
 #[test]
 fn closure_arguments_convert_to_the_callee_params() {
-    // `closure` の引数は直接の呼び出しの引数と同じく、呼ばれる関数の引数の Repr へ変換する。`_` の instance の部分
-    // 適用では、`int` の `5` を `box` して捕まえる
+    // 型どおりの関数の `closure` は一様な版 `depth@[_]$uniform` を指し、引数を版の一様な引数へ変換する。`_` の instance
+    // の部分適用では、`int` の `5` を `box` して捕まえる (docs/spec/lir.md の「関数の ABI」)
     let text = "\
 fn \"depth@[_]\"(x.0: tobj, n.1: int) -> int {
   return n.1
 }
 fn main() -> int {
   let c.0: tobj = closure \"depth@[_]\"(5)
-  let r.1: int = apply c.0(2: int)
+  let r.1: int = apply c.0(2)
   return r.1
 }
 ";
     insta::assert_snapshot!(function(&boxing_text(text), "main"), @r#"
     fn main() -> int {
       let b.2: tobj = box 5
-      let c.0: tobj = closure "depth@[_]"(b.2)
-      let r.1: int = apply c.0(2: int)
+      let c.0: tobj = closure "depth@[_]$uniform"(b.2)
+      let b.3: tobj = box 2
+      let r.4: tobj = apply c.0(b.3)
+      let r.1: int = unbox r.4
       return r.1
     }
     "#);
 }
 
 #[test]
-fn an_incompatible_tail_call_becomes_tail() {
-    // `g` は `tobj` を返し、`f` は `int` を返す。末尾の位置の呼び出しの束縛と `return` には変換を入れないので、縮約が
-    // `tail` にする。結果の変換は VM の変換のフレームが行う
-    // (docs/spec/lir.md の「末尾の位置の呼び出し」)
+fn an_incompatible_tail_position_call_is_not_a_tail_call() {
+    // `g` は `tobj` を返し、`f` は `int` を返す。末尾の位置の呼び出しの結果もほかの呼び出しと同じく `unbox` するので、
+    // 縮約は末尾呼び出しにしない (docs/spec/lir.md の「末尾の位置の呼び出し」)
     let text = "\
 fn g(x.0: tobj) -> tobj {
   return x.0
@@ -182,7 +183,9 @@ fn f(n.0: int) -> int {
     insta::assert_snapshot!(function(&pretty(&program), "f"), @"
     fn f(n.0: int) -> int {
       let n.2: tobj = box n.0
-      tail call g(n.2)
+      let r.3: tobj = call g(n.2)
+      let r.1: int = unbox r.3
+      return r.1
     }
     ");
 }
@@ -233,15 +236,16 @@ fn a_prim_result_is_rebound_to_its_row_repr() {
 
 #[test]
 fn a_clause_call_uses_the_reprs_of_its_operation() {
-    // `put` の `int` の引数へ `tobj` の n.2 を `unbox` して渡す。`get` は末尾の位置で呼ぶので、結果を受け直さず、
-    // 束縛を操作の `int` にする
+    // `put` の `int` の引数へ `tobj` の n.2 を `unbox` して渡す。`get` の結果は末尾の位置でも操作の `int` で受け直し、
+    // `box` して返す
     let text = "effect Counter { get(unit) -> int, put(int) -> unit }\nyields fn f(c.0: tobj, e.1: obj, n.2: tobj) -> tobj {\n  let u.3: unit = clause Counter.put c.0(e.1, n.2)\n  let c.4: tobj = prim ev_clause[Counter.get](e.1)\n  let m.5: tobj = clause Counter.get c.4(e.1, ())\n  return m.5\n}\n";
     insta::assert_snapshot!(function(&boxing_text(text), "f"), @"
     yields fn f(c.0: tobj, e.1: obj, n.2: tobj) -> tobj {
       let n.6: int = unbox n.2
       let u.3: unit = clause Counter.put c.0(e.1, n.6)
       let c.4: tobj = prim ev_clause[Counter.get](e.1)
-      let m.5: int = clause Counter.get c.4(e.1, ())
+      let m.7: int = clause Counter.get c.4(e.1, ())
+      let m.5: tobj = box m.7
       return m.5
     }
     ");
@@ -309,12 +313,12 @@ fn a_never_clause_call_is_not_rebound() {
 fn the_uses_of_a_never_clause_binder_are_not_converted() {
     // `int` の束縛を `tobj` の位置 (一様な `apply` の引数と `tobj` の `ret` の `return`) へ渡しても `box` しない。使いには制御が
     // 届かないからである
-    let text = "effect Fail { never fail(tobj) -> never }\nyields fn f(c.0: tobj, e.1: obj, s.2: obj, k.3: tobj) -> tobj {\n  let r.4: int = clause Fail.fail c.0(e.1, s.2)\n  let t.5: tobj = uniform apply k.3(r.4)\n  return t.5\n}\nyields fn g(c.0: tobj, e.1: obj, s.2: obj) -> tobj {\n  let r.3: int = clause Fail.fail c.0(e.1, s.2)\n  return r.3\n}\n";
+    let text = "effect Fail { never fail(tobj) -> never }\nyields fn f(c.0: tobj, e.1: obj, s.2: obj, k.3: tobj) -> tobj {\n  let r.4: int = clause Fail.fail c.0(e.1, s.2)\n  let t.5: tobj = apply k.3(r.4)\n  return t.5\n}\nyields fn g(c.0: tobj, e.1: obj, s.2: obj) -> tobj {\n  let r.3: int = clause Fail.fail c.0(e.1, s.2)\n  return r.3\n}\n";
     let shown = boxing_text(text);
     insta::assert_snapshot!(function(&shown, "f"), @"
     yields fn f(c.0: tobj, e.1: obj, s.2: obj, k.3: tobj) -> tobj {
       let r.4: int = clause Fail.fail c.0(e.1, s.2)
-      let t.5: tobj = uniform apply k.3(r.4)
+      let t.5: tobj = apply k.3(r.4)
       return t.5
     }
     ");
@@ -585,7 +589,7 @@ fn fill(n.0: int, v.1: int) -> obj {
 
 #[test]
 fn a_struct_passed_to_a_uniform_position_is_boxed() {
-    // 構造体は箱を要する Repr として、一様な位置 (EP の一様な場所の引数と結果、`tobj` のフィールド) との間で変換する。
+    // 構造体は箱を要する Repr として、一様な位置 (`apply` の引数と結果、`tobj` のフィールド) との間で変換する。
     // 箱の束縛は `obj` で、`tobj` の位置へ命令なしで渡る。受け直した構造体を `tobj` の位置へ渡すときは、`box` せずに
     // 元の箱を渡す。足す変数は元の変数の印を写す
     // (docs/spec/lir.md の「box の挿入」)
@@ -594,7 +598,7 @@ layout (,) { (,)(tobj, tobj) }
 layout Option { None, Some(tobj) }
 layout P { P(tobj, tobj) }
 fn f(c.0: tobj, v.1: P{int, obj lin} lin) -> obj lin {
-  let r.2: P{int, obj lin} lin = uniform apply c.0(v.1)
+  let r.2: P{int, obj lin} lin = apply c.0(v.1)
   let o.3: tobj lin = con Option #1(r.2)
   let p.4: obj lin = con (,) #0(o.3, r.2)
   return p.4
@@ -606,7 +610,7 @@ fn f(c.0: tobj, v.1: P{int, obj lin} lin) -> obj lin {
     layout P { P(tobj, tobj) }
     fn f(c.0: tobj, v.1: P{int, obj lin} lin) -> obj lin {
       let v.5: obj lin = box v.1
-      let r.6: tobj lin = uniform apply c.0(v.5)
+      let r.6: tobj lin = apply c.0(v.5)
       let r.2: P{int, obj lin} lin = unbox r.6
       let o.3: tobj lin = con Option #1(r.6)
       let p.4: obj lin = con (,) #0(o.3, r.6)

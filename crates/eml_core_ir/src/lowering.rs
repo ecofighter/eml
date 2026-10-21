@@ -128,14 +128,11 @@ fn call(call: Call) -> eml_lir::Call {
             args,
             yields,
             prompt,
-            site,
         } => eml_lir::Call::Apply {
             callee,
             args,
             yields,
             prompt,
-            site,
-            source_ret: None,
         },
         Call::Clause {
             effect,

@@ -63,33 +63,6 @@ impl Parser<'_> {
             blocks.push(self.block(&mut state, params)?);
         }
         let vars = self.reader.function_vars(state, blocks.len())?;
-        for stmt in blocks.iter_mut().flat_map(|block| &mut block.stmts) {
-            match stmt {
-                Stmt::Let {
-                    var: _,
-                    rhs:
-                        Rhs::Call {
-                            call: Call::Apply { args, site, .. },
-                            mask: _,
-                        },
-                } => syntax::fill_site(site, args, &vars),
-                Stmt::Let {
-                    var: _,
-                    rhs:
-                        Rhs::Call {
-                            call:
-                                Call::Resume {
-                                    k: _,
-                                    arg,
-                                    state,
-                                    site,
-                                },
-                            mask: _,
-                        },
-                } => syntax::fill_reprs(site, &[*arg, *state], &vars),
-                _ => {}
-            }
-        }
         Ok(CoreFn {
             name: header.name,
             internal: header.internal,
@@ -257,7 +230,7 @@ impl Parser<'_> {
         let line = self.reader.line();
         let mask = self.mask()?;
         if !mask.is_empty()
-            && !["call", "yields", "uniform", "apply", "resume"]
+            && !["call", "yields", "apply", "resume"]
                 .iter()
                 .any(|w| self.reader.at_word(w))
         {
@@ -270,20 +243,13 @@ impl Parser<'_> {
     fn call(&mut self, state: &mut FnState) -> Result<Call, ParseError> {
         let line = self.reader.line();
         let word = self.reader.word()?;
-        if let Some((yields, uniform)) = self.reader.apply_head(&word)? {
-            let parts = self.reader.apply(state, uniform)?;
-            if parts.source.is_some() {
-                return Err(error(
-                    line,
-                    "a Core IR apply takes its site from its arguments; only flatten in LIR writes `source(..)`",
-                ));
-            }
+        if let Some(yields) = self.reader.apply_head(&word)? {
+            let parts = self.reader.apply(state)?;
             return Ok(Call::Apply {
                 callee: parts.callee,
                 args: parts.args,
                 yields,
                 prompt: parts.prompt,
-                site: parts.site,
             });
         }
         match word.as_str() {
@@ -311,19 +277,17 @@ impl Parser<'_> {
                     args,
                 })
             }
-            // 値と状態は `apply` の引数と同じく、定数にだけ `: repr` を書く
             "resume" => {
                 let k = self.reader.atom(state)?;
                 self.reader.expect_punct('(')?;
-                let (arg, arg_repr) = self.reader.apply_arg(state, false)?;
+                let arg = self.reader.atom(state)?;
                 self.reader.expect_punct(',')?;
-                let (next, next_repr) = self.reader.apply_arg(state, false)?;
+                let next = self.reader.atom(state)?;
                 self.reader.expect_punct(')')?;
                 Ok(Call::Resume {
                     k,
                     arg,
                     state: next,
-                    site: vec![arg_repr, next_repr],
                 })
             }
             "clause" => {

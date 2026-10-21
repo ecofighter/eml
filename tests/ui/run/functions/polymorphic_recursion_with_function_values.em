@@ -1,6 +1,6 @@
--- 多相再帰の `twice_at` は型変数の位置が一様 (`_`) な instance で動き、受けた関数の値を一様な Repr で呼ぶ。
--- `main` のラムダは `Int`、`Float`、`String` を型どおりの Repr で受けて返すので、`apply` が実行時に引数と結果を
--- 変換する (docs/spec/lir.md の「`apply` の場所」)。
+-- 多相再帰の `twice_at` は型変数の位置が一様 (`_`) な instance で動き、受けた関数の値を呼ぶ。`main` のラムダは
+-- `Int`、`Float`、`String` を受けて返すが、値として生まれる関数なので引数と結果が一様で、どちらの側も同じ Repr で
+-- 受け渡す (docs/spec/lir.md の「関数の ABI」)。
 twice_at : Int -> (a -> <Panic> a) -> a -> <Panic> a
 twice_at n f x =
   if n == 0 then f (f x)

@@ -4,20 +4,27 @@
 
 use crate::boxing::tail_position_call;
 use crate::{
-    Atom, Block, Call, EffectInfo, LirFn, Mark, OpRet, Program, Rhs, Stmt, Term, VarId, operation,
+    Atom, Block, Call, EffectInfo, LirFn, Mark, OpRet, Program, Repr, Rhs, Stmt, Structs, Term,
+    VarId, operation,
 };
 
 pub fn contract(program: &mut Program) {
-    let ret_marks: Vec<Vec<Mark>> = program
+    let callee_rets: Vec<Vec<(Repr, Mark)>> = program
         .functions
         .iter()
-        .map(|function| function.rets.iter().map(|&(_, mark)| mark).collect())
+        .map(|function| function.rets.clone())
         .collect();
     for function in &mut program.functions {
         remove_dead_lets(function);
-        let rets: Vec<Mark> = function.rets.iter().map(|&(_, mark)| mark).collect();
+        let rets = function.rets.clone();
         for block in &mut function.blocks {
-            tail_call(block, &rets, &ret_marks, &program.effects);
+            tail_call(
+                block,
+                &rets,
+                &callee_rets,
+                &program.effects,
+                &program.structs,
+            );
         }
         // 1回のパスで不動点に達することを確かめる (docs/spec/lir.md の「縮約」)。確かめるパスも IR を書き換えうるので、
         // その副作用を `debug_assert!` の式に隠さない
@@ -34,13 +41,17 @@ pub fn contract(program: &mut Program) {
 
 /// `let x = <呼び出し>` の後の終端が `return x` なら、その2つを末尾呼び出しにする。複数の値を返す呼び出しは、
 /// `let (x.0, .., x.n) = <呼び出し>` の後の `return (x.0, .., x.n)` (同じ並び、同じ順) を同じく末尾呼び出しにする
-/// (docs/spec/lir.md の「縮約」)。結果の Repr が関数の結果と
-/// 互換でなくてもよい。結果の変換は VM の変換のフレームが行い、末尾呼び出しの間で合成する
-/// (docs/spec/lir.md の「末尾の位置の呼び出し」)。印の受け渡しは推移的でないので、
-/// x を通してつながっていた結果の印 (関数値の適用なら `poly`) を関数の戻り値の印へ、値ごとに直接つないでも渡せるかを
-/// 確かめる。値の数が違う形 (構造体と箱の間) の印は変換のフレームが受け渡すので比べない。`never` の操作の節の
-/// 呼び出しは戻らないので、どの戻り値の印にも渡せるとする (docs/spec/lir.md の「縮約」と「Kind の印」)。
-fn tail_call(block: &mut Block, rets: &[Mark], ret_marks: &[Vec<Mark>], effects: &[EffectInfo]) {
+/// (docs/spec/lir.md の「縮約」)。末尾呼び出しの結果はそのまま呼び出し元の結果になるので、結果の並びが関数の結果と
+/// 同じ長さで、値ごとに Repr が互換であることを条件にする。印の受け渡しは推移的でないので、x を通してつながっていた
+/// 結果の印 (関数値の適用なら `poly`) を関数の戻り値の印へ、値ごとに直接つないでも渡せるかも確かめる。`never` の操作の
+/// 節の呼び出しは戻らないので、どの結果にも渡せるとする (docs/spec/lir.md の「末尾の位置の呼び出し」と「Kind の印」)。
+fn tail_call(
+    block: &mut Block,
+    rets: &[(Repr, Mark)],
+    callee_rets: &[Vec<(Repr, Mark)>],
+    effects: &[EffectInfo],
+    structs: &Structs,
+) {
     let returned: &[Atom] = match &block.term {
         Term::Return(atom) => std::slice::from_ref(atom),
         Term::ReturnMany(atoms) => atoms,
@@ -62,9 +73,9 @@ fn tail_call(block: &mut Block, rets: &[Mark], ret_marks: &[Vec<Mark>], effects:
     {
         return;
     }
-    let result_marks = match call {
-        Call::Direct(target, _) => Some(ret_marks[target.0 as usize].clone()),
-        Call::Apply { .. } => Some(vec![Mark::Poly; vars.len()]),
+    let results = match call {
+        Call::Direct(target, _) => Some(callee_rets[target.0 as usize].clone()),
+        Call::Apply { .. } => Some(vec![(Repr::TObj, Mark::Poly)]),
         Call::Clause {
             effect,
             op,
@@ -73,17 +84,19 @@ fn tail_call(block: &mut Block, rets: &[Mark], ret_marks: &[Vec<Mark>], effects:
         } => {
             let operation = operation(effects, *effect, *op);
             match operation.ret {
-                OpRet::Repr(_) => Some(vec![operation.ret_mark]),
+                OpRet::Repr(repr) => Some(vec![(repr, operation.ret_mark)]),
                 OpRet::Never => None,
             }
         }
     };
-    let passes = result_marks.is_none_or(|marks| {
-        marks.len() != rets.len()
-            || marks
+    let passes = results.is_none_or(|results| {
+        results.len() == rets.len()
+            && results
                 .iter()
                 .zip(rets)
-                .all(|(&mark, &ret)| Mark::passes_to(mark, ret))
+                .all(|(&(result, mark), &(ret, ret_mark))| {
+                    structs.compatible(result, ret) && Mark::passes_to(mark, ret_mark)
+                })
     });
     if !passes {
         return;

@@ -229,9 +229,7 @@ impl<'p> Printer<'p> {
                 args,
                 yields,
                 prompt,
-                site,
-                source_ret,
-            } => w.apply(vars, (callee, args), *yields, *prompt, (site, *source_ret)),
+            } => w.apply(vars, (callee, args), *yields, *prompt),
             Call::Clause {
                 effect,
                 op,

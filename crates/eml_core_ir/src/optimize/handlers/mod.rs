@@ -1014,6 +1014,11 @@ impl Copies<'_> {
         let mut body = self.region(copy, (block, stmt + 1), params);
         body.name = format!("{}$h{number}", copy.code.name);
         body.internal = shape.forms[op] == ClauseForm::Other;
+        // `k` として渡す継続の関数は値として生まれるので、捕獲 (生きている変数) より後ろの再開の値と状態を一様に
+        // 受ける (docs/spec/core-ir.md の「handler の複製」)
+        if body.internal {
+            body.split = Some(live.len() as u32);
+        }
         self.place(continuation, body);
         let live: Vec<Atom> = live.into_iter().map(Atom::Var).collect();
         if shape.forms[op] == ClauseForm::Other {

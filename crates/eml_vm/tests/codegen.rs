@@ -492,7 +492,7 @@ fn main() -> unit {
 }
 yields fn land(b.0: tobj, ev.1: obj, s.2: obj) -> unit {
   dup s.2
-  let x.3: tobj = yields apply b.0((): unit) prompt ev.1
+  let x.3: tobj = yields apply b.0(()) prompt ev.1
   decref x.3
   decref ev.1
   let t.4: obj = extern \"Prelude.++\"(s.2, s.2)
@@ -662,27 +662,26 @@ fn main(a.0: obj, m.1: obj) -> unit {
     );
 }
 
-/// `apply` は場所のシグネチャを持つ。変数の引数は変数の Repr、定数の引数は `apply` の Repr で、結果は束縛の Repr、末尾の
-/// 位置では関数の `ret` である。一様な場所の引数と結果は `tobj` である
-/// (docs/spec/lir.md の「`apply` の場所」)。
+/// `apply` のシグネチャは引数も結果も `tobj` である。末尾の位置では結果が関数の `ret` で、互換な `tobj` になる
+/// (docs/spec/lir.md の「関数の ABI」)。
 #[test]
-fn an_apply_carries_its_site_signature() {
+fn an_apply_carries_a_uniform_signature() {
     insta::assert_snapshot!(disasm_unverified("\
-fn main(f.0: tobj, x.1: float) -> int {
+fn main(f.0: tobj, x.1: tobj) -> tobj {
   dup f.0
-  let a.2: int = apply f.0(x.1, 2: int)
-  let b.3: tobj = box a.2
-  let c.4: unit = uniform apply f.0(b.3)
-  tail apply f.0(a.2, #1: enum)
+  let a.2: tobj = apply f.0(x.1, #2)
+  dup f.0
+  let c.3: tobj = apply f.0(a.2)
+  tail apply f.0(c.3, #1)
 }
 "), @"
-    fn main (arity 2, frame 4)
+    fn main (arity 2, frame 3)
         14  dup s0
-        15  load_raw s3, 2
-        16  apply s1 = s0(s1, s3) : (float, int) -> int
-        17  box_int s2, s1
-        18  apply s2 = s0(s2) : (tobj) -> tobj
-        19  load_raw s3, 1
-        20  tail_apply s0(s1, s3) : (int, enum) -> int
+        15  load_imm s2, 2
+        16  apply s1 = s0(s1, s2) : (tobj, tobj) -> tobj unwind [s0]
+        17  dup s0
+        18  apply s1 = s0(s1) : (tobj) -> tobj unwind [s0]
+        19  load_imm s2, 1
+        20  tail_apply s0(s1, s2) : (tobj, tobj) -> tobj
     ");
 }

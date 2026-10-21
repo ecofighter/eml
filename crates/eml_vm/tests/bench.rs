@@ -130,14 +130,14 @@ fn apply_float() {
         unwound_frames: 0,
         string_bytes_copied: 3,
         rc_increments: 0,
-        rc_decrements: 1,
-        boxes: 0,
-        unboxes: 0,
+        rc_decrements: 200001,
+        boxes: 200000,
+        unboxes: 200000,
         conversions: 0,
-        allocations: 2,
+        allocations: 200002,
         reuses: 0,
         peak_objects: 2,
-        peak_stack: 19,
+        peak_stack: 23,
     }
     ");
 }
@@ -153,13 +153,13 @@ fn apply_int() {
         string_bytes_copied: 6,
         rc_increments: 0,
         rc_decrements: 1,
-        boxes: 0,
-        unboxes: 0,
+        boxes: 200000,
+        unboxes: 200000,
         conversions: 0,
         allocations: 2,
         reuses: 0,
         peak_objects: 2,
-        peak_stack: 19,
+        peak_stack: 23,
     }
     ");
 }
@@ -175,8 +175,8 @@ fn ep_float() {
         string_bytes_copied: 12,
         rc_increments: 400005,
         rc_decrements: 400013,
-        boxes: 100003,
-        unboxes: 100001,
+        boxes: 100006,
+        unboxes: 100004,
         conversions: 0,
         allocations: 9,
         reuses: 0,
@@ -1083,9 +1083,9 @@ fn unwind_points() {
     }
     insta::assert_snapshot!(lines.join("\n"), @"
     apply_float: 9
-    apply_int: 11
+    apply_int: 13
     empty: 0
-    ep_float: 11
+    ep_float: 15
     fannkuch_by_hand: 39
     fannkuch_var: 81
     fib: 7
@@ -1122,14 +1122,13 @@ fn unwind_points() {
     scripts/grep: 59
     scripts/logstat: 98
     scripts/csv2jsonl: 106
-    scripts/deploy: 108
+    scripts/deploy: 109
     ");
 }
 
 /// 規約の確かめ (docs/implementation/benchmarks.md の「回数のテスト」)。どのプログラムも `apply` が実行時に変換しない。
-/// 役割の境目の変換は、型どおりの関数を直接の末尾呼び出しで呼ぶ所などで起き、コード生成が静的な変換にする。
-/// `conversions` は `apply` が実行時に変換した回数だけを数える (docs/spec/vm.md の「`RunStats`」)。
-/// EP の役割と一様な場所が合い、包む関数も型ごとの instance で型どおりに呼ばれることを示す。
+/// `apply` の引数と結果は一様で、関数の値はどれも一様な ABI を持つためである。`conversions` は `apply` が実行時に
+/// 変換した回数だけを数える (docs/spec/vm.md の「`RunStats`」)。
 #[test]
 fn typed_benches_do_not_convert() {
     for name in PROGRAMS {
@@ -1165,7 +1164,7 @@ fn trade_offs() {
         allocations: 22,
         reuses: 20,
         peak_objects: 21,
-        peak_stack: 23,
+        peak_stack: 27,
     }
     "
     );
@@ -1179,14 +1178,14 @@ fn trade_offs() {
         unwound_frames: 0,
         string_bytes_copied: 5,
         rc_increments: 0,
-        rc_decrements: 51,
+        rc_decrements: 41,
         boxes: 50,
         unboxes: 50,
         conversions: 0,
-        allocations: 52,
-        reuses: 40,
+        allocations: 42,
+        reuses: 50,
         peak_objects: 31,
-        peak_stack: 23,
+        peak_stack: 28,
     }
     "
     );

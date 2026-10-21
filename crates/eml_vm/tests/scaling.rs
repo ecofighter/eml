@@ -397,7 +397,7 @@ hide : Int -> a -> <Panic> Box a
 hide n x = if n <= 0 then Box x else hide (n - 1) x
 ";
 
-/// ソースから作ったコードの逆アセンブル。コード生成が決める変換 (`convert`) を確かめるため。
+/// ソースから作ったコードの逆アセンブル。末尾呼び出しがどの関数へ向くかを確かめるため。
 fn disassembly(text: &str) -> String {
     let control = std::sync::Arc::new(eml_vm::Control::new(eml_vm::Limits::default()));
     let code = eml_vm::compile::<eml_rt::Fast>(&lir(text), control)
@@ -1011,13 +1011,14 @@ fn a_local_function_runs_like_a_top_level_helper() {
     }
 }
 
-/// 結果の Repr が呼び出し元の `ret` と互換でない末尾の位置の呼び出しを通るループ。どれも変換のフレームを合成するので、
-/// スタックは反復の数によらない (docs/spec/vm.md の「変換のフレーム」)。
+/// 結果の Repr が呼び出し元の `ret` と互換でない末尾の位置の呼び出しを通るループ。結果が一様なコードは型どおりの
+/// 関数を一様な版を通して末尾で呼ぶので、スタックは反復の数によらない (docs/spec/lir.md の「末尾の位置の呼び出し」)。
 /// - `count` は `State Int` の `get` で終わる。本体をデータに通して隠すので handler に特殊化されず、`tobj` を返す
-///   操作の末尾の `clause` が `int` を返す `count` の結果になる (コード生成が決める変換)。
-/// - `relay` は多相再帰があるので型変数の位置が一様 (`_`) で、`back` の `int` の結果を `tobj` の場所で受ける。
-///   `back` を名前で渡すと、optimize が `relay` を `back` に特殊化し、直接の末尾呼び出しの輪になる。データに通して
-///   渡すと、末尾の `apply` の輪になり、反復ごとに実行時の変換が起きる。
+///   操作の `clause` は `int` を返す `count` の末尾呼び出しにならない。それより前の `count` の自分への呼び出しは
+///   末尾呼び出しである。
+/// - `relay` は多相再帰があるので型変数の位置が一様 (`_`) で、結果が一様である。`back` を名前で渡すと、optimize が
+///   `relay` を `back` に特殊化し、`relay` の複製から `back$uniform` への末尾呼び出しの輪になる。データに通して
+///   渡すと、`back$uniform` を通る末尾の `apply` の輪になる。
 #[test]
 fn incompatible_tail_calls_keep_the_stack_flat() {
     let count = |n: u64| {
@@ -1036,11 +1037,6 @@ main () =
 "
         )
     };
-    assert!(
-        disassembly(&count(1)).contains("tail_clause s1(s0, s4) convert word -> int"),
-        "{}",
-        disassembly(&count(1))
-    );
     assert_flat(peaks(|n| (count(n), format!("{n}\n"))));
     let relay = |n: u64, back: &str| {
         format!(
@@ -1061,7 +1057,7 @@ main () = println (show (back {n}))
     };
     let direct = |n| relay(n, "relay n back");
     assert!(
-        disassembly(&direct(1)).contains("tail_call back(s0) convert int -> word"),
+        disassembly(&direct(1)).contains("tail_call back$uniform("),
         "{}",
         disassembly(&direct(1))
     );
@@ -1072,13 +1068,12 @@ main () = println (show (back {n}))
             "0\n".to_string(),
         )
     });
-    assert_eq!(long.conversions, PEAK_LONG, "{long:?}");
     assert_flat((short, long));
 }
 
 /// 特殊化しない handler の節が末尾で再開するループ。本体の関数の値をデータに通して隠すので、optimize は handler に
 /// 特殊化せず、操作は EP の道を通る (`evidence_steps` が 0 より大きい)。結果が一様な本体は `int` を返す `sum_asks` を
-/// 末尾で呼び、その結果をコード生成が決めた変換のフレームが箱に入れる。
+/// 一様な版 `sum_asks$uniform` を通して末尾で呼ぶ。
 #[test]
 fn an_unspecialized_clause_resuming_in_tail_position_keeps_the_stack_flat() {
     let program = |n: u64| {
@@ -1100,7 +1095,7 @@ main () =
         )
     };
     assert!(
-        disassembly(&program(1)).contains("tail_call sum_asks(s1, s0) convert int -> word"),
+        disassembly(&program(1)).contains("tail_call sum_asks$uniform("),
         "{}",
         disassembly(&program(1))
     );
@@ -1109,10 +1104,11 @@ main () =
     assert_flat((short, long));
 }
 
-/// 非末尾の再帰の各段が、結果の合わない `apply` で自分を呼ぶ。各段は関数のフレームと変換のフレームを1つずつ積み、
-/// どちらも深さに数える。小さい深さの上限では、ふつうの深さの誤りで止まる。
+/// 非末尾の再帰の各段が、`apply` で自分を呼ぶ。`&down` は一様な版 `down$uniform` を指すので、各段は版のフレームと
+/// 関数のフレームを1つずつ積み、どちらも深さに数える。小さい深さの上限では、ふつうの深さの誤りで止まる
+/// (docs/spec/lir.md の「関数の ABI」)。
 #[test]
-fn non_tail_conversions_count_in_the_stack() {
+fn non_tail_applies_through_a_variant_count_in_the_stack() {
     let text = |n: u64| {
         format!(
             "\
@@ -1128,9 +1124,7 @@ fn down(n.0: int) -> int {{
   switch d.1 Bool {{ #0 -> b1, #1 -> b2 }}
 b1:
   let m.2: int = extern \"Prelude.Num Int.-\"(n.0, 1)
-  let r.3: tobj = apply &down(m.2)
-  let k.4: int = unbox r.3
-  decref r.3
+  let k.4: int = apply &down(m.2)
   let s.5: int = extern \"Prelude.Num Int.+\"(k.4, 1)
   return s.5
 b2:
@@ -1139,11 +1133,7 @@ b2:
 "
         )
     };
-    let program = |n: u64| {
-        let program = crate::common::parse(&text(n));
-        eml_lir::verify(&program).unwrap_or_else(|error| panic!("{error}"));
-        program
-    };
+    let program = |n: u64| crate::common::lowered(&text(n));
     let run = |n: u64, config: &eml_vm::RunConfig| execute(&program(n), config);
     let checked = || eml_vm::RunConfig::default().with_debug_heap(true);
     let stats = |n: u64| {
@@ -1152,12 +1142,14 @@ b2:
         result.unwrap_or_else(|error| panic!("{error}"))
     };
     let (short, long) = (stats(PEAK_SHORT), stats(PEAK_LONG));
-    assert_eq!(long.conversions, PEAK_LONG, "{long:?}");
     let control = std::sync::Arc::new(eml_vm::Control::new(eml_vm::Limits::default()));
     let code = eml_vm::compile::<eml_rt::Fast>(&program(1), control).unwrap();
-    let down = code.functions().iter().find(|f| f.name == "down").unwrap();
-    // 1段は `down` のフレームと変換のフレーム (1つのスロット) で、どちらも見出しの2語を持つ
-    let per_level = u64::from(down.frame_size) + 2 + 1 + 2;
+    let frame = |name: &str| {
+        let function = code.functions().iter().find(|f| f.name == name).unwrap();
+        u64::from(function.frame_size)
+    };
+    // 1段は `down` のフレームと `down$uniform` のフレームで、どちらも見出しの2語を持つ
+    let per_level = frame("down") + 2 + frame("down$uniform") + 2;
     assert_eq!(
         long.peak_stack - short.peak_stack,
         per_level * (PEAK_LONG - PEAK_SHORT),
@@ -1172,6 +1164,142 @@ b2:
     let (_, result) = run(100_000, &limited);
     assert_eq!(
         result.unwrap_err().to_string(),
-        "the call depth limit is exceeded in `down`"
+        "the call depth limit is exceeded in `down$uniform`"
     );
+}
+
+/// データに隠した関数の値から、型どおりの `Float` の累積のループに入る。入口は一様な版を1回通るだけで、ループは
+/// 型どおりの自分への末尾呼び出しなので、スタックもヒープも反復の数によらず、確保も増えない
+/// (docs/spec/lir.md の「関数の ABI」)。
+#[test]
+fn a_float_accumulator_entered_through_a_hidden_value_stays_flat() {
+    let (short, long) = peaks(|n| {
+        (
+            format!(
+                "{HIDE}
+sum_to : Int -> Float -> <Panic> Float
+sum_to n acc = if n == 0 then acc else sum_to (n - 1) (acc + 0.5)
+
+main : Unit -> <IO, Panic> Unit
+main () =
+  let Box f = hide 0 sum_to
+  println (show (f {n} 0.0))
+"
+            ),
+            format!("{}.0\n", n / 2),
+        )
+    });
+    assert_eq!(short.allocations, long.allocations, "{short:?} {long:?}");
+    assert_flat((short, long));
+}
+
+/// 同じく、構造体 (組) の累積のループに入る。組は型どおりのループの中では葉のまま運ばれ、箱になるのは版の入口と
+/// 出口だけである。
+#[test]
+fn a_struct_accumulator_entered_through_a_hidden_value_stays_flat() {
+    let (short, long) = peaks(|n| {
+        (
+            format!(
+                "{HIDE}
+sum_pair : Int -> (Float, Int) -> <Panic> (Float, Int)
+sum_pair n acc = if n == 0 then acc else
+  match acc with
+    | (x, k) -> sum_pair (n - 1) (x + 0.5, k + 1)
+
+main : Unit -> <IO, Panic> Unit
+main () =
+  let Box f = hide 0 sum_pair
+  match f {n} (0.0, 0) with
+    | (x, k) -> println (show x ++ \" \" ++ show k)
+"
+            ),
+            format!("{}.0 {n}\n", n / 2),
+        )
+    });
+    assert_eq!(short.allocations, long.allocations, "{short:?} {long:?}");
+    assert_flat((short, long));
+}
+
+/// 継続渡しの `Int` の鎖。各段がラムダを作って次の段へ渡し、最後に鎖を末尾の `apply` でたどる。ラムダは値として
+/// 生まれるので結果が一様で、`apply` の結果をそのまま返す末尾呼び出しになる。ヒープは鎖の長さだけ伸びるが、
+/// スタックは伸びない。
+#[test]
+fn a_cps_chain_of_int_continuations_keeps_the_stack_flat() {
+    let (short, long) = peaks(|n| {
+        (
+            format!(
+                "count : Int -> (Int -> <Panic> Int) -> <Panic> Int
+count n k = if n == 0 then k 0 else count (n - 1) (fn r -> k (r + 1))
+
+main : Unit -> <IO, Panic> Unit
+main () = println (show (count {n} (fn r -> r)))
+"
+            ),
+            format!("{n}\n"),
+        )
+    });
+    assert_eq!(short.peak_stack, long.peak_stack, "{short:?} {long:?}");
+}
+
+/// `k` を値として使う節 (`Iter.generate` の `yield` の節) は節の写し `<g>{k}` になり、handler の複製 (`{H=…}`) に
+/// 展開される。`Iter` をデータに通して
+/// `Iter.fold` に渡すので、`fold` が `Iter` の `k` を `apply` で再開するループになる。スタックもヒープも反復の数に
+/// よらない (docs/spec/core-ir.md の「handler の複製」)。
+#[test]
+fn a_resume_loop_through_a_clause_copy_stays_flat() {
+    let program = |n: u64| {
+        format!(
+            "import Yield (Yield(..))
+{HIDE}
+nums : Int -> Unit -> <Yield Int, Panic> Unit
+nums n () =
+  let go i =
+    if i > n then ()
+    else
+      yield i
+      go (i + 1)
+  go 1
+
+main : Unit -> <IO, Panic> Unit
+main () =
+  let Box it = hide 0 (Iter.generate (nums {n}))
+  println (show (Iter.fold (fn acc x -> acc + x) 0 it))
+"
+        )
+    };
+    let shown = eml_lir::pretty(&lir(&program(1)));
+    assert!(shown.contains("{H="), "{shown}");
+    assert_flat(peaks(|n| (program(n), format!("{}\n", n * (n + 1) / 2))));
+}
+
+/// データに隠したクロージャを通る線形合同法。値は 64 ビットの `Int` の上の方 (2^62 以上) に置くので即値に
+/// 収まらず、一様な位置の箱は `BigInt` の物体になる。1回の反復の確保は `apply` の引数と結果の2つを超えない
+/// (docs/spec/object-model.md の「語」)。
+#[test]
+fn an_lcg_through_a_hidden_closure_allocates_at_most_two_objects_per_step() {
+    let (short, long) = peaks(|n| {
+        (
+            format!(
+                "{HIDE}
+run : (Int -> <Panic> Int) -> Int -> Int -> <Panic> Int
+run f n x = if n == 0 then x else run f (n - 1) (f x)
+
+main : Unit -> <IO, Panic> Unit
+main () =
+  let base = 4611686018427387904
+  let Box f = hide 0 (fn x -> base + ((x - base) * 1664525 + 1013904223) % 4294967296)
+  println (show (run f {n} base >= base))
+"
+            ),
+            "True\n".to_string(),
+        )
+    });
+    let steps = PEAK_LONG - PEAK_SHORT;
+    let allocations = long.allocations - short.allocations;
+    // 値が即値に収まると確保が0になり、上限の検査が素通りするので、1回の反復に1つは箱を作ることも確かめる
+    assert!(
+        (steps..=2 * steps).contains(&allocations),
+        "{short:?} {long:?}"
+    );
+    assert_flat((short, long));
 }

@@ -752,8 +752,8 @@ impl<'a> FnLowering<'a> {
     /// 外側より後ろの番号になる。
     /// `yields` は持ち上げた関数の印である。クロージャの印は、型のあるラムダなら `typed` で、型のない handle の本体と
     /// 節では捕まえた値の印の結びにする
-    /// (docs/spec/core-ir.md の「translate が決める印」)。`uniform_tail` は持ち上げた関数の最後の何個の引数と結果を一様にするかで、ラムダは 0 で
-    /// ある (docs/spec/lir.md の「関数の ABI」)。
+    /// (docs/spec/core-ir.md の「translate が決める印」)。持ち上げた関数は値として生まれるので、捕獲より後ろの引数と
+    /// 結果を一様にする (docs/spec/lir.md の「関数の ABI」)。
     #[expect(
         clippy::too_many_arguments,
         reason = "the parts of one lifted function"
@@ -761,7 +761,6 @@ impl<'a> FnLowering<'a> {
     fn lift(
         &mut self,
         name: String,
-        uniform_tail: usize,
         yields: bool,
         captured: Vec<LocalId>,
         params: &[Param],
@@ -775,7 +774,7 @@ impl<'a> FnLowering<'a> {
         let function = self.program.reserve(captured.len() + params.len());
         let mut core = FnLowering::new(self.ctx, &mut *self.program, yields)
             .lower(&name, true, &captured, params, root, ret);
-        core.set_uniform_tail(uniform_tail);
+        core.split = Some(captured.len() as u32);
         self.program.finish(function, core);
         let closure_mark = typed.unwrap_or_else(|| {
             captured

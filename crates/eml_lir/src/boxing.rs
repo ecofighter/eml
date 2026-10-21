@@ -1,8 +1,8 @@
 //! translate と縮約の間の box の挿入のパス (docs/spec/lir.md の「box の挿入」)。プログラム全体を1回で扱い、関数の
 //! ABI を決めてから、Repr の違う位置の間に `box` と `unbox` を入れる。関数の ABI は具体化した型と `split` だけで決まる。
-//! 手順は、`split` による一様化と、位置ごとの変換である
+//! 手順は、`split` による一様化、版 `<f>$uniform` の作成と値の参照の向け直し、位置ごとの変換である
 //! (docs/spec/lir.md の「box の挿入」)。型は読まず、呼ばれる関数の
-//! シグネチャ、`split` と `clause` の印、`apply` の場所、配置の表、操作の表、基本操作の表だけを読む。入力は EP の出力を
+//! シグネチャ、`split` と `clause` の印、配置の表、操作の表、基本操作の表だけを読む。入力は EP の出力を
 //! 写した LIR で、`tail`、`box`、`unbox`、RC の命令はない (`passes_until` の入口で `verify_lowered` が確かめる)。
 //!
 //! 変数は具体化した型の Repr を持ち、値を受ける位置の Repr と互換でなければ変換する。変換は箱を要するスカラーと
@@ -16,13 +16,15 @@ use std::collections::HashMap;
 use crate::check::shape;
 use crate::contract::pure;
 use crate::syntax::repr_text;
+use crate::variants;
 use crate::verify::block_shapes;
 use crate::{
     Atom, Block, BlockId, Call, CasePattern, EffectInfo, Layout, LirFn, Mark, OpRet, OperationInfo,
-    Program, Repr, Rhs, Site, Stmt, Structs, Term, VarId, VarInfo, operation,
+    Program, Repr, Rhs, Stmt, Structs, Term, VarId, VarInfo, operation,
 };
 
 pub fn boxing(program: &mut Program) {
+    // 手順 1: 値として生まれる関数と入口の関数を、その場でそろえる
     for function in &mut program.functions {
         match function.clause {
             Some((effect, op)) => conform_clause(
@@ -33,7 +35,9 @@ pub fn boxing(program: &mut Program) {
             None => conform_split(function, &program.structs),
         }
     }
-    // 変換はほかの関数を `signatures` でだけ見るので、関数を1つずつ書き換えながら表を共有で借りられる
+    // 手順 2〜4: 値として使う型どおりの関数の版を作り、値の参照と末尾の呼び出しをそちらへ向ける
+    variants::make(program);
+    // 手順 5: 変換はほかの関数を `signatures` でだけ見るので、関数を1つずつ書き換えながら表を共有で借りられる
     let signatures: Vec<Signature> = program.functions.iter().map(Signature::of).collect();
     for function in &mut program.functions {
         let never = vec![false; function.vars.len()];
@@ -139,7 +143,7 @@ fn converted_mark(from: Repr, to: Repr, mark: Mark) -> Mark {
 
 /// 一様な位置で値を受ける Repr。箱を要するスカラーと構造体は `tobj` になり、`obj` と `unit` はそのままである。
 /// 構造体の箱の束縛は `obj` だが、位置は `tobj` で、`obj` の箱は命令なしでそこへ渡る。
-fn uniform_repr(repr: Repr) -> Repr {
+pub(crate) fn uniform_repr(repr: Repr) -> Repr {
     if repr.needs_box() { Repr::TObj } else { repr }
 }
 
@@ -192,7 +196,7 @@ fn conform_clause(function: &mut LirFn, structs: &Structs, operation: &Operation
 /// `expected` と互換でない引数を、同じ名前の新しい `expected` の Repr の引数に替え、入口のブロックの先頭で、引数の順に
 /// `let p = unbox p'` (または `box`) を置いて元の変数を定義する。p' は p と同じ値なので、p の印を写す。`ret` を替えた
 /// ときの `return` の変換は `Converter` に任せる。
-fn conform(function: &mut LirFn, structs: &Structs, expected: &[Repr], ret: Repr) {
+pub(crate) fn conform(function: &mut LirFn, structs: &Structs, expected: &[Repr], ret: Repr) {
     let mut conversions = Vec::new();
     for (position, &wanted) in expected.iter().enumerate() {
         let param = function.params()[position];
@@ -266,22 +270,16 @@ impl Converter<'_> {
     fn run(mut self) {
         let mut fields = Vec::new();
         for index in 0..self.function.blocks.len() {
-            let tail = tail_position_call(&self.function.blocks[index]).map(|(at, _)| at);
             let stmts = std::mem::take(&mut self.function.blocks[index].stmts);
             let mut out = Vec::new();
-            for (at, stmt) in stmts.into_iter().enumerate() {
-                self.stmt(stmt, tail == Some(at), &mut out);
+            for stmt in stmts {
+                self.stmt(stmt, &mut out);
             }
             let mut term = std::mem::replace(
                 &mut self.function.blocks[index].term,
                 Term::Return(Atom::Unit),
             );
-            // 末尾の位置の呼び出しの `return` に変換を入れると、`return` の値が変換の束縛になり、末尾の位置の形が
-            // 消える。結果の変換は VM の変換のフレームが行う
-            // (docs/spec/lir.md の「末尾の位置の呼び出し」)
-            if tail.is_none() {
-                self.term(&mut term, &mut out, &mut fields);
-            }
+            self.term(&mut term, &mut out, &mut fields);
             let block = &mut self.function.blocks[index];
             block.stmts = out;
             block.term = term;
@@ -467,24 +465,14 @@ impl Converter<'_> {
         );
     }
 
-    /// `tail` は、文が末尾の位置の呼び出しの `let` であることである。
-    fn stmt(&mut self, stmt: Stmt, tail: bool, out: &mut Vec<Stmt>) {
+    fn stmt(&mut self, stmt: Stmt, out: &mut Vec<Stmt>) {
         match stmt {
             Stmt::Let { var, mut rhs } => {
                 let given = match &mut rhs {
                     Rhs::Call(call) => {
-                        let given = self.call(call, self.function.repr(var), out);
+                        let given = self.call(call, out);
                         // 結果を受け直さない呼び出しは、`never` の操作の節の呼び出しだけである
                         self.never[var.0 as usize] = given.is_none();
-                        // 末尾の位置の呼び出しの束縛は受け直さず、呼ばれる側の結果の Repr にする。後ろの純粋な `let`
-                        // がこの変数を使えば、変換はそちらに入り、縮約が消す
-                        if tail && let Some(given) = given {
-                            if !self.structs.compatible(self.function.repr(var), given) {
-                                self.function.vars[var.0 as usize].repr = given;
-                            }
-                            out.push(Stmt::Let { var, rhs });
-                            return;
-                        }
                         given
                     }
                     Rhs::MakeClosure(target, args) => {
@@ -587,11 +575,10 @@ impl Converter<'_> {
     }
 
     /// 呼び出しのアトムを変換し、結果を受ける Repr を返す。直接の呼び出しは呼ばれる関数の引数と `ret`、節の呼び出しは
-    /// 先頭の evidence が `obj` で、残りの引数と結果が操作の表の Repr である。`apply` は型どおりの場所なら場所の
-    /// Repr の並びと束縛の Repr `bound`、一様な場所なら `tobj` である。`never` の操作の節の呼び出しは戻らないので、
-    /// 結果を受け直さず `None` を返す (docs/spec/lir.md の「box の挿入」、
-    /// docs/spec/lir.md の「`apply` の場所」)。
-    fn call(&mut self, call: &mut Call, bound: Repr, out: &mut Vec<Stmt>) -> Option<Repr> {
+    /// 先頭の evidence が `obj` で、残りの引数と結果が操作の表の Repr である。`apply` の引数と結果はいつも `tobj` で
+    /// ある。`never` の操作の節の呼び出しは戻らないので、結果を受け直さず `None` を返す
+    /// (docs/spec/lir.md の「box の挿入」と「関数の ABI」)。
+    fn call(&mut self, call: &mut Call, out: &mut Vec<Stmt>) -> Option<Repr> {
         match call {
             Call::Direct(target, args) => {
                 let target = target.0 as usize;
@@ -601,24 +588,12 @@ impl Converter<'_> {
                 }
                 Some(self.signatures[target].ret)
             }
-            Call::Apply {
-                callee, args, site, ..
-            } => {
+            Call::Apply { callee, args, .. } => {
                 *callee = self.convert(*callee, Repr::TObj, out);
-                match site {
-                    Site::Typed(reprs) => {
-                        for (arg, &repr) in args.iter_mut().zip(reprs.iter()) {
-                            *arg = self.convert(*arg, repr, out);
-                        }
-                        Some(bound)
-                    }
-                    Site::Uniform => {
-                        for arg in args.iter_mut() {
-                            *arg = self.convert(*arg, Repr::TObj, out);
-                        }
-                        Some(Repr::TObj)
-                    }
+                for arg in args.iter_mut() {
+                    *arg = self.convert(*arg, Repr::TObj, out);
                 }
+                Some(Repr::TObj)
             }
             Call::Clause {
                 effect,

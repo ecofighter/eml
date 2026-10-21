@@ -2,9 +2,8 @@
 //! 変数を、形の葉の順 (深さ優先) に葉の変数の並びに替える。box の挿入が一様な位置との変換を構造体の変数のまま済ませた
 //! 後に走るので、ここでは位置ごとの変換を決めない。
 //!
-//! 開いた後も、関数と型どおりの `apply` の場所は源の単位の ABI (構造体の Repr を含む引数と結果の Repr) を持つ
-//! (`LirFn::source`、`Site::Typed`、`Call::Apply::source_ret`)。VM は関数の値の ABI と構造体と箱の間の変換をそこから
-//! 作る。葉の並びからは、どの葉がどの構造体の形をなすかが分からないためである。
+//! 開いた後も、関数は源の単位の ABI (構造体の Repr を含む引数と結果の Repr) を持つ (`LirFn::source`)。VM は関数の値の
+//! ABI をそこから作る。葉の並びからは、どの葉がどの構造体の形をなすかが分からないためである。
 //!
 //! 葉の変数は元の名前に葉の番号を付けた名前 (`d.0`) を持ち、Repr は形の葉のもの、印は形の葉の印と変数の印の小さい
 //! ほうである。複製が開いた引数の印を小さくすることがあるためである
@@ -18,8 +17,8 @@ use std::collections::{HashMap, HashSet};
 
 use crate::{
     Atom, BlockId, Call, Case, CasePattern, Ctor, EffectInfo, FloatBits, Layout, LirFn, Mark,
-    OpRet, Prim, Program, Repr, Rhs, Site, SourceSig, Stmt, StructId, Structs, Term, VarId,
-    VarInfo, operation,
+    OpRet, Prim, Program, Repr, Rhs, SourceSig, Stmt, StructId, Structs, Term, VarId, VarInfo,
+    operation,
 };
 
 pub fn flatten(program: &mut Program) {
@@ -360,14 +359,6 @@ impl<'a> Flattener<'a> {
             }
             Rhs::Call(call) => {
                 self.call(call);
-                if let Call::Apply {
-                    site: Site::Typed(_),
-                    source_ret,
-                    ..
-                } = call
-                {
-                    *source_ret = Some(Repr::Struct(id));
-                }
                 if self.never_returns(call) {
                     self.bind_never(var, id, rhs, out);
                     return;
@@ -451,8 +442,7 @@ impl<'a> Flattener<'a> {
         }
     }
 
-    /// 呼び出しの引数を開く。`apply` の型どおりの場所は源の引数ごとの Repr のまま残し、VM が源の単位の ABI を作れる
-    /// ようにする。
+    /// 呼び出しの引数を開く。`apply` と `clause` の引数は box の挿入が1語の Repr にしてある。
     fn call(&mut self, call: &mut Call) {
         match call {
             Call::Direct(target, args) => {
@@ -463,18 +453,11 @@ impl<'a> Flattener<'a> {
                 args,
                 yields: _,
                 prompt,
-                site,
-                source_ret: _,
             } => {
                 *callee = self.single(*callee);
                 *prompt = prompt.map(|marker| self.single_var(marker));
-                match site {
-                    Site::Typed(reprs) => *args = self.pass_all(args, reprs),
-                    Site::Uniform => {
-                        for arg in args.iter_mut() {
-                            *arg = self.single(*arg);
-                        }
-                    }
+                for arg in args.iter_mut() {
+                    *arg = self.single(*arg);
                 }
             }
             Call::Clause { callee, args, .. } => {
@@ -606,26 +589,11 @@ impl<'a> Flattener<'a> {
     fn term(&mut self, term: Term, original_params: &[Vec<VarId>]) -> Term {
         match term {
             Term::Return(atom) => {
-                let returned = match (self.ret, atom) {
-                    // 構造体を返す関数でも、末尾の位置の呼び出しの束縛は呼ばれる側の結果の Repr (一様な場所なら
-                    // `tobj`) を持ち、1つの値のまま返る。箱と構造体の間の変換は VM の変換のフレームが行う
-                    (Repr::Struct(_), Atom::Var(var))
-                        if !matches!(self.function.repr(var), Repr::Struct(_)) =>
-                    {
-                        return Term::Return(self.single(atom));
-                    }
-                    (Repr::Struct(_), _) => self.ret,
-                    // 末尾の位置の呼び出しの束縛は呼ばれる側の結果の Repr を持つので、構造体を返さない関数でも
-                    // 構造体の変数を返しうる。結果の変換は VM の変換のフレームが行う
-                    (_, Atom::Var(var))
-                        if self.leaves.contains_key(&var) && !self.subst.contains_key(&var) =>
-                    {
-                        self.function.repr(var)
-                    }
-                    _ => return Term::Return(self.single(atom)),
-                };
+                if !matches!(self.ret, Repr::Struct(_)) {
+                    return Term::Return(self.single(atom));
+                }
                 let mut values = Vec::new();
-                self.pass(atom, returned, &mut values);
+                self.pass(atom, self.ret, &mut values);
                 match <[Atom; 1]>::try_from(values) {
                     Ok([value]) => Term::Return(value),
                     Err(values) => Term::ReturnMany(values),

@@ -10,7 +10,7 @@ use std::fmt::Write as _;
 
 use crate::{
     Atom, BlockId, Case, CasePattern, Ctor, EffectInfo, FloatBits, FnIdx, Immediates, Layout,
-    LayoutCtor, LayoutId, Loc, Mark, MaskItem, OpRet, OperationInfo, ParseError, Prim, Repr, Site,
+    LayoutCtor, LayoutId, Loc, Mark, MaskItem, OpRet, OperationInfo, ParseError, Prim, Repr,
     SourceSig, StructShape, Structs, VarId, VarInfo,
 };
 
@@ -352,14 +352,11 @@ pub struct FnHeader {
     pub source: Option<SourceSig>,
 }
 
-/// `Reader::apply` が読んだ `apply` の部品。`source` は `source(..)` を書いた場所で `Some` になり、中身は構造体の結果
-/// の源の Repr である。その場所の Repr は書いたとおりで、変数から埋めない。
+/// `Reader::apply` が読んだ `apply` の部品。
 pub struct ApplyParts {
     pub callee: Atom,
     pub args: Vec<Atom>,
     pub prompt: Option<VarId>,
-    pub site: Site,
-    pub source: Option<Option<Repr>>,
 }
 
 /// 関数の並びのほかに、読み終えたプログラムが持つ表。
@@ -692,161 +689,38 @@ impl<'t> Reader<'t> {
             .ok_or_else(|| error(line, format!("expected a parameter index, found `{word}`")))
     }
 
-    /// `call` が読んだ語 `word` が `apply` の頭 (`[yields] [uniform] apply`) なら、`apply` までを読んで
-    /// (`yields`, `uniform`) を返す。ほかの語なら `None` を返す。
-    pub fn apply_head(&mut self, word: &str) -> Result<Option<(bool, bool)>, ParseError> {
+    /// `call` が読んだ語 `word` が `apply` の頭 (`[yields] apply`) なら、`apply` までを読んで `yields` を返す。
+    /// ほかの語なら `None` を返す。
+    pub fn apply_head(&mut self, word: &str) -> Result<Option<bool>, ParseError> {
         let yields = word == "yields";
-        let uniform = word == "uniform" || (yields && self.at_word("uniform"));
-        if !(yields || uniform || word == "apply") {
+        if !(yields || word == "apply") {
             return Ok(None);
         }
-        if yields && uniform {
-            self.pos += 1;
-        }
-        if word != "apply" {
+        if yields {
             if !self.at_word("apply") {
-                let last = if uniform { "uniform" } else { "yields" };
-                return Err(self.error_here(format!("expected `apply` after `{last}`")));
+                return Err(self.error_here("expected `apply` after `yields`"));
             }
             self.pos += 1;
         }
-        Ok(Some((yields, uniform)))
+        Ok(Some(yields))
     }
 
-    /// `apply` の後の、呼ぶ値、引数、着地の印と、引数を渡す場所。型どおりの場所は定数の引数にだけ `: repr` を書く。
-    /// 書き方を1つにするためである。変数の引数の Repr は、関数を読み終えてから `fill_site` が変数から埋める。
-    ///
-    /// LIR の開いた後の場所は、構造体の引数が葉の複数のアトムになり、場所の Repr を変数から決められない。その場所は
-    /// 引数の後に `source(reprs)` と源の引数ごとの Repr を書き、構造体の結果なら `-> repr` を続ける。このとき引数には
-    /// `: repr` を書かない。返す `ApplyParts::source` は、`source(..)` を書いたときに `Some(結果の Repr)` である。
-    pub fn apply(&mut self, state: &mut FnState, uniform: bool) -> Result<ApplyParts, ParseError> {
+    /// `apply` の後の、呼ぶ値、引数、着地の印。`apply` の引数と結果はいつも一様なので、Repr を書かない
+    /// (docs/spec/lir.md の「関数の ABI」)。
+    pub fn apply(&mut self, state: &mut FnState) -> Result<ApplyParts, ParseError> {
         let callee = self.atom(state)?;
-        let line = self.line();
-        let args = self.list('(', ')', |p| p.typed_arg(state, uniform))?;
-        let explicit = !uniform && self.at_word("source");
-        let source = if explicit {
-            self.pos += 1;
-            if args
-                .iter()
-                .any(|(atom, repr)| !matches!(atom, Atom::Var(_)) && repr.is_ok())
-            {
-                return Err(error(
-                    line,
-                    "an apply with `source(..)` writes no repr on its arguments",
-                ));
-            }
-            let reprs = self.list('(', ')', |p| p.repr())?;
-            let ret = if self.at_word("->") {
-                self.pos += 1;
-                Some(self.repr()?)
-            } else {
-                None
-            };
-            Some((reprs, ret))
-        } else {
-            None
-        };
+        let args = self.list('(', ')', |p| p.atom(state))?;
         let prompt = if self.at_word("prompt") {
             self.pos += 1;
             Some(self.var(state)?)
         } else {
             None
         };
-        let (site, source) = match source {
-            _ if uniform => (Site::Uniform, None),
-            Some((reprs, ret)) => (Site::Typed(reprs), Some(ret)),
-            None => {
-                let mut reprs = Vec::with_capacity(args.len());
-                for (_, repr) in &args {
-                    reprs.push(repr.clone()?);
-                }
-                (Site::Typed(reprs), None)
-            }
-        };
         Ok(ApplyParts {
             callee,
-            args: args.into_iter().map(|(atom, _)| atom).collect(),
+            args,
             prompt,
-            site,
-            source,
         })
-    }
-
-    /// `apply` と Core IR の `resume` の引数1つと、場所に入れる Repr。変数の Repr は仮に `unit` にしておく。
-    pub fn apply_arg(
-        &mut self,
-        state: &mut FnState,
-        uniform: bool,
-    ) -> Result<(Atom, Repr), ParseError> {
-        let (atom, repr) = self.typed_arg(state, uniform)?;
-        Ok((atom, repr?))
-    }
-
-    /// `apply_arg` と同じだが、`: repr` のない定数の引数の誤りを2つ目に返す。`apply` は引数の後の `source(..)` を
-    /// 見るまで、その誤りを報告するかを決められないためである。
-    fn typed_arg(
-        &mut self,
-        state: &mut FnState,
-        uniform: bool,
-    ) -> Result<(Atom, Result<Repr, ParseError>), ParseError> {
-        let line = self.line();
-        let start = self.pos;
-        // `#1:` のように、`:` は前の語に付いて1つの語になる。`()` と `&"name"` の後では離れた語になる
-        let joined = self
-            .peek_word()
-            .and_then(|word| word.strip_suffix(':'))
-            .filter(|head| !head.is_empty())
-            .map(str::to_string);
-        let (atom, annotated) = match joined {
-            Some(head) => {
-                self.pos += 1;
-                (self.atom_word(state, &head, line)?, true)
-            }
-            None => {
-                let atom = self.atom(state)?;
-                let annotated = self.at_word(":");
-                if annotated {
-                    self.pos += 1;
-                }
-                (atom, annotated)
-            }
-        };
-        let text = || {
-            let text: String = self.tokens[start..self.pos]
-                .iter()
-                .map(|token| match &token.tok {
-                    Tok::Word(word) => word.clone(),
-                    Tok::Str(value) => format!("{value:?}"),
-                    Tok::Punct(c) => c.to_string(),
-                })
-                .collect();
-            text.trim_end_matches(':').to_string()
-        };
-        match (atom, annotated) {
-            (_, true) if uniform => Err(error(
-                line,
-                "a uniform apply writes no repr on its arguments",
-            )),
-            (Atom::Var(_), true) => Err(error(
-                line,
-                format!(
-                    "the variable argument `{}` of an apply takes its repr from the variable",
-                    text()
-                ),
-            )),
-            (_, true) => Ok((atom, Ok(self.repr()?))),
-            (_, false) if uniform || matches!(atom, Atom::Var(_)) => Ok((atom, Ok(Repr::Unit))),
-            (_, false) => Ok((
-                atom,
-                Err(error(
-                    line,
-                    format!(
-                        "the constant argument `{}` of a typed apply needs `: repr`",
-                        text()
-                    ),
-                )),
-            )),
-        }
     }
 
     /// 関数を閉じる `}`。
@@ -1556,23 +1430,6 @@ impl<'t> Reader<'t> {
     }
 }
 
-/// 型どおりの場所の、変数の引数の Repr を変数の表から埋める。テキストは変数の引数の Repr を書かないので、関数を
-/// 読み終えて変数の表ができてから埋める。
-pub fn fill_site(site: &mut Site, args: &[Atom], vars: &[VarInfo]) {
-    if let Site::Typed(reprs) = site {
-        fill_reprs(reprs, args, vars);
-    }
-}
-
-/// 引数ごとの Repr の並び (`apply` の場所と Core IR の `resume` の場所) の、変数の引数の Repr を埋める。
-pub fn fill_reprs(reprs: &mut [Repr], args: &[Atom], vars: &[VarInfo]) {
-    for (repr, atom) in reprs.iter_mut().zip(args) {
-        if let Atom::Var(var) = atom {
-            *repr = vars[var.0 as usize].repr;
-        }
-    }
-}
-
 pub fn error(line: usize, message: impl Into<String>) -> ParseError {
     ParseError {
         line,
@@ -1791,39 +1648,19 @@ impl<'p> Writer<'p> {
         function_name(self.functions[target.0 as usize])
     }
 
-    /// `[yields] [uniform] apply callee(args) [source(reprs) [-> repr]] [prompt v]`。型どおりの場所は、定数の引数に
-    /// だけ `: repr` を書く。場所の Repr を引数の変数から決められないとき (LIR の開いた後の構造体の引数) と、構造体の
-    /// 結果 `source_ret` を持つときは、`source(..)` に場所の Repr をすべて書く (`Reader::apply`)。
+    /// `[yields] apply callee(args) [prompt v]`。
     pub fn apply(
         &self,
         vars: &[VarInfo],
         (callee, args): (&Atom, &[Atom]),
         yields: bool,
         prompt: Option<VarId>,
-        (site, source_ret): (&Site, Option<Repr>),
     ) -> String {
-        let (uniform, reprs) = match site {
-            Site::Uniform => ("uniform ", &[][..]),
-            Site::Typed(reprs) => ("", &reprs[..]),
-        };
-        let implied = reprs.len() == args.len()
-            && args.iter().zip(reprs).all(|(atom, &repr)| match atom {
-                Atom::Var(var) => self.structs.same(vars[var.0 as usize].repr, repr),
-                _ => true,
-            });
-        let (args, source) = if uniform.is_empty() && !(implied && source_ret.is_none()) {
-            let ret = source_ret.map_or_else(String::new, |ret| format!(" -> {}", self.repr(ret)));
-            (
-                self.atoms(vars, args),
-                format!(" source({}){ret}", self.reprs(reprs)),
-            )
-        } else {
-            (self.typed_atoms(vars, args, reprs), String::new())
-        };
         format!(
-            "{}{uniform}apply {}({args}){source}{}",
+            "{}apply {}({}){}",
             if yields { "yields " } else { "" },
             self.atom(vars, callee),
+            self.atoms(vars, args),
             prompt.map_or(String::new(), |v| format!(" prompt {}", self.var(vars, v)))
         )
     }
@@ -1832,18 +1669,6 @@ impl<'p> Writer<'p> {
         reprs
             .iter()
             .map(|&repr| self.repr(repr))
-            .collect::<Vec<_>>()
-            .join(", ")
-    }
-
-    /// 引数の並び。定数の引数にだけ、`reprs` の同じ位置の Repr を `: repr` と書く。
-    pub fn typed_atoms(&self, vars: &[VarInfo], args: &[Atom], reprs: &[Repr]) -> String {
-        args.iter()
-            .enumerate()
-            .map(|(index, atom)| match (atom, reprs.get(index)) {
-                (Atom::Var(_), _) | (_, None) => self.atom(vars, atom),
-                (_, Some(&repr)) => format!("{}: {}", self.atom(vars, atom), self.repr(repr)),
-            })
             .collect::<Vec<_>>()
             .join(", ")
     }

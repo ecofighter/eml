@@ -11,7 +11,7 @@ use eml_extern::{Extern, FunctionRow};
 use crate::syntax::{REPRS, effect_text, layout_text, operation_text, prim_text, repr_text};
 use crate::{
     Atom, BlockId, Case, CasePattern, Ctor, EffectInfo, FnIdx, Immediates, Layout, LayoutCtor,
-    LayoutId, Mark, OpRet, Prim, Repr, Site, StructId, StructShape, Structs, VarId, VarInfo,
+    LayoutId, Mark, OpRet, Prim, Repr, StructId, StructShape, Structs, VarId, VarInfo,
 };
 
 /// 一様な位置の始まりは、関数の引数の数を超えない (docs/spec/lir.md の「関数の ABI」)。
@@ -433,44 +433,9 @@ impl<'a> Context<'a> {
         Some(operation_text(self.tables.effects, effect, op))
     }
 
-    /// 型どおりの `apply` の場所は、引数ごとに1つの Repr を持ち、変数の引数の Repr は変数の Repr と同じである。box の
-    /// 挿入は引数を場所の Repr へ変換するので、どの段でも成り立つ
-    /// (docs/spec/lir.md の「`apply` の場所」)。
-    pub fn check_site(&self, args: &[Atom], site: &Site) -> Result<(), String> {
-        match site {
-            Site::Typed(reprs) => self.check_reprs("apply", args, reprs),
-            Site::Uniform => Ok(()),
-        }
-    }
-
-    /// 型どおりの場所 (`apply` か Core IR の `resume`) の検査。`check_site` と同じ規則で、`what` は誤りの文に書く。
-    pub fn check_reprs(&self, what: &str, args: &[Atom], reprs: &[Repr]) -> Result<(), String> {
-        if reprs.len() != args.len() {
-            return Err(format!(
-                "the {what} site lists {} reprs for {} arguments",
-                reprs.len(),
-                args.len()
-            ));
-        }
-        for (&atom, &repr) in args.iter().zip(reprs) {
-            if let Atom::Var(var) = atom
-                && !self.tables.structs.same(self.repr(var), repr)
-            {
-                return Err(format!(
-                    "the {what} site gives `{}` {} but the variable is {}",
-                    self.name(var),
-                    self.repr_text(repr),
-                    self.repr_text(self.repr(var))
-                ));
-            }
-        }
-        Ok(())
-    }
-
     /// 互換の位置に収まる値。規則は box の挿入と同じ `Atom::fits_compatible` で、`never` の操作の `perform` と
-    /// `clause` の束縛と、戻らない extern の束縛は、それに加えて、どの位置にも収まる。関数の値として使う関数は一様で
-    /// なくてよい。`apply` が実行時に Repr を変えるためである
-    /// (docs/spec/vm.md の「シグネチャ」)。
+    /// `clause` の束縛と、戻らない extern の束縛は、それに加えて、どの位置にも収まる。関数の値として使う関数が一様で
+    /// あることは、ここでなく verifier の値の参照の規則が確かめる (docs/spec/lir.md の「verifier」)。
     pub fn passes(&self, atom: Atom, expected: Repr) -> bool {
         match atom {
             Atom::Var(var) if self.never[var.0 as usize] => true,

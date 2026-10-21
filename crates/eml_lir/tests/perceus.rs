@@ -1296,7 +1296,7 @@ fn g(n.0: int) -> int {
   return n.0
 }
 internal uniform from 2 fn f(k.0: obj, c.1: enum, u.2: unit) -> Tok{int, float} lin {
-  let t.3: Tok{int, float} lin = uniform apply k.0(1)
+  let t.3: Tok{int, float} lin = apply k.0(1)
   unpack t.3 Tok #0(n.4: int, x.5: float)
   switch c.1 Prelude.Bool { #0 -> b1, #1 -> b2 }
 b1:
@@ -1310,7 +1310,7 @@ b2:
     insta::assert_snapshot!(function(&passes_text(text, Pass::Perceus), "f"), @"
     internal uniform from 2 fn f(k.0: obj, c.1: enum, u.2: unit) -> tobj lin {
       let b.8: tobj = box 1
-      let t.9: tobj lin = uniform apply k.0(b.8)
+      let t.9: tobj lin = apply k.0(b.8)
       let (t.0.11: int, t.1.12: float) = unbox t.9 Tok
       switch c.1 Prelude.Bool { #0 -> b1, #1 -> b2 }
     b1:
@@ -1379,7 +1379,7 @@ fn a_lin_box_whose_leaves_are_unused_is_still_dropped_on_its_path() {
 layout Tok { Tok(int, float) }
 layout Prelude.Bool { False, True }
 internal uniform from 2 fn f(k.0: obj, c.1: enum, u.2: unit) -> Tok{int, float} lin {
-  let t.3: Tok{int, float} lin = uniform apply k.0(1)
+  let t.3: Tok{int, float} lin = apply k.0(1)
   unpack t.3 Tok #0(n.4: int, x.5: float)
   switch c.1 Prelude.Bool { #0 -> b1, #1 -> b2 }
 b1:
@@ -1392,7 +1392,7 @@ b2:
     insta::assert_snapshot!(function(&passes_text(text, Pass::Perceus), "f"), @"
     internal uniform from 2 fn f(k.0: obj, c.1: enum, u.2: unit) -> tobj lin {
       let b.7: tobj = box 1
-      let t.8: tobj lin = uniform apply k.0(b.7)
+      let t.8: tobj lin = apply k.0(b.7)
       let (_, _) = unbox t.8 Tok
       switch c.1 Prelude.Bool { #0 -> b1, #1 -> b2 }
     b1:
@@ -1416,7 +1416,7 @@ fn g(s.0: obj) -> int {
   return 1
 }
 internal uniform from 2 fn f(k.0: obj, c.1: enum, u.2: unit) -> Tok{obj, float} lin {
-  let t.3: Tok{obj, float} lin = uniform apply k.0(1)
+  let t.3: Tok{obj, float} lin = apply k.0(1)
   unpack t.3 Tok #0(s.4: obj, x.5: float)
   switch c.1 Prelude.Bool { #0 -> b1, #1 -> b2 }
 b1:
@@ -1431,7 +1431,7 @@ b2:
     insta::assert_snapshot!(function(&passes_text(text, Pass::Perceus), "f"), @r#"
     internal uniform from 2 fn f(k.0: obj, c.1: enum, u.2: unit) -> tobj lin {
       let b.9: tobj = box 1
-      let t.10: tobj lin = uniform apply k.0(b.9)
+      let t.10: tobj lin = apply k.0(b.9)
       let (t.0.12: obj, t.1.13: float) = unbox t.10 Tok
       switch c.1 Prelude.Bool { #0 -> b1, #1 -> b2 }
     b1:

@@ -2,8 +2,8 @@
 //! の `unsafe fn` を呼ぶので、核の操作の前提を守っていることを確かめる。メモリの Host だけを使い、ファイルを開かない。
 //! 確かめる道: 直接の呼び出しと戻り、`con` と `switch` と `release`、部分適用と余った引数、基本操作 (evidence を作って
 //! 引く)、ヒープの文字列の extern、2つのプログラムを1つの `Machine` に続けて読み込み、2つ目の塊を付け替えること、
-//! 文字列を返す入口の結果を写すこと、`exit` の巻き戻し、型どおりの `apply` と生の語の捕獲、`apply` の箱の変換、
-//! 変換のフレーム、複数の値の戻りと構造体と箱の間の変換、両方のモード。
+//! 文字列を返す入口の結果を写すこと、`exit` の巻き戻し、`apply` と生の語の捕獲、複数の値の戻りと構造体と箱の間の
+//! 変換、両方のモード。
 
 use eml_vm::{AnyMachine, RunConfig, capture_host, execute};
 
@@ -260,88 +260,34 @@ fn bottom(n.0: int) -> unit {
     }
 }
 
-/// 捕まえた `float` を生の語に書き、`apply` で引数の順に読み出す (`make_closure` と `take_captures`)。
+/// 捕まえた `float` を生の語に書き、`apply` で引数の順に読み出す (`make_closure` と `take_captures`)。後から足す
+/// 引数と結果は一様な箱である。
 #[test]
-fn typed_apply_with_raw_captures() {
+fn an_apply_with_raw_captures() {
     let text = "\
 fn main() -> unit {
   let c.0: tobj = closure scale(2.5)
-  let r.1: float = apply c.0(4.0: float)
-  let s.2: obj = extern \"Prelude.Show Float.show\"(r.1)
-  let u.3: unit = extern Prelude.println(s.2)
-  return u.3
+  let b.1: tobj = box 4.0
+  let r.2: tobj = apply c.0(b.1)
+  let x.3: float = unbox r.2
+  decref r.2
+  let s.4: obj = extern \"Prelude.Show Float.show\"(x.3)
+  let u.5: unit = extern Prelude.println(s.4)
+  return u.5
 }
-fn scale(k.0: float, x.1: float) -> float {
-  let y.2: float = extern \"Prelude.Num Float.*\"(k.0, x.1)
-  return y.2
+fn scale(k.0: float, x.1: tobj) -> tobj {
+  let y.2: float = unbox x.1
+  decref x.1
+  let z.3: float = extern \"Prelude.Num Float.*\"(k.0, y.2)
+  let r.4: tobj = box z.3
+  return r.4
 }
 ";
     assert_eq!(run_both(text), "10.0\n");
 }
 
-/// 場所が `tobj` とする引数で一意な `float` の箱を渡すと、`apply` が中身を取り出して箱を空け、関数が結果を箱に入れずに
-/// 返す (`convert_word`)。
-#[test]
-fn a_boxed_argument_unboxes_into_a_typed_function() {
-    let text = "\
-fn main() -> unit {
-  let x.0: float = extern \"Prelude.Num Float.+\"(2.0, 0.5)
-  let b.1: tobj = box x.0
-  let r.2: float = apply &half(b.1)
-  let s.3: obj = extern \"Prelude.Show Float.show\"(r.2)
-  let u.4: unit = extern Prelude.println(s.3)
-  return u.4
-}
-fn half(x.0: float) -> float {
-  let y.1: float = extern \"Prelude.Div Float./\"(x.0, 2.0)
-  return y.1
-}
-";
-    assert_eq!(run_both(text), "1.25\n");
-}
-
-/// 変換のフレームを通る戻り。`half` の `float` の結果を一様な場所のために箱に入れ (`Float` の物体を確保する)、
-/// `boxed` の箱の結果を `int` の場所のために取り出して箱を空ける。`wrap` から `inc` への末尾の `apply` は、`main` が
-/// 積んだ変換のフレームと合成して恒等になり、そのフレームを外す。
-#[test]
-fn a_conversion_frame_round_trip() {
-    let text = "\
-fn main() -> unit {
-  let x.0: float = extern \"Prelude.Num Float.+\"(2.0, 0.5)
-  let b.1: tobj = box x.0
-  let r.2: tobj = uniform apply &half(b.1)
-  let y.3: float = unbox r.2
-  decref r.2
-  let s.4: obj = extern \"Prelude.Show Float.show\"(y.3)
-  let u.5: unit = extern Prelude.println(s.4)
-  let n.6: int = apply &boxed(20: int)
-  let m.7: int = apply &wrap(n.6)
-  let t.8: obj = extern \"Prelude.Show Int.show\"(m.7)
-  let v.9: unit = extern Prelude.println(t.8)
-  return v.9
-}
-fn half(x.0: float) -> float {
-  let y.1: float = extern \"Prelude.Div Float./\"(x.0, 2.0)
-  return y.1
-}
-fn boxed(x.0: int) -> tobj {
-  let y.1: int = extern \"Prelude.Num Int.+\"(x.0, 1)
-  let b.2: tobj = box y.1
-  return b.2
-}
-fn wrap(x.0: int) -> tobj {
-  tail apply &inc(x.0)
-}
-fn inc(x.0: int) -> int {
-  let y.1: int = extern \"Prelude.Num Int.+\"(x.0, 1)
-  return y.1
-}
-";
-    assert_eq!(run_both(text), "1.25\n22\n");
-}
-
-/// 複数の値の戻りと、構造体と箱の間の変換。構造体は参照の葉 (文字列) を持つ。`pair` は葉を `RetN` で返す。一様な
-/// 場所に渡す箱は、`apply` が `same` の前で葉に開いて空け、`same` の葉の結果は変換のフレームが箱に入れる。`main` の
+/// 複数の値の戻りと、構造体と箱の間の変換。構造体は参照の葉 (文字列) を持つ。`pair` は葉を `RetN` で返す。`apply`
+/// に渡す箱は、`same` の一様な版が葉に開いて空け、`same` の葉の結果を版が箱に入れる。`main` の
 /// 構造体の `unbox` はその箱から葉を借り、`release unboxed` が箱を空けて葉を受け取る。`take` は構造体を葉のまま
 /// 受ける。構造体はまだソースから作られないので、手書きの LIR をパスに通す。
 #[test]
@@ -355,7 +301,7 @@ fn main() -> unit {{
   let b.1: obj = const \" value\"
   let s.2: obj = extern \"Prelude.++\"(a.0, b.1)
   let p.3: {named} = call pair(s.2)
-  let q.4: {named} = uniform apply &same(p.3)
+  let q.4: {named} = apply &same(p.3)
   let x.5: float = apply &take(q.4)
   let t.6: obj = extern \"Prelude.Show Float.show\"(x.5)
   let u.7: unit = extern Prelude.println(t.6)
@@ -389,7 +335,7 @@ fn shared_struct_boxes_with_scalar_leaves() {
         "\
 layout (,,) {{ (,,)(tobj, tobj, tobj) }}
 fn main() -> unit {{
-  let w.0: tobj = uniform apply &make(())
+  let w.0: tobj = apply &make(())
   let x.1: int = apply &first(w.0)
   let y.2: obj = apply &third(w.0)
   let s.3: obj = extern \"Prelude.Show Int.show\"(x.1)

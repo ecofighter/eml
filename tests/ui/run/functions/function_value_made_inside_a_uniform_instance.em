@@ -1,6 +1,6 @@
--- 多相再帰の `keep_first` は一様 (`_`) な instance で動き、その中で作ったラムダは引数と結果を `tobj` で持つ。`main`
--- はそのラムダを `Int -> Int` や `Float -> Float` として型どおりの Repr で呼ぶので、`apply` が実行時に変換する
--- (docs/spec/lir.md の「`apply` の場所」)。
+-- 多相再帰の `keep_first` は一様 (`_`) な instance で動き、その中でラムダを作る。`main` はそのラムダを `Int -> Int` や
+-- `Float -> Float` として呼ぶ。関数の値は捕獲より後ろの引数と結果がいつも一様なので、作った所と呼ぶ所が違う型を
+-- 見ていても、`apply` は引数と結果を箱に入れて受け渡すだけでよい (docs/spec/lir.md の「関数の ABI」)。
 keep_first : Int -> a -> <Panic> (a -> <Panic> a)
 keep_first n x =
   if n == 0 then fn y -> if n == 0 then x else y

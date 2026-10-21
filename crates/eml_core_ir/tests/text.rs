@@ -2,7 +2,7 @@
 //! `pretty` で表示すると元のテキストに戻ることと、構文の誤りの報告を確かめる。
 
 use eml_core_ir::{Call, Program, Rhs, Stmt, parse, pretty};
-use eml_lir::{Atom, BlockId, Mark, MaskItem, ParseError, Repr, Site, VarId};
+use eml_lir::{Atom, BlockId, Mark, MaskItem, ParseError, Repr, VarId};
 
 /// 読んで表示し直すと元に戻ることを確かめ、読んだプログラムを返す。
 fn round_trip(text: &str) -> Program {
@@ -167,8 +167,8 @@ fn a_resume_round_trips() {
         "\
 effect State { get(tobj) -> tobj, put(tobj) -> tobj }
 fn f(k.0: tobj, s.1: int) -> int {
-  let t.2: int = mask [State] resume k.0(1: int, s.1)
-  let t.3: int = resume ()(t.2, (): unit)
+  let t.2: int = mask [State] resume k.0(1, s.1)
+  let t.3: int = resume ()(t.2, ())
   return t.3
 }
 ",
@@ -183,7 +183,6 @@ fn f(k.0: tobj, s.1: int) -> int {
                     k: v(0),
                     arg: Atom::Int(1),
                     state: v(1),
-                    site: vec![Repr::Int, Repr::Int],
                 },
                 mask: vec![MaskItem {
                     effect: 0,
@@ -201,8 +200,8 @@ fn a_mask_reads_back() {
         "\
 effect Main.State { get(tobj) -> tobj, put(tobj) -> tobj }
 fn entry$main(c.0: tobj) -> tobj {
-  let t.1: tobj = mask [Main.State*2] apply c.0((): unit)
-  let t.2: tobj = mask [Main.State] apply t.1((): unit)
+  let t.1: tobj = mask [Main.State*2] apply c.0(())
+  let t.2: tobj = mask [Main.State] apply t.1(())
   return t.2
 }
 ",
@@ -212,7 +211,7 @@ fn entry$main(c.0: tobj) -> tobj {
 effect Main.State { get(tobj) -> tobj, put(tobj) -> tobj }
 fn f(c.0: tobj, k.1: tobj) -> int {
   let t.2: int = mask [#3] call f(c.0, k.1)
-  let t.3: int = mask [Main.State] resume k.1(t.2, (): unit)
+  let t.3: int = mask [Main.State] resume k.1(t.2, ())
   let t.4: int = mask [Main.State] call f(c.0, t.3)
   return t.4
 }
@@ -409,10 +408,10 @@ b3:
 #[test]
 fn yields_marks_round_trip() {
     round_trip(
-        "yields fn f(c.0: tobj) -> tobj {\n  let t.1: tobj = yields apply c.0((): unit)\n  return t.1\n}\n",
+        "yields fn f(c.0: tobj) -> tobj {\n  let t.1: tobj = yields apply c.0(())\n  return t.1\n}\n",
     );
     round_trip(
-        "effect Ask { ask(unit) -> tobj }\ninternal yields fn g(c.0: tobj) -> tobj {\n  let t.1: tobj = mask [Ask] yields apply c.0((): unit)\n  return t.1\n}\n",
+        "effect Ask { ask(unit) -> tobj }\ninternal yields fn g(c.0: tobj) -> tobj {\n  let t.1: tobj = mask [Ask] yields apply c.0(())\n  return t.1\n}\n",
     );
 }
 
@@ -427,7 +426,7 @@ fn a_yields_mark_on_anything_but_apply_is_an_error() {
     );
 
     let error = parse_error(
-        "effect Ask { ask(unit) -> tobj }\nfn f(k.0: tobj) -> int {\n  let t.1: int = mask [Ask] yields resume k.0(1: int, (): unit)\n  return t.1\n}\n",
+        "effect Ask { ask(unit) -> tobj }\nfn f(k.0: tobj) -> int {\n  let t.1: int = mask [Ask] yields resume k.0(1, ())\n  return t.1\n}\n",
     );
     assert_eq!(error.line, 3);
     assert_eq!(
@@ -501,7 +500,7 @@ yields fn f(s.0: tobj, o.1: tobj, c.2: tobj, k.3: tobj) -> tobj {
   let t.10: tobj = mask [State] yields apply c.2(r.9)
   let p.11: tobj = perform State.get(())
   let q.12: tobj = perform never Fail.fail(p.11)
-  let v.13: tobj = resume k.3(q.12, (): unit)
+  let v.13: tobj = resume k.3(q.12, ())
   let h.14: tobj = handle State(s.0, c.2) { get: c.2, put: c.2 } return c.2
   let n.15: tobj = con Option #1(h.14)
   let x.16: tobj = closure g(n.15)
@@ -571,7 +570,7 @@ fn a_mask_with_two_items_reads_back() {
 effect State { get(unit) -> tobj }
 effect Yield { y(unit) -> tobj }
 fn f(c.0: tobj) -> tobj {
-  let t.2: tobj = mask [State, Yield@1] yields apply c.0((): unit)
+  let t.2: tobj = mask [State, Yield@1] yields apply c.0(())
   return t.2
 }
 ",
@@ -594,7 +593,7 @@ fn f(c.0: tobj) -> tobj {
 #[test]
 fn prompt_marker_round_trips() {
     let program = round_trip(
-        "fn f(b.1: tobj, ev.2: obj) -> obj {\n  let x.3: tobj poly = yields apply b.1((): unit) prompt ev.2\n  return ev.2\n}\n",
+        "fn f(b.1: tobj, ev.2: obj) -> obj {\n  let x.3: tobj poly = yields apply b.1(()) prompt ev.2\n  return ev.2\n}\n",
     );
     let Stmt::Let {
         rhs: Rhs::Call { call, .. },
@@ -609,16 +608,15 @@ fn prompt_marker_round_trips() {
     assert_eq!(atoms, vec![v(1), Atom::Unit]);
 }
 
-/// 一様な位置の始まりは `fn` の前に `uniform from N` で書き、型どおりの関数は何も書かない。`apply` の場所は、型どおりなら定数の引数にだけ
-/// `: repr` を書き、変数の引数の Repr は変数から読む。EP の一様な場所は `uniform apply` と書く
-/// (docs/spec/lir.md の「関数の ABI」と「`apply` の場所」)。
+/// 一様な位置の始まりは `fn` の前に `uniform from N` で書き、型どおりの関数は何も書かない
+/// (docs/spec/lir.md の「関数の ABI」)。
 #[test]
 fn splits_and_sites_round_trip() {
     let program = round_trip(
         "\
 fn f(c.0: tobj, x.1: int) -> tobj {
-  let t.2: tobj = apply c.0(#1: tobj, x.1)
-  let t.3: tobj = uniform apply t.2(x.1, ())
+  let t.2: tobj = apply c.0(#1, x.1)
+  let t.3: tobj = apply t.2(x.1, ())
   return t.3
 }
 internal yields uniform from 0 fn b(p.0: unit) -> tobj {
@@ -640,50 +638,4 @@ internal yields uniform from 1 fn f$k0(a.0: int, x.1: tobj) -> tobj {
     );
     let splits: Vec<Option<u32>> = program.functions.iter().map(|f| f.split).collect();
     assert_eq!(splits, [None, Some(0), Some(1), Some(0), Some(1), Some(1)]);
-    let sites: Vec<&Site> = program.functions[0].blocks[0]
-        .stmts
-        .iter()
-        .map(|stmt| match stmt {
-            Stmt::Let {
-                rhs:
-                    Rhs::Call {
-                        call: Call::Apply { site, .. },
-                        ..
-                    },
-                ..
-            } => site,
-            _ => panic!("expected an apply"),
-        })
-        .collect();
-    assert_eq!(
-        sites,
-        [&Site::Typed(vec![Repr::TObj, Repr::Int]), &Site::Uniform]
-    );
-}
-
-/// `: repr` は型どおりの場所の定数の引数にだけ書く。書き方を1つにするためである。
-#[test]
-fn a_site_repr_is_written_on_the_constants_of_a_typed_apply_only() {
-    let head = "fn f(c.0: tobj, x.1: int) -> tobj {\n";
-    let error = parse_error(&format!(
-        "{head}  let t.2: tobj = apply c.0(1)\n  return t.2\n}}\n"
-    ));
-    assert_eq!(
-        error.message,
-        "the constant argument `1` of a typed apply needs `: repr`"
-    );
-    let error = parse_error(&format!(
-        "{head}  let t.2: tobj = apply c.0(x.1: int)\n  return t.2\n}}\n"
-    ));
-    assert_eq!(
-        error.message,
-        "the variable argument `x.1` of an apply takes its repr from the variable"
-    );
-    let error = parse_error(&format!(
-        "{head}  let t.2: tobj = uniform apply c.0(1: int)\n  return t.2\n}}\n"
-    ));
-    assert_eq!(
-        error.message,
-        "a uniform apply writes no repr on its arguments"
-    );
 }

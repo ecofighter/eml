@@ -141,7 +141,6 @@ fn yield_points(
                     args: _,
                     yields,
                     prompt: _,
-                    site: _,
                 } => *yields,
                 Call::Clause { effect, op, .. } => {
                     operation(&program.effects, *effect, *op).resumable
@@ -291,8 +290,9 @@ impl<'a> Splitter<'a> {
     }
 
     /// 継続の関数 `f$kN` は κ に合成する値として生まれるので内部の関数にし、直接呼ばれるだけの合流のブロックの関数
-    /// `f$jJ` は内部の関数にしない (`internal`)。`f$kN` は再開の値を一様に受ける最後の1個の引数と結果を一様にし、`f$jJ`
-    /// は一様な位置を持たない (docs/spec/lir.md の「関数の ABI」、docs/spec/core-ir.md の「継続の関数」)。
+    /// `f$jJ` は内部の関数にしない (`internal`)。`f$kN` は捕獲 (生きている変数) より後ろの再開の値と結果を一様にする。
+    /// `f$jJ` は継続のコードからだけ末尾で呼ばれるので、結果だけを一様にし、そこで末尾呼び出しを保つ
+    /// (docs/spec/lir.md の「関数の ABI」、docs/spec/core-ir.md の「継続の関数」)。
     fn continuation(&self, idx: FnIdx, program: &Program, body: Out, internal: bool) -> CoreFn {
         let (vars, blocks) = body.compact();
         let mut function = CoreFn {
@@ -306,9 +306,8 @@ impl<'a> Splitter<'a> {
             ret_mark: self.source.ret_mark,
             blocks,
         };
-        if internal {
-            function.set_uniform_tail(1);
-        }
+        let captured = function.params().len() - usize::from(internal);
+        function.split = Some(captured as u32);
         function
     }
 

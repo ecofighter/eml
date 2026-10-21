@@ -3,7 +3,7 @@
 //! tests/contract.rs にある。
 
 use crate::common::{function, passes_text};
-use eml_lir::{Pass, contract, parse, pretty, verify_contracted, verify_flattened, verify_scopes};
+use eml_lir::{Pass, contract, parse, pretty, verify_flattened, verify_scopes};
 
 /// 入力と出力が、どちらも scope の段の verifier を通ることも確かめる。
 fn contract_text(text: &str) -> String {
@@ -172,7 +172,7 @@ fn by_call(x.0: int) -> int {
   return r.1
 }
 fn by_apply(f.0: tobj) -> tobj {
-  let r.1: tobj = apply f.0((): unit)
+  let r.1: tobj = apply f.0(())
   return r.1
 }
 yields fn by_clause(c.0: tobj, e.1: obj, s.2: obj) -> tobj {
@@ -190,7 +190,7 @@ fn not_returned(x.0: int) -> int {
       tail call by_call(x.0)
     }
     fn by_apply(f.0: tobj) -> tobj {
-      tail apply f.0((): unit)
+      tail apply f.0(())
     }
     yields fn by_clause(c.0: tobj, e.1: obj, s.2: obj) -> tobj {
       tail clause Ask.ask c.0(e.1, s.2)
@@ -203,10 +203,8 @@ fn not_returned(x.0: int) -> int {
 }
 
 #[test]
-fn an_incompatible_tail_position_call_becomes_tail() {
-    // `g` の `unit` は `f` の `obj` と互換でないが、末尾の位置の呼び出しは結果の Repr によらず末尾呼び出しになる。
-    // 結果の変換は VM の変換のフレームが行う
-    // (docs/spec/lir.md の「末尾の位置の呼び出し」)
+fn an_incompatible_tail_position_call_is_not_made_tail() {
+    // `g` の `unit` は `f` の `obj` と互換でないので、縮約は末尾呼び出しにしない (docs/spec/lir.md の「縮約」)
     let text = "\
 fn f() -> obj {
   let r.0: tobj = call g()
@@ -218,7 +216,8 @@ fn g() -> unit {
 ";
     insta::assert_snapshot!(contract_text(text), @"
     fn f() -> obj {
-      tail call g()
+      let r.0: tobj = call g()
+      return r.0
     }
     fn g() -> unit {
       return ()
@@ -228,8 +227,8 @@ fn g() -> unit {
 
 #[test]
 fn a_clause_call_returned_at_the_end_becomes_a_tail_call() {
-    // 節の呼び出しも、結果の Repr によらず末尾呼び出しになる。`g` では `Counter.put` の `unit` の結果が `obj` の
-    // `ret` と互換でないが、末尾呼び出しにする
+    // 節の呼び出しも、操作の結果が `ret` と互換なら末尾呼び出しになる。`g` では `Counter.put` の `unit` の結果が
+    // `obj` の `ret` と互換でないので、末尾呼び出しにしない
     let text = "\
 effect Counter { get(unit) -> int, put(int) -> unit }
 yields fn f(c.0: tobj, e.1: obj) -> int {
@@ -247,7 +246,8 @@ yields fn g(c.0: tobj, e.1: obj, n.2: int) -> obj {
       tail clause Counter.get c.0(e.1, ())
     }
     yields fn g(c.0: tobj, e.1: obj, n.2: int) -> obj {
-      tail clause Counter.put c.0(e.1, n.2)
+      let u.3: tobj = clause Counter.put c.0(e.1, n.2)
+      return u.3
     }
     ");
 }
@@ -290,7 +290,7 @@ fn h(s.0: obj) -> obj lin {
   return f.1
 }
 fn k(c.0: tobj) -> tobj lin {
-  let r.1: tobj poly = apply c.0((): unit)
+  let r.1: tobj poly = apply c.0(())
   return r.1
 }
 ";
@@ -309,7 +309,7 @@ fn k(c.0: tobj) -> tobj lin {
       return f.1
     }
     fn k(c.0: tobj) -> tobj lin {
-      tail apply c.0((): unit)
+      tail apply c.0(())
     }
     ");
 }
@@ -337,7 +337,7 @@ const VEC3: &str = "layout Vec3 { Vec3(float, float, float) }\n";
 #[test]
 fn a_multi_value_call_returned_in_order_becomes_tail() {
     // `let (x.0, .., x.n) = <呼び出し>` の直後の `return (x.0, .., x.n)` は、同じ並びで同じ順なら末尾呼び出しになる。
-    // 構造体を返す型どおりの `apply` も同じである
+    // `apply` の結果は `tobj` なので、構造体を返す `h` の `apply` は葉に開いて返し、末尾呼び出しにならない
     // (docs/spec/lir.md の「縮約」)
     let text = format!(
         "{VEC3}fn g(x.0: float) -> Vec3{{float, float, float}} {{
@@ -362,7 +362,10 @@ fn h(k.0: obj, x.1: float) -> Vec3{{float, float, float}} {{
     ");
     insta::assert_snapshot!(function(&shown, "h"), @"
     fn h(k.0: obj, x.1: float) -> (float, float, float) source(obj, float) -> Vec3{float, float, float} {
-      tail apply k.0(x.1) source(float) -> Vec3{float, float, float}
+      let x.3: tobj = box x.1
+      let v.4: tobj = apply k.0(x.3)
+      let (v.0.5: float, v.1.6: float, v.2.7: float) = unbox v.4 Vec3
+      return (v.0.5, v.1.6, v.2.7)
     }
     ");
 }
@@ -399,11 +402,11 @@ fn an_unused_struct_unbox_is_removed_and_the_call_becomes_tail() {
     let text = "\
 layout (,) { (,)(tobj, tobj) }
 internal uniform from 1 fn g(k.0: obj, p.1: (,){float, float}) -> tobj {
-  let r.2: tobj = uniform apply k.0(p.1)
+  let r.2: tobj = apply k.0(p.1)
   return r.2
 }
 fn h(k.0: obj, x.1: float) -> (,){float, float} {
-  let p.2: (,){float, float} = uniform apply k.0(x.1)
+  let p.2: (,){float, float} = apply k.0(x.1)
   let q.3: (,){float, float} = call h(k.0, 2.0)
   return q.3
 }
@@ -411,13 +414,13 @@ fn h(k.0: obj, x.1: float) -> (,){float, float} {
     let shown = passes_text(text, Pass::Contract);
     insta::assert_snapshot!(function(&shown, "g"), @"
     internal uniform from 1 fn g(k.0: obj, p.3: tobj) -> tobj {
-      tail uniform apply k.0(p.3)
+      tail apply k.0(p.3)
     }
     ");
     insta::assert_snapshot!(function(&shown, "h"), @"
     fn h(k.0: obj, x.1: float) -> (float, float) source(obj, float) -> (,){float, float} {
       let x.4: tobj = box x.1
-      let p.5: tobj = uniform apply k.0(x.4)
+      let p.5: tobj = apply k.0(x.4)
       tail call h(k.0, 2.0)
     }
     ");
@@ -430,7 +433,7 @@ fn an_unused_unbox_of_a_lin_box_after_a_tail_position_call_is_removed() {
     let text = "\
 layout Tok { Tok(int, float) }
 internal uniform from 1 fn f(k.0: obj, u.1: unit) -> Tok{int, float} lin {
-  let t.2: Tok{int, float} lin = uniform apply k.0(1)
+  let t.2: Tok{int, float} lin = apply k.0(1)
   unpack t.2 Tok #0(n.3: int, x.4: float)
   let m.5: enum = extern \"Prelude.Ord Int.<\"(n.3, 1)
   return t.2
@@ -439,7 +442,7 @@ internal uniform from 1 fn f(k.0: obj, u.1: unit) -> Tok{int, float} lin {
     insta::assert_snapshot!(function(&passes_text(text, Pass::Contract), "f"), @"
     internal uniform from 1 fn f(k.0: obj, u.1: unit) -> tobj lin {
       let b.6: tobj = box 1
-      tail uniform apply k.0(b.6)
+      tail apply k.0(b.6)
     }
     ");
 }
@@ -465,7 +468,7 @@ fn f(k.0: obj, w.1: obj lin) -> int {
         panic!("the input must verify: {error}\n{text}");
     }
     contract(&mut program);
-    if let Err(error) = verify_contracted(&program) {
+    if let Err(error) = verify_flattened(&program) {
         panic!("the output must verify: {error}");
     }
     insta::assert_snapshot!(function(&pretty(&program), "f"), @"

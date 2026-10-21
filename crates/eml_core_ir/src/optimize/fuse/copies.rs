@@ -435,19 +435,9 @@ impl Fuser<'_> {
     fn build(&self, key: &Key, name: String) -> CoreFn {
         let mut function = self.functions[key.callee.0 as usize].clone();
         function.name = name;
-        // 一様な位置を開くと末尾の引数の並びが変わるので、複製は型どおりに呼ぶ関数にする。開く位置が `split` より前なら、
-        // 後ろの一様な引数の数は変わらない (docs/spec/core-ir.md の「`con` の値の形についての特殊化」)
-        let uniform_tail = function
-            .split
-            .map_or(0, |at| function.params().len() - at as usize);
-        let opens_uniform = function.split.is_some_and(|at| {
-            key.args
-                .iter()
-                .any(|&(position, _)| position >= at as usize)
-        });
-        if opens_uniform {
-            function.split = None;
-        }
+        // 開いた位置とその前は型どおりにし、後ろの一様な位置だけを保つ (docs/spec/core-ir.md の
+        // 「`con` の値の形についての特殊化」)
+        let mut widths = Vec::new();
         let mut params = Vec::new();
         let mut rebuilt = Vec::new();
         for (position, param) in function.params().to_vec().into_iter().enumerate() {
@@ -458,6 +448,7 @@ impl Fuser<'_> {
             let ArgShape::Con { ctor, fields } = shape else {
                 unreachable!("the fusion keys hold only con shapes");
             };
+            let before = params.len();
             let info = function.vars[param.0 as usize].clone();
             let limit = info.mark;
             let capped = |mark: Mark| if mark.at_least(limit) { limit } else { mark };
@@ -516,6 +507,7 @@ impl Fuser<'_> {
                     }
                 }
             }
+            widths.push((position, params.len() - before));
             rebuilt.push(Stmt::Let {
                 var: param,
                 rhs: Rhs::Con {
@@ -528,9 +520,7 @@ impl Fuser<'_> {
         entry.params = params;
         rebuilt.append(&mut entry.stmts);
         entry.stmts = rebuilt;
-        if function.split.is_some() {
-            function.set_uniform_tail(uniform_tail);
-        }
+        function.split = function.copy_split(&widths);
         function
     }
 }

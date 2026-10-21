@@ -5,7 +5,7 @@
 use eml_extern::Extern;
 use eml_lir::{
     Atom, BlockId, Case, Ctor, EffectInfo, FnIdx, Layout, LayoutId, Loc, Mark, MaskItem, Prim,
-    Repr, Site, Structs, VarId, VarInfo,
+    Repr, Structs, VarId, VarInfo,
 };
 
 mod builder;
@@ -83,14 +83,17 @@ pub struct CoreFn {
 }
 
 impl CoreFn {
-    /// 最後の `count` 個の引数と結果を一様にする。`count` が 0 なら型どおりの関数にする。
-    pub fn set_uniform_tail(&mut self, count: usize) {
-        debug_assert!(
-            count <= self.params().len(),
-            "{} has fewer parameters than the {count} to make uniform",
-            self.name
-        );
-        self.split = (count > 0).then(|| self.params().len().saturating_sub(count) as u32);
+    /// 複製の `split`。`opened` は、鍵が開いた元の引数の位置と、その位置に入る新しい引数の数の組である。複製は元の
+    /// 一様な位置のうち、開いた位置より後ろのものだけを一様に保つ。開いた位置とその前は型どおりにし、捕獲より前には
+    /// 下げない (docs/spec/core-ir.md の「`con` の値の形についての特殊化」)。
+    pub(crate) fn copy_split(&self, opened: &[(usize, usize)]) -> Option<u32> {
+        let split = self.split? as usize;
+        let first = opened
+            .iter()
+            .map(|&(position, _)| position + 1)
+            .fold(split, usize::max);
+        let added: usize = opened.iter().map(|&(_, count)| count).sum();
+        Some((first + added - opened.len()) as u32)
     }
 
     pub fn params(&self) -> &[VarId] {
@@ -368,8 +371,6 @@ pub enum Call {
         /// フレームまで VM のスタックを巻き戻す。`v` は呼び出しが消費も読みもしないので `for_each_atom` は
         /// 見せず、呼び出しの後も生きている `obj` の変数である (docs/spec/lir.md の「着地の印」)。
         prompt: Option<VarId>,
-        /// 引数を渡す規約 (`eml_lir::Site`)。
-        site: Site,
     },
     /// handler を設け、本体の関数に `()` を適用する。translate だけが出し、EP が基本操作と `prompt$` の呼び出しに
     /// 置き換える (docs/spec/core-ir.md の「handle と `prompt$`」)。本体と節と `return` の節は、捕まえた変数を先頭の
@@ -393,16 +394,7 @@ pub enum Call {
     },
     /// 継続を再開する。`state` は再開した handler の次の状態で、値は handle 式の値である。translate だけが出し、EP が
     /// `apply` に置き換える (docs/spec/core-ir.md の「再開と状態」)。
-    ///
-    /// `site` は再開の値と状態の Repr で、型どおりの `apply` の場所 (`eml_lir::Site::Typed`) と同じく translate が型から
-    /// 決める。handler への特殊化が `resume` を `apply` に変えるときに場所として写す
-    /// (docs/spec/lir.md の「`apply` の場所」)。
-    Resume {
-        k: Atom,
-        arg: Atom,
-        state: Atom,
-        site: Vec<Repr>,
-    },
+    Resume { k: Atom, arg: Atom, state: Atom },
     /// 操作の in-place の入口のクロージャ `callee` を呼ぶ。`args` の先頭は evidence (`obj`)、残りは操作の引数で、
     /// 引数と結果の Repr は操作の表の `params` と `ret` から取る。`mask` は持たない
     /// (docs/spec/lir.md の「節の呼び出し」)。
@@ -438,7 +430,6 @@ impl Call {
                 args,
                 yields: _,
                 prompt: _,
-                site: _,
             }
             | Call::Clause {
                 effect: _,
@@ -461,12 +452,7 @@ impl Call {
                 clauses.iter().for_each(|&atom| f(atom));
                 f(*ret);
             }
-            Call::Resume {
-                k,
-                arg,
-                state,
-                site: _,
-            } => {
+            Call::Resume { k, arg, state } => {
                 f(*k);
                 f(*arg);
                 f(*state);
@@ -488,7 +474,6 @@ impl Call {
                 args,
                 yields: _,
                 prompt: _,
-                site: _,
             }
             | Call::Clause {
                 effect: _,
@@ -511,12 +496,7 @@ impl Call {
                 clauses.iter_mut().for_each(&mut f);
                 f(ret);
             }
-            Call::Resume {
-                k,
-                arg,
-                state,
-                site: _,
-            } => {
+            Call::Resume { k, arg, state } => {
                 f(k);
                 f(arg);
                 f(state);

@@ -167,7 +167,7 @@ fn f(n.0: int, s.1: obj) -> obj {
 fn landing_is_the_prompt_variable() {
     let text = "\
 yields fn f(b.0: tobj, ev.1: obj) -> obj {
-  let x.2: tobj = yields apply b.0((): unit) prompt ev.1
+  let x.2: tobj = yields apply b.0(()) prompt ev.1
   decref x.2
   return ev.1
 }
@@ -320,7 +320,7 @@ fn f(x.0: tobj, s.1: obj) -> obj {
   return s.1
 }
 fn h(c.0: tobj) -> tobj {
-  tail apply c.0((): unit)
+  tail apply c.0(())
 }
 ";
     assert_eq!(points_of(text, "f"), [point(0, 0, &[(1, 1)], None)]);

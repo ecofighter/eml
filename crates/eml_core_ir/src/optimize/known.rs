@@ -5,7 +5,7 @@ use std::collections::{HashMap, HashSet};
 
 use super::specialize::{ClosureShape, Key, Specializer};
 use crate::{Call, CoreFn, Rhs, Stmt, Term};
-use eml_lir::{Atom, Ctor, FnIdx, Mark, MaskItem, Repr, Site, VarId, VarInfo};
+use eml_lir::{Atom, Ctor, FnIdx, Mark, MaskItem, Repr, VarId, VarInfo};
 
 /// 呼ぶ相手と、すでに渡した先頭の引数が分かっている関数の値。
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -531,7 +531,6 @@ fn uses(function: &CoreFn) -> HashMap<VarId, Vec<Use>> {
                                     args,
                                     yields: _,
                                     prompt: _,
-                                    site: _,
                                 },
                             mask,
                         },
@@ -672,7 +671,7 @@ pub(crate) fn replace(
     match call {
         Call::Direct(target, args) => {
             let callee = &callees[target.0 as usize];
-            let rhs = instruction(vars, callee, args.clone(), mask)?;
+            let rhs = instruction(callee, args.clone(), mask)?;
             Some(vec![Stmt::Let { var, rhs }])
         }
         Call::Apply {
@@ -680,7 +679,6 @@ pub(crate) fn replace(
             args,
             yields,
             prompt,
-            site,
         } => {
             let closure = match *callee {
                 Atom::Fn(target) => KnownClosure {
@@ -704,13 +702,12 @@ pub(crate) fn replace(
                 }]);
             }
             let rest = given.split_off(callee.arity);
-            let rhs = saturated(vars, closure.function, callee, given, mask);
+            let rhs = saturated(closure.function, callee, given, mask);
             if rest.is_empty() {
                 return Some(vec![Stmt::Let { var, rhs }]);
             }
             // 余った引数は、translate の既知の呼び出しと同じく、結果の関数の値に `apply` する。`mask` が空のときだけ
-            // ここに来るので、分けても `mask` の掛かる範囲は変わらない。余った引数は `apply` の引数の後ろの部分なので、
-            // 場所も後ろの部分を写す
+            // ここに来るので、分けても `mask` の掛かる範囲は変わらない
             let result = fresh(
                 vars,
                 VarInfo {
@@ -726,12 +723,6 @@ pub(crate) fn replace(
                     rhs: Rhs::Call {
                         call: Call::Apply {
                             callee: Atom::Var(result),
-                            site: match site {
-                                Site::Typed(reprs) => {
-                                    Site::Typed(reprs[reprs.len() - rest.len()..].to_vec())
-                                }
-                                Site::Uniform => Site::Uniform,
-                            },
                             args: rest,
                             yields: *yields,
                             prompt: *prompt,
@@ -747,14 +738,8 @@ pub(crate) fn replace(
 
 /// 引数のそろった呼び出し。包む関数は直接呼ばず、包んでいる命令に戻す。`op$` と `con$` は値と部分適用でだけ使われる
 /// (docs/spec/core-ir.md の「REPL の入力」)。
-fn saturated(
-    vars: &[VarInfo],
-    target: FnIdx,
-    callee: &Callee,
-    args: Vec<Atom>,
-    mask: &[MaskItem],
-) -> Rhs {
-    instruction(vars, callee, args.clone(), mask).unwrap_or_else(|| Rhs::Call {
+fn saturated(target: FnIdx, callee: &Callee, args: Vec<Atom>, mask: &[MaskItem]) -> Rhs {
+    instruction(callee, args.clone(), mask).unwrap_or_else(|| Rhs::Call {
         call: Call::Direct(target, args),
         mask: mask.to_vec(),
     })
@@ -762,12 +747,7 @@ fn saturated(
 
 /// 包む関数 `callee` の命令に `args` を渡す右辺。包む関数でないか、`perform` に `mask` が付くなら `None` を返す。
 /// `perform` は `mask` を持てないためである。
-fn instruction(
-    vars: &[VarInfo],
-    callee: &Callee,
-    args: Vec<Atom>,
-    mask: &[MaskItem],
-) -> Option<Rhs> {
+fn instruction(callee: &Callee, args: Vec<Atom>, mask: &[MaskItem]) -> Option<Rhs> {
     match callee.wrapper? {
         Wrapper::Perform {
             effect,
@@ -784,32 +764,13 @@ fn instruction(
         }),
         // `con` はエフェクトを起こさないので `mask` は要らない
         Wrapper::Con(ctor) => Some(Rhs::Con { ctor, args }),
-        Wrapper::Resume { stateful } => {
+        Wrapper::Resume { stateful: _ } => {
             let mut args = args.into_iter();
             let k = args.next().expect("a continuation wrapper takes k");
             let arg = args.next().expect("a continuation wrapper takes a value");
             let state = args.next().unwrap_or(Atom::Unit);
-            // 定数の引数の Repr は型ごとの `cont$` の引数の Repr である。translate の `resume` の場所と同じく
-            // `k` の型から決まる。状態のない handler の状態は `()` である
-            let state_repr = if stateful {
-                callee.params[2].repr
-            } else {
-                Repr::Unit
-            };
-            let site = [(arg, callee.params[1].repr), (state, state_repr)]
-                .into_iter()
-                .map(|(atom, param)| match atom {
-                    Atom::Var(var) => vars[var.0 as usize].repr,
-                    _ => param,
-                })
-                .collect();
             Some(Rhs::Call {
-                call: Call::Resume {
-                    k,
-                    arg,
-                    state,
-                    site,
-                },
+                call: Call::Resume { k, arg, state },
                 mask: mask.to_vec(),
             })
         }

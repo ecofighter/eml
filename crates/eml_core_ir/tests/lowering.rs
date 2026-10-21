@@ -105,7 +105,7 @@ fn lowering_rejects_a_mask() {
         "\
 effect State { get(unit) -> tobj }
 fn f(c.0: tobj) -> tobj {
-  let t.1: tobj = mask [State] apply c.0((): unit)
+  let t.1: tobj = mask [State] apply c.0(())
   return t.1
 }
 ",

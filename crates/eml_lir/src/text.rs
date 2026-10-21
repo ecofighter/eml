@@ -14,7 +14,6 @@ pub fn parse(text: &str) -> Result<Program, ParseError> {
     let tokens = syntax::lex(text)?;
     let mut parser = Parser {
         reader: Reader::new(&tokens),
-        written_sites: Vec::new(),
     };
     parser.reader.declarations()?;
     let mut functions = Vec::new();
@@ -35,9 +34,6 @@ pub fn parse(text: &str) -> Result<Program, ParseError> {
 
 struct Parser<'t> {
     reader: Reader<'t>,
-    /// 読んでいる関数の `apply` ごとの、`source(..)` で場所を書いたかどうか。読んだ順に並ぶ。書いた場所は変数から
-    /// 埋めない。
-    written_sites: Vec<bool>,
 }
 
 impl Parser<'_> {
@@ -54,29 +50,6 @@ impl Parser<'_> {
             blocks.push(self.block(&mut state, params)?);
         }
         let vars = self.reader.function_vars(state, blocks.len())?;
-        // 文と終端を読んだ順にたどるので、`apply` は `written_sites` と同じ順に現れる
-        let mut written = std::mem::take(&mut self.written_sites).into_iter();
-        for block in &mut blocks {
-            let calls = block.stmts.iter_mut().filter_map(|stmt| match stmt {
-                Stmt::Let {
-                    var: _,
-                    rhs: Rhs::Call(call),
-                }
-                | Stmt::LetMany { vars: _, call } => Some(call),
-                _ => None,
-            });
-            let tail = match &mut block.term {
-                Term::TailCall(call) => Some(call),
-                _ => None,
-            };
-            for call in calls.chain(tail) {
-                if let Call::Apply { args, site, .. } = call
-                    && written.next() == Some(false)
-                {
-                    syntax::fill_site(site, args, &vars);
-                }
-            }
-        }
         Ok(LirFn {
             name: header.name,
             internal: header.internal,
@@ -285,7 +258,7 @@ impl Parser<'_> {
             Some(word) => word,
             _ => return Err(self.reader.error_here("expected a right-hand side")),
         };
-        if matches!(keyword, "call" | "yields" | "uniform" | "apply" | "clause") {
+        if matches!(keyword, "call" | "yields" | "apply" | "clause") {
             return Ok(Rhs::Call(self.call(state)?));
         }
         self.reader.bump();
@@ -330,16 +303,13 @@ impl Parser<'_> {
     fn call(&mut self, state: &mut FnState) -> Result<Call, ParseError> {
         let line = self.reader.line();
         let word = self.reader.word()?;
-        if let Some((yields, uniform)) = self.reader.apply_head(&word)? {
-            let parts = self.reader.apply(state, uniform)?;
-            self.written_sites.push(parts.source.is_some());
+        if let Some(yields) = self.reader.apply_head(&word)? {
+            let parts = self.reader.apply(state)?;
             return Ok(Call::Apply {
                 callee: parts.callee,
                 args: parts.args,
                 yields,
                 prompt: parts.prompt,
-                site: parts.site,
-                source_ret: parts.source.flatten(),
             });
         }
         match word.as_str() {

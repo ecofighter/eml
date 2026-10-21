@@ -14,14 +14,16 @@ const APPLY_TO: &str =
 /// 自分のコードのまま残る。`hide` は自分を呼ぶので展開されず、取り出した値は呼ぶ側から見えない。
 const HIDE: &str = "data Box a = | Box a\n\nhide : Int -> a -> <Panic> Box a\nhide n x = if n <= 0 then Box x else hide (n - 1) x\n\n";
 
-/// 値としてだけ使うラムダも型どおりの ABI を持つ。`apply` が実行時に Repr を合わせるので、一様にしない
-/// (docs/spec/lir.md の「関数の ABI」)。
+/// 持ち主の一族のコードが直接だけ呼ぶラムダは型どおりの ABI を持つ。このラムダを値として参照するのは `hide` の複製
+/// だけなので型どおりのままで、その値の参照は一様な版 `main$lambda0$uniform` が受ける
+/// (docs/spec/core-ir.md の「直接だけ呼ばれる持ち上げた関数」、docs/spec/lir.md の「関数の ABI」)。
 #[test]
 fn a_lambda_used_only_as_a_value_keeps_its_typed_abi() {
     let text = format!(
         "{HIDE}{APPLY_TO}main : Unit -> <IO, Panic> Unit\nmain () =\n  let Box f = hide 0 (fn n -> n + 1)\n  println (show (apply_to f 2))"
     );
     let shown = lir_text(&text, eml_lir::Pass::Boxing);
+    assert!(shown.contains("fn main$lambda0$uniform("), "{shown}");
     insta::assert_snapshot!(function(&shown, "main$lambda0"), @r#"
     internal fn main$lambda0(n.0: int) -> int {
       let t.1: int = extern "Prelude.Num Int.+"(n.0, 1)
@@ -76,9 +78,9 @@ fn shared_wrappers_are_never_called_directly() {
 }
 
 #[test]
-fn no_boxed_wrapper_is_made() {
-    // 値として使うトップレベルの関数も型どおりの ABI のまま名前で参照し、`apply` が実行時に Repr を合わせる。一様な
-    // 包み `f$boxed` は作らない (docs/spec/lir.md の「関数の ABI」)
+fn a_top_level_function_used_as_a_value_keeps_its_typed_abi() {
+    // 値として使うトップレベルの関数は型どおりの ABI のまま残り、値の参照は一様な版 `inc$uniform` に向く。版のほかに
+    // 一様な包み `f$boxed` は作らない (docs/spec/lir.md の「関数の ABI」)
     let text = format!(
         "{HIDE}inc : Int -> <Panic> Int\ninc n = n + 1\n\n{APPLY_TO}main : Unit -> <IO, Panic> Unit\nmain () =\n  let Box f = hide 0 inc\n  println (show (apply_to f 2))"
     );
@@ -99,6 +101,7 @@ fn no_boxed_wrapper_is_made() {
     }
     "#);
     assert!(shown.contains("{1=inc}"), "{shown}");
+    assert!(shown.contains("&inc$uniform"), "{shown}");
 }
 
 #[test]
@@ -136,7 +139,9 @@ fn int_constants_are_boxed_and_other_constants_pass_as_they_are() {
       let t.1: Box{tobj} = call "hide@#29c654b2da42db65"(0)
       unpack t.1 Box #0(count.2: tobj)
       let d.3: Four{int, unit, enum, tobj} = con Four #0(5, (), #1, &"id@[_]")
-      let t.4: int = apply count.2(d.3)
+      let d.7: obj = box d.3
+      let t.8: tobj = apply count.2(d.7)
+      let t.4: int = unbox t.8
       let t.5: obj = extern "Prelude.Show Int.show"(t.4)
       let t.6: unit = extern Prelude.println(t.5)
       return t.6
@@ -166,16 +171,19 @@ fn a_value_unboxed_by_the_pass_is_passed_on_without_a_new_box() {
 }
 
 #[test]
-fn applies_of_a_typed_function_value_convert_nothing() {
-    // 型どおりの場所の `apply` は引数と結果を型どおりの Repr で渡すので、`apply` の結果をもう一度 `apply` に渡すときも
-    // 変換しない (docs/spec/lir.md の「`apply` の場所」)
+fn an_apply_result_goes_to_the_next_apply_in_its_box() {
+    // `apply` は引数と結果を一様な `tobj` で渡す。`apply` の結果をもう一度 `apply` に渡すときは、箱のまま渡し、取り出し
+    // 直さない (docs/spec/lir.md の「box の挿入」)
     let text = format!(
         "{HIDE}twice_plus : (Int -> Int) -> Int -> <Panic> Int\ntwice_plus f x = f (f x) + 1\n\nmain : Unit -> <IO, Panic> Unit\nmain () =\n  let Box f = hide 0 (fn n -> n)\n  let Box twice_plus = hide 0 twice_plus\n  println (show (twice_plus f 1))"
     );
     insta::assert_snapshot!(function(&lir_text(&text, eml_lir::Pass::Boxing), "twice_plus"), @r#"
     fn twice_plus(f.0: tobj, x.1: int) -> int {
-      let t.2: int = apply f.0(x.1)
-      let t.3: int = apply f.0(t.2)
+      let x.5: tobj = box x.1
+      let t.6: tobj = apply f.0(x.5)
+      let t.2: int = unbox t.6
+      let t.7: tobj = apply f.0(t.6)
+      let t.3: int = unbox t.7
       let t.4: int = extern "Prelude.Num Int.+"(t.3, 1)
       return t.4
     }
@@ -288,9 +296,9 @@ fn a_value_lambda_that_fails_ends_in_a_tail_never_clause() {
 
 #[test]
 fn a_chain_of_tail_calls_keeps_its_typed_rets() {
-    // 関数の `ret` は型と `split` だけで決まり、パスが上げない。`apply_to` は末尾の位置の `apply` でも `int` を返し、それを
-    // 末尾の位置で呼ぶ `via` も `int` を返す。`through` は、呼び出しと `return` の間に使われない純粋な `let` があっても
-    // 末尾呼び出しになる。`apply_to` は自分を呼ぶので `via` に展開されず、`via` と `through` はデータを通して呼ぶので
+    // 関数の `ret` は型と `split` だけで決まり、パスが上げない。`apply_to` は `int` を返すので、結果が `tobj` の末尾の
+    // 位置の `apply` は末尾呼び出しにならず、結果を取り出して返す。`apply_to` を末尾の位置で呼ぶ `via` も `int` を返し、
+    // 末尾呼び出しになる。`through` の `apply` も同じく末尾呼び出しにならない。`apply_to` は自分を呼ぶので `via` に展開されず、`via` と `through` はデータを通して呼ぶので
     // `main` に展開されない (docs/spec/lir.md の「関数の ABI」)
     let text = format!(
         "{HIDE}apply_to : (Int -> Int) -> Int -> <Panic> Int\napply_to f x = if x > 9 then apply_to f (x - 1) else f x\n\nvia : Int -> <Panic> Int\nvia x =\n  let Box f = hide 0 (fn n -> n)\n  apply_to f x\n\nthrough : (Int -> Int) -> Int -> Int\nthrough f x =\n  let r = f x\n  let s = \"unused\"\n  r\n\nmain : Unit -> <IO, Panic> Unit\nmain () =\n  let Box g = hide 0 (fn n -> n)\n  let Box via = hide 0 via\n  let Box through = hide 0 through\n  println (show (via 1 + through g 2))"
@@ -301,7 +309,10 @@ fn a_chain_of_tail_calls_keeps_its_typed_rets() {
       let t.2: enum = extern "Prelude.Ord Int.>"(x.1, 9)
       switch t.2 Prelude.Bool { #0 -> b1, #1 -> b2 }
     b1:
-      tail apply f.0(x.1)
+      let x.6: tobj = box x.1
+      let t.7: tobj = apply f.0(x.6)
+      let t.5: int = unbox t.7
+      return t.5
     b2:
       let t.3: int = extern "Prelude.Num Int.-"(x.1, 1)
       tail call apply_to(f.0, t.3)
@@ -315,16 +326,23 @@ fn a_chain_of_tail_calls_keeps_its_typed_rets() {
     "#);
     insta::assert_snapshot!(function(&shown, "through"), @"
     fn through(f.0: tobj poly, x.1: int) -> int {
-      tail apply f.0(x.1)
+      let x.4: tobj = box x.1
+      let t.5: tobj = apply f.0(x.4)
+      let t.2: int = unbox t.5
+      return t.2
     }
     ");
     insta::assert_snapshot!(function(&shown, "entry$main"), @r#"
     fn entry$main() -> unit {
-      let t.0.12: tobj = call "hide@[Int -> Int]{1=main$lambda0}"(0)
-      let t.0.13: tobj = call "hide@[Int -> <Panic> Int]{1=via}"(0)
-      let t.0.14: tobj = call "hide@[(Int -> Int) -> Int -> Int]{1=through}"(0)
-      let t.7: int = apply t.0.13(1: int)
-      let t.8: int = apply t.0.14(t.0.12, 2: int)
+      let t.0.16: tobj = call "hide@[Int -> Int]{1=main$lambda0}"(0)
+      let t.0.17: tobj = call "hide@[Int -> <Panic> Int]{1=via}"(0)
+      let t.0.18: tobj = call "hide@[(Int -> Int) -> Int -> Int]{1=through}"(0)
+      let b.12: tobj = box 1
+      let t.13: tobj = apply t.0.17(b.12)
+      let t.7: int = unbox t.13
+      let b.14: tobj = box 2
+      let t.15: tobj = apply t.0.18(t.0.16, b.14)
+      let t.8: int = unbox t.15
       let t.9: int = extern "Prelude.Num Int.+"(t.7, t.8)
       let t.10: obj = extern "Prelude.Show Int.show"(t.9)
       let t.11: unit = extern Prelude.println(t.10)
@@ -334,16 +352,16 @@ fn a_chain_of_tail_calls_keeps_its_typed_rets() {
 }
 
 #[test]
-fn a_body_ending_in_a_typed_call_makes_it_a_tail_call() {
-    // handle の本体は `split` で結果が一様な `tobj` になり、`Int` を返す `answer` を末尾の位置で呼ぶ。box の挿入は結果を
-    // 変換せず、縮約が末尾呼び出しにする。結果の変換は VM の変換のフレームが行う
-    // (docs/spec/lir.md の「末尾の位置の呼び出し」)
+fn a_body_ending_in_a_typed_call_tail_calls_its_uniform_variant() {
+    // handle の本体は `split` で結果が一様な `tobj` になり、`Int` を返す `answer` を末尾の位置で呼ぶ。この呼び出しは
+    // 一様な版 `answer$uniform` に向き、引数を箱に入れた末尾呼び出しになる (docs/spec/lir.md の「末尾の位置の呼び出し」)
     let text = format!(
         "effect Ask where\n  ask : Unit -> Int\n\n{HIDE}answer : Int -> <Ask, Panic> Int\nanswer n =\n  if n > 0 then answer (n - 1)\n  else\n    let Box q = hide 0 ask\n    q () + 1\n\nmain : Unit -> <IO, Panic> Unit\nmain () =\n  let r = handle answer 0 with\n    | ctl ask () k -> k 1\n  println (show r)"
     );
     insta::assert_snapshot!(function(&lir_text(&text, eml_lir::Pass::Contract), "main$handle0"), @"
     internal yields uniform from 0 fn main$handle0(p.0: unit) -> tobj {
-      tail call answer(0)
+      let b.2: tobj = box 0
+      tail call answer$uniform(b.2)
     }
     ");
 }

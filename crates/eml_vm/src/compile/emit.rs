@@ -3,8 +3,8 @@
 use eml_extern::{Extern, OpRet};
 use eml_lir::unwind::UnwindPoint;
 use eml_lir::{
-    Atom, BlockId, Call, Ctor, FnIdx, LayoutCtor, LirFn, Loc, Program, Repr, Rhs, Shape, Site,
-    Stmt, Term, VarId,
+    Atom, BlockId, Call, Ctor, FnIdx, LayoutCtor, LirFn, Loc, Program, Repr, Rhs, Shape, Stmt,
+    Term, VarId,
 };
 use eml_rt::{MaskItem, Mode};
 
@@ -204,6 +204,17 @@ impl<'a, M: Mode> Emitter<'a, '_, M> {
         }
     }
 
+    /// 定数の `#N` と関数は `tobj` の位置の値として読む。
+    fn atom_repr(&self, atom: Atom) -> Repr {
+        match atom {
+            Atom::Var(var) => self.repr(var),
+            Atom::Int(_) => Repr::Int,
+            Atom::Float(_) => Repr::Float,
+            Atom::Unit => Repr::Unit,
+            Atom::Tag(_) | Atom::Fn(_) => Repr::TObj,
+        }
+    }
+
     /// 源の単位の Repr が占める語の Repr。構造体は `unit` でない葉に開く。
     fn leaf_reprs(&self, repr: Repr) -> Vec<Repr> {
         match repr {
@@ -345,12 +356,11 @@ impl<'a, M: Mode> Emitter<'a, '_, M> {
             Stmt::LetMany { vars, call } => {
                 let at = match call {
                     Call::Direct(f, args) => self.call_operands(*f, args),
-                    Call::Apply { source_ret, .. } => {
-                        let ret = source_ret.expect("a multi-value apply has a struct result");
-                        self.apply_operands(call, ret)
-                    }
-                    Call::Clause { .. } => {
-                        unreachable!("an operation returns one value (docs/spec/lir.md)")
+                    // `apply` の結果はいつも一様な1語である (docs/spec/lir.md の「関数の ABI」)
+                    Call::Apply { .. } | Call::Clause { .. } => {
+                        unreachable!(
+                            "an apply and an operation return one value (docs/spec/lir.md)"
+                        )
                     }
                 };
                 let dsts: Vec<u32> = vars.iter().map(|&var| u32::from(self.slot(var))).collect();
@@ -632,19 +642,9 @@ impl<'a, M: Mode> Emitter<'a, '_, M> {
                 let at = self.clause_operands(call);
                 self.out.push(Op::Clause { dst, at });
             }
-            Rhs::Call(
-                call @ Call::Apply {
-                    site, source_ret, ..
-                },
-            ) => {
-                // 一様な場所の結果は `tobj` で、box の挿入が束縛をそれに合わせてある。葉が1つの構造体の結果は、源の
-                // Repr を持つ
-                let ret = match (site, source_ret) {
-                    (_, Some(ret)) => *ret,
-                    (Site::Typed(_), None) => self.repr(var),
-                    (Site::Uniform, None) => Repr::TObj,
-                };
-                let at = self.apply_operands(call, ret);
+            Rhs::Call(call @ Call::Apply { .. }) => {
+                // box の挿入が束縛を `tobj` に合わせてあるので、パイプラインの出す `apply` は変換を通らない
+                let at = self.apply_operands(call, self.repr(var));
                 self.out.push(Op::Apply { dst, at });
             }
             Rhs::Prim(prim, args) => {
@@ -777,23 +777,14 @@ impl<'a, M: Mode> Emitter<'a, '_, M> {
         )
     }
 
-    /// `apply` のオペランド [呼ばれる値, n, 場所のシグネチャ, 引数…]。場所のシグネチャは引数を `apply` が持つ Repr で、
-    /// 結果を `ret` で持つ。一様な場所の引数はすべて `tobj` である。`ret` は型どおりの
-    /// 場所では束縛の Repr、一様な場所では `tobj` で、末尾の位置ではどちらも関数の `ret` である
-    /// (docs/spec/lir.md の「`apply` の場所」)。
+    /// `apply` のオペランド [呼ばれる値, n, 場所のシグネチャ, 引数…]。場所のシグネチャは引数をその Repr で、
+    /// 結果を `ret` で持つ。`ret` は束縛の位置では束縛の Repr、末尾の位置では関数の `ret` である。verifier を
+    /// 通った IR ではどれも `tobj` になる (docs/spec/lir.md の「関数の ABI」)。
     fn apply_operands(&mut self, call: &Call, ret: Repr) -> u32 {
-        let Call::Apply {
-            callee, args, site, ..
-        } = call
-        else {
+        let Call::Apply { callee, args, .. } = call else {
             unreachable!("apply operands are made for an apply")
         };
-        // 型どおりの場所は源の引数ごとに Repr を持ち、引数は構造体を葉に開いた並びである。変数の引数の場所の Repr は
-        // 変数の Repr と同じである (verifier が確かめる)
-        let params: Vec<Repr> = match site {
-            Site::Typed(reprs) => reprs.clone(),
-            Site::Uniform => vec![Repr::TObj; args.len()],
-        };
+        let params: Vec<Repr> = args.iter().map(|&arg| self.atom_repr(arg)).collect();
         let words: Vec<Repr> = params
             .iter()
             .flat_map(|&repr| self.leaf_reprs(repr))

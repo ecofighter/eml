@@ -2,8 +2,7 @@
 //! 構造の規則 R1 から R8 と、前の形の IR から引き継いだ検査を1つずつ確かめる。
 
 use eml_lir::{
-    Pass, Prim, Program, Rhs, Stmt, parse, passes_until, verify, verify_contracted,
-    verify_flattened, verify_lowered, verify_scopes,
+    Prim, Program, Rhs, Stmt, parse, verify, verify_flattened, verify_lowered, verify_scopes,
 };
 
 /// 手で書く IR の配置の行。プログラムの先頭に置く。
@@ -565,16 +564,18 @@ fn a_returned_variable_has_the_repr_of_the_function() {
     );
 }
 
-/// 末尾の位置の呼び出しの束縛は呼ばれる側の結果の Repr を持ち、box の挿入はその `return` に変換を入れない。範囲の段は
-/// この形の互換でない `return` だけを許し、縮約がそれを `tail` にする。間に純粋でない文があれば末尾の位置でなく、
-/// 今のとおり拒む (docs/spec/lir.md の「末尾の位置の呼び出し」)。
+/// 互換でない `return` は、末尾の位置の呼び出しの後でも拒む。box の挿入は末尾の位置の呼び出しの結果も関数の `ret`
+/// へ変換するためである (docs/spec/lir.md の「末尾の位置の呼び出し」)。
 #[test]
-fn an_incompatible_return_is_accepted_only_after_a_tail_position_call() {
+fn an_incompatible_return_is_rejected_even_after_a_tail_position_call() {
     let g = "fn g(x.0: tobj) -> tobj {\n  return x.0\n}\n";
     let tail = format!(
         "{g}fn f(c.0: tobj) -> int {{\n  let r.1: tobj = call g(c.0)\n  let s.2: obj = const \"unused\"\n  return r.1\n}}\n"
     );
-    assert_eq!(check_scopes(&tail), Ok(()));
+    assert_eq!(
+        check_scopes(&tail),
+        Err("`r.1` (tobj) is returned from a function that returns int in `f`".to_string())
+    );
     for text in [
         format!(
             "{g}fn f(c.0: tobj, s.1: obj) -> int {{\n  let r.2: tobj = call g(c.0)\n  let u.3: unit = extern Prelude.println(s.1)\n  return r.2\n}}\n"
@@ -841,9 +842,9 @@ fn g(a.0: tobj, b.1: tobj) -> tobj {{
 }
 
 #[test]
-fn a_function_value_need_not_be_uniform() {
-    // `apply` が実行時に Repr を変えるので、引数や結果が一様でない関数も関数の値になる
-    // (docs/spec/vm.md の「シグネチャ」)
+fn a_function_value_is_uniform_beyond_its_captures() {
+    // `apply` は引数と結果を一様に渡すので、関数の値にする関数は捕獲より後ろの引数と結果が一様である。`&k` と `&h` は
+    // そうでないので拒む (docs/spec/lir.md の「関数の ABI」)
     let value = |atom: &str| {
         format!(
             "\
@@ -858,21 +859,27 @@ fn f() -> tobj {{
 {UNIFORM}"
         )
     };
-    for atom in ["&i", "&k", "&h"] {
-        assert_eq!(check(&value(atom)), Ok(()));
+    assert_eq!(check(&value("&i")), Ok(()));
+    for name in ["k", "h"] {
+        assert_eq!(
+            check(&value(&format!("&{name}"))),
+            Err(format!(
+                "`{name}` is used as a value with 0 captures, but its later parameters and its result are not all uniform in `f`"
+            ))
+        );
     }
-    // 関数の値は位置に収まるかを確かめる。`&k` は `int` の位置に収まらない
+    // 関数の値は位置に収まるかを確かめる。`&i` は `int` の位置に収まらない
     assert_eq!(
-        rejected_at_both_levels(&format!("fn f() -> int {{\n  return &k\n}}\n{K}")),
-        "&k is returned from a function that returns int in `f`"
+        rejected_at_both_levels(&format!("fn f() -> int {{\n  return &i\n}}\n{UNIFORM}")),
+        "&i is returned from a function that returns int in `f`"
     );
     for body in [
-        "  let d.0: tobj = con Option #1(&k)\n  return d.0\n",
-        "  let c.0: tobj = closure g(&k)\n  return c.0\n",
-        "  let c.0: tobj = closure g(())\n  let t.1: tobj = apply c.0(&k: tobj)\n  return t.1\n",
+        "  let d.0: tobj = con Option #1(&i)\n  return d.0\n",
+        "  let c.0: tobj = closure g(&i)\n  return c.0\n",
+        "  let c.0: tobj = closure g(())\n  let t.1: tobj = apply c.0(&i)\n  return t.1\n",
     ] {
         let text = format!(
-            "{OPTION}fn f() -> tobj {{\n{body}}}\nfn g(a.0: tobj, b.1: unit) -> tobj {{\n  return a.0\n}}\n{K}"
+            "{OPTION}fn f() -> tobj {{\n{body}}}\nfn g(a.0: tobj, b.1: unit) -> tobj {{\n  return a.0\n}}\n{UNIFORM}"
         );
         assert_eq!(check(&text), Ok(()));
     }
@@ -880,7 +887,7 @@ fn f() -> tobj {{
 
 #[test]
 fn a_closure_checks_its_argument_scopes() {
-    // 一様でない関数のクロージャも作れる。引数の範囲は確かめる
+    // 捕獲の位置は一様でなくてよい。捕獲の引数の範囲は確かめる
     let closure = |g: &str, arg: &str| {
         format!(
             "\
@@ -888,8 +895,8 @@ fn f() -> tobj {{
   let c.0: tobj = closure g({arg})
   return c.0
 }}
-fn g(a.0: {g}, b.1: {g}) -> {g} {{
-  return a.0
+fn g(a.0: {g}, b.1: tobj) -> tobj {{
+  return b.1
 }}
 "
         )
@@ -906,12 +913,12 @@ fn the_operands_of_uniform_calls_are_compatible_with_tobj() {
     for (params, body, message) in [
         (
             "c.0: tobj, n.1: int",
-            "  let t.2: tobj = apply n.1((): unit)\n  return t.2\n",
+            "  let t.2: tobj = apply n.1(())\n  return t.2\n",
             "the callee of an apply is `n.1` (int), but an apply takes tobj",
         ),
         (
             "c.0: tobj, n.1: int",
-            "  let t.2: tobj = uniform apply c.0(n.1)\n  return t.2\n",
+            "  let t.2: tobj = apply c.0(n.1)\n  return t.2\n",
             "argument 0 of an apply is `n.1` (int), but an apply takes tobj",
         ),
         (
@@ -947,7 +954,7 @@ fn the_results_of_uniform_calls_are_bound_to_variables_compatible_with_tobj() {
     for (params, body, message) in [
         (
             "",
-            "  let t.0: int = uniform apply &i(())\n  return ()\n",
+            "  let t.0: int = apply &i(())\n  return ()\n",
             "`t.0` (int) is bound to an apply, which returns tobj",
         ),
         (
@@ -968,20 +975,44 @@ fn the_results_of_uniform_calls_are_bound_to_variables_compatible_with_tobj() {
     }
 }
 
-/// 末尾呼び出しの結果の Repr は、呼び出し元の `ret` と互換でなくてよい。VM の変換のフレームが変換する
-/// (docs/spec/lir.md の「末尾の位置の呼び出し」)。印は今のとおり比べる。
+/// 末尾呼び出しの結果の Repr は、呼び出し元の `ret` と互換である (docs/spec/lir.md の「末尾の位置の呼び出し」)。
 #[test]
-fn an_incompatible_tail_call_result_is_accepted() {
+fn a_tail_call_result_is_compatible_with_the_ret() {
     let tail = |ret: &str, params: &str, call: &str| {
         format!("{ASK}fn f({params}) -> {ret} {{\n  tail {call}\n}}\n{K}{UNIFORM}")
     };
     for (ret, params, call) in [
-        ("unit", "c.0: tobj", "apply c.0((): unit)"),
-        ("tobj", "", "call k(1)"),
-        ("int", "c.0: tobj", "uniform apply c.0(())"),
-        ("int", "c.0: tobj, e.1: obj", "clause Ask.ask c.0(e.1, ())"),
+        ("tobj", "c.0: tobj", "apply c.0(())"),
+        ("int", "", "call k(1)"),
+        ("tobj", "c.0: tobj, e.1: obj", "clause Ask.ask c.0(e.1, ())"),
     ] {
         assert_eq!(check(&tail(ret, params, call)), Ok(()), "{call}");
+    }
+    for (ret, params, call, message) in [
+        (
+            "tobj",
+            "",
+            "call k(1)",
+            "a tail call to `k` returns int, but this function returns tobj",
+        ),
+        (
+            "int",
+            "c.0: tobj",
+            "apply c.0(())",
+            "a tail apply returns tobj poly, but this function returns int",
+        ),
+        (
+            "int",
+            "c.0: tobj, e.1: obj",
+            "clause Ask.ask c.0(e.1, ())",
+            "a tail clause of `Ask.ask` returns tobj, but this function returns int",
+        ),
+    ] {
+        assert_eq!(
+            check(&tail(ret, params, call)),
+            Err(format!("{message} in `f`")),
+            "{call}"
+        );
     }
 }
 
@@ -1311,7 +1342,7 @@ fn a_borrowed_field_cannot_be_consumed() {
         "  let t.4: obj = con Box #0(x.2)\n  return t.4\n",
         "  let t.4: obj = extern Prelude.++(x.2, x.2)\n  return t.4\n",
         "  let t.4: obj = apply c.1(x.2)\n  return t.4\n",
-        "  let t.4: obj = apply x.2((): unit)\n  return t.4\n",
+        "  let t.4: obj = apply x.2(())\n  return t.4\n",
     ] {
         assert_eq!(
             check(&borrowing_arm(body)),
@@ -2006,7 +2037,7 @@ fn the_lowered_level_rejects_tail_calls() {
             "a tail call is formed before contract in `f`",
         ),
         (
-            "fn f(c.0: tobj) -> tobj {\n  tail apply c.0((): unit)\n}\n",
+            "fn f(c.0: tobj) -> tobj {\n  tail apply c.0(())\n}\n",
             "a tail apply is formed before contract in `f`",
         ),
     ] {
@@ -2488,7 +2519,7 @@ fn a_clause_function_is_only_put_into_a_handler_table() {
     );
     assert_eq!(
         check_lowered(&format!(
-            "{COUNTER}fn f(c.0: tobj) -> tobj {{\n  let t.1: tobj = apply c.0(&g: tobj)\n  return t.1\n}}\n{PUT_CLAUSE}"
+            "{COUNTER}fn f(c.0: tobj) -> tobj {{\n  let t.1: tobj = apply c.0(&g)\n  return t.1\n}}\n{PUT_CLAUSE}"
         )),
         used_as_value
     );
@@ -2823,7 +2854,7 @@ fn v2_lets_unr_pass_to_lin_at_each_boundary() {
         format!("fn f(s.0: obj) -> unit {{\n  let u.1: unit = call g(s.0)\n  return u.1\n}}\n{TAKES_LIN}"),
         format!("fn f(s.0: obj) -> obj lin {{\n  let t.1: obj lin = call h(s.0)\n  return t.1\n}}\n{GIVES_UNR}"),
         format!("fn f(s.0: obj) -> obj lin {{\n  tail call h(s.0)\n}}\n{GIVES_UNR}"),
-        "fn f(s.0: obj) -> tobj lin {\n  let c.1: tobj lin = closure k(s.0)\n  return c.1\n}\nfn k(a.0: obj lin, b.1: int) -> tobj lin {\n  return a.0\n}\n".to_string(),
+        "fn f(s.0: obj) -> tobj lin {\n  let c.1: tobj lin = closure k(s.0)\n  return c.1\n}\nfn k(a.0: obj lin, b.1: unit) -> tobj lin {\n  return a.0\n}\n".to_string(),
         "fn f(s.0: obj) -> unit {\n  let u.1: unit = extern Std.Fs.close(s.0)\n  return u.1\n}\n".to_string(),
         "fn f() -> tobj lin {\n  let w.0: tobj lin = prim evv_get()\n  return w.0\n}\n".to_string(),
         format!("{LIN_OPS}fn f(c.0: tobj, e.1: obj, x.2: tobj) -> tobj lin {{\n  let t.3: tobj lin = clause L.take c.0(e.1, x.2)\n  return t.3\n}}\n"),
@@ -2957,7 +2988,7 @@ fn marked(body: &str, ev: &str) -> String {
 #[test]
 fn prompt_marker_is_accepted() {
     let text = marked(
-        "  let x.2: tobj = yields apply b.0((): unit) prompt ev.1\n  decref x.2\n  return ev.1\n",
+        "  let x.2: tobj = yields apply b.0(()) prompt ev.1\n  decref x.2\n  return ev.1\n",
         "ev.1: obj",
     );
     assert_eq!(check(&text), Ok(()));
@@ -2965,8 +2996,7 @@ fn prompt_marker_is_accepted() {
 
 #[test]
 fn prompt_marker_in_tail_position_is_rejected() {
-    let text =
-        "fn f(b.0: tobj, ev.1: obj) -> tobj {\n  tail yields apply b.0((): unit) prompt ev.1\n}\n";
+    let text = "fn f(b.0: tobj, ev.1: obj) -> tobj {\n  tail yields apply b.0(()) prompt ev.1\n}\n";
     assert_eq!(
         check_scopes(text),
         Err(
@@ -2979,7 +3009,7 @@ fn prompt_marker_in_tail_position_is_rejected() {
 #[test]
 fn prompt_marker_on_a_dead_variable_is_rejected() {
     let text = marked(
-        "  let x.2: tobj = yields apply b.0((): unit) prompt ev.1\n  return ()\n",
+        "  let x.2: tobj = yields apply b.0(()) prompt ev.1\n  return ()\n",
         "ev.1: obj",
     )
     .replace("-> obj", "-> unit");
@@ -2994,7 +3024,7 @@ fn prompt_marker_on_a_dead_variable_is_rejected() {
 
 #[test]
 fn prompt_marker_on_a_non_obj_variable_is_rejected() {
-    let text = "fn f(b.0: tobj, ev.1: tobj) -> tobj {\n  let x.2: tobj = yields apply b.0((): unit) prompt ev.1\n  decref x.2\n  return ev.1\n}\n";
+    let text = "fn f(b.0: tobj, ev.1: tobj) -> tobj {\n  let x.2: tobj = yields apply b.0(()) prompt ev.1\n  decref x.2\n  return ev.1\n}\n";
     assert_eq!(
         check_scopes(text),
         Err("`ev.1` is the prompt marker of an apply, but it is tobj, not obj in `f`".to_string())
@@ -3004,7 +3034,7 @@ fn prompt_marker_on_a_non_obj_variable_is_rejected() {
 #[test]
 fn prompt_marker_on_an_unowned_variable_is_rejected() {
     let text = marked(
-        "  decref ev.1\n  let x.2: tobj = yields apply b.0((): unit) prompt ev.1\n  decref x.2\n  return ev.1\n",
+        "  decref ev.1\n  let x.2: tobj = yields apply b.0(()) prompt ev.1\n  decref x.2\n  return ev.1\n",
         "ev.1: obj",
     );
     assert_eq!(
@@ -3022,7 +3052,7 @@ fn prompt_marker_used_only_in_a_sibling_branch_is_rejected() {
         "{BOOL}fn f(b.0: tobj, ev.1: obj, c.2: enum, e.3: obj) -> obj {{
   switch c.2 Prelude.Bool {{ #0 -> b1, #1 -> b2 }}
 b1:
-  let x.4: tobj = yields apply b.0((): unit) prompt ev.1
+  let x.4: tobj = yields apply b.0(()) prompt ev.1
   return e.3
 b2:
   return ev.1
@@ -3041,7 +3071,7 @@ b2:
 #[test]
 fn prompt_marker_passed_only_to_a_jump_is_accepted() {
     let text = "fn f(b.0: tobj, ev.1: obj) -> obj {
-  let x.2: tobj = yields apply b.0((): unit) prompt ev.1
+  let x.2: tobj = yields apply b.0(()) prompt ev.1
   jump b1(ev.1)
 b1(p.3: obj):
   return p.3
@@ -3340,33 +3370,6 @@ fn an_int_argument_for_an_obj_extern_parameter_is_rejected_at_the_entry_level() 
     );
 }
 
-/// 型どおりの `apply` の場所の変数の Repr は、どの段でも変数と同じである。box の挿入は引数を場所の Repr へ変換する
-/// (docs/spec/lir.md の「`apply` の場所」)。
-#[test]
-fn a_site_entry_must_match_its_variable() {
-    use eml_lir::{Call, Repr, Site};
-    let mut program = read(
-        "fn f(x.0: tobj, c.1: tobj) -> tobj {\n  let t.2: tobj = apply c.1(x.0)\n  return t.2\n}\n",
-    );
-    assert_eq!(verify_lowered(&program), Ok(()));
-    let Stmt::Let {
-        rhs: Rhs::Call(Call::Apply { site, .. }),
-        ..
-    } = &mut program.functions[0].blocks[0].stmts[0]
-    else {
-        panic!("expected an apply");
-    };
-    *site = Site::Typed(vec![Repr::Int]);
-    assert_eq!(
-        verify_lowered(&program).map_err(|error| error.message),
-        Err("the apply site gives `x.0` int but the variable is tobj".to_string())
-    );
-    assert_eq!(
-        verify_scopes(&program).map_err(|error| error.message),
-        Err("the apply site gives `x.0` int but the variable is tobj".to_string())
-    );
-}
-
 /// 一様な位置の始まりは、関数の引数の数を超えない。
 #[test]
 fn a_split_is_not_past_the_end_of_the_parameters() {
@@ -3435,47 +3438,6 @@ fn a_struct_box_is_obj() {
         check_scopes(&text("tobj", "obj")),
         Err("`b.2` (tobj) is bound to a box of a struct, which is obj in `f`".to_string())
     );
-}
-
-/// 縮約の後の段は、互換でない `return` を末尾の位置の呼び出しの形でも許さない。縮約がその形を `tail` にしなかった
-/// なら、`return` は呼ばれる側の結果の Repr のまま関数の `ret` を返す (docs/spec/lir.md の「verifier」)。
-#[test]
-fn the_contracted_level_rejects_an_incompatible_return_after_a_tail_position_call() {
-    let text = "\
-fn g(x.0: tobj) -> tobj {
-  return x.0
-}
-fn f(c.0: tobj) -> int {
-  let r.1: tobj = call g(c.0)
-  return r.1
-}
-";
-    assert_eq!(check_flattened(text), Ok(()));
-    assert_eq!(
-        verify_contracted(&read(text)).map_err(|error| error.to_string()),
-        Err("`r.1` (tobj) is returned from a function that returns int in `f`".to_string())
-    );
-}
-
-/// box の挿入は末尾の位置の呼び出しの束縛を呼ばれる側の結果の Repr (`tobj`) にする。結果の印 `lin` は関数の戻り値の
-/// 印 `unr` と直接つなげないので、縮約は互換でない `return` を `tail` にしない。この誤りは縮約の後の検査が縮約の名前で
-/// 報告する。
-#[test]
-#[should_panic(
-    expected = "internal error: invalid LIR after contract: `r.1` (tobj) is returned from a function that returns int in `f`"
-)]
-fn an_incompatible_return_left_by_contract_is_reported_after_contract() {
-    let text = "\
-fn h(c.0: tobj) -> tobj lin {
-  let r.1: tobj lin = uniform apply c.0(())
-  return r.1
-}
-fn f(c.0: tobj) -> int {
-  let r.1: int poly = call h(c.0)
-  return r.1
-}
-";
-    passes_until(&mut read(text), Pass::Contract);
 }
 
 fn check_flattened(text: &str) -> Result<(), String> {
@@ -3550,98 +3512,30 @@ fn f(x.0: float) -> (float, float) {{
     );
 }
 
-/// 開いた後の関数の源の ABI と `apply` の場所は、葉に開くと関数の引数と結果、`apply` の引数と同じ並びになる。開く前の
-/// 段は源の ABI を持たない (docs/spec/lir.md の「開く」)。
+/// 開いた後の関数の源の ABI は、葉に開くと関数の引数と結果と同じ並びになる。開く前の段は源の ABI を持たない
+/// (docs/spec/lir.md の「開く」)。
 #[test]
 fn source_records_open_to_the_leaves() {
-    let text = |source: &str, site: &str| {
+    let text = |source: &str| {
         format!(
             "{VEC3}fn f(x.0: float, y.1: float, z.2: float, c.3: tobj) -> float {source} {{
-  let r.4: float = apply c.3(x.0, y.1, z.2) source({site})
-  return r.4
+  return x.0
 }}
 "
         )
     };
     let vec3 = "Vec3{float, float, float}";
-    let good = text(&format!("source({vec3}, tobj) -> float"), vec3);
+    let good = text(&format!("source({vec3}, tobj) -> float"));
     assert_eq!(check_flattened(&good), Ok(()));
     assert_eq!(
         check_scopes(&good),
         Err("the function has a source signature before flatten in `f`".to_string())
     );
     assert_eq!(
-        check_flattened(&text(&format!("source({vec3}) -> float"), vec3)),
+        check_flattened(&text(&format!("source({vec3}) -> float"))),
         Err(format!(
             "the source parameters ({vec3}) open to (float, float, float), but the function takes (float, float, float, tobj) in `f`"
         ))
-    );
-    assert_eq!(
-        check_flattened(&text(
-            &format!("source({vec3}, tobj) -> float"),
-            "float, float"
-        )),
-        Err("the apply site lists 2 reprs for 3 arguments in `f`".to_string())
-    );
-}
-
-/// `apply` の `source_ret` は、構造体の結果を葉で受ける場所だけが持つ。開いた後の段で、型どおりの場所の結果を複数の
-/// 値で受けるなら要り、構造体の Repr でなければならない。開く前の段は持たない
-/// (docs/spec/lir.md の「開く」)。
-#[test]
-fn a_source_result_is_a_struct_on_a_flattened_apply() {
-    let vec3 = "Vec3{float, float, float}";
-    let many = |source_ret: &str| {
-        format!(
-            "{VEC3}fn f(c.0: tobj, x.1: float) -> float {{
-  let (a.2: float, b.3: float, d.4: float) = apply c.0(x.1) source(float){source_ret}
-  return a.2
-}}
-"
-        )
-    };
-    assert_eq!(check_flattened(&many(&format!(" -> {vec3}"))), Ok(()));
-    assert_eq!(
-        check_flattened(&many("")),
-        Err("a typed apply bound to several values has no source result in `f`".to_string())
-    );
-    let single = format!(
-        "{VEC3}fn f(c.0: tobj, x.1: float) -> float {{
-  let r.2: float = apply c.0(x.1) source(float) -> float
-  return r.2
-}}
-"
-    );
-    assert_eq!(
-        check_flattened(&single),
-        Err("the source result of an apply is float, not a struct in `f`".to_string())
-    );
-    let unopened = format!(
-        "{VEC3}fn f(c.0: tobj, x.1: float) -> float {{
-  let v.2: {vec3} = apply c.0(x.1) source(float) -> {vec3}
-  unpack v.2 Vec3 #0(a.3: float, b.4: float, d.5: float)
-  return a.3
-}}
-"
-    );
-    assert_eq!(
-        check_scopes(&unopened),
-        Err("an apply has a source result before flatten in `f`".to_string())
-    );
-    // 一様な場所の結果は `tobj` の1語なので、源の結果を持たない。テキストには書けないので、読んだものを書き換える
-    use eml_lir::{Call, Site};
-    let mut uniform = read(&many(&format!(" -> {vec3}")));
-    let Stmt::LetMany {
-        call: Call::Apply { site, .. },
-        ..
-    } = &mut uniform.functions[0].blocks[0].stmts[0]
-    else {
-        panic!("expected an apply bound to several values");
-    };
-    *site = Site::Uniform;
-    assert_eq!(
-        verify_flattened(&uniform).map_err(|error| error.message),
-        Err("an apply with a uniform site has a source result".to_string())
     );
 }
 

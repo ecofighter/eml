@@ -20,6 +20,7 @@ pub mod reuse;
 pub mod syntax;
 mod text;
 pub mod unwind;
+mod variants;
 mod verify;
 
 pub use boxing::boxing;
@@ -31,7 +32,7 @@ pub use pretty::{pretty, pretty_with_positions};
 pub use prim::{Immediates, Prim, PrimRow};
 pub use reuse::reuse;
 pub use text::parse;
-pub use verify::{verify, verify_contracted, verify_flattened, verify_lowered, verify_scopes};
+pub use verify::{verify, verify_flattened, verify_lowered, verify_scopes};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Program {
@@ -101,16 +102,6 @@ pub struct LirFn {
 pub struct SourceSig {
     pub params: Vec<Repr>,
     pub ret: Repr,
-}
-
-/// `apply` が引数を渡す規約。`Typed` は引数ごとの Repr で、その場所の矢印の型から決まる。変数の引数の Repr は変数の
-/// Repr と同じで (verifier が確かめる)、定数の引数の Repr は translate が型から決める。`#0` が `enum` か `tobj` かを
-/// 決めるためである。`Uniform` は EP が作る一様な場所である。結果の Repr は束縛の Repr で、末尾の位置では含む関数の
-/// `ret` である (docs/spec/lir.md の「`apply` の場所」)。
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum Site {
-    Typed(Vec<Repr>),
-    Uniform,
 }
 
 impl LirFn {
@@ -483,12 +474,6 @@ pub enum Call {
         /// フレームまで VM のスタックを巻き戻す。`v` は呼び出しが消費も読みもしないので `for_each_atom` は
         /// 見せず、呼び出しの後も生きている `obj` の変数である (docs/spec/lir.md の「着地の印」)。
         prompt: Option<VarId>,
-        /// 引数を渡す規約 (`Site`)。型どおりの場所は源の引数ごとに Repr を1つ持つ。開いた後は、構造体の Repr の
-        /// 引数が葉に開いた複数のアトムになる。
-        site: Site,
-        /// 開いた後の構造体の結果の、源の Repr。開く前と、結果が構造体でない場所では `None` で、結果の Repr は束縛の
-        /// Repr (末尾の位置では関数の結果) である。テキストの形は `source(..)` の後の `-> Vec3{..}` である。
-        source_ret: Option<Repr>,
     },
     /// 操作の in-place の入口のクロージャ `callee` を呼ぶ。`args` の先頭は evidence (`obj`)、残りは操作の引数で、
     /// 引数と結果の Repr は操作の表の `params` と `ret` から取る。`mask` は持たない
@@ -519,8 +504,6 @@ impl Call {
                 args,
                 yields: _,
                 prompt: _,
-                site: _,
-                source_ret: _,
             }
             | Call::Clause {
                 effect: _,
@@ -542,8 +525,6 @@ impl Call {
                 args,
                 yields: _,
                 prompt: _,
-                site: _,
-                source_ret: _,
             }
             | Call::Clause {
                 effect: _,

@@ -560,13 +560,11 @@ fn std_public_functions_keep_their_lir() {
       decref ys.2
       tail call "F0"(#0, acc.1)
     b2:
-      let x.5: int = unbox x.3
-      release ys.2 Prelude.List #1(_, rest.4)
+      release ys.2 Prelude.List #1(x.3, rest.4)
       dup f.0
-      let t.6: int = apply f.0(x.5)
-      let t.7: tobj = box t.6
-      let d.8: tobj = con Prelude.List #1(t.7, acc.1)
-      tail call "F7"(f.0, d.8, rest.4)
+      let t.5: tobj = apply f.0(x.3)
+      let d.6: tobj = con Prelude.List #1(t.5, acc.1)
+      tail call "F7"(f.0, d.6, rest.4)
     }
     fn "F9"(p.0: tobj, acc.1: tobj, ys.2: tobj) -> tobj {
       switch ys.2 Prelude.List { #0 -> b1, #1(x.3: tobj, rest.4: tobj) -> b2 }
@@ -575,10 +573,12 @@ fn std_public_functions_keep_their_lir() {
       decref ys.2
       tail call "F0"(#0, acc.1)
     b2:
-      let x.5: int = unbox x.3
       release ys.2 Prelude.List #1(x.3, rest.4)
       dup p.0
-      let t.6: enum = apply p.0(x.5)
+      dup x.3
+      let t.5: tobj = apply p.0(x.3)
+      let t.6: enum = unbox t.5
+      decref t.5
       switch t.6 Prelude.Bool { #0 -> b3, #1 -> b4 }
     b3:
       decref x.3
@@ -594,18 +594,17 @@ fn std_public_functions_keep_their_lir() {
       decref ys.2
       tail call "F0"(#0, acc.1)
     b2:
-      let x.5: int = unbox x.3
-      release ys.2 Prelude.List #1(_, rest.4)
+      release ys.2 Prelude.List #1(x.3, rest.4)
       dup f.0
-      let t.6: tobj = apply f.0(x.5)
-      switch t.6 Prelude.Option { #0 -> b3, #1(y.7: tobj) -> b4 }
+      let t.5: tobj = apply f.0(x.3)
+      switch t.5 Prelude.Option { #0 -> b3, #1(y.6: tobj) -> b4 }
     b3:
-      decref t.6
+      decref t.5
       tail call "F11"(f.0, acc.1, rest.4)
     b4:
-      release t.6 Prelude.Option #1(y.7)
-      let d.8: tobj = con Prelude.List #1(y.7, acc.1)
-      tail call "F11"(f.0, d.8, rest.4)
+      release t.5 Prelude.Option #1(y.6)
+      let d.7: tobj = con Prelude.List #1(y.6, acc.1)
+      tail call "F11"(f.0, d.7, rest.4)
     }
     fn F13(needle.0: obj, s.1: obj, at.2: int, n.3: int, i.4: int) -> enum {
       let t.5: enum = extern "Prelude.Ord Int.>="(i.4, n.3)
@@ -828,6 +827,26 @@ fn std_public_functions_keep_their_lir() {
     b13:
       decref s.0
       return #0
+    }
+    fn "F26"(xs.0: tobj) -> tobj {
+      let r.1: int = call "F2"(xs.0)
+      let r.2: tobj = box r.1
+      return r.2
+    }
+    fn "F27"(xs.0: tobj) -> tobj {
+      let r.1: int = call "F4"(xs.0)
+      let r.2: tobj = box r.1
+      return r.2
+    }
+    fn F28(prefix.0: obj, s.1: obj) -> tobj {
+      let r.2: enum = call F12(prefix.0, s.1)
+      let r.3: tobj = box r.2
+      return r.3
+    }
+    fn F29(suffix.0: obj, s.1: obj) -> tobj {
+      let r.2: enum = call F14(suffix.0, s.1)
+      let r.3: tobj = box r.2
+      return r.3
     }
     "#);
 }
