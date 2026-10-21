@@ -1126,14 +1126,10 @@ fn unwind_points() {
     ");
 }
 
-/// `ep_float` の `conversions`。役割の境目の変換は、結果が一様な handle の本体が型どおりの関数を末尾で呼ぶ所などで
-/// 起きる。`ep_float` の境目はどれも直接の末尾呼び出しで、コード生成が静的な変換にする。`conversions` は `apply` が
-/// 実行時に変換した回数だけを数えるので 0 である (docs/spec/vm.md の「`RunStats`」)。
-const EP_FLOAT_CONVERSIONS: u64 = 0;
-
-/// 規約の確かめ (docs/implementation/benchmarks.md の「回数のテスト」)。特殊化しない
-/// handler を通る `ep_float` のほかは、`apply` が実行時に変換しない。EP の役割と一様な場所が合い、包む関数も型ごとの
-/// instance で型どおりに呼ばれることを示す。
+/// 規約の確かめ (docs/implementation/benchmarks.md の「回数のテスト」)。どのプログラムも `apply` が実行時に変換しない。
+/// 役割の境目の変換は、型どおりの関数を直接の末尾呼び出しで呼ぶ所などで起き、コード生成が静的な変換にする。
+/// `conversions` は `apply` が実行時に変換した回数だけを数える (docs/spec/vm.md の「`RunStats`」)。
+/// EP の役割と一様な場所が合い、包む関数も型ごとの instance で型どおりに呼ばれることを示す。
 #[test]
 fn typed_benches_do_not_convert() {
     for name in PROGRAMS {
@@ -1142,12 +1138,7 @@ fn typed_benches_do_not_convert() {
             .unwrap_or_else(|error| panic!("{}: {error}", path.display()));
         let (_, result) = run_stats(&text);
         let stats = result.unwrap_or_else(|error| panic!("{name}: {error}"));
-        let expected = if name == "ep_float" {
-            EP_FLOAT_CONVERSIONS
-        } else {
-            0
-        };
-        assert_eq!(stats.conversions, expected, "{name}: {stats:?}");
+        assert_eq!(stats.conversions, 0, "{name}: {stats:?}");
     }
 }
 
