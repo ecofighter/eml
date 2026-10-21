@@ -462,3 +462,95 @@ fn main() -> (float, float) {
         })
     );
 }
+
+/// 箱の欄が `tobj` と宣言された構造体は、スカラーの葉も箱に入れて欄に置く。`BigInt` の大きさの `int`、箱の
+/// `float`、ヒープの文字列を持つ箱を、一様な場所が受けて共有のまま2回取り出す。共有の箱から取り出すときは、葉を
+/// dup して箱の参照を減らす。最後に取り出すときは、葉を移して箱を空ける。
+#[test]
+fn a_shared_box_gives_its_scalar_leaves_twice() {
+    let t = "(,,){int, float, obj}";
+    let text = format!(
+        "\
+layout (,,) {{ (,,)(tobj, tobj, tobj) }}
+fn main() -> unit {{
+  let w.0: tobj = uniform apply &make(())
+  let x.1: int = apply &first(w.0)
+  let y.2: obj = apply &third(w.0)
+  let s.3: obj = extern \"Prelude.Show Int.show\"(x.1)
+  let u.4: unit = extern Prelude.println(s.3)
+  let u.5: unit = extern Prelude.println(y.2)
+  return u.5
+}}
+fn make(u.0: unit) -> {t} {{
+  let a.1: obj = const \"he\"
+  let b.2: obj = const \"llo\"
+  let s.3: obj = extern \"Prelude.++\"(a.1, b.2)
+  let p.4: {t} = con (,,) #0(4611686018427387904, 2.5, s.3)
+  return p.4
+}}
+fn first(p.0: {t}) -> int {{
+  unpack p.0 (,,) #0(x.1: int, y.2: float, z.3: obj)
+  return x.1
+}}
+fn third(p.0: {t}) -> obj {{
+  unpack p.0 (,,) #0(x.1: int, y.2: float, z.3: obj)
+  return z.3
+}}
+"
+    );
+    let disasm = disasm_lowered(&text);
+    assert!(disasm.contains("dup s"), "{disasm}");
+    let (out, stats) = run_lowered_stats(&text);
+    let stats = stats.unwrap_or_else(|error| panic!("{error}"));
+    assert_eq!(out, "4611686018427387904\nhello\n");
+    // 箱にするときは構造体の箱と `int`、`float` の葉の箱で3つ、取り出すたびに同じ3つを開ける
+    assert_eq!(
+        (stats.conversions, stats.boxes, stats.unboxes),
+        (3, 3, 6),
+        "{stats:?}"
+    );
+}
+
+/// `tobj` と宣言された欄に入った構造体は、箱の中でも箱になる。変換のフレームが入れ子の箱を作り、共有の箱から2回取り出す
+/// たびに、入れ子の箱からも葉を取り出す。
+#[test]
+fn a_nested_struct_boxes_and_unboxes_its_inner_struct() {
+    let seg = "Seg{Vec2{float, float}, int}";
+    let text = format!(
+        "\
+layout Vec2 {{ Vec2(float, float) }}
+layout Seg {{ Seg(tobj, int) }}
+fn main() -> unit {{
+  let w.0: tobj = uniform apply &make(())
+  let x.1: float = apply &sum(w.0)
+  let y.2: float = apply &sum(w.0)
+  let z.3: float = extern \"Prelude.Num Float.+\"(x.1, y.2)
+  let s.4: obj = extern \"Prelude.Show Float.show\"(z.3)
+  let u.5: unit = extern Prelude.println(s.4)
+  return u.5
+}}
+fn make(u.0: unit) -> {seg} {{
+  let v.1: Vec2{{float, float}} = con Vec2 #0(1.5, 2.25)
+  let s.2: {seg} = con Seg #0(v.1, 9)
+  return s.2
+}}
+fn sum(s.0: {seg}) -> float {{
+  unpack s.0 Seg #0(v.1: Vec2{{float, float}}, n.2: int)
+  unpack v.1 Vec2 #0(x.3: float, y.4: float)
+  let z.5: float = extern \"Prelude.Num Float.+\"(x.3, y.4)
+  return z.5
+}}
+"
+    );
+    let disasm = disasm_lowered(&text);
+    assert!(disasm.contains("dup s"), "{disasm}");
+    let (out, stats) = run_lowered_stats(&text);
+    let stats = stats.unwrap_or_else(|error| panic!("{error}"));
+    assert_eq!(out, "7.5\n");
+    // 箱は `Seg` と `Vec2` の2つで、取り出すたびに2つとも開ける
+    assert_eq!(
+        (stats.conversions, stats.boxes, stats.unboxes),
+        (3, 2, 4),
+        "{stats:?}"
+    );
+}

@@ -380,3 +380,43 @@ fn take(p.0: {named}) -> float {{
     eml_lir::verify(&program).unwrap_or_else(|error| panic!("{error}"));
     assert_eq!(run_program(&program), "multi value\n1.5\n");
 }
+
+/// 共有の箱から、`tobj` の欄に入ったスカラーの葉と文字列の葉を2回取り出す (docs/superpowers/specs/2026-10-21-s14e-abi-struct-design.md
+/// の「S14e-2 構造体の表現」の「VM」)。
+#[test]
+fn shared_struct_boxes_with_scalar_leaves() {
+    let t = "(,,){int, float, obj}";
+    let text = format!(
+        "\
+layout (,,) {{ (,,)(tobj, tobj, tobj) }}
+fn main() -> unit {{
+  let w.0: tobj = uniform apply &make(())
+  let x.1: int = apply &first(w.0)
+  let y.2: obj = apply &third(w.0)
+  let s.3: obj = extern \"Prelude.Show Int.show\"(x.1)
+  let u.4: unit = extern Prelude.println(s.3)
+  let u.5: unit = extern Prelude.println(y.2)
+  return u.5
+}}
+fn make(u.0: unit) -> {t} {{
+  let a.1: obj = const \"he\"
+  let b.2: obj = const \"llo\"
+  let s.3: obj = extern \"Prelude.++\"(a.1, b.2)
+  let p.4: {t} = con (,,) #0(4611686018427387904, 2.5, s.3)
+  return p.4
+}}
+fn first(p.0: {t}) -> int {{
+  unpack p.0 (,,) #0(x.1: int, y.2: float, z.3: obj)
+  return x.1
+}}
+fn third(p.0: {t}) -> obj {{
+  unpack p.0 (,,) #0(x.1: int, y.2: float, z.3: obj)
+  return z.3
+}}
+"
+    );
+    let mut program = eml_lir::parse(&text).unwrap_or_else(|error| panic!("{error}"));
+    eml_lir::passes_until(&mut program, eml_lir::Pass::Reuse);
+    eml_lir::verify(&program).unwrap_or_else(|error| panic!("{error}"));
+    assert_eq!(run_program(&program), "4611686018427387904\nhello\n");
+}
