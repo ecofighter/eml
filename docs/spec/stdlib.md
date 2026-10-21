@@ -98,7 +98,7 @@ try_panic action =
 - `try_panic` は、IO の失敗、`exit`、書き出しの失敗、割り込み、確保量と深さの上限、検査モードのヒープの誤りを捕まえない。`try_io` も `Panic` を捕まえない
 - `try_panic` で捕まえなかった `Panic` は、今までと同じ実行時エラーである。`panic message` は `panicked: message` の文言に位置を付けて表示する
 
-`Panic` を起こすのは、`panic` と、次の誤りを返す組み込みの関数である。VM は `Fault::panics` で誤りを選び、`Pure` でない行の誤りのうち `Fault::panics` が真のものを `Panic` に届ける。`Pure` の行は巻き戻しの地点を持たないので届けない ([VM](vm.md) の「`IO` と `Panic` への中断」)。`message` は、[LIR](lir.md) の「実行時エラー」の文言と1文字も違わない。
+`Panic` を起こすのは、`panic` と、次の誤りを返す組み込みの関数である。VM は、`Pure` でない行の誤りのうち `Fault::panics` が真のものを `Panic` に届ける。`Pure` の行は巻き戻しの地点を持たないので届けない ([VM](vm.md) の「`IO` と `Panic` への中断」)。`message` は、[LIR](lir.md) の「実行時エラー」の文言と1文字も違わない。
 
 | `Fault` | 起こす関数 |
 |---|---|
