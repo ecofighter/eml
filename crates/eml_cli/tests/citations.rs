@@ -1,6 +1,6 @@
 //! コメントと文書が `docs/` の節を `…の「見出し」` の形で引いたとき、その見出しが行き先のファイルにあることと、
-//! 文書のリンクの行き先があることを確かめる。節を移したときに、引用だけが古いまま残るのを防ぐため
-//! (docs/implementation/testing.md の「文書の引用の検査」)。
+//! 文書のリンクの行き先があることと、`docs/reports/` の見出しを引いていないことを確かめる。節を移したときに、
+//! 引用だけが古いまま残るのを防ぐため (docs/implementation/testing.md の「文書の引用の検査」)。
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -13,9 +13,11 @@ fn repo_root() -> PathBuf {
 }
 
 /// 引用を探すファイル。`docs/superpowers` と `docs/plans` は作業中の設計と計画で、まだない節を引くので除く。
+/// `bench/` は `.em` のほか、計測のスクリプト (`.py`、`.sh`) のコメントも引ける。
 fn sources(root: &Path) -> Vec<PathBuf> {
     let mut files = vec![root.join("CLAUDE.md"), root.join("README.md")];
     let mut dirs = vec![
+        root.join("bench"),
         root.join("crates"),
         root.join("docs"),
         root.join("std"),
@@ -34,7 +36,7 @@ fn sources(root: &Path) -> Vec<PathBuf> {
                 dirs.push(path);
             } else if matches!(
                 path.extension().and_then(|ext| ext.to_str()),
-                Some("rs" | "em" | "md")
+                Some("rs" | "em" | "md" | "py" | "sh")
             ) {
                 files.push(path);
             }
@@ -56,7 +58,7 @@ fn flatten(path: &Path, text: &str) -> String {
             if is_markdown(path) {
                 line
             } else {
-                ["///", "//!", "//", "--"]
+                ["///", "//!", "//", "--", "#"]
                     .iter()
                     .find_map(|marker| line.strip_prefix(marker))
                     .unwrap_or(line)
@@ -157,6 +159,34 @@ fn every_cited_heading_exists() {
         broken.is_empty(),
         "見出しのない引用:\n{}",
         broken.join("\n")
+    );
+}
+
+/// `docs/reports/` は書いた時点のまま残す調査なので、規則の出典として見出しを引かない
+/// (docs/README.md の「文書の扱い」)。
+#[test]
+fn no_citation_points_into_reports() {
+    let root = repo_root();
+    // 引用の行き先は canonicalize してあるので、比べる側もそろえる。
+    let reports = root.join("docs/reports").canonicalize().unwrap();
+    let mut cited = Vec::new();
+    for file in sources(&root) {
+        let text = fs::read_to_string(&file).unwrap();
+        for citation in citations(&file, &root, &flatten(&file, &text)) {
+            if citation.target.starts_with(&reports) {
+                cited.push(format!(
+                    "{}: {} の「{}」",
+                    relative(&root, &file),
+                    relative(&root, &citation.target),
+                    citation.heading
+                ));
+            }
+        }
+    }
+    assert!(
+        cited.is_empty(),
+        "docs/reports への見出しつきの引用:\n{}",
+        cited.join("\n")
     );
 }
 

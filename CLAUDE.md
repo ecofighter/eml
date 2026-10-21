@@ -12,7 +12,9 @@ The documentation lives under `docs/`; start from `docs/README.md`. `docs/spec/`
 - The documents under `docs/` are the source of truth.
 - eml is unreleased and under development, so ignore backward compatibility and develop aggressively: change syntax, APIs, internal representations, and diagnostics freely, without deprecation paths or compatibility shims.
 - Put a concise, refined implementation first. Accept a reasonable cost in revising tests, in further design discussion, and in implementation effort to reach it.
-- When a test fails and there is a sound reason that the test itself is what should change, put the change in the work's spec with its kind (see Testing); approving the spec is the agreement. Mechanical follow-ups need no agreement.
+- When a test fails and there is a sound reason that the test itself is what should change, put the change in the stage's plan under `docs/plans/` with its kind (see Testing); approving the plan is the agreement. Mechanical follow-ups need no agreement.
+- The documents under `docs/` describe the current state. They do not name stages, dates, or what came before; that history lives in git (docs/README.md の「文書の扱い」). The only exception is `docs/reports/`.
+- A stage's design and plan live in `docs/plans/`, are committed on main as the stage's first commit, and are deleted when the stage closes (docs/future/roadmap.md の「進め方」). Code and `docs/` never cite `docs/plans/`; write the `docs/spec/` section in the same commit that implements the rule, and cite that.
 - Code comments and docs are written in Japanese. Code comments explain why, not what: do not restate the code, and cite `docs/` paths when pointing at a rule.
 - Whenever you write Japanese text (docs under `docs/`, code comments, or anything else), always follow the `yomiyasu:yomiyasu` skill: invoke it before writing and apply its rules to everything you write.
 - The CLAUDE.md files (this one and `crates/eml_rt/CLAUDE.md`) hold working rules and pointers into `docs/`. When a stage changes the design, write it in `docs/` and touch a CLAUDE.md only when a rule or a pointer changes, so the two never drift apart.
@@ -89,21 +91,21 @@ The crate-to-spec reading map is in `docs/README.md` (「読む順」). Topics t
 | Reprs, marks, the LIR passes, verifiers | docs/spec/lir.md の「値の表現」, docs/spec/lir.md の「Kind の印」, docs/spec/lir.md の「パスの順番」, docs/spec/lir.md の「verifier」 |
 | VM frames, unwinding, limits | docs/spec/vm.md の「命令とフレーム」, docs/spec/vm.md の「巻き戻し」, docs/spec/vm.md の「上限と割り込み」 |
 | Runtime objects, `Ctx`, externs in the word ABI | docs/spec/object-model.md, and `crates/eml_rt/CLAUDE.md` |
-| The implemented language and its limits | docs/implementation/status.md; the order of the work is in docs/future/roadmap.md |
+| The implemented language and its limits | docs/implementation/status.md; what comes next and why is in docs/future/roadmap.md |
 
 ## Testing
 
 The rules are in docs/implementation/testing.md; the facts below are the ones every change runs into.
 
 - Work test-first (TDD). Snapshots use `insta`, mostly inline (`@"..."`).
-- Test changes come in three kinds (docs/implementation/testing.md の「テストの変更の運用」): (1) pass/fail changes (moving a test between `run`, `run-fail` and `check-fail`, deleting a test, UI or unit) are listed one by one in the work's spec; (2) expected-value changes (UI output, diagnostic codes or wording, stage-dump snapshots such as Core IR, `RunStats` snapshots, moving a UI test without changing pass/fail) are described as a scope in the work's spec (e.g. "rewrite every UI test that uses E3005"); approving the spec is the agreement for kinds 1 and 2, and the reason goes in the spec and the commit message; (3) mechanical follow-ups that keep every expected value byte-identical need no agreement, and the commit message is the record.
-- Never bend the design to keep existing tests unchanged (no parallel enum variants, flags, test-only fields, or spec exceptions for that purpose). Put the test change in the work's spec instead, stating its kind.
+- Test changes come in three kinds (docs/implementation/testing.md の「テストの変更の運用」): (1) pass/fail changes (moving a test between `run`, `run-fail` and `check-fail`, deleting a test, UI or unit) are listed one by one in the stage's plan; (2) expected-value changes (UI output, diagnostic codes or wording, stage-dump snapshots such as Core IR, `RunStats` snapshots, moving a UI test without changing pass/fail) are described as a scope in the stage's plan (e.g. "rewrite every UI test that uses E3005"); approving the plan is the agreement for kinds 1 and 2, and the reason goes in the plan and the commit message; (3) mechanical follow-ups that keep every expected value byte-identical need no agreement, and the commit message is the record.
+- Never bend the design to keep existing tests unchanged (no parallel enum variants, flags, test-only fields, or spec exceptions for that purpose). Put the test change in the stage's plan instead, stating its kind.
 - Pick where a new test goes from docs/implementation/testing.md の「テストの置き場所」, and check each fact in one place only.
 - Each crate's integration tests build into one binary, `integration` (`autotests = false`; `tests/main.rs` declares every file as a module). A file not declared there does not run.
 - UI tests live in `tests/ui/{run,run-fail,check-fail}/<category>/`, as `<name>.em` or `<name>/main.em` with the modules it imports; the top-level directory decides the expected outcome, and `run` / `run-fail` tests run in checked and then fast mode (docs/implementation/testing.md の「UI テスト」). REPL transcripts live in `crates/eml_cli/tests/repl/` (docs/implementation/testing.md の「REPL のトランスクリプト」).
 - `eml_test_support` (dev-only) wraps `eml_cli::Session` for integration tests. Use it only from `tests/`, never from `#[cfg(test)]` in `src/`: the crate under test would be linked twice. Stages are features (`hir` < `types` < `core` < `run`); each crate enables only up to its own stage, so its tests still build while downstream crates are broken mid-refactor.
 - Core IR and LIR tests are written as IR text read by `eml_core_ir::parse` / `eml_lir::parse`; hand-written LIR tests live in `crates/eml_lir/tests` (docs/implementation/testing.md の「LIR のテキストの形」).
-- The `bench/` programs have their `RunStats` pinned by inline snapshots in `crates/eml_vm/tests/bench.rs`, so a change in work counts is an expected-value change. At the end of a stage, record `bench/run.sh`'s output in `docs/implementation/benchmarks.md` (docs/implementation/benchmarks.md の「記録」).
+- The `bench/` programs have their `RunStats` pinned by inline snapshots in `crates/eml_vm/tests/bench.rs`, so a change in work counts is an expected-value change. When a stage that touched `eml_vm`, `eml_rt`, `eml_lir`, `eml_core_ir`, `std/` or `bench/` closes, replace the three tables in docs/implementation/benchmarks.md の「今の数値」 with fresh `bench/run.sh`, `bench/rt.sh` and `bench/scripts.sh` output measured on a clean tree; the stage-by-stage history is the file's git log.
 - A change to `eml_rt` has a gate of its own: see `crates/eml_rt/CLAUDE.md`.
 
 ## Syntax
