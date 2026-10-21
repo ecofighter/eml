@@ -93,7 +93,7 @@ effect Fail where
 - 操作のシグネチャで、エフェクトの型引数と同じ名前の型変数はその型引数を指す。ほかの型変数は、操作ごとに暗黙に量化する
 - row の中のエフェクトには、宣言と同じ個数の型引数を付ける (`<State Int>`)。個数が違えば E1015 にする
 - **操作のカリー化を許す。** 操作の引数の個数は、シグネチャの一番外側の `->` の数とする
-- 操作のシグネチャの一番外側の `->` には row を書けない (書いたらエラー)。カリー化した操作では、この規則を外側のすべての `->` に適用する
+- 操作のシグネチャの一番外側の `->` には row を書けない (書いたら E1007)。シグネチャが関数型でない場合も E1007 である。カリー化した操作では、この規則を外側のすべての `->` に適用する
 - `never` の操作の結果の型は、宣言で自由な型変数として書く (`never fail : String -> a`)。結果の型は操作自身の型変数で、引数に現れてはならない。エフェクトの型引数は、呼び出した側が自由に選べないので、結果の型に使えない (E1008)
 - エフェクトの操作は、値の名前空間に置くトップレベルの値である。名前の重複の扱いは [モジュールと名前解決](modules.md) の「名前空間」にある
 
@@ -230,7 +230,7 @@ data Color =
 
 ### `deriving`
 
-- `data` の宣言に `deriving` を付けると、書いたクラスの instance を処理系が作る。書けるのは Prelude の `Eq`、`Ord`、`Show` だけである (E1038)。名前でなく解決したクラスで判定するので、ユーザーが `Eq` という名前のクラスを定義しても導出できない
+- `data` の宣言に `deriving` を付けると、書いたクラスの instance を処理系が作る。書けるのは Prelude の `Eq`、`Ord`、`Show` だけである (E1038)。書いた名前がクラスに解決しなければ E1002 にする。名前でなく解決したクラスで判定するので、ユーザーが `Eq` という名前のクラスを定義しても導出できない
 - 導出した instance の文脈は、フィールドの型に現れる `data` の型引数のそれぞれに、そのクラスを付けたものである。Haskell のような文脈の推論 (フィールドの制約を簡約して最小の文脈を求めること) はしない。各フィールドの型は、この文脈のもとで同じクラスの instance を持たなければならない ([型と Kind](types.md) の「導出した instance の検査」)
 - `Ord` を導出するには、上位クラスの規則で `Eq` の instance が要る。手で書いたものでも、導出したものでもよい
 - 導出したメソッドの意味は次のとおりである。`!=`、`<`、`<=`、`>`、`>=` は、クラスの既定のメソッドを通る
@@ -335,7 +335,7 @@ pub data Result e a =
 - `Result` の型引数は `Result e a` の順で、Haskell の `Either e a` と同じである。`Err`、`Ok` の順に宣言するので、導出した `Ord` では `Err _ < Ok _` になる
 - `List` の導出した `Ord` は `Nil < _ :: _` と要素ごとの辞書順で、Haskell のリストの順と同じである
 - `List` の `Show` は手で書いた instance で、`[1, 2]` の形で表示する。空のリストは `[]` である。要素は `show` で表示し、`, ` で区切る。`show_prec` は既定のままにする。角括弧で閉じているので、引数の位置でも括弧が要らないためである。表示は左辺の文字列を一意なまま伸ばして作るので、リストの長さに比例する時間で済む ([オブジェクトモデル](object-model.md) の「文字列の操作」)。`Option` と `Result` の導出した `Show` は、`Some [1]`、`Some (-1)`、`Ok "a"` のように表示する
-- リストを扱う関数 (`map`、`length` など) は、まだ Prelude にない
+- リストを扱う関数は Prelude になく、`List` のモジュールにある ([標準ライブラリ](stdlib.md) の「`List`」)
 
 Prelude の instance は次のとおりである。
 
@@ -345,6 +345,8 @@ Prelude の instance は次のとおりである。
 | `Ord Int` | `extern compare`、`extern (<)`、`extern (<=)`、`extern (>)`、`extern (>=)` |
 | `Show Int` | `extern show`。`show_prec` は Prelude に書き、`d > 6` で負の数なら括弧で囲む (`Some (-1)`) |
 | `Show Float` | `extern show`。Python の `repr` と同じ形で表示する (上の「Prelude のクラス」)。`show_prec` は Prelude に書き、`d > 6` で表示が `-` で始まるなら括弧で囲む (`Some (-1.5)`、`Some (-0.0)`、`Some (-inf)`)。`-` で始まるかは、Prelude の中だけの `Pure` の extern `shows_minus : Float -> Bool` で見分ける。`x < 0.0` は `-0.0` で偽になるためである |
+| `Num Int`、`Div Int`、`Num Float`、`Div Float` | メソッドを instance の中の `extern` で表の行に結ぶ (上の「Prelude のクラス」の `Num` と `Div` の項) |
+| `Eq Float`、`Ord Float` | IEEE 754 のとおりの比較と全順序の `compare` (上の「Prelude のクラス」の `Eq Float` と `Ord Float` の項) |
 | `Eq String` | `extern (==)`、`extern (!=)` |
 | `Ord String` | `extern compare`。順はバイト順で、妥当な UTF-8 ではコードポイントの順と一致する。`<` などは既定のメソッドを通る |
 | `Show String` | `extern show`。下のエスケープで表示する。`display s = s` で、文字列をそのまま返す。恒等関数で足りるので、extern にしない |
@@ -355,6 +357,7 @@ Prelude の instance は次のとおりである。
 | `Show (List a)` | Prelude に eml で書いた instance (上の `List` の `Show`) |
 | `Eq (Option a)`、`Ord (Option a)`、`Show (Option a)` | `deriving (Eq, Ord, Show)` |
 | `Eq (Result e a)`、`Ord (Result e a)`、`Show (Result e a)` | `deriving (Eq, Ord, Show)` |
+| `Eq IOErrorKind`、`Show IOErrorKind`、`Show IOError` | `IOErrorKind` は `deriving (Eq, Show)`。`Show IOError` は Prelude に書いた instance |
 | タプルと `Unit` の `Eq`、`Ord`、`Show` | 処理系の構造的な instance (上の「`deriving`」) |
 
 - `compare` の extern の行は、`Ordering` の宣言の順のタグ (`LT` が 0) を返す
