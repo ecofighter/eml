@@ -1,0 +1,30 @@
+---
+source: crates/eml_cli/tests/ui.rs
+expression: rendered
+input_file: tests/ui/check-fail/linearity/across_multi.em
+---
+[E3006] Error: the array variable `a` must be used exactly once, but it is kept alive across a call that may resume more than once
+   ╭─[ check-fail/linearity/across_multi.em:7:3 ]
+   │
+ 7 │ ╭─▶   var a = MutArray.make 2 0
+   ┆ ┆   
+ 9 │ ├─▶   Array.get (MutArray.freeze a) 0
+   │ │                                       
+   │ ╰─────────────────────────────────────── the scope of this `var` may perform `choose`, a `multi` operation
+   │
+   ├─[ check-fail/linearity/across_multi.em:7:3 ]
+   │
+ 7 │   var a = MutArray.make 2 0
+   │   ────────────┬────────────  
+   │               ╰────────────── `a` holds its array until the end of its scope
+   │
+   ├─[ check-fail/linearity/across_multi.em:7:3 ]
+   │
+ 3 │   multi choose : Unit -> Bool
+   │         ───┬──  
+   │            ╰──── `choose` is declared `multi` here
+   │ 
+   │ Help: perform the `multi` operation outside the scope of `a`
+   │ 
+   │ Note: a continuation of a `multi` operation can be resumed more than once, and each resumption would use the value again
+───╯

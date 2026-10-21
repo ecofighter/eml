@@ -1,0 +1,19 @@
+---
+source: crates/eml_cli/tests/ui.rs
+expression: rendered
+input_file: tests/ui/check-fail/syntax/row_parameter_not_a_name.em
+---
+[E0011] Error: expected a row variable
+   ╭─[ check-fail/syntax/row_parameter_not_a_name.em:2:13 ]
+   │
+ 2 │ data Fixed <IO> =
+   │             ─┬  
+   │              ╰── found `IO`
+───╯
+[E0011] Error: expected a row variable
+   ╭─[ check-fail/syntax/row_parameter_not_a_name.em:5:14 ]
+   │
+ 5 │ data Open <e | f> =
+   │              ┬  
+   │              ╰── found `|`
+───╯

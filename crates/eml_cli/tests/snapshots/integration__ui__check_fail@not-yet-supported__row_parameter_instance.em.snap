@@ -1,0 +1,19 @@
+---
+source: crates/eml_cli/tests/ui.rs
+expression: rendered
+input_file: tests/ui/check-fail/not-yet-supported/row_parameter_instance.em
+---
+[E0004] Error: instances of a type with row parameters are not supported yet
+   ╭─[ check-fail/not-yet-supported/row_parameter_instance.em:4:13 ]
+   │
+ 4 │   deriving (Eq)
+   │             ─┬  
+   │              ╰── this is implemented in a later stage
+───╯
+[E0004] Error: instances of a type with row parameters are not supported yet
+   ╭─[ check-fail/not-yet-supported/row_parameter_instance.em:9:16 ]
+   │
+ 9 │ instance Show (Task <e>) where
+   │                ────┬───  
+   │                    ╰───── this is implemented in a later stage
+───╯

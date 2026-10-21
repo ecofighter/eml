@@ -1,0 +1,21 @@
+---
+source: crates/eml_cli/tests/ui.rs
+expression: rendered
+input_file: tests/ui/check-fail/syntax/extern_kind.em
+---
+[E1033] Error: `extern` is only allowed in the standard library
+   ╭─[ check-fail/syntax/extern_kind.em:2:1 ]
+   │
+ 2 │ extern data Handle : Lin
+   │ ───┬──  
+   │    ╰──── user modules cannot declare externs
+   │ 
+   │ Help: remove `extern` and define the declaration in eml
+───╯
+[E0011] Error: `extern data` cannot have `:`, `=` or `where`
+   ╭─[ check-fail/syntax/extern_kind.em:2:20 ]
+   │
+ 2 │ extern data Handle : Lin
+   │                    ┬  
+   │                    ╰── an extern declaration is only the name and its type parameters
+───╯

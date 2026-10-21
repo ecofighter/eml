@@ -1,0 +1,14 @@
+---
+source: crates/eml_cli/tests/ui.rs
+expression: rendered
+input_file: tests/ui/check-fail/types/unr_value_in_once_field.em
+---
+[E2001] Error: mismatched types
+    ╭─[ check-fail/types/unr_value_in_once_field.em:12:22 ]
+    │
+ 12 │     | Many f -> Once f
+    │                 ──┬─ ┬  
+    │                   ╰───── argument 1 of `Once`
+    │                      │  
+    │                      ╰── expected `once Int -> Int`, found `Int -> Int`
+────╯

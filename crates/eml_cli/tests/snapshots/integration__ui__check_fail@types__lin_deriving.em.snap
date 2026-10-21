@@ -1,0 +1,23 @@
+---
+source: crates/eml_cli/tests/ui.rs
+expression: rendered
+input_file: tests/ui/check-fail/types/lin_deriving.em
+---
+[E2010] Error: `Token` is linear, so it cannot have an instance of `Eq`
+   ╭─[ check-fail/types/lin_deriving.em:4:13 ]
+   │
+ 4 │   deriving (Eq)
+   │             ─┬  
+   │              ╰── a linear type
+   │ 
+   │ Note: the methods of a class may copy or drop their arguments, which a linear value forbids
+───╯
+[E2010] Error: `Key` is linear, so it cannot have an instance of `Show`
+   ╭─[ check-fail/types/lin_deriving.em:9:15 ]
+   │
+ 9 │ instance Show Key where
+   │               ─┬─  
+   │                ╰─── a linear type
+   │ 
+   │ Note: the methods of a class may copy or drop their arguments, which a linear value forbids
+───╯

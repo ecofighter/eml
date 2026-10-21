@@ -1,0 +1,20 @@
+---
+source: crates/eml_cli/tests/ui.rs
+expression: rendered
+input_file: tests/ui/check-fail/linearity/mut_array_twice.em
+---
+[E3002] Error: `m` must be used exactly once, but it is used more than once
+   ╭─[ check-fail/linearity/mut_array_twice.em:6:27 ]
+   │
+ 6 │   let b = MutArray.freeze m
+   │                           ┬  
+   │                           ╰── used again here
+   │
+   ├─[ check-fail/linearity/mut_array_twice.em:6:27 ]
+   │
+ 5 │   let a = MutArray.freeze m
+   │                           ┬  
+   │                           ╰── first used here
+   │ 
+   │ Note: linear values, such as files, the continuation of a `once` operation and closures that capture one, must be used exactly once
+───╯
