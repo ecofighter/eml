@@ -19,9 +19,7 @@ use eml_lir::{
 use crate::builder::FnBuilder;
 
 use super::display::BUDGET;
-use super::types::{
-    Composite, MAX_STRUCT_WORDS, StructTypes, boxed_repr, declared_mark, mark, named, split_arrows,
-};
+use super::types::{Composite, StructTypes, boxed_repr, declared_mark, mark, named, split_arrows};
 
 /// 文字列リテラルと表示用のパスの表。同じ文字列には同じ番号を返す。
 #[derive(Default)]
@@ -177,22 +175,8 @@ impl ProgramBuilder {
         Repr::Struct(self.structs.intern(StructShape { layout, fields }))
     }
 
-    /// 型を持たない組の Repr。開いた後の葉の語の数が上限に収まれば構造体に、収まらなければ `obj` にする
-    /// (docs/superpowers/specs/2026-10-21-s14e-abi-struct-design.md の「構造体にする型」)。
     pub(super) fn tuple_struct(&mut self, layout: LayoutId, fields: Vec<(Repr, Mark)>) -> Repr {
-        let words: usize = fields
-            .iter()
-            .map(|&(repr, _)| match repr {
-                Repr::Struct(id) => self.structs.words(id),
-                Repr::Unit => 0,
-                _ => 1,
-            })
-            .sum();
-        if (1..=MAX_STRUCT_WORDS).contains(&words) {
-            Repr::Struct(self.structs.intern(StructShape { layout, fields }))
-        } else {
-            Repr::Obj
-        }
+        super::types::tuple_struct(&mut self.structs, layout, fields)
     }
 
     pub(super) fn var_info(

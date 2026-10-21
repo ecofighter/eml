@@ -1,0 +1,9 @@
+---
+source: crates/eml_cli/tests/ui.rs
+expression: "format!(\"--- stdout ---\\n{stdout}--- stderr ---\\n{diagnostics}{stderr}{written}{exit}\")"
+input_file: tests/ui/run/linearity/lin_struct_through_uniform.em
+---
+--- stdout ---
+hello from a file 7
+hello from a file 8
+--- stderr ---

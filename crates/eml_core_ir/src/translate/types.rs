@@ -5,13 +5,36 @@ use std::collections::{HashMap, HashSet};
 use eml_hir::{Program as HirProgram, TypeDefId, TypeDefKind};
 use eml_types::{Lin, TypeId, TypeKind, TypeStore, TypedProgram};
 
-use eml_lir::{Mark, Repr, VarInfo, data_repr};
+use eml_lir::{LayoutId, Mark, Repr, StructShape, Structs, VarInfo, data_repr};
 
 use super::instances::constructor_fields;
 
 /// 構造体にする型の、開いた後の葉の語の数の上限
 /// (docs/superpowers/specs/2026-10-21-s14e-abi-struct-design.md の「構造体にする型」)。
 pub(super) const MAX_STRUCT_WORDS: usize = 6;
+
+/// 型を持たない組の Repr。開いた後の葉の語の数が上限に収まれば構造体に、収まらなければ `obj` にする
+/// (docs/superpowers/specs/2026-10-21-s14e-abi-struct-design.md の「構造体にする型」)。translate の `var` の組と、
+/// optimize の状態を渡す形の複製が返す組が使う。
+pub(crate) fn tuple_struct(
+    structs: &mut Structs,
+    layout: LayoutId,
+    fields: Vec<(Repr, Mark)>,
+) -> Repr {
+    let words: usize = fields
+        .iter()
+        .map(|&(repr, _)| match repr {
+            Repr::Struct(id) => structs.words(id),
+            Repr::Unit => 0,
+            _ => 1,
+        })
+        .sum();
+    if (1..=MAX_STRUCT_WORDS).contains(&words) {
+        Repr::Struct(structs.intern(StructShape { layout, fields }))
+    } else {
+        Repr::Obj
+    }
+}
 
 /// 箱の位置の Repr (docs/spec/core-ir.md の「型の Repr」)。構造体にする型も、箱に入れた形の `obj` として読む。
 /// 構造体が現れない所 (extern の行、操作の表) はこの Repr を使う

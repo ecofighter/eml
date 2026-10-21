@@ -1,0 +1,11 @@
+---
+source: crates/eml_cli/tests/ui.rs
+expression: "format!(\"--- stdout ---\\n{stdout}--- stderr ---\\n{diagnostics}{stderr}{written}{exit}\")"
+input_file: tests/ui/run/panic/struct_return_panics.em
+---
+--- stdout ---
+Ok 8.5
+Err "too big: 5"
+Ok 12.0
+Err "negative"
+--- stderr ---

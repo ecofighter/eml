@@ -1,0 +1,12 @@
+---
+source: crates/eml_cli/tests/ui.rs
+expression: "format!(\"--- stdout ---\\n{stdout}--- stderr ---\\n{diagnostics}{stderr}{written}{exit}\")"
+input_file: tests/ui/run/float/float_bits_through_structs.em
+---
+--- stdout ---
+direct: -0.0 LT False / nan GT True
+converted: -0.0 LT False / nan GT True
+captured: -0.0 LT False / nan GT True
+struct leaves: -0.0 LT False / nan GT True
+returned: -0.0 LT False / nan GT True
+--- stderr ---

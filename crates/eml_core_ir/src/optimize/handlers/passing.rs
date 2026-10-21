@@ -10,10 +10,11 @@ use super::super::blocks;
 use super::super::known::fresh;
 use super::{Copies, KnownFn, Shape, Table, piece, targeted};
 use crate::tail::tail_position_call;
+use crate::translate::tuple_struct;
 use crate::{Block, Call, CoreFn, Program, Rhs, Stmt, Term};
 use eml_lir::{
-    Atom, BlockId, Ctor, FnIdx, Layout, LayoutCtor, LayoutId, Mark, Repr, Role, TUPLE, VarId,
-    VarInfo,
+    Atom, BlockId, Ctor, FnIdx, Layout, LayoutCtor, LayoutId, Mark, Repr, Role, Structs, TUPLE,
+    VarId, VarInfo,
 };
 
 /// 複製 `f{H}` が返す値の並び。複製の元の名前と handler で決まるので、名前が同じ複製はいつも同じ形の結果を返す
@@ -27,13 +28,13 @@ pub(super) struct Returned {
 impl Returned {
     /// 並びを返す結果の Repr と印。値がなければ `()` を、1つならその値を返す。`Unit` を返す関数が、呼ばれるたびに
     /// 組を確保しないためである。2つ以上なら、その大きさのタプルを1つ作って返す。外側の handler ごとに組を重ねない
-    /// ためである。
-    pub(super) fn info(&self) -> VarInfo {
+    /// ためである。タプルの Repr は `Tuples` が値の Repr と印から決める。
+    pub(super) fn info(&self, tuples: &Tuples) -> VarInfo {
         let (repr, mark) = match self.values[..] {
             [] => (Repr::Unit, Mark::Unr),
             [value] => value,
             _ => (
-                Repr::Obj,
+                tuples.repr(&self.values),
                 self.values
                     .iter()
                     .fold(Mark::Unr, |joined, &(_, mark)| joined.join(mark)),
@@ -70,21 +71,58 @@ pub(super) fn returned(
     Returned { values }
 }
 
-/// タプルの大きさごとの配置。
-pub(super) type Tuples = HashMap<usize, LayoutId>;
+/// 状態を渡す形の複製が開くか返すタプル。回の初めに、複製が借りる前の `program` に配置と形を足しておく。
+pub(super) struct Tuples {
+    /// 大きさごとの配置。
+    layouts: HashMap<usize, LayoutId>,
+    /// 値の並びごとのタプルの Repr。値の Repr と印から作る形の構造体で、6 語を超える並びは `obj` である
+    /// (docs/superpowers/specs/2026-10-21-s14e-abi-struct-design.md の「Core IR」の optimize)。並びは複製の元の名前と
+    /// handler で決まるので、名前が同じ複製はいつも同じ形を返す。
+    reprs: HashMap<Vec<(Repr, Mark)>, Repr>,
+}
 
-fn tuple(tuples: &Tuples, size: usize) -> Ctor {
-    Ctor {
-        layout: *tuples
-            .get(&size)
-            .expect("the round adds the tuple layouts its copies use"),
-        tag: TUPLE,
+impl Tuples {
+    /// 値の並び `lists` のうち2つ以上の値を持つものの、配置と Repr を決める。
+    pub(super) fn new(program: &mut Program, lists: Vec<Vec<(Repr, Mark)>>) -> Tuples {
+        let mut tuples = Tuples {
+            layouts: HashMap::new(),
+            reprs: HashMap::new(),
+        };
+        for values in lists {
+            if values.len() < 2 || tuples.reprs.contains_key(&values) {
+                continue;
+            }
+            let layout = *tuples
+                .layouts
+                .entry(values.len())
+                .or_insert_with(|| tuple_layout(program, values.len()));
+            let repr = tuple_struct(&mut program.structs, layout, values.clone());
+            tuples.reprs.insert(values, repr);
+        }
+        tuples
+    }
+
+    fn ctor(&self, size: usize) -> Ctor {
+        Ctor {
+            layout: *self
+                .layouts
+                .get(&size)
+                .expect("the round adds the tuple layouts its copies use"),
+            tag: TUPLE,
+        }
+    }
+
+    fn repr(&self, values: &[(Repr, Mark)]) -> Repr {
+        *self
+            .reprs
+            .get(values)
+            .expect("the round adds the tuple reprs its copies use")
     }
 }
 
 /// `size` 個の要素のタプルの配置。translate がタプルに使う配置と同じ形 (フィールドはどれも `tobj`) で、配置の表に
 /// なければ足す。
-pub(super) fn tuple_layout(program: &mut Program, size: usize) -> LayoutId {
+fn tuple_layout(program: &mut Program, size: usize) -> LayoutId {
     let name = format!("({})", ",".repeat(size - 1));
     if let Some(index) = program
         .layouts
@@ -146,7 +184,7 @@ pub(super) fn receive(
     }
     let mut values = base.values.clone();
     values.push((state.repr, state.mark));
-    let received = fresh(vars, Returned { values }.info());
+    let received = fresh(vars, Returned { values }.info(tuples));
     let mut stmts = vec![Stmt::Let {
         var: received,
         rhs: call,
@@ -156,7 +194,7 @@ pub(super) fn receive(
         let next = fresh(vars, state.clone());
         stmts.push(Stmt::Unpack {
             value: received,
-            ctor: tuple(tuples, 2),
+            ctor: tuples.ctor(2),
             fields: vec![value, next],
         });
         return (stmts, Some(value), Some(next));
@@ -180,14 +218,14 @@ pub(super) fn receive(
     unpacked.push(next);
     stmts.push(Stmt::Unpack {
         value: received,
-        ctor: tuple(tuples, count + 1),
+        ctor: tuples.ctor(count + 1),
         fields: unpacked,
     });
     let value = value(vars);
     stmts.push(Stmt::Let {
         var: value,
         rhs: Rhs::Con {
-            ctor: tuple(tuples, count),
+            ctor: tuples.ctor(count),
             args: fields.into_iter().map(Atom::Var).collect(),
         },
     });
@@ -274,7 +312,7 @@ pub(super) fn build(copies: &mut Copies, index: FnIdx, function: FnIdx, shape: &
         program,
         state.as_ref().map(|state| (state.repr, state.mark)),
     );
-    let result = own.info();
+    let result = own.info(copies.tuples);
     copies.table.returns.insert(index, own);
     let touching = copies.touching[&shape.effect].as_slice();
     let tuples = copies.tuples;
@@ -351,6 +389,7 @@ pub(super) fn build(copies: &mut Copies, index: FnIdx, function: FnIdx, shape: &
     let mut units: HashSet<VarId> = HashSet::new();
     let mut entered: Vec<Option<VarId>> = vec![None; source.blocks.len()];
     let mut blocks: Vec<Block> = Vec::with_capacity(next as usize);
+    let mut extra: Vec<Block> = Vec::new();
     for (number, original) in source.blocks.iter().enumerate() {
         debug_assert_eq!(BlockId(blocks.len() as u32), starts[number]);
         let mut params = original.params.clone();
@@ -483,7 +522,16 @@ pub(super) fn build(copies: &mut Copies, index: FnIdx, function: FnIdx, shape: &
             match &mut term {
                 Term::Return(value) => {
                     let value = *value;
-                    term = finish(&mut code, &mut current, &base, value, current_state, tuples);
+                    term = finish(
+                        &mut code,
+                        &mut current,
+                        &base,
+                        value,
+                        current_state,
+                        tuples,
+                        &program.structs,
+                        (&mut extra, next),
+                    );
                 }
                 Term::Jump { target, args } => {
                     *target = starts[target.0 as usize];
@@ -498,6 +546,7 @@ pub(super) fn build(copies: &mut Copies, index: FnIdx, function: FnIdx, shape: &
         }
         blocks.push(current);
     }
+    blocks.append(&mut extra);
     code.blocks = blocks;
     blocks::prune(&mut code);
     copies.place(index, code);
@@ -517,6 +566,12 @@ fn unit(units: &HashSet<VarId>, atom: &mut Atom) {
 /// 以上なら value はそのタプルなので、開いてから並べ直す。タプルの印は、結果の印に要素の印を結んだものにする。
 /// `return` は値と結果の印が互換であればよいので、値の印が結果の印を超えることがあり、タプルを作る所の検査はその
 /// 値の印も求めるためである。
+///
+/// 構造体の `con` の引数は正確な位置だが、`return` の value は f の結果の Repr と互換であればよい (`obj` の変数や
+/// `tobj` の位置の `()`)。そのときは、value と状態を、並びの Repr の引数を持つブロックへのジャンプで渡し、そこで
+/// タプルを作る。ジャンプの実引数は命令なしで収まる互換の位置なので、`return` と同じ値をそのまま渡せる
+/// (docs/spec/lir.md の「位置の規則」)。足すブロックは `extra` の並びに積み、番号は `extra` の2つ目の値から振る。
+#[allow(clippy::too_many_arguments)]
 fn finish(
     code: &mut CoreFn,
     block: &mut Block,
@@ -524,6 +579,8 @@ fn finish(
     value: Atom,
     state: Option<VarId>,
     tuples: &Tuples,
+    structs: &Structs,
+    extra: (&mut Vec<Block>, u32),
 ) -> Term {
     let Some(state) = state else {
         return Term::Return(value);
@@ -532,7 +589,7 @@ fn finish(
         Atom::Var(var) => code.mark(var),
         _ => Mark::Unr,
     };
-    let mut args = match base.values.len() {
+    let args = match base.values.len() {
         0 => {
             if mark(code, value) != Mark::Unr {
                 let dropped = fresh(
@@ -550,7 +607,37 @@ fn finish(
             }
             return Term::Return(Atom::Var(state));
         }
-        1 => vec![value],
+        1 => {
+            let (repr, _) = base.values[0];
+            let exact = match value {
+                Atom::Var(var) => structs.same(code.repr(var), repr),
+                constant => constant.fits(&code.vars, repr),
+            };
+            if matches!(code.ret, Repr::Struct(_)) && !exact {
+                let (extra, first) = extra;
+                let target = BlockId(first + extra.len() as u32);
+                let info = VarInfo {
+                    name: "t".to_string(),
+                    repr,
+                    mark: mark(code, value),
+                };
+                let param = fresh(&mut code.vars, info);
+                let state_info = code.vars[state.0 as usize].clone();
+                let next = fresh(&mut code.vars, state_info);
+                let mut built = Block {
+                    params: vec![param, next],
+                    stmts: Vec::new(),
+                    term: Term::Return(Atom::Unit),
+                };
+                built.term = build_tuple(code, &mut built, vec![Atom::Var(param)], next, tuples);
+                extra.push(built);
+                return Term::Jump {
+                    target,
+                    args: vec![value, Atom::Var(state)],
+                };
+            }
+            vec![value]
+        }
         count => {
             let Atom::Var(returned) = value else {
                 unreachable!("a copy returns its tuple in a variable");
@@ -571,28 +658,42 @@ fn finish(
                 .collect();
             block.stmts.push(Stmt::Unpack {
                 value: returned,
-                ctor: tuple(tuples, count),
+                ctor: tuples.ctor(count),
                 fields: fields.clone(),
             });
             fields.into_iter().map(Atom::Var).collect()
         }
     };
+    build_tuple(code, block, args, state, tuples)
+}
+
+/// f の並び `args` と今の状態のタプルを作って返す。
+fn build_tuple(
+    code: &mut CoreFn,
+    block: &mut Block,
+    mut args: Vec<Atom>,
+    state: VarId,
+    tuples: &Tuples,
+) -> Term {
     args.push(Atom::Var(state));
-    let built_mark = args
-        .iter()
-        .fold(code.ret_mark, |joined, &arg| joined.join(mark(code, arg)));
+    let built_mark = args.iter().fold(code.ret_mark, |joined, &arg| {
+        joined.join(match arg {
+            Atom::Var(var) => code.mark(var),
+            _ => Mark::Unr,
+        })
+    });
     let built = fresh(
         &mut code.vars,
         VarInfo {
             name: "d".to_string(),
-            repr: Repr::Obj,
+            repr: code.ret,
             mark: built_mark,
         },
     );
     block.stmts.push(Stmt::Let {
         var: built,
         rhs: Rhs::Con {
-            ctor: tuple(tuples, args.len()),
+            ctor: tuples.ctor(args.len()),
             args,
         },
     });

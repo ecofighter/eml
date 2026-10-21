@@ -263,24 +263,32 @@ fn round(program: &mut Program, translated: &[bool], table: &mut Table) -> bool 
     if handlers.is_empty() {
         return false;
     }
-    // タプルの配置は、複製が `program` を借りる前に足しておく。状態つきの handler の経路の関数ごとに、元の並びを
-    // 開くタプルと、状態を足した並びを返すタプルを使う
-    let mut sizes = BTreeSet::new();
+    // タプルの配置と形は、複製が `program` を借りる前に足しておく。状態を渡す形の handler の経路の関数ごとに、元の
+    // 並びと、状態つきなら状態を足した並びを使う
+    let mut lists = Vec::new();
     for handler in &handlers {
-        if handler.form != Form::Passing || !handler.stateful() {
+        if handler.form != Form::Passing {
             continue;
         }
+        let state = handler.stateful().then(|| {
+            let ret = handler
+                .clauses
+                .last()
+                .expect("a handler has a return clause");
+            let ret = passing::state_info(program.function(ret.function));
+            (ret.repr, ret.mark)
+        });
         for &function in &handler.path {
-            let base = passing::returned(table, function, program, None)
-                .values
-                .len();
-            sizes.extend([base, base + 1].into_iter().filter(|&size| size >= 2));
+            let base = passing::returned(table, function, program, None).values;
+            if let Some(state) = state {
+                let mut own = base.clone();
+                own.push(state);
+                lists.push(own);
+            }
+            lists.push(base);
         }
     }
-    let tuples: Tuples = sizes
-        .into_iter()
-        .map(|size| (size, passing::tuple_layout(program, size)))
-        .collect();
+    let tuples = Tuples::new(program, lists);
     let mut copies = Copies {
         program,
         table,

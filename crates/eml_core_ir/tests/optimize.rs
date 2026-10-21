@@ -796,16 +796,16 @@ main () = println (show (State.exec 0 (fn () -> count 5)))
     let shown = core_text(text, Pass::Optimize);
     assert!(!shown.contains("handle "), "{shown}");
     insta::assert_snapshot!(handler_copies(&shown), @r#"
-    fn "count{H=Std.State.run@#6d0e8cc9f0bb1f6e}"(n.0: int, st.7: int) -> obj {
+    fn "count{H=Std.State.run@#6d0e8cc9f0bb1f6e}"(n.0: int, st.7: int) -> (,){int, int} {
       let t.1: enum = extern "Prelude.Eq Int.=="(n.0, 0)
       switch t.1 Prelude.Bool { #0 -> b1, #1 -> b2 }
     b1:
       let t.3: int = extern "Prelude.Num Int.+"(st.7, 1)
       let t.5: int = extern "Prelude.Num Int.-"(n.0, 1)
-      let t.10: obj = call "count{H=Std.State.run@#6d0e8cc9f0bb1f6e}"(t.5, t.3)
+      let t.10: (,){int, int} = call "count{H=Std.State.run@#6d0e8cc9f0bb1f6e}"(t.5, t.3)
       return t.10
     b2:
-      let d.11: obj = con (,) #0(0, st.7)
+      let d.11: (,){int, int} = con (,) #0(0, st.7)
       return d.11
     }
     "#);
@@ -992,17 +992,17 @@ fn nested_handlers_are_specialized_inside_out() {
         .map(str::trim)
         .collect();
     insta::assert_snapshot!(nested.join("\n\n"), @r#"
-    fn "loop{H=count@#3090723f4081c669}@#41424a60520c7b81"(i.0: int, n.1: int, c.6: int, st.9: int) -> obj {
+    fn "loop{H=count@#3090723f4081c669}@#41424a60520c7b81"(i.0: int, n.1: int, c.6: int, st.9: int) -> (,){int, int} {
       let t.2: enum = extern "Prelude.Ord Int.>"(i.0, n.1)
       switch t.2 Prelude.Bool { #0 -> b1, #1 -> b2 }
     b1:
       let t.14: int = extern "Prelude.Num Int.+"(c.6, 1)
       let t.15: int = extern "Prelude.Num Int.+"(st.9, i.0)
       let t.4: int = extern "Prelude.Num Int.+"(i.0, 1)
-      let t.12: obj = call "loop{H=count@#3090723f4081c669}@#41424a60520c7b81"(t.4, n.1, t.14, t.15)
+      let t.12: (,){int, int} = call "loop{H=count@#3090723f4081c669}@#41424a60520c7b81"(t.4, n.1, t.14, t.15)
       return t.12
     b2:
-      let d.13: obj = con (,) #0(c.6, st.9)
+      let d.13: (,){int, int} = con (,) #0(c.6, st.9)
       return d.13
     }
     "#);
@@ -2020,7 +2020,7 @@ fn entry$main() -> int {
     fn "f{H=ret}"(n.0: int, s.4: int) -> int {
       switch n.0 { 0 -> b1, _ -> b2 }
     b1:
-      let t.5: obj = call "g{H=ret}"(3, s.4)
+      let t.5: (,){tobj, int} = call "g{H=ret}"(3, s.4)
       unpack t.5 (,) #0(t.1: tobj, s.6: int)
       return s.6
     b2:
@@ -2125,7 +2125,7 @@ fn nested_handlers_return_one_tuple() {
         assert!(!code.contains("con (,) "), "{shown}");
     }
     insta::assert_snapshot!(format!("{step}\n{looped}"), @r#"
-    fn "step{H=run_c@#16721f776dc3b3e5}{H=run_b@#f19715733acc9a50}@#d06ed3ed0f858a82"(k.0: int, s.7: int, s.11: int, s.17: int) -> obj {
+    fn "step{H=run_c@#16721f776dc3b3e5}{H=run_b@#f19715733acc9a50}@#d06ed3ed0f858a82"(k.0: int, s.7: int, s.11: int, s.17: int) -> (,,){int, int, int} {
       let t.1: enum = extern "Prelude.Eq Int.=="(k.0, 0)
       switch t.1 Prelude.Bool { #0 -> b1, #1 -> b2 }
     b1:
@@ -2133,24 +2133,24 @@ fn nested_handlers_return_one_tuple() {
       let t.12: int = extern "Prelude.Num Int.+"(s.11, 1)
       let t.8: int = extern "Prelude.Num Int.+"(s.7, 1)
       let t.5: int = extern "Prelude.Num Int.-"(k.0, 1)
-      let t.22: obj = call "step{H=run_c@#16721f776dc3b3e5}{H=run_b@#f19715733acc9a50}@#d06ed3ed0f858a82"(t.5, t.8, t.12, t.18)
+      let t.22: (,,){int, int, int} = call "step{H=run_c@#16721f776dc3b3e5}{H=run_b@#f19715733acc9a50}@#d06ed3ed0f858a82"(t.5, t.8, t.12, t.18)
       return t.22
     b2:
-      let d.25: obj = con (,,) #0(s.7, s.11, s.17)
+      let d.25: (,,){int, int, int} = con (,,) #0(s.7, s.11, s.17)
       return d.25
     }
 
-    fn "loop{H=run_c@#16721f776dc3b3e5}{H=run_b@#f19715733acc9a50}@#e9f1b383dd022326"(i.0: int, s.5: int, s.8: int, s.13: int) -> obj {
+    fn "loop{H=run_c@#16721f776dc3b3e5}{H=run_b@#f19715733acc9a50}@#e9f1b383dd022326"(i.0: int, s.5: int, s.8: int, s.13: int) -> (,,){int, int, int} {
       let t.1: enum = extern "Prelude.Eq Int.=="(i.0, 0)
       switch t.1 Prelude.Bool { #0 -> b1, #1 -> b2 }
     b1:
-      let t.14: obj = call "step{H=run_c@#16721f776dc3b3e5}{H=run_b@#f19715733acc9a50}@#d06ed3ed0f858a82"(1, s.5, s.8, s.13)
+      let t.14: (,,){int, int, int} = call "step{H=run_c@#16721f776dc3b3e5}{H=run_b@#f19715733acc9a50}@#d06ed3ed0f858a82"(1, s.5, s.8, s.13)
       unpack t.14 (,,) #0(t.15: int, t.16: int, s.17: int)
       let t.3: int = extern "Prelude.Num Int.-"(i.0, 1)
-      let t.18: obj = call "loop{H=run_c@#16721f776dc3b3e5}{H=run_b@#f19715733acc9a50}@#e9f1b383dd022326"(t.3, t.15, t.16, s.17)
+      let t.18: (,,){int, int, int} = call "loop{H=run_c@#16721f776dc3b3e5}{H=run_b@#f19715733acc9a50}@#e9f1b383dd022326"(t.3, t.15, t.16, s.17)
       return t.18
     b2:
-      let d.21: obj = con (,,) #0(s.5, s.8, s.13)
+      let d.21: (,,){int, int, int} = con (,,) #0(s.5, s.8, s.13)
       return d.21
     }
     "#);
@@ -2289,7 +2289,7 @@ fn nested_vars_are_specialized_inside_out() {
     insta::assert_snapshot!(copies.join("\n"), @r#"
     fn "Prelude.for<e>{2=count$lambda0/1}{H=count$var0$return}"(lo.0: int, hi.1: int, marks.7: obj, st.8: int) -> int {
     fn "Prelude.for<e>{2=sieve$lambda2/1}{H=sieve$var0$return}"(lo.0: int, hi.1: int, n.7: int, st.8: obj lin) -> obj lin {
-    fn "Prelude.while<e>{0=sieve$lambda0/1, 1=sieve$lambda1/1}@#55b5caa901e2f263"(n.5: int, i.6: int, st.7: int, st.12: obj lin) -> obj lin {
+    fn "Prelude.while<e>{0=sieve$lambda0/1, 1=sieve$lambda1/1}@#55b5caa901e2f263"(n.5: int, i.6: int, st.7: int, st.12: obj lin) -> (,){int, obj lin} lin {
     "#);
 }
 
@@ -2539,4 +2539,183 @@ fn entry$main(k.0: tobj) -> int {
     };
     assert_eq!(role("r{"), Role::Typed, "{shown}");
     assert_eq!(role("g{"), Role::Clause, "{shown}");
+}
+
+/// 状態を渡す形の複製が2つ以上の値を返すとき、結果は値の Repr と印から作るタプルの形の構造体である。末尾でない
+/// 呼び出しは構造体を受けて `unpack` し、`return` の節の結果の組も構造体の `con` で作る
+/// (docs/superpowers/specs/2026-10-21-s14e-abi-struct-design.md の「Core IR」の optimize)。
+#[test]
+fn passing_returns_a_tuple_struct() {
+    let text = "\
+import Std.State (State(..))
+
+count : Int -> <State Int, Panic> Int
+count n = if n == 0 then 0 else
+  put (get () + 1)
+  let r = count (n - 1)
+  r + 2
+
+main : Unit -> <IO, Panic> Unit
+main () = println (show (State.exec 0 (fn () -> count 5)))
+";
+    let shown = core_text(text, Pass::Optimize);
+    assert!(!shown.contains("handle "), "{shown}");
+    insta::assert_snapshot!(handler_copies(&shown), @r#"
+    fn "count{H=Std.State.run@#6d0e8cc9f0bb1f6e}"(n.0: int, st.8: int) -> (,){int, int} {
+      let t.1: enum = extern "Prelude.Eq Int.=="(n.0, 0)
+      switch t.1 Prelude.Bool { #0 -> b1, #1 -> b2 }
+    b1:
+      let t.3: int = extern "Prelude.Num Int.+"(st.8, 1)
+      let t.5: int = extern "Prelude.Num Int.-"(n.0, 1)
+      let t.11: (,){int, int} = call "count{H=Std.State.run@#6d0e8cc9f0bb1f6e}"(t.5, t.3)
+      unpack t.11 (,) #0(t.6: int, st.12: int)
+      let t.7: int = extern "Prelude.Num Int.+"(t.6, 2)
+      let d.13: (,){int, int} = con (,) #0(t.7, st.12)
+      return d.13
+    b2:
+      let d.14: (,){int, int} = con (,) #0(0, st.8)
+      return d.14
+    }
+    "#);
+}
+
+/// 開いた後の語の数が 6 を超える並びは、構造体にせず今の `obj` のタプルで返す
+/// (docs/superpowers/specs/2026-10-21-s14e-abi-struct-design.md の「構造体にする型」)。
+#[test]
+fn a_returned_tuple_over_six_words_stays_obj() {
+    let text = "\
+import Std.State (State(..))
+
+data Six =
+  | Six Float Float Float Float Float Float
+
+count : Int -> <State Six, Panic> Int
+count n = if n == 0 then 0 else
+  let Six a b c d e f = get ()
+  put (Six (a + 1.0) b c d e f)
+  count (n - 1) + 1
+
+main : Unit -> <IO, Panic> Unit
+main () =
+  let Six a _ _ _ _ _ = State.exec (Six 0.0 0.0 0.0 0.0 0.0 0.0) (fn () -> count 5)
+  println (show a)
+";
+    let shown = core_text(text, Pass::Optimize);
+    assert!(!shown.contains("handle "), "{shown}");
+    let header = shown
+        .lines()
+        .find(|line| line.starts_with("fn \"count{H="))
+        .unwrap_or_else(|| panic!("{shown}"));
+    assert!(header.ends_with("-> obj {"), "{shown}");
+}
+
+/// 構造体の型の `var` の状態は、状態を渡す形の複製でも構造体のまま持ち回る。2つの `var` の状態を返す複製の組は、
+/// 入れ子の構造体を葉に持つ構造体になる (docs/superpowers/specs/2026-10-21-s14e-abi-struct-design.md の「Core IR」の
+/// optimize)。
+#[test]
+fn a_struct_var_state_stays_a_struct() {
+    let text = "\
+data Vec3 =
+  | Vec3 Float Float Float
+
+add : Vec3 -> Vec3 -> <Panic> Vec3
+add (Vec3 a b c) (Vec3 x y z) = Vec3 (a + x) (b + y) (c + z)
+
+walk : Int -> <Panic> Float
+walk n =
+  var p = Vec3 0.0 0.0 0.0
+  var steps = 0
+  for 0 n (fn i ->
+    p <- add p (Vec3 1.0 2.0 3.0)
+    steps <- steps + 1)
+  let Vec3 x y z = p
+  x + y + z + Float.of_int steps
+
+main : Unit -> <IO, Panic> Unit
+main () = println (show (walk 4))
+";
+    let shown = core_text(text, Pass::Optimize);
+    assert!(!shown.contains("handle "), "{shown}");
+    let headers: Vec<&str> = shown
+        .lines()
+        .filter(|line| line.starts_with("fn \"") && line.contains("{H="))
+        .collect();
+    insta::assert_snapshot!(headers.join("\n"), @r#"fn "Prelude.for<e>{2=walk$lambda0}{H=walk$var1$return}@#168ca81853eb6170"(lo.0: int, hi.1: int, st.7: int, st.10: Vec3{float, float, float}) -> (,){int, Vec3{float, float, float}} {"#);
+}
+
+/// 組を構造体で返す複製で、`return` の値が並びの Repr と互換なだけ (`tobj` の結果の `()`) のときは、値と状態を並びの
+/// Repr の引数を持つブロックへジャンプで渡し、そこで構造体の `con` を作る。構造体の `con` の引数は正確な位置で、
+/// ジャンプの実引数は命令なしで収まる互換の位置だからである
+/// (docs/superpowers/specs/2026-10-21-s14e-abi-struct-design.md の「Core IR」の optimize)。
+#[test]
+fn a_compatible_return_value_reaches_the_tuple_through_a_block() {
+    let shown = optimized(
+        "\
+effect Count { tick(unit) -> unit }
+internal yields fn body(p.0: unit) -> tobj {
+  let t.1: tobj = call g(3)
+  return t.1
+}
+yields fn g(n.0: int) -> tobj {
+  let t.1: unit = perform Count.tick(())
+  switch n.0 { 0 -> b1, _ -> b2 }
+b1:
+  return ()
+b2:
+  let m.2: int = extern \"Prelude.Num Int.-\"(n.0, 1)
+  let t.3: tobj = call g(m.2)
+  return t.3
+}
+internal fn tick(p.0: unit, k.1: tobj, s.2: int) -> tobj {
+  let n.3: int = extern \"Prelude.Num Int.+\"(s.2, 1)
+  let t.4: tobj = resume k.1((): unit, n.3)
+  return t.4
+}
+internal fn ret(x.0: tobj, s.1: int) -> int {
+  return s.1
+}
+fn entry$main() -> int {
+  let t.0: int = handle Count(0, &body) { tick: &tick } return &ret
+  return t.0
+}
+",
+    );
+    insta::assert_snapshot!(function(&shown, "\"g{H=ret}\""), @r#"
+    fn "g{H=ret}"(n.0: int, s.4: int) -> (,){tobj, int} {
+      let n.5: int = extern "Prelude.Num Int.+"(s.4, 1)
+      switch n.0 { 0 -> b1, _ -> b2 }
+    b1:
+      jump b3((), n.5)
+    b2:
+      let m.2: int = extern "Prelude.Num Int.-"(n.0, 1)
+      let t.10: (,){tobj, int} = call "g{H=ret}"(m.2, n.5)
+      return t.10
+    b3(t.7: tobj, s.8: int):
+      let d.9: (,){tobj, int} = con (,) #0(t.7, s.8)
+      return d.9
+    }
+    "#);
+}
+
+/// 既知の閉包をフィールドに持つ構造体の `con` を渡す呼び出しの複製は、値のフィールドを形の Repr (`int`) で受ける。
+/// 複製の入口で作り直す構造体の `con` の引数は、形と比べる正確な位置だからである。配置の Repr (`tobj`) で受けると、
+/// 作り直す `con` が verifier に断られる
+/// (docs/superpowers/specs/2026-10-21-s14e-abi-struct-design.md の「Core IR」の optimize)。
+#[test]
+fn a_con_copy_takes_struct_fields_in_their_shape_reprs() {
+    let text = "\
+apply_n : (Int -> <Panic> Int, Int) -> Int -> <Panic> Int
+apply_n (f, x) n = if n == 0 then x else apply_n (f, f x) (n - 1)
+
+main : Unit -> <IO, Panic> Unit
+main () =
+  let k = 3
+  println (show (apply_n ((fn y -> y + k), 1) 10))
+";
+    let shown = core_text(text, Pass::Optimize);
+    let header = shown
+        .lines()
+        .find(|line| line.starts_with("fn \"apply_n{"))
+        .unwrap_or_else(|| panic!("{shown}"));
+    insta::assert_snapshot!(header, @r#"fn "apply_n{0=(,) #0(main$lambda0/1, _)}"(k.9: int, p.11: int, n.1: int) -> int {"#);
 }

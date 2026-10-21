@@ -1,0 +1,10 @@
+---
+source: crates/eml_cli/tests/ui.rs
+expression: "format!(\"--- stdout ---\\n{stdout}--- stderr ---\\n{diagnostics}{stderr}{written}{exit}\")"
+input_file: tests/ui/run/records/struct_typed_field.em
+---
+--- stdout ---
+32.5
+15.0
+1.5 1.25 1.125 2.5
+--- stderr ---

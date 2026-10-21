@@ -293,6 +293,18 @@ pub fn run_stats(text: &str) -> (String, Result<RunStats, RuntimeError>) {
     execute(&lir(text), &checked())
 }
 
+/// `run_stats` と同じく流し、スクリプトに引数 `args` を渡す (`Env.args`)。大きさを引数で受ける基準のプログラムを、
+/// 大きさを変えて数えるテストのため。
+#[cfg(feature = "run")]
+pub fn run_stats_with_args(text: &str, args: &[&str]) -> (String, Result<RunStats, RuntimeError>) {
+    let host = eml_cli::CaptureHost::new(std::path::PathBuf::new())
+        .with_args(args.iter().map(std::ffi::OsString::from).collect());
+    let out = host.output();
+    let result =
+        eml_cli::execute(&lir(text), &checked(), host.into_ref()).map(|finished| finished.stats);
+    (out.contents(), result)
+}
+
 /// 上限のない新しい `Control` を持つ、検査モードの設定。止める理由のビットは `Control::clear` でしか下りないので、
 /// 設定を使い回すと前の実行で立ったビットで次の実行が止まる。そのため実行ごとに作る。
 #[cfg(feature = "run")]

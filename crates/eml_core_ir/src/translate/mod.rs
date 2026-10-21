@@ -39,6 +39,7 @@ use types::{StructTypes, mark, named, split_arrows};
 // extern の表の行と std の宣言を照らし合わせる結合テスト (tests/externs.rs) が、translate と同じ規則で型の Repr を決める。
 // extern の行に構造体は現れないので、構造体にする型も箱の位置の `obj` として読む
 pub use types::boxed_repr as type_repr;
+pub(crate) use types::tuple_struct;
 
 /// 節の `k` の変換の形 (docs/spec/core-ir.md)。
 #[derive(Clone, Copy, PartialEq, Eq)]

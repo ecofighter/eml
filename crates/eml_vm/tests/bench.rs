@@ -3,7 +3,7 @@
 
 use std::path::{Path, PathBuf};
 
-use eml_test_support::{lir, lir_files, run_stats};
+use eml_test_support::{lir, lir_files, run_stats, run_stats_with_args};
 use eml_vm::RunStats;
 
 /// テストを持つ基準のプログラム。`bench/` にプログラムを足したら、ここと下のテストの関数の両方に足す。
@@ -68,6 +68,16 @@ fn bench_dir() -> PathBuf {
 /// `debug_heap` 付きで走らせ、出力を確かめてから回数を返す。リークと実行時エラーは panic にする。
 fn stats(name: &str, expected: &str) -> RunStats {
     stats_at(&bench_dir().join(format!("{name}.em")), expected)
+}
+
+/// `stats` と同じく流し、プログラムに引数 `args` (大きさ) を渡す。
+fn stats_with_args(name: &str, args: &[&str], expected: &str) -> RunStats {
+    let path = bench_dir().join(format!("{name}.em"));
+    let text = std::fs::read_to_string(&path)
+        .unwrap_or_else(|error| panic!("{}: {error}", path.display()));
+    let (out, result) = run_stats_with_args(&text, args);
+    assert_eq!(out, expected, "{result:?}");
+    result.unwrap_or_else(|error| panic!("{error}"))
 }
 
 /// `stats` と同じく、`tests/ui/run/` の下の UI テストのプログラムを走らせる。`path` はそこからの相対パスである。
@@ -321,14 +331,14 @@ fn state() {
         unwound_frames: 0,
         string_bytes_copied: 6,
         rc_increments: 0,
-        rc_decrements: 2,
-        boxes: 2,
-        unboxes: 1,
+        rc_decrements: 1,
+        boxes: 0,
+        unboxes: 0,
         conversions: 0,
-        allocations: 3,
+        allocations: 2,
         reuses: 0,
         peak_objects: 2,
-        peak_stack: 16,
+        peak_stack: 15,
     }
     ");
 }
@@ -387,11 +397,11 @@ fn state_nested() {
         unwound_frames: 0,
         string_bytes_copied: 23,
         rc_increments: 0,
-        rc_decrements: 4,
-        boxes: 2,
-        unboxes: 2,
+        rc_decrements: 3,
+        boxes: 0,
+        unboxes: 0,
         conversions: 0,
-        allocations: 5,
+        allocations: 4,
         reuses: 0,
         peak_objects: 4,
         peak_stack: 20,
@@ -829,11 +839,11 @@ fn nbody() {
         unwound_frames: 0,
         string_bytes_copied: 24,
         rc_increments: 82160,
-        rc_decrements: 124211,
+        rc_decrements: 107210,
         boxes: 5,
         unboxes: 20055,
         conversions: 0,
-        allocations: 42052,
+        allocations: 25051,
         reuses: 0,
         peak_objects: 26,
         peak_stack: 76,
@@ -851,11 +861,11 @@ fn spectral_norm() {
         unwound_frames: 0,
         string_bytes_copied: 11,
         rc_increments: 398371,
-        rc_decrements: 402427,
-        boxes: 4003,
-        unboxes: 400402,
+        rc_decrements: 402413,
+        boxes: 4001,
+        unboxes: 400400,
         conversions: 0,
-        allocations: 4057,
+        allocations: 4043,
         reuses: 0,
         peak_objects: 304,
         peak_stack: 53,
@@ -873,13 +883,13 @@ fn sieve_var() {
         unwound_frames: 0,
         string_bytes_copied: 4,
         rc_increments: 0,
-        rc_decrements: 2264,
-        boxes: 2262,
+        rc_decrements: 2,
+        boxes: 0,
         unboxes: 39996,
         conversions: 0,
-        allocations: 2265,
+        allocations: 3,
         reuses: 0,
-        peak_objects: 3,
+        peak_objects: 2,
         peak_stack: 30,
     }
     ");
@@ -917,11 +927,11 @@ fn fannkuch_var() {
         unwound_frames: 0,
         string_bytes_copied: 25,
         rc_increments: 0,
-        rc_decrements: 38677,
-        boxes: 79549,
-        unboxes: 66068,
+        rc_decrements: 9,
+        boxes: 12293,
+        unboxes: 40868,
         conversions: 0,
-        allocations: 38678,
+        allocations: 10,
         reuses: 0,
         peak_objects: 5,
         peak_stack: 54,
@@ -962,10 +972,10 @@ const VAR_PAIRS: [(&str, &str, &str); 2] = [
     ),
 ];
 
-/// `var` の版が手書きの版より多く確保する数。経路の関数の末尾でない呼び出しから2つ以上の値が戻る所のタプルで、
-/// S14e まで残る。ふるいは素数ごとに1つ、fannkuch-redux は順列ごとに4つと、裏返しごとに1つと、外側のループの
-/// 1つである。呼び出しの場所ごとの内訳は docs/implementation/benchmarks.md の「S14c-3」にある。
-const RESIDUAL: [(&str, u64); 2] = [("sieve_var", 2262), ("fannkuch_var", 38669)];
+/// `var` の版が手書きの版より多く確保する数。経路の関数の末尾でない呼び出しから2つ以上の値が戻る所のタプルは、
+/// S14e-2 で構造体になり、確保しなくなった。fannkuch-redux に残る 1 は、`main` が受ける 8 つの値の組で、6 語を
+/// 超えるので構造体にしない (docs/implementation/benchmarks.md の「S14e-2」)。
+const RESIDUAL: [(&str, u64); 2] = [("sieve_var", 0), ("fannkuch_var", 1)];
 
 #[test]
 fn var_matches_hand_written_work() {
@@ -1142,9 +1152,11 @@ fn typed_benches_do_not_convert() {
     }
 }
 
-/// 型から決める呼び出しの規約の引き換え (docs/superpowers/specs/2026-10-21-s14e-abi-struct-design.md の
+/// 型から決める呼び出しの規約と構造体の表現の引き換え (docs/superpowers/specs/2026-10-21-s14e-abi-struct-design.md の
 /// 「引き換えにすること」)。特殊化されない `List.map` が、受けた `Float` をそのまま返す関数の値を型どおりに呼ぶので、
-/// 要素ごとに `Float` の箱が1つ増える。その回数を固定して記録する。
+/// 要素ごとに `Float` の箱が1つ増える。組を入れ替える関数の値を渡すと、要素の組を箱から取り出して渡し、戻った組を新しい
+/// 箱に入れる。その回数を固定して記録する。特殊化される組の入れ替えと、RC の葉を3つ持つ組を展開しない関数に通す形も
+/// 固定する。
 #[test]
 fn trade_offs() {
     insta::assert_debug_snapshot!(
@@ -1168,4 +1180,108 @@ fn trade_offs() {
     }
     "
     );
+    insta::assert_debug_snapshot!(
+        ui_stats("records/swap_map_unspecialized.em", "192.5\n"),
+        @"
+    RunStats {
+        evidence_steps: 0,
+        yields: 0,
+        yield_frames: 0,
+        unwound_frames: 0,
+        string_bytes_copied: 5,
+        rc_increments: 0,
+        rc_decrements: 51,
+        boxes: 50,
+        unboxes: 50,
+        conversions: 0,
+        allocations: 52,
+        reuses: 40,
+        peak_objects: 31,
+        peak_stack: 23,
+    }
+    "
+    );
+    let specialized = ui_stats("records/swap_map_specialized.em", "192.5\n");
+    assert_eq!(
+        (specialized.allocations, specialized.reuses),
+        SWAP_MAP_BEFORE_STRUCTS,
+        "{specialized:?}"
+    );
+    insta::assert_debug_snapshot!(specialized, @"
+    RunStats {
+        evidence_steps: 0,
+        yields: 0,
+        yield_frames: 0,
+        unwound_frames: 0,
+        string_bytes_copied: 5,
+        rc_increments: 0,
+        rc_decrements: 31,
+        boxes: 30,
+        unboxes: 30,
+        conversions: 0,
+        allocations: 32,
+        reuses: 50,
+        peak_objects: 31,
+        peak_stack: 18,
+    }
+    ");
+    insta::assert_debug_snapshot!(
+        ui_stats(
+            "records/three_rc_leaves_through_a_call.em",
+            "12345x\nx,12,345\n"
+        )
+        .rc_increments,
+        @"2"
+    );
 }
+
+/// S14e-2 の完了の条件 (docs/superpowers/specs/2026-10-21-s14e-abi-struct-design.md の「完了の条件」)。nbody を1回
+/// 進めるごとの確保は、配列に書く `Vec3` の箱の 25 (速度に 20、位置に 5) である。計算の途中の `Vec3` と、状態を渡す形の
+/// 複製が返す `(MutArray, MutArray)` の組は確保しない。
+#[test]
+fn nbody_allocates_25_per_step() {
+    let one = stats_with_args("nbody", &["1"], "-0.169075164\n-0.169074954\n");
+    let thousand = stats_with_args("nbody", &["1000"], "-0.169075164\n-0.169087605\n");
+    let two_thousand = stats_with_args("nbody", &["2000"], "-0.169075164\n-0.169071607\n");
+    assert_eq!(
+        thousand.allocations - one.allocations,
+        999 * 25,
+        "{one:?}\n{thousand:?}"
+    );
+    assert_eq!(
+        two_thousand.allocations - thousand.allocations,
+        1000 * 25,
+        "{thousand:?}\n{two_thousand:?}"
+    );
+}
+
+/// S14e-2 の完了の条件。mandelbrot の `Complex` は構造体なので、格子点ごとの確保も、まわすたびの reuse もない。確保は
+/// 格子の大きさによらない定数だけである。
+#[test]
+fn mandelbrot_does_not_allocate_complex() {
+    let small = stats_with_args("mandelbrot", &["64"], "1626\n");
+    let large = stats_with_args("mandelbrot", &["128"], "6518\n");
+    assert_eq!(large.reuses, 0, "{large:?}");
+    assert_eq!(small.reuses, 0, "{small:?}");
+    assert_eq!(small.allocations, large.allocations, "{small:?}\n{large:?}");
+}
+
+/// S14e-1 の後の spectral-norm の確保の数 (docs/implementation/benchmarks.md の「S14d」と「S14e-1」)。
+const SPECTRAL_NORM_S14E1_ALLOCATIONS: u64 = 4057;
+
+/// S14e-2 の完了の条件。状態を渡す形の複製が返す組の 12 と、その中の `Float` の箱の 2 の、14 の確保が減る。配列の
+/// `Float` の要素の箱は残る。
+#[test]
+fn spectral_norm_allocates_14_fewer() {
+    let stats = stats("spectral_norm", "1.274219991\n");
+    assert_eq!(
+        stats.allocations,
+        SPECTRAL_NORM_S14E1_ALLOCATIONS - 14,
+        "{stats:?}"
+    );
+}
+
+/// 組の要素を入れ替える特殊化された `map` (`records/swap_map_specialized.em`) の、構造体の表現の前 (コミット e6665e64)
+/// の `allocations` と `reuses`。葉の単位の覗き穴と reuse で、構造体の後も同じ数になる
+/// (docs/superpowers/specs/2026-10-21-s14e-abi-struct-design.md の「足すテスト」)。
+const SWAP_MAP_BEFORE_STRUCTS: (u64, u64) = (32, 50);

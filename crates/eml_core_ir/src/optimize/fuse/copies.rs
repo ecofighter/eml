@@ -16,7 +16,7 @@ use crate::optimize::specialize::{
     ArgShape, ClosureShape, FieldShape, Key, MAX_KEY_DEPTH, copy_name, key_depth,
 };
 use crate::{Call, CoreFn, Rhs, Stmt, Term};
-use eml_lir::{Atom, CasePattern, Ctor, FnIdx, Mark, Role, VarId, VarInfo};
+use eml_lir::{Atom, CasePattern, Ctor, FnIdx, Mark, Repr, Role, VarId, VarInfo};
 
 /// 鍵の位置ごとの形と、その位置の値の代わりに複製へ渡す実引数。
 type Plan = Vec<(usize, ArgShape, Vec<Atom>)>;
@@ -175,8 +175,9 @@ pub(super) fn redirect(function: &mut CoreFn, cx: &mut Fuser) -> Vec<VarId> {
                     continue;
                 };
                 let shape = shapes.entry(con).or_insert_with(|| {
+                    let reprs = cx.field_reprs(function.repr(con), *ctor);
                     let (shape, values) =
-                        cx.con_shape(function, *ctor, fields, &closures, &uses)?;
+                        cx.con_shape(function, *ctor, fields, &reprs, &closures, &uses)?;
                     // `Unr` でない `con` は、使う所がすべて開けるときだけ開く
                     let everywhere = sites[&con].len() == uses[con.0 as usize]
                         && sites[&con]
@@ -285,18 +286,36 @@ impl Fuser<'_> {
         self.copy_source(index) && self.con_params[index].opens(position, shape)
     }
 
-    /// 既知の閉包をフィールドに少なくとも1つ持つ `con` の形と、その値の代わりに渡す実引数。閉包でないフィールドは、
-    /// `Unr` の値か定数のときだけ値のまま渡す。鍵の入れ子の深さが `MAX_KEY_DEPTH` を超える位置は特殊化しない
-    /// (docs/spec/core-ir.md の「融合が止まること」)。
+    /// Repr が `repr` の `con` の値の、フィールドの Repr。構造体の `con` の引数は形のフィールドの Repr と比べる正確な
+    /// 位置なので、複製の中で作り直す `con` に合わせて形の Repr にする。ほかは配置の宣言した Repr である
+    /// (docs/superpowers/specs/2026-10-21-s14e-abi-struct-design.md の「Core IR」の optimize)。
+    fn field_reprs(&self, repr: Repr, ctor: Ctor) -> Vec<Repr> {
+        match repr {
+            Repr::Struct(id) => self
+                .structs
+                .shape(id)
+                .fields
+                .iter()
+                .map(|&(repr, _)| repr)
+                .collect(),
+            _ => self.layouts[ctor.layout.0 as usize].constructors[ctor.tag as usize]
+                .fields
+                .clone(),
+        }
+    }
+
+    /// 既知の閉包をフィールドに少なくとも1つ持つ `con` の形と、その値の代わりに渡す実引数。`reprs` はフィールドの
+    /// Repr (`field_reprs`) である。閉包でないフィールドは、`Unr` の値か定数のときだけ値のまま渡す。鍵の入れ子の深さが
+    /// `MAX_KEY_DEPTH` を超える位置は特殊化しない (docs/spec/core-ir.md の「融合が止まること」)。
     fn con_shape(
         &self,
         function: &CoreFn,
         ctor: Ctor,
         fields: &[Atom],
+        reprs: &[Repr],
         closures: &HashMap<VarId, KnownClosure>,
         uses: &[usize],
     ) -> Option<(ArgShape, Vec<Atom>)> {
-        let reprs = &self.layouts[ctor.layout.0 as usize].constructors[ctor.tag as usize].fields;
         let mut shapes = Vec::with_capacity(fields.len());
         let mut values = Vec::new();
         for (&field, &repr) in fields.iter().zip(reprs) {
@@ -439,10 +458,9 @@ impl Fuser<'_> {
             let info = function.vars[param.0 as usize].clone();
             let limit = info.mark;
             let capped = |mark: Mark| if mark.at_least(limit) { limit } else { mark };
-            let reprs =
-                &self.layouts[ctor.layout.0 as usize].constructors[ctor.tag as usize].fields;
+            let reprs = self.field_reprs(info.repr, *ctor);
             let mut atoms = Vec::with_capacity(fields.len());
-            for (field, &repr) in fields.iter().zip(reprs) {
+            for (field, &repr) in fields.iter().zip(&reprs) {
                 match field {
                     FieldShape::Closure(shape) => {
                         let names = &self.callees[shape.function.0 as usize].params;

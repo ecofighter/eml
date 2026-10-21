@@ -53,7 +53,7 @@ S14d で足した3つと、`sieve_var.em`、`fannkuch_var.em` は、大きさを
 
 ## 回数のテスト
 
-`crates/eml_vm/tests/bench.rs` は、プログラムごとに1つのテストで、VM の検査モードで走らせ、出力を確かめ、`RunStats` の全項目 (S13e で足した `allocations` と、S13e-4 で足した `reuses` を含む) をインラインスナップショットで固定する。`bench/` のファイルの一覧と、テストのプログラムの一覧が一致することも確かめる。`specialization_matches_hand_written_work` は、自動の版と `_by_hand` の版の6つの組で、`allocations`、`boxes`、`unboxes` が同じことを確かめる (S13e-1 の完了の条件。下の「S13e-1」。6つ目の `state_loop` の組は S14c-2 の完了の条件で、下の「S14c-2」)。`handler_specialization_removes_yields_and_evidence` は、`iter_generate` と `iter_pipeline` の `yields` と、`push_fold` と `fold_state` の `evidence_steps` が0であることを確かめる (S13e-2 の完了の条件。下の「S13e-2」)。`state_loop` と `state_nested` の `evidence_steps` が0であることも確かめる (S14c-2 の完了の条件)。`specialization_matches_hand_written_rc` は6つの組で RC の回数が同じことを、`iter_allocations_do_not_grow_with_the_input` と `iter_generate_allocates_as_much_as_the_direct_loop` は `Iter` で引く形の確保の数を確かめる (S13e-3 の完了の条件。下の「S13e-3」)。`rebuilding_programs_reuse_boxes` は、関数の中で手放して作り直す8つのプログラムで `reuses` が 0 より大きいことを確かめる (S13e-4 の完了の条件。下の「S13e-4」)。`var_matches_hand_written_work` は、`var` で書いた版と手書きの版の2つの組で、`var` の版の `evidence_steps` と `yields` が0であることと、確保の数の差が表 `RESIDUAL` の値に等しいことを確かめる (S14c-3 の完了の条件。下の「S14c-3」)。回数は機械の速さに左右されないので、ふだんの `cargo test` で流す。
+`crates/eml_vm/tests/bench.rs` は、プログラムごとに1つのテストで、VM の検査モードで走らせ、出力を確かめ、`RunStats` の全項目 (S13e で足した `allocations` と、S13e-4 で足した `reuses` を含む) をインラインスナップショットで固定する。`bench/` のファイルの一覧と、テストのプログラムの一覧が一致することも確かめる。`specialization_matches_hand_written_work` は、自動の版と `_by_hand` の版の6つの組で、`allocations`、`boxes`、`unboxes` が同じことを確かめる (S13e-1 の完了の条件。下の「S13e-1」。6つ目の `state_loop` の組は S14c-2 の完了の条件で、下の「S14c-2」)。`handler_specialization_removes_yields_and_evidence` は、`iter_generate` と `iter_pipeline` の `yields` と、`push_fold` と `fold_state` の `evidence_steps` が0であることを確かめる (S13e-2 の完了の条件。下の「S13e-2」)。`state_loop` と `state_nested` の `evidence_steps` が0であることも確かめる (S14c-2 の完了の条件)。`specialization_matches_hand_written_rc` は6つの組で RC の回数が同じことを、`iter_allocations_do_not_grow_with_the_input` と `iter_generate_allocates_as_much_as_the_direct_loop` は `Iter` で引く形の確保の数を確かめる (S13e-3 の完了の条件。下の「S13e-3」)。`rebuilding_programs_reuse_boxes` は、関数の中で手放して作り直す8つのプログラムで `reuses` が 0 より大きいことを確かめる (S13e-4 の完了の条件。下の「S13e-4」)。`var_matches_hand_written_work` は、`var` で書いた版と手書きの版の2つの組で、`var` の版の `evidence_steps` と `yields` が0であることと、確保の数の差が表 `RESIDUAL` の値に等しいことを確かめる (S14c-3 の完了の条件。下の「S14c-3」)。`nbody_allocates_25_per_step`、`mandelbrot_does_not_allocate_complex`、`spectral_norm_allocates_14_fewer` は、構造体の表現で消える確保を確かめる (S14e-2 の完了の条件。下の「S14e-2」)。`trade_offs` は、型から決める呼び出しの規約と構造体の表現の引き換えの形の回数を固定する (下の「S14e-1」と「S14e-2」)。回数は機械の速さに左右されないので、ふだんの `cargo test` で流す。
 
 段の前後の回数は、このスナップショットの差分で残る。回数を変える変更は、その段の spec に期待値の変更として書く ([テスト戦略](testing.md) の「テストの変更の運用」)。S10a までの記録の回数は S10b で消したインタプリタのもので、`rc_increments`、`rc_decrements`、`peak_objects` は VM と数え方が違う (下の「S10a (VM)」)。`peak_stack` は S10b で足した欄で、それより前の記録にはない。
 
@@ -2365,7 +2365,7 @@ S12d のスクリプト
 
 `Float` のフィールドは宣言した Repr が `float` なので、`Vec3` と `Complex` は、今は `Float` の箱を持たない `con` の箱1つである ([LIR](../spec/lir.md) の「位置の規則」)。配列の要素は一様な位置なので、`Float` の要素は箱に入る。S14e の後も、配列に書く構造体の値は `con` と同じ形の箱に入る (ロードマップの「小さな単一コンストラクタの型の構造体の表現」)。この区別で、既定の大きさの確保を分けると次のとおりである。S14e の後の値は見込みで、S14e で確かめる。
 
-- `nbody`: 確保は 1 回進めると 124、1000 回で 52072、2000 回で 104072 で、1 回進めるごとにちょうど 52 である。`boxes` が 5 なので、どれも `Vec3` の箱である。1 回進めるごとに、配列に書く `Vec3` が 25 (速度に 20、位置に 5) あり、残る 27 は計算の途中の値である。S14e が消すのは途中の値の 27 で、配列に書く 25 は箱として残る見込みである
+- `nbody`: 確保は 1 回進めると 124、1000 回で 52072、2000 回で 104072 で、1 回進めるごとにちょうど 52 である。`boxes` が 5 なので、`Float` の箱はない。1 回進めるごとに、配列に書く `Vec3` が 25 (速度に 20、位置に 5) あり、残る 27 は計算の途中の `Vec3` の 10 と、状態を渡す形の複製が返す `(MutArray, MutArray)` の組の 17 である。S14e が消すのはこの 27 で、配列に書く 25 は箱として残る見込みである (S14e-2 で確かめた。下の「S14e-2」)
 - `mandelbrot`: 確保は格子点ごとに 2 (64 × 64 で 8194、128 × 128 で 32770) で、まわすたびに作る `Complex` は、手放す箱を reuse で使い回す (`reuses` が格子点あたり約 24)。S14e は、確保と reuse の両方を消す見込みである
 - `spectral_norm`: 4057 の確保のうち 4003 が `boxes` で、ほとんどが配列の `Float` の要素の箱である。10 回のくり返しで行列とベクトルの積を 40 回計算し、そのたびに 100 個の要素を作る (40 × 100 = 4000)。S14e は、この確保を消さない
 - `sieve_var` と `fannkuch_var`: 差 `RESIDUAL` (2262 と 38669) は、経路の関数の末尾でない呼び出しが返すタプルである (上の「S14c-3」)。S14e が消す見込みである
@@ -2509,3 +2509,134 @@ S14e の前の値は同じ機械で同じ日に、コミット 061eb96 (足し�
 
 - `apply` の多いプログラムの実行の分は、`apply_float` が 141087023 から 79969428 に (-43.3%)、`apply_int` が 109944343 から 73066387 に (-33.5%)、`ep_float` が 223515378 から 183658340 に (-17.8%)、`iter_pipeline` が -16.3%、`iter_pipeline_by_hand` が -16.2% 減った
 - `apply` を使わないプログラムは `RunStats` が変わらず、実行の分が +0.2% (`nbody`) から +1.7% (`fannkuch_by_hand`) 増えた。VM の命令のループのコード生成が変わった分で、`sum_loop` を 100 万回にして測ると、1回まわるごとに約3命令増えている。`apply` の速い道を足したときに、`apply` の関数を展開する、しない、`FnEntry` の欄を減らすなどを試したが、どれもこの増えを消さなかった。`apply` の多いプログラムで最もよい形を残した
+
+### S14e-2
+
+S14e-2 (構造体の表現。`docs/superpowers/specs/2026-10-21-s14e-abi-struct-design.md` の「S14e-2 構造体の表現」) で、コンストラクタが1つで再帰しない小さな `data` と、要素のあるタプルを、ヒープの箱でなく構造体の値で表すようにした。LIR の開くパス (`flatten`) が構造体の変数を葉の変数の並びに開き、VM は直接の呼び出しと `apply` から複数の値を返す。状態を渡す形の複製が2つ以上の値を返すときの組も、開いた後の葉が 6 語以下なら構造体にした。値は、コミット 1a91f47 に、状態を渡す形の組を構造体にする変更を足した作業ツリーで測った。
+
+- 機種: Mac17,2 (Apple M5)
+- OS: macOS 27.0.1 (26A434)
+- rustc: rustc 1.98.1 (48a229cea 2026-09-01)
+- Python: Python 3.14.8
+
+#### 完了の条件
+
+- nbody: 確保は 1 回進めると 79、1000 回で 25054、2000 回で 50054 で、1 回進めるごとにちょうど 25 である (`bench.rs` の `nbody_allocates_25_per_step`)。残るのは配列に書く `Vec3` の箱で、計算の途中の `Vec3` の 10 と、状態を渡す形の複製が返す `(MutArray, MutArray)` の組の 17 は確保しない。上の「S14d」の「S14e が消す確保と消さない確保」の見込みのとおりである
+- mandelbrot: `reuses` は 0 で、確保は格子の大きさによらず 5 (64 × 64 と 128 × 128。引数を読む分を含む) である (`mandelbrot_does_not_allocate_complex`)。`Complex` を作る確保と、まわすたびの reuse がなくなった
+- `sieve_var`: 確保の数が手書きの版と等しい。`RESIDUAL` は 2262 から 0 になった
+- `fannkuch_var`: 確保の数が手書きの版より 1 多い。`RESIDUAL` は 38669 から 1 になった。残る 1 は、`main` が受ける 8 つの値の組で、6 語を超えるので構造体にしない
+- spectral-norm: 確保は 4057 から 4043 に、14 減った (`spectral_norm_allocates_14_fewer`)。状態を渡す形の複製が返す組の 12 と、その組の中の `Float` の箱の 2 である。配列の `Float` の要素の箱は残る
+- `bench/` のどのプログラムも、`allocations` が S14e-1 の後 (コミット e6665e64) から増えていない
+
+#### 実行の仕事の回数
+
+S14e-1 の後からの変化である。ほかのプログラムの `RunStats` は変わらない。
+
+| プログラム | `rc_decrements` | `boxes` | `unboxes` | `allocations` | `reuses` | `peak_objects` / `peak_stack` |
+|---|---:|---:|---:|---:|---:|---|
+| `nbody` | 134231 → 107210 | 5 | 20055 | 52072 → 25051 | 6 → 0 | 26 / 66 → 76 |
+| `mandelbrot` | 32769 → 1 | 0 | 0 | 32770 → 2 | 399752 → 0 | 3 → 2 / 45 → 43 |
+| `spectral_norm` | 402427 → 402413 | 4003 → 4001 | 400402 → 400400 | 4057 → 4043 | 0 | 304 / 53 |
+| `sieve_var` | 2264 → 2 | 2262 → 0 | 39996 | 2265 → 3 | 0 | 3 → 2 / 30 |
+| `fannkuch_var` | 38677 → 9 | 79549 → 12293 | 66068 → 40868 | 38678 → 10 | 0 | 5 / 54 |
+| `records` | 7 → 6 | 0 | 0 | 8 → 7 | 100000 → 0 | 5 → 4 / 29 → 26 |
+| `state` | 2 → 1 | 2 → 0 | 1 → 0 | 3 → 2 | 0 | 2 / 16 → 15 |
+| `state_nested` | 4 → 3 | 2 → 0 | 2 → 0 | 5 → 4 | 0 | 4 / 20 |
+| `upsert` | 484142 → 482143 | 20000 → 22000 | 56815 → 58815 | 48003 → 46004 | 312764 | 6002 / 352 |
+| `upsert_by_hand` | 484142 → 482143 | 20000 → 22000 | 56815 → 58815 | 48003 → 46004 | 312764 | 6002 / 352 |
+
+- `orders` と `orders_by_hand` は `peak_stack` だけが変わった (20 → 18、19 → 18)
+- `state` と `state_nested` は、状態を渡す形の複製が返す (結果, 状態) の組が構造体になり、組の確保と、その中の `Int` の `box` と `unbox` がなくなった
+- `nbody` の `peak_stack` が 66 から 76 に増えたのは、構造体の葉がレジスタを使うためである。reuse の 6 は、計算の途中の `Vec3` の箱がなくなって消えた
+- `records` の `Stats` (4 つの `Int`) は構造体になり、reuse の元の箱がなくなった。構造体にしない値の reuse は `records_wide` が確かめる (上の「S14e-1」)
+- `upsert` の確保が 1999 減ったのは、`sort_by` の `split_at` が返す組 (2000 個の要素の整列で 1999 回) が構造体になった分である。`boxes` と `unboxes` が 2000 ずつ増えたのは、`entries` の `(k, v)` の組のためである。`v` は `Node` の配置の `tobj` のフィールドから読むので、構造体の `int` の葉にするときに `unbox` し、組をリストの要素 (一様な位置) に入れるときにまた `box` する。開くパスの葉の単位の覗き穴は、構造体の `unbox` が箱のフィールドから取り出した葉にだけ当たり、スカラーの `unbox` で取り出した葉には当たらない。`Int` は即値なので、この `box` は確保にならない
+- 引き換えの形 (`bench.rs` の `trade_offs`) は次のとおりである
+  - `tests/ui/run/functions/unspecialized_map_passes_floats.em`: `allocations` は 24 から 22 に減った
+  - `tests/ui/run/records/swap_map_specialized.em` (特殊化される組の入れ替え): `allocations` が 32、`reuses` が 50 で、構造体の前 (コミット e6665e64) と同じである。`boxes` は 20 から 30 に増えたが、増えたのは `Int` の即値の `box` である
+  - `tests/ui/run/records/swap_map_unspecialized.em` (特殊化されない `map` に組を入れ替える関数の値を渡す形): `allocations` が 34 から 52 に増え、`reuses` が 50 から 40 に減った。`map` は要素の組を箱から取り出して葉の並びで渡し、戻った組を新しい箱に入れる
+  - `tests/ui/run/records/three_rc_leaves_through_a_call.em`: `rc_increments` は 2 で、構造体の前と同じである
+
+#### 基準のプログラムの命令の数
+
+コミット 1a91f47 に、この作業の変更を足した作業ツリーで `bench/run.sh` を流した出力は、次のとおりである。
+
+- 機種: Mac17,2 (Apple M5)
+- OS: macOS 27.0.1 (26A434)
+- rustc: rustc 1.98.1 (48a229cea 2026-09-01)
+- コミット: 1a91f47-dirty
+
+| プログラム | instructions retired | 実行の分 | 実時間 (s) |
+|---|---:|---:|---:|
+| `empty` | 44270332 | | 0.00 |
+| `apply_float` | 124407386 | 80137054 | 0.00 |
+| `apply_int` | 117404379 | 73134047 | 0.00 |
+| `ep_float` | 228679308 | 184408976 | 0.01 |
+| `fannkuch_by_hand` | 189871375 | 145601043 | 0.00 |
+| `fannkuch_var` | 284475382 | 240205050 | 0.01 |
+| `fib` | 130835331 | 86564999 | 0.00 |
+| `fold_state` | 94689237 | 50418905 | 0.00 |
+| `iter_generate` | 105322292 | 61051960 | 0.00 |
+| `iter_pipeline` | 215626545 | 171356213 | 0.00 |
+| `iter_pipeline_by_hand` | 216854473 | 172584141 | 0.00 |
+| `list` | 203704476 | 159434144 | 0.00 |
+| `loop` | 211613416 | 167343084 | 0.00 |
+| `mandelbrot` | 467899681 | 423629349 | 0.02 |
+| `nbody` | 189147731 | 144877399 | 0.01 |
+| `orders` | 293895192 | 249624860 | 0.01 |
+| `orders_by_hand` | 295224001 | 250953669 | 0.01 |
+| `push_fold` | 91380114 | 47109782 | 0.00 |
+| `push_fold_by_hand` | 91609147 | 47338815 | 0.00 |
+| `rbtree` | 262667791 | 218397459 | 0.01 |
+| `records` | 135841805 | 91571473 | 0.00 |
+| `records_wide` | 208056957 | 163786625 | 0.00 |
+| `sieve_by_hand` | 104062283 | 59791951 | 0.00 |
+| `sieve_var` | 135102202 | 90831870 | 0.00 |
+| `spectral_norm` | 520347076 | 476076744 | 0.02 |
+| `state` | 82345729 | 38075397 | 0.00 |
+| `state_loop` | 84380479 | 40110147 | 0.00 |
+| `state_loop_by_hand` | 82126714 | 37856382 | 0.00 |
+| `state_nested` | 96217286 | 51946954 | 0.00 |
+| `std_list` | 198605894 | 154335562 | 0.00 |
+| `sum_loop` | 79988438 | 35718106 | 0.00 |
+| `tree` | 237866753 | 193596421 | 0.01 |
+| `tree_by_hand` | 237228219 | 192957887 | 0.01 |
+| `tree_map` | 185464389 | 141194057 | 0.00 |
+| `upsert` | 514381178 | 470110846 | 0.02 |
+| `upsert_by_hand` | 512520955 | 468250623 | 0.02 |
+
+S14e-1 の後の値 (上の「S14e-1」の表) と比べると、次のとおりである。
+
+- 実行の分は、`records` が 125262095 から 91571473 に (-26.9%)、`mandelbrot` が 562744680 から 423629349 に (-24.7%)、`nbody` が -4.2%、`fannkuch_var` が -3.8% 減った
+- `iter_pipeline` (+3.4%)、`iter_pipeline_by_hand` (+3.5%)、`orders_by_hand` (+2.0%)、`orders` (+1.3%) は増えた。どれも `peak_stack` のほかの `RunStats` は変わらない。`iter_pipeline` の `Iter.fold` の LIR を比べると、`Option` の中の `(Int, Iter)` の組を、`unpack` と `release` でなく、構造体の `unbox` と `release unboxed` で読んで手放すようになったほかは、形が変わらない。増えはこの2つの命令の分と見ているが、VM の中までは調べていない
+- ほかのプログラムの増減は -0.1% から +0.7% の範囲である
+
+状態を渡す形の組を構造体にする前 (コミット 1a91f47。同じ日に同じ機械で測った) と比べると、`fannkuch_var` の実行の分が 249762059 から 240205050 に (-3.8%)、`nbody` が -2.1%、`sieve_var` が -0.5% 減り、ほかのプログラムは -0.1% から +0.4% の範囲である。
+
+#### スクリプトの計測
+
+`bench/scripts.sh` の出力は、次のとおりである。Python は 3.14.8 である。
+
+数値計算
+
+| 計測 | 大きさ | eml の実時間 (s) | Python の実時間 (s) | 比 (eml / Python) | eml の最大 RSS (MB) | Python の最大 RSS (MB) |
+|---|---:|---:|---:|---:|---:|---:|
+| nbody | 140000 | 0.29 | 0.64 | 0.5 | 10 | 15 |
+| spectral-norm | 510 | 0.31 | 0.86 | 0.4 | 9 | 14 |
+| mandelbrot | 480 | 0.20 | 0.30 | 0.7 | 9 | 14 |
+| fannkuch-redux | 9 | 0.51 | 0.24 | 2.1 | 10 | 14 |
+| sieve | 3500000 | 0.27 | 0.16 | 1.7 | 35 | 41 |
+
+S12d のスクリプト
+
+| 計測 | 大きさ | eml の実時間 (s) | Python の実時間 (s) | 比 (eml / Python) | eml の最大 RSS (MB) | Python の最大 RSS (MB) |
+|---|---:|---:|---:|---:|---:|---:|
+| `wc` | 9000 KiB | 0.32 | 0.02 | 16.0 | 29 | 78 |
+| `grep -n` | 70000 KiB | 0.29 | 0.26 | 1.1 | 9 | 17 |
+| `logstat` | 6700 KiB | 0.30 | 0.11 | 2.7 | 10 | 19 |
+| `logstat --whole` | 6700 KiB | 0.29 | 0.10 | 2.9 | 35 | 53 |
+| `csv2jsonl` | 2900 KiB | 0.29 | 0.18 | 1.6 | 21 | 51 |
+
+- どの行も eml の実時間が 150 ms から 600 ms の範囲にあるので、大きさは決め直さない (上の「スクリプトの計測」の「大きさ」)
+- 上の「S14d」の値と比べると、mandelbrot が 0.29 秒から 0.20 秒に (比は 1.0 から 0.7 に)、fannkuch-redux が 0.57 秒から 0.51 秒に (比は 2.4 から 2.1 に)、ふるいが 0.30 秒から 0.27 秒に (比は 1.8 から 1.7 に) 速くなった。nbody と spectral-norm はほぼ同じである
+- fannkuch-redux とふるいは、まだ目標 (1.5 倍以下) に届かない。添字1つに3つの extern を呼ぶ形 (上の「S14c-3」) は残っている
+- `wc` の Python の実時間は 20 ms で、刻みが粗い (上の「S14d」)
