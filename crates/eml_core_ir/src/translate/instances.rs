@@ -740,7 +740,7 @@ impl Collector<'_> {
                     continue;
                 };
                 // 参照の一番外側の矢印は参照ごとの変数で、`once` の位置に置けばシグネチャの `Unr` と食い違うので比べない
-                // (docs/spec/types.md の「トップレベルの関数の参照」)
+                // (docs/spec/types.md の「値を読む式の矢印の線形性」)
                 assert!(
                     store.lin_compatible_inner(types.exprs[expr], callee.signature),
                     "internal error: in {}, a reference of type `{}` meets unr with lin in its callee `{}` at `{}`",
@@ -765,7 +765,7 @@ impl Collector<'_> {
                     Substitution::new(names.zip(instantiation.args.iter().copied()), kinds);
                 let declared = store.substitute(typed.decls[&instantiation.decl].ty, &mut subst);
                 assert!(
-                    store.lin_compatible(types.exprs[expr], declared),
+                    store.lin_compatible_inner(types.exprs[expr], declared),
                     "internal error: in {}, a reference of type `{}` meets unr with lin in operation `{}` at `{}`",
                     instance(store),
                     store.display_linear(types.exprs[expr], &hir.names),

@@ -273,7 +273,7 @@ impl<'c> Table<'c> {
         self.take_problem(instances, own)
     }
 
-    fn require_lin(&mut self, lower: Bound<Linearity>, upper: Bound<Linearity>) {
+    pub(crate) fn require_lin(&mut self, lower: Bound<Linearity>, upper: Bound<Linearity>) {
         self.linearity
             .require(lower, upper, self.kind_origin.clone());
     }

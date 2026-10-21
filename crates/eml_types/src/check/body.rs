@@ -402,7 +402,10 @@ impl BodyCheck<'_, '_> {
             ExprKind::List(elements) => self.list(expr.range, elements),
             ExprKind::Record { ctor, fields } => self.record(id, *ctor, fields, expr.range),
             ExprKind::Update { base, fields } => self.update(id, *base, fields),
-            ExprKind::Field { base, field } => self.projection(id, *base, field),
+            ExprKind::Field { base, field } => {
+                let ty = self.projection(id, *base, field);
+                self.table.widen_outer_lin(ty)
+            }
             // 各穴は `display e` の呼び出しで、`String` を返す。穴の式の型には、`display` の参照が `Show` の制約を付ける
             // (docs/spec/expressions.md の「補間」)
             ExprKind::Interpolation(segments) => {
@@ -425,7 +428,10 @@ impl BodyCheck<'_, '_> {
             ExprKind::IndexAssign { var, index, value } => {
                 self.index_assign(id, *var, *index, *value)
             }
-            ExprKind::Index { base, index } => self.index(id, *base, *index),
+            ExprKind::Index { base, index } => {
+                let ty = self.index(id, *base, *index);
+                self.table.widen_outer_lin(ty)
+            }
         };
         self.typing.exprs.insert(id, ty);
         ty
@@ -642,12 +648,13 @@ impl BodyCheck<'_, '_> {
     fn path(&mut self, id: ExprId, res: Res, range: TextRange, open: bool) -> Ty {
         let item = match res {
             Res::Local(local) => {
-                return self
+                let ty = self
                     .typing
                     .locals
                     .get(local)
                     .copied()
                     .unwrap_or(self.table.error);
+                return self.table.widen_outer_lin(ty);
             }
             Res::Item(item) => item,
         };
@@ -658,13 +665,10 @@ impl BodyCheck<'_, '_> {
         let Some((ty, args, rows)) = instantiated else {
             return self.table.error;
         };
-        // 操作以外の宣言は何も捕まえないので、一番外側の矢印を参照ごとの変数にして、`once` の位置にも置けるようにする。
-        // 呼び出しの位置でも同じにする。制約がなければ `Unr` に解けるので、呼び出しの意味は変わらない。この変数は宣言の
-        // `Shape` の番号を持たないので、`Instance.lin` には入れない (docs/spec/types.md の「トップレベルの関数の参照」)
-        let ty = match item {
-            ValueItem::Operation(_) => ty,
-            _ => self.table.fresh_outer_lin(ty),
-        };
+        // 宣言の参照も、局所変数の参照と同じく矢印を広げる。呼び出しの位置でも同じにする。制約がなければ `Unr` に解けるので、
+        // 呼び出しの意味は変わらない。この変数は宣言の `Shape` の番号を持たないので、`Instance.lin` には入れない
+        // (docs/spec/types.md の「値を読む式の矢印の線形性」)
+        let ty = self.table.widen_outer_lin(ty);
         self.typing.instantiations.insert(id, (item, args, rows));
         if open { self.table.open_spine(ty) } else { ty }
     }
@@ -786,6 +790,7 @@ impl BodyCheck<'_, '_> {
         self.typing
             .calls
             .insert(id, CallRows::Call { arrows, performs });
+        ty = self.table.widen_outer_lin(ty);
         // 部分適用の残りは、ほかの参照と同じく戻り値の側の row を開く
         if opened_later {
             ty = self.table.open_spine(ty);
@@ -1080,7 +1085,7 @@ impl BodyCheck<'_, '_> {
 
     pub(super) fn expect(&mut self, range: TextRange, expected: Ty, found: Ty, origin: &Origin) {
         let unified = self.with_kind_origin(range, KindReason::Unified, |this| {
-            this.table.unify(found, expected)
+            this.table.flow_into(found, expected)
         });
         match unified {
             Ok(()) => {}

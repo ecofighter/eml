@@ -2,6 +2,7 @@ use std::collections::HashSet;
 
 use super::unify::Unified;
 use super::*;
+use crate::data::Variance;
 
 impl Table<'_> {
     /// 束縛済みの row 変数を展開し、ラベルを1つの並びにまとめる。
@@ -467,9 +468,45 @@ impl Table<'_> {
         self.function_with(param, lin, row, ret)
     }
 
-    /// 関数型の一番外側の矢印の線形性を、新しい Kind 変数に替える。何も捕まえない宣言の参照を `once` の位置にも
-    /// 置けるようにするため (docs/spec/types.md の「トップレベルの関数の参照」)。内側の矢印は変えない。
-    pub fn fresh_outer_lin(&mut self, ty: Ty) -> Ty {
+    /// 値を読む式の型で、`Lin` でない矢印を、元の線形性以上の新しい Kind 変数に替える (規則 W)。型構成子の共変の引数と
+    /// 組の要素は1段だけ見る。それより深い位置は、読むたびに型の大きさに比例する写しが要るので広げない
+    /// (docs/spec/types.md の「値を読む式の矢印の線形性」)。
+    pub fn widen_outer_lin(&mut self, ty: Ty) -> Ty {
+        let ty = self.resolve(ty);
+        match self.shape(ty).clone() {
+            TyShape::Con(def, args, rows) => {
+                let variance = self.data_kinds()[def].variance.clone();
+                let widened: Vec<Ty> = args
+                    .iter()
+                    .enumerate()
+                    .map(|(index, &arg)| match variance.get(index) {
+                        Some(Variance::Co) => self.widen_arrow(arg),
+                        _ => arg,
+                    })
+                    .collect();
+                if widened == args {
+                    ty
+                } else {
+                    self.alloc(TyShape::Con(def, widened, rows))
+                }
+            }
+            TyShape::Tuple(elements) => {
+                let widened: Vec<Ty> = elements
+                    .iter()
+                    .map(|&element| self.widen_arrow(element))
+                    .collect();
+                if widened == elements {
+                    ty
+                } else {
+                    self.tuple(widened)
+                }
+            }
+            _ => self.widen_arrow(ty),
+        }
+    }
+
+    fn widen_arrow(&mut self, ty: Ty) -> Ty {
+        let ty = self.resolve(ty);
         let TyShape::Fn {
             param,
             lin,
@@ -479,16 +516,42 @@ impl Table<'_> {
         else {
             return ty;
         };
-        // 置き換えてよいのは、宣言で `Unr` に決まった矢印だけである。ほかの値を置き換えると、その矢印の制約が消える。
-        // 成り立つのは、シグネチャの一番外側の矢印が `Arrows::OutermostUnr` と `Method { outermost }` で `Unr` になり、
-        // コンストラクタの最初の矢印も `Unr` で、一番外側の `once` は E1050 の後に HIR が外すためである
-        // (docs/spec/types.md の「1回だけ呼べる関数の型」)
-        debug_assert!(
-            matches!(lin, ArrowLin::Known(Linearity::Unr)),
-            "the outermost arrow of a declaration is unr"
-        );
-        let lin = self.fresh_arrow_lin();
-        self.function_with(param, lin, row, ret)
+        if lin == ArrowLin::Known(Linearity::Lin) {
+            return ty;
+        }
+        let fresh = self.fresh_arrow_lin();
+        self.require_lin(arrow_bound(lin), arrow_bound(fresh));
+        self.function_with(param, fresh, row, ret)
+    }
+
+    /// `found` を `expected` に流し込む (規則 F)。`found` が未決の変数で `expected` が関数型なら、一番外側の矢印だけを
+    /// `expected` 以下の新しい Kind 変数にした写しに決める。型の分からない値を `once` の位置へ先に渡し、後から呼んでも
+    /// 通すためである。それ以外は単一化と同じ (docs/spec/types.md の「値を読む式の矢印の線形性」)。
+    pub fn flow_into(&mut self, found: Ty, expected: Ty) -> Result<(), UnifyError> {
+        let (found, expected) = (self.resolve(found), self.resolve(expected));
+        if let (
+            TyShape::Var(_),
+            TyShape::Fn {
+                param,
+                lin,
+                row,
+                ret,
+            },
+        ) = (self.shape(found).clone(), self.shape(expected).clone())
+        {
+            let fresh = self.fresh_arrow_lin();
+            self.require_lin(arrow_bound(fresh), arrow_bound(lin));
+            let copy = self.function_with(param, fresh, row, ret);
+            return self.unify(found, copy);
+        }
+        self.unify(found, expected)
+    }
+}
+
+fn arrow_bound(lin: ArrowLin) -> Bound<Linearity> {
+    match lin {
+        ArrowLin::Known(known) => Bound::Const(known),
+        ArrowLin::Var(var) => Bound::Var(var),
     }
 }
 

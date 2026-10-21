@@ -1071,7 +1071,7 @@ fn partial_and_extra_arguments_use_closures() {
       return t.2
     }
     fn adder(x.0: int) -> tobj poly {
-      let c.1: tobj poly = closure add(x.0)
+      let c.1: tobj = closure add(x.0)
       return c.1
     }
     fn main(p.0: unit) -> unit {

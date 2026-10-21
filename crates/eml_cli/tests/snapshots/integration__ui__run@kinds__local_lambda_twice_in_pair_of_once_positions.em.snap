@@ -1,0 +1,9 @@
+---
+source: crates/eml_cli/tests/ui.rs
+expression: "format!(\"--- stdout ---\\n{stdout}--- stderr ---\\n{diagnostics}{stderr}{written}{exit}\")"
+input_file: tests/ui/run/kinds/local_lambda_twice_in_pair_of_once_positions.em
+---
+--- stdout ---
+ab
+abab
+--- stderr ---

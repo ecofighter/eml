@@ -80,7 +80,8 @@ impl BodyCheck<'_, '_> {
     /// 変数の名前の参照。
     pub(super) fn var_get(&mut self, id: ExprId, var: VarId) -> Ty {
         self.use_var(id, var, false);
-        self.var_type(var)
+        let ty = self.var_type(var);
+        self.table.widen_outer_lin(ty)
     }
 
     /// `x <- e`。

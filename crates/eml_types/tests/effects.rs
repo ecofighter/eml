@@ -493,7 +493,7 @@ fn operations_of_a_duplicate_effect_do_not_cascade() {
 /// (docs/spec/types.md の「Kind の書き出し」)。
 #[test]
 fn a_linear_arrow_is_displayed_as_once() {
-    let text = "data Box =\n  | Box (Int -> Int)\n  | Done\n\neffect Ask where\n  ask : Unit -> Int\n\npick : Bool -> Box -> Int\npick c b =\n  match b with\n    | Box g ->\n        handle ask () with\n          | ctl ask () k -> (if c then k else g) 1\n          | return x -> x\n    | Done -> 0";
+    let text = "data Box =\n  | Box (Int -> Int)\n  | Done\n\neffect Ask where\n  ask : Unit -> Int\n\npick : Bool -> Box -> Int\npick c b =\n  match b with\n    | Box g ->\n        handle ask () with\n          | ctl ask () k ->\n              match Box k with\n                | Box h -> h 1\n                | Done -> 0\n          | return x -> x\n    | Done -> 0";
     insta::assert_snapshot!(check_text(text), @"
     ask : Unit -> <Ask> Int
     pick : Bool -> Box -> Int
@@ -501,18 +501,19 @@ fn a_linear_arrow_is_displayed_as_once() {
       b#1 : Box
       g#2 : Int -> Int
       k#3 : once Int -> Int
-      x#4 : Int
+      h#4 : Int -> Int
+      x#5 : Int
     ---
-    E2001 13:47 mismatched types
-      13:47 expected `once Int -> Int`, found `Int -> Int`
-      13:40 the `then` branch has this type
+    E2001 14:25 mismatched types
+      14:25 expected `Int -> Int`, found `once Int -> Int`
+      14:21 argument 1 of `Box`
     ");
 }
 
 /// 線形性の食い違いが大きな型の中にあっても、`once` は入れ子の矢印に付く。
 #[test]
 fn a_linear_arrow_nested_in_a_tuple_is_displayed_as_once() {
-    let text = "data Box =\n  | Box (Int -> Int)\n  | Done\n\neffect Ask where\n  ask : Unit -> Int\n\npick : Bool -> Box -> Int\npick c b =\n  match b with\n    | Box g ->\n        handle ask () with\n          | ctl ask () k ->\n              let (f, n) = if c then (k, 1) else (g, 2)\n              f n\n          | return x -> x\n    | Done -> 0";
+    let text = "data Box =\n  | Box (Int -> Int)\n  | Done\n\ndata Pair =\n  | Pair (Int -> Int, Int)\n\neffect Ask where\n  ask : Unit -> Int\n\npick : Bool -> Box -> Int\npick c b =\n  match b with\n    | Box g ->\n        handle ask () with\n          | ctl ask () k ->\n              match Pair (k, 1) with\n                | Pair (f, n) -> f n\n          | return x -> x\n    | Done -> 0";
     insta::assert_snapshot!(check_text(text), @"
     ask : Unit -> <Ask> Int
     pick : Bool -> Box -> Int
@@ -520,13 +521,13 @@ fn a_linear_arrow_nested_in_a_tuple_is_displayed_as_once() {
       b#1 : Box
       g#2 : Int -> Int
       k#3 : once Int -> Int
-      f#4 : once Int -> Int
+      f#4 : Int -> Int
       n#5 : Int
       x#6 : Int
     ---
-    E2001 14:50 mismatched types
-      14:50 expected `(once Int -> Int, Int)`, found `(Int -> Int, Int)`
-      14:38 the `then` branch has this type
+    E2001 17:26 mismatched types
+      17:26 expected `(Int -> Int, Int)`, found `(once Int -> Int, Int)`
+      17:21 argument 1 of `Pair`
     ");
 }
 
@@ -748,7 +749,7 @@ fn a_clause_cannot_resume_with_a_linear_closure_where_the_result_has_an_arrow() 
 }
 
 #[test]
-fn a_clause_cannot_use_a_parameter_arrow_as_a_linear_one() {
+fn a_clause_may_use_a_parameter_arrow_as_a_linear_one() {
     let text = "effect Op where\n  op : (Unit -> <IO> Unit) -> Unit\n\nsame : a -> a -> (a, a)\nsame x y = (x, y)\n\nmain : Unit -> <IO> Unit\nmain () =\n  handle op (fn () -> ()) with\n    | ctl op x k ->\n        let h = Fs.open \"a\"\n        let (p, q) = same x (fn () -> Fs.close h)\n        p ()\n        q ()\n        k ()";
     insta::assert_snapshot!(check_text(text), @"
     op : (Unit -> <IO> Unit) -> <Op> Unit
@@ -757,18 +758,12 @@ fn a_clause_cannot_use_a_parameter_arrow_as_a_linear_one() {
       x#0 : a
       y#1 : a
     main : Unit -> <IO> Unit
-      x#0 : once Unit -> <IO> Unit
+      x#0 : Unit -> <IO> Unit
       k#1 : once Unit -> <IO> Unit
       h#2 : File
       p#3 : once Unit -> <IO> Unit
       q#4 : once Unit -> <IO> Unit
       $r#5 : Unit
-    ---
-    E3001 10:5 a linear value is used where the type of `op` requires a value that may be used any number of times
-      10:5 this clause handles `op`
-      12:30 this lambda captures a linear value
-      note: linear values, such as files, the continuation of a `once` operation and closures that capture one, must be used exactly once
-      note: the arguments of `op` may be used any number of times, so the clause cannot treat them as linear values
     ");
 }
 

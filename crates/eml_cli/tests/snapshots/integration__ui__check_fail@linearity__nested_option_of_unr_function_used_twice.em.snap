@@ -1,0 +1,20 @@
+---
+source: crates/eml_cli/tests/ui.rs
+expression: rendered
+input_file: tests/ui/check-fail/linearity/nested_option_of_unr_function_used_twice.em
+---
+[E3002] Error: `xs` must be used exactly once, but it is used more than once
+    ╭─[ check-fail/linearity/nested_option_of_unr_function_used_twice.em:15:26 ]
+    │
+ 15 │   println (show (run_all xs))
+    │                          ─┬  
+    │                           ╰── used again here
+    │
+    ├─[ check-fail/linearity/nested_option_of_unr_function_used_twice.em:15:26 ]
+    │
+ 14 │   println (show (run_all xs))
+    │                          ─┬  
+    │                           ╰── first used here
+    │ 
+    │ Note: linear values, such as files, the continuation of a `once` operation and closures that capture one, must be used exactly once
+────╯

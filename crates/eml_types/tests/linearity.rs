@@ -1005,24 +1005,6 @@ fn top_level_functions_fit_once_positions() {
     assert_eq!(check_short(text), Vec::<String>::new());
 }
 
-#[test]
-fn an_unr_function_value_does_not_fit_a_once_field() {
-    let text = "data Task =\n  | Task (once Unit -> <IO> Unit)\n\ndata Job =\n  | Job (Unit -> <IO> Unit)\n\nmove : Job -> Task\nmove j =\n  match j with\n    | Job f -> Task f";
-    assert_eq!(check_short(text), ["E2001 10:21 mismatched types"]);
-}
-
-#[test]
-fn a_parameter_called_twice_does_not_fit_a_once_field() {
-    let text = "data Task =\n  | Task (once Unit -> <IO> Unit)\n\nmake : (Unit -> <IO> Unit) -> <IO> Task\nmake f =\n  f ()\n  Task f";
-    assert_eq!(
-        check_short(text)
-            .iter()
-            .map(|d| &d[..5])
-            .collect::<Vec<_>>(),
-        ["E3002"]
-    );
-}
-
 /// `once` の操作の `fn` の節の本体が `multi` の操作を起こすと、隠れた `k` が区間をまたぐ。`$k` ではなく節の継続として
 /// 報告する (docs/spec/effects.md の「継続の多重度と持ち越し規則」)。
 #[test]

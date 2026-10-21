@@ -420,8 +420,8 @@ impl TypeStore {
         self.pairs_lin_compatible(vec![(a, b)])
     }
 
-    /// 一番外側の矢印の線形性だけを比べない `lin_compatible`。トップレベルの関数の参照は、一番外側の矢印が参照ごとの
-    /// 変数で、呼ばれる側のシグネチャの `Unr` と違ってよいため (docs/spec/types.md の「トップレベルの関数の参照」)。
+    /// 一番外側の矢印の線形性だけを比べない `lin_compatible`。宣言の参照は、一番外側の矢印が参照ごとの
+    /// 変数で、呼ばれる側のシグネチャの `Unr` と違ってよいため (docs/spec/types.md の「値を読む式の矢印の線形性」)。
     pub fn lin_compatible_inner(&self, reference: TypeId, callee: TypeId) -> bool {
         match (self.kind(reference), self.kind(callee)) {
             (
