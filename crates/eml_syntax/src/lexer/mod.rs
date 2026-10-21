@@ -378,14 +378,18 @@ impl Lexer<'_> {
             Err(CharLitError::MoreThanOne) => {
                 let diagnostic = Diagnostic::error(
                     codes::INVALID_CHAR_LITERAL,
-                    format!("character literal `{slice}` has more than one character"),
+                    format!(
+                        "character literal `{}` has more than one character",
+                        printable(slice)
+                    ),
                     Label::new(
                         self.file,
                         self.range(start, start + slice.len()),
                         "a character literal holds exactly one character",
                     ),
                 );
-                let diagnostic = if body.contains(['"', '\\']) {
+                // 見えない文字を含む本文は、そのまま書いても escape しても、help の文字列が元の本文と見分けられない
+                let diagnostic = if body.contains(['"', '\\']) || body.chars().any(is_invisible) {
                     diagnostic
                 } else {
                     diagnostic.with_help(format!("write a string: `\"{body}\"`"))

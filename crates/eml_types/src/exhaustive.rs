@@ -45,7 +45,7 @@ enum Pat {
     Con(Ctor, Vec<Pat>),
 }
 
-/// パターンの頭。タプルは要素の数だけのフィールドを持つコンストラクタが1つの型として、`Int` と `String` の
+/// パターンの頭。タプルは要素の数だけのフィールドを持つコンストラクタが1つの型として、`Int`、`Char`、`String` の
 /// リテラルは引数のないコンストラクタが無限にある型として扱う (docs/spec/exhaustiveness.md)。どれも同じ
 /// usefulness の手続きに乗せるため、コンストラクタの一種にする。
 #[derive(Debug, Clone, PartialEq)]

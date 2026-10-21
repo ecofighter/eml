@@ -342,6 +342,17 @@ fn malformed_character_literals_are_one_token_with_one_diagnostic() {
 }
 
 #[test]
+fn a_long_character_literal_with_an_invisible_character_is_escaped_and_gets_no_help() {
+    assert_eq!(
+        diags("'a\tb'"),
+        ["E0016@0..5 character literal `'a\\tb'` has more than one character"]
+    );
+    let (_, file) = source("'a\tb'");
+    let (_, diagnostics) = lex(file, "'a\tb'");
+    assert!(diagnostics[0].help.is_empty());
+}
+
+#[test]
 fn an_unclosed_quote_stays_unexpected_and_a_primed_name_is_one_identifier() {
     assert_eq!(diags("'a"), ["E0001@0..1 unexpected character `'`"]);
     assert_eq!(kinds("x'"), ["LIDENT"]);

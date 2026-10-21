@@ -177,6 +177,9 @@ UTF-8 の核の extern を入れ、標準ライブラリを広げる。`std/` �
 ### 処理系
 
 - Kind 推論の検証: `eml_types/src/kind/` の束の上の計算 (最小解、多相化で残す制約、持ち越し、含意、instance での値) を vstd だけに依存する葉の crate に移し、Verus で証明する。型検査と evidence passing の変換は Verus で扱わない。LIR の verifier と VM の組で `eml_rt` の前提を証明するかを検討する。詳細は [Verus で検証する範囲](verification.md) にある
+- `Char` の行に VM の命令を足すか: 今は `Std.Char.of_int` と `Show Char` が汎用の `Op::Extern` で動く ([VM](../spec/vm.md) の「基本操作と extern」)
+  - 後に回した理由: 命令の数が効くほど `Char` を使う処理がまだない。
+  - 見直す条件: `bench/` のプログラムかスクリプトで、汎用の `Op::Extern` の費用が目立つとき。
 - インクリメンタル化: 各段階をクエリ (salsa など) に載せ替える。各段階を純粋な関数にしているのはこのため ([コンパイラの構成](../implementation/architecture.md))
 - LSP: 診断、hover (型と row の表示)、補完、code action。診断の構造体は、LSP の診断と code action に変換できる形にしてある ([診断](../spec/diagnostics.md))。前提: インクリメンタル化
 - ネイティブ化: LIR から Cranelift でネイティブのコードを出す。LIR のブロックの列とブロック引数は、Cranelift のブロック引数に1対1で写る。多相な位置の `Int` は語の表現 ([オブジェクトモデル](../spec/object-model.md) の「語」)、`Float` は `float` の位置では生の 64 ビット、`tobj` では箱という表現を前提にする。VM とネイティブは `eml_rt` の値とヒープを共有し、関数表 `FnEntry` を接続点にして混ぜて動かせる。たとえば、標準ライブラリだけをネイティブにし、ユーザーのコードをバイトコードで動かす。VM からネイティブの関数を呼ぶ入口は、下の「入口」にある。`eml_extern` の表は、`eml_rt` の語の ABI の関数になる。ネイティブの `par` がバイトコードの閉包を worker で呼ぶには、VM の並列化 (下の「マルチコア対応」) が要る。前提: 借用パラメータ
