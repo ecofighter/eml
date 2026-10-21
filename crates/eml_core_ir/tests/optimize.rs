@@ -1480,7 +1480,7 @@ main () =
 }
 
 /// 展開した関数が返す `con` は、合流のブロックの引数を通って `match` に届く。`jump` の側で `switch` を決める
-/// (docs/future/roadmap.md の「処理系」の項目「jump threading とインライン化」)。
+/// (docs/spec/core-ir.md の「既知のコンストラクタ」)。
 #[test]
 fn a_con_returned_by_an_inlined_function_resolves() {
     let text = "\
@@ -1595,7 +1595,7 @@ main () =
 }
 
 /// 展開した関数の `if` の両方の枝が作る組は、合流のブロックの `unpack` を `jump` の側で飛ばして、組を作らずに渡す
-/// (docs/future/roadmap.md の「処理系」の項目「jump threading とインライン化」)。translate は同じ関数の中の
+/// (docs/spec/core-ir.md の「既知のコンストラクタ」)。translate は同じ関数の中の
 /// `let (a, b) = if …` を自分で組を作らない形にするので、組は展開した関数から受ける。
 #[test]
 fn a_tuple_from_both_arms_of_an_if_is_threaded() {

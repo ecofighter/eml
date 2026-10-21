@@ -1,7 +1,8 @@
 //! 既知のコンストラクタ (docs/spec/core-ir.md の「既知のコンストラクタ」)。
 //! 同じ関数の中の `con` で作った値への `switch` と `unpack` をその場で解き、合流のブロックの引数を通って届く場合は
-//! `jump` の側で決める (docs/future/roadmap.md の「処理系」の項目「jump threading とインライン化」)。解いた `con` の
-//! フィールドにある既知の閉包への `apply` は、S13e-1 と同じ規則で直接の呼び出しにする。
+//! `jump` の側で決める。解いた `con` の
+//! フィールドにある既知の閉包への `apply` は、既知の閉包と同じ規則 (docs/spec/core-ir.md の「既知の閉包」) で
+//! 直接の呼び出しにする。
 //!
 //! `con` の変数を開くのは、その `switch` か `unpack` が唯一の使いのときだけである。translate が `Unr` でない `con` の
 //! 変数を開く規則と同じで (docs/spec/core-ir.md)、引数の所有権はちょうど1回だけ移る。`switch` では、選ばれない
@@ -295,8 +296,8 @@ fn entry(uses: &[usize], block: &Block) -> Option<Entry> {
     }
 }
 
-/// `jump` の実引数で解ける合流のブロックの入口を、`jump` の側で決める (docs/future/roadmap.md の「処理系」の
-/// 項目「jump threading とインライン化」)。`jump M(a…)` の行き先 `M(p…)` が `switch p_i` か `unpack p_i` で始まり、
+/// `jump` の実引数で解ける合流のブロックの入口を、`jump` の側で決める (docs/spec/core-ir.md の
+/// 「既知のコンストラクタ」)。`jump M(a…)` の行き先 `M(p…)` が `switch p_i` か `unpack p_i` で始まり、
 /// `a_i` が `Tag` や `Int` の定数か、唯一の使いがこの `jump` である既知の `con` なら、`switch` か `unpack` を飛ばす。
 /// `unpack` で始まる M では、`p_i` をほかで使わない。`switch` で始まる M では、`p_i` を選ばれる行き先の外の、ほかの
 /// case の行き先で使っていてもよい (`scrutinee_skipped`)。
