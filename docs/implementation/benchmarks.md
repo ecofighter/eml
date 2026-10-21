@@ -251,7 +251,149 @@ bench/scripts.sh
 
 ## 所見
 
-今も判断の根拠になっている計測を、題名の見出しで置く。
+機種の M4 は Mac16,1 (Apple M4)、M5 は Mac17,2 (Apple M5) である。OS はどれも macOS 27.0.1 (26A434)、rustc は 1.98.1 で、「`decref` が一意な物体を空ける道」だけ 1.95.0 である。
+
+### `decref` が一意な物体を空ける道
+
+- 主張: 速いモードの `decref` の速い道は、rc が 1 なら `#[inline(never)]` で `#[cold]` でない解放の連鎖を直に呼ぶ。遅い道に入れる形と、連鎖を包む関数を呼ぶ形は命令が多い
+- 数値: `free` の計測で、遅い道に進む形 1,905,243,516、遅い道から `#[cold]` を外した形 1,896,524,999、直に呼ぶ形 1,785,276,496 (約6.3%、1回あたり約12命令の減り)。包む関数を呼ぶ形は 1,825,319,011。ほかの計測はどの形でも 0.4% 以内。連鎖の根を作業リストに積まない2つの形は `list` が約10.4% と約33.3% 増えた。M4、56211a5 に未コミットの変更を足した木。コミットからは再現できない
+- 根拠にしている所: `crates/eml_rt/src/heap/mod.rs` の `decref` のコメント、[オブジェクトモデル](../spec/object-model.md) の「核の操作」
+
+### 破棄処理の判定
+
+- 主張: 箱を空けるたびに読む破棄処理の判定は、`Kind` の `match` を通さず、`Meta::has_finalizer` が種類のビットを `Foreign` の番号と直に比べる。`Kind::from_bits` の腕が1つ増えるだけで、解放の多い計測が数%増える
+- 数値: 腕を1つ足すと `list` +5.56%、`free` +3.25%、`map` +3.70%。腕を除くと 0.25% 以内に戻った。M4、8b98876 に未コミットの変更を足した木。コミットからは再現できない
+- 根拠にしている所: `crates/eml_rt/src/meta.rs` の `has_finalizer` のコメント、[オブジェクトモデル](../spec/object-model.md) の「種類」
+
+### `eml_rt` のインライン化
+
+- 主張: `eml_rt` の速い道は、呼ぶ側に展開されていることを `-C remark=inline` の「definition is unavailable」で確かめる。展開されないと、`map-reuse` と `append` の命令の数が倍を超える。原因はどれも、総称な関数の実体が呼ぶ側と別のコード生成単位に入ることか、総称でない関数が crate をまたいで展開されないことだった。次の置き方はそのためである
+  - 総称な関数 (`set_field`、`field`、`string_push`、`push_unchecked`、`release_unkept`、`meta`、`scanned`) と、繰り返しの中の総称でない関数 (`release_children`、`Control::stop_bits`、`into_token`、`drop_token`) に `#[inline]` を付ける
+  - `Arc` を持つ欄 (`Heap` の付けた塊、`Pages` の `Control`、`HostRef` の Host) は `ManuallyDrop` にし、`Drop` が `#[inline(never)]` の関数に渡して手放す。欄の後始末が展開されると、単位の分け方が変わる
+  - 検査モードだけの確かめ (`checked_unshared`) は、呼ぶ側の `M::CHECKED` の枝の中で呼ぶ
+  - `rt_extern_bench` を `rt_bench` と別のプログラムにし、`rt_bench` の単位の分け方を変えない
+  - この戻し方は脆い。`release_children` は展開の閾値の近くにある
+- 数値:
+  - `release_children` に `#[inline]` がないと `map-reuse` が 600,306,311 から 1,281,810,080 命令になり、付けると `append` は1回あたり約73命令から約28命令になった。M4、8b98876 に未コミットの変更を足した木。コミットからは再現できない
+  - 付けた塊の欄を `Option<Arc<Frozen<M>>>` のまま持つと `map-reuse` +46%、`append` +152%。`checked_unshared` を速いモードでも呼ぶと `map-reuse` +49%、`append` +152%。M4、fd26d0d に未コミットの変更を足した木。コミットからは再現できない
+  - `Ctx` を計測のプログラムで使い始めたとき `map-reuse` +85%、`append` +152%。`field` を除く4つに `#[inline]` を付けた形では、同じ設定のビルドを繰り返すと `map-reuse` が約566M と約1058M 命令の間で変わり、`field` を足すと3回のビルドで約568M に留まった。`stop_bits` に付けると `poll` は1回あたり約14命令から約11命令になった。M4、28eb18d
+  - `into_token` と `drop_token` に付ける前後で、26の計測のどれも 0.5% より大きくは増えなかった (最大は `println-line` の +0.227%)。M4、e5f86d8 の前の未コミットの木。コミットからは再現できない
+  - VM の繰り返しから「definition is unavailable」で展開されなかった `eml_rt` の20の関数は、どれも繰り返しの外か冷えた道にあった。M4、73e31d1
+- 根拠にしている所: `crates/eml_rt/src/heap/release.rs` の `release_children`、`heap/mod.rs` の `region` の欄と `checked_unshared` と `set_field`、`alloc.rs` の `Pages` の `control` の欄、`control.rs` の `unbounded`、`host.rs` の `release_host`、`examples/rt_extern_bench.rs` の先頭のコメント。[オブジェクトモデル](../spec/object-model.md) の「核の操作」、「extern」の `Ctx` を取らない算術の項、「`unsafe` の核」の T4 の行。[VM](../spec/vm.md) の「置き場所」の `eml_rt` の項
+
+### 出力のバッファと Host の呼び出し
+
+- 主張: 標準出力と標準エラーは `Mutex` の中の 64 KiB の `BufWriter` にまとめて書く。行ごとに flush すると約65〜160倍遅い。Host は `dyn Host` で呼び、総称の型引数にしない。動的な呼び出しの分は、書き込みの費用と比べて小さい
+- 数値: 23 バイトの行を100万行書くと、行ごとの flush はファイルへ 1.30 µs/行、パイプへ 324 ns/行、`BufWriter` は 8 ns/行と 5 ns/行 (M4。設計のときの使い捨ての計測で、コミットの記録はない)。`rt.sh` の `println-block` (`dyn Host` の呼び出しを含む) は1行あたり約238命令、`println-line` は約12,131命令 (M4、42aee31)
+- 根拠にしている所: [オブジェクトモデル](../spec/object-model.md) の「extern」の「出力のバッファ」と Host の項
+
+### `Fs.read_all` の読み方
+
+- 主張: `Fs.read_all` は `Vec` に読んでからヒープへ写す。ヒープに直接読む形は、空き領域を0で埋める費用が省いた写しとほぼ相殺するので 6〜10% しか速くならず、信頼する関数が4つ要る。mmap はファイルが縮むと SIGBUS で落ち、`Vec` をそのまま文字列にすると文字列の全操作が2つの形に分かれる。読み手を `StopOnInterrupt` で包むので、`read_to_end` は空き領域を0で埋めてから読む
+- 数値: 採った形は 1 MiB で 60.2 µs、64 MiB で 7.0 ms (M4、ページキャッシュにあるファイル。設計のときの計測で、コミットの記録はない)。0で埋めるようにすると `read-all` +12.1%、`read-all-unsized` +10.0% (M4、1f36698 と 223d52f)
+- 根拠にしている所: [オブジェクトモデル](../spec/object-model.md) の「`File`」
+- 受け入れた理由: `read_buf` が stable の Rust にないため、中断で止められる読みを優先した
+
+### `codegen-units`
+
+- 主張: release のプロファイルの `codegen-units` は既定の値のままにする。1 にすると、VM の実行の分はプログラムによって減ったり増えたりする
+- 数値: `CARGO_PROFILE_RELEASE_CODEGEN_UNITS=1` で、`state` -14.2%、`tree` -6.1%、`list` -4.6%、`loop` -1.1%、`fib` +2.5% (M4、73e31d1)
+- 根拠にしている所: [VM](../spec/vm.md) の「置き場所」の `codegen-units` の項
+
+### `eml_vm` のインライン化
+
+- 主張: `eml_vm` の関数には、`vm::run` に「definition is unavailable」で展開されていないことと、付けると `bench/run.sh` で命令の数が減ることの2つが分かったときだけ `#[inline]` を付ける。`data` と `apply` の9つの関数は両方に当たった。`apply::apply` は付けても変わらなかったので付けない
+- 数値: 9つに付けると実行の分が `tree` 約5.4%、`list` 約3.8%、`state` 約2.8%、`fib` と `loop` 約1.2〜1.3% 減った。`apply::apply` は 0.2% 以内で、`fib` は約0.2% 増えた。基本操作の命令を `vm::step` の `match` に移すと、`state` が約17%、ほかが1〜4% 減った。M4、33cd286 から 4b5ef6c2 の間の未コミットの木。コミットからは再現できず、今のコードでは測り直していない
+- 根拠にしている所: [VM](../spec/vm.md) の「置き場所」の `eml_vm` の項
+
+### reuse の命令の関数の置き方
+
+- 主張: `release_reuse` と `con_reuse` は `#[inline]` にして token を使う道だけを `vm::run` に展開し、値が共有されていた道 (`release_shared`) と token が空の道 (`con_fresh`) は `#[cold]` と `#[inline(never)]` の関数に出す。3つの置き方のうち、reuse するプログラムで最も減り、reuse しないプログラムの増え方も 0.5% 以内に収まった
+- 数値: 基準 9ed9a349 からの実行の分の増減。`#[inline(never)]` では `tree` -4.93% (試作は -9.03%)。全部を `#[inline]` にすると reuse しない `iter_pipeline` +1.49%、`iter_pipeline_by_hand` +1.59%。採った形は `tree` -11.12%、`std_list` -14.28%、reuse しないプログラムは最大 +0.33% (`fib`)。M4、e5f86d8 の前の未コミットの木。コミットからは再現できない
+- 根拠にしている所: [VM](../spec/vm.md) の「置き場所」の reuse の命令の項
+
+### `INLINE_LIMIT` と `GROWTH_FACTOR`
+
+- 主張: `INLINE_LIMIT` の 40 は、測った値 (10、20、40、80) のうち、どのプログラムも下げ止まる最小の値である。書き換えで生まれた呼び出しの展開の予算 `GROWTH_FACTOR` は8倍で、`bench/` と `tests/ui/run`、`tests/ui/run-fail` のどの関数も予算に届かない。予算がないと、本体が自分を k 回呼ぶ `Fix` のラムダで関数が回ごとに k 倍に育つ
+- 数値: 実行の分で、`iter_pipeline` は 20 で 295,711,502、40 で 197,919,428 (20 では49% 遅い)。`upsert` は 10 で 535,233,564、20 以上で約490M (10 では9% 遅い)。80 は 40 と ±0.2% 以内。予算なしの `Fix` のラムダは、本体の呼び出し3で Core IR 157,491 行・0.31 秒・206 MB、4で 1,747,659 行・4.2 秒・2.5 GB。8倍の予算では約400行。育ち方の最大は `tests/ui/run/std/std_iter_lin.em` の `main` の 48 から 179 (3.7倍) で、4倍では余裕が13文しかない。M4、b9b2ff0 の前の未コミットの木 (定数を変えて測った)。コミットからは再現できない
+- 根拠にしている所: `crates/eml_core_ir/src/optimize/fuse/mod.rs` の `GROWTH_FACTOR` と `fuse/inline.rs` の `INLINE_LIMIT`、[Core IR](../spec/core-ir.md) の「インライン化」と「融合が止まること」
+
+### インライン化で増えるスタック
+
+- 主張: 末尾でない再帰の中に小さな関数を展開すると、1つのフレームのスロットが増え、深い再帰でスタックの上限に早く当たる
+- 数値: `upsert` の `peak_stack` は 352 語で、展開しなければ 206 語 (6f77feb)。`RunStats` の値なので機種によらない。352 は `crates/eml_vm/tests/bench.rs` のスナップショットと同じ
+- 根拠にしている所: [実装の現在地](status.md) の「深さと性能」
+- 受け入れた理由: 展開は、自動の版と手書きの版の組の RC の回数をそろえるために要る
+
+### reuse の token で増えるスタック
+
+- 主張: 末尾でない再帰の呼び出しをまたいで reuse の token を持つと、token のスロットでフレームごとに1語増え、深い再帰でスタックの上限に早く当たる
+- 数値: `list` の `peak_stack` は 700,015 語で、token を持たなければ 600,014 語 (9ed9a349)。`tree_map` は 126 語と 112 語。`RunStats` の値なので機種によらず、`crates/eml_vm/tests/bench.rs` のスナップショットと同じ
+- 根拠にしている所: [実装の現在地](status.md) の「深さと性能」
+- 受け入れた理由: token をフレームの中に限る形 (frame-limited reuse) は、token を呼び出しの引数と戻り値で渡さない簡単な形で、その費用として受け入れた
+
+### 1バイトずつ回すループ
+
+- 主張: eml で1バイトずつ回すループは、`bench/loop.em` の1反復に約330命令かかる。入力を1バイトずつ数える `wc` は Python の版の約14倍の実時間で、Python の版は C で書かれた `bytes.count` と `bytes.split` に任せている。1行の読みと検索を extern に任せる `grep -n` は Python とほぼ同じになる。素のループでは VM は CPython より速い
+- 数値: `loop` の実行の分 165,337,806 命令 / 500,000 反復 (M5、fc990f9)。30 MB の入力で `wc` は eml 1.01 秒、Python 0.07 秒 (14.4倍)、`grep -n` は 1.1倍 (M5、5bb2254、Python 3.14.7)。3,000万回のループは VM 0.26 秒、Python 0.66 秒で、`wc` を Python でも1バイトずつのループで書くと VM 1.56 秒、Python 1.45 秒 (M4、Python 3.14.7。リポジトリにない使い捨ての試作で、コミットの記録はない)。「今の数値」の `wc` の比は大きさが 9000 KiB で Python の実時間が小さく、この30 MB の値とは違う数になる
+- 根拠にしている所: [実装の現在地](status.md) の「深さと性能」、[ロードマップ](../future/roadmap.md) のネイティブ化の項目の完了の条件
+
+### ネイティブ化の見込み
+
+- 主張: `wc` の内側のループを LIR のまま Rust に写すと Python の約1.2倍、借用とインライン化を足すと約0.45倍になる。ネイティブ化で Python の1.5倍以内に届く見込みはある。ただし Cranelift のコードは LLVM より遅いことがあり、確保の多い `logstat` は測っていない
+- 数値: LIR をそのまま写した Rust (`opt-level=1`。1バイトごとの `dup`、`String.byte_at` の呼び出しと `decref`、`is_space` の呼び出しを残す) は読み込みを含めて約0.10秒、借用とインライン化を足すと約0.035秒。M4、Python 3.14.7。リポジトリにない使い捨ての試作で、コミットの記録はない
+- 根拠にしている所: [ロードマップ](../future/roadmap.md) のネイティブ化の項目の完了の条件
+
+### `Yield` を変える handler の yield
+
+- 主張: `Yield a` を `Yield b` に変える handler の `fn yield` の節は、節が外側の `yield` を起こすので、外側の handler が特殊化される `Yield.fold` でも、`State.run` の中でも、1要素ごとに yield する
+- 数値: 1,000 要素の `map_lists` (`tests/ui/run/effects/pure_callback_under_state.em` と同じ形) を `Yield.fold` で畳むと、`yields` 1000、`evidence_steps` 4002。`State.run` の中でも同じ値。0fff343a の検査モード (`eml_test_support::run_stats`)。`RunStats` の値なので機種によらない
+- 根拠にしている所: [ロードマップ](../future/roadmap.md) の「処理系」の、yield しうる外のエフェクトを呼ぶ節をその場で実行する項目、[実装の現在地](status.md) の「深さと性能」
+
+### 状態を渡す形にしない handler
+
+- 主張: どの節もすぐに再開する handler でも、`perform` の結果と節の末尾の `resume k(v, s)` の Repr か印が合わないものは、状態を渡す形の条件 (`resumes_fit`) に当たって EP の道に残る。経路がすべて末尾の呼び出しでも、末尾の経路の形には切り替えない
+- 数値: `bench/` には当たるプログラムがなく、`RunStats` は変わらなかった (M5、e19347bc と c2e34728)。`crates/eml_core_ir/tests/optimize.rs` の `a_resume_value_of_another_repr_keeps_the_handle` が、この handle が残ることを固定する
+- 根拠にしている所: [Core IR](../spec/core-ir.md) の「handler への特殊化」
+- 受け入れた理由: 1つの handler に2つの形を持たないため
+
+### 配列の `Float` の要素の箱
+
+- 主張: 配列の要素は一様な位置なので、`Array Float` と `MutArray Float` の要素は書くたびに `Float` の箱に入る。spectral-norm の確保のほとんどはこの箱である
+- 数値: spectral-norm (既定の大きさ) は `allocations` 4043、`boxes` 4001。10回のくり返しで行列とベクトルの積を40回計算し、そのたびに100個の要素を作る (40 × 100 = 4000)。状態を渡す形の複製が返す組を構造体にしない場合は 4057 だった (e6665e64)。`RunStats` の値なので機種によらず、0fff343a の `bench.rs` のスナップショットと同じ
+- 根拠にしている所: [ロードマップ](../future/roadmap.md) のスカラーの要素を生で持つ配列の項目、`bench/spectral_norm.em` の先頭のコメント、`crates/eml_vm/tests/bench.rs` の `spectral_norm_allocates_14_fewer`
+
+### 配列に書く構造体の箱
+
+- 主張: 配列の要素と、配置で構造体の型を宣言したフィールドは一様な位置なので、そこに書く構造体の値は箱に入る。nbody の確保はこの箱だけである
+- 数値: nbody は1回進めるごとに 25 (速度に20、位置に5) で、既定の1000回で `allocations` 25051。計算の途中の `Vec3` と、状態を渡す形の複製が返す組は確保しない。`RunStats` の値なので機種によらず、0fff343a の `bench.rs` のスナップショットと同じ
+- 根拠にしている所: [ロードマップ](../future/roadmap.md) の構造体のフィールドを親の物体に並べることの項目、[実装の現在地](status.md) の「深さと性能」、`bench/nbody.em` の先頭のコメント、`crates/eml_vm/tests/bench.rs` の `nbody_allocates_25_per_step`
+
+### 呼び出しの規約の引き換え
+
+- 主張: 関数の Repr を型から決める規約で、増えた費用が2つある
+  - 特殊化されない `List.map` が、受けた `Float` をそのまま返す関数の値を型どおりに呼ぶので、要素ごとに `Float` の箱が1つ増える
+  - `apply` を使わないプログラムで、VM の命令のループが1回まわるごとに約3命令増えた。原因は分かっていない
+- 数値:
+  - `unspecialized_map_passes_floats.em` は `boxes` 20、`allocations` 22。型どおりに呼ばない規約では `boxes` 11、`allocations` 14 (ab9768c9)。今の値は 0fff343a の `trade_offs` のスナップショットと同じ
+  - `apply` を使わないプログラムの実行の分は +0.2% (`nbody`) から +1.7% (`fannkuch_by_hand`)。M5、061eb96 と、f6aee0e に未コミットの変更を足した木。コミットからは再現できない
+- 根拠にしている所: `crates/eml_vm/tests/bench.rs` の `trade_offs`、`tests/ui/run/functions/unspecialized_map_passes_floats.em` の先頭のコメント
+- 受け入れた理由:
+  - `Float` の箱: 特殊化されない `apply` を型どおりに呼ぶ規約の帰結で、`apply` の多いプログラムの実行の分が大きく減った (`apply_float` -43.3%、`apply_int` -33.5%、`ep_float` -17.8%)
+  - ループの約3命令: `apply` の関数を展開する形、しない形、`FnEntry` の欄を減らす形のどれでも消えず、`apply` の多いプログラムで最もよい形を残した
+
+### 構造体の表現の引き換え
+
+- 主張: 小さな単一コンストラクタの型とタプルを構造体にしたことで、増えた費用が2つある
+  - 特殊化されない `map` に組を入れ替える関数の値を渡すと、要素の組を箱から取り出して葉の並びで渡し、戻った組を新しい箱に入れる。共有した組を展開しない関数に渡すと、RC の葉ごとに `dup` する
+  - `Option` の中の組を構造体の `unbox` と `release unboxed` で読むので、`iter_pipeline` と `orders` の実行の分が増えた
+- 数値:
+  - `swap_map_unspecialized.em` は `allocations` 52、`reuses` 40。構造体にしない場合は 34 と 50 (e6665e64)。`swap_map_specialized.em` は構造体にしない場合と同じ 32 と 50 (`SWAP_MAP_BEFORE_STRUCTS`)。`three_rc_leaves_through_a_call.em` は `rc_increments` 3。今の値は 0fff343a の `trade_offs` のスナップショットと同じ
+  - `iter_pipeline` +3.4%、`iter_pipeline_by_hand` +3.5%、`orders_by_hand` +2.0%、`orders` +1.3%。M5、1a91f47 に未コミットの変更を足した木。コミットからは再現できない
+- 根拠にしている所: `crates/eml_vm/tests/bench.rs` の `trade_offs` と `SWAP_MAP_BEFORE_STRUCTS`、`tests/ui/run/records/swap_map_unspecialized.em` と `three_rc_leaves_through_a_call.em` の先頭のコメント
+- 受け入れた理由:
+  - 組の箱と葉の `dup`: データに通した関数の値は、葉の並びの規約で呼ぶほかない。構造体の表現で、`records` -26.9%、`mandelbrot` -24.7% と、確保の多いプログラムの実行の分が大きく減った
+  - `Option` の組の2命令: 増えたのは組を読む2つの命令の分と見ている。VM の中までは調べていない
 
 ## 記録
 
