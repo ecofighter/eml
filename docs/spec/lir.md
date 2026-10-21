@@ -57,7 +57,7 @@ EP の後の Core IR から写す LIR と、その実行の意味を定める。
 - `release unboxed x L #t(p1, .., pn)` は、構造体の `unbox` で葉を借りた箱 x を手放す `release` である。x がダミーなら何もしない (下の「ダミーの値」)。ほかは `release` と同じである。Perceus と reuse のパスが、構造体の `unbox` が読む箱に置く `release` にだけ印を付ける。ふつうの `release` の速い道に、ダミーを確かめる分岐を足さないためである
 - `drop a` は、a の参照を1つ手放す。a を消費し、結果は `unit` である。意味は `decref` と同じ「参照を1つ手放す」で、「すぐに破棄する」ではない。`poly` の値は実は `Unr` で共有されていることがあり (多重の継続を2回再開して写した `resume$` のクロージャが捕まえる `ret` など)、手放した後に残りの参照が使われうるためである。a が `unr` でない変数でも、`drop` は消費なので、Perceus はその後に何も足さない。`unr` でない値を手放す命令は、`drop` と Perceus の `release` だけである (下の「verifier」の V1)。a がダミーかタグなら、何も起こらない (下の「ダミーの値」)
 - 値 (アトム) の使い方は「消費」と「読む」に分かれる。`switch` の scrutinee、`unpack` の値、`unbox` のオペランド (構造体の `unbox` の箱を含む)、`prim` と extern の借用の引数 (下の「基本操作」と「extern の借用」) だけが「読む」で、参照を受け取らない。ほかの使い方 (呼び出し、`apply`、`clause`、呼ばれる側、extern と `prim` の借用でない引数、`con`、`closure` の引数、`drop`、`box`、`return`、`tail`、`jump` の実引数) はすべて「消費」で、参照を1つ受け取る。Core IR のエフェクトの命令の引数も「消費」である
-- `tail <呼び出し>` (`TailCall`) は、縮約が作る末尾呼び出しの要求である。呼び出し元のフレームを積まずに呼ぶ。呼び出しの結果は、呼び出し元の `ret` と互換でなくてよい。結果の変換は実行時に変換のフレームが行う (下の「末尾の位置の呼び出し」、[VM](vm.md) の「変換のフレーム」)。LIR の呼び出しは `mask` を持たない。EP が `mask` を `evv_mask` の包みに置き換えている ([Core IR](core-ir.md) の「`mask` の包み」) ためである。所有の都合で `let r = <呼び出し>` と `return r` に戻す降格は、借用パラメータを入れるときに、末尾の位置の呼び出しの輪の上にない末尾呼び出しにだけ足す (下の「末尾の位置の呼び出し」、[ロードマップ](../future/roadmap.md) の「処理系」)
+- `tail <呼び出し>` (`TailCall`) は、縮約が作る末尾呼び出しの要求である。呼び出し元のフレームを積まずに呼ぶ。呼び出しの結果は、呼び出し元の `ret` と互換でなくてよい。結果の変換は実行時に変換のフレームが行う (下の「末尾の位置の呼び出し」、[VM](vm.md) の「変換のフレーム」)。LIR の呼び出しは `mask` を持たない。EP が `mask` を `evv_mask` の包みに置き換えている ([Core IR](core-ir.md) の「`mask` の包み」) ためである。所有の都合で `let r = <呼び出し>` と `return r` に戻す降格は、借用パラメータの最適化が、末尾の位置の呼び出しの輪の上にない末尾呼び出しにだけ使う (下の「末尾の位置の呼び出し」、[ロードマップ](../future/roadmap.md) の「処理系」)
 
 ### 構造の規則
 
@@ -96,7 +96,7 @@ R1 と R2 から、ブロックの番号の順は辺の向きに沿った順 (�
 - 変数は値の表現 (Repr) を持つ。Repr は Core IR で型から決まり ([Core IR](core-ir.md) の「型の Repr」)、LIR にそのまま写る。Kind は Repr とは別に、印として持つ (下の「Kind の印」)
 - Repr は `int`、`float`、`enum`、`unit`、`obj`、`tobj` の6つと、構造体の `struct(S)` である。S は形の表の番号である (下の「構造体の形」)。`obj` はつねにヒープの物体を指す。`tobj` は、即値 (タグか関数の値) かヒープの物体を指す。RC の対象は `obj` と `tobj` の変数で、Perceus はこの変数にだけ RC の命令を付ける。reuse のパスが足す token の Repr `token` は、値ではない (下の「reuse」)
 - 局所の変数はスカラーと構造体のまま持ち、呼ぶ側か呼ばれる側が具体的な型を知らない位置 (一様な位置) だけを参照にする。一様な位置の Repr は `tobj` である。Lean の IR と同じ方式である。`int`、`float`、`enum`、`unit` の変数は、VM ではタグのないスロットに、ネイティブではレジスタに置ける。値を受ける位置の Repr は下の「位置の規則」が決め、変数の Repr と互換でなければ、box の挿入 (下の「box の挿入」) が変換を入れる
-- 一様な位置との間で `box` と `unbox` を要する Repr を、箱を要する Repr と呼ぶ。今は `int`、`float`、`enum` (箱を要するスカラー) と構造体である。規則と verifier の文言は、この集合の1つの定義 (`Repr::needs_box`) から作る。Repr を足すときに、規則を1つずつ探して直さずに済むためである。スカラーの箱は `tobj` で、構造体の箱は `obj` である (下の「構造体の形」)。命令なしで `tobj` と行き来するスカラーは `unit` だけである。`obj` と `tobj` の間は、命令なしで渡せる
+- 一様な位置との間で `box` と `unbox` を要する Repr を、箱を要する Repr と呼ぶ。`int`、`float`、`enum` (箱を要するスカラー) と構造体である。規則と verifier の文言は、この集合の1つの定義 (`Repr::needs_box`) から作る。Repr を足すときに、規則を1つずつ探して直さずに済むためである。スカラーの箱は `tobj` で、構造体の箱は `obj` である (下の「構造体の形」)。命令なしで `tobj` と行き来するスカラーは `unit` だけである。`obj` と `tobj` の間は、命令なしで渡せる
 - `float` は IEEE 754 の倍精度の浮動小数で、生の 64 ビットにビット列を持つ。`float` の case のリテラルはないので、`switch` の scrutinee にならない (リテラルの `switch` は `int` か `obj` の文字列)。`float` の定数は、`0.0` と `-0.0` や NaN のペイロードを区別するために、値でなくビット列 (`FloatBits`) で持って比べる
 - 2つの Repr a と b は、次のどれかのとき互換 (`Repr::compatible`) である
   - a と b が同じ
@@ -263,7 +263,7 @@ R1 と R2 から、ブロックの番号の順は辺の向きに沿った順 (�
 
 - 行は、引数ごとの借用の印 (`FunctionRow::borrowed`) を `params` と並べて持つ。印の立つ引数を extern は読むだけで、消費しない。基本操作の借用の引数 (下の「基本操作」) と同じく読む使いなので、Perceus は借りた変数を `dup` しない。借用が最後の使いなら、その命令の直後で手放す
 - 借りるのは、配列を読む4つの行 (`Std.Array.length`、`Std.Array.get`、`Std.MutArray.length`、`Std.MutArray.read`) の配列の引数だけである。読むたびに配列の参照を渡して返す手間を省くためである
-- extern が失敗して中断しても、借りた引数は呼んだ側が持ったままである。巻き戻しの表は呼び出しの後に持っている値を手放すので、借りた引数もそこで手放す ([VM](vm.md) の「巻き戻し」)。消費する引数は、今までどおり extern が手放す
+- extern が失敗して中断しても、借りた引数は呼んだ側が持ったままである。巻き戻しの表は呼び出しの後に持っている値を手放すので、借りた引数もそこで手放す ([VM](vm.md) の「巻き戻し」)。消費する引数は、extern が手放す
 - `with_arg: Some(k)` の行 (`Std.MutArray.length` と `read`) は、宣言の型では結果と引数 k の組を返す。行の結果は組の最初の要素で、組は translate が作る ([Core IR](core-ir.md) の「組を返す extern」)。LIR の `extern` 命令は行の結果だけを束縛し、借りた引数 k はその後の `con` が消費する
 - 縮約は、`Lin` の引数を借りずに受ける `Pure` の行 (`Std.MutArray.freeze`) を消さない (下の「縮約」)
 
@@ -275,7 +275,7 @@ R1 と R2 から、ブロックの番号の順は辺の向きに沿った順 (�
 - EP は Core IR の上で、box の挿入と縮約は LIR の上で、この定義を判定する。判定は同じ定義の写しである。純粋な右辺の集合は、LIR では `box` と `unbox` を含み、Core IR では含まない。EP の出力には `box` と `unbox` がないので、EP の出力の上で判定は同じ答えを返す。EP が「末尾の位置の呼び出しは yield の地点にしない」と決めたことと、縮約が末尾呼び出しを作ることは、この同じ定義の上で成り立つ
 - 末尾の位置の呼び出しは、結果の Repr が呼び出し元の `ret` と互換でなくても `tail` になる。結果の変換は、VM の変換のフレームが行う ([VM](vm.md) の「変換のフレーム」)
   - box の挿入は、末尾の位置の呼び出しの結果の束縛と、その `return` に変換を入れない。束縛の Repr は呼ばれる側の結果の Repr にする。入れると、`return` の値が変換の束縛になり、末尾の位置の形が消えるためである
-  - Kind の印は、両端が同じ型から決まるか `poly` なので互換である。縮約と verifier は今までどおり印を比べる
+  - Kind の印は、両端が同じ型から決まるか `poly` なので互換である。縮約と verifier は印を比べる
 - 保証: 末尾の位置の呼び出しは (`mask` 付きの呼び出しを除き)、どれも `tail` になる。変換のフレームは末尾呼び出しの間で合成され、本当のフレーム1つにつき多くとも1つになる。そのため、末尾の位置の呼び出しの輪をたどってもスタックは伸びない。`mask` 付きの呼び出しは保証の外に置く。戻りで `evv` を戻すのでフレームを残すが、そのフレームの数は handler の数で抑えられる (下の「`evv` の不変条件」)
 - 合成が成り立つ理由: 変換の両端は同じ型の Repr である。1つの型の Repr は一様な Repr ともう1つ (型どおりの Repr) だけなので、同じ型の2つの変換の合成はいつも恒等である。そのため、合成は変換のフレームを外すか、そのまま残すかのどちらかで、フレームを足さない ([VM](vm.md) の「変換のフレーム」)
 - 保証は IR の形についての文である。呼び出しの値が、文を持つ合流のブロックを通って `return` に届く形 (`let r = if n == 0 then 0 else f (n - 1) in let s = "unused" in r`) は、末尾の位置の呼び出しでなく、保証の外にある ([実装の現在地](../implementation/status.md) の「実行の費用」)
@@ -314,7 +314,7 @@ handle の実行と、継続の再開のたびに、新しい evidence を作る
 
 - `ev_lookup[E]` は、`evv` を先頭からたどり、エフェクトの番号が E の最初の evidence を返す。費用は今有効な handler の数に比例し、呼び出しの深さにはよらない
 - `evv_mask[items](w)` は、`items` の各項目 (エフェクト、残す数 n、飛ばす数 m) について、w の先頭から合う evidence を数え、n 個を残して続く m 個を除いたリストを作る。項目のないエフェクトの evidence は残す。除く位置までの節点を写し、残りは共有する。evidence の物体は写さない
-- `evv` は書き換えないので、探す場所ごとのキャッシュを後で足せる ([ロードマップ](../future/roadmap.md) の「処理系」)
+- `evv` は書き換えないので、探す場所ごとにキャッシュを置いても結果は変わらない ([ロードマップ](../future/roadmap.md) の「処理系」)
 
 ### 基本操作
 
@@ -383,7 +383,7 @@ handle の実行と、継続の再開のたびに、新しい evidence を作る
 - `callee` は in-place の入口のクロージャ、`args` の先頭は evidence (`obj`)、残りは操作の引数である。引数と結果の Repr は、操作の表の `params` と `ret` から取る (上の「エフェクトの位置」)
 - `apply` と同じく関数の値を呼ぶ。VM とネイティブでは、操作の ABI を知っている間接呼び出しになる ([VM](vm.md) の「呼び出しと戻り」)
 - `mask` は持たない
-- 操作の Repr を `perform` の境界に通すために、この呼び出しを足した。box の挿入、縮約、verifier にその規則がある。Perceus には規則を足さない
+- 操作の Repr を `perform` の境界に通すために、この呼び出しを置く。box の挿入、縮約、verifier にその規則がある。Perceus には規則を足さない
 
 ### 着地の印
 
@@ -403,7 +403,7 @@ handle の実行と、継続の再開のたびに、新しい evidence を作る
 
 - yield 中に返す値は、呼び出し元が使わずに捨てる
 - 関数の `ret` が `obj` か `tobj` なら `prim dummy()` の値を、`int` なら `0` を、`float` なら `0.0` を、`enum` なら `#0` を、`unit` なら `()` を返す。`tobj` にも物体を使うのは、互換の位置を通って `obj` の変数に入ることがあるためである (`ret` が `tobj` の関数の結果を `obj` の変数で受ける形)。`ret` が構造体なら、構造体の変数に `prim dummy()` を束縛して返す。box の挿入がこの束縛を `unbox` で受け直すので、開いた後は、下の構造体の `unbox` の約束で葉のダミーになる ([Core IR](core-ir.md) の「yield の地点」)
-- ダミーは、変換と RC の命令に当たる。EP は遅い道の先頭で、使わない x を `drop` し ([Core IR](core-ir.md) の「yield の地点」)、box の挿入は呼び出しの結果を受け直す `unbox` と `box` を呼び出しの直後 (yield の確認の前) に置く。VM の変換のフレームも、yield 中はダミーを受ける ([VM](vm.md) の「変換のフレーム」)。そのため、実行時は次を守る。S9 の `eml_rt` も同じ約束を守る
+- ダミーは、変換と RC の命令に当たる。EP は遅い道の先頭で、使わない x を `drop` し ([Core IR](core-ir.md) の「yield の地点」)、box の挿入は呼び出しの結果を受け直す `unbox` と `box` を呼び出しの直後 (yield の確認の前) に置く。VM の変換のフレームも、yield 中はダミーを受ける ([VM](vm.md) の「変換のフレーム」)。そのため、実行時は次を守る。`eml_rt` も同じ約束を守る
   - `dummy` の値は、`dup`、`decref`、`drop` で何も起こさない
   - `unbox` は、ダミーを受けても誤りにせず、何かの値を返す。その値は捨てられる
   - `box` は、ダミーを受けたらダミーを返す。`0`、`0.0`、`#0` は普通に箱に入れ、その値は捨てられる
@@ -445,7 +445,7 @@ handle の実行と、継続の再開のたびに、新しい evidence を作る
 | reuse (`reuse`) | Perceus の後の、token の命令のない LIR | 手放す箱を token にし、同じ語の数の `con` がそれを使う LIR |
 
 - どのパスの後でも、ブロックの列は上の「構造の規則」を満たす。パスの間で古くなる索引やキャッシュは IR に持たせない
-- 借用パラメータの最適化は後で追加する ([ロードマップ](../future/roadmap.md))。再帰の深さの決まりは、[Core IR](core-ir.md) の「パス」にある
+- 借用パラメータの最適化はしない ([ロードマップ](../future/roadmap.md))。再帰の深さの決まりは、[Core IR](core-ir.md) の「パス」にある
 
 ### box の挿入
 
@@ -528,7 +528,7 @@ Perceus は、`switch` と `unpack` のフィールドを借りたまま使い�
 - タグの case を持つのに配置のない `switch` を見たら、Perceus はパニックする。verifier が拒む形なので、黙って飛ばさない
 - 構造体の `unbox` の葉は、`unpack` のフィールドと同じく箱から借りる。親とスロットも `unpack` と同じに決める
 - 構造体の `unbox` が読む箱 w を手放す所は、次のようにする
-  - 属する生きている葉がなく、w の印が `unr` でなければ、`decref` (V1 が拒む) でなく `let u = drop w` にする。`Lin` の箱を手放すためである。w の印が `unr` なら、今までどおり `decref` にする
+  - 属する生きている葉がなく、w の印が `unr` でなければ、`decref` (V1 が拒む) でなく `let u = drop w` にする。`Lin` の箱を手放すためである。w の印が `unr` なら、`decref` にする
   - 葉を受け取るために w を解く `release` には、w の印によらず `unboxed` の印を付ける (`release unboxed w L #0(..)`)。w がダミーでありうるためである (上の「ダミーの値」)
 
 #### 親、スロット、持ち主
@@ -589,7 +589,7 @@ Perceus は、`switch` と `unpack` のフィールドを借りたまま使い�
 - `jump` の前: 上の「所有を取る時点」の 3. のとおり、行き先で生きている借りた変数をすべて所有にした後で、行き先で生きていない所有の変数 (保持されている変数を含む) を `decref` する。合流するブロックに入るすべての辺で、所有の集合が入口の生存集合のうちの RC の対象と一致する
 - `return` と `tail` の前: 実引数の所有を取った後で、保持されている変数をすべて `decref` し、所有を残さない
 - 呼び出しの前: 上の「所有を取る時点」の 2. のとおり、保持されている持ち主を解くので、保持されている変数は呼び出しをまたがない。保持されている持ち主が呼び出しをまたぐと、その死んだ兄弟のフィールドも残り、末尾でない再帰では段ごとに溜まるためである
-- 終端を、文と新しい終端に置き換える編集をその場でできる形にしておく。借用パラメータを入れるときに、末尾の位置の呼び出しの輪の上にない `TailCall` を降格するためである (上の「末尾の位置の呼び出し」)
+- 終端を、文と新しい終端に置き換える編集をその場でできる形にしておく。借用パラメータの最適化 ([ロードマップ](../future/roadmap.md)) が、末尾の位置の呼び出しの輪の上にない `TailCall` を降格できるようにするためである (上の「末尾の位置の呼び出し」)
 
 #### Perceus の時間
 
@@ -670,7 +670,7 @@ reuse のパスは、Perceus が手放す箱を token にし、同じ物理的�
   - token: token の変数は、token を定義する `release` でだけ定義する。経路でまだ使っていない token は所有の数1として持ち、所有と同じ写し方で `switch` の行き先へ渡す。どの経路でも、token を受ける `con` か `drop_token` で、ちょうど1回使う。token は値の位置 (上の「token の流れ」) に現れず、`jump`、`return`、`tail` の時点と、yield しうる呼び出しの直後に生きていない
   - token を受ける `con`: 物理的な語の数は token の元の構築子と同じである。`in place` なら、元と同じ配置の同じタグで、`lin` ビットの条件を満たす。書かない印の数は引数の数と同じで、書かない引数は、元の値を分解して束縛した変数で、語の種類と物理的な位置が元と同じである
   - 借りた変数 (所有の数0) は消費できないので、`jump` で渡されることはない。呼び出しの後も見えたままで、持ち主が所有されていれば有効である。持ち主を呼び出しの引数として消費すると、その後の借りた変数の使いは拒まれる。定義が支配する合流のブロックでも見えたままで、持ち主がどの辺でも所有されていれば有効である
-  - 持ち主を手放した後は、間の変数を後で `dup` していても、借りた変数を拒む。保守的だが健全で、Perceus はその形を出さない。親をたどる規則に緩めることは、IR を変えずに後でできる
+  - 持ち主を手放した後は、間の変数を後で `dup` していても、借りた変数を拒む。保守的だが健全で、Perceus はその形を出さない。親をたどる規則に緩めても、IR は変わらない
 - 引数のない `con` は、2つの IR のどの段でも拒む (`` a constructor value without fields is written as a tag `#N`, not `con` ``)
 - 入口の段だけの文言は次のとおりである
   - `tail`: ``a tail call is formed before contract``。`call` のほかは ``a tail apply``、``a tail clause`` を同じ形で使う
@@ -695,7 +695,7 @@ reuse のパスは、Perceus が手放す箱を token にし、同じ物理的�
   - `` `x.0` is released as `P` #0, but its constructor is not known on this path ``: 名前のない `release` の構築子が、その道で分かっていない
   - token: `` the token `r.4` is used twice ``、`` the token `r.4` is used as a value ``、`` the token `r.4` is still live at a return `` (`a tail call`、``a jump to b1`` も同じ形)、`` the token `r.3` is live after `g`, which may yield ``
   - token を受ける `con`: ``a con of `Q` #0 has 3 words, but the token `r.4` holds 2 words``、``a con of `Q` #0 rebuilds the token `r.4` in place, but the token comes from `P` #0``、``a con of `P` #0 rebuilds the token `r.3` in place, but `x.0` is lin and `d.4` is poly``、``argument 0 of a con of `P` #0 is skipped, but `b.3` is not at the same position in the box of the token `r.4` ``
-  - 持ち主のない変数を読むか消費するか手放したときと、持ち主も手放した変数を消費するか手放したときは、今までと同じく `` `x.1` is {used|released|duplicated|switched on|unpacked|unboxed|lent to `prim ev_evv`} after it was moved `` で報告する
+  - 持ち主のない変数を読むか消費するか手放したときと、持ち主も手放した変数を消費するか手放したときは、`` `x.1` is {used|released|duplicated|switched on|unpacked|unboxed|lent to `prim ev_evv`} after it was moved `` で報告する
 - R7 と R8 のうち境界の検査でないものは、2つの IR のすべての段で走り、どの段でも次の文言で報告する (`release` は LIR の所有の段にだけ現れる)。境界の検査と、`box` と `unbox` の規則は、境界の段で走る。どの文言の後にも、ほかの誤りと同じく `` in `f` `` が付く
   - 表にない配置: ``a con refers to the unknown layout #3`` (`a switch`、`an unpack`、`a release` も同じ形)
   - `switch` の配置の有無: `a switch with tag cases has no layout`、``a switch without tag cases has the layout `Prelude.Bool` ``
