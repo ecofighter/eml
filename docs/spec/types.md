@@ -96,7 +96,7 @@ data Queue a : Lin =
 
 - `Int` は 64 ビットの符号付き整数、`Float` は IEEE 754 の倍精度 (64 ビット) の浮動小数である。どちらも Prelude の extern の型で、Kind は `Unr` である
 - `Char` は Unicode のスカラー値 (0..=0xD7FF と 0xE000..=0x10FFFF) の1つを表す。Prelude の extern の型で、Kind は `Unr` である。文字のリテラルの型は `Char` で、`Int` とは別の型なので、`Num` の instance を持たず、`'a' + 'b'` は E2006、`'a' == 1` は E2001 になる。比較は `Eq` と `Ord` で、順序はコードポイントの順である ([宣言](declarations.md) の「Prelude のクラス」)
-- `Byte` は 0 から 255 の整数の1つを表す。Prelude の extern の型で、Kind は `Unr` である。リテラルは `65u8` の形で、型は `Byte` である。`Int` とは別の型なので、`1u8 == 1` は E2001 になる。算術は `Num` と `Div` で、`+ - *` と `negate` は結果が 0..=255 の外なら `Panic` を起こす。比較は `Eq` と `Ord` で、順序は数の順である ([宣言](declarations.md) の「Prelude のクラス」)
+- `Byte` は 0 から 255 の整数の1つを表す。Prelude の extern の型で、Kind は `Unr` である。リテラルは `65u8` の形で、型は `Byte` である。`Int` とは別の型なので、`1u8 == 1` は E2001 になる。算術は `Num` と `Div` で、`+ - *` と `negate` は結果が 0..=255 の外なら `Panic` を起こす。比較は `Eq` と `Ord` で、順序は数の順である。ビット演算は `Bits` で、`Int` と同じく `Byte` も instance を持ち、結果は 0..=255 に収まる。`Char` には `Bits` の instance がなく、`'a' &&& 'b'` は E2006 になる ([宣言](declarations.md) の「Prelude のクラス」)
 - リテラルは単相である。整数のリテラルの型は `Int`、浮動小数のリテラルの型は `Float`、`u8` を付けた整数のリテラルの型は `Byte`、文字のリテラルの型は `Char` で、`fromInteger` に当たる脱糖も defaulting もない ([字句](lexical.md) の「数値と文字」)
 - 算術は Prelude のクラス `Num` (`+ - *`、`negate`) と `Div` (`/ %`) のメソッドで、`Int`、`Float`、`Byte` がそれぞれ instance を持つ ([宣言](declarations.md) の「Prelude のクラス」)。何もオペランドの型を決めない算術は、制約が決まらず E2009 になる (下の「制約の解決」)。`Int` と `Float` を混ぜた演算 (`1 + 1.5`) は、単一化が失敗して E2001 になる
 

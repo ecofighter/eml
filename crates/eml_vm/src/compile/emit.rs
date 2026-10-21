@@ -1016,6 +1016,18 @@ fn arithmetic(ext: Extern, dst: Slot, args: &[Slot]) -> Option<Op> {
         | Extern::ByteToInt
         | Extern::ByteOfInt
         | Extern::ByteWrap
+        | Extern::IntAnd
+        | Extern::IntOr
+        | Extern::IntXor
+        | Extern::IntComplement
+        | Extern::IntShl
+        | Extern::IntShr
+        | Extern::ByteAnd
+        | Extern::ByteOr
+        | Extern::ByteXor
+        | Extern::ByteComplement
+        | Extern::ByteShl
+        | Extern::ByteShr
         | Extern::FloatNeg
         | Extern::FloatCompare
         | Extern::FloatShow

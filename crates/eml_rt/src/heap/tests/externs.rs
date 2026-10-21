@@ -117,6 +117,56 @@ fn check_index_accepts_only_positions_inside_the_length() {
     );
 }
 
+/// 幅 `w` の語のシフトの素直な版。`i128` で計算して `w` ビットに切る。量が負なら逆向きで、符号を反転しない
+fn naive_shift(x: i64, n: i64, width: u32, left: bool) -> i64 {
+    let (left, amount) = if n < 0 {
+        (!left, -(n as i128))
+    } else {
+        (left, n as i128)
+    };
+    let x = x as i128;
+    let shifted = if amount >= width as i128 {
+        if left || x >= 0 { 0 } else { -1 }
+    } else if left {
+        x << amount
+    } else {
+        x >> amount
+    };
+    if width == 64 {
+        shifted as i64
+    } else {
+        (shifted & 0xff) as i64
+    }
+}
+
+#[test]
+fn bits_match_plain_rust() {
+    for a in table::BITS_INT {
+        assert_eq!(int_complement(a), !a);
+        for b in table::BITS_INT {
+            assert_eq!(int_and(a, b), a & b);
+            assert_eq!(int_or(a, b), a | b);
+            assert_eq!(int_xor(a, b), a ^ b);
+        }
+        for n in table::SHIFT_AMOUNTS {
+            assert_eq!(int_shl(a, n), naive_shift(a, n, 64, true), "{a} <<< {n}");
+            assert_eq!(int_shr(a, n), naive_shift(a, n, 64, false), "{a} >>> {n}");
+        }
+    }
+    for a in table::BITS_BYTE {
+        assert_eq!(byte_complement(a), 255 - a);
+        for b in table::BITS_BYTE {
+            for r in [int_and(a, b), int_or(a, b), int_xor(a, b)] {
+                assert!((0..=255).contains(&r));
+            }
+        }
+        for n in table::SHIFT_AMOUNTS {
+            assert_eq!(byte_shl(a, n), naive_shift(a, n, 8, true), "{a} <<< {n}");
+            assert_eq!(byte_shr(a, n), naive_shift(a, n, 8, false), "{a} >>> {n}");
+        }
+    }
+}
+
 #[test]
 fn arithmetic_matches_checked_rust() {
     for a in EDGES {
@@ -1336,6 +1386,21 @@ unsafe fn call<M: Mode>(
             "Prelude.Div Byte./" => arith(int_div)?,
             "Prelude.Div Byte.%" => arith(int_rem)?,
             "Prelude.Num Byte.negate" => Outcome::Int(byte_negate(int(0))?),
+            "Prelude.Bits Int.&&&" | "Prelude.Bits Byte.&&&" => {
+                Outcome::Int(int_and(int(0), int(1)))
+            }
+            "Prelude.Bits Int.|||" | "Prelude.Bits Byte.|||" => {
+                Outcome::Int(int_or(int(0), int(1)))
+            }
+            "Prelude.Bits Int.^^^" | "Prelude.Bits Byte.^^^" => {
+                Outcome::Int(int_xor(int(0), int(1)))
+            }
+            "Prelude.Bits Int.complement" => Outcome::Int(int_complement(int(0))),
+            "Prelude.Bits Byte.complement" => Outcome::Int(byte_complement(int(0))),
+            "Prelude.Bits Int.<<<" => Outcome::Int(int_shl(int(0), int(1))),
+            "Prelude.Bits Int.>>>" => Outcome::Int(int_shr(int(0), int(1))),
+            "Prelude.Bits Byte.<<<" => Outcome::Int(byte_shl(int(0), int(1))),
+            "Prelude.Bits Byte.>>>" => Outcome::Int(byte_shr(int(0), int(1))),
             "Prelude.Num Int.negate" => Outcome::Int(int_negate(int(0))?),
             "Prelude.check_index" => {
                 check_index(int(0), int(1))?;

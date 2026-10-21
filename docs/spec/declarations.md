@@ -162,12 +162,17 @@ dir </> name = join_path dir name
 | 3 | `&&` | 右 |
 | 4 | `==` `!=` `<` `<=` `>` `>=` | 結合しない |
 | 5 | `++` `::` | 右 |
+| 5 | `\|\|\|` | 左 |
 | 6 | `+` `-` | 左 |
+| 6 | `^^^` | 左 |
 | 7 | `*` `/` `%` | 左 |
+| 7 | `&&&` | 左 |
+| 8 | `<<<` `>>>` | 左 |
 | 9 | `>>` `<<` (関数合成) | 右 |
 | (10) | 関数適用、射影 | 左 |
 
 - `::` の fixity (`infixr 5`) は、Prelude が `List` と一緒に宣言する
+- ビット演算の `&&&`、`|||`、`^^^`、`<<<`、`>>>` の fixity は、Prelude が `Bits` と一緒に宣言する。段は Haskell の `Data.Bits` の `.&.` (7)、`.|.` (5)、`xor` (6)、`shiftL`/`shiftR` (8) と同じである。`x &&& m == 0` は `(x &&& m) == 0` と読む。`|||` と右結合の `++` や `::` は同じ段で結合が違うので、括弧なしで混ぜると E1006 になる。前置の `-` は優先順位 6 なので、`-8 >>> 1` は `-(8 >>> 1)` と読む。負の被演算子は `(-8) >>> 1` と括弧に入れる。右の被演算子の前置の `-` も、括弧がなければ E1006 になるので、負のシフトの量は `1 <<< (-1)` と書く
 - 合成演算子 `.` は採用しない (`.` は射影とモジュール修飾に使うため)
 - 単項の `!` はない。否定は関数 `not` で書く
 
@@ -180,6 +185,8 @@ dir </> name = join_path dir name
 | 単項の `-` (`negate`) | `Num a => a -> <Panic> a`。`Num` のメソッド `negate` を呼ぶ。`Int` の instance では、オーバーフローが `Panic` を起こす。`Byte` の instance では、`negate 0u8` 以外は結果が負になるので `Panic` を起こす。`Float` の instance は符号を反転する (`negate 0.0` は `-0.0`) |
 | `==` `!=` | `Eq a => a -> a -> Bool`。クラス `Eq` のメソッドである。`Eq` の instance のない型 (関数型、instance のない `data` の型、制約のないシグネチャの型変数) の値を比べると E2006 にする。`Float` は IEEE 754 のとおりに比べる (下の「Prelude のクラス」) |
 | `<` `<=` `>` `>=` | `Ord a => a -> a -> Bool`。クラス `Ord` のメソッドで、`compare` からの既定を持つ。`Float` の instance は IEEE 754 のとおりに比べ、`compare` とは食い違うことがある (下の「Prelude のクラス」) |
+| `&&&` `\|\|\|` `^^^` | `Bits a => a -> a -> a`。クラス `Bits` のメソッドで、2の補数の語のビットごとの論理積、論理和、排他的論理和である。`Panic` を起こさない |
+| `<<<` `>>>` | `Bits a => a -> Int -> a`。クラス `Bits` のメソッドで、左と右へのシフトである。量が負なら逆向きにずらす (下の「Prelude のクラス」のシフトの表)。`Panic` を起こさない |
 | `++` | `String -> String -> String` |
 | `&&` `\|\|` | `Bool -> Bool -> Bool`。短絡評価する。HIR で `a && b` を `if a then b else False` に、`a \|\| b` を `if a then True else b` に脱糖する |
 | `\|>` `<\|` | `x \|> f` は Prelude の関数 `x \|> f = f x` の呼び出しである。引数を左から評価するので、`x` を先に評価する。評価の順は [式](expressions.md) の「関数適用」に従う。`f <\| x` は Prelude の関数 `f <\| x = f x` の呼び出しである |
@@ -276,6 +283,14 @@ pub class Div a where
   (/) : a -> a -> <Panic> a
   (%) : a -> a -> <Panic> a
 
+pub class Bits a where
+  (&&&) : a -> a -> a
+  (|||) : a -> a -> a
+  (^^^) : a -> a -> a
+  complement : a -> a
+  (<<<) : a -> Int -> a
+  (>>>) : a -> Int -> a
+
 pub class Eq a where
   (==) : a -> a -> Bool
   (!=) : a -> a -> Bool
@@ -298,6 +313,18 @@ pub class Show a where
 ```
 
 - `Num` と `Div` は、互いを上位クラスに持たない。Prelude は `Int`、`Float`、`Byte` の instance を置き、メソッドを instance の中の `extern` で表の行 (`Prelude.Num Int.+`、`Prelude.Num Float.+`、`Prelude.Num Byte.+` など) に結ぶ。単相化で instance が決まるので、`Int` と `Float` の算術と `Byte` の `/` と `%` は VM の専用の命令になる。`Num Byte` の `+ - *` と `negate` は、数学的な結果が 0..=255 の外なら `Panic` ``integer overflow`` を起こす。`Int` のように回らず、回すときは `Byte.wrap` で明示する。`Byte` の `/` と `%` は `Int` と同じ向きに丸め、0 で割るときだけ ``division by zero`` を起こす ([VM](vm.md) の「基本操作と extern」)
+- `Bits` は `Int` と `Byte` の instance を置き、メソッドを instance の中の `extern` で表の行 (`Prelude.Bits Int.&&&`、`Prelude.Bits Byte.<<<` など、全部で12行) に結ぶ。`Char` と `Float` には instance を置かない。メソッドの型は row を持たず、どのメソッドも `Panic` を起こさない。綴りは F# のものである (`|` は予約語で、`>>` と `<<` は関数合成なので使えない)。`pop_count` や `test_bit` はない
+- `&&&`、`|||`、`^^^` は2の補数の語のビットごとの演算で、`Byte` の結果は 0..=255 に収まる。`complement x` は `Int` で `!x`、`Byte` で `x ^ 255` である
+- `<<<` と `>>>` の量は `Int` で、負の量は逆向きにずらす。次の表のとおり、量が語の幅 `w` (`Int` は 64、`Byte` は 8) 以上でも、`i64::MIN` でも符号を反転せずに定義する。`x` は被演算子で、`Byte` では 0..=255 である。`Int` の `>>` は算術シフトで、符号を保つ
+
+  | | `n >= w` | `0 <= n < w` | `-w < n < 0` | `n <= -w` |
+  |---|---|---|---|---|
+  | `Int` `x <<< n` | `0` | `x` を `n` ビット左へ (はみ出たビットは失う) | `x >> (-n)` (算術) | `x < 0` なら `-1`、そうでなければ `0` |
+  | `Int` `x >>> n` | `x < 0` なら `-1`、そうでなければ `0` | `x >> n` (算術) | `x` を `-n` ビット左へ (はみ出たビットは失う) | `0` |
+  | `Byte` `x <<< n` | `0` | `(x << n) & 255` | `x >> (-n)` | `0` |
+  | `Byte` `x >>> n` | `0` | `x >> n` | `(x << (-n)) & 255` | `0` |
+
+- `Bits` の12行は `Pure` で、VM の汎用の `Op::Extern` で動かす ([VM](vm.md) の「基本操作と extern」)。専用の命令は持たない
 - `Num` と `Div` のメソッドの型は `<Panic>` を持つ。メソッドの型はクラスで1つなので、`Panic` を起こさない instance のメソッド (`Float` の算術) も、型の上では `<Panic>` を持つ。`Float` の算術の表の行は `Pure` である
 - 整数のリテラルは `Int`、浮動小数のリテラルは `Float` である。`fromInteger` に当たる脱糖も defaulting もないので、何も型を決めない算術 (使わないラムダ `fn x -> x + x` など) は E2009 になる。`Int` と `Float` を混ぜた演算 (`1 + 1.5`) は E2001 である
 - `Eq Float` と `Ord Float` の比較の演算子 (`==`、`!=`、`<`、`<=`、`>`、`>=`) は IEEE 754 のとおりである。NaN はどの値とも等しくなく、NaN が絡むと `!=` のほかは偽になる。`0.0 == -0.0` は真である。`compare` だけは全順序 (Rust の `f64::total_cmp`) で、`-nan < -inf < … < -0.0 < 0.0 < … < inf < nan` と並べる。`Float` の演算が作る NaN は、どれもいつも正の quiet NaN (Rust の `f64::NAN`、ビット列 `0x7FF8000000000000`) にそろえる。そのため、どのプラットフォームでも `compare` は計算で得た NaN を `inf` より大きく並べる。並べ替えが NaN を含んでも順序として成り立つためである。そのため `Float` では、NaN と ±0 のときだけ、`==` と `compare … == EQ` の答えが食い違う (`0.0 == -0.0` は真だが、`compare (-0.0) 0.0` は `LT` である)。Prelude のほかの instance では、2つは食い違わない
@@ -346,6 +373,7 @@ Prelude の instance は次のとおりである。
 | `Show Int` | `extern show`。`show_prec` は Prelude に書き、`d > 6` で負の数なら括弧で囲む (`Some (-1)`) |
 | `Show Float` | `extern show`。Python の `repr` と同じ形で表示する (上の「Prelude のクラス」)。`show_prec` は Prelude に書き、`d > 6` で表示が `-` で始まるなら括弧で囲む (`Some (-1.5)`、`Some (-0.0)`、`Some (-inf)`)。`-` で始まるかは、Prelude の中だけの `Pure` の extern `shows_minus : Float -> Bool` で見分ける。`x < 0.0` は `-0.0` で偽になるためである |
 | `Num Int`、`Div Int`、`Num Byte`、`Div Byte`、`Num Float`、`Div Float` | メソッドを instance の中の `extern` で表の行に結ぶ (上の「Prelude のクラス」の `Num` と `Div` の項) |
+| `Bits Int`、`Bits Byte` | メソッドを instance の中の `extern` で表の行に結ぶ (上の「Prelude のクラス」の `Bits` の項) |
 | `Eq Float`、`Ord Float` | IEEE 754 のとおりの比較と全順序の `compare` (上の「Prelude のクラス」の `Eq Float` と `Ord Float` の項) |
 | `Eq Char` | `extern (==)`、`extern (!=)` |
 | `Ord Char` | `extern compare`、`extern (<)`、`extern (<=)`、`extern (>)`、`extern (>=)`。順はコードポイントの順で、`Ord String` の UTF-8 のバイト順と一致する |

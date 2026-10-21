@@ -1,0 +1,12 @@
+---
+source: crates/eml_cli/tests/ui.rs
+expression: rendered
+input_file: tests/ui/check-fail/types/bits_on_char.em
+---
+[E2006] Error: no instance of `Bits` for `Char`
+   ╭─[ check-fail/types/bits_on_char.em:3:30 ]
+   │
+ 3 │ main () = println (show ('a' &&& 'b'))
+   │                              ─┬─  
+   │                               ╰─── `&&&` requires `Bits Char`
+───╯

@@ -202,6 +202,43 @@ pub const BYTE_BINARY: [&str; 7] = [
     "Prelude.Ord Byte.>=",
 ];
 
+/// シフトの量。語の幅 8 と 64 の前後、符号の反転が起こる `i64::MIN`
+pub const SHIFT_AMOUNTS: [i64; 17] = [
+    i64::MIN,
+    -65,
+    -64,
+    -63,
+    -9,
+    -8,
+    -7,
+    -1,
+    0,
+    1,
+    7,
+    8,
+    9,
+    63,
+    64,
+    65,
+    i64::MAX,
+];
+
+/// `Int` のビット演算の被演算子
+pub const BITS_INT: [i64; 8] = [i64::MIN, -5, -1, 0, 1, 0x81, 255, i64::MAX];
+
+/// `Byte` のビット演算の被演算子。0..=255 に収まる値だけを取る
+pub const BITS_BYTE: [i64; 4] = [0, 1, 0x81, 255];
+
+/// ビット演算の行。2 つ目の組は被演算子を 2 つ取り、シフトは量を取る
+pub const BITS_BINARY: [&str; 6] = [
+    "Prelude.Bits Int.&&&",
+    "Prelude.Bits Int.|||",
+    "Prelude.Bits Int.^^^",
+    "Prelude.Bits Byte.&&&",
+    "Prelude.Bits Byte.|||",
+    "Prelude.Bits Byte.^^^",
+];
+
 /// 浮動小数の端の値。±0、±1、小数、`MAX`、`MIN`、最小の正規化数と非正規化数、±無限大、NaN
 pub const FLOAT_EDGES: [f64; 14] = [
     0.0,
@@ -659,6 +696,38 @@ pub fn inputs() -> Vec<(String, Vec<Arg>)> {
     }
     for a in BYTE_EDGES.into_iter().chain(EDGES) {
         push("Prelude.Num Byte.negate", vec![Arg::Int(a)]);
+    }
+    for name in BITS_BINARY {
+        let operands: &[i64] = if name.contains("Byte") {
+            &BITS_BYTE
+        } else {
+            &BITS_INT
+        };
+        for &a in operands {
+            for &b in operands {
+                push(name, vec![Arg::Int(a), Arg::Int(b)]);
+            }
+        }
+    }
+    for (name, operands) in [
+        ("Prelude.Bits Int.complement", &BITS_INT[..]),
+        ("Prelude.Bits Byte.complement", &BITS_BYTE[..]),
+    ] {
+        for &a in operands {
+            push(name, vec![Arg::Int(a)]);
+        }
+    }
+    for (name, operands) in [
+        ("Prelude.Bits Int.<<<", &BITS_INT[..]),
+        ("Prelude.Bits Int.>>>", &BITS_INT[..]),
+        ("Prelude.Bits Byte.<<<", &BITS_BYTE[..]),
+        ("Prelude.Bits Byte.>>>", &BITS_BYTE[..]),
+    ] {
+        for &a in operands {
+            for n in SHIFT_AMOUNTS {
+                push(name, vec![Arg::Int(a), Arg::Int(n)]);
+            }
+        }
     }
     for name in ["Prelude.Num Int.negate", "Prelude.Show Int.show"] {
         for a in EDGES.into_iter().chain(random_ints(RANDOM_INTS)) {

@@ -315,6 +315,38 @@ instance Show Byte where
   show b = display b ++ "u8"
   extern display
 
+pub infixl 8 <<<, >>>
+pub infixl 7 &&&
+pub infixl 6 ^^^
+pub infixl 5 |||
+
+-- ビット演算のクラス。どのメソッドも `Panic` を起こさない。`<<<` と `>>>` の量は `Int` で、負なら逆向きにずらす
+-- (docs/spec/declarations.md の「Prelude のクラス」)
+pub class Bits a where
+  (&&&) : a -> a -> a
+  (|||) : a -> a -> a
+  (^^^) : a -> a -> a
+  complement : a -> a
+  (<<<) : a -> Int -> a
+  (>>>) : a -> Int -> a
+
+instance Bits Int where
+  extern (&&&)
+  extern (|||)
+  extern (^^^)
+  extern complement
+  extern (<<<)
+  extern (>>>)
+
+-- 結果は 0 から 255 に収まる。はみ出たビットは切り捨てる
+instance Bits Byte where
+  extern (&&&)
+  extern (|||)
+  extern (^^^)
+  extern complement
+  extern (<<<)
+  extern (>>>)
+
 -- 要素を持つ組み込みの型。Array の Kind は要素に従い、MutArray は常に Lin (docs/spec/types.md)
 pub extern data Array a
 pub extern data MutArray a

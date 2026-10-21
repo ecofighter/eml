@@ -298,6 +298,238 @@ pub fn byte_negate(a: i64) -> (r: Result<i64, ArithFault>)
     }
 }
 
+/// `Int` の `<<<` の意味。量が負なら逆向きにずらし、どの量でも符号を反転しない
+/// (docs/spec/declarations.md の「Prelude のクラス」のシフトの表)
+pub open spec fn int_shl_spec(x: i64, n: i64) -> i64 {
+    if n >= 64 {
+        0
+    } else if n >= 0 {
+        (x << (n as u32)) as i64
+    } else if n > -64 {
+        (x >> ((-n) as u32)) as i64
+    } else if x < 0 {
+        -1i64
+    } else {
+        0
+    }
+}
+
+/// `Int` の `>>>` の意味。算術シフトである
+pub open spec fn int_shr_spec(x: i64, n: i64) -> i64 {
+    if n >= 64 {
+        if x < 0 {
+            -1i64
+        } else {
+            0
+        }
+    } else if n >= 0 {
+        (x >> (n as u32)) as i64
+    } else if n > -64 {
+        (x << ((-n) as u32)) as i64
+    } else {
+        0
+    }
+}
+
+/// `Byte` の `<<<` の意味。はみ出たビットは 255 で切る
+pub open spec fn byte_shl_spec(x: i64, n: i64) -> i64 {
+    if n >= 8 {
+        0
+    } else if n >= 0 {
+        ((x << (n as u32)) as i64) & 255
+    } else if n > -8 {
+        (x >> ((-n) as u32)) as i64
+    } else {
+        0
+    }
+}
+
+/// `Byte` の `>>>` の意味
+pub open spec fn byte_shr_spec(x: i64, n: i64) -> i64 {
+    if n >= 8 {
+        0
+    } else if n >= 0 {
+        (x >> (n as u32)) as i64
+    } else if n > -8 {
+        ((x << ((-n) as u32)) as i64) & 255
+    } else {
+        0
+    }
+}
+
+// 範囲の中の `Byte` の語にビット演算を当てても 0..=255 に収まる事実。`Byte` の行の結果の不変条件のために使う
+proof fn lemma_byte_bits(x: i64, y: i64, n: u32)
+    by (bit_vector)
+    requires
+        0 <= x <= 255,
+        0 <= y <= 255,
+        0 <= n < 8,
+    ensures
+        0 <= x & y <= 255,
+        0 <= x | y <= 255,
+        0 <= x ^ y <= 255,
+        0 <= x ^ 255 <= 255,
+        0 <= x >> n <= 255,
+        0 <= (x << (n as u32)) & 255 <= 255,
+{
+}
+
+#[inline]
+pub fn int_and(a: i64, b: i64) -> (r: i64)
+    ensures
+        r == a & b,
+        0 <= a <= 255 && 0 <= b <= 255 ==> 0 <= r <= 255,
+{
+    proof {
+        if 0 <= a <= 255 && 0 <= b <= 255 {
+            lemma_byte_bits(a, b, 0u32);
+        }
+    }
+    a & b
+}
+
+#[inline]
+pub fn int_or(a: i64, b: i64) -> (r: i64)
+    ensures
+        r == a | b,
+        0 <= a <= 255 && 0 <= b <= 255 ==> 0 <= r <= 255,
+{
+    proof {
+        if 0 <= a <= 255 && 0 <= b <= 255 {
+            lemma_byte_bits(a, b, 0u32);
+        }
+    }
+    a | b
+}
+
+#[inline]
+pub fn int_xor(a: i64, b: i64) -> (r: i64)
+    ensures
+        r == a ^ b,
+        0 <= a <= 255 && 0 <= b <= 255 ==> 0 <= r <= 255,
+{
+    proof {
+        if 0 <= a <= 255 && 0 <= b <= 255 {
+            lemma_byte_bits(a, b, 0u32);
+        }
+    }
+    a ^ b
+}
+
+#[inline]
+pub fn int_complement(a: i64) -> (r: i64)
+    ensures
+        r == !a,
+{
+    !a
+}
+
+#[inline]
+pub fn int_shl(a: i64, n: i64) -> (r: i64)
+    ensures
+        r == int_shl_spec(a, n),
+{
+    if n >= 64 {
+        0
+    } else if n >= 0 {
+        a << (n as u32)
+    } else if n > -64 {
+        a >> ((-n) as u32)
+    } else if a < 0 {
+        -1
+    } else {
+        0
+    }
+}
+
+#[inline]
+pub fn int_shr(a: i64, n: i64) -> (r: i64)
+    ensures
+        r == int_shr_spec(a, n),
+{
+    if n >= 64 {
+        if a < 0 {
+            -1
+        } else {
+            0
+        }
+    } else if n >= 0 {
+        a >> (n as u32)
+    } else if n > -64 {
+        a << ((-n) as u32)
+    } else {
+        0
+    }
+}
+
+#[inline]
+pub fn byte_complement(a: i64) -> (r: i64)
+    ensures
+        r == a ^ 255,
+        0 <= a <= 255 ==> 0 <= r <= 255,
+{
+    proof {
+        if 0 <= a <= 255 {
+            lemma_byte_bits(a, 0, 0u32);
+        }
+    }
+    a ^ 255
+}
+
+#[inline]
+pub fn byte_shl(a: i64, n: i64) -> (r: i64)
+    ensures
+        r == byte_shl_spec(a, n),
+        0 <= a <= 255 ==> 0 <= r <= 255,
+{
+    if n >= 8 {
+        0
+    } else if n >= 0 {
+        proof {
+            if 0 <= a <= 255 {
+                lemma_byte_bits(a, 0, n as u32);
+            }
+        }
+        (a << (n as u32)) & 255
+    } else if n > -8 {
+        proof {
+            if 0 <= a <= 255 {
+                lemma_byte_bits(a, 0, (-n) as u32);
+            }
+        }
+        a >> ((-n) as u32)
+    } else {
+        0
+    }
+}
+
+#[inline]
+pub fn byte_shr(a: i64, n: i64) -> (r: i64)
+    ensures
+        r == byte_shr_spec(a, n),
+        0 <= a <= 255 ==> 0 <= r <= 255,
+{
+    if n >= 8 {
+        0
+    } else if n >= 0 {
+        proof {
+            if 0 <= a <= 255 {
+                lemma_byte_bits(a, 0, n as u32);
+            }
+        }
+        a >> (n as u32)
+    } else if n > -8 {
+        proof {
+            if 0 <= a <= 255 {
+                lemma_byte_bits(a, 0, (-n) as u32);
+            }
+        }
+        (a << ((-n) as u32)) & 255
+    } else {
+        0
+    }
+}
+
 #[inline]
 pub fn int_add(a: i64, b: i64) -> (r: Result<i64, ArithFault>)
     ensures
