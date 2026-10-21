@@ -1,6 +1,6 @@
 -- 赤黒木への挿入。`balance` が組み直す節を受ける形 (FBIP の形) に書いたので、`ins` が分解した節の箱を、同じ関数の中で
 -- 作る節が使い回す。Okasaki の書き方 (`balance c l k r`) では節を作るのが呼び出し先なので、関数をまたぐ reuse が要る
--- (docs/implementation/status.md の「深さと性能」)。
+-- (docs/implementation/status.md の「最適化が扱わない形」)。
 data Color =
   | Red
   | Black

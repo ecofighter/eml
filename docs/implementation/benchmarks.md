@@ -322,21 +322,21 @@ bench/scripts.sh
 
 - 主張: 末尾でない再帰の中に小さな関数を展開すると、1つのフレームのスロットが増え、深い再帰でスタックの上限に早く当たる
 - 数値: `upsert` の `peak_stack` は 352 語で、展開しなければ 206 語 (6f77feb)。`RunStats` の値なので機種によらない。352 は `crates/eml_vm/tests/bench.rs` のスナップショットと同じ
-- 根拠にしている所: [実装の現在地](status.md) の「深さと性能」
+- 根拠にしている所: [実装の現在地](status.md) の「最適化が扱わない形」
 - 受け入れた理由: 展開は、自動の版と手書きの版の組の RC の回数をそろえるために要る
 
 ### reuse の token で増えるスタック
 
 - 主張: 末尾でない再帰の呼び出しをまたいで reuse の token を持つと、token のスロットでフレームごとに1語増え、深い再帰でスタックの上限に早く当たる
 - 数値: `list` の `peak_stack` は 700,015 語で、token を持たなければ 600,014 語 (9ed9a349)。`tree_map` は 126 語と 112 語。`RunStats` の値なので機種によらず、`crates/eml_vm/tests/bench.rs` のスナップショットと同じ
-- 根拠にしている所: [実装の現在地](status.md) の「深さと性能」
+- 根拠にしている所: [実装の現在地](status.md) の「実行の費用」
 - 受け入れた理由: token をフレームの中に限る形 (frame-limited reuse) は、token を呼び出しの引数と戻り値で渡さない簡単な形で、その費用として受け入れた
 
 ### 1バイトずつ回すループ
 
 - 主張: eml で1バイトずつ回すループは、`bench/loop.em` の1反復に約330命令かかる。入力を1バイトずつ数える `wc` は Python の版の約14倍の実時間で、Python の版は C で書かれた `bytes.count` と `bytes.split` に任せている。1行の読みと検索を extern に任せる `grep -n` は Python とほぼ同じになる。素のループでは VM は CPython より速い
 - 数値: `loop` の実行の分 165,337,806 命令 / 500,000 反復 (M5、fc990f9)。30 MB の入力で `wc` は eml 1.01 秒、Python 0.07 秒 (14.4倍)、`grep -n` は 1.1倍 (M5、5bb2254、Python 3.14.7)。3,000万回のループは VM 0.26 秒、Python 0.66 秒で、`wc` を Python でも1バイトずつのループで書くと VM 1.56 秒、Python 1.45 秒 (M4、Python 3.14.7。リポジトリにない使い捨ての試作で、コミットの記録はない)。「今の数値」の `wc` の比は大きさが 9000 KiB で Python の実時間が小さく、この30 MB の値とは違う数になる
-- 根拠にしている所: [実装の現在地](status.md) の「深さと性能」、[ロードマップ](../future/roadmap.md) のネイティブ化の項目の完了の条件
+- 根拠にしている所: [実装の現在地](status.md) の「実行の費用」、[ロードマップ](../future/roadmap.md) のネイティブ化の項目の完了の条件
 
 ### ネイティブ化の見込み
 
@@ -348,7 +348,7 @@ bench/scripts.sh
 
 - 主張: `Yield a` を `Yield b` に変える handler の `fn yield` の節は、節が外側の `yield` を起こすので、外側の handler が特殊化される `Yield.fold` でも、`State.run` の中でも、1要素ごとに yield する
 - 数値: 1,000 要素の `map_lists` (`tests/ui/run/effects/pure_callback_under_state.em` と同じ形) を `Yield.fold` で畳むと、`yields` 1000、`evidence_steps` 4002。`State.run` の中でも同じ値。0fff343a の検査モード (`eml_test_support::run_stats`)。`RunStats` の値なので機種によらない
-- 根拠にしている所: [ロードマップ](../future/roadmap.md) の「処理系」の、yield しうる外のエフェクトを呼ぶ節をその場で実行する項目、[実装の現在地](status.md) の「深さと性能」
+- 根拠にしている所: [ロードマップ](../future/roadmap.md) の「処理系」の、yield しうる外のエフェクトを呼ぶ節をその場で実行する項目、[実装の現在地](status.md) の「実行の費用」
 
 ### 状態を渡す形にしない handler
 
@@ -367,7 +367,7 @@ bench/scripts.sh
 
 - 主張: 配列の要素と、配置で構造体の型を宣言したフィールドは一様な位置なので、そこに書く構造体の値は箱に入る。nbody の確保はこの箱だけである
 - 数値: nbody は1回進めるごとに 25 (速度に20、位置に5) で、既定の1000回で `allocations` 25051。計算の途中の `Vec3` と、状態を渡す形の複製が返す組は確保しない。`RunStats` の値なので機種によらず、0fff343a の `bench.rs` のスナップショットと同じ
-- 根拠にしている所: [ロードマップ](../future/roadmap.md) の構造体のフィールドを親の物体に並べることの項目、[実装の現在地](status.md) の「深さと性能」、`bench/nbody.em` の先頭のコメント、`crates/eml_vm/tests/bench.rs` の `nbody_allocates_25_per_step`
+- 根拠にしている所: [ロードマップ](../future/roadmap.md) の構造体のフィールドを親の物体に並べることの項目、[実装の現在地](status.md) の「実行の費用」、`bench/nbody.em` の先頭のコメント、`crates/eml_vm/tests/bench.rs` の `nbody_allocates_25_per_step`
 
 ### 呼び出しの規約の引き換え
 
@@ -1499,7 +1499,7 @@ S13e-1 の完了の条件は、5つの組の自動の版と `_by_hand` の版で
 
 変える前の自動の版の `boxes` は、`orders` が 219490、`iter_pipeline` が 550001、`tree` が 44694、`upsert` が 39407 で、`push_fold` の `allocations` は手書きの版より1つ多い8だった。
 
-- RC の回数は、`orders`、`push_fold`、`upsert` で手書きの版に届いていない。インライン化しないので、要素ごとに直接の呼び出しが1回残り、その呼び出しが要素の所有権を受け取るためである ([実装の現在地](status.md) の「深さと性能」)。RC の回数を揃えるのは S13e-3 の条件である
+- RC の回数は、`orders`、`push_fold`、`upsert` で手書きの版に届いていない。インライン化しないので、要素ごとに直接の呼び出しが1回残り、その呼び出しが要素の所有権を受け取るためである ([実装の現在地](status.md) の「最適化が扱わない形」)。RC の回数を揃えるのは S13e-3 の条件である
 - `iter_pipeline_by_hand` も変わった。確保が1つ減り、`box` と `unbox` が1つずつ増えた (1回の実行で1回)。`Iter.generate` の handle の本体の複製は `internal` でないので、値として渡す所で `$boxed` を通るためである
 - `list` は `map` の複製で `boxes` と `unboxes` が 400000 から 200000 に、`fold_state` は `rc_increments` が 400005 から 300005 に減った
 - 変える前と変えた後で、`push_fold_by_hand` の `allocations` は7から6に、`fold_state` の `allocations` は13から10に、`push_fold` の `rc_increments` は300001から200001に減った
@@ -2014,7 +2014,7 @@ S13e-4 の設計の前に、main (9ed9a349) に、VM のコード生成で reuse
 | 木の全節を作り直す `incr` (65,535 節を20回) | 1,225,383,286 | 1,120,736,613 | 8.5% | 1,376,235 | 1,310,700 |
 
 - 関数の中で動的に組む版 (フレームごとに token を溜め、呼び出しとブロックをまたぐ) で数えた reuse の上限は、`bench/upsert` で 312,764 回だった。ブロックの中だけで組むと 107,670 回である
-- Okasaki の書き方の赤黒木は、節を作るのが呼び出し先の `balance` の中なので、`ins` の token が `balance` への末尾呼び出しで使われずに終わる。関数をまたぐ reuse が要るので、S13e-4 では扱わない ([実装の現在地](status.md) の「深さと性能」)
+- Okasaki の書き方の赤黒木は、節を作るのが呼び出し先の `balance` の中なので、`ins` の token が `balance` への末尾呼び出しで使われずに終わる。関数をまたぐ reuse が要るので、S13e-4 では扱わない ([実装の現在地](status.md) の「最適化が扱わない形」)
 - レコードの更新は、`release` だけを元にすると reuse が1回も起きない。フィールドがみな借りたまま読まれ、Perceus が `decref st` を出すためである。実装は、構築子の分かっている値の `decref` も元にする
 
 ### S14a

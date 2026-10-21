@@ -410,7 +410,7 @@ pub data Iter <e> a = | Iter (once Unit -> <e> Option (a, Iter <e> a))
 
 `Iter` を使うときは、次の3つに注意する。
 
-- 速さ: 末尾再帰の生産者を `generate` で引く形は、S13e-2 の handler への特殊化 ([Core IR](core-ir.md) の「handler への特殊化」) で yield しなくなり、S13e-3 の融合 ([Core IR](core-ir.md) の「`con` の値の形についての特殊化」) で、`fold` で引く形と `map` を重ねた形は1要素ごとに何も確保しないループになった。`filter` を重ねた形では、残した要素ごとに4つの確保 (`Some`、組、`Iter`、閉包) が残る。末尾でない再帰の生産者 (木の走査など) は、今も1要素ごとに yield する ([実装の現在地](../implementation/status.md) の「深さと性能」)
+- 速さ: 末尾再帰の生産者を `generate` で引く形は、S13e-2 の handler への特殊化 ([Core IR](core-ir.md) の「handler への特殊化」) で yield しなくなり、S13e-3 の融合 ([Core IR](core-ir.md) の「`con` の値の形についての特殊化」) で、`fold` で引く形と `map` を重ねた形は1要素ごとに何も確保しないループになった。`filter` を重ねた形では、残した要素ごとに4つの確保 (`Some`、組、`Iter`、閉包) が残る。末尾でない再帰の生産者 (木の走査など) は、今も1要素ごとに yield する ([実装の現在地](../implementation/status.md) の「最適化が扱わない形」)
 - エフェクトの届く先: 生産者のエフェクトは、`Iter.generate` を呼んだ場所ではなく、`next` を呼んだ場所の handler に届く。そのため、`try_io` は `Iter.generate` ではなく、消費するループを包む (`try_io (fn () -> Iter.each f (Iter.generate producer))`)
 - `multi` の操作: `yield` は `once` の操作なので、`Yield.for_each` の要素ごとの関数の中で `multi` の操作を起こすと E3006 になる。`yield` の継続を持ったまま、`multi` の操作をまたぐためである ([エフェクトと handler](effects.md) の「継続の多重度と持ち越し規則」)。多回の再開ができるジェネレータを用意しないことの帰結である
 
