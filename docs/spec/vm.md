@@ -14,10 +14,10 @@ VM は、LIR をレジスタ型のバイトコードに変換し、`eml_rt` の 
 - `eml_lir` は、データの物理的な形を決める関数 `LayoutCtor::shape` を持つ ([オブジェクトモデル](object-model.md) の「ペイロード」)
 - `eml_lir` は、文の単位の生存を公開の API にする ([LIR](lir.md) の「生存解析」)。スロットの割り当て (「スロットの割り当て」) が文の単位の干渉を作るために使う
 - `eml_rt` は、`Word::from_bits` を公開する。生の `int` と `enum` の値をスロットに置くためである (「スロットとスタック」)
-- `eml_rt` の関数には、S10 で VM のために `#[inline]` を足さなかった。インライン化の注釈 (`-C remark=inline`) が「definition is unavailable」と示した `eml_rt` の関数は、どれも実行の繰り返しの外か冷えた道にあったためである。繰り返しの中で呼ぶ関数に同じ注釈が出たときに足し、前後に `bench/rt.sh` を流して [計測の基準](../implementation/benchmarks.md) に記録する。`#[inline]` の置き方によって `map-reuse` の命令の数がビルドごとに約2倍振れたことがあるためである。S13e-4 では、reuse の命令の速い道で呼ぶ `into_token` と `drop_token` に `#[inline]` を足した。足す前後の `bench/rt.sh` の値は、どの計測も 0.5% より大きくは増えなかった
-- `eml_vm` の中の関数には、2つが分かったときだけ `#[inline]` を付ける。1つは、インライン化の注釈 (`-C remark=inline`) で、VM の繰り返し (`vm::run` と、そこに展開される関数) に「definition is unavailable」で展開されていないことである。もう1つは、付けると `bench/run.sh` で命令の数が減ることである。総称な関数の実体は、コード生成単位の1つにしかできず、ほかの単位からは展開できないためである。今は `data` の命令の関数 (`con`、`switch_tag`、`switch_int`、`switch_string`、`unpack`、`release`、`unbox`)、`con` と `release` の本体から reuse の命令と共有するために出した `write_fields`、`release_fields`、`drop_children`、`apply` の `make_closure` と `apply_rest` に付けている。測った数は [計測の基準](../implementation/benchmarks.md) の「S10b」にある
-- reuse の命令の関数 (`release_reuse` と `con_reuse`) は `#[inline]` にして、token を使う道だけを `vm::run` に展開する。値が共有されていた道 (`release_shared`) と token が空の道 (`con_fresh`) は、`#[cold]` と `#[inline(never)]` を付けた関数に出す。`bench/run.sh` で3つの置き方を比べた ([計測の基準](../implementation/benchmarks.md) の「S13e-4」)。2つの関数を `#[inline(never)]` にすると、reuse の命令ごとに呼び出しが1つ増え、`bench/tree.em` の命令の数の減り方は試作の半分ほどにとどまった。遅い道ごと展開すると、`vm::run` が大きくなり、reuse の命令を1つも使わない `bench/iter_pipeline.em` で命令の数が約1.5% 増えた。遅い道を出した置き方は、reuse するプログラムで最も減り、reuse しないプログラムの増え方は 0.5% 以内に収まった。`eml_rt` の部品 (`is_unique`、`into_token`、`con_at` など) は、速い道の中に展開される
-- release のプロファイルの `codegen-units` は既定の値のままにする。1 にすると、VM の実行の分の命令の数はプログラムによって減ったり増えたりしたためである (`state` で 14.2% 減、`fib` で 2.5% 増。[計測の基準](../implementation/benchmarks.md) の「S10a (VM)」)
+- `eml_rt` の関数に、VM のために `#[inline]` を足すのは、繰り返しの中で呼ぶ関数にインライン化の注釈 (`-C remark=inline`) が「definition is unavailable」を示したときだけにする。足す前と後に `bench/rt.sh` を流し、どの計測も 0.5% より大きく増えないことを確かめる。`#[inline]` の置き方によって、`map-reuse` の命令の数がビルドごとに約2倍振れたためである ([計測の基準](../implementation/benchmarks.md) の「`eml_rt` のインライン化」)
+- `eml_vm` の中の関数には、2つが分かったときだけ `#[inline]` を付ける。1つは、インライン化の注釈 (`-C remark=inline`) で、VM の繰り返し (`vm::run` と、そこに展開される関数) に「definition is unavailable」で展開されていないことである。もう1つは、付けると `bench/run.sh` で命令の数が減ることである。総称な関数の実体は、コード生成単位の1つにしかできず、ほかの単位からは展開できないためである。今は `data` の命令の関数 (`con`、`switch_tag`、`switch_int`、`switch_string`、`unpack`、`release`、`unbox`)、`con` と `release` の本体から reuse の命令と共有するために出した `write_fields`、`release_fields`、`drop_children`、`apply` の `make_closure` と `apply_rest` に付けている。測った数は [計測の基準](../implementation/benchmarks.md) の「`eml_vm` のインライン化」にある
+- reuse の命令の関数 (`release_reuse` と `con_reuse`) は `#[inline]` にして、token を使う道だけを `vm::run` に展開する。値が共有されていた道 (`release_shared`) と token が空の道 (`con_fresh`) は、`#[cold]` と `#[inline(never)]` を付けた関数に出す。`bench/run.sh` で3つの置き方を比べた ([計測の基準](../implementation/benchmarks.md) の「reuse の命令の関数の置き方」)。2つの関数を `#[inline(never)]` にすると、reuse の命令ごとに呼び出しが1つ増え、`bench/tree.em` の命令の数の減り方が小さくなった。遅い道ごと展開すると、`vm::run` が大きくなり、reuse の命令を1つも使わない `bench/iter_pipeline.em` の命令の数が増えた。遅い道を出した置き方は、reuse するプログラムで最も減り、reuse しないプログラムの増え方は 0.5% 以内に収まった。`eml_rt` の部品 (`is_unique`、`into_token`、`con_at` など) は、速い道の中に展開される
+- release のプロファイルの `codegen-units` は既定の値のままにする。1 にすると、VM の実行の分の命令の数はプログラムによって減ったり増えたりしたためである ([計測の基準](../implementation/benchmarks.md) の「`codegen-units`」)
 - 実行の関数は `eml_vm::execute(program: &eml_lir::Program, config: &RunConfig, host: HostRef) -> Result<Finished, RuntimeError>` の1つである。`execute` は、新しい `Machine` にプログラムを読み込み、入口を実行して閉じる (「追記」)。`RunConfig` は、検査モードかどうか (`debug_heap`) と、実行を止める情報 (`control: Arc<Control>`) を持つ。`file_root` は Host が持つので、`RunConfig` は持たない
 - `RunConfig` は `#[non_exhaustive]` にする。欄を足しても呼び出し側を壊さないためである。`RunConfig::default()` は、速いモードと、上限のない新しい `Control` (`Control::new(Limits::default())`) である。`Control` は `Default` を持たないので、`Default` は手で書く。`with_debug_heap(bool)` と `with_control(Arc<Control>)` で組み立てる
 - 1つの `Control` は1回の実行に使う。止める理由のビットは `Control::clear` でしか下りないので、使い回すと、前の実行で立ったビットで次の実行がすぐ止まるためである。REPL (`eml_cli::Repl`) は1つの `Control` をセッション全体で使い、入力の始めに `clear` を呼ぶ。`RunConfig` を `clone` すると `Control` を共有するので、UI テストの仕組みと `eml_test_support` は実行ごとに新しい `RunConfig` を作る
@@ -127,7 +127,7 @@ base + 0 .. base + frame_size: スロット
 - case と `unpack` のフィールドは、使われるものだけを読んで書く。SSA なので、使われないフィールドは死んでいる
 - Repr ごとにスロットを分けない。どの値も1語なので、分けても得るものがないためである。命令の位置ごとの割り当ては静的に決まるので、命令の位置ごとの「生きていて所有しているスロット」の表を作れる。表は生存解析だけでは決まらず、Perceus の所有の状態から作る。巻き戻しの地点の表はこの形で作っている (「巻き戻し」)。安全点ごとの表は作っていない (「並列化への備え」)
 - `jump` のブロック引数の並列な代入は、コンパイル時に `Move` の列へ直す。どの代入も、まだ読まれていない値を上書きしない順に並べ、輪になる代入は一時のスロットを1つ通して切る。変数の代入を先に並べ、定数の引数はその後に行き先のスロットへ直接読み込む。定数の書き込み先が、ほかの代入がまだ読む値のスロットでありうるためである
-- ブロック引数と実引数に同じ色を付けやすくする合併は行わない。移動の命令を減らす工夫だが、合併なしで VM の実行の分の命令の数が、S10a で比べた前のインタプリタの約 0.10〜0.17 倍に収まったので、簡潔さを先にした ([計測の基準](../implementation/benchmarks.md) の「S10a (VM)」)
+- ブロック引数と実引数に同じ色を付けやすくする合併は行わない。移動の命令を減らす工夫だが、合併なしで VM の実行の分の命令の数が前のインタプリタの約 0.10〜0.17 倍に収まったので、簡潔さを先にした。
 - 呼ぶ側のスロットは、呼び出しの間もスタックに残る。そのため、呼び出しの後で使う変数を退避しない。借りた変数が呼び出しをまたぐときは、その持ち主もスロットに残るので、借りた変数は有効なままである ([LIR](lir.md) の「所有を取る時点」)
 
 ## 呼び出しと戻り
@@ -247,7 +247,7 @@ token は1語の値で、フレームのスロットに置く ([オブジェク�
 - フィールドのある case では、検査モードで、語の種類が `Data` で、tag と走査する語の数が case の配置のものであることを確かめ、違えば内部の誤りにする。verifier の R8 は値を作った配置を追わないので、verifier を通った IR でも外れうるためである ([LIR](lir.md) の「構造の規則」)
 - フィールドは `field` と `raw` で物理的な位置から読み、スロットに書く (使われるものだけ)。読むだけなので、参照の数は変えない
 - `Int` の `switch` (`SwitchInt`) は、生の値を case の値と順に比べる。`String` の `switch` (`SwitchString`) は、scrutinee と定数を両方 `Heap::string` で借りて、バイト列を順に比べる。どちらも手放さない
-- 比較と分岐を1つにした命令は持たない。比較の命令が結果を生の `enum` の値としてスロットに書き、`SwitchEnum` がそれで分ける。融合の命令を足すと、`Op` の種類、コード生成の形の照合、逆アセンブラ、テストが増える。融合なしで VM の実行の分の命令の数が、S10a で比べた前のインタプリタの約 0.10〜0.17 倍に収まったので、簡潔さを先にした ([計測の基準](../implementation/benchmarks.md) の「S10a (VM)」)
+- 比較と分岐を1つにした命令は持たない。比較の命令が結果を生の `enum` の値としてスロットに書き、`SwitchEnum` がそれで分ける。融合の命令を足すと、`Op` の種類、コード生成の形の照合、逆アセンブラ、テストが増える。融合なしで VM の実行の分の命令の数が前のインタプリタの約 0.10〜0.17 倍に収まったので、簡潔さを先にした。
 - `unpack` は、行き先が1つの `switch` と同じ読み方をする。検査モードでは、語がポインタで、種類が `Data` で、tag と走査する語の数が名指したものであることを確かめ、違えば内部の誤りにする
 
 ### 基本操作と extern
@@ -408,7 +408,7 @@ token は1語の値で、フレームのスロットに置く ([オブジェク�
 
 どの回数も時間ではなく、仕事か物体か語を数える。そのため、2乗の時間にならないことと、ループがフレームを積まないことを、ふだんのテストで確かめられる ([テスト戦略](../implementation/testing.md) の「性能のテスト」)。
 
-S10a までの記録の `rc_increments`、`rc_decrements`、`peak_objects` は、S10b で消したインタプリタの数え方の値で、VM の値とは違う。違う理由は [計測の基準](../implementation/benchmarks.md) の「S10a (VM)」にある。
+前のインタプリタの数え方の `rc_increments`、`rc_decrements`、`peak_objects` の値は、VM の値とは違う。
 
 ## 並列化への備え
 

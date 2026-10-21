@@ -75,7 +75,7 @@ meta: u32         tag (16 ビット) | scan (8 ビット) | info (8 ビット)
 
 ### 種類
 
-種類は `info` の下位4ビットで、最大 16 種類である。種類ごとに次の欄を決める。欄は表を引かず、`Kind` の `match` で決める。種類を足すときに、どの欄も決め忘れないようにするためである。ただし破棄処理の欄は、箱を空けるたびに読むので、`Meta::has_finalizer` が種類のビットを `Foreign` の番号と直に比べる。`match` で種類に戻すと、種類を1つ足しただけで解放の多い計測の命令の数が数 % 増えたためである ([計測の基準](../implementation/benchmarks.md) の「S9b-1 (文字列)」)。比べた結果が種類の欄と同じであることは、Verus が確かめる。
+種類は `info` の下位4ビットで、最大 16 種類である。種類ごとに次の欄を決める。欄は表を引かず、`Kind` の `match` で決める。種類を足すときに、どの欄も決め忘れないようにするためである。ただし破棄処理の欄は、箱を空けるたびに読むので、`Meta::has_finalizer` が種類のビットを `Foreign` の番号と直に比べる。`match` で種類に戻すと、種類を1つ足しただけで解放の多い計測の命令の数が数 % 増えたためである ([計測の基準](../implementation/benchmarks.md) の「破棄処理の判定」)。比べた結果が種類の欄と同じであることは、Verus が確かめる。
 
 | 欄 | 意味 |
 |---|---|
@@ -299,7 +299,7 @@ VM の `con` と `closure` は、束縛する変数の印が `lin` なら、`all
 - `foreign` と `foreign_unique` は、物体の種類と値の型を、どちらのモードでも照らす。違えば `WrongKind` を返す。`foreign` の安全の条件は物体が生きていることだけで、違う型の値を指すポインタを返さないことは、この照らし合わせが受け持つためである
 - `reuse_in_place` は、空の token を受けると `StaleToken` を返す。空の token には箱がなく、返す語がないためである
 
-`Err` を作らない操作は、呼ぶ側に展開すれば、最適化で `Result` の分岐が消える。そのため、`dup` と `decref` は、局所の rc を書き換えるだけの速い道を `#[inline]` にし、残り (共有、不死、張り付いた数、検査モードの仕事) を、`#[cold]` と `#[inline(never)]` を付けた遅い道の関数に出す。速いモードの `decref` の速い道は、rc が 1 なら解放の連鎖を直に呼ぶ。解放の連鎖は `#[inline(never)]` にするが、一意な物体を空けることはよく起きるので、`#[cold]` にはしない。確保と箱の解放の速い道、`release`、`release_reuse`、`con_at`、`into_token`、`drop_token` と、語とヘッダの小さい関数も `#[inline]` にする。VM は `eml_rt` の外の crate なので、付けないと、総称でない関数は crate をまたぐ呼び出しになりうるためである。`Ctx::poll` が読む `Control::stop_bits` も、同じ理由で `#[inline]` にする。`field`、`set_field`、`meta`、`scanned`、`string_push` と、`string_push` の中で呼ぶ `push_unchecked` と、`release` と `release_reuse` の子の処理 (`release_children`) が呼ぶ `release_unkept` も `#[inline]` にする。総称な関数の実体は、使う側の crate のコード生成単位の1つにしかできず、ほかの単位からは展開できないためである ([計測の基準](../implementation/benchmarks.md) の「S9b-2b (実行文脈)」)。確保器の遅い道 (ページを替えること、大きい物体の確保と返却) は `#[cold]` にする。命令の数は [計測の基準](../implementation/benchmarks.md) の「S9a (`eml_rt` の核)」にある。
+`Err` を作らない操作は、呼ぶ側に展開すれば、最適化で `Result` の分岐が消える。そのため、`dup` と `decref` は、局所の rc を書き換えるだけの速い道を `#[inline]` にし、残り (共有、不死、張り付いた数、検査モードの仕事) を、`#[cold]` と `#[inline(never)]` を付けた遅い道の関数に出す。速いモードの `decref` の速い道は、rc が 1 なら解放の連鎖を直に呼ぶ。解放の連鎖は `#[inline(never)]` にするが、一意な物体を空けることはよく起きるので、`#[cold]` にはしない。確保と箱の解放の速い道、`release`、`release_reuse`、`con_at`、`into_token`、`drop_token` と、語とヘッダの小さい関数も `#[inline]` にする。VM は `eml_rt` の外の crate なので、付けないと、総称でない関数は crate をまたぐ呼び出しになりうるためである。`Ctx::poll` が読む `Control::stop_bits` も、同じ理由で `#[inline]` にする。`field`、`set_field`、`meta`、`scanned`、`string_push` と、`string_push` の中で呼ぶ `push_unchecked` と、`release` と `release_reuse` の子の処理 (`release_children`) が呼ぶ `release_unkept` も `#[inline]` にする。総称な関数の実体は、使う側の crate のコード生成単位の1つにしかできず、ほかの単位からは展開できないためである ([計測の基準](../implementation/benchmarks.md) の「`eml_rt` のインライン化」)。確保器の遅い道 (ページを替えること、大きい物体の確保と返却) は `#[cold]` にする。`decref` の解放の道を選んだ計測は [計測の基準](../implementation/benchmarks.md) の「`decref` が一意な物体を空ける道」に、今の命令の数は同じ文書の「今の数値」にある。
 
 ペイロードを呼ぶ側が書く `alloc` と `alloc_immortal` も `unsafe fn` である。`meta` の種類は `Foreign`、`String`、`Free` のどれでもなく、`scan` は 255 でない。呼ぶ側は、ほかのヒープの操作の前に `meta` に合うペイロードを書く。`scan` が 255 の物体は走査する語の数をペイロードの先頭の数の語から読むので、数の語を書く前には、走査する語と生の語の境目が決まらない。走査する語が 255 個以上の物体は `alloc_data` で作る。ペイロードの形が正しいかは VM が受け持ち、確保のたびに実行時に確かめると速い道の費用になるためである。ペイロードを自分で書く `alloc_data`、`alloc_int`、`alloc_foreign`、`alloc_string`、`alloc_string_room`、`alloc_string_immortal` は安全な関数である。`String` の物体を作れるのは、下の「文字列」の操作だけである。
 
@@ -802,7 +802,7 @@ token の表の項目は、`into_token` と `release_reuse` が添字を使い�
 - 関数は、行ごとに引数の数が決まった形にする。`args: &[Word]` を受ける一律の形は採らない。引数がメモリを通り、ネイティブのコードでもレジスタで渡せなくなるためである
 - 引数と結果の型は Repr で決める。`int` は生の `i64`、`obj` は `Word`、`unit` は `()` である。`enum` のタグも `i64` にする。VM のレジスタは生の 64 ビットの語で、`yielding` と `yield_status` も `i64` を返すので、VM の側で型を変えずに済む
 - `Bool` と `Ordering` のタグ (`FALSE=0`、`TRUE=1`、`LT=0`、`EQ=1`、`GT=2`) は `i64` の定数、組のタグ (`TUPLE=0`) は `alloc_data` に合わせて `u16` の定数として `externs` に置く。`eml_lir` の定数と同じであることは、両方に依存する `eml_vm` のテスト (`tags.rs`) で確かめる
-- ヒープも Host も使わない算術と比較は、`Ctx` を取らない `#[inline]` の関数にする。VM の専用の命令が呼び、ほかの crate でも展開できるようにするためである。総称でない関数は、`#[inline]` がないと crate をまたいで展開されない ([計測の基準](../implementation/benchmarks.md) の「S9b-2b (実行文脈)」)
+- ヒープも Host も使わない算術と比較は、`Ctx` を取らない `#[inline]` の関数にする。VM の専用の命令が呼び、ほかの crate でも展開できるようにするためである。総称でない関数は、`#[inline]` がないと crate をまたいで展開されない ([計測の基準](../implementation/benchmarks.md) の「`eml_rt` のインライン化」)
 - `Word` を受ける extern は `unsafe fn` にし、`# Safety` に前提を書く。`Word` は別のヒープからも持ち込めるためで、核の操作と同じである。前提は、`heap_mut()` の前提を守っていることと、語が即値か、このヒープか付けた塊の生きている物体を指し、呼ぶ側がその参照を1つ持つことである。速いモードでは、文字列を受ける引数が文字列であることと、`Fs.read_all` と `read_line_raw` の `File` が局所で rc が 1 であることも前提にする。`File` の型は、どちらのモードでも確かめる
 - 引数の所有は LIR の規則のとおりにする。`obj` の引数は消費し、比較も読み終えたら手放す。`Int.show` は `Word` を受けないので、安全な関数である
 
@@ -911,7 +911,7 @@ pub struct Opened {
 - `Ctx` は Host を不透明な型 `HostRef` で持ち、何も約束しない関数を通して呼ぶ (下の「`unsafe` の核」の T11)。Verus は `dyn Host` も `io::Error` も扱えないためである。`HostRef` は `Arc<dyn Host>` を `ManuallyDrop` の欄に持ち、`Drop` で `#[inline(never)]` の関数に渡して手放す。`Control` と凍結した領域の鎖と同じ形で、`Ctx` を使うコードのコード生成単位の分け方を変えないための予防である。`Ctx` 自身は、今と同じく `Drop` を実装しない
 - `Ctx::new(control, host)` で受け取る。`par` の子の `Ctx` は、同じ Host を `Arc` で写して持つ
 - `Send + Sync` を求めるので、`JsValue` を持つブラウザの Host は `unsafe impl` が要る。これは受け入れる
-- Host を総称の型引数 (`Ctx<M, H>`) にはしない。基本操作がすべて `H` ごとにも単相化され、証明にも `H` が入るためである。動的な呼び出しの費用は数ナノ秒で、書き込みの費用と比べて小さい ([計測の基準](../implementation/benchmarks.md) の「S9b-3 (extern)」)
+- Host を総称の型引数 (`Ctx<M, H>`) にはしない。基本操作がすべて `H` ごとにも単相化され、証明にも `H` が入るためである。動的な呼び出しの分は、書き込みの費用と比べて小さい ([計測の基準](../implementation/benchmarks.md) の「出力のバッファと Host の呼び出し」)
 - ネイティブ、WASM (WASI)、アプリへの組み込み、S11 の REPL は、渡す Host を替えるだけで済む。標準入力、環境変数、子のプロセスなどの extern を足すときも、Host のメソッドを足す
 - `args`、`env_var`、`stdin`、`write_file`、`run` は、その入出力を持たない Host の振る舞いを既定に持つ。引数は空、環境変数は設定されていない、ほかは `Unsupported` の誤り (extern の理由は `not available`) である。組み込み先の Host は、出力とファイルの読みだけを実装すれば済む
 - `stdin` は、Host が持つ標準入力の読み手を、読む間だけ `MutexGuard` で貸す。Host のメソッドは `&self` を受けるためである
@@ -924,7 +924,7 @@ pub struct Opened {
 - `StdHost::stdio(file_root)` は、標準出力と標準エラーに書く。`StdHost::new(out, err, file_root, mode)` は、テストと組み込みのために書き込み先と書き方 (`Buffering` の `Line` か `Block`) を受ける。どちらも引数と標準入力を持たず (REPL の Host)、`with_args` と `with_stdin` で足す (`eml run` の Host。[VM](vm.md) の「置き場所」)
 - `StdHost` の `env_var` はプロセスの環境を読む。空の名前と、`=` か NUL を含む名前は `std::env::var_os` が panic しうるので、読まずに `None` を返す。`write_file` は `file_root` にパスをつないで、作るか切り詰めて書く。`run` は、子に標準入出力と環境を受け継がせ、`file_root` が空でなければそこを作業ディレクトリにする
 - 出力の方針は C の stdio と同じにする。標準出力が端末なら、対話ですぐ見えるように行ごとに書く (`Line`)。端末でなければ、64 KiB の `BufWriter` でまとめて書く (`Block`)。標準エラーは、いつも行ごとに書く
-- まとめて書くと、行ごとに flush する書き方より約 65〜160 倍速い ([計測の基準](../implementation/benchmarks.md) の「S9b-3 (extern)」)
+- まとめて書くと、行ごとに flush する書き方より速い ([計測の基準](../implementation/benchmarks.md) の「出力のバッファと Host の呼び出し」)
 - ストリームごとに `Mutex` を1つ持ち、ロックの中で本文と `\n` を書く。ロックが毒されていたら、`PoisonError::into_inner` で取り出して続ける。中身は書き込みのバッファだけで、続けても壊れないためである
 - `StdHost` を落とすときは、`BufWriter` の `Drop` がまだ書いていない出力を書く (unwind のときも同じ)。誤りは捨てる
 - `StdHost::open` は、`file_root` に `path` をつないで開く。`path` が絶対パスなら、そのパスを開く。長さの見込みは、ふつうのファイルにだけ返す。ディレクトリも開け、読むときに `I/O error` になる
@@ -950,14 +950,14 @@ pub struct Opened {
   3. 64 KiB ずつ読む。区切りの前ごとに、`Vec` の容量で次の確かめをする
      - 止める語が立っていれば、`Stopped` で止める。理由は `Ctx::poll` と同じ関数 `stop_reason` で決める (`INTERRUPT` なら `Interrupted`、`MEMORY` なら `MemoryLimit`)
      - 次に、領域の大きさと `Control` の確保量の和を上限 `max_bytes` と比べ、超えれば `Stopped(MemoryLimit)` で止める。`Vec` はヒープの外にあり、そのままでは上限に数えられないためである
-  4. 各区切りは `take(64 KiB).read_to_end(&mut vec)` で読み、0 バイトなら終わる。std が、短い読みと、終わりを小さな読みで確かめることを受け持つ。読み手は `StopOnInterrupt` で包む。中の読み手が `Interrupted` を返したとき、止める語が立っていれば `Interrupted` でない誤りに変えて返し、立っていなければそのまま返して `read_to_end` に読み直させる。区切りの読みが誤りを返したとき、止める語が立っていれば `Stopped` で止め、立っていなければ `Io` の誤りにする。SIGINT のハンドラが `SA_RESTART` を外して入れるので ([VM](vm.md) の「上限と割り込み」)、待っている読みは `EINTR` で戻り、この道で止まる。`StopOnInterrupt` は `read_buf` を実装できない (stable の Rust) ので、`read_to_end` は空き領域を各バイトにつき1回 0 で埋めてから読む。測った費用は [計測の基準](../implementation/benchmarks.md) の「S11c-1」にある
+  4. 各区切りは `take(64 KiB).read_to_end(&mut vec)` で読み、0 バイトなら終わる。std が、短い読みと、終わりを小さな読みで確かめることを受け持つ。読み手は `StopOnInterrupt` で包む。中の読み手が `Interrupted` を返したとき、止める語が立っていれば `Interrupted` でない誤りに変えて返し、立っていなければそのまま返して `read_to_end` に読み直させる。区切りの読みが誤りを返したとき、止める語が立っていれば `Stopped` で止め、立っていなければ `Io` の誤りにする。SIGINT のハンドラが `SA_RESTART` を外して入れるので ([VM](vm.md) の「上限と割り込み」)、待っている読みは `EINTR` で戻り、この道で止まる。`StopOnInterrupt` は `read_buf` を実装できない (stable の Rust) ので、`read_to_end` は空き領域を各バイトにつき1回 0 で埋めてから読む。測った費用は [計測の基準](../implementation/benchmarks.md) の「`Fs.read_all` の読み方」にある
   5. 読み終えたら `String::from_utf8` で確かめ、`alloc_string(&str)` でヒープへ写し、`Vec` を手放す
   6. 結果は組 `(File, String)` で、`alloc_data(TUPLE, 2, 0, lin = true)` で作り、`File` の参照を組に移す。行の `ret_kind` が `Lin` なので `lin` ビットを立てる
   - 読みの誤りなら `Io { op: Read, .. }`、UTF-8 でなければ `NotUtf8`、止めたら `Stopped` を返す。どのときも `Vec` と `File` を手放す。`File` を手放すことで閉じる
 - `Fs.read_line_raw` も同じ `Ctx::fs_read` で、`line` を真にして読む。1、5、6 と誤りのときの扱いは `Fs.read_all` と同じで、違いは次の2つである
   - 長さの見込みはファイル全体の長さなので、確保に使わずに取り出して捨てる。読んだ後の残りの長さとは合わないためである
   - 下の標準入力の1行の読みと同じく、`fill_buf` と `consume` で次の `\n` まで (それを含めて) 写す。64 KiB を超える行も、区切りごとに 3 の確かめをしながら読み続ける。終わりなら空の文字列を返す
-- ヒープに直接読む形、mmap で読む形、`Vec` をそのままヒープの文字列にする形は採らない。計測と理由は [計測の基準](../implementation/benchmarks.md) の「S9b-3 (extern)」にある
+- ヒープに直接読む形、mmap で読む形、`Vec` をそのままヒープの文字列にする形は採らない。計測と理由は [計測の基準](../implementation/benchmarks.md) の「`Fs.read_all` の読み方」にある
 - 標準入力の読み (`Std.Stdin.read_all` と `read_line_raw`) も、`Fs.read_all` と同じ読みの部品 (`StopOnInterrupt::read_bytes`) で読み、同じく区切りごとに止める語と確保量を見る。1行の読みは、std の `read_until` を使わず `fill_buf` と `consume` で `\n` まで写す。`read_until` は `Interrupted` を自分で読み直すので、止める語を見られないためである
 - `Proc.status` は、子を起動する前と、子が終わった後に止める語を見る。待つ間の Ctrl-C は同じプロセスグループの子にも届くので、子が終わって待ちから戻る。起動と同時に届いた Ctrl-C は子に届かないことがあり、そのときは子が終わってから止まる
 - 読む途中か待つ間に止める語を見るのは、`File` の読み (`Fs.read_all` と `read_line_raw`)、標準入力の読み、`Proc.status` だけである。ほかの extern は短い時間で終わるので、安全点を通らない
@@ -989,7 +989,7 @@ Verus で確かめない部分は、次の信頼の一覧にまとめる。`exte
 | T1 | ページの確保と返却の関数。中身は `std::alloc::{alloc, dealloc}` で、確保に失敗したら `handle_alloc_error` を呼ぶ。セッションの確保量の加減 (`charge_pages`、`refund_pages`) と、確保の前に上限と比べる `over_budget` もここに入る。中身は `Control` の atomic の加減と読みで、値について何も約束しない (上の「実行の制御」) | OS と確保器の境界 | ページの確保と返却、64 KiB の揃え、大きい物体のページ、`Heap` を落とすときの返却。2つのスレッドのヒープが、1つの `Control` に確保量を足し引きすること |
 | T2 | rc と前置きの atomic の読み書き。欄の権限を受け、`AtomicI32::from_ptr` と `AtomicU32::from_ptr` で Relaxed と AcqRel の操作をする。約束は、T0 の下での逐次の値である | vstd の atomic は SeqCst だけを扱う | 局所と共有の `dup` と `decref`、`is_last` の2回の読み込み、検査モードの前置きの書き換え。2つのスレッドが同じ共有の rc の欄を並行に増減し、最後の参照を見るのがちょうど1つのスレッドであること |
 | T3 | `Foreign` の物体の中身。破棄処理の表 (関数のポインタ)、`TypeId` の照らし合わせ、`drop_in_place`。`foreign_unique` が書き換えるために返すポインタも、同じ照らし合わせで型を守る | Verus は関数のポインタと `TypeId` を扱わない | 型の違う照らし合わせ、`Drop` を持つ値 (`Box`、`String`、`Vec`)、大きさ 0 の型、破棄処理が panic する場合、解放と `Heap` の破棄での破棄処理の呼び出しが1回だけであること、`foreign_unique` で借りて書き換えた値の破棄処理が1回だけであること |
-| T4 | `verus!` の外の `Drop` の実装 (`Heap`、`Pages`、`Frozen`)。`Frozen` の `Drop` は、親への `Arc` を `Arc::into_inner` のループで手放し、ページは `Pages` の `Drop` が返す。`Heap` は付けた塊の `Arc` を `ManuallyDrop` の欄に持ち、`Drop` が生きている物体の後始末 (`finalize_all`) の後で、`#[inline(never)]` の関数に渡して手放す。`Pages` も、確保量を数える `Control` の `Arc` を `ManuallyDrop` の欄に持ち、`Drop` がページを返して確保量を引いた後で、`#[inline(never)]` の関数に渡して手放す。`HostRef` の `Drop` も、Host の `Arc` を `#[inline(never)]` の関数に渡して手放す (上の「extern」の「Host」)。欄の後始末を展開させると、計測のプログラムのコード生成単位の分け方が変わり、速い道が展開されなくなるためである ([計測の基準](../implementation/benchmarks.md) の「S9b-2a (凍結した領域)」)。後始末の中で破棄処理が panic すると、塊の `Arc` は手放されずに漏れる (メモリの安全は崩れない)。ヒープの ghost の欄の塊の権限の写しは、`wf` で `Arc` の指す塊の権限に結ぶが、写しを使う間 `Arc` が塊のメモリを生かし続けることは Verus が確かめない | Verus は利用者の `Drop` を扱わない。中身は検証した関数を呼ぶか、`Arc` を手放すだけにする | T1 と T3 のテストが通る道。塊の `Drop` がページを返すこと、鎖の塊と付けたヒープをどの順に落としても漏れず、残る `Arc` が鎖を生かすこと |
+| T4 | `verus!` の外の `Drop` の実装 (`Heap`、`Pages`、`Frozen`)。`Frozen` の `Drop` は、親への `Arc` を `Arc::into_inner` のループで手放し、ページは `Pages` の `Drop` が返す。`Heap` は付けた塊の `Arc` を `ManuallyDrop` の欄に持ち、`Drop` が生きている物体の後始末 (`finalize_all`) の後で、`#[inline(never)]` の関数に渡して手放す。`Pages` も、確保量を数える `Control` の `Arc` を `ManuallyDrop` の欄に持ち、`Drop` がページを返して確保量を引いた後で、`#[inline(never)]` の関数に渡して手放す。`HostRef` の `Drop` も、Host の `Arc` を `#[inline(never)]` の関数に渡して手放す (上の「extern」の「Host」)。欄の後始末を展開させると、計測のプログラムのコード生成単位の分け方が変わり、速い道が展開されなくなるためである ([計測の基準](../implementation/benchmarks.md) の「`eml_rt` のインライン化」)。後始末の中で破棄処理が panic すると、塊の `Arc` は手放されずに漏れる (メモリの安全は崩れない)。ヒープの ghost の欄の塊の権限の写しは、`wf` で `Arc` の指す塊の権限に結ぶが、写しを使う間 `Arc` が塊のメモリを生かし続けることは Verus が確かめない | Verus は利用者の `Drop` を扱わない。中身は検証した関数を呼ぶか、`Arc` を手放すだけにする | T1 と T3 のテストが通る道。塊の `Drop` がページを返すこと、鎖の塊と付けたヒープをどの順に落としても漏れず、残る `Arc` が鎖を生かすこと |
 | T5 | 証明に使う std の約束のうち vstd にないもの。`ptr::without_provenance_mut` (`Word::imm` が const fn のまま即値を作るため)、2つの塊が同じ塊かを `std::ptr::eq` で比べる `same_chunk` (同じ番地の塊は同じ値であると約束する。vstd は `Arc` の番地の比較に約束を持たない)、panic で止める関数 (大きさの桁あふれ、即値に収まらない `Word::imm`、不死の物体の数の桁あふれ、ページの配置の誤り、子孫でない塊を付ける `attach` の `not_a_descendant`)、`<[u8] as Ord>::cmp` を1回呼ぶ包み `bytes_cmp` の結果が辞書式の順序の spec `lex` に一致すること (上の「extern」。vstd の `assume_specification` は `cmp` を総称の形でしか受けないので、包みにする) | vstd の std の約束が足りない。panic の関数は値を返さないことだけを約束する | なし (値の約束で、メモリに触れない) |
 | T6 | `global` の宣言: 64 ビットの環境、`Word`、`Header`、`PageHeader`、前置きの配置 | Verus は `global` の宣言をコンパイル時に照らす | なし |
 | T7 | unwind。検証した関数は、決まった所でしか unwind しないとして証明する。決まった所は、T5 の panic の関数 (状態を変える前に呼ぶ)、T3 の破棄処理 (箱を先に死んだことにしてから呼ぶ)、`Vec` の伸長と、T11 の Host の呼び出し (`write_line`、`flush`、`open`、読み手の読みと drop、読んだバイト列の UTF-8 の確かめ、`args`、`env_var`、`stdin`、`write_file`、`run`) である。Host を呼ぶ前には、ヒープを整った状態にしておく。Host の中で unwind した後に残る状態は、`println` では文字列が漏れ、`Fs.open` では開く間借りていたパスの文字列が漏れ、`File` の読み (`Fs.read_all` と `read_line_raw`) では `File` が漏れて `Heap` を落とすときの `finalize_all` が閉じる。どれもメモリの安全は崩れない。`Ctx` は `Drop` を実装せず、`evv` と yield の状態の語に触れないので、基本操作の中の `decref` で破棄処理が panic した後も、`Ctx` を落とすことは安全である (上の「実行文脈 `Ctx`」) | Verus の `ensures` は正常に戻ったときだけを扱う。unwind の後も `Heap` と `Ctx` を落とすことは安全でなければならない | 解放の連鎖の途中で破棄処理が panic した後に、`Heap` を落とすこと |
