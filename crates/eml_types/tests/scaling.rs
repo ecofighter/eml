@@ -60,7 +60,7 @@ fn ring(n: usize) -> String {
     for i in 0..n {
         let j = (i + 1) % n;
         text.push_str(&format!(
-            "f{i} : a -> Int -> a\nf{i} x n = if n == 0 then x else f{j} x (n - 1)\n\n"
+            "f{i} : a -> Int -> <Panic> a\nf{i} x n = if n == 0 then x else f{j} x (n - 1)\n\n"
         ));
     }
     text
@@ -73,7 +73,7 @@ fn ring_of_higher_order_functions(n: usize) -> String {
     for i in 0..n {
         let j = (i + 1) % n;
         text.push_str(&format!(
-            "f{i} : (Int -> Int) -> Int -> Int\nf{i} g n = if n == 0 then g n else f{j} g (n - 1)\n\n"
+            "f{i} : (Int -> Int) -> Int -> <Panic> Int\nf{i} g n = if n == 0 then g n else f{j} g (n - 1)\n\n"
         ));
     }
     text
@@ -86,7 +86,7 @@ fn ring_with_local_lambdas(n: usize) -> String {
     for i in 0..n {
         let j = (i + 1) % n;
         text.push_str(&format!(
-            "f{i} : a -> Int -> a\nf{i} x n =\n  if n == 0 then x\n  else\n    let h = fn u -> x\n    f{j} (h ()) (n - 1)\n\n"
+            "f{i} : a -> Int -> <Panic> a\nf{i} x n =\n  if n == 0 then x\n  else\n    let h = fn u -> x\n    f{j} (h ()) (n - 1)\n\n"
         ));
     }
     text
@@ -103,7 +103,7 @@ fn ring_with_local_lambdas(n: usize) -> String {
 /// ラムダの `let` の列も、書き出しの前の検査が2乗の時間になる。そこで鎖は `wrap` の呼び出しの列で1つの本体に作る。
 fn functions_over_an_arrow_chain(n: usize) -> String {
     let mut text = String::from(
-        "wrap : (Int -> Int) -> (Int -> Int)\nwrap g = fn x -> g x\n\nq : Unit -> (Int -> Int)\nq () =\n  let q0 = fn x -> x\n",
+        "wrap : (Int -> Int) -> (Int -> Int)\nwrap g = fn x -> g x\n\nq : Unit -> <Panic> (Int -> <Panic> Int)\nq () =\n  let q0 = fn x -> x\n",
     );
     for i in 1..=n {
         text.push_str(&format!("  let q{i} = wrap q{}\n", i - 1));
@@ -112,7 +112,7 @@ fn functions_over_an_arrow_chain(n: usize) -> String {
     for i in 0..n {
         let j = (i + 1) % n;
         text.push_str(&format!(
-            "f{i} : Int -> Int\nf{i} n = if n == 0 then (q ()) 0 else f{j} (n - 1)\n\n"
+            "f{i} : Int -> <Panic> Int\nf{i} n = if n == 0 then (q ()) 0 else f{j} (n - 1)\n\n"
         ));
     }
     text
