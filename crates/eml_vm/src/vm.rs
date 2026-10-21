@@ -400,6 +400,15 @@ fn step<M: Mode>(
             let n = unsafe { ctx.array_length(task.get(a)) }?;
             task.set_raw(dst, n);
         }
+        // 文字列の行も借りる引数を手放さない。誤りの扱いは配列の行と同じ
+        Op::StrByteAt { dst, i, s } => {
+            let b = unsafe { ctx.string_byte_at(task.raw(i), task.get(s)) }?;
+            task.set_raw(dst, b);
+        }
+        Op::StrByteLength { dst, s } => {
+            let n = unsafe { ctx.string_byte_length(task.get(s)) }?;
+            task.set_raw(dst, n);
+        }
         Op::ArraySet { dst, at } => {
             let o = &code.operands[at as usize..];
             let (a, i, x) = (
@@ -766,9 +775,10 @@ fn step_failed<M: Mode>(
         | Op::IntRem { dst, .. }
         | Op::IntNeg { dst, .. }
         | Op::ArrayGet { dst, .. }
+        | Op::StrByteAt { dst, .. }
         | Op::ArraySet { dst, .. } => (dst, Purity::Panics),
         // `length` の行は `Pure` で巻き戻しの地点を持たない
-        Op::ArrayLength { dst, .. } => (dst, Purity::Pure),
+        Op::ArrayLength { dst, .. } | Op::StrByteLength { dst, .. } => (dst, Purity::Pure),
         _ => return Err(fault),
     };
     match fault {
@@ -951,14 +961,6 @@ fn run_extern<M: Mode>(
             Extern::Eprintln => {
                 ctx.write_string(Stream::Err, task.get(arg(0)))?;
                 task.set(dst, Word::UNIT);
-            }
-            Extern::StrByteLength => {
-                let n = ctx.string_byte_length(task.get(arg(0)))?;
-                task.set_raw(dst, n);
-            }
-            Extern::StrByteAt => {
-                let b = ctx.string_byte_at(task.raw(arg(0)), task.get(arg(1)))?;
-                task.set_raw(dst, b);
             }
             Extern::StrSlice => {
                 let w = ctx.string_slice(task.raw(arg(0)), task.raw(arg(1)), task.get(arg(2)))?;
@@ -1184,6 +1186,8 @@ fn run_extern<M: Mode>(
             | Extern::FloatGe
             | Extern::BoolEq
             | Extern::BoolNe
+            | Extern::StrByteLength
+            | Extern::StrByteAt
             | Extern::ArrayLength
             | Extern::MutArrayLength
             | Extern::ArrayGet

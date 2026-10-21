@@ -328,6 +328,17 @@ pub enum Op {
         dst: Slot,
         a: Slot,
     },
+    /// `Std.String.byte_at`。文字列 `s` は借りたまま、バイト位置 `i` の値を生の語で `dst` に置く。
+    StrByteAt {
+        dst: Slot,
+        i: Slot,
+        s: Slot,
+    },
+    /// `Std.String.byte_length`。文字列 `s` は借りたまま。
+    StrByteLength {
+        dst: Slot,
+        s: Slot,
+    },
     /// `Std.Array.set` と `Std.MutArray.write`。`operands[at..]` は [配列, 添字, 値]。配列と値を消費する。
     ArraySet {
         dst: Slot,

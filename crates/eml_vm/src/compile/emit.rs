@@ -428,12 +428,14 @@ impl<'a, M: Mode> Emitter<'a, '_, M> {
         items
     }
 
-    /// 配列の行の専用の命令 (docs/spec/vm.md の「基本操作と extern」)。`set` だけは3つのオペランドが `Op` の8バイトに
+    /// 配列の行と、文字列のバイトを読む行の専用の命令 (docs/spec/vm.md の「基本操作と extern」)。`set` だけは3つのオペランドが `Op` の8バイトに
     /// 入らないので、`operands` に置く。
     fn array_op(&mut self, ext: Extern, dst: Slot, slots: &[Slot]) -> Option<Op> {
         Some(match (ext, slots) {
             (Extern::ArrayLength | Extern::MutArrayLength, &[a]) => Op::ArrayLength { dst, a },
             (Extern::ArrayGet | Extern::MutArrayRead, &[a, b]) => Op::ArrayGet { dst, a, b },
+            (Extern::StrByteLength, &[s]) => Op::StrByteLength { dst, s },
+            (Extern::StrByteAt, &[i, s]) => Op::StrByteAt { dst, i, s },
             (Extern::ArraySet | Extern::MutArrayWrite, &[_, _, _]) => {
                 let at = self.out.operands(slots.iter().map(|&s| u32::from(s)));
                 Op::ArraySet { dst, at }
@@ -1055,8 +1057,6 @@ fn arithmetic(ext: Extern, dst: Slot, args: &[Slot]) -> Option<Op> {
         | Extern::StrCompare
         | Extern::StrShow
         | Extern::Eprintln
-        | Extern::StrByteLength
-        | Extern::StrByteAt
         | Extern::StrSlice
         | Extern::StrFindFrom
         | Extern::EnvArgCount
@@ -1070,6 +1070,8 @@ fn arithmetic(ext: Extern, dst: Slot, args: &[Slot]) -> Option<Op> {
         | Extern::Exit
         | Extern::Panic
         | Extern::ArrayMake
+        | Extern::StrByteLength
+        | Extern::StrByteAt
         | Extern::ArrayLength
         | Extern::ArrayGet
         | Extern::ArraySet
