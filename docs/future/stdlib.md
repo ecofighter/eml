@@ -12,7 +12,7 @@
 - `Task a` を `Lin` にする: `Async.start` が返すタスクを、必ず `await` するか `drop` (キャンセル) させる。構造化された並行処理にする
 - `exit`: S12b で入れた ([標準ライブラリ](../spec/stdlib.md) の「`exit`」)
 - S12a で入れた標準ライブラリ (`Fs` の読み書き、`List`、`String`、`Env`、`Stdin`、`Proc.run`、`eprintln`) と extern の境界の方針は、[標準ライブラリ](../spec/stdlib.md) にある。S12a は、extern を小さい核にとどめ、どのスクリプトも使う少数の関数だけを eml で書いた。並べ替えと `Map` は、UTF-8 と標準ライブラリの項目で入れる ([ロードマップ](roadmap.md) の「UTF-8 と標準ライブラリ」)。`replace` と、`Option` と `Result` の補助関数は、まだ決めていない
-- `Prelude` の範囲: 今は `Bool`、`Ordering`、`List`、`Option`、`Result`、`println`、`eprintln`、`not`、`|>` などの標準の演算子と fixity ([宣言](../spec/declarations.md) の標準の演算子の表)、型クラス `Eq`、`Ord`、`Show` ([宣言](../spec/declarations.md) の「Prelude のクラス」) を持つ。S14 で `Num` が入る
+- `Prelude` の範囲: 今は `Bool`、`Ordering`、`List`、`Option`、`Result`、`println`、`eprintln`、`not`、`|>` などの標準の演算子と fixity ([宣言](../spec/declarations.md) の標準の演算子の表)、型クラス `Eq`、`Ord`、`Show`、`Num`、`Div` ([宣言](../spec/declarations.md) の「Prelude のクラス」) を持つ。
 - モジュールの候補: `Fs`、`Path`、`Proc`、`Env`、`String`、`List`、`Map`、`Json`、`Csv`、`Toml`、`Regex`、`Http`、`Async`
 - 補間の穴は、Prelude の `Show` の `display` で文字列にする ([式](../spec/expressions.md) の「補間」)。標準ライブラリの型を穴に書けるようにするには、`Show` の instance を置く。人が読む形が `show` の形と違う型は、`display` を上書きする
 - `Bytes` と UTF-8: `String` は常に妥当な UTF-8 である。extern は、検証付きのデコード、エンコード、バイト長、バイト位置から `Char` と次の位置を読む操作、境界を検査する切り出しにとどめる。S12a の `String` の核 (`byte_length`、`byte_at`、`slice`、`find_from`) は、バイトの位置で読む今の形の核で、分割と検索は eml で書いた ([標準ライブラリ](../spec/stdlib.md) の「`String`」)。`Char` と `Bytes` を入れるときに、核をこの形に置き換える ([ロードマップ](roadmap.md) の「UTF-8 と標準ライブラリ」)
