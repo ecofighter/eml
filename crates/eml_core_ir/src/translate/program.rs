@@ -747,7 +747,7 @@ pub(super) fn recursive_types(hir: &HirProgram) -> HashSet<TypeDefId> {
 }
 
 /// Core IR のエフェクトの表に入るエフェクト。`eml_hir::Program::effects` の順 (モジュールの番号の順、モジュールの中の
-/// 宣言の順) にすべて並べる。`IO` は Prelude の最初のエフェクトなので、いつも 0 番である。`try_io` が `IO` の
+/// 宣言の順) にすべて並べる。`IO` は Prelude の最初のエフェクトなので、いつも 0 番で、`Panic` は 1 番である。`try_io` が `IO` の
 /// `handle` になるため、extern のエフェクトも表から外さない (docs/spec/core-ir.md の「IO の extern」)。
 fn core_effects(hir: &HirProgram) -> impl Iterator<Item = (EffectId, &EffectDef)> {
     hir.effects()

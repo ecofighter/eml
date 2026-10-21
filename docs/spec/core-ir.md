@@ -2,7 +2,7 @@
 
 位置づけ: 規範。
 
-型付き HIR から変換する Core IR と、その上のパス (translate と evidence passing)、LIR への変換を定める。2つの IR に共通する規則 (ブロックの列、構造の規則、値の表現、データの配置、位置の規則、末尾の位置の呼び出し、基本操作と実行時のモデル) と、LIR のパスと実行の意味は [LIR](lir.md) にある。
+型付き HIR から変換する Core IR と、その上のパス (translate と evidence passing)、LIR への変換を定める。2つの IR に共通する規則 (ブロックの列、構造の規則、値の表現、データの配置、構造体の形、位置の規則、末尾の位置の呼び出し、基本操作と実行時のモデル) と、LIR のパスと実行の意味は [LIR](lir.md) にある。
 
 ## 実行系の方針
 
@@ -96,7 +96,7 @@
 
   - `con` を作る出現の印を、引数の印の結びにはしない。`Option (List File)` の `Some []` が `unr` になり、`lin` の受け手との受け渡しを V2 が拒むためである。出現が開いて作る `con` は、`Tag` なら `unr`、`con` で作った変数 (`Made`) ならその変数の印を運ぶ
   - 操作の節の `k` の印は、`k` の型の矢印の線形性から決める。操作の箇所の継続の多重度ではない
-- 構造体の型の値の印も、ほかの型と同じく型の Kind から決める。上の「RC の対象でない値の印は `unr`」の規則は、箱の位置の Repr (`boxed_repr`) で RC の対象かを見る。構造体の箱は `obj` なので、構造体は型の Kind に従う
+- 構造体の型の値の印も、ほかの型と同じく型の Kind から決める。RC の対象でない値の印は `unr` とする規則は、箱の位置の Repr (`boxed_repr`) で RC の対象かを見る。構造体の箱は `obj` なので、構造体は型の Kind に従う
 - 宣言の型を代入せずに読む所 (操作の表) は、相対的な型も読める読み方 (`TypeStore::linearity_or_poly`) で決め、`Rigid` と `Var` に依存する値を `poly` にする。保守的なので、`(a, File)` は `lin` でなく `poly` になる。`op$` と `con$` は参照の型ごとの instance なので、型のある所の規則で決める
 - `k` を関数の値として包む `cont$` と `cont$state` は、引数 `k` を `poly` にする。生の継続の線形性 (`once` の操作なら `Lin`、`multi` なら `Unr`) は `k` の値の型から決まらないためである。再開に渡す値 `v` と状態 `s` と結果 `t` は、`k` の型から決める
 - 導出とタプルの生成器 (`==`、`compare`、`show_prec`、`show`、`tag$` など) の変数はすべて `unr` にする。`Unr` のクラスの規則 ([型と Kind](types.md) の「`Unr` のクラス」) で、instance の頭の型変数は `Unr` だからである。生成器の鍵の `Flexible(Poly)` から決めると、`tag$` の `decref x` を V1 が拒む
@@ -189,7 +189,7 @@ box の挿入が足す変数の印は、[LIR](lir.md) の「box の挿入」に�
 - translate の型の Repr と配置の Repr は、同じ関数 (`data_repr`) で決める。構造体にする型も配置を持ち、配置の Repr は `obj` である。構造体の箱は、この配置の `con` と同じ形の物体である ([LIR](lir.md) の「構造体の形」)
 - 配置を持つのは、translate が出す IR が指すデータ型 (Prelude の `Bool` を含む) と、組の大きさごとの配置である。extern の型と `Unit` は持たない。名前は関数と同じく、入口以外のモジュールの型を修飾する (`Prelude.Bool`)。組の配置は宣言がないので大きさだけで決まり、名前は `(,)`、`(,,)` のように、大きさより1少ないカンマを括弧で囲む。組のコンストラクタは1つで、名前は配置と同じで、フィールドはどれも `tobj` である
 - translate は、命令を出すそれぞれの所で、コンストラクタか型から配置を決める。値の型からは決めない。配置は最初に使った順に表に入れる。translate の後のパス (EP と LIR のパス) は表を変えないので、使われなくなった配置が残ることがある。番号は1回の変換の中だけで意味を持つ。VM は実行時に配置の番号を使わないので、REPL の追記も配置の番号を引き直さない ([VM](vm.md) の「追記」)
-- extern が作るデータは、比べる extern と `Std.Env.has` の `Bool`、`compare` の extern の `Ordering`、`Fs.read_all` と `read_line_raw` の組である。`Bool` は機械の定数 `FALSE` と `TRUE` で、`Ordering` は `LT`、`EQ`、`GT` で作る。そのタグが `Prelude.Bool` と `Prelude.Ordering` の宣言の順と合うことを、テストが確かめる。組の配置は大きさだけで決まる。そのため、extern の行は配置を持たない。名前的なデータ (`List`、`Option`、`Result`) は extern が作らず、標準ライブラリの eml が包む ([標準ライブラリ](stdlib.md) の「extern の境界」)
+- extern が作るデータは、比べる extern と `Std.Env.has`、`Prelude.shows_minus`、`Std.Float.can_parse` の `Bool`、`compare` の extern の `Ordering`、`Fs.read_all` と `read_line_raw` の組である。`Bool` は機械の定数 `FALSE` と `TRUE` で、`Ordering` は `LT`、`EQ`、`GT` で作る。そのタグが `Prelude.Bool` と `Prelude.Ordering` の宣言の順と合うことを、テストが確かめる。組の配置は大きさだけで決まる。そのため、extern の行は配置を持たない。名前的なデータ (`List`、`Option`、`Result`) は extern が作らず、標準ライブラリの eml が包む ([標準ライブラリ](stdlib.md) の「extern の境界」)
 - 名前付きのレコードは、ほかの `data` と同じく、型ごとの配置に入る。名前付きのフィールドを持つコンストラクタも、フィールドの名前は持たず、宣言の順のフィールドの Repr の列を持つ
 
 ### 組を返す extern
@@ -255,7 +255,7 @@ box の挿入が足す変数の印は、[LIR](lir.md) の「box の挿入」に�
   - `mask` が効くのは呼び出しそのものだけで、引数の評価には効かない。Core IR の呼び出しの引数は値 (アトム) なので、引数は呼び出しより前の文で評価し終えている。そのため、これは形から決まる。
 - `mask` は translate の出力にだけある。EP が `evv_mask` の包みに置き換える (下の「`mask` の包み」)。包みは戻りで `evv` を戻すので、`mask` 付きの末尾の位置の呼び出しは末尾呼び出しにならない。
 - 変換の段の verifier は、`mask` のエフェクトの番号がエフェクトの表にあること、番号が真に昇順に並んでいること (同じエフェクトの項目が2つないこと)、どの項目も m が 1 以上であること、`mask` が `handle`、`perform`、`clause` に付いていないことを確かめる (``a mask is not in ascending order``、``a mask item of `State` skips no handler``)。EP の後の段は、`mask` が残っていれば誤りにする。
-- extern のエフェクト (`IO`) も、ほかのエフェクトと同じく Core IR のエフェクトの表に入る。番号は下の「IO の extern」にある。`mask` は extern のエフェクトを持たない。また verifier は、`extern` 命令の引数の数を表の行と比べる。引数と結果の Repr は、box の挿入の後の LIR の範囲の段と所有の段で比べる ([LIR](lir.md) の「extern の行」)。
+- extern のエフェクト (`IO` と `Panic`) も、ほかのエフェクトと同じく Core IR のエフェクトの表に入る。番号は下の「IO の extern」にある。`mask` は extern のエフェクトを持たない。また verifier は、`extern` 命令の引数の数を表の行と比べる。引数と結果の Repr は、box の挿入の後の LIR の範囲の段と所有の段で比べる ([LIR](lir.md) の「extern の行」)。
 - handle の本体、操作の節、`return` の節は、ラムダと同じく、捕まえた変数を先頭の引数に持つ関数に持ち上げ、そのクロージャか関数の値を `handle` に渡す。本体の関数は `()` を受ける。節はエフェクトの操作の順に並べる。操作を値として使うときは、`perform` を呼ぶだけの関数 (`op$…`) で包む。`op$` も `con$` と同じく参照の型ごとの instance である。
 - 変換は、節ごとに `k` の使い方を HIR で調べ、次の2つの形のどちらかにする。
   - 直接の形: 節の本体のどこでも (入れ子のラムダや handle の本体の中を含む)、`k` の使用がすべて引数をそろえた直接の呼び出し (`k v`、状態ありなら `k v st`) か `drop k` なら、クロージャを作らない。その呼び出しを、生の継続への `Call::Resume` にする。生の継続をラムダや handle の本体が捕まえても、`Call::Resume` で再開できる。引数が余る呼び出し (`r` が関数型のときの `k v x`) は、`Call::Resume` の結果への `apply` を続ける。`mask` は、その呼び出しの最後の矢印の記録を付ける。持ち上げたローカル関数の引数に生の `k` を渡す呼び出しは、この形に当たらない。呼び出し先の `return` のブロックが `k` の末尾の `resume` で終わらないので、節はその場で動かない (下の「ローカル関数の持ち上げ」)。
@@ -473,6 +473,7 @@ REPL の入力から作る関数 `input$N` (N は入力の番号) は、`()` を
   - 入力の値の型を構造で書くなら、表示関数 `display$N$0("", 300, 0, 0, v)` を呼び、結果の組の文字列を返す (下の「表示関数」)
   - `show_prec` で書く型なら、`show` を呼んだ結果を返す。`show` は補間の穴と同じく `LangItems` (`show_method`) で引くので、利用者が同じ名前を定義しても変わらない
   - 関数型なら、入力の関数を呼んでから値を捨て、`<fn>` の定数を返す。式の中の `println` などは動く
+  - `Show` を持たない extern の型なら、入力の関数を呼んでから値を捨て、`<extern>` の定数を返す
   - 入口は位置を持たない。書けなかったときの誤りの位置 (入力の式の先頭) は、`Repl` が HIR の入力の関数の本体から作る
 - `let x = e` の入力の `entry$input$N` は、結果を `prim root_set[N]` で根に置く。根の番号は入力の番号である ([オブジェクトモデル](object-model.md) の「セッションの根」)
 - 前の入力の `let` の束縛への参照は、どこにあっても `prim root_get[i]()` になる。関数の定義の本体からも参照できる。値の Repr と根の `tobj` の変換は、box の挿入が入れる
@@ -943,10 +944,10 @@ in-place の入口は、translate が作った節の関数 g から、EP が節�
 #### IO の extern
 
 - `IO` を起こす extern (表の行の `purity` が `Effectful`) と `Panic` を起こす extern (`Panics`) の呼び出しは、yield の地点でない。直後に yield の確認も遅い道も置かない。`try_io` が捕まえる種類の誤りで失敗すると、VM が `io_failed` の節の入口を呼んで中断を始める。`Panic` を起こす誤りで失敗したときと `panic` は、`panicked` の節の入口を呼んで中断を始める。`exit` はいつも中断を始める ([VM](vm.md) の「extern の中断」)。どの中断も巻き戻しで進み、extern の後には戻らない (上の「`never` の中断」)
-- `IO` は yield しうるラベルでないので、`IO` だけを row に持つ関数は `yields` でない ([型と Kind](types.md) の「row の具体化の記録」)。`yields` でない関数も `IO` の extern を呼んでよい
+- `IO` は yield しうるラベルでないので、`IO` だけを row に持つ関数は `yields` でない ([型と Kind](types.md) の「row の具体化の記録」)。`yields` でない関数も `IO` と `Panic` の extern を呼んでよい
 - すぐに再開する節の条件 (「`perform` と節の3つの形」) では、`Pure` でない extern の呼び出しを yield の地点に数えない。そうした extern を呼ぶ節の入口は under の形にするので、節の本体は handle の外側の `evv` で動き、節の IO の失敗と `Panic` は handle の本体の中の `try_io` と `try_panic` でなく、handle の外の `try_io` と `try_panic` に届く
 - extern の関数を包む関数 (`$externN`) は、行が `Effectful` でも `yields` でない。extern を呼んで返すだけだからである
-- `IO` は、Prelude の最初のエフェクトとして、いつもエフェクトの表にある。番号は 0 である。`try_io` の handle、`io_failed` の節、`prompt$` は、普通の `never` の操作の handle と同じ形に変換する
+- `IO` と `Panic` は、Prelude の最初の2つのエフェクトとして、いつもエフェクトの表にある。番号は 0 と 1 である。`try_io` の handle、`io_failed` の節、`prompt$` は、普通の `never` の操作の handle と同じ形に変換する
 
 #### `mask` の包み
 
