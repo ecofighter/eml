@@ -470,6 +470,32 @@ fn appending_the_text_of_another_string<M: Mode>() {
     assert_eq!(mortal(&heap), 0);
 }
 
+/// `write_byte` は1バイトだけを書き換え、ほかのバイトと長さを変えない。先頭、語の境目の前後、末尾と、大きい物体の
+/// ページの後ろのほうを書き、`bytes` で読み戻す。
+fn single_bytes_are_overwritten<M: Mode>() {
+    let mut heap = Heap::<M>::new();
+    for n in [1, 9, 17, PAGE_BYTES + 3] {
+        let mut expected = "a".repeat(n).into_bytes();
+        let w = heap.alloc_string(std::str::from_utf8(&expected).unwrap());
+        let h = w.as_ptr();
+        let cap = n.div_ceil(8) + 1;
+        let mut at = vec![0, n - 1, n / 2];
+        at.extend([7, 8].into_iter().filter(|&i| i < n));
+        for (k, &i) in at.iter().enumerate() {
+            let b = b'A' + k as u8;
+            crate::text::write_byte(h, cap, i, b, Tracked::assume_new());
+            expected[i] = b;
+        }
+        assert_eq!(
+            crate::text::bytes(h, n, Tracked::assume_new()),
+            &expected[..]
+        );
+        assert_eq!(text(&heap, w).as_bytes(), &expected[..]);
+        unsafe { heap.decref(w) }.unwrap();
+    }
+    assert_eq!(mortal(&heap), 0);
+}
+
 fn reading_then_appending<M: Mode>() {
     let mut heap = Heap::<M>::new();
     let w = heap.alloc_string("first");
@@ -990,6 +1016,7 @@ both_modes!(
     empty_strings_are_appended,
     self_concat_under_both_borrow_models,
     appending_the_text_of_another_string,
+    single_bytes_are_overwritten,
     reading_then_appending,
     parts_of_a_string_are_copied,
     frozen_pages_are_returned,

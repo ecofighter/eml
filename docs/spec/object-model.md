@@ -394,7 +394,7 @@ left が一意 (is_unique)
 - 和の長さと倍の容量は `checked_add` と `checked_mul` で求め、桁あふれは今の確保と同じく panic にする (T5)
 - 検査モードの誤りは、語を受ける操作の共通の誤り (`UseAfterFree`、`WrongOwner`)、種類が `String` でないときの `WrongKind`、数が 0 の不死の物体の手放し (`ImmortalOverRelease`) である。どの誤りも最初の確保より前に返すので、`Err` のときヒープは変わらない。文字列は子を持たないので、left と right の `decref` の誤りをすべて先に確かめられる。left と right が同じ物体で rc が 1 のとき (参照を2つ持つという前提を破った呼び出し) も、2回の `decref` を続けて確かめるので、ここで断る。後の手放しは、先に確かめたので誤りにならない
 - モデルが合っていて前提がすべて成り立つときの結果は、`decref` と同じく、`Ok` か、モデルが照らさない誤り (下の「検査モードの約束」) である。モデルは不死の物体の外の参照の数を持たないので、不死の left の `ImmortalOverRelease` はモデルの前提の下でも返りうる
-- extern の比較、`++`、`println` は、文字列を借りて読むか、`string_concat` を使う。足した核の操作は、`String.show` が結果を1回で確保するための `alloc_string_room` だけである。`String.show` の区間の写しは、写す元の文字列を借りた `&str` を vstd の `str::split_at` で切って渡すので、T10 の関数は変わらない (下の「extern」)
+- extern の比較、`++`、`println` は、文字列を借りて読むか、`string_concat` を使う。足した核の操作は、`String.show` が結果を1回で確保するための `alloc_string_room` だけである。`String.show` の区間の写しは、写す元の文字列を借りた `&str` を vstd の `str::split_at` で切って渡すので、T10 に関数を足さない (下の「extern」)
 
 ## 配列
 
@@ -873,7 +873,7 @@ token の表の項目は、`into_token` と `release_reuse` が添字を使い�
 - `Std.Float` の変換 (`of_int`、`truncate`、`floor`、`ceil`、`round`)、数学の関数 (`sqrt`、`abs`、`sin`、`cos`、`exp`、`log`、`pow`)、`infinity_value`、`nan_value`、`Prelude.shows_minus` も T12 で信頼する。本体は Rust の `f64` の関数を呼ぶだけである。数学の関数の NaN の結果も、`canonical_nan` で正の quiet NaN にそろえる。`truncate` などの4つは、結果が `Int` の範囲 `[-2^63, 2^63)` を外れれば (NaN と ±無限大も) `ArithFault::FloatToInt` を返す。誤りは元の値のビット列を持ち、文言 ``float `1e+19` does not fit in `Int` `` の値は `show` の形で書く。`shows_minus` は結果が `Bool` のタグであることを約束する
 - `Show Float` の `show`、`to_fixed`、`parse` の書式と読みも T12 で信頼する。`float_repr` が Python の `repr` の形 (正しく丸めた最短の桁が読み戻せない 2 の冪では、`{:e}` の桁を使う) を、`float_fixed` が Python の `f"{x:.{n}f}"` の形を、Rust の `format!` で作る。`float_parse` は前後の空白を除いて `str::parse` で読む。結果の文字列は `Ctx::float_show` と `float_to_fixed` が `fresh_string` で作り、`string_to_float` は文字列の引数を `env_has` と同じく借りて読んで手放す。この3つは `verus!` の中で確かめる。`to_fixed` の桁数が 0 から 100 の外なら、何も作らずに `ArithFault::FixedDigits` を返す
 
-文字列の extern は、結果を ghost のバイト列の spec で約束する。文字列のバイト列は、T10 の「ペイロードを `str` として借りる関数」で借りて読む。
+文字列の extern は、結果を ghost のバイト列の spec で約束する。文字列のバイト列は、T10 の `bytes` の上に書いた `text` で `str` として借りて読む。
 
 - `==` と `!=` は、長さが違えば先に返し、同じなら slice の `==` で比べる。slice の `==` は vstd に spec があるので、信頼は要らない
 - `compare` は、辞書式の順序 (バイトの順) の spec `lex(a, b)` に一致することを約束する。比べるのは `<[u8] as Ord>::cmp` を1回呼ぶ包み `bytes_cmp` で、その結果が `lex` に一致することを T5 で信頼する。長さで先に返す近道は使わない (`"b" > "ab"` のため)
@@ -885,7 +885,7 @@ token の表の項目は、`into_token` と `release_reuse` が添字を使い�
   - C1 の制御文字 (U+0080〜U+009F) もそのまま写す。UTF-8 の先頭と続きのバイトはどれも 0x80 以上なので、バイトの単位の規則は、文字の単位の規則と同じ結果になる
   - 1回目の走査で結果の長さを数え (桁あふれは `checked_add` で確かめる)、`alloc_string_room` でその容量の空の文字列を1回だけ確保する。2回目の走査で、エスケープのない区間はまとめて写し、エスケープは短い ASCII の列を足す。どれも容量に収まるので、作り直しは起きない
   - 足すのは、`string_push` と同じ道の内部の関数 (`append_str` と `append_part`) である。公開の `string_push` は検査モードで確かめ直し、その場で足すことを約束しないので使わない
-  - 区間を写すときは、写す元の文字列を T10 で借りた `&str` を、vstd の `str::split_at` で `[from, to)` に切って渡す。そのため T10 の関数は変わらない。切る位置が文字の境目であることは、「正しい UTF-8 の列で、ASCII のバイトの直前と直後は文字の境目である」という補題で示す。結果が UTF-8 であることは `valid_utf8_concat` から出る
+  - 区間を写すときは、写す元の文字列を `text` で借りた `&str` を、vstd の `str::split_at` で `[from, to)` に切って渡す。そのため T10 に関数を足さない。切る位置が文字の境目であることは、「正しい UTF-8 の列で、ASCII のバイトの直前と直後は文字の境目である」という補題で示す。結果が UTF-8 であることは `valid_utf8_concat` から出る
 - 文字列の核 (`String.byte_length`、`byte_at`、`slice`、`find_from`) は、位置を UTF-8 のバイトの位置で読む ([標準ライブラリ](stdlib.md) の「`String`」)
   - `byte_length` は ghost のバイト列の長さを、`byte_at` は範囲の中ならその位置のバイトを約束する
   - `slice` は、範囲の中で両端が vstd の `is_char_boundary` を満たすとき、結果の ghost のバイト列が部分の列に等しいことを約束する。結果は `String.show` と同じ道 (`alloc_string_room` と `append_part`) で作る。部分が UTF-8 であることは、ASCII の補題と同じく `valid_utf8_split` から出す (`lemma_boundary_in_prefix`)。範囲と境界は確保の前に確かめる
@@ -989,7 +989,7 @@ pub struct Opened {
 
 ## `unsafe` の核
 
-- `unsafe` は小さい核に閉じる。核は、確保器、ヘッダとフィールドの読み書き、文字列のバイトの読み書き、`dup`、`decref`、解放の連鎖、token の操作である。それ以外 (`share` のたどり、`release` の組み立て、生存の列挙) は核の操作を呼んで書く
+- `unsafe` は小さい核に閉じる。核は、確保器、ヘッダとフィールドの読み書き、バイト列の読み書き、`dup`、`decref`、解放の連鎖、token の操作である。それ以外 (`share` のたどり、`release` の組み立て、生存の列挙) は核の操作を呼んで書く
 - 核では SeqCst と `fence` を使わない
 - `eml_rt` のコードは、核を含めて Verus の `verus!` の中に書き、`cargo verus verify -p eml_rt` が crate 全体を検証する ([テスト戦略](../implementation/testing.md) の「Verus」)。生のポインタの読み書きは、どれも Verus の権限 (`PointsTo`) の上で行う。証明するのは、公開の操作の前提 (上の「核の操作」の表) の下でのメモリの安全、ヒープの形の不変条件、RC と抽象のモデルの対応、`share` と `release` と reuse の遷移、上の「検査モードの約束」の性質である
 - 確保と atomic の操作は、std の関数を薄い関数で包み、その関数の約束を信頼する (下の表の T1 と T2)。vstd の確保は失敗すると `process::abort` を呼び、vstd の atomic は SeqCst だけを扱うので、使わない。包みは std の関数を1回呼ぶだけで、型を差し替える層ではない
@@ -1008,7 +1008,7 @@ Verus で確かめない部分は、次の信頼の一覧にまとめる。`exte
 | T7 | unwind。検証した関数は、決まった所でしか unwind しないとして証明する。決まった所は、T5 の panic の関数 (状態を変える前に呼ぶ)、T3 の破棄処理 (箱を先に死んだことにしてから呼ぶ)、`Vec` の伸長と、T11 の Host の呼び出し (`write_line`、`flush`、`open`、読み手の読みと drop、読んだバイト列の UTF-8 の確かめ、`args`、`env_var`、`stdin`、`write_file`、`run`) である。Host を呼ぶ前には、ヒープを整った状態にしておく。Host の中で unwind した後に残る状態は、`println` では文字列が漏れ、`Fs.open` では開く間借りていたパスの文字列が漏れ、`File` の読み (`Fs.read_all` と `read_line_raw`) では `File` が漏れて `Heap` を落とすときの `finalize_all` が閉じる。どれもメモリの安全は崩れない。`Ctx` は `Drop` を実装せず、`evv` と yield の状態の語に触れないので、基本操作の中の `decref` で破棄処理が panic した後も、`Ctx` を落とすことは安全である (上の「実行文脈 `Ctx`」) | Verus の `ensures` は正常に戻ったときだけを扱う。unwind の後も `Heap` と `Ctx` を落とすことは安全でなければならない | 解放の連鎖の途中で破棄処理が panic した後に、`Heap` を落とすこと |
 | T8 | 借用の規則 (Stacked Borrows と Tree Borrows) | vstd の権限のモデルは、参照と生のポインタの借用の規則を表さない | 核の各操作を両方のモードで1回ずつ通す小さいテスト。ヒープの物体のフィールドに置いた領域の語を読み、領域の文字列から写し、`share` と解放の連鎖が領域の子で止まること。実行文脈の基本操作を1回ずつ通すこと |
 | T9 | Verus、Z3、rustc、vstd (その std の約束を含む) | 道具そのもの | なし |
-| T10 | 文字列のバイトの読み書き。`String` のブロックの権限を受けてペイロードにバイトを写す関数と、ペイロードを `str` として借りる関数と、その位置を返す関数。約束は、権限が渡したポインタの `String` のブロックのもので、長さの語とバイト列の語を持つとき、メモリのバイト列が権限の ghost のバイト列に等しいこと、写すのは長さの語の後ろの容量の中だけで、長さの語の値と権限の位置を変えないこと。写す元のバイト列が写す先と重ならないことを前提にする。このヒープの文字列から写すときは写す先がいつも別のブロックで、`string_push` の `s` は、呼ぶ側の約束により left 自身の中身を指さない | Verus の権限は語の単位で、語の中のバイトの位置を扱わない | 語に揃わない位置への追記、大きい物体のページをまたぐ長さ、大きい左辺からの作り直し、空の文字列、多バイトの文字、1ページの長さを含む自分自身との連結 (`x ++ x`)、ほかの文字列の中身を指す `s` の追記、`string` で読んだ位置の使用が終わった後の追記、`String.show` が区間を写すこと (区間が先頭、途中、末尾にあり、多バイトの文字と接する場合)、2つの借用の規則での読み書き |
+| T10 | バイト列の読み書き。`String` のブロックの権限を受けて、ペイロードに `&[u8]` を写す `write_bytes` (今の長さの位置から後ろに足す)、ペイロードの1バイトを書き換える `write_byte` (今の長さより前の位置で、ghost のバイト列はその位置だけが変わる)、ペイロードを `&[u8]` として借りる `bytes`、その位置を返す `bytes_ptr` の4つ。`str` で読み書きする `write_text`、`text`、`text_ptr` は、vstd の `str::as_bytes` と `str::from_utf8_unchecked` の約束を使って、この4つの上に検証して書く。約束は、権限が渡したポインタの `String` のブロックのもので、長さの語とバイト列の語を持つとき、メモリのバイト列が権限の ghost のバイト列に等しいこと、写すのは長さの語の後ろの容量の中だけで、長さの語の値と権限の位置を変えないこと。写す元のバイト列が写す先と重ならないことを前提にする。このヒープの文字列から写すときは写す先がいつも別のブロックで、`string_push` の `s` は、呼ぶ側の約束により left 自身の中身を指さない | Verus の権限は語の単位で、語の中のバイトの位置を扱わない | 語に揃わない位置への追記、`write_byte` による1バイトの書き換え (先頭、語の境目の前後、末尾、大きい物体のページ)、大きい物体のページをまたぐ長さ、大きい左辺からの作り直し、空の文字列、多バイトの文字、1ページの長さを含む自分自身との連結 (`x ++ x`)、ほかの文字列の中身を指す `s` の追記、`string` で読んだ位置の使用が終わった後の追記、`String.show` が区間を写すこと (区間が先頭、途中、末尾にあり、多バイトの文字と接する場合)、2つの借用の規則での読み書き |
 | T11 | Host の実装と、それを呼ぶ関数。`HostRef` とその `Clone`、Host の `write_line` と `flush` を呼ぶ関数、不透明な `File`、Host の `open` を呼ぶ関数、`File` を区切りごとに (行の読みでは次の `\n` まで) 読んで UTF-8 を確かめる関数 `read_text`、引数の数と引数を写す `host_arg_count` と `host_arg`、環境変数を読む `host_env_has` と `host_env_var`、標準入力を読む `host_read_stdin`、ファイルを書く `host_write_file`、子を起動する `host_run`。中身は何も約束しない (書いた中身、読めた中身、返した値のどれも)。約束するのは、`Fault` を返す橋が `Fault::Heap` を返さないことだけで、本体を読めば分かる。`read_text` の `File` を借りる前提は、`foreign_unique` で確かめる (上の「extern」) | Verus は `dyn Host`、`io::Error`、`dyn BufRead` を扱わず、OS とのやりとりの中身は証明の外にある。中身は期待値の表で確かめる ([テスト戦略](../implementation/testing.md) の「期待値の表」) | メモリの Host を通る `println` と `flush`、`open`、`read_all` (区切りをまたぐ長さ、長さの見込みのない読み手、短い読み、途中の読みの誤り、UTF-8 でない中身、止める語 (区切りの前と、止める語が立った後の `Interrupted`))、`read_line_raw` (区切りをまたぐ行、`\r\n` で終わる行、空の行、行の終わりのない最後の行、終わり、途中の読みの誤り、UTF-8 でない行、止める語)、`close`。引数、環境変数、標準入力の行と残り、ファイルの書き込み、子の起動の橋 |
 | T12 | 浮動小数の演算と書式。`Float` の算術 (`float_add`、`float_sub`、`float_mul`、`float_div`、`float_rem`、`float_negate`)、NaN をそろえる `canonical_nan`、全順序の `float_compare`、`Std.Float` の変換 (`float_of_int`、`float_truncate`、`float_floor`、`float_ceil`、`float_round` と、範囲を確かめる `float_to_int`)、数学の関数 (`float_sqrt`、`float_abs`、`float_sin`、`float_cos`、`float_exp`、`float_log`、`float_pow`)、`float_infinity`、`float_nan`、`float_shows_minus`、書式 (`float_repr`、`float_fixed`) と読み (`float_parse`)。本体は Rust の `f64` の演算子と関数、`f64::total_cmp`、`format!`、`str::parse` を呼ぶだけで、値は IEEE 754 の倍精度のとおりである。ただし NaN の結果は、`canonical_nan` が正の quiet NaN (`f64::NAN`) にそろえる。約束するのは、`float_compare` の結果が `Ordering` のタグであること、`float_shows_minus` の結果が `Bool` のタグであることだけである (上の「extern」) | vstd の `f64` の算術の仕様は、前提 (`add_req` など) を満たす実装を持たないので呼べない。`%`、`total_cmp`、ビット列との変換、整数との変換、数学の関数、書式と読みは仕様を持たない。値は期待値の表で確かめる。書式は Python の出力とも照らし合わせる (`tests/ui/run/float/`) | 特別な値 (±0、最小の正規化数と非正規化数、`MAX`、±無限大、NaN) の組で、各関数が Rust の演算と同じビット列 (NaN の結果は `f64::NAN` のビット列) を返し、`float_compare` が `total_cmp` と同じ答えを返すこと。変換が Rust の丸めと同じ値か同じ誤りを返し、`float_repr` の結果を `float_parse` が同じビット列に読み戻すこと。Miri は数学の関数 (`sin` など) の結果に決まらない小さな誤差を足すので、それらは近さだけを比べる |
 
@@ -1017,7 +1017,7 @@ T10 の約束は、関数そのものの外の次の2つにも頼る。
 - `String` のバイト列の語を書くのは、T10 の書き込みの関数だけである。ほかの検証した書き込みは、この語に届かない。`raw` と `set_raw` は不透明なペイロードを断り (上の「種類」)、`set_field` は走査する語だけを書くためである。`string_concat` も同じ書き込みの関数で右辺を写す
 - ghost のバイト列を、別の権限の列から写して入れない。列の型は `meta.rs` の外では作れないが、ほかの権限の列を写すことはできてしまう。`trust.rs` のテスト `only_meta_writes_the_ghost_text` が、`meta.rs` の外にある列への代入、列の `&mut` の借用、`BlockPerm` の構造体の式を断る
 
-写すのは生のポインタ (`ptr::copy_nonoverlapping`) だけで行い、同じブロックに `&mut [u8]` と `&[u8]` を同時に作らない。読み書きの範囲は、検証したコードの側の `requires` と `ensures` で縛る。T3 と同じ形である。
+書き込みは生のポインタ (`ptr::copy_nonoverlapping` と `ptr::write`) だけで行い、同じブロックに `&mut [u8]` と `&[u8]` を同時に作らない。読み書きの範囲は、検証したコードの側の `requires` と `ensures` で縛る。T3 と同じ形である。
 
 Miri は、表の「Miri で確かめること」を確かめる `trusted` の module のテストだけを流す ([テスト戦略](../implementation/testing.md) の「Miri」)。テストは信頼の部分へ届く検証したコードも通るので、T8 もそこで確かめる。
 
