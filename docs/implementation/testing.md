@@ -275,7 +275,20 @@ Core IR のテキストは `eml_core_ir::pretty` が書き、`eml_core_ir::parse
   - `files/`: `Fs.File` と `Fs.open` / `Fs.read_all` / `Fs.close`、中断のときの `File` の解放、ファイルの実行時エラー
   - `modules/`: import、修飾した名前、`pub`、Prelude と標準ライブラリの修飾。ディレクトリのテストを置く
   - `std/`: 標準ライブラリの関数 ([標準ライブラリ](../spec/stdlib.md))。`List`、`String`、`Env`、`Stdin`、`Fs.read_text` と `write_text` と `read_line`、`Proc.run`、`eprintln`、`Yield`、`Fail`、`State`、`Iter`、文字列の核の実行時エラー。std のモジュールと同じ名前のテスト (`yield.em` など) は `std_` を頭に付ける。入口のファイルが `yield.em` だと、`import Yield` がユーザーの根で大文字小文字だけが違うファイルを見つけて E1026 になり、標準ライブラリに進まないためである ([モジュールと名前解決](../spec/modules.md) の「標準ライブラリ」)
-  - `scripts/`: S12d の5本のスクリプト (`wc`、`grep`、`logstat`、`csv2jsonl`、`deploy`)。どれもディレクトリのテストで、入力は `main.args`、`main.stdin` と隣のファイルで与える。1回の起動で主な経路を通す。`deploy` のほかは、同じ処理を Python で書いた版 (`bench/scripts/<名前>.py`) と標準出力と終了コードが一致することを `bench/scripts/compare.sh --fixture <名前>` で確かめてから、スナップショットを受け入れる。UI テストで固定しない経路 (ほかのフラグ、空の入力、誤りの経路) も、`bench/scripts/compare.sh <名前> 引数…` で Python の版と比べて確かめる ([計測の基準](benchmarks.md) の「スクリプトの計測」)
+  - `arrays/`: 配列の組み立て、読み書き、範囲外の添字、共有した配列の書き込み
+  - `classes/`: 型クラス、インスタンス、導出、制約つきの関数
+  - `float/`: `Float` の演算、比較、ビット表現、文字列との往復
+  - `io/`: `IO` の実行時の振る舞い。終了コード、入力、`try_io`
+  - `kinds/`: Kind の印 (`lin`、`once`) と行のパラメータ、ジェネレータ
+  - `linearity/`: 線形な値の消費と、中断のときの後始末
+  - `lists/`: リストのリテラル、パターン、標準の型
+  - `panic/`: `Panic` の捕捉と、パニックの中での後始末
+  - `records/`: レコードの構築、更新、分解、ジェネリックなレコード
+  - `reuse/`: Perceus の再利用。移した欄の書き込みと、共有した値を再利用しないこと
+  - `strings/`: 文字列の表示、補間、複数行、生の文字列、パターン
+  - `unwind/`: 中断と巻き戻し。`exit` と `abort` がハンドラやファイルを抜けるときの後始末
+  - `var/`: `var` の変数。配列の添字、スコープ、中断との組み合わせ
+  - `scripts/`: 5本のスクリプト (`wc`、`grep`、`logstat`、`csv2jsonl`、`deploy`)。どれもディレクトリのテストで、入力は `main.args`、`main.stdin` と隣のファイルで与える。1回の起動で主な経路を通す。`deploy` のほかは、同じ処理を Python で書いた版 (`bench/scripts/<名前>.py`) と標準出力と終了コードが一致することを `bench/scripts/compare.sh --fixture <名前>` で確かめてから、スナップショットを受け入れる。UI テストで固定しない経路 (ほかのフラグ、空の入力、誤りの経路) も、`bench/scripts/compare.sh <名前> 引数…` で Python の版と比べて確かめる ([計測の基準](benchmarks.md) の「スクリプトの計測」)
   - `runtime/`: 実装の性質を確かめるテスト。メモリの解放、スタックの深さ、合流のブロック (`join_points.em`)、末尾呼び出し、部分を共有する型 (`shared_types_*.em`。木として書き下すと列の長さの指数の大きさになる型を、長さ40の列で作る)
 - 部分を共有する型の扱いが指数の時間に戻ると、`runtime/shared_types_*.em` は、終わらないかメモリを使い尽くす形で現れ、テストの失敗としては報告されない。`ui::run` は `run/` のファイルをすべて1つのテストで流すので、1つのファイルが終わらないとテスト全体が止まる
 - 実行テストは入口の `.em` のあるディレクトリを `Fs.open` の基準ディレクトリにする。入力のファイルはテストの隣に置く。拡張子が `.em` でないファイルは、テストにもモジュールにも数えない
