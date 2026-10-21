@@ -1,6 +1,6 @@
 -- 実行時に選んだ `Int -> Int` の関数の値を、ループの中で10万回 `apply` する。
--- 選ぶ関数が実行時まで決まらないので、既知の閉包への特殊化が効かない。型から決める呼び出しの規約は、`Int` の引数と結果を箱に包まずに
--- `apply` を通すので、`boxes` と `unboxes` が消える (docs/implementation/benchmarks.md の「基準のプログラム」)
+-- 選ぶ関数が実行時まで決まらないので、既知の閉包への特殊化が効かない。関数の値の引数と結果は一様なので、`Int` は `apply` を通るたびに
+-- `box` と `unbox` を通る。`Int` の箱はタグを付けるだけで、確保はない (docs/implementation/benchmarks.md の「呼び出しの規約の引き換え」)
 inc : Int -> <Panic> Int
 inc x = x + 1
 

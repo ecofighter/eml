@@ -24,9 +24,9 @@
 | `state_loop.em` | 末尾でない `put` を `Std.State` の handler の下で回すループ | 状態を渡す形の特殊化 |
 | `state_loop_by_hand.em` | `state_loop.em` のループの状態を、引数で手で受け渡した版 | `state_loop.em` の下限 |
 | `state_nested.em` | 状態つきの handler を2つ重ねたループ | 入れ子の handler の特殊化 |
-| `apply_int.em` | 実行時に選んだ `Int -> Int` の関数の値を、ループの中で10万回 `apply` する | 型どおりの Repr で呼ぶ `apply` |
+| `apply_int.em` | 実行時に選んだ `Int -> Int` の関数の値を、ループの中で10万回 `apply` する | 引数と結果を一様な語で渡す `apply` |
 | `apply_float.em` | `apply_int.em` の `Float -> Float` の版 | `Float` の引数と結果が `apply` を通る費用 |
-| `ep_float.em` | `Float` の結果と `Int` の状態を持つ操作を、特殊化しない handler の下で10万回起こす | EP の道で、操作の結果と状態を型どおりの Repr で運ぶ費用 |
+| `ep_float.em` | `Float` の結果と `Int` の状態を持つ操作を、特殊化しない handler の下で10万回起こす | EP の道で、操作の結果と状態を運ぶ費用 |
 | `fold_state.em` | `State.run` の中で `Yield.fold` に純粋なラムダを渡し、10万要素を合計する | 純粋なコールバックを節がその場で呼ぶこと (`yields` が0) |
 | `list.em` | プログラムの中で定義した `List a` を `range`、`map`、`foldl` で合計する | 型変数のフィールドの `Int`、高階関数 |
 | `tree.em` | 線形合同法で作った `Int` を二分探索木に入れ、総称な `size` と `fold` で畳む | 再帰的なデータ、`switch` と `unpack` |
@@ -164,89 +164,89 @@ bench/scripts.sh
 - 機種: Mac17,2 (Apple M5)
 - OS: macOS 27.0.1 (26A434)
 - rustc: rustc 1.98.1 (48a229cea 2026-09-01)
-- コミット: 64c16c8
+- コミット: 80d960f
 
 | プログラム | instructions retired | 実行の分 | 実時間 (s) |
 |---|---:|---:|---:|
-| `empty` | 44277657 | | 0.00 |
-| `apply_float` | 124450420 | 80172763 | 0.00 |
-| `apply_int` | 117260304 | 72982647 | 0.00 |
-| `ep_float` | 228643047 | 184365390 | 0.01 |
-| `fannkuch_by_hand` | 189965030 | 145687373 | 0.00 |
-| `fannkuch_var` | 285033939 | 240756282 | 0.01 |
-| `fib` | 130851896 | 86574239 | 0.00 |
-| `fold_state` | 94791605 | 50513948 | 0.00 |
-| `iter_generate` | 105325225 | 61047568 | 0.00 |
-| `iter_pipeline` | 215788900 | 171511243 | 0.00 |
-| `iter_pipeline_by_hand` | 216793712 | 172516055 | 0.00 |
-| `list` | 203660886 | 159383229 | 0.00 |
-| `loop` | 211559447 | 167281790 | 0.00 |
-| `mandelbrot` | 467990565 | 423712908 | 0.02 |
-| `nbody` | 189154858 | 144877201 | 0.01 |
-| `orders` | 293906687 | 249629030 | 0.01 |
-| `orders_by_hand` | 295090183 | 250812526 | 0.01 |
-| `push_fold` | 91339327 | 47061670 | 0.00 |
-| `push_fold_by_hand` | 91718848 | 47441191 | 0.00 |
-| `rbtree` | 262644807 | 218367150 | 0.01 |
-| `records` | 135826516 | 91548859 | 0.00 |
-| `records_wide` | 207955705 | 163678048 | 0.00 |
-| `sieve_by_hand` | 104067330 | 59789673 | 0.00 |
-| `sieve_var` | 135174212 | 90896555 | 0.00 |
-| `spectral_norm` | 520394262 | 476116605 | 0.02 |
-| `state` | 82284992 | 38007335 | 0.00 |
-| `state_loop` | 84355962 | 40078305 | 0.00 |
-| `state_loop_by_hand` | 82036051 | 37758394 | 0.00 |
-| `state_nested` | 96321136 | 52043479 | 0.00 |
-| `std_list` | 198655384 | 154377727 | 0.00 |
-| `sum_loop` | 80019321 | 35741664 | 0.00 |
-| `tree` | 237881947 | 193604290 | 0.01 |
-| `tree_by_hand` | 237126308 | 192848651 | 0.01 |
-| `tree_map` | 185464346 | 141186689 | 0.00 |
-| `upsert` | 514532055 | 470254398 | 0.02 |
-| `upsert_by_hand` | 512445034 | 468167377 | 0.02 |
+| `empty` | 44465300 | | 0.00 |
+| `apply_float` | 177670766 | 133205466 | 0.00 |
+| `apply_int` | 146702769 | 102237469 | 0.00 |
+| `ep_float` | 229564122 | 185098822 | 0.01 |
+| `fannkuch_by_hand` | 189388848 | 144923548 | 0.00 |
+| `fannkuch_var` | 285655257 | 241189957 | 0.01 |
+| `fib` | 130555936 | 86090636 | 0.00 |
+| `fold_state` | 95272926 | 50807626 | 0.00 |
+| `iter_generate` | 106307184 | 61841884 | 0.00 |
+| `iter_pipeline` | 214420679 | 169955379 | 0.00 |
+| `iter_pipeline_by_hand` | 215703426 | 171238126 | 0.00 |
+| `list` | 203979998 | 159514698 | 0.00 |
+| `loop` | 211362104 | 166896804 | 0.00 |
+| `mandelbrot` | 469466600 | 425001300 | 0.02 |
+| `nbody` | 190534441 | 146069141 | 0.01 |
+| `orders` | 294671799 | 250206499 | 0.01 |
+| `orders_by_hand` | 295968620 | 251503320 | 0.01 |
+| `push_fold` | 91857433 | 47392133 | 0.00 |
+| `push_fold_by_hand` | 92163765 | 47698465 | 0.00 |
+| `rbtree` | 262317954 | 217852654 | 0.01 |
+| `records` | 135430429 | 90965129 | 0.00 |
+| `records_wide` | 208186893 | 163721593 | 0.01 |
+| `sieve_by_hand` | 104845803 | 60380503 | 0.00 |
+| `sieve_var` | 136448422 | 91983122 | 0.00 |
+| `spectral_norm` | 522565735 | 478100435 | 0.02 |
+| `state` | 82393410 | 37928110 | 0.00 |
+| `state_loop` | 84405656 | 39940356 | 0.00 |
+| `state_loop_by_hand` | 82082127 | 37616827 | 0.00 |
+| `state_nested` | 96354782 | 51889482 | 0.00 |
+| `std_list` | 199371679 | 154906379 | 0.00 |
+| `sum_loop` | 80017330 | 35552030 | 0.00 |
+| `tree` | 237867998 | 193402698 | 0.01 |
+| `tree_by_hand` | 237180911 | 192715611 | 0.01 |
+| `tree_map` | 185164006 | 140698706 | 0.00 |
+| `upsert` | 515639376 | 471174076 | 0.02 |
+| `upsert_by_hand` | 513657702 | 469192402 | 0.02 |
 
 ### `bench/rt.sh`
 
 - 機種: Mac17,2 (Apple M5)
 - OS: macOS 27.0.1 (26A434)
 - rustc: rustc 1.98.1 (48a229cea 2026-09-01)
-- コミット: 64c16c8
+- コミット: 80d960f
 
 `rt_bench` の計測
 
 | 計測 | instructions retired | 実時間 (s) |
 |---|---:|---:|
-| `empty` | 16788171 | 0.00 |
-| `list` | 1250434701 | 0.04 |
-| `box-list` | 3076194144 | 0.08 |
-| `dup` | 276869013 | 0.01 |
-| `free` | 1827322835 | 0.05 |
-| `map` | 1809276164 | 0.05 |
-| `map-reuse` | 599052407 | 0.02 |
-| `append` | 277753031 | 0.01 |
-| `perform` | 516878107 | 0.01 |
-| `perform-deep` | 867185769 | 0.03 |
-| `handle` | 613952381 | 0.01 |
-| `yield` | 347735860 | 0.08 |
-| `mask` | 3827982427 | 0.10 |
-| `poll` | 1117212664 | 0.03 |
+| `empty` | 16772736 | 0.00 |
+| `list` | 1250117850 | 0.04 |
+| `box-list` | 3075414148 | 0.09 |
+| `dup` | 276773068 | 0.01 |
+| `free` | 1826927771 | 0.05 |
+| `map` | 1809055045 | 0.06 |
+| `map-reuse` | 599038679 | 0.02 |
+| `append` | 277773443 | 0.01 |
+| `perform` | 516852307 | 0.01 |
+| `perform-deep` | 866865626 | 0.03 |
+| `handle` | 613862038 | 0.01 |
+| `yield` | 347027932 | 0.09 |
+| `mask` | 3826981158 | 0.10 |
+| `poll` | 1116855171 | 0.03 |
 
 extern の計測 (`rt_extern_bench`)
 
 | 計測 | instructions retired | 実時間 (s) |
 |---|---:|---:|
-| `string-eq` | 345526537 | 0.01 |
-| `string-eq-early` | 737213345 | 0.01 |
-| `compare` | 345557476 | 0.01 |
-| `concat-copy` | 2634967018 | 0.09 |
-| `show-int` | 2347557032 | 0.06 |
-| `show-int-long` | 5498451585 | 0.16 |
-| `show-string` | 3703921040 | 0.15 |
-| `show-string-dense` | 8643265593 | 0.27 |
-| `println-block` | 254039237 | 0.00 |
-| `println-line` | 11175023428 | 0.60 |
-| `read-all` | 125108724 | 0.00 |
-| `read-all-unsized` | 136605816 | 0.00 |
+| `string-eq` | 345331550 | 0.01 |
+| `string-eq-early` | 737076591 | 0.01 |
+| `compare` | 345449541 | 0.01 |
+| `concat-copy` | 2634012465 | 0.09 |
+| `show-int` | 2346938123 | 0.06 |
+| `show-int-long` | 5497239759 | 0.16 |
+| `show-string` | 3702649605 | 0.15 |
+| `show-string-dense` | 8643002984 | 0.28 |
+| `println-block` | 254017287 | 0.00 |
+| `println-line` | 11148325287 | 0.61 |
+| `read-all` | 125151875 | 0.00 |
+| `read-all-unsized` | 136540533 | 0.00 |
 
 ### `bench/scripts.sh`
 
@@ -254,28 +254,28 @@ extern の計測 (`rt_extern_bench`)
 - OS: macOS 27.0.1 (26A434)
 - rustc: rustc 1.98.1 (48a229cea 2026-09-01)
 - Python: Python 3.14.8
-- コミット: 64c16c8
+- コミット: 80d960f
 - 入力: スクリプトの入力は bench/scripts/gen.py が作る。大きさは表の「大きさ」の欄にある
 
 スクリプト
 
 | 計測 | 大きさ | eml の実時間 (s) | Python の実時間 (s) | 比 (eml / Python) | eml の最大 RSS (MB) | Python の最大 RSS (MB) |
 |---|---:|---:|---:|---:|---:|---:|
-| `wc` | 9000 KiB | 0.29 | 0.02 | 14.5 | 29 | 78 |
-| `grep -n` | 70000 KiB | 0.29 | 0.27 | 1.1 | 9 | 16 |
-| `logstat` | 6700 KiB | 0.30 | 0.10 | 3.0 | 10 | 20 |
-| `logstat --whole` | 6700 KiB | 0.29 | 0.10 | 2.9 | 35 | 54 |
+| `wc` | 9000 KiB | 0.30 | 0.03 | 10.0 | 29 | 78 |
+| `grep -n` | 70000 KiB | 0.29 | 0.27 | 1.1 | 9 | 17 |
+| `logstat` | 6700 KiB | 0.31 | 0.11 | 2.8 | 10 | 19 |
+| `logstat --whole` | 6700 KiB | 0.30 | 0.10 | 3.0 | 35 | 53 |
 | `csv2jsonl` | 2900 KiB | 0.29 | 0.18 | 1.6 | 21 | 51 |
 
 数値計算
 
 | 計測 | 大きさ | eml の実時間 (s) | Python の実時間 (s) | 比 (eml / Python) | eml の最大 RSS (MB) | Python の最大 RSS (MB) |
 |---|---:|---:|---:|---:|---:|---:|
-| nbody | 140000 | 0.29 | 0.64 | 0.5 | 10 | 14 |
-| spectral-norm | 510 | 0.32 | 0.86 | 0.4 | 9 | 14 |
-| mandelbrot | 480 | 0.19 | 0.30 | 0.6 | 9 | 14 |
-| fannkuch-redux | 9 | 0.53 | 0.24 | 2.2 | 10 | 14 |
-| sieve | 3500000 | 0.29 | 0.16 | 1.8 | 35 | 41 |
+| nbody | 140000 | 0.29 | 0.64 | 0.5 | 9 | 14 |
+| spectral-norm | 510 | 0.31 | 0.86 | 0.4 | 9 | 14 |
+| mandelbrot | 480 | 0.20 | 0.30 | 0.7 | 8 | 14 |
+| fannkuch-redux | 9 | 0.52 | 0.24 | 2.2 | 10 | 14 |
+| sieve | 3500000 | 0.30 | 0.17 | 1.8 | 35 | 41 |
 
 ## 所見
 
@@ -399,26 +399,29 @@ extern の計測 (`rt_extern_bench`)
 
 ### 呼び出しの規約の引き換え
 
-- 主張: 関数の Repr を型から決める規約で、増えた費用が2つある
-  - 特殊化されない `List.map` が、受けた `Float` をそのまま返す関数の値を型どおりに呼ぶので、要素ごとに `Float` の箱が1つ増える
-  - `apply` を使わないプログラムで、VM の命令のループが1回まわるごとに約3命令増えた。原因は分かっていない
+- 主張: 関数の値の、捕まえた値より後ろの引数と結果をいつも一様にする規約 ([LIR](../spec/lir.md) の「関数の ABI」) には、次の費用がある
+  - 特殊化されない関数の値に `Float` や構造体を渡すと、呼ぶたびに引数と結果が箱に入る。`Int` の箱はタグを付けるだけで、確保しない
+  - 値として参照する型どおりの関数には、版 `<f>$uniform` ができる。末尾の位置で `apply` か `clause` に届く関数の版は本体を写した写しの形になり、コードが増える
+  - 値として生まれて値としても参照される関数は、直接呼ぶ所でも引数と結果を一様にして渡す
+  - 直接だけ呼ばれる持ち上げた関数と、値の参照が残らない handler への特殊化の継続の関数は、型どおりのままなので、この費用を持たない ([Core IR](../spec/core-ir.md) の「直接だけ呼ばれる持ち上げた関数」)。節の写しは `perform` の地点ごとに継続の関数について複製するので、継続を閉包にせず、再開の値と状態も箱に入らない ([Core IR](../spec/core-ir.md) の「節の写しの、継続についての複製」)。その代わり、節の本体のコードは地点の数だけ写る
 - 数値:
-  - `unspecialized_map_passes_floats.em` は `boxes` 20、`allocations` 22。型どおりに呼ばない規約では `boxes` 11、`allocations` 14 (ab9768c9)。今の値は 0fff343a の `trade_offs` のスナップショットと同じ
-  - `apply` を使わないプログラムの実行の分は +0.2% (`nbody`) から +1.7% (`fannkuch_by_hand`)。M5、061eb96 と、f6aee0e に未コミットの変更を足した木。コミットからは再現できない
-- 根拠にしている所: `crates/eml_vm/tests/bench.rs` の `trade_offs`、`tests/ui/run/functions/unspecialized_map_passes_floats.em` の先頭のコメント
-- 受け入れた理由:
-  - `Float` の箱: 特殊化されない `apply` を型どおりに呼ぶ規約の帰結で、`apply` の多いプログラムの実行の分が大きく減った (`apply_float` -43.3%、`apply_int` -33.5%、`ep_float` -17.8%)
-  - ループの約3命令: `apply` の関数を展開する形、しない形、`FnEntry` の欄を減らす形のどれでも消えず、`apply` の多いプログラムで最もよい形を残した
+  - `apply_float` (10万回の `apply`) は `boxes` 200000、`allocations` 200002 で、呼ぶたびに引数と結果の箱を1つずつ確保する。`apply_int` も `boxes` 200000 だが、`allocations` は 2 である
+  - `ep_float` の `allocations` は10万回の操作で 9 である
+  - `unspecialized_map_passes_floats.em` は `boxes` 20、`allocations` 22。`boxes` はリストの10個の要素の箱と、ラムダの版 `main$lambda0$uniform` が要素ごとに結果を入れる箱である
+  - `bench/` と `tests/ui/run*` のプログラムの reuse の後の LIR は、関数が 3685、文が 33432 で、版が 54、そのうち写しの形が 17 である ([テスト戦略](testing.md) の「開発用の数え方」)
+  - d650bdec の値。`RunStats` の値なので機種によらず、`bench.rs` のスナップショットと同じ
+- 根拠にしている所: `crates/eml_vm/tests/bench.rs` の `trade_offs`、`bench/apply_int.em`、`bench/apply_float.em`、`bench/ep_float.em` と `tests/ui/run/functions/unspecialized_map_passes_floats.em` の先頭のコメント
+- 受け入れた理由: 実行時に Repr を変える仕組みが要らず、`apply` は引数の数だけを比べればよい ([VM](../spec/vm.md) の「呼び出しと戻り」)。末尾の位置の呼び出しの鎖ごとに残るフレームは多くとも1つで ([LIR](../spec/lir.md) の「末尾の位置の呼び出し」)、ネイティブ化では Cranelift の `return_call` をそのまま使える。ABI は名前で決まるので、REPL の追記とネイティブのコードの使い回しで食い違わない
 
 ### 構造体の表現の引き換え
 
 - 主張: 小さな単一コンストラクタの型とタプルを構造体にしたことで、増えた費用が2つある
-  - 特殊化されない `map` に組を入れ替える関数の値を渡すと、要素の組を箱から取り出して葉の並びで渡し、戻った組を新しい箱に入れる。共有した組を展開しない関数に渡すと、RC の葉ごとに `dup` する
+  - 特殊化されない `map` に組を入れ替える関数の値を渡すと、ラムダが要素の組を箱から取り出して入れ替え、新しい箱に入れて返す。共有した組を展開しない関数に渡すと、RC の葉ごとに `dup` する
   - `Option` の中の組を構造体の `unbox` と `release unboxed` で読むので、`iter_pipeline` と `orders` の実行の分が増えた
 - 数値:
-  - `swap_map_unspecialized.em` は `allocations` 52、`reuses` 40。構造体にしない場合は 34 と 50 (e6665e64)。`swap_map_specialized.em` は構造体にしない場合と同じ 32 と 50 (`SWAP_MAP_BEFORE_STRUCTS`)。`three_rc_leaves_through_a_call.em` は `rc_increments` 3。今の値は 0fff343a の `trade_offs` のスナップショットと同じ
+  - `swap_map_unspecialized.em` は `allocations` 42、`reuses` 50。`swap_map_specialized.em` は構造体にしない場合と同じ 32 と 50 (`SWAP_MAP_BEFORE_STRUCTS`)。`three_rc_leaves_through_a_call.em` は `rc_increments` 3。今の値は d650bdec の `trade_offs` のスナップショットと同じ
   - `iter_pipeline` +3.4%、`iter_pipeline_by_hand` +3.5%、`orders_by_hand` +2.0%、`orders` +1.3%。M5、1a91f47 に未コミットの変更を足した木。コミットからは再現できない
 - 根拠にしている所: `crates/eml_vm/tests/bench.rs` の `trade_offs` と `SWAP_MAP_BEFORE_STRUCTS`、`tests/ui/run/records/swap_map_unspecialized.em` と `three_rc_leaves_through_a_call.em` の先頭のコメント
 - 受け入れた理由:
-  - 組の箱と葉の `dup`: データに通した関数の値は、葉の並びの規約で呼ぶほかない。構造体の表現で、`records` -26.9%、`mandelbrot` -24.7% と、確保の多いプログラムの実行の分が大きく減った
+  - 組の箱と葉の `dup`: データに通した関数の値は引数と結果が一様なので、組は箱で渡る。構造体の表現で、`records` -26.9%、`mandelbrot` -24.7% と、確保の多いプログラムの実行の分が大きく減った
   - `Option` の組の2命令: 増えたのは組を読む2つの命令の分と見ている。VM の中までは調べていない

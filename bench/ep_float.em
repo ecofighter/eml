@@ -1,7 +1,7 @@
 -- `Float` の結果と `Int` の状態を持つ操作を、特殊化しない handler の下で10万回起こす。
 -- 経路に `mask` の付いた呼び出しがあるので、handler への特殊化は断られ、EP の道 (evidence passing) に残る
--- (docs/spec/core-ir.md の「handler への特殊化」)。`evidence_steps` が 0 より大きい。型から決める呼び出しの規約は、EP の道の
--- 操作の結果と状態を型に合わせた Repr で運ぶので、その費用を見る (docs/implementation/benchmarks.md の「基準のプログラム」)
+-- (docs/spec/core-ir.md の「handler への特殊化」)。`evidence_steps` が 0 より大きい。EP の道で操作の結果と
+-- 状態を運ぶ費用を見る。`allocations` は操作の回数によらない (docs/implementation/benchmarks.md の「呼び出しの規約の引き換え」)
 effect Gauge where
   read : Int -> Float
 
