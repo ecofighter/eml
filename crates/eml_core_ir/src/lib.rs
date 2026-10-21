@@ -27,7 +27,7 @@ pub use optimize::optimize;
 pub use pipeline::{Pass, core_until, lower, lower_until};
 pub use pretty::{pretty, pretty_with_positions};
 pub use text::parse;
-pub use translate::type_repr;
+pub use translate::boxed_repr;
 pub use verify::{verify_evidence, verify_translated};
 
 #[derive(Debug, Clone, PartialEq, Eq)]

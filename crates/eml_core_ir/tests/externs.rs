@@ -2,7 +2,7 @@
 //! `eml_hir` の結合テストが照らし合わせる。型から Repr を決める規則は translate にあるので、ここで確かめる。
 //! extern が作る値のタグと、translate が作る配置も照らし合わせる。
 
-use eml_core_ir::type_repr;
+use eml_core_ir::boxed_repr;
 use eml_extern::{Extern, ExternType, Linearity, OpRet, Purity};
 use eml_hir::{Function, FunctionKind, MethodImpl, TypeDefId, ValueItem};
 use eml_lir::{FALSE, TRUE, TUPLE};
@@ -186,7 +186,7 @@ fn every_extern_function_row_has_the_reprs_of_its_std_signature() {
             let TypeKind::Fn { param, ret, .. } = types.kind(ty) else {
                 panic!("`{}` has an arrow per parameter", row.name);
             };
-            params.push(type_repr(types, *param, &checked.program));
+            params.push(boxed_repr(types, *param, &checked.program));
             param_types.push(*param);
             ty = *ret;
         }
@@ -196,7 +196,7 @@ fn every_extern_function_row_has_the_reprs_of_its_std_signature() {
             OpRet::Repr(ret) => {
                 let result = row_result(types, row.name, row.with_arg, &param_types, ty);
                 assert_eq!(
-                    type_repr(types, result, &checked.program),
+                    boxed_repr(types, result, &checked.program),
                     ret,
                     "{}",
                     row.name
@@ -365,7 +365,7 @@ fn every_extern_type_row_has_the_repr_of_its_type() {
             panic!("`{name}` is a function");
         };
         assert_eq!(
-            type_repr(types, *param, &checked.program),
+            boxed_repr(types, *param, &checked.program),
             row.repr,
             "{}",
             row.name
