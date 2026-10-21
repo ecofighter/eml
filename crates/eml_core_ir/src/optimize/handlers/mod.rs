@@ -6,8 +6,8 @@
 //!   本体を展開して、その `resume` を `perform` の後ろのブロックへのジャンプにする。`return` の節は handle の地点で
 //!   呼ぶ
 //! - 末尾の経路の形: それ以外の handler の形。経路は末尾の呼び出しだけでたどる。複製の中の `perform` は、すぐに
-//!   再開する節なら節の本体をその場に展開した形にする。それ以外の節なら、継続の関数の閉包を `k` として節の写し
-//!   `<g>{k}` を末尾で呼ぶ形にし、`never` の操作なら、後ろを捨てて節の関数を末尾で呼ぶ形にする
+//!   再開する節なら節の本体をその場に展開した形にする。それ以外の節なら、節の写し `<g>{k}` をその地点の継続の関数に
+//!   ついて複製したものを末尾で呼ぶ形にし、`never` の操作なら、後ろを捨てて節の関数を末尾で呼ぶ形にする
 //!
 //! 入れ子の handler は内側から、回を重ねて特殊化する (`handlers`)。複製と継続の関数は、その回の初めのコードから
 //! 作る。そのコードは名前ごとに決まっているので、どの handle を特殊化するかも、複製のコードも、handle を含む関数と
@@ -20,7 +20,7 @@ mod touch;
 use std::collections::{BTreeSet, HashMap};
 
 use super::blocks;
-use super::known::{Wrapper, fresh, known_closures, wrapper};
+use super::known::{Callee, Wrapper, fresh, known_closures, wrapper};
 use super::specialize::limited;
 use super::{kept_marks, recompute_yields};
 use crate::liveness::{insert_var, live_after_term, step_back};
@@ -60,23 +60,11 @@ impl ClauseForm {
         }
         let params = clause.params();
         let k = params[params.len() - 2];
+        if handles(clause) {
+            return ClauseForm::Other;
+        }
         let mut returns = 0;
         for block in &clause.blocks {
-            let handles = block.stmts.iter().any(|stmt| {
-                matches!(
-                    stmt,
-                    Stmt::Let {
-                        var: _,
-                        rhs: Rhs::Call {
-                            call: Call::Handle { .. },
-                            mask: _,
-                        },
-                    }
-                )
-            });
-            if handles {
-                return ClauseForm::Other;
-            }
             if let Term::Return(_) = block.term {
                 let resumed = tail_position_call(block).is_some_and(|(at, call)| {
                     matches!(call, Call::Resume { k: Atom::Var(var), .. } if *var == k)
@@ -106,6 +94,26 @@ impl ClauseForm {
             ClauseForm::Other
         }
     }
+}
+
+/// 本体に `handle` を持つか。
+fn handles(function: &CoreFn) -> bool {
+    function
+        .blocks
+        .iter()
+        .flat_map(|block| &block.stmts)
+        .any(|stmt| {
+            matches!(
+                stmt,
+                Stmt::Let {
+                    var: _,
+                    rhs: Rhs::Call {
+                        call: Call::Handle { .. },
+                        mask: _,
+                    },
+                }
+            )
+        })
 }
 
 /// 特殊化の形。handler の節の形だけで決まるので、1つの handle はいつも1つの形になる
@@ -791,6 +799,42 @@ impl Copies<'_> {
         copy
     }
 
+    /// 節の関数 `clause` の写し `<g>{k}` を、`k` に渡す継続の関数 `continuation` の閉包について開いた複製
+    /// `<g>{k}{<位置>=<継続の関数>/<捕獲の数>}` (`piece::clause_with_continuation`)。`resume k(v, s)` は継続の関数の
+    /// 直接の呼び出しになる。継続の関数は `perform` の地点ごとに1つなので、複製もその地点だけから呼ばれる。名前は既知の
+    /// 閉包の複製と同じ書き方で、写しと継続の関数の名前で決まり、コードもそれだけで決まる。本体に `handle` を持つ節は
+    /// 複製しない (`None`)。複製すると、その `handle` が複製の数だけ写り、節の関数がちょうど1つの `handle` に属する
+    /// という EP の前提 (`crates/eml_core_ir/src/evidence/handlers.rs` の `entries`) に反するためである
+    /// (docs/spec/core-ir.md の「節の写しの、継続についての複製」)。
+    fn continued(
+        &mut self,
+        clause: FnIdx,
+        stateful: bool,
+        continuation: FnIdx,
+        callee: &Callee,
+        count: usize,
+    ) -> Option<FnIdx> {
+        let program = self.program;
+        let function = program.function(clause);
+        if handles(function) {
+            return None;
+        }
+        let base = limited(&function.name, format!("{}{{k}}", function.name));
+        let with_k = piece::clause_with_k(function, base.clone(), stateful, |wrapper| {
+            resumes(program, wrapper).is_some()
+        });
+        let position = with_k.params().len() - 2;
+        let closure = match count {
+            0 => callee.name.clone(),
+            count => format!("{}/{count}", callee.name),
+        };
+        let name = limited(&base, format!("{base}{{{position}={closure}}}"));
+        let code = piece::clause_with_continuation(&with_k, name, continuation, callee, count);
+        let copy = self.reserve(clause);
+        self.place(copy, code);
+        Some(copy)
+    }
+
     /// `<f>{H=<ret>}`。上限を超えた名前は、既知の閉包の複製と同じくハッシュの形にする。
     fn name(&self, function: FnIdx, shape: &Shape) -> String {
         let name = &self.program.function(function).name;
@@ -811,8 +855,9 @@ impl Copies<'_> {
     ///
     /// H 宛ての `perform` は、どれもそこで複製を終える。再開する操作では、`perform` より後ろを継続の関数 `f{H}$hN`
     /// に切り出す。すぐに再開する節は本体を展開して、その `resume` を `f{H}$hN` の末尾呼び出しにする。それ以外の節は、
-    /// `f{H}$hN` の閉包を `k` として節の写し `<g>{k}` に渡し、末尾で呼ぶ。`never` の操作は後ろを捨て、節の関数を末尾で
-    /// 呼ぶ。状態をいつも関数の引数で渡すので、ブロックの間で状態を持ち回る必要がなく、組も確保しない。展開した節の
+    /// 節の写し `<g>{k}` を `f{H}$hN` の閉包について複製したものに、閉包の捕獲を渡して末尾で呼ぶ (`continued`)。本体に
+    /// `handle` を持つ節だけは、`f{H}$hN` の閉包を `k` として `<g>{k}` に渡す。`never` の操作は後ろを捨て、節の関数を
+    /// 末尾で呼ぶ。状態をいつも関数の引数で渡すので、ブロックの間で状態を持ち回る必要がなく、組も確保しない。展開した節の
     /// 費用は `perform` ごとの末尾呼び出し1回である。
     ///
     /// `perform` は後ろから順に書き換える。前の `perform` の続きを切り出すときには、その中の後ろの `perform` がすでに
@@ -1019,10 +1064,11 @@ impl Copies<'_> {
         if body.internal {
             body.split = Some(live.len() as u32);
         }
+        let callee = Callee::of(&body);
         self.place(continuation, body);
         let live: Vec<Atom> = live.into_iter().map(Atom::Var).collect();
         if shape.forms[op] == ClauseForm::Other {
-            // `k` を値として使う節: 続きの閉包を `k` にして、節の写しを末尾で呼ぶ。閉包の印は節の `k` の印で、
+            // `k` を値として使う節は、続きの閉包を `k` にして節の写しを末尾で呼ぶ。閉包の印は節の `k` の印で、
             // `once` の操作なら `lin` になる
             let source = program.function(clause);
             let k = source.vars[source.params()[source.params().len() - 2].0 as usize].mark;
@@ -1033,27 +1079,39 @@ impl Copies<'_> {
                 }),
                 "a `multi` continuation captures only `unr` values"
             );
-            // 捕獲のない閉包は関数の値で書く (docs/spec/core-ir.md)
-            let closure = (!live.is_empty()).then(|| {
-                let var = fresh(
-                    &mut copy.code.vars,
-                    VarInfo {
-                        name: "k".to_string(),
-                        repr: Repr::TObj,
-                        mark: k,
-                    },
-                );
-                (var, Rhs::MakeClosure(continuation, live.clone()))
-            });
-            let value = closure
-                .as_ref()
-                .map_or(Atom::Fn(continuation), |&(var, _)| Atom::Var(var));
-            clause_args.extend([value, state_atom]);
+            let (target, closure) =
+                match self.continued(clause, shape.stateful, continuation, &callee, live.len()) {
+                    // 継続の閉包は作らず、その捕獲を写しの複製へそのまま渡す
+                    Some(target) => {
+                        clause_args.extend(live.iter().copied());
+                        (target, None)
+                    }
+                    None => {
+                        // 捕獲のない閉包は関数の値で書く (docs/spec/core-ir.md)
+                        let closure = (!live.is_empty()).then(|| {
+                            let var = fresh(
+                                &mut copy.code.vars,
+                                VarInfo {
+                                    name: "k".to_string(),
+                                    repr: Repr::TObj,
+                                    mark: k,
+                                },
+                            );
+                            (var, Rhs::MakeClosure(continuation, live.clone()))
+                        });
+                        let value = closure
+                            .as_ref()
+                            .map_or(Atom::Fn(continuation), |&(var, _)| Atom::Var(var));
+                        clause_args.push(value);
+                        (self.clause_copy(clause, shape.stateful), closure)
+                    }
+                };
+            clause_args.push(state_atom);
             let mut passed = live;
             passed.extend(clause_args.iter().copied());
             let released = dead(&copy.code, &copy.all_captures, &[], &passed);
             // 写しの戻り値は節の関数の戻り値のままである
-            let call = Call::Direct(self.clause_copy(clause, shape.stateful), clause_args);
+            let call = Call::Direct(target, clause_args);
             end(
                 &mut copy.code,
                 (block, stmt),

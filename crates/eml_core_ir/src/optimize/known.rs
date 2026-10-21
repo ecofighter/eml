@@ -416,7 +416,8 @@ impl Rewriter<'_> {
                                 _ => Mark::Unr,
                             })
                             .collect();
-                        rewritable(closure, &captured, args, *result, *masked, &self.cx.callees)
+                        let callee = &self.cx.callees[closure.function.0 as usize];
+                        rewritable(closure, &captured, args, *result, *masked, callee)
                     }
                     &Use::Passed { target, position } => {
                         self.cx.shape(target, position, closure).is_some()
@@ -591,9 +592,8 @@ fn rewritable(
     args: &[Mark],
     result: Mark,
     masked: bool,
-    callees: &[Callee],
+    callee: &Callee,
 ) -> bool {
-    let callee = &callees[closure.function.0 as usize];
     let given = closure.captures.len() + args.len();
     let unboxes_non_unr = args.iter().enumerate().any(|(index, &mark)| {
         mark != Mark::Unr
@@ -637,6 +637,20 @@ pub(crate) fn apply_rewritable(
     mask: &[MaskItem],
     callees: &[Callee],
 ) -> bool {
+    let callee = &callees[closure.function.0 as usize];
+    apply_rewritable_to(vars, closure, callee, var, args, mask)
+}
+
+/// `apply_rewritable` の、閉包の関数 `callee` の表を直接受ける形。表にまだない関数 (handler への特殊化が作る継続の
+/// 関数) の閉包に使う。
+pub(crate) fn apply_rewritable_to(
+    vars: &[VarInfo],
+    closure: &KnownClosure,
+    callee: &Callee,
+    var: VarId,
+    args: &[Atom],
+    mask: &[MaskItem],
+) -> bool {
     let mark = |atom: &Atom| match *atom {
         Atom::Var(var) => vars[var.0 as usize].mark,
         _ => Mark::Unr,
@@ -649,7 +663,7 @@ pub(crate) fn apply_rewritable(
         &marks,
         vars[var.0 as usize].mark,
         !mask.is_empty(),
-        callees,
+        callee,
     )
 }
 

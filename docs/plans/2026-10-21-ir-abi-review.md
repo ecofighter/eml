@@ -387,6 +387,7 @@ T-3 と T-4 を T-5 より先に置くのは、T-6 の末尾の規則が `passes
 ### T-11: (条件付き) `<g>{k}` の複製を既知の継続で特殊化する
 
 - 条件: 関門 G で `scripts/csv2jsonl` の行だけが通らないとき
+- 決まったこと: T-6 の後の関門 G では、csv2jsonl の実時間 (+6.2%) と LIR の文の総数 (+3.2%) の2つが通らなかった。利用者は、T-11 を入れて測り直すことに決めた
 - 作業: handler に特殊化した `<g>{k}` の複製を、既知の継続のクロージャでさらに複製し、`resume k(v, s)` を直接の呼び出しにする (core-ir.md の「複製」と同じ規則)
 - 完了の条件: 開発用の数え方で、csv2jsonl の箱を要る `apply` の場所が 0 になる。`bench/scripts.sh` の csv2jsonl の行が T-6 の前より遅くない
 
@@ -457,6 +458,11 @@ T-1 と T-2 は並べてよい。それ以降は1本の列である。
   - 種類2: `uniform apply`、`source(`、Repr の付いた `apply` の定数、`apply` の `-> X{…}` を含むすべての Core IR と LIR のテキストのスナップショット
   - 種類2: シグネチャの文字列を含む VM の逆アセンブルのスナップショット
   - 種類2: `apply` の実行時の変換や変換のフレームを説明する UI テストの頭のコメント (`function_value_made_inside_a_uniform_instance`、`float_bits_through_structs`、`lin_struct_through_uniform`、`float_closure_partial_application`、`unspecialized_map_passes_floats`、`swap_map_unspecialized`)
+- T-11:
+  - 種類2: `crates/eml_core_ir/tests/optimize.rs` の `handler_specialization_functions_are_typed` が見る節の写しは `<g>{k}{…}` になり、`k` への `apply` の代わりに継続の関数の直接の呼び出しを数える (この規則が `apply` を消す)。テストの名前と合否は変えない
+  - 種類2: bench.rs の `unwind_points` のスナップショット (`scripts/csv2jsonl` が 106 から 109)
+  - 種類2: `<g>{k}` の名前か、`k` への `apply` を含む Core IR と LIR のテキストのスナップショット
+  - 新しいテスト (`crates/eml_core_ir/tests/optimize.rs`): `a_clause_copy_is_copied_for_each_continuation`、`a_clause_copy_drops_the_captures_instead_of_k`、`a_clause_copy_with_a_handle_is_not_copied_for_its_continuation`
 - T-8:
   - T-6 で通らなくなったものと、T-6 で消えた `Call::Apply::source_ret`、`uniform apply`、場所の Repr の構文に関わるものは、T-6 の行に移した。下の一覧のうち、まだ残るのは `a_mismatch_between_different_types_is_internal`、`a_tail_call_between_reprs_of_different_types_is_not_compiled`、`the_capture_count_is_packed_with_the_function`、`typed_benches_do_not_convert` と、2つの UI テストの移動である
   - 種類1: `crates/eml_vm/tests/conversions.rs` の `a_uniform_site_converts_into_and_out_of_a_typed_function`、`a_closure_keeps_a_float_capture_raw`、`a_partial_application_by_the_vm_lays_out_raw_words`、`apply_rest_keeps_raw_words`、`a_mismatch_between_different_types_is_internal`、`a_tail_call_between_reprs_of_different_types_is_not_compiled`、`a_signature_too_long_to_pack_is_compared_by_its_reprs`、`a_boxed_argument_frees_a_unique_box`、`a_boxed_argument_decrefs_a_shared_box`、`a_typed_site_boxes_into_a_uniform_function` を消す

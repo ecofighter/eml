@@ -2,16 +2,16 @@
 //! `perform` の地点からの続きを継続の関数にし、合流のブロックからの続きを合流のブロックの関数にする (`region`)。
 //! すぐに再開する節の本体を写して (`clause_blocks`) `perform` の地点に展開し (`inline_clause`)、引数を置き換えて
 //! 定数になった `switch` を合う行き先へのジャンプにする (`blocks::constant_target`)。`k` を値として使う節は、`k` に継続の関数の閉包を受ける写し
-//! `<g>{k}` にする (`clause_with_k`)。展開で辺の入らなくなったブロックは、最後に落とす (`blocks::prune`)。
+//! `<g>{k}` にし (`clause_with_k`)、それを `perform` の地点の継続について複製する (`clause_with_continuation`)。展開で辺の入らなくなったブロックは、最後に落とす (`blocks::prune`)。
 
 use std::collections::{BTreeSet, HashMap, HashSet};
 
 use crate::tail::tail_position_call;
 use crate::{Block, Call, CoreFn, Rhs, Stmt, Term};
-use eml_lir::{Atom, BlockId, FnIdx, Repr, VarId, VarInfo};
+use eml_lir::{Atom, BlockId, FnIdx, Mark, Repr, VarId, VarInfo};
 
 use super::super::blocks::constant_target;
-use super::super::known::fresh;
+use super::super::known::{Callee, KnownClosure, apply_rewritable_to, fresh};
 
 /// ブロックごとの、合流のブロックか。合流のブロックは、入る辺が2本以上か、引数を持つブロックである。引数を持つ
 /// ブロックには、引数を渡す `jump` で入る (docs/spec/lir.md の「構造の規則」の R3 と R4)。`switch` の行き先は入る辺が
@@ -406,6 +406,183 @@ pub(crate) fn clause_with_k(
                     prompt: None,
                 };
             }
+        }
+    }
+    copy
+}
+
+/// 節の写し `<g>{k}` の `k` の位置を、そこへ渡す継続の関数の閉包 `closure continuation(捕獲…)` について開いた複製
+/// (docs/spec/core-ir.md の「節の写しの、継続についての複製」)。`k` の引数は捕獲ごとの新しい引数になる。その Repr
+/// と印は継続の関数の捕獲の位置の引数から写し、印は `k` の印を超えない。既知の閉包の複製 (`Specializer::copy`) と
+/// 同じ作り方である。`count` は捕獲の数である。
+///
+/// `k` への `apply` は、既知の閉包への `apply` と同じ規則 (`apply_rewritable_to`) で書き換えられるとき、
+/// `call continuation(捕獲…, 引数…)` にする。`mask` はそのまま残す。`drop k` は、`unr` でない捕獲の `drop` にする。
+/// 閉包を捨てると捕獲を手放すのと同じで、`unr` の捕獲は Perceus が手放す。それ以外の使う所では、その場で閉包を
+/// 作り直す。`unr` でない `k` は経路ごとに1回しか使われないので、捕獲もそれぞれの経路で1回だけ使われる。
+pub(crate) fn clause_with_continuation(
+    with_k: &CoreFn,
+    name: String,
+    continuation: FnIdx,
+    callee: &Callee,
+    count: usize,
+) -> CoreFn {
+    let mut copy = with_k.clone();
+    copy.name = name;
+    let params = copy.params().to_vec();
+    let at = params.len() - 2;
+    let k = params[at];
+    let info = copy.vars[k.0 as usize].clone();
+    let captures: Vec<VarId> = callee.params[..count]
+        .iter()
+        .map(|param| {
+            let mark = if param.mark.at_least(info.mark) {
+                info.mark
+            } else {
+                param.mark
+            };
+            fresh(
+                &mut copy.vars,
+                VarInfo {
+                    name: param.name.clone(),
+                    repr: param.repr,
+                    mark,
+                },
+            )
+        })
+        .collect();
+    copy.blocks[0]
+        .params
+        .splice(at..=at, captures.iter().copied());
+    let closure = KnownClosure {
+        function: continuation,
+        captures: captures.iter().copied().map(Atom::Var).collect(),
+    };
+    let released: Vec<VarId> = captures
+        .iter()
+        .copied()
+        .filter(|&capture| copy.mark(capture) != Mark::Unr)
+        .collect();
+    let rebuild = |vars: &mut Vec<VarInfo>, out: &mut Vec<Stmt>| {
+        if captures.is_empty() {
+            return Atom::Fn(continuation);
+        }
+        let var = fresh(vars, info.clone());
+        out.push(Stmt::Let {
+            var,
+            rhs: Rhs::MakeClosure(continuation, closure.captures.clone()),
+        });
+        Atom::Var(var)
+    };
+    // 捕獲がどれも `unr` の `drop k` は文ごと消え、その結果の `()` の変数は `()` に置き換える
+    let mut dropped = HashSet::new();
+    for block in 0..copy.blocks.len() {
+        let stmts = std::mem::take(&mut copy.blocks[block].stmts);
+        let mut out = Vec::with_capacity(stmts.len());
+        for mut stmt in stmts {
+            match &mut stmt {
+                Stmt::Let {
+                    var,
+                    rhs:
+                        Rhs::Call {
+                            call:
+                                Call::Apply {
+                                    callee: Atom::Var(target),
+                                    args,
+                                    ..
+                                },
+                            mask,
+                        },
+                } if *target == k
+                    && apply_rewritable_to(&copy.vars, &closure, callee, *var, args, mask) =>
+                {
+                    let mut given = closure.captures.clone();
+                    given.extend(args.iter().copied());
+                    out.push(Stmt::Let {
+                        var: *var,
+                        rhs: Rhs::Call {
+                            call: Call::Direct(continuation, given),
+                            mask: std::mem::take(mask),
+                        },
+                    });
+                    continue;
+                }
+                Stmt::Let {
+                    var,
+                    rhs: Rhs::Drop(Atom::Var(target)),
+                } if *target == k => {
+                    let mut vars = released.iter().copied();
+                    match vars.next() {
+                        Some(first) => out.push(Stmt::Let {
+                            var: *var,
+                            rhs: Rhs::Drop(Atom::Var(first)),
+                        }),
+                        None => {
+                            dropped.insert(*var);
+                        }
+                    }
+                    for capture in vars {
+                        let unit = fresh(
+                            &mut copy.vars,
+                            VarInfo {
+                                name: "u".to_string(),
+                                repr: Repr::Unit,
+                                mark: Mark::Unr,
+                            },
+                        );
+                        out.push(Stmt::Let {
+                            var: unit,
+                            rhs: Rhs::Drop(Atom::Var(capture)),
+                        });
+                    }
+                    continue;
+                }
+                _ => {}
+            }
+            let mut uses = false;
+            stmt.for_each_atom(|atom| uses |= atom == Atom::Var(k));
+            if uses {
+                let value = rebuild(&mut copy.vars, &mut out);
+                if let Stmt::Let { var: _, rhs } = &mut stmt {
+                    rhs.for_each_atom_mut(|atom| {
+                        if *atom == Atom::Var(k) {
+                            *atom = value;
+                        }
+                    });
+                }
+            }
+            out.push(stmt);
+        }
+        let mut uses = false;
+        copy.blocks[block]
+            .term
+            .for_each_atom(|atom| uses |= atom == Atom::Var(k));
+        if uses {
+            let value = rebuild(&mut copy.vars, &mut out);
+            copy.blocks[block].term.for_each_atom_mut(|atom| {
+                if *atom == Atom::Var(k) {
+                    *atom = value;
+                }
+            });
+        }
+        copy.blocks[block].stmts = out;
+    }
+    if !dropped.is_empty() {
+        for block in &mut copy.blocks {
+            for stmt in &mut block.stmts {
+                if let Stmt::Let { var: _, rhs } = stmt {
+                    rhs.for_each_atom_mut(|atom| {
+                        if matches!(atom, Atom::Var(var) if dropped.contains(var)) {
+                            *atom = Atom::Unit;
+                        }
+                    });
+                }
+            }
+            block.term.for_each_atom_mut(|atom| {
+                if matches!(atom, Atom::Var(var) if dropped.contains(var)) {
+                    *atom = Atom::Unit;
+                }
+            });
         }
     }
     copy

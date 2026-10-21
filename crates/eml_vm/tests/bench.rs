@@ -1121,7 +1121,7 @@ fn unwind_points() {
     scripts/wc: 44
     scripts/grep: 59
     scripts/logstat: 98
-    scripts/csv2jsonl: 106
+    scripts/csv2jsonl: 109
     scripts/deploy: 109
     ");
 }

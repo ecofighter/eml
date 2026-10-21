@@ -2385,8 +2385,9 @@ b5:
     "#);
 }
 
-/// handler への特殊化が作る関数 (`f{H}` と、節の写し `<g>{k}`) は `split` を持たない。直接呼ばれるか、特殊化した経路の
-/// 中で型どおりに呼ばれるためである。`<g>{k}` は `k` を `apply` で呼ぶ (docs/spec/lir.md の「関数の ABI」)。
+/// handler への特殊化が作る関数 (`f{H}` と、節の写しの複製 `<g>{k}{…}`) は `split` を持たない。直接呼ばれるか、
+/// 特殊化した経路の中で型どおりに呼ばれるためである。複製は `k` を `apply` で呼ばず、継続の関数を直接呼ぶ
+/// (docs/spec/core-ir.md の「節の写しの、継続についての複製」)。
 #[test]
 fn handler_specialization_functions_are_typed() {
     let program =
@@ -2408,30 +2409,39 @@ fn handler_specialization_functions_are_typed() {
     let copy = program
         .functions
         .iter()
-        .find(|function| function.name.ends_with("{k}"))
-        .unwrap_or_else(|| panic!("no `<g>{{k}}` in\n{shown}"));
+        .find(|function| function.name.contains("{k}{"))
+        .unwrap_or_else(|| panic!("no `<g>{{k}}{{…}}` in\n{shown}"));
     assert_eq!(copy.split, None, "{shown}");
-    let applies = copy
-        .blocks
-        .iter()
-        .flat_map(|block| &block.stmts)
-        .filter(|stmt| {
-            matches!(
-                stmt,
+    let calls = |continued: bool| {
+        copy.blocks
+            .iter()
+            .flat_map(|block| &block.stmts)
+            .filter(|stmt| match stmt {
                 Stmt::Let {
-                    rhs: Rhs::Call {
-                        call: Call::Apply { .. },
-                        ..
-                    },
+                    rhs:
+                        Rhs::Call {
+                            call: Call::Apply { .. },
+                            ..
+                        },
                     ..
-                }
-            )
-        })
-        .count();
-    assert!(applies > 0, "{shown}");
+                } => !continued,
+                Stmt::Let {
+                    rhs:
+                        Rhs::Call {
+                            call: Call::Direct(target, _),
+                            ..
+                        },
+                    ..
+                } => continued && program.function(*target).name.ends_with("$h0"),
+                _ => false,
+            })
+            .count()
+    };
+    assert_eq!(calls(false), 0, "{shown}");
+    assert!(calls(true) > 0, "{shown}");
 }
 
-/// 節の写し `<g>{k}` が展開されずに残るプログラム。`state_loop` の節はすぐに再開するので写しを作らない。この節は `k` を
+/// 節の写しの複製 `<g>{k}{…}` が展開されずに残るプログラム。`state_loop` の節はすぐに再開するので写しを作らない。この節は `k` を
 /// 末尾でなく呼ぶので写しになり、本体が展開の上限より大きいので複製に展開されない。
 const CLAUSE_WITH_K: &str = "\
 effect Ask where
@@ -2447,6 +2457,138 @@ main () =
       let v = k 10
       v * 1 + v * 2 + v * 3 + v * 4 + v * 5 + v * 6 + v * 7 + v * 8 + v * 9 + v * 10 + v * 11 + v * 12 + v * 13 + v * 14 + v * 15 + v * 16 + v * 17 + v * 18 + v * 19 + v * 20 + v * 21 + v * 22 + v * 23 + v * 24 + v * 25 + v * 26 + v * 27 + v * 28 + v * 29
   println (show r)
+";
+
+/// 節の写しは、`perform` の地点ごとに、そこで渡す継続の関数について複製される。複製は `k` を継続の関数の捕獲の
+/// 引数に開き、`k` への `apply` を継続の関数の直接の呼び出しにする。もとの写し `<g>{k}` は呼ばれなくなって消える
+/// (docs/spec/core-ir.md の「節の写しの、継続についての複製」)。
+#[test]
+fn a_clause_copy_is_copied_for_each_continuation() {
+    let program = eml_test_support::core_until(TWO_ASKS, Pass::Optimize);
+    let shown = pretty(&program);
+    let copies: Vec<&eml_core_ir::CoreFn> = program
+        .functions
+        .iter()
+        .filter(|function| function.name.contains("{k}"))
+        .collect();
+    let mut names: Vec<&str> = copies.iter().map(|copy| copy.name.as_str()).collect();
+    names.sort();
+    assert_eq!(
+        names,
+        [
+            "main$handle0$ask{k}{1=sum{H=main$handle0$return}$h0/2}",
+            "main$handle0$ask{k}{1=sum{H=main$handle0$return}$h1/3}",
+        ],
+        "{shown}"
+    );
+    let copy = function(&shown, names[1]);
+    let head: Vec<&str> = copy.lines().take(2).collect();
+    insta::assert_snapshot!(head.join("\n"), @r#"
+    fn "main$handle0$ask{k}{1=sum{H=main$handle0$return}$h1/3}"(p.0: unit, acc.61: int, n.62: int, t.63: int, p.2: unit) -> int {
+      let t.3: int = call "sum{H=main$handle0$return}$h1"(acc.61, n.62, t.63, 10)
+    "#);
+    assert!(!copy.contains("apply "), "{copy}");
+}
+
+/// `perform` の地点が2つある経路の関数。節は `k` を末尾でなく呼ぶので写しになり、展開の上限より大きいので複製に
+/// 展開されない。
+const TWO_ASKS: &str = "\
+effect Ask where
+  ask : Unit -> Int
+
+sum : Int -> Int -> <Ask, Panic> Int
+sum acc n =
+  if n <= 0 then acc
+  else
+    let a = ask ()
+    let b = ask ()
+    sum (acc + a * b) (n - 1)
+
+main : Unit -> <IO, Panic> Unit
+main () =
+  let r = handle sum 0 3 with
+    | ctl ask () k ->
+      let v = k 10
+      v * 1 + v * 2 + v * 3 + v * 4 + v * 5 + v * 6 + v * 7 + v * 8 + v * 9 + v * 10 + v * 11 + v * 12 + v * 13 + v * 14 + v * 15 + v * 16 + v * 17 + v * 18 + v * 19 + v * 20 + v * 21 + v * 22 + v * 23 + v * 24 + v * 25 + v * 26 + v * 27 + v * 28 + v * 29
+  println (show r)
+";
+
+/// `k` を捨てる節の複製は、閉包を作り直して捨てるのでなく、`unr` でない捕獲だけを捨てる。ここでは捕獲の `File` を
+/// 捨て、複製と継続の関数は小さいので呼ぶ側に展開される (docs/spec/core-ir.md の「節の写しの、継続についての複製」)。
+#[test]
+fn a_clause_copy_drops_the_captures_instead_of_k() {
+    let shown = core_text(DROPPED_K, Pass::Optimize);
+    insta::assert_snapshot!(function(&shown, "entry$main"), @r#"
+    fn entry$main() -> unit {
+      let s.1: obj = const "input.txt"
+      let t.2: obj lin = extern Std.Fs.open(s.1)
+      let t.3: unit = drop t.2
+      let s.4: obj = const "dropped"
+      let t.5: unit = extern Prelude.println(s.4)
+      return t.5
+    }
+    "#);
+}
+
+/// `once` の操作の節で、`File` を生きている変数に持つ経路の関数。節は `k` を捨てる。
+const DROPPED_K: &str = "\
+effect Ask where
+  ask : Unit -> Int
+
+read_after : Fs.File -> <Ask, IO> Unit
+read_after f =
+  let n = ask ()
+  Fs.close f
+
+main : Unit -> <IO> Unit
+main () =
+  let f = Fs.open \"input.txt\"
+  handle read_after f with
+    | ctl ask () k ->
+        drop k
+        println \"dropped\"
+";
+
+/// 本体に `handle` を持つ節の写しは、継続について複製しない。複製すると中の `handle` が写り、節の関数がちょうど1つの
+/// `handle` に属するという EP の前提に反するためである (docs/spec/core-ir.md の「節の写しの、継続についての複製」)。
+#[test]
+fn a_clause_copy_with_a_handle_is_not_copied_for_its_continuation() {
+    let program = eml_test_support::core_until(HANDLE_IN_CLAUSE, Pass::Optimize);
+    let shown = pretty(&program);
+    assert!(
+        program
+            .functions
+            .iter()
+            .all(|function| !function.name.contains("{k}{")),
+        "{shown}"
+    );
+    assert!(shown.contains("{k}\"("), "{shown}");
+}
+
+/// 節の本体に `handle` がある handler。節の本体は展開の上限より大きいので、写しが残る。
+const HANDLE_IN_CLAUSE: &str = "\
+effect Ask where
+  ask : Unit -> Int
+
+effect Tell where
+  tell : Int -> Unit
+
+sum : Int -> Int -> <Ask, Panic> Int
+sum acc n = if n <= 0 then acc else sum (acc + ask ()) (n - 1)
+
+main : Unit -> <IO, Panic> Unit
+main () =
+  let r = handle sum 0 3 with
+    | ctl ask () k ->
+      let v = k 10
+      let w = handle quiet () with | fn tell x -> ()
+      w + v * 1 + v * 2 + v * 3 + v * 4 + v * 5 + v * 6 + v * 7 + v * 8 + v * 9 + v * 10 + v * 11 + v * 12 + v * 13 + v * 14 + v * 15 + v * 16 + v * 17 + v * 18 + v * 19 + v * 20 + v * 21 + v * 22 + v * 23 + v * 24 + v * 25 + v * 26 + v * 27 + v * 28 + v * 29
+  println (show r)
+
+quiet : Unit -> <Tell> Int
+quiet () =
+  tell 1
+  2
 ";
 
 /// `con` の複製は、開いた位置より後ろの一様な引数だけを一様に保ち、結果は一様なまま写す。一様な引数の位置を開く `r` の
