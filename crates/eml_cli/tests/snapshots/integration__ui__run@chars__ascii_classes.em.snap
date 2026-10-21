@@ -1,0 +1,15 @@
+---
+source: crates/eml_cli/tests/ui.rs
+expression: "format!(\"--- stdout ---\\n{stdout}--- stderr ---\\n{diagnostics}{stderr}{written}{exit}\")"
+input_file: tests/ui/run/chars/ascii_classes.em
+---
+--- stdout ---
+digit 10
+upper 26
+lower 26
+alpha 52
+alphanumeric 62
+space 6
+ascii 128
+False
+--- stderr ---

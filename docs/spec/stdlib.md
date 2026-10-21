@@ -209,12 +209,22 @@ pub while : (Unit -> <e> Bool) -> (Unit -> <e> Unit) -> <e> Unit
 |---|---|---|
 | `to_int` | `Char -> Int` | extern |
 | `of_int` | `Int -> <Panic> Char` | extern |
+| `is_ascii` | `Char -> Bool` | eml |
+| `is_ascii_digit` | `Char -> Bool` | eml |
+| `is_ascii_upper` | `Char -> Bool` | eml |
+| `is_ascii_lower` | `Char -> Bool` | eml |
+| `is_ascii_alpha` | `Char -> Bool` | eml |
+| `is_ascii_alphanumeric` | `Char -> Bool` | eml |
+| `is_ascii_space` | `Char -> Bool` | eml |
 
 `Float` と同じく、モジュールで修飾して使う (`Char.to_int c`)。
 
 - `to_int c` は `c` のコードポイントで、0 から 0xD7FF か 0xE000 から 0x10FFFF の `Int` である。`Char` と `Int` は同じ語なので、実行時には何もしない
 - `of_int n` は、`n` がスカラー値 (0 から 0xD7FF か 0xE000 から 0x10FFFF) のときにその `Char` を返す。ほかの値 (負の数、サロゲート、0x10FFFF を超える値) では `Panic` を起こす。文言は ``int `55296` is not a Unicode scalar value`` である (下の「実行時エラー」)
 - `Option` ではなく `Panic` にするのは `Float.truncate` と合わせるためで、extern が `Option` を作れないためでもある
+- `is_ascii` は U+0000 から U+007F の文字で成り立つ。`is_ascii_digit` は `'0'` から `'9'`、`is_ascii_upper` は `'A'` から `'Z'`、`is_ascii_lower` は `'a'` から `'z'` で成り立つ。`is_ascii_alpha` は upper か lower、`is_ascii_alphanumeric` は alpha か digit で成り立つ
+- `is_ascii_space` は `' '` と、`'\t'` から `'\r'` (U+0009 から U+000D) で成り立つ。`Std.String` の空白の判定と同じ範囲である
+- どの判定も、ASCII 以外の文字では偽である
 
 ## `Std.Array`
 
