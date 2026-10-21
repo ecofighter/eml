@@ -1,7 +1,7 @@
 # バイト列とハンドルの段
 
 - 作成: 2026-10-22
-- 状態: 計画は確定。関門 T-19 の結果で、行を読む道の写しの回数が決まる (U-1)。T-28 は条件付きの任意のタスクである
+- 状態: 計画は確定。関門 T-19 を通り、行を読む道は1行に1回の写しに決まった (U-1)。T-28 は条件付きの任意のタスクである
 - 付録: `docs/plans/2026-10-22-bytes-and-handles/` (`tests.md` にハンドルのテストの本文と期待する出力、`rust-start/` に Rust の基準の出発点)
 
 ## 1. 目的と完了の条件
@@ -699,13 +699,29 @@ pub class Bits a where
 
 | ID | 項目 | 影響 | 決め方と時期 | 決まらないときの既定 |
 |---|---|---|---|---|
-| U-1 | T-19 の関門の結果 | T-20〜T-25 の行の読みの写しの回数 | T-19 で決め、ここに書いてコミットする | 1行に1回の写し。通らなければ2回 |
+| U-1 | T-19 の関門の結果 | T-20〜T-25 の行の読みの写しの回数 | 決まった (T-19 で関門を通った。下の「U-1 の結果」) | 1行に1回の写し |
 | U-2 | 一意な物体の種類の書き換え | `string_bytes_copied` | T-28 の条件 | この段で行わず「その後の項目」へ |
 | U-3 | `read_into` (T11。Host の読みを一意な `Bytes` の空きに直接書く) | `read-all-bytes` の予算、wc の約 13 ms | ネイティブ化の段。引き金はネイティブで `bench/rt.sh` の `read-all-bytes` が Rust の `read_to_end` の 1.3 倍を超えること | 入れない。入れるときの約束: `read_into(h, cap, at, file, control) -> Result<usize, Failure>` は窓 (`8*(cap-1) - at` バイト) を1回0で埋めてから読み、窓より大きい `n` を返す Host の読み手を断り (`Failure::Io(Other)`。そういう読み手の Miri のテスト)、読んだバイトで ghost の列を伸ばす。それを包む検証したループが、一意な物体を倍にして伸ばし (`bytes_grow`、`eml_rt` の中だけ)、EOF か予算で止まる |
 | U-4 | 部分文字列の探索のアルゴリズム | grep の比 | T-17 で std の2倍を超えたら | 先頭バイトの走査と比較。超えたら同じ行の中で Two-Way にする |
 | U-5 | `Byte` と `Bits` の専用の VM の命令 | VM の命令の数 | `bench/` かスクリプトで汎用の `Op::Extern` の費用が目立つとき | 足さない |
 | U-6 | `pop_count`、`test_bit`、`count_leading_zeros`、`count_trailing_zeros`、`Int` の論理右シフト、`Char` の形の `Byte` のリテラル (`b'"'`)、`reserve`、先頭をその場で切ること、`read_chunk` の大きさの引数 | なし | 要る用途が出たとき (`Char` の形のリテラルは第3段で、識別子にならない接頭辞とともに見直す) | 入れない。論理右シフトは `(x >>> n) &&& ((1 <<< (64 - n)) - 1)` (0 < n < 64) で書ける |
 | U-7 | `Bytes` と `String` の名前 (短い名前をどちらに渡すか) | `Stdin`/`Fs` の行の名前 | 第3段 | この段では `String` が短い名前 (`read_all`、`read_line`) を持つ |
+
+### U-1 の結果
+
+- 関門は通った。行を読む道は1行に1回の写しにする (D-15 の本来の形)。`Vec` に集める2回の写しの形は使わない
+- 試作: 枝 `proto/t19-reader-slice` のコミット `c41b4cc0` (base は `9cdb95b2`。merge しない)。`host.rs` に `Reader`、`external_body` の `fill<'a>(r: *mut Reader, control: &Control) -> Result<&'a [u8], Failure>` と `consume(r, n)` を置き (T11 に3行)、検証した `Ctx::reader_line(r)` が、借りた `Foreign` の `Reader` の buffer の slice を `alloc_bytes` と `bytes_extend` にそのまま渡す。`r` の参照は呼ぶ側に残り、読みの誤りと止めたときは途中まで読んだ行を手放す
+- 関門の結果:
+  - `cargo verus verify -p eml_rt` (新しい `CARGO_TARGET_DIR`): `verification results:: 974 verified, 0 errors`
+  - Miri の `trusted::reader_line_*` (`reader_line_within_one_buffer`、`reader_line_across_two_refills`、`reader_line_interrupted_mid_line`。それぞれ速いモードと検査モード): `-Zmiri-strict-provenance` で 6 passed、`-Zmiri-tree-borrows` を足して 6 passed
+  - `bench/run.sh` (どちらもきれいな作業ツリー): 37 のプログラムの命令の数の差は、base に対してどれも 0.3% 以内 (最大は `empty` の -0.284%、ほかは -0.232%〜+0.146%)。run-to-run の揺れの範囲である
+- T-20 以降に効くこと:
+  - `bytes_extend` は試作で、`push_unchecked` を写した `bytes_push_unchecked` と、`Tail::Body(h, len)` (バイト列の物体の全体を写す。UTF-8 の境目を求めない) で作った。`write_in_place`、`release_text`、`lemma_text_set`、`lemma_safe_text_set` の前提は、種類 `String` から `has_body()` に広げるだけで通った。`Tail` に腕を足しても bench の命令の数は変わらなかった
+  - `Ctx` の証明でループをつなぐには、`pushed` だけでは足りない。`h0` で生きていた物体が残ること (`no_free`) を言うため、`bytes_extend` は `others_kept(old, left)` (left のほかの生きている物体は同じブロックのまま生きている) と `settled()` も約束した。ループの不変条件は「`h0` から `moved(0, {})` かつ `no_free` で、行の物体は `h0` で生きていなかった」で、作るたび、伸ばすたびに保てた
+  - `extend_ok` と `others_kept` は `heap/mod.rs` に置く。closed な spec の中身は定義した module とその下からしか見えず、`heap/string.rs` に置くと `heap::ctx` の証明から開けなかった
+  - 行のループの止まることは、読んだ長さ `total` を `checked_add` で数え、`decreases usize::MAX - total` で示した (補充の空でない塊は少なくとも1バイト足す)。信頼の行 (`exec_allows_no_decreases_clause`) は要らない
+  - 試作は `File` を変えず、`Reader` を直接 `Foreign` に入れた。誤りは `Fault::Stdin(reason)` で返した。T-20 は `File { path, reader: Reader, size }` にし、`fill` は `File` の欄のポインタを受けるか、誤りにパスを付ける形にする
+  - `fill` は、止める語の立っていない `Interrupted` を読み直し、立っていれば次の周回の確かめで止める。確保量は `control.over_budget(0)` で見た
 
 ## 付録: レビューで変わった主なこと
 
