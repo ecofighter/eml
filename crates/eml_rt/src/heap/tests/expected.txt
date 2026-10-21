@@ -2627,6 +2627,28 @@ Prelude.Ord Int.>=	i:3124598908270	i:-576621991	=> b:True
 Prelude.Ord Int.>=	i:598062959422	i:-19933768	=> b:True
 Prelude.Ord Int.>=	i:-14	i:8809924004734011	=> b:False
 Prelude.Ord Int.>=	i:15961653	i:77128808	=> b:False
+Std.Char.of_int	i:-1	=> err:"int `-1` is not a Unicode scalar value"
+Std.Char.of_int	i:0	=> i:0
+Std.Char.of_int	i:55295	=> i:55295
+Std.Char.of_int	i:55296	=> err:"int `55296` is not a Unicode scalar value"
+Std.Char.of_int	i:57343	=> err:"int `57343` is not a Unicode scalar value"
+Std.Char.of_int	i:57344	=> i:57344
+Std.Char.of_int	i:1114111	=> i:1114111
+Std.Char.of_int	i:1114112	=> err:"int `1114112` is not a Unicode scalar value"
+Std.Char.of_int	i:-9223372036854775808	=> err:"int `-9223372036854775808` is not a Unicode scalar value"
+Std.Char.of_int	i:9223372036854775807	=> err:"int `9223372036854775807` is not a Unicode scalar value"
+Std.Char.to_int	i:0	=> i:0
+Std.Char.to_int	i:65	=> i:65
+Std.Char.to_int	i:97	=> i:97
+Std.Char.to_int	i:127	=> i:127
+Std.Char.to_int	i:128	=> i:128
+Std.Char.to_int	i:233	=> i:233
+Std.Char.to_int	i:55295	=> i:55295
+Std.Char.to_int	i:57344	=> i:57344
+Std.Char.to_int	i:65535	=> i:65535
+Std.Char.to_int	i:65536	=> i:65536
+Std.Char.to_int	i:128512	=> i:128512
+Std.Char.to_int	i:1114111	=> i:1114111
 Prelude.Eq Char.==	i:0	i:0	=> b:True
 Prelude.Eq Char.==	i:0	i:65	=> b:False
 Prelude.Eq Char.==	i:0	i:97	=> b:False

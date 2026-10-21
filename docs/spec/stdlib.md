@@ -20,9 +20,9 @@ eml run --debug-heap wc.em -l input.txt
 
 ## extern の境界
 
-標準ライブラリの extern は小さい核にとどめ、便利な関数は eml で書く。extern の境界では、スカラー (`Int`、`Float`、`Bool`、`Unit`)、文字列、`Foreign` だけを受け渡し、`List` と `Option` は eml の側で組む。`eml_rt` がデータの配置を知らないで済むようにするためである ([Core IR](core-ir.md) の「translate の配置」)。そのため、`pub` でない extern は番兵 (見つからない位置の -1、終わりの空の文字列など) を返すことがある。番兵は標準ライブラリの中に閉じ込め、利用者には `Option` で見せる。
+標準ライブラリの extern は小さい核にとどめ、便利な関数は eml で書く。extern の境界では、スカラー (`Int`、`Float`、`Char`、`Bool`、`Unit`)、文字列、`Foreign` だけを受け渡し、`List` と `Option` は eml の側で組む。`eml_rt` がデータの配置を知らないで済むようにするためである ([Core IR](core-ir.md) の「translate の配置」)。そのため、`pub` でない extern は番兵 (見つからない位置の -1、終わりの空の文字列など) を返すことがある。番兵は標準ライブラリの中に閉じ込め、利用者には `Option` で見せる。
 
-文字の型がないので、文字列の位置は UTF-8 のバイトの位置 (`Int`) で表す。引数の順は、対象を最後に置く。`line |> String.split ","` と部分適用で使えるようにするためである。
+文字列の位置は UTF-8 のバイトの位置 (`Int`) で表す。引数の順は、対象を最後に置く。`line |> String.split ","` と部分適用で使えるようにするためである。
 
 ## `Prelude`
 
@@ -102,7 +102,7 @@ try_panic action =
 
 | `Fault` | 起こす関数 |
 |---|---|
-| `Arith(_)` | `+`、`-`、`*`、`/`、`%`、単項の `-`。`Float.truncate`、`Float.floor`、`Float.ceil`、`Float.round` (`Int` に収まらない値) と `Float.to_fixed` (桁数) |
+| `Arith(_)` | `+`、`-`、`*`、`/`、`%`、単項の `-`。`Float.truncate`、`Float.floor`、`Float.ceil`、`Float.round` (`Int` に収まらない値)、`Float.to_fixed` (桁数)、`Char.of_int` (スカラー値でない値) |
 | `Index(_)` | `String.byte_at`、`String.slice`、`String.find_from` と、それらを使う std の関数。`Array.get`、`Array.set`、`Array.make`、`MutArray.read`、`MutArray.write`、`MutArray.make` (添字の範囲と負の長さ) と、添字の式が使う `check_index`。`Env.arg` の範囲の外の位置も `Index` だが、`Env.arg` は std の中だけで使うので、利用者のプログラムでは起きない |
 
 ## `exit`
@@ -202,6 +202,19 @@ pub while : (Unit -> <e> Bool) -> (Unit -> <e> Unit) -> <e> Unit
 - `to_fixed n x` は、小数点以下 `n` 桁の文字列で、Python の `f"{x:.{n}f}"` と同じである。10進の値を正しく丸め、ちょうど中間なら偶数の側を選ぶ (`to_fixed 0 2.5` は `"2"`、`to_fixed 2 1.005` は `"1.00"`)。特別な値は `inf`、`-inf`、`nan` と書き、`-0.0` は `-` を付ける。`n` が 0 から 100 の外なら `Panic` を起こす
 - `parse s` は、前後の Unicode の空白を除き、Rust の `f64::from_str` が受ける形を読む。符号、10進と指数の形 (`1.5`、`.5`、`5.`、`1E-5`、`1e+16`)、大文字小文字を問わない `inf`、`infinity`、`nan` である。Python の `float` と違い、数字の間の `_` は受けない。読めなければ `None` で、大きすぎる値は無限大になる。`parse (show x)` は、どの `x` でも同じ値を返す
 - `parse` は、std の中だけの2つの `Pure` の extern で書いてある。`can_parse : String -> Bool` が読めるかを返し、`parse_raw : String -> Float` が値を返す (読めなければ NaN。読めた `nan` と区別するため、`parse` は NaN のときだけ `can_parse` を呼ぶ) (上の「extern の境界」)
+
+## `Std.Char`
+
+| 名前 | 型 | 実装 |
+|---|---|---|
+| `to_int` | `Char -> Int` | extern |
+| `of_int` | `Int -> <Panic> Char` | extern |
+
+`Float` と同じく、モジュールで修飾して使う (`Char.to_int c`)。
+
+- `to_int c` は `c` のコードポイントで、0 から 0xD7FF か 0xE000 から 0x10FFFF の `Int` である。`Char` と `Int` は同じ語なので、実行時には何もしない
+- `of_int n` は、`n` がスカラー値 (0 から 0xD7FF か 0xE000 から 0x10FFFF) のときにその `Char` を返す。ほかの値 (負の数、サロゲート、0x10FFFF を超える値) では `Panic` を起こす。文言は ``int `55296` is not a Unicode scalar value`` である (下の「実行時エラー」)
+- `Option` ではなく `Panic` にするのは `Float.truncate` と合わせるためで、extern が `Option` を作れないためでもある
 
 ## `Std.Array`
 
@@ -427,6 +440,7 @@ I/O の失敗の一部は `try_io` で捕まえられる (上の「`try_io`」)�
 | `slice` の境界 | ``string slice 1..3 is not on a character boundary`` |
 | `Float.truncate`、`floor`、`ceil`、`round` の範囲の外 | `` float `1e+19` does not fit in `Int` `` (値は `show` の形) |
 | `Float.to_fixed` の桁数 | `` `to_fixed` takes 0 to 100 digits, not 101 `` |
+| `Char.of_int` の引数 | ``int `55296` is not a Unicode scalar value`` |
 | 配列の添字の範囲の外 (`get`、`set`、`read`、`write`) | ``array index 3 is out of range for length 3`` |
 | 配列の負の長さ (`make`、`tabulate`) | ``array length -1 is negative`` |
 | `Fs.write_text` | ``cannot write `out.txt`: permission denied`` |

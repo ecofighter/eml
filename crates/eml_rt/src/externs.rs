@@ -49,6 +49,8 @@ pub enum ArithFault {
     FloatToInt(u64),
     /// `Float.to_fixed` の桁数が 0 から 100 の外にある。
     FixedDigits(i64),
+    /// `Char.of_int` の引数が Unicode のスカラー値でない。
+    NotScalar(i64),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -189,6 +191,27 @@ impl From<ArithFault> for Fault {
 impl From<HeapError> for Fault {
     fn from(error: HeapError) -> Fault {
         Fault::Heap(error)
+    }
+}
+
+/// Unicode のスカラー値: サロゲート (0xD800 から 0xDFFF) を除く 0 から 0x10FFFF (docs/spec/lir.md の「値の表現」)。
+pub open spec fn is_scalar(n: int) -> bool {
+    (0 <= n <= 0xD7FF) || (0xE000 <= n <= 0x10FFFF)
+}
+
+// 範囲を比較で書くのは、vstd の `Range::contains` の約束を信頼せずに済むようにするためである
+#[allow(clippy::manual_range_contains)]
+#[inline]
+pub fn char_of_int(n: i64) -> (r: Result<i64, ArithFault>)
+    ensures
+        r is Ok <==> is_scalar(n as int),
+        r matches Ok(v) ==> v == n,
+        r is Err ==> r == Err::<i64, ArithFault>(ArithFault::NotScalar(n)),
+{
+    if (0 <= n && n <= 0xD7FF) || (0xE000 <= n && n <= 0x10FFFF) {
+        Ok(n)
+    } else {
+        Err(ArithFault::NotScalar(n))
     }
 }
 
@@ -805,6 +828,7 @@ impl fmt::Display for ArithFault {
                 float_repr(f64::from_bits(*bits))
             ),
             ArithFault::FixedDigits(n) => write!(f, "`to_fixed` takes 0 to 100 digits, not {n}"),
+            ArithFault::NotScalar(n) => write!(f, "int `{n}` is not a Unicode scalar value"),
         }
     }
 }

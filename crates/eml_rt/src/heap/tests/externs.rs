@@ -1337,6 +1337,8 @@ unsafe fn call<M: Mode>(
             }
             "Prelude.shows_minus" => tag_bool(float_shows_minus(float(0))),
             "Std.Float.of_int" => float_result(float_of_int(int(0))),
+            "Std.Char.to_int" => Outcome::Int(int(0)),
+            "Std.Char.of_int" => Outcome::Int(char_of_int(int(0))?),
             "Std.Float.truncate" => Outcome::Int(float_truncate(float(0))?),
             "Std.Float.floor" => Outcome::Int(float_floor(float(0))?),
             "Std.Float.ceil" => Outcome::Int(float_ceil(float(0))?),

@@ -685,3 +685,18 @@ fn main(f.0: tobj, x.1: tobj) -> tobj {
          8  tail_apply s0(s1, s2)
     ");
 }
+
+/// `Char.to_int` は語を変えないので、`extern` でなく `move` になる (docs/spec/vm.md の「基本操作と extern」)。
+#[test]
+fn char_to_int_is_a_move() {
+    let text = disasm(
+        "\
+fn f(c.0: int) -> int {
+  let n.1: int = extern \"Std.Char.to_int\"(c.0)
+  return n.1
+}
+",
+    );
+    assert!(text.contains("move"), "{text}");
+    assert!(!text.contains("extern"), "{text}");
+}

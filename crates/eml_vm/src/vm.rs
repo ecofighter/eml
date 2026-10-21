@@ -1004,6 +1004,10 @@ fn run_extern<M: Mode>(
                 let n = convert(task.float(arg(0))).map_err(Fault::Arith)?;
                 task.set_raw(dst, n);
             }
+            Extern::CharOfInt => {
+                let c = externs::char_of_int(task.raw(arg(0))).map_err(Fault::Arith)?;
+                task.set_raw(dst, c);
+            }
             Extern::FloatSqrt
             | Extern::FloatAbs
             | Extern::FloatSin
@@ -1091,6 +1095,7 @@ fn run_extern<M: Mode>(
             | Extern::CharLe
             | Extern::CharGt
             | Extern::CharGe
+            | Extern::CharToInt
             | Extern::FloatNeg
             | Extern::FloatAdd
             | Extern::FloatSub

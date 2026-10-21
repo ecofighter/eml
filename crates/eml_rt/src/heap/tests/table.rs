@@ -145,6 +145,20 @@ pub const CHAR_EDGES: [i64; 12] = [
     0x0, 0x41, 0x61, 0x7f, 0x80, 0xe9, 0xd7ff, 0xe000, 0xffff, 0x1_0000, 0x1_f600, 0x10_ffff,
 ];
 
+/// `Char.of_int` の引数。スカラー値の両端、サロゲートの前後、範囲の外
+pub const CHAR_OF_INT: [i64; 10] = [
+    -1,
+    0,
+    0xd7ff,
+    0xd800,
+    0xdfff,
+    0xe000,
+    0x10_ffff,
+    0x11_0000,
+    i64::MIN,
+    i64::MAX,
+];
+
 /// 文字を2つ取る行
 pub const CHAR_BINARY: [&str; 7] = [
     "Prelude.Eq Char.==",
@@ -567,6 +581,12 @@ pub fn inputs() -> Vec<(String, Vec<Arg>)> {
         for pair in ints.chunks(2) {
             push(name, vec![Arg::Int(pair[0]), Arg::Int(pair[1])]);
         }
+    }
+    for a in CHAR_OF_INT {
+        push("Std.Char.of_int", vec![Arg::Int(a)]);
+    }
+    for a in CHAR_EDGES {
+        push("Std.Char.to_int", vec![Arg::Int(a)]);
     }
     for name in CHAR_BINARY {
         for a in CHAR_EDGES {
