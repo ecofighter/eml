@@ -239,6 +239,82 @@ fn same(v.0: {V}) -> {V} {{
     );
 }
 
+/// 種類の等しい構造体の組は語の位置を変えないので、その隣のスカラーの引数だけをその場で箱に入れる。構造体の葉は
+/// 箱に入らない (docs/spec/vm.md の「シグネチャ」)。
+#[test]
+fn a_struct_beside_a_converted_scalar_keeps_its_leaves() {
+    let text = format!(
+        "{LAYOUTS}\
+fn main() -> unit {{
+  let v.0: {V} = con Vec3 #0(1.0, 2.0, 3.0)
+  let r.1: {V} = apply &shift(v.0, 4.0: float)
+  let u.2: unit = call check(r.1)
+  return u.2
+}}
+fn shift(v.0: {V}, k.1: tobj) -> {V} {{
+  unpack v.0 Vec3 #0(x.2: float, y.3: float, z.4: float)
+  let a.5: float = call plus(x.2, k.1)
+  let s.6: {V} = con Vec3 #0(a.5, y.3, z.4)
+  return s.6
+}}
+fn plus(a.0: float, b.1: float) -> float {{
+  let c.2: float = extern \"Prelude.Num Float.+\"(a.0, b.1)
+  return c.2
+}}
+{}",
+        prelude(523)
+    );
+    let (out, stats) = run_lowered_stats(&text);
+    let stats = stats.unwrap_or_else(|error| panic!("{error}"));
+    assert_eq!(out, "523\n");
+    // 作るのは `4.0` の箱だけである
+    assert_eq!(
+        (stats.conversions, stats.allocations),
+        (1, DUMMY + 1),
+        "{stats:?}"
+    );
+}
+
+/// 葉が1つの構造体は1語で渡り、型どおりの場所と関数の間では変換しない。一様な場所からは1つの葉を箱から取り出し、
+/// 結果をまた箱に入れる (docs/spec/vm.md の「シグネチャ」)。
+#[test]
+fn a_one_leaf_struct_crosses_an_apply_in_one_word() {
+    let m = "M{float}";
+    let text = format!(
+        "\
+layout M {{ M(float) }}
+fn main() -> unit {{
+  let m.0: {m} = con M #0(2.5)
+  let r.1: {m} = apply &twice(m.0)
+  let b.2: {m} = uniform apply &twice(r.1)
+  unpack b.2 M #0(x.3: float)
+  let u.4: unit = call show(x.3)
+  return u.4
+}}
+fn twice(m.0: {m}) -> {m} {{
+  unpack m.0 M #0(x.1: float)
+  let y.2: float = extern \"Prelude.Num Float.+\"(x.1, x.1)
+  let n.3: {m} = con M #0(y.2)
+  return n.3
+}}
+fn show(x.0: float) -> unit {{
+  let s.1: obj = extern \"Prelude.Show Float.show\"(x.0)
+  let u.2: unit = extern Prelude.println(s.1)
+  return u.2
+}}
+"
+    );
+    let (out, stats) = run_lowered_stats(&text);
+    let stats = stats.unwrap_or_else(|error| panic!("{error}"));
+    assert_eq!(out, "10.0\n");
+    // 作るのは、一様な場所の引数の箱と結果の箱と、出力の文字列だけである
+    assert_eq!(
+        (stats.conversions, stats.allocations),
+        (1, DUMMY + 3),
+        "{stats:?}"
+    );
+}
+
 /// 構造体を返す関数が、結果が一様な関数を末尾で適用する。変換のフレームは関数の位置に積まれ、箱から取り出した葉を
 /// 関数の呼び出し元の `CallN` のスロットに書く。一様な場所がその関数を適用すると、積んだ変換と末尾の変換の合成は
 /// 恒等なので、変換のフレームは外れ、箱がそのまま一様な場所に戻る。

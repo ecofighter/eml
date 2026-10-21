@@ -476,6 +476,10 @@ pub fn compile_error(program: &Program, error: CompileError) -> RuntimeError {
         CompileError::MultiValueEntry { function } => {
             ("an entry function returns more than one value", function)
         }
+        CompileError::NoConversion { function } => (
+            "a tail call converts between the reprs of different types",
+            function,
+        ),
     };
     RuntimeError::Fault {
         fault: VmFault::Internal(what),

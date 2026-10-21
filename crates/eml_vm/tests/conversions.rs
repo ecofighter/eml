@@ -233,6 +233,29 @@ fn half(x.0: float) -> float {{
     );
 }
 
+/// 直接の末尾呼び出しの結果の変換は、コード生成が静的に決める。`int` を返す関数を `float` を返す関数が末尾で呼ぶのは
+/// 型の誤りで、その変換はない。コード生成は変換のない命令を出さずに、内部の誤りにする。
+#[test]
+fn a_tail_call_between_reprs_of_different_types_is_not_compiled() {
+    let text = "\
+fn main() -> unit {
+  let x.0: float = call g(())
+  return ()
+}
+fn g(u.0: unit) -> float {
+  tail call f(u.0)
+}
+fn f(u.0: unit) -> int {
+  return 1
+}
+";
+    let (_, result) = run_unverified(text);
+    assert_eq!(
+        result.unwrap_err().to_string(),
+        "internal error: a tail call converts between the reprs of different types in `g`"
+    );
+}
+
 /// 引数が 15 個を超えるシグネチャは語に詰められないので、合っていても種類を中身で比べる。変換はしない。
 #[test]
 fn a_signature_too_long_to_pack_is_compared_by_its_reprs() {

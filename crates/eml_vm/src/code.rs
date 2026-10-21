@@ -50,16 +50,25 @@ pub(crate) struct Conversion {
 }
 
 /// 変換の命令列の表。組の中身で一意にする (docs/spec/vm.md の「変換のフレーム」)。
-/// 引くのは変換の要る遅い道だけなので、並びを順に見る。
+/// 追記は変換の命令列を `code` の末尾に足すので、並びは命令列の先頭の位置の昇順である。種類の組で引くのは変換の要る
+/// 遅い道とコード生成だけなので、並びを順に見る。
 #[derive(Default)]
 pub(crate) struct Conversions {
     list: Vec<Conversion>,
 }
 
 impl Conversions {
-    /// `from` から `to` への変換の命令列の先頭。同じ種類の間と、違う型の Repr の間には変換がない。
-    pub(crate) fn find(&self, from: Class, to: Class) -> Option<Pc> {
-        self.get(from, to).map(|c| c.start)
+    /// `from` から `to` への変換の番号。同じ種類の間と、違う型の Repr の間には変換がない。番号は追記の間も変わらない。
+    pub(crate) fn find(&self, from: Class, to: Class) -> Option<u32> {
+        self.list
+            .iter()
+            .position(|c| (c.from, c.to) == (from, to))
+            .map(|index| u32::try_from(index).expect("the conversions fit in u32 numbers"))
+    }
+
+    /// 番号 `index` の変換。末尾呼び出しの命令は結果の変換をこの番号で持つ。
+    pub(crate) fn nth(&self, index: u32) -> Option<Conversion> {
+        self.list.get(index as usize).copied()
     }
 
     /// `from` から `to` への変換。
@@ -110,14 +119,12 @@ impl Conversions {
         });
     }
 
-    /// 命令列の先頭が `pc` の変換。フレームの見出しの戻り先と、命令の変換のオペランドを引く。
+    /// 命令列の先頭が `pc` の変換。フレームの見出しの戻り先を引く。
     pub(crate) fn at(&self, pc: Pc) -> Option<&Conversion> {
-        self.list.iter().find(|c| c.start == pc)
-    }
-
-    /// `pc` が変換の命令列の中か。
-    pub(crate) fn contains(&self, pc: Pc) -> bool {
-        self.list.iter().any(|c| c.start <= pc && pc < c.end)
+        self.list
+            .binary_search_by_key(&pc, |c| c.start)
+            .ok()
+            .map(|index| &self.list[index])
     }
 }
 
@@ -223,6 +230,9 @@ pub enum CompileError {
     /// 結果が複数の値の入口の関数。入口の `ret` は値1つで、`Finish` は値を1つだけ受ける
     /// (docs/spec/vm.md の「`CodeBase` と `FnEntry`」)。
     MultiValueEntry { function: String },
+    /// 末尾呼び出しの結果を、違う型の Repr の間で変える関数。その変換はなく、verifier を通った IR には現れない
+    /// (docs/spec/vm.md の「呼び出しと戻り」)。
+    NoConversion { function: String },
 }
 
 impl<M: Mode> CodeBase<M> {
@@ -241,9 +251,14 @@ impl<M: Mode> CodeBase<M> {
             .any(|repr| repr.is_rc())
     }
 
-    /// `pc` が変換の命令列の中か。
+    /// フレームの見出しの戻り先 `pc` が変換の命令列の先頭か。変換の命令列の直前にだけ `Receive` を置くので、表を引かず
+    /// に直前の命令で決まる。巻き戻しがフレームごとに引くためである。
     pub(crate) fn is_conversion(&self, pc: Pc) -> bool {
-        self.conversions.contains(pc)
+        let receives = pc
+            .checked_sub(1)
+            .is_some_and(|before| matches!(self.code[before as usize], Op::Receive { .. }));
+        debug_assert_eq!(receives, self.conversions.at(pc).is_some());
+        receives
     }
 
     /// 命令の位置を含む関数。組み込みの命令と変換の命令列はどの関数にも属さない。関数は命令の位置の順に並ぶ。関数の

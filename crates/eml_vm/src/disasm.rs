@@ -191,16 +191,16 @@ impl<'a> View<'a> {
         )
     }
 
-    /// 末尾の呼び出しの結果の変換。位置は追記で変わりうるので、種類の組で書く。なければ空である。
-    fn conversion(&self, pc: u32) -> String {
-        match self.conversions.at(pc) {
+    /// 末尾の呼び出しの結果の変換。命令は変換の番号を持つが、種類の組で書く。なければ空である。
+    fn conversion(&self, index: u32) -> String {
+        match self.conversions.nth(index) {
             Some(c) => format!(
                 " convert {} -> {}",
                 self.structs.class_name(c.from),
                 self.structs.class_name(c.to)
             ),
-            None if pc == NONE => String::new(),
-            None => format!(" convert ?{pc}"),
+            None if index == NONE => String::new(),
+            None => format!(" convert ?{index}"),
         }
     }
 

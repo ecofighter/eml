@@ -46,7 +46,7 @@ pub(crate) fn function<M: Mode>(
     };
     for block in 0..function.blocks.len() {
         emitter.block_pcs[block] = emitter.out.pc();
-        emitter.block(BlockId(block as u32));
+        emitter.block(BlockId(block as u32))?;
     }
     debug_assert!(
         emitter.points.next().is_none(),
@@ -275,7 +275,7 @@ impl<'a, M: Mode> Emitter<'a, '_, M> {
         }
     }
 
-    fn block(&mut self, id: BlockId) {
+    fn block(&mut self, id: BlockId) -> Result<(), CompileError> {
         let block = self.function.block(id);
         for (i, stmt) in block.stmts.iter().enumerate() {
             self.temps = 0;
@@ -285,7 +285,7 @@ impl<'a, M: Mode> Emitter<'a, '_, M> {
             }
         }
         self.temps = 0;
-        self.term(id, &block.term);
+        self.term(id, &block.term)
     }
 
     fn stmt(&mut self, block: BlockId, stmt: &Stmt) {
@@ -816,22 +816,23 @@ impl<'a, M: Mode> Emitter<'a, '_, M> {
         )
     }
 
-    /// 末尾の呼び出しの結果 `ret` を、この関数の `ret` へ変える変換の命令列の位置。変換が要らなければ `NONE` である。
+    /// 末尾の呼び出しの結果 `ret` を、この関数の `ret` へ変える変換の番号。変換が要らなければ `NONE` である。
     /// 呼ぶ関数と呼び出し元の `ret` から静的に決まるので、命令に持たせる
     /// (docs/spec/vm.md の「呼び出しと戻り」)。
-    fn result_conversion(&self, ret: Repr) -> u32 {
+    /// 両端は同じ型の Repr なので、verifier を通った IR ではいつも変換がある。変換のない IR はコンパイラの誤りで、
+    /// `NONE` で続けると変換しない語を返すので、誤りにする。
+    fn result_conversion(&self, ret: Repr) -> Result<u32, CompileError> {
         let from = class(self.vm_repr(ret));
         let to = class(self.vm_repr(source_ret(self.function)));
         if from == to {
-            return NONE;
+            return Ok(NONE);
         }
-        let conversion = self.out.conversions.find(from, to);
-        // 両端は同じ型の Repr なので、verifier を通った IR ではいつも変換がある
-        debug_assert!(
-            conversion.is_some(),
-            "a tail call converts between the reprs of different types"
-        );
-        conversion.unwrap_or(NONE)
+        self.out
+            .conversions
+            .find(from, to)
+            .ok_or_else(|| CompileError::NoConversion {
+                function: self.function.name.clone(),
+            })
     }
 
     /// `closure f(args)` が捕まえる源の引数の数。引数は構造体を葉に開いた並びなので、`f` の源の引数を前から開いて
@@ -866,7 +867,7 @@ impl<'a, M: Mode> Emitter<'a, '_, M> {
         )
     }
 
-    fn term(&mut self, block: BlockId, term: &Term) {
+    fn term(&mut self, block: BlockId, term: &Term) -> Result<(), CompileError> {
         match term {
             Term::Return(atom) => {
                 let src = self.atom(*atom, self.function.rets[0].0);
@@ -878,7 +879,8 @@ impl<'a, M: Mode> Emitter<'a, '_, M> {
                     self.self_tail_patches.push(at as usize);
                     self.out.push(Op::TailSelf { at });
                 } else {
-                    let conversion = self.result_conversion(source_ret(self.program.function(*f)));
+                    let conversion =
+                        self.result_conversion(source_ret(self.program.function(*f)))?;
                     self.out.operands([conversion]);
                     self.out.push(Op::TailCall { at });
                 }
@@ -887,7 +889,7 @@ impl<'a, M: Mode> Emitter<'a, '_, M> {
                 let at = self.clause_operands(call);
                 // `never` の操作の `clause` は戻らないので、変換も合成もしない (docs/spec/lir.md の「`never` の操作」)
                 let conversion = match eml_lir::operation(&self.program.effects, *effect, *op).ret {
-                    OpRet::Repr(ret) => self.result_conversion(ret),
+                    OpRet::Repr(ret) => self.result_conversion(ret)?,
                     OpRet::Never => NONE,
                 };
                 self.out.operands([conversion]);
@@ -917,6 +919,7 @@ impl<'a, M: Mode> Emitter<'a, '_, M> {
                 default,
             } => self.switch(block, *scrutinee, *layout, cases, *default),
         }
+        Ok(())
     }
 
     /// ブロック引数への並列な代入と、行き先への `Goto`。変数の代入を先に並べ、定数はその後に書く。定数の書き込み先が、

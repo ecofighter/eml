@@ -57,7 +57,7 @@ struct Closure {
 }
 
 /// `callee` を `task.scratch` の引数に適用する。捕まえた値の数と渡す引数の数の和が関数の引数の数と等しく、種類が
-/// 合えば、今と同じ道で入る (速い道)。速い道に入るのは構造体のないシグネチャどうしだけなので
+/// 合えば、今と同じ道で入る (速い道)。速い道に入るシグネチャが持つ構造体は葉が1つのものだけなので
 /// (`crate::sig::pack`)、そこでは語の数と源の引数の数が等しい。
 pub(crate) fn apply<M: Mode>(
     code: &CodeBase<M>,
@@ -348,7 +348,7 @@ fn convert_result<M: Mode>(
             })
         }
         Target::Tail => {
-            vm::tail_convert(code, task, result.start)?;
+            vm::tail_convert(code, task, result)?;
             Ok(Target::Tail)
         }
     }
@@ -356,7 +356,8 @@ fn convert_result<M: Mode>(
 
 /// 渡す引数のうち先頭の `take` 個 (源の単位) を、関数の引数の Repr へ変える。`whole` (ちょうどの数の適用) なら結果の
 /// 種類も比べ、合わなければ結果の変換を返す。合わない組が1つでもあれば `conversions` に1回数える。構造体と箱の間の
-/// 変換は語の数を変えるので、そのときは scratch を作り直す。
+/// 変換は語の数を変えるので、そのときだけ scratch を作り直す。種類の等しい構造体の組は同じ形なので、語の位置は
+/// 変わらない。
 #[cold]
 #[inline(never)]
 #[expect(clippy::too_many_arguments, reason = "the decoded parts of one apply")]
@@ -390,12 +391,16 @@ fn convert<M: Mode>(
     let pairs = at.params[site.offset..site.offset + take]
         .iter()
         .zip(&callee.params[k..k + take]);
-    // 構造体の引数は語の数が1でないので、合う組でも語の位置がずれる。そのときは並びを作り直す
-    let reshaped = pairs
-        .clone()
-        .any(|(from, to)| matches!(from, Repr::Struct(_)) || matches!(to, Repr::Struct(_)));
+    let reshaped = pairs.clone().any(|(&from, &to)| {
+        class(from) != class(to)
+            && (matches!(from, Repr::Struct(_)) || matches!(to, Repr::Struct(_)))
+    });
     if reshaped {
-        let words = std::mem::take(&mut task.scratch);
+        // 作り直す並びは取っておいた領域に書き、読み終えた並びを次の作り直しのために取っておく。適用ごとに確保しない
+        // ためである
+        let spare = std::mem::take(&mut task.spare);
+        let mut words = std::mem::replace(&mut task.scratch, spare);
+        task.scratch.clear();
         let mut at = 0;
         for (&from, &to) in pairs {
             let width = code.structs.words(&from).len();
@@ -410,12 +415,16 @@ fn convert<M: Mode>(
             at += width;
         }
         task.scratch.extend_from_slice(&words[at..]);
+        words.clear();
+        task.spare = words;
     } else {
-        for (slot, (&from, &to)) in task.scratch.iter_mut().zip(pairs) {
+        let mut at = 0;
+        for (&from, &to) in pairs {
             if class(from) != class(to) {
-                *slot = convert_word(ctx, counts, *slot, from, to)?;
+                task.scratch[at] = convert_word(ctx, counts, task.scratch[at], from, to)?;
                 mismatched = true;
             }
+            at += code.structs.words(&from).len();
         }
     }
     if M::CHECKED && mismatched {

@@ -8,7 +8,7 @@ use eml_rt::{Ctx, Mode, Stream, Token, Word};
 
 use crate::RunCounts;
 use crate::apply;
-use crate::code::CodeBase;
+use crate::code::{CodeBase, Conversion};
 use crate::data;
 use crate::error::VmFault;
 use crate::op::{APPLY_REST, FINISH, NONE, Op, Pc, Slot};
@@ -24,6 +24,8 @@ pub struct Task {
     pub(crate) last_ret: Pc,
     /// 末尾の呼び出しと適用で、引数を今のフレームから新しいフレームへ移す間だけ置く所。
     pub(crate) scratch: Vec<Word>,
+    /// `apply` が構造体と箱の間の変換で引数の並びを作り直すときの、もう1つの領域。中身は使わず、容量だけを使い回す。
+    pub(crate) spare: Vec<Word>,
     /// `reserve` がスタックの容量を伸ばす上限の語の数 (`stack_limit`)。
     pub(crate) stack_limit: usize,
     /// 入口の関数の番号。どの関数にも属さない命令の誤りの名前と、`Finish` が結果を手放すかを決める。
@@ -58,6 +60,7 @@ impl Task {
             frame_size: usize::from(entry.frame_size),
             last_ret: FINISH,
             scratch: Vec::new(),
+            spare: Vec::new(),
             stack_limit: stack_limit(max_depth),
             entry: index,
             keep_result: false,
@@ -162,8 +165,10 @@ impl Task {
 }
 
 /// スタックの容量の上限。深さが `max_depth` を超えると次の安全点で止まり、安全点の前には通常、1つの枠と見出し
-/// (`u16::MAX + 2` 語) までを積むので、それより大きい容量は見込まない。余る引数の適用は2つ積みうるが、`reserve` は
-/// 求める長さを下回らない (docs/spec/vm.md の「スロットとスタック」)。
+/// (`u16::MAX + 2` 語) までを積むので、それより大きい容量は見込まない。呼ばれる側の枠と同じ安全点の前に、余る引数の
+/// 適用は `ApplyRest` の枠を、結果の変換は変換のフレーム (見出しと、構造体の葉の数までのスロット) を積むので、
+/// 求める長さが上限を超えうる。`reserve` は求める長さを下回らないので、そのときも足りる
+/// (docs/spec/vm.md の「スロットとスタック」)。
 fn stack_limit(max_depth: usize) -> usize {
     max_depth.saturating_add(usize::from(u16::MAX) + 2)
 }
@@ -233,7 +238,7 @@ fn step<M: Mode>(
             let n = o[1] as usize;
             task.load_scratch(slots(&o[2..2 + n]));
             if o[2 + n] != NONE {
-                tail_convert(code, task, o[2 + n])?;
+                tail_convert_nth(code, task, o[2 + n])?;
             }
             task.enter_in_place(code, o[0]);
             ctx.poll(task.depth())?;
@@ -569,7 +574,7 @@ fn clause_call<M: Mode>(
     task.load_scratch(slots(&o[2..2 + n]));
     let callee = task.get(o[0] as Slot);
     if matches!(target, apply::Target::Tail) && o[2 + n] != NONE {
-        tail_convert(code, task, o[2 + n])?;
+        tail_convert_nth(code, task, o[2 + n])?;
     }
     apply::apply_clause(code, ctx, task, callee, target)?;
     ctx.poll(task.depth())?;
@@ -786,6 +791,21 @@ fn convert_struct_return<M: Mode>(
     Ok(())
 }
 
+/// 末尾呼び出しの命令が持つ番号の変換で `tail_convert` する。`step` の `TailCall` の腕を小さく保つため、変換を引く
+/// のもここでする。
+#[cold]
+#[inline(never)]
+fn tail_convert_nth<M: Mode>(
+    code: &CodeBase<M>,
+    task: &mut Task,
+    index: u32,
+) -> Result<(), VmFault> {
+    let c2 = code.conversions.nth(index).ok_or(VmFault::Internal(
+        "a tail call converts through a conversion that does not exist",
+    ))?;
+    tail_convert(code, task, c2)
+}
+
 /// 末尾の呼び出しの結果に変換 `c2` が要るとき、呼ばれる側が今のフレームの位置に入れるように、変換のフレームを
 /// 整える (docs/spec/vm.md の「変換のフレーム」)。今のフレームの戻り先が
 /// 変換のフレーム c1 なら、c1 を c1 と c2 の合成に替え、合成が恒等なら c1 を外して呼ばれる側に c1 の見出しを引き継が
@@ -797,13 +817,15 @@ fn convert_struct_return<M: Mode>(
 pub(crate) fn tail_convert<M: Mode>(
     code: &CodeBase<M>,
     task: &mut Task,
-    c2: Pc,
+    c2: Conversion,
 ) -> Result<(), VmFault> {
     let (ret, dst, caller_size) = read_header(task.stack[task.base - 2]);
-    let c2 = code.conversions.at(c2).ok_or(VmFault::Internal(
-        "a tail call converts through a position that is not a conversion",
-    ))?;
-    let Some(c1) = code.conversions.at(ret) else {
+    let c1 = if code.is_conversion(ret) {
+        code.conversions.at(ret)
+    } else {
+        None
+    };
+    let Some(c1) = c1 else {
         task.frame_size = c2.size;
         task.push_frame(c2.start, 0, 0);
         return Ok(());
@@ -1303,6 +1325,7 @@ mod tests {
             frame_size: 0,
             last_ret: FINISH,
             scratch: Vec::new(),
+            spare: Vec::new(),
             stack_limit: stack_limit(max_depth),
             entry: 0,
             keep_result: false,

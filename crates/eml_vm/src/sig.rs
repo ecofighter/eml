@@ -217,31 +217,41 @@ pub(crate) const SLOW_SITE: u64 = u64::MAX - 1;
 
 /// 引数の種類を i 番目の 4 ビットに、結果の種類をその次の 4 ビットに詰めた語。`apply` の速い道は関数の語を捕まえた値の
 /// 数だけずらし、場所の語と1回で比べる (docs/spec/vm.md の「シグネチャ」)。詰められなければ `slow` を返す。
-/// 構造体を含むシグネチャも詰めない。構造体の引数は語の数が Repr の数と違い、速い道は語の数で引数の数を比べるため
-/// である。
-fn pack(sig: &Signature, slow: u64) -> u64 {
-    if sig.params.len() > PACKED
-        || sig.ret.len() != 1
-        || sig
-            .params
-            .iter()
-            .chain(&sig.ret)
-            .any(|repr| matches!(repr, Repr::Struct(_)))
-    {
+/// 速い道は語の数で引数の数を比べるので、構造体は葉が1つのものだけを詰める。葉が2つ以上の構造体は、語の数が源の
+/// 引数の数と違うためである。
+fn pack(sig: &Signature, structs: &Structs, slow: u64) -> u64 {
+    if sig.params.len() > PACKED || sig.ret.len() != 1 {
         return slow;
     }
-    let code = |repr: Repr| match class(repr) {
-        Class::Word => 0,
-        Class::Int => 1,
-        Class::Float => 2,
-        Class::Enum => 3,
-        Class::Struct(_) => unreachable!("a signature with a struct is not packed"),
+    let mut key = 0;
+    for (i, &repr) in sig.params.iter().chain(&sig.ret).enumerate() {
+        let Some(code) = code(repr, structs) else {
+            return slow;
+        };
+        key |= code << (4 * i);
+    }
+    key
+}
+
+/// 種類の 4 ビットの値。葉が1つの構造体は、葉の種類の値に 4 を足す。同じ型の箱 (語の種類) と分けるためで、語の葉の
+/// 構造体 (`data W = W String`) も箱とは違う値になる。違う型の構造体どうしやスカラーとは同じ値になりうるが、単相化
+/// した場所と関数は同じ型を見るので、出会わない。葉が1つでない構造体は詰めない。値はどれも 7 以下なので、`SLOW_FN`
+/// と `SLOW_SITE` の 4 ビット (`0xF`、`0xE`) にならない。
+fn code(repr: Repr, structs: &Structs) -> Option<u64> {
+    let scalar = |class: Class| match class {
+        Class::Word => Some(0),
+        Class::Int => Some(1),
+        Class::Float => Some(2),
+        Class::Enum => Some(3),
+        Class::Struct(_) => None,
     };
-    sig.params
-        .iter()
-        .chain(&sig.ret)
-        .enumerate()
-        .fold(0, |key, (i, &repr)| key | code(repr) << (4 * i))
+    match repr {
+        Repr::Struct(_) => match structs.words(&repr) {
+            [leaf] => scalar(class(*leaf)).map(|code| 4 + code),
+            _ => None,
+        },
+        _ => scalar(class(repr)),
+    }
 }
 
 /// シグネチャの語の並び。スロットとクロージャと `ApplyRest` のフレームは、構造体を葉に開いた語で値を持つので、
@@ -260,6 +270,7 @@ pub(crate) struct Signatures {
     list: Vec<Signature>,
     words: Vec<Words>,
     site_keys: Vec<u64>,
+    fn_keys: Vec<u64>,
     index: HashMap<Signature, SigId>,
 }
 
@@ -279,7 +290,8 @@ impl Signatures {
             words.params.extend_from_slice(structs.words(param));
         }
         words.starts.push(words.params.len());
-        self.site_keys.push(pack(&sig, SLOW_SITE));
+        self.site_keys.push(pack(&sig, structs, SLOW_SITE));
+        self.fn_keys.push(pack(&sig, structs, SLOW_FN));
         self.words.push(words);
         self.index.insert(sig.clone(), id);
         self.list.push(sig);
@@ -303,13 +315,17 @@ impl Signatures {
 
     /// 関数の `FnEntry` に置く語。
     pub(crate) fn fn_key(&self, id: SigId) -> u64 {
-        pack(self.get(id), SLOW_FN)
+        self.fn_keys[id.0 as usize]
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn pack_plain(sig: &Signature, slow: u64) -> u64 {
+        pack(sig, &Structs::default(), slow)
+    }
 
     fn sig(params: &[Repr], ret: Repr) -> Signature {
         Signature {
@@ -321,18 +337,18 @@ mod tests {
     /// 関数の語を捕まえた値の数だけずらすと、残りの引数と結果の語になる。
     #[test]
     fn a_function_key_shifted_past_its_captures_is_the_key_of_its_rest() {
-        let f = pack(&sig(&[Repr::Float, Repr::Int], Repr::Float), SLOW_FN);
-        let site = pack(&sig(&[Repr::Int], Repr::Float), SLOW_SITE);
+        let f = pack_plain(&sig(&[Repr::Float, Repr::Int], Repr::Float), SLOW_FN);
+        let site = pack_plain(&sig(&[Repr::Int], Repr::Float), SLOW_SITE);
         assert_eq!(f >> 4, site);
-        let boxed = pack(&sig(&[Repr::TObj], Repr::Float), SLOW_SITE);
+        let boxed = pack_plain(&sig(&[Repr::TObj], Repr::Float), SLOW_SITE);
         assert_ne!(f >> 4, boxed);
     }
 
     /// `obj`、`tobj`、`unit` は同じ種類なので、語も等しい。
     #[test]
     fn word_reprs_pack_alike() {
-        let a = pack(&sig(&[Repr::Obj, Repr::Unit], Repr::TObj), SLOW_SITE);
-        let b = pack(&sig(&[Repr::TObj, Repr::TObj], Repr::Unit), SLOW_SITE);
+        let a = pack_plain(&sig(&[Repr::Obj, Repr::Unit], Repr::TObj), SLOW_SITE);
+        let b = pack_plain(&sig(&[Repr::TObj, Repr::TObj], Repr::Unit), SLOW_SITE);
         assert_eq!(a, b);
     }
 
@@ -340,14 +356,76 @@ mod tests {
     #[test]
     fn slow_keys_never_match() {
         let long = vec![Repr::TObj; 20];
-        let f = pack(&sig(&long, Repr::TObj), SLOW_FN);
-        let site = pack(&sig(&long, Repr::TObj), SLOW_SITE);
-        let short = pack(&sig(&[Repr::TObj], Repr::TObj), SLOW_SITE);
+        let f = pack_plain(&sig(&long, Repr::TObj), SLOW_FN);
+        let site = pack_plain(&sig(&long, Repr::TObj), SLOW_SITE);
+        let short = pack_plain(&sig(&[Repr::TObj], Repr::TObj), SLOW_SITE);
         for k in 0..20u32 {
             let shifted = f.wrapping_shr(4 * k);
             assert_ne!(shifted, site);
             assert_ne!(shifted, short);
         }
-        assert_ne!(pack(&sig(&[], Repr::TObj), SLOW_FN), site);
+        assert_ne!(pack_plain(&sig(&[], Repr::TObj), SLOW_FN), site);
+    }
+
+    /// LIR のテキストの関数の引数に書いた構造体の形を、VM の表に引き直す。返す番号は引数の順である。
+    fn linked(layouts: &str, params: &[&str]) -> (Structs, Vec<Repr>) {
+        let params: Vec<String> = params
+            .iter()
+            .enumerate()
+            .map(|(i, repr)| format!("p.{i}: {repr}"))
+            .collect();
+        let text = format!(
+            "{layouts}fn f({}) -> unit {{\n  return ()\n}}\n",
+            params.join(", ")
+        );
+        let program = eml_lir::parse(&text).unwrap_or_else(|error| panic!("{error}"));
+        let mut structs = Structs::default();
+        let (links, _) = structs.link(&program);
+        let reprs = program.functions[0]
+            .params()
+            .iter()
+            .map(|&param| match program.functions[0].repr(param) {
+                Repr::Struct(id) => Repr::Struct(links[id.0 as usize]),
+                other => other,
+            })
+            .collect();
+        (structs, reprs)
+    }
+
+    fn keys(structs: &Structs, params: &[Repr], ret: Repr) -> (u64, u64) {
+        let mut signatures = Signatures::default();
+        let id = signatures.intern(sig(params, ret), structs);
+        (signatures.site_key(id), signatures.fn_key(id))
+    }
+
+    /// 葉が1つの構造体は1語なので、語の数と源の引数の数が等しく、速い道で比べられる。同じ形の場所と関数の語は等しく、
+    /// 同じ型の箱 (`tobj`) とは違う。語の葉の構造体も箱と同じ語にしない。
+    #[test]
+    fn a_one_leaf_struct_packs_apart_from_its_box() {
+        let (structs, reprs) = linked(
+            "layout M { M(float) }\nlayout W { W(obj) }\n",
+            &["M{float}", "W{obj}"],
+        );
+        let (m, w) = (reprs[0], reprs[1]);
+        for one in [m, w] {
+            let (site, function) = keys(&structs, &[one, Repr::Int], one);
+            assert_ne!(site, SLOW_SITE);
+            assert_eq!(function, site);
+            let (boxed, _) = keys(&structs, &[Repr::TObj, Repr::Int], Repr::TObj);
+            assert_ne!(site, boxed);
+        }
+        let (m_site, _) = keys(&structs, &[m], Repr::Unit);
+        let (float_site, _) = keys(&structs, &[Repr::Float], Repr::Unit);
+        let (w_site, _) = keys(&structs, &[w], Repr::Unit);
+        assert_ne!(m_site, w_site);
+        assert_ne!(m_site, float_site);
+    }
+
+    /// 葉が2つ以上の構造体は語の数が源の引数の数と違うので、詰めない。
+    #[test]
+    fn a_struct_of_several_leaves_is_not_packed() {
+        let (structs, reprs) = linked("layout V { V(float, float) }\n", &["V{float, float}"]);
+        let (site, function) = keys(&structs, &[reprs[0]], Repr::Float);
+        assert_eq!((site, function), (SLOW_SITE, SLOW_FN));
     }
 }
