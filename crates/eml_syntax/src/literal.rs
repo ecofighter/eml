@@ -11,9 +11,46 @@ pub(crate) fn simple_escape(c: char) -> Option<char> {
         'r' => '\r',
         '\\' => '\\',
         '"' => '"',
+        '\'' => '\'',
         '0' => '\0',
         _ => return None,
     })
+}
+
+/// 文字のリテラルの誤り。範囲は引用符の間の本文の先頭からで、`UnknownEscape` は `\` と文字、`InvalidUnicode` は
+/// `\u{...}` の長さを持つ。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum CharLitError {
+    Empty,
+    MoreThanOne,
+    UnknownEscape(char),
+    InvalidUnicode(usize),
+}
+
+/// 文字のリテラルの引用符の間の文字列が表す文字 (docs/spec/lexical.md の「数値と文字」)。`\u{` の `}` は本文の中だけで
+/// 探すので、閉じの `'` の先は見ない。文字列の `\{` は escape でなく、ここでは不明な escape になる。
+pub(crate) fn char_value(body: &str) -> Result<char, CharLitError> {
+    let mut chars = body.chars();
+    let first = chars.next().ok_or(CharLitError::Empty)?;
+    let (c, rest) = if first == '\\' {
+        let escaped = chars.next().ok_or(CharLitError::UnknownEscape('\\'))?;
+        if escaped == 'u' {
+            let after = &body[2..];
+            let (len, c) = unicode_escape(after).ok_or(CharLitError::InvalidUnicode(2))?;
+            let c = c.ok_or(CharLitError::InvalidUnicode(2 + len))?;
+            (c, &after[len..])
+        } else {
+            let c = simple_escape(escaped).ok_or(CharLitError::UnknownEscape(escaped))?;
+            (c, chars.as_str())
+        }
+    } else {
+        (first, chars.as_str())
+    };
+    if rest.is_empty() {
+        Ok(c)
+    } else {
+        Err(CharLitError::MoreThanOne)
+    }
 }
 
 /// `\u` に続く `{...}` を読む。`rest` は `\u` の直後から始まる。`}` を探すのは、リテラルの外 (行末、最初の `"`

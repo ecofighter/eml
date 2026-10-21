@@ -153,15 +153,7 @@ impl Lexer<'_> {
             Some(c) if literal::simple_escape(c).is_some() => self.push(ESCAPE, i + 2),
             Some(c) => {
                 let end = i + 1 + c.len_utf8();
-                // 見えない文字 (単独の `\r` など) をそのまま埋めると、文言の中で何の文字か分からない
-                let message = if super::is_invisible(c) {
-                    format!(
-                        "unknown escape sequence `\\` followed by U+{:04X}",
-                        u32::from(c)
-                    )
-                } else {
-                    format!("unknown escape sequence `\\{c}`")
-                };
+                let message = super::unknown_escape_message(c);
                 self.error(codes::INVALID_ESCAPE, message, i, end, "not a valid escape");
                 self.push(ESCAPE, end);
             }

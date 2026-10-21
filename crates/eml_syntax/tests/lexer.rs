@@ -287,6 +287,73 @@ fn character_literals() {
 }
 
 #[test]
+fn malformed_character_literals_are_one_token_with_one_diagnostic() {
+    for text in [
+        "''",
+        "'ab'",
+        "'e\u{301}'",
+        r"'\q'",
+        r"'\u{D800}'",
+        r"'\u{110000}'",
+    ] {
+        assert_eq!(kinds(text), ["CHAR"], "{text}");
+        assert_eq!(diags(text).len(), 1, "{text}");
+    }
+    insta::assert_debug_snapshot!(
+        [
+            diags("''"),
+            diags("'ab'"),
+            diags("'e\u{301}'"),
+            diags(r"'\q'"),
+            diags(r"'\u{D800}'"),
+            diags(r"'\u{110000}'"),
+            diags(r"'\u{}'"),
+            diags(r"'\u{1234567}'"),
+        ],
+        @r#"
+    [
+        [
+            "E0016@0..2 empty character literal",
+        ],
+        [
+            "E0016@0..4 character literal `'ab'` has more than one character",
+        ],
+        [
+            "E0016@0..5 character literal `'e\u{301}'` has more than one character",
+        ],
+        [
+            "E0008@1..3 unknown escape sequence `\\q`",
+        ],
+        [
+            "E0008@1..9 invalid unicode escape `\\u{D800}`",
+        ],
+        [
+            "E0008@1..11 invalid unicode escape `\\u{110000}`",
+        ],
+        [
+            "E0008@1..5 invalid unicode escape `\\u{}`",
+        ],
+        [
+            "E0008@1..12 invalid unicode escape `\\u{1234567}`",
+        ],
+    ]
+    "#
+    );
+}
+
+#[test]
+fn an_unclosed_quote_stays_unexpected_and_a_primed_name_is_one_identifier() {
+    assert_eq!(diags("'a"), ["E0001@0..1 unexpected character `'`"]);
+    assert_eq!(kinds("x'"), ["LIDENT"]);
+    assert!(diags("x'").is_empty());
+}
+
+#[test]
+fn escaped_quotes_are_valid_characters() {
+    assert!(diags(r"'\'' '\\' '\u{10FFFF}'").is_empty());
+}
+
+#[test]
 fn float_right_after_a_dot_is_split_into_field_indices() {
     insta::assert_snapshot!(dump("t.0.1"), @r#"
     LIDENT@0..1 "t"

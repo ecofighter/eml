@@ -5,7 +5,7 @@ use logos::Logos;
 
 use crate::SyntaxKind::{self, *};
 use crate::codes;
-use crate::literal::{self, int_value};
+use crate::literal::{self, CharLitError, int_value};
 use string::raw_string_hashes;
 
 mod string;
@@ -83,7 +83,9 @@ enum Raw {
     #[regex(r"[0-9][0-9_]*\.[0-9][0-9_]*([eE][+-]?[0-9][0-9_]*)?")]
     #[regex(r"[0-9][0-9_]*[eE][+-][0-9][0-9_]*")]
     Float,
-    #[regex(r"'([^'\\\n]|\\[^\n]|\\u\{[0-9A-Fa-f]*\})'")]
+    /// 閉じた形だけにする。誤ったリテラルも同じ行の次の `'` までを1つのトークンにして、診断を1件にするため
+    /// (docs/spec/lexical.md の「数値と文字」)。
+    #[regex(r"'(\\[^\n]|[^'\\\n])*'")]
     Char,
     #[regex(r"[!$%&*+\-./<=>?@^|~:]+")]
     Op,
@@ -363,6 +365,63 @@ impl Lexer<'_> {
         ));
     }
 
+    fn check_char(&mut self, slice: &str) {
+        let start = self.pos;
+        let body = &slice[1..slice.len() - 1];
+        let (error, message, label) = match literal::char_value(body) {
+            Ok(_) => return,
+            Err(CharLitError::Empty) => (
+                None,
+                "empty character literal".to_string(),
+                "a character literal holds exactly one character",
+            ),
+            Err(CharLitError::MoreThanOne) => {
+                let diagnostic = Diagnostic::error(
+                    codes::INVALID_CHAR_LITERAL,
+                    format!("character literal `{slice}` has more than one character"),
+                    Label::new(
+                        self.file,
+                        self.range(start, start + slice.len()),
+                        "a character literal holds exactly one character",
+                    ),
+                );
+                let diagnostic = if body.contains(['"', '\\']) {
+                    diagnostic
+                } else {
+                    diagnostic.with_help(format!("write a string: `\"{body}\"`"))
+                };
+                self.diagnostics.push(diagnostic);
+                return;
+            }
+            Err(CharLitError::UnknownEscape(c)) => {
+                let end = start + 2 + c.len_utf8();
+                (
+                    Some((start + 1, end)),
+                    unknown_escape_message(c),
+                    "not a valid escape",
+                )
+            }
+            Err(CharLitError::InvalidUnicode(len)) => {
+                let end = start + 1 + len;
+                (
+                    Some((start + 1, end)),
+                    format!("invalid unicode escape `{}`", &self.text[start + 1..end]),
+                    "expected `\\u{` followed by 1 to 6 hex digits and `}`",
+                )
+            }
+        };
+        match error {
+            Some((from, to)) => self.error(codes::INVALID_ESCAPE, message, from, to, label),
+            None => self.error(
+                codes::INVALID_CHAR_LITERAL,
+                message,
+                start,
+                start + slice.len(),
+                label,
+            ),
+        }
+    }
+
     fn simple(&mut self) {
         let text = self.text;
         let rest = &text[self.pos..];
@@ -408,7 +467,10 @@ impl Lexer<'_> {
                 }
                 FLOAT
             }
-            Ok(Raw::Char) => CHAR,
+            Ok(Raw::Char) => {
+                self.check_char(slice);
+                CHAR
+            }
             Ok(Raw::Op) if slice.len() >= 2 && slice.bytes().all(|b| b == b'-') => {
                 // `-->` などを演算子として使えるように、`-` だけの並びに限って行コメントにする (Haskell と同じ)。
                 self.push(COMMENT, self.pos + line_len(rest));
@@ -607,6 +669,18 @@ fn printable(snippet: &str) -> String {
         out.push('…');
     }
     out
+}
+
+/// 見えない文字 (単独の `\r` など) をそのまま埋めると、文言の中で何の文字か分からない。
+pub(super) fn unknown_escape_message(c: char) -> String {
+    if is_invisible(c) {
+        format!(
+            "unknown escape sequence `\\` followed by U+{:04X}",
+            u32::from(c)
+        )
+    } else {
+        format!("unknown escape sequence `\\{c}`")
+    }
 }
 
 /// 制御文字と、幅を持たない書式の文字 (BOM、ゼロ幅の空白、書字方向の制御など)。そのまま埋め込むと、メッセージの中で

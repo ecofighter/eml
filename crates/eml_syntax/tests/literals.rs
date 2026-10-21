@@ -71,6 +71,7 @@ fn string_values() {
     );
     assert_eq!(decode_string(r#""\u{1F600}!""#).as_deref(), Some("😀!"));
     assert_eq!(decode_string(r#""""#).as_deref(), Some(""));
+    assert_eq!(decode_string(r#""\'""#).as_deref(), Some("'"));
 }
 
 #[test]
