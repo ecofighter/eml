@@ -48,6 +48,12 @@ impl Parser<'_> {
         let [(ret, ret_mark)] = header.rets[..] else {
             return Err(syntax::error(line, "a Core IR function returns one value"));
         };
+        if header.source.is_some() {
+            return Err(syntax::error(
+                line,
+                "a Core IR function has no source signature; only flatten in LIR writes one",
+            ));
+        }
         let mut blocks = vec![self.block(&mut state, header.params)?];
         while !self.reader.end_function() {
             if self.reader.peek_word().is_none() {
@@ -265,13 +271,19 @@ impl Parser<'_> {
         let line = self.reader.line();
         let word = self.reader.word()?;
         if let Some((yields, uniform)) = self.reader.apply_head(&word)? {
-            let (callee, args, prompt, site) = self.reader.apply(state, uniform)?;
+            let parts = self.reader.apply(state, uniform)?;
+            if parts.source.is_some() {
+                return Err(error(
+                    line,
+                    "a Core IR apply takes its site from its arguments; only flatten in LIR writes `source(..)`",
+                ));
+            }
             return Ok(Call::Apply {
-                callee,
-                args,
+                callee: parts.callee,
+                args: parts.args,
                 yields,
-                prompt,
-                site,
+                prompt: parts.prompt,
+                site: parts.site,
             });
         }
         match word.as_str() {

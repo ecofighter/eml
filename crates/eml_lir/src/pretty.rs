@@ -61,6 +61,7 @@ impl<'p> Printer<'p> {
             role: function.role,
             params: function.params().to_vec(),
             rets: function.rets.clone(),
+            source: function.source.clone(),
         };
         self.writer.function_head(&header, &function.vars, out);
         for (index, block) in function.blocks.iter().enumerate() {
@@ -229,7 +230,8 @@ impl<'p> Printer<'p> {
                 yields,
                 prompt,
                 site,
-            } => w.apply(vars, (callee, args), *yields, *prompt, site),
+                source_ret,
+            } => w.apply(vars, (callee, args), *yields, *prompt, (site, *source_ret)),
             Call::Clause {
                 effect,
                 op,

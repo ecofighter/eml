@@ -333,6 +333,7 @@ fn f(c.0: tobj) -> int {
             yields: false,
             prompt: None,
             site: Site::Typed(vec![Repr::Int]),
+            source_ret: None,
         })
     );
 }
@@ -736,6 +737,7 @@ fn f(c.0: tobj) -> int {
                 yields: false,
                 prompt: None,
                 site: Site::Typed(vec![Repr::Int, Repr::Int]),
+                source_ret: None,
             }),
         }
     );
@@ -747,6 +749,7 @@ fn f(c.0: tobj) -> int {
             yields: false,
             prompt: None,
             site: Site::Typed(vec![Repr::Int]),
+            source_ret: None,
         })
     );
 }
@@ -1883,6 +1886,26 @@ fn f(w.0: tobj, x.1: float) -> (obj lin, float) {
     assert_eq!(
         f.blocks[0].stmts[3].defs().collect::<Vec<_>>(),
         [VarId(4), VarId(5)]
+    );
+    // 開いた後の関数と `apply` の場所は源の Repr を `source(..)` に書く。場所を書いた `apply` の定数の引数には
+    // `: repr` を書かない
+    let program = round_trip(
+        "\
+layout P { P(tobj, float) }
+fn g(c.0: tobj, x.1: float) -> float source(tobj, P{unit, float}) -> float {
+  let r.2: float = apply c.0(1.5, x.1) source(float, P{unit, float})
+  return r.2
+}
+",
+    );
+    let function = &program.functions[0];
+    assert!(function.source.is_some());
+    assert_eq!(
+        parse_error(
+            "fn g(c.0: tobj) -> float {\n  let r.1: float = apply c.0(1.5: float) source(float)\n  return r.1\n}\n"
+        )
+        .message,
+        "an apply with `source(..)` writes no repr on its arguments"
     );
     // 書き方を1つにするため、値が1つの結果と `return` と呼び出しの束縛は括弧で書かない
     for (text, message) in [

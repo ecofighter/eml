@@ -84,8 +84,21 @@ pub struct LirFn {
     /// 構造体を返す関数がその葉を並べる (docs/superpowers/specs/2026-10-21-s14e-abi-struct-design.md の「LIR」)。
     /// テキストの形では、2つ以上の値を `-> (float, float)` と書く。
     pub rets: Vec<(Repr, Mark)>,
+    /// 開いた後の関数の、源の単位の ABI (`SourceSig`)。開く前と、引数にも結果にも構造体のない関数では `None` で、ABI は
+    /// 引数と `rets` のとおりである。
+    pub source: Option<SourceSig>,
     /// `blocks[0]` が入口で、その引数が関数の引数である。辺はすべて番号の大きいブロックへ向かう。
     pub blocks: Vec<Block>,
+}
+
+/// 開くパスが構造体を葉に開いた関数の、開く前の引数の Repr と結果の Repr。構造体の Repr はそのまま残る。VM は
+/// 関数の値の ABI (源の引数の単位の数と、構造体と箱の間の変換に要る形) をこれから作る。引数と `rets` は、これを葉に
+/// 開いた並びと同じである (verifier が確かめる)。テキストの形では、関数の頭の結果の後に `source(Vec3{..}) -> Vec3{..}`
+/// と書く (docs/superpowers/specs/2026-10-21-s14e-abi-struct-design.md の「VM」)。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SourceSig {
+    pub params: Vec<Repr>,
+    pub ret: Repr,
 }
 
 /// 関数が EP のしくみの中で受け持つ役割。EP が総称に呼ぶ位置 (最後の `uniform_params` 個の引数と、
@@ -509,8 +522,12 @@ pub enum Call {
         /// フレームまで VM のスタックを巻き戻す。`v` は呼び出しが消費も読みもしないので `for_each_atom` は
         /// 見せず、呼び出しの後も生きている `obj` の変数である (docs/spec/lir.md の「着地の印」)。
         prompt: Option<VarId>,
-        /// 引数を渡す規約 (`Site`)。
+        /// 引数を渡す規約 (`Site`)。型どおりの場所は源の引数ごとに Repr を1つ持つ。開いた後は、構造体の Repr の
+        /// 引数が葉に開いた複数のアトムになる。
         site: Site,
+        /// 開いた後の構造体の結果の、源の Repr。開く前と、結果が構造体でない場所では `None` で、結果の Repr は束縛の
+        /// Repr (末尾の位置では関数の結果) である。テキストの形は `source(..)` の後の `-> Vec3{..}` である。
+        source_ret: Option<Repr>,
     },
     /// 操作の in-place の入口のクロージャ `callee` を呼ぶ。`args` の先頭は evidence (`obj`)、残りは操作の引数で、
     /// 引数と結果の Repr は操作の表の `params` と `ret` から取る。`mask` は持たない
@@ -542,6 +559,7 @@ impl Call {
                 yields: _,
                 prompt: _,
                 site: _,
+                source_ret: _,
             }
             | Call::Clause {
                 effect: _,
@@ -564,6 +582,7 @@ impl Call {
                 yields: _,
                 prompt: _,
                 site: _,
+                source_ret: _,
             }
             | Call::Clause {
                 effect: _,

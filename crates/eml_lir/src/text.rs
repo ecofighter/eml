@@ -14,6 +14,7 @@ pub fn parse(text: &str) -> Result<Program, ParseError> {
     let tokens = syntax::lex(text)?;
     let mut parser = Parser {
         reader: Reader::new(&tokens),
+        written_sites: Vec::new(),
     };
     parser.reader.declarations()?;
     let mut functions = Vec::new();
@@ -34,6 +35,9 @@ pub fn parse(text: &str) -> Result<Program, ParseError> {
 
 struct Parser<'t> {
     reader: Reader<'t>,
+    /// 読んでいる関数の `apply` ごとの、`source(..)` で場所を書いたかどうか。読んだ順に並ぶ。書いた場所は変数から
+    /// 埋めない。
+    written_sites: Vec<bool>,
 }
 
 impl Parser<'_> {
@@ -50,6 +54,8 @@ impl Parser<'_> {
             blocks.push(self.block(&mut state, params)?);
         }
         let vars = self.reader.function_vars(state, blocks.len())?;
+        // 文と終端を読んだ順にたどるので、`apply` は `written_sites` と同じ順に現れる
+        let mut written = std::mem::take(&mut self.written_sites).into_iter();
         for block in &mut blocks {
             let calls = block.stmts.iter_mut().filter_map(|stmt| match stmt {
                 Stmt::Let {
@@ -64,7 +70,9 @@ impl Parser<'_> {
                 _ => None,
             };
             for call in calls.chain(tail) {
-                if let Call::Apply { args, site, .. } = call {
+                if let Call::Apply { args, site, .. } = call
+                    && written.next() == Some(false)
+                {
                     syntax::fill_site(site, args, &vars);
                 }
             }
@@ -77,6 +85,7 @@ impl Parser<'_> {
             clause: header.clause,
             vars,
             rets: header.rets,
+            source: header.source,
             blocks,
         })
     }
@@ -322,13 +331,15 @@ impl Parser<'_> {
         let line = self.reader.line();
         let word = self.reader.word()?;
         if let Some((yields, uniform)) = self.reader.apply_head(&word)? {
-            let (callee, args, prompt, site) = self.reader.apply(state, uniform)?;
+            let parts = self.reader.apply(state, uniform)?;
+            self.written_sites.push(parts.source.is_some());
             return Ok(Call::Apply {
-                callee,
-                args,
+                callee: parts.callee,
+                args: parts.args,
                 yields,
-                prompt,
-                site,
+                prompt: parts.prompt,
+                site: parts.site,
+                source_ret: parts.source.flatten(),
             });
         }
         match word.as_str() {

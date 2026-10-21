@@ -65,6 +65,7 @@ impl<'p> Printer<'p> {
             role: function.role,
             params: function.params().to_vec(),
             rets: vec![(function.ret, function.ret_mark)],
+            source: None,
         };
         self.writer.function_head(&header, &function.vars, out);
         for (index, block) in function.blocks.iter().enumerate() {
@@ -161,7 +162,7 @@ impl<'p> Printer<'p> {
                 yields,
                 prompt,
                 site,
-            } => w.apply(vars, (callee, args), *yields, *prompt, site),
+            } => w.apply(vars, (callee, args), *yields, *prompt, (site, None)),
             Call::Handle {
                 effect,
                 init,

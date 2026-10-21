@@ -2,6 +2,10 @@
 //! 変数を、形の葉の順 (深さ優先) に葉の変数の並びに替える。box の挿入が一様な位置との変換を構造体の変数のまま済ませた
 //! 後に走るので、ここでは位置ごとの変換を決めない。
 //!
+//! 開いた後も、関数と型どおりの `apply` の場所は源の単位の ABI (構造体の Repr を含む引数と結果の Repr) を持つ
+//! (`LirFn::source`、`Site::Typed`、`Call::Apply::source_ret`)。VM は関数の値の ABI と構造体と箱の間の変換をそこから
+//! 作る。葉の並びからは、どの葉がどの構造体の形をなすかが分からないためである。
+//!
 //! 葉の変数は元の名前に葉の番号を付けた名前 (`d.0`) を持ち、Repr は形の葉のもの、印は形の葉の印と変数の印の小さい
 //! ほうである。複製が開いた引数の印を小さくすることがあるためである
 //! (docs/superpowers/specs/2026-10-21-s14e-abi-struct-design.md の「Kind の印と RC」)。`unit` の葉は変数を作らず、
@@ -14,7 +18,7 @@ use std::collections::{HashMap, HashSet};
 
 use crate::{
     Atom, Call, Ctor, EffectInfo, FloatBits, Layout, LirFn, Mark, OpRet, Prim, Program, Repr, Rhs,
-    Site, Stmt, StructId, Structs, Term, VarId, VarInfo, operation,
+    Site, SourceSig, Stmt, StructId, Structs, Term, VarId, VarInfo, operation,
 };
 
 pub fn flatten(program: &mut Program) {
@@ -61,8 +65,9 @@ struct Flattener<'a> {
     from_field: HashMap<VarId, VarId>,
     /// 入れ子の構造体の箱を受けた `tobj` のフィールドの変数。それを開く構造体の `unbox` は、葉がどれも使われなければ消す。
     nested_boxes: HashSet<VarId>,
-    /// 開く前の関数での、変数ごとの消費の数。構造体の `unbox` の後の `drop` を決めるのに使う。
-    consumed: Vec<usize>,
+    /// 構造体の `unbox` の後に置いた `drop` の結果の変数から、手放す箱。箱を開いた後の関数のほかの所で消費すれば、
+    /// 最後にその `drop` を外す。
+    box_drops: HashMap<VarId, VarId>,
 }
 
 impl<'a> Flattener<'a> {
@@ -73,18 +78,6 @@ impl<'a> Flattener<'a> {
         effects: &'a [EffectInfo],
         signatures: &'a [Vec<Repr>],
     ) -> Self {
-        let mut consumed = vec![0; function.vars.len()];
-        let mut count = |atom: Atom| {
-            if let Atom::Var(var) = atom {
-                consumed[var.0 as usize] += 1;
-            }
-        };
-        for block in &function.blocks {
-            for stmt in &block.stmts {
-                stmt.for_each_consumed(&mut count);
-            }
-            block.term.for_each_consumed(&mut count);
-        }
         let ret = function.rets[0].0;
         Flattener {
             function,
@@ -97,7 +90,7 @@ impl<'a> Flattener<'a> {
             subst: HashMap::new(),
             from_field: HashMap::new(),
             nested_boxes: HashSet::new(),
-            consumed,
+            box_drops: HashMap::new(),
         }
     }
 
@@ -122,6 +115,17 @@ impl<'a> Flattener<'a> {
             original_params.push(params);
         }
         let (ret, ret_mark) = self.function.rets[0];
+        let params: Vec<Repr> = original_params[0]
+            .iter()
+            .map(|&param| self.function.repr(param))
+            .collect();
+        if params
+            .iter()
+            .chain([&ret])
+            .any(|repr| matches!(repr, Repr::Struct(_)))
+        {
+            self.function.source = Some(SourceSig { params, ret });
+        }
         if let Repr::Struct(id) = ret {
             self.function.rets = self
                 .structs
@@ -147,6 +151,17 @@ impl<'a> Flattener<'a> {
             block.term = term;
         }
         self.remove_unused_reads();
+        self.remove_consumed_box_drops();
+        // 開いた構造体の変数はどこからも参照されないので、表から外す。読み戻した表の使われない番号と同じ形にする
+        for info in &mut self.function.vars {
+            if matches!(info.repr, Repr::Struct(_)) {
+                *info = VarInfo {
+                    name: String::new(),
+                    repr: Repr::Unit,
+                    mark: Mark::Unr,
+                };
+            }
+        }
     }
 
     fn fresh(&mut self, name: String, repr: Repr, mark: Mark) -> VarId {
@@ -343,6 +358,14 @@ impl<'a> Flattener<'a> {
             }
             Rhs::Call(call) => {
                 self.call(call);
+                if let Call::Apply {
+                    site: Site::Typed(_),
+                    source_ret,
+                    ..
+                } = call
+                {
+                    *source_ret = Some(Repr::Struct(id));
+                }
                 if self.never_returns(call) {
                     self.bind_never(var, id, rhs, out);
                     return;
@@ -376,16 +399,16 @@ impl<'a> Flattener<'a> {
                 self.leaves.insert(var, leaves);
                 // `lin` の箱は Perceus の `decref` (V1 が拒む) でなく `drop` で手放す。`unr` でない RC の葉があれば、
                 // その葉を使う所が箱の中身を受け取るので置かない
-                // (docs/superpowers/specs/2026-10-21-s14e-abi-struct-design.md の「LIR」)
-                if self.function.mark(boxed) != Mark::Unr
-                    && !self.structs.has_non_unr_rc_leaf(id)
-                    && self.consumed[boxed.0 as usize] == 0
-                {
+                // (docs/superpowers/specs/2026-10-21-s14e-abi-struct-design.md の「LIR」)。箱をほかで消費するかは、
+                // 開いた後の関数全体を見るまで分からない。箱は構造体の葉 (置き換えた変数) でもありうるためである。
+                // そこで先に置き、最後に `remove_consumed_box_drops` が外す
+                if self.function.mark(boxed) != Mark::Unr && !self.structs.has_non_unr_rc_leaf(id) {
                     let dropped = self.fresh(self.name(boxed), Repr::Unit, Mark::Unr);
                     out.push(Stmt::Let {
                         var: dropped,
                         rhs: Rhs::Drop(Atom::Var(boxed)),
                     });
+                    self.box_drops.insert(dropped, boxed);
                 }
             }
             _ => panic!(
@@ -436,7 +459,8 @@ impl<'a> Flattener<'a> {
         }
     }
 
-    /// 呼び出しの引数を開く。`apply` の型どおりの場所の Repr の並びも、引数と同じく葉に開く。
+    /// 呼び出しの引数を開く。`apply` の型どおりの場所は源の引数ごとの Repr のまま残し、VM が源の単位の ABI を作れる
+    /// ようにする。
     fn call(&mut self, call: &mut Call) {
         match call {
             Call::Direct(target, args) => {
@@ -448,27 +472,12 @@ impl<'a> Flattener<'a> {
                 yields: _,
                 prompt,
                 site,
+                source_ret: _,
             } => {
                 *callee = self.single(*callee);
                 *prompt = prompt.map(|marker| self.single_var(marker));
                 match site {
-                    Site::Typed(reprs) => {
-                        let mut opened_reprs = Vec::with_capacity(reprs.len());
-                        for &repr in reprs.iter() {
-                            match repr {
-                                Repr::Struct(id) => opened_reprs.extend(
-                                    self.structs
-                                        .leaves(id)
-                                        .into_iter()
-                                        .map(|(leaf, _)| leaf)
-                                        .filter(|&leaf| leaf != Repr::Unit),
-                                ),
-                                _ => opened_reprs.push(repr),
-                            }
-                        }
-                        *args = self.pass_all(args, reprs);
-                        *reprs = opened_reprs;
-                    }
+                    Site::Typed(reprs) => *args = self.pass_all(args, reprs),
                     Site::Uniform => {
                         for arg in args.iter_mut() {
                             *arg = self.single(*arg);
@@ -695,6 +704,37 @@ impl<'a> Flattener<'a> {
                 let mut keep = keep.into_iter();
                 block.stmts.retain(|_| keep.next() == Some(true));
             }
+        }
+    }
+}
+
+impl Flattener<'_> {
+    /// 構造体の `unbox` の後に置いた `drop` のうち、箱を開いた後の関数のほかの所で消費するものを外す。
+    fn remove_consumed_box_drops(&mut self) {
+        if self.box_drops.is_empty() {
+            return;
+        }
+        let mut consumed = vec![0usize; self.function.vars.len()];
+        for block in &self.function.blocks {
+            let mut count = |atom: Atom| {
+                if let Atom::Var(var) = atom {
+                    consumed[var.0 as usize] += 1;
+                }
+            };
+            for stmt in &block.stmts {
+                stmt.for_each_consumed(&mut count);
+            }
+            block.term.for_each_consumed(&mut count);
+        }
+        // 数えた消費には置いた `drop` 自身が入るので、ほかに消費がなければ 1 である
+        let box_drops = &self.box_drops;
+        for block in &mut self.function.blocks {
+            block.stmts.retain(|stmt| match stmt {
+                Stmt::Let { var, rhs: _ } => box_drops
+                    .get(var)
+                    .is_none_or(|boxed| consumed[boxed.0 as usize] == 1),
+                _ => true,
+            });
         }
     }
 }

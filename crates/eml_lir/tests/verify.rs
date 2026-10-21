@@ -3499,3 +3499,38 @@ fn f(x.0: float) -> (float, float) {{
         Err("the function returns (float, float) before flatten in `g`".to_string())
     );
 }
+
+/// 開いた後の関数の源の ABI と `apply` の場所は、葉に開くと関数の引数と結果、`apply` の引数と同じ並びになる。開く前の
+/// 段は源の ABI を持たない (docs/superpowers/specs/2026-10-21-s14e-abi-struct-design.md の「VM」)。
+#[test]
+fn source_records_open_to_the_leaves() {
+    let text = |source: &str, site: &str| {
+        format!(
+            "{VEC3}fn f(x.0: float, y.1: float, z.2: float, c.3: tobj) -> float {source} {{
+  let r.4: float = apply c.3(x.0, y.1, z.2) source({site}) -> float
+  return r.4
+}}
+"
+        )
+    };
+    let vec3 = "Vec3{float, float, float}";
+    let good = text(&format!("source({vec3}, tobj) -> float"), vec3);
+    assert_eq!(check_flattened(&good), Ok(()));
+    assert_eq!(
+        check_scopes(&good),
+        Err("the function has a source signature before flatten in `f`".to_string())
+    );
+    assert_eq!(
+        check_flattened(&text(&format!("source({vec3}) -> float"), vec3)),
+        Err(format!(
+            "the source parameters ({vec3}) open to (float, float, float), but the function takes (float, float, float, tobj) in `f`"
+        ))
+    );
+    assert_eq!(
+        check_flattened(&text(
+            &format!("source({vec3}, tobj) -> float"),
+            "float, float"
+        )),
+        Err("the apply site lists 2 reprs for 3 arguments in `f`".to_string())
+    );
+}

@@ -44,6 +44,7 @@ fn function(function: CoreFn) -> eml_lir::LirFn {
         clause,
         vars,
         rets: vec![(ret, ret_mark)],
+        source: None,
         blocks: blocks.into_iter().map(block).collect(),
     }
 }
@@ -134,6 +135,7 @@ fn call(call: Call) -> eml_lir::Call {
             yields,
             prompt,
             site,
+            source_ret: None,
         },
         Call::Clause {
             effect,

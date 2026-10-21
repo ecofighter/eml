@@ -33,11 +33,11 @@ use crate::check::{
 };
 use crate::liveness;
 use crate::reuse;
-use crate::syntax::{layout_text, operation_text, prim_text, rets_text};
+use crate::syntax::{layout_text, operation_text, prim_text, repr_text, rets_text};
 use crate::unwind::{self, UnwindPoint};
 use crate::{
     Atom, Block, BlockId, Call, CasePattern, Ctor, FnIdx, Layout, LirFn, Mark, OpRet, Prim,
-    Program, Repr, Reuse, Rhs, Stmt, Term, VarId, VerifyError, operation,
+    Program, Repr, Reuse, Rhs, Stmt, StructId, Structs, Term, VarId, VerifyError, operation,
 };
 
 /// Perceus の後の LIR を確かめる。形と範囲に加えて、RC の対象の変数の所有が釣り合うことを確かめる。
@@ -173,9 +173,92 @@ fn no_struct_layouts(program: &Program) -> Result<(), VerifyError> {
     Ok(())
 }
 
+/// 構造体の `unit` でない葉の Repr。
+fn opened_leaves(structs: &Structs, id: StructId) -> Vec<Repr> {
+    structs
+        .leaves(id)
+        .into_iter()
+        .map(|(repr, _)| repr)
+        .filter(|&repr| repr != Repr::Unit)
+        .collect()
+}
+
+/// 開いた後の段では、変数の表のどこにも構造体は残らない。開くパスは開いた構造体の変数を表から外す。
+fn no_struct_vars(program: &Program, function: &LirFn) -> Result<(), String> {
+    match function
+        .vars
+        .iter()
+        .enumerate()
+        .find(|(_, info)| matches!(info.repr, Repr::Struct(_)))
+    {
+        Some((index, info)) => Err(format!(
+            "`{}.{index}` is {}, but no struct remains after flatten",
+            info.name,
+            repr_text(&program.layouts, &program.structs, info.repr)
+        )),
+        None => Ok(()),
+    }
+}
+
+/// 源の ABI (`SourceSig`) を葉に開いた並びは、関数の引数の Repr と結果の Repr の並びと同じである。印は比べない。
+fn source_sig(program: &Program, function: &LirFn) -> Result<(), String> {
+    let Some(source) = &function.source else {
+        return Ok(());
+    };
+    let structs = &program.structs;
+    let open = |reprs: &[Repr]| -> Vec<Repr> {
+        reprs
+            .iter()
+            .flat_map(|&repr| match repr {
+                Repr::Struct(id) => opened_leaves(structs, id),
+                _ => vec![repr],
+            })
+            .collect()
+    };
+    let text = |reprs: &[Repr]| {
+        reprs
+            .iter()
+            .map(|&repr| repr_text(&program.layouts, structs, repr))
+            .collect::<Vec<_>>()
+            .join(", ")
+    };
+    let params: Vec<Repr> = function
+        .params()
+        .iter()
+        .map(|&param| function.repr(param))
+        .collect();
+    let rets: Vec<Repr> = function.rets.iter().map(|&(repr, _)| repr).collect();
+    let (opened_params, opened_ret) = (open(&source.params), open(&[source.ret]));
+    let same = |a: &[Repr], b: &[Repr]| {
+        a.len() == b.len() && a.iter().zip(b).all(|(&a, &b)| structs.same(a, b))
+    };
+    if !same(&opened_params, &params) {
+        return Err(format!(
+            "the source parameters ({}) open to ({}), but the function takes ({})",
+            text(&source.params),
+            text(&opened_params),
+            text(&params)
+        ));
+    }
+    if !same(&opened_ret, &rets) {
+        return Err(format!(
+            "the source result {} opens to ({}), but the function returns ({})",
+            text(&[source.ret]),
+            text(&opened_ret),
+            text(&rets)
+        ));
+    }
+    Ok(())
+}
+
 /// 関数の結果の並びは空でない。2つ以上の値を返す関数は開いた後の段だけにあり、開いた後の結果に構造体は残らない。
 /// `clause` の印の関数は操作の ABI で値を1つ返す。
 fn rets(program: &Program, function: &LirFn, level: Level, clause: bool) -> Result<(), String> {
+    if level >= Level::Flattened {
+        source_sig(program, function)?;
+    } else if function.source.is_some() {
+        return Err("the function has a source signature before flatten".to_string());
+    }
     let text = || rets_text(&program.layouts, &program.structs, &function.rets);
     match function.rets.len() {
         0 => return Err("the function returns no values".to_string()),
@@ -201,6 +284,9 @@ fn rets(program: &Program, function: &LirFn, level: Level, clause: bool) -> Resu
             "the function returns {}, but no struct remains after flatten",
             text()
         ));
+    }
+    if level >= Level::Flattened {
+        no_struct_vars(program, function)?;
     }
     Ok(())
 }
@@ -920,6 +1006,21 @@ impl<'a> Checker<'a> {
         Ok(())
     }
 
+    /// 開いた後の段で、源の Repr を葉の Repr の並びに開く。構造体は `unit` でない葉に、ほかはそのものになる。開く前の
+    /// 段では開かない。
+    fn opened(&self, repr: Repr) -> Vec<Repr> {
+        match repr {
+            Repr::Struct(id) if self.level >= Level::Flattened => {
+                opened_leaves(&self.program.structs, id)
+            }
+            _ => vec![repr],
+        }
+    }
+
+    fn opened_all(&self, reprs: &[Repr]) -> Vec<Repr> {
+        reprs.iter().flat_map(|&repr| self.opened(repr)).collect()
+    }
+
     /// `return` の値の並びは、関数の結果の並びと長さが同じで、値ごとに Repr が互換で印も互換である。末尾の位置の
     /// 呼び出しの束縛は呼ばれる側の結果の Repr を持ち、縮約がこの形を `tail` にする。それまでの段では、互換でない
     /// `return` をこの形のときだけ許す。構造体と箱の間の違いでは、並びの長さも違いうる
@@ -1027,13 +1128,6 @@ impl<'a> Checker<'a> {
             return Err(format!(
                 "`{}` is a token, but only a release defines one",
                 self.cx.name(var)
-            ));
-        }
-        if self.level >= Level::Flattened && matches!(self.function.repr(var), Repr::Struct(_)) {
-            return Err(format!(
-                "`{}` is {}, but no struct remains after flatten",
-                self.cx.name(var),
-                self.cx.repr_text(self.function.repr(var))
             ));
         }
         self.define_once(var, site)?;
@@ -1516,6 +1610,17 @@ impl<'a> Checker<'a> {
             }
             // 型どおりの場所の結果は束縛の Repr で、一様な場所の結果は `tobj` である。関数の値は型変数の位置なので、
             // 結果の印はいつも `poly` で、どの受け手とも合う
+            // 構造体の結果を葉で受ける場所は、源の Repr を `source_ret` に持つ
+            Call::Apply {
+                site: ApplySite::Typed(_),
+                source_ret: Some(ret),
+                ..
+            } if !matches!(receiver, Receiver::Tail) => Some(
+                self.opened(*ret)
+                    .into_iter()
+                    .map(|repr| (repr, Mark::Poly))
+                    .collect(),
+            ),
             Call::Apply { site, .. } => match (site, receiver) {
                 (ApplySite::Typed(_), Receiver::Bound(var)) => {
                     Some(vec![(self.function.repr(var), Mark::Poly)])
@@ -1536,16 +1641,14 @@ impl<'a> Checker<'a> {
             },
         };
         if let Call::Apply { args, site, .. } = call {
-            self.cx.check_site(args, site)?;
-            // 開くパスは場所の Repr の並びも引数と同じく葉に開く
-            if self.level >= Level::Flattened
-                && let ApplySite::Typed(reprs) = site
-                && let Some(&repr) = reprs.iter().find(|repr| matches!(repr, Repr::Struct(_)))
-            {
-                return Err(format!(
-                    "the apply site lists {}, but no struct remains after flatten",
-                    self.cx.repr_text(repr)
-                ));
+            // 開いた後の場所は源の引数ごとの Repr を持ち、引数はそれを葉に開いた並びである
+            // (docs/superpowers/specs/2026-10-21-s14e-abi-struct-design.md の「VM」)
+            match site {
+                ApplySite::Typed(reprs) if self.level >= Level::Flattened => {
+                    self.cx
+                        .check_reprs("apply", args, &self.opened_all(reprs))?
+                }
+                _ => self.cx.check_site(args, site)?,
             }
         }
         if self.cx.boundaries {
@@ -1653,12 +1756,17 @@ impl<'a> Checker<'a> {
                 yields: _,
                 prompt: _,
                 site,
+                source_ret: _,
             } => {
                 let uniform = operands("an apply");
                 uniform(&|| "the callee".to_string(), *callee)?;
+                let reprs = match site {
+                    ApplySite::Typed(reprs) => self.opened_all(reprs),
+                    ApplySite::Uniform => Vec::new(),
+                };
                 for (index, &arg) in args.iter().enumerate() {
                     let expected = match site {
-                        ApplySite::Typed(reprs) => reprs[index],
+                        ApplySite::Typed(_) => reprs[index],
                         ApplySite::Uniform => Repr::TObj,
                     };
                     if !self.cx.passes(arg, expected) {
