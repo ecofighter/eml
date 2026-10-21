@@ -7,7 +7,7 @@
 - 実行の仕事の回数 (`RunStats`): 決定的なので、テストのスナップショットで固定する。回数が変わると、スナップショットの差分として出る
 - 実行した命令の数: macOS の `/usr/bin/time -l` が出す `instructions retired` を、`bench/run.sh` と `bench/rt.sh` で測る。スクリプトと数値計算は、Python と実時間で比べる (`bench/scripts.sh`)
 
-下の「今の数値」の表は、段を閉じるときに、3つとも同じ機種で測り直して入れ替える ([ロードマップ](../future/roadmap.md) の「進め方」)。測り直すのは、前の表のコミットから `crates/eml_vm`、`crates/eml_rt`、`crates/eml_lir`、`crates/eml_core_ir`、`std/`、`bench/` のどれかが変わった段である。測るのはコードの最後のコミットの作業ツリーで、`-dirty` の値は載せない。段の途中では入れ替えない。段ごとの前後は、この文書の git の履歴 (`git log -p docs/implementation/benchmarks.md`) と、閉じるコミットのメッセージで読む。
+下の「今の数値」の表は、段を閉じるときに、3つとも同じ機種で測り直して入れ替える ([ロードマップ](../future/roadmap.md) の「進め方」)。測り直すのは、前の表のコミットから `crates/eml_vm`、`crates/eml_rt`、`crates/eml_lir`、`crates/eml_core_ir`、`std/`、`bench/` のどれかが変わった段である。測るのはコードの最後のコミットの作業ツリーで、未コミットの変更がある木の値は載せない。段の途中では入れ替えない。段ごとの前後は、この文書の git の履歴 (`git log -p docs/implementation/benchmarks.md`) と、閉じるコミットのメッセージで読む。
 
 今も判断の根拠になっている計測は、下の「所見」に題名の見出しで残し、コードと文書はその見出しを引く。各所見は、主張、支える数値と測った機種とコミット、根拠にしている所 (この所見を引く規則、コメント、項目)、受け入れた後退ならその理由を書く。残すのは、コードか `docs/` の規則が今も引くもの、[ロードマップ](../future/roadmap.md) の項目の根拠であるもの、受け入れた後退とその理由である。所見の数値は表と独立で、表の入れ替えでは更新しない。段が変えた規則を根拠にしている所見は、その段を閉じるときに測り直して更新するか、根拠でなくなったなら消す。
 
@@ -21,10 +21,16 @@
 | `fib.em` | `fib 25` | 呼び出しと `Int` の算術 |
 | `loop.em` | 末尾再帰のループ | 末尾呼び出し |
 | `state.em` | `get` と `put` を持つ `Counter` の handler の下で数える再帰 | すぐに再開する操作 |
-| `fold_state.em` | `State.run` の中で `Yield.fold` に純粋なラムダを渡し、10万要素を合計する (S13d で足した) | 純粋なコールバックを節がその場で呼ぶこと (`yields` が0) |
+| `state_loop.em` | 末尾でない `put` を `Std.State` の handler の下で回すループ | 状態を渡す形の特殊化 |
+| `state_loop_by_hand.em` | `state_loop.em` のループの状態を、引数で手で受け渡した版 | `state_loop.em` の下限 |
+| `state_nested.em` | 状態つきの handler を2つ重ねたループ | 入れ子の handler の特殊化 |
+| `apply_int.em` | 実行時に選んだ `Int -> Int` の関数の値を、ループの中で10万回 `apply` する | 型どおりの Repr で呼ぶ `apply` |
+| `apply_float.em` | `apply_int.em` の `Float -> Float` の版 | `Float` の引数と結果が `apply` を通る費用 |
+| `ep_float.em` | `Float` の結果と `Int` の状態を持つ操作を、特殊化しない handler の下で10万回起こす | EP の道で、操作の結果と状態を型どおりの Repr で運ぶ費用 |
+| `fold_state.em` | `State.run` の中で `Yield.fold` に純粋なラムダを渡し、10万要素を合計する | 純粋なコールバックを節がその場で呼ぶこと (`yields` が0) |
 | `list.em` | プログラムの中で定義した `List a` を `range`、`map`、`foldl` で合計する | 型変数のフィールドの `Int`、高階関数 |
 | `tree.em` | 線形合同法で作った `Int` を二分探索木に入れ、総称な `size` と `fold` で畳む | 再帰的なデータ、`switch` と `unpack` |
-| `orders.em` | 10万件の `Order` のレコードを、ラムダを渡した `List.filter`、`List.map`、`List.fold` で集計する (S13e で足した) | リストの高階関数に渡すラムダ |
+| `orders.em` | 10万件の `Order` のレコードを、ラムダを渡した `List.filter`、`List.map`、`List.fold` で集計する | リストの高階関数に渡すラムダ |
 | `orders_by_hand.em` | `orders.em` のラムダを各ループに書き込んだ版 | `orders.em` の特殊化が目指す下限 |
 | `push_fold.em` | `Yield.fold (fn acc x -> acc + x) 0 (nums 100000)` | `Yield` の畳み込みに渡すラムダ |
 | `push_fold_by_hand.em` | 専用の `sum` handler に `acc + x` を書き込んだ版 | `push_fold.em` の下限 |
@@ -35,43 +41,58 @@
 | `tree_by_hand.em` | `tree.em` の `fold (fn acc x -> acc + x)` を専用の `fold_sum` にした版 | `tree.em` の下限 |
 | `upsert.em` | `logstat` の AA 木の `upsert key increment` で 20000 個の文字列のキーを数え、`sort_by (fn (_, a) (_, b) -> a > b)` で並べる | 高階の更新関数と比較関数 |
 | `upsert_by_hand.em` | `increment` と比較を `upsert` と `sort_by` に書き込んだ版 | `upsert.em` の下限 |
-| `records.em` | 4つのフィールドのレコードを、`{ st \| … }` で10万回更新する (S13e-4 で足した) | `decref` を元にする reuse |
-| `rbtree.em` | 赤黒木に1万個の `Int` を入れる。`balance` は組み直す節を受ける (S13e-4 で足した) | 同じ関数の中で節を作り直す reuse |
-| `tree_map.em` | 8191 節の完全二分木の全節を、`incr` で20回作り直す (S13e-4 で足した) | 書かないフィールドとその場の書き換え |
-| `std_list.em` | 2万要素のリストに、std の `List.map` と `List.filter` を5回通す (S13e-4 で足した) | std のリストの関数の reuse |
-| `sieve_var.em` | 引数 (既定は 20000) より小さい素数の数を、`var` で書いたふるいで数える (S14c-3 で足し、S14d で引数を足した) | 入れ子の `var` の、状態を渡す形の特殊化 |
+| `records.em` | 4つのフィールドのレコードを、`{ st \| … }` で10万回更新する | 構造体の値の更新 (確保も reuse もしない) |
+| `records_wide.em` | `records.em` を7つの `Int` のフィールドのレコードにした版 | 構造体にしない値の reuse |
+| `rbtree.em` | 赤黒木に1万個の `Int` を入れる。`balance` は組み直す節を受ける | 同じ関数の中で節を作り直す reuse |
+| `tree_map.em` | 8191 節の完全二分木の全節を、`incr` で20回作り直す | 書かないフィールドとその場の書き換え |
+| `std_list.em` | 2万要素のリストに、std の `List.map` と `List.filter` を5回通す | std のリストの関数の reuse |
+| `sieve_var.em` | 引数 (既定は 20000) より小さい素数の数を、`var` で書いたふるいで数える | 入れ子の `var` の、状態を渡す形の特殊化 |
 | `sieve_by_hand.em` | `MutArray` を末尾再帰のループに線形に受け渡した版 | `sieve_var.em` の下限 |
-| `fannkuch_var.em` | fannkuch-redux (既定は n = 7) を、3本の配列の変数と10本の `Unr` の変数で書く (S14c-3 で足し、S14d で n を引数にした) | 何重にも入れ子になった `var` と、配列の添字 |
+| `fannkuch_var.em` | fannkuch-redux (既定は n = 7) を、3本の配列の変数と10本の `Unr` の変数で書く | 何重にも入れ子になった `var` と、配列の添字 |
 | `fannkuch_by_hand.em` | 状態をすべて末尾再帰の局所関数に受け渡した版 | `fannkuch_var.em` の下限 |
-| `nbody.em` | Benchmarks Game の5つの天体を、`Vec3` の値で引数の回数 (既定は 1000) だけ進める (S14d で足した) | ベクトルの値の確保と `Float` の算術 |
-| `spectral_norm.em` | 引数の大きさ (既定は 100) のスペクトルノルムを、`Array Float` と `var` で求める (S14d で足した) | 配列の `Float` の要素の箱 |
-| `mandelbrot.em` | 引数の大きさ (既定は 128) の正方形の格子で、集合に入る点を `Complex` の値で数える (S14d で足した) | 複素数の値の reuse |
+| `nbody.em` | Benchmarks Game の5つの天体を、`Vec3` の値で引数の回数 (既定は 1000) だけ進める | 配列に書く構造体の箱と `Float` の算術 |
+| `spectral_norm.em` | 引数の大きさ (既定は 100) のスペクトルノルムを、`Array Float` と `var` で求める | 配列の `Float` の要素の箱 |
+| `mandelbrot.em` | 引数の大きさ (既定は 128) の正方形の格子で、集合に入る点を `Complex` の値で数える | 構造体の値の算術 |
 
-S14d で足した3つと、`sieve_var.em`、`fannkuch_var.em` は、大きさを省略できる引数で受ける。引数がなければ表の既定の大きさで動き、回数のテストと `bench/run.sh` はこの大きさで測る。`bench/scripts.sh` は大きな大きさを渡して Python の版と比べる (下の「スクリプトの計測」)。大きさを読むために `Std.Env` と `String.to_int` のコードがプログラムに入るので、この5つの実行の分には、それをコンパイルして動かす約 2900 万命令が加わる (下の「S14d」)。
+`nbody.em`、`spectral_norm.em`、`mandelbrot.em`、`sieve_var.em`、`fannkuch_var.em` は、大きさを省略できる引数で受ける。引数がなければ表の既定の大きさで動き、回数のテストと `bench/run.sh` はこの大きさで測る。`bench/scripts.sh` は大きな大きさを渡して Python の版と比べる (下の「スクリプトの計測」)。大きさを読むために `Std.Env` と `String.to_int` のコードがプログラムに入るので、この5つの実行の分には、それをコンパイルして動かす約 2922 万命令が加わる (「今の数値」の環境で、大きさを読むだけのプログラムを測った値)。
 
 `_by_hand` の版は、対応する自動の版と同じ出力を出す。特殊化の効果は、自動の版の `RunStats` が手書きの版に近づくことで測る。
 
-`list.em` と `tree.em` はデータ型を自分で定義する。S6a で Prelude に `List` とリストのリテラルが入った後も、前の段の記録と比べられるように、自分のデータ型を使い続ける。`list.em` と `tree.em` の多相な関数 (`map`、`foldl`、`size`、`fold`) では、型変数の位置の `Int` が `box` と `unbox` を通る。単相化の前後でこの回数がどう変わったかは、下の「記録」の「S4b (単相化)」にある。
+`list.em` と `tree.em` はデータ型を自分で定義する。2つの多相な関数 (`map`、`foldl`、`size`、`fold`) では、型変数の位置の `Int` が `box` と `unbox` を通る。
 
 ## 回数のテスト
 
-`crates/eml_vm/tests/bench.rs` は、プログラムごとに1つのテストで、VM の検査モードで走らせ、出力を確かめ、`RunStats` の全項目 (S13e で足した `allocations` と、S13e-4 で足した `reuses` を含む) をインラインスナップショットで固定する。`bench/` のファイルの一覧と、テストのプログラムの一覧が一致することも確かめる。`specialization_matches_hand_written_work` は、自動の版と `_by_hand` の版の6つの組で、`allocations`、`boxes`、`unboxes` が同じことを確かめる (S13e-1 の完了の条件。下の「S13e-1」。6つ目の `state_loop` の組は S14c-2 の完了の条件で、下の「S14c-2」)。`handler_specialization_removes_yields_and_evidence` は、`iter_generate` と `iter_pipeline` の `yields` と、`push_fold` と `fold_state` の `evidence_steps` が0であることを確かめる (S13e-2 の完了の条件。下の「S13e-2」)。`state_loop` と `state_nested` の `evidence_steps` が0であることも確かめる (S14c-2 の完了の条件)。`specialization_matches_hand_written_rc` は6つの組で RC の回数が同じことを、`iter_allocations_do_not_grow_with_the_input` と `iter_generate_allocates_as_much_as_the_direct_loop` は `Iter` で引く形の確保の数を確かめる (S13e-3 の完了の条件。下の「S13e-3」)。`rebuilding_programs_reuse_boxes` は、関数の中で手放して作り直す8つのプログラムで `reuses` が 0 より大きいことを確かめる (S13e-4 の完了の条件。下の「S13e-4」)。`var_matches_hand_written_work` は、`var` で書いた版と手書きの版の2つの組で、`var` の版の `evidence_steps` と `yields` が0であることと、確保の数の差が表 `RESIDUAL` の値に等しいことを確かめる (S14c-3 の完了の条件。下の「S14c-3」)。`nbody_allocates_25_per_step`、`mandelbrot_does_not_allocate_complex`、`spectral_norm_allocates_14_fewer` は、構造体の表現で消える確保を確かめる (S14e-2 の完了の条件。下の「S14e-2」)。`trade_offs` は、型から決める呼び出しの規約と構造体の表現の引き換えの形の回数を固定する (下の「S14e-1」と「S14e-2」)。回数は機械の速さに左右されないので、ふだんの `cargo test` で流す。
+`crates/eml_vm/tests/bench.rs` は、プログラムごとに1つのテストで、VM の検査モードで走らせ、出力を確かめ、`RunStats` の全項目 ([VM](../spec/vm.md) の「`RunStats`」) をインラインスナップショットで固定する。`every_program_in_bench_has_a_test` は、`bench/` のファイルの一覧とテストのプログラムの一覧が一致することを確かめる。回数は機械の速さに左右されないので、ふだんの `cargo test` で流す。
 
-段の前後の回数は、このスナップショットの差分で残る。回数を変える変更は、その段の spec に期待値の変更として書く ([テスト戦略](testing.md) の「テストの変更の運用」)。S10a までの記録の回数は S10b で消したインタプリタのもので、`rc_increments`、`rc_decrements`、`peak_objects` は VM と数え方が違う (下の「S10a (VM)」)。`peak_stack` は S10b で足した欄で、それより前の記録にはない。
+プログラムをまたいで比べるテストは次のとおりである。
 
-## 命令の数の測り方
+- `specialization_matches_hand_written_work` と `specialization_matches_hand_written_rc`: 自動の版と `_by_hand` の版の6つの組で、`allocations`、`boxes`、`unboxes` と RC の回数が同じである
+- `handler_specialization_removes_yields_and_evidence`: `iter_generate` と `iter_pipeline` の `yields` と、`push_fold`、`fold_state`、`state_loop`、`state_nested` の `evidence_steps` が0である
+- `iter_allocations_do_not_grow_with_the_input` と `iter_generate_allocates_as_much_as_the_direct_loop`: `Iter.fold` で引く形の確保の数が入力の大きさによらず、直接のループ `sum_loop` と同じである。`Iter.filter` を重ねた形は、残した要素ごとに4つ確保する
+- `rebuilding_programs_reuse_boxes`: 関数の中で手放して作り直す8つのプログラムで `reuses` が0より大きい。`allocations_are_counted_in_checked_mode` は、確保の数が検査モードの数え方から来ることを確かめる
+- `var_matches_hand_written_work`: `var` で書いた版と手書きの版の2つの組で、`var` の版の `evidence_steps` と `yields` が0で、確保の数の差が表 `RESIDUAL` の値に等しい
+- `nbody_allocates_25_per_step`、`mandelbrot_does_not_allocate_complex`、`spectral_norm_allocates_14_fewer`: 構造体の表現で消える確保と残る確保の数 (下の「配列に書く構造体の箱」と「配列の `Float` の要素の箱」)
+- `typed_benches_do_not_convert`: どのプログラムでも `conversions` が0である
+- `unwind_points`: `bench/` と `tests/ui/run/scripts/` のプログラムの巻き戻しの表の行の数を固定する
+- `trade_offs`: 呼び出しの規約と構造体の表現の引き換えの形の回数を固定する (下の「呼び出しの規約の引き換え」と「構造体の表現の引き換え」)
+
+回数を変える変更は、期待値の変更として段の作業文書に書く ([テスト戦略](testing.md) の「テストの変更の運用」)。
+
+## 測り方
+
+命令の数は `bench/run.sh` と `bench/rt.sh` で、Python との実時間の比は `bench/scripts.sh` で測る。どれも macOS の `/usr/bin/time -l` を使うので、macOS でだけ動く。
+
+### 命令の数の測り方
 
 ```sh
 bench/run.sh
 ```
 
-`bench/run.sh` は、release ビルドの `eml run` (VM の速いモード) で各プログラムを3回ずつ走らせ、`instructions retired` と実時間の中央値と、実行の分を Markdown の表で出す。実行の分は、各プログラムの命令の数から `empty` の命令の数を引いた値である。`empty` はフロントエンド、コード生成、起動の費用なので、段の前後は実行の分で比べる。実行の分が 0 以下になったときは、理由を出して止まる。比べられる値でないものを記録しないためである。表の前に、測定の環境 (機種と CPU、macOS の版、`rustc -V`、コミット) を出す。コミットしていない変更があれば、コミットの後に `-dirty` が付く。プログラムが実行時エラーで止まったときと、`time -l` の出力から命令の数か実時間を読めなかったときは、その出力を見せて止まる。macOS でだけ動く。
+`bench/run.sh` は、release ビルドの `eml run` (VM の速いモード) で各プログラムを3回ずつ走らせ、`instructions retired` と実時間の中央値と、実行の分を Markdown の表で出す。実行の分は、各プログラムの命令の数から `empty` の命令の数を引いた値である。`empty` はフロントエンド、コード生成、起動の費用なので、プログラムどうしと、測り直した表どうしは実行の分で比べる。実行の分が 0 以下になったときは、理由を出して止まる。比べられる値でないものを記録しないためである。表の前に、測定の環境 (機種と CPU、macOS の版、`rustc -V`、コミット) を出す。コミットしていない変更があれば、コミットの行に未コミットの変更を示す印が付く。プログラムが実行時エラーで止まったときと、`time -l` の出力から命令の数か実時間を読めなかったときは、その出力を見せて止まる。macOS でだけ動く。
 
-valgrind が arm64 の macOS で動かないので、callgrind は使わない。`instructions retired` は callgrind ほど決定的ではないが、S4a の設計のときに release ビルドの `fib 30` を3回測った揺れは約0.1%だった。arm64 の命令の数なので、過去の調査で x86_64 の callgrind を使って測った値とは直接比べない。
+valgrind が arm64 の macOS で動かないので、callgrind は使わない。`instructions retired` は callgrind ほど決定的ではない。同じ木で `bench/run.sh` を2回流すと、実行の分の差は最大で 0.27% (`push_fold_by_hand`、実行の分 47441191 命令) だった。arm64 の命令の数なので、x86_64 の callgrind で測った値とは直接比べない。
 
 `empty.em` の命令の数は、フロントエンド、コード生成、起動の分である。ほかのプログラムの値からこれを引くと、実行の分の目安になる。実時間は 0.01 秒単位なので、命令の数を主に見る。
-
-段の終わりに `bench/run.sh` を流し、出力の環境と表を、下の「記録」に段の見出しを付けて足す。
 
 `bench/rt.sh` は、`eml_rt` の速いモードを測る ([オブジェクトモデル](../spec/object-model.md))。`crates/eml_rt/examples/rt_bench.rs` を release ビルドにし、次の14の計測を `bench/run.sh` と同じ方法で3回ずつ走らせて、同じ形の表を出す。`bench/` のプログラムでなく、ヒープの操作を直接呼ぶ。
 
@@ -83,7 +104,7 @@ valgrind が arm64 の macOS で動かないので、callgrind は使わない�
 | `dup` | 局所の物体の `dup` と `decref` の組を、10,000,000 回繰り返す |
 | `free` | cons セルを1つ確保して2つの語を書き、`decref` で空けることを、10,000,000 回繰り返す。`list` の解放は解放の連鎖の中の `release_ref` を通るので、`decref` が一意な物体を空ける道はこの計測で測る |
 | `map` | 1,000,000 個のリストを作り、`map (+1)` に当たる作り直しを10回行う。古いセルは `release` で空け、新しいセルは `alloc` で取る |
-| `map-reuse` | `map` と同じ作り直しを、`release_reuse` と `con_at` で行う。`eml_rt` だけを測るので、列は手で組む。reuse のパスを作る前に、reuse の効果の見込みを数字で持つために足した |
+| `map-reuse` | `map` と同じ作り直しを、`release_reuse` と `con_at` で行う。`eml_rt` だけを測るので、列は手で組む。VM の reuse の命令の速い道と同じ基本操作を、`eml_rt` だけで測る |
 | `append` | 空の文字列から始め、一意な文字列に `string_push` で 1 バイトずつ足すことを、10,000,000 回繰り返す。その場の追記と、倍の容量での作り直しの費用である |
 | `perform` | evidence が1つの `evv` で、`ev_lookup` と `ev_clause` を呼んで結果を手放すことを、10,000,000 回繰り返す。handler の中で `perform` してその場で戻る道である |
 | `perform-deep` | 同じことを、8つの evidence の `evv` の最も奥の evidence に対して行う |
@@ -92,7 +113,7 @@ valgrind が arm64 の macOS で動かないので、callgrind は使わない�
 | `mask` | 4つの evidence の `evv` で、2つ目の evidence を飛ばす `evv_mask` (項目は n = 0、m = 1 の1つ) を呼び、結果を手放すことを、10,000,000 回繰り返す |
 | `poll` | 安全点の確かめ `Ctx::poll` を、100,000,000 回繰り返す |
 
-`bench/rt.sh` は続けて、extern の計測のプログラム `crates/eml_rt/examples/rt_extern_bench.rs` の次の12の計測を、同じ方法で測って2つ目の表に出す ([オブジェクトモデル](../spec/object-model.md) の「extern」)。`rt_bench` と別のプログラムにするのは、上の14の計測のコード生成単位の分け方を変えないためである (下の「S9b-2b (実行文脈)」)。どの計測も速いモードの `Ctx` で動かす。渡す文字列の参照は、ヒープの文字列なら毎回 `dup` で、不死の文字列 (`concat-copy` の右と `read-all` のパス) なら `acquire_immortal` で作る。`show-int` は整数だけを渡すので、参照を作らない。
+`bench/rt.sh` は続けて、extern の計測のプログラム `crates/eml_rt/examples/rt_extern_bench.rs` の次の12の計測を、同じ方法で測って2つ目の表に出す ([オブジェクトモデル](../spec/object-model.md) の「extern」)。`rt_bench` と別のプログラムにするのは、上の14の計測のコード生成単位の分け方を変えないためである (下の「`eml_rt` のインライン化」)。どの計測も速いモードの `Ctx` で動かす。渡す文字列の参照は、ヒープの文字列なら毎回 `dup` で、不死の文字列 (`concat-copy` の右と `read-all` のパス) なら `acquire_immortal` で作る。`show-int` は整数だけを渡すので、参照を作らない。
 
 | 計測 | 中身 |
 |---|---|
@@ -109,21 +130,21 @@ valgrind が arm64 の macOS で動かないので、callgrind は使わない�
 | `read-all` | メモリの Host の 1 MiB のファイルを、開いて全部読んで閉じることを、100 回繰り返す。Host は長さの見込みを返す |
 | `read-all-unsized` | 同じことを、長さの見込みを返さない Host で行う |
 
-## スクリプトの計測
+### スクリプトの計測
 
-S12d の5本のスクリプト (`tests/ui/run/scripts/`) のうち入力の大きさが効く4本と、数値計算の5つのプログラムを、Python と比べる。目標は、ロードマップの速さの目標 (Python 3.14 の 1.5 倍以下の実時間) である。`bench/` の基準のプログラムと違い、命令の数でなく実時間と最大の常駐メモリを見る。比べる相手の Python の実行が、命令の数で比べられる形でないためである。
+`tests/ui/run/scripts/` のスクリプトのうち入力の大きさが効く4本と、数値計算の5つのプログラムを、Python と比べる。目標は、ロードマップの速さの目標 (Python 3.14 の 1.5 倍以下の実時間) である。`bench/` の基準のプログラムと違い、命令の数でなく実時間と最大の常駐メモリを見る。比べる相手の Python の実行が、命令の数で比べられる形でないためである。
 
 ```sh
 bench/scripts.sh
 ```
 
-- 表は2つある。S12d のスクリプトの表は `wc` (ログを標準入力から)、`grep -n` (約 0.5% の行が一致するパターン)、`logstat` (1行ずつ読む)、`logstat --whole` (全体を読んでから分ける)、`csv2jsonl` (3つの列を選ぶ) の5行である。数値計算の表は nbody、spectral-norm、mandelbrot、fannkuch-redux、ふるいの5行である
-- S12d のスクリプトの入力は、`bench/scripts/gen.py` が種類 (アクセスログか CSV) と大きさごとに、種を固定して1つずつ作る。`target/bench-scripts/` に大きさを名前に入れて置き、すでにあれば作り直さない
+- 表は2つある。スクリプトの表は `wc` (ログを標準入力から)、`grep -n` (約 0.5% の行が一致するパターン)、`logstat` (1行ずつ読む)、`logstat --whole` (全体を読んでから分ける)、`csv2jsonl` (3つの列を選ぶ) の5行である。数値計算の表は nbody、spectral-norm、mandelbrot、fannkuch-redux、ふるいの5行である
+- スクリプトの入力は、`bench/scripts/gen.py` が種類 (アクセスログか CSV) と大きさごとに、種を固定して1つずつ作る。`target/bench-scripts/` に大きさを名前に入れて置き、すでにあれば作り直さない
 - 比べる Python の版は、スクリプトが `bench/scripts/<名前>.py`、数値計算が `bench/numeric/<名前>.py` で、Python の標準ライブラリで普通に書いたものである。速さのために手で凝ったものにはしない。数値計算の版は、浮動小数の演算を eml の版と同じ順で行い、ビットまで同じ結果を出す
 - 各行の前に `bench/scripts/compare.sh` で、eml と Python の標準出力と終了コード (と書き出したファイル) が一致することを確かめる。一致しなければ止まる
 - release ビルドの `eml run` (VM の速いモード) と `python3 -I` を3回ずつ走らせ、`/usr/bin/time -l` の実時間と最大の常駐メモリの中央値を出す。`bench/run.sh` と同じく macOS でだけ動く
 
-### 大きさ
+#### 大きさ
 
 行ごとの大きさ (入力の KiB か、プログラムに渡す大きさ) は `bench/scripts.sh` が持ち、次の規則で決める。
 
@@ -131,9 +152,9 @@ bench/scripts.sh
 - 段を閉じる計測で、eml の実時間が 150 ms より短いか 600 ms より長い行は、`bench/scripts.sh` の大きさを変えて、閉じるコミットの前の別のコミットにし、その後で3つの表を測り直す。表に載せるのは新しい大きさの値だけで、変えた行と前後の値は閉じるコミットのメッセージに書く
 - 表の「大きさ」の欄に、どの大きさで測ったかを残す
 - 実時間は 0.01 秒の単位で出るので、300 ms では約 3% の刻みになる。小さな差は `instructions retired` で確かめる。Python の実時間が数十 ms の行 (`wc`) では、比が刻みの分だけ大きく揺れる
-- fannkuch-redux の大きさは順列の長さ n で、n が1つ増えると実時間が約9倍になる。300 ms に近い n がないので、300 ms との比が最も小さい n にする
+- fannkuch-redux の大きさは順列の長さ n で、n が1つ増えると実時間が約9倍になる。300 ms に近い n がないので、300 ms との比が最も小さい n にし、実時間が 150 ms から 600 ms の範囲を外れても決め直さない
 
-`bench/scripts/compare.sh` は、パスで渡す形 (`compare.sh --paths <eml の版> <Python の版> [引数...]`) のほか、UI テストの付属のファイルで出力を確かめるとき (`compare.sh --fixture <名前>`) にも使う ([テスト戦略](testing.md) の「分類」)。どちらかのファイルがなければ、比べずに止まる。
+`bench/scripts/compare.sh` は3つの形で使う。`--paths <eml の版> <Python の版> [引数...]` は、パスで渡した2つの版を比べる。`<名前> [引数...]` は、`tests/ui/run/scripts/<名前>/main.em` と `bench/scripts/<名前>.py` を比べる。`--fixture <名前>` は、UI テストの付属のファイルで出力を確かめる ([テスト戦略](testing.md) の「分類」)。どちらかのファイルがなければ、比べずに止まる。
 
 ## 今の数値
 
@@ -144,83 +165,89 @@ bench/scripts.sh
 - 機種: Mac17,2 (Apple M5)
 - OS: macOS 27.0.1 (26A434)
 - rustc: rustc 1.98.1 (48a229cea 2026-09-01)
-- コミット: 1a91f47-dirty
+- コミット: 64c16c8
 
 | プログラム | instructions retired | 実行の分 | 実時間 (s) |
 |---|---:|---:|---:|
-| `empty` | 44270332 | | 0.00 |
-| `apply_float` | 124407386 | 80137054 | 0.00 |
-| `apply_int` | 117404379 | 73134047 | 0.00 |
-| `ep_float` | 228679308 | 184408976 | 0.01 |
-| `fannkuch_by_hand` | 189871375 | 145601043 | 0.00 |
-| `fannkuch_var` | 284475382 | 240205050 | 0.01 |
-| `fib` | 130835331 | 86564999 | 0.00 |
-| `fold_state` | 94689237 | 50418905 | 0.00 |
-| `iter_generate` | 105322292 | 61051960 | 0.00 |
-| `iter_pipeline` | 215626545 | 171356213 | 0.00 |
-| `iter_pipeline_by_hand` | 216854473 | 172584141 | 0.00 |
-| `list` | 203704476 | 159434144 | 0.00 |
-| `loop` | 211613416 | 167343084 | 0.00 |
-| `mandelbrot` | 467899681 | 423629349 | 0.02 |
-| `nbody` | 189147731 | 144877399 | 0.01 |
-| `orders` | 293895192 | 249624860 | 0.01 |
-| `orders_by_hand` | 295224001 | 250953669 | 0.01 |
-| `push_fold` | 91380114 | 47109782 | 0.00 |
-| `push_fold_by_hand` | 91609147 | 47338815 | 0.00 |
-| `rbtree` | 262667791 | 218397459 | 0.01 |
-| `records` | 135841805 | 91571473 | 0.00 |
-| `records_wide` | 208056957 | 163786625 | 0.00 |
-| `sieve_by_hand` | 104062283 | 59791951 | 0.00 |
-| `sieve_var` | 135102202 | 90831870 | 0.00 |
-| `spectral_norm` | 520347076 | 476076744 | 0.02 |
-| `state` | 82345729 | 38075397 | 0.00 |
-| `state_loop` | 84380479 | 40110147 | 0.00 |
-| `state_loop_by_hand` | 82126714 | 37856382 | 0.00 |
-| `state_nested` | 96217286 | 51946954 | 0.00 |
-| `std_list` | 198605894 | 154335562 | 0.00 |
-| `sum_loop` | 79988438 | 35718106 | 0.00 |
-| `tree` | 237866753 | 193596421 | 0.01 |
-| `tree_by_hand` | 237228219 | 192957887 | 0.01 |
-| `tree_map` | 185464389 | 141194057 | 0.00 |
-| `upsert` | 514381178 | 470110846 | 0.02 |
-| `upsert_by_hand` | 512520955 | 468250623 | 0.02 |
+| `empty` | 44277657 | | 0.00 |
+| `apply_float` | 124450420 | 80172763 | 0.00 |
+| `apply_int` | 117260304 | 72982647 | 0.00 |
+| `ep_float` | 228643047 | 184365390 | 0.01 |
+| `fannkuch_by_hand` | 189965030 | 145687373 | 0.00 |
+| `fannkuch_var` | 285033939 | 240756282 | 0.01 |
+| `fib` | 130851896 | 86574239 | 0.00 |
+| `fold_state` | 94791605 | 50513948 | 0.00 |
+| `iter_generate` | 105325225 | 61047568 | 0.00 |
+| `iter_pipeline` | 215788900 | 171511243 | 0.00 |
+| `iter_pipeline_by_hand` | 216793712 | 172516055 | 0.00 |
+| `list` | 203660886 | 159383229 | 0.00 |
+| `loop` | 211559447 | 167281790 | 0.00 |
+| `mandelbrot` | 467990565 | 423712908 | 0.02 |
+| `nbody` | 189154858 | 144877201 | 0.01 |
+| `orders` | 293906687 | 249629030 | 0.01 |
+| `orders_by_hand` | 295090183 | 250812526 | 0.01 |
+| `push_fold` | 91339327 | 47061670 | 0.00 |
+| `push_fold_by_hand` | 91718848 | 47441191 | 0.00 |
+| `rbtree` | 262644807 | 218367150 | 0.01 |
+| `records` | 135826516 | 91548859 | 0.00 |
+| `records_wide` | 207955705 | 163678048 | 0.00 |
+| `sieve_by_hand` | 104067330 | 59789673 | 0.00 |
+| `sieve_var` | 135174212 | 90896555 | 0.00 |
+| `spectral_norm` | 520394262 | 476116605 | 0.02 |
+| `state` | 82284992 | 38007335 | 0.00 |
+| `state_loop` | 84355962 | 40078305 | 0.00 |
+| `state_loop_by_hand` | 82036051 | 37758394 | 0.00 |
+| `state_nested` | 96321136 | 52043479 | 0.00 |
+| `std_list` | 198655384 | 154377727 | 0.00 |
+| `sum_loop` | 80019321 | 35741664 | 0.00 |
+| `tree` | 237881947 | 193604290 | 0.01 |
+| `tree_by_hand` | 237126308 | 192848651 | 0.01 |
+| `tree_map` | 185464346 | 141186689 | 0.00 |
+| `upsert` | 514532055 | 470254398 | 0.02 |
+| `upsert_by_hand` | 512445034 | 468167377 | 0.02 |
 
 ### `bench/rt.sh`
 
-- 機種: Mac16,1 (Apple M4)
+- 機種: Mac17,2 (Apple M5)
 - OS: macOS 27.0.1 (26A434)
 - rustc: rustc 1.98.1 (48a229cea 2026-09-01)
+- コミット: 64c16c8
 
-`#[inline]` を付ける前と付けた後の値である。
+`rt_bench` の計測
 
-| 計測 | 付ける前 | 付けた後 | 増減 |
-|---|---:|---:|---:|
-| `empty` | 16916377 | 16871603 | -0.265% |
-| `list` | 1250936658 | 1251747828 | +0.065% |
-| `box-list` | 3075597568 | 3077582307 | +0.065% |
-| `dup` | 276957929 | 277534043 | +0.208% |
-| `free` | 1826974397 | 1827477618 | +0.028% |
-| `map` | 1810030753 | 1810077397 | +0.003% |
-| `map-reuse` | 599526043 | 600060135 | +0.089% |
-| `append` | 277778672 | 278151001 | +0.134% |
-| `perform` | 516949484 | 516913384 | -0.007% |
-| `perform-deep` | 867007445 | 866979921 | -0.003% |
-| `handle` | 613976003 | 613960335 | -0.003% |
-| `yield` | 346975812 | 347096610 | +0.035% |
-| `mask` | 3827016782 | 3827222755 | +0.005% |
-| `poll` | 1116955000 | 1117010205 | +0.005% |
-| `string-eq` | 345367596 | 345410807 | +0.013% |
-| `string-eq-early` | 737165272 | 737167062 | +0.000% |
-| `compare` | 345598258 | 345637867 | +0.011% |
-| `concat-copy` | 2634022767 | 2634170400 | +0.006% |
-| `show-int` | 2347008611 | 2347241326 | +0.010% |
-| `show-int-long` | 5497107972 | 5497306183 | +0.004% |
-| `show-string` | 3702661293 | 3703558636 | +0.024% |
-| `show-string-dense` | 8642957599 | 8643718073 | +0.009% |
-| `println-block` | 254480731 | 254474001 | -0.003% |
-| `println-line` | 12147750999 | 12175342621 | +0.227% |
-| `read-all` | 125349728 | 125400879 | +0.041% |
-| `read-all-unsized` | 136933280 | 136846355 | -0.063% |
+| 計測 | instructions retired | 実時間 (s) |
+|---|---:|---:|
+| `empty` | 16788171 | 0.00 |
+| `list` | 1250434701 | 0.04 |
+| `box-list` | 3076194144 | 0.08 |
+| `dup` | 276869013 | 0.01 |
+| `free` | 1827322835 | 0.05 |
+| `map` | 1809276164 | 0.05 |
+| `map-reuse` | 599052407 | 0.02 |
+| `append` | 277753031 | 0.01 |
+| `perform` | 516878107 | 0.01 |
+| `perform-deep` | 867185769 | 0.03 |
+| `handle` | 613952381 | 0.01 |
+| `yield` | 347735860 | 0.08 |
+| `mask` | 3827982427 | 0.10 |
+| `poll` | 1117212664 | 0.03 |
+
+extern の計測 (`rt_extern_bench`)
+
+| 計測 | instructions retired | 実時間 (s) |
+|---|---:|---:|
+| `string-eq` | 345526537 | 0.01 |
+| `string-eq-early` | 737213345 | 0.01 |
+| `compare` | 345557476 | 0.01 |
+| `concat-copy` | 2634967018 | 0.09 |
+| `show-int` | 2347557032 | 0.06 |
+| `show-int-long` | 5498451585 | 0.16 |
+| `show-string` | 3703921040 | 0.15 |
+| `show-string-dense` | 8643265593 | 0.27 |
+| `println-block` | 254039237 | 0.00 |
+| `println-line` | 11175023428 | 0.60 |
+| `read-all` | 125108724 | 0.00 |
+| `read-all-unsized` | 136605816 | 0.00 |
 
 ### `bench/scripts.sh`
 
@@ -228,26 +255,28 @@ bench/scripts.sh
 - OS: macOS 27.0.1 (26A434)
 - rustc: rustc 1.98.1 (48a229cea 2026-09-01)
 - Python: Python 3.14.8
-
-数値計算
-
-| 計測 | 大きさ | eml の実時間 (s) | Python の実時間 (s) | 比 (eml / Python) | eml の最大 RSS (MB) | Python の最大 RSS (MB) |
-|---|---:|---:|---:|---:|---:|---:|
-| nbody | 140000 | 0.29 | 0.64 | 0.5 | 10 | 15 |
-| spectral-norm | 510 | 0.31 | 0.86 | 0.4 | 9 | 14 |
-| mandelbrot | 480 | 0.20 | 0.30 | 0.7 | 9 | 14 |
-| fannkuch-redux | 9 | 0.51 | 0.24 | 2.1 | 10 | 14 |
-| sieve | 3500000 | 0.27 | 0.16 | 1.7 | 35 | 41 |
+- コミット: 64c16c8
+- 入力: スクリプトの入力は bench/scripts/gen.py が作る。大きさは表の「大きさ」の欄にある
 
 スクリプト
 
 | 計測 | 大きさ | eml の実時間 (s) | Python の実時間 (s) | 比 (eml / Python) | eml の最大 RSS (MB) | Python の最大 RSS (MB) |
 |---|---:|---:|---:|---:|---:|---:|
-| `wc` | 9000 KiB | 0.32 | 0.02 | 16.0 | 29 | 78 |
-| `grep -n` | 70000 KiB | 0.29 | 0.26 | 1.1 | 9 | 17 |
-| `logstat` | 6700 KiB | 0.30 | 0.11 | 2.7 | 10 | 19 |
-| `logstat --whole` | 6700 KiB | 0.29 | 0.10 | 2.9 | 35 | 53 |
+| `wc` | 9000 KiB | 0.29 | 0.02 | 14.5 | 29 | 78 |
+| `grep -n` | 70000 KiB | 0.29 | 0.27 | 1.1 | 9 | 16 |
+| `logstat` | 6700 KiB | 0.30 | 0.10 | 3.0 | 10 | 20 |
+| `logstat --whole` | 6700 KiB | 0.29 | 0.10 | 2.9 | 35 | 54 |
 | `csv2jsonl` | 2900 KiB | 0.29 | 0.18 | 1.6 | 21 | 51 |
+
+数値計算
+
+| 計測 | 大きさ | eml の実時間 (s) | Python の実時間 (s) | 比 (eml / Python) | eml の最大 RSS (MB) | Python の最大 RSS (MB) |
+|---|---:|---:|---:|---:|---:|---:|
+| nbody | 140000 | 0.29 | 0.64 | 0.5 | 10 | 14 |
+| spectral-norm | 510 | 0.32 | 0.86 | 0.4 | 9 | 14 |
+| mandelbrot | 480 | 0.19 | 0.30 | 0.6 | 9 | 14 |
+| fannkuch-redux | 9 | 0.53 | 0.24 | 2.2 | 10 | 14 |
+| sieve | 3500000 | 0.29 | 0.16 | 1.8 | 35 | 41 |
 
 ## 所見
 
@@ -297,7 +326,7 @@ bench/scripts.sh
 ### `codegen-units`
 
 - 主張: release のプロファイルの `codegen-units` は既定の値のままにする。1 にすると、VM の実行の分はプログラムによって減ったり増えたりする
-- 数値: `CARGO_PROFILE_RELEASE_CODEGEN_UNITS=1` で、`state` -14.2%、`tree` -6.1%、`list` -4.6%、`loop` -1.1%、`fib` +2.5% (M4、73e31d1)
+- 数値: `CARGO_PROFILE_RELEASE_CODEGEN_UNITS=1` の `bench/run.sh` を既定のビルドと比べると、実行の分は35のプログラムのうち22で減り、13で増えた。減りの最大は `fannkuch_by_hand` -6.89%、`fannkuch_var` -5.08%、`sieve_by_hand` -4.29%、増えの最大は `std_list` +3.89%、`list` +3.51%、`tree_by_hand` +3.45%、`tree` +3.32%。`state` -0.70%、`loop` -0.86%、`fib` -0.05% (M5、64c16c8)
 - 根拠にしている所: [VM](../spec/vm.md) の「置き場所」の `codegen-units` の項
 
 ### `eml_vm` のインライン化
