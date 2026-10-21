@@ -6,13 +6,16 @@
 //! 写した LIR で、`tail`、`box`、`unbox`、RC の命令はない (`passes_until` の入口で `verify_lowered` が確かめる)。
 //!
 //! 変数は具体化した型の Repr を持ち、値を受ける位置の Repr と互換でなければ変換する。変換は箱を要するスカラーと
-//! `tobj` の間だけで、`unit` と `obj` は命令なしで `tobj` と行き来する (docs/spec/lir.md の「値の表現」)。
+//! `tobj` の間と、構造体とその箱 (`obj`) の間だけで、`unit` と `obj` は命令なしで `tobj` と行き来する
+//! (docs/spec/lir.md の「値の表現」、docs/superpowers/specs/2026-10-21-s14e-abi-struct-design.md の「LIR」)。
+//! 構造体は1つの変数のまま扱い、葉に開くのは次の開くパス (flatten) である。
 //! パスはブロックと文のループだけで、IR の大きさに比例して再帰しない。
 
 use std::collections::HashMap;
 
 use crate::check::shape;
 use crate::contract::pure;
+use crate::syntax::repr_text;
 use crate::verify::block_shapes;
 use crate::{
     Atom, Block, BlockId, Call, CasePattern, EffectInfo, Layout, LirFn, Mark, OpRet, OperationInfo,
@@ -22,8 +25,12 @@ use crate::{
 pub fn boxing(program: &mut Program) {
     for function in &mut program.functions {
         match function.clause {
-            Some((effect, op)) => conform_clause(function, operation(&program.effects, effect, op)),
-            None => conform_role(function),
+            Some((effect, op)) => conform_clause(
+                function,
+                &program.structs,
+                operation(&program.effects, effect, op),
+            ),
+            None => conform_role(function, &program.structs),
         }
     }
     // 変換はほかの関数を `signatures` でだけ見るので、関数を1つずつ書き換えながら表を共有で借りられる
@@ -49,28 +56,89 @@ pub fn boxing(program: &mut Program) {
 /// ので縮約が消し、そこで末尾呼び出しになる (docs/spec/lir.md の「末尾の位置の呼び出し」)。形で決めるので、`never` の操作の
 /// 節の呼び出しも含む。EP は、Core IR の上の同じ判定 (`eml_core_ir` の tail.rs) で、この呼び出しを yield の地点に
 /// しない (docs/spec/core-ir.md の「yield の地点」)。
+///
+/// 開くパスの後は、`let (x.0, .., x.n) = <呼び出し>` の後の `return (x.0, .., x.n)` (同じ並び、同じ順) も同じ形で
+/// ある。構造体の `unbox` は純粋な `let` に数える
+/// (docs/superpowers/specs/2026-10-21-s14e-abi-struct-design.md の「LIR」)。
 pub(crate) fn tail_position_call(block: &Block) -> Option<(usize, &Call)> {
-    let Term::Return(Atom::Var(returned)) = block.term else {
-        return None;
+    let returned: &[Atom] = match &block.term {
+        Term::Return(atom) => std::slice::from_ref(atom),
+        Term::ReturnMany(atoms) => atoms,
+        _ => return None,
+    };
+    let is_returned = |vars: &[VarId]| {
+        vars.len() == returned.len()
+            && vars
+                .iter()
+                .zip(returned)
+                .all(|(&var, &atom)| atom == Atom::Var(var))
     };
     for (index, stmt) in block.stmts.iter().enumerate().rev() {
-        let Stmt::Let { var, rhs } = stmt else {
-            return None;
-        };
-        if *var == returned {
-            return match rhs {
-                Rhs::Call(call) => Some((index, call)),
-                _ => None,
-            };
-        }
-        if !pure(rhs) {
-            return None;
+        match stmt {
+            Stmt::Let { var, rhs } => {
+                if is_returned(std::slice::from_ref(var)) {
+                    return match rhs {
+                        Rhs::Call(call) => Some((index, call)),
+                        _ => None,
+                    };
+                }
+                if !pure(rhs) {
+                    return None;
+                }
+            }
+            Stmt::LetMany { vars, call } => return is_returned(vars).then_some((index, call)),
+            Stmt::UnboxStruct { .. } => {}
+            _ => return None,
         }
     }
     None
 }
 
-/// 一様な位置で値を受ける Repr。箱を要するスカラーは `tobj` になり、`obj` と `unit` はそのままである。
+/// 値を、`from` の Repr から `to` の Repr へ変える命令。箱を要するスカラーと `tobj` の間と、構造体とその箱の間である。
+/// 構造体の箱は配置の `con` と同じ形のヒープの物体なので `obj` で、`obj` と `tobj` のどちらからも取り出せる
+/// (docs/superpowers/specs/2026-10-21-s14e-abi-struct-design.md の「LIR」の box の挿入)。
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Conversion {
+    Box,
+    Unbox,
+}
+
+impl Conversion {
+    fn between(from: Repr, to: Repr) -> Option<Conversion> {
+        let holds = |boxed: Repr, value: Repr| {
+            value.needs_box()
+                && boxed.is_rc()
+                && (matches!(value, Repr::Struct(_)) || boxed == Repr::TObj)
+        };
+        if holds(to, from) {
+            Some(Conversion::Box)
+        } else if holds(from, to) {
+            Some(Conversion::Unbox)
+        } else {
+            None
+        }
+    }
+
+    fn rhs(self, atom: Atom) -> Rhs {
+        match self {
+            Conversion::Box => Rhs::Box(atom),
+            Conversion::Unbox => Rhs::Unbox(atom),
+        }
+    }
+}
+
+/// 変換で足す変数の印。構造体とその箱は元の変数の印を写す。構造体は `lin` の値を持ちうるためである。スカラーと
+/// その箱は `unr` である (docs/superpowers/specs/2026-10-21-s14e-abi-struct-design.md の「LIR」の box の挿入)。
+fn converted_mark(from: Repr, to: Repr, mark: Mark) -> Mark {
+    if matches!(from, Repr::Struct(_)) || matches!(to, Repr::Struct(_)) {
+        mark
+    } else {
+        Mark::Unr
+    }
+}
+
+/// 一様な位置で値を受ける Repr。箱を要するスカラーと構造体は `tobj` になり、`obj` と `unit` はそのままである。
+/// 構造体の箱の束縛は `obj` だが、位置は `tobj` で、`obj` の箱は命令なしでそこへ渡る。
 fn uniform_repr(repr: Repr) -> Repr {
     if repr.needs_box() { Repr::TObj } else { repr }
 }
@@ -78,7 +146,7 @@ fn uniform_repr(repr: Repr) -> Repr {
 /// 役割が一様にする位置 (最後の `uniform_params` 個の引数と、`uniform_ret` なら `ret`) を一様な Repr にする。EP の
 /// しくみはこれらの位置を総称に呼ぶためである。捕獲を含むほかの位置は、型どおりの Repr のままにする
 /// (docs/superpowers/specs/2026-10-21-s14e-abi-struct-design.md の「関数の ABI」)。
-fn conform_role(function: &mut LirFn) {
+fn conform_role(function: &mut LirFn, structs: &Structs) {
     let role = function.role;
     let params = function.params();
     let typed = params.len() - role.uniform_params();
@@ -99,13 +167,14 @@ fn conform_role(function: &mut LirFn) {
     } else {
         function.rets[0].0
     };
-    conform(function, &expected, ret);
+    conform(function, structs, &expected, ret);
 }
 
 /// `clause` の印の関数を操作の ABI に合わせる。捕獲は一様な Repr、evidence は `obj`、残りの引数は操作の表の Repr で
 /// 受け、`ret` は操作の `ret` にする。`never` の操作の節の入口はダミーの物体を返すので `obj` である
-/// (docs/spec/lir.md の「box の挿入」)。
-fn conform_clause(function: &mut LirFn, operation: &OperationInfo) {
+/// (docs/spec/lir.md の「box の挿入」)。操作の表は構造体の型の位置を `obj` にするので、構造体の引数は入口で
+/// `unbox` して受け直す。
+fn conform_clause(function: &mut LirFn, structs: &Structs, operation: &OperationInfo) {
     let params = function.params();
     let captures = params.len() - 1 - operation.params.len();
     let expected: Vec<Repr> = params[..captures]
@@ -118,25 +187,21 @@ fn conform_clause(function: &mut LirFn, operation: &OperationInfo) {
         OpRet::Repr(repr) => repr,
         OpRet::Never => Repr::Obj,
     };
-    conform(function, &expected, ret);
+    conform(function, structs, &expected, ret);
 }
 
 /// `expected` と互換でない引数を、同じ名前の新しい `expected` の Repr の引数に替え、入口のブロックの先頭で、引数の順に
 /// `let p = unbox p'` (または `box`) を置いて元の変数を定義する。p' は p と同じ値なので、p の印を写す。`ret` を替えた
 /// ときの `return` の変換は `Converter` に任せる。
-fn conform(function: &mut LirFn, expected: &[Repr], ret: Repr) {
+fn conform(function: &mut LirFn, structs: &Structs, expected: &[Repr], ret: Repr) {
     let mut conversions = Vec::new();
     for (position, &wanted) in expected.iter().enumerate() {
         let param = function.params()[position];
         let repr = function.repr(param);
-        if repr.compatible(wanted) {
+        if structs.compatible(repr, wanted) {
             continue;
         }
-        let rhs = if wanted == Repr::TObj && repr.needs_box() {
-            Rhs::Unbox
-        } else if repr == Repr::TObj && wanted.needs_box() {
-            Rhs::Box
-        } else {
+        let Some(conversion) = Conversion::between(wanted, repr) else {
             panic!(
                 "internal error: the boxing pass cannot take parameter {position} of `{}` ({}) as {}",
                 function.name,
@@ -154,7 +219,7 @@ fn conform(function: &mut LirFn, expected: &[Repr], ret: Repr) {
         function.blocks[BlockId::ENTRY.0 as usize].params[position] = fresh;
         conversions.push(Stmt::Let {
             var: param,
-            rhs: rhs(Atom::Var(fresh)),
+            rhs: conversion.rhs(Atom::Var(fresh)),
         });
     }
     function.blocks[BlockId::ENTRY.0 as usize]
@@ -287,14 +352,9 @@ impl Converter<'_> {
         }
     }
 
-    /// 足す変数は `int` と `enum` のスカラーか、それを包んだ箱で、どちらも `Unr` である
-    /// (docs/spec/lir.md の「box の挿入」)。
-    fn fresh(&mut self, name: String, repr: Repr) -> VarId {
-        self.function.vars.push(VarInfo {
-            name,
-            repr,
-            mark: Mark::Unr,
-        });
+    /// 足す変数の印は `converted_mark` が決める。
+    fn fresh(&mut self, name: String, repr: Repr, mark: Mark) -> VarId {
+        self.function.vars.push(VarInfo { name, repr, mark });
         VarId(self.function.vars.len() as u32 - 1)
     }
 
@@ -308,37 +368,45 @@ impl Converter<'_> {
         match atom {
             Atom::Var(var) => {
                 let repr = self.function.repr(var);
-                if repr.compatible(expected) || self.never[var.0 as usize] {
+                if self.structs.compatible(repr, expected) || self.never[var.0 as usize] {
                     return atom;
                 }
-                if repr.needs_box() && expected == Repr::TObj {
-                    if let Some(&from) = self.unboxed_from.get(&var) {
-                        return Atom::Var(from);
+                let mark = converted_mark(repr, expected, self.function.mark(var));
+                match Conversion::between(repr, expected) {
+                    Some(Conversion::Box) => {
+                        if let Some(&from) = self.unboxed_from.get(&var) {
+                            return Atom::Var(from);
+                        }
+                        // 構造体の箱は位置が `tobj` でも `obj` で束縛する
+                        let boxed_repr = match repr {
+                            Repr::Struct(_) => Repr::Obj,
+                            _ => Repr::TObj,
+                        };
+                        let boxed = self.fresh(self.name(var), boxed_repr, mark);
+                        out.push(Stmt::Let {
+                            var: boxed,
+                            rhs: Rhs::Box(atom),
+                        });
+                        Atom::Var(boxed)
                     }
-                    let boxed = self.fresh(self.name(var), Repr::TObj);
-                    out.push(Stmt::Let {
-                        var: boxed,
-                        rhs: Rhs::Box(atom),
-                    });
-                    return Atom::Var(boxed);
-                }
-                if repr == Repr::TObj && expected.needs_box() {
-                    if let Some(&from) = self.boxed_from.get(&var)
-                        && self.function.repr(from) == expected
-                    {
-                        return Atom::Var(from);
+                    Some(Conversion::Unbox) => {
+                        if let Some(&from) = self.boxed_from.get(&var)
+                            && self.structs.compatible(self.function.repr(from), expected)
+                        {
+                            return Atom::Var(from);
+                        }
+                        let unboxed = self.fresh(self.name(var), expected, mark);
+                        out.push(Stmt::Let {
+                            var: unboxed,
+                            rhs: Rhs::Unbox(atom),
+                        });
+                        Atom::Var(unboxed)
                     }
-                    let unboxed = self.fresh(self.name(var), expected);
-                    out.push(Stmt::Let {
-                        var: unboxed,
-                        rhs: Rhs::Unbox(atom),
-                    });
-                    return Atom::Var(unboxed);
+                    None => self.impossible(atom, expected),
                 }
-                self.impossible(atom, expected)
             }
             Atom::Int(_) | Atom::Float(_) if expected == Repr::TObj => {
-                let boxed = self.fresh("b".to_string(), Repr::TObj);
+                let boxed = self.fresh("b".to_string(), Repr::TObj, Mark::Unr);
                 out.push(Stmt::Let {
                     var: boxed,
                     rhs: Rhs::Box(atom),
@@ -354,39 +422,36 @@ impl Converter<'_> {
     /// その直後に置く `after` の変換で定義する。使う所の変数は書き換えないので、R5 と R6 はそのまま成り立つ。
     fn rebind(&mut self, var: VarId, given: Repr, after: &mut Vec<Stmt>) -> VarId {
         let repr = self.function.repr(var);
-        if repr.compatible(given) {
+        if self.structs.compatible(repr, given) {
             return var;
         }
-        let rhs = if given == Repr::TObj && repr.needs_box() {
-            Rhs::Unbox
-        } else if repr == Repr::TObj && given.needs_box() {
-            Rhs::Box
-        } else {
+        let Some(conversion) = Conversion::between(given, repr) else {
             self.impossible(Atom::Var(var), given)
         };
-        let fresh = self.fresh(self.name(var), given);
-        let table = if given == Repr::TObj {
-            &mut self.unboxed_from
-        } else {
-            &mut self.boxed_from
+        let mark = converted_mark(given, repr, self.function.mark(var));
+        let fresh = self.fresh(self.name(var), given, mark);
+        let table = match conversion {
+            Conversion::Unbox => &mut self.unboxed_from,
+            Conversion::Box => &mut self.boxed_from,
         };
         table.insert(var, fresh);
         after.push(Stmt::Let {
             var,
-            rhs: rhs(Atom::Var(fresh)),
+            rhs: conversion.rhs(Atom::Var(fresh)),
         });
         fresh
     }
 
     /// 型から起きない変換 (箱を要するスカラーと `obj` の間、違うスカラーどうし、`unit` と箱を要するスカラーの間、
-    /// 位置に収まらない定数)。translate の出力では起きないので、内部の誤りである。
+    /// 違う形の構造体どうし、構造体とスカラーの間、位置に収まらない定数)。translate の出力では起きないので、内部の
+    /// 誤りである。
     fn impossible(&self, atom: Atom, expected: Repr) -> ! {
         let what = match atom {
             Atom::Var(var) => format!(
                 "`{}.{}` ({})",
                 self.function.vars[var.0 as usize].name,
                 var.0,
-                self.function.repr(var).name()
+                repr_text(self.layouts, self.structs, self.function.repr(var))
             ),
             Atom::Int(n) => n.to_string(),
             Atom::Float(x) => x.to_string(),
@@ -398,7 +463,7 @@ impl Converter<'_> {
         };
         panic!(
             "internal error: the boxing pass cannot pass {what} to {} in `{}`",
-            expected.name(),
+            repr_text(self.layouts, self.structs, expected),
             self.function.name
         );
     }
@@ -415,7 +480,7 @@ impl Converter<'_> {
                         // 末尾の位置の呼び出しの束縛は受け直さず、呼ばれる側の結果の Repr にする。後ろの純粋な `let`
                         // がこの変数を使えば、変換はそちらに入り、縮約が消す
                         if tail && let Some(given) = given {
-                            if !self.function.repr(var).compatible(given) {
+                            if !self.structs.compatible(self.function.repr(var), given) {
                                 self.function.vars[var.0 as usize].repr = given;
                             }
                             out.push(Stmt::Let { var, rhs });
@@ -431,15 +496,15 @@ impl Converter<'_> {
                         }
                         None
                     }
+                    // 構造体の `con` の引数は、配置の宣言でなく形のフィールドと比べる正確な位置である
+                    // (docs/superpowers/specs/2026-10-21-s14e-abi-struct-design.md の「Core IR」)
                     Rhs::Con {
                         ctor,
                         args,
                         reuse: _,
                     } => {
-                        let layout = ctor.layout.0 as usize;
-                        let tag = ctor.tag as usize;
                         for (index, arg) in args.iter_mut().enumerate() {
-                            let field = self.layouts[layout].constructors[tag].fields[index];
+                            let field = self.field_repr(self.function.repr(var), *ctor, index);
                             *arg = self.convert(*arg, field, out);
                         }
                         None
@@ -495,9 +560,7 @@ impl Converter<'_> {
             } => {
                 let mut after = Vec::new();
                 for (index, field) in fields.iter_mut().enumerate() {
-                    let declared = self.layouts[ctor.layout.0 as usize].constructors
-                        [ctor.tag as usize]
-                        .fields[index];
+                    let declared = self.field_repr(self.function.repr(value), ctor, index);
                     *field = self.rebind(*field, declared, &mut after);
                 }
                 out.push(Stmt::Unpack {
@@ -510,6 +573,17 @@ impl Converter<'_> {
             Stmt::Dup(_) | Stmt::Decref(_) | Stmt::Release { .. } | Stmt::DropToken(_) => {
                 unreachable!("the boxing pass runs before Perceus")
             }
+            Stmt::LetMany { .. } | Stmt::UnboxStruct { .. } => {
+                unreachable!("the boxing pass runs before flatten")
+            }
+        }
+    }
+
+    /// `con` と `unpack` のフィールドの位置の Repr。構造体の値なら形のフィールド、ほかは配置の宣言した Repr である。
+    fn field_repr(&self, value: Repr, ctor: crate::Ctor, index: usize) -> Repr {
+        match value {
+            Repr::Struct(id) => self.structs.shape(id).fields[index].0,
+            _ => self.layouts[ctor.layout.0 as usize].constructors[ctor.tag as usize].fields[index],
         }
     }
 
@@ -610,6 +684,7 @@ impl Converter<'_> {
             Term::TailCall(_) => {
                 unreachable!("contract forms tail calls after the boxing pass")
             }
+            Term::ReturnMany(_) => unreachable!("the boxing pass runs before flatten"),
         }
     }
 }

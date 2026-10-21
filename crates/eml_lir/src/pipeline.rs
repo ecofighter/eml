@@ -2,13 +2,15 @@
 //! Core IR から LIR への変換までの順番は `eml_core_ir` が知る。
 
 use crate::{
-    Program, VerifyError, boxing, contract, perceus, reuse, verify, verify_lowered, verify_scopes,
+    Program, VerifyError, boxing, contract, flatten, perceus, reuse, verify, verify_flattened,
+    verify_lowered, verify_scopes,
 };
 
 /// `passes_until` で止める位置。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Pass {
     Boxing,
+    Flatten,
     Contract,
     Perceus,
     Reuse,
@@ -18,6 +20,7 @@ impl Pass {
     fn name(self) -> &'static str {
         match self {
             Pass::Boxing => "boxing",
+            Pass::Flatten => "flatten",
             Pass::Contract => "contract",
             Pass::Perceus => "perceus",
             Pass::Reuse => "reuse",
@@ -37,6 +40,11 @@ pub fn passes_until(program: &mut Program, last: Pass) {
     boxing(program);
     check(program, Pass::Boxing);
     if last == Pass::Boxing {
+        return;
+    }
+    flatten(program);
+    check(program, Pass::Flatten);
+    if last == Pass::Flatten {
         return;
     }
     contract(program);
@@ -59,7 +67,8 @@ fn check(program: &Program, pass: Pass) {
         return;
     }
     let result = match pass {
-        Pass::Boxing | Pass::Contract => verify_scopes(program),
+        Pass::Boxing => verify_scopes(program),
+        Pass::Flatten | Pass::Contract => verify_flattened(program),
         Pass::Perceus | Pass::Reuse => verify(program),
     };
     if let Err(error) = result {

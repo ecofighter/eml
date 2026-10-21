@@ -36,7 +36,7 @@ pub fn live_after_term(function: &LirFn, term: &Term, live_in: &[Vec<VarId>]) ->
         );
     };
     match term {
-        Term::Return(_) | Term::TailCall(_) => {}
+        Term::Return(_) | Term::ReturnMany(_) | Term::TailCall(_) => {}
         Term::Jump { target, args: _ } => add(*target, &function.block(*target).params),
         Term::Switch {
             scrutinee: _,
@@ -60,7 +60,7 @@ pub fn live_after_term(function: &LirFn, term: &Term, live_in: &[Vec<VarId>]) ->
 /// 単位の干渉を作るのに使い、token にもスロットを与える (docs/spec/vm.md の「スロットの割り当て」)。
 pub fn step_back(stmt: &Stmt, live: &mut BTreeSet<VarId>) {
     for var in stmt.defs() {
-        live.remove(var);
+        live.remove(&var);
     }
     match stmt {
         Stmt::Dup(var) | Stmt::Decref(var) | Stmt::DropToken(var) => {
@@ -71,6 +71,7 @@ pub fn step_back(stmt: &Stmt, live: &mut BTreeSet<VarId>) {
             ctor: _,
             fields,
             token: _,
+            unboxed: _,
         } => {
             live.insert(*value);
             live.extend(fields.iter().flatten().copied());
@@ -84,11 +85,9 @@ pub fn step_back(stmt: &Stmt, live: &mut BTreeSet<VarId>) {
             }
             stmt.for_each_atom(|atom| insert_var(live, atom));
         }
-        Stmt::Unpack {
-            value: _,
-            ctor: _,
-            fields: _,
-        } => stmt.for_each_atom(|atom| insert_var(live, atom)),
+        Stmt::LetMany { .. } | Stmt::Unpack { .. } | Stmt::UnboxStruct { .. } => {
+            stmt.for_each_atom(|atom| insert_var(live, atom))
+        }
     }
 }
 

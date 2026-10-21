@@ -5,6 +5,7 @@ mod common;
 
 mod boxing;
 mod contract;
+mod flatten;
 mod perceus;
 mod reuse;
 mod shape;

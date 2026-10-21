@@ -279,6 +279,7 @@ impl<'a, M: Mode> Emitter<'a, '_, M> {
                 ctor,
                 fields,
                 token,
+                unboxed: false,
             } => {
                 let layout_ctor = self.layout_ctor(*ctor);
                 let shape = layout_ctor.shape();
@@ -311,6 +312,12 @@ impl<'a, M: Mode> Emitter<'a, '_, M> {
             Stmt::DropToken(token) => {
                 let tok = self.slot(*token);
                 self.out.push(Op::DropToken { tok });
+            }
+            // 開くパスの複数の値の命令は、ソースのプログラムからはまだ作られない。VM はまだそれを実行しない
+            Stmt::LetMany { .. }
+            | Stmt::UnboxStruct { .. }
+            | Stmt::Release { unboxed: true, .. } => {
+                unreachable!("the VM does not compile multi-value statements yet")
             }
         }
     }
@@ -754,6 +761,7 @@ impl<'a, M: Mode> Emitter<'a, '_, M> {
                 let at = self.apply_operands(call, self.function.rets[0].0);
                 self.out.push(Op::TailApply { at });
             }
+            Term::ReturnMany(_) => unreachable!("the VM does not compile multi-value returns yet"),
             Term::Jump { target, args } => self.jump(block, *target, args),
             Term::Switch {
                 scrutinee,

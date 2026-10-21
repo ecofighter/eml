@@ -1,7 +1,9 @@
 //! LIR のテキストで書いた LIR で、verifier が正しいものを受け入れ、壊れたものを拒むことを確かめる (docs/spec/lir.md)。
 //! 構造の規則 R1 から R8 と、前の形の IR から引き継いだ検査を1つずつ確かめる。
 
-use eml_lir::{Prim, Program, Rhs, Stmt, parse, verify, verify_lowered, verify_scopes};
+use eml_lir::{
+    Prim, Program, Rhs, Stmt, parse, verify, verify_flattened, verify_lowered, verify_scopes,
+};
 
 /// 手で書く IR の配置の行。プログラムの先頭に置く。
 const BOOL: &str = "layout Prelude.Bool { False, True }\n";
@@ -3423,5 +3425,77 @@ fn a_struct_box_is_obj() {
     assert_eq!(
         check_scopes(&text("tobj", "obj")),
         Err("`b.2` (tobj) is bound to a box of a struct, which is obj in `f`".to_string())
+    );
+}
+
+fn check_flattened(text: &str) -> Result<(), String> {
+    verify_flattened(&read(text)).map_err(|error| error.to_string())
+}
+
+/// 開いた後の段では、変数にも関数の結果にも構造体は残らない。Perceus の後の段も開いた後である
+/// (docs/superpowers/specs/2026-10-21-s14e-abi-struct-design.md の「LIR」の verifier)。
+#[test]
+fn a_struct_after_flatten_is_rejected() {
+    let param = format!(
+        "{VEC3}fn f(v.0: Vec3{{float, float, float}}) -> float {{
+  unpack v.0 Vec3 #0(x.1: float, y.2: float, z.3: float)
+  return x.1
+}}
+"
+    );
+    assert_eq!(check_scopes(&param), Ok(()));
+    let error = Err(
+        "`v.0` is Vec3{float, float, float}, but no struct remains after flatten in `f`"
+            .to_string(),
+    );
+    assert_eq!(check_flattened(&param), error);
+    assert_eq!(check(&param), error);
+    let ret = format!(
+        "{VEC3}fn f(x.0: float) -> Vec3{{float, float, float}} {{
+  let v.1: Vec3{{float, float, float}} = con Vec3 #0(x.0, x.0, x.0)
+  return v.1
+}}
+"
+    );
+    assert_eq!(check_scopes(&ret), Ok(()));
+    assert_eq!(
+        check_flattened(&ret),
+        Err(
+            "the function returns Vec3{float, float, float}, but no struct remains after flatten in `f`"
+                .to_string()
+        )
+    );
+}
+
+/// 複数の値の `return` は、関数の結果の並びと長さが同じである。複数の値の命令は開いた後の段だけに現れる
+/// (docs/superpowers/specs/2026-10-21-s14e-abi-struct-design.md の「LIR」の verifier)。
+#[test]
+fn a_return_list_of_the_wrong_length_is_rejected() {
+    let text = |returned: &str| {
+        format!(
+            "fn g(x.0: float) -> (float, float) {{
+  return (x.0, x.0)
+}}
+fn f(x.0: float) -> (float, float) {{
+  let (a.1: float, b.2: float) = call g(x.0)
+  let c.3: float = extern \"Prelude.Num Float.+\"(a.1, b.2)
+  return {returned}
+}}
+"
+        )
+    };
+    assert_eq!(check_flattened(&text("(c.3, a.1)")), Ok(()));
+    assert_eq!(
+        check_flattened(&text("(c.3, a.1, b.2)")),
+        Err("a return gives 3 values, but the function returns (float, float) in `f`".to_string())
+    );
+    assert_eq!(
+        check_flattened(&text("c.3")),
+        Err("a return gives 1 values, but the function returns (float, float) in `f`".to_string())
+    );
+    // 開くパスより前の段は、複数の値を返す関数を拒む
+    assert_eq!(
+        check_scopes(&text("(c.3, a.1)")),
+        Err("the function returns (float, float) before flatten in `g`".to_string())
     );
 }

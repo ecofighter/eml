@@ -264,10 +264,11 @@ fn f(p.0: obj) -> obj {
             },
             fields: vec![Some(VarId(1)), None],
             token: None,
+            unboxed: false,
         }
     );
     // `dup` や `decref` と同じく、変数を定義せず、値の使いにも数えない
-    assert!(release.defs().is_empty());
+    assert!(release.defs().next().is_none());
     let mut atoms = Vec::new();
     release.for_each_atom(|atom| atoms.push(atom));
     assert!(atoms.is_empty());
@@ -1140,8 +1141,8 @@ fn g(i.0: int) -> int {
     f.blocks[2].term.for_each_atom(|atom| atoms.push(atom));
     assert_eq!(atoms, [v(2), v(6)]);
 
-    assert_eq!(f.blocks[0].stmts[0].defs(), [VarId(5)]);
-    assert_eq!(f.blocks[0].stmts[1].defs(), [VarId(6)]);
+    assert_eq!(f.blocks[0].stmts[0].defs().collect::<Vec<_>>(), [VarId(5)]);
+    assert_eq!(f.blocks[0].stmts[1].defs().collect::<Vec<_>>(), [VarId(6)]);
 
     let mut term = f.blocks[0].term.clone();
     term.for_each_successor_mut(|target| target.0 += 10);
@@ -1728,11 +1729,12 @@ b2:
             },
             fields: vec![None, Some(VarId(3)), Some(VarId(4)), None, Some(VarId(6))],
             token: Some(VarId(7)),
+            unboxed: false,
         }
     );
     // 生存解析と VM のスロットの割り当ては、定義を `defs` から知る。token がここに出ないと、token の変数がスロットを
     // 持たない
-    assert_eq!(stmts[0].defs(), [VarId(7)]);
+    assert_eq!(stmts[0].defs().collect::<Vec<_>>(), [VarId(7)]);
     assert_eq!(program.functions[0].repr(VarId(7)), Repr::Token);
     assert_eq!(program.functions[0].mark(VarId(7)), Mark::Unr);
     let Stmt::Let {
@@ -1766,7 +1768,7 @@ b2:
         })
     );
     assert_eq!(stmts[5], Stmt::DropToken(VarId(10)));
-    assert!(stmts[5].defs().is_empty());
+    assert!(stmts[5].defs().next().is_none());
 }
 
 #[test]
@@ -1794,6 +1796,7 @@ fn f(p.0: obj) -> unit {
             },
             fields: vec![None, None],
             token: Some(VarId(1)),
+            unboxed: false,
         }
     );
 }
@@ -1850,4 +1853,56 @@ internal yields role cont fn f$k0(a.0: int, x.1: tobj) -> tobj {
         panic!("expected a tail apply");
     };
     assert_eq!(site, &Site::Uniform);
+}
+
+/// 開くパスが作る複数の値の形 (複数の値の結果、`let`、`return`、構造体の `unbox`、`release unboxed`) は、表示した
+/// とおりに読み戻せる。葉の変数の名前は元の名前に葉の番号を付けたもの (`p.0`) である
+/// (docs/superpowers/specs/2026-10-21-s14e-abi-struct-design.md の「LIR」)。
+#[test]
+fn multi_value_forms_read_back() {
+    let program = round_trip(
+        "\
+layout P { P(tobj, float) }
+fn g(x.0: float) -> (obj lin, float) {
+  let d.1: obj lin = prim dummy()
+  return (d.1, x.0)
+}
+fn f(w.0: tobj, x.1: float) -> (obj lin, float) {
+  let (p.0.2: tobj, _) = unbox w.0 P
+  let p.0.3: float = unbox p.0.2
+  release unboxed w.0 P #0(p.0.2, _)
+  let (a.4: obj lin, b.5: float) = call g(p.0.3)
+  return (a.4, b.5)
+}
+",
+    );
+    let f = &program.functions[1];
+    assert_eq!(f.rets, [(Repr::Obj, Mark::Lin), (Repr::Float, Mark::Unr)]);
+    assert_eq!(f.vars[2].name, "p.0");
+    assert_eq!(f.blocks[0].stmts[0].defs().collect::<Vec<_>>(), [VarId(2)]);
+    assert_eq!(
+        f.blocks[0].stmts[3].defs().collect::<Vec<_>>(),
+        [VarId(4), VarId(5)]
+    );
+    // 書き方を1つにするため、値が1つの結果と `return` と呼び出しの束縛は括弧で書かない
+    for (text, message) in [
+        (
+            "fn f(x.0: int) -> (int) {\n  return x.0\n}\n",
+            "a function with one result writes it without parentheses",
+        ),
+        (
+            "fn f(x.0: int) -> int {\n  return (x.0)\n}\n",
+            "one value is returned without parentheses",
+        ),
+        (
+            "fn g() -> int {\n  return 1\n}\nfn f() -> int {\n  let (x.0: int) = call g()\n  return x.0\n}\n",
+            "one value is bound without parentheses",
+        ),
+        (
+            "fn g() -> (int, int) {\n  return (1, 2)\n}\nfn f() -> int {\n  let (x.0: int, _) = call g()\n  return x.0\n}\n",
+            "a call binds every value; only an unbox skips one",
+        ),
+    ] {
+        assert_eq!(parse_error(text).message, message);
+    }
 }

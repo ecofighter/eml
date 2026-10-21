@@ -95,12 +95,7 @@ fn deaths(
             ),
             "Perceus runs once on code without RC instructions"
         );
-        let born = stmt
-            .defs()
-            .iter()
-            .copied()
-            .filter(|var| live.contains(var))
-            .collect();
+        let born = stmt.defs().filter(|var| live.contains(var)).collect();
         let mut died = vars(|f| stmt.for_each_atom(f));
         died.retain(|var| !live.contains(var));
         died.sort_unstable();
@@ -286,7 +281,7 @@ impl Fields<'_> {
             _ => {}
         }
         // 定義して使わない変数も捨てる
-        candidates.extend(stmt.defs().iter().copied());
+        candidates.extend(stmt.defs());
         out.push(stmt);
         candidates.sort_unstable();
         candidates.dedup();
@@ -507,6 +502,7 @@ impl Fields<'_> {
                 ctor,
                 fields: named,
                 token: None,
+                unboxed: false,
             });
         }
         owned.remove(&owner);

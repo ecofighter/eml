@@ -33,7 +33,7 @@ use crate::check::{
 };
 use crate::liveness;
 use crate::reuse;
-use crate::syntax::{operation_text, prim_text};
+use crate::syntax::{layout_text, operation_text, prim_text, rets_text};
 use crate::unwind::{self, UnwindPoint};
 use crate::{
     Atom, Block, BlockId, Call, CasePattern, Ctor, FnIdx, Layout, LirFn, Mark, OpRet, Prim,
@@ -45,9 +45,17 @@ pub fn verify(program: &Program) -> Result<(), VerifyError> {
     verify_at(program, Level::Ownership)
 }
 
-/// Perceus より前の LIR を確かめる。形と範囲と境界を確かめ、RC の命令がまだないことを確かめる。
+/// 開くパス (flatten) より前の LIR を確かめる。形と範囲と境界を確かめ、RC の命令がまだないことを確かめる。構造体の
+/// 変数を受け、複数の値の `let` と `return` と構造体の `unbox` を拒む。
 pub fn verify_scopes(program: &Program) -> Result<(), VerifyError> {
     verify_at(program, Level::Scopes)
+}
+
+/// 開くパスの後で Perceus より前の LIR を確かめる。範囲の段の検査に加えて、構造体がどこにも残らないことを確かめ、
+/// 複数の値の `let` と `return` と構造体の `unbox` を受ける
+/// (docs/superpowers/specs/2026-10-21-s14e-abi-struct-design.md の「LIR」の verifier)。
+pub fn verify_flattened(program: &Program) -> Result<(), VerifyError> {
+    verify_at(program, Level::Flattened)
 }
 
 /// box の挿入の前の LIR を確かめる。範囲の段と同じ形と範囲を確かめ、境界は比べない。box の挿入と縮約が作るもの
@@ -57,12 +65,14 @@ pub fn verify_lowered(program: &Program) -> Result<(), VerifyError> {
     verify_at(program, Level::Lowered)
 }
 
-/// 検査の段。段はパスの順に直線に並ぶ。入口の段の LIR には、box の挿入と縮約が作るものがまだない。Perceus より前の
-/// LIR には、所有を確かめる材料 (`dup`、`decref`、`release`) がまだない。
+/// 検査の段。段はパスの順に直線に並ぶ。入口の段の LIR には、box の挿入と縮約が作るものがまだない。開くパスより前の
+/// LIR には構造体が残り、複数の値の命令がまだない。Perceus より前の LIR には、所有を確かめる材料 (`dup`、`decref`、
+/// `release`) がまだない。
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 enum Level {
     Lowered,
     Scopes,
+    Flattened,
     Ownership,
 }
 
@@ -96,9 +106,18 @@ pub(crate) fn unwind_points(program: &Program) -> Vec<Result<Vec<UnwindPoint>, V
 }
 
 fn verify_at(program: &Program, level: Level) -> Result<(), VerifyError> {
+    if level >= Level::Flattened {
+        no_struct_layouts(program)?;
+    }
     with_tables(program, |tables| {
         // `clause` の印の関数の ABI と役割は、参照ごとでなく関数ごとに1回だけ確かめる
         for function in &program.functions {
+            rets(program, function, level, function.clause.is_some()).map_err(|message| {
+                VerifyError {
+                    function: function.name.clone(),
+                    message,
+                }
+            })?;
             clause_function(
                 &program.effects,
                 &function.name,
@@ -131,6 +150,61 @@ fn verify_at(program: &Program, level: Level) -> Result<(), VerifyError> {
     })
 }
 
+/// 開いた後の段では、配置のフィールドに構造体は来ない。構造体の型を宣言したフィールドは `tobj` である
+/// (docs/superpowers/specs/2026-10-21-s14e-abi-struct-design.md の「箱に入れる位置」)。
+fn no_struct_layouts(program: &Program) -> Result<(), VerifyError> {
+    for layout in &program.layouts {
+        for constructor in &layout.constructors {
+            if constructor
+                .fields
+                .iter()
+                .any(|repr| matches!(repr, Repr::Struct(_)))
+            {
+                return Err(VerifyError {
+                    function: layout.name.clone(),
+                    message: format!(
+                        "the constructor `{}` has a struct field, but no struct remains after flatten",
+                        constructor.name
+                    ),
+                });
+            }
+        }
+    }
+    Ok(())
+}
+
+/// 関数の結果の並びは空でない。2つ以上の値を返す関数は開いた後の段だけにあり、開いた後の結果に構造体は残らない。
+/// `clause` の印の関数は操作の ABI で値を1つ返す。
+fn rets(program: &Program, function: &LirFn, level: Level, clause: bool) -> Result<(), String> {
+    let text = || rets_text(&program.layouts, &program.structs, &function.rets);
+    match function.rets.len() {
+        0 => return Err("the function returns no values".to_string()),
+        1 => {}
+        _ if level < Level::Flattened => {
+            return Err(format!("the function returns {} before flatten", text()));
+        }
+        _ if clause => {
+            return Err(format!(
+                "the function is a clause, but it returns {}",
+                text()
+            ));
+        }
+        _ => {}
+    }
+    if level >= Level::Flattened
+        && function
+            .rets
+            .iter()
+            .any(|(repr, _)| matches!(repr, Repr::Struct(_)))
+    {
+        return Err(format!(
+            "the function returns {}, but no struct remains after flatten",
+            text()
+        ));
+    }
+    Ok(())
+}
+
 fn with_tables<R>(program: &Program, f: impl FnOnce(Tables<'_>) -> R) -> R {
     // 配置の Repr はコンストラクタをすべてたどって決まるので、命令ごとでなく表ごとに1回だけ求める
     let layout_reprs: Vec<Repr> = program.layouts.iter().map(Layout::repr).collect();
@@ -161,7 +235,7 @@ pub(crate) fn block_shapes(function: &LirFn) -> Vec<BlockShape> {
         .map(|block| BlockShape {
             params: block.params.len(),
             term: match &block.term {
-                Term::Return(_) | Term::TailCall(_) => TermShape::Exit,
+                Term::Return(_) | Term::ReturnMany(_) | Term::TailCall(_) => TermShape::Exit,
                 Term::Jump { target, args } => TermShape::Jump {
                     target: *target,
                     args: args.len(),
@@ -174,10 +248,11 @@ pub(crate) fn block_shapes(function: &LirFn) -> Vec<BlockShape> {
         .collect()
 }
 
-/// 呼び出しの結果を受ける所。`let` の束縛か、`tail` の呼び出し元の `ret` である。
+/// 呼び出しの結果を受ける所。`let` の束縛か、複数の値の `let` の束縛の並びか、`tail` の呼び出し元の結果である。
 #[derive(Clone, Copy)]
-enum Receiver {
+enum Receiver<'v> {
     Bound(VarId),
+    Many(&'v [VarId]),
     Tail,
 }
 
@@ -430,6 +505,27 @@ impl<'a> Checker<'a> {
                 }
                 self.define(owned, *var, self.at)
             }
+            Stmt::LetMany { vars, call } => {
+                if self.level < Level::Flattened {
+                    return Err(format!(
+                        "a let of {} values is formed before flatten",
+                        vars.len()
+                    ));
+                }
+                self.check_call(owned, call, Receiver::Many(vars))?;
+                if reuse::may_yield(self.program, self.function, call) {
+                    self.no_token_live(owned, || {
+                        format!(
+                            "live after {}, which may yield",
+                            self.call_text(call, false)
+                        )
+                    })?;
+                }
+                for &var in vars {
+                    self.define(owned, var, self.at)?;
+                }
+                Ok(())
+            }
             Stmt::Unpack {
                 value,
                 ctor,
@@ -438,6 +534,33 @@ impl<'a> Checker<'a> {
                 self.cx.check_unpack(*value, *ctor, fields)?;
                 self.read(owned, *value, "unpacked")?;
                 self.known.insert(*value, *ctor);
+                self.bind_fields(
+                    owned,
+                    *value,
+                    *ctor,
+                    fields.iter().copied().enumerate(),
+                    self.at,
+                )
+            }
+            Stmt::UnboxStruct {
+                value,
+                ctor,
+                fields,
+            } => {
+                if self.level < Level::Flattened {
+                    return Err(format!(
+                        "an unbox of `{}` as `{}` is formed before flatten",
+                        self.cx.name(*value),
+                        layout_text(&self.program.layouts, ctor.layout)
+                    ));
+                }
+                self.check_unbox_struct(*value, *ctor, fields)?;
+                self.read(owned, *value, "unboxed")?;
+                self.known.insert(*value, *ctor);
+                let fields = fields
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(slot, field)| field.map(|field| (slot, field)));
                 self.bind_fields(owned, *value, *ctor, fields, self.at)
             }
             Stmt::Dup(var) => {
@@ -463,6 +586,7 @@ impl<'a> Checker<'a> {
                 ctor,
                 fields,
                 token,
+                unboxed: _,
             } => {
                 self.rc_allowed(*value, "released with its fields")?;
                 self.release(owned, *value, *ctor, fields, token.is_some())?;
@@ -643,7 +767,7 @@ impl<'a> Checker<'a> {
         self.no_token_values(&atoms)?;
         // token は合流するブロックへ流れず、関数からも出ない (docs/spec/object-model.md の「reuse」)
         match term {
-            Term::Return(_) => {
+            Term::Return(_) | Term::ReturnMany(_) => {
                 self.no_token_live(&owned, || "still live at a return".to_string())?
             }
             Term::TailCall(_) => {
@@ -657,24 +781,20 @@ impl<'a> Checker<'a> {
         match term {
             Term::Return(atom) => {
                 self.consume(&mut owned, *atom)?;
-                // 末尾の位置の呼び出しの束縛は呼ばれる側の結果の Repr を持ち、縮約がこの形を `tail` にする。それまでの
-                // 範囲の段では、互換でない `return` をこの形のときだけ許す
-                // (docs/superpowers/specs/2026-10-21-s14e-abi-struct-design.md の「box の挿入」)
-                let tail = self.level == Level::Scopes && tail_position_call(block).is_some();
-                if !tail && !self.cx.passes(*atom, self.function.rets[0].0) {
+                self.check_returned(block, std::slice::from_ref(atom))?;
+                self.nothing_owned(&owned)
+            }
+            Term::ReturnMany(atoms) => {
+                if self.level < Level::Flattened {
                     return Err(format!(
-                        "{} is returned from a function that returns {}",
-                        self.cx.typed_atom_text(*atom),
-                        self.cx.repr_text(self.function.rets[0].0)
+                        "a return of {} values is formed before flatten",
+                        atoms.len()
                     ));
                 }
-                if !self.cx.mark_passes(*atom, self.function.rets[0].1) {
-                    return Err(format!(
-                        "{} is returned from a function that returns {}",
-                        self.cx.marked_atom_text(*atom),
-                        self.function.rets[0].1.name()
-                    ));
+                for &atom in atoms {
+                    self.consume(&mut owned, atom)?;
                 }
+                self.check_returned(block, atoms)?;
                 self.nothing_owned(&owned)
             }
             Term::TailCall(call) => {
@@ -733,7 +853,13 @@ impl<'a> Checker<'a> {
                         if !case.fields.is_empty() {
                             known.insert(value, ctor);
                         }
-                        self.bind_fields(&mut entry, value, ctor, &case.fields, site)?;
+                        self.bind_fields(
+                            &mut entry,
+                            value,
+                            ctor,
+                            case.fields.iter().copied().enumerate(),
+                            site,
+                        )?;
                     }
                     self.pending.insert(case.target.0, entry);
                     self.pending_known.insert(case.target.0, known);
@@ -745,6 +871,90 @@ impl<'a> Checker<'a> {
                 Ok(())
             }
         }
+    }
+
+    /// 構造体の `unbox` の値は箱 (`obj` か `tobj`) で、配置はコンストラクタを1つ持つ。名前を書いたフィールドの変数は、
+    /// 配置の宣言した Repr と互換である。構造体の型を宣言したフィールドは `tobj` で、続く `unbox` が受け直す
+    /// (docs/superpowers/specs/2026-10-21-s14e-abi-struct-design.md の「LIR」)。
+    fn check_unbox_struct(
+        &self,
+        value: VarId,
+        ctor: Ctor,
+        fields: &[Option<VarId>],
+    ) -> Result<(), String> {
+        let repr = self.function.repr(value);
+        if !matches!(repr, Repr::Obj | Repr::TObj) {
+            return Err(format!(
+                "`{}` ({}) is unboxed as a struct, but only obj and tobj can be",
+                self.cx.name(value),
+                self.cx.repr_text(repr)
+            ));
+        }
+        let (layout, _, constructor) = self.cx.ctor(ctor, "an unbox")?;
+        if layout.constructors.len() != 1 {
+            return Err(format!(
+                "an unbox of `{}` names `{}`, which has {} constructors",
+                self.cx.name(value),
+                layout.name,
+                layout.constructors.len()
+            ));
+        }
+        field_count(
+            format!("an unbox of `{}` as `{}`", self.cx.name(value), layout.name),
+            fields.len(),
+            constructor,
+        )?;
+        for (slot, (field, &declared)) in fields.iter().zip(&constructor.fields).enumerate() {
+            let Some(field) = *field else { continue };
+            let field_repr = self.function.repr(field);
+            if !self.cx.compatible(field_repr, declared) {
+                return Err(format!(
+                    "field {slot} of an unbox of `{}` is `{}` ({}), but the layout has {}",
+                    self.cx.name(value),
+                    self.cx.name(field),
+                    self.cx.repr_text(field_repr),
+                    declared.name()
+                ));
+            }
+        }
+        Ok(())
+    }
+
+    /// `return` の値の並びは、関数の結果の並びと長さが同じで、値ごとに Repr が互換で印も互換である。末尾の位置の
+    /// 呼び出しの束縛は呼ばれる側の結果の Repr を持ち、縮約がこの形を `tail` にする。それまでの段では、互換でない
+    /// `return` をこの形のときだけ許す。構造体と箱の間の違いでは、並びの長さも違いうる
+    /// (docs/superpowers/specs/2026-10-21-s14e-abi-struct-design.md の「box の挿入」と「LIR」)。
+    fn check_returned(&self, block: &Block, atoms: &[Atom]) -> Result<(), String> {
+        let rets = &self.function.rets;
+        let tail = matches!(self.level, Level::Scopes | Level::Flattened)
+            && tail_position_call(block).is_some();
+        if atoms.len() != rets.len() {
+            if tail {
+                return Ok(());
+            }
+            return Err(format!(
+                "a return gives {} values, but the function returns {}",
+                atoms.len(),
+                rets_text(&self.program.layouts, &self.program.structs, rets)
+            ));
+        }
+        for (&atom, &(repr, mark)) in atoms.iter().zip(rets) {
+            if !tail && !self.cx.passes(atom, repr) {
+                return Err(format!(
+                    "{} is returned from a function that returns {}",
+                    self.cx.typed_atom_text(atom),
+                    self.cx.repr_text(repr)
+                ));
+            }
+            if !self.cx.mark_passes(atom, mark) {
+                return Err(format!(
+                    "{} is returned from a function that returns {}",
+                    self.cx.marked_atom_text(atom),
+                    mark.name()
+                ));
+            }
+        }
+        Ok(())
     }
 
     /// 合流するブロックに入る `jump` は、渡す値を除いて、どれも同じ多重集合を所有する。その集合が入口の所有になる (R6)。
@@ -817,6 +1027,13 @@ impl<'a> Checker<'a> {
             return Err(format!(
                 "`{}` is a token, but only a release defines one",
                 self.cx.name(var)
+            ));
+        }
+        if self.level >= Level::Flattened && matches!(self.function.repr(var), Repr::Struct(_)) {
+            return Err(format!(
+                "`{}` is {}, but no struct remains after flatten",
+                self.cx.name(var),
+                self.cx.repr_text(self.function.repr(var))
             ));
         }
         self.define_once(var, site)?;
@@ -906,12 +1123,13 @@ impl<'a> Checker<'a> {
 
     /// `case` か `unpack` のフィールドを定義する。RC の対象のフィールドは所有を持たずに始まる (借りる)。持ち主と
     /// 出どころは定義のときに1回だけ決める。
+    /// `fields` はフィールドの位置と変数の組で、構造体の `unbox` は読まない位置を飛ばす。
     fn bind_fields(
         &mut self,
         owned: &mut Owned,
         value: VarId,
         ctor: Ctor,
-        fields: &[VarId],
+        fields: impl Iterator<Item = (usize, VarId)>,
         site: Site,
     ) -> Result<(), String> {
         let owner = if owned.contains_key(&value) {
@@ -919,7 +1137,7 @@ impl<'a> Checker<'a> {
         } else {
             self.owners[value.0 as usize]
         };
-        for (slot, &field) in fields.iter().enumerate() {
+        for (slot, field) in fields {
             self.define(owned, field, site)?;
             owned.remove(&field);
             self.owners[field.0 as usize] = owner;
@@ -1265,7 +1483,7 @@ impl<'a> Checker<'a> {
                         args.len()
                     ));
                 }
-                Some(target.rets[0])
+                Some(target.rets.clone())
             }
             Call::Clause {
                 effect,
@@ -1292,7 +1510,7 @@ impl<'a> Checker<'a> {
                 }
                 // `never` の操作の節は値を返さないので、結果は位置でない
                 match operation.ret {
-                    OpRet::Repr(repr) => Some((repr, operation.ret_mark)),
+                    OpRet::Repr(repr) => Some(vec![(repr, operation.ret_mark)]),
                     OpRet::Never => None,
                 }
             }
@@ -1300,21 +1518,40 @@ impl<'a> Checker<'a> {
             // 結果の印はいつも `poly` で、どの受け手とも合う
             Call::Apply { site, .. } => match (site, receiver) {
                 (ApplySite::Typed(_), Receiver::Bound(var)) => {
-                    Some((self.function.repr(var), Mark::Poly))
+                    Some(vec![(self.function.repr(var), Mark::Poly)])
                 }
-                (ApplySite::Typed(_), Receiver::Tail) => {
-                    Some((self.function.rets[0].0, Mark::Poly))
-                }
-                (ApplySite::Uniform, _) => Some((Repr::TObj, Mark::Poly)),
+                (ApplySite::Typed(_), Receiver::Many(vars)) => Some(
+                    vars.iter()
+                        .map(|&var| (self.function.repr(var), Mark::Poly))
+                        .collect(),
+                ),
+                (ApplySite::Typed(_), Receiver::Tail) => Some(
+                    self.function
+                        .rets
+                        .iter()
+                        .map(|&(repr, _)| (repr, Mark::Poly))
+                        .collect(),
+                ),
+                (ApplySite::Uniform, _) => Some(vec![(Repr::TObj, Mark::Poly)]),
             },
         };
         if let Call::Apply { args, site, .. } = call {
             self.cx.check_site(args, site)?;
+            // 開くパスは場所の Repr の並びも引数と同じく葉に開く
+            if self.level >= Level::Flattened
+                && let ApplySite::Typed(reprs) = site
+                && let Some(&repr) = reprs.iter().find(|repr| matches!(repr, Repr::Struct(_)))
+            {
+                return Err(format!(
+                    "the apply site lists {}, but no struct remains after flatten",
+                    self.cx.repr_text(repr)
+                ));
+            }
         }
         if self.cx.boundaries {
             self.check_operands(call)?;
             if let Some(result) = result {
-                self.check_result(call, result, receiver)?;
+                self.check_result(call, &result, receiver)?;
             }
         }
         self.consume_all(owned, |f| call.for_each_atom(f))?;
@@ -1511,38 +1748,82 @@ impl<'a> Checker<'a> {
     fn check_result(
         &self,
         call: &Call,
-        (result, result_mark): (Repr, Mark),
+        results: &[(Repr, Mark)],
         receiver: Receiver,
     ) -> Result<(), String> {
+        let rets = |results: &[(Repr, Mark)]| {
+            rets_text(&self.program.layouts, &self.program.structs, results)
+        };
         match receiver {
             Receiver::Bound(var) => {
                 let repr = self.function.repr(var);
-                if !self.cx.compatible(repr, result) {
+                let [(result, result_mark)] = *results else {
                     return Err(format!(
                         "`{}` ({}) is bound to {}, which returns {}",
                         self.cx.name(var),
                         self.cx.repr_text(repr),
                         self.call_text(call, false),
-                        self.cx.repr_text(result)
+                        rets(results)
+                    ));
+                };
+                self.check_bound(call, var, result, result_mark)
+            }
+            Receiver::Many(vars) => {
+                if vars.len() != results.len() {
+                    return Err(format!(
+                        "{} values are bound to {}, which returns {}",
+                        vars.len(),
+                        self.call_text(call, false),
+                        rets(results)
                     ));
                 }
-                self.cx
-                    .bound_mark(var, result_mark, || self.call_text(call, false))
+                for (&var, &(result, result_mark)) in vars.iter().zip(results) {
+                    self.check_bound(call, var, result, result_mark)?;
+                }
+                Ok(())
             }
             Receiver::Tail => {
-                // 呼び出し元を "this function" と書き、呼ばれる側を指す "the function" と分ける
-                let ret_mark = self.function.rets[0].1;
-                if result_mark.compatible(ret_mark) {
+                // 構造体と箱の間の変換では並びの長さが違い、印は変換のフレームが受け渡す
+                // (docs/superpowers/specs/2026-10-21-s14e-abi-struct-design.md の「VM」)
+                if results.len() != self.function.rets.len() {
                     return Ok(());
                 }
-                Err(format!(
-                    "{} returns {}, but this function returns {}",
-                    self.call_text(call, true),
-                    result_mark.name(),
-                    ret_mark.name()
-                ))
+                for (&(_, result_mark), &(_, ret_mark)) in results.iter().zip(&self.function.rets) {
+                    // 呼び出し元を "this function" と書き、呼ばれる側を指す "the function" と分ける
+                    if !result_mark.compatible(ret_mark) {
+                        return Err(format!(
+                            "{} returns {}, but this function returns {}",
+                            self.call_text(call, true),
+                            result_mark.name(),
+                            ret_mark.name()
+                        ));
+                    }
+                }
+                Ok(())
             }
         }
+    }
+
+    /// 呼び出しの結果の1つの値を束縛する変数は、Repr が互換で、印も互換である。
+    fn check_bound(
+        &self,
+        call: &Call,
+        var: VarId,
+        result: Repr,
+        result_mark: Mark,
+    ) -> Result<(), String> {
+        let repr = self.function.repr(var);
+        if !self.cx.compatible(repr, result) {
+            return Err(format!(
+                "`{}` ({}) is bound to {}, which returns {}",
+                self.cx.name(var),
+                self.cx.repr_text(repr),
+                self.call_text(call, false),
+                self.cx.repr_text(result)
+            ));
+        }
+        self.cx
+            .bound_mark(var, result_mark, || self.call_text(call, false))
     }
 
     /// 境界の検査の文言で呼び出しを指す言い方。`let` では `` `g` ``、``a clause of `Ask.ask` `` の形、`tail` では

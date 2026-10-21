@@ -90,8 +90,8 @@ fn interference(function: &LirFn) -> Vec<BTreeSet<usize>> {
         });
         for stmt in block.stmts.iter().rev() {
             // 定義は、その文の後で生きているすべての変数と干渉する。定義した変数が死んでいても同じである
-            for &def in stmt.defs() {
-                for &other in stmt.defs().iter().chain(&live) {
+            for def in stmt.defs() {
+                for other in stmt.defs().chain(live.iter().copied()) {
                     edge(def, other);
                 }
             }

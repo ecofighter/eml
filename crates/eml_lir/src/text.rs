@@ -7,7 +7,7 @@
 use eml_extern::Extern;
 
 use crate::syntax::{self, FnState, Reader, error};
-use crate::{Atom, Block, Call, LirFn, ParseError, Program, Reuse, Rhs, Stmt, Term, VarId};
+use crate::{Atom, Block, Call, Ctor, LirFn, ParseError, Program, Reuse, Rhs, Stmt, Term, VarId};
 
 /// `pretty` の表示を `Program` に戻す。入口は `entry$main` という名前の関数で、なければ最初の関数である。
 pub fn parse(text: &str) -> Result<Program, ParseError> {
@@ -55,7 +55,8 @@ impl Parser<'_> {
                 Stmt::Let {
                     var: _,
                     rhs: Rhs::Call(call),
-                } => Some(call),
+                }
+                | Stmt::LetMany { vars: _, call } => Some(call),
                 _ => None,
             });
             let tail = match &mut block.term {
@@ -75,7 +76,7 @@ impl Parser<'_> {
             yields: header.yields,
             clause: header.clause,
             vars,
-            rets: vec![(header.ret, header.ret_mark)],
+            rets: header.rets,
             blocks,
         })
     }
@@ -95,6 +96,7 @@ impl Parser<'_> {
             };
             self.reader.bump();
             match keyword {
+                "let" if self.reader.at_punct('(') => stmts.push(self.let_many(state, line)?),
                 "let" => {
                     let var = self.reader.binder(state)?;
                     self.reader.expect_word("=")?;
@@ -121,6 +123,14 @@ impl Parser<'_> {
                 "decref" => stmts.push(Stmt::Decref(self.reader.var(state)?)),
                 "release" => stmts.push(self.release(state, line, None)?),
                 "drop_token" => stmts.push(Stmt::DropToken(self.reader.var(state)?)),
+                // `()` は `unit` の値なので、括弧の中に値があるときだけ値の並びと読む
+                "return" if self.reader.at_punct('(') && !self.reader.at_unit() => {
+                    let values = self.reader.list('(', ')', |p| p.atom(state))?;
+                    if values.len() < 2 {
+                        return Err(error(line, "one value is returned without parentheses"));
+                    }
+                    break Term::ReturnMany(values);
+                }
                 "return" => break Term::Return(self.reader.atom(state)?),
                 "tail" => break Term::TailCall(self.call(state)?),
                 "jump" => {
@@ -158,6 +168,43 @@ impl Parser<'_> {
         })
     }
 
+    /// `let (..) =` の後の、複数の値の呼び出しか構造体の `unbox`。`unbox` は読まないフィールドを `_` と書き、配置の
+    /// 名前だけを書く。構造体の配置のコンストラクタは1つだからである。
+    fn let_many(&mut self, state: &mut FnState, line: usize) -> Result<Stmt, ParseError> {
+        let binders = self.reader.list('(', ')', |p| {
+            if p.at_word("_") {
+                p.bump();
+                Ok(None)
+            } else {
+                p.binder(state).map(Some)
+            }
+        })?;
+        self.reader.expect_word("=")?;
+        if self.reader.at_word("unbox") {
+            self.reader.bump();
+            let value = self.reader.var(state)?;
+            let layout = self.reader.layout_ref()?;
+            return Ok(Stmt::UnboxStruct {
+                value,
+                ctor: Ctor { layout, tag: 0 },
+                fields: binders,
+            });
+        }
+        let Some(vars) = binders.into_iter().collect::<Option<Vec<VarId>>>() else {
+            return Err(error(
+                line,
+                "a call binds every value; only an unbox skips one",
+            ));
+        };
+        if vars.len() < 2 {
+            return Err(error(line, "one value is bound without parentheses"));
+        }
+        Ok(Stmt::LetMany {
+            vars,
+            call: self.call(state)?,
+        })
+    }
+
     /// `release` の後の値と、残す位置の並び。残す位置のない `release` は `decref` と同じなので、token を定義する形でだけ
     /// 書ける (docs/spec/object-model.md の「reuse」)。
     fn release(
@@ -166,6 +213,10 @@ impl Parser<'_> {
         line: usize,
         token: Option<VarId>,
     ) -> Result<Stmt, ParseError> {
+        let unboxed = self.reader.at_word("unboxed");
+        if unboxed {
+            self.reader.bump();
+        }
         let value = self.reader.var(state)?;
         let ctor = self.reader.ctor()?;
         let fields = self.reader.list('(', ')', |p| {
@@ -184,6 +235,7 @@ impl Parser<'_> {
             ctor,
             fields,
             token,
+            unboxed,
         })
     }
 

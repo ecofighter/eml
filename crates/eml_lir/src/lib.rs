@@ -10,6 +10,7 @@ pub use eml_extern::{FloatBits, OpRet, Repr, StructId};
 mod boxing;
 pub mod check;
 mod contract;
+mod flatten;
 pub mod liveness;
 mod perceus;
 mod pipeline;
@@ -23,13 +24,14 @@ mod verify;
 
 pub use boxing::boxing;
 pub use contract::contract;
+pub use flatten::flatten;
 pub use perceus::perceus;
 pub use pipeline::{Pass, passes_until};
 pub use pretty::{pretty, pretty_with_positions};
 pub use prim::{Immediates, Prim, PrimRow};
 pub use reuse::reuse;
 pub use text::parse;
-pub use verify::{verify, verify_lowered, verify_scopes};
+pub use verify::{verify, verify_flattened, verify_lowered, verify_scopes};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Program {
@@ -78,7 +80,9 @@ pub struct LirFn {
     /// (docs/spec/lir.md の「入口の関数の印」)。
     pub clause: Option<(u32, u32)>,
     pub vars: Vec<VarInfo>,
-    /// 直接の呼び出しの結果の Repr と印の並び。長さは1以上である。値が1つの関数は要素を1つ持つ。
+    /// 直接の呼び出しの結果の Repr と印の並び。長さは1以上である。開くパス (flatten) の前はいつも1つで、開いた後は
+    /// 構造体を返す関数がその葉を並べる (docs/superpowers/specs/2026-10-21-s14e-abi-struct-design.md の「LIR」)。
+    /// テキストの形では、2つ以上の値を `-> (float, float)` と書く。
     pub rets: Vec<(Repr, Mark)>,
     /// `blocks[0]` が入口で、その引数が関数の引数である。辺はすべて番号の大きいブロックへ向かう。
     pub blocks: Vec<Block>,
@@ -182,6 +186,12 @@ pub enum Stmt {
         var: VarId,
         rhs: Rhs,
     },
+    /// 複数の値を返す呼び出しの結果を、値の順に束縛する。開くパスが構造体の結果を葉に開いて作り、開いた後の段だけに
+    /// 現れる。テキストの形は `let (a.1: float, b.2: float) = call f(x.0)` である。値が1つの呼び出しは `Let` で書く。
+    LetMany {
+        vars: Vec<VarId>,
+        call: Call,
+    },
     /// コンストラクタが1つの型の値を分解する。行き先が「ブロックの残り」である1つの case の `switch` と同じ意味で、
     /// フィールドは `Case` のフィールドと同じ規則で束縛する。`ctor` の配置は、コンストラクタが1つで Repr が `obj`
     /// である (docs/spec/lir.md の「構造の規則」の R8)。
@@ -189,6 +199,15 @@ pub enum Stmt {
         value: VarId,
         ctor: Ctor,
         fields: Vec<VarId>,
+    },
+    /// 構造体の箱 `value` のフィールドを読み、`fields` に束縛する。`None` は読まないフィールドである。フィールドは
+    /// `unpack` のフィールドと同じく値から借りる。開くパスが構造体の `unbox` から作り、開いた後の段だけに現れる。
+    /// テキストの形は `let (x.4: float, _) = unbox w.3 Vec3` である
+    /// (docs/superpowers/specs/2026-10-21-s14e-abi-struct-design.md の「LIR」)。
+    UnboxStruct {
+        value: VarId,
+        ctor: Ctor,
+        fields: Vec<Option<VarId>>,
     },
     Dup(VarId),
     Decref(VarId),
@@ -202,6 +221,10 @@ pub enum Stmt {
         ctor: Ctor,
         fields: Vec<Option<VarId>>,
         token: Option<VarId>,
+        /// 構造体の `unbox` で葉を借りた箱を手放す印。VM はダミーを受けても何もしない別の命令にする。ふつうの
+        /// `release` の速い道に確かめの分岐を足さないためである。テキストの形では `release unboxed` と書く
+        /// (docs/superpowers/specs/2026-10-21-s14e-abi-struct-design.md の「ダミーの約束を広げる」)。
+        unboxed: bool,
     },
     /// `drop_token r`。使わなかった token を手放す。
     DropToken(VarId),
@@ -209,19 +232,28 @@ pub enum Stmt {
 
 impl Stmt {
     /// 文が定義する変数。
-    pub fn defs(&self) -> &[VarId] {
-        match self {
-            Stmt::Let { var, rhs: _ } => std::slice::from_ref(var),
+    pub fn defs(&self) -> impl Iterator<Item = VarId> + '_ {
+        let (vars, fields): (&[VarId], &[Option<VarId>]) = match self {
+            Stmt::Let { var, rhs: _ } => (std::slice::from_ref(var), &[]),
+            Stmt::LetMany { vars, call: _ } => (vars, &[]),
             Stmt::Unpack {
                 value: _,
                 ctor: _,
                 fields,
-            } => fields,
+            } => (fields, &[]),
+            Stmt::UnboxStruct {
+                value: _,
+                ctor: _,
+                fields,
+            } => (&[], fields),
             Stmt::Release {
                 token: Some(token), ..
-            } => std::slice::from_ref(token),
-            Stmt::Dup(_) | Stmt::Decref(_) | Stmt::Release { .. } | Stmt::DropToken(_) => &[],
-        }
+            } => (std::slice::from_ref(token), &[]),
+            Stmt::Dup(_) | Stmt::Decref(_) | Stmt::Release { .. } | Stmt::DropToken(_) => {
+                (&[], &[])
+            }
+        };
+        vars.iter().copied().chain(fields.iter().flatten().copied())
     }
 
     /// 文が値として使う変数と定数。`Dup`、`Decref`、`Release` は Perceus の命令なので、値の使用に数えない。token は
@@ -229,11 +261,8 @@ impl Stmt {
     pub fn for_each_atom(&self, mut f: impl FnMut(Atom)) {
         match self {
             Stmt::Let { var: _, rhs } => rhs.for_each_atom(f),
-            Stmt::Unpack {
-                value,
-                ctor: _,
-                fields: _,
-            } => f(Atom::Var(*value)),
+            Stmt::LetMany { vars: _, call } => call.for_each_atom(f),
+            Stmt::Unpack { value, .. } | Stmt::UnboxStruct { value, .. } => f(Atom::Var(*value)),
             Stmt::Dup(_) | Stmt::Decref(_) | Stmt::Release { .. } | Stmt::DropToken(_) => {}
         }
     }
@@ -243,7 +272,9 @@ impl Stmt {
     pub fn for_each_consumed(&self, f: impl FnMut(Atom)) {
         match self {
             Stmt::Let { var: _, rhs } => rhs.for_each_consumed(f),
+            Stmt::LetMany { vars: _, call } => call.for_each_atom(f),
             Stmt::Unpack { .. }
+            | Stmt::UnboxStruct { .. }
             | Stmt::Dup(_)
             | Stmt::Decref(_)
             | Stmt::Release { .. }
@@ -255,6 +286,9 @@ impl Stmt {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Term {
     Return(Atom),
+    /// 複数の値を返す。開くパスが構造体を返す `return` から作り、開いた後の段だけに現れる。テキストの形は
+    /// `return (a.1, b.2)` である。
+    ReturnMany(Vec<Atom>),
     /// 縮約が作る、末尾の呼び出しの要求。
     TailCall(Call),
     /// 並列な代入。実引数をすべて読んでから、行き先の引数に書く。
@@ -283,7 +317,7 @@ impl Term {
                 cases,
                 default,
             } => (None, &cases[..], *default),
-            Term::Return(_) | Term::TailCall(_) => (None, &[][..], None),
+            Term::Return(_) | Term::ReturnMany(_) | Term::TailCall(_) => (None, &[][..], None),
         };
         jump.into_iter()
             .chain(cases.iter().map(|case| case.target))
@@ -304,7 +338,7 @@ impl Term {
                     f(default);
                 }
             }
-            Term::Return(_) | Term::TailCall(_) => {}
+            Term::Return(_) | Term::ReturnMany(_) | Term::TailCall(_) => {}
         }
     }
 
@@ -312,7 +346,9 @@ impl Term {
         match self {
             Term::Return(atom) => f(*atom),
             Term::TailCall(call) => call.for_each_atom(f),
-            Term::Jump { target: _, args } => args.iter().for_each(|&atom| f(atom)),
+            Term::ReturnMany(args) | Term::Jump { target: _, args } => {
+                args.iter().for_each(|&atom| f(atom))
+            }
             Term::Switch {
                 scrutinee,
                 layout: _,
@@ -334,7 +370,7 @@ impl Term {
         match self {
             Term::Return(atom) => f(atom),
             Term::TailCall(call) => call.for_each_atom_mut(f),
-            Term::Jump { target: _, args } => args.iter_mut().for_each(f),
+            Term::ReturnMany(args) | Term::Jump { target: _, args } => args.iter_mut().for_each(f),
             Term::Switch {
                 scrutinee,
                 layout: _,

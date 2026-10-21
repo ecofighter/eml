@@ -60,8 +60,7 @@ impl<'p> Printer<'p> {
             clause: function.clause,
             role: function.role,
             params: function.params().to_vec(),
-            ret: function.rets[0].0,
-            ret_mark: function.rets[0].1,
+            rets: function.rets.clone(),
         };
         self.writer.function_head(&header, &function.vars, out);
         for (index, block) in function.blocks.iter().enumerate() {
@@ -81,6 +80,27 @@ impl<'p> Printer<'p> {
                 Stmt::Let { var, rhs } => {
                     format!("let {} = {}", w.binder(vars, *var), self.rhs(function, rhs))
                 }
+                Stmt::LetMany { vars: bound, call } => format!(
+                    "let ({}) = {}",
+                    w.binders(vars, bound),
+                    self.call(function, call)
+                ),
+                Stmt::UnboxStruct {
+                    value,
+                    ctor,
+                    fields,
+                } => {
+                    let fields: Vec<String> = fields
+                        .iter()
+                        .map(|field| field.map_or_else(|| "_".to_string(), |v| w.binder(vars, v)))
+                        .collect();
+                    format!(
+                        "let ({}) = unbox {} {}",
+                        fields.join(", "),
+                        w.var(vars, *value),
+                        w.layout(ctor.layout)
+                    )
+                }
                 Stmt::Unpack {
                     value,
                     ctor,
@@ -98,6 +118,7 @@ impl<'p> Printer<'p> {
                     ctor,
                     fields,
                     token,
+                    unboxed,
                 } => {
                     let kept: Vec<String> = fields
                         .iter()
@@ -106,7 +127,8 @@ impl<'p> Printer<'p> {
                     let binder =
                         token.map_or_else(String::new, |r| format!("let {} = ", w.binder(vars, r)));
                     format!(
-                        "{binder}release {} {}({})",
+                        "{binder}release {}{} {}({})",
+                        if *unboxed { "unboxed " } else { "" },
                         w.var(vars, *value),
                         w.ctor(*ctor),
                         kept.join(", ")
@@ -118,6 +140,7 @@ impl<'p> Printer<'p> {
         }
         let text = match &block.term {
             Term::Return(a) => format!("return {}", w.atom(vars, a)),
+            Term::ReturnMany(values) => format!("return ({})", w.atoms(vars, values)),
             Term::TailCall(call) => format!("tail {}", self.call(function, call)),
             Term::Jump { target, args } => {
                 format!("jump b{}({})", target.0, w.atoms(vars, args))

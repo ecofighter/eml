@@ -117,6 +117,18 @@ pub fn repr_text(layouts: &[Layout], structs: &Structs, repr: Repr) -> String {
     )
 }
 
+/// 関数の結果のテキストの形。値が1つなら `repr`、2つ以上なら `(repr, repr)` と書く。
+pub fn rets_text(layouts: &[Layout], structs: &Structs, rets: &[(Repr, Mark)]) -> String {
+    let texts: Vec<String> = rets
+        .iter()
+        .map(|&(repr, mark)| format!("{}{}", repr_text(layouts, structs, repr), mark_suffix(mark)))
+        .collect();
+    match &texts[..] {
+        [single] => single.clone(),
+        _ => format!("({})", texts.join(", ")),
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum Tok {
     /// 空白、括弧、`,`、`"` を含まない字の並び。関数の名前は演算子の字を含むので、名前の字で区切らずに
@@ -237,11 +249,18 @@ fn is_name_char(c: char) -> bool {
 }
 
 /// `name.N` を名前と番号の数字に分ける。名前は数字で始まらないので、`1.5` のような語を変数と読み違えない。番号が
-/// 大きすぎるかどうかは、形とは別の誤りとして呼ぶ側が報告する。
+/// 大きすぎるかどうかは、形とは別の誤りとして呼ぶ側が報告する。開くパスの葉の変数は、元の名前に葉の番号を
+/// 付けた名前 (`p.0`) を持つので、名前の後ろに `.N` が続いてもよい。
 fn split_var(word: &str) -> Option<(&str, &str)> {
     let (name, digits) = word.rsplit_once('.')?;
-    let first = name.chars().next()?;
-    if first.is_ascii_digit() || !name.chars().all(is_name_char) || !is_digits(digits) {
+    let mut parts = name.split('.');
+    let base = parts.next()?;
+    let first = base.chars().next()?;
+    if first.is_ascii_digit()
+        || !base.chars().all(is_name_char)
+        || !parts.all(is_digits)
+        || !is_digits(digits)
+    {
         return None;
     }
     Some((name, digits))
@@ -320,7 +339,8 @@ pub struct FnState {
     targets: Vec<(u32, usize)>,
 }
 
-/// `[internal] [yields] [clause E.op] [role R] fn name(params) -> repr` の欄。
+/// `[internal] [yields] [clause E.op] [role R] fn name(params) -> rets` の欄。値が1つなら `-> repr`、2つ以上なら
+/// `-> (repr, repr)` と書く。
 pub struct FnHeader {
     pub name: String,
     pub internal: bool,
@@ -328,8 +348,7 @@ pub struct FnHeader {
     pub clause: Option<(u32, u32)>,
     pub role: Role,
     pub params: Vec<VarId>,
-    pub ret: Repr,
-    pub ret_mark: Mark,
+    pub rets: Vec<(Repr, Mark)>,
 }
 
 /// 関数の並びのほかに、読み終えたプログラムが持つ表。
@@ -615,8 +634,20 @@ impl<'t> Reader<'t> {
         let name = self.name()?;
         let params = self.list('(', ')', |p| p.binder(state))?;
         self.expect_word("->")?;
-        let ret = self.repr()?;
-        let ret_mark = self.mark()?;
+        let rets = if self.at_punct('(') && !self.at_tuple_name() {
+            let line = self.line();
+            let rets = self.list('(', ')', |p| Ok((p.repr()?, p.mark()?)))?;
+            // 書き方を1つにするため、値が1つの関数は括弧を書かない
+            if rets.len() < 2 {
+                return Err(error(
+                    line,
+                    "a function with one result writes it without parentheses",
+                ));
+            }
+            rets
+        } else {
+            vec![(self.repr()?, self.mark()?)]
+        };
         self.expect_punct('{')?;
         Ok(FnHeader {
             name,
@@ -625,8 +656,7 @@ impl<'t> Reader<'t> {
             clause,
             role,
             params,
-            ret,
-            ret_mark,
+            rets,
         })
     }
 
@@ -1394,6 +1424,11 @@ impl<'t> Reader<'t> {
         self.peek() == Some(&Tok::Punct(c))
     }
 
+    /// `()` の値。
+    pub fn at_unit(&self) -> bool {
+        self.at_punct('(') && self.peek_at(1) == Some(&Tok::Punct(')'))
+    }
+
     fn at_tuple_name(&self) -> bool {
         self.at_punct('(') && self.peek_at(1) == Some(&Tok::Punct(','))
     }
@@ -1585,7 +1620,7 @@ impl<'p> Writer<'p> {
         }
     }
 
-    /// `[internal] [yields] [clause E.op] [role R] fn name(params) -> repr {` の行。
+    /// `[internal] [yields] [clause E.op] [role R] fn name(params) -> rets {` の行。
     pub fn function_head(&self, header: &FnHeader, vars: &[VarInfo], out: &mut String) {
         let clause = header.clause.map_or_else(String::new, |(effect, op)| {
             format!("clause {} ", operation_text(self.effects, effect, op))
@@ -1596,13 +1631,12 @@ impl<'p> Writer<'p> {
             .map_or_else(String::new, |name| format!("role {name} "));
         writeln!(
             out,
-            "{}{}{clause}{role}fn {}({}) -> {}{} {{",
+            "{}{}{clause}{role}fn {}({}) -> {} {{",
             if header.internal { "internal " } else { "" },
             if header.yields { "yields " } else { "" },
             function_name(&header.name),
             self.binders(vars, &header.params),
-            self.repr(header.ret),
-            mark_suffix(header.ret_mark)
+            self.rets(&header.rets)
         )
         .unwrap();
     }
@@ -1623,6 +1657,10 @@ impl<'p> Writer<'p> {
 
     pub fn repr(&self, repr: Repr) -> String {
         repr_text(self.layouts, self.structs, repr)
+    }
+
+    pub fn rets(&self, rets: &[(Repr, Mark)]) -> String {
+        rets_text(self.layouts, self.structs, rets)
     }
 
     pub fn ctor(&self, ctor: Ctor) -> String {

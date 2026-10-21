@@ -56,7 +56,8 @@ fn lir_read_back(shown: &str, last: eml_lir::Pass) {
         "the printed LIR must read back"
     );
     let verified = match last {
-        eml_lir::Pass::Boxing | eml_lir::Pass::Contract => eml_lir::verify_scopes(&parsed),
+        eml_lir::Pass::Boxing => eml_lir::verify_scopes(&parsed),
+        eml_lir::Pass::Flatten | eml_lir::Pass::Contract => eml_lir::verify_flattened(&parsed),
         eml_lir::Pass::Perceus | eml_lir::Pass::Reuse => eml_lir::verify(&parsed),
     };
     if let Err(error) = verified {

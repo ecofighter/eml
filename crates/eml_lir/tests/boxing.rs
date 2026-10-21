@@ -580,3 +580,84 @@ fn fill(n.0: int, v.1: int) -> obj {
     }
     ");
 }
+
+// 構造体
+
+#[test]
+fn a_struct_passed_to_a_uniform_position_is_boxed() {
+    // 構造体は箱を要する Repr として、一様な位置 (EP の一様な場所の引数と結果、`tobj` のフィールド) との間で変換する。
+    // 箱の束縛は `obj` で、`tobj` の位置へ命令なしで渡る。受け直した構造体を `tobj` の位置へ渡すときは、`box` せずに
+    // 元の箱を渡す。足す変数は元の変数の印を写す
+    // (docs/superpowers/specs/2026-10-21-s14e-abi-struct-design.md の「LIR」の box の挿入)
+    let text = "\
+layout (,) { (,)(tobj, tobj) }
+layout Option { None, Some(tobj) }
+layout P { P(tobj, tobj) }
+fn f(c.0: tobj, v.1: P{int, obj lin} lin) -> obj lin {
+  let r.2: P{int, obj lin} lin = uniform apply c.0(v.1)
+  let o.3: tobj lin = con Option #1(r.2)
+  let p.4: obj lin = con (,) #0(o.3, r.2)
+  return p.4
+}
+";
+    insta::assert_snapshot!(boxing_text(text), @"
+    layout (,) { (,)(tobj, tobj) }
+    layout Option { None, Some(tobj) }
+    layout P { P(tobj, tobj) }
+    fn f(c.0: tobj, v.1: P{int, obj lin} lin) -> obj lin {
+      let v.5: obj lin = box v.1
+      let r.6: tobj lin = uniform apply c.0(v.5)
+      let r.2: P{int, obj lin} lin = unbox r.6
+      let o.3: tobj lin = con Option #1(r.6)
+      let p.4: obj lin = con (,) #0(o.3, r.6)
+      return p.4
+    }
+    ");
+}
+
+#[test]
+fn a_struct_parameter_in_a_role_position_is_unboxed_at_entry() {
+    // 役割が一様にする位置の構造体の引数は、入口で `unbox` して受け直す。捕獲の位置は型どおりなので、構造体のまま
+    // 受ける。`clause` の印の関数は、操作の表が `obj` とする構造体の引数を同じく受け直す
+    // (docs/superpowers/specs/2026-10-21-s14e-abi-struct-design.md の「LIR」の box の挿入)
+    let text = "\
+layout P { P(tobj, tobj) }
+effect Put { put(obj) -> unit }
+internal role clause fn g(c.0: P{int, float}, k.1: tobj, s.2: P{int, float}) -> P{int, float} {
+  unpack c.0 P #0(a.3: int, b.4: float)
+  unpack s.2 P #0(x.5: int, y.6: float)
+  let n.7: int = extern \"Prelude.Num Int.+\"(a.3, x.5)
+  let q.8: P{int, float} = con P #0(n.7, y.6)
+  return q.8
+}
+internal yields clause Put.put fn h(e.0: obj, p.1: P{int, float}) -> unit {
+  unpack p.1 P #0(x.2: int, y.3: float)
+  return ()
+}
+fn main() -> unit {
+  let w.0: tobj = prim evv_get()
+  let e.1: obj = prim ev_new[Put]((), w.0)
+  let u.2: unit = prim ev_set_clause[Put.put](e.1, &h)
+  return ()
+}
+";
+    let shown = boxing_text(text);
+    insta::assert_snapshot!(function(&shown, "g"), @r#"
+    internal role clause fn g(c.0: P{int, float}, k.1: tobj, s.9: tobj) -> tobj {
+      let s.2: P{int, float} = unbox s.9
+      unpack c.0 P #0(a.3: int, b.4: float)
+      unpack s.2 P #0(x.5: int, y.6: float)
+      let n.7: int = extern "Prelude.Num Int.+"(a.3, x.5)
+      let q.8: P{int, float} = con P #0(n.7, y.6)
+      let q.10: obj = box q.8
+      return q.10
+    }
+    "#);
+    insta::assert_snapshot!(function(&shown, "h"), @"
+    internal yields clause Put.put fn h(e.0: obj, p.4: obj) -> unit {
+      let p.1: P{int, float} = unbox p.4
+      unpack p.1 P #0(x.2: int, y.3: float)
+      return ()
+    }
+    ");
+}

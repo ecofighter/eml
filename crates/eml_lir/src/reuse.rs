@@ -179,7 +179,7 @@ impl<'a> Planner<'a> {
                         }
                     }
                 }
-                Term::Return(_) | Term::TailCall(_) => {}
+                Term::Return(_) | Term::ReturnMany(_) | Term::TailCall(_) => {}
             }
         }
         self.finish()
@@ -195,6 +195,7 @@ impl<'a> Planner<'a> {
                 ctor,
                 fields,
                 token: None,
+                unboxed: _,
             } => self.source(path, at, *value, *ctor, fields),
             // 構築子が分かっている箱の `decref` も元にする。レコードの更新では、フィールドがみな借りたまま読まれるので、
             // Perceus は `release` でなく `decref` を出す (docs/spec/lir.md の「reuse」)
@@ -459,7 +460,10 @@ fn for_each_var(stmt: &Stmt, mut f: impl FnMut(VarId)) {
             f(*value);
             fields.iter().flatten().for_each(|&field| f(field));
         }
-        Stmt::Let { .. } | Stmt::Unpack { .. } => stmt.for_each_atom(|atom| {
+        Stmt::Let { .. }
+        | Stmt::LetMany { .. }
+        | Stmt::Unpack { .. }
+        | Stmt::UnboxStruct { .. } => stmt.for_each_atom(|atom| {
             if let Atom::Var(var) = atom {
                 f(var);
             }
@@ -528,6 +532,7 @@ impl Plan {
                         ctor: token.ctor,
                         fields: vec![None; token.fields],
                         token: Some(var),
+                        unboxed: false,
                     }
                 }
                 ref other => {
