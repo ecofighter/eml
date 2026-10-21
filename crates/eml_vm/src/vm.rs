@@ -996,10 +996,11 @@ fn extern_call<M: Mode>(
     }
 }
 
-/// extern の誤りを、誤りの種類で決まる中断に変える。`Panic` に渡す誤りは、行の `purity` によらず `try_panic` に届ける
-/// (`Env.arg` は `Effectful` だが、範囲の外の位置は `Panic` である)。`try_io` の捕まえる誤りは、`Effectful` の行の
-/// ものだけを届ける。捕まえる handler がなければ、今までどおり実行時エラーにする。失敗した extern は引数をすでに消費
-/// している。
+/// extern の誤りを、誤りの種類で決まる中断に変える。`Panic` に渡す誤りのうち、`Pure` でない行のものを `try_panic` に
+/// 届ける。`Pure` の行は巻き戻しの地点を持たないので届けない (`Env.arg` は `Effectful` だが、範囲の外の位置は
+/// `Panic` である)。`try_io` の捕まえる誤りは、`Effectful` の行のものだけを届ける。捕まえる handler がなければ、
+/// 実行時エラーにする。失敗した extern は引数をすでに消費している。docs/spec/vm.md の「`IO` と `Panic` への中断」を
+/// 見る。
 fn failed<M: Mode>(
     code: &CodeBase<M>,
     ctx: &mut Ctx<M>,
