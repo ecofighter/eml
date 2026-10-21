@@ -118,18 +118,18 @@ fn main(x.0: float) -> float {
 }
 
 #[test]
-fn a_role_boxes_only_its_uniform_positions() {
+fn a_split_boxes_only_its_uniform_positions() {
     // 節の関数は `k` と状態と結果だけが一様である。捕まえた `n` と操作の引数 `x` は `int` のまま受ける
     // (docs/spec/lir.md の「関数の ABI」)
     let text = "\
-internal role clause fn g(n.0: int, x.1: int, k.2: tobj, s.3: int) -> int {
+internal uniform from 2 fn g(n.0: int, x.1: int, k.2: tobj, s.3: int) -> int {
   let t.4: int = extern \"Prelude.Num Int.+\"(n.0, x.1)
   let r.5: int = extern \"Prelude.Num Int.+\"(t.4, s.3)
   return r.5
 }
 ";
     insta::assert_snapshot!(boxing_text(text), @r#"
-    internal role clause fn g(n.0: int, x.1: int, k.2: tobj, s.6: tobj) -> tobj {
+    internal uniform from 2 fn g(n.0: int, x.1: int, k.2: tobj, s.6: tobj) -> tobj {
       let s.3: int = unbox s.6
       let t.4: int = extern "Prelude.Num Int.+"(n.0, x.1)
       let r.5: int = extern "Prelude.Num Int.+"(t.4, s.3)
@@ -616,14 +616,14 @@ fn f(c.0: tobj, v.1: P{int, obj lin} lin) -> obj lin {
 }
 
 #[test]
-fn a_struct_parameter_in_a_role_position_is_unboxed_at_entry() {
-    // 役割が一様にする位置の構造体の引数は、入口で `unbox` して受け直す。捕獲の位置は型どおりなので、構造体のまま
+fn a_struct_parameter_in_a_uniform_position_is_unboxed_at_entry() {
+    // `split` 以降の位置の構造体の引数は、入口で `unbox` して受け直す。捕獲の位置は型どおりなので、構造体のまま
     // 受ける。`clause` の印の関数は、操作の表が `obj` とする構造体の引数を同じく受け直す
     // (docs/spec/lir.md の「box の挿入」)
     let text = "\
 layout P { P(tobj, tobj) }
 effect Put { put(obj) -> unit }
-internal role clause fn g(c.0: P{int, float}, k.1: tobj, s.2: P{int, float}) -> P{int, float} {
+internal uniform from 1 fn g(c.0: P{int, float}, k.1: tobj, s.2: P{int, float}) -> P{int, float} {
   unpack c.0 P #0(a.3: int, b.4: float)
   unpack s.2 P #0(x.5: int, y.6: float)
   let n.7: int = extern \"Prelude.Num Int.+\"(a.3, x.5)
@@ -643,7 +643,7 @@ fn main() -> unit {
 ";
     let shown = boxing_text(text);
     insta::assert_snapshot!(function(&shown, "g"), @r#"
-    internal role clause fn g(c.0: P{int, float}, k.1: tobj, s.9: tobj) -> tobj {
+    internal uniform from 1 fn g(c.0: P{int, float}, k.1: tobj, s.9: tobj) -> tobj {
       let s.2: P{int, float} = unbox s.9
       unpack c.0 P #0(a.3: int, b.4: float)
       unpack s.2 P #0(x.5: int, y.6: float)

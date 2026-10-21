@@ -398,7 +398,7 @@ fn an_unused_struct_unbox_is_removed_and_the_call_becomes_tail() {
     // その後の呼び出しは末尾呼び出しになる
     let text = "\
 layout (,) { (,)(tobj, tobj) }
-internal role body fn g(k.0: obj, p.1: (,){float, float}) -> tobj {
+internal uniform from 1 fn g(k.0: obj, p.1: (,){float, float}) -> tobj {
   let r.2: tobj = uniform apply k.0(p.1)
   return r.2
 }
@@ -410,7 +410,7 @@ fn h(k.0: obj, x.1: float) -> (,){float, float} {
 ";
     let shown = passes_text(text, Pass::Contract);
     insta::assert_snapshot!(function(&shown, "g"), @"
-    internal role body fn g(k.0: obj, p.3: tobj) -> tobj {
+    internal uniform from 1 fn g(k.0: obj, p.3: tobj) -> tobj {
       tail uniform apply k.0(p.3)
     }
     ");
@@ -429,7 +429,7 @@ fn an_unused_unbox_of_a_lin_box_after_a_tail_position_call_is_removed() {
     // では、この `unbox` を箱が `lin` でも消す。箱は呼び出しの結果として返るので、Perceus が手放す所はない
     let text = "\
 layout Tok { Tok(int, float) }
-internal role body fn f(k.0: obj, u.1: unit) -> Tok{int, float} lin {
+internal uniform from 1 fn f(k.0: obj, u.1: unit) -> Tok{int, float} lin {
   let t.2: Tok{int, float} lin = uniform apply k.0(1)
   unpack t.2 Tok #0(n.3: int, x.4: float)
   let m.5: enum = extern \"Prelude.Ord Int.<\"(n.3, 1)
@@ -437,7 +437,7 @@ internal role body fn f(k.0: obj, u.1: unit) -> Tok{int, float} lin {
 }
 ";
     insta::assert_snapshot!(function(&passes_text(text, Pass::Contract), "f"), @"
-    internal role body fn f(k.0: obj, u.1: unit) -> tobj lin {
+    internal uniform from 1 fn f(k.0: obj, u.1: unit) -> tobj lin {
       let b.6: tobj = box 1
       tail uniform apply k.0(b.6)
     }

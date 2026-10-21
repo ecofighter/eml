@@ -5,7 +5,7 @@
 use std::mem;
 
 use crate::{Block, CoreFn, Stmt, Term};
-use eml_lir::{Atom, BlockId, Mark, Repr, Role, Site, VarId, VarInfo};
+use eml_lir::{Atom, BlockId, Mark, Repr, Site, VarId, VarInfo};
 
 /// 値の渡し先になる、まだブロックになっていない位置。そこへ向かう開いたままのブロックを集め、ラベルを持つ式を
 /// 変換し終えたら `resolve` で扱いを決める。
@@ -192,8 +192,8 @@ impl FnBuilder {
     /// 消える。消したブロックを詰めて、番号を振り直す。末尾呼び出しはここでは作らず、縮約に任せる (docs/spec/core-ir.md)。
     /// 印の互換は推移的でないので、`a` が定数か、`a` の印が `p` の印と同じときだけ変える
     /// (docs/spec/lir.md の「Kind の印」、docs/spec/core-ir.md の「変換の規則」)。
-    /// `internal` は内部の関数の印 (`CoreFn::internal`) である。作る関数は役割を持たない (`Role::Typed`)。EP の役割を
-    /// 持つ関数は、呼ぶ側が役割を付ける。
+    /// `internal` は内部の関数の印 (`CoreFn::internal`) である。作る関数は一様な位置を持たない。一様な位置を
+    /// 持つ関数は、呼ぶ側が `split` を付ける。
     pub(crate) fn finish(
         self,
         name: String,
@@ -270,7 +270,7 @@ impl FnBuilder {
         CoreFn {
             name,
             internal,
-            role: Role::Typed,
+            split: None,
             yields,
             clause: None,
             vars: self.vars,

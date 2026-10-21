@@ -11,7 +11,7 @@ use eml_types::{FieldTarget, IndexTarget, TypeId, TypeKind, VarClass};
 
 use crate::builder::FnBuilder;
 use crate::{Call, Rhs, Stmt, Term};
-use eml_lir::{Atom, Ctor, FnIdx, Mark, MaskItem, Prim, Repr, Role, TUPLE, VarId, VarInfo};
+use eml_lir::{Atom, Ctor, FnIdx, Mark, MaskItem, Prim, Repr, TUPLE, VarId, VarInfo};
 
 use super::instances::wrapper_name;
 use super::pattern::Known;
@@ -21,6 +21,16 @@ use super::program::{
 };
 use super::types::{mark, named, split_arrows};
 use super::{ContinuationForm, Exit, FnLowering, Param};
+
+// EP が総称に呼ぶ関数の、一様にする最後の引数の数 (docs/spec/lir.md の「関数の ABI」)。結果はいつも一様である。
+/// handle と `var` の範囲の本体は `()` の引数を一様にする。
+const BODY_UNIFORM: usize = 1;
+/// 再開する操作の節は `k` と状態を一様にする。
+const CLAUSE_UNIFORM: usize = 2;
+/// `never` の操作の節は、状態だけを一様にする。
+const ABORT_UNIFORM: usize = 1;
+/// `return` の節は値と状態を一様にする。
+const RETURN_UNIFORM: usize = 2;
 
 /// extern の関数なら、その表の行。誤りのないプログラムの extern は、どれも標準ライブラリの宣言で行を持つ。
 pub(super) fn extern_row(hir: &HirProgram, function: FunctionId) -> Option<Extern> {
@@ -739,7 +749,7 @@ impl FnLowering<'_> {
                 // 本体の row は扱うエフェクトを含むので、本体はいつも yield しうる
                 let handled_closure = self.lift(
                     prefix.clone(),
-                    Role::Body,
+                    BODY_UNIFORM,
                     true,
                     body.closure_captures(handled),
                     &unit,
@@ -761,16 +771,16 @@ impl FnLowering<'_> {
                     let name = format!("{prefix}${}", self.ctx.hir[op].name);
                     // `never` の操作の節は、`prompt$` から状態だけを受ける
                     // (docs/spec/lir.md の「関数の ABI」)
-                    let role = if self.ctx.hir[op].multiplicity == OpMultiplicity::Never {
-                        Role::Abort
+                    let uniform_tail = if self.ctx.hir[op].multiplicity == OpMultiplicity::Never {
+                        ABORT_UNIFORM
                     } else {
-                        Role::Clause
+                        CLAUSE_UNIFORM
                     };
-                    closures.push(self.lift_clause(name, role, &clause.closure, stateless));
+                    closures.push(self.lift_clause(name, uniform_tail, &clause.closure, stateless));
                 }
                 let ret = self.lift_clause(
                     format!("{prefix}$return"),
-                    Role::Return,
+                    RETURN_UNIFORM,
                     &ret.closure,
                     stateless,
                 );
@@ -970,7 +980,7 @@ impl FnLowering<'_> {
                 let lambda_mark = mark(self.ctx.store, lambda_ty, self.ctx.hir);
                 self.lift(
                     name,
-                    Role::Typed,
+                    0,
                     yields,
                     captured,
                     &params,
@@ -1001,7 +1011,7 @@ impl FnLowering<'_> {
     fn lift_clause(
         &mut self,
         name: String,
-        role: Role,
+        uniform_tail: usize,
         closure: &Closure,
         stateless: bool,
     ) -> Atom {
@@ -1028,7 +1038,7 @@ impl FnLowering<'_> {
         );
         self.lift(
             name,
-            role,
+            uniform_tail,
             self.yields,
             captured,
             &params,
@@ -1056,7 +1066,7 @@ impl FnLowering<'_> {
         // 範囲の row は変数のエフェクトを含むので、範囲はいつも yield しうる
         let body = self.lift(
             prefix.clone(),
-            Role::Body,
+            BODY_UNIFORM,
             true,
             self.ctx.body.scope_captures(scope),
             &[(None, Repr::Unit, Mark::Unr)],
@@ -1089,11 +1099,11 @@ impl FnLowering<'_> {
 
     /// HIR に元のない内部の関数を作り、その値を返す。`body` は引数から本体の文を足し、返す値を返す。節は handle を
     /// 含む関数の row で動くので、その関数と同じ `yields` の印にする。`var` の節と `return` の節は、handle の節と
-    /// 同じ役割 `role` を持つ (docs/spec/lir.md の「関数の ABI」)。
+    /// 同じ一様な位置 `uniform_tail` を持つ (docs/spec/lir.md の「関数の ABI」)。
     fn synthesized(
         &mut self,
         name: String,
-        role: Role,
+        uniform_tail: usize,
         params: &[(&str, (Repr, Mark))],
         ret: (Repr, Mark),
         body: impl FnOnce(&mut FnBuilder, &mut ProgramBuilder, &[Atom]) -> Atom,
@@ -1107,7 +1117,7 @@ impl FnLowering<'_> {
         let value = body(&mut builder, &mut *self.program, &args);
         builder.terminate(Term::Return(value));
         let mut core = builder.finish(name, true, self.yields, ret.0, ret.1);
-        core.role = role;
+        core.set_uniform_tail(uniform_tail);
         self.program.finish(function, core);
         Atom::Fn(function)
     }
@@ -1136,7 +1146,7 @@ impl FnLowering<'_> {
         params.push(("st", state));
         self.synthesized(
             name,
-            Role::Clause,
+            CLAUSE_UNIFORM,
             &params,
             result,
             |builder, program, args| {
@@ -1219,7 +1229,7 @@ impl FnLowering<'_> {
         result: (Repr, Mark),
     ) -> Atom {
         let params = [("x", value), ("st", state)];
-        self.synthesized(name, Role::Return, &params, result, |builder, _, args| {
+        self.synthesized(name, RETURN_UNIFORM, &params, result, |builder, _, args| {
             if class == VarClass::Array {
                 bind(
                     builder,

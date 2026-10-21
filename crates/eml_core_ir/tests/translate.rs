@@ -267,7 +267,7 @@ fn lambdas_and_handlers_are_numbered_in_expression_order() {
             let line = line.strip_prefix("internal ").unwrap_or(line);
             let line = line.strip_prefix("yields ").unwrap_or(line);
             let line = line
-                .strip_prefix("role ")
+                .strip_prefix("uniform from ")
                 .and_then(|rest| rest.split_once(' '))
                 .map_or(line, |(_, rest)| rest);
             line.strip_prefix("fn ")
@@ -348,16 +348,16 @@ fn handlers_are_lifted_with_their_return_reprs() {
       let t.5: unit = extern Prelude.println(t.4)
       return t.5
     }
-    internal yields role body fn main$handle0(p.0: unit) -> int {
+    internal yields uniform from 0 fn main$handle0(p.0: unit) -> int {
       let s.1: obj = const "x"
       let t.2: int = perform Ask.ask(s.1)
       return t.2
     }
-    internal role clause fn main$handle0$ask(key.0: obj, k.1: tobj lin, p.2: unit) -> int {
+    internal uniform from 1 fn main$handle0$ask(key.0: obj, k.1: tobj lin, p.2: unit) -> int {
       let t.3: int = resume k.1(1: int, (): unit)
       return t.3
     }
-    internal role return fn main$handle0$return(x.0: int, p.1: unit) -> int {
+    internal uniform from 0 fn main$handle0$return(x.0: int, p.1: unit) -> int {
       let t.2: int = extern "Prelude.Num Int.+"(x.0, 1)
       return t.2
     }
@@ -373,7 +373,7 @@ fn a_continuation_passed_to_a_function_is_wrapped() {
     let text = "effect Ask where\n  ask : Unit -> Int\n\ntwice : (Int -> <e> Int) -> <e> Int\ntwice f = f 1\n\nmain : Unit -> <IO> Unit\nmain () =\n  let n =\n    handle ask () with\n      | ctl ask () k -> twice k\n  println (show n)";
     let shown = core_text(text, Pass::Translate);
     insta::assert_snapshot!(function(&shown, "main$handle0$ask"), @r#"
-    internal role clause fn main$handle0$ask(p.0: unit, k.1: tobj lin, p.2: unit) -> int {
+    internal uniform from 1 fn main$handle0$ask(p.0: unit, k.1: tobj lin, p.2: unit) -> int {
       let c.3: tobj lin = closure "cont$@[Int, Int]"(k.1)
       let t.4: int = call twice(c.3)
       return t.4
@@ -876,26 +876,26 @@ fn user_effects_are_numbered_after_io() {
       let t.3: unit = extern Prelude.println(t.2)
       return t.3
     }
-    internal yields role body fn main$handle1(p.0: unit) -> int {
+    internal yields uniform from 0 fn main$handle1(p.0: unit) -> int {
       let t.1: int = handle A((), &main$handle0) { ask: &main$handle0$ask } return &main$handle0$return
       return t.1
     }
-    internal yields role body fn main$handle0(p.0: unit) -> int {
+    internal yields uniform from 0 fn main$handle0(p.0: unit) -> int {
       let t.1: int = call "needs_a<e>"(&told)
       return t.1
     }
-    internal yields role clause fn main$handle0$ask(p.0: unit, k.1: tobj lin, p.2: unit) -> int {
+    internal yields uniform from 1 fn main$handle0$ask(p.0: unit, k.1: tobj lin, p.2: unit) -> int {
       let t.3: int = resume k.1(1: int, (): unit)
       return t.3
     }
-    internal yields role return fn main$handle0$return($r.0: int, p.1: unit) -> int {
+    internal yields uniform from 0 fn main$handle0$return($r.0: int, p.1: unit) -> int {
       return $r.0
     }
-    internal role clause fn main$handle1$tell(m.0: int, k.1: tobj lin, p.2: unit) -> int {
+    internal uniform from 1 fn main$handle1$tell(m.0: int, k.1: tobj lin, p.2: unit) -> int {
       let t.3: int = resume k.1((): unit, (): unit)
       return t.3
     }
-    internal role return fn main$handle1$return($r.0: int, p.1: unit) -> int {
+    internal uniform from 0 fn main$handle1$return($r.0: int, p.1: unit) -> int {
       return $r.0
     }
     fn entry$main() -> unit {
@@ -966,15 +966,15 @@ fn names_outside_the_entry_are_qualified_with_their_module() {
       let t.2: Report.Csv.Row{int} = apply &con$Report.Csv.Row(t.1)
       return t.2
     }
-    internal yields role body fn main$handle0(p.0: unit) -> Report.Csv.Row{int} {
+    internal yields uniform from 0 fn main$handle0(p.0: unit) -> Report.Csv.Row{int} {
       let t.1: Report.Csv.Row{int} = call Report.Csv.parse(())
       return t.1
     }
-    internal role clause fn main$handle0$next(p.0: unit, k.1: tobj lin, p.2: unit) -> Report.Csv.Row{int} {
+    internal uniform from 1 fn main$handle0$next(p.0: unit, k.1: tobj lin, p.2: unit) -> Report.Csv.Row{int} {
       let t.3: Report.Csv.Row{int} = resume k.1(1: int, (): unit)
       return t.3
     }
-    internal role return fn main$handle0$return(r.0: Report.Csv.Row{int}, p.1: unit) -> Report.Csv.Row{int} {
+    internal uniform from 0 fn main$handle0$return(r.0: Report.Csv.Row{int}, p.1: unit) -> Report.Csv.Row{int} {
       return r.0
     }
     internal fn main$extern0(p.0: obj) -> unit {
@@ -1257,16 +1257,16 @@ fn handlers_are_lifted_to_closures() {
       let t.5: unit = extern Prelude.println(t.4)
       return t.5
     }
-    internal yields role body fn main$handle0(p.0: unit) -> int {
+    internal yields uniform from 0 fn main$handle0(p.0: unit) -> int {
       let s.1: obj = const "x"
       let t.2: int = perform Ask.ask(s.1)
       return t.2
     }
-    internal role clause fn main$handle0$ask(key.0: obj, k.1: tobj lin, p.2: unit) -> int {
+    internal uniform from 1 fn main$handle0$ask(key.0: obj, k.1: tobj lin, p.2: unit) -> int {
       let t.3: int = resume k.1(1: int, (): unit)
       return t.3
     }
-    internal role return fn main$handle0$return(x.0: int, p.1: unit) -> int {
+    internal uniform from 0 fn main$handle0$return(x.0: int, p.1: unit) -> int {
       let t.2: int = extern "Prelude.Num Int.+"(x.0, 1)
       return t.2
     }
@@ -1453,14 +1453,14 @@ fn constructor_patterns_in_handler_clause_parameters() {
     let text = "data Box a = | Box a\n\neffect Give where\n  give : Box Int -> Int\n\nrun : Unit -> Int\nrun () =\n  handle Box (give (Box 1)) with\n    | ctl give (Box n) k -> k n\n    | return (Box r) -> r\n\nmain : Unit -> <IO> Unit\nmain () = println (show (run ()))";
     let shown = core_text(text, Pass::Translate);
     insta::assert_snapshot!(function(&shown, "run$handle0$give"), @"
-    internal role clause fn run$handle0$give(p.0: Box{int}, k.1: tobj lin, p.2: unit) -> int {
+    internal uniform from 1 fn run$handle0$give(p.0: Box{int}, k.1: tobj lin, p.2: unit) -> int {
       unpack p.0 Box #0(n.3: int)
       let t.4: int = resume k.1(n.3, (): unit)
       return t.4
     }
     ");
     insta::assert_snapshot!(function(&shown, "run$handle0$return"), @"
-    internal role return fn run$handle0$return(p.0: Box{int}, p.1: unit) -> int {
+    internal uniform from 0 fn run$handle0$return(p.0: Box{int}, p.1: unit) -> int {
       unpack p.0 Box #0(r.2: int)
       return r.2
     }
@@ -1612,18 +1612,18 @@ fn a_handler_with_a_state_passes_its_initial_value_and_takes_the_state_from_its_
       let t.3: unit = extern Prelude.println(t.2)
       return t.3
     }
-    internal yields role body fn main$handle0(p.0: unit) -> int {
+    internal yields uniform from 0 fn main$handle0(p.0: unit) -> int {
       let t.1: int = perform Ask.ask(())
       let t.2: int = perform Ask.ask(())
       let t.3: int = extern "Prelude.Num Int.+"(t.1, t.2)
       return t.3
     }
-    internal role clause fn main$handle0$ask(p.0: unit, k.1: tobj lin, st.2: int) -> int {
+    internal uniform from 1 fn main$handle0$ask(p.0: unit, k.1: tobj lin, st.2: int) -> int {
       let t.3: int = extern "Prelude.Num Int.+"(st.2, 1)
       let t.4: int = resume k.1(st.2, t.3)
       return t.4
     }
-    internal role return fn main$handle0$return(x.0: int, st.1: int) -> int {
+    internal uniform from 0 fn main$handle0$return(x.0: int, st.1: int) -> int {
       let t.2: int = extern "Prelude.Num Int.*"(x.0, st.1)
       return t.2
     }
@@ -1668,26 +1668,26 @@ fn effects_are_numbered_in_declaration_order() {
       let t.5: unit = extern Prelude.println(t.4)
       return t.5
     }
-    internal yields role body fn main$handle0(p.0: unit) -> int {
+    internal yields uniform from 0 fn main$handle0(p.0: unit) -> int {
       let t.1: int = perform A.a(())
       return t.1
     }
-    internal role clause fn main$handle0$a(p.0: unit, k.1: tobj lin, p.2: unit) -> int {
+    internal uniform from 1 fn main$handle0$a(p.0: unit, k.1: tobj lin, p.2: unit) -> int {
       let t.3: int = resume k.1(1: int, (): unit)
       return t.3
     }
-    internal role return fn main$handle0$return($r.0: int, p.1: unit) -> int {
+    internal uniform from 0 fn main$handle0$return($r.0: int, p.1: unit) -> int {
       return $r.0
     }
-    internal yields role body fn main$handle1(p.0: unit) -> int {
+    internal yields uniform from 0 fn main$handle1(p.0: unit) -> int {
       let t.1: int = perform B.b(())
       return t.1
     }
-    internal role clause fn main$handle1$b(p.0: unit, k.1: tobj lin, p.2: unit) -> int {
+    internal uniform from 1 fn main$handle1$b(p.0: unit, k.1: tobj lin, p.2: unit) -> int {
       let t.3: int = resume k.1(2: int, (): unit)
       return t.3
     }
-    internal role return fn main$handle1$return($r.0: int, p.1: unit) -> int {
+    internal uniform from 0 fn main$handle1$return($r.0: int, p.1: unit) -> int {
       return $r.0
     }
     fn entry$main() -> unit {
@@ -1874,7 +1874,7 @@ main () =
       k ()
 ";
     insta::assert_snapshot!(function(&core_text(text, Pass::Translate), "render$handle0"), @"
-    internal yields role body fn render$handle0(g.0: tobj poly, p.1: unit) -> unit {
+    internal yields uniform from 1 fn render$handle0(g.0: tobj poly, p.1: unit) -> unit {
       let t.2: unit = mask [Yield@1] yields apply g.0((): unit)
       return t.2
     }
@@ -1919,7 +1919,7 @@ fn a_continuation_call_in_its_clause_has_no_mask() {
         "{STATE}run : (Unit -> <State Int | e> a) -> <e> a\nrun action =\n  handle action () from 0 with\n    | ctl get () k st -> k st st\n    | ctl put n k _ -> k () n\n    | return x _ -> x\n\nmain : Unit -> <IO> Unit\nmain () = println (show (run (fn () -> get ())))\n"
     );
     insta::assert_snapshot!(function(&core_text(&text, Pass::Translate), "run@[Int]$handle0$get"), @r#"
-    internal role clause fn "run@[Int]$handle0$get"(p.0: unit, k.1: tobj lin, st.2: int) -> int {
+    internal uniform from 1 fn "run@[Int]$handle0$get"(p.0: unit, k.1: tobj lin, st.2: int) -> int {
       let t.3: int = resume k.1(st.2, st.2)
       return t.3
     }
@@ -1961,7 +1961,7 @@ main () =
 ";
     // handle の番号は HIR の式の ID の順なので、内側の handle が `f<e>$handle0` になる
     insta::assert_snapshot!(function(&core_text(text, Pass::Translate), "f<e>$handle0"), @r#"
-    internal yields role body fn "f<e>$handle0"(k.0: tobj lin, p.1: unit) -> int {
+    internal yields uniform from 1 fn "f<e>$handle0"(k.0: tobj lin, p.1: unit) -> int {
       let t.2: int = mask [Log] resume k.0(1: int, (): unit)
       return t.2
     }
@@ -2821,7 +2821,7 @@ fn a_handle_body_and_clause_closures_take_the_join_of_their_captures() {
     }
     "#);
     insta::assert_snapshot!(function(&ir, "main$handle0"), @"
-    internal yields role body fn main$handle0(f.0: obj lin, p.1: unit) -> int {
+    internal yields uniform from 1 fn main$handle0(f.0: obj lin, p.1: unit) -> int {
       let t.2: int = call use_file(f.0)
       return t.2
     }
@@ -3384,7 +3384,7 @@ fn a_lin_enum_variable_is_unr() {
     ");
     let lir = lir_text(text, eml_lir::Pass::Perceus);
     insta::assert_snapshot!(function(&lir, "hold$k0"), @r#"
-    internal yields role cont fn hold$k0(t.0: enum, t.4: tobj) -> tobj {
+    internal yields uniform from 1 fn hold$k0(t.0: enum, t.4: tobj) -> tobj {
       let t.1: int = unbox t.4
       decref t.4
       let t.3: int = call spend_after(0, t.0)
@@ -3525,7 +3525,7 @@ fn a_var_lowers_to_a_handle() {
       let t.1: unit = handle var$0$x(1, &main$var0) { get: &main$var0$get, set: &main$var0$set } return &main$var0$return
       return t.1
     }
-    internal yields role body fn main$var0(p.0: unit) -> unit {
+    internal yields uniform from 0 fn main$var0(p.0: unit) -> unit {
       let t.1: int = perform var$0$x.get(())
       let t.2: int = extern "Prelude.Num Int.+"(t.1, 1)
       let t.3: unit = perform var$0$x.set(t.2)
@@ -3534,15 +3534,15 @@ fn a_var_lowers_to_a_handle() {
       let t.6: unit = extern Prelude.println(t.5)
       return t.6
     }
-    internal role clause fn main$var0$get(p.0: unit, k.1: tobj lin, st.2: int) -> unit {
+    internal uniform from 1 fn main$var0$get(p.0: unit, k.1: tobj lin, st.2: int) -> unit {
       let t.3: unit = resume k.1(st.2, st.2)
       return t.3
     }
-    internal role clause fn main$var0$set(v.0: int, k.1: tobj lin, st.2: int) -> unit {
+    internal uniform from 1 fn main$var0$set(v.0: int, k.1: tobj lin, st.2: int) -> unit {
       let t.3: unit = resume k.1((): unit, v.0)
       return t.3
     }
-    internal role return fn main$var0$return(x.0: unit, st.1: int) -> unit {
+    internal uniform from 0 fn main$var0$return(x.0: unit, st.1: int) -> unit {
       return x.0
     }
     fn entry$main() -> unit {
@@ -3552,15 +3552,15 @@ fn a_var_lowers_to_a_handle() {
     "#);
 }
 
-/// ラムダは役割を持たず、handle と `var` の範囲の本体は `Body`、節は `Clause`、`never` の操作の節は `Abort`、
-/// `return` の節は `Return` になる。
+/// ラムダは `split` を持たず、handle と `var` の範囲の本体は最後の1個、節は最後の2個、`never` の操作の節は最後の1個、
+/// `return` の節は最後の2個の引数が一様になる。
 /// `apply` の場所は、変数の引数には変数の Repr を、定数の引数にはその矢印の引数の型の Repr を並べる。`None` は
 /// `#0` だが、`Option Int` の位置なので `enum` でなく `tobj` になる
 /// (docs/spec/lir.md の「関数の ABI」と「`apply` の場所」)。
 #[test]
-fn lambda_and_handler_roles() {
+fn lambda_and_handler_splits() {
     use eml_core_ir::{Call, Rhs, Stmt, pretty};
-    use eml_lir::{Repr, Role, Site};
+    use eml_lir::{Repr, Site};
     let text = "\
 effect Tick where
   tick : Int -> Unit
@@ -3586,29 +3586,31 @@ main () =
   println (show s)
 ";
     let program = eml_test_support::core_until(text, Pass::Translate);
-    let role = |name: &str| {
-        program
+    let uniform_tail = |name: &str| {
+        let function = program
             .functions
             .iter()
             .find(|function| function.name == name)
-            .unwrap_or_else(|| panic!("no `{name}` in\n{}", pretty(&program)))
-            .role
+            .unwrap_or_else(|| panic!("no `{name}` in\n{}", pretty(&program)));
+        function
+            .split
+            .map(|at| function.params().len() - at as usize)
     };
     for (name, expected) in [
-        ("main", Role::Typed),
-        ("main$lambda0", Role::Typed),
-        ("main$lambda1", Role::Typed),
-        ("main$handle0", Role::Body),
-        ("main$handle0$tick", Role::Clause),
-        ("main$handle0$return", Role::Return),
-        ("main$var0", Role::Body),
-        ("main$var0$get", Role::Clause),
-        ("main$var0$set", Role::Clause),
-        ("main$var0$return", Role::Return),
-        ("main$handle1", Role::Body),
-        ("main$handle1$fail", Role::Abort),
+        ("main", None),
+        ("main$lambda0", None),
+        ("main$lambda1", None),
+        ("main$handle0", Some(1)),
+        ("main$handle0$tick", Some(2)),
+        ("main$handle0$return", Some(2)),
+        ("main$var0", Some(1)),
+        ("main$var0$get", Some(2)),
+        ("main$var0$set", Some(2)),
+        ("main$var0$return", Some(2)),
+        ("main$handle1", Some(1)),
+        ("main$handle1$fail", Some(1)),
     ] {
-        assert_eq!(role(name), expected, "{name}\n{}", pretty(&program));
+        assert_eq!(uniform_tail(name), expected, "{name}\n{}", pretty(&program));
     }
     let main = program
         .functions

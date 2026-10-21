@@ -16,7 +16,7 @@ use crate::optimize::specialize::{
     ArgShape, ClosureShape, FieldShape, Key, MAX_KEY_DEPTH, copy_name, key_depth,
 };
 use crate::{Call, CoreFn, Rhs, Stmt, Term};
-use eml_lir::{Atom, CasePattern, Ctor, FnIdx, Mark, Repr, Role, VarId, VarInfo};
+use eml_lir::{Atom, CasePattern, Ctor, FnIdx, Mark, Repr, VarId, VarInfo};
 
 /// 鍵の位置ごとの形と、その位置の値の代わりに複製へ渡す実引数。
 type Plan = Vec<(usize, ArgShape, Vec<Atom>)>;
@@ -435,15 +435,18 @@ impl Fuser<'_> {
     fn build(&self, key: &Key, name: String) -> CoreFn {
         let mut function = self.functions[key.callee.0 as usize].clone();
         function.name = name;
-        // 役割は末尾の引数を一様にする。一様な位置を開くと末尾の引数の並びが変わるので、複製は型どおりに呼ぶ関数にする
-        // (docs/spec/core-ir.md の「`con` の値の形についての特殊化」)
-        let first_uniform = function.params().len() - function.role.uniform_params();
-        if key
-            .args
-            .iter()
-            .any(|&(position, _)| position >= first_uniform)
-        {
-            function.role = Role::Typed;
+        // 一様な位置を開くと末尾の引数の並びが変わるので、複製は型どおりに呼ぶ関数にする。開く位置が `split` より前なら、
+        // 後ろの一様な引数の数は変わらない (docs/spec/core-ir.md の「`con` の値の形についての特殊化」)
+        let uniform_tail = function
+            .split
+            .map_or(0, |at| function.params().len() - at as usize);
+        let opens_uniform = function.split.is_some_and(|at| {
+            key.args
+                .iter()
+                .any(|&(position, _)| position >= at as usize)
+        });
+        if opens_uniform {
+            function.split = None;
         }
         let mut params = Vec::new();
         let mut rebuilt = Vec::new();
@@ -525,6 +528,9 @@ impl Fuser<'_> {
         entry.params = params;
         rebuilt.append(&mut entry.stmts);
         entry.stmts = rebuilt;
+        if function.split.is_some() {
+            function.set_uniform_tail(uniform_tail);
+        }
         function
     }
 }

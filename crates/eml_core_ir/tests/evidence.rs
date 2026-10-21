@@ -45,7 +45,7 @@ fn a_yield_point_continues_in_a_continuation_function() {
     }
     ");
     insta::assert_snapshot!(function(&shown, "f$k0"), @r#"
-    internal yields role cont fn f$k0(a.0: int, x.1: int) -> int {
+    internal yields uniform from 1 fn f$k0(a.0: int, x.1: int) -> int {
       let y.2: int = extern "Prelude.Num Int.+"(x.1, a.0)
       return y.2
     }
@@ -117,7 +117,7 @@ yields fn f(a.0: int) -> int {
     }
     ");
     insta::assert_snapshot!(function(&shown, "f$k0"), @"
-    internal yields role cont fn f$k0(a.0: int, x.1: int) -> int {
+    internal yields uniform from 1 fn f$k0(a.0: int, x.1: int) -> int {
       let y.2: int = call g(x.1)
       let y.3: int = prim yielding()
       switch y.3 { 0 -> b2, _ -> b1 }
@@ -133,7 +133,7 @@ yields fn f(a.0: int) -> int {
     }
     ");
     insta::assert_snapshot!(function(&shown, "f$k1"), @r#"
-    internal yields role cont fn f$k1(a.0: int, y.1: int) -> int {
+    internal yields uniform from 1 fn f$k1(a.0: int, y.1: int) -> int {
       let z.2: int = extern "Prelude.Num Int.+"(y.1, a.0)
       return z.2
     }
@@ -166,7 +166,7 @@ b4:
 ";
     let shown = evidence_text(text);
     insta::assert_snapshot!(function(&shown, "f$k0"), @"
-    internal yields role cont fn f$k0(o.0: tobj, a.1: int, x.2: int) -> int {
+    internal yields uniform from 2 fn f$k0(o.0: tobj, a.1: int, x.2: int) -> int {
       switch o.0 Option { #0 -> b1, #1(v.3: int) -> b2 }
     b1:
       return x.2
@@ -190,7 +190,7 @@ b4:
     }
     ");
     insta::assert_snapshot!(function(&shown, "f$k1"), @r#"
-    internal yields role cont fn f$k1(x.0: int, y.1: int) -> int {
+    internal yields uniform from 1 fn f$k1(x.0: int, y.1: int) -> int {
       let z.2: int = extern "Prelude.Num Int.+"(y.1, x.0)
       return z.2
     }
@@ -243,7 +243,7 @@ b3(v.3: int):
     }
     ");
     insta::assert_snapshot!(function(&shown, "f$k0"), @r#"
-    internal yields role cont fn f$k0(a.0: int, x.1: int) -> int {
+    internal yields uniform from 1 fn f$k0(a.0: int, x.1: int) -> int {
       switch a.0 { 0 -> b1, _ -> b2 }
     b1:
       let p.2: int = extern "Prelude.Num Int.+"(x.1, 1)
@@ -284,7 +284,7 @@ b3(v.2: int):
 ";
     let shown = evidence_text(text);
     insta::assert_snapshot!(function(&shown, "f$k0"), @"
-    internal yields role cont fn f$k0(a.0: int, x.1: int) -> int {
+    internal yields uniform from 1 fn f$k0(a.0: int, x.1: int) -> int {
       switch a.0 { 0 -> b1, _ -> b2 }
     b1:
       let r.2: int = call f$j3(x.1, x.1)
@@ -311,7 +311,7 @@ b3(v.2: int):
     }
     ");
     insta::assert_snapshot!(function(&shown, "f$k1"), @r#"
-    internal yields role cont fn f$k1(x.0: int, w.1: int) -> int {
+    internal yields uniform from 1 fn f$k1(x.0: int, w.1: int) -> int {
       let z.2: int = extern "Prelude.Num Int.+"(w.1, x.0)
       return z.2
     }
@@ -349,7 +349,7 @@ yields fn f(h.0: tobj, a.1: tobj) -> tobj {
     }
     ");
     insta::assert_snapshot!(function(&shown, "f$k0"), @"
-    internal yields role cont fn f$k0(h.0: tobj, x.1: tobj, y.2: tobj) -> tobj {
+    internal yields uniform from 2 fn f$k0(h.0: tobj, x.1: tobj, y.2: tobj) -> tobj {
       let z.3: tobj = apply h.0(y.2)
       return x.1
     }
@@ -688,7 +688,7 @@ fn a_resume_becomes_an_apply() {
     );
     let shown = core_text(&text, Pass::Evidence);
     insta::assert_snapshot!(function(&shown, "main$handle0$ask"), @r#"
-    internal role clause fn main$handle0$ask(p.0: unit, k.1: tobj lin, p.2: unit) -> int {
+    internal uniform from 1 fn main$handle0$ask(p.0: unit, k.1: tobj lin, p.2: unit) -> int {
       let t.3: int = uniform apply k.1(10, ())
       let t.4: int = extern "Prelude.Num Int.*"(t.3, 2)
       return t.4
@@ -826,7 +826,7 @@ fn a_masked_call_restores_the_evidence_list_and_wraps_the_continuation() {
     }
     "#);
     insta::assert_snapshot!(function(&shown, &format!("{run}$k1")), @r#"
-    internal yields role cont fn "run<e>$k1"(t.0: int, t.1: obj) -> obj {
+    internal yields uniform from 1 fn "run<e>$k1"(t.0: int, t.1: obj) -> obj {
       let t.2: obj = extern "Prelude.Show Int.show"(t.0)
       let t.3: obj = extern Prelude.++(t.1, t.2)
       return t.3
@@ -844,7 +844,7 @@ fn a_masked_call_in_a_continuation_restores_the_evidence_list_before_it_continue
     let shown = core_text(&text, Pass::Evidence);
     let run = instance_name(&shown, "run");
     insta::assert_snapshot!(function(&shown, &format!("{run}$k0")), @r#"
-    internal yields role cont fn "run<e>$k0"(cb.0: tobj, t.1: obj) -> obj {
+    internal yields uniform from 1 fn "run<e>$k0"(cb.0: tobj, t.1: obj) -> obj {
       let w.3: tobj = prim evv_get()
       let w.4: tobj = prim evv_mask[State](w.3)
       let u.5: unit = prim evv_set(w.4)
@@ -866,7 +866,7 @@ fn a_masked_call_in_a_continuation_restores_the_evidence_list_before_it_continue
     }
     "#);
     insta::assert_snapshot!(function(&shown, &format!("{run}$k1")), @r#"
-    internal yields role cont fn "run<e>$k1"(t.0: obj, t.1: obj) -> obj {
+    internal yields uniform from 1 fn "run<e>$k1"(t.0: obj, t.1: obj) -> obj {
       let t.2: obj = extern Prelude.++(t.0, t.1)
       return t.2
     }
@@ -882,7 +882,7 @@ fn a_resume_in_a_yielding_function_becomes_a_yielding_apply() {
     );
     let shown = core_text(&text, Pass::Evidence);
     insta::assert_snapshot!(function(&shown, "f$handle0$ask"), @r#"
-    internal yields role clause fn f$handle0$ask(p.0: unit, k.1: tobj lin, p.2: unit) -> int {
+    internal yields uniform from 1 fn f$handle0$ask(p.0: unit, k.1: tobj lin, p.2: unit) -> int {
       let t.3: int = yields uniform apply k.1(10, ())
       let y.5: int = prim yielding()
       switch y.5 { 0 -> b2, _ -> b1 }
@@ -1319,12 +1319,12 @@ fn a_fn_clause_that_fails_runs_in_place() {
 }
 
 /// EP が作る `apply` は一様な場所である。補助の関数の中、`Call::Resume` から作る再開、`cont$` の中の再開、handle の
-/// 本体の呼び出しがどれも `uniform apply` になる。`perform` の後を受ける `f$k0` は `Continuation` の役割を持つ
+/// 本体の呼び出しがどれも `uniform apply` になる。`perform` の後を受ける `f$k0` は最後の1個の引数と結果が一様である
 /// (docs/spec/lir.md の「関数の ABI」と「`apply` の場所」)。
 #[test]
 fn ep_applies_are_uniform_sites() {
     use eml_core_ir::{Call, CoreFn, Rhs, Stmt};
-    use eml_lir::{Role, Site};
+    use eml_lir::Site;
     let text = format!(
         "{ASK}{HIDE}main : Unit -> <IO, Panic> Unit
 main () =
@@ -1382,9 +1382,10 @@ main () =
         .map(|(site, _)| site)
         .collect();
     assert_eq!(bodies, [Site::Uniform, Site::Uniform], "{shown}");
+    let continuation = function("main$lambda0$k0");
     assert_eq!(
-        function("main$lambda0$k0").role,
-        Role::Continuation,
+        continuation.split,
+        Some(continuation.params().len() as u32 - 1),
         "{shown}"
     );
 }

@@ -28,7 +28,7 @@ fn function(function: CoreFn) -> eml_lir::LirFn {
     let CoreFn {
         name,
         internal,
-        role,
+        split,
         yields,
         clause,
         vars,
@@ -39,7 +39,7 @@ fn function(function: CoreFn) -> eml_lir::LirFn {
     eml_lir::LirFn {
         name,
         internal,
-        role,
+        split,
         yields,
         clause,
         vars,

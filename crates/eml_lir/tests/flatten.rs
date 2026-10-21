@@ -79,7 +79,7 @@ fn a_leaf_from_an_unbox_is_not_reboxed() {
     // 組の要素を入れ替えて箱に戻すとき、要素ごとに `Float` の箱を作らないためである。取り出した葉はほかに使われない
     // ので、`unbox` も残らない
     let text = format!(
-        "{PAIR}internal role body fn swap(p.0: (,){{float, float}}) -> (,){{float, float}} {{
+        "{PAIR}internal uniform from 0 fn swap(p.0: (,){{float, float}}) -> (,){{float, float}} {{
   unpack p.0 (,) #0(a.1: float, b.2: float)
   let q.3: (,){{float, float}} = con (,) #0(b.2, a.1)
   return q.3
@@ -87,7 +87,7 @@ fn a_leaf_from_an_unbox_is_not_reboxed() {
 "
     );
     insta::assert_snapshot!(function(&flatten_text(&text), "swap"), @"
-    internal role body fn swap(p.4: tobj) -> tobj {
+    internal uniform from 0 fn swap(p.4: tobj) -> tobj {
       let (p.0.6: tobj, p.1.8: tobj) = unbox p.4 (,)
       let q.5: obj = con (,) #0(p.1.8, p.0.6)
       return q.5
@@ -99,14 +99,14 @@ fn a_leaf_from_an_unbox_is_not_reboxed() {
 fn unbox_becomes_a_multi_def_with_unused_leaves_skipped() {
     // 構造体の `unbox` は箱のフィールドを読んで葉を定義する1つの文になる。使わない葉は `_` と書き、読まない
     let text = format!(
-        "{VEC3}internal role body fn f(v.0: Vec3{{float, float, float}}) -> float {{
+        "{VEC3}internal uniform from 0 fn f(v.0: Vec3{{float, float, float}}) -> float {{
   unpack v.0 Vec3 #0(x.1: float, y.2: float, z.3: float)
   return y.2
 }}
 "
     );
     insta::assert_snapshot!(function(&flatten_text(&text), "f"), @"
-    internal role body fn f(v.4: tobj) -> tobj {
+    internal uniform from 0 fn f(v.4: tobj) -> tobj {
       let (_, v.1.7: float, _) = unbox v.4 Vec3
       let y.5: tobj = box v.1.7
       return y.5
@@ -259,13 +259,13 @@ fn a_nested_struct_is_unboxed_from_its_tobj_field() {
     let ball = "Ball{Vec3{float, float, float}, float}";
     let text = format!(
         "{VEC3}layout Ball {{ Ball(tobj, float) }}
-internal role body fn inner(b.0: {ball}) -> float {{
+internal uniform from 0 fn inner(b.0: {ball}) -> float {{
   unpack b.0 Ball #0(v.1: Vec3{{float, float, float}}, r.2: float)
   unpack v.1 Vec3 #0(x.3: float, y.4: float, z.5: float)
   let s.6: float = extern \"Prelude.Num Float.+\"(y.4, r.2)
   return s.6
 }}
-internal role body fn outer(b.0: {ball}) -> float {{
+internal uniform from 0 fn outer(b.0: {ball}) -> float {{
   unpack b.0 Ball #0(v.1: Vec3{{float, float, float}}, r.2: float)
   return r.2
 }}
@@ -273,7 +273,7 @@ internal role body fn outer(b.0: {ball}) -> float {{
     );
     let shown = flatten_text(&text);
     insta::assert_snapshot!(function(&shown, "inner"), @r#"
-    internal role body fn inner(b.7: tobj) -> tobj {
+    internal uniform from 0 fn inner(b.7: tobj) -> tobj {
       let (b.0.9: tobj, b.3.13: float) = unbox b.7 Ball
       let (_, b.1.11: float, _) = unbox b.0.9 Vec3
       let s.6: float = extern "Prelude.Num Float.+"(b.1.11, b.3.13)
@@ -282,7 +282,7 @@ internal role body fn outer(b.0: {ball}) -> float {{
     }
     "#);
     insta::assert_snapshot!(function(&shown, "outer"), @"
-    internal role body fn outer(b.3: tobj) -> tobj {
+    internal uniform from 0 fn outer(b.3: tobj) -> tobj {
       let (_, b.3.9: float) = unbox b.3 Ball
       let r.4: tobj = box b.3.9
       return r.4
@@ -296,11 +296,11 @@ fn a_struct_unbox_leaves_the_lin_box_to_perceus() {
     // 道ごとに手放すのは Perceus である (docs/spec/lir.md の「開く」)
     let text = "\
 layout Tok { Tok(int, float) }
-internal role body fn f(t.0: Tok{int, float} lin) -> int {
+internal uniform from 0 fn f(t.0: Tok{int, float} lin) -> int {
   unpack t.0 Tok #0(a.1: int, b.2: float)
   return a.1
 }
-internal role body fn kept(t.0: Tok{int, float} lin) -> Tok{int, float} lin {
+internal uniform from 0 fn kept(t.0: Tok{int, float} lin) -> Tok{int, float} lin {
   unpack t.0 Tok #0(a.1: int, b.2: float)
   let c.3: unit = extern Prelude.check_index(a.1, a.1)
   return t.0
@@ -308,14 +308,14 @@ internal role body fn kept(t.0: Tok{int, float} lin) -> Tok{int, float} lin {
 ";
     let shown = flatten_text(text);
     insta::assert_snapshot!(function(&shown, "f"), @"
-    internal role body fn f(t.3: tobj lin) -> tobj {
+    internal uniform from 0 fn f(t.3: tobj lin) -> tobj {
       let (t.0.5: int, _) = unbox t.3 Tok
       let a.4: tobj = box t.0.5
       return a.4
     }
     ");
     insta::assert_snapshot!(function(&shown, "kept"), @"
-    internal role body fn kept(t.4: tobj lin) -> tobj lin {
+    internal uniform from 0 fn kept(t.4: tobj lin) -> tobj lin {
       let (t.0.5: int, _) = unbox t.4 Tok
       let c.3: unit = extern Prelude.check_index(t.0.5, t.0.5)
       return t.4

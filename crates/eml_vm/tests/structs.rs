@@ -185,7 +185,7 @@ fn main() -> unit {{
   let u.1: unit = call check(r.0)
   return u.1
 }}
-internal role body fn make(u.0: unit) -> {V} {{
+internal uniform from 0 fn make(u.0: unit) -> {V} {{
   let v.1: {V} = con Vec3 #0(1.0, 2.0, 3.0)
   return v.1
 }}
@@ -217,7 +217,7 @@ fn main() -> unit {{
   let u.4: unit = call check(r.3)
   return u.4
 }}
-internal role body fn first(v.0: {V}) -> float {{
+internal uniform from 0 fn first(v.0: {V}) -> float {{
   unpack v.0 Vec3 #0(x.1: float, y.2: float, z.3: float)
   return x.1
 }}
@@ -331,7 +331,7 @@ fn via(k.0: tobj) -> {V} {{
   let p.1: {V} = uniform apply k.0(())
   return p.1
 }}
-internal role body fn make(u.0: unit) -> {V} {{
+internal uniform from 0 fn make(u.0: unit) -> {V} {{
   let v.1: {V} = con Vec3 #0(1.0, 2.0, 3.0)
   return v.1
 }}

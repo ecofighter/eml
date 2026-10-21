@@ -11,8 +11,8 @@ use crate::tail::tail_position_call;
 use crate::{Call, CoreFn, Program, Rhs, Stmt, Term};
 use eml_extern::Purity;
 use eml_lir::{
-    Atom, BlockId, FnIdx, Mark, MaskItem, OpRet, OperationInfo, Prim, Repr, Role, Site, VarId,
-    VarInfo, operation,
+    Atom, BlockId, FnIdx, Mark, MaskItem, OpRet, OperationInfo, Prim, Repr, Site, VarId, VarInfo,
+    operation,
 };
 
 use super::split::Annotations;
@@ -473,9 +473,9 @@ fn into_entry(program: &mut Program, clause: FnIdx, effect: u32, op: u32) {
     function.ret_mark = ret_mark;
     function.name.push_str("$entry");
     function.clause = Some((effect, op));
-    // 入口は操作の ABI で呼ばれ、`prompt$` に呼ばれる節の役割を持たない
+    // 入口は操作の ABI で呼ばれ、`prompt$` に呼ばれる節の `split` を持たない
     // (docs/spec/lir.md の「関数の ABI」)
-    function.role = Role::Typed;
+    function.split = None;
 }
 
 /// 節の本体が、末尾の `resume` のほかに呼び出しか、`Pure` でない extern を持つか。`resumes` は末尾の `resume` の

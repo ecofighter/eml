@@ -93,7 +93,7 @@ impl Parser<'_> {
         Ok(CoreFn {
             name: header.name,
             internal: header.internal,
-            role: header.role,
+            split: header.split,
             yields: header.yields,
             clause: header.clause,
             vars,

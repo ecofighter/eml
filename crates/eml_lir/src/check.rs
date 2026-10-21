@@ -11,16 +11,14 @@ use eml_extern::{Extern, FunctionRow};
 use crate::syntax::{REPRS, effect_text, layout_text, operation_text, prim_text, repr_text};
 use crate::{
     Atom, BlockId, Case, CasePattern, Ctor, EffectInfo, FnIdx, Immediates, Layout, LayoutCtor,
-    LayoutId, Mark, OpRet, Prim, Repr, Role, Site, StructId, StructShape, Structs, VarId, VarInfo,
+    LayoutId, Mark, OpRet, Prim, Repr, Site, StructId, StructShape, Structs, VarId, VarInfo,
 };
 
-/// 役割が一様にする最後の引数の数は、関数の引数の数を超えない
-/// (docs/spec/lir.md の「関数の ABI」)。
-pub fn role(role: Role, params: usize) -> Result<(), String> {
-    match role.name() {
-        Some(name) if role.uniform_params() > params => Err(format!(
-            "the role {name} makes {} parameters uniform, but the function takes {params}",
-            role.uniform_params()
+/// 一様な位置の始まりは、関数の引数の数を超えない (docs/spec/lir.md の「関数の ABI」)。
+pub fn split(split: Option<u32>, params: usize) -> Result<(), String> {
+    match split {
+        Some(at) if at as usize > params => Err(format!(
+            "uniform from {at} is past the end of the {params} parameters"
         )),
         _ => Ok(()),
     }

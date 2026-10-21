@@ -207,7 +207,7 @@ yields fn f(a.0: int, h.1: tobj) -> int {
       let s.8: int = extern "Prelude.Num Int.+"(x.5, a.0)
       return s.8
     }
-    internal yields role cont fn f$k0(a.0: int, h.1: tobj, x.2: int) -> int {
+    internal yields uniform from 2 fn f$k0(a.0: int, h.1: tobj, x.2: int) -> int {
       let r.3: tobj = yields apply h.1((): unit)
       let s.4: int = extern "Prelude.Num Int.+"(x.2, a.0)
       return s.4
@@ -278,7 +278,7 @@ yields fn f(c.0: tobj, e.1: obj) -> tobj {
       let w.3: tobj = clause State.get c.0(e.1, ())
       return w.3
     }
-    internal yields role cont fn f$k0(c.0: tobj, e.1: obj, v.2: tobj) -> tobj {
+    internal yields uniform from 2 fn f$k0(c.0: tobj, e.1: obj, v.2: tobj) -> tobj {
       let w.3: tobj = clause State.get c.0(e.1, ())
       return w.3
     }

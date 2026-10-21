@@ -58,7 +58,7 @@ impl<'p> Printer<'p> {
             internal: function.internal,
             yields: function.yields,
             clause: function.clause,
-            role: function.role,
+            split: function.split,
             params: function.params().to_vec(),
             rets: function.rets.clone(),
             source: function.source.clone(),

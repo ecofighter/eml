@@ -2,7 +2,7 @@
 //! `pretty` で表示すると元のテキストに戻ることと、構文の誤りの報告を確かめる。
 
 use eml_core_ir::{Call, Program, Rhs, Stmt, parse, pretty};
-use eml_lir::{Atom, BlockId, Mark, MaskItem, ParseError, Repr, Role, Site, VarId};
+use eml_lir::{Atom, BlockId, Mark, MaskItem, ParseError, Repr, Site, VarId};
 
 /// 読んで表示し直すと元に戻ることを確かめ、読んだプログラムを返す。
 fn round_trip(text: &str) -> Program {
@@ -609,11 +609,11 @@ fn prompt_marker_round_trips() {
     assert_eq!(atoms, vec![v(1), Atom::Unit]);
 }
 
-/// 役割は `fn` の前に `role R` で書き、`Typed` は何も書かない。`apply` の場所は、型どおりなら定数の引数にだけ
+/// 一様な位置の始まりは `fn` の前に `uniform from N` で書き、型どおりの関数は何も書かない。`apply` の場所は、型どおりなら定数の引数にだけ
 /// `: repr` を書き、変数の引数の Repr は変数から読む。EP の一様な場所は `uniform apply` と書く
 /// (docs/spec/lir.md の「関数の ABI」と「`apply` の場所」)。
 #[test]
-fn roles_and_sites_round_trip() {
+fn splits_and_sites_round_trip() {
     let program = round_trip(
         "\
 fn f(c.0: tobj, x.1: int) -> tobj {
@@ -621,35 +621,25 @@ fn f(c.0: tobj, x.1: int) -> tobj {
   let t.3: tobj = uniform apply t.2(x.1, ())
   return t.3
 }
-internal yields role body fn b(p.0: unit) -> tobj {
+internal yields uniform from 0 fn b(p.0: unit) -> tobj {
   return ()
 }
-internal role clause fn g(x.0: tobj, k.1: tobj, s.2: unit) -> tobj {
+internal uniform from 1 fn g(x.0: tobj, k.1: tobj, s.2: unit) -> tobj {
   return x.0
 }
-internal role return fn r(x.0: tobj, s.1: unit) -> tobj {
+internal uniform from 0 fn r(x.0: tobj, s.1: unit) -> tobj {
   return x.0
 }
-internal role abort fn a(m.0: tobj, s.1: unit) -> tobj {
+internal uniform from 1 fn a(m.0: tobj, s.1: unit) -> tobj {
   return m.0
 }
-internal yields role cont fn f$k0(a.0: int, x.1: tobj) -> tobj {
+internal yields uniform from 1 fn f$k0(a.0: int, x.1: tobj) -> tobj {
   return x.1
 }
 ",
     );
-    let roles: Vec<Role> = program.functions.iter().map(|f| f.role).collect();
-    assert_eq!(
-        roles,
-        [
-            Role::Typed,
-            Role::Body,
-            Role::Clause,
-            Role::Return,
-            Role::Abort,
-            Role::Continuation
-        ]
-    );
+    let splits: Vec<Option<u32>> = program.functions.iter().map(|f| f.split).collect();
+    assert_eq!(splits, [None, Some(0), Some(1), Some(0), Some(1), Some(1)]);
     let sites: Vec<&Site> = program.functions[0].blocks[0]
         .stmts
         .iter()

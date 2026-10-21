@@ -118,7 +118,7 @@ fn verify_at(program: &Program, level: Level) -> Result<(), VerifyError> {
         no_struct_layouts(program)?;
     }
     with_tables(program, |tables| {
-        // `clause` の印の関数の ABI と役割は、参照ごとでなく関数ごとに1回だけ確かめる
+        // `clause` の印の関数の ABI と `split` は、参照ごとでなく関数ごとに1回だけ確かめる
         for function in &program.functions {
             rets(program, function, level, function.clause.is_some()).map_err(|message| {
                 VerifyError {
@@ -138,7 +138,7 @@ fn verify_at(program: &Program, level: Level) -> Result<(), VerifyError> {
                 function.rets[0].1,
                 level >= Level::Scopes,
             )
-            .and_then(|()| check::role(function.role, function.params().len()))
+            .and_then(|()| check::split(function.split, function.params().len()))
             .map_err(|message| VerifyError {
                 function: function.name.clone(),
                 message,

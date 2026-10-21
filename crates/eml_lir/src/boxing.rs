@@ -1,8 +1,8 @@
 //! translate と縮約の間の box の挿入のパス (docs/spec/lir.md の「box の挿入」)。プログラム全体を1回で扱い、関数の
-//! ABI を決めてから、Repr の違う位置の間に `box` と `unbox` を入れる。関数の ABI は具体化した型と役割だけで決まる。
-//! 手順は、役割による一様化と、位置ごとの変換である
+//! ABI を決めてから、Repr の違う位置の間に `box` と `unbox` を入れる。関数の ABI は具体化した型と `split` だけで決まる。
+//! 手順は、`split` による一様化と、位置ごとの変換である
 //! (docs/spec/lir.md の「box の挿入」)。型は読まず、呼ばれる関数の
-//! シグネチャ、役割と `clause` の印、`apply` の場所、配置の表、操作の表、基本操作の表だけを読む。入力は EP の出力を
+//! シグネチャ、`split` と `clause` の印、`apply` の場所、配置の表、操作の表、基本操作の表だけを読む。入力は EP の出力を
 //! 写した LIR で、`tail`、`box`、`unbox`、RC の命令はない (`passes_until` の入口で `verify_lowered` が確かめる)。
 //!
 //! 変数は具体化した型の Repr を持ち、値を受ける位置の Repr と互換でなければ変換する。変換は箱を要するスカラーと
@@ -30,7 +30,7 @@ pub fn boxing(program: &mut Program) {
                 &program.structs,
                 operation(&program.effects, effect, op),
             ),
-            None => conform_role(function, &program.structs),
+            None => conform_split(function, &program.structs),
         }
     }
     // 変換はほかの関数を `signatures` でだけ見るので、関数を1つずつ書き換えながら表を共有で借りられる
@@ -143,13 +143,12 @@ fn uniform_repr(repr: Repr) -> Repr {
     if repr.needs_box() { Repr::TObj } else { repr }
 }
 
-/// 役割が一様にする位置 (最後の `uniform_params` 個の引数と、`uniform_ret` なら `ret`) を一様な Repr にする。EP の
-/// しくみはこれらの位置を総称に呼ぶためである。捕獲を含むほかの位置は、型どおりの Repr のままにする
+/// `split` 以降の引数と、`split` があれば `ret` を一様な Repr にする。EP のしくみは
+/// これらの位置を総称に呼ぶためである。捕獲を含むほかの位置は、型どおりの Repr のままにする
 /// (docs/spec/lir.md の「関数の ABI」)。
-fn conform_role(function: &mut LirFn, structs: &Structs) {
-    let role = function.role;
+fn conform_split(function: &mut LirFn, structs: &Structs) {
     let params = function.params();
-    let typed = params.len() - role.uniform_params();
+    let typed = function.split.map_or(params.len(), |at| at as usize);
     let expected: Vec<Repr> = params
         .iter()
         .enumerate()
@@ -162,7 +161,7 @@ fn conform_role(function: &mut LirFn, structs: &Structs) {
             }
         })
         .collect();
-    let ret = if role.uniform_ret() {
+    let ret = if function.split.is_some() {
         uniform_repr(function.rets[0].0)
     } else {
         function.rets[0].0
@@ -518,7 +517,7 @@ impl Converter<'_> {
                         }
                         Some(row.ret)
                     }
-                    // 入力にある `unbox` と `box` は、役割と `clause` の印の関数の入口で引数を合わせたものだけである
+                    // 入力にある `unbox` と `box` は、`split` と `clause` の印の関数の入口で引数を合わせたものだけである
                     Rhs::Unbox(Atom::Var(from)) => {
                         self.unboxed_from.insert(var, *from);
                         None

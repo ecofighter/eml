@@ -2,7 +2,7 @@
 //! `pretty` で表示すると元のテキストに戻ることと、構文の誤りの報告を確かめる。
 
 use eml_lir::{Atom, CasePattern, Ctor, FloatBits, FnIdx, LayoutId, MaskItem, OpRet, Prim, VarId};
-use eml_lir::{BlockId, Loc, Mark, ParseError, Repr, Reuse, Role, Site, StructShape, verify};
+use eml_lir::{BlockId, Loc, Mark, ParseError, Repr, Reuse, Site, StructShape, verify};
 use eml_lir::{Call, Program, Rhs, Stmt, Term, parse, pretty, pretty_with_positions};
 
 /// 読んで表示し直すと元に戻ることを確かめ、読んだプログラムを返す。
@@ -1805,45 +1805,35 @@ fn f(p.0: obj) -> unit {
     );
 }
 
-/// 役割と `apply` の場所は Core IR と同じ形で書く。`tail` の後の `apply` も場所を持つ
+/// `split` と `apply` の場所は Core IR と同じ形で書く。`tail` の後の `apply` も場所を持つ
 /// (docs/spec/lir.md の「関数の ABI」と「`apply` の場所」)。
 #[test]
-fn roles_and_sites_round_trip() {
+fn splits_and_sites_round_trip() {
     let program = round_trip(
         "\
 fn f(c.0: tobj, x.1: int) -> tobj {
   let t.2: tobj = apply c.0(#1: tobj, x.1)
   tail uniform apply t.2(x.1, ())
 }
-internal yields role body fn b(p.0: unit) -> tobj {
+internal yields uniform from 0 fn b(p.0: unit) -> tobj {
   return ()
 }
-internal role clause fn g(x.0: tobj, k.1: tobj, s.2: unit) -> tobj {
+internal uniform from 1 fn g(x.0: tobj, k.1: tobj, s.2: unit) -> tobj {
   return x.0
 }
-internal role return fn r(x.0: tobj, s.1: unit) -> tobj {
+internal uniform from 0 fn r(x.0: tobj, s.1: unit) -> tobj {
   return x.0
 }
-internal role abort fn a(m.0: tobj, s.1: unit) -> tobj {
+internal uniform from 1 fn a(m.0: tobj, s.1: unit) -> tobj {
   return m.0
 }
-internal yields role cont fn f$k0(a.0: int, x.1: tobj) -> tobj {
+internal yields uniform from 1 fn f$k0(a.0: int, x.1: tobj) -> tobj {
   return x.1
 }
 ",
     );
-    let roles: Vec<Role> = program.functions.iter().map(|f| f.role).collect();
-    assert_eq!(
-        roles,
-        [
-            Role::Typed,
-            Role::Body,
-            Role::Clause,
-            Role::Return,
-            Role::Abort,
-            Role::Continuation
-        ]
-    );
+    let splits: Vec<Option<u32>> = program.functions.iter().map(|f| f.split).collect();
+    assert_eq!(splits, [None, Some(0), Some(1), Some(0), Some(1), Some(1)]);
     let f = &program.functions[0];
     let Stmt::Let {
         rhs: Rhs::Call(Call::Apply { site, .. }),

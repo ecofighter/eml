@@ -26,7 +26,7 @@ use super::{kept_marks, recompute_yields};
 use crate::liveness::{insert_var, live_after_term, step_back};
 use crate::tail::tail_position_call;
 use crate::{Call, CoreFn, Program, Rhs, Stmt, Term};
-use eml_lir::{Atom, BlockId, FnIdx, Mark, OperationInfo, Repr, Role, VarId, VarInfo};
+use eml_lir::{Atom, BlockId, FnIdx, Mark, OperationInfo, Repr, VarId, VarInfo};
 
 use passing::{Returned, Tuples};
 use touch::touching;
@@ -833,7 +833,7 @@ impl Copies<'_> {
         let mut code = program.function(function).clone();
         code.name = self.name(function, shape);
         code.internal = false;
-        code.role = Role::Typed;
+        code.split = None;
         code.ret = ret.ret;
         code.ret_mark = ret.ret_mark;
 

@@ -152,7 +152,7 @@ fn a_value_unboxed_by_the_pass_is_passed_on_without_a_new_box() {
         "effect Ask where\n  ask : Unit -> Int\n\n{HIDE}pick : Int -> <Ask, Panic> Int\npick n =\n  let x = ask ()\n  if x > n then x else n\n\nmain : Unit -> <IO, Panic> Unit\nmain () =\n  let Box body = hide 0 (fn () -> pick 1)\n  let r =\n    handle body () with\n      | ctl ask () k -> k 2\n  println (show r)"
     );
     insta::assert_snapshot!(function(&lir_text(&text, eml_lir::Pass::Boxing), "main$lambda0$k0"), @r#"
-    internal yields role cont fn main$lambda0$k0(t.2: tobj) -> tobj {
+    internal yields uniform from 0 fn main$lambda0$k0(t.2: tobj) -> tobj {
       let t.0: int = unbox t.2
       let t.1: enum = extern "Prelude.Ord Int.>"(t.0, 1)
       switch t.1 Prelude.Bool { #0 -> b1, #1 -> b2 }
@@ -288,7 +288,7 @@ fn a_value_lambda_that_fails_ends_in_a_tail_never_clause() {
 
 #[test]
 fn a_chain_of_tail_calls_keeps_its_typed_rets() {
-    // 関数の `ret` は型と役割だけで決まり、パスが上げない。`apply_to` は末尾の位置の `apply` でも `int` を返し、それを
+    // 関数の `ret` は型と `split` だけで決まり、パスが上げない。`apply_to` は末尾の位置の `apply` でも `int` を返し、それを
     // 末尾の位置で呼ぶ `via` も `int` を返す。`through` は、呼び出しと `return` の間に使われない純粋な `let` があっても
     // 末尾呼び出しになる。`apply_to` は自分を呼ぶので `via` に展開されず、`via` と `through` はデータを通して呼ぶので
     // `main` に展開されない (docs/spec/lir.md の「関数の ABI」)
@@ -335,14 +335,14 @@ fn a_chain_of_tail_calls_keeps_its_typed_rets() {
 
 #[test]
 fn a_body_ending_in_a_typed_call_makes_it_a_tail_call() {
-    // handle の本体は役割で結果が一様な `tobj` になり、`Int` を返す `answer` を末尾の位置で呼ぶ。box の挿入は結果を
+    // handle の本体は `split` で結果が一様な `tobj` になり、`Int` を返す `answer` を末尾の位置で呼ぶ。box の挿入は結果を
     // 変換せず、縮約が末尾呼び出しにする。結果の変換は VM の変換のフレームが行う
     // (docs/spec/lir.md の「末尾の位置の呼び出し」)
     let text = format!(
         "effect Ask where\n  ask : Unit -> Int\n\n{HIDE}answer : Int -> <Ask, Panic> Int\nanswer n =\n  if n > 0 then answer (n - 1)\n  else\n    let Box q = hide 0 ask\n    q () + 1\n\nmain : Unit -> <IO, Panic> Unit\nmain () =\n  let r = handle answer 0 with\n    | ctl ask () k -> k 1\n  println (show r)"
     );
     insta::assert_snapshot!(function(&lir_text(&text, eml_lir::Pass::Contract), "main$handle0"), @"
-    internal yields role body fn main$handle0(p.0: unit) -> tobj {
+    internal yields uniform from 0 fn main$handle0(p.0: unit) -> tobj {
       tail call answer(0)
     }
     ");
@@ -369,7 +369,7 @@ fn the_result_of_exit_is_not_compared_with_positions() {
     "#);
 }
 
-/// 関数の ABI は型と役割で決まり、ほかの定義の使い方によらない
+/// 関数の ABI は型と `split` で決まり、ほかの定義の使い方によらない
 /// (docs/spec/lir.md の「関数の ABI」)。値としても使うローカル関数 `d$let$g` は、
 /// `d` をどの深さの呼び出しから展開するプログラムでも、同じ LIR になる。
 #[test]

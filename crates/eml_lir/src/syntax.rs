@@ -10,8 +10,8 @@ use std::fmt::Write as _;
 
 use crate::{
     Atom, BlockId, Case, CasePattern, Ctor, EffectInfo, FloatBits, FnIdx, Immediates, Layout,
-    LayoutCtor, LayoutId, Loc, Mark, MaskItem, OpRet, OperationInfo, ParseError, Prim, Repr, Role,
-    Site, SourceSig, StructShape, Structs, VarId, VarInfo,
+    LayoutCtor, LayoutId, Loc, Mark, MaskItem, OpRet, OperationInfo, ParseError, Prim, Repr, Site,
+    SourceSig, StructShape, Structs, VarId, VarInfo,
 };
 
 /// エフェクトの名前。表にない番号は `#N` で書く。誤りを含む IR も表示でき、`parse` が読み戻せて、verifier がその番号を
@@ -339,14 +339,14 @@ pub struct FnState {
     targets: Vec<(u32, usize)>,
 }
 
-/// `[internal] [yields] [clause E.op] [role R] fn name(params) -> rets [source(reprs) -> repr]` の欄。値が1つなら
+/// `[internal] [yields] [clause E.op] [uniform from N] fn name(params) -> rets [source(reprs) -> repr]` の欄。値が1つなら
 /// `-> repr`、2つ以上なら `-> (repr, repr)` と書く。`source` は LIR の開いた後の関数の源の ABI (`SourceSig`) である。
 pub struct FnHeader {
     pub name: String,
     pub internal: bool,
     pub yields: bool,
     pub clause: Option<(u32, u32)>,
-    pub role: Role,
+    pub split: Option<u32>,
     pub params: Vec<VarId>,
     pub rets: Vec<(Repr, Mark)>,
     pub source: Option<SourceSig>,
@@ -618,7 +618,7 @@ impl<'t> Reader<'t> {
         Ok(())
     }
 
-    /// `[internal] [yields] [clause E.op] [role R] fn name(params) -> repr {` を読む。入口のブロックとラベルの付いた
+    /// `[internal] [yields] [clause E.op] [uniform from N] fn name(params) -> repr {` を読む。入口のブロックとラベルの付いた
     /// ブロックの列が続く。
     pub fn function_header(&mut self, state: &mut FnState) -> Result<FnHeader, ParseError> {
         let internal = self.at_word("internal");
@@ -635,11 +635,12 @@ impl<'t> Reader<'t> {
         } else {
             None
         };
-        let role = if self.at_word("role") {
+        let split = if self.at_word("uniform") {
             self.pos += 1;
-            self.role()?
+            self.expect_word("from")?;
+            Some(self.split_start()?)
         } else {
-            Role::Typed
+            None
         };
         self.expect_word("fn")?;
         let name = self.name()?;
@@ -676,28 +677,19 @@ impl<'t> Reader<'t> {
             internal,
             yields,
             clause,
-            role,
+            split,
             params,
             rets,
             source,
         })
     }
 
-    /// `role` の後の語。`Typed` は `role` を書かないので、ここでは読まない。
-    fn role(&mut self) -> Result<Role, ParseError> {
+    /// `uniform from` の後の番号。
+    fn split_start(&mut self) -> Result<u32, ParseError> {
         let line = self.line();
         let word = self.word()?;
-        Role::ALL
-            .into_iter()
-            .find(|role| role.name() == Some(word.as_str()))
-            .ok_or_else(|| {
-                error(
-                    line,
-                    format!(
-                        "expected a role (body, clause, abort, return or cont), found `{word}`"
-                    ),
-                )
-            })
+        number(&word)
+            .ok_or_else(|| error(line, format!("expected a parameter index, found `{word}`")))
     }
 
     /// `call` が読んだ語 `word` が `apply` の頭 (`[yields] [uniform] apply`) なら、`apply` までを読んで
@@ -1688,18 +1680,17 @@ impl<'p> Writer<'p> {
         }
     }
 
-    /// `[internal] [yields] [clause E.op] [role R] fn name(params) -> rets {` の行。
+    /// `[internal] [yields] [clause E.op] [uniform from N] fn name(params) -> rets {` の行。
     pub fn function_head(&self, header: &FnHeader, vars: &[VarInfo], out: &mut String) {
         let clause = header.clause.map_or_else(String::new, |(effect, op)| {
             format!("clause {} ", operation_text(self.effects, effect, op))
         });
-        let role = header
-            .role
-            .name()
-            .map_or_else(String::new, |name| format!("role {name} "));
+        let split = header
+            .split
+            .map_or_else(String::new, |at| format!("uniform from {at} "));
         writeln!(
             out,
-            "{}{}{clause}{role}fn {}({}) -> {}{} {{",
+            "{}{}{clause}{split}fn {}({}) -> {}{} {{",
             if header.internal { "internal " } else { "" },
             if header.yields { "yields " } else { "" },
             function_name(&header.name),

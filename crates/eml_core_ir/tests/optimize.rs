@@ -125,7 +125,7 @@ main () =
       k ()
 ";
     insta::assert_snapshot!(function(&core_text(text, Pass::Optimize), "render$handle0"), @r#"
-    internal yields role body fn render$handle0(p.0: unit) -> unit {
+    internal yields uniform from 0 fn render$handle0(p.0: unit) -> unit {
       let t.1: unit = mask [Yield@1] yields apply &"op$yield@[Int]"(1: int)
       return t.1
     }
@@ -2385,12 +2385,12 @@ b5:
     "#);
 }
 
-/// handler への特殊化が作る関数 (`f{H}` と、節の写し `<g>{k}`) は役割を持たない。直接呼ばれるか、特殊化した経路の
+/// handler への特殊化が作る関数 (`f{H}` と、節の写し `<g>{k}`) は `split` を持たない。直接呼ばれるか、特殊化した経路の
 /// 中で型どおりに呼ばれるためである。`<g>{k}` の中の `k` への `apply` も型どおりの場所である
 /// (docs/spec/lir.md の「関数の ABI」)。
 #[test]
 fn handler_specialization_functions_are_typed() {
-    use eml_lir::{Role, Site};
+    use eml_lir::Site;
     let program =
         eml_test_support::core_until(include_str!("../../../bench/state_loop.em"), Pass::Optimize);
     let shown = pretty(&program);
@@ -2401,7 +2401,7 @@ fn handler_specialization_functions_are_typed() {
         .collect();
     assert!(!copies.is_empty(), "{shown}");
     assert!(
-        copies.iter().all(|function| function.role == Role::Typed),
+        copies.iter().all(|function| function.split.is_none()),
         "{shown}"
     );
 
@@ -2412,7 +2412,7 @@ fn handler_specialization_functions_are_typed() {
         .iter()
         .find(|function| function.name.ends_with("{k}"))
         .unwrap_or_else(|| panic!("no `<g>{{k}}` in\n{shown}"));
-    assert_eq!(copy.role, Role::Typed, "{shown}");
+    assert_eq!(copy.split, None, "{shown}");
     let sites: Vec<&Site> = copy
         .blocks
         .iter()
@@ -2492,25 +2492,24 @@ fn a_clause_copy_applies_k_at_the_site_of_the_resume() {
     assert_eq!(sites, [&Site::Typed(vec![Repr::TObj])], "{shown}");
 }
 
-/// `con` の複製は、一様な引数の位置を開くと引数の並びが変わるので役割を落とす。一様でない位置だけを開く複製は、
-/// 末尾の一様な引数がそのまま残るので役割を写す
+/// `con` の複製は、一様な引数の位置を開くと引数の並びが変わるので一様な位置を落とす。一様でない位置だけを開く複製は、
+/// 末尾の一様な引数がそのまま残るので `split` を引数の増減だけずらして写す
 /// (docs/spec/core-ir.md の「`con` の値の形についての特殊化」)。
 #[test]
-fn a_con_copy_keeps_its_role_only_when_the_uniform_parameters_stay() {
-    use eml_lir::Role;
+fn a_con_copy_keeps_its_split_only_when_the_uniform_parameters_stay() {
     let mut program = parse(
         "\
 layout Box { Box(tobj, int) }
 fn inc(x.0: int) -> int {
   return x.0
 }
-internal role return fn r(x.0: int, s.1: tobj) -> int {
+internal uniform from 0 fn r(x.0: int, s.1: tobj) -> int {
   unpack s.1 Box #0(f.2: tobj, n.5: int)
   let y.3: int = apply f.2(n.5)
   let z.4: int = call r(y.3, s.1)
   return z.4
 }
-internal role clause fn g(b.0: tobj, k.1: tobj, s.2: unit) -> int {
+internal uniform from 1 fn g(b.0: tobj, k.1: tobj, s.2: unit) -> int {
   unpack b.0 Box #0(f.3: tobj, n.6: int)
   let y.4: int = apply f.3(n.6)
   let z.5: int = call g(b.0, k.1, s.2)
@@ -2528,16 +2527,16 @@ fn entry$main(k.0: tobj) -> int {
     .unwrap_or_else(|error| panic!("{error}"));
     optimize(&mut program);
     let shown = pretty(&program);
-    let role = |prefix: &str| {
-        program
+    let uniform_tail = |prefix: &str| {
+        let copy = program
             .functions
             .iter()
             .find(|function| function.name.starts_with(prefix))
-            .unwrap_or_else(|| panic!("no `{prefix}` copy in\n{shown}"))
-            .role
+            .unwrap_or_else(|| panic!("no `{prefix}` copy in\n{shown}"));
+        copy.split.map(|at| copy.params().len() - at as usize)
     };
-    assert_eq!(role("r{"), Role::Typed, "{shown}");
-    assert_eq!(role("g{"), Role::Clause, "{shown}");
+    assert_eq!(uniform_tail("r{"), None, "{shown}");
+    assert_eq!(uniform_tail("g{"), Some(2), "{shown}");
 }
 
 /// 状態を渡す形の複製が2つ以上の値を返すとき、結果は値の Repr と印から作るタプルの形の構造体である。末尾でない
@@ -2825,4 +2824,43 @@ fn entry$main(a.0: obj lin) -> obj {
 ",
     );
     assert!(rejected.contains("con Box"), "{rejected}");
+}
+
+/// 既知の閉包を開いた複製は、開いた閉包の捕獲の数だけ引数が増えるが、後ろの一様な引数の数は変わらない
+/// (docs/spec/core-ir.md の「鍵と名前」)。
+#[test]
+fn a_known_closure_copy_keeps_its_uniform_tail() {
+    let mut program = parse(
+        "\
+internal fn h(a.0: int, b.1: int, x.2: int) -> int {
+  let t.3: int = extern \"Prelude.Num Int.+\"(a.0, b.1)
+  let t.4: int = extern \"Prelude.Num Int.+\"(t.3, x.2)
+  return t.4
+}
+internal uniform from 1 fn r(f.0: tobj, s.1: tobj) -> tobj {
+  let t.2: int = apply f.0(1: int)
+  switch t.2 { 0 -> b1, _ -> b2 }
+b1:
+  return s.1
+b2:
+  let t.3: tobj = call r(f.0, s.1)
+  return t.3
+}
+fn entry$main() -> tobj {
+  let c.0: tobj = closure h(3, 4)
+  let t.1: tobj = call r(c.0, ())
+  return t.1
+}
+",
+    )
+    .unwrap_or_else(|error| panic!("{error}"));
+    optimize(&mut program);
+    let shown = pretty(&program);
+    let copy = program
+        .functions
+        .iter()
+        .find(|function| function.name.starts_with("r{"))
+        .unwrap_or_else(|| panic!("no `r` copy in\n{shown}"));
+    assert_eq!(copy.params().len(), 3, "{shown}");
+    assert_eq!(copy.split, Some(2), "{shown}");
 }

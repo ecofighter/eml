@@ -26,7 +26,7 @@ use eml_types::{
 use la_arena::ArenaMap;
 
 use crate::{CoreFn, Program, Rhs, Term};
-use eml_lir::{Atom, Case, CasePattern, FALSE, FnIdx, Loc, Mark, Repr, Role, TRUE, VarId};
+use eml_lir::{Atom, Case, CasePattern, FALSE, FnIdx, Loc, Mark, Repr, TRUE, VarId};
 
 use crate::builder::{FnBuilder, Label};
 use expr::extern_row;
@@ -752,7 +752,7 @@ impl<'a> FnLowering<'a> {
     /// 外側より後ろの番号になる。
     /// `yields` は持ち上げた関数の印である。クロージャの印は、型のあるラムダなら `typed` で、型のない handle の本体と
     /// 節では捕まえた値の印の結びにする
-    /// (docs/spec/core-ir.md の「translate が決める印」)。`role` は持ち上げた関数の EP の役割で、ラムダは `Typed` で
+    /// (docs/spec/core-ir.md の「translate が決める印」)。`uniform_tail` は持ち上げた関数の最後の何個の引数と結果を一様にするかで、ラムダは 0 で
     /// ある (docs/spec/lir.md の「関数の ABI」)。
     #[expect(
         clippy::too_many_arguments,
@@ -761,7 +761,7 @@ impl<'a> FnLowering<'a> {
     fn lift(
         &mut self,
         name: String,
-        role: Role,
+        uniform_tail: usize,
         yields: bool,
         captured: Vec<LocalId>,
         params: &[Param],
@@ -775,7 +775,7 @@ impl<'a> FnLowering<'a> {
         let function = self.program.reserve(captured.len() + params.len());
         let mut core = FnLowering::new(self.ctx, &mut *self.program, yields)
             .lower(&name, true, &captured, params, root, ret);
-        core.role = role;
+        core.set_uniform_tail(uniform_tail);
         self.program.finish(function, core);
         let closure_mark = typed.unwrap_or_else(|| {
             captured

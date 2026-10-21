@@ -1266,7 +1266,7 @@ layout (,) { (,)(tobj, tobj) }
 fn g(a.0: obj) -> obj {
   return a.0
 }
-internal role body fn f(p.0: (,){obj, obj}) -> obj {
+internal uniform from 0 fn f(p.0: (,){obj, obj}) -> obj {
   unpack p.0 (,) #0(a.1: obj, b.2: obj)
   let c.3: obj = call g(a.1)
   let d.4: obj = extern Prelude.++(c.3, b.2)
@@ -1274,7 +1274,7 @@ internal role body fn f(p.0: (,){obj, obj}) -> obj {
 }
 ";
     insta::assert_snapshot!(function(&passes_text(text, Pass::Perceus), "f"), @"
-    internal role body fn f(p.5: tobj) -> obj {
+    internal uniform from 0 fn f(p.5: tobj) -> obj {
       let (p.0.6: obj, p.1.7: obj) = unbox p.5 (,)
       release unboxed p.5 (,) #0(p.0.6, p.1.7)
       let c.3: obj = call g(p.0.6)
@@ -1295,7 +1295,7 @@ layout Prelude.Bool { False, True }
 fn g(n.0: int) -> int {
   return n.0
 }
-internal role body fn f(k.0: obj, c.1: enum, u.2: unit) -> Tok{int, float} lin {
+internal uniform from 2 fn f(k.0: obj, c.1: enum, u.2: unit) -> Tok{int, float} lin {
   let t.3: Tok{int, float} lin = uniform apply k.0(1)
   unpack t.3 Tok #0(n.4: int, x.5: float)
   switch c.1 Prelude.Bool { #0 -> b1, #1 -> b2 }
@@ -1308,7 +1308,7 @@ b2:
 }
 ";
     insta::assert_snapshot!(function(&passes_text(text, Pass::Perceus), "f"), @"
-    internal role body fn f(k.0: obj, c.1: enum, u.2: unit) -> tobj lin {
+    internal uniform from 2 fn f(k.0: obj, c.1: enum, u.2: unit) -> tobj lin {
       let b.8: tobj = box 1
       let t.9: tobj lin = uniform apply k.0(b.8)
       let (t.0.11: int, t.1.12: float) = unbox t.9 Tok
@@ -1333,13 +1333,13 @@ fn a_borrowed_leaf_word_is_named_or_dupped_around_its_lin_box() {
     let text = "\
 layout (,) { (,)(tobj, tobj) }
 layout Option { None, Some(tobj) }
-internal role body fn named(p.0: (,){float, float} lin) -> tobj {
+internal uniform from 0 fn named(p.0: (,){float, float} lin) -> tobj {
   unpack p.0 (,) #0(a.1: float, b.2: float)
   let q.3: (,){float, float} = con (,) #0(a.1, a.1)
   let o.4: tobj = con Option #1(q.3)
   return o.4
 }
-internal role body fn dupped(p.0: (,){float, float} lin) -> obj lin {
+internal uniform from 0 fn dupped(p.0: (,){float, float} lin) -> obj lin {
   unpack p.0 (,) #0(a.1: float, b.2: float)
   let q.3: (,){float, float} = con (,) #0(a.1, a.1)
   let o.4: tobj = con Option #1(q.3)
@@ -1349,7 +1349,7 @@ internal role body fn dupped(p.0: (,){float, float} lin) -> obj lin {
 ";
     let shown = passes_text(text, Pass::Perceus);
     insta::assert_snapshot!(function(&shown, "named"), @"
-    internal role body fn named(p.5: tobj lin) -> tobj {
+    internal uniform from 0 fn named(p.5: tobj lin) -> tobj {
       let (p.0.7: tobj, _) = unbox p.5 (,)
       release unboxed p.5 (,) #0(p.0.7, _)
       dup p.0.7
@@ -1359,7 +1359,7 @@ internal role body fn dupped(p.0: (,){float, float} lin) -> obj lin {
     }
     ");
     insta::assert_snapshot!(function(&shown, "dupped"), @"
-    internal role body fn dupped(p.6: tobj lin) -> obj lin {
+    internal uniform from 0 fn dupped(p.6: tobj lin) -> obj lin {
       let (p.0.8: tobj, _) = unbox p.6 (,)
       dup p.0.8
       dup p.0.8
@@ -1378,7 +1378,7 @@ fn a_lin_box_whose_leaves_are_unused_is_still_dropped_on_its_path() {
     let text = "\
 layout Tok { Tok(int, float) }
 layout Prelude.Bool { False, True }
-internal role body fn f(k.0: obj, c.1: enum, u.2: unit) -> Tok{int, float} lin {
+internal uniform from 2 fn f(k.0: obj, c.1: enum, u.2: unit) -> Tok{int, float} lin {
   let t.3: Tok{int, float} lin = uniform apply k.0(1)
   unpack t.3 Tok #0(n.4: int, x.5: float)
   switch c.1 Prelude.Bool { #0 -> b1, #1 -> b2 }
@@ -1390,7 +1390,7 @@ b2:
 }
 ";
     insta::assert_snapshot!(function(&passes_text(text, Pass::Perceus), "f"), @"
-    internal role body fn f(k.0: obj, c.1: enum, u.2: unit) -> tobj lin {
+    internal uniform from 2 fn f(k.0: obj, c.1: enum, u.2: unit) -> tobj lin {
       let b.7: tobj = box 1
       let t.8: tobj lin = uniform apply k.0(b.7)
       let (_, _) = unbox t.8 Tok
@@ -1415,7 +1415,7 @@ layout Prelude.Bool { False, True }
 fn g(s.0: obj) -> int {
   return 1
 }
-internal role body fn f(k.0: obj, c.1: enum, u.2: unit) -> Tok{obj, float} lin {
+internal uniform from 2 fn f(k.0: obj, c.1: enum, u.2: unit) -> Tok{obj, float} lin {
   let t.3: Tok{obj, float} lin = uniform apply k.0(1)
   unpack t.3 Tok #0(s.4: obj, x.5: float)
   switch c.1 Prelude.Bool { #0 -> b1, #1 -> b2 }
@@ -1429,7 +1429,7 @@ b2:
 }
 ";
     insta::assert_snapshot!(function(&passes_text(text, Pass::Perceus), "f"), @r#"
-    internal role body fn f(k.0: obj, c.1: enum, u.2: unit) -> tobj lin {
+    internal uniform from 2 fn f(k.0: obj, c.1: enum, u.2: unit) -> tobj lin {
       let b.9: tobj = box 1
       let t.10: tobj lin = uniform apply k.0(b.9)
       let (t.0.12: obj, t.1.13: float) = unbox t.10 Tok

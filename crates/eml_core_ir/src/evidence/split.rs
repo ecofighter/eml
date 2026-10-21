@@ -10,7 +10,7 @@ use std::ops::Range;
 use crate::liveness::{insert_var, live_after_term, live_in, step_back};
 use crate::tail::tail_position_call;
 use crate::{Block, Call, CoreFn, Program, Rhs, Stmt, Term};
-use eml_lir::{Atom, BlockId, FnIdx, Mark, MaskItem, Prim, Repr, Role, VarId, VarInfo, operation};
+use eml_lir::{Atom, BlockId, FnIdx, Mark, MaskItem, Prim, Repr, VarId, VarInfo, operation};
 
 use super::{Helpers, captured_mark, direct, dummy, named, reserve, yield_switch};
 
@@ -291,25 +291,25 @@ impl<'a> Splitter<'a> {
     }
 
     /// 継続の関数 `f$kN` は κ に合成する値として生まれるので内部の関数にし、直接呼ばれるだけの合流のブロックの関数
-    /// `f$jJ` は内部の関数にしない (`internal`)。`f$kN` は再開の値を一様に受ける `Continuation` の役割を持ち、`f$jJ`
-    /// は役割を持たない (docs/spec/lir.md の「関数の ABI」、docs/spec/core-ir.md の「継続の関数」)。
+    /// `f$jJ` は内部の関数にしない (`internal`)。`f$kN` は再開の値を一様に受ける最後の1個の引数と結果を一様にし、`f$jJ`
+    /// は一様な位置を持たない (docs/spec/lir.md の「関数の ABI」、docs/spec/core-ir.md の「継続の関数」)。
     fn continuation(&self, idx: FnIdx, program: &Program, body: Out, internal: bool) -> CoreFn {
         let (vars, blocks) = body.compact();
-        CoreFn {
+        let mut function = CoreFn {
             name: program.function(idx).name.clone(),
             internal,
-            role: if internal {
-                Role::Continuation
-            } else {
-                Role::Typed
-            },
+            split: None,
             yields: true,
             clause: None,
             vars,
             ret: self.source.ret,
             ret_mark: self.source.ret_mark,
             blocks,
+        };
+        if internal {
+            function.set_uniform_tail(1);
         }
+        function
     }
 
     /// 部分を並べた順に関数の本体を作る。写した文は元の関数の変数の番号をそのまま使い、新しい変数はその後ろの番号に

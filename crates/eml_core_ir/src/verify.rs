@@ -69,10 +69,10 @@ fn verify_at(program: &Program, level: Level) -> Result<(), VerifyError> {
         strings: &program.strings,
         functions: &functions,
     };
-    // `clause` の印の関数の ABI と役割は、参照ごとでなく関数ごとに1回だけ確かめる
+    // `clause` の印の関数の ABI と `split` は、参照ごとでなく関数ごとに1回だけ確かめる
     for function in &program.functions {
         clause_function(program, function, level)
-            .and_then(|()| eml_lir::check::role(function.role, function.params().len()))
+            .and_then(|()| eml_lir::check::split(function.split, function.params().len()))
             .map_err(|message| VerifyError {
                 function: function.name.clone(),
                 message,

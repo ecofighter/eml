@@ -8,7 +8,7 @@ use std::collections::{BTreeSet, HashMap, HashSet};
 
 use crate::tail::tail_position_call;
 use crate::{Block, Call, CoreFn, Rhs, Stmt, Term};
-use eml_lir::{Atom, BlockId, FnIdx, Repr, Role, Site, VarId, VarInfo};
+use eml_lir::{Atom, BlockId, FnIdx, Repr, Site, VarId, VarInfo};
 
 use super::super::blocks::constant_target;
 use super::super::known::fresh;
@@ -35,7 +35,7 @@ pub(crate) fn joins(blocks: &[Block]) -> Vec<bool> {
 /// ブロック J への `jump` は、`exit(J, 実引数)` が返す呼び出しの末尾呼び出しにして、J には進まない。届かない
 /// ブロックは落とす。継続の関数 `f{H}$hN` と合流のブロックの関数 `f{H}$hjJ` は、どちらもこの形で作る。作る関数は
 /// 内部の関数でない。`k` として渡す継続の関数だけを、呼ぶ側が内部の関数にする。どちらも特殊化した経路の中で
-/// 型どおりに呼ばれるので、役割を持たない (docs/spec/lir.md の「関数の ABI」)。
+/// 型どおりに呼ばれるので、`split` を持たない (docs/spec/lir.md の「関数の ABI」)。
 ///
 /// 合流のブロックを写さないのは、写すと、合流のブロックとその先が、そこへ届くどの継続の関数にも入るためである。
 /// 条件つきの `perform` が並ぶと、コードが `perform` の数の2乗で育つ。合流のブロックでない行き先は、入る辺が
@@ -119,7 +119,7 @@ pub(crate) fn region(
     CoreFn {
         name: function.name.clone(),
         internal: false,
-        role: Role::Typed,
+        split: None,
         yields: function.yields,
         clause: None,
         vars: used.iter().map(info).collect(),
@@ -349,7 +349,7 @@ impl Copy<'_> {
 /// `resume k(v, s)` は、状態のない handler では `apply k(v)` に、状態つきでは `apply k(v, s)` にする。`mask` は
 /// そのまま残す。EP が `resume` から作る `apply` と同じく、印は節の関数の `yields` の印にする (docs/spec/core-ir.md の
 /// 「`apply` の印と分け方」)。`k` の出現がこの3つの形だけであることは、呼ぶ側が確かめてある。写しは handler の
-/// 複製から直接呼ばれるために生まれるので、内部の関数でなく、役割も持たない。`k` への `apply` は EP の再開と同じ形
+/// 複製から直接呼ばれるために生まれるので、内部の関数でなく、`split` も持たない。`k` への `apply` は EP の再開と同じ形
 /// だが、継続の関数を型どおりに呼ぶ場所である。場所の Repr は、`resume` が型から決めた場所を写す
 /// (docs/spec/lir.md の「関数の ABI」と「`apply` の場所」)。
 pub(crate) fn clause_with_k(
@@ -361,7 +361,7 @@ pub(crate) fn clause_with_k(
     let mut copy = clause.clone();
     copy.name = name;
     copy.internal = false;
-    copy.role = Role::Typed;
+    copy.split = None;
     let k = copy.params()[copy.params().len() - 2];
     copy.vars[k.0 as usize].repr = Repr::TObj;
     let mut wrapped = HashSet::new();

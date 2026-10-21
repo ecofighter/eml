@@ -3367,15 +3367,12 @@ fn a_site_entry_must_match_its_variable() {
     );
 }
 
-/// 役割が一様にする引数の数は、関数の引数の数を超えない。
+/// 一様な位置の始まりは、関数の引数の数を超えない。
 #[test]
-fn a_role_takes_no_more_uniform_parameters_than_the_function_has() {
+fn a_split_is_not_past_the_end_of_the_parameters() {
     assert_eq!(
-        check_lowered("internal role return fn r(x.0: tobj) -> tobj {\n  return x.0\n}\n"),
-        Err(
-            "the role return makes 2 parameters uniform, but the function takes 1 in `r`"
-                .to_string()
-        )
+        check_lowered("internal uniform from 2 fn r(x.0: tobj) -> tobj {\n  return x.0\n}\n"),
+        Err("uniform from 2 is past the end of the 1 parameters in `r`".to_string())
     );
 }
 

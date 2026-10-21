@@ -5,7 +5,7 @@
 use eml_extern::Extern;
 use eml_lir::{
     Atom, BlockId, Case, Ctor, EffectInfo, FnIdx, Layout, LayoutId, Loc, Mark, MaskItem, Prim,
-    Repr, Role, Site, Structs, VarId, VarInfo,
+    Repr, Site, Structs, VarId, VarInfo,
 };
 
 mod builder;
@@ -61,12 +61,12 @@ pub struct CoreFn {
     pub name: String,
     /// 内部の関数。値として生まれる関数である。translate のラムダ、handle の本体、節と `return` の節、包む関数
     /// (`op$`、`con$`、`$externN`、`cont$`、`cont$state`) と、optimize と EP が値として作る関数 (値として生まれた関数の
-    /// 複製、`k` として渡す継続の関数、`f$kN`) が当たる。ABI は決めない。ABI は型と役割 (`role`) で決まる
+    /// 複製、`k` として渡す継続の関数、`f$kN`) が当たる。ABI は決めない。ABI は型と一様な位置 (`split`) で決まる
     /// (docs/spec/lir.md の「関数の ABI」)。optimize の複製の名前などが
     /// この印を読む。テキストの形では `internal fn` と書く (docs/spec/core-ir.md)。
     pub internal: bool,
-    /// EP のしくみの中での役割 (`eml_lir::Role`)。テキストの形では `fn` の直前に `role R` と書く。
-    pub role: Role,
+    /// 一様な位置の始まり (`eml_lir::LirFn::split`)。テキストの形では `fn` の直前に `uniform from N` と書く。
+    pub split: Option<u32>,
     /// 本体が yield しうる (docs/spec/core-ir.md の「`yields` の印」)。
     /// テキストの形では `internal` の後に `yields fn` と書く。
     pub yields: bool,
@@ -83,6 +83,16 @@ pub struct CoreFn {
 }
 
 impl CoreFn {
+    /// 最後の `count` 個の引数と結果を一様にする。`count` が 0 なら型どおりの関数にする。
+    pub fn set_uniform_tail(&mut self, count: usize) {
+        debug_assert!(
+            count <= self.params().len(),
+            "{} has fewer parameters than the {count} to make uniform",
+            self.name
+        );
+        self.split = (count > 0).then(|| self.params().len().saturating_sub(count) as u32);
+    }
+
     pub fn params(&self) -> &[VarId] {
         &self.blocks[BlockId::ENTRY.0 as usize].params
     }

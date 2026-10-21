@@ -68,10 +68,12 @@ impl Program {
 pub struct LirFn {
     pub name: String,
     /// 内部の関数。値として生まれる関数である (`eml_core_ir::CoreFn::internal`)。ABI は決めず、box の挿入は読まない。
-    /// ABI は引数と `ret` の型どおりの Repr と役割 (`role`) で決まる。テキストの形では `internal fn` と書く。
+    /// ABI は引数と `ret` の型どおりの Repr と一様な位置 (`split`) で決まる。テキストの形では `internal fn` と書く。
     pub internal: bool,
-    /// EP のしくみの中での役割。テキストの形では `fn` の直前に `role R` と書く (`Role`)。
-    pub role: Role,
+    /// 一様な位置の始まり。`Some(n)` なら、`n` 番目以降の引数と結果が一様である。捕獲はその前に来る。`None` は型どおりの
+    /// 関数で、一様な位置を持たない。`split` は関数を作るときに付け、名前で決まる (docs/spec/lir.md の「関数の ABI」)。
+    /// テキストの形では `fn` の直前に `uniform from N` と書く。
+    pub split: Option<u32>,
     /// 本体が yield しうる (docs/spec/core-ir.md の「`yields` の印」)。
     /// テキストの形では `internal` の後に `yields fn` と書く。
     pub yields: bool,
@@ -99,63 +101,6 @@ pub struct LirFn {
 pub struct SourceSig {
     pub params: Vec<Repr>,
     pub ret: Repr,
-}
-
-/// 関数が EP のしくみの中で受け持つ役割。EP が総称に呼ぶ位置 (最後の `uniform_params` 個の引数と、
-/// `uniform_ret` なら結果) を一様にする。捕獲はその前に来る。役割は translate と EP が関数を作るときに付け、名前で
-/// 決まる。そのため、名前が同じ関数はいつも同じ ABI になる
-/// (docs/spec/lir.md の「関数の ABI」)。
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum Role {
-    /// 一様な位置を持たない。テキストには何も書かない。
-    Typed,
-    /// handle と `var` の範囲の本体。`()` の引数と結果が一様である。
-    Body,
-    /// `prompt$` が呼ぶ、再開する操作の節の関数。`k`、状態、結果が一様である。
-    Clause,
-    /// `prompt$` が呼ぶ、`never` の操作の節の関数。`prompt$` は操作の引数を捕まえたクロージャに状態だけを渡すので、
-    /// 状態と結果が一様である。
-    Abort,
-    /// `return` の節。値、状態、結果が一様である。
-    Return,
-    /// 継続の関数 `f$kN`。再開の値と結果が一様である。`f$kN` は生きている変数の後に再開の値を受け、状態は受けない。
-    Continuation,
-}
-
-impl Role {
-    pub const ALL: [Role; 6] = [
-        Role::Typed,
-        Role::Body,
-        Role::Clause,
-        Role::Abort,
-        Role::Return,
-        Role::Continuation,
-    ];
-
-    /// 一様にする、最後の引数の数。
-    pub fn uniform_params(self) -> usize {
-        match self {
-            Role::Typed => 0,
-            Role::Body | Role::Abort | Role::Continuation => 1,
-            Role::Clause | Role::Return => 2,
-        }
-    }
-
-    pub fn uniform_ret(self) -> bool {
-        self != Role::Typed
-    }
-
-    /// テキストの形の `role` の後の語。`Typed` は書かない。
-    pub fn name(self) -> Option<&'static str> {
-        match self {
-            Role::Typed => None,
-            Role::Body => Some("body"),
-            Role::Clause => Some("clause"),
-            Role::Abort => Some("abort"),
-            Role::Return => Some("return"),
-            Role::Continuation => Some("cont"),
-        }
-    }
 }
 
 /// `apply` が引数を渡す規約。`Typed` は引数ごとの Repr で、その場所の矢印の型から決まる。変数の引数の Repr は変数の
