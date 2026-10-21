@@ -2,7 +2,9 @@
 # スクリプトと数値計算のプログラムを、release ビルドの `eml run` (VM の速いモード) と Python の版の両方で3回ずつ
 # 走らせ、実時間と最大の常駐メモリの中央値を Markdown の表で出す (docs/implementation/benchmarks.md の「スクリプトの
 # 計測」)。行ごとの大きさは、eml の実時間が約 300 ms になるように決めてある。測る前に、両方の出力が一致することを
-# bench/scripts/compare.sh で確かめる。macOS の `/usr/bin/time -l` を使うので、macOS でだけ動く。
+# bench/scripts/compare.sh で確かめる。最後に、大きい入力 (log 100 MB、csv 51 MB) で Rust の版と比べる表を出す。実時間の
+# 5回の中央値から空のプログラムの分を引いた比である (「C/Rust との比べ方」)。macOS の `/usr/bin/time -l` を使うので、
+# macOS でだけ動く。
 set -euo pipefail
 
 if [[ "$(uname -s)" != "Darwin" ]]; then
@@ -36,18 +38,19 @@ input() {
 }
 
 median() {
-  printf '%s\n' "$@" | sort -n | sed -n "$(( (runs + 1) / 2 ))p"
+  printf '%s\n' "$@" | sort -n | sed -n "$(( ($# + 1) / 2 ))p"
 }
 
-# 標準入力 `$1` で、コマンド (`$2` 以降) を `runs` 回走らせ、実時間 (秒) と最大の常駐メモリ (MB) の中央値を空白で
-# 区切って出す
+# 標準入力 `$1` で、コマンド (`$2` 以降) を `count` 回 (既定は `runs`) 走らせ、実時間 (秒) の中央値、最大の常駐
+# メモリ (MB) の中央値、実時間の最小と最大を空白で区切って出す
 measure() {
   local input="$1"
   shift
+  local count="${count:-$runs}"
   local report elapsed rss
   local seconds=()
   local sizes=()
-  for _ in $(seq "$runs"); do
+  for _ in $(seq "$count"); do
     # 実行時エラーで止まったら、捕まえた出力を見せて止める。表の値が欠けたまま記録しないためである。プログラムの
     # 標準エラーも `report` に入るが、読むのは `time -l` の行だけである
     if ! report="$( { /usr/bin/time -l "$@" < "$input" > /dev/null; } 2>&1 )"; then
@@ -65,7 +68,9 @@ measure() {
     seconds+=("$elapsed")
     sizes+=("$rss")
   done
-  echo "$(median "${seconds[@]}") $(( $(median "${sizes[@]}") / 1024 / 1024 ))"
+  local sorted
+  sorted="$(printf '%s\n' "${seconds[@]}" | sort -n)"
+  echo "$(median "${seconds[@]}") $(( $(median "${sizes[@]}") / 1024 / 1024 )) $(head -n 1 <<<"$sorted") $(tail -n 1 <<<"$sorted")"
 }
 
 # 計測 `$1` の大きさの欄 `$2` の行を出す。eml の版 `$3` と Python の版 `$4` を、標準入力 `$5` と引数 (`$6` 以降) で
@@ -85,9 +90,9 @@ row() {
   done
   local result eml_seconds eml_mb python_seconds python_mb
   result="$(measure "$stdin" "$eml" run "$eml_file" ${args[@]+"${args[@]}"})"
-  read -r eml_seconds eml_mb <<<"$result"
+  read -r eml_seconds eml_mb _ _ <<<"$result"
   result="$(measure "$stdin" python3 -I "$py_file" ${args[@]+"${args[@]}"})"
-  read -r python_seconds python_mb <<<"$result"
+  read -r python_seconds python_mb _ _ <<<"$result"
   local ratio
   ratio="$(awk -v a="$eml_seconds" -v b="$python_seconds" 'BEGIN { if (b > 0) printf "%.1f", a / b; else print "-" }')"
   echo "| $label | $size | $eml_seconds | $python_seconds | $ratio | $eml_mb | $python_mb |"
@@ -116,6 +121,65 @@ script_row() {
 numeric_row() {
   local label="$1" program="$2" py="$3" size="$4"
   row "$label" "$size" "$root/bench/$program.em" "$root/bench/numeric/$py.py" /dev/null "$size"
+}
+
+# 5回測った実時間の中央値を使う。(最大 - 最小) / 中央値 が 10% を超えたら、1回だけ測り直してその値を使う
+# (docs/implementation/benchmarks.md の「C/Rust との比べ方」)
+rust_runs=5
+
+# 標準入力 `$1` で、コマンド (`$2` 以降) の実時間 (秒) の中央値を出す
+steady_time() {
+  local result seconds low high attempt
+  for attempt in 1 2; do
+    result="$(count=$rust_runs measure "$@")"
+    read -r seconds _ low high <<<"$result"
+    if awk -v m="$seconds" -v lo="$low" -v hi="$high" 'BEGIN { exit !(m > 0 && (hi - lo) / m <= 0.10) }'; then
+      break
+    fi
+  done
+  echo "$seconds"
+}
+
+# 空のプログラム。起動の時間を比から引くために測る
+empty_eml="$data/empty.em"
+empty_rust="$data/rust/empty"
+mkdir -p "$data/rust"
+printf 'main : Unit -> Unit\nmain () = ()\n' > "$empty_eml"
+printf 'fn main() {}\n' > "$data/rust/empty.rs"
+rustc --edition 2024 -C opt-level=3 -o "$empty_rust" "$data/rust/empty.rs"
+
+# 計測 `$1` の行。eml の版 `scripts/$4/main.em` と Rust の版 `bench/scripts/rust/$4.rs` を、種類 `$2` の約 `$3` KiB の
+# 入力と引数 (`$5` 以降) で比べてから測る。`@IN` と `@OUT` の扱いは `script_row` と同じである
+rust_row() {
+  local label="$1" kind="$2" kib="$3" name="$4"
+  shift 4
+  local path stdin args=() arg
+  local eml_file="$scripts/$name/main.em"
+  path="$(input "$kind" "$kib")"
+  stdin="$path"
+  for arg in "$@"; do
+    if [[ "$arg" == @IN ]]; then
+      args+=("$path")
+      stdin=/dev/null
+    else
+      args+=("$arg")
+    fi
+  done
+  if ! EML="$eml" "$root/bench/scripts/compare.sh" --rust --paths "$eml_file" "$root/bench/scripts/$name.py" ${args[@]+"${args[@]}"} < "$stdin" > "$data/compare.txt"; then
+    echo "bench/scripts.sh: $label の出力が eml と Rust で違う" >&2
+    cat "$data/compare.txt" >&2
+    exit 1
+  fi
+  local measured=()
+  for arg in ${args[@]+"${args[@]}"}; do
+    measured+=("${arg//@OUT/$data/out.txt}")
+  done
+  local eml_seconds rust_seconds ratio
+  eml_seconds="$(steady_time "$stdin" "$eml" run "$eml_file" ${measured[@]+"${measured[@]}"})"
+  rust_seconds="$(steady_time "$stdin" "$data/rust/$name" ${measured[@]+"${measured[@]}"})"
+  ratio="$(awk -v e="$eml_seconds" -v r="$rust_seconds" -v ee="$empty_eml_seconds" -v re="$empty_rust_seconds" \
+    'BEGIN { if (r - re > 0) printf "%.1f", (e - ee) / (r - re); else print "-" }')"
+  echo "| $label | $kib KiB | $eml_seconds | $rust_seconds | $empty_eml_seconds | $empty_rust_seconds | $ratio |"
 }
 
 header() {
@@ -149,3 +213,16 @@ numeric_row mandelbrot mandelbrot mandelbrot 480
 # n が1つ増えると実時間が約9倍になり、300 ms に近い n がない。300 ms との比が最も小さい 9 にする
 numeric_row fannkuch-redux fannkuch_var fannkuch 9
 numeric_row sieve sieve_var sieve 3500000
+
+echo
+echo "C/Rust との比"
+echo
+echo "| 計測 | 大きさ | eml の実時間 (s) | Rust の実時間 (s) | eml の空 (s) | Rust の空 (s) | 比 (eml / Rust) |"
+echo "|---|---:|---:|---:|---:|---:|---:|"
+empty_eml_seconds="$(steady_time /dev/null "$eml" run "$empty_eml")"
+empty_rust_seconds="$(steady_time /dev/null "$empty_rust")"
+rust_row '`wc`' log 100000 wc
+rust_row '`grep -n`' log 100000 grep -n "/api/v1/items/7 "
+rust_row '`logstat`' log 100000 logstat
+rust_row '`logstat --whole`' log 100000 logstat --whole
+rust_row '`csv2jsonl`' csv 50000 csv2jsonl --columns id,name,score @IN @OUT

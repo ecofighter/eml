@@ -5,7 +5,7 @@
 実行の費用を測るための、基準のプログラムと測り方と、今の数値をまとめる。費用は2つの数で見る。
 
 - 実行の仕事の回数 (`RunStats`): 決定的なので、テストのスナップショットで固定する。回数が変わると、スナップショットの差分として出る
-- 実行した命令の数: macOS の `/usr/bin/time -l` が出す `instructions retired` を、`bench/run.sh` と `bench/rt.sh` で測る。スクリプトと数値計算は、Python と実時間で比べる (`bench/scripts.sh`)
+- 実行した命令の数: macOS の `/usr/bin/time -l` が出す `instructions retired` を、`bench/run.sh` と `bench/rt.sh` で測る。スクリプトと数値計算は、Python と実時間で比べ、スクリプトは大きい入力で Rust の版とも比べる (`bench/scripts.sh`)
 
 下の「今の数値」の表は、段を閉じるときに、3つとも同じ機種で測り直して入れ替える ([ロードマップ](../future/roadmap.md) の「進め方」)。測り直すのは、前の表のコミットから `crates/eml_vm`、`crates/eml_rt`、`crates/eml_lir`、`crates/eml_core_ir`、`std/`、`bench/` のどれかが変わった段である。測るのはコードの最後のコミットの作業ツリーで、未コミットの変更がある木の値は載せない。段の途中では入れ替えない。段ごとの前後は、この文書の git の履歴 (`git log -p docs/implementation/benchmarks.md`) と、閉じるコミットのメッセージで読む。
 
@@ -79,7 +79,7 @@
 
 ## 測り方
 
-命令の数は `bench/run.sh` と `bench/rt.sh` で、Python との実時間の比は `bench/scripts.sh` で測る。どれも macOS の `/usr/bin/time -l` を使うので、macOS でだけ動く。
+命令の数は `bench/run.sh` と `bench/rt.sh` で、Python と Rust の版との実時間の比は `bench/scripts.sh` で測る。どれも macOS の `/usr/bin/time -l` を使うので、macOS でだけ動く。
 
 ### 命令の数の測り方
 
@@ -137,7 +137,7 @@ valgrind が arm64 の macOS で動かないので、callgrind は使わない�
 bench/scripts.sh
 ```
 
-- 表は2つある。スクリプトの表は `wc` (ログを標準入力から)、`grep -n` (約 0.5% の行が一致するパターン)、`logstat` (1行ずつ読む)、`logstat --whole` (全体を読んでから分ける)、`csv2jsonl` (3つの列を選ぶ) の5行である。数値計算の表は nbody、spectral-norm、mandelbrot、fannkuch-redux、ふるいの5行である
+- 表は3つある。スクリプトの表は `wc` (ログを標準入力から)、`grep -n` (約 0.5% の行が一致するパターン)、`logstat` (1行ずつ読む)、`logstat --whole` (全体を読んでから分ける)、`csv2jsonl` (3つの列を選ぶ) の5行である。数値計算の表は nbody、spectral-norm、mandelbrot、fannkuch-redux、ふるいの5行である。3つ目の表は、大きい入力で Rust の版と比べる (下の「C/Rust との比べ方」)
 - スクリプトの入力は、`bench/scripts/gen.py` が種類 (アクセスログか CSV) と大きさごとに、種を固定して1つずつ作る。`target/bench-scripts/` に大きさを名前に入れて置き、すでにあれば作り直さない
 - 比べる Python の版は、スクリプトが `bench/scripts/<名前>.py`、数値計算が `bench/numeric/<名前>.py` で、Python の標準ライブラリで普通に書いたものである。速さのために手で凝ったものにはしない。数値計算の版は、浮動小数の演算を eml の版と同じ順で行い、ビットまで同じ結果を出す
 - 各行の前に `bench/scripts/compare.sh` で、eml と Python の標準出力と終了コード (と書き出したファイル) が一致することを確かめる。一致しなければ止まる
@@ -153,7 +153,26 @@ bench/scripts.sh
 - 実時間は 0.01 秒の単位で出るので、300 ms では約 3% の刻みになる。小さな差は `instructions retired` で確かめる。Python の実時間が数十 ms の行 (`wc`) では、比が刻みの分だけ大きく揺れる
 - fannkuch-redux の大きさは順列の長さ n で、n が1つ増えると実時間が約9倍になる。300 ms に近い n がないので、300 ms との比が最も小さい n にし、実時間が 150 ms から 600 ms の範囲を外れても決め直さない
 
-`bench/scripts/compare.sh` は3つの形で使う。`--paths <eml の版> <Python の版> [引数...]` は、パスで渡した2つの版を比べる。`<名前> [引数...]` は、`tests/ui/run/scripts/<名前>/main.em` と `bench/scripts/<名前>.py` を比べる。`--fixture <名前>` は、UI テストの付属のファイルで出力を確かめる ([テスト戦略](testing.md) の「分類」)。どちらかのファイルがなければ、比べずに止まる。
+`bench/scripts/compare.sh` は3つの形で使う。`--paths <eml の版> <Python の版> [引数...]` は、パスで渡した2つの版を比べる。`<名前> [引数...]` は、`tests/ui/run/scripts/<名前>/main.em` と `bench/scripts/<名前>.py` を比べる。`--fixture <名前>` は、UI テストの付属のファイルで出力を確かめる ([テスト戦略](testing.md) の「分類」)。どちらかのファイルがなければ、比べずに止まる。先頭に `--rust` を置くと、相手を Python の版から `bench/scripts/rust/<名前>.rs` に替える。`rustc --edition 2024 -C opt-level=3` で `target/bench-scripts/rust/<名前>` に build してから動かす。
+
+#### C/Rust との比べ方
+
+ネイティブ化の目標は、`wc`、`grep -n`、`logstat`、`csv2jsonl` で、同じ出力を返す Rust の版の約2倍以内の実時間にすることである ([ロードマップ](../future/roadmap.md) のネイティブ化の項目)。Python の1.5倍以下という完了の条件は変えず、この目標は門にしない。核だけのベンチは、原因を見るためだけに使う。
+
+- 対象: `bench/scripts.sh` の5行 (`wc`、`grep -n`、`logstat`、`logstat --whole`、`csv2jsonl`)
+- 基準: スクリプトごとに1つの Rust のプログラム `bench/scripts/rust/<名前>.rs` を置く。安全な std だけで書き、crate、`unsafe`、明示した SIMD を使わない。`rustc --edition 2024 -C opt-level=3` (既定の target CPU) で build する。eml の版の手順をなぞる
+  - 入力を走査する回数が同じである
+  - 意味の仕事が同じである (eml が `String` を読む所では UTF-8 を確かめる)
+  - eml が呼ぶ std の操作 (`split`、`lines`、`contains`、整数の解析) には、std の対応物を使う
+  - 同じ計算量の一番近い std のデータ構造を使う (順序つきの木は `BTreeMap`)
+  - 確保と借用のやり方は自由である。eml の版が手順を変えたら、Rust の版も書き直す
+- 等しさ: 標準出力、終了コード、書いたファイルが eml と同じことを `bench/scripts/compare.sh --rust` で確かめる。`bench/scripts.sh` は各行を測る前にこれを流し、違えば止まる
+- 入力: `bench/scripts/gen.py` が作る log (約 102 MB) と CSV (約 51 MB) を `target/bench-scripts/access-100000k.log` と `target/bench-scripts/data-50000k.csv` に置く。Rust の版は bench の大きさの入力では 5 から 40 ms で、揺れが大きいためである
+- 測り方: 実時間の5回の中央値を、ほかの表と同じ機種で測る。(最大 - 最小) / 中央値 が 10% を超えたら、1回だけ測り直してその値を使う。比 = (t_eml - t_eml_empty) / (t_rust - t_rust_empty) で、`_empty` はそれぞれの空のプログラムの実時間である。起動の時間は比から引くので、ネイティブの eml が AOT か JIT かに比が左右されない。今の空のプログラムは `time -l` の分解能 (10 ms) より短く、表では 0.00 になる
+- 2倍を超えた行は、主な原因を所見に書く。原因の候補は、1バイトずつの呼び出し、RC、確保、写し、境界と桁あふれの確かめ、ベクトル化の有無、読み込みである
+
+比べる相手は、同じ1回の走査を書いた Rust のループである。2回の走査にした慣用の Rust は、書き方で結果が変わり、eml の側にベクトル化が要るので基準にしない。SIMD の crate や GNU と BSD の道具は、SIMD があるかを測ることになるので基準にしない。C の版は、道具が1つ増え、std の順序つきの写像がないので作らない。
+
 
 ## 今の数値
 
@@ -254,28 +273,38 @@ extern の計測 (`rt_extern_bench`)
 - OS: macOS 27.0.1 (26A434)
 - rustc: rustc 1.98.1 (48a229cea 2026-09-01)
 - Python: Python 3.14.8
-- コミット: 8aa0e2c
+- コミット: a6c4ede と `bench/scripts.sh` の変更 (`docs/` の編集を除く)
 - 入力: スクリプトの入力は bench/scripts/gen.py が作る。大きさは表の「大きさ」の欄にある
 
 スクリプト
 
 | 計測 | 大きさ | eml の実時間 (s) | Python の実時間 (s) | 比 (eml / Python) | eml の最大 RSS (MB) | Python の最大 RSS (MB) |
 |---|---:|---:|---:|---:|---:|---:|
-| `wc` | 9000 KiB | 0.32 | 0.03 | 10.7 | 29 | 78 |
-| `grep -n` | 70000 KiB | 0.29 | 0.26 | 1.1 | 9 | 16 |
-| `logstat` | 6700 KiB | 0.32 | 0.11 | 2.9 | 10 | 19 |
-| `logstat --whole` | 6700 KiB | 0.31 | 0.10 | 3.1 | 35 | 53 |
-| `csv2jsonl` | 2900 KiB | 0.32 | 0.19 | 1.7 | 21 | 51 |
+| `wc` | 9000 KiB | 0.30 | 0.02 | 15.0 | 29 | 78 |
+| `grep -n` | 70000 KiB | 0.30 | 0.26 | 1.2 | 9 | 16 |
+| `logstat` | 6700 KiB | 0.31 | 0.10 | 3.1 | 10 | 19 |
+| `logstat --whole` | 6700 KiB | 0.29 | 0.10 | 2.9 | 35 | 54 |
+| `csv2jsonl` | 2900 KiB | 0.30 | 0.18 | 1.7 | 21 | 51 |
 
 数値計算
 
 | 計測 | 大きさ | eml の実時間 (s) | Python の実時間 (s) | 比 (eml / Python) | eml の最大 RSS (MB) | Python の最大 RSS (MB) |
 |---|---:|---:|---:|---:|---:|---:|
-| nbody | 140000 | 0.29 | 0.64 | 0.5 | 9 | 15 |
-| spectral-norm | 510 | 0.31 | 0.87 | 0.4 | 9 | 14 |
-| mandelbrot | 480 | 0.20 | 0.30 | 0.7 | 9 | 14 |
+| nbody | 140000 | 0.29 | 0.64 | 0.5 | 10 | 14 |
+| spectral-norm | 510 | 0.31 | 0.86 | 0.4 | 9 | 14 |
+| mandelbrot | 480 | 0.20 | 0.30 | 0.7 | 8 | 14 |
 | fannkuch-redux | 9 | 0.52 | 0.24 | 2.2 | 10 | 14 |
-| sieve | 3500000 | 0.30 | 0.16 | 1.9 | 35 | 41 |
+| sieve | 3500000 | 0.30 | 0.17 | 1.8 | 35 | 41 |
+
+C/Rust との比
+
+| 計測 | 大きさ | eml の実時間 (s) | Rust の実時間 (s) | eml の空 (s) | Rust の空 (s) | 比 (eml / Rust) |
+|---|---:|---:|---:|---:|---:|---:|
+| `wc` | 100000 KiB | 3.38 | 0.07 | 0.00 | 0.00 | 48.3 |
+| `grep -n` | 100000 KiB | 0.41 | 0.08 | 0.00 | 0.00 | 5.1 |
+| `logstat` | 100000 KiB | 4.64 | 0.28 | 0.00 | 0.00 | 16.6 |
+| `logstat --whole` | 100000 KiB | 4.33 | 0.27 | 0.00 | 0.00 | 16.0 |
+| `csv2jsonl` | 50000 KiB | 4.96 | 0.14 | 0.00 | 0.00 | 35.4 |
 
 ## 所見
 
@@ -371,6 +400,18 @@ extern の計測 (`rt_extern_bench`)
 - 主張: `wc` の内側のループを LIR のまま Rust に写すと Python の約1.2倍、借用とインライン化を足すと約0.45倍になる。ネイティブ化で Python の1.5倍以内に届く見込みはある。ただし Cranelift のコードは LLVM より遅いことがあり、確保の多い `logstat` は測っていない
 - 数値: LIR をそのまま写した Rust (`opt-level=1`。1バイトごとの `dup`、`String.byte_at` の呼び出しと `decref`、`is_space` の呼び出しを残す) は読み込みを含めて約0.10秒、借用とインライン化を足すと約0.035秒。M4、Python 3.14.7。リポジトリにない使い捨ての試作で、コミットの記録はない
 - 根拠にしている所: [ロードマップ](../future/roadmap.md) のネイティブ化の項目の完了の条件
+
+### VM と Rust の版の比の主な原因
+
+- 主張: 今の VM の比は、どの行も約2倍の目標を大きく超える。主な原因は行ごとに違う。`wc` は1バイトずつ回すループの命令の数、`grep -n` は行ごとの写しと探索、`logstat` と `csv2jsonl` は行ごとの確保と RC である
+- 数値: 「今の数値」の「C/Rust との比」の表 (M5)。`wc` 48.3、`grep -n` 5.1、`logstat` 16.6、`logstat --whole` 16.0、`csv2jsonl` 35.4。1 MB の入力の `RunStats` は、`grep` が行ごとに確保 2.0、RC 14、写しは入力の 2.0 倍。`logstat` が行ごとに確保 25.0、RC 155、写しは 2.9 倍。`csv2jsonl` が行ごとに確保 41.7、RC 335、写しは 5.8 倍である (baea5793 の木に使い捨てのテストを足して測った。テストはリポジトリにない)
+- 根拠にしている所: [ロードマップ](../future/roadmap.md) のネイティブ化の項目の目標、「1バイトずつ回すループ」
+
+### Cranelift のコードと Rust の1回の走査
+
+- 主張: `wc` の内側のループを Cranelift で書くと、同じ1回の走査の Rust (LLVM) のループに対して、バイトの読みを展開した形は約1.5〜1.7倍、借用した extern を呼ぶ形は約2.2〜2.6倍、今の LIR の形 (所有の引数と1バイトごとの `dup`) は約3.7〜4.0倍になる。ネイティブ化で約2倍以内の目標に届くには、`String` と `Bytes` を1バイトずつ読む extern の借用と、その展開が要る
+- 数値: `wc` の内側のループを Cranelift 0.137 で書いた試作の ns/バイト。同じ形の Rust (LLVM) は 0.42〜0.44、検査なしの Cranelift は 0.48〜0.51、範囲と桁あふれの検査つきでバイトの読みを展開すると 0.65〜0.72、借りた extern を呼ぶと 0.94〜1.10、今の LIR の形は 1.59〜1.73 だった。同じコードでの Cranelift と LLVM の差は 0.9〜1.3 倍である。試作は、baea5793 の `wc` の LIR (`count$let$go`) と同じ形の CLIF を手で書いて JIT で動かし、`gen.py log 100000` の 102 MB の入力で、5回の最良を3〜4回くり返して測った (Apple M5、macOS 27、rustc 1.98.1)。リポジトリにない試作で、コマンドは残っていない
+- 根拠にしている所: [ロードマップ](../future/roadmap.md) のネイティブ化の項目の目標
 
 ### `Yield` を変える handler の yield
 
