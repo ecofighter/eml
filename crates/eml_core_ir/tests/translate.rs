@@ -3715,6 +3715,16 @@ fn a_uniform_leaf_is_not() {
     assert_eq!(repr_of(&shown, "depth@[_]", "d"), "obj");
 }
 
+/// `_` の葉は入れ子の中にあっても外側の型を構造体にしない。外側だけを構造体にすると、呼ぶ側の `(Int, (Float, Int))`
+/// と `walk@[_]` の `(Int, (_, Int))` で形が違う。`data` の型の中の `_` も同じである。
+#[test]
+fn a_nested_uniform_leaf_is_not() {
+    let text = "data Pair a b = | Pair a b\n\nwalk : Int -> (Int, (a, Int)) -> <Panic> Int\nwalk n p = if n == 0 then 0 else 1 + walk (n - 1) (1, (p, 2))\n\nwalk_pair : Int -> (Int, Pair a Int) -> <Panic> Int\nwalk_pair n p = if n == 0 then 0 else 1 + walk_pair (n - 1) (1, Pair p 2)\n\nmain : Unit -> <IO, Panic> Unit\nmain () =\n  println (show (walk 5 (1, (2.5, 3))))\n  println (show (walk_pair 5 (1, Pair 2.5 3)))";
+    let shown = core_text(text, Pass::Translate);
+    assert_eq!(repr_of(&shown, "walk@[_]", "p"), "obj");
+    assert_eq!(repr_of(&shown, "walk_pair@[_]", "p"), "obj");
+}
+
 /// `Lin` のフィールドを持つ型も構造体にする。構造体の値は `Lin` のまま移す。
 #[test]
 fn a_lin_field_is_allowed() {

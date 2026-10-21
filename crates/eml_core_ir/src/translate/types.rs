@@ -126,6 +126,8 @@ pub(super) struct StructTypes {
     fields: HashMap<TypeId, Vec<TypeId>>,
     /// 構造体にする型ごとの、開いた後の葉の語の数。
     words: HashMap<TypeId, usize>,
+    /// 入れ子のどこかに `_` の葉を持つので、構造体にしない型。
+    uniform: HashSet<TypeId>,
 }
 
 impl StructTypes {
@@ -165,34 +167,42 @@ impl StructTypes {
             recursive,
             fields,
             words: HashMap::new(),
+            uniform: HashSet::new(),
         };
         let mut memo = HashMap::new();
         for ty in store.ids() {
-            if let Some(words) = types.count(hir, store, ty, &mut memo) {
-                types.words.insert(ty, words);
+            match types.count(hir, store, ty, &mut memo) {
+                Leaves::Struct(words) => {
+                    types.words.insert(ty, words);
+                }
+                Leaves::Uniform => {
+                    types.uniform.insert(ty);
+                }
+                Leaves::Boxed => {}
             }
         }
         types
     }
 
-    /// `ty` を構造体にするなら、その葉の語の数。`memo` は求め終えた型の答えである。再帰は型の深さだけである。
+    /// `ty` の葉の判定。`memo` は求め終えた型の答えである。再帰は型の深さだけである。
     fn count(
         &self,
         hir: &HirProgram,
         types: &TypeStore,
         ty: TypeId,
-        memo: &mut HashMap<TypeId, Option<usize>>,
-    ) -> Option<usize> {
-        if let Some(&words) = memo.get(&ty) {
-            return words;
+        memo: &mut HashMap<TypeId, Leaves>,
+    ) -> Leaves {
+        if let Some(&leaves) = memo.get(&ty) {
+            return leaves;
         }
-        let words = self.composite(hir, types, ty).and_then(|(_, fields)| {
-            leaf_words(hir, types, fields, |field| {
+        let leaves = match self.composite(hir, types, ty) {
+            Some((_, fields)) => leaf_words(hir, types, fields, |field| {
                 self.count(hir, types, field, memo)
-            })
-        });
-        memo.insert(ty, words);
-        words
+            }),
+            None => Leaves::Boxed,
+        };
+        memo.insert(ty, leaves);
+        leaves
     }
 
     /// 構造体にしうる `data` の型の宣言か。
@@ -241,7 +251,19 @@ impl StructTypes {
         types: &TypeStore,
         fields: &[TypeId],
     ) -> Option<usize> {
-        leaf_words(hir, types, fields, |field| self.words.get(&field).copied())
+        let leaves = leaf_words(hir, types, fields, |field| {
+            if let Some(&words) = self.words.get(&field) {
+                Leaves::Struct(words)
+            } else if self.uniform.contains(&field) {
+                Leaves::Uniform
+            } else {
+                Leaves::Boxed
+            }
+        });
+        match leaves {
+            Leaves::Struct(words) => Some(words),
+            Leaves::Boxed | Leaves::Uniform => None,
+        }
     }
 
     /// 配置のフィールドの Repr。配置はスキームから決まるので、型変数のフィールドと同じく、構造体の型のフィールドも
@@ -260,29 +282,45 @@ impl StructTypes {
     }
 }
 
-/// フィールドの型が `fields` の値を構造体にするなら、開いた後の葉の語の数。`nested` は、構造体にするフィールドの型の
-/// 語の数を答える。`unit` の葉は 0 語で、`unit` でない葉が1つ以上要る。一様な位置の型変数 (`_`) の葉を持てば構造体に
-/// しない。呼ぶ側の `Pair Float Int` と呼ばれる側の `Pair _ Int` で形が違い、形どうしの変換が要るためである。節の
-/// 型変数 (`OpVar`) も、代入では `_` になるので同じに扱う。スキームの型変数 (`Rigid`) は `tobj` の葉である。構造体に
-/// しないフィールドの型は、箱の1語の葉になる。
+/// 型の葉の判定。構造体にする型は開いた後の葉の語の数を持つ。構造体にしない型は、`_` の葉を持つためか
+/// (`Uniform`)、それ以外の理由か (`Boxed`) を分ける。`_` の葉を持つ型を入れ子に持つ型も構造体にしないためである。
+#[derive(Clone, Copy)]
+enum Leaves {
+    Struct(usize),
+    Boxed,
+    Uniform,
+}
+
+/// フィールドの型が `fields` の値の葉の判定。`nested` は、フィールドの型の判定を答える。`unit` の葉は 0 語で、`unit`
+/// でない葉が1つ以上要る。一様な位置の型変数 (`_`) の葉を、入れ子のどこかに持てば構造体にしない。呼ぶ側の
+/// `(Int, (Float, Int))` と呼ばれる側の `(Int, (_, Int))` で形が違い、形どうしの変換が要るためである。節の型変数
+/// (`OpVar`) も、代入では `_` になるので同じに扱う。スキームの型変数 (`Rigid`) は `tobj` の葉である。大きさや `unit`
+/// の葉だけのために構造体にしないフィールドの型は、箱の1語の葉になる。
 fn leaf_words(
     hir: &HirProgram,
     types: &TypeStore,
     fields: &[TypeId],
-    mut nested: impl FnMut(TypeId) -> Option<usize>,
-) -> Option<usize> {
+    mut nested: impl FnMut(TypeId) -> Leaves,
+) -> Leaves {
     let mut words = 0;
     for &field in fields {
         if matches!(
             types.kind(field),
             TypeKind::Flexible(_) | TypeKind::OpVar(_, _)
         ) {
-            return None;
+            return Leaves::Uniform;
         }
-        words += nested(field)
-            .unwrap_or_else(|| usize::from(boxed_repr(types, field, hir) != Repr::Unit));
+        words += match nested(field) {
+            Leaves::Struct(words) => words,
+            Leaves::Boxed => usize::from(boxed_repr(types, field, hir) != Repr::Unit),
+            Leaves::Uniform => return Leaves::Uniform,
+        };
     }
-    (1..=MAX_STRUCT_WORDS).contains(&words).then_some(words)
+    if (1..=MAX_STRUCT_WORDS).contains(&words) {
+        Leaves::Struct(words)
+    } else {
+        Leaves::Boxed
+    }
 }
 
 fn composite_data(hir: &HirProgram, recursive: &HashSet<TypeDefId>, id: TypeDefId) -> bool {
