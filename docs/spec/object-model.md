@@ -794,8 +794,9 @@ token の表の項目は、`into_token` と `release_reuse` が添字を使い�
 | `Std.Env.arg_count`、`arg`、`has`、`lookup` | `Ctx::env_arg_count`、`env_arg`、`env_has`、`env_var` |
 | `Std.Stdin.read_all`、`read_line_raw` | `Ctx::stdin_read` (`line` が偽と真) |
 | `Std.Proc.status` | `Ctx::proc_status` |
+| `Std.Array.make`、`length`、`get`、`set`、`thaw`、`Std.MutArray.make`、`empty`、`length`、`read`、`write`、`freeze` | `Ctx::array_make`、`array_empty`、`array_length`、`array_get`、`array_set`、`array_freeze`、`array_thaw` (上の「配列」) |
 
-`unit` の引数を持つ行 (`Std.Env.arg_count`、`Std.Stdin.read_all`、`read_line_raw`、`Std.Float.infinity_value`、`nan_value`) は、VM が引数を読まずに呼ぶ。
+`unit` の引数を持つ行 (`Std.Env.arg_count`、`Std.Stdin.read_all`、`read_line_raw`、`Std.Float.infinity_value`、`nan_value`、`Std.MutArray.empty`) は、VM が引数を読まずに呼ぶ。
 
 ### 語の ABI
 
@@ -808,12 +809,12 @@ token の表の項目は、`into_token` と `release_reuse` が添字を使い�
 
 ### 誤り
 
-算術の誤りは `ArithFault` (`DivisionByZero` と `IntegerOverflow`) で、`Copy` である。`Result<i64, ArithFault>` は 16 バイトで、展開されないときも2つのレジスタで返る。`Ctx` のメソッドの誤りは `Fault` (24 バイト) で、`From<ArithFault>` と `From<HeapError>` を持つ。24 バイトに収めるため、まれな誤り (`NotUtf8` と `Index`) の中身は `Box` に入れる。
+算術の誤りは `ArithFault` (`DivisionByZero`、`IntegerOverflow`、`FloatToInt(u64)`、`FixedDigits(i64)`) で、`Copy` である。`FloatToInt` は `Int` に収まらない `Float` をビット列で持ち、`FixedDigits` は `Float.to_fixed` の範囲の外の桁数を持つ。`Result<i64, ArithFault>` は 16 バイトで、展開されないときも2つのレジスタで返る。`Ctx` のメソッドの誤りは `Fault` (24 バイト) で、`From<ArithFault>` と `From<HeapError>` を持つ。24 バイトに収めるため、まれな誤り (`NotUtf8` と `Index`) の中身は `Box` に入れる。
 
 | `Fault` | 中身 | 表示 |
 |---|---|---|
 | `Heap(HeapError)` | 検査モードの確かめと解放の連鎖の誤り | `HeapError` の表示 |
-| `Arith(ArithFault)` | 算術の誤り | `division by zero`、`integer overflow` |
+| `Arith(ArithFault)` | 算術の誤り。`Float` から `Int` への変換 (`FloatToInt`) と `to_fixed` の桁数 (`FixedDigits`) も含む | `division by zero`、`integer overflow`、``float `{}` does not fit in `Int` ``、``` `to_fixed` takes 0 to 100 digits, not {n} ``` |
 | `Output(Box<str>)` | 書き込みの誤りの `io::Error` の文言 | ``cannot write the output: {e}`` |
 | `Io { op, name, reason }` | `op` は `Open`、`Read`、`Write`、`Run`、`reason` は `IoReason` (`NotFound`、`PermissionDenied`、`NotAvailable`、`Other`) | ``cannot open `{name}`: {reason}``、``cannot read `{name}`: {reason}``、``cannot write `{name}`: {reason}``、``cannot run `{name}`: {reason}``。理由は `not found`、`permission denied`、`not available`、`I/O error` |
 | `Stdin(IoReason)` | 標準入力の読みの誤り | ``cannot read the standard input: {reason}`` |
