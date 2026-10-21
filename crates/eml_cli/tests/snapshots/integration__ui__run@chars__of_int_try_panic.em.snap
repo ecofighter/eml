@@ -6,5 +6,5 @@ input_file: tests/ui/run/chars/of_int_try_panic.em
 --- stdout ---
 Err "int `1114112` is not a Unicode scalar value"
 Err "int `-1` is not a Unicode scalar value"
-Ok 65
+Ok 'A'
 --- stderr ---

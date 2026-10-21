@@ -145,6 +145,12 @@ pub const CHAR_EDGES: [i64; 12] = [
     0x0, 0x41, 0x61, 0x7f, 0x80, 0xe9, 0xd7ff, 0xe000, 0xffff, 0x1_0000, 0x1_f600, 0x10_ffff,
 ];
 
+/// `Show Char` の引数。エスケープする文字、その隣、UTF-8 の長さの境目
+pub const CHAR_SHOW: [i64; 22] = [
+    0x0, 0x1, 0x9, 0xa, 0xd, 0x1f, 0x20, 0x22, 0x27, 0x5c, 0x7b, 0x7e, 0x7f, 0x80, 0xe9, 0x7ff,
+    0x800, 0xd7ff, 0xe000, 0xffff, 0x1_0000, 0x10_ffff,
+];
+
 /// `Char.of_int` の引数。スカラー値の両端、サロゲートの前後、範囲の外
 pub const CHAR_OF_INT: [i64; 10] = [
     -1,
@@ -587,6 +593,11 @@ pub fn inputs() -> Vec<(String, Vec<Arg>)> {
     }
     for a in CHAR_EDGES {
         push("Std.Char.to_int", vec![Arg::Int(a)]);
+    }
+    for name in ["Prelude.Show Char.show", "Prelude.Show Char.display"] {
+        for a in CHAR_SHOW {
+            push(name, vec![Arg::Int(a)]);
+        }
     }
     for name in CHAR_BINARY {
         for a in CHAR_EDGES {

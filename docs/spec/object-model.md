@@ -786,6 +786,7 @@ token の表の項目は、`into_token` と `release_reuse` が添字を使い�
 | `Prelude.Eq String.==`、`!=`、`Prelude.Ord String.compare` | `Ctx::string_eq`、`string_ne`、`string_compare` |
 | `Prelude.++` | `Ctx::string_append` |
 | `Prelude.Show Int.show`、`Prelude.Show String.show` | `Ctx::int_show`、`string_show` |
+| `Prelude.Show Char.show`、`display` | `Ctx::char_show`、`char_display` |
 | `Prelude.println`、`Prelude.eprintln` | `Ctx::write_string` (`Stream::Out`、`Stream::Err`) |
 | `Std.Fs.open`、`close` | `Ctx::fs_open`、`fs_close` |
 | `Std.Fs.read_all`、`read_line_raw` | `Ctx::fs_read` (`line` が偽と真) |
@@ -805,7 +806,7 @@ token の表の項目は、`into_token` と `release_reuse` が添字を使い�
 - `Bool` と `Ordering` のタグ (`FALSE=0`、`TRUE=1`、`LT=0`、`EQ=1`、`GT=2`) は `i64` の定数、組のタグ (`TUPLE=0`) は `alloc_data` に合わせて `u16` の定数として `externs` に置く。`eml_lir` の定数と同じであることは、両方に依存する `eml_vm` のテスト (`tags.rs`) で確かめる
 - ヒープも Host も使わない算術と比較は、`Ctx` を取らない `#[inline]` の関数にする。VM の専用の命令が呼び、ほかの crate でも展開できるようにするためである。総称でない関数は、`#[inline]` がないと crate をまたいで展開されない ([計測の基準](../implementation/benchmarks.md) の「`eml_rt` のインライン化」)
 - `Word` を受ける extern は `unsafe fn` にし、`# Safety` に前提を書く。`Word` は別のヒープからも持ち込めるためで、核の操作と同じである。前提は、`heap_mut()` の前提を守っていることと、語が即値か、このヒープか付けた塊の生きている物体を指し、呼ぶ側がその参照を1つ持つことである。速いモードでは、文字列を受ける引数が文字列であることと、`Fs.read_all` と `read_line_raw` の `File` が局所で rc が 1 であることも前提にする。`File` の型は、どちらのモードでも確かめる
-- 引数の所有は LIR の規則のとおりにする。`obj` の引数は消費し、比較も読み終えたら手放す。`Int.show` は `Word` を受けないので、安全な関数である
+- 引数の所有は LIR の規則のとおりにする。`obj` の引数は消費し、比較も読み終えたら手放す。`Int.show` は `Word` を受けないので、安全な関数である。`Char.show` と `Char.display` も `Word` を受けないが、引数がスカラー値であることを `requires` に持つので `unsafe fn` にし、呼ぶ側が [LIR](lir.md) の「値の表現」の不変条件を守る
 
 ### 誤り
 
@@ -869,6 +870,7 @@ token の表の項目は、`into_token` と `release_reuse` が添字を使い�
 - `compare` は、辞書式の順序 (バイトの順) の spec `lex(a, b)` に一致することを約束する。比べるのは `<[u8] as Ord>::cmp` を1回呼ぶ包み `bytes_cmp` で、その結果が `lex` に一致することを T5 で信頼する。長さで先に返す近道は使わない (`"b" > "ab"` のため)
 - `++` は、`string_concat` の約束 (上の「文字列」) をそのまま使う。左が一意ならその場で連結する
 - `Int.show` は、ghost のバイト列が spec `decimal(i)` (負なら `-`、続けて先頭に 0 のない10進の数字。0 は `"0"`) に等しいことを証明する。数字は `u64` の絶対値から作る (`-i64::MIN` は溢れるため)。20 バイトの作業領域 (`"-9223372036854775808"` がちょうど 20 バイト) に後ろから書き、ASCII なら UTF-8 であることを証明して `from_utf8_unchecked` で `&str` にし、`alloc_string` で作る
+- `Char.show` と `Char.display` は、ghost のバイト列が spec `char_show_spec(c)` (`'` で囲んだ `escape_char(c)`) と `char_display_spec(c)` (vstd の `encode_scalar`) に等しいことを証明する。`requires` はスカラー値であること。ASCII の文字は `String.show` と同じ `escape_byte` の規則に `'` の escape を足して書き、ASCII でない文字は `encode_scalar` の式のとおりに書く。結果が UTF-8 であることは、ASCII の補題と vstd の `encode_utf8_valid_utf8` で証明し、`from_utf8_unchecked` で `&str` にして `alloc_string` で作る
 - `String.show` は、ghost のバイト列がバイトの単位の spec `escape(bytes)` に等しいことを証明する
   - 全体を `"` で囲む。`"` と `\` には `\` を前に付ける。`\n`、`\t`、`\r`、`\0` は名前付きのエスケープにする。そのほかの制御文字 (0x01〜0x1F と 0x7F) は `\u{16進の小文字、桁埋めなし}` にする。それ以外のバイトは、0x80 以上も含めてそのまま写す
   - C1 の制御文字 (U+0080〜U+009F) もそのまま写す。UTF-8 の先頭と続きのバイトはどれも 0x80 以上なので、バイトの単位の規則は、文字の単位の規則と同じ結果になる
@@ -968,6 +970,7 @@ pub struct Opened {
 検査モードの `CtxStats` の `string_bytes_copied` は、extern がヒープの文字列に写したバイト数である。VM の `RunStats` の `string_bytes_copied` はこの数である ([VM](vm.md) の「`RunStats`」)。
 
 - `Int.show`: 数字の列の長さ
+- `Char.show`、`Char.display`: 結果の長さ
 - `String.show`: 結果の長さ
 - `Fs.read_all`: ファイルの長さ
 - `Fs.read_line_raw`: 読んだ行の長さ (行の終わりを含む)

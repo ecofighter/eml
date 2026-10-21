@@ -912,6 +912,16 @@ fn run_extern<M: Mode>(
                 ctx.fs_close(task.get(arg(0)))?;
                 task.set(dst, Word::UNIT);
             }
+            Extern::CharShow | Extern::CharDisplay => {
+                let c = task.raw(arg(0));
+                // SAFETY: `Char` の語は Unicode のスカラー値である (docs/spec/lir.md の「値の表現」)
+                let w = if ext == Extern::CharShow {
+                    ctx.char_show(c)
+                } else {
+                    ctx.char_display(c)
+                };
+                task.set(dst, w);
+            }
             Extern::IntShow => {
                 let w = ctx.int_show(task.raw(arg(0)));
                 task.set(dst, w);

@@ -7,9 +7,9 @@ use std::cmp::Ordering;
 use vstd::string::StringSliceAdditionalSpecFns;
 #[cfg(verus_only)]
 use vstd::utf8::{
-    is_char_boundary, is_char_boundary_iff_not_is_continuation_byte,
-    is_char_boundary_start_end_of_seq, pop_first_scalar, valid_first_scalar, valid_utf8,
-    valid_utf8_split,
+    encode_scalar, encode_utf8, encode_utf8_valid_utf8, is_char_boundary,
+    is_char_boundary_iff_not_is_continuation_byte, is_char_boundary_start_end_of_seq,
+    pop_first_scalar, valid_first_scalar, valid_utf8, valid_utf8_concat, valid_utf8_split,
 };
 
 #[cfg(verus_only)]
@@ -621,6 +621,181 @@ proof fn lemma_text_moved<M: Mode>(h1: Heap<M>, h0: Heap<M>, h: usize)
     }
 }
 
+/// `Show Char` が1文字を書く形 (囲みの `'` は含まない)。規則は文字の単位で決めてある (docs/spec/declarations.md の
+/// 「Prelude のクラス」)。`String.show` と違い、`'` を `\'` と書き、`"` はそのまま写す。
+pub open spec fn escape_char(c: u32) -> Seq<u8> {
+    if c == 0x27 {
+        seq![b'\\', b'\'']
+    } else if c == 0x22 {
+        seq![b'"']
+    } else if c < 0x80 {
+        escape_byte(c as u8)
+    } else {
+        encode_scalar(c)
+    }
+}
+
+/// `Show Char` の `show` の結果。
+pub open spec fn char_show_spec(c: u32) -> Seq<u8> {
+    seq![b'\''] + escape_char(c) + seq![b'\'']
+}
+
+/// `Show Char` の `display` の結果。その1文字の UTF-8 である。
+pub open spec fn char_display_spec(c: u32) -> Seq<u8> {
+    encode_scalar(c)
+}
+
+/// スカラー値 `c` の UTF-8 を `buf` の先頭に書き、その長さを返す。
+fn encode_char(c: u32, buf: &mut [u8; 4]) -> (k: usize)
+    requires
+        vstd::utf8::is_scalar(c),
+    ensures
+        k == encode_scalar(c).len(),
+        final(buf)@.subrange(0, k as int) == encode_scalar(c),
+{
+    if c < 0x80 {
+        buf[0] = (c & 0x7F) as u8;
+        proof {
+            assert(buf@.subrange(0, 1) =~= encode_scalar(c));
+        }
+        1
+    } else if c < 0x800 {
+        buf[0] = 0xC0 | ((c >> 6) & 0x1F) as u8;
+        buf[1] = 0x80 | (c & 0x3F) as u8;
+        proof {
+            assert(buf@.subrange(0, 2) =~= encode_scalar(c));
+        }
+        2
+    } else if c < 0x10000 {
+        buf[0] = 0xE0 | ((c >> 12) & 0x0F) as u8;
+        buf[1] = 0x80 | ((c >> 6) & 0x3F) as u8;
+        buf[2] = 0x80 | (c & 0x3F) as u8;
+        proof {
+            assert(buf@.subrange(0, 3) =~= encode_scalar(c));
+        }
+        3
+    } else {
+        buf[0] = 0xF0 | ((c >> 18) & 0x7) as u8;
+        buf[1] = 0x80 | ((c >> 12) & 0x3F) as u8;
+        buf[2] = 0x80 | ((c >> 6) & 0x3F) as u8;
+        buf[3] = 0x80 | (c & 0x3F) as u8;
+        proof {
+            assert(buf@.subrange(0, 4) =~= encode_scalar(c));
+        }
+        4
+    }
+}
+
+/// スカラー値の UTF-8 は正しい UTF-8 である。
+proof fn lemma_scalar_utf8(c: u32)
+    requires
+        vstd::utf8::is_scalar(c),
+    ensures
+        valid_utf8(encode_scalar(c)),
+{
+    let ch = c as char;
+    assert(ch as u32 == c);
+    assert(seq![ch].drop_first() =~= Seq::<char>::empty());
+    assert(encode_utf8(Seq::<char>::empty()) =~= Seq::<u8>::empty());
+    assert(encode_utf8(seq![ch]) =~= encode_scalar(c) + Seq::<u8>::empty());
+    assert(encode_utf8(seq![ch]) =~= encode_scalar(c));
+    encode_utf8_valid_utf8(seq![ch]);
+}
+
+/// `escape_char(c)` は正しい UTF-8 である。
+proof fn lemma_escape_char_utf8(c: u32)
+    requires
+        vstd::utf8::is_scalar(c),
+        c < 0x80 ==> forall|j: int| 0 <= j < escape_char(c).len() ==> escape_char(c)[j] < 0x80,
+    ensures
+        valid_utf8(escape_char(c)),
+{
+    if c >= 0x80 {
+        lemma_scalar_utf8(c);
+    } else {
+        lemma_ascii_utf8(escape_char(c));
+    }
+}
+
+/// `escape_char(c)` を `body` の先頭に書き、その長さを返す。
+fn escape_char_into(c: u32, body: &mut [u8; 6]) -> (k: usize)
+    requires
+        vstd::utf8::is_scalar(c),
+    ensures
+        k == escape_char(c).len(),
+        k <= 6,
+        final(body)@.subrange(0, k as int) == escape_char(c),
+        c < 0x80 ==> forall|j: int| 0 <= j < k ==> final(body)@[j] < 0x80,
+{
+    if c >= 0x80 {
+        let mut tmp = [0u8;4];
+        let k = encode_char(c, &mut tmp);
+        let mut i = 0;
+        while i < k
+            invariant
+                k <= 4,
+                i <= k,
+                tmp@.subrange(0, k as int) == encode_scalar(c),
+                forall|j: int| 0 <= j < i ==> body@[j] == tmp@[j],
+            decreases k - i,
+        {
+            body[i] = tmp[i];
+            i += 1;
+        }
+        proof {
+            assert(body@.subrange(0, k as int) =~= tmp@.subrange(0, k as int));
+        }
+        k
+    } else if c == 0x27 {
+        body[0] = b'\\';
+        body[1] = b'\'';
+        proof {
+            assert(body@.subrange(0, 2) =~= escape_char(c));
+            assert(body@[0] < 0x80 && body@[1] < 0x80);
+        }
+        2
+    } else if c == 0x22 {
+        body[0] = b'"';
+        proof {
+            assert(body@.subrange(0, 1) =~= escape_char(c));
+            assert(body@[0] < 0x80);
+        }
+        1
+    } else {
+        let mut esc = [0u8;6];
+        let k = escape_into(c as u8, &mut esc);
+        if k == 0 {
+            body[0] = c as u8;
+            proof {
+                assert(body@.subrange(0, 1) =~= escape_char(c));
+                assert(body@[0] < 0x80);
+            }
+            1
+        } else {
+            let mut i = 0;
+            while i < k
+                invariant
+                    k <= 6,
+                    i <= k,
+                    esc@.subrange(0, k as int) == escape_byte(c as u8),
+                    forall|j: int| 0 <= j < k ==> esc@[j] < 0x80,
+                    forall|j: int| 0 <= j < i ==> body@[j] == esc@[j],
+                decreases k - i,
+            {
+                body[i] = esc[i];
+                i += 1;
+            }
+            proof {
+                assert(body@.subrange(0, k as int) =~= esc@.subrange(0, k as int));
+                assert forall|j: int| 0 <= j < k implies body@[j] < 0x80 by {
+                    assert(body@[j] == esc@[j]);
+                }
+            }
+            k
+        }
+    }
+}
+
 impl<M: Mode> Ctx<M> {
     /// `w` は文字列の物体を指す。
     pub open spec fn is_string(&self, w: Word) -> bool {
@@ -1036,6 +1211,131 @@ impl<M: Mode> Ctx<M> {
             self.stats.string_bytes_copied = self.stats.string_bytes_copied.wrapping_add(
                 (20 - pos) as u64,
             );
+        }
+        proof {
+            s0.heap.lemma_text_spec(w);
+            self.heap.lemma_text_spec(w);
+            if M::CHECKED {
+                self.lemma_words_kept(s0);
+            }
+            if s0.held_ok() {
+                self.lemma_made_ok(s0, w);
+            }
+        }
+        w
+    }
+
+    /// `Show Char` の `show`。`c` を `'` で囲み、文字のリテラルとして読み戻せる形の文字列を作る。呼ぶ側がその参照を持つ。
+    ///
+    /// # Safety
+    /// `c` は Unicode のスカラー値である (docs/spec/lir.md の「値の表現」)。`Char` の型の値はこの不変条件を満たす。
+    pub unsafe fn char_show(&mut self, c: i64) -> (w: Word)
+        requires
+            old(self).wf(),
+            crate::externs::is_scalar(c as int),
+        ensures
+            final(self).wf(),
+            final(self).evv_spec() == old(self).evv_spec(),
+            final(self).yield_spec() == old(self).yield_spec(),
+            final(self).is_string(w),
+            final(self).text_of(w) == char_show_spec(c as u32),
+            old(self).held_ok() ==> {
+                &&& final(self).held_ok()
+                &&& final(self).holds(w)
+                &&& final(self).evolved_by(*old(self), |x: usize| 0int, Set::empty())
+            },
+    {
+        let u = c as u32;
+        let mut body = [0u8;6];
+        let k = escape_char_into(u, &mut body);
+        let mut buf = [0u8;8];
+        buf[0] = b'\'';
+        let mut i = 0;
+        while i < k
+            invariant
+                k <= 6,
+                i <= k,
+                buf@[0] == b'\'',
+                body@.subrange(0, k as int) == escape_char(u),
+                forall|j: int| 0 <= j < i ==> buf@[1 + j] == body@[j],
+            decreases k - i,
+        {
+            buf[1 + i] = body[i];
+            i += 1;
+        }
+        buf[1 + k] = b'\'';
+        let ghost text_seq = buf@.subrange(0, 2 + k as int);
+        proof {
+            assert(text_seq =~= char_show_spec(u));
+            assert(u < 0x80 ==> forall|j: int|
+                0 <= j < escape_char(u).len() ==> escape_char(u)[j] < 0x80) by {
+                if u < 0x80 {
+                    assert forall|j: int| 0 <= j < escape_char(u).len() implies escape_char(u)[j]
+                        < 0x80 by {
+                        assert(escape_char(u)[j] == body@.subrange(0, k as int)[j]);
+                    }
+                }
+            }
+            lemma_escape_char_utf8(u);
+            let q = seq![b'\''];
+            lemma_ascii_utf8(q);
+            valid_utf8_concat(q, escape_char(u));
+            valid_utf8_concat(q + escape_char(u), q);
+        }
+        let bytes = vstd::slice::slice_subrange(buf.as_slice(), 0, 2 + k);
+        let text = unsafe { str::from_utf8_unchecked(bytes) };
+        let ghost s0 = *self;
+        let w = self.heap.alloc_string(text);
+        if M::CHECKED {
+            self.stats.string_bytes_copied = self.stats.string_bytes_copied.wrapping_add(
+                (2 + k) as u64,
+            );
+        }
+        proof {
+            s0.heap.lemma_text_spec(w);
+            self.heap.lemma_text_spec(w);
+            if M::CHECKED {
+                self.lemma_words_kept(s0);
+            }
+            if s0.held_ok() {
+                self.lemma_made_ok(s0, w);
+            }
+        }
+        w
+    }
+
+    /// `Show Char` の `display`。`c` 1文字の UTF-8 の文字列を作り、呼ぶ側がその参照を持つ。
+    ///
+    /// # Safety
+    /// `c` は Unicode のスカラー値である (docs/spec/lir.md の「値の表現」)。
+    pub unsafe fn char_display(&mut self, c: i64) -> (w: Word)
+        requires
+            old(self).wf(),
+            crate::externs::is_scalar(c as int),
+        ensures
+            final(self).wf(),
+            final(self).evv_spec() == old(self).evv_spec(),
+            final(self).yield_spec() == old(self).yield_spec(),
+            final(self).is_string(w),
+            final(self).text_of(w) == char_display_spec(c as u32),
+            old(self).held_ok() ==> {
+                &&& final(self).held_ok()
+                &&& final(self).holds(w)
+                &&& final(self).evolved_by(*old(self), |x: usize| 0int, Set::empty())
+            },
+    {
+        let u = c as u32;
+        let mut buf = [0u8;4];
+        let k = encode_char(u, &mut buf);
+        proof {
+            lemma_scalar_utf8(u);
+        }
+        let bytes = vstd::slice::slice_subrange(buf.as_slice(), 0, k);
+        let text = unsafe { str::from_utf8_unchecked(bytes) };
+        let ghost s0 = *self;
+        let w = self.heap.alloc_string(text);
+        if M::CHECKED {
+            self.stats.string_bytes_copied = self.stats.string_bytes_copied.wrapping_add(k as u64);
         }
         proof {
             s0.heap.lemma_text_spec(w);

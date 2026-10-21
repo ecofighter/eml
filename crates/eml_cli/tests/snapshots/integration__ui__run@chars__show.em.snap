@@ -1,0 +1,24 @@
+---
+source: crates/eml_cli/tests/ui.rs
+expression: "format!(\"--- stdout ---\\n{stdout}--- stderr ---\\n{diagnostics}{stderr}{written}{exit}\")"
+input_file: tests/ui/run/chars/show.em
+---
+--- stdout ---
+'a'
+'\''
+'"'
+'\\'
+'\n'
+'\t'
+'\0'
+'\u{1}'
+'\u{7f}'
+'{'
+'é'
+'😀'
+[x]
+4
+2
+Some 'a'
+['a', 'b']
+--- stderr ---

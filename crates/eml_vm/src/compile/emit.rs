@@ -1004,6 +1004,8 @@ fn arithmetic(ext: Extern, dst: Slot, args: &[Slot]) -> Option<Op> {
         | Extern::IntNeg
         | Extern::CharToInt
         | Extern::CharOfInt
+        | Extern::CharShow
+        | Extern::CharDisplay
         | Extern::FloatNeg
         | Extern::FloatCompare
         | Extern::FloatShow

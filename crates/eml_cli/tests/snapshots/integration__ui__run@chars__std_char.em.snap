@@ -6,6 +6,6 @@ input_file: tests/ui/run/chars/std_char.em
 --- stdout ---
 65
 1114111
-97
+'a'
 True
 --- stderr ---

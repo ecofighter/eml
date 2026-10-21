@@ -282,6 +282,10 @@ instance Ord Char where
   extern (>)
   extern (>=)
 
+instance Show Char where
+  extern show
+  extern display
+
 -- 要素を持つ組み込みの型。Array の Kind は要素に従い、MutArray は常に Lin (docs/spec/types.md)
 pub extern data Array a
 pub extern data MutArray a

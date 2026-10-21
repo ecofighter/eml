@@ -254,6 +254,8 @@ pub enum Extern {
     CharGe,
     CharToInt,
     CharOfInt,
+    CharShow,
+    CharDisplay,
     FloatNeg,
     FloatAdd,
     FloatSub,
@@ -390,6 +392,8 @@ impl Extern {
         Extern::CharGe,
         Extern::CharToInt,
         Extern::CharOfInt,
+        Extern::CharShow,
+        Extern::CharDisplay,
         Extern::FloatNeg,
         Extern::FloatAdd,
         Extern::FloatSub,
@@ -553,6 +557,8 @@ impl Extern {
             Extern::CharToInt => row("Std.Char.to_int", &[Int], Int, Purity::Pure),
             // スカラー値でない `Int` は `Panic` である
             Extern::CharOfInt => row("Std.Char.of_int", &[Int], Int, Purity::Panics),
+            Extern::CharShow => row("Prelude.Show Char.show", &[Int], Obj, Purity::Pure),
+            Extern::CharDisplay => row("Prelude.Show Char.display", &[Int], Obj, Purity::Pure),
             // `Float` の算術は `Panic` を起こさない。メソッドの型はクラスで1つなので `<Panic>` を持つが、行は `Pure` である
             // (docs/spec/declarations.md の「Prelude のクラス」)
             Extern::FloatNeg => row("Prelude.Num Float.negate", &[Float], Float, Purity::Pure),

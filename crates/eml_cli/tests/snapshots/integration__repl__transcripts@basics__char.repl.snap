@@ -1,0 +1,11 @@
+---
+source: crates/eml_cli/tests/repl.rs
+expression: checked.render()
+input_file: crates/eml_cli/tests/repl/basics/char.repl
+---
+> 'a'
+'a'
+> :type 'a'
+'a' : Char
+--- close ---
+no leaks

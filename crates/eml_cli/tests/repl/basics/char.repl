@@ -1,0 +1,3 @@
+# `Char` の式の値は `Show Char` で書く
+> 'a'
+> :type 'a'

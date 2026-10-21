@@ -440,6 +440,31 @@ fn shows_count_the_bytes_they_write<M: Mode>() {
     assert_eq!(mortal(ctx.heap()), 0);
 }
 
+/// `char_display` が書くバイトは、Rust の `char::encode_utf8` と同じで、長さは UTF-8 の幅の境目で変わる。
+fn chars_display_as_utf8<M: Mode>() {
+    let mut ctx = ctx::<M>();
+    let cases = [
+        (0x0, 1),
+        (0x7f, 1),
+        (0x80, 2),
+        (0x7ff, 2),
+        (0x800, 3),
+        (0xd7ff, 3),
+        (0xe000, 3),
+        (0xffff, 3),
+        (0x1_0000, 4),
+        (0x10_ffff, 4),
+    ];
+    for (c, len) in cases {
+        let w = unsafe { ctx.char_display(c) };
+        let expected = char::from_u32(c as u32).unwrap().to_string();
+        assert_eq!(expected.len(), len);
+        assert_eq!(text(ctx.heap(), w), expected);
+        unsafe { ctx.heap_mut().decref(w) }.unwrap();
+    }
+    assert_eq!(mortal(ctx.heap()), 0);
+}
+
 fn ints_show_in_decimal<M: Mode>() {
     let mut ctx = ctx::<M>();
     for v in [
@@ -1366,6 +1391,14 @@ unsafe fn call<M: Mode>(
             }
             "Prelude.Eq Bool.==" => compare(bool_eq),
             "Prelude.Eq Bool.!=" => compare(bool_ne),
+            "Prelude.Show Char.show" => {
+                let w = ctx.char_show(int(0));
+                take_text(ctx, w)
+            }
+            "Prelude.Show Char.display" => {
+                let w = ctx.char_display(int(0));
+                take_text(ctx, w)
+            }
             "Prelude.Show Int.show" => {
                 let w = ctx.int_show(int(0));
                 take_text(ctx, w)
@@ -1567,6 +1600,7 @@ both_modes!(
     the_same_string_on_both_sides,
     appending_counts_the_bytes_it_copies,
     ints_show_in_decimal,
+    chars_display_as_utf8,
     shows_count_the_bytes_they_write,
     strings_show_with_their_escapes,
     a_string_extern_refuses_a_non_string,

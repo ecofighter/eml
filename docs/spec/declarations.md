@@ -349,6 +349,7 @@ Prelude の instance は次のとおりである。
 | `Eq Float`、`Ord Float` | IEEE 754 のとおりの比較と全順序の `compare` (上の「Prelude のクラス」の `Eq Float` と `Ord Float` の項) |
 | `Eq Char` | `extern (==)`、`extern (!=)` |
 | `Ord Char` | `extern compare`、`extern (<)`、`extern (<=)`、`extern (>)`、`extern (>=)`。順はコードポイントの順で、`Ord String` の UTF-8 のバイト順と一致する |
+| `Show Char` | `extern show`、`extern display`。`show` は下のエスケープで表示し、`display` はその1文字の文字列を返す。`"\{c}"` は `display` を通るので、文字をそのまま補間する |
 | `Eq String` | `extern (==)`、`extern (!=)` |
 | `Ord String` | `extern compare`。順はバイト順で、妥当な UTF-8 ではコードポイントの順と一致する。`<` などは既定のメソッドを通る |
 | `Show String` | `extern show`。下のエスケープで表示する。`display s = s` で、文字列をそのまま返す。恒等関数で足りるので、extern にしない |
@@ -364,6 +365,7 @@ Prelude の instance は次のとおりである。
 
 - `compare` の extern の行は、`Ordering` の宣言の順のタグ (`LT` が 0) を返す
 - `String` の `show` は、文字列を `"` で囲み、`"` を `\"`、`\` を `\\`、改行を `\n`、タブを `\t`、復帰を `\r`、NUL を `\0` と書く。ほかの U+0001〜U+001F と U+007F は `\u{…}` (16進の小文字で、先頭の 0 を省く) と書く。それ以外の文字はそのまま書く。どれも [字句](lexical.md) の「文字列」のエスケープとして読み戻せる。`{` はそのまま書く。`\` は `\\` と書くので、`\` の後に `{` が来ても補間の開きにならず、読み戻せる。`{` を `\{` と書くと補間の開きになり、読み戻せない
+- `Char` の `show` は、文字を `'` で囲み、`'` を `\'`、`\` を `\\`、改行を `\n`、タブを `\t`、復帰を `\r`、NUL を `\0` と書く。ほかの U+0001〜U+001F と U+007F は `\u{…}` と書く。`"` と、それ以外の文字はそのまま書く。`String` の `show` と違い、`"` にエスケープは要らず、`'` にエスケープが要る。どれも [字句](lexical.md) の文字のリテラルとして読み戻せる
 - `max` と `min` はない
 
 ## `pub`
