@@ -2731,21 +2731,24 @@ fn f(p.0: obj lin) -> tobj lin {
     assert_eq!(check(release), Ok(()));
 }
 
+const TAKES_UNR: &str = "fn g(h.0: obj) -> unit {\n  return ()\n}\n";
+const GIVES_UNR: &str = "fn h(s.0: obj) -> obj {\n  return s.0\n}\n";
+
 #[test]
-fn v2_rejects_passing_unr_to_lin_at_each_boundary() {
+fn v2_rejects_passing_lin_to_unr_at_each_boundary() {
     for (text, message) in [
         (
-            "fn f(s.0: obj) -> obj lin {\n  jump b1(s.0)\nb1(t.1: obj lin):\n  return t.1\n}\n"
+            "fn f(s.0: obj lin) -> obj {\n  jump b1(s.0)\nb1(t.1: obj):\n  return t.1\n}\n"
                 .to_string(),
-            "a jump to b1 passes `s.0` (unr) to `t.1` (lin)",
+            "a jump to b1 passes `s.0` (lin) to `t.1` (unr)",
         ),
         (
-            "fn f(s.0: obj) -> obj lin {\n  return s.0\n}\n".to_string(),
-            "`s.0` (unr) is returned from a function that returns lin",
+            "fn f(s.0: obj lin) -> obj {\n  return s.0\n}\n".to_string(),
+            "`s.0` (lin) is returned from a function that returns unr",
         ),
         (
-            format!("fn f(s.0: obj) -> unit {{\n  let u.1: unit = call g(s.0)\n  return u.1\n}}\n{TAKES_LIN}"),
-            "argument 0 of `g` is `s.0` (unr), but the function takes lin",
+            format!("fn f(s.0: obj lin) -> unit {{\n  let u.1: unit = call g(s.0)\n  return u.1\n}}\n{TAKES_UNR}"),
+            "argument 0 of `g` is `s.0` (lin), but the function takes unr",
         ),
         (
             format!("fn f(s.0: obj) -> obj {{\n  let t.1: obj = call h(s.0)\n  return t.1\n}}\n{GIVES_LIN}"),
@@ -2756,29 +2759,24 @@ fn v2_rejects_passing_unr_to_lin_at_each_boundary() {
             "a tail call to `h` returns lin, but this function returns unr",
         ),
         (
-            "fn f(s.0: obj) -> tobj lin {\n  let c.1: tobj lin = closure k(s.0)\n  return c.1\n}\nfn k(a.0: obj lin, b.1: tobj) -> tobj lin {\n  return a.0\n}\n"
+            "fn f(s.0: obj lin) -> tobj {\n  let c.1: tobj = closure k(s.0)\n  return c.1\n}\nfn k(a.0: obj, b.1: tobj) -> tobj {\n  return a.0\n}\n"
                 .to_string(),
-            "argument 0 of a closure of `k` is `s.0` (unr), but the function takes lin",
+            "argument 0 of a closure of `k` is `s.0` (lin), but the function takes unr",
         ),
         (
-            "fn f(s.0: obj) -> unit {\n  let u.1: unit = extern Std.Fs.close(s.0)\n  return u.1\n}\n"
+            "fn f(s.0: obj lin) -> unit {\n  let u.1: unit = extern Std.Fs.open(s.0)\n  return u.1\n}\n"
                 .to_string(),
-            "argument 0 of `Std.Fs.close` is `s.0` (unr), but the extern takes lin",
+            "argument 0 of `Std.Fs.open` is `s.0` (lin), but the extern takes unr",
         ),
         (
             "fn f(s.0: obj) -> obj {\n  let h.1: obj = extern Std.Fs.open(s.0)\n  return h.1\n}\n"
                 .to_string(),
             "`h.1` (unr) is bound to `Std.Fs.open`, which returns lin",
         ),
-        // `lin` から `unr` への受け渡しも拒む。基本操作の位置は `unr` か `poly` だけである
         (
             "fn f(w.0: tobj lin) -> unit {\n  let u.1: unit = prim evv_set(w.0)\n  return u.1\n}\n"
                 .to_string(),
             "argument 0 of `prim evv_set` is `w.0` (lin), but the primitive takes unr",
-        ),
-        (
-            "fn f() -> unit {\n  let w.0: tobj lin = prim evv_get()\n  return ()\n}\n".to_string(),
-            "`w.0` (lin) is bound to `prim evv_get`, which returns unr",
         ),
         (
             format!("{LIN_OPS}fn f(c.0: tobj lin, e.1: obj) -> tobj {{\n  let t.2: tobj = clause L.ask c.0(e.1, ())\n  return t.2\n}}\n"),
@@ -2787,10 +2785,6 @@ fn v2_rejects_passing_unr_to_lin_at_each_boundary() {
         (
             format!("{LIN_OPS}fn f(c.0: tobj, e.1: obj lin) -> tobj {{\n  let t.2: tobj = clause L.ask c.0(e.1, ())\n  return t.2\n}}\n"),
             "argument 0 of a clause of `L.ask` is `e.1` (lin), but a clause takes unr",
-        ),
-        (
-            format!("{LIN_OPS}fn f(c.0: tobj, e.1: obj, x.2: tobj) -> tobj lin {{\n  let t.3: tobj lin = clause L.take c.0(e.1, x.2)\n  return t.3\n}}\n"),
-            "argument 1 of a clause of `L.take` is `x.2` (unr), but the operation takes lin",
         ),
         (
             format!("{LIN_OPS}fn f(c.0: tobj, e.1: obj, x.2: tobj lin) -> tobj {{\n  let t.3: tobj = clause L.take c.0(e.1, x.2)\n  return t.3\n}}\n"),
@@ -2804,27 +2798,44 @@ fn v2_rejects_passing_unr_to_lin_at_each_boundary() {
         assert_eq!(rejected_at_both_levels(&text), format!("{message} in `f`"));
     }
     // `clause` の印の付いた関数は、操作の表の印で呼ばれる
-    for (head, ret, message) in [
-        (
-            "fn g(e.0: obj, x.1: tobj)",
-            "tobj lin",
-            "parameter 1 of `g`, a clause of `L.take`, is `x.1` (unr), but the operation takes lin",
-        ),
-        (
-            "fn g(e.0: obj lin, x.1: tobj lin)",
-            "tobj lin",
-            "parameter 0 of `g`, a clause of `L.take`, is `e.0` (lin), but a clause takes unr",
-        ),
-        (
-            "fn g(e.0: obj, x.1: tobj lin)",
-            "tobj",
-            "`g`, a clause of `L.take`, returns unr, but the operation returns lin",
-        ),
+    let text = format!(
+        "{LIN_OPS}internal clause L.take fn g(e.0: obj, x.1: tobj) -> tobj lin {{\n  return #0\n}}\n"
+    );
+    assert_eq!(
+        rejected_at_both_levels(&text),
+        "parameter 1 of `g`, a clause of `L.take`, is `x.1` (unr), but the operation takes lin in `g`"
+    );
+    // 結果は操作の結果の印へ渡る
+    let text = format!(
+        "{LIN_OPS}internal clause L.ask fn g(e.0: obj, x.1: unit) -> tobj lin {{\n  return #0\n}}\n"
+    );
+    assert_eq!(
+        rejected_at_both_levels(&text),
+        "`g`, a clause of `L.ask`, returns lin, but the operation returns unr in `g`"
+    );
+}
+
+#[test]
+fn v2_lets_unr_pass_to_lin_at_each_boundary() {
+    for text in [
+        "fn f(s.0: obj) -> obj lin {\n  jump b1(s.0)\nb1(t.1: obj lin):\n  return t.1\n}\n".to_string(),
+        "fn f(s.0: obj) -> obj lin {\n  return s.0\n}\n".to_string(),
+        format!("fn f(s.0: obj) -> unit {{\n  let u.1: unit = call g(s.0)\n  return u.1\n}}\n{TAKES_LIN}"),
+        format!("fn f(s.0: obj) -> obj lin {{\n  let t.1: obj lin = call h(s.0)\n  return t.1\n}}\n{GIVES_UNR}"),
+        format!("fn f(s.0: obj) -> obj lin {{\n  tail call h(s.0)\n}}\n{GIVES_UNR}"),
+        "fn f(s.0: obj) -> tobj lin {\n  let c.1: tobj lin = closure k(s.0)\n  return c.1\n}\nfn k(a.0: obj lin, b.1: int) -> tobj lin {\n  return a.0\n}\n".to_string(),
+        "fn f(s.0: obj) -> unit {\n  let u.1: unit = extern Std.Fs.close(s.0)\n  return u.1\n}\n".to_string(),
+        "fn f() -> tobj lin {\n  let w.0: tobj lin = prim evv_get()\n  return w.0\n}\n".to_string(),
+        format!("{LIN_OPS}fn f(c.0: tobj, e.1: obj, x.2: tobj) -> tobj lin {{\n  let t.3: tobj lin = clause L.take c.0(e.1, x.2)\n  return t.3\n}}\n"),
     ] {
-        let text =
-            format!("{LIN_OPS}internal clause L.take {head} -> {ret} {{\n  return x.1\n}}\n");
-        assert_eq!(rejected_at_both_levels(&text), format!("{message} in `g`"));
+        assert_eq!(check_scopes(&text), Ok(()), "{text}");
+        assert_eq!(check(&text), Ok(()), "{text}");
     }
+    // `clause` の印の付いた関数の evidence の引数は、`unr` の送り手から `lin` の受け手へ渡せる
+    let text = format!(
+        "{LIN_OPS}internal clause L.take fn g(e.0: obj lin, x.1: tobj lin) -> tobj lin {{\n  return x.1\n}}\n"
+    );
+    assert_eq!(check_scopes(&text), Ok(()), "{text}");
 }
 
 #[test]
@@ -2907,13 +2918,13 @@ fn v2_runs_only_on_jump_and_return_at_the_lowered_level() {
     assert_eq!(check_lowered(extern_arg), Ok(()));
     assert_eq!(
         check_lowered(
-            "fn f(s.0: obj) -> obj lin {\n  jump b1(s.0)\nb1(t.1: obj lin):\n  return t.1\n}\n"
+            "fn f(s.0: obj lin) -> obj {\n  jump b1(s.0)\nb1(t.1: obj):\n  return t.1\n}\n"
         ),
-        Err("a jump to b1 passes `s.0` (unr) to `t.1` (lin) in `f`".to_string())
+        Err("a jump to b1 passes `s.0` (lin) to `t.1` (unr) in `f`".to_string())
     );
     assert_eq!(
-        check_lowered("fn f(s.0: obj) -> obj lin {\n  return s.0\n}\n"),
-        Err("`s.0` (unr) is returned from a function that returns lin in `f`".to_string())
+        check_lowered("fn f(s.0: obj lin) -> obj {\n  return s.0\n}\n"),
+        Err("`s.0` (lin) is returned from a function that returns unr in `f`".to_string())
     );
 }
 

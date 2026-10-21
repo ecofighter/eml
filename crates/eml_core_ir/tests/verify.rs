@@ -877,8 +877,8 @@ fn g(h.0: obj lin) -> unit {
 ";
     assert_eq!(both(calls), Ok(()));
     assert_eq!(
-        both("fn f(s.0: obj) -> obj lin {\n  jump b1(s.0)\nb1(t.1: obj lin):\n  return t.1\n}\n"),
-        Err("a jump to b1 passes `s.0` (unr) to `t.1` (lin) in `f`".to_string())
+        both("fn f(s.0: obj lin) -> obj {\n  jump b1(s.0)\nb1(t.1: obj):\n  return t.1\n}\n"),
+        Err("a jump to b1 passes `s.0` (lin) to `t.1` (unr) in `f`".to_string())
     );
     assert_eq!(
         both("fn f(s.0: obj lin) -> obj {\n  return s.0\n}\n"),

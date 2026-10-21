@@ -36,10 +36,10 @@ pub fn contract(program: &mut Program) {
 /// `let (x.0, .., x.n) = <呼び出し>` の後の `return (x.0, .., x.n)` (同じ並び、同じ順) を同じく末尾呼び出しにする
 /// (docs/spec/lir.md の「縮約」)。結果の Repr が関数の結果と
 /// 互換でなくてもよい。結果の変換は VM の変換のフレームが行い、末尾呼び出しの間で合成する
-/// (docs/spec/lir.md の「末尾の位置の呼び出し」)。印の互換は推移的でないので、
-/// x を通してつながっていた結果の印 (関数値の適用なら `poly`) と関数の戻り値の印を、値ごとに直接つないでも互換かを
+/// (docs/spec/lir.md の「末尾の位置の呼び出し」)。印の受け渡しは推移的でないので、
+/// x を通してつながっていた結果の印 (関数値の適用なら `poly`) を関数の戻り値の印へ、値ごとに直接つないでも渡せるかを
 /// 確かめる。値の数が違う形 (構造体と箱の間) の印は変換のフレームが受け渡すので比べない。`never` の操作の節の
-/// 呼び出しは戻らないので、どの戻り値の印とも互換とする (docs/spec/lir.md の「縮約」と「Kind の印」)。
+/// 呼び出しは戻らないので、どの戻り値の印にも渡せるとする (docs/spec/lir.md の「縮約」と「Kind の印」)。
 fn tail_call(block: &mut Block, rets: &[Mark], ret_marks: &[Vec<Mark>], effects: &[EffectInfo]) {
     let returned: &[Atom] = match &block.term {
         Term::Return(atom) => std::slice::from_ref(atom),
@@ -78,14 +78,14 @@ fn tail_call(block: &mut Block, rets: &[Mark], ret_marks: &[Vec<Mark>], effects:
             }
         }
     };
-    let compatible = result_marks.is_none_or(|marks| {
+    let passes = result_marks.is_none_or(|marks| {
         marks.len() != rets.len()
             || marks
                 .iter()
                 .zip(rets)
-                .all(|(&mark, &ret)| mark.compatible(ret))
+                .all(|(&mark, &ret)| Mark::passes_to(mark, ret))
     });
-    if !compatible {
+    if !passes {
         return;
     }
     let call = match block.stmts.pop() {

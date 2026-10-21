@@ -144,9 +144,10 @@ R1 と R2 から、ブロックの番号の順は辺の向きに沿った順 (�
 
   - `poly` に `dup` を拒んでも困らない。ソースで2回使うか使わなければ型検査が `Unr` の制約を付けるので、制約のない Kind 変数の値はちょうど1回使われている。`decref` を拒むのは、`Lin` の物体の RC が 0 になると破棄処理が呼ばれ、暗黙の後始末になるためである。手放すには `drop` を使う (上の「ブロックの列」)
 - 印は Repr と同じく Core IR で決まり ([Core IR](core-ir.md) の「Kind の印」)、LIR にそのまま写る。LIR のパスは既存の変数の印を変えない。box の挿入と開くパスが足す変数の印は、下の「box の挿入」と「開く」にある。縮約は変数を足さない。LIR のパスが足す変数は、Perceus の構造体の箱の `drop` の結果の `unit` の変数 (`unr`) と、reuse の token の変数 (`r`。下の「reuse」) だけである
-- 結び (`Mark::join`) は、`lin` > `poly` > `unr` の順で大きいほうである。互換 (`Mark::compatible`) は、`unr` と `lin` の組だけが偽で、`poly` はどちらとも互換である。順序 (`Mark::at_least`) は `unr` < `poly` < `lin` で、作る所の検査が使う。交わり (`Mark::meet`) はこの順序で小さいほうで、構造体の葉の印を決めるのに使う (下の「構造体の形」)
-- 印の互換は Repr の互換と同じく推移的でない (`unr` と `poly`、`poly` と `lin` はそれぞれ互換だが、`unr` と `lin` は互換でない)。2つの位置を1つにつなぐ変形は、つないだ後の2つの位置が互換なときだけ行う。縮約の末尾呼び出しの規則と、translate の `jump` の転送がこれに当たる (下の「縮約」、[Core IR](core-ir.md) の「変換の規則」)
+- 結び (`Mark::join`) は、`lin` > `poly` > `unr` の順で大きいほうである。受け渡し (`Mark::passes_to(送り手, 受け手)`) は、送り手が `lin` で受け手が `unr` の向きだけが偽である。`lin` ビットを落とす向きだけを拒み、`unr` の値を `lin` の受け手に渡すのは、ビットが立たないだけで安全な側である。`poly` はどちらの向きも通す。順序 (`Mark::at_least`) は `unr` < `poly` < `lin` で、作る所の検査が使う。交わり (`Mark::meet`) はこの順序で小さいほうで、構造体の葉の印を決めるのに使う (下の「構造体の形」)
+- 印の受け渡しは推移的でない (`lin` から `poly`、`poly` から `unr` はそれぞれ渡せるが、`lin` から `unr` は渡せない)。2つの位置を1つにつなぐ変形は、つないだ後の送り手と受け手の組が渡せるときだけ行う。縮約の末尾呼び出しの規則と、translate の `jump` の転送がこれに当たる (下の「縮約」、[Core IR](core-ir.md) の「変換の規則」)
 - 定数 (`#N`、`()`、`Int`、`&f`) はどの印の位置にも渡せる。`None` を `lin` の引数に渡すことはよくある
+- 値の流れの比べでは、送り手と受け手を取り違えない。変数を別の変数に替える置き換え (展開の引数、`jump` の転送、複製の引数) は、渡すのでなく替えるので、印が等しいこと (または `at_least`) を求める
 - 印を使う検査は、V1、V2、作る所の検査の3つである (下の「Kind の印の検査」)。`unpack` と case で得たフィールドの印は、配置の表がフィールドの Kind を持たないので verifier は確かめず、translate を信用する。ヘッダの `lin` ビットが実行時に覆う ([オブジェクトモデル](object-model.md) の「`lin` ビット」)
 - テキストの形は、Repr の後に `unr` でないときだけ印を書く (`x.1: tobj lin`、`-> tobj poly`)。読み手は、書かなければ `unr` にし、`unr` と書いたら誤りにする。書き方を1つにするためである ([テスト戦略](../implementation/testing.md) の「LIR のテキストの形」)
 
@@ -275,7 +276,7 @@ R1 と R2 から、ブロックの番号の順は辺の向きに沿った順 (�
 - EP は Core IR の上で、box の挿入と縮約は LIR の上で、この定義を判定する。判定は同じ定義の写しである。純粋な右辺の集合は、LIR では `box` と `unbox` を含み、Core IR では含まない。EP の出力には `box` と `unbox` がないので、EP の出力の上で判定は同じ答えを返す。EP が「末尾の位置の呼び出しは yield の地点にしない」と決めたことと、縮約が末尾呼び出しを作ることは、この同じ定義の上で成り立つ
 - 末尾の位置の呼び出しは、結果の Repr が呼び出し元の `ret` と互換でなくても `tail` になる。結果の変換は、VM の変換のフレームが行う ([VM](vm.md) の「変換のフレーム」)
   - box の挿入は、末尾の位置の呼び出しの結果の束縛と、その `return` に変換を入れない。束縛の Repr は呼ばれる側の結果の Repr にする。入れると、`return` の値が変換の束縛になり、末尾の位置の形が消えるためである
-  - Kind の印は、両端が同じ型から決まるか `poly` なので互換である。縮約と verifier は印を比べる
+  - Kind の印は、両端が同じ型から決まるか `poly` なので渡せる。縮約と verifier は印を比べる
 - 保証: 末尾の位置の呼び出しは (`mask` 付きの呼び出しを除き)、どれも `tail` になる。変換のフレームは末尾呼び出しの間で合成され、本当のフレーム1つにつき多くとも1つになる。そのため、末尾の位置の呼び出しの輪をたどってもスタックは伸びない。`mask` 付きの呼び出しは保証の外に置く。戻りで `evv` を戻すのでフレームを残すが、そのフレームの数は handler の数で抑えられる (下の「`evv` の不変条件」)
 - 合成が成り立つ理由: 変換の両端は同じ型の Repr である。1つの型の Repr は一様な Repr ともう1つ (型どおりの Repr) だけなので、同じ型の2つの変換の合成はいつも恒等である。そのため、合成は変換のフレームを外すか、そのまま残すかのどちらかで、フレームを足さない ([VM](vm.md) の「変換のフレーム」)
 - 保証は IR の形についての文である。呼び出しの値が、文を持つ合流のブロックを通って `return` に届く形 (`let r = if n == 0 then 0 else f (n - 1) in let s = "unused" in r`) は、末尾の位置の呼び出しでなく、保証の外にある ([実装の現在地](../implementation/status.md) の「実行の費用」)
@@ -502,7 +503,7 @@ handle の実行と、継続の再開のたびに、新しい evidence を作る
 - 縮約は、使われない純粋な `let` をすべて消し、いつも Perceus より前に走る。Perceus はこれに頼る。translate が開いた `unr` でない `con` の変数 ([Core IR](core-ir.md) の「translate が決める印」) は、使われない `con` として残り、その `lin` の引数は葉も読む。Perceus の入力にこの `con` が残ると、Perceus がその `lin` の `con` を `decref` し、V1 が拒む。そのため、Perceus の入力には、`unr` でない引数を持つ使われない `con` と `closure` がない
 - ブロックを後ろから、文を後ろから見る1回のパスで、関数全体の使用の数を使う。定義は使う位置を支配し、辺は番号の大きいブロックへ向かうので、`let` を見る時点でその変数の使用はすべて見終わっている。消した `let` だけが使っていた束縛も同じパスで消えるので、1回で不動点に達する。デバッグビルドでは、2回目のパスが何も変えないことを確かめる
 - 末尾呼び出しを作るのは縮約だけである。使われない `let` を消した後で、すべてのブロックに末尾呼び出しの規則を当てる。`let x = <呼び出し>` の直後の終端が `return x` なら、2つを `tail` にする。`let (x1, .., xn) = <呼び出し>` の直後の終端が同じ並びを同じ順に返す `return (x1, .., xn)` も同じである。呼び出しの結果の Repr が関数の `ret` と互換でなくてもよい。結果の変換は変換のフレームが行う (上の「末尾の位置の呼び出し」)。文を消したかに関わらずすべてのブロックを1回見るので、時間はブロックの数に比例する
-  - 印には条件がある。印の互換は推移的でないので、x を通してつながっていた結果の印と関数の戻り値の印を、値ごとに直接つないでも互換であることを、`tail` にする条件にする。結果の印は、直接の呼び出しなら呼ばれる関数の戻り値の印、`apply` なら `poly` (いつも互換)、`clause` なら操作の表の戻り値の印である。`never` の操作の `clause` は結果を返さないので、どの戻り値の印とも互換とする。値の数が違う形 (構造体と箱の間) は、変換のフレームが値を受け渡すので比べない
+  - 印には条件がある。印の受け渡しは推移的でないので、x を通してつながっていた結果の印と関数の戻り値の印を、値ごとに直接つないでも、結果の印を戻り値の印に渡せる (`Mark::passes_to`) ことを、`tail` にする条件にする。結果の印は、直接の呼び出しなら呼ばれる関数の戻り値の印、`apply` なら `poly` (いつも渡せる)、`clause` なら操作の表の戻り値の印である。`never` の操作の `clause` は結果を返さないので、どの戻り値の印にも渡せるとする。値の数が違う形 (構造体と箱の間) は、変換のフレームが値を受け渡すので比べない
   - 末尾呼び出しを変換を入れた後に作るので、Repr のための降格は要らない
 - 縮約は、評価の順も短絡評価も変えない。消すのは実行時に何も起こさない右辺だけである
 
@@ -745,7 +746,7 @@ reuse のパスは、Perceus が手放す箱を token にし、同じ物理的�
 
 印は Core IR で決まり、後のパスは変えない (box の挿入は `unr` のスカラーを足し、ほかの変数には元の印を写すだけである。開くパスは葉に、形の葉の印と変数の印の小さいほうを付ける)。そのため、誤った印を付けたパスの直後の段で見つかる。
 
-- V2: 値の受け渡しで、送り手と受け手の印が互換である。各段で Repr を比べる所と同じ所で走らせる
+- V2: 値の受け渡しで、送り手の印を受け手の印に渡せる (`Mark::passes_to`)。つまり `lin` の値を `unr` の受け手に渡さない。`unr` の値を `lin` の受け手に渡すのは許す。各段で Repr を比べる所と同じ所で走らせる。`lin` の値を持つ値に `unr` の印を付ける誤りは、作る所の検査が止める
   - Core IR の2つの段と LIR の入口の段: `jump` の実引数と行き先の引数、`return` の値と関数の `ret_mark`
   - LIR の境界の段: 上に加えて、直接の呼び出しの引数と仮引数、結果と戻り値の印、`closure` の引数と、クロージャにする関数の捕まえる引数、`tail` の結果と呼び出し元の `ret_mark`、`apply` の位置 (いつも `poly` なので、実際には何も拒まない)、`extern`、`prim`、`clause` の引数と結果とそれぞれの表の列 (extern の行、基本操作の表、操作の表)、`clause` の印の付いた関数の引数と戻り値と操作の表の列
   - `perform`、`handle`、`resume` (EP の前の Core IR にだけある) の受け渡しは比べない。EP がそれらを `clause` と基本操作に置き換えた後の段で比べる
@@ -758,9 +759,9 @@ reuse のパスは、Perceus が手放す箱を token にし、同じ物理的�
   - V1: `` `x.1` (lin) is duplicated, but only unr can be ``、`` `x.1` (poly) is released, but only unr can be ``
   - `jump` と `return`: ``a jump to b2 passes `x.1` (lin) to `p.3` (unr) ``、`` `x.1` (lin) is returned from a function that returns unr ``
   - 直接の呼び出しの引数: ``argument 0 of `g` is `x.1` (lin), but the function takes unr``。`closure` の引数も同じ形である (``argument 0 of a closure of `g` ``)
-  - `extern`、`prim`、`clause` の引数: ``argument 0 of `Std.Fs.close` is `x.1` (unr), but the extern takes lin``、``argument 1 of a clause of `Counter.put` is `x.1` (lin), but the operation takes unr``、``the callee of a clause of `Counter.get` is `c.0` (lin), but a clause takes unr``
+  - `extern`、`prim`、`clause` の引数: ``argument 0 of `Std.Fs.open` is `x.1` (lin), but the extern takes unr``、``argument 1 of a clause of `Counter.put` is `x.1` (lin), but the operation takes unr``、``the callee of a clause of `Counter.get` is `c.0` (lin), but a clause takes unr``
   - 結果: `` `t.0` (unr) is bound to `Std.Fs.open`, which returns lin ``。`prim`、`clause`、呼び出しも同じ形である
-  - `clause` の印の関数: ``parameter 2 of `g$entry`, a clause of `Counter.put`, is `x.2` (lin), but the operation takes unr``、``parameter 1 of `g$entry`, a clause of `Counter.put`, is `e.1` (lin), but a clause takes unr``、`` `g$entry`, a clause of `Counter.get`, returns lin, but the operation returns unr ``
+  - `clause` の印の関数: ``parameter 2 of `g$entry`, a clause of `Counter.put`, is `x.2` (unr), but the operation takes lin``、`` `g$entry`, a clause of `Counter.get`, returns lin, but the operation returns unr ``
   - 作る所: `` `p.2` (unr) is bound to a con of `(,)` #0, whose arguments join to lin ``、`` `c.1` (unr) is bound to a closure of `k`, whose captures join to poly ``
 
 ## 実行の意味

@@ -1963,7 +1963,7 @@ impl<'a> Checker<'a> {
                 }
                 for (&(_, result_mark), &(_, ret_mark)) in results.iter().zip(&self.function.rets) {
                     // 呼び出し元を "this function" と書き、呼ばれる側を指す "the function" と分ける
-                    if !result_mark.compatible(ret_mark) {
+                    if !Mark::passes_to(result_mark, ret_mark) {
                         return Err(format!(
                             "{} returns {}, but this function returns {}",
                             self.call_text(call, true),

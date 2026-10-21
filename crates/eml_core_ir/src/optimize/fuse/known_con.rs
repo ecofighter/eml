@@ -84,7 +84,7 @@ fn passes(function: &CoreFn, structs: &Structs, arg: Atom, param: VarId) -> bool
     match arg {
         Atom::Var(var) => {
             structs.compatible(function.repr(var), repr)
-                && function.mark(var).compatible(function.mark(param))
+                && Mark::passes_to(function.mark(var), function.mark(param))
         }
         constant => constant.fits_compatible(&function.vars, structs, repr),
     }

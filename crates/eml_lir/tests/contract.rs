@@ -478,9 +478,30 @@ fn f(k.0: obj, w.1: obj lin) -> int {
 }
 
 #[test]
-fn a_multi_value_call_with_an_incompatible_mark_is_not_tail() {
-    // 呼ばれる側の葉は `unr` で、呼ぶ側の結果の葉は `lin` である。束縛の `poly` の葉を通せばどちらとも受け渡せるが、
-    // `tail` にすると `unr` と `lin` を直接つなぐので、値の数が同じなら印を値ごとに比べて `let` と `return` のまま残す
+fn a_multi_value_call_that_would_pass_lin_to_unr_is_not_tail() {
+    // 呼ばれる側の葉は `lin` で、呼ぶ側の結果の葉は `unr` である。束縛の `poly` の葉を通せばどちらとも受け渡せるが、
+    // `tail` にすると `lin` を `unr` に直接つなぐので、値の数が同じなら印を値ごとに比べて `let` と `return` のまま残す
+    let text = "\
+layout P { P(obj, obj) }
+fn g(a.0: obj lin, b.1: obj) -> P{obj lin, obj} lin {
+  let v.2: P{obj lin, obj} lin = con P #0(a.0, b.1)
+  return v.2
+}
+fn f(a.0: obj lin, b.1: obj) -> P{obj, obj} {
+  let v.2: P{obj poly, obj} poly = call g(a.0, b.1)
+  return v.2
+}
+";
+    insta::assert_snapshot!(function(&passes_text(text, Pass::Contract), "f"), @"
+    fn f(a.0: obj lin, b.1: obj) -> (obj, obj) source(obj, obj) -> P{obj, obj} {
+      let (v.0.3: obj poly, v.1.4: obj) = call g(a.0, b.1)
+      return (v.0.3, v.1.4)
+    }
+    ");
+}
+
+#[test]
+fn a_multi_value_call_that_passes_unr_to_lin_is_tail() {
     let text = "\
 layout P { P(obj, obj) }
 fn g(a.0: obj, b.1: obj) -> P{obj, obj} {
@@ -494,8 +515,7 @@ fn f(a.0: obj, b.1: obj) -> P{obj lin, obj} lin {
 ";
     insta::assert_snapshot!(function(&passes_text(text, Pass::Contract), "f"), @"
     fn f(a.0: obj, b.1: obj) -> (obj lin, obj) source(obj, obj) -> P{obj lin, obj} {
-      let (v.0.3: obj poly, v.1.4: obj) = call g(a.0, b.1)
-      return (v.0.3, v.1.4)
+      tail call g(a.0, b.1)
     }
     ");
 }

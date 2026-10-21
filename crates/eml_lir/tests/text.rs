@@ -1595,8 +1595,9 @@ fn marks_have_a_join_a_compatibility_and_an_order() {
     assert_eq!(Unr.join(Poly), Poly);
     assert_eq!(Poly.join(Lin), Lin);
     assert_eq!(Unr.join(Unr), Unr);
-    assert!(!Unr.compatible(Lin) && !Lin.compatible(Unr));
-    assert!(Poly.compatible(Lin) && Poly.compatible(Unr) && Lin.compatible(Lin));
+    assert!(!Mark::passes_to(Lin, Unr) && Mark::passes_to(Unr, Lin));
+    assert!(Mark::passes_to(Poly, Lin) && Mark::passes_to(Lin, Poly));
+    assert!(Mark::passes_to(Poly, Unr) && Mark::passes_to(Unr, Poly) && Mark::passes_to(Lin, Lin));
     assert!(Lin.at_least(Poly) && Poly.at_least(Unr) && !Unr.at_least(Poly));
 }
 

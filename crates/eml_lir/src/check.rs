@@ -91,7 +91,7 @@ pub fn clause_function<'v>(
     }
     let expected = std::iter::once(Mark::Unr).chain(operation.param_marks.iter().copied());
     for (index, (&(var, param), expected)) in params[captures..].iter().zip(expected).enumerate() {
-        if !param.mark.compatible(expected) {
+        if !Mark::passes_to(expected, param.mark) {
             // evidence の引数は、操作の表でなく `clause` の規則で `unr` と決まる (docs/spec/lir.md の「Kind の印の検査」)
             let taker = if index == 0 {
                 "a clause"
@@ -108,7 +108,7 @@ pub fn clause_function<'v>(
             ));
         }
     }
-    if !ret_mark.compatible(operation.ret_mark) {
+    if !Mark::passes_to(ret_mark, operation.ret_mark) {
         return Err(format!(
             "`{name}`, a clause of `{clause}`, returns {}, but the operation returns {}",
             ret_mark.name(),
@@ -490,7 +490,9 @@ impl<'a> Context<'a> {
     /// (docs/spec/lir.md の「Kind の印の検査」)。
     pub fn mark_passes(&self, atom: Atom, expected: Mark) -> bool {
         match atom {
-            Atom::Var(var) => self.never[var.0 as usize] || self.mark(var).compatible(expected),
+            Atom::Var(var) => {
+                self.never[var.0 as usize] || Mark::passes_to(self.mark(var), expected)
+            }
             Atom::Int(_) | Atom::Float(_) | Atom::Unit | Atom::Tag(_) | Atom::Fn(_) => true,
         }
     }
@@ -927,7 +929,7 @@ impl<'a> Context<'a> {
         Ok(())
     }
 
-    /// 呼び出しの結果の印 `result` は、束縛する変数の印と互換である (V2)。`callee` は誤りの文で呼ばれる側を指す句である。
+    /// 呼び出しの結果の印 `result` は、束縛する変数の印に渡せる (V2)。`callee` は誤りの文で呼ばれる側を指す句である。
     pub fn bound_mark(
         &self,
         var: VarId,
@@ -935,7 +937,7 @@ impl<'a> Context<'a> {
         callee: impl FnOnce() -> String,
     ) -> Result<(), String> {
         let mark = self.mark(var);
-        if mark.compatible(result) {
+        if Mark::passes_to(result, mark) {
             return Ok(());
         }
         Err(format!(

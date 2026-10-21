@@ -910,12 +910,10 @@ impl Mark {
         }
     }
 
-    /// `Unr` と `Lin` の組だけが受け渡せない。`Poly` はどちらとも受け渡せる。
-    pub fn compatible(self, other: Mark) -> bool {
-        !matches!(
-            (self, other),
-            (Mark::Unr, Mark::Lin) | (Mark::Lin, Mark::Unr)
-        )
+    /// 送り手の値を受け手に渡せるか。`lin` ビットを落とす向き (`Lin` を `Unr` の受け手へ) だけが渡せない。
+    /// `Unr` を `Lin` の受け手へ渡すのは、ビットが立たないだけで安全な側である。`Poly` はどちらの向きも通す。
+    pub fn passes_to(sender: Mark, receiver: Mark) -> bool {
+        !matches!((sender, receiver), (Mark::Lin, Mark::Unr))
     }
 
     /// 2つの印の小さいほう。順序は `Unr` < `Poly` < `Lin`。

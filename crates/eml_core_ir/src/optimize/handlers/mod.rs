@@ -549,7 +549,7 @@ fn eligible(
         let form = ClauseForm::of(function, operation);
         // それ以外の節の結果は、そのまま複製の結果になる
         let returns_handled =
-            function.ret == ret_fn.ret && function.ret_mark.compatible(ret_fn.ret_mark);
+            function.ret == ret_fn.ret && Mark::passes_to(function.ret_mark, ret_fn.ret_mark);
         if form == ClauseForm::Other
             && (!returns_handled || (operation.resumable && !keeps_k(program, function, stateful)))
         {
@@ -702,7 +702,7 @@ fn performs_fit(
                     arg.fits(&function.vars, info.repr)
                         && match arg {
                             Atom::Var(var) if inlined => info.mark.at_least(function.mark(var)),
-                            Atom::Var(var) => function.mark(var).compatible(info.mark),
+                            Atom::Var(var) => Mark::passes_to(function.mark(var), info.mark),
                             _ => true,
                         }
                 })

@@ -295,12 +295,13 @@ fn returns_pass(
                 Some(position) => match args[position] {
                     Atom::Var(arg) => {
                         structs.compatible(function.repr(arg), repr)
-                            && function.mark(arg).compatible(mark)
+                            && Mark::passes_to(function.mark(arg), mark)
                     }
                     constant => constant.fits_compatible(&function.vars, structs, repr),
                 },
                 None => {
-                    structs.compatible(callee.repr(var), repr) && callee.mark(var).compatible(mark)
+                    structs.compatible(callee.repr(var), repr)
+                        && Mark::passes_to(callee.mark(var), mark)
                 }
             },
             constant => constant.fits_compatible(&callee.vars, structs, repr),

@@ -2785,3 +2785,44 @@ fn entry$main() -> int {
     }
     "#);
 }
+
+/// `unr` の値を `lin` の受け手に渡す展開は通し、`lin` の値を `unr` の受け手に渡す展開は拒む
+/// (docs/spec/lir.md の「Kind の印」)。結果の印だけを `poly` にした呼ばれる側で、受け手の印を変える。
+#[test]
+fn inlining_passes_unr_to_lin_but_not_lin_to_unr() {
+    let callee = "fn g(a.0: obj) -> obj poly {\n  return a.0\n}\n";
+    let passing = optimized(&format!(
+        "{callee}fn entry$main(s.0: obj) -> obj lin {{\n  let r.1: obj lin = call g(s.0)\n  return r.1\n}}\n"
+    ));
+    assert!(!passing.contains("call g("), "{passing}");
+    let callee = "fn g(a.0: obj lin) -> obj poly {\n  return a.0\n}\n";
+    let rejected = optimized(&format!(
+        "{callee}fn entry$main(s.0: obj lin) -> obj {{\n  let r.1: obj = call g(s.0)\n  return r.1\n}}\n"
+    ));
+    assert!(rejected.contains("call g("), "{rejected}");
+}
+
+/// 既知の `con` を開くとき、`unr` のフィールドを `lin` の受け手に渡すのは通し、逆は通さない。
+#[test]
+fn opening_a_known_con_passes_unr_to_lin_but_not_lin_to_unr() {
+    let passing = optimized(
+        "layout Box { B(obj) }
+fn entry$main(a.0: obj) -> obj lin {
+  let p.1: obj = con Box #0(a.0)
+  unpack p.1 Box #0(x.2: obj lin)
+  return x.2
+}
+",
+    );
+    assert!(!passing.contains("con Box"), "{passing}");
+    let rejected = optimized(
+        "layout Box { B(obj) }
+fn entry$main(a.0: obj lin) -> obj {
+  let p.1: obj lin = con Box #0(a.0)
+  unpack p.1 Box #0(x.2: obj)
+  return x.2
+}
+",
+    );
+    assert!(rejected.contains("con Box"), "{rejected}");
+}
