@@ -1018,6 +1018,11 @@ fn run_extern<M: Mode>(
                 let c = externs::char_of_int(task.raw(arg(0))).map_err(Fault::Arith)?;
                 task.set_raw(dst, c);
             }
+            Extern::ByteOfInt => {
+                let b = externs::byte_of_int(task.raw(arg(0))).map_err(Fault::Arith)?;
+                task.set_raw(dst, b);
+            }
+            Extern::ByteWrap => task.set_raw(dst, externs::byte_wrap(task.raw(arg(0)))),
             Extern::FloatSqrt
             | Extern::FloatAbs
             | Extern::FloatSin
@@ -1113,6 +1118,7 @@ fn run_extern<M: Mode>(
             | Extern::ByteGt
             | Extern::ByteGe
             | Extern::CharToInt
+            | Extern::ByteToInt
             | Extern::FloatNeg
             | Extern::FloatAdd
             | Extern::FloatSub

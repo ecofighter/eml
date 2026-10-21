@@ -102,7 +102,7 @@ try_panic action =
 
 | `Fault` | 起こす関数 |
 |---|---|
-| `Arith(_)` | `+`、`-`、`*`、`/`、`%`、単項の `-`。`Float.truncate`、`Float.floor`、`Float.ceil`、`Float.round` (`Int` に収まらない値)、`Float.to_fixed` (桁数)、`Char.of_int` (スカラー値でない値) |
+| `Arith(_)` | `+`、`-`、`*`、`/`、`%`、単項の `-`。`Float.truncate`、`Float.floor`、`Float.ceil`、`Float.round` (`Int` に収まらない値)、`Float.to_fixed` (桁数)、`Char.of_int` (スカラー値でない値)、`Byte.of_int` (0 から 255 の外の値) |
 | `Index(_)` | `String.byte_at`、`String.slice`、`String.find_from` と、それらを使う std の関数。`Array.get`、`Array.set`、`Array.make`、`MutArray.read`、`MutArray.write`、`MutArray.make` (添字の範囲と負の長さ) と、添字の式が使う `check_index`。`Env.arg` の範囲の外の位置も `Index` だが、`Env.arg` は std の中だけで使うので、利用者のプログラムでは起きない |
 
 ## `exit`
@@ -225,6 +225,21 @@ pub while : (Unit -> <e> Bool) -> (Unit -> <e> Unit) -> <e> Unit
 - `is_ascii` は U+0000 から U+007F の文字で成り立つ。`is_ascii_digit` は `'0'` から `'9'`、`is_ascii_upper` は `'A'` から `'Z'`、`is_ascii_lower` は `'a'` から `'z'` で成り立つ。`is_ascii_alpha` は upper か lower、`is_ascii_alphanumeric` は alpha か digit で成り立つ
 - `is_ascii_space` は `' '` と、`'\t'` から `'\r'` (U+0009 から U+000D) で成り立つ。`Std.String` の空白の判定と同じ範囲である
 - どの判定も、ASCII 以外の文字では偽である
+
+## `Std.Byte`
+
+| 名前 | 型 | 実装 |
+|---|---|---|
+| `to_int` | `Byte -> Int` | extern |
+| `of_int` | `Int -> <Panic> Byte` | extern |
+| `wrap` | `Int -> Byte` | extern |
+
+`Char` と同じく、モジュールで修飾して使う (`Byte.to_int b`)。
+
+- `to_int b` は `b` の値で、0 から 255 の `Int` である。`Byte` と `Int` は同じ語なので、実行時には何もしない
+- `of_int n` は、`n` が 0 から 255 のときにその `Byte` を返す。ほかの値では `Panic` を起こす。文言は ``int `256` does not fit in `Byte` `` である (下の「実行時エラー」)
+- `wrap n` は `n` の下位8ビットを返す。2の補数で見るので、`wrap (-1)` は `255u8`、`wrap 256` は `0u8` で、`Panic` は起こさない
+- `Char` と `Byte` を直接変える関数はない。`Int` を経由する
 
 ## `Std.Array`
 
@@ -451,6 +466,7 @@ I/O の失敗の一部は `try_io` で捕まえられる (上の「`try_io`」)�
 | `Float.truncate`、`floor`、`ceil`、`round` の範囲の外 | `` float `1e+19` does not fit in `Int` `` (値は `show` の形) |
 | `Float.to_fixed` の桁数 | `` `to_fixed` takes 0 to 100 digits, not 101 `` |
 | `Char.of_int` の引数 | ``int `55296` is not a Unicode scalar value`` |
+| `Byte.of_int` の引数 | ``int `256` does not fit in `Byte` `` |
 | 配列の添字の範囲の外 (`get`、`set`、`read`、`write`) | ``array index 3 is out of range for length 3`` |
 | 配列の負の長さ (`make`、`tabulate`) | ``array length -1 is negative`` |
 | `Fs.write_text` | ``cannot write `out.txt`: permission denied`` |

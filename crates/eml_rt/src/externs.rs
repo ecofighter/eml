@@ -51,6 +51,8 @@ pub enum ArithFault {
     FixedDigits(i64),
     /// `Char.of_int` の引数が Unicode のスカラー値でない。
     NotScalar(i64),
+    /// `Byte.of_int` の引数が 0 から 255 の外にある。
+    NotByte(i64),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -213,6 +215,30 @@ pub fn char_of_int(n: i64) -> (r: Result<i64, ArithFault>)
     } else {
         Err(ArithFault::NotScalar(n))
     }
+}
+
+// 範囲を比較で書くのは、`char_of_int` と同じ理由である
+#[allow(clippy::manual_range_contains)]
+#[inline]
+pub fn byte_of_int(n: i64) -> (r: Result<i64, ArithFault>)
+    ensures
+        r is Ok <==> 0 <= n <= 255,
+        r matches Ok(v) ==> v == n,
+        r is Err ==> r == Err::<i64, ArithFault>(ArithFault::NotByte(n)),
+{
+    if 0 <= n && n <= 255 {
+        Ok(n)
+    } else {
+        Err(ArithFault::NotByte(n))
+    }
+}
+
+#[inline]
+pub fn byte_wrap(n: i64) -> (r: i64)
+    ensures
+        r == n & 255,
+{
+    n & 255
 }
 
 #[inline]
@@ -829,6 +855,7 @@ impl fmt::Display for ArithFault {
             ),
             ArithFault::FixedDigits(n) => write!(f, "`to_fixed` takes 0 to 100 digits, not {n}"),
             ArithFault::NotScalar(n) => write!(f, "int `{n}` is not a Unicode scalar value"),
+            ArithFault::NotByte(n) => write!(f, "int `{n}` does not fit in `Byte`"),
         }
     }
 }

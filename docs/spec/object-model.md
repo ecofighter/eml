@@ -767,7 +767,7 @@ token の表の項目は、`into_token` と `release_reuse` が添字を使い�
 
 ## extern
 
-`eml_extern` の表の関数の行のうち `exit` と `panic` を除く102個を、`eml_rt` に語の ABI で1回だけ書く。VM と、ネイティブのコードが同じ関数を呼ぶ。ヒープを使わない算術と比較は module `externs` の関数で、文字列と I/O の extern は `Ctx` のメソッドである。純粋な extern は、結果をバイト列や整数の spec に対して Verus で証明する。`exit` と `panic` は VM が実行する。`exit` は終了コードを覚えて、`Ctx::exit_abort` で中断を始める。`panic` は文言を `panicked` の節の入口に渡す ([VM](vm.md) の「extern の中断」)。
+`eml_extern` の表の関数の行のうち `exit` と `panic` を除く105個を、`eml_rt` に語の ABI で1回だけ書く。VM と、ネイティブのコードが同じ関数を呼ぶ。ヒープを使わない算術と比較は module `externs` の関数で、文字列と I/O の extern は `Ctx` のメソッドである。純粋な extern は、結果をバイト列や整数の spec に対して Verus で証明する。`exit` と `panic` は VM が実行する。`exit` は終了コードを覚えて、`Ctx::exit_abort` で中断を始める。`panic` は文言を `panicked` の節の入口に渡す ([VM](vm.md) の「extern の中断」)。
 
 行の番号 (`eml_extern::Extern`) から関数を引く表は `eml_rt` に置かない。VM が行の番号の `match` で各関数を呼ぶ。`match` は飛び先の表になるので、関数ポインタの表と同じ速さである。
 
@@ -789,6 +789,7 @@ token の表の項目は、`into_token` と `release_reuse` が添字を使い�
 | `Prelude.Eq String.==`、`!=`、`Prelude.Ord String.compare` | `Ctx::string_eq`、`string_ne`、`string_compare` |
 | `Prelude.++` | `Ctx::string_append` |
 | `Prelude.Show Int.show`、`Prelude.Show String.show` | `Ctx::int_show`、`string_show` |
+| `Std.Byte.to_int`、`of_int`、`wrap` | なし (語を変えないので、VM は `Move` に写す)、`byte_of_int`、`byte_wrap` |
 | `Prelude.Show Byte.display` | `Ctx::int_show` (`Byte` の語は `Int` と同じ `int` で、`display` は 10 進の数だけを返す) |
 | `Prelude.Show Char.show`、`display` | `Ctx::char_show`、`char_display` |
 | `Prelude.println`、`Prelude.eprintln` | `Ctx::write_string` (`Stream::Out`、`Stream::Err`) |
@@ -814,12 +815,12 @@ token の表の項目は、`into_token` と `release_reuse` が添字を使い�
 
 ### 誤り
 
-算術の誤りは `ArithFault` (`DivisionByZero`、`IntegerOverflow`、`FloatToInt(u64)`、`FixedDigits(i64)`、`NotScalar(i64)`) で、`Copy` である。`FloatToInt` は `Int` に収まらない `Float` をビット列で持ち、`FixedDigits` は `Float.to_fixed` の範囲の外の桁数を持ち、`NotScalar` は `Char.of_int` が断ったスカラー値でない `Int` を持つ。`Result<i64, ArithFault>` は 16 バイトで、展開されないときも2つのレジスタで返る。`Ctx` のメソッドの誤りは `Fault` (24 バイト) で、`From<ArithFault>` と `From<HeapError>` を持つ。24 バイトに収めるため、まれな誤り (`NotUtf8` と `Index`) の中身は `Box` に入れる。
+算術の誤りは `ArithFault` (`DivisionByZero`、`IntegerOverflow`、`FloatToInt(u64)`、`FixedDigits(i64)`、`NotScalar(i64)`、`NotByte(i64)`) で、`Copy` である。`FloatToInt` は `Int` に収まらない `Float` をビット列で持ち、`FixedDigits` は `Float.to_fixed` の範囲の外の桁数を持ち、`NotScalar` は `Char.of_int` が断ったスカラー値でない `Int` を、`NotByte` は `Byte.of_int` が断った 0..=255 の外の `Int` を持つ。`Result<i64, ArithFault>` は 16 バイトで、展開されないときも2つのレジスタで返る。`Ctx` のメソッドの誤りは `Fault` (24 バイト) で、`From<ArithFault>` と `From<HeapError>` を持つ。24 バイトに収めるため、まれな誤り (`NotUtf8` と `Index`) の中身は `Box` に入れる。
 
 | `Fault` | 中身 | 表示 |
 |---|---|---|
 | `Heap(HeapError)` | 検査モードの確かめと解放の連鎖の誤り | `HeapError` の表示 |
-| `Arith(ArithFault)` | 算術の誤り。`Float` から `Int` への変換 (`FloatToInt`) と `to_fixed` の桁数 (`FixedDigits`)、`Char.of_int` の引数 (`NotScalar`) も含む | `division by zero`、`integer overflow`、``float `{}` does not fit in `Int` ``、``` `to_fixed` takes 0 to 100 digits, not {n} ```、``int `{n}` is not a Unicode scalar value`` |
+| `Arith(ArithFault)` | 算術の誤り。`Float` から `Int` への変換 (`FloatToInt`) と `to_fixed` の桁数 (`FixedDigits`)、`Char.of_int` の引数 (`NotScalar`)、`Byte.of_int` の引数 (`NotByte`) も含む | `division by zero`、`integer overflow`、``float `{}` does not fit in `Int` ``、``` `to_fixed` takes 0 to 100 digits, not {n} ```、``int `{n}` is not a Unicode scalar value``、``int `{n}` does not fit in `Byte` `` |
 | `Output(Box<str>)` | 書き込みの誤りの `io::Error` の文言 | ``cannot write the output: {e}`` |
 | `Io { op, name, reason }` | `op` は `Open`、`Read`、`Write`、`Run`、`reason` は `IoReason` (`NotFound`、`PermissionDenied`、`NotAvailable`、`Other`) | ``cannot open `{name}`: {reason}``、``cannot read `{name}`: {reason}``、``cannot write `{name}`: {reason}``、``cannot run `{name}`: {reason}``。理由は `not found`、`permission denied`、`not available`、`I/O error` |
 | `Stdin(IoReason)` | 標準入力の読みの誤り | ``cannot read the standard input: {reason}`` |

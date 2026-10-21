@@ -59,7 +59,7 @@ import の循環は E1027 にする。型検査は item と SCC の単位で動�
 
 ## 標準ライブラリ
 
-標準ライブラリは、リポジトリの `std/` ツリーのモジュールで、処理系のバイナリに埋め込まれている。`std/` は `Prelude.em`、`Fs.em`、`List.em`、`String.em`、`Env.em`、`Stdin.em`、`Proc.em`、`Yield.em`、`Fail.em`、`State.em`、`Iter.em`、`Float.em`、`Char.em`、`Array.em`、`MutArray.em` からなる。各モジュールの関数は [標準ライブラリ](stdlib.md) にある。標準ライブラリのモジュールだけが `extern` を書ける ([宣言](declarations.md) の「`extern`」)。
+標準ライブラリは、リポジトリの `std/` ツリーのモジュールで、処理系のバイナリに埋め込まれている。`std/` は `Prelude.em`、`Fs.em`、`List.em`、`String.em`、`Env.em`、`Stdin.em`、`Proc.em`、`Yield.em`、`Fail.em`、`State.em`、`Iter.em`、`Float.em`、`Char.em`、`Byte.em`、`Array.em`、`MutArray.em` からなる。各モジュールの関数は [標準ライブラリ](stdlib.md) にある。標準ライブラリのモジュールだけが `extern` を書ける ([宣言](declarations.md) の「`extern`」)。
 
 - 標準ライブラリのモジュールの正式な名前は、予約した根 `Std` の下に置く (`Std.Fs`)。`Prelude` だけは `Prelude` のままである。診断に出すパスは `<std>/Prelude.em`、`<std>/Fs.em` のように書き、手元の相対パスと区別する
 - Prelude はいつも読み込む。ほかの標準ライブラリのモジュール `X` は、次のどれかのときだけ読み込む。すべてを毎回読み込むと、標準ライブラリを足すたびに、すべての実行と REPL の入力の検査が遅くなるためである

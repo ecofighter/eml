@@ -37,6 +37,7 @@ pub const STD: &[(&str, &str)] = &[
     ("Iter.em", include_str!("../../../std/Iter.em")),
     ("Float.em", include_str!("../../../std/Float.em")),
     ("Char.em", include_str!("../../../std/Char.em")),
+    ("Byte.em", include_str!("../../../std/Byte.em")),
     ("Array.em", include_str!("../../../std/Array.em")),
     ("MutArray.em", include_str!("../../../std/MutArray.em")),
 ];

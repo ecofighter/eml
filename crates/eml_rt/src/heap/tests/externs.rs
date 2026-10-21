@@ -170,8 +170,16 @@ fn bools_compare_by_tag() {
 /// 文言は docs/spec/lir.md の「実行時エラー」の一覧のとおりである。
 #[test]
 fn faults_print_their_listed_texts() {
-    let cases: [(Fault, &str); 24] = [
+    let cases: [(Fault, &str); 26] = [
         (ArithFault::DivisionByZero.into(), "division by zero"),
+        (
+            ArithFault::NotScalar(55296).into(),
+            "int `55296` is not a Unicode scalar value",
+        ),
+        (
+            ArithFault::NotByte(256).into(),
+            "int `256` does not fit in `Byte`",
+        ),
         (ArithFault::IntegerOverflow.into(), "integer overflow"),
         (
             ArithFault::FloatToInt(f64::NAN.to_bits()).into(),
@@ -1371,6 +1379,9 @@ unsafe fn call<M: Mode>(
             "Std.Float.of_int" => float_result(float_of_int(int(0))),
             "Std.Char.to_int" => Outcome::Int(int(0)),
             "Std.Char.of_int" => Outcome::Int(char_of_int(int(0))?),
+            "Std.Byte.to_int" => Outcome::Int(int(0)),
+            "Std.Byte.of_int" => Outcome::Int(byte_of_int(int(0))?),
+            "Std.Byte.wrap" => Outcome::Int(byte_wrap(int(0))),
             "Std.Float.truncate" => Outcome::Int(float_truncate(float(0))?),
             "Std.Float.floor" => Outcome::Int(float_floor(float(0))?),
             "Std.Float.ceil" => Outcome::Int(float_ceil(float(0))?),

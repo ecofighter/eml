@@ -165,6 +165,9 @@ pub const CHAR_OF_INT: [i64; 10] = [
     i64::MAX,
 ];
 
+/// `Byte.of_int` と `Byte.wrap` の引数。範囲の両端、その外、`Int` の両端
+pub const BYTE_CONVERT: [i64; 11] = [-1, 0, 1, 127, 128, 255, 256, 300, -256, i64::MIN, i64::MAX];
+
 /// 文字を2つ取る行
 pub const CHAR_BINARY: [&str; 7] = [
     "Prelude.Eq Char.==",
@@ -607,6 +610,14 @@ pub fn inputs() -> Vec<(String, Vec<Arg>)> {
     }
     for a in CHAR_EDGES {
         push("Std.Char.to_int", vec![Arg::Int(a)]);
+    }
+    for name in ["Std.Byte.of_int", "Std.Byte.wrap"] {
+        for a in BYTE_CONVERT {
+            push(name, vec![Arg::Int(a)]);
+        }
+    }
+    for a in BYTE_EDGES {
+        push("Std.Byte.to_int", vec![Arg::Int(a)]);
     }
     for name in ["Prelude.Show Char.show", "Prelude.Show Char.display"] {
         for a in CHAR_SHOW {

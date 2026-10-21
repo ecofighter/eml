@@ -267,6 +267,9 @@ pub enum Extern {
     ByteGt,
     ByteGe,
     ByteDisplay,
+    ByteToInt,
+    ByteOfInt,
+    ByteWrap,
     FloatNeg,
     FloatAdd,
     FloatSub,
@@ -413,6 +416,9 @@ impl Extern {
         Extern::ByteGt,
         Extern::ByteGe,
         Extern::ByteDisplay,
+        Extern::ByteToInt,
+        Extern::ByteOfInt,
+        Extern::ByteWrap,
         Extern::FloatNeg,
         Extern::FloatAdd,
         Extern::FloatSub,
@@ -586,6 +592,10 @@ impl Extern {
             Extern::ByteGt => row("Prelude.Ord Byte.>", &[Int, Int], Enum, Purity::Pure),
             Extern::ByteGe => row("Prelude.Ord Byte.>=", &[Int, Int], Enum, Purity::Pure),
             Extern::ByteDisplay => row("Prelude.Show Byte.display", &[Int], Obj, Purity::Pure),
+            Extern::ByteToInt => row("Std.Byte.to_int", &[Int], Int, Purity::Pure),
+            // 0..=255 の外の `Int` は `Panic` である
+            Extern::ByteOfInt => row("Std.Byte.of_int", &[Int], Int, Purity::Panics),
+            Extern::ByteWrap => row("Std.Byte.wrap", &[Int], Int, Purity::Pure),
             // `Float` の算術は `Panic` を起こさない。メソッドの型はクラスで1つなので `<Panic>` を持つが、行は `Pure` である
             // (docs/spec/declarations.md の「Prelude のクラス」)
             Extern::FloatNeg => row("Prelude.Num Float.negate", &[Float], Float, Purity::Pure),

@@ -1,0 +1,14 @@
+---
+source: crates/eml_cli/tests/ui.rs
+expression: "format!(\"--- stdout ---\\n{stdout}--- stderr ---\\n{diagnostics}{stderr}{written}{exit}\")"
+input_file: tests/ui/run/byte/std_byte.em
+---
+--- stdout ---
+200
+255u8
+0u8
+44u8
+Err "int `256` does not fit in `Byte`"
+Err "int `-1` does not fit in `Byte`"
+Ok 7u8
+--- stderr ---
