@@ -92,14 +92,9 @@ pub fn clause_function<'v>(
     let expected = std::iter::once(Mark::Unr).chain(operation.param_marks.iter().copied());
     for (index, (&(var, param), expected)) in params[captures..].iter().zip(expected).enumerate() {
         if !Mark::passes_to(expected, param.mark) {
-            // evidence の引数は、操作の表でなく `clause` の規則で `unr` と決まる (docs/spec/lir.md の「Kind の印の検査」)
-            let taker = if index == 0 {
-                "a clause"
-            } else {
-                "the operation"
-            };
+            // evidence の引数 (index 0) の受け手の印は `unr` なので、送り手の `unr` はいつも渡せてここに来ない
             return Err(format!(
-                "parameter {} of `{name}`, a clause of `{clause}`, is `{}.{}` ({}), but {taker} takes {}",
+                "parameter {} of `{name}`, a clause of `{clause}`, is `{}.{}` ({}), but the operation takes {}",
                 captures + index,
                 param.name,
                 var.0,
