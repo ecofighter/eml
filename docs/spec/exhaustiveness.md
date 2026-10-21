@@ -39,4 +39,4 @@ is_error _ = False
 
 ## 範囲外
 
-or パターン、ガード、as パターンはまだない ([実装の現在地](../implementation/status.md) の「今の言語の範囲」)。
+or パターン、ガード、as パターンはない ([実装の現在地](../implementation/status.md) の「今の言語の範囲」)。
