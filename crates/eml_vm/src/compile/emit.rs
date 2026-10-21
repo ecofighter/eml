@@ -973,8 +973,8 @@ fn arithmetic(ext: Extern, dst: Slot, args: &[Slot]) -> Option<Op> {
         Extern::IntAdd => Op::IntAdd { dst, a, b },
         Extern::IntSub => Op::IntSub { dst, a, b },
         Extern::IntMul => Op::IntMul { dst, a, b },
-        Extern::IntDiv => Op::IntDiv { dst, a, b },
-        Extern::IntMod => Op::IntRem { dst, a, b },
+        Extern::IntDiv | Extern::ByteDiv => Op::IntDiv { dst, a, b },
+        Extern::IntMod | Extern::ByteMod => Op::IntRem { dst, a, b },
         Extern::IntEq | Extern::CharEq | Extern::ByteEq => Op::IntEq { dst, a, b },
         Extern::IntNe | Extern::CharNe | Extern::ByteNe => Op::IntNe { dst, a, b },
         Extern::IntLt | Extern::CharLt | Extern::ByteLt => Op::IntLt { dst, a, b },
@@ -1008,6 +1008,10 @@ fn arithmetic(ext: Extern, dst: Slot, args: &[Slot]) -> Option<Op> {
         | Extern::CharOfInt
         | Extern::CharShow
         | Extern::CharDisplay
+        | Extern::ByteNeg
+        | Extern::ByteAdd
+        | Extern::ByteSub
+        | Extern::ByteMul
         | Extern::ByteDisplay
         | Extern::ByteToInt
         | Extern::ByteOfInt

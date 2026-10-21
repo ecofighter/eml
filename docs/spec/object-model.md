@@ -767,7 +767,7 @@ token の表の項目は、`into_token` と `release_reuse` が添字を使い�
 
 ## extern
 
-`eml_extern` の表の関数の行のうち `exit` と `panic` を除く105個を、`eml_rt` に語の ABI で1回だけ書く。VM と、ネイティブのコードが同じ関数を呼ぶ。ヒープを使わない算術と比較は module `externs` の関数で、文字列と I/O の extern は `Ctx` のメソッドである。純粋な extern は、結果をバイト列や整数の spec に対して Verus で証明する。`exit` と `panic` は VM が実行する。`exit` は終了コードを覚えて、`Ctx::exit_abort` で中断を始める。`panic` は文言を `panicked` の節の入口に渡す ([VM](vm.md) の「extern の中断」)。
+`eml_extern` の表の関数の行のうち `exit` と `panic` を除く111個を、`eml_rt` に語の ABI で1回だけ書く。VM と、ネイティブのコードが同じ関数を呼ぶ。ヒープを使わない算術と比較は module `externs` の関数で、文字列と I/O の extern は `Ctx` のメソッドである。純粋な extern は、結果をバイト列や整数の spec に対して Verus で証明する。`exit` と `panic` は VM が実行する。`exit` は終了コードを覚えて、`Ctx::exit_abort` で中断を始める。`panic` は文言を `panicked` の節の入口に渡す ([VM](vm.md) の「extern の中断」)。
 
 行の番号 (`eml_extern::Extern`) から関数を引く表は `eml_rt` に置かない。VM が行の番号の `match` で各関数を呼ぶ。`match` は飛び先の表になるので、関数ポインタの表と同じ速さである。
 
@@ -789,6 +789,8 @@ token の表の項目は、`into_token` と `release_reuse` が添字を使い�
 | `Prelude.Eq String.==`、`!=`、`Prelude.Ord String.compare` | `Ctx::string_eq`、`string_ne`、`string_compare` |
 | `Prelude.++` | `Ctx::string_append` |
 | `Prelude.Show Int.show`、`Prelude.Show String.show` | `Ctx::int_show`、`string_show` |
+| `Prelude.Num Byte.+`、`-`、`*`、`negate` | `byte_add`、`byte_sub`、`byte_mul`、`byte_negate` (数学的な結果が 0..=255 なら `Ok`、外なら `IntegerOverflow`。どの `i64` の入力にも定義する) |
+| `Prelude.Div Byte./`、`%` | `int_div`、`int_rem` (`Byte` の語も `int` で、割られる数と割る数が 0..=255 なら桁あふれがない) |
 | `Std.Byte.to_int`、`of_int`、`wrap` | なし (語を変えないので、VM は `Move` に写す)、`byte_of_int`、`byte_wrap` |
 | `Prelude.Show Byte.display` | `Ctx::int_show` (`Byte` の語は `Int` と同じ `int` で、`display` は 10 進の数だけを返す) |
 | `Prelude.Show Char.show`、`display` | `Ctx::char_show`、`char_display` |

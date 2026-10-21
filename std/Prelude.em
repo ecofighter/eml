@@ -289,6 +289,17 @@ instance Show Char where
 -- バイト。値は 0 から 255 の整数で、順序は数の順 (docs/spec/lir.md の「値の表現」)
 pub extern data Byte
 
+-- `+ - *` と `negate` は数学的な結果が 0 から 255 の外なら `Panic` を起こす。回すなら `Byte.wrap` で明示する
+instance Num Byte where
+  extern (+)
+  extern (-)
+  extern (*)
+  extern negate
+
+instance Div Byte where
+  extern (/)
+  extern (%)
+
 instance Eq Byte where
   extern (==)
   extern (!=)

@@ -182,6 +182,15 @@ pub const CHAR_BINARY: [&str; 7] = [
 /// バイトの端の値。0..=255 の両端、ASCII と非 ASCII の境、符号付き 8 ビットの境
 pub const BYTE_EDGES: [i64; 11] = [0, 1, 10, 34, 65, 97, 127, 128, 200, 254, 255];
 
+/// バイトの算術の行。`Div` の 2 つは `Int` の行と同じ関数に振り分ける
+pub const BYTE_ARITH: [&str; 5] = [
+    "Prelude.Num Byte.+",
+    "Prelude.Num Byte.-",
+    "Prelude.Num Byte.*",
+    "Prelude.Div Byte./",
+    "Prelude.Div Byte.%",
+];
+
 /// バイトを2つ取る行
 pub const BYTE_BINARY: [&str; 7] = [
     "Prelude.Eq Byte.==",
@@ -640,6 +649,16 @@ pub fn inputs() -> Vec<(String, Vec<Arg>)> {
                 push(name, vec![Arg::Int(a), Arg::Int(b)]);
             }
         }
+    }
+    for name in BYTE_ARITH {
+        for a in BYTE_EDGES.into_iter().chain(EDGES) {
+            for b in BYTE_EDGES.into_iter().chain(EDGES) {
+                push(name, vec![Arg::Int(a), Arg::Int(b)]);
+            }
+        }
+    }
+    for a in BYTE_EDGES.into_iter().chain(EDGES) {
+        push("Prelude.Num Byte.negate", vec![Arg::Int(a)]);
     }
     for name in ["Prelude.Num Int.negate", "Prelude.Show Int.show"] {
         for a in EDGES.into_iter().chain(random_ints(RANDOM_INTS)) {

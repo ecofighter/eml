@@ -241,6 +241,63 @@ pub fn byte_wrap(n: i64) -> (r: i64)
     n & 255
 }
 
+// 結果の範囲は `Byte` の不変条件 (docs/spec/lir.md の「値の表現」) を守るためで、入力には前提を置かない
+#[allow(clippy::manual_range_contains)]
+#[inline]
+pub fn byte_add(a: i64, b: i64) -> (r: Result<i64, ArithFault>)
+    ensures
+        r is Ok <==> 0 <= a + b <= 255,
+        r matches Ok(v) ==> v == a + b,
+        r is Err ==> r == Err::<i64, ArithFault>(ArithFault::IntegerOverflow),
+{
+    match a.checked_add(b) {
+        Some(v) if 0 <= v && v <= 255 => Ok(v),
+        _ => Err(ArithFault::IntegerOverflow),
+    }
+}
+
+#[allow(clippy::manual_range_contains)]
+#[inline]
+pub fn byte_sub(a: i64, b: i64) -> (r: Result<i64, ArithFault>)
+    ensures
+        r is Ok <==> 0 <= a - b <= 255,
+        r matches Ok(v) ==> v == a - b,
+        r is Err ==> r == Err::<i64, ArithFault>(ArithFault::IntegerOverflow),
+{
+    match a.checked_sub(b) {
+        Some(v) if 0 <= v && v <= 255 => Ok(v),
+        _ => Err(ArithFault::IntegerOverflow),
+    }
+}
+
+#[allow(clippy::manual_range_contains)]
+#[inline]
+pub fn byte_mul(a: i64, b: i64) -> (r: Result<i64, ArithFault>)
+    ensures
+        r is Ok <==> 0 <= a * b <= 255,
+        r matches Ok(v) ==> v == a * b,
+        r is Err ==> r == Err::<i64, ArithFault>(ArithFault::IntegerOverflow),
+{
+    match a.checked_mul(b) {
+        Some(v) if 0 <= v && v <= 255 => Ok(v),
+        _ => Err(ArithFault::IntegerOverflow),
+    }
+}
+
+#[allow(clippy::manual_range_contains)]
+#[inline]
+pub fn byte_negate(a: i64) -> (r: Result<i64, ArithFault>)
+    ensures
+        r is Ok <==> 0 <= -a <= 255,
+        r matches Ok(v) ==> v == -a,
+        r is Err ==> r == Err::<i64, ArithFault>(ArithFault::IntegerOverflow),
+{
+    match 0i64.checked_sub(a) {
+        Some(v) if 0 <= v && v <= 255 => Ok(v),
+        _ => Err(ArithFault::IntegerOverflow),
+    }
+}
+
 #[inline]
 pub fn int_add(a: i64, b: i64) -> (r: Result<i64, ArithFault>)
     ensures

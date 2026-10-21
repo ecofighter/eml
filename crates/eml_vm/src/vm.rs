@@ -1022,6 +1022,25 @@ fn run_extern<M: Mode>(
                 let b = externs::byte_of_int(task.raw(arg(0))).map_err(Fault::Arith)?;
                 task.set_raw(dst, b);
             }
+            Extern::ByteNeg => {
+                let r = externs::byte_negate(task.raw(arg(0))).map_err(Fault::Arith)?;
+                task.set_raw(dst, r);
+            }
+            Extern::ByteAdd => {
+                let r =
+                    externs::byte_add(task.raw(arg(0)), task.raw(arg(1))).map_err(Fault::Arith)?;
+                task.set_raw(dst, r);
+            }
+            Extern::ByteSub => {
+                let r =
+                    externs::byte_sub(task.raw(arg(0)), task.raw(arg(1))).map_err(Fault::Arith)?;
+                task.set_raw(dst, r);
+            }
+            Extern::ByteMul => {
+                let r =
+                    externs::byte_mul(task.raw(arg(0)), task.raw(arg(1))).map_err(Fault::Arith)?;
+                task.set_raw(dst, r);
+            }
             Extern::ByteWrap => task.set_raw(dst, externs::byte_wrap(task.raw(arg(0)))),
             Extern::FloatSqrt
             | Extern::FloatAbs
@@ -1096,6 +1115,8 @@ fn run_extern<M: Mode>(
             | Extern::IntMul
             | Extern::IntDiv
             | Extern::IntMod
+            | Extern::ByteDiv
+            | Extern::ByteMod
             | Extern::IntEq
             | Extern::IntNe
             | Extern::IntCompare

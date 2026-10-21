@@ -1330,6 +1330,12 @@ unsafe fn call<M: Mode>(
             "Prelude.Num Int.*" => arith(int_mul)?,
             "Prelude.Div Int./" => arith(int_div)?,
             "Prelude.Div Int.%" => arith(int_rem)?,
+            "Prelude.Num Byte.+" => arith(byte_add)?,
+            "Prelude.Num Byte.-" => arith(byte_sub)?,
+            "Prelude.Num Byte.*" => arith(byte_mul)?,
+            "Prelude.Div Byte./" => arith(int_div)?,
+            "Prelude.Div Byte.%" => arith(int_rem)?,
+            "Prelude.Num Byte.negate" => Outcome::Int(byte_negate(int(0))?),
             "Prelude.Num Int.negate" => Outcome::Int(int_negate(int(0))?),
             "Prelude.check_index" => {
                 check_index(int(0), int(1))?;

@@ -1,0 +1,13 @@
+---
+source: crates/eml_cli/tests/ui.rs
+expression: "format!(\"--- stdout ---\\n{stdout}--- stderr ---\\n{diagnostics}{stderr}{written}{exit}\")"
+input_file: tests/ui/run/byte/arithmetic.em
+---
+--- stdout ---
+255u8
+240u8
+0u8
+3u8
+1u8
+0u8
+--- stderr ---
