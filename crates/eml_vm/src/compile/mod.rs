@@ -9,13 +9,12 @@ use std::mem;
 use std::sync::Arc;
 
 use eml_lir::unwind::UnwindPoint;
-use eml_lir::{FnIdx, Loc, Program, StructId};
+use eml_lir::{FnIdx, Loc, Program};
 use eml_rt::{Control, MaskItem, Mode};
 
-use crate::code::{CodeBase, CompileError, Conversions, FnEntry, Index, Unwind, builtins};
+use crate::code::{CodeBase, CompileError, FnEntry, Index, Unwind, builtins};
 use crate::disasm;
 use crate::op::{Op, Pc};
-use crate::sig::{Signatures, Structs};
 use constants::Constants;
 
 /// 命令とオペランドを書く先。関数をまたいで1つにする。`load` の間だけ `CodeBase` の列を借りて末尾に書く。
@@ -26,13 +25,6 @@ pub(crate) struct Out {
     pub(crate) mask_lists: Vec<MaskItem>,
     pub(crate) locations: Vec<(Pc, Loc)>,
     pub(crate) unwinds: Vec<(Pc, Unwind)>,
-    /// `CodeBase::signatures` を借りたもの。一致の確かめで書いた写しを消しても、引いたシグネチャは残してよい。中身で
-    /// 引くので、同じ中身は同じ番号になるためである。
-    pub(crate) signatures: Signatures,
-    /// `CodeBase::conversions` を借りたもの。直接の末尾呼び出しの結果の変換を引く。
-    pub(crate) conversions: Conversions,
-    /// `CodeBase::structs` を借りたもの。シグネチャの語の並びを決める。
-    pub(crate) structs: Structs,
 }
 
 impl Out {
@@ -79,7 +71,6 @@ pub(crate) struct Links {
     pub(crate) strings: Vec<u32>,
     pub(crate) effects: Vec<u16>,
     pub(crate) files: Vec<u32>,
-    pub(crate) structs: Vec<StructId>,
 }
 
 /// プログラム全体を新しい `CodeBase` に変換する。逆アセンブラのテストが使う。
@@ -95,14 +86,10 @@ pub fn compile<M: Mode>(
 impl<M: Mode> CodeBase<M> {
     /// 組み込みの命令だけを持つ空の表。
     pub fn new(control: Arc<Control>) -> CodeBase<M> {
-        let (code, operands, conversions) = builtins();
         CodeBase {
             functions: Vec::new(),
-            code,
-            operands,
-            signatures: Signatures::default(),
-            conversions,
-            structs: Structs::default(),
+            code: builtins(),
+            operands: Vec::new(),
             mask_lists: Vec::new(),
             constants: Vec::new(),
             region: None,
@@ -130,9 +117,6 @@ impl<M: Mode> CodeBase<M> {
             functions,
             code,
             operands,
-            signatures,
-            conversions,
-            structs,
             mask_lists,
             constants,
             region,
@@ -148,9 +132,6 @@ impl<M: Mode> CodeBase<M> {
             mask_lists: mem::take(mask_lists),
             locations: mem::take(locations),
             unwinds: mem::take(unwinds),
-            signatures: mem::take(signatures),
-            conversions: mem::take(conversions),
-            structs: mem::take(structs),
         };
         let mut pool = Constants::new(constants, index, region, control);
         let strings = &program.strings;
@@ -194,9 +175,6 @@ impl<M: Mode> CodeBase<M> {
         *mask_lists = out.mask_lists;
         *locations = out.locations;
         *unwinds = out.unwinds;
-        *signatures = out.signatures;
-        *conversions = out.conversions;
-        *structs = out.structs;
         result?;
         if let Some(chunk) = frozen? {
             *region = Some(chunk);
@@ -210,15 +188,8 @@ impl<M: Mode> CodeBase<M> {
         Ok(links.functions[program.entry.0 as usize])
     }
 
-    /// 関数、エフェクト、位置のファイル、構造体の形の番号を引く。ない名前には末尾の番号を振る。新しく引いた形には
-    /// 変換の命令列を足す。文字列は定数を作るときに引く。
+    /// 関数、エフェクト、位置のファイルの番号を引く。ない名前には末尾の番号を振る。文字列は定数を作るときに引く。
     fn links(&mut self, program: &Program) -> Links {
-        let (structs, fresh) = self.structs.link(program);
-        for id in fresh {
-            let words = self.structs.get(id).leaves.len();
-            self.conversions
-                .push_struct(&mut self.code, &mut self.operands, id.0, words);
-        }
         let mut next = self.functions.len() as u32;
         let functions = program
             .functions
@@ -261,7 +232,6 @@ impl<M: Mode> CodeBase<M> {
             strings: Vec::new(),
             effects,
             files,
-            structs,
         }
     }
 }
@@ -305,17 +275,14 @@ fn check_known<M: Mode>(
                 mask_lists: &out.mask_lists,
                 locations: &out.locations,
                 unwinds: &out.unwinds,
-                signatures: &out.signatures,
-                conversions: &out.conversions,
-                structs: &out.structs,
                 functions,
                 files,
             }
             .function(entry)
         };
-        let sig = |entry: &FnEntry| out.signatures.get(entry.sig);
-        let same = (old.arity, old.frame_size) == (again.arity, again.frame_size)
-            && sig(old) == sig(&again)
+        let same = (old.arity, old.frame_size, old.ret_rc)
+            == (again.arity, again.frame_size, again.ret_rc)
+            && old.params == again.params
             && view(old) == view(&again);
         out.truncate(lengths);
         if !same {

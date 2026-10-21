@@ -1,6 +1,6 @@
 //! 関数ごとの命令の生成 (docs/spec/vm.md の「命令ごとの実行」)。定数の atom は、命令の前に一時のスロットへ読み込む。
 
-use eml_extern::{Extern, OpRet};
+use eml_extern::Extern;
 use eml_lir::unwind::UnwindPoint;
 use eml_lir::{
     Atom, BlockId, Call, Ctor, FnIdx, LayoutCtor, LirFn, Loc, Program, Repr, Rhs, Shape, Stmt,
@@ -13,7 +13,6 @@ use super::slots::{Slots, allocate};
 use super::{Links, Out};
 use crate::code::{CompileError, FnEntry, Unwind};
 use crate::op::{KEEP, NONE, Op, Pc, RAW, SKIP, Slot};
-use crate::sig::{Signature, class};
 
 pub(crate) fn function<M: Mode>(
     program: &Program,
@@ -62,43 +61,20 @@ pub(crate) fn function<M: Mode>(
     let frame_size =
         u16::try_from(usize::from(emitter.slots.colors) + usize::from(emitter.max_temps))
             .map_err(|_| too_many())?;
-    // 関数の値の ABI は源の単位で決める。構造体の引数は1つと数え、`apply` は構造体と箱の間の変換に形を使う
-    // (docs/spec/vm.md の「シグネチャ」)
-    let params = source_params(function);
-    let sig = Signature {
-        params: params.iter().map(|&repr| emitter.vm_repr(repr)).collect(),
-        ret: vec![emitter.vm_repr(source_ret(function))],
-    };
-    let sig = emitter.out.signatures.intern(sig, &emitter.out.structs);
+    let params: Box<[Repr]> = function
+        .params()
+        .iter()
+        .map(|&param| function.repr(param))
+        .collect();
     Ok(FnEntry {
         name: function.name.clone(),
         start,
         end: emitter.out.pc(),
         arity: u16::try_from(params.len()).map_err(|_| too_many())?,
         frame_size,
-        sig,
-        key: emitter.out.signatures.fn_key(sig),
+        params,
+        ret_rc: function.rets.iter().any(|(repr, _)| repr.is_rc()),
     })
-}
-
-/// 関数の源の単位の引数の Repr。開いた後の関数は `source` に持ち、構造体のない関数は引数のとおりである。
-fn source_params(function: &LirFn) -> Vec<Repr> {
-    match &function.source {
-        Some(source) => source.params.clone(),
-        None => function
-            .params()
-            .iter()
-            .map(|&param| function.repr(param))
-            .collect(),
-    }
-}
-
-/// 関数の源の単位の結果の Repr。
-fn source_ret(function: &LirFn) -> Repr {
-    function
-        .source
-        .as_ref()
-        .map_or(function.rets[0].0, |source| source.ret)
 }
 
 /// どこかで使う変数。SSA なので、使う変数は定義の後で生きていて、使わない変数の定義は死んでいる。死んでいるフィールドは
@@ -196,14 +172,6 @@ impl<'a, M: Mode> Emitter<'a, '_, M> {
         self.function.repr(var)
     }
 
-    /// プログラムの Repr を VM の Repr にする。構造体の番号を `CodeBase` の番号に引き直す。
-    pub(crate) fn vm_repr(&self, repr: Repr) -> Repr {
-        match repr {
-            Repr::Struct(id) => Repr::Struct(self.links.structs[id.0 as usize]),
-            other => other,
-        }
-    }
-
     /// 定数の `#N` と関数は `tobj` の位置の値として読む。
     fn atom_repr(&self, atom: Atom) -> Repr {
         match atom {
@@ -212,21 +180,6 @@ impl<'a, M: Mode> Emitter<'a, '_, M> {
             Atom::Float(_) => Repr::Float,
             Atom::Unit => Repr::Unit,
             Atom::Tag(_) | Atom::Fn(_) => Repr::TObj,
-        }
-    }
-
-    /// 源の単位の Repr が占める語の Repr。構造体は `unit` でない葉に開く。
-    fn leaf_reprs(&self, repr: Repr) -> Vec<Repr> {
-        match repr {
-            Repr::Struct(id) => self
-                .program
-                .structs
-                .leaves(id)
-                .into_iter()
-                .map(|(repr, _)| repr)
-                .filter(|&repr| repr != Repr::Unit)
-                .collect(),
-            other => vec![other],
         }
     }
 
@@ -366,10 +319,7 @@ impl<'a, M: Mode> Emitter<'a, '_, M> {
                 let dsts: Vec<u32> = vars.iter().map(|&var| u32::from(self.slot(var))).collect();
                 self.out
                     .operands([dsts.len() as u32].into_iter().chain(dsts));
-                self.out.push(match call {
-                    Call::Direct(..) => Op::CallN { at },
-                    _ => Op::ApplyN { at },
-                });
+                self.out.push(Op::CallN { at });
             }
             Stmt::UnboxStruct {
                 value,
@@ -625,12 +575,10 @@ impl<'a, M: Mode> Emitter<'a, '_, M> {
                     .map(|(&arg, &param)| self.atom(arg, callee.repr(param)))
                     .collect();
                 let lin = self.function.mark(var) == eml_lir::Mark::Lin;
-                let captured = self.captured(callee, args.len());
                 let at = self.out.operands(
                     [
                         self.links.functions[f.0 as usize],
                         u32::from(lin),
-                        captured,
                         slots.len() as u32,
                     ]
                     .into_iter()
@@ -643,8 +591,7 @@ impl<'a, M: Mode> Emitter<'a, '_, M> {
                 self.out.push(Op::Clause { dst, at });
             }
             Rhs::Call(call @ Call::Apply { .. }) => {
-                // box の挿入が束縛を `tobj` に合わせてあるので、パイプラインの出す `apply` は変換を通らない
-                let at = self.apply_operands(call, self.repr(var));
+                let at = self.apply_operands(call);
                 self.out.push(Op::Apply { dst, at });
             }
             Rhs::Prim(prim, args) => {
@@ -777,70 +724,22 @@ impl<'a, M: Mode> Emitter<'a, '_, M> {
         )
     }
 
-    /// `apply` のオペランド [呼ばれる値, n, 場所のシグネチャ, 引数…]。場所のシグネチャは引数をその Repr で、
-    /// 結果を `ret` で持つ。`ret` は束縛の位置では束縛の Repr、末尾の位置では関数の `ret` である。verifier を
-    /// 通った IR ではどれも `tobj` になる (docs/spec/lir.md の「関数の ABI」)。
-    fn apply_operands(&mut self, call: &Call, ret: Repr) -> u32 {
+    /// `apply` のオペランド [呼ばれる値, n, 引数…]。verifier を通った IR では引数はどれも一様な語である
+    /// (docs/spec/lir.md の「関数の ABI」)。
+    fn apply_operands(&mut self, call: &Call) -> u32 {
         let Call::Apply { callee, args, .. } = call else {
             unreachable!("apply operands are made for an apply")
         };
-        let params: Vec<Repr> = args.iter().map(|&arg| self.atom_repr(arg)).collect();
-        let words: Vec<Repr> = params
-            .iter()
-            .flat_map(|&repr| self.leaf_reprs(repr))
-            .collect();
         let callee = self.atom(*callee, Repr::TObj);
         let slots: Vec<Slot> = args
             .iter()
-            .zip(&words)
-            .map(|(&arg, &repr)| self.atom(arg, repr))
+            .map(|&arg| self.atom(arg, self.atom_repr(arg)))
             .collect();
-        let sig = Signature {
-            params: params.iter().map(|&repr| self.vm_repr(repr)).collect(),
-            ret: vec![self.vm_repr(ret)],
-        };
-        let sig = self.out.signatures.intern(sig, &self.out.structs);
         self.out.operands(
-            [u32::from(callee), slots.len() as u32, sig.0]
+            [u32::from(callee), slots.len() as u32]
                 .into_iter()
                 .chain(slots.iter().map(|&s| u32::from(s))),
         )
-    }
-
-    /// 末尾の呼び出しの結果 `ret` を、この関数の `ret` へ変える変換の番号。変換が要らなければ `NONE` である。
-    /// 呼ぶ関数と呼び出し元の `ret` から静的に決まるので、命令に持たせる
-    /// (docs/spec/vm.md の「呼び出しと戻り」)。
-    /// 両端は同じ型の Repr なので、verifier を通った IR ではいつも変換がある。変換のない IR はコンパイラの誤りで、
-    /// `NONE` で続けると変換しない語を返すので、誤りにする。
-    fn result_conversion(&self, ret: Repr) -> Result<u32, CompileError> {
-        let from = class(self.vm_repr(ret));
-        let to = class(self.vm_repr(source_ret(self.function)));
-        if from == to {
-            return Ok(NONE);
-        }
-        self.out
-            .conversions
-            .find(from, to)
-            .ok_or_else(|| CompileError::NoConversion {
-                function: self.function.name.clone(),
-            })
-    }
-
-    /// `closure f(args)` が捕まえる源の引数の数。引数は構造体を葉に開いた並びなので、`f` の源の引数を前から開いて
-    /// 葉の数が `words` に届くまで数える。VM は捕まえた値の数を `&f` の即値に詰め、`apply` は源の単位で引数の数を
-    /// 比べるためである。
-    fn captured(&self, callee: &LirFn, words: usize) -> u32 {
-        let mut covered = 0;
-        let mut count = 0;
-        for repr in source_params(callee) {
-            if covered >= words {
-                break;
-            }
-            covered += self.leaf_reprs(repr).len();
-            count += 1;
-        }
-        debug_assert_eq!(covered, words, "a closure captures whole source arguments");
-        count
     }
 
     /// 直接の呼び出しのオペランド [関数の番号, 引数の数, 引数のスロット…]。
@@ -870,24 +769,15 @@ impl<'a, M: Mode> Emitter<'a, '_, M> {
                     self.self_tail_patches.push(at as usize);
                     self.out.push(Op::TailSelf { at });
                 } else {
-                    let conversion =
-                        self.result_conversion(source_ret(self.program.function(*f)))?;
-                    self.out.operands([conversion]);
                     self.out.push(Op::TailCall { at });
                 }
             }
-            Term::TailCall(call @ Call::Clause { effect, op, .. }) => {
+            Term::TailCall(call @ Call::Clause { .. }) => {
                 let at = self.clause_operands(call);
-                // `never` の操作の `clause` は戻らないので、変換も合成もしない (docs/spec/lir.md の「`never` の操作」)
-                let conversion = match eml_lir::operation(&self.program.effects, *effect, *op).ret {
-                    OpRet::Repr(ret) => self.result_conversion(ret)?,
-                    OpRet::Never => NONE,
-                };
-                self.out.operands([conversion]);
                 self.out.push(Op::TailClause { at });
             }
             Term::TailCall(call) => {
-                let at = self.apply_operands(call, source_ret(self.function));
+                let at = self.apply_operands(call);
                 self.out.push(Op::TailApply { at });
             }
             Term::ReturnMany(atoms) => {

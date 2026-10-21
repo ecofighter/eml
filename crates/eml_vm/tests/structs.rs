@@ -141,11 +141,7 @@ fn times(k.0: float, v.1: {V}) -> {V} {{
     let stats = stats.unwrap_or_else(|error| panic!("{error}"));
     assert_eq!(out, "246\n");
     // 確保はクロージャと、構造体の引数の箱と結果の箱である
-    assert_eq!(
-        (stats.allocations, stats.conversions),
-        (DUMMY + 3, 0),
-        "{stats:?}"
-    );
+    assert_eq!(stats.allocations, DUMMY + 3, "{stats:?}");
 }
 
 /// 構造体を返す関数を `apply` で呼ぶと、一様な版が葉を受けて箱を1つ作る。受けた側は箱から葉を取り出す。
@@ -168,11 +164,7 @@ fn make(u.0: unit) -> {V} {{
     let (out, stats) = run_lowered_stats(&text);
     let stats = stats.unwrap_or_else(|error| panic!("{error}"));
     assert_eq!(out, "123\n");
-    assert_eq!(
-        (stats.conversions, stats.allocations),
-        (0, DUMMY + 1),
-        "{stats:?}"
-    );
+    assert_eq!(stats.allocations, DUMMY + 1, "{stats:?}");
 }
 
 /// `apply` の構造体の引数は箱で渡る。結果が一様な `first` は箱から葉を取り出し、型どおりの `same` の一様な版は
@@ -202,11 +194,7 @@ fn same(v.0: {V}) -> {V} {{
     let (out, stats) = run_lowered_stats(&text);
     let stats = stats.unwrap_or_else(|error| panic!("{error}"));
     assert_eq!(out, "156\n");
-    assert_eq!(
-        (stats.conversions, stats.allocations),
-        (0, DUMMY + 3),
-        "{stats:?}"
-    );
+    assert_eq!(stats.allocations, DUMMY + 3, "{stats:?}");
 }
 
 /// 葉が1つの構造体も、`apply` の引数と結果では `M` の箱で渡る。1回目の `apply` の結果の箱は、取り出さずに2回目の
@@ -241,11 +229,7 @@ fn show(x.0: float) -> unit {{
     let (out, stats) = run_lowered_stats(&text);
     let stats = stats.unwrap_or_else(|error| panic!("{error}"));
     assert_eq!(out, "10.0\n");
-    assert_eq!(
-        (stats.conversions, stats.allocations),
-        (0, DUMMY + 2),
-        "{stats:?}"
-    );
+    assert_eq!(stats.allocations, DUMMY + 2, "{stats:?}");
 }
 
 /// 構造体の引数の部分適用は、構造体の箱をクロージャに捕まえる。後の適用は構造体の引数を1つと数えて、ちょうどの数の
@@ -268,11 +252,7 @@ fn main() -> unit {{
     let (out, stats) = run_lowered_stats(&text);
     let stats = stats.unwrap_or_else(|error| panic!("{error}"));
     assert_eq!(out, "579\n");
-    assert_eq!(
-        (stats.conversions, stats.allocations),
-        (0, DUMMY + 3),
-        "{stats:?}"
-    );
+    assert_eq!(stats.allocations, DUMMY + 3, "{stats:?}");
 }
 
 /// `ApplyRest` のフレームが預かる構造体の引数は箱である。1段目が `exit` で中断すると、巻き戻しはその箱を手放す。
@@ -356,14 +336,12 @@ fn leave(e.0: obj) -> obj {{
         )
     };
     let (out, stats) = run_lir_stats(&text(true));
-    let stats = stats.unwrap_or_else(|error| panic!("{error}"));
+    stats.unwrap_or_else(|error| panic!("{error}"));
     assert_eq!(out, "0.0\n");
-    assert_eq!(stats.conversions, 0, "{stats:?}");
 
     let (out, stats) = run_lir_stats(&text(false));
-    let stats = stats.unwrap_or_else(|error| panic!("{error}"));
+    stats.unwrap_or_else(|error| panic!("{error}"));
     assert_eq!(out, "named\n2.5\n");
-    assert_eq!(stats.conversions, 0, "{stats:?}");
 }
 
 /// 構造体の `unbox` で葉を借りた箱の `release` は、ダミーを受けたら何もしない。token を作る形は空の token を返す。
@@ -466,11 +444,7 @@ fn third(p.0: {t}) -> obj {{
     assert_eq!(out, "4611686018427387904\nhello\n");
     // `box` は `make` の結果の `int` と `float` の葉と、`first` の結果の `int` の3つである。`first` と `third` の版が
     // 葉の箱を2つずつ開け、`main` が `first` の結果の箱を開ける
-    assert_eq!(
-        (stats.conversions, stats.boxes, stats.unboxes),
-        (0, 3, 5),
-        "{stats:?}"
-    );
+    assert_eq!((stats.boxes, stats.unboxes), (3, 5), "{stats:?}");
 }
 
 /// `tobj` と宣言された欄に入った構造体は、箱の中でも箱になる。一様な版が入れ子の箱を作り、共有の箱から2回取り出す
@@ -510,9 +484,5 @@ fn sum(s.0: {seg}) -> float {{
     let stats = stats.unwrap_or_else(|error| panic!("{error}"));
     assert_eq!(out, "7.5\n");
     // `box` は `sum` の版の `float` の結果の2つで、`main` がどちらも開ける。入れ子の箱は `con` で作る
-    assert_eq!(
-        (stats.conversions, stats.boxes, stats.unboxes),
-        (0, 2, 2),
-        "{stats:?}"
-    );
+    assert_eq!((stats.boxes, stats.unboxes), (2, 2), "{stats:?}");
 }

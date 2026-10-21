@@ -72,7 +72,6 @@
 - `rebuilding_programs_reuse_boxes`: 関数の中で手放して作り直す8つのプログラムで `reuses` が0より大きい。`allocations_are_counted_in_checked_mode` は、確保の数が検査モードの数え方から来ることを確かめる
 - `var_matches_hand_written_work`: `var` で書いた版と手書きの版の2つの組で、`var` の版の `evidence_steps` と `yields` が0で、確保の数の差が表 `RESIDUAL` の値に等しい
 - `nbody_allocates_25_per_step`、`mandelbrot_does_not_allocate_complex`、`spectral_norm_allocates_14_fewer`: 構造体の表現で消える確保と残る確保の数 (下の「配列に書く構造体の箱」と「配列の `Float` の要素の箱」)
-- `typed_benches_do_not_convert`: どのプログラムでも `conversions` が0である
 - `unwind_points`: `bench/` と `tests/ui/run/scripts/` のプログラムの巻き戻しの表の行の数を固定する
 - `trade_offs`: 呼び出しの規約と構造体の表現の引き換えの形の回数を固定する (下の「呼び出しの規約の引き換え」と「構造体の表現の引き換え」)
 

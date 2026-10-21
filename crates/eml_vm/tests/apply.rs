@@ -1,8 +1,7 @@
-//! 一様な `apply` と、VM の実行時の変換の見張り (docs/spec/vm.md の「シグネチャ」)。
-//! box の挿入が `apply` の引数と結果を一様にするので、変換は手で書いた、verifier を通らない LIR でだけ起きる。
-//! 捕まえた値は関数の引数の Repr のまま持つ。
+//! 一様な `apply` と、VM の見張り (docs/spec/vm.md の「呼び出しと戻り」)。box の挿入が `apply` の引数と結果を一様に
+//! するので、`apply` は引数の数を比べて語を写すだけである。捕まえた値は関数の引数の Repr のまま持つ。
 
-use crate::common::{run_lir_stats, run_unverified};
+use crate::common::{disasm_lowered, run_lir_stats, run_lowered_stats, run_unverified};
 
 const SHOW_INT: &str = "\
 fn show(n.0: int) -> unit {
@@ -42,9 +41,8 @@ fn inc(x.0: tobj) -> tobj {{
 {SHOW_INT}"
     );
     let (out, stats) = run_lir_stats(&text);
-    let stats = stats.unwrap();
+    stats.unwrap();
     assert_eq!(out, "11\n");
-    assert_eq!(stats.conversions, 0, "{stats:?}");
 }
 
 /// 捕まえた `float` は生の語のまま持つので、箱を作らない。箱は一様な引数と結果の2つだけである
@@ -73,7 +71,7 @@ fn scale(k.0: float, x.1: tobj) -> tobj {{
     let (out, stats) = run_lir_stats(&text);
     let stats = stats.unwrap();
     assert_eq!(out, "10.0\n");
-    assert_eq!((stats.boxes, stats.conversions), (2, 0), "{stats:?}");
+    assert_eq!(stats.boxes, 2, "{stats:?}");
 }
 
 /// 引数の足りない `apply` で VM が作るクロージャは、足す引数が一様なので語を写して並べる。参照の引数も即値の箱も
@@ -107,9 +105,8 @@ fn add3(s.0: obj, a.1: tobj, b.2: tobj, c.3: tobj) -> obj {
 }
 ";
     let (out, stats) = run_lir_stats(text);
-    let stats = stats.unwrap();
+    stats.unwrap();
     assert_eq!(out, "sum 6\n");
-    assert_eq!(stats.conversions, 0, "{stats:?}");
 }
 
 /// `make` が返すクロージャ。`int` の捕獲を生の語で持ち、後の引数を一様に受ける。
@@ -149,9 +146,8 @@ fn main() -> unit {{
 {MAKE}"
     );
     let (out, stats) = run_lir_stats(&text);
-    let stats = stats.unwrap();
+    stats.unwrap();
     assert_eq!(out, "sum 3\n");
-    assert_eq!(stats.conversions, 0, "{stats:?}");
 
     let exiting = format!(
         "\
@@ -179,11 +175,41 @@ fn leave(x.0: tobj) -> tobj {{
     assert_eq!(stats.unwound_frames, 2, "{stats:?}");
 }
 
-/// クロージャの最初の語の即値は関数の番号と捕まえた値の数を持つ。`con` で作った物体の最初の語は `&first` (数は 0)
-/// なのに、物体はもう1つ走査する語を持つので、検査モードは食い違いを断る。関数でない値を適用するのは型の誤りで、
-/// verifier は見ないので、通さずに実行する。
+/// クロージャの最初の語の即値は関数の番号と捕まえた値の数を持つ。数は引数の語の単位で、構造体の捕獲は開いた葉の数
+/// だけ数える。捕まえた値より後ろの引数は一様な1語なので、`apply` は語の数だけを比べる。`dot` は構造体を1つ
+/// 捕まえ、クロージャは2つの葉を生の語で持つ。
+///
+/// `con` で作った物体の最初の語は `&first` (数は 0) なのに、物体はもう1つ走査する語を持つので、検査モードは食い違いを
+/// 断る。関数でない値を適用するのは型の誤りで、verifier は見ないので、通さずに実行する。
 #[test]
 fn the_capture_count_is_packed_with_the_function() {
+    let text = format!(
+        "\
+layout V {{ V(float, float) }}
+fn main() -> unit {{
+  let v.0: V{{float, float}} = con V #0(3.0, 4.0)
+  let c.1: tobj = closure dot(v.0)
+  let x.2: float = apply c.1(2.0)
+  let u.3: unit = call show(x.2)
+  return u.3
+}}
+internal uniform from 1 fn dot(v.0: V{{float, float}}, k.1: float) -> float {{
+  unpack v.0 V #0(x.2: float, y.3: float)
+  let s.4: float = extern \"Prelude.Num Float.+\"(x.2, y.3)
+  let p.5: float = extern \"Prelude.Num Float.*\"(s.4, k.1)
+  return p.5
+}}
+{SHOW_FLOAT}"
+    );
+    let (out, stats) = run_lowered_stats(&text);
+    stats.unwrap_or_else(|error| panic!("{error}"));
+    assert_eq!(out, "14.0\n");
+    let disasm = disasm_lowered(&text);
+    assert!(
+        disasm.contains("fn dot (arity 3,") && disasm.contains("closure s0 = dot(s2, s3)"),
+        "{disasm}"
+    );
+
     let text = "\
 layout Pair { Pair(tobj, tobj) }
 fn main() -> unit {
@@ -206,63 +232,18 @@ fn first(a.0: tobj, b.1: tobj) -> tobj {
     );
 }
 
-/// 合わない組は同じ型の一様な Repr と箱を要するスカラーの組だけである。`int` の場所で `float` の関数を呼ぶのは
-/// 型の誤りで、verifier は型を見ないので、通さずに実行する。
+/// `Finish` はどの関数にも属さないので、そこで起きた誤りには最後に戻った関数の名前を付ける。`leave` は `evv` を残して
+/// `Finish` へ戻り、`Finish` の後の確かめがそれを誤りにする。`evv` を残すのは verifier の見ない誤りなので、VM 自身の
+/// 見張りを確かめるため通さずに実行する。
 #[test]
-fn a_mismatch_between_different_types_is_internal() {
-    let text = format!(
-        "\
-fn main() -> unit {{
-  let r.0: float = apply &half(4)
-  tail call show(r.0)
-}}
-fn half(x.0: float) -> float {{
-  let y.1: float = extern \"Prelude.Div Float./\"(x.0, 2.0)
-  return y.1
-}}
-{SHOW_FLOAT}"
-    );
-    let (_, result) = run_unverified(&text);
-    assert_eq!(
-        result.unwrap_err().to_string(),
-        "internal error: an apply converts between the reprs of different types in `main`"
-    );
-}
-
-/// 直接の末尾呼び出しの結果の変換は、コード生成が静的に決める。`int` を返す関数を `float` を返す関数が末尾で呼ぶのは
-/// 型の誤りで、その変換はない。コード生成は変換のない命令を出さずに、内部の誤りにする。
-#[test]
-fn a_tail_call_between_reprs_of_different_types_is_not_compiled() {
-    let text = "\
-fn main() -> unit {
-  let x.0: float = call g(())
-  return ()
-}
-fn g(u.0: unit) -> float {
-  tail call f(u.0)
-}
-fn f(u.0: unit) -> int {
-  return 1
-}
-";
-    let (_, result) = run_unverified(text);
-    assert_eq!(
-        result.unwrap_err().to_string(),
-        "internal error: a tail call converts between the reprs of different types in `g`"
-    );
-}
-
-/// 変換の命令列はどの関数にも属さないので、その戻りは最後に戻った関数を替えない。`leave` は `evv` を残して `int` を
-/// 返し、変換のフレームが箱に入れて `Finish` へ戻る。`Finish` で起きた誤りには、変換でなく `leave` の名前を付ける。
-/// `evv` を残すのは verifier の見ない誤りなので、VM 自身の見張りを確かめるため通さずに実行する。
-#[test]
-fn a_conversion_return_keeps_the_function_that_returned_last() {
+fn an_error_at_finish_names_the_function_that_returned_last() {
     let text = "\
 effect E { op(unit) -> unit }
 fn main() -> tobj {
-  tail apply &leave(1)
+  let b.0: tobj = box 1
+  tail apply &leave(b.0)
 }
-fn leave(x.0: int) -> int {
+fn leave(x.0: tobj) -> tobj {
   let w.1: tobj = prim evv_get()
   dup w.1
   let e.2: obj = prim ev_new[E]((), w.1)
@@ -287,9 +268,5 @@ fn a_constructor_value_applied_through_apply_does_not_convert() {
     let (out, result) = eml_test_support::run_stats(text);
     assert_eq!(out, "500500\n", "{result:?}");
     let stats = result.unwrap_or_else(|error| panic!("{error}"));
-    assert_eq!(
-        (stats.conversions, stats.boxes, stats.unboxes),
-        (0, 1000, 1000),
-        "{stats:?}"
-    );
+    assert_eq!((stats.boxes, stats.unboxes), (1000, 1000), "{stats:?}");
 }

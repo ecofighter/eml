@@ -11,7 +11,7 @@ use std::fmt::Write as _;
 use crate::{
     Atom, BlockId, Case, CasePattern, Ctor, EffectInfo, FloatBits, FnIdx, Immediates, Layout,
     LayoutCtor, LayoutId, Loc, Mark, MaskItem, OpRet, OperationInfo, ParseError, Prim, Repr,
-    SourceSig, StructShape, Structs, VarId, VarInfo,
+    StructShape, Structs, VarId, VarInfo,
 };
 
 /// エフェクトの名前。表にない番号は `#N` で書く。誤りを含む IR も表示でき、`parse` が読み戻せて、verifier がその番号を
@@ -339,8 +339,8 @@ pub struct FnState {
     targets: Vec<(u32, usize)>,
 }
 
-/// `[internal] [yields] [clause E.op] [uniform from N] fn name(params) -> rets [source(reprs) -> repr]` の欄。値が1つなら
-/// `-> repr`、2つ以上なら `-> (repr, repr)` と書く。`source` は LIR の開いた後の関数の源の ABI (`SourceSig`) である。
+/// `[internal] [yields] [clause E.op] [uniform from N] fn name(params) -> rets` の欄。値が1つなら `-> repr`、2つ以上なら
+/// `-> (repr, repr)` と書く。
 pub struct FnHeader {
     pub name: String,
     pub internal: bool,
@@ -349,7 +349,6 @@ pub struct FnHeader {
     pub split: Option<u32>,
     pub params: Vec<VarId>,
     pub rets: Vec<(Repr, Mark)>,
-    pub source: Option<SourceSig>,
 }
 
 /// `Reader::apply` が読んだ `apply` の部品。
@@ -657,17 +656,6 @@ impl<'t> Reader<'t> {
         } else {
             vec![(self.repr()?, self.mark()?)]
         };
-        let source = if self.at_word("source") {
-            self.pos += 1;
-            let params = self.list('(', ')', |p| p.repr())?;
-            self.expect_word("->")?;
-            Some(SourceSig {
-                params,
-                ret: self.repr()?,
-            })
-        } else {
-            None
-        };
         self.expect_punct('{')?;
         Ok(FnHeader {
             name,
@@ -677,7 +665,6 @@ impl<'t> Reader<'t> {
             split,
             params,
             rets,
-            source,
         })
     }
 
@@ -1547,20 +1534,12 @@ impl<'p> Writer<'p> {
             .map_or_else(String::new, |at| format!("uniform from {at} "));
         writeln!(
             out,
-            "{}{}{clause}{split}fn {}({}) -> {}{} {{",
+            "{}{}{clause}{split}fn {}({}) -> {} {{",
             if header.internal { "internal " } else { "" },
             if header.yields { "yields " } else { "" },
             function_name(&header.name),
             self.binders(vars, &header.params),
             self.rets(&header.rets),
-            header
-                .source
-                .as_ref()
-                .map_or_else(String::new, |source| format!(
-                    " source({}) -> {}",
-                    self.reprs(&source.params),
-                    self.repr(source.ret)
-                )),
         )
         .unwrap();
     }

@@ -324,7 +324,6 @@ fn build(program: &Program, source: FnIdx, copy: bool) -> LirFn {
             clause: None,
             vars,
             rets: original.rets.clone(),
-            source: None,
             blocks: vec![Block {
                 params: args.clone(),
                 stmts: vec![Stmt::Let {
@@ -361,7 +360,6 @@ fn placeholder() -> LirFn {
         clause: None,
         vars: Vec::new(),
         rets: vec![(Repr::Unit, crate::Mark::Unr)],
-        source: None,
         blocks: vec![Block {
             params: Vec::new(),
             stmts: Vec::new(),

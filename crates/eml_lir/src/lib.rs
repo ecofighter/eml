@@ -87,21 +87,8 @@ pub struct LirFn {
     /// 構造体を返す関数がその葉を並べる (docs/spec/lir.md の「開く」)。
     /// テキストの形では、2つ以上の値を `-> (float, float)` と書く。
     pub rets: Vec<(Repr, Mark)>,
-    /// 開いた後の関数の、源の単位の ABI (`SourceSig`)。開く前と、引数にも結果にも構造体のない関数では `None` で、ABI は
-    /// 引数と `rets` のとおりである。
-    pub source: Option<SourceSig>,
     /// `blocks[0]` が入口で、その引数が関数の引数である。辺はすべて番号の大きいブロックへ向かう。
     pub blocks: Vec<Block>,
-}
-
-/// 開くパスが構造体を葉に開いた関数の、開く前の引数の Repr と結果の Repr。構造体の Repr はそのまま残る。VM は
-/// 関数の値の ABI (源の引数の単位の数と、構造体と箱の間の変換に要る形) をこれから作る。引数と `rets` は、これを葉に
-/// 開いた並びと同じである (verifier が確かめる)。テキストの形では、関数の頭の結果の後に `source(Vec3{..}) -> Vec3{..}`
-/// と書く (docs/spec/vm.md の「シグネチャ」)。
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct SourceSig {
-    pub params: Vec<Repr>,
-    pub ret: Repr,
 }
 
 impl LirFn {

@@ -48,12 +48,6 @@ impl Parser<'_> {
         let [(ret, ret_mark)] = header.rets[..] else {
             return Err(syntax::error(line, "a Core IR function returns one value"));
         };
-        if header.source.is_some() {
-            return Err(syntax::error(
-                line,
-                "a Core IR function has no source signature; only flatten in LIR writes one",
-            ));
-        }
         let mut blocks = vec![self.block(&mut state, header.params)?];
         while !self.reader.end_function() {
             if self.reader.peek_word().is_none() {

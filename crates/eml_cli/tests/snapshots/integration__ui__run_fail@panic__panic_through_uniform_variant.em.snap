@@ -1,11 +1,11 @@
 ---
 source: crates/eml_cli/tests/ui.rs
 expression: "format!(\"--- stdout ---\\n{stdout}--- stderr ---\\n{diagnostics}{stderr}--- runtime error ---\\n{error}\\n{written}\")"
-input_file: tests/ui/run-fail/panic/panic_through_conversion.em
+input_file: tests/ui/run-fail/panic/panic_through_uniform_variant.em
 ---
 --- stdout ---
 20
 --- stderr ---
 --- runtime error ---
 division by zero
-  at run-fail/panic/panic_through_conversion.em:5:19
+  at run-fail/panic/panic_through_uniform_variant.em:5:19

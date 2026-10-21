@@ -1,7 +1,7 @@
 ---
 source: crates/eml_cli/tests/ui.rs
 expression: "format!(\"--- stdout ---\\n{stdout}--- stderr ---\\n{diagnostics}{stderr}{written}{exit}\")"
-input_file: tests/ui/run/unwind/abort_through_conversion.em
+input_file: tests/ui/run/unwind/abort_through_variant_and_apply_rest.em
 ---
 --- stdout ---
 Ok 10

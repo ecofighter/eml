@@ -65,7 +65,6 @@ impl<'p> Printer<'p> {
             split: function.split,
             params: function.params().to_vec(),
             rets: vec![(function.ret, function.ret_mark)],
-            source: None,
         };
         self.writer.function_head(&header, &function.vars, out);
         for (index, block) in function.blocks.iter().enumerate() {

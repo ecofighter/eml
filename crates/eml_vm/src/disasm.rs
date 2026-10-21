@@ -7,9 +7,8 @@ use eml_extern::Extern;
 use eml_lir::Loc;
 use eml_rt::{MaskItem, Mode};
 
-use crate::code::{CodeBase, Conversions, FnEntry, Unwind};
+use crate::code::{CodeBase, FnEntry, Unwind};
 use crate::op::{KEEP, NONE, Op, Pc, RAW, SKIP};
-use crate::sig::{Class, SigId, Signatures, Structs};
 
 pub fn disassemble<M: Mode>(code: &CodeBase<M>) -> String {
     let view = View::of(code);
@@ -35,9 +34,6 @@ pub(crate) struct View<'a> {
     pub(crate) mask_lists: &'a [MaskItem],
     pub(crate) locations: &'a [(Pc, Loc)],
     pub(crate) unwinds: &'a [(Pc, Unwind)],
-    pub(crate) signatures: &'a Signatures,
-    pub(crate) conversions: &'a Conversions,
-    pub(crate) structs: &'a Structs,
     pub(crate) functions: &'a [FnEntry],
     pub(crate) files: &'a [String],
 }
@@ -96,9 +92,6 @@ impl<'a> View<'a> {
             mask_lists: &code.mask_lists,
             locations: &code.locations,
             unwinds: &code.unwinds,
-            signatures: &code.signatures,
-            conversions: &code.conversions,
-            structs: &code.structs,
             functions: &code.functions,
             files: &code.files,
         }
@@ -163,45 +156,10 @@ impl<'a> View<'a> {
         format!("{{ {} }}", parts.join(", "))
     }
 
-    /// シグネチャを中身で書く。番号は読み込みの順で変わるので書かない。
-    fn signature(&self, id: u32) -> String {
-        let sig = self.signatures.get(SigId(id));
-        let names = |reprs: &[eml_lir::Repr]| {
-            reprs
-                .iter()
-                .map(|&repr| self.structs.repr_name(repr))
-                .collect::<Vec<_>>()
-                .join(", ")
-        };
-        let ret = match sig.ret.as_slice() {
-            [one] => self.structs.repr_name(*one),
-            many => format!("({})", names(many)),
-        };
-        format!("({}) -> {ret}", names(&sig.params))
-    }
-
-    /// `apply` のオペランド [呼ばれる値, n, 場所のシグネチャ, 引数…]。
+    /// `apply` のオペランド [呼ばれる値, n, 引数…]。
     fn apply(&self, o: &[u32]) -> String {
         let n = o[1] as usize;
-        format!(
-            "s{}({}) : {}",
-            o[0],
-            slots(&o[3..3 + n]),
-            self.signature(o[2])
-        )
-    }
-
-    /// 末尾の呼び出しの結果の変換。命令は変換の番号を持つが、種類の組で書く。なければ空である。
-    fn conversion(&self, index: u32) -> String {
-        match self.conversions.nth(index) {
-            Some(c) => format!(
-                " convert {} -> {}",
-                self.structs.class_name(c.from),
-                self.structs.class_name(c.to)
-            ),
-            None if index == NONE => String::new(),
-            None => format!(" convert ?{index}"),
-        }
+        format!("s{}({})", o[0], slots(&o[2..2 + n]))
     }
 
     /// 命令のテキスト。命令の位置 (飛び先と、自己末尾呼び出しの入口) は `origin` からの位置で書く。
@@ -225,35 +183,10 @@ impl<'a> View<'a> {
                 format!("call s{dst} = {}({})", name(ops(at)[0]), args(at, 2))
             }
             Op::TailCall { at } => {
-                let o = ops(at);
-                format!(
-                    "tail_call {}({}){}",
-                    name(o[0]),
-                    args(at, 2),
-                    self.conversion(o[2 + o[1] as usize])
-                )
+                format!("tail_call {}({})", name(ops(at)[0]), args(at, 2))
             }
             Op::Finish => "finish".to_string(),
             Op::ApplyRest => "apply_rest".to_string(),
-            Op::Receive { at } => format!("receive [{}]", args(at, 1)),
-            Op::RetBox { src, scalar } => {
-                format!("ret_box {} s{src}", self.structs.class_name(scalar.class()))
-            }
-            Op::RetUnbox { src, scalar } => {
-                format!(
-                    "ret_unbox {} s{src}",
-                    self.structs.class_name(scalar.class())
-                )
-            }
-            Op::RetBoxStruct { id } => {
-                format!("ret_box {}", self.structs.class_name(Class::Struct(id)))
-            }
-            Op::RetUnboxStruct { id } => {
-                format!(
-                    "ret_unbox {} s0",
-                    self.structs.class_name(Class::Struct(id))
-                )
-            }
             Op::CallN { at } => {
                 let o = ops(at);
                 let n = o[1] as usize;
@@ -265,15 +198,6 @@ impl<'a> View<'a> {
                 )
             }
             Op::RetN { at } => format!("ret_n ({})", args(at, 1)),
-            Op::ApplyN { at } => {
-                let o = ops(at);
-                let n = o[1] as usize;
-                format!(
-                    "apply_n ({}) = {}",
-                    slots(&o[4 + n..4 + n + o[3 + n] as usize]),
-                    self.apply(o)
-                )
-            }
             Op::UnboxStruct { src, at } => {
                 let o = ops(at);
                 format!(
@@ -295,7 +219,7 @@ impl<'a> View<'a> {
             Op::Closure { dst, at } => {
                 let o = ops(at);
                 let lin = if o[1] != 0 { " lin" } else { "" };
-                format!("closure s{dst} = {}({}){lin}", name(o[0]), args(at, 4))
+                format!("closure s{dst} = {}({}){lin}", name(o[0]), args(at, 3))
             }
             Op::Apply { dst, at } => format!("apply s{dst} = {}", self.apply(ops(at))),
             Op::TailApply { at } => format!("tail_apply {}", self.apply(ops(at))),
@@ -303,13 +227,7 @@ impl<'a> View<'a> {
                 format!("clause s{dst} = s{}({})", ops(at)[0], args(at, 2))
             }
             Op::TailClause { at } => {
-                let o = ops(at);
-                format!(
-                    "tail_clause s{}({}){}",
-                    o[0],
-                    args(at, 2),
-                    self.conversion(o[2 + o[1] as usize])
-                )
+                format!("tail_clause s{}({})", ops(at)[0], args(at, 2))
             }
             Op::TailSelf { at } => {
                 format!("tail_self {}({})", ops(at)[0] - origin, args(at, 2))

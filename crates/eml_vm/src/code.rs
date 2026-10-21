@@ -3,12 +3,11 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use eml_lir::{FloatBits, Loc};
+use eml_lir::{FloatBits, Loc, Repr};
 use eml_rt::{Control, Frozen, HeapError, MaskItem, Mode, Word};
 
 use crate::error::{RuntimeError, SourceLocation};
-use crate::op::{BUILTINS, CONVERSION_FRAME_SIZE, CONVERSIONS, Op, Pc, Slot};
-use crate::sig::{Class, Scalar, SigId, Signatures, Structs};
+use crate::op::{BUILTINS, Op, Pc, Slot};
 use crate::vm::{Failure, Task};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -17,13 +16,14 @@ pub struct FnEntry {
     /// 命令列の範囲 `[start, end)`。
     pub start: Pc,
     pub end: Pc,
-    /// 引数の数。クロージャの捕まえた値も引数に数える。
+    /// 引数の語の数。クロージャの捕まえた値も引数に数える。
     pub arity: u16,
     pub frame_size: u16,
-    /// 引数と結果の Repr。入口の関数として呼んだとき `Finish` が結果を手放すかも、これで決まる。
-    pub(crate) sig: SigId,
-    /// `sig` の種類を詰めた語 (`Signatures::fn_key`)。`apply` の速い道が `FnEntry` と一緒に読めるように、ここにも置く。
-    pub(crate) key: u64,
+    /// 引数の語の Repr。捕まえた値はクロージャの中で Repr のとおり走査する語か生の語に分かれるので、クロージャを
+    /// 作るときと入るときに語の並べ方を引く (docs/spec/object-model.md の「クロージャ」)。
+    pub(crate) params: Box<[Repr]>,
+    /// 結果が RC の Repr か。入口の関数として呼んだとき、`Finish` が結果を手放すかを決める。
+    pub(crate) ret_rc: bool,
 }
 
 /// 巻き戻しの地点の表の1行 (docs/spec/vm.md の「巻き戻しの表」)。
@@ -38,136 +38,11 @@ pub(crate) struct Unwind {
     pub(crate) landing: Option<Slot>,
 }
 
-/// 変換の命令列。受ける命令の次の `start` から `end` の前までで、`from` の種類の値を受けて `to` の種類で返す。
-/// `size` は変換のフレームの大きさで、受ける値の語の数である。
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) struct Conversion {
-    pub(crate) start: Pc,
-    pub(crate) end: Pc,
-    pub(crate) from: Class,
-    pub(crate) to: Class,
-    pub(crate) size: usize,
-}
-
-/// 変換の命令列の表。組の中身で一意にする (docs/spec/vm.md の「変換のフレーム」)。
-/// 追記は変換の命令列を `code` の末尾に足すので、並びは命令列の先頭の位置の昇順である。種類の組で引くのは変換の要る
-/// 遅い道とコード生成だけなので、並びを順に見る。
-#[derive(Default)]
-pub(crate) struct Conversions {
-    list: Vec<Conversion>,
-}
-
-impl Conversions {
-    /// `from` から `to` への変換の番号。同じ種類の間と、違う型の Repr の間には変換がない。番号は追記の間も変わらない。
-    pub(crate) fn find(&self, from: Class, to: Class) -> Option<u32> {
-        self.list
-            .iter()
-            .position(|c| (c.from, c.to) == (from, to))
-            .map(|index| u32::try_from(index).expect("the conversions fit in u32 numbers"))
-    }
-
-    /// 番号 `index` の変換。末尾呼び出しの命令は結果の変換をこの番号で持つ。
-    pub(crate) fn nth(&self, index: u32) -> Option<Conversion> {
-        self.list.get(index as usize).copied()
-    }
-
-    /// `from` から `to` への変換。
-    pub(crate) fn get(&self, from: Class, to: Class) -> Option<Conversion> {
-        self.list
-            .iter()
-            .find(|c| (c.from, c.to) == (from, to))
-            .copied()
-    }
-
-    /// 構造体 `id` の箱へ入れる変換と箱から取り出す変換を、`code` の末尾に足す。箱へ入れる変換は葉の語をスロット
-    /// 0.. に受け、取り出す変換は箱をスロット 0 に受ける。形を新しく引いたときに、追記の中で1回だけ作る
-    /// (docs/spec/vm.md の「変換のフレーム」)。
-    pub(crate) fn push_struct(
-        &mut self,
-        code: &mut Vec<Op>,
-        operands: &mut Vec<u32>,
-        id: u32,
-        words: usize,
-    ) {
-        let receive = |operands: &mut Vec<u32>, n: usize| {
-            let at = u32::try_from(operands.len()).expect("the operands fit in u32 positions");
-            operands.push(n as u32);
-            operands.extend(0..n as u32);
-            at
-        };
-        let at = receive(operands, words);
-        code.push(Op::Receive { at });
-        let start = code.len() as Pc;
-        code.push(Op::RetBoxStruct { id });
-        self.list.push(Conversion {
-            start,
-            end: code.len() as Pc,
-            from: Class::Struct(id),
-            to: Class::Word,
-            size: words,
-        });
-        let at = receive(operands, 1);
-        code.push(Op::Receive { at });
-        let start = code.len() as Pc;
-        code.push(Op::RetUnboxStruct { id });
-        self.list.push(Conversion {
-            start,
-            end: code.len() as Pc,
-            from: Class::Word,
-            to: Class::Struct(id),
-            size: 1,
-        });
-    }
-
-    /// 命令列の先頭が `pc` の変換。フレームの見出しの戻り先を引く。
-    pub(crate) fn at(&self, pc: Pc) -> Option<&Conversion> {
-        self.list
-            .binary_search_by_key(&pc, |c| c.start)
-            .ok()
-            .map(|index| &self.list[index])
-    }
-}
-
-/// 組み込みの命令とオペランドと変換の表。`Finish`、`ApplyRest` の後に、スカラーごとに箱へ入れる変換と取り出す変換を
-/// 置く。各命令列の直前には受ける命令を置き、受けるスロットは変換のフレームのスロット 0 である。
-pub(crate) fn builtins() -> (Vec<Op>, Vec<u32>, Conversions) {
-    const RECEIVE: u32 = 0;
-    let operands = vec![1, 0];
-    let mut code = vec![Op::Finish, Op::ApplyRest];
-    let mut conversions = Conversions::default();
-    debug_assert_eq!(code.len(), CONVERSIONS as usize);
-    for scalar in Scalar::ALL {
-        for boxing in [true, false] {
-            code.push(Op::Receive { at: RECEIVE });
-            let start = code.len() as Pc;
-            let (op, from, to) = if boxing {
-                (Op::RetBox { src: 0, scalar }, scalar.class(), Class::Word)
-            } else {
-                (Op::RetUnbox { src: 0, scalar }, Class::Word, scalar.class())
-            };
-            code.push(op);
-            conversions.list.push(Conversion {
-                start,
-                end: code.len() as Pc,
-                from,
-                to,
-                size: CONVERSION_FRAME_SIZE,
-            });
-        }
-    }
-    // 変換のフレームはどれも同じ大きさなので、命令列の使うスロットがその中にあることをここで確かめる
-    debug_assert!(
-        operands[1..=operands[0] as usize]
-            .iter()
-            .all(|&slot| (slot as usize) < CONVERSION_FRAME_SIZE)
-            && code.iter().all(|op| match op {
-                Op::RetBox { src, .. } | Op::RetUnbox { src, .. } =>
-                    usize::from(*src) < CONVERSION_FRAME_SIZE,
-                _ => true,
-            })
-    );
+/// 組み込みの命令 `Finish` と `ApplyRest`。関数の命令はこの後に並ぶ。
+pub(crate) fn builtins() -> Vec<Op> {
+    let code = vec![Op::Finish, Op::ApplyRest];
     debug_assert_eq!(code.len(), BUILTINS as usize);
-    (code, operands, conversions)
+    code
 }
 
 /// 実行中は読むだけの表。後の並列 VM の worker がそのまま共有できるように、`Sync` に保つ
@@ -177,12 +52,6 @@ pub struct CodeBase<M: Mode> {
     pub(crate) functions: Vec<FnEntry>,
     pub(crate) code: Vec<Op>,
     pub(crate) operands: Vec<u32>,
-    /// 関数と `apply` の場所のシグネチャ。中身で引くので、追記の間も番号は変わらない。
-    pub(crate) signatures: Signatures,
-    /// 変換の命令列。
-    pub(crate) conversions: Conversions,
-    /// 構造体の形。シグネチャの構造体の Repr はこの表の番号である。中身で引くので、追記の間も番号は変わらない。
-    pub(crate) structs: Structs,
     /// `EvvMask` が参照する、mask の項目の並び。
     pub(crate) mask_lists: Vec<MaskItem>,
     pub(crate) constants: Vec<Word>,
@@ -230,9 +99,6 @@ pub enum CompileError {
     /// 結果が複数の値の入口の関数。入口の `ret` は値1つで、`Finish` は値を1つだけ受ける
     /// (docs/spec/vm.md の「`CodeBase` と `FnEntry`」)。
     MultiValueEntry { function: String },
-    /// 末尾呼び出しの結果を、違う型の Repr の間で変える関数。その変換はなく、verifier を通った IR には現れない
-    /// (docs/spec/vm.md の「呼び出しと戻り」)。
-    NoConversion { function: String },
 }
 
 impl<M: Mode> CodeBase<M> {
@@ -240,29 +106,7 @@ impl<M: Mode> CodeBase<M> {
         &self.functions
     }
 
-    /// 関数の結果が RC の Repr か。構造体の結果は RC の葉を持つかで決まる。
-    pub(crate) fn ret_rc(&self, f: u32) -> bool {
-        let entry = &self.functions[f as usize];
-        self.signatures
-            .get(entry.sig)
-            .ret
-            .iter()
-            .flat_map(|repr| self.structs.words(repr))
-            .any(|repr| repr.is_rc())
-    }
-
-    /// フレームの見出しの戻り先 `pc` が変換の命令列の先頭か。変換の命令列の直前にだけ `Receive` を置くので、表を引かず
-    /// に直前の命令で決まる。巻き戻しがフレームごとに引くためである。
-    pub(crate) fn is_conversion(&self, pc: Pc) -> bool {
-        let receives = pc
-            .checked_sub(1)
-            .is_some_and(|before| matches!(self.code[before as usize], Op::Receive { .. }));
-        debug_assert_eq!(receives, self.conversions.at(pc).is_some());
-        receives
-    }
-
-    /// 命令の位置を含む関数。組み込みの命令と変換の命令列はどの関数にも属さない。関数は命令の位置の順に並ぶ。関数の
-    /// 間に置く変換の命令列を前の関数と取り違えないように、範囲の終わりも比べる。
+    /// 命令の位置を含む関数。組み込みの命令はどの関数にも属さない。関数は命令の位置の順に並ぶ。
     pub(crate) fn function_at(&self, pc: Pc) -> Option<&FnEntry> {
         if pc < BUILTINS {
             return None;

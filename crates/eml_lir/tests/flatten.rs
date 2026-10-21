@@ -59,7 +59,7 @@ fn f(b.0: Ball{{Vec3{{float, float, float}}, float}}, p.1: (,){{int, float}}) ->
 "
     );
     insta::assert_snapshot!(function(&flatten_text(&text), "f"), @"
-    fn f(b.0.7: float, b.1.8: float, b.2.9: float, b.3.10: float, p.0.11: int, p.1.12: float) -> obj source(Ball{Vec3{float, float, float}, float}, (,){int, float}) -> obj {
+    fn f(b.0.7: float, b.1.8: float, b.2.9: float, b.3.10: float, p.0.11: int, p.1.12: float) -> obj {
       let b.13: obj = con Vec3 #0(b.0.7, b.1.8, b.2.9)
       let b.5: obj = con Ball #0(b.13, b.3.10)
       let o.2: tobj = con Option #1(b.5)
@@ -134,7 +134,7 @@ fn f(n.0: int, c.6: tobj) -> unit {
 ";
     let shown = flatten_text(text);
     insta::assert_snapshot!(function(&shown, "g"), @"
-    fn g(p.1.1: int) -> int source(P{unit, int}) -> P{unit, int} {
+    fn g(p.1.1: int) -> int {
       return p.1.1
     }
     ");
@@ -179,7 +179,7 @@ b1(m.6: {vec3}):
     );
     let shown = flatten_text(&text);
     insta::assert_snapshot!(function(&shown, "add"), @r#"
-    fn add(a.0.12: float, a.1.13: float, a.2.14: float, b.0.15: float, b.1.16: float, b.2.17: float) -> (float, float, float) source(Vec3{float, float, float}, Vec3{float, float, float}) -> Vec3{float, float, float} {
+    fn add(a.0.12: float, a.1.13: float, a.2.14: float, b.0.15: float, b.1.16: float, b.2.17: float) -> (float, float, float) {
       let p.8: float = extern "Prelude.Num Float.+"(a.0.12, b.0.15)
       let q.9: float = extern "Prelude.Num Float.+"(a.1.13, b.1.16)
       let r.10: float = extern "Prelude.Num Float.+"(a.2.14, b.2.17)
@@ -187,7 +187,7 @@ b1(m.6: {vec3}):
     }
     "#);
     insta::assert_snapshot!(function(&shown, "f"), @"
-    fn f(a.0.11: float, a.1.12: float, a.2.13: float, c.1: tobj) -> (float, float, float) source(Vec3{float, float, float}, tobj) -> Vec3{float, float, float} {
+    fn f(a.0.11: float, a.1.12: float, a.2.13: float, c.1: tobj) -> (float, float, float) {
       let (s.0.17: float, s.1.18: float, s.2.19: float) = call add(a.0.11, a.1.12, a.2.13, a.0.11, a.1.12, a.2.13)
       let s.7: obj = con Vec3 #0(s.0.17, s.1.18, s.2.19)
       let t.8: tobj = apply c.1(s.7)
@@ -224,7 +224,7 @@ fn g(n.0: int) -> (,){{obj, int}} {{
     );
     let shown = flatten_text(&text);
     insta::assert_snapshot!(function(&shown, "f"), @"
-    yields fn f(c.0: tobj, e.1: obj, s.2: obj) -> (float, float, float) source(tobj, obj, obj) -> Vec3{float, float, float} {
+    yields fn f(c.0: tobj, e.1: obj, s.2: obj) -> (float, float, float) {
       let v.6: obj = clause Fail.fail c.0(e.1, s.2)
       let o.4: tobj = con Option #1(v.6)
       let t.5: obj = con (,) #0(o.4, v.6)
@@ -232,7 +232,7 @@ fn g(n.0: int) -> (,){{obj, int}} {{
     }
     ");
     insta::assert_snapshot!(function(&shown, "g"), @"
-    fn g(n.0: int) -> (obj, int) source(int) -> (,){obj, int} {
+    fn g(n.0: int) -> (obj, int) {
       let p.2: obj = extern Prelude.exit(n.0)
       let p.0.3: obj = prim dummy()
       return (p.0.3, 0)
@@ -251,7 +251,7 @@ fn f(t.0: T{obj lin, int, tobj poly} lin) -> unit {
 }
 ";
     insta::assert_snapshot!(function(&flatten_text(text), "f"), @"
-    fn f(t.0.2: obj lin, t.1.3: int, t.2.4: tobj poly) -> unit source(T{obj lin, int, tobj poly}) -> unit {
+    fn f(t.0.2: obj lin, t.1.3: int, t.2.4: tobj poly) -> unit {
       let u.5: unit = drop t.0.2
       let u.6: unit = drop t.2.4
       return ()
@@ -348,7 +348,7 @@ fn f(s.0: W{{tobj lin, int}} lin) -> float {{
 "
     );
     insta::assert_snapshot!(function(&flatten_text(&text), "f"), @r#"
-    fn f(s.0.6: tobj lin, s.1.7: int) -> float source(W{tobj lin, int}) -> float {
+    fn f(s.0.6: tobj lin, s.1.7: int) -> float {
       let (t.0.8: float, t.1.9: float, t.2.10: float) = unbox s.0.6 Vec3
       let r.3: float = call g(t.0.8, t.1.9, t.2.10)
       let q.4: float = extern "Prelude.Num Float.+"(r.3, 1.0)
@@ -381,7 +381,7 @@ b2:
 "
     );
     insta::assert_snapshot!(function(&flatten_text(&text), "f"), @r#"
-    fn f(s.0.9: tobj lin, s.1.10: int, c.1: enum) -> float source(W{tobj lin, int}, enum) -> float {
+    fn f(s.0.9: tobj lin, s.1.10: int, c.1: enum) -> float {
       switch c.1 Prelude.Bool { #0 -> b1, #1 -> b2 }
     b1:
       let (t.0.11: float, t.1.12: float, t.2.13: float) = unbox s.0.9 Vec3
@@ -408,7 +408,7 @@ fn f(k.0: obj) -> (,){float, float} {
 }
 ";
     insta::assert_snapshot!(function(&flatten_text(text), "f"), @"
-    fn f(k.0: obj) -> (float, float) source(obj) -> (,){float, float} {
+    fn f(k.0: obj) -> (float, float) {
       let b.2: tobj = box 1
       let p.3: tobj = apply k.0(b.2)
       let (p.0.4: tobj, p.1.6: tobj) = unbox p.3 (,)

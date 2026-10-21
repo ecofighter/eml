@@ -471,6 +471,13 @@ T-1 と T-2 は並べてよい。それ以降は1本の列である。
   - 種類1: `crates/eml_vm/tests/bench.rs` の `typed_benches_do_not_convert` を消す (欄がなくなる)
   - 種類1 (動かすだけで、出力は変わらない): `tests/ui/run-fail/panic/panic_through_conversion.em` を `tests/ui/run-fail/panic/panic_through_uniform_variant.em` に、`tests/ui/run/unwind/abort_through_conversion.em` を `tests/ui/run/unwind/abort_through_variant_and_apply_rest.em` に移し、頭のコメントを書き直す
   - 種類2: すべての `RunStats` のスナップショット (`conversions` の欄がなくなる)、消した verifier の文言、`convert` を含む逆アセンブルのスナップショット
+  - 利用者が T-8 の実装中に認めたもの:
+    - 種類1: `crates/eml_lir/tests/verify.rs` の `source_records_open_to_the_leaves` を消す (消した `source` の検査だけを確かめていた)
+    - 種類1: `crates/eml_lir/tests/text.rs` の `multi_value_forms_read_back` から `source(..)` を読み書きする部分を除く (構文がなくなる)
+    - 種類2: VM のすべての逆アセンブルのスナップショット (`crates/eml_vm/tests/codegen.rs` と `roots.rs`) の命令の位置と飛び先が 12 ずつ下がる (`BUILTINS` が 14 から 2 になり、変換の命令列がなくなる)
+    - 種類2: 移した `panic_through_uniform_variant.em` のスナップショットの誤りの位置の行が、新しいファイルの名前を指す (移すとパスが変わる)
+    - 名前を変えるだけで、合否は変えない: `crates/eml_vm/tests/conversions.rs` を `apply.rs` に移す。同じファイルの `a_conversion_return_keeps_the_function_that_returned_last` を `an_error_at_finish_names_the_function_that_returned_last` にし、`leave` が `tobj` を返す形にする (変換のフレームがなくなり、確かめるのは誤りに付く関数の名前だけになる)。`codegen.rs` の `an_apply_carries_a_uniform_signature` を `an_apply_carries_only_its_callee_and_argument_slots` にする (`apply` がシグネチャを持たなくなる)
+  - 注記: `FnEntry` の公開の欄は `{ name, start, end, arity, frame_size }` で、crate の中だけの欄に `params` (開いた後の引数の Repr) と `ret_rc` を残す。D-12 でクロージャは捕獲を Repr のとおり走査する語と生の語に分けて持つので、クロージャを作るときと入るときに語の並べ方を引くためと、`Finish` が結果を手放すかを決めるためである。T-8 の完了の条件の grep に残る `boxing.rs` の `conversions` と `place_field_conversions` (box の挿入の静的な変換)、`verify.rs` の `Receiver` (呼び出しの結果の受け手) は、消した仕組みとは関わりがない
 - T-10:
   - 種類3: テストのファイルを移すだけ
 

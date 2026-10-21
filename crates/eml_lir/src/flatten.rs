@@ -2,9 +2,6 @@
 //! 変数を、形の葉の順 (深さ優先) に葉の変数の並びに替える。box の挿入が一様な位置との変換を構造体の変数のまま済ませた
 //! 後に走るので、ここでは位置ごとの変換を決めない。
 //!
-//! 開いた後も、関数は源の単位の ABI (構造体の Repr を含む引数と結果の Repr) を持つ (`LirFn::source`)。VM は関数の値の
-//! ABI をそこから作る。葉の並びからは、どの葉がどの構造体の形をなすかが分からないためである。
-//!
 //! 葉の変数は元の名前に葉の番号を付けた名前 (`d.0`) を持ち、Repr は形の葉のもの、印は形の葉の印と変数の印の小さい
 //! ほうである。複製が開いた引数の印を小さくすることがあるためである
 //! (docs/spec/lir.md の「開く」)。`unit` の葉は変数を作らず、
@@ -17,8 +14,7 @@ use std::collections::{HashMap, HashSet};
 
 use crate::{
     Atom, BlockId, Call, Case, CasePattern, Ctor, EffectInfo, FloatBits, Layout, LirFn, Mark,
-    OpRet, Prim, Program, Repr, Rhs, SourceSig, Stmt, StructId, Structs, Term, VarId, VarInfo,
-    operation,
+    OpRet, Prim, Program, Repr, Rhs, Stmt, StructId, Structs, Term, VarId, VarInfo, operation,
 };
 
 pub fn flatten(program: &mut Program) {
@@ -114,17 +110,6 @@ impl<'a> Flattener<'a> {
             original_params.push(params);
         }
         let (ret, ret_mark) = self.function.rets[0];
-        let params: Vec<Repr> = original_params[0]
-            .iter()
-            .map(|&param| self.function.repr(param))
-            .collect();
-        if params
-            .iter()
-            .chain([&ret])
-            .any(|repr| matches!(repr, Repr::Struct(_)))
-        {
-            self.function.source = Some(SourceSig { params, ret });
-        }
         if let Repr::Struct(id) = ret {
             self.function.rets = self
                 .structs

@@ -1,13 +1,11 @@
 //! データの命令: `con`、switch、`unpack`、`release`、reuse、box (docs/spec/vm.md の「命令ごとの実行」)。
 
-use eml_lir::{Repr, StructId};
 use eml_rt::{Ctx, Heap, HeapError, Kind, Meta, Mode, Token, Word};
 
 use crate::RunCounts;
 use crate::code::CodeBase;
 use crate::error::VmFault;
 use crate::op::{KEEP, NONE, RAW, SKIP, Slot};
-use crate::sig::{Scalar, Structs};
 use crate::vm::Task;
 
 /// 走査する語が 255 個以上の物体の、ペイロードの先頭の数の語の分 (docs/spec/object-model.md の「ヘッダ」)。
@@ -439,43 +437,6 @@ pub(crate) fn unbox_float<M: Mode>(
     Ok(unsafe { ctx.heap().unbox_float(w) }?)
 }
 
-/// 生の語のスカラー `w` を箱に入れる。`apply` の変換と変換のフレームが使う。`enum` の箱は即値である。
-pub(crate) fn box_scalar<M: Mode>(
-    ctx: &mut Ctx<M>,
-    counts: &mut RunCounts,
-    w: Word,
-    scalar: Scalar,
-) -> Word {
-    if M::CHECKED {
-        counts.boxes += 1;
-    }
-    // 作る箱は新しい物体なので、`Ctx` の持つ語には触れない
-    let heap = unsafe { ctx.heap_mut() };
-    match scalar {
-        Scalar::Int => heap.alloc_int(w.bits() as i64),
-        Scalar::Float => heap.alloc_float(w.bits() as u64),
-        Scalar::Enum => Word::imm(w.bits() as i64),
-    }
-}
-
-/// 箱 `w` からスカラーを取り出し、箱を手放す。一様な値から取り出す変換は値を消費する。スカラーは中身に参照を持たない
-/// ので、取り出した後に箱を `decref` すれば、一意なら箱を空けることになる
-/// (docs/spec/vm.md の「変換のフレーム」)。
-pub(crate) fn unbox_scalar<M: Mode>(
-    ctx: &mut Ctx<M>,
-    counts: &mut RunCounts,
-    w: Word,
-    scalar: Scalar,
-) -> Result<Word, VmFault> {
-    let bits = match scalar {
-        Scalar::Float => unbox_float(ctx, w, counts)?,
-        Scalar::Int | Scalar::Enum => unbox(ctx, w, counts)? as u64,
-    };
-    // 箱は VM が参照を持つ値で、手放すのはその箱だけである
-    unsafe { ctx.heap_mut().decref(w) }?;
-    Ok(Word::from_bits(bits as usize))
-}
-
 /// 構造体の箱 `w` がダミーか (docs/spec/vm.md の「データとクロージャ」)。
 /// 速いモードは物体の種類で見分ける。ダミーは `BigInt` の物体で、構造体の箱はいつも `Data` である。検査モードは
 /// ヒープのダミーと同じ語であることも確かめ、ダミーでない `BigInt` を断る。1回の実行の中ではダミーは1つで、回復は
@@ -558,167 +519,4 @@ pub(crate) fn release_unboxed<M: Mode>(
     } else {
         release_reuse(code, ctx, task, src, at)
     }
-}
-
-/// 構造体 `id` の葉 `leaves` を、配置の `con` と同じ形の箱に入れる (docs/spec/lir.md の「開く」)。葉は配置の宣言したフィールドの Repr に合わせ、`tobj` のフィールドに入るスカラーは箱に入れ、
-/// 入れ子の構造体は再帰で箱にする。`unit` の葉は `()` を書く。葉の参照は箱に移る。実行時に作る箱には `lin` ビットを
-/// 立てない。`FnEntry` と呼ぶ所は印を持たないためで、安全な側である。箱は `boxes` に数える。
-pub(crate) fn box_struct<M: Mode>(
-    structs: &Structs,
-    ctx: &mut Ctx<M>,
-    counts: &mut RunCounts,
-    id: StructId,
-    leaves: &[Word],
-) -> Result<Word, VmFault> {
-    if M::CHECKED {
-        counts.boxes += 1;
-    }
-    let info = structs.get(id);
-    let shape = &info.shape;
-    let offset = count_word(shape.scanned) as usize;
-    let mut values = Vec::with_capacity(info.key.fields.len());
-    let mut next = 0;
-    for (&field, &declared) in info.key.fields.iter().zip(&info.key.declared) {
-        let value = match field {
-            Repr::Unit => Word::UNIT,
-            Repr::Struct(inner) => {
-                let count = structs.get(inner).leaves.len();
-                let boxed = box_struct(structs, ctx, counts, inner, &leaves[next..next + count])?;
-                next += count;
-                boxed
-            }
-            leaf => {
-                let word = leaves[next];
-                next += 1;
-                match leaf {
-                    Repr::Int | Repr::Float | Repr::Enum if declared.is_rc() => {
-                        let scalar = match leaf {
-                            Repr::Int => Scalar::Int,
-                            Repr::Float => Scalar::Float,
-                            _ => Scalar::Enum,
-                        };
-                        box_scalar(ctx, counts, word, scalar)
-                    }
-                    _ => word,
-                }
-            }
-        };
-        values.push(value);
-    }
-    // 作る物体だけに書き、`Ctx` の持つ語には触れない
-    let heap = unsafe { ctx.heap_mut() };
-    let w = heap.alloc_data(0, shape.scanned as usize, shape.raw as usize, false);
-    for ((value, &position), declared) in values
-        .into_iter()
-        .zip(&shape.positions)
-        .zip(&info.key.declared)
-    {
-        let index = position as usize + offset;
-        unsafe {
-            if declared.is_rc() {
-                heap.set_field(w, index, value)?;
-            } else {
-                heap.set_raw(w, index, value.bits() as u64)?;
-            }
-        }
-    }
-    Ok(w)
-}
-
-/// 構造体 `id` の箱 `w` から葉を取り出して `out` に足し、箱を消費する。一意なら箱を空けて葉の参照を受け取り、そうで
-/// なければ葉を `dup` して箱を手放す。`tobj` のフィールドのスカラーは取り出してその箱も手放し、入れ子の構造体は再帰で
-/// 取り出す。箱がダミーなら葉のダミーを足す。取り出しは `unboxes` に数える。
-pub(crate) fn take_struct<M: Mode>(
-    structs: &Structs,
-    ctx: &mut Ctx<M>,
-    counts: &mut RunCounts,
-    id: StructId,
-    w: Word,
-    out: &mut Vec<Word>,
-) -> Result<(), VmFault> {
-    if M::CHECKED {
-        counts.unboxes += 1;
-    }
-    let info = structs.get(id);
-    if is_dummy(ctx, w)? {
-        leaf_dummies(ctx, &info.leaves, out);
-        return Ok(());
-    }
-    let shape = &info.shape;
-    check_data(
-        ctx,
-        w,
-        0,
-        shape.scanned,
-        "an apply unboxes a struct from a value of another shape",
-    )?;
-    let offset = count_word(shape.scanned) as usize;
-    // VM は `w` の参照を1つ持つ
-    let last = unsafe { ctx.heap().is_last(w) }?;
-    for ((&field, &declared), &position) in info
-        .key
-        .fields
-        .iter()
-        .zip(&info.key.declared)
-        .zip(&shape.positions)
-    {
-        let index = position as usize + offset;
-        if field == Repr::Unit {
-            continue;
-        }
-        if !declared.is_rc() {
-            let raw = unsafe { ctx.heap().raw(w, index) }?;
-            out.push(Word::from_bits(raw as usize));
-            continue;
-        }
-        let child = unsafe { ctx.heap().field(w, index) }?;
-        match field {
-            Repr::Struct(inner) => {
-                if !last {
-                    unsafe { ctx.heap_mut().dup(child) }?;
-                }
-                take_struct(structs, ctx, counts, inner, child, out)?;
-            }
-            Repr::Int | Repr::Enum => {
-                out.push(Word::from_bits(unbox(ctx, child, counts)? as usize));
-                if last {
-                    unsafe { ctx.heap_mut().decref(child) }?;
-                }
-            }
-            Repr::Float => {
-                out.push(Word::from_bits(unbox_float(ctx, child, counts)? as usize));
-                if last {
-                    unsafe { ctx.heap_mut().decref(child) }?;
-                }
-            }
-            _ => {
-                if !last {
-                    unsafe { ctx.heap_mut().dup(child) }?;
-                }
-                out.push(child);
-            }
-        }
-    }
-    // 一意なら、子の参照は上で受け取ったので箱だけを空ける
-    unsafe {
-        if last {
-            ctx.heap_mut().free_block(w)?;
-        } else {
-            ctx.heap_mut().decref(w)?;
-        }
-    }
-    Ok(())
-}
-
-/// 葉の Repr ごとのダミー。参照の葉は `prim dummy()` の値、生の葉はビット列 0 (`0`、`0.0`、`#0`) である
-/// (docs/spec/lir.md の「ダミーの値」)。
-pub(crate) fn leaf_dummies<M: Mode>(ctx: &Ctx<M>, leaves: &[Repr], out: &mut Vec<Word>) {
-    let dummy = ctx.heap().dummy();
-    out.extend(leaves.iter().map(|repr| {
-        if repr.is_rc() {
-            dummy
-        } else {
-            Word::from_bits(0)
-        }
-    }));
 }

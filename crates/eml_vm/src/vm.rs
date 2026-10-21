@@ -8,11 +8,10 @@ use eml_rt::{Ctx, Mode, Stream, Token, Word};
 
 use crate::RunCounts;
 use crate::apply;
-use crate::code::{CodeBase, Conversion};
+use crate::code::CodeBase;
 use crate::data;
 use crate::error::VmFault;
-use crate::op::{APPLY_REST, FINISH, NONE, Op, Pc, Slot};
-use crate::sig::{Scalar, SigId};
+use crate::op::{APPLY_REST, FINISH, Op, Pc, Slot};
 
 /// 1つのタスクの実行の状態。
 pub struct Task {
@@ -24,8 +23,6 @@ pub struct Task {
     pub(crate) last_ret: Pc,
     /// 末尾の呼び出しと適用で、引数を今のフレームから新しいフレームへ移す間だけ置く所。
     pub(crate) scratch: Vec<Word>,
-    /// `apply` が構造体と箱の間の変換で引数の並びを作り直すときの、もう1つの領域。中身は使わず、容量だけを使い回す。
-    pub(crate) spare: Vec<Word>,
     /// `reserve` がスタックの容量を伸ばす上限の語の数 (`stack_limit`)。
     pub(crate) stack_limit: usize,
     /// 入口の関数の番号。どの関数にも属さない命令の誤りの名前と、`Finish` が結果を手放すかを決める。
@@ -60,7 +57,6 @@ impl Task {
             frame_size: usize::from(entry.frame_size),
             last_ret: FINISH,
             scratch: Vec::new(),
-            spare: Vec::new(),
             stack_limit: stack_limit(max_depth),
             entry: index,
             keep_result: false,
@@ -165,9 +161,8 @@ impl Task {
 }
 
 /// スタックの容量の上限。深さが `max_depth` を超えると次の安全点で止まり、安全点の前には通常、1つの枠と見出し
-/// (`u16::MAX + 2` 語) までを積むので、それより大きい容量は見込まない。呼ばれる側の枠と同じ安全点の前に、余る引数の
-/// 適用は `ApplyRest` の枠を、結果の変換は変換のフレーム (見出しと、構造体の葉の数までのスロット) を積むので、
-/// 求める長さが上限を超えうる。`reserve` は求める長さを下回らないので、そのときも足りる
+/// (`u16::MAX + 2` 語) までを積むので、それより大きい容量は見込まない。余る引数の適用は呼ばれる側の枠と同じ安全点の
+/// 前に `ApplyRest` の枠も積むので、求める長さが上限を超えうる。`reserve` は求める長さを下回らないので、そのときも足りる
 /// (docs/spec/vm.md の「スロットとスタック」)。
 fn stack_limit(max_depth: usize) -> usize {
     max_depth.saturating_add(usize::from(u16::MAX) + 2)
@@ -235,11 +230,7 @@ fn step<M: Mode>(
         }
         Op::TailCall { at } => {
             let o = ops(at);
-            let n = o[1] as usize;
-            task.load_scratch(slots(&o[2..2 + n]));
-            if o[2 + n] != NONE {
-                tail_convert_nth(code, task, o[2 + n])?;
-            }
+            task.load_scratch(slots(&o[2..2 + o[1] as usize]));
             task.enter_in_place(code, o[0]);
             ctx.poll(task.depth())?;
         }
@@ -250,32 +241,26 @@ fn step<M: Mode>(
             return Ok(false);
         }
         Op::ApplyRest => {
-            apply::apply_rest(code, ctx, task, counts)?;
+            apply::apply_rest(code, ctx, task)?;
             ctx.poll(task.depth())?;
         }
-        Op::Receive { .. } => receive_executed()?,
-        Op::RetBox { src, scalar } => convert_return(ctx, task, counts, src, scalar, true)?,
-        Op::RetUnbox { src, scalar } => convert_return(ctx, task, counts, src, scalar, false)?,
-        Op::RetBoxStruct { id } => convert_struct_return(code, ctx, task, counts, id, true)?,
-        Op::RetUnboxStruct { id } => convert_struct_return(code, ctx, task, counts, id, false)?,
         Op::Closure { dst, at } => {
             let o = ops(at);
-            let (f, lin, k, n) = (o[0], o[1] != 0, o[2] as usize, o[3] as usize);
-            task.load_scratch(slots(&o[4..4 + n]));
-            let w = apply::make_closure(code, ctx, f, k, lin, &task.scratch)?;
+            let (f, lin, n) = (o[0], o[1] != 0, o[2] as usize);
+            task.load_scratch(slots(&o[3..3 + n]));
+            let w = apply::make_closure(code, ctx, f, lin, &task.scratch)?;
             task.scratch.clear();
             task.set(dst, w);
         }
         Op::Apply { dst, at } => {
             let target = apply::Target::Frame { ret: task.pc, dst };
-            apply_call(code, ctx, task, counts, at, target)?;
+            apply_call(code, ctx, task, at, target)?;
         }
-        Op::ApplyN { at } => apply_many(code, ctx, task, counts, at)?,
         Op::Clause { dst, at } => {
             let target = apply::Target::Frame { ret: task.pc, dst };
             clause_call(code, ctx, task, at, target)?;
         }
-        Op::TailApply { at } => apply_call(code, ctx, task, counts, at, apply::Target::Tail)?,
+        Op::TailApply { at } => apply_call(code, ctx, task, at, apply::Target::Tail)?,
         Op::TailClause { at } => clause_call(code, ctx, task, at, apply::Target::Tail)?,
         Op::TailSelf { at } => {
             let o = ops(at);
@@ -540,7 +525,7 @@ fn slots(list: &[u32]) -> impl Iterator<Item = Slot> {
     list.iter().map(|&slot| slot as Slot)
 }
 
-/// `apply` の命令。オペランドは [呼ばれる値, n, 場所のシグネチャ, 引数…] である。引数は全部読んでから書くので、結果の
+/// `apply` の命令。オペランドは [呼ばれる値, n, 引数…] である。引数は全部読んでから書くので、結果の
 /// スロットがオペランドのスロットと同じ色でもよい (docs/spec/vm.md の「スロットの割り当て」)。`step` に展開するのは
 /// `bench/apply_int.em` の命令の数がそのほうが少なかったためである。
 #[inline(always)]
@@ -548,20 +533,18 @@ fn apply_call<M: Mode>(
     code: &CodeBase<M>,
     ctx: &mut Ctx<M>,
     task: &mut Task,
-    counts: &mut RunCounts,
     at: u32,
     target: apply::Target,
 ) -> Result<(), VmFault> {
     let o = &code.operands[at as usize..];
-    task.load_scratch(slots(&o[3..3 + o[1] as usize]));
+    task.load_scratch(slots(&o[2..2 + o[1] as usize]));
     let callee = task.get(o[0] as Slot);
-    let site = apply::Site::new(code, SigId(o[2]), 0);
-    apply::apply(code, ctx, task, counts, callee, site, target)?;
+    apply::apply(code, ctx, task, callee, target)?;
     ctx.poll(task.depth())?;
     Ok(())
 }
 
-/// `clause` の命令。オペランドは [呼ばれる値, n, 引数…] で、末尾の位置ではその後に結果の変換を持つ。
+/// `clause` の命令。オペランドは [呼ばれる値, n, 引数…] である。
 fn clause_call<M: Mode>(
     code: &CodeBase<M>,
     ctx: &mut Ctx<M>,
@@ -570,12 +553,8 @@ fn clause_call<M: Mode>(
     target: apply::Target,
 ) -> Result<(), VmFault> {
     let o = &code.operands[at as usize..];
-    let n = o[1] as usize;
-    task.load_scratch(slots(&o[2..2 + n]));
+    task.load_scratch(slots(&o[2..2 + o[1] as usize]));
     let callee = task.get(o[0] as Slot);
-    if matches!(target, apply::Target::Tail) && o[2 + n] != NONE {
-        tail_convert_nth(code, task, o[2 + n])?;
-    }
     apply::apply_clause(code, ctx, task, callee, target)?;
     ctx.poll(task.depth())?;
     Ok(())
@@ -612,22 +591,6 @@ fn call_many<M: Mode>(
     Ok(())
 }
 
-/// 複数の値を受ける `apply`。結果のスロットの扱いは `call_many` と同じである。
-#[inline(never)]
-fn apply_many<M: Mode>(
-    code: &CodeBase<M>,
-    ctx: &mut Ctx<M>,
-    task: &mut Task,
-    counts: &mut RunCounts,
-    at: u32,
-) -> Result<(), VmFault> {
-    let target = apply::Target::Frame {
-        ret: task.pc,
-        dst: 0,
-    };
-    apply_call(code, ctx, task, counts, at, target)
-}
-
 /// `RetN` の命令。`pc` はその位置で、`Ret` と同じく最後に戻った関数として覚え、戻りを安全点にする。
 #[inline(never)]
 fn return_many<M: Mode>(
@@ -643,7 +606,7 @@ fn return_many<M: Mode>(
     Ok(())
 }
 
-/// 複数の値の戻り。値を書くスロットは見出しの戻り先の直前の命令 (`CallN`、`ApplyN`、`Receive`) から読む。見出しの
+/// 複数の値の戻り。値を書くスロットは見出しの戻り先の直前の `CallN` から読む。見出しの
 /// 形は変えずに済み、末尾呼び出しが見出しを引き継げば、そのまま末尾で呼んだ側の呼び出し元に書ける
 /// (docs/spec/vm.md の「呼び出しと戻り」)。値は呼ばれる側のフレームから
 /// 呼び出し元のフレームへ写すので、読む所と書く所は重ならない。
@@ -674,15 +637,6 @@ fn receivers<M: Mode>(code: &CodeBase<M>, ret: Pc, n: usize) -> Result<&[u32], V
             let count = 2 + o[1] as usize;
             &o[count + 1..count + 1 + o[count] as usize]
         }
-        Some(Op::ApplyN { at }) => {
-            let o = o(at);
-            let count = 3 + o[1] as usize;
-            &o[count + 1..count + 1 + o[count] as usize]
-        }
-        Some(Op::Receive { at }) => {
-            let o = o(at);
-            &o[1..1 + o[0] as usize]
-        }
         _ => return Err(not_received()),
     };
     if M::CHECKED && dsts.len() != n {
@@ -695,159 +649,6 @@ fn receivers<M: Mode>(code: &CodeBase<M>, ret: Pc, n: usize) -> Result<&[u32], V
 #[inline(never)]
 fn not_received() -> VmFault {
     VmFault::Internal("multiple values return to a place that does not receive them")
-}
-
-/// 受ける命令は変換の命令列の前に置くだけで、実行しない。誤りを `step` の腕で直に返すと速い道の命令の列が変わるので
-/// (`bench/run.sh` で数が増えた)、外の関数で作る。
-#[cold]
-#[inline(never)]
-fn receive_executed() -> Result<(), VmFault> {
-    Err(VmFault::Internal("a receive instruction is executed"))
-}
-
-/// 変換のフレームの戻り。`boxing` なら `src` のスカラーを箱に入れ、そうでなければ箱から取り出して箱を手放し、呼び出し
-/// 元へ返す。yield 中に戻った値は使われずに捨てられるので、箱に入れて確保しないように、渡す Repr のダミーを書く
-/// (docs/spec/lir.md の「ダミーの値」)。戻りの安全点は `Ret` と同じだが、`last_ret` は残す。変換の命令列はどの関数にも
-/// 属さないので、その後の組み込みの命令の誤りには、変換の前に戻った関数の名前を付けるためである。速い道の `step` の
-/// 命令の列を変えないように、外に出す。
-#[cold]
-#[inline(never)]
-fn convert_return<M: Mode>(
-    ctx: &mut Ctx<M>,
-    task: &mut Task,
-    counts: &mut RunCounts,
-    src: Slot,
-    scalar: Scalar,
-    boxing: bool,
-) -> Result<(), VmFault> {
-    let w = task.get(src);
-    let value = match (ctx.yielding() != 0, boxing) {
-        (true, true) => ctx.heap().dummy(),
-        // 受けた値はダミーなので手放さない。`int`、`float`、`enum` のダミーはどれもビット列 0 である
-        (true, false) => Word::from_bits(0),
-        (false, true) => data::box_scalar(ctx, counts, w, scalar),
-        (false, false) => data::unbox_scalar(ctx, counts, w, scalar)?,
-    };
-    task.return_value(value);
-    ctx.poll(task.depth())?;
-    Ok(())
-}
-
-/// 構造体の変換のフレームの戻り。`boxing` なら葉をスロット 0.. に受けて箱に入れ、そうでなければスロット 0 の箱から葉を
-/// 取り出して箱を消費する。yield 中は、スカラーの変換と同じく、変換せずに渡す Repr のダミーを書く。値が1つなら見出しの
-/// 結果のスロットに、2つ以上なら `RetN` と同じく戻り先の直前の命令のスロットに書く。`last_ret` は `convert_return` と
-/// 同じ理由で残す。
-#[cold]
-#[inline(never)]
-fn convert_struct_return<M: Mode>(
-    code: &CodeBase<M>,
-    ctx: &mut Ctx<M>,
-    task: &mut Task,
-    counts: &mut RunCounts,
-    id: u32,
-    boxing: bool,
-) -> Result<(), VmFault> {
-    let id = eml_lir::StructId(id);
-    let info = code.structs.get(id);
-    let yielding = ctx.yielding() != 0;
-    if boxing {
-        let value = if yielding {
-            // 受けた葉はダミーなので手放さない
-            ctx.heap().dummy()
-        } else {
-            task.load_scratch((0..info.leaves.len()).map(|i| i as Slot));
-            let leaves = std::mem::take(&mut task.scratch);
-            let boxed = data::box_struct(&code.structs, ctx, counts, id, &leaves);
-            task.scratch = leaves;
-            task.scratch.clear();
-            boxed?
-        };
-        task.return_value(value);
-    } else {
-        let mut leaves = std::mem::take(&mut task.scratch);
-        leaves.clear();
-        if yielding {
-            data::leaf_dummies(ctx, &info.leaves, &mut leaves);
-        } else {
-            data::take_struct(&code.structs, ctx, counts, id, task.get(0), &mut leaves)?;
-        }
-        if let [value] = leaves[..] {
-            task.return_value(value);
-        } else {
-            let (ret, _, size) = read_header(task.stack[task.base - 2]);
-            let dsts = receivers::<M>(code, ret, leaves.len())?;
-            let caller = task.stack[task.base - 1].bits();
-            for (&value, &dst) in leaves.iter().zip(dsts) {
-                task.stack[caller + dst as usize] = value;
-            }
-            task.base = caller;
-            task.frame_size = size;
-            task.pc = ret;
-        }
-        leaves.clear();
-        task.scratch = leaves;
-    }
-    ctx.poll(task.depth())?;
-    Ok(())
-}
-
-/// 末尾呼び出しの命令が持つ番号の変換で `tail_convert` する。`step` の `TailCall` の腕を小さく保つため、変換を引く
-/// のもここでする。
-#[cold]
-#[inline(never)]
-fn tail_convert_nth<M: Mode>(
-    code: &CodeBase<M>,
-    task: &mut Task,
-    index: u32,
-) -> Result<(), VmFault> {
-    let c2 = code.conversions.nth(index).ok_or(VmFault::Internal(
-        "a tail call converts through a conversion that does not exist",
-    ))?;
-    tail_convert(code, task, c2)
-}
-
-/// 末尾の呼び出しの結果に変換 `c2` が要るとき、呼ばれる側が今のフレームの位置に入れるように、変換のフレームを
-/// 整える (docs/spec/vm.md の「変換のフレーム」)。今のフレームの戻り先が
-/// 変換のフレーム c1 なら、c1 を c1 と c2 の合成に替え、合成が恒等なら c1 を外して呼ばれる側に c1 の見出しを引き継が
-/// せる。そうでなければ、今のフレームの位置に変換のフレームを置き、呼ばれる側をその上に積む。そのため変換のフレームは、
-/// 本当のフレーム1つにつき多くとも1つで、末尾の呼び出しの輪をたどってもスタックは伸びない。引数はすでに scratch に
-/// 読んであるので、今のフレームのスロットを上書きしてよい。
-#[cold]
-#[inline(never)]
-pub(crate) fn tail_convert<M: Mode>(
-    code: &CodeBase<M>,
-    task: &mut Task,
-    c2: Conversion,
-) -> Result<(), VmFault> {
-    let (ret, dst, caller_size) = read_header(task.stack[task.base - 2]);
-    let c1 = if code.is_conversion(ret) {
-        code.conversions.at(ret)
-    } else {
-        None
-    };
-    let Some(c1) = c1 else {
-        task.frame_size = c2.size;
-        task.push_frame(c2.start, 0, 0);
-        return Ok(());
-    };
-    // 両端はいつも同じ型の Repr なので、c2 が渡す種類は c1 が受ける種類で、合成は恒等か1つの変換になる
-    if c2.to != c1.from {
-        return Err(apply::DIFFERENT_TYPES);
-    }
-    if c2.from == c1.to {
-        task.base = task.stack[task.base - 1].bits();
-        task.frame_size = caller_size;
-        return Ok(());
-    }
-    // 1つの型の Repr の種類は一様な種類ともう1つだけなので、同じ型の2つの変換の合成はいつも恒等である。ここに来るのは
-    // 違う型の間の変換だけで、その変換はない。受ける値の数が c1 のフレームに収まらない変換にも置き換えない
-    let composed = code
-        .conversions
-        .get(c2.from, c1.to)
-        .filter(|composed| composed.size <= caller_size)
-        .ok_or(apply::DIFFERENT_TYPES)?;
-    task.stack[task.base - 2] = header(composed.start, dst, caller_size);
-    Ok(())
 }
 
 /// 中断を始めた命令の後で、タスクのスタックを巻き戻す (docs/spec/vm.md の「巻き戻しの手順」)。`task.pc` は中断を
@@ -870,13 +671,11 @@ fn unwind<M: Mode>(
             FINISH if task.exit.is_some() => return Ok(()),
             FINISH => return Err(VmFault::Internal("an abort reached the bottom of the task")),
             APPLY_REST => {
-                // 余った参照の引数はまだ渡していないこの枠の参照である
-                for slot in apply::rest_references(code, task) {
+                // 余った引数はまだ渡していないこの枠の参照である
+                for slot in apply::rest_arguments(task) {
                     unsafe { ctx.heap_mut().decref(task.get(slot)) }?;
                 }
             }
-            // 変換のフレームは何も持たない。着地するフレームは、その見出しの結果のスロットに書く
-            pc if code.is_conversion(pc) => {}
             pc => {
                 let entry = code
                     .unwind_at(pc)
@@ -935,7 +734,7 @@ fn finish<M: Mode>(code: &CodeBase<M>, ctx: &mut Ctx<M>, task: &Task) -> Result<
         }
         return Ok(());
     }
-    if code.ret_rc(task.entry) && !task.keep_result {
+    if code.functions[task.entry as usize].ret_rc && !task.keep_result {
         // 結果は入口の関数が返した、VM の持つ参照である
         unsafe { ctx.heap_mut().decref(task.get(0)) }?;
     }
@@ -1326,7 +1125,6 @@ mod tests {
             frame_size: 0,
             last_ret: FINISH,
             scratch: Vec::new(),
-            spare: Vec::new(),
             stack_limit: stack_limit(max_depth),
             entry: 0,
             keep_result: false,

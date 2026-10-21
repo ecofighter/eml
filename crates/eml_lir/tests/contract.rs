@@ -356,12 +356,12 @@ fn h(k.0: obj, x.1: float) -> Vec3{{float, float, float}} {{
     );
     let shown = passes_text(&text, Pass::Contract);
     insta::assert_snapshot!(function(&shown, "f"), @"
-    fn f(x.0: float) -> (float, float, float) source(float) -> Vec3{float, float, float} {
+    fn f(x.0: float) -> (float, float, float) {
       tail call g(x.0)
     }
     ");
     insta::assert_snapshot!(function(&shown, "h"), @"
-    fn h(k.0: obj, x.1: float) -> (float, float, float) source(obj, float) -> Vec3{float, float, float} {
+    fn h(k.0: obj, x.1: float) -> (float, float, float) {
       let x.3: tobj = box x.1
       let v.4: tobj = apply k.0(x.3)
       let (v.0.5: float, v.1.6: float, v.2.7: float) = unbox v.4 Vec3
@@ -387,7 +387,7 @@ fn f(x.0: float) -> Vec3{{float, float, float}} {{
 "
     );
     insta::assert_snapshot!(function(&passes_text(&text, Pass::Contract), "f"), @"
-    fn f(x.0: float) -> (float, float, float) source(float) -> Vec3{float, float, float} {
+    fn f(x.0: float) -> (float, float, float) {
       let (v.0.6: float, v.1.7: float, v.2.8: float) = call g(x.0)
       return (v.1.7, v.0.6, v.2.8)
     }
@@ -418,7 +418,7 @@ fn h(k.0: obj, x.1: float) -> (,){float, float} {
     }
     ");
     insta::assert_snapshot!(function(&shown, "h"), @"
-    fn h(k.0: obj, x.1: float) -> (float, float) source(obj, float) -> (,){float, float} {
+    fn h(k.0: obj, x.1: float) -> (float, float) {
       let x.4: tobj = box x.1
       let p.5: tobj = apply k.0(x.4)
       tail call h(k.0, 2.0)
@@ -496,7 +496,7 @@ fn f(a.0: obj lin, b.1: obj) -> P{obj, obj} {
 }
 ";
     insta::assert_snapshot!(function(&passes_text(text, Pass::Contract), "f"), @"
-    fn f(a.0: obj lin, b.1: obj) -> (obj, obj) source(obj, obj) -> P{obj, obj} {
+    fn f(a.0: obj lin, b.1: obj) -> (obj, obj) {
       let (v.0.3: obj poly, v.1.4: obj) = call g(a.0, b.1)
       return (v.0.3, v.1.4)
     }
@@ -517,7 +517,7 @@ fn f(a.0: obj, b.1: obj) -> P{obj lin, obj} lin {
 }
 ";
     insta::assert_snapshot!(function(&passes_text(text, Pass::Contract), "f"), @"
-    fn f(a.0: obj, b.1: obj) -> (obj lin, obj) source(obj, obj) -> P{obj lin, obj} {
+    fn f(a.0: obj, b.1: obj) -> (obj lin, obj) {
       tail call g(a.0, b.1)
     }
     ");

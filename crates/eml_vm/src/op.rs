@@ -1,8 +1,6 @@
 //! VM の命令 (docs/spec/vm.md の「命令の形」)。命令は 8 バイトで、長さの変わるオペランドは `CodeBase::operands` に
 //! 置いて添字で指す。
 
-use crate::sig::Scalar;
-
 /// フレームの中のスロットの番号。
 pub type Slot = u16;
 /// `CodeBase::code` の中の命令の位置。
@@ -10,18 +8,10 @@ pub type Pc = u32;
 
 /// いちばん下のフレームの戻り先。
 pub const FINISH: Pc = 0;
-/// 余った引数を適用する組み込みの命令。そのフレームは [結果, n, 場所のシグネチャ, 残りの引数の最初の位置, 引数…] で、
-/// 引数は場所のシグネチャの Repr のまま持つ (docs/spec/vm.md の「フレーム」)。
+/// 余った引数を適用する組み込みの命令。そのフレームは [結果, n, 一様な引数…] である (docs/spec/vm.md の「フレーム」)。
 pub const APPLY_REST: Pc = 1;
-/// 箱を要するスカラーと一様な値の間の変換の命令列の、最初の位置。命令列は `CodeBase::new` が作る
-/// (docs/spec/vm.md の「変換のフレーム」)。
-pub const CONVERSIONS: Pc = 2;
-/// 組み込みの命令の数。関数の命令はこの後に並ぶ。変換の命令列は、受ける命令と変換して戻る命令の2つを6組持つ。
-pub const BUILTINS: Pc = CONVERSIONS + 2 * 6;
-/// スカラーの変換のフレームの大きさ。変換のフレームの大きさは変換ごとに受ける値の数で、構造体の箱へ入れる変換は葉の
-/// 数のスロットを持つ。合成は恒等か、違う型の間の誤りにしかならないので、変換のフレームを別の大きさの変換に置き換える
-/// ことはない (`vm::tail_convert`)。命令列を作るときに、使うスロットがこの中にあることを確かめる。
-pub const CONVERSION_FRAME_SIZE: usize = 1;
+/// 組み込みの命令の数。関数の命令はこの後に並ぶ。
+pub const BUILTINS: Pc = 2;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Op {
@@ -55,8 +45,7 @@ pub enum Op {
         dst: Slot,
         at: u32,
     },
-    /// `operands[at..]` は [関数の番号, 引数の数, 引数のスロット…, 結果の変換]。結果の変換は変換の命令列の位置か
-    /// `NONE` である。
+    /// `operands[at..]` は [関数の番号, 引数の数, 引数のスロット…]。
     TailCall {
         at: u32,
     },
@@ -71,36 +60,12 @@ pub enum Op {
     },
     Finish,
     ApplyRest,
-    /// 変換の命令列の先頭の直前に置く、受けるスロットの命令。`operands[at..]` は [値の数, スロット…]。実行はしない。
-    /// 戻りが値を書くスロットを、戻り先の直前の命令から読めるようにするためにある。
-    Receive {
-        at: u32,
-    },
-    /// 変換のフレームの本体。`src` のスカラーを箱に入れて呼び出し元へ返す。
-    RetBox {
-        src: Slot,
-        scalar: Scalar,
-    },
-    /// 変換のフレームの本体。`src` の箱からスカラーを取り出し、箱を手放して呼び出し元へ返す。
-    RetUnbox {
-        src: Slot,
-        scalar: Scalar,
-    },
-    /// 変換のフレームの本体。スロット 0.. の葉から構造体 `id` の箱を作って呼び出し元へ返す。
-    RetBoxStruct {
-        id: u32,
-    },
-    /// 変換のフレームの本体。スロット 0 の箱から構造体 `id` の葉を取り出し、箱を消費して呼び出し元へ返す。
-    RetUnboxStruct {
-        id: u32,
-    },
-    /// `operands[at..]` は [関数の番号, lin, 捕まえる源の引数の数, 引数の数, 引数のスロット…]。源の引数の数は
-    /// 構造体の引数を1つと数える。`&f` の即値にはこの数を詰める。
+    /// `operands[at..]` は [関数の番号, lin, 引数の数, 引数のスロット…]。`&f` の即値には引数の数を詰める。
     Closure {
         dst: Slot,
         at: u32,
     },
-    /// `operands[at..]` は [呼ばれる値のスロット, 引数の数, 場所のシグネチャ, 引数のスロット…]。
+    /// `operands[at..]` は [呼ばれる値のスロット, 引数の数, 引数のスロット…]。
     Apply {
         dst: Slot,
         at: u32,
@@ -108,17 +73,12 @@ pub enum Op {
     TailApply {
         at: u32,
     },
-    /// 複数の値を受ける `apply`。`operands[at..]` は [呼ばれる値のスロット, 引数の数, 場所のシグネチャ,
-    /// 引数のスロット…, 結果の数, 結果のスロット…]。
-    ApplyN {
-        at: u32,
-    },
     /// `operands[at..]` は [呼ばれる値のスロット, 引数の数, 引数のスロット…]。引数は操作の ABI の Repr である。
     Clause {
         dst: Slot,
         at: u32,
     },
-    /// `operands[at..]` は [呼ばれる値のスロット, 引数の数, 引数のスロット…, 結果の変換]。
+    /// `operands[at..]` は [呼ばれる値のスロット, 引数の数, 引数のスロット…]。
     TailClause {
         at: u32,
     },

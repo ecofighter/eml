@@ -17,15 +17,15 @@ fn add(a.0: int, b.1: int) -> int {
 }
 "), @"
     fn main (arity 0, frame 3)
-        14  load_raw s1, 40
-        15  load_raw s2, 2
-        16  call s0 = add(s1, s2)
-        17  extern s0 = Prelude.Show Int.show(s0)
-        18  extern s0 = Prelude.println(s0)
-        19  ret s0
+         2  load_raw s1, 40
+         3  load_raw s2, 2
+         4  call s0 = add(s1, s2)
+         5  extern s0 = Prelude.Show Int.show(s0)
+         6  extern s0 = Prelude.println(s0)
+         7  ret s0
     fn add (arity 2, frame 2)
-        20  int_add s0, s0, s1
-        21  ret s0
+         8  int_add s0, s0, s1
+         9  ret s0
     ");
 }
 
@@ -42,16 +42,16 @@ fn main() -> unit {
 }
 "), @"
     fn main (arity 0, frame 3)
-        14  load_raw s1, 1
-        15  load_raw s2, 2
-        16  int_add s0, s1, s2
-        17  load_raw s1, 3
-        18  int_add s0, s0, s1
-        19  load_raw s1, 4
-        20  int_add s0, s0, s1
-        21  extern s0 = Prelude.Show Int.show(s0)
-        22  extern s0 = Prelude.println(s0)
-        23  ret s0
+         2  load_raw s1, 1
+         3  load_raw s2, 2
+         4  int_add s0, s1, s2
+         5  load_raw s1, 3
+         6  int_add s0, s0, s1
+         7  load_raw s1, 4
+         8  int_add s0, s0, s1
+         9  extern s0 = Prelude.Show Int.show(s0)
+        10  extern s0 = Prelude.println(s0)
+        11  ret s0
     ");
 }
 
@@ -72,16 +72,16 @@ fn one() -> int {
 }
 "), @"
     fn main (arity 0, frame 4)
-        14  load_raw s2, 1
-        15  load_raw s3, 2
-        16  int_add s0, s2, s3
-        17  call s1 = one()
-        18  extern s0 = Prelude.Show Int.show(s0)
-        19  extern s0 = Prelude.println(s0)
-        20  ret s0
+         2  load_raw s2, 1
+         3  load_raw s3, 2
+         4  int_add s0, s2, s3
+         5  call s1 = one()
+         6  extern s0 = Prelude.Show Int.show(s0)
+         7  extern s0 = Prelude.println(s0)
+         8  ret s0
     fn one (arity 0, frame 1)
-        21  load_raw s0, 1
-        22  ret s0
+         9  load_raw s0, 1
+        10  ret s0
     ");
 }
 
@@ -101,19 +101,19 @@ b1(p.2: int, q.3: int):
 }
 "), @"
     fn main (arity 0, frame 4)
-        14  load_raw s2, 1
-        15  load_raw s3, 0
-        16  int_add s0, s2, s3
-        17  load_raw s2, 2
-        18  load_raw s3, 0
-        19  int_add s1, s2, s3
-        20  move s2, s1
-        21  move s1, s0
-        22  move s0, s2
-        23  int_sub s0, s0, s1
-        24  extern s0 = Prelude.Show Int.show(s0)
-        25  extern s0 = Prelude.println(s0)
-        26  ret s0
+         2  load_raw s2, 1
+         3  load_raw s3, 0
+         4  int_add s0, s2, s3
+         5  load_raw s2, 2
+         6  load_raw s3, 0
+         7  int_add s1, s2, s3
+         8  move s2, s1
+         9  move s1, s0
+        10  move s0, s2
+        11  int_sub s0, s0, s1
+        12  extern s0 = Prelude.Show Int.show(s0)
+        13  extern s0 = Prelude.println(s0)
+        14  ret s0
     ");
 }
 
@@ -139,16 +139,16 @@ b2:
 }
 "), @"
     fn main (arity 0, frame 1)
-        14  load_imm s0, 0
-        15  tail_call show(s0)
+         2  load_imm s0, 0
+         3  tail_call show(s0)
     fn show (arity 1, frame 3)
-        16  switch_tobj s0 { #0 -> 17 [], #1 -> 20 [] }
-        17  load_const s0, c0
-        18  extern s0 = Prelude.println(s0)
-        19  ret s0
-        20  decref s0
-        21  load_imm s2, 0
-        22  ret s2
+         4  switch_tobj s0 { #0 -> 5 [], #1 -> 8 [] }
+         5  load_const s0, c0
+         6  extern s0 = Prelude.println(s0)
+         7  ret s0
+         8  decref s0
+         9  load_imm s2, 0
+        10  ret s2
     ");
 }
 
@@ -166,13 +166,13 @@ fn main() -> unit {
 }
 "), @"
     fn main (arity 0, frame 4)
-        14  load_const s0, c0
-        15  load_raw s3, 7
-        16  con s0 = #0 (1 scanned, 1 raw) [@0 -> s0, raw @1 -> s3]
-        17  unpack s0 #0 [@0 -> s1]
-        18  release s0 #0 [keep @0]
-        19  extern s0 = Prelude.println(s1)
-        20  ret s0
+         2  load_const s0, c0
+         3  load_raw s3, 7
+         4  con s0 = #0 (1 scanned, 1 raw) [@0 -> s0, raw @1 -> s3]
+         5  unpack s0 #0 [@0 -> s1]
+         6  release s0 #0 [keep @0]
+         7  extern s0 = Prelude.println(s1)
+         8  ret s0
     ");
 }
 
@@ -197,16 +197,16 @@ b1:
 }
 "), @"
     fn main (arity 0, frame 2)
-        14  load_const s0, c0
-        15  load_const s1, c1
-        16  con s0 = #0 (2 scanned, 0 raw) [@0 -> s0, @1 -> s1]
-        17  tail_call first(s0)
+         2  load_const s0, c0
+         3  load_const s1, c1
+         4  con s0 = #0 (2 scanned, 0 raw) [@0 -> s0, @1 -> s1]
+         5  tail_call first(s0)
     fn first (arity 1, frame 3)
-        18  switch_obj s0 { #0 -> 19 [@0 -> s1, @1 -> s2] }
-        19  release s0 #0 [keep @0, keep @1]
-        20  decref s2
-        21  extern s0 = Prelude.println(s1)
-        22  ret s0
+         6  switch_obj s0 { #0 -> 7 [@0 -> s1, @1 -> s2] }
+         7  release s0 #0 [keep @0, keep @1]
+         8  decref s2
+         9  extern s0 = Prelude.println(s1)
+        10  ret s0
     ");
 }
 
@@ -226,14 +226,14 @@ fn main() -> unit {
 }
 "), @"
     fn main (arity 0, frame 3)
-        14  load_const s0, c0
-        15  load_const s1, c1
-        16  con s0 = #0 (2 scanned, 0 raw) [@0 -> s0, @1 -> s1]
-        17  unpack s0 #0 [@0 -> s1, @1 -> s2]
-        18  release s0 #0 [keep @0, keep @1]
-        19  decref s2
-        20  extern s0 = Prelude.println(s1)
-        21  ret s0
+         2  load_const s0, c0
+         3  load_const s1, c1
+         4  con s0 = #0 (2 scanned, 0 raw) [@0 -> s0, @1 -> s1]
+         5  unpack s0 #0 [@0 -> s1, @1 -> s2]
+         6  release s0 #0 [keep @0, keep @1]
+         7  decref s2
+         8  extern s0 = Prelude.println(s1)
+         9  ret s0
     ");
 }
 
@@ -253,15 +253,15 @@ b1(a.1: int, b.2: int):
 }
 "), @"
     fn main (arity 0, frame 4)
-        14  load_raw s2, 1
-        15  load_raw s3, 2
-        16  int_add s0, s2, s3
-        17  move s1, s0
-        18  load_raw s0, 5
-        19  int_add s0, s0, s1
-        20  extern s0 = Prelude.Show Int.show(s0)
-        21  extern s0 = Prelude.println(s0)
-        22  ret s0
+         2  load_raw s2, 1
+         3  load_raw s3, 2
+         4  int_add s0, s2, s3
+         5  move s1, s0
+         6  load_raw s0, 5
+         7  int_add s0, s0, s1
+         8  extern s0 = Prelude.Show Int.show(s0)
+         9  extern s0 = Prelude.println(s0)
+        10  ret s0
     ");
 }
 
@@ -292,20 +292,20 @@ b1:
 }
 "), @"
     fn main (arity 0, frame 2)
-        14  load_const s0, c0
-        15  load_const s1, c1
-        16  con s0 = #0 (2 scanned, 0 raw) [@0 -> s0, @1 -> s1]
-        17  con s0 = #0 (1 scanned, 0 raw) [@0 -> s0]
-        18  tail_call go(s0)
+         2  load_const s0, c0
+         3  load_const s1, c1
+         4  con s0 = #0 (2 scanned, 0 raw) [@0 -> s0, @1 -> s1]
+         5  con s0 = #0 (1 scanned, 0 raw) [@0 -> s0]
+         6  tail_call go(s0)
     fn go (arity 1, frame 4)
-        19  unpack s0 #0 [@0 -> s1]
-        20  switch_obj s1 { #0 -> 21 [@0 -> s2, @1 -> s3] }
-        21  dup s2
-        22  dup s3
-        23  decref s0
-        24  extern s0 = Prelude.println(s2) unwind [s3]
-        25  extern s0 = Prelude.println(s3)
-        26  ret s0
+         7  unpack s0 #0 [@0 -> s1]
+         8  switch_obj s1 { #0 -> 9 [@0 -> s2, @1 -> s3] }
+         9  dup s2
+        10  dup s3
+        11  decref s0
+        12  extern s0 = Prelude.println(s2) unwind [s3]
+        13  extern s0 = Prelude.println(s3)
+        14  ret s0
     ");
 }
 
@@ -322,14 +322,14 @@ fn main() -> unit {
 }
 "), @"
     fn main (arity 0, frame 3)
-        14  load_const s1, c0
-        15  load_raw s2, 1
-        16  int_add s0, s1, s2
-        17  load_const s1, c0
-        18  int_add s0, s0, s1
-        19  extern s0 = Prelude.Show Int.show(s0)
-        20  extern s0 = Prelude.println(s0)
-        21  ret s0
+         2  load_const s1, c0
+         3  load_raw s2, 1
+         4  int_add s0, s1, s2
+         5  load_const s1, c0
+         6  int_add s0, s0, s1
+         7  extern s0 = Prelude.Show Int.show(s0)
+         8  extern s0 = Prelude.println(s0)
+         9  ret s0
     ");
 }
 
@@ -353,18 +353,18 @@ b3:
 }
 "), @"
     fn main (arity 0, frame 4)
-        14  load_raw s2, 1
-        15  load_raw s3, 2
-        16  int_add s0, s2, s3
-        17  load_raw s2, 3
-        18  int_eq s1, s0, s2
-        19  switch_enum s1 { #0 -> 21 [], #1 -> 20 [] }
-        20  goto 23
-        21  load_imm s2, 0
-        22  ret s2
-        23  extern s0 = Prelude.Show Int.show(s0)
-        24  extern s0 = Prelude.println(s0)
-        25  ret s0
+         2  load_raw s2, 1
+         3  load_raw s3, 2
+         4  int_add s0, s2, s3
+         5  load_raw s2, 3
+         6  int_eq s1, s0, s2
+         7  switch_enum s1 { #0 -> 9 [], #1 -> 8 [] }
+         8  goto 11
+         9  load_imm s2, 0
+        10  ret s2
+        11  extern s0 = Prelude.Show Int.show(s0)
+        12  extern s0 = Prelude.println(s0)
+        13  ret s0
     ");
 }
 
@@ -389,17 +389,17 @@ b2:
 }
 "), @"
     fn main (arity 0, frame 1)
-        14  load_raw s0, 3
-        15  tail_call pick(s0)
+         2  load_raw s0, 3
+         3  tail_call pick(s0)
     fn pick (arity 1, frame 2)
-        16  load_raw s1, 3
-        17  int_eq s0, s0, s1
-        18  switch_enum s0 { #0 -> 19 [], #1 -> 21 [] }
-        19  load_imm s1, 0
-        20  ret s1
-        21  load_const s0, c0
-        22  extern s0 = Prelude.println(s0)
-        23  ret s0
+         4  load_raw s1, 3
+         5  int_eq s0, s0, s1
+         6  switch_enum s0 { #0 -> 7 [], #1 -> 9 [] }
+         7  load_imm s1, 0
+         8  ret s1
+         9  load_const s0, c0
+        10  extern s0 = Prelude.println(s0)
+        11  ret s0
     ");
 }
 
@@ -425,18 +425,18 @@ b3:
 }
 "), @"
     fn main (arity 0, frame 1)
-        14  load_raw s0, 2
-        15  tail_call pick(s0)
+         2  load_raw s0, 2
+         3  tail_call pick(s0)
     fn pick (arity 1, frame 2)
-        16  switch_int s0 { 1 -> 17, 5000000000 -> 20, _ -> 23 }
-        17  load_const s0, c0
-        18  extern s0 = Prelude.println(s0)
-        19  ret s0
-        20  load_const s0, c1
-        21  extern s0 = Prelude.println(s0)
-        22  ret s0
-        23  load_imm s1, 0
-        24  ret s1
+         4  switch_int s0 { 1 -> 5, 5000000000 -> 8, _ -> 11 }
+         5  load_const s0, c0
+         6  extern s0 = Prelude.println(s0)
+         7  ret s0
+         8  load_const s0, c1
+         9  extern s0 = Prelude.println(s0)
+        10  ret s0
+        11  load_imm s1, 0
+        12  ret s1
     ");
 }
 
@@ -463,21 +463,21 @@ b3:
 }
 "), @"
     fn main (arity 0, frame 2)
-        14  load_const s0, c0
-        15  call s0 = pick(s0)
-        16  load_imm s1, 0
-        17  ret s1
+         2  load_const s0, c0
+         3  call s0 = pick(s0)
+         4  load_imm s1, 0
+         5  ret s1
     fn pick (arity 1, frame 2)
-        18  switch_string s0 { 0 -> 19, 1 -> 22, _ -> 25 }
-        19  decref s0
-        20  load_raw s1, 1
-        21  ret s1
-        22  decref s0
-        23  load_raw s1, 2
-        24  ret s1
-        25  decref s0
-        26  load_raw s1, 3
-        27  ret s1
+         6  switch_string s0 { 0 -> 7, 1 -> 10, _ -> 13 }
+         7  decref s0
+         8  load_raw s1, 1
+         9  ret s1
+        10  decref s0
+        11  load_raw s1, 2
+        12  ret s1
+        13  decref s0
+        14  load_raw s1, 3
+        15  ret s1
     ");
 }
 
@@ -501,17 +501,17 @@ yields fn land(b.0: tobj, ev.1: obj, s.2: obj) -> unit {
 }
 "), @"
     fn main (arity 0, frame 1)
-        14  load_imm s0, 0
-        15  ret s0
+         2  load_imm s0, 0
+         3  ret s0
     fn land (arity 3, frame 4)
-        16  dup s2
-        17  load_imm s3, 0
-        18  apply s0 = s0(s3) : (unit) -> tobj unwind [s1, s2*2] land s1
-        19  decref s0
-        20  decref s1
-        21  extern s0 = Prelude.++(s2, s2)
-        22  extern s0 = Prelude.println(s0)
-        23  ret s0
+         4  dup s2
+         5  load_imm s3, 0
+         6  apply s0 = s0(s3) unwind [s1, s2*2] land s1
+         7  decref s0
+         8  decref s1
+         9  extern s0 = Prelude.++(s2, s2)
+        10  extern s0 = Prelude.println(s0)
+        11  ret s0
     ");
 }
 
@@ -551,28 +551,28 @@ fn sink(q.0: obj) -> unit {
 }
 "), @"
     fn main (arity 0, frame 2)
-        14  load_const s0, c0
-        15  load_raw s1, 7
-        16  con s0 = #0 (1 scanned, 1 raw) [@0 -> s0, raw @1 -> s1]
-        17  tail_call go(s0)
+         2  load_const s0, c0
+         3  load_raw s1, 7
+         4  con s0 = #0 (1 scanned, 1 raw) [@0 -> s0, raw @1 -> s1]
+         5  tail_call go(s0)
     fn go (arity 1, frame 5)
-        18  unpack s0 #0 [@0 -> s1, raw @1 -> s2]
-        19  release s0 #0 [keep @0] token s0
-        20  load_const s3, c1
-        21  extern s3 = Prelude.println(s3) unwind [s1] tokens [s0]
-        22  switch_int s2 { 0 -> 23, 1 -> 25, _ -> 28 }
-        23  con s0 = #0 (1 scanned, 1 raw) [skip @0 -> s1, raw @1 -> s2] reuse s0 in place
-        24  tail_call sink(s0)
-        25  load_raw s4, 8
-        26  con s0 = #0 (1 scanned, 1 raw) [@0 -> s1, raw @1 -> s4] reuse s0
-        27  tail_call sink(s0)
-        28  drop_token s0
-        29  decref s1
-        30  ret s3
+         6  unpack s0 #0 [@0 -> s1, raw @1 -> s2]
+         7  release s0 #0 [keep @0] token s0
+         8  load_const s3, c1
+         9  extern s3 = Prelude.println(s3) unwind [s1] tokens [s0]
+        10  switch_int s2 { 0 -> 11, 1 -> 13, _ -> 16 }
+        11  con s0 = #0 (1 scanned, 1 raw) [skip @0 -> s1, raw @1 -> s2] reuse s0 in place
+        12  tail_call sink(s0)
+        13  load_raw s4, 8
+        14  con s0 = #0 (1 scanned, 1 raw) [@0 -> s1, raw @1 -> s4] reuse s0
+        15  tail_call sink(s0)
+        16  drop_token s0
+        17  decref s1
+        18  ret s3
     fn sink (arity 1, frame 2)
-        31  decref s0
-        32  load_imm s1, 0
-        33  ret s1
+        19  decref s0
+        20  load_imm s1, 0
+        21  ret s1
     ");
 }
 
@@ -595,17 +595,17 @@ fn main() -> unit {
 }
 "), @"
     fn main (arity 0, frame 4)
-        14  box_const s0, c0
-        15  box_const s1, c1
-        16  unbox_float s2, s1
-        17  decref s1
-        18  box_float s1, s2
-        19  load_const s3, c2
-        20  con s1 = #0 (1 scanned, 1 raw) [raw @1 -> s3, @0 -> s1]
-        21  decref s1
-        22  decref s0
-        23  load_imm s3, 0
-        24  ret s3
+         2  box_const s0, c0
+         3  box_const s1, c1
+         4  unbox_float s2, s1
+         5  decref s1
+         6  box_float s1, s2
+         7  load_const s3, c2
+         8  con s1 = #0 (1 scanned, 1 raw) [raw @1 -> s3, @0 -> s1]
+         9  decref s1
+        10  decref s0
+        11  load_imm s3, 0
+        12  ret s3
     ");
 }
 
@@ -625,14 +625,14 @@ fn main(a.0: float, b.1: float) -> enum {
 }
 "), @"
     fn main (arity 2, frame 4)
-        14  float_add s2, s0, s1
-        15  load_const s3, c0
-        16  float_rem s2, s2, s3
-        17  float_neg s2, s2
-        18  float_lt s2, s2, s0
-        19  extern s0 = Prelude.Ord Float.compare(s0, s1)
-        20  bool_eq s0, s2, s0
-        21  ret s0
+         2  float_add s2, s0, s1
+         3  load_const s3, c0
+         4  float_rem s2, s2, s3
+         5  float_neg s2, s2
+         6  float_lt s2, s2, s0
+         7  extern s0 = Prelude.Ord Float.compare(s0, s1)
+         8  bool_eq s0, s2, s0
+         9  ret s0
     ");
 }
 
@@ -662,10 +662,10 @@ fn main(a.0: obj, m.1: obj) -> unit {
     );
 }
 
-/// `apply` のシグネチャは引数も結果も `tobj` である。末尾の位置では結果が関数の `ret` で、互換な `tobj` になる
+/// `apply` の命令は呼ばれる値と引数のスロットだけを持つ。引数も結果も一様な語なので、シグネチャを持たない
 /// (docs/spec/lir.md の「関数の ABI」)。
 #[test]
-fn an_apply_carries_a_uniform_signature() {
+fn an_apply_carries_only_its_callee_and_argument_slots() {
     insta::assert_snapshot!(disasm_unverified("\
 fn main(f.0: tobj, x.1: tobj) -> tobj {
   dup f.0
@@ -676,12 +676,12 @@ fn main(f.0: tobj, x.1: tobj) -> tobj {
 }
 "), @"
     fn main (arity 2, frame 3)
-        14  dup s0
-        15  load_imm s2, 2
-        16  apply s1 = s0(s1, s2) : (tobj, tobj) -> tobj unwind [s0]
-        17  dup s0
-        18  apply s1 = s0(s1) : (tobj) -> tobj unwind [s0]
-        19  load_imm s2, 1
-        20  tail_apply s0(s1, s2) : (tobj, tobj) -> tobj
+         2  dup s0
+         3  load_imm s2, 2
+         4  apply s1 = s0(s1, s2) unwind [s0]
+         5  dup s0
+         6  apply s1 = s0(s1) unwind [s0]
+         7  load_imm s2, 1
+         8  tail_apply s0(s1, s2)
     ");
 }

@@ -28,7 +28,7 @@ fn strings_are_dupped_and_decreffed() {
       let t.5: unit = extern Prelude.println(t.4)
       return t.5
     }
-    fn "hide@[String -> String]{1=twice}"(n.0: int) -> tobj source(int) -> Box{tobj} {
+    fn "hide@[String -> String]{1=twice}"(n.0: int) -> tobj {
       let t.2: enum = extern "Prelude.Ord Int.<="(n.0, 0)
       switch t.2 Prelude.Bool { #0 -> b1, #1 -> b2 }
     b1:
@@ -79,7 +79,7 @@ fn a_non_tail_if_keeps_strings_used_later() {
 fn constructor_arguments_are_owned_by_the_value() {
     let text = "data Box a = | Box a\n\nhide : Int -> a -> <Panic> Box a\nhide n x = if n <= 0 then Box x else hide (n - 1) x\n\ndata Pair a b =\n  | Pair a b\n\ntwice : String -> Pair String String\ntwice s = Pair s s\n\nmain : Unit -> <IO, Panic> Unit\nmain () =\n  let Box twice = hide 0 twice\n  let _ = twice \"s\"\n  ()";
     insta::assert_snapshot!(function(&lir_text(text, eml_lir::Pass::Perceus), "twice"), @"
-    fn twice(s.0: obj) -> (obj, obj) source(obj) -> Pair{obj, obj} {
+    fn twice(s.0: obj) -> (obj, obj) {
       dup s.0
       return (s.0, s.0)
     }

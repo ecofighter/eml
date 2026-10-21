@@ -170,11 +170,11 @@ extern の結果を1つの期待値の表に固定し、`eml_rt` の回帰を防
 - verifier が拒む LIR は、VM 自身の見張り (内部の誤り) を確かめるテストだけで使う。`run_unverified` で検査モードだけで走らせ、そのことをテストの doc コメントに書く。verifier が拒んだら、verifier でなくテストの LIR を直す
 - `tags.rs` は、`Bool`、`Ordering`、組のタグの定数が `eml_rt::externs` と `eml_lir` で同じであることを確かめる
 - `api.rs` は、`CodeBase<M>: Sync` と `Task: Send` を型の assert で固定する ([マルチコア対応の設計](../future/multicore.md) の「VM の並列化の備え」の制約1と2)。`RunConfig` の組み立て (`with_debug_heap`、`with_control`) と、割り込みの扱いも確かめる
-- `conversions.rs` は、型どおりの `apply` と実行時の変換を確かめる。速い道では箱を作らず、呼ぶ所と関数の Repr が合わない引数だけを `box` か `unbox` で変える ([VM](../spec/vm.md) の「シグネチャ」)
+- `apply.rs` は、一様な `apply` と、捕まえた値の並べ方と数を確かめる。`apply` は引数の数だけを比べて語を写し、部分適用と `ApplyRest` も一様な語を写す ([VM](../spec/vm.md) の「呼び出しと戻り」)
 - `machine.rs` は、入力をまたいで `CodeBase` と `Ctx` を持つ `Machine` を確かめる。手書きの LIR のプログラムを1つの `Machine` に続けて読み込み、名前で照らした関数の番号、定数、エフェクト、位置のファイルの引き直しを見る ([VM](../spec/vm.md) の「追記」)
 - `reuse.rs` は、reuse の命令の実行を手書きの LIR で確かめる。token を出すパスがなくても、token を定義する `release`、token を受ける `con`、`drop_token` と巻き戻しの token を VM だけで確かめられる ([VM](../spec/vm.md) の「reuse」)
 - `roots.rs` は、セッションの根を読み書きする基本操作を確かめる。根に置いた値は実行の終わりに VM が手放すので、検査モードのリークの検査も通る ([LIR](../spec/lir.md) の「基本操作」)
-- `structs.rs` は、複数の値の呼び出しと戻り、構造体と箱の間の変換を確かめる。構造体を持つ手書きの LIR をパスに通して実行し、ダミーを受ける命令はパスの後の形の LIR を手で書いて確かめる ([VM](../spec/vm.md) の「呼び出しと戻り」と「変換のフレーム」)
+- `structs.rs` は、複数の値の呼び出しと戻り、構造体を箱で渡す `apply` を確かめる。構造体を持つ手書きの LIR をパスに通して実行し、ダミーを受ける命令はパスの後の形の LIR を手で書いて確かめる ([VM](../spec/vm.md) の「呼び出しと戻り」と「データとクロージャ」)
 - `bench.rs` は、基準のプログラムの VM の `RunStats` を固定する。`scaling.rs` は、仕事の回数と物体とスタックの語の数を上限と比べる (どちらも下の「性能のテスト」)
 - `miri.rs` は、Miri で流す小さい実行のテストである (上の「Miri」)
 - `crates/eml_cli/tests/cli.rs` は、速いモードの `eml run` の成功と実行時エラーの終了コード、SIGINT で止めたときの終了コード 130 を確かめる。`crates/eml_cli/tests/terminal.rs` は `eml repl` を、`crates/eml_cli/tests/lines.rs` は行のまとめ方を、`crates/eml_cli/tests/pretty.rs` は結果の整形を確かめる (下の「CLI のテスト」)
@@ -209,7 +209,7 @@ b3(t.3: int):
   - token を受ける `con`: `let d.3: obj = con P #0(=a.1, b.2) reuse r.4`。`=` を付けた引数は書かない印で、末尾に `in place` を付けるとヘッダを書かない
   - 使わなかった token を手放す文: `drop_token r.4`
 - 構造体の repr は、形の中身を `配置{フィールドの repr, ..}` と書く (`Vec3{float, float, float}`、`(,){int, obj lin}`)。フィールドの印は repr の後に書く。入れ子の構造体も同じ書き方である ([LIR](../spec/lir.md) の「構造体の形」)
-- 開いた後の LIR では、2つ以上の値を返す関数の結果を `-> (float, float)` と書き、源の単位の ABI を結果の後に `source(引数の repr, ..) -> 結果の repr` と書く。複数の値の `let` は `let (a.1: float, b.2: float) = call f(x.0)`、`return` は `return (a.1, b.2)`、構造体の `unbox` は `let (x.4: float, _) = unbox w.3 Vec3`、その箱の `release` は `release unboxed w.3 Vec3 #0(..)` である ([LIR](../spec/lir.md) の「開く」)
+- 開いた後の LIR では、2つ以上の値を返す関数の結果を `-> (float, float)` と書く。複数の値の `let` は `let (a.1: float, b.2: float) = call f(x.0)`、`return` は `return (a.1, b.2)`、構造体の `unbox` は `let (x.4: float, _) = unbox w.3 Vec3`、その箱の `release` は `release unboxed w.3 Vec3 #0(..)` である ([LIR](../spec/lir.md) の「開く」)
 - 関数の名前が空のとき、または空白、`(`、`)`、`{`、`}`、`[`、`]`、`,`、`"`、`<`、`>` のどれかを含むとき、`pretty` はその名前を文字列と同じ逃がし方 (Rust の `{:?}`) で引用符で囲んで書く (`fn "f@[Int]"(x.0: int) -> int {`、`call "f@[Int]"(n.1)`)。lexer がこれらの文字で語を切るためである。単相化の instance の名前 (`map@[Int, String]`、row のビットを書いた `twice<e>`) と、instance のメソッドの関数の名前 (`Show Color.show`) がこれに当たる。関数の値は `&` の後に文字列を続ける (`&"f@[Int]"`)。`parse` は、関数の名前が来るすべての位置 (`fn` の見出し、`call`、`tail`、`closure`、`&`) で、語の代わりに文字列も読む。`apply` と節のオペランドの関数の値も `&` の規則に従う
 - 入口のブロックにはラベルを付けない。ほかのブロックは `bN:` か `bN(引数):` の行で始め、`N` は入口を除いて書いた順に 1 から数える。順が違えば `parse` が誤りにする。`parse` は終端の後をラベルとして読み、行の字下げは読まない。`pretty` はラベルを行頭に、文と終端を2字下げて書く。
 - 変数は名前と番号を `.` でつないで書く (`x.0`)。束縛する位置 (関数とブロックの引数、`let`、`unpack` と case のフィールド) では `x.0: int` のように repr を付け、`unr` でないときは repr の後に Kind の印を付け (`x.1: tobj lin`、`x.2: tobj poly`)、使う位置 (値、`dup`、`decref`、`release` の値と残すフィールド) には付けない。`parse` は最後の `.` の後を番号とする。名前は数字で始まらず、英数字、`_`、`$`、`'` からなる。番号の先頭に 0 は書かない。表示に現れない番号は、名前が空で repr が `unit` の変数で埋める。束縛のない変数も読み、repr を `unit` にする。見えない変数の使用は verifier が報告する。同じ番号を違う repr か違う印で束縛すると、`parse` が誤りにする (`` `x.1` is bound with two different marks ``)。

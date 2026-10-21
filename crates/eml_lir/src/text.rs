@@ -58,7 +58,6 @@ impl Parser<'_> {
             clause: header.clause,
             vars,
             rets: header.rets,
-            source: header.source,
             blocks,
         })
     }

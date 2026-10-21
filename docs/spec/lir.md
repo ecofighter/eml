@@ -23,7 +23,7 @@ EP の後の Core IR から写す LIR と、その実行の意味を定める。
 - LIR は、EP の後の Core IR を写したものである ([Core IR](core-ir.md) の「Core IR から LIR への変換」)。Core IR との違いは次の2つである
   - エフェクトの命令 (`perform`、`handle`、`resume`) と、呼び出しの `mask` を持たない。LIR の型にないので、EP の後に残っていないことを verifier でなく型で保証する
   - RC の命令 (`dup`、`decref`、`release`)、`box` と `unbox`、末尾呼び出し `tail` を持つ。どれも LIR のパス (box の挿入、縮約、Perceus) だけが入れる。複数の値の `let` と `return`、構造体の `unbox` は開くパスだけが入れる (下の「開く」)。token の命令は reuse のパスだけが入れる (下の「reuse」)。変換の直後の LIR はこれらを持たず、`passes_until` の入口の verifier がそれを確かめる (下の「パスの順番」)
-- 関数は、名前、内部の関数かどうかの印 (`internal`)、一様な位置の始まり (`split`)、yield しうるかの印 (`yields`)、入口の関数の印 (`clause`)、変数の表、結果の並び (`rets`)、源の単位の ABI (`source`)、ブロックの列を持つ。印と `split` は Core IR と同じ意味である ([Core IR](core-ir.md) の「`yields` の印」、下の「関数の ABI」と「入口の関数の印」)。box の挿入は `split` と `clause` を読み、`internal` は読まない。`internal` は ABI を決めない。VM は `yields` を読まない ([VM](vm.md) の「呼び出しと戻り」)
+- 関数は、名前、内部の関数かどうかの印 (`internal`)、一様な位置の始まり (`split`)、yield しうるかの印 (`yields`)、入口の関数の印 (`clause`)、変数の表、結果の並び (`rets`)、ブロックの列を持つ。印と `split` は Core IR と同じ意味である ([Core IR](core-ir.md) の「`yields` の印」、下の「関数の ABI」と「入口の関数の印」)。box の挿入は `split` と `clause` を読み、`internal` は読まない。`internal` は ABI を決めない。VM は `yields` を読まない ([VM](vm.md) の「呼び出しと戻り」)
 - プログラムは、関数、入口、文字列の表、配置の表、構造体の形の表、エフェクトの表、ファイルの表を持つ。Core IR のプログラムと同じ欄である。エフェクトの表は、`clause` の ABI (操作の Repr) と、基本操作の即値のために持つ
 - 2つの IR は別の型を持つ。型を読むだけでどちらの IR か分かり、LIR にエフェクトの命令がないことと、Core IR に RC と box がないことを、verifier でなく型で保証できるためである。重なる部品 (共有する型、テキスト形式の字句解析と共通の命令の読み書き、verifier の支配木と R7 と R8 の検査、基本操作と `clause` の検査) は `eml_lir` に置き、`eml_core_ir` が借りる
 
@@ -400,7 +400,7 @@ handle の実行と、継続の再開のたびに、新しい evidence を作る
 
 - yield 中に返す値は、呼び出し元が使わずに捨てる
 - 関数の `ret` が `obj` か `tobj` なら `prim dummy()` の値を、`int` なら `0` を、`float` なら `0.0` を、`enum` なら `#0` を、`unit` なら `()` を返す。`tobj` にも物体を使うのは、互換の位置を通って `obj` の変数に入ることがあるためである (`ret` が `tobj` の関数の結果を `obj` の変数で受ける形)。`ret` が構造体なら、構造体の変数に `prim dummy()` を束縛して返す。box の挿入がこの束縛を `unbox` で受け直すので、開いた後は、下の構造体の `unbox` の約束で葉のダミーになる ([Core IR](core-ir.md) の「yield の地点」)
-- ダミーは、変換と RC の命令に当たる。EP は遅い道の先頭で、使わない x を `drop` し ([Core IR](core-ir.md) の「yield の地点」)、box の挿入は呼び出しの結果を受け直す `unbox` と `box` を呼び出しの直後 (yield の確認の前) に置く。VM の変換のフレームも、yield 中はダミーを受ける ([VM](vm.md) の「変換のフレーム」)。そのため、実行時は次を守る。`eml_rt` も同じ約束を守る
+- ダミーは、変換と RC の命令に当たる。EP は遅い道の先頭で、使わない x を `drop` し ([Core IR](core-ir.md) の「yield の地点」)、box の挿入は呼び出しの結果を受け直す `unbox` と `box` を呼び出しの直後 (yield の確認の前) に置く。そのため、実行時は次を守る。`eml_rt` も同じ約束を守る
   - `dummy` の値は、`dup`、`decref`、`drop` で何も起こさない
   - `unbox` は、ダミーを受けても誤りにせず、何かの値を返す。その値は捨てられる
   - `box` は、ダミーを受けたらダミーを返す。`0`、`0.0`、`#0` は普通に箱に入れ、その値は捨てられる
@@ -487,8 +487,7 @@ handle の実行と、継続の再開のたびに、新しい evidence を作る
 - 構造体の `drop` は、`unr` でない RC の対象の葉ごとの `drop` にする。結果の `unit` の変数は `()` に置き換える
 - 戻らない呼び出し (`never` の操作の `clause`、`exit`) が構造体を束縛するときは、結果を `unr` の `obj` の変数 r で受け、葉をダミーの値で定義する。box の挿入は戻らない呼び出しの束縛の使いに変換を入れないので、1語の位置 (`tobj` のフィールド、`obj` の引数、`return` の1つの値) の使いが残りうる。開くパスはその使いを r に置き換える。制御が届かないので、どちらも実行されない
 - 消した構造体の変数は、変数の表に、名前が空で Repr が `unit` で印が `unr` の項目として残す。変数の番号を変えないためである
-- 開いた後も、関数は源の単位の ABI (構造体の Repr を含む引数と結果の Repr) を持つ。VM は関数の値の ABI をそこから作る ([VM](vm.md) の「シグネチャ」)。葉の並びからは、どの葉がどの構造体の形をなすかが分からないためである
-  - 関数は、引数か結果に構造体があれば、開く前の引数の Repr と結果の Repr (`LirFn::source`) を持つ。テキストの形では、関数の頭の結果の後に `source(tobj, P{unit, float}) -> float` と書く。verifier は、`source` を葉に開いた並びが関数の引数と `rets` と同じであることを確かめる
+- 開いた後の関数は、開く前の ABI を持たない。`apply` の引数と結果は一様な1語で、捕まえた値はクロージャの中で開いた葉の語のまま並ぶので、関数の値の ABI は開いた後の引数と `rets` だけで決まる (上の「関数の ABI」、[VM](vm.md) の「呼び出しと戻り」)
 - 開いた後の LIR には構造体の Repr が残らない。extern、`prim`、`clause` の引数と結果には、box の挿入の後に構造体が来ない
 - 構造体の値は葉の並びとして移る。`Lin` のフィールドを持つ構造体も `Lin` のまま移すので、`Lin` の葉は1回だけ消費される
 - パスはブロックと文のループだけで、IR の大きさに比例して再帰しない。再帰は入れ子の構造体の形の深さ (語の数の上限で抑えられる) だけである
@@ -642,7 +641,7 @@ reuse のパスは、Perceus が手放す箱を token にし、同じ物理的�
 - LIR の verifier は5つの段を持つ。段はパスの順に直線に並ぶので、境界の検査だけを切り替える別の旗は持たない
   - 入口の段 (`verify_lowered`) は、`passes_until` が入力にかける (上の「パスの順番」)。構造の規則のうち境界と所有に関わらないもの (R1〜R5、R6 の支配、R7 と R8 のうち境界の検査を除くもの) と、下の引き継ぐ検査と、基本操作と `clause` の検査を確かめ、`tail`、`box`、`unbox`、`dup`、`decref`、`release` がないことを確かめる。box の挿入は末尾呼び出しと変換のない入力を前提にし、`let` と `return` の形から末尾の位置を見るためである。Perceus より前に `release` を拒むのと同じく、パスの入力の約束を verifier が確かめる
   - 範囲の段 (`verify_scopes`) は box の挿入の後にかける。入口の段から `box` と `unbox` の拒否を除き、`box` と `unbox` の規則 (上の「値の表現」) と境界の検査を足す。構造体の変数を受け、複数の値の `let` と `return`、構造体の `unbox` を拒む。互換でない `return` は、末尾の位置の呼び出しの結果を返す形のときだけ許す (上の「末尾の位置の呼び出し」)
-  - 開いた後の段 (`verify_flattened`) は開くパスの後にかける。範囲の段に加えて、変数、関数の結果、配置のフィールドのどこにも構造体が残らないことを確かめ、複数の値の `let` と `return`、構造体の `unbox` を受ける。源の単位の ABI (上の「開く」) を葉に開いた並びが、関数の引数と結果に合うことも確かめる
+  - 開いた後の段 (`verify_flattened`) は開くパスの後にかける。範囲の段に加えて、変数、関数の結果、配置のフィールドのどこにも構造体が残らないことを確かめ、複数の値の `let` と `return`、構造体の `unbox` を受ける
   - 所有の段 (`verify`) は Perceus と reuse の後にかけ、開いた後の段に加えて、RC の対象の所有の多重集合 (R6)、V1、token の規則、`release unboxed` の印を確かめる
   - 入口の段のほかの4つの段を、境界の段と呼ぶ。境界の検査 (下) は境界の段で走る
 - Kind の印の検査 (V1、V2、作る所の検査) は、下の「Kind の印の検査」にある。V2 と作る所の検査は Repr を比べる所と同じ所で、V1 は所有の段で走る
@@ -674,11 +673,9 @@ reuse のパスは、Perceus が手放す箱を token にし、同じ物理的�
   - `box` と `unbox`: `` `n.1` is boxed before the boxing pass ``、``5 is boxed before the boxing pass``、`` `b.2` is unboxed before the boxing pass ``
 - 入口の段と範囲の段の、開くパスより前を確かめる文言は次のとおりである
   - 複数の値: ``a let of 2 values is formed before flatten``、``a return of 2 values is formed before flatten``、`` an unbox of `w.3` as `Vec3` is formed before flatten ``
-  - 源の単位の ABI: ``the function has a source signature before flatten``
   - 関数の結果: ``the function returns (float, float) before flatten``
 - 開いた後の段と所有の段の文言は次のとおりである
   - 残った構造体: `` `d.3` is Vec3{float, float, float}, but no struct remains after flatten ``、``the function returns Vec3{float, float, float}, but no struct remains after flatten``、``the constructor `Ball` has a struct field, but no struct remains after flatten``
-  - 源の単位の ABI: ``the source parameters (Vec3{float, float, float}) open to (float, float, float), but the function takes (float, float)``、``the source result Vec3{float, float, float} opens to (float, float, float), but the function returns (float, float)``
   - 複数の値: ``a return gives 3 values, but the function returns (float, float)``、``2 values are bound to `f`, which returns (float, float, float)``
   - 構造体の `unbox`: `` `w.3` (float) is unboxed as a struct, but only obj and tobj can be ``、`` an unbox of `w.3` names `Shape`, which has 2 constructors ``
 - 所有の段の `release unboxed` の文言は次のとおりである。`` `w.3` is unboxed as a struct, but its release is not marked unboxed ``、`` `w.3` is released as unboxed, but it is not unboxed as a struct ``

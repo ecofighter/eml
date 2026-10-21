@@ -3512,33 +3512,6 @@ fn f(x.0: float) -> (float, float) {{
     );
 }
 
-/// 開いた後の関数の源の ABI は、葉に開くと関数の引数と結果と同じ並びになる。開く前の段は源の ABI を持たない
-/// (docs/spec/lir.md の「開く」)。
-#[test]
-fn source_records_open_to_the_leaves() {
-    let text = |source: &str| {
-        format!(
-            "{VEC3}fn f(x.0: float, y.1: float, z.2: float, c.3: tobj) -> float {source} {{
-  return x.0
-}}
-"
-        )
-    };
-    let vec3 = "Vec3{float, float, float}";
-    let good = text(&format!("source({vec3}, tobj) -> float"));
-    assert_eq!(check_flattened(&good), Ok(()));
-    assert_eq!(
-        check_scopes(&good),
-        Err("the function has a source signature before flatten in `f`".to_string())
-    );
-    assert_eq!(
-        check_flattened(&text(&format!("source({vec3}) -> float"))),
-        Err(format!(
-            "the source parameters ({vec3}) open to (float, float, float), but the function takes (float, float, float, tobj) in `f`"
-        ))
-    );
-}
-
 /// 構造体の `unbox` の箱を手放す `release` だけが `unboxed` の印を持ち、その箱の `release` はいつも印を持つ。VM は
 /// 印の付いた `release` を、ダミーを受けても何もしない別の命令にする
 /// (docs/spec/lir.md の「ダミーの値」)。

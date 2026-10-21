@@ -61,7 +61,6 @@ impl<'p> Printer<'p> {
             split: function.split,
             params: function.params().to_vec(),
             rets: function.rets.clone(),
-            source: function.source.clone(),
         };
         self.writer.function_head(&header, &function.vars, out);
         for (index, block) in function.blocks.iter().enumerate() {

@@ -60,10 +60,10 @@ fn main() -> unit {
 }
 "), @"
     fn main (arity 0, frame 2)
-        14  box_const s0, c0
-        15  root_set s0, r2, s0
-        16  root_get s1, r2
-        17  decref s1
-        18  ret s0
+         2  box_const s0, c0
+         3  root_set s0, r2, s0
+         4  root_get s1, r2
+         5  decref s1
+         6  ret s0
     ");
 }
