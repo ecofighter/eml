@@ -351,7 +351,7 @@ HIR への変換では、名前解決に加えて、名前の重複と未定義�
 ## CLI と lib API
 
 - 引数の解析は `clap` (derive) を使う
-- `eml FILE ARGS...` は `eml run FILE ARGS...` と同じである。`run` のファイルより後ろの引数は、`-` で始まるものも含めて clap に読ませず、`split_script_args` で切り離してスクリプトに渡す ([標準ライブラリ](../spec/stdlib.md) の「起動」)。引数は `Env.args` で読め、`eml_cli` の `script_host` が標準入力と一緒に Host に持たせる
+- `eml FILE ARGS...` は `eml run FILE ARGS...` と同じである。`run` のファイルより後ろの引数は、`-` で始まるものも含めて clap に読ませず、`split_script_args` で切り離してスクリプトに渡す ([標準ライブラリ](../spec/stdlib.md) の「起動」)。引数は `Env.args` で読め、`eml_vm` の `script_host` (`eml_cli` が再公開する) が標準入力と一緒に Host に持たせる
 - `eml check <file>` は、診断を stderr に表示する。`eml run <file>` は、診断 (警告を含む) を先に stderr に表示し、エラーがなければ実行する。警告がプログラムの出力の後に出ないようにするため
 - `eml run` は VM の速いモードで実行し、`eml run --debug-heap` は検査モードで実行する。検査モードは、RC のリーク、解放済みの物体の使用、`lin` の物体の `dup` などを見つける ([オブジェクトモデル](../spec/object-model.md) の「報告する誤り」)
 - `eml run` は、ファイルを読む前に SIGINT のハンドラを入れ、`default_limits()` の上限で実行する ([VM](../spec/vm.md) の「上限と割り込み」)
