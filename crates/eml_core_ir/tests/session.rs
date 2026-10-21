@@ -101,7 +101,7 @@ fn a_structural_input_calls_its_display_function() {
     );
     insta::assert_snapshot!(function(&shown, "entry$input$2"), @r#"
     fn entry$input$2() -> obj {
-      let t.0: obj = call input$2(())
+      let t.0: B{tobj, int} = call input$2(())
       let s.1: obj = const ""
       let r.2: obj = call display$2$0(s.1, 300, 0, 0, t.0)
       unpack r.2 (,) #0(s.3: obj, n.4: int)
@@ -109,7 +109,7 @@ fn a_structural_input_calls_its_display_function() {
     }
     "#);
     insta::assert_snapshot!(function(&shown, "display$2$0"), @r#"
-    fn display$2$0(acc.0: obj, budget.1: int, depth.2: int, prec.3: int, x.4: obj) -> obj {
+    fn display$2$0(acc.0: obj, budget.1: int, depth.2: int, prec.3: int, x.4: B{tobj, int}) -> obj {
       let c.5: enum = extern "Prelude.Eq Int.=="(budget.1, 0)
       switch c.5 Prelude.Bool { #0 -> b1, #1 -> b2 }
     b1:

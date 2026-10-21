@@ -301,7 +301,7 @@ fn reprs_follow_the_types() {
     let text = "data Shape =\n  | Dot\n  | Circle Int\n\nmake : Int -> Bool -> String -> <Panic> Shape\nmake n b s =\n  let pair = (n, s)\n  let f = fn x -> x + n\n  let shape = Circle (f 1)\n  drop pair\n  shape\n\nmain : Unit -> <IO, Panic> Unit\nmain () =\n  let shape = make 1 True \"s\"\n  drop shape\n  println \"done\"";
     insta::assert_snapshot!(function(&core_text(text, Pass::Translate), "make"), @"
     fn make(n.0: int, b.1: enum, s.2: obj) -> tobj {
-      let d.3: obj = con (,) #0(n.0, s.2)
+      let d.3: (,){int, obj} = con (,) #0(n.0, s.2)
       let c.4: tobj = closure make$lambda0(n.0)
       let t.5: int = apply c.4(1: int)
       let d.6: tobj = con Shape #1(t.5)
@@ -701,13 +701,13 @@ fn a_row_that_binds_the_whole_tuple_builds_it_at_its_leaf() {
     b1:
       return 0
     b2:
-      let d.2: obj = con (,) #0(a.0, b.1)
+      let d.2: (,){int, int} = con (,) #0(a.0, b.1)
       let t.3: int = call first(d.2)
       return t.3
     }
     ");
     insta::assert_snapshot!(function(&shown, "first"), @"
-    fn first(p.0: obj) -> int {
+    fn first(p.0: (,){int, int}) -> int {
       unpack p.0 (,) #0(a.1: int, x.2: int)
       return a.1
     }
@@ -720,7 +720,7 @@ fn a_leaf_builds_a_known_value_once_however_often_it_passes_it() {
     let text = "pair : Int -> (Int, Int) -> (Int, Int) -> Int\npair a b c = a\n\nf : Int -> <Panic> Int\nf n =\n  let p = (n, n)\n  match p with\n    | q -> pair n q p\n\nmain : Unit -> <IO, Panic> Unit\nmain () = println (show (f 1))";
     insta::assert_snapshot!(function(&core_text(text, Pass::Translate), "f"), @"
     fn f(n.0: int) -> int {
-      let d.1: obj = con (,) #0(n.0, n.0)
+      let d.1: (,){int, int} = con (,) #0(n.0, n.0)
       let t.2: int = call pair(n.0, d.1, d.1)
       return t.2
     }
@@ -734,7 +734,7 @@ fn a_leaf_builds_one_value_for_the_same_constructor_at_two_types() {
     let text = "data P a =\n  | P Int\n\npair : P Int -> P String -> Int\npair x y = 0\n\nf : Int -> <Panic> Int\nf n = match (P 1, P 1) with\n  | (x, y) -> pair x y\n\nmain : Unit -> <IO, Panic> Unit\nmain () = println (show (f 1))";
     insta::assert_snapshot!(function(&core_text(text, Pass::Translate), "f"), @"
     fn f(n.0: int) -> int {
-      let d.1: obj = con P #0(1)
+      let d.1: P{int} = con P #0(1)
       let t.2: int = call pair(d.1, d.1)
       return t.2
     }
@@ -790,7 +790,7 @@ fn an_arm_reached_from_two_leaves_is_placed_after_the_tree() {
 fn a_lone_constructor_with_fields_is_unpacked_without_a_switch() {
     let text = "data Box a =\n  | Box a\n\nunbox : Box String -> String\nunbox (Box s) = s\n\nmain : Unit -> <IO> Unit\nmain () = println (unbox (Box \"b\"))";
     insta::assert_snapshot!(function(&core_text(text, Pass::Translate), "unbox"), @"
-    fn unbox(p.0: obj) -> obj {
+    fn unbox(p.0: Box{obj}) -> obj {
       unpack p.0 Box #0(s.1: obj)
       return s.1
     }
@@ -955,26 +955,26 @@ fn names_outside_the_entry_are_qualified_with_their_module() {
       return t.2
     }
     fn main(p.0: unit) -> unit {
-      let t.1: obj = handle Report.Csv.Parse((), &main$handle0) { next: &main$handle0$next } return &main$handle0$return
+      let t.1: Report.Csv.Row{int} = handle Report.Csv.Parse((), &main$handle0) { next: &main$handle0$next } return &main$handle0$return
       unpack t.1 Report.Csv.Row #0(n.2: int)
       let t.3: obj = extern "Prelude.Show Int.show"(n.2)
       let t.4: unit = call "apply@[String, Unit]"(&main$extern0, t.3)
       return t.4
     }
-    yields fn Report.Csv.parse(p.0: unit) -> obj {
+    yields fn Report.Csv.parse(p.0: unit) -> Report.Csv.Row{int} {
       let t.1: int = yields apply &op$Report.Csv.next((): unit)
-      let t.2: obj = apply &con$Report.Csv.Row(t.1)
+      let t.2: Report.Csv.Row{int} = apply &con$Report.Csv.Row(t.1)
       return t.2
     }
-    internal yields role body fn main$handle0(p.0: unit) -> obj {
-      let t.1: obj = call Report.Csv.parse(())
+    internal yields role body fn main$handle0(p.0: unit) -> Report.Csv.Row{int} {
+      let t.1: Report.Csv.Row{int} = call Report.Csv.parse(())
       return t.1
     }
-    internal role clause fn main$handle0$next(p.0: unit, k.1: tobj lin, p.2: unit) -> obj {
-      let t.3: obj = resume k.1(1: int, (): unit)
+    internal role clause fn main$handle0$next(p.0: unit, k.1: tobj lin, p.2: unit) -> Report.Csv.Row{int} {
+      let t.3: Report.Csv.Row{int} = resume k.1(1: int, (): unit)
       return t.3
     }
-    internal role return fn main$handle0$return(r.0: obj, p.1: unit) -> obj {
+    internal role return fn main$handle0$return(r.0: Report.Csv.Row{int}, p.1: unit) -> Report.Csv.Row{int} {
       return r.0
     }
     internal fn main$extern0(p.0: obj) -> unit {
@@ -985,8 +985,8 @@ fn names_outside_the_entry_are_qualified_with_their_module() {
       let t.1: int = perform Report.Csv.Parse.next(p.0)
       return t.1
     }
-    internal fn con$Report.Csv.Row(p.0: int) -> obj {
-      let d.1: obj = con Report.Csv.Row #0(p.0)
+    internal fn con$Report.Csv.Row(p.0: int) -> Report.Csv.Row{int} {
+      let d.1: Report.Csv.Row{int} = con Report.Csv.Row #0(p.0)
       return d.1
     }
     fn entry$main() -> unit {
@@ -1328,15 +1328,15 @@ fn a_constructor_used_as_a_function_value_is_wrapped() {
     let text = "data Pair a b =\n  | Pair a b\n\npairs : Int -> Pair Int Int\npairs n =\n  let make = Pair n\n  make 2\n\nmain : Unit -> <IO> Unit\nmain () =\n  let _ = pairs 1\n  ()";
     let shown = core_text(text, Pass::Translate);
     insta::assert_snapshot!(function(&shown, "pairs"), @r#"
-    fn pairs(n.0: int) -> obj {
+    fn pairs(n.0: int) -> Pair{int, int} {
       let c.1: tobj = closure "con$Pair@[Int, Int]"(n.0)
-      let t.2: obj = apply c.1(2: int)
+      let t.2: Pair{int, int} = apply c.1(2: int)
       return t.2
     }
     "#);
     insta::assert_snapshot!(function(&shown, "con$Pair@[Int, Int]"), @r#"
-    internal fn "con$Pair@[Int, Int]"(p.0: int, p.1: int) -> obj {
-      let d.2: obj = con Pair #0(p.0, p.1)
+    internal fn "con$Pair@[Int, Int]"(p.0: int, p.1: int) -> Pair{int, int} {
+      let d.2: Pair{int, int} = con Pair #0(p.0, p.1)
       return d.2
     }
     "#);
@@ -1398,26 +1398,26 @@ fn constructor_patterns_in_let_lambda_and_equation_parameters() {
     let text = "data Box a = | Box a\n\nby_equation : Box Int -> Int\nby_equation (Box n) = n\n\nby_let : Box Int -> <Panic> Int\nby_let b =\n  let Box m = b\n  m + 1\n\nby_lambda : Box Int -> Int\nby_lambda b = (fn (Box k) -> k) b\n\nmain : Unit -> <IO, Panic> Unit\nmain () = println (show (by_equation (Box 1) + by_let (Box 2) + by_lambda (Box 3)))";
     let shown = core_text(text, Pass::Translate);
     insta::assert_snapshot!(function(&shown, "by_equation"), @"
-    fn by_equation(p.0: obj) -> int {
+    fn by_equation(p.0: Box{int}) -> int {
       unpack p.0 Box #0(n.1: int)
       return n.1
     }
     ");
-    insta::assert_snapshot!(function(&shown, "by_let"), @"
-    fn by_let(b.0: obj) -> int {
+    insta::assert_snapshot!(function(&shown, "by_let"), @r#"
+    fn by_let(b.0: Box{int}) -> int {
       unpack b.0 Box #0(m.1: int)
-      let t.2: int = extern \"Prelude.Num Int.+\"(m.1, 1)
+      let t.2: int = extern "Prelude.Num Int.+"(m.1, 1)
       return t.2
     }
-    ");
+    "#);
     insta::assert_snapshot!(function(&shown, "by_lambda"), @"
-    fn by_lambda(b.0: obj) -> int {
+    fn by_lambda(b.0: Box{int}) -> int {
       let t.1: int = apply &by_lambda$lambda0(b.0)
       return t.1
     }
     ");
     insta::assert_snapshot!(function(&shown, "by_lambda$lambda0"), @"
-    internal fn by_lambda$lambda0(p.0: obj) -> int {
+    internal fn by_lambda$lambda0(p.0: Box{int}) -> int {
       unpack p.0 Box #0(k.1: int)
       return k.1
     }
@@ -1453,14 +1453,14 @@ fn constructor_patterns_in_handler_clause_parameters() {
     let text = "data Box a = | Box a\n\neffect Give where\n  give : Box Int -> Int\n\nrun : Unit -> Int\nrun () =\n  handle Box (give (Box 1)) with\n    | ctl give (Box n) k -> k n\n    | return (Box r) -> r\n\nmain : Unit -> <IO> Unit\nmain () = println (show (run ()))";
     let shown = core_text(text, Pass::Translate);
     insta::assert_snapshot!(function(&shown, "run$handle0$give"), @"
-    internal role clause fn run$handle0$give(p.0: obj, k.1: tobj lin, p.2: unit) -> int {
+    internal role clause fn run$handle0$give(p.0: Box{int}, k.1: tobj lin, p.2: unit) -> int {
       unpack p.0 Box #0(n.3: int)
       let t.4: int = resume k.1(n.3, (): unit)
       return t.4
     }
     ");
     insta::assert_snapshot!(function(&shown, "run$handle0$return"), @"
-    internal role return fn run$handle0$return(p.0: obj, p.1: unit) -> int {
+    internal role return fn run$handle0$return(p.0: Box{int}, p.1: unit) -> int {
       unpack p.0 Box #0(r.2: int)
       return r.2
     }
@@ -1473,14 +1473,14 @@ fn tuples_are_built_and_taken_apart_by_parameters_and_let() {
     let text = "swap : (Int, String) -> (String, Int)\nswap (n, s) = (s, n)\n\nfirst : (Int, Int) -> Int\nfirst p =\n  let (a, _) = p\n  a\n\nmain : Unit -> <IO> Unit\nmain () =\n  let _ = swap (1, \"a\")\n  println (show (first (2, 3)))";
     let shown = core_text(text, Pass::Translate);
     insta::assert_snapshot!(function(&shown, "swap"), @"
-    fn swap(p.0: obj) -> obj {
+    fn swap(p.0: (,){int, obj}) -> (,){obj, int} {
       unpack p.0 (,) #0(n.1: int, s.2: obj)
-      let d.3: obj = con (,) #0(s.2, n.1)
+      let d.3: (,){obj, int} = con (,) #0(s.2, n.1)
       return d.3
     }
     ");
     insta::assert_snapshot!(function(&shown, "first"), @"
-    fn first(p.0: obj) -> int {
+    fn first(p.0: (,){int, int}) -> int {
       unpack p.0 (,) #0(a.1: int, x.2: int)
       return a.1
     }
@@ -1493,7 +1493,7 @@ fn a_tuple_column_is_a_single_constructor() {
     let text = "data Option a = | None | Some a\n\npick : (Option Int, Int) -> Int\npick p = match p with\n  | (Some n, _) -> n\n  | (None, k) -> k\n\nmain : Unit -> <IO> Unit\nmain () = println (show (pick (None, 1)))";
     let shown = core_text(text, Pass::Translate);
     insta::assert_snapshot!(function(&shown, "pick"), @"
-    fn pick(p.0: obj) -> int {
+    fn pick(p.0: (,){tobj, int}) -> int {
       unpack p.0 (,) #0(x.1: tobj, k.2: int)
       switch x.1 Option { #0 -> b1, #1(n.3: int) -> b2 }
     b1:
@@ -1555,7 +1555,7 @@ fn a_literal_column_inside_a_tuple() {
     let text = "classify : (Int, Bool) -> Int\nclassify p = match p with\n  | (0, True) -> 1\n  | (_, False) -> 2\n  | (n, _) -> n\n\nmain : Unit -> <IO> Unit\nmain () = println (show (classify (0, True)))";
     let shown = core_text(text, Pass::Translate);
     insta::assert_snapshot!(function(&shown, "classify"), @"
-    fn classify(p.0: obj) -> int {
+    fn classify(p.0: (,){int, enum}) -> int {
       unpack p.0 (,) #0(n.1: int, x.2: enum)
       switch n.1 { 0 -> b1, _ -> b2 }
     b1:
@@ -1797,7 +1797,7 @@ fn each_comparison_picks_the_instruction_of_its_operand_type() {
     layout (,,,,,) { (,,,,,)(tobj, tobj, tobj, tobj, tobj, tobj) }
     effect Prelude.IO { never io_failed(enum, obj) -> never }
     effect Prelude.Panic { never panicked(obj) -> never }
-    fn compare(n.0: int, s.1: obj, b.2: enum) -> obj {
+    fn compare(n.0: int, s.1: obj, b.2: enum) -> (,,,,,){enum, enum, enum, enum, enum, enum} {
       let t.3: enum = extern "Prelude.Eq Int.=="(n.0, 1)
       let t.4: enum = extern "Prelude.Eq Int.!="(n.0, 2)
       let s.5: obj = const "a"
@@ -1806,12 +1806,12 @@ fn each_comparison_picks_the_instruction_of_its_operand_type() {
       let t.8: enum = extern "Prelude.Eq String.!="(s.1, s.7)
       let t.9: enum = extern "Prelude.Eq Bool.=="(b.2, #1)
       let t.10: enum = extern "Prelude.Eq Bool.!="(b.2, #0)
-      let d.11: obj = con (,,,,,) #0(t.3, t.4, t.6, t.8, t.9, t.10)
+      let d.11: (,,,,,){enum, enum, enum, enum, enum, enum} = con (,,,,,) #0(t.3, t.4, t.6, t.8, t.9, t.10)
       return d.11
     }
     fn main(p.0: unit) -> unit {
       let s.1: obj = const "a"
-      let t.2: obj = call compare(1, s.1, #1)
+      let t.2: (,,,,,){enum, enum, enum, enum, enum, enum} = call compare(1, s.1, #1)
       return ()
     }
     fn entry$main() -> unit {
@@ -2651,7 +2651,7 @@ fn tuple_instances_are_generated_per_size() {
     let text = "main : Unit -> <IO> Unit\nmain () =\n  println (show ((1, \"a\") == (2, \"b\")))\n  println (show ())";
     let shown = core_text(text, Pass::Translate);
     insta::assert_snapshot!(function(&shown, "Prelude.Eq (,).==@[Int, String]"), @r#"
-    fn "Prelude.Eq (,).==@[Int, String]"(x.0: obj, y.1: obj) -> enum {
+    fn "Prelude.Eq (,).==@[Int, String]"(x.0: (,){int, obj}, y.1: (,){int, obj}) -> enum {
       unpack x.0 (,) #0(a.2: int, a.3: obj)
       unpack y.1 (,) #0(b.4: int, b.5: obj)
       let t.6: enum = extern "Prelude.Eq Int.=="(a.2, b.4)
@@ -2711,13 +2711,13 @@ fn interpolation_uses_the_extern_concatenation_even_with_a_user_plus_plus() {
 #[test]
 fn record_construction_evaluates_in_source_order_and_builds_in_declaration_order() {
     let text = "data P = | P { a : Int, b : Int }\n\nf : Int -> <Panic> P\nf x = P { b = x + 1, a = x }\n\nmain : Unit -> <IO, Panic> Unit\nmain () = drop (f 1)";
-    insta::assert_snapshot!(function(&core_text(text, Pass::Translate), "f"), @"
-    fn f(x.0: int) -> obj {
-      let t.1: int = extern \"Prelude.Num Int.+\"(x.0, 1)
-      let d.2: obj = con P #0(x.0, t.1)
+    insta::assert_snapshot!(function(&core_text(text, Pass::Translate), "f"), @r#"
+    fn f(x.0: int) -> P{int, int} {
+      let t.1: int = extern "Prelude.Num Int.+"(x.0, 1)
+      let d.2: P{int, int} = con P #0(x.0, t.1)
       return d.2
     }
-    ");
+    "#);
 }
 
 #[test]
@@ -2725,14 +2725,14 @@ fn a_projection_unpacks_and_returns_the_field() {
     let text = "data P = | P { a : String, b : Int }\n\nf : P -> Int\nf p = p.b\n\ng : (Int, String) -> String\ng t = t.1\n\nmain : Unit -> <IO> Unit\nmain () =\n  println (show (f (P { a = \"x\", b = 1 })))\n  println (g (1, \"y\"))";
     let ir = core_text(text, Pass::Translate);
     insta::assert_snapshot!(function(&ir, "f"), @"
-    fn f(p.0: obj) -> int {
+    fn f(p.0: P{obj, int}) -> int {
       unpack p.0 P #0(f.1: obj, f.2: int)
       return f.2
     }
     ");
     insta::assert_snapshot!(function(&ir, "g"), @"
-    fn g(t.0: obj) -> obj {
-      unpack t.0 (,) #0(f.1: tobj, f.2: obj)
+    fn g(t.0: (,){int, obj}) -> obj {
+      unpack t.0 (,) #0(f.1: int, f.2: obj)
       return f.2
     }
     ");
@@ -2743,27 +2743,26 @@ fn a_projection_of_a_type_variable_field_is_unboxed() {
     let text = format!(
         "{HIDE}data Box a = | Box {{ x : a }}\n\nf : Box Int -> <Panic> Int\nf b = b.x + 1\n\nmain : Unit -> <IO, Panic> Unit\nmain () =\n  let Hide f = hide 0 f\n  println (show (f (Box {{ x = 1 }})))"
     );
-    insta::assert_snapshot!(function(&lir_text(&text, eml_lir::Pass::Boxing), "f"), @"
-    fn f(b.0: obj) -> int {
-      unpack b.0 Box #0(f.3: tobj)
-      let f.1: int = unbox f.3
-      let t.2: int = extern \"Prelude.Num Int.+\"(f.1, 1)
+    insta::assert_snapshot!(function(&lir_text(&text, eml_lir::Pass::Boxing), "f"), @r#"
+    fn f(b.0: Box{int}) -> int {
+      unpack b.0 Box #0(f.1: int)
+      let t.2: int = extern "Prelude.Num Int.+"(f.1, 1)
       return t.2
     }
-    ");
+    "#);
 }
 
 #[test]
 fn an_update_evaluates_its_fields_and_builds_a_new_value() {
     let text = "data P = | P { a : Int, b : Int, c : Int }\n\nf : P -> Int -> <Panic> P\nf p n = { p | c = n + 1, a = n }\n\nmain : Unit -> <IO, Panic> Unit\nmain () = drop (f (P { a = 1, b = 2, c = 3 }) 4)";
-    insta::assert_snapshot!(function(&core_text(text, Pass::Translate), "f"), @"
-    fn f(p.0: obj, n.1: int) -> obj {
-      let t.2: int = extern \"Prelude.Num Int.+\"(n.1, 1)
+    insta::assert_snapshot!(function(&core_text(text, Pass::Translate), "f"), @r#"
+    fn f(p.0: P{int, int, int}, n.1: int) -> P{int, int, int} {
+      let t.2: int = extern "Prelude.Num Int.+"(n.1, 1)
       unpack p.0 P #0(f.3: int, f.4: int, f.5: int)
-      let d.6: obj = con P #0(n.1, f.4, t.2)
+      let d.6: P{int, int, int} = con P #0(n.1, f.4, t.2)
       return d.6
     }
-    ");
+    "#);
 }
 
 #[test]
@@ -2771,9 +2770,9 @@ fn a_generic_update_keeps_the_fields_at_their_instantiated_types() {
     let text = "data Box a = | Box { item : a, n : Int }\n\nmain : Unit -> <IO, Panic> Unit\nmain () =\n  let b = { Box { item = 41, n = 1 } | n = 2 }\n  match b with\n    | Box { item } -> println (show (item + 1))";
     insta::assert_snapshot!(function(&core_text(text, Pass::Translate), "main"), @r#"
     fn main(p.0: unit) -> unit {
-      let d.1: obj = con Box #0(41, 1)
+      let d.1: Box{int, int} = con Box #0(41, 1)
       unpack d.1 Box #0(f.2: int, f.3: int)
-      let d.4: obj = con Box #0(f.2, 2)
+      let d.4: Box{int, int} = con Box #0(f.2, 2)
       let t.5: int = extern "Prelude.Num Int.+"(f.2, 1)
       let t.6: obj = extern "Prelude.Show Int.show"(t.5)
       let t.7: unit = extern Prelude.println(t.6)
@@ -2849,15 +2848,15 @@ fn the_fields_a_projection_leaves_behind_take_their_types_marks() {
     let text = "data R = | R { n : Int, f : Fs.File }\n\ntake : R -> Fs.File\ntake r = r.f\n\nbump : R -> R\nbump r = { r | n = 5 }\n\nmain : Unit -> <IO> Unit\nmain () = Fs.close (take (bump (R { n = 1, f = Fs.open \"a.txt\" })))";
     let ir = core_text(text, Pass::Translate);
     insta::assert_snapshot!(function(&ir, "take"), @"
-    fn take(r.0: obj lin) -> obj lin {
+    fn take(r.0: R{int, obj lin} lin) -> obj lin {
       unpack r.0 R #0(f.1: int, f.2: obj lin)
       return f.2
     }
     ");
     insta::assert_snapshot!(function(&ir, "bump"), @"
-    fn bump(r.0: obj lin) -> obj lin {
+    fn bump(r.0: R{int, obj lin} lin) -> R{int, obj lin} lin {
       unpack r.0 R #0(f.1: int, f.2: obj lin)
-      let d.3: obj lin = con R #0(5, f.2)
+      let d.3: R{int, obj lin} lin = con R #0(5, f.2)
       return d.3
     }
     ");
@@ -2902,8 +2901,8 @@ fn wrappers_take_the_reprs_and_marks_of_their_instance() {
     }
     "#);
     insta::assert_snapshot!(function(&ir, "con$Box@[Int]"), @r#"
-    internal fn "con$Box@[Int]"(p.0: int, p.1: obj lin) -> obj lin {
-      let d.2: obj lin = con Box #0(p.0, p.1)
+    internal fn "con$Box@[Int]"(p.0: int, p.1: obj lin) -> Box{int, obj lin} lin {
+      let d.2: Box{int, obj lin} lin = con Box #0(p.0, p.1)
       return d.2
     }
     "#);
@@ -2915,7 +2914,9 @@ const CLOSE_OPT: &str = "close_opt : Option (List Fs.File) -> <IO> Unit\nclose_o
 
 #[test]
 fn a_leaf_that_binds_nothing_non_unr_drops_the_matched_value() {
-    // `[]` の葉も `(n, [])` の葉も、`lin` の引数から `unr` でない変数を何も束縛しないので、引数を `drop` する
+    // `[]` の葉も `(n, [])` の葉も、`lin` の引数から `unr` でない変数を何も束縛しないので、引数を `drop` する。
+    // `(n, [])` の引数は構造体で箱がないので、分解した `unr` でないフィールドを `drop` する
+    // (docs/superpowers/specs/2026-10-21-s14e-abi-struct-design.md の「Kind の印と RC」)
     let text = format!(
         "{CLOSE_ALL}go : (Int, List Fs.File) -> <IO> Int\ngo p =\n  match p with\n    | (n, []) -> n\n    | (n, f :: rest) ->\n        Fs.close f\n        close_all rest\n        n\n\nmain : Unit -> <IO> Unit\nmain () =\n  println (show (go (1, [Fs.open \"input.txt\"])))\n  println (show (go (2, [])))"
     );
@@ -2935,11 +2936,11 @@ fn a_leaf_that_binds_nothing_non_unr_drops_the_matched_value() {
     }
     "#);
     insta::assert_snapshot!(function(&ir, "go"), @"
-    fn go(p.0: obj lin) -> int {
+    fn go(p.0: (,){int, tobj lin} lin) -> int {
       unpack p.0 (,) #0(n.1: int, x.2: tobj lin)
       switch x.2 Prelude.List { #0 -> b1, #1(f.3: obj lin, rest.4: tobj lin) -> b2 }
     b1:
-      let u.5: unit = drop p.0
+      let u.5: unit = drop x.2
       return n.1
     b2:
       let t.6: unit = extern Std.Fs.close(f.3)
@@ -3006,8 +3007,8 @@ fn a_linear_constructor_variable_is_opened_when_no_arm_receives_it() {
     }
     let ir = core_text(&text, Pass::Translate);
     insta::assert_snapshot!(function(&ir, "finish"), @r#"
-    fn finish(l.0: obj lin, name.1: obj) -> int {
-      let d.2: obj lin = con Job #0(name.1, l.0)
+    fn finish(l.0: Log{obj lin, int} lin, name.1: obj) -> int {
+      let d.2: Job{obj, Log{obj lin, int} lin} lin = con Job #0(name.1, l.0)
       let s.3: obj = const "between"
       let t.4: unit = extern Prelude.println(s.3)
       unpack l.0 Log #0(file.5: obj lin, lines.6: int)
@@ -3043,19 +3044,15 @@ fn a_linear_constructor_variable_received_by_an_arm_is_taken_apart() {
     );
     insta::assert_snapshot!(function(&lir_text(&text, eml_lir::Pass::Perceus), "go"), @r#"
     fn go(xs.0: tobj lin, ys.1: tobj lin) -> unit {
-      let d.2: obj lin = con (,) #0(xs.0, ys.1)
       let s.3: obj = const "between"
       let t.4: unit = extern Prelude.println(s.3)
-      unpack d.2 (,) #0(x.5: tobj lin, b.6: tobj lin)
-      switch x.5 Prelude.List { #0 -> b1, _ -> b2 }
+      switch xs.0 Prelude.List { #0 -> b1, _ -> b2 }
     b1:
-      release d.2 (,) #0(_, b.6)
-      tail call close_all(b.6)
+      let u.7: unit = drop xs.0
+      tail call close_all(ys.1)
     b2:
-      unpack d.2 (,) #0(a.9: tobj lin, b.10: tobj lin)
-      release d.2 (,) #0(a.9, b.10)
-      let t.11: unit = call close_all(a.9)
-      tail call close_all(b.10)
+      let t.12: unit = call close_all(xs.0)
+      tail call close_all(ys.1)
     }
     "#);
     // `q` は `o` の枝が受け取るので開かず、`q` を根にする。`(Some [], 0)` の葉は `q` から何も束縛しないので `q` を drop する
@@ -3065,7 +3062,7 @@ fn a_linear_constructor_variable_received_by_an_arm_is_taken_apart() {
     insta::assert_snapshot!(function(&core_text(&text, Pass::Translate), "go"), @r#"
     fn go(xs.0: tobj lin, n.1: int) -> unit {
       let d.2: tobj lin = con Prelude.Option #1(xs.0)
-      let d.3: obj lin = con (,) #0(d.2, n.1)
+      let d.3: (,){tobj lin, int} lin = con (,) #0(d.2, n.1)
       let s.4: obj = const "between"
       let t.5: unit = extern Prelude.println(s.4)
       switch d.2 Prelude.Option { #1(x.6: tobj lin) -> b1, _ -> b2 }
@@ -3164,7 +3161,7 @@ fn a_linear_constructor_variable_destructured_in_both_branches_is_taken_apart_in
     );
     insta::assert_snapshot!(function(&core_text(&text, Pass::Translate), "go"), @r#"
     fn go(c.0: enum, xs.1: tobj lin) -> unit {
-      let d.2: obj lin = con (,) #0(xs.1, 1)
+      let d.2: (,){tobj lin, int} lin = con (,) #0(xs.1, 1)
       let s.3: obj = const "between"
       let t.4: unit = extern Prelude.println(s.3)
       switch c.0 Prelude.Bool { #0 -> b1, #1 -> b2 }
@@ -3402,13 +3399,33 @@ fn a_lin_enum_variable_is_unr() {
 fn taking_only_unr_fields_out_of_a_lin_value_drops_it() {
     // `Lin` と宣言した型のフィールドが `unr` だけなら、射影も更新も `unr` でないフィールドを取り出さないので、分解した
     // 直後に値を `drop` する。しないと、Perceus は値を `release` で解かず、`decref` が V1 に反する
-    // (docs/spec/core-ir.md の「変換の規則」)。所有の段の検査まで通す
-    let text = "data Ledger : Lin =\n  | Ledger { entries : List Int, owner : String }\n\nempty : Ledger -> Bool\nempty l =\n  match l.entries with\n    | [] -> True\n    | _ -> False\n\nrename : Ledger -> Ledger\nrename l = { l | owner = \"b\" }\n\nmain : Unit -> <IO> Unit\nmain () = println (show (empty (rename (Ledger { entries = [1], owner = \"a\" }))))";
+    // (docs/spec/core-ir.md の「変換の規則」)。所有の段の検査まで通す。フィールドが7語あるので `Ledger` は構造体に
+    // ならず、箱を持つ (docs/superpowers/specs/2026-10-21-s14e-abi-struct-design.md の「構造体にする型」)
+    let text = "data Ledger : Lin =\n  | Ledger { entries : List Int, owner : String, a : Int, b : Int, c : Int, d : Int, e : Int }\n\nempty : Ledger -> Bool\nempty l =\n  match l.entries with\n    | [] -> True\n    | _ -> False\n\nmain : Unit -> <IO> Unit\nmain () = println (show (empty (Ledger { entries = [1], owner = \"a\", a = 0, b = 0, c = 0, d = 0, e = 0 })))";
     let ir = core_text(text, Pass::Translate);
     insta::assert_snapshot!(function(&ir, "empty"), @"
     fn empty(l.0: obj lin) -> enum {
+      unpack l.0 Ledger #0(f.1: tobj, f.2: obj, f.3: int, f.4: int, f.5: int, f.6: int, f.7: int)
+      let u.8: unit = drop l.0
+      switch f.1 Prelude.List { #0 -> b1, _ -> b2 }
+    b1:
+      return #1
+    b2:
+      return #0
+    }
+    ");
+    lir_text(text, eml_lir::Pass::Perceus);
+}
+
+#[test]
+fn taking_only_unr_fields_out_of_a_lin_struct_drops_nothing() {
+    // 構造体になる `Lin` の値は箱を持たず、`unr` のフィールドは Perceus が1つずつ手放すので、分解した値を `drop`
+    // しない (docs/superpowers/specs/2026-10-21-s14e-abi-struct-design.md の「Kind の印と RC」)。所有の段の検査まで通す
+    let text = "data Ledger : Lin =\n  | Ledger { entries : List Int, owner : String }\n\nempty : Ledger -> Bool\nempty l =\n  match l.entries with\n    | [] -> True\n    | _ -> False\n\nrename : Ledger -> Ledger\nrename l = { l | owner = \"b\" }\n\nmain : Unit -> <IO> Unit\nmain () = println (show (empty (rename (Ledger { entries = [1], owner = \"a\" }))))";
+    let ir = core_text(text, Pass::Translate);
+    insta::assert_snapshot!(function(&ir, "empty"), @"
+    fn empty(l.0: Ledger{tobj, obj} lin) -> enum {
       unpack l.0 Ledger #0(f.1: tobj, f.2: obj)
-      let u.3: unit = drop l.0
       switch f.1 Prelude.List { #0 -> b1, _ -> b2 }
     b1:
       return #1
@@ -3417,12 +3434,11 @@ fn taking_only_unr_fields_out_of_a_lin_value_drops_it() {
     }
     ");
     insta::assert_snapshot!(function(&ir, "rename"), @r#"
-    fn rename(l.0: obj lin) -> obj lin {
+    fn rename(l.0: Ledger{tobj, obj} lin) -> Ledger{tobj, obj} lin {
       let s.1: obj = const "b"
       unpack l.0 Ledger #0(f.2: tobj, f.3: obj)
-      let u.4: unit = drop l.0
-      let d.5: obj lin = con Ledger #0(f.2, s.1)
-      return d.5
+      let d.4: Ledger{tobj, obj} lin = con Ledger #0(f.2, s.1)
+      return d.4
     }
     "#);
     lir_text(text, eml_lir::Pass::Perceus);
@@ -3471,12 +3487,12 @@ main () =
     );
     assert!(translated.contains("con (,)"), "{translated}");
     insta::assert_snapshot!(translated, @r#"
-    fn first(m.0: obj lin) -> obj lin {
+    fn first(m.0: obj lin) -> (,){int, obj lin} lin {
       let t.1: int = extern Std.MutArray.read(m.0, 0)
-      let d.2: obj lin = con (,) #0(t.1, m.0)
+      let d.2: (,){int, obj lin} lin = con (,) #0(t.1, m.0)
       unpack d.2 (,) #0(v.3: int, m2.4: obj lin)
       let t.5: int = extern "Prelude.Num Int.+"(v.3, 1)
-      let d.6: obj lin = con (,) #0(t.5, m2.4)
+      let d.6: (,){int, obj lin} lin = con (,) #0(t.5, m2.4)
       return d.6
     }
     "#);
@@ -3624,4 +3640,139 @@ main () =
         "{}",
         pretty(&program)
     );
+}
+
+/// 関数 `name` の中で名前が `var` の最初の変数 (引数か `let`) の、Repr と印の書き方。括弧と中括弧の外の `,`、`)`、
+/// ` =` までを読む。
+fn repr_of(shown: &str, name: &str, var: &str) -> String {
+    let function = function(shown, name);
+    let start = [format!("({var}."), format!(" {var}.")]
+        .iter()
+        .filter_map(|prefix| function.find(prefix.as_str()).map(|at| at + 1))
+        .min()
+        .unwrap_or_else(|| panic!("no `{var}` in\n{function}"));
+    let colon = function[start..].find(": ").expect("a variable has a repr") + start + 2;
+    let mut depth = 0;
+    let rest = &function[colon..];
+    for (at, c) in rest.char_indices() {
+        match c {
+            '(' | '{' => depth += 1,
+            ')' | '}' if depth > 0 => depth -= 1,
+            ',' | ')' if depth == 0 => return rest[..at].to_string(),
+            ' ' if depth == 0 && rest[at..].starts_with(" =") => return rest[..at].to_string(),
+            _ => {}
+        }
+    }
+    panic!("the repr of `{var}` does not end in\n{function}")
+}
+
+/// IR の表示の中の、配置 `name` の行。
+fn layout_line(shown: &str, name: &str) -> String {
+    shown
+        .lines()
+        .find(|line| line.starts_with(&format!("layout {name} ")))
+        .unwrap_or_else(|| panic!("no layout `{name}` in\n{shown}"))
+        .to_string()
+}
+
+/// コンストラクタが1つの小さな data は構造体である
+/// (docs/superpowers/specs/2026-10-21-s14e-abi-struct-design.md の「構造体にする型」)。
+#[test]
+fn a_small_record_is_a_struct() {
+    let text = "data Point = | Point { x : Float, y : Float }\n\npx : Point -> Float\npx p = p.x\n\nmain : Unit -> <IO> Unit\nmain () = println (show (px (Point { x = 1.0, y = 2.0 })))";
+    let shown = core_text(text, Pass::Translate);
+    assert_eq!(repr_of(&shown, "px", "p"), "Point{float, float}");
+}
+
+/// 自分を直接か、ほかの宣言のフィールドを通して含む型は構造体にしない。`Iter` は `Option (a, Iter e a)` を通して
+/// 自分を含む。
+#[test]
+fn a_recursive_group_is_not() {
+    let text = "import Iter (Iter)\nimport Iter\nimport Yield (Yield(..))\n\ndata Rose = | Rose Int (List Rose)\n\nsize : Rose -> Int\nsize r =\n  drop r\n  1\n\ndrain : Iter <> Int -> Int\ndrain it =\n  drop it\n  0\n\nmain : Unit -> <IO, Panic> Unit\nmain () = println (show (size (Rose 1 []) + drain (Iter.generate (fn () -> yield 1))))";
+    let shown = core_text(text, Pass::Translate);
+    assert_eq!(repr_of(&shown, "size", "r"), "obj");
+    assert_eq!(repr_of(&shown, "drain", "it"), "obj lin");
+}
+
+/// 開いた後の葉が 6 語までなら構造体で、7 語なら今のまま `obj` である。
+#[test]
+fn seven_words_are_not() {
+    let text = "data Six = | Six Int Int Int Int Int Int\ndata Seven = | Seven Int Int Int Int Int Int Int\n\nsix : Six -> Int\nsix (Six a _ _ _ _ _) = a\n\nseven : Seven -> Int\nseven (Seven a _ _ _ _ _ _) = a\n\nmain : Unit -> <IO, Panic> Unit\nmain () = println (show (six (Six 1 2 3 4 5 6) + seven (Seven 1 2 3 4 5 6 7)))";
+    let shown = core_text(text, Pass::Translate);
+    assert_eq!(
+        repr_of(&shown, "six", "p"),
+        "Six{int, int, int, int, int, int}"
+    );
+    assert_eq!(repr_of(&shown, "seven", "p"), "obj");
+}
+
+/// 一様な位置の型変数 (`_`) の葉を持つ型は構造体にしない。呼ぶ側と呼ばれる側で形が違い、形どうしの変換が要るため
+/// である。`depth` の `a` は多相再帰で一様な位置になる。
+#[test]
+fn a_uniform_leaf_is_not() {
+    let text = "depth : Int -> a -> <Panic> Int\ndepth n x =\n  if n == 0 then 0\n  else\n    let pair = (x, n)\n    depth (n - 1) pair\n\nmain : Unit -> <IO, Panic> Unit\nmain () = println (show (depth 3 1.0))";
+    let shown = core_text(text, Pass::Translate);
+    assert_eq!(repr_of(&shown, "depth@[_]", "d"), "obj");
+}
+
+/// `Lin` のフィールドを持つ型も構造体にする。構造体の値は `Lin` のまま移す。
+#[test]
+fn a_lin_field_is_allowed() {
+    let text = "import Fs (File)\n\ndata Handle = | Handle Int File\n\nclose_it : Handle -> <IO> Unit\nclose_it (Handle _ f) = Fs.close f\n\nmain : Unit -> <IO> Unit\nmain () =\n  Fs.write_text \"h.txt\" \"x\"\n  close_it (Handle 1 (Fs.open \"h.txt\"))";
+    let shown = core_text(text, Pass::Translate);
+    assert_eq!(repr_of(&shown, "close_it", "p"), "Handle{int, obj lin} lin");
+}
+
+/// row の型引数を持つ型も構造体にする。Repr は row によらない。
+#[test]
+fn a_row_argument_is_allowed() {
+    let text = "data Task <e> = | Task Int (Unit -> <e> Int)\n\nrun : Task <IO> -> <IO, Panic> Int\nrun (Task n f) = n + f ()\n\nmain : Unit -> <IO, Panic> Unit\nmain () = println (show (run (Task 1 (fn () -> 2))))";
+    let shown = core_text(text, Pass::Translate);
+    assert_eq!(repr_of(&shown, "run", "p"), "Task{int, tobj}");
+}
+
+/// `unit` の葉は 0 語と数え、`unit` でない葉が1つ以上要る。
+#[test]
+fn only_unit_leaves_is_not() {
+    let text = "data Units = | Units Unit Unit\n\nboth : Units -> (Unit, Unit) -> Int\nboth u t =\n  drop u\n  drop t\n  0\n\nmain : Unit -> <IO> Unit\nmain () = println (show (both (Units () ()) ((), ())))";
+    let shown = core_text(text, Pass::Translate);
+    assert_eq!(repr_of(&shown, "both", "u"), "obj");
+    assert_eq!(repr_of(&shown, "both", "t"), "obj");
+}
+
+/// 配置はコンストラクタのスキームから決まる。スキームの型変数は `tobj` の葉と数えるので、`(a, Int)` は構造体の型で、
+/// 配置のフィールドは `tobj` になる。7 語の組は構造体でないので `obj` のままである。
+#[test]
+fn a_scheme_variable_is_a_tobj_leaf() {
+    let text = "data Holder a = | Holder (a, Int) | Empty\ndata Wide a = | Wide (a, a, a, a, a, a, a) | Gone\n\nheld : Holder Float -> Int\nheld h =\n  match h with\n    | Holder (_, n) -> n\n    | Empty -> 0\n\nwide : Wide Int -> Int\nwide w =\n  match w with\n    | Wide (a, _, _, _, _, _, _) -> a\n    | Gone -> 0\n\nmain : Unit -> <IO, Panic> Unit\nmain () = println (show (held (Holder (1.0, 2)) + wide (Wide (1, 2, 3, 4, 5, 6, 7))))";
+    let shown = core_text(text, Pass::Translate);
+    assert_eq!(
+        layout_line(&shown, "Holder"),
+        "layout Holder { Holder(tobj), Empty }"
+    );
+    assert_eq!(
+        layout_line(&shown, "Wide"),
+        "layout Wide { Wide(obj), Gone }"
+    );
+}
+
+/// 配置で構造体の型を宣言したフィールドは、型変数のフィールドと同じ一様な位置の `tobj` である
+/// (docs/superpowers/specs/2026-10-21-s14e-abi-struct-design.md の「箱に入れる位置」)。
+#[test]
+fn a_struct_typed_field_is_tobj_in_its_layout() {
+    let text = "data Vec3 = | Vec3 Float Float Float\ndata Shape = | Ball Vec3 Float | Empty\n\nradius : Shape -> Float\nradius s =\n  match s with\n    | Ball _ r -> r\n    | Empty -> 0.0\n\nmain : Unit -> <IO> Unit\nmain () = println (show (radius (Ball (Vec3 0.0 0.0 0.0) 1.0)))";
+    let shown = core_text(text, Pass::Translate);
+    assert_eq!(
+        layout_line(&shown, "Shape"),
+        "layout Shape { Ball(tobj, float), Empty }"
+    );
+}
+
+/// 構造体の変数の印は、ほかの型と同じく型の Kind から決める。RC の対象でないことを理由に `unr` にしない
+/// (docs/superpowers/specs/2026-10-21-s14e-abi-struct-design.md の「Kind の印と RC」)。
+#[test]
+fn a_struct_takes_its_mark_from_its_kind() {
+    let text = "import MutArray\n\nmeasure : MutArray Int -> (Int, MutArray Int)\nmeasure a = MutArray.length a\n\nmain : Unit -> <IO, Panic> Unit\nmain () =\n  let (n, a) = measure (MutArray.make 3 0)\n  drop a\n  println (show n)";
+    let shown = core_text(text, Pass::Translate);
+    assert_eq!(repr_of(&shown, "measure", "d"), "(,){int, obj lin} lin");
 }

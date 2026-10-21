@@ -140,9 +140,9 @@ fn a_constructor_value_becomes_a_con() {
     let text = text.as_str();
     insta::assert_snapshot!(function(&core_text(text, Pass::Optimize), "entry$main"), @r#"
     fn entry$main() -> unit {
-      let t.1: obj = con Pair #0(1, 2)
-      let t.2: obj = call "hide@[Pair]"(0, t.1)
-      unpack t.2 Box #0(q.3: obj)
+      let t.1: Pair{int, int} = con Pair #0(1, 2)
+      let t.2: Box{Pair{int, int}} = call "hide@[Pair]"(0, t.1)
+      unpack t.2 Box #0(q.3: Pair{int, int})
       unpack q.3 Pair #0(a.4: int, x.5: int)
       let t.6: obj = extern "Prelude.Show Int.show"(a.4)
       let t.7: unit = extern Prelude.println(t.6)
@@ -347,7 +347,7 @@ fn a_closure_captured_by_a_closure_is_specialized() {
     internal fn "Std.Iter.map@[Int, Int]$lambda0{0=main$lambda0}"(it.1: obj lin, p.2: unit) -> tobj lin {
       unpack it.1 Std.Iter.Iter #0(pull.12: tobj lin)
       let t.13: tobj lin = apply pull.12((): unit)
-      switch t.13 Prelude.Option { #0 -> b1, #1(x.4: obj lin) -> b2 }
+      switch t.13 Prelude.Option { #0 -> b1, #1(x.4: (,){int, obj lin} lin) -> b2 }
     b1:
       let u.7: unit = drop t.13
       return #0
@@ -356,7 +356,7 @@ fn a_closure_captured_by_a_closure_is_specialized() {
       let t.14: int = extern "Prelude.Num Int.+"(x.5, 1)
       let c.15: tobj lin = closure "Std.Iter.map@[Int, Int]$lambda0{0=main$lambda0}"(rest.6)
       let d.16: obj lin = con Std.Iter.Iter #0(c.15)
-      let d.10: obj lin = con (,) #0(t.14, d.16)
+      let d.10: (,){int, obj lin} lin = con (,) #0(t.14, d.16)
       let d.11: tobj lin = con Prelude.Option #1(d.10)
       return d.11
     }
@@ -1204,7 +1204,7 @@ fn a_continuation_captures_its_live_variables() {
     b1:
       let k.6: tobj lin = closure "nums$let$go{H=Std.Iter.generate@#8c179e1f604536f1}$h0"(n.0, t.3)
       let d.7: obj lin = con Std.Iter.Iter #0(k.6)
-      let d.8: obj lin = con (,) #0(t.3, d.7)
+      let d.8: (,){int, obj lin} lin = con (,) #0(t.3, d.7)
       let d.9: tobj lin = con Prelude.Option #1(d.8)
       return d.9
     b2:

@@ -408,3 +408,37 @@ fn f(k.0: obj) -> (,){float, float} {
     }
     ");
 }
+
+#[test]
+fn a_switch_on_a_constant_leaf_becomes_a_jump() {
+    // 定数を引数にした構造体の `con` を分けて `switch` すると、葉を置き換えた `switch` は定数で分ける。合う case への
+    // ジャンプにし、辺の入らなくなったブロックを落として番号を振り直す
+    let text = format!(
+        "{OPTION}layout Color {{ Red, Green }}
+fn f(o.0: tobj) -> int {{
+  let p.1: (,){{enum, tobj}} = con (,) #0(#1, o.0)
+  unpack p.1 (,) #0(c.2: enum, x.3: tobj)
+  switch c.2 Color {{ #0 -> b1, #1 -> b2 }}
+b1:
+  return 1
+b2:
+  switch x.3 Option {{ #0 -> b3, _ -> b4 }}
+b3:
+  return 2
+b4:
+  return 3
+}}
+"
+    );
+    insta::assert_snapshot!(function(&flatten_text(&format!("{PAIR}{text}")), "f"), @"
+    fn f(o.0: tobj) -> int {
+      jump b1()
+    b1:
+      switch o.0 Option { #0 -> b2, _ -> b3 }
+    b2:
+      return 2
+    b3:
+      return 3
+    }
+    ");
+}

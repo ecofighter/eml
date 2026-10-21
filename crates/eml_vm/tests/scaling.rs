@@ -672,17 +672,20 @@ main () = println (walk {n})
 }
 
 /// 型変数のフィールドは `tobj` なので、`Int` を入れると `box`、取り出して `Int` として使うと `unbox` を通る
-/// (docs/spec/lir.md の「位置の規則」)。データの配置は単相化の後も一様なので、この形の変換は残る。`Wrap 1` は自分を
-/// 呼ぶ `hide` を通すので、既知のコンストラクタとしてその場で解けない。
+/// (docs/spec/lir.md の「位置の規則」)。データの配置は単相化の後も一様なので、この形の変換は残る。`Wrap` は
+/// コンストラクタを2つにして、構造体にならない型にする (docs/superpowers/specs/2026-10-21-s14e-abi-struct-design.md
+/// の「構造体にする型」)。`Wrap 1` は自分を呼ぶ `hide` を通すので、既知のコンストラクタとしてその場で解けない。
 #[test]
 fn an_int_in_a_type_variable_field_is_boxed_and_unboxed() {
     let text = [
         "data Wrap a =",
         "  | Wrap a",
+        "  | Gone",
         "",
-        "unwrap : Wrap a -> a",
+        "unwrap : Wrap a -> <Panic> a",
         "unwrap w = match w with",
         "  | Wrap x -> x",
+        "  | Gone -> panic \"gone\"",
         "",
         "data Box a = | Box a",
         "",

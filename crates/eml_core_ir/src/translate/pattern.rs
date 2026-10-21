@@ -15,8 +15,9 @@ use crate::{Rhs, Stmt, Term};
 use eml_lir::{
     Atom, BlockId, Case, CasePattern, Ctor, LayoutId, Mark, Repr, TUPLE, VarId, VarInfo,
 };
+use eml_types::TypeId;
 
-use super::types::{mark, named, repr, type_def_repr, var_info};
+use super::types::{mark, named};
 use super::{Ctx, CtxId, Exit, FnLowering};
 use crate::builder::Label;
 
@@ -26,7 +27,7 @@ use crate::builder::Label;
 /// 「translate の組み立て」)。`Con` の `mark` は値を作るときの印で、検査した式の型か、開いた変数から決まる
 /// (docs/spec/core-ir.md の「translate が決める印」)。引数の印の結びにすると、
 /// `Option (List File)` の `Some []` が `unr` になるためである。
-#[derive(Clone, PartialEq)]
+#[derive(Clone)]
 pub(super) enum Occ {
     Atom(Atom),
     Con {
@@ -37,13 +38,22 @@ pub(super) enum Occ {
     },
 }
 
-/// 頭の分かっている出現の値。まだ作っていない値は、作るときに配置を引く。決定木が値を作らずに枝を選べば、
-/// その配置は IR に現れないので表に入れない。
-#[derive(Clone, Copy, PartialEq)]
+/// 頭の分かっている出現の値。まだ作っていない値は値の型を持ち、作るときに配置と Repr を引く。構造体にする型かどうかは
+/// コンストラクタでなく型で決まり (docs/superpowers/specs/2026-10-21-s14e-abi-struct-design.md の「構造体にする型」)、
+/// 構造体の Repr を引くと配置も表に入る。決定木が値を作らずに枝を選べば、その配置は IR に現れないので表に入れない。
+#[derive(Clone, Copy)]
 pub(super) enum ConValue {
     Made(Atom),
-    Data(ConstructorId),
-    Tuple,
+    Data(ConstructorId, TypeId),
+    Tuple(TypeId),
+}
+
+/// 1つの葉で作った `con` の命令。同じ命令は同じ値を作るので、`unr` の値はこれで1つにまとめる。
+#[derive(PartialEq)]
+struct BuiltCon {
+    ctor: Ctor,
+    args: Vec<Atom>,
+    repr: Repr,
 }
 
 /// 同じ関数の中で `con` で作った変数の中身。変数は1回だけ定義され、定義は使う位置を支配するので、変数を見れば
@@ -243,15 +253,11 @@ impl FnLowering<'_> {
         alias: Option<LocalId>,
         passes_alias: Vec<bool>,
     ) -> Vec<Label> {
-        let (merged, merged_mark) = match &scrutinee {
-            Scrutinee::Expr(expr) => {
-                let ty = self.ty(*expr);
-                (
-                    repr(self.ctx.store, ty, self.ctx.hir),
-                    mark(self.ctx.store, ty, self.ctx.hir),
-                )
-            }
-            Scrutinee::Occ(_, repr, mark) => (*repr, *mark),
+        // 値の分からない出口が2つ以上のときだけ、まとめるラベルの引数の Repr を引く。構造体の Repr は配置を表に入れる
+        // ので、作らずに分解するだけのタプルの配置を表に入れないためである
+        let merged = match &scrutinee {
+            Scrutinee::Expr(expr) => Err(self.ty(*expr)),
+            Scrutinee::Occ(_, repr, mark) => Ok((*repr, *mark)),
         };
         let arms: Vec<Label> = pats
             .iter()
@@ -291,9 +297,8 @@ impl FnLowering<'_> {
             }
             _ => {
                 let name = alias.map_or("c", |alias| self.ctx.body.locals[alias].name.as_str());
-                let merge = self
-                    .builder
-                    .new_label(vec![named(name, merged, merged_mark)]);
+                let (repr, mark) = merged.unwrap_or_else(|ty| self.typed(ty));
+                let merge = self.builder.new_label(vec![named(name, repr, mark)]);
                 for (block, occ) in unknown {
                     self.builder.reopen(block);
                     let value = self.materialize(occ);
@@ -358,13 +363,14 @@ impl FnLowering<'_> {
         self.materialize_once(&occ, &mut Vec::new())
     }
 
-    /// `built` は、同じ葉でもう作った出現とその値である。葉が同じ値を何度渡しても、`con` は1回だけ作る
-    /// (docs/spec/core-ir.md の「変換の規則」)。コンストラクタとフィールドのアトムが同じ出現は、作る `con` の命令も
-    /// 同じなので、型が違っても1つにまとめる。型引数が違う値や、引数のないコンストラクタを違う型でフィールドに持つ値も
-    /// ここで1つになる。まとめるのは印が `unr` の出現だけで、`unr` でない出現は `built` に入れない。`unr` でない値を
-    /// 2か所で使うと Perceus が `dup` し、`built` に入れると同じ形の `unr` の出現がその `con` を使い回すためである
-    /// (docs/spec/core-ir.md の「translate が決める印」)。
-    fn materialize_once(&mut self, occ: &Occ, built: &mut Vec<(Occ, Atom)>) -> Atom {
+    /// `built` は、同じ葉でもう作った `con` の命令とその値である。葉が同じ値を何度渡しても、`con` は1回だけ作る
+    /// (docs/spec/core-ir.md の「変換の規則」)。コンストラクタとフィールドのアトムと Repr が同じ出現は、作る `con` の
+    /// 命令も同じなので、型が違っても1つにまとめる。型引数が違う値や、引数のないコンストラクタを違う型でフィールドに
+    /// 持つ値もここで1つになる。まとめるのは印が `unr` の出現だけで、`unr` でない出現は `built` に入れない。`unr` で
+    /// ない値を2か所で使うと Perceus が `dup` し、`built` に入れると同じ形の `unr` の出現がその `con` を使い回すため
+    /// である (docs/spec/core-ir.md の「translate が決める印」)。`unr` の値のフィールドも `unr` なので、フィールドを
+    /// 先に作っても、まとめる値のフィールドは `built` から引くだけである。
+    fn materialize_once(&mut self, occ: &Occ, built: &mut Vec<(BuiltCon, Atom)>) -> Atom {
         match occ {
             Occ::Atom(atom) => *atom,
             Occ::Con {
@@ -377,28 +383,36 @@ impl FnLowering<'_> {
                 value,
                 mark,
             } => {
-                let shared = *mark == Mark::Unr;
-                if shared && let Some(&(_, atom)) = built.iter().find(|(done, _)| done == occ) {
-                    return atom;
-                }
                 let args: Vec<Atom> = fields
                     .iter()
                     .map(|field| self.materialize_once(field, built))
                     .collect();
-                let (layout, repr) = match *value {
-                    ConValue::Data(ctor) => {
-                        let hir = self.ctx.hir;
-                        let layout = self.program.ctor(hir, self.ctx.store, ctor).layout;
-                        (layout, type_def_repr(hir[ctor].ty, hir))
-                    }
-                    // 要素が2つ以上のタプルは、型の Repr がいつも `obj` である
-                    ConValue::Tuple => (self.program.tuple_layout(args.len()), Repr::Obj),
+                let (layout, ty) = match *value {
+                    ConValue::Data(ctor, ty) => (
+                        self.program.ctor(self.ctx.hir, self.ctx.store, ctor).layout,
+                        ty,
+                    ),
+                    ConValue::Tuple(ty) => (self.program.tuple_layout(args.len()), ty),
                     ConValue::Made(_) => unreachable!("a made value is returned above"),
                 };
                 let ctor = Ctor { layout, tag: *tag };
-                let atom = self.bind("d", repr, *mark, Rhs::Con { ctor, args });
+                let repr = self.type_repr(ty);
+                let key = BuiltCon { ctor, args, repr };
+                let shared = *mark == Mark::Unr;
+                if shared && let Some(&(_, atom)) = built.iter().find(|(done, _)| *done == key) {
+                    return atom;
+                }
+                let atom = self.bind(
+                    "d",
+                    repr,
+                    *mark,
+                    Rhs::Con {
+                        ctor,
+                        args: key.args.clone(),
+                    },
+                );
                 if shared {
-                    built.push((occ.clone(), atom));
+                    built.push((key, atom));
                 }
                 atom
             }
@@ -422,11 +436,12 @@ impl FnLowering<'_> {
         };
         if let Some((ctor, args)) = saturated {
             let fields = args.iter().map(|&arg| self.occurrence(arg)).collect();
+            let ty = self.ty(id);
             return Occ::Con {
                 tag: self.ctx.hir[ctor].tag,
                 fields,
-                value: ConValue::Data(ctor),
-                mark: mark(self.ctx.store, self.ty(id), self.ctx.hir),
+                value: ConValue::Data(ctor, ty),
+                mark: mark(self.ctx.store, ty, self.ctx.hir),
             };
         }
         match &body.exprs[id].kind {
@@ -436,11 +451,12 @@ impl FnLowering<'_> {
                     .iter()
                     .map(|&element| self.occurrence(element))
                     .collect();
+                let ty = self.ty(id);
                 Occ::Con {
                     tag: TUPLE,
                     fields,
-                    value: ConValue::Tuple,
-                    mark: mark(self.ctx.store, self.ty(id), self.ctx.hir),
+                    value: ConValue::Tuple(ty),
+                    mark: mark(self.ctx.store, ty, self.ctx.hir),
                 }
             }
             _ => Occ::Atom(self.atom(id)),
@@ -539,8 +555,9 @@ impl FnLowering<'_> {
         value: Atom,
         attempt: Attempt,
     ) -> Decision {
-        // フィールドを持つ値は定数にならない。パターンが型をその data かタプルに決めるので、値の Repr はつねに `obj`
-        // である。verifier は `obj` でない値の `unpack` を拒む (R7)
+        // フィールドを持つ値は定数にならない。パターンが型をその data かタプルに決めるので、値の Repr は `obj` か
+        // 構造体である。構造体の値を分けるのはいつも `unpack` で、フィールドの Repr はパターンの型、つまり形の
+        // フィールドの型から決まる (docs/superpowers/specs/2026-10-21-s14e-abi-struct-design.md の「Core IR」)
         let Atom::Var(value) = value else {
             unreachable!("a value with fields is a variable")
         };
@@ -705,12 +722,23 @@ impl FnLowering<'_> {
                 fields,
                 next,
             } => {
+                let split = matches!(self.builder.repr(value), Repr::Struct(_));
+                let previous = split.then(|| self.unpacked.insert(value, fields.clone()));
                 self.builder.emit(Stmt::Unpack {
                     value,
                     ctor,
                     fields,
                 });
                 self.emit(*next, ctx, root, attempt);
+                match previous {
+                    Some(Some(fields)) => {
+                        self.unpacked.insert(value, fields);
+                    }
+                    Some(None) => {
+                        self.unpacked.remove(&value);
+                    }
+                    None => {}
+                }
             }
             Decision::Leaf { arm, bound } => {
                 let context = self.match_ctx(ctx);
@@ -765,7 +793,7 @@ impl FnLowering<'_> {
                     })
                     .unwrap_or("x");
                 let ty = self.pat_type(pat);
-                let repr = repr(self.ctx.store, ty, hir);
+                let repr = self.type_repr(ty);
                 let field =
                     self.builder
                         .var(named(name, repr, mark(self.ctx.store, ty, self.ctx.hir)));
@@ -856,10 +884,14 @@ impl FnLowering<'_> {
 
     /// 決定木の葉で、枝が使わない値を drop する (docs/spec/core-ir.md の「決定木の葉の `drop`」)。
     /// 根は、検査した値の出現から、決定が開いた頭の分かる値をたどって着く変数である。
-    /// 根 `v` を drop するのは、印が `unr` でなく Repr が RC の対象で、枝が `v` から取り出した `unr` でない変数を
-    /// 束縛せず、`v` か `v` を中に持つ値も受け取らないときである。drop しないと、Perceus が `unr` でない値を
-    /// `decref` する。枝が値全体を受け取るときは呼ばない。
+    /// 根 `v` を drop するのは、印が `unr` でなく Repr が RC の対象 (`unr` でない RC の葉を持つ構造体を含む) で、
+    /// 枝が `v` から取り出した `unr` でない変数を束縛せず、`v` か `v` を中に持つ値も受け取らないときである。drop
+    /// しないと、Perceus が `unr` でない値を `decref` する。枝が値全体を受け取るときは呼ばない。
+    /// この道で分けた構造体は、枝が値ごと受け取らなければ、フィールドごとに同じ規則を当てる。構造体は開いた後に葉の
+    /// 変数の並びになり、`release` で解く物体がないので、パターンが調べ尽くしたフィールド (`[]` の葉など) も明示の
+    /// `drop` で手放す (docs/superpowers/specs/2026-10-21-s14e-abi-struct-design.md の「Kind の印と RC」)。
     fn drop_matched_away(&mut self, root: &Occ, bound: &[(LocalId, Occ)], attempt: Attempt) {
+        let mut whole = HashSet::new();
         let mut kept = HashSet::new();
         let mut work: Vec<Occ> = bound.iter().map(|(_, occ)| occ.clone()).collect();
         while let Some(occ) = work.pop() {
@@ -872,6 +904,7 @@ impl FnLowering<'_> {
                 }
                 // `unr` の変数は `unr` でない値を中に持たず、`unr` でない根を生かしておく理由にもならない
                 Occ::Atom(Atom::Var(var)) if self.builder.mark(var) != Mark::Unr => {
+                    whole.insert(var);
                     kept.insert(var);
                     let mut child = var;
                     while let Some(&parent) = self.parents.get(&child) {
@@ -896,9 +929,18 @@ impl FnLowering<'_> {
                     Some(known) if self.opens(var, attempt) => {
                         work.extend(known.args.iter().rev().map(|&arg| Occ::Atom(arg)));
                     }
+                    _ if !whole.contains(&var) && self.unpacked.contains_key(&var) => {
+                        let fields = &self.unpacked[&var];
+                        work.extend(
+                            fields
+                                .iter()
+                                .rev()
+                                .map(|&field| Occ::Atom(Atom::Var(field))),
+                        );
+                    }
                     _ => {
                         if self.builder.mark(var) != Mark::Unr
-                            && self.builder.repr(var).is_rc()
+                            && self.program.rc_target(self.builder.repr(var))
                             && !kept.contains(&var)
                         {
                             self.bind("u", Repr::Unit, Mark::Unr, Rhs::Drop(Atom::Var(var)));
@@ -911,19 +953,15 @@ impl FnLowering<'_> {
     }
 
     /// 局所変数を受けるラベルの引数。
-    fn local_info(&self, local: LocalId) -> VarInfo {
-        let ty = self
+    fn local_info(&mut self, local: LocalId) -> VarInfo {
+        let ty = *self
             .ctx
             .types
             .locals
             .get(local)
             .expect("every local is typed");
-        var_info(
-            &self.ctx.body.locals[local].name,
-            self.ctx.store,
-            *ty,
-            self.ctx.hir,
-        )
+        let body = self.ctx.body;
+        self.var_info(&body.locals[local].name, ty)
     }
 
     /// 式 `root` の中で局所変数 `local` を使うか。`let x = S; match x` の枝が `x` を使うかを決める。

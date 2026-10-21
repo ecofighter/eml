@@ -775,6 +775,15 @@ impl Structs {
             .any(|&(repr, mark)| repr.is_rc() && mark != Mark::Unr)
     }
 
+    /// 「RC の対象」で後始末を決める所が後始末する値の Repr。RC の対象の Repr と、`unr` でない RC の葉を持つ構造体
+    /// である (docs/superpowers/specs/2026-10-21-s14e-abi-struct-design.md の「Kind の印と RC」)。
+    pub fn rc_target(&self, repr: Repr) -> bool {
+        match repr {
+            Repr::Struct(id) => self.has_non_unr_rc_leaf(id),
+            _ => repr.is_rc(),
+        }
+    }
+
     /// 印を除いて同じ Repr。構造体どうしは骨組み (配置と、葉の Repr) が同じときに等しい。正確な位置で Repr を比べる
     /// 所が使う。状態を渡す形の複製が値の印から作る形と、型から作る形とで、印だけが違うことがあるためである
     /// (docs/superpowers/specs/2026-10-21-s14e-abi-struct-design.md の「構造体の Repr」)。

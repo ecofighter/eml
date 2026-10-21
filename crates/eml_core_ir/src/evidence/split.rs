@@ -508,7 +508,8 @@ impl Out<'_> {
 /// 遅い道。取り出した κ に続きのクロージャを `compose$` で足して戻し、ダミーを返す。`mask` の地点では、先に κ を
 /// `mask$` で包む。内側のフレームの再開のときに `mask$` が `evv` を整えるためである。地点の結果はここではダミーで、
 /// `unr` でない RC の結果は先頭で drop する。V1 が `unr` でない変数への Perceus の `decref` を拒むためである
-/// (docs/spec/core-ir.md の「EP の明示の `drop`」)。
+/// (docs/spec/core-ir.md の「EP の明示の `drop`」)。`unr` でない RC の葉を持つ構造体の結果も drop する
+/// (docs/superpowers/specs/2026-10-21-s14e-abi-struct-design.md の「Kind の印と RC」)。
 fn slow_path(
     program: &mut Program,
     helpers: &mut Helpers,
@@ -519,7 +520,7 @@ fn slow_path(
 ) -> Block {
     let mut stmts = Vec::new();
     let result = out.info(point.result);
-    if result.repr.is_rc() && result.mark != Mark::Unr {
+    if program.structs.rc_target(result.repr) && result.mark != Mark::Unr {
         out.bind(
             &mut stmts,
             "u",

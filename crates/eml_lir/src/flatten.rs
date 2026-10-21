@@ -17,8 +17,9 @@
 use std::collections::{HashMap, HashSet};
 
 use crate::{
-    Atom, Call, Ctor, EffectInfo, FloatBits, Layout, LirFn, Mark, OpRet, Prim, Program, Repr, Rhs,
-    Site, SourceSig, Stmt, StructId, Structs, Term, VarId, VarInfo, operation,
+    Atom, BlockId, Call, Case, CasePattern, Ctor, EffectInfo, FloatBits, Layout, LirFn, Mark,
+    OpRet, Prim, Program, Repr, Rhs, Site, SourceSig, Stmt, StructId, Structs, Term, VarId,
+    VarInfo, operation,
 };
 
 pub fn flatten(program: &mut Program) {
@@ -65,6 +66,8 @@ struct Flattener<'a> {
     from_field: HashMap<VarId, VarId>,
     /// 入れ子の構造体の箱を受けた `tobj` のフィールドの変数。それを開く構造体の `unbox` は、葉がどれも使われなければ消す。
     nested_boxes: HashSet<VarId>,
+    /// 定数で分けることになった `switch` をジャンプにしたか。
+    folded: bool,
 }
 
 impl<'a> Flattener<'a> {
@@ -87,6 +90,7 @@ impl<'a> Flattener<'a> {
             subst: HashMap::new(),
             from_field: HashMap::new(),
             nested_boxes: HashSet::new(),
+            folded: false,
         }
     }
 
@@ -145,6 +149,9 @@ impl<'a> Flattener<'a> {
             let block = &mut self.function.blocks[index];
             block.stmts = out;
             block.term = term;
+        }
+        if self.folded {
+            prune(self.function);
         }
         self.remove_unused_reads();
         // 開いた構造体の変数はどこからも参照されないので、表から外す。読み戻した表の使われない番号と同じ形にする
@@ -639,12 +646,27 @@ impl<'a> Flattener<'a> {
                 layout,
                 cases,
                 default,
-            } => Term::Switch {
-                scrutinee: self.single(scrutinee),
-                layout,
-                cases,
-                default,
-            },
+            } => {
+                let value = self.single(scrutinee);
+                // 定数を引数にした構造体の `con` を分ける `switch` は、葉を置き換えると定数で分ける。定数で分ける
+                // `switch` は verifier が断るので、合う case か `default` へのジャンプにする。定数はフィールドを持たない
+                // ので、合う case はフィールドを束縛しない。ほかの行き先は辺が入らなくなり、`run` が落とす
+                if let (Atom::Var(_), Some(target)) =
+                    (scrutinee, constant_target(value, &cases, default))
+                {
+                    self.folded = true;
+                    return Term::Jump {
+                        target,
+                        args: Vec::new(),
+                    };
+                }
+                Term::Switch {
+                    scrutinee: value,
+                    layout,
+                    cases,
+                    default,
+                }
+            }
             Term::TailCall(_) => unreachable!("contract forms tail calls after flatten"),
             Term::ReturnMany(_) => unreachable!("only flatten forms multi-value returns"),
         }
@@ -709,4 +731,50 @@ fn defined(leaves: &[Atom]) -> Vec<VarId> {
             _ => None,
         })
         .collect()
+}
+
+/// 定数 `value` で分ける `switch` の行き先。合う case がなければ `default` である。
+fn constant_target(value: Atom, cases: &[Case], default: Option<BlockId>) -> Option<BlockId> {
+    let pattern = match value {
+        Atom::Tag(tag) => CasePattern::Tag(tag),
+        Atom::Int(value) => CasePattern::Int(value),
+        Atom::Var(_) | Atom::Float(_) | Atom::Unit | Atom::Fn(_) => return None,
+    };
+    let matched = cases.iter().find(|case| case.pattern == pattern);
+    debug_assert!(
+        matched.is_none_or(|case| case.fields.is_empty()),
+        "a constant has no fields"
+    );
+    matched.map(|case| case.target).or(default)
+}
+
+/// 入口から届かないブロックを落とし、残ったブロックに元の順のまま番号を振り直す。辺の入らないブロックを残すと、構造の
+/// 規則 (docs/spec/lir.md の「構造の規則」の R4) に反する。
+fn prune(function: &mut LirFn) {
+    let mut reached = vec![false; function.blocks.len()];
+    reached[BlockId::ENTRY.0 as usize] = true;
+    let mut pending = vec![BlockId::ENTRY];
+    while let Some(block) = pending.pop() {
+        for next in function.blocks[block.0 as usize].term.successors() {
+            if !reached[next.0 as usize] {
+                reached[next.0 as usize] = true;
+                pending.push(next);
+            }
+        }
+    }
+    let mut renumber = vec![BlockId::ENTRY; function.blocks.len()];
+    let mut kept = 0;
+    for (index, &reached) in reached.iter().enumerate() {
+        if reached {
+            renumber[index] = BlockId(kept);
+            kept += 1;
+        }
+    }
+    let mut reached = reached.into_iter();
+    function.blocks.retain(|_| reached.next() == Some(true));
+    for block in &mut function.blocks {
+        block
+            .term
+            .for_each_successor_mut(|target| *target = renumber[target.0 as usize]);
+    }
 }

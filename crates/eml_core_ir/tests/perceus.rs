@@ -12,8 +12,8 @@ use crate::common::{function, lir_text};
 fn strings_are_dupped_and_decreffed() {
     let text = "data Box a = | Box a\n\nhide : Int -> a -> <Panic> Box a\nhide n x = if n <= 0 then Box x else hide (n - 1) x\n\ntwice : String -> String\ntwice s = s ++ s\n\nignore : String -> Int\nignore s = 1\n\nmain : Unit -> <IO, Panic> Unit\nmain () =\n  let Box twice = hide 0 twice\n  println (twice \"a\")";
     insta::assert_snapshot!(lir_text(text, eml_lir::Pass::Perceus), @r#"
-    layout Prelude.Bool { False, True }
     layout Box { Box(tobj) }
+    layout Prelude.Bool { False, True }
     effect Prelude.IO { never io_failed(enum, obj) -> never }
     effect Prelude.Panic { never panicked(obj) -> never }
     fn twice(s.0: obj) -> obj {
@@ -22,23 +22,20 @@ fn strings_are_dupped_and_decreffed() {
       return t.1
     }
     fn entry$main() -> unit {
-      let t.1: obj = call "hide@[String -> String]{1=twice}"(0)
-      unpack t.1 Box #0(twice.2: tobj)
+      let t.0.6: tobj = call "hide@[String -> String]{1=twice}"(0)
       let s.3: obj = const "a"
-      release t.1 Box #0(twice.2)
-      let t.4: obj = apply twice.2(s.3)
+      let t.4: obj = apply t.0.6(s.3)
       let t.5: unit = extern Prelude.println(t.4)
       return t.5
     }
-    fn "hide@[String -> String]{1=twice}"(n.0: int) -> obj {
+    fn "hide@[String -> String]{1=twice}"(n.0: int) -> tobj source(int) -> Box{tobj} {
       let t.2: enum = extern "Prelude.Ord Int.<="(n.0, 0)
       switch t.2 Prelude.Bool { #0 -> b1, #1 -> b2 }
     b1:
       let t.4: int = extern "Prelude.Num Int.-"(n.0, 1)
       tail call "hide@[String -> String]{1=twice}"(t.4)
     b2:
-      let d.3: obj = con Box #0(&twice)
-      return d.3
+      return &twice
     }
     "#);
 }
@@ -82,10 +79,9 @@ fn a_non_tail_if_keeps_strings_used_later() {
 fn constructor_arguments_are_owned_by_the_value() {
     let text = "data Box a = | Box a\n\nhide : Int -> a -> <Panic> Box a\nhide n x = if n <= 0 then Box x else hide (n - 1) x\n\ndata Pair a b =\n  | Pair a b\n\ntwice : String -> Pair String String\ntwice s = Pair s s\n\nmain : Unit -> <IO, Panic> Unit\nmain () =\n  let Box twice = hide 0 twice\n  let _ = twice \"s\"\n  ()";
     insta::assert_snapshot!(function(&lir_text(text, eml_lir::Pass::Perceus), "twice"), @"
-    fn twice(s.0: obj) -> obj {
+    fn twice(s.0: obj) -> (obj, obj) source(obj) -> Pair{obj, obj} {
       dup s.0
-      let d.1: obj = con Pair #0(s.0, s.0)
-      return d.1
+      return (s.0, s.0)
     }
     ");
 }
@@ -211,17 +207,17 @@ fn a_file_taken_out_of_a_tuple_is_neither_dupped_nor_decreffed() {
     fn entry$main() -> unit {
       let s.1: obj = const "input.txt"
       let t.2: obj lin = extern Std.Fs.open(s.1)
-      let t.3: obj lin = extern Std.Fs.read_all(t.2)
-      unpack t.3 (,) #0(f.4: obj lin, first.5: obj)
-      release t.3 (,) #0(f.4, first.5)
-      let t.6: obj lin = extern Std.Fs.read_all(f.4)
-      unpack t.6 (,) #0(f.7: obj lin, rest.8: obj)
-      release t.6 (,) #0(f.7, rest.8)
-      let t.9: unit = extern Std.Fs.close(f.7)
-      let t.10: unit = extern Prelude.println(first.5)
+      let t.16: obj lin = extern Std.Fs.read_all(t.2)
+      let (t.0.18: obj lin, t.1.19: obj) = unbox t.16 (,)
+      release unboxed t.16 (,) #0(t.0.18, t.1.19)
+      let t.17: obj lin = extern Std.Fs.read_all(t.0.18)
+      let (t.0.20: obj lin, t.1.21: obj) = unbox t.17 (,)
+      release unboxed t.17 (,) #0(t.0.20, t.1.21)
+      let t.9: unit = extern Std.Fs.close(t.0.20)
+      let t.10: unit = extern Prelude.println(t.1.19)
       let s.11: obj = const "["
       let s.12: obj = const "]"
-      let t.13: obj = extern Prelude.++(rest.8, s.12)
+      let t.13: obj = extern Prelude.++(t.1.21, s.12)
       let t.14: obj = extern Prelude.++(s.11, t.13)
       let t.15: unit = extern Prelude.println(t.14)
       return t.15

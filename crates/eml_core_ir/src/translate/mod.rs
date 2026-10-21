@@ -33,11 +33,12 @@ use expr::extern_row;
 use instances::{InstanceKind, Part, Target, wrapper_name};
 use names::NameTable;
 use pattern::{Known, MatchCtx, Occ, Scrutinee, destructures};
-use program::{EntryAfter, ProgramBuilder, ShowTarget, Shown, effect_table};
-use types::{mark, named, repr, split_arrows, var_info};
+use program::{EntryAfter, ProgramBuilder, ShowTarget, Shown, effect_table, recursive_types};
+use types::{StructTypes, mark, named, split_arrows};
 
-// extern の表の行と std の宣言を照らし合わせる結合テスト (tests/externs.rs) が、translate と同じ規則で型の Repr を決める
-pub use types::repr as type_repr;
+// extern の表の行と std の宣言を照らし合わせる結合テスト (tests/externs.rs) が、translate と同じ規則で型の Repr を決める。
+// extern の行に構造体は現れないので、構造体にする型も箱の位置の `obj` として読む
+pub use types::boxed_repr as type_repr;
 
 /// 節の `k` の変換の形 (docs/spec/core-ir.md)。
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -286,14 +287,14 @@ fn lower_local_functions(ctx: BodyCtx<'_>, program: &mut ProgramBuilder) {
                 .collect();
             ctx.check_captures(lambda_ty, &captured, "local function");
         }
-        let (params, ret) = ctx.lambda_signature(lambda_ty, &closure.params);
+        let (params, ret) = ctx.lambda_signature(program, lambda_ty, &closure.params);
         let yields = ctx.resolve(
             *ctx.types
                 .lambda_yields
                 .get(lambda)
                 .expect("every lambda has its row classified"),
         );
-        let captured = ctx.typed_captures(&function.captured);
+        let captured = ctx.typed_captures(program, &function.captured);
         // ローカル関数は直接呼ばれるために生まれるので、内部の関数でない。値として使う所も、型どおりの ABI のまま
         // 同じ関数を指す (docs/superpowers/specs/2026-10-21-s14e-abi-struct-design.md の「関数の ABI」)
         let core = FnLowering::new(ctx, program, yields).lower(
@@ -315,8 +316,9 @@ pub(crate) fn translate(
     entry: FunctionId,
     files: &SourceFiles,
 ) -> Program {
-    let mut builder = ProgramBuilder::new(typed);
-    let instances = instances::collect(hir, typed, entry);
+    let mut instances = instances::collect(hir, typed, entry);
+    let struct_types = StructTypes::new(hir, typed, &mut instances.store, recursive_types(hir));
+    let mut builder = ProgramBuilder::new(typed, struct_types);
     let store = &instances.store;
     let indices: Vec<FnIdx> = instances
         .list
@@ -364,7 +366,13 @@ pub(crate) fn translate(
             .params
             .iter()
             .zip(&param_types)
-            .map(|(&pat, &ty)| (Some(pat), repr(store, ty, hir), mark(store, ty, hir)))
+            .map(|(&pat, &ty)| {
+                (
+                    Some(pat),
+                    builder.repr(hir, store, ty),
+                    mark(store, ty, hir),
+                )
+            })
             .collect();
         let forms = continuation_forms(body);
         let numbers = numbering(hir, body, &function.targets);
@@ -374,6 +382,7 @@ pub(crate) fn translate(
             .as_deref()
             .unwrap_or_else(|| typed.bodies.get(id).expect("every body is type-checked"));
         let references = references(body, &types.implicit_drops);
+        let ret = (builder.repr(hir, store, ret), mark(store, ret, hir));
         let ctx = BodyCtx {
             hir,
             body,
@@ -401,7 +410,7 @@ pub(crate) fn translate(
             &[],
             &params,
             body.root,
-            (repr(store, ret, hir), mark(store, ret, hir)),
+            ret,
         );
         builder.finish(index, core);
     }
@@ -434,7 +443,7 @@ pub(crate) fn translate(
         entry: entry_fn,
         strings: builder.strings.values,
         layouts: builder.layouts,
-        structs: eml_lir::Structs::default(),
+        structs: builder.structs,
         effects: effect_table(hir, store, typed),
         files: builder.files.values,
     }
@@ -584,38 +593,45 @@ impl BodyCtx<'_> {
         }
     }
 
+    /// 型 `ty` の値の Repr と印。
+    fn typed(&self, program: &mut ProgramBuilder, ty: TypeId) -> (Repr, Mark) {
+        (
+            program.repr(self.hir, self.store, ty),
+            mark(self.store, ty, self.hir),
+        )
+    }
+
     /// 型が `lambda_ty` のラムダの引数と、本体の値の Repr と印。
-    fn lambda_signature(&self, lambda_ty: TypeId, pats: &[PatId]) -> (Vec<Param>, (Repr, Mark)) {
+    fn lambda_signature(
+        &self,
+        program: &mut ProgramBuilder,
+        lambda_ty: TypeId,
+        pats: &[PatId],
+    ) -> (Vec<Param>, (Repr, Mark)) {
         let (param_types, ret_ty) = split_arrows(self.store, lambda_ty, pats.len());
         let params = pats
             .iter()
             .zip(&param_types)
             .map(|(&pat, &ty)| {
-                (
-                    Some(pat),
-                    repr(self.store, ty, self.hir),
-                    mark(self.store, ty, self.hir),
-                )
+                let (repr, mark) = self.typed(program, ty);
+                (Some(pat), repr, mark)
             })
             .collect();
-        let ret = (
-            repr(self.store, ret_ty, self.hir),
-            mark(self.store, ret_ty, self.hir),
-        );
-        (params, ret)
+        (params, self.typed(program, ret_ty))
     }
 
     /// 捕まえる変数と、その値の Repr と印。
-    fn typed_captures(&self, captured: &[LocalId]) -> Vec<(LocalId, Repr, Mark)> {
+    fn typed_captures(
+        &self,
+        program: &mut ProgramBuilder,
+        captured: &[LocalId],
+    ) -> Vec<(LocalId, Repr, Mark)> {
         captured
             .iter()
             .map(|&local| {
                 let ty = *self.types.locals.get(local).expect("every local is typed");
-                (
-                    local,
-                    repr(self.store, ty, self.hir),
-                    mark(self.store, ty, self.hir),
-                )
+                let (repr, mark) = self.typed(program, ty);
+                (local, repr, mark)
             })
             .collect()
     }
@@ -632,6 +648,9 @@ struct FnLowering<'a> {
     /// 決定木が分解した値のフィールドの変数から、分解した値への表。決定木の葉の drop が、枝の束縛した変数をどの値から
     /// 取り出したかをたどるのに使う (docs/spec/core-ir.md の「決定木の葉の `drop`」)。
     parents: HashMap<VarId, VarId>,
+    /// 決定木が今の道で `unpack` した構造体の変数と、そのフィールドの変数。葉の `drop` が構造体をフィールドごとに
+    /// 扱うのに使う (`pattern.rs` の `drop_matched_away`)。
+    unpacked: HashMap<VarId, Vec<VarId>>,
     /// 参照が1つでない局所変数に束縛した `con` の変数。決定木はこれを開かない
     /// (docs/spec/core-ir.md の「translate が決める印」)。
     shared: HashSet<VarId>,
@@ -651,6 +670,7 @@ impl<'a> FnLowering<'a> {
             contexts: Vec::new(),
             cons: HashMap::new(),
             parents: HashMap::new(),
+            unpacked: HashMap::new(),
             shared: HashSet::new(),
         }
     }
@@ -750,7 +770,7 @@ impl<'a> FnLowering<'a> {
     ) -> Atom {
         let captured = self
             .ctx
-            .typed_captures(&lifted_captures(self.ctx.lifted, captured));
+            .typed_captures(self.program, &lifted_captures(self.ctx.lifted, captured));
         let function = self.program.reserve(captured.len() + params.len());
         let mut core = FnLowering::new(self.ctx, &mut *self.program, yields)
             .lower(&name, true, &captured, params, root, ret);
@@ -906,9 +926,8 @@ impl<'a> FnLowering<'a> {
         let on_true = self.builder.new_label(Vec::new());
         let on_false = self.builder.new_label(Vec::new());
         let ty = self.ty(condition);
-        let unknown = self
-            .builder
-            .new_label(vec![var_info("c", self.ctx.store, ty, self.ctx.hir)]);
+        let info = self.var_info("c", ty);
+        let unknown = self.builder.new_label(vec![info]);
         self.contexts.push(Ctx::Bool {
             on_true,
             on_false,

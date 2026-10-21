@@ -1,24 +1,27 @@
 //! 変換の途中で関数を足していく表と、extern の関数、操作、コンストラクタ、継続を包む関数、入口の関数、エフェクトの表。
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use eml_extern::{Extern, ExternType};
 use eml_hir::{
     ConstructorId, EffectDef, EffectId, EffectKind, FunctionId, Items, ModuleId, ModuleOrigin,
-    OpMultiplicity, OperationId, Program as HirProgram, TypeDefId, TypeDefKind, ValueItem,
+    OpMultiplicity, OperationId, Program as HirProgram, TypeDefId, TypeDefKind, TypeRefKind,
+    ValueItem,
 };
 use eml_types::{TypeId, TypeKind, TypeStore, TypedProgram, VarClass, VarType};
 
 use crate::{Call, CoreFn, Rhs, Stmt, Term};
 use eml_lir::{
     Atom, Ctor, EffectInfo, FnIdx, Layout, LayoutCtor, LayoutId, Loc, Mark, OpRet, OperationInfo,
-    Prim, Repr, TUPLE, VarInfo,
+    Prim, Repr, StructShape, Structs, TUPLE, VarInfo,
 };
 
 use crate::builder::FnBuilder;
 
 use super::display::BUDGET;
-use super::types::{declared_mark, mark, named, repr, split_arrows, var_info};
+use super::types::{
+    Composite, MAX_STRUCT_WORDS, StructTypes, boxed_repr, declared_mark, mark, named, split_arrows,
+};
 
 /// 文字列リテラルと表示用のパスの表。同じ文字列には同じ番号を返す。
 #[derive(Default)]
@@ -86,10 +89,15 @@ pub(super) struct ProgramBuilder {
     /// 型ごとの包む関数 (`op$`、`con$`、`cont$`、`cont$state`) を名前で引く表。名前は型引数を含むので、同じ名前なら
     /// 同じコードである。
     wrappers: HashMap<String, FnIdx>,
+    struct_types: StructTypes,
+    /// IR が名指す構造体の形 (`Program.structs`)。
+    pub(super) structs: Structs,
+    /// 型ごとに決めた Repr。構造体の判定は型をたどるので、同じ型を何度も読む変換のために覚えておく。
+    reprs: HashMap<TypeId, Repr>,
 }
 
 impl ProgramBuilder {
-    pub(super) fn new(typed: &TypedProgram) -> ProgramBuilder {
+    pub(super) fn new(typed: &TypedProgram, struct_types: StructTypes) -> ProgramBuilder {
         ProgramBuilder {
             functions: Vec::new(),
             arities: Vec::new(),
@@ -106,7 +114,101 @@ impl ProgramBuilder {
                 })
                 .collect(),
             wrappers: HashMap::new(),
+            struct_types,
+            structs: Structs::default(),
+            reprs: HashMap::new(),
         }
+    }
+
+    /// 変数の Repr。箱の位置の Repr (`boxed_repr`) に、構造体にする型の判定を加える。構造体の形のフィールドの Repr と
+    /// 印は、具体化したフィールドの型から決める
+    /// (docs/superpowers/specs/2026-10-21-s14e-abi-struct-design.md の「構造体の Repr」)。
+    pub(super) fn repr(&mut self, hir: &HirProgram, types: &TypeStore, ty: TypeId) -> Repr {
+        if let Some(&repr) = self.reprs.get(&ty) {
+            return repr;
+        }
+        let repr = match self.struct_types.split(hir, types, ty) {
+            Some((composite, fields)) => {
+                let fields = fields.to_vec();
+                self.struct_repr(hir, types, composite, &fields)
+            }
+            None => boxed_repr(types, ty, hir),
+        };
+        self.reprs.insert(ty, repr);
+        repr
+    }
+
+    /// 形が `composite` でフィールドの型が `fields` の値の Repr。型の表に値の型そのものがない所 (導出の生成器) が使う。
+    pub(super) fn composite_repr(
+        &mut self,
+        hir: &HirProgram,
+        types: &TypeStore,
+        composite: Composite,
+        fields: &[TypeId],
+    ) -> Repr {
+        let candidate = match composite {
+            Composite::Tuple(_) => true,
+            Composite::Data(id) => self.struct_types.composite_data(hir, id),
+        };
+        if candidate && self.struct_types.words(hir, types, fields).is_some() {
+            return self.struct_repr(hir, types, composite, fields);
+        }
+        match composite {
+            Composite::Tuple(_) => Repr::Obj,
+            Composite::Data(id) => super::types::type_def_repr(id, hir),
+        }
+    }
+
+    fn struct_repr(
+        &mut self,
+        hir: &HirProgram,
+        types: &TypeStore,
+        composite: Composite,
+        fields: &[TypeId],
+    ) -> Repr {
+        let layout = match composite {
+            Composite::Tuple(arity) => self.tuple_layout(arity),
+            Composite::Data(id) => self.data_layout(hir, types, id),
+        };
+        let fields = fields
+            .iter()
+            .map(|&field| (self.repr(hir, types, field), mark(types, field, hir)))
+            .collect();
+        Repr::Struct(self.structs.intern(StructShape { layout, fields }))
+    }
+
+    /// 型を持たない組の Repr。開いた後の葉の語の数が上限に収まれば構造体に、収まらなければ `obj` にする
+    /// (docs/superpowers/specs/2026-10-21-s14e-abi-struct-design.md の「構造体にする型」)。
+    pub(super) fn tuple_struct(&mut self, layout: LayoutId, fields: Vec<(Repr, Mark)>) -> Repr {
+        let words: usize = fields
+            .iter()
+            .map(|&(repr, _)| match repr {
+                Repr::Struct(id) => self.structs.words(id),
+                Repr::Unit => 0,
+                _ => 1,
+            })
+            .sum();
+        if (1..=MAX_STRUCT_WORDS).contains(&words) {
+            Repr::Struct(self.structs.intern(StructShape { layout, fields }))
+        } else {
+            Repr::Obj
+        }
+    }
+
+    pub(super) fn var_info(
+        &mut self,
+        name: &str,
+        hir: &HirProgram,
+        types: &TypeStore,
+        ty: TypeId,
+    ) -> VarInfo {
+        named(name, self.repr(hir, types, ty), mark(types, ty, hir))
+    }
+
+    /// 「RC の対象」で後始末を決める所の述語。`unr` でない RC の葉を持つ構造体も含める
+    /// (docs/superpowers/specs/2026-10-21-s14e-abi-struct-design.md の「Kind の印と RC」)。
+    pub(super) fn rc_target(&self, repr: Repr) -> bool {
+        self.structs.rc_target(repr)
     }
 
     /// data の型の配置。フィールドの Repr は、コンストラクタのスキームの、宣言したフィールドの型から決める。
@@ -132,7 +234,7 @@ impl ProgramBuilder {
                     name: constructor.name.clone(),
                     fields: fields
                         .iter()
-                        .map(|&field| repr(types, field, hir))
+                        .map(|&field| self.struct_types.layout_field_repr(hir, types, field))
                         .collect(),
                 }
             })
@@ -239,15 +341,16 @@ impl ProgramBuilder {
             return function;
         }
         let stateful = params.len() == 2;
-        let reprs: Vec<Repr> = params.iter().map(|&ty| repr(types, ty, hir)).collect();
+        let reprs: Vec<Repr> = params.iter().map(|&ty| self.repr(hir, types, ty)).collect();
         // 生の継続は `once` の操作なら `Lin`、`multi` なら `Unr` で、`k` の値の型からは決まらないので `poly` にする
         let mut infos = vec![named("k", Repr::TObj, Mark::Poly)];
         infos.extend(
             params
                 .iter()
                 .zip(["v", "s"])
-                .map(|(&ty, name)| var_info(name, types, ty, hir)),
+                .map(|(&ty, name)| self.var_info(name, hir, types, ty)),
         );
+        let result = self.var_info("t", hir, types, result);
         // どの文脈からも呼ばれるので、yield しうるとみなす
         let function = self.simple(
             name.clone(),
@@ -270,7 +373,7 @@ impl ProgramBuilder {
                     mask: Vec::new(),
                 }
             },
-            var_info("t", types, result, hir),
+            result,
         );
         self.wrappers.insert(name, function);
         function
@@ -292,8 +395,9 @@ impl ProgramBuilder {
         let (param_types, result_type) = split_arrows(types, ty, hir[op].arity);
         let params = param_types
             .iter()
-            .map(|&ty| var_info("p", types, ty, hir))
+            .map(|&ty| self.var_info("p", hir, types, ty))
             .collect();
+        let result = self.var_info("t", hir, types, result_type);
         let function = self.simple(
             name.clone(),
             true,
@@ -302,7 +406,7 @@ impl ProgramBuilder {
                 call: perform_call(hir, op, args),
                 mask: Vec::new(),
             },
-            var_info("t", types, result_type, hir),
+            result,
         );
         self.wrappers.insert(name, function);
         function
@@ -324,9 +428,10 @@ impl ProgramBuilder {
         let (param_types, result_type) = split_arrows(types, ty, hir[ctor].fields.len());
         let params = param_types
             .iter()
-            .map(|&ty| var_info("p", types, ty, hir))
+            .map(|&ty| self.var_info("p", hir, types, ty))
             .collect();
         let ctor_id = self.ctor(hir, types, ctor);
+        let result = self.var_info("d", hir, types, result_type);
         let function = self.simple(
             name.clone(),
             false,
@@ -335,7 +440,7 @@ impl ProgramBuilder {
                 ctor: ctor_id,
                 args,
             },
-            var_info("d", types, result_type, hir),
+            result,
         );
         self.wrappers.insert(name, function);
         function
@@ -365,11 +470,14 @@ impl ProgramBuilder {
         let mut builder = FnBuilder::new();
         let args = param_types
             .iter()
-            .map(|&ty| Atom::Var(builder.param(var_info("p", types, ty, hir))))
+            .map(|&ty| {
+                let info = self.var_info("p", hir, types, ty);
+                Atom::Var(builder.param(info))
+            })
             .collect();
         let result = self.extern_call(&mut builder, hir, types, row, args, Some(at), result_type);
         builder.terminate(Term::Return(result));
-        let info = var_info("t", types, result_type, hir);
+        let info = self.var_info("t", hir, types, result_type);
         // `IO` を起こす extern も、失敗すると継続を作らずに巻き戻すので yield の地点でない。包む関数は extern を呼ぶだけ
         // なので yield しない (docs/spec/core-ir.md の「IO の extern」)
         let core = builder.finish(name, true, false, info.repr, info.mark);
@@ -391,14 +499,14 @@ impl ProgramBuilder {
         ty: TypeId,
     ) -> Atom {
         if ext.row().with_arg.is_none() {
-            let info = var_info("t", types, ty, hir);
+            let info = self.var_info("t", hir, types, ty);
             return bind(builder, info, Rhs::Extern { ext, args, at });
         }
         let TypeKind::Tuple(elements) = types.kind(ty) else {
             unreachable!("an extern with `with_arg` returns a pair")
         };
-        let value = var_info("t", types, elements[0], hir);
-        let pair = var_info("d", types, ty, hir);
+        let value = self.var_info("t", hir, types, elements[0]);
+        let pair = self.var_info("d", hir, types, ty);
         self.lending_call(builder, ext, args, at, value, pair)
     }
 
@@ -453,15 +561,17 @@ impl ProgramBuilder {
         let (params, result_type) = split_arrows(types, target_type, 1);
         let mut builder = FnBuilder::new();
         let unit = vec![Atom::Unit];
+        let param = self.repr(hir, types, params[0]);
         let call = if self.arity(target) == 0 {
-            let value = builder.var(var_info("f", types, target_type, hir));
+            let info = self.var_info("f", hir, types, target_type);
+            let value = builder.var(info);
             builder.emit(Stmt::Let {
                 var: value,
                 rhs: plain_call(Call::Direct(target, Vec::new())),
             });
             Call::Apply {
                 callee: Atom::Var(value),
-                site: builder.typed_site(&unit, |_| repr(types, params[0], hir)),
+                site: builder.typed_site(&unit, |_| param),
                 args: unit,
                 yields,
                 prompt: None,
@@ -469,16 +579,19 @@ impl ProgramBuilder {
         } else {
             Call::Direct(target, unit)
         };
-        let result = builder.var(var_info("t", types, result_type, hir));
+        let info = self.var_info("t", hir, types, result_type);
+        let result = builder.var(info);
         builder.emit(Stmt::Let {
             var: result,
             rhs: plain_call(call),
         });
         let value = Atom::Var(result);
         let (returned, ret, ret_mark) = match after {
+            // 入口の `ret` は値1つにする。構造体なら `obj` にし、box の挿入が箱に入れる
+            // (docs/superpowers/specs/2026-10-21-s14e-abi-struct-design.md の「Core IR」)
             EntryAfter::Return => (
                 value,
-                repr(types, result_type, hir),
+                boxed_repr(types, result_type, hir),
                 mark(types, result_type, hir),
             ),
             EntryAfter::Store(root) => {
@@ -609,6 +722,44 @@ pub(super) fn plain_call(call: Call) -> Rhs {
         call,
         mask: Vec::new(),
     }
+}
+
+/// 再帰の組に入る型の宣言。宣言のフィールドの型の注釈が、型引数や関数型の中を含めてどこかで名指す型の宣言へ辺を引き、
+/// 自分へ戻れる宣言を集める。自分を直接か、ほかの宣言のフィールドを通して含む型は、構造体にしない。`Iter` は
+/// `Option (a, Iter e a)` を通して自分を含む
+/// (docs/superpowers/specs/2026-10-21-s14e-abi-struct-design.md の「構造体にする型」)。構造体にしうるのはコンストラクタが
+/// 1つの宣言だけなので、それらからだけたどる。プログラムに1回だけ求める。
+pub(super) fn recursive_types(hir: &HirProgram) -> HashSet<TypeDefId> {
+    let mentions = |id: TypeDefId| {
+        hir[id]
+            .types
+            .iter()
+            .filter_map(|(_, reference)| match reference.kind {
+                TypeRefKind::Con(target, _, _) => Some(target),
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+    };
+    let single = |id: TypeDefId| matches!(&hir[id].kind, TypeDefKind::Data { constructors } if constructors.len() == 1);
+    let mut edges: HashMap<TypeDefId, Vec<TypeDefId>> = HashMap::new();
+    let mut recursive = HashSet::new();
+    for (start, _) in hir.types().filter(|&(id, _)| single(id)) {
+        let mut seen = HashSet::new();
+        let mut work = vec![start];
+        while let Some(id) = work.pop() {
+            for &next in edges.entry(id).or_insert_with(|| mentions(id)).iter() {
+                if next == start {
+                    recursive.insert(start);
+                    work.clear();
+                    break;
+                }
+                if seen.insert(next) {
+                    work.push(next);
+                }
+            }
+        }
+    }
+    recursive
 }
 
 /// Core IR のエフェクトの表に入るエフェクト。`eml_hir::Program::effects` の順 (モジュールの番号の順、モジュールの中の
@@ -785,11 +936,14 @@ pub(super) fn effect_table(
                         let mark = |ty| declared_mark(types, ty, hir);
                         OperationInfo {
                             name: operation.name.clone(),
-                            params: params.iter().map(|&ty| repr(types, ty, hir)).collect(),
+                            params: params
+                                .iter()
+                                .map(|&ty| boxed_repr(types, ty, hir))
+                                .collect(),
                             param_marks: params.iter().map(|&ty| mark(ty)).collect(),
                             ret_mark: if resumable { mark(result) } else { Mark::Poly },
                             ret: if resumable {
-                                OpRet::Repr(repr(types, result, hir))
+                                OpRet::Repr(boxed_repr(types, result, hir))
                             } else {
                                 OpRet::Never
                             },
@@ -806,7 +960,7 @@ pub(super) fn effect_table(
 /// ごとの Repr との変換は box の挿入に任せる (docs/spec/core-ir.md の「`var` の変換」)。配列の変数の要素 `e` は
 /// `MutArray e` の型引数である。
 fn var_operations(hir: &HirProgram, types: &TypeStore, var: VarType) -> Vec<OperationInfo> {
-    let slot = |ty| (repr(types, ty, hir), declared_mark(types, ty, hir));
+    let slot = |ty| (boxed_repr(types, ty, hir), declared_mark(types, ty, hir));
     let state = slot(var.ty);
     let element = || match types.kind(var.ty) {
         TypeKind::Con { args, .. } => slot(args[0]),

@@ -11,7 +11,7 @@ use eml_types::{FieldTarget, IndexTarget, TypeId, TypeKind, VarClass};
 
 use crate::builder::FnBuilder;
 use crate::{Call, Rhs, Stmt, Term};
-use eml_lir::{Atom, Ctor, FnIdx, Mark, MaskItem, Prim, Repr, Role, TUPLE, VarId};
+use eml_lir::{Atom, Ctor, FnIdx, Mark, MaskItem, Prim, Repr, Role, TUPLE, VarId, VarInfo};
 
 use super::instances::wrapper_name;
 use super::pattern::Known;
@@ -19,7 +19,7 @@ use super::program::{
     ProgramBuilder, VarOp, bind, effect_index, perform_call, plain_call, var_perform_call,
     wrapper_base,
 };
-use super::types::{mark, named, repr, split_arrows, var_info};
+use super::types::{mark, named, split_arrows};
 use super::{ContinuationForm, Exit, FnLowering, Param};
 
 /// extern の関数なら、その表の行。誤りのないプログラムの extern は、どれも標準ライブラリの宣言で行を持つ。
@@ -77,6 +77,21 @@ fn masked_call(call: Call, mask: Vec<MaskItem>) -> Rhs {
 }
 
 impl FnLowering<'_> {
+    /// 型 `ty` の値の Repr (`ProgramBuilder::repr`)。
+    pub(super) fn type_repr(&mut self, ty: TypeId) -> Repr {
+        self.program.repr(self.ctx.hir, self.ctx.store, ty)
+    }
+
+    /// 型 `ty` の値の Repr と印。
+    pub(super) fn typed(&mut self, ty: TypeId) -> (Repr, Mark) {
+        self.ctx.typed(self.program, ty)
+    }
+
+    pub(super) fn var_info(&mut self, name: &str, ty: TypeId) -> VarInfo {
+        self.program
+            .var_info(name, self.ctx.hir, self.ctx.store, ty)
+    }
+
     pub(super) fn ty(&self, expr: ExprId) -> TypeId {
         self.ctx
             .types
@@ -103,7 +118,9 @@ impl FnLowering<'_> {
 
     /// `value` を `ctor` で分解する `unpack` を足し、フィールドの変数を返す。変数の Repr は配置のフィールドの Repr で、
     /// `overrides` に挙げたフィールドだけは、その Repr にする。使うフィールドを具体化した型の Repr で受け、配置との変換を
-    /// パターンのフィールドと同じく boxing に任せるためである。印は `marks` のフィールドの順の印である。
+    /// パターンのフィールドと同じく boxing に任せるためである。構造体の値のフィールドは、どれも形のフィールドの Repr で
+    /// 受ける (docs/superpowers/specs/2026-10-21-s14e-abi-struct-design.md の「Core IR」)。印は `marks` のフィールドの
+    /// 順の印である。
     fn unpack_fields(
         &mut self,
         value: Atom,
@@ -115,9 +132,19 @@ impl FnLowering<'_> {
         let Atom::Var(value) = value else {
             unreachable!("a value with fields is a variable")
         };
-        let reprs = self.program.layouts[ctor.layout.0 as usize].constructors[ctor.tag as usize]
-            .fields
-            .clone();
+        let reprs: Vec<Repr> = match self.builder.repr(value) {
+            Repr::Struct(id) => self
+                .program
+                .structs
+                .shape(id)
+                .fields
+                .iter()
+                .map(|&(repr, _)| repr)
+                .collect(),
+            _ => self.program.layouts[ctor.layout.0 as usize].constructors[ctor.tag as usize]
+                .fields
+                .clone(),
+        };
         debug_assert_eq!(marks.len(), reprs.len(), "one mark per field");
         let fields: Vec<VarId> = reprs
             .into_iter()
@@ -139,7 +166,10 @@ impl FnLowering<'_> {
         // `release` で解かず、残る `decref` は V1 に反する。`Lin` と宣言した型のフィールドが `unr` だけの値である。
         // 決定木の葉の `drop` と同じく、分解した直後に手放す (docs/spec/core-ir.md の「変換の規則」)
         let linear = |var: VarId| self.builder.mark(var) != Mark::Unr;
-        if linear(value) && !fields.iter().any(|&field| linear(field)) {
+        if linear(value)
+            && self.program.rc_target(self.builder.repr(value))
+            && !fields.iter().any(|&field| linear(field))
+        {
             self.bind("u", Repr::Unit, Mark::Unr, Rhs::Drop(Atom::Var(value)));
         }
         fields
@@ -147,7 +177,7 @@ impl FnLowering<'_> {
 
     /// 型 `ty` の値を束縛する `bind`。
     fn bind_typed(&mut self, name: &str, ty: TypeId, rhs: Rhs) -> Atom {
-        let repr = repr(self.ctx.store, ty, self.ctx.hir);
+        let repr = self.type_repr(ty);
         let mark = mark(self.ctx.store, ty, self.ctx.hir);
         self.bind(name, repr, mark, rhs)
     }
@@ -277,10 +307,11 @@ impl FnLowering<'_> {
             let (params, rest) = split_arrows(self.ctx.store, callee_ty, end);
             let part_ty = if end == last { ty } else { rest };
             // 定数の引数の Repr は、その矢印の引数の型から決める
-            let params = &params[end - run.len()..];
-            let site = self.builder.typed_site(&part, |index| {
-                repr(self.ctx.store, params[index], self.ctx.hir)
-            });
+            let reprs: Vec<Repr> = params[end - run.len()..]
+                .iter()
+                .map(|&param| self.type_repr(param))
+                .collect();
+            let site = self.builder.typed_site(&part, |index| reprs[index]);
             let rhs = masked_call(
                 Call::Apply {
                     callee: function,
@@ -412,10 +443,8 @@ impl FnLowering<'_> {
                 let mask = self.mask(id, args.len() - 1);
                 // 場所の Repr は `apply` と同じく `k` の矢印の型から決める。状態のない handler の状態は `()` である
                 let (params, _) = split_arrows(self.ctx.store, ty, args.len());
-                let mut reprs: Vec<Repr> = params
-                    .iter()
-                    .map(|&param| repr(self.ctx.store, param, self.ctx.hir))
-                    .collect();
+                let mut reprs: Vec<Repr> =
+                    params.iter().map(|&param| self.type_repr(param)).collect();
                 reprs.resize(2, Repr::Unit);
                 let mut args = args.into_iter();
                 let arg = args.next().expect("a continuation takes a value");
@@ -593,9 +622,8 @@ impl FnLowering<'_> {
     /// で続きを変換する。
     fn through_continuation(&mut self, id: ExprId) -> Atom {
         let ty = self.ty(id);
-        let after = self
-            .builder
-            .new_label(vec![var_info("t", self.ctx.store, ty, self.ctx.hir)]);
+        let info = self.var_info("t", ty);
+        let after = self.builder.new_label(vec![info]);
         self.tail_expr(id, Exit::Jump(after));
         let args = self
             .builder
@@ -705,7 +733,7 @@ impl FnLowering<'_> {
                 let unit = [(None, Repr::Unit, Mark::Unr)];
                 let handled_ty = self.ty(handled.body);
                 let handled_ret = (
-                    repr(self.ctx.store, handled_ty, self.ctx.hir),
+                    self.type_repr(handled_ty),
                     mark(self.ctx.store, handled_ty, self.ctx.hir),
                 );
                 // 本体の row は扱うエフェクトを含むので、本体はいつも yield しうる
@@ -815,7 +843,7 @@ impl FnLowering<'_> {
                     ),
                 };
                 let ty = self.ty(id);
-                let result = repr(self.ctx.store, ty, self.ctx.hir);
+                let result = self.type_repr(ty);
                 // 取り出さない残りのフィールドの型は `discarded` にある。`discarded` が狙い以外のフィールドを
                 // すべて並べることに頼るので、埋まらない位置を `Unr` で済ませない
                 let rest = &self.ctx.types.discarded[id];
@@ -844,7 +872,7 @@ impl FnLowering<'_> {
                     .filter(|index| !update.written.contains(index))
                     .map(|index| {
                         let ty = update.fields[index as usize];
-                        (index, repr(self.ctx.store, ty, self.ctx.hir))
+                        (index, self.type_repr(ty))
                     })
                     .collect();
                 let marks: Vec<Mark> = update
@@ -898,10 +926,7 @@ impl FnLowering<'_> {
                     VarClass::Array => VarOp::Take,
                 };
                 let ty = self.ty(id);
-                let result = (
-                    repr(self.ctx.store, ty, self.ctx.hir),
-                    mark(self.ctx.store, ty, self.ctx.hir),
-                );
+                let result = (self.type_repr(ty), mark(self.ctx.store, ty, self.ctx.hir));
                 self.var_perform(id, *var, op, vec![Atom::Unit], result)
             }
             ExprKind::Assign { var, value } => {
@@ -921,7 +946,7 @@ impl FnLowering<'_> {
                     body: lambda_body,
                 } = closure;
                 let lambda_ty = self.ty(id);
-                let (params, ret) = self.ctx.lambda_signature(lambda_ty, params);
+                let (params, ret) = self.ctx.lambda_signature(self.program, lambda_ty, params);
                 let name = format!(
                     "{}$lambda{}",
                     self.ctx.root_name, self.ctx.numbering.lambdas[id]
@@ -987,7 +1012,7 @@ impl FnLowering<'_> {
                 let ty = self.pat_type(pat);
                 (
                     Some(pat),
-                    repr(self.ctx.store, ty, self.ctx.hir),
+                    self.type_repr(ty),
                     mark(self.ctx.store, ty, self.ctx.hir),
                 )
             })
@@ -998,7 +1023,7 @@ impl FnLowering<'_> {
         let captured = self.ctx.body.closure_captures(closure);
         let ret_ty = self.ty(closure.body);
         let ret = (
-            repr(self.ctx.store, ret_ty, self.ctx.hir),
+            self.type_repr(ret_ty),
             mark(self.ctx.store, ret_ty, self.ctx.hir),
         );
         self.lift(
@@ -1022,11 +1047,11 @@ impl FnLowering<'_> {
         let (store, hir) = (self.ctx.store, self.ctx.hir);
         // 初期値の型は instance の代入をかけた変数の型である
         let var_ty = self.ty(init);
-        let state = (repr(store, var_ty, hir), mark(store, var_ty, hir));
+        let state = self.typed(var_ty);
         let scope_ty = self.ty(scope);
-        let scope_ret = (repr(store, scope_ty, hir), mark(store, scope_ty, hir));
+        let scope_ret = self.typed(scope_ty);
         let ty = self.ty(id);
-        let result = (repr(store, ty, hir), mark(store, ty, hir));
+        let result = self.typed(ty);
         let prefix = format!("{}$var{}", self.ctx.root_name, u32::from(var.into_raw()));
         // 範囲の row は変数のエフェクトを含むので、範囲はいつも yield しうる
         let body = self.lift(
@@ -1041,9 +1066,7 @@ impl FnLowering<'_> {
         );
         let class = self.ctx.types.vars[var].class;
         let element = match (class, store.kind(var_ty)) {
-            (VarClass::Array, TypeKind::Con { args, .. }) => {
-                (repr(store, args[0], hir), mark(store, args[0], hir))
-            }
+            (VarClass::Array, TypeKind::Con { args, .. }) => self.typed(args[0]),
             _ => UNIT,
         };
         let clauses = VarOp::of(class)
@@ -1134,28 +1157,28 @@ impl FnLowering<'_> {
                             VarOp::Length => (Extern::MutArrayLength, vec![st], int),
                             _ => (Extern::MutArrayRead, vec![st, args[0]], element),
                         };
+                        // 型を持たない組なので、語の数の条件だけで構造体にする
+                        // (docs/superpowers/specs/2026-10-21-s14e-abi-struct-design.md の「Core IR」)
+                        let layout = program.tuple_layout(2);
+                        let pair_repr = program.tuple_struct(layout, vec![value, state]);
                         let pair = program.lending_call(
                             builder,
                             ext,
                             lent,
                             None,
                             named("t", value.0, value.1),
-                            named("d", Repr::Obj, state.1),
+                            named("d", pair_repr, state.1),
                         );
                         let Atom::Var(pair) = pair else {
                             unreachable!("a lending call binds its pair")
                         };
-                        // 組は融合の既知のコンストラクタで消える
                         let fields = vec![
                             builder.var(named("f", value.0, value.1)),
                             builder.var(named("st", state.0, state.1)),
                         ];
                         builder.emit(Stmt::Unpack {
                             value: pair,
-                            ctor: Ctor {
-                                layout: program.tuple_layout(2),
-                                tag: TUPLE,
-                            },
+                            ctor: Ctor { layout, tag: TUPLE },
                             fields: fields.clone(),
                         });
                         (Atom::Var(fields[0]), Atom::Var(fields[1]))
@@ -1250,10 +1273,7 @@ impl FnLowering<'_> {
     /// 呼ぶので、`Std.Array` を読み込まなくてよい (docs/spec/core-ir.md の「`var` の変換」)。
     fn index(&mut self, id: ExprId, base: IndexBase, index: ExprId) -> Atom {
         let ty = self.ty(id);
-        let element = (
-            repr(self.ctx.store, ty, self.ctx.hir),
-            mark(self.ctx.store, ty, self.ctx.hir),
-        );
+        let element = (self.type_repr(ty), mark(self.ctx.store, ty, self.ctx.hir));
         match (self.ctx.types.indexes[id], base) {
             (IndexTarget::ArrayVar, IndexBase::Var(var)) => {
                 let index = self.atom(index);

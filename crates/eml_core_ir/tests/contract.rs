@@ -56,10 +56,8 @@ fn returning_a_field_of_a_call_result_is_not_a_tail_call() {
     let text = text.as_str();
     insta::assert_snapshot!(function(&lir_text(text, eml_lir::Pass::Contract), "first"), @"
     fn first(x.0: int) -> int {
-      let t.1: obj = call split(x.0)
-      unpack t.1 (,) #0(y.4: tobj, x.5: tobj)
-      let y.2: int = unbox y.4
-      return y.2
+      let (t.0.4: int, t.1.5: int) = call split(x.0)
+      return t.0.4
     }
     ");
 }

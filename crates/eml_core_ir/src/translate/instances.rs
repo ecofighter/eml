@@ -595,31 +595,8 @@ impl Collector<'_> {
         self.constructor_fields(ty, &args)
     }
 
-    /// `data` の型 `ty` の型引数 `args` での、コンストラクタの宣言の順のフィールドの型。コンストラクタの宣言の型に、
-    /// 型引数の名前から `args` への代入をかけて、矢印の引数として取り出す。
     fn constructor_fields(&mut self, ty: TypeDefId, args: &[TypeId]) -> Vec<Vec<TypeId>> {
-        let hir = self.hir;
-        let TypeDefKind::Data { constructors } = &hir[ty].kind else {
-            unreachable!("only data types have constructors")
-        };
-        let names: Vec<String> = hir[ty]
-            .generics
-            .type_vars
-            .values()
-            .map(|var| var.name.clone())
-            .collect();
-        constructors
-            .iter()
-            .map(|&constructor| {
-                let item = ValueItem::Constructor(constructor);
-                let kinds = self.typed.kind_values(item, args, &self.store);
-                let mut subst =
-                    Substitution::new(names.iter().cloned().zip(args.iter().copied()), kinds);
-                let declared = self.typed.decls[&item].ty;
-                let ty = self.store.substitute(declared, &mut subst);
-                split_arrows(&self.store, ty, hir[constructor].fields.len()).0
-            })
-            .collect()
+        constructor_fields(self.hir, self.typed, &mut self.store, ty, args)
     }
 
     /// 表示器が部分の型 `ty` をどう書くか (docs/spec/core-ir.md の「表示関数」)。`depth` は部分の段、`method` は `Show` で
@@ -1199,4 +1176,42 @@ fn core_method(hir: &HirProgram, core: CoreMethod) -> MethodId {
         .iter()
         .find(|&&method| hir.core_method(method) == Some(core))
         .expect("the Prelude classes declare their core methods")
+}
+
+/// `data` の型 `ty` の型引数 `args` での、コンストラクタの宣言の順のフィールドの型。コンストラクタの宣言の型に、
+/// 型引数の名前から `args` への代入をかけて、矢印の引数として取り出す。型引数が宣言に対して相対的なら (スキームの型)、
+/// Kind の値を求められないので Kind 変数を残して代入する。そうしたフィールドの型からは Repr だけを読む
+/// (`types.rs` の `StructTypes`)。
+pub(super) fn constructor_fields(
+    hir: &HirProgram,
+    typed: &TypedProgram,
+    store: &mut TypeStore,
+    ty: TypeDefId,
+    args: &[TypeId],
+) -> Vec<Vec<TypeId>> {
+    let TypeDefKind::Data { constructors } = &hir[ty].kind else {
+        unreachable!("only data types have constructors")
+    };
+    let names: Vec<String> = hir[ty]
+        .generics
+        .type_vars
+        .values()
+        .map(|var| var.name.clone())
+        .collect();
+    let vars = || names.iter().cloned().zip(args.iter().copied());
+    let relative = args.iter().any(|&arg| store.is_relative(arg));
+    constructors
+        .iter()
+        .map(|&constructor| {
+            let item = ValueItem::Constructor(constructor);
+            let mut subst = if relative {
+                Substitution::partial(vars())
+            } else {
+                Substitution::new(vars(), typed.kind_values(item, args, store))
+            };
+            let declared = typed.decls[&item].ty;
+            let ty = store.substitute(declared, &mut subst);
+            split_arrows(store, ty, hir[constructor].fields.len()).0
+        })
+        .collect()
 }

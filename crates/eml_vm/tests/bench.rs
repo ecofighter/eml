@@ -550,7 +550,7 @@ fn orders() {
         allocations: 200002,
         reuses: 159320,
         peak_objects: 200001,
-        peak_stack: 20,
+        peak_stack: 18,
     }
     ");
 }
@@ -572,7 +572,7 @@ fn orders_by_hand() {
         allocations: 200002,
         reuses: 159320,
         peak_objects: 200001,
-        peak_stack: 19,
+        peak_stack: 18,
     }
     ");
 }
@@ -675,11 +675,11 @@ fn upsert() {
         unwound_frames: 0,
         string_bytes_copied: 157580,
         rc_increments: 436140,
-        rc_decrements: 484142,
-        boxes: 20000,
-        unboxes: 56815,
+        rc_decrements: 482143,
+        boxes: 22000,
+        unboxes: 58815,
         conversions: 0,
-        allocations: 48003,
+        allocations: 46004,
         reuses: 312764,
         peak_objects: 6002,
         peak_stack: 352,
@@ -697,11 +697,11 @@ fn upsert_by_hand() {
         unwound_frames: 0,
         string_bytes_copied: 157580,
         rc_increments: 436140,
-        rc_decrements: 484142,
-        boxes: 20000,
-        unboxes: 56815,
+        rc_decrements: 482143,
+        boxes: 22000,
+        unboxes: 58815,
         conversions: 0,
-        allocations: 48003,
+        allocations: 46004,
         reuses: 312764,
         peak_objects: 6002,
         peak_stack: 352,
@@ -719,14 +719,14 @@ fn records() {
         unwound_frames: 0,
         string_bytes_copied: 37,
         rc_increments: 0,
-        rc_decrements: 7,
+        rc_decrements: 6,
         boxes: 0,
         unboxes: 0,
         conversions: 0,
-        allocations: 8,
-        reuses: 100000,
-        peak_objects: 5,
-        peak_stack: 29,
+        allocations: 7,
+        reuses: 0,
+        peak_objects: 4,
+        peak_stack: 26,
     }
     ");
 }
@@ -807,14 +807,14 @@ fn mandelbrot() {
         unwound_frames: 0,
         string_bytes_copied: 4,
         rc_increments: 0,
-        rc_decrements: 32769,
+        rc_decrements: 1,
         boxes: 0,
         unboxes: 0,
         conversions: 0,
-        allocations: 32770,
-        reuses: 399752,
-        peak_objects: 3,
-        peak_stack: 45,
+        allocations: 2,
+        reuses: 0,
+        peak_objects: 2,
+        peak_stack: 43,
     }
     ");
 }
@@ -829,14 +829,14 @@ fn nbody() {
         unwound_frames: 0,
         string_bytes_copied: 24,
         rc_increments: 82160,
-        rc_decrements: 134231,
+        rc_decrements: 124211,
         boxes: 5,
         unboxes: 20055,
         conversions: 0,
-        allocations: 52072,
-        reuses: 6,
+        allocations: 42052,
+        reuses: 0,
         peak_objects: 26,
-        peak_stack: 66,
+        peak_stack: 76,
     }
     ");
 }
@@ -996,7 +996,6 @@ fn rebuilding_programs_reuse_boxes() {
         ("tree", "14898 7454478318\n"),
         ("upsert", "2000 k1182 23\n"),
         ("orders", "150308561\n"),
-        ("records", "100000 49764648 999 223\n"),
         (
             "records_wide",
             "100000 49764648 999 223 33086607712 50000 678\n",
@@ -1158,14 +1157,14 @@ fn trade_offs() {
         unwound_frames: 0,
         string_bytes_copied: 4,
         rc_increments: 0,
-        rc_decrements: 23,
+        rc_decrements: 21,
         boxes: 20,
         unboxes: 20,
         conversions: 0,
-        allocations: 24,
+        allocations: 22,
         reuses: 20,
         peak_objects: 21,
-        peak_stack: 24,
+        peak_stack: 23,
     }
     "
     );

@@ -472,6 +472,40 @@ yields fn n() -> unit {
 }
 
 #[test]
+fn a_struct_ret_returns_a_dummy_bound_to_a_struct_variable() {
+    // 構造体の `ret` には、構造体の変数に `prim dummy()` を印 `poly` で束縛して返す。box の挿入が `unbox` で受け直す
+    // (docs/superpowers/specs/2026-10-21-s14e-abi-struct-design.md の「Core IR」の EP)
+    let text = "\
+layout (,) { (,)(tobj, tobj) }
+yields fn g() -> unit {
+  return ()
+}
+yields fn p(n.0: int, s.1: obj) -> (,){int, obj} {
+  let u.2: unit = call g()
+  let d.3: (,){int, obj} = con (,) #0(n.0, s.1)
+  return d.3
+}
+";
+    insta::assert_snapshot!(function(&evidence_text(text), "p"), @"
+    yields fn p(n.0: int, s.1: obj) -> (,){int, obj} {
+      let u.2: unit = call g()
+      let y.4: int = prim yielding()
+      switch y.4 { 0 -> b2, _ -> b1 }
+    b1:
+      let k.5: tobj poly = prim yield_cont_take()
+      let c.6: tobj = closure p$k0(n.0, s.1)
+      let k.7: tobj poly = closure compose$(k.5, c.6)
+      let u.8: unit = prim yield_cont_set(k.7)
+      let d.9: (,){int, obj} poly = prim dummy()
+      return d.9
+    b2:
+      let d.3: (,){int, obj} = con (,) #0(n.0, s.1)
+      return d.3
+    }
+    ");
+}
+
+#[test]
 fn helpers_are_made_once_in_their_final_form() {
     // 2つの関数が yield の地点を持っても `compose$` は1つで、その中の `apply` は分けられない。`id$` は yield を
     // 始める節の入口だけが使うので、まだ作られない
@@ -512,6 +546,70 @@ yields fn h() -> int {
     ");
 }
 
+#[test]
+fn the_slow_path_drops_a_struct_result_with_non_unr_rc_leaves() {
+    // 地点の結果が `unr` でない RC の葉を持つ構造体なら、遅い道の先頭で drop する。葉がスカラーだけの構造体は drop
+    // しない (docs/superpowers/specs/2026-10-21-s14e-abi-struct-design.md の「Kind の印と RC」)
+    let text = "\
+layout (,) { (,)(tobj, tobj) }
+yields fn g(s.0: obj lin) -> (,){int, obj lin} lin {
+  let p.1: (,){int, obj lin} lin = con (,) #0(1, s.0)
+  return p.1
+}
+yields fn f(s.0: obj lin) -> (,){int, obj lin} lin {
+  let p.1: (,){int, obj lin} lin = call g(s.0)
+  let u.2: unit = call n()
+  return p.1
+}
+fn n() -> unit {
+  return ()
+}
+yields fn h() -> (,){int, int} {
+  let p.0: (,){int, int} = con (,) #0(1, 2)
+  return p.0
+}
+yields fn k() -> (,){int, int} {
+  let p.0: (,){int, int} = call h()
+  let u.1: unit = call n()
+  return p.0
+}
+";
+    let shown = evidence_text(text);
+    insta::assert_snapshot!(function(&shown, "f"), @"
+    yields fn f(s.0: obj lin) -> (,){int, obj lin} lin {
+      let p.1: (,){int, obj lin} lin = call g(s.0)
+      let y.3: int = prim yielding()
+      switch y.3 { 0 -> b2, _ -> b1 }
+    b1:
+      let u.4: unit = drop p.1
+      let k.5: tobj poly = prim yield_cont_take()
+      let k.6: tobj poly = closure compose$(k.5, &f$k0)
+      let u.7: unit = prim yield_cont_set(k.6)
+      let d.8: (,){int, obj lin} poly = prim dummy()
+      return d.8
+    b2:
+      let u.2: unit = call n()
+      return p.1
+    }
+    ");
+    insta::assert_snapshot!(function(&shown, "k"), @"
+    yields fn k() -> (,){int, int} {
+      let p.0: (,){int, int} = call h()
+      let y.2: int = prim yielding()
+      switch y.2 { 0 -> b2, _ -> b1 }
+    b1:
+      let k.3: tobj poly = prim yield_cont_take()
+      let k.4: tobj poly = closure compose$(k.3, &k$k0)
+      let u.5: unit = prim yield_cont_set(k.4)
+      let d.6: (,){int, int} poly = prim dummy()
+      return d.6
+    b2:
+      let u.1: unit = call n()
+      return p.0
+    }
+    ");
+}
+
 const ASK: &str = "effect Ask where\n  ask : Unit -> Int\n\n";
 
 /// 関数の値をデータに入れて取り出す。optimize はデータを通った値を既知の閉包としないので
@@ -530,7 +628,7 @@ fn a_handle_installs_evidence_and_calls_prompt() {
     let shown = core_text(&text, Pass::Evidence);
     insta::assert_snapshot!(function(&shown, "main"), @r#"
     fn main(p.0: unit) -> unit {
-      let t.1: obj = call "hide@[Unit -> <Ask, Panic> Int]{1=main$lambda0}"(0)
+      let t.1: Box{tobj} = call "hide@[Unit -> <Ask, Panic> Int]{1=main$lambda0}"(0)
       unpack t.1 Box #0(b.2: tobj)
       let c.3: tobj = closure main$handle0(b.2)
       let w.7: tobj = prim evv_get()
@@ -1040,8 +1138,8 @@ fn an_extern_wrapper_does_not_yield() {
     insta::assert_snapshot!(wrappers.join("\n"), @r#"
     internal fn main$extern0(p.0: obj lin) -> unit {
     internal fn main$extern1(p.0: obj) -> obj lin {
-    fn "hide@[Std.Fs.File -> <IO> Unit]{1=main$extern0}"(n.0: int) -> obj {
-    fn "hide@[String -> <IO> Std.Fs.File]{1=main$extern1}"(n.0: int) -> obj {
+    fn "hide@[Std.Fs.File -> <IO> Unit]{1=main$extern0}"(n.0: int) -> Box{tobj} {
+    fn "hide@[String -> <IO> Std.Fs.File]{1=main$extern1}"(n.0: int) -> Box{tobj} {
     "#);
 }
 

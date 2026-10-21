@@ -202,7 +202,8 @@ impl Substitution {
         }
     }
 
-    /// 型引数だけを置き換え、Kind 変数は残す。宣言の型の一部の型引数だけを置き換えるテストのためにある。
+    /// 型引数だけを置き換え、Kind 変数は残す。宣言の型の一部の型引数だけを置き換えるテストと、Kind の値を求められない
+    /// 相対的な型引数で、Repr だけを読む型を作る所 (translate の構造体の判定) が使う。
     pub fn partial(vars: impl IntoIterator<Item = (String, TypeId)>) -> Substitution {
         Substitution {
             vars: vars.into_iter().collect(),
@@ -394,6 +395,16 @@ impl TypeStore {
     /// 宣言の型をそのまま読む操作の表が使う (docs/spec/core-ir.md の「表の印の列」)。
     pub fn linearity_or_poly(&self, ty: TypeId) -> Lin {
         self.linearity[ty.index()]
+    }
+
+    /// 型の値の線形性が宣言に対して相対的か (`Rigid` か `Var` に依存するか)。`linearity` を読めない型を分けるのに使う。
+    pub fn is_relative(&self, ty: TypeId) -> bool {
+        self.relative[ty.index()]
+    }
+
+    /// 登録したすべての型の ID。登録した順に並ぶので、後で足した型だけを読むときは先頭を飛ばせばよい。
+    pub fn ids(&self) -> impl Iterator<Item = TypeId> + use<> {
+        (0..self.kinds.len() as u32).map(TypeId)
     }
 
     /// 型に宣言の Kind 変数 (`Var`) が残っているか。

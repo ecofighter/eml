@@ -889,15 +889,21 @@ impl<'a> Context<'a> {
     }
 
     /// 入口の段では、行の Repr が `tobj` でない位置の引数と結果の Repr は行と同じである。`tobj` の位置は、型変数の
-    /// 位置として具体化した型の Repr のまま渡され、box の挿入が合わせる。
+    /// 位置として具体化した型の Repr のまま渡され、box の挿入が合わせる。行に構造体は現れず、構造体の型の位置は箱の
+    /// `obj` なので、`obj` の位置にも構造体がそのまま渡され、box の挿入が合わせる
+    /// (docs/superpowers/specs/2026-10-21-s14e-abi-struct-design.md の「構造体の Repr」)。
     fn check_extern_exact(
         &self,
         var: VarId,
         row: &FunctionRow,
         args: &[Atom],
     ) -> Result<(), String> {
+        let boxed_struct =
+            |repr: Repr, expected: Repr| expected == Repr::Obj && matches!(repr, Repr::Struct(_));
         for (index, (&arg, &expected)) in args.iter().zip(row.params).enumerate() {
-            if expected != Repr::TObj && !arg.fits(self.vars, expected) {
+            let struct_arg =
+                matches!(arg, Atom::Var(var) if boxed_struct(self.repr(var), expected));
+            if expected != Repr::TObj && !struct_arg && !arg.fits(self.vars, expected) {
                 return Err(format!(
                     "argument {index} of `{}` is {}, but the extern takes {}",
                     row.name,
@@ -909,6 +915,7 @@ impl<'a> Context<'a> {
         if let OpRet::Repr(ret) = row.ret
             && ret != Repr::TObj
             && self.repr(var) != ret
+            && !boxed_struct(self.repr(var), ret)
         {
             return Err(format!(
                 "`{}` ({}) is bound to `{}`, which returns {}",

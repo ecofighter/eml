@@ -117,15 +117,13 @@ fn fields_are_rebound_at_the_head_of_the_case_target_and_after_an_unpack() {
       return t.2
     }
     ");
-    insta::assert_snapshot!(function(&shown, "sum"), @"
-    fn sum(p.0: obj) -> int {
-      unpack p.0 (,) #0(a.4: tobj, b.5: tobj)
-      let a.1: int = unbox a.4
-      let b.2: int = unbox b.5
-      let t.3: int = extern \"Prelude.Num Int.+\"(a.1, b.2)
+    insta::assert_snapshot!(function(&shown, "sum"), @r#"
+    fn sum(p.0: (,){int, int}) -> int {
+      unpack p.0 (,) #0(a.1: int, b.2: int)
+      let t.3: int = extern "Prelude.Num Int.+"(a.1, b.2)
       return t.3
     }
-    ");
+    "#);
 }
 
 #[test]
@@ -135,10 +133,9 @@ fn int_constants_are_boxed_and_other_constants_pass_as_they_are() {
     let text = format!("{HIDE}{text}");
     insta::assert_snapshot!(function(&lir_text(&text, eml_lir::Pass::Boxing), "entry$main"), @r#"
     fn entry$main() -> unit {
-      let t.1: obj = call "hide@#29c654b2da42db65"(0)
+      let t.1: Box{tobj} = call "hide@#29c654b2da42db65"(0)
       unpack t.1 Box #0(count.2: tobj)
-      let b.7: tobj = box 5
-      let d.3: obj = con Four #0(b.7, (), #1, &"id@[_]")
+      let d.3: Four{int, unit, enum, tobj} = con Four #0(5, (), #1, &"id@[_]")
       let t.4: int = apply count.2(d.3)
       let t.5: obj = extern "Prelude.Show Int.show"(t.4)
       let t.6: unit = extern Prelude.println(t.5)
@@ -312,9 +309,8 @@ fn a_chain_of_tail_calls_keeps_its_typed_rets() {
     "#);
     insta::assert_snapshot!(function(&shown, "via"), @r#"
     fn via(x.0: int) -> int {
-      let t.1: obj = call "hide@[Int -> Int]{1=via$lambda0}"(0)
-      unpack t.1 Box #0(f.2: tobj)
-      tail call apply_to(f.2, x.0)
+      let t.0.4: tobj = call "hide@[Int -> Int]{1=via$lambda0}"(0)
+      tail call apply_to(t.0.4, x.0)
     }
     "#);
     insta::assert_snapshot!(function(&shown, "through"), @"
@@ -324,14 +320,11 @@ fn a_chain_of_tail_calls_keeps_its_typed_rets() {
     ");
     insta::assert_snapshot!(function(&shown, "entry$main"), @r#"
     fn entry$main() -> unit {
-      let t.1: obj = call "hide@[Int -> Int]{1=main$lambda0}"(0)
-      unpack t.1 Box #0(g.2: tobj)
-      let t.3: obj = call "hide@[Int -> <Panic> Int]{1=via}"(0)
-      unpack t.3 Box #0(via.4: tobj)
-      let t.5: obj = call "hide@[(Int -> Int) -> Int -> Int]{1=through}"(0)
-      unpack t.5 Box #0(through.6: tobj)
-      let t.7: int = apply via.4(1: int)
-      let t.8: int = apply through.6(g.2, 2: int)
+      let t.0.12: tobj = call "hide@[Int -> Int]{1=main$lambda0}"(0)
+      let t.0.13: tobj = call "hide@[Int -> <Panic> Int]{1=via}"(0)
+      let t.0.14: tobj = call "hide@[(Int -> Int) -> Int -> Int]{1=through}"(0)
+      let t.7: int = apply t.0.13(1: int)
+      let t.8: int = apply t.0.14(t.0.12, 2: int)
       let t.9: int = extern "Prelude.Num Int.+"(t.7, t.8)
       let t.10: obj = extern "Prelude.Show Int.show"(t.9)
       let t.11: unit = extern Prelude.println(t.10)
@@ -362,18 +355,15 @@ fn the_result_of_exit_is_not_compared_with_positions() {
         "{HIDE}f : Int -> <IO> (Int, Int)\nf n = if n == 0 then (exit 3, n) else (n, n)\n\nmain : Unit -> <IO, Panic> Unit\nmain () =\n  let Box f = hide 0 f\n  println (show (f 1))"
     );
     insta::assert_snapshot!(function(&lir_text(&text, eml_lir::Pass::Boxing), "f"), @r#"
-    fn f(n.0: int) -> obj {
+    fn f(n.0: int) -> (,){int, int} {
       let t.1: enum = extern "Prelude.Eq Int.=="(n.0, 0)
       switch t.1 Prelude.Bool { #0 -> b1, #1 -> b2 }
     b1:
-      let n.5: tobj = box n.0
-      let n.6: tobj = box n.0
-      let d.4: obj = con (,) #0(n.5, n.6)
+      let d.4: (,){int, int} = con (,) #0(n.0, n.0)
       return d.4
     b2:
       let t.2: int = extern Prelude.exit(3)
-      let n.7: tobj = box n.0
-      let d.3: obj = con (,) #0(t.2, n.7)
+      let d.3: (,){int, int} = con (,) #0(t.2, n.0)
       return d.3
     }
     "#);

@@ -1,14 +1,24 @@
 //! 型から決まる値の表現 (Repr) と Kind の印。
 
+use std::collections::{HashMap, HashSet};
+
 use eml_hir::{Program as HirProgram, TypeDefId, TypeDefKind};
-use eml_types::{Lin, TypeId, TypeKind, TypeStore};
+use eml_types::{Lin, TypeId, TypeKind, TypeStore, TypedProgram};
 
 use eml_lir::{Mark, Repr, VarInfo, data_repr};
 
-/// 型の Repr (docs/spec/core-ir.md の「型の Repr」)。総称的な位置の束縛も具体化した型から決める。値を受ける位置の
-/// Repr と違えば、box の挿入が変換を入れる (docs/spec/lir.md の「位置の規則」)。関数の値と型変数の値は、即値
-/// (捕まえた変数のない関数、引数のないコンストラクタ) にもヒープの物体にもなるので `tobj` にする。
-pub fn repr(types: &TypeStore, ty: TypeId, hir: &HirProgram) -> Repr {
+use super::instances::constructor_fields;
+
+/// 構造体にする型の、開いた後の葉の語の数の上限
+/// (docs/superpowers/specs/2026-10-21-s14e-abi-struct-design.md の「構造体にする型」)。
+pub(super) const MAX_STRUCT_WORDS: usize = 6;
+
+/// 箱の位置の Repr (docs/spec/core-ir.md の「型の Repr」)。構造体にする型も、箱に入れた形の `obj` として読む。
+/// 構造体が現れない所 (extern の行、操作の表) はこの Repr を使う
+/// (docs/superpowers/specs/2026-10-21-s14e-abi-struct-design.md の「構造体の Repr」)。変数の Repr は、構造体を
+/// 決める `ProgramBuilder::repr` が決める。関数の値と型変数の値は、即値 (捕まえた変数のない関数、引数のない
+/// コンストラクタ) にもヒープの物体にもなるので `tobj` にする。
+pub fn boxed_repr(types: &TypeStore, ty: TypeId, hir: &HirProgram) -> Repr {
     match types.kind(ty) {
         // row は値を持たないので、表し方は型構成子だけで決まる
         TypeKind::Con {
@@ -44,13 +54,13 @@ pub(super) fn type_def_repr(id: TypeDefId, hir: &HirProgram) -> Repr {
 }
 
 /// instance の代入をかけた型の印 (docs/spec/core-ir.md の「translate が決める印」)。宣言に対して相対的な型は
-/// 現れないので、`TypeStore::linearity` で読む。
+/// 現れないので、`TypeStore::linearity` で読む。構造体にする型も、箱の位置の Repr (`obj`) で RC の対象として
+/// 扱うので、型の Kind に従う (docs/superpowers/specs/2026-10-21-s14e-abi-struct-design.md の「Kind の印と RC」)。
 pub(super) fn mark(types: &TypeStore, ty: TypeId, hir: &HirProgram) -> Mark {
     scalar_or(types, ty, hir, || types.linearity(ty))
 }
 
-/// 宣言の型を代入せずに読む所 (操作の表) の印。`Rigid` と `Var` に依存する型は `poly` になる。
-/// 保守的なので、`(a, File)` も `lin` でなく `poly` になる。
+/// 宣言の型を代入せずに読む所 (操作の表) の印。`Rigid` と `Var` に依存する型は `poly` になる。保守的なので、`(a, File)` も `lin` でなく `poly` になる。
 pub(super) fn declared_mark(types: &TypeStore, ty: TypeId, hir: &HirProgram) -> Mark {
     scalar_or(types, ty, hir, || types.linearity_or_poly(ty))
 }
@@ -59,7 +69,7 @@ pub(super) fn declared_mark(types: &TypeStore, ty: TypeId, hir: &HirProgram) -> 
 /// スカラーとその箱は資源を持たないためである。`Lin` と宣言したフィールドのない型 (`enum`) の値が1回だけ使われる
 /// ことは、型検査が守る (docs/spec/core-ir.md の「translate が決める印」)。
 fn scalar_or(types: &TypeStore, ty: TypeId, hir: &HirProgram, lin: impl FnOnce() -> Lin) -> Mark {
-    if repr(types, ty, hir).is_rc() {
+    if boxed_repr(types, ty, hir).is_rc() {
         mark_of(lin())
     } else {
         Mark::Unr
@@ -69,17 +79,13 @@ fn scalar_or(types: &TypeStore, ty: TypeId, hir: &HirProgram, lin: impl FnOnce()
 /// 型の線形性が決める印。決まらない型 (`Poly`) は、呼び出し側が決めるので `poly` にする。`TypeStore` は `Var` に
 /// 依存する型の値を `Poly` として持つので、2つの読み方のどちらも `Var` を返さない (docs/spec/types.md の
 /// 「型の線形性」)。
-fn mark_of(lin: Lin) -> Mark {
+pub(super) fn mark_of(lin: Lin) -> Mark {
     match lin {
         Lin::Unr => Mark::Unr,
         Lin::Lin => Mark::Lin,
         Lin::Poly => Mark::Poly,
         Lin::Var(_) => unreachable!("the store gives a Kind variable's type the value `Poly`"),
     }
-}
-
-pub(super) fn var_info(name: &str, types: &TypeStore, ty: TypeId, hir: &HirProgram) -> VarInfo {
-    named(name, repr(types, ty, hir), mark(types, ty, hir))
 }
 
 pub(super) fn named(name: &str, repr: Repr, mark: Mark) -> VarInfo {
@@ -102,4 +108,187 @@ pub(super) fn split_arrows(types: &TypeStore, ty: TypeId, count: usize) -> (Vec<
         ty = *ret;
     }
     (params, ty)
+}
+
+/// 構造体にしうる値の形。タプルか、コンストラクタが1つでフィールドを持ち、再帰の組に入らない `data` である。
+#[derive(Clone, Copy)]
+pub(super) enum Composite {
+    Tuple(usize),
+    Data(TypeDefId),
+}
+
+/// 型を構造体にするかの判定 (docs/superpowers/specs/2026-10-21-s14e-abi-struct-design.md の「構造体にする型」)。
+/// 変換は型の表を読むだけなので、`data` の型のフィールドの型と、構造体にする型の葉の語の数は、変換の前に求めておく。
+pub(super) struct StructTypes {
+    /// 再帰の組に入る型の宣言 (`program.rs` の `recursive_types`)。
+    recursive: HashSet<TypeDefId>,
+    /// 構造体にしうる `data` の型ごとの、具体化したフィールドの型。
+    fields: HashMap<TypeId, Vec<TypeId>>,
+    /// 構造体にする型ごとの、開いた後の葉の語の数。
+    words: HashMap<TypeId, usize>,
+}
+
+impl StructTypes {
+    /// 表のどの型からも引けるよう、構造体にしうる `data` の型をすべて調べる。代入で足した型も、フィールドの型として
+    /// 引かれうるので、足した型がなくなるまで調べる。再帰の組に入らない宣言のフィールドは、組の外の宣言の型だけを
+    /// 含むので、足す型はいつか尽きる。語の数は型ごとに1回だけ求める。部分を共有する型 (`((a, a), (a, a))`) を
+    /// たどり直すと、手間が型の深さの指数になるためである。
+    pub(super) fn new(
+        hir: &HirProgram,
+        typed: &TypedProgram,
+        store: &mut TypeStore,
+        recursive: HashSet<TypeDefId>,
+    ) -> StructTypes {
+        let mut fields = HashMap::new();
+        let mut seen = 0;
+        loop {
+            let fresh: Vec<TypeId> = store.ids().skip(seen).collect();
+            if fresh.is_empty() {
+                break;
+            }
+            seen += fresh.len();
+            for ty in fresh {
+                let TypeKind::Con { id, args, .. } = store.kind(ty) else {
+                    continue;
+                };
+                if !composite_data(hir, &recursive, *id) {
+                    continue;
+                }
+                let (id, args) = (*id, args.clone());
+                let [only] =
+                    <[Vec<TypeId>; 1]>::try_from(constructor_fields(hir, typed, store, id, &args))
+                        .expect("a composite data type has one constructor");
+                fields.insert(ty, only);
+            }
+        }
+        let mut types = StructTypes {
+            recursive,
+            fields,
+            words: HashMap::new(),
+        };
+        let mut memo = HashMap::new();
+        for ty in store.ids() {
+            if let Some(words) = types.count(hir, store, ty, &mut memo) {
+                types.words.insert(ty, words);
+            }
+        }
+        types
+    }
+
+    /// `ty` を構造体にするなら、その葉の語の数。`memo` は求め終えた型の答えである。再帰は型の深さだけである。
+    fn count(
+        &self,
+        hir: &HirProgram,
+        types: &TypeStore,
+        ty: TypeId,
+        memo: &mut HashMap<TypeId, Option<usize>>,
+    ) -> Option<usize> {
+        if let Some(&words) = memo.get(&ty) {
+            return words;
+        }
+        let words = self.composite(hir, types, ty).and_then(|(_, fields)| {
+            leaf_words(hir, types, fields, |field| {
+                self.count(hir, types, field, memo)
+            })
+        });
+        memo.insert(ty, words);
+        words
+    }
+
+    /// 構造体にしうる `data` の型の宣言か。
+    pub(super) fn composite_data(&self, hir: &HirProgram, id: TypeDefId) -> bool {
+        composite_data(hir, &self.recursive, id)
+    }
+
+    /// `ty` を構造体にするなら、値の形とフィールドの型。
+    pub(super) fn split<'a>(
+        &'a self,
+        hir: &HirProgram,
+        types: &'a TypeStore,
+        ty: TypeId,
+    ) -> Option<(Composite, &'a [TypeId])> {
+        if !self.words.contains_key(&ty) {
+            return None;
+        }
+        self.composite(hir, types, ty)
+    }
+
+    fn composite<'a>(
+        &'a self,
+        hir: &HirProgram,
+        types: &'a TypeStore,
+        ty: TypeId,
+    ) -> Option<(Composite, &'a [TypeId])> {
+        match types.kind(ty) {
+            TypeKind::Tuple(elements) if !elements.is_empty() => {
+                Some((Composite::Tuple(elements.len()), elements))
+            }
+            TypeKind::Con { id, .. } if self.composite_data(hir, *id) => {
+                let fields = self
+                    .fields
+                    .get(&ty)
+                    .expect("every composite data type in the store has its fields");
+                Some((Composite::Data(*id), fields))
+            }
+            _ => None,
+        }
+    }
+
+    /// フィールドの型が `fields` の値を構造体にするなら、開いた後の葉の語の数。
+    pub(super) fn words(
+        &self,
+        hir: &HirProgram,
+        types: &TypeStore,
+        fields: &[TypeId],
+    ) -> Option<usize> {
+        leaf_words(hir, types, fields, |field| self.words.get(&field).copied())
+    }
+
+    /// 配置のフィールドの Repr。配置はスキームから決まるので、型変数のフィールドと同じく、構造体の型のフィールドも
+    /// 一様な位置の `tobj` にする (docs/superpowers/specs/2026-10-21-s14e-abi-struct-design.md の「箱に入れる位置」)。
+    pub(super) fn layout_field_repr(
+        &self,
+        hir: &HirProgram,
+        types: &TypeStore,
+        ty: TypeId,
+    ) -> Repr {
+        if self.words.contains_key(&ty) {
+            Repr::TObj
+        } else {
+            boxed_repr(types, ty, hir)
+        }
+    }
+}
+
+/// フィールドの型が `fields` の値を構造体にするなら、開いた後の葉の語の数。`nested` は、構造体にするフィールドの型の
+/// 語の数を答える。`unit` の葉は 0 語で、`unit` でない葉が1つ以上要る。一様な位置の型変数 (`_`) の葉を持てば構造体に
+/// しない。呼ぶ側の `Pair Float Int` と呼ばれる側の `Pair _ Int` で形が違い、形どうしの変換が要るためである。節の
+/// 型変数 (`OpVar`) も、代入では `_` になるので同じに扱う。スキームの型変数 (`Rigid`) は `tobj` の葉である。構造体に
+/// しないフィールドの型は、箱の1語の葉になる。
+fn leaf_words(
+    hir: &HirProgram,
+    types: &TypeStore,
+    fields: &[TypeId],
+    mut nested: impl FnMut(TypeId) -> Option<usize>,
+) -> Option<usize> {
+    let mut words = 0;
+    for &field in fields {
+        if matches!(
+            types.kind(field),
+            TypeKind::Flexible(_) | TypeKind::OpVar(_, _)
+        ) {
+            return None;
+        }
+        words += nested(field)
+            .unwrap_or_else(|| usize::from(boxed_repr(types, field, hir) != Repr::Unit));
+    }
+    (1..=MAX_STRUCT_WORDS).contains(&words).then_some(words)
+}
+
+fn composite_data(hir: &HirProgram, recursive: &HashSet<TypeDefId>, id: TypeDefId) -> bool {
+    matches!(
+        &hir[id].kind,
+        TypeDefKind::Data { constructors }
+            if constructors.len() == 1 && !hir[constructors[0]].fields.is_empty()
+    ) && !recursive.contains(&id)
 }

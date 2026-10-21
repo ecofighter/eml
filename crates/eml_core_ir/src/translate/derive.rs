@@ -15,7 +15,7 @@ use eml_lir::{
 
 use super::instances::{GeneratedInstance, GeneratedMethod, Target};
 use super::program::{ProgramBuilder, plain_call};
-use super::types::{repr, type_def_repr};
+use super::types::{Composite, type_def_repr};
 use crate::builder::FnBuilder;
 
 /// 生成器の変数。印はすべて `unr` にする。instance の頭の型変数は `Unr` だからである (docs/spec/types.md の
@@ -101,10 +101,10 @@ pub(super) fn shape(
     program: &mut ProgramBuilder,
     of: ShapeOf<'_>,
 ) -> Shape {
-    let reprs = |fields: &[TypeId]| -> Vec<Repr> {
+    let reprs = |program: &mut ProgramBuilder, fields: &[TypeId]| -> Vec<Repr> {
         fields
             .iter()
-            .map(|&field| repr(store, field, hir))
+            .map(|&field| program.repr(hir, store, field))
             .collect()
     };
     match of {
@@ -114,21 +114,21 @@ pub(super) fn shape(
             constructors: Vec::new(),
         },
         ShapeOf::Tuple(elements) => Shape {
-            repr: Repr::Obj,
+            repr: program.composite_repr(hir, store, Composite::Tuple(elements.len()), elements),
             layout: Some(program.tuple_layout(elements.len())),
             constructors: vec![Constructor {
                 tag: TUPLE,
                 name: String::new(),
                 infix: None,
                 field_names: None,
-                fields: reprs(elements),
+                fields: reprs(program, elements),
             }],
         },
         ShapeOf::Data(ty, fields) => {
             let TypeDefKind::Data { constructors } = &hir[ty].kind else {
                 unreachable!("only data types have constructors")
             };
-            let constructors = constructors
+            let constructors: Vec<Constructor> = constructors
                 .iter()
                 .zip(fields)
                 .map(|(&ctor, fields)| Constructor {
@@ -139,11 +139,16 @@ pub(super) fn shape(
                         .field_names
                         .as_ref()
                         .map(|names| names.iter().map(|field| field.name.clone()).collect()),
-                    fields: reprs(fields),
+                    fields: reprs(program, fields),
                 })
                 .collect();
+            // 構造体にする型かは、コンストラクタが1つの型でだけフィールドの型から決まる
+            let repr = match fields {
+                [only] => program.composite_repr(hir, store, Composite::Data(ty), only),
+                _ => type_def_repr(ty, hir),
+            };
             Shape {
-                repr: type_def_repr(ty, hir),
+                repr,
                 layout: Some(program.data_layout(hir, store, ty)),
                 constructors,
             }
