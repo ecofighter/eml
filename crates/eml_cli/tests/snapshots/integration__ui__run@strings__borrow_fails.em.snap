@@ -1,0 +1,10 @@
+---
+source: crates/eml_cli/tests/ui.rs
+expression: "format!(\"--- stdout ---\\n{stdout}--- stderr ---\\n{diagnostics}{stderr}{written}{exit}\")"
+input_file: tests/ui/run/strings/borrow_fails.em
+---
+--- stdout ---
+Err "string slice 0..9000 is out of range for length 3"
+Err "string index 9000 is out of range for length 3"
+abc
+--- stderr ---

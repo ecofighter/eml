@@ -38,6 +38,7 @@
 | `iter_pipeline_by_hand.em` | 専用の `evens`、`squares`、`sum` にした版 | `iter_pipeline.em` の下限 |
 | `iter_generate.em` | `Iter.fold (fn acc x -> acc + x) 0 (Iter.generate (nums 100000))` | `Iter.generate` が生産者を包む費用 |
 | `sum_loop.em` | 1 から 100000 までの合計を直接の末尾再帰で求める | `iter_generate.em` と `push_fold.em` を比べる基準 |
+| `byte_loop.em` | 10 万バイトの文字列を作り、`String.byte_at` で先頭から足し上げる | 1バイトずつ読むループの RC (借用の extern は `rc_increments` が0) |
 | `tree_by_hand.em` | `tree.em` の `fold (fn acc x -> acc + x)` を専用の `fold_sum` にした版 | `tree.em` の下限 |
 | `upsert.em` | `logstat` の AA 木の `upsert key increment` で 20000 個の文字列のキーを数え、`sort_by (fn (_, a) (_, b) -> a > b)` で並べる | 高階の更新関数と比較関数 |
 | `upsert_by_hand.em` | `increment` と比較を `upsert` と `sort_by` に書き込んだ版 | `upsert.em` の下限 |
@@ -112,7 +113,7 @@ valgrind が arm64 の macOS で動かないので、callgrind は使わない�
 | `mask` | 4つの evidence の `evv` で、2つ目の evidence を飛ばす `evv_mask` (項目は n = 0、m = 1 の1つ) を呼び、結果を手放すことを、10,000,000 回繰り返す |
 | `poll` | 安全点の確かめ `Ctx::poll` を、100,000,000 回繰り返す |
 
-`bench/rt.sh` は続けて、extern の計測のプログラム `crates/eml_rt/examples/rt_extern_bench.rs` の次の12の計測を、同じ方法で測って2つ目の表に出す ([オブジェクトモデル](../spec/object-model.md) の「extern」)。`rt_bench` と別のプログラムにするのは、上の14の計測のコード生成単位の分け方を変えないためである (下の「`eml_rt` のインライン化」)。どの計測も速いモードの `Ctx` で動かす。渡す文字列の参照は、ヒープの文字列なら毎回 `dup` で、不死の文字列 (`concat-copy` の右と `read-all` のパス) なら `acquire_immortal` で作る。`show-int` は整数だけを渡すので、参照を作らない。
+`bench/rt.sh` は続けて、extern の計測のプログラム `crates/eml_rt/examples/rt_extern_bench.rs` の次の12の計測を、同じ方法で測って2つ目の表に出す ([オブジェクトモデル](../spec/object-model.md) の「extern」)。`rt_bench` と別のプログラムにするのは、上の14の計測のコード生成単位の分け方を変えないためである (下の「`eml_rt` のインライン化」)。どの計測も速いモードの `Ctx` で動かす。引数を消費する extern に渡す文字列の参照は、ヒープの文字列なら毎回 `dup` で、不死の文字列 (`concat-copy` の右と `read-all` のパス) なら `acquire_immortal` で作る。借りる extern (`string-eq`、`compare`、`show-string`) には、呼ぶ側が持つ参照をそのまま渡す。`show-int` は整数だけを渡すので、参照を作らない。
 
 | 計測 | 中身 |
 |---|---|

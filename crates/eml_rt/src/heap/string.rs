@@ -738,7 +738,7 @@ impl<M: Mode> Heap<M> {
                 && self.kept_live(mid)
     }
 
-    /// 文字列を受けて手放す操作の検査。状態を変える前に呼ぶ。速いモードでは何も確かめない。
+    /// 文字列を受けて手放す操作と、文字列を借りる操作の検査。状態を変える前に呼ぶ。速いモードでは何も確かめない。
     pub(super) fn checked_string(&self, h: *mut Header) -> (r: Result<(), HeapError>)
         requires
             self.core.sound(),

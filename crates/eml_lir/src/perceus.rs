@@ -260,6 +260,9 @@ impl Fields<'_> {
     fn stmt(&mut self, state: &mut State, stmt: Stmt, live: &BTreeSet<VarId>, out: &mut Vec<Stmt>) {
         let used = vars(|f| stmt.for_each_atom(f));
         let consumed = self.consumed(|f| stmt.for_each_consumed(f));
+        // 借りる変数を同じ文が消費もするなら、文の後も生きているとみなす。借用は文の間じゅう続くので、消費に渡す参照とは
+        // 別に1つ要り、文の後の `decref` がその参照を手放す (docs/spec/lir.md の「extern の借用」)
+        let lent = self.consumed(|f| stmt.for_each_lent(f));
         let need = Need { live, used: &used };
         // 消費する変数のほかに、所有を取るのは次の変数である。持ち主の最後の参照をこの文が消費した後も生きている、
         // その持ち主に属する変数。呼び出しの後で生きている、保持されている持ち主に属する変数。後者は持ち主を呼び出しの
@@ -291,10 +294,14 @@ impl Fields<'_> {
             );
         }
         self.take(state, take, &need, out);
-        out.extend(dups(consumed.clone(), live).into_iter().map(Stmt::Dup));
+        out.extend(
+            dups(consumed.clone(), live, &lent)
+                .into_iter()
+                .map(Stmt::Dup),
+        );
         debug_assert!(consumed.iter().all(|var| state.owned.contains(var)));
         for var in &consumed {
-            if !live.contains(var) {
+            if !live.contains(var) && !lent.contains(var) {
                 state.owned.remove(var);
             }
         }
@@ -396,7 +403,11 @@ impl Fields<'_> {
             },
             out,
         );
-        out.extend(dups(consumed.clone(), after).into_iter().map(Stmt::Dup));
+        out.extend(
+            dups(consumed.clone(), after, &[])
+                .into_iter()
+                .map(Stmt::Dup),
+        );
         let owned = &mut state.owned;
         for var in &consumed {
             if !after.contains(var) {
@@ -613,13 +624,13 @@ fn vars(for_each: impl FnOnce(&mut dyn FnMut(Atom))) -> Vec<VarId> {
 }
 
 /// 使うたびに所有権を1つ渡すので、2回目以降の使用と、後でも生きている変数の分を複製する。`uses` は使う順の RC の
-/// 対象の変数で、結果は変数の昇順に並ぶ。
-fn dups(mut uses: Vec<VarId>, live_after: &BTreeSet<VarId>) -> Vec<VarId> {
+/// 対象の変数で、結果は変数の昇順に並ぶ。`lent` はその文が借りる変数で、後でも生きているものと同じに数える。
+fn dups(mut uses: Vec<VarId>, live_after: &BTreeSet<VarId>, lent: &[VarId]) -> Vec<VarId> {
     uses.sort_unstable();
     let mut dups = Vec::new();
     for (index, &var) in uses.iter().enumerate() {
         let last = uses.get(index + 1) != Some(&var);
-        if !last || live_after.contains(&var) {
+        if !last || live_after.contains(&var) || lent.contains(&var) {
             dups.push(var);
         }
     }

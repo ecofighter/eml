@@ -219,8 +219,7 @@ fn every_extern_function_row_has_the_reprs_of_its_std_signature() {
     }
 }
 
-/// 表の値そのもの。配列を借りるのは、配列を読む4つの行の配列の引数だけで、組を返すのは `Std.MutArray` の2つの行
-/// だけである。
+/// 表の値そのもの。借りる引数を持つ行は次の表の行だけで、組を返すのは `Std.MutArray` の2つの行だけである。
 #[test]
 fn only_the_array_readers_borrow() {
     for &e in Extern::ALL {
@@ -230,6 +229,14 @@ fn only_the_array_readers_borrow() {
             "Std.Array.get" => (&[true, false], None),
             "Std.MutArray.length" => (&[true], Some(0)),
             "Std.MutArray.read" => (&[true, false], Some(0)),
+            "Std.String.byte_length" | "Prelude.Show String.show" => (&[true], None),
+            "Std.String.byte_at" => (&[false, true], None),
+            "Std.String.slice" => (&[false, false, true], None),
+            "Std.String.find_from" => (&[true, false, true], None),
+            "Prelude.Eq String.==" | "Prelude.Eq String.!=" | "Prelude.Ord String.compare" => {
+                (&[true, true], None)
+            }
+            "Std.Float.can_parse" | "Std.Float.parse_raw" => (&[true], None),
             _ => {
                 assert!(!row.borrowed.contains(&true), "{}", row.name);
                 assert_eq!(row.with_arg, None, "{}", row.name);

@@ -94,7 +94,7 @@ fn find_bytes(text: &[u8], needle: &[u8], from: usize) -> (r: i64)
 }
 
 impl<M: Mode> Ctx<M> {
-    /// `String.byte_length`。`s` の参照を受け取って手放し、バイトの数を返す。
+    /// `String.byte_length`。`s` を借りて、バイトの数を返す。呼ぶ側の参照の数は変わらない。
     ///
     /// # Safety
     /// `copy_string` と同じ。
@@ -117,7 +117,7 @@ impl<M: Mode> Ctx<M> {
             old(self).held_ok() && old(self).is_string(s) && old(self).holds(s) && r is Ok ==> {
                 &&& r == Ok::<i64, Fault>(old(self).text_of(s).len() as i64)
                 &&& final(self).held_ok()
-                &&& final(self).evolved_by(*old(self), |x: usize| -points(s, x), Set::empty())
+                &&& final(self).evolved_by(*old(self), |x: usize| 0int, Set::empty())
             },
     {
         let ghost s0 = *self;
@@ -145,20 +145,20 @@ impl<M: Mode> Ctx<M> {
         }
         let bytes = self.heap.string_text(s).as_bytes();
         let len = bytes.len() as i64;
-        self.heap.release_text(hs, Ghost(s), Ghost(c));
         proof {
             if M::CHECKED {
                 lemma_words_trans(self.heap, h1, s0.heap);
                 self.lemma_words_kept(s0);
             }
             if c {
-                self.lemma_printed(s0, h1, s);
+                self.lemma_lent(s0, h1);
             }
         }
         Ok(len)
     }
 
-    /// `String.byte_at`。`s` の参照を受け取って手放し、位置 `i` のバイトを返す。範囲の外なら `Fault::Index` を返す。
+    /// `String.byte_at`。`s` を借りて、位置 `i` のバイトを返す。範囲の外なら `Fault::Index` を返す。呼ぶ側の参照の数は
+    /// 変わらない。
     ///
     /// # Safety
     /// `copy_string` と同じ。
@@ -187,7 +187,7 @@ impl<M: Mode> Ctx<M> {
                 )
                 &&& !(0 <= i < old(self).text_of(s).len()) ==> (r matches Err(Fault::Index(_)))
                 &&& final(self).held_ok()
-                &&& final(self).evolved_by(*old(self), |x: usize| -points(s, x), Set::empty())
+                &&& final(self).evolved_by(*old(self), |x: usize| 0int, Set::empty())
             },
     {
         let ghost s0 = *self;
@@ -222,21 +222,21 @@ impl<M: Mode> Ctx<M> {
                 Err(Fault::Index(Box::new(IndexFault::String { index: i, len: len as i64 })))
             }
         };
-        self.heap.release_text(hs, Ghost(s), Ghost(c));
         proof {
             if M::CHECKED {
                 lemma_words_trans(self.heap, h1, s0.heap);
                 self.lemma_words_kept(s0);
             }
             if c {
-                self.lemma_printed(s0, h1, s);
+                self.lemma_lent(s0, h1);
             }
         }
         r
     }
 
-    /// `String.slice`。`s` の参照を受け取って手放し、バイトの位置 `start` から `end` の手前までの部分の新しい文字列を
-    /// 返す。範囲が `0 <= start <= end <= len` でないか、端が文字の境界にないときは、何も作らずに `Fault::Index` を返す。
+    /// `String.slice`。`s` を借りて、バイトの位置 `start` から `end` の手前までの部分の新しい文字列を返す。
+    /// 範囲が `0 <= start <= end <= len` でないか、端が文字の境界にないときは、何も作らずに `Fault::Index` を返す。
+    /// 呼ぶ側の参照の数は、どちらでも変わらない。
     ///
     /// # Safety
     /// `copy_string` と同じ。
@@ -272,11 +272,11 @@ impl<M: Mode> Ctx<M> {
                 &&& r matches Ok(w) ==> {
                     &&& final(self).held_ok()
                     &&& final(self).holds(w)
-                    &&& final(self).evolved_by(*old(self), |x: usize| -points(s, x), Set::empty())
+                    &&& final(self).evolved_by(*old(self), |x: usize| 0int, Set::empty())
                 }
                 &&& r matches Err(Fault::Index(_)) ==> {
                     &&& final(self).held_ok()
-                    &&& final(self).evolved_by(*old(self), |x: usize| -points(s, x), Set::empty())
+                    &&& final(self).evolved_by(*old(self), |x: usize| 0int, Set::empty())
                 }
             },
     {
@@ -304,7 +304,7 @@ impl<M: Mode> Ctx<M> {
             return Err(Fault::Heap(e));
         }
         let ghost text = h1.text_of(s);
-        // 範囲と境界を、確保より前に確かめる。誤りなら `s` を手放すだけで、何も作らない
+        // 範囲と境界を、確保より前に確かめる。誤りなら何も作らない
         let fault = {
             let t = self.heap.string_text(s);
             let bytes = t.as_bytes();
@@ -318,14 +318,13 @@ impl<M: Mode> Ctx<M> {
             }
         };
         if let Some(fault) = fault {
-            self.heap.release_text(hs, Ghost(s), Ghost(c));
             proof {
                 if M::CHECKED {
                     lemma_words_trans(self.heap, h1, s0.heap);
                     self.lemma_words_kept(s0);
                 }
                 if c {
-                    self.lemma_printed(s0, h1, s);
+                    self.lemma_lent(s0, h1);
                 }
             }
             return Err(Fault::Index(Box::new(fault)));
@@ -347,7 +346,6 @@ impl<M: Mode> Ctx<M> {
                 s0.lemma_text_shown(h1, h2, h3, s, w);
             }
         }
-        self.heap.release_text(hs, Ghost(s), Ghost(c));
         if M::CHECKED {
             self.stats.string_bytes_copied = self.stats.string_bytes_copied.wrapping_add(
                 (to - from) as u64,
@@ -363,13 +361,13 @@ impl<M: Mode> Ctx<M> {
                 self.lemma_words_kept(s0);
             }
             if c {
-                self.lemma_shown(s0, h1, h2, h3, s, w);
+                self.lemma_shown_lent(s0, h1, h2, h3, s, w);
             }
         }
         Ok(w)
     }
 
-    /// `String.find_from`。`needle` と `s` の参照を受け取り、読み終えたら `needle`、`s` の順に手放す。`from` 以上で
+    /// `String.find_from`。`needle` と `s` を借りて、`from` 以上で
     /// `needle` が始まる最小の位置を返し、なければ -1 を返す。`from` が `0 <= from <= len` でなければ `Fault::Index` を
     /// 返す。
     ///
@@ -383,7 +381,7 @@ impl<M: Mode> Ctx<M> {
             old(self).wf(),
             old(self).heap_spec().word_in(needle),
             old(self).heap_spec().word_in(s),
-            !M::CHECKED ==> old(self).holds_strings(needle, s),
+            !M::CHECKED ==> old(self).lends_strings(needle, s),
         ensures
             final(self).wf(),
             final(self).evv_spec() == old(self).evv_spec(),
@@ -393,10 +391,10 @@ impl<M: Mode> Ctx<M> {
                 self,
             ).heap_spec().settled_heap(),
             !M::CHECKED ==> !(r matches Err(Fault::Heap(_))),
-            old(self).held_ok() && old(self).holds_strings(needle, s) ==> !(r matches Err(
+            old(self).held_ok() && old(self).lends_strings(needle, s) ==> !(r matches Err(
                 Fault::Heap(_),
             )) || (r matches Err(Fault::Heap(e)) && chain_err(Err::<(), HeapError>(e))),
-            old(self).held_ok() && old(self).holds_strings(needle, s) && !(r matches Err(
+            old(self).held_ok() && old(self).lends_strings(needle, s) && !(r matches Err(
                 Fault::Heap(_),
             )) ==> {
                 let text = old(self).text_of(s);
@@ -408,28 +406,36 @@ impl<M: Mode> Ctx<M> {
                 ))
                 &&& !(0 <= from <= text.len()) ==> (r matches Err(Fault::Index(_)))
                 &&& final(self).held_ok()
-                &&& final(self).evolved_by(
-                    *old(self),
-                    |x: usize| -points(needle, x) - points(s, x),
-                    Set::empty(),
-                )
+                &&& final(self).evolved_by(*old(self), |x: usize| 0int, Set::empty())
             },
     {
         let ghost s0 = *self;
-        let ghost c = s0.held_ok() && s0.holds_strings(needle, s);
+        let ghost c = s0.held_ok() && s0.lends_strings(needle, s);
         if M::CHECKED && !(needle.is_ptr() && s.is_ptr()) {
             return Err(Fault::Heap(HeapError::WrongKind));
         }
         self.heap.settle();
         let ghost h1 = self.heap;
+        let ha = self.heap.header_of(needle);
+        let hb = self.heap.header_of(s);
         proof {
             lemma_settled_twice(s0.heap);
             assert(h1.words_kept(s0.heap));
+            h1.lemma_text_spec(needle);
+            h1.lemma_text_spec(s);
+            s0.heap.lemma_text_spec(needle);
+            s0.heap.lemma_text_spec(s);
             if c {
-                s0.lemma_settled_strings(h1, needle, s);
+                s0.lemma_settled_lent(h1, needle, s);
             }
         }
-        if let Err(e) = self.heap.checked_strings(needle, s) {
+        if let Err(e) = self.heap.checked_string(ha) {
+            proof {
+                self.lemma_words_kept(s0);
+            }
+            return Err(Fault::Heap(e));
+        }
+        if let Err(e) = self.heap.checked_string(hb) {
             proof {
                 self.lemma_words_kept(s0);
             }
@@ -449,14 +455,13 @@ impl<M: Mode> Ctx<M> {
                 Err(Fault::Index(Box::new(IndexFault::String { index: from, len: len as i64 })))
             }
         };
-        let Ghost(mid) = self.heap.release_strings(needle, s, Ghost(c));
         proof {
             if M::CHECKED {
                 lemma_words_trans(self.heap, h1, s0.heap);
                 self.lemma_words_kept(s0);
             }
             if c {
-                self.lemma_released(s0, h1, mid, needle, s);
+                self.lemma_lent(s0, h1);
             }
         }
         r

@@ -2254,6 +2254,34 @@ fn f(e.0: obj) -> tobj {
     );
 }
 
+#[test]
+fn a_variable_lent_and_consumed_by_one_instruction_needs_two_references() {
+    // `ev_renew` は第1引数を借りて第2引数を消費する。同じ変数を渡すには、参照が2つ要る
+    // (docs/spec/lir.md の「extern の借用」)
+    let without_dup = "\
+fn f(e.0: obj) -> obj {
+  let r.1: obj = prim ev_renew(e.0, e.0)
+  return r.1
+}
+";
+    assert_eq!(
+        check(without_dup),
+        Err(
+            "`e.0` is lent to `prim ev_renew` and consumed by the same instruction in `f`"
+                .to_string()
+        )
+    );
+    let with_dup = "\
+fn f(e.0: obj) -> obj {
+  dup e.0
+  let r.1: obj = prim ev_renew(e.0, e.0)
+  decref e.0
+  return r.1
+}
+";
+    assert_eq!(check(with_dup), Ok(()));
+}
+
 // 大きさ
 
 /// `n` 個の `switch` が続き、片方の枝が呼び出しをして合流する関数。所有の検査の段では、合流のブロックの数だけ、

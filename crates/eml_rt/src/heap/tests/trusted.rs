@@ -346,8 +346,11 @@ fn every_primitive_once<M: Mode>() {
         let a = ctx.heap_mut().alloc_string("a");
         let b = ctx.heap_mut().alloc_string("b");
         assert_eq!(ctx.string_compare(a, b), Ok(crate::externs::LT));
+        ctx.heap_mut().decref(a).unwrap();
+        ctx.heap_mut().decref(b).unwrap();
         let a = ctx.heap_mut().alloc_string("a\n");
         let shown = ctx.string_show(a).unwrap();
+        ctx.heap_mut().decref(a).unwrap();
         let n = ctx.int_show(-12);
         let joined = ctx.string_append(shown, n).unwrap();
         ctx.write_string(crate::Stream::Out, joined).unwrap();
@@ -494,6 +497,7 @@ fn parts_of_a_string_are_copied<M: Mode>() {
             let w = ctx.string_show(s).unwrap();
             assert_eq!(text(ctx.heap(), w), shown);
             ctx.heap_mut().decref(w).unwrap();
+            ctx.heap_mut().decref(s).unwrap();
         }
     }
     assert_eq!(mortal(ctx.heap()), 0);

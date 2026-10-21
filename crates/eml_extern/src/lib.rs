@@ -372,7 +372,7 @@ pub struct FunctionRow {
     pub ret_kind: Linearity,
     pub purity: Purity,
     /// 引数ごとの借用の印。長さは `params` と同じである。印の立つ引数を extern は読むだけで消費せず、失敗したときも
-    /// 呼んだ側が持ったままである。配列を借りて読む行だけが持つ (docs/spec/lir.md の「extern の借用」)。
+    /// 呼んだ側が持ったままである (docs/spec/lir.md の「extern の借用」)。
     pub borrowed: &'static [bool],
     /// `Some(k)` の行は、宣言の型では結果と引数 `k` の組を返す。行の結果 (`ret`、`ret_kind`) は組の最初の要素で、
     /// translate が呼び出しの後に `con` で組を作る。組を受けてすぐ開く所では、最適化の既知のコンストラクタで組が
@@ -546,24 +546,13 @@ impl Extern {
                 with_arg: None,
             }
         }
-        // 配列を借りて読む行。結果はどれも `Unr` である (要素の型変数は `Unr` に固定する)
-        fn lending<const N: usize>(
-            name: &'static str,
-            params: &'static [Repr; N],
-            param_kinds: &'static [Linearity; N],
-            ret: Repr,
-            purity: Purity,
-            with_arg: Option<usize>,
-        ) -> FunctionRow {
-            let mut row = kinded(name, params, param_kinds, ret, Unr, purity);
-            // 借りるのは先頭の配列だけである
-            row.borrowed = const {
-                let mut borrowed = [false; N];
-                borrowed[0] = true;
-                &{ borrowed }
-            };
-            row.with_arg = with_arg;
-            row
+        // 印の立つ引数を借りる行。長さは引数の数と同じである (docs/spec/lir.md の「extern の借用」)
+        fn borrowing<const N: usize>(mask: &'static [bool; N], row: FunctionRow) -> FunctionRow {
+            assert_eq!(row.params.len(), N, "{}", row.name);
+            FunctionRow {
+                borrowed: mask,
+                ..row
+            }
         }
         // 線形な値を扱わない行は、すべて `Unr` にする
         fn row<const N: usize>(
@@ -690,29 +679,59 @@ impl Extern {
             Extern::FloatInfinity => row("Std.Float.infinity_value", &[Unit], Float, Purity::Pure),
             Extern::FloatNan => row("Std.Float.nan_value", &[Unit], Float, Purity::Pure),
             Extern::FloatToFixed => row("Std.Float.to_fixed", &[Int, Float], Obj, Purity::Panics),
-            Extern::FloatCanParse => row("Std.Float.can_parse", &[Obj], Enum, Purity::Pure),
-            Extern::FloatParseRaw => row("Std.Float.parse_raw", &[Obj], Float, Purity::Pure),
-            Extern::StrConcat => row("Prelude.++", &[Obj, Obj], Obj, Purity::Pure),
-            Extern::StrEq => row("Prelude.Eq String.==", &[Obj, Obj], Enum, Purity::Pure),
-            Extern::StrNe => row("Prelude.Eq String.!=", &[Obj, Obj], Enum, Purity::Pure),
-            Extern::StrCompare => row(
-                "Prelude.Ord String.compare",
-                &[Obj, Obj],
-                Enum,
-                Purity::Pure,
+            Extern::FloatCanParse => borrowing(
+                &[true],
+                row("Std.Float.can_parse", &[Obj], Enum, Purity::Pure),
             ),
-            Extern::StrShow => row("Prelude.Show String.show", &[Obj], Obj, Purity::Pure),
+            Extern::FloatParseRaw => borrowing(
+                &[true],
+                row("Std.Float.parse_raw", &[Obj], Float, Purity::Pure),
+            ),
+            Extern::StrConcat => row("Prelude.++", &[Obj, Obj], Obj, Purity::Pure),
+            Extern::StrEq => borrowing(
+                &[true, true],
+                row("Prelude.Eq String.==", &[Obj, Obj], Enum, Purity::Pure),
+            ),
+            Extern::StrNe => borrowing(
+                &[true, true],
+                row("Prelude.Eq String.!=", &[Obj, Obj], Enum, Purity::Pure),
+            ),
+            Extern::StrCompare => borrowing(
+                &[true, true],
+                row(
+                    "Prelude.Ord String.compare",
+                    &[Obj, Obj],
+                    Enum,
+                    Purity::Pure,
+                ),
+            ),
+            Extern::StrShow => borrowing(
+                &[true],
+                row("Prelude.Show String.show", &[Obj], Obj, Purity::Pure),
+            ),
             Extern::BoolEq => row("Prelude.Eq Bool.==", &[Enum, Enum], Enum, Purity::Pure),
             Extern::BoolNe => row("Prelude.Eq Bool.!=", &[Enum, Enum], Enum, Purity::Pure),
             Extern::Eprintln => row("Prelude.eprintln", &[Obj], Unit, Purity::Effectful),
-            Extern::StrByteLength => row("Std.String.byte_length", &[Obj], Int, Purity::Pure),
-            Extern::StrByteAt => row("Std.String.byte_at", &[Int, Obj], Int, Purity::Panics),
-            Extern::StrSlice => row("Std.String.slice", &[Int, Int, Obj], Obj, Purity::Panics),
-            Extern::StrFindFrom => row(
-                "Std.String.find_from",
-                &[Obj, Int, Obj],
-                Int,
-                Purity::Panics,
+            Extern::StrByteLength => borrowing(
+                &[true],
+                row("Std.String.byte_length", &[Obj], Int, Purity::Pure),
+            ),
+            Extern::StrByteAt => borrowing(
+                &[false, true],
+                row("Std.String.byte_at", &[Int, Obj], Int, Purity::Panics),
+            ),
+            Extern::StrSlice => borrowing(
+                &[false, false, true],
+                row("Std.String.slice", &[Int, Int, Obj], Obj, Purity::Panics),
+            ),
+            Extern::StrFindFrom => borrowing(
+                &[true, false, true],
+                row(
+                    "Std.String.find_from",
+                    &[Obj, Int, Obj],
+                    Int,
+                    Purity::Panics,
+                ),
             ),
             Extern::EnvArgCount => row("Std.Env.arg_count", &[Unit], Int, Purity::Effectful),
             Extern::EnvArg => row("Std.Env.arg", &[Int], Obj, Purity::Effectful),
@@ -750,16 +769,20 @@ impl Extern {
             // 配列の要素は型変数の位置なので `tobj` である。型変数は `Unr` に固定するので、`Array` の Kind も `Unr` に
             // なる。`MutArray` はいつも `Lin` である (docs/spec/stdlib.md の「`Std.Array`」)
             Extern::ArrayMake => row("Std.Array.make", &[Int, TObj], Obj, Purity::Panics),
-            Extern::ArrayLength => {
-                lending("Std.Array.length", &[Obj], &[Unr], Int, Purity::Pure, None)
-            }
-            Extern::ArrayGet => lending(
-                "Std.Array.get",
-                &[Obj, Int],
-                &[Unr, Unr],
-                TObj,
-                Purity::Panics,
-                None,
+            Extern::ArrayLength => borrowing(
+                &[true],
+                kinded("Std.Array.length", &[Obj], &[Unr], Int, Unr, Purity::Pure),
+            ),
+            Extern::ArrayGet => borrowing(
+                &[true, false],
+                kinded(
+                    "Std.Array.get",
+                    &[Obj, Int],
+                    &[Unr, Unr],
+                    TObj,
+                    Unr,
+                    Purity::Panics,
+                ),
             ),
             Extern::ArraySet => row("Std.Array.set", &[Obj, Int, TObj], Obj, Purity::Panics),
             Extern::ArrayThaw => kinded("Std.Array.thaw", &[Obj], &[Unr], Obj, Lin, Purity::Pure),
@@ -779,21 +802,33 @@ impl Extern {
                 Lin,
                 Purity::Pure,
             ),
-            Extern::MutArrayLength => lending(
-                "Std.MutArray.length",
-                &[Obj],
-                &[Lin],
-                Int,
-                Purity::Pure,
-                Some(0),
+            Extern::MutArrayLength => borrowing(
+                &[true],
+                FunctionRow {
+                    with_arg: Some(0),
+                    ..kinded(
+                        "Std.MutArray.length",
+                        &[Obj],
+                        &[Lin],
+                        Int,
+                        Unr,
+                        Purity::Pure,
+                    )
+                },
             ),
-            Extern::MutArrayRead => lending(
-                "Std.MutArray.read",
-                &[Obj, Int],
-                &[Lin, Unr],
-                TObj,
-                Purity::Panics,
-                Some(0),
+            Extern::MutArrayRead => borrowing(
+                &[true, false],
+                FunctionRow {
+                    with_arg: Some(0),
+                    ..kinded(
+                        "Std.MutArray.read",
+                        &[Obj, Int],
+                        &[Lin, Unr],
+                        TObj,
+                        Unr,
+                        Purity::Panics,
+                    )
+                },
             ),
             Extern::MutArrayWrite => kinded(
                 "Std.MutArray.write",

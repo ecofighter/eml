@@ -895,6 +895,8 @@ fn run_extern<M: Mode>(
         return unwind(code, ctx, task, counts, dummy);
     }
     unsafe {
+        // 借りる引数 (`FunctionRow::borrowed`) の行は、引数を手放さない。失敗しても、借りた値は呼んだ側の
+        // スロットに残り、巻き戻しの表が手放す (docs/spec/lir.md の「extern の借用」)
         match ext {
             Extern::Println => {
                 ctx.write_string(Stream::Out, task.get(arg(0)))?;
@@ -1114,8 +1116,6 @@ fn run_extern<M: Mode>(
                 let parsed = ctx.string_to_float(task.get(arg(0)))?;
                 task.set_float(dst, parsed.unwrap_or(f64::NAN));
             }
-            // 配列の行は、借りる引数 (`FunctionRow::borrowed`) を手放さない。失敗しても、借りた配列は呼んだ側の
-            // スロットに残り、巻き戻しの表が手放す (docs/spec/lir.md の「extern の借用」)
             Extern::ArrayMake | Extern::MutArrayMake => {
                 let lin = ext == Extern::MutArrayMake;
                 let w = ctx.array_make(task.raw(arg(0)), task.get(arg(1)), lin)?;

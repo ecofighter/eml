@@ -405,29 +405,32 @@ fn strings_compare_by_bytes<M: Mode>() {
             unsafe {
                 let (a, b) = (s(&mut ctx, x), s(&mut ctx, y));
                 assert_eq!(ctx.string_eq(a, b), Ok((x == y) as i64));
-                let (a, b) = (s(&mut ctx, x), s(&mut ctx, y));
                 assert_eq!(ctx.string_ne(a, b), Ok((x != y) as i64));
-                let (a, b) = (s(&mut ctx, x), s(&mut ctx, y));
                 assert_eq!(
                     ctx.string_compare(a, b),
                     Ok(ordering(x.as_bytes().cmp(y.as_bytes())))
                 );
+                ctx.heap_mut().decref(a).unwrap();
+                ctx.heap_mut().decref(b).unwrap();
             }
         }
     }
     assert_eq!(mortal(ctx.heap()), 0);
 }
 
-/// 呼ぶ側は同じ文字列の参照を2つ持って渡す。両方を手放しても正しく動く。
+/// 借りる行は同じ文字列を両辺に渡されても、参照1つのまま動く。消費する行は参照を2つ持って渡す。
 fn the_same_string_on_both_sides<M: Mode>() {
     let mut ctx = ctx::<M>();
     unsafe {
         let a = s(&mut ctx, "abc");
-        ctx.heap_mut().dup(a).unwrap();
         assert_eq!(ctx.string_eq(a, a), Ok(TRUE));
-        let a = s(&mut ctx, "abc");
-        ctx.heap_mut().dup(a).unwrap();
+        assert_eq!(ctx.string_ne(a, a), Ok(FALSE));
         assert_eq!(ctx.string_compare(a, a), Ok(EQ));
+        let n = s(&mut ctx, "b");
+        assert_eq!(ctx.string_find_from(a, 0, a), Ok(0));
+        assert_eq!(ctx.string_find_from(n, 0, a), Ok(1));
+        ctx.heap_mut().decref(n).unwrap();
+        ctx.heap_mut().decref(a).unwrap();
         let a = s(&mut ctx, "abc");
         ctx.heap_mut().dup(a).unwrap();
         let w = ctx.string_append(a, a).unwrap();
@@ -494,6 +497,7 @@ fn shows_count_the_bytes_they_write<M: Mode>() {
         assert_eq!(text(ctx.heap(), w), "\"a\\n日\"");
         assert_eq!(ctx.stats().string_bytes_copied - before, 8);
         ctx.heap_mut().decref(w).unwrap();
+        ctx.heap_mut().decref(a).unwrap();
     }
     assert_eq!(mortal(ctx.heap()), 0);
 }
@@ -566,20 +570,20 @@ fn strings_show_with_their_escapes<M: Mode>() {
             let w = ctx.string_show(a).unwrap();
             assert_eq!(text(ctx.heap(), w), shown);
             ctx.heap_mut().decref(w).unwrap();
+            ctx.heap_mut().decref(a).unwrap();
         }
     }
     assert_eq!(mortal(ctx.heap()), 0);
 }
 
-/// 文字列の核はバイトの位置で読み、範囲の外と文字の境界を断る。断っても引数は手放す (docs/spec/stdlib.md)。
+/// 文字列の核はバイトの位置で読み、範囲の外と文字の境界を断る。断っても引数は借りたままで、参照の数は変わらない
+/// (docs/spec/lir.md の「extern の借用」)。
 fn the_string_core_reads_by_byte_positions<M: Mode>() {
     let mut ctx = ctx::<M>();
     unsafe {
         let a = s(&mut ctx, "a日b");
         assert_eq!(ctx.string_byte_length(a), Ok(5));
-        let a = s(&mut ctx, "a日b");
         assert_eq!(ctx.string_byte_at(1, a), Ok(0xe6));
-        let a = s(&mut ctx, "a日b");
         assert_eq!(
             ctx.string_byte_at(5, a),
             Err(Fault::Index(Box::new(IndexFault::String {
@@ -587,11 +591,9 @@ fn the_string_core_reads_by_byte_positions<M: Mode>() {
                 len: 5
             })))
         );
-        let a = s(&mut ctx, "a日b");
         let w = ctx.string_slice(1, 4, a).unwrap();
         assert_eq!(text(ctx.heap(), w), "日");
         ctx.heap_mut().decref(w).unwrap();
-        let a = s(&mut ctx, "a日b");
         assert_eq!(
             ctx.string_slice(2, 4, a),
             Err(Fault::Index(Box::new(IndexFault::Boundary {
@@ -599,7 +601,6 @@ fn the_string_core_reads_by_byte_positions<M: Mode>() {
                 end: 4
             })))
         );
-        let a = s(&mut ctx, "a日b");
         assert_eq!(
             ctx.string_slice(0, 6, a),
             Err(Fault::Index(Box::new(IndexFault::Slice {
@@ -608,6 +609,7 @@ fn the_string_core_reads_by_byte_positions<M: Mode>() {
                 len: 5
             })))
         );
+        ctx.heap_mut().decref(a).unwrap();
         // 探す位置は `from` 以上で、空の文字列は `from` で見つかる
         for (needle, from, found) in [
             ("b", 0, 4),
@@ -623,6 +625,8 @@ fn the_string_core_reads_by_byte_positions<M: Mode>() {
                 Ok(found),
                 "{needle} {from}"
             );
+            ctx.heap_mut().decref(n).unwrap();
+            ctx.heap_mut().decref(a).unwrap();
         }
         let n = s(&mut ctx, "b");
         let a = s(&mut ctx, "a日b");
@@ -633,6 +637,8 @@ fn the_string_core_reads_by_byte_positions<M: Mode>() {
                 len: 5
             })))
         );
+        ctx.heap_mut().decref(n).unwrap();
+        ctx.heap_mut().decref(a).unwrap();
     }
     assert_eq!(mortal(ctx.heap()), 0);
 }
@@ -649,6 +655,7 @@ fn a_slice_counts_the_bytes_it_copies<M: Mode>() {
         let w = ctx.string_slice(0, 4, a).unwrap();
         assert_eq!(ctx.stats().string_bytes_copied - before, 4);
         ctx.heap_mut().decref(w).unwrap();
+        ctx.heap_mut().decref(a).unwrap();
     }
     assert_eq!(mortal(ctx.heap()), 0);
 }
@@ -1304,6 +1311,18 @@ impl Args {
         }
     }
 
+    /// 借りて渡す文字列の引数。呼んだ側の参照は結果を読んだ後で手放す
+    unsafe fn lent_string<M: Mode>(
+        &mut self,
+        ctx: &mut crate::Ctx<M>,
+        arg: &Arg,
+        root: &Path,
+    ) -> Word {
+        let w = unsafe { self.string(ctx, arg, root) };
+        self.release.push(w);
+        w
+    }
+
     /// 借りて渡す配列の引数。呼んだ側の参照は結果を読んだ後で手放す
     unsafe fn lent_array<M: Mode>(&mut self, ctx: &mut crate::Ctx<M>, arg: &Arg) -> Word {
         let w = unsafe { self.array(ctx, arg) };
@@ -1373,6 +1392,12 @@ unsafe fn call<M: Mode>(
         let two = |ctx: &mut crate::Ctx<M>, args: &mut Args| {
             let a = args.string(ctx, &inputs[0], root);
             (a, args.string(ctx, &inputs[1], root))
+        };
+        let lent_one =
+            |ctx: &mut crate::Ctx<M>, args: &mut Args| args.lent_string(ctx, &inputs[0], root);
+        let lent_two = |ctx: &mut crate::Ctx<M>, args: &mut Args| {
+            let a = args.lent_string(ctx, &inputs[0], root);
+            (a, args.lent_string(ctx, &inputs[1], root))
         };
         Ok(match name {
             "Prelude.Num Int.+" => arith(int_add)?,
@@ -1471,11 +1496,11 @@ unsafe fn call<M: Mode>(
                 take_text(ctx, w)
             }
             "Std.Float.can_parse" => {
-                let a = one(ctx, args);
+                let a = lent_one(ctx, args);
                 Outcome::Bool(ctx.string_to_float(a)?.is_some())
             }
             "Std.Float.parse_raw" => {
-                let a = one(ctx, args);
+                let a = lent_one(ctx, args);
                 float_result(ctx.string_to_float(a)?.unwrap_or(f64::NAN))
             }
             "Prelude.Eq Bool.==" => compare(bool_eq),
@@ -1493,15 +1518,15 @@ unsafe fn call<M: Mode>(
                 take_text(ctx, w)
             }
             "Prelude.Eq String.==" => {
-                let (a, b) = two(ctx, args);
+                let (a, b) = lent_two(ctx, args);
                 tag_bool(ctx.string_eq(a, b)?)
             }
             "Prelude.Eq String.!=" => {
-                let (a, b) = two(ctx, args);
+                let (a, b) = lent_two(ctx, args);
                 tag_bool(ctx.string_ne(a, b)?)
             }
             "Prelude.Ord String.compare" => {
-                let (a, b) = two(ctx, args);
+                let (a, b) = lent_two(ctx, args);
                 tag_order(ctx.string_compare(a, b)?)
             }
             "Prelude.++" => {
@@ -1510,7 +1535,7 @@ unsafe fn call<M: Mode>(
                 take_text(ctx, w)
             }
             "Prelude.Show String.show" => {
-                let a = one(ctx, args);
+                let a = lent_one(ctx, args);
                 let w = ctx.string_show(a)?;
                 take_text(ctx, w)
             }
@@ -1541,21 +1566,21 @@ unsafe fn call<M: Mode>(
                 Outcome::Str(line)
             }
             "Std.String.byte_length" => {
-                let a = one(ctx, args);
+                let a = lent_one(ctx, args);
                 Outcome::Int(ctx.string_byte_length(a)?)
             }
             "Std.String.byte_at" => {
-                let a = args.string(ctx, &inputs[1], root);
+                let a = args.lent_string(ctx, &inputs[1], root);
                 Outcome::Int(ctx.string_byte_at(int(0), a)?)
             }
             "Std.String.slice" => {
-                let a = args.string(ctx, &inputs[2], root);
+                let a = args.lent_string(ctx, &inputs[2], root);
                 let w = ctx.string_slice(int(0), int(1), a)?;
                 take_text(ctx, w)
             }
             "Std.String.find_from" => {
-                let n = args.string(ctx, &inputs[0], root);
-                let a = args.string(ctx, &inputs[2], root);
+                let n = args.lent_string(ctx, &inputs[0], root);
+                let a = args.lent_string(ctx, &inputs[2], root);
                 Outcome::Int(ctx.string_find_from(n, int(1), a)?)
             }
             "Std.Array.make" | "Std.MutArray.make" => {

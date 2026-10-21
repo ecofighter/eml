@@ -815,7 +815,7 @@ token の表の項目は、`into_token` と `release_reuse` が添字を使い�
 - `Bool` と `Ordering` のタグ (`FALSE=0`、`TRUE=1`、`LT=0`、`EQ=1`、`GT=2`) は `i64` の定数、組のタグ (`TUPLE=0`) は `alloc_data` に合わせて `u16` の定数として `externs` に置く。`eml_lir` の定数と同じであることは、両方に依存する `eml_vm` のテスト (`tags.rs`) で確かめる
 - ヒープも Host も使わない算術と比較は、`Ctx` を取らない `#[inline]` の関数にする。VM の専用の命令が呼び、ほかの crate でも展開できるようにするためである。総称でない関数は、`#[inline]` がないと crate をまたいで展開されない ([計測の基準](../implementation/benchmarks.md) の「`eml_rt` のインライン化」)
 - `Word` を受ける extern は `unsafe fn` にし、`# Safety` に前提を書く。`Word` は別のヒープからも持ち込めるためで、核の操作と同じである。前提は、`heap_mut()` の前提を守っていることと、語が即値か、このヒープか付けた塊の生きている物体を指し、呼ぶ側がその参照を1つ持つことである。速いモードでは、文字列を受ける引数が文字列であることと、`Fs.read_all` と `read_line_raw` の `File` が局所で rc が 1 であることも前提にする。`File` の型は、どちらのモードでも確かめる
-- 引数の所有は LIR の規則のとおりにする。`obj` の引数は消費し、比較も読み終えたら手放す。`Int.show` は `Word` を受けないので、安全な関数である。`Char.show` と `Char.display` も `Word` を受けないが、引数がスカラー値であることを `requires` に持つので `unsafe fn` にし、呼ぶ側が [LIR](lir.md) の「値の表現」の不変条件を守る
+- 引数の所有は LIR の規則のとおりにする。借用の印の立つ引数 ([LIR](lir.md) の「extern の借用」) は手放さず、事後条件は、その物体の rc が変わらないことである。ほかの `obj` の引数は消費する。借りる引数に同じ物体を2つ渡すときも、参照は1つでよい。`Int.show` は `Word` を受けないので、安全な関数である。`Char.show` と `Char.display` も `Word` を受けないが、引数がスカラー値であることを `requires` に持つので `unsafe fn` にし、呼ぶ側が [LIR](lir.md) の「値の表現」の不変条件を守る
 
 ### 誤り
 
@@ -849,8 +849,8 @@ token の表の項目は、`into_token` と `release_reuse` が添字を使い�
 
 | 誤り | 約束 |
 |---|---|
-| `Heap(_)` | どの確かめも、状態を変える前、Host を呼ぶ前に行う。ヒープは変わらず、何も書かず、何も開かない。確かめるのは、種類 (文字列か、`File` の `Foreign` か)、`decref` が通ること (同じ物体を2つの引数に渡したときは2回続けて通ること。`string_concat` と同じ)、`File` を読む extern の `File` が一意であること (`foreign_unique`) である。ただし `fs_read` と `fs_close` は、確かめた後で `File` を手放す解放の連鎖の誤りも返しうる (下の項) |
-| `Output`、`Io`、`Stdin`、`NotUtf8`、`Index`、`Stopped` | 引数は成功のときと同じく消費する。`Fs.read_all` と `read_line_raw` は `File` を手放し (破棄処理が閉じる)、読んだバイト列を手放し、結果を作らない。`slice` は範囲と境界を確保の前に確かめ、誤りなら何も作らない。引数を受けない extern (`Env.arg`、標準入力の読み) は、誤りならヒープを変えない。ほかのヒープは変わらず、`held_ok` は保たれる。REPL が続けて使うためである |
+| `Heap(_)` | どの確かめも、状態を変える前、Host を呼ぶ前に行う。ヒープは変わらず、何も書かず、何も開かない。確かめるのは、種類 (文字列か、`File` の `Foreign` か)、`decref` が通ること (消費する引数に同じ物体を2つ渡したときは2回続けて通ること。`string_concat` と同じ。借りる引数は1つずつ確かめる)、`File` を読む extern の `File` が一意であること (`foreign_unique`) である。ただし `fs_read` と `fs_close` は、確かめた後で `File` を手放す解放の連鎖の誤りも返しうる (下の項) |
+| `Output`、`Io`、`Stdin`、`NotUtf8`、`Index`、`Stopped` | 借りる引数は成功のときと同じく手放さず、消費する引数は成功のときと同じく消費する。`Fs.read_all` と `read_line_raw` は `File` を手放し (破棄処理が閉じる)、読んだバイト列を手放し、結果を作らない。`slice` は範囲と境界を確保の前に確かめ、誤りなら何も作らない。引数を受けない extern (`Env.arg`、標準入力の読み) は、誤りならヒープを変えない。ほかのヒープは変わらず、`held_ok` は保たれる。REPL が続けて使うためである |
 | `ArithFault` | ヒープに触れない |
 
 - `fs_read` と `fs_close` の `Heap(_)` は、ヒープが変わらないか、`File` を手放す解放の連鎖で起きたモデルが照らさない誤り (上の「検査モードの約束」) である。モデルは `Foreign` の物体が走査する語を持たないことを知らないので、約束はこの形になる。基本操作の `evv_set`、`ev_set_state`、`yield_finish` と同じく、その後は `Ctx` を落とすことしかできない

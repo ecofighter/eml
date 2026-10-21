@@ -1375,6 +1375,39 @@ impl<'a> Checker<'a> {
         Ok(())
     }
 
+    /// 借りる変数を同じ命令が消費もするなら、消費の数より多い参照を持っているはずである。借りる引数は命令の間じゅう
+    /// 読まれるので、足りないと消費が最後の参照を渡して、読みが解放された物体に当たる
+    /// (docs/spec/lir.md の「extern の借用」)。
+    fn lent_apart_from_consumed(
+        &self,
+        owned: &Owned,
+        args: &[Atom],
+        borrowed: &[bool],
+        lent: &str,
+    ) -> Result<(), String> {
+        if self.level != Level::Ownership {
+            return Ok(());
+        }
+        for (&arg, _) in args.iter().zip(borrowed).filter(|&(_, &borrowed)| borrowed) {
+            let Atom::Var(var) = arg else { continue };
+            let Some(&held) = owned.get(&var) else {
+                continue;
+            };
+            let consumed = args
+                .iter()
+                .zip(borrowed)
+                .filter(|&(&other, &borrowed)| !borrowed && other == arg)
+                .count();
+            if consumed > 0 && held as usize <= consumed {
+                return Err(format!(
+                    "`{}` is {lent} and consumed by the same instruction",
+                    self.cx.name(var)
+                ));
+            }
+        }
+        Ok(())
+    }
+
     /// 値を使う。所有の検査の段では、RC の対象なら所有を1つ渡す。
     fn consume(&self, owned: &mut Owned, atom: Atom) -> Result<(), String> {
         let var = match atom {
@@ -1464,6 +1497,7 @@ impl<'a> Checker<'a> {
                 // 借用の引数は基本操作と同じく読む使いである (docs/spec/lir.md の「extern の借用」)
                 let lent = format!("lent to `{}`", ext.row().name);
                 self.read_borrowed(owned, args, ext.row().borrowed, &lent)?;
+                self.lent_apart_from_consumed(owned, args, ext.row().borrowed, &lent)?;
             }
             Rhs::Prim(prim, args) => {
                 self.cx.check_prim(var, prim, args)?;
@@ -1471,6 +1505,7 @@ impl<'a> Checker<'a> {
                 // (docs/spec/lir.md の「基本操作」)
                 let lent = format!("lent to `prim {}`", prim_text(&self.program.effects, prim));
                 self.read_borrowed(owned, args, prim.row().borrowed, &lent)?;
+                self.lent_apart_from_consumed(owned, args, prim.row().borrowed, &lent)?;
             }
             Rhs::ConstString(index) => {
                 if *index as usize >= self.program.strings.len() {

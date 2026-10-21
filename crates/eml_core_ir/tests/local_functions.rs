@@ -413,7 +413,6 @@ fn std_public_functions_keep_their_lir() {
       tail call "F11"(f.0, #0, xs.1)
     }
     fn F12(prefix.0: obj, s.1: obj) -> enum {
-      dup prefix.0
       let t.2: int = extern Std.String.byte_length(prefix.0)
       let t.3: enum = extern "Prelude.Ord Int.>="(0, 0)
       switch t.3 Prelude.Bool { #0 -> b1, #1 -> b2 }
@@ -423,7 +422,6 @@ fn std_public_functions_keep_their_lir() {
       return #0
     b2:
       let t.4: int = extern "Prelude.Num Int.+"(0, t.2)
-      dup s.1
       let t.5: int = extern Std.String.byte_length(s.1)
       let t.6: enum = extern "Prelude.Ord Int.<="(t.4, t.5)
       switch t.6 Prelude.Bool { #0 -> b3, #1 -> b4 }
@@ -435,12 +433,9 @@ fn std_public_functions_keep_their_lir() {
       tail call F13(prefix.0, s.1, 0, t.2, 0)
     }
     fn F14(suffix.0: obj, s.1: obj) -> enum {
-      dup s.1
       let t.2: int = extern Std.String.byte_length(s.1)
-      dup suffix.0
       let t.3: int = extern Std.String.byte_length(suffix.0)
       let t.4: int = extern "Prelude.Num Int.-"(t.2, t.3)
-      dup suffix.0
       let t.5: int = extern Std.String.byte_length(suffix.0)
       let t.6: enum = extern "Prelude.Ord Int.>="(t.4, 0)
       switch t.6 Prelude.Bool { #0 -> b1, #1 -> b2 }
@@ -450,7 +445,6 @@ fn std_public_functions_keep_their_lir() {
       return #0
     b2:
       let t.7: int = extern "Prelude.Num Int.+"(t.4, t.5)
-      dup s.1
       let t.8: int = extern Std.String.byte_length(s.1)
       let t.9: enum = extern "Prelude.Ord Int.<="(t.7, t.8)
       switch t.9 Prelude.Bool { #0 -> b3, #1 -> b4 }
@@ -462,7 +456,6 @@ fn std_public_functions_keep_their_lir() {
       tail call F13(suffix.0, s.1, t.4, t.5, 0)
     }
     fn F15(sep.0: obj, s.1: obj) -> tobj {
-      dup sep.0
       let t.2: int = extern Std.String.byte_length(sep.0)
       let t.3: enum = extern "Prelude.Eq Int.=="(t.2, 0)
       switch t.3 Prelude.Bool { #0 -> b1, #1 -> b2 }
@@ -488,24 +481,22 @@ fn std_public_functions_keep_their_lir() {
       tail call F20(sep.0, x.2, rest.3)
     }
     fn F21(s.0: obj) -> obj {
-      dup s.0
       let t.1: int = extern Std.String.byte_length(s.0)
       dup s.0
       let t.2: int = call F22(s.0, t.1, 0)
       dup s.0
       let t.3: int = call F23(s.0, t.2, t.1)
       let t.4: obj = extern Std.String.slice(t.2, t.3, s.0)
+      decref s.0
       return t.4
     }
     fn F24(s.0: obj) -> tobj {
-      dup s.0
       let t.1: int = extern Std.String.byte_length(s.0)
       let t.2: enum = extern "Prelude.Ord Int.>"(t.1, 0)
       switch t.2 Prelude.Bool { #0 -> b1, #1 -> b2 }
     b1:
       jump b3(0)
     b2:
-      dup s.0
       let t.3: int = extern Std.String.byte_at(0, s.0)
       jump b3(t.3)
     b3(t.4: int):
@@ -610,10 +601,8 @@ fn std_public_functions_keep_their_lir() {
       let t.5: enum = extern "Prelude.Ord Int.>="(i.4, n.3)
       switch t.5 Prelude.Bool { #0 -> b1, #1 -> b2 }
     b1:
-      dup needle.0
       let t.6: int = extern Std.String.byte_at(i.4, needle.0)
       let t.7: int = extern "Prelude.Num Int.+"(at.2, i.4)
-      dup s.1
       let t.8: int = extern Std.String.byte_at(t.7, s.1)
       let t.9: enum = extern "Prelude.Eq Int.=="(t.6, t.8)
       switch t.9 Prelude.Bool { #0 -> b3, #1 -> b4 }
@@ -630,36 +619,31 @@ fn std_public_functions_keep_their_lir() {
       tail call F13(needle.0, s.1, at.2, n.3, t.10)
     }
     fn F16(sep.0: obj, s.1: obj, at.2: int, acc.3: tobj) -> tobj {
-      dup sep.0
-      dup s.1
       let t.4: int = extern Std.String.find_from(sep.0, at.2, s.1)
       let t.5: enum = extern "Prelude.Ord Int.<"(t.4, 0)
       switch t.5 Prelude.Bool { #0 -> b1, #1 -> b2 }
     b1:
-      dup sep.0
       let t.6: int = extern Std.String.byte_length(sep.0)
       let t.7: int = extern "Prelude.Num Int.+"(t.4, t.6)
-      dup s.1
       let t.8: obj = extern Std.String.slice(at.2, t.4, s.1)
       let d.9: tobj = con Prelude.List #1(t.8, acc.3)
       tail call F16(sep.0, s.1, t.7, d.9)
     b2:
       decref sep.0
-      dup s.1
       let t.10: int = extern Std.String.byte_length(s.1)
       let t.11: obj = extern Std.String.slice(at.2, t.10, s.1)
+      decref s.1
       let d.12: tobj = con Prelude.List #1(t.11, acc.3)
       tail call "F1"(#0, d.12)
     }
     fn F18(s.0: obj, at.1: int, acc.2: tobj) -> tobj {
-      dup s.0
       let t.3: int = extern Std.String.byte_length(s.0)
       let t.4: enum = extern "Prelude.Ord Int.>="(at.1, t.3)
       switch t.4 Prelude.Bool { #0 -> b1, #1 -> b2 }
     b1:
       let s.5: obj = const "\n"
-      dup s.0
       let t.6: int = extern Std.String.find_from(s.5, at.1, s.0)
+      decref s.5
       let t.7: enum = extern "Prelude.Ord Int.<"(t.6, 0)
       switch t.7 Prelude.Bool { #0 -> b3, #1 -> b10 }
     b2:
@@ -667,9 +651,7 @@ fn std_public_functions_keep_their_lir() {
       tail call "F1"(#0, acc.2)
     b3:
       let t.8: int = extern "Prelude.Num Int.+"(t.6, 1)
-      dup s.0
       let t.9: obj = extern Std.String.slice(at.1, t.6, s.0)
-      dup t.9
       let t.10: int = extern Std.String.byte_length(t.9)
       let t.11: enum = extern "Prelude.Ord Int.>"(t.10, 0)
       switch t.11 Prelude.Bool { #0 -> b4, #1 -> b5 }
@@ -677,7 +659,6 @@ fn std_public_functions_keep_their_lir() {
       jump b8()
     b5:
       let t.12: int = extern "Prelude.Num Int.-"(t.10, 1)
-      dup t.9
       let t.13: int = extern Std.String.byte_at(t.12, t.9)
       let t.14: enum = extern "Prelude.Eq Int.=="(t.13, 13)
       switch t.14 Prelude.Bool { #0 -> b6, #1 -> b7 }
@@ -686,6 +667,7 @@ fn std_public_functions_keep_their_lir() {
     b7:
       let t.15: int = extern "Prelude.Num Int.-"(t.10, 1)
       let t.16: obj = extern Std.String.slice(0, t.15, t.9)
+      decref t.9
       jump b9(t.16)
     b8:
       jump b9(t.9)
@@ -694,6 +676,7 @@ fn std_public_functions_keep_their_lir() {
       tail call F18(s.0, t.8, d.18)
     b10:
       let t.19: obj = extern Std.String.slice(at.1, t.3, s.0)
+      decref s.0
       let d.20: tobj = con Prelude.List #1(t.19, acc.2)
       tail call "F1"(#0, d.20)
     }
@@ -717,7 +700,6 @@ fn std_public_functions_keep_their_lir() {
       decref s.0
       jump b10()
     b2:
-      dup s.0
       let t.4: int = extern Std.String.byte_at(i.2, s.0)
       let t.5: enum = extern "Prelude.Eq Int.=="(t.4, 32)
       switch t.5 Prelude.Bool { #0 -> b3, #1 -> b4 }
@@ -751,7 +733,6 @@ fn std_public_functions_keep_their_lir() {
       jump b10()
     b2:
       let t.4: int = extern "Prelude.Num Int.-"(stop.2, 1)
-      dup s.0
       let t.5: int = extern Std.String.byte_at(t.4, s.0)
       let t.6: enum = extern "Prelude.Eq Int.=="(t.5, 32)
       switch t.6 Prelude.Bool { #0 -> b3, #1 -> b4 }
@@ -781,7 +762,6 @@ fn std_public_functions_keep_their_lir() {
       let t.6: enum = extern "Prelude.Ord Int.>="(i.3, len.1)
       switch t.6 Prelude.Bool { #0 -> b1, #1 -> b2 }
     b1:
-      dup s.0
       let t.7: int = extern Std.String.byte_at(i.3, s.0)
       let t.8: int = extern "Prelude.Num Int.-"(t.7, 48)
       let t.9: enum = extern "Prelude.Ord Int.<"(t.8, 0)

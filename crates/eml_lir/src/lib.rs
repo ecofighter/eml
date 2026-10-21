@@ -219,6 +219,13 @@ impl Stmt {
         }
     }
 
+    /// 値の使いのうち、基本操作と extern の借用の引数 (`Rhs::for_each_lent`)。
+    pub fn for_each_lent(&self, f: impl FnMut(Atom)) {
+        if let Stmt::Let { var: _, rhs } = self {
+            rhs.for_each_lent(f);
+        }
+    }
+
     /// 値の使いのうち、参照を1つ受け取る「消費」。`unpack` と `unbox` の値は読むだけなので数えない
     /// (docs/spec/lir.md)。
     pub fn for_each_consumed(&self, f: impl FnMut(Atom)) {
@@ -408,6 +415,21 @@ impl Rhs {
             Rhs::Prim(prim, args) => unborrowed(args, prim.row().borrowed),
             Rhs::Extern { ext, args, at: _ } => unborrowed(args, ext.row().borrowed),
             _ => self.for_each_atom(f),
+        }
+    }
+
+    /// 値の使いのうち、基本操作と extern の借用の引数。読むだけなので `for_each_consumed` には入らない。同じ変数が
+    /// 同じ命令の消費の位置にもあれば、その命令の前に参照が2つ要る (docs/spec/lir.md の「extern の借用」)。
+    pub fn for_each_lent(&self, mut f: impl FnMut(Atom)) {
+        let (args, borrowed) = match self {
+            Rhs::Prim(prim, args) => (args, prim.row().borrowed),
+            Rhs::Extern { ext, args, at: _ } => (args, ext.row().borrowed),
+            _ => return,
+        };
+        for (&atom, &borrowed) in args.iter().zip(borrowed) {
+            if borrowed {
+                f(atom);
+            }
         }
     }
 

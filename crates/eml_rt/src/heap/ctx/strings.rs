@@ -807,12 +807,18 @@ impl<M: Mode> Ctx<M> {
         self.heap_spec().text_of(w)
     }
 
+    /// 文字列 `a` と `b` を借りる extern の前提。呼ぶ側が両方の参照を持つ。同じ物体でも、借りるだけで手放さないので
+    /// 参照は1つでよい。
+    pub open spec fn lends_strings(&self, a: Word, b: Word) -> bool {
+        self.is_string(a) && self.is_string(b) && self.holds(a) && self.holds(b)
+    }
+
     /// 文字列 `a` と `b` を受ける extern の前提。呼ぶ側が両方の参照を1つずつ持つ (同じ物体なら2つ持つ)。
     pub open spec fn holds_strings(&self, a: Word, b: Word) -> bool {
         self.is_string(a) && self.is_string(b) && self.holds_args(seq![a, b])
     }
 
-    /// `==`。両辺の参照を受け取り、読み終えたら `a`、`b` の順に手放す。
+    /// `==`。両辺を借りる。呼ぶ側の参照の数は変わらない。
     ///
     /// # Safety
     /// `heap_mut` の前提を守っている。`a` と `b` は即値か、このヒープか付けた塊の生きている物体を指し、呼ぶ側がその参照を
@@ -823,7 +829,7 @@ impl<M: Mode> Ctx<M> {
             old(self).wf(),
             old(self).heap_spec().word_in(a),
             old(self).heap_spec().word_in(b),
-            !M::CHECKED ==> old(self).holds_strings(a, b),
+            !M::CHECKED ==> old(self).lends_strings(a, b),
         ensures
             final(self).wf(),
             final(self).evv_spec() == old(self).evv_spec(),
@@ -831,10 +837,10 @@ impl<M: Mode> Ctx<M> {
             r is Err ==> (r matches Err(Fault::Heap(_)) && final(self).heap_spec().settled_heap()
                 == old(self).heap_spec().settled_heap()),
             !M::CHECKED ==> r is Ok,
-            old(self).held_ok() && old(self).holds_strings(a, b) ==> r is Ok || (r matches Err(
+            old(self).held_ok() && old(self).lends_strings(a, b) ==> r is Ok || (r matches Err(
                 Fault::Heap(e),
             ) && chain_err(Err::<(), HeapError>(e))),
-            old(self).held_ok() && old(self).holds_strings(a, b) && r is Ok ==> {
+            old(self).held_ok() && old(self).lends_strings(a, b) && r is Ok ==> {
                 &&& r == Ok::<i64, Fault>(
                     if old(self).text_of(a) == old(self).text_of(b) {
                         TRUE
@@ -843,11 +849,7 @@ impl<M: Mode> Ctx<M> {
                     },
                 )
                 &&& final(self).held_ok()
-                &&& final(self).evolved_by(
-                    *old(self),
-                    |x: usize| -points(a, x) - points(b, x),
-                    Set::empty(),
-                )
+                &&& final(self).evolved_by(*old(self), |x: usize| 0int, Set::empty())
             },
     {
         self.compare(a, b, false)
@@ -862,7 +864,7 @@ impl<M: Mode> Ctx<M> {
             old(self).wf(),
             old(self).heap_spec().word_in(a),
             old(self).heap_spec().word_in(b),
-            !M::CHECKED ==> old(self).holds_strings(a, b),
+            !M::CHECKED ==> old(self).lends_strings(a, b),
         ensures
             final(self).wf(),
             final(self).evv_spec() == old(self).evv_spec(),
@@ -870,10 +872,10 @@ impl<M: Mode> Ctx<M> {
             r is Err ==> (r matches Err(Fault::Heap(_)) && final(self).heap_spec().settled_heap()
                 == old(self).heap_spec().settled_heap()),
             !M::CHECKED ==> r is Ok,
-            old(self).held_ok() && old(self).holds_strings(a, b) ==> r is Ok || (r matches Err(
+            old(self).held_ok() && old(self).lends_strings(a, b) ==> r is Ok || (r matches Err(
                 Fault::Heap(e),
             ) && chain_err(Err::<(), HeapError>(e))),
-            old(self).held_ok() && old(self).holds_strings(a, b) && r is Ok ==> {
+            old(self).held_ok() && old(self).lends_strings(a, b) && r is Ok ==> {
                 &&& r == Ok::<i64, Fault>(
                     if old(self).text_of(a) == old(self).text_of(b) {
                         FALSE
@@ -882,18 +884,14 @@ impl<M: Mode> Ctx<M> {
                     },
                 )
                 &&& final(self).held_ok()
-                &&& final(self).evolved_by(
-                    *old(self),
-                    |x: usize| -points(a, x) - points(b, x),
-                    Set::empty(),
-                )
+                &&& final(self).evolved_by(*old(self), |x: usize| 0int, Set::empty())
             },
     {
         let eq = self.compare(a, b, false)?;
         Ok(TRUE - eq)
     }
 
-    /// `compare`。`Ordering` のタグを返す。`string_eq` と同じく、両辺の参照を受け取って手放す。
+    /// `compare`。`Ordering` のタグを返す。`string_eq` と同じく、両辺を借りる。
     ///
     /// # Safety
     /// `string_eq` と同じ。
@@ -902,7 +900,7 @@ impl<M: Mode> Ctx<M> {
             old(self).wf(),
             old(self).heap_spec().word_in(a),
             old(self).heap_spec().word_in(b),
-            !M::CHECKED ==> old(self).holds_strings(a, b),
+            !M::CHECKED ==> old(self).lends_strings(a, b),
         ensures
             final(self).wf(),
             final(self).evv_spec() == old(self).evv_spec(),
@@ -910,23 +908,19 @@ impl<M: Mode> Ctx<M> {
             r is Err ==> (r matches Err(Fault::Heap(_)) && final(self).heap_spec().settled_heap()
                 == old(self).heap_spec().settled_heap()),
             !M::CHECKED ==> r is Ok,
-            old(self).held_ok() && old(self).holds_strings(a, b) ==> r is Ok || (r matches Err(
+            old(self).held_ok() && old(self).lends_strings(a, b) ==> r is Ok || (r matches Err(
                 Fault::Heap(e),
             ) && chain_err(Err::<(), HeapError>(e))),
-            old(self).held_ok() && old(self).holds_strings(a, b) && r is Ok ==> {
+            old(self).held_ok() && old(self).lends_strings(a, b) && r is Ok ==> {
                 &&& r == Ok::<i64, Fault>(lex(old(self).text_of(a), old(self).text_of(b)))
                 &&& final(self).held_ok()
-                &&& final(self).evolved_by(
-                    *old(self),
-                    |x: usize| -points(a, x) - points(b, x),
-                    Set::empty(),
-                )
+                &&& final(self).evolved_by(*old(self), |x: usize| 0int, Set::empty())
             },
     {
         self.compare(a, b, true)
     }
 
-    /// 文字列 `a` と `b` を比べて、両方を手放す。`order` なら `lex` のタグを、そうでなければ等しいかの `Bool` のタグを
+    /// 文字列 `a` と `b` を借りて比べる。`order` なら `lex` のタグを、そうでなければ等しいかの `Bool` のタグを
     /// 返す。検査モードの検査は、状態を変える前に済ませる。
     #[inline]
     fn compare(&mut self, a: Word, b: Word, order: bool) -> (r: Result<i64, Fault>)
@@ -934,7 +928,7 @@ impl<M: Mode> Ctx<M> {
             old(self).wf(),
             old(self).heap_spec().word_in(a),
             old(self).heap_spec().word_in(b),
-            !M::CHECKED ==> old(self).holds_strings(a, b),
+            !M::CHECKED ==> old(self).lends_strings(a, b),
         ensures
             final(self).wf(),
             final(self).evv_spec() == old(self).evv_spec(),
@@ -943,10 +937,10 @@ impl<M: Mode> Ctx<M> {
                 == old(self).heap_spec().settled_heap()),
             !M::CHECKED ==> r is Ok,
             r matches Ok(v) ==> (!order ==> v == TRUE || v == FALSE),
-            old(self).held_ok() && old(self).holds_strings(a, b) ==> r is Ok || (r matches Err(
+            old(self).held_ok() && old(self).lends_strings(a, b) ==> r is Ok || (r matches Err(
                 Fault::Heap(e),
             ) && chain_err(Err::<(), HeapError>(e))),
-            old(self).held_ok() && old(self).holds_strings(a, b) && r is Ok ==> {
+            old(self).held_ok() && old(self).lends_strings(a, b) && r is Ok ==> {
                 &&& r == Ok::<i64, Fault>(
                     if order {
                         lex(old(self).text_of(a), old(self).text_of(b))
@@ -957,28 +951,36 @@ impl<M: Mode> Ctx<M> {
                     },
                 )
                 &&& final(self).held_ok()
-                &&& final(self).evolved_by(
-                    *old(self),
-                    |x: usize| -points(a, x) - points(b, x),
-                    Set::empty(),
-                )
+                &&& final(self).evolved_by(*old(self), |x: usize| 0int, Set::empty())
             },
     {
         let ghost s0 = *self;
-        let ghost c = s0.held_ok() && s0.holds_strings(a, b);
+        let ghost c = s0.held_ok() && s0.lends_strings(a, b);
         if M::CHECKED && !(a.is_ptr() && b.is_ptr()) {
             return Err(Fault::Heap(HeapError::WrongKind));
         }
         self.heap.settle();
         let ghost h1 = self.heap;
+        let ha = self.heap.header_of(a);
+        let hb = self.heap.header_of(b);
         proof {
             lemma_settled_twice(s0.heap);
             assert(h1.words_kept(s0.heap));
+            h1.lemma_text_spec(a);
+            h1.lemma_text_spec(b);
+            s0.heap.lemma_text_spec(a);
+            s0.heap.lemma_text_spec(b);
             if c {
-                s0.lemma_settled_strings(h1, a, b);
+                s0.lemma_settled_lent(h1, a, b);
             }
         }
-        if let Err(e) = self.heap.checked_strings(a, b) {
+        if let Err(e) = self.heap.checked_string(ha) {
+            proof {
+                self.lemma_words_kept(s0);
+            }
+            return Err(Fault::Heap(e));
+        }
+        if let Err(e) = self.heap.checked_string(hb) {
             proof {
                 self.lemma_words_kept(s0);
             }
@@ -1016,14 +1018,13 @@ impl<M: Mode> Ctx<M> {
                 FALSE
             });
         }
-        let Ghost(mid) = self.heap.release_strings(a, b, Ghost(c));
         proof {
             if M::CHECKED {
                 lemma_words_trans(self.heap, h1, s0.heap);
                 self.lemma_words_kept(s0);
             }
             if c {
-                self.lemma_released(s0, h1, mid, a, b);
+                self.lemma_lent(s0, h1);
             }
         }
         Ok(r)
@@ -1398,7 +1399,7 @@ impl<M: Mode> Ctx<M> {
         Ok(self.fresh_string(text.as_str()))
     }
 
-    /// `Float.parse` の読み。`s` の参照を受け取って手放し、読めた値か、読めなければ `None` を返す。読みは T12 の
+    /// `Float.parse` の読み。`s` を借りて、読めた値か、読めなければ `None` を返す。読みは T12 の
     /// `float_parse` がする。
     ///
     /// # Safety
@@ -1421,7 +1422,7 @@ impl<M: Mode> Ctx<M> {
             r matches Err(Fault::Heap(e)) && chain_err(Err::<(), HeapError>(e))),
             old(self).held_ok() && old(self).is_string(s) && old(self).holds(s) && r is Ok ==> {
                 &&& final(self).held_ok()
-                &&& final(self).evolved_by(*old(self), |x: usize| -points(s, x), Set::empty())
+                &&& final(self).evolved_by(*old(self), |x: usize| 0int, Set::empty())
             },
     {
         let ghost s0 = *self;
@@ -1448,20 +1449,19 @@ impl<M: Mode> Ctx<M> {
             return Err(Fault::Heap(e));
         }
         let value = float_parse(self.heap.string_text(s));
-        self.heap.release_text(hs, Ghost(s), Ghost(c));
         proof {
             if M::CHECKED {
                 lemma_words_trans(self.heap, h1, s0.heap);
                 self.lemma_words_kept(s0);
             }
             if c {
-                self.lemma_printed(s0, h1, s);
+                self.lemma_lent(s0, h1);
             }
         }
         Ok(value)
     }
 
-    /// `String.show`。`s` を `"` で囲み、エスケープした文字列を作る。`s` の参照を受け取って手放し、結果の参照を返す。
+    /// `String.show`。`s` を `"` で囲み、エスケープした文字列を作る。`s` は借りて、結果の参照を返す。
     /// 1回目の走査で結果の長さを数えて1回だけ確保し、2回目の走査で、エスケープしないバイトの区間はまとめて、エスケープは
     /// 短い定数で、その場で書き足す。
     ///
@@ -1489,7 +1489,7 @@ impl<M: Mode> Ctx<M> {
                 ==> {
                 &&& final(self).held_ok()
                 &&& final(self).holds(w)
-                &&& final(self).evolved_by(*old(self), |x: usize| -points(s, x), Set::empty())
+                &&& final(self).evolved_by(*old(self), |x: usize| 0int, Set::empty())
             }),
     {
         let ghost s0 = *self;
@@ -1573,7 +1573,6 @@ impl<M: Mode> Ctx<M> {
                 s0.lemma_text_shown(h1, h2, h3, s, w);
             }
         }
-        self.heap.release_text(hs, Ghost(s), Ghost(c));
         if M::CHECKED {
             self.stats.string_bytes_copied = self.stats.string_bytes_copied.wrapping_add(n as u64);
         }
@@ -1587,10 +1586,87 @@ impl<M: Mode> Ctx<M> {
                 self.lemma_words_kept(s0);
             }
             if c {
-                self.lemma_shown(s0, h1, h2, h3, s, w);
+                self.lemma_shown_lent(s0, h1, h2, h3, s, w);
             }
         }
         Ok(w)
+    }
+
+    /// 借りるだけの extern の、モデルが合っている道。`settle` の後の `h1` から、何も手放していない。
+    pub(super) proof fn lemma_lent(&self, s0: Ctx<M>, h1: Heap<M>)
+        requires
+            s0.held_ok(),
+            h1 == s0.heap.settled_heap(),
+            h1.consistent(),
+            self.heap == h1,
+            self.evv == s0.evv,
+            self.yielding == s0.yielding,
+            self.max_evv == s0.max_evv,
+        ensures
+            self.held_ok(),
+            self.evolved_by(s0, |x: usize| 0int, Set::empty()),
+    {
+        let z = |x: usize| 0int;
+        let none = Set::<usize>::empty();
+        lemma_settle_moved(h1, s0.heap);
+        assert forall|x: usize| #[trigger] self.need(seq![], x) > 0 implies s0.need(seq![], x) + z(
+            x,
+        ) >= self.need(seq![], x) by {
+            lemma_points_in(seq![], x);
+        }
+        self.lemma_holds_moved(s0, seq![], seq![], z, none);
+        self.lemma_evv_kept(s0, z, none);
+    }
+
+    /// `String.slice` と `String.show` の、`s` を借りる道。確保と追記の後の `h3` から、何も手放していない。
+    pub(super) proof fn lemma_shown_lent(
+        &self,
+        s0: Ctx<M>,
+        h1: Heap<M>,
+        h2: Heap<M>,
+        h3: Heap<M>,
+        s: Word,
+        w: Word,
+    )
+        requires
+            s0.held_ok(),
+            s0.is_string(s),
+            s0.holds(s),
+            h1 == s0.heap.settled_heap(),
+            h1.consistent(),
+            h2.made(h1, w),
+            h2.owned(w),
+            h3.core.text_changed(h2.core, w.bits_spec()),
+            h3.dummy == h2.dummy,
+            h3.region == h2.region,
+            h3.worker == h2.worker,
+            h3.consistent(),
+            h3.core.model@.building is None,
+            self.heap == h3,
+            self.evv == s0.evv,
+            self.yielding == s0.yielding,
+            self.max_evv == s0.max_evv,
+        ensures
+            self.held_ok(),
+            self.holds(w),
+            self.evolved_by(s0, |x: usize| 0int, Set::empty()),
+    {
+        let h0 = s0.heap;
+        let z = |x: usize| 0int;
+        let none = Set::<usize>::empty();
+        s0.lemma_text_shown(h1, h2, h3, s, w);
+        lemma_settle_moved(h1, h0);
+        lemma_moved_chain(h3, h1, h0, z, z, z, none, none, none);
+        assert forall|x: usize| #[trigger] self.need(seq![], x) > 0 implies s0.need(seq![], x) + z(
+            x,
+        ) >= self.need(seq![], x) by {
+            lemma_points_in(seq![], x);
+        }
+        self.lemma_holds_moved(s0, seq![], seq![], z, none);
+        self.lemma_evv_kept(s0, z, none);
+        assert(s.bits_spec() != w.bits_spec());
+        lemma_view_live(self.heap, w.bits_spec());
+        self.lemma_fresh_holds(s0, w);
     }
 
     /// 文字列を1つ受ける extern の前提から、`settle` の後のヒープ `h1` で、`s` を読めて手放せることを言う。
@@ -1648,7 +1724,7 @@ impl<M: Mode> Ctx<M> {
         self.heap.lemma_text_spec(s);
     }
 
-    /// `String.show` で `s` を手放す前の、モデルが合っている道。確保と追記は `s` に触れないので、`s` はまだ持たれている。
+    /// `String.slice` と `String.show` で、確保と追記の後の、モデルが合っている道。確保と追記は `s` に触れないので、`s` はまだ持たれている。
     pub(super) proof fn lemma_text_shown(
         &self,
         h1: Heap<M>,
@@ -1694,63 +1770,37 @@ impl<M: Mode> Ctx<M> {
         assert(h3.core.word_ok(w) == h2.core.word_ok(w));
     }
 
-    /// `String.show` の、モデルが合っている道。
-    pub(super) proof fn lemma_shown(
-        &self,
-        s0: Ctx<M>,
-        h1: Heap<M>,
-        h2: Heap<M>,
-        h3: Heap<M>,
-        s: Word,
-        w: Word,
-    )
+    /// 文字列を2つ借りる extern の前提から、`settle` の後のヒープ `h1` で、2つを読めることを言う。
+    pub(super) proof fn lemma_settled_lent(&self, h1: Heap<M>, a: Word, b: Word)
         requires
-            s0.held_ok(),
-            s0.is_string(s),
-            s0.holds(s),
-            h1 == s0.heap.settled_heap(),
-            h1.consistent(),
-            h2.made(h1, w),
-            h2.owned(w),
-            h3.core.text_changed(h2.core, w.bits_spec()),
-            h3.dummy == h2.dummy,
-            h3.region == h2.region,
-            h3.worker == h2.worker,
-            h3.consistent(),
-            h3.core.model@.building is None,
-            self.heap.consistent(),
-            self.heap.core.model@.building is None,
-            self.heap.evolved(h3, s, -1),
-            self.heap.kept_live(h3),
-            self.evv == s0.evv,
-            self.yielding == s0.yielding,
-            self.max_evv == s0.max_evv,
-        ensures
             self.held_ok(),
-            self.holds(w),
-            self.evolved_by(s0, |x: usize| -points(s, x), Set::empty()),
+            self.lends_strings(a, b),
+            h1 == self.heap.settled_heap(),
+            h1.consistent(),
+        ensures
+            held_word(h1, a),
+            held_word(h1, b),
+            live(h1, a.bits_spec()),
+            live(h1, b.bits_spec()),
+            h1.core.state(a.bits_spec()) == BlockState::Live,
+            h1.core.state(b.bits_spec()) == BlockState::Live,
+            h1.core.kind(a.bits_spec()) == Kind::String,
+            h1.core.kind(b.bits_spec()) == Kind::String,
+            h1.text_of(a) == self.text_of(a),
+            h1.text_of(b) == self.text_of(b),
+            !M::CHECKED ==> h1.text_readable(a) && h1.text_readable(b),
     {
-        let h0 = s0.heap;
+        self.lemma_settled_string(h1, a);
+        self.lemma_settled_string(h1, b);
+        let h0 = self.heap;
         let z = |x: usize| 0int;
-        let ds = |x: usize| -points(s, x);
-        let none = Set::<usize>::empty();
-        let ws = seq![s];
-        s0.lemma_text_shown(h1, h2, h3, s, w);
         lemma_settle_moved(h1, h0);
-        lemma_decref_moved(self.heap, h3, s);
-        lemma_moved_chain(self.heap, h3, h1, z, ds, ds, none, none, none);
-        lemma_moved_chain(self.heap, h1, h0, z, ds, ds, none, none, none);
-        assert forall|x: usize| #[trigger] self.need(seq![], x) > 0 implies s0.need(ws, x) + ds(x)
-            >= self.need(seq![], x) by {
-            lemma_points_in(seq![], x);
-            lemma_points_in(ws, x);
-        }
-        self.lemma_holds_moved(s0, ws, seq![], ds, none);
-        self.lemma_evv_kept(s0, ds, none);
-        assert(s.bits_spec() != w.bits_spec());
-        lemma_arg_moved(self.heap, h3, ds, none, w);
-        lemma_view_live(self.heap, w.bits_spec());
-        self.lemma_fresh_holds(s0, w);
+        lemma_arg_moved(h1, h0, z, Set::empty(), a);
+        lemma_arg_moved(h1, h0, z, Set::empty(), b);
+        h0.lemma_text_spec(a);
+        h0.lemma_text_spec(b);
+        h1.lemma_text_spec(a);
+        h1.lemma_text_spec(b);
     }
 
     /// 文字列を受ける extern の前提から、`settle` の後のヒープ `h1` で、ヒープの文字列の操作の前提を言う。

@@ -257,8 +257,9 @@ R1 と R2 から、ブロックの番号の順は辺の向きに沿った順 (�
 
 #### extern の借用
 
-- 行は、引数ごとの借用の印 (`FunctionRow::borrowed`) を `params` と並べて持つ。印の立つ引数を extern は読むだけで、消費しない。基本操作の借用の引数 (下の「基本操作」) と同じく読む使いなので、Perceus は借りた変数を `dup` しない。借用が最後の使いなら、その命令の直後で手放す
-- 借りるのは、配列を読む4つの行 (`Std.Array.length`、`Std.Array.get`、`Std.MutArray.length`、`Std.MutArray.read`) の配列の引数だけである。読むたびに配列の参照を渡して返す手間を省くためである
+- 行は、引数ごとの借用の印 (`FunctionRow::borrowed`) を `params` と並べて持つ。印はどの位置の引数にも立てられる。印の立つ引数を extern は読むだけで、消費しない。基本操作の借用の引数 (下の「基本操作」) と同じく読む使いなので、Perceus は借りた変数を `dup` しない。借用が最後の使いなら、その命令の直後で手放す
+- 借りるのは、配列を読む4つの行 (`Std.Array.length`、`Std.Array.get`、`Std.MutArray.length`、`Std.MutArray.read`) の配列の引数と、`String` を読む10行の `String` の引数である。10行は、`Std.String.byte_length`、`byte_at`、`slice`、`find_from` (探す文字列と対象の両方)、`Prelude.Eq String.==` と `!=`、`Prelude.Ord String.compare` (両辺)、`Prelude.Show String.show`、`Std.Float.can_parse` と `parse_raw` である。読むたびに参照を渡して返す手間と、1バイトずつ読むループの `dup` を省くためである。`++`、`println`、`eprintln`、`Std.Fs.open`、`write_text`、`Std.Env` の行、`Std.Proc.status` は、引数を消費したままにする
+- 1つの命令が同じ変数を借りて、かつ消費するなら、その命令の前に参照が2つ要る。借用は命令の間じゅう続くので、消費に渡す参照とは別に1つ持つ必要があるためである。Perceus は、借りる変数を同じ命令が消費するなら、その変数を命令の後も生きているとみなして `dup` を置き、命令の後の `decref` が借用の分を手放す。verifier は、`dup` のないこの形を `` `e.0` is lent to `prim ev_renew` and consumed by the same instruction `` のように断る。借りるだけの使いと、別の変数を消費する使いは、この規則に当たらない
 - extern が失敗して中断しても、借りた引数は呼んだ側が持ったままである。巻き戻しの表は呼び出しの後に持っている値を手放すので、借りた引数もそこで手放す ([VM](vm.md) の「巻き戻し」)。消費する引数は、extern が手放す
 - `with_arg: Some(k)` の行 (`Std.MutArray.length` と `read`) は、宣言の型では結果と引数 k の組を返す。行の結果は組の最初の要素で、組は translate が作る ([Core IR](core-ir.md) の「組を返す extern」)。LIR の `extern` 命令は行の結果だけを束縛し、借りた引数 k はその後の `con` が消費する
 - 縮約は、`Lin` の引数を借りずに受ける `Pure` の行 (`Std.MutArray.freeze`) を消さない (下の「縮約」)
@@ -561,7 +562,7 @@ Perceus は、`switch` と `unpack` のフィールドを借りたまま使い�
 - o がその命令で必要なら、命令の前に `dup v` を置く。o はまだ所有されているので、v は有効である。4. はいつもこの場合である
 - o が必要でない (保持されている) なら、命令の前で o を解く (下の「持ち主を解く」)。o に属する生きている変数は、まとめて所有になる。2. はいつもこの場合である
 
-1つの命令の前では、所有を取る命令 (`dup` と、持ち主を解く命令) を先に置き、消費の数で数える `dup` をその後に置く。消費の数の `dup` は、同じ変数を2回以上消費するときと、消費した後も生きているときに要る。所有を取った後の変数は、ほかの所有の変数と同じに扱う。
+1つの命令の前では、所有を取る命令 (`dup` と、持ち主を解く命令) を先に置き、消費の数で数える `dup` をその後に置く。消費の数の `dup` は、同じ変数を2回以上消費するときと、消費した後も生きているときと、同じ命令が借りているときに要る。所有を取った後の変数は、ほかの所有の変数と同じに扱う。
 
 #### 持ち主を解く
 
@@ -661,7 +662,7 @@ reuse のパスは、Perceus が手放す箱を token にし、同じ物理的�
 - 変数 v が有効なのは、v の所有の数が1つ以上か、v の持ち主の所有の数が1つ以上のときである。1回の参照で決まるので、verifier は線形のままである。所有の数が正なら、その経路は実際の参照を持ち、物体は生きている。データは変更されないので、その下の物体もすべて生きている
 - 所有の段では、次の規則を確かめる
   - 分解 (case のフィールド、`unpack`): 値は見えて有効な RC の対象の変数である。RC の対象のフィールドは所有の数0で始まる。借りた変数への `switch` と `unpack` も受け入れる
-  - 読む (`switch` の scrutinee、`unpack` の値、`unbox` のオペランド、`prim` の借用の引数、`dup` の対象): 見えて有効である。所有の数を変えない。ただし `dup v` は v の所有の数を1つ増やす。`prim` の借用の引数が変数でない値なら、消費と同じ検査 (関数の値の番号) だけを通す
+  - 読む (`switch` の scrutinee、`unpack` の値、`unbox` のオペランド、`prim` と extern の借用の引数、`dup` の対象): 見えて有効である。所有の数を変えない。ただし `dup v` は v の所有の数を1つ増やす。`prim` の借用の引数が変数でない値なら、消費と同じ検査 (関数の値の番号) だけを通す。借りる変数を同じ命令が消費するなら、所有の数が消費の数より多くなければならない
   - 消費と `decref v`: 見えて、v の所有の数が1つ以上である。1つ減らす。1つの命令の中では左から順に当てる
   - `release x L #t(p1, .., pn)`: 名前が1つ以上あるか、token を定義する。x の所有の数が1つ以上である。名前を書いた各 pi は見えて、Repr が RC の対象で、出どころが `(x, L #t, i)` である。その後、x を1つ減らし、各 pi を1つ増やす。1つの位置には1つの名前しか書けないので、同じフィールドを2つの変数が引き継ぐことはない
   - 名前のない `release` では、その道で x の構築子が `L #t` だと分かっている。箱の子は `L #t` の形で手放され、token の語の数も `L #t` で決まるので、違う構築子なら fast mode で記憶がおかしくなるためである。分かっている構築子は reuse のパスと同じく道ごとに持つ。タグの case の行き先はその scrutinee の、`unpack` はその値の構築子を知り、合流するブロックには入るすべての道で分かっているものだけが残る。フィールドのない構築子は数えない。名前のある `release` には求めない。出どころが x を `L #t` として分解したことを示すうえ、両立しない2つの `switch` を通る死んだ道では、分かっている構築子が出どころと食い違うことがあるためである
@@ -686,6 +687,7 @@ reuse のパスは、Perceus が手放す箱を token にし、同じ物理的�
 - 所有の段の誤りの文言は次のとおりである
   - `` `x.1` is {used|released} but is only borrowed from `d.0` ``: 持ち主が所有されている間に、所有の数0の変数を消費したか、`decref` か `release` で手放した
   - `` `x.1` is {duplicated|switched on|unpacked|unboxed|lent to `prim ev_evv`} after its owner `d.0` was given up ``: 無効な変数を読んだ。`prim` の借用の引数では、基本操作をテキストの形 (即値を含む) で書く。extern の借用の引数では、行の名前を書く (``lent to `Std.Array.get` ``)
+  - `` `x.1` is lent to `Std.Array.get` and consumed by the same instruction ``: 借りる変数を同じ命令が消費するのに、所有の数が消費の数以下である。`prim` の借用の引数では、基本操作をテキストの形で書く (``lent to `prim ev_renew` ``)
   - `` `x.1` is not field 0 of `d.0` as `Option` #1 ``: `release` の名前の出どころが違う
   - `` a release of `d.0` keeps no field `` と `` `x.1` is kept but is not reference counted ``: `release` の名前の誤り
   - `` `x.0` is released as `P` #0, but its constructor is not known on this path ``: 名前のない `release` の構築子が、その道で分かっていない

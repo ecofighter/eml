@@ -1225,6 +1225,41 @@ fn h(p.0: obj) -> obj {
 }
 
 #[test]
+fn a_variable_lent_and_consumed_by_one_statement_is_dupped() {
+    // `ev_renew` は第1引数を借りて第2引数を消費する。同じ変数を両方に渡すと、借用が文の間じゅう続くので、消費に渡す
+    // 参照とは別に1つ要る。`dup` を置き、文の後の `decref` が借用の分を手放す (docs/spec/lir.md の「extern の借用」)
+    let shown = perceus_text(
+        "\
+fn f(e.0: obj) -> obj {
+  let r.1: obj = prim ev_renew(e.0, e.0)
+  return r.1
+}
+fn g(e.0: obj) -> obj {
+  let r.1: obj = prim ev_renew(e.0, e.0)
+  let u.2: unit = prim ev_set_state(e.0, r.1)
+  return r.1
+}
+",
+    );
+    insta::assert_snapshot!(shown, @"
+    fn f(e.0: obj) -> obj {
+      dup e.0
+      let r.1: obj = prim ev_renew(e.0, e.0)
+      decref e.0
+      return r.1
+    }
+    fn g(e.0: obj) -> obj {
+      dup e.0
+      let r.1: obj = prim ev_renew(e.0, e.0)
+      dup r.1
+      let u.2: unit = prim ev_set_state(e.0, r.1)
+      decref e.0
+      return r.1
+    }
+    ");
+}
+
+#[test]
 fn perceus_leaves_a_borrowed_extern_argument_owned() {
     // `Std.Array.get` は配列を借りるので、後でまた使う `again` の `a.0` も `dup` しない。`last` の `a.0` は呼び出しの
     // 直後で `decref` する (docs/spec/lir.md の「extern の借用」)

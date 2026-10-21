@@ -112,6 +112,33 @@ fn appending_to_a_unique_string_copies_only_the_right_side() {
     assert!(stats.string_bytes_copied <= 4 * n as u64, "{stats:?}");
 }
 
+#[test]
+fn reading_bytes_of_a_string_does_not_dup_per_byte() {
+    // `byte_at` は文字列を借りるので、1バイトごとの `dup` は要らない。長さを2倍にしても `rc_increments` は変わらない。
+    // 引数を消費する行に戻ると、バイトの数だけ増えて落ちる (docs/spec/lir.md の「extern の借用」)
+    let program = |n: usize| {
+        format!(
+            "grow : Int -> String -> <Panic> String\n\
+             grow n acc = if n == 0 then acc else grow (n - 1) (acc ++ \"x\")\n\
+             \n\
+             sum_bytes : String -> Int -> Int -> Int -> <Panic> Int\n\
+             sum_bytes s i n acc =\n\
+             \x20 if i == n then acc else sum_bytes s (i + 1) n (acc + String.byte_at i s)\n\
+             \n\
+             main : Unit -> <IO, Panic> Unit\n\
+             main () =\n\
+             \x20 let s = grow {} \"s\"\n\
+             \x20 println (show (sum_bytes s 0 (String.byte_length s) 0))\n",
+            n - 1
+        )
+    };
+    let increments = |n: usize| {
+        let sum = 115 + 120 * (n as u64 - 1);
+        stats(&program(n), &format!("{sum}\n")).rc_increments
+    };
+    assert_eq!(increments(1000), increments(2000));
+}
+
 /// handler の下の非末尾の再帰。深さごとに1回 `ask` するので、`count n` は n 回 `ask` する。evidence は `evv` の
 /// 先頭から探すので、1回の `ask` がたどる節点の数は今有効な handler の数で決まり、深さによらない
 /// (docs/spec/lir.md の「evidence を探す」)。

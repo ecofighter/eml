@@ -7,9 +7,10 @@ use eml_test_support::{lir, lir_files, run_stats, run_stats_with_args};
 use eml_vm::RunStats;
 
 /// テストを持つ基準のプログラム。`bench/` にプログラムを足したら、ここと下のテストの関数の両方に足す。
-const PROGRAMS: [&str; 36] = [
+const PROGRAMS: [&str; 37] = [
     "apply_float",
     "apply_int",
+    "byte_loop",
     "empty",
     "ep_float",
     "fannkuch_by_hand",
@@ -118,6 +119,27 @@ fn every_program_in_bench_has_a_test() {
             "`{name}` has no test function"
         );
     }
+}
+
+#[test]
+fn byte_loop() {
+    insta::assert_debug_snapshot!(stats("byte_loop", "11999995\n"), @"
+    RunStats {
+        evidence_steps: 0,
+        yields: 0,
+        yield_frames: 0,
+        unwound_frames: 0,
+        string_bytes_copied: 100008,
+        rc_increments: 0,
+        rc_decrements: 16,
+        boxes: 0,
+        unboxes: 0,
+        allocations: 17,
+        reuses: 0,
+        peak_objects: 3,
+        peak_stack: 17,
+    }
+    ");
 }
 
 #[test]
@@ -660,8 +682,8 @@ fn upsert() {
         yield_frames: 0,
         unwound_frames: 0,
         string_bytes_copied: 157580,
-        rc_increments: 436140,
-        rc_decrements: 482143,
+        rc_increments: 25952,
+        rc_decrements: 71955,
         boxes: 22000,
         unboxes: 58815,
         allocations: 46004,
@@ -681,8 +703,8 @@ fn upsert_by_hand() {
         yield_frames: 0,
         unwound_frames: 0,
         string_bytes_copied: 157580,
-        rc_increments: 436140,
-        rc_decrements: 482143,
+        rc_increments: 25952,
+        rc_decrements: 71955,
         boxes: 22000,
         unboxes: 58815,
         allocations: 46004,
@@ -1048,6 +1070,7 @@ fn unwind_points() {
     insta::assert_snapshot!(lines.join("\n"), @"
     apply_float: 9
     apply_int: 13
+    byte_loop: 7
     empty: 0
     ep_float: 15
     fannkuch_by_hand: 39

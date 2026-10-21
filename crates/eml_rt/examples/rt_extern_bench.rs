@@ -62,7 +62,7 @@ fn decref(ctx: &mut Ctx<Fast>, w: Word) {
     unsafe { ctx.heap_mut().decref(w) }.unwrap();
 }
 
-/// 参照を1つ足す。extern は引数の参照を受け取って手放すので、同じ文字列を何度も渡すために使う。
+/// 参照を1つ足す。引数を消費する extern に、同じ文字列を何度も渡すために使う。借りる extern には要らない。
 fn dup(ctx: &mut Ctx<Fast>, w: Word) {
     // SAFETY: w は呼ぶ側が参照を持つ生きた物体である。
     unsafe { ctx.heap_mut().dup(w) }.unwrap();
@@ -80,9 +80,7 @@ fn string_eq(early: bool) {
     };
     let b = string(&mut ctx, &other);
     for _ in 0..rounds {
-        dup(&mut ctx, a);
-        dup(&mut ctx, b);
-        // SAFETY: a と b は生きた文字列で、渡す参照は直前の dup で作った。
+        // SAFETY: a と b は生きた文字列で、呼ぶ側が参照を持つ。string_eq は借りるだけで手放さない。
         black_box(unsafe { ctx.string_eq(black_box(a), black_box(b)) }.unwrap());
     }
     decref(&mut ctx, a);
@@ -95,8 +93,6 @@ fn compare() {
     let a = string(&mut ctx, &format!("{}a", "x".repeat(LONG - 1)));
     let b = string(&mut ctx, &format!("{}b", "x".repeat(LONG - 1)));
     for _ in 0..10_000 {
-        dup(&mut ctx, a);
-        dup(&mut ctx, b);
         // SAFETY: string_eq と同じ。
         black_box(unsafe { ctx.string_compare(black_box(a), black_box(b)) }.unwrap());
     }
@@ -136,8 +132,7 @@ fn show_string(text: &str) {
     let mut ctx = ctx();
     let s = string(&mut ctx, text);
     for _ in 0..100_000 {
-        dup(&mut ctx, s);
-        // SAFETY: s は生きた文字列で、渡す参照は直前の dup で作った。
+        // SAFETY: s は生きた文字列で、呼ぶ側が参照を持つ。string_show は借りるだけで手放さない。
         let shown = unsafe { ctx.string_show(black_box(s)) }.unwrap();
         decref(&mut ctx, black_box(shown));
     }
