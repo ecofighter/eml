@@ -33,11 +33,15 @@ eml の目的、言語の性格、確定した設計判断の一覧、文書全�
 | 継続 | 継続 `k` は普通の関数で、`k v` で再開する。状態のある handler では `k v st` と書く。`once` の `k` は `Lin` の矢印を持ち、`ctl` の節は、戻らない呼び出し (`fail`、`exit` など) で終わる経路を除き、`k` を呼ぶか `drop k` を必ず書く。`fn` の節は `k` を書かず、本体の値で再開する。`multi` の `k` は `Unr` の矢印を持つ | [エフェクトと handler](spec/effects.md) |
 | handler の意味 | deep handler。再開した継続の中でも同じ handler が有効なまま | [エフェクトと handler](spec/effects.md) |
 | `IO` | Prelude が宣言する組み込みの extern のエフェクトで、操作は `never` の `io_failed` だけである。`io_failed` は Prelude の外から見えず、Prelude の `try_io` だけが `IO` を handle する。利用者は `IO` を handle できない。`println` などは `<IO>` を持つ `extern` の関数である | [エフェクトと handler](spec/effects.md) の「組み込みの `IO`」、[標準ライブラリ](spec/stdlib.md) の「`try_io`」 |
+| `Panic` | Prelude が宣言する組み込みの extern のエフェクトで、値と入力で決まる誤りを表す。整数の桁あふれとゼロ除算、文字列の範囲外の位置、範囲外のスクリプトの引数などを起こしうる関数は、最後の矢印の row に `Panic` を持つ。操作は `never` の `panicked` だけで、Prelude の外から見えない。Prelude の `panic` で起こし、`try_panic` だけが handle する | [エフェクトと handler](spec/effects.md) の「組み込みの `Panic`」、[標準ライブラリ](spec/stdlib.md) の「`try_panic`」 |
+| `var` | 局所の可変の変数で、ブロックの文 `var x = e` で宣言し、`x <- e` で書き換え、配列の変数は `x[i]` で読み書きする。`var` の地点ごとに合成のエフェクトを1つ作り、変数を使う所はその row を求める | [式](spec/expressions.md) の「`var`」、[エフェクトと handler](spec/effects.md) の「`var` のエフェクト」 |
 | 暗黙の後始末 | 通常の制御フローでは行わない。例外は2つで、中断では外れるフレームの値を巻き戻しが解放し、戻らない呼び出し (`fail`、`exit` など) で終わる経路では、消費しない `Lin` の値を呼び出しの前で手放す。破棄処理は物体の解放だけで、エフェクトを起こさず、失敗もしない | [線形性](spec/linearity.md) の「暗黙の後始末」、[エフェクトと handler](spec/effects.md) |
 | 型付け | Bidirectional Typing + 単一化。トップレベルの関数は引数と戻り値の型注釈が必須。トップレベルの関数の row はシグネチャで決まり、省略した row は `<>` (純粋) である。Kind は推論する | [型と Kind](spec/types.md) |
 | 直積型 | レコードは名前的で、`data` のコンストラクタにフィールドの名前を付けて宣言する (`data Person = \| Person { name : String, age : Int }`)。どのコンストラクタにもフィールドの名前を付けられ、射影 `p.name` と更新 `{ p \| age = 31 }` はコンストラクタが1つの型でだけ使える。タプルは構造的なままで、`t.0` で射影する。Unit は 0 要素のタプル `()` である。Kind はフィールドの Kind の join で推論する | [直積型とレコード](spec/records.md) |
 | 単相化 | 関数のコードは (関数, 型引数) の instance ごとに単相化し、データの配置は一様のままにする。多相再帰で大きくなる型変数の位置と handler の節の型変数は、一様な位置 (`tobj`) として扱う | [Core IR](spec/core-ir.md) の「変換の規則」 |
 | 等価、比較、表示 | 型クラス `Eq`、`Ord`、`Show` を Prelude に置く。`class` と `instance` の宣言、シグネチャの制約 `Eq a =>`、`deriving` を持つ。証拠は Core IR への変換の単相化で決め、実行時の辞書は持たない | [宣言](spec/declarations.md) の「クラスと instance」、[型と Kind](spec/types.md) の「制約」 |
+| 数 | `Int` は 64 ビットの符号付き整数、`Float` は IEEE 754 の倍精度の浮動小数である。リテラルは単相で、型はそれぞれ `Int` と `Float` になる。算術は Prelude のクラス `Num` (`+ - *`、`negate`) と `Div` (`/ %`) のメソッドで、`Int` と `Float` がそれぞれ instance を持つ | [型と Kind](spec/types.md) の「数の型」 |
+| 配列 | `Array a` と `MutArray a` は Prelude の extern の型である。`Array` は意味の上で書き換わらず、Kind は要素に従う。`MutArray` は Kind が常に `Lin` で、線形に受け渡して使う | [標準ライブラリ](spec/stdlib.md) の「`Std.Array`」「`Std.MutArray`」 |
 
 ### 構文
 
