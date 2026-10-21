@@ -34,9 +34,9 @@ pub fn contract(program: &mut Program) {
 
 /// `let x = <呼び出し>` の後の終端が `return x` なら、その2つを末尾呼び出しにする。複数の値を返す呼び出しは、
 /// `let (x.0, .., x.n) = <呼び出し>` の後の `return (x.0, .., x.n)` (同じ並び、同じ順) を同じく末尾呼び出しにする
-/// (docs/superpowers/specs/2026-10-21-s14e-abi-struct-design.md の「LIR」の後のパス)。結果の Repr が関数の結果と
+/// (docs/spec/lir.md の「縮約」)。結果の Repr が関数の結果と
 /// 互換でなくてもよい。結果の変換は VM の変換のフレームが行い、末尾呼び出しの間で合成する
-/// (docs/superpowers/specs/2026-10-21-s14e-abi-struct-design.md の「box の挿入」)。印の互換は推移的でないので、
+/// (docs/spec/lir.md の「末尾の位置の呼び出し」)。印の互換は推移的でないので、
 /// x を通してつながっていた結果の印 (関数値の適用なら `poly`) と関数の戻り値の印を、値ごとに直接つないでも互換かを
 /// 確かめる。値の数が違う形 (構造体と箱の間) の印は変換のフレームが受け渡すので比べない。`never` の操作の節の
 /// 呼び出しは戻らないので、どの戻り値の印とも互換とする (docs/spec/lir.md の「縮約」と「Kind の印」)。
@@ -133,7 +133,7 @@ fn remove_dead_lets(function: &mut LirFn) -> bool {
                 // 構造体の `unbox` は箱を読むだけの純粋な `let` である。使われない葉は `_` にして読まない。葉がどれも
                 // 使われない `unbox` は、箱が `unr` か、末尾の位置の呼び出しの後ろにあれば消す。後者は開くパスの
                 // 覗き穴が残すもので、消すと末尾の位置の呼び出しの形が保たれる
-                // (docs/superpowers/specs/2026-10-21-s14e-abi-struct-design.md の「LIR」)。`unr` でない箱の
+                // (docs/spec/lir.md の「縮約」)。`unr` でない箱の
                 // `unbox` は残す。Perceus はこの文で箱を知り、箱を手放す所を `decref` (V1 が拒む) でなく `drop` に
                 // する。末尾の位置では箱を呼び出しの結果として返すので、手放す所がない
                 Stmt::UnboxStruct { value, fields, .. } => {

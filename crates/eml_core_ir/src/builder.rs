@@ -63,7 +63,7 @@ impl FnBuilder {
     }
 
     /// 型どおりの `apply` の場所。変数の引数は変数の Repr にし、定数の引数は `constant` が引数の位置から決める Repr に
-    /// する (docs/superpowers/specs/2026-10-21-s14e-abi-struct-design.md の「`apply` の ABI」)。
+    /// する (docs/spec/lir.md の「`apply` の場所」)。
     pub(crate) fn typed_site(&self, args: &[Atom], constant: impl Fn(usize) -> Repr) -> Site {
         Site::Typed(self.typed_reprs(args, constant))
     }

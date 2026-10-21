@@ -460,7 +460,7 @@ pub(crate) fn box_scalar<M: Mode>(
 
 /// 箱 `w` からスカラーを取り出し、箱を手放す。一様な値から取り出す変換は値を消費する。スカラーは中身に参照を持たない
 /// ので、取り出した後に箱を `decref` すれば、一意なら箱を空けることになる
-/// (docs/superpowers/specs/2026-10-21-s14e-abi-struct-design.md の「VM」)。
+/// (docs/spec/vm.md の「変換のフレーム」)。
 pub(crate) fn unbox_scalar<M: Mode>(
     ctx: &mut Ctx<M>,
     counts: &mut RunCounts,
@@ -476,7 +476,7 @@ pub(crate) fn unbox_scalar<M: Mode>(
     Ok(Word::from_bits(bits as usize))
 }
 
-/// 構造体の箱 `w` がダミーか (docs/superpowers/specs/2026-10-21-s14e-abi-struct-design.md の「ダミーの約束を広げる」)。
+/// 構造体の箱 `w` がダミーか (docs/spec/vm.md の「データとクロージャ」)。
 /// 速いモードは物体の種類で見分ける。ダミーは `BigInt` の物体で、構造体の箱はいつも `Data` である。検査モードは
 /// ヒープのダミーと同じ語であることも確かめ、ダミーでない `BigInt` を断る。1回の実行の中ではダミーは1つで、回復は
 /// スタックを捨てるので、語で比べてよい。
@@ -498,7 +498,7 @@ fn is_dummy<M: Mode>(ctx: &Ctx<M>, w: Word) -> Result<bool, VmFault> {
     Ok(true)
 }
 
-/// 構造体の `unbox` (docs/superpowers/specs/2026-10-21-s14e-abi-struct-design.md の「LIR」)。フィールドは箱から借りて
+/// 構造体の `unbox` (docs/spec/vm.md の「データとクロージャ」)。フィールドは箱から借りて
 /// 読む。箱がダミーなら、参照のフィールドにはダミーを、生のフィールドにはビット列 0 を書く。box の挿入は呼び出しの
 /// 結果を受け直す `unbox` を yield の確認の前に置くので、ダミーを受けうるためである。`vm::step` に展開しないのは、
 /// 複数の値の命令と同じ理由である。
@@ -560,8 +560,7 @@ pub(crate) fn release_unboxed<M: Mode>(
     }
 }
 
-/// 構造体 `id` の葉 `leaves` を、配置の `con` と同じ形の箱に入れる (docs/superpowers/specs/2026-10-21-s14e-abi-struct-design.md
-/// の「箱に入れる位置」)。葉は配置の宣言したフィールドの Repr に合わせ、`tobj` のフィールドに入るスカラーは箱に入れ、
+/// 構造体 `id` の葉 `leaves` を、配置の `con` と同じ形の箱に入れる (docs/spec/lir.md の「開く」)。葉は配置の宣言したフィールドの Repr に合わせ、`tobj` のフィールドに入るスカラーは箱に入れ、
 /// 入れ子の構造体は再帰で箱にする。`unit` の葉は `()` を書く。葉の参照は箱に移る。実行時に作る箱には `lin` ビットを
 /// 立てない。`FnEntry` と呼ぶ所は印を持たないためで、安全な側である。箱は `boxes` に数える。
 pub(crate) fn box_struct<M: Mode>(

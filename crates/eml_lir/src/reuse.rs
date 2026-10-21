@@ -90,7 +90,7 @@ struct Planner<'a> {
     origins: Vec<Option<(VarId, Ctor, usize)>>,
     /// 構造体の `unbox` が読む箱。その `decref` から作る token の `release` にも、Perceus の `release` と同じ印を
     /// 付ける。箱がダミーなら空の token を作るためである
-    /// (docs/superpowers/specs/2026-10-21-s14e-abi-struct-design.md の「ダミーの約束を広げる」)。
+    /// (docs/spec/lir.md の「ダミーの値」)。
     unboxed: Vec<bool>,
     tokens: Vec<Token>,
     /// token を受ける `con` の位置と、その受け方。
@@ -210,7 +210,7 @@ impl<'a> Planner<'a> {
     fn stmt(&mut self, path: &mut Path, at: At, stmt: &Stmt) {
         match stmt {
             // 構造体の `unbox` も `unpack` と同じく箱の構築子を知らせる
-            // (docs/superpowers/specs/2026-10-21-s14e-abi-struct-design.md の「LIR」)
+            // (docs/spec/lir.md の「reuse の元」)
             Stmt::Unpack { value, ctor, .. } | Stmt::UnboxStruct { value, ctor, .. } => {
                 path.known.insert(*value, *ctor);
             }

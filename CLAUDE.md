@@ -52,7 +52,7 @@ eml_cli          check / run / repl; the only pipeline driver (`Session`); stage
 eml_vm           LIR -> register bytecode (`CodeBase`) run on `eml_rt`'s `Ctx`; `Machine` appends programs by name (the REPL)
 eml_rt           runtime core shared by the VM and native code; depends only on vstd, verified with Verus
 eml_core_ir      typed HIR -> Core IR (translate -> optimize -> evidence), then `to_lir` and the LIR passes
-eml_lir          LIR (leaf crate on `eml_extern` only): types both IRs share, boxing -> contract -> Perceus -> reuse, verifier
+eml_lir          LIR (leaf crate on `eml_extern` only): types both IRs share, boxing -> flatten -> contract -> Perceus -> reuse, verifier
 eml_types        Kind / type / row inference, class constraints; linearity, multiplicity, and exhaustiveness checks
 eml_hir          module loading, CST -> HIR, name resolution
 eml_syntax       logos lexer, layout stage, event-based parser, rowan CST, typed AST wrappers

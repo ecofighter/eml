@@ -1,4 +1,4 @@
-//! 型どおりの `apply` と、実行時の変換 (docs/superpowers/specs/2026-10-21-s14e-abi-struct-design.md の「VM」)。
+//! 型どおりの `apply` と、実行時の変換 (docs/spec/vm.md の「シグネチャ」)。
 //! 関数は一様でなく、`apply` の場所は引数と結果の Repr を持つ。速い道では箱を作らず、呼ぶ所と関数の Repr が合わない
 //! 引数だけを `box` か `unbox` で変える。捕まえた値と部分適用の引数は関数の引数の Repr のまま持つ。
 
@@ -822,7 +822,7 @@ fn ui_programs_take_the_conversion_paths_they_describe() {
 
 /// 値として使うコンストラクタは型ごとの instance (`con$Some@[Int]`) なので、型どおりの `apply` は速い道を通る。
 /// スキームから決めた包む関数 (引数が `tobj`) では、呼ぶたびに引数を変換していた
-/// (docs/superpowers/specs/2026-10-21-s14e-abi-struct-design.md の「関数の ABI」)。残る `box` は `Some` の
+/// (docs/spec/lir.md の「関数の ABI」)。残る `box` は `Some` の
 /// フィールドに `Int` を入れる箱である。
 #[test]
 fn a_constructor_value_applied_at_its_type_does_not_convert() {

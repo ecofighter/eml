@@ -2891,7 +2891,7 @@ fn derived_generators_are_unr() {
 #[test]
 fn wrappers_take_the_reprs_and_marks_of_their_instance() {
     // `op$` と `con$` は型ごとの instance なので、型変数の位置も具体化した型の Repr と印になる
-    // (docs/superpowers/specs/2026-10-21-s14e-abi-struct-design.md の「関数の ABI」)
+    // (docs/spec/lir.md の「関数の ABI」)
     let text = "effect Pass e where\n  pass : e -> Fs.File -> e\n\ndata Box a = | Box a Fs.File\n\nuse_op : (Int -> Fs.File -> <Pass Int, IO> Int) -> <Pass Int, IO> Int\nuse_op op = op 1 (Fs.open \"a.txt\")\n\nmain : Unit -> <IO> Unit\nmain () =\n  let n = handle use_op pass with\n    | ctl pass x g k ->\n        Fs.close g\n        k x\n  let mk = Box n\n  match mk (Fs.open \"a.txt\") with\n    | Box m f ->\n        Fs.close f\n        println (show m)";
     let ir = core_text(text, Pass::Translate);
     insta::assert_snapshot!(function(&ir, "op$pass@[Int]"), @r#"
@@ -2916,7 +2916,7 @@ const CLOSE_OPT: &str = "close_opt : Option (List Fs.File) -> <IO> Unit\nclose_o
 fn a_leaf_that_binds_nothing_non_unr_drops_the_matched_value() {
     // `[]` の葉も `(n, [])` の葉も、`lin` の引数から `unr` でない変数を何も束縛しないので、引数を `drop` する。
     // `(n, [])` の引数は構造体で箱がないので、分解した `unr` でないフィールドを `drop` する
-    // (docs/superpowers/specs/2026-10-21-s14e-abi-struct-design.md の「Kind の印と RC」)
+    // (docs/spec/lir.md の「構造体の形」)
     let text = format!(
         "{CLOSE_ALL}go : (Int, List Fs.File) -> <IO> Int\ngo p =\n  match p with\n    | (n, []) -> n\n    | (n, f :: rest) ->\n        Fs.close f\n        close_all rest\n        n\n\nmain : Unit -> <IO> Unit\nmain () =\n  println (show (go (1, [Fs.open \"input.txt\"])))\n  println (show (go (2, [])))"
     );
@@ -3400,7 +3400,7 @@ fn taking_only_unr_fields_out_of_a_lin_value_drops_it() {
     // `Lin` と宣言した型のフィールドが `unr` だけなら、射影も更新も `unr` でないフィールドを取り出さないので、分解した
     // 直後に値を `drop` する。しないと、Perceus は値を `release` で解かず、`decref` が V1 に反する
     // (docs/spec/core-ir.md の「変換の規則」)。所有の段の検査まで通す。フィールドが7語あるので `Ledger` は構造体に
-    // ならず、箱を持つ (docs/superpowers/specs/2026-10-21-s14e-abi-struct-design.md の「構造体にする型」)
+    // ならず、箱を持つ (docs/spec/core-ir.md の「構造体にする型」)
     let text = "data Ledger : Lin =\n  | Ledger { entries : List Int, owner : String, a : Int, b : Int, c : Int, d : Int, e : Int }\n\nempty : Ledger -> Bool\nempty l =\n  match l.entries with\n    | [] -> True\n    | _ -> False\n\nmain : Unit -> <IO> Unit\nmain () = println (show (empty (Ledger { entries = [1], owner = \"a\", a = 0, b = 0, c = 0, d = 0, e = 0 })))";
     let ir = core_text(text, Pass::Translate);
     insta::assert_snapshot!(function(&ir, "empty"), @"
@@ -3420,7 +3420,7 @@ fn taking_only_unr_fields_out_of_a_lin_value_drops_it() {
 #[test]
 fn taking_only_unr_fields_out_of_a_lin_struct_drops_nothing() {
     // 構造体になる `Lin` の値は箱を持たず、`unr` のフィールドは Perceus が1つずつ手放すので、分解した値を `drop`
-    // しない (docs/superpowers/specs/2026-10-21-s14e-abi-struct-design.md の「Kind の印と RC」)。所有の段の検査まで通す
+    // しない (docs/spec/lir.md の「構造体の形」)。所有の段の検査まで通す
     let text = "data Ledger : Lin =\n  | Ledger { entries : List Int, owner : String }\n\nempty : Ledger -> Bool\nempty l =\n  match l.entries with\n    | [] -> True\n    | _ -> False\n\nrename : Ledger -> Ledger\nrename l = { l | owner = \"b\" }\n\nmain : Unit -> <IO> Unit\nmain () = println (show (empty (rename (Ledger { entries = [1], owner = \"a\" }))))";
     let ir = core_text(text, Pass::Translate);
     insta::assert_snapshot!(function(&ir, "empty"), @"
@@ -3556,7 +3556,7 @@ fn a_var_lowers_to_a_handle() {
 /// `return` の節は `Return` になる。
 /// `apply` の場所は、変数の引数には変数の Repr を、定数の引数にはその矢印の引数の型の Repr を並べる。`None` は
 /// `#0` だが、`Option Int` の位置なので `enum` でなく `tobj` になる
-/// (docs/superpowers/specs/2026-10-21-s14e-abi-struct-design.md の「関数の ABI」「`apply` の ABI」)。
+/// (docs/spec/lir.md の「関数の ABI」と「`apply` の場所」)。
 #[test]
 fn lambda_and_handler_roles() {
     use eml_core_ir::{Call, Rhs, Stmt, pretty};
@@ -3676,7 +3676,7 @@ fn layout_line(shown: &str, name: &str) -> String {
 }
 
 /// コンストラクタが1つの小さな data は構造体である
-/// (docs/superpowers/specs/2026-10-21-s14e-abi-struct-design.md の「構造体にする型」)。
+/// (docs/spec/core-ir.md の「構造体にする型」)。
 #[test]
 fn a_small_record_is_a_struct() {
     let text = "data Point = | Point { x : Float, y : Float }\n\npx : Point -> Float\npx p = p.x\n\nmain : Unit -> <IO> Unit\nmain () = println (show (px (Point { x = 1.0, y = 2.0 })))";
@@ -3767,7 +3767,7 @@ fn a_scheme_variable_is_a_tobj_leaf() {
 }
 
 /// 配置で構造体の型を宣言したフィールドは、型変数のフィールドと同じ一様な位置の `tobj` である
-/// (docs/superpowers/specs/2026-10-21-s14e-abi-struct-design.md の「箱に入れる位置」)。
+/// (docs/spec/core-ir.md の「translate の配置」)。
 #[test]
 fn a_struct_typed_field_is_tobj_in_its_layout() {
     let text = "data Vec3 = | Vec3 Float Float Float\ndata Shape = | Ball Vec3 Float | Empty\n\nradius : Shape -> Float\nradius s =\n  match s with\n    | Ball _ r -> r\n    | Empty -> 0.0\n\nmain : Unit -> <IO> Unit\nmain () = println (show (radius (Ball (Vec3 0.0 0.0 0.0) 1.0)))";
@@ -3779,7 +3779,7 @@ fn a_struct_typed_field_is_tobj_in_its_layout() {
 }
 
 /// 構造体の変数の印は、ほかの型と同じく型の Kind から決める。RC の対象でないことを理由に `unr` にしない
-/// (docs/superpowers/specs/2026-10-21-s14e-abi-struct-design.md の「Kind の印と RC」)。
+/// (docs/spec/core-ir.md の「translate が決める印」)。
 #[test]
 fn a_struct_takes_its_mark_from_its_kind() {
     let text = "import MutArray\n\nmeasure : MutArray Int -> (Int, MutArray Int)\nmeasure a = MutArray.length a\n\nmain : Unit -> <IO, Panic> Unit\nmain () =\n  let (n, a) = measure (MutArray.make 3 0)\n  drop a\n  println (show n)";

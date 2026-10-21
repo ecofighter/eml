@@ -180,8 +180,8 @@ impl Specializer {
         }
         let mut function = self.translated[key.callee.0 as usize].clone();
         function.name = self.copy_name(&key);
-        // ABI は名前で決まるので、複製は呼び出し先の印を写す。値として生まれた関数 (ラムダ、節と `return` の節) の複製は
-        // 内部の関数で、ほかの関数の複製は内部の関数でない (docs/spec/lir.md の「一様な関数」)
+        // 複製は呼び出し先の `internal` の印と役割を写す。値として生まれた関数 (ラムダ、節と `return` の節) の複製は
+        // 内部の関数で、ほかの関数の複製は内部の関数でない (docs/spec/core-ir.md の「鍵と名前」)
         let mut params = Vec::new();
         let mut opened = HashMap::new();
         for (position, param) in function.params().to_vec().into_iter().enumerate() {

@@ -129,7 +129,7 @@ struct Fields<'a> {
     marks: Vec<Mark>,
     /// 構造体の `unbox` が読む箱。箱は構造体の変数の印を持ち、`lin` か `poly` なら `decref` できない (V1) ので、
     /// 手放す所で `drop` にする。名前を書いて解く `release` には印を付ける。VM がダミーを受けても何もしない命令に
-    /// するためである (docs/superpowers/specs/2026-10-21-s14e-abi-struct-design.md の「ダミーの約束を広げる」)。
+    /// するためである (docs/spec/lir.md の「ダミーの値」)。
     unboxed: Vec<bool>,
     parent: Vec<Option<Parent>>,
     /// 束縛の時点の持ち主。verifier と同じく、親が所有されていれば親、そうでなければ親の持ち主である
@@ -237,7 +237,7 @@ impl Fields<'_> {
 
     /// 所有していて、属する生きている変数のない `var` を手放す。構造体の `unbox` の箱で `unr` でないものは `drop` に
     /// する。葉を借りていた箱だが、ここでは生きている葉がないので、箱ごと手放してよい
-    /// (docs/superpowers/specs/2026-10-21-s14e-abi-struct-design.md の「LIR」)。
+    /// (docs/spec/lir.md の「Perceus」)。
     fn discard(&mut self, var: VarId, out: &mut Vec<Stmt>) {
         if !self.unboxed[var.0 as usize] || self.marks[var.0 as usize] == Mark::Unr {
             out.push(Stmt::Decref(var));
@@ -329,7 +329,7 @@ impl Fields<'_> {
                 self.lend(state, fields.iter().copied(), |var| live.contains(&var));
             }
             // 構造体の `unbox` の葉は、`unpack` のフィールドと同じく箱から借りる
-            // (docs/superpowers/specs/2026-10-21-s14e-abi-struct-design.md の「LIR」)
+            // (docs/spec/lir.md の「Perceus」)
             Stmt::UnboxStruct {
                 value,
                 ctor,

@@ -55,7 +55,7 @@ fn h(s.0: int, b.1: tobj, a.2: tobj, x.3: tobj, r.4: tobj) -> int {
 }
 
 /// 構造体の Repr は LIR と同じく、配置の名前と、フィールドごとの Repr と印で書く
-/// (docs/superpowers/specs/2026-10-21-s14e-abi-struct-design.md の「構造体の Repr」)。
+/// (docs/spec/lir.md の「構造体の形」)。
 #[test]
 fn struct_text_round_trips() {
     let program = round_trip(
@@ -611,7 +611,7 @@ fn prompt_marker_round_trips() {
 
 /// 役割は `fn` の前に `role R` で書き、`Typed` は何も書かない。`apply` の場所は、型どおりなら定数の引数にだけ
 /// `: repr` を書き、変数の引数の Repr は変数から読む。EP の一様な場所は `uniform apply` と書く
-/// (docs/superpowers/specs/2026-10-21-s14e-abi-struct-design.md の「関数の ABI」「`apply` の ABI」)。
+/// (docs/spec/lir.md の「関数の ABI」と「`apply` の場所」)。
 #[test]
 fn roles_and_sites_round_trip() {
     let program = round_trip(

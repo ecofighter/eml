@@ -49,7 +49,7 @@ fn f() -> int {
 fn a_typed_apply_converts_only_a_constant_to_its_entry() {
     // 型どおりの場所は引数と結果を場所の Repr で渡すので、変数の引数も結果も変換しない。場所が `tobj` とする定数だけを
     // `box` し、場所の Repr は変換した後の値を表す
-    // (docs/superpowers/specs/2026-10-21-s14e-abi-struct-design.md の「`apply` の ABI」)
+    // (docs/spec/lir.md の「`apply` の場所」)
     let text = "\
 fn f(c.0: tobj, n.1: int) -> int {
   let r.2: int = apply c.0(n.1, 5: tobj)
@@ -92,7 +92,7 @@ fn f(c.0: tobj, n.1: int) -> int {
 #[test]
 fn a_direct_call_to_a_lambda_converts_nothing() {
     // 内部の関数も型どおりの ABI を持つので、展開しないラムダを直接呼ぶ所に `box` も `unbox` も入らない
-    // (docs/superpowers/specs/2026-10-21-s14e-abi-struct-design.md の「関数の ABI」)
+    // (docs/spec/lir.md の「関数の ABI」)
     let text = "\
 internal fn main$lambda0(x.0: float) -> float {
   let y.1: float = extern \"Prelude.Num Float.+\"(x.0, 1.0)
@@ -120,7 +120,7 @@ fn main(x.0: float) -> float {
 #[test]
 fn a_role_boxes_only_its_uniform_positions() {
     // 節の関数は `k` と状態と結果だけが一様である。捕まえた `n` と操作の引数 `x` は `int` のまま受ける
-    // (docs/superpowers/specs/2026-10-21-s14e-abi-struct-design.md の「関数の ABI」)
+    // (docs/spec/lir.md の「関数の ABI」)
     let text = "\
 internal role clause fn g(n.0: int, x.1: int, k.2: tobj, s.3: int) -> int {
   let t.4: int = extern \"Prelude.Num Int.+\"(n.0, x.1)
@@ -167,7 +167,7 @@ fn main() -> int {
 fn an_incompatible_tail_call_becomes_tail() {
     // `g` は `tobj` を返し、`f` は `int` を返す。末尾の位置の呼び出しの束縛と `return` には変換を入れないので、縮約が
     // `tail` にする。結果の変換は VM の変換のフレームが行う
-    // (docs/superpowers/specs/2026-10-21-s14e-abi-struct-design.md の「box の挿入」)
+    // (docs/spec/lir.md の「末尾の位置の呼び出し」)
     let text = "\
 fn g(x.0: tobj) -> tobj {
   return x.0
@@ -588,7 +588,7 @@ fn a_struct_passed_to_a_uniform_position_is_boxed() {
     // 構造体は箱を要する Repr として、一様な位置 (EP の一様な場所の引数と結果、`tobj` のフィールド) との間で変換する。
     // 箱の束縛は `obj` で、`tobj` の位置へ命令なしで渡る。受け直した構造体を `tobj` の位置へ渡すときは、`box` せずに
     // 元の箱を渡す。足す変数は元の変数の印を写す
-    // (docs/superpowers/specs/2026-10-21-s14e-abi-struct-design.md の「LIR」の box の挿入)
+    // (docs/spec/lir.md の「box の挿入」)
     let text = "\
 layout (,) { (,)(tobj, tobj) }
 layout Option { None, Some(tobj) }
@@ -619,7 +619,7 @@ fn f(c.0: tobj, v.1: P{int, obj lin} lin) -> obj lin {
 fn a_struct_parameter_in_a_role_position_is_unboxed_at_entry() {
     // 役割が一様にする位置の構造体の引数は、入口で `unbox` して受け直す。捕獲の位置は型どおりなので、構造体のまま
     // 受ける。`clause` の印の関数は、操作の表が `obj` とする構造体の引数を同じく受け直す
-    // (docs/superpowers/specs/2026-10-21-s14e-abi-struct-design.md の「LIR」の box の挿入)
+    // (docs/spec/lir.md の「box の挿入」)
     let text = "\
 layout P { P(tobj, tobj) }
 effect Put { put(obj) -> unit }

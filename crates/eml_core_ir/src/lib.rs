@@ -62,7 +62,7 @@ pub struct CoreFn {
     /// 内部の関数。値として生まれる関数である。translate のラムダ、handle の本体、節と `return` の節、包む関数
     /// (`op$`、`con$`、`$externN`、`cont$`、`cont$state`) と、optimize と EP が値として作る関数 (値として生まれた関数の
     /// 複製、`k` として渡す継続の関数、`f$kN`) が当たる。ABI は決めない。ABI は型と役割 (`role`) で決まる
-    /// (docs/superpowers/specs/2026-10-21-s14e-abi-struct-design.md の「関数の ABI」)。optimize の複製の名前などが
+    /// (docs/spec/lir.md の「関数の ABI」)。optimize の複製の名前などが
     /// この印を読む。テキストの形では `internal fn` と書く (docs/spec/core-ir.md)。
     pub internal: bool,
     /// EP のしくみの中での役割 (`eml_lir::Role`)。テキストの形では `fn` の直前に `role R` と書く。
@@ -386,7 +386,7 @@ pub enum Call {
     ///
     /// `site` は再開の値と状態の Repr で、型どおりの `apply` の場所 (`eml_lir::Site::Typed`) と同じく translate が型から
     /// 決める。handler への特殊化が `resume` を `apply` に変えるときに場所として写す
-    /// (docs/superpowers/specs/2026-10-21-s14e-abi-struct-design.md の「`apply` の ABI」)。
+    /// (docs/spec/lir.md の「`apply` の場所」)。
     Resume {
         k: Atom,
         arg: Atom,

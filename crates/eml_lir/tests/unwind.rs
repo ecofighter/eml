@@ -332,7 +332,7 @@ fn h(c.0: tobj) -> tobj {
 #[test]
 fn leaves_of_a_multi_value_call_are_not_owned() {
     // 複数の値を返す呼び出しの結果は、呼び出しが戻らなければまだないので、どの葉も数えない
-    // (docs/superpowers/specs/2026-10-21-s14e-abi-struct-design.md の「LIR」の後のパス)。`f` が中断しうるのは
+    // (docs/spec/vm.md の「巻き戻しの表」)。`f` が中断しうるのは
     // この呼び出しだけによる
     let text = "\
 fn g(x.0: obj) -> (obj, obj) {

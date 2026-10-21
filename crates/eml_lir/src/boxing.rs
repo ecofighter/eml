@@ -1,13 +1,13 @@
 //! translate と縮約の間の box の挿入のパス (docs/spec/lir.md の「box の挿入」)。プログラム全体を1回で扱い、関数の
 //! ABI を決めてから、Repr の違う位置の間に `box` と `unbox` を入れる。関数の ABI は具体化した型と役割だけで決まる。
 //! 手順は、役割による一様化と、位置ごとの変換である
-//! (docs/superpowers/specs/2026-10-21-s14e-abi-struct-design.md の「box の挿入」)。型は読まず、呼ばれる関数の
+//! (docs/spec/lir.md の「box の挿入」)。型は読まず、呼ばれる関数の
 //! シグネチャ、役割と `clause` の印、`apply` の場所、配置の表、操作の表、基本操作の表だけを読む。入力は EP の出力を
 //! 写した LIR で、`tail`、`box`、`unbox`、RC の命令はない (`passes_until` の入口で `verify_lowered` が確かめる)。
 //!
 //! 変数は具体化した型の Repr を持ち、値を受ける位置の Repr と互換でなければ変換する。変換は箱を要するスカラーと
 //! `tobj` の間と、構造体とその箱 (`obj`) の間だけで、`unit` と `obj` は命令なしで `tobj` と行き来する
-//! (docs/spec/lir.md の「値の表現」、docs/superpowers/specs/2026-10-21-s14e-abi-struct-design.md の「LIR」)。
+//! (docs/spec/lir.md の「値の表現」、docs/spec/lir.md の「構造体の形」)。
 //! 構造体は1つの変数のまま扱い、葉に開くのは次の開くパス (flatten) である。
 //! パスはブロックと文のループだけで、IR の大きさに比例して再帰しない。
 
@@ -59,7 +59,7 @@ pub fn boxing(program: &mut Program) {
 ///
 /// 開くパスの後は、`let (x.0, .., x.n) = <呼び出し>` の後の `return (x.0, .., x.n)` (同じ並び、同じ順) も同じ形で
 /// ある。構造体の `unbox` は純粋な `let` に数える
-/// (docs/superpowers/specs/2026-10-21-s14e-abi-struct-design.md の「LIR」)。
+/// (docs/spec/lir.md の「末尾の位置の呼び出し」)。
 pub(crate) fn tail_position_call(block: &Block) -> Option<(usize, &Call)> {
     let returned: &[Atom] = match &block.term {
         Term::Return(atom) => std::slice::from_ref(atom),
@@ -96,7 +96,7 @@ pub(crate) fn tail_position_call(block: &Block) -> Option<(usize, &Call)> {
 
 /// 値を、`from` の Repr から `to` の Repr へ変える命令。箱を要するスカラーと `tobj` の間と、構造体とその箱の間である。
 /// 構造体の箱は配置の `con` と同じ形のヒープの物体なので `obj` で、`obj` と `tobj` のどちらからも取り出せる
-/// (docs/superpowers/specs/2026-10-21-s14e-abi-struct-design.md の「LIR」の box の挿入)。
+/// (docs/spec/lir.md の「値の表現」)。
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Conversion {
     Box,
@@ -128,7 +128,7 @@ impl Conversion {
 }
 
 /// 変換で足す変数の印。構造体とその箱は元の変数の印を写す。構造体は `lin` の値を持ちうるためである。スカラーと
-/// その箱は `unr` である (docs/superpowers/specs/2026-10-21-s14e-abi-struct-design.md の「LIR」の box の挿入)。
+/// その箱は `unr` である (docs/spec/lir.md の「box の挿入」)。
 fn converted_mark(from: Repr, to: Repr, mark: Mark) -> Mark {
     if matches!(from, Repr::Struct(_)) || matches!(to, Repr::Struct(_)) {
         mark
@@ -145,7 +145,7 @@ fn uniform_repr(repr: Repr) -> Repr {
 
 /// 役割が一様にする位置 (最後の `uniform_params` 個の引数と、`uniform_ret` なら `ret`) を一様な Repr にする。EP の
 /// しくみはこれらの位置を総称に呼ぶためである。捕獲を含むほかの位置は、型どおりの Repr のままにする
-/// (docs/superpowers/specs/2026-10-21-s14e-abi-struct-design.md の「関数の ABI」)。
+/// (docs/spec/lir.md の「関数の ABI」)。
 fn conform_role(function: &mut LirFn, structs: &Structs) {
     let role = function.role;
     let params = function.params();
@@ -279,7 +279,7 @@ impl Converter<'_> {
             );
             // 末尾の位置の呼び出しの `return` に変換を入れると、`return` の値が変換の束縛になり、末尾の位置の形が
             // 消える。結果の変換は VM の変換のフレームが行う
-            // (docs/superpowers/specs/2026-10-21-s14e-abi-struct-design.md の「box の挿入」)
+            // (docs/spec/lir.md の「末尾の位置の呼び出し」)
             if tail.is_none() {
                 self.term(&mut term, &mut out, &mut fields);
             }
@@ -497,7 +497,7 @@ impl Converter<'_> {
                         None
                     }
                     // 構造体の `con` の引数は、配置の宣言でなく形のフィールドと比べる正確な位置である
-                    // (docs/superpowers/specs/2026-10-21-s14e-abi-struct-design.md の「Core IR」)
+                    // (docs/spec/lir.md の「構造の規則」)
                     Rhs::Con {
                         ctor,
                         args,
@@ -591,7 +591,7 @@ impl Converter<'_> {
     /// 先頭の evidence が `obj` で、残りの引数と結果が操作の表の Repr である。`apply` は型どおりの場所なら場所の
     /// Repr の並びと束縛の Repr `bound`、一様な場所なら `tobj` である。`never` の操作の節の呼び出しは戻らないので、
     /// 結果を受け直さず `None` を返す (docs/spec/lir.md の「box の挿入」、
-    /// docs/superpowers/specs/2026-10-21-s14e-abi-struct-design.md の「`apply` の ABI」)。
+    /// docs/spec/lir.md の「`apply` の場所」)。
     fn call(&mut self, call: &mut Call, bound: Repr, out: &mut Vec<Stmt>) -> Option<Repr> {
         match call {
             Call::Direct(target, args) => {

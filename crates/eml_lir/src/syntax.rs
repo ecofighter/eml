@@ -93,7 +93,7 @@ pub fn layout_text(layouts: &[Layout], id: LayoutId) -> String {
 }
 
 /// Repr のテキストの形。構造体は形の中身を `Vec3{float, float, float}` と書く。再帰は形の深さだけである
-/// (docs/superpowers/specs/2026-10-21-s14e-abi-struct-design.md の「構造体の Repr」)。
+/// (docs/spec/lir.md の「構造体の形」)。
 pub fn repr_text(layouts: &[Layout], structs: &Structs, repr: Repr) -> String {
     let Repr::Struct(id) = repr else {
         return repr.name().to_string();

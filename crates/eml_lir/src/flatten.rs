@@ -1,4 +1,4 @@
-//! box の挿入と縮約の間の開くパス (docs/superpowers/specs/2026-10-21-s14e-abi-struct-design.md の「LIR」)。構造体の
+//! box の挿入と縮約の間の開くパス (docs/spec/lir.md の「開く」)。構造体の
 //! 変数を、形の葉の順 (深さ優先) に葉の変数の並びに替える。box の挿入が一様な位置との変換を構造体の変数のまま済ませた
 //! 後に走るので、ここでは位置ごとの変換を決めない。
 //!
@@ -8,7 +8,7 @@
 //!
 //! 葉の変数は元の名前に葉の番号を付けた名前 (`d.0`) を持ち、Repr は形の葉のもの、印は形の葉の印と変数の印の小さい
 //! ほうである。複製が開いた引数の印を小さくすることがあるためである
-//! (docs/superpowers/specs/2026-10-21-s14e-abi-struct-design.md の「Kind の印と RC」)。`unit` の葉は変数を作らず、
+//! (docs/spec/lir.md の「開く」)。`unit` の葉は変数を作らず、
 //! 使う所を `()` にする。
 //!
 //! パスはブロックと文のループだけで、IR の大きさに比例して再帰しない。再帰は入れ子の構造体の形の深さ (6 語の上限で
@@ -400,7 +400,7 @@ impl<'a> Flattener<'a> {
                 let leaves = self.unbox_struct(boxed, id, &name, 0, mark, out);
                 // 箱はここで手放さず、Perceus が道ごとに手放す。box の挿入は取り出しを使う所の支配点に置くので、
                 // 箱を消費するかは道ごとに違い、この文の後に `drop` を置くかは一つに決まらない
-                // (docs/superpowers/specs/2026-10-21-s14e-abi-struct-design.md の「LIR」)
+                // (docs/spec/lir.md の「開く」)
                 self.leaves.insert(var, leaves);
             }
             _ => panic!(
@@ -412,7 +412,7 @@ impl<'a> Flattener<'a> {
 
     /// 戻らない呼び出しの構造体の束縛。結果を `unr` の `obj` の変数で受け、葉をダミーの値で定義する。box の挿入は
     /// この束縛の使いを変換しないので、1語の位置の使いが残りうる。その使いは受けた変数に置き換える。制御が届かない
-    /// ので、どちらも実行されない (docs/superpowers/specs/2026-10-21-s14e-abi-struct-design.md の「LIR」)。
+    /// ので、どちらも実行されない (docs/spec/lir.md の「開く」)。
     fn bind_never(&mut self, var: VarId, id: StructId, rhs: Rhs, out: &mut Vec<Stmt>) {
         let VarInfo { name, mark, .. } = self.function.vars[var.0 as usize].clone();
         let word = self.fresh(name.clone(), Repr::Obj, Mark::Unr);

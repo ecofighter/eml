@@ -673,8 +673,7 @@ main () = println (walk {n})
 
 /// 型変数のフィールドは `tobj` なので、`Int` を入れると `box`、取り出して `Int` として使うと `unbox` を通る
 /// (docs/spec/lir.md の「位置の規則」)。データの配置は単相化の後も一様なので、この形の変換は残る。`Wrap` は
-/// コンストラクタを2つにして、構造体にならない型にする (docs/superpowers/specs/2026-10-21-s14e-abi-struct-design.md
-/// の「構造体にする型」)。`Wrap 1` は自分を呼ぶ `hide` を通すので、既知のコンストラクタとしてその場で解けない。
+/// コンストラクタを2つにして、構造体にならない型にする (docs/spec/core-ir.md の「構造体にする型」)。`Wrap 1` は自分を呼ぶ `hide` を通すので、既知のコンストラクタとしてその場で解けない。
 #[test]
 fn an_int_in_a_type_variable_field_is_boxed_and_unboxed() {
     let text = [
@@ -1013,7 +1012,7 @@ fn a_local_function_runs_like_a_top_level_helper() {
 }
 
 /// 結果の Repr が呼び出し元の `ret` と互換でない末尾の位置の呼び出しを通るループ。どれも変換のフレームを合成するので、
-/// スタックは反復の数によらない (docs/superpowers/specs/2026-10-21-s14e-abi-struct-design.md の「box の挿入」)。
+/// スタックは反復の数によらない (docs/spec/vm.md の「変換のフレーム」)。
 /// - `count` は `State Int` の `get` で終わる。本体をデータに通して隠すので handler に特殊化されず、`tobj` を返す
 ///   操作の末尾の `clause` が `int` を返す `count` の結果になる (コード生成が決める変換)。
 /// - `relay` は多相再帰があるので型変数の位置が一様 (`_`) で、`back` の `int` の結果を `tobj` の場所で受ける。

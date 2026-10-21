@@ -49,7 +49,7 @@ pub(crate) struct Conversion {
     pub(crate) size: usize,
 }
 
-/// 変換の命令列の表。組の中身で一意にする (docs/superpowers/specs/2026-10-21-s14e-abi-struct-design.md の「VM」)。
+/// 変換の命令列の表。組の中身で一意にする (docs/spec/vm.md の「変換のフレーム」)。
 /// 引くのは変換の要る遅い道だけなので、並びを順に見る。
 #[derive(Default)]
 pub(crate) struct Conversions {
@@ -72,7 +72,7 @@ impl Conversions {
 
     /// 構造体 `id` の箱へ入れる変換と箱から取り出す変換を、`code` の末尾に足す。箱へ入れる変換は葉の語をスロット
     /// 0.. に受け、取り出す変換は箱をスロット 0 に受ける。形を新しく引いたときに、追記の中で1回だけ作る
-    /// (docs/superpowers/specs/2026-10-21-s14e-abi-struct-design.md の「VM」)。
+    /// (docs/spec/vm.md の「変換のフレーム」)。
     pub(crate) fn push_struct(
         &mut self,
         code: &mut Vec<Op>,
@@ -221,7 +221,7 @@ pub enum CompileError {
     /// (docs/spec/vm.md の「追記」)。
     Mismatch { function: String },
     /// 結果が複数の値の入口の関数。入口の `ret` は値1つで、`Finish` は値を1つだけ受ける
-    /// (docs/superpowers/specs/2026-10-21-s14e-abi-struct-design.md の「S14e-2 構造体の表現」の「VM」)。
+    /// (docs/spec/vm.md の「`CodeBase` と `FnEntry`」)。
     MultiValueEntry { function: String },
 }
 

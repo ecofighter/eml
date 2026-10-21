@@ -119,7 +119,7 @@ impl FnLowering<'_> {
     /// `value` を `ctor` で分解する `unpack` を足し、フィールドの変数を返す。変数の Repr は配置のフィールドの Repr で、
     /// `overrides` に挙げたフィールドだけは、その Repr にする。使うフィールドを具体化した型の Repr で受け、配置との変換を
     /// パターンのフィールドと同じく boxing に任せるためである。構造体の値のフィールドは、どれも形のフィールドの Repr で
-    /// 受ける (docs/superpowers/specs/2026-10-21-s14e-abi-struct-design.md の「Core IR」)。印は `marks` のフィールドの
+    /// 受ける (docs/spec/core-ir.md の「構造体にする型」)。印は `marks` のフィールドの
     /// 順の印である。
     fn unpack_fields(
         &mut self,
@@ -195,7 +195,7 @@ impl FnLowering<'_> {
     }
 
     /// 値か部分適用で使う操作かコンストラクタ `item` の、参照 `reference` の型ごとの包む関数
-    /// (docs/superpowers/specs/2026-10-21-s14e-abi-struct-design.md の「関数の ABI」)。名前には参照が具体化した型引数を
+    /// (docs/spec/lir.md の「関数の ABI」)。名前には参照が具体化した型引数を
     /// 書き、引数と結果の Repr は参照の型から決める。参照の型はスキームにその型引数を入れた型なので、名前が同じなら
     /// コードも同じである。
     fn item_wrapper(&mut self, item: ValueItem, reference: ExprId) -> FnIdx {
@@ -760,7 +760,7 @@ impl FnLowering<'_> {
                         .expect("a program without errors has a clause for every operation");
                     let name = format!("{prefix}${}", self.ctx.hir[op].name);
                     // `never` の操作の節は、`prompt$` から状態だけを受ける
-                    // (docs/superpowers/specs/2026-10-21-s14e-abi-struct-design.md の「関数の ABI」)
+                    // (docs/spec/lir.md の「関数の ABI」)
                     let role = if self.ctx.hir[op].multiplicity == OpMultiplicity::Never {
                         Role::Abort
                     } else {
@@ -1089,7 +1089,7 @@ impl FnLowering<'_> {
 
     /// HIR に元のない内部の関数を作り、その値を返す。`body` は引数から本体の文を足し、返す値を返す。節は handle を
     /// 含む関数の row で動くので、その関数と同じ `yields` の印にする。`var` の節と `return` の節は、handle の節と
-    /// 同じ役割 `role` を持つ (docs/superpowers/specs/2026-10-21-s14e-abi-struct-design.md の「関数の ABI」)。
+    /// 同じ役割 `role` を持つ (docs/spec/lir.md の「関数の ABI」)。
     fn synthesized(
         &mut self,
         name: String,
@@ -1158,7 +1158,7 @@ impl FnLowering<'_> {
                             _ => (Extern::MutArrayRead, vec![st, args[0]], element),
                         };
                         // 型を持たない組なので、語の数の条件だけで構造体にする
-                        // (docs/superpowers/specs/2026-10-21-s14e-abi-struct-design.md の「Core IR」)
+                        // (docs/spec/core-ir.md の「構造体にする型」)
                         let layout = program.tuple_layout(2);
                         let pair_repr = program.tuple_struct(layout, vec![value, state]);
                         let pair = program.lending_call(

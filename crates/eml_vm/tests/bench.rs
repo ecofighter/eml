@@ -1132,7 +1132,7 @@ fn unwind_points() {
 /// 実行時に変換した回数だけを数えるので 0 である (docs/implementation/benchmarks.md の「S14e-1」)。
 const EP_FLOAT_CONVERSIONS: u64 = 0;
 
-/// S14e-1 の完了の条件 (docs/superpowers/specs/2026-10-21-s14e-abi-struct-design.md の「完了の条件」)。特殊化しない
+/// S14e-1 の完了の条件 (docs/implementation/benchmarks.md の「S14e-1」)。特殊化しない
 /// handler を通る `ep_float` のほかは、`apply` が実行時に変換しない。EP の役割と一様な場所が合い、包む関数も型ごとの
 /// instance で型どおりに呼ばれることを示す。
 #[test]
@@ -1152,8 +1152,7 @@ fn typed_benches_do_not_convert() {
     }
 }
 
-/// 型から決める呼び出しの規約と構造体の表現の引き換え (docs/superpowers/specs/2026-10-21-s14e-abi-struct-design.md の
-/// 「引き換えにすること」)。特殊化されない `List.map` が、受けた `Float` をそのまま返す関数の値を型どおりに呼ぶので、
+/// 型から決める呼び出しの規約と構造体の表現の引き換え (docs/implementation/benchmarks.md の「S14e-1」)。特殊化されない `List.map` が、受けた `Float` をそのまま返す関数の値を型どおりに呼ぶので、
 /// 要素ごとに `Float` の箱が1つ増える。組を入れ替える関数の値を渡すと、要素の組を箱から取り出して渡し、戻った組を新しい
 /// 箱に入れる。その回数を固定して記録する。特殊化される組の入れ替えと、RC の葉を3つ持つ組を展開しない関数に通す形も
 /// 固定する。
@@ -1235,7 +1234,7 @@ fn trade_offs() {
     );
 }
 
-/// S14e-2 の完了の条件 (docs/superpowers/specs/2026-10-21-s14e-abi-struct-design.md の「完了の条件」)。nbody を1回
+/// S14e-2 の完了の条件 (docs/implementation/benchmarks.md の「S14e-2」)。nbody を1回
 /// 進めるごとの確保は、配列に書く `Vec3` の箱の 25 (速度に 20、位置に 5) である。計算の途中の `Vec3` と、状態を渡す形の
 /// 複製が返す `(MutArray, MutArray)` の組は確保しない。
 #[test]
@@ -1283,5 +1282,5 @@ fn spectral_norm_allocates_14_fewer() {
 
 /// 組の要素を入れ替える特殊化された `map` (`records/swap_map_specialized.em`) の、構造体の表現の前 (コミット e6665e64)
 /// の `allocations` と `reuses`。葉の単位の覗き穴と reuse で、構造体の後も同じ数になる
-/// (docs/superpowers/specs/2026-10-21-s14e-abi-struct-design.md の「足すテスト」)。
+/// (docs/implementation/benchmarks.md の「S14e-2」)。
 const SWAP_MAP_BEFORE_STRUCTS: (u64, u64) = (32, 50);

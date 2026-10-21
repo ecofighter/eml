@@ -53,7 +53,7 @@ pub fn verify_scopes(program: &Program) -> Result<(), VerifyError> {
 
 /// 開くパスの後で Perceus より前の LIR を確かめる。範囲の段の検査に加えて、構造体がどこにも残らないことを確かめ、
 /// 複数の値の `let` と `return` と構造体の `unbox` を受ける
-/// (docs/superpowers/specs/2026-10-21-s14e-abi-struct-design.md の「LIR」の verifier)。
+/// (docs/spec/lir.md の「verifier」)。
 pub fn verify_flattened(program: &Program) -> Result<(), VerifyError> {
     verify_at(program, Level::Flattened)
 }
@@ -151,7 +151,7 @@ fn verify_at(program: &Program, level: Level) -> Result<(), VerifyError> {
 }
 
 /// 開いた後の段では、配置のフィールドに構造体は来ない。構造体の型を宣言したフィールドは `tobj` である
-/// (docs/superpowers/specs/2026-10-21-s14e-abi-struct-design.md の「箱に入れる位置」)。
+/// (docs/spec/lir.md の「verifier」)。
 fn no_struct_layouts(program: &Program) -> Result<(), VerifyError> {
     for layout in &program.layouts {
         for constructor in &layout.constructors {
@@ -395,7 +395,7 @@ struct Checker<'a> {
     token_sources: Vec<Option<(VarId, Ctor)>>,
     /// 構造体の `unbox` が読む箱。その `release` だけが `unboxed` の印を持ち、いつも持つ。VM は印の付いた `release`
     /// を、ダミーを受けても何もしない命令にするためである
-    /// (docs/superpowers/specs/2026-10-21-s14e-abi-struct-design.md の「ダミーの約束を広げる」)。変数は1回だけ
+    /// (docs/spec/lir.md の「ダミーの値」)。変数は1回だけ
     /// 定義されるので (R5)、関数に1つの表にする。
     unboxed: Vec<bool>,
     /// 巻き戻しの地点ごとの所有を書き留める先。`unwind_points` だけが与える。
@@ -982,7 +982,7 @@ impl<'a> Checker<'a> {
 
     /// 構造体の `unbox` の値は箱 (`obj` か `tobj`) で、配置はコンストラクタを1つ持つ。名前を書いたフィールドの変数は、
     /// 配置の宣言した Repr と互換である。構造体の型を宣言したフィールドは `tobj` で、続く `unbox` が受け直す
-    /// (docs/superpowers/specs/2026-10-21-s14e-abi-struct-design.md の「LIR」)。
+    /// (docs/spec/lir.md の「ブロックの列」)。
     fn check_unbox_struct(
         &self,
         value: VarId,
@@ -1045,7 +1045,7 @@ impl<'a> Checker<'a> {
     /// `return` の値の並びは、関数の結果の並びと長さが同じで、値ごとに Repr が互換で印も互換である。末尾の位置の
     /// 呼び出しの束縛は呼ばれる側の結果の Repr を持ち、縮約がこの形を `tail` にする。それまでの段では、互換でない
     /// `return` をこの形のときだけ許す。構造体と箱の間の違いでは、並びの長さも違いうる
-    /// (docs/superpowers/specs/2026-10-21-s14e-abi-struct-design.md の「box の挿入」と「LIR」)。
+    /// (docs/spec/lir.md の「末尾の位置の呼び出し」)。
     fn check_returned(&self, block: &Block, atoms: &[Atom]) -> Result<(), String> {
         let rets = &self.function.rets;
         let tail = matches!(self.level, Level::Scopes | Level::Flattened)
@@ -1514,7 +1514,7 @@ impl<'a> Checker<'a> {
                     ));
                 }
                 // 構造体の箱は配置の `con` と同じ形のヒープの物体なので `obj` である
-                // (docs/superpowers/specs/2026-10-21-s14e-abi-struct-design.md の「箱に入れる位置」)
+                // (docs/spec/lir.md の「値の表現」)
                 let (boxed, of) = match *atom {
                     Atom::Var(operand)
                         if matches!(self.function.repr(operand), Repr::Struct(_)) =>
@@ -1670,7 +1670,7 @@ impl<'a> Checker<'a> {
         {
             self.check_source_ret(site, *source_ret, receiver)?;
             // 開いた後の場所は源の引数ごとの Repr を持ち、引数はそれを葉に開いた並びである
-            // (docs/superpowers/specs/2026-10-21-s14e-abi-struct-design.md の「VM」)
+            // (docs/spec/lir.md の「開く」)
             match site {
                 ApplySite::Typed(reprs) if self.level >= Level::Flattened => {
                     self.cx
@@ -1693,7 +1693,7 @@ impl<'a> Checker<'a> {
     }
 
     /// `apply` の `source_ret` の検査。構造体の結果を葉で受ける型どおりの場所だけが、開いた後の段で持つ
-    /// (docs/superpowers/specs/2026-10-21-s14e-abi-struct-design.md の「VM」)。
+    /// (docs/spec/lir.md の「開く」)。
     fn check_source_ret(
         &self,
         site: &ApplySite,
@@ -1908,7 +1908,7 @@ impl<'a> Checker<'a> {
 
     /// 呼び出しの結果 (直接の呼び出しなら呼ばれる関数の `ret`、節の呼び出しなら操作の `ret`、`apply` なら場所の結果)
     /// は、束縛する変数と互換である (R7)。`tail` の結果の Repr は呼び出し元の `ret` と互換でなくてよい。VM の変換の
-    /// フレームが変換するためである (docs/superpowers/specs/2026-10-21-s14e-abi-struct-design.md の「box の挿入」)。
+    /// フレームが変換するためである (docs/spec/lir.md の「末尾の位置の呼び出し」)。
     /// 結果の印は、束縛する変数か呼び出し元の戻り値の印と互換である (V2)。
     fn check_result(
         &self,
@@ -1949,7 +1949,7 @@ impl<'a> Checker<'a> {
             }
             Receiver::Tail => {
                 // 構造体と箱の間の変換では並びの長さが違い、印は変換のフレームが受け渡す
-                // (docs/superpowers/specs/2026-10-21-s14e-abi-struct-design.md の「VM」)
+                // (docs/spec/vm.md の「変換のフレーム」)
                 if results.len() != self.function.rets.len() {
                     return Ok(());
                 }

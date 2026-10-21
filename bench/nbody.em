@@ -1,6 +1,6 @@
 -- nbody (S14d の計測)。Benchmarks Game の5つの天体を引数の回数 (既定は 1000) だけ進め、進める前と後のエネルギーを書く。
--- ベクトルは `Vec3` の値で書く。今は `Vec3` を作るたびに箱を確保し、S14e の構造体の表現がその確保を消す
--- (docs/implementation/benchmarks.md の「S14d」)。bench/numeric/nbody.py は、同じ順で浮動小数の演算を行う Python の版である
+-- ベクトルは `Vec3` の値で書く。S14e の構造体の表現で、計算の途中の `Vec3` は確保しない。配列に書く `Vec3` は箱に入る
+-- (docs/implementation/benchmarks.md の「S14e-2」)。bench/numeric/nbody.py は、同じ順で浮動小数の演算を行う Python の版である
 data Vec3 =
   | Vec3 Float Float Float
 

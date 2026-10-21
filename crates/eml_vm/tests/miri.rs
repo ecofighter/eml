@@ -381,8 +381,7 @@ fn take(p.0: {named}) -> float {{
     assert_eq!(run_program(&program), "multi value\n1.5\n");
 }
 
-/// 共有の箱から、`tobj` の欄に入ったスカラーの葉と文字列の葉を2回取り出す (docs/superpowers/specs/2026-10-21-s14e-abi-struct-design.md
-/// の「S14e-2 構造体の表現」の「VM」)。
+/// 共有の箱から、`tobj` の欄に入ったスカラーの葉と文字列の葉を2回取り出す (docs/spec/vm.md の「データとクロージャ」)。
 #[test]
 fn shared_struct_boxes_with_scalar_leaves() {
     let t = "(,,){int, float, obj}";

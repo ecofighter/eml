@@ -15,7 +15,7 @@ const APPLY_TO: &str =
 const HIDE: &str = "data Box a = | Box a\n\nhide : Int -> a -> <Panic> Box a\nhide n x = if n <= 0 then Box x else hide (n - 1) x\n\n";
 
 /// 値としてだけ使うラムダも型どおりの ABI を持つ。`apply` が実行時に Repr を合わせるので、一様にしない
-/// (docs/superpowers/specs/2026-10-21-s14e-abi-struct-design.md の「関数の ABI」)。
+/// (docs/spec/lir.md の「関数の ABI」)。
 #[test]
 fn a_lambda_used_only_as_a_value_keeps_its_typed_abi() {
     let text = format!(
@@ -78,7 +78,7 @@ fn shared_wrappers_are_never_called_directly() {
 #[test]
 fn no_boxed_wrapper_is_made() {
     // 値として使うトップレベルの関数も型どおりの ABI のまま名前で参照し、`apply` が実行時に Repr を合わせる。一様な
-    // 包み `f$boxed` は作らない (docs/superpowers/specs/2026-10-21-s14e-abi-struct-design.md の「box の挿入」)
+    // 包み `f$boxed` は作らない (docs/spec/lir.md の「関数の ABI」)
     let text = format!(
         "{HIDE}inc : Int -> <Panic> Int\ninc n = n + 1\n\n{APPLY_TO}main : Unit -> <IO, Panic> Unit\nmain () =\n  let Box f = hide 0 inc\n  println (show (apply_to f 2))"
     );
@@ -168,7 +168,7 @@ fn a_value_unboxed_by_the_pass_is_passed_on_without_a_new_box() {
 #[test]
 fn applies_of_a_typed_function_value_convert_nothing() {
     // 型どおりの場所の `apply` は引数と結果を型どおりの Repr で渡すので、`apply` の結果をもう一度 `apply` に渡すときも
-    // 変換しない (docs/superpowers/specs/2026-10-21-s14e-abi-struct-design.md の「`apply` の ABI」)
+    // 変換しない (docs/spec/lir.md の「`apply` の場所」)
     let text = format!(
         "{HIDE}twice_plus : (Int -> Int) -> Int -> <Panic> Int\ntwice_plus f x = f (f x) + 1\n\nmain : Unit -> <IO, Panic> Unit\nmain () =\n  let Box f = hide 0 (fn n -> n)\n  let Box twice_plus = hide 0 twice_plus\n  println (show (twice_plus f 1))"
     );
@@ -291,7 +291,7 @@ fn a_chain_of_tail_calls_keeps_its_typed_rets() {
     // 関数の `ret` は型と役割だけで決まり、パスが上げない。`apply_to` は末尾の位置の `apply` でも `int` を返し、それを
     // 末尾の位置で呼ぶ `via` も `int` を返す。`through` は、呼び出しと `return` の間に使われない純粋な `let` があっても
     // 末尾呼び出しになる。`apply_to` は自分を呼ぶので `via` に展開されず、`via` と `through` はデータを通して呼ぶので
-    // `main` に展開されない (docs/superpowers/specs/2026-10-21-s14e-abi-struct-design.md の「関数の ABI」)
+    // `main` に展開されない (docs/spec/lir.md の「関数の ABI」)
     let text = format!(
         "{HIDE}apply_to : (Int -> Int) -> Int -> <Panic> Int\napply_to f x = if x > 9 then apply_to f (x - 1) else f x\n\nvia : Int -> <Panic> Int\nvia x =\n  let Box f = hide 0 (fn n -> n)\n  apply_to f x\n\nthrough : (Int -> Int) -> Int -> Int\nthrough f x =\n  let r = f x\n  let s = \"unused\"\n  r\n\nmain : Unit -> <IO, Panic> Unit\nmain () =\n  let Box g = hide 0 (fn n -> n)\n  let Box via = hide 0 via\n  let Box through = hide 0 through\n  println (show (via 1 + through g 2))"
     );
@@ -337,7 +337,7 @@ fn a_chain_of_tail_calls_keeps_its_typed_rets() {
 fn a_body_ending_in_a_typed_call_makes_it_a_tail_call() {
     // handle の本体は役割で結果が一様な `tobj` になり、`Int` を返す `answer` を末尾の位置で呼ぶ。box の挿入は結果を
     // 変換せず、縮約が末尾呼び出しにする。結果の変換は VM の変換のフレームが行う
-    // (docs/superpowers/specs/2026-10-21-s14e-abi-struct-design.md の「box の挿入」)
+    // (docs/spec/lir.md の「末尾の位置の呼び出し」)
     let text = format!(
         "effect Ask where\n  ask : Unit -> Int\n\n{HIDE}answer : Int -> <Ask, Panic> Int\nanswer n =\n  if n > 0 then answer (n - 1)\n  else\n    let Box q = hide 0 ask\n    q () + 1\n\nmain : Unit -> <IO, Panic> Unit\nmain () =\n  let r = handle answer 0 with\n    | ctl ask () k -> k 1\n  println (show r)"
     );
@@ -369,9 +369,9 @@ fn the_result_of_exit_is_not_compared_with_positions() {
     "#);
 }
 
-/// 関数の ABI は名前で決まり、ほかの定義の使い方によらない
-/// (docs/superpowers/specs/2026-10-21-s14e-abi-struct-design.md の「関数の ABI」)。値としても使う
-/// ローカル関数 `d$let$g` は、`d` をどの深さの呼び出しから展開するプログラムでも、同じ LIR になる。
+/// 関数の ABI は型と役割で決まり、ほかの定義の使い方によらない
+/// (docs/spec/lir.md の「関数の ABI」)。値としても使うローカル関数 `d$let$g` は、
+/// `d` をどの深さの呼び出しから展開するプログラムでも、同じ LIR になる。
 #[test]
 fn a_local_function_used_as_a_value_has_one_abi_in_every_program() {
     const D: &str = "d : Int -> <Panic> Int\nd x =\n  let g y = y + 1\n  let fs = [g]\n  g x + List.length fs\n\n";

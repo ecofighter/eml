@@ -185,7 +185,7 @@ fn yield_switch(yielding: VarId, fast: BlockId, slow: BlockId) -> Term {
 /// 変数に入ることがあるためである (docs/spec/lir.md の「ダミーの値」)。印が `poly` なのは、戻り値の印が `lin` の
 /// 関数からも返すためである。構造体の `ret` には、構造体の変数にダミーの物体を束縛して返す。box の挿入がこの束縛を
 /// `unbox` で受け直すので、開いた後は葉のダミーになる
-/// (docs/superpowers/specs/2026-10-21-s14e-abi-struct-design.md の「Core IR」の EP)。
+/// (docs/spec/lir.md の「ダミーの値」)。
 /// `bind` は物体を作る `let` を置き、その変数を返す。
 fn dummy(ret: Repr, bind: impl FnOnce(VarInfo, Rhs) -> VarId) -> Atom {
     match ret {

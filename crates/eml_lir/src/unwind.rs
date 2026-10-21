@@ -34,7 +34,7 @@ pub fn points_all(program: &Program) -> Vec<Result<Vec<UnwindPoint>, VerifyError
 }
 
 /// 文が巻き戻しの地点なら、文が束縛する変数と着地の印を返す。複数の値を返す呼び出しは、葉をすべて束縛する
-/// (docs/superpowers/specs/2026-10-21-s14e-abi-struct-design.md の「LIR」の後のパス)。`aborts` は `may_abort` の
+/// (docs/spec/vm.md の「巻き戻しの表」)。`aborts` は `may_abort` の
 /// 結果である。中断しない関数の呼び出しは、中断が通らないので地点にしない。
 pub(crate) fn point<'s>(stmt: &'s Stmt, aborts: &[bool]) -> Option<(&'s [VarId], Option<VarId>)> {
     let (vars, abort, landing) = match stmt {

@@ -474,7 +474,7 @@ yields fn n() -> unit {
 #[test]
 fn a_struct_ret_returns_a_dummy_bound_to_a_struct_variable() {
     // 構造体の `ret` には、構造体の変数に `prim dummy()` を印 `poly` で束縛して返す。box の挿入が `unbox` で受け直す
-    // (docs/superpowers/specs/2026-10-21-s14e-abi-struct-design.md の「Core IR」の EP)
+    // (docs/spec/lir.md の「ダミーの値」)
     let text = "\
 layout (,) { (,)(tobj, tobj) }
 yields fn g() -> unit {
@@ -549,7 +549,7 @@ yields fn h() -> int {
 #[test]
 fn the_slow_path_drops_a_struct_result_with_non_unr_rc_leaves() {
     // 地点の結果が `unr` でない RC の葉を持つ構造体なら、遅い道の先頭で drop する。葉がスカラーだけの構造体は drop
-    // しない (docs/superpowers/specs/2026-10-21-s14e-abi-struct-design.md の「Kind の印と RC」)
+    // しない (docs/spec/lir.md の「構造体の形」)
     let text = "\
 layout (,) { (,)(tobj, tobj) }
 yields fn g(s.0: obj lin) -> (,){int, obj lin} lin {
@@ -1320,7 +1320,7 @@ fn a_fn_clause_that_fails_runs_in_place() {
 
 /// EP が作る `apply` は一様な場所である。補助の関数の中、`Call::Resume` から作る再開、`cont$` の中の再開、handle の
 /// 本体の呼び出しがどれも `uniform apply` になる。`perform` の後を受ける `f$k0` は `Continuation` の役割を持つ
-/// (docs/superpowers/specs/2026-10-21-s14e-abi-struct-design.md の「関数の ABI」「`apply` の ABI」)。
+/// (docs/spec/lir.md の「関数の ABI」と「`apply` の場所」)。
 #[test]
 fn ep_applies_are_uniform_sites() {
     use eml_core_ir::{Call, CoreFn, Rhs, Stmt};

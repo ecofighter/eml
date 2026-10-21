@@ -664,7 +664,7 @@ fn main(a.0: obj, m.1: obj) -> unit {
 
 /// `apply` は場所のシグネチャを持つ。変数の引数は変数の Repr、定数の引数は `apply` の Repr で、結果は束縛の Repr、末尾の
 /// 位置では関数の `ret` である。一様な場所の引数と結果は `tobj` である
-/// (docs/superpowers/specs/2026-10-21-s14e-abi-struct-design.md の「`apply` の ABI」)。
+/// (docs/spec/lir.md の「`apply` の場所」)。
 #[test]
 fn an_apply_carries_its_site_signature() {
     insta::assert_snapshot!(disasm_unverified("\

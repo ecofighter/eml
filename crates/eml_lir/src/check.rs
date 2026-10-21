@@ -15,7 +15,7 @@ use crate::{
 };
 
 /// 役割が一様にする最後の引数の数は、関数の引数の数を超えない
-/// (docs/superpowers/specs/2026-10-21-s14e-abi-struct-design.md の「関数の ABI」)。
+/// (docs/spec/lir.md の「関数の ABI」)。
 pub fn role(role: Role, params: usize) -> Result<(), String> {
     match role.name() {
         Some(name) if role.uniform_params() > params => Err(format!(
@@ -442,7 +442,7 @@ impl<'a> Context<'a> {
 
     /// 型どおりの `apply` の場所は、引数ごとに1つの Repr を持ち、変数の引数の Repr は変数の Repr と同じである。box の
     /// 挿入は引数を場所の Repr へ変換するので、どの段でも成り立つ
-    /// (docs/superpowers/specs/2026-10-21-s14e-abi-struct-design.md の「`apply` の ABI」)。
+    /// (docs/spec/lir.md の「`apply` の場所」)。
     pub fn check_site(&self, args: &[Atom], site: &Site) -> Result<(), String> {
         match site {
             Site::Typed(reprs) => self.check_reprs("apply", args, reprs),
@@ -477,7 +477,7 @@ impl<'a> Context<'a> {
     /// 互換の位置に収まる値。規則は box の挿入と同じ `Atom::fits_compatible` で、`never` の操作の `perform` と
     /// `clause` の束縛と、戻らない extern の束縛は、それに加えて、どの位置にも収まる。関数の値として使う関数は一様で
     /// なくてよい。`apply` が実行時に Repr を変えるためである
-    /// (docs/superpowers/specs/2026-10-21-s14e-abi-struct-design.md の「VM」)。
+    /// (docs/spec/vm.md の「シグネチャ」)。
     pub fn passes(&self, atom: Atom, expected: Repr) -> bool {
         match atom {
             Atom::Var(var) if self.never[var.0 as usize] => true,
@@ -552,8 +552,7 @@ impl<'a> Context<'a> {
     }
 
     /// `unpack` の値は、配置の Repr が `obj` でコンストラクタが1つの値か、構造体である。配置のフィールドは R8 で、
-    /// 構造体のフィールドは形と比べる (docs/spec/lir.md の「構造の規則」の R8、
-    /// docs/superpowers/specs/2026-10-21-s14e-abi-struct-design.md の「Core IR」の verifier)。
+    /// 構造体のフィールドは形と比べる (docs/spec/lir.md の「構造の規則」の R7 と R8)。
     pub fn check_unpack(&self, value: VarId, ctor: Ctor, fields: &[VarId]) -> Result<(), String> {
         let repr = self.repr(value);
         let shape = match repr {
@@ -638,7 +637,7 @@ impl<'a> Context<'a> {
     }
 
     /// 構造体の値を分けるのは `unpack` だけで、`switch` の scrutinee にならない
-    /// (docs/superpowers/specs/2026-10-21-s14e-abi-struct-design.md の「Core IR」)。
+    /// (docs/spec/lir.md の「構造の規則」)。
     pub fn switch_scrutinee(&self, scrutinee: Atom) -> Result<(), String> {
         match scrutinee {
             Atom::Var(var) if matches!(self.repr(var), Repr::Struct(_)) => Err(format!(
@@ -891,7 +890,7 @@ impl<'a> Context<'a> {
     /// 入口の段では、行の Repr が `tobj` でない位置の引数と結果の Repr は行と同じである。`tobj` の位置は、型変数の
     /// 位置として具体化した型の Repr のまま渡され、box の挿入が合わせる。行に構造体は現れず、構造体の型の位置は箱の
     /// `obj` なので、`obj` の位置にも構造体がそのまま渡され、box の挿入が合わせる
-    /// (docs/superpowers/specs/2026-10-21-s14e-abi-struct-design.md の「構造体の Repr」)。
+    /// (docs/spec/lir.md の「extern の行」)。
     fn check_extern_exact(
         &self,
         var: VarId,
@@ -1147,7 +1146,7 @@ impl<'a> Context<'a> {
     }
 
     /// 構造体の `con` は形の配置を指し、引数は形のフィールドの Repr に正確な位置として収まる。配置の宣言した Repr
-    /// とは比べない (docs/superpowers/specs/2026-10-21-s14e-abi-struct-design.md の「Core IR」の translate)。
+    /// とは比べない (docs/spec/lir.md の「構造の規則」)。
     fn struct_con(
         &self,
         var: VarId,

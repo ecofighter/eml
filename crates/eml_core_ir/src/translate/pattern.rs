@@ -39,7 +39,7 @@ pub(super) enum Occ {
 }
 
 /// 頭の分かっている出現の値。まだ作っていない値は値の型を持ち、作るときに配置と Repr を引く。構造体にする型かどうかは
-/// コンストラクタでなく型で決まり (docs/superpowers/specs/2026-10-21-s14e-abi-struct-design.md の「構造体にする型」)、
+/// コンストラクタでなく型で決まり (docs/spec/core-ir.md の「構造体にする型」)、
 /// 構造体の Repr を引くと配置も表に入る。決定木が値を作らずに枝を選べば、その配置は IR に現れないので表に入れない。
 #[derive(Clone, Copy)]
 pub(super) enum ConValue {
@@ -557,7 +557,7 @@ impl FnLowering<'_> {
     ) -> Decision {
         // フィールドを持つ値は定数にならない。パターンが型をその data かタプルに決めるので、値の Repr は `obj` か
         // 構造体である。構造体の値を分けるのはいつも `unpack` で、フィールドの Repr はパターンの型、つまり形の
-        // フィールドの型から決まる (docs/superpowers/specs/2026-10-21-s14e-abi-struct-design.md の「Core IR」)
+        // フィールドの型から決まる (docs/spec/core-ir.md の「構造体にする型」)
         let Atom::Var(value) = value else {
             unreachable!("a value with fields is a variable")
         };
@@ -889,7 +889,7 @@ impl FnLowering<'_> {
     /// しないと、Perceus が `unr` でない値を `decref` する。枝が値全体を受け取るときは呼ばない。
     /// この道で分けた構造体は、枝が値ごと受け取らなければ、フィールドごとに同じ規則を当てる。構造体は開いた後に葉の
     /// 変数の並びになり、`release` で解く物体がないので、パターンが調べ尽くしたフィールド (`[]` の葉など) も明示の
-    /// `drop` で手放す (docs/superpowers/specs/2026-10-21-s14e-abi-struct-design.md の「Kind の印と RC」)。
+    /// `drop` で手放す (docs/spec/lir.md の「構造体の形」)。
     fn drop_matched_away(&mut self, root: &Occ, bound: &[(LocalId, Occ)], attempt: Attempt) {
         let mut whole = HashSet::new();
         let mut kept = HashSet::new();

@@ -44,7 +44,7 @@ impl Parser<'_> {
         let line = self.reader.line();
         let header = self.reader.function_header(&mut state)?;
         // Core IR の関数は値を1つ返す。構造体は1つの変数のまま扱い、葉に開くのは LIR の開くパスである
-        // (docs/superpowers/specs/2026-10-21-s14e-abi-struct-design.md の「進め方」)
+        // (docs/spec/lir.md の「開く」)
         let [(ret, ret_mark)] = header.rets[..] else {
             return Err(syntax::error(line, "a Core IR function returns one value"));
         };

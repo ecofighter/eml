@@ -975,7 +975,7 @@ fn instance_name(
 /// translate の包む関数 (`op$`、`con$`、`cont$`、`cont$state`) の名前。ほかの instance と同じく型引数を書き、型変数の
 /// ないスキームでは `base` のままにする。包む関数は引数と結果の Repr を具体化した型から決めるので、名前が型引数を
 /// 持たないと、同じ名前の関数が違うコードになるためである
-/// (docs/superpowers/specs/2026-10-21-s14e-abi-struct-design.md の「関数の ABI」)。
+/// (docs/spec/lir.md の「関数の ABI」)。
 pub(super) fn wrapper_name(
     store: &TypeStore,
     names: &NameTable,

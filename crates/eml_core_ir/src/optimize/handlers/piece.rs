@@ -34,9 +34,8 @@ pub(crate) fn joins(blocks: &[Block]) -> Vec<bool> {
 /// ブロックの残りで、そこから合流のブロックを通らずに届くブロックを元の順のまま番号を振り直して続ける。合流の
 /// ブロック J への `jump` は、`exit(J, 実引数)` が返す呼び出しの末尾呼び出しにして、J には進まない。届かない
 /// ブロックは落とす。継続の関数 `f{H}$hN` と合流のブロックの関数 `f{H}$hjJ` は、どちらもこの形で作る。作る関数は
-/// 内部の関数でない。`k` として渡す継続の関数だけを、呼ぶ側が内部の関数にする (docs/spec/lir.md の「一様な関数」)。
-/// どちらも特殊化した経路の中で型どおりに呼ばれるので、役割を持たない
-/// (docs/superpowers/specs/2026-10-21-s14e-abi-struct-design.md の「関数の ABI」)。
+/// 内部の関数でない。`k` として渡す継続の関数だけを、呼ぶ側が内部の関数にする。どちらも特殊化した経路の中で
+/// 型どおりに呼ばれるので、役割を持たない (docs/spec/lir.md の「関数の ABI」)。
 ///
 /// 合流のブロックを写さないのは、写すと、合流のブロックとその先が、そこへ届くどの継続の関数にも入るためである。
 /// 条件つきの `perform` が並ぶと、コードが `perform` の数の2乗で育つ。合流のブロックでない行き先は、入る辺が
@@ -351,9 +350,8 @@ impl Copy<'_> {
 /// そのまま残す。EP が `resume` から作る `apply` と同じく、印は節の関数の `yields` の印にする (docs/spec/core-ir.md の
 /// 「`apply` の印と分け方」)。`k` の出現がこの3つの形だけであることは、呼ぶ側が確かめてある。写しは handler の
 /// 複製から直接呼ばれるために生まれるので、内部の関数でなく、役割も持たない。`k` への `apply` は EP の再開と同じ形
-/// だが、継続の関数を型どおりに呼ぶ場所である。定数の引数の Repr は、型が手元にないので定数の形から決める
-/// (docs/spec/lir.md の「一様な関数」、docs/superpowers/specs/2026-10-21-s14e-abi-struct-design.md の
-/// 「関数の ABI」)。
+/// だが、継続の関数を型どおりに呼ぶ場所である。場所の Repr は、`resume` が型から決めた場所を写す
+/// (docs/spec/lir.md の「関数の ABI」と「`apply` の場所」)。
 pub(crate) fn clause_with_k(
     clause: &CoreFn,
     name: String,
@@ -400,7 +398,7 @@ pub(crate) fn clause_with_k(
                 debug_assert_eq!(callee, Atom::Var(k), "a clause resumes only its own `k`");
                 // 場所は、`resume` が型から決めたものを写す。定数の値の形からは決めない。`None` は `enum` の形だが、
                 // `Option Int` を受ける `k` には `tobj` で渡るためである
-                // (docs/superpowers/specs/2026-10-21-s14e-abi-struct-design.md の「`apply` の ABI」)
+                // (docs/spec/lir.md の「`apply` の場所」)
                 let (args, reprs) = if stateful {
                     (vec![arg, state], site.clone())
                 } else {

@@ -636,7 +636,7 @@ const APPLY_TO: &str = "apply_to : (a -> <e> b) -> a -> <e> b\napply_to f x = f 
 
 /// `con$`、`op$`、`cont$` は型ごとの instance で、名前に型引数を書き、引数と結果を具体化した型の Repr で持つ。スキームの
 /// 型変数を `tobj` にすると、型どおりの `apply` が呼ぶたびに実行時の変換を通るためである
-/// (docs/superpowers/specs/2026-10-21-s14e-abi-struct-design.md の「関数の ABI」)。
+/// (docs/spec/lir.md の「関数の ABI」)。
 #[test]
 fn wrappers_are_per_type_instances() {
     let text = format!(

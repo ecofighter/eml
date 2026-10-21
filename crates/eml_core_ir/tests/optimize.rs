@@ -2387,7 +2387,7 @@ b5:
 
 /// handler への特殊化が作る関数 (`f{H}` と、節の写し `<g>{k}`) は役割を持たない。直接呼ばれるか、特殊化した経路の
 /// 中で型どおりに呼ばれるためである。`<g>{k}` の中の `k` への `apply` も型どおりの場所である
-/// (docs/superpowers/specs/2026-10-21-s14e-abi-struct-design.md の「関数の ABI」)。
+/// (docs/spec/lir.md の「関数の ABI」)。
 #[test]
 fn handler_specialization_functions_are_typed() {
     use eml_lir::{Role, Site};
@@ -2455,8 +2455,7 @@ main () =
 ";
 
 /// 節の写し `<g>{k}` の `k` への `apply` は、`resume` の場所を写す。`None` は `#0` で値の形は `enum` だが、
-/// `Option Int` を受ける `k` には `tobj` で渡る (docs/superpowers/specs/2026-10-21-s14e-abi-struct-design.md の
-/// 「`apply` の ABI」)。
+/// `Option Int` を受ける `k` には `tobj` で渡る (docs/spec/lir.md の「`apply` の場所」)。
 #[test]
 fn a_clause_copy_applies_k_at_the_site_of_the_resume() {
     use eml_lir::{Repr, Site};
@@ -2495,7 +2494,7 @@ fn a_clause_copy_applies_k_at_the_site_of_the_resume() {
 
 /// `con` の複製は、一様な引数の位置を開くと引数の並びが変わるので役割を落とす。一様でない位置だけを開く複製は、
 /// 末尾の一様な引数がそのまま残るので役割を写す
-/// (docs/superpowers/specs/2026-10-21-s14e-abi-struct-design.md の「関数の ABI」)。
+/// (docs/spec/core-ir.md の「`con` の値の形についての特殊化」)。
 #[test]
 fn a_con_copy_keeps_its_role_only_when_the_uniform_parameters_stay() {
     use eml_lir::Role;
@@ -2543,7 +2542,7 @@ fn entry$main(k.0: tobj) -> int {
 
 /// 状態を渡す形の複製が2つ以上の値を返すとき、結果は値の Repr と印から作るタプルの形の構造体である。末尾でない
 /// 呼び出しは構造体を受けて `unpack` し、`return` の節の結果の組も構造体の `con` で作る
-/// (docs/superpowers/specs/2026-10-21-s14e-abi-struct-design.md の「Core IR」の optimize)。
+/// (docs/spec/core-ir.md の「handler の複製」)。
 #[test]
 fn passing_returns_a_tuple_struct() {
     let text = "\
@@ -2580,7 +2579,7 @@ main () = println (show (State.exec 0 (fn () -> count 5)))
 }
 
 /// 開いた後の語の数が 6 を超える並びは、構造体にせず今の `obj` のタプルで返す
-/// (docs/superpowers/specs/2026-10-21-s14e-abi-struct-design.md の「構造体にする型」)。
+/// (docs/spec/core-ir.md の「構造体にする型」)。
 #[test]
 fn a_returned_tuple_over_six_words_stays_obj() {
     let text = "\
@@ -2610,7 +2609,7 @@ main () =
 }
 
 /// 構造体の型の `var` の状態は、状態を渡す形の複製でも構造体のまま持ち回る。2つの `var` の状態を返す複製の組は、
-/// 入れ子の構造体を葉に持つ構造体になる (docs/superpowers/specs/2026-10-21-s14e-abi-struct-design.md の「Core IR」の
+/// 入れ子の構造体を葉に持つ構造体になる (docs/spec/core-ir.md の「handler の複製」の
 /// optimize)。
 #[test]
 fn a_struct_var_state_stays_a_struct() {
@@ -2646,7 +2645,7 @@ main () = println (show (walk 4))
 /// 組を構造体で返す複製で、`return` の値が並びの Repr と互換なだけ (`tobj` の結果の `()`) のときは、値と状態を並びの
 /// Repr の引数を持つブロックへジャンプで渡し、そこで構造体の `con` を作る。構造体の `con` の引数は正確な位置で、
 /// ジャンプの実引数は命令なしで収まる互換の位置だからである
-/// (docs/superpowers/specs/2026-10-21-s14e-abi-struct-design.md の「Core IR」の optimize)。
+/// (docs/spec/core-ir.md の「handler の複製」)。
 #[test]
 fn a_compatible_return_value_reaches_the_tuple_through_a_block() {
     let shown = optimized(
@@ -2700,7 +2699,7 @@ fn entry$main() -> int {
 /// 既知の閉包をフィールドに持つ構造体の `con` を渡す呼び出しの複製は、値のフィールドを形の Repr (`int`) で受ける。
 /// 複製の入口で作り直す構造体の `con` の引数は、形と比べる正確な位置だからである。配置の Repr (`tobj`) で受けると、
 /// 作り直す `con` が verifier に断られる
-/// (docs/superpowers/specs/2026-10-21-s14e-abi-struct-design.md の「Core IR」の optimize)。
+/// (docs/spec/core-ir.md の「handler の複製」)。
 #[test]
 fn a_con_copy_takes_struct_fields_in_their_shape_reprs() {
     let text = "\
@@ -2723,7 +2722,7 @@ main () =
 /// 状態つきの handler の複製で、末尾の呼び出しの結果をそのまま返してよいのは、呼ぶ複製の並びが f の並びと同じときだけ
 /// である。タプルの形は値の Repr で決まるので、大きさが同じ並びでも形が違う。`obj` を返す f が `tobj` を返す g を末尾で
 /// 呼ぶと、f の複製は g の組を受け直して開き、f の並びの組を作り直して返す
-/// (docs/superpowers/specs/2026-10-21-s14e-abi-struct-design.md の「Core IR」の optimize)。
+/// (docs/spec/core-ir.md の「handler の複製」)。
 #[test]
 fn a_tail_call_to_a_copy_with_another_tuple_shape_is_received() {
     let shown = optimized(

@@ -107,7 +107,7 @@ fn f(a.0: obj, b.1: tobj, c.2: int, d.3: enum, e.4: unit) -> unit {
 }
 
 /// 構造体の Repr は配置の名前と、フィールドごとの Repr と印で書く。同じ中身の形は1つの番号になる
-/// (docs/superpowers/specs/2026-10-21-s14e-abi-struct-design.md の「構造体の Repr」)。
+/// (docs/spec/lir.md の「構造体の形」)。
 #[test]
 fn struct_text_round_trips() {
     let program = round_trip(
@@ -1805,7 +1805,7 @@ fn f(p.0: obj) -> unit {
 }
 
 /// 役割と `apply` の場所は Core IR と同じ形で書く。`tail` の後の `apply` も場所を持つ
-/// (docs/superpowers/specs/2026-10-21-s14e-abi-struct-design.md の「関数の ABI」「`apply` の ABI」)。
+/// (docs/spec/lir.md の「関数の ABI」と「`apply` の場所」)。
 #[test]
 fn roles_and_sites_round_trip() {
     let program = round_trip(
@@ -1860,7 +1860,7 @@ internal yields role cont fn f$k0(a.0: int, x.1: tobj) -> tobj {
 
 /// 開くパスが作る複数の値の形 (複数の値の結果、`let`、`return`、構造体の `unbox`、`release unboxed`) は、表示した
 /// とおりに読み戻せる。葉の変数の名前は元の名前に葉の番号を付けたもの (`p.0`) である
-/// (docs/superpowers/specs/2026-10-21-s14e-abi-struct-design.md の「LIR」)。
+/// (docs/spec/lir.md の「開く」)。
 #[test]
 fn multi_value_forms_read_back() {
     let program = round_trip(

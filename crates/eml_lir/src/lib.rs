@@ -81,7 +81,7 @@ pub struct LirFn {
     pub clause: Option<(u32, u32)>,
     pub vars: Vec<VarInfo>,
     /// 直接の呼び出しの結果の Repr と印の並び。長さは1以上である。開くパス (flatten) の前はいつも1つで、開いた後は
-    /// 構造体を返す関数がその葉を並べる (docs/superpowers/specs/2026-10-21-s14e-abi-struct-design.md の「LIR」)。
+    /// 構造体を返す関数がその葉を並べる (docs/spec/lir.md の「開く」)。
     /// テキストの形では、2つ以上の値を `-> (float, float)` と書く。
     pub rets: Vec<(Repr, Mark)>,
     /// 開いた後の関数の、源の単位の ABI (`SourceSig`)。開く前と、引数にも結果にも構造体のない関数では `None` で、ABI は
@@ -94,7 +94,7 @@ pub struct LirFn {
 /// 開くパスが構造体を葉に開いた関数の、開く前の引数の Repr と結果の Repr。構造体の Repr はそのまま残る。VM は
 /// 関数の値の ABI (源の引数の単位の数と、構造体と箱の間の変換に要る形) をこれから作る。引数と `rets` は、これを葉に
 /// 開いた並びと同じである (verifier が確かめる)。テキストの形では、関数の頭の結果の後に `source(Vec3{..}) -> Vec3{..}`
-/// と書く (docs/superpowers/specs/2026-10-21-s14e-abi-struct-design.md の「VM」)。
+/// と書く (docs/spec/vm.md の「シグネチャ」)。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SourceSig {
     pub params: Vec<Repr>,
@@ -104,7 +104,7 @@ pub struct SourceSig {
 /// 関数が EP のしくみの中で受け持つ役割。EP が総称に呼ぶ位置 (最後の `uniform_params` 個の引数と、
 /// `uniform_ret` なら結果) を一様にする。捕獲はその前に来る。役割は translate と EP が関数を作るときに付け、名前で
 /// 決まる。そのため、名前が同じ関数はいつも同じ ABI になる
-/// (docs/superpowers/specs/2026-10-21-s14e-abi-struct-design.md の「関数の ABI」)。
+/// (docs/spec/lir.md の「関数の ABI」)。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Role {
     /// 一様な位置を持たない。テキストには何も書かない。
@@ -161,7 +161,7 @@ impl Role {
 /// `apply` が引数を渡す規約。`Typed` は引数ごとの Repr で、その場所の矢印の型から決まる。変数の引数の Repr は変数の
 /// Repr と同じで (verifier が確かめる)、定数の引数の Repr は translate が型から決める。`#0` が `enum` か `tobj` かを
 /// 決めるためである。`Uniform` は EP が作る一様な場所である。結果の Repr は束縛の Repr で、末尾の位置では含む関数の
-/// `ret` である (docs/superpowers/specs/2026-10-21-s14e-abi-struct-design.md の「`apply` の ABI」)。
+/// `ret` である (docs/spec/lir.md の「`apply` の場所」)。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Site {
     Typed(Vec<Repr>),
@@ -187,7 +187,7 @@ impl LirFn {
 
     /// 構造体の `unbox` が読む箱を、`VarId` の番号で引く表。Perceus はその箱を手放す所で `drop` か印の付いた
     /// `release` を選び、reuse と verifier は `release` の印を合わせる
-    /// (docs/superpowers/specs/2026-10-21-s14e-abi-struct-design.md の「ダミーの約束を広げる」)。変数は1回だけ
+    /// (docs/spec/lir.md の「ダミーの値」)。変数は1回だけ
     /// 定義されるので (R5)、関数に1つの表にする。表にない番号の変数は、verifier が別に誤りとして報告する。
     pub fn struct_boxes(&self) -> Vec<bool> {
         let mut boxes = vec![false; self.vars.len()];
@@ -232,7 +232,7 @@ pub enum Stmt {
     /// 構造体の箱 `value` のフィールドを読み、`fields` に束縛する。`None` は読まないフィールドである。フィールドは
     /// `unpack` のフィールドと同じく値から借りる。開くパスが構造体の `unbox` から作り、開いた後の段だけに現れる。
     /// テキストの形は `let (x.4: float, _) = unbox w.3 Vec3` である
-    /// (docs/superpowers/specs/2026-10-21-s14e-abi-struct-design.md の「LIR」)。
+    /// (docs/spec/lir.md の「開く」)。
     UnboxStruct {
         value: VarId,
         ctor: Ctor,
@@ -252,7 +252,7 @@ pub enum Stmt {
         token: Option<VarId>,
         /// 構造体の `unbox` で葉を借りた箱を手放す印。VM はダミーを受けても何もしない別の命令にする。ふつうの
         /// `release` の速い道に確かめの分岐を足さないためである。テキストの形では `release unboxed` と書く
-        /// (docs/superpowers/specs/2026-10-21-s14e-abi-struct-design.md の「ダミーの約束を広げる」)。
+        /// (docs/spec/lir.md の「ダミーの値」)。
         unboxed: bool,
     },
     /// `drop_token r`。使わなかった token を手放す。
@@ -438,7 +438,7 @@ pub enum Rhs {
     /// 箱を要する値 (`Repr::needs_box`) か、`Int` か `Float` の定数を箱に入れる。オペランドを消費し、所有した箱を作る。
     /// 箱の種類はオペランドの Repr で決まる (docs/spec/lir.md の「値の表現」)。スカラーの箱は `tobj` で、構造体の箱は
     /// 配置の `con` と同じ形のヒープの物体なので `obj` である
-    /// (docs/superpowers/specs/2026-10-21-s14e-abi-struct-design.md の「箱に入れる位置」)。
+    /// (docs/spec/lir.md の「値の表現」)。
     Box(Atom),
     /// 箱から、箱を要する値を取り出す。`switch` の scrutinee と同じく値を読むだけで、所有権を受け取らない。取り出す値の
     /// 種類は束縛する変数の Repr で決まる。スカラーは `tobj` から、構造体は `obj` か `tobj` から取り出す。
@@ -702,7 +702,7 @@ impl LayoutCtor {
 
 /// 構造体の形。配置と、フィールドごとの Repr と Kind の印を持つ。フィールドの Repr は具体化した型から決まり、入れ子の
 /// 構造体のフィールドは `Repr::Struct` になる。配置の宣言した Repr とは別に持つ
-/// (docs/superpowers/specs/2026-10-21-s14e-abi-struct-design.md の「構造体の Repr」)。
+/// (docs/spec/lir.md の「構造体の形」)。
 /// テキストの形は `Vec3{float, float, float}`、`(,){int, obj lin}` である。
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct StructShape {
@@ -712,7 +712,7 @@ pub struct StructShape {
 
 /// 構造体の形の表。同じ中身の形には同じ番号を付ける。形は具体化した型から決まり、型は instance の名前に入って
 /// いるので、名前が同じ関数はいつも同じ ABI になる。番号は1つの Program の中だけで意味を持つ
-/// (docs/superpowers/specs/2026-10-21-s14e-abi-struct-design.md の「構造体の Repr」)。
+/// (docs/spec/lir.md の「構造体の形」)。
 #[derive(Clone, Default)]
 pub struct Structs {
     shapes: Vec<StructShape>,
@@ -741,7 +741,7 @@ impl Structs {
 
     /// 形の葉を深さ優先にフィールドの順で並べる。`unit` の葉も位置を保つために含める。入れ子の構造体の葉の印は、
     /// 葉の印とフィールドの印の小さいほうにする。構造体の変数を開くときの葉の印の規則を、入れ子のフィールドにも
-    /// 当てたものである (docs/superpowers/specs/2026-10-21-s14e-abi-struct-design.md の「Kind の印と RC」)。
+    /// 当てたものである (docs/spec/lir.md の「構造体の形」)。
     /// 再帰は形の深さだけである。
     pub fn leaves(&self, id: StructId) -> Vec<(Repr, Mark)> {
         let mut leaves = Vec::new();
@@ -768,7 +768,7 @@ impl Structs {
     }
 
     /// 印が `unr` でない、RC の対象の葉を持つか。「RC の対象」で後始末を決めている所は、この述語が真の構造体も含める
-    /// (docs/superpowers/specs/2026-10-21-s14e-abi-struct-design.md の「Kind の印と RC」)。
+    /// (docs/spec/lir.md の「構造体の形」)。
     pub fn has_non_unr_rc_leaf(&self, id: StructId) -> bool {
         self.leaves(id)
             .iter()
@@ -776,7 +776,7 @@ impl Structs {
     }
 
     /// 「RC の対象」で後始末を決める所が後始末する値の Repr。RC の対象の Repr と、`unr` でない RC の葉を持つ構造体
-    /// である (docs/superpowers/specs/2026-10-21-s14e-abi-struct-design.md の「Kind の印と RC」)。
+    /// である (docs/spec/lir.md の「構造体の形」)。
     pub fn rc_target(&self, repr: Repr) -> bool {
         match repr {
             Repr::Struct(id) => self.has_non_unr_rc_leaf(id),
@@ -786,7 +786,7 @@ impl Structs {
 
     /// 印を除いて同じ Repr。構造体どうしは骨組み (配置と、葉の Repr) が同じときに等しい。正確な位置で Repr を比べる
     /// 所が使う。状態を渡す形の複製が値の印から作る形と、型から作る形とで、印だけが違うことがあるためである
-    /// (docs/superpowers/specs/2026-10-21-s14e-abi-struct-design.md の「構造体の Repr」)。
+    /// (docs/spec/lir.md の「構造体の形」)。
     pub fn same(&self, a: Repr, b: Repr) -> bool {
         match (a, b) {
             (Repr::Struct(a), Repr::Struct(b)) => {
@@ -804,7 +804,7 @@ impl Structs {
 
     /// 互換の位置で命令なしで値を渡せる2つの Repr。構造体どうしは骨組みが同じときだけ互換で、印は葉ごとに印の
     /// 規則で比べる。ほかは `Repr::compatible` と同じである
-    /// (docs/superpowers/specs/2026-10-21-s14e-abi-struct-design.md の「構造体の Repr」)。
+    /// (docs/spec/lir.md の「構造体の形」)。
     pub fn compatible(&self, a: Repr, b: Repr) -> bool {
         match (a, b) {
             (Repr::Struct(_), Repr::Struct(_)) => self.same(a, b),

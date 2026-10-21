@@ -76,7 +76,7 @@ pub(super) struct Tuples {
     /// 大きさごとの配置。
     layouts: HashMap<usize, LayoutId>,
     /// 値の並びごとのタプルの Repr。値の Repr と印から作る形の構造体で、6 語を超える並びは `obj` である
-    /// (docs/superpowers/specs/2026-10-21-s14e-abi-struct-design.md の「Core IR」の optimize)。並びは複製の元の名前と
+    /// (docs/spec/core-ir.md の「handler の複製」)。並びは複製の元の名前と
     /// handler で決まるので、名前が同じ複製はいつも同じ形を返す。
     reprs: HashMap<Vec<(Repr, Mark)>, Repr>,
 }

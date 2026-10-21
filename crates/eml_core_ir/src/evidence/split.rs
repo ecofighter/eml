@@ -291,9 +291,8 @@ impl<'a> Splitter<'a> {
     }
 
     /// 継続の関数 `f$kN` は κ に合成する値として生まれるので内部の関数にし、直接呼ばれるだけの合流のブロックの関数
-    /// `f$jJ` は内部の関数にしない (`internal`、docs/spec/lir.md の「一様な関数」)。`f$kN` は再開の値を一様に受ける
-    /// `Continuation` の役割を持ち、`f$jJ` は役割を持たない
-    /// (docs/superpowers/specs/2026-10-21-s14e-abi-struct-design.md の「関数の ABI」)。
+    /// `f$jJ` は内部の関数にしない (`internal`)。`f$kN` は再開の値を一様に受ける `Continuation` の役割を持ち、`f$jJ`
+    /// は役割を持たない (docs/spec/lir.md の「関数の ABI」、docs/spec/core-ir.md の「継続の関数」)。
     fn continuation(&self, idx: FnIdx, program: &Program, body: Out, internal: bool) -> CoreFn {
         let (vars, blocks) = body.compact();
         CoreFn {
@@ -509,7 +508,7 @@ impl Out<'_> {
 /// `mask$` で包む。内側のフレームの再開のときに `mask$` が `evv` を整えるためである。地点の結果はここではダミーで、
 /// `unr` でない RC の結果は先頭で drop する。V1 が `unr` でない変数への Perceus の `decref` を拒むためである
 /// (docs/spec/core-ir.md の「EP の明示の `drop`」)。`unr` でない RC の葉を持つ構造体の結果も drop する
-/// (docs/superpowers/specs/2026-10-21-s14e-abi-struct-design.md の「Kind の印と RC」)。
+/// (docs/spec/lir.md の「構造体の形」)。
 fn slow_path(
     program: &mut Program,
     helpers: &mut Helpers,

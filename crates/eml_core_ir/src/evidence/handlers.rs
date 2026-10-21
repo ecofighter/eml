@@ -162,7 +162,7 @@ pub(super) fn lower(
                     mask,
                 } => {
                     // 再開した計算の yield は、`k` の外側の row、つまりこの関数の row を通る。再開は EP の一様な場所である
-                    // (docs/superpowers/specs/2026-10-21-s14e-abi-struct-design.md の「`apply` の ABI」)
+                    // (docs/spec/lir.md の「`apply` の場所」)
                     let apply = Call::Apply {
                         callee: k,
                         args: vec![arg, state],
@@ -474,7 +474,7 @@ fn into_entry(program: &mut Program, clause: FnIdx, effect: u32, op: u32) {
     function.name.push_str("$entry");
     function.clause = Some((effect, op));
     // 入口は操作の ABI で呼ばれ、`prompt$` に呼ばれる節の役割を持たない
-    // (docs/superpowers/specs/2026-10-21-s14e-abi-struct-design.md の「関数の ABI」)
+    // (docs/spec/lir.md の「関数の ABI」)
     function.role = Role::Typed;
 }
 

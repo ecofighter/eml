@@ -10,11 +10,11 @@ use eml_lir::{LayoutId, Mark, Repr, StructShape, Structs, VarInfo, data_repr};
 use super::instances::constructor_fields;
 
 /// 構造体にする型の、開いた後の葉の語の数の上限
-/// (docs/superpowers/specs/2026-10-21-s14e-abi-struct-design.md の「構造体にする型」)。
+/// (docs/spec/core-ir.md の「構造体にする型」)。
 pub(super) const MAX_STRUCT_WORDS: usize = 6;
 
 /// 型を持たない組の Repr。開いた後の葉の語の数が上限に収まれば構造体に、収まらなければ `obj` にする
-/// (docs/superpowers/specs/2026-10-21-s14e-abi-struct-design.md の「構造体にする型」)。translate の `var` の組と、
+/// (docs/spec/core-ir.md の「構造体にする型」)。translate の `var` の組と、
 /// optimize の状態を渡す形の複製が返す組が使う。
 pub(crate) fn tuple_struct(
     structs: &mut Structs,
@@ -38,7 +38,7 @@ pub(crate) fn tuple_struct(
 
 /// 箱の位置の Repr (docs/spec/core-ir.md の「型の Repr」)。構造体にする型も、箱に入れた形の `obj` として読む。
 /// 構造体が現れない所 (extern の行、操作の表) はこの Repr を使う
-/// (docs/superpowers/specs/2026-10-21-s14e-abi-struct-design.md の「構造体の Repr」)。変数の Repr は、構造体を
+/// (docs/spec/core-ir.md の「型の Repr」)。変数の Repr は、構造体を
 /// 決める `ProgramBuilder::repr` が決める。関数の値と型変数の値は、即値 (捕まえた変数のない関数、引数のない
 /// コンストラクタ) にもヒープの物体にもなるので `tobj` にする。
 pub fn boxed_repr(types: &TypeStore, ty: TypeId, hir: &HirProgram) -> Repr {
@@ -78,7 +78,7 @@ pub(super) fn type_def_repr(id: TypeDefId, hir: &HirProgram) -> Repr {
 
 /// instance の代入をかけた型の印 (docs/spec/core-ir.md の「translate が決める印」)。宣言に対して相対的な型は
 /// 現れないので、`TypeStore::linearity` で読む。構造体にする型も、箱の位置の Repr (`obj`) で RC の対象として
-/// 扱うので、型の Kind に従う (docs/superpowers/specs/2026-10-21-s14e-abi-struct-design.md の「Kind の印と RC」)。
+/// 扱うので、型の Kind に従う (docs/spec/core-ir.md の「translate が決める印」)。
 pub(super) fn mark(types: &TypeStore, ty: TypeId, hir: &HirProgram) -> Mark {
     scalar_or(types, ty, hir, || types.linearity(ty))
 }
@@ -140,7 +140,7 @@ pub(super) enum Composite {
     Data(TypeDefId),
 }
 
-/// 型を構造体にするかの判定 (docs/superpowers/specs/2026-10-21-s14e-abi-struct-design.md の「構造体にする型」)。
+/// 型を構造体にするかの判定 (docs/spec/core-ir.md の「構造体にする型」)。
 /// 変換は型の表を読むだけなので、`data` の型のフィールドの型と、構造体にする型の葉の語の数は、変換の前に求めておく。
 pub(super) struct StructTypes {
     /// 再帰の組に入る型の宣言 (`program.rs` の `recursive_types`)。
@@ -290,7 +290,7 @@ impl StructTypes {
     }
 
     /// 配置のフィールドの Repr。配置はスキームから決まるので、型変数のフィールドと同じく、構造体の型のフィールドも
-    /// 一様な位置の `tobj` にする (docs/superpowers/specs/2026-10-21-s14e-abi-struct-design.md の「箱に入れる位置」)。
+    /// 一様な位置の `tobj` にする (docs/spec/core-ir.md の「translate の配置」)。
     pub(super) fn layout_field_repr(
         &self,
         hir: &HirProgram,

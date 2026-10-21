@@ -1260,7 +1260,7 @@ fn last(a.0: obj) -> tobj {
 fn an_unboxed_box_is_released_with_its_named_leaves() {
     // 構造体の `unbox` の葉は、`unpack` のフィールドと同じく箱から借りる。箱が死んで葉が要る所では、葉に名前を書いた
     // `release unboxed` で箱を解く。印の付いた `release` は、箱がダミーでも何もしない
-    // (docs/superpowers/specs/2026-10-21-s14e-abi-struct-design.md の「ダミーの約束を広げる」)
+    // (docs/spec/lir.md の「Perceus」)
     let text = "\
 layout (,) { (,)(tobj, tobj) }
 fn g(a.0: obj) -> obj {

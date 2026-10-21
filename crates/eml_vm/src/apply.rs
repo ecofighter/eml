@@ -1,6 +1,6 @@
 //! 関数の値の適用とクロージャ (docs/spec/vm.md の「呼び出しと戻り」)。引数は `Task::scratch` に置いて渡す。呼ぶ所の
 //! シグネチャと関数の `FnEntry` の Repr が合わなければ、引数を実行時に変える
-//! (docs/superpowers/specs/2026-10-21-s14e-abi-struct-design.md の「VM」)。
+//! (docs/spec/vm.md の「シグネチャ」)。
 
 use eml_lir::Repr;
 use eml_rt::{Ctx, Mode, Word};
@@ -186,7 +186,7 @@ pub(crate) fn apply_clause<M: Mode>(
         ));
     }
     // 入口の関数の捕獲は一様で、操作の引数に構造体は来ないので、語の数は源の引数の数と等しい
-    // (docs/superpowers/specs/2026-10-21-s14e-abi-struct-design.md の「関数の ABI」)
+    // (docs/spec/lir.md の「関数の ABI」)
     if M::CHECKED && code.signatures.words(entry.sig).starts[k] != k {
         return Err(VmFault::Internal("a clause entry captures a struct"));
     }
@@ -194,8 +194,7 @@ pub(crate) fn apply_clause<M: Mode>(
 }
 
 /// 呼ばれる値から、関数の番号、捕まえた値の数、クロージャの物体を読む。捕まえた値の数は `&f` の即値の上の 32 ビットに
-/// 詰めてあるので、1回の読み込みで関数と数が分かる (docs/superpowers/specs/2026-10-21-s14e-abi-struct-design.md の
-/// 「VM」)。
+/// 詰めてあるので、1回の読み込みで関数と数が分かる (docs/spec/vm.md の「データとクロージャ」)。
 #[inline(always)]
 fn decode<M: Mode>(ctx: &Ctx<M>, callee: Word) -> Result<(usize, usize, Option<Closure>), VmFault> {
     let split = |imm: i64| {
@@ -426,7 +425,7 @@ fn convert<M: Mode>(
 }
 
 /// 合わない組は同じ型の一様な Repr と箱を要する Repr の組である。単相化した2つの場所は同じ型を見ているためである
-/// (docs/superpowers/specs/2026-10-21-s14e-abi-struct-design.md の「`apply` の ABI」)。構造体は箱 (`obj` か `tobj`) と
+/// (docs/spec/vm.md の「シグネチャ」)。構造体は箱 (`obj` か `tobj`) と
 /// だけ組になる。違う形の構造体どうしは種類が違うので、ここで断る。箱が同じ型の構造体の箱かは、取り出すときに検査
 /// モードが配置で確かめる。
 fn check_pair(from: Repr, to: Repr) -> Result<(), VmFault> {

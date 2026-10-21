@@ -69,7 +69,7 @@ pub enum Repr {
     Token,
     /// 構造体の値。番号は Program の形の表 (`eml_lir::Structs`) を引く。形を番号で指すのは、`Repr` を `Copy` に保つため
     /// である。extern の行、配置、操作の表には現れない
-    /// (docs/superpowers/specs/2026-10-21-s14e-abi-struct-design.md の「構造体の Repr」)。
+    /// (docs/spec/lir.md の「構造体の形」)。
     Struct(StructId),
 }
 
@@ -90,7 +90,7 @@ impl Repr {
 
     /// 箱を要する Repr。一様な位置との間で `box` と `unbox` を要する。`unit` は命令なしで `tobj` と行き来するので
     /// 入らない。box の挿入の規則と verifier はこの述語から作る (docs/spec/lir.md の「値の表現」、
-    /// docs/superpowers/specs/2026-10-21-s14e-abi-struct-design.md の「構造体の Repr」)。
+    /// docs/spec/lir.md の「構造体の形」)。
     pub fn needs_box(self) -> bool {
         matches!(self, Repr::Int | Repr::Float | Repr::Enum | Repr::Struct(_))
     }

@@ -63,7 +63,7 @@ pub(crate) fn function<M: Mode>(
         u16::try_from(usize::from(emitter.slots.colors) + usize::from(emitter.max_temps))
             .map_err(|_| too_many())?;
     // 関数の値の ABI は源の単位で決める。構造体の引数は1つと数え、`apply` は構造体と箱の間の変換に形を使う
-    // (docs/superpowers/specs/2026-10-21-s14e-abi-struct-design.md の「VM」)
+    // (docs/spec/vm.md の「シグネチャ」)
     let params = source_params(function);
     let sig = Signature {
         params: params.iter().map(|&repr| emitter.vm_repr(repr)).collect(),
@@ -780,7 +780,7 @@ impl<'a, M: Mode> Emitter<'a, '_, M> {
     /// `apply` のオペランド [呼ばれる値, n, 場所のシグネチャ, 引数…]。場所のシグネチャは引数を `apply` が持つ Repr で、
     /// 結果を `ret` で持つ。一様な場所の引数はすべて `tobj` である。`ret` は型どおりの
     /// 場所では束縛の Repr、一様な場所では `tobj` で、末尾の位置ではどちらも関数の `ret` である
-    /// (docs/superpowers/specs/2026-10-21-s14e-abi-struct-design.md の「`apply` の ABI」)。
+    /// (docs/spec/lir.md の「`apply` の場所」)。
     fn apply_operands(&mut self, call: &Call, ret: Repr) -> u32 {
         let Call::Apply {
             callee, args, site, ..
@@ -818,7 +818,7 @@ impl<'a, M: Mode> Emitter<'a, '_, M> {
 
     /// 末尾の呼び出しの結果 `ret` を、この関数の `ret` へ変える変換の命令列の位置。変換が要らなければ `NONE` である。
     /// 呼ぶ関数と呼び出し元の `ret` から静的に決まるので、命令に持たせる
-    /// (docs/superpowers/specs/2026-10-21-s14e-abi-struct-design.md の「VM」)。
+    /// (docs/spec/vm.md の「呼び出しと戻り」)。
     fn result_conversion(&self, ret: Repr) -> u32 {
         let from = class(self.vm_repr(ret));
         let to = class(self.vm_repr(source_ret(self.function)));

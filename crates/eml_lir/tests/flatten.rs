@@ -1,4 +1,4 @@
-//! 開くパス (docs/superpowers/specs/2026-10-21-s14e-abi-struct-design.md の「LIR」)。構造体はまだソースから作られない
+//! 開くパス (docs/spec/lir.md の「開く」)。構造体はまだソースから作られない
 //! ので、手で書いた構造体の LIR を box の挿入から開くパスまで通す。
 
 use crate::common::function;
@@ -47,7 +47,7 @@ fn box_builds_the_layout_con() {
     // 構造体の箱は配置の `con` で、葉を配置の宣言したフィールドの Repr に合わせる。`Ball` の `tobj` のフィールドに入る
     // `Vec3` は再帰で箱にし、`float` のフィールドには葉をそのまま入れる。`(Int, Float)` の箱はどちらのフィールドも
     // `tobj` なので、葉をそれぞれ `box` する
-    // (docs/superpowers/specs/2026-10-21-s14e-abi-struct-design.md の「箱に入れる位置」)
+    // (docs/spec/lir.md の「開く」)
     let text = format!(
         "{VEC3}{PAIR}{OPTION}layout Ball {{ Ball(tobj, float) }}
 fn f(b.0: Ball{{Vec3{{float, float, float}}, float}}, p.1: (,){{int, float}}) -> obj {{
@@ -293,7 +293,7 @@ internal role body fn outer(b.0: {ball}) -> float {{
 #[test]
 fn a_struct_unbox_leaves_the_lin_box_to_perceus() {
     // 構造体の `unbox` の後に、開くパスは `lin` の箱を手放す `drop` を置かない。箱を消費するかは道ごとに違うので、
-    // 道ごとに手放すのは Perceus である (docs/superpowers/specs/2026-10-21-s14e-abi-struct-design.md の「LIR」)
+    // 道ごとに手放すのは Perceus である (docs/spec/lir.md の「開く」)
     let text = "\
 layout Tok { Tok(int, float) }
 internal role body fn f(t.0: Tok{int, float} lin) -> int {

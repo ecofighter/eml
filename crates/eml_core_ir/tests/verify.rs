@@ -1030,7 +1030,7 @@ b1(p.3: obj):
 
 /// 型どおりの `apply` の場所は、変数の引数の Repr を変数と同じにする。テキストは変数の Repr を場所に読むので、
 /// 読んだ後に場所を書き換えて食い違いを作る
-/// (docs/superpowers/specs/2026-10-21-s14e-abi-struct-design.md の「`apply` の ABI」)。
+/// (docs/spec/lir.md の「`apply` の場所」)。
 #[test]
 fn a_site_entry_must_match_its_variable() {
     use eml_lir::{Repr, Site};
@@ -1066,7 +1066,7 @@ fn site_of(program: &mut Program) -> &mut eml_lir::Site {
 }
 
 /// `resume` の場所は値と状態の2つの Repr を持ち、変数の引数の Repr を変数と同じにする
-/// (docs/superpowers/specs/2026-10-21-s14e-abi-struct-design.md の「`apply` の ABI」)。
+/// (docs/spec/lir.md の「`apply` の場所」)。
 #[test]
 fn a_resume_site_entry_must_match_its_variable() {
     use eml_lir::Repr;
@@ -1118,7 +1118,7 @@ fn a_role_takes_no_more_uniform_parameters_than_the_function_has() {
 const VEC3: &str = "layout Vec3 { Vec3(float, float, float) }\n";
 
 /// 構造体の値を分けるのは `unpack` だけで、タグの `switch` の scrutinee にならない
-/// (docs/superpowers/specs/2026-10-21-s14e-abi-struct-design.md の「Core IR」)。
+/// (docs/spec/lir.md の「構造の規則」)。
 #[test]
 fn a_struct_is_never_a_switch_scrutinee() {
     let rejected = format!(
@@ -1171,7 +1171,7 @@ b1:
 }
 
 /// 構造体の `con` の引数は、配置の宣言した Repr でなく形のフィールドの Repr と、正確な位置として比べる
-/// (docs/superpowers/specs/2026-10-21-s14e-abi-struct-design.md の「Core IR」)。
+/// (docs/spec/lir.md の「構造の規則」)。
 #[test]
 fn a_struct_con_is_checked_against_its_shape() {
     let pair = |n: &str, s: &str| {

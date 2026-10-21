@@ -566,7 +566,7 @@ fn a_returned_variable_has_the_repr_of_the_function() {
 
 /// 末尾の位置の呼び出しの束縛は呼ばれる側の結果の Repr を持ち、box の挿入はその `return` に変換を入れない。範囲の段は
 /// この形の互換でない `return` だけを許し、縮約がそれを `tail` にする。間に純粋でない文があれば末尾の位置でなく、
-/// 今のとおり拒む (docs/superpowers/specs/2026-10-21-s14e-abi-struct-design.md の「box の挿入」)。
+/// 今のとおり拒む (docs/spec/lir.md の「末尾の位置の呼び出し」)。
 #[test]
 fn an_incompatible_return_is_accepted_only_after_a_tail_position_call() {
     let g = "fn g(x.0: tobj) -> tobj {\n  return x.0\n}\n";
@@ -842,7 +842,7 @@ fn g(a.0: tobj, b.1: tobj) -> tobj {{
 #[test]
 fn a_function_value_need_not_be_uniform() {
     // `apply` が実行時に Repr を変えるので、引数や結果が一様でない関数も関数の値になる
-    // (docs/superpowers/specs/2026-10-21-s14e-abi-struct-design.md の「VM」)
+    // (docs/spec/vm.md の「シグネチャ」)
     let value = |atom: &str| {
         format!(
             "\
@@ -968,7 +968,7 @@ fn the_results_of_uniform_calls_are_bound_to_variables_compatible_with_tobj() {
 }
 
 /// 末尾呼び出しの結果の Repr は、呼び出し元の `ret` と互換でなくてよい。VM の変換のフレームが変換する
-/// (docs/superpowers/specs/2026-10-21-s14e-abi-struct-design.md の「box の挿入」)。印は今のとおり比べる。
+/// (docs/spec/lir.md の「末尾の位置の呼び出し」)。印は今のとおり比べる。
 #[test]
 fn an_incompatible_tail_call_result_is_accepted() {
     let tail = |ret: &str, params: &str, call: &str| {
@@ -3329,7 +3329,7 @@ fn an_int_argument_for_an_obj_extern_parameter_is_rejected_at_the_entry_level() 
 }
 
 /// 型どおりの `apply` の場所の変数の Repr は、どの段でも変数と同じである。box の挿入は引数を場所の Repr へ変換する
-/// (docs/superpowers/specs/2026-10-21-s14e-abi-struct-design.md の「`apply` の ABI」)。
+/// (docs/spec/lir.md の「`apply` の場所」)。
 #[test]
 fn a_site_entry_must_match_its_variable() {
     use eml_lir::{Call, Repr, Site};
@@ -3372,7 +3372,7 @@ fn a_role_takes_no_more_uniform_parameters_than_the_function_has() {
 const VEC3: &str = "layout Vec3 { Vec3(float, float, float) }\n";
 
 /// 入口の段と box の挿入の後の段は構造体の変数を受ける。印だけが違う形どうしは互換である
-/// (docs/superpowers/specs/2026-10-21-s14e-abi-struct-design.md の「LIR」の verifier)。
+/// (docs/spec/lir.md の「verifier」)。
 #[test]
 fn the_lowered_and_scopes_stages_accept_structs() {
     let text = format!(
@@ -3407,7 +3407,7 @@ b1(q.1: (,){{Vec3{{float, float, float}}, obj}}):
 }
 
 /// 構造体の箱は配置の `con` と同じ形のヒープの物体なので、`box` の束縛は `obj` である。`unbox` は `obj` からも
-/// `tobj` からも構造体を取り出す (docs/superpowers/specs/2026-10-21-s14e-abi-struct-design.md の「LIR」の box の挿入)。
+/// `tobj` からも構造体を取り出す (docs/spec/lir.md の「値の表現」)。
 #[test]
 fn a_struct_box_is_obj() {
     let text = |boxed: &str, from: &str| {
@@ -3433,7 +3433,7 @@ fn check_flattened(text: &str) -> Result<(), String> {
 }
 
 /// 開いた後の段では、変数にも関数の結果にも構造体は残らない。Perceus の後の段も開いた後である
-/// (docs/superpowers/specs/2026-10-21-s14e-abi-struct-design.md の「LIR」の verifier)。
+/// (docs/spec/lir.md の「verifier」)。
 #[test]
 fn a_struct_after_flatten_is_rejected() {
     let param = format!(
@@ -3468,7 +3468,7 @@ fn a_struct_after_flatten_is_rejected() {
 }
 
 /// 複数の値の `return` は、関数の結果の並びと長さが同じである。複数の値の命令は開いた後の段だけに現れる
-/// (docs/superpowers/specs/2026-10-21-s14e-abi-struct-design.md の「LIR」の verifier)。
+/// (docs/spec/lir.md の「verifier」)。
 #[test]
 fn a_return_list_of_the_wrong_length_is_rejected() {
     let text = |returned: &str| {
@@ -3501,7 +3501,7 @@ fn f(x.0: float) -> (float, float) {{
 }
 
 /// 開いた後の関数の源の ABI と `apply` の場所は、葉に開くと関数の引数と結果、`apply` の引数と同じ並びになる。開く前の
-/// 段は源の ABI を持たない (docs/superpowers/specs/2026-10-21-s14e-abi-struct-design.md の「VM」)。
+/// 段は源の ABI を持たない (docs/spec/lir.md の「開く」)。
 #[test]
 fn source_records_open_to_the_leaves() {
     let text = |source: &str, site: &str| {
@@ -3537,7 +3537,7 @@ fn source_records_open_to_the_leaves() {
 
 /// `apply` の `source_ret` は、構造体の結果を葉で受ける場所だけが持つ。開いた後の段で、型どおりの場所の結果を複数の
 /// 値で受けるなら要り、構造体の Repr でなければならない。開く前の段は持たない
-/// (docs/superpowers/specs/2026-10-21-s14e-abi-struct-design.md の「VM」)。
+/// (docs/spec/lir.md の「開く」)。
 #[test]
 fn a_source_result_is_a_struct_on_a_flattened_apply() {
     let vec3 = "Vec3{float, float, float}";
@@ -3597,7 +3597,7 @@ fn a_source_result_is_a_struct_on_a_flattened_apply() {
 
 /// 構造体の `unbox` の箱を手放す `release` だけが `unboxed` の印を持ち、その箱の `release` はいつも印を持つ。VM は
 /// 印の付いた `release` を、ダミーを受けても何もしない別の命令にする
-/// (docs/superpowers/specs/2026-10-21-s14e-abi-struct-design.md の「ダミーの約束を広げる」)。
+/// (docs/spec/lir.md の「ダミーの値」)。
 #[test]
 fn only_the_box_of_a_struct_unbox_is_released_unboxed() {
     let text = |unbox: &str, release: &str| {

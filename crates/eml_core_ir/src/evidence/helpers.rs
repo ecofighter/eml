@@ -271,7 +271,7 @@ fn apply_marked(
     prompt: Option<VarId>,
 ) -> VarId {
     // 補助の関数の `apply` は EP の一様な場所である
-    // (docs/superpowers/specs/2026-10-21-s14e-abi-struct-design.md の「`apply` の ABI」)
+    // (docs/spec/lir.md の「`apply` の場所」)
     let rhs = call(Call::Apply {
         callee: Atom::Var(callee),
         args,

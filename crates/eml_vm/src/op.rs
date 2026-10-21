@@ -11,10 +11,10 @@ pub type Pc = u32;
 /// いちばん下のフレームの戻り先。
 pub const FINISH: Pc = 0;
 /// 余った引数を適用する組み込みの命令。そのフレームは [結果, n, 場所のシグネチャ, 残りの引数の最初の位置, 引数…] で、
-/// 引数は場所のシグネチャの Repr のまま持つ (docs/superpowers/specs/2026-10-21-s14e-abi-struct-design.md の「VM」)。
+/// 引数は場所のシグネチャの Repr のまま持つ (docs/spec/vm.md の「フレーム」)。
 pub const APPLY_REST: Pc = 1;
 /// 箱を要するスカラーと一様な値の間の変換の命令列の、最初の位置。命令列は `CodeBase::new` が作る
-/// (docs/superpowers/specs/2026-10-21-s14e-abi-struct-design.md の「VM」)。
+/// (docs/spec/vm.md の「変換のフレーム」)。
 pub const CONVERSIONS: Pc = 2;
 /// 組み込みの命令の数。関数の命令はこの後に並ぶ。変換の命令列は、受ける命令と変換して戻る命令の2つを6組持つ。
 pub const BUILTINS: Pc = CONVERSIONS + 2 * 6;
@@ -304,7 +304,7 @@ pub enum Op {
     /// 構造体の `unbox` で葉を借りた箱の `release`。`operands[at..]` は [token のスロットか NONE, タグ,
     /// 走査する語の数, 項目の数, 項目…] で、項目は `Release` と同じである。箱がダミーなら何もせず、token の形は空の
     /// token を書く。ふつうの `release` の速い道に確かめを足さないため、命令を分ける
-    /// (docs/superpowers/specs/2026-10-21-s14e-abi-struct-design.md の「ダミーの約束を広げる」)。
+    /// (docs/spec/vm.md の「データとクロージャ」)。
     ReleaseUnboxed {
         src: Slot,
         at: u32,

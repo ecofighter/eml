@@ -288,7 +288,7 @@ impl Fuser<'_> {
 
     /// Repr が `repr` の `con` の値の、フィールドの Repr。構造体の `con` の引数は形のフィールドの Repr と比べる正確な
     /// 位置なので、複製の中で作り直す `con` に合わせて形の Repr にする。ほかは配置の宣言した Repr である
-    /// (docs/superpowers/specs/2026-10-21-s14e-abi-struct-design.md の「Core IR」の optimize)。
+    /// (docs/spec/core-ir.md の「`con` の値の形についての特殊化」)。
     fn field_reprs(&self, repr: Repr, ctor: Ctor) -> Vec<Repr> {
         match repr {
             Repr::Struct(id) => self
@@ -430,13 +430,13 @@ impl Fuser<'_> {
 
     /// 呼び出し先の書き換えた後のコードの、鍵の位置の引数を開いた複製。開いた引数の印は、捕獲の位置の印ともとの引数の
     /// 印の小さい方にする。作り直す閉包と `con` は、もとの引数の印を持つ。開いた引数の印はそれを超えないので、組み立ての
-    /// 検査を通る (docs/spec/lir.md の「Kind の印の検査」)。ABI は名前で決まるので、複製は呼び出し先の `internal` の
-    /// 印を写す (docs/spec/lir.md の「一様な関数」)。
+    /// 検査を通る (docs/spec/lir.md の「Kind の印の検査」)。複製は呼び出し先の `internal` の印を写す
+    /// (docs/spec/core-ir.md の「鍵と名前」)。
     fn build(&self, key: &Key, name: String) -> CoreFn {
         let mut function = self.functions[key.callee.0 as usize].clone();
         function.name = name;
         // 役割は末尾の引数を一様にする。一様な位置を開くと末尾の引数の並びが変わるので、複製は型どおりに呼ぶ関数にする
-        // (docs/superpowers/specs/2026-10-21-s14e-abi-struct-design.md の「関数の ABI」)
+        // (docs/spec/core-ir.md の「`con` の値の形についての特殊化」)
         let first_uniform = function.params().len() - function.role.uniform_params();
         if key
             .args

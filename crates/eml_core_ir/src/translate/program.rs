@@ -120,7 +120,7 @@ impl ProgramBuilder {
 
     /// 変数の Repr。箱の位置の Repr (`boxed_repr`) に、構造体にする型の判定を加える。構造体の形のフィールドの Repr と
     /// 印は、具体化したフィールドの型から決める
-    /// (docs/superpowers/specs/2026-10-21-s14e-abi-struct-design.md の「構造体の Repr」)。
+    /// (docs/spec/core-ir.md の「構造体にする型」)。
     pub(super) fn repr(&mut self, hir: &HirProgram, types: &TypeStore, ty: TypeId) -> Repr {
         if let Some(&repr) = self.reprs.get(&ty) {
             return repr;
@@ -190,7 +190,7 @@ impl ProgramBuilder {
     }
 
     /// 「RC の対象」で後始末を決める所の述語。`unr` でない RC の葉を持つ構造体も含める
-    /// (docs/superpowers/specs/2026-10-21-s14e-abi-struct-design.md の「Kind の印と RC」)。
+    /// (docs/spec/lir.md の「構造体の形」)。
     pub(super) fn rc_target(&self, repr: Repr) -> bool {
         self.structs.rc_target(repr)
     }
@@ -572,7 +572,7 @@ impl ProgramBuilder {
         let value = Atom::Var(result);
         let (returned, ret, ret_mark) = match after {
             // 入口の `ret` は値1つにする。構造体なら `obj` にし、box の挿入が箱に入れる
-            // (docs/superpowers/specs/2026-10-21-s14e-abi-struct-design.md の「Core IR」)
+            // (docs/spec/core-ir.md の「構造体にする型」)
             EntryAfter::Return => (
                 value,
                 boxed_repr(types, result_type, hir),
@@ -711,7 +711,7 @@ pub(super) fn plain_call(call: Call) -> Rhs {
 /// 再帰の組に入る型の宣言。宣言のフィールドの型の注釈が、型引数や関数型の中を含めてどこかで名指す型の宣言へ辺を引き、
 /// 自分へ戻れる宣言を集める。自分を直接か、ほかの宣言のフィールドを通して含む型は、構造体にしない。`Iter` は
 /// `Option (a, Iter e a)` を通して自分を含む
-/// (docs/superpowers/specs/2026-10-21-s14e-abi-struct-design.md の「構造体にする型」)。構造体にしうるのはコンストラクタが
+/// (docs/spec/core-ir.md の「構造体にする型」)。構造体にしうるのはコンストラクタが
 /// 1つの宣言だけなので、それらからだけたどる。プログラムに1回だけ求める。
 pub(super) fn recursive_types(hir: &HirProgram) -> HashSet<TypeDefId> {
     let mentions = |id: TypeDefId| {

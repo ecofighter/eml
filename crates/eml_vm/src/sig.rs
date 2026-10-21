@@ -1,6 +1,6 @@
 //! シグネチャと構造体の形。シグネチャは関数と `apply` の場所の、源の単位の引数と結果の Repr の並びである。どちらも
 //! `CodeBase` の中で中身から一意な番号にするので、追記の間も番号は変わらない
-//! (docs/superpowers/specs/2026-10-21-s14e-abi-struct-design.md の「VM」)。
+//! (docs/spec/vm.md の「シグネチャ」)。
 
 use std::collections::HashMap;
 
@@ -8,7 +8,7 @@ use eml_lir::{LayoutCtor, Program, Repr, Shape, StructId};
 
 /// VM の構造体の形の中身。配置の名前、0番のコンストラクタの宣言したフィールドの Repr、形のフィールドの Repr で決まる。
 /// 入れ子の構造体のフィールドは VM の番号で指す。印は持たない。形は骨組みで比べ、印だけが違う形は同じ変換を使うため
-/// である (docs/superpowers/specs/2026-10-21-s14e-abi-struct-design.md の「構造体の Repr」)。
+/// である (docs/spec/vm.md の「シグネチャ」)。
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub(crate) struct StructKey {
     pub(crate) layout: String,
@@ -153,7 +153,7 @@ pub(crate) struct Signature {
 }
 
 /// 変換の種類。`apply` は Repr の等しさでなく種類で比べる。`obj` と `tobj` が違うだけで遅い道に入らないためである
-/// (docs/superpowers/specs/2026-10-21-s14e-abi-struct-design.md の「VM」)。
+/// (docs/spec/vm.md の「シグネチャ」)。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Class {
     /// 語のまま渡せるもの (`obj`、`tobj`、`unit`)。
@@ -216,8 +216,7 @@ const SLOW_FN: u64 = u64::MAX;
 pub(crate) const SLOW_SITE: u64 = u64::MAX - 1;
 
 /// 引数の種類を i 番目の 4 ビットに、結果の種類をその次の 4 ビットに詰めた語。`apply` の速い道は関数の語を捕まえた値の
-/// 数だけずらし、場所の語と1回で比べる (docs/superpowers/specs/2026-10-21-s14e-abi-struct-design.md の
-/// 「作る人に任せること」)。詰められなければ `slow` を返す。
+/// 数だけずらし、場所の語と1回で比べる (docs/spec/vm.md の「シグネチャ」)。詰められなければ `slow` を返す。
 /// 構造体を含むシグネチャも詰めない。構造体の引数は語の数が Repr の数と違い、速い道は語の数で引数の数を比べるため
 /// である。
 fn pack(sig: &Signature, slow: u64) -> u64 {

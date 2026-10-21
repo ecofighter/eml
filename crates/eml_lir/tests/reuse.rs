@@ -617,7 +617,7 @@ fn h(y.0: obj, z.1: obj) -> obj {
 fn swapping_tuple_elements_still_reuses_the_box() {
     // 構造体の `unbox` の箱を解く `release unboxed` も reuse の元になる。組の要素を入れ替えて箱に戻す形では、今までの
     // `release` と `con … reuse` の組が構造体の後も残る
-    // (docs/superpowers/specs/2026-10-21-s14e-abi-struct-design.md の「LIR」)
+    // (docs/spec/lir.md の「reuse の元」)
     let text = "\
 layout (,) { (,)(tobj, tobj) }
 internal role body fn swap(p.0: (,){float, float}) -> (,){float, float} {

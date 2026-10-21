@@ -297,7 +297,7 @@ fn lower_local_functions(ctx: BodyCtx<'_>, program: &mut ProgramBuilder) {
         );
         let captured = ctx.typed_captures(program, &function.captured);
         // ローカル関数は直接呼ばれるために生まれるので、内部の関数でない。値として使う所も、型どおりの ABI のまま
-        // 同じ関数を指す (docs/superpowers/specs/2026-10-21-s14e-abi-struct-design.md の「関数の ABI」)
+        // 同じ関数を指す (docs/spec/lir.md の「関数の ABI」)
         let core = FnLowering::new(ctx, program, yields).lower(
             &name,
             false,
@@ -733,7 +733,7 @@ impl<'a> FnLowering<'a> {
     }
 
     /// 節の `k` (局所変数 `local`) を包む、`k` の型ごとの関数。名前の型引数は、再開の値と状態 (状態のある handler
-    /// だけ) と結果の型である (docs/superpowers/specs/2026-10-21-s14e-abi-struct-design.md の「関数の ABI」)。
+    /// だけ) と結果の型である (docs/spec/lir.md の「関数の ABI」)。
     fn continuation_wrapper(&mut self, local: LocalId) -> FnIdx {
         let (hir, store) = (self.ctx.hir, self.ctx.store);
         let arity = self.ctx.body.continuations[local];
@@ -753,7 +753,7 @@ impl<'a> FnLowering<'a> {
     /// `yields` は持ち上げた関数の印である。クロージャの印は、型のあるラムダなら `typed` で、型のない handle の本体と
     /// 節では捕まえた値の印の結びにする
     /// (docs/spec/core-ir.md の「translate が決める印」)。`role` は持ち上げた関数の EP の役割で、ラムダは `Typed` で
-    /// ある (docs/superpowers/specs/2026-10-21-s14e-abi-struct-design.md の「関数の ABI」)。
+    /// ある (docs/spec/lir.md の「関数の ABI」)。
     #[expect(
         clippy::too_many_arguments,
         reason = "the parts of one lifted function"

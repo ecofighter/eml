@@ -206,7 +206,7 @@ fn not_returned(x.0: int) -> int {
 fn an_incompatible_tail_position_call_becomes_tail() {
     // `g` の `unit` は `f` の `obj` と互換でないが、末尾の位置の呼び出しは結果の Repr によらず末尾呼び出しになる。
     // 結果の変換は VM の変換のフレームが行う
-    // (docs/superpowers/specs/2026-10-21-s14e-abi-struct-design.md の「box の挿入」)
+    // (docs/spec/lir.md の「末尾の位置の呼び出し」)
     let text = "\
 fn f() -> obj {
   let r.0: tobj = call g()
@@ -338,7 +338,7 @@ const VEC3: &str = "layout Vec3 { Vec3(float, float, float) }\n";
 fn a_multi_value_call_returned_in_order_becomes_tail() {
     // `let (x.0, .., x.n) = <呼び出し>` の直後の `return (x.0, .., x.n)` は、同じ並びで同じ順なら末尾呼び出しになる。
     // 構造体を返す型どおりの `apply` も同じである
-    // (docs/superpowers/specs/2026-10-21-s14e-abi-struct-design.md の「LIR」の後のパス)
+    // (docs/spec/lir.md の「縮約」)
     let text = format!(
         "{VEC3}fn g(x.0: float) -> Vec3{{float, float, float}} {{
   let v.1: Vec3{{float, float, float}} = con Vec3 #0(x.0, x.0, 1.0)
