@@ -3,7 +3,7 @@
 //! 確かめる道: 直接の呼び出しと戻り、`con` と `switch` と `release`、部分適用と余った引数、基本操作 (evidence を作って
 //! 引く)、ヒープの文字列の extern、2つのプログラムを1つの `Machine` に続けて読み込み、2つ目の塊を付け替えること、
 //! 文字列を返す入口の結果を写すこと、`exit` の巻き戻し、型どおりの `apply` と生の語の捕獲、`apply` の箱の変換、
-//! 変換のフレーム、両方のモード。
+//! 変換のフレーム、複数の値の戻りと構造体と箱の間の変換、両方のモード。
 
 use eml_vm::{AnyMachine, RunConfig, capture_host, execute};
 
@@ -338,4 +338,45 @@ fn inc(x.0: int) -> int {
 }
 ";
     assert_eq!(run_both(text), "1.25\n22\n");
+}
+
+/// 複数の値の戻りと、構造体と箱の間の変換。構造体は参照の葉 (文字列) を持つ。`pair` は葉を `RetN` で返す。一様な
+/// 場所に渡す箱は、`apply` が `same` の前で葉に開いて空け、`same` の葉の結果は変換のフレームが箱に入れる。`main` の
+/// 構造体の `unbox` はその箱から葉を借り、`release unboxed` が箱を空けて葉を受け取る。`take` は構造体を葉のまま
+/// 受ける。構造体はまだソースから作られないので、手書きの LIR をパスに通す。
+#[test]
+fn multi_value_returns() {
+    let named = "Named{obj, float}";
+    let text = format!(
+        "\
+layout Named {{ Named(obj, float) }}
+fn main() -> unit {{
+  let a.0: obj = const \"multi\"
+  let b.1: obj = const \" value\"
+  let s.2: obj = extern \"Prelude.++\"(a.0, b.1)
+  let p.3: {named} = call pair(s.2)
+  let q.4: {named} = uniform apply &same(p.3)
+  let x.5: float = apply &take(q.4)
+  let t.6: obj = extern \"Prelude.Show Float.show\"(x.5)
+  let u.7: unit = extern Prelude.println(t.6)
+  return u.7
+}}
+fn pair(s.0: obj) -> {named} {{
+  let p.1: {named} = con Named #0(s.0, 1.5)
+  return p.1
+}}
+fn same(p.0: {named}) -> {named} {{
+  return p.0
+}}
+fn take(p.0: {named}) -> float {{
+  unpack p.0 Named #0(s.1: obj, x.2: float)
+  let u.3: unit = extern Prelude.println(s.1)
+  return x.2
+}}
+"
+    );
+    let mut program = eml_lir::parse(&text).unwrap_or_else(|error| panic!("{error}"));
+    eml_lir::passes_until(&mut program, eml_lir::Pass::Reuse);
+    eml_lir::verify(&program).unwrap_or_else(|error| panic!("{error}"));
+    assert_eq!(run_program(&program), "multi value\n1.5\n");
 }

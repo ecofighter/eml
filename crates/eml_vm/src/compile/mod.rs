@@ -9,13 +9,13 @@ use std::mem;
 use std::sync::Arc;
 
 use eml_lir::unwind::UnwindPoint;
-use eml_lir::{FnIdx, Loc, Program};
+use eml_lir::{FnIdx, Loc, Program, StructId};
 use eml_rt::{Control, MaskItem, Mode};
 
 use crate::code::{CodeBase, CompileError, Conversions, FnEntry, Index, Unwind, builtins};
 use crate::disasm;
 use crate::op::{Op, Pc};
-use crate::sig::Signatures;
+use crate::sig::{Signatures, Structs};
 use constants::Constants;
 
 /// 命令とオペランドを書く先。関数をまたいで1つにする。`load` の間だけ `CodeBase` の列を借りて末尾に書く。
@@ -31,6 +31,8 @@ pub(crate) struct Out {
     pub(crate) signatures: Signatures,
     /// `CodeBase::conversions` を借りたもの。直接の末尾呼び出しの結果の変換を引く。
     pub(crate) conversions: Conversions,
+    /// `CodeBase::structs` を借りたもの。シグネチャの語の並びを決める。
+    pub(crate) structs: Structs,
 }
 
 impl Out {
@@ -77,6 +79,7 @@ pub(crate) struct Links {
     pub(crate) strings: Vec<u32>,
     pub(crate) effects: Vec<u16>,
     pub(crate) files: Vec<u32>,
+    pub(crate) structs: Vec<StructId>,
 }
 
 /// プログラム全体を新しい `CodeBase` に変換する。逆アセンブラのテストが使う。
@@ -99,6 +102,7 @@ impl<M: Mode> CodeBase<M> {
             operands,
             signatures: Signatures::default(),
             conversions,
+            structs: Structs::default(),
             mask_lists: Vec::new(),
             constants: Vec::new(),
             region: None,
@@ -115,6 +119,12 @@ impl<M: Mode> CodeBase<M> {
     /// 呼び出しを書ける。名前が同じ関数はいつも同じコードになるので (docs/spec/vm.md の「追記」)、debug ビルドでは
     /// すでにある名前の関数も変換し直して比べる。誤りを返した後の表は途中まで書いたものなので、使い続けない。
     pub fn load(&mut self, program: &Program) -> Result<u32, CompileError> {
+        let entry = program.function(program.entry);
+        if entry.rets.len() > 1 {
+            return Err(CompileError::MultiValueEntry {
+                function: entry.name.clone(),
+            });
+        }
         let links = self.links(program);
         let CodeBase {
             functions,
@@ -122,6 +132,7 @@ impl<M: Mode> CodeBase<M> {
             operands,
             signatures,
             conversions,
+            structs,
             mask_lists,
             constants,
             region,
@@ -139,6 +150,7 @@ impl<M: Mode> CodeBase<M> {
             unwinds: mem::take(unwinds),
             signatures: mem::take(signatures),
             conversions: mem::take(conversions),
+            structs: mem::take(structs),
         };
         let mut pool = Constants::new(constants, index, region, control);
         let strings = &program.strings;
@@ -184,6 +196,7 @@ impl<M: Mode> CodeBase<M> {
         *unwinds = out.unwinds;
         *signatures = out.signatures;
         *conversions = out.conversions;
+        *structs = out.structs;
         result?;
         if let Some(chunk) = frozen? {
             *region = Some(chunk);
@@ -197,8 +210,15 @@ impl<M: Mode> CodeBase<M> {
         Ok(links.functions[program.entry.0 as usize])
     }
 
-    /// 関数、エフェクト、位置のファイルの番号を引く。ない名前には末尾の番号を振る。文字列は定数を作るときに引く。
+    /// 関数、エフェクト、位置のファイル、構造体の形の番号を引く。ない名前には末尾の番号を振る。新しく引いた形には
+    /// 変換の命令列を足す。文字列は定数を作るときに引く。
     fn links(&mut self, program: &Program) -> Links {
+        let (structs, fresh) = self.structs.link(program);
+        for id in fresh {
+            let words = self.structs.get(id).leaves.len();
+            self.conversions
+                .push_struct(&mut self.code, &mut self.operands, id.0, words);
+        }
         let mut next = self.functions.len() as u32;
         let functions = program
             .functions
@@ -241,6 +261,7 @@ impl<M: Mode> CodeBase<M> {
             strings: Vec::new(),
             effects,
             files,
+            structs,
         }
     }
 }
@@ -286,6 +307,7 @@ fn check_known<M: Mode>(
                 unwinds: &out.unwinds,
                 signatures: &out.signatures,
                 conversions: &out.conversions,
+                structs: &out.structs,
                 functions,
                 files,
             }

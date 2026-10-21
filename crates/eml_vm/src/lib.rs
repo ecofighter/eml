@@ -473,6 +473,9 @@ pub fn compile_error(program: &Program, error: CompileError) -> RuntimeError {
         CompileError::Mismatch { function } => {
             ("a function with a known name has other code", function)
         }
+        CompileError::MultiValueEntry { function } => {
+            ("an entry function returns more than one value", function)
+        }
     };
     RuntimeError::Fault {
         fault: VmFault::Internal(what),

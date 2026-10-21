@@ -9,7 +9,7 @@ use eml_rt::{MaskItem, Mode};
 
 use crate::code::{CodeBase, Conversions, FnEntry, Unwind};
 use crate::op::{KEEP, NONE, Op, Pc, RAW, SKIP};
-use crate::sig::{SigId, Signatures};
+use crate::sig::{Class, SigId, Signatures, Structs};
 
 pub fn disassemble<M: Mode>(code: &CodeBase<M>) -> String {
     let view = View::of(code);
@@ -37,6 +37,7 @@ pub(crate) struct View<'a> {
     pub(crate) unwinds: &'a [(Pc, Unwind)],
     pub(crate) signatures: &'a Signatures,
     pub(crate) conversions: &'a Conversions,
+    pub(crate) structs: &'a Structs,
     pub(crate) functions: &'a [FnEntry],
     pub(crate) files: &'a [String],
 }
@@ -97,6 +98,7 @@ impl<'a> View<'a> {
             unwinds: &code.unwinds,
             signatures: &code.signatures,
             conversions: &code.conversions,
+            structs: &code.structs,
             functions: &code.functions,
             files: &code.files,
         }
@@ -167,12 +169,12 @@ impl<'a> View<'a> {
         let names = |reprs: &[eml_lir::Repr]| {
             reprs
                 .iter()
-                .map(|repr| repr.name())
+                .map(|&repr| self.structs.repr_name(repr))
                 .collect::<Vec<_>>()
                 .join(", ")
         };
         let ret = match sig.ret.as_slice() {
-            [one] => one.name().to_string(),
+            [one] => self.structs.repr_name(*one),
             many => format!("({})", names(many)),
         };
         format!("({}) -> {ret}", names(&sig.params))
@@ -192,7 +194,11 @@ impl<'a> View<'a> {
     /// 末尾の呼び出しの結果の変換。位置は追記で変わりうるので、種類の組で書く。なければ空である。
     fn conversion(&self, pc: u32) -> String {
         match self.conversions.at(pc) {
-            Some(c) => format!(" convert {} -> {}", c.from.name(), c.to.name()),
+            Some(c) => format!(
+                " convert {} -> {}",
+                self.structs.class_name(c.from),
+                self.structs.class_name(c.to)
+            ),
             None if pc == NONE => String::new(),
             None => format!(" convert ?{pc}"),
         }
@@ -231,15 +237,65 @@ impl<'a> View<'a> {
             Op::ApplyRest => "apply_rest".to_string(),
             Op::Receive { at } => format!("receive [{}]", args(at, 1)),
             Op::RetBox { src, scalar } => {
-                format!("ret_box {} s{src}", scalar.class().name())
+                format!("ret_box {} s{src}", self.structs.class_name(scalar.class()))
             }
             Op::RetUnbox { src, scalar } => {
-                format!("ret_unbox {} s{src}", scalar.class().name())
+                format!(
+                    "ret_unbox {} s{src}",
+                    self.structs.class_name(scalar.class())
+                )
+            }
+            Op::RetBoxStruct { id } => {
+                format!("ret_box {}", self.structs.class_name(Class::Struct(id)))
+            }
+            Op::RetUnboxStruct { id } => {
+                format!(
+                    "ret_unbox {} s0",
+                    self.structs.class_name(Class::Struct(id))
+                )
+            }
+            Op::CallN { at } => {
+                let o = ops(at);
+                let n = o[1] as usize;
+                format!(
+                    "call_n ({}) = {}({})",
+                    slots(&o[3 + n..3 + n + o[2 + n] as usize]),
+                    name(o[0]),
+                    args(at, 2)
+                )
+            }
+            Op::RetN { at } => format!("ret_n ({})", args(at, 1)),
+            Op::ApplyN { at } => {
+                let o = ops(at);
+                let n = o[1] as usize;
+                format!(
+                    "apply_n ({}) = {}",
+                    slots(&o[4 + n..4 + n + o[3 + n] as usize]),
+                    self.apply(o)
+                )
+            }
+            Op::UnboxStruct { src, at } => {
+                let o = ops(at);
+                format!(
+                    "unbox_struct s{src} #{} [{}]",
+                    o[0],
+                    fields(&o[3..3 + 2 * o[2] as usize])
+                )
+            }
+            Op::ReleaseUnboxed { src, at } => {
+                let o = ops(at);
+                let entries = release_entries(&o[4..4 + o[3] as usize]);
+                let token = if o[0] == NONE {
+                    String::new()
+                } else {
+                    format!(" token s{}", o[0])
+                };
+                format!("release_unboxed s{src} #{} [{entries}]{token}", o[1])
             }
             Op::Closure { dst, at } => {
                 let o = ops(at);
                 let lin = if o[1] != 0 { " lin" } else { "" };
-                format!("closure s{dst} = {}({}){lin}", name(o[0]), args(at, 3))
+                format!("closure s{dst} = {}({}){lin}", name(o[0]), args(at, 4))
             }
             Op::Apply { dst, at } => format!("apply s{dst} = {}", self.apply(ops(at))),
             Op::TailApply { at } => format!("tail_apply {}", self.apply(ops(at))),

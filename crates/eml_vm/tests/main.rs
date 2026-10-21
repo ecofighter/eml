@@ -16,4 +16,5 @@ mod reuse;
 mod roots;
 mod run;
 mod scaling;
+mod structs;
 mod tags;

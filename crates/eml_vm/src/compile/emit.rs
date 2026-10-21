@@ -62,23 +62,43 @@ pub(crate) fn function<M: Mode>(
     let frame_size =
         u16::try_from(usize::from(emitter.slots.colors) + usize::from(emitter.max_temps))
             .map_err(|_| too_many())?;
-    let sig = emitter.out.signatures.intern(Signature {
-        params: function
-            .params()
-            .iter()
-            .map(|&param| function.repr(param))
-            .collect(),
-        ret: function.rets.iter().map(|&(repr, _)| repr).collect(),
-    });
+    // 関数の値の ABI は源の単位で決める。構造体の引数は1つと数え、`apply` は構造体と箱の間の変換に形を使う
+    // (docs/superpowers/specs/2026-10-21-s14e-abi-struct-design.md の「VM」)
+    let params = source_params(function);
+    let sig = Signature {
+        params: params.iter().map(|&repr| emitter.vm_repr(repr)).collect(),
+        ret: vec![emitter.vm_repr(source_ret(function))],
+    };
+    let sig = emitter.out.signatures.intern(sig, &emitter.out.structs);
     Ok(FnEntry {
         name: function.name.clone(),
         start,
         end: emitter.out.pc(),
-        arity: u16::try_from(function.params().len()).map_err(|_| too_many())?,
+        arity: u16::try_from(params.len()).map_err(|_| too_many())?,
         frame_size,
         sig,
         key: emitter.out.signatures.fn_key(sig),
     })
+}
+
+/// 関数の源の単位の引数の Repr。開いた後の関数は `source` に持ち、構造体のない関数は引数のとおりである。
+fn source_params(function: &LirFn) -> Vec<Repr> {
+    match &function.source {
+        Some(source) => source.params.clone(),
+        None => function
+            .params()
+            .iter()
+            .map(|&param| function.repr(param))
+            .collect(),
+    }
+}
+
+/// 関数の源の単位の結果の Repr。
+fn source_ret(function: &LirFn) -> Repr {
+    function
+        .source
+        .as_ref()
+        .map_or(function.rets[0].0, |source| source.ret)
 }
 
 /// どこかで使う変数。SSA なので、使う変数は定義の後で生きていて、使わない変数の定義は死んでいる。死んでいるフィールドは
@@ -174,6 +194,29 @@ impl<'a, M: Mode> Emitter<'a, '_, M> {
 
     pub(crate) fn repr(&self, var: VarId) -> Repr {
         self.function.repr(var)
+    }
+
+    /// プログラムの Repr を VM の Repr にする。構造体の番号を `CodeBase` の番号に引き直す。
+    pub(crate) fn vm_repr(&self, repr: Repr) -> Repr {
+        match repr {
+            Repr::Struct(id) => Repr::Struct(self.links.structs[id.0 as usize]),
+            other => other,
+        }
+    }
+
+    /// 源の単位の Repr が占める語の Repr。構造体は `unit` でない葉に開く。
+    fn leaf_reprs(&self, repr: Repr) -> Vec<Repr> {
+        match repr {
+            Repr::Struct(id) => self
+                .program
+                .structs
+                .leaves(id)
+                .into_iter()
+                .map(|(repr, _)| repr)
+                .filter(|&repr| repr != Repr::Unit)
+                .collect(),
+            other => vec![other],
+        }
     }
 
     /// 一時のスロットを1つ取る。変数のスロットの後に置き、命令ごとに使い回す。
@@ -281,30 +324,16 @@ impl<'a, M: Mode> Emitter<'a, '_, M> {
                 token,
                 unboxed: false,
             } => {
-                let layout_ctor = self.layout_ctor(*ctor);
-                let shape = layout_ctor.shape();
-                let offset = crate::data::count_word(shape.scanned);
-                let entries: Vec<u32> = fields
-                    .iter()
-                    .zip(&shape.positions)
-                    .zip(&layout_ctor.fields)
-                    .filter(|(_, repr)| repr.is_rc())
-                    .map(|((field, &position), _)| {
-                        (position + offset) | if field.is_some() { KEEP } else { 0 }
-                    })
-                    .collect();
+                let items = self.release_entries(*ctor, fields);
                 let src = self.slot(*value);
-                let head = [ctor.tag, shape.scanned, entries.len() as u32];
                 match token {
                     None => {
-                        let at = self.out.operands(head.into_iter().chain(entries));
+                        let at = self.out.operands(items);
                         self.out.push(Op::Release { src, at });
                     }
                     Some(token) => {
                         let tok = u32::from(self.slot(*token));
-                        let at = self
-                            .out
-                            .operands([tok].into_iter().chain(head).chain(entries));
+                        let at = self.out.operands([tok].into_iter().chain(items));
                         self.out.push(Op::ReleaseReuse { src, at });
                     }
                 }
@@ -313,13 +342,88 @@ impl<'a, M: Mode> Emitter<'a, '_, M> {
                 let tok = self.slot(*token);
                 self.out.push(Op::DropToken { tok });
             }
-            // 開くパスの複数の値の命令は、ソースのプログラムからはまだ作られない。VM はまだそれを実行しない
-            Stmt::LetMany { .. }
-            | Stmt::UnboxStruct { .. }
-            | Stmt::Release { unboxed: true, .. } => {
-                unreachable!("the VM does not compile multi-value statements yet")
+            Stmt::LetMany { vars, call } => {
+                let at = match call {
+                    Call::Direct(f, args) => self.call_operands(*f, args),
+                    Call::Apply { source_ret, .. } => {
+                        let ret = source_ret.expect("a multi-value apply has a struct result");
+                        self.apply_operands(call, ret)
+                    }
+                    Call::Clause { .. } => {
+                        unreachable!("an operation returns one value (docs/spec/lir.md)")
+                    }
+                };
+                let dsts: Vec<u32> = vars.iter().map(|&var| u32::from(self.slot(var))).collect();
+                self.out
+                    .operands([dsts.len() as u32].into_iter().chain(dsts));
+                self.out.push(match call {
+                    Call::Direct(..) => Op::CallN { at },
+                    _ => Op::ApplyN { at },
+                });
+            }
+            Stmt::UnboxStruct {
+                value,
+                ctor,
+                fields,
+            } => {
+                let layout_ctor = self.layout_ctor(*ctor);
+                let shape = layout_ctor.shape();
+                let offset = crate::data::count_word(shape.scanned);
+                let mut items = Vec::new();
+                for ((field, &position), &repr) in
+                    fields.iter().zip(&shape.positions).zip(&layout_ctor.fields)
+                {
+                    if let Some(field) = field
+                        && self.used[field.0 as usize]
+                    {
+                        let raw = if repr.is_rc() { 0 } else { RAW };
+                        items.push((position + offset) | raw);
+                        items.push(u32::from(self.slot(*field)));
+                    }
+                }
+                let at = self.out.operands(
+                    [ctor.tag, shape.scanned, (items.len() / 2) as u32]
+                        .into_iter()
+                        .chain(items),
+                );
+                let src = self.slot(*value);
+                self.out.push(Op::UnboxStruct { src, at });
+            }
+            Stmt::Release {
+                value,
+                ctor,
+                fields,
+                token,
+                unboxed: true,
+            } => {
+                let entries = self.release_entries(*ctor, fields);
+                let tok = token.map_or(NONE, |token| u32::from(self.slot(token)));
+                let at = self.out.operands([tok].into_iter().chain(entries));
+                let src = self.slot(*value);
+                self.out.push(Op::ReleaseUnboxed { src, at });
             }
         }
+    }
+
+    /// `release` のオペランドの [タグ, 走査する語の数, 項目の数, 項目…]。項目は RC のフィールドの位置で、残す位置には
+    /// `KEEP` を立てる。
+    fn release_entries(&self, ctor: Ctor, fields: &[Option<VarId>]) -> Vec<u32> {
+        let layout_ctor = self.layout_ctor(ctor);
+        let shape = layout_ctor.shape();
+        let offset = crate::data::count_word(shape.scanned);
+        let entries: Vec<u32> = fields
+            .iter()
+            .zip(&shape.positions)
+            .zip(&layout_ctor.fields)
+            .filter(|(_, repr)| repr.is_rc())
+            .map(|((field, &position), _)| {
+                (position + offset) | if field.is_some() { KEEP } else { 0 }
+            })
+            .collect();
+        [ctor.tag, shape.scanned, entries.len() as u32]
+            .into_iter()
+            .chain(entries)
+            .collect()
     }
 
     /// 巻き戻しの表の行を足す。地点の命令は文の最後に書くので、今の位置がその命令の次の位置である
@@ -511,10 +615,12 @@ impl<'a, M: Mode> Emitter<'a, '_, M> {
                     .map(|(&arg, &param)| self.atom(arg, callee.repr(param)))
                     .collect();
                 let lin = self.function.mark(var) == eml_lir::Mark::Lin;
+                let captured = self.captured(callee, args.len());
                 let at = self.out.operands(
                     [
                         self.links.functions[f.0 as usize],
                         u32::from(lin),
+                        captured,
                         slots.len() as u32,
                     ]
                     .into_iter()
@@ -526,11 +632,17 @@ impl<'a, M: Mode> Emitter<'a, '_, M> {
                 let at = self.clause_operands(call);
                 self.out.push(Op::Clause { dst, at });
             }
-            Rhs::Call(call @ Call::Apply { site, .. }) => {
-                // 一様な場所の結果は `tobj` で、box の挿入が束縛をそれに合わせてある
-                let ret = match site {
-                    Site::Typed(_) => self.repr(var),
-                    Site::Uniform => Repr::TObj,
+            Rhs::Call(
+                call @ Call::Apply {
+                    site, source_ret, ..
+                },
+            ) => {
+                // 一様な場所の結果は `tobj` で、box の挿入が束縛をそれに合わせてある。葉が1つの構造体の結果は、源の
+                // Repr を持つ
+                let ret = match (site, source_ret) {
+                    (_, Some(ret)) => *ret,
+                    (Site::Typed(_), None) => self.repr(var),
+                    (Site::Uniform, None) => Repr::TObj,
                 };
                 let at = self.apply_operands(call, ret);
                 self.out.push(Op::Apply { dst, at });
@@ -676,21 +788,27 @@ impl<'a, M: Mode> Emitter<'a, '_, M> {
         else {
             unreachable!("apply operands are made for an apply")
         };
-        // 変数の引数の場所の Repr は変数の Repr と同じである (verifier が確かめる)
+        // 型どおりの場所は源の引数ごとに Repr を持ち、引数は構造体を葉に開いた並びである。変数の引数の場所の Repr は
+        // 変数の Repr と同じである (verifier が確かめる)
         let params: Vec<Repr> = match site {
             Site::Typed(reprs) => reprs.clone(),
             Site::Uniform => vec![Repr::TObj; args.len()],
         };
+        let words: Vec<Repr> = params
+            .iter()
+            .flat_map(|&repr| self.leaf_reprs(repr))
+            .collect();
         let callee = self.atom(*callee, Repr::TObj);
         let slots: Vec<Slot> = args
             .iter()
-            .zip(&params)
+            .zip(&words)
             .map(|(&arg, &repr)| self.atom(arg, repr))
             .collect();
-        let sig = self.out.signatures.intern(Signature {
-            params,
-            ret: vec![ret],
-        });
+        let sig = Signature {
+            params: params.iter().map(|&repr| self.vm_repr(repr)).collect(),
+            ret: vec![self.vm_repr(ret)],
+        };
+        let sig = self.out.signatures.intern(sig, &self.out.structs);
         self.out.operands(
             [u32::from(callee), slots.len() as u32, sig.0]
                 .into_iter()
@@ -702,7 +820,8 @@ impl<'a, M: Mode> Emitter<'a, '_, M> {
     /// 呼ぶ関数と呼び出し元の `ret` から静的に決まるので、命令に持たせる
     /// (docs/superpowers/specs/2026-10-21-s14e-abi-struct-design.md の「VM」)。
     fn result_conversion(&self, ret: Repr) -> u32 {
-        let (from, to) = (class(ret), class(self.function.rets[0].0));
+        let from = class(self.vm_repr(ret));
+        let to = class(self.vm_repr(source_ret(self.function)));
         if from == to {
             return NONE;
         }
@@ -713,6 +832,23 @@ impl<'a, M: Mode> Emitter<'a, '_, M> {
             "a tail call converts between the reprs of different types"
         );
         conversion.unwrap_or(NONE)
+    }
+
+    /// `closure f(args)` が捕まえる源の引数の数。引数は構造体を葉に開いた並びなので、`f` の源の引数を前から開いて
+    /// 葉の数が `words` に届くまで数える。VM は捕まえた値の数を `&f` の即値に詰め、`apply` は源の単位で引数の数を
+    /// 比べるためである。
+    fn captured(&self, callee: &LirFn, words: usize) -> u32 {
+        let mut covered = 0;
+        let mut count = 0;
+        for repr in source_params(callee) {
+            if covered >= words {
+                break;
+            }
+            covered += self.leaf_reprs(repr).len();
+            count += 1;
+        }
+        debug_assert_eq!(covered, words, "a closure captures whole source arguments");
+        count
     }
 
     /// 直接の呼び出しのオペランド [関数の番号, 引数の数, 引数のスロット…]。
@@ -742,7 +878,7 @@ impl<'a, M: Mode> Emitter<'a, '_, M> {
                     self.self_tail_patches.push(at as usize);
                     self.out.push(Op::TailSelf { at });
                 } else {
-                    let conversion = self.result_conversion(self.program.function(*f).rets[0].0);
+                    let conversion = self.result_conversion(source_ret(self.program.function(*f)));
                     self.out.operands([conversion]);
                     self.out.push(Op::TailCall { at });
                 }
@@ -758,10 +894,21 @@ impl<'a, M: Mode> Emitter<'a, '_, M> {
                 self.out.push(Op::TailClause { at });
             }
             Term::TailCall(call) => {
-                let at = self.apply_operands(call, self.function.rets[0].0);
+                let at = self.apply_operands(call, source_ret(self.function));
                 self.out.push(Op::TailApply { at });
             }
-            Term::ReturnMany(_) => unreachable!("the VM does not compile multi-value returns yet"),
+            Term::ReturnMany(atoms) => {
+                let function = self.function;
+                let slots: Vec<u32> = atoms
+                    .iter()
+                    .zip(&function.rets)
+                    .map(|(&atom, &(repr, _))| u32::from(self.atom(atom, repr)))
+                    .collect();
+                let at = self
+                    .out
+                    .operands([slots.len() as u32].into_iter().chain(slots));
+                self.out.push(Op::RetN { at });
+            }
             Term::Jump { target, args } => self.jump(block, *target, args),
             Term::Switch {
                 scrutinee,

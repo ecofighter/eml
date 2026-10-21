@@ -28,6 +28,25 @@ pub fn run_lir_stats(text: &str) -> (String, Result<RunStats, RuntimeError>) {
     run_both(&verified(text))
 }
 
+/// 構造体を持つ手書きの LIR を、box の挿入から reuse までのパスに通して verifier にかける。構造体はまだソースから
+/// 作られないので、VM の複数の値の命令と構造体の変換はこの形で確かめる。
+pub fn lowered(text: &str) -> Program {
+    let mut program = parse(text);
+    eml_lir::passes_until(&mut program, eml_lir::Pass::Reuse);
+    eml_lir::verify(&program).unwrap_or_else(|error| panic!("{error}"));
+    program
+}
+
+/// `lowered` の LIR を `run_lir_stats` と同じく実行する。
+pub fn run_lowered_stats(text: &str) -> (String, Result<RunStats, RuntimeError>) {
+    run_both(&lowered(text))
+}
+
+/// `lowered` の LIR の逆アセンブル。
+pub fn disasm_lowered(text: &str) -> String {
+    disasm_unverified_program(&lowered(text))
+}
+
 fn run_both(program: &Program) -> (String, Result<RunStats, RuntimeError>) {
     let (out, result) = execute(program, &eml_vm::RunConfig::default().with_debug_heap(true));
     if result.is_ok() {

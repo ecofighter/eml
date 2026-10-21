@@ -18,9 +18,9 @@ pub const APPLY_REST: Pc = 1;
 pub const CONVERSIONS: Pc = 2;
 /// 組み込みの命令の数。関数の命令はこの後に並ぶ。変換の命令列は、受ける命令と変換して戻る命令の2つを6組持つ。
 pub const BUILTINS: Pc = CONVERSIONS + 2 * 6;
-/// 変換のフレームの大きさ。受ける値と作業用のスロットの数の最大で、どの変換も同じ大きさにする。合成でフレームを
-/// 置き換えるとき、上のフレームをずらさずに済むためである。命令列を作るときに、使うスロットがこの中にあることを
-/// 確かめる。
+/// スカラーの変換のフレームの大きさ。変換のフレームの大きさは変換ごとに受ける値の数で、構造体の箱へ入れる変換は葉の
+/// 数のスロットを持つ。合成は恒等か、違う型の間の誤りにしかならないので、変換のフレームを別の大きさの変換に置き換える
+/// ことはない (`vm::tail_convert`)。命令列を作るときに、使うスロットがこの中にあることを確かめる。
 pub const CONVERSION_FRAME_SIZE: usize = 1;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -60,6 +60,15 @@ pub enum Op {
     TailCall {
         at: u32,
     },
+    /// 複数の値を返す直接の呼び出し。`operands[at..]` は [関数の番号, 引数の数, 引数のスロット…, 結果の数,
+    /// 結果のスロット…]。結果は呼ばれる側の `RetN` が、見出しの戻り先の直前のこの命令から読んだスロットに書く。
+    CallN {
+        at: u32,
+    },
+    /// 複数の値の戻り。`operands[at..]` は [値の数, 値のスロット…]。
+    RetN {
+        at: u32,
+    },
     Finish,
     ApplyRest,
     /// 変換の命令列の先頭の直前に置く、受けるスロットの命令。`operands[at..]` は [値の数, スロット…]。実行はしない。
@@ -77,7 +86,16 @@ pub enum Op {
         src: Slot,
         scalar: Scalar,
     },
-    /// `operands[at..]` は [関数の番号, lin, 引数の数, 引数のスロット…]。
+    /// 変換のフレームの本体。スロット 0.. の葉から構造体 `id` の箱を作って呼び出し元へ返す。
+    RetBoxStruct {
+        id: u32,
+    },
+    /// 変換のフレームの本体。スロット 0 の箱から構造体 `id` の葉を取り出し、箱を消費して呼び出し元へ返す。
+    RetUnboxStruct {
+        id: u32,
+    },
+    /// `operands[at..]` は [関数の番号, lin, 捕まえる源の引数の数, 引数の数, 引数のスロット…]。源の引数の数は
+    /// 構造体の引数を1つと数える。`&f` の即値にはこの数を詰める。
     Closure {
         dst: Slot,
         at: u32,
@@ -88,6 +106,11 @@ pub enum Op {
         at: u32,
     },
     TailApply {
+        at: u32,
+    },
+    /// 複数の値を受ける `apply`。`operands[at..]` は [呼ばれる値のスロット, 引数の数, 場所のシグネチャ,
+    /// 引数のスロット…, 結果の数, 結果のスロット…]。
+    ApplyN {
         at: u32,
     },
     /// `operands[at..]` は [呼ばれる値のスロット, 引数の数, 引数のスロット…]。引数は操作の ABI の Repr である。
@@ -269,6 +292,20 @@ pub enum Op {
         src: Slot,
     },
     Release {
+        src: Slot,
+        at: u32,
+    },
+    /// 構造体の箱 `src` のフィールドを読む。`operands[at..]` は `Unpack` と同じ [タグ, 走査する語の数, 項目の数,
+    /// [位置 | RAW, スロット]…] である。箱がダミーなら、各スロットに葉のダミーを書く。
+    UnboxStruct {
+        src: Slot,
+        at: u32,
+    },
+    /// 構造体の `unbox` で葉を借りた箱の `release`。`operands[at..]` は [token のスロットか NONE, タグ,
+    /// 走査する語の数, 項目の数, 項目…] で、項目は `Release` と同じである。箱がダミーなら何もせず、token の形は空の
+    /// token を書く。ふつうの `release` の速い道に確かめを足さないため、命令を分ける
+    /// (docs/superpowers/specs/2026-10-21-s14e-abi-struct-design.md の「ダミーの約束を広げる」)。
+    ReleaseUnboxed {
         src: Slot,
         at: u32,
     },

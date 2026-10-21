@@ -8,7 +8,7 @@ use eml_rt::{Control, Frozen, HeapError, MaskItem, Mode, Word};
 
 use crate::error::{RuntimeError, SourceLocation};
 use crate::op::{BUILTINS, CONVERSION_FRAME_SIZE, CONVERSIONS, Op, Pc, Slot};
-use crate::sig::{Class, Scalar, SigId, Signatures};
+use crate::sig::{Class, Scalar, SigId, Signatures, Structs};
 use crate::vm::{Failure, Task};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -39,12 +39,14 @@ pub(crate) struct Unwind {
 }
 
 /// 変換の命令列。受ける命令の次の `start` から `end` の前までで、`from` の種類の値を受けて `to` の種類で返す。
+/// `size` は変換のフレームの大きさで、受ける値の語の数である。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct Conversion {
     pub(crate) start: Pc,
     pub(crate) end: Pc,
     pub(crate) from: Class,
     pub(crate) to: Class,
+    pub(crate) size: usize,
 }
 
 /// 変換の命令列の表。組の中身で一意にする (docs/superpowers/specs/2026-10-21-s14e-abi-struct-design.md の「VM」)。
@@ -57,10 +59,55 @@ pub(crate) struct Conversions {
 impl Conversions {
     /// `from` から `to` への変換の命令列の先頭。同じ種類の間と、違う型の Repr の間には変換がない。
     pub(crate) fn find(&self, from: Class, to: Class) -> Option<Pc> {
+        self.get(from, to).map(|c| c.start)
+    }
+
+    /// `from` から `to` への変換。
+    pub(crate) fn get(&self, from: Class, to: Class) -> Option<Conversion> {
         self.list
             .iter()
             .find(|c| (c.from, c.to) == (from, to))
-            .map(|c| c.start)
+            .copied()
+    }
+
+    /// 構造体 `id` の箱へ入れる変換と箱から取り出す変換を、`code` の末尾に足す。箱へ入れる変換は葉の語をスロット
+    /// 0.. に受け、取り出す変換は箱をスロット 0 に受ける。形を新しく引いたときに、追記の中で1回だけ作る
+    /// (docs/superpowers/specs/2026-10-21-s14e-abi-struct-design.md の「VM」)。
+    pub(crate) fn push_struct(
+        &mut self,
+        code: &mut Vec<Op>,
+        operands: &mut Vec<u32>,
+        id: u32,
+        words: usize,
+    ) {
+        let receive = |operands: &mut Vec<u32>, n: usize| {
+            let at = u32::try_from(operands.len()).expect("the operands fit in u32 positions");
+            operands.push(n as u32);
+            operands.extend(0..n as u32);
+            at
+        };
+        let at = receive(operands, words);
+        code.push(Op::Receive { at });
+        let start = code.len() as Pc;
+        code.push(Op::RetBoxStruct { id });
+        self.list.push(Conversion {
+            start,
+            end: code.len() as Pc,
+            from: Class::Struct(id),
+            to: Class::Word,
+            size: words,
+        });
+        let at = receive(operands, 1);
+        code.push(Op::Receive { at });
+        let start = code.len() as Pc;
+        code.push(Op::RetUnboxStruct { id });
+        self.list.push(Conversion {
+            start,
+            end: code.len() as Pc,
+            from: Class::Word,
+            to: Class::Struct(id),
+            size: 1,
+        });
     }
 
     /// 命令列の先頭が `pc` の変換。フレームの見出しの戻り先と、命令の変換のオペランドを引く。
@@ -97,6 +144,7 @@ pub(crate) fn builtins() -> (Vec<Op>, Vec<u32>, Conversions) {
                 end: code.len() as Pc,
                 from,
                 to,
+                size: CONVERSION_FRAME_SIZE,
             });
         }
     }
@@ -126,6 +174,8 @@ pub struct CodeBase<M: Mode> {
     pub(crate) signatures: Signatures,
     /// 変換の命令列。
     pub(crate) conversions: Conversions,
+    /// 構造体の形。シグネチャの構造体の Repr はこの表の番号である。中身で引くので、追記の間も番号は変わらない。
+    pub(crate) structs: Structs,
     /// `EvvMask` が参照する、mask の項目の並び。
     pub(crate) mask_lists: Vec<MaskItem>,
     pub(crate) constants: Vec<Word>,
@@ -170,6 +220,9 @@ pub enum CompileError {
     /// すでにある名前の関数を変換し直すと、前と違うコードになった。debug ビルドだけが確かめる
     /// (docs/spec/vm.md の「追記」)。
     Mismatch { function: String },
+    /// 結果が複数の値の入口の関数。入口の `ret` は値1つで、`Finish` は値を1つだけ受ける
+    /// (docs/superpowers/specs/2026-10-21-s14e-abi-struct-design.md の「S14e-2 構造体の表現」の「VM」)。
+    MultiValueEntry { function: String },
 }
 
 impl<M: Mode> CodeBase<M> {
@@ -177,19 +230,15 @@ impl<M: Mode> CodeBase<M> {
         &self.functions
     }
 
-    /// 関数の結果が RC の Repr か。
+    /// 関数の結果が RC の Repr か。構造体の結果は RC の葉を持つかで決まる。
     pub(crate) fn ret_rc(&self, f: u32) -> bool {
         let entry = &self.functions[f as usize];
         self.signatures
             .get(entry.sig)
             .ret
             .iter()
+            .flat_map(|repr| self.structs.words(repr))
             .any(|repr| repr.is_rc())
-    }
-
-    /// `from` から `to` への変換の命令列の先頭。
-    pub(crate) fn conversion(&self, from: Class, to: Class) -> Option<Pc> {
-        self.conversions.find(from, to)
     }
 
     /// `pc` が変換の命令列の中か。

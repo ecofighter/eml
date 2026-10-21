@@ -95,11 +95,20 @@ fn interference(function: &LirFn) -> Vec<BTreeSet<usize>> {
                     edge(def, other);
                 }
             }
-            // unpack の値は、書くフィールドと干渉する (switch の scrutinee と同じ理由)
-            if let Stmt::Unpack { value, fields, .. } = stmt {
-                for &field in fields {
-                    edge(field, *value);
+            // unpack と構造体の unbox の値は、書くフィールドと干渉する (switch の scrutinee と同じ理由)。複数の値の
+            // `let` が定義する変数どうしは、上の定義の規則で干渉する
+            match stmt {
+                Stmt::Unpack { value, fields, .. } => {
+                    for &field in fields {
+                        edge(field, *value);
+                    }
                 }
+                Stmt::UnboxStruct { value, fields, .. } => {
+                    for &field in fields.iter().flatten() {
+                        edge(field, *value);
+                    }
+                }
+                _ => {}
             }
             step_back(stmt, &mut live);
         }

@@ -11,7 +11,7 @@ use crate::apply;
 use crate::code::CodeBase;
 use crate::data;
 use crate::error::VmFault;
-use crate::op::{APPLY_REST, CONVERSION_FRAME_SIZE, FINISH, NONE, Op, Pc, Slot};
+use crate::op::{APPLY_REST, FINISH, NONE, Op, Pc, Slot};
 use crate::sig::{Scalar, SigId};
 
 /// 1つのタスクの実行の状態。
@@ -238,6 +238,8 @@ fn step<M: Mode>(
             task.enter_in_place(code, o[0]);
             ctx.poll(task.depth())?;
         }
+        Op::CallN { at } => call_many(code, ctx, task, at)?,
+        Op::RetN { at } => return_many(code, ctx, task, pc, at)?,
         Op::Finish => {
             finish(code, ctx, task)?;
             return Ok(false);
@@ -249,11 +251,13 @@ fn step<M: Mode>(
         Op::Receive { .. } => receive_executed()?,
         Op::RetBox { src, scalar } => convert_return(ctx, task, counts, src, scalar, true)?,
         Op::RetUnbox { src, scalar } => convert_return(ctx, task, counts, src, scalar, false)?,
+        Op::RetBoxStruct { id } => convert_struct_return(code, ctx, task, counts, id, true)?,
+        Op::RetUnboxStruct { id } => convert_struct_return(code, ctx, task, counts, id, false)?,
         Op::Closure { dst, at } => {
             let o = ops(at);
-            let (f, lin, n) = (o[0], o[1] != 0, o[2] as usize);
-            task.load_scratch(slots(&o[3..3 + n]));
-            let w = apply::make_closure(code, ctx, f, lin, &task.scratch)?;
+            let (f, lin, k, n) = (o[0], o[1] != 0, o[2] as usize, o[3] as usize);
+            task.load_scratch(slots(&o[4..4 + n]));
+            let w = apply::make_closure(code, ctx, f, k, lin, &task.scratch)?;
             task.scratch.clear();
             task.set(dst, w);
         }
@@ -261,6 +265,7 @@ fn step<M: Mode>(
             let target = apply::Target::Frame { ret: task.pc, dst };
             apply_call(code, ctx, task, counts, at, target)?;
         }
+        Op::ApplyN { at } => apply_many(code, ctx, task, counts, at)?,
         Op::Clause { dst, at } => {
             let target = apply::Target::Frame { ret: task.pc, dst };
             clause_call(code, ctx, task, at, target)?;
@@ -353,6 +358,8 @@ fn step<M: Mode>(
         Op::Dup { src } => unsafe { ctx.heap_mut().dup(task.get(src)) }?,
         Op::Decref { src } => unsafe { ctx.heap_mut().decref(task.get(src)) }?,
         Op::Release { src, at } => data::release(code, ctx, task, src, at)?,
+        Op::UnboxStruct { src, at } => data::unbox_struct(code, ctx, task, src, at)?,
+        Op::ReleaseUnboxed { src, at } => data::release_unboxed(code, ctx, task, src, at)?,
         Op::Con { dst, at } => data::con(code, ctx, task, dst, at)?,
         Op::ReleaseReuse { src, at } => data::release_reuse(code, ctx, task, src, at)?,
         Op::ConReuse { dst, at } => data::con_reuse(code, ctx, task, counts, dst, at)?,
@@ -569,7 +576,9 @@ fn clause_call<M: Mode>(
     Ok(())
 }
 
-/// 呼ぶ側の上に呼ばれる側のフレームを作り、引数を写して先頭へ進む。呼ぶ側のスロットはスタックに残る。
+/// 呼ぶ側の上に呼ばれる側のフレームを作り、引数を写して先頭へ進む。呼ぶ側のスロットはスタックに残る。`CallN` からも
+/// 呼ぶので、`Call` の速い道に展開し続けるように `inline(always)` にする。
+#[inline(always)]
 fn call<M: Mode>(code: &CodeBase<M>, task: &mut Task, dst: Slot, at: u32) {
     let ops = &code.operands[at as usize..];
     let n = ops[1] as usize;
@@ -580,6 +589,107 @@ fn call<M: Mode>(code: &CodeBase<M>, task: &mut Task, dst: Slot, at: u32) {
         task.stack[base + i] = task.stack[caller + slot as usize];
     }
     task.pc = entry.start;
+}
+
+// 複数の値の命令は `step` に展開しない。展開すると `step` が大きくなり、値が1つの `Call` と `Ret` の速い道の命令の数が
+// 増えた (`bench/run.sh` の `fib` で約 4%)。値が1つの呼び出しの速さを変えないためである
+
+/// 複数の値を受ける直接の呼び出し。結果のスロットは呼ばれる側の `RetN` が読むので、見出しの結果のスロットは使わない。
+#[inline(never)]
+fn call_many<M: Mode>(
+    code: &CodeBase<M>,
+    ctx: &mut Ctx<M>,
+    task: &mut Task,
+    at: u32,
+) -> Result<(), VmFault> {
+    call(code, task, 0, at);
+    ctx.poll(task.depth())?;
+    Ok(())
+}
+
+/// 複数の値を受ける `apply`。結果のスロットの扱いは `call_many` と同じである。
+#[inline(never)]
+fn apply_many<M: Mode>(
+    code: &CodeBase<M>,
+    ctx: &mut Ctx<M>,
+    task: &mut Task,
+    counts: &mut RunCounts,
+    at: u32,
+) -> Result<(), VmFault> {
+    let target = apply::Target::Frame {
+        ret: task.pc,
+        dst: 0,
+    };
+    apply_call(code, ctx, task, counts, at, target)
+}
+
+/// `RetN` の命令。`pc` はその位置で、`Ret` と同じく最後に戻った関数として覚え、戻りを安全点にする。
+#[inline(never)]
+fn return_many<M: Mode>(
+    code: &CodeBase<M>,
+    ctx: &mut Ctx<M>,
+    task: &mut Task,
+    pc: Pc,
+    at: u32,
+) -> Result<(), VmFault> {
+    ret_many::<M>(code, task, at)?;
+    task.last_ret = pc;
+    ctx.poll(task.depth())?;
+    Ok(())
+}
+
+/// 複数の値の戻り。値を書くスロットは見出しの戻り先の直前の命令 (`CallN`、`ApplyN`、`Receive`) から読む。見出しの
+/// 形は変えずに済み、末尾呼び出しが見出しを引き継げば、そのまま末尾で呼んだ側の呼び出し元に書ける
+/// (docs/superpowers/specs/2026-10-21-s14e-abi-struct-design.md の「S14e-2 構造体の表現」の「VM」)。値は呼ばれる側のフレームから
+/// 呼び出し元のフレームへ写すので、読む所と書く所は重ならない。
+#[inline]
+fn ret_many<M: Mode>(code: &CodeBase<M>, task: &mut Task, at: u32) -> Result<(), VmFault> {
+    let o = &code.operands[at as usize..];
+    let n = o[0] as usize;
+    let (ret, _, size) = read_header(task.stack[task.base - 2]);
+    let dsts = receivers::<M>(code, ret, n)?;
+    let caller = task.stack[task.base - 1].bits();
+    for (&src, &dst) in o[1..1 + n].iter().zip(dsts) {
+        task.stack[caller + dst as usize] = task.stack[task.base + src as usize];
+    }
+    task.base = caller;
+    task.frame_size = size;
+    task.pc = ret;
+    Ok(())
+}
+
+/// 戻り先 `ret` の直前の、複数の値を受ける命令の結果のスロット。`Finish` と `ApplyRest` の位置へは値が1つしか
+/// 戻らないので、ほかの命令の後への戻りは内部の誤りである。検査モードは値の数も比べる。
+#[inline]
+fn receivers<M: Mode>(code: &CodeBase<M>, ret: Pc, n: usize) -> Result<&[u32], VmFault> {
+    let o = |at: u32| &code.operands[at as usize..];
+    let dsts = match ret.checked_sub(1).map(|pc| code.code[pc as usize]) {
+        Some(Op::CallN { at }) => {
+            let o = o(at);
+            let count = 2 + o[1] as usize;
+            &o[count + 1..count + 1 + o[count] as usize]
+        }
+        Some(Op::ApplyN { at }) => {
+            let o = o(at);
+            let count = 3 + o[1] as usize;
+            &o[count + 1..count + 1 + o[count] as usize]
+        }
+        Some(Op::Receive { at }) => {
+            let o = o(at);
+            &o[1..1 + o[0] as usize]
+        }
+        _ => return Err(not_received()),
+    };
+    if M::CHECKED && dsts.len() != n {
+        return Err(not_received());
+    }
+    Ok(dsts)
+}
+
+#[cold]
+#[inline(never)]
+fn not_received() -> VmFault {
+    VmFault::Internal("multiple values return to a place that does not receive them")
 }
 
 /// 受ける命令は変換の命令列の前に置くだけで、実行しない。誤りを `step` の腕で直に返すと速い道の命令の列が変わるので
@@ -618,6 +728,64 @@ fn convert_return<M: Mode>(
     Ok(())
 }
 
+/// 構造体の変換のフレームの戻り。`boxing` なら葉をスロット 0.. に受けて箱に入れ、そうでなければスロット 0 の箱から葉を
+/// 取り出して箱を消費する。yield 中は、スカラーの変換と同じく、変換せずに渡す Repr のダミーを書く。値が1つなら見出しの
+/// 結果のスロットに、2つ以上なら `RetN` と同じく戻り先の直前の命令のスロットに書く。`last_ret` は `convert_return` と
+/// 同じ理由で残す。
+#[cold]
+#[inline(never)]
+fn convert_struct_return<M: Mode>(
+    code: &CodeBase<M>,
+    ctx: &mut Ctx<M>,
+    task: &mut Task,
+    counts: &mut RunCounts,
+    id: u32,
+    boxing: bool,
+) -> Result<(), VmFault> {
+    let id = eml_lir::StructId(id);
+    let info = code.structs.get(id);
+    let yielding = ctx.yielding() != 0;
+    if boxing {
+        let value = if yielding {
+            // 受けた葉はダミーなので手放さない
+            ctx.heap().dummy()
+        } else {
+            task.load_scratch((0..info.leaves.len()).map(|i| i as Slot));
+            let leaves = std::mem::take(&mut task.scratch);
+            let boxed = data::box_struct(&code.structs, ctx, counts, id, &leaves);
+            task.scratch = leaves;
+            task.scratch.clear();
+            boxed?
+        };
+        task.return_value(value);
+    } else {
+        let mut leaves = std::mem::take(&mut task.scratch);
+        leaves.clear();
+        if yielding {
+            data::leaf_dummies(ctx, &info.leaves, &mut leaves);
+        } else {
+            data::take_struct(&code.structs, ctx, counts, id, task.get(0), &mut leaves)?;
+        }
+        if let [value] = leaves[..] {
+            task.return_value(value);
+        } else {
+            let (ret, _, size) = read_header(task.stack[task.base - 2]);
+            let dsts = receivers::<M>(code, ret, leaves.len())?;
+            let caller = task.stack[task.base - 1].bits();
+            for (&value, &dst) in leaves.iter().zip(dsts) {
+                task.stack[caller + dst as usize] = value;
+            }
+            task.base = caller;
+            task.frame_size = size;
+            task.pc = ret;
+        }
+        leaves.clear();
+        task.scratch = leaves;
+    }
+    ctx.poll(task.depth())?;
+    Ok(())
+}
+
 /// 末尾の呼び出しの結果に変換 `c2` が要るとき、呼ばれる側が今のフレームの位置に入れるように、変換のフレームを
 /// 整える (docs/superpowers/specs/2026-10-21-s14e-abi-struct-design.md の「VM」の「変換の合成」)。今のフレームの戻り先が
 /// 変換のフレーム c1 なら、c1 を c1 と c2 の合成に替え、合成が恒等なら c1 を外して呼ばれる側に c1 の見出しを引き継が
@@ -632,14 +800,14 @@ pub(crate) fn tail_convert<M: Mode>(
     c2: Pc,
 ) -> Result<(), VmFault> {
     let (ret, dst, caller_size) = read_header(task.stack[task.base - 2]);
-    let Some(c1) = code.conversions.at(ret) else {
-        task.frame_size = CONVERSION_FRAME_SIZE;
-        task.push_frame(c2, 0, 0);
-        return Ok(());
-    };
     let c2 = code.conversions.at(c2).ok_or(VmFault::Internal(
         "a tail call converts through a position that is not a conversion",
     ))?;
+    let Some(c1) = code.conversions.at(ret) else {
+        task.frame_size = c2.size;
+        task.push_frame(c2.start, 0, 0);
+        return Ok(());
+    };
     // 両端はいつも同じ型の Repr なので、c2 が渡す種類は c1 が受ける種類で、合成は恒等か1つの変換になる
     if c2.to != c1.from {
         return Err(apply::DIFFERENT_TYPES);
@@ -649,10 +817,14 @@ pub(crate) fn tail_convert<M: Mode>(
         task.frame_size = caller_size;
         return Ok(());
     }
+    // 1つの型の Repr の種類は一様な種類ともう1つだけなので、同じ型の2つの変換の合成はいつも恒等である。ここに来るのは
+    // 違う型の間の変換だけで、その変換はない。受ける値の数が c1 のフレームに収まらない変換にも置き換えない
     let composed = code
-        .conversion(c2.from, c1.to)
+        .conversions
+        .get(c2.from, c1.to)
+        .filter(|composed| composed.size <= caller_size)
         .ok_or(apply::DIFFERENT_TYPES)?;
-    task.stack[task.base - 2] = header(composed, dst, caller_size);
+    task.stack[task.base - 2] = header(composed.start, dst, caller_size);
     Ok(())
 }
 
