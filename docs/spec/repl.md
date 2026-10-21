@@ -83,7 +83,7 @@
 - 位置の正負は、型全体を正とし、矢印の引数で反転する。矢印の結果と矢印自身の row は矢印の正負を保つ。データ型とタプルの引数と、row のラベルの型引数も正負を保つ (データ型の変性は調べない)
 - 負の位置の row 変数を閉じないのは、書いた型が、本当の型の受け付ける引数を受け付けなくなるためである。`ignore_fn : (Unit -> <e> Int) -> Int` は `ignore_fn ask` を受け付けるが、`(Unit -> Int) -> Int` と宣言した関数は `ask` を受け付けない。そのため `:type ignore_fn` は `(Unit -> <e> Int) -> Int` になる。引数の引数は正の位置なので、`((Unit -> <e> Int) -> Int) -> Int` は `((Unit -> Int) -> Int) -> Int` と書く
 - 型に現れる型変数に残った制約は文脈にする。1つなら `Show a => …`、2つ以上なら `(Eq a, Show b) => …` と書く。制約は、型変数が現れた順に並べ、同じ型変数の中ではクラスの表示の名前の順 (同じなら定義の順) に並べる。同じ制約は1つにし、ほかの制約の上位クラスでたどれる制約は書かない (`Ord a` があれば `Eq a` を書かない)
-- 型に現れない型変数に残った制約は、式の入力と同じく、その型変数を `Unit` に決めて解く。表示する型を変えないので、上の「defaulting しない」とは食い違わない。`Unit` で解けなければ E2009 にする。そのため `:type show []` は `String` を返し、`:type name (make ())` (`Unit` の instance のないクラス) は E2009 になる。型変数でない型に残った制約は、今と同じく E2006 にする
+- 型に現れない型変数に残った制約は、式の入力と同じく、その型変数を `Unit` に決めて解く。表示する型を変えないので、上で述べた、型変数を `Unit` に決めない規則とは食い違わない。`Unit` で解けなければ E2009 にする。そのため `:type show []` は `String` を返し、`:type name (make ())` (`Unit` の instance のないクラス) は E2009 になる。型変数でない型に残った制約は、今と同じく E2006 にする
 - Kind (矢印の線形性) は書かない。表面の型の構文に Kind はないためである
 - 型と制約の名前は、診断と同じ表示 (`DisplayNames`) で書く。定義し直した item の古い版は `Shape#1` になる
 
@@ -118,6 +118,7 @@ println "hi" : Unit
 | `Empty`、`Accepted`、`Rejected` | 診断のほかに書くものはない。式の入力の値は、`Repl` が整形して Host の標準出力に書き、書き出す (下の「値の書き方」) |
 | `Failed` | 割り込みで止まったなら `interrupted`、ほかは `runtime error: {error}` を標準エラーに書く。位置があれば `  at path:line:column` が続く |
 | `Interrupted` | 標準エラーに `interrupted` を書く |
+| `Exited(n)` | 標準エラーに `exited with code n` を書き、次の入力へ進む (「割り込みと実行時エラー」) |
 | `Broken` | 標準エラーに `runtime error: {error}` を書き、`close` を呼ばずに終了コード 1 で終わる。後の入力はどれも実行できないためである |
 
 - 割り込みは、止まった所によらず `interrupted` と書く。VM の中で止まったときの関数の名前 (`entry$` や `f@[Int]`) は、利用者が書いた名前でないので見せない
@@ -133,18 +134,21 @@ println "hi" : Unit
 - 関数型の入力も、式を評価してから `<fn> : 型` を書く (式の中の `println` などは動く)
 
 ```
-> Box 3
-Box 3 : Box
-> fn x -> x + 1
-<fn> : Int -> Int
+> inc : Int -> <Panic> Int
+. inc x = x + 1
+.
+> inc
+<fn> : Int -> <Panic> Int
+> fn x -> x * 2
+<fn> : Int -> <Panic> Int
+> data Box = | Box (Int -> <Panic> Int)
+> Box inc
+Box <fn> : Box
 > [fn x -> x, inc]
-[<fn>, <fn>] : List (Int -> Int)
-> (1, "a", inc)
-(1, "a", <fn>) : (Int, String, Int -> Int)
-> P { f = inc, n = 2 }
-P { f = <fn>, n = 2 } : P
-> 1 + 2
-3
+[<fn>, <fn>] : List (Int -> <Panic> Int)
+> data R = | R { f : Int -> <Panic> Int, n : Int }
+> R { f = inc, n = -3 }
+R { f = <fn>, n = -3 } : R
 ```
 
 表示器は、値の部分 (入力の値そのものを含む) ごとに、書き方を次の順で決める。
