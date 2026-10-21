@@ -18,6 +18,8 @@ The documentation lives under `docs/`; start from `docs/README.md`. `docs/spec/`
 - Code comments and docs are written in Japanese. Code comments explain why, not what: do not restate the code, and cite `docs/` paths when pointing at a rule.
 - Whenever you write Japanese text (docs under `docs/`, code comments, or anything else), always follow the `yomiyasu:yomiyasu` skill: invoke it before writing and apply its rules to everything you write.
 - The CLAUDE.md files (this one and `crates/eml_rt/CLAUDE.md`) hold working rules and pointers into `docs/`. When a stage changes the design, write it in `docs/` and touch a CLAUDE.md only when a rule or a pointer changes, so the two never drift apart.
+- Run ad-hoc `.em` programs (`eml run`, `cargo run -p eml_cli -- run`, probes in a scratchpad) under `timeout` (e.g. `timeout 20`). An eml program can legitimately loop forever: a tail-recursive loop that does not allocate hits neither `max_depth` nor `max_bytes` (docs/spec/vm.md の「上限と割り込み」).
+- When a Bash call exceeds its timeout, Claude Code moves it to a background task instead of killing it. Before finishing (above all as a subagent), stop every such task with TaskStop or wait for it to complete; a task left running keeps a finished subagent listed as running and leaves its process behind.
 
 ## Commands
 
