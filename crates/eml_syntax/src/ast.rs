@@ -404,6 +404,7 @@ impl OpSeq {
 pub enum LiteralValue {
     Int(i64),
     Float(f64),
+    Byte(u8),
     String(String),
     Char(char),
 }
@@ -420,6 +421,7 @@ impl Literal {
         match token.kind() {
             SyntaxKind::INT => crate::literal::int_value(token.text()).map(LiteralValue::Int),
             SyntaxKind::FLOAT => crate::literal::float_value(token.text()).map(LiteralValue::Float),
+            SyntaxKind::BYTE => crate::literal::byte_value(token.text()).map(LiteralValue::Byte),
             SyntaxKind::RAW_STRING => {
                 crate::literal::raw_value(token.text()).map(LiteralValue::String)
             }
@@ -1258,7 +1260,7 @@ impl TupleType {
 }
 
 impl LiteralPat {
-    /// `INT`、`CHAR`、`RAW_STRING` のトークン。`-1` の `-` は含まない。raw 文字列のほかの文字列はトークンでなく、
+    /// `INT`、`FLOAT`、`BYTE`、`CHAR`、`RAW_STRING` のトークン。`-1` の `-` は含まない。raw 文字列のほかの文字列はトークンでなく、
     /// `string` で取り出す。
     pub fn token(&self) -> Option<SyntaxToken> {
         self.syntax
@@ -1267,13 +1269,22 @@ impl LiteralPat {
             .find(|token| {
                 matches!(
                     token.kind(),
-                    SyntaxKind::INT | SyntaxKind::FLOAT | SyntaxKind::CHAR | SyntaxKind::RAW_STRING
+                    SyntaxKind::INT
+                        | SyntaxKind::FLOAT
+                        | SyntaxKind::BYTE
+                        | SyntaxKind::CHAR
+                        | SyntaxKind::RAW_STRING
                 )
             })
     }
 
     pub fn string(&self) -> Option<StringLit> {
         support::child(&self.syntax)
+    }
+
+    /// 数のリテラルの前に `-` があるか。`Byte` の負のリテラル (E1054) を HIR が見つけるのに使う。
+    pub fn is_negative(&self) -> bool {
+        support::token(&self.syntax, SyntaxKind::MINUS).is_some()
     }
 
     /// `-1` の `-` は字句の一部ではなくパターンの一部なので (docs/spec/grammar.md の `apat`)、ここで符号を付ける。
@@ -1301,6 +1312,8 @@ impl LiteralPat {
                 let x = crate::literal::float_value(token.text())?;
                 Some(LiteralValue::Float(if negative { -x } else { x }))
             }
+            // 負号は HIR が E1054 にするので、値は符号を見ない
+            SyntaxKind::BYTE => crate::literal::byte_value(token.text()).map(LiteralValue::Byte),
             SyntaxKind::RAW_STRING => {
                 crate::literal::raw_value(token.text()).map(LiteralValue::String)
             }

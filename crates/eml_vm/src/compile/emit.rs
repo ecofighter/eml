@@ -975,13 +975,15 @@ fn arithmetic(ext: Extern, dst: Slot, args: &[Slot]) -> Option<Op> {
         Extern::IntMul => Op::IntMul { dst, a, b },
         Extern::IntDiv => Op::IntDiv { dst, a, b },
         Extern::IntMod => Op::IntRem { dst, a, b },
-        Extern::IntEq | Extern::CharEq => Op::IntEq { dst, a, b },
-        Extern::IntNe | Extern::CharNe => Op::IntNe { dst, a, b },
-        Extern::IntLt | Extern::CharLt => Op::IntLt { dst, a, b },
-        Extern::IntLe | Extern::CharLe => Op::IntLe { dst, a, b },
-        Extern::IntGt | Extern::CharGt => Op::IntGt { dst, a, b },
-        Extern::IntGe | Extern::CharGe => Op::IntGe { dst, a, b },
-        Extern::IntCompare | Extern::CharCompare => Op::IntCompare { dst, a, b },
+        Extern::IntEq | Extern::CharEq | Extern::ByteEq => Op::IntEq { dst, a, b },
+        Extern::IntNe | Extern::CharNe | Extern::ByteNe => Op::IntNe { dst, a, b },
+        Extern::IntLt | Extern::CharLt | Extern::ByteLt => Op::IntLt { dst, a, b },
+        Extern::IntLe | Extern::CharLe | Extern::ByteLe => Op::IntLe { dst, a, b },
+        Extern::IntGt | Extern::CharGt | Extern::ByteGt => Op::IntGt { dst, a, b },
+        Extern::IntGe | Extern::CharGe | Extern::ByteGe => Op::IntGe { dst, a, b },
+        Extern::IntCompare | Extern::CharCompare | Extern::ByteCompare => {
+            Op::IntCompare { dst, a, b }
+        }
         Extern::FloatAdd => Op::FloatAdd { dst, a, b },
         Extern::FloatSub => Op::FloatSub { dst, a, b },
         Extern::FloatMul => Op::FloatMul { dst, a, b },
@@ -1006,6 +1008,7 @@ fn arithmetic(ext: Extern, dst: Slot, args: &[Slot]) -> Option<Op> {
         | Extern::CharOfInt
         | Extern::CharShow
         | Extern::CharDisplay
+        | Extern::ByteDisplay
         | Extern::FloatNeg
         | Extern::FloatCompare
         | Extern::FloatShow

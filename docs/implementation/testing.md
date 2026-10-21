@@ -277,6 +277,7 @@ Core IR のテキストは `eml_core_ir::pretty` が書き、`eml_core_ir::parse
   - `std/`: 標準ライブラリの関数 ([標準ライブラリ](../spec/stdlib.md))。`List`、`String`、`Env`、`Stdin`、`Fs.read_text` と `write_text` と `read_line`、`Proc.run`、`eprintln`、`Yield`、`Fail`、`State`、`Iter`、文字列の核の実行時エラー。std のモジュールと同じ名前のテスト (`yield.em` など) は `std_` を頭に付ける。入口のファイルが `yield.em` だと、`import Yield` がユーザーの根で大文字小文字だけが違うファイルを見つけて E1026 になり、標準ライブラリに進まないためである ([モジュールと名前解決](../spec/modules.md) の「標準ライブラリ」)
   - `arrays/`: 配列の組み立て、読み書き、範囲外の添字、共有した配列の書き込み
   - `chars/`: `Char` のリテラル、パターン、比較、表示と、`Std.Char` の変換と ASCII の判定
+  - `byte/`: `Byte` のリテラル、パターン、比較、表示
   - `classes/`: 型クラス、インスタンス、導出、制約つきの関数
   - `float/`: `Float` の演算、比較、ビット表現、文字列との往復
   - `io/`: `IO` の実行時の振る舞い。終了コード、入力、`try_io`

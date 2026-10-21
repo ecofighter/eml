@@ -622,6 +622,7 @@ impl FnLowering<'_> {
             ExprKind::Literal(Literal::Int(n)) => Atom::Int(*n),
             ExprKind::Literal(Literal::Float(x)) => Atom::Float(*x),
             ExprKind::Literal(Literal::Char(c)) => Atom::Int(i64::from(u32::from(*c))),
+            ExprKind::Literal(Literal::Byte(b)) => Atom::Int(i64::from(*b)),
             ExprKind::Literal(Literal::Unit) => Atom::Unit,
             ExprKind::Literal(Literal::String(text)) => {
                 let index = self.program.strings.intern(text);

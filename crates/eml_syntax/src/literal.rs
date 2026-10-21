@@ -84,6 +84,13 @@ pub(crate) fn int_value(text: &str) -> Option<i64> {
     i64::from_str_radix(body, radix).ok()
 }
 
+/// `BYTE` トークンの値。`Byte` の範囲 (0..=255) を超えるものは `None` で、字句解析が E0007 を報告している
+/// (docs/spec/lexical.md の「数値と文字」)。
+pub(crate) fn byte_value(text: &str) -> Option<u8> {
+    let integer = text.strip_suffix("u8")?;
+    int_value(integer).and_then(|n| u8::try_from(n).ok())
+}
+
 /// `FLOAT` トークンの値。`_` を除いて Rust の `f64` の読み取りに渡し、最も近い値に丸める。大きすぎる値は無限大になる
 /// (docs/spec/lexical.md の「数値と文字」)。
 pub(crate) fn float_value(text: &str) -> Option<f64> {

@@ -145,3 +145,40 @@ fn raw_string_values() {
     );
     assert_eq!(value("r\"abc"), None);
 }
+
+fn byte_value(literal: &str) -> Option<u8> {
+    match value(literal) {
+        Some(LiteralValue::Byte(b)) => Some(b),
+        None => None,
+        other => panic!("not a byte: {other:?}"),
+    }
+}
+
+#[test]
+fn byte_values() {
+    assert_eq!(byte_value("255u8"), Some(255));
+    assert_eq!(byte_value("0xffu8"), Some(255));
+    assert_eq!(byte_value("0b1u8"), Some(1));
+    assert_eq!(byte_value("0o17u8"), Some(15));
+    assert_eq!(byte_value("1_0u8"), Some(10));
+}
+
+#[test]
+fn too_large_byte_literals_are_reported() {
+    assert_eq!(byte_value("256u8"), None);
+    assert_eq!(
+        diagnostics("x = 256u8"),
+        ["E0007 1:5 byte literal `256u8` is too large"]
+    );
+}
+
+#[test]
+fn malformed_byte_literals_are_invalid_numbers() {
+    for literal in ["65U8", "1e5u8", "0xu8"] {
+        assert_eq!(
+            diagnostics(&format!("x = {literal}")),
+            [format!("E0007 1:5 invalid number literal `{literal}`")],
+            "{literal}"
+        );
+    }
+}

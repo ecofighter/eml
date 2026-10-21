@@ -18,6 +18,9 @@ probe_int x = x
 probe_char : Char -> Char
 probe_char c = c
 
+probe_byte : Byte -> Byte
+probe_byte b = b
+
 probe_string : String -> String
 probe_string s = s
 
@@ -52,6 +55,7 @@ fn probe(ty: ExternType) -> &'static str {
         ExternType::Int => "probe_int",
         ExternType::Float => "probe_float",
         ExternType::Char => "probe_char",
+        ExternType::Byte => "probe_byte",
         ExternType::String => "probe_string",
         ExternType::Unit => "probe_unit",
         ExternType::File => "probe_file",

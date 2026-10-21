@@ -1,0 +1,11 @@
+---
+source: crates/eml_cli/tests/repl.rs
+expression: checked.render()
+input_file: crates/eml_cli/tests/repl/basics/byte.repl
+---
+> 65u8
+65u8
+> :type 65u8
+65u8 : Byte
+--- close ---
+no leaks

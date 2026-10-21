@@ -56,7 +56,7 @@ struct Fix {
 | E0004 | `NOT_YET_SUPPORTED` | 実装していない構文 (コマンドリテラル、型の別名 `type`、Kind の宣言 `: Unr`、row の型引数を持つ型の instance と `deriving`) |
 | E0005 | `UNTERMINATED_BLOCK_COMMENT` | 閉じていないブロックコメント |
 | E0006 | `TAB_INDENTATION` | インデントにタブを使った |
-| E0007 | `INVALID_NUMBER` | 不正な数値リテラル |
+| E0007 | `INVALID_NUMBER` | 不正な数値リテラル。`Int` や `Byte` の範囲を超える整数も含む ([字句](lexical.md) の「数値と文字」) |
 | E0008 | `INVALID_ESCAPE` | 不正なエスケープ (文字列と文字のリテラルの未知のエスケープ、不正な `\u{...}`、複数行の文字列の行末の `\`) |
 | E0009 | `EXPECTED_INDENTED_BLOCK` | 開始トークンの後に字下げしたブロックが必要 |
 | E0010 | `SPACE_AROUND_DOT` | `.` の前後の空白 |
@@ -119,6 +119,7 @@ struct Fix {
 | E1051 | `CLAUSE_KEYWORD` | 操作の節に `fn` も `ctl` も書いていない (`ctl ` を足す fix を付ける)、`never` の操作の節に `fn` を書いた、`return` の節に `fn` か `ctl` を書いた ([式](expressions.md) の「handler」) |
 | E1052 | `FLOAT_PATTERN` | パターンに浮動小数のリテラル (`1.5`、`-2.5`) を書いた。比べるときは `==` を使う ([網羅性](exhaustiveness.md)) |
 | E1053 | `ASSIGN_TARGET` | `<-` の左辺が `var` の名前でも、`var` の名前の添字でもない ([式](expressions.md) の「`var`」) |
+| E1054 | `NEGATIVE_BYTE_LITERAL` | `Byte` のリテラルの直前に `-` がある。式でもパターンでも同じ ([式](expressions.md) の「演算子の列と単項マイナス」) |
 | E2001 | `TYPE_MISMATCH` | 型の不一致。呼び出しの row のエフェクトの型引数が今の row と一致しない場合を含む |
 | E2002 | `EFFECT_NOT_IN_ROW` | シグネチャの row に含まれないエフェクトを起こした。ラムダの本体の場合を含む |
 | E2003 | `MISSING_MAIN` | 入口のモジュールに `main` がない。import した `main` は数えない。`eml run` のときだけ出す |

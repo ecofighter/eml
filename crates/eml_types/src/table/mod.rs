@@ -229,6 +229,7 @@ pub(crate) struct Table<'c> {
     pub int: Ty,
     pub float: Ty,
     pub char: Ty,
+    pub byte: Ty,
     pub string: Ty,
     pub bool: Ty,
     pub unit: Ty,
@@ -302,6 +303,7 @@ impl<'c> Table<'c> {
             int: Ty(0),
             float: Ty(0),
             char: Ty(0),
+            byte: Ty(0),
             string: Ty(0),
             bool: Ty(0),
             unit: Ty(0),
@@ -322,6 +324,11 @@ impl<'c> Table<'c> {
         ));
         table.char = table.alloc(TyShape::Con(
             table.extern_type(ExternType::Char),
+            Vec::new(),
+            Vec::new(),
+        ));
+        table.byte = table.alloc(TyShape::Con(
+            table.extern_type(ExternType::Byte),
             Vec::new(),
             Vec::new(),
         ));

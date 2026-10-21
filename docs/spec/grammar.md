@@ -76,7 +76,7 @@ operand     ::= '-' operand | app
 app         ::= 'drop'? postfix+
 postfix     ::= atom ('.' (LIDENT | INT) | '[' expr ']')*  -- '.' の前後に空白を置かない。'[' は下の補足
 
-atom        ::= INT | FLOAT | CHAR | string | RAW_STRING | command
+atom        ::= INT | FLOAT | BYTE | CHAR | string | RAW_STRING | command
               | qvar | qcon
               | '(' ')' | '(' expr ')' | '(' expr ':' type ')'
               | '(' expr (',' expr)+ ','? ')'
@@ -91,13 +91,13 @@ field       ::= LIDENT ('=' expr)?
 
 pat         ::= cpat (CONOP pat)?                         -- 右結合 (例: x :: rest)
 cpat        ::= qcon apat+ | apat
-apat        ::= '_' | LIDENT | qcon | literal | '-' (INT | FLOAT)
+apat        ::= '_' | LIDENT | qcon | literal | '-' (INT | FLOAT | BYTE)
               | '(' ')' | '(' pat ')' | '(' pat (',' pat)+ ','? ')'
               | '(' pat ':' type ')'
               | '[' list(pat) ']'
               | qcon '{' list(fpat) '}'
 fpat        ::= LIDENT ('=' pat)?
-literal     ::= INT | FLOAT | string | RAW_STRING | CHAR
+literal     ::= INT | FLOAT | BYTE | string | RAW_STRING | CHAR
 
 type        ::= 'once'? btype ('->' row? type)?           -- 'once' の後ろは関数型
 btype       ::= qcon targ* | type_atom
@@ -166,7 +166,7 @@ command     ::= CMD_START (CMD_TEXT | ESCAPE | '\{' '..'? expr INTERP_END)* CMD_
 - 式の形は `expr`、`operand`、`postfix` の3つの層に分かれる。上の層の形を下の層の位置に括弧なしで書くと E0012 にする
   - `if`、`match`、`handle`、`fn`、`let ... in` は `expr` の層の形で、末尾の本体が右へできるだけ伸びる。関数の引数や演算の項にするときは括弧で囲む。これにより、`match e with` の `e` は `with` の手前で終わる
   - `drop` の適用は `operand` の層の形で、引数が atom なので右へ伸びない。演算の項には書けるが、関数の引数にするときは括弧で囲む
-- `let` が関数の形かどうかは、`let` の後の2つのトークンで決める。`let` の次が `LIDENT` で、その次が `LIDENT`、`_`、`UIDENT`、整数、浮動小数、文字列の始まり (`STRING_START`、`RAW_STRING`)、文字、`(`、`[`、`{` のどれかなら、ローカル関数である。浮動小数は `apat` の `literal` で、HIR が E1052 にする。`{` は、コンストラクタのない `{` をパターンの位置ではパターンを期待する誤りにする規則に合わせて数える。`-` は含めない。`apat` は `'-' INT` を含むが、トップレベルで `LIDENT OP` を演算子の定義として先に読むのと揃えるためである。次の形はパターンの束縛のまま読む
+- `let` が関数の形かどうかは、`let` の後の2つのトークンで決める。`let` の次が `LIDENT` で、その次が `LIDENT`、`_`、`UIDENT`、整数、浮動小数、`Byte`、文字列の始まり (`STRING_START`、`RAW_STRING`)、文字、`(`、`[`、`{` のどれかなら、ローカル関数である。浮動小数は `apat` の `literal` で、HIR が E1052 にする。`Byte` の負のリテラル `'-' BYTE` は E1054 にする。`{` は、コンストラクタのない `{` をパターンの位置ではパターンを期待する誤りにする規則に合わせて数える。`-` は含めない。`apat` は `'-' INT` を含むが、トップレベルで `LIDENT OP` を演算子の定義として先に読むのと揃えるためである。次の形はパターンの束縛のまま読む
   - `let x = e` と `let x : T = e` (名前の次が `=` か `:`)
   - `let (f, text) = e`、`let Some x = e`、`let P { name = n } = e` (最初がパターン)
   - `let x :: rest = e` (名前の次が演算子)

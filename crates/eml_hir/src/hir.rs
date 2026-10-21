@@ -901,6 +901,7 @@ pub enum Literal {
     Int(i64),
     /// 値をビット列で持ち、`Eq` を導出できるようにする。`0.0` と `-0.0` は別のリテラルである。
     Float(FloatBits),
+    Byte(u8),
     Char(char),
     String(String),
     Unit,

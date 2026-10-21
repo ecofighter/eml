@@ -1,0 +1,19 @@
+---
+source: crates/eml_cli/tests/ui.rs
+expression: rendered
+input_file: tests/ui/check-fail/names/negative_byte_literal.em
+---
+[E1054] Error: a `Byte` literal cannot be negative
+   ╭─[ check-fail/names/negative_byte_literal.em:3:5 ]
+   │
+ 3 │ a = -1u8
+   │     ──┬─  
+   │       ╰─── `Byte` holds 0 to 255
+───╯
+[E1054] Error: a `Byte` literal cannot be negative
+   ╭─[ check-fail/names/negative_byte_literal.em:7:5 ]
+   │
+ 7 │   | -1u8 -> 1
+   │     ──┬─  
+   │       ╰─── `Byte` holds 0 to 255
+───╯

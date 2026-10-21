@@ -1,0 +1,3 @@
+# `Byte` の式の値は `Show Byte` で書く
+> 65u8
+> :type 65u8

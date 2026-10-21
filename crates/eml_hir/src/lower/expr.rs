@@ -312,6 +312,7 @@ impl<'a> BodyLowering<'a> {
                     ExprKind::Literal(match value {
                         ast::LiteralValue::Int(n) => Literal::Int(n),
                         ast::LiteralValue::Float(x) => Literal::Float(FloatBits::new(x)),
+                        ast::LiteralValue::Byte(b) => Literal::Byte(b),
                         ast::LiteralValue::Char(c) => Literal::Char(c),
                         ast::LiteralValue::String(s) => Literal::String(s),
                     })
@@ -911,6 +912,11 @@ impl<'a> BodyLowering<'a> {
             ast::Pat::LiteralPat(literal) => match literal.value() {
                 Some(ast::LiteralValue::Int(n)) => PatKind::Literal(Literal::Int(n)),
                 Some(ast::LiteralValue::Float(_)) => self.float_pattern(range),
+                Some(ast::LiteralValue::Byte(_)) if literal.is_negative() => {
+                    self.negative_byte_literal(range);
+                    PatKind::Missing
+                }
+                Some(ast::LiteralValue::Byte(b)) => PatKind::Literal(Literal::Byte(b)),
                 Some(ast::LiteralValue::Char(c)) => PatKind::Literal(Literal::Char(c)),
                 Some(ast::LiteralValue::String(s)) => PatKind::Literal(Literal::String(s)),
                 // 範囲外の整数、壊れた文字と文字列は、字句解析が報告済み
@@ -1238,6 +1244,15 @@ impl<'a> BodyLowering<'a> {
             Label::new(self.file, range, "a floating-point literal"),
         ));
         PatKind::Missing
+    }
+
+    /// `Byte` の負のリテラル (E1054)。式でもパターンでも書かせない (docs/spec/expressions.md の「演算子の列と単項マイナス」)。
+    pub(super) fn negative_byte_literal(&mut self, range: TextRange) {
+        self.diagnostics.push(Diagnostic::error(
+            codes::NEGATIVE_BYTE_LITERAL,
+            "a `Byte` literal cannot be negative",
+            Label::new(self.file, range, "`Byte` holds 0 to 255"),
+        ));
     }
 
     pub(super) fn alloc(&mut self, kind: ExprKind, range: TextRange) -> ExprId {

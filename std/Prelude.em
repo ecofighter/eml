@@ -286,6 +286,24 @@ instance Show Char where
   extern show
   extern display
 
+-- バイト。値は 0 から 255 の整数で、順序は数の順 (docs/spec/lir.md の「値の表現」)
+pub extern data Byte
+
+instance Eq Byte where
+  extern (==)
+  extern (!=)
+
+instance Ord Byte where
+  extern compare
+  extern (<)
+  extern (<=)
+  extern (>)
+  extern (>=)
+
+instance Show Byte where
+  show b = display b ++ "u8"
+  extern display
+
 -- 要素を持つ組み込みの型。Array の Kind は要素に従い、MutArray は常に Lin (docs/spec/types.md)
 pub extern data Array a
 pub extern data MutArray a

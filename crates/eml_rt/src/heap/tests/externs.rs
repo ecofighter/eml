@@ -1341,6 +1341,13 @@ unsafe fn call<M: Mode>(
             "Prelude.Ord Char.>" => compare(int_gt),
             "Prelude.Ord Char.>=" => compare(int_ge),
             "Prelude.Ord Char.compare" => tag_order(int_compare(int(0), int(1))),
+            "Prelude.Eq Byte.==" => compare(int_eq),
+            "Prelude.Eq Byte.!=" => compare(int_ne),
+            "Prelude.Ord Byte.<" => compare(int_lt),
+            "Prelude.Ord Byte.<=" => compare(int_le),
+            "Prelude.Ord Byte.>" => compare(int_gt),
+            "Prelude.Ord Byte.>=" => compare(int_ge),
+            "Prelude.Ord Byte.compare" => tag_order(int_compare(int(0), int(1))),
             "Prelude.Num Float.+" => float_arith(float_add),
             "Prelude.Num Float.-" => float_arith(float_sub),
             "Prelude.Num Float.*" => float_arith(float_mul),
@@ -1399,7 +1406,7 @@ unsafe fn call<M: Mode>(
                 let w = ctx.char_display(int(0));
                 take_text(ctx, w)
             }
-            "Prelude.Show Int.show" => {
+            "Prelude.Show Int.show" | "Prelude.Show Byte.display" => {
                 let w = ctx.int_show(int(0));
                 take_text(ctx, w)
             }

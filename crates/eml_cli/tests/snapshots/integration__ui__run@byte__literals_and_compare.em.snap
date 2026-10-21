@@ -1,0 +1,14 @@
+---
+source: crates/eml_cli/tests/ui.rs
+expression: "format!(\"--- stdout ---\\n{stdout}--- stderr ---\\n{diagnostics}{stderr}{written}{exit}\")"
+input_file: tests/ui/run/byte/literals_and_compare.em
+---
+--- stdout ---
+65u8
+65
+True
+False
+LT
+c
+[1u8, 2u8]
+--- stderr ---

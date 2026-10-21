@@ -922,7 +922,7 @@ fn run_extern<M: Mode>(
                 };
                 task.set(dst, w);
             }
-            Extern::IntShow => {
+            Extern::IntShow | Extern::ByteDisplay => {
                 let w = ctx.int_show(task.raw(arg(0)));
                 task.set(dst, w);
             }
@@ -1105,6 +1105,13 @@ fn run_extern<M: Mode>(
             | Extern::CharLe
             | Extern::CharGt
             | Extern::CharGe
+            | Extern::ByteEq
+            | Extern::ByteNe
+            | Extern::ByteCompare
+            | Extern::ByteLt
+            | Extern::ByteLe
+            | Extern::ByteGt
+            | Extern::ByteGe
             | Extern::CharToInt
             | Extern::FloatNeg
             | Extern::FloatAdd

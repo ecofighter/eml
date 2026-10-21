@@ -103,4 +103,5 @@ pub mod codes {
     pub const CLAUSE_KEYWORD: ErrorCode = ErrorCode(1051);
     pub const FLOAT_PATTERN: ErrorCode = ErrorCode(1052);
     pub const ASSIGN_TARGET: ErrorCode = ErrorCode(1053);
+    pub const NEGATIVE_BYTE_LITERAL: ErrorCode = ErrorCode(1054);
 }

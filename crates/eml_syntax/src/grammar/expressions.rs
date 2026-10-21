@@ -7,6 +7,7 @@ const OPERATORS: TokenSet = TokenSet::new(&[OP, CONOP, MINUS]);
 const ATOM_START: TokenSet = TokenSet::new(&[
     INT,
     FLOAT,
+    BYTE,
     CHAR,
     RAW_STRING,
     STRING_START,
@@ -523,7 +524,7 @@ fn at_index(p: &Parser) -> bool {
 fn atom(p: &mut Parser) -> Option<CompletedMarker> {
     let m = p.start();
     let kind = match p.current() {
-        INT | FLOAT | CHAR | RAW_STRING => {
+        INT | FLOAT | BYTE | CHAR | RAW_STRING => {
             p.bump_any();
             LITERAL
         }

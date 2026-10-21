@@ -176,6 +176,20 @@ pub const CHAR_BINARY: [&str; 7] = [
     "Prelude.Ord Char.>=",
 ];
 
+/// バイトの端の値。0..=255 の両端、ASCII と非 ASCII の境、符号付き 8 ビットの境
+pub const BYTE_EDGES: [i64; 11] = [0, 1, 10, 34, 65, 97, 127, 128, 200, 254, 255];
+
+/// バイトを2つ取る行
+pub const BYTE_BINARY: [&str; 7] = [
+    "Prelude.Eq Byte.==",
+    "Prelude.Eq Byte.!=",
+    "Prelude.Ord Byte.compare",
+    "Prelude.Ord Byte.<",
+    "Prelude.Ord Byte.<=",
+    "Prelude.Ord Byte.>",
+    "Prelude.Ord Byte.>=",
+];
+
 /// 浮動小数の端の値。±0、±1、小数、`MAX`、`MIN`、最小の正規化数と非正規化数、±無限大、NaN
 pub const FLOAT_EDGES: [f64; 14] = [
     0.0,
@@ -602,6 +616,16 @@ pub fn inputs() -> Vec<(String, Vec<Arg>)> {
     for name in CHAR_BINARY {
         for a in CHAR_EDGES {
             for b in CHAR_EDGES {
+                push(name, vec![Arg::Int(a), Arg::Int(b)]);
+            }
+        }
+    }
+    for a in BYTE_EDGES {
+        push("Prelude.Show Byte.display", vec![Arg::Int(a)]);
+    }
+    for name in BYTE_BINARY {
+        for a in BYTE_EDGES {
+            for b in BYTE_EDGES {
                 push(name, vec![Arg::Int(a), Arg::Int(b)]);
             }
         }

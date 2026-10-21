@@ -350,6 +350,9 @@ Prelude の instance は次のとおりである。
 | `Eq Char` | `extern (==)`、`extern (!=)` |
 | `Ord Char` | `extern compare`、`extern (<)`、`extern (<=)`、`extern (>)`、`extern (>=)`。順はコードポイントの順で、`Ord String` の UTF-8 のバイト順と一致する |
 | `Show Char` | `extern show`、`extern display`。`show` は下のエスケープで表示し、`display` はその1文字の文字列を返す。`"\{c}"` は `display` を通るので、文字をそのまま補間する |
+| `Eq Byte` | `extern (==)`、`extern (!=)` |
+| `Ord Byte` | `extern compare`、`extern (<)`、`extern (<=)`、`extern (>)`、`extern (>=)`。順は数の順である |
+| `Show Byte` | `extern display`。`display` は10進の数だけを返し (`65`)、`show` は Prelude に書いて `display b ++ "u8"` とする (`65u8`)。`show` の結果は `Byte` のリテラルとして読み戻せる。`"\{b}"` は `display` を通る |
 | `Eq String` | `extern (==)`、`extern (!=)` |
 | `Ord String` | `extern compare`。順はバイト順で、妥当な UTF-8 ではコードポイントの順と一致する。`<` などは既定のメソッドを通る |
 | `Show String` | `extern show`。下のエスケープで表示する。`display s = s` で、文字列をそのまま返す。恒等関数で足りるので、extern にしない |

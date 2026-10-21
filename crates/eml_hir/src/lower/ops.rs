@@ -56,7 +56,9 @@ impl BodyLowering<'_> {
                     let direct = written_literal
                         && matches!(
                             self.exprs[id].kind,
-                            ExprKind::Literal(Literal::Int(_) | Literal::Float(_))
+                            ExprKind::Literal(
+                                Literal::Int(_) | Literal::Float(_) | Literal::Byte(_)
+                            )
                         );
                     pieces.push(Piece::Operand(id, direct));
                 }
@@ -170,6 +172,14 @@ impl BodyLowering<'_> {
                             ExprKind::Literal(literal),
                             range.cover(self.exprs[operand].range),
                         );
+                    }
+                    if matches!(
+                        self.exprs[operand].kind,
+                        ExprKind::Literal(Literal::Byte(_))
+                    ) {
+                        let whole = range.cover(self.exprs[operand].range);
+                        self.negative_byte_literal(whole);
+                        return self.alloc(ExprKind::Missing, whole);
                     }
                 }
                 let callee = self.alloc(

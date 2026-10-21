@@ -5,7 +5,7 @@ use logos::Logos;
 
 use crate::SyntaxKind::{self, *};
 use crate::codes;
-use crate::literal::{self, CharLitError, int_value};
+use crate::literal::{self, CharLitError, byte_value, int_value};
 use string::raw_string_hashes;
 
 mod string;
@@ -453,6 +453,16 @@ impl Lexer<'_> {
                     );
                     INT
                 }
+                Some(BYTE) if byte_value(slice).is_none() => {
+                    self.error(
+                        codes::INVALID_NUMBER,
+                        format!("byte literal `{slice}` is too large"),
+                        self.pos,
+                        self.pos + len,
+                        "the largest `Byte` is 255",
+                    );
+                    BYTE
+                }
                 Some(kind) => kind,
                 None => {
                     self.error(
@@ -602,6 +612,11 @@ pub(crate) fn line_len(rest: &str) -> usize {
 }
 
 fn number_kind(number: &str) -> Option<SyntaxKind> {
+    // 接尾辞は基数の判定より前に外す。`u` は16進の数字でないので、`0xffu8` も曖昧にならない
+    // (docs/spec/lexical.md の「数値と文字」)
+    if let Some(integer) = number.strip_suffix("u8") {
+        return (number_kind(integer) == Some(INT)).then_some(BYTE);
+    }
     let digits = |body: &str, radix: u32| {
         body.chars().any(|c| c != '_') && body.chars().all(|c| c == '_' || c.is_digit(radix))
     };

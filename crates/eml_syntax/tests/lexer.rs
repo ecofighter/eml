@@ -939,3 +939,8 @@ fn a_unicode_escape_does_not_run_past_a_command_literal() {
     );
     assert_eq!(diags(text), ["E0008@3..5 invalid unicode escape `\\u`"]);
 }
+
+#[test]
+fn byte_literals_have_their_own_kind() {
+    assert_eq!(kinds("65u8 65 0xffu8"), ["BYTE", "INT", "BYTE"]);
+}

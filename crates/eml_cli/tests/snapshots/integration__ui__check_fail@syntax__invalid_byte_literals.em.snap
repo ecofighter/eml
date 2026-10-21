@@ -1,0 +1,19 @@
+---
+source: crates/eml_cli/tests/ui.rs
+expression: rendered
+input_file: tests/ui/check-fail/syntax/invalid_byte_literals.em
+---
+[E0007] Error: byte literal `256u8` is too large
+   ╭─[ check-fail/syntax/invalid_byte_literals.em:2:13 ]
+   │
+ 2 │ too_large = 256u8
+   │             ──┬──  
+   │               ╰──── the largest `Byte` is 255
+───╯
+[E0007] Error: invalid number literal `65U8`
+   ╭─[ check-fail/syntax/invalid_byte_literals.em:5:20 ]
+   │
+ 5 │ uppercase_suffix = 65U8
+   │                    ──┬─  
+   │                      ╰─── not a valid number
+───╯
