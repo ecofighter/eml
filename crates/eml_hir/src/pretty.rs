@@ -311,6 +311,7 @@ impl Printer<'_> {
             ExprKind::Missing => "<missing>".to_string(),
             ExprKind::Literal(Literal::Int(n)) => n.to_string(),
             ExprKind::Literal(Literal::Float(x)) => x.to_string(),
+            ExprKind::Literal(Literal::Char(c)) => char_literal(*c),
             ExprKind::Literal(Literal::String(s)) => format!("{s:?}"),
             ExprKind::Literal(Literal::Unit) => "()".to_string(),
             ExprKind::Path(res) => self.res(body, *res),
@@ -606,6 +607,7 @@ impl Printer<'_> {
             }
             PatKind::Literal(Literal::Int(n)) => n.to_string(),
             PatKind::Literal(Literal::Float(x)) => x.to_string(),
+            PatKind::Literal(Literal::Char(c)) => char_literal(*c),
             PatKind::Literal(Literal::String(s)) => format!("{s:?}"),
             PatKind::Literal(Literal::Unit) => "()".to_string(),
             PatKind::Annot { pat, ty } => {
@@ -686,6 +688,20 @@ impl Printer<'_> {
             }
             RowRef::Error => "<error>".to_string(),
         })
+    }
+}
+
+/// 文字のリテラルの書き方。`show` の escape と同じ規則で、リテラルとして読み戻せる形にする。
+fn char_literal(c: char) -> String {
+    match c {
+        '\'' => r"'\''".to_string(),
+        '\\' => r"'\\'".to_string(),
+        '\n' => r"'\n'".to_string(),
+        '\t' => r"'\t'".to_string(),
+        '\r' => r"'\r'".to_string(),
+        '\0' => r"'\0'".to_string(),
+        '\u{1}'..='\u{1f}' | '\u{7f}' => format!("'\\u{{{:x}}}'", u32::from(c)),
+        _ => format!("'{c}'"),
     }
 }
 

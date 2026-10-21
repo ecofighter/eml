@@ -83,9 +83,8 @@ fn strings_reported_by_the_lexer_have_no_value() {
 }
 
 #[test]
-fn unsupported_literals_have_no_value() {
-    // 文字は値を持たない。E0004 は HIR が出す。
-    assert_eq!(value("'a'"), None);
+fn char_literals_have_values() {
+    assert_eq!(value("'a'"), Some(LiteralValue::Char('a')));
 }
 
 #[test]

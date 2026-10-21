@@ -228,6 +228,7 @@ pub(crate) struct Table<'c> {
     multiplicity: Bounds<Multiplicity>,
     pub int: Ty,
     pub float: Ty,
+    pub char: Ty,
     pub string: Ty,
     pub bool: Ty,
     pub unit: Ty,
@@ -300,6 +301,7 @@ impl<'c> Table<'c> {
             multiplicity: Bounds::default(),
             int: Ty(0),
             float: Ty(0),
+            char: Ty(0),
             string: Ty(0),
             bool: Ty(0),
             unit: Ty(0),
@@ -315,6 +317,11 @@ impl<'c> Table<'c> {
         ));
         table.float = table.alloc(TyShape::Con(
             table.extern_type(ExternType::Float),
+            Vec::new(),
+            Vec::new(),
+        ));
+        table.char = table.alloc(TyShape::Con(
+            table.extern_type(ExternType::Char),
             Vec::new(),
             Vec::new(),
         ));

@@ -20,7 +20,7 @@ Unr ≤ Lin,  Never ≤ Once ≤ Multi
 - データ型の Kind は、フィールドの Kind の上限 (join) で推論する。型引数を持つ `data` では、宣言ごとに Kind に効く型引数の位置を求める。フィールドに直接書いた型引数と、別の `data` の効く引数の位置に書いた型引数が効く。再帰する宣言があるので、すべての宣言で不動点を求める。`Option a` の Kind は `a` の Kind になる。フィールドに定数の `Lin` の型 (`File`、またはそれを含む `data`) が関数型の外に現れる `data` は、型引数によらず `Lin` である。関数型の中の型引数は効かない。フィールドに書いた関数型の線形性は、`->` なら `Unr`、`once` を付けた矢印なら `Lin` である (下の「1回だけ呼べる関数の型」)。`Lin` の宣言 (`data T : Lin`) は、フィールドによらず `Lin` にする (下の「`Lin` の宣言」)。
 - `data` の型引数ごとに、その型引数が値の中で現れる位置の向き (変位) も求める。変位は「現れない」「作って渡す側 (共変)」「受け取る側 (反変)」「両方」のどれかである。フィールドは作って渡す側にあり、関数型の引数で向きを反転し、戻り値とタプルの要素ではそのまま保つ。別の `data` の型引数の位置では、その型引数の変位を重ねる。row のラベルの型引数は両方とする。型引数を持つ extern の型 (`Array a`、`MutArray a`) の型引数は共変とする。Kind と同じく、すべての宣言で不動点を求める。変位は、操作の結果の型の矢印をどう扱うかを決めるのに使う ([エフェクトと handler](effects.md) の「handler の意味」)。
 - コンストラクタの型は、宣言の型引数で量化したスキーム (`Some : a -> Option a`) である。矢印の row は `<>`、線形性は `Unr` である。
-- extern の型 ([宣言](declarations.md) の「`extern`」) の Kind は、処理系の表の行が決める。`Int`、`Float`、`String` は `Unr`、`Array a` は引数の Kind に従い (`Array File` は `Lin`)、`MutArray a` は常に `Lin` である。`Unit` は Prelude が extern の型として宣言する名前で、型としては要素のないタプルである (下の「直積型と Unit」)。標準ライブラリのモジュール `Fs` の `File` は `Lin` で、破棄処理 `close` を持つ ([エフェクトと handler](effects.md) の「組み込みの `IO`」)。
+- extern の型 ([宣言](declarations.md) の「`extern`」) の Kind は、処理系の表の行が決める。`Int`、`Float`、`Char`、`String` は `Unr`、`Array a` は引数の Kind に従い (`Array File` は `Lin`)、`MutArray a` は常に `Lin` である。`Unit` は Prelude が extern の型として宣言する名前で、型としては要素のないタプルである (下の「直積型と Unit」)。標準ライブラリのモジュール `Fs` の `File` は `Lin` で、破棄処理 `close` を持つ ([エフェクトと handler](effects.md) の「組み込みの `IO`」)。
 - extern のエフェクト (`IO` と `Panic`) の多重度は `Once` と決める。どちらの操作も `never` の操作 (`io_failed`、`panicked`) だけなので、操作から計算すると `Never` になるが、extern の関数がその場で1回だけ戻るので `Once` として扱う。
 
 ### 直積型と Unit
@@ -95,7 +95,8 @@ data Queue a : Lin =
 ## 数の型
 
 - `Int` は 64 ビットの符号付き整数、`Float` は IEEE 754 の倍精度 (64 ビット) の浮動小数である。どちらも Prelude の extern の型で、Kind は `Unr` である
-- リテラルは単相である。整数のリテラルの型は `Int`、浮動小数のリテラルの型は `Float` で、`fromInteger` に当たる脱糖も defaulting もない ([字句](lexical.md) の「数値と文字」)
+- `Char` は Unicode のスカラー値 (0..=0xD7FF と 0xE000..=0x10FFFF) の1つを表す。Prelude の extern の型で、Kind は `Unr` である。文字のリテラルの型は `Char` で、`Int` とは別の型なので、`Num` の instance を持たず、`'a' + 'b'` は E2006、`'a' == 1` は E2001 になる。比較は `Eq` と `Ord` で、順序はコードポイントの順である ([宣言](declarations.md) の「Prelude のクラス」)
+- リテラルは単相である。整数のリテラルの型は `Int`、浮動小数のリテラルの型は `Float`、文字のリテラルの型は `Char` で、`fromInteger` に当たる脱糖も defaulting もない ([字句](lexical.md) の「数値と文字」)
 - 算術は Prelude のクラス `Num` (`+ - *`、`negate`) と `Div` (`/ %`) のメソッドで、`Int` と `Float` がそれぞれ instance を持つ ([宣言](declarations.md) の「Prelude のクラス」)。何もオペランドの型を決めない算術は、制約が決まらず E2009 になる (下の「制約の解決」)。`Int` と `Float` を混ぜた演算 (`1 + 1.5`) は、単一化が失敗して E2001 になる
 
 ## 関数型

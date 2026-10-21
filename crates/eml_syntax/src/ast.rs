@@ -405,6 +405,7 @@ pub enum LiteralValue {
     Int(i64),
     Float(f64),
     String(String),
+    Char(char),
 }
 
 impl Literal {
@@ -412,9 +413,8 @@ impl Literal {
         self.syntax.first_token()
     }
 
-    /// 文字の未対応のリテラル、範囲外の整数、閉じていない raw 文字列は `None` を返す。未対応のリテラルは HIR が
-    /// E0004 を出し、ほかは字句解析が報告済みである。raw 文字列のほかの文字列は `StringLit` で、
-    /// `Literal` ではない。
+    /// 範囲外の整数、閉じていない raw 文字列、壊れた文字のリテラルは `None` を返す。どれも字句解析が報告済みである。
+    /// raw 文字列のほかの文字列は `StringLit` で、`Literal` ではない。
     pub fn value(&self) -> Option<LiteralValue> {
         let token = self.token()?;
         match token.kind() {
@@ -423,6 +423,7 @@ impl Literal {
             SyntaxKind::RAW_STRING => {
                 crate::literal::raw_value(token.text()).map(LiteralValue::String)
             }
+            SyntaxKind::CHAR => char_token_value(token.text()).map(LiteralValue::Char),
             _ => None,
         }
     }
@@ -1276,8 +1277,7 @@ impl LiteralPat {
     }
 
     /// `-1` の `-` は字句の一部ではなくパターンの一部なので (docs/spec/grammar.md の `apat`)、ここで符号を付ける。
-    /// 値の壊れたリテラル、未対応のリテラル (文字)、穴のある文字列は `None` を返す。未対応のリテラルは HIR が
-    /// E0004 を出し、値の壊れたものは字句解析が、穴はパーサが報告済みである。
+    /// 値の壊れたリテラルと穴のある文字列は `None` を返す。値の壊れたものは字句解析が、穴はパーサが報告済みである。
     pub fn value(&self) -> Option<LiteralValue> {
         if let Some(string) = self.string() {
             return string
@@ -1304,9 +1304,16 @@ impl LiteralPat {
             SyntaxKind::RAW_STRING => {
                 crate::literal::raw_value(token.text()).map(LiteralValue::String)
             }
+            SyntaxKind::CHAR => char_token_value(token.text()).map(LiteralValue::Char),
             _ => None,
         }
     }
+}
+
+/// `CHAR` のトークンは引用符を含む。壊れた値は字句解析が報告済みなので `None` にする。
+fn char_token_value(text: &str) -> Option<char> {
+    let body = text.strip_prefix('\'')?.strip_suffix('\'')?;
+    crate::literal::char_value(body).ok()
 }
 
 /// 欠けた部分があっても前後の部分を取り違えないように、区切りのトークンの間で子を探す。

@@ -1084,6 +1084,13 @@ fn run_extern<M: Mode>(
             | Extern::IntLe
             | Extern::IntGt
             | Extern::IntGe
+            | Extern::CharEq
+            | Extern::CharNe
+            | Extern::CharCompare
+            | Extern::CharLt
+            | Extern::CharLe
+            | Extern::CharGt
+            | Extern::CharGe
             | Extern::FloatNeg
             | Extern::FloatAdd
             | Extern::FloatSub

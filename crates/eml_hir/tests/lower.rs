@@ -90,7 +90,7 @@ fn signatures_and_equations_are_paired_by_name() {
 
 #[test]
 fn constructs_of_later_stages_are_not_yet_supported() {
-    let text = "f : Int -> Int\nf x =\n  let first = 'c'\n  let plus : Int -> Int -> <Panic> Int = (+)\n  let y = x in y";
+    let text = "f : Int -> Int\nf x =\n  let first = `ls`\n  let plus : Int -> Int -> <Panic> Int = (+)\n  let y = x in y";
     insta::assert_snapshot!(lower_text(text), @"
     f : Int -> Int
     f x#0 = {
@@ -102,7 +102,7 @@ fn constructs_of_later_stages_are_not_yet_supported() {
       }
     }
     ---
-    E0004 3:15 character literals are not supported yet
+    E0004 3:15 command literals are not supported yet
     ");
 }
 
@@ -353,20 +353,30 @@ fn type_declarations_are_not_supported_yet() {
 #[test]
 fn later_stage_literals_are_not_supported_yet() {
     assert_eq!(
-        diagnostics("x : Int\nx = ('c', `ls`)"),
-        [
-            "E0004 2:6 character literals are not supported yet",
-            "E0004 2:11 command literals are not supported yet",
-        ]
+        diagnostics("x : Int\nx = (`ls`)"),
+        ["E0004 2:6 command literals are not supported yet"]
     );
 }
 
 #[test]
-fn character_patterns_are_not_supported_yet() {
-    assert_eq!(
-        diagnostics("f : Int -> Int\nf x = match x with\n  | 'c' -> 1\n  | _ -> 0"),
-        ["E0004 3:5 character literals are not supported yet"]
-    );
+fn character_literals_print_with_the_escapes_of_show() {
+    let text = "f : Unit -> Unit\nf () =\n  let a = '\\''\n  let b = '\\u{1}'\n  let c = '\\u{301}'\n  let d = '\"'\n  let e = '\\0'\n  ()";
+    let printed = lower_text(text);
+    for expected in [r"'\''", r"'\u{1}'", "'\u{301}'", "'\"'", r"'\0'"] {
+        assert!(printed.contains(expected), "{expected} in {printed}");
+    }
+}
+
+#[test]
+fn character_literals_lower() {
+    let text = "f : Char -> Int\nf c =\n  let newline = '\\n'\n  match c with\n    | 'c' -> 1\n    | _ -> 0";
+    insta::assert_snapshot!(lower_text(text), @r"
+    f : Char -> Int
+    f c#0 = {
+      let newline#1 = '\n'
+      (match c#0 with | 'c' -> 1 | _ -> 0)
+    }
+    ");
 }
 
 #[test]

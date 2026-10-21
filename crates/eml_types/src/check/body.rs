@@ -358,6 +358,7 @@ impl BodyCheck<'_, '_> {
             ExprKind::Missing => self.table.error,
             ExprKind::Literal(Literal::Int(_)) => self.table.int,
             ExprKind::Literal(Literal::Float(_)) => self.table.float,
+            ExprKind::Literal(Literal::Char(_)) => self.table.char,
             ExprKind::Literal(Literal::String(_)) => self.table.string,
             ExprKind::Literal(Literal::Unit) => self.table.unit,
             ExprKind::Path(res) => self.path(id, *res, expr.range, true),
@@ -1062,13 +1063,14 @@ impl BodyCheck<'_, '_> {
         }
     }
 
-    /// `Int` と `String` のリテラルのパターン。リテラルの型を期待する型と単一化する。浮動小数のリテラルのパターンは
+    /// `Int`、`Char`、`String` のリテラルのパターン。リテラルの型を期待する型と単一化する。浮動小数のリテラルのパターンは
     /// HIR が E1052 にして `Missing` に下ろすので、ここには来ないが、型は式と同じに決めておく。
     fn literal_pattern(&mut self, pat: PatId, literal: &Literal, expected: Ty) {
         let range = self.body.pats[pat].range;
         let found = match literal {
             Literal::Int(_) => self.table.int,
             Literal::Float(_) => self.table.float,
+            Literal::Char(_) => self.table.char,
             Literal::String(_) => self.table.string,
             Literal::Unit => self.table.unit,
         };

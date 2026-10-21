@@ -189,6 +189,7 @@ fn lower(
         TypeRefKind::Con(id, _, _) if *id == table.extern_type(ExternType::Unit) => table.unit,
         TypeRefKind::Con(id, _, _) if *id == table.extern_type(ExternType::Int) => table.int,
         TypeRefKind::Con(id, _, _) if *id == table.extern_type(ExternType::Float) => table.float,
+        TypeRefKind::Con(id, _, _) if *id == table.extern_type(ExternType::Char) => table.char,
         TypeRefKind::Con(id, _, _) if *id == table.extern_type(ExternType::String) => table.string,
         TypeRefKind::Con(id, _, _) if *id == table.lang.bool => table.bool,
         TypeRefKind::Con(id, args, rows) => {

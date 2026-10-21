@@ -1,0 +1,14 @@
+---
+source: crates/eml_cli/tests/ui.rs
+expression: rendered
+input_file: tests/ui/check-fail/exhaustiveness/char_without_wildcard.em
+---
+[E4001] Error: `match` does not cover every value
+   ╭─[ check-fail/exhaustiveness/char_without_wildcard.em:3:11 ]
+   │
+ 3 │ vowel c = match c with
+   │           ──┬──  
+   │             ╰──── no arm matches some values
+   │ 
+   │ Note: not covered: `_`
+───╯

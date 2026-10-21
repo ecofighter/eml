@@ -307,18 +307,12 @@ impl<'a> BodyLowering<'a> {
         let range = expr.range();
         match expr {
             ast::Expr::Literal(literal) => {
-                if let Some((token, message)) = literal.token().and_then(|token| {
-                    Some((token.text_range(), unsupported_literal(token.kind())?))
-                }) {
-                    self.diagnostics
-                        .push(Diagnostic::not_yet_supported(self.file, token, message));
-                    return self.alloc(ExprKind::Missing, range);
-                }
                 // 壊れた値は字句解析が報告済み
                 let kind = literal.value().map_or(ExprKind::Missing, |value| {
                     ExprKind::Literal(match value {
                         ast::LiteralValue::Int(n) => Literal::Int(n),
                         ast::LiteralValue::Float(x) => Literal::Float(FloatBits::new(x)),
+                        ast::LiteralValue::Char(c) => Literal::Char(c),
                         ast::LiteralValue::String(s) => Literal::String(s),
                     })
                 });
@@ -917,14 +911,10 @@ impl<'a> BodyLowering<'a> {
             ast::Pat::LiteralPat(literal) => match literal.value() {
                 Some(ast::LiteralValue::Int(n)) => PatKind::Literal(Literal::Int(n)),
                 Some(ast::LiteralValue::Float(_)) => self.float_pattern(range),
+                Some(ast::LiteralValue::Char(c)) => PatKind::Literal(Literal::Char(c)),
                 Some(ast::LiteralValue::String(s)) => PatKind::Literal(Literal::String(s)),
-                None => match literal.token().and_then(|token| {
-                    Some((token.text_range(), unsupported_literal(token.kind())?))
-                }) {
-                    Some((token, message)) => self.unsupported_pat(token, message),
-                    // 範囲外の整数と壊れた文字列は、字句解析が報告済み
-                    None => PatKind::Missing,
-                },
+                // 範囲外の整数、壊れた文字と文字列は、字句解析が報告済み
+                None => PatKind::Missing,
             },
             ast::Pat::ListPat(list) => return self.lower_list_pat(list, range),
             // 要素は外側のパターンと同じ組で変換する。`(x, x)` も1つのパターンの中の重複である (E1017)
@@ -1239,12 +1229,6 @@ impl<'a> BodyLowering<'a> {
         self.alloc(ExprKind::Missing, range)
     }
 
-    fn unsupported_pat(&mut self, range: TextRange, message: &str) -> PatKind {
-        self.diagnostics
-            .push(Diagnostic::not_yet_supported(self.file, range, message));
-        PatKind::Missing
-    }
-
     /// 浮動小数のリテラルのパターン (E1052)。`==` で比べるよう案内する。`0.0` と `-0.0`、NaN のように、`==` と
     /// ビット列の一致が食い違う値があるので、パターンには書かせない (docs/spec/exhaustiveness.md)。
     fn float_pattern(&mut self, range: TextRange) -> PatKind {
@@ -1267,13 +1251,4 @@ fn arguments(n: usize) -> String {
     } else {
         format!("{n} arguments")
     }
-}
-
-/// まだ実装していない文字のリテラル。
-/// パーサは CST を組み、HIR が E0004 を出す (docs/spec/diagnostics.md の「未対応の構文と E0004」)。
-fn unsupported_literal(kind: SyntaxKind) -> Option<&'static str> {
-    Some(match kind {
-        SyntaxKind::CHAR => "character literals are not supported yet",
-        _ => return None,
-    })
 }

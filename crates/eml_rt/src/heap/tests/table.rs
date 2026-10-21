@@ -140,6 +140,22 @@ pub const INT_BINARY: [&str; 12] = [
     "Prelude.Ord Int.>=",
 ];
 
+/// 文字の端の値。Unicode のスカラー値の両端、サロゲートの前後、ASCII と BMP と補助面の境
+pub const CHAR_EDGES: [i64; 12] = [
+    0x0, 0x41, 0x61, 0x7f, 0x80, 0xe9, 0xd7ff, 0xe000, 0xffff, 0x1_0000, 0x1_f600, 0x10_ffff,
+];
+
+/// 文字を2つ取る行
+pub const CHAR_BINARY: [&str; 7] = [
+    "Prelude.Eq Char.==",
+    "Prelude.Eq Char.!=",
+    "Prelude.Ord Char.compare",
+    "Prelude.Ord Char.<",
+    "Prelude.Ord Char.<=",
+    "Prelude.Ord Char.>",
+    "Prelude.Ord Char.>=",
+];
+
 /// 浮動小数の端の値。±0、±1、小数、`MAX`、`MIN`、最小の正規化数と非正規化数、±無限大、NaN
 pub const FLOAT_EDGES: [f64; 14] = [
     0.0,
@@ -550,6 +566,13 @@ pub fn inputs() -> Vec<(String, Vec<Arg>)> {
         }
         for pair in ints.chunks(2) {
             push(name, vec![Arg::Int(pair[0]), Arg::Int(pair[1])]);
+        }
+    }
+    for name in CHAR_BINARY {
+        for a in CHAR_EDGES {
+            for b in CHAR_EDGES {
+                push(name, vec![Arg::Int(a), Arg::Int(b)]);
+            }
         }
     }
     for name in ["Prelude.Num Int.negate", "Prelude.Show Int.show"] {

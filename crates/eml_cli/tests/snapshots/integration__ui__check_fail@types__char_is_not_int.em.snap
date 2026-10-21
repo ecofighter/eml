@@ -1,0 +1,21 @@
+---
+source: crates/eml_cli/tests/ui.rs
+expression: rendered
+input_file: tests/ui/check-fail/types/char_is_not_int.em
+---
+[E2006] Error: no instance of `Num` for `Char`
+   ╭─[ check-fail/types/char_is_not_int.em:3:14 ]
+   │
+ 3 │ sum () = 'a' + 'b'
+   │              ┬  
+   │              ╰── `+` requires `Num Char`
+───╯
+[E2001] Error: mismatched types
+   ╭─[ check-fail/types/char_is_not_int.em:6:15 ]
+   │
+ 6 │ same = 'a' == 1
+   │            ─┬ ┬  
+   │             ╰──── argument 2 of `==`
+   │               │  
+   │               ╰── expected `Char`, found `Int`
+───╯

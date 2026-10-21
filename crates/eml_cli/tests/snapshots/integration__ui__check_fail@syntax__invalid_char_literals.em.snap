@@ -3,26 +3,12 @@ source: crates/eml_cli/tests/ui.rs
 expression: rendered
 input_file: tests/ui/check-fail/syntax/invalid_char_literals.em
 ---
-[E0004] Error: character literals are not supported yet
-   ╭─[ check-fail/syntax/invalid_char_literals.em:2:9 ]
-   │
- 2 │ empty = ''
-   │         ─┬  
-   │          ╰── this is implemented in a later stage
-───╯
 [E0016] Error: empty character literal
    ╭─[ check-fail/syntax/invalid_char_literals.em:2:9 ]
    │
  2 │ empty = ''
    │         ─┬  
    │          ╰── a character literal holds exactly one character
-───╯
-[E0004] Error: character literals are not supported yet
-   ╭─[ check-fail/syntax/invalid_char_literals.em:5:8 ]
-   │
- 5 │ many = 'ab'
-   │        ──┬─  
-   │          ╰─── this is implemented in a later stage
 ───╯
 [E0016] Error: character literal `'ab'` has more than one character
    ╭─[ check-fail/syntax/invalid_char_literals.em:5:8 ]
@@ -33,13 +19,6 @@ input_file: tests/ui/check-fail/syntax/invalid_char_literals.em
    │ 
    │ Help: write a string: `"ab"`
 ───╯
-[E0004] Error: character literals are not supported yet
-   ╭─[ check-fail/syntax/invalid_char_literals.em:8:11 ]
-   │
- 8 │ unknown = '\q'
-   │           ──┬─  
-   │             ╰─── this is implemented in a later stage
-───╯
 [E0008] Error: unknown escape sequence `\q`
    ╭─[ check-fail/syntax/invalid_char_literals.em:8:12 ]
    │
@@ -47,13 +26,6 @@ input_file: tests/ui/check-fail/syntax/invalid_char_literals.em
    │            ─┬  
    │             ╰── not a valid escape
 ───╯
-[E0004] Error: character literals are not supported yet
-    ╭─[ check-fail/syntax/invalid_char_literals.em:11:13 ]
-    │
- 11 │ surrogate = '\u{D800}'
-    │             ─────┬────  
-    │                  ╰────── this is implemented in a later stage
-────╯
 [E0008] Error: invalid unicode escape `\u{D800}`
     ╭─[ check-fail/syntax/invalid_char_literals.em:11:14 ]
     │

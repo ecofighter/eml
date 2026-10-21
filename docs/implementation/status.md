@@ -8,8 +8,8 @@
 
 ### 実装したもの
 
-- 基本型: `Int`、`Float`、`Bool`、`String`、`Unit`。`Bool` は Prelude の `data Bool = | False | True` で、キーワード `true` / `false` はない。単項の `!` はなく、関数 `not` を使う
-- タプルと射影 `t.0`、型引数を持つ代数的データ型 (`data`)、`match` と入れ子のパターン、`Int` と `String` のリテラルのパターン
+- 基本型: `Int`、`Float`、`Char`、`Bool`、`String`、`Unit`。`Char` は文字のリテラル `'a'` と、`Eq` と `Ord` を持つ。`Bool` は Prelude の `data Bool = | False | True` で、キーワード `true` / `false` はない。単項の `!` はなく、関数 `not` を使う
+- タプルと射影 `t.0`、型引数を持つ代数的データ型 (`data`)、`match` と入れ子のパターン、`Int`、`Char`、`String` のリテラルのパターン
 - 名前付きのレコード: `data` のコンストラクタの名前付きのフィールド、作る式 `Person { name = "a", age = 3 }` と省略形、射影 `p.name`、更新 `{ p | age = 31 }`、分解のパターン、フィールドのセクション `(.name)` と `(.0)`、導出した `Show` の `Person { … }` の表示 ([直積型とレコード](../spec/records.md))。呼び出しの引数のラムダは、ほかの引数の後に型を検査する ([型と Kind](../spec/types.md) の「引数のラムダを後で検査する」)
 - Prelude の `List`、`Option`、`Result` と、その `Eq`、`Ord`、`Show` の instance ([宣言](../spec/declarations.md) の「Prelude のクラス」)。リストのリテラル `[…]` とパターン、コンストラクタ `::` (`infixr 5`。Prelude だけが宣言できる、E1044) ([式](../spec/expressions.md) の「リスト」)。リストの関数は `Std.List` にある (`map`、`filter`、`fold`、`length` など。[標準ライブラリ](../spec/stdlib.md) の「`List`」)
 - 文字列: エスケープ、補間 `\{式}`、複数行の文字列 `"""`、raw 文字列 `r"…"` / `r#"…"#` ([字句](../spec/lexical.md) の「文字列」)。補間の穴は、Prelude の `Show` のメソッド `display` で文字列にする ([式](../spec/expressions.md) の「補間」)。文字列の関数は標準ライブラリの `String` にある。位置は UTF-8 のバイトの位置である ([標準ライブラリ](../spec/stdlib.md))
@@ -35,7 +35,7 @@
 
 ### まだないもの
 
-- 文字 (字句として予約し、使うと E0004。[ロードマップ](../future/roadmap.md) の「`Char`」)
+- `Char` の `Show` と標準ライブラリ ([ロードマップ](../future/roadmap.md) の「`Char`」)
 - まだ実装していない構文: 型の別名 `type` ([ロードマップ](../future/roadmap.md) の「言語機能と構文」)、コマンドリテラル ([ロードマップ](../future/roadmap.md) の「コマンドリテラル」)。字句と文法の置き場所を用意してあり、使うと E0004 (未対応) を出して回復する。どの段階が E0004 を出すかは [診断](../spec/diagnostics.md) の「未対応の構文と E0004」にある
 - row の型引数を持つ型の instance と `deriving`。書くと E0004 を出す
 - バイト列と標準入出力のハンドル ([ロードマップ](../future/roadmap.md) の「バイト列とハンドル」)。文字の型を使う文字列の関数、連想配列、並べ替えなどの標準ライブラリ ([ロードマップ](../future/roadmap.md) の「UTF-8 と標準ライブラリ」)

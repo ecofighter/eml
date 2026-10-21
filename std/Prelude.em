@@ -268,6 +268,20 @@ while cond body =
     while cond body
   else ()
 
+-- 文字。値は Unicode のスカラー値で、順序はコードポイントの順 (`String` の UTF-8 のバイトの順と一致する)
+pub extern data Char
+
+instance Eq Char where
+  extern (==)
+  extern (!=)
+
+instance Ord Char where
+  extern compare
+  extern (<)
+  extern (<=)
+  extern (>)
+  extern (>=)
+
 -- 要素を持つ組み込みの型。Array の Kind は要素に従い、MutArray は常に Lin (docs/spec/types.md)
 pub extern data Array a
 pub extern data MutArray a

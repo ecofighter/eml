@@ -981,6 +981,7 @@ impl FnLowering<'_> {
     fn literal_pattern(&mut self, literal: &Literal) -> CasePattern {
         match literal {
             Literal::Int(n) => CasePattern::Int(*n),
+            Literal::Char(c) => CasePattern::Int(i64::from(u32::from(*c))),
             Literal::String(text) => CasePattern::String(self.program.strings.intern(text)),
             Literal::Unit => unreachable!("`()` is a wildcard pattern, not a literal pattern"),
             Literal::Float(_) => unreachable!("HIR reports a floating-point literal pattern"),

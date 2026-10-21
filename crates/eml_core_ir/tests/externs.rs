@@ -15,6 +15,9 @@ const PROBES: &str = "\
 probe_int : Int -> Int
 probe_int x = x
 
+probe_char : Char -> Char
+probe_char c = c
+
 probe_string : String -> String
 probe_string s = s
 
@@ -48,6 +51,7 @@ fn probe(ty: ExternType) -> &'static str {
     match ty {
         ExternType::Int => "probe_int",
         ExternType::Float => "probe_float",
+        ExternType::Char => "probe_char",
         ExternType::String => "probe_string",
         ExternType::Unit => "probe_unit",
         ExternType::File => "probe_file",

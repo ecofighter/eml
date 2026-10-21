@@ -347,6 +347,8 @@ Prelude の instance は次のとおりである。
 | `Show Float` | `extern show`。Python の `repr` と同じ形で表示する (上の「Prelude のクラス」)。`show_prec` は Prelude に書き、`d > 6` で表示が `-` で始まるなら括弧で囲む (`Some (-1.5)`、`Some (-0.0)`、`Some (-inf)`)。`-` で始まるかは、Prelude の中だけの `Pure` の extern `shows_minus : Float -> Bool` で見分ける。`x < 0.0` は `-0.0` で偽になるためである |
 | `Num Int`、`Div Int`、`Num Float`、`Div Float` | メソッドを instance の中の `extern` で表の行に結ぶ (上の「Prelude のクラス」の `Num` と `Div` の項) |
 | `Eq Float`、`Ord Float` | IEEE 754 のとおりの比較と全順序の `compare` (上の「Prelude のクラス」の `Eq Float` と `Ord Float` の項) |
+| `Eq Char` | `extern (==)`、`extern (!=)` |
+| `Ord Char` | `extern compare`、`extern (<)`、`extern (<=)`、`extern (>)`、`extern (>=)`。順はコードポイントの順で、`Ord String` の UTF-8 のバイト順と一致する |
 | `Eq String` | `extern (==)`、`extern (!=)` |
 | `Ord String` | `extern compare`。順はバイト順で、妥当な UTF-8 ではコードポイントの順と一致する。`<` などは既定のメソッドを通る |
 | `Show String` | `extern show`。下のエスケープで表示する。`display s = s` で、文字列をそのまま返す。恒等関数で足りるので、extern にしない |

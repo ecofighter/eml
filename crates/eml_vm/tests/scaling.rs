@@ -1193,6 +1193,34 @@ main () =
     assert_flat((short, long));
 }
 
+/// `Char` を比べて持ち回るループ。`Char` は `Int` の語なので、型どおりのループの中では箱に入らず、一様な位置の
+/// 入口と出口で即値の箱になるだけである。反復の数によらず、箱も確保も増えない
+/// (docs/spec/lir.md の「値の表現」)。
+#[test]
+fn a_char_comparison_loop_does_not_box_or_allocate_per_iteration() {
+    let (short, long) = peaks(|n| {
+        (
+            format!(
+                "{HIDE}
+climb : Int -> Char -> Int -> <Panic> Int
+climb n c acc = if n == 0 then acc else
+  let next = if c < 'z' then 'z' else 'a'
+  climb (n - 1) next (if c == next then acc else acc + 1)
+
+main : Unit -> <IO, Panic> Unit
+main () =
+  let Box f = hide 0 climb
+  println (show (f {n} 'a' 0))
+"
+            ),
+            format!("{n}\n"),
+        )
+    });
+    assert_eq!(short.boxes, long.boxes, "{short:?} {long:?}");
+    assert_eq!(short.allocations, long.allocations, "{short:?} {long:?}");
+    assert_flat((short, long));
+}
+
 /// 同じく、構造体 (組) の累積のループに入る。組は型どおりのループの中では葉のまま運ばれ、箱になるのは版の入口と
 /// 出口だけである。
 #[test]
