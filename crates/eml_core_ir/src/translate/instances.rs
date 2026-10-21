@@ -701,9 +701,9 @@ impl Collector<'_> {
     }
 
     /// 関数の instance ごとに、参照の型と呼ばれる instance の型、`perform` の型と操作の宣言の型、節の型と操作の宣言の
-    /// 型を比べ、`unr` と `lin` が食い違わないことを確かめる。この食い違いを最初に拒むのは V2 (docs/spec/lir.md の「Kind の印の検査」) なので、それより
-    /// 前に書き出しか評価が誤れば気づけない。そのため debug ビルドで確かめる
-    /// (docs/spec/core-ir.md の「食い違いがないことの検査」)。
+    /// 型を比べ、`unr` と `lin` が食い違わないことを確かめる。この食い違いを最初に拒むのは V2
+    /// (docs/spec/lir.md の「Kind の印の検査」) なので、それより前に書き出しか評価が誤れば気づけない。そのため debug
+    /// ビルドで確かめる (docs/spec/core-ir.md の「食い違いがないことの検査」)。
     fn check_linearity(&mut self) {
         let Collector {
             hir,
