@@ -1,6 +1,6 @@
 -- 操作の引数が定数 (`True`、`False`、引数のないコンストラクタ。フィールドを持つコンストラクタと混ざるものも含む)
 -- のとき、節の本体を展開すると、その定数で分ける `switch` ができる。optimize は、それを合う case へのジャンプにする
--- (docs/superpowers/specs/2026-10-18-s13e-specialization-design.md の「書き換え」)。
+-- (docs/spec/core-ir.md の「handler の複製」)。
 import Yield (Yield(..))
 
 data Box a = | Box a

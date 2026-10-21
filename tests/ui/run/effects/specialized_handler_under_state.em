@@ -1,6 +1,6 @@
 -- `Yield.fold` で畳む生産者が、外側の `State.run` の `get` と `put` も呼ぶ。`Yield` の handler を特殊化した後も、
 -- `State` の操作は外側の handler に届き、畳み込みの結果と外側の状態がどちらも合う
--- (docs/superpowers/specs/2026-10-18-s13e-specialization-design.md の「意味が変わらない理由」)。
+-- (docs/spec/core-ir.md の「handler の特殊化で意味が変わらない理由」)。
 import Yield (Yield(..))
 import Std.State (State(..))
 

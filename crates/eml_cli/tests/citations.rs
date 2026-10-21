@@ -12,7 +12,7 @@ fn repo_root() -> PathBuf {
         .unwrap()
 }
 
-/// 引用を探すファイル。`docs/superpowers` と `docs/plans` は作業中の設計と計画で、まだない節を引くので除く。
+/// 引用を探すファイル。`docs/plans` は作業中の計画で、まだない節を引くので除く。
 /// `bench/` は `.em` のほか、計測のスクリプト (`.py`、`.sh`) のコメントも引ける。
 fn sources(root: &Path) -> Vec<PathBuf> {
     let mut files = vec![root.join("CLAUDE.md"), root.join("README.md")];
@@ -24,10 +24,7 @@ fn sources(root: &Path) -> Vec<PathBuf> {
         root.join("tests"),
     ];
     while let Some(dir) = dirs.pop() {
-        if dir.ends_with("docs/superpowers")
-            || dir.ends_with("docs/plans")
-            || dir.ends_with("target")
-        {
+        if dir.ends_with("docs/plans") || dir.ends_with("target") {
             continue;
         }
         for entry in fs::read_dir(&dir).unwrap() {
