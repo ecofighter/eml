@@ -463,6 +463,7 @@ T-1 と T-2 は並べてよい。それ以降は1本の列である。
   - 種類2: bench.rs の `unwind_points` のスナップショット (`scripts/csv2jsonl` が 106 から 109)
   - 種類2: `<g>{k}` の名前か、`k` への `apply` を含む Core IR と LIR のテキストのスナップショット
   - 新しいテスト (`crates/eml_core_ir/tests/optimize.rs`): `a_clause_copy_is_copied_for_each_continuation`、`a_clause_copy_drops_the_captures_instead_of_k`、`a_clause_copy_with_a_handle_is_not_copied_for_its_continuation`
+  - `k` として渡す継続の関数 `f{H}$hN` に、D-12 の「値の参照が残らない値として生まれた関数は `split` を持たない」を当てる (別のコミット)。新しいテストは `a_continuation_called_only_by_its_clause_copy_is_typed`。種類1と種類2の変更はない
 - T-8:
   - T-6 で通らなくなったものと、T-6 で消えた `Call::Apply::source_ret`、`uniform apply`、場所の Repr の構文に関わるものは、T-6 の行に移した。下の一覧のうち、まだ残るのは `a_mismatch_between_different_types_is_internal`、`a_tail_call_between_reprs_of_different_types_is_not_compiled`、`the_capture_count_is_packed_with_the_function`、`typed_benches_do_not_convert` と、2つの UI テストの移動である
   - 種類1: `crates/eml_vm/tests/conversions.rs` の `a_uniform_site_converts_into_and_out_of_a_typed_function`、`a_closure_keeps_a_float_capture_raw`、`a_partial_application_by_the_vm_lays_out_raw_words`、`apply_rest_keeps_raw_words`、`a_mismatch_between_different_types_is_internal`、`a_tail_call_between_reprs_of_different_types_is_not_compiled`、`a_signature_too_long_to_pack_is_compared_by_its_reprs`、`a_boxed_argument_frees_a_unique_box`、`a_boxed_argument_decrefs_a_shared_box`、`a_typed_site_boxes_into_a_uniform_function` を消す

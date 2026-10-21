@@ -2490,6 +2490,31 @@ fn a_clause_copy_is_copied_for_each_continuation() {
     assert!(!copy.contains("apply "), "{copy}");
 }
 
+/// 節の写しの複製が直接呼ぶだけの継続の関数は、値の参照が残らないので `split` を持たない。`k` を値として使う節
+/// (`Iter.generate`) の継続の関数は、複製が閉包を作り直すので `split` を保つ
+/// (docs/spec/core-ir.md の「直接だけ呼ばれる持ち上げた関数」)。
+#[test]
+fn a_continuation_called_only_by_its_clause_copy_is_typed() {
+    let continuations = |text: &str| {
+        let program = eml_test_support::core_until(text, Pass::Optimize);
+        let shown = pretty(&program);
+        let found: Vec<Option<u32>> = program
+            .functions
+            .iter()
+            .filter(|function| function.name.contains("{H=") && function.name.contains("}$h"))
+            .filter(|function| !function.name.contains("}$hj"))
+            .map(|function| function.split)
+            .collect();
+        assert!(!found.is_empty(), "{shown}");
+        found
+    };
+    assert!(continuations(TWO_ASKS).iter().all(Option::is_none));
+    let generated = format!(
+        "{NUMS}{HIDE}\nmain : Unit -> <IO, Panic> Unit\nmain () =\n  let Box it = hide 0 (Iter.generate (nums 3))\n  println (show (Iter.to_list it))\n"
+    );
+    assert!(continuations(&generated).iter().all(Option::is_some));
+}
+
 /// `perform` の地点が2つある経路の関数。節は `k` を末尾でなく呼ぶので写しになり、展開の上限より大きいので複製に
 /// 展開されない。
 const TWO_ASKS: &str = "\

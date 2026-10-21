@@ -228,8 +228,9 @@ impl Shape {
 /// 経路はどの `handle` も断るので、入れ子の handler は内側から特殊化される。1回ごとに、その回の初めのコードから
 /// 特殊化できる handle をすべて特殊化し、印を付け直してから次の回に進む。内側の handle が複製の呼び出しに変わると、
 /// 外側の handler の経路はその複製を通ってたどれるようになる。変わる handle がなくなったら止める
-/// (docs/spec/core-ir.md の「handler への特殊化」)。
-pub(crate) fn handlers(program: &mut Program, translated: &mut Vec<bool>) {
+/// (docs/spec/core-ir.md の「handler への特殊化」)。返すのは、末尾の経路の形の複製ごとの一族 (`Table::families`) で
+/// ある。
+pub(crate) fn handlers(program: &mut Program, translated: &mut Vec<bool>) -> Vec<Vec<FnIdx>> {
     let mut table = Table::default();
     while round(program, translated, &mut table) {
         let inherited: Vec<bool> = table
@@ -242,6 +243,7 @@ pub(crate) fn handlers(program: &mut Program, translated: &mut Vec<bool>) {
         let keep = kept_marks(program);
         recompute_yields(program, &keep);
     }
+    table.families
 }
 
 /// 回をまたいで持つ複製の表。同じ鍵の複製は一度だけ作る。経路の関数は `handle` を持たないので、後の回で書き換え
@@ -257,6 +259,10 @@ struct Table {
     sources: Vec<FnIdx>,
     /// 状態を渡す形の複製ごとの、返す値の並び。後の回の複製の並びは、元の複製の並びから決まる。
     returns: HashMap<FnIdx, Returned>,
+    /// 末尾の経路の形の複製ごとの一族。複製 `f{H}` と、それを作るときに作った継続の関数 `f{H}$hN`、合流のブロックの
+    /// 関数 `f{H}$hjJ`、節の写しの複製 `<g>{k}{…}` である。どれも `f{H}` の名前で決まるので、一族も名前で決まる。
+    /// `k` として渡す継続の関数の値の参照は、この一族の中にしか生まれない (`direct::type_direct_only`)。
+    families: Vec<Vec<FnIdx>>,
 }
 
 /// 1回分の特殊化。その回の初めのコードで特殊化できる handle がなければ、何も変えずに `false` を返す。
@@ -304,6 +310,7 @@ fn round(program: &mut Program, translated: &[bool], table: &mut Table) -> bool 
         pending: Vec::new(),
         touching: &touch,
         tuples: &tuples,
+        family: Vec::new(),
     };
     let calls: Vec<FnIdx> = handlers
         .iter()
@@ -754,6 +761,8 @@ struct Copies<'a> {
     touching: &'a HashMap<u32, Vec<bool>>,
     /// 状態を渡す形の複製が使うタプルの配置 (`passing::tuple_layout`)。
     tuples: &'a Tuples,
+    /// 作っている末尾の経路の形の複製の一族。
+    family: Vec<FnIdx>,
 }
 
 impl Copies<'_> {
@@ -762,6 +771,13 @@ impl Copies<'_> {
         self.created.push(None);
         self.table.sources.push(source);
         FnIdx((self.program.functions.len() + self.created.len() - 1) as u32)
+    }
+
+    /// 作っている複製 `f{H}` の一族 (`Table::families`) に入る関数の番号を取る。
+    fn reserve_member(&mut self, source: FnIdx) -> FnIdx {
+        let index = self.reserve(source);
+        self.family.push(index);
+        index
     }
 
     fn place(&mut self, index: FnIdx, function: CoreFn) {
@@ -830,7 +846,7 @@ impl Copies<'_> {
         };
         let name = limited(&base, format!("{base}{{{position}={closure}}}"));
         let code = piece::clause_with_continuation(&with_k, name, continuation, callee, count);
-        let copy = self.reserve(clause);
+        let copy = self.reserve_member(clause);
         self.place(copy, code);
         Some(copy)
     }
@@ -881,6 +897,7 @@ impl Copies<'_> {
         code.split = None;
         code.ret = ret.ret;
         code.ret_mark = ret.ret_mark;
+        self.family = vec![index];
 
         let mut captures: Vec<Vec<Atom>> = Vec::new();
         for &(clause, count) in &shape.clauses {
@@ -1005,6 +1022,8 @@ impl Copies<'_> {
         }
         blocks::prune(&mut copy.code);
         self.place(index, copy.code);
+        let family = std::mem::take(&mut self.family);
+        self.table.families.push(family);
     }
 
     /// `copy` の `block` の `stmt` 番目の H 宛ての `perform` を書き換える。`number` はその通し番号で、`live` は
@@ -1052,7 +1071,7 @@ impl Copies<'_> {
             );
             return;
         }
-        let continuation = self.reserve(copy.source);
+        let continuation = self.reserve_member(copy.source);
         let mut params = live.clone();
         params.push(result);
         params.extend(copy.state);
@@ -1060,7 +1079,8 @@ impl Copies<'_> {
         body.name = format!("{}$h{number}", copy.code.name);
         body.internal = shape.forms[op] == ClauseForm::Other;
         // `k` として渡す継続の関数は値として生まれるので、捕獲 (生きている変数) より後ろの再開の値と状態を一様に
-        // 受ける (docs/spec/core-ir.md の「handler の複製」)
+        // 受ける (docs/spec/core-ir.md の「handler の複製」)。節の写しの複製が直接呼ぶだけになれば、optimize の最後に
+        // `direct::type_direct_only` が `split` を外す
         if body.internal {
             body.split = Some(live.len() as u32);
         }
@@ -1183,7 +1203,7 @@ impl Copies<'_> {
         piece::region(code, at, params, joins, |join, args| {
             let function = *join_functions.entry(join).or_insert_with(|| {
                 pending.push(join);
-                self.reserve(*source)
+                self.reserve_member(*source)
             });
             let mut args = args.to_vec();
             args.extend(join_live(code, live_in, join, *state).map(Atom::Var));
