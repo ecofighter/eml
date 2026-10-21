@@ -233,7 +233,7 @@ token は1語の値で、フレームのスロットに置く ([オブジェク�
   - 組になる形は走査する語が 255 個未満に限るので (`Shape::reuse_words`、[オブジェクトモデル](object-model.md) の「ヘッダ」)、数の語はなく、位置をずらさない。コード生成はこれをデバッグビルドで確かめる
   - 検査モードでは、空でない token を使った回数を `RunStats` の `reuses` に数える
 - `drop_token r` (`DropToken`) は、`Heap::drop_token` を呼ぶ。空の token なら何もしない
-- token の命令を1つも持たない関数は、reuse の命令を含まない命令の列になる
+- token の命令を1つも持たない関数には、reuse の命令も、その費用も加わらない
 - 逆アセンブラは、token のスロットを `release s0 #1 [keep @0] token s3`、`con s1 = #1 (2 scanned, 0 raw) [skip @0 -> s2, @1 -> s4] reuse s3 in place`、`drop_token s3` の形で書く
 
 ### switch
