@@ -26,7 +26,7 @@ eml を実装するエージェントとプログラマのための文書群で�
 | [spec/object-model.md](spec/object-model.md) | 規範 | `eml_rt` の核: 語、ヘッダと種類、物体の形、ページの確保器と生存の列挙、局所と共有の RC、`share`、`lin` ビット、核の操作、文字列、凍結した領域、reuse の部品、検査モード、実行文脈 `Ctx`、extern (語の ABI、誤り、Host と出力のバッファ、`File`)、受け入れる制約、配列、ダミーの値、`unsafe` の核 |
 | [spec/vm.md](spec/vm.md) | 規範 | VM の置き場所と実行の API、`CodeBase` と `FnEntry`、スロットとフレーム、命令の形、スロットの割り当て、呼び出しと戻り、命令ごとの実行、誤りと終わりの処理、上限と割り込み、`RunStats`、並列化への備え、巻き戻し、extern の中断 |
 | [spec/diagnostics.md](spec/diagnostics.md) | 規範 | 診断のデータ構造、診断の順、番号の範囲と各番号の意味、連鎖する診断の抑止、他の言語の書き方へのヒント |
-| [spec/examples.md](spec/examples.md) | 説明 | 本番の構文で書いたプログラム例。まだ実装していない構文を含む |
+| [spec/examples.md](spec/examples.md) | 説明 | 本番の構文で書いたプログラム例。実装していない構文を含む |
 | **implementation/** | 手引き | どう作るか、今どこまでできているか |
 | [implementation/architecture.md](implementation/architecture.md) | 手引き | プログラム全体の構成と採らなかった形、crate の構成、各段階の規律、エラー回復、各 crate の内部、CLI と lib API、translate の組み立て、継続と evidence、構文解析と名前解決の回復、リポジトリ、ソースファイルと位置、外部 crate |
 | [implementation/testing.md](implementation/testing.md) | 手引き | テスト戦略、テストの変更の運用、テストの置き場所、`eml_rt` の検証 (Verus、単体テスト、期待値の表、Miri)、`eml_vm` のテスト、UI テスト (2つのモードで流すこと)、LIR と Core IR のテキストの形、文書の引用の検査、REPL のトランスクリプト、CLI のテスト、性能のテスト、feature の組み合わせ、よく使うコマンド |
@@ -40,7 +40,7 @@ eml を実装するエージェントとプログラマのための文書群で�
 | [future/verification.md](future/verification.md) | 将来の設計 | Verus で検証する範囲 (Kind 推論の解く部分を証明する方針、型検査と evidence passing を扱わない理由) |
 | **plans/** | 作業中 | 段の設計と計画。段の最初のコミットで入れ、段を閉じるときに消す。コードと文書から引かない |
 | **reports/** | 調査 | 実装の方針を決めるための調査レポート。書いた時点のコミットに基づき、後から更新しない |
-| [reports/eml/](reports/eml/) | 調査 | VM のマルチコア対応 (2026-10-10) |
+| [reports/eml/](reports/eml/) | 調査 | VM のマルチコア対応 |
 
 ## 読む順
 

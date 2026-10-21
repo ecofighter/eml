@@ -28,7 +28,7 @@ eml の目的、言語の性格、確定した設計判断の一覧、文書全�
 |---|---|---|
 | 線形性 | Kind で区別する。`Type<m>`、`m ∈ {Unr ≤ Lin}`。Affine は持たず、値を捨てるときは組み込みキーワード `drop` を明示する | [型と Kind](spec/types.md)、[線形性](spec/linearity.md) |
 | Kind の将来 | 内部では最初から Kind 変数と部分 Kind 関係を扱う。表面の構文では当面書かせず、将来ユーザーが Kind を書けるようにする | [型と Kind](spec/types.md) |
-| エフェクト | Row 多相 (Koka 方式、scoped labels)。row 変数にも Kind `Row<s>`、`s ∈ {Never ≤ Once ≤ Multi}` を持たせる。`Never` は将来のマルチコア対応のための要素 | [型と Kind](spec/types.md)、[エフェクトと handler](spec/effects.md) |
+| エフェクト | Row 多相 (Koka 方式、scoped labels)。row 変数にも Kind `Row<s>`、`s ∈ {Never ≤ Once ≤ Multi}` を持たせる。`Never` はマルチコア対応のための要素 | [型と Kind](spec/types.md)、[エフェクトと handler](spec/effects.md) |
 | 継続の多重度 | 操作ごとに `never` / `once` / `multi` を宣言する。デフォルトは `once` | [エフェクトと handler](spec/effects.md) |
 | 継続 | 継続 `k` は普通の関数で、`k v` で再開する。状態のある handler では `k v st` と書く。`once` の `k` は `Lin` の矢印を持ち、`ctl` の節は、戻らない呼び出し (`fail`、`exit` など) で終わる経路を除き、`k` を呼ぶか `drop k` を必ず書く。`fn` の節は `k` を書かず、本体の値で再開する。`multi` の `k` は `Unr` の矢印を持つ | [エフェクトと handler](spec/effects.md) |
 | handler の意味 | deep handler。再開した継続の中でも同じ handler が有効なまま | [エフェクトと handler](spec/effects.md) |
@@ -65,7 +65,7 @@ eml の目的、言語の性格、確定した設計判断の一覧、文書全�
 | handler の節 | 操作の節は `\| ctl op x k -> …` (継続を操作する) か `\| fn op x -> …` (本体の値ですぐに再開する) で、`return` の節にはどちらも書かない。名前は Koka に合わせた | [式](spec/expressions.md) |
 | ローカル関数 | `let f x = …` で定義し、`and g y = …` で続けた組は互いに呼び合える (OCaml の `let rec … and …` と同じ) | [式](spec/expressions.md) |
 | パラメータ付き handler | `handle e from init with`。状態を handler が持ち、節の最後の引数で受ける。状態のある handler では `k v st` で次の状態を渡す。状態があるかどうかは `from` の有無で決まる | [式](spec/expressions.md) |
-| 線形値の受け渡し | 糖衣構文は今は入れない。入れるかどうかは、S13b の `Iter` で `File` を持つ生産者を書いてから決める ([ロードマップ](future/roadmap.md) の「言語機能と構文」)。再束縛、`use`、パラメータ付き handler で吸収する | [式](spec/expressions.md) |
+| 線形値の受け渡し | 糖衣構文はない。`File` を持つ生産者は `Iter` で書ける (`tests/ui/run/std/iter_file/`)。糖衣は [ロードマップ](future/roadmap.md) の「言語機能と構文」の項目にある。再束縛、`use`、パラメータ付き handler で吸収する | [式](spec/expressions.md) |
 | 文字列 | 補間は `"\{x}"`。複数行の `"""`、raw の `r"..."` | [字句](spec/lexical.md) |
 | コマンドリテラル | バッククォート。シェルを介さず、引数のリストを組む (Julia 方式) | [字句](spec/lexical.md) |
 | fixity | ユーザーが宣言する。優先順位は整数 0〜9。CST では演算子の列を平たいまま持ち、HIR で組み直す | [宣言](spec/declarations.md)、[式](spec/expressions.md) |
@@ -93,9 +93,7 @@ eml の目的、言語の性格、確定した設計判断の一覧、文書全�
 | deep handler | 再開した継続の中でも同じ handler が有効なままの handler |
 | パラメータ付き handler | `handle e from init with` の形で、状態を節の最後の引数として受け渡す handler。状態は handler の実行ごとの evidence に置き、脱糖しない |
 | レイアウト段 | lexer と parser の間で、仮想トークン `OPEN` / `SEP` / `CLOSE` (コードでは `LAYOUT_OPEN` / `LAYOUT_SEP` / `LAYOUT_CLOSE`) を挿入する段 |
-| Perceus | 参照カウントの `dup` / `decref` / `release` を静的に挿入する方式。reuse analysis と借用の最適化は後で入れる |
+| Perceus | 参照カウントの `dup` / `decref` / `release` を静的に挿入する方式。reuse analysis も持つ ([LIR](spec/lir.md) の「reuse」)。借用の最適化はない ([ロードマップ](future/roadmap.md) の「処理系」) |
 | Core IR | 型付き HIR から変換する、前向きの辺だけを持つ基本ブロックの列の IR。すべての中間値に名前を付け、エフェクトの命令を明示する。RC と box は持たない |
 | LIR | EP の後の Core IR から写す、基本ブロックの列の IR。エフェクトの命令を持たず、box、RC の命令、末尾呼び出しを明示する。VM と後のネイティブ化の入力である |
-| M1、M2 | 完了したマイルストーンである。M1 は言語の全体を一通り通した最初の vertical slice、M2 はモジュールと参照ごとの具体化の表である。今の範囲は [実装の現在地](implementation/status.md) にある |
-| S0〜S14 | 再設計のサブプロジェクトである。S0 運用と文書、S1 row の健全性、S2a 継続を関数にする、S2b 組み込みを extern にする、S3a フロントエンドの土台、S3b-1 ランタイムとインタプリタの土台、S3b-2a Core IR v2 の構造、S3b-2b Core IR v2 の所有、S3b-2c-1 Core IR v2 の表、S3b-2c-2 Core IR v2 の境界、S4a 計測の基準、S4b 単相化、S5 型クラス、S6a リスト、S6b 文字列、S6c レコード、S7 evidence passing、S8 LIR、S9 共通ランタイム、S10 VM と切り替え、S11 REPL、S12 スクリプトの MVP、S13 実例による判断がある。次の S14 数値計算の整備と、その後の言語の項目と処理系の項目は [ロードマップ](future/roadmap.md) の「段の列」にある。パイプラインの「段階」とは別の呼び方である |
 | a1 / a2-wait / a2-cancel | 並列 API `par` を段階的に広げる計画の各段階。[マルチコア対応の設計](future/multicore.md) にある |
