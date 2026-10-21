@@ -3507,7 +3507,7 @@ fn source_records_open_to_the_leaves() {
     let text = |source: &str, site: &str| {
         format!(
             "{VEC3}fn f(x.0: float, y.1: float, z.2: float, c.3: tobj) -> float {source} {{
-  let r.4: float = apply c.3(x.0, y.1, z.2) source({site}) -> float
+  let r.4: float = apply c.3(x.0, y.1, z.2) source({site})
   return r.4
 }}
 "
@@ -3532,5 +3532,50 @@ fn source_records_open_to_the_leaves() {
             "float, float"
         )),
         Err("the apply site lists 2 reprs for 3 arguments in `f`".to_string())
+    );
+}
+
+/// `apply` の `source_ret` は、構造体の結果を葉で受ける場所だけが持つ。開いた後の段で、型どおりの場所の結果を複数の
+/// 値で受けるなら要り、構造体の Repr でなければならない。開く前の段は持たない
+/// (docs/superpowers/specs/2026-10-21-s14e-abi-struct-design.md の「VM」)。
+#[test]
+fn a_source_result_is_a_struct_on_a_flattened_apply() {
+    let vec3 = "Vec3{float, float, float}";
+    let many = |source_ret: &str| {
+        format!(
+            "{VEC3}fn f(c.0: tobj, x.1: float) -> float {{
+  let (a.2: float, b.3: float, d.4: float) = apply c.0(x.1) source(float){source_ret}
+  return a.2
+}}
+"
+        )
+    };
+    assert_eq!(check_flattened(&many(&format!(" -> {vec3}"))), Ok(()));
+    assert_eq!(
+        check_flattened(&many("")),
+        Err("a typed apply bound to several values has no source result in `f`".to_string())
+    );
+    let single = format!(
+        "{VEC3}fn f(c.0: tobj, x.1: float) -> float {{
+  let r.2: float = apply c.0(x.1) source(float) -> float
+  return r.2
+}}
+"
+    );
+    assert_eq!(
+        check_flattened(&single),
+        Err("the source result of an apply is float, not a struct in `f`".to_string())
+    );
+    let unopened = format!(
+        "{VEC3}fn f(c.0: tobj, x.1: float) -> float {{
+  let v.2: {vec3} = apply c.0(x.1) source(float) -> {vec3}
+  unpack v.2 Vec3 #0(a.3: float, b.4: float, d.5: float)
+  return a.3
+}}
+"
+    );
+    assert_eq!(
+        check_scopes(&unopened),
+        Err("an apply has a source result before flatten in `f`".to_string())
     );
 }

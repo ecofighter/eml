@@ -374,3 +374,68 @@ fn f(s.0: W{{tobj lin, int}} lin) -> float {{
     }
     "#);
 }
+
+#[test]
+fn a_box_unboxed_in_two_branches_is_dropped_in_each() {
+    // box の挿入は使う所ごとに取り出すので、二つの枝はそれぞれ構造体を取り出して `drop` を置く。箱をほかで消費するかは、
+    // 置いた `drop` の後で届く所に限って数える
+    let text = format!(
+        "{VEC3}layout W {{ W(tobj, int) }}
+layout Prelude.Bool {{ False, True }}
+fn g(v.0: Vec3{{float, float, float}} lin) -> float {{
+  unpack v.0 Vec3 #0(x.1: float, y.2: float, z.3: float)
+  return x.1
+}}
+fn f(s.0: W{{tobj lin, int}} lin, c.1: enum) -> float {{
+  unpack s.0 W #0(t.2: tobj lin, n.3: int)
+  switch c.1 Prelude.Bool {{ #0 -> b1, #1 -> b2 }}
+b1:
+  let r.4: float = call g(t.2)
+  return r.4
+b2:
+  let q.5: float = call g(t.2)
+  let u.6: float = extern \"Prelude.Num Float.+\"(q.5, 1.0)
+  return u.6
+}}
+fn mixed(s.0: W{{tobj lin, int}} lin, c.1: enum) -> tobj lin {{
+  unpack s.0 W #0(t.2: tobj lin, n.3: int)
+  switch c.1 Prelude.Bool {{ #0 -> b1, #1 -> b2 }}
+b1:
+  return t.2
+b2:
+  let r.4: float = call g(t.2)
+  return #0
+}}
+"
+    );
+    let shown = flatten_text(&text);
+    insta::assert_snapshot!(function(&shown, "f"), @r#"
+    fn f(s.0.9: tobj lin, s.1.10: int, c.1: enum) -> float source(W{tobj lin, int}, enum) -> float {
+      switch c.1 Prelude.Bool { #0 -> b1, #1 -> b2 }
+    b1:
+      let (t.0.11: float, t.1.12: float, t.2.13: float) = unbox s.0.9 Vec3
+      let s.0.14: unit = drop s.0.9
+      let r.4: float = call g(t.0.11, t.1.12, t.2.13)
+      return r.4
+    b2:
+      let (t.0.15: float, t.1.16: float, t.2.17: float) = unbox s.0.9 Vec3
+      let s.0.18: unit = drop s.0.9
+      let q.5: float = call g(t.0.15, t.1.16, t.2.17)
+      let u.6: float = extern "Prelude.Num Float.+"(q.5, 1.0)
+      return u.6
+    }
+    "#);
+    // 片方の枝が箱を返しても、取り出すだけの枝では箱を手放す
+    insta::assert_snapshot!(function(&shown, "mixed"), @"
+    fn mixed(s.0.6: tobj lin, s.1.7: int, c.1: enum) -> tobj lin source(W{tobj lin, int}, enum) -> tobj {
+      switch c.1 Prelude.Bool { #0 -> b1, #1 -> b2 }
+    b1:
+      return s.0.6
+    b2:
+      let (t.0.8: float, t.1.9: float, t.2.10: float) = unbox s.0.6 Vec3
+      let s.0.11: unit = drop s.0.6
+      let r.4: float = call g(t.0.8, t.1.9, t.2.10)
+      return #0
+    }
+    ");
+}

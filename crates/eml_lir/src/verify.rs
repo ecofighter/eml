@@ -1640,7 +1640,14 @@ impl<'a> Checker<'a> {
                 (ApplySite::Uniform, _) => Some(vec![(Repr::TObj, Mark::Poly)]),
             },
         };
-        if let Call::Apply { args, site, .. } = call {
+        if let Call::Apply {
+            args,
+            site,
+            source_ret,
+            ..
+        } = call
+        {
+            self.check_source_ret(site, *source_ret, receiver)?;
             // 開いた後の場所は源の引数ごとの Repr を持ち、引数はそれを葉に開いた並びである
             // (docs/superpowers/specs/2026-10-21-s14e-abi-struct-design.md の「VM」)
             match site {
@@ -1660,6 +1667,32 @@ impl<'a> Checker<'a> {
         self.consume_all(owned, |f| call.for_each_atom(f))?;
         match call.prompt() {
             Some(marker) => self.check_prompt(owned, call, marker),
+            None => Ok(()),
+        }
+    }
+
+    /// `apply` の `source_ret` の検査。構造体の結果を葉で受ける場所だけが、開いた後の段で持つ
+    /// (docs/superpowers/specs/2026-10-21-s14e-abi-struct-design.md の「VM」)。
+    fn check_source_ret(
+        &self,
+        site: &ApplySite,
+        source_ret: Option<Repr>,
+        receiver: Receiver,
+    ) -> Result<(), String> {
+        match source_ret {
+            Some(_) if self.level < Level::Flattened => {
+                Err("an apply has a source result before flatten".to_string())
+            }
+            Some(Repr::Struct(_)) => Ok(()),
+            Some(repr) => Err(format!(
+                "the source result of an apply is {}, not a struct",
+                repr.name()
+            )),
+            None if matches!((site, receiver), (ApplySite::Typed(_), Receiver::Many(_)))
+                && self.level >= Level::Flattened =>
+            {
+                Err("a typed apply bound to several values has no source result".to_string())
+            }
             None => Ok(()),
         }
     }

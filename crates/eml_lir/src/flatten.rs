@@ -17,8 +17,8 @@
 use std::collections::{HashMap, HashSet};
 
 use crate::{
-    Atom, Call, Ctor, EffectInfo, FloatBits, Layout, LirFn, Mark, OpRet, Prim, Program, Repr, Rhs,
-    Site, SourceSig, Stmt, StructId, Structs, Term, VarId, VarInfo, operation,
+    Atom, Block, BlockId, Call, Ctor, EffectInfo, FloatBits, Layout, LirFn, Mark, OpRet, Prim,
+    Program, Repr, Rhs, Site, SourceSig, Stmt, StructId, Structs, Term, VarId, VarInfo, operation,
 };
 
 pub fn flatten(program: &mut Program) {
@@ -709,33 +709,62 @@ impl<'a> Flattener<'a> {
 }
 
 impl Flattener<'_> {
-    /// 構造体の `unbox` の後に置いた `drop` のうち、箱を開いた後の関数のほかの所で消費するものを外す。
+    /// 構造体の `unbox` の後に置いた `drop` のうち、そこから届く所で箱を消費するものを外す。
     fn remove_consumed_box_drops(&mut self) {
         if self.box_drops.is_empty() {
             return;
         }
-        let mut consumed = vec![0usize; self.function.vars.len()];
-        for block in &self.function.blocks {
-            let mut count = |atom: Atom| {
-                if let Atom::Var(var) = atom {
-                    consumed[var.0 as usize] += 1;
+        let blocks = &self.function.blocks;
+        let mut removed = HashSet::new();
+        for (index, block) in blocks.iter().enumerate() {
+            for (at, stmt) in block.stmts.iter().enumerate() {
+                if let Stmt::Let { var, rhs: _ } = stmt
+                    && let Some(&boxed) = self.box_drops.get(var)
+                    && self.consumed_after(blocks, index, at + 1, boxed)
+                {
+                    removed.insert(*var);
                 }
-            };
-            for stmt in &block.stmts {
-                stmt.for_each_consumed(&mut count);
             }
-            block.term.for_each_consumed(&mut count);
         }
-        // 数えた消費には置いた `drop` 自身が入るので、ほかに消費がなければ 1 である
-        let box_drops = &self.box_drops;
         for block in &mut self.function.blocks {
-            block.stmts.retain(|stmt| match stmt {
-                Stmt::Let { var, rhs: _ } => box_drops
-                    .get(var)
-                    .is_none_or(|boxed| consumed[boxed.0 as usize] == 1),
-                _ => true,
-            });
+            block
+                .stmts
+                .retain(|stmt| !matches!(stmt, Stmt::Let { var, rhs: _ } if removed.contains(var)));
         }
+    }
+
+    /// `block` の `at` 番目の文から先で、`boxed` を消費するか。box の挿入は使う所ごとに取り出すので、同じ箱の
+    /// `drop` は枝ごとに置かれる。関数全体で数えると、ほかの枝の `drop` や消費まで数えて判断を誤るので、届く所に
+    /// 限り、置いた `drop` は数えない
+    fn consumed_after(&self, blocks: &[Block], block: usize, at: usize, boxed: VarId) -> bool {
+        let consumes = |stmts: &[Stmt], term: &Term| {
+            let mut found = false;
+            let mut check = |atom: Atom| found |= atom == Atom::Var(boxed);
+            for stmt in stmts {
+                if !matches!(stmt, Stmt::Let { var, rhs: _ } if self.box_drops.contains_key(var)) {
+                    stmt.for_each_consumed(&mut check);
+                }
+            }
+            term.for_each_consumed(&mut check);
+            found
+        };
+        let first = &blocks[block];
+        if consumes(&first.stmts[at..], &first.term) {
+            return true;
+        }
+        let mut seen = HashSet::new();
+        let mut pending: Vec<BlockId> = first.term.successors().collect();
+        while let Some(next) = pending.pop() {
+            if !seen.insert(next) {
+                continue;
+            }
+            let next = &blocks[next.0 as usize];
+            if consumes(&next.stmts, &next.term) {
+                return true;
+            }
+            pending.extend(next.term.successors());
+        }
+        false
     }
 }
 
