@@ -41,6 +41,7 @@ eml の目的、言語の性格、確定した設計判断の一覧、文書全�
 | 単相化 | 関数のコードは (関数, 型引数) の instance ごとに単相化し、データの配置は一様のままにする。多相再帰で大きくなる型変数の位置と handler の節の型変数は、一様な位置 (`tobj`) として扱う | [Core IR](spec/core-ir.md) の「変換の規則」 |
 | 等価、比較、表示 | 型クラス `Eq`、`Ord`、`Show` を Prelude に置く。`class` と `instance` の宣言、シグネチャの制約 `Eq a =>`、`deriving` を持つ。証拠は Core IR への変換の単相化で決め、実行時の辞書は持たない | [宣言](spec/declarations.md) の「クラスと instance」、[型と Kind](spec/types.md) の「制約」 |
 | 数 | `Int` は 64 ビットの符号付き整数、`Float` は IEEE 754 の倍精度の浮動小数である。リテラルは単相で、型はそれぞれ `Int` と `Float` になる。算術は Prelude のクラス `Num` (`+ - *`、`negate`) と `Div` (`/ %`) のメソッドで、`Int` と `Float` がそれぞれ instance を持つ | [型と Kind](spec/types.md) の「数の型」 |
+| 文字 | `Char` は Unicode のスカラー値を表し、`Int` とは別の型である。リテラルは `'a'` で、`Num` の instance を持たない。比較と表示は `Eq`、`Ord`、`Show` で、変換と ASCII の判定は `Std.Char` にある | [型と Kind](spec/types.md) の「数の型」、[標準ライブラリ](spec/stdlib.md) の「`Std.Char`」 |
 | 配列 | `Array a` と `MutArray a` は Prelude の extern の型である。`Array` は意味の上で書き換わらず、Kind は要素に従う。`MutArray` は Kind が常に `Lin` で、線形に受け渡して使う | [標準ライブラリ](spec/stdlib.md) の「`Std.Array`」「`Std.MutArray`」 |
 
 ### 構文
