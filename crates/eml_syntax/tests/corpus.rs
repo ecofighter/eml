@@ -43,7 +43,7 @@ fn s1_corpus_items() {
 
 #[test]
 fn later_stage_corpus_has_no_syntax_diagnostics() {
-    // パーサが E0004 を出す構文はもうない (docs/implementation/status.md の「未対応の構文と E0004」)。
+    // パーサが E0004 を出す構文はない (docs/spec/diagnostics.md の「未対応の構文と E0004」)。
     assert_eq!(diagnostics(LATER_STAGES), Vec::<String>::new());
 }
 

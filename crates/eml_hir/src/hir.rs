@@ -743,7 +743,7 @@ pub enum ExprKind {
         source: MatchSource,
     },
     /// 要素は2つ以上である。タプルの型への変換は型検査で行う
-    /// (docs/implementation/status.md の「タプルの扱い」)。
+    /// (docs/implementation/architecture.md の「`eml_hir` の内部」)。
     Tuple(Vec<ExprId>),
     /// リストのリテラル。`[]` は要素のない `List` である。パターンと違い `::` に組まないのは、要素が多くても後の
     /// 段階の再帰を深くしないため (docs/spec/grammar.md の「文法上の補足」)。
@@ -1002,7 +1002,7 @@ pub enum TypeRefKind {
         ret: TypeRefId,
     },
     /// 要素は2つ以上である。タプルの型への変換は型検査で行う
-    /// (docs/implementation/status.md の「タプルの扱い」)。
+    /// (docs/implementation/architecture.md の「`eml_hir` の内部」)。
     Tuple(Vec<TypeRefId>),
 }
 

@@ -171,7 +171,7 @@ debug_dump.rs  木のダンプ。構文のテストとデバッグに使う
 - 行の先頭の `then` / `else` / `and` の直前の `SEP` は、`grammar/expressions.rs` の `skip_sep_before` が1つ読み飛ばす ([レイアウト規則](../spec/layout.md) の「`then` / `else` / `and` の前の `SEP`」)。`and` の束縛は `and_binding` が読み、`LET_STMT` か `LET_EXPR` の子の `AND_BINDING` にする。値の `let` の後の `and` も、E0011 を出したうえで同じ形に組んで回復する
 - トークンの種類 (`EOF` まで) は 128 未満に収める。`TokenSet` が `u128` のビット集合であるため
 - `eml_hir` は、型付き AST の API、識別子や演算子の `SyntaxToken`、`eml_syntax` が再公開する `AstPtr` だけを使う。CST の木の構造 (`.syntax()`) には、`AstPtr` を解決する根を作るときのほかは触れず、`rowan` に依存しない
-- E0004 (未対応) は HIR が出し、パーサは出さない。HIR が E0004 を出す構文は [実装の現在地](status.md) の「未対応の構文と E0004」にある。E0004 はどの段階でも同じ意味なので、番号とラベルは `eml_diagnostics` に置く
+- E0004 (未対応) は HIR が出し、パーサは出さない。HIR が E0004 を出す構文は [診断](../spec/diagnostics.md) の「未対応の構文と E0004」にある。E0004 はどの段階でも同じ意味なので、番号とラベルは `eml_diagnostics` に置く
 
 ## `eml_hir` で行う脱糖と検査
 
@@ -215,6 +215,8 @@ HIR への変換では、名前解決に加えて、名前の重複と未定義�
 - 導出した instance は本体を持たず、`InstanceOrigin::Derived` に `deriving` のクラス名の位置を持つ。どのメソッドの本体を処理系が作るかは `Program::core_method` (`CoreMethod`) が決める。導出した `Show` のために、中置のコンストラクタの fixity を HIR に残す
 - 呼び出しの評価の順は `eval.rs` の `call_steps` が決める ([関数適用](../spec/expressions.md))。持ち越しのパス (`eml_types`) はこの手順を逆に、Core IR の変換 (`eml_core_ir`) は順にたどる。順の組み立てを1か所に置くのは、2か所で組むとずれたときに持ち越し規則が実行と食い違うためである。直接呼ぶ範囲 (`known_arity`) も、両方の段階がここから引く
 - `Body` の走査関数 (`walk_child_exprs`、`pat_bindings`、`captures`) は、式やパターンの種類を足す段階が直す。誤った handler の節は診断を出して節に入れず、扱うエフェクトが決まらなければ `effect` を `None` にして、型検査に診断を連鎖させない。誤りのあるセクションも、被演算子の名前の誤りを報告してから全体を `Missing` にする
+- タプルは専用の形 (`ExprKind::Tuple`、`PatKind::Tuple`、`TypeRefKind::Tuple`) で持ち、要素は2つ以上である。型検査がラベルのない要素の列 (下の「`eml_types` の内部」のタプルの箇条) に写す。`Unit` は要素のないタプルである。タプルの射影 `t.0` は、名前付きのレコードの射影と同じく `ExprKind::Field` で持ち、型検査が型から引く ([型と Kind](../spec/types.md) の「フィールドの解決」)
+- HIR の関数は、シグネチャの関数名の位置 (`Function::signature_name_range`) と、等式の関数名の位置 (`Function::equation_ranges`) を持つ。どちらもソースに書かれた名前の位置で、HIR が見た目の情報 (行頭と字下げ) を持たない規律 (上の「各段階の規律」) に反しない。等式の数は、E1020 の後の網羅性の診断の連鎖を抑えるのにも使う。位置を別の表に分ける形は [ロードマップ](../future/roadmap.md) の「処理系」の source map の項目にある
 
 ## `eml_types` の内部
 

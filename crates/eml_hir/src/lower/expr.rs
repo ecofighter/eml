@@ -1269,8 +1269,8 @@ fn arguments(n: usize) -> String {
     }
 }
 
-/// `Char` の項目 (文字) で実装するリテラル。
-/// パーサは CST を組み、HIR が E0004 を出す (docs/implementation/status.md の「未対応の構文と E0004」)。
+/// まだ実装していない文字のリテラル。
+/// パーサは CST を組み、HIR が E0004 を出す (docs/spec/diagnostics.md の「未対応の構文と E0004」)。
 fn unsupported_literal(kind: SyntaxKind) -> Option<&'static str> {
     Some(match kind {
         SyntaxKind::CHAR => "character literals are not supported yet",
