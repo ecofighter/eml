@@ -20,6 +20,7 @@ macro_rules! both_modes {
 
 mod arrays;
 mod basics;
+mod bytes;
 mod checked;
 mod control;
 mod ctx;

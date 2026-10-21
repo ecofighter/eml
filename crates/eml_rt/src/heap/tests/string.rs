@@ -1,4 +1,4 @@
-//! 文字列の物体 (docs/spec/object-model.md の「文字列」)。
+//! 文字列の物体 (docs/spec/object-model.md の「バイト列と文字列」)。
 
 use std::any::Any;
 use std::collections::BTreeMap;

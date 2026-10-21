@@ -109,21 +109,21 @@ pub(crate) open spec fn p_count(p: BlockPerm) -> int {
     }
 }
 
-/// `String` の物体のバイト列。
+/// `String` か `Bytes` の物体のバイト列。
 pub(crate) open spec fn p_text(p: BlockPerm) -> Seq<u8> {
     p.text()
 }
 
-/// `String` の物体の中身 (docs/spec/object-model.md の「文字列」)。走査する語はなく、生の 0 語目にバイト長を持ち、
-/// バイト列は長さの語の後ろの容量に収まる妥当な UTF-8 である。
-pub(crate) open spec fn string_wf(p: BlockPerm, cap: nat) -> bool {
+/// `String` か `Bytes` の物体の中身 (docs/spec/object-model.md の「バイト列と文字列」)。走査する語はなく、生の 0 語目に
+/// バイト長を持ち、バイト列は長さの語の後ろの容量に収まる。`String` のバイト列は妥当な UTF-8 である。
+pub(crate) open spec fn body_wf(p: BlockPerm, cap: nat) -> bool {
     &&& p_count(p) == 0
     &&& !p_extended(p)
     &&& cap >= 1
     &&& p_init(p, 0)
     &&& p_word(p, 0).bits_spec() == p.text().len()
     &&& p.text().len() <= 8 * (cap - 1)
-    &&& valid_utf8(p.text())
+    &&& p_kind(p) == Kind::String ==> valid_utf8(p.text())
 }
 
 /// ペイロードの語は、容量の終わりまですべて書いてある。`Data` の物体は生の語の数を持たないので、回復が生の語を容量の
@@ -449,10 +449,12 @@ impl Core {
         }
         &&& st == BlockState::Live || st == BlockState::Dying ==> (p_kind(p).boxes_value()
             ==> self.cap(h) >= 1 && p_init(p, 0))
-        &&& st == BlockState::Live || st == BlockState::Dying ==> (p_kind(p) == Kind::String
-            ==> string_wf(p, self.cap(h)))
+        &&& st == BlockState::Live || st == BlockState::Dying ==> (p_kind(p).has_body() ==> body_wf(
+            p,
+            self.cap(h),
+        ))
         &&& st != BlockState::Freed && p_kind(p) == Kind::Data ==> p_filled(p, self.cap(h))
-        &&& st == BlockState::Building ==> p_kind(p) != Kind::String
+        &&& st == BlockState::Building ==> !p_kind(p).has_body()
         &&& st == BlockState::Live ==> forall|i: int| #[trigger]
             p_scanned(p, i) ==> self.slot_word(p, h, i)
         &&& st == BlockState::Dying ==> forall|i: int| #[trigger] p_scanned(p, i) ==> p_init(p, i)

@@ -485,8 +485,8 @@ impl<M: Mode> Heap<M> {
         requires
             old(self).wf(),
             old(self).safe_settleable(),
-            meta.kind_spec() != Kind::Foreign && meta.kind_spec() != Kind::String
-                && meta.kind_spec() != Kind::Free,
+            meta.kind_spec() != Kind::Foreign && !meta.kind_spec().has_body() && meta.kind_spec()
+                != Kind::Free,
             meta.scan_spec() != 255,
             meta.scan_spec() <= payload_words,
             !M::CHECKED ==> old(self).con_at_ok(token, payload_words),

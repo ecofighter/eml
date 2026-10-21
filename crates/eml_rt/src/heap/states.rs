@@ -463,7 +463,7 @@ impl Core {
             old(self).model@.building is None,
             meta matches Some(m) ==> {
                 &&& m.kind_spec() != Kind::Free
-                &&& m.kind_spec() != Kind::String
+                &&& !m.kind_spec().has_body()
                 &&& m.scan_spec() != 255
                 &&& m.scan_spec() <= old(self).cap(h@.addr)
             },
@@ -659,7 +659,7 @@ impl Core {
                     &&& self.meta_bits(a) == m.bits_spec()
                     &&& bits_wf(m.bits_spec())
                     &&& bits_kind(m.bits_spec()) != Kind::Free
-                    &&& bits_kind(m.bits_spec()) != Kind::String
+                    &&& !bits_kind(m.bits_spec()).has_body()
                     &&& bits_scan(m.bits_spec()) != 255
                     &&& bits_scan(m.bits_spec()) <= s0.cap(a)
                 },

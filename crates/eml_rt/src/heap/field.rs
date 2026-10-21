@@ -5,7 +5,7 @@ use vstd::prelude::*;
 
 use super::Core;
 #[cfg(verus_only)]
-use super::inv::{p_count, p_extended, p_first, p_init, p_kind, p_scanned, p_word, string_wf};
+use super::inv::{body_wf, p_count, p_extended, p_first, p_init, p_kind, p_scanned, p_word};
 #[cfg(verus_only)]
 use super::model::{BlockState, Model, Pos, lemma_indeg_insert, lemma_indeg_remove};
 #[cfg(verus_only)]
@@ -101,7 +101,7 @@ impl Core {
         ensures
             p_extended(self.perm(h)) ==> p_init(self.perm(h), 0),
             p_kind(self.perm(h)).boxes_value() ==> p_init(self.perm(h), 0),
-            p_kind(self.perm(h)) == Kind::String ==> string_wf(self.perm(h), self.cap(h)),
+            p_kind(self.perm(h)).has_body() ==> body_wf(self.perm(h), self.cap(h)),
             p_first(self.perm(h)) + p_count(self.perm(h)) <= self.cap(h),
     {
         if !self.dom().contains(h) {
@@ -274,7 +274,7 @@ impl Core {
             s0.dom().contains(h),
             s0.state(h) == BlockState::Live || s0.state(h) == BlockState::Building,
             p_first(s0.perm(h)) + p_count(s0.perm(h)) <= i,
-            s0.kind(h) != Kind::String,
+            !s0.kind(h).has_body(),
             self.slot_changed(s0, h, i),
             self.model == s0.model,
         ensures
@@ -404,8 +404,8 @@ impl Core {
                         assert(p_scanned(q, j));
                         assert(s0.slot_word(q, h, j));
                     }
-                    if p_kind(p) == Kind::String {
-                        assert(string_wf(q, s0.cap(h)));
+                    if p_kind(p).has_body() {
+                        assert(body_wf(q, s0.cap(h)));
                     }
                 } else {
                     assert(self.perm(b) == s0.perm(b));
@@ -445,8 +445,8 @@ impl Core {
                         assert(p_scanned(q, j));
                         assert(s0.safe_slot(q, j));
                     }
-                    if p_kind(p) == Kind::String {
-                        assert(string_wf(q, s0.cap(h)));
+                    if p_kind(p).has_body() {
+                        assert(body_wf(q, s0.cap(h)));
                     }
                 } else {
                     assert(self.perm(b) == s0.perm(b));

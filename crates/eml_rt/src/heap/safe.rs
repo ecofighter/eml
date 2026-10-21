@@ -9,8 +9,8 @@ use super::Core;
 use super::check::UNCOUNTED;
 #[cfg(verus_only)]
 use super::inv::{
-    p_code, p_count, p_extended, p_filled, p_first, p_gen, p_init, p_kind, p_meta, p_owner,
-    p_scanned, p_word, prefix_kept, prefix_recounted, state_code, string_wf,
+    body_wf, p_code, p_count, p_extended, p_filled, p_first, p_gen, p_init, p_kind, p_meta,
+    p_owner, p_scanned, p_word, prefix_kept, prefix_recounted, state_code,
 };
 #[cfg(verus_only)]
 use super::model::{BlockState, Model, Pos};
@@ -133,10 +133,12 @@ impl Core {
         }
         &&& st == BlockState::Live || st == BlockState::Dying ==> (p_kind(p).boxes_value()
             ==> self.cap(h) >= 1 && p_init(p, 0))
-        &&& st == BlockState::Live || st == BlockState::Dying ==> (p_kind(p) == Kind::String
-            ==> string_wf(p, self.cap(h)))
+        &&& st == BlockState::Live || st == BlockState::Dying ==> (p_kind(p).has_body() ==> body_wf(
+            p,
+            self.cap(h),
+        ))
         &&& st != BlockState::Freed && p_kind(p) == Kind::Data ==> p_filled(p, self.cap(h))
-        &&& st == BlockState::Building ==> p_kind(p) != Kind::String
+        &&& st == BlockState::Building ==> !p_kind(p).has_body()
         &&& st == BlockState::Live || st == BlockState::Dying || st == BlockState::Token ==> forall|
             i: int,
         | #[trigger]
@@ -539,7 +541,7 @@ impl Core {
             self.state(h) != BlockState::Building ==> self.perm(h).meta == s0.perm(h).meta,
             self.state(h) == BlockState::Building ==> self.model@.written[h] == Set::<int>::empty(),
             self.state(h) == BlockState::Token ==> p_kind(self.perm(h)) == Kind::Data,
-            self.state(h) == BlockState::Building ==> p_kind(self.perm(h)) != Kind::String,
+            self.state(h) == BlockState::Building ==> !p_kind(self.perm(h)).has_body(),
             p_kind(self.perm(h)) == Kind::Data ==> p_kind(s0.perm(h)) == Kind::Data,
             forall|i: int| #[trigger]
                 self.model@.kept.contains((h, i)) ==> p_scanned(self.perm(h), i) && p_scanned(
@@ -607,7 +609,7 @@ impl Core {
                 }
             },
             !s0.scanned(h, i) ==> p_first(s0.perm(h)) + p_count(s0.perm(h)) <= i && self.model
-                == s0.model && s0.kind(h) != Kind::String,
+                == s0.model && !s0.kind(h).has_body(),
         ensures
             self.safe_wf(),
             forall|w: Word| #[trigger] self.word_ok(w) == s0.word_ok(w),
@@ -995,7 +997,7 @@ impl Core {
         ensures
             p_extended(self.perm(h)) ==> p_init(self.perm(h), 0),
             p_kind(self.perm(h)).boxes_value() ==> self.cap(h) >= 1 && p_init(self.perm(h), 0),
-            p_kind(self.perm(h)) == Kind::String ==> string_wf(self.perm(h), self.cap(h)),
+            p_kind(self.perm(h)).has_body() ==> body_wf(self.perm(h), self.cap(h)),
             p_first(self.perm(h)) + p_count(self.perm(h)) <= self.cap(h),
     {
         if !self.dom().contains(h) {
@@ -1098,8 +1100,10 @@ impl Core {
         }
         &&& st == BlockState::Live || st == BlockState::Dying ==> (p_kind(p).boxes_value()
             ==> self.cap(h) >= 1 && p_init(p, 0))
-        &&& st == BlockState::Live || st == BlockState::Dying ==> (p_kind(p) == Kind::String
-            ==> string_wf(p, self.cap(h)))
+        &&& st == BlockState::Live || st == BlockState::Dying ==> (p_kind(p).has_body() ==> body_wf(
+            p,
+            self.cap(h),
+        ))
         &&& st == BlockState::Token ==> p_kind(p) == Kind::Data
     }
 

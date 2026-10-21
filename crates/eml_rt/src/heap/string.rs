@@ -1,6 +1,6 @@
-//! 文字列の物体 (docs/spec/object-model.md の「文字列」)。種類 `String` の物体は、ここの操作だけが作り、書く。
-//! 長さの語は生の 0 語目で、バイト列はその後ろにあり、ghost のバイト列 `text` に等しい。バイト列を書くのは、作るときと
-//! 後ろに足すとき (`string_push` などと、`String.show` の `append_str` と `append_part`) だけである。
+//! 文字列とバイト列の物体 (docs/spec/object-model.md の「バイト列と文字列」)。種類 `String` と `Bytes` の物体は、ここの
+//! 操作だけが作り、書く。長さの語は生の 0 語目で、バイト列はその後ろにあり、ghost のバイト列 `text` に等しい。バイト列を
+//! 書くのは、作るときと後ろに足すとき (`string_push` などと、`String.show` の `append_str` と `append_part`) だけである。
 
 use vstd::prelude::*;
 #[cfg(verus_only)]
@@ -13,18 +13,20 @@ use vstd::utf8::{
 
 use super::*;
 #[cfg(verus_only)]
-use crate::heap::inv::string_wf;
+use crate::heap::inv::body_wf;
 #[cfg(verus_only)]
 use crate::meta::{field_ptr, slot_offset};
-use crate::text::{text, text_ptr, write_text};
+use crate::text::{bytes, bytes_ptr, text, text_ptr, write_bytes, write_text};
 
 verus! {
 
-/// 文字列の後ろに写すバイト列。`Str` は呼ぶ側の `&str`、`Text(h, len, from, to)` はこのヒープか付けた塊の文字列の
-/// 物体 (ヘッダと長さ) のバイトの範囲 `[from, to)` である。`string_concat` の右辺はヒープの権限から借りて読むので、
-/// `&mut self` を取る操作に `&str` として渡せない。そのため、右辺の権限は写す直前に `Core::write_tail` の中で借りる。
+/// 文字列かバイト列の後ろに写すバイト列。`Str` は呼ぶ側の `&str`、`Bytes` は呼ぶ側の `&[u8]`、`Text(h, len, from, to)`
+/// はこのヒープか付けた塊の文字列の物体 (ヘッダと長さ) のバイトの範囲 `[from, to)` である。`string_concat` の右辺は
+/// ヒープの権限から借りて読むので、`&mut self` を取る操作に `&str` として渡せない。そのため、右辺の権限は写す直前に
+/// `Core::write_tail` の中で借りる。
 enum Tail<'a> {
     Str(&'a str),
+    Bytes(&'a [u8]),
     Text(*mut Header, usize, usize, usize),
 }
 
@@ -57,6 +59,7 @@ impl Core {
     spec fn tail_bytes(&self, t: Tail) -> Seq<u8> {
         match t {
             Tail::Str(s) => s.spec_bytes(),
+            Tail::Bytes(b) => b@,
             Tail::Text(r, _, from, to) => self.perm(r@.addr).text().subrange(
                 from as int,
                 to as int,
@@ -69,6 +72,7 @@ impl Core {
     spec fn tail_ok(&self, t: Tail) -> bool {
         match t {
             Tail::Str(_) => true,
+            Tail::Bytes(_) => true,
             Tail::Text(r, n, from, to) => {
                 &&& self.text_ok(r, n)
                 &&& from <= to <= n
@@ -82,7 +86,7 @@ impl Core {
     spec fn text_ok(&self, r: *mut Header, n: usize) -> bool {
         &&& self.has(r@.addr)
         &&& self.region_wf()
-        &&& self.perm(r@.addr).holds_text(r, n as int)
+        &&& self.perm(r@.addr).holds_body(r, n as int)
         &&& n == self.perm(r@.addr).text().len()
         &&& valid_utf8(self.perm(r@.addr).text())
     }
@@ -114,14 +118,17 @@ impl Core {
         }
     }
 
+    /// `Bytes` のほかの `Tail` は妥当な UTF-8 である。
     proof fn lemma_tail_utf8(&self, t: Tail)
         requires
             self.tail_ok(t),
+            !(t is Bytes),
         ensures
             valid_utf8(self.tail_bytes(t)),
     {
         match t {
             Tail::Str(s) => encode_utf8_valid_utf8(s@),
+            Tail::Bytes(_) => {},
             Tail::Text(r, _, from, to) => {
                 lemma_boundary_in_prefix(self.perm(r@.addr).text(), from as int, to as int)
             },
@@ -141,6 +148,7 @@ impl Core {
                 let n = s.as_bytes().len();
                 n
             },
+            Tail::Bytes(b) => b.len(),
             Tail::Text(_, _, from, to) => *to - *from,
         }
     }
@@ -160,7 +168,7 @@ impl Core {
         requires
             forall|i: int| #[trigger] old(perm).slots.contains_key(i) <==> 0 <= i < cap,
             cap >= 1,
-            old(perm).holds_text(h, 8 * (cap - 1)),
+            old(perm).holds_body(h, 8 * (cap - 1)),
             at == old(perm).text().len(),
             at + self.tail_bytes(*t).len() <= 8 * (cap - 1),
             self.tail_ok(*t),
@@ -178,6 +186,7 @@ impl Core {
     {
         match t {
             Tail::Str(s) => write_text(h, cap, at, s, Tracked(perm)),
+            Tail::Bytes(b) => write_bytes(h, cap, at, b, Tracked(perm)),
             Tail::Text(r, n, from, to) => {
                 write_text(h, cap, at, self.text_part(*r, *n, *from, *to), Tracked(perm))
             },
@@ -221,7 +230,7 @@ impl Core {
         &&& forall|j: int|
             self.perm(h).slots.contains_key(j) ==> (#[trigger] self.perm(h).slots[j]).ptr()
                 == old.perm(h).slots[j].ptr()
-        &&& string_wf(self.perm(h), self.cap(h))
+        &&& body_wf(self.perm(h), self.cap(h))
     }
 
     /// `old` と `self` の両方で生きているブロックは、`meta`、rc の符号、持ち主を変えず、`h` のほかは語とバイト列も
@@ -344,12 +353,16 @@ impl<M: Mode> Heap<M> {
         self.core.kind(w.bits_spec()) == Kind::String
     }
 
-    /// 文字列のバイト列。
+    pub closed spec fn is_bytes(&self, w: Word) -> bool {
+        self.core.kind(w.bits_spec()) == Kind::Bytes
+    }
+
+    /// 文字列かバイト列のバイト列。
     pub closed spec fn text_of(&self, w: Word) -> Seq<u8> {
         self.core.perm(w.bits_spec()).text()
     }
 
-    /// 文字列 `w` に書けるバイト数。
+    /// 文字列かバイト列 `w` に書けるバイト数。
     pub closed spec fn capacity(&self, w: Word) -> int {
         8 * (self.core.cap(w.bits_spec()) - 1)
     }
@@ -358,12 +371,14 @@ impl<M: Mode> Heap<M> {
     pub(super) proof fn lemma_text_spec(&self, w: Word)
         ensures
             self.is_string(w) == (self.core.kind(w.bits_spec()) == Kind::String),
+            self.is_bytes(w) == (self.core.kind(w.bits_spec()) == Kind::Bytes),
             self.text_of(w) == self.core.perm(w.bits_spec()).text(),
             self.capacity(w) == 8 * (self.core.cap(w.bits_spec()) - 1),
     {
     }
 
-    /// `alloc_string_immortal` の後の状態。`w` は rc 0 の生きている物体で、検査モードの外に出ている参照の数は 0 である。
+    /// `alloc_string_immortal` か `alloc_bytes_immortal` の後の状態。`w` は rc 0 の生きている物体で、検査モードの外に
+    /// 出ている参照の数は 0 である。
     pub closed spec fn made_immortal(&self, old: Heap<M>, w: Word) -> bool {
         let h = w.bits_spec();
         &&& self.wf()
@@ -424,7 +439,7 @@ impl<M: Mode> Heap<M> {
             reveal_strlit("");
             assert(empty.spec_bytes() =~= Seq::<u8>::empty());
         }
-        let w = self.make_text(room, Tail::Str(empty), None, 1);
+        let w = self.make_text(room, Tail::Str(empty), None, 1, Kind::String);
         proof {
             assert(Seq::<u8>::empty() + Seq::<u8>::empty() =~= Seq::<u8>::empty());
         }
@@ -446,6 +461,90 @@ impl<M: Mode> Heap<M> {
         self.make_string(s, 0)
     }
 
+    /// `b` を写したバイト列を作る。
+    pub fn alloc_bytes(&mut self, b: &[u8]) -> (w: Word)
+        requires
+            old(self).wf(),
+            old(self).safe_settleable(),
+            !M::CHECKED ==> old(self).settleable(),
+        ensures
+            final(self).made(*old(self), w),
+            final(self).is_bytes(w),
+            final(self).text_of(w) == b@,
+            final(self).owned(w),
+            !final(self).lin_of(w),
+            final(self).grew(*old(self), w),
+            M::CHECKED ==> final(self).words_kept(*old(self)),
+    {
+        self.make_bytes(b, 1)
+    }
+
+    /// 容量が `room` バイト以上の空のバイト列を作る。`alloc_string_room` のバイト列の版である。
+    pub fn alloc_bytes_room(&mut self, room: usize) -> (w: Word)
+        requires
+            old(self).wf(),
+            old(self).safe_settleable(),
+            !M::CHECKED ==> old(self).settleable(),
+        ensures
+            final(self).made(*old(self), w),
+            final(self).is_bytes(w),
+            final(self).text_of(w) == Seq::<u8>::empty(),
+            final(self).owned(w),
+            !final(self).lin_of(w),
+            final(self).capacity(w) >= room,
+            final(self).grew(*old(self), w),
+            M::CHECKED ==> final(self).words_kept(*old(self)),
+    {
+        let empty: &[u8] = &[];
+        proof {
+            assert(empty@ =~= Seq::<u8>::empty());
+        }
+        let w = self.make_text(room, Tail::Bytes(empty), None, 1, Kind::Bytes);
+        proof {
+            assert(Seq::<u8>::empty() + Seq::<u8>::empty() =~= Seq::<u8>::empty());
+        }
+        w
+    }
+
+    /// `alloc_bytes` と同じで、rc 0 の不死の物体にする。
+    pub fn alloc_bytes_immortal(&mut self, b: &[u8]) -> (w: Word)
+        requires
+            old(self).wf(),
+            old(self).safe_settleable(),
+            !M::CHECKED ==> old(self).settleable(),
+        ensures
+            final(self).made_immortal(*old(self), w),
+            final(self).is_bytes(w),
+            final(self).text_of(w) == b@,
+            M::CHECKED ==> final(self).words_kept(*old(self)),
+    {
+        self.make_bytes(b, 0)
+    }
+
+    /// `b` を写したバイト列を、rc `rc` の生きている物体として作る。
+    fn make_bytes(&mut self, b: &[u8], rc: i32) -> (w: Word)
+        requires
+            old(self).wf(),
+            old(self).safe_settleable(),
+            !M::CHECKED ==> old(self).settleable(),
+            rc == 0 || rc == 1,
+        ensures
+            rc == 1 ==> final(self).made(*old(self), w),
+            rc == 0 ==> final(self).made_immortal(*old(self), w),
+            final(self).is_bytes(w),
+            final(self).text_of(w) == b@,
+            final(self).core.model@.owner[w.bits_spec()] == final(self).worker,
+            !final(self).core.lin(w.bits_spec()),
+            forall|x: Word| old(self).core.word_ok(x) ==> #[trigger] final(self).core.word_ok(x),
+            final(self).grew(*old(self), w),
+    {
+        let w = self.make_text(b.len(), Tail::Bytes(b), None, rc, Kind::Bytes);
+        proof {
+            assert(b@ + Seq::<u8>::empty() =~= b@);
+        }
+        w
+    }
+
     /// `s` を写した文字列を、rc `rc` の生きている物体として作る。
     fn make_string(&mut self, s: &str, rc: i32) -> (w: Word)
         requires
@@ -465,21 +564,25 @@ impl<M: Mode> Heap<M> {
     {
         let t = Tail::Str(s);
         let bytes = self.core.tail_len(&t);
-        let w = self.make_text(bytes, t, None, rc);
+        let w = self.make_text(bytes, t, None, rc, Kind::String);
         proof {
             assert(s.spec_bytes() + Seq::<u8>::empty() =~= s.spec_bytes());
         }
         w
     }
 
-    /// 容量が `room` バイト以上の文字列を rc `rc` の生きている物体として作り、`head` と `tail` のバイト列を順に写す。
-    /// rc 0 なら不死の物体で、検査モードの外に出ている参照の数は 0 から始まる (`alloc_header` が書く)。
-    fn make_text(&mut self, room: usize, head: Tail, tail: Option<Tail>, rc: i32) -> (w: Word)
+    /// 容量が `room` バイト以上の種類 `kind` (`String` か `Bytes`) の物体を rc `rc` の生きている物体として作り、`head` と
+    /// `tail` のバイト列を順に写す。rc 0 なら不死の物体で、検査モードの外に出ている参照の数は 0 から始まる
+    /// (`alloc_header` が書く)。文字列には `Tail::Bytes` を写さないので、中身は妥当な UTF-8 になる。
+    fn make_text(&mut self, room: usize, head: Tail, tail: Option<Tail>, rc: i32, kind: Kind) -> (w:
+        Word)
         requires
             old(self).wf(),
             old(self).safe_settleable(),
             !M::CHECKED ==> old(self).settleable(),
             rc == 0 || rc == 1,
+            kind.has_body(),
+            kind == Kind::String ==> !(head is Bytes) && !(tail matches Some(Tail::Bytes(_))),
             old(self).core.tail_ok(head),
             old(self).core.opt_ok(tail),
             old(self).core.tail_bytes(head).len() + old(self).core.opt_bytes(tail).len() <= room,
@@ -488,7 +591,7 @@ impl<M: Mode> Heap<M> {
             rc == 0 ==> final(self).made_immortal(*old(self), w),
             final(self).same_tokens(*old(self)),
             final(self).core.env == old(self).core.env,
-            final(self).is_string(w),
+            final(self).core.kind(w.bits_spec()) == kind,
             final(self).text_of(w) == old(self).core.tail_bytes(head) + old(self).core.opt_bytes(
                 tail,
             ),
@@ -514,7 +617,7 @@ impl<M: Mode> Heap<M> {
         };
         self.settle();
         let ghost s1 = *self;
-        let meta = Meta::new(0, 0, Kind::String, false);
+        let meta = Meta::new(0, 0, kind, false);
         let (h, Tracked(perm)) = self.alloc_header(payload_words, rc, meta);
         let tracked mut perm = perm;
         proof {
@@ -547,17 +650,20 @@ impl<M: Mode> Heap<M> {
         let ghost mid = self.core;
         proof {
             check::lemma_alive_code();
-            s1.core.lemma_tail_utf8(head);
-            if let Some(t) = tail {
-                s1.core.lemma_tail_utf8(t);
-                valid_utf8_concat(s1.core.tail_bytes(head), s1.core.tail_bytes(t));
-            } else {
+            if tail is None {
                 assert(s1.core.tail_bytes(head) + Seq::<u8>::empty() =~= s1.core.tail_bytes(head));
+            }
+            if kind == Kind::String {
+                s1.core.lemma_tail_utf8(head);
+                if let Some(t) = tail {
+                    s1.core.lemma_tail_utf8(t);
+                    valid_utf8_concat(s1.core.tail_bytes(head), s1.core.tail_bytes(t));
+                }
             }
             assert(perm.text() =~= s1.core.tail_bytes(head) + s1.core.opt_bytes(tail));
             let c = self.core;
             let a = h@.addr;
-            assert(string_wf(perm, c.cap(a)));
+            assert(body_wf(perm, c.cap(a)));
             assert(c.perm_wf(perm, a, BlockState::Live, Set::empty(), self.worker));
         }
         self.core.publish(Ghost(h), Tracked(perm), Ghost(BlockState::Live), Ghost(self.worker));
@@ -626,6 +732,53 @@ impl<M: Mode> Heap<M> {
         }
         let tracked p = self.core.tracked_perm(h@.addr);
         Ok(text_ptr(h, len, Tracked(p)))
+    }
+
+    /// # Safety
+    /// `w` はこのヒープか付けた塊の生きているバイト列の物体を指す。返す位置を読めるのは、物体が生きていて、その物体を
+    /// 書き換えていない間だけである。
+    pub unsafe fn bytes(&self, w: Word) -> (r: Result<*const [u8], HeapError>)
+        requires
+            self.wf(),
+            w.is_ptr_spec(),
+            self.word_in(w),
+            !M::CHECKED ==> self.settleable() && self.readable(w) && self.is_bytes(w),
+        ensures
+            self.consistent() && self.settleable() && self.readable(w) && self.is_bytes(w)
+                ==> r is Ok,
+    {
+        let h = self.header_of(w);
+        proof {
+            if self.consistent() && self.settleable() && self.readable(w) {
+                self.core.lemma_readable(w);
+            }
+        }
+        self.checked_live(h)?;
+        if M::CHECKED && !matches!(self.core.meta_get(h).kind(), Kind::Bytes) {
+            return Err(HeapError::WrongKind);
+        }
+        proof {
+            if M::CHECKED {
+                self.core.lemma_shape(h@.addr);
+                if self.core.dom().contains(h@.addr) {
+                    self.core.lemma_safe_at(h@.addr);
+                }
+            } else {
+                self.core.lemma_live_block(h@.addr);
+            }
+        }
+        let len = self.core.slot_get(h, 0).bits();
+        proof {
+            self.core.lemma_shape(h@.addr);
+            let cap = self.core.cap(h@.addr);
+            assert((len + 7) / 8 <= cap - 1) by (nonlinear_arith)
+                requires
+                    len <= 8 * (cap - 1),
+                    cap >= 1,
+            ;
+        }
+        let tracked p = self.core.tracked_perm(h@.addr);
+        Ok(bytes_ptr(h, len, Tracked(p)))
     }
 
     /// `string_push` の前提がみな成り立ち、モデルが合っている。`decref` の前提に、left が生きている文字列であることを
@@ -834,6 +987,17 @@ impl<M: Mode> Heap<M> {
         &&& !M::CHECKED ==> self.settleable() && self.readable(w) && self.is_string(w)
     }
 
+    /// バイト列 `w` を読める。`text_readable` のバイト列の版である。
+    pub(super) open spec fn bytes_readable(&self, w: Word) -> bool {
+        &&& w.is_ptr_spec()
+        &&& self.word_in(w)
+        &&& M::CHECKED ==> self.core.kind(w.bits_spec()) == Kind::Bytes && self.decref_passes(
+            w.bits_spec(),
+        )
+        &&& !M::CHECKED ==> self.settleable() && self.readable(w) && self.core.kind(w.bits_spec())
+            == Kind::Bytes
+    }
+
     /// 文字列 `w` のバイト列を借りる。
     pub(super) fn string_text(&self, w: Word) -> (s: &str)
         requires
@@ -841,6 +1005,23 @@ impl<M: Mode> Heap<M> {
             self.text_readable(w),
         ensures
             s.spec_bytes() == self.text_of(w),
+    {
+        let b = self.body_of(w);
+        let s = unsafe { str::from_utf8_unchecked(b) };
+        proof {
+            assert(s.spec_bytes() =~= b@);
+        }
+        s
+    }
+
+    /// 文字列かバイト列 `w` の中身を `&[u8]` として借りる。文字列なら中身は妥当な UTF-8 である。
+    pub(super) fn body_of(&self, w: Word) -> (b: &[u8])
+        requires
+            self.wf(),
+            self.text_readable(w) || self.bytes_readable(w),
+        ensures
+            b@ == self.text_of(w),
+            self.core.kind(w.bits_spec()) == Kind::String ==> valid_utf8(b@),
     {
         let h = self.header_of(w);
         proof {
@@ -866,7 +1047,7 @@ impl<M: Mode> Heap<M> {
             ;
         }
         let tracked p = self.core.tracked_perm(h@.addr);
-        text(h, len, Tracked(p))
+        bytes(h, len, Tracked(p))
     }
 
     /// 文字列 `w` は、ほかに参照のない生きている文字列で、その場で書き足せる。
@@ -965,6 +1146,7 @@ impl<M: Mode> Heap<M> {
             old(self).core.model@.building is None,
             old(self).appendable(w),
             old(self).core.tail_ok(t),
+            !(t is Bytes),
             t matches Tail::Text(r, _, _, _) ==> r@.addr != w.bits_spec(),
             old(self).text_of(w).len() + old(self).core.tail_bytes(t).len() <= old(self).capacity(
                 w,
@@ -1192,6 +1374,7 @@ impl<M: Mode> Heap<M> {
             cap == old(self).core.cap(h@.addr),
             len + old(self).core.tail_bytes(*t).len() <= 8 * (cap - 1),
             old(self).core.tail_ok(*t),
+            !(*t is Bytes),
             t matches Tail::Text(r, _, _, _) ==> r@.addr != h@.addr,
         ensures
             final(self).wf(),
@@ -1243,7 +1426,7 @@ impl<M: Mode> Heap<M> {
     /// 文字列の参照を返す。left が一意で容量が足りればその場で書き、足りなければ容量を倍にして作り直す。一意でなければ
     /// 和の長さで写す。どちらの写しも left を手放す前に済ませる。速いモードでは、大きい物体のページを箱の解放がすぐに
     /// 返すためである。速いモードは rc 0 の物体のページの頭を読まないので、容量は一意な left でだけ読む
-    /// (docs/spec/object-model.md の「文字列」)。
+    /// (docs/spec/object-model.md の「バイト列と文字列」)。
     #[inline]
     fn push_unchecked(&mut self, left: Word, t: Tail, Ghost(c): Ghost<bool>) -> (w: Word)
         requires
@@ -1254,6 +1437,7 @@ impl<M: Mode> Heap<M> {
             old(self).core.state(left.bits_spec()) == BlockState::Live,
             old(self).core.kind(left.bits_spec()) == Kind::String,
             old(self).core.tail_ok(t),
+            !(t is Bytes),
             t matches Tail::Text(r, _, _, _) && r@.addr == left.bits_spec() ==> old(
                 self,
             ).core.rc_of(left.bits_spec()) != 1,
@@ -1361,7 +1545,7 @@ impl<M: Mode> Heap<M> {
             ;
             s0.core.lemma_whole(h, len);
         }
-        let w = self.make_text(want, Tail::Text(h, len, 0, len), Some(t), 1);
+        let w = self.make_text(want, Tail::Text(h, len, 0, len), Some(t), 1, Kind::String);
         let ghost mid = *self;
         proof {
             // 塊の left は、新しい物体のブロックと重ならない
@@ -1400,7 +1584,7 @@ impl<M: Mode> Heap<M> {
     }
 
     /// left の後ろに s を足した文字列を返す。left の参照を1つ受け取り、結果の参照を1つ返す。どの誤りも最初の確保より
-    /// 前に返すので、`Err` のときヒープは変わらない (docs/spec/object-model.md の「文字列」)。
+    /// 前に返すので、`Err` のときヒープは変わらない (docs/spec/object-model.md の「バイト列と文字列」)。
     ///
     /// # Safety
     /// `left` はこのヒープか付けた塊の生きている文字列の物体を指し、呼ぶ側がその参照を1つ持つ (`decref` と同じ前提)。
@@ -1449,7 +1633,7 @@ impl<M: Mode> Heap<M> {
     }
 
     /// `++`。両辺の参照を受け取り、結果の参照を返す。`string_push(left, string(right))` の後に right を手放す。どの誤りも
-    /// 最初の確保より前に返す (docs/spec/object-model.md の「文字列」)。
+    /// 最初の確保より前に返す (docs/spec/object-model.md の「バイト列と文字列」)。
     ///
     /// # Safety
     /// `left` と `right` はこのヒープか付けた塊の生きている文字列の物体を指し、呼ぶ側がそれぞれの参照を1つずつ持つ

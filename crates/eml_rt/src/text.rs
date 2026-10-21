@@ -1,11 +1,11 @@
-//! 文字列のバイト列 (docs/spec/object-model.md の「文字列」)。Verus の権限は語の単位で、語の中のバイトの位置を
-//! 扱わないので、`&[u8]` で読み書きする4つの関数 (`write_bytes`、`write_byte`、`bytes`、`bytes_ptr`) は信頼の一覧の
-//! T10 である。どれも `String` のブロックの権限を受け、長さの語 (ペイロードの 0 語目) の後ろの容量の中だけを読み書き
-//! する。メモリのバイト列は、いつも権限の ghost のバイト列 `text` に等しい。この約束は、権限が渡したポインタの
-//! `String` のブロックのものであるとき (`BlockPerm::holds_text`) に限る。ghost のバイト列を変えるのは、ここの
-//! `write_bytes` と `write_byte` と、確保のたびに列を空にする `BlockPerm::clear_text` だけである。`str` で読み書きする
-//! `write_text`、`text`、`text_ptr` は、vstd の `str::as_bytes` と `str::from_utf8_unchecked` の約束を使って、
-//! この4つの上に検証して書く。
+//! 文字列とバイト列の中身 (docs/spec/object-model.md の「バイト列と文字列」)。Verus の権限は語の単位で、語の中のバイトの
+//! 位置を扱わないので、`&[u8]` で読み書きする4つの関数 (`write_bytes`、`write_byte`、`bytes`、`bytes_ptr`) は信頼の
+//! 一覧の T10 である。どれも `String` か `Bytes` のブロックの権限を受け、長さの語 (ペイロードの 0 語目) の後ろの容量の
+//! 中だけを読み書きする。メモリのバイト列は、いつも権限の ghost のバイト列 `text` に等しい。この約束は、権限が渡した
+//! ポインタの `String` か `Bytes` のブロックのものであるとき (`BlockPerm::holds_body`) に限る。ghost のバイト列を
+//! 変えるのは、ここの `write_bytes` と `write_byte` と、確保のたびに列を空にする `BlockPerm::clear_text` だけである。
+//! `str` で読み書きする `write_text`、`text`、`text_ptr` は、vstd の `str::as_bytes` と `str::from_utf8_unchecked` の
+//! 約束を使って、この4つの上に検証して書く。
 
 use crate::meta::{BlockPerm, Header, slot_ptr};
 use vstd::prelude::*;
@@ -30,7 +30,7 @@ pub(crate) fn write_bytes(
     requires
         forall|i: int| #[trigger] old(perm).slots.contains_key(i) <==> 0 <= i < cap,
         cap >= 1,
-        old(perm).holds_text(h, 8 * (cap - 1)),
+        old(perm).holds_body(h, 8 * (cap - 1)),
         at == old(perm).text().len(),
         at + b@.len() <= 8 * (cap - 1),
     ensures
@@ -47,7 +47,7 @@ pub(crate) fn write_bytes(
     // 生のポインタだけで写す。`copy_nonoverlapping` は、b が写す先と重ならないことを前提にする。このヒープの文字列から
     // 写すとき (`string_concat` の右辺、`String.show` の写す元、作り直しの left) は、写す先がいつも別のブロック
     // である。呼ぶ側の `&str` は、`string_push` の Safety が left 自身の中身を指さないことを求める
-    // (docs/spec/object-model.md の「文字列」)
+    // (docs/spec/object-model.md の「バイト列と文字列」)
     unsafe {
         std::ptr::copy_nonoverlapping(b.as_ptr(), slot_ptr(h, 1).cast::<u8>().add(at), b.len());
     }
@@ -70,7 +70,7 @@ pub(crate) fn write_byte(
     requires
         forall|k: int| #[trigger] old(perm).slots.contains_key(k) <==> 0 <= k < cap,
         cap >= 1,
-        old(perm).holds_text(h, 8 * (cap - 1)),
+        old(perm).holds_body(h, 8 * (cap - 1)),
         old(perm).text().len() <= 8 * (cap - 1),
         i < old(perm).text().len(),
     ensures
@@ -94,7 +94,7 @@ pub(crate) fn write_byte(
 #[inline]
 pub(crate) fn bytes(h: *mut Header, len: usize, Tracked(perm): Tracked<&BlockPerm>) -> (r: &[u8])
     requires
-        perm.holds_text(h, len as int),
+        perm.holds_body(h, len as int),
         len == perm.text().len(),
     ensures
         r@ == perm.text(),
@@ -111,7 +111,7 @@ pub(crate) fn bytes_ptr(
     Tracked(perm): Tracked<&BlockPerm>,
 ) -> *const [u8]
     requires
-        perm.holds_text(h, len as int),
+        perm.holds_body(h, len as int),
         len == perm.text().len(),
 {
     std::ptr::slice_from_raw_parts(slot_ptr(h, 1).cast::<u8>().cast_const(), len)
@@ -129,7 +129,7 @@ pub(crate) fn write_text(
     requires
         forall|i: int| #[trigger] old(perm).slots.contains_key(i) <==> 0 <= i < cap,
         cap >= 1,
-        old(perm).holds_text(h, 8 * (cap - 1)),
+        old(perm).holds_body(h, 8 * (cap - 1)),
         at == old(perm).text().len(),
         at + s.spec_bytes().len() <= 8 * (cap - 1),
     ensures
@@ -149,7 +149,7 @@ pub(crate) fn write_text(
 #[inline]
 pub(crate) fn text(h: *mut Header, len: usize, Tracked(perm): Tracked<&BlockPerm>) -> (r: &str)
     requires
-        perm.holds_text(h, len as int),
+        perm.holds_body(h, len as int),
         len == perm.text().len(),
         valid_utf8(perm.text()),
     ensures
@@ -164,11 +164,11 @@ pub(crate) fn text(h: *mut Header, len: usize, Tracked(perm): Tracked<&BlockPerm
 }
 
 /// `h` の中身の位置。公開の `string` が返す。指す先を読めるのは、物体が生きていて、`string_push` か `string_concat` で
-/// 書き換えていない間だけである (docs/spec/object-model.md の「文字列」)。
+/// 書き換えていない間だけである (docs/spec/object-model.md の「バイト列と文字列」)。
 #[inline]
 pub(crate) fn text_ptr(h: *mut Header, len: usize, Tracked(perm): Tracked<&BlockPerm>) -> *const str
     requires
-        perm.holds_text(h, len as int),
+        perm.holds_body(h, len as int),
         len == perm.text().len(),
         valid_utf8(perm.text()),
 {

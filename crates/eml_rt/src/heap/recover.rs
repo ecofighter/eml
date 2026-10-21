@@ -742,6 +742,29 @@ impl<M: Mode> Heap<M> {
                 }
                 Ok(())
             },
+            Kind::Bytes => {
+                if M::CHECKED && self.core.prefix_first_get(h) != self.worker {
+                    return Err(HeapError::Unrecoverable);
+                }
+                proof {
+                    assert(self.core.kind(a) == Kind::Bytes);
+                    if M::CHECKED {
+                        assert(self.decref_passes(a));
+                    }
+                }
+                let body = self.body_of(w);
+                let nw = new.alloc_bytes(body);
+                proof {
+                    new.lemma_target_made(n0, *self, ws0, out, d0, nw, a);
+                    self.lemma_source_insert(d0, old(frames)@, a, Some(nw));
+                }
+                done.insert(a, Some(nw));
+                words.push(nw);
+                proof {
+                    assert(words@.drop_last() =~= ws0);
+                }
+                Ok(())
+            },
             Kind::BigInt => {
                 let x = self.core.slot_get(h, 0).bits() as i64;
                 let nw = new.alloc_int(x);

@@ -24,11 +24,14 @@ pub enum Kind {
     /// `Float` の箱。値の語 (`f64` のビット列) を1つ持つ。`Int` の即値のような空きのビットがないので、`box` はいつも
     /// 確保する (docs/spec/object-model.md の「種類」)。
     Float = 4,
+    /// バイト列。`String` と同じ形 (長さの語とバイト列) で、UTF-8 の不変条件だけを持たない
+    /// (docs/spec/object-model.md の「バイト列と文字列」)。
+    Bytes = 5,
     /// 確保器が空いたブロックに付ける。生きている物体はこの種類を持たない。
     Free = 15,
 }
 
-/// 種類のビットが表す種類。0、1、2、3、4、15 のほかは `Meta` の型の不変条件で除く。
+/// 種類のビットが表す種類。0、1、2、3、4、5、15 のほかは `Meta` の型の不変条件で除く。
 pub open spec fn kind_of(bits: u32) -> Kind {
     if bits == 0 {
         Kind::Data
@@ -40,13 +43,15 @@ pub open spec fn kind_of(bits: u32) -> Kind {
         Kind::String
     } else if bits == 4 {
         Kind::Float
+    } else if bits == 5 {
+        Kind::Bytes
     } else {
         Kind::Free
     }
 }
 
 pub open spec fn known_kind(bits: u32) -> bool {
-    bits == 0 || bits == 1 || bits == 2 || bits == 3 || bits == 4 || bits == 15
+    bits == 0 || bits == 1 || bits == 2 || bits == 3 || bits == 4 || bits == 5 || bits == 15
 }
 
 // 種類ごとの欄。破棄処理の欄だけは、箱を空けるたびに読むので、この `match` でなく `Meta::has_finalizer` が持つ
@@ -65,6 +70,7 @@ impl Kind {
             2 => Kind::Foreign,
             3 => Kind::String,
             4 => Kind::Float,
+            5 => Kind::Bytes,
             15 => Kind::Free,
             _ => unreachable!("an unknown object kind {bits}"),
         }
@@ -75,6 +81,12 @@ impl Kind {
         self == Kind::BigInt || self == Kind::Float
     }
 
+    /// 長さの語とバイト列の形を持つ種類 (`String` と `Bytes`)。この仲間は ghost のバイト列と `holds_body` を共有し、
+    /// 種類で違うのは追加の不変条件 (`String` の UTF-8) だけである (docs/spec/object-model.md の「バイト列と文字列」)。
+    pub open spec fn has_body(self) -> bool {
+        self == Kind::String || self == Kind::Bytes
+    }
+
     /// リークの報告の種類の名前。
     pub fn name(self) -> &'static str {
         match self {
@@ -83,6 +95,7 @@ impl Kind {
             Kind::Foreign => "Foreign",
             Kind::String => "String",
             Kind::Float => "Float",
+            Kind::Bytes => "Bytes",
             Kind::Free => "Free",
         }
     }
@@ -95,15 +108,15 @@ impl Kind {
         matches!(self, Kind::Data)
     }
 
-    /// ペイロードが核の操作から見て不透明か。`raw` と `set_raw` はこの種類を断る。`Foreign` は Rust の値を、`String` は
-    /// 途中までしか書いていない語を持つので、語として読み書きすると未初期化の読み込みか不変条件の破れになる
+    /// ペイロードが核の操作から見て不透明か。`raw` と `set_raw` はこの種類を断る。`Foreign` は Rust の値を、`String` と
+    /// `Bytes` は途中までしか書いていない語を持つので、語として読み書きすると未初期化の読み込みか不変条件の破れになる
     /// (docs/spec/object-model.md の「種類」)。
     #[inline]
     pub(crate) fn opaque(self) -> (r: bool)
         ensures
-            r == (self == Kind::Foreign || self == Kind::String),
+            r == (self == Kind::Foreign || self.has_body()),
     {
-        matches!(self, Kind::Foreign | Kind::String)
+        matches!(self, Kind::Foreign | Kind::String | Kind::Bytes)
     }
 }
 
@@ -777,12 +790,12 @@ impl BlockPerm {
         self.text = Text { bytes: Seq::empty() };
     }
 
-    /// `String` のブロック `h` の権限で、長さの語と、その後ろの `n` バイトを覆う語の権限を持つ。T10 の関数は、権限と
-    /// ポインタがこの関係にあるときだけ、メモリのバイト列が ghost のバイト列に等しいことを約束する。
-    pub(crate) open spec fn holds_text(self, h: *mut Header, n: int) -> bool {
+    /// `String` か `Bytes` のブロック `h` の権限で、長さの語と、その後ろの `n` バイトを覆う語の権限を持つ。T10 の関数は、
+    /// 権限とポインタがこの関係にあるときだけ、メモリのバイト列が ghost のバイト列に等しいことを約束する。
+    pub(crate) open spec fn holds_body(self, h: *mut Header, n: int) -> bool {
         &&& self.meta.ptr() == field_ptr::<u32>(h, 4)
         &&& self.meta.is_init()
-        &&& bits_kind(self.meta.value()) == Kind::String
+        &&& bits_kind(self.meta.value()).has_body()
         &&& forall|i: int|
             0 <= i <= (n + 7) / 8 ==> #[trigger] self.slots.contains_key(i) && self.slots[i].ptr()
                 == field_ptr::<Word>(h, slot_offset(i))
@@ -843,6 +856,8 @@ mod tests {
             Kind::BigInt,
             Kind::Foreign,
             Kind::String,
+            Kind::Float,
+            Kind::Bytes,
             Kind::Free,
         ] {
             assert_eq!(kind.tokenable(), kind == Kind::Data);
