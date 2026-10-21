@@ -2719,3 +2719,70 @@ main () =
         .unwrap_or_else(|| panic!("{shown}"));
     insta::assert_snapshot!(header, @r#"fn "apply_n{0=(,) #0(main$lambda0/1, _)}"(k.9: int, p.11: int, n.1: int) -> int {"#);
 }
+
+/// 状態つきの handler の複製で、末尾の呼び出しの結果をそのまま返してよいのは、呼ぶ複製の並びが f の並びと同じときだけ
+/// である。タプルの形は値の Repr で決まるので、大きさが同じ並びでも形が違う。`obj` を返す f が `tobj` を返す g を末尾で
+/// 呼ぶと、f の複製は g の組を受け直して開き、f の並びの組を作り直して返す
+/// (docs/superpowers/specs/2026-10-21-s14e-abi-struct-design.md の「Core IR」の optimize)。
+#[test]
+fn a_tail_call_to_a_copy_with_another_tuple_shape_is_received() {
+    let shown = optimized(
+        "\
+effect Count { tick(unit) -> unit }
+internal yields fn body(p.0: unit) -> tobj {
+  let t.1: obj = call f(3)
+  return t.1
+}
+yields fn f(n.0: int) -> obj {
+  switch n.0 { 0 -> b1, _ -> b2 }
+b1:
+  let t.1: tobj = call g(3)
+  return t.1
+b2:
+  let m.2: int = extern \"Prelude.Num Int.-\"(n.0, 1)
+  let t.3: obj = call f(m.2)
+  return t.3
+}
+yields fn g(n.0: int) -> tobj {
+  let t.1: unit = perform Count.tick(())
+  switch n.0 { 0 -> b1, _ -> b2 }
+b1:
+  let s.4: obj = const \"done\"
+  return s.4
+b2:
+  let m.2: int = extern \"Prelude.Num Int.-\"(n.0, 1)
+  let t.3: tobj = call g(m.2)
+  return t.3
+}
+internal fn tick(p.0: unit, k.1: tobj, s.2: int) -> tobj {
+  let n.3: int = extern \"Prelude.Num Int.+\"(s.2, 1)
+  let t.4: tobj = resume k.1((): unit, n.3)
+  return t.4
+}
+internal fn ret(x.0: tobj, s.1: int) -> int {
+  let u.2: unit = drop x.0
+  return s.1
+}
+fn entry$main() -> int {
+  let t.0: int = handle Count(0, &body) { tick: &tick } return &ret
+  return t.0
+}
+",
+    );
+    insta::assert_snapshot!(function(&shown, "\"f{H=ret}\""), @r#"
+    fn "f{H=ret}"(n.0: int, s.4: int) -> (,){obj, int} {
+      switch n.0 { 0 -> b1, _ -> b2 }
+    b1:
+      let t.5: (,){tobj, int} = call "g{H=ret}"(3, s.4)
+      unpack t.5 (,) #0(t.1: tobj, s.6: int)
+      jump b3(t.1, s.6)
+    b2:
+      let m.2: int = extern "Prelude.Num Int.-"(n.0, 1)
+      let t.10: (,){obj, int} = call "f{H=ret}"(m.2, s.4)
+      return t.10
+    b3(t.7: obj, s.8: int):
+      let d.9: (,){obj, int} = con (,) #0(t.7, s.8)
+      return d.9
+    }
+    "#);
+}

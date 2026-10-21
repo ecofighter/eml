@@ -4,6 +4,6 @@ expression: "format!(\"--- stdout ---\\n{stdout}--- stderr ---\\n{diagnostics}{s
 input_file: tests/ui/run/records/three_rc_leaves_through_a_call.em
 ---
 --- stdout ---
-12345x
-x,12,345
+123459
+9,12,345
 --- stderr ---

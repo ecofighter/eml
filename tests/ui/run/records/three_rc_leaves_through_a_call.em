@@ -9,7 +9,7 @@ pass n t = if n == 0 then t else
 
 main : Unit -> <IO, Panic> Unit
 main () =
-  let t = ("x", show 12, show 345)
+  let t = (show 9, show 12, show 345)
   let (a, b, c) = pass 7 t
   println (a ++ b ++ c)
   let (d, e, f) = t

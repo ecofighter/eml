@@ -1228,10 +1228,10 @@ fn trade_offs() {
     insta::assert_debug_snapshot!(
         ui_stats(
             "records/three_rc_leaves_through_a_call.em",
-            "12345x\nx,12,345\n"
+            "123459\n9,12,345\n"
         )
         .rc_increments,
-        @"2"
+        @"3"
     );
 }
 

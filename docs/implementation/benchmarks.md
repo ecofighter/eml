@@ -2554,16 +2554,11 @@ S14e-1 の後からの変化である。ほかのプログラムの `RunStats` �
   - `tests/ui/run/functions/unspecialized_map_passes_floats.em`: `allocations` は 24 から 22 に減った
   - `tests/ui/run/records/swap_map_specialized.em` (特殊化される組の入れ替え): `allocations` が 32、`reuses` が 50 で、構造体の前 (コミット e6665e64) と同じである。`boxes` は 20 から 30 に増えたが、増えたのは `Int` の即値の `box` である
   - `tests/ui/run/records/swap_map_unspecialized.em` (特殊化されない `map` に組を入れ替える関数の値を渡す形): `allocations` が 34 から 52 に増え、`reuses` が 50 から 40 に減った。`map` は要素の組を箱から取り出して葉の並びで渡し、戻った組を新しい箱に入れる
-  - `tests/ui/run/records/three_rc_leaves_through_a_call.em`: `rc_increments` は 2 で、構造体の前と同じである
+  - `tests/ui/run/records/three_rc_leaves_through_a_call.em`: `rc_increments` は 3 である。共有した組を展開しない関数に渡すので、3つの文字列の葉をそれぞれ `dup` する
 
 #### 基準のプログラムの命令の数
 
-コミット 1a91f47 に、この作業の変更を足した作業ツリーで `bench/run.sh` を流した出力は、次のとおりである。
-
-- 機種: Mac17,2 (Apple M5)
-- OS: macOS 27.0.1 (26A434)
-- rustc: rustc 1.98.1 (48a229cea 2026-09-01)
-- コミット: 1a91f47-dirty
+コミット 1a91f47 に、この作業の変更を足した作業ツリー (1a91f47-dirty) で `bench/run.sh` を流した出力は、次のとおりである。機種、OS、rustc は上のとおりである。
 
 | プログラム | instructions retired | 実行の分 | 実時間 (s) |
 |---|---:|---:|---:|

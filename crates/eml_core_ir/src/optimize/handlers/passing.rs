@@ -483,11 +483,10 @@ pub(super) fn build(copies: &mut Copies, index: FnIdx, function: FnIdx, shape: &
                         call: Call::Direct(copy, args),
                         mask: Vec::new(),
                     };
-                    // 状態のない handler の複製は元の結果をそのまま返す。状態つきでは、並びの大きさが違う末尾の
-                    // 呼び出しを末尾でない呼び出しとして受け直し、下の `return` で f の並びにする
-                    if tail == Some(at)
-                        && (!shape.stateful || callee.values.len() == base.values.len())
-                    {
+                    // 状態のない handler の複製は元の結果をそのまま返す。状態つきでは、並びが違う末尾の呼び出しを
+                    // 末尾でない呼び出しとして受け直し、下の `return` で f の並びにする。タプルの形は値の Repr と印で
+                    // 決まるので、大きさが同じでも並びが違えば結果の形が違う
+                    if tail == Some(at) && (!shape.stateful || callee.values == base.values) {
                         let returned = fresh(&mut code.vars, result.clone());
                         current.stmts.push(Stmt::Let {
                             var: returned,
@@ -569,8 +568,8 @@ fn unit(units: &HashSet<VarId>, atom: &mut Atom) {
 ///
 /// 構造体の `con` の引数は正確な位置だが、`return` の value は f の結果の Repr と互換であればよい (`obj` の変数や
 /// `tobj` の位置の `()`)。そのときは、value と状態を、並びの Repr の引数を持つブロックへのジャンプで渡し、そこで
-/// タプルを作る。ジャンプの実引数は命令なしで収まる互換の位置なので、`return` と同じ値をそのまま渡せる
-/// (docs/spec/lir.md の「位置の規則」)。足すブロックは `extra` の並びに積み、番号は `extra` の2つ目の値から振る。
+/// タプルを作る。ジャンプの実引数は `return` と同じく互換の位置で、box の挿入が要る変換を入れるので、`return` と
+/// 同じ値を渡せる (docs/spec/lir.md の「位置の規則」)。足すブロックは `extra` の並びに積み、番号は `extra` の2つ目の値から振る。
 #[allow(clippy::too_many_arguments)]
 fn finish(
     code: &mut CoreFn,
