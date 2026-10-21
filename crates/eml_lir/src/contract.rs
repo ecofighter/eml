@@ -119,7 +119,7 @@ fn remove_dead_lets(function: &mut LirFn) -> bool {
     let vars = &function.vars;
     for block in function.blocks.iter_mut().rev() {
         let mut keep = vec![true; block.stmts.len()];
-        let tail_at = tail_position_call(block).map(|(at, _)| at);
+        let tail = tail_position_call(block).map(|(at, _)| (at, bound(&block.stmts[at])));
         for (position, stmt) in block.stmts.iter_mut().enumerate().rev() {
             match stmt {
                 Stmt::Let { var, rhs } if uses[var.0 as usize] == 0 && pure(rhs) => {
@@ -131,11 +131,11 @@ fn remove_dead_lets(function: &mut LirFn) -> bool {
                     });
                 }
                 // 構造体の `unbox` は箱を読むだけの純粋な `let` である。使われない葉は `_` にして読まない。葉がどれも
-                // 使われない `unbox` は、箱が `unr` か、末尾の位置の呼び出しの後ろにあれば消す。後者は開くパスの
-                // 覗き穴が残すもので、消すと末尾の位置の呼び出しの形が保たれる
-                // (docs/spec/lir.md の「縮約」)。`unr` でない箱の
-                // `unbox` は残す。Perceus はこの文で箱を知り、箱を手放す所を `decref` (V1 が拒む) でなく `drop` に
-                // する。末尾の位置では箱を呼び出しの結果として返すので、手放す所がない
+                // 使われない `unbox` は、箱が `unr` か、箱が末尾の位置の呼び出しの結果で、その呼び出しの後ろにあれば
+                // 消す。後者は開くパスの覗き穴が残すもので、消すと末尾の位置の呼び出しの形が保たれる
+                // (docs/spec/lir.md の「縮約」)。ほかの `unr` でない箱の `unbox` は残す。Perceus はこの文で箱を知り、
+                // 箱を手放す所を `decref` (V1 が拒む) でなく `drop` にする。末尾の位置の呼び出しの結果の箱は、呼び出しの
+                // 結果として返すので、手放す所がない
                 Stmt::UnboxStruct { value, fields, .. } => {
                     for field in fields.iter_mut() {
                         if field.is_some_and(|var| uses[var.0 as usize] == 0) {
@@ -145,7 +145,9 @@ fn remove_dead_lets(function: &mut LirFn) -> bool {
                     }
                     if fields.iter().all(Option::is_none)
                         && (vars[value.0 as usize].mark == Mark::Unr
-                            || tail_at.is_some_and(|at| position > at))
+                            || tail.as_ref().is_some_and(|(at, results)| {
+                                position > *at && results.contains(value)
+                            }))
                     {
                         keep[position] = false;
                         uses[value.0 as usize] -= 1;
@@ -161,6 +163,15 @@ fn remove_dead_lets(function: &mut LirFn) -> bool {
         }
     }
     removed
+}
+
+/// 呼び出しの文が束縛する変数。
+fn bound(stmt: &Stmt) -> Vec<VarId> {
+    match stmt {
+        Stmt::Let { var, .. } => vec![*var],
+        Stmt::LetMany { vars, .. } => vars.clone(),
+        _ => Vec::new(),
+    }
 }
 
 /// 消してもよい右辺。値を作るだけで、エフェクトも実行時エラーも起こさない。extern は表の行が消せるもの

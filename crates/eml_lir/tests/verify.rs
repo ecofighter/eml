@@ -2,7 +2,8 @@
 //! 構造の規則 R1 から R8 と、前の形の IR から引き継いだ検査を1つずつ確かめる。
 
 use eml_lir::{
-    Prim, Program, Rhs, Stmt, parse, verify, verify_flattened, verify_lowered, verify_scopes,
+    Pass, Prim, Program, Rhs, Stmt, parse, passes_until, verify, verify_contracted,
+    verify_flattened, verify_lowered, verify_scopes,
 };
 
 /// 手で書く IR の配置の行。プログラムの先頭に置く。
@@ -3426,6 +3427,47 @@ fn a_struct_box_is_obj() {
         check_scopes(&text("tobj", "obj")),
         Err("`b.2` (tobj) is bound to a box of a struct, which is obj in `f`".to_string())
     );
+}
+
+/// 縮約の後の段は、互換でない `return` を末尾の位置の呼び出しの形でも許さない。縮約がその形を `tail` にしなかった
+/// なら、`return` は呼ばれる側の結果の Repr のまま関数の `ret` を返す (docs/spec/lir.md の「verifier」)。
+#[test]
+fn the_contracted_level_rejects_an_incompatible_return_after_a_tail_position_call() {
+    let text = "\
+fn g(x.0: tobj) -> tobj {
+  return x.0
+}
+fn f(c.0: tobj) -> int {
+  let r.1: tobj = call g(c.0)
+  return r.1
+}
+";
+    assert_eq!(check_flattened(text), Ok(()));
+    assert_eq!(
+        verify_contracted(&read(text)).map_err(|error| error.to_string()),
+        Err("`r.1` (tobj) is returned from a function that returns int in `f`".to_string())
+    );
+}
+
+/// box の挿入は末尾の位置の呼び出しの束縛を呼ばれる側の結果の Repr (`tobj`) にする。結果の印 `lin` は関数の戻り値の
+/// 印 `unr` と直接つなげないので、縮約は互換でない `return` を `tail` にしない。この誤りは縮約の後の検査が縮約の名前で
+/// 報告する。
+#[test]
+#[should_panic(
+    expected = "internal error: invalid LIR after contract: `r.1` (tobj) is returned from a function that returns int in `f`"
+)]
+fn an_incompatible_return_left_by_contract_is_reported_after_contract() {
+    let text = "\
+fn h(c.0: tobj) -> tobj lin {
+  let r.1: tobj lin = uniform apply c.0(())
+  return r.1
+}
+fn f(c.0: tobj) -> int {
+  let r.1: int poly = call h(c.0)
+  return r.1
+}
+";
+    passes_until(&mut read(text), Pass::Contract);
 }
 
 fn check_flattened(text: &str) -> Result<(), String> {

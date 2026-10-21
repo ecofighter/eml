@@ -1,4 +1,6 @@
-use eml_lir::{Pass, parse, passes_until, pretty, verify, verify_flattened, verify_scopes};
+use eml_lir::{
+    Pass, parse, passes_until, pretty, verify, verify_contracted, verify_flattened, verify_scopes,
+};
 
 /// 名前で選んだ関数の表示。ほかの関数 (`entry$main` など) を期待値から外すため。内部の関数は `internal fn` の行から
 /// 始まる。
@@ -26,7 +28,8 @@ pub fn passes_text(text: &str, last: Pass) -> String {
     assert_eq!(pretty(&parsed), shown, "the printed LIR must read back");
     let verified = match last {
         Pass::Boxing => verify_scopes(&parsed),
-        Pass::Flatten | Pass::Contract => verify_flattened(&parsed),
+        Pass::Flatten => verify_flattened(&parsed),
+        Pass::Contract => verify_contracted(&parsed),
         Pass::Perceus | Pass::Reuse => verify(&parsed),
     };
     if let Err(error) = verified {

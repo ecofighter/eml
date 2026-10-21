@@ -2,8 +2,8 @@
 //! Core IR から LIR への変換までの順番は `eml_core_ir` が知る。
 
 use crate::{
-    Program, VerifyError, boxing, contract, flatten, perceus, reuse, verify, verify_flattened,
-    verify_lowered, verify_scopes,
+    Program, VerifyError, boxing, contract, flatten, perceus, reuse, verify, verify_contracted,
+    verify_flattened, verify_lowered, verify_scopes,
 };
 
 /// `passes_until` で止める位置。
@@ -68,7 +68,8 @@ fn check(program: &Program, pass: Pass) {
     }
     let result = match pass {
         Pass::Boxing => verify_scopes(program),
-        Pass::Flatten | Pass::Contract => verify_flattened(program),
+        Pass::Flatten => verify_flattened(program),
+        Pass::Contract => verify_contracted(program),
         Pass::Perceus | Pass::Reuse => verify(program),
     };
     if let Err(error) = result {

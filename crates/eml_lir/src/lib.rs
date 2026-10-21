@@ -31,7 +31,7 @@ pub use pretty::{pretty, pretty_with_positions};
 pub use prim::{Immediates, Prim, PrimRow};
 pub use reuse::reuse;
 pub use text::parse;
-pub use verify::{verify, verify_flattened, verify_lowered, verify_scopes};
+pub use verify::{verify, verify_contracted, verify_flattened, verify_lowered, verify_scopes};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Program {

@@ -3,7 +3,7 @@
 //! tests/contract.rs にある。
 
 use crate::common::{function, passes_text};
-use eml_lir::{Pass, contract, parse, pretty, verify_scopes};
+use eml_lir::{Pass, contract, parse, pretty, verify_contracted, verify_flattened, verify_scopes};
 
 /// 入力と出力が、どちらも scope の段の verifier を通ることも確かめる。
 fn contract_text(text: &str) -> String {
@@ -440,6 +440,39 @@ internal role body fn f(k.0: obj, u.1: unit) -> Tok{int, float} lin {
     internal role body fn f(k.0: obj, u.1: unit) -> tobj lin {
       let b.6: tobj = box 1
       tail uniform apply k.0(b.6)
+    }
+    ");
+}
+
+#[test]
+fn an_unused_unbox_of_another_box_after_a_tail_position_call_is_kept() {
+    // 末尾の位置の呼び出しの後ろで消すのは、呼び出しの結果の箱の `unbox` だけである。ほかの `lin` の箱の `unbox` は
+    // 葉がどれも使われなくても残し、Perceus がその箱を `drop` で手放す。そのため `g` の呼び出しは末尾呼び出しに
+    // ならない (docs/spec/lir.md の「縮約」)
+    let text = "\
+layout Tok { Tok(int, float) }
+fn g(k.0: obj) -> int {
+  return 1
+}
+fn f(k.0: obj, w.1: obj lin) -> int {
+  let r.2: int = call g(k.0)
+  let (_, _) = unbox w.1 Tok
+  return r.2
+}
+";
+    let mut program = parse(text).unwrap_or_else(|error| panic!("{error}"));
+    if let Err(error) = verify_flattened(&program) {
+        panic!("the input must verify: {error}\n{text}");
+    }
+    contract(&mut program);
+    if let Err(error) = verify_contracted(&program) {
+        panic!("the output must verify: {error}");
+    }
+    insta::assert_snapshot!(function(&pretty(&program), "f"), @"
+    fn f(k.0: obj, w.1: obj lin) -> int {
+      let r.2: int = call g(k.0)
+      let (_, _) = unbox w.1 Tok
+      return r.2
     }
     ");
 }

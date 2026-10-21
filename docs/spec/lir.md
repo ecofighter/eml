@@ -431,7 +431,7 @@ handle の実行と、継続の再開のたびに、新しい evidence を作る
 - LIR のパスは、box の挿入、開く、縮約、Perceus、reuse の順である。`eml_lir::Pass` は `Boxing`、`Flatten`、`Contract`、`Perceus`、`Reuse` の5つで、`passes_until(&mut Program, Pass)` は、変換の直後の LIR に、box の挿入から指定したパスまでを順にかける。LIR のパスの順番を知るのはこの関数だけである。Core IR のパスと、2つの層をつなぐ順番は [Core IR](core-ir.md) の「パス」にある
 - verifier はデバッグビルドだけでかけ、誤りはパスの名前を付けて報告する
   - `passes_until` は、最初に入力に入口の段 (`verify_lowered`) をかけ、誤りを `internal error: invalid LIR before boxing: {error}` と報告する。box の挿入の入力の約束であり、手で書いた LIR を `passes_until` に渡すテストもこの検査を通る
-  - box の挿入の後は範囲の段 (`verify_scopes`) を、開くパスと縮約の後は開いた後の段 (`verify_flattened`) を、Perceus と reuse の後は所有の段 (`verify`) をかけ、誤りを `internal error: invalid LIR after {pass}: {error}` と報告する
+  - box の挿入の後は範囲の段 (`verify_scopes`) を、開くパスの後は開いた後の段 (`verify_flattened`) を、縮約の後は縮約の後の段 (`verify_contracted`) を、Perceus と reuse の後は所有の段 (`verify`) をかけ、誤りを `internal error: invalid LIR after {pass}: {error}` と報告する
 - 5つのパスは、テストが直接呼べるように、それぞれ公開する (`boxing`、`flatten`、`contract`、`perceus`、`reuse`)
 - box の挿入を開くパスより先に置くのは、一様な位置との変換と覗き穴を、構造体を1つの変数のまま今の規則で済ませるためである。開くパスを縮約より先に置くのは、開くパスが残す使われない読み出しを縮約が消すためである
 - `eml_core_ir::lower` は reuse まで、`lower_until` は指定したパスまでかける
@@ -498,7 +498,7 @@ handle の実行と、継続の再開のたびに、新しい evidence を作る
 ### 縮約
 
 - 使われない純粋な `let` を消す。純粋なのは `const`、`con`、`closure`、`box`、`unbox`、`prim root_get`、`prim empty_mut_array` と、表の行が `Pure` の `extern` である。ただし、`Lin` の引数を借りずに受ける `Pure` の行 (`Std.MutArray.freeze`) は消さない (`FunctionRow::removable`)。消すと `Lin` の値を手放す命令がなくなり、Perceus がその変数を `decref` して V1 が拒むためである。呼び出し、`Panics` と `Effectful` の `extern`、`prim`、`drop` は、使われなくても消さない。ほかの基本操作は実行の文脈か evidence を読み書きするので、純粋でないとみなす。使われない `box` を消しても確保が1つ減るだけで、`unbox` は読むだけなので、どちらも評価の順を変えない
-- 構造体の `unbox` も純粋で、使われない葉は `_` にして読まない。葉がどれも使われない構造体の `unbox` は、箱が `unr` か、`unbox` が末尾の位置の呼び出しの後ろにあるときだけ消す。後者は box の挿入の覗き穴が残すもので、消すと末尾の位置の呼び出しの形が保たれる。ほかは残す。Perceus はこの文で箱が構造体の箱だと知り、`unr` でない箱を手放す所を、V1 が拒む `decref` でなく `drop` にする (下の「Perceus」)
+- 構造体の `unbox` も純粋で、使われない葉は `_` にして読まない。葉がどれも使われない構造体の `unbox` は、箱が `unr` か、箱が末尾の位置の呼び出しの結果で、`unbox` がその呼び出しの後ろにあるときだけ消す。後者は box の挿入の覗き穴が残すもので、消すと末尾の位置の呼び出しの形が保たれる。箱は呼び出しの結果として返るので、手放す所がない。ほかの箱の `unbox` は呼び出しの後ろにあっても残す。Perceus はこの文で箱が構造体の箱だと知り、`unr` でない箱を手放す所を、V1 が拒む `decref` でなく `drop` にする (下の「Perceus」)
 - 縮約は、使われない純粋な `let` をすべて消し、いつも Perceus より前に走る。Perceus はこれに頼る。translate が開いた `unr` でない `con` の変数 ([Core IR](core-ir.md) の「translate が決める印」) は、使われない `con` として残り、その `lin` の引数は葉も読む。Perceus の入力にこの `con` が残ると、Perceus がその `lin` の `con` を `decref` し、V1 が拒む。そのため、Perceus の入力には、`unr` でない引数を持つ使われない `con` と `closure` がない
 - ブロックを後ろから、文を後ろから見る1回のパスで、関数全体の使用の数を使う。定義は使う位置を支配し、辺は番号の大きいブロックへ向かうので、`let` を見る時点でその変数の使用はすべて見終わっている。消した `let` だけが使っていた束縛も同じパスで消えるので、1回で不動点に達する。デバッグビルドでは、2回目のパスが何も変えないことを確かめる
 - 末尾呼び出しを作るのは縮約だけである。使われない `let` を消した後で、すべてのブロックに末尾呼び出しの規則を当てる。`let x = <呼び出し>` の直後の終端が `return x` なら、2つを `tail` にする。`let (x1, .., xn) = <呼び出し>` の直後の終端が同じ並びを同じ順に返す `return (x1, .., xn)` も同じである。呼び出しの結果の Repr が関数の `ret` と互換でなくてもよい。結果の変換は変換のフレームが行う (上の「末尾の位置の呼び出し」)。文を消したかに関わらずすべてのブロックを1回見るので、時間はブロックの数に比例する
@@ -641,14 +641,15 @@ reuse のパスは、Perceus が手放す箱を token にし、同じ物理的�
 
 ### verifier
 
-- LIR の verifier は4つの段を持つ。段はパスの順に直線に並ぶので、境界の検査だけを切り替える別の旗は持たない
+- LIR の verifier は5つの段を持つ。段はパスの順に直線に並ぶので、境界の検査だけを切り替える別の旗は持たない
   - 入口の段 (`verify_lowered`) は、`passes_until` が入力にかける (上の「パスの順番」)。構造の規則のうち境界と所有に関わらないもの (R1〜R5、R6 の支配、R7 と R8 のうち境界の検査を除くもの) と、下の引き継ぐ検査と、基本操作と `clause` の検査を確かめ、`tail`、`box`、`unbox`、`dup`、`decref`、`release` がないことを確かめる。box の挿入は末尾呼び出しと変換のない入力を前提にし、`let` と `return` の形から末尾の位置を見るためである。Perceus より前に `release` を拒むのと同じく、パスの入力の約束を verifier が確かめる
   - 範囲の段 (`verify_scopes`) は box の挿入の後にかける。入口の段から `box` と `unbox` の拒否を除き、`box` と `unbox` の規則 (上の「値の表現」) と境界の検査を足す。構造体の変数を受け、複数の値の `let` と `return`、構造体の `unbox` を拒む。互換でない `return` は、末尾の位置の呼び出しの結果を返す形のときだけ許す (上の「末尾の位置の呼び出し」)
-  - 開いた後の段 (`verify_flattened`) は開くパスと縮約の後にかける。範囲の段に加えて、変数、関数の結果、配置のフィールドのどこにも構造体が残らないことを確かめ、複数の値の `let` と `return`、構造体の `unbox` を受ける。源の単位の ABI (上の「開く」) を葉に開いた並びが、関数の引数と結果、`apply` の引数と合うことも確かめる
-  - 所有の段 (`verify`) は Perceus と reuse の後にかけ、開いた後の段に加えて、RC の対象の所有の多重集合 (R6)、V1、token の規則、`release unboxed` の印を確かめる
-  - 入口の段のほかの3つの段を、境界の段と呼ぶ。境界の検査 (下) は境界の段で走る
+  - 開いた後の段 (`verify_flattened`) は開くパスの後にかける。範囲の段に加えて、変数、関数の結果、配置のフィールドのどこにも構造体が残らないことを確かめ、複数の値の `let` と `return`、構造体の `unbox` を受ける。源の単位の ABI (上の「開く」) を葉に開いた並びが、関数の引数と結果、`apply` の引数と合うことも確かめる
+  - 縮約の後の段 (`verify_contracted`) は縮約の後にかける。開いた後の段から、互換でない `return` を末尾の位置の呼び出しの形のときだけ許す例外を除く。縮約がその形を `tail` にしなかったなら、`return` は変換なしに関数の `ret` を返すためである。縮約は印を直接つなげない形を `tail` にしないので (上の「縮約」)、この段がなければ、その誤りは Perceus の後の所有の段で Perceus の名前で報告される
+  - 所有の段 (`verify`) は Perceus と reuse の後にかけ、縮約の後の段に加えて、RC の対象の所有の多重集合 (R6)、V1、token の規則、`release unboxed` の印を確かめる
+  - 入口の段のほかの4つの段を、境界の段と呼ぶ。境界の検査 (下) は境界の段で走る
 - Kind の印の検査 (V1、V2、作る所の検査) は、下の「Kind の印の検査」にある。V2 と作る所の検査は Repr を比べる所と同じ所で、V1 は所有の段で走る
-- 着地の印 (上の「着地の印」) の検査は、4つの段のすべてで走る
+- 着地の印 (上の「着地の印」) の検査は、5つの段のすべてで走る
   - 末尾呼び出しの印は、呼び出しの検査の最初に拒む (``a tail apply has a prompt marker, but a tail call leaves no frame to land on``)。入口の段は `tail` そのものを拒むので、この文言は入口の段のほかで出る
   - ほかの印は、呼び出しの検査 (範囲と所有を含む) の後に確かめる。印の変数 v が見えること、v の Repr が `obj` であること、v が呼び出しの直後で生きていることを、この順に確かめる (`` `ev.1` is the prompt marker of an apply, but it is tobj, not obj ``、`` `ev.1` is the prompt marker of an apply, but it is not used after the call ``)
   - 所有の段では、v が呼び出しの直後にも所有されていることも確かめる (`` `ev.1` is the prompt marker of an apply, but it is not owned after the call ``)。巻き戻しは着地したフレームの値を手放さないので、続く `prompt$` が使う v は、着地の後も有効でなければならない
@@ -678,7 +679,7 @@ reuse のパスは、Perceus が手放す箱を token にし、同じ物理的�
   - 複数の値: ``a let of 2 values is formed before flatten``、``a return of 2 values is formed before flatten``、`` an unbox of `w.3` as `Vec3` is formed before flatten ``
   - 源の単位の ABI: ``the function has a source signature before flatten``、``an apply has a source result before flatten``
   - 関数の結果: ``the function returns (float, float) before flatten``
-- 開いた後の段と所有の段の文言は次のとおりである
+- 開いた後の段、縮約の後の段、所有の段の文言は次のとおりである
   - 残った構造体: `` `d.3` is Vec3{float, float, float}, but no struct remains after flatten ``、``the function returns Vec3{float, float, float}, but no struct remains after flatten``、``the constructor `Ball` has a struct field, but no struct remains after flatten``
   - 源の単位の ABI: ``the source parameters (Vec3{float, float, float}) open to (float, float, float), but the function takes (float, float)``、``the source result Vec3{float, float, float} opens to (float, float, float), but the function returns (float, float)``、``an apply with a uniform site has a source result``、``the source result of an apply is float, not a struct``、``a typed apply bound to several values has no source result``
   - 複数の値: ``a return gives 3 values, but the function returns (float, float)``、``2 values are bound to `f`, which returns (float, float, float)``
@@ -726,7 +727,7 @@ reuse のパスは、Perceus が手放す箱を token にし、同じ物理的�
   - `unbox` のオペランド: `` `p.0` (obj) is unboxed, but only tobj can be ``、``5 is unboxed, but only tobj can be``
   - `unbox` の束縛: `` `n.2` (tobj) is bound to an unbox, which gives int, float or enum ``
 - 引き継ぐ検査は次のとおりである。2つの IR のすべての段で走る。直接呼び出しとクロージャの引数の数、文字列定数と関数の番号が表にあること、`extern` 命令の引数の数、case の種類 (1つの `switch` の case が同じ種類であること、リテラルの case がフィールドを持たないこと)、`switch` が行き先を1つ以上持つこと、フィールドを束縛する case を持つ `switch` の scrutinee が RC の対象 (`obj` か `tobj`) の変数であること、リテラルの `switch` の `default`。Core IR のエフェクトの命令の検査は [Core IR](core-ir.md) の「verifier」にある
-- 基本操作と `clause` の検査は次のとおりである。Core IR の EP の段と、LIR の4つの段のすべてで走る
+- 基本操作と `clause` の検査は次のとおりである。Core IR の EP の段と、LIR の5つの段のすべてで走る
   - `prim` の即値のエフェクトと操作がエフェクトの表にあり、引数の数が表の行と同じである。`evv_mask` の項目は、呼び出しの `mask` と同じく空でなく、番号の真に昇順に並び (同じエフェクトの項目が2つない)、どの項目も1つ以上の evidence を飛ばす (``the effects of `prim evv_mask[Counter, State]` are not in ascending order``、`` `prim evv_mask[]` masks no effect ``、``an item of `prim evv_mask[State*0]` skips no handler``)
   - `clause` の操作がエフェクトの表にあり、引数の数が「1 + 操作の引数の数」である
   - `ev_set_clause[E.op]` に渡す値が `&g` か、同じ関数の中の `closure g(..)` なら、g の `clause` の印が op に合い、同じ関数の中で evidence を定義した `ev_new[E]` の E にも合う

@@ -58,6 +58,13 @@ pub fn verify_flattened(program: &Program) -> Result<(), VerifyError> {
     verify_at(program, Level::Flattened)
 }
 
+/// 縮約の後で Perceus より前の LIR を確かめる。開いた後の段の検査に加えて、互換でない `return` を末尾の位置の
+/// 呼び出しの形でも拒む。縮約がその形を `tail` にしなかったなら、`return` は変換なしに関数の `ret` を返すためである
+/// (docs/spec/lir.md の「verifier」)。
+pub fn verify_contracted(program: &Program) -> Result<(), VerifyError> {
+    verify_at(program, Level::Contracted)
+}
+
 /// box の挿入の前の LIR を確かめる。範囲の段と同じ形と範囲を確かめ、境界は比べない。box の挿入と縮約が作るもの
 /// (`box`、`unbox`、`tail`) と、Perceus が入れるもの (`dup`、`decref`、`release`) がまだないことを確かめる。
 /// box の挿入は、末尾呼び出しと変換のない入力を前提にするためである (docs/spec/lir.md の「パスの順番」)。
@@ -66,13 +73,14 @@ pub fn verify_lowered(program: &Program) -> Result<(), VerifyError> {
 }
 
 /// 検査の段。段はパスの順に直線に並ぶ。入口の段の LIR には、box の挿入と縮約が作るものがまだない。開くパスより前の
-/// LIR には構造体が残り、複数の値の命令がまだない。Perceus より前の LIR には、所有を確かめる材料 (`dup`、`decref`、
-/// `release`) がまだない。
+/// LIR には構造体が残り、複数の値の命令がまだない。縮約より前の LIR には、`tail` にする前の互換でない `return` が
+/// 残りうる。Perceus より前の LIR には、所有を確かめる材料 (`dup`、`decref`、`release`) がまだない。
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 enum Level {
     Lowered,
     Scopes,
     Flattened,
+    Contracted,
     Ownership,
 }
 
@@ -1043,7 +1051,7 @@ impl<'a> Checker<'a> {
     }
 
     /// `return` の値の並びは、関数の結果の並びと長さが同じで、値ごとに Repr が互換で印も互換である。末尾の位置の
-    /// 呼び出しの束縛は呼ばれる側の結果の Repr を持ち、縮約がこの形を `tail` にする。それまでの段では、互換でない
+    /// 呼び出しの束縛は呼ばれる側の結果の Repr を持ち、縮約がこの形を `tail` にする。縮約より前の段では、互換でない
     /// `return` をこの形のときだけ許す。構造体と箱の間の違いでは、並びの長さも違いうる
     /// (docs/spec/lir.md の「末尾の位置の呼び出し」)。
     fn check_returned(&self, block: &Block, atoms: &[Atom]) -> Result<(), String> {
