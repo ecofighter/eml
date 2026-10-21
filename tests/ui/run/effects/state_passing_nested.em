@@ -1,4 +1,4 @@
--- 2つの状態つきの handler を重ねたループ (S14c-2)。内側の `Tick` の handler から先に特殊化される
+-- 2つの状態つきの handler を重ねたループ。内側の `Tick` の handler から先に特殊化される
 import Std.State (State(..))
 
 effect Tick where

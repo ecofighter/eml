@@ -762,7 +762,7 @@ fn insert_after(function: &mut CoreFn, added: Vec<(usize, Block)>) {
 /// 既知の閉包への `apply` を直接の呼び出しにする (docs/spec/core-ir.md の「既知の閉包」)。解いた `con`
 /// のフィールドを置き換えると、`closure` で束縛した変数や関数の値への `apply` が新しく現れるためである。`Unr`
 /// でない閉包は、使う所がすべて書き換わるときだけ書き換える。書き換えない使う所が残ると、
-/// 捕獲した値を閉包と直接の呼び出しの2か所で消費するためである (S13e-1 と同じ規則)。書き換えた文の数と、
+/// 捕獲した値を閉包と直接の呼び出しの2か所で消費するためである (既知の閉包の規則と同じ)。書き換えた文の数と、
 /// 書き換えで生まれた直接の呼び出しの結果の変数を返す。生まれた呼び出しは、呼ぶ側がインライン化の候補にする。
 pub(super) fn call_known_closures(function: &mut CoreFn, callees: &[Callee]) -> (bool, Vec<VarId>) {
     let closures = known_closures(function);

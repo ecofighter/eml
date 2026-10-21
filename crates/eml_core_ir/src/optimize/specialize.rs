@@ -25,7 +25,7 @@ pub(crate) struct ClosureShape {
     pub(crate) captures: Vec<(Repr, Mark)>,
 }
 
-/// 鍵の位置が受け取る既知の値の形。S13e-1 は閉包だけを、融合の段は既知の閉包をフィールドに持つ `con` も鍵にする
+/// 鍵の位置が受け取る既知の値の形。既知の閉包の特殊化は閉包だけを、融合の段は既知の閉包をフィールドに持つ `con` も鍵にする
 /// (docs/spec/core-ir.md の「`con` の値の形についての特殊化」)。
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub(crate) enum ArgShape {
@@ -190,7 +190,7 @@ impl Specializer {
                 continue;
             };
             let ArgShape::Closure(shape) = shape else {
-                unreachable!("S13e-1 keys hold only closures");
+                unreachable!("known-closure keys hold only closures");
             };
             let limit = function.mark(param);
             let names = &self.callees[shape.function.0 as usize].params;

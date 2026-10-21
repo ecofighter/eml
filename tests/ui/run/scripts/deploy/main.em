@@ -1,4 +1,4 @@
--- deploy: 設定ファイルの段 (build、test、package、upload) を順に動かす (S12d のスクリプト)。`deploy [--dry-run] CONFIG`。
+-- deploy: 設定ファイルの段 (build、test、package、upload) を順に動かす。`deploy [--dry-run] CONFIG`。
 -- 段の起動は `Run`、記録は `Log` のエフェクトにし、`--dry-run` では `Run` の handler だけを差し替える。段が失敗したら
 -- そこで止め、報告を書いてから、その終了コードで終える
 effect Run where

@@ -1,4 +1,4 @@
--- csv2jsonl: ヘッダ付きの CSV の選んだ列を JSON Lines に変換する (S12d のスクリプト)。
+-- csv2jsonl: ヘッダ付きの CSV の選んだ列を JSON Lines に変換する。
 -- `csv2jsonl --columns NAME,NAME... INPUT OUTPUT`。引用符の欄は `,`、改行、`""` を含められる。誤りは終了コードと文言の
 -- 組を `fail` に渡して中断し、全体を組み立ててから書くので、誤りがあれば何も書かない
 import Yield (Yield(..))

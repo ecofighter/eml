@@ -112,7 +112,7 @@ impl ClauseForm {
 /// (docs/spec/core-ir.md の「handler への特殊化」)。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Form {
-    /// 経路を末尾の呼び出しでたどり、`perform` ごとに続きを継続の関数に切り出す形 (S13e-2)。
+    /// 経路を末尾の呼び出しでたどり、`perform` ごとに続きを継続の関数に切り出す形。
     Tail,
     /// どの操作も再開し、どの節もすぐに再開する handler の形。経路を末尾かどうかによらずたどり、状態を変数で持ち回る
     /// (`passing`)。
@@ -193,7 +193,7 @@ struct KnownFn {
 }
 
 /// 複製が受ける handler の形。複製の名前の鍵は `return` の節の関数 (`ret`) である。translate は handle ごとに
-/// `return` の節を作り、S13e-1 は持ち主の名前を鍵に入れて複製するので、`ret` が handle を1つに決める。
+/// `return` の節を作り、既知の閉包の複製は持ち主の名前を鍵に入れて複製するので、`ret` が handle を1つに決める。
 #[derive(Clone)]
 struct Shape {
     effect: u32,
@@ -791,7 +791,7 @@ impl Copies<'_> {
         copy
     }
 
-    /// `<f>{H=<ret>}`。上限を超えた名前は、S13e-1 の複製と同じくハッシュの形にする。
+    /// `<f>{H=<ret>}`。上限を超えた名前は、既知の閉包の複製と同じくハッシュの形にする。
     fn name(&self, function: FnIdx, shape: &Shape) -> String {
         let name = &self.program.function(function).name;
         let ret = &self.program.function(shape.ret()).name;

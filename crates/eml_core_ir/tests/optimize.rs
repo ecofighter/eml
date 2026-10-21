@@ -200,7 +200,7 @@ fn a_closure_whose_applies_are_all_rewritten_is_dropped() {
 }
 
 /// 値をデータに入れて取り出す。取り出した値は既知の閉包でないので、handle の本体に届いても handler への特殊化の
-/// 対象にならない。S13e-1 の規則だけを見るテストが使う。`hide` は自分を呼ぶので展開されず、取り出した値は呼ぶ側から見えない。
+/// 対象にならない。既知の閉包の規則だけを見るテストが使う。`hide` は自分を呼ぶので展開されず、取り出した値は呼ぶ側から見えない。
 const HIDE: &str = "
 data Box a = | Box a
 
@@ -363,7 +363,7 @@ fn a_closure_captured_by_a_closure_is_specialized() {
     "#);
 }
 
-/// `emit` の末尾でない呼び出しが、S13e-2 の handler への特殊化を止め、handle の本体を残す。
+/// `emit` の末尾でない呼び出しが、handler への特殊化を止め、handle の本体を残す。
 #[test]
 fn generate_reaches_the_handle_body() {
     let text = "\
@@ -675,7 +675,7 @@ fn for_each_is_specialized() {
 
 /// 状態つきの handler では、複製が状態を最後の引数で受ける。`count` は `Unit` を返すので、複製は次の状態だけを返す
 /// (docs/spec/core-ir.md の「handler の複製」)。展開した節は次の状態をブロックの引数で後ろへ渡すが、ここではそのブロックに
-/// 入る辺が1本なので、融合 (S13e-3) がブロックをつないで引数は残らない。状態を受けるブロックの引数は、2本の辺が入る
+/// 入る辺が1本なので、融合 がブロックをつないで引数は残らない。状態を受けるブロックの引数は、2本の辺が入る
 /// `a_conditional_perform_passes_the_state_to_the_join` が固定する。
 #[test]
 fn a_stateful_handler_threads_its_state() {
@@ -723,7 +723,7 @@ fn a_non_tail_put_is_specialized() {
             .all(|line| !line.contains("handle ") && !line.contains("perform Std.State")),
         "{shown}"
     );
-    // `bump` の複製は小さいので、融合 (S13e-3) が `loop` の複製に展開し、`bump` の `get` と `put` は状態の足し算に
+    // `bump` の複製は小さいので、融合 が `loop` の複製に展開し、`bump` の `get` と `put` は状態の足し算に
     // なる
     insta::assert_snapshot!(handler_copies(&shown), @r#"
     fn "loop{H=Std.State.run@#c7a76c0c3d933166}"(i.0: int, n.1: int, st.6: int) -> int {
@@ -963,8 +963,8 @@ const STATE_NESTED: &str = include_str!("../../../bench/state_nested.em");
 
 /// 後の回の handler の複製の名前か。内側の複製 `f{H=…}` の複製の名前は `f{H=…}{H=…}` で、64字を超えると内側の
 /// 複製の名前にハッシュを付けた `f{H=…}@#<16 hex>` になる (docs/spec/core-ir.md の「handler の複製」)。ハッシュのない
-/// 名前は `{H=` を2つ以上持つものを取り、S13e-1 の複製の最初の回の複製 `f{0=…}{H=…}` は取らない。ハッシュの名前は、
-/// ハッシュの前の部分に `{H=` を持つものを取る。ただし、長い S13e-1 の複製の最初の回の複製 `f{0=…}{H=…}@#<16 hex>`
+/// 名前は `{H=` を2つ以上持つものを取り、既知の閉包の複製の最初の回の複製 `f{0=…}{H=…}` は取らない。ハッシュの名前は、
+/// ハッシュの前の部分に `{H=` を持つものを取る。ただし、長い 既知の閉包の複製の最初の回の複製 `f{0=…}{H=…}@#<16 hex>`
 /// も同じ形なので、これだけは見分けられない。
 fn nested_copy(line: &str) -> bool {
     let Some(name) = line.split('"').nth(1).filter(|_| line.contains("fn \"")) else {
@@ -1151,7 +1151,7 @@ main () =
 
 /// `k` を値として使う節は、継続の関数の閉包を `k` として受ける写し `<g>{k}` を末尾で呼ぶ形になり、`Iter.generate` で
 /// 引く形から yield が消える (docs/spec/core-ir.md の「handler の複製」)。`Iter`
-/// は `hide` を通して `Iter.fold` に届けるので、融合 (S13e-3) で継続の関数が消えない。
+/// は `hide` を通して `Iter.fold` に届けるので、融合 で継続の関数が消えない。
 #[test]
 fn iter_generate_has_no_yield_left() {
     let text = format!(
