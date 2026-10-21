@@ -380,6 +380,8 @@ T-3 と T-4 を T-5 より先に置くのは、T-6 の末尾の規則が `passes
 
 ### T-10: LIR のパスのテストを eml_lir に移す (含めることに決まった)
 
+- 決まったこと: 行わない。移す4つのファイルのテストはどれもソースからパイプラインを通すもので、testing.md の「テストの置き場所」は、それを `crates/eml_core_ir/tests` に置き、`eml_lir` の dev-dependency にフロントエンドを入れないと決めている。今の配置がこの規則どおりなので、利用者がやめると決めた
+
 - 作業: `crates/eml_core_ir/tests/{boxing,contract,perceus,unwind}.rs` を `crates/eml_lir/tests` に移し、両方の `tests/main.rs` を直す
 - 完了の条件: `cargo test` で、テストの数と結果が移す前と同じである
 - 種類: 3
