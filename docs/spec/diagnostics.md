@@ -24,7 +24,7 @@ struct Fix {
 }
 ```
 
-- CLI では `ariadne` で表示する。将来の LSP では、同じ構造体から LSP の診断と code action に変換する。
+- CLI では `ariadne` で表示する。同じ構造体は、LSP の診断と code action に変換できる形である ([ロードマップ](../future/roadmap.md) の「処理系」)。
 - `Diagnostic`、`FileId`、`SourceFiles` は `eml_diagnostics` に置く。`eml_diagnostics` は `rowan` に依存しない ([コンパイラの構成](../implementation/architecture.md))。
 - 番号の定数は、段階ごとの `codes` モジュールに定義する (例: `eml_syntax::codes`)。E0004 (未対応) は、どの段階が出しても同じ意味なので、番号とラベルを `eml_diagnostics` に置く (`NOT_YET_SUPPORTED`、`Diagnostic::not_yet_supported`)。
 - 補足の情報は、独立した診断ではなく `notes` と `help` に入れる。そのため `Severity` は `Error` と `Warning` の2つだけにする。
@@ -53,7 +53,7 @@ struct Fix {
 | E0001 | `UNEXPECTED_CHARACTER` | eml のソースとして認識できない文字 |
 | E0002 | `UNTERMINATED_STRING` | 閉じていない文字列リテラル (複数行の文字列、raw 文字列、コマンドリテラルを含む) と、閉じていない補間の穴 ([字句](lexical.md) の「改行での回復」) |
 | E0003 | `EXPECTED_ITEM` | トップレベルで項目の始まりでないトークン |
-| E0004 | `NOT_YET_SUPPORTED` | 後の段階で実装する構文 (文字のリテラル、コマンドリテラル、型の別名 `type`、Kind の宣言 `: Unr`、row の型引数を持つ型の instance と `deriving`) |
+| E0004 | `NOT_YET_SUPPORTED` | 実装していない構文 (文字のリテラル、コマンドリテラル、型の別名 `type`、Kind の宣言 `: Unr`、row の型引数を持つ型の instance と `deriving`) |
 | E0005 | `UNTERMINATED_BLOCK_COMMENT` | 閉じていないブロックコメント |
 | E0006 | `TAB_INDENTATION` | インデントにタブを使った |
 | E0007 | `INVALID_NUMBER` | 不正な数値リテラル |
@@ -149,20 +149,16 @@ struct Fix {
 | E4004 | `UNREACHABLE_ARM` | 到達しない枝 (Warning) |
 | E4005 | `UNREACHABLE_EQUATION` | 到達しない等式 (Warning) |
 
-E1011 は、もとは `resume` と `drop` の引数の個数の誤り (`KEYWORD_ARITY`) だった。`resume` をキーワードでなく継続 `k` の呼び出しにしたときに、`drop` だけの誤り (`DROP_ARITY`) に狭めて使い続けることにした。
+E2007 と E2008 は欠番で、ほかの診断に使わない。
 
-E2007 は欠番である。もとは `resume` の状態の欄の食い違いに使っていた番号で、ほかの診断には使わない。
-
-E2008 は欠番である。もとは `MASK_CONFLICT` (呼び出し先が自分で起こすエフェクトを、同じ呼び出しで row 変数のために飛ばす必要がある) に使っていた番号で、`mask` を位置つきにしたときに不要になった ([エフェクトと handler](effects.md) の「handler の意味」)。ほかの診断には使わない。
-
-E2006 は、もとは `NOT_COMPARABLE` (`==` か `!=` で、`Int`、`String`、`Bool` のどれでもない型の値を比べた) だった。型クラスを入れたときに、E2007 のように欠番にせず、名前と意味を改めて使い続けることにした。新しい意味 (instance がない) は、もとの意味を含む一般化だからである。`==` の位置に出る場合も、演算子でなくクラスの言葉で言う。
+E2006 が `==` の位置に出る場合も、演算子でなくクラスの言葉で言う。
 
 ## 未対応の構文と E0004
 
-E0004 (`NOT_YET_SUPPORTED`) は、まだ実装していない構文に使う。字句として予約した文字のリテラル、コマンドリテラル、型の別名の `type` の宣言、Kind の宣言の `: Unr`、row の型引数を持つ型の instance と `deriving` である。どの段階が出しても「まだ実装していない」という同じ意味なので、番号を分けない。HIR 以降の段階は、対応していない構文を、診断を出さずに無視することはしない。見つけた段階で E0004 を出して回復する。
+E0004 (`NOT_YET_SUPPORTED`) は、実装していない構文に使う。字句として予約した文字のリテラル、コマンドリテラル、型の別名の `type` の宣言、Kind の宣言の `: Unr`、row の型引数を持つ型の instance と `deriving` である。どの段階が出しても「実装していない」という同じ意味なので、番号を分けない。HIR 以降の段階は、対応していない構文を、診断を出さずに無視することはしない。見つけた段階で E0004 を出して回復する。
 
 - パーサは、これらの構文を CST まで組み、E0004 を出さない。意味を与える最初の段階が、未対応を判定する
-- 今 E0004 を出すのは HIR だけである。`type` の宣言、文字のリテラル (式とパターン)、コマンドリテラル、`: Unr`、row の型引数を持つ型の instance と `deriving` に出す
+- E0004 を出すのは HIR だけである。`type` の宣言、文字のリテラル (式とパターン)、コマンドリテラル、`: Unr`、row の型引数を持つ型の instance と `deriving` に出す
 - コマンドリテラルは、lexer が文字列と同じ形のトークンに分け ([字句](lexical.md) の「コマンドリテラル」)、HIR がリテラル全体に E0004 を1件出す。穴の中の式は lower しない
 - 型の位置の `[` と `{`、コンストラクタのない `{ … }` は、未対応の構文でなく、構文の誤り (E0011) である。リストの型は `List a` と書き、レコードは `data` で宣言する ([文法](grammar.md) の「文法上の補足」)
 
