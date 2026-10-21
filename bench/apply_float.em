@@ -1,6 +1,6 @@
--- 実行時に選んだ `Float -> Float` の関数の値を、ループの中で10万回 `apply` する (S14e-1 の基準)。
--- `apply_int` の `Float` の版で、`Float` の引数と結果の箱が `apply` を通る費用を見る。S14e の規約は、この箱を消す
--- (docs/implementation/benchmarks.md の「S14e-1」)
+-- 実行時に選んだ `Float -> Float` の関数の値を、ループの中で10万回 `apply` する。
+-- `apply_int` の `Float` の版で、`Float` の引数と結果の箱が `apply` を通る費用を見る。型から決める呼び出しの規約は、この箱を消す
+-- (docs/implementation/benchmarks.md の「基準のプログラム」)
 half : Float -> <Panic> Float
 half x = x * 0.5 + 1.0
 

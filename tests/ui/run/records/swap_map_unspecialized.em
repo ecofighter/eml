@@ -1,4 +1,4 @@
--- 引き換えの形 (docs/implementation/benchmarks.md の「S14e-2」)。データに
+-- 引き換えの形 (docs/implementation/benchmarks.md の「構造体の表現の引き換え」)。データに
 -- 通した `List.map` は特殊化されず、データに通した関数の値を型どおりに、組を構造体の葉の並びで呼ぶ。`map` は要素の
 -- 箱から組を取り出して渡し、戻った組を新しい箱に入れる。数は `crates/eml_vm/tests/bench.rs` の `trade_offs` が
 -- 固定する。

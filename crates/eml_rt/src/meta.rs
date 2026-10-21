@@ -176,7 +176,7 @@ impl Meta {
 
     /// 種類が破棄処理を持つ (`Foreign` である) か。箱を空けるたびに読むので、`Kind::from_bits` を通さずに種類のビットを
     /// 比べる。`from_bits` の腕を1つ増やしただけで、解放の多い計測の命令の数が数 % 増えたためである
-    /// (docs/implementation/benchmarks.md の「S9b-1 (文字列)」)。
+    /// (docs/implementation/benchmarks.md の「破棄処理の判定」)。
     #[inline]
     pub(crate) fn has_finalizer(self) -> (r: bool)
         ensures

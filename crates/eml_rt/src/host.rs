@@ -339,7 +339,7 @@ impl Drop for HostRef {
 /// Host の `Arc` を手放す。
 // 欄の後始末として `Arc<dyn Host>` を手放す処理が展開されると、`Ctx` を使うコードのコード生成単位の分け方が変わりうる。
 // その予防として展開させない (`Pages` の `control` の欄と同じ。docs/implementation/benchmarks.md の
-// 「S9b-2b (実行文脈)」)
+// 「`eml_rt` のインライン化」)
 #[inline(never)]
 fn release_host(host: Arc<dyn Host>) {
     let _ = host;
@@ -401,7 +401,7 @@ pub fn lock_stdin(stdin: &Mutex<Box<dyn BufRead + Send>>) -> StdinLock<'_> {
 
 /// 開いたファイル。
 pub struct Opened {
-    // S12 で行ごとに読む extern を足すときに、そのまま使えるよう `BufRead` で渡す
+    // 行ごとに読む extern (`Fs.read_line_raw`) も、そのまま使えるよう `BufRead` で渡す
     pub reader: Box<dyn BufRead + Send>,
     /// 読む前に分かる長さ。ふつうのファイルなら、メタデータの長さである。
     pub size: Option<u64>,

@@ -172,7 +172,7 @@ pub(crate) struct Pages {
     /// ページを取るときと返すときに、そのバイト数を数える先。
     // `Drop` がページを返した後で `release_control` に渡して手放す。欄の後始末として `Arc` を手放す処理が展開されると、
     // 計測のプログラムのコード生成単位の分け方が変わり、文字列の操作と `release` が呼ぶ側に展開されなくなったためである
-    // (`Heap` の `region` の欄と同じ。docs/implementation/benchmarks.md の「S9b-2a (凍結した領域)」)
+    // (`Heap` の `region` の欄と同じ。docs/implementation/benchmarks.md の「`eml_rt` のインライン化」)
     control: ManuallyDrop<Arc<Control>>,
     list: Vec<*mut PageHeader>,
     classes: [Class; 27],

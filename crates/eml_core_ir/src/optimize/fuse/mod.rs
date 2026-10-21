@@ -41,7 +41,7 @@ const MAX_INLINE_ROUNDS: usize = 8;
 /// 閉包への `apply` を k 個持ち込む関数が k の `MAX_INLINE_ROUNDS` 乗の大きさまで育つためである。予算は関数自身の
 /// コードだけで決まるので、名前が同じ関数のコードは変わらない (docs/spec/vm.md の「追記」)。決まった大きさでなく
 /// 倍率にしたのは、大きな関数が持つ `Iter` の段の連なりのどれもを融合するためで、下限を置いたのは、数文のラムダにも
-/// 展開した本体をいくつか入れるためである。8倍にした理由は docs/implementation/benchmarks.md の「S13e-3」にある。
+/// 展開した本体をいくつか入れるためである。8倍にした理由は docs/implementation/benchmarks.md の「`INLINE_LIMIT` と `GROWTH_FACTOR`」にある。
 const GROWTH_FACTOR: usize = 8;
 
 /// `fuse` に入った時点の関数の関係。

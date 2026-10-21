@@ -1,6 +1,6 @@
 //! `eml_rt` の extern の速いモードの計測 (docs/implementation/benchmarks.md)。`bench/rt.sh` が release ビルドで
 //! 走らせ、命令の数を測る。`rt_bench` と別のプログラムにするのは、今ある14の計測のコード生成単位の分け方を変えない
-//! ためである (benchmarks.md の「S9b-2b (実行文脈)」)。
+//! ためである (docs/implementation/benchmarks.md の「`eml_rt` のインライン化」)。
 
 use std::hint::black_box;
 use std::io::{self, Cursor};

@@ -1,4 +1,4 @@
--- State.run の中で Yield.fold に純粋なラムダを渡す。fold の節がその場で動き、yield しないことを固定する (S13d)
+-- State.run の中で Yield.fold に純粋なラムダを渡す。fold の節がその場で動き、yield しないことを固定する
 import Yield (Yield(..))
 import Std.State (State(..))
 

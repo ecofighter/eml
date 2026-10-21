@@ -1,6 +1,6 @@
--- spectral-norm (S14d の計測)。Benchmarks Game の行列 `A` の大きさを引数 (既定は 100) で受け、`v` に `Aᵀ A` を掛ける
+-- spectral-norm。Benchmarks Game の行列 `A` の大きさを引数 (既定は 100) で受け、`v` に `Aᵀ A` を掛ける
 -- ことを10回行って、スペクトルノルムを書く。ベクトルは `Array Float` で、要素の `Float` は箱に入る
--- (docs/implementation/benchmarks.md の「S14d」)。bench/numeric/spectral_norm.py は、同じ順で浮動小数の演算を行う
+-- (docs/implementation/benchmarks.md の「配列の `Float` の要素の箱」)。bench/numeric/spectral_norm.py は、同じ順で浮動小数の演算を行う
 -- Python の版である
 a : Int -> Int -> <Panic> Float
 a i j = 1.0 / Float.of_int ((i + j) * (i + j + 1) / 2 + i + 1)

@@ -60,7 +60,7 @@ pub enum IoOp {
     Run,
 }
 
-/// I/O の誤りの理由。文字列でなく値で分けるのは、S12 の `try_io` が eml の `IOError` の値に変えるためである。
+/// I/O の誤りの理由。文字列でなく値で分けるのは、`try_io` が eml の `IOError` の値に変えるためである。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum IoReason {
     NotFound,

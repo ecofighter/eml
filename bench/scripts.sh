@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# S12d のスクリプトと数値計算のプログラムを、release ビルドの `eml run` (VM の速いモード) と Python の版の両方で3回ずつ
+# スクリプトと数値計算のプログラムを、release ビルドの `eml run` (VM の速いモード) と Python の版の両方で3回ずつ
 # 走らせ、実時間と最大の常駐メモリの中央値を Markdown の表で出す (docs/implementation/benchmarks.md の「スクリプトの
 # 計測」)。行ごとの大きさは、eml の実時間が約 300 ms になるように決めてある。測る前に、両方の出力が一致することを
 # bench/scripts/compare.sh で確かめる。macOS の `/usr/bin/time -l` を使うので、macOS でだけ動く。
@@ -93,7 +93,7 @@ row() {
   echo "| $label | $size | $eml_seconds | $python_seconds | $ratio | $eml_mb | $python_mb |"
 }
 
-# S12d のスクリプト `$4` の行。入力は種類 `$2` の約 `$3` KiB で、引数 (`$5` 以降) に `@IN` があればそのパスとして渡し、
+# スクリプト `$4` の行。入力は種類 `$2` の約 `$3` KiB で、引数 (`$5` 以降) に `@IN` があればそのパスとして渡し、
 # なければ標準入力にする
 script_row() {
   local label="$1" kind="$2" kib="$3" name="$4"
@@ -128,9 +128,9 @@ echo "- OS: macOS $(sw_vers -productVersion) ($(sw_vers -buildVersion))"
 echo "- rustc: $(rustc -V)"
 echo "- Python: $(python3 -V)"
 echo "- コミット: $(git -C "$root" describe --always --dirty --abbrev=7)"
-echo "- 入力: S12d のスクリプトの入力は bench/scripts/gen.py が作る。大きさは表の「大きさ」の欄にある"
+echo "- 入力: スクリプトの入力は bench/scripts/gen.py が作る。大きさは表の「大きさ」の欄にある"
 echo
-echo "S12d のスクリプト"
+echo "スクリプト"
 echo
 header
 script_row '`wc`' log 9000 wc

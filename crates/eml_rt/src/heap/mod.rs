@@ -148,7 +148,7 @@ pub struct Heap<M: Mode> {
     /// 付けた凍結した塊。`core` の塊の権限の写しは、この `Arc` が生かす塊から写す。
     // `Heap` を落とすときは、後始末の後で `release_region` に渡して手放す。欄の後始末として `Arc` を手放す処理が展開
     // されると、計測のプログラムで文字列の操作と `release` が呼ぶ側に展開されなくなり、`append` の命令の数が2.5倍に
-    // なったためである (docs/implementation/benchmarks.md の「S9b-2a (凍結した領域)」)
+    // なったためである (docs/implementation/benchmarks.md の「`eml_rt` のインライン化」)
     region: ManuallyDrop<Option<Arc<Frozen<M>>>>,
     worker: u32,
     /// 検査モードの構築中の物体のブロックの番地。なければ 0 で、速いモードではいつも 0 である。
@@ -2253,7 +2253,7 @@ impl<M: Mode> Heap<M> {
         }
         let h = self.header_of(w);
         // `dup` と同じく、局所の数を減らすだけの道を呼ぶ側に展開する。一意な物体を空けることは VM でよく起きるので、
-        // 遅い道に入れず、ここから解放の連鎖を直に呼ぶ (docs/implementation/benchmarks.md の「S9a (`eml_rt` の核)」)
+        // 遅い道に入れず、ここから解放の連鎖を直に呼ぶ (docs/implementation/benchmarks.md の「`decref` が一意な物体を空ける道」)
         if !M::CHECKED {
             let n = self.core.rc_get(h);
             match rc::decref_step(n) {
@@ -3232,7 +3232,7 @@ impl<M: Mode> Heap<M> {
     /// `WrongOwner` を、rc が 0 以下で構築中でなければ `NotWritable` を返す。
     // 呼ぶ側は `M::CHECKED` の枝の中で呼ぶ。速いモードでも呼んで中ですぐ戻る形にすると、計測のプログラムで
     // `string_push`、`make_text`、`release` が呼ぶ側に展開されなくなり、`append` の命令の数が2.5倍になったためである
-    // (docs/implementation/benchmarks.md の「S9b-2a (凍結した領域)」)
+    // (docs/implementation/benchmarks.md の「`eml_rt` のインライン化」)
     #[inline]
     fn checked_unshared(&self, w: Word, h: *mut Header) -> (r: Result<(), HeapError>)
         requires
@@ -3378,7 +3378,7 @@ impl<M: Mode> Heap<M> {
     // 汎用の関数の実体は、使う側のバイナリの codegen unit の1つにしかできず、ほかの unit からは展開できない。
     // `#[inline]` で unit ごとに写しを作らせる。付けないと、`Ctx` を同じバイナリで使ったときに `map-reuse` と `append` の
     // 命令の数が倍ほどになった。`field`、`string_push`、`push_unchecked`、`release_unkept` と、`perform` の道で
-    // `Ctx` が呼ぶ `meta` と `scanned` も同じ理由で付ける (docs/implementation/benchmarks.md の「S9b-2b (実行文脈)」)
+    // `Ctx` が呼ぶ `meta` と `scanned` も同じ理由で付ける (docs/implementation/benchmarks.md の「`eml_rt` のインライン化」)
     #[inline]
     pub unsafe fn set_field(&mut self, w: Word, i: usize, v: Word) -> (r: Result<(), HeapError>)
         requires

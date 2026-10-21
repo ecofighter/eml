@@ -46,8 +46,8 @@ const PROGRAMS: [&str; 36] = [
     "upsert_by_hand",
 ];
 
-/// 自動の版と手で特殊化した `_by_hand` の版の組と、両方の出力。`state_loop` の組は S14c-2 の完了の条件で、状態を渡す形の
-/// 特殊化と、状態を手で渡す版を比べる (docs/implementation/benchmarks.md の「S14c-2」)。
+/// 自動の版と手で特殊化した `_by_hand` の版の組と、両方の出力。`state_loop` の組は、状態を渡す形の
+/// 特殊化と、状態を手で渡す版を比べる (docs/implementation/benchmarks.md の「回数のテスト」)。
 const PAIRS: [(&str, &str, &str); 6] = [
     ("orders", "orders_by_hand", "150308561\n"),
     ("push_fold", "push_fold_by_hand", "5000050000\n"),
@@ -453,11 +453,11 @@ fn iter_generate() {
     ");
 }
 
-/// S13e-3 の完了の条件 (docs/implementation/benchmarks.md の「S13e-3」)。`Iter.generate` を `Iter.fold` で引く形は、
+/// 融合の確かめ (docs/implementation/benchmarks.md の「回数のテスト」)。`Iter.generate` を `Iter.fold` で引く形は、
 /// 融合で1要素ごとの確保がなくなり、確保の数は入力の 10 万要素に比例しない。`Iter.filter` を重ねた形は、
 /// 残した要素ごとに4つを確保する。`filter` が要素を飛ばすループは再帰する複製になり、作った `Some ((x, Iter k))`
 /// を相手の分からない呼ぶ側へ返すためである。これをなくすには再帰する呼び出し先の継続についての特殊化が要り、後に回した
-/// (ユーザーが決めた)。ここでは、S13e-3 の前の 900008 の約4分の1に減ったことを固定する。
+/// (ユーザーが決めた)。ここでは、残した要素ごとの4つの確保の上限 (200,100) を固定する。
 #[test]
 fn iter_allocations_do_not_grow_with_the_input() {
     let generate = stats("iter_generate", "5000050000\n");
@@ -468,9 +468,8 @@ fn iter_allocations_do_not_grow_with_the_input() {
     }
 }
 
-/// S13e-2 の完了の条件は、特殊化した `Iter.generate` が1要素ごとに `k`、`Iter`、組、`Some` の4つを確保することだった。
-/// S13e-3 の融合の後は、`Iter.fold` で引く形は1要素ごとに何も確保せず、確保の数は直接のループ `sum_loop` と同じ
-/// になる。残りは結果を表示する分である (docs/implementation/benchmarks.md の「S13e-3」)。
+/// 融合の後は、`Iter.fold` で引く形は1要素ごとに何も確保せず、確保の数は直接のループ `sum_loop` と同じ
+/// になる。残りは結果を表示する分である (docs/implementation/benchmarks.md の「回数のテスト」)。
 #[test]
 fn iter_generate_allocates_as_much_as_the_direct_loop() {
     let generate = stats("iter_generate", "5000050000\n");
@@ -479,7 +478,7 @@ fn iter_generate_allocates_as_much_as_the_direct_loop() {
     assert_eq!(generate.yields, 0, "{generate:?}");
 }
 
-/// S13e-2 の完了の条件 (docs/implementation/benchmarks.md の「S13e-2」)。`Iter.generate` で引く形は yield せず、push の
+/// handler の特殊化の確かめ (docs/implementation/benchmarks.md の「回数のテスト」)。`Iter.generate` で引く形は yield せず、push の
 /// 形と状態の handler は evidence を引かない。
 #[test]
 fn handler_specialization_removes_yields_and_evidence() {
@@ -491,7 +490,7 @@ fn handler_specialization_removes_yields_and_evidence() {
     assert_eq!(fold.evidence_steps, 0, "{fold:?}");
     let pipeline = stats("iter_pipeline", "166671666700000\n");
     assert_eq!(pipeline.yields, 0, "{pipeline:?}");
-    // S14c-2 の完了の条件 (docs/implementation/benchmarks.md の「S14c-2」)。末尾でない `put` のループと、状態つきの
+    // 状態を渡す形への特殊化の確かめ (docs/implementation/benchmarks.md の「回数のテスト」)。末尾でない `put` のループと、状態つきの
     // handler を2つ重ねたループも、状態を渡す形に特殊化されて evidence を引かない
     let state_loop = stats("state_loop", "5000050000\n");
     assert_eq!(state_loop.evidence_steps, 0, "{state_loop:?}");
@@ -961,7 +960,7 @@ fn fannkuch_by_hand() {
     ");
 }
 
-/// S14c-3 の完了の条件 (docs/implementation/benchmarks.md の「S14c-3」)。`var` で書いた版と、`MutArray` を線形に
+/// `var` の確かめ (docs/implementation/benchmarks.md の「回数のテスト」)。`var` で書いた版と、`MutArray` を線形に
 /// 受け渡して手で書いた版の組と、両方の出力。
 const VAR_PAIRS: [(&str, &str, &str); 2] = [
     ("sieve_var", "sieve_by_hand", "2262\n"),
@@ -973,8 +972,8 @@ const VAR_PAIRS: [(&str, &str, &str); 2] = [
 ];
 
 /// `var` の版が手書きの版より多く確保する数。経路の関数の末尾でない呼び出しから2つ以上の値が戻る所のタプルは、
-/// S14e-2 で構造体になり、確保しなくなった。fannkuch-redux に残る 1 は、`main` が受ける 8 つの値の組で、6 語を
-/// 超えるので構造体にしない (docs/implementation/benchmarks.md の「S14e-2」)。
+/// 構造体になり、確保しなくなった。fannkuch-redux に残る 1 は、`main` が受ける 8 つの値の組で、6 語を
+/// 超えるので構造体にしない (docs/spec/core-ir.md の「構造体にする型」)。
 const RESIDUAL: [(&str, u64); 2] = [("sieve_var", 0), ("fannkuch_var", 1)];
 
 #[test]
@@ -997,7 +996,7 @@ fn var_matches_hand_written_work() {
     }
 }
 
-/// S13e-4 の完了の条件 (docs/implementation/benchmarks.md の「S13e-4」)。関数の中で手放して作り直す8つのプログラムで、
+/// reuse の確かめ (docs/implementation/benchmarks.md の「回数のテスト」)。関数の中で手放して作り直す8つのプログラムで、
 /// `con` が手放した箱を使い回す (docs/spec/lir.md の「reuse」)。
 #[test]
 fn rebuilding_programs_reuse_boxes() {
@@ -1027,8 +1026,8 @@ fn allocations_are_counted_in_checked_mode() {
     assert!(stats.allocations >= 100_000, "{stats:?}");
 }
 
-/// S13e-1 の完了の条件 (docs/implementation/benchmarks.md の「S13e-1」)。既知の閉包を渡す版と手で特殊化した版で、
-/// 確保と `box` / `unbox` の回数が同じになる。RC の回数は、本体を埋め込む S13e-3 で揃うので、下の
+/// 既知の閉包の確かめ (docs/implementation/benchmarks.md の「回数のテスト」)。既知の閉包を渡す版と手で特殊化した版で、
+/// 確保と `box` / `unbox` の回数が同じになる。RC の回数は、本体を埋め込む融合で揃うので、下の
 /// `specialization_matches_hand_written_rc` が比べる。
 #[test]
 fn specialization_matches_hand_written_work() {
@@ -1043,7 +1042,7 @@ fn specialization_matches_hand_written_work() {
     }
 }
 
-/// S13e-3 の完了の条件 (docs/implementation/benchmarks.md の「S13e-3」)。インライン化と融合の後は、自動の版と
+/// インライン化と融合の確かめ (docs/implementation/benchmarks.md の「回数のテスト」)。インライン化と融合の後は、自動の版と
 /// `_by_hand` の版の6つの組で、RC の回数も同じになる。
 #[test]
 fn specialization_matches_hand_written_rc() {
@@ -1058,7 +1057,7 @@ fn specialization_matches_hand_written_rc() {
     }
 }
 
-/// 巻き戻しの地点の総数。S14a が値に依存する実行時エラーを `Panic` に移すと、地点の数が動く。
+/// 巻き戻しの地点の総数。値に依存する実行時エラーを `Panic` に移すと、地点の数が動く。
 fn unwind_point_count(program: &eml_lir::Program) -> usize {
     eml_lir::unwind::points_all(program)
         .iter()
@@ -1129,10 +1128,10 @@ fn unwind_points() {
 
 /// `ep_float` の `conversions`。役割の境目の変換は、結果が一様な handle の本体が型どおりの関数を末尾で呼ぶ所などで
 /// 起きる。`ep_float` の境目はどれも直接の末尾呼び出しで、コード生成が静的な変換にする。`conversions` は `apply` が
-/// 実行時に変換した回数だけを数えるので 0 である (docs/implementation/benchmarks.md の「S14e-1」)。
+/// 実行時に変換した回数だけを数えるので 0 である (docs/spec/vm.md の「`RunStats`」)。
 const EP_FLOAT_CONVERSIONS: u64 = 0;
 
-/// S14e-1 の完了の条件 (docs/implementation/benchmarks.md の「S14e-1」)。特殊化しない
+/// 規約の確かめ (docs/implementation/benchmarks.md の「回数のテスト」)。特殊化しない
 /// handler を通る `ep_float` のほかは、`apply` が実行時に変換しない。EP の役割と一様な場所が合い、包む関数も型ごとの
 /// instance で型どおりに呼ばれることを示す。
 #[test]
@@ -1152,7 +1151,7 @@ fn typed_benches_do_not_convert() {
     }
 }
 
-/// 型から決める呼び出しの規約と構造体の表現の引き換え (docs/implementation/benchmarks.md の「S14e-1」)。特殊化されない `List.map` が、受けた `Float` をそのまま返す関数の値を型どおりに呼ぶので、
+/// 型から決める呼び出しの規約と構造体の表現の引き換え (docs/implementation/benchmarks.md の「呼び出しの規約の引き換え」と「構造体の表現の引き換え」)。特殊化されない `List.map` が、受けた `Float` をそのまま返す関数の値を型どおりに呼ぶので、
 /// 要素ごとに `Float` の箱が1つ増える。組を入れ替える関数の値を渡すと、要素の組を箱から取り出して渡し、戻った組を新しい
 /// 箱に入れる。その回数を固定して記録する。特殊化される組の入れ替えと、RC の葉を3つ持つ組を展開しない関数に通す形も
 /// 固定する。
@@ -1234,7 +1233,7 @@ fn trade_offs() {
     );
 }
 
-/// S14e-2 の完了の条件 (docs/implementation/benchmarks.md の「S14e-2」)。nbody を1回
+/// 構造体の確かめ (docs/implementation/benchmarks.md の「回数のテスト」)。nbody を1回
 /// 進めるごとの確保は、配列に書く `Vec3` の箱の 25 (速度に 20、位置に 5) である。計算の途中の `Vec3` と、状態を渡す形の
 /// 複製が返す `(MutArray, MutArray)` の組は確保しない。
 #[test]
@@ -1254,7 +1253,7 @@ fn nbody_allocates_25_per_step() {
     );
 }
 
-/// S14e-2 の完了の条件。mandelbrot の `Complex` は構造体なので、格子点ごとの確保も、まわすたびの reuse もない。確保は
+/// mandelbrot の `Complex` は構造体なので、格子点ごとの確保も、まわすたびの reuse もない。確保は
 /// 格子の大きさによらない定数だけである。
 #[test]
 fn mandelbrot_does_not_allocate_complex() {
@@ -1265,22 +1264,22 @@ fn mandelbrot_does_not_allocate_complex() {
     assert_eq!(small.allocations, large.allocations, "{small:?}\n{large:?}");
 }
 
-/// S14e-1 の後の spectral-norm の確保の数 (docs/implementation/benchmarks.md の「S14d」と「S14e-1」)。
-const SPECTRAL_NORM_S14E1_ALLOCATIONS: u64 = 4057;
+/// 組を構造体にしない場合の spectral-norm の確保の数 (docs/implementation/benchmarks.md の「配列の `Float` の要素の箱」)。
+const SPECTRAL_NORM_BOXED_TUPLE_ALLOCATIONS: u64 = 4057;
 
-/// S14e-2 の完了の条件。状態を渡す形の複製が返す組の 12 と、その中の `Float` の箱の 2 の、14 の確保が減る。配列の
+/// 状態を渡す形の複製が返す組の 12 と、その中の `Float` の箱の 2 の、14 の確保が減る。配列の
 /// `Float` の要素の箱は残る。
 #[test]
 fn spectral_norm_allocates_14_fewer() {
     let stats = stats("spectral_norm", "1.274219991\n");
     assert_eq!(
         stats.allocations,
-        SPECTRAL_NORM_S14E1_ALLOCATIONS - 14,
+        SPECTRAL_NORM_BOXED_TUPLE_ALLOCATIONS - 14,
         "{stats:?}"
     );
 }
 
-/// 組の要素を入れ替える特殊化された `map` (`records/swap_map_specialized.em`) の、構造体の表現の前 (コミット e6665e64)
+/// 組の要素を入れ替える特殊化された `map` (`records/swap_map_specialized.em`) の、構造体の表現の前
 /// の `allocations` と `reuses`。葉の単位の覗き穴と reuse で、構造体の後も同じ数になる
-/// (docs/implementation/benchmarks.md の「S14e-2」)。
+/// (docs/implementation/benchmarks.md の「構造体の表現の引き換え」)。
 const SWAP_MAP_BEFORE_STRUCTS: (u64, u64) = (32, 50);

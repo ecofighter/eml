@@ -374,7 +374,7 @@ impl<M: Mode> Heap<M> {
     /// なら箱を token にし、そうでなければ空ける。
     // 付けないと、文字列の操作を同じバイナリで使ったときに `release_reuse` の中へ展開されなくなり、一意な箱を token に
     // する道が `keep` を数える一般のループになって、`map-reuse` の命令の数が2倍を超えた
-    // (docs/implementation/benchmarks.md の「S9b-1 (文字列)」)
+    // (docs/implementation/benchmarks.md の「`eml_rt` のインライン化」)
     #[inline]
     pub(super) fn release_children(
         &mut self,

@@ -48,7 +48,7 @@ impl Control {
     /// 上限のない新しい `Control`。
     // `Heap::new` はモードごとに呼ぶ側の crate で写される。`Arc` を作る処理をその写しに含めると、計測のプログラムの
     // コード生成単位の分け方が変わり、速い道が呼ぶ側に展開されなくなったので、モードによらないこの関数に置く
-    // (docs/implementation/benchmarks.md の「S9b-2a (凍結した領域)」)
+    // (docs/implementation/benchmarks.md の「`eml_rt` のインライン化」)
     pub(crate) fn unbounded() -> Arc<Control> {
         Arc::new(Control::new(Limits::default()))
     }
@@ -59,7 +59,7 @@ impl Control {
 }
 
 } // verus!
-// S10 の VM も、安全点で止めたときにこの文言を出す
+// VM も、安全点で止めたときにこの文言を出す
 impl fmt::Display for Stop {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(match self {

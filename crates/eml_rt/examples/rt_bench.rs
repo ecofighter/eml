@@ -1,5 +1,5 @@
 //! `eml_rt` の速いモードの計測 (docs/implementation/benchmarks.md)。`bench/rt.sh` が release ビルドで走らせ、命令の数を
-//! 測る。reuse analysis はまだないので、reuse の列は手で組む。reuse の効果の見込みを、パスを作る前に数字で持つためである。
+//! 測る。reuse の列は手で組む。VM の reuse の命令の速い道と同じ基本操作を、`eml_rt` だけで測るためである。
 
 use std::hint::black_box;
 use std::io;

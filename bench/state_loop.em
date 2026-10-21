@@ -1,4 +1,4 @@
--- 末尾でない `put` を `Std.State` の handler の下で回すループ (S14c-2)。`bump` の呼び出しは末尾でない
+-- 末尾でない `put` を `Std.State` の handler の下で回すループ。`bump` の呼び出しは末尾でない
 import Std.State (State(..))
 
 bump : Int -> <State Int, Panic> Unit

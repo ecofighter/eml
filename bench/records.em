@@ -1,5 +1,5 @@
--- 4つのフィールドのレコードを `{ st | … }` で更新し続ける。古いレコードは一意なので、更新で作るレコードはその箱を
--- 使い回す (docs/spec/lir.md の「reuse」)。Perceus は `decref st` を出すので、`decref` を reuse の元にする規則が効く。
+-- 4つのフィールドのレコードを `{ st | … }` で更新し続ける。4つの `Int` のフィールドなので構造体の値の更新であり、確保しない
+-- (docs/spec/core-ir.md の「構造体にする型」)。
 data Stats =
   | Stats { count : Int, total : Int, max : Int, last : Int }
 

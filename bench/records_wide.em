@@ -1,6 +1,6 @@
--- `records.em` を7つの `Int` のフィールドのレコードにした版 (S14e-1 の基準)。S14e の構造体の表現は、フィールドが少ない
--- 値だけを対象にするので、このレコードは構造体にならず、これまでどおり箱で更新し続ける。`reuses` が 0 より大きいことで、
--- 構造体にしない値の reuse が残ることを確かめる (docs/implementation/benchmarks.md の「S14e-1」)
+-- `records.em` を7つの `Int` のフィールドのレコードにした版。構造体の表現は、フィールドが少ない
+-- 値だけを対象にするので、このレコードは構造体にならず、箱で更新し続ける。`reuses` が 0 より大きいことで、
+-- 構造体にしない値の reuse が残ることを確かめる (docs/implementation/benchmarks.md の「基準のプログラム」)
 data Stats =
   | Stats { count : Int, total : Int, max : Int, last : Int, sum_sq : Int, odd : Int, prev : Int }
 
