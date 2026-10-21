@@ -1,6 +1,6 @@
 -- 関数の値をリストに入れ、多相再帰の `compose_at` が一様 (`_`) な instance の中で取り出して呼ぶ。データに入った
 -- 関数の値は静的には包めないので、型どおりの Repr のラムダを一様な場所から呼ぶ `apply` が実行時に変換する
--- (docs/superpowers/specs/2026-10-21-s14e-abi-struct-design.md の「`apply` の ABI」)。
+-- (docs/spec/lir.md の「`apply` の場所」)。
 compose_at : Int -> List (a -> <Panic> a) -> a -> <Panic> a
 compose_at n fs x =
   if n == 0 then List.fold (fn acc f -> f acc) x fs

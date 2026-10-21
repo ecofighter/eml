@@ -1,6 +1,6 @@
 -- 構造体の値を一様な位置に置く。リストの要素の `(Int, Float)`、配列の要素の `Vec3`、`Option` の中の `Vec3` は、
 -- どれも `con` と同じ形の箱に入り、取り出すと構造体に戻る
--- (docs/superpowers/specs/2026-10-21-s14e-abi-struct-design.md の「箱に入れる位置」)。
+-- (docs/spec/lir.md の「構造体の形」)。
 data Vec3 =
   | Vec3 Float Float Float
 

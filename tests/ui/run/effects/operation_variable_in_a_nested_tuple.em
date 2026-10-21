@@ -1,5 +1,5 @@
 -- 操作の型変数 (`OpVar`) が入れ子のタプルや data の中にある引数を、節で分解する。節の中の型は、入れ子の型変数の
--- ために構造体にしない (docs/superpowers/specs/2026-10-21-s14e-abi-struct-design.md の「構造体にする型」)
+-- ために構造体にしない (docs/spec/core-ir.md の「構造体にする型」)
 data Pair a b = | Pair a b
 
 effect Put where

@@ -1,6 +1,6 @@
 -- `Float` を捕まえた閉包を部分適用し、データに通してから残りの引数で呼ぶ。捕まえた `Float` と部分適用の `Float` は
 -- 箱に入れず、呼ばれる関数の引数の Repr で閉包に持つ。`over` は引数を1つ取る関数の値に2つの引数を渡すので、余った
--- 引数を預けてから、返った閉包に渡す (docs/superpowers/specs/2026-10-21-s14e-abi-struct-design.md の「VM」)。
+-- 引数を預けてから、返った閉包に渡す (docs/spec/vm.md の「呼び出しと戻り」)。
 data Box a = | Box a
 
 hide : Int -> a -> <Panic> Box a

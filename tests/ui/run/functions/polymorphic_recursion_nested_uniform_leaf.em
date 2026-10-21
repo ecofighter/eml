@@ -1,6 +1,6 @@
 -- 一様な位置の型変数が入れ子のタプルや data の中にある型は、外側も構造体にしない。呼ぶ側の `(Int, (Float, Int))` と
 -- `walk@[_]` の `(Int, (_, Int))` で形が違ってしまうためである
--- (docs/superpowers/specs/2026-10-21-s14e-abi-struct-design.md の「構造体にする型」)
+-- (docs/spec/core-ir.md の「構造体にする型」)
 data Pair a b = | Pair a b
 
 walk : Int -> (Int, (a, Int)) -> <Panic> Int

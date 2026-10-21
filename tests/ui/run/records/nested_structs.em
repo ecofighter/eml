@@ -1,6 +1,6 @@
 -- 構造体のフィールドが構造体である型。`Particle` は `Vec2` を2つと `Int` を持つ 5 語の構造体で、開くと葉が深さ優先に
 -- 並ぶ。入れ子のタプル `(Vec2, (Int, Vec2))` も同じである
--- (docs/superpowers/specs/2026-10-21-s14e-abi-struct-design.md の「構造体の Repr」)。
+-- (docs/spec/lir.md の「構造体の形」)。
 data Vec2 =
   | Vec2 Float Float
 

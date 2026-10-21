@@ -1,6 +1,6 @@
 -- 多相再帰の `keep_first` は一様 (`_`) な instance で動き、その中で作ったラムダは引数と結果を `tobj` で持つ。`main`
 -- はそのラムダを `Int -> Int` や `Float -> Float` として型どおりの Repr で呼ぶので、`apply` が実行時に変換する
--- (docs/superpowers/specs/2026-10-21-s14e-abi-struct-design.md の「`apply` の ABI」)。
+-- (docs/spec/lir.md の「`apply` の場所」)。
 keep_first : Int -> a -> <Panic> (a -> <Panic> a)
 keep_first n x =
   if n == 0 then fn y -> if n == 0 then x else y

@@ -1,6 +1,6 @@
 -- 構造体を返す関数の中の戻らない呼び出し (`panic` と `fail`)。戻らない呼び出しが構造体を束縛しても、葉はダミーの値で
 -- 定義され、実行は届かない。`try_panic` と `Fail.to_result` が中断を受ける
--- (docs/superpowers/specs/2026-10-21-s14e-abi-struct-design.md の「LIR」の開くパス)。
+-- (docs/spec/lir.md の「開く」)。
 import Fail (Fail(..))
 
 data Vec2 =

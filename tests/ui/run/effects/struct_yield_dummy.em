@@ -1,6 +1,6 @@
 -- 特殊化しない handler の下で、構造体を返す呼び出しの途中で yield する。`point` は `ask` で中断し、yield の確認の後の
 -- 遅い道は、構造体の結果の代わりにダミーを返す。呼ぶ側はダミーを受けても葉を使わずに中断を続け、再開した後で本当の
--- 値を受ける (docs/superpowers/specs/2026-10-21-s14e-abi-struct-design.md の「ダミーの約束を広げる」)。`point` は
+-- 値を受ける (docs/spec/lir.md の「ダミーの値」)。`point` は
 -- 展開されないように再帰させる。
 effect Ask where
   ask : Int -> Int

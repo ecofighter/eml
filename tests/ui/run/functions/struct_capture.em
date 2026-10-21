@@ -1,6 +1,6 @@
 -- 構造体を捕まえる閉包。捕獲の位置は型どおりなので、`Vec2` は葉のまま閉包に入る。閉包をリストに入れて後で呼ぶ形と、
 -- 構造体を受ける関数の部分適用の形と、構造体を入れ子に持つ組を捕まえる形を通す
--- (docs/superpowers/specs/2026-10-21-s14e-abi-struct-design.md の「Core IR」の EP)。
+-- (docs/spec/lir.md の「関数の ABI」)。
 data Vec2 =
   | Vec2 Float Float
 

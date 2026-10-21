@@ -1,7 +1,7 @@
 -- `File` の葉を持つ構造体を一様な位置 (`_`) に通して戻す。`pass` の多相再帰は `pass@[_]` で、直接の呼び出しでは
 -- box の挿入が構造体を箱に入れ、関数の値の `apply` では VM の実行時の変換が箱に入れる。戻ると構造体に戻る。変換が
 -- 作る箱は `lin` のビットを持たないが、`File` はそれぞれちょうど1回閉じ、検査モードでリークもない
--- (docs/superpowers/specs/2026-10-21-s14e-abi-struct-design.md の「箱に入れる位置」)。
+-- (docs/spec/lir.md の「構造体の形」)。
 data Box a = | Box a
 
 pass : Int -> a -> <Panic> a

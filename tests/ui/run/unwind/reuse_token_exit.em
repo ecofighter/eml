@@ -1,6 +1,6 @@
 -- レコードを分解して手放した後、作り直す前に、埋め込まれない (自分を呼ぶ) 関数が `exit` で中断する。生きている
 -- token は巻き戻しで手放す。
--- フィールドを7つにして、Stats を構造体にせず箱のままにする (docs/superpowers/specs/2026-10-21-s14e-abi-struct-design.md の「構造体にする型」)。
+-- フィールドを7つにして、Stats を構造体にせず箱のままにする (docs/spec/core-ir.md の「構造体にする型」)。
 -- 残りの5つは使わない
 data Stats =
   | Stats { count : Int, total : Int, a : Int, b : Int, c : Int, d : Int, e : Int }

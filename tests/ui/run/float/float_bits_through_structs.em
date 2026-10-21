@@ -2,7 +2,7 @@
 -- `unbox` (`pass@[_]` を関数の値で呼ぶ)、閉包の生の捕獲、構造体の葉、複数の値の戻り (`swap` が返す `Vec2`) である。
 -- `compare` は全順序で、`-0.0` を `0.0` より小さいとする。NaN のペイロードを見せる eml の関数はないので、確かめるのは
 -- `-0.0` と NaN の符号 (`compare` の結果) と、NaN であることだけである
--- (docs/superpowers/specs/2026-10-21-s14e-abi-struct-design.md の「VM」)。
+-- (docs/spec/vm.md の「呼び出しと戻り」)。
 data Vec2 =
   | Vec2 Float Float
 
