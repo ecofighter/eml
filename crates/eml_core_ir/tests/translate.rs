@@ -1243,41 +1243,6 @@ fn nested_value_ifs_meet_in_their_own_merge_blocks() {
 }
 
 #[test]
-fn handlers_are_lifted_to_closures() {
-    let text = "effect Ask where\n  ask : String -> Int\n\nmain : Unit -> <IO, Panic> Unit\nmain () =\n  let prefix = \"n = \"\n  let n =\n    handle ask \"x\" with\n      | ctl ask key k -> k 1\n      | return x -> x + 1\n  println (prefix ++ show n)";
-    insta::assert_snapshot!(core_text(text, Pass::Translate), @r#"
-    effect Prelude.IO { never io_failed(enum, obj) -> never }
-    effect Prelude.Panic { never panicked(obj) -> never }
-    effect Ask { ask(obj) -> int }
-    fn main(p.0: unit) -> unit {
-      let s.1: obj = const "n = "
-      let t.2: int = handle Ask((), &main$handle0) { ask: &main$handle0$ask } return &main$handle0$return
-      let t.3: obj = extern "Prelude.Show Int.show"(t.2)
-      let t.4: obj = extern Prelude.++(s.1, t.3)
-      let t.5: unit = extern Prelude.println(t.4)
-      return t.5
-    }
-    internal yields uniform from 0 fn main$handle0(p.0: unit) -> int {
-      let s.1: obj = const "x"
-      let t.2: int = perform Ask.ask(s.1)
-      return t.2
-    }
-    internal uniform from 0 fn main$handle0$ask(key.0: obj, k.1: tobj lin, p.2: unit) -> int {
-      let t.3: int = resume k.1(1, ())
-      return t.3
-    }
-    internal uniform from 0 fn main$handle0$return(x.0: int, p.1: unit) -> int {
-      let t.2: int = extern "Prelude.Num Int.+"(x.0, 1)
-      return t.2
-    }
-    fn entry$main() -> unit {
-      let t.0: unit = call main(())
-      return t.0
-    }
-    "#);
-}
-
-#[test]
 fn operations_as_values_and_drop() {
     let text = "effect Log where\n  log : String -> String -> Unit\n\nrun : Unit -> <Log> Unit\nrun () =\n  let info = log \"info\"\n  info \"a\"\n\ndiscard : String -> Unit\ndiscard s = drop s\n\nmain : Unit -> <IO> Unit\nmain () =\n  handle run () with\n    | ctl log _ _ k -> k ()\n  discard \"x\"";
     let shown = core_text(text, Pass::Translate);

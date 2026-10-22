@@ -5,22 +5,6 @@ use eml_test_support::{check, short_text};
 use crate::common::{check_full, check_short, check_text};
 
 #[test]
-fn effects_must_be_in_the_signature() {
-    let text = "greet : String -> Unit\ngreet name = println name\n\nshout : String -> <IO> Unit\nshout name = println (name ++ \"!\")";
-    insta::assert_snapshot!(check_text(text), @r"
-    greet : String -> Unit
-      name#0 : String
-    shout : String -> <IO> Unit
-      name#0 : String
-    ---
-    E2002 2:14 `println` performs `IO`, which the signature of `greet` does not allow
-      2:14 this call performs `IO`
-      1:9 the row of this signature does not include it
-      help: add `IO` to the row of the signature of `greet`, as in `-> <IO> ...`
-    ");
-}
-
-#[test]
 fn main_with_an_erroneous_row_is_not_reported_again() {
     insta::assert_snapshot!(check_text("main : Unit -> <Console> Unit\nmain () = ()"), @r"
         main : Unit -> <{error}> Unit

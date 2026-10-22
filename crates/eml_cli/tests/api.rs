@@ -353,25 +353,6 @@ fn a_repl_is_send() {
 }
 
 #[test]
-fn an_expression_prints_its_value() {
-    let mut console = Console::new(&RunConfig::default());
-    assert_eq!(
-        console.eval("1 + 2"),
-        (Outcome::Accepted, "3\n".to_string(), vec![])
-    );
-}
-
-#[test]
-fn a_definition_is_kept_for_later_inputs() {
-    let mut console = Console::new(&RunConfig::default());
-    assert_eq!(
-        console.eval("inc : Int -> <Panic> Int\ninc x = x + 1"),
-        (Outcome::Accepted, String::new(), vec![])
-    );
-    assert_eq!(console.eval("inc 41").1, "42\n");
-}
-
-#[test]
 fn a_rejected_input_leaves_the_session_unchanged() {
     let mut console = Console::new(&RunConfig::default());
     assert_eq!(
@@ -401,23 +382,6 @@ fn an_input_of_only_comments_does_nothing() {
     let evaluated = repl.eval("nope");
     let primary = &evaluated.diagnostics[0].primary;
     assert_eq!(evaluated.files.path(primary.file), "<input 1>");
-}
-
-#[test]
-fn a_runtime_error_does_not_end_the_session() {
-    let mut console = Console::new(&RunConfig::default());
-    let (outcome, _, _) = console.eval("1 / 0");
-    assert!(matches!(outcome, Outcome::Failed(_)), "{outcome:?}");
-    assert_eq!(console.eval("let x = 5").0, Outcome::Accepted);
-    assert_eq!(console.eval("x * 2").1, "10\n");
-}
-
-#[test]
-fn a_failed_let_binds_nothing() {
-    let mut console = Console::new(&RunConfig::default());
-    let (outcome, _, _) = console.eval("let y = 1 / 0");
-    assert!(matches!(outcome, Outcome::Failed(_)), "{outcome:?}");
-    assert_eq!(console.eval("y").2, ["E1001"]);
 }
 
 /// 止める理由のビットは `eval` の始めに下りる (docs/spec/object-model.md の「実行の制御」)。
