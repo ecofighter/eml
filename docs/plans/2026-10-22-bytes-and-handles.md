@@ -657,6 +657,7 @@ pub class Bits a where
 - 作業 (roadmap の「進め方」の順):
   1. docs/spec を仕上げ、段の名前と「今は〜、後で〜」の予告が残っていないことを確かめる
      - 使われなくなった `eml_rt::externs::TUPLE` (T-22 で組を作る extern がなくなった) を消し、OM の「`alloc_data` に合わせて `u16` の定数として `externs` に置く」の文と、testing.md の「組のタグ `TUPLE` が 0 であること」を消す。テストの変更 (承認済み): 種類 1 として `crates/eml_vm/tests/tags.rs` の `TUPLE` の assert を消す
+     - docs/implementation/testing.md の `crates/eml_vm/tests/scaling.rs` の段落に、この段で足した `Bytes` とハンドルの規模のテスト (`Bytes` の push と読み、`Show Bytes`、`Bytes` の行のループと切り詰め、`Stdin` の行のループ、`Stdout` の書き込みのループ) が何を比べるかを足す
   2. `bench/scripts.sh` を流し、範囲を外れた行があれば大きさを変えて別のコミット (`Resize bench rows`) にする。`bench/run.sh`、`bench/rt.sh`、`bench/scripts.sh` をコードの最後のコミットの作業ツリーで流し、「今の数値」の表 (「C/Rust との比」を含む) を入れ替える。この段が変えた規則に依る所見 (「1バイトずつ回すループ」、「`Fs.read_all` の読み方」、「出力のバッファと Host の呼び出し」、「ネイティブ化の見込み」) を測り直して直すか消す
   3. docs/implementation/status.md: `Byte`、`Bits`、`Bytes`、ハンドルを実装済みに入れ、「まだないもの」から「バイト列と標準入出力のハンドル」を消す
   4. docs/implementation/architecture.md を、crate かパスの構成が変わった所だけ直す
