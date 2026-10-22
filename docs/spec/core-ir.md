@@ -72,7 +72,7 @@
 
 - 構造体の型の `con` は `struct(S)` の変数を束縛する。引数は形のフィールドの Repr と比べる正確な位置で、配置の宣言した Repr とは比べない
 - 構造体の値を分けるのは、いつも `unpack` である。束縛するフィールドの Repr と印は、形のものになる。構造体の変数はタグの `switch` の scrutinee にならない
-- `with_arg` の extern (`Std.Fs` の5つの読み、`Std.MutArray.read`、`length`) が作る組も、条件を満たせば構造体になる (下の「組を返す extern」)
+- `with_arg` の extern (`Std.Fs` と `Std.Stdin` のそれぞれ5つの読み、`Std.MutArray.read`、`length`) が作る組も、条件を満たせば構造体になる (下の「組を返す extern」)
 - 入口の関数 `entry$<名前>` の `ret` は値1つにする。入口の値の型が構造体なら `ret` を `obj` にし、box の挿入が箱に入れる。VM の `Finish` は値を1つだけ受けるためである ([VM](vm.md) の「誤り、止めること、終わり」)
 - 型から決める構造体 (`StructTypes`) と、型を持たない組 (`with_arg` の組と、`optimize` の状態を渡す形の複製が返す組) は、同じ語の数と `unit` の条件 (`MAX_STRUCT_WORDS`) で決める。型を持たない組の形は `tuple_struct` が作る
 
@@ -173,6 +173,15 @@ Perceus は、`unr` でない変数に `decref` を置く所がある。V1 と�
   | `Std.Fs.read_all_bytes`、`read_line_bytes_raw` | `Lin` | `Unr` (`Bytes`) |
   | `Std.Fs.read_chunk` | `Unr`、`Lin` | `Unr` (`Bytes`) |
   | `Std.Fs.close` | `Lin` | `Unr` |
+  | `Std.Stdin.open` | `Unr` | `Lin` (`Stdin`) |
+  | `Std.Stdin.read_all`、`read_line_raw` | `Lin` | `Unr` (`String`) |
+  | `Std.Stdin.read_all_bytes`、`read_line_bytes_raw` | `Lin` | `Unr` (`Bytes`) |
+  | `Std.Stdin.read_chunk` | `Unr`、`Lin` | `Unr` (`Bytes`) |
+  | `Std.Stdin.close` | `Lin` | `Unr` |
+  | `Std.Stdout.open`、`Std.Stderr.open` | `Unr` | `Lin` (`Stdout`、`Stderr`) |
+  | `Std.Stdout` と `Std.Stderr` の `write`、`write_string`、`write_line` | `Unr`、`Lin` | `Lin` (同じハンドル) |
+  | `Std.Stdout.flush` | `Lin` | `Lin` |
+  | `Std.Stdout.close`、`Std.Stderr.close` | `Lin` | `Unr` |
   | `Std.Array.thaw` | `Unr` | `Lin` (`MutArray a`) |
   | `Std.MutArray.make` | `Unr`、`Unr` | `Lin` |
   | `Std.MutArray.empty` | `Unr` | `Lin` |
@@ -182,7 +191,7 @@ Perceus は、`unr` でない変数に `decref` を置く所がある。V1 と�
   | `Std.MutArray.freeze` | `Lin` | `Unr` (`Array a`) |
   | ほかのすべての行 | すべて `Unr` | `Unr` |
 
-  `with_arg` の行 (`Std.Fs` の5つの読み、`Std.MutArray.length`、`read`) の結果の列は、組の最初の要素の Kind である (下の「組を返す extern」)。`std/` のシグネチャとの結び付けは、Repr と同じテスト (`crates/eml_core_ir/tests/externs.rs`) で、`TypeStore::linearity_or_poly` を使って確かめる。型変数に依存する宣言の型 (`Array a`、`a`) は `Poly` と読めるが、型変数は `Unr` に固定されているので、`Unr` の行と合うものとして比べる。`MutArray a` は型変数によらず `Lin` と読める。戻らない extern の結果は、テストも行と比べない ([LIR](lir.md) の「戻らない extern」)
+  `with_arg` の行 (`Std.Fs` と `Std.Stdin` のそれぞれ5つの読み、`Std.MutArray.length`、`read`) の結果の列は、組の最初の要素の Kind である (下の「組を返す extern」)。`std/` のシグネチャとの結び付けは、Repr と同じテスト (`crates/eml_core_ir/tests/externs.rs`) で、`TypeStore::linearity_or_poly` を使って確かめる。型変数に依存する宣言の型 (`Array a`、`a`) は `Poly` と読めるが、型変数は `Unr` に固定されているので、`Unr` の行と合うものとして比べる。`MutArray a` は型変数によらず `Lin` と読める。戻らない extern の結果は、テストも行と比べない ([LIR](lir.md) の「戻らない extern」)
 - 基本操作の表の印の列は [LIR](lir.md) の「基本操作」にある。EP が自分の変数に付ける印と同じなので、`prim` の V2 が EP 自身を確かめる
 - 操作の表 (`OperationInfo`) は、Repr の `params` と `ret` と並べて、引数と戻り値の印の列 (`param_marks`、`ret_mark`) を持つ。操作の宣言の型を、相対的な型も読める読み方で読み、`Rigid` と `Var` に依存する値を `poly` にする。呼ぶ側から節へ渡る位置の矢印は宣言で `Unr` に固定されている ([エフェクトと handler](effects.md) の「handler の意味」) ので `unr` になる。V2 は `clause` の呼び出しと、`clause` の印の付いた関数の引数と戻り値を、この列と比べる。テキストの形では、効果の宣言が列を書く ([テスト戦略](../implementation/testing.md) の「LIR のテキストの形」)
 
@@ -198,7 +207,8 @@ Perceus は、`unr` でない変数に `decref` を置く所がある。V1 と�
 ### 組を返す extern
 
 - `Std.MutArray.length` と `read` は、宣言の型では結果と配列の組を返す (`MutArray a -> Int -> <Panic> (a, MutArray a)`)。extern は借りない引数を消費するので、組を作る extern にすると、読むたびに組を確保する。そこで行は配列を借り (`FunctionRow::borrowed`)、要素だけを返し、`with_arg: Some(0)` を持つ ([LIR](lir.md) の「extern の借用」)
-- `Std.Fs` の読み (`read_all`、`read_line_raw`、`read_all_bytes`、`read_line_bytes_raw`、`read_chunk`) も同じ形である。宣言の型は読んだ結果と `File` の組を返し (`File -> <IO> (String, File)`)、行は `File` を借りて結果だけを返す。`with_arg` は `File` の位置で、`read_chunk : Bytes -> File -> <IO> (Bytes, File)` だけは `Some(1)`、ほかは `Some(0)` である
+- `Std.Fs` と `Std.Stdin` の読み (`read_all`、`read_line_raw`、`read_all_bytes`、`read_line_bytes_raw`、`read_chunk`) も同じ形である。宣言の型は読んだ結果とハンドル (`File` か `Stdin`) の組を返し (`File -> <IO> (String, File)`)、行はハンドルを借りて結果だけを返す。`with_arg` はハンドルの位置で、`read_chunk : Bytes -> File -> <IO> (Bytes, File)` (`Stdin` も同じ形) だけは `Some(1)`、ほかは `Some(0)` である
+- `Std.Stdout` と `Std.Stderr` の書き込み (`write`、`write_string`、`write_line`) は、書くデータを借り、ハンドルを消費して同じハンドルを返す。結果がハンドルそのものなので、組を返さず、`with_arg` を持たない
 - translate は、`with_arg: Some(k)` の行の引数のそろった呼び出しを、行の結果を束縛する `extern` 命令と、その結果と引数 k を組にする `con` にする。`let t.1: int = extern Std.MutArray.read(m.0, 0)` と `let d.2: (,){int, obj lin} lin = con (,) #0(t.1, m.0)` の形である。組が構造体にならない型なら、`d.2` は `obj` である。extern は m.0 を借りるだけなので、m.0 を消費するのは `con` だけである。`$externN` も同じ形の本体を持つ。どちらも同じ関数 (`ProgramBuilder::extern_call`) が作る
 - 組を受けてすぐ開く所 (`let (v, m) = MutArray.read m i`) では、最適化の既知のコンストラクタ (下の「既知のコンストラクタ」) で組が消え、確保が残らない。組が構造体なら、既知のコンストラクタに頼らなくても確保がない
 

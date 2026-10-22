@@ -239,7 +239,7 @@ fn every_extern_function_row_has_the_reprs_of_its_std_signature() {
 /// `Std.Stdin` のそれぞれ5つの読みの行だけである。`Std.Stdout` と `Std.Stderr` の書き込みの行は、データを借りて
 /// ハンドルを返すので、組を返さない。
 #[test]
-fn only_the_array_readers_borrow() {
+fn only_the_listed_rows_borrow_or_return_a_pair() {
     for &e in Extern::ALL {
         let row = e.row();
         let expected: (&[bool], Option<usize>) = match row.name {
@@ -380,7 +380,7 @@ fn kind_of(lin: Lin) -> Linearity {
 /// 表の値そのもの。`Fs` の7つ、`Stdin` の7つ、`Stdout` の6つ、`Stderr` の5つと `MutArray` を扱う7つ以外は、引数も
 /// 結果も `Unr` である。
 #[test]
-fn only_the_file_functions_carry_a_lin() {
+fn only_the_handle_and_mutable_array_rows_carry_a_lin() {
     use Linearity::{Lin, Unr};
     for &e in Extern::ALL {
         let row = e.row();
