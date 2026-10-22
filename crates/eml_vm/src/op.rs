@@ -339,6 +339,17 @@ pub enum Op {
         dst: Slot,
         s: Slot,
     },
+    /// `Std.Bytes.get` と `Prelude.bytes_get`。バイト列 `b` は借りたまま、位置 `i` のバイトを生の語で `dst` に置く。
+    BytesGet {
+        dst: Slot,
+        i: Slot,
+        b: Slot,
+    },
+    /// `Std.Bytes.length` と `Prelude.bytes_length`。バイト列 `b` は借りたまま。
+    BytesLength {
+        dst: Slot,
+        b: Slot,
+    },
     /// `Std.Array.set` と `Std.MutArray.write`。`operands[at..]` は [配列, 添字, 値]。配列と値を消費する。
     ArraySet {
         dst: Slot,

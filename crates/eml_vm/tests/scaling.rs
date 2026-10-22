@@ -186,6 +186,31 @@ fn reading_bytes_does_not_dup_per_byte() {
     assert_eq!(increments(1000), increments(2000));
 }
 
+/// `Bytes` を n 個作って `show` するプログラム。
+fn shown_bytes(n: usize) -> String {
+    format!(
+        "grow : Int -> Bytes -> <Panic> Bytes\n\
+         grow n acc = if n == 0 then acc else grow (n - 1) (Bytes.push 7u8 acc)\n\
+         \n\
+         main : Unit -> <IO, Panic> Unit\n\
+         main () = println (show (grow {n} (Bytes.empty ())))\n"
+    )
+}
+
+#[test]
+fn showing_bytes_does_not_dup_per_element_and_uses_the_dedicated_instructions() {
+    // `Show Bytes` の読み出しは借りるので、要素ごとの `dup` は要らず、`rc_increments` は長さによらない。読み出しは
+    // 汎用の extern ではなく専用の命令で動く (docs/spec/vm.md の「基本操作と extern」)
+    let expected = |n: usize| format!("Bytes [{}]\n", vec!["7"; n].join(", "));
+    let increments = |n: usize| stats(&shown_bytes(n), &expected(n)).rc_increments;
+    assert_eq!(increments(1000), increments(2000));
+
+    let code = disassembly(&shown_bytes(3));
+    assert!(code.contains("bytes_get s"), "{code}");
+    assert!(code.contains("bytes_length s"), "{code}");
+    assert!(!code.contains("= Prelude.bytes_"), "{code}");
+}
+
 /// handler の下の非末尾の再帰。深さごとに1回 `ask` するので、`count n` は n 回 `ask` する。evidence は `evv` の
 /// 先頭から探すので、1回の `ask` がたどる節点の数は今有効な handler の数で決まり、深さによらない
 /// (docs/spec/lir.md の「evidence を探す」)。

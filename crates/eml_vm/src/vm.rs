@@ -409,6 +409,14 @@ fn step<M: Mode>(
             let n = unsafe { ctx.string_byte_length(task.get(s)) }?;
             task.set_raw(dst, n);
         }
+        Op::BytesGet { dst, i, b } => {
+            let x = unsafe { ctx.bytes_get(task.raw(i), task.get(b)) }?;
+            task.set_raw(dst, x);
+        }
+        Op::BytesLength { dst, b } => {
+            let n = unsafe { ctx.bytes_length(task.get(b)) }?;
+            task.set_raw(dst, n);
+        }
         Op::ArraySet { dst, at } => {
             let o = &code.operands[at as usize..];
             let (a, i, x) = (
@@ -776,9 +784,12 @@ fn step_failed<M: Mode>(
         | Op::IntNeg { dst, .. }
         | Op::ArrayGet { dst, .. }
         | Op::StrByteAt { dst, .. }
+        | Op::BytesGet { dst, .. }
         | Op::ArraySet { dst, .. } => (dst, Purity::Panics),
         // `length` の行は `Pure` で巻き戻しの地点を持たない
-        Op::ArrayLength { dst, .. } | Op::StrByteLength { dst, .. } => (dst, Purity::Pure),
+        Op::ArrayLength { dst, .. }
+        | Op::StrByteLength { dst, .. }
+        | Op::BytesLength { dst, .. } => (dst, Purity::Pure),
         _ => return Err(fault),
     };
     match fault {
@@ -975,10 +986,6 @@ fn run_extern<M: Mode>(
                 let w = ctx.bytes_empty()?;
                 task.set(dst, w);
             }
-            Extern::BytesLength | Extern::ShowBytesLength => {
-                let n = ctx.bytes_length(task.get(arg(0)))?;
-                task.set_raw(dst, n);
-            }
             Extern::BytesAppend => {
                 let w = ctx.bytes_append(task.get(arg(0)), task.get(arg(1)))?;
                 task.set(dst, w);
@@ -1024,10 +1031,6 @@ fn run_extern<M: Mode>(
             Extern::BytesMake => {
                 let w = ctx.bytes_make(task.raw(arg(0)), task.raw(arg(1)))?;
                 task.set(dst, w);
-            }
-            Extern::BytesGet | Extern::ShowBytesGet => {
-                let b = ctx.bytes_get(task.raw(arg(0)), task.get(arg(1)))?;
-                task.set_raw(dst, b);
             }
             Extern::BytesSet => {
                 let w = ctx.bytes_set(task.raw(arg(0)), task.raw(arg(1)), task.get(arg(2)))?;
@@ -1262,6 +1265,10 @@ fn run_extern<M: Mode>(
             | Extern::BoolNe
             | Extern::StrByteLength
             | Extern::StrByteAt
+            | Extern::BytesLength
+            | Extern::BytesGet
+            | Extern::ShowBytesLength
+            | Extern::ShowBytesGet
             | Extern::ArrayLength
             | Extern::MutArrayLength
             | Extern::ArrayGet

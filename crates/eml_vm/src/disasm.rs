@@ -373,6 +373,8 @@ impl<'a> View<'a> {
             Op::ArrayLength { dst, a } => format!("array_length s{dst}, s{a}"),
             Op::StrByteAt { dst, i, s } => bin("str_byte_at", dst, i, s),
             Op::StrByteLength { dst, s } => format!("str_byte_length s{dst}, s{s}"),
+            Op::BytesGet { dst, i, b } => bin("bytes_get", dst, i, b),
+            Op::BytesLength { dst, b } => format!("bytes_length s{dst}, s{b}"),
             Op::ArraySet { dst, at } => format!("array_set s{dst} = {}", slots(&ops(at)[..3])),
             Op::Extern { dst, at } => format!(
                 "extern s{dst} = {}({})",

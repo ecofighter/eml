@@ -428,7 +428,7 @@ impl<'a, M: Mode> Emitter<'a, '_, M> {
         items
     }
 
-    /// 配列の行と、文字列のバイトを読む行の専用の命令 (docs/spec/vm.md の「基本操作と extern」)。`set` だけは3つのオペランドが `Op` の8バイトに
+    /// 配列の行と、文字列とバイト列のバイトを読む行の専用の命令 (docs/spec/vm.md の「基本操作と extern」)。`set` だけは3つのオペランドが `Op` の8バイトに
     /// 入らないので、`operands` に置く。
     fn array_op(&mut self, ext: Extern, dst: Slot, slots: &[Slot]) -> Option<Op> {
         Some(match (ext, slots) {
@@ -436,6 +436,8 @@ impl<'a, M: Mode> Emitter<'a, '_, M> {
             (Extern::ArrayGet | Extern::MutArrayRead, &[a, b]) => Op::ArrayGet { dst, a, b },
             (Extern::StrByteLength, &[s]) => Op::StrByteLength { dst, s },
             (Extern::StrByteAt, &[i, s]) => Op::StrByteAt { dst, i, s },
+            (Extern::BytesLength | Extern::ShowBytesLength, &[b]) => Op::BytesLength { dst, b },
+            (Extern::BytesGet | Extern::ShowBytesGet, &[i, b]) => Op::BytesGet { dst, i, b },
             (Extern::ArraySet | Extern::MutArrayWrite, &[_, _, _]) => {
                 let at = self.out.operands(slots.iter().map(|&s| u32::from(s)));
                 Op::ArraySet { dst, at }
@@ -1060,7 +1062,6 @@ fn arithmetic(ext: Extern, dst: Slot, args: &[Slot]) -> Option<Op> {
         | Extern::StrSlice
         | Extern::StrFindFrom
         | Extern::BytesEmpty
-        | Extern::BytesLength
         | Extern::BytesAppend
         | Extern::BytesAppendSlice
         | Extern::BytesSlice
@@ -1071,11 +1072,8 @@ fn arithmetic(ext: Extern, dst: Slot, args: &[Slot]) -> Option<Op> {
         | Extern::BytesCompare
         | Extern::BytesFindFrom
         | Extern::BytesMake
-        | Extern::BytesGet
         | Extern::BytesSet
         | Extern::BytesPush
-        | Extern::ShowBytesLength
-        | Extern::ShowBytesGet
         | Extern::BytesValidUtf8
         | Extern::StringDecode
         | Extern::EnvArgCount
@@ -1091,6 +1089,10 @@ fn arithmetic(ext: Extern, dst: Slot, args: &[Slot]) -> Option<Op> {
         | Extern::ArrayMake
         | Extern::StrByteLength
         | Extern::StrByteAt
+        | Extern::BytesLength
+        | Extern::BytesGet
+        | Extern::ShowBytesLength
+        | Extern::ShowBytesGet
         | Extern::ArrayLength
         | Extern::ArrayGet
         | Extern::ArraySet
