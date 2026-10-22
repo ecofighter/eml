@@ -1070,6 +1070,12 @@ fn arithmetic(ext: Extern, dst: Slot, args: &[Slot]) -> Option<Op> {
         | Extern::BytesNe
         | Extern::BytesCompare
         | Extern::BytesFindFrom
+        | Extern::BytesMake
+        | Extern::BytesGet
+        | Extern::BytesSet
+        | Extern::BytesPush
+        | Extern::ShowBytesLength
+        | Extern::ShowBytesGet
         | Extern::BytesValidUtf8
         | Extern::StringDecode
         | Extern::EnvArgCount

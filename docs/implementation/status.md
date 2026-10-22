@@ -8,7 +8,7 @@
 
 ### 実装したもの
 
-- 基本型: `Int`、`Float`、`Char`、`Byte`、`Bool`、`String`、`Unit`。`Byte` は `65u8` の形のリテラルと、`Eq`、`Ord`、`Show` を持ち、変換は `Std.Byte` にある ([標準ライブラリ](../spec/stdlib.md) の「`Std.Byte`」)。`Char` は文字のリテラル `'a'` と、`Eq`、`Ord`、`Show` を持つ。変換と ASCII の判定は `Std.Char` にある ([標準ライブラリ](../spec/stdlib.md) の「`Std.Char`」)。`Bytes` はバイト列の型で、`Eq` と `Ord` を持ち、リテラルはない。操作は `Bytes` にある ([標準ライブラリ](../spec/stdlib.md) の「`Bytes`」)。`Bool` は Prelude の `data Bool = | False | True` で、キーワード `true` / `false` はない。単項の `!` はなく、関数 `not` を使う
+- 基本型: `Int`、`Float`、`Char`、`Byte`、`Bool`、`String`、`Unit`。`Byte` は `65u8` の形のリテラルと、`Eq`、`Ord`、`Show` を持ち、変換は `Std.Byte` にある ([標準ライブラリ](../spec/stdlib.md) の「`Std.Byte`」)。`Char` は文字のリテラル `'a'` と、`Eq`、`Ord`、`Show` を持つ。変換と ASCII の判定は `Std.Char` にある ([標準ライブラリ](../spec/stdlib.md) の「`Std.Char`」)。`Bytes` はバイト列の型で、`Eq`、`Ord`、`Show` を持ち、リテラルはない。操作は `Bytes` にある ([標準ライブラリ](../spec/stdlib.md) の「`Bytes`」)。`Bool` は Prelude の `data Bool = | False | True` で、キーワード `true` / `false` はない。単項の `!` はなく、関数 `not` を使う
 - タプルと射影 `t.0`、型引数を持つ代数的データ型 (`data`)、`match` と入れ子のパターン、`Int`、`Byte`、`Char`、`String` のリテラルのパターン
 - 名前付きのレコード: `data` のコンストラクタの名前付きのフィールド、作る式 `Person { name = "a", age = 3 }` と省略形、射影 `p.name`、更新 `{ p | age = 31 }`、分解のパターン、フィールドのセクション `(.name)` と `(.0)`、導出した `Show` の `Person { … }` の表示 ([直積型とレコード](../spec/records.md))。呼び出しの引数のラムダは、ほかの引数の後に型を検査する ([型と Kind](../spec/types.md) の「引数のラムダを後で検査する」)
 - Prelude の `List`、`Option`、`Result` と、その `Eq`、`Ord`、`Show` の instance ([宣言](../spec/declarations.md) の「Prelude のクラス」)。リストのリテラル `[…]` とパターン、コンストラクタ `::` (`infixr 5`。Prelude だけが宣言できる、E1044) ([式](../spec/expressions.md) の「リスト」)。リストの関数は `Std.List` にある (`map`、`filter`、`fold`、`length` など。[標準ライブラリ](../spec/stdlib.md) の「`List`」)

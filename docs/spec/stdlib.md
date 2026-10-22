@@ -22,7 +22,7 @@ eml run --debug-heap wc.em -l input.txt
 
 標準ライブラリの extern は小さい核にとどめ、便利な関数は eml で書く。extern の境界では、スカラー (`Int`、`Float`、`Char`、`Byte`、`Bool`、`Unit`)、文字列、バイト列、`Foreign` だけを受け渡し、`List` と `Option` は eml の側で組む。`eml_rt` がデータの配置を知らないで済むようにするためである ([Core IR](core-ir.md) の「translate の配置」)。結果が `Char` の extern の行はスカラー値を、結果が `Byte` の extern の行は 0..=255 を返す ([LIR](lir.md) の「値の表現」)。そのため、`pub` でない extern は番兵 (見つからない位置の -1、終わりの空の文字列など) を返すことがある。番兵は標準ライブラリの中に閉じ込め、利用者には `Option` で見せる。
 
-extern の行は、どの位置の引数も借用にできる ([LIR](lir.md) の「extern の借用」)。`String` を読む行 (`byte_length`、`byte_at`、`slice`、`find_from`、`String` の `==`、`!=`、`compare`、`show`、`Float` の `can_parse` と `parse_raw`) は文字列を借りる。`Bytes` を読む行 (`length`、`slice`、`find_from`、`append_slice` の `src`、`Bytes` の `==`、`!=`、`compare`、`String.valid_utf8`) もバイト列を借りる。借りた値は、行が失敗しても呼ぶ側が持ったままである。
+extern の行は、どの位置の引数も借用にできる ([LIR](lir.md) の「extern の借用」)。`String` を読む行 (`byte_length`、`byte_at`、`slice`、`find_from`、`String` の `==`、`!=`、`compare`、`show`、`Float` の `can_parse` と `parse_raw`) は文字列を借りる。`Bytes` を読む行 (`length`、`get`、`slice`、`find_from`、`append_slice` の `src`、`Bytes` の `==`、`!=`、`compare`、`String.valid_utf8`) もバイト列を借りる。借りた値は、行が失敗しても呼ぶ側が持ったままである。
 
 文字列の位置は UTF-8 のバイトの位置 (`Int`) で表す。引数の順は、対象を最後に置く。`line |> String.split ","` と部分適用で使えるようにするためである。
 
@@ -266,11 +266,15 @@ pub while : (Unit -> <e> Bool) -> (Unit -> <e> Unit) -> <e> Unit
 | `slice` | `Int -> Int -> Bytes -> <Panic> Bytes` | extern (バイト列を借りる) |
 | `truncate` | `Int -> Bytes -> <Panic> Bytes` | extern |
 | `of_string` | `String -> Bytes` | extern |
+| `make` | `Int -> Byte -> <Panic> Bytes` | extern |
+| `get` | `Int -> Bytes -> <Panic> Byte` | extern (バイト列を借りる) |
+| `set` | `Int -> Byte -> Bytes -> <Panic> Bytes` | extern |
+| `push` | `Byte -> Bytes -> Bytes` | extern |
 | `find` | `Bytes -> Bytes -> <Panic> Option Int` | eml |
 
 型 `Bytes` は Prelude の extern の型で、関数は `Std.Bytes` に置く。`Std.Float` と同じく、モジュールで修飾して使う (`Bytes.length b`)。
 
-- `Bytes` は 0 から 255 のバイトの列である。`String` と同じ配置を持つ別の型で、UTF-8 の条件はなく、`String` との変換は中身を写す ([オブジェクトモデル](object-model.md) の「バイト列と文字列」)。リテラルはない。`Eq` と `Ord` を持ち、順序はバイトの辞書式の順序で、`String` と同じである
+- `Bytes` は 0 から 255 のバイトの列である。`String` と同じ配置を持つ別の型で、UTF-8 の条件はなく、`String` との変換は中身を写す ([オブジェクトモデル](object-model.md) の「バイト列と文字列」)。リテラルはない。`Eq`、`Ord`、`Show` を持ち、順序はバイトの辞書式の順序で、`String` と同じである
 - 位置と長さはバイトの数の `Int` である。引数の順は、対象を最後に置く
 - `empty ()` は長さ 0 のバイト列である
 - `length b` はバイトの数である
@@ -279,6 +283,11 @@ pub while : (Unit -> <e> Bool) -> (Unit -> <e> Unit) -> <e> Unit
 - `slice from to b` は、位置 `from` から `to` の手前までを写した新しいバイト列である。`0 <= from <= to <= length b` でなければ `Panic` を起こす
 - `truncate n b` は、前の `n` バイトである。`0 <= n <= length b` でなければ `Panic` を起こす。`b` が一意ならその場で長さだけを書き換えて、容量を保つ。そうでなければ、前の部分を写す
 - `of_string s` は、`s` の中身を写したバイト列である。リテラルと共有した文字列も写す
+- `make n b` は、どのバイトも `b` の、長さ `n` のバイト列である。`n` が負なら `Panic` を起こす。`Limits::max_bytes` を超える長さは、確保の前に止める
+- `get i b` は、位置 `i` のバイトである。`0 <= i < length b` でなければ `Panic` を起こす。`b` は借りる
+- `set i x b` は、位置 `i` のバイトを `x` にしたバイト列である。`0 <= i < length b` でなければ `Panic` を起こす。`b` が一意ならその場で書き換え、そうでなければ写してから書き換える
+- `push x b` は、`b` の後ろに `x` を足したバイト列である。`b` が一意で容量が足りればその場で伸ばし、足りなければ容量を倍にして写す。空から n 回足すときに写すバイトの合計は 2n 以下で、確保は log2(n) に比例する
+- `show b` は `Bytes [1, 2, 3]` の形で、要素は `Byte` の `display` の数である (`u8` を付けない)。空は `Bytes []` である。Prelude にあるので、`Std.Bytes` を import しなくても使える
 - `find needle b` は、`needle` が最初に現れる位置である。空の `needle` は `Some 0` である。照合は素朴な方法で、`needle` の長さと探す範囲の長さの積に比例する時間がかかる
 - 範囲の外の文言は、[LIR](lir.md) の「実行時エラー」にある
 
@@ -509,6 +518,8 @@ I/O の失敗の一部は `try_io` で捕まえられる (上の「`try_io`」)�
 | `Char.of_int` の引数 | ``int `55296` is not a Unicode scalar value`` |
 | `Byte.of_int` の引数 | ``int `256` does not fit in `Byte` `` |
 | `Bytes.slice`、`append_slice`、`truncate` の範囲の外 | ``bytes slice 2..9 is out of range for length 3`` |
+| `Bytes.get`、`set` の範囲の外 | ``bytes index 5 is out of range for length 3`` |
+| `Bytes.make` の負の長さ | ``bytes length -1 is negative`` |
 | `String.decode` の妥当でない UTF-8 | ``invalid UTF-8 at byte 3`` (数は最初の妥当でないバイトの位置) |
 | 配列の添字の範囲の外 (`get`、`set`、`read`、`write`) | ``array index 3 is out of range for length 3`` |
 | 配列の負の長さ (`make`、`tabulate`) | ``array length -1 is negative`` |

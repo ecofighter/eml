@@ -975,7 +975,7 @@ fn run_extern<M: Mode>(
                 let w = ctx.bytes_empty()?;
                 task.set(dst, w);
             }
-            Extern::BytesLength => {
+            Extern::BytesLength | Extern::ShowBytesLength => {
                 let n = ctx.bytes_length(task.get(arg(0)))?;
                 task.set_raw(dst, n);
             }
@@ -1020,6 +1020,22 @@ fn run_extern<M: Mode>(
                 let i =
                     ctx.bytes_find_from(task.get(arg(0)), task.raw(arg(1)), task.get(arg(2)))?;
                 task.set_raw(dst, i);
+            }
+            Extern::BytesMake => {
+                let w = ctx.bytes_make(task.raw(arg(0)), task.raw(arg(1)))?;
+                task.set(dst, w);
+            }
+            Extern::BytesGet | Extern::ShowBytesGet => {
+                let b = ctx.bytes_get(task.raw(arg(0)), task.get(arg(1)))?;
+                task.set_raw(dst, b);
+            }
+            Extern::BytesSet => {
+                let w = ctx.bytes_set(task.raw(arg(0)), task.raw(arg(1)), task.get(arg(2)))?;
+                task.set(dst, w);
+            }
+            Extern::BytesPush => {
+                let w = ctx.bytes_push(task.raw(arg(0)), task.get(arg(1)))?;
+                task.set(dst, w);
             }
             Extern::BytesValidUtf8 => {
                 let r = ctx.bytes_valid_utf8(task.get(arg(0)))?;

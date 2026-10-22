@@ -1705,6 +1705,32 @@ unsafe fn call<M: Mode>(
                 let w = ctx.string_decode(a)?;
                 take_text(ctx, w)
             }
+            "Std.Bytes.make" => {
+                let w = ctx.bytes_make(int(0), int(1))?;
+                take_bytes(ctx, w)
+            }
+            "Std.Bytes.get" => {
+                let a = args.lent_bytes(ctx, &inputs[1]);
+                Outcome::Int(ctx.bytes_get(int(0), a)?)
+            }
+            "Prelude.bytes_length" => {
+                let a = args.lent_bytes(ctx, &inputs[0]);
+                Outcome::Int(ctx.bytes_length(a)?)
+            }
+            "Prelude.bytes_get" => {
+                let a = args.lent_bytes(ctx, &inputs[1]);
+                Outcome::Int(ctx.bytes_get(int(0), a)?)
+            }
+            "Std.Bytes.set" => {
+                let a = args.bytes(ctx, &inputs[2]);
+                let w = ctx.bytes_set(int(0), int(1), a)?;
+                take_bytes(ctx, w)
+            }
+            "Std.Bytes.push" => {
+                let a = args.bytes(ctx, &inputs[1]);
+                let w = ctx.bytes_push(int(0), a)?;
+                take_bytes(ctx, w)
+            }
             "Std.Bytes.find_from" => {
                 let n = args.lent_bytes(ctx, &inputs[0]);
                 let a = args.lent_bytes(ctx, &inputs[2]);

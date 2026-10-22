@@ -381,6 +381,9 @@ Prelude の instance は次のとおりである。
 | `Eq Byte` | `extern (==)`、`extern (!=)` |
 | `Ord Byte` | `extern compare`、`extern (<)`、`extern (<=)`、`extern (>)`、`extern (>=)`。順は数の順である |
 | `Show Byte` | `extern display`。`display` は10進の数だけを返し (`65`)、`show` は Prelude に書いて `display b ++ "u8"` とする (`65u8`)。`show` の結果は `Byte` のリテラルとして読み戻せる。`"\{b}"` は `display` を通る |
+| `Eq Bytes` | `extern (==)`、`extern (!=)` |
+| `Ord Bytes` | `extern compare`。順はバイトの辞書式の順序で、`Ord String` と同じである。`<` などは既定のメソッドを通る |
+| `Show Bytes` | Prelude に eml で書いた instance。`Prelude.bytes_length` と `Prelude.bytes_get` で読み、`Bytes [1, 2, 3]` の形に表示する。要素は `Byte` の `display` の数である |
 | `Eq String` | `extern (==)`、`extern (!=)` |
 | `Ord String` | `extern compare`。順はバイト順で、妥当な UTF-8 ではコードポイントの順と一致する。`<` などは既定のメソッドを通る |
 | `Show String` | `extern show`。下のエスケープで表示する。`display s = s` で、文字列をそのまま返す。恒等関数で足りるので、extern にしない |

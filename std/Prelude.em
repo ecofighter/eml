@@ -364,3 +364,25 @@ instance Eq Bytes where
 
 instance Ord Bytes where
   extern compare
+
+-- `Show Bytes` が読む行。Prelude は `Std.Bytes` を import できないので、ここにも置く
+extern bytes_length : Bytes -> Int
+extern bytes_get : Int -> Bytes -> <Panic> Byte
+
+-- 位置はどれも範囲の中なので `Panic` は起こらない。型から `Panic` を除くために `try_panic` で包み、届かない `Err`
+-- には誤りの文言を返す。要素は `display` の数で、`u8` を付けない
+instance Show Bytes where
+  show b =
+    match try_panic (fn () -> show_bytes_from b (bytes_length b) 0 "Bytes [") with
+      | Ok text -> text
+      | Err message -> message
+
+-- 左辺を一意な文字列として伸ばすので、長さに比例する時間で済む
+show_bytes_from : Bytes -> Int -> Int -> String -> <Panic> String
+show_bytes_from b len i acc =
+  if i >= len then
+    acc ++ "]"
+  else if i == 0 then
+    show_bytes_from b len 1 (acc ++ display (bytes_get 0 b))
+  else
+    show_bytes_from b len (i + 1) (acc ++ ", " ++ display (bytes_get i b))

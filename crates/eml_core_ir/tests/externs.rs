@@ -241,7 +241,10 @@ fn only_the_array_readers_borrow() {
                 (&[true, true], None)
             }
             "Std.Float.can_parse" | "Std.Float.parse_raw" => (&[true], None),
-            "Std.Bytes.length" | "Std.String.valid_utf8" => (&[true], None),
+            "Std.Bytes.length" | "Std.String.valid_utf8" | "Prelude.bytes_length" => {
+                (&[true], None)
+            }
+            "Std.Bytes.get" | "Prelude.bytes_get" => (&[false, true], None),
             "Std.Bytes.slice" => (&[false, false, true], None),
             "Std.Bytes.append_slice" => (&[false, false, true, false], None),
             "Std.Bytes.find_from" => (&[true, false, true], None),

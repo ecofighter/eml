@@ -415,6 +415,7 @@ left が一意 (is_unique)
 
 - バイト列は文字列と同じ道で作り、中身を写すのも文字列と同じ T10 の `write_bytes` である
 - バイト列を書き換える extern (下の「extern」) は、文字列の操作と同じ本体を種類 `Bytes` で使う。`Bytes.append` は `string_concat` と同じ本体で、`Bytes.push` は1バイトの `bytes_extend` である。検査モードの誤りも文字列の操作と同じで、種類が `Bytes` でなければ `WrongKind` を返す。どの誤りも最初の確保より前に返すので、`Err` のときヒープは変わらない
+- `Bytes.make n b` は、確保の前に `n` を確かめる。負なら `Index` の誤り (`bytes length <n> is negative`)、`Limits::max_bytes` を超えるなら `Stopped(MemoryLimit)` を返す (`Array.make` と同じ)。`Bytes.get` は借りた物体の位置を読み、`Bytes.set` は一意ならその位置の1バイトだけを `write_byte` で書き換え、一意でなければ写してから書き換える
 - `Bytes.truncate` は、left が一意ならその場で長さの語だけを書き、容量を保つ。ghost のバイト列は `truncate_text` で縮める (上の「中身の不変条件」)。一意でなければ、前の部分を新しいバイト列に写して left を `decref` する
 - `Bytes.set` は、left が一意ならその場で T10 の `write_byte` で1バイトを書き換える。一意でなければ、写してから書く
 - `Bytes.append_slice` (`Ctx::bytes_append_part(from, to, src, dst)`) は dst の参照を受け取り、src を借りる。dst が一意ならその場で src の範囲を足す。src と dst が同じ物体なら、呼ぶ側は借りる分と消費する分の参照を2つ持つので ([LIR](lir.md) の「extern の借用」)、dst は一意でなく写す枝に進む。そのため、T10 の写す元と写す先は重ならない。検査モードはこの前提を確かめ、同じ物体で rc が 1 なら `NotUnique` を返す。速いモードでは前提にする
@@ -807,7 +808,7 @@ token の表の項目は、`into_token` と `release_reuse` が添字を使い�
 
 ## extern
 
-`eml_extern` の表の関数の行のうち `exit` と `panic` を除く136個を、`eml_rt` に語の ABI で1回だけ書く。VM と、ネイティブのコードが同じ関数を呼ぶ。ヒープを使わない算術と比較は module `externs` の関数で、文字列と I/O の extern は `Ctx` のメソッドである。純粋な extern は、結果をバイト列や整数の spec に対して Verus で証明する。`exit` と `panic` は VM が実行する。`exit` は終了コードを覚えて、`Ctx::exit_abort` で中断を始める。`panic` は文言を `panicked` の節の入口に渡す ([VM](vm.md) の「extern の中断」)。
+`eml_extern` の表の関数の行のうち `exit` と `panic` を除く142個を、`eml_rt` に語の ABI で1回だけ書く。VM と、ネイティブのコードが同じ関数を呼ぶ。ヒープを使わない算術と比較は module `externs` の関数で、文字列と I/O の extern は `Ctx` のメソッドである。純粋な extern は、結果をバイト列や整数の spec に対して Verus で証明する。`exit` と `panic` は VM が実行する。`exit` は終了コードを覚えて、`Ctx::exit_abort` で中断を始める。`panic` は文言を `panicked` の節の入口に渡す ([VM](vm.md) の「extern の中断」)。
 
 行の番号 (`eml_extern::Extern`) から関数を引く表は `eml_rt` に置かない。VM が行の番号の `match` で各関数を呼ぶ。`match` は飛び先の表になるので、関数ポインタの表と同じ速さである。
 
@@ -842,7 +843,7 @@ token の表の項目は、`into_token` と `release_reuse` が添字を使い�
 | `Std.Fs.read_all`、`read_line_raw` | `Ctx::fs_read` (`line` が偽と真) |
 | `Std.Fs.write_text` | `Ctx::fs_write_text` |
 | `Std.String.byte_length`、`byte_at`、`slice`、`find_from` | `Ctx::string_byte_length`、`string_byte_at`、`string_slice`、`string_find_from` |
-| `Std.Bytes.empty`、`length`、`append`、`append_slice`、`slice`、`truncate`、`of_string`、`find_from` | `Ctx::bytes_empty`、`bytes_length`、`bytes_append`、`bytes_append_part`、`bytes_slice`、`bytes_truncate`、`bytes_of_string`、`bytes_find_from` (上の「バイト列の操作」と「変換」) |
+| `Std.Bytes.empty`、`length`、`append`、`append_slice`、`slice`、`truncate`、`of_string`、`find_from`、`make`、`get`、`set`、`push`、`Prelude.bytes_length`、`bytes_get` | `Ctx::bytes_empty`、`bytes_length`、`bytes_append`、`bytes_append_part`、`bytes_slice`、`bytes_truncate`、`bytes_of_string`、`bytes_find_from`、`bytes_make`、`bytes_get`、`bytes_set`、`bytes_push` (上の「バイト列の操作」と「変換」)。`Prelude.bytes_length` と `bytes_get` は `Show Bytes` が読む行で、`Std.Bytes.length` と `get` と同じメソッドを呼ぶ |
 | `Std.String.valid_utf8`、`decode` | `Ctx::bytes_valid_utf8`、`string_decode` (上の「バイト列と文字列」の「変換」) |
 | `Std.Env.arg_count`、`arg`、`has`、`lookup` | `Ctx::env_arg_count`、`env_arg`、`env_has`、`env_var` |
 | `Std.Stdin.read_all`、`read_line_raw` | `Ctx::stdin_read` (`line` が偽と真) |

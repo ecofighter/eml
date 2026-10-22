@@ -1029,6 +1029,40 @@ pub fn inputs() -> Vec<(String, Vec<Arg>)> {
         "Std.Bytes.find_from",
         vec![by(&[98]), Arg::Int(0), Arg::SharedBytes(vec![97, 98])],
     );
+    // `Byte` の語は 0 から 255 の `Int` で渡す。位置は両端の外と `i64` の端を含める
+    for n in [-1, 0, 1, 3, i64::MAX] {
+        for byte in [0, 255] {
+            push("Std.Bytes.make", vec![Arg::Int(n), Arg::Int(byte)]);
+        }
+    }
+    for b in BYTES {
+        let len = b.len() as i64;
+        push("Prelude.bytes_length", vec![by(b)]);
+        let mut positions = vec![-1, 0, len - 1, len, i64::MIN, i64::MAX];
+        positions.sort_unstable();
+        positions.dedup();
+        for i in positions {
+            push("Std.Bytes.get", vec![Arg::Int(i), by(b)]);
+            push("Prelude.bytes_get", vec![Arg::Int(i), by(b)]);
+            push("Std.Bytes.set", vec![Arg::Int(i), Arg::Int(200), by(b)]);
+        }
+        for byte in [0, 255] {
+            push("Std.Bytes.push", vec![Arg::Int(byte), by(b)]);
+        }
+    }
+    // 共有したバイト列は、`set` と `push` が写してから書き換える
+    push(
+        "Std.Bytes.get",
+        vec![Arg::Int(1), Arg::SharedBytes(vec![97, 98])],
+    );
+    push(
+        "Std.Bytes.set",
+        vec![Arg::Int(1), Arg::Int(99), Arg::SharedBytes(vec![97, 98])],
+    );
+    push(
+        "Std.Bytes.push",
+        vec![Arg::Int(99), Arg::SharedBytes(vec![97, 98])],
+    );
     for s in &strings {
         push("Std.Bytes.of_string", vec![Arg::Unique(s.clone())]);
     }

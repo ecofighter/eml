@@ -346,6 +346,12 @@ pub enum Extern {
     BytesNe,
     BytesCompare,
     BytesFindFrom,
+    BytesMake,
+    BytesGet,
+    BytesSet,
+    BytesPush,
+    ShowBytesLength,
+    ShowBytesGet,
     BytesValidUtf8,
     StringDecode,
     EnvArgCount,
@@ -526,6 +532,12 @@ impl Extern {
         Extern::BytesNe,
         Extern::BytesCompare,
         Extern::BytesFindFrom,
+        Extern::BytesMake,
+        Extern::BytesGet,
+        Extern::BytesSet,
+        Extern::BytesPush,
+        Extern::ShowBytesLength,
+        Extern::ShowBytesGet,
         Extern::BytesValidUtf8,
         Extern::StringDecode,
         Extern::EnvArgCount,
@@ -799,6 +811,23 @@ impl Extern {
             Extern::BytesFindFrom => borrowing(
                 &[true, false, true],
                 row("Std.Bytes.find_from", &[Obj, Int, Obj], Int, Purity::Panics),
+            ),
+            Extern::BytesMake => row("Std.Bytes.make", &[Int, Int], Obj, Purity::Panics),
+            Extern::BytesGet => borrowing(
+                &[false, true],
+                row("Std.Bytes.get", &[Int, Obj], Int, Purity::Panics),
+            ),
+            Extern::BytesSet => row("Std.Bytes.set", &[Int, Int, Obj], Obj, Purity::Panics),
+            Extern::BytesPush => row("Std.Bytes.push", &[Int, Obj], Obj, Purity::Pure),
+            // `Show Bytes` は Prelude にあり、`Std.Bytes` を import できないので、読む行を Prelude にも持つ
+            // (docs/spec/stdlib.md の「`Bytes`」)
+            Extern::ShowBytesLength => borrowing(
+                &[true],
+                row("Prelude.bytes_length", &[Obj], Int, Purity::Pure),
+            ),
+            Extern::ShowBytesGet => borrowing(
+                &[false, true],
+                row("Prelude.bytes_get", &[Int, Obj], Int, Purity::Panics),
             ),
             Extern::BytesValidUtf8 => borrowing(
                 &[true],

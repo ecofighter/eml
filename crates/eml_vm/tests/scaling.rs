@@ -139,6 +139,53 @@ fn reading_bytes_of_a_string_does_not_dup_per_byte() {
     assert_eq!(increments(1000), increments(2000));
 }
 
+/// `empty` から一意な左辺に `push` で n バイト足し、長さを出力するプログラム。
+fn pushed_bytes(n: usize) -> String {
+    format!(
+        "grow : Int -> Bytes -> <Panic> Bytes\n\
+         grow n acc = if n == 0 then acc else grow (n - 1) (Bytes.push 65u8 acc)\n\
+         \n\
+         main : Unit -> <IO, Panic> Unit\n\
+         main () = println (show (Bytes.length (grow {n} (Bytes.empty ()))))\n"
+    )
+}
+
+#[test]
+fn pushing_to_a_unique_bytes_doubles_its_room() {
+    // 一意な左辺は容量が尽きたときだけ倍にして写す。写すバイトの合計は 2n 以下で、確保は log2(n) に比例する
+    // (docs/spec/object-model.md の「バイト列の操作」)
+    let n = 2000;
+    let stats = stats(&pushed_bytes(n), &format!("{n}\n"));
+    assert!(stats.string_bytes_copied <= 4 * n as u64, "{stats:?}");
+    assert!(
+        stats.allocations as f64 <= (n as f64).log2() + 3.0,
+        "{stats:?}"
+    );
+}
+
+#[test]
+fn reading_bytes_does_not_dup_per_byte() {
+    // `Bytes.get` はバイト列を借りるので、1バイトごとの `dup` は要らない。長さを2倍にしても `rc_increments` は変わらない
+    // (docs/spec/lir.md の「extern の借用」)
+    let program = |n: usize| {
+        format!(
+            "grow : Int -> Bytes -> <Panic> Bytes\n\
+             grow n acc = if n == 0 then acc else grow (n - 1) (Bytes.push 65u8 acc)\n\
+             \n\
+             sum_bytes : Bytes -> Int -> Int -> Int -> <Panic> Int\n\
+             sum_bytes b i n acc =\n\
+             \x20 if i == n then acc else sum_bytes b (i + 1) n (acc + Byte.to_int (Bytes.get i b))\n\
+             \n\
+             main : Unit -> <IO, Panic> Unit\n\
+             main () =\n\
+             \x20 let b = grow {n} (Bytes.empty ())\n\
+             \x20 println (show (sum_bytes b 0 (Bytes.length b) 0))\n"
+        )
+    };
+    let increments = |n: usize| stats(&program(n), &format!("{}\n", 65 * n)).rc_increments;
+    assert_eq!(increments(1000), increments(2000));
+}
+
 /// handler の下の非末尾の再帰。深さごとに1回 `ask` するので、`count n` は n 回 `ask` する。evidence は `evv` の
 /// 先頭から探すので、1回の `ask` がたどる節点の数は今有効な handler の数で決まり、深さによらない
 /// (docs/spec/lir.md の「evidence を探す」)。

@@ -1,0 +1,10 @@
+---
+source: crates/eml_cli/tests/ui.rs
+expression: "format!(\"--- stdout ---\\n{stdout}--- stderr ---\\n{diagnostics}{stderr}--- runtime error ---\\n{error}\\n{written}\")"
+input_file: tests/ui/run-fail/bytes/make.em
+---
+--- stdout ---
+--- stderr ---
+--- runtime error ---
+bytes length -1 is negative
+  at run-fail/bytes/make.em:4:32

@@ -19,3 +19,12 @@ pub find : Bytes -> Bytes -> <Panic> Option Int
 find needle b =
   let i = find_from needle 0 b
   if i < 0 then None else Some i
+
+-- `n` バイトの、どのバイトも `b` のバイト列を返す。`n` が負なら `Panic` である
+pub extern make : Int -> Byte -> <Panic> Bytes
+-- 位置 `i` のバイト。範囲の外は `Panic` である
+pub extern get : Int -> Bytes -> <Panic> Byte
+-- 位置 `i` のバイトを `b` にしたバイト列を返す。一意なら、その場で書き換える
+pub extern set : Int -> Byte -> Bytes -> <Panic> Bytes
+-- 末尾に `b` を足す。一意なら、その場で伸ばす
+pub extern push : Byte -> Bytes -> Bytes
