@@ -309,9 +309,9 @@ pub class Bits a where
   |---|---|---|---|---|---|
   | `Std.Stdin.open` | `[Unit] -> Obj` | `[Unr] -> Lin` | `[f]` | — | `handle_open(Handle::Stdin)` |
   | `Std.Stdin.close` | `[Obj] -> Unit` | `[Lin] -> Unr` | `[f]` | — | `handle_close(h, Handle::Stdin)` |
-  | `Std.Stdin.read_chunk` | `[Obj, Obj] -> Obj` | `[Unr, Lin] -> Unr` | `[f, t]` | `Some(1)` | `handle_read(h, Read::Chunk(buf))` |
-  | `Std.Stdin.read_all_bytes` と `read_all` | `[Obj] -> Obj` | `[Lin] -> Unr` | `[t]` | `Some(0)` | `handle_read(h, Read::All, Form::Bytes / Text)` |
-  | `Std.Stdin.read_line_bytes_raw` と `read_line_raw` | 同じ | 同じ | `[t]` | `Some(0)` | `handle_read(h, Read::Line, Form::Bytes / Text)` |
+  | `Std.Stdin.read_chunk` | `[Obj, Obj] -> Obj` | `[Unr, Lin] -> Unr` | `[f, t]` | `Some(1)` | `handle_read(h, ReadAmount::Chunk(buf))` |
+  | `Std.Stdin.read_all_bytes` と `read_all` | `[Obj] -> Obj` | `[Lin] -> Unr` | `[t]` | `Some(0)` | `handle_read(h, ReadAmount::All, Form::Bytes / Text)` |
+  | `Std.Stdin.read_line_bytes_raw` と `read_line_raw` | 同じ | 同じ | `[t]` | `Some(0)` | `handle_read(h, ReadAmount::Line, Form::Bytes / Text)` |
 
 - `std/Fs.em`: `open`、`close`、`write_text`、`read_text` は型を保つ。読みは上の5行を `File` で持つ (`read_chunk`、`read_all_bytes`、`read_line_bytes_raw` は新しく、`read_all : File -> <IO> (String, File)` と `read_line_raw : File -> <IO> (String, File)` は形を変える)。eml の `read_line : File -> <IO, Panic> (Option String, File)` と `read_line_bytes : File -> <IO, Panic> (Option Bytes, File)` を `Stdin.em` と同じく書く。`read_text path` は `let (text, f) = read_all (open path)`、`close f`、`text` になる
 - 手放すハンドルのない `Stdin.read_all ()` と `Stdin.read_line ()` は消す。`Stdin.read_text ()` が前者に代わる
@@ -655,6 +655,7 @@ pub class Bits a where
 - 目的: roadmap の「進め方」の閉じる手順を行う (コミット `Close bytes and handles`)
 - 作業 (roadmap の「進め方」の順):
   1. docs/spec を仕上げ、段の名前と「今は〜、後で〜」の予告が残っていないことを確かめる
+     - 使われなくなった `eml_rt::externs::TUPLE` (T-22 で組を作る extern がなくなった) を消し、OM の「`alloc_data` に合わせて `u16` の定数として `externs` に置く」の文と、testing.md の「組のタグ `TUPLE` が 0 であること」を消す。テストの変更 (承認済み): 種類 1 として `crates/eml_vm/tests/tags.rs` の `TUPLE` の assert を消す
   2. `bench/scripts.sh` を流し、範囲を外れた行があれば大きさを変えて別のコミット (`Resize bench rows`) にする。`bench/run.sh`、`bench/rt.sh`、`bench/scripts.sh` をコードの最後のコミットの作業ツリーで流し、「今の数値」の表 (「C/Rust との比」を含む) を入れ替える。この段が変えた規則に依る所見 (「1バイトずつ回すループ」、「`Fs.read_all` の読み方」、「出力のバッファと Host の呼び出し」、「ネイティブ化の見込み」) を測り直して直すか消す
   3. docs/implementation/status.md: `Byte`、`Bits`、`Bytes`、ハンドルを実装済みに入れ、「まだないもの」から「バイト列と標準入出力のハンドル」を消す
   4. docs/implementation/architecture.md を、crate かパスの構成が変わった所だけ直す
