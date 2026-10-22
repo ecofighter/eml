@@ -374,15 +374,25 @@ fn stream_handles_write_into_the_host_buffers<M: Mode>() {
         let out = ctx.handle_open(Handle::Stdout).unwrap();
         let err = ctx.handle_open(Handle::Stderr).unwrap();
         let b = ctx.heap_mut().alloc_bytes(b"a\xff\n");
-        let out2 = ctx.handle_write(out, Stream::Out, b, Write::Bytes).unwrap();
+        let out2 = ctx
+            .handle_write(out, Handle::Stdout, b, Write::Bytes)
+            .unwrap();
         assert_eq!(out2, out);
         let t = s(&mut ctx, "b");
-        let out = ctx.handle_write(out, Stream::Out, t, Write::Text).unwrap();
-        let out = ctx.handle_write(out, Stream::Out, t, Write::Line).unwrap();
-        let err = ctx.handle_write(err, Stream::Err, t, Write::Line).unwrap();
-        let err = ctx.handle_write(err, Stream::Err, b, Write::Bytes).unwrap();
+        let out = ctx
+            .handle_write(out, Handle::Stdout, t, Write::Text)
+            .unwrap();
+        let out = ctx
+            .handle_write(out, Handle::Stdout, t, Write::Line)
+            .unwrap();
+        let err = ctx
+            .handle_write(err, Handle::Stderr, t, Write::Line)
+            .unwrap();
+        let err = ctx
+            .handle_write(err, Handle::Stderr, b, Write::Bytes)
+            .unwrap();
         let flushes = memory.flushes();
-        let out = ctx.handle_flush(out).unwrap();
+        let out = ctx.handle_flush(out, Handle::Stdout).unwrap();
         assert_eq!(memory.flushes(), flushes + 1);
         ctx.heap_mut().decref(b).unwrap();
         ctx.heap_mut().decref(t).unwrap();
@@ -422,14 +432,14 @@ fn a_failed_write_releases_the_handle<M: Mode>() {
     unsafe {
         let b = ctx.heap_mut().alloc_bytes(b"x");
         let t = s(&mut ctx, "x");
-        for (handle, stream, data, write) in [
-            (Handle::Stdout, Stream::Out, t, Write::Line),
-            (Handle::Stdout, Stream::Out, b, Write::Bytes),
-            (Handle::Stderr, Stream::Err, t, Write::Text),
+        for (handle, data, write) in [
+            (Handle::Stdout, t, Write::Line),
+            (Handle::Stdout, b, Write::Bytes),
+            (Handle::Stderr, t, Write::Text),
         ] {
             let h = ctx.handle_open(handle).unwrap();
             assert_eq!(
-                ctx.handle_write(h, stream, data, write),
+                ctx.handle_write(h, handle, data, write),
                 Err(Fault::Output("disk full".into()))
             );
             let h = ctx.handle_open(handle).unwrap();
@@ -448,7 +458,7 @@ fn a_failed_flush_releases_the_handle<M: Mode>() {
     unsafe {
         let out = ctx.handle_open(Handle::Stdout).unwrap();
         assert_eq!(
-            ctx.handle_flush(out),
+            ctx.handle_flush(out, Handle::Stdout),
             Err(Fault::Output("broken pipe".into()))
         );
         let out = ctx.handle_open(Handle::Stdout).unwrap();
@@ -466,11 +476,11 @@ fn a_handle_of_another_stream_is_refused<M: Mode>() {
         let err = ctx.handle_open(Handle::Stderr).unwrap();
         let t = s(&mut ctx, "x");
         assert_eq!(
-            ctx.handle_write(err, Stream::Out, t, Write::Line),
+            ctx.handle_write(err, Handle::Stdout, t, Write::Line),
             Err(Fault::Heap(HeapError::WrongKind))
         );
         assert_eq!(
-            ctx.handle_flush(err),
+            ctx.handle_flush(err, Handle::Stdout),
             Err(Fault::Heap(HeapError::WrongKind))
         );
         assert_eq!(
@@ -486,6 +496,43 @@ fn a_handle_of_another_stream_is_refused<M: Mode>() {
         ctx.handle_close(err, Handle::Stderr).unwrap();
     }
     assert_eq!(memory.out(), "");
+    assert_eq!(mortal(ctx.heap()), 0);
+}
+
+/// 読むためのハンドルの種類 (`FileIn`、`Stdin`) は、`handle_write` と `handle_flush` がどちらのモードでも
+/// `WrongKind` で断り、何も書かない。`handle_flush` は標準エラーの種類も断り、`FileIn` を `FileOut` として渡しても
+/// 断る。ヒープは変わらず、ハンドルは呼ぶ側に残る。
+fn a_read_handle_is_refused_by_writes_and_flushes<M: Mode>() {
+    let memory = Arc::new(MemoryHost::default().with_stdin(MemoryFile::text("x")));
+    memory.add("in.txt", MemoryFile::text("x"));
+    let mut ctx = ctx_with::<M>(&memory);
+    let wrong = Err(Fault::Heap(HeapError::WrongKind));
+    unsafe {
+        let p = s(&mut ctx, "in.txt");
+        let file = ctx.fs_open(p, crate::Open::Read).unwrap();
+        let stdin = ctx.handle_open(Handle::Stdin).unwrap();
+        let t = s(&mut ctx, "x");
+        let live = mortal(ctx.heap());
+        for (h, handle) in [(file, Handle::FileIn), (stdin, Handle::Stdin)] {
+            assert_eq!(ctx.handle_write(h, handle, t, Write::Text), wrong);
+            assert_eq!(ctx.handle_flush(h, handle), wrong);
+        }
+        assert_eq!(ctx.handle_flush(file, Handle::Stderr), wrong);
+        assert_eq!(ctx.handle_flush(file, Handle::FileOut), wrong);
+        assert_eq!(mortal(ctx.heap()), live);
+        assert_eq!(
+            (
+                super::raw::rc(file),
+                super::raw::rc(stdin),
+                super::raw::rc(t)
+            ),
+            (1, 1, 1)
+        );
+        ctx.heap_mut().decref(t).unwrap();
+        ctx.handle_close(stdin, Handle::Stdin).unwrap();
+        ctx.handle_close(file, Handle::FileIn).unwrap();
+    }
+    assert_eq!(memory.written("in.txt"), None);
     assert_eq!(mortal(ctx.heap()), 0);
 }
 
@@ -509,4 +556,5 @@ both_modes!(
     a_failed_write_releases_the_handle,
     a_failed_flush_releases_the_handle,
     a_handle_of_another_stream_is_refused,
+    a_read_handle_is_refused_by_writes_and_flushes,
 );

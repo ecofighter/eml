@@ -93,6 +93,88 @@ pub(crate) fn host_flush(host: &HostRef) -> Result<(), Box<str>> {
     host.host.flush().map_err(|e| e.to_string().into_boxed_str())
 }
 
+/// 書くために開くときの、すでにあるファイルの扱い。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WriteMode {
+    /// 作るか、切り詰めて開く (`FileOut.create`)。
+    Truncate,
+    /// 作るか、末尾に足す形で開く (`FileOut.append`)。
+    Append,
+}
+
+/// `Ctx::fs_open` が `Open::Write` で開いたファイル。`Foreign` の物体の中身にする。書き込みは自分の buffer にためる。
+/// 閉じずに手放したときは、`BufWriter` の drop glue が残りを書き、誤りを捨てる (docs/spec/object-model.md の
+/// 「出力のバッファ」)。
+#[verifier::external_body]
+pub(crate) struct FileOut {
+    /// 開くときに渡されたままのパス。誤りの文言に使う。
+    path: Box<str>,
+    /// 書き込みの誤りの後は `None` にする。書いていない buffer を捨て、それ以上書かないためである。
+    writer: Option<BufWriter<Box<dyn Write + Send>>>,
+}
+
+/// Host に `path` を書くために開かせる。誤りなら、写したパスと理由を返す。
+#[verifier::external_body]
+pub(crate) fn host_open_write(host: &HostRef, path: &str, mode: WriteMode) -> Result<
+    FileOut,
+    (Box<str>, IoReason),
+> {
+    let path: Box<str> = path.into();
+    match host.host.open_write(&path, mode) {
+        Ok(writer) => Ok(
+            FileOut { path, writer: Some(BufWriter::with_capacity(BUFFER_BYTES, writer)) },
+        ),
+        Err(e) => Err((path, io_reason(&e))),
+    }
+}
+
+/// `bytes` を (`line` なら続けて `\n` も) `f` の buffer に書く。buffer があふれれば Host の writer に書き出す。
+/// 誤りなら buffer を捨て、`f` はそれ以上書かない。
+///
+/// # Safety
+/// `f` は生きている `FileOut` を指し、呼ぶ間ほかに参照がない。呼ぶ側が `Heap::foreign_unique` で確かめる (T3)。
+#[verifier::external_body]
+pub(crate) unsafe fn file_out_write(f: *mut FileOut, bytes: &[u8], line: bool) -> (r: Result<
+    (),
+    Fault,
+>)
+    ensures
+        r is Ok || r matches Err(Fault::Io { op: IoOp::Write, .. }),
+{
+    let f = unsafe { &mut *f };
+    let Some(writer) = &mut f.writer else {
+        return Err(write_fault(f, IoReason::NotAvailable));
+    };
+    let written = writer.write_all(bytes).and_then(
+        |()|
+            {
+                if line {
+                    writer.write_all(b"\n")
+                } else {
+                    Ok(())
+                }
+            },
+    );
+    written.map_err(|e| write_fault(f, io_reason(&e)))
+}
+
+/// `f` の buffer を Host の writer に書き出す。誤りなら、`file_out_write` と同じく buffer を捨てる。
+///
+/// # Safety
+/// `file_out_write` と同じである。
+#[verifier::external_body]
+pub(crate) unsafe fn file_out_flush(f: *mut FileOut) -> (r: Result<(), Fault>)
+    ensures
+        r is Ok || r matches Err(Fault::Io { op: IoOp::Write, .. }),
+{
+    let f = unsafe { &mut *f };
+    let flushed = match &mut f.writer {
+        Some(writer) => writer.flush().map_err(|e| io_reason(&e)),
+        None => Err(IoReason::NotAvailable),
+    };
+    flushed.map_err(|reason| write_fault(f, reason))
+}
+
 /// `FileIn.open` で開いたファイル。`Foreign` の物体の中身にする。閉じる処理は drop glue だけで、どのスレッドで落として
 /// もよい (docs/future/multicore.md)。
 #[verifier::external_body]
@@ -670,6 +752,19 @@ fn fault(name: SourceName, failure: Failure) -> Fault {
     }
 }
 
+/// 書き込みの誤り。`f` の書いていない buffer を、書き出さずに writer ごと捨てる。`BufWriter` の drop glue に任せると、
+/// 誤りを返した後でもファイルが伸びうるためである (docs/spec/object-model.md の「誤りのときの約束」)。
+fn write_fault(f: &mut FileOut, reason: IoReason) -> Fault {
+    if let Some(writer) = f.writer.take() {
+        let _ = writer.into_parts();
+    }
+    Fault::Io {
+        op: IoOp::Write,
+        name: f.path.clone(),
+        reason,
+    }
+}
+
 impl Source for FileIn {
     fn reader(&mut self) -> Option<&mut Reader> {
         Some(&mut self.reader)
@@ -748,6 +843,11 @@ pub trait Host: Send + Sync {
     fn stdin(&self) -> Option<Arc<StdinSlot>> {
         None
     }
+    /// `path` のファイルを書くために開く。`mode` が、すでにあるファイルを切り詰めるか、末尾に足すかを決める。書き手は
+    /// buffer のない `Write` でよい。buffer は `eml_rt` の `FileOut` が持つ。
+    fn open_write(&self, _path: &str, _mode: WriteMode) -> io::Result<Box<dyn Write + Send>> {
+        Err(io::Error::from(io::ErrorKind::Unsupported))
+    }
     /// `path` のファイルを作るか切り詰めて、`text` を書く。
     fn write_file(&self, _path: &str, _text: &str) -> io::Result<()> {
         Err(io::Error::from(io::ErrorKind::Unsupported))
@@ -788,8 +888,8 @@ pub enum Buffering {
     Block,
 }
 
-/// 書き込みのバッファの大きさ。
-const BUFFER_BYTES: usize = 64 * 1024;
+/// 書き込みのバッファの大きさ。標準出力と標準エラーと `FileOut` が共有する。
+pub(crate) const BUFFER_BYTES: usize = 64 * 1024;
 
 /// 標準出力と標準エラーに書き、ファイルを `file_root` の下から開く Host。出力の書き方は C の stdio と同じにする。
 /// 落とすときは、`BufWriter` の `Drop` がまだ書いていない出力を書く (unwind のときも同じで、誤りは捨てる)。環境変数は
@@ -925,6 +1025,16 @@ impl Host for StdHost {
         self.stdin.clone()
     }
 
+    fn open_write(&self, path: &str, mode: WriteMode) -> io::Result<Box<dyn Write + Send>> {
+        let mut options = fs::OpenOptions::new();
+        options.write(true).create(true);
+        match mode {
+            WriteMode::Truncate => options.truncate(true),
+            WriteMode::Append => options.append(true),
+        };
+        Ok(Box::new(options.open(self.file_root.join(path))?))
+    }
+
     fn write_file(&self, path: &str, text: &str) -> io::Result<()> {
         fs::write(self.file_root.join(path), text)
     }
@@ -941,9 +1051,9 @@ impl Host for StdHost {
     }
 }
 
-/// I/O の誤りの理由 (`read_text`、`write_file`、`run` の失敗を `Fault` の理由にする)。止める語が立った後の
-/// `Interrupted` は `fill` と `read_all` が止めたことにし、立っていない `Interrupted` は読み直す。
-/// 読み以外の `Interrupted` は止める語と関係なく、ここで `Other` になる。
+/// I/O の誤りの理由 (`read_text`、`open_write`、`FileOut` の書き込み、`write_file`、`run` の失敗を `Fault` の理由に
+/// する)。止める語が立った後の `Interrupted` は `fill` と `read_all` が止めたことにし、立っていない `Interrupted` は
+/// 読み直す。読み以外の `Interrupted` は止める語と関係なく、ここで `Other` になる。
 fn io_reason(e: &io::Error) -> IoReason {
     match e.kind() {
         io::ErrorKind::NotFound => IoReason::NotFound,

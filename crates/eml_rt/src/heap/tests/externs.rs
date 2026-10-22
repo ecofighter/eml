@@ -1188,7 +1188,7 @@ fn a_missing_file_is_a_fault_naming_its_path<M: Mode>() {
     unsafe {
         let p = s(&mut ctx, "missing.txt");
         assert_eq!(
-            ctx.fs_open(p),
+            ctx.fs_open(p, Open::Read),
             Err(Fault::Io {
                 op: IoOp::Open,
                 name: "missing.txt".into(),
@@ -1217,7 +1217,7 @@ unsafe fn read_borrowed<M: Mode>(
 unsafe fn open<M: Mode>(ctx: &mut crate::Ctx<M>, path: &str) -> Word {
     unsafe {
         let p = s(ctx, path);
-        ctx.fs_open(p).unwrap()
+        ctx.fs_open(p, Open::Read).unwrap()
     }
 }
 
@@ -2157,7 +2157,7 @@ unsafe fn call<M: Mode>(
                     ReadAmount::Line
                 };
                 let p = one(ctx, args);
-                let f = ctx.fs_open(p)?;
+                let f = ctx.fs_open(p, Open::Read)?;
                 // 読みは FileIn を借りるので、誤りでも閉じてから返す
                 let mut read = read_borrowed(ctx, f, amount);
                 if name.ends_with('2') && read.is_ok() {

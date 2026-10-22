@@ -14,9 +14,9 @@ use super::string::text;
 use super::{CONS, Probe, cons, list, mortal, probe, raw};
 use crate::alloc::MAX_SMALL_WORDS;
 use crate::cell::{rc_decref_shared, rc_dup_shared};
-use crate::externs::{Form, Handle, ReadAmount};
+use crate::externs::{Fault, Form, Handle, IoOp, IoReason, Open, ReadAmount, Write};
 use crate::heap::ctx::positions::find_byte;
-use crate::host::{Failure, FileIn, Reader, consume, fill, host_open};
+use crate::host::{BUFFER_BYTES, Failure, FileIn, Reader, WriteMode, consume, fill, host_open};
 use crate::{Checked, Control, Ctx, Fast, Heap, HeapError, Kind, Limits, Meta, Mode, Word};
 
 const PAGE_BYTES: usize = 0x1_0000;
@@ -874,7 +874,7 @@ fn borrowed_files_go_through_the_host<M: Mode>() {
     let mut ctx = Ctx::<M>::new(control.clone(), host(&memory));
     let open = |ctx: &mut Ctx<M>, name: &str| unsafe {
         let p = ctx.heap_mut().alloc_string(name);
-        ctx.fs_open(p).unwrap()
+        ctx.fs_open(p, Open::Read).unwrap()
     };
     unsafe {
         // 64 KiB の区切りをまたぐ行、`\r\n` を残した行、空の行、行の終わりのない最後の行、終わりの空の文字列
@@ -1042,7 +1042,7 @@ fn borrowed_bytes_go_through_the_host<M: Mode>() {
     let mut ctx = ctx_tests::ctx_with::<M>(&memory);
     let open = |ctx: &mut Ctx<M>, name: &str| unsafe {
         let p = ctx.heap_mut().alloc_string(name);
-        ctx.fs_open(p).unwrap()
+        ctx.fs_open(p, Open::Read).unwrap()
     };
     let read = |ctx: &mut Ctx<M>, f: Word, amount: ReadAmount| unsafe {
         let w = ctx.handle_read(f, Handle::FileIn, amount, Form::Bytes)?;
@@ -1118,7 +1118,7 @@ fn an_overlong_read_is_refused_by_a_whole_read() {
     for form in [Form::Text, Form::Bytes] {
         unsafe {
             let p = ctx.heap_mut().alloc_string("x");
-            let f = ctx.fs_open(p).unwrap();
+            let f = ctx.fs_open(p, Open::Read).unwrap();
             assert_eq!(
                 ctx.handle_read(f, Handle::FileIn, ReadAmount::All, form),
                 Err(crate::Fault::Io {
@@ -1289,10 +1289,10 @@ fn stream_handles_lower_their_flags_when_dropped<M: Mode>() {
         }
         let b = ctx.heap_mut().alloc_bytes(b"o");
         let out = ctx
-            .handle_write(opened[1], crate::Stream::Out, b, crate::Write::Bytes)
+            .handle_write(opened[1], Handle::Stdout, b, crate::Write::Bytes)
             .unwrap();
         let err = ctx
-            .handle_write(opened[2], crate::Stream::Err, b, crate::Write::Bytes)
+            .handle_write(opened[2], Handle::Stderr, b, crate::Write::Bytes)
             .unwrap();
         ctx.heap_mut().decref(b).unwrap();
         assert_eq!((raw::rc(out), raw::rc(err)), (1, 1));
@@ -1310,6 +1310,159 @@ fn stream_handles_lower_their_flags_when_dropped<M: Mode>() {
         }
     }
     assert_eq!(mortal(ctx.heap()), 0);
+}
+
+/// `FileOut` を `path` に `mode` で開く。
+unsafe fn open_out<M: Mode>(ctx: &mut Ctx<M>, path: &str, mode: WriteMode) -> Word {
+    unsafe {
+        let p = ctx.heap_mut().alloc_string(path);
+        ctx.fs_open(p, Open::Write(mode)).unwrap()
+    }
+}
+
+/// `FileOut` は自分の buffer に書き、`flush` で Host の書き手に書き出す。文字列、行、バイト列の書き込みと、buffer の
+/// 大きさ以上の書き込みが buffer を通らずに届くこと、`Append` が前の中身を残すことを確かめる。開けないパスは、パスを
+/// 手放して `Io { op: Open, .. }` を返す。
+fn a_file_out_writes_through_its_buffer<M: Mode>() {
+    let memory = Arc::new(MemoryHost::default());
+    let mut ctx = ctx_tests::ctx_with::<M>(&memory);
+    let large = vec![b'z'; BUFFER_BYTES + 3];
+    unsafe {
+        let t = ctx.heap_mut().alloc_string("日本");
+        let b = ctx.heap_mut().alloc_bytes(b"\xff");
+        let w = ctx.heap_mut().alloc_bytes(&large);
+        let f = open_out(&mut ctx, "out.txt", WriteMode::Truncate);
+        let f = ctx
+            .handle_write(f, Handle::FileOut, t, Write::Text)
+            .unwrap();
+        let f = ctx
+            .handle_write(f, Handle::FileOut, t, Write::Line)
+            .unwrap();
+        let f = ctx
+            .handle_write(f, Handle::FileOut, b, Write::Bytes)
+            .unwrap();
+        assert_eq!(memory.written_bytes("out.txt"), Some(Vec::new()));
+        let f = ctx.handle_flush(f, Handle::FileOut).unwrap();
+        let head = "日本日本\n".len() + 1;
+        assert_eq!(
+            memory.written_bytes("out.txt").unwrap(),
+            ["日本日本\n".as_bytes(), b"\xff"].concat()
+        );
+        let f = ctx
+            .handle_write(f, Handle::FileOut, w, Write::Bytes)
+            .unwrap();
+        assert_eq!(
+            memory.written_bytes("out.txt").unwrap().len(),
+            head + large.len()
+        );
+        assert_eq!((raw::rc(f), raw::rc(t), raw::rc(w)), (1, 1, 1));
+        ctx.handle_close(f, Handle::FileOut).unwrap();
+        let f = open_out(&mut ctx, "out.txt", WriteMode::Append);
+        let f = ctx
+            .handle_write(f, Handle::FileOut, t, Write::Line)
+            .unwrap();
+        let f = ctx.handle_flush(f, Handle::FileOut).unwrap();
+        ctx.handle_close(f, Handle::FileOut).unwrap();
+        let written = memory.written_bytes("out.txt").unwrap();
+        assert_eq!(written.len(), head + large.len() + "日本\n".len());
+        assert!(written.ends_with("z日本\n".as_bytes()));
+        let p = ctx.heap_mut().alloc_string("");
+        assert_eq!(
+            ctx.fs_open(p, Open::Write(WriteMode::Truncate)),
+            Err(Fault::Io {
+                op: IoOp::Open,
+                name: "".into(),
+                reason: IoReason::PermissionDenied
+            })
+        );
+        for x in [t, b, w] {
+            ctx.heap_mut().decref(x).unwrap();
+        }
+    }
+    assert_eq!(mortal(ctx.heap()), 0);
+}
+
+/// 閉じない `FileOut` は、`Ctx` を落とすときの破棄処理 (`BufWriter` の drop glue) が buffer を書く。書けない書き手
+/// では誤りを捨て、panic しない。
+fn a_dropped_file_out_writes_its_buffer<M: Mode>() {
+    for (memory, expected) in [
+        (MemoryHost::default(), "kept\n"),
+        (MemoryHost::failing("disk full"), ""),
+    ] {
+        let memory = Arc::new(memory);
+        let mut ctx = ctx_tests::ctx_with::<M>(&memory);
+        unsafe {
+            let t = ctx.heap_mut().alloc_string("kept");
+            let f = open_out(&mut ctx, "kept.txt", WriteMode::Truncate);
+            ctx.handle_write(f, Handle::FileOut, t, Write::Line)
+                .unwrap();
+            ctx.heap_mut().decref(t).unwrap();
+        }
+        assert_eq!(memory.written("kept.txt").as_deref(), Some(""));
+        drop(ctx);
+        assert_eq!(memory.written("kept.txt").as_deref(), Some(expected));
+        assert_eq!(memory.received(), "kept\n".len());
+    }
+}
+
+/// buffer があふれた書き込みと `flush` が書けなければ、`Io { op: Write, .. }` を返してハンドルを手放し、書いていない
+/// buffer を捨てる。その後は、`Ctx` を落としても書き手は何も受けない。読むハンドルと書くハンドルの取り違えは
+/// `WrongKind` で、ヒープは変わらない。
+fn a_failed_file_out_write_discards_the_rest<M: Mode>() {
+    let memory = Arc::new(MemoryHost::failing("disk full"));
+    memory.add("in.txt", MemoryFile::text("x"));
+    let mut ctx = ctx_tests::ctx_with::<M>(&memory);
+    let failed = |path: &str| {
+        Err(Fault::Io {
+            op: IoOp::Write,
+            name: path.into(),
+            reason: IoReason::Other,
+        })
+    };
+    unsafe {
+        let t = ctx.heap_mut().alloc_string("abc");
+        let w = ctx.heap_mut().alloc_bytes(&vec![b'z'; BUFFER_BYTES]);
+        let f = open_out(&mut ctx, "a.txt", WriteMode::Truncate);
+        let f = ctx
+            .handle_write(f, Handle::FileOut, t, Write::Text)
+            .unwrap();
+        assert_eq!(memory.received(), 0);
+        assert_eq!(
+            ctx.handle_write(f, Handle::FileOut, w, Write::Bytes),
+            failed("a.txt")
+        );
+        assert_eq!(mortal(ctx.heap()), 2);
+        let f = open_out(&mut ctx, "b.txt", WriteMode::Truncate);
+        let f = ctx
+            .handle_write(f, Handle::FileOut, t, Write::Line)
+            .unwrap();
+        assert_eq!(ctx.handle_flush(f, Handle::FileOut), failed("b.txt"));
+        assert_eq!(mortal(ctx.heap()), 2);
+        let out = open_out(&mut ctx, "c.txt", WriteMode::Truncate);
+        let p = ctx.heap_mut().alloc_string("in.txt");
+        let file = ctx.fs_open(p, Open::Read).unwrap();
+        let live = mortal(ctx.heap());
+        for handle in [Handle::FileOut, Handle::FileIn] {
+            assert_eq!(
+                ctx.handle_read(out, handle, ReadAmount::All, Form::Text),
+                Err(Fault::Heap(HeapError::WrongKind))
+            );
+            assert_eq!(
+                ctx.handle_write(file, handle, t, Write::Text),
+                Err(Fault::Heap(HeapError::WrongKind))
+            );
+        }
+        assert_eq!(mortal(ctx.heap()), live);
+        assert_eq!((raw::rc(out), raw::rc(file), raw::rc(t)), (1, 1, 1));
+        ctx.handle_close(out, Handle::FileOut).unwrap();
+        ctx.handle_close(file, Handle::FileIn).unwrap();
+        ctx.heap_mut().decref(t).unwrap();
+        ctx.heap_mut().decref(w).unwrap();
+    }
+    assert_eq!(mortal(ctx.heap()), 0);
+    drop(ctx);
+    // 書き手が受けたのは、あふれたときの "abc" と、`flush` の "abc\n" だけである
+    assert_eq!(memory.received(), "abc".len() + "abc\n".len());
 }
 
 /// スクリプトの extern の橋 (引数、環境変数、標準入力、ファイルの書き込み、子のプロセス) を、メモリの Host で通す。
@@ -1446,6 +1599,9 @@ both_modes!(
     stdin_handles_take_and_return_the_reader,
     stdin_bytes_flush_before_each_refill,
     stream_handles_lower_their_flags_when_dropped,
+    a_file_out_writes_through_its_buffer,
+    a_dropped_file_out_writes_its_buffer,
+    a_failed_file_out_write_discards_the_rest,
     script_externs_go_through_the_host,
     find_byte_reads_the_body_of_an_object,
 );

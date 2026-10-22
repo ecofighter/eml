@@ -4,7 +4,7 @@
 
 use eml_extern::{Extern, ExternEffect, Purity};
 use eml_rt::externs::{self, Fault};
-use eml_rt::{Ctx, Form, Handle, Mode, ReadAmount, Stream, Token, Word, Write};
+use eml_rt::{Ctx, Form, Handle, Mode, Open, ReadAmount, Stream, Token, Word, Write};
 
 use crate::RunCounts;
 use crate::apply;
@@ -924,7 +924,7 @@ fn run_extern<M: Mode>(
                 task.set(dst, Word::UNIT);
             }
             Extern::Open => {
-                let w = ctx.fs_open(task.get(arg(0)))?;
+                let w = ctx.fs_open(task.get(arg(0)), Open::Read)?;
                 task.set(dst, w);
             }
             Extern::ReadAll
@@ -983,19 +983,19 @@ fn run_extern<M: Mode>(
             | Extern::StderrWrite
             | Extern::StderrWriteString
             | Extern::StderrWriteLine => {
-                let (stream, write) = match ext {
-                    Extern::StdoutWrite => (Stream::Out, Write::Bytes),
-                    Extern::StdoutWriteString => (Stream::Out, Write::Text),
-                    Extern::StdoutWriteLine => (Stream::Out, Write::Line),
-                    Extern::StderrWrite => (Stream::Err, Write::Bytes),
-                    Extern::StderrWriteString => (Stream::Err, Write::Text),
-                    _ => (Stream::Err, Write::Line),
+                let (handle, write) = match ext {
+                    Extern::StdoutWrite => (Handle::Stdout, Write::Bytes),
+                    Extern::StdoutWriteString => (Handle::Stdout, Write::Text),
+                    Extern::StdoutWriteLine => (Handle::Stdout, Write::Line),
+                    Extern::StderrWrite => (Handle::Stderr, Write::Bytes),
+                    Extern::StderrWriteString => (Handle::Stderr, Write::Text),
+                    _ => (Handle::Stderr, Write::Line),
                 };
-                let w = ctx.handle_write(task.get(arg(1)), stream, task.get(arg(0)), write)?;
+                let w = ctx.handle_write(task.get(arg(1)), handle, task.get(arg(0)), write)?;
                 task.set(dst, w);
             }
             Extern::StdoutFlush => {
-                let w = ctx.handle_flush(task.get(arg(0)))?;
+                let w = ctx.handle_flush(task.get(arg(0)), Handle::Stdout)?;
                 task.set(dst, w);
             }
             Extern::CharShow | Extern::CharDisplay => {

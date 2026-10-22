@@ -124,8 +124,9 @@ fn compile(path: &Path, suffix: &str) -> (eml_lir::Program, PathBuf, String) {
     (program, root, stderr)
 }
 
-/// 実行の結果。`stderr` はプログラムと子のプロセスが標準エラーに書いたものである。`written` は `Fs.write_text` が
-/// 書いたファイルを、スナップショットに足す形に並べたものである。`result` の `Ok` は `exit` の終了コードである。
+/// 実行の結果。`stderr` はプログラムと子のプロセスが標準エラーに書いたものである。`written` は `Fs.write_text` と
+/// `FileOut` が書いたファイルを、スナップショットに足す形に並べたものである。UTF-8 でない中身は `escape_ascii` で書き、
+/// 見出しに `(not UTF-8)` を付ける。`result` の `Ok` は `exit` の終了コードである。
 struct Ran {
     stdout: String,
     stderr: String,
@@ -177,7 +178,13 @@ fn execute_in(program: &eml_lir::Program, path: &Path, root: &Path, debug_heap: 
     let written = files
         .files()
         .into_iter()
-        .map(|(path, text)| format!("--- written: {path} ---\n{text}"))
+        .map(|(path, bytes)| match String::from_utf8(bytes) {
+            Ok(text) => format!("--- written: {path} ---\n{text}"),
+            Err(e) => format!(
+                "--- written: {path} (not UTF-8) ---\n{}\n",
+                e.as_bytes().escape_ascii()
+            ),
+        })
         .collect();
     Ran {
         stdout: out.contents(),

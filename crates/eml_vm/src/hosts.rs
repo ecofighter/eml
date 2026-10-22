@@ -8,7 +8,7 @@ use std::path::PathBuf;
 use std::process::{Command, Stdio};
 use std::sync::{Arc, Mutex, PoisonError};
 
-use eml_rt::{Buffering, Host, HostRef, Opened, StdHost, StdinSlot, Stream, exit_code};
+use eml_rt::{Buffering, Host, HostRef, Opened, StdHost, StdinSlot, Stream, WriteMode, exit_code};
 
 /// 書いたバイト列を覚える書き込み先。テストが出力を読むために使う。
 #[derive(Clone, Default)]
@@ -35,28 +35,52 @@ impl Write for Capture {
     }
 }
 
-/// `CaptureHost` が書いたファイル。パスの順に並ぶ。
+/// `CaptureHost` が書いたファイル。パスの順に並ぶ。中身は UTF-8 とは限らない。
 #[derive(Clone, Default)]
-pub struct Written(Arc<Mutex<BTreeMap<String, String>>>);
+pub struct Written(Arc<Mutex<BTreeMap<String, Vec<u8>>>>);
 
 impl Written {
-    pub fn files(&self) -> Vec<(String, String)> {
-        let files = self.0.lock().unwrap_or_else(PoisonError::into_inner);
+    pub fn files(&self) -> Vec<(String, Vec<u8>)> {
+        let files = self.lock();
         files
             .iter()
-            .map(|(path, text)| (path.clone(), text.clone()))
+            .map(|(path, bytes)| (path.clone(), bytes.clone()))
             .collect()
     }
 
-    fn get(&self, path: &str) -> Option<String> {
-        let files = self.0.lock().unwrap_or_else(PoisonError::into_inner);
-        files.get(path).cloned()
+    fn get(&self, path: &str) -> Option<Vec<u8>> {
+        self.lock().get(path).cloned()
+    }
+
+    fn lock(&self) -> std::sync::MutexGuard<'_, BTreeMap<String, Vec<u8>>> {
+        self.0.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+}
+
+/// `CaptureHost::open_write` が返す書き手。書き込みごとに表の lock を1つだけ取り、`path` の中身に足す。
+struct WrittenFile {
+    files: Written,
+    path: String,
+}
+
+impl Write for WrittenFile {
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        self.files
+            .lock()
+            .entry(self.path.clone())
+            .or_default()
+            .extend_from_slice(buf);
+        Ok(buf.len())
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        Ok(())
     }
 }
 
 /// テストの Host。標準出力と標準エラーを、それぞれメモリに捕まえる。引数、標準入力、環境変数は与えたものだけで、本物の
-/// 環境は読まない。テストの結果を実行する場所によらないものにするためである。`Fs.write_text` はディスクに書かずに
-/// 覚え、同じパスの `FileIn.open` はそれを読む。リポジトリの中にファイルを作らないためである。子のプロセスは本物を起動し、
+/// 環境は読まない。テストの結果を実行する場所によらないものにするためである。`Fs.write_text` と `FileOut` はディスクに
+/// 書かずに覚え、同じパスの `FileIn.open` はそれを読む。リポジトリの中にファイルを作らないためである。子のプロセスは本物を起動し、
 /// その標準出力と標準エラーも捕まえる (docs/implementation/testing.md の「UI テスト」)。
 pub struct CaptureHost {
     // 出力とファイルの読みは `eml run` と同じ `StdHost` に任せ、出力のまとめ方も同じにする
@@ -147,10 +171,10 @@ impl Host for CaptureHost {
 
     fn open(&self, path: &str) -> io::Result<Opened> {
         match self.written.get(path) {
-            Some(text) => {
-                let size = text.len() as u64;
+            Some(bytes) => {
+                let size = bytes.len() as u64;
                 Ok(Opened {
-                    reader: Box::new(Cursor::new(text.into_bytes())),
+                    reader: Box::new(Cursor::new(bytes)),
                     size: Some(size),
                 })
             }
@@ -173,13 +197,23 @@ impl Host for CaptureHost {
         self.stdin.clone()
     }
 
+    /// `Truncate` は開いた時点でそのパスを空にし、`Append` は今の中身を残す。
+    fn open_write(&self, path: &str, mode: WriteMode) -> io::Result<Box<dyn Write + Send>> {
+        let mut files = self.written.lock();
+        let bytes = files.entry(path.to_string()).or_default();
+        if mode == WriteMode::Truncate {
+            bytes.clear();
+        }
+        Ok(Box::new(WrittenFile {
+            files: self.written.clone(),
+            path: path.to_string(),
+        }))
+    }
+
     fn write_file(&self, path: &str, text: &str) -> io::Result<()> {
-        let mut files = self
-            .written
-            .0
+        self.written
             .lock()
-            .unwrap_or_else(PoisonError::into_inner);
-        files.insert(path.to_string(), text.to_string());
+            .insert(path.to_string(), text.as_bytes().to_vec());
         Ok(())
     }
 

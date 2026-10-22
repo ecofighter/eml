@@ -8,15 +8,23 @@ use super::proof::*;
 use super::strings::lemma_pushed_moved;
 use super::*;
 use crate::alloc::too_large;
-use crate::externs::{Fault, Form, Handle, IoOp, ReadAmount, StdStream, Write};
+use crate::externs::{Fault, Form, Handle, IoOp, Open, ReadAmount, StdStream, Write};
 use crate::host::{
-    FileIn, OutputHandle, Source, StderrHandle, StdinHandle, StdoutHandle, Stream, consume, fill,
-    host_flush, host_open, host_write, host_write_line, open_stdin, open_stream, read_text,
+    FileIn, FileOut, OutputHandle, Source, StderrHandle, StdinHandle, StdoutHandle, Stream,
+    consume, file_out_flush, file_out_write, fill, host_flush, host_open, host_open_write,
+    host_write, host_write_line, open_stdin, open_stream, read_text,
 };
 #[cfg(verus_only)]
 use vstd::string::StringSliceAdditionalSpecFns;
 
 verus! {
+
+/// `handle_write` が型を確かめたハンドルの書き込み先。標準のストリームは Host の buffer に、`FileOut` は自分の buffer
+/// に書く。
+enum Sink {
+    Stream(Stream),
+    File(*mut FileOut),
+}
 
 /// 行の読みの途中のヒープ `h`。呼ぶ前のヒープ `h0` からは、新しい物体を作って手放しただけで、`h0` で生きていた物体は
 /// みな同じブロックのまま生きている。`w` はその間に作った、伸ばせるバイト列である。
@@ -267,13 +275,14 @@ impl<M: Mode> Ctx<M> {
         }
     }
 
-    /// `FileIn.open`。パス `path` のファイルを Host に開かせ、`lin` ビットを立てた `FileIn` の物体を返す。`path` の参照を
-    /// 受け取り、開けたかどうかによらず手放す。
+    /// `FileIn.open`、`FileOut.create`、`FileOut.append`。パス `path` のファイルを `open` の向きで Host に開かせ、`lin`
+    /// ビットを立てた物体 (`Open::Read` なら `FileIn`、`Open::Write` なら `FileOut`) を返す。`path` の参照を受け取り、
+    /// 開けたかどうかによらず手放す。
     ///
     /// # Safety
     /// `heap_mut` の前提を守っている。`path` は即値か、このヒープか付けた塊の生きている物体を指し、呼ぶ側がその参照を
     /// 1つ持つ。速いモードでは、`path` は文字列である (検査モードは確かめ、違えば何も開かずに `WrongKind` を返す)。
-    pub unsafe fn fs_open(&mut self, path: Word) -> (r: Result<Word, Fault>)
+    pub unsafe fn fs_open(&mut self, path: Word, open: Open) -> (r: Result<Word, Fault>)
         requires
             old(self).wf(),
             old(self).heap_spec().word_in(path),
@@ -326,11 +335,24 @@ impl<M: Mode> Ctx<M> {
             }
             return Err(Fault::Heap(e));
         }
-        match host_open(&self.host, self.heap.string_text(path)) {
-            Ok(file) => {
-                // パスを手放す前に FileIn を作る。先に手放すと、空けたパスの箱を FileIn が使い回しうるので、呼ぶ前からの変化
-                // (`evolved_by`) を証明で言えない
-                let f = self.heap.alloc_foreign(file, true);
+        let made = match open {
+            // パスを手放す前にハンドルを作る。先に手放すと、空けたパスの箱をハンドルが使い回しうるので、呼ぶ前からの
+            // 変化 (`evolved_by`) を証明で言えない
+            Open::Read => match host_open(&self.host, self.heap.string_text(path)) {
+                Ok(file) => Ok(self.heap.alloc_foreign(file, true)),
+                Err(e) => Err(e),
+            },
+            Open::Write(mode) => match host_open_write(
+                &self.host,
+                self.heap.string_text(path),
+                mode,
+            ) {
+                Ok(file) => Ok(self.heap.alloc_foreign(file, true)),
+                Err(e) => Err(e),
+            },
+        };
+        match made {
+            Ok(f) => {
                 let ghost h2 = self.heap;
                 proof {
                     self.lemma_room_made(h1, path, f, Kind::String);
@@ -451,7 +473,9 @@ impl<M: Mode> Ctx<M> {
                 Err(e) => Err(Fault::Heap(e)),
             },
             // 書き込みのハンドルは読めない
-            Handle::Stdout | Handle::Stderr => Err(Fault::Heap(HeapError::WrongKind)),
+            Handle::Stdout | Handle::Stderr | Handle::FileOut => Err(
+                Fault::Heap(HeapError::WrongKind),
+            ),
         }
     }
 
@@ -862,11 +886,12 @@ impl<M: Mode> Ctx<M> {
 
     /// `Stdin.open`、`Stdout.open`、`Stderr.open`。`handle` の型のハンドルを開き、`lin` ビットを立てた `Foreign` の
     /// 物体を返す。生きているハンドルがすでにあれば、何も作らずに `InUse` を返す (docs/spec/stdlib.md の「ハンドル」)。
-    /// `FileIn` はパスを受ける `fs_open` で開く。
+    /// `FileIn` と `FileOut` はパスを受ける `fs_open` で開く。
     pub fn handle_open(&mut self, handle: Handle) -> (r: Result<Word, Fault>)
         requires
             old(self).wf(),
             handle != Handle::FileIn,
+            handle != Handle::FileOut,
         ensures
             final(self).wf(),
             final(self).evv_spec() == old(self).evv_spec(),
@@ -912,7 +937,7 @@ impl<M: Mode> Ctx<M> {
                 }
             },
             // 前提により来ない
-            Handle::FileIn => {
+            Handle::FileIn | Handle::FileOut => {
                 proof {
                     assert(false);
                 }
@@ -930,8 +955,8 @@ impl<M: Mode> Ctx<M> {
         Ok(w)
     }
 
-    /// `FileIn.close`、`Stdin.close`、`Stdout.close`、`Stderr.close`。ハンドル `h` の参照を手放す。最後の参照なので、
-    /// 破棄処理がハンドルを閉じる。
+    /// `FileIn.close`、`FileOut.close_raw`、`Stdin.close`、`Stdout.close`、`Stderr.close`。ハンドル `h` の参照を手放す。
+    /// 最後の参照なので、破棄処理がハンドルを閉じる。
     ///
     /// # Safety
     /// `heap_mut` の前提を守っている。`h` は即値か、このヒープか付けた塊の生きている物体を指し、呼ぶ側がその参照を
@@ -959,17 +984,20 @@ impl<M: Mode> Ctx<M> {
             },
     {
         let ghost s0 = *self;
-        let ghost c = s0.held_ok() && s0.holds(h);
         if !h.is_ptr() {
             return Err(Fault::Heap(HeapError::WrongKind));
         }
         proof {
-            if c {
+            if s0.held_ok() && s0.holds(h) {
                 s0.lemma_held_arg(h);
             }
         }
         let kind = match handle {
             Handle::FileIn => match unsafe { self.heap.foreign::<FileIn>(h) } {
+                Ok(_) => Ok(()),
+                Err(e) => Err(e),
+            },
+            Handle::FileOut => match unsafe { self.heap.foreign::<FileOut>(h) } {
                 Ok(_) => Ok(()),
                 Err(e) => Err(e),
             },
@@ -988,6 +1016,42 @@ impl<M: Mode> Ctx<M> {
         };
         if let Err(e) = kind {
             return Err(Fault::Heap(e));
+        }
+        unsafe { self.release_handle(h) }
+    }
+
+    /// 型を確かめたハンドル `h` の参照を手放す。`handle_close` と、書けなかった `handle_write` と `handle_flush` が使う。
+    ///
+    /// # Safety
+    /// `handle_close` と同じである。
+    unsafe fn release_handle(&mut self, h: Word) -> (r: Result<(), Fault>)
+        requires
+            old(self).wf(),
+            old(self).heap_spec().word_in(h),
+            h.is_ptr_spec(),
+            !M::CHECKED ==> old(self).holds(h),
+        ensures
+            final(self).wf(),
+            final(self).evv_spec() == old(self).evv_spec(),
+            final(self).yield_spec() == old(self).yield_spec(),
+            r is Ok || (r matches Err(Fault::Heap(_))),
+            r is Err ==> *final(self) == *old(self) || final(self).heap_spec().kept_live(
+                old(self).heap_spec(),
+            ),
+            !M::CHECKED ==> r is Ok,
+            old(self).held_ok() && old(self).holds(h) ==> (r matches Err(Fault::Heap(e))
+                ==> *final(self) == *old(self) || chain_err(Err::<(), HeapError>(e))),
+            old(self).held_ok() && old(self).holds(h) && r is Ok ==> {
+                &&& final(self).held_ok()
+                &&& final(self).evolved_by(*old(self), |x: usize| -points(h, x), Set::empty())
+            },
+    {
+        let ghost s0 = *self;
+        let ghost c = s0.held_ok() && s0.holds(h);
+        proof {
+            if c {
+                s0.lemma_held_arg(h);
+            }
         }
         if M::CHECKED {
             let header = self.heap.header_of(h);
@@ -1012,17 +1076,19 @@ impl<M: Mode> Ctx<M> {
         Ok(())
     }
 
-    /// `Stdout.write`、`write_string`、`write_line` と、`Stderr` の同じ3つ。`data` を借りて `stream` に書き、受け取った
-    /// ハンドル `h` をそのまま返す。`write` がデータの種類と書き方を決め、`Line` は `println` と同じく `\n` を足して
-    /// 1行として書く。ハンドルは buffer を持たず、Host の buffer に書く (docs/spec/stdlib.md の「`Stdout` と
-    /// `Stderr`」)。書けなければ `h` を手放して `Output` を返す。`data` の参照の数は変わらない。
+    /// `FileOut.write`、`write_bytes`、`write_line`、`Stdout.write`、`write_string`、`write_line` と、`Stderr` の同じ3つ。
+    /// `data` を借りて `handle` のハンドル `h` に書き、`h` をそのまま返す。`write` がデータの種類と書き方を決め、`Line`
+    /// は `println` と同じく `\n` を足して1行として書く。標準のストリームのハンドルは buffer を持たず Host の buffer に、
+    /// `FileOut` は自分の buffer に書く (docs/spec/object-model.md の「出力のバッファ」)。書けなければ `h` を手放して、
+    /// 標準のストリームなら `Output`、`FileOut` なら `Io { op: Write, .. }` を返す。`data` の参照の数は変わらない。
     ///
     /// # Safety
     /// `heap_mut` の前提を守っている。`h` と `data` は即値か、このヒープか付けた塊の生きている物体を指し、呼ぶ側が
-    /// それぞれの参照を1つ持つ。`stream` のハンドルでない `h` は、どちらのモードでも `WrongKind` を返す。速いモード
-    /// では、`data` は `write` の種類 (`Bytes` ならバイト列、ほかは文字列) である (検査モードは確かめ、違えば何も
-    /// 書かずに `WrongKind` を返す)。
-    pub unsafe fn handle_write(&mut self, h: Word, stream: Stream, data: Word, write: Write) -> (r:
+    /// それぞれの参照を1つ持つ。`handle` が `FileIn` か `Stdin` か、`h` が `handle` の型のハンドルでなければ、どちらの
+    /// モードでも `WrongKind` を返す。速いモードでは、`data` は `write` の種類 (`Bytes` ならバイト列、ほかは文字列)
+    /// で、`FileOut` の `h` は局所で rc が 1 である (検査モードは確かめ、違えば何も書かずに `WrongKind`、`NotUnique`、
+    /// `WrongOwner` を返す)。
+    pub unsafe fn handle_write(&mut self, h: Word, handle: Handle, data: Word, write: Write) -> (r:
         Result<Word, Fault>)
         requires
             old(self).wf(),
@@ -1036,11 +1102,14 @@ impl<M: Mode> Ctx<M> {
                     Kind::String
                 },
             ) && old(self).holds(data) && old(self).holds(h),
+            !M::CHECKED && handle == Handle::FileOut ==> old(self).heap_spec().rc_value(h) == 1,
         ensures
             final(self).wf(),
             final(self).evv_spec() == old(self).evv_spec(),
             final(self).yield_spec() == old(self).yield_spec(),
-            r is Ok || (r matches Err(Fault::Output(_))) || (r matches Err(Fault::Heap(_))),
+            r is Ok || (r matches Err(Fault::Output(_))) || (r matches Err(
+                Fault::Io { op: IoOp::Write, .. },
+            )) || (r matches Err(Fault::Heap(_))),
             r matches Ok(x) ==> x == h,
             !M::CHECKED && (r matches Err(Fault::Heap(_))) ==> r == Err::<Word, Fault>(
                 Fault::Heap(HeapError::WrongKind),
@@ -1058,7 +1127,7 @@ impl<M: Mode> Ctx<M> {
                     &&& final(self).holds(h)
                     &&& final(self).evolved_by(*old(self), |x: usize| 0int, Set::empty())
                 }
-                &&& r matches Err(Fault::Output(_)) ==> {
+                &&& r is Err && !(r matches Err(Fault::Heap(_))) ==> {
                     &&& final(self).held_ok()
                     &&& final(self).evolved_by(*old(self), |x: usize| -points(h, x), Set::empty())
                 }
@@ -1078,25 +1147,29 @@ impl<M: Mode> Ctx<M> {
                 s0.lemma_held_arg(h);
             }
         }
-        let (handle, checked) = match stream {
-            Stream::Out => (
-                Handle::Stdout,
-                match unsafe { self.heap.foreign::<StdoutHandle>(h) } {
-                    Ok(_) => Ok(()),
-                    Err(e) => Err(e),
-                },
-            ),
-            Stream::Err => (
-                Handle::Stderr,
-                match unsafe { self.heap.foreign::<StderrHandle>(h) } {
-                    Ok(_) => Ok(()),
-                    Err(e) => Err(e),
-                },
-            ),
+        // 確かめはどれも書く前に済ませ、誤りなら何も書かない
+        let checked = match handle {
+            Handle::Stdout => match unsafe { self.heap.foreign::<StdoutHandle>(h) } {
+                Ok(_) => Ok(Sink::Stream(Stream::Out)),
+                Err(e) => Err(e),
+            },
+            Handle::Stderr => match unsafe { self.heap.foreign::<StderrHandle>(h) } {
+                Ok(_) => Ok(Sink::Stream(Stream::Err)),
+                Err(e) => Err(e),
+            },
+            Handle::FileOut => match unsafe { self.heap.foreign_unique::<FileOut>(h) } {
+                Ok(p) => Ok(Sink::File(p)),
+                Err(e) => Err(e),
+            },
+            // 読むためのハンドルには書けない
+            Handle::FileIn | Handle::Stdin => Err(HeapError::WrongKind),
         };
-        if let Err(e) = checked {
-            return Err(Fault::Heap(e));
-        }
+        let sink = match checked {
+            Ok(sink) => sink,
+            Err(e) => {
+                return Err(Fault::Heap(e));
+            },
+        };
         self.heap.settle();
         let ghost h1 = self.heap;
         let hd = self.heap.header_of(data);
@@ -1109,16 +1182,29 @@ impl<M: Mode> Ctx<M> {
                 s0.lemma_settled_body(h1, data, kind);
             }
         }
-        // 確かめはどれも Host を呼ぶ前に済ませ、誤りなら何も書かない
         if let Err(e) = self.heap.checked_body(hd, kind) {
             proof {
                 self.lemma_words_kept(s0);
             }
             return Err(Fault::Heap(e));
         }
-        let written = match write {
-            Write::Line => host_write_line(&self.host, stream, self.heap.string_text(data)),
-            Write::Bytes | Write::Text => host_write(&self.host, stream, self.heap.body_of(data)),
+        let line = match write {
+            Write::Line => true,
+            Write::Bytes | Write::Text => false,
+        };
+        let written = match sink {
+            Sink::Stream(stream) => {
+                let to_host = if line {
+                    host_write_line(&self.host, stream, self.heap.string_text(data))
+                } else {
+                    host_write(&self.host, stream, self.heap.body_of(data))
+                };
+                match to_host {
+                    Ok(()) => Ok(()),
+                    Err(e) => Err(Fault::Output(e)),
+                }
+            },
+            Sink::File(p) => unsafe { file_out_write(p, self.heap.body_of(data), line) },
         };
         proof {
             if M::CHECKED {
@@ -1131,9 +1217,9 @@ impl<M: Mode> Ctx<M> {
         }
         match written {
             Ok(()) => Ok(h),
-            Err(e) => {
-                let closed = unsafe { self.handle_close(h, handle) };
-                closed?;
+            Err(fault) => {
+                let released = unsafe { self.release_handle(h) };
+                released?;
                 proof {
                     if c {
                         lemma_settle_moved(h1, s0.heap);
@@ -1150,33 +1236,39 @@ impl<M: Mode> Ctx<M> {
                         );
                     }
                 }
-                Err(Fault::Output(e))
+                Err(fault)
             },
         }
     }
 
-    /// `Stdout.flush`。Host がまとめて持っている出力を書き出させ、受け取ったハンドル `h` をそのまま返す。書き出せな
-    /// ければ `h` を手放して `Output` を返す。
+    /// `Stdout.flush` と `FileOut.flush`。標準出力なら Host がまとめて持っている出力を、`FileOut` なら自分の buffer を
+    /// 書き出させ、受け取ったハンドル `h` をそのまま返す。書き出せなければ `h` を手放して、標準出力なら `Output`、
+    /// `FileOut` なら `Io { op: Write, .. }` を返す。
     ///
     /// # Safety
     /// `heap_mut` の前提を守っている。`h` は即値か、このヒープか付けた塊の生きている物体を指し、呼ぶ側がその参照を
-    /// 1つ持つ。標準出力のハンドルでなければ、どちらのモードでも `WrongKind` を返す。
-    pub unsafe fn handle_flush(&mut self, h: Word) -> (r: Result<Word, Fault>)
+    /// 1つ持つ。`handle` が `Stdout` か `FileOut` でないか、`h` が `handle` の型のハンドルでなければ、どちらのモードでも
+    /// `WrongKind` を返す。速いモードでは、`FileOut` の `h` は局所で rc が 1 である (検査モードは確かめる)。
+    pub unsafe fn handle_flush(&mut self, h: Word, handle: Handle) -> (r: Result<Word, Fault>)
         requires
             old(self).wf(),
             old(self).heap_spec().word_in(h),
             !M::CHECKED ==> old(self).holds(h),
+            !M::CHECKED && handle == Handle::FileOut ==> old(self).heap_spec().rc_value(h) == 1,
         ensures
             final(self).wf(),
             final(self).evv_spec() == old(self).evv_spec(),
             final(self).yield_spec() == old(self).yield_spec(),
-            r is Ok || (r matches Err(Fault::Output(_))) || (r matches Err(Fault::Heap(_))),
+            r is Ok || (r matches Err(Fault::Output(_))) || (r matches Err(
+                Fault::Io { op: IoOp::Write, .. },
+            )) || (r matches Err(Fault::Heap(_))),
             r matches Ok(x) ==> x == h && *final(self) == *old(self),
             !M::CHECKED && (r matches Err(Fault::Heap(_))) ==> r == Err::<Word, Fault>(
                 Fault::Heap(HeapError::WrongKind),
             ),
-            old(self).held_ok() && old(self).holds(h) && (r matches Err(Fault::Output(_)))
-                ==> final(self).held_ok() && final(self).evolved_by(
+            old(self).held_ok() && old(self).holds(h) && r is Err && !(r matches Err(
+                Fault::Heap(_),
+            )) ==> final(self).held_ok() && final(self).evolved_by(
                 *old(self),
                 |x: usize| -points(h, x),
                 Set::empty(),
@@ -1192,15 +1284,32 @@ impl<M: Mode> Ctx<M> {
                 s0.lemma_held_arg(h);
             }
         }
-        if let Err(e) = unsafe { self.heap.foreign::<StdoutHandle>(h) } {
-            return Err(Fault::Heap(e));
-        }
-        match host_flush(&self.host) {
+        let flushed = match handle {
+            Handle::Stdout => match unsafe { self.heap.foreign::<StdoutHandle>(h) } {
+                Ok(_) => match host_flush(&self.host) {
+                    Ok(()) => Ok(()),
+                    Err(e) => Err(Fault::Output(e)),
+                },
+                Err(e) => {
+                    return Err(Fault::Heap(e));
+                },
+            },
+            Handle::FileOut => match unsafe { self.heap.foreign_unique::<FileOut>(h) } {
+                Ok(p) => unsafe { file_out_flush(p) },
+                Err(e) => {
+                    return Err(Fault::Heap(e));
+                },
+            },
+            Handle::FileIn | Handle::Stdin | Handle::Stderr => {
+                return Err(Fault::Heap(HeapError::WrongKind));
+            },
+        };
+        match flushed {
             Ok(()) => Ok(h),
-            Err(e) => {
-                let closed = unsafe { self.handle_close(h, Handle::Stdout) };
-                closed?;
-                Err(Fault::Output(e))
+            Err(fault) => {
+                let released = unsafe { self.release_handle(h) };
+                released?;
+                Err(fault)
             },
         }
     }

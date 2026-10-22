@@ -6,7 +6,7 @@ use std::io::{self, Read, Write};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
-use crate::{Host, HostRef, Opened, StdinSlot, Stream};
+use crate::{Host, HostRef, Opened, StdinSlot, Stream, WriteMode};
 
 /// メモリの上のファイル。読み手の振る舞い (1回に返すバイト数、途中の誤り、中断) を決められる。
 #[derive(Clone, Default)]
@@ -104,8 +104,10 @@ pub(super) struct MemoryHost {
     env: HashMap<String, OsString>,
     /// `None` なら標準入力を使えない
     stdin: Option<Arc<StdinSlot>>,
-    /// `write_file` が書いたファイル
-    written: Mutex<HashMap<String, String>>,
+    /// `write_file` と `open_write` の書き手が書いたファイル
+    written: Arc<Mutex<HashMap<String, Vec<u8>>>>,
+    /// `open_write` の書き手が受けたバイト数。書けなかったバイトも数える
+    received: Arc<AtomicUsize>,
     /// `run` が受けたプログラムと引数
     runs: Mutex<Vec<(String, Vec<String>)>>,
     /// `flush` を呼ばれた回数
@@ -166,7 +168,14 @@ impl MemoryHost {
         self
     }
     pub(super) fn written(&self, path: &str) -> Option<String> {
+        self.written_bytes(path)
+            .map(|bytes| String::from_utf8(bytes).unwrap())
+    }
+    pub(super) fn written_bytes(&self, path: &str) -> Option<Vec<u8>> {
         self.written.lock().unwrap().get(path).cloned()
+    }
+    pub(super) fn received(&self) -> usize {
+        self.received.load(Ordering::Relaxed)
     }
     pub(super) fn runs(&self) -> Vec<(String, Vec<String>)> {
         self.runs.lock().unwrap().clone()
@@ -234,6 +243,23 @@ impl Host for MemoryHost {
     fn stdin(&self) -> Option<Arc<StdinSlot>> {
         self.stdin.clone()
     }
+    /// 空のパスは開けない。`fail_write` があれば、書き手は書くたびにその文言で失敗する
+    fn open_write(&self, path: &str, mode: WriteMode) -> io::Result<Box<dyn Write + Send>> {
+        if path.is_empty() {
+            return Err(io::Error::from(io::ErrorKind::PermissionDenied));
+        }
+        let mut written = self.written.lock().unwrap();
+        let bytes = written.entry(path.to_string()).or_default();
+        if mode == WriteMode::Truncate {
+            bytes.clear();
+        }
+        Ok(Box::new(Writer {
+            written: self.written.clone(),
+            path: path.to_string(),
+            fail: self.fail_write,
+            received: self.received.clone(),
+        }))
+    }
     fn write_file(&self, path: &str, text: &str) -> io::Result<()> {
         if path.is_empty() {
             return Err(io::Error::from(io::ErrorKind::PermissionDenied));
@@ -241,7 +267,7 @@ impl Host for MemoryHost {
         self.written
             .lock()
             .unwrap()
-            .insert(path.to_string(), text.to_string());
+            .insert(path.to_string(), text.as_bytes().to_vec());
         Ok(())
     }
     /// プロセスを起動せず、受けたものを覚える。`missing` は見つからないプログラムで、ほかは引数の数を終了コードにする
@@ -256,6 +282,32 @@ impl Host for MemoryHost {
             control.interrupt();
         }
         Ok(code)
+    }
+}
+
+/// `MemoryHost::open_write` の書き手。メモリの表の `path` の中身に足す。
+struct Writer {
+    written: Arc<Mutex<HashMap<String, Vec<u8>>>>,
+    path: String,
+    fail: Option<&'static str>,
+    received: Arc<AtomicUsize>,
+}
+
+impl Write for Writer {
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        self.received.fetch_add(buf.len(), Ordering::Relaxed);
+        if let Some(message) = self.fail {
+            return Err(io::Error::other(message));
+        }
+        let mut written = self.written.lock().unwrap();
+        written
+            .entry(self.path.clone())
+            .or_default()
+            .extend_from_slice(buf);
+        Ok(buf.len())
+    }
+    fn flush(&mut self) -> io::Result<()> {
+        Ok(())
     }
 }
 

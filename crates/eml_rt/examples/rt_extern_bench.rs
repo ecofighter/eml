@@ -8,7 +8,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use eml_rt::{
-    Buffering, Control, Ctx, Fast, Form, Handle, Host, HostRef, Limits, Opened, ReadAmount,
+    Buffering, Control, Ctx, Fast, Form, Handle, Host, HostRef, Limits, Open, Opened, ReadAmount,
     StdHost, Stream, Word, Write,
 };
 
@@ -188,7 +188,8 @@ fn stdout_write_line() {
     for _ in 0..10_000_000 {
         // SAFETY: out は生きた標準出力のハンドルで、handle_write は受け取ったハンドルを返す。line は借りるだけで
         // 手放さない。
-        out = unsafe { ctx.handle_write(out, Stream::Out, black_box(line), Write::Line) }.unwrap();
+        out =
+            unsafe { ctx.handle_write(out, Handle::Stdout, black_box(line), Write::Line) }.unwrap();
     }
     // SAFETY: out は生きた標準出力のハンドルで、この後読まない。
     unsafe { ctx.handle_close(out, Handle::Stdout) }.unwrap();
@@ -231,7 +232,7 @@ fn read_all(sized: bool) {
         // 文字列は decref に渡し、その後どちらも読まない。
         unsafe {
             ctx.heap_mut().acquire_immortal(path).unwrap();
-            let file = ctx.fs_open(path).unwrap();
+            let file = ctx.fs_open(path, Open::Read).unwrap();
             let text = ctx
                 .handle_read(file, Handle::FileIn, ReadAmount::All, Form::Text)
                 .unwrap();
@@ -406,7 +407,7 @@ fn read_all_bytes(std: bool) {
         // SAFETY: read_all と同じ。
         unsafe {
             ctx.heap_mut().acquire_immortal(path).unwrap();
-            let file = ctx.fs_open(path).unwrap();
+            let file = ctx.fs_open(path, Open::Read).unwrap();
             let read = ctx
                 .handle_read(file, Handle::FileIn, ReadAmount::All, Form::Bytes)
                 .unwrap();
@@ -440,7 +441,7 @@ fn read_line_bytes(std: bool) {
     // SAFETY: read_all と同じ。行は decref に渡し、その後読まない。
     unsafe {
         ctx.heap_mut().acquire_immortal(path).unwrap();
-        let file = ctx.fs_open(path).unwrap();
+        let file = ctx.fs_open(path, Open::Read).unwrap();
         loop {
             let read = ctx
                 .handle_read(file, Handle::FileIn, ReadAmount::Line, Form::Bytes)

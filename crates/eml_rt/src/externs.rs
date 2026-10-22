@@ -6,6 +6,7 @@ use std::fmt;
 
 use crate::control::Stop;
 use crate::error::HeapError;
+use crate::host::WriteMode;
 use crate::word::Word;
 #[cfg(verus_only)]
 use vstd::arithmetic::div_mod::{rust_div, rust_rem};
@@ -77,12 +78,21 @@ pub enum IoReason {
 pub enum Handle {
     /// `Std.FileIn.FileIn`。
     FileIn,
+    /// `Std.FileOut.FileOut`。
+    FileOut,
     /// `Std.Stdin.Stdin`。
     Stdin,
     /// `Std.Stdout.Stdout`。
     Stdout,
     /// `Std.Stderr.Stderr`。
     Stderr,
+}
+
+/// `Ctx::fs_open` がファイルを開く向き。読むなら `FileIn`、書くなら `FileOut` の物体を作る。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Open {
+    Read,
+    Write(WriteMode),
 }
 
 /// `Ctx::handle_write` が書くデータの種類と書き方。
