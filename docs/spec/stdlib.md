@@ -446,7 +446,7 @@ pub while : (Unit -> <e> Bool) -> (Unit -> <e> Unit) -> <e> Unit
 - `read_text path` は、ファイル全体を文字列として読む。`open`、`read_all`、`close` で書いた関数である
 - `write_text path text` は、ファイルを作るか切り詰めて、`text` を書く
 - `read_line file` は、今の位置から1行を読み、行の終わり (`\n` か `\r\n`) を `String.trim_line_end` で除いて、結果を先に、同じ `File` を後に置いた組で返す。終わりなら `None` を返す。行の終わりのない最後の行も1行として返す。`Stdin.read_line` と同じである
-- `read_line` は、`File` を持ったまま1行ずつ読む生産者を書くための関数で、後のバイト列とハンドルの項目でハンドルの API に置き換わりうる ([ロードマップ](../future/roadmap.md) の「バイト列とハンドル」)。std の中だけの extern `read_line_raw : File -> <IO> (String, File)` の上に書いてある。`read_line_raw` は行の終わりを含む1行を返し、終わりなら空の文字列を返す (上の「extern の境界」の番兵)。読み方は `read_all` と同じく `File` の読み手から読み、64 KiB を超える行も、割り込みと確保量の上限を見ながら読む ([オブジェクトモデル](object-model.md) の「読み手」)
+- `read_line` は、std の中だけの extern `read_line_raw : File -> <IO> (String, File)` の上に書いてある。`read_line_raw` は行の終わりを含む1行を返し、終わりなら空の文字列を返す (上の「extern の境界」の番兵)。読み方は `read_all` と同じく `File` の読み手から読み、64 KiB を超える行も、割り込みと確保量の上限を見ながら読む ([オブジェクトモデル](object-model.md) の「読み手」)
 - 読めないときと UTF-8 でない行の誤りは、文言も `try_io` での捕まえ方も `read_all` と同じである ([LIR](lir.md) の「実行時エラー」)。誤りのときも `read_all` と同じく、extern は `File` を手放さない。`try_io` の下では巻き戻しが手放して閉じ、実行時エラーなら実行がそこで止まる
 - バイト列の読み (`read_all_bytes`、`read_line_bytes`、`read_chunk`) は、どのバイトも受け、UTF-8 を確かめないので、`NotUtf8` で失敗しない。ほかは文字列の読みと同じで、`File` を借りて、結果を先に、同じ `File` を後に置いた組で返す。読めないときの誤りと、割り込みと確保量の上限の扱いも同じである
 - `read_all_bytes file` は、今の位置から終わりまでをバイト列として読む。`read_all` と同じく Rust の buffer に読んでから1回写す

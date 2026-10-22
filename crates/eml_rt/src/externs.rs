@@ -26,9 +26,6 @@ pub const EQ: i64 = 1;
 
 pub const GT: i64 = 2;
 
-/// 組のタグ。`alloc_data` のタグの型に合わせる。
-pub const TUPLE: u16 = 0;
-
 /// `IOErrorKind` のタグ。Prelude の宣言の順で、`try_io` の `io_failed` の節が受け取る
 /// (docs/spec/stdlib.md の「`try_io`」)。
 pub const IO_NOT_FOUND: i64 = 0;

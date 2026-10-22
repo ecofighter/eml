@@ -8,7 +8,8 @@
 
 ### 実装したもの
 
-- 基本型: `Int`、`Float`、`Char`、`Byte`、`Bool`、`String`、`Unit`。`Byte` は `65u8` の形のリテラルと、`Eq`、`Ord`、`Show` を持ち、変換は `Std.Byte` にある ([標準ライブラリ](../spec/stdlib.md) の「`Std.Byte`」)。`Char` は文字のリテラル `'a'` と、`Eq`、`Ord`、`Show` を持つ。変換と ASCII の判定は `Std.Char` にある ([標準ライブラリ](../spec/stdlib.md) の「`Std.Char`」)。`Bytes` はバイト列の型で、`Eq`、`Ord`、`Show` を持ち、リテラルはない。操作は `Bytes` にある ([標準ライブラリ](../spec/stdlib.md) の「`Bytes`」)。`Bool` は Prelude の `data Bool = | False | True` で、キーワード `true` / `false` はない。単項の `!` はなく、関数 `not` を使う
+- 基本型: `Int`、`Float`、`Char`、`Byte`、`Bool`、`String`、`Unit`。`Byte` は `65u8` の形のリテラルと、`Eq`、`Ord`、`Show`、算術の `Num` と `Div` を持ち、変換は `Std.Byte` にある ([標準ライブラリ](../spec/stdlib.md) の「`Std.Byte`」)。`Char` は文字のリテラル `'a'` と、`Eq`、`Ord`、`Show` を持つ。変換と ASCII の判定は `Std.Char` にある ([標準ライブラリ](../spec/stdlib.md) の「`Std.Char`」)。`Bytes` はバイト列の型で、`Eq`、`Ord`、`Show` を持ち、リテラルはない。操作は `Bytes` にあり ([標準ライブラリ](../spec/stdlib.md) の「`Bytes`」)、`String` との変換は `Bytes.of_string` と `String.decode` である ([標準ライブラリ](../spec/stdlib.md) の「`Bytes` との変換」)。`Bool` は Prelude の `data Bool = | False | True` で、キーワード `true` / `false` はない。単項の `!` はなく、関数 `not` を使う
+- ビット演算: Prelude のクラス `Bits` (`&&&`、`|||`、`^^^`、`complement`、`<<<`、`>>>`) と、`Int` と `Byte` の instance ([宣言](../spec/declarations.md) の「Prelude のクラス」)
 - タプルと射影 `t.0`、型引数を持つ代数的データ型 (`data`)、`match` と入れ子のパターン、`Int`、`Byte`、`Char`、`String` のリテラルのパターン
 - 名前付きのレコード: `data` のコンストラクタの名前付きのフィールド、作る式 `Person { name = "a", age = 3 }` と省略形、射影 `p.name`、更新 `{ p | age = 31 }`、分解のパターン、フィールドのセクション `(.name)` と `(.0)`、導出した `Show` の `Person { … }` の表示 ([直積型とレコード](../spec/records.md))。呼び出しの引数のラムダは、ほかの引数の後に型を検査する ([型と Kind](../spec/types.md) の「引数のラムダを後で検査する」)
 - Prelude の `List`、`Option`、`Result` と、その `Eq`、`Ord`、`Show` の instance ([宣言](../spec/declarations.md) の「Prelude のクラス」)。リストのリテラル `[…]` とパターン、コンストラクタ `::` (`infixr 5`。Prelude だけが宣言できる、E1044) ([式](../spec/expressions.md) の「リスト」)。リストの関数は `Std.List` にある (`map`、`filter`、`fold`、`length` など。[標準ライブラリ](../spec/stdlib.md) の「`List`」)
@@ -24,6 +25,7 @@
 - IO の失敗と終了: Prelude の `try_io : (Unit -> <IO | e> a) -> <IO | e> Result IOError a` が、IO の extern の失敗 (書き出しの失敗を除く) を `IOError { kind, message }` の値にする。`exit : Int -> <IO> a` は途中のフレームの値を後始末し、終了コード `n & 255` で終わる。REPL では入力を終えるだけである ([標準ライブラリ](../spec/stdlib.md) の「`try_io`」と「`exit`」)
 - 標準ライブラリのツリー: リポジトリの `std/` (`Prelude.em`、`Fs.em`、`List.em`、`String.em`、`Env.em`、`Stdin.em`、`Stdout.em`、`Stderr.em`、`Proc.em`、`Float.em`、`Char.em`、`Byte.em`、`Bytes.em`、`Array.em`、`MutArray.em`、`Yield.em`、`Fail.em`、`State.em`、`Iter.em`) をバイナリに埋め込む。Prelude はいつも読み込み、ほかのモジュールは import か修飾子で使うものだけを読み込む。`Fs.open` のように import なしで修飾付きで使え、`import Std.Fs` でも読める。予約した根は `Std` である ([モジュールと名前解決](../spec/modules.md) の「標準ライブラリ」)
 - std のエフェクトと `Iter`: エフェクトのモジュール `Yield` (`for_each`、`fold`、`collect`)、`Fail` (`to_result`、`to_option`)、`State` (`run`、`eval`、`exec`) と、`once` の継続で作る引いて使うジェネレータ `Iter` とその変換。`File` から1行ずつ読む `Fs.read_line` ([標準ライブラリ](../spec/stdlib.md) の「エフェクトのモジュール」と「`Fs`」)。`tests/ui/run/scripts/` の `grep`、`logstat`、`csv2jsonl` は std のエフェクトを使い、`csv2jsonl` の CSV の読み取りは `let … and …` の組で書く
+- 標準入出力とファイルのハンドル: 線形な型 `Stdin`、`Stdout`、`Stderr`、`Fs.File`。読むハンドルは文字列とバイト列を、全部、1行ずつ、塊ごとに読み、書くハンドルはバイト列と文字列と行を書く。標準のストリームごとに、生きているハンドルは高々1つである ([標準ライブラリ](../spec/stdlib.md) の「ハンドル」)
 - `Float` (IEEE 754 の倍精度) のリテラル、算術、比較と、Python の `repr` の形の表示。変換と数学の関数は `Std.Float` にある ([宣言](../spec/declarations.md) の「Prelude のクラス」、[標準ライブラリ](../spec/stdlib.md) の「`Std.Float`」)
 - 配列: 変えられない `Array a` (`Std.Array`) と、線形な `MutArray a` (`Std.MutArray`) ([標準ライブラリ](../spec/stdlib.md) の「`Std.Array`」と「`Std.MutArray`」)
 - ブロックの中の `var` と代入 `x <- e`、添字の読み `x[i]` と書き込み `x[i] <- e`、Prelude の `for` と `while` ([式](../spec/expressions.md) の「`var`」、[標準ライブラリ](../spec/stdlib.md) の「`for` と `while`」)
@@ -37,7 +39,7 @@
 
 - まだ実装していない構文: 型の別名 `type` ([ロードマップ](../future/roadmap.md) の「言語機能と構文」)、コマンドリテラル ([ロードマップ](../future/roadmap.md) の「コマンドリテラル」)。字句と文法の置き場所を用意してあり、使うと E0004 (未対応) を出して回復する。どの段階が E0004 を出すかは [診断](../spec/diagnostics.md) の「未対応の構文と E0004」にある
 - row の型引数を持つ型の instance と `deriving`。書くと E0004 を出す
-- バイト列と標準入出力のハンドル ([ロードマップ](../future/roadmap.md) の「バイト列とハンドル」)。文字の型を使う文字列の関数、連想配列、並べ替えなどの標準ライブラリ ([ロードマップ](../future/roadmap.md) の「UTF-8 と標準ライブラリ」)
+- 文字の型を使う文字列の関数、書き込みのできる `File`、連想配列、並べ替えなどの標準ライブラリ ([ロードマップ](../future/roadmap.md) の「UTF-8 と標準ライブラリ」)
 - ユーザーが書く extern (FFI)
 - 可変参照 `Ref`、再エクスポート (`pub import`)、抽象型、修飾した演算子の構文、`data` のフィールドの矢印の線形性の多相、`: Unr` の宣言、row の型引数の省略、`Lin` の型を受けるクラス、or パターン、ガード、as パターン、借用パラメータ、関数をまたぐ reuse、LSP、フォーマッタ、ネイティブ化 ([ロードマップ](../future/roadmap.md) の「その後の項目」)
 
