@@ -8,6 +8,15 @@ pub extern slice : Int -> Int -> String -> <Panic> String
 -- 探す文字列、開始位置、対象。開始位置以降で最初に見つかった位置で、なければ -1 である
 extern find_from : String -> Int -> String -> <Panic> Int
 
+-- 借りて確かめる。`decode` は妥当でない並びで `Panic` を起こすので、先にこれで確かめる
+pub extern valid_utf8 : Bytes -> Bool
+-- `Bytes` を消費して中身を写す。妥当でない UTF-8 は `Panic` になる
+pub extern decode : Bytes -> <Panic> String
+
+-- 妥当な UTF-8 なら `Some` で `String` に写し、そうでなければ `None` である (docs/spec/stdlib.md の「`Bytes` との変換」)
+pub from_utf8 : Bytes -> <Panic> Option String
+from_utf8 b = if valid_utf8 b then Some (decode b) else None
+
 pub find : String -> String -> <Panic> Option Int
 find needle s =
   let i = find_from needle 0 s

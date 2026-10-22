@@ -1021,6 +1021,14 @@ fn run_extern<M: Mode>(
                     ctx.bytes_find_from(task.get(arg(0)), task.raw(arg(1)), task.get(arg(2)))?;
                 task.set_raw(dst, i);
             }
+            Extern::BytesValidUtf8 => {
+                let r = ctx.bytes_valid_utf8(task.get(arg(0)))?;
+                task.set_raw(dst, r);
+            }
+            Extern::StringDecode => {
+                let w = ctx.string_decode(task.get(arg(0)))?;
+                task.set(dst, w);
+            }
             Extern::EnvArgCount => task.set_raw(dst, ctx.env_arg_count()),
             Extern::EnvArg => {
                 let w = ctx.env_arg(task.raw(arg(0)))?;

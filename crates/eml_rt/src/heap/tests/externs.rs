@@ -1696,6 +1696,15 @@ unsafe fn call<M: Mode>(
                 let b = args.lent_bytes(ctx, &inputs[1]);
                 tag_order(ctx.bytes_compare(a, b)?)
             }
+            "Std.String.valid_utf8" => {
+                let a = args.lent_bytes(ctx, &inputs[0]);
+                tag_bool(ctx.bytes_valid_utf8(a)?)
+            }
+            "Std.String.decode" => {
+                let a = args.bytes(ctx, &inputs[0]);
+                let w = ctx.string_decode(a)?;
+                take_text(ctx, w)
+            }
             "Std.Bytes.find_from" => {
                 let n = args.lent_bytes(ctx, &inputs[0]);
                 let a = args.lent_bytes(ctx, &inputs[2]);

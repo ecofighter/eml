@@ -1034,6 +1034,17 @@ pub fn inputs() -> Vec<(String, Vec<Arg>)> {
     }
     push("Std.Bytes.of_string", vec![Arg::Shared("ab".into())]);
     push("Std.Bytes.of_string", vec![c("ab")]);
+    // 妥当でない並びは位置つきの誤りになり、共有したバイト列も手放す
+    for b in BYTES {
+        push("Std.String.valid_utf8", vec![by(b)]);
+        push("Std.String.decode", vec![by(b)]);
+    }
+    push(
+        "Std.String.valid_utf8",
+        vec![Arg::SharedBytes(vec![97, 255])],
+    );
+    push("Std.String.decode", vec![Arg::SharedBytes(vec![97, 98])]);
+    push("Std.String.decode", vec![Arg::SharedBytes(vec![97, 255])]);
     let rel = |s: &str| vec![Arg::Rel(s.to_string())];
     for path in [
         "plain.txt",

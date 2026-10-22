@@ -428,6 +428,7 @@ left が一意 (is_unique)
 | 操作 | 動作 |
 |---|---|
 | `bytes_of_string(s) -> Result<Word, Fault>` | `Bytes.of_string`。`s` の参照を受け取り、同じバイトのバイト列を返す。文字列が一意でも、リテラルや共有の文字列でも、同じ道で写す |
+| `bytes_valid_utf8(b) -> Result<i64, Fault>` | `String.valid_utf8`。`b` を借りて、T5 の `utf8_valid` で確かめる。妥当なら真、そうでなければ偽を返す。何も作らず、手放さない |
 | `string_decode(b) -> Result<Word, Fault>` | `String.decode`。`b` の参照を受け取り、T5 の `utf8_valid` で確かめる。妥当なら同じバイトの文字列を返す。妥当でなければ何も作らずに `b` を手放し、最初の妥当でない位置を持つ `Fault::Utf8 { at }` を返す |
 
 - 写すバイトは `string_bytes_copied` に数える。妥当でないバイト列は何も写さないので数えない (下の「仕事の回数」)
@@ -806,7 +807,7 @@ token の表の項目は、`into_token` と `release_reuse` が添字を使い�
 
 ## extern
 
-`eml_extern` の表の関数の行のうち `exit` と `panic` を除く134個を、`eml_rt` に語の ABI で1回だけ書く。VM と、ネイティブのコードが同じ関数を呼ぶ。ヒープを使わない算術と比較は module `externs` の関数で、文字列と I/O の extern は `Ctx` のメソッドである。純粋な extern は、結果をバイト列や整数の spec に対して Verus で証明する。`exit` と `panic` は VM が実行する。`exit` は終了コードを覚えて、`Ctx::exit_abort` で中断を始める。`panic` は文言を `panicked` の節の入口に渡す ([VM](vm.md) の「extern の中断」)。
+`eml_extern` の表の関数の行のうち `exit` と `panic` を除く136個を、`eml_rt` に語の ABI で1回だけ書く。VM と、ネイティブのコードが同じ関数を呼ぶ。ヒープを使わない算術と比較は module `externs` の関数で、文字列と I/O の extern は `Ctx` のメソッドである。純粋な extern は、結果をバイト列や整数の spec に対して Verus で証明する。`exit` と `panic` は VM が実行する。`exit` は終了コードを覚えて、`Ctx::exit_abort` で中断を始める。`panic` は文言を `panicked` の節の入口に渡す ([VM](vm.md) の「extern の中断」)。
 
 行の番号 (`eml_extern::Extern`) から関数を引く表は `eml_rt` に置かない。VM が行の番号の `match` で各関数を呼ぶ。`match` は飛び先の表になるので、関数ポインタの表と同じ速さである。
 
@@ -842,6 +843,7 @@ token の表の項目は、`into_token` と `release_reuse` が添字を使い�
 | `Std.Fs.write_text` | `Ctx::fs_write_text` |
 | `Std.String.byte_length`、`byte_at`、`slice`、`find_from` | `Ctx::string_byte_length`、`string_byte_at`、`string_slice`、`string_find_from` |
 | `Std.Bytes.empty`、`length`、`append`、`append_slice`、`slice`、`truncate`、`of_string`、`find_from` | `Ctx::bytes_empty`、`bytes_length`、`bytes_append`、`bytes_append_part`、`bytes_slice`、`bytes_truncate`、`bytes_of_string`、`bytes_find_from` (上の「バイト列の操作」と「変換」) |
+| `Std.String.valid_utf8`、`decode` | `Ctx::bytes_valid_utf8`、`string_decode` (上の「バイト列と文字列」の「変換」) |
 | `Std.Env.arg_count`、`arg`、`has`、`lookup` | `Ctx::env_arg_count`、`env_arg`、`env_has`、`env_var` |
 | `Std.Stdin.read_all`、`read_line_raw` | `Ctx::stdin_read` (`line` が偽と真) |
 | `Std.Proc.status` | `Ctx::proc_status` |
@@ -939,6 +941,8 @@ token の表の項目は、`into_token` と `release_reuse` が添字を使い�
 - `append`、`append_slice`、`slice`、`truncate` の結果は、`text_of` が `a + b`、`dst + src[from..to]`、`s[start..end]`、`w[0..n]` に等しい。範囲の誤りは確保の前に返す
 - `find_from` は文字列の `find_from` と同じ spec `found_from` を約束する。開始位置が `0 <= from <= len` でなければ `IndexFault::BytesIndex` を返す。照合は素朴な二重の繰り返しである
 - `empty` は `Bytes.make` と同じ道で作る長さ 0 のバイト列で、確保量の上限を確かめる
+- `String.valid_utf8` は、結果が vstd の `valid_utf8` に一致することを約束する。バイト列は借りるだけで、手放さない
+- `String.decode` は、妥当なバイト列には同じバイトの `String` を返し、妥当でなければ `Fault::Utf8` を返す。どちらのときも `b` の参照を手放す。検査モードでは、引数が `Bytes` の物体でなければ `Heap(WrongKind)` を返す
 - 検査モードでは、引数が `Bytes` の物体でなければ `Heap(WrongKind)` を返す。`String` の物体も断る
 
 I/O の extern (`println`、`eprintln`、`Fs.open`、`Fs.read_all`、`Fs.read_line_raw`、`Fs.close`、`Fs.write_text`、`Env` と `Stdin` と `Proc.status` の extern) は、メモリの安全と、RC のモデルでの増減を証明する。引数を消費すること、結果を持つこと、組のフィールド、`File` の種類と `lin` ビット、誤りのときに作りかけの物体を手放すことを含む。OS とのやりとりの中身 (何が書かれ、何が読めたか) は約束せず、T11 (下の「`unsafe` の核」) と期待値の表 ([テスト戦略](../implementation/testing.md) の「期待値の表」) に任せる。`Fs.read_all` と `read_line_raw` の結果の文字列は `alloc_string` で作るので、ghost のバイト列と UTF-8 であることは今ある約束から出る。
