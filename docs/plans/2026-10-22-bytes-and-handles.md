@@ -634,7 +634,7 @@ pub class Bits a where
 - 対象: `ExternType::Stdin`、7つの行、VM の振り分け、`std/Stdin.em` (付録 `tests.md` の全文)、`StdinHandle { reader: Option<Reader>, slot: Option<Arc<StdinSlot>> }` と `Drop`、`Fault::InUse`
 - テストの変更 (承認済み):
   - 種類 3: `tests/ui/run/std/stdin.em` (ハンドルのループにし、出力は同じ)、`tests/ui/run/io/try_io_kinds.em` (`Stdin.read_text ()`。`main : Unit -> <IO, Panic> Unit`)、スクリプト `grep` (`stdin_lines h` がハンドルを `go` に通し、最後に閉じる)、`logstat` (同じ)、`wc` (`Stdin.read_text ()`)、`crates/eml_cli/tests/cli.rs` の `a_script_reads_the_standard_input_and_writes_the_standard_error` と `repeated_interrupts_end_a_program_waiting_for_the_standard_input_with_130` のプログラム
-  - 種類 2: `tests/ui/run-fail/std/stdin_not_utf8.em`、`crates/eml_cli/tests/repl/std/script_io.repl` (どちらも付録 `tests.md`)、`crates/eml_vm/tests/bench.rs::unwind_points` の `scripts/wc`、`scripts/grep`、`scripts/logstat` の行 (新しい値はこのタスクが記録する)
+  - 種類 2: `tests/ui/run-fail/std/stdin_not_utf8.em`、`crates/eml_cli/tests/repl/std/script_io.repl` (どちらも付録 `tests.md`)、`crates/eml_vm/tests/bench.rs::unwind_points` の `scripts/wc`、`scripts/grep`、`scripts/logstat` の行 (新しい値はこのタスクが記録する)、`externs::only_the_array_readers_borrow` と `externs::only_the_file_functions_carry_a_lin` (`Std.Stdin.read_all` と `read_line_raw` が `([true], Some(0))` と `([Lin], Unr)` になり、新しい行が入る)
 - 新しいテスト: `tests/ui/run/io/stdin_handles.em`、`tests/ui/run-fail/io/stdin_opened_twice.em` (付録 `tests.md`)
 - docs/spec: stdlib.md の「`Stdin`」を書き直し、新しい「ハンドル」の節 (`Lin` のハンドル、`open`/`close`、排他の規則、順、書き出す時、D-17 の表、汎用の書き方) を足す。`try_io` の表、repl.md、modules.md の「標準ライブラリ」、lir.md の「実行時エラー」(`InUse` の3つの文言)
 - 完了の条件: 1章の検査、`cargo test -p eml_cli --test integration repl::`、`bench/scripts/compare.sh --fixture grep`、`--fixture logstat`、`--fixture wc` が通る
@@ -692,7 +692,7 @@ pub class Bits a where
 ## 8. 検証の計画
 
 - 各タスクの完了の条件と1章の検査
-- 信頼の一覧の最後の形: `cargo test -p eml_rt trust::` が、T10 = `write_bytes`、`write_byte`、`bytes`、`bytes_ptr` (か7行の代案)、T5 に `utf8_valid`、T11 に `Reader`、`fill`、`consume`、`StdinSlot`、`host_write`、`StdinHandle`、T13 = `find_byte` を並べる
+- 信頼の一覧の最後の形: `cargo test -p eml_rt trust::` が、T10 = `write_bytes`、`write_byte`、`bytes`、`bytes_ptr` (か7行の代案)、T5 に `utf8_valid`、T11 に `Reader`、`fill`、`consume`、`StdinSlot`、`host_write`、`StdinHandle`、`open_stdin` (検証したコードが Host の slot から読み手を取り出す唯一の入口。使われなくなった `host_read_stdin` は消える)、T-25 の `OpenFlags` と、標準出力と標準エラーを開く入口があればその行、T4 に `StdinHandle` と T-25 の2つのハンドルの `Drop`、T13 = `find_byte` を並べる
 - `cargo test -p eml_lir --test integration perceus::`、`cargo test -p eml_vm --test integration scaling::`、`cargo test -p eml_cli --test integration ui::`、`cargo test -p eml_cli --test integration repl::` が通る
 - `bench/scripts/compare.sh --rust` の4つの fixture と、`compare.sh --fixture` の `wc`、`grep`、`logstat` が 0 で終わる
 - `bench/scripts.sh` の「C/Rust との比」と、`bench/rt.sh` の予算の行を benchmarks.md に書いてある
