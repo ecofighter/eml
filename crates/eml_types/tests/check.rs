@@ -1,4 +1,4 @@
-use crate::common::{check_short, check_text};
+use crate::common::{check_full, check_short, check_text};
 use eml_hir::ValueItem;
 
 #[test]
@@ -715,13 +715,11 @@ fn a_local_function_value_is_opened() {
 #[test]
 fn an_undetermined_projection_in_a_local_function_is_e2013() {
     let text = "data P = | P { name : String }\n\nmain : Unit -> <IO> Unit\nmain () =\n  let name_of p = p.name\n  println (name_of (P { name = \"a\" }))";
-    assert_eq!(
-        check_short(text),
-        vec![
-            "E2013 5:19 the type of this value must be known to access its field `name`"
-                .to_string()
-        ]
-    );
+    insta::assert_snapshot!(check_full(text), @"
+    E2013 5:19 the type of this value must be known to access its field `name`
+      5:19 the type of this value is not known here
+      help: annotate the type of the parameter, as in `fn (p : T) -> …`
+    ");
 }
 
 #[test]

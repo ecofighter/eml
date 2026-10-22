@@ -456,13 +456,11 @@ fn a_continuation_with_a_state_called_without_it_in_a_lambda_is_a_mismatch() {
     // ラムダの中の `c 1` は `c` に引数を1つだけ渡す。状態のある `k` を渡すと、`again k` が部分適用の関数になり、
     // 節の型と食い違う
     let text = "effect Ask where\n  ask : Unit -> Int\n\nf : Unit -> Int\nf () =\n  handle ask () from 0 with\n    | ctl ask () k st ->\n        let again = fn c -> c 1\n        again k\n    | return x _ -> x";
-    let checked = eml_test_support::check(text);
-    let codes: Vec<String> = checked
-        .diagnostics
-        .iter()
-        .map(|d| d.code.to_string())
-        .collect();
-    assert_eq!(codes, ["E2001"]);
+    insta::assert_snapshot!(check_full(text), @"
+    E2001 9:9 mismatched types
+      9:9 expected `Int`, found `once Int -> Int`
+      note: each clause of a handler must have the type of the whole `handle` expression
+    ");
 }
 
 #[test]
