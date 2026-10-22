@@ -30,6 +30,8 @@ pub const STD: &[(&str, &str)] = &[
     ("String.em", include_str!("../../../std/String.em")),
     ("Env.em", include_str!("../../../std/Env.em")),
     ("Stdin.em", include_str!("../../../std/Stdin.em")),
+    ("Stdout.em", include_str!("../../../std/Stdout.em")),
+    ("Stderr.em", include_str!("../../../std/Stderr.em")),
     ("Proc.em", include_str!("../../../std/Proc.em")),
     ("Yield.em", include_str!("../../../std/Yield.em")),
     ("Fail.em", include_str!("../../../std/Fail.em")),

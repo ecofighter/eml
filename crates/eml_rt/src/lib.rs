@@ -29,6 +29,7 @@ pub use control::{Control, Limits, Stop};
 pub use error::HeapError;
 pub use externs::{
     ArithFault, Fault, Form, Handle, IndexFault, IoOp, IoReason, ReadAmount, StdStream, Utf8Source,
+    Write,
 };
 pub use frozen::Frozen;
 pub use heap::{Ctx, CtxStats, Heap, MaskItem, Stats, Token};

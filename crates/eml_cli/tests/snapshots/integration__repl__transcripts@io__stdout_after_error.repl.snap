@@ -1,0 +1,18 @@
+---
+source: crates/eml_cli/tests/repl.rs
+expression: checked.render()
+input_file: crates/eml_cli/tests/repl/io/stdout_after_error.repl
+---
+> boom : Int -> <IO, Panic> Unit
+. boom n =
+.   let out = Stdout.open ()
+.   let out = Stdout.write_line (show (1 / n)) out
+.   Stdout.close out
+.
+> boom 0
+runtime error: division by zero
+  at <input 1>:4:40
+> Stdout.close (Stdout.write_line "reopened" (Stdout.open ()))
+reopened
+--- close ---
+no leaks

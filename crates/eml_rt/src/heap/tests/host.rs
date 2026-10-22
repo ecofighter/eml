@@ -98,6 +98,8 @@ pub(super) struct MemoryHost {
     files: Mutex<HashMap<String, MemoryFile>>,
     /// 書き込みで返す誤りの文言
     fail_write: Option<&'static str>,
+    /// `flush` で返す誤りの文言
+    fail_flush: Option<&'static str>,
     args: Vec<OsString>,
     env: HashMap<String, OsString>,
     /// `None` なら標準入力を使えない
@@ -119,6 +121,13 @@ impl MemoryHost {
             ..MemoryHost::default()
         }
     }
+    /// 書き込みは通り、`flush` だけが失敗する Host
+    pub(super) fn failing_flush(message: &'static str) -> MemoryHost {
+        MemoryHost {
+            fail_flush: Some(message),
+            ..MemoryHost::default()
+        }
+    }
     pub(super) fn add(&self, path: &str, file: MemoryFile) {
         self.files.lock().unwrap().insert(path.to_string(), file);
     }
@@ -127,6 +136,12 @@ impl MemoryHost {
     }
     pub(super) fn err(&self) -> String {
         String::from_utf8(self.err.lock().unwrap().clone()).unwrap()
+    }
+    pub(super) fn out_bytes(&self) -> Vec<u8> {
+        self.out.lock().unwrap().clone()
+    }
+    pub(super) fn err_bytes(&self) -> Vec<u8> {
+        self.err.lock().unwrap().clone()
     }
     pub(super) fn with_args(mut self, args: Vec<OsString>) -> MemoryHost {
         self.args = args;
@@ -174,9 +189,23 @@ impl Host for MemoryHost {
         target.push(b'\n');
         Ok(())
     }
+    fn write(&self, stream: Stream, bytes: &[u8]) -> io::Result<()> {
+        if let Some(message) = self.fail_write {
+            return Err(io::Error::other(message));
+        }
+        let mut target = match stream {
+            Stream::Out => self.out.lock().unwrap(),
+            Stream::Err => self.err.lock().unwrap(),
+        };
+        target.extend_from_slice(bytes);
+        Ok(())
+    }
     fn flush(&self) -> io::Result<()> {
         self.flushes.fetch_add(1, Ordering::Relaxed);
-        Ok(())
+        match self.fail_flush {
+            Some(message) => Err(io::Error::other(message)),
+            None => Ok(()),
+        }
     }
     fn open(&self, path: &str) -> io::Result<Opened> {
         let file = self
@@ -368,6 +397,36 @@ mod std_host {
         let (host, _, err) = std_host(Buffering::Block);
         host.write_line(Stream::Err, "e").unwrap();
         assert_eq!(err.text(), "e\n");
+    }
+
+    /// `Line` のバイト列の書き込みは、`\n` を含むときだけ書き出す。
+    #[test]
+    fn a_line_host_flushes_a_write_with_a_newline() {
+        let (host, out, _) = std_host(Buffering::Line);
+        host.write(Stream::Out, b"a").unwrap();
+        assert_eq!(out.text(), "");
+        host.write(Stream::Out, b"b\nc").unwrap();
+        assert_eq!(out.text(), "ab\nc");
+    }
+
+    /// `Block` のバイト列の書き込みは、`\n` を含んでも書き出さない。
+    #[test]
+    fn a_block_host_holds_writes_until_flush() {
+        let (host, out, _) = std_host(Buffering::Block);
+        host.write(Stream::Out, b"a\n").unwrap();
+        assert_eq!(out.text(), "");
+        host.flush().unwrap();
+        assert_eq!(out.text(), "a\n");
+    }
+
+    /// 標準エラーへのバイト列の書き込みは、`Block` でも、`\n` がなくても、書くたびに書き出す。
+    #[test]
+    fn the_error_stream_flushes_every_write() {
+        for mode in [Buffering::Line, Buffering::Block] {
+            let (host, _, err) = std_host(mode);
+            host.write(Stream::Err, b"e").unwrap();
+            assert_eq!(err.text(), "e");
+        }
     }
 
     /// 書き込み先が panic してロックが毒されても、次の行は書ける。panic した行は `BufWriter` に残り、次の行と一緒に

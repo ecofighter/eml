@@ -1,0 +1,10 @@
+---
+source: crates/eml_cli/tests/ui.rs
+expression: "format!(\"--- stdout ---\\n{stdout}--- stderr ---\\n{diagnostics}{stderr}{written}{exit}\")"
+input_file: tests/ui/run/io/try_io_releases_handles.em
+---
+--- stdout ---
+before
+caught: `not_utf8.txt` is not valid UTF-8
+bytes 2
+--- stderr ---

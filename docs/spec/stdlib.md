@@ -28,7 +28,8 @@ extern の行は、どの位置の引数も借用にできる ([LIR](lir.md) の
 
 ## `Prelude`
 
-- `eprintln : String -> <IO> Unit` は、標準エラーに1行を書く。C の stdio と同じく、標準出力は書き出さない。標準出力をまとめて書いているとき (端末でないとき) は、`eprintln` の行が先に出ることがある
+- `println : String -> <IO> Unit` は、標準出力に1行を書く。`Stdout.write_line` と同じく、Host が持つ標準出力の buffer に書く。`Stdout` のハンドルが生きている間も使え、ハンドルの書き込みと同じ buffer に書くので、出力はプログラムの順に並ぶ (下の「`Stdout` と `Stderr`」)
+- `eprintln : String -> <IO> Unit` は、標準エラーに1行を書く。`Stderr.write_line` と同じく、書くたびに書き出す。C の stdio と同じく、標準出力は書き出さない。標準出力をまとめて書いているとき (端末でないとき) は、`eprintln` の行が先に出ることがある
 - `check_index : Int -> Int -> <Panic> Unit` は Prelude の中だけの extern で、利用者は名前で呼べない。translate が `var` の配列の変数の添字に呼び、添字が長さの範囲の外なら `Std.MutArray.read` と同じ文言 ("array index {index} is out of range for length {len}") の `Panic` を起こす ([Core IR](core-ir.md) の「`var` の変換」)
 
 ## `try_io`
@@ -106,7 +107,7 @@ try_panic action =
 |---|---|
 | `Arith(_)` | `+`、`-`、`*`、`/`、`%`、単項の `-`。`Float.truncate`、`Float.floor`、`Float.ceil`、`Float.round` (`Int` に収まらない値)、`Float.to_fixed` (桁数)、`Char.of_int` (スカラー値でない値)、`Byte.of_int` (0 から 255 の外の値) |
 | `Utf8(_)` | `String.decode` と、それを使う std の関数 |
-| `InUse(_)` | `Stdin.open` (標準入力のハンドルが生きている間の2つ目の `open`) と、それを使う `Stdin.read_text` (下の「ハンドル」) |
+| `InUse(_)` | `Stdin.open`、`Stdout.open`、`Stderr.open` (同じストリームのハンドルが生きている間の2つ目の `open`) と、`Stdin.open` を使う `Stdin.read_text` (下の「ハンドル」) |
 | `Index(_)` | `String.byte_at`、`String.slice`、`String.find_from` と、それらを使う std の関数。`Array.get`、`Array.set`、`Array.make`、`MutArray.read`、`MutArray.write`、`MutArray.make` (添字の範囲と負の長さ) と、添字の式が使う `check_index`。`Env.arg` の範囲の外の位置も `Index` だが、`Env.arg` は std の中だけで使うので、利用者のプログラムでは起きない |
 
 ## `exit`
@@ -353,10 +354,11 @@ pub while : (Unit -> <e> Bool) -> (Unit -> <e> Unit) -> <e> Unit
 
 ## ハンドル
 
-`Stdin.Stdin` と `Fs.File` は、読むためのハンドルである。
+`Stdin.Stdin` と `Fs.File` は読むためのハンドルで、`Stdout.Stdout` と `Stderr.Stderr` は書くためのハンドルである。
 
 - ハンドルは線形な型 (`Lin`) で、ちょうど1回使う ([線形性](linearity.md))。`close h` は `drop h` と同じで、ハンドルを手放して閉じる
 - 読む関数はハンドルを借りて読み、結果を先に、同じハンドルを後に置いた組で返す。`Stdin` と `File` は同じ名前と同じ形の読む関数を持つ (下の「`Stdin`」と「`Fs`」)
+- 書く関数は書くデータを借り、ハンドルを受け取って同じハンドルを返す。`Stdout` と `Stderr` は同じ名前と同じ形の書く関数を持つ (下の「`Stdout` と `Stderr`」)
 - 読めるハンドルの上の汎用のコードは、読む関数を引数で渡して書く。`count_lines Stdin.read_line h 0` も `count_lines Fs.read_line f 0` も、直接書いたループと同じ費用で動く
 
   ```haskell
@@ -367,9 +369,10 @@ pub while : (Unit -> <e> Bool) -> (Unit -> <e> Unit) -> <e> Unit
       | (Some _, h) -> count_lines read h (n + 1)
   ```
 
-- 標準入力のハンドルは `Stdin.open ()` で開く。生きている標準入力のハンドルは高々1つで、生きている間の2つ目の `open` は `Panic` (`the standard input is already open`) になる。閉じた後は、また開ける。標準入力の持ち主はいつも1人なので、読む順はプログラムの順である
+- 標準のストリームのハンドルは `Stdin.open ()`、`Stdout.open ()`、`Stderr.open ()` で開く。ストリームごとに、生きているハンドルは高々1つで、生きている間の2つ目の `open` は `Panic` (`the standard input is already open`、`the standard output is already open`、`the standard error is already open`) になる。閉じた後は、また開ける。ストリームの持ち主はいつも1人なので、読む順と書く順はプログラムの順である
 - 標準入力のハンドルは、標準入力の読み手 (64 KiB の buffer) を持つ。開くときに Host から読み手を取り、閉じるときに buffer に残ったバイトごと Host に返す。そのため、次に開いたハンドルは続きから読み、`Stdin.read_text ()` のように開いて閉じる関数を続けて呼んでも、読んでいない入力は失われない
-- 標準入力を持たない Host (REPL) でも `open` は通り、読みが I/O の失敗 (`cannot read the standard input: not available`) になる。この Host の標準入力のハンドルは読み手を持たないので、2つ開いても `Panic` にならない
+- 標準入力を持たない Host (REPL) でも `open` は通り、読みが I/O の失敗 (`cannot read the standard input: not available`) になる。この Host でも、生きている標準入力のハンドルは高々1つで、2つ目の `open` は `Panic` になる
+- 書くためのハンドルは buffer を持たない。Host がストリームごとに1つ持つ buffer に書き、`println` と `eprintln` も同じ buffer に書く。そのため、`close`、巻き戻し、`exit` のどれでハンドルを手放しても、書いた出力は失われない (下の「`Stdout` と `Stderr`」)
 - ハンドルを持ったまま中断 (`try_io`、`try_panic`、`never` の操作) で巻き戻ると、巻き戻しがハンドルを手放して閉じる。読みの誤りでも、読みの extern はハンドルを手放さない。`try_io` の下では巻き戻しが手放し、実行時エラーなら実行がそこで止まる
 - 標準入力の読みは、読み手の buffer を補充する前ごとに標準出力を書き出す。行の途中の補充と、buffer が空の `read_chunk` も同じである。buffer から読むときは書き出さない。`read_all` と `read_all_bytes` は、最初の補充の前に1回書き出す。入力を pipe で先読みしたとき、buffer にある2つの行の間に書いたプロンプトは、次の補充かプログラムの終わりまで出ない (C と同じ。[オブジェクトモデル](object-model.md) の「読み手」)
 
@@ -377,12 +380,13 @@ pub while : (Unit -> <e> Bool) -> (Unit -> <e> Unit) -> <e> Unit
 
 | 操作 | 失敗 | 届け方 |
 |---|---|---|
-| `Stdin.open` | 標準入力のハンドルが生きている (`InUse`) | `Panic` (`try_panic`) |
+| `open` | 同じストリームのハンドルが生きている (`InUse`) | `Panic` (`try_panic`) |
 | `close` | なし | — |
 | `Stdin` の読み | 読めない (`Stdin(reason)`)。標準入力がなければ理由は `not available` | `IO` (`try_io`) |
 | `File` の読み | 読めない (`Io { op: Read, .. }`) | `IO` |
 | 文字列の読み | UTF-8 でない (`NotUtf8`)。バイト列の読みはこれで失敗しない | `IO` (`kind` は `NotUtf8`) |
 | どの読みも | 割り込み、確保量の上限 | 位置を付けた実行時エラー |
+| 書き込み (`write`、`write_string`、`write_line`、`flush`) | 書けない (`Output`) | 実行時エラー。`try_io` では捕まえない (上の「`try_io`」) |
 | どの操作も | 検査モードのヒープの誤り | 実行時エラー |
 
 ## `Stdin`
@@ -405,6 +409,26 @@ pub while : (Unit -> <e> Bool) -> (Unit -> <e> Unit) -> <e> Unit
 - `read_line` と `read_line_bytes` は、std の中だけの extern `read_line_raw` と `read_line_bytes_raw` の上に書いてある。どちらも行の終わりを含む1行を返し、終わりなら空を返す (上の「extern の境界」の番兵)
 - 読みは `Fs` と同じく、64 KiB ずつ読みながら割り込みと確保量の上限を見る
 - REPL では、標準入力を REPL 自身が読むので、どの読みも I/O の失敗 (`cannot read the standard input: not available`) にする
+
+## `Stdout` と `Stderr`
+
+| 関数 | 型 |
+|---|---|
+| `Stdout.open` | `Unit -> <IO, Panic> Stdout` |
+| `Stdout.close` | `Stdout -> <IO> Unit` |
+| `Stdout.write` | `Bytes -> Stdout -> <IO> Stdout` |
+| `Stdout.write_string` | `String -> Stdout -> <IO> Stdout` |
+| `Stdout.write_line` | `String -> Stdout -> <IO> Stdout` |
+| `Stdout.flush` | `Stdout -> <IO> Stdout` |
+
+`Stdout` は標準出力のハンドルの型で、`Stderr` は標準エラーのハンドルの型である (上の「ハンドル」)。`Stderr` は、`flush` のほかの5つを同じ名前と同じ形で持つ。2つは別の型なので、一方のハンドルを他方の関数に渡すと型の誤り (E2001) になる。
+
+- `write b h` はバイト列 `b` をそのまま書き、`write_string s h` は文字列 `s` をそのまま書き、`write_line s h` は `s` と `\n` を書く。`Stdout.write_line` は `println` と、`Stderr.write_line` は `eprintln` と同じ書き方である。どれもデータを借りて、受け取ったハンドルを返す
+- 1回の書き込みは、ストリームの lock の下で Host を1回呼ぶ。1回の書き込みはほかの書き込みと途中で混ざらないが、2回の書き込みの間には、ほかの書き込みが入りうる
+- 書き込みは、Host がストリームごとに持つ buffer に入る。標準出力は、端末なら `\n` を含む書き込みが書き出し、端末でなければ 64 KiB ずつまとめて書く。標準エラーは書くたびに書き出すので、`Stderr` は `flush` を持たない ([オブジェクトモデル](object-model.md) の「出力のバッファ」)
+- `Stdout.flush h` は、標準出力の buffer を書き出す。ほかに Host が buffer を書き出すのは、`main` の終わり、`exit`、実行時エラーを出す前、割り込みか上限で止めたとき、REPL の入力の区切り、`Proc.run` の前、標準入力の読み手の補充の前である
+- 1回の書き込みは、extern の呼び出しと Host の呼び出しの費用を持つ。1バイトずつ出すときは、`Bytes.push` で `Bytes` を組んでから1回書く
+- 書けないとき (`Output`) は、`println` と同じく実行時エラーで、`try_io` では捕まえない。書き込みの extern は、そのときハンドルを手放す
 
 ## `Fs`
 
@@ -561,7 +585,7 @@ pub data Iter <e> a = | Iter (once Unit -> <e> Option (a, Iter <e> a))
 
 標準ライブラリの extern の誤りの文言は次のとおりである。I/O の失敗の理由は `not found`、`permission denied`、`not available`、`I/O error` のどれかである。位置は extern を呼んだ所で、標準ライブラリの関数の中の extern なら `<std>/…` の位置になる。
 
-I/O の失敗の一部は `try_io` で捕まえられる (上の「`try_io`」)。`byte_at` と `slice` の誤りと、`Bytes` の範囲の誤りと、`decode` の妥当でない UTF-8 と、`Std.Float` の変換と `to_fixed` の誤りと、配列の添字と長さの誤りと、標準入力の2つ目のハンドルは `Panic` で、`try_panic` で捕まえられる (上の「`try_panic`」)。捕まえなかった失敗は、この表の文言の実行時エラーになる。
+I/O の失敗の一部は `try_io` で捕まえられる (上の「`try_io`」)。`byte_at` と `slice` の誤りと、`Bytes` の範囲の誤りと、`decode` の妥当でない UTF-8 と、`Std.Float` の変換と `to_fixed` の誤りと、配列の添字と長さの誤りと、標準のストリームの2つ目のハンドルは `Panic` で、`try_panic` で捕まえられる (上の「`try_panic`」)。捕まえなかった失敗は、この表の文言の実行時エラーになる。
 
 | 失敗 | 文言 |
 |---|---|
@@ -581,6 +605,8 @@ I/O の失敗の一部は `try_io` で捕まえられる (上の「`try_io`」)�
 | `Fs.write_text` | ``cannot write `out.txt`: permission denied`` |
 | `Proc.run` の起動 | ``cannot run `rsync`: not found`` |
 | 標準入力の2つ目のハンドル | ``the standard input is already open`` |
+| 標準出力の2つ目のハンドル | ``the standard output is already open`` |
+| 標準エラーの2つ目のハンドル | ``the standard error is already open`` |
 | 標準入力の読み | ``cannot read the standard input: not available`` |
 | UTF-8 でない標準入力 | ``the standard input is not valid UTF-8`` |
 | UTF-8 でない引数 | ``argument 2 is not valid UTF-8`` (`Env.args ()` のリストの 0 から数えた位置) |

@@ -1,0 +1,10 @@
+---
+source: crates/eml_cli/tests/ui.rs
+expression: "format!(\"--- stdout ---\\n{stdout}--- stderr ---\\n{diagnostics}{stderr}{written}{exit}\")"
+input_file: tests/ui/run/io/try_panic_catches_in_use.em
+---
+--- stdout ---
+caught: the standard output is already open
+caught: the standard input is already open
+still open
+--- stderr ---

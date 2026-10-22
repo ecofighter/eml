@@ -1,0 +1,14 @@
+---
+source: crates/eml_cli/tests/ui.rs
+expression: rendered
+input_file: tests/ui/check-fail/types/stream_handles_differ.em
+---
+[E2001] Error: mismatched types
+   ╭─[ check-fail/types/stream_handles_differ.em:5:16 ]
+   │
+ 5 │   Stdout.close err
+   │   ──────┬───── ─┬─  
+   │         ╰─────────── argument 1 of `close`
+   │                 │   
+   │                 ╰─── expected `Stdout`, found `Stderr`
+───╯

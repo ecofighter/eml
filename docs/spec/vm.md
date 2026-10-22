@@ -285,7 +285,7 @@ token は1語の値で、フレームのスロットに置く ([オブジェク�
 ### `IO` と `Panic` への中断
 
 - extern の命令 (`Op::Extern`) か算術の専用の命令が `Fault` を返すと、VM は誤りの種類で届け先を決める
-  - `Fault::panics` が真の誤り (算術の誤り、妥当でない UTF-8 のバイト列、範囲の外の位置、標準のストリームの2つ目の `open`。[オブジェクトモデル](object-model.md) の「extern」) のうち、`Pure` でない行のものを `Panic` に届ける。`Pure` の行は巻き戻しの地点を持たないので届けない。`Env.arg` と `Stdin.open` の行は `Effectful` だが、範囲の外の位置と2つ目の `open` は `Panic` である。操作は `panicked` で、引数は誤りの文言 (`Fault` の表示) の文字列である
+  - `Fault::panics` が真の誤り (算術の誤り、妥当でない UTF-8 のバイト列、範囲の外の位置、標準のストリームの2つ目の `open`。[オブジェクトモデル](object-model.md) の「extern」) のうち、`Pure` でない行のものを `Panic` に届ける。`Pure` の行は巻き戻しの地点を持たないので届けない。`Env.arg` と標準のストリームの `open` の行は `Effectful` だが、範囲の外の位置と2つ目の `open` は `Panic` である。操作は `panicked` で、引数は誤りの文言 (`Fault` の表示) の文字列である
   - `try_io` が捕まえる誤り ([標準ライブラリ](stdlib.md) の「`try_io`」) は、行の `purity` が `Effectful` のときだけ `IO` に届ける。操作は `io_failed` で、引数は `kind` のタグと文言の文字列である。`Effectful` でない行がこの `Fault` を返したら、実行時エラーにする。表にはそういう行はない
   - ほかの誤り (書き出しの誤り、ヒープの誤り、止めたこと) は、実行時エラー (`VmFault::Extern`) にする
 - 届けるときは、`ctx.ev_find` でそのエフェクトの evidence を探す

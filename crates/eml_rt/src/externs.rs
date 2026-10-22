@@ -75,13 +75,28 @@ pub enum IoReason {
     Other,
 }
 
-/// `Ctx::handle_read` が借りるハンドルの種類。`Foreign` の物体の中身の型を決める。
+/// `Ctx` のハンドルの extern が受けるハンドルの種類。`Foreign` の物体の中身の型を決める。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Handle {
     /// `Std.Fs.File`。
     File,
     /// `Std.Stdin.Stdin`。
     Stdin,
+    /// `Std.Stdout.Stdout`。
+    Stdout,
+    /// `Std.Stderr.Stderr`。
+    Stderr,
+}
+
+/// `Ctx::handle_write` が書くデータの種類と書き方。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Write {
+    /// バイト列をそのまま書く (`write`)。
+    Bytes,
+    /// 文字列をそのまま書く (`write_string`)。
+    Text,
+    /// 文字列と `\n` を1行として書く (`write_line`。`println` と同じ)。
+    Line,
 }
 
 /// 標準のストリーム。ストリームごとに、生きているハンドルは高々1つである (docs/spec/stdlib.md の「ハンドル」)。

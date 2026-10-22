@@ -1,0 +1,9 @@
+# 実行時エラーで止まった入力が開いていた `Stdout` のハンドルは回復が手放し、開いた印も下りるので、次の入力でまた開ける
+> boom : Int -> <IO, Panic> Unit
+. boom n =
+.   let out = Stdout.open ()
+.   let out = Stdout.write_line (show (1 / n)) out
+.   Stdout.close out
+.
+> boom 0
+> Stdout.close (Stdout.write_line "reopened" (Stdout.open ()))

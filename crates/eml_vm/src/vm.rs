@@ -4,7 +4,7 @@
 
 use eml_extern::{Extern, ExternEffect, Purity};
 use eml_rt::externs::{self, Fault};
-use eml_rt::{Ctx, Form, Handle, Mode, ReadAmount, Stream, Token, Word};
+use eml_rt::{Ctx, Form, Handle, Mode, ReadAmount, Stream, Token, Word, Write};
 
 use crate::RunCounts;
 use crate::apply;
@@ -958,17 +958,44 @@ fn run_extern<M: Mode>(
                 let w = ctx.handle_read(task.get(arg(1)), handle, chunk, Form::Bytes)?;
                 task.set(dst, w);
             }
-            Extern::Close | Extern::StdinClose => {
-                let handle = if ext == Extern::Close {
-                    Handle::File
-                } else {
-                    Handle::Stdin
+            Extern::Close | Extern::StdinClose | Extern::StdoutClose | Extern::StderrClose => {
+                let handle = match ext {
+                    Extern::Close => Handle::File,
+                    Extern::StdinClose => Handle::Stdin,
+                    Extern::StdoutClose => Handle::Stdout,
+                    _ => Handle::Stderr,
                 };
                 ctx.handle_close(task.get(arg(0)), handle)?;
                 task.set(dst, Word::UNIT);
             }
-            Extern::StdinOpen => {
-                let w = ctx.handle_open(Handle::Stdin)?;
+            Extern::StdinOpen | Extern::StdoutOpen | Extern::StderrOpen => {
+                let handle = match ext {
+                    Extern::StdinOpen => Handle::Stdin,
+                    Extern::StdoutOpen => Handle::Stdout,
+                    _ => Handle::Stderr,
+                };
+                let w = ctx.handle_open(handle)?;
+                task.set(dst, w);
+            }
+            Extern::StdoutWrite
+            | Extern::StdoutWriteString
+            | Extern::StdoutWriteLine
+            | Extern::StderrWrite
+            | Extern::StderrWriteString
+            | Extern::StderrWriteLine => {
+                let (stream, write) = match ext {
+                    Extern::StdoutWrite => (Stream::Out, Write::Bytes),
+                    Extern::StdoutWriteString => (Stream::Out, Write::Text),
+                    Extern::StdoutWriteLine => (Stream::Out, Write::Line),
+                    Extern::StderrWrite => (Stream::Err, Write::Bytes),
+                    Extern::StderrWriteString => (Stream::Err, Write::Text),
+                    _ => (Stream::Err, Write::Line),
+                };
+                let w = ctx.handle_write(task.get(arg(1)), stream, task.get(arg(0)), write)?;
+                task.set(dst, w);
+            }
+            Extern::StdoutFlush => {
+                let w = ctx.handle_flush(task.get(arg(0)))?;
                 task.set(dst, w);
             }
             Extern::CharShow | Extern::CharDisplay => {

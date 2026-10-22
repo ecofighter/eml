@@ -66,9 +66,10 @@ fn invalid_utf8_faults_panic() {
     assert_eq!(fault.io_error_kind(), None);
 }
 
-/// `try_panic` に渡すのは算術と範囲の外の位置の誤りだけで、IO の失敗とは重ならない。
+/// `try_panic` に渡すのは算術と範囲の外の位置の誤りと、標準のストリームの2つ目の `open` だけで、IO の失敗とは
+/// 重ならない。
 #[test]
-fn only_arith_and_index_faults_panic() {
+fn only_value_faults_and_second_opens_panic() {
     let index = |fault| Fault::Index(Box::new(fault));
     let panicking = [
         Fault::Arith(ArithFault::DivisionByZero),
@@ -90,6 +91,9 @@ fn only_arith_and_index_faults_panic() {
             len: 1,
         }),
         index(IndexFault::BytesLength { len: -1 }),
+        Fault::InUse(StdStream::Stdin),
+        Fault::InUse(StdStream::Stdout),
+        Fault::InUse(StdStream::Stderr),
     ];
     for fault in &panicking {
         assert!(fault.panics(), "{fault:?}");
@@ -236,7 +240,7 @@ fn bools_compare_by_tag() {
 /// 「実行時エラー」の一覧にもある。
 #[test]
 fn faults_print_their_listed_texts() {
-    let cases: [(Fault, &str); 30] = [
+    let cases: [(Fault, &str); 33] = [
         (ArithFault::DivisionByZero.into(), "division by zero"),
         (
             ArithFault::NotScalar(55296).into(),
@@ -314,6 +318,18 @@ fn faults_print_their_listed_texts() {
         (
             Fault::NotUtf8(Box::new(Utf8Source::Stdin)),
             "the standard input is not valid UTF-8",
+        ),
+        (
+            Fault::InUse(StdStream::Stdin),
+            "the standard input is already open",
+        ),
+        (
+            Fault::InUse(StdStream::Stdout),
+            "the standard output is already open",
+        ),
+        (
+            Fault::InUse(StdStream::Stderr),
+            "the standard error is already open",
         ),
         (
             Fault::NotUtf8(Box::new(Utf8Source::Arg(2))),

@@ -9,7 +9,7 @@ use std::sync::Arc;
 
 use eml_rt::{
     Buffering, Control, Ctx, Fast, Form, Handle, Host, HostRef, Limits, Opened, ReadAmount,
-    StdHost, Stream, Word,
+    StdHost, Stream, Word, Write,
 };
 
 const LONG: usize = 64 * 1024;
@@ -22,7 +22,8 @@ fn main() {
              show-string, show-string-dense, println-block, println-line, read-all, read-all-unsized, \
              find-byte-1mib, find-byte-1mib-position, find-bytes-1mib, find-bytes-1mib-windows, \
              find-byte, find-byte-swar, find-sub, find-sub-contains, slice-short, slice-short-box, \
-             read-all-bytes, read-all-bytes-std, read-line-bytes-64mib, read-line-bytes-64mib-std",
+             read-all-bytes, read-all-bytes-std, read-line-bytes-64mib, read-line-bytes-64mib-std, \
+             stdout-write-line-10m",
     );
     match case.as_str() {
         "string-eq" => string_eq(false),
@@ -51,6 +52,7 @@ fn main() {
         "read-all-bytes-std" => read_all_bytes(true),
         "read-line-bytes-64mib" => read_line_bytes(false),
         "read-line-bytes-64mib-std" => read_line_bytes(true),
+        "stdout-write-line-10m" => stdout_write_line(),
         _ => panic!("an unknown case {case}"),
     }
 }
@@ -177,6 +179,23 @@ fn println(mode: Buffering) {
     decref(&mut ctx, line);
 }
 
+/// 23 バイトの行を `Stdout.write_line` で 10,000,000 回書く。Host は `io::sink` へまとめて書く `StdHost` なので、
+/// 1回の費用 (extern、`dyn Host` の呼び出し、競合しない lock、buffer への写し) を測る。
+fn stdout_write_line() {
+    let mut ctx = ctx();
+    let line = string(&mut ctx, "the quick brown fox jum");
+    let mut out = ctx.handle_open(Handle::Stdout).unwrap();
+    for _ in 0..10_000_000 {
+        // SAFETY: out は生きた標準出力のハンドルで、handle_write は受け取ったハンドルを返す。line は借りるだけで
+        // 手放さない。
+        out = unsafe { ctx.handle_write(out, Stream::Out, black_box(line), Write::Line) }.unwrap();
+    }
+    // SAFETY: out は生きた標準出力のハンドルで、この後読まない。
+    unsafe { ctx.handle_close(out, Handle::Stdout) }.unwrap();
+    ctx.flush().unwrap();
+    decref(&mut ctx, line);
+}
+
 /// 1つのファイルだけを持つメモリの Host。中身は開くたびに写さず、`Arc` を分け合う。
 struct OneFile {
     bytes: Arc<[u8]>,
@@ -185,6 +204,9 @@ struct OneFile {
 
 impl Host for OneFile {
     fn write_line(&self, _: Stream, _: &str) -> io::Result<()> {
+        Ok(())
+    }
+    fn write(&self, _: Stream, _: &[u8]) -> io::Result<()> {
         Ok(())
     }
     fn flush(&self) -> io::Result<()> {

@@ -624,6 +624,15 @@ impl Host for Interrupting {
         Ok(())
     }
 
+    fn write(&self, _: Stream, bytes: &[u8]) -> io::Result<()> {
+        if self.armed.swap(false, Ordering::SeqCst) {
+            self.control.interrupt();
+        }
+        let mut out = self.out.lock().unwrap_or_else(PoisonError::into_inner);
+        out.push_str(&String::from_utf8_lossy(bytes));
+        Ok(())
+    }
+
     fn flush(&self) -> io::Result<()> {
         Ok(())
     }
@@ -699,6 +708,10 @@ struct InterruptingOpen {
 
 impl Host for InterruptingOpen {
     fn write_line(&self, _: Stream, _: &str) -> io::Result<()> {
+        Ok(())
+    }
+
+    fn write(&self, _: Stream, _: &[u8]) -> io::Result<()> {
         Ok(())
     }
 
@@ -1197,6 +1210,10 @@ struct Unwritable;
 
 impl Host for Unwritable {
     fn write_line(&self, _: Stream, _: &str) -> io::Result<()> {
+        Err(io::Error::other("the pipe is closed"))
+    }
+
+    fn write(&self, _: Stream, _: &[u8]) -> io::Result<()> {
         Err(io::Error::other("the pipe is closed"))
     }
 

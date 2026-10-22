@@ -39,6 +39,12 @@ probe_file f = f
 probe_stdin : Stdin.Stdin -> Stdin.Stdin
 probe_stdin h = h
 
+probe_stdout : Stdout.Stdout -> Stdout.Stdout
+probe_stdout h = h
+
+probe_stderr : Stderr.Stderr -> Stderr.Stderr
+probe_stderr h = h
+
 probe_array : Array Int -> Array Int
 probe_array a = a
 
@@ -67,6 +73,8 @@ fn probe(ty: ExternType) -> &'static str {
         ExternType::Unit => "probe_unit",
         ExternType::File => "probe_file",
         ExternType::Stdin => "probe_stdin",
+        ExternType::Stdout => "probe_stdout",
+        ExternType::Stderr => "probe_stderr",
         ExternType::Array => "probe_array",
         ExternType::MutArray => "probe_mut_array",
     }
@@ -228,7 +236,8 @@ fn every_extern_function_row_has_the_reprs_of_its_std_signature() {
 }
 
 /// 表の値そのもの。借りる引数を持つ行は次の表の行だけで、組を返すのは `Std.MutArray` の2つの行と、`Std.Fs` と
-/// `Std.Stdin` のそれぞれ5つの読みの行だけである。
+/// `Std.Stdin` のそれぞれ5つの読みの行だけである。`Std.Stdout` と `Std.Stderr` の書き込みの行は、データを借りて
+/// ハンドルを返すので、組を返さない。
 #[test]
 fn only_the_array_readers_borrow() {
     for &e in Extern::ALL {
@@ -265,6 +274,12 @@ fn only_the_array_readers_borrow() {
             "Prelude.Eq Bytes.==" | "Prelude.Eq Bytes.!=" | "Prelude.Ord Bytes.compare" => {
                 (&[true, true], None)
             }
+            "Std.Stdout.write"
+            | "Std.Stdout.write_string"
+            | "Std.Stdout.write_line"
+            | "Std.Stderr.write"
+            | "Std.Stderr.write_string"
+            | "Std.Stderr.write_line" => (&[true, false], None),
             _ => {
                 assert!(!row.borrowed.contains(&true), "{}", row.name);
                 assert_eq!(row.with_arg, None, "{}", row.name);
@@ -362,7 +377,8 @@ fn kind_of(lin: Lin) -> Linearity {
     }
 }
 
-/// 表の値そのもの。`Fs` の7つ、`Stdin` の7つと `MutArray` を扱う7つ以外は、引数も結果も `Unr` である。
+/// 表の値そのもの。`Fs` の7つ、`Stdin` の7つ、`Stdout` の6つ、`Stderr` の5つと `MutArray` を扱う7つ以外は、引数も
+/// 結果も `Unr` である。
 #[test]
 fn only_the_file_functions_carry_a_lin() {
     use Linearity::{Lin, Unr};
@@ -383,6 +399,15 @@ fn only_the_file_functions_carry_a_lin() {
             "Std.Stdin.read_line_bytes_raw" => (&[Lin], Unr),
             "Std.Stdin.read_chunk" => (&[Unr, Lin], Unr),
             "Std.Stdin.close" => (&[Lin], Unr),
+            "Std.Stdout.open" | "Std.Stderr.open" => (&[Unr], Lin),
+            "Std.Stdout.close" | "Std.Stderr.close" => (&[Lin], Unr),
+            "Std.Stdout.write"
+            | "Std.Stdout.write_string"
+            | "Std.Stdout.write_line"
+            | "Std.Stderr.write"
+            | "Std.Stderr.write_string"
+            | "Std.Stderr.write_line" => (&[Unr, Lin], Lin),
+            "Std.Stdout.flush" => (&[Lin], Lin),
             "Std.Array.thaw" => (&[Unr], Lin),
             "Std.MutArray.make" => (&[Unr, Unr], Lin),
             "Std.MutArray.empty" => (&[Unr], Lin),

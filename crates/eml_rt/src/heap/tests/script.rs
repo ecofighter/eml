@@ -1,4 +1,5 @@
-//! スクリプトの extern (引数、環境変数、標準入力、ファイルの書き込み、子のプロセス、標準エラー)。メモリの Host で、
+//! スクリプトの extern (引数、環境変数、標準入力、ファイルの書き込み、子のプロセス、標準エラー、標準出力と標準エラーの
+//! ハンドル)。メモリの Host で、
 //! 結果と誤りと、引数を手放すことを確かめる (docs/spec/stdlib.md)。
 
 use std::ffi::OsString;
@@ -10,7 +11,9 @@ use super::host::{MemoryFile, MemoryHost};
 use super::mortal;
 use super::string::text;
 use crate::externs::{FALSE, IndexFault, IoOp, IoReason, TRUE, Utf8Source};
-use crate::{Control, Ctx, Fault, Limits, Mode, Stop, Stream, Word};
+use crate::{
+    Control, Ctx, Fault, Handle, HeapError, Limits, Mode, StdStream, Stop, Stream, Word, Write,
+};
 
 fn s<M: Mode>(ctx: &mut Ctx<M>, x: &str) -> Word {
     unsafe { ctx.heap_mut() }.alloc_string(x)
@@ -362,6 +365,130 @@ fn a_process_stops_on_an_interrupt<M: Mode>() {
     assert_eq!(mortal(ctx.heap()), 0);
 }
 
+/// 書き込みのハンドルは、データを借りて Host のストリームに書き、受け取ったハンドルを返す。`Bytes` と `Text` はその
+/// まま書き、`Line` は `\n` を足す。データの参照の数は変わらない。
+fn stream_handles_write_into_the_host_buffers<M: Mode>() {
+    let memory = Arc::new(MemoryHost::default());
+    let mut ctx = ctx_with::<M>(&memory);
+    unsafe {
+        let out = ctx.handle_open(Handle::Stdout).unwrap();
+        let err = ctx.handle_open(Handle::Stderr).unwrap();
+        let b = ctx.heap_mut().alloc_bytes(b"a\xff\n");
+        let out2 = ctx.handle_write(out, Stream::Out, b, Write::Bytes).unwrap();
+        assert_eq!(out2, out);
+        let t = s(&mut ctx, "b");
+        let out = ctx.handle_write(out, Stream::Out, t, Write::Text).unwrap();
+        let out = ctx.handle_write(out, Stream::Out, t, Write::Line).unwrap();
+        let err = ctx.handle_write(err, Stream::Err, t, Write::Line).unwrap();
+        let err = ctx.handle_write(err, Stream::Err, b, Write::Bytes).unwrap();
+        let flushes = memory.flushes();
+        let out = ctx.handle_flush(out).unwrap();
+        assert_eq!(memory.flushes(), flushes + 1);
+        ctx.heap_mut().decref(b).unwrap();
+        ctx.heap_mut().decref(t).unwrap();
+        ctx.handle_close(out, Handle::Stdout).unwrap();
+        ctx.handle_close(err, Handle::Stderr).unwrap();
+    }
+    assert_eq!(memory.out_bytes(), b"a\xff\nbb\n");
+    assert_eq!(memory.err_bytes(), b"b\na\xff\n");
+    assert_eq!(mortal(ctx.heap()), 0);
+}
+
+/// どのストリームも、生きているハンドルは高々1つで、2つ目の `open` は `InUse` である。閉じた後は開ける。標準入力を
+/// 持たない Host でも同じである。
+fn a_second_open_of_a_stream_is_in_use<M: Mode>() {
+    let mut ctx = ctx_with::<M>(&Arc::new(MemoryHost::default()));
+    for (handle, stream) in [
+        (Handle::Stdin, StdStream::Stdin),
+        (Handle::Stdout, StdStream::Stdout),
+        (Handle::Stderr, StdStream::Stderr),
+    ] {
+        unsafe {
+            let h = ctx.handle_open(handle).unwrap();
+            assert_eq!(ctx.handle_open(handle), Err(Fault::InUse(stream)));
+            ctx.handle_close(h, handle).unwrap();
+            let h = ctx.handle_open(handle).unwrap();
+            ctx.handle_close(h, handle).unwrap();
+        }
+    }
+    assert_eq!(mortal(ctx.heap()), 0);
+}
+
+/// 書けなければ、ハンドルを手放して `Output` を返す。借りたデータは呼ぶ側に残り、ハンドルの印は下りる。1行の書き込み
+/// (`Host::write_line`) もバイト列と文字列の書き込み (`Host::write`) も同じである。
+fn a_failed_write_releases_the_handle<M: Mode>() {
+    let memory = Arc::new(MemoryHost::failing("disk full"));
+    let mut ctx = ctx_with::<M>(&memory);
+    unsafe {
+        let b = ctx.heap_mut().alloc_bytes(b"x");
+        let t = s(&mut ctx, "x");
+        for (handle, stream, data, write) in [
+            (Handle::Stdout, Stream::Out, t, Write::Line),
+            (Handle::Stdout, Stream::Out, b, Write::Bytes),
+            (Handle::Stderr, Stream::Err, t, Write::Text),
+        ] {
+            let h = ctx.handle_open(handle).unwrap();
+            assert_eq!(
+                ctx.handle_write(h, stream, data, write),
+                Err(Fault::Output("disk full".into()))
+            );
+            let h = ctx.handle_open(handle).unwrap();
+            ctx.handle_close(h, handle).unwrap();
+        }
+        ctx.heap_mut().decref(t).unwrap();
+        ctx.heap_mut().decref(b).unwrap();
+    }
+    assert_eq!(mortal(ctx.heap()), 0);
+}
+
+/// 書き出せなければ、`flush` もハンドルを手放して `Output` を返し、ハンドルの印は下りる。
+fn a_failed_flush_releases_the_handle<M: Mode>() {
+    let memory = Arc::new(MemoryHost::failing_flush("broken pipe"));
+    let mut ctx = ctx_with::<M>(&memory);
+    unsafe {
+        let out = ctx.handle_open(Handle::Stdout).unwrap();
+        assert_eq!(
+            ctx.handle_flush(out),
+            Err(Fault::Output("broken pipe".into()))
+        );
+        let out = ctx.handle_open(Handle::Stdout).unwrap();
+        ctx.handle_close(out, Handle::Stdout).unwrap();
+    }
+    assert_eq!(mortal(ctx.heap()), 0);
+}
+
+/// 別のストリームのハンドルと、書き込みのハンドルの読みは、どちらのモードでも `WrongKind` で、何も書かない。
+/// ハンドルは呼ぶ側に残る。
+fn a_handle_of_another_stream_is_refused<M: Mode>() {
+    let memory = Arc::new(MemoryHost::default());
+    let mut ctx = ctx_with::<M>(&memory);
+    unsafe {
+        let err = ctx.handle_open(Handle::Stderr).unwrap();
+        let t = s(&mut ctx, "x");
+        assert_eq!(
+            ctx.handle_write(err, Stream::Out, t, Write::Line),
+            Err(Fault::Heap(HeapError::WrongKind))
+        );
+        assert_eq!(
+            ctx.handle_flush(err),
+            Err(Fault::Heap(HeapError::WrongKind))
+        );
+        assert_eq!(
+            ctx.handle_read(
+                err,
+                Handle::Stderr,
+                crate::ReadAmount::All,
+                crate::Form::Text
+            ),
+            Err(Fault::Heap(HeapError::WrongKind))
+        );
+        ctx.heap_mut().decref(t).unwrap();
+        ctx.handle_close(err, Handle::Stderr).unwrap();
+    }
+    assert_eq!(memory.out(), "");
+    assert_eq!(mortal(ctx.heap()), 0);
+}
+
 both_modes!(
     eprintln_writes_to_the_standard_error,
     arguments_are_read_by_index,
@@ -377,4 +504,9 @@ both_modes!(
     a_file_is_written_whole,
     a_process_gets_its_arguments_split_at_nul,
     a_process_stops_on_an_interrupt,
+    stream_handles_write_into_the_host_buffers,
+    a_second_open_of_a_stream_is_in_use,
+    a_failed_write_releases_the_handle,
+    a_failed_flush_releases_the_handle,
+    a_handle_of_another_stream_is_refused,
 );

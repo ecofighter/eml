@@ -137,6 +137,10 @@ impl Host for CaptureHost {
         self.inner.write_line(stream, line)
     }
 
+    fn write(&self, stream: Stream, bytes: &[u8]) -> io::Result<()> {
+        self.inner.write(stream, bytes)
+    }
+
     fn flush(&self) -> io::Result<()> {
         self.inner.flush()
     }

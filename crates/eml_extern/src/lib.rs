@@ -143,6 +143,8 @@ pub enum ExternType {
     Unit,
     File,
     Stdin,
+    Stdout,
+    Stderr,
     Array,
     MutArray,
 }
@@ -168,6 +170,8 @@ impl ExternType {
         ExternType::Unit,
         ExternType::File,
         ExternType::Stdin,
+        ExternType::Stdout,
+        ExternType::Stderr,
         ExternType::Array,
         ExternType::MutArray,
     ];
@@ -193,6 +197,8 @@ impl ExternType {
             ExternType::Unit => row("Prelude.Unit", Linearity::Unr, Repr::Unit),
             ExternType::File => row("Std.Fs.File", Linearity::Lin, Repr::Obj),
             ExternType::Stdin => row("Std.Stdin.Stdin", Linearity::Lin, Repr::Obj),
+            ExternType::Stdout => row("Std.Stdout.Stdout", Linearity::Lin, Repr::Obj),
+            ExternType::Stderr => row("Std.Stderr.Stderr", Linearity::Lin, Repr::Obj),
             ExternType::Array => generic("Prelude.Array", Linearity::Unr),
             ExternType::MutArray => generic("Prelude.MutArray", Linearity::Lin),
         }
@@ -372,6 +378,17 @@ pub enum Extern {
     StdinReadAll,
     StdinReadLineBytes,
     StdinReadLine,
+    StdoutOpen,
+    StdoutClose,
+    StdoutWrite,
+    StdoutWriteString,
+    StdoutWriteLine,
+    StdoutFlush,
+    StderrOpen,
+    StderrClose,
+    StderrWrite,
+    StderrWriteString,
+    StderrWriteLine,
     WriteText,
     ProcStatus,
     Exit,
@@ -566,6 +583,17 @@ impl Extern {
         Extern::StdinReadAll,
         Extern::StdinReadLineBytes,
         Extern::StdinReadLine,
+        Extern::StdoutOpen,
+        Extern::StdoutClose,
+        Extern::StdoutWrite,
+        Extern::StdoutWriteString,
+        Extern::StdoutWriteLine,
+        Extern::StdoutFlush,
+        Extern::StderrOpen,
+        Extern::StderrClose,
+        Extern::StderrWrite,
+        Extern::StderrWriteString,
+        Extern::StderrWriteLine,
         Extern::WriteText,
         Extern::ProcStatus,
         Extern::Exit,
@@ -614,6 +642,13 @@ impl Extern {
                 borrowed: mask,
                 ..row
             }
+        }
+        // ハンドルに書く行。データを借り、ハンドルを消費して返す (docs/spec/stdlib.md の「`Stdout` と `Stderr`」)
+        fn writing(name: &'static str) -> FunctionRow {
+            borrowing(
+                &[true, false],
+                kinded(name, &[Obj, Obj], &[Unr, Lin], Obj, Lin, Purity::Effectful),
+            )
         }
         // 線形な値を扱わない行は、すべて `Unr` にする
         fn row<const N: usize>(
@@ -1007,6 +1042,52 @@ impl Extern {
                     )
                 },
             ),
+            Extern::StdoutOpen => kinded(
+                "Std.Stdout.open",
+                &[Unit],
+                &[Unr],
+                Obj,
+                Lin,
+                Purity::Effectful,
+            ),
+            Extern::StdoutClose => kinded(
+                "Std.Stdout.close",
+                &[Obj],
+                &[Lin],
+                Unit,
+                Unr,
+                Purity::Effectful,
+            ),
+            Extern::StdoutWrite => writing("Std.Stdout.write"),
+            Extern::StdoutWriteString => writing("Std.Stdout.write_string"),
+            Extern::StdoutWriteLine => writing("Std.Stdout.write_line"),
+            Extern::StdoutFlush => kinded(
+                "Std.Stdout.flush",
+                &[Obj],
+                &[Lin],
+                Obj,
+                Lin,
+                Purity::Effectful,
+            ),
+            Extern::StderrOpen => kinded(
+                "Std.Stderr.open",
+                &[Unit],
+                &[Unr],
+                Obj,
+                Lin,
+                Purity::Effectful,
+            ),
+            Extern::StderrClose => kinded(
+                "Std.Stderr.close",
+                &[Obj],
+                &[Lin],
+                Unit,
+                Unr,
+                Purity::Effectful,
+            ),
+            Extern::StderrWrite => writing("Std.Stderr.write"),
+            Extern::StderrWriteString => writing("Std.Stderr.write_string"),
+            Extern::StderrWriteLine => writing("Std.Stderr.write_line"),
             Extern::WriteText => row("Std.Fs.write_text", &[Obj, Obj], Unit, Purity::Effectful),
             Extern::ProcStatus => row("Std.Proc.status", &[Obj, Obj], Int, Purity::Effectful),
             // 戻らない extern。VM が実行の底まで中断する (docs/spec/vm.md の「extern の中断」)

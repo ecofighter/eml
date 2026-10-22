@@ -1073,6 +1073,10 @@ impl crate::Host for OverlongHost {
         Ok(())
     }
 
+    fn write(&self, _: crate::Stream, _: &[u8]) -> io::Result<()> {
+        Ok(())
+    }
+
     fn flush(&self) -> io::Result<()> {
         Ok(())
     }
@@ -1238,6 +1242,51 @@ fn stdin_bytes_flush_before_each_refill<M: Mode>() {
         assert_eq!(&*ctx.heap().bytes(w).unwrap(), b"");
         ctx.heap_mut().decref(w).unwrap();
         ctx.handle_close(h, Handle::Stdin).unwrap();
+    }
+    assert_eq!(mortal(ctx.heap()), 0);
+}
+
+/// 書き込みのハンドルは Host の buffer に書き (`host_write`)、開いた印を `HostRef` に立てる。閉じずに `Heap` ごと
+/// 落としても、破棄処理 (`Drop`) が印を下ろすので、同じ `HostRef` を写した次の `Ctx` でまた開ける。標準入力のない
+/// Host でも、標準入力のハンドルの印は同じく働く。
+fn stream_handles_lower_their_flags_when_dropped<M: Mode>() {
+    let memory = Arc::new(MemoryHost::default());
+    let shared = host(&memory);
+    let handles = [Handle::Stdin, Handle::Stdout, Handle::Stderr];
+    let mut ctx = Ctx::<M>::new(Arc::new(Control::new(Limits::default())), shared.clone());
+    unsafe {
+        let opened: Vec<Word> = handles
+            .iter()
+            .map(|&handle| ctx.handle_open(handle).unwrap())
+            .collect();
+        for (&handle, stream) in handles.iter().zip([
+            crate::StdStream::Stdin,
+            crate::StdStream::Stdout,
+            crate::StdStream::Stderr,
+        ]) {
+            assert_eq!(ctx.handle_open(handle), Err(crate::Fault::InUse(stream)));
+        }
+        let b = ctx.heap_mut().alloc_bytes(b"o");
+        let out = ctx
+            .handle_write(opened[1], crate::Stream::Out, b, crate::Write::Bytes)
+            .unwrap();
+        let err = ctx
+            .handle_write(opened[2], crate::Stream::Err, b, crate::Write::Bytes)
+            .unwrap();
+        ctx.heap_mut().decref(b).unwrap();
+        assert_eq!((raw::rc(out), raw::rc(err)), (1, 1));
+    }
+    drop(ctx);
+    assert_eq!(
+        (memory.out(), memory.err()),
+        ("o".to_string(), "o".to_string())
+    );
+    let mut ctx = Ctx::<M>::new(Arc::new(Control::new(Limits::default())), shared);
+    for handle in handles {
+        unsafe {
+            let h = ctx.handle_open(handle).unwrap();
+            ctx.handle_close(h, handle).unwrap();
+        }
     }
     assert_eq!(mortal(ctx.heap()), 0);
 }
@@ -1590,6 +1639,7 @@ both_modes!(
     the_stdin_reader_survives_a_second_ctx,
     stdin_handles_take_and_return_the_reader,
     stdin_bytes_flush_before_each_refill,
+    stream_handles_lower_their_flags_when_dropped,
     script_externs_go_through_the_host,
     find_byte_reads_the_body_of_an_object,
 );

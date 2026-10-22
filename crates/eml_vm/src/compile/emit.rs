@@ -1091,6 +1091,17 @@ fn arithmetic(ext: Extern, dst: Slot, args: &[Slot]) -> Option<Op> {
         | Extern::StdinReadAll
         | Extern::StdinReadLineBytes
         | Extern::StdinReadLine
+        | Extern::StdoutOpen
+        | Extern::StdoutClose
+        | Extern::StdoutWrite
+        | Extern::StdoutWriteString
+        | Extern::StdoutWriteLine
+        | Extern::StdoutFlush
+        | Extern::StderrOpen
+        | Extern::StderrClose
+        | Extern::StderrWrite
+        | Extern::StderrWriteString
+        | Extern::StderrWriteLine
         | Extern::WriteText
         | Extern::ProcStatus
         | Extern::Exit

@@ -144,8 +144,9 @@ valgrind が arm64 の macOS で動かないので、callgrind は使わない�
 | `read-all-bytes-std` | 同じ 64 MiB を `&[u8]` から `read_to_end` で読むことを、8 回繰り返す |
 | `read-line-bytes-64mib` | 56 バイトの行を並べたメモリの Host の 64 MiB のファイルを、`handle_read` の `Form::Bytes` の行の読みで1行ずつ読み、行を手放す |
 | `read-line-bytes-64mib-std` | 同じ 64 MiB を、64 KiB の `BufReader` の `read_until` で行ごとに新しい `Vec` に読んで落とす |
+| `stdout-write-line-10m` | 23 バイトの行を、`Stdout` のハンドルの `write_line` (`handle_write` の `Write::Line`) で、`io::sink` へまとめて書く `StdHost` に 10,000,000 回書く |
 
-`find-byte-1mib` と `find-bytes-1mib` は 1 MiB を走査する行で、比の目標は約2倍である。`find-byte` から `read-all-bytes` までの4組は、行ごとの処理の予算の行で、`bench/rt.sh` が eml の行と参照の行の命令の数の比と実時間の比を、組ごとに表にして出す。予算は次のとおりである。`find-byte` が 1.5 以下、`find-sub` が 1.6 以下、`slice-short` が 1.0 以下、`read-all-bytes` が 1.3 以下である。`find-byte` の予算は `grep -n` と `logstat` の行ごとの探索から、`find-sub` の予算は `grep -n` の行ごとの検査と測った SWAR の差から、`slice-short` の予算は `grep -n`、`logstat`、`csv2jsonl` の行ごとの確保の見積もりから、`read-all-bytes` の予算は読みの見込みから決めた。最後の `read-line-bytes-64mib` の組は、行の読みの費用を記録するだけで、予算を持たない。
+`find-byte-1mib` と `find-bytes-1mib` は 1 MiB を走査する行で、比の目標は約2倍である。`find-byte` から `read-all-bytes` までの4組は、行ごとの処理の予算の行で、`bench/rt.sh` が eml の行と参照の行の命令の数の比と実時間の比を、組ごとに表にして出す。予算は次のとおりである。`find-byte` が 1.5 以下、`find-sub` が 1.6 以下、`slice-short` が 1.0 以下、`read-all-bytes` が 1.3 以下である。`find-byte` の予算は `grep -n` と `logstat` の行ごとの探索から、`find-sub` の予算は `grep -n` の行ごとの検査と測った SWAR の差から、`slice-short` の予算は `grep -n`、`logstat`、`csv2jsonl` の行ごとの確保の見積もりから、`read-all-bytes` の予算は読みの見込みから決めた。最後の `read-line-bytes-64mib` の組は、行の読みの費用を記録するだけで、予算を持たない。`stdout-write-line-10m` も、ハンドルの1回の書き込みの費用 (extern の呼び出し、`dyn Host` の呼び出し、競合しない lock、buffer への写し) を記録するだけの行で、参照の行と予算を持たない。
 
 ### スクリプトの計測
 
@@ -294,6 +295,7 @@ extern の計測 (`rt_extern_bench`)
   - 2倍の行への費用: 100 MB の入力で、eml の `read_all` (読み、UTF-8 の検査、写し) は 23 ms、Rust の `read_to_end` は 9〜10 ms で、差は約 13 ms である。`wc` の Rust の版は 0.071 s なので、2倍の目標 (ロードマップの「ネイティブ化」の、スクリプト全体の目標で、この行の予算とは別) の余裕約 71 ms のうち、約 13 ms を読みが使う
   - `read_into` (Host の読みを一意な `Bytes` の空きに直接書く) は今は入れない。入れる引き金は、ネイティブのコードで、この行が `read_to_end` の 1.3 倍を超えることで、VM の今の測定では判定しない。`read_into` は `Vec` からの写しを省くが、stable の Rust は `read_buf` を持たず、読む前に空きを 0 で埋めるので、ヒープへ直接読んでも得は 6〜10% に留まる。1.3 の予算に入れるには、写しを省くことに加えて、0 で埋めずに読む手段が要る
 - `read-line-bytes-64mib` (56 バイトの行の 64 MiB を `Form::Bytes` の行の読みで読む) は記録だけの行で、予算を持たない。64 KiB の `BufReader` の `read_until` で行ごとに `Vec` に読む参照に対し、命令の数の比は 1.28 である (1,007,422,319 対 786,708,291 命令。3回の中央値で、どちらも入力の 64 MiB を組む費用を含む)。行の読みは読み手の buffer から行を1回だけヒープへ写すので、差は主に `Ctx` の呼び出しと、行の終わりを1バイトずつ探すループである。
+- `stdout-write-line-10m` (23 バイトの行を `Stdout` のハンドルで 10,000,000 回書く) は記録だけの行で、1回の書き込みは約299命令、約 9 ns である (2,987,628,843 命令と 0.09 秒。3回の中央値。M5、56cc5b74 の木に `Stdout` と `Stderr` を足したもの)。`println-block` の1行あたり約254命令に比べ、ハンドルの型の確かめと、ハンドルを返す分が多い。
 
 ### `bench/scripts.sh`
 

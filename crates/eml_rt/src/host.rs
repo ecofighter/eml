@@ -10,6 +10,7 @@ use std::io::{self, BufWriter, IsTerminal, Read, Write};
 use std::mem::ManuallyDrop;
 use std::path::PathBuf;
 use std::process::{Command, ExitStatus};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
 
 use vstd::prelude::*;
@@ -33,19 +34,56 @@ pub enum Stream {
 pub struct HostRef {
     // `Drop` で `release_host` に渡して手放す。理由は `release_host` の注釈にある
     host: ManuallyDrop<Arc<dyn Host>>,
+    /// 標準のストリームのハンドルの開いた印。写した `HostRef` (`par` の worker の `Ctx`) と共有する。
+    flags: Arc<OpenFlags>,
 }
 
 impl Clone for HostRef {
     #[verifier::external_body]
     fn clone(&self) -> Self {
-        HostRef { host: ManuallyDrop::new(Arc::clone(&self.host)) }
+        HostRef { host: ManuallyDrop::new(Arc::clone(&self.host)), flags: Arc::clone(&self.flags) }
     }
+}
+
+/// 標準のストリームごとの、生きているハンドルがあるかの印 (docs/spec/object-model.md の「Host」)。開くときに立て、
+/// ハンドルの `Drop` が下ろす。印は atomic なので、ハンドルを落とすスレッドは開いたスレッドと違ってよい
+/// (docs/future/multicore.md)。
+#[verifier::external_body]
+pub(crate) struct OpenFlags {
+    stdin: AtomicBool,
+    stdout: AtomicBool,
+    stderr: AtomicBool,
+}
+
+/// `Stdout.open` で開いた標準出力のハンドル。`Foreign` の物体の中身にする。buffer を持たず、Host の標準出力の buffer
+/// を使う権利だけを表す (docs/spec/stdlib.md の「`Stdout` と `Stderr`」)。`Drop` は開いた印を下ろすだけである。
+pub(crate) struct StdoutHandle {
+    flags: Arc<OpenFlags>,
+}
+
+/// `Stderr.open` で開いた標準エラーのハンドル。`StdoutHandle` と別の型にし、`Heap::foreign` の型の確かめが2つの
+/// ハンドルの取り違えを捕まえるようにする。
+pub(crate) struct StderrHandle {
+    flags: Arc<OpenFlags>,
+}
+
+/// `open_stream` が開いた、標準出力か標準エラーのハンドル。2つのハンドルは `open_stream` でしか作れないので、印と
+/// ハンドルの型の組は、その `ensures` が決める。
+pub(crate) enum OutputHandle {
+    Stdout(StdoutHandle),
+    Stderr(StderrHandle),
 }
 
 /// Host に1行を書かせる。誤りは `io::Error` の文言で返す。
 #[verifier::external_body]
 pub(crate) fn host_write_line(host: &HostRef, stream: Stream, line: &str) -> Result<(), Box<str>> {
     host.host.write_line(stream, line).map_err(|e| e.to_string().into_boxed_str())
+}
+
+/// Host に `bytes` をそのまま書かせる。誤りは `io::Error` の文言で返す。
+#[verifier::external_body]
+pub(crate) fn host_write(host: &HostRef, stream: Stream, bytes: &[u8]) -> Result<(), Box<str>> {
+    host.host.write(stream, bytes).map_err(|e| e.to_string().into_boxed_str())
 }
 
 /// Host がまとめて持っている出力を書かせる。誤りは `io::Error` の文言で返す。
@@ -104,6 +142,8 @@ pub(crate) struct StdinHandle {
     /// 失敗する。
     reader: Option<Reader>,
     slot: Option<Arc<StdinSlot>>,
+    /// 標準入力の開いた印。Host が標準入力を持たなくても立てるので、どの Host でも生きているハンドルは高々1つである。
+    flags: Arc<OpenFlags>,
 }
 
 /// `src` の読み手の buffer に残ったバイトを返す。空なら1回補充してから返し、終わりなら空の slice を返す
@@ -191,19 +231,48 @@ pub(crate) unsafe fn read_text<S: Source>(
     Ok(bytes)
 }
 
-/// `Stdin.open`。Host の slot から読み手を取り、標準入力のハンドルを作る。slot が空なら、ほかのハンドルが開いているので
-/// `InUse` を返す。Host が標準入力を持たなければ、読み手のないハンドルを作る (docs/spec/stdlib.md の「ハンドル」)。
+/// `Stdin.open`。開いた印を立て、Host の slot から読み手を取って、標準入力のハンドルを作る。印がすでに立っているか
+/// slot が空なら、ほかのハンドルが開いているので `InUse` を返す。slot が空になるのは、同じ Host の別の `HostRef` の
+/// ハンドルが読み手を持っているときである。Host が標準入力を持たなければ、読み手のないハンドルを作る
+/// (docs/spec/stdlib.md の「ハンドル」)。
 #[verifier::external_body]
 pub(crate) fn open_stdin(host: &HostRef) -> (r: Result<StdinHandle, Fault>)
     ensures
         r is Ok || r matches Err(Fault::InUse(StdStream::Stdin)),
 {
+    let flags = host.flags.raise(StdStream::Stdin)?;
     let Some(slot) = host.host.stdin() else {
-        return Ok(StdinHandle { reader: None, slot: None });
+        return Ok(StdinHandle { reader: None, slot: None, flags });
     };
     match slot.take() {
-        Some(reader) => Ok(StdinHandle { reader: Some(reader), slot: Some(slot) }),
-        None => Err(Fault::InUse(StdStream::Stdin)),
+        Some(reader) => Ok(StdinHandle { reader: Some(reader), slot: Some(slot), flags }),
+        None => {
+            flags.lower(StdStream::Stdin);
+            Err(Fault::InUse(StdStream::Stdin))
+        },
+    }
+}
+
+/// `Stdout.open` と `Stderr.open`。`stream` の開いた印を立て、その印を持つ `stream` の型のハンドルを返す。印がすでに
+/// 立っていれば、ほかのハンドルが開いているので `InUse` を返す (docs/spec/stdlib.md の「ハンドル」)。
+#[verifier::external_body]
+pub(crate) fn open_stream(host: &HostRef, stream: Stream) -> (r: Result<OutputHandle, Fault>)
+    ensures
+        r matches Ok(OutputHandle::Stdout(_)) ==> stream == Stream::Out,
+        r matches Ok(OutputHandle::Stderr(_)) ==> stream == Stream::Err,
+        r is Ok || (r matches Err(Fault::InUse(s)) && s == (if stream == Stream::Out {
+            StdStream::Stdout
+        } else {
+            StdStream::Stderr
+        })),
+{
+    match stream {
+        Stream::Out => Ok(
+            OutputHandle::Stdout(StdoutHandle { flags: host.flags.raise(StdStream::Stdout)? }),
+        ),
+        Stream::Err => Ok(
+            OutputHandle::Stderr(StderrHandle { flags: host.flags.raise(StdStream::Stderr)? }),
+        ),
     }
 }
 
@@ -512,6 +581,53 @@ impl Drop for StdinHandle {
         if let (Some(slot), Some(reader)) = (&self.slot, self.reader.take()) {
             slot.put(reader);
         }
+        // 読み手を返してから下ろすので、次に開いたハンドルは slot の読み手を取れる
+        self.flags.lower(StdStream::Stdin);
+    }
+}
+
+impl Drop for StdoutHandle {
+    fn drop(&mut self) {
+        self.flags.lower(StdStream::Stdout);
+    }
+}
+
+impl Drop for StderrHandle {
+    fn drop(&mut self) {
+        self.flags.lower(StdStream::Stderr);
+    }
+}
+
+impl OpenFlags {
+    fn new() -> OpenFlags {
+        OpenFlags {
+            stdin: AtomicBool::new(false),
+            stdout: AtomicBool::new(false),
+            stderr: AtomicBool::new(false),
+        }
+    }
+
+    fn flag(&self, stream: StdStream) -> &AtomicBool {
+        match stream {
+            StdStream::Stdin => &self.stdin,
+            StdStream::Stdout => &self.stdout,
+            StdStream::Stderr => &self.stderr,
+        }
+    }
+
+    /// `stream` の印を立てる。すでに立っていれば `InUse` を返す。
+    fn raise(self: &Arc<Self>, stream: StdStream) -> Result<Arc<OpenFlags>, Fault> {
+        match self
+            .flag(stream)
+            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+        {
+            Ok(_) => Ok(Arc::clone(self)),
+            Err(_) => Err(Fault::InUse(stream)),
+        }
+    }
+
+    fn lower(&self, stream: StdStream) {
+        self.flag(stream).store(false, Ordering::Release);
     }
 }
 
@@ -585,6 +701,7 @@ impl HostRef {
     pub fn new(host: Arc<dyn Host>) -> HostRef {
         HostRef {
             host: ManuallyDrop::new(host),
+            flags: Arc::new(OpenFlags::new()),
         }
     }
 }
@@ -609,6 +726,8 @@ fn release_host(host: Arc<dyn Host>) {
 pub trait Host: Send + Sync {
     /// 本文と `\n` を、ほかの行と途中で混ざらないように書く。
     fn write_line(&self, stream: Stream, line: &str) -> io::Result<()>;
+    /// `bytes` をそのまま、ほかの書き込みと途中で混ざらないように書く。
+    fn write(&self, stream: Stream, bytes: &[u8]) -> io::Result<()>;
     /// まとめて持っている出力を書く。
     fn flush(&self) -> io::Result<()>;
     /// `path` のファイルを読むために開く。
@@ -659,10 +778,10 @@ pub struct Opened {
     pub size: Option<u64>,
 }
 
-/// 標準出力の書き方。標準エラーは、どちらでも行ごとに書く。
+/// 標準出力の書き方。標準エラーは、どちらでも書き込みごとに書き出す。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Buffering {
-    /// 行ごとに書く。
+    /// 行ごとに書く。`\n` を含む書き込みが書き出す。
     Line,
     /// 64 KiB ずつまとめて書く。
     Block,
@@ -749,6 +868,20 @@ impl Host for StdHost {
         w.write_all(line.as_bytes())?;
         w.write_all(b"\n")?;
         if by_line {
+            w.flush()?;
+        }
+        Ok(())
+    }
+
+    fn write(&self, stream: Stream, bytes: &[u8]) -> io::Result<()> {
+        let (target, flush) = match stream {
+            // 行ごとに書くときだけ改行を探す。まとめて書くときの書き込みに走査の費用を足さない
+            Stream::Out => (&self.out, self.line && bytes.contains(&b'\n')),
+            Stream::Err => (&self.err, true),
+        };
+        let mut w = lock(target);
+        w.write_all(bytes)?;
+        if flush {
             w.flush()?;
         }
         Ok(())

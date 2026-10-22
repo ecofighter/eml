@@ -1,0 +1,19 @@
+---
+source: crates/eml_cli/tests/ui.rs
+expression: rendered
+input_file: tests/ui/check-fail/linearity/stdout_not_used.em
+---
+[E3003] Error: `out` must be used exactly once, but it is not used
+   ╭─[ check-fail/linearity/stdout_not_used.em:4:7 ]
+   │
+ 4 │   let out = Stdout.open ()
+   │       ─┬─  
+   │        ╰─── `out` is bound here
+ 5 │   println "x"
+   │              │ 
+   │              ╰─ `out` is not used before the end of this scope
+   │ 
+   │ Help: pass `out` to `drop`
+   │ 
+   │ Note: linear values, such as files, the continuation of a `once` operation and closures that capture one, must be used exactly once
+───╯
