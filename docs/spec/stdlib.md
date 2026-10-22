@@ -146,9 +146,22 @@ pub while : (Unit -> <e> Bool) -> (Unit -> <e> Unit) -> <e> Unit
 | `length` | `List a -> <Panic> Int` |
 | `reverse` | `List a -> List a` |
 | `append` | `List a -> List a -> List a` |
+| `take` | `Int -> List a -> <Panic> List a` |
+| `split_at` | `Int -> List a -> <Panic> (List a, List a)` |
+| `nth` | `Int -> List a -> <Panic> Option a` |
+| `zip` | `List a -> List b -> List (a, b)` |
+| `index_of` | `Eq a => a -> List a -> <Panic> Option Int` |
+| `contains` | `Eq a => a -> List a -> Bool` |
+| `lookup` | `Eq k => k -> List (k, v) -> Option v` |
 
 - `map`、`filter`、`filter_map`、`each` は、要素の順に関数を呼ぶ。`fold f init xs` は左からたたむ (`f (f init x1) x2`)
 - `append xs ys` は `xs` の後ろに `ys` を続ける
+- `take n xs` は先頭の `n` 個を返す。`n` が 0 以下なら `Nil` で、長さより大きければ全体である
+- `split_at n xs` は先頭の `n` 個と残りの組を返す。`n` が 0 以下なら `(Nil, xs)` で、長さ以上なら `(xs, Nil)` である
+- `nth i xs` は 0 から数えた位置 `i` の要素を返す。`i` が負か長さ以上なら `None` である
+- `zip` は短いほうの長さで止める
+- `index_of x xs` は `x` に等しい最初の要素の位置を返し、なければ `None` である。`contains x xs` は等しい要素があるかを返す。`lookup key ps` は最初にキーが等しい組の値を返す。探すものを先に置くのは、`String.contains` と `Map.lookup` にそろえるためである
+- `drop` は置かない。線形の値を捨てる `drop` と名前が重なるためである
 - どの関数も末尾再帰で書き、逆順に積んで最後に `reverse` する。長いリストでも VM の深さの上限に当たらないようにするためである
 
 ## `String`
