@@ -661,7 +661,8 @@ pub class Bits a where
   3. docs/implementation/status.md: `Byte`、`Bits`、`Bytes`、ハンドルを実装済みに入れ、「まだないもの」から「バイト列と標準入出力のハンドル」を消す
   4. docs/implementation/architecture.md を、crate かパスの構成が変わった所だけ直す
   5. roadmap からこの段の節を消す。U-2〜U-6 を「後に回した理由」と「見直す条件」を添えて「その後の項目」に移す。roadmap の次の所を直す: 「ネイティブ化」の `extern` の借用の箇条 (:231。`String` の読みの行は借用になった)、「スカラーの要素を生で持つ配列」の設計の要点 (:207。D-1 の中身の仲間の別の種類として足す)、「借用パラメータ」の項目 (extern の任意の位置の借用と別名の規則はこの段で入った)
-  6. docs/overview.md の確定した設計判断の表と、docs/README.md の「文書の地図」を、変わった所だけ直す
+     - docs/future/stdlib.md の「標準入出力のハンドル」の項目 (:11) は実装したので消すか、docs/spec/stdlib.md の「ハンドル」を指す文にする。消す roadmap の節の「バッファ付きの読み書きもハンドルにする」を、D-8 の意味で書き直した決めが docs/spec に残っていることを確かめる
+  6. docs/overview.md の確定した設計判断の表と、docs/README.md の「文書の地図」を、変わった所だけ直す (spec/stdlib.md の行に `Stdout` と `Stderr` を足す)
   7. CLAUDE.md と crates/eml_rt/CLAUDE.md を、規則か道しるべが変わったときだけ直す (信頼の一覧が T0〜T13 になるので、crates/eml_rt/CLAUDE.md の「T0-T12」を直す)
   8. この文書と付録を消す。消す前に、docs/ に残っていない決めがないことを確かめる
 - 完了の条件: 1章の完了の条件をすべて満たす。`git grep -nE 'Stdin\.read_(line|all)[[:space:]]*\(\)|Stdin\.read_line_raw[[:space:]]*\(\)' -- . ':!docs/plans' ':!docs/reports'` と `git grep -nE '\(File, (String|Option String)\)' -- . ':!docs/plans' ':!docs/reports'` が何も出さない。`git grep -n '標準入力から読む前' -- docs/spec` が何も出さない (OM の書き出す時の一覧を書き直した)
