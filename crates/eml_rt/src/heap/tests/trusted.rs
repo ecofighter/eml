@@ -14,7 +14,7 @@ use super::string::text;
 use super::table::Rng;
 use super::{CONS, Probe, cons, list, mortal, probe, raw};
 use crate::cell::{rc_decref_shared, rc_dup_shared};
-use crate::externs::{Form, Handle, Read};
+use crate::externs::{Form, Handle, ReadAmount};
 use crate::heap::ctx::positions::{find_byte, find_bytes};
 use crate::host::{Failure, File, Reader, consume, fill, host_open};
 use crate::{Checked, Control, Ctx, Fast, Heap, HeapError, Kind, Limits, Meta, Mode, Word};
@@ -791,145 +791,11 @@ fn println_goes_through_the_host<M: Mode>() {
     assert_eq!(mortal(ctx.heap()), 0);
 }
 
-/// 1行を読み、組から File と行を取り出す。
-unsafe fn next_line<M: Mode>(ctx: &mut Ctx<M>, f: Word) -> (Word, String) {
-    unsafe {
-        let t = ctx.fs_read(f, true).unwrap();
-        let file = ctx.heap().field(t, 0).unwrap();
-        let w = ctx.heap().field(t, 1).unwrap();
-        let line = text(ctx.heap(), w);
-        ctx.heap_mut()
-            .release(t, crate::externs::TUPLE, &[true, true])
-            .unwrap();
-        ctx.heap_mut().decref(w).unwrap();
-        (file, line)
-    }
-}
-
-/// Host を通る読み。区切りをまたぐ長さ、長さの見込みのない読み手、短い読み、途中の誤り、UTF-8 でない中身、
-/// 止める語、閉じることを、全部の読みと行の読みの両方で通す。
-fn files_go_through_the_host<M: Mode>() {
-    let memory = Arc::new(MemoryHost::default());
-    let control = Arc::new(Control::new(Limits::default()));
-    let body = "0123456789".repeat(7000);
-    memory.add(
-        "big.txt",
-        MemoryFile {
-            sized: false,
-            chunk: 4096,
-            ..MemoryFile::text(&body)
-        },
-    );
-    memory.add(
-        "broken.txt",
-        MemoryFile {
-            fail_after: Some(1),
-            ..MemoryFile::text("ab")
-        },
-    );
-    memory.add(
-        "bad.bin",
-        MemoryFile {
-            bytes: vec![0xc3],
-            sized: true,
-            ..MemoryFile::default()
-        },
-    );
-    memory.add(
-        "fifo",
-        MemoryFile {
-            interrupt_with: Some(control.clone()),
-            ..MemoryFile::text("abc")
-        },
-    );
-    let long_line = "x".repeat(70_000);
-    memory.add(
-        "lines.txt",
-        MemoryFile {
-            chunk: 4096,
-            ..MemoryFile::text(&format!("{long_line}\na\r\n\nlast"))
-        },
-    );
-    let mut ctx = Ctx::<M>::new(control.clone(), host(&memory));
-    unsafe {
-        // 64 KiB の区切りをまたぐ行、`\r\n` を残した行、空の行、行の終わりのない最後の行、終わりの空の文字列
-        let p = ctx.heap_mut().alloc_string("lines.txt");
-        let mut f = ctx.fs_open(p).unwrap();
-        for expected in [
-            format!("{long_line}\n"),
-            "a\r\n".into(),
-            "\n".into(),
-            "last".into(),
-            String::new(),
-        ] {
-            let line;
-            (f, line) = next_line(&mut ctx, f);
-            assert_eq!(line, expected);
-        }
-        ctx.fs_close(f).unwrap();
-        assert_eq!(mortal(ctx.heap()), 0);
-        for name in ["broken.txt", "bad.bin"] {
-            let p = ctx.heap_mut().alloc_string(name);
-            let f = ctx.fs_open(p).unwrap();
-            assert!(ctx.fs_read(f, true).is_err());
-            assert_eq!(mortal(ctx.heap()), 0);
-        }
-        let p = ctx.heap_mut().alloc_string("fifo");
-        let f = ctx.fs_open(p).unwrap();
-        assert_eq!(
-            ctx.fs_read(f, true),
-            Err(crate::Fault::Stopped(crate::Stop::Interrupted))
-        );
-        control.clear();
-        let p = ctx.heap_mut().alloc_string("lines.txt");
-        let f = ctx.fs_open(p).unwrap();
-        control.interrupt();
-        assert_eq!(
-            ctx.fs_read(f, true),
-            Err(crate::Fault::Stopped(crate::Stop::Interrupted))
-        );
-        control.clear();
-        assert_eq!(mortal(ctx.heap()), 0);
-        let p = ctx.heap_mut().alloc_string("big.txt");
-        let f = ctx.fs_open(p).unwrap();
-        let t = ctx.fs_read(f, false).unwrap();
-        let w = ctx.heap().field(t, 1).unwrap();
-        assert_eq!(text(ctx.heap(), w), body);
-        ctx.heap_mut().decref(t).unwrap();
-        for name in ["broken.txt", "bad.bin"] {
-            let p = ctx.heap_mut().alloc_string(name);
-            let f = ctx.fs_open(p).unwrap();
-            assert!(ctx.fs_read(f, false).is_err());
-        }
-        let p = ctx.heap_mut().alloc_string("big.txt");
-        let f = ctx.fs_open(p).unwrap();
-        ctx.fs_close(f).unwrap();
-        // 止める語が立った後の `Interrupted` で止まる (T11)
-        let p = ctx.heap_mut().alloc_string("fifo");
-        let f = ctx.fs_open(p).unwrap();
-        assert_eq!(
-            ctx.fs_read(f, false),
-            Err(crate::Fault::Stopped(crate::Stop::Interrupted))
-        );
-        control.clear();
-        let before = mortal(ctx.heap());
-        let p = ctx.heap_mut().alloc_string("big.txt");
-        let f = ctx.fs_open(p).unwrap();
-        control.interrupt();
-        assert_eq!(
-            ctx.fs_read(f, false),
-            Err(crate::Fault::Stopped(crate::Stop::Interrupted))
-        );
-        assert_eq!(mortal(ctx.heap()), before);
-    }
-    assert_eq!(mortal(ctx.heap()), 0);
-}
-
 /// `handle_read` でハンドルを借りて読み、読んだ中身を写して手放す。
 unsafe fn read_borrowed<M: Mode>(
     ctx: &mut Ctx<M>,
     f: Word,
-    read: Read,
+    read: ReadAmount,
 ) -> Result<String, crate::Fault> {
     unsafe {
         let w = ctx.handle_read(f, Handle::File, read, Form::Text)?;
@@ -939,8 +805,9 @@ unsafe fn read_borrowed<M: Mode>(
     }
 }
 
-/// `files_go_through_the_host` と同じ場合を、ハンドルを借りる `handle_read` で通す。誤りと止めたときも、ハンドルは
-/// 呼ぶ側に残り、`close` で閉じる。
+/// Host を通る読み。区切りをまたぐ長さ、長さの見込みのない読み手、短い読み、途中の誤り、UTF-8 でない中身、
+/// 止める語、閉じることを、全部の読みと行の読みの両方で、ハンドルを借りる `handle_read` で通す。誤りと止めたときも、
+/// ハンドルは呼ぶ側に残り、`close` で閉じる。
 fn borrowed_files_go_through_the_host<M: Mode>() {
     let memory = Arc::new(MemoryHost::default());
     let control = Arc::new(Control::new(Limits::default()));
@@ -998,11 +865,14 @@ fn borrowed_files_go_through_the_host<M: Mode>() {
             "last".into(),
             String::new(),
         ] {
-            assert_eq!(read_borrowed(&mut ctx, f, Read::Line).unwrap(), expected);
+            assert_eq!(
+                read_borrowed(&mut ctx, f, ReadAmount::Line).unwrap(),
+                expected
+            );
         }
         ctx.fs_close(f).unwrap();
         assert_eq!(mortal(ctx.heap()), 0);
-        for read in [Read::Line, Read::All] {
+        for read in [ReadAmount::Line, ReadAmount::All] {
             for name in ["broken.txt", "bad.bin"] {
                 let f = open(&mut ctx, name);
                 assert!(read_borrowed(&mut ctx, f, read).is_err());
@@ -1029,7 +899,7 @@ fn borrowed_files_go_through_the_host<M: Mode>() {
             assert_eq!(mortal(ctx.heap()), 0);
         }
         let f = open(&mut ctx, "big.txt");
-        assert_eq!(read_borrowed(&mut ctx, f, Read::All).unwrap(), body);
+        assert_eq!(read_borrowed(&mut ctx, f, ReadAmount::All).unwrap(), body);
         ctx.fs_close(f).unwrap();
     }
     assert_eq!(mortal(ctx.heap()), 0);
@@ -1511,7 +1381,6 @@ both_modes!(
     own_objects_read_region_words,
     two_threads_share_one_control,
     println_goes_through_the_host,
-    files_go_through_the_host,
     borrowed_files_go_through_the_host,
     two_buffered_lines_flush_once,
     a_line_across_two_refills_flushes_before_each,

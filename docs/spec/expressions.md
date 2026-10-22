@@ -10,7 +10,7 @@
 copy : String -> String -> <IO> Unit
 copy src dst =
   let f = Fs.open src
-  let (f, text) = Fs.read_all f
+  let (text, f) = Fs.read_all f
   Fs.close f
   write_text dst text
 ```

@@ -46,7 +46,7 @@ read_twice () =
   let go f n =
     if n == 0 then Fs.close f
     else
-      let (f, text) = Fs.read_all f
+      let (text, f) = Fs.read_all f
       go f (n - 1)
   go (Fs.open "input.txt") 3
   println "passed along"

@@ -4,7 +4,7 @@
 with_file : String -> <IO> Int
 with_file name =
   let f = Fs.open name
-  let (f, text) = Fs.read_all f
+  let (text, f) = Fs.read_all f
   Fs.close f
   String.byte_length text
 

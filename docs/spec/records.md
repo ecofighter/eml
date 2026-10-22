@@ -84,8 +84,8 @@ close_job j =
   Fs.close log
   name
 
-let n = (Fs.read_all f).1         -- エラー: 残りの .0 (Fs.File) が Lin
-let (f, text) = Fs.read_all f     -- OK
+let n = (Fs.read_all f).0         -- エラー: 残りの .1 (Fs.File) が Lin
+let (text, f) = Fs.read_all f     -- OK
 ```
 
 - 違反は E3004 にし、分解のパターンを help で示す。fix は付けない。セクション `(.name)` が組むラムダの隠れた引数は分解を書けないので、セクションの射影には help を付けない ([診断の出し方](../implementation/diagnostics.md) の「線形性の診断」)

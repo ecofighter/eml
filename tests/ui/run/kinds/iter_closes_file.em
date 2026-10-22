@@ -18,7 +18,7 @@ yield_all xs =
 file_lines : String -> <IO, Panic> Iter <IO, Panic> String
 file_lines path =
   let f = Fs.open path
-  let (f, text) = Fs.read_all f
+  let (text, f) = Fs.read_all f
   handle yield_all (String.lines text) with
     | ctl yield line k -> More line k
     | return () ->

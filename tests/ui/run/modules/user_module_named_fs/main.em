@@ -7,7 +7,7 @@ main : Unit -> <IO> Unit
 main () =
   println (Fs.describe ())
   let f = F.open "../../files/input.txt"
-  let (f, text) = F.read_all f
+  let (text, f) = F.read_all f
   F.close f
   println text
   println (Other.read_input ())

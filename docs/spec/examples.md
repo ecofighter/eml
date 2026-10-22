@@ -73,7 +73,7 @@ main () =
 grep : String -> String -> <IO, Panic> Unit
 grep pat path =
   let f = Fs.open path
-  let (f, text) = Fs.read_all f
+  let (text, f) = Fs.read_all f
   Fs.close f
   lines text
     |> filter (String.contains pat)

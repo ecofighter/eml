@@ -9,7 +9,7 @@ deep n =
 
 held : Unit -> <IO, Panic> Int
 held () =
-  let (f, text) = Fs.read_all (Fs.open "input.txt")
+  let (text, f) = Fs.read_all (Fs.open "input.txt")
   let n = String.byte_length (Fs.read_text "missing.txt")
   Fs.close f
   n + String.byte_length text

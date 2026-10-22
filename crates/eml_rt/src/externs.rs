@@ -83,7 +83,7 @@ pub enum Handle {
 
 /// `Ctx::handle_read` がハンドルから読む量。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Read {
+pub enum ReadAmount {
     /// 終わりまで。
     All,
     /// 次の `\n` まで (それを含めて)。終わりなら空である。

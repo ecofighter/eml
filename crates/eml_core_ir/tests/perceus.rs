@@ -201,26 +201,23 @@ fn a_nested_pattern_releases_from_the_parent_down() {
 
 #[test]
 fn a_file_taken_out_of_a_tuple_is_neither_dupped_nor_decreffed() {
-    // `File` は `Lin` なので、組を分解した所で `release` が両方のフィールドを残し、その後は1回ずつ使う
-    let text = "main : Unit -> <IO> Unit\nmain () =\n  let f = Fs.open \"input.txt\"\n  let (f, first) = Fs.read_all f\n  let (f, rest) = Fs.read_all f\n  Fs.close f\n  println first\n  println (\"[\" ++ rest ++ \"]\")";
+    // 読みは `File` を借りて結果と `File` の組を返し、組は最適化で消える。`File` は `Lin` なので、`dup` も `decref` も
+    // 入らずに、借りる読みの後で `close` に1回だけ渡る
+    let text = "main : Unit -> <IO> Unit\nmain () =\n  let f = Fs.open \"input.txt\"\n  let (first, f) = Fs.read_all f\n  let (rest, f) = Fs.read_all f\n  Fs.close f\n  println first\n  println (\"[\" ++ rest ++ \"]\")";
     insta::assert_snapshot!(function(&lir_text(text, eml_lir::Pass::Perceus), "entry$main"), @r#"
     fn entry$main() -> unit {
       let s.1: obj = const "input.txt"
       let t.2: obj lin = extern Std.Fs.open(s.1)
-      let t.16: obj lin = extern Std.Fs.read_all(t.2)
-      let (t.0.18: obj lin, t.1.19: obj) = unbox t.16 (,)
-      release unboxed t.16 (,) #0(t.0.18, t.1.19)
-      let t.17: obj lin = extern Std.Fs.read_all(t.0.18)
-      let (t.0.20: obj lin, t.1.21: obj) = unbox t.17 (,)
-      release unboxed t.17 (,) #0(t.0.20, t.1.21)
-      let t.9: unit = extern Std.Fs.close(t.0.20)
-      let t.10: unit = extern Prelude.println(t.1.19)
-      let s.11: obj = const "["
-      let s.12: obj = const "]"
-      let t.13: obj = extern Prelude.++(t.1.21, s.12)
-      let t.14: obj = extern Prelude.++(s.11, t.13)
-      let t.15: unit = extern Prelude.println(t.14)
-      return t.15
+      let t.3: obj = extern Std.Fs.read_all(t.2)
+      let t.4: obj = extern Std.Fs.read_all(t.2)
+      let t.5: unit = extern Std.Fs.close(t.2)
+      let t.6: unit = extern Prelude.println(t.3)
+      let s.7: obj = const "["
+      let s.8: obj = const "]"
+      let t.9: obj = extern Prelude.++(t.4, s.8)
+      let t.10: obj = extern Prelude.++(s.7, t.9)
+      let t.11: unit = extern Prelude.println(t.10)
+      return t.11
     }
     "#);
 }

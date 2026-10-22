@@ -4,7 +4,7 @@
 
 use eml_extern::{Extern, ExternEffect, Purity};
 use eml_rt::externs::{self, Fault};
-use eml_rt::{Ctx, Mode, Stream, Token, Word};
+use eml_rt::{Ctx, Form, Handle, Mode, ReadAmount, Stream, Token, Word};
 
 use crate::RunCounts;
 use crate::apply;
@@ -928,7 +928,12 @@ fn run_extern<M: Mode>(
                 task.set(dst, w);
             }
             Extern::ReadAll | Extern::ReadLine => {
-                let w = ctx.fs_read(task.get(arg(0)), matches!(ext, Extern::ReadLine))?;
+                let read = if ext == Extern::ReadLine {
+                    ReadAmount::Line
+                } else {
+                    ReadAmount::All
+                };
+                let w = ctx.handle_read(task.get(arg(0)), Handle::File, read, Form::Text)?;
                 task.set(dst, w);
             }
             Extern::Close => {

@@ -167,7 +167,7 @@ read_text : String -> <IO> Result IOError String
 read_text path =
   use try_io
   let f = Fs.open path
-  let (f, text) = Fs.read_all f
+  let (text, f) = Fs.read_all f
   Fs.close f
   text
 

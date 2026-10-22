@@ -7,8 +7,8 @@ lines : String -> Unit -> <Yield String, IO, Panic> Unit
 lines path () =
   let go file =
     match Fs.read_line file with
-      | (file, None) -> Fs.close file
-      | (file, Some line) ->
+      | (None, file) -> Fs.close file
+      | (Some line, file) ->
         yield line
         go file
   go (Fs.open path)

@@ -233,6 +233,7 @@ fn only_the_array_readers_borrow() {
             "Std.Array.get" => (&[true, false], None),
             "Std.MutArray.length" => (&[true], Some(0)),
             "Std.MutArray.read" => (&[true, false], Some(0)),
+            "Std.Fs.read_all" | "Std.Fs.read_line_raw" => (&[true], Some(0)),
             "Std.String.byte_length" | "Prelude.Show String.show" => (&[true], None),
             "Std.String.byte_at" => (&[false, true], None),
             "Std.String.slice" => (&[false, false, true], None),
@@ -356,8 +357,8 @@ fn only_the_file_functions_carry_a_lin() {
         let row = e.row();
         let expected: (&[Linearity], Linearity) = match row.name {
             "Std.Fs.open" => (&[Unr], Lin),
-            "Std.Fs.read_all" => (&[Lin], Lin),
-            "Std.Fs.read_line_raw" => (&[Lin], Lin),
+            "Std.Fs.read_all" => (&[Lin], Unr),
+            "Std.Fs.read_line_raw" => (&[Lin], Unr),
             "Std.Fs.close" => (&[Lin], Unr),
             "Std.Array.thaw" => (&[Unr], Lin),
             "Std.MutArray.make" => (&[Unr, Unr], Lin),
@@ -402,12 +403,12 @@ fn every_extern_type_row_has_the_repr_of_its_type() {
     }
 }
 
-/// 機械の extern は、`Bool` と組の値を配置の表を見ずに `FALSE`、`TRUE`、`TUPLE` のタグで作る。そのタグが、translate
-/// が std の宣言から作る配置の添字と合うことを確かめる。
+/// 機械の extern は `Bool` の値を、translate は `with_arg` の行の組を、配置の表を見ずに `FALSE`、`TRUE`、`TUPLE` の
+/// タグで作る。そのタグが、translate が std の宣言から作る配置の添字と合うことを確かめる。
 #[test]
 fn the_tags_externs_build_name_the_constructors_of_their_layouts() {
     let program = eml_test_support::lir(
-        "main : Unit -> <IO> Unit\nmain () =\n  let f = Fs.open \"a.txt\"\n  let (f, text) = Fs.read_all f\n  Fs.close f\n  if text == \"\" then println \"empty\" else println text",
+        "main : Unit -> <IO> Unit\nmain () =\n  let f = Fs.open \"a.txt\"\n  let (text, f) = Fs.read_all f\n  Fs.close f\n  if text == \"\" then println \"empty\" else println text",
     );
     let constructors = |name: &str| -> Vec<&str> {
         let layout = program
@@ -427,7 +428,7 @@ fn the_tags_externs_build_name_the_constructors_of_their_layouts() {
         (bool[FALSE as usize], bool[TRUE as usize]),
         ("False", "True")
     );
-    // `Fs.read_all` の結果は、要素が2つの組の配置の唯一のコンストラクタである
+    // `Fs.read_all` の結果と `File` の組は、要素が2つの組の配置の唯一のコンストラクタである
     assert_eq!(constructors("(,)"), ["(,)"]);
     assert_eq!(TUPLE, 0);
 }

@@ -5,10 +5,11 @@ import String
 
 pub extern data File
 pub extern open : String -> <IO> File
-pub extern read_all : File -> <IO> (File, String)
+-- 読みは `File` を借りて、結果を先に、`File` を後に返す (docs/spec/effects.md の「組み込みの `IO`」)
+pub extern read_all : File -> <IO> (String, File)
 -- 行の終わりを含む1行で、終わりなら空の文字列である。extern は `Option` を作らないので、`read_line` が包む
 -- (docs/spec/stdlib.md の「extern の境界」)
-extern read_line_raw : File -> <IO> (File, String)
+extern read_line_raw : File -> <IO> (String, File)
 pub extern close : File -> <IO> Unit
 -- `path` のファイルを作るか切り詰めて、`text` を書く
 pub extern write_text : String -> String -> <IO> Unit
@@ -16,13 +17,12 @@ pub extern write_text : String -> String -> <IO> Unit
 -- ファイル全体を文字列として読む
 pub read_text : String -> <IO> String
 read_text path =
-  let f = open path
-  let (f, text) = read_all f
+  let (text, f) = read_all (open path)
   close f
   text
 
 -- 行の終わり (`\n` か `\r\n`) を除いた1行で、終わりなら `None` である。`Stdin.read_line` と同じである
-pub read_line : File -> <IO, Panic> (File, Option String)
+pub read_line : File -> <IO, Panic> (Option String, File)
 read_line file =
-  let (file, line) = read_line_raw file
-  if String.byte_length line == 0 then (file, None) else (file, Some (String.trim_line_end line))
+  let (line, file) = read_line_raw file
+  if String.byte_length line == 0 then (None, file) else (Some (String.trim_line_end line), file)

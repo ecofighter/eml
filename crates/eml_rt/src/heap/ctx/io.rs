@@ -4,7 +4,7 @@
 #[cfg(verus_only)]
 use super::proof::*;
 use super::*;
-use crate::externs::{Fault, Form, Handle, IoOp, Read, TUPLE};
+use crate::externs::{Fault, Form, Handle, IoOp, ReadAmount};
 use crate::host::{File, Stream, host_flush, host_open, host_write_line, read_text};
 #[cfg(verus_only)]
 use vstd::string::StringSliceAdditionalSpecFns;
@@ -279,137 +279,22 @@ impl<M: Mode> Ctx<M> {
         }
     }
 
-    /// `Fs.read_all` と `Fs.read_line_raw`。`file` を終わりまで (`line` なら次の `\n` まで、それを含めて) 読み、組
-    /// `(File, String)` を返す。行の読みでは、終わりなら文字列は空である。`file` の参照は組に移る。64 KiB ずつ読み、
-    /// 区切りごとに止める語と確保量を見る (docs/spec/object-model.md の「実行の制御」)。読みの誤り、UTF-8 でない中身、
-    /// 止めたときは、`file` を手放して閉じ、結果を作らない。
-    ///
-    /// # Safety
-    /// `heap_mut` の前提を守っている。`file` は即値か、このヒープか付けた塊の生きている物体を指し、呼ぶ側がその参照を
-    /// 1つ持つ。速いモードでは、`file` は局所で rc が 1 である (検査モードは確かめ、違えば `NotUnique` か `WrongOwner`
-    /// を返す)。`File` でなければ、どちらのモードでも `WrongKind` を返す。
-    pub unsafe fn fs_read(&mut self, file: Word, line: bool) -> (r: Result<Word, Fault>)
-        requires
-            old(self).wf(),
-            old(self).heap_spec().word_in(file),
-            !M::CHECKED ==> old(self).holds(file) && old(self).heap_spec().rc_value(file) == 1,
-        ensures
-            final(self).wf(),
-            final(self).evv_spec() == old(self).evv_spec(),
-            final(self).yield_spec() == old(self).yield_spec(),
-            (r matches Err(Fault::Heap(_))) ==> *final(self) == *old(self)
-                || final(self).heap_spec().kept_live(old(self).heap_spec()),
-            !M::CHECKED && (r matches Err(Fault::Heap(_))) ==> r == Err::<Word, Fault>(
-                Fault::Heap(HeapError::WrongKind),
-            ) && *final(self) == *old(self),
-            r matches Ok(t) ==> {
-                let h = final(self).heap_spec();
-                &&& h.kind_of(t) == Kind::Data
-                &&& h.tag_of(t) == TUPLE
-                &&& h.lin_of(t)
-                &&& h.count_of(t) == 2
-                &&& h.scanned_word(t, 0) == file
-                &&& final(self).is_string(h.scanned_word(t, 1))
-            },
-            old(self).held_ok() && old(self).holds(file) && old(self).heap_spec().rc_value(file)
-                == 1 ==> (r matches Err(Fault::Heap(e)) ==> *final(self) == *old(self) || chain_err(
-                Err::<(), HeapError>(e),
-            )),
-            old(self).held_ok() && old(self).holds(file) && old(self).heap_spec().rc_value(file)
-                == 1 && !(r matches Err(Fault::Heap(_))) ==> {
-                &&& final(self).held_ok()
-                &&& final(self).evolved_by(*old(self), |x: usize| -points(file, x), Set::empty())
-                &&& r matches Ok(t) ==> final(self).holds(t)
-            },
-    {
-        let ghost s0 = *self;
-        let ghost c = s0.held_ok() && s0.holds(file) && s0.heap.rc_value(file) == 1;
-        if !file.is_ptr() {
-            return Err(Fault::Heap(HeapError::WrongKind));
-        }
-        proof {
-            if c {
-                s0.lemma_held_arg(file);
-            }
-        }
-        let p = match unsafe { self.heap.foreign_unique::<File>(file) } {
-            Ok(p) => p,
-            Err(e) => return Err(Fault::Heap(e)),
-        };
-        let text = match unsafe { read_text(p, &self.control, None, line) } {
-            Ok(text) => text,
-            Err(e) => {
-                // 手放すと破棄処理が File を閉じる
-                if let Err(e) = unsafe { self.heap.decref(file) } {
-                    proof {
-                        self.lemma_words_kept(s0);
-                    }
-                    return Err(Fault::Heap(e));
-                }
-                proof {
-                    if M::CHECKED {
-                        self.lemma_words_kept(s0);
-                    }
-                    if c {
-                        self.lemma_closed(s0, file);
-                    }
-                }
-                return Err(e);
-            },
-        };
-        let text = text.as_str();
-        let s = self.heap.alloc_string(text);
-        let ghost h1 = self.heap;
-        if M::CHECKED {
-            self.stats.string_bytes_copied = self.stats.string_bytes_copied.wrapping_add(
-                text.len() as u64,
-            );
-        }
-        let t = self.heap.alloc_data(TUPLE, 2, 0, true);
-        let ghost h2 = self.heap;
-        proof {
-            lemma_words_trans(h2, h1, s0.heap);
-            lemma_unextended(h2, t);
-            assert(h2.scanned_at(t, 0) && h2.scanned_at(t, 1));
-            if c {
-                s0.lemma_read_mid(h1, h2, s, t, file);
-            }
-        }
-        // `file` の参照は組に移るので、`dup` しない
-        (unsafe { self.heap.set_field(t, 0, file) })?;
-        let ghost h3 = self.heap;
-        proof {
-            if M::CHECKED {
-                lemma_set_passes_kept(h3, h2, t, 0, file, 1);
-            }
-            if c {
-                s0.lemma_read_set(h1, h2, h3, s, t, file);
-            }
-        }
-        (unsafe { self.heap.set_field(t, 1, s) })?;
-        proof {
-            lemma_words_trans(h3, h2, s0.heap);
-            lemma_words_trans(self.heap, h3, s0.heap);
-            self.lemma_words_kept(s0);
-            self.lemma_tuple_made(s0.heap, h1, h2, h3, s, t, file);
-            if c {
-                self.lemma_read_ok(s0, h1, h2, h3, s, t, file);
-            }
-        }
-        Ok(t)
-    }
-
     /// ハンドル `h` を借りて読む。`read` が読む量を、`form` が結果の形を決める。結果は新しい物体で、組は作らない。
-    /// 読みは `fs_read` と同じく 64 KiB ずつで、区切りごとに止める語と確保量を見る (docs/spec/object-model.md の
-    /// 「読み手」)。`h` の参照は呼ぶ側に残り、参照の数は成功でも誤りでも変わらない。読みの誤り、UTF-8 でない中身、
-    /// 止めたときもハンドルを手放さず、ヒープを変えない。
+    /// 読みは 64 KiB ずつで、区切りごとに止める語と確保量を見る (docs/spec/object-model.md の「読み手」)。`h` の
+    /// 参照は呼ぶ側に残り、参照の数は成功でも誤りでも変わらない。読みの誤り、UTF-8 でない中身、止めたときも
+    /// ハンドルを手放さず、ヒープを変えない。
     ///
     /// # Safety
     /// `heap_mut` の前提を守っている。`h` は即値か、このヒープか付けた塊の生きている物体を指し、呼ぶ側がその参照を
     /// 1つ持つ。速いモードでは、`h` は局所で rc が 1 である (検査モードは確かめ、違えば `NotUnique` か `WrongOwner`
     /// を返す)。`handle` の型のハンドルでなければ、どちらのモードでも `WrongKind` を返す。
-    pub unsafe fn handle_read(&mut self, h: Word, handle: Handle, read: Read, form: Form) -> (r:
-        Result<Word, Fault>)
+    pub unsafe fn handle_read(
+        &mut self,
+        h: Word,
+        handle: Handle,
+        read: ReadAmount,
+        form: Form,
+    ) -> (r: Result<Word, Fault>)
         requires
             old(self).wf(),
             old(self).heap_spec().word_in(h),
@@ -442,8 +327,8 @@ impl<M: Mode> Ctx<M> {
             }
         }
         let line = match read {
-            Read::All => false,
-            Read::Line => true,
+            ReadAmount::All => false,
+            ReadAmount::Line => true,
         };
         let text = match handle {
             Handle::File => {
@@ -679,198 +564,6 @@ impl<M: Mode> Ctx<M> {
         self.lemma_evv_kept(s0, z, none);
         lemma_view_live(self.heap, s.bits_spec());
         self.lemma_fresh_holds(s0, s);
-    }
-
-    /// `fs_read` で文字列 `s` と組 `t` を作った後の、モデルが合っている道。`self` は呼ぶ前の文脈で、組の 0 番に
-    /// `file` を書ける。
-    proof fn lemma_read_mid(&self, h1: Heap<M>, h2: Heap<M>, s: Word, t: Word, file: Word)
-        requires
-            self.held_ok(),
-            self.holds(file),
-            h1.made(self.heap, s),
-            h2.made(h1, t),
-        ensures
-            h2.consistent(),
-            moved(h2, self.heap, |x: usize| 0int, Set::empty()),
-            !live(self.heap, s.bits_spec()),
-            live(h2, t.bits_spec()),
-            file.bits_spec() != s.bits_spec() && file.bits_spec() != t.bits_spec(),
-            h2.core.settled_view().ext(s.bits_spec()) == 1,
-            held_word(h2, file),
-            h2.holds(file),
-            h2.writable(t),
-    {
-        let h0 = self.heap;
-        let z = |x: usize| 0int;
-        let none = Set::<usize>::empty();
-        let ws = seq![file];
-        self.lemma_arg_counted(ws, 0);
-        lemma_points_in(ws, file.bits_spec());
-        lemma_alloc_moved(h1, h0, s);
-        lemma_alloc_moved(h2, h1, t);
-        lemma_moved_chain(h2, h1, h0, z, z, z, none, none, none);
-        lemma_arg_moved(h2, h0, z, none, file);
-        assert(live(h2, s.bits_spec()));
-        assert(exact(h2, h1, z));
-        assert(live(h1, s.bits_spec()));
-    }
-
-    /// 組の 0 番に `file` を書いた後も、1 番に `s` を書ける。`self` は呼ぶ前の文脈である。
-    proof fn lemma_read_set(
-        &self,
-        h1: Heap<M>,
-        h2: Heap<M>,
-        h3: Heap<M>,
-        s: Word,
-        t: Word,
-        file: Word,
-    )
-        requires
-            self.held_ok(),
-            self.holds(file),
-            h1.made(self.heap, s),
-            h1.owned(s),
-            h2.made(h1, t),
-            h2.owned(t),
-            h2.scan_of(t) == 2,
-            forall|i: int| 0 <= i < 2 ==> (#[trigger] h2.scanned_word(t, i)).bits_spec() == 1,
-            h3.field_set(h2, t, 0, file),
-            h3.consistent(),
-        ensures
-            h3.writable(t),
-            h3.holds(s),
-            h3.owned(t),
-            h3.scanned_at(t, 1),
-            h3.word_at(t, 1).bits_spec() == 1,
-            held_word(h3, s),
-    {
-        let df = |x: usize| -points(file, x);
-        let x = Set::<usize>::empty().insert(t.bits_spec());
-        self.lemma_read_mid(h1, h2, s, t, file);
-        lemma_unextended(h2, t);
-        assert(h2.scanned_word(t, 0).bits_spec() == 1);
-        assert(h2.scanned_word(t, 1).bits_spec() == 1);
-        lemma_set_unit_moved(h3, h2, t, 0, file);
-        lemma_unextended(h3, t);
-        assert(h3.word_at(t, 1) == h2.word_at(t, 1));
-        lemma_view_live(h2, s.bits_spec());
-        assert(held_word(h2, s));
-        lemma_arg_moved(h3, h2, df, x, s);
-        assert(live(h3, t.bits_spec()));
-        assert(same_head(h3, h2, t.bits_spec()));
-    }
-
-    /// `fs_read` が返す組の形。モデルが合わなくても言える。
-    proof fn lemma_tuple_made(
-        &self,
-        h0: Heap<M>,
-        h1: Heap<M>,
-        h2: Heap<M>,
-        h3: Heap<M>,
-        s: Word,
-        t: Word,
-        file: Word,
-    )
-        requires
-            h1.made(h0, s),
-            h1.is_string(s),
-            h2.grew(h1, t),
-            h2.kind_of(t) == Kind::Data,
-            h2.tag_of(t) == TUPLE,
-            h2.lin_of(t),
-            h2.count_of(t) == 2,
-            h2.scan_of(t) == 2,
-            h3.field_set(h2, t, 0, file),
-            self.heap.field_set(h3, t, 1, s),
-        ensures
-            self.heap.kind_of(t) == Kind::Data,
-            self.heap.tag_of(t) == TUPLE,
-            self.heap.lin_of(t),
-            self.heap.count_of(t) == 2,
-            self.heap.scanned_word(t, 0) == file,
-            self.heap.scanned_word(t, 1) == s,
-            self.is_string(s),
-    {
-        assert(h2.grown_block(h1, s.bits_spec()));
-        lemma_unextended(h2, t);
-        lemma_unextended(h3, t);
-        lemma_unextended(self.heap, t);
-        self.heap.lemma_text_spec(s);
-        h1.lemma_text_spec(s);
-        h2.lemma_text_spec(s);
-        h3.lemma_text_spec(s);
-    }
-
-    /// `fs_read` の、読めた道でモデルが合っている道。
-    proof fn lemma_read_ok(
-        &self,
-        s0: Ctx<M>,
-        h1: Heap<M>,
-        h2: Heap<M>,
-        h3: Heap<M>,
-        s: Word,
-        t: Word,
-        file: Word,
-    )
-        requires
-            s0.held_ok(),
-            s0.holds(file),
-            self.evv == s0.evv,
-            self.yielding == s0.yielding,
-            self.max_evv == s0.max_evv,
-            h1.made(s0.heap, s),
-            h1.owned(s),
-            h2.made(h1, t),
-            h2.owned(t),
-            h2.scan_of(t) == 2,
-            forall|i: int| 0 <= i < 2 ==> (#[trigger] h2.scanned_word(t, i)).bits_spec() == 1,
-            h3.field_set(h2, t, 0, file),
-            self.heap.field_set(h3, t, 1, s),
-            h3.consistent(),
-            self.heap.consistent(),
-        ensures
-            self.held_ok(),
-            self.holds(t),
-            self.evolved_by(s0, |x: usize| -points(file, x), Set::empty()),
-    {
-        let h0 = s0.heap;
-        let h4 = self.heap;
-        let z = |x: usize| 0int;
-        let none = Set::<usize>::empty();
-        let x = none.insert(t.bits_spec());
-        let df = |b: usize| -points(file, b);
-        let ds = |b: usize| -points(s, b);
-        let d = |b: usize| -points(file, b) - points(s, b);
-        s0.lemma_read_mid(h1, h2, s, t, file);
-        s0.lemma_read_set(h1, h2, h3, s, t, file);
-        let tb = t.bits_spec();
-        let sb = s.bits_spec();
-        lemma_unextended(h2, t);
-        assert(h2.scanned_word(t, 0).bits_spec() == 1);
-        lemma_set_unit_moved(h3, h2, t, 0, file);
-        lemma_set_unit_moved(h4, h3, t, 1, s);
-        // 呼ぶ前から生きている物体についての変化
-        lemma_moved_chain(h3, h2, h0, z, df, df, none, x, none);
-        assert forall|b: usize| live(h0, b) implies #[trigger] df(b) == df(b) + ds(b) by {}
-        lemma_moved_chain(h4, h3, h0, df, ds, df, none, x, none);
-        // 新しい組と文字列についての変化
-        lemma_moved_chain(h4, h3, h2, df, ds, d, x, x, x);
-        assert(live(h2, tb));
-        assert(d(tb) == 0);
-        assert(live(h4, tb));
-        assert(same_head(h4, h2, tb));
-        // Ctx の語と引数
-        let ws = seq![file];
-        assert forall|b: usize| #[trigger] self.need(seq![], b) > 0 implies s0.need(ws, b) + df(b)
-            >= self.need(seq![], b) by {
-            lemma_points_in(seq![], b);
-            lemma_points_in(ws, b);
-        }
-        self.lemma_holds_moved(s0, ws, seq![], df, none);
-        self.lemma_evv_kept(s0, df, none);
-        lemma_view_live(h4, tb);
-        assert(held_word(h4, t));
-        self.lemma_fresh_holds(s0, t);
     }
 
     /// `println` の、モデルが合っている道。`settle` の後の `h1` から `s` を手放した。

@@ -14,11 +14,11 @@ hide n x = if n <= 0 then Box x else hide (n - 1) x
 main : Unit -> <IO, Panic> Unit
 main () =
   let (f, k) = pass 3 (Fs.open "input.txt", 7)
-  let (f, text) = Fs.read_all f
+  let (text, f) = Fs.read_all f
   Fs.close f
   println (text ++ " " ++ show k)
   let Box again = hide 0 (pass 2)
   let (g, m) = again (Fs.open "input.txt", 8)
-  let (g, text) = Fs.read_all g
+  let (text, g) = Fs.read_all g
   Fs.close g
   println (text ++ " " ++ show m)

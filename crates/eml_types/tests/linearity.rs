@@ -187,7 +187,7 @@ fn plain(text: &str) -> String {
 
 #[test]
 fn a_file_read_and_closed_is_clean() {
-    let text = "main : Unit -> <IO> Unit\nmain () =\n  let f = Fs.open \"a.txt\"\n  let (f, text) = Fs.read_all f\n  Fs.close f\n  println text";
+    let text = "main : Unit -> <IO> Unit\nmain () =\n  let f = Fs.open \"a.txt\"\n  let (text, f) = Fs.read_all f\n  Fs.close f\n  println text";
     assert_eq!(plain(text), "");
 }
 
@@ -226,10 +226,10 @@ fn recursive_and_mutually_recursive_data_with_a_file_are_linear() {
 
 #[test]
 fn a_file_cannot_be_discarded_from_a_tuple() {
-    let text = "main : Unit -> <IO> Unit\nmain () =\n  let (_, text) = Fs.read_all (Fs.open \"a.txt\")\n  println text";
-    insta::assert_snapshot!(plain(text), @r"
-    E3004 3:8 a linear value cannot be discarded with `_`
-      3:8 this pattern discards it
+    let text = "main : Unit -> <IO> Unit\nmain () =\n  let (text, _) = Fs.read_all (Fs.open \"a.txt\")\n  println text";
+    insta::assert_snapshot!(plain(text), @"
+    E3004 3:14 a linear value cannot be discarded with `_`
+      3:14 this pattern discards it
       note: linear values, such as files, the continuation of a `once` operation and closures that capture one, must be used exactly once
       help: bind it to a name and pass the name to `drop`
     ");

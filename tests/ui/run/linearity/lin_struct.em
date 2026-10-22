@@ -9,7 +9,7 @@ open_reader path = Reader (Fs.open path) 0
 
 read_once : Reader -> <IO, Panic> (Reader, String)
 read_once (Reader f n) =
-  let (f, text) = Fs.read_all f
+  let (text, f) = Fs.read_all f
   (Reader f (n + 1), text)
 
 skip : Int -> Reader -> <Panic> Reader

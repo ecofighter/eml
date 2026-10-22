@@ -7,7 +7,7 @@ main () =
   let text =
     handle load () from Fs.open "input.txt" with
       | ctl load () k f ->
-          let (f, s) = Fs.read_all f
+          let (s, f) = Fs.read_all f
           k s f
       | return x f ->
           Fs.close f

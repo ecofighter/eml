@@ -6,6 +6,6 @@ main : Unit -> <IO> Unit
 main () =
   let j = Job { name = "build", log = Fs.open "input.txt" }
   let Job { name, log } = j
-  let (log, text) = Fs.read_all log
+  let (text, log) = Fs.read_all log
   Fs.close log
   println "\{name}: \{text}"

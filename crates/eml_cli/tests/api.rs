@@ -719,9 +719,9 @@ impl Host for InterruptingOpen {
 }
 
 /// 割り込みで止まった入力が開いた `File` は、`eval` から戻った時点で閉じていて、検査モードの `close` もリークを
-/// 報告しない。`Fs.read_all` の中で止まったときは `read_all` が `File` を手放す (`Extern` の誤り)。`File` を渡す
-/// 呼び出しの安全点で止まったときは `File` が失敗した実行のスタックに残り、回復が古いヒープを捨てるときに破棄処理が
-/// 閉じる (docs/spec/object-model.md の「セッションの根」)。
+/// 報告しない。`Fs.read_all` の中で止まったとき (`Extern` の誤り) も、`File` を渡す呼び出しの安全点で止まったときも、
+/// `File` は失敗した実行のスタックに残り、回復が古いヒープを捨てるときに破棄処理が閉じる。`read_all` は `File` を
+/// 借りるので、誤りでも手放さない (docs/spec/object-model.md の「セッションの根」)。
 #[test]
 fn a_file_left_open_by_an_interrupt_is_closed_by_recovery() {
     for debug_heap in [true, false] {
@@ -743,9 +743,9 @@ fn a_file_left_open_by_an_interrupt_is_closed_by_recovery() {
         for input in [
             "keep : Int -> Fs.File -> <Panic> Fs.File\nkeep n f = if n > 0 then keep (n - 1) f else f",
             "read : Unit -> <IO> String\nread () =\n  let f = Fs.open \"a.txt\"\n  \
-             let (f, text) = Fs.read_all f\n  Fs.close f\n  text",
+             let (text, f) = Fs.read_all f\n  Fs.close f\n  text",
             "read_kept : Unit -> <IO, Panic> String\nread_kept () =\n  let f = keep 0 (Fs.open \"a.txt\")\n  \
-             let (f, text) = Fs.read_all f\n  Fs.close f\n  text",
+             let (text, f) = Fs.read_all f\n  Fs.close f\n  text",
         ] {
             let evaluated = repl.eval(input);
             assert_eq!(

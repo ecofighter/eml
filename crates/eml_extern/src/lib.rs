@@ -384,10 +384,9 @@ pub struct FunctionRow {
     /// 引数の Repr。数はシグネチャの一番外側の `->` の数と等しい。
     pub params: &'static [Repr],
     /// 結果の Repr。`Never` は戻らない extern で、`ret_kind` は読まない。データを返す行は、比べる extern、
-    /// `Std.Env.has`、`Prelude.shows_minus`、`Std.Float.can_parse` の `Bool`、`compare` の `Ordering`、
-    /// `Std.Fs.read_all` と `read_line_raw` の組である。`Bool` と `Ordering` のタグは決まっていて、組の配置は大きさ
-    /// だけで決まるので、行は配置を持たない。`List` や `Option` は extern が作らず、標準ライブラリの eml が包む
-    /// (docs/spec/core-ir.md の「translate の配置」)。
+    /// `Std.Env.has`、`Prelude.shows_minus`、`Std.Float.can_parse` の `Bool` と、`compare` の `Ordering` である。
+    /// タグは決まっているので、行は配置を持たない。組は extern が作らず、`with_arg` の行は translate が作る。`List`
+    /// や `Option` も extern が作らず、標準ライブラリの eml が包む (docs/spec/core-ir.md の「translate の配置」)。
     pub ret: OpRet,
     /// 引数ごとの Kind。長さは `params` と同じである。LIR の verifier が、呼び出しの引数と結果の印をこの列と比べる
     /// (docs/spec/core-ir.md の「表の印の列」)。
@@ -609,21 +608,33 @@ impl Extern {
         match self {
             Extern::Println => row("Prelude.println", &[Obj], Unit, Purity::Effectful),
             Extern::Open => kinded("Std.Fs.open", &[Obj], &[Unr], Obj, Lin, Purity::Effectful),
-            Extern::ReadAll => kinded(
-                "Std.Fs.read_all",
-                &[Obj],
-                &[Lin],
-                Obj,
-                Lin,
-                Purity::Effectful,
+            Extern::ReadAll => borrowing(
+                &[true],
+                FunctionRow {
+                    with_arg: Some(0),
+                    ..kinded(
+                        "Std.Fs.read_all",
+                        &[Obj],
+                        &[Lin],
+                        Obj,
+                        Unr,
+                        Purity::Effectful,
+                    )
+                },
             ),
-            Extern::ReadLine => kinded(
-                "Std.Fs.read_line_raw",
-                &[Obj],
-                &[Lin],
-                Obj,
-                Lin,
-                Purity::Effectful,
+            Extern::ReadLine => borrowing(
+                &[true],
+                FunctionRow {
+                    with_arg: Some(0),
+                    ..kinded(
+                        "Std.Fs.read_line_raw",
+                        &[Obj],
+                        &[Lin],
+                        Obj,
+                        Unr,
+                        Purity::Effectful,
+                    )
+                },
             ),
             Extern::Close => kinded("Std.Fs.close", &[Obj], &[Lin], Unit, Unr, Purity::Effectful),
             Extern::IntShow => row("Prelude.Show Int.show", &[Int], Obj, Purity::Pure),

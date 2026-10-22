@@ -60,7 +60,7 @@ search opts prefix name =
     if name == "-" then matching opts prefix stdin_lines
     else
       let f = Fs.open name
-      let (f, text) = Fs.read_all f
+      let (text, f) = Fs.read_all f
       Fs.close f
       use matching opts prefix
       numbered_lines (String.lines text)

@@ -7,8 +7,10 @@ use std::io::{self, Cursor, Read};
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use eml_rt::externs::TUPLE;
-use eml_rt::{Buffering, Control, Ctx, Fast, Host, HostRef, Limits, Opened, StdHost, Stream, Word};
+use eml_rt::{
+    Buffering, Control, Ctx, Fast, Form, Handle, Host, HostRef, Limits, Opened, ReadAmount,
+    StdHost, Stream, Word,
+};
 
 const LONG: usize = 64 * 1024;
 const KIB: usize = 1024;
@@ -201,15 +203,14 @@ fn read_all(sized: bool) {
     // SAFETY: 不死の文字列を1つ確保するだけである。
     let path = unsafe { ctx.heap_mut() }.alloc_string_immortal("big.txt");
     for _ in 0..100 {
-        // SAFETY: path は生きた不死の物体である。fs_read が返した組から File と文字列の参照を取り出し、組は
-        // 両方を残して手放す。File は fs_close に、文字列は decref に渡し、その後どちらも読まない。
+        // SAFETY: path は生きた不死の物体である。handle_read は File を借りて文字列を返す。File は fs_close に、
+        // 文字列は decref に渡し、その後どちらも読まない。
         unsafe {
             ctx.heap_mut().acquire_immortal(path).unwrap();
             let file = ctx.fs_open(path).unwrap();
-            let pair = ctx.fs_read(file, false).unwrap();
-            let file = ctx.heap().field(pair, 0).unwrap();
-            let text = ctx.heap().field(pair, 1).unwrap();
-            ctx.heap_mut().release(pair, TUPLE, &[true, true]).unwrap();
+            let text = ctx
+                .handle_read(file, Handle::File, ReadAmount::All, Form::Text)
+                .unwrap();
             black_box(text);
             ctx.heap_mut().decref(text).unwrap();
             ctx.fs_close(file).unwrap();
@@ -362,7 +363,8 @@ fn slice_short(boxed: bool) {
 }
 
 /// 64 MiB のメモリの Host のファイルを全部読む。`Bytes` を返す読みの道はまだないので、eml の側は今ある
-/// `fs_read` (`String` を返し、UTF-8 を検査する) の道を測る。`std` なら `&[u8]` からの `read_to_end` である。
+/// `handle_read` の `Form::Text` (`String` を返し、UTF-8 を検査する) の道を測る。`std` なら `&[u8]` からの
+/// `read_to_end` である。
 fn read_all_bytes(std: bool) {
     const ROUNDS: usize = 8;
     let bytes: Arc<[u8]> = "abcdefg\n".repeat(64 * MIB / 8).into_bytes().into();
@@ -382,10 +384,9 @@ fn read_all_bytes(std: bool) {
         unsafe {
             ctx.heap_mut().acquire_immortal(path).unwrap();
             let file = ctx.fs_open(path).unwrap();
-            let pair = ctx.fs_read(file, false).unwrap();
-            let file = ctx.heap().field(pair, 0).unwrap();
-            let text = ctx.heap().field(pair, 1).unwrap();
-            ctx.heap_mut().release(pair, TUPLE, &[true, true]).unwrap();
+            let text = ctx
+                .handle_read(file, Handle::File, ReadAmount::All, Form::Text)
+                .unwrap();
             black_box(text);
             ctx.heap_mut().decref(text).unwrap();
             ctx.fs_close(file).unwrap();

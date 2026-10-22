@@ -511,7 +511,7 @@ mod interrupts {
         let mut repl = LiveRepl::start(&dir, &["--debug-heap"]);
         repl.send(
             "slurp : Unit -> <IO> String\nslurp () =\n  let f = Fs.open \"fifo\"\n  \
-             let (f, text) = Fs.read_all f\n  Fs.close f\n  text\n\n\"defined\"",
+             let (text, f) = Fs.read_all f\n  Fs.close f\n  text\n\n\"defined\"",
         );
         repl.expect_out("\"defined\"");
         repl.send("slurp ()");

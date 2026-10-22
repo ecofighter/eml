@@ -116,16 +116,13 @@ fn an_interrupt_inside_read_all_is_an_interrupt() {
     std::fs::create_dir_all(&root).unwrap();
     std::fs::write(root.join("a.txt"), "abc").unwrap();
     let text = "\
-layout (,) { (,)(tobj, tobj) }
 fn main() -> unit {
   let p.0: obj = const \"a.txt\"
   let h.1: obj lin = extern \"Std.Fs.open\"(p.0)
-  let t.2: obj lin = extern \"Std.Fs.read_all\"(h.1)
-  unpack t.2 (,) #0(f.3: obj lin, s.4: obj)
-  release t.2 (,) #0(f.3, s.4)
-  decref s.4
-  let u.5: unit = extern \"Std.Fs.close\"(f.3)
-  return u.5
+  let s.2: obj = extern \"Std.Fs.read_all\"(h.1)
+  decref s.2
+  let u.3: unit = extern \"Std.Fs.close\"(h.1)
+  return u.3
 }
 ";
     let program = parse(text);

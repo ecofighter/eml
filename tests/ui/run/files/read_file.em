@@ -2,8 +2,8 @@
 main : Unit -> <IO> Unit
 main () =
   let f = Fs.open "input.txt"
-  let (f, first) = Fs.read_all f
-  let (f, rest) = Fs.read_all f
+  let (first, f) = Fs.read_all f
+  let (rest, f) = Fs.read_all f
   Fs.close f
   println first
   println ("[" ++ rest ++ "]")

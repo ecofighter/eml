@@ -54,7 +54,7 @@ read_input name =
   if name == "-" then Stdin.read_all ()
   else
     let f = Fs.open name
-    let (f, text) = Fs.read_all f
+    let (text, f) = Fs.read_all f
     Fs.close f
     text
 
