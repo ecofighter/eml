@@ -1,0 +1,14 @@
+---
+source: crates/eml_cli/tests/ui.rs
+expression: "format!(\"--- stdout ---\\n{stdout}--- stderr ---\\n{diagnostics}{stderr}{written}{exit}\")"
+input_file: tests/ui/run/chars/of_byte.em
+---
+--- stdout ---
+True
+True
+97u8
+1
+2
+3
+4
+--- stderr ---

@@ -1973,6 +1973,7 @@ unsafe fn call<M: Mode>(
             "Std.Float.of_int" => float_result(float_of_int(int(0))),
             "Std.Char.to_int" => Outcome::Int(int(0)),
             "Std.Char.of_int" => Outcome::Int(char_of_int(int(0))?),
+            "Std.Char.of_byte" => Outcome::Int(int(0)),
             "Std.Byte.to_int" => Outcome::Int(int(0)),
             "Std.Byte.of_int" => Outcome::Int(byte_of_int(int(0))?),
             "Std.Byte.wrap" => Outcome::Int(byte_wrap(int(0))),

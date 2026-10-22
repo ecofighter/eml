@@ -826,7 +826,7 @@ token の表の項目は、`into_token` と `release_reuse` が添字を使い�
 | `Prelude.Eq Bool.==`、`!=` | `bool_eq`、`bool_ne` |
 | `Prelude.Eq Char.==`、`!=`、`Prelude.Ord Char.<`、`<=`、`>`、`>=`、`compare` | `int_eq`、`int_ne`、`int_lt`、`int_le`、`int_gt`、`int_ge`、`int_compare` (`Char` の語は `Int` と同じ `int` なので、`Int` の関数を使う) |
 | `Prelude.Eq Byte.==`、`!=`、`Prelude.Ord Byte.<`、`<=`、`>`、`>=`、`compare` | `int_eq`、`int_ne`、`int_lt`、`int_le`、`int_gt`、`int_ge`、`int_compare` (`Byte` の語も `int` なので、`Int` の関数を使う) |
-| `Std.Char.to_int`、`of_int` | なし (語を変えないので、VM は `Move` に写す)、`char_of_int` |
+| `Std.Char.to_int`、`of_byte`、`of_int` | なし (語を変えないので、VM は `Move` に写す)、`char_of_int` (`of_int` だけ) |
 | `Prelude.check_index` | `check_index` (`0 <= index < len` なら `Ok(())`、そうでなければ `Std.MutArray.read` と同じ `IndexFault::Array`) |
 | `Prelude.Eq String.==`、`!=`、`Prelude.Ord String.compare` | `Ctx::string_eq`、`string_ne`、`string_compare` |
 | `Prelude.Eq Bytes.==`、`!=`、`Prelude.Ord Bytes.compare` | `Ctx::bytes_eq`、`bytes_ne`、`bytes_compare` |

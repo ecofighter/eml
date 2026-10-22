@@ -968,7 +968,9 @@ pub(crate) fn effect_number(e: u32) -> u16 {
 fn arithmetic(ext: Extern, dst: Slot, args: &[Slot]) -> Option<Op> {
     match (ext, args) {
         (Extern::IntNeg, [a]) => return Some(Op::IntNeg { dst, a: *a }),
-        (Extern::CharToInt | Extern::ByteToInt, [a]) => return Some(Op::Move { dst, src: *a }),
+        (Extern::CharToInt | Extern::ByteToInt | Extern::CharOfByte, [a]) => {
+            return Some(Op::Move { dst, src: *a });
+        }
         (Extern::FloatNeg, [a]) => return Some(Op::FloatNeg { dst, a: *a }),
         _ => {}
     }
@@ -1013,6 +1015,7 @@ fn arithmetic(ext: Extern, dst: Slot, args: &[Slot]) -> Option<Op> {
         | Extern::IntNeg
         | Extern::CharToInt
         | Extern::CharOfInt
+        | Extern::CharOfByte
         | Extern::CharShow
         | Extern::CharDisplay
         | Extern::ByteNeg

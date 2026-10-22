@@ -1312,6 +1312,7 @@ fn run_extern<M: Mode>(
             | Extern::ByteGt
             | Extern::ByteGe
             | Extern::CharToInt
+            | Extern::CharOfByte
             | Extern::ByteToInt
             | Extern::FloatNeg
             | Extern::FloatAdd

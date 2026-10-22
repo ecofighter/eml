@@ -694,6 +694,9 @@ pub fn inputs() -> Vec<(String, Vec<Arg>)> {
     for a in CHAR_EDGES {
         push("Std.Char.to_int", vec![Arg::Int(a)]);
     }
+    for a in BYTE_EDGES {
+        push("Std.Char.of_byte", vec![Arg::Int(a)]);
+    }
     for name in ["Std.Byte.of_int", "Std.Byte.wrap"] {
         for a in BYTE_CONVERT {
             push(name, vec![Arg::Int(a)]);

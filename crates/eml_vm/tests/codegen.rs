@@ -700,3 +700,18 @@ fn f(c.0: int) -> int {
     assert!(text.contains("move"), "{text}");
     assert!(!text.contains("extern"), "{text}");
 }
+
+/// `Char.of_byte` は語を変えないので、`extern` でなく `move` になる (docs/spec/vm.md の「基本操作と extern」)。
+#[test]
+fn char_of_byte_is_a_move() {
+    let text = disasm(
+        "\
+fn f(c.0: int) -> int {
+  let n.1: int = extern \"Std.Char.of_byte\"(c.0)
+  return n.1
+}
+",
+    );
+    assert!(text.contains("move"), "{text}");
+    assert!(!text.contains("extern"), "{text}");
+}

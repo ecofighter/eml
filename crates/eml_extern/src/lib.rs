@@ -272,6 +272,7 @@ pub enum Extern {
     CharGe,
     CharToInt,
     CharOfInt,
+    CharOfByte,
     CharShow,
     CharDisplay,
     ByteEq,
@@ -477,6 +478,7 @@ impl Extern {
         Extern::CharGe,
         Extern::CharToInt,
         Extern::CharOfInt,
+        Extern::CharOfByte,
         Extern::CharShow,
         Extern::CharDisplay,
         Extern::ByteEq,
@@ -771,6 +773,8 @@ impl Extern {
             Extern::CharToInt => row("Std.Char.to_int", &[Int], Int, Purity::Pure),
             // スカラー値でない `Int` は `Panic` である
             Extern::CharOfInt => row("Std.Char.of_int", &[Int], Int, Purity::Panics),
+            // Latin-1。0 から 255 はどれもスカラー値なので失敗しない
+            Extern::CharOfByte => row("Std.Char.of_byte", &[Int], Int, Purity::Pure),
             Extern::CharShow => row("Prelude.Show Char.show", &[Int], Obj, Purity::Pure),
             Extern::CharDisplay => row("Prelude.Show Char.display", &[Int], Obj, Purity::Pure),
             Extern::ByteEq => row("Prelude.Eq Byte.==", &[Int, Int], Enum, Purity::Pure),

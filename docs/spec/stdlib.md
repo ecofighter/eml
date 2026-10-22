@@ -225,6 +225,11 @@ pub while : (Unit -> <e> Bool) -> (Unit -> <e> Unit) -> <e> Unit
 |---|---|---|
 | `to_int` | `Char -> Int` | extern |
 | `of_int` | `Int -> <Panic> Char` | extern |
+| `of_byte` | `Byte -> Char` | extern |
+| `to_byte` | `Char -> <Panic> Byte` | eml |
+| `utf8_length` | `Char -> Int` | eml |
+| `to_ascii_upper` | `Char -> Char` | eml |
+| `to_ascii_lower` | `Char -> Char` | eml |
 | `is_ascii` | `Char -> Bool` | eml |
 | `is_ascii_digit` | `Char -> Bool` | eml |
 | `is_ascii_upper` | `Char -> Bool` | eml |
@@ -241,6 +246,11 @@ pub while : (Unit -> <e> Bool) -> (Unit -> <e> Unit) -> <e> Unit
 - `is_ascii` は U+0000 から U+007F の文字で成り立つ。`is_ascii_digit` は `'0'` から `'9'`、`is_ascii_upper` は `'A'` から `'Z'`、`is_ascii_lower` は `'a'` から `'z'` で成り立つ。`is_ascii_alpha` は upper か lower、`is_ascii_alphanumeric` は alpha か digit で成り立つ
 - `is_ascii_space` は `' '` と、`'\t'` から `'\r'` (U+0009 から U+000D) で成り立つ。`Std.String` の空白の判定と同じ範囲である
 - どの判定も、ASCII 以外の文字では偽である
+- `of_byte b` は `b` を Latin-1 の文字として読む。0 から 255 はどれもスカラー値なので、失敗しない。`Byte` と `Char` は同じ語なので、実行時には何もしない
+- `of_byte` は UTF-8 をデコードしない。文字列のバイトを渡すと、先頭のバイトや続きのバイトは、別の Latin-1 の文字になる。文字列から文字を読む関数は `String.char_at` である
+- `to_byte c` は、`c` が U+00FF 以下ならその `Byte` を返す。それを超えるときは `Panic` を起こす。文言は ``char 'あ' does not fit in `Byte` `` である
+- `utf8_length c` は `c` を UTF-8 で書いたときのバイト数で、U+007F まで 1、U+07FF まで 2、U+FFFF まで 3、それより上は 4 である
+- `to_ascii_upper` と `to_ascii_lower` は、ASCII の英字だけを変え、ほかの文字はそのまま返す。ASCII 以外の大文字と小文字の変換は持たない
 
 ## `Std.Byte`
 
@@ -255,7 +265,6 @@ pub while : (Unit -> <e> Bool) -> (Unit -> <e> Unit) -> <e> Unit
 - `to_int b` は `b` の値で、0 から 255 の `Int` である。`Byte` と `Int` は同じ語なので、実行時には何もしない
 - `of_int n` は、`n` が 0 から 255 のときにその `Byte` を返す。ほかの値では `Panic` を起こす。文言は ``int `256` does not fit in `Byte` `` である (下の「実行時エラー」)
 - `wrap n` は `n` の下位8ビットを返す。2の補数で見るので、`wrap (-1)` は `255u8`、`wrap 256` は `0u8` で、`Panic` は起こさない
-- `Char` と `Byte` を直接変える関数はない。`Int` を経由する
 
 ## `Bytes`
 
