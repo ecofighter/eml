@@ -66,4 +66,5 @@ echo "extern の計測 (rt_extern_bench)"
 echo
 measure "$examples/rt_extern_bench" \
   string-eq string-eq-early compare concat-copy show-int show-int-long show-string show-string-dense \
-  println-block println-line read-all read-all-unsized
+  println-block println-line read-all read-all-unsized \
+  find-byte-1mib find-byte-1mib-position find-bytes-1mib find-bytes-1mib-windows

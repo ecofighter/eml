@@ -165,6 +165,7 @@ const TRUSTED: &[(&str, &str)] = &[
     ("externs.rs: external_body float_repr", "T12"),
     ("externs.rs: external_body float_fixed", "T12"),
     ("externs.rs: external_body float_parse", "T12"),
+    ("heap/ctx/positions.rs: external_body find_byte", "T13"),
     ("alloc.rs: Drop for Pages", "T4"),
     ("heap/walk.rs: Drop for Heap", "T4"),
     ("frozen.rs: Drop for Frozen", "T4"),
@@ -458,7 +459,8 @@ fn the_trust_list_is_exactly_the_trusted_items() {
     for (item, number) in TRUSTED {
         assert!(
             [
-                "T0", "T1", "T2", "T3", "T4", "T5", "T6", "T7", "T8", "T9", "T10", "T11", "T12"
+                "T0", "T1", "T2", "T3", "T4", "T5", "T6", "T7", "T8", "T9", "T10", "T11", "T12",
+                "T13"
             ]
             .contains(number),
             "{item} has no trust row"

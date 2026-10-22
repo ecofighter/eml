@@ -29,7 +29,7 @@ use proof::*;
 mod arrays;
 pub(super) mod bytes;
 mod io;
-mod positions;
+pub(super) mod positions;
 // 証明の部品だけを置くので、検証のときだけ読む
 #[cfg(verus_only)]
 mod proof;

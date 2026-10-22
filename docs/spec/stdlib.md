@@ -22,7 +22,7 @@ eml run --debug-heap wc.em -l input.txt
 
 標準ライブラリの extern は小さい核にとどめ、便利な関数は eml で書く。extern の境界では、スカラー (`Int`、`Float`、`Char`、`Byte`、`Bool`、`Unit`)、文字列、バイト列、`Foreign` だけを受け渡し、`List` と `Option` は eml の側で組む。`eml_rt` がデータの配置を知らないで済むようにするためである ([Core IR](core-ir.md) の「translate の配置」)。結果が `Char` の extern の行はスカラー値を、結果が `Byte` の extern の行は 0..=255 を返す ([LIR](lir.md) の「値の表現」)。そのため、`pub` でない extern は番兵 (見つからない位置の -1、終わりの空の文字列など) を返すことがある。番兵は標準ライブラリの中に閉じ込め、利用者には `Option` で見せる。
 
-extern の行は、どの位置の引数も借用にできる ([LIR](lir.md) の「extern の借用」)。`String` を読む行 (`byte_length`、`byte_at`、`slice`、`find_from`、`String` の `==`、`!=`、`compare`、`show`、`Float` の `can_parse` と `parse_raw`) は文字列を借りる。`Bytes` を読む行 (`length`、`get`、`slice`、`find_from`、`append_slice` の `src`、`Bytes` の `==`、`!=`、`compare`、`String.valid_utf8`) もバイト列を借りる。借りた値は、行が失敗しても呼ぶ側が持ったままである。
+extern の行は、どの位置の引数も借用にできる ([LIR](lir.md) の「extern の借用」)。`String` を読む行 (`byte_length`、`byte_at`、`slice`、`find_from`、`String` の `==`、`!=`、`compare`、`show`、`Float` の `can_parse` と `parse_raw`) は文字列を借りる。`Bytes` を読む行 (`length`、`get`、`slice`、`find_from`、`find_byte_from`、`append_slice` の `src`、`Bytes` の `==`、`!=`、`compare`、`String.valid_utf8`) もバイト列を借りる。借りた値は、行が失敗しても呼ぶ側が持ったままである。
 
 文字列の位置は UTF-8 のバイトの位置 (`Int`) で表す。引数の順は、対象を最後に置く。`line |> String.split ","` と部分適用で使えるようにするためである。
 
@@ -180,7 +180,7 @@ pub while : (Unit -> <e> Bool) -> (Unit -> <e> Unit) -> <e> Unit
 - `trim_line_end s` は、最後の行の終わり (`\n` か `\r\n`) を1つ除く。行の終わりで終わらなければ `s` をそのまま返し、`trim_line_end ""` は `""` である。`Stdin.read_line` と `Fs.read_line` が、読んだ行の終わりを除くのに使う
 - `to_int s` は、Rust の `i64::from_str` と同じ形を読む。省略できる符号 `+` か `-` の後に、1つ以上の ASCII の数字が続く形である。空白は許さない。範囲を超えれば `None` で、`"-9223372036854775808"` は読める
 - `byte_length` と `join` のほかの関数は、`byte_at`、`slice`、std の中だけの `find_from` か算術を使うので、型の上では `Panic` を起こしうる
-- 部分文字列の照合は素朴な方法で、`needle` の長さと探す範囲の長さの積に比例する時間がかかる
+- 部分文字列の照合は、`needle` の先頭のバイトを8バイトずつまとめて探し、見つけた位置ごとに残りを比べる。最悪の場合は、`needle` の長さと探す範囲の長さの積に比例する時間がかかる ([オブジェクトモデル](object-model.md) の「extern」)
 
 ### `Bytes` との変換
 
@@ -271,6 +271,7 @@ pub while : (Unit -> <e> Bool) -> (Unit -> <e> Unit) -> <e> Unit
 | `set` | `Int -> Byte -> Bytes -> <Panic> Bytes` | extern |
 | `push` | `Byte -> Bytes -> Bytes` | extern |
 | `find` | `Bytes -> Bytes -> <Panic> Option Int` | eml |
+| `find_byte` | `Byte -> Bytes -> <Panic> Option Int` | eml |
 
 型 `Bytes` は Prelude の extern の型で、関数は `Std.Bytes` に置く。`Std.Float` と同じく、モジュールで修飾して使う (`Bytes.length b`)。
 
@@ -288,7 +289,8 @@ pub while : (Unit -> <e> Bool) -> (Unit -> <e> Unit) -> <e> Unit
 - `set i x b` は、位置 `i` のバイトを `x` にしたバイト列である。`0 <= i < length b` でなければ `Panic` を起こす。`b` が一意ならその場で書き換え、そうでなければ写してから書き換える
 - `push x b` は、`b` の後ろに `x` を足したバイト列である。`b` が一意で容量が足りればその場で伸ばし、足りなければ容量を倍にして写す。空から n 回足すときに写すバイトの合計は 2n 以下で、確保は log2(n) に比例する
 - `show b` は `Bytes [1, 2, 3]` の形で、要素は `Byte` の `display` の数である (`u8` を付けない)。空は `Bytes []` である。Prelude にあるので、`Std.Bytes` を import しなくても使える
-- `find needle b` は、`needle` が最初に現れる位置である。空の `needle` は `Some 0` である。照合は素朴な方法で、`needle` の長さと探す範囲の長さの積に比例する時間がかかる
+- `find needle b` は、`needle` が最初に現れる位置である。空の `needle` は `Some 0` である。照合は `String` の `find` と同じで、最悪の場合は `needle` の長さと探す範囲の長さの積に比例する時間がかかる
+- `find_byte x b` は、`x` が最初に現れる位置である。8バイトずつまとめて比べるので、1バイトずつ `get` で読むループより速い
 - 範囲の外の文言は、[LIR](lir.md) の「実行時エラー」にある
 
 ## `Std.Array`
@@ -530,4 +532,4 @@ I/O の失敗の一部は `try_io` で捕まえられる (上の「`try_io`」)�
 | UTF-8 でない引数 | ``argument 2 is not valid UTF-8`` (`Env.args ()` のリストの 0 から数えた位置) |
 | UTF-8 でない環境変数 | ``environment variable `LANG` is not valid UTF-8`` |
 
-標準ライブラリの中だけで起きる誤り (`String.find_from` と `Bytes.find_from` の開始位置、`Env.arg` の位置) の文言は、[LIR](lir.md) の「実行時エラー」にある。
+標準ライブラリの中だけで起きる誤り (`String.find_from`、`Bytes.find_from`、`Bytes.find_byte_from` の開始位置、`Env.arg` の位置) の文言は、[LIR](lir.md) の「実行時エラー」にある。

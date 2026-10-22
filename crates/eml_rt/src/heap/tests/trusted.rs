@@ -10,8 +10,10 @@ use vstd::prelude::Tracked;
 use super::ctx as ctx_tests;
 use super::host::{MemoryFile, MemoryHost, host};
 use super::string::text;
+use super::table::Rng;
 use super::{CONS, Probe, cons, list, mortal, probe, raw};
 use crate::cell::{rc_decref_shared, rc_dup_shared};
+use crate::heap::ctx::positions::{find_byte, find_bytes};
 use crate::{Checked, Control, Ctx, Fast, Heap, HeapError, Kind, Limits, Meta, Mode, Word};
 
 const PAGE_BYTES: usize = 0x1_0000;
@@ -1104,6 +1106,131 @@ fn float_conversions_and_formats_match_rust() {
     same(float_parse("-nan").unwrap(), f64::NAN);
 }
 
+// T13
+
+/// `find_byte` と比べる素朴なループ。
+fn naive_find_byte(hay: &[u8], from: usize, b: u8) -> Option<usize> {
+    (from..hay.len()).find(|&i| hay[i] == b)
+}
+
+/// 探すバイトの近くの値を混ぜた乱数の列。語の演算で借りが伝わる並び (`b` の直後の `b ^ 1` など) と、`b` の密な
+/// 列と疎な列ができる。
+fn bytes_near(rng: &mut Rng, b: u8, len: usize) -> Vec<u8> {
+    let density = [2, 8, 64][(rng.next() % 3) as usize];
+    (0..len)
+        .map(|_| {
+            let r = rng.next();
+            if r.is_multiple_of(density) {
+                b
+            } else {
+                let near = [
+                    b ^ 1,
+                    b ^ 0x80,
+                    b.wrapping_add(1),
+                    b.wrapping_sub(1),
+                    0,
+                    0xff,
+                ];
+                if r % 4 == 1 {
+                    (r >> 8) as u8
+                } else {
+                    near[((r >> 8) % 6) as usize]
+                }
+            }
+        })
+        .collect()
+}
+
+/// T13 の `find_byte` は、乱数の入力について素朴なループと同じ位置を返す。列は1つの buffer の途中から切り出し、語に
+/// 揃わない先頭からも読む。長さは 8 バイトの塊の数と残りのバイトの数のどの組も作る。
+#[test]
+fn find_byte_matches_a_naive_loop() {
+    let mut rng = Rng::new();
+    for _ in 0..3000 {
+        let b = rng.next() as u8;
+        let start = (rng.next() % 8) as usize;
+        let len = (rng.next() % 40) as usize;
+        let buffer = bytes_near(&mut rng, b, start + len);
+        let hay = &buffer[start..];
+        let from = (rng.next() % (len as u64 + 1)) as usize;
+        assert_eq!(
+            find_byte(hay, from, b),
+            naive_find_byte(hay, from, b),
+            "{hay:?} from {from} for {b}"
+        );
+    }
+}
+
+/// `find_from` の照合 (`find_bytes`) は `find_byte` で先頭のバイトを探す。乱数の入力について、`windows` で1つずつ
+/// 比べた位置と同じ位置を返す。
+#[test]
+fn find_byte_under_find_bytes_matches_windows() {
+    let mut rng = Rng::new();
+    for _ in 0..3000 {
+        let b = rng.next() as u8;
+        let len = (rng.next() % 40) as usize;
+        let text = bytes_near(&mut rng, b, len);
+        let needle_len = (rng.next() % 4) as usize;
+        let needle = bytes_near(&mut rng, b, needle_len);
+        let from = (rng.next() % (len as u64 + 1)) as usize;
+        let expected = if needle.is_empty() {
+            Some(from)
+        } else {
+            text[from..]
+                .windows(needle.len())
+                .position(|w| w == needle.as_slice())
+                .map(|i| from + i)
+        };
+        assert_eq!(
+            find_bytes(&text, &needle, from),
+            expected.map_or(-1, |i| i as i64),
+            "{needle:?} in {text:?} from {from}"
+        );
+    }
+}
+
+/// `find_byte` は物体の中身を借りた `&[u8]` を読む。1語に収まる長さ、語の境目の前後、大きい物体のページの後ろまで
+/// 続く長さで、`Bytes.find_byte_from` と `Bytes.find_from` を通す。
+fn find_byte_reads_the_body_of_an_object<M: Mode>() {
+    let mut ctx = ctx_tests::ctx::<M>();
+    let mut large = vec![b'a'; PAGE_BYTES + 3];
+    let last = large.len() - 1;
+    large[last] = b'x';
+    let cases = [
+        b"".to_vec(),
+        b"abcdefg".to_vec(),
+        b"abcdefgx".to_vec(),
+        b"abcdefghx".to_vec(),
+        large.clone(),
+        vec![b'a'; PAGE_BYTES + 3],
+    ];
+    unsafe {
+        let needle = ctx.heap_mut().alloc_bytes(b"ax");
+        for body in cases {
+            let w = ctx.heap_mut().alloc_bytes(&body);
+            let len = body.len();
+            for from in [0, 1, 8, len / 2, len] {
+                if from > len {
+                    continue;
+                }
+                let expected = naive_find_byte(&body, from, b'x');
+                let p = ctx.heap().bytes(w).unwrap();
+                assert_eq!(find_byte(&*p, from, b'x'), expected);
+                let r = expected.map_or(-1, |i| i as i64);
+                assert_eq!(ctx.bytes_find_byte(b'x' as i64, from as i64, w), Ok(r));
+                let r = body[from..]
+                    .windows(2)
+                    .position(|w| w == b"ax")
+                    .map_or(-1, |i| (from + i) as i64);
+                assert_eq!(ctx.bytes_find_from(needle, from as i64, w), Ok(r));
+            }
+            ctx.heap_mut().decref(w).unwrap();
+        }
+        ctx.heap_mut().decref(needle).unwrap();
+    }
+    assert_eq!(mortal(ctx.heap()), 0);
+}
+
 both_modes!(
     pages_are_aligned_and_returned,
     large_objects_get_their_own_page,
@@ -1138,4 +1265,5 @@ both_modes!(
     println_goes_through_the_host,
     files_go_through_the_host,
     script_externs_go_through_the_host,
+    find_byte_reads_the_body_of_an_object,
 );

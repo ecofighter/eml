@@ -64,7 +64,62 @@ fn starts_at(text: &[u8], needle: &[u8], i: usize) -> (r: bool)
     true
 }
 
-/// `from` 以上で `needle` が始まる最小の位置。素朴な照合で、なければ -1 を返す。
+/// `find_byte` の結果。`from` 以上で `b` がある最小の位置で、なければ -1 である。
+pub open spec fn found_byte(text: Seq<u8>, b: u8, from: int, r: i64) -> bool {
+    if r >= 0 {
+        &&& from <= r < text.len()
+        &&& text[r as int] == b
+        &&& forall|j: int| from <= j < r ==> text[j] != b
+    } else {
+        &&& r == -1
+        &&& forall|j: int| from <= j < text.len() ==> text[j] != b
+    }
+}
+
+/// `hay` の `from` 以上で `b` がある最小の位置。8 バイトずつ1語に読み、`b` に等しいバイトがあるかを語の演算で
+/// 確かめる (SWAR)。結果が最初の位置であることは、Miri の上で素朴なループと比べるテストで確かめ、信頼する
+/// (信頼の一覧の T13)。語の演算の証明は `bit_vector` の大きな証明になるためである。
+#[verifier::external_body]
+#[inline]
+pub(crate) fn find_byte(hay: &[u8], from: usize, b: u8) -> (r: Option<usize>)
+    requires
+        from <= hay@.len(),
+    ensures
+        r matches Some(i) ==> {
+            &&& from <= i < hay@.len()
+            &&& hay@[i as int] == b
+            &&& forall|j: int| from <= j < i ==> hay@[j] != b
+        },
+        r is None ==> forall|j: int| from <= j < hay@.len() ==> hay@[j] != b,
+{
+    let ones: u64 = 0x0101_0101_0101_0101;
+    let highs: u64 = 0x8080_8080_8080_8080;
+    let pattern = ones * b as u64;
+    let (words, rest) = hay[from..].as_chunks::<8>();
+    let mut at = from;
+    for word in words {
+        // `x` では `b` に等しいバイトが 0 になり、`zeros` は 0 のバイトの最上位の bit に立つ。引き算の借りで、0 の
+        // バイトより上のバイトにも bit が立ちうる。借りは上にしか伝わらないので、一番下の bit は最初の 0 のバイトの
+        // ものである
+        let x = u64::from_le_bytes(*word) ^ pattern;
+        let zeros = x.wrapping_sub(ones) & !x & highs;
+        if zeros != 0 {
+            return Some(at + (zeros.trailing_zeros() / 8) as usize);
+        }
+        at += 8;
+    }
+    let mut k = 0;
+    while k < rest.len() {
+        if rest[k] == b {
+            return Some(at + k);
+        }
+        k += 1;
+    }
+    None
+}
+
+/// `from` 以上で `needle` が始まる最小の位置。T13 の `find_byte` で `needle` の先頭のバイトを探し、見つけた位置
+/// ごとに残りを比べる。なければ -1 を返す。
 pub(crate) fn find_bytes(text: &[u8], needle: &[u8], from: usize) -> (r: i64)
     requires
         from <= text@.len(),
@@ -72,23 +127,47 @@ pub(crate) fn find_bytes(text: &[u8], needle: &[u8], from: usize) -> (r: i64)
     ensures
         found_from(text@, needle@, from as int, r),
 {
+    if needle.is_empty() {
+        proof {
+            assert(text@.subrange(from as int, from as int) =~= needle@);
+        }
+        return from as i64;
+    }
     if needle.len() > text.len() {
         return -1;
     }
     let last = text.len() - needle.len();
+    let first = needle[0];
     let mut i = from;
     while i <= last
         invariant
             from <= i,
+            0 < needle@.len(),
+            first == needle@[0],
             last + needle@.len() == text@.len(),
             text@.len() <= i64::MAX,
             forall|j: int| from <= j < i ==> !matches_at(text@, needle@, j),
         decreases last + 1 - i,
     {
-        if starts_at(text, needle, i) {
-            return i as i64;
+        let found = find_byte(text, i, first);
+        let end = match found {
+            Some(p) => p,
+            None => text.len(),
+        };
+        proof {
+            assert forall|j: int| i <= j < end implies !matches_at(text@, needle@, j) by {
+                if matches_at(text@, needle@, j) {
+                    assert(text@.subrange(j, j + needle@.len())[0] == text@[j]);
+                }
+            }
         }
-        i += 1;
+        if end > last {
+            return -1;
+        }
+        if starts_at(text, needle, end) {
+            return end as i64;
+        }
+        i = end + 1;
     }
     -1
 }

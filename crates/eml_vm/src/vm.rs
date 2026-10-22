@@ -1040,6 +1040,11 @@ fn run_extern<M: Mode>(
                 let w = ctx.bytes_push(task.raw(arg(0)), task.get(arg(1)))?;
                 task.set(dst, w);
             }
+            Extern::BytesFindByte => {
+                let i =
+                    ctx.bytes_find_byte(task.raw(arg(0)), task.raw(arg(1)), task.get(arg(2)))?;
+                task.set_raw(dst, i);
+            }
             Extern::BytesValidUtf8 => {
                 let r = ctx.bytes_valid_utf8(task.get(arg(0)))?;
                 task.set_raw(dst, r);

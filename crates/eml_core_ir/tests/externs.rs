@@ -245,7 +245,7 @@ fn only_the_array_readers_borrow() {
                 (&[true], None)
             }
             "Std.Bytes.get" | "Prelude.bytes_get" => (&[false, true], None),
-            "Std.Bytes.slice" => (&[false, false, true], None),
+            "Std.Bytes.slice" | "Std.Bytes.find_byte_from" => (&[false, false, true], None),
             "Std.Bytes.append_slice" => (&[false, false, true, false], None),
             "Std.Bytes.find_from" => (&[true, false, true], None),
             "Prelude.Eq Bytes.==" | "Prelude.Eq Bytes.!=" | "Prelude.Ord Bytes.compare" => {

@@ -1731,6 +1731,10 @@ unsafe fn call<M: Mode>(
                 let w = ctx.bytes_push(int(0), a)?;
                 take_bytes(ctx, w)
             }
+            "Std.Bytes.find_byte_from" => {
+                let a = args.lent_bytes(ctx, &inputs[2]);
+                Outcome::Int(ctx.bytes_find_byte(int(0), int(1), a)?)
+            }
             "Std.Bytes.find_from" => {
                 let n = args.lent_bytes(ctx, &inputs[0]);
                 let a = args.lent_bytes(ctx, &inputs[2]);

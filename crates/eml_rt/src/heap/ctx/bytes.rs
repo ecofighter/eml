@@ -4,9 +4,9 @@
 #[cfg(verus_only)]
 use vstd::utf8::valid_utf8;
 
-use super::positions::find_bytes;
+use super::positions::{find_byte, find_bytes};
 #[cfg(verus_only)]
-use super::positions::found_from;
+use super::positions::{found_byte, found_from};
 #[cfg(verus_only)]
 use super::proof::*;
 #[cfg(verus_only)]
@@ -576,6 +576,95 @@ impl<M: Mode> Ctx<M> {
                     crate::alloc::too_large();
                 }
                 Ok(find_bytes(t, n, from as usize))
+            } else {
+                Err(Fault::Index(Box::new(IndexFault::BytesIndex { index: from, len: len as i64 })))
+            }
+        };
+        proof {
+            if M::CHECKED {
+                lemma_words_trans(self.heap, h1, s0.heap);
+                self.lemma_words_kept(s0);
+            }
+            if c {
+                self.lemma_lent(s0, h1);
+            }
+        }
+        r
+    }
+
+    /// `Bytes.find_byte_from`。`s` を借りて、`from` 以上で `b` がある最小の位置を返し、なければ -1 を返す。探すのは
+    /// T13 の `find_byte` である。`from` が `0 <= from <= len` でなければ `Fault::Index` を返す。
+    ///
+    /// # Safety
+    /// `bytes_length` と同じ。
+    pub unsafe fn bytes_find_byte(&mut self, b: i64, from: i64, s: Word) -> (r: Result<i64, Fault>)
+        requires
+            old(self).wf(),
+            old(self).heap_spec().word_in(s),
+            0 <= b < 256,
+            !M::CHECKED ==> old(self).is_bytes(s) && old(self).holds(s),
+        ensures
+            final(self).wf(),
+            final(self).evv_spec() == old(self).evv_spec(),
+            final(self).yield_spec() == old(self).yield_spec(),
+            r is Ok || (r matches Err(Fault::Index(_))) || (r matches Err(Fault::Heap(_))),
+            (r matches Err(Fault::Heap(_))) ==> final(self).heap_spec().settled_heap() == old(
+                self,
+            ).heap_spec().settled_heap(),
+            !M::CHECKED ==> !(r matches Err(Fault::Heap(_))),
+            old(self).held_ok() && old(self).is_bytes(s) && old(self).holds(s) ==> !(r matches Err(
+                Fault::Heap(_),
+            )) || (r matches Err(Fault::Heap(e)) && chain_err(Err::<(), HeapError>(e))),
+            old(self).held_ok() && old(self).is_bytes(s) && old(self).holds(s) && !(r matches Err(
+                Fault::Heap(_),
+            )) ==> {
+                let text = old(self).text_of(s);
+                &&& 0 <= from <= text.len() ==> (r matches Ok(v) && found_byte(
+                    text,
+                    b as u8,
+                    from as int,
+                    v,
+                ))
+                &&& !(0 <= from <= text.len()) ==> (r matches Err(Fault::Index(_)))
+                &&& final(self).held_ok()
+                &&& final(self).evolved_by(*old(self), |x: usize| 0int, Set::empty())
+            },
+    {
+        let ghost s0 = *self;
+        let ghost c = s0.held_ok() && s0.is_bytes(s) && s0.holds(s);
+        if M::CHECKED && !s.is_ptr() {
+            return Err(Fault::Heap(HeapError::WrongKind));
+        }
+        self.heap.settle();
+        let ghost h1 = self.heap;
+        let hs = self.heap.header_of(s);
+        proof {
+            lemma_settled_twice(s0.heap);
+            assert(h1.words_kept(s0.heap));
+            h1.lemma_text_spec(s);
+            s0.heap.lemma_text_spec(s);
+            if c {
+                s0.lemma_settled_body(h1, s, Kind::Bytes);
+            }
+        }
+        if let Err(e) = self.heap.checked_body(hs, Kind::Bytes) {
+            proof {
+                self.lemma_words_kept(s0);
+            }
+            return Err(Fault::Heap(e));
+        }
+        let r = {
+            let t = self.heap.body_of(s);
+            let len = t.len();
+            if 0 <= from && (from as u64) <= (len as u64) {
+                // ヒープのバイト列は `isize::MAX` より短いので、ここには来ない
+                if (len as u64) > (i64::MAX as u64) {
+                    crate::alloc::too_large();
+                }
+                match find_byte(t, from as usize, b as u8) {
+                    Some(i) => Ok(i as i64),
+                    None => Ok(-1),
+                }
             } else {
                 Err(Fault::Index(Box::new(IndexFault::BytesIndex { index: from, len: len as i64 })))
             }

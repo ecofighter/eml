@@ -114,7 +114,7 @@ valgrind が arm64 の macOS で動かないので、callgrind は使わない�
 | `mask` | 4つの evidence の `evv` で、2つ目の evidence を飛ばす `evv_mask` (項目は n = 0、m = 1 の1つ) を呼び、結果を手放すことを、10,000,000 回繰り返す |
 | `poll` | 安全点の確かめ `Ctx::poll` を、100,000,000 回繰り返す |
 
-`bench/rt.sh` は続けて、extern の計測のプログラム `crates/eml_rt/examples/rt_extern_bench.rs` の次の12の計測を、同じ方法で測って2つ目の表に出す ([オブジェクトモデル](../spec/object-model.md) の「extern」)。`rt_bench` と別のプログラムにするのは、上の14の計測のコード生成単位の分け方を変えないためである (下の「`eml_rt` のインライン化」)。どの計測も速いモードの `Ctx` で動かす。引数を消費する extern に渡す文字列の参照は、ヒープの文字列なら毎回 `dup` で、不死の文字列 (`concat-copy` の右と `read-all` のパス) なら `acquire_immortal` で作る。借りる extern (`string-eq`、`compare`、`show-string`) には、呼ぶ側が持つ参照をそのまま渡す。`show-int` は整数だけを渡すので、参照を作らない。
+`bench/rt.sh` は続けて、extern の計測のプログラム `crates/eml_rt/examples/rt_extern_bench.rs` の次の16の計測を、同じ方法で測って2つ目の表に出す ([オブジェクトモデル](../spec/object-model.md) の「extern」)。`rt_bench` と別のプログラムにするのは、上の14の計測のコード生成単位の分け方を変えないためである (下の「`eml_rt` のインライン化」)。どの計測も速いモードの `Ctx` で動かす。引数を消費する extern に渡す文字列の参照は、ヒープの文字列なら毎回 `dup` で、不死の文字列 (`concat-copy` の右と `read-all` のパス) なら `acquire_immortal` で作る。借りる extern (`string-eq`、`compare`、`show-string`、`find-byte-1mib`、`find-bytes-1mib`) には、呼ぶ側が持つ参照をそのまま渡す。`-position` と `-windows` の行は、同じ探索を Rust の標準ライブラリで行う比べる基準で、`box-list` と同じく `eml_rt` を呼ばない。`show-int` は整数だけを渡すので、参照を作らない。
 
 | 計測 | 中身 |
 |---|---|
@@ -130,6 +130,10 @@ valgrind が arm64 の macOS で動かないので、callgrind は使わない�
 | `println-line` | 同じことを `Line` (行ごとに flush) で行う |
 | `read-all` | メモリの Host の 1 MiB のファイルを、開いて全部読んで閉じることを、100 回繰り返す。Host は長さの見込みを返す |
 | `read-all-unsized` | 同じことを、長さの見込みを返さない Host で行う |
+| `find-byte-1mib` | 52 バイトの行を並べた 1 MiB のバイト列の末尾の1バイトを `Bytes.find_byte_from` で探すことを、1,000 回繰り返す |
+| `find-byte-1mib-position` | 同じ探索を `<[u8]>::iter().position` で行う |
+| `find-bytes-1mib` | 同じ並びの末尾の 16 バイトを `Bytes.find_from` で探すことを、100 回繰り返す。探す列の先頭のバイトは行ごとに1回合い、そのたびに 15 バイト目まで比べて外れる |
+| `find-bytes-1mib-windows` | 同じ探索を `<[u8]>::windows().position` で行う |
 
 ### スクリプトの計測
 

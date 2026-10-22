@@ -384,13 +384,13 @@ const RANDOM_INTS: usize = 50;
 const RANDOM_STRINGS: usize = 30;
 
 /// 種を固定した xorshift64。表を作り直しても同じ入力が並ぶ
-struct Rng(u64);
+pub(super) struct Rng(u64);
 
 impl Rng {
-    fn new() -> Rng {
+    pub(super) fn new() -> Rng {
         Rng(SEED)
     }
-    fn next(&mut self) -> u64 {
+    pub(super) fn next(&mut self) -> u64 {
         let mut x = self.0;
         x ^= x << 13;
         x ^= x >> 7;
@@ -1049,6 +1049,14 @@ pub fn inputs() -> Vec<(String, Vec<Arg>)> {
         for byte in [0, 255] {
             push("Std.Bytes.push", vec![Arg::Int(byte), by(b)]);
         }
+        for byte in [0, 97, 255] {
+            for from in [-1, 0, 1, len, len + 1] {
+                push(
+                    "Std.Bytes.find_byte_from",
+                    vec![Arg::Int(byte), Arg::Int(from), by(b)],
+                );
+            }
+        }
     }
     // 共有したバイト列は、`set` と `push` が写してから書き換える
     push(
@@ -1062,6 +1070,10 @@ pub fn inputs() -> Vec<(String, Vec<Arg>)> {
     push(
         "Std.Bytes.push",
         vec![Arg::Int(99), Arg::SharedBytes(vec![97, 98])],
+    );
+    push(
+        "Std.Bytes.find_byte_from",
+        vec![Arg::Int(98), Arg::Int(0), Arg::SharedBytes(vec![97, 98])],
     );
     for s in &strings {
         push("Std.Bytes.of_string", vec![Arg::Unique(s.clone())]);

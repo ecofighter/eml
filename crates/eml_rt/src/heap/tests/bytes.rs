@@ -657,7 +657,7 @@ fn conversions_are_counted<M: Mode>() {
     assert_eq!(mortal(ctx.heap()), 1);
 }
 
-/// `Bytes.empty` は長さ 0 の物体を作り、`Bytes.find_from` は素朴な探索で最初の位置を返す。検査モードは文字列を断る。
+/// `Bytes.empty` は長さ 0 の物体を作り、`Bytes.find_from` は最初の位置を返す。検査モードは文字列を断る。
 fn empty_bytes_and_a_search<M: Mode>() {
     let mut ctx = ctx::<M>();
     unsafe {

@@ -28,3 +28,10 @@ pub extern get : Int -> Bytes -> <Panic> Byte
 pub extern set : Int -> Byte -> Bytes -> <Panic> Bytes
 -- 末尾に `b` を足す。一意なら、その場で伸ばす
 pub extern push : Byte -> Bytes -> Bytes
+-- 探すバイト、開始位置、対象。開始位置以降で最初に見つかった位置で、なければ -1 である
+extern find_byte_from : Byte -> Int -> Bytes -> <Panic> Int
+
+pub find_byte : Byte -> Bytes -> <Panic> Option Int
+find_byte x b =
+  let i = find_byte_from x 0 b
+  if i < 0 then None else Some i

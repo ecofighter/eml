@@ -17,7 +17,8 @@ const MIB: usize = 1024 * 1024;
 fn main() {
     let case = std::env::args().nth(1).expect(
         "a case: string-eq, string-eq-early, compare, concat-copy, show-int, show-int-long, \
-             show-string, show-string-dense, println-block, println-line, read-all, read-all-unsized",
+             show-string, show-string-dense, println-block, println-line, read-all, read-all-unsized, \
+             find-byte-1mib, find-byte-1mib-position, find-bytes-1mib, find-bytes-1mib-windows",
     );
     match case.as_str() {
         "string-eq" => string_eq(false),
@@ -32,6 +33,10 @@ fn main() {
         "println-line" => println(Buffering::Line),
         "read-all" => read_all(true),
         "read-all-unsized" => read_all(false),
+        "find-byte-1mib" => find_byte(false),
+        "find-byte-1mib-position" => find_byte(true),
+        "find-bytes-1mib" => find_bytes(false),
+        "find-bytes-1mib-windows" => find_bytes(true),
         _ => panic!("an unknown case {case}"),
     }
 }
@@ -200,4 +205,67 @@ fn read_all(sized: bool) {
             ctx.fs_close(file).unwrap();
         }
     }
+}
+
+/// 52 バイトの行を並べた 1 MiB のバイト列。末尾の `last` で終わる。行の中の `0` は、`find_bytes` の needle の先頭の
+/// バイトとして、行ごとに1回合う。
+fn haystack(last: &[u8]) -> Vec<u8> {
+    let line = b"abcdefghijklmnopqrstuvwxyz0123456789ABCDEFGHIJKLMNO\n";
+    let mut hay: Vec<u8> = line
+        .iter()
+        .copied()
+        .cycle()
+        .take(MIB - last.len())
+        .collect();
+    hay.extend_from_slice(last);
+    hay
+}
+
+/// 1 MiB のバイト列の末尾の1バイトを `Bytes.find_byte_from` で探す。`std` なら、同じ探索を
+/// `<[u8]>::iter().position` で行う (比べる基準)。
+fn find_byte(std: bool) {
+    let hay = haystack(b"#");
+    let mut ctx = ctx();
+    // SAFETY: バイト列を1つ確保するだけで、ほかの物体には触れない。
+    let w = unsafe { ctx.heap_mut() }.alloc_bytes(&hay);
+    let target = black_box(b'#');
+    for _ in 0..1_000 {
+        let at = if std {
+            black_box(&hay[..])
+                .iter()
+                .position(|&x| x == target)
+                .map_or(-1, |i| i as i64)
+        } else {
+            // SAFETY: w は生きたバイト列で、呼ぶ側が参照を持つ。bytes_find_byte は借りるだけで手放さない。
+            unsafe { ctx.bytes_find_byte(target as i64, 0, black_box(w)) }.unwrap()
+        };
+        assert_eq!(black_box(at), MIB as i64 - 1);
+    }
+    decref(&mut ctx, w);
+}
+
+/// 1 MiB のバイト列の末尾の 16 バイトを `Bytes.find_from` で探す。needle の先頭の `0` は行ごとに合い、そのたびに
+/// 15 バイト目まで比べて外れる。`std` なら、同じ探索を `<[u8]>::windows().position` で行う (比べる基準)。
+fn find_bytes(std: bool) {
+    let needle = b"0123456789ABCDE#";
+    let hay = haystack(needle);
+    let mut ctx = ctx();
+    // SAFETY: バイト列を2つ確保するだけで、ほかの物体には触れない。
+    let w = unsafe { ctx.heap_mut() }.alloc_bytes(&hay);
+    let n = unsafe { ctx.heap_mut() }.alloc_bytes(needle);
+    for _ in 0..100 {
+        let at = if std {
+            let needle = black_box(&needle[..]);
+            black_box(&hay[..])
+                .windows(needle.len())
+                .position(|x| x == needle)
+                .map_or(-1, |i| i as i64)
+        } else {
+            // SAFETY: n と w は生きたバイト列で、呼ぶ側が参照を持つ。bytes_find_from は借りるだけで手放さない。
+            unsafe { ctx.bytes_find_from(black_box(n), 0, black_box(w)) }.unwrap()
+        };
+        assert_eq!(black_box(at), (MIB - needle.len()) as i64);
+    }
+    decref(&mut ctx, n);
+    decref(&mut ctx, w);
 }
