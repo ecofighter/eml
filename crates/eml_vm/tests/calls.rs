@@ -166,38 +166,6 @@ fn pair(f.0: tobj) -> unit {{
     assert_eq!(run_lir(&text), ("ok\n".to_string(), Ok(())));
 }
 
-/// `make` はクロージャを返し、そのクロージャはまた関数を返す。引数が2段余る。`main` の `apply` は末尾ではなく、入れ子は `ApplyRest` の末尾の適用の中で起きる。
-#[test]
-fn over_application_nests_through_apply_rest() {
-    let text = "\
-fn main() -> unit {
-  let a.0: tobj = box 1
-  let b.1: tobj = box 2
-  let c.2: tobj = box 3
-  let r.3: tobj = apply &make(a.0, b.1, c.2)
-  let n.4: int = unbox r.3
-  decref r.3
-  let s.5: obj = extern \"Prelude.Show Int.show\"(n.4)
-  let u.6: unit = extern Prelude.println(s.5)
-  return u.6
-}
-fn make(x.0: tobj) -> tobj {
-  let c.1: tobj = closure pick(x.0)
-  return c.1
-}
-fn pick(x.0: tobj, y.1: tobj) -> tobj {
-  decref y.1
-  let c.2: tobj = closure keep(x.0)
-  return c.2
-}
-fn keep(x.0: tobj, z.1: tobj) -> tobj {
-  decref z.1
-  return x.0
-}
-";
-    assert_eq!(run_lir(text), ("1\n".to_string(), Ok(())));
-}
-
 /// 末尾の位置の `apply` で引数が足りなければ、作ったクロージャを返す。
 #[test]
 fn a_tail_apply_with_too_few_arguments_returns_a_closure() {

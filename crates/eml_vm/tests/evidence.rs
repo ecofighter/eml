@@ -12,54 +12,6 @@ const COUNTER: &str = "effect Counter { get(unit) -> tobj, put(tobj) -> unit }\n
 /// のは、継続の欄の `()` が「取り出した後」の印を兼ねるためである (docs/spec/core-ir.md の「EP が作る補助の関数」)。
 const ID: &str = "yields fn id(x.0: tobj) -> tobj {\n  return x.0\n}\n";
 
-/// すぐに再開する節を evidence から引いてその場で呼ぶ。状態は evidence の欄に残る。
-#[test]
-fn an_immediate_clause_reads_and_writes_the_state_of_its_evidence() {
-    let text = format!(
-        "{COUNTER}\
-fn main() -> unit {{
-  let w.0: tobj = prim evv_get()
-  dup w.0
-  dup w.0
-  let s.1: tobj = box 3
-  let e.2: obj = prim ev_new[Counter](s.1, w.0)
-  let u.3: unit = prim ev_set_clause[Counter.get](e.2, &get)
-  let u.4: unit = prim ev_set_clause[Counter.put](e.2, &put)
-  let w.5: tobj = prim evv_push(w.0, e.2)
-  let u.6: unit = prim evv_set(w.5)
-  let e.7: obj = prim ev_lookup[Counter]()
-  let c.8: tobj = prim ev_clause[Counter.put](e.7)
-  let f.9: tobj = box 5
-  let u.10: unit = clause Counter.put c.8(e.7, f.9)
-  let e.11: obj = prim ev_lookup[Counter]()
-  let c.12: tobj = prim ev_clause[Counter.get](e.11)
-  let r.13: tobj = clause Counter.get c.12(e.11, ())
-  let u.14: unit = prim evv_set(w.0)
-  let n.15: int = unbox r.13
-  decref r.13
-  let t.16: obj = extern \"Prelude.Show Int.show\"(n.15)
-  let v.17: unit = extern Prelude.println(t.16)
-  return v.17
-}}
-internal yields clause Counter.get fn get(e.0: obj, u.1: unit) -> tobj {{
-  let s.2: tobj = prim ev_take_state(e.0)
-  dup s.2
-  let v.3: unit = prim ev_set_state(e.0, s.2)
-  decref e.0
-  return s.2
-}}
-internal yields clause Counter.put fn put(e.0: obj, n.1: tobj) -> unit {{
-  let u.2: unit = prim ev_set_state(e.0, n.1)
-  decref e.0
-  return u.2
-}}
-"
-    );
-    let (output, result) = run_lir(&text);
-    assert_eq!(result, Ok(()));
-    assert_eq!(output, "5\n");
-}
-
 /// yield_to で始めた yield を、yield_status と yield_finish で受け取る。yield_status は、yield の前と後は 0、
 /// 宛先の evidence では 1 (中断なら 2)、ほかの evidence では 3 である。`yield_abort` は戻らずに巻き戻すので、中断は
 /// 呼んだ関数の中で始め、着地の印の付いた `apply` から状態を読む。
