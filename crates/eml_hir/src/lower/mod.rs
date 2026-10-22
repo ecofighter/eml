@@ -13,7 +13,7 @@ pub use types::visit_type_vars;
 
 use std::collections::HashMap;
 
-use eml_diagnostics::{Diagnostic, ErrorCode, FileId, Label, TextRange};
+use eml_diagnostics::{Diagnostic, ErrorCode, FileId, Label, TextEdit, TextRange};
 use eml_extern::Extern;
 use eml_syntax::{AstPtr, SyntaxNode, SyntaxToken, ast};
 use la_arena::{Arena, ArenaMap, Idx, RawIdx};
@@ -22,7 +22,7 @@ use crate::codes;
 use crate::def_map::{DefMap, NameRef, Resolved, Resolver, module_id, not_in_module, private_name};
 use crate::hir::*;
 use crate::item_tree::{FunctionItem, InputItemKind, ItemTree};
-use crate::load::LoadedModule;
+use crate::load::{LoadedModule, STD_ROOT};
 use crate::program::{ItemId, Items, Module, ModuleId, ModuleOrigin, Program};
 use class::ContextScope;
 use expr::BodyLowering;
@@ -711,9 +711,9 @@ pub(super) fn unresolved<T>(
     }
 }
 
-/// E1031。修飾子は1つのセグメントなので、パス全体を書いた `Report.Csv.parse` もここに来る。そのモジュールを import して
-/// いれば、使える修飾子を help で示す (docs/spec/modules.md の「import」)。標準ライブラリのモジュールの正式な名前
-/// (`Std.Fs.close`) を書いたときは、短い名前の修飾子を示す (docs/spec/modules.md の「名前の解決」)。
+/// E1031。修飾子は1つのセグメントなので、パス全体を書いた `Report.Csv.parse` もここに来る。そのモジュールを別名で
+/// import していれば、使える修飾子を help で示す (docs/spec/modules.md の「import」)。import のない標準ライブラリの
+/// モジュールなら、足す import を help と fix で示す (docs/spec/modules.md の「名前の解決」)。
 fn unknown_qualifier(
     items: &Resolver<'_>,
     file: FileId,
@@ -726,17 +726,56 @@ fn unknown_qualifier(
         format!("unknown module qualifier `{qualifier}`"),
         Label::new(file, range, "no import gives this qualifier"),
     );
-    match items.qualifiers_of(qualifier).first() {
-        Some(usable) => diagnostic.with_help(format!(
+    let short = items.std_short_name_of(qualifier);
+    let usable = items.qualifiers_of(qualifier).first().copied().or_else(|| {
+        let short = short.filter(|&short| short == qualifier)?;
+        items
+            .qualifiers_of(&format!("{STD_ROOT}.{short}"))
+            .first()
+            .copied()
+    });
+    if let Some(usable) = usable {
+        return diagnostic.with_help(format!(
             "the import of `{qualifier}` gives the qualifier `{usable}`; write `{usable}.{name}`"
-        )),
-        None => match items.std_short_name_of(qualifier) {
-            Some(short) => diagnostic.with_help(format!(
-                "write `{short}.{name}`, or `import {qualifier} as {}`",
-                &short[..1]
-            )),
-            None => diagnostic,
-        },
+        ));
+    }
+    let Some(short) = short else {
+        return diagnostic;
+    };
+    let full = short != qualifier;
+    let Some(at) = items.import_at() else {
+        // 式、`let`、`:type` の入力は import を書けないので、先に import を入力してもらう
+        return diagnostic.with_help(if full {
+            format!("enter `import {qualifier}` as an input first, then write `{short}.{name}`")
+        } else {
+            format!("enter `import {qualifier}` as an input first")
+        });
+    };
+    let mut edits = vec![TextEdit {
+        file,
+        range: TextRange::empty(at),
+        replacement: format!("import {qualifier}\n"),
+    }];
+    if full {
+        edits.push(TextEdit {
+            file,
+            range,
+            replacement: short.to_string(),
+        });
+        diagnostic
+            .with_help(format!(
+                "a qualifier is one segment; add `import {qualifier}` and write `{short}.{name}`"
+            ))
+            .with_fix(
+                format!("import `{qualifier}` and write `{short}.{name}`"),
+                edits,
+            )
+    } else {
+        diagnostic
+            .with_help(format!(
+                "add `import {short}` to use the standard module `{STD_ROOT}.{short}`"
+            ))
+            .with_fix(format!("add `import {short}`"), edits)
     }
 }
 

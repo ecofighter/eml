@@ -73,7 +73,7 @@ eml の目的、言語の性格、確定した設計判断の一覧、文書全�
 | 文字列 | 補間は `"\{x}"`。複数行の `"""`、raw の `r"..."` | [字句](spec/lexical.md) |
 | コマンドリテラル | バッククォート。シェルを介さず、引数のリストを組む (Julia 方式) | [字句](spec/lexical.md) |
 | fixity | ユーザーが宣言する。優先順位は整数 0〜9。CST では演算子の列を平たいまま持ち、HIR で組み直す | [宣言](spec/declarations.md)、[式](spec/expressions.md) |
-| モジュール | 1ファイル = 1モジュール。`pub` で公開する。import は既定で修飾付き。標準ライブラリのモジュール (`Fs` など) は import なしで修飾付きで使える | [モジュールと名前解決](spec/modules.md) |
+| モジュール | 1ファイル = 1モジュール。`pub` で公開する。import は既定で修飾付き。標準ライブラリのモジュール (`Fs` など) も、Prelude のほかは import して修飾付きで使う | [モジュールと名前解決](spec/modules.md) |
 | 組み込みの宣言 | 修飾子 `extern` で組み込みの関数、型、エフェクトを宣言する (`pub extern println : String -> <IO> Unit`)。標準ライブラリはバイナリに埋め込んだ `std/` のツリーから読み、Prelude は `std/Prelude.em` である。ファイルの操作は標準ライブラリのモジュール `Fs` (`Fs.open` など) にある | [宣言](spec/declarations.md)、[モジュールと名前解決](spec/modules.md) |
 | 並行処理 | 新しい構文は追加しない。エフェクトにより直接の形で書ける | [式](spec/expressions.md) |
 | コメント | `--` と、入れ子にできる `{- -}` | [字句](spec/lexical.md) |

@@ -96,7 +96,7 @@ struct Fix {
 | E1028 | `AMBIGUOUS_NAME` | 修飾しない名前、または合流した修飾子の名前が、別々の定義を指して曖昧である |
 | E1029 | `PRIVATE_NAME` | ユーザーのモジュールの `pub` でない名前を、修飾か import の並びで使った |
 | E1030 | `RESERVED_MODULE` | 修飾子が `Prelude` になる import、`import Main`、入口のファイル (REPL では `:load` のファイル) を指す import、`import Std` (標準ライブラリの根) |
-| E1031 | `UNKNOWN_QUALIFIER` | 修飾子がどの import にも、標準ライブラリのモジュールにもない。2つ以上のセグメントの修飾子 (`Report.Csv.parse`) を含む |
+| E1031 | `UNKNOWN_QUALIFIER` | 修飾子がどの import にもない。2つ以上のセグメントの修飾子 (`Report.Csv.parse`) を含む |
 | E1032 | `PRIVATE_IN_PUBLIC` | `pub` の item の型に、同じモジュールの `pub` でない型かエフェクトが現れた ([モジュールと名前解決](modules.md) の「公開の範囲」) |
 | E1033 | `EXTERN_OUTSIDE_STD` | ユーザーのモジュールに `extern` を書いた。instance の中の `extern` の行を含む。標準ライブラリ (`std/`) のモジュールだけが書ける ([宣言](declarations.md) の「`extern`」) |
 | E1034 | `ORPHAN_INSTANCE` | クラスも頭の型も定義していないモジュールの instance ([モジュールと名前解決](modules.md) の「instance の一貫性」) |

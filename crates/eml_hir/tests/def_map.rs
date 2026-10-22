@@ -631,7 +631,7 @@ fn a_long_import_chain_does_not_overflow_the_stack() {
     // 循環の検査を再帰で深さ優先にたどると、鎖の長さだけスタックを使う
     let (loaded, diagnostics) = eml_hir::load("test.em", "import M0\n", &Chain(100_000));
     assert!(diagnostics.is_empty(), "{diagnostics:?}");
-    let (_, diagnostics) = eml_hir::def_map(&loaded.modules);
+    let (_, diagnostics) = eml_hir::def_map(&loaded);
     assert!(diagnostics.is_empty(), "{diagnostics:?}");
 }
 

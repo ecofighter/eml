@@ -94,7 +94,7 @@ fn lower(texts: &[(u32, &str)], modules: &[(&str, &str)]) -> Lowered {
         &MemorySource(modules),
         &ImportCache::default(),
     );
-    let (def_map, stage) = eml_hir::def_map(&loaded.modules);
+    let (def_map, stage) = eml_hir::def_map(&loaded);
     diagnostics.extend(stage);
     let (program, stage) = eml_hir::lower(&def_map, &loaded.modules);
     diagnostics.extend(stage);
@@ -172,10 +172,13 @@ fn session_modules_follow_the_prelude_in_input_order() {
 
 #[test]
 fn imports_of_inputs_follow_the_inputs_in_the_order_they_are_found() {
-    // 前の入力の修飾子も標準ライブラリのモジュールを読む (docs/spec/modules.md の「REPL のセッション」)
+    // 前の入力の import も、入力の順にたどる (docs/spec/modules.md の「REPL のセッション」)
     let (loaded, diagnostics, _) = load(
         &[
-            (1, "import A\n\nf : String -> <IO> Fs.File\nf p = Fs.open p"),
+            (
+                1,
+                "import A\nimport Fs\n\nf : String -> <IO> Fs.File\nf p = Fs.open p",
+            ),
             (2, "import B"),
         ],
         &[("A.em", ""), ("B.em", "")],
@@ -631,7 +634,7 @@ fn lower_forms(
         &MemorySource(modules),
         &ImportCache::default(),
     );
-    let (def_map, found) = eml_hir::def_map(&loaded.modules);
+    let (def_map, found) = eml_hir::def_map(&loaded);
     diagnostics.extend(found);
     let (program, found) = eml_hir::lower(&def_map, &loaded.modules);
     diagnostics.extend(found);

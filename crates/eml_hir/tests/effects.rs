@@ -391,10 +391,11 @@ fn a_repeated_operation_name_is_not_a_missing_clause() {
 
 #[test]
 fn file_operations_cannot_be_handled() {
-    let text = "f : Unit -> Int\nf () =\n  handle 1 with\n    | ctl Fs.open p k -> k 1";
+    let text =
+        "import Fs\n\nf : Unit -> Int\nf () =\n  handle 1 with\n    | ctl Fs.open p k -> k 1";
     insta::assert_snapshot!(report(text), @"
-    E1009 4:11 `IO` cannot be handled
-      4:11 `open` is an extern function with the effect `IO`
+    E1009 6:11 `IO` cannot be handled
+      6:11 `open` is an extern function with the effect `IO`
     ");
 }
 

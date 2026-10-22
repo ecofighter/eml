@@ -362,7 +362,7 @@ pub(crate) fn test_program(text: &str) -> eml_hir::Program {
 #[cfg(test)]
 pub(crate) fn test_program_with_files(text: &str) -> (eml_hir::Program, SourceFiles) {
     let (loaded, _) = eml_hir::load("test.em", text, &NoModules);
-    let (def_map, _) = eml_hir::def_map(&loaded.modules);
+    let (def_map, _) = eml_hir::def_map(&loaded);
     let program = eml_hir::lower(&def_map, &loaded.modules).0;
     (program, loaded.files)
 }
@@ -387,7 +387,7 @@ pub(crate) fn test_session(inputs: &[&str]) -> (eml_hir::Program, SourceFiles) {
         &NoModules,
         &eml_hir::ImportCache::default(),
     );
-    let (def_map, _) = eml_hir::def_map(&loaded.modules);
+    let (def_map, _) = eml_hir::def_map(&loaded);
     let program = eml_hir::lower(&def_map, &loaded.modules).0;
     (program, loaded.files)
 }
@@ -418,7 +418,7 @@ pub(crate) fn test_query(inputs: &[&str], query: &str) -> (eml_hir::Program, Sou
         &NoModules,
         &eml_hir::ImportCache::default(),
     );
-    let (def_map, _) = eml_hir::def_map(&loaded.modules);
+    let (def_map, _) = eml_hir::def_map(&loaded);
     let program = eml_hir::lower(&def_map, &loaded.modules).0;
     (program, loaded.files)
 }

@@ -131,7 +131,7 @@ fn session(
         &NoModules,
         &eml_hir::ImportCache::default(),
     );
-    let (def_map, found) = eml_hir::def_map(&loaded.modules);
+    let (def_map, found) = eml_hir::def_map(&loaded);
     diagnostics.extend(found);
     let (program, found) = eml_hir::lower(&def_map, &loaded.modules);
     diagnostics.extend(found);

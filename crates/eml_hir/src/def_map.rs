@@ -4,14 +4,14 @@
 
 use std::collections::{HashMap, HashSet};
 
-use eml_diagnostics::{Diagnostic, ErrorCode, FileId, Label, TextRange};
+use eml_diagnostics::{Diagnostic, ErrorCode, FileId, Label, TextRange, TextSize};
 use eml_extern::{ExternEffect, ExternType};
 use la_arena::{Idx, RawIdx};
 
 use crate::codes;
 use crate::hir::{ExternIndex, LangItems, ParamSort};
-use crate::item_tree::{Fixity, ImportName, InputItemKind, ItemTree, duplicate};
-use crate::load::{ImportTarget, LoadedModule, STD_ROOT};
+use crate::item_tree::{Fixity, ImportName, InputItemKind, ItemTree, duplicate, first_item_start};
+use crate::load::{ImportTarget, Loaded, LoadedModule, STD_ROOT};
 use crate::names::{Definer, DisplayNames};
 use crate::program::{
     BindingId, ClassId, ConstructorId, EffectId, FunctionId, ItemId, MethodId, ModuleId,
@@ -166,6 +166,8 @@ struct ModuleScope {
     /// 宣言の順に並べる。
     parts: HashMap<TypeItem, Vec<(String, ValueItem)>>,
     imports: Imports,
+    /// E1031 の fix が import を挿入する位置 (`first_item_start`)。import を書けない入力では `None` である。
+    import_at: Option<TextSize>,
 }
 
 /// プログラム全体の名前の表。
@@ -174,9 +176,11 @@ pub struct DefMap {
     modules: Vec<ModuleScope>,
     prelude: ModuleId,
     entry: ModuleId,
-    /// Prelude を除く標準ライブラリのモジュールの、短い名前 (`Fs`) からの表。ユーザーのモジュールが import なしで書く
-    /// 修飾子を引く。
-    std_short_names: HashMap<String, ModuleId>,
+    /// 読み込んだ標準ライブラリのモジュールの、短い名前 (`Fs`) からの表。Prelude は除く。ユーザーのモジュールが
+    /// 標準ライブラリのモジュールを隠したことを示す help が引く。
+    loaded_std: HashMap<String, ModuleId>,
+    /// 埋め込んだ標準ライブラリのモジュールの短い名前すべて (`Loaded::std_names`)。
+    std_names: HashSet<String>,
     lang: LangItems,
     externs: ExternIndex,
     names: DisplayNames,
@@ -185,7 +189,8 @@ pub struct DefMap {
 /// モジュール 0 を Prelude として読む。入口は、セッションでは最後のセッションのモジュール (今の入力)、ファイルでは 1 である
 /// (`Loaded::modules`)。値と型の名前空間の重複 (E1003)、fixity の重複 (E1021)、このモジュールにない演算子の fixity
 /// (E1022)、import の並びの名前 (E1001、E1002、E1029)、import の循環 (E1027) を出す。
-pub fn def_map(modules: &[LoadedModule]) -> (DefMap, Vec<Diagnostic>) {
+pub fn def_map(loaded: &Loaded) -> (DefMap, Vec<Diagnostic>) {
+    let modules = &loaded.modules;
     let entry = modules
         .iter()
         .rposition(|module| module.origin.session().is_some())
@@ -216,7 +221,7 @@ pub fn def_map(modules: &[LoadedModule]) -> (DefMap, Vec<Diagnostic>) {
         .ty(ExternType::Unit)
         .expect("the Prelude declares `Unit`");
     let names = display_names(&scopes, unit);
-    let std_short_names = scopes
+    let loaded_std = scopes
         .iter()
         .enumerate()
         .filter(|(_, scope)| scope.origin == ModuleOrigin::Std)
@@ -230,7 +235,8 @@ pub fn def_map(modules: &[LoadedModule]) -> (DefMap, Vec<Diagnostic>) {
             modules: scopes,
             prelude: module_id(0),
             entry: module_id(entry),
-            std_short_names,
+            loaded_std,
+            std_names: loaded.std_names.iter().cloned().collect(),
             lang,
             externs,
             names,
@@ -410,6 +416,7 @@ impl ModuleScope {
             binding,
             parts: HashMap::new(),
             imports: Imports::default(),
+            import_at: first_item_start(&loaded.parse),
         };
         scope.declare(tree);
         scope
@@ -1352,14 +1359,19 @@ impl<'a> Resolver<'a> {
         names
     }
 
-    /// 修飾子が標準ライブラリのモジュールの正式な名前 (`Std.Fs`) なら、その短い名前 (`Fs`)。E1031 の help が使う
-    /// (docs/spec/modules.md の「名前の解決」)。
+    /// 修飾子が標準ライブラリのモジュールの短い名前 (`Fs`) か正式な名前 (`Std.Fs`) なら、その短い名前。読み込んで
+    /// いないモジュールも含む。E1031 の help と fix が使う (docs/spec/modules.md の「名前の解決」)。
     pub fn std_short_name_of<'q>(&self, qualifier: &'q str) -> Option<&'q str> {
-        let short = qualifier.strip_prefix("Std.")?;
-        self.def_map
-            .std_short_names
-            .contains_key(short)
-            .then_some(short)
+        let short = qualifier
+            .strip_prefix(STD_ROOT)
+            .and_then(|rest| rest.strip_prefix('.'))
+            .unwrap_or(qualifier);
+        self.def_map.std_names.contains(short).then_some(short)
+    }
+
+    /// このモジュールに import を挿入する位置。import を書けない REPL の入力では `None` である。
+    pub fn import_at(&self) -> Option<TextSize> {
+        self.own().import_at
     }
 
     /// 修飾子が指すユーザーのモジュールが同じパスの標準ライブラリのモジュールを隠し、そちらが `name` を `pub` で
@@ -1374,7 +1386,7 @@ impl<'a> Resolver<'a> {
             if scope.origin != ModuleOrigin::User {
                 return None;
             }
-            let (short, &std) = self.def_map.std_short_names.get_key_value(&scope.name)?;
+            let (short, &std) = self.def_map.loaded_std.get_key_value(&scope.name)?;
             let std = self.def_map.scope(std);
             let defined = if types {
                 defines_public::<TypeItem>(std, name)
@@ -1539,9 +1551,8 @@ impl<'a> Resolver<'a> {
     }
 
     /// 修飾子が指すモジュールと、それを作った import。`Prelude` はどのモジュールでも使える暗黙の修飾子で、import を
-    /// 持たない (docs/spec/modules.md の「Prelude」)。どの import も作らない修飾子は、ユーザーのモジュールでだけ、同じ
-    /// 短い名前の標準ライブラリのモジュールを指す (docs/spec/modules.md の「名前の解決」と「標準ライブラリ」)。import していないユーザーのモジュールは、修飾子にならない。標準ライブラリの
-    /// モジュールどうしは import で明示して使い、依存がすべて import に現れるようにする (循環の検査 E1027 のため)。
+    /// 持たない (docs/spec/modules.md の「Prelude」)。ほかの修飾子は import だけが作る。import していないモジュールは、
+    /// ユーザーのものも標準ライブラリのものも修飾子にならない (docs/spec/modules.md の「名前の解決」)。
     fn targets(&self, qualifier: &str) -> Vec<(ImportTarget, ImportAt)> {
         // セッションでは、その修飾子を与える最も新しい入力の import だけを使う
         let mut targets: Vec<(ImportTarget, ImportAt)> = self
@@ -1562,12 +1573,6 @@ impl<'a> Resolver<'a> {
             .is_some_and(|prelude| prelude.name == qualifier)
         {
             targets.push((ImportTarget::Module(self.def_map.prelude), None));
-        }
-        if targets.is_empty()
-            && !self.own().origin.is_std()
-            && let Some(&module) = self.def_map.std_short_names.get(qualifier)
-        {
-            targets.push((ImportTarget::Module(module), None));
         }
         targets
     }

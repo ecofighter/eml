@@ -125,8 +125,8 @@ impl Session {
         self.loaded.entry
     }
 
-    /// 読み込んだモジュールの名前。番号の順で、Prelude、入口 (`Main`)、Prelude を除く標準ライブラリ、import でたどった
-    /// 依存先の順に並ぶ。
+    /// 読み込んだモジュールの名前。番号の順で、Prelude、入口 (`Main`) の後に、import を幅優先でたどって見つけた順の
+    /// モジュールが並ぶ。
     pub fn module_names(&self) -> impl Iterator<Item = &str> {
         self.loaded
             .modules
@@ -146,7 +146,7 @@ impl Session {
 
     pub fn def_map(&self) -> DefMapped {
         let mut diagnostics = self.load_diagnostics.clone();
-        let (def_map, stage) = eml_hir::def_map(&self.loaded.modules);
+        let (def_map, stage) = eml_hir::def_map(&self.loaded);
         diagnostics.extend(stage);
         sort_diagnostics(&mut diagnostics);
         DefMapped {

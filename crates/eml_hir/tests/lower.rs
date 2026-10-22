@@ -1,4 +1,6 @@
-use crate::common::{diagnostics, lower_files_text, lower_text, module_codes, module_report};
+use crate::common::{
+    diagnostics, fixes, lower_files_text, lower_text, module_codes, module_report,
+};
 
 #[test]
 fn a_signature_and_an_equation_become_a_function() {
@@ -831,10 +833,28 @@ fn a_full_std_name_as_a_qualifier_points_to_the_short_name() {
     insta::assert_snapshot!(module_report(entry, &[]), @"
     E1031 test.em 2:5 unknown module qualifier `Std.Fs`
       test.em 2:5 no import gives this qualifier
-      help: write `Fs.close`, or `import Std.Fs as F`
+      help: a qualifier is one segment; add `import Std.Fs` and write `Fs.close`
     E1031 test.em 5:5 unknown module qualifier `Std.Nope`
       test.em 5:5 no import gives this qualifier
     ");
+    // import を足す編集と、修飾子を短い名前に置き換える編集の2つを1つの fix にする
+    insta::assert_snapshot!(fixes(entry).join("\n"), @r#"
+    E1031 2:5 import `Std.Fs` and write `Fs.close`
+      1:1..1:1 "import Std.Fs\n"
+      2:5..2:11 "Fs"
+    "#);
+}
+
+#[test]
+fn a_short_std_qualifier_imported_under_an_alias_points_to_the_alias() {
+    // 別名で import したモジュールには import を足させず、使える修飾子を示す (docs/spec/modules.md の「名前の解決」)
+    let entry = "import Std.String as S\n\nf : Int\nf = String.byte_length \"a\"";
+    insta::assert_snapshot!(module_report(entry, &[]), @"
+    E1031 test.em 4:5 unknown module qualifier `String`
+      test.em 4:5 no import gives this qualifier
+      help: the import of `String` gives the qualifier `S`; write `S.byte_length`
+    ");
+    assert_eq!(fixes(entry), Vec::<String>::new());
 }
 
 #[test]

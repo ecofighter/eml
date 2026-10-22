@@ -288,8 +288,9 @@ impl Repl {
                     },
                 });
             }
-            // 標準ライブラリのモジュールは使う入力でだけ読み込むので、この入力が読まなかったモジュールの item は、前の
-            // 位置のまま覚えておく (docs/spec/modules.md の「REPL のセッション」)
+            // 読み込むモジュールの集合は入力ごとに単調に増えるので、前の入力の関数と instance はこの入力の表にもある
+            // (docs/spec/modules.md の「REPL のセッション」)。表にないのは、この入力のプログラムが使わなかった組の
+            // instance の位置だけなので、前の位置のまま覚えておく
             for (key, positions) in std::mem::take(&mut self.uniform) {
                 uniform.entry(key).or_insert(positions);
             }
@@ -518,8 +519,9 @@ fn uniform_positions(
     positions
 }
 
-/// 前に受け付けた item のうち、一様な位置が変わった最初のものの名前。今の入力が読み込まなかった標準ライブラリの
-/// モジュールの item は、今のプログラムにないので比べない。
+/// 前に受け付けた item のうち、一様な位置が変わった最初のものの名前。受け付けた入力の import は後の入力にも残るので、
+/// 読み込むモジュールの集合は入力ごとに単調に増え、前に覚えた item は今のプログラムにもある
+/// (docs/spec/modules.md の「REPL のセッション」)。
 fn first_change<'a>(
     before: &'a BTreeMap<UniformKey, Positions>,
     now: &BTreeMap<UniformKey, Positions>,

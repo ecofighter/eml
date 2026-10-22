@@ -55,11 +55,14 @@ pub struct Loaded {
     pub files: SourceFiles,
     pub prelude: FileId,
     pub entry: FileId,
-    /// 番号が `ModuleId` で、`FileId` の番号とも一致する。0 が Prelude、1 が入口で、その後に import と修飾子をたどって
+    /// 番号が `ModuleId` で、`FileId` の番号とも一致する。0 が Prelude、1 が入口で、その後に import をたどって
     /// 見つけた順に、標準ライブラリのモジュールとユーザーのモジュールが並ぶ。セッション (`load_session`) では、1 から
     /// セッションのモジュールが入力の順に並び、最後の今の入力が入口である。その後に、見つけた順のモジュールが続く
     /// (docs/spec/modules.md の「標準ライブラリ」)。
     pub modules: Vec<LoadedModule>,
+    /// 埋め込んだ標準ライブラリのモジュールの短い名前 (`Fs`)。読み込まなかったものも含み、Prelude は除く。import の
+    /// ない修飾子の E1031 に、足す import を示すために使う (docs/spec/modules.md の「名前の解決」)。
+    pub std_names: Vec<String>,
 }
 
 /// REPL のセッションの1つの入力。`form` は読み方と表示のパスを決める (docs/spec/modules.md の「REPL のセッション」)。
@@ -122,7 +125,7 @@ pub fn load(
 
 /// 標準ライブラリを `(ファイル名, 本文)` の並びで受け取る `load`。テストが標準ライブラリを差し替えられるようにするため。
 /// 並びは `Prelude.em` を含める。extern の索引が Prelude の行を引くので、足りないと `def_map` が panic する。標準
-/// ライブラリのモジュールは、使うものだけを読み込む (docs/spec/modules.md の「標準ライブラリ」)。
+/// ライブラリのモジュールは、import したものだけを読み込む (docs/spec/modules.md の「標準ライブラリ」)。
 pub fn load_with_std(
     std: &[(&str, &str)],
     entry_path: &str,
@@ -272,39 +275,20 @@ impl<'a> Loader<'a> {
         Some(id)
     }
 
-    /// ユーザーのモジュールの構文に修飾子として現れる標準ライブラリのモジュールを読む。修飾子は名前解決より前に、
-    /// 位置によらず構文木の名前の経路のすべてから拾う。`Std.Fs` も数えるのは、E1031 の help が標準ライブラリの `Fs` を
-    /// 引くためである (docs/spec/modules.md の「標準ライブラリ」)。
-    fn load_qualified_std(&mut self, index: usize) {
-        let qualifiers: Vec<ModulePath> = self.modules[index]
-            .parse
-            .paths()
-            .filter_map(|path| {
-                let mut segments: Vec<String> = path
-                    .segments()
-                    .map(|segment| segment.text().to_string())
-                    .collect();
-                segments.pop();
-                (!segments.is_empty()).then_some(ModulePath(segments))
-            })
-            .collect();
-        for qualifier in qualifiers {
-            let path = std_relative(&qualifier).unwrap_or(qualifier);
-            self.std_module(&path);
-        }
-    }
-
     /// import をたどり終えて、読み込みの結果にする。
     fn finish(mut self, prelude: FileId, entry: FileId) -> (Loaded, Vec<Diagnostic>, ImportCache) {
         // 見つけたモジュールを `modules` の末尾に足すので、前から順に処理すれば幅優先になる
         let mut next = 0;
         while next < self.modules.len() {
             self.resolve_imports(next);
-            if !self.modules[next].origin.is_std() {
-                self.load_qualified_std(next);
-            }
             next += 1;
         }
+        let std_names = self
+            .std
+            .iter()
+            .filter(|&&(file, _)| file != PRELUDE_FILE)
+            .map(|&(file, _)| std_path(file).dotted())
+            .collect();
         let Loader {
             files,
             modules,
@@ -317,6 +301,7 @@ impl<'a> Loader<'a> {
             prelude,
             entry,
             modules,
+            std_names,
         };
         (loaded, diagnostics, read)
     }

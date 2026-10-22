@@ -1,0 +1,10 @@
+# 式の入力は import を書けないので、import していない標準ライブラリのモジュールの修飾子は E1031 になり、help は先に
+# 入力する import を示す。item の入力では、ファイルと同じく import を足す help になる。`import List` を入力した後は、
+# 後の入力から修飾子 `List` を使える (docs/spec/modules.md の「REPL のセッション」)
+> List.length [1, 2]
+> Std.List.length [1, 2]
+> n : Int
+. n = List.length [1, 2]
+.
+> import List
+> List.length [1, 2]

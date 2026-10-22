@@ -348,7 +348,7 @@ struct LoweredStd {
 /// 標準ライブラリを差し替えて読み込み、`def_map` と `lower` まで流す。
 fn lower_std(std: &[(&str, &str)], entry: &str, source: &dyn ModuleSource) -> LoweredStd {
     let (loaded, mut diagnostics) = eml_hir::load_with_std(std, ENTRY_PATH, entry, source);
-    let (map, stage) = eml_hir::def_map(&loaded.modules);
+    let (map, stage) = eml_hir::def_map(&loaded);
     diagnostics.extend(stage);
     let (program, stage) = eml_hir::lower(&map, &loaded.modules);
     diagnostics.extend(stage);
@@ -403,15 +403,16 @@ fn origins(loaded: &Loaded) -> Vec<ModuleOrigin> {
 
 #[test]
 fn std_modules_are_numbered_in_the_order_they_are_found() {
-    // import を先にたどり、その後で修飾子の標準ライブラリを読む (docs/spec/modules.md の「標準ライブラリ」)
+    // import を幅優先でたどった順で、標準ライブラリとユーザーのモジュールが混ざる (docs/spec/modules.md の「標準ライブラリ」)
     let (loaded, diagnostics) = eml_hir::load_with_std(
         &fake_std(),
         ENTRY_PATH,
         "import Util
+import Fs
 
 f : Unit -> String
 f () = Fs.greet ()",
-        &MemorySource(&[("Util.em", "")]),
+        &MemorySource(&[("Util.em", "import Std.List")]),
     );
     assert!(diagnostics.is_empty(), "{diagnostics:?}");
     assert_eq!(
@@ -421,9 +422,9 @@ f () = Fs.greet ()",
             "Main",
             "Util",
             "Std.Fs",
+            "Std.List",
             "Std.String",
-            "Std.Bytes",
-            "Std.List"
+            "Std.Bytes"
         ]
     );
     assert_eq!(
@@ -433,9 +434,9 @@ f () = Fs.greet ()",
             "test.em",
             "Util.em",
             "<std>/Fs.em",
+            "<std>/List.em",
             "<std>/String.em",
-            "<std>/Bytes.em",
-            "<std>/List.em"
+            "<std>/Bytes.em"
         ]
     );
     assert_eq!(
@@ -450,15 +451,15 @@ f () = Fs.greet ()",
             ModuleOrigin::Std
         ]
     );
-    assert_eq!(targets(&loaded, 1), [Some(2)]);
+    assert_eq!(targets(&loaded, 1), [Some(2), Some(3)]);
 }
 
 /// 修飾子の位置を確かめるための標準ライブラリ。`Shapes` は Prelude と `Fs` のほかに足すモジュールである。
 const SHAPES: &str = "pub data Shape = | Circle Int\n\npub data P = | P { n : Int }\n\npub effect Ask where\n  ask : Unit -> Int\n\npub class Size a where\n  size : a -> Int\n\npub x : Int\nx = 1\n";
 
 #[test]
-fn a_qualifier_anywhere_loads_the_std_module() {
-    // 修飾子は名前解決より前に、位置によらず構文木から拾う (docs/spec/modules.md の「標準ライブラリ」)
+fn a_qualifier_alone_does_not_load_the_std_module() {
+    // 読み込みは import だけをたどり、構文木の修飾子を見ない (docs/spec/modules.md の「標準ライブラリ」)
     let std = [
         ("Prelude.em", eml_hir::PRELUDE_SOURCE),
         ("Fs.em", eml_hir::STD[1].1),
@@ -476,51 +477,52 @@ fn a_qualifier_anywhere_loads_the_std_module() {
         "y : Unit -> Int\ny () = handle 1 with\n  | ctl Shapes.ask () k -> k 1",
     ] {
         let (loaded, _) = eml_hir::load_with_std(&std, ENTRY_PATH, entry, &MemorySource(&[]));
-        assert_eq!(names(&loaded), ["Prelude", "Main", "Std.Shapes"], "{entry}");
+        assert_eq!(names(&loaded), ["Prelude", "Main"], "{entry}");
     }
-    // 修飾子に現れない標準ライブラリのモジュールは読まない
     for entry in [
-        "y : Int\ny = 1",
-        "y : Int\ny = Report.x",
-        "y : Int\ny = shapes",
+        "import Shapes\n\ny : Int\ny = Shapes.x",
+        "import Std.Shapes as S",
     ] {
         let (loaded, _) = eml_hir::load_with_std(&std, ENTRY_PATH, entry, &MemorySource(&[]));
-        assert_eq!(names(&loaded), ["Prelude", "Main"], "{entry}");
+        assert_eq!(names(&loaded), ["Prelude", "Main", "Std.Shapes"], "{entry}");
     }
 }
 
 #[test]
-fn a_std_module_is_reached_by_its_short_name_without_an_import() {
-    let source = Recording::new(&[]);
-    let lowered = lower_std(
+fn a_qualifier_reads_neither_the_std_nor_the_user_root() {
+    let user = [("Fs.em", "pub greet : Unit -> String\ngreet () = \"user\"")];
+    let source = Recording::new(&user);
+    let (loaded, diagnostics) = eml_hir::load_with_std(
         &fake_std(),
+        ENTRY_PATH,
         "f : Unit -> String\nf () = Fs.greet ()",
         &source,
     );
-    assert_eq!(lowered.diagnostics, Vec::<String>::new());
-    assert_eq!(lowered.qualified_in("Main", "Fs", "greet"), Some("Std.Fs"));
-    assert_eq!(
-        names(&lowered.loaded),
-        [
-            "Prelude",
-            "Main",
-            "Std.Fs",
-            "Std.String",
-            "Std.Bytes",
-            "Std.List"
-        ]
-    );
+    assert!(diagnostics.is_empty(), "{diagnostics:?}");
+    assert_eq!(names(&loaded), ["Prelude", "Main"]);
     assert_eq!(source.read_paths(), Vec::<String>::new());
-    // 修飾子は1つの区切りで、正式な名前は修飾子にならない
-    let lowered = lower_std(
-        &fake_std(),
-        "f : Unit -> String\nf () = Std.Fs.greet ()",
-        &MemorySource(&[]),
-    );
-    assert_eq!(
-        lowered.diagnostics,
-        ["test.em 2:8 E1031 unknown module qualifier `Std.Fs`"]
-    );
+}
+
+#[test]
+fn a_std_module_without_an_import_is_an_unknown_qualifier_with_an_import_fix() {
+    // fix は shebang と先頭の注釈の後ろ、最初の item の前に import を挿入する。同じ修飾子の診断はどれも同じ fix を持つ
+    // (docs/spec/modules.md の「名前の解決」)
+    let entry = "#!/usr/bin/env eml\n-- head\n\nf : Unit -> Int\nf () = String.byte_length \"a\"\n\ng : Int\ng = String.byte_length \"b\"";
+    let lowered = eml_test_support::lower_files(entry, &[]);
+    insta::assert_snapshot!(full(lowered.files(), &lowered.diagnostics), @"
+    E1031 5:8 unknown module qualifier `String`
+      5:8 no import gives this qualifier
+      help: add `import String` to use the standard module `Std.String`
+    E1031 8:5 unknown module qualifier `String`
+      8:5 no import gives this qualifier
+      help: add `import String` to use the standard module `Std.String`
+    ");
+    insta::assert_snapshot!(eml_test_support::fixes(lowered.files(), &lowered.diagnostics), @r#"
+    E1031 5:8 add `import String`
+      4:1..4:1 "import String\n"
+    E1031 8:5 add `import String`
+      4:1..4:1 "import String\n"
+    "#);
 }
 
 #[test]
@@ -569,7 +571,8 @@ fn a_user_module_hiding_a_std_module_suggests_the_canonical_import() {
 }
 
 #[test]
-fn an_unimported_user_module_does_not_shadow_a_std_module() {
+fn an_unimported_module_is_neither_the_user_nor_the_std_one() {
+    // 名前解決はファイルを見ないので、根にユーザーの `Fs.em` があっても、help は標準ライブラリの import を示す
     let user = [("Fs.em", "pub greet : Unit -> String\ngreet () = \"user\"")];
     let source = Recording::new(&user);
     let lowered = lower_std(
@@ -577,28 +580,24 @@ fn an_unimported_user_module_does_not_shadow_a_std_module() {
         "f : Unit -> String\nf () = Fs.greet ()",
         &source,
     );
-    assert_eq!(lowered.diagnostics, Vec::<String>::new());
-    assert_eq!(lowered.qualified_in("Main", "Fs", "greet"), Some("Std.Fs"));
     assert_eq!(
-        names(&lowered.loaded),
-        [
-            "Prelude",
-            "Main",
-            "Std.Fs",
-            "Std.String",
-            "Std.Bytes",
-            "Std.List"
-        ]
+        lowered.diagnostics,
+        ["test.em 2:8 E1031 unknown module qualifier `Fs`"]
     );
+    assert_eq!(lowered.qualified_in("Main", "Fs", "greet"), None);
+    assert_eq!(names(&lowered.loaded), ["Prelude", "Main"]);
     assert_eq!(source.read_paths(), Vec::<String>::new());
 }
 
 #[test]
 fn a_qualifier_means_what_each_module_imports() {
-    // 入口の `import Fs` はユーザーの `Fs.em` を指すが、`Fs` を import しない `B` の `Fs` は標準ライブラリを指す
+    // 入口の `import Fs` はユーザーの `Fs.em` を指すが、`B` の `import Std.Fs` は標準ライブラリを指す
     let modules = [
         ("Fs.em", "pub greet : Unit -> String\ngreet () = \"user\""),
-        ("B.em", "pub g : Unit -> String\ng () = Fs.greet ()"),
+        (
+            "B.em",
+            "import Std.Fs\n\npub g : Unit -> String\ng () = Fs.greet ()",
+        ),
     ];
     let lowered = lower_std(&fake_std(), "import Fs\nimport B", &MemorySource(&modules));
     assert_eq!(lowered.diagnostics, Vec::<String>::new());
@@ -696,12 +695,12 @@ fn private_names_of_a_std_module_are_undefined() {
     // 今の Prelude の規則を、標準ライブラリのモジュールすべてに広げる (E1029 にしない)
     let lowered = lower_std(
         &fake_std(),
-        "f : Unit -> String\nf () = Fs.hidden ()",
+        "import Fs\n\nf : Unit -> String\nf () = Fs.hidden ()",
         &MemorySource(&[]),
     );
     assert_eq!(
         lowered.diagnostics,
-        ["test.em 2:8 E1001 cannot find value `hidden` in module `Std.Fs`"]
+        ["test.em 4:8 E1001 cannot find value `hidden` in module `Std.Fs`"]
     );
     let lowered = lower_std(&fake_std(), "import Std.Fs (hidden)", &MemorySource(&[]));
     assert_eq!(

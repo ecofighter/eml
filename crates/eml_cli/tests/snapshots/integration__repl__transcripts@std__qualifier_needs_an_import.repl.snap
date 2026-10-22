@@ -1,0 +1,24 @@
+---
+source: crates/eml_cli/tests/repl.rs
+expression: checked.render()
+input_file: crates/eml_cli/tests/repl/std/qualifier_needs_an_import.repl
+---
+> List.length [1, 2]
+E1031 <input 1> 1:1 unknown module qualifier `List`
+  <input 1> 1:1 no import gives this qualifier
+  help: enter `import List` as an input first
+> Std.List.length [1, 2]
+E1031 <input 2> 1:1 unknown module qualifier `Std.List`
+  <input 2> 1:1 no import gives this qualifier
+  help: enter `import Std.List` as an input first, then write `List.length`
+> n : Int
+. n = List.length [1, 2]
+.
+E1031 <input 3> 2:5 unknown module qualifier `List`
+  <input 3> 2:5 no import gives this qualifier
+  help: add `import List` to use the standard module `Std.List`
+> import List
+> List.length [1, 2]
+2
+--- close ---
+no leaks
