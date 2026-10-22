@@ -30,6 +30,10 @@ fn check_with_std_extras(prelude_extra: &str, file_in_extra: &str, text: &str) -
             eml_test_support::std_module("String.em"),
             eml_test_support::std_module("Bytes.em"),
             eml_test_support::std_module("List.em"),
+            eml_test_support::std_module("Char.em"),
+            eml_test_support::std_module("Byte.em"),
+            eml_test_support::std_module("Iter.em"),
+            eml_test_support::std_module("Yield.em"),
         ],
         text,
     );

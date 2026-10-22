@@ -291,7 +291,7 @@ static FAKE_FS: LazyLock<String> = LazyLock::new(|| {
 });
 
 fn fake_std() -> Vec<(&'static str, &'static str)> {
-    let [file_in, string, bytes, list] = fs_imports();
+    let [file_in, string, bytes, list, char, byte, iter, yield_] = fs_imports();
     vec![
         ("Prelude.em", eml_hir::PRELUDE_SOURCE),
         ("Fs.em", FAKE_FS.as_str()),
@@ -299,17 +299,26 @@ fn fake_std() -> Vec<(&'static str, &'static str)> {
         string,
         bytes,
         list,
+        char,
+        byte,
+        iter,
+        yield_,
     ]
 }
 
 /// 本物の `Fs` が読む標準ライブラリのモジュール。`Fs` は `String` と `FileIn` を import し、`FileIn` は `String` と `Bytes` を、
-/// `String` は `List` を import するので、本物の `Fs` を使う偽の木にはこの4つも要る。
-fn fs_imports() -> [(&'static str, &'static str); 4] {
+/// `String` は `List`、`Char`、`Iter`、`Yield` を、`Char` は `Byte` を、`Iter` は `List` と `Yield` を import するので、
+/// 本物の `Fs` を使う偽の木にはこの8つも要る。
+fn fs_imports() -> [(&'static str, &'static str); 8] {
     [
         std_module("FileIn.em"),
         std_module("String.em"),
         std_module("Bytes.em"),
         std_module("List.em"),
+        std_module("Char.em"),
+        std_module("Byte.em"),
+        std_module("Iter.em"),
+        std_module("Yield.em"),
     ]
 }
 
@@ -427,7 +436,11 @@ f () = Fs.greet ()",
             "Std.List",
             "Std.String",
             "Std.FileIn",
-            "Std.Bytes"
+            "Std.Char",
+            "Std.Iter",
+            "Std.Yield",
+            "Std.Bytes",
+            "Std.Byte"
         ]
     );
     assert_eq!(
@@ -440,7 +453,11 @@ f () = Fs.greet ()",
             "<std>/List.em",
             "<std>/String.em",
             "<std>/FileIn.em",
-            "<std>/Bytes.em"
+            "<std>/Char.em",
+            "<std>/Iter.em",
+            "<std>/Yield.em",
+            "<std>/Bytes.em",
+            "<std>/Byte.em"
         ]
     );
     assert_eq!(
@@ -449,6 +466,10 @@ f () = Fs.greet ()",
             ModuleOrigin::Std,
             ModuleOrigin::User,
             ModuleOrigin::User,
+            ModuleOrigin::Std,
+            ModuleOrigin::Std,
+            ModuleOrigin::Std,
+            ModuleOrigin::Std,
             ModuleOrigin::Std,
             ModuleOrigin::Std,
             ModuleOrigin::Std,
@@ -547,7 +568,11 @@ fn an_import_prefers_the_user_module_of_the_same_name() {
             "Std.String",
             "Std.FileIn",
             "Std.List",
-            "Std.Bytes"
+            "Std.Char",
+            "Std.Iter",
+            "Std.Yield",
+            "Std.Bytes",
+            "Std.Byte"
         ]
     );
     assert_eq!(lowered.qualified_in("Main", "Fs", "greet"), Some("Fs"));
@@ -618,7 +643,11 @@ fn a_qualifier_means_what_each_module_imports() {
             "Std.String",
             "Std.FileIn",
             "Std.List",
-            "Std.Bytes"
+            "Std.Char",
+            "Std.Iter",
+            "Std.Yield",
+            "Std.Bytes",
+            "Std.Byte"
         ]
     );
     assert_eq!(lowered.qualified_in("Main", "Fs", "greet"), Some("Fs"));
@@ -644,7 +673,11 @@ fn an_import_falls_back_to_the_std_module_when_the_file_is_missing() {
             "Std.String",
             "Std.FileIn",
             "Std.List",
-            "Std.Bytes"
+            "Std.Char",
+            "Std.Iter",
+            "Std.Yield",
+            "Std.Bytes",
+            "Std.Byte"
         ]
     );
     assert_eq!(targets(&loaded, 1), [Some(2), Some(2)]);
@@ -743,7 +776,7 @@ const FS_HEAD_LINES: usize = 6;
 
 #[test]
 fn a_std_module_reaches_another_only_through_an_import() {
-    let [file_in, string, bytes, list] = fs_imports();
+    let [file_in, string, bytes, list, char, byte, iter, yield_] = fs_imports();
     let other = "pub x : Int\nx = 1\n";
     let without = [
         ("Prelude.em", eml_hir::PRELUDE_SOURCE),
@@ -753,6 +786,10 @@ fn a_std_module_reaches_another_only_through_an_import() {
         string,
         bytes,
         list,
+        char,
+        byte,
+        iter,
+        yield_,
     ];
     // 入口が `Fs` を使わないと、標準ライブラリの `Fs` を読まない
     let lowered = lower_std(&without, "import Std.Fs", &MemorySource(&[]));
@@ -771,6 +808,10 @@ fn a_std_module_reaches_another_only_through_an_import() {
         string,
         bytes,
         list,
+        char,
+        byte,
+        iter,
+        yield_,
     ];
     // 標準ライブラリのモジュールの import は、ユーザーの根を読まない
     let source = Recording::new(&[("Other.em", "")]);
@@ -786,7 +827,11 @@ fn a_std_module_reaches_another_only_through_an_import() {
             "Std.FileIn",
             "Std.Other",
             "Std.List",
-            "Std.Bytes"
+            "Std.Char",
+            "Std.Iter",
+            "Std.Yield",
+            "Std.Bytes",
+            "Std.Byte"
         ]
     );
     assert_eq!(targets(&lowered.loaded, 2), [Some(3), Some(4), Some(5)]);
@@ -795,7 +840,7 @@ fn a_std_module_reaches_another_only_through_an_import() {
 
 #[test]
 fn a_std_module_reaches_another_by_its_canonical_name_too() {
-    let [file_in, string, bytes, list] = fs_imports();
+    let [file_in, string, bytes, list, char, byte, iter, yield_] = fs_imports();
     let other = "pub x : Int\nx = 1\n";
     let std = [
         ("Prelude.em", eml_hir::PRELUDE_SOURCE),
@@ -808,6 +853,10 @@ fn a_std_module_reaches_another_by_its_canonical_name_too() {
         string,
         bytes,
         list,
+        char,
+        byte,
+        iter,
+        yield_,
     ];
     let source = Recording::new(&[]);
     let lowered = lower_std(&std, "import Std.Fs", &source);
@@ -818,7 +867,7 @@ fn a_std_module_reaches_another_by_its_canonical_name_too() {
 
 #[test]
 fn a_std_module_cannot_import_the_prelude() {
-    let [file_in, string, bytes, list] = fs_imports();
+    let [file_in, string, bytes, list, char, byte, iter, yield_] = fs_imports();
     // 標準ライブラリのモジュールも Prelude を暗黙に取り込むので、書いた `import Prelude` は誤りである
     let std = [
         ("Prelude.em", eml_hir::PRELUDE_SOURCE),
@@ -830,6 +879,10 @@ fn a_std_module_cannot_import_the_prelude() {
         string,
         bytes,
         list,
+        char,
+        byte,
+        iter,
+        yield_,
     ];
     let (loaded, mut diagnostics) =
         eml_hir::load_with_std(&std, ENTRY_PATH, "import Std.Fs", &MemorySource(&[]));
@@ -863,7 +916,11 @@ fn a_std_directory_in_the_user_root_is_never_read() {
             "Std.String",
             "Std.FileIn",
             "Std.List",
-            "Std.Bytes"
+            "Std.Char",
+            "Std.Iter",
+            "Std.Yield",
+            "Std.Bytes",
+            "Std.Byte"
         ]
     );
     assert_eq!(loaded.files.text(loaded.prelude), eml_hir::PRELUDE_SOURCE);

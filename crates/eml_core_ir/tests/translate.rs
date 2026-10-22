@@ -3157,6 +3157,7 @@ fn try_io_handles_the_io_effect() {
     [
         "effect Prelude.IO { never io_failed(enum, obj) -> never }",
         "effect Prelude.Panic { never panicked(obj) -> never }",
+        "effect Std.Yield.Yield { yield(tobj poly) -> unit }",
     ]
     "#);
     assert!(shown.contains("handle Prelude.IO("), "{shown}");

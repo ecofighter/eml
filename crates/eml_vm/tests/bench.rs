@@ -859,7 +859,7 @@ fn mandelbrot() {
         allocations: 2,
         reuses: 0,
         peak_objects: 2,
-        peak_stack: 43,
+        peak_stack: 39,
     }
     ");
 }
@@ -901,7 +901,7 @@ fn spectral_norm() {
         allocations: 4043,
         reuses: 0,
         peak_objects: 304,
-        peak_stack: 53,
+        peak_stack: 51,
     }
     ");
 }
@@ -922,7 +922,7 @@ fn sieve_var() {
         allocations: 3,
         reuses: 0,
         peak_objects: 2,
-        peak_stack: 30,
+        peak_stack: 26,
     }
     ");
 }
@@ -1120,7 +1120,7 @@ fn unwind_points() {
     empty: 0
     ep_float: 15
     fannkuch_by_hand: 39
-    fannkuch_var: 81
+    fannkuch_var: 83
     fib: 7
     fold_state: 4
     iter_generate: 5
@@ -1128,8 +1128,8 @@ fn unwind_points() {
     iter_pipeline_by_hand: 11
     list: 9
     loop: 4
-    mandelbrot: 27
-    nbody: 91
+    mandelbrot: 29
+    nbody: 93
     orders: 12
     orders_by_hand: 12
     push_fold: 4
@@ -1138,8 +1138,8 @@ fn unwind_points() {
     records: 9
     records_wide: 13
     sieve_by_hand: 14
-    sieve_var: 34
-    spectral_norm: 71
+    sieve_var: 36
+    spectral_norm: 73
     state: 4
     state_loop: 4
     state_loop_by_hand: 4
@@ -1153,7 +1153,7 @@ fn unwind_points() {
     upsert_by_hand: 23
     scripts/wc: 46
     scripts/grep: 61
-    scripts/logstat: 102
+    scripts/logstat: 105
     scripts/csv2jsonl: 109
     scripts/deploy: 109
     ");

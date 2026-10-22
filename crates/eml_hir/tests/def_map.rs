@@ -585,6 +585,10 @@ fn a_std_name_defined_by_a_user_module_is_qualified_by_the_canonical_name() {
         eml_test_support::std_module("String.em"),
         eml_test_support::std_module("Bytes.em"),
         eml_test_support::std_module("List.em"),
+        eml_test_support::std_module("Char.em"),
+        eml_test_support::std_module("Byte.em"),
+        eml_test_support::std_module("Iter.em"),
+        eml_test_support::std_module("Yield.em"),
     ];
     // 標準ライブラリの `Fs` は、使うときだけ読み込む
     let lowered = eml_test_support::lower_with_std(
@@ -604,11 +608,14 @@ fn a_std_name_defined_by_a_user_module_is_qualified_by_the_canonical_name() {
             "type Std.Fs.Only -> Only",
             "type Std.Fs.Secret -> Std.Fs.Secret",
             "type Std.FileIn.FileIn -> FileIn",
+            "type Std.Iter.Iter -> Iter",
+            "effect Std.Yield.Yield -> Yield",
             "constructor Main.B -> B",
             "constructor Main.S -> S",
             "constructor Std.Fs.A -> A",
             "constructor Std.Fs.O -> O",
             "constructor Std.Fs.Z -> Z",
+            "constructor Std.Iter.Iter -> Iter",
         ]
     );
 }

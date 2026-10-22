@@ -197,7 +197,11 @@ fn imports_of_inputs_follow_the_inputs_in_the_order_they_are_found() {
             "Std.String",
             "Std.FileIn",
             "Std.List",
-            "Std.Bytes"
+            "Std.Char",
+            "Std.Iter",
+            "Std.Yield",
+            "Std.Bytes",
+            "Std.Byte"
         ]
     );
 }
@@ -252,7 +256,11 @@ fn a_cached_fallback_to_the_standard_library_stays() {
             "Std.String",
             "Std.FileIn",
             "Std.List",
-            "Std.Bytes"
+            "Std.Char",
+            "Std.Iter",
+            "Std.Yield",
+            "Std.Bytes",
+            "Std.Byte"
         ]
     );
     assert_eq!(

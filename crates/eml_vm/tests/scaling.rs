@@ -118,12 +118,12 @@ fn reading_bytes_of_a_string_does_not_dup_per_byte() {
     // 引数を消費する行に戻ると、バイトの数だけ増えて落ちる (docs/spec/lir.md の「extern の借用」)
     let program = |n: usize| {
         format!(
-            "import String\ngrow : Int -> String -> <Panic> String\n\
+            "import Byte\nimport String\ngrow : Int -> String -> <Panic> String\n\
              grow n acc = if n == 0 then acc else grow (n - 1) (acc ++ \"x\")\n\
              \n\
              sum_bytes : String -> Int -> Int -> Int -> <Panic> Int\n\
              sum_bytes s i n acc =\n\
-             \x20 if i == n then acc else sum_bytes s (i + 1) n (acc + String.byte_at i s)\n\
+             \x20 if i == n then acc else sum_bytes s (i + 1) n (acc + Byte.to_int (String.byte_at i s))\n\
              \n\
              main : Unit -> <IO, Panic> Unit\n\
              main () =\n\
@@ -137,6 +137,28 @@ fn reading_bytes_of_a_string_does_not_dup_per_byte() {
         stats(&program(n), &format!("{sum}\n")).rc_increments
     };
     assert_eq!(increments(1000), increments(2000));
+}
+
+#[test]
+fn pushing_chars_to_a_unique_string_grows_it_in_place() {
+    // 一意な左辺に `String.push` で足すときは、容量が尽きたときだけ倍にして写す。写すバイトの合計は長さにほぼ比例し、
+    // `push` ごとの `dup` はない (docs/spec/object-model.md の「文字列の操作」)
+    let program = |n: usize| {
+        format!(
+            "import String\ngrow : Int -> String -> <Panic> String\n\
+             grow n acc = if n == 0 then acc else grow (n - 1) (String.push '日' acc)\n\
+             \n\
+             main : Unit -> <IO, Panic> Unit\n\
+             main () = println (show (String.byte_length (grow {n} \"\")))\n"
+        )
+    };
+    let run = |n: usize| stats(&program(n), &format!("{}\n", 3 * n));
+    let (small, large) = (run(1000), run(2000));
+    assert!(
+        large.string_bytes_copied <= 2 * small.string_bytes_copied + 8,
+        "{small:?} {large:?}"
+    );
+    assert_eq!(small.rc_increments, large.rc_increments);
 }
 
 /// `empty` から一意な左辺に `push` で n バイト足し、長さを出力するプログラム。

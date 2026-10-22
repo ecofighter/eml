@@ -6,6 +6,7 @@ import Fail (Fail(..))
 import Env
 import FileIn
 import Fs
+import Byte
 import List
 import String
 
@@ -16,12 +17,12 @@ data Row =
 -- `at` 以降で最初の `byte` の位置。なければ `n` である
 find_byte : Int -> Int -> String -> Int -> <Panic> Int
 find_byte byte at text n =
-  if at >= n || String.byte_at at text == byte then at else find_byte byte (at + 1) text n
+  if at >= n || byte_at at text == byte then at else find_byte byte (at + 1) text n
 
 count_byte : Int -> String -> <Panic> Int
 count_byte byte s =
   let n = String.byte_length s
-  let go i acc = if i >= n then acc else go (i + 1) (if String.byte_at i s == byte then acc + 1 else acc)
+  let go i acc = if i >= n then acc else go (i + 1) (if byte_at i s == byte then acc + 1 else acc)
   go 0 0
 
 -- 入力を行ごとに流す。空の行は飛ばす。読み取りの状態 (行の始め、欄の中、引用符の中、引用符の閉じた後) を
@@ -33,16 +34,16 @@ rows text =
   let n = String.byte_length text
   let row_start at line =
     if at >= n then ()
-    else if String.byte_at at text == 10 then row_start (at + 1) (line + 1)
-    else if String.byte_at at text == 13 && at + 1 < n && String.byte_at (at + 1) text == 10 then
+    else if byte_at at text == 10 then row_start (at + 1) (line + 1)
+    else if byte_at at text == 13 && at + 1 < n && byte_at (at + 1) text == 10 then
       row_start (at + 2) (line + 1)
     else field at line line Nil
   and field at row_line line fields =
-    if at < n && String.byte_at at text == 34 then in_quotes (at + 1) "" row_line line fields
+    if at < n && byte_at at text == 34 then in_quotes (at + 1) "" row_line line fields
     else
       let stop = unquoted_end at text n
       let fields = without_cr (String.slice at stop text) :: fields
-      if stop < n && String.byte_at stop text == 44 then field (stop + 1) row_line line fields
+      if stop < n && byte_at stop text == 44 then field (stop + 1) row_line line fields
       else
         yield (Row { line = row_line, fields = List.reverse fields })
         row_start (if stop < n then stop + 1 else n) (line + 1)
@@ -53,16 +54,16 @@ rows text =
     else
       let piece = String.slice at close text
       let line = line + count_byte 10 piece
-      if close + 1 < n && String.byte_at (close + 1) text == 34 then
+      if close + 1 < n && byte_at (close + 1) text == 34 then
         in_quotes (close + 2) ((acc ++ piece) ++ "\"") row_line line fields
       else after_quote (close + 1) row_line line ((acc ++ piece) :: fields)
   and after_quote at row_line line fields =
-    if at < n && String.byte_at at text == 44 then field (at + 1) row_line line fields
+    if at < n && byte_at at text == 44 then field (at + 1) row_line line fields
     else
       let next =
         if at >= n then n
-        else if String.byte_at at text == 10 then at + 1
-        else if String.byte_at at text == 13 && at + 1 < n && String.byte_at (at + 1) text == 10 then at + 2
+        else if byte_at at text == 10 then at + 1
+        else if byte_at at text == 13 && at + 1 < n && byte_at (at + 1) text == 10 then at + 2
         else fail (1, "line \{line}: unexpected text after a closing quote")
       yield (Row { line = row_line, fields = List.reverse fields })
       row_start next (line + 1)
@@ -73,13 +74,13 @@ unquoted_end : Int -> String -> Int -> <Panic> Int
 unquoted_end at text n =
   if at >= n then n
   else
-    let b = String.byte_at at text
+    let b = byte_at at text
     if b == 44 || b == 10 then at else unquoted_end (at + 1) text n
 
 without_cr : String -> <Panic> String
 without_cr s =
   let n = String.byte_length s
-  if n > 0 && String.byte_at (n - 1) s == 13 then String.slice 0 (n - 1) s else s
+  if n > 0 && byte_at (n - 1) s == 13 then String.slice 0 (n - 1) s else s
 
 -- `json.dumps` と同じエスケープで、JSON の文字列にする
 json_string : String -> <Panic> String
@@ -89,7 +90,7 @@ json_string s =
   let go start i acc =
     if i >= n then (acc ++ String.slice start n s) ++ "\""
     else
-      let b = String.byte_at i s
+      let b = byte_at i s
       if b == 34 || b == 92 || b < 32 then
         go (i + 1) (i + 1) ((acc ++ String.slice start i s) ++ escape b)
       else go start (i + 1) acc
@@ -202,3 +203,7 @@ main () =
     | _ ->
       eprintln "usage: csv2jsonl --columns NAME,NAME... INPUT OUTPUT"
       exit 2
+
+-- 位置 `i` のバイトを `Int` で返す
+byte_at : Int -> String -> <Panic> Int
+byte_at i s = Byte.to_int (String.byte_at i s)

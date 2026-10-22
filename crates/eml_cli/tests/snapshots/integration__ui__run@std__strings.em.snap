@@ -1,11 +1,11 @@
 ---
 source: crates/eml_cli/tests/ui.rs
-expression: "format!(\"--- stdout ---\\n{stdout}--- stderr ---\\n{stderr}{written}\")"
+expression: "format!(\"--- stdout ---\\n{stdout}--- stderr ---\\n{diagnostics}{stderr}{written}{exit}\")"
 input_file: tests/ui/run/std/strings.em
 ---
 --- stdout ---
 5
-230
+230u8
 日
 Some 4
 None

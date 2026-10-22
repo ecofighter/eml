@@ -2,6 +2,7 @@
 -- 書かないときは標準入力を読む。数える部分はエフェクトを使わずに書く
 import Env
 import FileIn
+import Byte
 import List
 import Stdin
 import String
@@ -35,7 +36,7 @@ count text =
     if i >= n then
       Counts { lines = lines, words = if in_word then words + 1 else words, bytes = n }
     else
-      let b = String.byte_at i text
+      let b = byte_at i text
       if is_space b then
         go (i + 1) (if b == 10 then lines + 1 else lines) (if in_word then words + 1 else words) False
       else go (i + 1) lines words True
@@ -101,3 +102,7 @@ main () =
           let (total, failed) = count_files shown names
           if List.length names >= 2 then println (format shown total (Some "total")) else ()
           if failed then exit 1 else ()
+
+-- 位置 `i` のバイトを `Int` で返す
+byte_at : Int -> String -> <Panic> Int
+byte_at i s = Byte.to_int (String.byte_at i s)

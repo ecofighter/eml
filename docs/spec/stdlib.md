@@ -156,11 +156,18 @@ pub while : (Unit -> <e> Bool) -> (Unit -> <e> Unit) -> <e> Unit
 | 関数 | 型 | 実装 |
 |---|---|---|
 | `byte_length` | `String -> Int` | extern |
-| `byte_at` | `Int -> String -> <Panic> Int` | extern |
+| `byte_at` | `Int -> String -> <Panic> Byte` | extern |
 | `char_at` | `Int -> String -> <Panic> Char` | extern |
 | `slice` | `Int -> Int -> String -> <Panic> String` | extern |
 | `push` | `Char -> String -> String` | extern |
 | `decode` | `Bytes -> <Panic> String` | extern |
+| `next` | `Int -> String -> <Panic> Int` | eml |
+| `of_char` | `Char -> String` | eml |
+| `of_chars` | `List Char -> String` | eml |
+| `to_chars` | `String -> <Panic> List Char` | eml |
+| `fold` | `(b -> Char -> <e> b) -> b -> String -> <Panic \| e> b` | eml |
+| `each` | `(Char -> <e> Unit) -> String -> <Panic \| e> Unit` | eml |
+| `chars` | `String -> Iter <Panic \| e> Char` | eml |
 | `from_utf8` | `Bytes -> Option String` | eml |
 | `find` | `String -> String -> <Panic> Option Int` | eml |
 | `contains`、`starts_with`、`ends_with` | `String -> String -> <Panic> Bool` | eml |
@@ -171,20 +178,25 @@ pub while : (Unit -> <e> Bool) -> (Unit -> <e> Unit) -> <e> Unit
 | `trim_line_end` | `String -> <Panic> String` | eml |
 | `to_int` | `String -> <Panic> Option Int` | eml |
 
+- 位置はどれも UTF-8 のバイトの位置の `Int` で、位置専用の型はない。文字の境界でない位置は、`char_at` と `slice` が `Panic` で断る
 - `byte_length s` は UTF-8 のバイトの数である
-- `byte_at i s` は位置 `i` のバイト (0〜255) である。`0 <= i < byte_length s` でなければ `Panic` を起こす
-- `char_at i s` は、位置 `i` から始まる文字である。`0 <= i < byte_length s` でないときと、`i` が文字の境界でないときは `Panic` を起こす。次の文字の位置は `i + Char.utf8_length c` である
+- `byte_at i s` は位置 `i` のバイト (0〜255) を `Byte` で返す。`0 <= i < byte_length s` でなければ `Panic` を起こす
+- `char_at i s` は、位置 `i` から始まる文字である。`0 <= i < byte_length s` でないときと、`i` が文字の境界でないときは `Panic` を起こす。次の文字の位置は `next` で求める
+- `next i s` は、位置 `i` の文字の次の位置で、`i + Char.utf8_length (char_at i s)` である
 - `push c s` は、`s` の後ろに `c` の UTF-8 を足した文字列である。`s` は消費する。`s` が一意ならその場で伸ばし、そうでなければ写してから足す
 - `slice start end s` は、位置 `start` から `end` の手前までの部分の文字列である。`0 <= start <= end <= byte_length s` でないときと、`start` か `end` が文字の境界でないときは `Panic` を起こす。文字の境界は、文字列の端か、UTF-8 の続きのバイト (`0x80`〜`0xBF`) でない位置である
+- `of_char c` は `c` だけの文字列で、`of_chars cs` は `cs` の文字を順に `push` した文字列である。`to_chars s` は `s` の文字のリストである
+- `fold f init s` は、先頭から文字ごとに `char_at` で読み、`f` を呼んでたたむ。`each f s` は文字ごとに `f` を呼ぶ。`chars s` は文字を順に渡す `Iter` で、`Iter.take` などでつなげる。row の `Panic` は、`s` の読みが `Panic` を起こしうるためである
+- 走査の方針は、区切りがすべて ASCII なら `byte_at` と `'x'u8` のリテラルで書き、コードポイントが要る所だけ `char_at` で読む。UTF-8 の続きのバイトは ASCII と重ならないので、バイトで区切っても文字を割らない。ネイティブ化では、`byte_at` の読みの展開が最も軽い
 - `find needle s` は、`needle` が最初に現れる位置である。空の `needle` は `Some 0` である
 - `contains needle s`、`starts_with prefix s`、`ends_with suffix s` は、名前のとおりの判定である。バイトで比べるので、文字の境界でない位置で比べても誤りにならない
 - `split sep s` は、`sep` で区切った部分を順に返す。Rust の `str::split` と同じく、続いた区切りは空の部分を作り、`split "," ""` は `[""]` である。空の `sep` は区切らず `[s]` を返す
 - `lines s` は、Rust の `str::lines` と同じである。行の終わりは `\n` か `\r\n` で、最後の行の終わりは省ける。`lines "a\r\nb\n"` は `["a", "b"]`、`lines "a\r"` は `["a\r"]`、`lines ""` は `[]` である
 - `join sep xs` は、要素の間に `sep` を挟んでつなぐ
-- `trim s` は、両端の ASCII の空白 (空白、`\t`、`\n`、`\x0B`、`\x0C`、`\r`) を除く。Unicode の空白は除かない
+- `trim s` は、`byte_at` で見て、両端の ASCII の空白 (空白、`\t`、`\n`、`\x0B`、`\x0C`、`\r`) を除く。Unicode の空白は除かない
 - `trim_line_end s` は、最後の行の終わり (`\n` か `\r\n`) を1つ除く。行の終わりで終わらなければ `s` をそのまま返し、`trim_line_end ""` は `""` である。`Stdin.read_line` と `FileIn.read_line` が、読んだ行の終わりを除くのに使う
 - `to_int s` は、Rust の `i64::from_str` と同じ形を読む。省略できる符号 `+` か `-` の後に、1つ以上の ASCII の数字が続く形である。空白は許さない。範囲を超えれば `None` で、`"-9223372036854775808"` は読める
-- `byte_length`、`push`、`join`、`from_utf8` のほかの関数は、`byte_at`、`slice`、std の中だけの `find_from` か算術を使うので、型の上では `Panic` を起こしうる
+- `byte_length`、`push`、`join`、`from_utf8`、`of_char`、`of_chars` のほかの関数は、`Panic` を起こす行 (`byte_at`、`char_at`、`slice`、`decode`、std の中だけの `find_from`) か算術を使うので、型の上では `Panic` を起こしうる
 - 部分文字列の照合は、`needle` の先頭のバイトを8バイトずつまとめて探し、見つけた位置ごとに残りを比べる。最悪の場合は、`needle` の長さと探す範囲の長さの積に比例する時間がかかる ([オブジェクトモデル](object-model.md) の「extern」)
 
 ### `Bytes` との変換
@@ -246,7 +258,7 @@ pub while : (Unit -> <e> Bool) -> (Unit -> <e> Unit) -> <e> Unit
 - `of_int n` は、`n` がスカラー値 (0 から 0xD7FF か 0xE000 から 0x10FFFF) のときにその `Char` を返す。ほかの値 (負の数、サロゲート、0x10FFFF を超える値) では `Panic` を起こす。文言は ``int `55296` is not a Unicode scalar value`` である (下の「実行時エラー」)
 - `Option` ではなく `Panic` にするのは `Float.truncate` と合わせるためで、extern が `Option` を作れないためでもある
 - `is_ascii` は U+0000 から U+007F の文字で成り立つ。`is_ascii_digit` は `'0'` から `'9'`、`is_ascii_upper` は `'A'` から `'Z'`、`is_ascii_lower` は `'a'` から `'z'` で成り立つ。`is_ascii_alpha` は upper か lower、`is_ascii_alphanumeric` は alpha か digit で成り立つ
-- `is_ascii_space` は `' '` と、`'\t'` から `'\r'` (U+0009 から U+000D) で成り立つ。`Std.String` の空白の判定と同じ範囲である
+- `is_ascii_space` は `' '` と、`'\t'` から `'\r'` (U+0009 から U+000D) で成り立つ。`String.trim` と同じ範囲である
 - どの判定も、ASCII 以外の文字では偽である
 - `of_byte b` は `b` を Latin-1 の文字として読む。0 から 255 はどれもスカラー値なので、失敗しない。`Byte` と `Char` は同じ語なので、実行時には何もしない
 - `of_byte` は UTF-8 をデコードしない。文字列のバイトを渡すと、先頭のバイトや続きのバイトは、別の Latin-1 の文字になる。文字列から文字を読む関数は `String.char_at` である

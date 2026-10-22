@@ -1,0 +1,19 @@
+---
+source: crates/eml_cli/tests/ui.rs
+expression: "format!(\"--- stdout ---\\n{stdout}--- stderr ---\\n{diagnostics}{stderr}{written}{exit}\")"
+input_file: tests/ui/run/std/string_chars.em
+---
+--- stdout ---
+'日'
+4
+3
+'a'
+'日'
+['h', 'e']
+['a', '日', 'b']
+hé日
+日
+ééé
+Err "string index 2 is not on a character boundary"
+Err "string index 4 is out of range for length 4"
+--- stderr ---

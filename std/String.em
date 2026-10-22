@@ -1,10 +1,13 @@
 -- 文字列の関数 (docs/spec/stdlib.md)。位置は UTF-8 のバイトの位置である。extern は `byte_length`、`byte_at`、
 -- `char_at`、`slice`、`push`、`find_from`、`decode` だけで、ほかは eml で書く。
 import List
+import Char
+import Iter (Iter(..))
+import Yield (Yield(..))
 
 pub extern byte_length : String -> Int
-pub extern byte_at : Int -> String -> <Panic> Int
--- 位置から始まる文字を読む。次の文字の位置は `i + Char.utf8_length c` である
+pub extern byte_at : Int -> String -> <Panic> Byte
+-- 位置から始まる文字を読む。次の文字の位置は `next` で求める
 pub extern char_at : Int -> String -> <Panic> Char
 pub extern slice : Int -> Int -> String -> <Panic> String
 -- `s` を消費する。一意ならその場で伸ばす
@@ -21,6 +24,36 @@ from_utf8 b =
   match try_panic (fn () -> decode b) with
     | Ok s -> Some s
     | Err _ -> None
+
+-- 位置 `i` の文字の次の位置。`i` が文字の境界でなければ `Panic` である
+pub next : Int -> String -> <Panic> Int
+next i s = i + Char.utf8_length (char_at i s)
+
+pub of_char : Char -> String
+of_char c = display c
+
+pub of_chars : List Char -> String
+of_chars cs = List.fold (fn acc c -> push c acc) "" cs
+
+-- 先頭から順に `f` を呼んでたたむ。文字ごとに `char_at` で読み、幅だけ進む
+pub fold : (b -> Char -> <e> b) -> b -> String -> <Panic | e> b
+fold f init s =
+  let len = byte_length s
+  let go acc i =
+    if i >= len then acc
+    else
+      let c = char_at i s
+      go (f acc c) (i + Char.utf8_length c)
+  go init 0
+
+pub each : (Char -> <e> Unit) -> String -> <Panic | e> Unit
+each f s = fold (fn _ c -> f c) () s
+
+pub to_chars : String -> <Panic> List Char
+to_chars s = List.reverse (fold (fn acc c -> c :: acc) Nil s)
+
+pub chars : String -> Iter <Panic | e> Char
+chars s = Iter.generate (fn () -> each yield s)
 
 pub find : String -> String -> <Panic> Option Int
 find needle s =
@@ -72,15 +105,15 @@ lines s =
 pub trim_line_end : String -> <Panic> String
 trim_line_end line =
   let n = byte_length line
-  if n == 0 || byte_at (n - 1) line != 10 then line
-  else if n >= 2 && byte_at (n - 2) line == 13 then slice 0 (n - 2) line
+  if n == 0 || byte_at (n - 1) line != '\n'u8 then line
+  else if n >= 2 && byte_at (n - 2) line == '\r'u8 then slice 0 (n - 2) line
   else slice 0 (n - 1) line
 
 -- `\r\n` で終わった行の `\r` を除く
 without_cr : String -> <Panic> String
 without_cr line =
   let n = byte_length line
-  if n > 0 && byte_at (n - 1) line == 13 then slice 0 (n - 1) line else line
+  if n > 0 && byte_at (n - 1) line == '\r'u8 then slice 0 (n - 1) line else line
 
 pub join : String -> List String -> String
 join sep xs =
@@ -97,21 +130,22 @@ join sep xs =
 pub trim : String -> <Panic> String
 trim s =
   let len = byte_length s
-  let skip_space i = if i < len && is_space (byte_at i s) then skip_space (i + 1) else i
+  let skip_space i = if i < len && is_space_byte (byte_at i s) then skip_space (i + 1) else i
   let start = skip_space 0
   let trim_back stop =
-    if stop > start && is_space (byte_at (stop - 1) s) then trim_back (stop - 1) else stop
+    if stop > start && is_space_byte (byte_at (stop - 1) s) then trim_back (stop - 1) else stop
   slice start (trim_back len) s
 
-is_space : Int -> Bool
-is_space b = b == 32 || (b >= 9 && b <= 13)
+-- `Char.is_ascii_space` と同じ範囲である。バイトで見るので、ここに別に持つ
+is_space_byte : Byte -> Bool
+is_space_byte b = b == ' 'u8 || (b >= '\t'u8 && b <= '\r'u8)
 
 -- 省ける符号 `+` か `-` と、1つ以上の ASCII の数字 (Rust の `i64::from_str` と同じ)。範囲を超えれば `None` である
 pub to_int : String -> <Panic> Option Int
 to_int s =
   let len = byte_length s
-  let sign = if len > 0 then byte_at 0 s else 0
-  let start = if sign == 43 || sign == 45 then 1 else 0
+  let negative = len > 0 && byte_at 0 s == '-'u8
+  let start = if negative || (len > 0 && byte_at 0 s == '+'u8) then 1 else 0
   -- `Int` の下限。字句は `-9223372036854775808` を範囲外の誤りにするので、1を引いて作る
   let min_int = -9223372036854775807 - 1
   -- 値を負の側で積む。`-9223372036854775808` の絶対値は `Int` に収まらないためである。掛ける前に、結果が下限より
@@ -120,8 +154,8 @@ to_int s =
     if i >= len then
       if negative then Some acc else if acc == min_int then None else Some (0 - acc)
     else
-      let d = byte_at i s - 48
+      let d = Char.to_int (char_at i s) - 48
       if d < 0 || d > 9 then None
       else if acc < (min_int + d) / 10 then None
       else accumulate (i + 1) negative (acc * 10 - d)
-  if start >= len then None else accumulate start (sign == 45) 0
+  if start >= len then None else accumulate start negative 0
