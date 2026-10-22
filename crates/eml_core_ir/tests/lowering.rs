@@ -4,27 +4,43 @@
 
 use eml_core_ir::{Pass, parse, pretty_with_positions, to_lir};
 
-use crate::common::programs::ui_programs;
+use std::num::NonZeroUsize;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::thread;
 
+use crate::common::programs::{UiProgram, ui_programs};
+
+/// プログラムどうしは独立なので、コアの数のスレッドで分けて流す。`Session` は `Send + Sync` である
+/// (docs/implementation/architecture.md の「CLI と lib API」)。
 #[test]
 fn every_program_lowers_to_the_same_text() {
-    for program in ui_programs() {
-        let core = eml_test_support::core_until_files(
-            &program.entry,
-            &program.module_refs(),
-            Pass::Evidence,
-        );
-        let shown = pretty_with_positions(&core);
-        let lir = to_lir(core);
-        assert_eq!(
-            eml_lir::pretty_with_positions(&lir),
-            shown,
-            "{}",
-            program.name
-        );
-        if let Err(error) = eml_lir::verify_lowered(&lir) {
-            panic!("{}: {error}", program.name);
+    let programs = ui_programs();
+    let next = AtomicUsize::new(0);
+    let workers = thread::available_parallelism().map_or(1, NonZeroUsize::get);
+    thread::scope(|scope| {
+        for _ in 0..workers {
+            scope.spawn(|| {
+                while let Some(program) = programs.get(next.fetch_add(1, Ordering::Relaxed)) {
+                    lowers_to_the_same_text(program);
+                }
+            });
         }
+    });
+}
+
+fn lowers_to_the_same_text(program: &UiProgram) {
+    let core =
+        eml_test_support::core_until_files(&program.entry, &program.module_refs(), Pass::Evidence);
+    let shown = pretty_with_positions(&core);
+    let lir = to_lir(core);
+    assert_eq!(
+        eml_lir::pretty_with_positions(&lir),
+        shown,
+        "{}",
+        program.name
+    );
+    if let Err(error) = eml_lir::verify_lowered(&lir) {
+        panic!("{}: {error}", program.name);
     }
 }
 
