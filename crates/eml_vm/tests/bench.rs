@@ -7,11 +7,12 @@ use eml_test_support::{lir, lir_files, run_stats, run_stats_with_args};
 use eml_vm::RunStats;
 
 /// テストを持つ基準のプログラム。`bench/` にプログラムを足したら、ここと下のテストの関数の両方に足す。
-const PROGRAMS: [&str; 38] = [
+const PROGRAMS: [&str; 39] = [
     "apply_float",
     "apply_int",
     "byte_loop",
     "bytes_loop",
+    "char_loop",
     "empty",
     "ep_float",
     "fannkuch_by_hand",
@@ -139,6 +140,27 @@ fn byte_loop() {
         reuses: 0,
         peak_objects: 3,
         peak_stack: 17,
+    }
+    ");
+}
+
+#[test]
+fn char_loop() {
+    insta::assert_debug_snapshot!(stats("char_loop", "11999995\n"), @"
+    RunStats {
+        evidence_steps: 0,
+        yields: 0,
+        yield_frames: 0,
+        unwound_frames: 0,
+        string_bytes_copied: 100008,
+        rc_increments: 0,
+        rc_decrements: 16,
+        boxes: 0,
+        unboxes: 0,
+        allocations: 17,
+        reuses: 0,
+        peak_objects: 3,
+        peak_stack: 18,
     }
     ");
 }
@@ -1094,6 +1116,7 @@ fn unwind_points() {
     apply_int: 13
     byte_loop: 7
     bytes_loop: 7
+    char_loop: 7
     empty: 0
     ep_float: 15
     fannkuch_by_hand: 39

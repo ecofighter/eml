@@ -431,7 +431,7 @@ left が一意 (is_unique)
 | 操作 | 動作 |
 |---|---|
 | `bytes_of_string(s) -> Result<Word, Fault>` | `Bytes.of_string`。`s` の参照を受け取り、同じバイトのバイト列を返す。`s` が一意なら種類を `Bytes` に書き換えて `s` を返す。リテラルと共有の文字列は写す |
-| `bytes_valid_utf8(b) -> Result<i64, Fault>` | `String.valid_utf8`。`b` を借りて、T5 の `utf8_valid` で確かめる。妥当なら真、そうでなければ偽を返す。何も作らず、手放さない |
+| `bytes_valid_utf8(b) -> Result<i64, Fault>` | `b` を借りて、T5 の `utf8_valid` で確かめる。妥当なら真、そうでなければ偽を返す。何も作らず、手放さない。これを呼ぶ extern の行はない |
 | `string_decode(b) -> Result<Word, Fault>` | `String.decode`。`b` の参照を受け取り、T5 の `utf8_valid` で確かめる。妥当なら同じバイトの文字列を返す。`b` が一意なら種類を `String` に書き換えて `b` を返し、そうでなければ写す。妥当でなければ何も作らずに `b` を手放し、最初の妥当でない位置を持つ `Fault::Utf8 { at }` を返す |
 
 - 写したバイトは `string_bytes_copied` に数える。一意な引数と妥当でないバイト列は何も写さないので数えない (下の「仕事の回数」)
@@ -846,9 +846,9 @@ token の表の項目は、`into_token` と `release_reuse` が添字を使い�
 | `Std.FileIn.read_all`、`read_line_raw` | `Ctx::handle_read` (`Handle::FileIn`、`ReadAmount::All` と `Line`、`Form::Text`。下の「読み手」) |
 | `Std.FileIn.read_all_bytes`、`read_line_bytes_raw`、`read_chunk` | `Ctx::handle_read` (`Handle::FileIn`、`ReadAmount::All` と `Line` と `Chunk(buf)`、`Form::Bytes`。下の「読み手」) |
 | `Std.Fs.write_text` | `Ctx::fs_write_text` |
-| `Std.String.byte_length`、`byte_at`、`slice`、`find_from` | `Ctx::string_byte_length`、`string_byte_at`、`string_slice`、`string_find_from` |
+| `Std.String.byte_length`、`byte_at`、`char_at`、`slice`、`push`、`find_from` | `Ctx::string_byte_length`、`string_byte_at`、`string_char_at`、`string_slice`、`string_push_char`、`string_find_from` (上の「文字列の操作」) |
 | `Std.Bytes.empty`、`length`、`append`、`append_slice`、`slice`、`truncate`、`of_string`、`find_from`、`make`、`get`、`set`、`push`、`find_byte_from`、`Prelude.bytes_length`、`bytes_get` | `Ctx::bytes_empty`、`bytes_length`、`bytes_append`、`bytes_append_part`、`bytes_slice`、`bytes_truncate`、`bytes_of_string`、`bytes_find_from`、`bytes_make`、`bytes_get`、`bytes_set`、`bytes_push`、`bytes_find_byte` (上の「バイト列の操作」と「変換」)。`Prelude.bytes_length` と `bytes_get` は `Show Bytes` が読む行で、`Std.Bytes.length` と `get` と同じメソッドを呼ぶ |
-| `Std.String.valid_utf8`、`decode` | `Ctx::bytes_valid_utf8`、`string_decode` (上の「バイト列と文字列」の「変換」) |
+| `Std.String.decode` | `Ctx::string_decode` (上の「バイト列と文字列」の「変換」) |
 | `Std.Env.arg_count`、`arg`、`has`、`lookup` | `Ctx::env_arg_count`、`env_arg`、`env_has`、`env_var` |
 | `Std.Stdin.open`、`close` | `Ctx::handle_open`、`handle_close` (`Handle::Stdin`。下の「読み手」) |
 | `Std.Stdin.read_all`、`read_line_raw`、`read_all_bytes`、`read_line_bytes_raw`、`read_chunk` | `Ctx::handle_read` (`Handle::Stdin`。`FileIn` の同じ名前の読みと同じ `ReadAmount` と `Form`) |
@@ -958,7 +958,7 @@ token の表の項目は、`into_token` と `release_reuse` が添字を使い�
 - `find_from` は文字列の `find_from` と同じ spec `found_from` を約束し、照合も同じである。開始位置が `0 <= from <= len` でなければ `IndexFault::BytesIndex` を返す
 - `find_byte_from` は、開始位置以降でバイトが等しい最小の位置か、なければ -1 であることを約束する (spec `found_byte`)。探すのは T13 の `find_byte` で、結果はその約束から出る。開始位置の誤りは `find_from` と同じである
 - `empty` は `Bytes.make` と同じ道で作る長さ 0 のバイト列で、確保量の上限を確かめる
-- `String.valid_utf8` は、結果が vstd の `valid_utf8` に一致することを約束する。バイト列は借りるだけで、手放さない
+- `Ctx::bytes_valid_utf8` は、結果が vstd の `valid_utf8` に一致することを約束する。バイト列は借りるだけで、手放さない
 - `String.decode` は、妥当なバイト列には同じバイトの `String` を返し、妥当でなければ `Fault::Utf8` を返す。どちらのときも `b` の参照を手放す。検査モードでは、引数が `Bytes` の物体でなければ `Heap(WrongKind)` を返す
 - 検査モードでは、引数が `Bytes` の物体でなければ `Heap(WrongKind)` を返す。`String` の物体も断る
 

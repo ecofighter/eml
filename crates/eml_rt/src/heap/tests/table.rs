@@ -888,7 +888,8 @@ pub fn inputs() -> Vec<(String, Vec<Arg>)> {
             push(name, vec![c(s)]);
         }
     }
-    // 文字列の核 (`byte_length`、`byte_at`、`slice`、`find_from`)。位置は端と、その外側の 1 つずつである
+    // 文字列の核 (`byte_length`、`byte_at`、`char_at`、`slice`、`push`、`find_from`)。位置は端と、その外側の 1 つ
+    // ずつである。`char_at` は文字の途中の位置も渡すため、すべての位置を渡す
     for s in &strings {
         push("Std.String.byte_length", vec![c(s)]);
     }
@@ -896,6 +897,12 @@ pub fn inputs() -> Vec<(String, Vec<Arg>)> {
         let len = s.len() as i64;
         for i in [-1, 0, 1, len - 1, len, i64::MAX, i64::MIN] {
             push("Std.String.byte_at", vec![Arg::Int(i), c(s)]);
+        }
+        for i in (-1..=len).chain([i64::MAX, i64::MIN]) {
+            push("Std.String.char_at", vec![Arg::Int(i), c(s)]);
+        }
+        for ch in [0x61, 0xe9, 0x65e5, 0x1_f600] {
+            push("Std.String.push", vec![Arg::Int(ch), c(s)]);
         }
         for (start, end) in [
             (0, 0),
@@ -923,6 +930,17 @@ pub fn inputs() -> Vec<(String, Vec<Arg>)> {
             }
         }
     }
+    // UTF-8 の長さの境目の文字を、一意な文字列に足す。共有した文字列は写してから足す
+    for ch in [0x0, 0x7f, 0x80, 0x7ff, 0x800, 0xffff, 0x1_0000, 0x10_ffff] {
+        push(
+            "Std.String.push",
+            vec![Arg::Int(ch), Arg::Unique("ab".into())],
+        );
+    }
+    push(
+        "Std.String.push",
+        vec![Arg::Int(0x63), Arg::Shared("ab".into())],
+    );
     // 一意な文字列と共有した文字列も、ほかの引数と同じく手放す
     push(
         "Std.String.slice",
@@ -1085,13 +1103,8 @@ pub fn inputs() -> Vec<(String, Vec<Arg>)> {
     push("Std.Bytes.of_string", vec![c("ab")]);
     // 妥当でない並びは位置つきの誤りになり、共有したバイト列も手放す
     for b in BYTES {
-        push("Std.String.valid_utf8", vec![by(b)]);
         push("Std.String.decode", vec![by(b)]);
     }
-    push(
-        "Std.String.valid_utf8",
-        vec![Arg::SharedBytes(vec![97, 255])],
-    );
     push("Std.String.decode", vec![Arg::SharedBytes(vec![97, 98])]);
     push("Std.String.decode", vec![Arg::SharedBytes(vec![97, 255])]);
     let rel = |s: &str| vec![Arg::Rel(s.to_string())];

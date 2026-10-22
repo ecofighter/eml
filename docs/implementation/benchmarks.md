@@ -39,6 +39,7 @@
 | `iter_generate.em` | `Iter.fold (fn acc x -> acc + x) 0 (Iter.generate (nums 100000))` | `Iter.generate` が生産者を包む費用 |
 | `sum_loop.em` | 1 から 100000 までの合計を直接の末尾再帰で求める | `iter_generate.em` と `push_fold.em` を比べる基準 |
 | `byte_loop.em` | 10 万バイトの文字列を作り、`String.byte_at` で先頭から足し上げる | 1バイトずつ読むループの RC (借用の extern は `rc_increments` が0) |
+| `char_loop.em` | `byte_loop.em` と同じ文字列を、`String.char_at` で1文字ずつ読んで足し上げる | 汎用の extern の命令で文字を読むループ (`byte_at` の専用の命令との差) |
 | `bytes_loop.em` | 10 万バイトのバイト列を `Bytes.push` で作り、`Bytes.get` で先頭から足し上げる | バイト列の `push` が容量を倍にして伸ばすこと (確保が log2 に比例する) と、1バイトずつ読むループの RC (`rc_increments` が0) |
 | `tree_by_hand.em` | `tree.em` の `fold (fn acc x -> acc + x)` を専用の `fold_sum` にした版 | `tree.em` の下限 |
 | `upsert.em` | `logstat` の AA 木の `upsert key increment` で 20000 個の文字列のキーを数え、`sort_by (fn (_, a) (_, b) -> a > b)` で並べる | 高階の更新関数と比較関数 |

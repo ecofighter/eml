@@ -1,21 +1,26 @@
--- 文字列の関数 (docs/spec/stdlib.md)。位置は UTF-8 のバイトの位置である。extern は核の4つ (`byte_length`、
--- `byte_at`、`slice`、`find_from`) だけで、ほかは eml で書く。
+-- 文字列の関数 (docs/spec/stdlib.md)。位置は UTF-8 のバイトの位置である。extern は `byte_length`、`byte_at`、
+-- `char_at`、`slice`、`push`、`find_from`、`decode` だけで、ほかは eml で書く。
 import List
 
 pub extern byte_length : String -> Int
 pub extern byte_at : Int -> String -> <Panic> Int
+-- 位置から始まる文字を読む。次の文字の位置は `i + Char.utf8_length c` である
+pub extern char_at : Int -> String -> <Panic> Char
 pub extern slice : Int -> Int -> String -> <Panic> String
+-- `s` を消費する。一意ならその場で伸ばす
+pub extern push : Char -> String -> String
 -- 探す文字列、開始位置、対象。開始位置以降で最初に見つかった位置で、なければ -1 である
 extern find_from : String -> Int -> String -> <Panic> Int
 
--- 借りて確かめる。`decode` は妥当でない並びで `Panic` を起こすので、先にこれで確かめる
-pub extern valid_utf8 : Bytes -> Bool
 -- `Bytes` を消費する。一意なら写さずに同じブロックを使い、そうでなければ中身を写す。妥当でない UTF-8 は `Panic` になる
 pub extern decode : Bytes -> <Panic> String
 
 -- 妥当な UTF-8 なら `Some` で `String` にし、そうでなければ `None` である (docs/spec/stdlib.md の「`Bytes` との変換」)
-pub from_utf8 : Bytes -> <Panic> Option String
-from_utf8 b = if valid_utf8 b then Some (decode b) else None
+pub from_utf8 : Bytes -> Option String
+from_utf8 b =
+  match try_panic (fn () -> decode b) with
+    | Ok s -> Some s
+    | Err _ -> None
 
 pub find : String -> String -> <Panic> Option Int
 find needle s =

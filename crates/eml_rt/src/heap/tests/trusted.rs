@@ -552,7 +552,7 @@ fn parts_of_a_string_are_copied<M: Mode>() {
     assert_eq!(mortal(ctx.heap()), 0);
 }
 
-/// `Bytes.valid_utf8` は `core::str::from_utf8` で確かめる (T5 の `utf8_valid`)。物体の中身の `&[u8]` を、
+/// `Ctx::bytes_valid_utf8` は `core::str::from_utf8` で確かめる (T5 の `utf8_valid`)。物体の中身の `&[u8]` を、
 /// 1語に収まる長さ、語の境目をまたぐ長さ、大きい物体のページの後ろまで続く長さで渡す。妥当でなければ、確かめが
 /// 止まった位置 (先頭、途中、末尾) を返す。
 fn utf8_is_checked_by_core<M: Mode>() {

@@ -182,8 +182,8 @@ impl<M: Mode> Ctx<M> {
         r
     }
 
-    /// `String.valid_utf8`。`s` を借りて、中身が妥当な UTF-8 かの `Bool` のタグを返す。確かめは T5 の `utf8_valid` が
-    /// する。呼ぶ側の参照の数は変わらない。
+    /// `s` を借りて、中身が妥当な UTF-8 かの `Bool` のタグを返す。確かめは T5 の `utf8_valid` がする。呼ぶ側の参照の
+    /// 数は変わらない。
     ///
     /// # Safety
     /// `bytes_length` と同じ。

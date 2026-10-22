@@ -346,7 +346,9 @@ pub enum Extern {
     Eprintln,
     StrByteLength,
     StrByteAt,
+    StrCharAt,
     StrSlice,
+    StrPush,
     StrFindFrom,
     BytesEmpty,
     BytesLength,
@@ -366,7 +368,6 @@ pub enum Extern {
     BytesFindByte,
     ShowBytesLength,
     ShowBytesGet,
-    BytesValidUtf8,
     StringDecode,
     EnvArgCount,
     EnvArg,
@@ -552,7 +553,9 @@ impl Extern {
         Extern::Eprintln,
         Extern::StrByteLength,
         Extern::StrByteAt,
+        Extern::StrCharAt,
         Extern::StrSlice,
+        Extern::StrPush,
         Extern::StrFindFrom,
         Extern::BytesEmpty,
         Extern::BytesLength,
@@ -572,7 +575,6 @@ impl Extern {
         Extern::BytesFindByte,
         Extern::ShowBytesLength,
         Extern::ShowBytesGet,
-        Extern::BytesValidUtf8,
         Extern::StringDecode,
         Extern::EnvArgCount,
         Extern::EnvArg,
@@ -888,10 +890,15 @@ impl Extern {
                 &[false, true],
                 row("Std.String.byte_at", &[Int, Obj], Int, Purity::Panics),
             ),
+            Extern::StrCharAt => borrowing(
+                &[false, true],
+                row("Std.String.char_at", &[Int, Obj], Int, Purity::Panics),
+            ),
             Extern::StrSlice => borrowing(
                 &[false, false, true],
                 row("Std.String.slice", &[Int, Int, Obj], Obj, Purity::Panics),
             ),
+            Extern::StrPush => row("Std.String.push", &[Int, Obj], Obj, Purity::Pure),
             Extern::StrFindFrom => borrowing(
                 &[true, false, true],
                 row(
@@ -964,10 +971,6 @@ impl Extern {
             Extern::ShowBytesGet => borrowing(
                 &[false, true],
                 row("Prelude.bytes_get", &[Int, Obj], Int, Purity::Panics),
-            ),
-            Extern::BytesValidUtf8 => borrowing(
-                &[true],
-                row("Std.String.valid_utf8", &[Obj], Enum, Purity::Pure),
             ),
             Extern::StringDecode => row("Std.String.decode", &[Obj], Obj, Purity::Panics),
             Extern::EnvArgCount => row("Std.Env.arg_count", &[Unit], Int, Purity::Effectful),

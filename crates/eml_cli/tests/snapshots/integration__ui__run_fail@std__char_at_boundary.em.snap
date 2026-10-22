@@ -1,0 +1,10 @@
+---
+source: crates/eml_cli/tests/ui.rs
+expression: "format!(\"--- stdout ---\\n{stdout}--- stderr ---\\n{diagnostics}{stderr}--- runtime error ---\\n{error}\\n{written}\")"
+input_file: tests/ui/run-fail/std/char_at_boundary.em
+---
+--- stdout ---
+--- stderr ---
+--- runtime error ---
+string index 1 is not on a character boundary
+  at run-fail/std/char_at_boundary.em:4:26

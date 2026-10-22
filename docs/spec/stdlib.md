@@ -22,7 +22,7 @@ eml run --debug-heap wc.em -l input.txt
 
 標準ライブラリの extern は小さい核にとどめ、便利な関数は eml で書く。extern の境界では、スカラー (`Int`、`Float`、`Char`、`Byte`、`Bool`、`Unit`)、文字列、バイト列、`Foreign` だけを受け渡し、`List` と `Option` は eml の側で組む。`eml_rt` がデータの配置を知らないで済むようにするためである ([Core IR](core-ir.md) の「translate の配置」)。結果が `Char` の extern の行はスカラー値を、結果が `Byte` の extern の行は 0..=255 を返す ([LIR](lir.md) の「値の表現」)。そのため、`pub` でない extern は番兵 (見つからない位置の -1、終わりの空の文字列など) を返すことがある。番兵は標準ライブラリの中に閉じ込め、利用者には `Option` で見せる。
 
-extern の行は、どの位置の引数も借用にできる ([LIR](lir.md) の「extern の借用」)。`String` を読む行 (`byte_length`、`byte_at`、`slice`、`find_from`、`String` の `==`、`!=`、`compare`、`show`、`Float` の `can_parse` と `parse_raw`) は文字列を借りる。`Bytes` を読む行 (`length`、`get`、`slice`、`find_from`、`find_byte_from`、`append_slice` の `src`、`Bytes` の `==`、`!=`、`compare`、`String.valid_utf8`) もバイト列を借りる。借りた値は、行が失敗しても呼ぶ側が持ったままである。
+extern の行は、どの位置の引数も借用にできる ([LIR](lir.md) の「extern の借用」)。`String` を読む行 (`byte_length`、`byte_at`、`char_at`、`slice`、`find_from`、`String` の `==`、`!=`、`compare`、`show`、`Float` の `can_parse` と `parse_raw`) は文字列を借りる。`Bytes` を読む行 (`length`、`get`、`slice`、`find_from`、`find_byte_from`、`append_slice` の `src`、`Bytes` の `==`、`!=`、`compare`) もバイト列を借りる。借りた値は、行が失敗しても呼ぶ側が持ったままである。
 
 文字列の位置は UTF-8 のバイトの位置 (`Int`) で表す。引数の順は、対象を最後に置く。`line |> String.split ","` と部分適用で使えるようにするためである。
 
@@ -108,7 +108,7 @@ try_panic action =
 | `Arith(_)` | `+`、`-`、`*`、`/`、`%`、単項の `-`。`Float.truncate`、`Float.floor`、`Float.ceil`、`Float.round` (`Int` に収まらない値)、`Float.to_fixed` (桁数)、`Char.of_int` (スカラー値でない値)、`Byte.of_int` (0 から 255 の外の値) |
 | `Utf8(_)` | `String.decode` と、それを使う std の関数 |
 | `InUse(_)` | `Stdin.open`、`Stdout.open`、`Stderr.open` (同じストリームのハンドルが生きている間の2つ目の `open`) と、`Stdin.open` を使う `Stdin.read_text` (下の「ハンドル」) |
-| `Index(_)` | `String.byte_at`、`String.slice`、`String.find_from` と、それらを使う std の関数。`Array.get`、`Array.set`、`Array.make`、`MutArray.read`、`MutArray.write`、`MutArray.make` (添字の範囲と負の長さ) と、添字の式が使う `check_index`。`Env.arg` の範囲の外の位置も `Index` だが、`Env.arg` は std の中だけで使うので、利用者のプログラムでは起きない |
+| `Index(_)` | `String.byte_at`、`String.char_at`、`String.slice`、`String.find_from` と、それらを使う std の関数。`Array.get`、`Array.set`、`Array.make`、`MutArray.read`、`MutArray.write`、`MutArray.make` (添字の範囲と負の長さ) と、添字の式が使う `check_index`。`Env.arg` の範囲の外の位置も `Index` だが、`Env.arg` は std の中だけで使うので、利用者のプログラムでは起きない |
 
 ## `exit`
 
@@ -157,10 +157,11 @@ pub while : (Unit -> <e> Bool) -> (Unit -> <e> Unit) -> <e> Unit
 |---|---|---|
 | `byte_length` | `String -> Int` | extern |
 | `byte_at` | `Int -> String -> <Panic> Int` | extern |
+| `char_at` | `Int -> String -> <Panic> Char` | extern |
 | `slice` | `Int -> Int -> String -> <Panic> String` | extern |
-| `valid_utf8` | `Bytes -> Bool` | extern |
+| `push` | `Char -> String -> String` | extern |
 | `decode` | `Bytes -> <Panic> String` | extern |
-| `from_utf8` | `Bytes -> <Panic> Option String` | eml |
+| `from_utf8` | `Bytes -> Option String` | eml |
 | `find` | `String -> String -> <Panic> Option Int` | eml |
 | `contains`、`starts_with`、`ends_with` | `String -> String -> <Panic> Bool` | eml |
 | `split` | `String -> String -> <Panic> List String` | eml |
@@ -172,6 +173,8 @@ pub while : (Unit -> <e> Bool) -> (Unit -> <e> Unit) -> <e> Unit
 
 - `byte_length s` は UTF-8 のバイトの数である
 - `byte_at i s` は位置 `i` のバイト (0〜255) である。`0 <= i < byte_length s` でなければ `Panic` を起こす
+- `char_at i s` は、位置 `i` から始まる文字である。`0 <= i < byte_length s` でないときと、`i` が文字の境界でないときは `Panic` を起こす。次の文字の位置は `i + Char.utf8_length c` である
+- `push c s` は、`s` の後ろに `c` の UTF-8 を足した文字列である。`s` は消費する。`s` が一意ならその場で伸ばし、そうでなければ写してから足す
 - `slice start end s` は、位置 `start` から `end` の手前までの部分の文字列である。`0 <= start <= end <= byte_length s` でないときと、`start` か `end` が文字の境界でないときは `Panic` を起こす。文字の境界は、文字列の端か、UTF-8 の続きのバイト (`0x80`〜`0xBF`) でない位置である
 - `find needle s` は、`needle` が最初に現れる位置である。空の `needle` は `Some 0` である
 - `contains needle s`、`starts_with prefix s`、`ends_with suffix s` は、名前のとおりの判定である。バイトで比べるので、文字の境界でない位置で比べても誤りにならない
@@ -181,16 +184,15 @@ pub while : (Unit -> <e> Bool) -> (Unit -> <e> Unit) -> <e> Unit
 - `trim s` は、両端の ASCII の空白 (空白、`\t`、`\n`、`\x0B`、`\x0C`、`\r`) を除く。Unicode の空白は除かない
 - `trim_line_end s` は、最後の行の終わり (`\n` か `\r\n`) を1つ除く。行の終わりで終わらなければ `s` をそのまま返し、`trim_line_end ""` は `""` である。`Stdin.read_line` と `FileIn.read_line` が、読んだ行の終わりを除くのに使う
 - `to_int s` は、Rust の `i64::from_str` と同じ形を読む。省略できる符号 `+` か `-` の後に、1つ以上の ASCII の数字が続く形である。空白は許さない。範囲を超えれば `None` で、`"-9223372036854775808"` は読める
-- `byte_length` と `join` のほかの関数は、`byte_at`、`slice`、std の中だけの `find_from` か算術を使うので、型の上では `Panic` を起こしうる
+- `byte_length`、`push`、`join`、`from_utf8` のほかの関数は、`byte_at`、`slice`、std の中だけの `find_from` か算術を使うので、型の上では `Panic` を起こしうる
 - 部分文字列の照合は、`needle` の先頭のバイトを8バイトずつまとめて探し、見つけた位置ごとに残りを比べる。最悪の場合は、`needle` の長さと探す範囲の長さの積に比例する時間がかかる ([オブジェクトモデル](object-model.md) の「extern」)
 
 ### `Bytes` との変換
 
 `Bytes` から `String` への変換は、UTF-8 として妥当かを確かめる。`String` から `Bytes` への変換 `Bytes.of_string` は「`Bytes`」にある。
 
-- `valid_utf8 b` は、`b` が妥当な UTF-8 かどうかである。`b` は借りるので、確かめた後も使える
 - `decode b` は、`b` と同じバイトの `String` である。`b` は消費する。`b` が一意なら写さずに同じブロックを使い、そうでなければ中身を写す。`b` が妥当な UTF-8 でなければ、`b` を手放して `Panic` を起こす。文言は `invalid UTF-8 at byte 3` の形で、数は最初の妥当でないバイトの位置である (下の「実行時エラー」)
-- `from_utf8 b` は、`b` が妥当なら `Some (decode b)`、そうでなければ `None` である。`valid_utf8` と `decode` が1回ずつ確かめるので、確かめは2回になる。`from_utf8` の型に `<Panic>` が付くのは、`decode` を呼ぶからである。`valid_utf8` で確かめた後にだけ呼ぶので、`Panic` は実際には起きない
+- `from_utf8 b` は、`b` が妥当なら `Some (decode b)`、そうでなければ `None` である。`b` は消費する。`decode` を `try_panic` で包み、`Err` を `None` にする。確かめは `decode` の1回で、型から `Panic` が消える
 
 ## `Std.Float`
 
@@ -605,11 +607,12 @@ pub data Iter <e> a = | Iter (once Unit -> <e> Option (a, Iter <e> a))
 
 標準ライブラリの extern の誤りの文言は次のとおりである。I/O の失敗の理由は `not found`、`permission denied`、`not available`、`I/O error` のどれかである。位置は extern を呼んだ所で、標準ライブラリの関数の中の extern なら `<std>/…` の位置になる。
 
-I/O の失敗の一部は `try_io` で捕まえられる (上の「`try_io`」)。`byte_at` と `slice` の誤りと、`Bytes` の範囲の誤りと、`decode` の妥当でない UTF-8 と、`Std.Float` の変換と `to_fixed` の誤りと、配列の添字と長さの誤りと、標準のストリームの2つ目のハンドルは `Panic` で、`try_panic` で捕まえられる (上の「`try_panic`」)。捕まえなかった失敗は、この表の文言の実行時エラーになる。
+I/O の失敗の一部は `try_io` で捕まえられる (上の「`try_io`」)。`byte_at`、`char_at`、`slice` の誤りと、`Bytes` の範囲の誤りと、`decode` の妥当でない UTF-8 と、`Std.Float` の変換と `to_fixed` の誤りと、配列の添字と長さの誤りと、標準のストリームの2つ目のハンドルは `Panic` で、`try_panic` で捕まえられる (上の「`try_panic`」)。捕まえなかった失敗は、この表の文言の実行時エラーになる。
 
 | 失敗 | 文言 |
 |---|---|
-| `byte_at` の範囲の外 | ``string index 5 is out of range for length 3`` |
+| `byte_at`、`char_at` の範囲の外 | ``string index 5 is out of range for length 3`` |
+| `char_at` の境界 | ``string index 1 is not on a character boundary`` |
 | `slice` の範囲の外 | ``string slice 2..9 is out of range for length 3`` |
 | `slice` の境界 | ``string slice 1..3 is not on a character boundary`` |
 | `Float.truncate`、`floor`、`ceil`、`round` の範囲の外 | `` float `1e+19` does not fit in `Int` `` (値は `show` の形) |

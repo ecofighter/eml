@@ -1036,8 +1036,17 @@ fn run_extern<M: Mode>(
                 ctx.write_string(Stream::Err, task.get(arg(0)))?;
                 task.set(dst, Word::UNIT);
             }
+            Extern::StrCharAt => {
+                let c = ctx.string_char_at(task.raw(arg(0)), task.get(arg(1)))?;
+                task.set_raw(dst, c);
+            }
             Extern::StrSlice => {
                 let w = ctx.string_slice(task.raw(arg(0)), task.raw(arg(1)), task.get(arg(2)))?;
+                task.set(dst, w);
+            }
+            Extern::StrPush => {
+                // SAFETY: `Char` の語は Unicode のスカラー値である (docs/spec/lir.md の「値の表現」)
+                let w = ctx.string_push_char(task.raw(arg(0)), task.get(arg(1)))?;
                 task.set(dst, w);
             }
             Extern::StrFindFrom => {
@@ -1107,10 +1116,6 @@ fn run_extern<M: Mode>(
                 let i =
                     ctx.bytes_find_byte(task.raw(arg(0)), task.raw(arg(1)), task.get(arg(2)))?;
                 task.set_raw(dst, i);
-            }
-            Extern::BytesValidUtf8 => {
-                let r = ctx.bytes_valid_utf8(task.get(arg(0)))?;
-                task.set_raw(dst, r);
             }
             Extern::StringDecode => {
                 let w = ctx.string_decode(task.get(arg(0)))?;

@@ -2174,6 +2174,15 @@ unsafe fn call<M: Mode>(
                 let a = args.lent_string(ctx, &inputs[1], root);
                 Outcome::Int(ctx.string_byte_at(int(0), a)?)
             }
+            "Std.String.char_at" => {
+                let a = args.lent_string(ctx, &inputs[1], root);
+                Outcome::Int(ctx.string_char_at(int(0), a)?)
+            }
+            "Std.String.push" => {
+                let a = args.string(ctx, &inputs[1], root);
+                let w = ctx.string_push_char(int(0), a)?;
+                take_text(ctx, w)
+            }
             "Std.String.slice" => {
                 let a = args.lent_string(ctx, &inputs[2], root);
                 let w = ctx.string_slice(int(0), int(1), a)?;
@@ -2233,10 +2242,6 @@ unsafe fn call<M: Mode>(
                 let a = args.lent_bytes(ctx, &inputs[0]);
                 let b = args.lent_bytes(ctx, &inputs[1]);
                 tag_order(ctx.bytes_compare(a, b)?)
-            }
-            "Std.String.valid_utf8" => {
-                let a = args.lent_bytes(ctx, &inputs[0]);
-                tag_bool(ctx.bytes_valid_utf8(a)?)
             }
             "Std.String.decode" => {
                 let a = args.bytes(ctx, &inputs[0]);

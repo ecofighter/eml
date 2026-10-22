@@ -257,16 +257,14 @@ fn only_the_listed_rows_borrow_or_return_a_pair() {
             | "Std.Stdin.read_line_bytes_raw" => (&[true], Some(0)),
             "Std.FileIn.read_chunk" | "Std.Stdin.read_chunk" => (&[false, true], Some(1)),
             "Std.String.byte_length" | "Prelude.Show String.show" => (&[true], None),
-            "Std.String.byte_at" => (&[false, true], None),
+            "Std.String.byte_at" | "Std.String.char_at" => (&[false, true], None),
             "Std.String.slice" => (&[false, false, true], None),
             "Std.String.find_from" => (&[true, false, true], None),
             "Prelude.Eq String.==" | "Prelude.Eq String.!=" | "Prelude.Ord String.compare" => {
                 (&[true, true], None)
             }
             "Std.Float.can_parse" | "Std.Float.parse_raw" => (&[true], None),
-            "Std.Bytes.length" | "Std.String.valid_utf8" | "Prelude.bytes_length" => {
-                (&[true], None)
-            }
+            "Std.Bytes.length" | "Prelude.bytes_length" => (&[true], None),
             "Std.Bytes.get" | "Prelude.bytes_get" => (&[false, true], None),
             "Std.Bytes.slice" | "Std.Bytes.find_byte_from" => (&[false, false, true], None),
             "Std.Bytes.append_slice" => (&[false, false, true, false], None),

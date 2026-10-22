@@ -4,10 +4,8 @@ expression: "format!(\"--- stdout ---\\n{stdout}--- stderr ---\\n{diagnostics}{s
 input_file: tests/ui/run/bytes/decode.em
 ---
 --- stdout ---
-True
 Some "héllo"
 Some ""
-False
 4
 None
 "日本"
