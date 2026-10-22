@@ -381,6 +381,43 @@ pub while : (Unit -> <e> Bool) -> (Unit -> <e> Unit) -> <e> Unit
 - `write m i x` は、`i` 番目をその場で `x` に替える。添字が範囲の外なら `Panic` を起こす
 - `freeze m` は、写さずに `lin` ビットを下ろして `Array` にする
 
+## `Std.Map`
+
+キーの順に並べた写像である。AVL 木で、`Std.List` を import して書いてある。
+
+```haskell
+pub data Map k v =
+  | Empty
+  | LeftHigh (Map k v) k v (Map k v)
+  | Even (Map k v) k v (Map k v)
+  | RightHigh (Map k v) k v (Map k v)
+```
+
+| 関数 | 型 |
+|---|---|
+| `empty` | `Map k v` |
+| `insert` | `Ord k => k -> v -> Map k v -> Map k v` |
+| `upsert` | `Ord k => k -> (Option v -> <e> v) -> Map k v -> <e> Map k v` |
+| `delete` | `Ord k => k -> Map k v -> Map k v` |
+| `lookup` | `Ord k => k -> Map k v -> Option v` |
+| `member` | `Ord k => k -> Map k v -> Bool` |
+| `size` | `Map k v -> <Panic> Int` |
+| `fold` | `(b -> k -> v -> <e> b) -> b -> Map k v -> <e> b` |
+| `to_list` | `Map k v -> List (k, v)` |
+| `from_list` | `Ord k => List (k, v) -> Map k v` |
+
+- 3つのコンストラクタ `LeftHigh`、`Even`、`RightHigh` は、左右の部分木の高さの差を表す。左が1高いか、同じか、右が1高いかである。高さを数で持たないので、釣り合いの計算に算術がなく、`Panic` も起きない
+- 挿入と削除は、部分木の高さが増えたか減ったかを `Bool` で返す。釣り合いを直す関数は、組み直す節を受け取り、同じ関数の中で節を作る。そのため、受け取った節の箱を使い回せる ([LIR](lir.md) の「reuse」)
+- `upsert key f m` は、`key` があれば値を `f (Some v)` に、なければ `f None` を入れる。`f` はちょうど1回呼び、キーは前からあるものを残す。`insert key value m` は `upsert key (fn _ -> value) m` と同じである
+- `delete key m` は、`key` がなければ同じ木を返す。`lookup` は値を `Some` で返し、なければ `None` である。`member` はキーがあるかを返す
+- `fold f init m` は、キーの昇順に `f acc k v` を呼んで左からたたむ。`to_list` は、キーの昇順の組のリストである
+- `from_list` は、前から順に `insert` する。同じキーが複数あれば、後の組が勝つ
+- `size` は木を O(n) で数える。数えるのに `+` を使い、`Int` の桁あふれが `Panic` になりうるので、型に `Panic` を持つ
+- `size` のほかの関数は、型に `Panic` を持たない。トップレベルの値 (row は `<>` に限る) と `Show` の instance の本体でも使える
+- キーも値も `Unr` に限る。`Lin` の値は E3001 になる。釣り合いを直す関数の `_ -> t` の枝が、値を捨てるためである
+- コンストラクタは公開される。抽象型がまだなく、コンストラクタを隠せないためである。API は上の関数の表だけである。利用者が `Empty` などで直接作った木に、関数が何を返すかは決めない。そのような木でも、`size` 以外の関数は実行時エラーを起こさない
+- `import Map (Map(..))` と書くと、`Empty` が利用者のコンストラクタと重なりうる。そのため、使い方は `Map.empty` と関数に限る
+
 ## `Env`
 
 | 関数 | 型 |

@@ -7,7 +7,7 @@ use eml_test_support::{lir, lir_files, run_stats, run_stats_with_args};
 use eml_vm::RunStats;
 
 /// テストを持つ基準のプログラム。`bench/` にプログラムを足したら、ここと下のテストの関数の両方に足す。
-const PROGRAMS: [&str; 39] = [
+const PROGRAMS: [&str; 40] = [
     "apply_float",
     "apply_int",
     "byte_loop",
@@ -41,6 +41,7 @@ const PROGRAMS: [&str; 39] = [
     "state_loop_by_hand",
     "state_nested",
     "std_list",
+    "std_map",
     "sum_loop",
     "tree",
     "tree_by_hand",
@@ -844,6 +845,27 @@ fn std_list() {
 }
 
 #[test]
+fn std_map() {
+    insta::assert_debug_snapshot!(stats("std_map", "2000 k1182 23\n"), @"
+    RunStats {
+        evidence_steps: 0,
+        yields: 0,
+        yield_frames: 0,
+        unwound_frames: 0,
+        string_bytes_copied: 157580,
+        rc_increments: 2000,
+        rc_decrements: 50003,
+        boxes: 22000,
+        unboxes: 58777,
+        allocations: 48004,
+        reuses: 250381,
+        peak_objects: 8001,
+        peak_stack: 274,
+    }
+    ");
+}
+
+#[test]
 fn mandelbrot() {
     insta::assert_debug_snapshot!(stats("mandelbrot", "6518\n"), @"
     RunStats {
@@ -1042,6 +1064,7 @@ fn rebuilding_programs_reuse_boxes() {
         ("rbtree", "9997\n"),
         ("tree_map", "33714156\n"),
         ("std_list", "887099805\n"),
+        ("std_map", "2000 k1182 23\n"),
     ] {
         let stats = stats(name, output);
         assert!(stats.reuses > 0, "{name}: {stats:?}");
@@ -1145,6 +1168,7 @@ fn unwind_points() {
     state_loop_by_hand: 4
     state_nested: 5
     std_list: 13
+    std_map: 20
     sum_loop: 4
     tree: 15
     tree_by_hand: 15

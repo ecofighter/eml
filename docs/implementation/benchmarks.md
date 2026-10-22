@@ -49,6 +49,7 @@
 | `rbtree.em` | 赤黒木に1万個の `Int` を入れる。`balance` は組み直す節を受ける | 同じ関数の中で節を作り直す reuse |
 | `tree_map.em` | 8191 節の完全二分木の全節を、`incr` で20回作り直す | 書かないフィールドとその場の書き換え |
 | `std_list.em` | 2万要素のリストに、std の `List.map` と `List.filter` を5回通す | std のリストの関数の reuse |
+| `std_map.em` | std の `Map.upsert` で 20000 個の文字列のキーを数え、`List.sort_by` で件数の降順に並べる (`upsert.em` と同じ入力) | 釣り合いを直す関数が受けた節の箱を使い回すことと、並べ替えが手放すセルを使い回すこと |
 | `sieve_var.em` | 引数 (既定は 20000) より小さい素数の数を、`var` で書いたふるいで数える | 入れ子の `var` の、状態を渡す形の特殊化 |
 | `sieve_by_hand.em` | `MutArray` を末尾再帰のループに線形に受け渡した版 | `sieve_var.em` の下限 |
 | `fannkuch_var.em` | fannkuch-redux (既定は n = 7) を、3本の配列の変数と10本の `Unr` の変数で書く | 何重にも入れ子になった `var` と、配列の添字 |
