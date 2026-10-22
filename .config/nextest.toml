@@ -1,0 +1,10 @@
+# ふだんの実行に入れるテストの条件は docs/implementation/testing.md の「性能のテスト」にある
+[profile.default]
+slow-timeout = { period = "2s", terminate-after = 30 }
+fail-fast = false
+
+# テストの中でファイルを並べて流す5つのテスト。`test(=…)` は完全一致なので、名前を変えたらここも直す
+[[profile.default.overrides]]
+filter = 'test(=ui::run) | test(=ui::run_fail) | test(=ui::check_fail) | test(=repl::transcripts) | test(=lowering::every_program_lowers_to_the_same_text)'
+threads-required = "num-cpus"
+slow-timeout = { period = "10s", terminate-after = 6 }

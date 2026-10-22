@@ -101,6 +101,7 @@
               packages = [
                 devToolchain
                 pkgs.cargo-insta
+                pkgs.cargo-nextest
                 verus
                 verusfmt
               ];

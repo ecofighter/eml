@@ -148,7 +148,7 @@ extern の結果を1つの期待値の表に固定し、`eml_rt` の回帰を防
   - バイト列: 空、1バイト、互いに前置きになる組、UTF-8 でない並び、複数バイトの文字、繰り返しの並び。`length`、`append` (左と右が一意なものと、`dup` で共有したもの)、`slice`、`append_slice` (範囲の端と、その外側の 1 つずつ。`dst` が一意なものと共有したもの)、`truncate`、`find_from`、`find_byte_from` (バイト 0、97、255 と、開始位置の端とその外側の 1 つずつ。共有したバイト列も渡す)、`==`、`!=`、`compare`、`of_string` (一意な文字列、共有した文字列、不死の定数)、`make` (長さ -1、0、1、3 とバイト 0、255)、`get` と `set` (両端とその外側と `Int` の両端の位置)、`push` (バイト 0、255。`set` と `push` は共有したバイト列も渡す)、`Show Bytes` が読む `Prelude.bytes_length` と `bytes_get`。引数と結果は、バイトの整数の並びで `y:[1,2]` (一意)、`Y:[1,2]` (共有した引数) と書く
   - 配列: 長さ -1、0、1、3 の `make`、要素の数 0、1、3 の `length`、両端とその外側と `Int` の両端の添字の `get` と `read`、両端とその外側の添字の `set` と `write`、共有された配列の `get` と `set` と `thaw`、空と空でない配列の `thaw` と `freeze`。配列の引数と結果は、要素の整数の並びで `A:[1,2]` (`Array`)、`D:[1,2]` (共有した `Array`)、`M:[1,2]` (`MutArray`) と書く
 - テスト `the_externs_match_the_table` (`heap/tests/externs.rs`) は、両方のモードで表のどの場合も同じ結果になり、引数の定数のほかに物体が残らないことを確かめる。表の入力が `table.rs` の入力と違えば落ちるので、古い表は残らない
-- 表は、同じファイルの `#[ignore]` のテスト `the_table_can_be_written` が、検査モードの結果で書く。入力を変えたときは `cargo test -p eml_rt the_table_can_be_written -- --ignored` で書き直し、`git diff --no-ext-diff` で結果の欄を確かめる
+- 表は、同じファイルの `#[ignore]` のテスト `the_table_can_be_written` が、検査モードの結果で書く。入力を変えたときは `cargo nextest run -p eml_rt --run-ignored ignored-only the_table_can_be_written` で書き直し、`git diff --no-ext-diff` で結果の欄を確かめる
 
 ### Miri
 
@@ -265,7 +265,7 @@ Core IR のテキストは `eml_core_ir::pretty` が書き、`eml_core_ir::parse
 - `tests/ui/run-fail/**/*.em` は、診断のエラーなしでコンパイルでき、実行が実行時エラーで終わることを確認する。エラーまでの出力と実行時エラーのメッセージをスナップショットにする。スナップショットは `run` と同じ `--- stdout ---` と `--- stderr ---` の節の後に、`--- runtime error ---` の節を置く
 - テストは `crates/eml_cli/tests/ui.rs` に置く。`tests/common` の `for_each_file` が最上位のディレクトリの下の `.em` を集め、最上位のディレクトリごとに1つのテスト (`ui::run`、`ui::run_fail`、`ui::check_fail`) がそのファイルを並べて流す。ワーカーの数は、`RUST_TEST_THREADS` があればその値、なければ `available_parallelism()` で、ファイルの数を超えない。`eml_cli` の lib API をプロセス内で呼び、検査モードと速いモードの2つで実行する (下の「2つのモードで流す」)
 - 1つのファイルが失敗しても残りのファイルを流し、終わりに失敗したファイルをすべて挙げる。文言は `<k> of <n> files failed:` の後に、`<ワークスペースからの相対パス>: <panic の文言>` を1行ずつ並べたものである。同時に失敗したファイルのスナップショットの差分は出力の中で混ざるので、1つを読むには `EML_UI_FILTER=<部分文字列>` で流し直す。ワークスペースからの相対パスにその文字列を含むファイルだけが流れる。この絞り込みは UI テストとトランスクリプトの両方にかかり、どのファイルにも当たらなければ失敗する。打ち間違えた絞り込みで、0個のファイルを流して通るのを防ぐためである。当たるファイルのないテストは通る
-- 1つのファイルが 10 秒を超えて走ると、`still running after 10s: <パス>` を標準エラーに1回出す。libtest は止まったテストの出力を見せないので、どのファイルで止まったかを知らせるためである
+- 1つのファイルが 10 秒を超えて走ると、`still running after 10s: <パス>` を標準エラーに1回出す。テストは1つで多くのファイルを流すので、止まったときにどのファイルかを知らせるためである。nextest は標準エラーを捕まえるので、この行はテストを止めたときの要約か、`--no-capture` で流したときに見える
 - テストは1つのファイル (`<最上位>/<分類>/<名前>.em`) か、1つのディレクトリ (`<最上位>/<分類>/<名前>/main.em`) である。ディレクトリのテストでは `main.em` が入口で、そのディレクトリが根になる。ディレクトリの中のほかの `.em` は `main.em` から import するモジュールで、単独のテストにしない。1つのファイルのテストはユーザーのモジュールを import しない。根が分類のディレクトリなので、import すると隣のテストのファイルをモジュールとして読んでしまう。ハーネスは、ユーザーのモジュールが入口だけであることを `Session::user_module_names` で確かめ、依存先のユーザーのモジュールを読み込んだ1つのファイルのテストを失敗にする。標準ライブラリのモジュールはユーザーのモジュールに数えないので、1つのファイルのテストでも `Fs.open` や `import Fs` を使ってよい
 - 実行のテストの入力は、テストの隣の付属のファイルで与える。入口 `<名前>.em` (ディレクトリのテストでは `main.em`) の拡張子を替えた `<名前>.args` (1行に1つの引数)、`<名前>.stdin` (そのままのバイト列)、`<名前>.env` (`KEY=VALUE` の行) である。どれも省け、省くと引数なし、空の標準入力、空の環境になる。`.args` では、改行を含む引数と最後の空の引数は書けないので、要れば CLI のテストで確かめる
 - `Fs.write_text` が書いたファイルは、ディスクに書かずにテストの Host が覚え、スナップショットの末尾に `--- written: <パス> ---` と中身を足す (下の「2つのモードで流す」)。リポジトリの中にファイルを作らないためである。Host は実行ごとにメモリの表を持つので、同じディレクトリで同じ名前のファイルに書くテストどうしも並べて流せる。書いたファイルがなければ何も足さない
@@ -301,7 +301,7 @@ Core IR のテキストは `eml_core_ir::pretty` が書き、`eml_core_ir::parse
   - `var/`: `var` の変数。配列の添字、スコープ、中断との組み合わせ
   - `scripts/`: 5本のスクリプト (`wc`、`grep`、`logstat`、`csv2jsonl`、`deploy`)。どれもディレクトリのテストで、入力は `main.args`、`main.stdin` と隣のファイルで与える。1回の起動で主な経路を通す。`deploy` のほかは、同じ処理を Python で書いた版 (`bench/scripts/<名前>.py`) と標準出力と終了コードが一致することを `bench/scripts/compare.sh --fixture <名前>` で確かめてから、スナップショットを受け入れる。UI テストで固定しない経路 (ほかのフラグ、空の入力、誤りの経路) も、`bench/scripts/compare.sh <名前> 引数…` で Python の版と比べて確かめる ([計測の基準](benchmarks.md) の「スクリプトの計測」)
   - `runtime/`: 実装の性質を確かめるテスト。メモリの解放、スタックの深さ、合流のブロック (`join_points.em`)、末尾呼び出し、部分を共有する型 (`shared_types_*.em`。木として書き下すと列の長さの指数の大きさになる型を、長さ40の列で作る)
-- 部分を共有する型の扱いが指数の時間に戻ると、`runtime/shared_types_*.em` は、終わらないかメモリを使い尽くす形で現れ、テストの失敗としては報告されない。`ui::run` は `run/` のファイルをすべて1つのテストで流すので、1つのファイルが終わらないとテスト全体が止まる。そのファイルの名前は 10 秒を超えたところで標準エラーに出る (上の UI テストの項目)
+- 部分を共有する型の扱いが指数の時間に戻ると、`runtime/shared_types_*.em` は、終わらないかメモリを使い尽くす形で現れ、テストの失敗としては報告されない。`ui::run` は `run/` のファイルをすべて1つのテストで流すので、1つのファイルが終わらないとテスト全体が止まる。そのファイルの名前は、ハーネスが 10 秒を超えたところで標準エラーに出す (上の UI テストの項目)。nextest は 60 秒でテストを止めて失敗にし、その標準エラーを見せる (「性能のテスト」)
 - 実行テストは入口の `.em` のあるディレクトリを `Fs.open` の基準ディレクトリにする。入力のファイルはテストの隣に置く。拡張子が `.em` でないファイルは、テストにもモジュールにも数えない
 - `check-fail/` は、主なエラーの番号の範囲 ([診断](../spec/diagnostics.md) の「番号の範囲」) で分ける。機能で分けると、エフェクトの誤りのように E1xxx と E2xxx にまたがるものの置き場所が決まらないためである
   - `syntax/` (E0xxx)、`names/` (E1xxx)、`types/` (E2xxx)、`linearity/` (E3xxx)。`exhaustiveness/` (E4xxx)
@@ -366,9 +366,18 @@ Core IR のテキストは `eml_core_ir::pretty` が書き、`eml_core_ir::parse
 
 ## 性能のテスト
 
+ふだんの実行 (`cargo nextest run`、フラグなし) には次の2つを満たすテストを入れる。
+
+1. 合否が機械の速さに左右されない
+2. dev プロファイルで1つずつ流して (`cargo nextest run -j 1`)、開発機で1秒以内に終わる
+
+ファイルを集めて流す5つのテスト (`ui::run`、`ui::run_fail`、`ui::check_fail`、`repl::transcripts`、`lowering::every_program_lowers_to_the_same_text`) は、1つのファイルが1秒以内で、テスト全体が5秒以内であればよい。この5つはテストの中でファイルを並べて流すので、`.config/nextest.toml` で単独で流し、ほかのテストとコアを取り合わないようにする。テストの中に壁時計の上限を置くのは、止まったことを見つけるためだけにする。上限は測った時間の10倍以上にする。2つの条件に当たらないテストには `#[ignore = "<理由>"]` を付ける。流すコマンドを「よく使うコマンド」に書き、流す時 (何を変えたときか) をそのテストを説明する節に書く。
+
+nextest は2秒を超えて走るテストを `SLOW` と表示し、60 秒で止めて失敗にする。集めて流す5つのテストは 10 秒ごとに表示し、同じく 60 秒で止める。止めたテストの標準エラーは要約に出る。
+
 `crates/eml_types/tests/scaling.rs` は、合成プログラムを4倍の大きさにしたときの型検査の時間の比を確かめる。形は、多相な関数の連鎖、独立した多相な関数、`data` と `match`、持ち越しの連鎖、環状の相互再帰、関数を引数に取る関数の輪 (`a_ring_of_higher_order_functions`)、局所のラムダを持つ関数の輪 (`a_ring_of_functions_with_local_lambdas`)、長い矢印の鎖の上を参照する多くの関数 (`many_functions_over_a_long_arrow_chain`)、1つの本体で同じ名前の `let` が続く連鎖、部分を共有する型を作る `let` の列 (`let f1 = f0 ident` の列)、その列を2本作って `if` で合わせる形、呼び出しを要素に持つリストのリテラル (`a_list_literal_of_calls`。`[id_ 0, id_ 1, …]`) である。HIR まで作ってから `eml_types::check` の時間だけを測り、各大きさで3回測った最小を使う。大きさは関数の数で、2000 と 8000 にする。最後の4つの形は関数の数を大きさにしない。同じ名前の `let` が続く連鎖は `let` の数を、部分を共有する型を作る2つの形は1本の列の長さを、リストのリテラルは要素の数を大きさにする。リストのリテラルは、持ち越しのパスが評価済みの要素を1つで代表させること ([コンパイラの構成](architecture.md) の「`eml_types` の内部」) を確かめる。比が6以下なら通る。部分を共有する型を作る2つの形は、型の深さが列の長さに比例し、書き出し、単一化、occurs の検査の再帰がその深さまで進む。テストのスレッドの既定のスタック (2 MiB) では足りないので、この2つは 64 MiB のスタックのスレッドで測る。ほかに、前の値を2つ並べた `Pair` の `let` の列の後で、型クラスの制約を1つ解く形がある。この型は木として書き下すと列の長さの指数の大きさになるので、制約の解決が同じクラスと型の組を1回だけ解くかを確かめる。列そのものの検査に列の長さの2乗の時間がかかる ([実装の現在地](status.md) の「コンパイルの時間と深さ」) ため、この形は大きさを変えた比を測らない。長さ 2000 の同じ列で、最後に制約を解く本体と解かない本体の時間を比べ、比が6以下なら通る。型が深いので、これも 64 MiB のスタックのスレッドで測る。時間を測るので `#[ignore]` を付け、release ビルドで流す。型検査の構造を変えたときに流す。
 
-`crates/eml_core_ir/tests/instances.rs` は、単相化の instance の数と名前を確かめるテスト (多相な関数の鎖を2つの型で使うと各関数の instance がちょうど2つになる、多相再帰が一様な1つの instance になる、など) をふだんの `cargo test` で流す。同じファイルに、`eml_core_ir::lower` の時間だけを測るテストが2つある。多相な関数の鎖を `Int` と `String` で使う形と、部分を共有する型を作る `let` の列を総称な関数の本体に置いて `main` から使う形である。各大きさで3回測った最小を使い、大きさ 2000 と 8000 の時間の比が6以下なら通る。後の形は型が深いので、`eml_types` の `scaling.rs` と同じく 64 MiB のスタックのスレッドで測る。どちらも `#[ignore]` を付け、release ビルドで流す。translate の instance の集め方を変えたときに流す。
+`crates/eml_core_ir/tests/instances.rs` は、単相化の instance の数と名前を確かめるテスト (多相な関数の鎖を2つの型で使うと各関数の instance がちょうど2つになる、多相再帰が一様な1つの instance になる、など) をふだんの実行で流す。同じファイルに、`eml_core_ir::lower` の時間だけを測るテストが2つある。多相な関数の鎖を `Int` と `String` で使う形と、部分を共有する型を作る `let` の列を総称な関数の本体に置いて `main` から使う形である。各大きさで3回測った最小を使い、大きさ 2000 と 8000 の時間の比が6以下なら通る。後の形は型が深いので、`eml_types` の `scaling.rs` と同じく 64 MiB のスタックのスレッドで測る。どちらも `#[ignore]` を付け、release ビルドで流す。translate の instance の集め方を変えたときに流す。
 
 `crates/eml_hir/tests/scaling.rs` は、名前の違う `data` と `effect` の宣言の数を 4000 から 16000 にしたときの、構文解析から `DefMap` までの時間の比を確かめる。比が6以下なら通る。`DefMap` の重複の判定を変えたときに流す。
 
@@ -387,15 +396,15 @@ Prelude のリストには4つのテストがある。長さ 1000 と 2000 の�
 
 ほかに、数え方そのものを確かめるテストがある。操作も文字列もなければ `evidence_steps`、`yields`、`yield_frames`、`string_bytes_copied`、`rc_increments`、`rc_decrements` は 0 で、`peak_objects` はダミーの物体の 1 である。操作はどれも少なくとも1つの evidence を調べる。`"ab" ++ "cd"` は少なくとも4バイトを書く。型変数のフィールドに `Int` を入れて取り出すと `boxes` と `unboxes` が1以上になり、スカラーの位置だけのプログラムでは 0 になる。
 
-コード生成とパスがブロックの列を再帰でたどらないことも、ここで確かめる。5000 個の文の列、5000 個の `if` 文の列 (`switch` のブロックが 5000 個できる)、1000 個のリテラルの腕を持つ `match`、1000 個の共有された腕を持つ `match` である。各テストはソースをテストの中で作り、`eml_test_support::run_stats` で実行する。回数は機械の速さに左右されないので、`#[ignore]` を付けず、ふだんの `cargo test` で流す。
+コード生成とパスがブロックの列を再帰でたどらないことも、ここで確かめる。5000 個の文の列、5000 個の `if` 文の列 (`switch` のブロックが 5000 個できる)、1000 個のリテラルの腕を持つ `match`、1000 個の共有された腕を持つ `match` である。各テストはソースをテストの中で作り、`eml_test_support::run_stats` で実行する。ふだんの実行に入る。
 
 `crates/eml_vm/tests/bench.rs` は、基準のプログラム (リポジトリの `bench/`) を VM の検査モードで走らせ、出力を確かめ、`RunStats` の全項目をインラインスナップショットで固定する。プログラムごとに1つのテストにして、並列に走らせる。`bench/` のファイルの一覧とテストのプログラムの一覧が一致することも確かめる。回数は決定的なので、段の前後の回数はこのスナップショットの差分で残る。回数を変える変更は、段の設計 (`docs/plans/`) に期待値の変更として書く。プログラムの中身と命令の数の測り方は [計測の基準](benchmarks.md) にある。
 
-`SourceFiles::line_col` の表のテスト (`eml_diagnostics` の `source.rs`)、verifier の大きな IR のテスト (`eml_lir` の `tests/verify.rs` の、長い `switch` の連鎖、借りたフィールドへの長い `switch` の連鎖、1つのブロックに深さの違う辺が多く合流する形と、`eml_core_ir` の `tests/verify.rs` の、長い文の `if` の列) は、数えられる仕事の回数がないので時間を測る。2乗の実装だけが超える緩い上限 (5 秒と 10 秒) を置き、`#[ignore]` を付けずに debug ビルドのふだんの `cargo test` で流す。
+`SourceFiles::line_col` の表のテスト (`eml_diagnostics` の `source.rs`)、verifier の大きな IR のテスト (`eml_lir` の `tests/verify.rs` の、長い `switch` の連鎖、借りたフィールドへの長い `switch` の連鎖、1つのブロックに深さの違う辺が多く合流する形と、`eml_core_ir` の `tests/verify.rs` の、長い文の `if` の列) は、数えられる仕事の回数がないので時間を測る。2乗の実装だけが超える緩い上限 (5 秒と 10 秒) を置く。ふだんの実行に入る。
 
 ### 開発用の数え方
 
-`crates/eml_core_ir/tests/census.rs` は、`bench/` と `tests/ui/run*` のすべてのプログラムを reuse の後の LIR まで通し、プログラムごとと合計の、関数の数、文の数、終端 (ブロック) の数、一様な版 `<f>$uniform` の数、そのうち写しの形の数を表示する ([LIR](../spec/lir.md) の「関数の ABI」)。呼び出しの規約を変えたときに、コードの大きさの変わり方を前後で比べるためのもので、合否を持たない。`#[ignore]` を付け、`cargo test -p eml_core_ir --test integration census -- --ignored --nocapture` で流す。
+`crates/eml_core_ir/tests/census.rs` は、`bench/` と `tests/ui/run*` のすべてのプログラムを reuse の後の LIR まで通し、プログラムごとと合計の、関数の数、文の数、終端 (ブロック) の数、一様な版 `<f>$uniform` の数、そのうち写しの形の数を表示する ([LIR](../spec/lir.md) の「関数の ABI」)。呼び出しの規約を変えたときに、コードの大きさの変わり方を前後で比べるためのもので、合否を持たない。`#[ignore]` を付け、`cargo nextest run -p eml_core_ir --test integration --run-ignored ignored-only --no-capture census` で流す。
 
 ## feature の組み合わせの確認
 
@@ -403,19 +412,22 @@ Prelude のリストには4つのテストがある。長さ 1000 と 2000 の�
 
 ## よく使うコマンド
 
-dev プロファイル (`cargo test` もこれを使う) は opt-level 1 で、debug assertions は有効である。`--release` は `bench/*.sh` と、`#[ignore]` を付けた時間のテストだけで使う。デバッガで局所変数が最適化で消えるときは、`CARGO_PROFILE_DEV_OPT_LEVEL=0 cargo test ...` で一度だけ opt-level 0 のビルドを作る。
+dev プロファイル (`cargo nextest run` と `cargo test` もこれを使う) は opt-level 1 で、debug assertions は有効である。`--release` は `bench/*.sh` と、`#[ignore]` を付けた時間のテストだけで使う。デバッガで局所変数が最適化で消えるときは、`CARGO_PROFILE_DEV_OPT_LEVEL=0 cargo test ...` で一度だけ opt-level 0 のビルドを作る。
 
 ```sh
-cargo test                                           # すべてのテスト
-cargo test -p eml_syntax --test integration parser::empty_file    # 1つのテスト
-cargo test -p eml_cli --test integration ui::            # UI テスト
-EML_UI_FILTER=basics/hello.em cargo test -p eml_cli --test integration ui::   # 1つの UI テストだけ流す
+cargo nextest run                                    # すべてのテスト
+cargo test                                           # 同じテストを流す (1つの crate の短いループでは cargo test -p の方が速い)
+cargo nextest run -j 1                               # ふだんの実行の条件を確かめる (1秒を超えるのは集めて流す5つだけ。性能のテスト)
+cargo nextest run -p eml_syntax --test integration parser::empty_file    # 1つのテスト
+cargo nextest run -p eml_cli --test integration -E 'test(ui::)'          # UI テスト
+EML_UI_FILTER=basics/hello.em cargo nextest run -p eml_cli --test integration -E 'test(ui::)'   # 1つの UI テストだけ流す
 cargo insta review                                   # スナップショットの承認
+cargo insta test --test-runner nextest --accept      # テストを流し、スナップショットを受け入れる
 cargo clippy --all-targets && cargo fmt
-cargo test --release -p eml_types --test integration scaling:: -- --ignored   # 型検査の時間の伸び (性能のテスト)
-cargo test --release -p eml_hir --test integration scaling:: -- --ignored     # 名前の表を作る時間の伸び (性能のテスト)
-cargo test --release -p eml_core_ir --test integration instances::lowering -- --ignored   # 単相化の lower の時間の伸び (性能のテスト)
-cargo test -p eml_vm --test integration scaling::                              # VM の仕事の回数とスタックの語の数 (ふだんの cargo test にも入る)
+cargo nextest run --release -p eml_types --test integration --run-ignored ignored-only scaling::   # 型検査の時間の伸び (性能のテスト)
+cargo nextest run --release -p eml_hir --test integration --run-ignored ignored-only scaling::     # 名前の表を作る時間の伸び (性能のテスト)
+cargo nextest run --release -p eml_core_ir --test integration --run-ignored ignored-only instances::lowering   # 単相化の lower の時間の伸び (性能のテスト)
+cargo test -p eml_vm --test integration scaling::                              # VM の仕事の回数とスタックの語の数 (ふだんの実行にも入る)
 cargo test -p eml_vm --test integration bench::                                # 基準のプログラムの回数 (同上)
 bench/run.sh                                                                   # 基準のプログラムの命令の数 (macOS、release)
 bench/scripts.sh                                                               # スクリプトと数値計算のプログラムを Python と比べた実時間と常駐メモリ (大きさは eml で約 300 ms) と、大きい入力のスクリプトの Rust の版との比 (macOS、release)

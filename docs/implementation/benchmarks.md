@@ -64,7 +64,7 @@
 
 ## 回数のテスト
 
-`crates/eml_vm/tests/bench.rs` は、プログラムごとに1つのテストで、VM の検査モードで走らせ、出力を確かめ、`RunStats` の全項目 ([VM](../spec/vm.md) の「`RunStats`」) をインラインスナップショットで固定する。`every_program_in_bench_has_a_test` は、`bench/` のファイルの一覧とテストのプログラムの一覧が一致することを確かめる。回数は機械の速さに左右されないので、ふだんの `cargo test` で流す。
+`crates/eml_vm/tests/bench.rs` は、プログラムごとに1つのテストで、VM の検査モードで走らせ、出力を確かめ、`RunStats` の全項目 ([VM](../spec/vm.md) の「`RunStats`」) をインラインスナップショットで固定する。`every_program_in_bench_has_a_test` は、`bench/` のファイルの一覧とテストのプログラムの一覧が一致することを確かめる。回数は機械の速さに左右されないので、ふだんの実行で流す。
 
 プログラムをまたいで比べるテストは次のとおりである。
 

@@ -7,7 +7,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::mpsc::{self, RecvTimeoutError};
 use std::time::{Duration, Instant};
 
-/// libtest は止まったテストの出力を見せないので、この時間を超えて走るファイルの名前を先に出す
+/// 1つのテストが多くのファイルを流すので、この時間を超えて走るファイルの名前を出し、どこで止まったかを分かるようにする
 /// (docs/implementation/testing.md の「UI テスト」)。
 const SLOW: Duration = Duration::from_secs(10);
 

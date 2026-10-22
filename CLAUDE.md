@@ -23,13 +23,13 @@ The documentation lives under `docs/`; start from `docs/README.md`. `docs/spec/`
 
 ## Commands
 
-The dev environment is a Nix flake (`direnv` with `use flake`) on nixos-unstable. Every Rust toolchain comes from fenix: stable is pinned to the version Verus requires (1.98.1) and serves the devShell, `nix build` and Verus; the `.#miri` shell has a nightly with miri and rust-src. The devShell provides clippy, rustfmt, rust-analyzer, cargo-insta, and `verus` / `cargo-verus` and `verusfmt`. Both shells set `CARGO_HOME` to `${XDG_CACHE_HOME:-$HOME/.cache}/eml-cargo-home` so rustup's `~/.cargo/bin` proxies do not shadow fenix's `cargo-clippy` / `cargo-miri`.
+The dev environment is a Nix flake (`direnv` with `use flake`) on nixos-unstable. Every Rust toolchain comes from fenix: stable is pinned to the version Verus requires (1.98.1) and serves the devShell, `nix build` and Verus; the `.#miri` shell has a nightly with miri and rust-src. The devShell provides clippy, rustfmt, rust-analyzer, cargo-insta, cargo-nextest, and `verus` / `cargo-verus` and `verusfmt`. Both shells set `CARGO_HOME` to `${XDG_CACHE_HOME:-$HOME/.cache}/eml-cargo-home` so rustup's `~/.cargo/bin` proxies do not shadow fenix's `cargo-clippy` / `cargo-miri`.
 
 ```sh
 cargo build                          # all crates
-cargo test                           # all tests
-cargo test -p eml_syntax --test integration parser::empty_file   # a single test
-cargo test -p eml_cli --test integration ui::   # UI tests
+cargo nextest run                    # all tests (`cargo test` runs the same tests; `cargo test -p` is faster for a short loop on one crate)
+cargo nextest run -p eml_syntax --test integration parser::empty_file   # a single test
+cargo nextest run -p eml_cli --test integration -E 'test(ui::)'   # UI tests
 cargo insta review                   # accept snapshots
 cargo clippy --all-targets && cargo fmt
 cargo clippy -p eml_cli --no-default-features --features types -- -D warnings   # non-default features (none, types, core; eml_test_support also hir)
@@ -45,7 +45,7 @@ bench/scripts.sh                     # the scripts under tests/ui/run/scripts/ a
 bench/scripts/compare.sh --fixture wc   # a script's eml vs Python stdout and exit code on its UI-test inputs (or: compare.sh NAME ARGS... < input, compare.sh --paths EML PY ARGS... < input)
 ```
 
-The dev profile (and so `cargo test`) is opt-level 1 with debug assertions on; `--release` is only for `bench/*.sh` and the `#[ignore]` timing tests. For a debugger, build once with `CARGO_PROFILE_DEV_OPT_LEVEL=0 cargo test ...`.
+The dev profile (and so `cargo nextest run` and `cargo test`) is opt-level 1 with debug assertions on; `--release` is only for `bench/*.sh` and the `#[ignore]` timing tests. For a debugger, build once with `CARGO_PROFILE_DEV_OPT_LEVEL=0 cargo test ...`.
 
 The full list, with the scaling tests, is in docs/implementation/testing.md の「よく使うコマンド」.
 
@@ -104,6 +104,7 @@ The rules are in docs/implementation/testing.md; the facts below are the ones ev
 - Work test-first (TDD). Snapshots use `insta`, mostly inline (`@"..."`).
 - Test changes come in three kinds (docs/implementation/testing.md の「テストの変更の運用」): (1) pass/fail changes (moving a test between `run`, `run-fail` and `check-fail`, deleting a test, UI or unit) are listed one by one in the stage's plan; (2) expected-value changes (UI output, diagnostic codes or wording, stage-dump snapshots such as Core IR, `RunStats` snapshots, moving a UI test without changing pass/fail) are described as a scope in the stage's plan (e.g. "rewrite every UI test that uses E3005"); approving the plan is the agreement for kinds 1 and 2, and the reason goes in the plan and the commit message; (3) mechanical follow-ups that keep every expected value byte-identical need no agreement, and the commit message is the record.
 - Never bend the design to keep existing tests unchanged (no parallel enum variants, flags, test-only fields, or spec exceptions for that purpose). Put the test change in the stage's plan instead, stating its kind.
+- Every test in the ordinary run (`cargo nextest run`, no flags) finishes within 1 s when run alone (`cargo nextest run -j 1`), and its outcome does not depend on machine speed; nextest marks a test `SLOW` after 2 s. The five tests that run a directory of files in parallel get 1 s per file and 5 s in all; anything else gets `#[ignore = "<reason>"]` (docs/implementation/testing.md の「性能のテスト」).
 - Pick where a new test goes from docs/implementation/testing.md の「テストの置き場所」, and check each fact in one place only.
 - Each crate's integration tests build into one binary, `integration` (`autotests = false`; `tests/main.rs` declares every file as a module). A file not declared there does not run.
 - UI tests live in `tests/ui/{run,run-fail,check-fail}/<category>/`, as `<name>.em` or `<name>/main.em` with the modules it imports; the top-level directory decides the expected outcome, and `run` / `run-fail` tests run in checked and then fast mode (docs/implementation/testing.md の「UI テスト」). REPL transcripts live in `crates/eml_cli/tests/repl/` (docs/implementation/testing.md の「REPL のトランスクリプト」).
