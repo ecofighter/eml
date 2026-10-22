@@ -2164,6 +2164,67 @@ impl<M: Mode> Ctx<M> {
         self.lemma_evv_kept(s0, d, none);
     }
 
+    /// 種類 `kind` の物体 `s` を受けて、中身を写した別の物体 `w` を返す extern (`Bytes.of_string`、`String.decode`) の、
+    /// モデルが合っている道。確保と追記の後の `h3` から、`s` の参照を1つ手放した。
+    pub(super) proof fn lemma_converted_ok(
+        &self,
+        s0: Ctx<M>,
+        h1: Heap<M>,
+        h2: Heap<M>,
+        h3: Heap<M>,
+        s: Word,
+        w: Word,
+        kind: Kind,
+    )
+        requires
+            kind.has_body(),
+            s0.held_ok(),
+            s0.is_body(s, kind),
+            s0.holds(s),
+            h1 == s0.heap.settled_heap(),
+            h1.consistent(),
+            h2.made(h1, w),
+            h2.owned(w),
+            h3.core.text_changed(h2.core, w.bits_spec()),
+            h3.dummy == h2.dummy,
+            h3.region == h2.region,
+            h3.worker == h2.worker,
+            h3.consistent(),
+            h3.core.model@.building is None,
+            self.heap.consistent(),
+            self.heap.settled(),
+            self.heap.evolved(h3, s, -1),
+            self.heap.kept_live(h3),
+            self.evv == s0.evv,
+            self.yielding == s0.yielding,
+            self.max_evv == s0.max_evv,
+        ensures
+            self.held_ok(),
+            self.holds(w),
+            self.evolved_by(s0, |x: usize| -points(s, x), Set::empty()),
+    {
+        let h0 = s0.heap;
+        let z = |x: usize| 0int;
+        let d = |x: usize| -points(s, x);
+        let none = Set::<usize>::empty();
+        let ws = seq![s];
+        s0.lemma_text_shown(h1, h2, h3, s, w, kind);
+        lemma_settle_moved(h1, h0);
+        lemma_decref_moved(self.heap, h3, s);
+        lemma_moved_chain(self.heap, h3, h1, z, d, d, none, none, none);
+        lemma_moved_chain(self.heap, h1, h0, z, d, d, none, none, none);
+        assert forall|x: usize| #[trigger] self.need(seq![], x) > 0 implies s0.need(ws, x) + d(x)
+            >= self.need(seq![], x) by {
+            lemma_points_in(seq![], x);
+            lemma_points_in(ws, x);
+        }
+        self.lemma_holds_moved(s0, ws, seq![], d, none);
+        self.lemma_evv_kept(s0, d, none);
+        assert(s.bits_spec() != w.bits_spec());
+        lemma_view_live(self.heap, w.bits_spec());
+        self.lemma_fresh_holds(s0, w);
+    }
+
     /// 新しい物体 `w` を作り、その場で書き足しただけの変化の後、呼ぶ側は `w` の参照を `Ctx` と別に1つ持つ。
     pub(super) proof fn lemma_made_filled(&self, s0: Ctx<M>, h2: Heap<M>, w: Word)
         requires

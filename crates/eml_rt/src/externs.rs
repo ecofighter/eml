@@ -121,6 +121,8 @@ pub enum Fault {
     /// 標準入力の読みの誤り。
     Stdin(IoReason),
     NotUtf8(Box<Utf8Source>),
+    /// `Bytes` を `String` にするとき (`decode`)、バイト列の最初の妥当でない位置。
+    Utf8 { at: i64 },
     Index(Box<IndexFault>),
     /// 読む途中か子を待つ間に、止める語か確保量の上限に当たった。
     Stopped(Stop),
@@ -137,17 +139,18 @@ impl Fault {
             Fault::Heap(_)
             | Fault::Arith(_)
             | Fault::Output(_)
+            | Fault::Utf8 { at: _ }
             | Fault::Index(_)
             | Fault::Stopped(_) => None,
         }
     }
 
-    /// `try_panic` が捕まえる誤りか。値と入力で決まる誤り (算術と範囲の外の位置) だけを `Panic` にする。ヒープの誤り、
+    /// `try_panic` が捕まえる誤りか。値と入力で決まる誤り (算術、妥当でない UTF-8、範囲の外の位置) だけを `Panic` にする。ヒープの誤り、
     /// 書き出しの誤り、止めたことは、どの呼び出しでも起きうるか起きた位置が決まらないので、型に出さない停止のままにする
     /// (docs/spec/stdlib.md の「`try_panic`」)。
     pub fn panics(&self) -> bool {
         match self {
-            Fault::Arith(_) | Fault::Index(_) => true,
+            Fault::Arith(_) | Fault::Utf8 { at: _ } | Fault::Index(_) => true,
             Fault::Heap(_)
             | Fault::Output(_)
             | Fault::Io { op: _, name: _, reason: _ }
@@ -1190,6 +1193,7 @@ impl fmt::Display for Fault {
                     write!(f, "environment variable `{name}` is not valid UTF-8")
                 }
             },
+            Fault::Utf8 { at } => write!(f, "invalid UTF-8 at byte {at}"),
             Fault::Index(fault) => match **fault {
                 IndexFault::String { index, len } => {
                     write!(f, "string index {index} is out of range for length {len}")

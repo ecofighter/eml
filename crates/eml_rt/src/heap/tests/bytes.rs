@@ -499,6 +499,164 @@ fn bytes_copies_are_counted<M: Mode>() {
     assert_eq!(mortal(ctx.heap()), 0);
 }
 
+/// 文字列はバイト列に写される。元の文字列の参照は手放し、共有やリテラルでも同じ結果になる。
+fn strings_become_bytes<M: Mode>() {
+    let mut ctx = ctx::<M>();
+    let mut literals = 0;
+    let large = "ab日本語".repeat(300);
+    for s in ["", "abc", "日本語", large.as_str()] {
+        unsafe {
+            let w = ctx.heap_mut().alloc_string(s);
+            let b = ctx.bytes_of_string(w).unwrap();
+            assert_eq!(body(ctx.heap(), b), s.as_bytes());
+            ctx.heap_mut().decref(b).unwrap();
+
+            let w = ctx.heap_mut().alloc_string(s);
+            ctx.heap_mut().dup(w).unwrap();
+            let b = ctx.bytes_of_string(w).unwrap();
+            assert_eq!(body(ctx.heap(), b), s.as_bytes());
+            assert_eq!(text(ctx.heap(), w), s);
+            assert!(ctx.heap().is_unique(w).unwrap());
+            ctx.heap_mut().decref(b).unwrap();
+            ctx.heap_mut().decref(w).unwrap();
+
+            let lit = ctx.heap_mut().alloc_string_immortal(s);
+            literals += 1;
+            ctx.heap_mut().dup(lit).unwrap();
+            let b = ctx.bytes_of_string(lit).unwrap();
+            assert_eq!(body(ctx.heap(), b), s.as_bytes());
+            assert_eq!(text(ctx.heap(), lit), s);
+            ctx.heap_mut().decref(b).unwrap();
+        }
+    }
+    assert_eq!(mortal(ctx.heap()), literals);
+}
+
+/// 妥当な UTF-8 のバイト列は、同じバイトの文字列に写される。
+fn bytes_decode_to_strings<M: Mode>() {
+    let mut ctx = ctx::<M>();
+    let mut literals = 0;
+    let large = "ab日本語".repeat(300);
+    for s in ["", "abc", "日本語", large.as_str()] {
+        unsafe {
+            let b = ctx.heap_mut().alloc_bytes(s.as_bytes());
+            let w = ctx.string_decode(b).unwrap();
+            assert_eq!(text(ctx.heap(), w), s);
+            ctx.heap_mut().decref(w).unwrap();
+
+            let b = ctx.heap_mut().alloc_bytes(s.as_bytes());
+            ctx.heap_mut().dup(b).unwrap();
+            let w = ctx.string_decode(b).unwrap();
+            assert_eq!(text(ctx.heap(), w), s);
+            assert_eq!(body(ctx.heap(), b), s.as_bytes());
+            assert!(ctx.heap().is_unique(b).unwrap());
+            ctx.heap_mut().decref(w).unwrap();
+            ctx.heap_mut().decref(b).unwrap();
+
+            let lit = ctx.heap_mut().alloc_bytes_immortal(s.as_bytes());
+            literals += 1;
+            ctx.heap_mut().dup(lit).unwrap();
+            let w = ctx.string_decode(lit).unwrap();
+            assert_eq!(text(ctx.heap(), w), s);
+            ctx.heap_mut().decref(w).unwrap();
+        }
+    }
+    assert_eq!(mortal(ctx.heap()), literals);
+}
+
+/// 妥当でないバイト列は、最初の妥当でない位置を持つ誤りになる。引数の参照は手放し、共有されていればほかの参照は残る。
+fn invalid_bytes_do_not_decode<M: Mode>() {
+    let mut ctx = ctx::<M>();
+    let mut large = "日本語".repeat(500).into_bytes();
+    large.push(0xff);
+    for (b, at) in [
+        (b"\xff".to_vec(), 0i64),
+        (b"abc\xff".to_vec(), 3),
+        (b"ab\xe6\x97".to_vec(), 2),
+        ("日本語".as_bytes()[..8].to_vec(), 6),
+        (vec![0xed, 0xa0, 0x80], 0),
+        (large.clone(), large.len() as i64 - 1),
+    ] {
+        unsafe {
+            let w = ctx.heap_mut().alloc_bytes(&b);
+            assert_eq!(
+                ctx.string_decode(w),
+                Err(Fault::Utf8 { at }),
+                "{:?}",
+                &b[..b.len().min(8)]
+            );
+            let w = ctx.heap_mut().alloc_bytes(&b);
+            ctx.heap_mut().dup(w).unwrap();
+            assert_eq!(ctx.string_decode(w), Err(Fault::Utf8 { at }));
+            assert_eq!(body(ctx.heap(), w), b);
+            assert!(ctx.heap().is_unique(w).unwrap());
+            ctx.heap_mut().decref(w).unwrap();
+        }
+    }
+    assert_eq!(mortal(ctx.heap()), 0);
+}
+
+/// 検査モードは、種類の違う引数を断り、ヒープを変えない。
+fn conversions_refuse_the_wrong_kind<M: Mode>() {
+    if !M::CHECKED {
+        return;
+    }
+    let mut ctx = ctx::<M>();
+    fn wrong<T>() -> Result<T, Fault> {
+        Err(Fault::Heap(HeapError::WrongKind))
+    }
+    unsafe {
+        let s = ctx.heap_mut().alloc_string("abc");
+        let b = ctx.heap_mut().alloc_bytes(b"abc");
+        assert_eq!(ctx.bytes_of_string(b), wrong());
+        assert_eq!(ctx.string_decode(s), wrong());
+        assert_eq!(text(ctx.heap(), s), "abc");
+        assert_eq!(body(ctx.heap(), b), b"abc");
+        assert!(ctx.heap().is_unique(s).unwrap());
+        assert!(ctx.heap().is_unique(b).unwrap());
+        ctx.heap_mut().decref(s).unwrap();
+        ctx.heap_mut().decref(b).unwrap();
+    }
+    assert_eq!(mortal(ctx.heap()), 0);
+}
+
+/// 検査モードは、どちらの変換も写したバイトを `string_bytes_copied` に数える。妥当でないバイト列は何も写さない
+/// (docs/spec/object-model.md の「仕事の回数」)。
+fn conversions_are_counted<M: Mode>() {
+    if !M::CHECKED {
+        return;
+    }
+    let mut ctx = ctx::<M>();
+    let mut last = 0;
+    let mut copied = |ctx: &Ctx<M>| {
+        let now = ctx.stats().string_bytes_copied;
+        let d = now - last;
+        last = now;
+        d
+    };
+    unsafe {
+        let s = ctx.heap_mut().alloc_string("日本語");
+        copied(&ctx);
+        let b = ctx.bytes_of_string(s).unwrap();
+        assert_eq!(copied(&ctx), 9);
+        ctx.heap_mut().dup(b).unwrap();
+        let t = ctx.string_decode(b).unwrap();
+        assert_eq!(copied(&ctx), 9);
+        let lit = ctx.heap_mut().alloc_string_immortal("ab");
+        ctx.heap_mut().dup(lit).unwrap();
+        let c = ctx.bytes_of_string(lit).unwrap();
+        assert_eq!(copied(&ctx), 2);
+        let bad = ctx.heap_mut().alloc_bytes(&[b'a', 0xff]);
+        copied(&ctx);
+        assert_eq!(ctx.string_decode(bad), Err(Fault::Utf8 { at: 1 }));
+        assert_eq!(copied(&ctx), 0);
+        for w in [b, c, t] {
+            ctx.heap_mut().decref(w).unwrap();
+        }
+    }
+    assert_eq!(mortal(ctx.heap()), 1);
+}
+
 both_modes!(
     bytes_hold_their_body,
     a_room_bytes_object_starts_empty,
@@ -519,4 +677,9 @@ both_modes!(
     appending_a_part_of_itself_needs_two_references,
     bytes_externs_refuse_a_string,
     bytes_copies_are_counted,
+    strings_become_bytes,
+    bytes_decode_to_strings,
+    invalid_bytes_do_not_decode,
+    conversions_refuse_the_wrong_kind,
+    conversions_are_counted,
 );

@@ -1199,15 +1199,15 @@ impl<M: Mode> Heap<M> {
         self.append_tail(w, Tail::Bytes(b));
     }
 
-    /// 書き換えられるバイト列 `w` の後ろに、別のバイト列 `src` のバイトの範囲 `[from, to)` を写す。容量は足りている。
-    /// `Bytes.slice` が使う。
+    /// 書き換えられるバイト列 `w` の後ろに、別のバイト列か文字列 `src` のバイトの範囲 `[from, to)` を写す。容量は足りて
+    /// いる。`Bytes.slice` と `Bytes.of_string` が使う。
     pub(super) fn append_body(&mut self, w: Word, src: Word, from: usize, to: usize)
         requires
             old(self).wf(),
             old(self).core.model@.building is None,
             old(self).appendable(w),
             old(self).is_bytes(w),
-            old(self).bytes_readable(src),
+            old(self).bytes_readable(src) || old(self).text_readable(src),
             src.bits_spec() != w.bits_spec(),
             from <= to <= old(self).text_of(src).len(),
             old(self).text_of(w).len() + (to - from) <= old(self).capacity(w),
@@ -1241,6 +1241,47 @@ impl<M: Mode> Heap<M> {
             ;
         }
         self.append_tail(w, Tail::Body(h, n, from, to));
+    }
+
+    /// 書き足せる文字列 `w` の後ろに、妥当な UTF-8 のバイト列 `src` の全体を写す。容量は足りている。`String.decode` が使う。
+    pub(super) fn append_utf8(&mut self, w: Word, src: Word)
+        requires
+            old(self).wf(),
+            old(self).core.model@.building is None,
+            old(self).appendable(w),
+            old(self).is_string(w),
+            old(self).bytes_readable(src),
+            valid_utf8(old(self).text_of(src)),
+            src.bits_spec() != w.bits_spec(),
+            old(self).text_of(w).len() + old(self).text_of(src).len() <= old(self).capacity(w),
+        ensures
+            final(self).appended(*old(self), w),
+            final(self).text_of(w) == old(self).text_of(w) + old(self).text_of(src),
+    {
+        let h = self.header_of(src);
+        proof {
+            self.core.lemma_shape(h@.addr);
+            if M::CHECKED {
+                if self.core.dom().contains(h@.addr) {
+                    self.core.lemma_safe_at(h@.addr);
+                }
+            } else {
+                self.core.lemma_readable(src);
+                reveal(Core::building_wf);
+                self.core.lemma_live_block(h@.addr);
+            }
+        }
+        let n = self.core.slot_get(h, 0).bits();
+        proof {
+            let c = self.core.cap(h@.addr);
+            assert((n + 7) / 8 <= c - 1) by (nonlinear_arith)
+                requires
+                    n <= 8 * (c - 1),
+                    c >= 1,
+            ;
+            self.core.lemma_whole(h, n);
+        }
+        self.append_tail(w, Tail::Text(h, n, 0, n));
     }
 
     /// `append_str`、`append_part`、`append_bytes`、`append_body` の本体。

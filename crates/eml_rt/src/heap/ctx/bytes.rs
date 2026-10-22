@@ -470,6 +470,232 @@ impl<M: Mode> Ctx<M> {
         Ok(w)
     }
 
+    /// `Bytes.of_string`。`s` の参照を受け取り、中身を写した新しいバイト列を返す。`s` の参照は写した後に手放す。写す
+    /// バイトは `string_bytes_copied` に数える。
+    ///
+    /// # Safety
+    /// `bytes_push` と同じ (`s` の参照は受け取る)。速いモードでは、`s` は文字列である。
+    pub unsafe fn bytes_of_string(&mut self, s: Word) -> (r: Result<Word, Fault>)
+        requires
+            old(self).wf(),
+            old(self).heap_spec().word_in(s),
+            !M::CHECKED ==> old(self).is_string(s) && old(self).holds(s),
+        ensures
+            final(self).wf(),
+            final(self).evv_spec() == old(self).evv_spec(),
+            final(self).yield_spec() == old(self).yield_spec(),
+            r is Err ==> (r matches Err(Fault::Heap(_)) && final(self).heap_spec().settled_heap()
+                == old(self).heap_spec().settled_heap()),
+            !M::CHECKED ==> r is Ok,
+            old(self).held_ok() && old(self).is_string(s) && old(self).holds(s) ==> r is Ok || (
+            r matches Err(Fault::Heap(e)) && chain_err(Err::<(), HeapError>(e))),
+            r matches Ok(w) ==> final(self).is_bytes(w) && final(self).text_of(w) == old(
+                self,
+            ).text_of(s),
+            r matches Ok(w) ==> (old(self).held_ok() && old(self).is_string(s) && old(self).holds(s)
+                ==> {
+                &&& final(self).held_ok()
+                &&& final(self).holds(w)
+                &&& final(self).evolved_by(*old(self), |x: usize| -points(s, x), Set::empty())
+            }),
+    {
+        let ghost s0 = *self;
+        let ghost c = s0.held_ok() && s0.is_string(s) && s0.holds(s);
+        if M::CHECKED && !s.is_ptr() {
+            return Err(Fault::Heap(HeapError::WrongKind));
+        }
+        self.heap.settle();
+        let ghost h1 = self.heap;
+        let hs = self.heap.header_of(s);
+        proof {
+            lemma_settled_twice(s0.heap);
+            assert(h1.words_kept(s0.heap));
+            h1.lemma_text_spec(s);
+            s0.heap.lemma_text_spec(s);
+            if c {
+                s0.lemma_settled_body(h1, s, Kind::String);
+            }
+        }
+        if let Err(e) = self.heap.checked_body(hs, Kind::String) {
+            proof {
+                self.lemma_words_kept(s0);
+            }
+            return Err(Fault::Heap(e));
+        }
+        let ghost text = h1.text_of(s);
+        let len = self.heap.body_of(s).len();
+        let w = self.heap.alloc_bytes_room(len);
+        let ghost h2 = self.heap;
+        proof {
+            h2.lemma_text_spec(w);
+            self.lemma_room_made(h1, s, w, Kind::String);
+        }
+        self.heap.append_body(w, s, 0, len);
+        if M::CHECKED {
+            self.stats.string_bytes_copied = self.stats.string_bytes_copied.wrapping_add(
+                len as u64,
+            );
+        }
+        let ghost h3 = self.heap;
+        proof {
+            assert(h3.text_of(w) =~= text.subrange(0, len as int));
+            assert(text.subrange(0, len as int) =~= text);
+            h3.lemma_text_spec(s);
+            h3.lemma_text_spec(w);
+            if c {
+                s0.lemma_text_shown(h1, h2, h3, s, w, Kind::String);
+            }
+            if !self.heap.core.dom().contains(hs@.addr) {
+                self.heap.core.lemma_region_at(hs@.addr);
+            }
+        }
+        self.heap.release_text(hs, Ghost(s), Ghost(c));
+        proof {
+            self.heap.lemma_text_spec(w);
+            if M::CHECKED {
+                lemma_words_trans(h2, h1, s0.heap);
+                assert(h3.words_kept(h2));
+                assert(self.heap.words_kept(h3));
+                lemma_words_trans(h3, h2, s0.heap);
+                lemma_words_trans(self.heap, h3, s0.heap);
+                self.lemma_words_kept(s0);
+            }
+            if c {
+                self.lemma_converted_ok(s0, h1, h2, h3, s, w, Kind::String);
+            }
+        }
+        Ok(w)
+    }
+
+    /// `String.decode`。`b` の参照を受け取り、中身が妥当な UTF-8 なら、写した新しい文字列を返す。妥当でなければ
+    /// 最初の妥当でない位置を持つ `Fault::Utf8` を返す。どちらでも `b` の参照は手放す。確かめは T5 の `utf8_valid` が
+    /// し、写すバイトは `string_bytes_copied` に数える。
+    ///
+    /// # Safety
+    /// `bytes_push` と同じ (`b` の参照は受け取る)。
+    pub unsafe fn string_decode(&mut self, b: Word) -> (r: Result<Word, Fault>)
+        requires
+            old(self).wf(),
+            old(self).heap_spec().word_in(b),
+            !M::CHECKED ==> old(self).is_bytes(b) && old(self).holds(b),
+        ensures
+            final(self).wf(),
+            final(self).evv_spec() == old(self).evv_spec(),
+            final(self).yield_spec() == old(self).yield_spec(),
+            r is Ok || (r matches Err(Fault::Utf8 { .. })) || (r matches Err(Fault::Heap(_))),
+            (r matches Err(Fault::Heap(_))) ==> final(self).heap_spec().settled_heap() == old(
+                self,
+            ).heap_spec().settled_heap(),
+            !M::CHECKED ==> !(r matches Err(Fault::Heap(_))),
+            old(self).held_ok() && old(self).is_bytes(b) && old(self).holds(b) ==> !(r matches Err(
+                Fault::Heap(_),
+            )) || (r matches Err(Fault::Heap(e)) && chain_err(Err::<(), HeapError>(e))),
+            r matches Ok(w) ==> {
+                &&& valid_utf8(old(self).text_of(b))
+                &&& final(self).is_string(w)
+                &&& final(self).text_of(w) == old(self).text_of(b)
+            },
+            r matches Err(Fault::Utf8 { .. }) ==> !valid_utf8(old(self).text_of(b)),
+            old(self).held_ok() && old(self).is_bytes(b) && old(self).holds(b) ==> {
+                &&& r matches Ok(w) ==> {
+                    &&& final(self).held_ok()
+                    &&& final(self).holds(w)
+                    &&& final(self).evolved_by(*old(self), |x: usize| -points(b, x), Set::empty())
+                }
+                &&& r matches Err(Fault::Utf8 { .. }) ==> {
+                    &&& final(self).held_ok()
+                    &&& final(self).evolved_by(*old(self), |x: usize| -points(b, x), Set::empty())
+                }
+                &&& valid_utf8(old(self).text_of(b)) ==> !(r matches Err(Fault::Utf8 { .. }))
+            },
+    {
+        let ghost s0 = *self;
+        let ghost ws = seq![b];
+        let ghost c = s0.held_ok() && s0.is_bytes(b) && s0.holds(b);
+        if M::CHECKED && !b.is_ptr() {
+            return Err(Fault::Heap(HeapError::WrongKind));
+        }
+        self.heap.settle();
+        let ghost h1 = self.heap;
+        let hb = self.heap.header_of(b);
+        proof {
+            lemma_settled_twice(s0.heap);
+            assert(h1.words_kept(s0.heap));
+            h1.lemma_text_spec(b);
+            s0.heap.lemma_text_spec(b);
+            if c {
+                s0.lemma_settled_body(h1, b, Kind::Bytes);
+            }
+        }
+        if let Err(e) = self.heap.checked_body(hb, Kind::Bytes) {
+            proof {
+                self.lemma_words_kept(s0);
+            }
+            return Err(Fault::Heap(e));
+        }
+        let ghost text = h1.text_of(b);
+        if let Some(at) = utf8_valid(self.heap.body_of(b)) {
+            proof {
+                if !self.heap.core.dom().contains(hb@.addr) {
+                    self.heap.core.lemma_region_at(hb@.addr);
+                }
+            }
+            self.heap.release_text(hb, Ghost(b), Ghost(c));
+            proof {
+                if M::CHECKED {
+                    assert(self.heap.words_kept(h1));
+                    lemma_words_trans(self.heap, h1, s0.heap);
+                    self.lemma_words_kept(s0);
+                }
+                if c {
+                    self.lemma_dropped_ok(s0, h1, ws, b);
+                }
+            }
+            return Err(Fault::Utf8 { at: at as i64 });
+        }
+        let len = self.heap.body_of(b).len();
+        let w = self.heap.alloc_string_room(len);
+        let ghost h2 = self.heap;
+        proof {
+            h2.lemma_text_spec(w);
+            self.lemma_room_made(h1, b, w, Kind::Bytes);
+        }
+        self.heap.append_utf8(w, b);
+        if M::CHECKED {
+            self.stats.string_bytes_copied = self.stats.string_bytes_copied.wrapping_add(
+                len as u64,
+            );
+        }
+        let ghost h3 = self.heap;
+        proof {
+            assert(h3.text_of(w) =~= text);
+            h3.lemma_text_spec(b);
+            h3.lemma_text_spec(w);
+            if c {
+                s0.lemma_text_shown(h1, h2, h3, b, w, Kind::Bytes);
+            }
+            if !self.heap.core.dom().contains(hb@.addr) {
+                self.heap.core.lemma_region_at(hb@.addr);
+            }
+        }
+        self.heap.release_text(hb, Ghost(b), Ghost(c));
+        proof {
+            self.heap.lemma_text_spec(w);
+            if M::CHECKED {
+                lemma_words_trans(h2, h1, s0.heap);
+                assert(h3.words_kept(h2));
+                assert(self.heap.words_kept(h3));
+                lemma_words_trans(h3, h2, s0.heap);
+                lemma_words_trans(self.heap, h3, s0.heap);
+                self.lemma_words_kept(s0);
+            }
+            if c {
+                self.lemma_converted_ok(s0, h1, h2, h3, b, w, Kind::Bytes);
+            }
+        }
+        Ok(w)
+    }
+
     /// `Bytes.make`。どのバイトも `b` の、長さ `n` の新しいバイト列を返す。`n` が負なら `Fault::Index` を返す。
     /// 確保量の上限を超える長さは、確保を試す前に `Stopped(MemoryLimit)` で止める (`Array.make` と同じ)。
     ///

@@ -58,6 +58,14 @@ fn io_faults_map_to_their_kinds() {
     );
 }
 
+/// `String.decode` の誤りは値で決まるので `try_panic` が捕まえ、IO の失敗とは重ならない。
+#[test]
+fn invalid_utf8_faults_panic() {
+    let fault = Fault::Utf8 { at: 0 };
+    assert!(fault.panics());
+    assert_eq!(fault.io_error_kind(), None);
+}
+
 /// `try_panic` に渡すのは算術と範囲の外の位置の誤りだけで、IO の失敗とは重ならない。
 #[test]
 fn only_arith_and_index_faults_panic() {
@@ -228,7 +236,7 @@ fn bools_compare_by_tag() {
 /// 「実行時エラー」の一覧にもある。
 #[test]
 fn faults_print_their_listed_texts() {
-    let cases: [(Fault, &str); 29] = [
+    let cases: [(Fault, &str); 30] = [
         (ArithFault::DivisionByZero.into(), "division by zero"),
         (
             ArithFault::NotScalar(55296).into(),
@@ -315,6 +323,7 @@ fn faults_print_their_listed_texts() {
             Fault::NotUtf8(Box::new(Utf8Source::EnvVar("LANG".into()))),
             "environment variable `LANG` is not valid UTF-8",
         ),
+        (Fault::Utf8 { at: 3 }, "invalid UTF-8 at byte 3"),
         (
             Fault::Index(Box::new(IndexFault::String { index: 5, len: 3 })),
             "string index 5 is out of range for length 3",

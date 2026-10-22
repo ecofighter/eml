@@ -421,6 +421,20 @@ left が一意 (is_unique)
 - 容量は文字列と同じ式で、ページの頭のブロックの大きさから出す
 - `Bytes` の物体は `lin` ビットを立てず、token にもならない (上の「種類」)
 
+### 変換
+
+`String` と `Bytes` の変換は、どちらも中身を新しい物体に写し、引数の参照を手放す。種類を書き換えて物体を共有する道は持たない。
+
+| 操作 | 動作 |
+|---|---|
+| `bytes_of_string(s) -> Result<Word, Fault>` | `Bytes.of_string`。`s` の参照を受け取り、同じバイトのバイト列を返す。文字列が一意でも、リテラルや共有の文字列でも、同じ道で写す |
+| `string_decode(b) -> Result<Word, Fault>` | `String.decode`。`b` の参照を受け取り、T5 の `utf8_valid` で確かめる。妥当なら同じバイトの文字列を返す。妥当でなければ何も作らずに `b` を手放し、最初の妥当でない位置を持つ `Fault::Utf8 { at }` を返す |
+
+- 写すバイトは `string_bytes_copied` に数える。妥当でないバイト列は何も写さないので数えない (下の「仕事の回数」)
+- 引数が一意なときは、ブロックを共有してよい。そのときは写さないので、変わるのは `string_bytes_copied` だけである。今の実装は、一意でも写す
+- 検査モードの誤りは、種類が違うときの `WrongKind` と、`decref` の誤り (`UseAfterFree` など) である。どちらも最初の確保より前に返すので、`Err` のときヒープは変わらない。`Utf8` を返すときは `b` の参照だけを手放している
+- `string_decode` は、確かめた全体を `String` の物体に足す。足せるのは妥当な UTF-8 だけなので、`String` の不変条件は保たれる
+
 ## 配列
 
 `Array a` と `MutArray a` は同じ形の物体である。tag 0 の `Data` で、要素を走査する語として順に並べ、生の語は持たない。要素が 255 個以上なら、ほかの `Data` と同じく数の語を先に置く (上の「ヘッダ」)。要素の位置は一様な位置なので、`Int` は即値で、`Float` は箱で入る。`MutArray` の物体は `lin` ビットを持つ。種類を分けないので、回復は `lin` ビットのない配列を `Data` として写し、`MutArray` を `lin` ビットの物体として断る (上の「種類」の回復の表)。
@@ -854,17 +868,18 @@ token の表の項目は、`into_token` と `release_reuse` が添字を使い�
 | `Io { op, name, reason }` | `op` は `Open`、`Read`、`Write`、`Run`、`reason` は `IoReason` (`NotFound`、`PermissionDenied`、`NotAvailable`、`Other`) | ``cannot open `{name}`: {reason}``、``cannot read `{name}`: {reason}``、``cannot write `{name}`: {reason}``、``cannot run `{name}`: {reason}``。理由は `not found`、`permission denied`、`not available`、`I/O error` |
 | `Stdin(IoReason)` | 標準入力の読みの誤り | ``cannot read the standard input: {reason}`` |
 | `NotUtf8(Box<Utf8Source>)` | 読んだ中身が UTF-8 でない。`Utf8Source` はファイル (パス)、標準入力、引数 (`Env.args ()` の位置)、環境変数 (名前) | ``` `{path}` is not valid UTF-8 ```、`the standard input is not valid UTF-8`、`argument {index} is not valid UTF-8`、``environment variable `{name}` is not valid UTF-8`` |
+| `Utf8 { at: i64 }` | `String.decode` に渡したバイト列が妥当な UTF-8 でない。`at` は最初の妥当でないバイトの位置で、T5 の `utf8_valid` が返す | ``invalid UTF-8 at byte {at}`` |
 | `Index(Box<IndexFault>)` | 範囲の外の位置。`IndexFault` は、文字列の位置 (`byte_at`、`find_from`)、`slice` の範囲、`slice` の境界、`Env.arg` の位置、配列の添字 (`get`、`set`、`read`、`write`)、`make` の負の長さ、バイト列の位置 (`Bytes.get`、`set`)、バイト列の範囲 (`Bytes.slice`、`append_slice`、`truncate`。`truncate n` の範囲は `0..n`)、`Bytes.make` の負の長さ | ``string index {index} is out of range for length {len}``、``string slice {start}..{end} is out of range for length {len}``、``string slice {start}..{end} is not on a character boundary``、``argument index {index} is out of range for {count} arguments``、``array index {index} is out of range for length {len}``、``array length {len} is negative``、``bytes index {index} is out of range for length {len}``、``bytes slice {start}..{end} is out of range for length {len}``、``bytes length {len} is negative`` |
 | `Stopped(Stop)` | `File` の読み (`Fs.read_all` と `read_line_raw`) と標準入力の読みが読む途中で、`Proc.status` が子を起動する前か待つ間に、止める語か確保量の上限に当たった | `interrupted`、`the memory limit is exceeded`、`the call depth limit is exceeded` (`Stop` の表示) |
 
 `Fault::io_error_kind` は、`try_io` が捕まえる誤り (`Io`、`Stdin`、`NotUtf8`) に `IOErrorKind` のタグ (`IO_NOT_FOUND` 0 から `IO_OTHER` 4) を返し、ほかには `None` を返す ([標準ライブラリ](stdlib.md) の「`try_io`」)。
 
-`Fault::panics` は、`try_panic` が捕まえる誤り (`Arith` と `Index`) で真を返し、ほかでは偽を返す ([標準ライブラリ](stdlib.md) の「`try_panic`」)。値と入力で決まる誤りだけを `Panic` にし、どの呼び出しでも起きうるか起きた位置が決まらない誤り (`Heap`、`Output`、`Stopped`) は型に出さない。`io_error_kind` が `Some` を返す誤りとは重ならない。VM はこの2つで、誤りを `Panic` に届けるか、`IO` に届けるか、実行時エラーにするかを決める ([VM](vm.md) の「`IO` と `Panic` への中断」)。
+`Fault::panics` は、`try_panic` が捕まえる誤り (`Arith`、`Utf8`、`Index`) で真を返し、ほかでは偽を返す ([標準ライブラリ](stdlib.md) の「`try_panic`」)。値と入力で決まる誤りだけを `Panic` にし、どの呼び出しでも起きうるか起きた位置が決まらない誤り (`Heap`、`Output`、`Stopped`) は型に出さない。`io_error_kind` が `Some` を返す誤りとは重ならない。VM はこの2つで、誤りを `Panic` に届けるか、`IO` に届けるか、実行時エラーにするかを決める ([VM](vm.md) の「`IO` と `Panic` への中断」)。
 
 - `name` は extern に渡されたパスの文字列そのもの (`file_root` をつなぐ前) か、`Run` ならプログラムの名前である
 - `NotAvailable` は、その実行の Host が持たない入出力である。REPL の標準入力と、組み込み先の Host が実装しなかったメソッドが当たる (下の「Host」)
 - I/O の誤りを文字列でなく値の種類で分けるのは、`try_io` が I/O の誤りを eml の `IOError` の値に変えるためである
-- `Arith`、`Output`、`Io`、`Stdin`、`NotUtf8`、`Index` の表示は、[LIR](lir.md) の「実行時エラー」の文言と1文字も違わない。これは verifier を通るプログラムでの約束である。`Heap(_)` の表示は `eml_rt::HeapError` のものである
+- `Arith`、`Output`、`Io`、`Stdin`、`NotUtf8`、`Utf8`、`Index` の表示は、[LIR](lir.md) の「実行時エラー」の文言と1文字も違わない。これは verifier を通るプログラムでの約束である。`Heap(_)` の表示は `eml_rt::HeapError` のものである
 - 位置 (`at path:line:column`) を付けるのは VM の役で、`Fault` は持たない
 - VM は `Stopped` を、安全点の `Ctx::poll` が返す `Err(Stop)` と同じに扱う
 
@@ -875,7 +890,7 @@ token の表の項目は、`into_token` と `release_reuse` が添字を使い�
 | 誤り | 約束 |
 |---|---|
 | `Heap(_)` | どの確かめも、状態を変える前、Host を呼ぶ前に行う。ヒープは変わらず、何も書かず、何も開かない。確かめるのは、種類 (文字列か、`File` の `Foreign` か)、`decref` が通ること (消費する引数に同じ物体を2つ渡したときは2回続けて通ること。`string_concat` と同じ。借りる引数は1つずつ確かめる)、`File` を読む extern の `File` が一意であること (`foreign_unique`) である。ただし `fs_read` と `fs_close` は、確かめた後で `File` を手放す解放の連鎖の誤りも返しうる (下の項) |
-| `Output`、`Io`、`Stdin`、`NotUtf8`、`Index`、`Stopped` | 借りる引数は成功のときと同じく手放さず、消費する引数は成功のときと同じく消費する。`Fs.read_all` と `read_line_raw` は `File` を手放し (破棄処理が閉じる)、読んだバイト列を手放し、結果を作らない。`slice` は範囲と境界を確保の前に確かめ、誤りなら何も作らない。引数を受けない extern (`Env.arg`、標準入力の読み) は、誤りならヒープを変えない。ほかのヒープは変わらず、`held_ok` は保たれる。REPL が続けて使うためである |
+| `Output`、`Io`、`Stdin`、`NotUtf8`、`Utf8`、`Index`、`Stopped` | 借りる引数は成功のときと同じく手放さず、消費する引数は成功のときと同じく消費する。`Fs.read_all` と `read_line_raw` は `File` を手放し (破棄処理が閉じる)、読んだバイト列を手放し、結果を作らない。`slice` は範囲と境界を確保の前に確かめ、誤りなら何も作らない。引数を受けない extern (`Env.arg`、標準入力の読み) は、誤りならヒープを変えない。ほかのヒープは変わらず、`held_ok` は保たれる。REPL が続けて使うためである |
 | `ArithFault` | ヒープに触れない |
 
 - `fs_read` と `fs_close` の `Heap(_)` は、ヒープが変わらないか、`File` を手放す解放の連鎖で起きたモデルが照らさない誤り (上の「検査モードの約束」) である。モデルは `Foreign` の物体が走査する語を持たないことを知らないので、約束はこの形になる。基本操作の `evv_set`、`ev_set_state`、`yield_finish` と同じく、その後は `Ctx` を落とすことしかできない
@@ -1012,6 +1027,7 @@ pub struct Opened {
 - `Env.arg`、`Env.lookup`、標準入力の読み: 写した文字列の長さ
 - `++`: 左が一意 (rc 1 の局所の物体) なら右の長さだけを数え、容量が足りずに作り直しても同じである。左が共有か不死なら、両辺の長さを数える
 - `Bytes.make`、`Bytes.slice`: 結果の長さ
+- `Bytes.of_string`、`String.decode`: 写したバイトの数。`decode` が `Utf8` を返すときは数えない
 - `Bytes.append`、`Bytes.push`、`Bytes.append_slice`: `++` と同じく、一意な左には足した長さだけを数え、共有か不死の左には左の長さも足して数える。`push` の足す長さは 1 で、`append_slice` は範囲の長さである
 - `Bytes.set`、`Bytes.truncate`: 一意ならその場で書き換えるので数えない。共有か不死なら、写した結果の長さを数える
 
@@ -1031,7 +1047,7 @@ Verus で確かめない部分は、次の信頼の一覧にまとめる。`exte
 | T2 | rc と前置きの atomic の読み書き。欄の権限を受け、`AtomicI32::from_ptr` と `AtomicU32::from_ptr` で Relaxed と AcqRel の操作をする。約束は、T0 の下での逐次の値である | vstd の atomic は SeqCst だけを扱う | 局所と共有の `dup` と `decref`、`is_last` の2回の読み込み、検査モードの前置きの書き換え。2つのスレッドが同じ共有の rc の欄を並行に増減し、最後の参照を見るのがちょうど1つのスレッドであること |
 | T3 | `Foreign` の物体の中身。破棄処理の表 (関数のポインタ)、`TypeId` の照らし合わせ、`drop_in_place`。`foreign_unique` が書き換えるために返すポインタも、同じ照らし合わせで型を守る | Verus は関数のポインタと `TypeId` を扱わない | 型の違う照らし合わせ、`Drop` を持つ値 (`Box`、`String`、`Vec`)、大きさ 0 の型、破棄処理が panic する場合、解放と `Heap` の破棄での破棄処理の呼び出しが1回だけであること、`foreign_unique` で借りて書き換えた値の破棄処理が1回だけであること |
 | T4 | `verus!` の外の `Drop` の実装 (`Heap`、`Pages`、`Frozen`)。`Frozen` の `Drop` は、親への `Arc` を `Arc::into_inner` のループで手放し、ページは `Pages` の `Drop` が返す。`Heap` は付けた塊の `Arc` を `ManuallyDrop` の欄に持ち、`Drop` が生きている物体の後始末 (`finalize_all`) の後で、`#[inline(never)]` の関数に渡して手放す。`Pages` も、確保量を数える `Control` の `Arc` を `ManuallyDrop` の欄に持ち、`Drop` がページを返して確保量を引いた後で、`#[inline(never)]` の関数に渡して手放す。`HostRef` の `Drop` も、Host の `Arc` を `#[inline(never)]` の関数に渡して手放す (上の「extern」の「Host」)。欄の後始末を展開させると、計測のプログラムのコード生成単位の分け方が変わり、速い道が展開されなくなるためである ([計測の基準](../implementation/benchmarks.md) の「`eml_rt` のインライン化」)。後始末の中で破棄処理が panic すると、塊の `Arc` は手放されずに漏れる (メモリの安全は崩れない)。ヒープの ghost の欄の塊の権限の写しは、`wf` で `Arc` の指す塊の権限に結ぶが、写しを使う間 `Arc` が塊のメモリを生かし続けることは Verus が確かめない | Verus は利用者の `Drop` を扱わない。中身は検証した関数を呼ぶか、`Arc` を手放すだけにする | T1 と T3 のテストが通る道。塊の `Drop` がページを返すこと、鎖の塊と付けたヒープをどの順に落としても漏れず、残る `Arc` が鎖を生かすこと |
-| T5 | 証明に使う std の約束のうち vstd にないもの。`ptr::without_provenance_mut` (`Word::imm` が const fn のまま即値を作るため)、2つの塊が同じ塊かを `std::ptr::eq` で比べる `same_chunk` (同じ番地の塊は同じ値であると約束する。vstd は `Arc` の番地の比較に約束を持たない)、panic で止める関数 (大きさの桁あふれ、即値に収まらない `Word::imm`、不死の物体の数の桁あふれ、ページの配置の誤り、子孫でない塊を付ける `attach` の `not_a_descendant`)、`<[u8] as Ord>::cmp` を1回呼ぶ包み `bytes_cmp` の結果が辞書式の順序の spec `lex` に一致すること (上の「extern」。vstd の `assume_specification` は `cmp` を総称の形でしか受けないので、包みにする)、`core::str::from_utf8` の誤りの位置 (`Utf8Error::valid_up_to`) を返す包み `utf8_valid` の結果が、妥当なときだけ `None` で、それが vstd の `valid_utf8` に一致し、誤りの位置がバイト列の長さより前であること (`Ctx::bytes_valid_utf8`。vstd は検査付きの `from_utf8` に約束を持たない。位置は誤りの文言にだけ使う) | vstd の std の約束が足りない。panic の関数は値を返さないことだけを約束する | `utf8_valid` が物体の中身を借りた `&[u8]` を読むこと (1語に収まる長さ、語の境目をまたぐ長さ、大きい物体のページの後ろまで続く長さ) と、誤りの位置 (先頭、途中、末尾)。ほかは値の約束で、メモリに触れない |
+| T5 | 証明に使う std の約束のうち vstd にないもの。`ptr::without_provenance_mut` (`Word::imm` が const fn のまま即値を作るため)、2つの塊が同じ塊かを `std::ptr::eq` で比べる `same_chunk` (同じ番地の塊は同じ値であると約束する。vstd は `Arc` の番地の比較に約束を持たない)、panic で止める関数 (大きさの桁あふれ、即値に収まらない `Word::imm`、不死の物体の数の桁あふれ、ページの配置の誤り、子孫でない塊を付ける `attach` の `not_a_descendant`)、`<[u8] as Ord>::cmp` を1回呼ぶ包み `bytes_cmp` の結果が辞書式の順序の spec `lex` に一致すること (上の「extern」。vstd の `assume_specification` は `cmp` を総称の形でしか受けないので、包みにする)、`core::str::from_utf8` の誤りの位置 (`Utf8Error::valid_up_to`) を返す包み `utf8_valid` の結果が、妥当なときだけ `None` で、それが vstd の `valid_utf8` に一致し、誤りの位置がバイト列の長さより前であること (`Ctx::bytes_valid_utf8` と `Ctx::string_decode`。vstd は検査付きの `from_utf8` に約束を持たない。位置は誤りの文言にだけ使う) | vstd の std の約束が足りない。panic の関数は値を返さないことだけを約束する | `utf8_valid` が物体の中身を借りた `&[u8]` を読むこと (1語に収まる長さ、語の境目をまたぐ長さ、大きい物体のページの後ろまで続く長さ) と、誤りの位置 (先頭、途中、末尾)。ほかは値の約束で、メモリに触れない |
 | T6 | `global` の宣言: 64 ビットの環境、`Word`、`Header`、`PageHeader`、前置きの配置 | Verus は `global` の宣言をコンパイル時に照らす | なし |
 | T7 | unwind。検証した関数は、決まった所でしか unwind しないとして証明する。決まった所は、T5 の panic の関数 (状態を変える前に呼ぶ)、T3 の破棄処理 (箱を先に死んだことにしてから呼ぶ)、`Vec` の伸長と、T11 の Host の呼び出し (`write_line`、`flush`、`open`、読み手の読みと drop、読んだバイト列の UTF-8 の確かめ、`args`、`env_var`、`stdin`、`write_file`、`run`) である。Host を呼ぶ前には、ヒープを整った状態にしておく。Host の中で unwind した後に残る状態は、`println` では文字列が漏れ、`Fs.open` では開く間借りていたパスの文字列が漏れ、`File` の読み (`Fs.read_all` と `read_line_raw`) では `File` が漏れて `Heap` を落とすときの `finalize_all` が閉じる。どれもメモリの安全は崩れない。`Ctx` は `Drop` を実装せず、`evv` と yield の状態の語に触れないので、基本操作の中の `decref` で破棄処理が panic した後も、`Ctx` を落とすことは安全である (上の「実行文脈 `Ctx`」) | Verus の `ensures` は正常に戻ったときだけを扱う。unwind の後も `Heap` と `Ctx` を落とすことは安全でなければならない | 解放の連鎖の途中で破棄処理が panic した後に、`Heap` を落とすこと |
 | T8 | 借用の規則 (Stacked Borrows と Tree Borrows) | vstd の権限のモデルは、参照と生のポインタの借用の規則を表さない | 核の各操作を両方のモードで1回ずつ通す小さいテスト。ヒープの物体のフィールドに置いた領域の語を読み、領域の文字列から写し、`share` と解放の連鎖が領域の子で止まること。実行文脈の基本操作を1回ずつ通すこと |
