@@ -3,21 +3,21 @@ source: crates/eml_cli/tests/ui.rs
 expression: rendered
 input_file: tests/ui/check-fail/names/std_full_qualifier.em
 ---
-[E1031] Error: unknown module qualifier `Std.Fs`
+[E1031] Error: unknown module qualifier `Std.FileIn`
    ╭─[ check-fail/names/std_full_qualifier.em:4:11 ]
    │
- 4 │   let f = Std.Fs.open "a.txt"
-   │           ───┬──  
-   │              ╰──── no import gives this qualifier
+ 4 │   let f = Std.FileIn.open "a.txt"
+   │           ─────┬────  
+   │                ╰────── no import gives this qualifier
    │ 
-   │ Help: a qualifier is one segment; add `import Std.Fs` and write `Fs.open`
+   │ Help: a qualifier is one segment; add `import Std.FileIn` and write `FileIn.open`
 ───╯
-[E1031] Error: unknown module qualifier `Std.Fs`
+[E1031] Error: unknown module qualifier `Std.FileIn`
    ╭─[ check-fail/names/std_full_qualifier.em:5:3 ]
    │
- 5 │   Std.Fs.close f
-   │   ───┬──  
-   │      ╰──── no import gives this qualifier
+ 5 │   Std.FileIn.close f
+   │   ─────┬────  
+   │        ╰────── no import gives this qualifier
    │ 
-   │ Help: a qualifier is one segment; add `import Std.Fs` and write `Fs.close`
+   │ Help: a qualifier is one segment; add `import Std.FileIn` and write `FileIn.close`
 ───╯

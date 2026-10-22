@@ -1,6 +1,6 @@
 -- `File` を開いた生産者の `Iter` を途中で `drop` すると、`File` を捕まえた `return` の節のクロージャも継続と一緒に
 -- 解放され、`File` が閉じる。検査モードで漏れがないことで確かめる。最後まで引いたときは `return` の節が閉じる。
-import Fs
+import FileIn
 import String
 
 data Iter <e> a =
@@ -20,12 +20,12 @@ yield_all xs =
 
 file_lines : String -> <IO, Panic> Iter <IO, Panic> String
 file_lines path =
-  let f = Fs.open path
-  let (text, f) = Fs.read_all f
+  let f = FileIn.open path
+  let (text, f) = FileIn.read_all f
   handle yield_all (String.lines text) with
     | ctl yield line k -> More line k
     | return () ->
-        Fs.close f
+        FileIn.close f
         println "closed by the return clause"
         Done
 

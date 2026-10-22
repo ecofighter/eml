@@ -72,7 +72,7 @@ data Shape =
 - `extern data` に書けるのは型変数の型引数だけで、row の型引数も Kind の宣言も書けない。extern の型の Kind は処理系の表が決める
 - `type` は型の別名の構文として予約する。型の別名は実装しておらず、`type` の宣言は HIR が E0004 にする ([ロードマップ](../future/roadmap.md) の「言語機能と構文」)
 - `extern` でない `data` に `=` がないものは、値を作れない型になるので E1025 とする。どのモジュールでも同じである
-- `Int`、`String`、`Unit` は `Prelude` の、`File` は標準ライブラリのモジュール `Fs` の `extern data` で、`Bool` は `Prelude` の `data Bool = | False | True` である (下の「`extern`」)。`List`、`Option`、`Result` も `Prelude` の `data` である (下の「Prelude のクラス」)
+- `Int`、`String`、`Unit` は `Prelude` の、`FileIn` は標準ライブラリのモジュール `FileIn` の `extern data` で、`Bool` は `Prelude` の `data Bool = | False | True` である (下の「`extern`」)。`List`、`Option`、`Result` も `Prelude` の `data` である (下の「Prelude のクラス」)
 
 ## `effect`
 
@@ -115,7 +115,7 @@ pub extern println : String -> <IO> Unit
 extern のエフェクトに型引数を持たせないのは、row の中で重なったラベルを1つにまとめる規則が、型引数のないエフェクトでだけ正しいためである。これ以外の位置の `extern` は構文エラー (E0011) になる ([文法](grammar.md))。extern の型は型引数を書ける。`Array a` のような要素の型を持つ型があるためで、型引数はすべて共変である。
 
 - `extern` は標準ライブラリ ([モジュールと名前解決](modules.md) の「標準ライブラリ」) のモジュールにだけ書ける。ユーザーのモジュールに書くと、宣言ごとに E1033 にする。help で `extern` を外すよう示すが、外すと E1005 や E1025 になるので自動の修正にはしない。宣言は extern として読み、E1005、E1025、`where` がないことの誤りは重ねて出さない。extern のシグネチャに続く等式は、離れていても読み捨て、E1018 と E1019 も出さない。E1033 は宣言ごとに1つで、その宣言を使った位置には重ねない。handler の節の先頭にユーザーの extern の関数を書いても、E1009 を重ねずに節を捨てる
-- extern の宣言は、処理系が持つ表の行を、モジュールの正式な名前で修飾した名前 (`Prelude.println`、`Std.Fs.open`) で指す。表にない名前や、表の行と食い違う宣言は処理系の誤りで、診断ではなくテストで防ぐ
+- extern の宣言は、処理系が持つ表の行を、モジュールの正式な名前で修飾した名前 (`Prelude.println`、`Std.FileIn.open`) で指す。表にない名前や、表の行と食い違う宣言は処理系の誤りで、診断ではなくテストで防ぐ
 - extern でない宣言の規則は変わらない。等式のないシグネチャは E1005、`=` のない `data` は E1025 で、`Prelude` を含むすべてのモジュールで同じである。extern でない `effect` には、`where` と操作が要る
 - extern の関数の型は、ほかの関数と同じくシグネチャから決まる。引数のそろった呼び出しは、eml のコードを呼び返さずにその場で実行される。ただし、`try_io` が捕まえる種類の誤りで失敗すると VM が `io_failed` の節の入口を呼び、`exit` は中断を始める ([VM](vm.md) の「extern の中断」)
 - extern の関数の引数の型に現れる型変数は、Kind のスキームで `Unr` に固定する。本体がないので、extern が引数をどう使うかを Kind に推論できないためである (操作の引数と同じ考えである)。そのため、`Lin` の要素の `Array` にはどの関数も使えない。結果だけに現れる型変数 (`exit` と `panic` の結果、`MutArray.empty` の要素) は固定しない

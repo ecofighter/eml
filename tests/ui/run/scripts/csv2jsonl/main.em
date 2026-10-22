@@ -4,6 +4,7 @@
 import Yield (Yield(..))
 import Fail (Fail(..))
 import Env
+import FileIn
 import Fs
 import List
 import String
@@ -170,9 +171,9 @@ convert columns body =
 read_text : String -> <IO> Result IOError String
 read_text path =
   use try_io
-  let f = Fs.open path
-  let (text, f) = Fs.read_all f
-  Fs.close f
+  let f = FileIn.open path
+  let (text, f) = FileIn.read_all f
+  FileIn.close f
   text
 
 main : Unit -> <IO, Panic> Unit

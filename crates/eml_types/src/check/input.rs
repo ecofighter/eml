@@ -507,15 +507,15 @@ mod tests {
 
     #[test]
     fn an_input_cannot_leave_or_keep_a_linear_value() {
-        let (_, _, diagnostics) = session(&["import Fs", "Fs.open \"x\""]);
+        let (_, _, diagnostics) = session(&["import FileIn", "FileIn.open \"x\""]);
         assert_eq!(
             diagnostics,
-            ["E2016 this input leaves a value of the linear type `File`"]
+            ["E2016 this input leaves a value of the linear type `FileIn`"]
         );
-        let (_, _, diagnostics) = session(&["import Fs", "let f = Fs.open \"x\""]);
+        let (_, _, diagnostics) = session(&["import FileIn", "let f = FileIn.open \"x\""]);
         assert_eq!(
             diagnostics,
-            ["E2016 `f` cannot keep a value of the linear type `File`"]
+            ["E2016 `f` cannot keep a value of the linear type `FileIn`"]
         );
     }
 
@@ -668,11 +668,14 @@ mod tests {
     #[test]
     fn a_query_lifts_the_rules_of_an_expression_input() {
         assert_eq!(typed(&[ASK], "ask ()"), "Int");
-        assert_eq!(typed(&["import Fs"], "Fs.open \"x\""), "File");
+        assert_eq!(typed(&["import FileIn"], "FileIn.open \"x\""), "FileIn");
         // Kind (矢印の線形性) は書かない
         assert_eq!(
-            typed(&["import Fs"], "fn f -> fn (u : Unit) -> Fs.close f"),
-            "File -> Unit -> <IO> Unit"
+            typed(
+                &["import FileIn"],
+                "fn f -> fn (u : Unit) -> FileIn.close f"
+            ),
+            "FileIn -> Unit -> <IO> Unit"
         );
         assert_eq!(typed(&["let n = 1"], "n"), "Int");
     }

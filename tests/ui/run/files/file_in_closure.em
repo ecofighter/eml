@@ -1,9 +1,9 @@
 -- A lambda that captures a file is linear and can be called once.
-import Fs
+import FileIn
 
 main : Unit -> <IO> Unit
 main () =
-  let f = Fs.open "input.txt"
-  let finish = fn () -> Fs.close f
+  let f = FileIn.open "input.txt"
+  let finish = fn () -> FileIn.close f
   finish ()
   println "closed"

@@ -1102,10 +1102,10 @@ pub fn inputs() -> Vec<(String, Vec<Arg>)> {
         "missing.txt",
         "a\u{0}b",
     ] {
-        push("Std.Fs.read_all", rel(path));
+        push("Std.FileIn.read_all", rel(path));
     }
-    push("Std.Fs.read_all", vec![Arg::Abs("plain.txt".into())]);
-    push("Std.Fs.read_all2", rel("plain.txt"));
+    push("Std.FileIn.read_all", vec![Arg::Abs("plain.txt".into())]);
+    push("Std.FileIn.read_all2", rel("plain.txt"));
     for path in [
         "plain.txt",
         "crlf.txt",
@@ -1115,10 +1115,10 @@ pub fn inputs() -> Vec<(String, Vec<Arg>)> {
         "dir",
         "missing.txt",
     ] {
-        push("Std.Fs.read_line_raw", rel(path));
+        push("Std.FileIn.read_line_raw", rel(path));
     }
     for path in ["plain.txt", "crlf.txt", "empty.txt"] {
-        push("Std.Fs.read_line_raw2", rel(path));
+        push("Std.FileIn.read_line_raw2", rel(path));
     }
     // 配列。長さは負、0、1、3 で、添字は端と、その外側の 1 つずつと、`Int` の両端である。共有された配列の `set` と
     // `thaw` は写す

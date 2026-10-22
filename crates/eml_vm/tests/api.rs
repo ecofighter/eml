@@ -109,7 +109,7 @@ fn an_interrupted_control_stops_at_the_first_safepoint() {
     }
 }
 
-/// 安全点を通らずに `Fs.read_all` に着くプログラムは、読みの中で止まる。止めたのは extern なので `Extern` の誤りになる。
+/// 安全点を通らずに `FileIn.read_all` に着くプログラムは、読みの中で止まる。止めたのは extern なので `Extern` の誤りになる。
 #[test]
 fn an_interrupt_inside_read_all_is_an_interrupt() {
     let root = std::env::temp_dir().join(format!("eml-vm-read-interrupt-{}", std::process::id()));
@@ -118,10 +118,10 @@ fn an_interrupt_inside_read_all_is_an_interrupt() {
     let text = "\
 fn main() -> unit {
   let p.0: obj = const \"a.txt\"
-  let h.1: obj lin = extern \"Std.Fs.open\"(p.0)
-  let s.2: obj = extern \"Std.Fs.read_all\"(h.1)
+  let h.1: obj lin = extern \"Std.FileIn.open\"(p.0)
+  let s.2: obj = extern \"Std.FileIn.read_all\"(h.1)
   decref s.2
-  let u.3: unit = extern \"Std.Fs.close\"(h.1)
+  let u.3: unit = extern \"Std.FileIn.close\"(h.1)
   return u.3
 }
 ";

@@ -19,7 +19,7 @@
 | 速いモードの前提 | 前提を作る段 |
 |---|---|
 | RC のモデル (消費する操作では呼ぶ側が参照を1つ持つ、など) | Perceus。LIR の verifier が確かめるが、debug ビルドだけである |
-| 読むハンドル (`File` と `Stdin`) は局所で rc が 1 で、`read_chunk` の `buf` はバイト列である ([オブジェクトモデル](../spec/object-model.md) の「読み手」) | Kind の印 (Kind 推論、`kind_values`、translate) と V1 |
+| 読むハンドル (`FileIn` と `Stdin`) は局所で rc が 1 で、`read_chunk` の `buf` はバイト列である ([オブジェクトモデル](../spec/object-model.md) の「読み手」) | Kind の印 (Kind 推論、`kind_values`、translate) と V1 |
 | `ev_lookup` の `evv` に、探すエフェクトの evidence がある | 型検査の row と `mask` ([エフェクトと handler](../spec/effects.md) の「健全性」) と EP |
 | 外側の `evv` が `evv_wf` を満たす、yield の状態の手順を守る | EP ([オブジェクトモデル](../spec/object-model.md) の「基本操作の契約」) |
 
@@ -35,7 +35,7 @@ Verus が向いているのは、(b) のうち小さく安定した純粋なデ�
 
 ### 値する理由
 
-- 印の正しさを、後の段は確かめられない。V2 では `poly` が `unr` とも `lin` とも合うので、LIR の verifier は「`unr` の変数が `Lin` の物体を持たない」ことを確かめられない ([LIR](../spec/lir.md) の「Kind の印の検査」)。`unpack` と case のフィールドの印は translate を信用している。`poly` のコードで作った `Lin` の物体には `lin` ビットが立たないので ([オブジェクトモデル](../spec/object-model.md) の「`lin` ビット」)、検査モードでも捕まらない。印の根拠は Kind 推論だけで、translate の `check_linearity` が debug ビルドで、テストしたプログラムについて突き合わせているだけである。誤りがあると、速いモードの `File` の rc が 1 という前提が成り立たなくなる
+- 印の正しさを、後の段は確かめられない。V2 では `poly` が `unr` とも `lin` とも合うので、LIR の verifier は「`unr` の変数が `Lin` の物体を持たない」ことを確かめられない ([LIR](../spec/lir.md) の「Kind の印の検査」)。`unpack` と case のフィールドの印は translate を信用している。`poly` のコードで作った `Lin` の物体には `lin` ビットが立たないので ([オブジェクトモデル](../spec/object-model.md) の「`lin` ビット」)、検査モードでも捕まらない。印の根拠は Kind 推論だけで、translate の `check_linearity` が debug ビルドで、テストしたプログラムについて突き合わせているだけである。誤りがあると、速いモードの `FileIn` の rc が 1 という前提が成り立たなくなる
 - 規則の議論が繊細である。[型と Kind](../spec/types.md) は、反例を挙げて規則を選んでいる。「書き出すときの規則」の `f eat x n` の例、「instance での評価」の多相再帰の `f x eat g n` の例、`Unr` への固定で `μ` の instance での値を使わない理由がそれに当たる
 - 数学として閉じている。扱うのは、2つの値の束 (`Unr ≤ Lin`)、3つの値の鎖 (`Never ≤ Once ≤ Multi`)、`Poly` を足した3つの値の結び、変数の間の辺と定数の境界だけである。SMT に向いていて、`eml_rt` で `share_walk` を任意のグラフについて証明したやり方 ([テスト戦略](../implementation/testing.md) の「Verus」) がそのまま使える
 

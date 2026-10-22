@@ -1,17 +1,17 @@
 -- The body of a handle runs at most once, so it can capture a file.
-import Fs
+import FileIn
 
 effect Ask where
   ask : Unit -> Int
 
-use_file : Fs.File -> <Ask, IO> Int
+use_file : FileIn.FileIn -> <Ask, IO> Int
 use_file f =
-  Fs.close f
+  FileIn.close f
   ask ()
 
 main : Unit -> <IO, Panic> Unit
 main () =
-  let f = Fs.open "input.txt"
+  let f = FileIn.open "input.txt"
   let n =
     handle use_file f with
       | ctl ask () k -> k 41

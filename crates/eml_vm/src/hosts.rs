@@ -56,7 +56,7 @@ impl Written {
 
 /// テストの Host。標準出力と標準エラーを、それぞれメモリに捕まえる。引数、標準入力、環境変数は与えたものだけで、本物の
 /// 環境は読まない。テストの結果を実行する場所によらないものにするためである。`Fs.write_text` はディスクに書かずに
-/// 覚え、同じパスの `Fs.open` はそれを読む。リポジトリの中にファイルを作らないためである。子のプロセスは本物を起動し、
+/// 覚え、同じパスの `FileIn.open` はそれを読む。リポジトリの中にファイルを作らないためである。子のプロセスは本物を起動し、
 /// その標準出力と標準エラーも捕まえる (docs/implementation/testing.md の「UI テスト」)。
 pub struct CaptureHost {
     // 出力とファイルの読みは `eml run` と同じ `StdHost` に任せ、出力のまとめ方も同じにする
@@ -72,7 +72,7 @@ pub struct CaptureHost {
 }
 
 impl CaptureHost {
-    /// 引数なし、空の標準入力、空の環境で始める。`file_root` は `Fs.open` の相対パスと子の作業ディレクトリの基準である。
+    /// 引数なし、空の標準入力、空の環境で始める。`file_root` は `FileIn.open` の相対パスと子の作業ディレクトリの基準である。
     pub fn new(file_root: PathBuf) -> CaptureHost {
         let (out, err) = (Capture::default(), Capture::default());
         let inner = StdHost::new(

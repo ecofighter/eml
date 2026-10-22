@@ -177,7 +177,7 @@ fn imports_of_inputs_follow_the_inputs_in_the_order_they_are_found() {
         &[
             (
                 1,
-                "import A\nimport Fs\n\nf : String -> <IO> Fs.File\nf p = Fs.open p",
+                "import A\nimport Fs\n\nf : String -> <IO> FileIn.FileIn\nf p = FileIn.open p",
             ),
             (2, "import B"),
         ],
@@ -195,8 +195,9 @@ fn imports_of_inputs_follow_the_inputs_in_the_order_they_are_found() {
             "Std.Fs",
             "B",
             "Std.String",
-            "Std.Bytes",
-            "Std.List"
+            "Std.FileIn",
+            "Std.List",
+            "Std.Bytes"
         ]
     );
 }
@@ -249,8 +250,9 @@ fn a_cached_fallback_to_the_standard_library_stays() {
             "<input 1>",
             "Std.Fs",
             "Std.String",
-            "Std.Bytes",
-            "Std.List"
+            "Std.FileIn",
+            "Std.List",
+            "Std.Bytes"
         ]
     );
     assert_eq!(

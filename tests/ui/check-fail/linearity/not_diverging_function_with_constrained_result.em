@@ -1,5 +1,5 @@
 -- E3003: a function whose result variable has a class context may return a value, so its call does not end the path.
-import Fs
+import FileIn
 
 class Default a where
   default : Unit -> a
@@ -12,7 +12,7 @@ mk () = default ()
 
 pick : Unit -> <IO> Int
 pick () =
-  let f = Fs.open "input.txt"
+  let f = FileIn.open "input.txt"
   mk ()
 
 main : Unit -> <IO> Unit

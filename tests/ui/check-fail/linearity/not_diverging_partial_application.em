@@ -1,5 +1,5 @@
 -- E3003: a call through a `let`-bound value does not end the path, even when the value is `die`.
-import Fs
+import FileIn
 
 die : String -> <IO> a
 die message =
@@ -8,6 +8,6 @@ die message =
 
 main : Unit -> <IO> Unit
 main () =
-  let f = Fs.open "input.txt"
+  let f = FileIn.open "input.txt"
   let d = die
   d "no"

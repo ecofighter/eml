@@ -1,8 +1,8 @@
 import Fail (Fail(..))
-import Fs (File)
+import FileIn (File)
 
 fail_with_file : String -> Unit -> <IO, Fail File> Unit
-fail_with_file path () = Fail.fail (Fs.open path)
+fail_with_file path () = Fail.fail (FileIn.open path)
 
 main : Unit -> <IO> Unit
 main () =

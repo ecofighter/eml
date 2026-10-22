@@ -1,12 +1,13 @@
 -- `File` を持つフレームを通ってゼロ除算を `try_panic` が捕まえる。巻き戻しが途中のフレームの `File` を閉じるので、
 -- 検査モードの漏れの検査も通る。
+import FileIn
 import Fs
 
 deep : Int -> Int -> <IO, Panic> Int
 deep d n =
-  let f = Fs.open "input.txt"
+  let f = FileIn.open "input.txt"
   let r = if n == 0 then 100 / d else deep d (n - 1) + 1
-  Fs.close f
+  FileIn.close f
   r
 
 main : Unit -> <IO> Unit

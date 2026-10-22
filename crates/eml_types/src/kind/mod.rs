@@ -557,7 +557,7 @@ mod tests {
 
     #[test]
     fn reasons_have_a_fixed_order() {
-        let program = crate::test_program("import Std.Fs");
+        let program = crate::test_program("import Std.FileIn");
         let mut types = TypeStore::new(&program);
         let reasons = distinct_reasons(&program, &mut types);
         let key = |reason: &KindReason| reason.order_key(&types, &program.names);
@@ -590,7 +590,7 @@ mod tests {
     /// 中身が1か所だけ違う由来を、種類ごとに並べる。
     fn distinct_reasons(program: &Program, types: &mut TypeStore) -> Vec<KindReason> {
         let file = types.intern(TypeKind::Con {
-            id: program.extern_type(ExternType::File),
+            id: program.extern_type(ExternType::FileIn),
             args: Vec::new(),
             rows: Vec::new(),
         });

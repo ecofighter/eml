@@ -1,10 +1,10 @@
 -- E3003: `S.get` returns the state type of its row, so its call does not end the path.
 import Std.State as S
-import Fs
+import FileIn
 
 peek : Unit -> <S.State Int, IO> Int
 peek () =
-  let f = Fs.open "input.txt"
+  let f = FileIn.open "input.txt"
   S.get ()
 
 main : Unit -> <IO> Unit

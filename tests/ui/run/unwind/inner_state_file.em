@@ -1,6 +1,6 @@
 -- 内側の handler の状態が `File` のまま、本体が外側の `Fail.to_result` へ中断する。巻き戻しが内側の handler を外すときに状態を取り出して手放し、`File` を閉じる。
 import Fail (Fail(..))
-import Fs
+import FileIn
 
 effect Tick where
   tick : Unit -> Unit
@@ -12,10 +12,10 @@ body () =
 
 inner : Unit -> <Fail String, IO> Int
 inner () =
-  handle body () from Fs.open "input.txt" with
+  handle body () from FileIn.open "input.txt" with
     | ctl tick () k f -> k () f
     | return x f ->
-      Fs.close f
+      FileIn.close f
       x
 
 main : Unit -> <IO> Unit

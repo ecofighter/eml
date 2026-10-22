@@ -1,6 +1,6 @@
 -- その場で動く `fn` 節が無いファイルを開く。節の本体は handler の外側の `evv` で動くので、handle の本体の中の
 -- `try_io` ではなく、handle の外の `try_io` が IO の失敗を捕まえる。
-import Fs
+import FileIn
 
 effect Ask where
   ask : Unit -> Int
@@ -15,7 +15,7 @@ handled : Unit -> <IO, Panic> String
 handled () =
   handle body () with
     | fn ask () ->
-      Fs.close (Fs.open "missing.txt")
+      FileIn.close (FileIn.open "missing.txt")
       1
 
 main : Unit -> <IO, Panic> Unit

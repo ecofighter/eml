@@ -6,12 +6,12 @@ input_file: tests/ui/check-fail/linearity/file_not_closed_on_a_branch.em
 [E3003] Error: `f` must be used exactly once, but some paths do not use it
    ╭─[ check-fail/linearity/file_not_closed_on_a_branch.em:6:7 ]
    │
- 6 │   let f = Fs.open "input.txt"
+ 6 │   let f = FileIn.open "input.txt"
    │       ┬  
    │       ╰── `f` is bound here
- 7 │   if True then Fs.close f else println "kept"
-   │                                ───────┬──────  
-   │                                       ╰──────── this branch does not use `f`
+ 7 │   if True then FileIn.close f else println "kept"
+   │                                    ───────┬──────  
+   │                                           ╰──────── this branch does not use `f`
    │ 
    │ Help: pass `f` to `drop`
    │ 

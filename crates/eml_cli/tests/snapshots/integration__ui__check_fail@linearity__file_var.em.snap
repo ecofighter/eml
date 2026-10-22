@@ -3,12 +3,12 @@ source: crates/eml_cli/tests/ui.rs
 expression: rendered
 input_file: tests/ui/check-fail/linearity/file_var.em
 ---
-[E3007] Error: the variable `f` has the linear type `File`
+[E3007] Error: the variable `f` has the linear type `FileIn`
    ╭─[ check-fail/linearity/file_var.em:6:3 ]
    │
- 6 │   var f = Fs.open "input.txt"
-   │   ─────────────┬─────────────  
-   │                ╰─────────────── a `var` variable must be unrestricted or a `MutArray`
+ 6 │   var f = FileIn.open "input.txt"
+   │   ───────────────┬───────────────  
+   │                  ╰───────────────── a `var` variable must be unrestricted or a `MutArray`
    │ 
    │ Help: bind the value with `let` and pass `f` on instead of keeping it in a `var` variable
    │ 

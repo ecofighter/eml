@@ -696,7 +696,7 @@ impl Host for InterruptingOpen {
 }
 
 /// 割り込みで止まった入力が開いた `File` は、`eval` から戻った時点で閉じていて、検査モードの `close` もリークを
-/// 報告しない。`Fs.read_all` の中で止まったとき (`Extern` の誤り) も、`File` を渡す呼び出しの安全点で止まったときも、
+/// 報告しない。`FileIn.read_all` の中で止まったとき (`Extern` の誤り) も、`File` を渡す呼び出しの安全点で止まったときも、
 /// `File` は失敗した実行のスタックに残り、回復が古いヒープを捨てるときに破棄処理が閉じる。`read_all` は `File` を
 /// 借りるので、誤りでも手放さない (docs/spec/object-model.md の「セッションの根」)。
 #[test]
@@ -718,11 +718,11 @@ fn a_file_left_open_by_an_interrupt_is_closed_by_recovery() {
             HostRef::new(Arc::new(host)),
         );
         for input in [
-            "import Fs\nkeep : Int -> Fs.File -> <Panic> Fs.File\nkeep n f = if n > 0 then keep (n - 1) f else f",
-            "import Fs\nread : Unit -> <IO> String\nread () =\n  let f = Fs.open \"a.txt\"\n  \
-             let (text, f) = Fs.read_all f\n  Fs.close f\n  text",
-            "import Fs\nread_kept : Unit -> <IO, Panic> String\nread_kept () =\n  let f = keep 0 (Fs.open \"a.txt\")\n  \
-             let (text, f) = Fs.read_all f\n  Fs.close f\n  text",
+            "import FileIn\nkeep : Int -> FileIn.FileIn -> <Panic> FileIn.FileIn\nkeep n f = if n > 0 then keep (n - 1) f else f",
+            "import FileIn\nread : Unit -> <IO> String\nread () =\n  let f = FileIn.open \"a.txt\"\n  \
+             let (text, f) = FileIn.read_all f\n  FileIn.close f\n  text",
+            "import FileIn\nread_kept : Unit -> <IO, Panic> String\nread_kept () =\n  let f = keep 0 (FileIn.open \"a.txt\")\n  \
+             let (text, f) = FileIn.read_all f\n  FileIn.close f\n  text",
         ] {
             let evaluated = repl.eval(input);
             assert_eq!(
@@ -1096,8 +1096,8 @@ fn type_of_closes_the_row_of_a_self_call_under_its_own_handler() {
 #[test]
 fn type_of_returns_no_type_when_any_error_is_found() {
     let mut console = Console::new(&RunConfig::default());
-    assert_eq!(console.eval("import Fs").0, Outcome::Accepted);
-    let typed = console.repl.type_of("let f = Fs.open \"x\" in (f, f)");
+    assert_eq!(console.eval("import FileIn").0, Outcome::Accepted);
+    let typed = console.repl.type_of("let f = FileIn.open \"x\" in (f, f)");
     assert!(has_errors(&typed.diagnostics), "{:?}", typed.diagnostics);
     assert_eq!(typed.ty, None);
 }

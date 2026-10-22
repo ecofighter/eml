@@ -2,7 +2,7 @@
 -- ファイルを書かないときは標準入力を1行ずつ読む。行を流す生産者と、`Yield.fold` で絞り込んで出す消費者に分けて書く
 import Yield (Yield(..))
 import Env
-import Fs
+import FileIn
 import List
 import Stdin
 import String
@@ -64,9 +64,9 @@ search opts prefix name =
     use try_io
     if name == "-" then matching opts prefix stdin_lines
     else
-      let f = Fs.open name
-      let (text, f) = Fs.read_all f
-      Fs.close f
+      let f = FileIn.open name
+      let (text, f) = FileIn.read_all f
+      FileIn.close f
       use matching opts prefix
       numbered_lines (String.lines text)
   match found with

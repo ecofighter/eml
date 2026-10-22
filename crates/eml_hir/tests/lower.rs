@@ -829,19 +829,19 @@ fn a_constructor_operator_brings_its_public_fixity_through_type_imports() {
 
 #[test]
 fn a_full_std_name_as_a_qualifier_points_to_the_short_name() {
-    let entry = "f : Int\nf = Std.Fs.close\n\ng : Int\ng = Std.Nope.close";
+    let entry = "f : Int\nf = Std.FileIn.close\n\ng : Int\ng = Std.Nope.close";
     insta::assert_snapshot!(module_report(entry, &[]), @"
-    E1031 test.em 2:5 unknown module qualifier `Std.Fs`
+    E1031 test.em 2:5 unknown module qualifier `Std.FileIn`
       test.em 2:5 no import gives this qualifier
-      help: a qualifier is one segment; add `import Std.Fs` and write `Fs.close`
+      help: a qualifier is one segment; add `import Std.FileIn` and write `FileIn.close`
     E1031 test.em 5:5 unknown module qualifier `Std.Nope`
       test.em 5:5 no import gives this qualifier
     ");
     // import を足す編集と、修飾子を短い名前に置き換える編集の2つを1つの fix にする
     insta::assert_snapshot!(fixes(entry).join("\n"), @r#"
-    E1031 2:5 import `Std.Fs` and write `Fs.close`
-      1:1..1:1 "import Std.Fs\n"
-      2:5..2:11 "Fs"
+    E1031 2:5 import `Std.FileIn` and write `FileIn.close`
+      1:1..1:1 "import Std.FileIn\n"
+      2:5..2:15 "FileIn"
     "#);
 }
 

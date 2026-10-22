@@ -33,7 +33,7 @@ probe_float x = x
 probe_unit : Unit -> Unit
 probe_unit u = u
 
-probe_file : Fs.File -> Fs.File
+probe_file : FileIn.FileIn -> FileIn.FileIn
 probe_file f = f
 
 probe_stdin : Stdin.Stdin -> Stdin.Stdin
@@ -71,7 +71,7 @@ fn probe(ty: ExternType) -> &'static str {
         ExternType::String => "probe_string",
         ExternType::Bytes => "probe_bytes",
         ExternType::Unit => "probe_unit",
-        ExternType::File => "probe_file",
+        ExternType::FileIn => "probe_file",
         ExternType::Stdin => "probe_stdin",
         ExternType::Stdout => "probe_stdout",
         ExternType::Stderr => "probe_stderr",
@@ -235,7 +235,7 @@ fn every_extern_function_row_has_the_reprs_of_its_std_signature() {
     }
 }
 
-/// 表の値そのもの。借りる引数を持つ行は次の表の行だけで、組を返すのは `Std.MutArray` の2つの行と、`Std.Fs` と
+/// 表の値そのもの。借りる引数を持つ行は次の表の行だけで、組を返すのは `Std.MutArray` の2つの行と、`Std.FileIn` と
 /// `Std.Stdin` のそれぞれ5つの読みの行だけである。`Std.Stdout` と `Std.Stderr` の書き込みの行は、データを借りて
 /// ハンドルを返すので、組を返さない。
 #[test]
@@ -247,15 +247,15 @@ fn only_the_listed_rows_borrow_or_return_a_pair() {
             "Std.Array.get" => (&[true, false], None),
             "Std.MutArray.length" => (&[true], Some(0)),
             "Std.MutArray.read" => (&[true, false], Some(0)),
-            "Std.Fs.read_all"
-            | "Std.Fs.read_line_raw"
-            | "Std.Fs.read_all_bytes"
-            | "Std.Fs.read_line_bytes_raw"
+            "Std.FileIn.read_all"
+            | "Std.FileIn.read_line_raw"
+            | "Std.FileIn.read_all_bytes"
+            | "Std.FileIn.read_line_bytes_raw"
             | "Std.Stdin.read_all"
             | "Std.Stdin.read_line_raw"
             | "Std.Stdin.read_all_bytes"
             | "Std.Stdin.read_line_bytes_raw" => (&[true], Some(0)),
-            "Std.Fs.read_chunk" | "Std.Stdin.read_chunk" => (&[false, true], Some(1)),
+            "Std.FileIn.read_chunk" | "Std.Stdin.read_chunk" => (&[false, true], Some(1)),
             "Std.String.byte_length" | "Prelude.Show String.show" => (&[true], None),
             "Std.String.byte_at" => (&[false, true], None),
             "Std.String.slice" => (&[false, false, true], None),
@@ -377,7 +377,7 @@ fn kind_of(lin: Lin) -> Linearity {
     }
 }
 
-/// 表の値そのもの。`Fs` の7つ、`Stdin` の7つ、`Stdout` の6つ、`Stderr` の5つと `MutArray` を扱う7つ以外は、引数も
+/// 表の値そのもの。`FileIn` の7つ、`Stdin` の7つ、`Stdout` の6つ、`Stderr` の5つと `MutArray` を扱う7つ以外は、引数も
 /// 結果も `Unr` である。
 #[test]
 fn only_the_handle_and_mutable_array_rows_carry_a_lin() {
@@ -385,13 +385,13 @@ fn only_the_handle_and_mutable_array_rows_carry_a_lin() {
     for &e in Extern::ALL {
         let row = e.row();
         let expected: (&[Linearity], Linearity) = match row.name {
-            "Std.Fs.open" => (&[Unr], Lin),
-            "Std.Fs.read_all" => (&[Lin], Unr),
-            "Std.Fs.read_line_raw" => (&[Lin], Unr),
-            "Std.Fs.read_all_bytes" => (&[Lin], Unr),
-            "Std.Fs.read_line_bytes_raw" => (&[Lin], Unr),
-            "Std.Fs.read_chunk" => (&[Unr, Lin], Unr),
-            "Std.Fs.close" => (&[Lin], Unr),
+            "Std.FileIn.open" => (&[Unr], Lin),
+            "Std.FileIn.read_all" => (&[Lin], Unr),
+            "Std.FileIn.read_line_raw" => (&[Lin], Unr),
+            "Std.FileIn.read_all_bytes" => (&[Lin], Unr),
+            "Std.FileIn.read_line_bytes_raw" => (&[Lin], Unr),
+            "Std.FileIn.read_chunk" => (&[Unr, Lin], Unr),
+            "Std.FileIn.close" => (&[Lin], Unr),
             "Std.Stdin.open" => (&[Unr], Lin),
             "Std.Stdin.read_all" => (&[Lin], Unr),
             "Std.Stdin.read_line_raw" => (&[Lin], Unr),
@@ -456,7 +456,7 @@ fn every_extern_type_row_has_the_repr_of_its_type() {
 #[test]
 fn the_tags_externs_build_name_the_constructors_of_their_layouts() {
     let program = eml_test_support::lir(
-        "import Fs\nmain : Unit -> <IO> Unit\nmain () =\n  let f = Fs.open \"a.txt\"\n  let (text, f) = Fs.read_all f\n  Fs.close f\n  if text == \"\" then println \"empty\" else println text",
+        "import FileIn\nmain : Unit -> <IO> Unit\nmain () =\n  let f = FileIn.open \"a.txt\"\n  let (text, f) = FileIn.read_all f\n  FileIn.close f\n  if text == \"\" then println \"empty\" else println text",
     );
     let constructors = |name: &str| -> Vec<&str> {
         let layout = program
@@ -476,7 +476,7 @@ fn the_tags_externs_build_name_the_constructors_of_their_layouts() {
         (bool[FALSE as usize], bool[TRUE as usize]),
         ("False", "True")
     );
-    // `Fs.read_all` の結果と `File` の組は、要素が2つの組の配置の唯一のコンストラクタである
+    // `FileIn.read_all` の結果と `File` の組は、要素が2つの組の配置の唯一のコンストラクタである
     assert_eq!(constructors("(,)"), ["(,)"]);
     assert_eq!(TUPLE, 0);
 }

@@ -1,6 +1,6 @@
 //! LIR の `release` (docs/spec/object-model.md の「核の操作」)。判定は `is_last` で、
 //! rc が -1 の物体も最後の参照として、残すフィールドを `dup` せずに受け取る。共有の親から `lin` の子が届く形
-//! (docs/spec/object-model.md の「`share`」) で、正しいプログラムの `File` を `dup` しないためである。
+//! (docs/spec/object-model.md の「`share`」) で、正しいプログラムの `FileIn` を `dup` しないためである。
 
 use std::mem;
 use vstd::prelude::*;

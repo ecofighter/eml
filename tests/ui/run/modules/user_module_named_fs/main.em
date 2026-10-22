@@ -6,8 +6,5 @@ import Other
 main : Unit -> <IO> Unit
 main () =
   println (Fs.describe ())
-  let f = F.open "../../files/input.txt"
-  let (text, f) = F.read_all f
-  F.close f
-  println text
+  println (F.read_text "../../files/input.txt")
   println (Other.read_input ())

@@ -64,7 +64,7 @@ import の循環は E1027 にする。型検査は item と SCC の単位で動�
 
 ## 標準ライブラリ
 
-標準ライブラリは、リポジトリの `std/` ツリーのモジュールで、処理系のバイナリに埋め込まれている。`std/` は `Prelude.em`、`Fs.em`、`List.em`、`String.em`、`Env.em`、`Stdin.em`、`Stdout.em`、`Stderr.em`、`Proc.em`、`Yield.em`、`Fail.em`、`State.em`、`Iter.em`、`Float.em`、`Char.em`、`Byte.em`、`Bytes.em`、`Array.em`、`MutArray.em` からなる。各モジュールの関数は [標準ライブラリ](stdlib.md) にある。標準ライブラリのモジュールだけが `extern` を書ける ([宣言](declarations.md) の「`extern`」)。
+標準ライブラリは、リポジトリの `std/` ツリーのモジュールで、処理系のバイナリに埋め込まれている。`std/` は `Prelude.em`、`FileIn.em`、`Fs.em`、`List.em`、`String.em`、`Env.em`、`Stdin.em`、`Stdout.em`、`Stderr.em`、`Proc.em`、`Yield.em`、`Fail.em`、`State.em`、`Iter.em`、`Float.em`、`Char.em`、`Byte.em`、`Bytes.em`、`Array.em`、`MutArray.em` からなる。各モジュールの関数は [標準ライブラリ](stdlib.md) にある。標準ライブラリのモジュールだけが `extern` を書ける ([宣言](declarations.md) の「`extern`」)。
 
 - 標準ライブラリのモジュールの正式な名前は、予約した根 `Std` の下に置く (`Std.Fs`)。`Prelude` だけは `Prelude` のままである。診断に出すパスは `<std>/Prelude.em`、`<std>/Fs.em` のように書き、手元の相対パスと区別する
 - Prelude はいつも読み込み、どのモジュールからも使える。ほかの標準ライブラリのモジュール `X` は、`X` を import したモジュールからだけ修飾子として使える (`import X`、`import Std.X`、`import Std.X as A`、`import X (…)`)。import しないモジュールでは、`X.f` も `Std.X.f` も E1031 である (下の「名前の解決」)。修飾子の指す先が import だけで決まるようにするためである。REPL も同じ規則である (下の「REPL のセッション」)
@@ -76,13 +76,13 @@ import の循環は E1027 にする。型検査は item と SCC の単位で動�
 - `import Std.Fs` はいつも標準ライブラリを指す。`import Std.Nope` は E1026 で、ユーザーの根は読まない。`import Std` は `Std` が標準ライブラリの根なので E1030 にする
 - `import Std.Prelude` は、別名を付けても E1030 にする。Prelude は暗黙に取り込むので、import できない
 - `import Fs` は、まずユーザーの根の `Fs.em` を探し、ファイルが見つからないときだけ標準ライブラリの `Fs` を探す。ユーザーの `Fs.em` があれば、それを優先する。大文字小文字だけが違うファイルがあるときや、あっても読めないときは E1026 で、標準ライブラリには進まない
-- ユーザーの `Fs.em` を `import Fs` で読むと、修飾子 `Fs` はユーザーのモジュールを指し、標準ライブラリの `Fs` は隠れる。`Fs.open` のように修飾して引いた名前がユーザーの `Fs` になく、標準ライブラリの `Fs` が `pub` で定義していれば、E1001 か E1002 に「`import Std.Fs as F` で標準ライブラリに届く」という help を付ける
+- ユーザーの `Fs.em` を `import Fs` で読むと、修飾子 `Fs` はユーザーのモジュールを指し、標準ライブラリの `Fs` は隠れる。`Fs.read_text` のように修飾して引いた名前がユーザーの `Fs` になく、標準ライブラリの `Fs` が `pub` で定義していれば、E1001 か E1002 に「`import Std.Fs as F` で標準ライブラリに届く」という help を付ける
 - `as Std` の別名は書ける。`Std` は暗黙の修飾子ではないので、ほかのモジュールと合流しない
 - 標準ライブラリのモジュールも `Prelude` を暗黙に取り込む。そのため、`import Prelude` などの予約したモジュールの規則 (E1030) は標準ライブラリの import にもかける。入口のファイルを指す import の検査だけは、標準ライブラリの import がユーザーの根を探さないので、かけない
 - 標準ライブラリのモジュールどうしは、`import` で明示して使う。`import Fs` と `import Std.Fs` のどちらで書いてもよい。標準ライブラリのモジュールの import は `std/` だけを探し、ユーザーの根は読まない。循環 (E1027) は標準ライブラリの中の依存もすべて見る
 - 標準ライブラリのモジュールの `pub` でない item (`Prelude` の `show_rest` など) は、ユーザーからは定義がないものとして扱う。`Prelude.show_rest` は E1029 ではなく E1001 である
 - extern のエフェクトの操作 (Prelude の `io_failed`) は、`pub` のエフェクトでも、宣言したモジュールの外から見えない。修飾しても修飾しなくても E1001 である。handler の節の先頭に書いても同じである
-- ユーザーのモジュールが `File` を定義していて標準ライブラリの `File` と重なるときだけ、型の表示は標準ライブラリのものを `Std.Fs.File` と書く。ほかは `File` と短く書く。重なりは、読み込んだモジュールの型だけで決まる。そのため、利用者の `data File` は、`Fs` を読み込んだプログラムでだけ `Main.File` と書く。標準ライブラリの `pub` でない item は、利用者が書けないので重なりに数えず、ほかの定義元と同じ名前ならその item だけを修飾する
+- ユーザーのモジュールが `FileIn` を定義していて標準ライブラリの `FileIn` と重なるときだけ、型の表示は標準ライブラリのものを `Std.FileIn.FileIn` と書く。ほかは `FileIn` と短く書く。重なりは、読み込んだモジュールの型だけで決まる。そのため、利用者の `data FileIn` は、標準ライブラリの `FileIn` を読み込んだプログラムでだけ `Main.FileIn` と書く。標準ライブラリの `pub` でない item は、利用者が書けないので重なりに数えず、ほかの定義元と同じ名前ならその item だけを修飾する
 - モジュールと同じ名前の型を持つ標準ライブラリのモジュールがある (`Std.Stdin` の `Stdin`)。修飾子 `Stdin` はモジュールを指すので、型は `Stdin.Stdin` と書く。型の表示は、上の規則のとおり重ならなければ `Stdin` と短く書く
 
 ## 名前の解決

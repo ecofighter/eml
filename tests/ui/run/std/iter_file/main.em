@@ -1,18 +1,18 @@
--- `Fs.read_line` で読む生産者を `Iter.generate` で包む (docs/spec/stdlib.md)。`Iter.take` が途中でやめると、残りの
+-- `FileIn.read_line` で読む生産者を `Iter.generate` で包む (docs/spec/stdlib.md)。`Iter.take` が途中でやめると、残りの
 -- 継続ごと `File` を閉じる。閉じなければ checked mode の漏れの検査で落ちる
 import Iter
 import Yield (Yield(..))
-import Fs
+import FileIn
 
 lines : String -> Unit -> <Yield String, IO, Panic> Unit
 lines path () =
   let go file =
-    match Fs.read_line file with
-      | (None, file) -> Fs.close file
+    match FileIn.read_line file with
+      | (None, file) -> FileIn.close file
       | (Some line, file) ->
         yield line
         go file
-  go (Fs.open path)
+  go (FileIn.open path)
 
 main : Unit -> <IO, Panic> Unit
 main () =

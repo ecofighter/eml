@@ -286,7 +286,7 @@ yields fn g(c.0: tobj, e.1: obj, x.2: tobj lin) -> tobj {
   return r.3
 }
 fn h(s.0: obj) -> obj lin {
-  let f.1: obj lin = extern Std.Fs.open(s.0)
+  let f.1: obj lin = extern Std.FileIn.open(s.0)
   return f.1
 }
 fn k(c.0: tobj) -> tobj lin {
@@ -305,7 +305,7 @@ fn k(c.0: tobj) -> tobj lin {
       return r.3
     }
     fn h(s.0: obj) -> obj lin {
-      let f.1: obj lin = extern Std.Fs.open(s.0)
+      let f.1: obj lin = extern Std.FileIn.open(s.0)
       return f.1
     }
     fn k(c.0: tobj) -> tobj lin {

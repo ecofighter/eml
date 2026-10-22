@@ -93,10 +93,10 @@ pub(crate) fn host_flush(host: &HostRef) -> Result<(), Box<str>> {
     host.host.flush().map_err(|e| e.to_string().into_boxed_str())
 }
 
-/// `Fs.open` で開いたファイル。`Foreign` の物体の中身にする。閉じる処理は drop glue だけで、どのスレッドで落として
+/// `FileIn.open` で開いたファイル。`Foreign` の物体の中身にする。閉じる処理は drop glue だけで、どのスレッドで落として
 /// もよい (docs/future/multicore.md)。
 #[verifier::external_body]
-pub(crate) struct File {
+pub(crate) struct FileIn {
     /// `open` に渡されたままのパス。誤りの文言に使う。
     path: Box<str>,
     reader: Reader,
@@ -190,11 +190,11 @@ pub(crate) unsafe fn consume<S: Source>(src: *mut S, n: usize) {
 
 /// Host に `path` を開かせる。誤りなら、写したパスと理由を返す。
 #[verifier::external_body]
-pub(crate) fn host_open(host: &HostRef, path: &str) -> Result<File, (Box<str>, IoReason)> {
+pub(crate) fn host_open(host: &HostRef, path: &str) -> Result<FileIn, (Box<str>, IoReason)> {
     // パスは1回だけ写し、開けても開けなくても、それを持たせる
     let path: Box<str> = path.into();
     match host.host.open(&path) {
-        Ok(Opened { reader, size }) => Ok(File { path, reader: Reader::new(reader), size }),
+        Ok(Opened { reader, size }) => Ok(FileIn { path, reader: Reader::new(reader), size }),
         Err(e) => Err((path, io_reason(&e))),
     }
 }
@@ -647,7 +647,7 @@ pub(crate) trait Source {
 /// 読みの誤りに付ける、読んだハンドルの名前。
 pub(crate) enum SourceName {
     /// `open` に渡されたままのパス。
-    File(Box<str>),
+    FileIn(Box<str>),
     Stdin,
 }
 
@@ -655,7 +655,7 @@ pub(crate) enum SourceName {
 /// 約束は `Source` の実装に依らない。
 fn fault(name: SourceName, failure: Failure) -> Fault {
     match (failure, name) {
-        (Failure::Io(reason), SourceName::File(path)) => Fault::Io {
+        (Failure::Io(reason), SourceName::FileIn(path)) => Fault::Io {
             op: IoOp::Read,
             name: path,
             reason,
@@ -663,14 +663,14 @@ fn fault(name: SourceName, failure: Failure) -> Fault {
         (Failure::Io(reason), SourceName::Stdin) => Fault::Stdin(reason),
         (Failure::Stopped(stop), _) => Fault::Stopped(stop),
         (Failure::Output(message), _) => Fault::Output(message),
-        (Failure::NotUtf8, SourceName::File(path)) => {
-            Fault::NotUtf8(Box::new(Utf8Source::File(path)))
+        (Failure::NotUtf8, SourceName::FileIn(path)) => {
+            Fault::NotUtf8(Box::new(Utf8Source::FileIn(path)))
         }
         (Failure::NotUtf8, SourceName::Stdin) => Fault::NotUtf8(Box::new(Utf8Source::Stdin)),
     }
 }
 
-impl Source for File {
+impl Source for FileIn {
     fn reader(&mut self) -> Option<&mut Reader> {
         Some(&mut self.reader)
     }
@@ -680,7 +680,7 @@ impl Source for File {
     }
 
     fn name(&self) -> SourceName {
-        SourceName::File(self.path.clone())
+        SourceName::FileIn(self.path.clone())
     }
 }
 

@@ -6,10 +6,10 @@ input_file: tests/ui/check-fail/linearity/file_shadowed.em
 [E3003] Error: `f` must be used exactly once, but it is not used
    ╭─[ check-fail/linearity/file_shadowed.em:6:7 ]
    │
- 6 │   let f = Fs.open "a.txt"
+ 6 │   let f = FileIn.open "a.txt"
    │       ┬  
    │       ╰── `f` is bound here
- 7 │   let f = Fs.open "b.txt"
+ 7 │   let f = FileIn.open "b.txt"
    │       ┬  
    │       ╰── `f` is shadowed here
    │ 

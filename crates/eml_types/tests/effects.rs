@@ -76,14 +76,14 @@ fn a_continuation_is_a_function() {
 /// 状態のある `multi` の `k` を部分適用したクロージャは、`Lin` の値を捕まえると1回しか呼べない (docs/spec/effects.md)。
 #[test]
 fn a_partial_continuation_capturing_a_linear_value_is_linear() {
-    let text = "import Fs\neffect Pick where\n  multi pick : Unit -> Fs.File\n\nrun : Unit -> <IO> Unit\nrun () =\n  handle pick () from () with\n    | ctl pick () k st ->\n        let g = k (Fs.open \"a\")\n        g st\n        g st\n    | return f _ -> Fs.close f";
+    let text = "import FileIn\neffect Pick where\n  multi pick : Unit -> FileIn.FileIn\n\nrun : Unit -> <IO> Unit\nrun () =\n  handle pick () from () with\n    | ctl pick () k st ->\n        let g = k (FileIn.open \"a\")\n        g st\n        g st\n    | return f _ -> FileIn.close f";
     insta::assert_snapshot!(check_text(text), @"
-    pick : Unit -> <Pick> File
+    pick : Unit -> <Pick> FileIn
     run : Unit -> <IO> Unit
-      k#0 : File -> once Unit -> <IO> Unit
+      k#0 : FileIn -> once Unit -> <IO> Unit
       st#1 : Unit
       g#2 : once Unit -> <IO> Unit
-      f#3 : File
+      f#3 : FileIn
     ---
     E3002 11:9 `g` must be used exactly once, but it is used more than once
       11:9 used again here
@@ -386,14 +386,14 @@ fn the_return_clause_of_a_multi_handler_cannot_capture_a_linear_value() {
 /// `table` の単体テスト `an_extern_effect_is_performed_at_most_once` が確かめる。
 #[test]
 fn a_linear_value_may_be_kept_across_an_io_call_in_a_multi_clause() {
-    let text = "import Fs\neffect Choice where\n  multi choose : Unit -> Bool\n\nsay : String -> <IO> Unit\nsay s = println s\n\nboth : Unit -> <IO, Panic> Int\nboth () =\n  handle (if choose () then 1 else 2) with\n    | ctl choose () k ->\n        let file = Fs.open \"a\"\n        say \"x\"\n        Fs.close file\n        k True + k False";
+    let text = "import FileIn\neffect Choice where\n  multi choose : Unit -> Bool\n\nsay : String -> <IO> Unit\nsay s = println s\n\nboth : Unit -> <IO, Panic> Int\nboth () =\n  handle (if choose () then 1 else 2) with\n    | ctl choose () k ->\n        let file = FileIn.open \"a\"\n        say \"x\"\n        FileIn.close file\n        k True + k False";
     insta::assert_snapshot!(check_text(text), @"
     choose : Unit -> <Choice> Bool
     say : String -> <IO> Unit
       s#0 : String
     both : Unit -> <IO, Panic> Int
       k#0 : Bool -> <IO, Panic> Int
-      file#1 : File
+      file#1 : FileIn
       $r#2 : Int
     ");
 }
@@ -604,11 +604,11 @@ const REF: &str = "data Ref a =\n  | Ref (a -> Unit) a\n\n";
 
 #[test]
 fn a_linear_closure_cannot_enter_a_contravariant_argument_of_data_in_the_result() {
-    let text = "import Fs\ndata Sink a =\n  | Sink (a -> <IO> Unit)\n\neffect Mk where\n  mk : Unit -> Sink (Unit -> <IO> Unit)\n\nmain : Unit -> <IO> Unit\nmain () =\n  let h = Fs.open \"a\"\n  handle (match mk () with\n    | Sink put -> put (fn () -> Fs.close h)) with\n    | ctl mk () k ->\n        k (Sink (fn f ->\n          f ()\n          f ()))";
+    let text = "import FileIn\ndata Sink a =\n  | Sink (a -> <IO> Unit)\n\neffect Mk where\n  mk : Unit -> Sink (Unit -> <IO> Unit)\n\nmain : Unit -> <IO> Unit\nmain () =\n  let h = FileIn.open \"a\"\n  handle (match mk () with\n    | Sink put -> put (fn () -> FileIn.close h)) with\n    | ctl mk () k ->\n        k (Sink (fn f ->\n          f ()\n          f ()))";
     insta::assert_snapshot!(check_text(text), @"
     mk : Unit -> <Mk> Sink (Unit -> <IO> Unit)
     main : Unit -> <IO> Unit
-      h#0 : File
+      h#0 : FileIn
       put#1 : (Unit -> <IO> Unit) -> <IO> Unit
       k#2 : once Sink (Unit -> <IO> Unit) -> <IO> Unit
       f#3 : Unit -> <IO> Unit
@@ -634,7 +634,7 @@ fn the_performer_may_call_a_function_the_clause_gives_more_than_once() {
 
 #[test]
 fn a_clause_cannot_give_a_linear_closure_through_two_contravariant_data_arguments() {
-    let text = "import Fs\ndata Sink a =\n  | Sink (a -> <IO> Unit)\n\neffect Mk where\n  mk : Unit -> (Sink (Sink (Unit -> <IO> Unit)), Int)\n\nmain : Unit -> <IO> Unit\nmain () =\n  handle (match mk () with\n    | (Sink s, _) -> s (Sink (fn g -> g ()))) with\n    | ctl mk () k -> k (Sink (fn sk ->\n        let f = Fs.open \"a\"\n        match sk with\n          | Sink h -> h (fn () -> Fs.close f)), 0)";
+    let text = "import FileIn\ndata Sink a =\n  | Sink (a -> <IO> Unit)\n\neffect Mk where\n  mk : Unit -> (Sink (Sink (Unit -> <IO> Unit)), Int)\n\nmain : Unit -> <IO> Unit\nmain () =\n  handle (match mk () with\n    | (Sink s, _) -> s (Sink (fn g -> g ()))) with\n    | ctl mk () k -> k (Sink (fn sk ->\n        let f = FileIn.open \"a\"\n        match sk with\n          | Sink h -> h (fn () -> FileIn.close f)), 0)";
     insta::assert_snapshot!(check_text(text), @"
     mk : Unit -> <Mk> (Sink (Sink (Unit -> <IO> Unit)), Int)
     main : Unit -> <IO> Unit
@@ -642,7 +642,7 @@ fn a_clause_cannot_give_a_linear_closure_through_two_contravariant_data_argument
       g#1 : Unit -> <IO> Unit
       k#2 : once (Sink (Sink (once Unit -> <IO> Unit)), Int) -> <IO> Unit
       sk#3 : Sink (once Unit -> <IO> Unit)
-      f#4 : File
+      f#4 : FileIn
       h#5 : (once Unit -> <IO> Unit) -> <IO> Unit
       $r#6 : Unit
     ---
@@ -657,14 +657,14 @@ fn a_clause_cannot_give_a_linear_closure_through_two_contravariant_data_argument
 #[test]
 fn a_twice_flipped_arrow_is_produced_by_the_clause() {
     // `inner` は、呼ぶ側の関数の引数の引数なので、向きが2回反転して節が作って渡す位置にある
-    let text = "import Fs\neffect Mk where\n  mk : Unit -> (((Unit -> <IO> Unit) -> <IO> Unit) -> <IO> Unit, Int)\n\nmain : Unit -> <IO> Unit\nmain () =\n  handle (match mk () with\n    | (run, _) -> run (fn inner ->\n        inner ()\n        inner ())) with\n    | ctl mk () k ->\n        let h = Fs.open \"a\"\n        k (fn cb -> cb (fn () -> Fs.close h), 0)";
+    let text = "import FileIn\neffect Mk where\n  mk : Unit -> (((Unit -> <IO> Unit) -> <IO> Unit) -> <IO> Unit, Int)\n\nmain : Unit -> <IO> Unit\nmain () =\n  handle (match mk () with\n    | (run, _) -> run (fn inner ->\n        inner ()\n        inner ())) with\n    | ctl mk () k ->\n        let h = FileIn.open \"a\"\n        k (fn cb -> cb (fn () -> FileIn.close h), 0)";
     insta::assert_snapshot!(check_text(text), @"
     mk : Unit -> <Mk> (((Unit -> <IO> Unit) -> <IO> Unit) -> <IO> Unit, Int)
     main : Unit -> <IO> Unit
       run#0 : ((Unit -> <IO> Unit) -> <IO> Unit) -> <IO> Unit
       inner#1 : Unit -> <IO> Unit
       k#2 : once (once ((once Unit -> <IO> Unit) -> <IO> Unit) -> <IO> Unit, Int) -> <IO> Unit
-      h#3 : File
+      h#3 : FileIn
       cb#4 : (once Unit -> <IO> Unit) -> <IO> Unit
       $r#5 : Unit
     ---
@@ -685,7 +685,7 @@ fn a_twice_flipped_arrow_is_produced_by_the_clause() {
 fn a_linear_closure_cannot_enter_an_arrow_in_a_row_label_of_the_result() {
     // ラベルの型引数の矢印は両方の向きとして `Unr` に固定するので、`mk` の節が渡す `twice` はそれを2回呼べ、`ask`
     // の答えに線形なクロージャは渡せない
-    let text = "import Fs\neffect Ask a where\n  ask : Unit -> a\n\neffect Mk where\n  mk : Unit -> (Unit -> <Ask (Unit -> <IO> Unit), IO> Unit, Int)\n\ntwice : Unit -> <Ask (Unit -> <IO> Unit), IO> Unit\ntwice () =\n  let f = ask ()\n  f ()\n  f ()\n\nmain : Unit -> <IO> Unit\nmain () =\n  handle (match mk () with\n    | (g, _) ->\n        handle g () with\n          | ctl ask () k ->\n              let h = Fs.open \"a\"\n              k (fn () -> Fs.close h)) with\n    | ctl mk () k -> k (twice, 0)";
+    let text = "import FileIn\neffect Ask a where\n  ask : Unit -> a\n\neffect Mk where\n  mk : Unit -> (Unit -> <Ask (Unit -> <IO> Unit), IO> Unit, Int)\n\ntwice : Unit -> <Ask (Unit -> <IO> Unit), IO> Unit\ntwice () =\n  let f = ask ()\n  f ()\n  f ()\n\nmain : Unit -> <IO> Unit\nmain () =\n  handle (match mk () with\n    | (g, _) ->\n        handle g () with\n          | ctl ask () k ->\n              let h = FileIn.open \"a\"\n              k (fn () -> FileIn.close h)) with\n    | ctl mk () k -> k (twice, 0)";
     insta::assert_snapshot!(check_text(text), @"
     ask : Unit -> <Ask a> a
     mk : Unit -> <Mk> (Unit -> <Ask (Unit -> <IO> Unit), IO> Unit, Int)
@@ -695,7 +695,7 @@ fn a_linear_closure_cannot_enter_an_arrow_in_a_row_label_of_the_result() {
     main : Unit -> <IO> Unit
       g#0 : Unit -> <Ask (Unit -> <IO> Unit), IO> Unit
       k#1 : once (Unit -> <IO> Unit) -> <Mk, IO> Unit
-      h#2 : File
+      h#2 : FileIn
       $r#3 : Unit
       k#4 : once (Unit -> <Ask (Unit -> <IO> Unit), IO> Unit, Int) -> <IO> Unit
       $r#5 : Unit
@@ -708,14 +708,14 @@ fn a_linear_closure_cannot_enter_an_arrow_in_a_row_label_of_the_result() {
 
 #[test]
 fn a_clause_cannot_keep_a_file_across_a_function_with_an_operation_row_variable() {
-    let text = "import Fs\neffect Mk where\n  mk : Unit -> ((Unit -> <IO | e> Int) -> <IO | e> Int, Int)\n\nmain : Unit -> <IO> Unit\nmain () =\n  handle (match mk () with\n    | (run, _) -> println (show (run (fn () -> 1)))) with\n    | ctl mk () k ->\n        k (fn g ->\n          let h = Fs.open \"a\"\n          let x = g ()\n          Fs.close h\n          x, 0)";
+    let text = "import FileIn\neffect Mk where\n  mk : Unit -> ((Unit -> <IO | e> Int) -> <IO | e> Int, Int)\n\nmain : Unit -> <IO> Unit\nmain () =\n  handle (match mk () with\n    | (run, _) -> println (show (run (fn () -> 1)))) with\n    | ctl mk () k ->\n        k (fn g ->\n          let h = FileIn.open \"a\"\n          let x = g ()\n          FileIn.close h\n          x, 0)";
     insta::assert_snapshot!(check_text(text), @"
     mk : Unit -> <Mk> ((Unit -> <IO | e> Int) -> <IO | e> Int, Int)
     main : Unit -> <IO> Unit
       run#0 : (Unit -> <IO> Int) -> <IO> Int
       k#1 : once ((Unit -> <IO | e> Int) -> <IO | e> Int, Int) -> <IO> Unit
       g#2 : Unit -> <IO | e> Int
-      h#3 : File
+      h#3 : FileIn
       x#4 : Int
       $r#5 : Unit
     ---
@@ -729,13 +729,13 @@ fn a_clause_cannot_keep_a_file_across_a_function_with_an_operation_row_variable(
 
 #[test]
 fn a_clause_cannot_resume_with_a_linear_closure_where_the_result_has_an_arrow() {
-    let text = "import Fs\neffect Mk where\n  mk : Unit -> (Unit -> <IO> Unit, Int)\n\nmain : Unit -> <IO> Unit\nmain () =\n  handle (match mk () with\n    | (g, _) -> g ()) with\n    | ctl mk () k ->\n        let h = Fs.open \"a\"\n        k (fn () -> Fs.close h, 1)";
+    let text = "import FileIn\neffect Mk where\n  mk : Unit -> (Unit -> <IO> Unit, Int)\n\nmain : Unit -> <IO> Unit\nmain () =\n  handle (match mk () with\n    | (g, _) -> g ()) with\n    | ctl mk () k ->\n        let h = FileIn.open \"a\"\n        k (fn () -> FileIn.close h, 1)";
     insta::assert_snapshot!(check_text(text), @"
     mk : Unit -> <Mk> (Unit -> <IO> Unit, Int)
     main : Unit -> <IO> Unit
       g#0 : Unit -> <IO> Unit
       k#1 : once (once Unit -> <IO> Unit, Int) -> <IO> Unit
-      h#2 : File
+      h#2 : FileIn
       $r#3 : Unit
     ---
     E3001 9:5 a linear value is used where the type of `mk` requires a value that may be used any number of times
@@ -748,7 +748,7 @@ fn a_clause_cannot_resume_with_a_linear_closure_where_the_result_has_an_arrow() 
 
 #[test]
 fn a_clause_may_use_a_parameter_arrow_as_a_linear_one() {
-    let text = "import Fs\neffect Op where\n  op : (Unit -> <IO> Unit) -> Unit\n\nsame : a -> a -> (a, a)\nsame x y = (x, y)\n\nmain : Unit -> <IO> Unit\nmain () =\n  handle op (fn () -> ()) with\n    | ctl op x k ->\n        let h = Fs.open \"a\"\n        let (p, q) = same x (fn () -> Fs.close h)\n        p ()\n        q ()\n        k ()";
+    let text = "import FileIn\neffect Op where\n  op : (Unit -> <IO> Unit) -> Unit\n\nsame : a -> a -> (a, a)\nsame x y = (x, y)\n\nmain : Unit -> <IO> Unit\nmain () =\n  handle op (fn () -> ()) with\n    | ctl op x k ->\n        let h = FileIn.open \"a\"\n        let (p, q) = same x (fn () -> FileIn.close h)\n        p ()\n        q ()\n        k ()";
     insta::assert_snapshot!(check_text(text), @"
     op : (Unit -> <IO> Unit) -> <Op> Unit
       kinds: (Unit -> <IO> Unit) <= Unr
@@ -758,7 +758,7 @@ fn a_clause_may_use_a_parameter_arrow_as_a_linear_one() {
     main : Unit -> <IO> Unit
       x#0 : Unit -> <IO> Unit
       k#1 : once Unit -> <IO> Unit
-      h#2 : File
+      h#2 : FileIn
       p#3 : once Unit -> <IO> Unit
       q#4 : once Unit -> <IO> Unit
       $r#5 : Unit
@@ -781,11 +781,11 @@ fn a_clause_may_call_a_closure_it_receives_through_the_result_more_than_once() {
 
 #[test]
 fn a_linear_closure_cannot_be_passed_to_a_function_from_the_result() {
-    let text = "import Fs\neffect Mk where\n  mk : Unit -> ((Unit -> <IO> Unit) -> <IO> Unit, Int)\n\nmain : Unit -> <IO> Unit\nmain () =\n  let h = Fs.open \"a\"\n  handle (match mk () with\n    | (run, _) -> run (fn () -> Fs.close h)) with\n    | ctl mk () k -> k (fn g -> g (), 1)";
+    let text = "import FileIn\neffect Mk where\n  mk : Unit -> ((Unit -> <IO> Unit) -> <IO> Unit, Int)\n\nmain : Unit -> <IO> Unit\nmain () =\n  let h = FileIn.open \"a\"\n  handle (match mk () with\n    | (run, _) -> run (fn () -> FileIn.close h)) with\n    | ctl mk () k -> k (fn g -> g (), 1)";
     insta::assert_snapshot!(check_text(text), @"
     mk : Unit -> <Mk> ((Unit -> <IO> Unit) -> <IO> Unit, Int)
     main : Unit -> <IO> Unit
-      h#0 : File
+      h#0 : FileIn
       run#1 : (Unit -> <IO> Unit) -> <IO> Unit
       k#2 : once ((Unit -> <IO> Unit) -> <IO> Unit, Int) -> <IO> Unit
       g#3 : Unit -> <IO> Unit
@@ -800,12 +800,12 @@ fn a_linear_closure_cannot_be_passed_to_a_function_from_the_result() {
 #[test]
 fn a_linear_closure_cannot_enter_an_arrow_in_both_directions_of_the_result() {
     let text = format!(
-        "import Fs\n{REF}effect Mk where\n  mk : Unit -> Ref (Unit -> <IO> Unit)\n\nmain : Unit -> <IO> Unit\nmain () =\n  let h = Fs.open \"a\"\n  handle (match mk () with\n    | Ref put v ->\n        put (fn () -> Fs.close h)\n        v ()) with\n    | ctl mk () k -> k (Ref (fn _ -> ()) (fn () -> ()))"
+        "import FileIn\n{REF}effect Mk where\n  mk : Unit -> Ref (Unit -> <IO> Unit)\n\nmain : Unit -> <IO> Unit\nmain () =\n  let h = FileIn.open \"a\"\n  handle (match mk () with\n    | Ref put v ->\n        put (fn () -> FileIn.close h)\n        v ()) with\n    | ctl mk () k -> k (Ref (fn _ -> ()) (fn () -> ()))"
     );
     insta::assert_snapshot!(check_text(&text), @"
     mk : Unit -> <Mk> Ref (Unit -> <IO> Unit)
     main : Unit -> <IO> Unit
-      h#0 : File
+      h#0 : FileIn
       put#1 : (Unit -> <IO> Unit) -> Unit
       v#2 : Unit -> <IO> Unit
       k#3 : once Ref (Unit -> <IO> Unit) -> <IO> Unit
@@ -821,13 +821,13 @@ fn a_linear_closure_cannot_enter_an_arrow_in_both_directions_of_the_result() {
 /// 再開しない (docs/spec/types.md の「呼び出しの包含を解く」)。
 #[test]
 fn a_pure_local_call_inside_multi_keeps_a_file() {
-    let text = "import Fs\neffect Choice where\n  multi choose : Unit -> Bool\n\nheld : Unit -> <Choice, IO, Panic> Unit\nheld () =\n  let f = Fs.open \"a\"\n  let count n = if n == 0 then 0 else count (n - 1)\n  let x = count 3\n  Fs.close f\n  if choose () then println (show x) else ()";
+    let text = "import FileIn\neffect Choice where\n  multi choose : Unit -> Bool\n\nheld : Unit -> <Choice, IO, Panic> Unit\nheld () =\n  let f = FileIn.open \"a\"\n  let count n = if n == 0 then 0 else count (n - 1)\n  let x = count 3\n  FileIn.close f\n  if choose () then println (show x) else ()";
     assert_eq!(check_short(text), Vec::<String>::new());
 }
 
 #[test]
 fn a_linear_local_function_held_across_multi_is_e3006() {
-    let text = "import Fs\neffect Choice where\n  multi choose : Unit -> Bool\n\nheld : Unit -> <Choice, IO, Panic> Unit\nheld () =\n  let f = Fs.open \"a\"\n  let close () = Fs.close f\n  let b = choose ()\n  close ()";
+    let text = "import FileIn\neffect Choice where\n  multi choose : Unit -> Bool\n\nheld : Unit -> <Choice, IO, Panic> Unit\nheld () =\n  let f = FileIn.open \"a\"\n  let close () = FileIn.close f\n  let b = choose ()\n  close ()";
     insta::assert_snapshot!(check_full(text), @"
     E3006 9:11 `close` must be used exactly once, but it is kept alive across a call that may resume more than once
       9:11 this call may perform `choose`, a `multi` operation

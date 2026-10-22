@@ -250,8 +250,8 @@ fn a_hash_name_does_not_depend_on_the_other_instances() {
 fn a_type_outside_the_prelude_and_the_entry_is_qualified_by_its_module() {
     // 名前の型は、診断の表示名と違って、名前が重ならなくてもモジュールで修飾する。後の入力が同じ名前を定義しても
     // 名前が変わらないようにするためである
-    let text = "import Fs\nid : a -> a\nid x = x\n\nmain : Unit -> <IO> Unit\nmain () =\n  let f = id (Fs.open \"x.txt\")\n  Fs.close f";
-    assert_eq!(instances_of(text, "id"), ["id@[Std.Fs.File]"]);
+    let text = "import FileIn\nid : a -> a\nid x = x\n\nmain : Unit -> <IO> Unit\nmain () =\n  let f = id (FileIn.open \"x.txt\")\n  FileIn.close f";
+    assert_eq!(instances_of(text, "id"), ["id@[Std.FileIn.FileIn]"]);
     let modules = [("Shape.em", "pub data Shape = | Dot\n")];
     let text = "import Shape (Shape(..))\n\nid : a -> a\nid x = x\n\nmain : Unit -> <IO> Unit\nmain () =\n  let _ = id Dot\n  ()";
     assert_eq!(
@@ -528,7 +528,7 @@ fn instances_that_differ_only_in_linearity_have_different_names() {
     // `k` は `File` を捕まえるので矢印が `Lin` になる。`inc` の宣言の一番外の矢印は `Unr` で、参照の row は開いて
     // いるので、`main` の中で呼ぶと `<IO>` になる。2つの型引数は線形性だけが違い、名前は矢印の線形性を `once` で書くので、
     // 番号付きの名前に落ちない (docs/spec/core-ir.md の「変換の規則」)
-    let text = "import Fs\nid : a -> a\nid x = x\n\ninc : Int -> <Panic> Int\ninc x = x + 1\n\nmain : Unit -> <IO, Panic> Unit\nmain () =\n  let h = Fs.open \"a.txt\"\n  let k = fn n ->\n    Fs.close h\n    n\n  let one = id k\n  let a = one 1\n  let i = id inc\n  println (show (i a))";
+    let text = "import FileIn\nid : a -> a\nid x = x\n\ninc : Int -> <Panic> Int\ninc x = x + 1\n\nmain : Unit -> <IO, Panic> Unit\nmain () =\n  let h = FileIn.open \"a.txt\"\n  let k = fn n ->\n    FileIn.close h\n    n\n  let one = id k\n  let a = one 1\n  let i = id inc\n  println (show (i a))";
     assert_eq!(
         instances_of(text, "id"),
         ["id@[once Int -> <IO> Int]", "id@[Int -> <Panic> Int]"]
@@ -539,12 +539,12 @@ fn instances_that_differ_only_in_linearity_have_different_names() {
 fn a_function_called_with_lin_and_unr_closures_has_one_instance() {
     // instance の鍵は型引数だけで、呼ばれる側の矢印の変数は鍵に入らない。`apply` の `f` の矢印は instance の中で
     // `Poly` になる (docs/spec/types.md の「instance での評価」)
-    let text = "import Fs\napply : (a -> <e> b) -> a -> <e> b\napply f x = f x\n\nmain : Unit -> <IO, Panic> Unit\nmain () =\n  let h = Fs.open \"a.txt\"\n  let a = apply (fn n ->\n    Fs.close h\n    n) 1\n  let b = apply (fn n -> n + 1) a\n  println (show b)";
+    let text = "import FileIn\napply : (a -> <e> b) -> a -> <e> b\napply f x = f x\n\nmain : Unit -> <IO, Panic> Unit\nmain () =\n  let h = FileIn.open \"a.txt\"\n  let a = apply (fn n ->\n    FileIn.close h\n    n) 1\n  let b = apply (fn n -> n + 1) a\n  println (show b)";
     assert_eq!(instances_of(text, "apply"), ["apply@[Int, Int]"]);
 }
 
 /// spec の「instance での評価」の `f` の例。
-const F_EXAMPLE: &str = "import Fs\n\nf : a -> (a -> <IO, Panic> Int) -> (Int -> <IO> Int) -> Int -> <IO, Panic> Int\nf x eat g n =\n  if n == 0 then g (eat x)\n  else\n    let k = fn y -> g (eat x + y)\n    f k (fn h -> h 1) (fn z -> z) (n - 1)\n\nshut_with : Fs.File -> Int -> <IO> Int\nshut_with file z =\n  Fs.close file\n  z\n\nmain : Unit -> <IO, Panic> Unit\nmain () =\n  let file = Fs.open \"a.txt\"\n  let n = f 1 (fn y -> y) (shut_with file) 3\n  println (show n)";
+const F_EXAMPLE: &str = "import FileIn\n\nf : a -> (a -> <IO, Panic> Int) -> (Int -> <IO> Int) -> Int -> <IO, Panic> Int\nf x eat g n =\n  if n == 0 then g (eat x)\n  else\n    let k = fn y -> g (eat x + y)\n    f k (fn h -> h 1) (fn z -> z) (n - 1)\n\nshut_with : FileIn.FileIn -> Int -> <IO> Int\nshut_with file z =\n  FileIn.close file\n  z\n\nmain : Unit -> <IO, Panic> Unit\nmain () =\n  let file = FileIn.open \"a.txt\"\n  let n = f 1 (fn y -> y) (shut_with file) 3\n  println (show n)";
 
 #[test]
 fn a_type_variable_above_a_poly_arrow_makes_the_recursive_call_poly() {

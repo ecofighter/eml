@@ -1546,28 +1546,28 @@ main () =
 }
 
 /// 同じ関数の中の `con` への `switch` も、`switch` のほかの行き先で `con` を使っていてよい。translate は
-/// フィールドを束縛しない葉で `Unr` でない値を `drop` するので、`None` の葉が `Option Fs.File` を捨てる。
+/// フィールドを束縛しない葉で `Unr` でない値を `drop` するので、`None` の葉が `Option FileIn.FileIn` を捨てる。
 /// `merge_jumps` が合流のブロックをつないで、`jump` の側で決めるはずだった `switch` が `con` と同じブロックに来ても、
 /// jump threading と同じ規則で解ける (docs/spec/core-ir.md の「既知のコンストラクタ」)。
 #[test]
 fn a_local_switch_resolves_when_another_case_drops_the_con() {
-    let text = "import Fs\n\
-maybe_file : Bool -> Fs.File -> <IO> Option Fs.File
+    let text = "import FileIn\n\
+maybe_file : Bool -> FileIn.FileIn -> <IO> Option FileIn.FileIn
 maybe_file c f =
   if c then Some f
   else
-    Fs.close f
+    FileIn.close f
     None
 
-close_opt : Option Fs.File -> <IO> Int
+close_opt : Option FileIn.FileIn -> <IO> Int
 close_opt o = match o with
   | None -> 0
   | Some f ->
-    Fs.close f
+    FileIn.close f
     1
 
 main : Unit -> <IO> Unit
-main () = println (show (close_opt (maybe_file True (Fs.open \"in.txt\"))))
+main () = println (show (close_opt (maybe_file True (FileIn.open \"in.txt\"))))
 ";
     let main = function(&core_text(text, Pass::Optimize), "entry$main");
     assert!(
@@ -1698,17 +1698,17 @@ fn iter_pipeline_fuses_map_into_the_fold_and_generate_into_the_filter() {
 /// 1回閉じることを確かめる。
 #[test]
 fn a_fold_over_a_file_producer_is_fused() {
-    let text = "import Fs\nimport Iter\n\
+    let text = "import FileIn\nimport Iter\n\
 import Yield (Yield(..))
 
 numbers : Int -> Unit -> <Yield Int, IO, Panic> Unit
 numbers n () =
   let go file i =
-    if i > n then Fs.close file
+    if i > n then FileIn.close file
     else
       yield i
       go file (i + 1)
-  go (Fs.open \"numbers.txt\") 1
+  go (FileIn.open \"numbers.txt\") 1
 
 main : Unit -> <IO, Panic> Unit
 main () =
@@ -2545,7 +2545,7 @@ fn a_clause_copy_drops_the_captures_instead_of_k() {
     insta::assert_snapshot!(function(&shown, "entry$main"), @r#"
     fn entry$main() -> unit {
       let s.1: obj = const "input.txt"
-      let t.2: obj lin = extern Std.Fs.open(s.1)
+      let t.2: obj lin = extern Std.FileIn.open(s.1)
       let t.3: unit = drop t.2
       let s.4: obj = const "dropped"
       let t.5: unit = extern Prelude.println(s.4)
@@ -2556,19 +2556,19 @@ fn a_clause_copy_drops_the_captures_instead_of_k() {
 
 /// `once` の操作の節で、`File` を生きている変数に持つ経路の関数。節は `k` を捨てる。
 const DROPPED_K: &str = "\
-import Fs
+import FileIn
 
 effect Ask where
   ask : Unit -> Int
 
-read_after : Fs.File -> <Ask, IO> Unit
+read_after : FileIn.FileIn -> <Ask, IO> Unit
 read_after f =
   let n = ask ()
-  Fs.close f
+  FileIn.close f
 
 main : Unit -> <IO> Unit
 main () =
-  let f = Fs.open \"input.txt\"
+  let f = FileIn.open \"input.txt\"
   handle read_after f with
     | ctl ask () k ->
         drop k

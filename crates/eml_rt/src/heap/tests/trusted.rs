@@ -16,7 +16,7 @@ use crate::alloc::MAX_SMALL_WORDS;
 use crate::cell::{rc_decref_shared, rc_dup_shared};
 use crate::externs::{Form, Handle, ReadAmount};
 use crate::heap::ctx::positions::find_byte;
-use crate::host::{Failure, File, Reader, consume, fill, host_open};
+use crate::host::{Failure, FileIn, Reader, consume, fill, host_open};
 use crate::{Checked, Control, Ctx, Fast, Heap, HeapError, Kind, Limits, Meta, Mode, Word};
 
 const PAGE_BYTES: usize = 0x1_0000;
@@ -819,7 +819,7 @@ unsafe fn read_borrowed<M: Mode>(
     read: ReadAmount,
 ) -> Result<String, crate::Fault> {
     unsafe {
-        let w = ctx.handle_read(f, Handle::File, read, Form::Text)?;
+        let w = ctx.handle_read(f, Handle::FileIn, read, Form::Text)?;
         let read = text(ctx.heap(), w);
         ctx.heap_mut().decref(w).unwrap();
         Ok(read)
@@ -891,14 +891,14 @@ fn borrowed_files_go_through_the_host<M: Mode>() {
                 expected
             );
         }
-        ctx.handle_close(f, Handle::File).unwrap();
+        ctx.handle_close(f, Handle::FileIn).unwrap();
         assert_eq!(mortal(ctx.heap()), 0);
         for read in [ReadAmount::Line, ReadAmount::All] {
             for name in ["broken.txt", "bad.bin"] {
                 let f = open(&mut ctx, name);
                 assert!(read_borrowed(&mut ctx, f, read).is_err());
                 assert_eq!(raw::rc(f), 1);
-                ctx.handle_close(f, Handle::File).unwrap();
+                ctx.handle_close(f, Handle::FileIn).unwrap();
                 assert_eq!(mortal(ctx.heap()), 0);
             }
             // 止める語が立った後の `Interrupted` で止まる (T11)
@@ -907,7 +907,7 @@ fn borrowed_files_go_through_the_host<M: Mode>() {
                 read_borrowed(&mut ctx, f, read),
                 Err(crate::Fault::Stopped(crate::Stop::Interrupted))
             );
-            ctx.handle_close(f, Handle::File).unwrap();
+            ctx.handle_close(f, Handle::FileIn).unwrap();
             control.clear();
             let f = open(&mut ctx, "lines.txt");
             control.interrupt();
@@ -916,17 +916,17 @@ fn borrowed_files_go_through_the_host<M: Mode>() {
                 Err(crate::Fault::Stopped(crate::Stop::Interrupted))
             );
             control.clear();
-            ctx.handle_close(f, Handle::File).unwrap();
+            ctx.handle_close(f, Handle::FileIn).unwrap();
             assert_eq!(mortal(ctx.heap()), 0);
         }
         let f = open(&mut ctx, "big.txt");
         assert_eq!(read_borrowed(&mut ctx, f, ReadAmount::All).unwrap(), body);
-        ctx.handle_close(f, Handle::File).unwrap();
+        ctx.handle_close(f, Handle::FileIn).unwrap();
     }
     assert_eq!(mortal(ctx.heap()), 0);
 }
 
-/// 信頼の一覧の総称の `fill` と `consume` を、`File` の生のポインタで直接通す。buffer に残ったバイト、短い読みの後の
+/// 信頼の一覧の総称の `fill` と `consume` を、`FileIn` の生のポインタで直接通す。buffer に残ったバイト、短い読みの後の
 /// 補充、終わり、補充の前の書き出し、読みの誤りにパスを付けること、止める語を確かめる。
 #[test]
 fn fill_and_consume_read_a_file_through_a_pointer() {
@@ -952,7 +952,7 @@ fn fill_and_consume_read_a_file_through_a_pointer() {
         Err(_) => panic!("{path} did not open"),
     };
     let mut file = opened("a.txt");
-    let p: *mut File = &mut file;
+    let p: *mut FileIn = &mut file;
     unsafe {
         assert_eq!(fill(p, &control, None).unwrap(), b"abc");
         consume(p, 2);
@@ -968,7 +968,7 @@ fn fill_and_consume_read_a_file_through_a_pointer() {
         assert_eq!(fill(p, &control, None).unwrap(), b"");
     }
     let mut file = opened("broken.txt");
-    let p: *mut File = &mut file;
+    let p: *mut FileIn = &mut file;
     unsafe {
         assert_eq!(fill(p, &control, None).unwrap(), b"ab");
         consume(p, 2);
@@ -982,7 +982,7 @@ fn fill_and_consume_read_a_file_through_a_pointer() {
         );
     }
     let mut file = opened("a.txt");
-    let p: *mut File = &mut file;
+    let p: *mut FileIn = &mut file;
     control.interrupt();
     assert_eq!(
         unsafe { fill(p, &control, None) },
@@ -1045,7 +1045,7 @@ fn borrowed_bytes_go_through_the_host<M: Mode>() {
         ctx.fs_open(p).unwrap()
     };
     let read = |ctx: &mut Ctx<M>, f: Word, amount: ReadAmount| unsafe {
-        let w = ctx.handle_read(f, Handle::File, amount, Form::Bytes)?;
+        let w = ctx.handle_read(f, Handle::FileIn, amount, Form::Bytes)?;
         let bytes = (*ctx.heap().bytes(w).unwrap()).to_vec();
         ctx.heap_mut().decref(w).unwrap();
         Ok::<_, crate::Fault>(bytes)
@@ -1055,33 +1055,33 @@ fn borrowed_bytes_go_through_the_host<M: Mode>() {
         assert_eq!(read(&mut ctx, f, ReadAmount::Line).unwrap(), b"ab\n");
         assert_eq!(read(&mut ctx, f, ReadAmount::Line).unwrap(), b"cd\n");
         assert_eq!(read(&mut ctx, f, ReadAmount::Line).unwrap(), b"");
-        ctx.handle_close(f, Handle::File).unwrap();
+        ctx.handle_close(f, Handle::FileIn).unwrap();
         let f = open(&mut ctx, "slow.txt");
         assert_eq!(read(&mut ctx, f, ReadAmount::Line).unwrap(), b"abcdefg\n");
         let buf = ctx.heap_mut().alloc_bytes(b">");
         ctx.heap_mut().dup(buf).unwrap();
         let mut w = ctx
-            .handle_read(f, Handle::File, ReadAmount::Chunk(buf), Form::Bytes)
+            .handle_read(f, Handle::FileIn, ReadAmount::Chunk(buf), Form::Bytes)
             .unwrap();
         assert_ne!(w, buf);
         // buffer に残った1バイトだけを足し、次の塊は補充して読む
         assert_eq!(&*ctx.heap().bytes(w).unwrap(), b">h");
         for _ in 0..2 {
             w = ctx
-                .handle_read(f, Handle::File, ReadAmount::Chunk(w), Form::Bytes)
+                .handle_read(f, Handle::FileIn, ReadAmount::Chunk(w), Form::Bytes)
                 .unwrap();
             assert_eq!(&*ctx.heap().bytes(w).unwrap(), b">hi");
         }
         ctx.heap_mut().decref(w).unwrap();
         ctx.heap_mut().decref(buf).unwrap();
-        ctx.handle_close(f, Handle::File).unwrap();
+        ctx.handle_close(f, Handle::FileIn).unwrap();
         let f = open(&mut ctx, "broken.txt");
         assert!(read(&mut ctx, f, ReadAmount::Line).is_err());
         assert_eq!(raw::rc(f), 1);
-        ctx.handle_close(f, Handle::File).unwrap();
+        ctx.handle_close(f, Handle::FileIn).unwrap();
         let f = open(&mut ctx, "lines.txt");
         assert_eq!(read(&mut ctx, f, ReadAmount::All).unwrap(), b"ab\ncd\n");
-        ctx.handle_close(f, Handle::File).unwrap();
+        ctx.handle_close(f, Handle::FileIn).unwrap();
     }
     assert_eq!(mortal(ctx.heap()), 0);
 }
@@ -1120,7 +1120,7 @@ fn an_overlong_read_is_refused_by_a_whole_read() {
             let p = ctx.heap_mut().alloc_string("x");
             let f = ctx.fs_open(p).unwrap();
             assert_eq!(
-                ctx.handle_read(f, Handle::File, ReadAmount::All, form),
+                ctx.handle_read(f, Handle::FileIn, ReadAmount::All, form),
                 Err(crate::Fault::Io {
                     op: crate::IoOp::Read,
                     name: "x".into(),
@@ -1128,7 +1128,7 @@ fn an_overlong_read_is_refused_by_a_whole_read() {
                 })
             );
             assert_eq!(raw::rc(f), 1);
-            ctx.handle_close(f, Handle::File).unwrap();
+            ctx.handle_close(f, Handle::FileIn).unwrap();
         }
     }
     assert_eq!(mortal(ctx.heap()), 0);

@@ -1,5 +1,5 @@
 -- An update of a record with a type parameter keeps the other fields, and a later pattern reads them at the instantiated type.
-import Fs
+import FileIn
 
 data Box a =
   | Box { item : a, n : Int }
@@ -14,7 +14,7 @@ main () =
   println (item ++ "c")
   match { Box { item = 7, n = 0 } | n = 5 } with
     | Box { item } -> println (show (item * 6))
-  let job = { Box { item = Fs.open "input.txt", n = 0 } | n = 1 }
+  let job = { Box { item = FileIn.open "input.txt", n = 0 } | n = 1 }
   let Box { item = file, n } = job
-  Fs.close file
+  FileIn.close file
   println (show n)

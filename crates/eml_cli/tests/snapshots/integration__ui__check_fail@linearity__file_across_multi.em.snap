@@ -12,7 +12,7 @@ input_file: tests/ui/check-fail/linearity/file_across_multi.em
     │
     ├─[ check-fail/linearity/file_across_multi.em:10:11 ]
     │
-  9 │   let f = Fs.open "input.txt"
+  9 │   let f = FileIn.open "input.txt"
     │       ┬  
     │       ╰── `f` is bound here
     │

@@ -2,7 +2,7 @@
 -- 生きている token は巻き戻しで手放す。
 -- フィールドを7つにして、Stats を構造体にせず箱のままにする (docs/spec/core-ir.md の「構造体にする型」)。
 -- 残りの5つは使わない
-import Fs
+import FileIn
 import List
 
 data Stats =
@@ -10,7 +10,7 @@ data Stats =
 
 probe : Int -> Int -> <IO, Panic> Unit
 probe depth count =
-  if depth == 0 then (if count > 3 then Fs.close (Fs.open "missing.txt") else ())
+  if depth == 0 then (if count > 3 then FileIn.close (FileIn.open "missing.txt") else ())
   else probe (depth - 1) count
 
 step : Stats -> <IO, Panic> Stats

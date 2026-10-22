@@ -10,7 +10,7 @@ use super::*;
 use crate::alloc::too_large;
 use crate::externs::{Fault, Form, Handle, IoOp, ReadAmount, StdStream, Write};
 use crate::host::{
-    File, OutputHandle, Source, StderrHandle, StdinHandle, StdoutHandle, Stream, consume, fill,
+    FileIn, OutputHandle, Source, StderrHandle, StdinHandle, StdoutHandle, Stream, consume, fill,
     host_flush, host_open, host_write, host_write_line, open_stdin, open_stream, read_text,
 };
 #[cfg(verus_only)]
@@ -267,7 +267,7 @@ impl<M: Mode> Ctx<M> {
         }
     }
 
-    /// `Fs.open`。パス `path` のファイルを Host に開かせ、`lin` ビットを立てた `File` の物体を返す。`path` の参照を
+    /// `FileIn.open`。パス `path` のファイルを Host に開かせ、`lin` ビットを立てた `FileIn` の物体を返す。`path` の参照を
     /// 受け取り、開けたかどうかによらず手放す。
     ///
     /// # Safety
@@ -328,7 +328,7 @@ impl<M: Mode> Ctx<M> {
         }
         match host_open(&self.host, self.heap.string_text(path)) {
             Ok(file) => {
-                // パスを手放す前に File を作る。先に手放すと、空けたパスの箱を File が使い回しうるので、呼ぶ前からの変化
+                // パスを手放す前に FileIn を作る。先に手放すと、空けたパスの箱を FileIn が使い回しうるので、呼ぶ前からの変化
                 // (`evolved_by`) を証明で言えない
                 let f = self.heap.alloc_foreign(file, true);
                 let ghost h2 = self.heap;
@@ -440,7 +440,7 @@ impl<M: Mode> Ctx<M> {
             }
         }
         match handle {
-            Handle::File => match unsafe { self.heap.foreign_unique::<File>(h) } {
+            Handle::FileIn => match unsafe { self.heap.foreign_unique::<FileIn>(h) } {
                 Ok(p) => unsafe { self.read_from(p, false, read, form) },
                 Err(e) => Err(Fault::Heap(e)),
             },
@@ -862,11 +862,11 @@ impl<M: Mode> Ctx<M> {
 
     /// `Stdin.open`、`Stdout.open`、`Stderr.open`。`handle` の型のハンドルを開き、`lin` ビットを立てた `Foreign` の
     /// 物体を返す。生きているハンドルがすでにあれば、何も作らずに `InUse` を返す (docs/spec/stdlib.md の「ハンドル」)。
-    /// `File` はパスを受ける `fs_open` で開く。
+    /// `FileIn` はパスを受ける `fs_open` で開く。
     pub fn handle_open(&mut self, handle: Handle) -> (r: Result<Word, Fault>)
         requires
             old(self).wf(),
-            handle != Handle::File,
+            handle != Handle::FileIn,
         ensures
             final(self).wf(),
             final(self).evv_spec() == old(self).evv_spec(),
@@ -912,7 +912,7 @@ impl<M: Mode> Ctx<M> {
                 }
             },
             // 前提により来ない
-            Handle::File => {
+            Handle::FileIn => {
                 proof {
                     assert(false);
                 }
@@ -930,7 +930,7 @@ impl<M: Mode> Ctx<M> {
         Ok(w)
     }
 
-    /// `Fs.close`、`Stdin.close`、`Stdout.close`、`Stderr.close`。ハンドル `h` の参照を手放す。最後の参照なので、
+    /// `FileIn.close`、`Stdin.close`、`Stdout.close`、`Stderr.close`。ハンドル `h` の参照を手放す。最後の参照なので、
     /// 破棄処理がハンドルを閉じる。
     ///
     /// # Safety
@@ -969,7 +969,7 @@ impl<M: Mode> Ctx<M> {
             }
         }
         let kind = match handle {
-            Handle::File => match unsafe { self.heap.foreign::<File>(h) } {
+            Handle::FileIn => match unsafe { self.heap.foreign::<FileIn>(h) } {
                 Ok(_) => Ok(()),
                 Err(e) => Err(e),
             },
@@ -1283,7 +1283,7 @@ impl<M: Mode> Ctx<M> {
         self.lemma_evv_kept(s0, dw, none);
     }
 
-    /// `Fs.open` で File を作った後も、パス `s` は持たれていて手放せる。`self` は呼ぶ前の文脈である。
+    /// `FileIn.open` で FileIn を作った後も、パス `s` は持たれていて手放せる。`self` は呼ぶ前の文脈である。
     pub(super) proof fn lemma_path_kept(&self, h1: Heap<M>, h2: Heap<M>, s: Word, w: Word)
         requires
             self.held_ok(),
@@ -1303,7 +1303,7 @@ impl<M: Mode> Ctx<M> {
         lemma_view_live(h2, s.bits_spec());
     }
 
-    /// `Fs.open` の、開けた道でモデルが合っている道。`h1` は `settle` の後、`h2` は File を作った後である。
+    /// `FileIn.open` の、開けた道でモデルが合っている道。`h1` は `settle` の後、`h2` は FileIn を作った後である。
     pub(super) proof fn lemma_opened(&self, s0: Ctx<M>, h1: Heap<M>, h2: Heap<M>, s: Word, w: Word)
         requires
             s0.held_ok(),

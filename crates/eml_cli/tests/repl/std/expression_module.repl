@@ -1,8 +1,8 @@
 # 前の入力で import した標準ライブラリのモジュールは、式の入力からも使える。式の入力の後も前の入力の定義は変わらず、
 # E2018 にもならない (docs/spec/modules.md の「REPL のセッション」)
-> import Fs
+> import FileIn
 > double : Int -> <Panic> Int
 . double x = x * 2
 .
-> fn (path : String) -> Fs.open path
+> fn (path : String) -> FileIn.open path
 > double 21

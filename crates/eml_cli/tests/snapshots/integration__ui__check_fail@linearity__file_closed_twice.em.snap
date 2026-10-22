@@ -4,17 +4,17 @@ expression: rendered
 input_file: tests/ui/check-fail/linearity/file_closed_twice.em
 ---
 [E3002] Error: `f` must be used exactly once, but it is used more than once
-   ╭─[ check-fail/linearity/file_closed_twice.em:8:12 ]
+   ╭─[ check-fail/linearity/file_closed_twice.em:8:16 ]
    │
- 8 │   Fs.close f
-   │            ┬  
-   │            ╰── used again here
+ 8 │   FileIn.close f
+   │                ┬  
+   │                ╰── used again here
    │
-   ├─[ check-fail/linearity/file_closed_twice.em:8:12 ]
+   ├─[ check-fail/linearity/file_closed_twice.em:8:16 ]
    │
- 7 │   Fs.close f
-   │            ┬  
-   │            ╰── first used here
+ 7 │   FileIn.close f
+   │                ┬  
+   │                ╰── first used here
    │ 
    │ Note: linear values, such as files, the continuation of a `once` operation and closures that capture one, must be used exactly once
 ───╯

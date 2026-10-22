@@ -6,7 +6,7 @@ input_file: tests/ui/check-fail/linearity/not_diverging_operation_result_in_row.
 [E3003] Error: `f` must be used exactly once, but it is not used
    ╭─[ check-fail/linearity/not_diverging_operation_result_in_row.em:7:7 ]
    │
- 7 │   let f = Fs.open "input.txt"
+ 7 │   let f = FileIn.open "input.txt"
    │       ┬  
    │       ╰── `f` is bound here
  8 │   S.get ()

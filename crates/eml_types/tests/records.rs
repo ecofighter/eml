@@ -19,7 +19,7 @@ fn a_field_mismatch_names_the_field() {
 
 #[test]
 fn an_omitted_linear_field_is_discarded() {
-    let text = "import Fs\ndata Job = | Job { name : String, log : Fs.File }\n\nf : Job -> String\nf j = match j with\n  | Job { name } -> name";
+    let text = "import FileIn\ndata Job = | Job { name : String, log : FileIn.FileIn }\n\nf : Job -> String\nf j = match j with\n  | Job { name } -> name";
     insta::assert_snapshot!(diagnostics(text), @"
     E3004 6:5 the field `log` is discarded, but it holds a linear value
       6:5 this pattern leaves out `log`
@@ -78,7 +78,7 @@ fn same_field_name_in_two_records() {
 
 #[test]
 fn projection_and_update_discard_linear_fields() {
-    let text = "import Fs\ndata Job = | Job { name : String, log : Fs.File }\n\nf : Job -> String\nf j = j.name\n\ng : Job -> Fs.File -> Job\ng j f = { j | log = f }";
+    let text = "import FileIn\ndata Job = | Job { name : String, log : FileIn.FileIn }\n\nf : Job -> String\nf j = j.name\n\ng : Job -> FileIn.FileIn -> Job\ng j f = { j | log = f }";
     insta::assert_snapshot!(diagnostics(text), @"
     E3004 5:7 the field `log` is discarded, but it holds a linear value
       5:7 this projection leaves the field `log` behind
@@ -171,7 +171,7 @@ fn update_errors() {
 
 #[test]
 fn a_projection_in_a_section_discards_without_help() {
-    let text = "import Fs\ndata Job = | Job { name : String, log : Fs.File }\n\napply : (Job -> String) -> Job -> String\napply f j = f j\n\nf : Job -> String\nf j = apply (.name) j";
+    let text = "import FileIn\ndata Job = | Job { name : String, log : FileIn.FileIn }\n\napply : (Job -> String) -> Job -> String\napply f j = f j\n\nf : Job -> String\nf j = apply (.name) j";
     insta::assert_snapshot!(diagnostics(text), @"
     E3004 8:13 the field `log` is discarded, but it holds a linear value
       8:13 this projection leaves the field `log` behind
@@ -181,7 +181,7 @@ fn a_projection_in_a_section_discards_without_help() {
 
 #[test]
 fn a_projection_uses_its_base_once() {
-    let text = "import Fs\ndata Job = | Job { name : String, log : Fs.File }\n\nf : Job -> (String, String)\nf j = (j.name, j.name)";
+    let text = "import FileIn\ndata Job = | Job { name : String, log : FileIn.FileIn }\n\nf : Job -> (String, String)\nf j = (j.name, j.name)";
     insta::assert_snapshot!(diagnostics(text), @"
     E3004 5:8 the field `log` is discarded, but it holds a linear value
       5:8 this projection leaves the field `log` behind
@@ -314,7 +314,7 @@ fn an_update_of_a_type_without_fields_is_reported_once() {
 
 #[test]
 fn a_pattern_field_without_its_pattern_binds_nothing() {
-    let text = "import Fs\ndata Job = | Job { name : String, log : Fs.File }\n\nf : Job -> String\nf j = match j with\n  | Job { log = , name } -> name";
+    let text = "import FileIn\ndata Job = | Job { name : String, log : FileIn.FileIn }\n\nf : Job -> String\nf j = match j with\n  | Job { log = , name } -> name";
     insta::assert_snapshot!(diagnostics(text), @"
     E0011 6:17 expected a pattern
       6:17 found `,`

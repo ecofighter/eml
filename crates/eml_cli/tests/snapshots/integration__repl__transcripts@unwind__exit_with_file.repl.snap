@@ -3,12 +3,12 @@ source: crates/eml_cli/tests/repl.rs
 expression: checked.render()
 input_file: crates/eml_cli/tests/repl/unwind/exit_with_file.repl
 ---
-> import Fs
+> import FileIn
 > helper : Int -> <IO, Panic> Int
 . helper n =
-.   let f = Fs.open "exit_with_file.repl"
+.   let f = FileIn.open "exit_with_file.repl"
 .   let r = if n == 0 then exit 2 else helper (n - 1) + 1
-.   Fs.close f
+.   FileIn.close f
 .   r
 .
 > helper 3

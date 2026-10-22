@@ -510,12 +510,12 @@ mod interrupts {
         assert_eq!(unsafe { libc::mkfifo(path.as_ptr(), 0o600) }, 0);
         let mut repl = LiveRepl::start(&dir, &["--debug-heap"]);
         repl.send(
-            "import Fs\nslurp : Unit -> <IO> String\nslurp () =\n  let f = Fs.open \"fifo\"\n  \
-             let (text, f) = Fs.read_all f\n  Fs.close f\n  text\n\n\"defined\"",
+            "import FileIn\nslurp : Unit -> <IO> String\nslurp () =\n  let f = FileIn.open \"fifo\"\n  \
+             let (text, f) = FileIn.read_all f\n  FileIn.close f\n  text\n\n\"defined\"",
         );
         repl.expect_out("\"defined\"");
         repl.send("slurp ()");
-        // 子の `Fs.open` は書き手が開くまで待つ。読み手のいないパイプを書き込み用に非同期で開くと ENXIO なので、
+        // 子の `FileIn.open` は書き手が開くまで待つ。読み手のいないパイプを書き込み用に非同期で開くと ENXIO なので、
         // 開けた時点で子は読みに進んでいる。何も書かずに開いたままにして、子を読みの中で待たせる
         let writer = loop {
             match std::fs::OpenOptions::new()

@@ -233,20 +233,20 @@ fn lines_text(n: usize) -> (String, usize) {
     (text, trimmed)
 }
 
-/// `Fs.read_line_bytes` で `path` の行を終わりまで読み、行の長さの和が `trimmed` なら `ok` を出すプログラム。出力に
+/// `FileIn.read_line_bytes` で `path` の行を終わりまで読み、行の長さの和が `trimmed` なら `ok` を出すプログラム。出力に
 /// 数を書かないのは、`Int.show` の写しを `string_bytes_copied` に混ぜないためである。
 fn bytes_line_loop(path: &str, trimmed: usize) -> String {
     format!(
-        "import Bytes\nimport Fs\ngo : Fs.File -> Int -> <IO, Panic> (Int, Fs.File)\n\
+        "import Bytes\nimport FileIn\ngo : FileIn.FileIn -> Int -> <IO, Panic> (Int, FileIn.FileIn)\n\
          go f n =\n\
-         \x20 match Fs.read_line_bytes f with\n\
+         \x20 match FileIn.read_line_bytes f with\n\
          \x20   | (None, f) -> (n, f)\n\
          \x20   | (Some line, f) -> go f (n + Bytes.length line)\n\
          \n\
          main : Unit -> <IO, Panic> Unit\n\
          main () =\n\
-         \x20 let (n, f) = go (Fs.open \"{path}\") 0\n\
-         \x20 Fs.close f\n\
+         \x20 let (n, f) = go (FileIn.open \"{path}\") 0\n\
+         \x20 FileIn.close f\n\
          \x20 if n == {trimmed} then println \"ok\" else println \"mismatch\"\n"
     )
 }
@@ -322,7 +322,7 @@ fn a_stdout_write_loop_does_not_dup_the_handle() {
     assert_eq!(increments(1000), increments(2000));
 }
 
-/// 1 MiB のファイルを `Fs.read_all_bytes` で読み、`String.decode` で文字列にして長さを確かめるプログラム。`keep` なら
+/// 1 MiB のファイルを `FileIn.read_all_bytes` で読み、`String.decode` で文字列にして長さを確かめるプログラム。`keep` なら
 /// 読んだバイト列を `decode` の後でも使うので、`decode` には共有の引数が渡る。
 fn decode_read(keep: bool) -> (String, u64) {
     let text = "abcdefgh".repeat(1 << 17);
@@ -335,10 +335,10 @@ fn decode_read(keep: bool) -> (String, u64) {
         format!("String.byte_length s == {n}")
     };
     let program = format!(
-        "import Bytes\nimport Fs\nimport String\nmain : Unit -> <IO, Panic> Unit\n\
+        "import Bytes\nimport FileIn\nimport String\nmain : Unit -> <IO, Panic> Unit\n\
          main () =\n\
-         \x20 let (b, f) = Fs.read_all_bytes (Fs.open \"{}\")\n\
-         \x20 Fs.close f\n\
+         \x20 let (b, f) = FileIn.read_all_bytes (FileIn.open \"{}\")\n\
+         \x20 FileIn.close f\n\
          \x20 let s = String.decode b\n\
          \x20 if {check} then println \"ok\" else println \"mismatch\"\n",
         path.to_str().unwrap()

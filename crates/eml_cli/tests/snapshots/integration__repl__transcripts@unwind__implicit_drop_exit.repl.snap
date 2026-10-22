@@ -3,8 +3,8 @@ source: crates/eml_cli/tests/repl.rs
 expression: checked.render()
 input_file: crates/eml_cli/tests/repl/unwind/implicit_drop_exit.repl
 ---
-> import Fs
-> let f = Fs.open "implicit_drop_exit.repl" in exit 1
+> import FileIn
+> let f = FileIn.open "implicit_drop_exit.repl" in exit 1
 exited with code 1
 > 1 + 1
 2

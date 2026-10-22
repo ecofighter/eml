@@ -3,12 +3,12 @@ source: crates/eml_cli/tests/repl.rs
 expression: checked.render()
 input_file: crates/eml_cli/tests/repl/std/expression_module.repl
 ---
-> import Fs
+> import FileIn
 > double : Int -> <Panic> Int
 . double x = x * 2
 .
-> fn (path : String) -> Fs.open path
-<fn> : String -> <IO> File
+> fn (path : String) -> FileIn.open path
+<fn> : String -> <IO> FileIn
 > double 21
 42
 --- close ---

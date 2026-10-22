@@ -1,6 +1,6 @@
 -- `return` の節が `fail` して外側の `Fail.to_result` へ中断する。途中のフレームが持つ `File` は閉じる。
 import Fail (Fail(..))
-import Fs
+import FileIn
 
 effect Tick where
   tick : Unit -> Unit
@@ -13,9 +13,9 @@ ticked () =
 
 outer : Unit -> <Fail String, IO> Int
 outer () =
-  let f = Fs.open "input.txt"
+  let f = FileIn.open "input.txt"
   let r = ticked ()
-  Fs.close f
+  FileIn.close f
   r
 
 main : Unit -> <IO> Unit

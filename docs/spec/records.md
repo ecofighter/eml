@@ -57,7 +57,7 @@ main () =
 ## Kind
 
 - 名前付きのレコードは `data` なので、Kind はほかの `data` と同じく、フィールドの Kind の join で推論する ([型と Kind](types.md) の「Kind」)。`Lin` なフィールドが1つでもあれば、その型は `Lin` になる
-- タプルの Kind は要素の Kind の join である (`(Fs.File, String) : Type<Lin>`)。要素に書いた型変数は、どれも Kind に効く。`Unit` は `Unr` である
+- タプルの Kind は要素の Kind の join である (`(FileIn.FileIn, String) : Type<Lin>`)。要素に書いた型変数は、どれも Kind に効く。`Unit` は `Unr` である
 
 ## 線形性の規則
 
@@ -69,23 +69,23 @@ main () =
 
 ```haskell
 data Job =
-  | Job { name : String, log : Fs.File }
+  | Job { name : String, log : FileIn.FileIn }
 
-log_of : Job -> Fs.File
+log_of : Job -> FileIn.FileIn
 log_of j = j.log                  -- OK: 残りの name : String は Unr
 
 name_of : Job -> String
-name_of j = j.name                -- エラー: 残りの log : Fs.File が Lin
+name_of j = j.name                -- エラー: 残りの log : FileIn.FileIn が Lin
                                   -- help: 分解のパターンで取り出し、log を drop に渡す
 
 close_job : Job -> <IO> String
 close_job j =
   let Job { name, log } = j       -- OK
-  Fs.close log
+  FileIn.close log
   name
 
-let n = (Fs.read_all f).0         -- エラー: 残りの .1 (Fs.File) が Lin
-let (text, f) = Fs.read_all f     -- OK
+let n = (FileIn.read_all f).0         -- エラー: 残りの .1 (FileIn.FileIn) が Lin
+let (text, f) = FileIn.read_all f     -- OK
 ```
 
 - 違反は E3004 にし、分解のパターンを help で示す。fix は付けない。セクション `(.name)` が組むラムダの隠れた引数は分解を書けないので、セクションの射影には help を付けない ([診断の出し方](../implementation/diagnostics.md) の「線形性の診断」)
@@ -94,7 +94,7 @@ let (text, f) = Fs.read_all f     -- OK
 
   ```haskell
   data Log =
-    | Log { file : Fs.File, lines : Int }
+    | Log { file : FileIn.FileIn, lines : Int }
 
   bump : Log -> Log
   bump l =

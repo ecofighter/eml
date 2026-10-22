@@ -28,16 +28,16 @@ fn a_polymorphic_hole_takes_the_constraint_from_the_signature() {
 #[test]
 fn a_linear_value_held_across_a_multi_hole_is_rejected() {
     let text = [
-        "import Fs",
+        "import FileIn",
         "",
         "effect Choice where",
         "  multi choose : Unit -> Bool",
         "",
         "f : Unit -> <Choice, IO> String",
         "f () =",
-        "  let file = Fs.open \"a\"",
+        "  let file = FileIn.open \"a\"",
         "  let s = \"\\{choose ()}\"",
-        "  Fs.close file",
+        "  FileIn.close file",
         "  s",
     ]
     .join("\n");

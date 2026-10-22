@@ -9,9 +9,9 @@
 ```haskell
 copy : String -> String -> <IO> Unit
 copy src dst =
-  let f = Fs.open src
-  let (text, f) = Fs.read_all f
-  Fs.close f
+  let f = FileIn.open src
+  let (text, f) = FileIn.read_all f
+  FileIn.close f
   write_text dst text
 ```
 
@@ -96,7 +96,7 @@ each items (fn item ->
 
 - 関数はカリー化する。部分適用はクロージャになる
 - 関数適用 `e0 e1 … en` は、呼ばれる式 `e0`、引数 `e1`、…、`en` をこの順にすべて評価し、その後で矢印 `1` から `n` を順に適用する。OCaml の `f a b` と同じ順である。括弧は順を変えない (`(f 1) (g ())` と `f 1 (g ())` は同じ式である)。`x |> f a` は `(|>) x (f a)` の呼び出しなので、引数の順に `x` を先に評価する ([宣言](declarations.md) の `|>`)。矢印 `1` を適用してから `e2` を評価したいときは、`let g = e0 e1` と書いて順を文面に出す
-  - 引数が呼び出しの前に出そろうので、`pick 1 (Fs.open "x")` と `let f = Fs.open "x"` の後の `pick 1 f` は同じ意味になり、持ち越し規則 ([エフェクトと handler](effects.md)) も同じに扱う。矢印 `1` が `multi` の操作を起こすなら、どちらも E3006 である
+  - 引数が呼び出しの前に出そろうので、`pick 1 (FileIn.open "x")` と `let f = FileIn.open "x"` の後の `pick 1 f` は同じ意味になり、持ち越し規則 ([エフェクトと handler](effects.md)) も同じに扱う。矢印 `1` が `multi` の操作を起こすなら、どちらも E3006 である
 - 矢印の適用の間に評価は入らないので、処理系は引数をまとめて渡せる。既知の関数、ローカル関数、extern の関数、操作、コンストラクタの引数の数までの引数は、本体が引数のそろうまで動かないので、1回の呼び出しで直接渡す。それを超える引数は、返った関数値に順に適用する。クラスのメソッドの引数の数は、メソッドのシグネチャの矢印の数である。instance の等式の引数の数を使うと、どの instance を選ぶかで直接呼ぶ範囲が変わるためである。引数のないトップレベルの値は、参照するたびに計算して関数値を返すので、既知の関数に含めず、関数値として扱う。関数値の呼び出しは、すべての引数を1つの適用で渡す。handler の節の `k` は、引数の数が分かる呼び出し先として扱う (状態なしは1、状態ありは2)。そのため `k st (st + 1)` は1回の再開になる。手順は持ち越し規則にも効くので、`eml_hir::call_steps` の1か所で決める
 
 ## `if`
@@ -289,7 +289,7 @@ sum_to n =
 - `fn` と `ctl` を書かせるのは、その場で値を返す節と継続を操作する節を、行の先頭で読み分けるためである。名前は Koka の `fun` と `ctl` の節に合わせた。引数の個数で区別する案は採らない。パラメータ付き handler では、最後の引数が `k` か状態かを、操作の引数の個数を知らないと読み分けられないためである。`ctl` を省ける形にしないのは、同じ節の書き方が2つになるためである
 - `fn` の節の本体の型が合わなければ、隠れた `k` の引数の誤りではなく、本体が操作の結果の型 (パラメータ付き handler では、操作の結果と次の状態の組) と合わない誤りとして報告する
 - `fn` の節の本体で `k` を書くと、名前が見つからない誤り (E1001) になる。`never` でない操作の節なら、`ctl` にして継続を受けるよう note を付ける
-- 節の先頭の名前は、エフェクトの操作だけから解決する ([モジュールと名前解決](modules.md))。操作でない名前は E1001 にする。ただし `IO` を起こす extern の関数 (`println`、`Fs.open` など) は E1009 にする
+- 節の先頭の名前は、エフェクトの操作だけから解決する ([モジュールと名前解決](modules.md))。操作でない名前は E1001 にする。ただし `IO` を起こす extern の関数 (`println`、`FileIn.open` など) は E1009 にする
 - `return` の節は省略でき、省略したら `| return x -> x` とみなす
 - `ctl` の節の継続 `k` は普通の関数で、状態のない handler では `k v` で再開する。`drop k` で捨てる。`drop` の引数が1個でなければ、HIR で E1011 にする
 - 1つの handler は1つのエフェクトのすべての操作に節を書く ([エフェクトと handler](effects.md) の「handler の意味」)
@@ -301,12 +301,12 @@ handler の意味、`k` の線形性、extern のエフェクト `IO` を起こ�
 ```haskell
 with_log : String -> (Unit -> <Log, IO | e> a) -> <IO | e> a
 with_log path action =
-  handle action () from Fs.open path with
+  handle action () from FileIn.open path with
     | ctl log lv msg k f ->
         let f = write f "[\{show_level lv}] \{msg}"
         k () f
     | return x f ->
-        Fs.close f
+        FileIn.close f
         x
 ```
 
@@ -318,7 +318,7 @@ with_log path action =
   ```haskell
   (handle action () with
      | ctl log lv msg k -> fn f -> (k ()) (... f ...)
-     | return x -> fn f -> ...) (Fs.open path)
+     | return x -> fn f -> ...) (FileIn.open path)
   ```
 
   脱糖しないのは、状態を handler の実行ごとの evidence に置くと、`| fn get () st -> (st, st)` のような節がすぐに再開する形のまま残るためである。evidence passing は、そうした節を継続を作らずにその場で実行する ([Core IR](core-ir.md) の「`perform` と節の3つの形」)

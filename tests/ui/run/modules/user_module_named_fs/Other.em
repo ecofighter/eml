@@ -3,7 +3,4 @@
 import Std.Fs
 
 pub read_input : Unit -> <IO> String
-read_input () =
-  let (text, f) = Fs.read_all (Fs.open "../../files/input.txt")
-  Fs.close f
-  text
+read_input () = Fs.read_text "../../files/input.txt"

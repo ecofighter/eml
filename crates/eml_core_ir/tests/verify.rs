@@ -866,12 +866,12 @@ fn v2_runs_only_on_jump_and_return_at_the_core_ir_levels() {
     // 呼び出しの引数、extern の引数と結果は、box の挿入の後の LIR の段で比べる
     let calls = "\
 fn f(s.0: obj) -> unit {
-  let h.1: obj = extern Std.Fs.open(s.0)
+  let h.1: obj = extern Std.FileIn.open(s.0)
   let u.2: unit = call g(h.1)
   return u.2
 }
 fn g(h.0: obj lin) -> unit {
-  let u.1: unit = extern Std.Fs.close(h.0)
+  let u.1: unit = extern Std.FileIn.close(h.0)
   return u.1
 }
 ";

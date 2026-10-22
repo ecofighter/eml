@@ -31,10 +31,10 @@ fn a_lambda_that_captures_nothing_is_unr() {
 #[test]
 fn a_lambda_that_captures_a_file_is_lin() {
     // `g` の矢印は `File` の `h` を捕まえて下限 `Lin` を持つので、最小解が `Lin` になる
-    let text = "import Fs\nmain : Unit -> <IO> Unit\nmain () =\n  let h = Fs.open \"a.txt\"\n  let g = fn () -> Fs.close h\n  g ()";
+    let text = "import FileIn\nmain : Unit -> <IO> Unit\nmain () =\n  let h = FileIn.open \"a.txt\"\n  let g = fn () -> FileIn.close h\n  g ()";
     insta::assert_snapshot!(exported(text), @"
     main : Unit -> <IO> Unit
-      h#0 : File
+      h#0 : FileIn
       g#1 : once Unit -> <IO> Unit
     ");
 }
@@ -141,11 +141,11 @@ fn a_clause_in_main_keeps_its_operation_variable_kinds() {
 fn an_unresolved_variable_takes_the_least_value() {
     // tests/ui/run/files/file_in_return_clause_on_abort.em の形。使われない `return x` の `x` の型は推論で決まらず、
     // その `μ` は下限を持たないので、最小値の `Unr` の `Flexible` になり `_` と書く
-    let text = "import Fs\neffect Fail where\n  never fail : Unit -> a\n\nmain : Unit -> <IO> Unit\nmain () =\n  let f = Fs.open \"input.txt\"\n  handle fail () with\n    | ctl fail () -> println \"aborted\"\n    | return x -> Fs.close f";
+    let text = "import FileIn\neffect Fail where\n  never fail : Unit -> a\n\nmain : Unit -> <IO> Unit\nmain () =\n  let f = FileIn.open \"input.txt\"\n  handle fail () with\n    | ctl fail () -> println \"aborted\"\n    | return x -> FileIn.close f";
     insta::assert_snapshot!(exported(text), @"
     fail : Unit -> <Fail> a
     main : Unit -> <IO> Unit
-      f#0 : File
+      f#0 : FileIn
       x#1 : _
     ");
 }

@@ -126,12 +126,12 @@ R1 と R2 から、ブロックの番号の順は辺の向きに沿った順 (�
   - `tobj` の位置に置いた定数 `#N` は、値が N の `enum` を `box` した値と同じである。`unbox` が、どちらの値も同じに読むためである
 - 後のバイトコード VM とネイティブ化は、開いた後の変数の Repr と `box` と `unbox` から、スロットかレジスタの種類、確保、RC の操作をすべて IR から読める
 - `Lin` の値は2回以上消費されない。`Lin` の値はちょうど1回使われる ([線形性](linearity.md)) ので、消費のための `dup` は要らない。`Lin` の物体の参照の数は、いつも1である
-  - そのため、スレッドをまたぐときに `Lin` の物体は印を付けずに所有者を移すだけで済む ([マルチコア対応の設計](../future/multicore.md))。`File` を閉じる時点は `close` や `drop` を書いた所と一致し、extern (`read_all`、`close`) は一意性を前提にできる
+  - そのため、スレッドをまたぐときに `Lin` の物体は印を付けずに所有者を移すだけで済む ([マルチコア対応の設計](../future/multicore.md))。`FileIn` を閉じる時点は `close` や `drop` を書いた所と一致し、extern (`read_all`、`close`) は一意性を前提にできる
   - フィールド (下の項目) のほかに `Lin` の値の `dup` が出る原因はないと見ている。ソースで2回使えば、型検査が `Unr` の制約を付ける。`multi` の継続は、持ち越し規則で `Unr` の値しか捕まえない。EP の継続のクロージャ、ブロック引数、handler の状態は move で、呼ばれる側の閉包は `apply` で消費される
 - `Lin` のフィールドも `dup` されない。型の正しいプログラムでは、`Lin` のフィールドの持ち主 (下の「Perceus」) も `Lin` である。データの Kind はフィールドの Kind の上限で決まるためである ([型と Kind](types.md) の「Kind」)。`Lin` の持ち主は分解した後に使われないので、Perceus がフィールドの所有を取るどの時点でも、持ち主はその命令で必要でなく、解かれる。フィールドは `release` で受け取られる
   - 後の行のパターンが分解した値かその祖先を束縛する決定木 (`| other -> ..`、`| W h _ -> ..`) でも同じである。決定木の途中の行き先ではフィールドは借りたままで、所有を取る葉では持ち主が死んでいる
   - この議論は、決定木の途中にガードがないことに依る
-- `unr` でない変数の `dup` と `decref` は、V1 が静的に拒む (下の「verifier」)。`File` を含む `Lin` のデータとクロージャの `dup` は、`lin` ビットが立っていないとほかの物体と区別できないので、この静的な検査が覆う。`lin` ビットの立った物体 (`File` など) の参照を増やす違反は、検査モードの `eml_rt` も実行時に見つける ([オブジェクトモデル](object-model.md) の「`lin` ビット」)
+- `unr` でない変数の `dup` と `decref` は、V1 が静的に拒む (下の「verifier」)。`FileIn` を含む `Lin` のデータとクロージャの `dup` は、`lin` ビットが立っていないとほかの物体と区別できないので、この静的な検査が覆う。`lin` ビットの立った物体 (`FileIn` など) の参照を増やす違反は、検査モードの `eml_rt` も実行時に見つける ([オブジェクトモデル](object-model.md) の「`lin` ビット」)
 - 文字列のリテラル (`const`) の値は、凍結した領域の不死の物体を指す ([オブジェクトモデル](object-model.md) の「凍結した領域」)。それでも LIR は、リテラルについても `dup` と `decref` の釣り合いを保つ。値がリテラルだからといって `dup` や `decref` を消すパスは作らない
 
 ### Kind の印
@@ -258,10 +258,10 @@ R1 と R2 から、ブロックの番号の順は辺の向きに沿った順 (�
 #### extern の借用
 
 - 行は、引数ごとの借用の印 (`FunctionRow::borrowed`) を `params` と並べて持つ。印はどの位置の引数にも立てられる。印の立つ引数を extern は読むだけで、消費しない。基本操作の借用の引数 (下の「基本操作」) と同じく読む使いなので、Perceus は借りた変数を `dup` しない。借用が最後の使いなら、その命令の直後で手放す
-- 借りるのは、配列を読む4つの行 (`Std.Array.length`、`Std.Array.get`、`Std.MutArray.length`、`Std.MutArray.read`) の配列の引数と、`String` を読む10行の `String` の引数である。10行は、`Std.String.byte_length`、`byte_at`、`slice`、`find_from` (探す文字列と対象の両方)、`Prelude.Eq String.==` と `!=`、`Prelude.Ord String.compare` (両辺)、`Prelude.Show String.show`、`Std.Float.can_parse` と `parse_raw` である。`File` を読む5行 (`Std.Fs.read_all`、`read_line_raw`、`read_all_bytes`、`read_line_bytes_raw`、`read_chunk`) と、`Stdin` を読む同じ名前の5行 (`Std.Stdin.read_all` など) も、ハンドルの引数を借りる。`read_chunk` は、足す先のバイト列 (最初の引数) を消費する。`Bytes` を読む行 (`Std.Bytes.length`、`get`、`slice`、`find_from` の探すバイト列と対象、`find_byte_from` の対象、`append_slice` の `src`、`Prelude.Eq Bytes.==` と `!=`、`Prelude.Ord Bytes.compare` の両辺、`Std.String.valid_utf8`、`Show Bytes` が読む `Prelude.bytes_length` と `bytes_get`) も `Bytes` の引数を借りる。`Std.Stdout` と `Std.Stderr` の書き込みの行 (`write`、`write_string`、`write_line`) は書くデータ (最初の引数) を借り、ハンドルを消費して同じハンドルを返す。読むたびに参照を渡して返す手間と、1バイトずつ読むループの `dup` を省くためである。`++`、`println`、`eprintln`、`Std.Fs.open`、`write_text`、`Std.Env` の行、`Std.Proc.status` は、引数を消費したままにする
+- 借りるのは、配列を読む4つの行 (`Std.Array.length`、`Std.Array.get`、`Std.MutArray.length`、`Std.MutArray.read`) の配列の引数と、`String` を読む10行の `String` の引数である。10行は、`Std.String.byte_length`、`byte_at`、`slice`、`find_from` (探す文字列と対象の両方)、`Prelude.Eq String.==` と `!=`、`Prelude.Ord String.compare` (両辺)、`Prelude.Show String.show`、`Std.Float.can_parse` と `parse_raw` である。`FileIn` を読む5行 (`Std.FileIn.read_all`、`read_line_raw`、`read_all_bytes`、`read_line_bytes_raw`、`read_chunk`) と、`Stdin` を読む同じ名前の5行 (`Std.Stdin.read_all` など) も、ハンドルの引数を借りる。`read_chunk` は、足す先のバイト列 (最初の引数) を消費する。`Bytes` を読む行 (`Std.Bytes.length`、`get`、`slice`、`find_from` の探すバイト列と対象、`find_byte_from` の対象、`append_slice` の `src`、`Prelude.Eq Bytes.==` と `!=`、`Prelude.Ord Bytes.compare` の両辺、`Std.String.valid_utf8`、`Show Bytes` が読む `Prelude.bytes_length` と `bytes_get`) も `Bytes` の引数を借りる。`Std.Stdout` と `Std.Stderr` の書き込みの行 (`write`、`write_string`、`write_line`) は書くデータ (最初の引数) を借り、ハンドルを消費して同じハンドルを返す。読むたびに参照を渡して返す手間と、1バイトずつ読むループの `dup` を省くためである。`++`、`println`、`eprintln`、`Std.FileIn.open`、`write_text`、`Std.Env` の行、`Std.Proc.status` は、引数を消費したままにする
 - 1つの命令が同じ変数を借りて、かつ消費するなら、その命令の前に参照が2つ要る。extern の行でこの形を持つのは `Std.Bytes.append_slice` だけで、`src` を借り、`dst` を消費する。借用は命令の間じゅう続くので、消費に渡す参照とは別に1つ持つ必要があるためである。Perceus は、借りる変数を同じ命令が消費するなら、その変数を命令の後も生きているとみなして `dup` を置き、命令の後の `decref` が借用の分を手放す。verifier は、`dup` のないこの形を `` `e.0` is lent to `prim ev_renew` and consumed by the same instruction `` のように断る。借りるだけの使いと、別の変数を消費する使いは、この規則に当たらない
 - extern が失敗して中断しても、借りた引数は呼んだ側が持ったままである。巻き戻しの表は呼び出しの後に持っている値を手放すので、借りた引数もそこで手放す ([VM](vm.md) の「巻き戻し」)。消費する引数は、extern が手放す
-- `with_arg: Some(k)` の行 (`Std.Fs` と `Std.Stdin` のそれぞれ5つの読み、`Std.MutArray.length`、`read`) は、宣言の型では結果と引数 k の組を返す。行の結果は組の最初の要素で、組は translate が作る ([Core IR](core-ir.md) の「組を返す extern」)。LIR の `extern` 命令は行の結果だけを束縛し、借りた引数 k はその後の `con` が消費する
+- `with_arg: Some(k)` の行 (`Std.FileIn` と `Std.Stdin` のそれぞれ5つの読み、`Std.MutArray.length`、`read`) は、宣言の型では結果と引数 k の組を返す。行の結果は組の最初の要素で、組は translate が作る ([Core IR](core-ir.md) の「組を返す extern」)。LIR の `extern` 命令は行の結果だけを束縛し、借りた引数 k はその後の `con` が消費する
 - 縮約は、`Lin` の引数を借りずに受ける `Pure` の行 (`Std.MutArray.freeze`) を消さない (下の「縮約」)
 
 ### 末尾の位置の呼び出し
@@ -754,13 +754,13 @@ reuse のパスは、Perceus が手放す箱を token にし、同じ物理的�
   - `never` の操作の `clause` の結果を束縛する変数は、Repr と同じく、どの使いでも V2 と作る所の検査の対象にしない。使いには制御が届かないためである (上の「`never` の操作」)。Core IR の変換の段では、`never` の操作の `perform` の結果を束縛する変数も同じ理由で対象にしない
   - 定数はどの印とも合う
 - V1: `unr` でない変数に `dup` と `decref` を置かない。`dup` と `decref` は Perceus の後にしかないので、所有の段だけで走らせる。`unr` でない値を手放す命令は `drop` と `release` である
-- 作る所の検査: `con` と `closure` が束縛する変数の印は、引数の印の結び以上でなければならない (順序は `unr` < `poly` < `lin`)。V1 だけでは、誤って `unr` を付けた `List File` や `File` を捕まえたクロージャが `dup` されても気づけないので、作る所で拒む。Core IR の2つの段と LIR のすべての段で走らせる。定数は `unr` として結び、`never` の束縛は数えない
+- 作る所の検査: `con` と `closure` が束縛する変数の印は、引数の印の結び以上でなければならない (順序は `unr` < `poly` < `lin`)。V1 だけでは、誤って `unr` を付けた `List FileIn` や `FileIn` を捕まえたクロージャが `dup` されても気づけないので、作る所で拒む。Core IR の2つの段と LIR のすべての段で走らせる。定数は `unr` として結び、`never` の束縛は数えない
 - 誤りの文言は次のとおりである
   - V1: `` `x.1` (lin) is duplicated, but only unr can be ``、`` `x.1` (poly) is released, but only unr can be ``
   - `jump` と `return`: ``a jump to b2 passes `x.1` (lin) to `p.3` (unr) ``、`` `x.1` (lin) is returned from a function that returns unr ``
   - 直接の呼び出しの引数: ``argument 0 of `g` is `x.1` (lin), but the function takes unr``。`closure` の引数も同じ形である (``argument 0 of a closure of `g` ``)
-  - `extern`、`prim`、`clause` の引数: ``argument 0 of `Std.Fs.open` is `x.1` (lin), but the extern takes unr``、``argument 1 of a clause of `Counter.put` is `x.1` (lin), but the operation takes unr``、``the callee of a clause of `Counter.get` is `c.0` (lin), but a clause takes unr``
-  - 結果: `` `t.0` (unr) is bound to `Std.Fs.open`, which returns lin ``。`prim`、`clause`、呼び出しも同じ形である
+  - `extern`、`prim`、`clause` の引数: ``argument 0 of `Std.FileIn.open` is `x.1` (lin), but the extern takes unr``、``argument 1 of a clause of `Counter.put` is `x.1` (lin), but the operation takes unr``、``the callee of a clause of `Counter.get` is `c.0` (lin), but a clause takes unr``
+  - 結果: `` `t.0` (unr) is bound to `Std.FileIn.open`, which returns lin ``。`prim`、`clause`、呼び出しも同じ形である
   - `clause` の印の関数: ``parameter 2 of `g$entry`, a clause of `Counter.put`, is `x.2` (unr), but the operation takes lin``、`` `g$entry`, a clause of `Counter.get`, returns lin, but the operation returns unr ``
   - 作る所: `` `p.2` (unr) is bound to a con of `(,)` #0, whose arguments join to lin ``、`` `c.1` (unr) is bound to a closure of `k`, whose captures join to poly ``
 
@@ -785,10 +785,10 @@ LIR を実行する [VM](vm.md) と後のネイティブのコードは、次の
 - `prim` は、上の「基本操作」の表のとおりに文脈と evidence を読み書きする。借用の引数は呼ぶ側が持ったままなので手放さず、ほかの引数は所有した参照として受け取り、結果に残さないものを手放す。結果は所有した参照である。`evv_mask` が残すリストの残りと、`ev_renew` が新しい evidence に入れる入口の表は、基本操作が自分で `dup` する
 - `clause` は `apply` と同じく関数の値を呼ぶ。操作の ABI は値の表し方を変えないためである (上の「節の呼び出し」)
 - ダミーの値 (`prim dummy()`、`0`、`0.0`、`#0`、`()`) は、上の「ダミーの値」の約束を守る。`dup`、`decref`、`drop` は何も起こさず、`box` と `unbox` は誤りにしない
-- `drop k` は、継続のクロージャが捕まえていた値を、解放の連鎖で1回ずつ解放する。`Lin` の値の破棄処理は物体の解放そのものなので、捕まっていた `File` は、この解放で読み出し口が捨てられて閉じる ([オブジェクトモデル](object-model.md) の「読み手」)
-- 中断 (`never` の操作、`try_io` が捕まえる IO の失敗、`try_panic` が捕まえる `Panic`、`exit`) は継続を組み立てず、タスクのスタックを巻き戻す。外すフレームが、中断の通った命令 (下の「巻き戻しの地点」) の直後に所有している RC の対象の値を、所有の数だけ手放し、生きている token を `drop_token` で手放す。`File` はこの解放で閉じる。着地の印の evidence が中断の宛先と同じ `apply` (上の「着地の印」) に着いたら、その結果にダミーを入れ、次の文から続ける。`exit` の中断の宛先はどの印とも合わないので、実行の底まで巻き戻す。手順は [VM](vm.md) の「巻き戻し」にある
+- `drop k` は、継続のクロージャが捕まえていた値を、解放の連鎖で1回ずつ解放する。`Lin` の値の破棄処理は物体の解放そのものなので、捕まっていた `FileIn` は、この解放で読み出し口が捨てられて閉じる ([オブジェクトモデル](object-model.md) の「読み手」)
+- 中断 (`never` の操作、`try_io` が捕まえる IO の失敗、`try_panic` が捕まえる `Panic`、`exit`) は継続を組み立てず、タスクのスタックを巻き戻す。外すフレームが、中断の通った命令 (下の「巻き戻しの地点」) の直後に所有している RC の対象の値を、所有の数だけ手放し、生きている token を `drop_token` で手放す。`FileIn` はこの解放で閉じる。着地の印の evidence が中断の宛先と同じ `apply` (上の「着地の印」) に着いたら、その結果にダミーを入れ、次の文から続ける。`exit` の中断の宛先はどの印とも合わないので、実行の底まで巻き戻す。手順は [VM](vm.md) の「巻き戻し」にある
 - 下の「実行時エラー」は巻き戻さず、評価全体を止める。分担は [VM](vm.md) の「中断と実行時エラーの分担」にある
-- `extern` 命令は、引数を受け取ってその場で実行し、値を返す。継続の最下部には、プログラムの終わりを表す枠があるだけで、`IO` の handler はない。`println` は Host に書く。`open` は `File` の物体を確保し、`File` の読み (`read_all`、`read_line_raw`、`read_all_bytes`、`read_line_bytes_raw`、`read_chunk`) は `File` を借りて読み、読んだ文字列かバイト列を返す。`read_chunk` は、受け取ったバイト列に足して返す。`close` は `File` を解放する ([エフェクトと handler](effects.md) の「組み込みの `IO`」)。標準入力のハンドルも、`open` が物体を確保し、同じ名前の5つの読みがハンドルを借りて読み、`close` が解放する ([標準ライブラリ](stdlib.md) の「`Stdin`」)。標準出力と標準エラーのハンドルの書き込みは、データを借りて Host に書き、受け取ったハンドルを返す ([標準ライブラリ](stdlib.md) の「`Stdout` と `Stderr`」)
+- `extern` 命令は、引数を受け取ってその場で実行し、値を返す。継続の最下部には、プログラムの終わりを表す枠があるだけで、`IO` の handler はない。`println` は Host に書く。`open` は `FileIn` の物体を確保し、`FileIn` の読み (`read_all`、`read_line_raw`、`read_all_bytes`、`read_line_bytes_raw`、`read_chunk`) は `FileIn` を借りて読み、読んだ文字列かバイト列を返す。`read_chunk` は、受け取ったバイト列に足して返す。`close` は `FileIn` を解放する ([エフェクトと handler](effects.md) の「組み込みの `IO`」)。標準入力のハンドルも、`open` が物体を確保し、同じ名前の5つの読みがハンドルを借りて読み、`close` が解放する ([標準ライブラリ](stdlib.md) の「`Stdin`」)。標準出力と標準エラーのハンドルの書き込みは、データを借りて Host に書き、受け取ったハンドルを返す ([標準ライブラリ](stdlib.md) の「`Stdout` と `Stderr`」)
 - 実行が正しく終わったとき、`evv` は空で、yield の状態はなしでなければならない (上の「`evv` の不変条件」)。そうでなければ内部の誤りである。残った evidence がリークに見えないように、この検査はモードによらず、検査モードのリークの検査の前に行う
 - 呼び出しの深さの扱いは [VM](vm.md) の「スロットとスタック」にある
 - 名前付きのレコードとタプルは、コンストラクタが1つの `data` と同じ物体で、位置で分解する ([直積型とレコード](records.md))
@@ -815,7 +815,7 @@ LIR を実行する [VM](vm.md) と後のネイティブのコードは、次の
 - `Std.Float` の `truncate`、`floor`、`ceil`、`round` の結果が `Int` に収まらないとき (`` float `<x>` does not fit in `Int` ``。`x` は `show` の形)、`Float.to_fixed` の桁数が 0 から 100 の外のとき (`` `to_fixed` takes 0 to 100 digits, not <n> ``) ([標準ライブラリ](stdlib.md) の「`Std.Float`」)
 - `Std.Char` の `of_int` の引数がスカラー値でないとき (``int `<n>` is not a Unicode scalar value``) ([標準ライブラリ](stdlib.md) の「`Std.Char`」)
 - `Std.Byte` の `of_int` の引数が 0 から 255 の外のとき (``int `<n>` does not fit in `Byte` ``) ([標準ライブラリ](stdlib.md) の「`Std.Byte`」)
-- `Fs.open` が開けないとき (``cannot open `<path>`: <reason>``)、`Fs.read_all` か `Fs.read_line` が読めないとき (``cannot read `<path>`: <reason>``)、`Fs.write_text` が書けないとき (``cannot write `<path>`: <reason>``)、`Proc.run` が子を起動できないとき (``cannot run `<program>`: <reason>``)、標準入力を読めないとき (``cannot read the standard input: <reason>``)。`reason` は `not found`、`permission denied`、`not available`、`I/O error` のどれかである
+- `FileIn.open` が開けないとき (``cannot open `<path>`: <reason>``)、`FileIn.read_all` か `FileIn.read_line` が読めないとき (``cannot read `<path>`: <reason>``)、`Fs.write_text` が書けないとき (``cannot write `<path>`: <reason>``)、`Proc.run` が子を起動できないとき (``cannot run `<program>`: <reason>``)、標準入力を読めないとき (``cannot read the standard input: <reason>``)。`reason` は `not found`、`permission denied`、`not available`、`I/O error` のどれかである
 - 読んだ内容が UTF-8 でないとき。ファイル (``` `<path>` is not valid UTF-8 ```)、標準入力 (`the standard input is not valid UTF-8`)、引数 (`argument <index> is not valid UTF-8`。`Env.args ()` のリストの 0 から数えた位置)、環境変数 (``environment variable `<name>` is not valid UTF-8``) である
 - 文字列の位置が範囲の外のとき (`string index <index> is out of range for length <len>`)、`String.slice` の範囲が文字列の外のとき (`string slice <start>..<end> is out of range for length <len>`) と、端が文字の境界にないとき (`string slice <start>..<end> is not on a character boundary`)、`Env.arg` の位置が範囲の外のとき (`argument index <index> is out of range for <count> arguments`)。最後のものは標準ライブラリの中だけで起きる ([標準ライブラリ](stdlib.md) の「実行時エラー」)
 - バイト列の範囲が外のとき (`bytes slice <start>..<end> is out of range for length <len>`。`Bytes.slice`、`append_slice`、`truncate` で、`truncate n` の範囲は `0..n`)、バイト列の位置が外のとき (`bytes index <index> is out of range for length <len>`。`Bytes.get`、`set` の位置と、`Bytes.find_from` と `find_byte_from` の開始位置)、`Bytes.make` の長さが負のとき (`bytes length <len> is negative`) ([標準ライブラリ](stdlib.md) の「`Bytes`」)
@@ -834,7 +834,7 @@ extern の実装は、VM と後のネイティブのコードが使う `eml_rt` 
 
 `eml_rt` の Host が出力をまとめて書くときは、書き込みの誤りが見つかるのは、後でバッファがあふれた `println` か、プログラムの終わりの flush である。そのため、`println` の誤りに付く位置は、書けなかった行を書いた `println` でなく、誤りを見つけた `println` の位置になる。終わりの flush の誤りは位置を持たない。
 
-実行時エラーは、誤りの種類 (`fault`)、そのとき実行していた LIR の関数の名前 (`function`)、省略できる位置 (`at`) を持つ。位置を持つ `extern` 命令の実行が起こした誤り (その中のヒープの誤りを含む) にだけ、その命令の位置を付ける。位置は Core IR から写したもので ([Core IR](core-ir.md) の「位置」)、ファイルは `Program.files` の添字である。引数の読み出し、`dup`、`decref`、`release`、`switch`、`unpack`、`box`、`unbox` の誤りと、位置を持たない `extern` 命令の誤りには付けない。安全点で止めたときも位置を付けない。`File` の読み、標準入力の読み、`Proc.run` の中で止めたときは、extern の誤りなので位置を付ける。標準ライブラリの関数の中の extern なら、位置は `<std>/…` を指す。
+実行時エラーは、誤りの種類 (`fault`)、そのとき実行していた LIR の関数の名前 (`function`)、省略できる位置 (`at`) を持つ。位置を持つ `extern` 命令の実行が起こした誤り (その中のヒープの誤りを含む) にだけ、その命令の位置を付ける。位置は Core IR から写したもので ([Core IR](core-ir.md) の「位置」)、ファイルは `Program.files` の添字である。引数の読み出し、`dup`、`decref`、`release`、`switch`、`unpack`、`box`、`unbox` の誤りと、位置を持たない `extern` 命令の誤りには付けない。安全点で止めたときも位置を付けない。`FileIn` の読み、標準入力の読み、`Proc.run` の中で止めたときは、extern の誤りなので位置を付ける。標準ライブラリの関数の中の extern なら、位置は `<std>/…` を指す。
 
 位置があるときは、次のように表示する。`path` は `Program.files` の表示用のパスである。
 

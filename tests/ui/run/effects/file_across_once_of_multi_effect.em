@@ -1,21 +1,21 @@
 -- A file can be kept alive across a `once` operation of an effect that also has a `multi` operation, because only
 -- the `multi` operations copy the continuation.
-import Fs
+import FileIn
 
 effect Mixed where
   single : Unit -> Int
   multi many : Unit -> Int
 
-counted : Fs.File -> <Mixed, IO, Panic> Int
+counted : FileIn.FileIn -> <Mixed, IO, Panic> Int
 counted f =
   let n = single ()
-  Fs.close f
+  FileIn.close f
   n + many ()
 
 main : Unit -> <IO, Panic> Unit
 main () =
   let total =
-    handle counted (Fs.open "../files/input.txt") with
+    handle counted (FileIn.open "../files/input.txt") with
       | ctl single () k -> k 1
       | ctl many () k -> k 10 + k 20
   println (show total)

@@ -1,6 +1,6 @@
 -- E3006: an outer `multi` operation copies the inner handler with its `return` clause, so the clause would close the
 -- captured file once for each resumption.
-import Fs
+import FileIn
 
 effect Choice where
   multi choose : Unit -> Bool
@@ -10,10 +10,10 @@ effect Ask where
 
 pick : Unit -> <Choice, IO> Unit
 pick () =
-  let f = Fs.open "input.txt"
+  let f = FileIn.open "input.txt"
   handle (if choose () then ask () else 0) with
     | ctl ask () k -> k 1
-    | return n -> Fs.close f
+    | return n -> FileIn.close f
 
 main : Unit -> <IO> Unit
 main () =

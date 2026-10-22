@@ -130,7 +130,7 @@ const TRUSTED: &[(&str, &str)] = &[
     ("host.rs: external_body host_write_line", "T11"),
     ("host.rs: external_body host_write", "T11"),
     ("host.rs: external_body host_flush", "T11"),
-    ("host.rs: external_body File", "T11"),
+    ("host.rs: external_body FileIn", "T11"),
     ("host.rs: external_body host_open", "T11"),
     ("host.rs: external_body Reader", "T11"),
     ("host.rs: external_body StdinSlot", "T11"),

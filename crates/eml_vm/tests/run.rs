@@ -290,10 +290,10 @@ fn main() -> unit {{
   return u.1
 }}
 fn f(p.0: obj) -> unit {{
-  let h.1: obj lin = extern Std.Fs.open(p.0)
+  let h.1: obj lin = extern Std.FileIn.open(p.0)
   dup h.1
-  let u.2: unit = extern Std.Fs.close(h.1)
-  let u.3: unit = extern Std.Fs.close(h.1)
+  let u.2: unit = extern Std.FileIn.close(h.1)
+  let u.3: unit = extern Std.FileIn.close(h.1)
   return u.3
 }}
 "

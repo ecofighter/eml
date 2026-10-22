@@ -440,7 +440,7 @@ fn a_failed_recovery_breaks_the_session() {
     let text = "\
 fn main() -> unit {
   let p.0: obj = const \"a.txt\"
-  let h.1: obj lin = extern \"Std.Fs.open\"(p.0)
+  let h.1: obj lin = extern \"Std.FileIn.open\"(p.0)
   let u.2: unit = prim root_set[1](h.1)
   let n.3: int = extern \"Prelude.Div Int.%\"(1, 0)
   return ()

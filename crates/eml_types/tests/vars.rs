@@ -131,11 +131,11 @@ f xs = xs[0]
 
 #[test]
 fn a_lin_element_is_e3001() {
-    let text = "import Fs\nimport MutArray\n\
+    let text = "import FileIn\nimport MutArray\n\
 main : Unit -> <IO, Panic> Unit
 main () =
   var a = MutArray.empty ()
-  a[0] <- Fs.open \"x\"
+  a[0] <- FileIn.open \"x\"
   drop a
 ";
     insta::assert_debug_snapshot!(check_short(text), @r#"
@@ -162,7 +162,7 @@ main () =
 
 #[test]
 fn a_var_of_a_signature_type_variable_constrains_the_scheme() {
-    let text = "import Fs\n\
+    let text = "import FileIn\n\
 keep : a -> a
 keep x =
   var y = x
@@ -170,8 +170,8 @@ keep x =
 
 main : Unit -> <IO> Unit
 main () =
-  let f = keep (Fs.open \"x\")
-  Fs.close f
+  let f = keep (FileIn.open \"x\")
+  FileIn.close f
 ";
     insta::assert_debug_snapshot!(check_short(text), @r#"
     [
@@ -182,15 +182,15 @@ main () =
 
 #[test]
 fn a_linear_var_is_e3007() {
-    let text = "import Fs\n\
+    let text = "import FileIn\n\
 main : Unit -> <IO> Unit
 main () =
-  var f = Fs.open \"x\"
+  var f = FileIn.open \"x\"
   ()
 ";
     insta::assert_debug_snapshot!(check_short(text), @r#"
     [
-        "E3007 4:3 the variable `f` has the linear type `File`",
+        "E3007 4:3 the variable `f` has the linear type `FileIn`",
     ]
     "#);
 }
@@ -478,18 +478,18 @@ f () =
 
 #[test]
 fn a_value_kept_across_a_var_scope_is_e3006() {
-    let text = "import Fs\n\
+    let text = "import FileIn\n\
 effect Choose where
   multi choose : Unit -> Bool
 
 g : Unit -> <Choose, IO, Panic> Unit
 g () =
-  let f = Fs.open \"x\"
+  let f = FileIn.open \"x\"
   let r =
     var n = 0
     if choose () then n <- 1 else ()
     n
-  Fs.close f
+  FileIn.close f
   println (show r)
 ";
     insta::assert_snapshot!(check_full(text), @"

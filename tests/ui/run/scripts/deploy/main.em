@@ -2,6 +2,7 @@
 -- 段の起動は `Run`、記録は `Log` のエフェクトにし、`--dry-run` では `Run` の handler だけを差し替える。段が失敗したら
 -- そこで止め、報告を書いてから、その終了コードで終える
 import Env
+import FileIn
 import Fs
 import List
 import Proc
@@ -116,9 +117,9 @@ result_line outcome =
 read_text : String -> <IO> Result IOError String
 read_text path =
   use try_io
-  let f = Fs.open path
-  let (text, f) = Fs.read_all f
-  Fs.close f
+  let f = FileIn.open path
+  let (text, f) = FileIn.read_all f
+  FileIn.close f
   text
 
 deploy : Bool -> Config -> <IO, Panic> Unit

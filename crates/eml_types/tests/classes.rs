@@ -269,7 +269,7 @@ fn a_constrained_variable_is_unrestricted() {
 fn resolving_an_instance_requires_unrestricted_arguments() {
     // `G b` は `b` によらず `Unr` だが、instance の本体は頭の型変数を `Unr` として検査するので、解くたびに型引数に
     // `Unr` を求める (docs/spec/types.md の「`Unr` のクラス」)
-    let text = "import Fs\nclass Size a where\n  size : a -> Int\n\ndata G b = | G (Unit -> <IO> b)\n\ninstance Size (G b) where\n  size _ = 0\n\nf : Unit -> <IO> Int\nf () = size (G (fn () -> Fs.open \"x\"))";
+    let text = "import FileIn\nclass Size a where\n  size : a -> Int\n\ndata G b = | G (Unit -> <IO> b)\n\ninstance Size (G b) where\n  size _ = 0\n\nf : Unit -> <IO> Int\nf () = size (G (fn () -> FileIn.open \"x\"))";
     let found = lines(text);
     assert!(
         found.iter().any(|line| line.starts_with("E30")),
@@ -280,7 +280,7 @@ fn resolving_an_instance_requires_unrestricted_arguments() {
 #[test]
 fn a_recursive_reference_at_a_linear_type_is_reported_at_the_reference() {
     // 再帰した参照が `a` を線形な型で具体化すると、シグネチャの `a ≤ Unr` も破れる。その違反は報告せず、参照の誤りだけを出す
-    let text = "import Fs\nclass Same a where\n  same : a -> a -> Bool\n\ndata Box a = | Box a\n\ninstance Same (Box a) where\n  same _ _ = True\n\nf : Same a => a -> <IO> Int\nf x = f (Box (Fs.open \"x\"))\n\ng : Same a => a -> <IO> Int\ng x = g (Fs.open \"x\")";
+    let text = "import FileIn\nclass Same a where\n  same : a -> a -> Bool\n\ndata Box a = | Box a\n\ninstance Same (Box a) where\n  same _ _ = True\n\nf : Same a => a -> <IO> Int\nf x = f (Box (FileIn.open \"x\"))\n\ng : Same a => a -> <IO> Int\ng x = g (FileIn.open \"x\")";
     let found = lines(text);
     assert!(
         found.iter().any(|line| line.starts_with("E3001 11:7")),
@@ -294,13 +294,13 @@ fn a_recursive_reference_at_a_linear_type_is_reported_at_the_reference() {
 
 #[test]
 fn a_linear_head_cannot_have_an_instance() {
-    let text = "import Fs\nclass Size a where\n  size : a -> Int\n\ndata H = | H Fs.File\n\ninstance Size H where\n  size _ = 0\n\ninstance Size Fs.File where\n  size _ = 0";
+    let text = "import FileIn\nclass Size a where\n  size : a -> Int\n\ndata H = | H FileIn.FileIn\n\ninstance Size H where\n  size _ = 0\n\ninstance Size FileIn.FileIn where\n  size _ = 0";
     let checked = check(text);
     insta::assert_snapshot!(eml_test_support::full(checked.files(), &checked.diagnostics), @"
     E2010 7:15 `H` is linear, so it cannot have an instance of `Size`
       7:15 a linear type
       note: the methods of a class may copy or drop their arguments, which a linear value forbids
-    E2010 10:15 `File` is linear, so it cannot have an instance of `Size`
+    E2010 10:15 `FileIn` is linear, so it cannot have an instance of `Size`
       10:15 a linear type
       note: the methods of a class may copy or drop their arguments, which a linear value forbids
     ");

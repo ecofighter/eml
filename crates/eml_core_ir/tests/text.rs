@@ -153,7 +153,7 @@ fn an_operation_mark_of_unr_is_an_error() {
 #[test]
 fn the_effect_table_of_a_translated_program_writes_the_marks() {
     let text = pretty(&eml_test_support::core_until(
-        "import Std.Fs\n\neffect Ask a where\n  ask : Unit -> a\n  put : a -> Unit\n  open : Unit -> Fs.File\n\nmain : Unit -> <IO> Unit\nmain () = println \"x\"\n",
+        "import Std.FileIn\n\neffect Ask a where\n  ask : Unit -> a\n  put : a -> Unit\n  open : Unit -> FileIn.FileIn\n\nmain : Unit -> <IO> Unit\nmain () = println \"x\"\n",
         eml_core_ir::Pass::Translate,
     ));
     assert!(text.contains("ask(unit) -> tobj poly"), "{text}");

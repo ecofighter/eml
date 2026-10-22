@@ -1,7 +1,7 @@
 -- wc: 行、語、バイトの数を数える。`wc [-l] [-w] [-c] [FILE...]` で、ファイル名 `-` と、ファイルを
 -- 書かないときは標準入力を読む。数える部分はエフェクトを使わずに書く
 import Env
-import Fs
+import FileIn
 import List
 import Stdin
 import String
@@ -59,9 +59,9 @@ read_input name =
   use try_io
   if name == "-" then Stdin.read_text ()
   else
-    let f = Fs.open name
-    let (text, f) = Fs.read_all f
-    Fs.close f
+    let f = FileIn.open name
+    let (text, f) = FileIn.read_all f
+    FileIn.close f
     text
 
 -- 名前のある入力を順に数えて出し、合計と、開けない入力があったかを返す

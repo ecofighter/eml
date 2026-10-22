@@ -1,7 +1,7 @@
 -- Opening a file that does not exist stops the program with a runtime error.
-import Fs
+import FileIn
 
 main : Unit -> <IO> Unit
 main () =
-  let f = Fs.open "missing.txt"
-  Fs.close f
+  let f = FileIn.open "missing.txt"
+  FileIn.close f

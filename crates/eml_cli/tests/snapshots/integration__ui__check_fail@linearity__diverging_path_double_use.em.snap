@@ -4,17 +4,17 @@ expression: rendered
 input_file: tests/ui/check-fail/linearity/diverging_path_double_use.em
 ---
 [E3002] Error: `f` must be used exactly once, but it is used more than once
-    ╭─[ check-fail/linearity/diverging_path_double_use.em:10:14 ]
+    ╭─[ check-fail/linearity/diverging_path_double_use.em:10:18 ]
     │
- 10 │     Fs.close f
-    │              ┬  
-    │              ╰── used again here
+ 10 │     FileIn.close f
+    │                  ┬  
+    │                  ╰── used again here
     │
-    ├─[ check-fail/linearity/diverging_path_double_use.em:10:14 ]
+    ├─[ check-fail/linearity/diverging_path_double_use.em:10:18 ]
     │
-  9 │     Fs.close f
-    │              ┬  
-    │              ╰── first used here
+  9 │     FileIn.close f
+    │                  ┬  
+    │                  ╰── first used here
     │ 
     │ Note: linear values, such as files, the continuation of a `once` operation and closures that capture one, must be used exactly once
 ────╯

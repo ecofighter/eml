@@ -1,6 +1,6 @@
 -- 状態が `File` の handler の、その場で動く `fn` 節が、`exit 6` を呼ぶ補助の関数を呼ぶ。巻き戻しは節の入口の
 -- フレームが取り出した `File` を閉じ、`Finish` まで届く。
-import Fs
+import FileIn
 
 effect Probe where
   probe : Int -> Int
@@ -16,9 +16,9 @@ body () = probe 1 + probe 2
 main : Unit -> <IO, Panic> Unit
 main () =
   let r =
-    handle body () from Fs.open "input.txt" with
+    handle body () from FileIn.open "input.txt" with
       | fn probe n f -> if n == 2 then (stop n, f) else (n, f)
       | return x f ->
-        Fs.close f
+        FileIn.close f
         x
   println "never \{r}"

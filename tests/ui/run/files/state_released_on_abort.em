@@ -1,5 +1,5 @@
 -- A file held as the state of an inner handler is released when an outer `never` operation aborts the body.
-import Fs
+import FileIn
 
 effect Fail where
   never fail : Unit -> a
@@ -14,9 +14,9 @@ body () =
 
 inner : Unit -> <Fail, IO> Unit
 inner () =
-  handle body () from Fs.open "input.txt" with
+  handle body () from FileIn.open "input.txt" with
     | ctl tick () k f -> k () f
-    | return x f -> Fs.close f
+    | return x f -> FileIn.close f
 
 main : Unit -> <IO> Unit
 main () =

@@ -75,8 +75,8 @@ pub enum IoReason {
 /// `Ctx` のハンドルの extern が受けるハンドルの種類。`Foreign` の物体の中身の型を決める。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Handle {
-    /// `Std.Fs.File`。
-    File,
+    /// `Std.FileIn.FileIn`。
+    FileIn,
     /// `Std.Stdin.Stdin`。
     Stdin,
     /// `Std.Stdout.Stdout`。
@@ -129,7 +129,7 @@ pub enum Form {
 #[derive(Debug, PartialEq, Eq)]
 pub enum Utf8Source {
     /// `open` に渡されたままのパス。
-    File(Box<str>),
+    FileIn(Box<str>),
     Stdin,
     /// `Env.args ()` のリストの 0 から数えた位置。
     Arg(i64),
@@ -1241,7 +1241,7 @@ impl fmt::Display for Fault {
             }
             Fault::Stdin(reason) => write!(f, "cannot read the standard input: {reason}"),
             Fault::NotUtf8(source) => match &**source {
-                Utf8Source::File(path) => write!(f, "`{path}` is not valid UTF-8"),
+                Utf8Source::FileIn(path) => write!(f, "`{path}` is not valid UTF-8"),
                 Utf8Source::Stdin => f.write_str("the standard input is not valid UTF-8"),
                 Utf8Source::Arg(index) => write!(f, "argument {index} is not valid UTF-8"),
                 Utf8Source::EnvVar(name) => {

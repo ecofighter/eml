@@ -74,7 +74,7 @@ struct Fix {
 | E1006 | `NON_ASSOCIATIVE_OPERATORS` | 結合しない演算子の並び、優先順位が同じで結合の向きが違う演算子の並び |
 | E1007 | `INVALID_OPERATION_SIGNATURE` | 操作のシグネチャの一番外側の `->` に row を書いた。または、シグネチャが関数型でない |
 | E1008 | `NEVER_RESULT_NOT_FREE` | `never` の操作の結果の型が、引数に現れない型変数でない |
-| E1009 | `UNHANDLEABLE_EFFECT` | handler の節の先頭に、extern のエフェクト (`IO`) を起こす extern の関数 (`println`、`Fs.open` など) の名前を書いた。操作として引けず、extern の関数として引けたときだけである |
+| E1009 | `UNHANDLEABLE_EFFECT` | handler の節の先頭に、extern のエフェクト (`IO`) を起こす extern の関数 (`println`、`FileIn.open` など) の名前を書いた。操作として引けず、extern の関数として引けたときだけである |
 | E1010 | `CLAUSE_ARITY` | handler の節の引数の個数の誤り |
 | E1011 | `DROP_ARITY` | `drop` の引数の個数の誤り |
 | E1012 | `MIXED_EFFECTS_IN_HANDLER` | 1つの handler に別のエフェクトの操作の節が混ざった |

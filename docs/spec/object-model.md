@@ -97,7 +97,7 @@ meta: u32         tag (16 ビット) | scan (8 ビット) | info (8 ビット)
 | `Bytes` | 5 | 生の1語目にバイト長、その後にバイト列 (下の「バイト列と文字列」) | 0 (`scan` は 0) | できない | なし | 不透明 |
 | `Free` | 15 | 空きリストの次のブロックへのポインタ | なし | できない | なし | いいえ |
 
-- `Foreign` は、`File` のように Rust の値を持つ物体である。`alloc_foreign::<T>(value, lin)` が、`T` ごとに1つの静的な表 (値の型を照らす `TypeId` を返す関数と、`drop_in_place::<T>` を呼ぶ破棄処理) を作って先頭に置く。`T` は `Send + 'static` で、揃えは 8 バイト以下に限る。後で別のスレッドが最後の参照を手放しても、破棄処理をそのスレッドで呼べるようにするためである ([マルチコア対応の設計](../future/multicore.md) の「スレッドに縛られたリソース」)
+- `Foreign` は、`FileIn` のように Rust の値を持つ物体である。`alloc_foreign::<T>(value, lin)` が、`T` ごとに1つの静的な表 (値の型を照らす `TypeId` を返す関数と、`drop_in_place::<T>` を呼ぶ破棄処理) を作って先頭に置く。`T` は `Send + 'static` で、揃えは 8 バイト以下に限る。後で別のスレッドが最後の参照を手放しても、破棄処理をそのスレッドで呼べるようにするためである ([マルチコア対応の設計](../future/multicore.md) の「スレッドに縛られたリソース」)
 - `Foreign` の箱を空けるときは、表を読み、箱を先に死んだことにしてから破棄処理を呼び、その後でブロックを確保器に返す。破棄処理が panic しても同じ値を2回破棄せず、返した大きい物体のページを読まないためである。panic したときは、その箱が漏れる
 - `Foreign` を token にしないのは、破棄処理を飛ばして別の物体に使い回すと、`Lin` の資源の後始末が漏れるためである。`BigInt` と `Float` は reuse のパスの対象にならないので、token にしない
 - `String` と `Bytes` を token にしないのは、token の箱はいつも `Data` であるという性質を崩さないためである。`con_at` が書き直さない語の扱いは、この性質に頼る。reuse のパスも文字列とバイト列を対象にしない
@@ -137,7 +137,7 @@ meta: u32         tag (16 ビット) | scan (8 ビット) | info (8 ビット)
 | 入口の表 | `Data`、0 | [入口のクロージャ...] |
 | 文字列 | `String`、0 | 上の「種類」と下の「バイト列と文字列」 |
 | バイト列 | `Bytes`、0 | 上の「種類」と下の「バイト列と文字列」 |
-| `File` | `Foreign`、`lin` ビットを立てる | 破棄処理の表と、Rust の値 `File` (下の「extern」の「読み手」) |
+| `FileIn` | `Foreign`、`lin` ビットを立てる | 破棄処理の表と、Rust の値 `FileIn` (下の「extern」の「読み手」) |
 
 ### クロージャ
 
@@ -243,7 +243,7 @@ RC の遷移は、rc の値だけを受け取って次の状態を返す純粋�
 - `lin` ビットの立った物体には印を付けず、所有者を `receiver` に移す。ただし、その子はたどり続ける。`Lin` の物体の中の `Unr` の子は、送り手がほかの所からも参照していることがあるためである。`Lin` の物体は rc が 1 なので、受け手は局所の物体としてそのまま使える
   - `lin` の物体は rc が 1 なので、正しいプログラムでは2回届かない。検査モードは、たどりで同じ `lin` の物体に2回届いたら誤りにする (訪れた `lin` の物体の集合を持つ)。すでに共有の側にある `lin` の物体に届いたときも誤りにする。速いモードは、正しいプログラムに頼る
   - 検査モードは、たどりで届いた物体が生きていなければ誤りにする
-- `lin` ビットのない親の中に `lin` ビットの立った子があることは、ふつうに起きる。`poly` の印の `con` (`(a, File)` の組の型は `poly` になる) と、EP の継続のクロージャ (印は捕まえた値の印の結び) は `lin` ビットを持たないが、中の `File` はビットを持つ。このとき `share` の後は、共有の親から局所の `lin` の子が届く。そのため、共有の物体から届いてよいのは、共有か不死の物体か、`lin` ビットの立った局所の物体である
+- `lin` ビットのない親の中に `lin` ビットの立った子があることは、ふつうに起きる。`poly` の印の `con` (`(a, FileIn)` の組の型は `poly` になる) と、EP の継続のクロージャ (印は捕まえた値の印の結び) は `lin` ビットを持たないが、中の `FileIn` はビットを持つ。このとき `share` の後は、共有の親から局所の `lin` の子が届く。そのため、共有の物体から届いてよいのは、共有か不死の物体か、`lin` ビットの立った局所の物体である
   - そうした親は、実際には `Lin` の値なので参照は1つで、所有も受け手に移っている。親の最後の参照を手放すのは受け手で、子の所有者の検査とも合う
   - 受け手がその親を手放すとき、親の rc は -1 である。-1 の物体は、参照が自分の1つだけなので、最後の参照として扱い、残すフィールドを `dup` せずに受け取る (下の「核の操作」の `is_last`)。残す `lin` の子を `dup` すると、正しいプログラムでも検査モードの誤りになるためである
 - たどりのコードは、物体への読み書き (生存、rc、`lin` ビット、所有者、子) を `Graph` trait の裏に置いて書く。Verus が、たどりのコードを trait のメソッドの約束の上で、任意のグラフについて証明するためである ([テスト戦略](../implementation/testing.md) の「Verus」)。ヒープの上の実装も証明し、たどりの結果をヒープの抽象のモデルの遷移と結ぶ
@@ -252,13 +252,13 @@ RC の遷移は、rc の値だけを受け取って次の状態を返す純粋�
 ## `lin` ビット
 
 - `info` の `lin` ビットは、検査モードに限らず常に持つ。`par` の fork で、印付けの代わりに所有者を移すのに使うためである ([マルチコア対応の設計](../future/multicore.md) の「`Lin` の物体の所有者の移し替え」)
-- `alloc` と `con_at` は、呼ぶ側が渡す `meta` の `lin` ビットをそのまま書く。どの物体にビットを立てるかは、呼ぶ側が決める。`File` などの extern の資源は作るときに立てる。`con` と `closure` は、Kind の印 ([LIR](lir.md) の「Kind の印」) が `lin` なら立て、`unr` と `poly` なら立てない
+- `alloc` と `con_at` は、呼ぶ側が渡す `meta` の `lin` ビットをそのまま書く。どの物体にビットを立てるかは、呼ぶ側が決める。`FileIn` などの extern の資源は作るときに立てる。`con` と `closure` は、Kind の印 ([LIR](lir.md) の「Kind の印」) が `lin` なら立て、`unr` と `poly` なら立てない
 - `poly` のコードで作った `Lin` の物体はビットを持たないので、fork で共有になり、その場の書き換えができなくなる。安全の側に倒れるだけである
 - `reuse_in_place` はヘッダを書かないので、箱の `lin` ビットがそのまま残る。ビットが欠けるのは安全の側である (`share` で印が付いて共有になり、その場の書き換えができなくなるだけ)。危ないのは、ビットが誤って残ることで、`Unr` の値の正しい `dup` を検査モードが誤りにする。印が `lin` の変数の箱がビットを持つとは限らない (`map Some files` のように、`poly` の `$con$Some` が作った箱が `lin` の変数に入る) が、印が `unr` の変数の箱はビットを持たない
 - そのため、`reuse_in_place` を使ってよいのは、古い物体の印が `unr` のときか、新しい物体の印が `lin` のときである。それ以外は `con_at` で `meta` を書く。検査モードの照らし合わせも、`lin` ビットについては「箱がビットを持ち、新しい `meta` が持たない」ときだけを誤りにする
 - `unpack` と case で得たフィールドの印は、配置の表から確かめられず、translate を信用する ([LIR](lir.md) の「Kind の印の検査」)。検査モードの `lin` ビットの誤り (下の「報告する誤り」) が、これを実行時に覆う
 
-`File` の物体は、`Fs.open` が作るときにビットを立てる (下の「extern」の「読み手」)。
+`FileIn` の物体は、`FileIn.open` が作るときにビットを立てる (下の「extern」の「読み手」)。
 
 VM の `con` と `closure` は、束縛する変数の印が `lin` なら、`alloc_data` の `lin` を真にしてビットを立てる。`apply` の部分適用で作るクロージャは、元のクロージャのビットを写し、元が即値の関数の値なら立てない ([VM](vm.md) の「呼び出しと戻り」)。
 
@@ -314,7 +314,7 @@ VM の `con` と `closure` は、束縛する変数の印が `lin` なら、`all
 | `alloc_immortal(payload_words, meta)` | rc 0 で確保する |
 | `acquire_immortal(w)` | 不死の物体の参照を1つ作る。速いモードでは何もしない (下の「不死の物体の数え方」) |
 | `alloc_int(n)` / `unbox_int(w)` | 上の「語」の `box` と `unbox` |
-| `alloc_foreign::<T>(value, lin)` / `foreign::<T>(w)` / `foreign_unique::<T>(w)` | `alloc_foreign` は種類 `Foreign` の物体を作り、`foreign` はその中の値へのポインタを返す。`foreign_unique` は、局所で rc が 1 の物体の値を、書き換えるために借りる。`Ctx::handle_read` が `File` と標準入力のハンドルの読み手を進めるのに使う (下の「extern」と「読み手」) |
+| `alloc_foreign::<T>(value, lin)` / `foreign::<T>(w)` / `foreign_unique::<T>(w)` | `alloc_foreign` は種類 `Foreign` の物体を作り、`foreign` はその中の値へのポインタを返す。`foreign_unique` は、局所で rc が 1 の物体の値を、書き換えるために借りる。`Ctx::handle_read` が `FileIn` と標準入力のハンドルの読み手を進めるのに使う (下の「extern」と「読み手」) |
 | `dup(w)` / `decref(w)` | 上の「参照カウント」。`decref` が 0 にした物体は、解放の連鎖に入れる |
 | `is_unique(w)` | rc が 1 か。共有、不死、張り付いた数は、この1回の比較でみな偽になる。reuse とその場の書き換えに使う |
 | `is_last(w)` | rc が 1 か -1 か。手放そうとしている参照が最後のものかを判定し、フィールドを `dup` せずに受け取ってよいかに使う。rc は Relaxed で読み、-1 のときだけ Acquire で読み直す。読み直しは同じ値を返し、最後の AcqRel の `decref` と同期する。ふだんの rc が 1 の道に、aarch64 の Acquire の読み込みの費用を足さないためである |
@@ -454,7 +454,7 @@ left が一意 (is_unique)
 | `array_freeze(m)` / `array_thaw(a)` | 消費する | `lin` ビットを下ろすか立てた配列を返す。一意なら `set_lin` でその場で変え、同じ語を返す。一意でなければ、要素を `dup` して写した物体にビットを付け、元を手放す |
 
 - 添字が範囲の外なら、`get` は何も変えずに、`set` は `a` と `x` を手放してから、`Fault::Index` を返す。範囲と長さは、確保より前に確かめる
-- `make` の長さは利用者が決めるので、確保より前に大きさも確かめる。確保器が作れる語の数 (2^32 未満) に収まらない長さと、今の確保量に足すと上限 (`Limits::max_bytes`) を超える長さには、何も確保せずに `x` を手放して `Fault::Stopped(Stop::MemoryLimit)` を返す。確保器に任せると、プロセスが panic で落ちるか、上限を報告する前に OS に止められるためである。上限との比べ方は、`File` の読みが確保を試す前に止めるのと同じである。物体全体のバイト数をページ単位で数える `bytes()` と比べるので、この確かめは早めの断りであり、確保器自身のページの勘定と停止はそのあとにも働く
+- `make` の長さは利用者が決めるので、確保より前に大きさも確かめる。確保器が作れる語の数 (2^32 未満) に収まらない長さと、今の確保量に足すと上限 (`Limits::max_bytes`) を超える長さには、何も確保せずに `x` を手放して `Fault::Stopped(Stop::MemoryLimit)` を返す。確保器に任せると、プロセスが panic で落ちるか、上限を報告する前に OS に止められるためである。上限との比べ方は、`FileIn` の読みが確保を試す前に止めるのと同じである。物体全体のバイト数をページ単位で数える `bytes()` と比べるので、この確かめは早めの断りであり、確保器自身のページの勘定と停止はそのあとにも働く
 - `MutArray` はいつも一意なので、共有の物体の `freeze` は型の誤りである。検査モードは `NotUnique` で断り、速いモードは写す。速いモードが写すのは、VM が確かめられない前提 (一意であること) をメソッドに置かないためである
 - `set_lin` は、一意な物体の `meta` の `lin` ビットだけを書き換え、tag、scan、種類、rc は変えない。一意な物体はほかの物体から辺で指されず、ほかのスレッドも読めない。そのため、ビットを変えても、`evv` のリストと evidence の形や、`Ctx` の持つ語の条件は崩れない。Verus はこの変化を、`evolved_by` の代わりに `evolved_lin` (`a` だけは `meta` の `lin` ビットも変わってよい変化) で書いて証明する
 - 写しも書き換えも語の単位なので、信頼の一覧に行を足さない
@@ -696,7 +696,7 @@ token の表の項目は、`into_token` と `release_reuse` が添字を使い�
 
 続けられる実行時エラー (extern の誤り、深さと確保量の上限、割り込み) の後に、VM は `Ctx::recover()` を呼ぶ。`recover` は基本操作でない。根から届く物体を新しいヒープに写し、古いヒープを丸ごと捨てる。実行時エラーと割り込みは Perceus の規則の外の中断なので、RC の規則だけでは後始末できないためである。回復の後に生きている物体は、根から届く物体と、凍結した領域の物体と、ヒープのダミーだけになる。
 
-- 古いヒープを捨てると、失敗した実行が残したもの (捨てたスタックと `evv` と yield の状態の語、token の箱) がすべて消える。届かない `Foreign` の物体は、古いヒープを落とすときに破棄処理が呼ばれる (`File` なら閉じる。上の「生存の列挙」)。古いヒープのページはすべて `Control` に戻るので、確保量は新しいヒープの分に戻る
+- 古いヒープを捨てると、失敗した実行が残したもの (捨てたスタックと `evv` と yield の状態の語、token の箱) がすべて消える。届かない `Foreign` の物体は、古いヒープを落とすときに破棄処理が呼ばれる (`FileIn` なら閉じる。上の「生存の列挙」)。古いヒープのページはすべて `Control` に戻るので、確保量は新しいヒープの分に戻る
 - 写すと物体の番地が変わる。失敗した実行の後に、ヒープの外でヒープの語を持つのは根だけである。`CodeBase` の定数は凍結した領域にあり、写しても変わらない。VM のタスクは実行の局所の値として捨て、Host はヒープの語を持たない
 - その場で解放して RC を数え直す形にしないのは、次の3つのためである。Verus の RC のモデルは外からの参照をただの数で持つので、捨てたスタックや `evv` の参照がなくなったことを表すには、多くのブロックと辺をまとめて消す新しい遷移が要る。速いモードでは token の箱を生きている `Data` と見分けられないので、数え直しの誤りが速いモードのメモリの安全を崩す。小さい物体のページは OS に返さないので、その場で解放しても確保量は減らない
 - 根の値は `Unr` なので、`lin` の物体、`lin` ビットの物体、token の箱には届かない。届いたら写すのをやめ、`Unrecoverable` を返す
@@ -840,16 +840,16 @@ token の表の項目は、`into_token` と `release_reuse` が添字を使い�
 | `Prelude.Show Byte.display` | `Ctx::int_show` (`Byte` の語は `Int` と同じ `int` で、`display` は 10 進の数だけを返す) |
 | `Prelude.Show Char.show`、`display` | `Ctx::char_show`、`char_display` |
 | `Prelude.println`、`Prelude.eprintln` | `Ctx::write_string` (`Stream::Out`、`Stream::Err`) |
-| `Std.Fs.open`、`close` | `Ctx::fs_open`、`handle_close` (`Handle::File`) |
-| `Std.Fs.read_all`、`read_line_raw` | `Ctx::handle_read` (`Handle::File`、`ReadAmount::All` と `Line`、`Form::Text`。下の「読み手」) |
-| `Std.Fs.read_all_bytes`、`read_line_bytes_raw`、`read_chunk` | `Ctx::handle_read` (`Handle::File`、`ReadAmount::All` と `Line` と `Chunk(buf)`、`Form::Bytes`。下の「読み手」) |
+| `Std.FileIn.open`、`close` | `Ctx::fs_open`、`handle_close` (`Handle::FileIn`) |
+| `Std.FileIn.read_all`、`read_line_raw` | `Ctx::handle_read` (`Handle::FileIn`、`ReadAmount::All` と `Line`、`Form::Text`。下の「読み手」) |
+| `Std.FileIn.read_all_bytes`、`read_line_bytes_raw`、`read_chunk` | `Ctx::handle_read` (`Handle::FileIn`、`ReadAmount::All` と `Line` と `Chunk(buf)`、`Form::Bytes`。下の「読み手」) |
 | `Std.Fs.write_text` | `Ctx::fs_write_text` |
 | `Std.String.byte_length`、`byte_at`、`slice`、`find_from` | `Ctx::string_byte_length`、`string_byte_at`、`string_slice`、`string_find_from` |
 | `Std.Bytes.empty`、`length`、`append`、`append_slice`、`slice`、`truncate`、`of_string`、`find_from`、`make`、`get`、`set`、`push`、`find_byte_from`、`Prelude.bytes_length`、`bytes_get` | `Ctx::bytes_empty`、`bytes_length`、`bytes_append`、`bytes_append_part`、`bytes_slice`、`bytes_truncate`、`bytes_of_string`、`bytes_find_from`、`bytes_make`、`bytes_get`、`bytes_set`、`bytes_push`、`bytes_find_byte` (上の「バイト列の操作」と「変換」)。`Prelude.bytes_length` と `bytes_get` は `Show Bytes` が読む行で、`Std.Bytes.length` と `get` と同じメソッドを呼ぶ |
 | `Std.String.valid_utf8`、`decode` | `Ctx::bytes_valid_utf8`、`string_decode` (上の「バイト列と文字列」の「変換」) |
 | `Std.Env.arg_count`、`arg`、`has`、`lookup` | `Ctx::env_arg_count`、`env_arg`、`env_has`、`env_var` |
 | `Std.Stdin.open`、`close` | `Ctx::handle_open`、`handle_close` (`Handle::Stdin`。下の「読み手」) |
-| `Std.Stdin.read_all`、`read_line_raw`、`read_all_bytes`、`read_line_bytes_raw`、`read_chunk` | `Ctx::handle_read` (`Handle::Stdin`。`Fs` の同じ名前の読みと同じ `ReadAmount` と `Form`) |
+| `Std.Stdin.read_all`、`read_line_raw`、`read_all_bytes`、`read_line_bytes_raw`、`read_chunk` | `Ctx::handle_read` (`Handle::Stdin`。`FileIn` の同じ名前の読みと同じ `ReadAmount` と `Form`) |
 | `Std.Stdout.open`、`close`、`Std.Stderr.open`、`close` | `Ctx::handle_open`、`handle_close` (`Handle::Stdout`、`Handle::Stderr`。下の「出力のバッファ」) |
 | `Std.Stdout.write`、`write_string`、`write_line`、`Std.Stderr.write`、`write_string`、`write_line` | `Ctx::handle_write` (`Stream::Out` か `Stream::Err`。`Write::Bytes`、`Text`、`Line`。下の「出力のバッファ」) |
 | `Std.Stdout.flush` | `Ctx::handle_flush` |
@@ -881,7 +881,7 @@ token の表の項目は、`into_token` と `release_reuse` が添字を使い�
 | `NotUtf8(Box<Utf8Source>)` | 読んだ中身が UTF-8 でない。`Utf8Source` はファイル (パス)、標準入力、引数 (`Env.args ()` の位置)、環境変数 (名前) | ``` `{path}` is not valid UTF-8 ```、`the standard input is not valid UTF-8`、`argument {index} is not valid UTF-8`、``environment variable `{name}` is not valid UTF-8`` |
 | `Utf8 { at: i64 }` | `String.decode` に渡したバイト列が妥当な UTF-8 でない。`at` は最初の妥当でないバイトの位置で、T5 の `utf8_valid` が返す | ``invalid UTF-8 at byte {at}`` |
 | `Index(Box<IndexFault>)` | 範囲の外の位置。`IndexFault` は、文字列の位置 (`byte_at`、`find_from`)、`slice` の範囲、`slice` の境界、`Env.arg` の位置、配列の添字 (`get`、`set`、`read`、`write`)、`make` の負の長さ、バイト列の位置 (`Bytes.get`、`set`、`find_from` と `find_byte_from` の開始位置)、バイト列の範囲 (`Bytes.slice`、`append_slice`、`truncate`。`truncate n` の範囲は `0..n`)、`Bytes.make` の負の長さ | ``string index {index} is out of range for length {len}``、``string slice {start}..{end} is out of range for length {len}``、``string slice {start}..{end} is not on a character boundary``、``argument index {index} is out of range for {count} arguments``、``array index {index} is out of range for length {len}``、``array length {len} is negative``、``bytes index {index} is out of range for length {len}``、``bytes slice {start}..{end} is out of range for length {len}``、``bytes length {len} is negative`` |
-| `Stopped(Stop)` | `File` の読みと標準入力の読みが読む途中で、`Proc.status` が子を起動する前か待つ間に、止める語か確保量の上限に当たった | `interrupted`、`the memory limit is exceeded`、`the call depth limit is exceeded` (`Stop` の表示) |
+| `Stopped(Stop)` | `FileIn` の読みと標準入力の読みが読む途中で、`Proc.status` が子を起動する前か待つ間に、止める語か確保量の上限に当たった | `interrupted`、`the memory limit is exceeded`、`the call depth limit is exceeded` (`Stop` の表示) |
 | `InUse(StdStream)` | 標準のストリーム (`Stdin`、`Stdout`、`Stderr`) のハンドルが生きている間の、2つ目の `open` | `the standard input is already open`、`the standard output is already open`、`the standard error is already open` |
 
 `Fault::io_error_kind` は、`try_io` が捕まえる誤り (`Io`、`Stdin`、`NotUtf8`) に `IOErrorKind` のタグ (`IO_NOT_FOUND` 0 から `IO_OTHER` 4) を返し、ほかには `None` を返す ([標準ライブラリ](stdlib.md) の「`try_io`」)。
@@ -955,7 +955,7 @@ token の表の項目は、`into_token` と `release_reuse` が添字を使い�
 - `String.decode` は、妥当なバイト列には同じバイトの `String` を返し、妥当でなければ `Fault::Utf8` を返す。どちらのときも `b` の参照を手放す。検査モードでは、引数が `Bytes` の物体でなければ `Heap(WrongKind)` を返す
 - 検査モードでは、引数が `Bytes` の物体でなければ `Heap(WrongKind)` を返す。`String` の物体も断る
 
-I/O の extern (`println`、`eprintln`、`Fs.open`、標準のストリームの `open`、ハンドルの読みと書き込み、`Stdout.flush`、`close`、`Fs.write_text`、`Env` と `Proc.status` の extern) は、メモリの安全と、RC のモデルでの増減を証明する。引数を消費すること (借りるハンドルと、書き込みの借りるデータは参照の数を変えないこと。書き込みと `flush` は受け取ったハンドルをそのまま返すこと)、結果を持つこと、ハンドルの種類と `lin` ビット、誤りのときに作りかけの物体を手放すことを含む。OS とのやりとりの中身 (何が書かれ、何が読めたか) は約束せず、T11 (下の「`unsafe` の核」) と期待値の表 ([テスト戦略](../implementation/testing.md) の「期待値の表」) に任せる。ハンドルの読みの結果は `alloc_string`、`alloc_bytes`、`bytes_extend` で作るので、ghost のバイト列と、文字列なら UTF-8 であることは、今ある約束と `read_text` の約束から出る。
+I/O の extern (`println`、`eprintln`、`FileIn.open`、標準のストリームの `open`、ハンドルの読みと書き込み、`Stdout.flush`、`close`、`Fs.write_text`、`Env` と `Proc.status` の extern) は、メモリの安全と、RC のモデルでの増減を証明する。引数を消費すること (借りるハンドルと、書き込みの借りるデータは参照の数を変えないこと。書き込みと `flush` は受け取ったハンドルをそのまま返すこと)、結果を持つこと、ハンドルの種類と `lin` ビット、誤りのときに作りかけの物体を手放すことを含む。OS とのやりとりの中身 (何が書かれ、何が読めたか) は約束せず、T11 (下の「`unsafe` の核」) と期待値の表 ([テスト戦略](../implementation/testing.md) の「期待値の表」) に任せる。ハンドルの読みの結果は `alloc_string`、`alloc_bytes`、`bytes_extend` で作るので、ghost のバイト列と、文字列なら UTF-8 であることは、今ある約束と `read_text` の約束から出る。
 
 ### Host
 
@@ -982,7 +982,7 @@ pub struct Opened {
 
 - `write_line` は、本文と `\n` を、ほかの行と途中で混ざらないように書く。`&str` を受けるのは、eml の文字列は UTF-8 が証明されており、テキストしか受けない出力先 (WASM の console、GUI) にも渡せるためである。`Stream` は `Out` と `Err` で、標準エラーは `eprintln` と `Stderr` のハンドルが使う
 - `write` は、バイト列をそのまま、ほかの書き込みと途中で混ざらないように書く。書くためのハンドルの `write` と `write_string` が使う。バイト列は UTF-8 とは限らないので、テキストしか受けない出力先の Host は、受けられないバイトの扱いを自分で決める
-- `open` は、読み手と、読む前に分かる長さ (ふつうのファイルならメタデータの長さ) を返す。読み手は buffer のない `Read` でよい。buffer は `eml_rt` の読み手 (下の「読み手」) が持ち、標準入力と `File` が同じ読みの部品を使うためである
+- `open` は、読み手と、読む前に分かる長さ (ふつうのファイルならメタデータの長さ) を返す。読み手は buffer のない `Read` でよい。buffer は `eml_rt` の読み手 (下の「読み手」) が持ち、標準入力と `FileIn` が同じ読みの部品を使うためである
 - `Ctx` は Host を不透明な型 `HostRef` で持ち、何も約束しない関数を通して呼ぶ (下の「`unsafe` の核」の T11)。Verus は `dyn Host` も `io::Error` も扱えないためである。`HostRef` は `Arc<dyn Host>` を `ManuallyDrop` の欄に持ち、`Drop` で `#[inline(never)]` の関数に渡して手放す。標準のストリームのハンドルの開いた印 `Arc<OpenFlags>` も持ち (下の「出力のバッファ」)、`HostRef` の写しは印を共有する。`Control` と凍結した領域の鎖と同じ形で、`Ctx` を使うコードのコード生成単位の分け方を変えないための予防である。`Ctx` 自身は、今と同じく `Drop` を実装しない
 - `Ctx::new(control, host)` で受け取る。`par` の子の `Ctx` は、同じ Host を `Arc` で写して持つ
 - `Send + Sync` を求めるので、`JsValue` を持つブラウザの Host は `unsafe impl` が要る。これは受け入れる
@@ -1020,43 +1020,43 @@ pub struct Opened {
 
 ### 読み手
 
-- 読み手 `Reader { inner: Box<dyn Read + Send>, buf: Box<[u8]>, pos, filled }` は、Host が渡した読み手 `inner` と 64 KiB の buffer を持つ。Verus には `external_body` の不透明な型として見せる。buffer は最初の補充で確保する。全部を読むだけの `File` は buffer を使わないためである
-- `Reader::fill_buf(control, host)` は、buffer に残ったバイトの slice を返す。残りがなければ、1回補充してから返す。補充では、止める語と確保量を見てから (下の `Fs.read_all` の 3 と同じ確かめで、`Vec` の領域は 0)、`inner` の `read` を1回呼んで最大 64 KiB を読む。止める語の立っていない `Interrupted` は読み直し、立っていれば次の確かめで止める。読みの誤りは、止める語が立っていれば `Stopped`、立っていなければ `Io` である。終わりなら空の slice を返す。`read` が渡した buffer より大きい長さを返したら (`Read` の約束を破る読み手)、`pos` と `filled` を書く前に `Io(Other)` で断る。読み手は壊れずに次の読みへ残る
+- 読み手 `Reader { inner: Box<dyn Read + Send>, buf: Box<[u8]>, pos, filled }` は、Host が渡した読み手 `inner` と 64 KiB の buffer を持つ。Verus には `external_body` の不透明な型として見せる。buffer は最初の補充で確保する。全部を読むだけの `FileIn` は buffer を使わないためである
+- `Reader::fill_buf(control, host)` は、buffer に残ったバイトの slice を返す。残りがなければ、1回補充してから返す。補充では、止める語と確保量を見てから (下の `FileIn.read_all` の 3 と同じ確かめで、`Vec` の領域は 0)、`inner` の `read` を1回呼んで最大 64 KiB を読む。止める語の立っていない `Interrupted` は読み直し、立っていれば次の確かめで止める。読みの誤りは、止める語が立っていれば `Stopped`、立っていなければ `Io` である。終わりなら空の slice を返す。`read` が渡した buffer より大きい長さを返したら (`Read` の約束を破る読み手)、`pos` と `filled` を書く前に `Io(Other)` で断る。読み手は壊れずに次の読みへ残る
 - `host` を渡すと、`fill_buf` は補充の前に Host の `flush` を呼ぶ。標準入力の読みが使う (上の「出力のバッファ」)。書き出せなければ `Failure::Output` になる
 - `Reader::consume(n)` は、`fill_buf` が返したバイトの先頭の `n` バイトを使ったことにする
 - `fill_buf` と `consume` は安全なメソッドで、slice の寿命は読み手の借用に縛られる。`verus!` の外の読みの部品 (`read_line`、`read_all`) はこれを使うので、次の補充の後に古い slice を読むコードはコンパイルできない
-- 検証した `Ctx` のコードは、`foreign_unique` で借りたハンドルの生のポインタしか持たず、不透明なハンドルの欄 (読み手やパス) を開けない。そのため、読み手を読む入口は、ハンドルの型 `S` について総称の信頼の関数 `fill(src: *mut S, control, host) -> Result<&[u8], Fault>` と `consume(src: *mut S, n)` にする。`S` は安全な trait `Source` を実装する。`Source::reader` がハンドルの読み手を返し (読み手のないハンドルは `None` で、読みは `not available` の誤りになる)、`Source::take_size` がまだ使っていない長さの見込みを取り出し、`Source::name` が誤りに付ける名前 (`SourceName` の `File(path)` か `Stdin`) を返す。読みの誤り (`Failure` の `Io`、`Stopped`、`Output`、`NotUtf8`) を `Fault` にするのは信頼の関数の側で、`File` の `Io` は `Io { op: Read, name: path, reason }`、`NotUtf8` は `NotUtf8(File(path))`、標準入力の `Io` は `Stdin(reason)`、`NotUtf8` は `NotUtf8(Stdin)` である。この対応は `Fault::Heap` を作らないので、`fill` と `read_text` の約束は `Source` の実装に依らない。`fill` の中身は、`fill_buf` と `consume` を呼んで、slice の寿命を呼ぶ側の約束に付け替えるだけである
+- 検証した `Ctx` のコードは、`foreign_unique` で借りたハンドルの生のポインタしか持たず、不透明なハンドルの欄 (読み手やパス) を開けない。そのため、読み手を読む入口は、ハンドルの型 `S` について総称の信頼の関数 `fill(src: *mut S, control, host) -> Result<&[u8], Fault>` と `consume(src: *mut S, n)` にする。`S` は安全な trait `Source` を実装する。`Source::reader` がハンドルの読み手を返し (読み手のないハンドルは `None` で、読みは `not available` の誤りになる)、`Source::take_size` がまだ使っていない長さの見込みを取り出し、`Source::name` が誤りに付ける名前 (`SourceName` の `FileIn(path)` か `Stdin`) を返す。読みの誤り (`Failure` の `Io`、`Stopped`、`Output`、`NotUtf8`) を `Fault` にするのは信頼の関数の側で、`FileIn` の `Io` は `Io { op: Read, name: path, reason }`、`NotUtf8` は `NotUtf8(FileIn(path))`、標準入力の `Io` は `Stdin(reason)`、`NotUtf8` は `NotUtf8(Stdin)` である。この対応は `Fault::Heap` を作らないので、`fill` と `read_text` の約束は `Source` の実装に依らない。`fill` の中身は、`fill_buf` と `consume` を呼んで、slice の寿命を呼ぶ側の約束に付け替えるだけである
 - `fill` が返す slice は、次に同じハンドルを使うか (`fill`、`consume`、そのほかハンドルを受ける T11 の関数のどれでも)、ハンドルを落とすまで読める。slice は読み手の buffer を指し、ヒープのページを指さないので、その間にヒープで確保しても解放してもよい (下の「`unsafe` の核」の T11)
 - Rust の buffer に読む読み (文字列の読みと、バイト列の全部の読み) は、総称の信頼の関数 `read_text(src: *mut S, control, host, line, form) -> Result<Vec<u8>, Fault>` で読む。`line` なら `read_line` で次の `\n` まで、そうでなければ `Source::take_size` の見込みを渡して `read_all` で終わりまで読む。`form` が `Form::Text` なら `str::from_utf8` で確かめ、`ensures` で結果が vstd の `valid_utf8` を満たすと約束する。検証したコードはそれを使って `str::from_utf8_unchecked` で `&str` にする。誤りには `fill` と同じく `Source::name` の名前を付ける。UTF-8 でなければ `Failure::NotUtf8` の誤りにする
-- `Ctx::handle_read(h, handle, read, form)` は、ハンドル `h` を `foreign_unique` で借りて読み、結果の物体だけを返す。`handle` が中身の型 (`Handle::File` か `Handle::Stdin`)、`read` が量 (`ReadAmount::All`、`Line`、`Chunk(buf)`)、`form` が形 (`Form::Text` か `Form::Bytes`) を決める。組は作らず、`h` の参照は呼ぶ側に残る。`Handle::Stdin` なら、`fill` と `read_text` に Host を渡し、補充の前ごとに標準出力を書き出させる (上の「出力のバッファ」)
+- `Ctx::handle_read(h, handle, read, form)` は、ハンドル `h` を `foreign_unique` で借りて読み、結果の物体だけを返す。`handle` が中身の型 (`Handle::FileIn` か `Handle::Stdin`)、`read` が量 (`ReadAmount::All`、`Line`、`Chunk(buf)`)、`form` が形 (`Form::Text` か `Form::Bytes`) を決める。組は作らず、`h` の参照は呼ぶ側に残る。`Handle::Stdin` なら、`fill` と `read_text` に Host を渡し、補充の前ごとに標準出力を書き出させる (上の「出力のバッファ」)
   - 全部の読みと文字列の行の読みは `read_text` で読み、`alloc_string` か `alloc_bytes` でヒープへ1回写す。証明は、呼ぶ前から生きている物体の参照の数を変えないことを言う (`evolved_by` の変化が 0)。読みの誤り、UTF-8 でない中身、止めたときも、ハンドルを手放さず、ヒープを変えない
   - バイト列の行の読みは、検証したコードが `fill` と `consume` を呼び、`fill` が返した読み手の buffer の slice をそのまま `alloc_bytes` に渡し、補充をまたぐ行は `Heap::bytes_extend` で伸ばす。`\n` は、buffer の中を T13 の `find_byte` (下の「`unsafe` の核」) で探す。1つの buffer に収まる行は、buffer から1回だけ写す。補充をまたぐ行は、最初の部分を空きのない物体に作るので、伸ばすたびに作り直しうる。作り直しは `Bytes.push` と同じく容量を倍にし、それまでの部分を写し直すので、長い行の写しの合計は行の長さの約3倍以下になる。証明は全部の読みと同じく `evolved_by` の変化が 0 であることを言う。ループの不変条件は、呼ぶ前のヒープから物体を作って伸ばしただけで、呼ぶ前に生きていた物体はみな同じブロックのまま生きていることである (`bytes_extend` が約束する `others_kept`)。止まることは、読んだ長さの和を `checked_add` で数え、それが増えることで示す。読みの誤りと止めたときは、途中まで読んだ行を手放してから返す
   - 塊の読み `Chunk(buf)` は `buf` を消費する。`fill` が返した slice を `bytes_extend(buf, slice)` で足してから、その長さを `consume` する。結果はいつもバイト列で、`form` を見ない。証明は `Bytes.push` と同じ変化 (`buf` の参照を結果の参照に替える) を言う。読みの誤りと止めたときは `buf` を手放してから返す
 - 標準入力の読み手は、Host の slot `StdinSlot` (`Mutex<Option<Reader>>`) に置く。`Ctx::handle_open(Handle::Stdin)` (`Stdin.open`) は、信頼の関数 `open_stdin` で slot から読み手を取り出し、`StdinHandle { reader: Option<Reader>, slot: Option<Arc<StdinSlot>>, flags: Arc<OpenFlags> }` を中身にした `Foreign` の物体を、`lin` ビットを立てて作る。`open_stdin` は、先に `HostRef` の標準入力の印を立てる (上の「出力のバッファ」)。印がすでに立っていれば、ほかのハンドルが開いているので、何も作らずに `InUse(Stdin)` を返す。slot が空なら、同じ Host の別の `HostRef` のハンドルが読み手を持っているので、印を下ろして同じく `InUse(Stdin)` を返す。Host が slot を持たなければ、読み手のないハンドルを作り、その読みは `Stdin(NotAvailable)` になる。この Host でも印は同じく働くので、生きている標準入力のハンドルは高々1つである。`StdinHandle` の `Drop` は、読み手を buffer に残ったバイトごと slot に返してから、印を下ろす。lock を取るだけで、失敗せず I/O をしないので、`close`、巻き戻し、`Heap` を落とすときの破棄処理のどれで落としてもよく、どのスレッドで落としてもよい。そのため、同じ Host で `Machine::run` を繰り返しても、読んでいない入力が残る。ロックが毒されていたら、中身を取り出して続ける。中身は読み手だけで、続けても壊れないためである
-- `File` の物体は、`Foreign` の中身を `File { path: Box<str>, reader: Reader, size: Option<u64> }` にしたもので、作るときに `lin` ビットを立てる。Verus には `external_body` の不透明な型として見せる
-- 閉じる処理は、`File` の drop glue だけである (手で書いた `Drop` は置かない)。どのスレッドで落としてもよい ([マルチコア対応の設計](../future/multicore.md) の「スレッドに縛られたリソース」)
-- `Fs.open`: 確かめの後、借りたパスの `&str` を Host の `open` に渡す。パスは1回だけ写して `File` に持たせる。開けたら `File` の物体を作ってから、パスの文字列を手放す。先に手放すと、空けたパスの箱を `File` が使い回しうるので、呼ぶ前からの変化を証明で言えないためである。Host が誤りを返せば、パスを手放して `Io { op: Open, .. }` を返す
-- `Fs.close`、`Stdin.close`、`Stdout.close`、`Stderr.close` (`Ctx::handle_close`): 検査モードは型と `decref` の前提を確かめ、その後 `decref` するだけである。閉じる処理は中身の破棄処理である
-- `Fs.read_all`
-  1. `File` は、局所で rc が 1 で、今の worker が持つものでなければならない。中の読み手を書き換えるためである。`foreign_unique` で借り、検査モードは確かめて `NotUnique` か `WrongOwner` を返す。速いモードでは安全の前提にする
-  2. 長さの見込みを取り出す (`Option::take`)。見込みがあれば、その大きさで 3 の確かめをしてから、`Vec<u8>` に `try_reserve` する。確保より先に上限と比べるので、確保できないほど大きい見込みも、上限があれば I/O の誤りでなく `Stopped(MemoryLimit)` になる。確保の失敗は `Io { op: Read, reason: Other }` にする (今の `read_to_end` と同じ)。2回目の `Fs.read_all` には見込みがないので、余分に確保しない。その後、読み手の buffer に残ったバイト (前の `Fs.read_line_raw` が読んだ分) を `Vec` に移す。3 と 4 は buffer を通さずに `inner` を読む
+- `FileIn` の物体は、`Foreign` の中身を `FileIn { path: Box<str>, reader: Reader, size: Option<u64> }` にしたもので、作るときに `lin` ビットを立てる。Verus には `external_body` の不透明な型として見せる
+- 閉じる処理は、`FileIn` の drop glue だけである (手で書いた `Drop` は置かない)。どのスレッドで落としてもよい ([マルチコア対応の設計](../future/multicore.md) の「スレッドに縛られたリソース」)
+- `FileIn.open`: 確かめの後、借りたパスの `&str` を Host の `open` に渡す。パスは1回だけ写して `FileIn` に持たせる。開けたら `FileIn` の物体を作ってから、パスの文字列を手放す。先に手放すと、空けたパスの箱を `FileIn` が使い回しうるので、呼ぶ前からの変化を証明で言えないためである。Host が誤りを返せば、パスを手放して `Io { op: Open, .. }` を返す
+- `FileIn.close`、`Stdin.close`、`Stdout.close`、`Stderr.close` (`Ctx::handle_close`): 検査モードは型と `decref` の前提を確かめ、その後 `decref` するだけである。閉じる処理は中身の破棄処理である
+- `FileIn.read_all`
+  1. `FileIn` は、局所で rc が 1 で、今の worker が持つものでなければならない。中の読み手を書き換えるためである。`foreign_unique` で借り、検査モードは確かめて `NotUnique` か `WrongOwner` を返す。速いモードでは安全の前提にする
+  2. 長さの見込みを取り出す (`Option::take`)。見込みがあれば、その大きさで 3 の確かめをしてから、`Vec<u8>` に `try_reserve` する。確保より先に上限と比べるので、確保できないほど大きい見込みも、上限があれば I/O の誤りでなく `Stopped(MemoryLimit)` になる。確保の失敗は `Io { op: Read, reason: Other }` にする (今の `read_to_end` と同じ)。2回目の `FileIn.read_all` には見込みがないので、余分に確保しない。その後、読み手の buffer に残ったバイト (前の `FileIn.read_line_raw` が読んだ分) を `Vec` に移す。3 と 4 は buffer を通さずに `inner` を読む
   3. 64 KiB ずつ読む。区切りの前ごとに、`Vec` の容量で次の確かめをする
      - 止める語が立っていれば、`Stopped` で止める。理由は `Ctx::poll` と同じ関数 `stop_reason` で決める (`INTERRUPT` なら `Interrupted`、`MEMORY` なら `MemoryLimit`)
      - 次に、領域の大きさと `Control` の確保量の和を上限 `max_bytes` と比べ、超えれば `Stopped(MemoryLimit)` で止める。`Vec` はヒープの外にあり、そのままでは上限に数えられないためである
-  4. 各区切りは `take(64 KiB).read_to_end(&mut vec)` で読み、0 バイトなら終わる。std が、短い読みと、終わりを小さな読みで確かめることを受け持つ。読み手は `StopOnInterrupt` で包む。中の読み手が `Interrupted` を返したとき、止める語が立っていれば `Interrupted` でない誤りに変えて返し、立っていなければそのまま返して `read_to_end` に読み直させる。中の読み手が渡した buffer より大きい長さを返したら、`StopOnInterrupt` が誤りに変える (`fill_buf` と同じく `Io(Other)` になる)。そのまま返すと `read_to_end` が std の中で panic するためである。区切りの読みが誤りを返したとき、止める語が立っていれば `Stopped` で止め、立っていなければ `Io` の誤りにする。SIGINT のハンドラが `SA_RESTART` を外して入れるので ([VM](vm.md) の「上限と割り込み」)、待っている読みは `EINTR` で戻り、この道で止まる。`StopOnInterrupt` は `read_buf` を実装できない (stable の Rust) ので、`read_to_end` は空き領域を各バイトにつき1回 0 で埋めてから読む。測った費用は [計測の基準](../implementation/benchmarks.md) の「`Fs.read_all` の読み方」にある
+  4. 各区切りは `take(64 KiB).read_to_end(&mut vec)` で読み、0 バイトなら終わる。std が、短い読みと、終わりを小さな読みで確かめることを受け持つ。読み手は `StopOnInterrupt` で包む。中の読み手が `Interrupted` を返したとき、止める語が立っていれば `Interrupted` でない誤りに変えて返し、立っていなければそのまま返して `read_to_end` に読み直させる。中の読み手が渡した buffer より大きい長さを返したら、`StopOnInterrupt` が誤りに変える (`fill_buf` と同じく `Io(Other)` になる)。そのまま返すと `read_to_end` が std の中で panic するためである。区切りの読みが誤りを返したとき、止める語が立っていれば `Stopped` で止め、立っていなければ `Io` の誤りにする。SIGINT のハンドラが `SA_RESTART` を外して入れるので ([VM](vm.md) の「上限と割り込み」)、待っている読みは `EINTR` で戻り、この道で止まる。`StopOnInterrupt` は `read_buf` を実装できない (stable の Rust) ので、`read_to_end` は空き領域を各バイトにつき1回 0 で埋めてから読む。測った費用は [計測の基準](../implementation/benchmarks.md) の「`FileIn.read_all` の読み方」にある
   5. 読み終えたら `String::from_utf8` で確かめ、`alloc_string(&str)` でヒープへ写し、`Vec` を手放す
-  6. 結果は文字列だけで、組は作らない。`File` の参照は呼ぶ側に残り、宣言の型の組 `(String, File)` は translate が作る ([Core IR](core-ir.md) の「組を返す extern」)
-  - 読みの誤りなら `Io { op: Read, .. }`、UTF-8 でなければ `NotUtf8`、止めたら `Stopped` を返す。どのときも `Vec` を手放し、`File` は手放さない。`try_io` の下では巻き戻しが `File` を手放して閉じ、実行時エラーなら実行が止まる
-- `Fs.read_line_raw` も同じ `Ctx::handle_read` で、`ReadAmount::Line` で読む。1、5、6 と誤りのときの扱いは `Fs.read_all` と同じで、違いは次の2つである
+  6. 結果は文字列だけで、組は作らない。`FileIn` の参照は呼ぶ側に残り、宣言の型の組 `(String, FileIn)` は translate が作る ([Core IR](core-ir.md) の「組を返す extern」)
+  - 読みの誤りなら `Io { op: Read, .. }`、UTF-8 でなければ `NotUtf8`、止めたら `Stopped` を返す。どのときも `Vec` を手放し、`FileIn` は手放さない。`try_io` の下では巻き戻しが `FileIn` を手放して閉じ、実行時エラーなら実行が止まる
+- `FileIn.read_line_raw` も同じ `Ctx::handle_read` で、`ReadAmount::Line` で読む。1、5、6 と誤りのときの扱いは `FileIn.read_all` と同じで、違いは次の2つである
   - 長さの見込みはファイル全体の長さなので、確保に使わずに取り出して捨てる。読んだ後の残りの長さとは合わないためである
   - 下の標準入力の1行の読みと同じく、`fill` と `consume` で次の `\n` まで (それを含めて) 写す。`\n` は、buffer の中を T13 の `find_byte` (下の「`unsafe` の核」) で探す。buffer に `\n` がなければ buffer の残りをすべて写し、補充して続ける。64 KiB を超える行も、補充の前ごとに 3 の確かめをしながら読み続ける。終わりなら空の文字列を返す
-- `Fs.read_all_bytes` は `Fs.read_all` と同じ手順で、5 の確かめをせず `alloc_bytes` で写す。UTF-8 でなくても失敗しない
-- `Fs.read_line_bytes_raw` は `Fs.read_line_raw` と同じく見込みを使わず、上のバイト列の行の読みで写す。`fill` が 64 KiB の補充の前ごとに 3 の確かめ (`Vec` の領域は 0) をするので、長い行の途中でも止まれる。伸ばす行はヒープの物体なので、確保量に数えられる
-- `Fs.read_chunk` は上の塊の読みで、buffer に残りがあれば補充しない。1回で足すのは 64 KiB 以下である
-- ヒープに直接読む形、mmap で読む形、`Vec` をそのままヒープの文字列にする形は採らない。計測と理由は [計測の基準](../implementation/benchmarks.md) の「`Fs.read_all` の読み方」にある
-- 標準入力の読み (`Std.Stdin.read_all`、`read_line_raw`、`read_all_bytes`、`read_line_bytes_raw`、`read_chunk`) は、ハンドルの読み手を `File` と同じ `handle_read` の道で読み、同じく区切りごとに止める語と確保量を見る。長さの見込みは持たない。1行の読みは、std の `read_until` を使わず `fill_buf` と `consume` で `\n` まで写す。`read_until` は `Interrupted` を自分で読み直すので、止める語を見られないためである。補充の前ごとに標準出力を書き出す (行の途中の補充と、buffer が空の塊の読みも含む)。全部の読みは、buffer の残りを移した後、`inner` を読む前に1回書き出す
+- `FileIn.read_all_bytes` は `FileIn.read_all` と同じ手順で、5 の確かめをせず `alloc_bytes` で写す。UTF-8 でなくても失敗しない
+- `FileIn.read_line_bytes_raw` は `FileIn.read_line_raw` と同じく見込みを使わず、上のバイト列の行の読みで写す。`fill` が 64 KiB の補充の前ごとに 3 の確かめ (`Vec` の領域は 0) をするので、長い行の途中でも止まれる。伸ばす行はヒープの物体なので、確保量に数えられる
+- `FileIn.read_chunk` は上の塊の読みで、buffer に残りがあれば補充しない。1回で足すのは 64 KiB 以下である
+- ヒープに直接読む形、mmap で読む形、`Vec` をそのままヒープの文字列にする形は採らない。計測と理由は [計測の基準](../implementation/benchmarks.md) の「`FileIn.read_all` の読み方」にある
+- 標準入力の読み (`Std.Stdin.read_all`、`read_line_raw`、`read_all_bytes`、`read_line_bytes_raw`、`read_chunk`) は、ハンドルの読み手を `FileIn` と同じ `handle_read` の道で読み、同じく区切りごとに止める語と確保量を見る。長さの見込みは持たない。1行の読みは、std の `read_until` を使わず `fill_buf` と `consume` で `\n` まで写す。`read_until` は `Interrupted` を自分で読み直すので、止める語を見られないためである。補充の前ごとに標準出力を書き出す (行の途中の補充と、buffer が空の塊の読みも含む)。全部の読みは、buffer の残りを移した後、`inner` を読む前に1回書き出す
 - `Proc.status` は、子を起動する前と、子が終わった後に止める語を見る。待つ間の Ctrl-C は同じプロセスグループの子にも届くので、子が終わって待ちから戻る。起動と同時に届いた Ctrl-C は子に届かないことがあり、そのときは子が終わってから止まる
-- 読む途中か待つ間に止める語を見るのは、`File` の読み (`Fs.read_all`、`read_line_raw`、`read_all_bytes`、`read_line_bytes_raw`、`read_chunk`)、標準入力の読み、`Proc.status` だけである。ほかの extern は短い時間で終わるので、安全点を通らない
+- 読む途中か待つ間に止める語を見るのは、`FileIn` の読み (`FileIn.read_all`、`read_line_raw`、`read_all_bytes`、`read_line_bytes_raw`、`read_chunk`)、標準入力の読み、`Proc.status` だけである。ほかの extern は短い時間で終わるので、安全点を通らない
 
 ### 仕事の回数
 
@@ -1065,13 +1065,13 @@ pub struct Opened {
 - `Int.show`: 数字の列の長さ
 - `Char.show`、`Char.display`: 結果の長さ
 - `String.show`: 結果の長さ
-- `Fs.read_all`: ファイルの長さ
-- `Fs.read_line_raw`: 読んだ行の長さ (行の終わりを含む)
-- `Fs.read_all_bytes`: 読んだ長さ
-- `Fs.read_line_bytes_raw`: 読んだ行の長さ (行の終わりを含む)。補充をまたぐ行を伸ばすときの作り直しは、一意な左に足す `++` と同じく数えない
-- `Fs.read_chunk`: `Bytes.push` と同じく、一意な `buf` には足した長さだけを数え、共有か不死の `buf` には `buf` の長さも足して数える
+- `FileIn.read_all`: ファイルの長さ
+- `FileIn.read_line_raw`: 読んだ行の長さ (行の終わりを含む)
+- `FileIn.read_all_bytes`: 読んだ長さ
+- `FileIn.read_line_bytes_raw`: 読んだ行の長さ (行の終わりを含む)。補充をまたぐ行を伸ばすときの作り直しは、一意な左に足す `++` と同じく数えない
+- `FileIn.read_chunk`: `Bytes.push` と同じく、一意な `buf` には足した長さだけを数え、共有か不死の `buf` には `buf` の長さも足して数える
 - `String.slice`: 結果の長さ
-- 標準入力の読み: `Fs` の同じ名前の読みと同じ
+- 標準入力の読み: `FileIn` の同じ名前の読みと同じ
 - `Env.arg`、`Env.lookup`: 写した文字列の長さ
 - `++`: 左が一意 (rc 1 の局所の物体) なら右の長さだけを数え、容量が足りずに作り直しても同じである。左が共有か不死なら、両辺の長さを数える
 - `Bytes.make`、`Bytes.slice`: 結果の長さ
@@ -1086,7 +1086,7 @@ pub struct Opened {
 - `eml_rt` のコードは、核を含めて Verus の `verus!` の中に書き、`cargo verus verify -p eml_rt` が crate 全体を検証する ([テスト戦略](../implementation/testing.md) の「Verus」)。生のポインタの読み書きは、どれも Verus の権限 (`PointsTo`) の上で行う。証明するのは、公開の操作の前提 (上の「核の操作」の表) の下でのメモリの安全、ヒープの形の不変条件、RC と抽象のモデルの対応、`share` と `release` と reuse の遷移、上の「検査モードの約束」の性質である
 - 確保と atomic の操作は、std の関数を薄い関数で包み、その関数の約束を信頼する (下の表の T1 と T2)。vstd の確保は失敗すると `process::abort` を呼び、vstd の atomic は SeqCst だけを扱うので、使わない。包みは std の関数を1回呼ぶだけで、型を差し替える層ではない
 
-Verus で確かめない部分は、次の信頼の一覧にまとめる。`external_body`、`assume_specification` などの信頼の項目は、どれもこの表のどれかに属する。`eml_rt` の `trust.rs` のテストが、テストでないコードの項目を探し、表の番号を付けた一覧と同じであることを確かめる。`verus!` の外に置くのは、`fmt` と `Default` の実装、T4 の `Drop`、`unsafe impl Send` と `Sync`、`Sync` でないことの型の assert と配置を確かめるコンパイル時の assert、`leaks` の `BTreeMap` を組む安全な関数と `check_invariants`、前置きの構造体 `Prefix` の宣言、panic の文言の `const`、`Foreign` の表の `const` (T3)、`Control` の止める語と確保量を読み書きする安全な関数と `Ctx::poll` (上の「実行の制御」)、Host の trait (既定のメソッドを含む) と `Opened`、`StdinSlot` の `new` と、読み手を取り出す `take` と返す `put`、`StdinHandle`、`StdoutHandle`、`StderrHandle` の `Drop` (T4)、`OpenFlags` の `new` と、印を選ぶ `flag`、立てる `raise`、下ろす `lower`、`Reader` の `new`、`fill_buf`、`consume` と buffer の残りを取り出す `take_buffered`、trait `Source` と `File` と `StdinHandle` の実装、読みの誤りに名前を付ける `fault`、`exit_code`、`Buffering`、`StdHost`、`HostRef::new` と `HostRef` の `Drop` (T4)、`Fault`、`ArithFault`、`IoReason`、`Stop` の `Display`、`io::Error` を `IoReason` に写す関数 `io_reason` (上の「extern」)、止める語が立った後の `Interrupted` を変える読み手 `StopOnInterrupt` と、読みの部品 `check`、`line_part`、`read_line`、`read_all` (上の「読み手」)、テストだけである。
+Verus で確かめない部分は、次の信頼の一覧にまとめる。`external_body`、`assume_specification` などの信頼の項目は、どれもこの表のどれかに属する。`eml_rt` の `trust.rs` のテストが、テストでないコードの項目を探し、表の番号を付けた一覧と同じであることを確かめる。`verus!` の外に置くのは、`fmt` と `Default` の実装、T4 の `Drop`、`unsafe impl Send` と `Sync`、`Sync` でないことの型の assert と配置を確かめるコンパイル時の assert、`leaks` の `BTreeMap` を組む安全な関数と `check_invariants`、前置きの構造体 `Prefix` の宣言、panic の文言の `const`、`Foreign` の表の `const` (T3)、`Control` の止める語と確保量を読み書きする安全な関数と `Ctx::poll` (上の「実行の制御」)、Host の trait (既定のメソッドを含む) と `Opened`、`StdinSlot` の `new` と、読み手を取り出す `take` と返す `put`、`StdinHandle`、`StdoutHandle`、`StderrHandle` の `Drop` (T4)、`OpenFlags` の `new` と、印を選ぶ `flag`、立てる `raise`、下ろす `lower`、`Reader` の `new`、`fill_buf`、`consume` と buffer の残りを取り出す `take_buffered`、trait `Source` と `FileIn` と `StdinHandle` の実装、読みの誤りに名前を付ける `fault`、`exit_code`、`Buffering`、`StdHost`、`HostRef::new` と `HostRef` の `Drop` (T4)、`Fault`、`ArithFault`、`IoReason`、`Stop` の `Display`、`io::Error` を `IoReason` に写す関数 `io_reason` (上の「extern」)、止める語が立った後の `Interrupted` を変える読み手 `StopOnInterrupt` と、読みの部品 `check`、`line_part`、`read_line`、`read_all` (上の「読み手」)、テストだけである。
 
 | # | 中身 | 理由 | Miri で確かめること |
 |---|---|---|---|
@@ -1097,11 +1097,11 @@ Verus で確かめない部分は、次の信頼の一覧にまとめる。`exte
 | T4 | `verus!` の外の `Drop` の実装 (`Heap`、`Pages`、`Frozen`)。`Frozen` の `Drop` は、親への `Arc` を `Arc::into_inner` のループで手放し、ページは `Pages` の `Drop` が返す。`Heap` は付けた塊の `Arc` を `ManuallyDrop` の欄に持ち、`Drop` が生きている物体の後始末 (`finalize_all`) の後で、`#[inline(never)]` の関数に渡して手放す。`Pages` も、確保量を数える `Control` の `Arc` を `ManuallyDrop` の欄に持ち、`Drop` がページを返して確保量を引いた後で、`#[inline(never)]` の関数に渡して手放す。`HostRef` の `Drop` も、Host の `Arc` を `#[inline(never)]` の関数に渡して手放す (上の「extern」の「Host」)。`StdinHandle` の `Drop` は、持っている読み手を Host の slot に返してから、開いた印を下ろす (上の「読み手」)。`StdoutHandle` と `StderrHandle` の `Drop` は、開いた印を下ろすだけである (上の「出力のバッファ」)。欄の後始末を展開させると、計測のプログラムのコード生成単位の分け方が変わり、速い道が展開されなくなるためである ([計測の基準](../implementation/benchmarks.md) の「`eml_rt` のインライン化」)。後始末の中で破棄処理が panic すると、塊の `Arc` は手放されずに漏れる (メモリの安全は崩れない)。ヒープの ghost の欄の塊の権限の写しは、`wf` で `Arc` の指す塊の権限に結ぶが、写しを使う間 `Arc` が塊のメモリを生かし続けることは Verus が確かめない | Verus は利用者の `Drop` を扱わない。中身は検証した関数を呼ぶか、`Arc` を手放すだけにする | T1 と T3 のテストが通る道。塊の `Drop` がページを返すこと、鎖の塊と付けたヒープをどの順に落としても漏れず、残る `Arc` が鎖を生かすこと |
 | T5 | 証明に使う std の約束のうち vstd にないもの。`ptr::without_provenance_mut` (`Word::imm` が const fn のまま即値を作るため)、2つの塊が同じ塊かを `std::ptr::eq` で比べる `same_chunk` (同じ番地の塊は同じ値であると約束する。vstd は `Arc` の番地の比較に約束を持たない)、panic で止める関数 (大きさの桁あふれ、即値に収まらない `Word::imm`、不死の物体の数の桁あふれ、ページの配置の誤り、子孫でない塊を付ける `attach` の `not_a_descendant`)、`<[u8] as Ord>::cmp` を1回呼ぶ包み `bytes_cmp` の結果が辞書式の順序の spec `lex` に一致すること (上の「extern」。vstd の `assume_specification` は `cmp` を総称の形でしか受けないので、包みにする)、`core::str::from_utf8` の誤りの位置 (`Utf8Error::valid_up_to`) を返す包み `utf8_valid` の結果が、妥当なときだけ `None` で、それが vstd の `valid_utf8` に一致し、誤りの位置がバイト列の長さより前であること (`Ctx::bytes_valid_utf8` と `Ctx::string_decode`。vstd は検査付きの `from_utf8` に約束を持たない。位置は誤りの文言にだけ使う) | vstd の std の約束が足りない。panic の関数は値を返さないことだけを約束する | `utf8_valid` が物体の中身を借りた `&[u8]` を読むこと (1語に収まる長さ、語の境目をまたぐ長さ、大きい物体のページの後ろまで続く長さ) と、誤りの位置 (先頭、途中、末尾)。ほかは値の約束で、メモリに触れない |
 | T6 | `global` の宣言: 64 ビットの環境、`Word`、`Header`、`PageHeader`、前置きの配置 | Verus は `global` の宣言をコンパイル時に照らす | なし |
-| T7 | unwind。検証した関数は、決まった所でしか unwind しないとして証明する。決まった所は、T5 の panic の関数 (状態を変える前に呼ぶ)、T3 の破棄処理 (箱を先に死んだことにしてから呼ぶ)、`Vec` の伸長と、T11 の Host の呼び出し (`write_line`、`write`、`flush`、`open`、読み手の読みと drop、読んだバイト列の UTF-8 の確かめ、`args`、`env_var`、`stdin`、`write_file`、`run`) である。Host を呼ぶ前には、ヒープを整った状態にしておく。Host の中で unwind した後に残る状態は、`println` では文字列が漏れ、`Fs.open` では開く間借りていたパスの文字列が漏れ、`File` の読みでは借りた `File` が呼ぶ側に残り、`Heap` を落とすときの `finalize_all` が閉じる。どれもメモリの安全は崩れない。`Ctx` は `Drop` を実装せず、`evv` と yield の状態の語に触れないので、基本操作の中の `decref` で破棄処理が panic した後も、`Ctx` を落とすことは安全である (上の「実行文脈 `Ctx`」) | Verus の `ensures` は正常に戻ったときだけを扱う。unwind の後も `Heap` と `Ctx` を落とすことは安全でなければならない | 解放の連鎖の途中で破棄処理が panic した後に、`Heap` を落とすこと |
+| T7 | unwind。検証した関数は、決まった所でしか unwind しないとして証明する。決まった所は、T5 の panic の関数 (状態を変える前に呼ぶ)、T3 の破棄処理 (箱を先に死んだことにしてから呼ぶ)、`Vec` の伸長と、T11 の Host の呼び出し (`write_line`、`write`、`flush`、`open`、読み手の読みと drop、読んだバイト列の UTF-8 の確かめ、`args`、`env_var`、`stdin`、`write_file`、`run`) である。Host を呼ぶ前には、ヒープを整った状態にしておく。Host の中で unwind した後に残る状態は、`println` では文字列が漏れ、`FileIn.open` では開く間借りていたパスの文字列が漏れ、`FileIn` の読みでは借りた `FileIn` が呼ぶ側に残り、`Heap` を落とすときの `finalize_all` が閉じる。どれもメモリの安全は崩れない。`Ctx` は `Drop` を実装せず、`evv` と yield の状態の語に触れないので、基本操作の中の `decref` で破棄処理が panic した後も、`Ctx` を落とすことは安全である (上の「実行文脈 `Ctx`」) | Verus の `ensures` は正常に戻ったときだけを扱う。unwind の後も `Heap` と `Ctx` を落とすことは安全でなければならない | 解放の連鎖の途中で破棄処理が panic した後に、`Heap` を落とすこと |
 | T8 | 借用の規則 (Stacked Borrows と Tree Borrows) | vstd の権限のモデルは、参照と生のポインタの借用の規則を表さない | 核の各操作を両方のモードで1回ずつ通す小さいテスト。ヒープの物体のフィールドに置いた領域の語を読み、領域の文字列から写し、`share` と解放の連鎖が領域の子で止まること。実行文脈の基本操作を1回ずつ通すこと |
 | T9 | Verus、Z3、rustc、vstd (その std の約束を含む) | 道具そのもの | なし |
 | T10 | バイト列の読み書き。`String` か `Bytes` のブロックの権限を受けて、ペイロードに `&[u8]` を写す `write_bytes` (今の長さの位置から後ろに足す)、ペイロードの1バイトを書き換える `write_byte` (今の長さより前の位置で、ghost のバイト列はその位置だけが変わる)、ペイロードを `&[u8]` として借りる `bytes`、その位置を返す `bytes_ptr` の4つ。`str` で読み書きする `write_text`、`text`、`text_ptr` は、vstd の `str::as_bytes` と `str::from_utf8_unchecked` の約束を使って、この4つの上に検証して書く。約束は、権限が渡したポインタの `String` か `Bytes` のブロックのもので、長さの語とバイト列の語を持つとき、メモリのバイト列が権限の ghost のバイト列に等しいこと、写すのは長さの語の後ろの容量の中だけで、長さの語の値と権限の位置を変えないこと。写す元のバイト列が写す先と重ならないことを前提にする。このヒープの文字列から写すときは写す先がいつも別のブロックで、`string_push` の `s` は、呼ぶ側の約束により left 自身の中身を指さない。`Bytes.append_slice` は、src と dst が同じ物体なら写す枝に進む (上の「バイト列の操作」) | Verus の権限は語の単位で、語の中のバイトの位置を扱わない | 語に揃わない位置への追記、`write_byte` による1バイトの書き換え (先頭、語の境目の前後、末尾、大きい物体のページ)、大きい物体のページの末尾まで続く長さ (語に揃う長さと揃わない長さ)、大きい左辺からの作り直し、空の文字列、多バイトの文字、大きい物体の長さを含む自分自身との連結 (`x ++ x`)、ほかの文字列の中身を指す `s` の追記、`string` で読んだ位置の使用が終わった後の追記、`String.show` が区間を写すこと (区間が先頭、途中、末尾にあり、多バイトの文字と接する場合)、バイト列の `set` と `push` と `truncate`、src と dst が同じ物体の `append_slice`、2つの借用の規則での読み書き |
-| T11 | Host の実装と、それを呼ぶ関数。`HostRef` とその `Clone`、Host の `write_line`、`write`、`flush` を呼ぶ関数、標準のストリームの開いた印 `OpenFlags` と、標準出力と標準エラーの印を立ててそのハンドルを作る `open_stream`、不透明な `File`、Host の `open` を呼ぶ関数、不透明な読み手 `Reader` と、ハンドルの読み手を読む総称の `fill` と `consume`、標準入力の読み手の slot `StdinSlot`、不透明な標準入力のハンドル `StdinHandle` と、slot から読み手を取って開く `open_stdin`、ハンドルを区切りごとに (行の読みでは次の `\n` まで) 読み、文字列の形なら UTF-8 を確かめる総称の関数 `read_text`、引数の数と引数を写す `host_arg_count` と `host_arg`、環境変数を読む `host_env_has` と `host_env_var`、ファイルを書く `host_write_file`、子を起動する `host_run`。中身は何も約束しない (書いた中身、読めた中身、返した値のどれも)。約束するのは、`Fault` を返す橋 (`fill` を含む) が `Fault::Heap` を返さないこと、`open_stdin` の誤りが `InUse(Stdin)` だけで、`open_stream` が渡したストリームの型のハンドルを返し、誤りがそのストリームの `InUse` だけであること、`read_text` が文字列の形で返すバイト列が妥当な UTF-8 であることだけで、本体を読めば分かる。`read_text`、`fill`、`consume` のハンドルを借りる前提は、`foreign_unique` で確かめる (上の「extern」) | Verus は `dyn Host`、`io::Error`、`dyn Read`、`Mutex` を扱わず、OS とのやりとりの中身は証明の外にある。中身は期待値の表で確かめる ([テスト戦略](../implementation/testing.md) の「期待値の表」) | メモリの Host を通る `println` と `flush`、`open`、ハンドルを借りる `handle_read` の全部の読み (区切りをまたぐ長さ、長さの見込みのない読み手、短い読み、途中の読みの誤り、UTF-8 でない中身、止める語 (区切りの前と、止める語が立った後の `Interrupted`))、行の読み (区切りをまたぐ行、`\r\n` で終わる行、空の行、行の終わりのない最後の行、終わり、途中の読みの誤り、UTF-8 でない行、止める語)、`close`。検証したコードが `fill` と `consume` を呼ぶバイト列の読み (1つの buffer の中の行、2回の補充をまたぐ行、途中まで読んだ行を手放す行の途中の読みの誤り、その場で足す塊と共有のバイト列を写す塊、終わりの塊、全部の読み)。引数、環境変数、標準入力の行と残り、ファイルの書き込み、子の起動の橋。標準入力の補充と書き出し (1回の補充で buffer に入った2行は1回だけ書き出し、2回の補充をまたぐ行は補充の前ごとに書き出す)、同じ Host の上の2つ目の `Ctx` が slot の読み手の buffer の残りから読むこと。標準入力のハンドルが開くときに slot から読み手を取り、閉じるときと `Heap` を落とすときに返すこと、開いている間の2つ目の `open` が `InUse` になること、標準入力のない Host のハンドルの読みが `not available` になること、書くためのハンドルが Host の buffer に書き、閉じずに `Heap` を落としたときも破棄処理が開いた印を下ろして、同じ `HostRef` を写した次の `Ctx` でまた開けること、標準入力のない Host でも2つ目の標準入力の `open` が `InUse` になること、バイト列の行と塊の読みが補充の前ごとに書き出すこと。誤りと止めたときも、ハンドルが閉じるまで残ること。`File` の生のポインタで `fill` と `consume` を直接呼ぶこと (buffer の残り、短い読みの後の補充、終わり、補充の前の書き出し、パスを付けた読みの誤り、止める語)。buffer より大きい長さを返す読み手を断り、読み手が次の読みに残ること。全部の読み (文字列とバイト列) も、そういう読み手を std の中で panic させずに断ること |
+| T11 | Host の実装と、それを呼ぶ関数。`HostRef` とその `Clone`、Host の `write_line`、`write`、`flush` を呼ぶ関数、標準のストリームの開いた印 `OpenFlags` と、標準出力と標準エラーの印を立ててそのハンドルを作る `open_stream`、不透明な `FileIn`、Host の `open` を呼ぶ関数、不透明な読み手 `Reader` と、ハンドルの読み手を読む総称の `fill` と `consume`、標準入力の読み手の slot `StdinSlot`、不透明な標準入力のハンドル `StdinHandle` と、slot から読み手を取って開く `open_stdin`、ハンドルを区切りごとに (行の読みでは次の `\n` まで) 読み、文字列の形なら UTF-8 を確かめる総称の関数 `read_text`、引数の数と引数を写す `host_arg_count` と `host_arg`、環境変数を読む `host_env_has` と `host_env_var`、ファイルを書く `host_write_file`、子を起動する `host_run`。中身は何も約束しない (書いた中身、読めた中身、返した値のどれも)。約束するのは、`Fault` を返す橋 (`fill` を含む) が `Fault::Heap` を返さないこと、`open_stdin` の誤りが `InUse(Stdin)` だけで、`open_stream` が渡したストリームの型のハンドルを返し、誤りがそのストリームの `InUse` だけであること、`read_text` が文字列の形で返すバイト列が妥当な UTF-8 であることだけで、本体を読めば分かる。`read_text`、`fill`、`consume` のハンドルを借りる前提は、`foreign_unique` で確かめる (上の「extern」) | Verus は `dyn Host`、`io::Error`、`dyn Read`、`Mutex` を扱わず、OS とのやりとりの中身は証明の外にある。中身は期待値の表で確かめる ([テスト戦略](../implementation/testing.md) の「期待値の表」) | メモリの Host を通る `println` と `flush`、`open`、ハンドルを借りる `handle_read` の全部の読み (区切りをまたぐ長さ、長さの見込みのない読み手、短い読み、途中の読みの誤り、UTF-8 でない中身、止める語 (区切りの前と、止める語が立った後の `Interrupted`))、行の読み (区切りをまたぐ行、`\r\n` で終わる行、空の行、行の終わりのない最後の行、終わり、途中の読みの誤り、UTF-8 でない行、止める語)、`close`。検証したコードが `fill` と `consume` を呼ぶバイト列の読み (1つの buffer の中の行、2回の補充をまたぐ行、途中まで読んだ行を手放す行の途中の読みの誤り、その場で足す塊と共有のバイト列を写す塊、終わりの塊、全部の読み)。引数、環境変数、標準入力の行と残り、ファイルの書き込み、子の起動の橋。標準入力の補充と書き出し (1回の補充で buffer に入った2行は1回だけ書き出し、2回の補充をまたぐ行は補充の前ごとに書き出す)、同じ Host の上の2つ目の `Ctx` が slot の読み手の buffer の残りから読むこと。標準入力のハンドルが開くときに slot から読み手を取り、閉じるときと `Heap` を落とすときに返すこと、開いている間の2つ目の `open` が `InUse` になること、標準入力のない Host のハンドルの読みが `not available` になること、書くためのハンドルが Host の buffer に書き、閉じずに `Heap` を落としたときも破棄処理が開いた印を下ろして、同じ `HostRef` を写した次の `Ctx` でまた開けること、標準入力のない Host でも2つ目の標準入力の `open` が `InUse` になること、バイト列の行と塊の読みが補充の前ごとに書き出すこと。誤りと止めたときも、ハンドルが閉じるまで残ること。`FileIn` の生のポインタで `fill` と `consume` を直接呼ぶこと (buffer の残り、短い読みの後の補充、終わり、補充の前の書き出し、パスを付けた読みの誤り、止める語)。buffer より大きい長さを返す読み手を断り、読み手が次の読みに残ること。全部の読み (文字列とバイト列) も、そういう読み手を std の中で panic させずに断ること |
 | T12 | 浮動小数の演算と書式。`Float` の算術 (`float_add`、`float_sub`、`float_mul`、`float_div`、`float_rem`、`float_negate`)、NaN をそろえる `canonical_nan`、全順序の `float_compare`、`Std.Float` の変換 (`float_of_int`、`float_truncate`、`float_floor`、`float_ceil`、`float_round` と、範囲を確かめる `float_to_int`)、数学の関数 (`float_sqrt`、`float_abs`、`float_sin`、`float_cos`、`float_exp`、`float_log`、`float_pow`)、`float_infinity`、`float_nan`、`float_shows_minus`、書式 (`float_repr`、`float_fixed`) と読み (`float_parse`)。本体は Rust の `f64` の演算子と関数、`f64::total_cmp`、`format!`、`str::parse` を呼ぶだけで、値は IEEE 754 の倍精度のとおりである。ただし NaN の結果は、`canonical_nan` が正の quiet NaN (`f64::NAN`) にそろえる。約束するのは、`float_compare` の結果が `Ordering` のタグであること、`float_shows_minus` の結果が `Bool` のタグであることだけである (上の「extern」) | vstd の `f64` の算術の仕様は、前提 (`add_req` など) を満たす実装を持たないので呼べない。`%`、`total_cmp`、ビット列との変換、整数との変換、数学の関数、書式と読みは仕様を持たない。値は期待値の表で確かめる。書式は Python の出力とも照らし合わせる (`tests/ui/run/float/`) | なし (値は期待値の表と単体テストで確かめる) |
 | T13 | バイト列の走査。`find_byte(hay, from, b)` は、`hay` の `from` 以上で `b` に等しい最小の位置を返し、なければ `None` を返す。本体は安全な Rust で、8 バイトずつ1語に読み、`b` を並べた語との排他的論理和に0のバイトがあるかを語の演算 (SWAR) で確かめ、一番下の0のバイトの位置を返す。残りの 7 バイト以下は1バイトずつ比べる。約束は、結果が最初の位置であることである (`String.find_from`、`Bytes.find_from`、`Bytes.find_byte_from` と、行の読みが `\n` を探すところ。上の「extern」) | 語の演算の証明は `bit_vector` の大きな証明になる。本体は `unsafe` を使わず、メモリの安全は Rust が守るので、信頼するのは結果の値だけである | 物体の中身を借りた `&[u8]` (1語に収まる長さ、語の境目の前後、大きい物体のページの後ろまで続く長さ) を読むこと。値は単体テストが、乱数の入力 (語に揃わない先頭、どの長さの残り、`b` の密な列と疎な列、`b` に近い値の並び) で素朴なループと `windows` の比べに照らして確かめる |
 
@@ -1124,7 +1124,7 @@ FFI の境界を足すときは、この表に行を足し、Miri のテスト�
 | エフェクトは 65535 個まで | evidence の `tag` をエフェクトの番号 + 1 にするため (上の「evidence の3つの物体」) |
 | 物体の種類は 16 個まで | `info` の4ビットにするため |
 | 64 ビットの環境だけを対象にする | 語を 8 バイトにするため |
-| 速いモードでは、解放の後の使用、token の2回の使用、`File` の参照の重複を検出しない | 速い道に検査を置かないため。`lin` の物体の rc は 1 なので、その `dup` は速い道を通る。検出は verifier と、検査モードで走らせる UI テストに任せる。`eml run` では、どれも `--debug-heap` のときだけ見つかる ([LIR](lir.md) の「実行時エラー」) |
+| 速いモードでは、解放の後の使用、token の2回の使用、`FileIn` の参照の重複を検出しない | 速い道に検査を置かないため。`lin` の物体の rc は 1 なので、その `dup` は速い道を通る。検出は verifier と、検査モードで走らせる UI テストに任せる。`eml run` では、どれも `--debug-heap` のときだけ見つかる ([LIR](lir.md) の「実行時エラー」) |
 | 小さい物体のページを、実行中に OS へ返さない | 核を小さく保つため。空きリストは級ごとなので、使う量は級ごとの生きていた量の最大の和で抑えられる (2 語の物体が多い時期の後に 4 語の物体が多い時期が来ると、両方の分を使う)。上の「確保と解放」の「決めていないこと」に挙げてある |
 | 局所の数が `i32::MAX` に達した物体と、共有の数が `DROP_LIMIT` を下回った物体は解放されない | 張り付きの方式による。物体を 2^31 - 2^17 回参照するには、参照だけで 16 GiB 近くが要る |
 | 検査モードでは、使うメモリがそれまでに確保した量の合計になる | 解放したブロックを使い回さないため。token の表も `into_token` の回数に比例して伸びる。生存の列挙とリークの検査の時間も、確保した量の合計に比例する。UI テスト、`bench.rs`、`--debug-heap` の実行が検査モードで動くので、確保の多いプログラムではメモリが増える。足りなくなったら、隔離する量に上限を付ける |

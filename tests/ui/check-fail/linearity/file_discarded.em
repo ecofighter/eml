@@ -1,7 +1,7 @@
 -- E3004: a file cannot be discarded with `_`.
-import Fs
+import FileIn
 
 main : Unit -> <IO> Unit
 main () =
-  let (text, _) = Fs.read_all (Fs.open "input.txt")
+  let (text, _) = FileIn.read_all (FileIn.open "input.txt")
   println text

@@ -2,7 +2,7 @@
 -- エフェクトを起こす形、組の中で handler を張る形を純粋な文脈から呼ぶ形、3つの関数の組、1行の形、`and` のない
 -- `let` との混在、組の関数を `List.map` に渡す形、`File` を捕まえる再帰しない組
 -- (docs/spec/expressions.md の「ローカル関数」)。
-import Fs
+import FileIn
 import List
 
 effect Ask where
@@ -64,8 +64,8 @@ evens xs =
 -- (docs/spec/linearity.md の「基本の規則」)
 apart : Unit -> <IO, Panic> Unit
 apart () =
-  let f = Fs.open "input.txt"
-  let finish () = Fs.close f
+  let f = FileIn.open "input.txt"
+  let finish () = FileIn.close f
   and next n = n + 1
   println (show (next (next 1)))
   finish ()

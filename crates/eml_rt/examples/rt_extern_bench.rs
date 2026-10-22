@@ -227,17 +227,17 @@ fn read_all(sized: bool) {
     // SAFETY: 不死の文字列を1つ確保するだけである。
     let path = unsafe { ctx.heap_mut() }.alloc_string_immortal("big.txt");
     for _ in 0..100 {
-        // SAFETY: path は生きた不死の物体である。handle_read は File を借りて文字列を返す。File は handle_close に、
+        // SAFETY: path は生きた不死の物体である。handle_read は FileIn を借りて文字列を返す。FileIn は handle_close に、
         // 文字列は decref に渡し、その後どちらも読まない。
         unsafe {
             ctx.heap_mut().acquire_immortal(path).unwrap();
             let file = ctx.fs_open(path).unwrap();
             let text = ctx
-                .handle_read(file, Handle::File, ReadAmount::All, Form::Text)
+                .handle_read(file, Handle::FileIn, ReadAmount::All, Form::Text)
                 .unwrap();
             black_box(text);
             ctx.heap_mut().decref(text).unwrap();
-            ctx.handle_close(file, Handle::File).unwrap();
+            ctx.handle_close(file, Handle::FileIn).unwrap();
         }
     }
 }
@@ -408,11 +408,11 @@ fn read_all_bytes(std: bool) {
             ctx.heap_mut().acquire_immortal(path).unwrap();
             let file = ctx.fs_open(path).unwrap();
             let read = ctx
-                .handle_read(file, Handle::File, ReadAmount::All, Form::Bytes)
+                .handle_read(file, Handle::FileIn, ReadAmount::All, Form::Bytes)
                 .unwrap();
             black_box(read);
             ctx.heap_mut().decref(read).unwrap();
-            ctx.handle_close(file, Handle::File).unwrap();
+            ctx.handle_close(file, Handle::FileIn).unwrap();
         }
     }
 }
@@ -443,7 +443,7 @@ fn read_line_bytes(std: bool) {
         let file = ctx.fs_open(path).unwrap();
         loop {
             let read = ctx
-                .handle_read(file, Handle::File, ReadAmount::Line, Form::Bytes)
+                .handle_read(file, Handle::FileIn, ReadAmount::Line, Form::Bytes)
                 .unwrap();
             let len = ctx.heap().bytes(read).unwrap().len();
             ctx.heap_mut().decref(black_box(read)).unwrap();
@@ -451,6 +451,6 @@ fn read_line_bytes(std: bool) {
                 break;
             }
         }
-        ctx.handle_close(file, Handle::File).unwrap();
+        ctx.handle_close(file, Handle::FileIn).unwrap();
     }
 }

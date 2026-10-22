@@ -936,10 +936,10 @@ fn run_extern<M: Mode>(
             | Extern::StdinReadAllBytes
             | Extern::StdinReadLineBytes => {
                 let (handle, read, form) = match ext {
-                    Extern::ReadAll => (Handle::File, ReadAmount::All, Form::Text),
-                    Extern::ReadLine => (Handle::File, ReadAmount::Line, Form::Text),
-                    Extern::ReadAllBytes => (Handle::File, ReadAmount::All, Form::Bytes),
-                    Extern::ReadLineBytes => (Handle::File, ReadAmount::Line, Form::Bytes),
+                    Extern::ReadAll => (Handle::FileIn, ReadAmount::All, Form::Text),
+                    Extern::ReadLine => (Handle::FileIn, ReadAmount::Line, Form::Text),
+                    Extern::ReadAllBytes => (Handle::FileIn, ReadAmount::All, Form::Bytes),
+                    Extern::ReadLineBytes => (Handle::FileIn, ReadAmount::Line, Form::Bytes),
                     Extern::StdinReadAll => (Handle::Stdin, ReadAmount::All, Form::Text),
                     Extern::StdinReadLine => (Handle::Stdin, ReadAmount::Line, Form::Text),
                     Extern::StdinReadAllBytes => (Handle::Stdin, ReadAmount::All, Form::Bytes),
@@ -950,7 +950,7 @@ fn run_extern<M: Mode>(
             }
             Extern::ReadChunk | Extern::StdinReadChunk => {
                 let handle = if ext == Extern::ReadChunk {
-                    Handle::File
+                    Handle::FileIn
                 } else {
                     Handle::Stdin
                 };
@@ -960,7 +960,7 @@ fn run_extern<M: Mode>(
             }
             Extern::Close | Extern::StdinClose | Extern::StdoutClose | Extern::StderrClose => {
                 let handle = match ext {
-                    Extern::Close => Handle::File,
+                    Extern::Close => Handle::FileIn,
                     Extern::StdinClose => Handle::Stdin,
                     Extern::StdoutClose => Handle::Stdout,
                     _ => Handle::Stderr,

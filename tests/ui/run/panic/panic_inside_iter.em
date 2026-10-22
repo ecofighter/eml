@@ -3,16 +3,17 @@
 -- ループになり、`Iter.filter` を重ねた形は生産者の `once` の継続を捕まえたまま中断する。
 import Iter
 import Yield (Yield(..))
+import FileIn
 import Fs
 
 numbers : Int -> Unit -> <Yield Int, IO, Panic> Unit
 numbers n () =
   let go file i =
-    if i > n then Fs.close file
+    if i > n then FileIn.close file
     else
       yield i
       go file (i + 1)
-  go (Fs.open "numbers.txt") 1
+  go (FileIn.open "numbers.txt") 1
 
 total : Int -> Unit -> <IO, Panic> Int
 total d () = Iter.fold (fn a b -> a + b / (d - b)) 0 (Iter.generate (numbers 5))

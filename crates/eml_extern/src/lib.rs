@@ -141,7 +141,7 @@ pub enum ExternType {
     String,
     Bytes,
     Unit,
-    File,
+    FileIn,
     Stdin,
     Stdout,
     Stderr,
@@ -168,7 +168,7 @@ impl ExternType {
         ExternType::String,
         ExternType::Bytes,
         ExternType::Unit,
-        ExternType::File,
+        ExternType::FileIn,
         ExternType::Stdin,
         ExternType::Stdout,
         ExternType::Stderr,
@@ -195,7 +195,7 @@ impl ExternType {
             ExternType::String => row("Prelude.String", Linearity::Unr, Repr::Obj),
             ExternType::Bytes => row("Prelude.Bytes", Linearity::Unr, Repr::Obj),
             ExternType::Unit => row("Prelude.Unit", Linearity::Unr, Repr::Unit),
-            ExternType::File => row("Std.Fs.File", Linearity::Lin, Repr::Obj),
+            ExternType::FileIn => row("Std.FileIn.FileIn", Linearity::Lin, Repr::Obj),
             ExternType::Stdin => row("Std.Stdin.Stdin", Linearity::Lin, Repr::Obj),
             ExternType::Stdout => row("Std.Stdout.Stdout", Linearity::Lin, Repr::Obj),
             ExternType::Stderr => row("Std.Stderr.Stderr", Linearity::Lin, Repr::Obj),
@@ -661,13 +661,20 @@ impl Extern {
         }
         match self {
             Extern::Println => row("Prelude.println", &[Obj], Unit, Purity::Effectful),
-            Extern::Open => kinded("Std.Fs.open", &[Obj], &[Unr], Obj, Lin, Purity::Effectful),
+            Extern::Open => kinded(
+                "Std.FileIn.open",
+                &[Obj],
+                &[Unr],
+                Obj,
+                Lin,
+                Purity::Effectful,
+            ),
             Extern::ReadAll => borrowing(
                 &[true],
                 FunctionRow {
                     with_arg: Some(0),
                     ..kinded(
-                        "Std.Fs.read_all",
+                        "Std.FileIn.read_all",
                         &[Obj],
                         &[Lin],
                         Obj,
@@ -681,7 +688,7 @@ impl Extern {
                 FunctionRow {
                     with_arg: Some(0),
                     ..kinded(
-                        "Std.Fs.read_line_raw",
+                        "Std.FileIn.read_line_raw",
                         &[Obj],
                         &[Lin],
                         Obj,
@@ -695,7 +702,7 @@ impl Extern {
                 FunctionRow {
                     with_arg: Some(1),
                     ..kinded(
-                        "Std.Fs.read_chunk",
+                        "Std.FileIn.read_chunk",
                         &[Obj, Obj],
                         &[Unr, Lin],
                         Obj,
@@ -709,7 +716,7 @@ impl Extern {
                 FunctionRow {
                     with_arg: Some(0),
                     ..kinded(
-                        "Std.Fs.read_all_bytes",
+                        "Std.FileIn.read_all_bytes",
                         &[Obj],
                         &[Lin],
                         Obj,
@@ -723,7 +730,7 @@ impl Extern {
                 FunctionRow {
                     with_arg: Some(0),
                     ..kinded(
-                        "Std.Fs.read_line_bytes_raw",
+                        "Std.FileIn.read_line_bytes_raw",
                         &[Obj],
                         &[Lin],
                         Obj,
@@ -732,7 +739,14 @@ impl Extern {
                     )
                 },
             ),
-            Extern::Close => kinded("Std.Fs.close", &[Obj], &[Lin], Unit, Unr, Purity::Effectful),
+            Extern::Close => kinded(
+                "Std.FileIn.close",
+                &[Obj],
+                &[Lin],
+                Unit,
+                Unr,
+                Purity::Effectful,
+            ),
             Extern::IntShow => row("Prelude.Show Int.show", &[Int], Obj, Purity::Pure),
             Extern::IntNeg => row("Prelude.Num Int.negate", &[Int], Int, Purity::Panics),
             Extern::IntAdd => row("Prelude.Num Int.+", &[Int, Int], Int, Purity::Panics),

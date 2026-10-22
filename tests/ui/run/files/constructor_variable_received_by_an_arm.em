@@ -1,21 +1,21 @@
 -- `p` を束縛した後で検査し、`other` の枝が `p` そのものを受け取る。決定木は `p` を開かずに分解するので、`xs` と
 -- `ys` を2か所で使わない (docs/spec/core-ir.md の「translate が決める印」)。
-import Fs
+import FileIn
 
-close_all : List Fs.File -> <IO> Unit
+close_all : List FileIn.FileIn -> <IO> Unit
 close_all [] = println "closed"
 close_all (f :: rest) =
-  Fs.close f
+  FileIn.close f
   close_all rest
 
-take : (List Fs.File, List Fs.File) -> <IO> Unit
+take : (List FileIn.FileIn, List FileIn.FileIn) -> <IO> Unit
 take p =
   match p with
     | (a, b) ->
         close_all a
         close_all b
 
-go : List Fs.File -> List Fs.File -> <IO> Unit
+go : List FileIn.FileIn -> List FileIn.FileIn -> <IO> Unit
 go xs ys =
   let p = (xs, ys)
   println "between"
@@ -25,5 +25,5 @@ go xs ys =
 
 main : Unit -> <IO> Unit
 main () =
-  go [] [Fs.open "input.txt"]
-  go [Fs.open "input.txt"] []
+  go [] [FileIn.open "input.txt"]
+  go [FileIn.open "input.txt"] []

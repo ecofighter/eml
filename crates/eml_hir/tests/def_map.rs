@@ -577,10 +577,11 @@ fn a_std_name_defined_by_a_user_module_is_qualified_by_the_canonical_name() {
         "{}\npub data Tag = | A\n\npub data Only = | O\n\ndata Secret = | Z",
         eml_hir::STD[1].1
     );
-    // 本物の `Fs` は `String` と `Bytes` を import し、`String` は `List` を import する
+    // 本物の `Fs` は `String` と `FileIn` を import し、`FileIn` は `String` と `Bytes` を、`String` は `List` を import する
     let std = [
         ("Prelude.em", eml_hir::PRELUDE_SOURCE),
         ("Fs.em", &fs),
+        eml_test_support::std_module("FileIn.em"),
         eml_test_support::std_module("String.em"),
         eml_test_support::std_module("Bytes.em"),
         eml_test_support::std_module("List.em"),
@@ -599,10 +600,10 @@ fn a_std_name_defined_by_a_user_module_is_qualified_by_the_canonical_name() {
         [
             "type Main.Tag -> Main.Tag",
             "type Main.Secret -> Secret",
-            "type Std.Fs.File -> File",
             "type Std.Fs.Tag -> Std.Fs.Tag",
             "type Std.Fs.Only -> Only",
             "type Std.Fs.Secret -> Std.Fs.Secret",
+            "type Std.FileIn.FileIn -> FileIn",
             "constructor Main.B -> B",
             "constructor Main.S -> S",
             "constructor Std.Fs.A -> A",

@@ -21,7 +21,7 @@ input_file: tests/ui/check-fail/linearity/local_function_like_lambda.em
 [E3003] Error: `finish` must be used exactly once, but it is not used
     ╭─[ check-fail/linearity/local_function_like_lambda.em:18:7 ]
     │
- 18 │   let finish () = Fs.close f
+ 18 │   let finish () = FileIn.close f
     │       ───┬──  
     │          ╰──── `finish` is bound here
  19 │   println "forgot"
@@ -35,7 +35,7 @@ input_file: tests/ui/check-fail/linearity/local_function_like_lambda.em
 [E3003] Error: `finish` must be used exactly once, but some paths do not use it
     ╭─[ check-fail/linearity/local_function_like_lambda.em:24:7 ]
     │
- 24 │   let finish () = Fs.close f
+ 24 │   let finish () = FileIn.close f
     │       ───┬──  
     │          ╰──── `finish` is bound here
  25 │   if b then finish () else println "kept"
@@ -55,7 +55,7 @@ input_file: tests/ui/check-fail/linearity/local_function_like_lambda.em
     │
     ├─[ check-fail/linearity/local_function_like_lambda.em:31:11 ]
     │
- 30 │   let finish () = Fs.close f
+ 30 │   let finish () = FileIn.close f
     │       ───┬──  
     │          ╰──── `finish` is bound here
     │

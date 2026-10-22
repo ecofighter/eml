@@ -6,7 +6,7 @@ input_file: tests/ui/check-fail/linearity/list_of_files.em
 [E3003] Error: `files` must be used exactly once, but it is not used
    ╭─[ check-fail/linearity/list_of_files.em:6:7 ]
    │
- 6 │   let files = [Fs.open "a.txt", Fs.open "b.txt"]
+ 6 │   let files = [FileIn.open "a.txt", FileIn.open "b.txt"]
    │       ──┬──  
    │         ╰──── `files` is bound here
  7 │   println "opened"

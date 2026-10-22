@@ -44,7 +44,7 @@ eml の目的、言語の性格、確定した設計判断の一覧、文書全�
 | 文字 | `Char` は Unicode のスカラー値を表し、`Int` とは別の型である。リテラルは `'a'` で、`Num` の instance を持たない。比較と表示は `Eq`、`Ord`、`Show` で、変換と ASCII の判定は `Std.Char` にある | [型と Kind](spec/types.md) の「数の型」、[標準ライブラリ](spec/stdlib.md) の「`Std.Char`」 |
 | バイト | `Byte` は 0 から 255 の整数を表し、`Int` とは別の型である。リテラルは `65u8` で、`Eq`、`Ord`、`Show` を持つ。算術の `Num` と `Div` は、結果が 0 から 255 の外なら `Panic` を起こす。ビット演算は Prelude のクラス `Bits` で、`Int` と `Byte` が instance を持つ | [型と Kind](spec/types.md) の「数の型」、[字句](spec/lexical.md) の「数値と文字」、[宣言](spec/declarations.md) の「Prelude のクラス」 |
 | バイト列 | `Bytes` は `Unr` で意味の上で書き換わらないバイトの列である。`String` と同じ物体の形を持つ別の種類で、変換は中身を写すか、一意なら種類だけを書き換える。更新は、RC が 1 ならその場で書き換え、そうでなければ写す | [標準ライブラリ](spec/stdlib.md) の「`Bytes`」、[オブジェクトモデル](spec/object-model.md) の「バイト列と文字列」 |
-| ハンドル | 標準入出力のハンドル `Stdin`、`Stdout`、`Stderr` と `Fs.File` は `Lin` の型である。読む関数はハンドルを借りて結果を先に返し、書く関数はデータを借りてハンドルを返す。標準のストリームごとに、生きているハンドルは高々1つである。書き込みの buffer は Host が持ち、`println` と共有する | [標準ライブラリ](spec/stdlib.md) の「ハンドル」 |
+| ハンドル | 標準入出力のハンドル `Stdin`、`Stdout`、`Stderr` と `FileIn.FileIn` は `Lin` の型である。読む関数はハンドルを借りて結果を先に返し、書く関数はデータを借りてハンドルを返す。標準のストリームごとに、生きているハンドルは高々1つである。書き込みの buffer は Host が持ち、`println` と共有する | [標準ライブラリ](spec/stdlib.md) の「ハンドル」 |
 | 配列 | `Array a` と `MutArray a` は Prelude の extern の型である。`Array` は意味の上で書き換わらず、Kind は要素に従う。`MutArray` は Kind が常に `Lin` で、線形に受け渡して使う | [標準ライブラリ](spec/stdlib.md) の「`Std.Array`」「`Std.MutArray`」 |
 
 ### 構文
@@ -69,12 +69,12 @@ eml の目的、言語の性格、確定した設計判断の一覧、文書全�
 | handler の節 | 操作の節は `\| ctl op x k -> …` (継続を操作する) か `\| fn op x -> …` (本体の値ですぐに再開する) で、`return` の節にはどちらも書かない。名前は Koka に合わせた | [式](spec/expressions.md) |
 | ローカル関数 | `let f x = …` で定義し、`and g y = …` で続けた組は互いに呼び合える (OCaml の `let rec … and …` と同じ) | [式](spec/expressions.md) |
 | パラメータ付き handler | `handle e from init with`。状態を handler が持ち、節の最後の引数で受ける。状態のある handler では `k v st` で次の状態を渡す。状態があるかどうかは `from` の有無で決まる | [式](spec/expressions.md) |
-| 線形値の受け渡し | 糖衣構文はない。`File` を持つ生産者は `Iter` で書ける (`tests/ui/run/std/iter_file/`)。糖衣は [ロードマップ](future/roadmap.md) の「言語機能と構文」の項目にある。再束縛、`use`、パラメータ付き handler で吸収する | [式](spec/expressions.md) |
+| 線形値の受け渡し | 糖衣構文はない。`FileIn` を持つ生産者は `Iter` で書ける (`tests/ui/run/std/iter_file/`)。糖衣は [ロードマップ](future/roadmap.md) の「言語機能と構文」の項目にある。再束縛、`use`、パラメータ付き handler で吸収する | [式](spec/expressions.md) |
 | 文字列 | 補間は `"\{x}"`。複数行の `"""`、raw の `r"..."` | [字句](spec/lexical.md) |
 | コマンドリテラル | バッククォート。シェルを介さず、引数のリストを組む (Julia 方式) | [字句](spec/lexical.md) |
 | fixity | ユーザーが宣言する。優先順位は整数 0〜9。CST では演算子の列を平たいまま持ち、HIR で組み直す | [宣言](spec/declarations.md)、[式](spec/expressions.md) |
 | モジュール | 1ファイル = 1モジュール。`pub` で公開する。import は既定で修飾付き。標準ライブラリのモジュール (`Fs` など) も、Prelude のほかは import して修飾付きで使う | [モジュールと名前解決](spec/modules.md) |
-| 組み込みの宣言 | 修飾子 `extern` で組み込みの関数、型、エフェクトを宣言する (`pub extern println : String -> <IO> Unit`)。標準ライブラリはバイナリに埋め込んだ `std/` のツリーから読み、Prelude は `std/Prelude.em` である。ファイルの操作は標準ライブラリのモジュール `Fs` (`Fs.open` など) にある | [宣言](spec/declarations.md)、[モジュールと名前解決](spec/modules.md) |
+| 組み込みの宣言 | 修飾子 `extern` で組み込みの関数、型、エフェクトを宣言する (`pub extern println : String -> <IO> Unit`)。標準ライブラリはバイナリに埋め込んだ `std/` のツリーから読み、Prelude は `std/Prelude.em` である。ファイルを読む操作は標準ライブラリのモジュール `FileIn` (`FileIn.open` など) に、パスで済む操作は `Fs` (`Fs.read_text` など) にある | [宣言](spec/declarations.md)、[モジュールと名前解決](spec/modules.md) |
 | 並行処理 | 新しい構文は追加しない。エフェクトにより直接の形で書ける | [式](spec/expressions.md) |
 | コメント | `--` と、入れ子にできる `{- -}` | [字句](spec/lexical.md) |
 
@@ -93,7 +93,7 @@ eml の目的、言語の性格、確定した設計判断の一覧、文書全�
 | 持ち越し規則 | 操作の呼び出しをまたいで生きていてよい値の規則。`multi` の操作をまたげるのは `Unr` の値だけである |
 | 中断 | 継続が再開されずに捨てられること。`never` の操作、`try_io` が捕まえる IO の失敗、`exit` は、継続を組み立てずに、タスクのスタックを行き先のフレームまで巻き戻す。`drop k` は継続を捨てる。どちらも、捨てたフレームや継続が持っていた値を解放する |
 | 戻らない呼び出し | 型スキームを持つ宣言を引数をそろえて呼ぶ呼び出しで、結果の型が、宣言の型のほかの所に現れない制約のない型変数であるもの (`fail`、`exit`)。その型の値を作れないので、普通には戻らない。この呼び出しで終わる経路では、消費しない `Lin` の値を手放さなくてよい |
-| 破棄処理 | `Lin` 型に宣言された捨て方。標準ライブラリのリソース `Fs.File` では `Fs.close` |
+| 破棄処理 | `Lin` 型に宣言された捨て方。標準ライブラリのリソース `FileIn.FileIn` では `FileIn.close` |
 | deep handler | 再開した継続の中でも同じ handler が有効なままの handler |
 | パラメータ付き handler | `handle e from init with` の形で、状態を節の最後の引数として受け渡す handler。状態は handler の実行ごとの evidence に置き、脱糖しない |
 | レイアウト段 | lexer と parser の間で、仮想トークン `OPEN` / `SEP` / `CLOSE` (コードでは `LAYOUT_OPEN` / `LAYOUT_SEP` / `LAYOUT_CLOSE`) を挿入する段 |

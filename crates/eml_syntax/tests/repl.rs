@@ -29,7 +29,7 @@ fn declarations_and_signatures_are_items() {
         "data Color = | Red | Green",
         "data Color =\n  | Red\n  | Green",
         "effect Ask where\n  ask : Unit -> Int",
-        "import Std.Fs",
+        "import Std.FileIn",
         "infixl 6 <+>",
         "class Size a where\n  size : a -> Int",
         "instance Show Color where\n  show c = \"c\"",
@@ -197,7 +197,7 @@ fn one_line_inputs_are_complete() {
         "f x",
         "1 + 2",
         "let x = 1",
-        "import Std.Fs",
+        "import Std.FileIn",
         "data Color = | Red | Green",
         "\n\nf x",
         // 閉じた括弧の中の字下げした行は、ブロックではない

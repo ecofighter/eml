@@ -1,7 +1,7 @@
 -- `var` の変数は `Unr` か `MutArray` でなければならない。`File` は E3007
-import Fs
+import FileIn
 
 main : Unit -> <IO> Unit
 main () =
-  var f = Fs.open "input.txt"
+  var f = FileIn.open "input.txt"
   println "done"

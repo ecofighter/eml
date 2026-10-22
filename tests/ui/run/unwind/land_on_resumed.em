@@ -1,6 +1,6 @@
 -- 節が `ctl` で `k` を呼んで再開した後、再開された本体が同じ handler の `never` の操作を呼ぶ。中断の行き先は
 -- 再開で作り直された evidence で、`resume$` の着地の印の所で止まる。途中のフレームの `File` は閉じる。
-import Fs
+import FileIn
 
 effect Ctl where
   ask : Unit -> Int
@@ -10,9 +10,9 @@ body : Unit -> <Ctl, IO, Panic> Int
 body () =
   let a = ask ()
   println "asked \{a}"
-  let f = Fs.open "input.txt"
+  let f = FileIn.open "input.txt"
   let r = stop 7
-  Fs.close f
+  FileIn.close f
   a + r
 
 main : Unit -> <IO, Panic> Unit

@@ -6,9 +6,9 @@ input_file: tests/ui/check-fail/linearity/lin_element.em
 [E3001] Error: a linear value is used where an unrestricted value is expected
    ╭─[ check-fail/linearity/lin_element.em:8:3 ]
    │
- 8 │   a[0] <- Fs.open "input.txt"
-   │   ─────────────┬─────────────  
-   │                ╰─────────────── this expression
+ 8 │   a[0] <- FileIn.open "input.txt"
+   │   ───────────────┬───────────────  
+   │                  ╰───────────────── this expression
    │ 
    │ Note: linear values, such as files, the continuation of a `once` operation and closures that capture one, must be used exactly once
 ───╯

@@ -1,6 +1,6 @@
 -- E3006: `keep` holds its argument across a call of `action`. Given a file and an action that performs a `multi`
 -- operation, the file would be closed again by each resumption.
-import Fs
+import FileIn
 
 effect Choice where
   multi choose : Unit -> Bool
@@ -17,9 +17,9 @@ chooser () =
 
 pick : Unit -> <Choice, IO> Unit
 pick () =
-  let f = Fs.open "input.txt"
+  let f = FileIn.open "input.txt"
   let g = keep f chooser
-  Fs.close g
+  FileIn.close g
 
 main : Unit -> <IO> Unit
 main () =

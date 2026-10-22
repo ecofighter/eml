@@ -5,16 +5,17 @@
 -- `File` はちょうど1回閉じ、閉じなければ checked mode の漏れの検査で落ちる
 import Iter
 import Yield (Yield(..))
+import FileIn
 import Fs
 
 numbers : Int -> Unit -> <Yield Int, IO, Panic> Unit
 numbers n () =
   let go file i =
-    if i > n then Fs.close file
+    if i > n then FileIn.close file
     else
       yield i
       go file (i + 1)
-  go (Fs.open "numbers.txt") 1
+  go (FileIn.open "numbers.txt") 1
 
 main : Unit -> <IO, Panic> Unit
 main () =

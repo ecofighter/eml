@@ -12,21 +12,21 @@ input_file: tests/ui/check-fail/names/std_without_import.em
    │ 
    │ Help: add `import String` to use the standard module `Std.String`
 ───╯
-[E1031] Error: unknown module qualifier `Std.Fs`
+[E1031] Error: unknown module qualifier `Std.FileIn`
    ╭─[ check-fail/names/std_without_import.em:7:3 ]
    │
- 7 │   Std.Fs.close (Std.Fs.open "a.txt")
-   │   ───┬──  
-   │      ╰──── no import gives this qualifier
+ 7 │   Std.FileIn.close (Std.FileIn.open "a.txt")
+   │   ─────┬────  
+   │        ╰────── no import gives this qualifier
    │ 
-   │ Help: a qualifier is one segment; add `import Std.Fs` and write `Fs.close`
+   │ Help: a qualifier is one segment; add `import Std.FileIn` and write `FileIn.close`
 ───╯
-[E1031] Error: unknown module qualifier `Std.Fs`
-   ╭─[ check-fail/names/std_without_import.em:7:17 ]
+[E1031] Error: unknown module qualifier `Std.FileIn`
+   ╭─[ check-fail/names/std_without_import.em:7:21 ]
    │
- 7 │   Std.Fs.close (Std.Fs.open "a.txt")
-   │                 ───┬──  
-   │                    ╰──── no import gives this qualifier
+ 7 │   Std.FileIn.close (Std.FileIn.open "a.txt")
+   │                     ─────┬────  
+   │                          ╰────── no import gives this qualifier
    │ 
-   │ Help: a qualifier is one segment; add `import Std.Fs` and write `Fs.open`
+   │ Help: a qualifier is one segment; add `import Std.FileIn` and write `FileIn.open`
 ───╯

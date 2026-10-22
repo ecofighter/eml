@@ -36,7 +36,7 @@ E0xxx は `eml_syntax::codes` (E0004 だけは `eml_diagnostics`)、E1xxx は `e
 | E1023 | `INVALID_SECTION` | 優先順位の合わないセクション (`(* a + b)` や `(+ a + b)`)。セクション全体を指し、被演算子を括弧で囲むよう help で伝える |
 | E1024 | `USE_AT_END_OF_BLOCK` | ブロックの最後の文が `use` である (包む残りがない)。`use` の文を指す |
 | E1025 | `MISSING_CONSTRUCTORS` | `data` にコンストラクタがない (`=` のない `data`)。`data` の名前を指す。`extern data` は対象にならず、`extern` でなければ標準ライブラリを含むどのモジュールでも出す |
-| E1026 | `MODULE_NOT_FOUND` | import したモジュールのファイルがない、または読めない (UTF-8 でない、IO の誤り)。読めない理由をメッセージに書く。import のモジュールのパスを指す。`import Std.Nope` はラベルを「there is no file `<std>/Nope.em`」にし、ユーザーの根は読まない。`import Fs` は、ユーザーの根にファイルが見つからないときだけ `std/` を探す。大文字小文字だけが違うファイルがあるか読めないときは、`std/` へ進まない |
+| E1026 | `MODULE_NOT_FOUND` | import したモジュールのファイルがない、または読めない (UTF-8 でない、IO の誤り)。読めない理由をメッセージに書く。import のモジュールのパスを指す。`import Std.Nope` はラベルを「there is no file `<std>/Nope.em`」にし、ユーザーの根は読まない。`import FileIn` は、ユーザーの根にファイルが見つからないときだけ `std/` を探す。大文字小文字だけが違うファイルがあるか読めないときは、`std/` へ進まない |
 | E1027 | `IMPORT_CYCLE` | import の循環。循環を閉じる import を指し、循環の経路を note で示す |
 | E1028 | `AMBIGUOUS_NAME` | 修飾しない名前、または合流した修飾子の名前が、別々の定義を指して曖昧である。使った位置を primary にし、候補の import を secondary にする |
 | E1029 | `PRIVATE_NAME` | ユーザーのモジュールの `pub` でない名前を、修飾か import の並びで使った。名前を primary にし、定義を secondary にする |

@@ -109,7 +109,7 @@ fn run_opens_an_absolute_path_as_is() {
     std::fs::write(&input, "from an absolute path").unwrap();
     let program = dir.join("absolute.em");
     let source = format!(
-        "import Fs\nmain : Unit -> <IO> Unit\nmain () =\n  let f = Fs.open \"{}\"\n  let (text, f) = Fs.read_all f\n  Fs.close f\n  println text\n",
+        "import FileIn\nmain : Unit -> <IO> Unit\nmain () =\n  let f = FileIn.open \"{}\"\n  let (text, f) = FileIn.read_all f\n  FileIn.close f\n  println text\n",
         input.display()
     );
     std::fs::write(&program, source).unwrap();
@@ -228,13 +228,13 @@ main () = spin 0
 /// 名前付きパイプ `fifo` を開いて全部読む。書き手が何も書かずに開いたままなら、読みの中で待ち続ける。
 #[cfg(unix)]
 const READ_FIFO: &str = "\
-import Fs
+import FileIn
 
 main : Unit -> <IO> Unit
 main () =
-  let f = Fs.open \"fifo\"
-  let (text, f) = Fs.read_all f
-  Fs.close f
+  let f = FileIn.open \"fifo\"
+  let (text, f) = FileIn.read_all f
+  FileIn.close f
   println text
 ";
 
@@ -340,7 +340,7 @@ fn repeated_interrupts_end_a_program_waiting_in_a_read_with_130() {
     assert_eq!(unsafe { libc::mkfifo(path.as_ptr(), 0o600) }, 0);
     let deadline = Instant::now() + DEADLINE;
     let mut child = spawn_run(&dir, std::process::Stdio::null());
-    // 子の `Fs.open` は書き手が開くまで待つ。読み手のいないパイプを書き込み用に非同期で開くと ENXIO なので、開けた
+    // 子の `FileIn.open` は書き手が開くまで待つ。読み手のいないパイプを書き込み用に非同期で開くと ENXIO なので、開けた
     // 時点で子は実行を始めている。何も書かずに開いたままにして、子を読みの中で待たせる
     let writer = loop {
         match std::fs::OpenOptions::new()
@@ -617,7 +617,7 @@ main () = println (show (Proc.run \"sh\" [\"-c\", \"echo started >&2; exec sleep
     assert!(rest.starts_with("runtime error: interrupted\n"), "{rest}");
 }
 
-/// 標準入力の読みの中で待つプログラムも、`Fs.read_all` と同じく SIGINT で止まり、終了コードは 130 である。読みに入る
+/// 標準入力の読みの中で待つプログラムも、`FileIn.read_all` と同じく SIGINT で止まり、終了コードは 130 である。読みに入る
 /// 直前に届いた SIGINT は読みを止めないので、終わるまで 100 ms ごとに送り続ける (2回目の SIGINT はその場で終わらせる。
 /// `repeated_interrupts_end_a_program_waiting_in_a_read_with_130` と同じ)。
 #[cfg(unix)]

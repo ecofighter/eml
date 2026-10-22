@@ -3,7 +3,7 @@ source: crates/eml_cli/tests/repl.rs
 expression: checked.render()
 input_file: crates/eml_cli/tests/repl/errors/diagnostics.repl
 ---
-> import Fs
+> import FileIn
 > bad : Int -> <Panic> Int
 . bad x = x + "s"
 .
@@ -20,8 +20,8 @@ E2001 <input 4> 1:5 mismatched types
 > nope
 E1001 <input 5> 1:1 cannot find value `nope`
   <input 5> 1:1 not found in this scope
-> let file = Fs.open "missing.txt"
-E2016 <input 6> 1:5 `file` cannot keep a value of the linear type `File`
+> let file = FileIn.open "missing.txt"
+E2016 <input 6> 1:5 `file` cannot keep a value of the linear type `FileIn`
   <input 6> 1:5 bound here
   note: only values that may be copied and dropped stay across inputs
 > effect Ask where

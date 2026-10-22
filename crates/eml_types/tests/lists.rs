@@ -33,8 +33,8 @@ fn a_carried_list_prefix_is_reported_at_the_first_element() {
         "effect Choice where",
         "  multi choose : Unit -> Bool",
         "",
-        "import Fs\nf : Unit -> <Choice, IO> List Fs.File",
-        "import Fs\nf () = [Fs.open \"a\", Fs.open \"b\", if choose () then Fs.open \"c\" else Fs.open \"d\"]",
+        "import FileIn\nf : Unit -> <Choice, IO> List FileIn.FileIn",
+        "import FileIn\nf () = [FileIn.open \"a\", FileIn.open \"b\", if choose () then FileIn.open \"c\" else FileIn.open \"d\"]",
     ]
     .join("\n");
     insta::assert_snapshot!(diagnostics(&text), @"
@@ -46,8 +46,8 @@ fn a_carried_list_prefix_is_reported_at_the_first_element() {
       7:1 this equation is not right after the signature of `f`
       5:1 the signature is here
       help: move the equations of `f` right after its signature
-    E3006 7:38 a linear value must be used exactly once, but it is kept alive across a call that may resume more than once
-      7:38 this call may perform `choose`, a `multi` operation
+    E3006 7:46 a linear value must be used exactly once, but it is kept alive across a call that may resume more than once
+      7:46 this call may perform `choose`, a `multi` operation
       7:9 this value is kept alive across the call
       2:9 `choose` is declared `multi` here
       note: a continuation of a `multi` operation can be resumed more than once, and each resumption would use the value again

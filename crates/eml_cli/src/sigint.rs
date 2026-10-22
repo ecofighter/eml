@@ -1,5 +1,5 @@
 //! SIGINT のハンドラ (docs/spec/vm.md の「上限と割り込み」)。unix だけで入れる。`SA_RESTART` を外すので、待っている
-//! 読みは `EINTR` で戻り、`Fs.read_all` が止める語を読んで止まる (docs/spec/object-model.md の「読み手」)。
+//! 読みは `EINTR` で戻り、`FileIn.read_all` が止める語を読んで止まる (docs/spec/object-model.md の「読み手」)。
 
 use std::io;
 use std::sync::atomic::{AtomicBool, Ordering};

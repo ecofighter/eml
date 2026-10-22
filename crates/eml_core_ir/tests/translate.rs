@@ -1543,13 +1543,13 @@ fn a_literal_column_inside_a_tuple() {
 
 #[test]
 fn file_operations_are_extern_calls() {
-    let text = "import Fs\nmain : Unit -> <IO, Panic> Unit\nmain () =\n  let f = Fs.open \"a.txt\"\n  let (s, f) = Fs.read_all f\n  Fs.close f\n  println s";
+    let text = "import FileIn\nmain : Unit -> <IO, Panic> Unit\nmain () =\n  let f = FileIn.open \"a.txt\"\n  let (s, f) = FileIn.read_all f\n  FileIn.close f\n  println s";
     let ir = core_text(text, Pass::Translate);
     for op in [
-        "extern Std.Fs.open(",
-        "extern Std.Fs.read_all(",
+        "extern Std.FileIn.open(",
+        "extern Std.FileIn.read_all(",
         "con (,)",
-        "extern Std.Fs.close(",
+        "extern Std.FileIn.close(",
     ] {
         assert!(ir.contains(op), "{ir}");
     }
@@ -2746,18 +2746,18 @@ fn a_generic_update_keeps_the_fields_at_their_instantiated_types() {
 
 #[test]
 fn a_parameter_and_a_result_of_file_type_are_lin() {
-    let text = "import Fs\nclose_it : Fs.File -> <IO> Unit\nclose_it f = Fs.close f\n\nmain : Unit -> <IO, Panic> Unit\nmain () =\n  let f = Fs.open \"a.txt\"\n  close_it f";
+    let text = "import FileIn\nclose_it : FileIn.FileIn -> <IO> Unit\nclose_it f = FileIn.close f\n\nmain : Unit -> <IO, Panic> Unit\nmain () =\n  let f = FileIn.open \"a.txt\"\n  close_it f";
     let ir = core_text(text, Pass::Translate);
     insta::assert_snapshot!(function(&ir, "close_it"), @"
     fn close_it(f.0: obj lin) -> unit {
-      let t.1: unit = extern Std.Fs.close(f.0)
+      let t.1: unit = extern Std.FileIn.close(f.0)
       return t.1
     }
     ");
     insta::assert_snapshot!(function(&ir, "main"), @r#"
     fn main(p.0: unit) -> unit {
       let s.1: obj = const "a.txt"
-      let t.2: obj lin = extern Std.Fs.open(s.1)
+      let t.2: obj lin = extern Std.FileIn.open(s.1)
       let t.3: unit = call close_it(t.2)
       return t.3
     }
@@ -2767,12 +2767,12 @@ fn a_parameter_and_a_result_of_file_type_are_lin() {
 #[test]
 fn a_handle_body_and_clause_closures_take_the_join_of_their_captures() {
     // 本体と節のクロージャには HIR の型がないので、捕まえた値の印の結びにする。本体は File を、節は Int を捕まえる
-    let text = "import Fs\neffect Ask where\n  ask : Unit -> Int\n\nuse_file : Fs.File -> <Ask, IO> Int\nuse_file f =\n  Fs.close f\n  ask ()\n\nmain : Unit -> <IO, Panic> Unit\nmain () =\n  let f = Fs.open \"a.txt\"\n  let n = 40 + 1\n  let m =\n    handle use_file f with\n      | ctl ask () k -> k n\n  println (show (m + 1))";
+    let text = "import FileIn\neffect Ask where\n  ask : Unit -> Int\n\nuse_file : FileIn.FileIn -> <Ask, IO> Int\nuse_file f =\n  FileIn.close f\n  ask ()\n\nmain : Unit -> <IO, Panic> Unit\nmain () =\n  let f = FileIn.open \"a.txt\"\n  let n = 40 + 1\n  let m =\n    handle use_file f with\n      | ctl ask () k -> k n\n  println (show (m + 1))";
     let ir = core_text(text, Pass::Translate);
     insta::assert_snapshot!(function(&ir, "main"), @r#"
     fn main(p.0: unit) -> unit {
       let s.1: obj = const "a.txt"
-      let t.2: obj lin = extern Std.Fs.open(s.1)
+      let t.2: obj lin = extern Std.FileIn.open(s.1)
       let t.3: int = extern "Prelude.Num Int.+"(40, 1)
       let c.4: tobj lin = closure main$handle0(t.2)
       let c.5: tobj = closure main$handle0$ask(t.3)
@@ -2793,8 +2793,8 @@ fn a_handle_body_and_clause_closures_take_the_join_of_their_captures() {
 
 #[test]
 fn a_constructor_built_from_a_scrutinee_expression_takes_its_type_mark() {
-    // `Some []` の引数はタグだけだが、式の型 `Option (List Fs.File)` は Lin なので、葉で作る `con` は `lin` になる
-    let text = "import Fs\nclose_all : List Fs.File -> <IO> Unit\nclose_all xs =\n  match xs with\n    | [] -> ()\n    | f :: rest ->\n        Fs.close f\n        close_all rest\n\nclose_opt : Option (List Fs.File) -> <IO> Unit\nclose_opt o =\n  match o with\n    | None -> ()\n    | Some xs -> close_all xs\n\nmain : Unit -> <IO> Unit\nmain () =\n  match Some [] with\n    | other -> close_opt other";
+    // `Some []` の引数はタグだけだが、式の型 `Option (List FileIn.FileIn)` は Lin なので、葉で作る `con` は `lin` になる
+    let text = "import FileIn\nclose_all : List FileIn.FileIn -> <IO> Unit\nclose_all xs =\n  match xs with\n    | [] -> ()\n    | f :: rest ->\n        FileIn.close f\n        close_all rest\n\nclose_opt : Option (List FileIn.FileIn) -> <IO> Unit\nclose_opt o =\n  match o with\n    | None -> ()\n    | Some xs -> close_all xs\n\nmain : Unit -> <IO> Unit\nmain () =\n  match Some [] with\n    | other -> close_opt other";
     insta::assert_snapshot!(function(&core_text(text, Pass::Translate), "main"), @"
     fn main(p.0: unit) -> unit {
       let d.1: tobj lin = con Prelude.Option #1(#0)
@@ -2808,7 +2808,7 @@ fn a_constructor_built_from_a_scrutinee_expression_takes_its_type_mark() {
 fn the_fields_a_projection_leaves_behind_take_their_types_marks() {
     // 射影が残すフィールドは `Unr` でなければ E3004 なので、`lin` になるのは取り出す File のフィールドである。
     // 更新が残すフィールドは、File のフィールドも含めて型の印を持つ
-    let text = "import Fs\ndata R = | R { n : Int, f : Fs.File }\n\ntake : R -> Fs.File\ntake r = r.f\n\nbump : R -> R\nbump r = { r | n = 5 }\n\nmain : Unit -> <IO> Unit\nmain () = Fs.close (take (bump (R { n = 1, f = Fs.open \"a.txt\" })))";
+    let text = "import FileIn\ndata R = | R { n : Int, f : FileIn.FileIn }\n\ntake : R -> FileIn.FileIn\ntake r = r.f\n\nbump : R -> R\nbump r = { r | n = 5 }\n\nmain : Unit -> <IO> Unit\nmain () = FileIn.close (take (bump (R { n = 1, f = FileIn.open \"a.txt\" })))";
     let ir = core_text(text, Pass::Translate);
     insta::assert_snapshot!(function(&ir, "take"), @"
     fn take(r.0: R{int, obj lin} lin) -> obj lin {
@@ -2855,7 +2855,7 @@ fn derived_generators_are_unr() {
 fn wrappers_take_the_reprs_and_marks_of_their_instance() {
     // `$op$` と `$con$` は型ごとの instance なので、型変数の位置も具体化した型の Repr と印になる
     // (docs/spec/lir.md の「関数の ABI」)
-    let text = "import Fs\neffect Pass e where\n  pass : e -> Fs.File -> e\n\ndata Box a = | Box a Fs.File\n\nuse_op : (Int -> Fs.File -> <Pass Int, IO> Int) -> <Pass Int, IO> Int\nuse_op op = op 1 (Fs.open \"a.txt\")\n\nmain : Unit -> <IO> Unit\nmain () =\n  let n = handle use_op pass with\n    | ctl pass x g k ->\n        Fs.close g\n        k x\n  let mk = Box n\n  match mk (Fs.open \"a.txt\") with\n    | Box m f ->\n        Fs.close f\n        println (show m)";
+    let text = "import FileIn\neffect Pass e where\n  pass : e -> FileIn.FileIn -> e\n\ndata Box a = | Box a FileIn.FileIn\n\nuse_op : (Int -> FileIn.FileIn -> <Pass Int, IO> Int) -> <Pass Int, IO> Int\nuse_op op = op 1 (FileIn.open \"a.txt\")\n\nmain : Unit -> <IO> Unit\nmain () =\n  let n = handle use_op pass with\n    | ctl pass x g k ->\n        FileIn.close g\n        k x\n  let mk = Box n\n  match mk (FileIn.open \"a.txt\") with\n    | Box m f ->\n        FileIn.close f\n        println (show m)";
     let ir = core_text(text, Pass::Translate);
     insta::assert_snapshot!(function(&ir, "$op$pass@[Int]"), @r#"
     internal yields uniform from 0 fn "$op$pass@[Int]"(p.0: int, p.1: obj lin) -> int {
@@ -2871,9 +2871,9 @@ fn wrappers_take_the_reprs_and_marks_of_their_instance() {
     "#);
 }
 
-const CLOSE_ALL: &str = "close_all : List Fs.File -> <IO> Unit\nclose_all [] = println \"closed\"\nclose_all (f :: rest) =\n  Fs.close f\n  close_all rest\n\n";
+const CLOSE_ALL: &str = "close_all : List FileIn.FileIn -> <IO> Unit\nclose_all [] = println \"closed\"\nclose_all (f :: rest) =\n  FileIn.close f\n  close_all rest\n\n";
 
-const CLOSE_OPT: &str = "close_opt : Option (List Fs.File) -> <IO> Unit\nclose_opt o =\n  match o with\n    | None -> println \"none\"\n    | Some l -> close_all l\n\n";
+const CLOSE_OPT: &str = "close_opt : Option (List FileIn.FileIn) -> <IO> Unit\nclose_opt o =\n  match o with\n    | None -> println \"none\"\n    | Some l -> close_all l\n\n";
 
 #[test]
 fn a_leaf_that_binds_nothing_non_unr_drops_the_matched_value() {
@@ -2881,7 +2881,7 @@ fn a_leaf_that_binds_nothing_non_unr_drops_the_matched_value() {
     // `(n, [])` の引数は構造体で箱がないので、分解した `unr` でないフィールドを `drop` する
     // (docs/spec/lir.md の「構造体の形」)
     let text = format!(
-        "import Fs\n{CLOSE_ALL}go : (Int, List Fs.File) -> <IO> Int\ngo p =\n  match p with\n    | (n, []) -> n\n    | (n, f :: rest) ->\n        Fs.close f\n        close_all rest\n        n\n\nmain : Unit -> <IO> Unit\nmain () =\n  println (show (go (1, [Fs.open \"input.txt\"])))\n  println (show (go (2, [])))"
+        "import FileIn\n{CLOSE_ALL}go : (Int, List FileIn.FileIn) -> <IO> Int\ngo p =\n  match p with\n    | (n, []) -> n\n    | (n, f :: rest) ->\n        FileIn.close f\n        close_all rest\n        n\n\nmain : Unit -> <IO> Unit\nmain () =\n  println (show (go (1, [FileIn.open \"input.txt\"])))\n  println (show (go (2, [])))"
     );
     let ir = core_text(&text, Pass::Translate);
     insta::assert_snapshot!(function(&ir, "close_all"), @r#"
@@ -2893,7 +2893,7 @@ fn a_leaf_that_binds_nothing_non_unr_drops_the_matched_value() {
       let t.5: unit = extern Prelude.println(s.4)
       return t.5
     b2:
-      let t.6: unit = extern Std.Fs.close(f.1)
+      let t.6: unit = extern Std.FileIn.close(f.1)
       let t.7: unit = call close_all(rest.2)
       return t.7
     }
@@ -2906,7 +2906,7 @@ fn a_leaf_that_binds_nothing_non_unr_drops_the_matched_value() {
       let u.5: unit = drop x.2
       return n.1
     b2:
-      let t.6: unit = extern Std.Fs.close(f.3)
+      let t.6: unit = extern Std.FileIn.close(f.3)
       let t.7: unit = call close_all(rest.4)
       return n.1
     }
@@ -2916,7 +2916,7 @@ fn a_leaf_that_binds_nothing_non_unr_drops_the_matched_value() {
 #[test]
 fn a_leaf_that_receives_a_value_containing_v_does_not_drop_v() {
     // `(o, 0)` の葉は `h` を中に持つ `Some h` を受け取るので、`h` を drop しない
-    let text = "import Fs\nclose_opt : Option Fs.File -> <IO> Unit\nclose_opt o =\n  match o with\n    | None -> println \"none\"\n    | Some f -> Fs.close f\n\ngo : Fs.File -> Int -> <IO> Unit\ngo h n =\n  match (Some h, n) with\n    | (o, 0) -> close_opt o\n    | (Some h2, _) -> Fs.close h2\n    | (None, _) -> println \"never\"\n\nmain : Unit -> <IO> Unit\nmain () =\n  go (Fs.open \"input.txt\") 0\n  go (Fs.open \"input.txt\") 1";
+    let text = "import FileIn\nclose_opt : Option FileIn.FileIn -> <IO> Unit\nclose_opt o =\n  match o with\n    | None -> println \"none\"\n    | Some f -> FileIn.close f\n\ngo : FileIn.FileIn -> Int -> <IO> Unit\ngo h n =\n  match (Some h, n) with\n    | (o, 0) -> close_opt o\n    | (Some h2, _) -> FileIn.close h2\n    | (None, _) -> println \"never\"\n\nmain : Unit -> <IO> Unit\nmain () =\n  go (FileIn.open \"input.txt\") 0\n  go (FileIn.open \"input.txt\") 1";
     insta::assert_snapshot!(function(&core_text(text, Pass::Translate), "go"), @"
     fn go(h.0: obj lin, n.1: int) -> unit {
       switch n.1 { 0 -> b1, _ -> b2 }
@@ -2925,7 +2925,7 @@ fn a_leaf_that_receives_a_value_containing_v_does_not_drop_v() {
       let t.3: unit = call close_opt(d.2)
       return t.3
     b2:
-      let t.4: unit = extern Std.Fs.close(h.0)
+      let t.4: unit = extern Std.FileIn.close(h.0)
       return t.4
     }
     ");
@@ -2935,7 +2935,7 @@ fn a_leaf_that_receives_a_value_containing_v_does_not_drop_v() {
 fn equal_non_unr_occurrences_are_built_apart() {
     // 同じ形の `lin` の出現を1つの `con` にまとめると、Perceus がそれを `dup` する。`unr` の出現は今のとおりまとめる
     let text = format!(
-        "import Fs\n{CLOSE_ALL}{CLOSE_OPT}use_ints : Option (List Int) -> Int\nuse_ints o =\n  match o with\n    | None -> 0\n    | Some l -> 1\n\nmain : Unit -> <IO, Panic> Unit\nmain () =\n  let (a, b) = (Some [], Some [])\n  close_opt a\n  close_opt b\n  let (c, d, e) = (Some [], Some [], Some [])\n  close_opt c\n  println (show (use_ints d + use_ints e))"
+        "import FileIn\n{CLOSE_ALL}{CLOSE_OPT}use_ints : Option (List Int) -> Int\nuse_ints o =\n  match o with\n    | None -> 0\n    | Some l -> 1\n\nmain : Unit -> <IO, Panic> Unit\nmain () =\n  let (a, b) = (Some [], Some [])\n  close_opt a\n  close_opt b\n  let (c, d, e) = (Some [], Some [], Some [])\n  close_opt c\n  println (show (use_ints d + use_ints e))"
     );
     insta::assert_snapshot!(function(&core_text(&text, Pass::Translate), "main"), @r#"
     fn main(p.0: unit) -> unit {
@@ -2960,7 +2960,7 @@ fn equal_non_unr_occurrences_are_built_apart() {
 fn a_linear_constructor_variable_is_opened_when_no_arm_receives_it() {
     // どの枝も `j` と `o` そのものを受け取らないので、決定木は `con` の引数を直接読み、`con` は作らない
     let text = format!(
-        "import Fs\n{CLOSE_ALL}{HIDE}data Log =\n  | Log {{ file : Fs.File, lines : Int }}\ndata Job =\n  | Job {{ name : String, log : Log }}\n\nfinish : Log -> String -> <IO> Int\nfinish l name =\n  let j = Job {{ name = name, log = l }}\n  println \"between\"\n  let Job {{ name = n, log = Log {{ file, lines }} }} = j\n  println n\n  Fs.close file\n  lines\n\ngo : List Fs.File -> <IO> Unit\ngo xs =\n  let o = Some xs\n  println \"between\"\n  match o with\n    | Some [] -> println \"empty\"\n    | Some l -> close_all l\n    | None -> println \"none\"\n\nmain : Unit -> <IO, Panic> Unit\nmain () =\n  let Hide finish = hide 0 finish\n  let Hide go = hide 0 go\n  println (show (finish (Log {{ file = Fs.open \"input.txt\", lines = 3 }}) \"job\"))\n  go []"
+        "import FileIn\n{CLOSE_ALL}{HIDE}data Log =\n  | Log {{ file : FileIn.FileIn, lines : Int }}\ndata Job =\n  | Job {{ name : String, log : Log }}\n\nfinish : Log -> String -> <IO> Int\nfinish l name =\n  let j = Job {{ name = name, log = l }}\n  println \"between\"\n  let Job {{ name = n, log = Log {{ file, lines }} }} = j\n  println n\n  FileIn.close file\n  lines\n\ngo : List FileIn.FileIn -> <IO> Unit\ngo xs =\n  let o = Some xs\n  println \"between\"\n  match o with\n    | Some [] -> println \"empty\"\n    | Some l -> close_all l\n    | None -> println \"none\"\n\nmain : Unit -> <IO, Panic> Unit\nmain () =\n  let Hide finish = hide 0 finish\n  let Hide go = hide 0 go\n  println (show (finish (Log {{ file = FileIn.open \"input.txt\", lines = 3 }}) \"job\"))\n  go []"
     );
     // 開いた `con` は使われないので、縮約が消す
     let lir = lir_text(&text, eml_lir::Pass::Perceus);
@@ -2976,7 +2976,7 @@ fn a_linear_constructor_variable_is_opened_when_no_arm_receives_it() {
       let t.4: unit = extern Prelude.println(s.3)
       unpack l.0 Log #0(file.5: obj lin, lines.6: int)
       let t.7: unit = extern Prelude.println(name.1)
-      let t.8: unit = extern Std.Fs.close(file.5)
+      let t.8: unit = extern Std.FileIn.close(file.5)
       return lines.6
     }
     "#);
@@ -3003,7 +3003,7 @@ fn a_linear_constructor_variable_received_by_an_arm_is_taken_apart() {
     // `other` の枝が `p` そのものを受け取るので、`p` を開かずに分解する。開くと、`p` の `con` が生き残ったまま
     // ほかの葉が引数を読み、Perceus が `xs` と `ys` を `dup` し、`p` を `decref` する
     let text = format!(
-        "import Fs\n{CLOSE_ALL}{HIDE}take : (List Fs.File, List Fs.File) -> <IO> Unit\ntake p =\n  match p with\n    | (a, b) ->\n        close_all a\n        close_all b\n\ngo : List Fs.File -> List Fs.File -> <IO> Unit\ngo xs ys =\n  let p = (xs, ys)\n  println \"between\"\n  match p with\n    | ([], b) -> close_all b\n    | other -> take other\n\nmain : Unit -> <IO, Panic> Unit\nmain () =\n  let Hide go = hide 0 go\n  go [] [Fs.open \"input.txt\"]\n  go [Fs.open \"input.txt\"] []"
+        "import FileIn\n{CLOSE_ALL}{HIDE}take : (List FileIn.FileIn, List FileIn.FileIn) -> <IO> Unit\ntake p =\n  match p with\n    | (a, b) ->\n        close_all a\n        close_all b\n\ngo : List FileIn.FileIn -> List FileIn.FileIn -> <IO> Unit\ngo xs ys =\n  let p = (xs, ys)\n  println \"between\"\n  match p with\n    | ([], b) -> close_all b\n    | other -> take other\n\nmain : Unit -> <IO, Panic> Unit\nmain () =\n  let Hide go = hide 0 go\n  go [] [FileIn.open \"input.txt\"]\n  go [FileIn.open \"input.txt\"] []"
     );
     insta::assert_snapshot!(function(&lir_text(&text, eml_lir::Pass::Perceus), "go"), @r#"
     fn go(xs.0: tobj lin, ys.1: tobj lin) -> unit {
@@ -3020,7 +3020,7 @@ fn a_linear_constructor_variable_received_by_an_arm_is_taken_apart() {
     "#);
     // `q` は `o` の枝が受け取るので開かず、`q` を根にする。`(Some [], 0)` の葉は `q` から何も束縛しないので `q` を drop する
     let text = format!(
-        "import Fs\n{CLOSE_ALL}{CLOSE_OPT}{HIDE}go : List Fs.File -> Int -> <IO> Unit\ngo xs n =\n  let q = Some xs\n  let p = (q, n)\n  println \"between\"\n  match p with\n    | (Some [], 0) -> println \"empty zero\"\n    | (o, _) -> close_opt o\n\nmain : Unit -> <IO, Panic> Unit\nmain () =\n  let Hide go = hide 0 go\n  go [] 0\n  go [Fs.open \"input.txt\"] 1"
+        "import FileIn\n{CLOSE_ALL}{CLOSE_OPT}{HIDE}go : List FileIn.FileIn -> Int -> <IO> Unit\ngo xs n =\n  let q = Some xs\n  let p = (q, n)\n  println \"between\"\n  match p with\n    | (Some [], 0) -> println \"empty zero\"\n    | (o, _) -> close_opt o\n\nmain : Unit -> <IO, Panic> Unit\nmain () =\n  let Hide go = hide 0 go\n  go [] 0\n  go [FileIn.open \"input.txt\"] 1"
     );
     insta::assert_snapshot!(function(&core_text(&text, Pass::Translate), "go"), @r#"
     fn go(xs.0: tobj lin, n.1: int) -> unit {
@@ -3056,9 +3056,9 @@ fn a_linear_constructor_variable_used_on_another_path_is_not_opened() {
     // `v` を参照する所が2つあるので、検査は `v` の唯一の使用でない。決定が静的でも、どの枝も `v` を受け取らなくても、
     // 開くと `xs` を2か所で使い、Perceus が `lin` の値を `dup` と `decref` する
     for text in [
-        "import Fs\ndata Hide a = | Hide a\n\nhide : Int -> a -> <Panic> Hide a\nhide n x = if n <= 0 then Hide x else hide (n - 1) x\n\nclose_all : List Fs.File -> <IO> Unit\nclose_all [] = println \"closed\"\nclose_all (f :: rest) =\n  Fs.close f\n  close_all rest\n\nclose_opt : Option (List Fs.File) -> <IO> Unit\nclose_opt o =\n  match o with\n    | None -> println \"none\"\n    | Some l -> close_all l\n\ngo : Bool -> List Fs.File -> <IO> Unit\ngo c xs =\n  let v = Some xs\n  println \"between\"\n  if c then\n    match v with\n      | Some l -> close_all l\n      | None -> println \"none\"\n  else close_opt v\n\nmain : Unit -> <IO, Panic> Unit\nmain () =\n  let Hide go = hide 0 go\n  go True [Fs.open \"input.txt\"]\n  go False [Fs.open \"input.txt\"]",
-        "import Fs\ndata Hide a = | Hide a\n\nhide : Int -> a -> <Panic> Hide a\nhide n x = if n <= 0 then Hide x else hide (n - 1) x\n\nclose_all : List Fs.File -> <IO> Unit\nclose_all [] = println \"closed\"\nclose_all (f :: rest) =\n  Fs.close f\n  close_all rest\n\nclose_opt : Option (List Fs.File) -> <IO> Unit\nclose_opt o =\n  match o with\n    | None -> println \"none\"\n    | Some l -> close_all l\n\ngo : Bool -> List Fs.File -> <IO> Unit\ngo c xs =\n  let v = Some xs\n  println \"between\"\n  if c then\n    match v with\n      | Some [] -> println \"empty\"\n      | Some l -> close_all l\n      | None -> println \"none\"\n  else close_opt v\n\nmain : Unit -> <IO, Panic> Unit\nmain () =\n  let Hide go = hide 0 go\n  go True [Fs.open \"input.txt\"]\n  go True []\n  go False [Fs.open \"input.txt\"]",
-        "import Fs\ndata Hide a = | Hide a\n\nhide : Int -> a -> <Panic> Hide a\nhide n x = if n <= 0 then Hide x else hide (n - 1) x\n\nclose_all : List Fs.File -> <IO> Unit\nclose_all [] = println \"closed\"\nclose_all (f :: rest) =\n  Fs.close f\n  close_all rest\n\nident : Option (List Fs.File) -> Option (List Fs.File)\nident o = o\n\ngo : Bool -> List Fs.File -> <IO> Unit\ngo c xs =\n  let v = Some xs\n  println \"between\"\n  match (if c then v else ident v) with\n    | Some l -> close_all l\n    | None -> println \"none\"\n\nmain : Unit -> <IO, Panic> Unit\nmain () =\n  let Hide go = hide 0 go\n  go True [Fs.open \"input.txt\"]\n  go False [Fs.open \"input.txt\"]",
+        "import FileIn\ndata Hide a = | Hide a\n\nhide : Int -> a -> <Panic> Hide a\nhide n x = if n <= 0 then Hide x else hide (n - 1) x\n\nclose_all : List FileIn.FileIn -> <IO> Unit\nclose_all [] = println \"closed\"\nclose_all (f :: rest) =\n  FileIn.close f\n  close_all rest\n\nclose_opt : Option (List FileIn.FileIn) -> <IO> Unit\nclose_opt o =\n  match o with\n    | None -> println \"none\"\n    | Some l -> close_all l\n\ngo : Bool -> List FileIn.FileIn -> <IO> Unit\ngo c xs =\n  let v = Some xs\n  println \"between\"\n  if c then\n    match v with\n      | Some l -> close_all l\n      | None -> println \"none\"\n  else close_opt v\n\nmain : Unit -> <IO, Panic> Unit\nmain () =\n  let Hide go = hide 0 go\n  go True [FileIn.open \"input.txt\"]\n  go False [FileIn.open \"input.txt\"]",
+        "import FileIn\ndata Hide a = | Hide a\n\nhide : Int -> a -> <Panic> Hide a\nhide n x = if n <= 0 then Hide x else hide (n - 1) x\n\nclose_all : List FileIn.FileIn -> <IO> Unit\nclose_all [] = println \"closed\"\nclose_all (f :: rest) =\n  FileIn.close f\n  close_all rest\n\nclose_opt : Option (List FileIn.FileIn) -> <IO> Unit\nclose_opt o =\n  match o with\n    | None -> println \"none\"\n    | Some l -> close_all l\n\ngo : Bool -> List FileIn.FileIn -> <IO> Unit\ngo c xs =\n  let v = Some xs\n  println \"between\"\n  if c then\n    match v with\n      | Some [] -> println \"empty\"\n      | Some l -> close_all l\n      | None -> println \"none\"\n  else close_opt v\n\nmain : Unit -> <IO, Panic> Unit\nmain () =\n  let Hide go = hide 0 go\n  go True [FileIn.open \"input.txt\"]\n  go True []\n  go False [FileIn.open \"input.txt\"]",
+        "import FileIn\ndata Hide a = | Hide a\n\nhide : Int -> a -> <Panic> Hide a\nhide n x = if n <= 0 then Hide x else hide (n - 1) x\n\nclose_all : List FileIn.FileIn -> <IO> Unit\nclose_all [] = println \"closed\"\nclose_all (f :: rest) =\n  FileIn.close f\n  close_all rest\n\nident : Option (List FileIn.FileIn) -> Option (List FileIn.FileIn)\nident o = o\n\ngo : Bool -> List FileIn.FileIn -> <IO> Unit\ngo c xs =\n  let v = Some xs\n  println \"between\"\n  match (if c then v else ident v) with\n    | Some l -> close_all l\n    | None -> println \"none\"\n\nmain : Unit -> <IO, Panic> Unit\nmain () =\n  let Hide go = hide 0 go\n  go True [FileIn.open \"input.txt\"]\n  go False [FileIn.open \"input.txt\"]",
     ] {
         let program = eml_test_support::lir(text);
         for function in &program.functions {
@@ -3084,7 +3084,7 @@ fn a_linear_constructor_variable_used_on_another_path_is_not_opened() {
             }
         }
     }
-    insta::assert_snapshot!(function(&lir_text("import Fs\ndata Hide a = | Hide a\n\nhide : Int -> a -> <Panic> Hide a\nhide n x = if n <= 0 then Hide x else hide (n - 1) x\n\nclose_all : List Fs.File -> <IO> Unit\nclose_all [] = println \"closed\"\nclose_all (f :: rest) =\n  Fs.close f\n  close_all rest\n\nclose_opt : Option (List Fs.File) -> <IO> Unit\nclose_opt o =\n  match o with\n    | None -> println \"none\"\n    | Some l -> close_all l\n\ngo : Bool -> List Fs.File -> <IO> Unit\ngo c xs =\n  let v = Some xs\n  println \"between\"\n  if c then\n    match v with\n      | Some l -> close_all l\n      | None -> println \"none\"\n  else close_opt v\n\nmain : Unit -> <IO, Panic> Unit\nmain () =\n  let Hide go = hide 0 go\n  go True [Fs.open \"input.txt\"]\n  go False [Fs.open \"input.txt\"]", eml_lir::Pass::Perceus), "go"), @r#"
+    insta::assert_snapshot!(function(&lir_text("import FileIn\ndata Hide a = | Hide a\n\nhide : Int -> a -> <Panic> Hide a\nhide n x = if n <= 0 then Hide x else hide (n - 1) x\n\nclose_all : List FileIn.FileIn -> <IO> Unit\nclose_all [] = println \"closed\"\nclose_all (f :: rest) =\n  FileIn.close f\n  close_all rest\n\nclose_opt : Option (List FileIn.FileIn) -> <IO> Unit\nclose_opt o =\n  match o with\n    | None -> println \"none\"\n    | Some l -> close_all l\n\ngo : Bool -> List FileIn.FileIn -> <IO> Unit\ngo c xs =\n  let v = Some xs\n  println \"between\"\n  if c then\n    match v with\n      | Some l -> close_all l\n      | None -> println \"none\"\n  else close_opt v\n\nmain : Unit -> <IO, Panic> Unit\nmain () =\n  let Hide go = hide 0 go\n  go True [FileIn.open \"input.txt\"]\n  go False [FileIn.open \"input.txt\"]", eml_lir::Pass::Perceus), "go"), @r#"
     fn go(c.0: enum, xs.1: tobj lin) -> unit {
       let d.2: tobj lin = con Prelude.Option #1(xs.1)
       let s.3: obj = const "between"
@@ -3120,7 +3120,7 @@ fn a_linear_constructor_variable_destructured_in_both_branches_is_taken_apart_in
     // 各枝が `p` そのものを `unpack` で分解する。参照は構文で数えるので、安全な側に保守的である
     // (docs/spec/core-ir.md の「translate が決める印」)
     let text = format!(
-        "import Fs\n{CLOSE_ALL}go : Bool -> List Fs.File -> <IO, Panic> Unit\ngo c xs =\n  let p = (xs, 1)\n  println \"between\"\n  if c then\n    let (a, n) = p\n    println (show n)\n    close_all a\n  else\n    let (b, m) = p\n    println (show (m + 1))\n    close_all b\n\nmain : Unit -> <IO, Panic> Unit\nmain () =\n  go True [Fs.open \"input.txt\"]\n  go False [Fs.open \"input.txt\"]"
+        "import FileIn\n{CLOSE_ALL}go : Bool -> List FileIn.FileIn -> <IO, Panic> Unit\ngo c xs =\n  let p = (xs, 1)\n  println \"between\"\n  if c then\n    let (a, n) = p\n    println (show n)\n    close_all a\n  else\n    let (b, m) = p\n    println (show (m + 1))\n    close_all b\n\nmain : Unit -> <IO, Panic> Unit\nmain () =\n  go True [FileIn.open \"input.txt\"]\n  go False [FileIn.open \"input.txt\"]"
     );
     insta::assert_snapshot!(function(&core_text(&text, Pass::Translate), "go"), @r#"
     fn go(c.0: enum, xs.1: tobj lin) -> unit {
@@ -3295,7 +3295,7 @@ fn a_group_member_as_a_value_carries_the_shared_captures() {
 #[test]
 fn a_group_without_recursion_keeps_each_members_captures() {
     // 再帰しない組では、`File` を捕まえた `finish` だけがそれを受け取る。共有すると `next` の呼び出しが `f` を複製する
-    let text = "import Fs\nmain : Unit -> <IO, Panic> Unit\nmain () =\n  let f = Fs.open \"input.txt\"\n  let finish () = Fs.close f\n  and next n = n + 1\n  println (show (next 1))\n  finish ()";
+    let text = "import FileIn\nmain : Unit -> <IO, Panic> Unit\nmain () =\n  let f = FileIn.open \"input.txt\"\n  let finish () = FileIn.close f\n  and next n = n + 1\n  println (show (next 1))\n  finish ()";
     let shown = core_text(text, Pass::Translate);
     let signatures: Vec<&str> = shown
         .lines()
@@ -3411,12 +3411,12 @@ fn taking_only_unr_fields_out_of_a_lin_struct_drops_nothing() {
 fn a_non_returning_call_drops_the_open_file_first() {
     // 戻らない呼び出しで終わる経路で消費しない `File` は、引数を評価した後、呼び出しの直前に手放す。`unr` の `s` は
     // 手放さない (docs/spec/core-ir.md の「戻らない呼び出しの前の `drop`」)。所有の段の検査まで通す
-    let text = "import Fs\nmain : Unit -> <IO, Panic> Unit\nmain () =\n  let f = Fs.open \"a\"\n  let s = \"b\"\n  exit (1 + 1)";
+    let text = "import FileIn\nmain : Unit -> <IO, Panic> Unit\nmain () =\n  let f = FileIn.open \"a\"\n  let s = \"b\"\n  exit (1 + 1)";
     let ir = core_text(text, Pass::Translate);
     insta::assert_snapshot!(function(&ir, "main"), @r#"
     fn main(p.0: unit) -> unit {
       let s.1: obj = const "a"
-      let t.2: obj lin = extern Std.Fs.open(s.1)
+      let t.2: obj lin = extern Std.FileIn.open(s.1)
       let s.3: obj = const "b"
       let t.4: int = extern "Prelude.Num Int.+"(1, 1)
       let u.5: unit = drop t.2
@@ -3659,7 +3659,7 @@ fn a_nested_uniform_leaf_is_not() {
 /// `Lin` のフィールドを持つ型も構造体にする。構造体の値は `Lin` のまま移す。
 #[test]
 fn a_lin_field_is_allowed() {
-    let text = "import Fs (File)\n\ndata Handle = | Handle Int File\n\nclose_it : Handle -> <IO> Unit\nclose_it (Handle _ f) = Fs.close f\n\nmain : Unit -> <IO> Unit\nmain () =\n  Fs.write_text \"h.txt\" \"x\"\n  close_it (Handle 1 (Fs.open \"h.txt\"))";
+    let text = "import FileIn (FileIn)\nimport Fs\n\ndata Handle = | Handle Int FileIn\n\nclose_it : Handle -> <IO> Unit\nclose_it (Handle _ f) = FileIn.close f\n\nmain : Unit -> <IO> Unit\nmain () =\n  Fs.write_text \"h.txt\" \"x\"\n  close_it (Handle 1 (FileIn.open \"h.txt\"))";
     let shown = core_text(text, Pass::Translate);
     assert_eq!(repr_of(&shown, "close_it", "p"), "Handle{int, obj lin} lin");
 }

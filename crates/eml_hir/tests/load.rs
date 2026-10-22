@@ -291,20 +291,22 @@ static FAKE_FS: LazyLock<String> = LazyLock::new(|| {
 });
 
 fn fake_std() -> Vec<(&'static str, &'static str)> {
-    let [string, bytes, list] = fs_imports();
+    let [file_in, string, bytes, list] = fs_imports();
     vec![
         ("Prelude.em", eml_hir::PRELUDE_SOURCE),
         ("Fs.em", FAKE_FS.as_str()),
+        file_in,
         string,
         bytes,
         list,
     ]
 }
 
-/// 本物の `Fs` が読む標準ライブラリのモジュール。`Fs` は `String` と `Bytes` を import し、`String` は `List` を
-/// import するので、本物の `Fs` を使う偽の木にはこの3つも要る。
-fn fs_imports() -> [(&'static str, &'static str); 3] {
+/// 本物の `Fs` が読む標準ライブラリのモジュール。`Fs` は `String` と `FileIn` を import し、`FileIn` は `String` と `Bytes` を、
+/// `String` は `List` を import するので、本物の `Fs` を使う偽の木にはこの4つも要る。
+fn fs_imports() -> [(&'static str, &'static str); 4] {
     [
+        std_module("FileIn.em"),
         std_module("String.em"),
         std_module("Bytes.em"),
         std_module("List.em"),
@@ -424,6 +426,7 @@ f () = Fs.greet ()",
             "Std.Fs",
             "Std.List",
             "Std.String",
+            "Std.FileIn",
             "Std.Bytes"
         ]
     );
@@ -436,6 +439,7 @@ f () = Fs.greet ()",
             "<std>/Fs.em",
             "<std>/List.em",
             "<std>/String.em",
+            "<std>/FileIn.em",
             "<std>/Bytes.em"
         ]
     );
@@ -445,6 +449,7 @@ f () = Fs.greet ()",
             ModuleOrigin::Std,
             ModuleOrigin::User,
             ModuleOrigin::User,
+            ModuleOrigin::Std,
             ModuleOrigin::Std,
             ModuleOrigin::Std,
             ModuleOrigin::Std,
@@ -540,8 +545,9 @@ fn an_import_prefers_the_user_module_of_the_same_name() {
             "Fs",
             "Std.Fs",
             "Std.String",
-            "Std.Bytes",
-            "Std.List"
+            "Std.FileIn",
+            "Std.List",
+            "Std.Bytes"
         ]
     );
     assert_eq!(lowered.qualified_in("Main", "Fs", "greet"), Some("Fs"));
@@ -556,16 +562,16 @@ fn an_import_prefers_the_user_module_of_the_same_name() {
 #[test]
 fn a_user_module_hiding_a_std_module_suggests_the_canonical_import() {
     // help は、隠れた標準ライブラリのモジュールがその名前を定義しているときだけ付ける
-    let entry = "import Fs\n\nf : String -> <IO> Fs.File\nf p = Fs.open p\n\ng : Int\ng = Fs.nope";
-    let lowered = eml_test_support::lower_files(entry, &[("Fs.em", "")]);
+    let entry = "import FileIn\n\nf : String -> <IO> FileIn.FileIn\nf p = FileIn.open p\n\ng : Int\ng = FileIn.nope";
+    let lowered = eml_test_support::lower_files(entry, &[("FileIn.em", "")]);
     insta::assert_snapshot!(full(lowered.files(), &lowered.diagnostics), @"
-    E1002 3:20 cannot find type `File` in module `Fs`
+    E1002 3:20 cannot find type `FileIn` in module `FileIn`
       3:20 not found in this module
-      help: the standard `Fs` is hidden by your module `Fs`; `import Std.Fs as F` reaches it
-    E1001 4:7 cannot find value `open` in module `Fs`
+      help: the standard `FileIn` is hidden by your module `FileIn`; `import Std.FileIn as F` reaches it
+    E1001 4:7 cannot find value `open` in module `FileIn`
       4:7 not found in this module
-      help: the standard `Fs` is hidden by your module `Fs`; `import Std.Fs as F` reaches it
-    E1001 7:5 cannot find value `nope` in module `Fs`
+      help: the standard `FileIn` is hidden by your module `FileIn`; `import Std.FileIn as F` reaches it
+    E1001 7:5 cannot find value `nope` in module `FileIn`
       7:5 not found in this module
     ");
 }
@@ -610,8 +616,9 @@ fn a_qualifier_means_what_each_module_imports() {
             "Std.Fs",
             "B",
             "Std.String",
-            "Std.Bytes",
-            "Std.List"
+            "Std.FileIn",
+            "Std.List",
+            "Std.Bytes"
         ]
     );
     assert_eq!(lowered.qualified_in("Main", "Fs", "greet"), Some("Fs"));
@@ -635,8 +642,9 @@ fn an_import_falls_back_to_the_std_module_when_the_file_is_missing() {
             "Main",
             "Std.Fs",
             "Std.String",
-            "Std.Bytes",
-            "Std.List"
+            "Std.FileIn",
+            "Std.List",
+            "Std.Bytes"
         ]
     );
     assert_eq!(targets(&loaded, 1), [Some(2), Some(2)]);
@@ -710,7 +718,7 @@ fn private_names_of_a_std_module_are_undefined() {
 }
 
 /// 本物の `Fs` の先頭 (注釈と import) の後ろに `head` を挟んだもの。`head` の import を宣言より前に置いたまま、
-/// `File` などの宣言を残すため。`head` の1行目は `Fs.em` の `FS_HEAD_LINES + 1` 行目になる。
+/// `read_text` などの宣言を残すため。`head` の1行目は `Fs.em` の `FS_HEAD_LINES + 1` 行目になる。
 fn fs_with(head: &str) -> String {
     let fs = eml_hir::STD[1].1;
     let lines: Vec<&str> = fs.split_inclusive('\n').collect();
@@ -735,12 +743,13 @@ const FS_HEAD_LINES: usize = 6;
 
 #[test]
 fn a_std_module_reaches_another_only_through_an_import() {
-    let [string, bytes, list] = fs_imports();
+    let [file_in, string, bytes, list] = fs_imports();
     let other = "pub x : Int\nx = 1\n";
     let without = [
         ("Prelude.em", eml_hir::PRELUDE_SOURCE),
         ("Fs.em", &fs_with("pub f : Unit -> Int\nf () = Other.x\n")),
         ("Other.em", other),
+        file_in,
         string,
         bytes,
         list,
@@ -758,6 +767,7 @@ fn a_std_module_reaches_another_only_through_an_import() {
             &fs_with("import Other\n\npub f : Unit -> Int\nf () = Other.x\n"),
         ),
         ("Other.em", other),
+        file_in,
         string,
         bytes,
         list,
@@ -773,9 +783,10 @@ fn a_std_module_reaches_another_only_through_an_import() {
             "Main",
             "Std.Fs",
             "Std.String",
-            "Std.Bytes",
+            "Std.FileIn",
             "Std.Other",
-            "Std.List"
+            "Std.List",
+            "Std.Bytes"
         ]
     );
     assert_eq!(targets(&lowered.loaded, 2), [Some(3), Some(4), Some(5)]);
@@ -784,7 +795,7 @@ fn a_std_module_reaches_another_only_through_an_import() {
 
 #[test]
 fn a_std_module_reaches_another_by_its_canonical_name_too() {
-    let [string, bytes, list] = fs_imports();
+    let [file_in, string, bytes, list] = fs_imports();
     let other = "pub x : Int\nx = 1\n";
     let std = [
         ("Prelude.em", eml_hir::PRELUDE_SOURCE),
@@ -793,6 +804,7 @@ fn a_std_module_reaches_another_by_its_canonical_name_too() {
             &fs_with("import Std.Other\n\npub f : Unit -> Int\nf () = Other.x\n"),
         ),
         ("Other.em", other),
+        file_in,
         string,
         bytes,
         list,
@@ -806,7 +818,7 @@ fn a_std_module_reaches_another_by_its_canonical_name_too() {
 
 #[test]
 fn a_std_module_cannot_import_the_prelude() {
-    let [string, bytes, list] = fs_imports();
+    let [file_in, string, bytes, list] = fs_imports();
     // 標準ライブラリのモジュールも Prelude を暗黙に取り込むので、書いた `import Prelude` は誤りである
     let std = [
         ("Prelude.em", eml_hir::PRELUDE_SOURCE),
@@ -814,6 +826,7 @@ fn a_std_module_cannot_import_the_prelude() {
             "Fs.em",
             &fs_with("import Prelude\nimport Std.Prelude as P\n"),
         ),
+        file_in,
         string,
         bytes,
         list,
@@ -848,8 +861,9 @@ fn a_std_directory_in_the_user_root_is_never_read() {
             "Main",
             "Std.Fs",
             "Std.String",
-            "Std.Bytes",
-            "Std.List"
+            "Std.FileIn",
+            "Std.List",
+            "Std.Bytes"
         ]
     );
     assert_eq!(loaded.files.text(loaded.prelude), eml_hir::PRELUDE_SOURCE);

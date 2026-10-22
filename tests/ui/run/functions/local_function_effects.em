@@ -1,7 +1,7 @@
 -- ローカル関数と代数的効果の組み合わせを確かめる。純粋な関数を handle の中と外から呼ぶ形、自分が handler を張る再帰、
 -- `multi` の handler の中で純粋な関数を呼んでも `File` を持てること、節の中で `k` を捕まえる関数。
 -- (docs/spec/core-ir.md の「ローカル関数の持ち上げ」)
-import Fs
+import FileIn
 
 effect Ask where
   ask : Unit -> Int
@@ -42,11 +42,11 @@ clause_captures_k () =
 
 pure_under_multi : Unit -> <IO, Panic> Unit
 pure_under_multi () =
-  let f = Fs.open "input.txt"
+  let f = FileIn.open "input.txt"
   let double n = n + n
   let b = handle (if choose () then double 1 else double 2) with
     | ctl choose () k -> double (k True) + double (k False)
-  Fs.close f
+  FileIn.close f
   println (show b)
 
 recursive_resuming_k_twice : Unit -> <Panic> Int

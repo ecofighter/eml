@@ -1,18 +1,18 @@
 -- `Lin` のフィールドを持つ構造体。`Reader` は `File` と `Int` の 2 語の構造体で、`Lin` のまま関数の引数と結果を渡り、
 -- 最後に1回だけ閉じる。展開しない関数 (再帰する `skip`) に通す形も通す
 -- (docs/spec/core-ir.md の「構造体にする型」)。
-import Fs
+import FileIn
 import String
 
 data Reader =
-  | Reader Fs.File Int
+  | Reader FileIn.FileIn Int
 
 open_reader : String -> <IO> Reader
-open_reader path = Reader (Fs.open path) 0
+open_reader path = Reader (FileIn.open path) 0
 
 read_once : Reader -> <IO, Panic> (Reader, String)
 read_once (Reader f n) =
-  let (text, f) = Fs.read_all f
+  let (text, f) = FileIn.read_all f
   (Reader f (n + 1), text)
 
 skip : Int -> Reader -> <Panic> Reader
@@ -22,7 +22,7 @@ skip k r = if k == 0 then r else
 
 close_reader : Reader -> <IO> Int
 close_reader (Reader f n) =
-  Fs.close f
+  FileIn.close f
   n
 
 main : Unit -> <IO, Panic> Unit

@@ -2,17 +2,18 @@
 -- `Iter.take` が残りを捨てると `File` も閉じる。閉じなければ checked mode の漏れの検査で落ちる
 import Iter
 import Yield (Yield(..))
+import FileIn
 import Fs
 
 lines : String -> Unit -> <Yield String, IO, Panic> Unit
 lines path () =
   let go file =
-    match Fs.read_line file with
-      | (None, file) -> Fs.close file
+    match FileIn.read_line file with
+      | (None, file) -> FileIn.close file
       | (Some line, file) ->
         yield line
         go file
-  go (Fs.open path)
+  go (FileIn.open path)
 
 main : Unit -> <IO, Panic> Unit
 main () =

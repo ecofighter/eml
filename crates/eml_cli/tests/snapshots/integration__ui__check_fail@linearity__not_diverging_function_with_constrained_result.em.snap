@@ -6,7 +6,7 @@ input_file: tests/ui/check-fail/linearity/not_diverging_function_with_constraine
 [E3003] Error: `f` must be used exactly once, but it is not used
     ╭─[ check-fail/linearity/not_diverging_function_with_constrained_result.em:15:7 ]
     │
- 15 │   let f = Fs.open "input.txt"
+ 15 │   let f = FileIn.open "input.txt"
     │       ┬  
     │       ╰── `f` is bound here
  16 │   mk ()

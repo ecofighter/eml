@@ -1,6 +1,6 @@
 -- 内側の handler の状態が `File` で、本体が外側の once の操作を起こす。`prompt$` はほかの宛先の yield (状態 3) として状態を
 -- 取り出し、`rewind$` のクロージャに入れる。再開すれば `return` の節が閉じ、`drop k` ならクロージャの解放で閉じる。
-import Fs
+import FileIn
 
 effect Tick where
   tick : Unit -> Unit
@@ -17,10 +17,10 @@ body () =
 
 inner : Unit -> <Ask, IO> Int
 inner () =
-  handle body () from Fs.open "input.txt" with
+  handle body () from FileIn.open "input.txt" with
     | ctl tick () k f -> k () f
     | return x f ->
-        Fs.close f
+        FileIn.close f
         x
 
 main : Unit -> <IO> Unit

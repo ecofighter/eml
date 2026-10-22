@@ -14,16 +14,19 @@ fn check_with_prelude(extra: &str, text: &str) -> String {
     check_with_std_extras(extra, "", text)
 }
 
-/// `check_with_prelude` に加えて `Fs` の末尾にも `fs_extra` を足す。`File` は `Fs` の中にあるので、`File` を使う
-/// 関数は Prelude に足せず、`Fs` に足す。
-fn check_with_std_extras(prelude_extra: &str, fs_extra: &str, text: &str) -> String {
+/// `check_with_prelude` に加えて `FileIn` の末尾にも `file_in_extra` を足す。`FileIn` は `FileIn` の中にあるので、
+/// `FileIn` を使う関数は Prelude に足せず、`FileIn` に足す。
+fn check_with_std_extras(prelude_extra: &str, file_in_extra: &str, text: &str) -> String {
     let prelude = format!("{}\n{prelude_extra}", eml_hir::PRELUDE_SOURCE);
-    let fs = format!("{}\n{fs_extra}", eml_hir::STD[1].1);
-    // 本物の `Fs` は `String` と `Bytes` を import し、`String` は `List` を import する
+    let file_in = format!(
+        "{}\n{file_in_extra}",
+        eml_test_support::std_module("FileIn.em").1
+    );
+    // 本物の `FileIn` は `String` と `Bytes` を import し、`String` は `List` を import する
     let checked = eml_test_support::check_with_std(
         &[
             ("Prelude.em", &prelude),
-            ("Fs.em", &fs),
+            ("FileIn.em", &file_in),
             eml_test_support::std_module("String.em"),
             eml_test_support::std_module("Bytes.em"),
             eml_test_support::std_module("List.em"),
@@ -48,11 +51,11 @@ fn shown(files: &SourceFiles, label: &Label) -> String {
 
 #[test]
 fn a_linear_misuse_in_a_std_module_points_into_that_module() {
-    let fs_extra = "pub held : Unit -> <Choice, IO> Unit\nheld () =\n  let f = open \"a.txt\"\n  let b = choose ()\n  close f\n";
-    insta::assert_snapshot!(check_with_std_extras(CHOICE, fs_extra, "import Std.Fs"), @r#"
+    let file_in_extra = "pub held : Unit -> <Choice, IO> Unit\nheld () =\n  let f = open \"a.txt\"\n  let b = choose ()\n  close f\n";
+    insta::assert_snapshot!(check_with_std_extras(CHOICE, file_in_extra, "import Std.FileIn"), @r#"
     E3006 `f` must be used exactly once, but it is kept alive across a call that may resume more than once
-      <std>/Fs.em "choose ()" this call may perform `choose`, a `multi` operation
-      <std>/Fs.em "f" `f` is bound here
+      <std>/FileIn.em "choose ()" this call may perform `choose`, a `multi` operation
+      <std>/FileIn.em "f" `f` is bound here
       <std>/Prelude.em "choose" `choose` is declared `multi` here
     "#);
 }
@@ -62,7 +65,7 @@ fn a_carry_over_through_a_prelude_function_points_into_the_prelude() {
     let extra = format!(
         "{CHOICE}\npub keep : a -> (Unit -> <e> Unit) -> <e> a\nkeep x action =\n  action ()\n  x\n"
     );
-    let text = "import Fs\nchooser : Unit -> <Choice> Unit\nchooser () =\n  let b = choose ()\n  ()\n\nkept : Unit -> <Choice, IO> Unit\nkept () =\n  let f = Fs.open \"a.txt\"\n  let g = keep f chooser\n  Fs.close g";
+    let text = "import FileIn\nchooser : Unit -> <Choice> Unit\nchooser () =\n  let b = choose ()\n  ()\n\nkept : Unit -> <Choice, IO> Unit\nkept () =\n  let f = FileIn.open \"a.txt\"\n  let g = keep f chooser\n  FileIn.close g";
     insta::assert_snapshot!(check_with_prelude(&extra, text), @r#"
     E3006 `keep` keeps a linear value alive across a call that may resume more than once
       test.em "keep" `keep` is used here
@@ -72,11 +75,11 @@ fn a_carry_over_through_a_prelude_function_points_into_the_prelude() {
 
 #[test]
 fn linear_misuses_in_a_std_module_point_into_that_module() {
-    let fs_extra = "pub twice : File -> <IO> Unit\ntwice f =\n  close f\n  close f\n\npub dropped : File -> <IO> Unit\ndropped f = ()\n\npub discarded : File -> <IO> Unit\ndiscarded _ = ()\n";
-    let shown = check_with_std_extras("", fs_extra, "import Std.Fs");
-    // どの診断も、すべてのラベルが Fs の中を指す
+    let file_in_extra = "pub twice : FileIn -> <IO> Unit\ntwice f =\n  close f\n  close f\n\npub dropped : FileIn -> <IO> Unit\ndropped f = ()\n\npub discarded : FileIn -> <IO> Unit\ndiscarded _ = ()\n";
+    let shown = check_with_std_extras("", file_in_extra, "import Std.FileIn");
+    // どの診断も、すべてのラベルが FileIn の中を指す
     for line in shown.lines().filter(|line| line.starts_with("  ")) {
-        assert!(line.starts_with("  <std>/Fs.em "), "{shown}");
+        assert!(line.starts_with("  <std>/FileIn.em "), "{shown}");
     }
     for code in ["E3002", "E3003", "E3004"] {
         assert!(shown.contains(code), "{code}\n{shown}");
@@ -86,7 +89,7 @@ fn linear_misuses_in_a_std_module_point_into_that_module() {
 #[test]
 fn a_carry_over_through_a_composition_points_into_the_prelude() {
     // `>>` の本体は `g` を持ったまま `f` を呼ぶので、線形な `g` を `multi` の `f` と合成すると E3006 になる
-    let text = "import Fs\nchooser : Unit -> <Choice> Unit\nchooser () =\n  let b = choose ()\n  ()\n\ncomposed : Unit -> <Choice, IO> Unit\ncomposed () =\n  let h = Fs.open \"a.txt\"\n  let k = chooser >> (fn u -> Fs.close h)\n  k ()";
+    let text = "import FileIn\nchooser : Unit -> <Choice> Unit\nchooser () =\n  let b = choose ()\n  ()\n\ncomposed : Unit -> <Choice, IO> Unit\ncomposed () =\n  let h = FileIn.open \"a.txt\"\n  let k = chooser >> (fn u -> FileIn.close h)\n  k ()";
     let shown = check_with_prelude(CHOICE, text);
     assert!(shown.starts_with("E3006 "), "{shown}");
     assert!(shown.contains("  test.em \">>\" "), "{shown}");

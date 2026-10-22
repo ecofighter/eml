@@ -203,14 +203,14 @@ fn a_nested_pattern_releases_from_the_parent_down() {
 fn a_file_taken_out_of_a_tuple_is_neither_dupped_nor_decreffed() {
     // 読みは `File` を借りて結果と `File` の組を返し、組は最適化で消える。`File` は `Lin` なので、`dup` も `decref` も
     // 入らずに、借りる読みの後で `close` に1回だけ渡る
-    let text = "import Fs\nmain : Unit -> <IO> Unit\nmain () =\n  let f = Fs.open \"input.txt\"\n  let (first, f) = Fs.read_all f\n  let (rest, f) = Fs.read_all f\n  Fs.close f\n  println first\n  println (\"[\" ++ rest ++ \"]\")";
+    let text = "import FileIn\nmain : Unit -> <IO> Unit\nmain () =\n  let f = FileIn.open \"input.txt\"\n  let (first, f) = FileIn.read_all f\n  let (rest, f) = FileIn.read_all f\n  FileIn.close f\n  println first\n  println (\"[\" ++ rest ++ \"]\")";
     insta::assert_snapshot!(function(&lir_text(text, eml_lir::Pass::Perceus), "entry$main"), @r#"
     fn entry$main() -> unit {
       let s.1: obj = const "input.txt"
-      let t.2: obj lin = extern Std.Fs.open(s.1)
-      let t.3: obj = extern Std.Fs.read_all(t.2)
-      let t.4: obj = extern Std.Fs.read_all(t.2)
-      let t.5: unit = extern Std.Fs.close(t.2)
+      let t.2: obj lin = extern Std.FileIn.open(s.1)
+      let t.3: obj = extern Std.FileIn.read_all(t.2)
+      let t.4: obj = extern Std.FileIn.read_all(t.2)
+      let t.5: unit = extern Std.FileIn.close(t.2)
       let t.6: unit = extern Prelude.println(t.3)
       let s.7: obj = const "["
       let s.8: obj = const "]"

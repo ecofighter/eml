@@ -618,7 +618,7 @@ fn a_field_is_released_from_a_dead_owner_without_a_dup() {
 layout W { W(obj, int) }
 fn f(w.0: obj lin) -> unit {
   unpack w.0 W #0(h.1: obj lin, n.2: int)
-  let u.3: unit = extern Std.Fs.close(h.1)
+  let u.3: unit = extern Std.FileIn.close(h.1)
   return u.3
 }
 ",
@@ -629,7 +629,7 @@ fn f(w.0: obj lin) -> unit {
     fn f(w.0: obj lin) -> unit {
       unpack w.0 W #0(h.1: obj lin, n.2: int)
       release w.0 W #0(h.1, _)
-      let u.3: unit = extern Std.Fs.close(h.1)
+      let u.3: unit = extern Std.FileIn.close(h.1)
       return u.3
     }
     ");

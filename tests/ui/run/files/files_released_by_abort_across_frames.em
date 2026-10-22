@@ -1,14 +1,14 @@
 -- A `never` operation aborts through several frames that each hold a file; every file is released once.
-import Fs
+import FileIn
 
 effect Fail where
   never fail : String -> a
 
 deep : Int -> <Fail, IO, Panic> Int
 deep n =
-  let f = Fs.open "input.txt"
+  let f = FileIn.open "input.txt"
   let r = if n == 0 then fail "stop" else deep (n - 1) + 1
-  Fs.close f
+  FileIn.close f
   r
 
 main : Unit -> <IO, Panic> Unit

@@ -2750,10 +2750,8 @@ fn passes_until_checks_its_input() {
 // 印: V1、V2、作る所の検査 (docs/spec/lir.md の「Kind の印の検査」)
 
 /// `File` を受けて閉じる関数と、`File` を返す関数。
-const TAKES_LIN: &str =
-    "fn g(h.0: obj lin) -> unit {\n  let u.1: unit = extern Std.Fs.close(h.0)\n  return u.1\n}\n";
-const GIVES_LIN: &str =
-    "fn h(s.0: obj) -> obj lin {\n  let f.1: obj lin = extern Std.Fs.open(s.0)\n  return f.1\n}\n";
+const TAKES_LIN: &str = "fn g(h.0: obj lin) -> unit {\n  let u.1: unit = extern Std.FileIn.close(h.0)\n  return u.1\n}\n";
+const GIVES_LIN: &str = "fn h(s.0: obj) -> obj lin {\n  let f.1: obj lin = extern Std.FileIn.open(s.0)\n  return f.1\n}\n";
 
 /// `File` を受けて返す操作と、`unr` の値を受けて返す操作。
 const LIN_OPS: &str = "effect L { take(tobj lin) -> tobj lin, ask(unit) -> tobj }\n";
@@ -2823,14 +2821,14 @@ fn v2_rejects_passing_lin_to_unr_at_each_boundary() {
             "argument 0 of a closure of `k` is `s.0` (lin), but the function takes unr",
         ),
         (
-            "fn f(s.0: obj lin) -> unit {\n  let u.1: unit = extern Std.Fs.open(s.0)\n  return u.1\n}\n"
+            "fn f(s.0: obj lin) -> unit {\n  let u.1: unit = extern Std.FileIn.open(s.0)\n  return u.1\n}\n"
                 .to_string(),
-            "argument 0 of `Std.Fs.open` is `s.0` (lin), but the extern takes unr",
+            "argument 0 of `Std.FileIn.open` is `s.0` (lin), but the extern takes unr",
         ),
         (
-            "fn f(s.0: obj) -> obj {\n  let h.1: obj = extern Std.Fs.open(s.0)\n  return h.1\n}\n"
+            "fn f(s.0: obj) -> obj {\n  let h.1: obj = extern Std.FileIn.open(s.0)\n  return h.1\n}\n"
                 .to_string(),
-            "`h.1` (unr) is bound to `Std.Fs.open`, which returns lin",
+            "`h.1` (unr) is bound to `Std.FileIn.open`, which returns lin",
         ),
         (
             "fn f(w.0: tobj lin) -> unit {\n  let u.1: unit = prim evv_set(w.0)\n  return u.1\n}\n"
@@ -2883,7 +2881,7 @@ fn v2_lets_unr_pass_to_lin_at_each_boundary() {
         format!("fn f(s.0: obj) -> obj lin {{\n  let t.1: obj lin = call h(s.0)\n  return t.1\n}}\n{GIVES_UNR}"),
         format!("fn f(s.0: obj) -> obj lin {{\n  tail call h(s.0)\n}}\n{GIVES_UNR}"),
         "fn f(s.0: obj) -> tobj lin {\n  let c.1: tobj lin = closure k(s.0)\n  return c.1\n}\nfn k(a.0: obj lin, b.1: unit) -> tobj lin {\n  return a.0\n}\n".to_string(),
-        "fn f(s.0: obj) -> unit {\n  let u.1: unit = extern Std.Fs.close(s.0)\n  return u.1\n}\n".to_string(),
+        "fn f(s.0: obj) -> unit {\n  let u.1: unit = extern Std.FileIn.close(s.0)\n  return u.1\n}\n".to_string(),
         "fn f() -> tobj lin {\n  let w.0: tobj lin = prim evv_get()\n  return w.0\n}\n".to_string(),
         format!("{LIN_OPS}fn f(c.0: tobj, e.1: obj, x.2: tobj) -> tobj lin {{\n  let t.3: tobj lin = clause L.take c.0(e.1, x.2)\n  return t.3\n}}\n"),
     ] {
@@ -2972,8 +2970,7 @@ fn v2_runs_only_on_jump_and_return_at_the_lowered_level() {
         "fn f(s.0: obj) -> unit {{\n  let u.1: unit = call g(s.0)\n  return u.1\n}}\n{TAKES_LIN}"
     );
     assert_eq!(check_lowered(&call), Ok(()));
-    let extern_arg =
-        "fn f(s.0: obj) -> unit {\n  let u.1: unit = extern Std.Fs.close(s.0)\n  return u.1\n}\n";
+    let extern_arg = "fn f(s.0: obj) -> unit {\n  let u.1: unit = extern Std.FileIn.close(s.0)\n  return u.1\n}\n";
     assert_eq!(check_lowered(extern_arg), Ok(()));
     assert_eq!(
         check_lowered(

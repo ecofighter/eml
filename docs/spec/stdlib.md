@@ -71,9 +71,9 @@ try_io action =
 
 | `Fault` | 起こす関数 | `kind` |
 |---|---|---|
-| `Io { reason, .. }` | `Fs.open`、`Fs.read_all`、`Fs.read_line`、`Fs.read_text`、`Fs.read_all_bytes`、`Fs.read_line_bytes`、`Fs.read_chunk`、`Fs.write_text`、`Proc.run` | `reason` が `NotFound` なら `NotFound`、`PermissionDenied` なら `PermissionDenied`、`NotAvailable` なら `NotAvailable`、`Other` なら `Other` |
+| `Io { reason, .. }` | `FileIn.open`、`FileIn.read_all`、`FileIn.read_line`、`Fs.read_text`、`FileIn.read_all_bytes`、`FileIn.read_line_bytes`、`FileIn.read_chunk`、`Fs.write_text`、`Proc.run` | `reason` が `NotFound` なら `NotFound`、`PermissionDenied` なら `PermissionDenied`、`NotAvailable` なら `NotAvailable`、`Other` なら `Other` |
 | `Stdin(reason)` | `Stdin.read_text` と、`Stdin` のハンドルの読み (`read_all`、`read_line`、`read_all_bytes`、`read_line_bytes`、`read_chunk`) | 同上 |
-| `NotUtf8(_)` | `Fs.read_all`、`Fs.read_line`、`Fs.read_text`、`Stdin.read_text`、`Stdin.read_all`、`Stdin.read_line`、`Env.args`、`Env.get` | `NotUtf8` |
+| `NotUtf8(_)` | `FileIn.read_all`、`FileIn.read_line`、`Fs.read_text`、`Stdin.read_text`、`Stdin.read_all`、`Stdin.read_line`、`Env.args`、`Env.get` | `NotUtf8` |
 
 書き出しの失敗 (`Output`) を捕まえないのは、標準出力をまとめて書くためである ([オブジェクトモデル](object-model.md) の「Host」)。書けなかったことが分かるのは、後でバッファがあふれた `println` か、読みや起動の前の書き出しか、プログラムの終わりの書き出しになる。そのため、`try_io (fn () -> println s)` は書けなくても `Ok` を返しうるし、関係のない別の `try_io` が失敗を受け取りうる。どこで捕まるかが決まらないので、実行時エラーのままにする。
 
@@ -179,7 +179,7 @@ pub while : (Unit -> <e> Bool) -> (Unit -> <e> Unit) -> <e> Unit
 - `lines s` は、Rust の `str::lines` と同じである。行の終わりは `\n` か `\r\n` で、最後の行の終わりは省ける。`lines "a\r\nb\n"` は `["a", "b"]`、`lines "a\r"` は `["a\r"]`、`lines ""` は `[]` である
 - `join sep xs` は、要素の間に `sep` を挟んでつなぐ
 - `trim s` は、両端の ASCII の空白 (空白、`\t`、`\n`、`\x0B`、`\x0C`、`\r`) を除く。Unicode の空白は除かない
-- `trim_line_end s` は、最後の行の終わり (`\n` か `\r\n`) を1つ除く。行の終わりで終わらなければ `s` をそのまま返し、`trim_line_end ""` は `""` である。`Stdin.read_line` と `Fs.read_line` が、読んだ行の終わりを除くのに使う
+- `trim_line_end s` は、最後の行の終わり (`\n` か `\r\n`) を1つ除く。行の終わりで終わらなければ `s` をそのまま返し、`trim_line_end ""` は `""` である。`Stdin.read_line` と `FileIn.read_line` が、読んだ行の終わりを除くのに使う
 - `to_int s` は、Rust の `i64::from_str` と同じ形を読む。省略できる符号 `+` か `-` の後に、1つ以上の ASCII の数字が続く形である。空白は許さない。範囲を超えれば `None` で、`"-9223372036854775808"` は読める
 - `byte_length` と `join` のほかの関数は、`byte_at`、`slice`、std の中だけの `find_from` か算術を使うので、型の上では `Panic` を起こしうる
 - 部分文字列の照合は、`needle` の先頭のバイトを8バイトずつまとめて探し、見つけた位置ごとに残りを比べる。最悪の場合は、`needle` の長さと探す範囲の長さの積に比例する時間がかかる ([オブジェクトモデル](object-model.md) の「extern」)
@@ -294,7 +294,7 @@ pub while : (Unit -> <e> Bool) -> (Unit -> <e> Unit) -> <e> Unit
 - `show b` は `Bytes [1, 2, 3]` の形で、要素は `Byte` の `display` の数である (`u8` を付けない)。空は `Bytes []` である。Prelude にあるので、`Std.Bytes` を import しなくても使える
 - `find needle b` は、`needle` が最初に現れる位置である。空の `needle` は `Some 0` である。照合は `String` の `find` と同じで、最悪の場合は `needle` の長さと探す範囲の長さの積に比例する時間がかかる
 - `find_byte x b` は、`x` が最初に現れる位置である。8バイトずつまとめて比べるので、1バイトずつ `get` で読むループより速い
-- `trim_line_end b` は、最後の行の終わり (`\n` か `\r\n`) を1つ除く。行の終わりで終わらなければ `b` をそのまま返す。`length`、`get`、`truncate` の上に書いてあるので、`b` が一意なら長さだけを書き換え、写さない。`Fs.read_line_bytes` が、読んだ行の終わりを除くのに使う
+- `trim_line_end b` は、最後の行の終わり (`\n` か `\r\n`) を1つ除く。行の終わりで終わらなければ `b` をそのまま返す。`length`、`get`、`truncate` の上に書いてあるので、`b` が一意なら長さだけを書き換え、写さない。`FileIn.read_line_bytes` が、読んだ行の終わりを除くのに使う
 - 範囲の外の文言は、[LIR](lir.md) の「実行時エラー」にある
 
 ## `Std.Array`
@@ -354,12 +354,12 @@ pub while : (Unit -> <e> Bool) -> (Unit -> <e> Unit) -> <e> Unit
 
 ## ハンドル
 
-`Stdin.Stdin` と `Fs.File` は読むためのハンドルで、`Stdout.Stdout` と `Stderr.Stderr` は書くためのハンドルである。
+`Stdin.Stdin` と `FileIn.FileIn` は読むためのハンドルで、`Stdout.Stdout` と `Stderr.Stderr` は書くためのハンドルである。
 
 - ハンドルは線形な型 (`Lin`) で、ちょうど1回使う ([線形性](linearity.md))。`close h` は `drop h` と同じで、ハンドルを手放して閉じる
-- 読む関数はハンドルを借りて読み、結果を先に、同じハンドルを後に置いた組で返す。`Stdin` と `File` は同じ名前と同じ形の読む関数を持つ (下の「`Stdin`」と「`Fs`」)
+- 読む関数はハンドルを借りて読み、結果を先に、同じハンドルを後に置いた組で返す。`Stdin` と `FileIn` は同じ名前と同じ形の読む関数を持つ (下の「`Stdin`」と「`FileIn`」)
 - 書く関数は書くデータを借り、ハンドルを受け取って同じハンドルを返す。`Stdout` と `Stderr` は同じ名前と同じ形の書く関数を持つ (下の「`Stdout` と `Stderr`」)
-- 読めるハンドルの上の汎用のコードは、読む関数を引数で渡して書く。`count_lines Stdin.read_line h 0` も `count_lines Fs.read_line f 0` も、直接書いたループと同じ費用で動く
+- 読めるハンドルの上の汎用のコードは、読む関数を引数で渡して書く。`count_lines Stdin.read_line h 0` も `count_lines FileIn.read_line f 0` も、直接書いたループと同じ費用で動く
 
   ```haskell
   count_lines : (h -> <IO, Panic> (Option String, h)) -> h -> Int -> <IO, Panic> (Int, h)
@@ -369,7 +369,7 @@ pub while : (Unit -> <e> Bool) -> (Unit -> <e> Unit) -> <e> Unit
       | (Some _, h) -> count_lines read h (n + 1)
   ```
 
-- 標準のストリームのハンドルは `Stdin.open ()`、`Stdout.open ()`、`Stderr.open ()` で開く。ストリームごとに、生きているハンドルは高々1つで、生きている間の2つ目の `open` は `Panic` (`the standard input is already open`、`the standard output is already open`、`the standard error is already open`) になる。閉じた後は、また開ける。ストリームの持ち主はいつも1人なので、読む順と書く順はプログラムの順である。持ち主を1人にするのは、`Lin` のハンドルに標準のストリームを持つ意味を与え、標準入力と `File` が1つの読みの道を共有するためである
+- 標準のストリームのハンドルは `Stdin.open ()`、`Stdout.open ()`、`Stderr.open ()` で開く。ストリームごとに、生きているハンドルは高々1つで、生きている間の2つ目の `open` は `Panic` (`the standard input is already open`、`the standard output is already open`、`the standard error is already open`) になる。閉じた後は、また開ける。ストリームの持ち主はいつも1人なので、読む順と書く順はプログラムの順である。持ち主を1人にするのは、`Lin` のハンドルに標準のストリームを持つ意味を与え、標準入力と `FileIn` が1つの読みの道を共有するためである
 - 標準入力のハンドルは、標準入力の読み手 (64 KiB の buffer) を持つ。開くときに Host から読み手を取り、閉じるときに buffer に残ったバイトごと Host に返す。そのため、次に開いたハンドルは続きから読み、`Stdin.read_text ()` のように開いて閉じる関数を続けて呼んでも、読んでいない入力は失われない
 - 標準入力を持たない Host (REPL) でも `open` は通り、読みが I/O の失敗 (`cannot read the standard input: not available`) になる。この Host でも、生きている標準入力のハンドルは高々1つで、2つ目の `open` は `Panic` になる
 - 書くためのハンドルは buffer を持たない。Host がストリームごとに1つ持つ buffer に書き、`println` と `eprintln` も同じ buffer に書く。そのため、`close`、巻き戻し、`exit` のどれでハンドルを手放しても、書いた出力は失われない (下の「`Stdout` と `Stderr`」)
@@ -383,7 +383,7 @@ pub while : (Unit -> <e> Bool) -> (Unit -> <e> Unit) -> <e> Unit
 | `open` | 同じストリームのハンドルが生きている (`InUse`) | `Panic` (`try_panic`) |
 | `close` | なし | — |
 | `Stdin` の読み | 読めない (`Stdin(reason)`)。標準入力がなければ理由は `not available` | `IO` (`try_io`) |
-| `File` の読み | 読めない (`Io { op: Read, .. }`) | `IO` |
+| `FileIn` の読み | 読めない (`Io { op: Read, .. }`) | `IO` |
 | 文字列の読み | UTF-8 でない (`NotUtf8`)。バイト列の読みはこれで失敗しない | `IO` (`kind` は `NotUtf8`) |
 | どの読みも | 割り込み、確保量の上限 | 位置を付けた実行時エラー |
 | 書き込み (`write`、`write_string`、`write_line`、`flush`) | 書けない (`Output`) | 実行時エラー。`try_io` では捕まえない (上の「`try_io`」) |
@@ -405,9 +405,9 @@ pub while : (Unit -> <e> Bool) -> (Unit -> <e> Unit) -> <e> Unit
 `Stdin` は標準入力のハンドルの型である (上の「ハンドル」)。
 
 - `read_text ()` は、ハンドルを開いて標準入力の残りをすべて読み、閉じる。`open`、`read_all`、`close` で書いた関数である
-- 読む関数は、同じ名前の `Fs` の関数と同じ意味である (下の「`Fs`」)。`read_all` は残りをすべて読み、`read_line` は1行を読んで行の終わり (`\n` か `\r\n`) を `String.trim_line_end` で除き、終わりなら `None` を返す。行の終わりのない最後の行も1行として返す。`read_all_bytes`、`read_line_bytes`、`read_chunk` はバイト列の読みで、どのバイトも受ける
+- 読む関数は、同じ名前の `FileIn` の関数と同じ意味である (下の「`FileIn`」)。`read_all` は残りをすべて読み、`read_line` は1行を読んで行の終わり (`\n` か `\r\n`) を `String.trim_line_end` で除き、終わりなら `None` を返す。行の終わりのない最後の行も1行として返す。`read_all_bytes`、`read_line_bytes`、`read_chunk` はバイト列の読みで、どのバイトも受ける
 - `read_line` と `read_line_bytes` は、std の中だけの extern `read_line_raw` と `read_line_bytes_raw` の上に書いてある。どちらも行の終わりを含む1行を返し、終わりなら空を返す (上の「extern の境界」の番兵)
-- 読みは `Fs` と同じく、64 KiB ずつ読みながら割り込みと確保量の上限を見る
+- 読みは `FileIn` と同じく、64 KiB ずつ読みながら割り込みと確保量の上限を見る
 - REPL では、標準入力を REPL 自身が読むので、どの読みも I/O の失敗 (`cannot read the standard input: not available`) にする
 
 ## `Stdout` と `Stderr`
@@ -430,28 +430,39 @@ pub while : (Unit -> <e> Bool) -> (Unit -> <e> Unit) -> <e> Unit
 - 1回の書き込みは、extern の呼び出しと Host の呼び出しの費用を持つ。1バイトずつ出すときは、`Bytes.push` で `Bytes` を組んでから1回書く
 - 書けないとき (`Output`) は、`println` と同じく実行時エラーで、`try_io` では捕まえない。書き込みの extern は、そのときハンドルを手放す
 
+## `FileIn`
+
+| 関数 | 型 |
+|---|---|
+| `open` | `String -> <IO> FileIn` |
+| `close` | `FileIn -> <IO> Unit` |
+| `read_all` | `FileIn -> <IO> (String, FileIn)` |
+| `read_line` | `FileIn -> <IO, Panic> (Option String, FileIn)` |
+| `read_all_bytes` | `FileIn -> <IO> (Bytes, FileIn)` |
+| `read_line_bytes` | `FileIn -> <IO, Panic> (Option Bytes, FileIn)` |
+| `read_chunk` | `Bytes -> FileIn -> <IO> (Bytes, FileIn)` |
+
+`FileIn` はファイルを読むハンドルの型である (上の「ハンドル」)。`open`、`read_all`、`close` と `FileIn` の型は [エフェクトと handler](effects.md) の「組み込みの `IO`」にある。
+
+- `read_line file` は、今の位置から1行を読み、行の終わり (`\n` か `\r\n`) を `String.trim_line_end` で除いて、結果を先に、同じ `FileIn` を後に置いた組で返す。終わりなら `None` を返す。行の終わりのない最後の行も1行として返す。`Stdin.read_line` と同じである
+- `read_line` は、std の中だけの extern `read_line_raw : FileIn -> <IO> (String, FileIn)` の上に書いてある。`read_line_raw` は行の終わりを含む1行を返し、終わりなら空の文字列を返す (上の「extern の境界」の番兵)。読み方は `read_all` と同じく `FileIn` の読み手から読み、64 KiB を超える行も、割り込みと確保量の上限を見ながら読む ([オブジェクトモデル](object-model.md) の「読み手」)
+- 読めないときと UTF-8 でない行の誤りは、文言も `try_io` での捕まえ方も `read_all` と同じである ([LIR](lir.md) の「実行時エラー」)。誤りのときも `read_all` と同じく、extern は `FileIn` を手放さない。`try_io` の下では巻き戻しが手放して閉じ、実行時エラーなら実行がそこで止まる
+- バイト列の読み (`read_all_bytes`、`read_line_bytes`、`read_chunk`) は、どのバイトも受け、UTF-8 を確かめないので、`NotUtf8` で失敗しない。ほかは文字列の読みと同じで、`FileIn` を借りて、結果を先に、同じ `FileIn` を後に置いた組で返す。読めないときの誤りと、割り込みと確保量の上限の扱いも同じである
+- `read_all_bytes file` は、今の位置から終わりまでをバイト列として読む。`read_all` と同じく Rust の buffer に読んでから1回写す
+- `read_line_bytes file` は、今の位置から1行を読み、行の終わりを `Bytes.trim_line_end` で除いて返す。終わりなら `None` を返す。std の中だけの extern `read_line_bytes_raw : FileIn -> <IO> (Bytes, FileIn)` の上に書いてあり、`read_line_raw` と同じく、行の終わりを含む1行か、終わりなら空のバイト列を返す。読み手の buffer から行を直接ヒープのバイト列に写すので、1つの buffer に収まる行は1回だけ写す。64 KiB の補充をまたぐ行は、補充ごとにバイト列を伸ばし、伸ばすときに `Bytes.push` と同じく容量を倍にして作り直しうる (それまでの部分を写し直す)
+- `read_chunk buf file` は、読み手の buffer に残ったバイトを、空なら1回補充して読めたバイトを、`buf` の後ろに足して返す。終わりなら何も足さない。`buf` は消費し、`Bytes.push` と同じく、一意で容量が足りればその場で伸ばす。読みが失敗したときは `buf` を手放してから誤りを返す。1回で足すバイトは 64 KiB 以下である
+
 ## `Fs`
 
 | 関数 | 型 |
 |---|---|
 | `read_text` | `String -> <IO> String` |
 | `write_text` | `String -> String -> <IO> Unit` |
-| `read_line` | `File -> <IO, Panic> (Option String, File)` |
-| `read_all_bytes` | `File -> <IO> (Bytes, File)` |
-| `read_line_bytes` | `File -> <IO, Panic> (Option Bytes, File)` |
-| `read_chunk` | `Bytes -> File -> <IO> (Bytes, File)` |
 
-`open`、`read_all`、`close` と `File` は [エフェクトと handler](effects.md) の「組み込みの `IO`」にある。
+パスで1回に済む関数である。ハンドルを使う読みは `FileIn` にある。
 
-- `read_text path` は、ファイル全体を文字列として読む。`open`、`read_all`、`close` で書いた関数である
+- `read_text path` は、ファイル全体を文字列として読む。`FileIn.open`、`FileIn.read_all`、`FileIn.close` で書いた関数である
 - `write_text path text` は、ファイルを作るか切り詰めて、`text` を書く
-- `read_line file` は、今の位置から1行を読み、行の終わり (`\n` か `\r\n`) を `String.trim_line_end` で除いて、結果を先に、同じ `File` を後に置いた組で返す。終わりなら `None` を返す。行の終わりのない最後の行も1行として返す。`Stdin.read_line` と同じである
-- `read_line` は、std の中だけの extern `read_line_raw : File -> <IO> (String, File)` の上に書いてある。`read_line_raw` は行の終わりを含む1行を返し、終わりなら空の文字列を返す (上の「extern の境界」の番兵)。読み方は `read_all` と同じく `File` の読み手から読み、64 KiB を超える行も、割り込みと確保量の上限を見ながら読む ([オブジェクトモデル](object-model.md) の「読み手」)
-- 読めないときと UTF-8 でない行の誤りは、文言も `try_io` での捕まえ方も `read_all` と同じである ([LIR](lir.md) の「実行時エラー」)。誤りのときも `read_all` と同じく、extern は `File` を手放さない。`try_io` の下では巻き戻しが手放して閉じ、実行時エラーなら実行がそこで止まる
-- バイト列の読み (`read_all_bytes`、`read_line_bytes`、`read_chunk`) は、どのバイトも受け、UTF-8 を確かめないので、`NotUtf8` で失敗しない。ほかは文字列の読みと同じで、`File` を借りて、結果を先に、同じ `File` を後に置いた組で返す。読めないときの誤りと、割り込みと確保量の上限の扱いも同じである
-- `read_all_bytes file` は、今の位置から終わりまでをバイト列として読む。`read_all` と同じく Rust の buffer に読んでから1回写す
-- `read_line_bytes file` は、今の位置から1行を読み、行の終わりを `Bytes.trim_line_end` で除いて返す。終わりなら `None` を返す。std の中だけの extern `read_line_bytes_raw : File -> <IO> (Bytes, File)` の上に書いてあり、`read_line_raw` と同じく、行の終わりを含む1行か、終わりなら空のバイト列を返す。読み手の buffer から行を直接ヒープのバイト列に写すので、1つの buffer に収まる行は1回だけ写す。64 KiB の補充をまたぐ行は、補充ごとにバイト列を伸ばし、伸ばすときに `Bytes.push` と同じく容量を倍にして作り直しうる (それまでの部分を写し直す)
-- `read_chunk buf file` は、読み手の buffer に残ったバイトを、空なら1回補充して読めたバイトを、`buf` の後ろに足して返す。終わりなら何も足さない。`buf` は消費し、`Bytes.push` と同じく、一意で容量が足りればその場で伸ばす。読みが失敗したときは `buf` を手放してから誤りを返す。1回で足すバイトは 64 KiB 以下である
 
 ## `Proc`
 
@@ -520,7 +531,7 @@ pub effect Fail x where
 
 - `Fail` は誤りの型を引数に持つ。誤りの形はプログラムごとに違うためである (`tests/ui/run/scripts/csv2jsonl` は、終了コードと文言の組を `fail (1, "…")` と渡す)
 - `to_result action` は、`action ()` が `fail x` で止まれば `Err x` を、値 `v` を返せば `Ok v` を返す
-- `to_option action` は、誤りを捨てて `None` を返す。捨てるので、誤りの型は `Unr` でなければならない。節で誤りを `_` に束縛するので、型検査が `Unr` の制約を付け、`Fail File` のような誤りの型は E3001 になる。新しい規則は要らない
+- `to_option action` は、誤りを捨てて `None` を返す。捨てるので、誤りの型は `Unr` でなければならない。節で誤りを `_` に束縛するので、型検査が `Unr` の制約を付け、`Fail FileIn` のような誤りの型は E3001 になる。新しい規則は要らない
 - row に2つの `Fail` を並べたときは、`fail` はいつも1つ目のラベルに向かう。2つ目を名指す構文はない ([ロードマップ](../future/roadmap.md) の「言語機能と構文」)
 
 ## `State`
@@ -562,18 +573,18 @@ pub data Iter <e> a = | Iter (once Unit -> <e> Option (a, Iter <e> a))
 | `fold` | `(b -> a -> <e> b) -> b -> Iter <e> a -> <e> b` |
 | `to_list` | `Iter <e> a -> <e> List a` |
 
-- `Iter` は `once` の関数を持つので `Lin` である ([型と Kind](types.md) の「1回だけ呼べる関数の型」)。途中でやめるときは `drop` で捨てる。生産者が `File` を持っていれば、そこで閉じる
+- `Iter` は `once` の関数を持つので `Lin` である ([型と Kind](types.md) の「1回だけ呼べる関数の型」)。途中でやめるときは `drop` で捨てる。生産者が `FileIn` を持っていれば、そこで閉じる
 - コンストラクタ `Iter` も公開する。コンストラクタを隠す `pub data` (抽象型) がないためである
 - `next it` は、次の要素と残りの `Iter` の組を返し、終わりなら `None` を返す
 - `generate`、`from_list` と変換 (`map`、`filter`、`filter_map`、`take`、`zip`、`enumerate`) は、`next` を呼ぶまで何も動かさない。そのため、どれもエフェクトを起こさず、矢印に row が要らない。Python のジェネレータが `next` まで本体を動かさないのと同じである
 - `generate producer` は、生産者を `Yield` の handler で包む。名前を `from` にしないのは、`from` が `handle … from …` のキーワードだからである。`yield` の節は、受け取った値と、継続 `k` を包んだ次の `Iter` の組を返し、`return` の節は `None` を返す。`yield_all` は逆向きの変換で、`Iter` の要素を順に `yield` する
-- `take n it` は、n 個を渡した後の `next` で残りを `drop` して `None` を返す。n が 0 以下なら、最初の `next` で何も取り出さずに捨てる。`take` の `Iter` そのものを `drop` したときも、中の `Iter` は一緒に捨てられる。そのため、生産者の `File` が閉じるのは、渡し終えた次の `next` か `drop` の時点である
-- `filter p it` は、要素を `p` に渡したうえで、その要素を返す。要素を2回使うので、要素の型は `Unr` でなければならない。型検査がこの制約を付け、`File` の `Iter` に `filter` を使うと E3001 になる。`map`、`filter_map`、`take`、`zip`、`enumerate` は要素を1回だけ使うので、`Lin` の要素にも使える
+- `take n it` は、n 個を渡した後の `next` で残りを `drop` して `None` を返す。n が 0 以下なら、最初の `next` で何も取り出さずに捨てる。`take` の `Iter` そのものを `drop` したときも、中の `Iter` は一緒に捨てられる。そのため、生産者の `FileIn` が閉じるのは、渡し終えた次の `next` か `drop` の時点である
+- `filter p it` は、要素を `p` に渡したうえで、その要素を返す。要素を2回使うので、要素の型は `Unr` でなければならない。型検査がこの制約を付け、`FileIn` の `Iter` に `filter` を使うと E3001 になる。`map`、`filter_map`、`take`、`zip`、`enumerate` は要素を1回だけ使うので、`Lin` の要素にも使える
 - `zip` は、どちらかが終わったら、もう一方の残りを `drop` する。右が先に終わったときは、左から引いた要素も `drop` する。`enumerate start` は、番号を `start` から数える。行番号のように1から数える場面が多いためである
 - `each`、`fold`、`to_list` は、終わりまで `next` を呼ぶ。`fold` は左からたたみ、`to_list` は要素の順のリストを返す
 - `next` の結果を専用の型にせず `Option` の組にするのは、利用者が覚える型を `Iter` だけにするためである (Rust の `Iterator::next`、OCaml の `Seq.uncons` と同じ形)。先頭の値を先に求める形 (`| Done | More a (once Unit -> <e> Iter <e> a)`) では、作っただけで生産者が最初の `yield` まで動く
 - `Std.Iter` は `Std.Yield` を import し、`Std.Yield` は `Std.Iter` を知らない。両方向の変換 (`generate` と `yield_all`) を `Std.Iter` に置くので、依存は一方向で、push の形だけを使うプログラムは `Std.Iter` を読み込まない
-- 多回の再開ができるジェネレータ (`multi` の `yield`) は用意しない。生産者が `yield` をまたいで `Lin` の値を持てなくなり、`File` を持つ生産者を書けないためである。要る例が出たら、`Yield` の意味を変えずに別のエフェクトとして足せる
+- 多回の再開ができるジェネレータ (`multi` の `yield`) は用意しない。生産者が `yield` をまたいで `Lin` の値を持てなくなり、`FileIn` を持つ生産者を書けないためである。要る例が出たら、`Yield` の意味を変えずに別のエフェクトとして足せる
 
 `Iter` を使うときは、次の3つに注意する。
 

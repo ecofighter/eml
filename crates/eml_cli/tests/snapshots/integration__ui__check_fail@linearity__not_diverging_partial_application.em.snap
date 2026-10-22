@@ -6,7 +6,7 @@ input_file: tests/ui/check-fail/linearity/not_diverging_partial_application.em
 [E3003] Error: `f` must be used exactly once, but it is not used
     ╭─[ check-fail/linearity/not_diverging_partial_application.em:11:7 ]
     │
- 11 │   let f = Fs.open "input.txt"
+ 11 │   let f = FileIn.open "input.txt"
     │       ┬  
     │       ╰── `f` is bound here
     │ 
