@@ -4,6 +4,8 @@
 #[cfg(verus_only)]
 use vstd::utf8::valid_utf8;
 
+#[cfg(verus_only)]
+use super::super::Core;
 use super::positions::{find_byte, find_bytes};
 #[cfg(verus_only)]
 use super::positions::{found_byte, found_from};
@@ -681,8 +683,9 @@ impl<M: Mode> Ctx<M> {
         r
     }
 
-    /// `Bytes.of_string`。`s` の参照を受け取り、中身を写した新しいバイト列を返す。`s` の参照は写した後に手放す。写す
-    /// バイトは `string_bytes_copied` に数える。
+    /// `Bytes.of_string`。`s` の参照を受け取り、同じバイトのバイト列の参照を返す。`s` が一意なら、その場で種類だけを
+    /// `Bytes` に書き換えて `s` を返す。そうでなければ中身を写した新しいバイト列を返し、`s` の参照を手放す。写した
+    /// バイトだけを `string_bytes_copied` に数える (docs/spec/object-model.md の「変換」)。
     ///
     /// # Safety
     /// `bytes_push` と同じ (`s` の参照は受け取る)。速いモードでは、`s` は文字列である。
@@ -707,7 +710,17 @@ impl<M: Mode> Ctx<M> {
                 ==> {
                 &&& final(self).held_ok()
                 &&& final(self).holds(w)
-                &&& final(self).evolved_by(*old(self), |x: usize| -points(s, x), Set::empty())
+                &&& w != s ==> final(self).evolved_by(
+                    *old(self),
+                    |x: usize| -points(s, x),
+                    Set::empty(),
+                )
+                &&& w == s ==> final(self).evolved_kind(
+                    *old(self),
+                    |x: usize| 0int,
+                    Set::empty(),
+                    s,
+                )
             }),
     {
         let ghost s0 = *self;
@@ -717,6 +730,7 @@ impl<M: Mode> Ctx<M> {
         }
         self.heap.settle();
         let ghost h1 = self.heap;
+        let ghost s1 = *self;
         let hs = self.heap.header_of(s);
         proof {
             lemma_settled_twice(s0.heap);
@@ -732,6 +746,25 @@ impl<M: Mode> Ctx<M> {
                 self.lemma_words_kept(s0);
             }
             return Err(Fault::Heap(e));
+        }
+        if self.heap.core.rc_get(hs) == 1 {
+            proof {
+                lemma_unique_body(h1, s, Kind::String);
+            }
+            self.heap.set_body_kind(hs, Kind::Bytes);
+            proof {
+                self.heap.lemma_text_spec(s);
+                h1.lemma_text_spec(s);
+                if M::CHECKED {
+                    assert(self.heap.words_kept(h1));
+                    lemma_words_trans(self.heap, h1, s0.heap);
+                    self.lemma_words_kept(s0);
+                }
+                if c {
+                    self.lemma_rekinded_ok(s0, s1, s, Kind::Bytes);
+                }
+            }
+            return Ok(s);
         }
         let ghost text = h1.text_of(s);
         let len = self.heap.body_of(s).len();
@@ -778,9 +811,10 @@ impl<M: Mode> Ctx<M> {
         Ok(w)
     }
 
-    /// `String.decode`。`b` の参照を受け取り、中身が妥当な UTF-8 なら、写した新しい文字列を返す。妥当でなければ
-    /// 最初の妥当でない位置を持つ `Fault::Utf8` を返す。どちらでも `b` の参照は手放す。確かめは T5 の `utf8_valid` が
-    /// し、写すバイトは `string_bytes_copied` に数える。
+    /// `String.decode`。`b` の参照を受け取り、中身が妥当な UTF-8 なら、同じバイトの文字列の参照を返す。`b` が一意なら、
+    /// その場で種類だけを `String` に書き換えて `b` を返す。そうでなければ写した新しい文字列を返し、`b` の参照を
+    /// 手放す。妥当でなければ `b` の参照を手放し、最初の妥当でない位置を持つ `Fault::Utf8` を返す。確かめは T5 の
+    /// `utf8_valid` がし、写したバイトだけを `string_bytes_copied` に数える (docs/spec/object-model.md の「変換」)。
     ///
     /// # Safety
     /// `bytes_push` と同じ (`b` の参照は受け取る)。
@@ -811,7 +845,17 @@ impl<M: Mode> Ctx<M> {
                 &&& r matches Ok(w) ==> {
                     &&& final(self).held_ok()
                     &&& final(self).holds(w)
-                    &&& final(self).evolved_by(*old(self), |x: usize| -points(b, x), Set::empty())
+                    &&& w != b ==> final(self).evolved_by(
+                        *old(self),
+                        |x: usize| -points(b, x),
+                        Set::empty(),
+                    )
+                    &&& w == b ==> final(self).evolved_kind(
+                        *old(self),
+                        |x: usize| 0int,
+                        Set::empty(),
+                        b,
+                    )
                 }
                 &&& r matches Err(Fault::Utf8 { .. }) ==> {
                     &&& final(self).held_ok()
@@ -828,6 +872,7 @@ impl<M: Mode> Ctx<M> {
         }
         self.heap.settle();
         let ghost h1 = self.heap;
+        let ghost s1 = *self;
         let hb = self.heap.header_of(b);
         proof {
             lemma_settled_twice(s0.heap);
@@ -863,6 +908,25 @@ impl<M: Mode> Ctx<M> {
                 }
             }
             return Err(Fault::Utf8 { at: at as i64 });
+        }
+        if self.heap.core.rc_get(hb) == 1 {
+            proof {
+                lemma_unique_body(h1, b, Kind::Bytes);
+                h1.lemma_text_spec(b);
+            }
+            self.heap.set_body_kind(hb, Kind::String);
+            proof {
+                self.heap.lemma_text_spec(b);
+                if M::CHECKED {
+                    assert(self.heap.words_kept(h1));
+                    lemma_words_trans(self.heap, h1, s0.heap);
+                    self.lemma_words_kept(s0);
+                }
+                if c {
+                    self.lemma_rekinded_ok(s0, s1, b, Kind::String);
+                }
+            }
+            return Ok(b);
         }
         let len = self.heap.body_of(b).len();
         let w = self.heap.alloc_string_room(len);
@@ -1557,6 +1621,264 @@ impl<M: Mode> Ctx<M> {
             }
         }
         Ok(x)
+    }
+}
+
+/// `checked_body` を通った rc 1 の文字列かバイト列は、このヒープの生きている物体である。塊の物体は rc 0 なので、
+/// rc 1 の物体は塊にない。
+proof fn lemma_unique_body<M: Mode>(h: Heap<M>, w: Word, kind: Kind)
+    requires
+        h.wf(),
+        h.core.model@.building is None,
+        h.readable_as(w, kind),
+        h.core.rc_of(w.bits_spec()) == 1,
+    ensures
+        h.core.dom().contains(w.bits_spec()),
+        h.core.state(w.bits_spec()) == BlockState::Live,
+        h.core.kind(w.bits_spec()) == kind,
+{
+    let b = w.bits_spec();
+    h.core.lemma_shape(b);
+    if M::CHECKED {
+        h.core.lemma_code_state(b);
+    } else {
+        h.core.lemma_readable(w);
+    }
+    reveal(Core::building_wf);
+    if !h.core.dom().contains(b) {
+        h.core.lemma_region_at(b);
+    }
+}
+
+/// `set_body_kind` の後のヒープは、`a` の種類のほかは前と同じに読める。`lin` ビット、rc、持ち主、語は変わらない。
+proof fn lemma_rekinded_same<M: Mode>(h1: Heap<M>, h0: Heap<M>, a: usize, kind: Kind)
+    requires
+        h1.rekinded(h0, a, kind),
+    ensures
+        h0.core.kind(a).has_body(),
+        forall|w: Word| #[trigger] h1.readable(w) == h0.readable(w),
+        forall|w: Word| #[trigger] h1.owned(w) == h0.owned(w),
+        forall|w: Word| #[trigger] h1.rc_value(w) == h0.rc_value(w),
+        forall|w: Word| #[trigger] h1.count_of(w) == h0.count_of(w),
+        forall|w: Word| #[trigger] h1.tag_of(w) == h0.tag_of(w),
+        forall|w: Word| #[trigger] h1.scan_of(w) == h0.scan_of(w),
+        forall|w: Word| #[trigger] h1.lin_of(w) == h0.lin_of(w),
+        forall|w: Word, i: int| #[trigger] h1.scanned_word(w, i) == h0.scanned_word(w, i),
+        forall|w: Word| w.bits_spec() != a ==> #[trigger] h1.kind_of(w) == h0.kind_of(w),
+        h1.core.kind(a) == kind,
+        forall|b: usize| #[trigger] live(h1, b) == live(h0, b),
+        forall|b: usize| #[trigger] h1.core.block(b) == h0.core.block(b),
+        forall|b: usize| #[trigger] h1.core.settled_view().ext(b) == h0.core.settled_view().ext(b),
+        forall|b: usize| #[trigger]
+            h1.core.settled_view().rc_of(b) == h0.core.settled_view().rc_of(b),
+        forall|b: usize| b != a ==> #[trigger] h1.core.perm(b) == h0.core.perm(b),
+        h1.core.perm(a).slots == h0.core.perm(a).slots,
+        h1.core.perm(a).rc == h0.core.perm(a).rc,
+        h1.core.perm(a).text == h0.core.perm(a).text,
+        h1.core.model == h0.core.model,
+        h1.core.env == h0.core.env,
+{
+    assert forall|b: usize| b != a implies #[trigger] h1.core.perm(b) == h0.core.perm(b) by {
+        if h0.core.dom().contains(b) {
+            assert(h1.core.perms@[b] == h0.core.perms@[b]);
+        }
+    }
+    assert(h1.core.settled_view() == h1.core);
+    assert(h0.core.settled_view() == h0.core);
+    assert forall|w: Word| #[trigger] h1.count_of(w) == h0.count_of(w) by {
+        if w.bits_spec() != a {
+            assert(h1.core.perm(w.bits_spec()) == h0.core.perm(w.bits_spec()));
+        }
+    }
+    assert forall|w: Word, i: int| #[trigger] h1.scanned_word(w, i) == h0.scanned_word(w, i) by {
+        if w.bits_spec() != a {
+            assert(h1.core.perm(w.bits_spec()) == h0.core.perm(w.bits_spec()));
+        }
+    }
+    assert forall|w: Word| #[trigger] h1.tag_of(w) == h0.tag_of(w) by {
+        if w.bits_spec() != a {
+            assert(h1.core.perm(w.bits_spec()) == h0.core.perm(w.bits_spec()));
+        }
+    }
+    assert forall|w: Word| w.bits_spec() != a implies #[trigger] h1.kind_of(w) == h0.kind_of(w) by {
+        assert(h1.core.perm(w.bits_spec()) == h0.core.perm(w.bits_spec()));
+    }
+    assert forall|w: Word| #[trigger] h1.scan_of(w) == h0.scan_of(w) by {
+        if w.bits_spec() != a {
+            assert(h1.core.perm(w.bits_spec()) == h0.core.perm(w.bits_spec()));
+        }
+    }
+    assert forall|w: Word| #[trigger] h1.lin_of(w) == h0.lin_of(w) by {
+        if w.bits_spec() != a {
+            assert(h1.core.perm(w.bits_spec()) == h0.core.perm(w.bits_spec()));
+        }
+    }
+    assert forall|w: Word| #[trigger] h1.rc_value(w) == h0.rc_value(w) by {
+        if w.bits_spec() != a {
+            assert(h1.core.perm(w.bits_spec()) == h0.core.perm(w.bits_spec()));
+        }
+    }
+    assert forall|w: Word| #[trigger] h1.owned(w) == h0.owned(w) by {
+        assert(h1.rc_value(w) == h0.rc_value(w));
+    }
+    assert forall|b: usize| #[trigger]
+        h1.core.settled_view().rc_of(b) == h0.core.settled_view().rc_of(b) by {
+        if b != a {
+            assert(h1.core.perm(b) == h0.core.perm(b));
+        }
+    }
+}
+
+/// `set_body_kind` の後も、`evv` のリストは同じ列のリストである。節点も evidence も入口の表も `Data` で、書き換えた
+/// 物体は前も後も文字列かバイト列なので、どの物体が `Data` かは変わらない。
+proof fn lemma_path_rekinded<M: Mode>(
+    h1: Heap<M>,
+    h0: Heap<M>,
+    a: usize,
+    kind: Kind,
+    w: Word,
+    f: nat,
+)
+    requires
+        h1.rekinded(h0, a, kind),
+        kind.has_body(),
+    ensures
+        path(h1, w, f) == path(h0, w, f),
+    decreases f,
+{
+    lemma_rekinded_same(h1, h0, a, kind);
+    assert forall|v: Word| #[trigger]
+        h1.kind_of(v) == Kind::Data <==> h0.kind_of(v) == Kind::Data by {
+        if v.bits_spec() == a {
+            assert(h0.kind_of(v) == h0.core.kind(a));
+        }
+    }
+    if w.bits_spec() != 1 && f > 0 {
+        let e = h0.scanned_word(w, 0);
+        let t = h0.scanned_word(e, 0);
+        assert(node_ok(h1, w) == node_ok(h0, w));
+        if table_ok(h0, t) {
+            assert(h1.kind_of(t) == Kind::Data);
+            assert forall|i: int| 0 <= i < h1.count_of(t) implies dupable(
+                h1,
+                #[trigger] h1.scanned_word(t, i),
+            ) by {
+                assert(dupable(h0, h0.scanned_word(t, i)));
+            }
+        }
+        if table_ok(h1, t) {
+            assert(h0.kind_of(t) == Kind::Data);
+            assert forall|i: int| 0 <= i < h0.count_of(t) implies dupable(
+                h0,
+                #[trigger] h0.scanned_word(t, i),
+            ) by {
+                assert(dupable(h1, h1.scanned_word(t, i)));
+            }
+        }
+        assert(ev_ok(h1, e) == ev_ok(h0, e));
+        lemma_path_rekinded(h1, h0, a, kind, h0.scanned_word(w, 1), (f - 1) as nat);
+    }
+}
+
+impl<M: Mode> Ctx<M> {
+    /// 一意な引数の種類をその場で書き換えた `of_string` と `decode` の、モデルが合っている道。`s1` は `settle` の後の
+    /// 文脈で、その後は引数 `a` の種類だけが変わった。参照の数も `lin` ビットも変わらないので、`Ctx` の語と `a` は
+    /// 持たれたままで、`evv` のリストもそのままである。
+    proof fn lemma_rekinded_ok(&self, s0: Ctx<M>, s1: Ctx<M>, a: Word, kind: Kind)
+        requires
+            s0.held_ok(),
+            s0.holds(a),
+            a.is_ptr_spec(),
+            s1.heap == s0.heap.settled_heap(),
+            s1.heap.consistent(),
+            s1.evv == s0.evv,
+            s1.yielding == s0.yielding,
+            s1.max_evv == s0.max_evv,
+            self.heap.rekinded(s1.heap, a.bits_spec(), kind),
+            kind.has_body(),
+            self.heap.consistent(),
+            self.evv == s0.evv,
+            self.yielding == s0.yielding,
+            self.max_evv == s0.max_evv,
+        ensures
+            self.held_ok(),
+            self.holds(a),
+            self.evolved_kind(s0, |b: usize| 0int, Set::empty(), a),
+    {
+        let h0 = s0.heap;
+        let h1 = s1.heap;
+        let h2 = self.heap;
+        let ab = a.bits_spec();
+        let z = |b: usize| 0int;
+        let none = Set::<usize>::empty();
+        // `settle` の後の文脈
+        lemma_settle_moved(h1, h0);
+        assert forall|b: usize| #[trigger] s1.need(seq![], b) > 0 implies s0.need(seq![], b) + z(b)
+            >= s1.need(seq![], b) by {
+            lemma_points_in(seq![], b);
+        }
+        s1.lemma_holds_moved(s0, seq![], seq![], z, none);
+        s1.lemma_evv_kept(s0, z, none);
+        assert forall|b: usize| #[trigger] s1.need(seq![a], b) > 0 implies s0.need(seq![a], b) + z(
+            b,
+        ) >= s1.need(seq![a], b) by {}
+        s1.lemma_holds_moved(s0, seq![a], seq![a], z, none);
+        // 種類の書き換え
+        lemma_rekinded_same(h2, h1, ab, kind);
+        assert(h2.core.settleable());
+        assert(held_word(h2, self.evv));
+        assert(held_word(h2, self.yielding.target));
+        assert(held_word(h2, self.yielding.clause));
+        assert(held_word(h2, self.yielding.cont));
+        assert(held_word(h1, seq![a][0]));
+        assert(held_word(h2, a));
+        assert(self.holds_args(seq![])) by {
+            assert forall|b: usize| #[trigger]
+                self.need(seq![], b) > 0 && h2.core.settled_view().rc_of(b)
+                    != 0 implies h2.core.settled_view().ext(b) >= self.need(seq![], b) by {
+                assert(s1.need(seq![], b) == self.need(seq![], b));
+            }
+        }
+        assert(self.holds_args(seq![a])) by {
+            let ws = seq![a];
+            assert forall|i: int| 0 <= i < ws.len() implies held_word(h2, #[trigger] ws[i]) by {}
+            assert forall|b: usize| #[trigger]
+                self.need(ws, b) > 0 && h2.core.settled_view().rc_of(b)
+                    != 0 implies h2.core.settled_view().ext(b) >= self.need(ws, b) by {
+                assert(s1.need(ws, b) == self.need(ws, b));
+            }
+        }
+        let w = self.evv;
+        let f = choose|f: nat| #[trigger] path(h1, w, f) is Some;
+        lemma_seq_of(h1, w, f);
+        lemma_path_rekinded(h2, h1, ab, kind, w, f);
+        lemma_seq_of(h2, w, f);
+        assert(listed(h2, w, self.max_evv));
+        // `settle` と種類の書き換えをつなぐ
+        let v0 = h0.core.settled_view();
+        assert forall|b: usize|
+            #![trigger live(h2, b), live(h0, b)]
+            live(h0, b) && live(h2, b) implies {
+            &&& b != ab ==> same_head(h2, h0, b)
+            &&& same_head_kind(h2, h0, b)
+            &&& h2.core.perm(b).slots == h0.core.perm(b).slots
+        } by {
+            assert(live(h1, b));
+            assert(same_head(h1, h0, b));
+            if b != ab {
+                assert(h2.core.perm(b) == h1.core.perm(b));
+            }
+        }
+        assert forall|b: usize|
+            #![trigger live(h0, b)]
+            live(h0, b) && (v0.rc_of(b) == 0 || v0.ext(b) + z(b) >= 1) implies {
+            &&& live(h2, b)
+            &&& h2.core.block(b) == h0.core.block(b)
+            &&& v0.rc_of(b) != 0 ==> h2.core.settled_view().ext(b) == v0.ext(b) + z(b)
+        } by {
+            assert(live(h1, b));
+        }
+        assert(moved_kind(h2, h0, z, none, ab));
     }
 }
 

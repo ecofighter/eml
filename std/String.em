@@ -10,10 +10,10 @@ extern find_from : String -> Int -> String -> <Panic> Int
 
 -- 借りて確かめる。`decode` は妥当でない並びで `Panic` を起こすので、先にこれで確かめる
 pub extern valid_utf8 : Bytes -> Bool
--- `Bytes` を消費して中身を写す。妥当でない UTF-8 は `Panic` になる
+-- `Bytes` を消費する。一意なら写さずに同じブロックを使い、そうでなければ中身を写す。妥当でない UTF-8 は `Panic` になる
 pub extern decode : Bytes -> <Panic> String
 
--- 妥当な UTF-8 なら `Some` で `String` に写し、そうでなければ `None` である (docs/spec/stdlib.md の「`Bytes` との変換」)
+-- 妥当な UTF-8 なら `Some` で `String` にし、そうでなければ `None` である (docs/spec/stdlib.md の「`Bytes` との変換」)
 pub from_utf8 : Bytes -> <Panic> Option String
 from_utf8 b = if valid_utf8 b then Some (decode b) else None
 

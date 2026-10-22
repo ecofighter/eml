@@ -631,7 +631,7 @@ impl Core {
         }
     }
 
-    /// `meta` を書く。モデルは替えない。これを使うのは `set_lin` だけである。
+    /// `meta` を書く。モデルは替えない。これを使うのは `set_lin` と `set_body_kind` だけである。
     #[inline]
     pub(crate) fn meta_put(&mut self, h: *mut Header, m: Meta)
         requires

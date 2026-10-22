@@ -10,7 +10,7 @@ pub extern append_slice : Int -> Int -> Bytes -> Bytes -> <Panic> Bytes
 pub extern slice : Int -> Int -> Bytes -> <Panic> Bytes
 -- 前の `n` バイトを返す。`0 <= n <= length b` で、一意なら長さだけを書き換える
 pub extern truncate : Int -> Bytes -> <Panic> Bytes
--- 中身を写す
+-- 一意なら写さずに同じブロックを使い、そうでなければ中身を写す
 pub extern of_string : String -> Bytes
 -- 探す列、開始位置、対象。開始位置以降で最初に見つかった位置で、なければ -1 である
 extern find_from : Bytes -> Int -> Bytes -> <Panic> Int

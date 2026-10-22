@@ -322,6 +322,64 @@ fn a_stdout_write_loop_does_not_dup_the_handle() {
     assert_eq!(increments(1000), increments(2000));
 }
 
+/// 1 MiB のファイルを `Fs.read_all_bytes` で読み、`String.decode` で文字列にして長さを確かめるプログラム。`keep` なら
+/// 読んだバイト列を `decode` の後でも使うので、`decode` には共有の引数が渡る。
+fn decode_read(keep: bool) -> (String, u64) {
+    let text = "abcdefgh".repeat(1 << 17);
+    let path = std::path::Path::new(env!("CARGO_TARGET_TMPDIR")).join("decode-read.txt");
+    std::fs::write(&path, &text).unwrap();
+    let n = text.len();
+    let check = if keep {
+        format!("String.byte_length s + Bytes.length b == {}", 2 * n)
+    } else {
+        format!("String.byte_length s == {n}")
+    };
+    let program = format!(
+        "main : Unit -> <IO, Panic> Unit\n\
+         main () =\n\
+         \x20 let (b, f) = Fs.read_all_bytes (Fs.open \"{}\")\n\
+         \x20 Fs.close f\n\
+         \x20 let s = String.decode b\n\
+         \x20 if {check} then println \"ok\" else println \"mismatch\"\n",
+        path.to_str().unwrap()
+    );
+    (program, n as u64)
+}
+
+#[test]
+fn decoding_a_unique_read_copies_the_input_once() {
+    // 読みは読み手の buffer から1回写す。一意なバイト列の `decode` は種類だけを書き換えるので写さず、共有なら写す
+    // (docs/spec/object-model.md の「変換」)
+    let (program, n) = decode_read(false);
+    assert_eq!(stats(&program, "ok\n").string_bytes_copied, n);
+    let (program, n) = decode_read(true);
+    assert_eq!(stats(&program, "ok\n").string_bytes_copied, 2 * n);
+}
+
+#[test]
+fn converting_a_unique_string_to_bytes_copies_nothing() {
+    // `"abc" ++ "def"` は左が不死なので両辺の 6 バイトを数える。一意な結果の `of_string` は種類だけを書き換えるので
+    // 数えず、共有の文字列とリテラルは写して 6 バイトを数える (docs/spec/object-model.md の「仕事の回数」)
+    let copied = |body: &str| {
+        let program = format!(
+            "main : Unit -> <IO, Panic> Unit\n\
+             main () =\n\
+             \x20 let s = \"abc\" ++ \"def\"\n\
+             {body}"
+        );
+        stats(&program, "ok\n").string_bytes_copied
+    };
+    let unique = "  let b = Bytes.of_string s\n\
+                  \x20 if Bytes.length b == 6 then println \"ok\" else println \"mismatch\"\n";
+    let shared = "  let b = Bytes.of_string s\n\
+                  \x20 if Bytes.length b == String.byte_length s then println \"ok\" else println \"mismatch\"\n";
+    let literal = "  let b = Bytes.of_string \"abcdef\"\n\
+                   \x20 if Bytes.length b == String.byte_length s then println \"ok\" else println \"mismatch\"\n";
+    assert_eq!(copied(unique), 6);
+    assert_eq!(copied(shared), 12);
+    assert_eq!(copied(literal), 12);
+}
+
 /// handler の下の非末尾の再帰。深さごとに1回 `ask` するので、`count n` は n 回 `ask` する。evidence は `evv` の
 /// 先頭から探すので、1回の `ask` がたどる節点の数は今有効な handler の数で決まり、深さによらない
 /// (docs/spec/lir.md の「evidence を探す」)。

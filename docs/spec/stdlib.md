@@ -186,10 +186,10 @@ pub while : (Unit -> <e> Bool) -> (Unit -> <e> Unit) -> <e> Unit
 
 ### `Bytes` との変換
 
-`Bytes` から `String` への変換は、UTF-8 として妥当かを確かめて、中身を写す。`Bytes` へ写す `Bytes.of_string` は「`Bytes`」にある。
+`Bytes` から `String` への変換は、UTF-8 として妥当かを確かめる。`String` から `Bytes` への変換 `Bytes.of_string` は「`Bytes`」にある。
 
 - `valid_utf8 b` は、`b` が妥当な UTF-8 かどうかである。`b` は借りるので、確かめた後も使える
-- `decode b` は、`b` と同じバイトの `String` である。中身を写し、`b` は消費する。`b` が妥当な UTF-8 でなければ、`b` を手放して `Panic` を起こす。文言は `invalid UTF-8 at byte 3` の形で、数は最初の妥当でないバイトの位置である (下の「実行時エラー」)
+- `decode b` は、`b` と同じバイトの `String` である。`b` は消費する。`b` が一意なら写さずに同じブロックを使い、そうでなければ中身を写す。`b` が妥当な UTF-8 でなければ、`b` を手放して `Panic` を起こす。文言は `invalid UTF-8 at byte 3` の形で、数は最初の妥当でないバイトの位置である (下の「実行時エラー」)
 - `from_utf8 b` は、`b` が妥当なら `Some (decode b)`、そうでなければ `None` である。`valid_utf8` と `decode` が1回ずつ確かめるので、確かめは2回になる。`from_utf8` の型に `<Panic>` が付くのは、`decode` を呼ぶからである。`valid_utf8` で確かめた後にだけ呼ぶので、`Panic` は実際には起きない
 
 ## `Std.Float`
@@ -286,7 +286,7 @@ pub while : (Unit -> <e> Bool) -> (Unit -> <e> Unit) -> <e> Unit
 - `append_slice from to src dst` は、`dst` の後ろに、`src` の位置 `from` から `to` の手前までを足したバイト列である。`0 <= from <= to <= length src` でなければ `Panic` を起こす。`src` は借り、`dst` は消費する。`dst` が一意ならその場で伸ばす。同じ変数を `src` と `dst` に渡してもよく、そのときは参照が2つ要るので、`dst` を写す。`append_slice 0 (length b) b b` は `b` を倍にする ([LIR](lir.md) の「extern の借用」)
 - `slice from to b` は、位置 `from` から `to` の手前までを写した新しいバイト列である。`0 <= from <= to <= length b` でなければ `Panic` を起こす
 - `truncate n b` は、前の `n` バイトである。`0 <= n <= length b` でなければ `Panic` を起こす。`b` が一意ならその場で長さだけを書き換えて、容量を保つ。そうでなければ、前の部分を写す
-- `of_string s` は、`s` の中身を写したバイト列である。リテラルと共有した文字列も写す
+- `of_string s` は、`s` と同じバイトのバイト列である。`s` は消費する。`s` が一意なら写さずに同じブロックを使う。リテラルと共有した文字列は写す
 - `make n b` は、どのバイトも `b` の、長さ `n` のバイト列である。`n` が負なら `Panic` を起こす。`Limits::max_bytes` を超える長さは、確保の前に止める
 - `get i b` は、位置 `i` のバイトである。`0 <= i < length b` でなければ `Panic` を起こす。`b` は借りる
 - `set i x b` は、位置 `i` のバイトを `x` にしたバイト列である。`0 <= i < length b` でなければ `Panic` を起こす。`b` が一意ならその場で書き換え、そうでなければ写してから書き換える

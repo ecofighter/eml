@@ -2045,6 +2045,68 @@ impl<M: Mode> Heap<M> {
         }
     }
 
+    /// `set_body_kind` の後の状態。物体 `h` の `meta` の種類だけが `kind` になり、ほかは変わらない。
+    pub(super) open spec fn rekinded(&self, old: Heap<M>, h: usize, kind: Kind) -> bool {
+        &&& self.dummy == old.dummy
+        &&& self.region == old.region
+        &&& self.worker == old.worker
+        &&& self.tokens == old.tokens
+        &&& self.building == old.building
+        &&& old.core.dom().contains(h)
+        &&& old.core.state(h) == BlockState::Live
+        &&& old.core.model@.building is None
+        &&& old.core.kind(h).has_body()
+        &&& self.core.meta_changed(old.core, h)
+        &&& bits_wf(self.core.meta_bits(h))
+        &&& bits_lin(self.core.meta_bits(h)) == bits_lin(old.core.meta_bits(h))
+        &&& bits_tag(self.core.meta_bits(h)) == bits_tag(old.core.meta_bits(h))
+        &&& bits_scan(self.core.meta_bits(h)) == bits_scan(old.core.meta_bits(h))
+        &&& bits_kind(self.core.meta_bits(h)) == kind
+    }
+
+    /// 文字列かバイト列 `h` の種類を `kind` (`String` か `Bytes`) に書き換える。`meta` だけを書き、長さの語とバイト列は
+    /// 変えない。`Bytes.of_string` と `String.decode` が、一意な引数を写さずに結果にするのに使う。一意な物体はほかの
+    /// 物体から辺で指されず、ほかのスレッドも読めないので、種類を変えても誰の前提も崩れない
+    /// (docs/spec/object-model.md の「変換」)。
+    pub(super) fn set_body_kind(&mut self, h: *mut Header, kind: Kind)
+        requires
+            old(self).wf(),
+            old(self).core.model@.building is None,
+            old(self).core.dom().contains(h@.addr),
+            h == old(self).core.block(h@.addr),
+            old(self).core.state(h@.addr) == BlockState::Live,
+            old(self).core.kind(h@.addr).has_body(),
+            kind.has_body(),
+            kind == Kind::String ==> valid_utf8(old(self).core.perm(h@.addr).text()),
+        ensures
+            final(self).wf(),
+            final(self).same_tokens(*old(self)),
+            final(self).rekinded(*old(self), h@.addr, kind),
+            final(self).core.kind(h@.addr) == kind,
+            old(self).consistent() ==> final(self).consistent(),
+            forall|x: Word| #[trigger] final(self).core.word_ok(x) == old(self).core.word_ok(x),
+    {
+        let ghost s0 = *self;
+        proof {
+            s0.core.lemma_shape(h@.addr);
+        }
+        let m = self.core.meta_get(h);
+        let n = Meta::new(m.tag(), m.scan(), kind, m.lin());
+        self.core.meta_put(h, n);
+        proof {
+            let a = h@.addr;
+            m.lemma_fields();
+            n.lemma_fields();
+            self.core.lemma_meta_set(s0.core, a);
+            if s0.consistent() {
+                assert(self.core.perms@[s0.dummy.bits_spec()]
+                    == s0.core.perms@[s0.dummy.bits_spec()]);
+                assert(self.core.quiet());
+                assert(self.dummy_wf());
+            }
+        }
+    }
+
     /// バイト列 left の前の `keep` バイトを持つ、一意なバイト列を返す。left の参照を1つ受け取り、結果の参照を返す。
     /// left が一意ならその場で長さの語だけを書き、そうでなければ `keep` バイトを写した新しい物体を作ってから left を
     /// 手放す (docs/spec/object-model.md の「バイト列の操作」)。検査はみな済んでいる。

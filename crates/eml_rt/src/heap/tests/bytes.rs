@@ -620,8 +620,8 @@ fn conversions_refuse_the_wrong_kind<M: Mode>() {
     assert_eq!(mortal(ctx.heap()), 0);
 }
 
-/// 検査モードは、どちらの変換も写したバイトを `string_bytes_copied` に数える。妥当でないバイト列は何も写さない
-/// (docs/spec/object-model.md の「仕事の回数」)。
+/// 検査モードは、どちらの変換も写したバイトを `string_bytes_copied` に数える。一意な引数は種類だけを書き換えるので
+/// 数えず、妥当でないバイト列は何も写さない (docs/spec/object-model.md の「仕事の回数」)。
 fn conversions_are_counted<M: Mode>() {
     if !M::CHECKED {
         return;
@@ -638,7 +638,7 @@ fn conversions_are_counted<M: Mode>() {
         let s = ctx.heap_mut().alloc_string("日本語");
         copied(&ctx);
         let b = ctx.bytes_of_string(s).unwrap();
-        assert_eq!(copied(&ctx), 9);
+        assert_eq!(copied(&ctx), 0);
         ctx.heap_mut().dup(b).unwrap();
         let t = ctx.string_decode(b).unwrap();
         assert_eq!(copied(&ctx), 9);
@@ -655,6 +655,42 @@ fn conversions_are_counted<M: Mode>() {
         }
     }
     assert_eq!(mortal(ctx.heap()), 1);
+}
+
+/// 一意な引数の変換は、その場で種類だけを書き換えて同じ語を返す。種類が変わるので、検査モードは前の種類を求める
+/// 変換を断る。妥当でない一意なバイト列は、種類を変えずに手放す (docs/spec/object-model.md の「変換」)。
+fn unique_conversions_rewrite_the_kind<M: Mode>() {
+    let mut ctx = ctx::<M>();
+    let large = "ab日本語".repeat(300);
+    for s in ["", "abc", "日本語", large.as_str()] {
+        unsafe {
+            let w = ctx.heap_mut().alloc_string(s);
+            let b = ctx.bytes_of_string(w).unwrap();
+            assert_eq!(b, w);
+            assert_eq!(body(ctx.heap(), b), s.as_bytes());
+            if M::CHECKED {
+                assert_eq!(
+                    ctx.bytes_of_string(b),
+                    Err(Fault::Heap(HeapError::WrongKind))
+                );
+            }
+            let t = ctx.string_decode(b).unwrap();
+            assert_eq!(t, w);
+            assert_eq!(text(ctx.heap(), t), s);
+            if M::CHECKED {
+                assert_eq!(ctx.string_decode(t), Err(Fault::Heap(HeapError::WrongKind)));
+            }
+            ctx.heap_mut().decref(t).unwrap();
+        }
+    }
+    unsafe {
+        let b = ctx.heap_mut().alloc_bytes(&[b'a', 0xff]);
+        assert_eq!(ctx.string_decode(b), Err(Fault::Utf8 { at: 1 }));
+    }
+    assert_eq!(mortal(ctx.heap()), 0);
+    if M::CHECKED {
+        assert_eq!(ctx.stats().string_bytes_copied, 0);
+    }
 }
 
 /// `Bytes.empty` は長さ 0 の物体を作り、`Bytes.find_from` は最初の位置を返す。検査モードは文字列を断る。
@@ -721,4 +757,5 @@ both_modes!(
     invalid_bytes_do_not_decode,
     conversions_refuse_the_wrong_kind,
     conversions_are_counted,
+    unique_conversions_rewrite_the_kind,
 );

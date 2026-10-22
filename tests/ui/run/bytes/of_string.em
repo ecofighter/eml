@@ -1,4 +1,4 @@
--- `Bytes.of_string` は中身を写す。リテラルの `String` からも、組み立てた `String` からも作れる。
+-- `Bytes.of_string` は同じバイトのバイト列を作る。リテラルの `String` からも、組み立てた `String` からも作れる。
 main : Unit -> <IO, Panic> Unit
 main () =
   let s = "héllo" ++ "!"

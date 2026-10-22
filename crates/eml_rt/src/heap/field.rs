@@ -12,6 +12,8 @@ use super::model::{BlockState, Model, Pos, lemma_indeg_insert, lemma_indeg_remov
 use crate::meta::{Kind, bits_kind, bits_scan, bits_wf};
 #[cfg(verus_only)]
 use crate::word::Word;
+#[cfg(verus_only)]
+use vstd::utf8::valid_utf8;
 
 verus! {
 
@@ -341,8 +343,10 @@ impl Core {
         }
     }
 
-    /// 生きている物体の `meta` を、種類と scan を変えずに書いた後も、不変条件は保たれる (`set_lin`)。語とモデルは
-    /// 変わらないので、`meta` から決まる形 (走査する語の位置と数、種類の条件) が同じなら、どの述語も前と同じである。
+    /// 生きている物体の `meta` を、scan を変えずに書いた後も、不変条件は保たれる (`set_lin` と `set_body_kind`)。語と
+    /// モデルは変わらないので、`meta` から決まる形 (走査する語の位置と数、種類の条件) が同じなら、どの述語も前と同じで
+    /// ある。種類は変えないか、`String` と `Bytes` の間でだけ変える。2つは同じ形で、違うのは `String` の UTF-8 の条件
+    /// だけなので、`String` にするときはバイト列が妥当な UTF-8 であればよい (docs/spec/object-model.md の「変換」)。
     pub(crate) proof fn lemma_meta_set(&self, s0: Core, h: usize)
         requires
             s0.full() || s0.safe_wf(),
@@ -350,7 +354,10 @@ impl Core {
             s0.state(h) == BlockState::Live,
             self.meta_changed(s0, h),
             bits_wf(self.meta_bits(h)),
-            bits_kind(self.meta_bits(h)) == bits_kind(s0.meta_bits(h)),
+            bits_kind(self.meta_bits(h)) == bits_kind(s0.meta_bits(h)) || (s0.kind(h).has_body()
+                && self.kind(h).has_body() && (self.kind(h) == Kind::String ==> valid_utf8(
+                self.perm(h).text(),
+            ))),
             bits_scan(self.meta_bits(h)) == bits_scan(s0.meta_bits(h)),
         ensures
             s0.full() ==> self.full(),
@@ -358,7 +365,10 @@ impl Core {
             forall|w: Word| #[trigger] self.word_ok(w) == s0.word_ok(w),
             forall|b: usize, j: int| #[trigger] self.scanned(b, j) == s0.scanned(b, j),
             forall|b: usize| #[trigger] self.count(b) == s0.count(b),
-            forall|b: usize| #[trigger] self.kind(b) == s0.kind(b),
+            forall|b: usize| b != h ==> #[trigger] self.kind(b) == s0.kind(b),
+            bits_kind(self.meta_bits(h)) == bits_kind(s0.meta_bits(h)) ==> forall|b: usize|
+             #[trigger]
+                self.kind(b) == s0.kind(b),
             forall|b: usize| #[trigger] self.state(b) == s0.state(b),
             forall|b: usize| #[trigger] self.cap(b) == s0.cap(b),
             forall|b: usize| #[trigger] self.has(b) == s0.has(b),
@@ -374,7 +384,6 @@ impl Core {
         assert(p_extended(p) == p_extended(q));
         assert(p_first(p) == p_first(q));
         assert(p_count(p) == p_count(q));
-        assert(p_kind(p) == p_kind(q));
         assert forall|b: usize| #[trigger] self.has(b) == s0.has(b) by {}
         assert forall|b: usize, j: int| #[trigger] self.scanned(b, j) == s0.scanned(b, j) by {
             if b != h && s0.dom().contains(b) {
@@ -386,8 +395,8 @@ impl Core {
                 assert(self.perms@[b] == s0.perms@[b]);
             }
         }
-        assert forall|b: usize| #[trigger] self.kind(b) == s0.kind(b) by {
-            if b != h && s0.dom().contains(b) {
+        assert forall|b: usize| b != h implies #[trigger] self.kind(b) == s0.kind(b) by {
+            if s0.dom().contains(b) {
                 assert(self.perms@[b] == s0.perms@[b]);
             }
         }
