@@ -12,6 +12,7 @@ use super::mortal;
 use super::string::text;
 use super::table::{self, Arg, Case, EDGES, Outcome, Scratch};
 use crate::externs::*;
+use crate::heap::ctx::positions::{find_byte, find_bytes};
 use crate::{Buffering, Control, HeapError, HostRef, Limits, Mode, StdHost, Stop, Word};
 
 fn ordering(o: Order) -> i64 {
@@ -430,6 +431,201 @@ fn every_power_of_two_shows_and_reads_back() {
     }
     assert_eq!(float_repr(2f64.powi(-1017)), "7.120236347223045e-307");
     assert_eq!(float_repr(2f64.powi(89)), "6.189700196426902e+26");
+}
+
+// 信頼の一覧の T12 と T13 の値の確かめ。本体は安全な Rust で、Miri が見るメモリと借用の規則には足すものがないので、
+// `trusted` に置かない (docs/implementation/testing.md の「Miri」)
+
+/// 浮動小数の演算と `compare`。特別な値 (±0、±無限大、NaN、非正規化数) を含む組で、Rust の演算と同じビット列を返す。
+/// NaN の結果は、Rust の結果の符号と中身によらず、正の quiet NaN (`f64::NAN`) のビット列でなければならない
+#[test]
+fn float_operations_match_rust() {
+    let values = [
+        0.0,
+        -0.0,
+        1.5,
+        -2.5,
+        f64::MIN_POSITIVE,
+        5e-324,
+        f64::MAX,
+        f64::INFINITY,
+        f64::NEG_INFINITY,
+        f64::NAN,
+        -f64::NAN,
+    ];
+    let same = |got: f64, want: f64| {
+        let want = if want.is_nan() { f64::NAN } else { want };
+        assert_eq!(got.to_bits(), want.to_bits(), "{got:?} != {want:?}")
+    };
+    for a in values {
+        same(float_negate(a), -a);
+        for b in values {
+            same(float_add(a, b), a + b);
+            same(float_sub(a, b), a - b);
+            same(float_mul(a, b), a * b);
+            same(float_div(a, b), a / b);
+            same(float_rem(a, b), a % b);
+            let order = match a.total_cmp(&b) {
+                std::cmp::Ordering::Less => LT,
+                std::cmp::Ordering::Equal => EQ,
+                std::cmp::Ordering::Greater => GT,
+            };
+            assert_eq!(float_compare(a, b), order, "{a:?} {b:?}");
+        }
+    }
+}
+
+/// 浮動小数の変換、数学の関数、書式、読み。各関数が Rust の `f64` の関数と同じ値 (NaN は `f64::NAN` のビット列) を
+/// 返し、書式が Python の `repr` と `f"{x:.{n}f}"` の形で、読みが書式の結果を同じビット列に読み戻すこと
+#[test]
+fn float_conversions_and_formats_match_rust() {
+    let values = [
+        0.0,
+        -0.0,
+        0.1,
+        2.5,
+        -3.5,
+        1e16,
+        1e-5,
+        f64::MIN_POSITIVE,
+        5e-324,
+        f64::MAX,
+        f64::INFINITY,
+        f64::NEG_INFINITY,
+        f64::NAN,
+        -f64::NAN,
+    ];
+    let same = |got: f64, want: f64| {
+        let want = if want.is_nan() { f64::NAN } else { want };
+        assert_eq!(got.to_bits(), want.to_bits(), "{got:?} != {want:?}")
+    };
+    let int = |t: f64, x: f64| {
+        if (-9223372036854775808.0..9223372036854775808.0).contains(&t) {
+            Ok(t as i64)
+        } else {
+            Err(ArithFault::FloatToInt(x.to_bits()))
+        }
+    };
+    for x in values {
+        same(float_sqrt(x), x.sqrt());
+        same(float_abs(x), x.abs());
+        same(float_sin(x), x.sin());
+        same(float_cos(x), x.cos());
+        same(float_exp(x), x.exp());
+        same(float_log(x), x.ln());
+        for y in values {
+            same(float_pow(x, y), x.powf(y));
+        }
+        assert_eq!(float_truncate(x), int(x.trunc(), x));
+        assert_eq!(float_floor(x), int(x.floor(), x));
+        assert_eq!(float_ceil(x), int(x.ceil(), x));
+        assert_eq!(float_round(x), int(x.round_ties_even(), x));
+        let minus = x.is_sign_negative() && !x.is_nan();
+        assert_eq!(float_shows_minus(x), if minus { TRUE } else { FALSE });
+        let shown = float_repr(x);
+        assert_eq!(shown.starts_with('-'), minus, "{shown}");
+        let back = float_parse(&shown).unwrap();
+        same(back, x);
+        assert_eq!(
+            float_fixed(3, x),
+            if x.is_nan() {
+                "nan".to_string()
+            } else {
+                format!("{x:.3}")
+            }
+        );
+    }
+    for i in [0, 1, -1, i64::MAX, i64::MIN, (1 << 53) + 1] {
+        same(float_of_int(i), i as f64);
+    }
+    same(float_infinity(), f64::INFINITY);
+    same(float_nan(), f64::NAN);
+    assert_eq!(float_repr(1e16), "1e+16");
+    assert_eq!(float_repr(1e-5), "1e-05");
+    assert_eq!(float_repr(123456.0), "123456.0");
+    assert_eq!(float_parse(" 1_0 "), None);
+    same(float_parse("-nan").unwrap(), f64::NAN);
+}
+
+/// `find_byte` と比べる素朴なループ。
+fn naive_find_byte(hay: &[u8], from: usize, b: u8) -> Option<usize> {
+    (from..hay.len()).find(|&i| hay[i] == b)
+}
+
+/// 探すバイトの近くの値を混ぜた乱数の列。語の演算で借りが伝わる並び (`b` の直後の `b ^ 1` など) と、`b` の密な
+/// 列と疎な列ができる。
+fn bytes_near(rng: &mut table::Rng, b: u8, len: usize) -> Vec<u8> {
+    let density = [2, 8, 64][(rng.next() % 3) as usize];
+    (0..len)
+        .map(|_| {
+            let r = rng.next();
+            if r.is_multiple_of(density) {
+                b
+            } else {
+                let near = [
+                    b ^ 1,
+                    b ^ 0x80,
+                    b.wrapping_add(1),
+                    b.wrapping_sub(1),
+                    0,
+                    0xff,
+                ];
+                if r % 4 == 1 {
+                    (r >> 8) as u8
+                } else {
+                    near[((r >> 8) % 6) as usize]
+                }
+            }
+        })
+        .collect()
+}
+
+/// T13 の `find_byte` は、乱数の入力について素朴なループと同じ位置を返す。列は1つの buffer の途中から切り出し、語に
+/// 揃わない先頭からも読む。長さは 8 バイトの塊の数と残りのバイトの数のどの組も作る。
+#[test]
+fn find_byte_matches_a_naive_loop() {
+    let mut rng = table::Rng::new();
+    for _ in 0..3000 {
+        let b = rng.next() as u8;
+        let start = (rng.next() % 8) as usize;
+        let len = (rng.next() % 40) as usize;
+        let buffer = bytes_near(&mut rng, b, start + len);
+        let hay = &buffer[start..];
+        let from = (rng.next() % (len as u64 + 1)) as usize;
+        assert_eq!(
+            find_byte(hay, from, b),
+            naive_find_byte(hay, from, b),
+            "{hay:?} from {from} for {b}"
+        );
+    }
+}
+
+/// `find_from` の照合 (`find_bytes`) は `find_byte` で先頭のバイトを探す。乱数の入力について、`windows` で1つずつ
+/// 比べた位置と同じ位置を返す。
+#[test]
+fn find_byte_under_find_bytes_matches_windows() {
+    let mut rng = table::Rng::new();
+    for _ in 0..3000 {
+        let b = rng.next() as u8;
+        let len = (rng.next() % 40) as usize;
+        let text = bytes_near(&mut rng, b, len);
+        let needle_len = (rng.next() % 4) as usize;
+        let needle = bytes_near(&mut rng, b, needle_len);
+        let from = (rng.next() % (len as u64 + 1)) as usize;
+        let expected = if needle.is_empty() {
+            Some(from)
+        } else {
+            text[from..]
+                .windows(needle.len())
+                .position(|w| w == needle.as_slice())
+                .map(|i| from + i)
+        };
+        assert_eq!(
+            find_bytes(&text, &needle, from),
+            expected.map_or(-1, |i| i as i64),
+            "{needle:?} in {text:?} from {from}"
+        );
+    }
 }
 
 /// 算術の誤りは2つのレジスタで返り、`Fault` は 24 バイトに収まる。
