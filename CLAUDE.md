@@ -45,6 +45,8 @@ bench/scripts.sh                     # the scripts under tests/ui/run/scripts/ a
 bench/scripts/compare.sh --fixture wc   # a script's eml vs Python stdout and exit code on its UI-test inputs (or: compare.sh NAME ARGS... < input, compare.sh --paths EML PY ARGS... < input)
 ```
 
+The dev profile (and so `cargo test`) is opt-level 1 with debug assertions on; `--release` is only for `bench/*.sh` and the `#[ignore]` timing tests. For a debugger, build once with `CARGO_PROFILE_DEV_OPT_LEVEL=0 cargo test ...`.
+
 The full list, with the scaling tests, is in docs/implementation/testing.md の「よく使うコマンド」.
 
 ## Architecture

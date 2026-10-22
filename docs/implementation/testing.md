@@ -399,6 +399,8 @@ Prelude のリストには4つのテストがある。長さ 1000 と 2000 の�
 
 ## よく使うコマンド
 
+dev プロファイル (`cargo test` もこれを使う) は opt-level 1 で、debug assertions は有効である。`--release` は `bench/*.sh` と、`#[ignore]` を付けた時間のテストだけで使う。デバッガで局所変数が最適化で消えるときは、`CARGO_PROFILE_DEV_OPT_LEVEL=0 cargo test ...` で一度だけ opt-level 0 のビルドを作る。
+
 ```sh
 cargo test                                           # すべてのテスト
 cargo test -p eml_syntax --test integration parser::empty_file    # 1つのテスト
