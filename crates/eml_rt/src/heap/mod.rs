@@ -56,6 +56,8 @@ use vstd::shared::Shared;
 
 pub use ctx::{Ctx, CtxStats, MaskItem};
 pub use reuse::Token;
+// host.rs の文字列の行の読みも、`\n` を T13 の走査で探す (docs/spec/object-model.md の「`unsafe` の核」)
+pub(crate) use ctx::positions::find_byte;
 
 use crate::foreign::{finalizer_of, run_finalizer};
 #[cfg(verus_only)]

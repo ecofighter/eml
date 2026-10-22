@@ -17,6 +17,7 @@ use vstd::prelude::*;
 
 use crate::control::{Control, Stop, stop_reason};
 use crate::externs::{Fault, Form, IndexFault, IoOp, IoReason, StdStream, Utf8Source};
+use crate::heap::find_byte;
 #[cfg(verus_only)]
 use vstd::utf8::valid_utf8;
 
@@ -415,7 +416,7 @@ fn read_line(
 
 /// 1行の読みで `buf` から写すバイト数と、そこで行が終わるか。`\n` があればそれまで (それを含めて)、なければ全部である。
 fn line_part(buf: &[u8]) -> (usize, bool) {
-    match buf.iter().position(|&b| b == b'\n') {
+    match find_byte(buf, 0, b'\n') {
         Some(i) => (i + 1, true),
         None => (buf.len(), false),
     }

@@ -4,7 +4,7 @@
 
 use std::fmt::Write;
 
-use eml_test_support::{execute, lir, run, run_stats};
+use eml_test_support::{execute, lir, run, run_stats, run_stats_with_stdin};
 use eml_vm::RunStats;
 
 /// 正常に終わった実行の回数。生成したソースが意図どおりに走ったことを、出力でも確かめる。
@@ -214,6 +214,14 @@ fn showing_bytes_does_not_dup_per_element_and_uses_the_dedicated_instructions() 
 /// n 行のファイルをディスクに書き、そのパスと、`\r\n` を除いた行の長さの和と、ファイルの長さを返す。
 /// 行の長さは揃えない。
 fn lines_file(name: &str, n: usize) -> (String, usize, usize) {
+    let (text, trimmed) = lines_text(n);
+    let path = std::path::Path::new(env!("CARGO_TARGET_TMPDIR")).join(format!("{name}-{n}.txt"));
+    std::fs::write(&path, &text).unwrap();
+    (path.to_str().unwrap().to_string(), trimmed, text.len())
+}
+
+/// n 行のテキストと、`\r\n` を除いた行の長さの和。行の長さは揃えない。
+fn lines_text(n: usize) -> (String, usize) {
     let mut text = String::new();
     let mut trimmed = 0;
     for i in 0..n {
@@ -222,9 +230,7 @@ fn lines_file(name: &str, n: usize) -> (String, usize, usize) {
         text.push_str(&line);
         text.push_str(if i % 2 == 0 { "\r\n" } else { "\n" });
     }
-    let path = std::path::Path::new(env!("CARGO_TARGET_TMPDIR")).join(format!("{name}-{n}.txt"));
-    std::fs::write(&path, &text).unwrap();
-    (path.to_str().unwrap().to_string(), trimmed, text.len())
+    (text, trimmed)
 }
 
 /// `Fs.read_line_bytes` で `path` の行を終わりまで読み、行の長さの和が `trimmed` なら `ok` を出すプログラム。出力に
@@ -265,6 +271,55 @@ fn reading_and_trimming_bytes_lines_copies_the_input_once() {
         let stats = stats(&bytes_line_loop(&path, trimmed), "ok\n");
         assert_eq!(stats.string_bytes_copied, size as u64, "{stats:?}");
     }
+}
+
+/// `Stdin.read_line_bytes` で標準入力の行を終わりまで読み、行の長さの和が `trimmed` なら `ok` を出すプログラム。
+fn stdin_bytes_line_loop(trimmed: usize) -> String {
+    format!(
+        "go : Stdin.Stdin -> Int -> <IO, Panic> (Int, Stdin.Stdin)\n\
+         go h n =\n\
+         \x20 match Stdin.read_line_bytes h with\n\
+         \x20   | (None, h) -> (n, h)\n\
+         \x20   | (Some line, h) -> go h (n + Bytes.length line)\n\
+         \n\
+         main : Unit -> <IO, Panic> Unit\n\
+         main () =\n\
+         \x20 let (n, h) = go (Stdin.open ()) 0\n\
+         \x20 Stdin.close h\n\
+         \x20 if n == {trimmed} then println \"ok\" else println \"mismatch\"\n"
+    )
+}
+
+#[test]
+fn a_stdin_line_loop_does_not_dup_the_handle() {
+    // `Stdin` の読みも `File` と同じく、ハンドルを借りて結果を先に返す。行の数を2倍にしても `rc_increments` は
+    // 変わらない (docs/spec/lir.md の「extern の借用」)
+    let increments = |n: usize| {
+        let (text, trimmed) = lines_text(n);
+        let (out, result) = run_stats_with_stdin(&stdin_bytes_line_loop(trimmed), text.as_bytes());
+        assert_eq!(out, "ok\n");
+        result
+            .unwrap_or_else(|error| panic!("{error}"))
+            .rc_increments
+    };
+    assert_eq!(increments(1000), increments(2000));
+}
+
+#[test]
+fn a_stdout_write_loop_does_not_dup_the_handle() {
+    // 書き込みはデータを借り、受け取ったハンドルを返すので、書くたびにハンドルを `dup` しない。書く回数を2倍にしても
+    // `rc_increments` は変わらない (docs/spec/lir.md の「extern の借用」)
+    let increments = |n: usize| {
+        let program = format!(
+            "go : Stdout.Stdout -> Int -> <IO, Panic> Stdout.Stdout\n\
+             go h n = if n == 0 then h else go (Stdout.write_line \"line\" h) (n - 1)\n\
+             \n\
+             main : Unit -> <IO, Panic> Unit\n\
+             main () = Stdout.close (go (Stdout.open ()) {n})\n"
+        );
+        stats(&program, &"line\n".repeat(n)).rc_increments
+    };
+    assert_eq!(increments(1000), increments(2000));
 }
 
 /// handler の下の非末尾の再帰。深さごとに1回 `ask` するので、`count n` は n 回 `ask` する。evidence は `evv` の

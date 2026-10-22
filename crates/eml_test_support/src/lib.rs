@@ -305,6 +305,16 @@ pub fn run_stats_with_args(text: &str, args: &[&str]) -> (String, Result<RunStat
     (out.contents(), result)
 }
 
+/// `run_stats` と同じく流し、標準入力に `input` を与える。標準入力を読むループを、入力の大きさを変えて数えるテストのため。
+#[cfg(feature = "run")]
+pub fn run_stats_with_stdin(text: &str, input: &[u8]) -> (String, Result<RunStats, RuntimeError>) {
+    let host = eml_cli::CaptureHost::new(std::path::PathBuf::new()).with_stdin(input.to_vec());
+    let out = host.output();
+    let result =
+        eml_cli::execute(&lir(text), &checked(), host.into_ref()).map(|finished| finished.stats);
+    (out.contents(), result)
+}
+
 /// 上限のない新しい `Control` を持つ、検査モードの設定。止める理由のビットは `Control::clear` でしか下りないので、
 /// 設定を使い回すと前の実行で立ったビットで次の実行が止まる。そのため実行ごとに作る。
 #[cfg(feature = "run")]

@@ -1,6 +1,7 @@
 //! 出力とファイルの extern (docs/spec/object-model.md の「extern」)。Host を通して書き、開き、読む。何が書かれ、
 //! 何が読めたかは約束せず (信頼の一覧の T11)、引数と結果の所有と RC の増減を証明する。
 
+use super::positions::find_byte;
 #[cfg(verus_only)]
 use super::proof::*;
 #[cfg(verus_only)]
@@ -672,20 +673,9 @@ impl<M: Mode> Ctx<M> {
                 }
                 return Ok(w);
             }
-            let mut i: usize = 0;
-            while i < len && buf[i] != b'\n'
-                invariant
-                    len == buf@.len(),
-                    i <= len,
-                decreases len - i,
-            {
-                i += 1;
-            }
-            let done = i < len;
-            let n = if done {
-                i + 1
-            } else {
-                i
+            let (n, done) = match find_byte(buf, 0, b'\n') {
+                Some(i) => (i + 1, true),
+                None => (len, false),
             };
             let part = vstd::slice::slice_subrange(buf, 0, n);
             let next = match total.checked_add(n) {
