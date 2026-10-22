@@ -143,7 +143,7 @@
 
 - 決定: この段の後の信頼の一覧は次のとおりである
   - T10 を「文字列のバイトの読み書き」から「バイト列の読み書き」に変え、`&[u8]` の4つの関数にする: `write_bytes(h, cap, at, &[u8])` (`at == len` で後ろに足す)、`write_byte(h, cap, i, u8)` (`i < len`、ghost の `update(i, b)`)、`bytes(h, len) -> &[u8]`、`bytes_ptr(h, len) -> *const [u8]`。長さの語を書くのは slot の書き込みで、検証したままである。`write_text`、`text`、`text_ptr` は、vstd の `str::as_bytes` と `str::from_utf8_unchecked` の spec を使って、この4つの上の検証したつなぎにする
-  - T5 に `utf8_valid(&[u8]) -> bool` (`ensures r == valid_utf8(v@)`。`core::str::from_utf8(..).is_ok()` を包む) を足す
+  - T5 に `utf8_valid(&[u8]) -> Option<usize>` (`ensures r is None <==> valid_utf8(v@)`、`Some(at)` なら `at < len`。`core::str::from_utf8(..).err().map(|e| e.valid_up_to())` を包む) を足す。T-12 の `Fault::Utf8 { at }` はこの `at` を使う (実行中に決めた。`bool` では D-2 の位置が出せないため)
   - T13 (新しい行「バイト列の走査」): `find_byte(hay: &[u8], from, b) -> Option<usize>`。安全な Rust の SWAR (8 バイトずつ) で、`external_body` の `ensures` は最初の位置である。Miri の上で、乱数の入力について素朴なループと結果を比べるテストで保証する (利用者が承認した)。第1段が信頼の行を足していたら、次の空き番号にする
   - この段では T11 に行を足さない (`read_into` は U-3)。ハンドルの読み手と書き込みの行 (`Reader`、`fill`、`consume`、`StdinSlot`、`host_write`、`StdinHandle`) は T11 の Host の行として足す (D-16)
 - 退けた案: SWAR を Verus で証明すること (`bit_vector` の証明が大きく、この段が重くなる)
@@ -544,7 +544,7 @@ pub class Bits a where
 ### T-11: `Bytes` の `Ctx` のメソッドと T5 の `utf8_valid`
 
 - 対象: `bytes_make/length/get/set/push/append/append_part/truncate/slice/eq/ne/compare`、`bytes_valid_utf8` (T5 の行と Miri)、`bytes_append_part` の別名の前提。探索のメソッドはここに入れない
-- docs/spec: OM の「extern」の表の行
+- docs/spec: OM の「バイト列の操作」の表。OM の「extern」の表の行は、eml_extern の行を足すタスク (T-13、T-14、T-15) が足す (実行中に決めた。docs/spec は今の状態を書くため)。`Bytes` の写しも `string_bytes_copied` に数える (実行中に決めた。T-15、T-23、T-28 の上限がこれを前提にする)
 - テスト: `eml_rt` の単体テスト。`src == dst` で rc 2 の `append_part` (写す道) と、rc 1 の検査モードの `NotUnique` を含む
 - 完了の条件: 1章の検査が通る
 
