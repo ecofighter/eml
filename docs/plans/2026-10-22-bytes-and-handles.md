@@ -286,7 +286,7 @@ pub class Bits a where
 | `pub extern get : Int -> Bytes -> <Panic> Byte` | `[Int, Obj] -> Int` Panics | `[false, true]` | `bytes_get(i, w)` | — | 要 |
 | `pub extern set : Int -> Byte -> Bytes -> <Panic> Bytes` | `[Int, Int, Obj] -> Obj` Panics | — | `bytes_set(i, b, w)` | 一意ならその場 | 要 |
 | `pub extern push : Byte -> Bytes -> Bytes` | `[Int, Obj] -> Obj` Pure | — | `bytes_push(b, w)` | `string_push` と同じ | 要 |
-| `extern find_byte : Byte -> Int -> Bytes -> <Panic> Int` (なければ -1。`pub find_byte` は `Option` を返す) | `[Int, Int, Obj] -> Int` Panics | `[f, f, true]` | `bytes_find_byte` | — | 要 |
+| `extern find_byte_from : Byte -> Int -> Bytes -> <Panic> Int` (なければ -1。eml で書く `pub find_byte` は `Option` を返す。`find_from` と `find` の組に倣い、同じ名前の2つの宣言を避ける) | `[Int, Int, Obj] -> Int` Panics | `[f, f, true]` | `bytes_find_byte` | — | 要 |
 
 - extern にしないもの (eml で書く): `Show Bytes` (`get` の上に書き、形は `Bytes [1, 2, 3]`。要素は `display` の数で、`u8` を付けない)、`from_utf8`、`find`、`find_byte`、`starts_with`、`split`、`trim_line_end : Bytes -> <Panic> Bytes` (`length`、`get`、`truncate` の上に書く。T-23 が足す)
 - `Bytes` のリテラルはこの段で作らない
@@ -581,7 +581,7 @@ pub class Bits a where
 
 ### T-17: 信頼の行 T13 の `find_byte` と `find_from` の作り直し
 
-- 対象: T13 の `find_byte` (D-5) と Miri の比べるテスト、`bytes_find_byte`、先頭バイトの走査と比較で作り直した `bytes_find_from`、同じ道を通る `String.find_from`、行 `find_byte`、`Std.Bytes.find` と `find_byte` (eml)
+- 対象: T13 の `find_byte` (D-5) と Miri の比べるテスト、`bytes_find_byte`、先頭バイトの走査と比較で作り直した `bytes_find_from`、同じ道を通る `String.find_from`、行 `find_byte_from`、`Std.Bytes.find` と `find_byte` (eml)
 - 完了の条件: 1章の検査と Miri の2つの実行が通る (`trusted::find_byte_*` を含む)。`bench/rt.sh` の行 `find-byte-1mib` と `find-bytes-1mib` があり、`<[u8]>::iter().position` と `<[u8]>::windows().position` に対する比をコミットのメッセージに書く (2倍は目標で、門にしない)
 
 ### T-18: `eml_rt` の予算の行
