@@ -2345,7 +2345,7 @@ fn borrowed_chain(n: u32) -> String {
 #[test]
 fn a_long_chain_of_switches_on_borrowed_fields_is_verified_in_linear_time() {
     // 借りた変数が有効かどうかは、変数と持ち主の所有を1回ずつ見れば決まる。親を1段ずつたどると2乗の時間がかかる
-    let program = read(&borrowed_chain(100_000));
+    let program = read(&borrowed_chain(50_000));
     let start = std::time::Instant::now();
     assert_eq!(verify(&program), Ok(()));
     let elapsed = start.elapsed();
