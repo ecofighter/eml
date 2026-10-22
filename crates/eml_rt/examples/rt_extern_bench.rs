@@ -173,7 +173,7 @@ fn println(mode: Buffering) {
     for _ in 0..1_000_000 {
         dup(&mut ctx, line);
         // SAFETY: line は生きた文字列で、渡す参照は直前の dup で作った。
-        unsafe { ctx.write_string(Stream::Out, black_box(line)) }.unwrap();
+        unsafe { ctx.println(Stream::Out, black_box(line)) }.unwrap();
     }
     ctx.flush().unwrap();
     decref(&mut ctx, line);

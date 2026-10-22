@@ -1,14 +1,11 @@
-//! スクリプトの extern (docs/spec/object-model.md の「extern」)。引数、環境変数、ファイルの書き込み、子の
-//! プロセスを Host を通して扱う。何が読めて何が起きたかは約束せず (信頼の一覧の T11)、引数と結果の所有と RC の増減を
-//! 証明する。
+//! スクリプトの extern (docs/spec/object-model.md の「extern」)。引数、環境変数、子のプロセスを Host を通して
+//! 扱う。何が読めて何が起きたかは約束せず (信頼の一覧の T11)、引数と結果の所有と RC の増減を証明する。
 
 #[cfg(verus_only)]
 use super::proof::*;
 use super::*;
 use crate::externs::{FALSE, Fault, TRUE};
-use crate::host::{
-    host_arg, host_arg_count, host_env_has, host_env_var, host_run, host_write_file,
-};
+use crate::host::{host_arg, host_arg_count, host_env_has, host_env_var, host_run};
 
 verus! {
 
@@ -250,76 +247,6 @@ impl<M: Mode> Ctx<M> {
                 Err(e)
             },
         }
-    }
-
-    /// `Fs.write_text`。ファイル `path` を作るか切り詰めて、`text` を書く。読み終えたら `path`、`text` の順に手放す。
-    ///
-    /// # Safety
-    /// `string_eq` と同じ (`a` が `path`、`b` が `text`)。
-    pub unsafe fn fs_write_text(&mut self, path: Word, text: Word) -> (r: Result<(), Fault>)
-        requires
-            old(self).wf(),
-            old(self).heap_spec().word_in(path),
-            old(self).heap_spec().word_in(text),
-            !M::CHECKED ==> old(self).holds_strings(path, text),
-        ensures
-            final(self).wf(),
-            final(self).evv_spec() == old(self).evv_spec(),
-            final(self).yield_spec() == old(self).yield_spec(),
-            (r matches Err(Fault::Heap(_))) ==> final(self).heap_spec().settled_heap() == old(
-                self,
-            ).heap_spec().settled_heap(),
-            !M::CHECKED ==> !(r matches Err(Fault::Heap(_))),
-            old(self).held_ok() && old(self).holds_strings(path, text) ==> !(r matches Err(
-                Fault::Heap(_),
-            )) || (r matches Err(Fault::Heap(e)) && chain_err(Err::<(), HeapError>(e))),
-            old(self).held_ok() && old(self).holds_strings(path, text) && !(r matches Err(
-                Fault::Heap(_),
-            )) ==> {
-                &&& final(self).held_ok()
-                &&& final(self).evolved_by(
-                    *old(self),
-                    |x: usize| -points(path, x) - points(text, x),
-                    Set::empty(),
-                )
-            },
-    {
-        let ghost s0 = *self;
-        let ghost c = s0.held_ok() && s0.holds_strings(path, text);
-        if M::CHECKED && !(path.is_ptr() && text.is_ptr()) {
-            return Err(Fault::Heap(HeapError::WrongKind));
-        }
-        self.heap.settle();
-        let ghost h1 = self.heap;
-        proof {
-            lemma_settled_twice(s0.heap);
-            assert(h1.words_kept(s0.heap));
-            if c {
-                s0.lemma_settled_strings(h1, path, text, Kind::String);
-            }
-        }
-        if let Err(e) = self.heap.checked_pair(path, text, Kind::String) {
-            proof {
-                self.lemma_words_kept(s0);
-            }
-            return Err(Fault::Heap(e));
-        }
-        let r = host_write_file(
-            &self.host,
-            self.heap.string_text(path),
-            self.heap.string_text(text),
-        );
-        let Ghost(mid) = self.heap.release_pair(path, text, Ghost(Kind::String), Ghost(c));
-        proof {
-            if M::CHECKED {
-                lemma_words_trans(self.heap, h1, s0.heap);
-                self.lemma_words_kept(s0);
-            }
-            if c {
-                self.lemma_released(s0, h1, mid, path, text);
-            }
-        }
-        r
     }
 
     /// `Proc.status`。プログラム `program` を引数の列 `args` (引数の数と各引数を、それぞれ NUL で終えて並べたもの) で

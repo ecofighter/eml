@@ -398,17 +398,6 @@ pub(crate) fn host_env_var(host: &HostRef, name: &str) -> (r: Result<String, Fau
     }
 }
 
-/// Host に `path` のファイルを書かせる。
-#[verifier::external_body]
-pub(crate) fn host_write_file(host: &HostRef, path: &str, text: &str) -> (r: Result<(), Fault>)
-    ensures
-        !(r matches Err(Fault::Heap(_))),
-{
-    host.host.write_file(path, text).map_err(
-        |e| Fault::Io { op: IoOp::Write, name: path.into(), reason: io_reason(&e) },
-    )
-}
-
 /// Host に子のプロセスを起動させ、終了コードを返す。`args` は、引数の数と各引数を、それぞれ NUL で終えて並べた列
 /// である。OS の引数は NUL を含めないので、NUL を含む引数があれば数が合わなくなり、起動の誤りにする。止める語が
 /// 起動の前に立っていれば起動せず、子を待つ間に立てば子が終わった後で、止めたことにする
@@ -848,10 +837,6 @@ pub trait Host: Send + Sync {
     fn open_write(&self, _path: &str, _mode: WriteMode) -> io::Result<Box<dyn Write + Send>> {
         Err(io::Error::from(io::ErrorKind::Unsupported))
     }
-    /// `path` のファイルを作るか切り詰めて、`text` を書く。
-    fn write_file(&self, _path: &str, _text: &str) -> io::Result<()> {
-        Err(io::Error::from(io::ErrorKind::Unsupported))
-    }
     /// `PATH` から `program` を探して子のプロセスを起動し、終わるのを待って終了コードを返す (`exit_code`)。子と eml の
     /// 出力が順に並ぶよう、起動の前に標準出力を書き出す。
     fn run(&self, _program: &str, _args: &[&str]) -> io::Result<i32> {
@@ -1035,10 +1020,6 @@ impl Host for StdHost {
         Ok(Box::new(options.open(self.file_root.join(path))?))
     }
 
-    fn write_file(&self, path: &str, text: &str) -> io::Result<()> {
-        fs::write(self.file_root.join(path), text)
-    }
-
     fn run(&self, program: &str, args: &[&str]) -> io::Result<i32> {
         lock(&self.out).flush()?;
         let mut command = Command::new(program);
@@ -1051,7 +1032,7 @@ impl Host for StdHost {
     }
 }
 
-/// I/O の誤りの理由 (`read_text`、`open_write`、`FileOut` の書き込み、`write_file`、`run` の失敗を `Fault` の理由に
+/// I/O の誤りの理由 (`read_text`、`open_write`、`FileOut` の書き込み、`run` の失敗を `Fault` の理由に
 /// する)。止める語が立った後の `Interrupted` は `fill` と `read_all` が止めたことにし、立っていない `Interrupted` は
 /// 読み直す。読み以外の `Interrupted` は止める語と関係なく、ここで `Other` になる。
 fn io_reason(e: &io::Error) -> IoReason {

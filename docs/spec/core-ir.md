@@ -173,13 +173,17 @@ Perceus は、`unr` でない変数に `decref` を置く所がある。V1 と�
   | `Std.FileIn.read_all_bytes`、`read_line_bytes_raw` | `Lin` | `Unr` (`Bytes`) |
   | `Std.FileIn.read_chunk` | `Unr`、`Lin` | `Unr` (`Bytes`) |
   | `Std.FileIn.close` | `Lin` | `Unr` |
+  | `Std.FileOut.create`、`append` | `Unr` | `Lin` (`FileOut`) |
+  | `Std.FileOut.write`、`write_bytes`、`write_line` | `Unr`、`Lin` | `Lin` (同じハンドル) |
+  | `Std.FileOut.flush` | `Lin` | `Lin` |
+  | `Std.FileOut.close_raw` | `Lin` | `Unr` |
   | `Std.Stdin.open` | `Unr` | `Lin` (`Stdin`) |
   | `Std.Stdin.read_all`、`read_line_raw` | `Lin` | `Unr` (`String`) |
   | `Std.Stdin.read_all_bytes`、`read_line_bytes_raw` | `Lin` | `Unr` (`Bytes`) |
   | `Std.Stdin.read_chunk` | `Unr`、`Lin` | `Unr` (`Bytes`) |
   | `Std.Stdin.close` | `Lin` | `Unr` |
   | `Std.Stdout.open`、`Std.Stderr.open` | `Unr` | `Lin` (`Stdout`、`Stderr`) |
-  | `Std.Stdout` と `Std.Stderr` の `write`、`write_string`、`write_line` | `Unr`、`Lin` | `Lin` (同じハンドル) |
+  | `Std.Stdout` と `Std.Stderr` の `write`、`write_bytes`、`write_line` | `Unr`、`Lin` | `Lin` (同じハンドル) |
   | `Std.Stdout.flush` | `Lin` | `Lin` |
   | `Std.Stdout.close`、`Std.Stderr.close` | `Lin` | `Unr` |
   | `Std.Array.thaw` | `Unr` | `Lin` (`MutArray a`) |
@@ -208,7 +212,7 @@ Perceus は、`unr` でない変数に `decref` を置く所がある。V1 と�
 
 - `Std.MutArray.length` と `read` は、宣言の型では結果と配列の組を返す (`MutArray a -> Int -> <Panic> (a, MutArray a)`)。extern は借りない引数を消費するので、組を作る extern にすると、読むたびに組を確保する。そこで行は配列を借り (`FunctionRow::borrowed`)、要素だけを返し、`with_arg: Some(0)` を持つ ([LIR](lir.md) の「extern の借用」)
 - `Std.FileIn` と `Std.Stdin` の読み (`read_all`、`read_line_raw`、`read_all_bytes`、`read_line_bytes_raw`、`read_chunk`) も同じ形である。宣言の型は読んだ結果とハンドル (`FileIn` か `Stdin`) の組を返し (`FileIn -> <IO> (String, FileIn)`)、行はハンドルを借りて結果だけを返す。`with_arg` はハンドルの位置で、`read_chunk : Bytes -> FileIn -> <IO> (Bytes, FileIn)` (`Stdin` も同じ形) だけは `Some(1)`、ほかは `Some(0)` である
-- `Std.Stdout` と `Std.Stderr` の書き込み (`write`、`write_string`、`write_line`) は、書くデータを借り、ハンドルを消費して同じハンドルを返す。結果がハンドルそのものなので、組を返さず、`with_arg` を持たない
+- `Std.FileOut`、`Std.Stdout`、`Std.Stderr` の書き込み (`write`、`write_bytes`、`write_line`) は、書くデータを借り、ハンドルを消費して同じハンドルを返す。結果がハンドルそのものなので、組を返さず、`with_arg` を持たない
 - translate は、`with_arg: Some(k)` の行の引数のそろった呼び出しを、行の結果を束縛する `extern` 命令と、その結果と引数 k を組にする `con` にする。`let t.1: int = extern Std.MutArray.read(m.0, 0)` と `let d.2: (,){int, obj lin} lin = con (,) #0(t.1, m.0)` の形である。組が構造体にならない型なら、`d.2` は `obj` である。extern は m.0 を借りるだけなので、m.0 を消費するのは `con` だけである。`$externN` も同じ形の本体を持つ。どちらも同じ関数 (`ProgramBuilder::extern_call`) が作る
 - 組を受けてすぐ開く所 (`let (v, m) = MutArray.read m i`) では、最適化の既知のコンストラクタ (下の「既知のコンストラクタ」) で組が消え、確保が残らない。組が構造体なら、既知のコンストラクタに頼らなくても確保がない
 

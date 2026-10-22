@@ -478,7 +478,7 @@ main () =
     assert_eq!(String::from_utf8_lossy(&output.stderr), "to stderr\n");
 }
 
-/// `Fs.write_text` は実際のディスクに書き、書けなければ `cannot write` の実行時エラーになる。
+/// `Fs.write_text` は実際のディスクに書く。書くファイルを開けなければ `cannot open` の実行時エラーになる。
 #[test]
 fn a_script_writes_a_file_and_reports_a_failed_write() {
     let write = "import Fs\n\
@@ -502,9 +502,37 @@ main () = Fs.write_text \"missing-dir/x.txt\" \"x\"
     assert_eq!(bad.status.code(), Some(1));
     let stderr = String::from_utf8_lossy(&bad.stderr);
     assert!(
-        stderr.starts_with("runtime error: cannot write `missing-dir/x.txt`: not found"),
+        stderr.starts_with("runtime error: cannot open `missing-dir/x.txt`: not found"),
         "{stderr}"
     );
+}
+
+/// `FileOut` は実際のディスクに書く。`close` で書き出し、閉じないまま `exit` しても、ヒープを落とすときの破棄処理が
+/// buffer を書き出す。
+#[test]
+fn a_file_out_is_written_out_at_exit_and_at_the_end() {
+    let closed = "import FileOut\n\
+main : Unit -> <IO> Unit
+main () =
+  FileOut.close (FileOut.write_line \"1\" (FileOut.create \"log.txt\"))
+  FileOut.close (FileOut.write_line \"2\" (FileOut.append \"log.txt\"))
+";
+    let open = "import FileOut\n\
+main : Unit -> <IO> Unit
+main () =
+  let f = FileOut.write_line \"kept\" (FileOut.create \"kept.txt\")
+  exit 3
+";
+    let dir = temp_project("cli-file-out", &[("closed.em", closed), ("open.em", open)]);
+    let closed = eml_in(&dir, &["closed.em"]);
+    let open = eml_in(&dir, &["open.em"]);
+    let log = std::fs::read_to_string(dir.join("log.txt"));
+    let kept = std::fs::read_to_string(dir.join("kept.txt"));
+    std::fs::remove_dir_all(&dir).unwrap();
+    assert_eq!(closed.status.code(), Some(0), "{closed:?}");
+    assert_eq!(log.unwrap(), "1\n2\n");
+    assert_eq!(open.status.code(), Some(3), "{open:?}");
+    assert_eq!(kept.unwrap(), "kept\n");
 }
 
 /// 1行目が `#!/usr/bin/env eml` の実行できるファイルは、そのまま動かせる。

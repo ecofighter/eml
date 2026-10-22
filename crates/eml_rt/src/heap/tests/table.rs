@@ -1136,6 +1136,27 @@ pub fn inputs() -> Vec<(String, Vec<Arg>)> {
     for path in ["plain.txt", "crlf.txt", "empty.txt"] {
         push("Std.FileIn.read_line_raw2", rel(path));
     }
+    // 書くファイル。表の用意したファイルは書き換えず、場合ごとに作るか切り詰めて書き、読み戻す。`append` は2回足す。
+    // 開けないパスは `create` で確かめる
+    for text in ["", "日本"] {
+        for name in ["Std.FileOut.write", "Std.FileOut.write_line"] {
+            push(
+                name,
+                vec![Arg::Rel("out.txt".into()), Arg::Const(text.into())],
+            );
+        }
+    }
+    push(
+        "Std.FileOut.write_bytes",
+        vec![Arg::Rel("out.bin".into()), Arg::Bytes(vec![97, 0xff])],
+    );
+    push(
+        "Std.FileOut.append",
+        vec![Arg::Rel("log.txt".into()), Arg::Const("ab".into())],
+    );
+    for path in ["dir", "locked.txt", "missing/x.txt", "a\u{0}b"] {
+        push("Std.FileOut.create", rel(path));
+    }
     // 配列。長さは負、0、1、3 で、添字は端と、その外側の 1 つずつと、`Int` の両端である。共有された配列の `set` と
     // `thaw` は写す
     let array = |elements: &[i64], lin: bool, shared: bool| Arg::Array {

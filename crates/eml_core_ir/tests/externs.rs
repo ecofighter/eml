@@ -36,6 +36,9 @@ probe_unit u = u
 probe_file : FileIn.FileIn -> FileIn.FileIn
 probe_file f = f
 
+probe_file_out : FileOut.FileOut -> FileOut.FileOut
+probe_file_out f = f
+
 probe_stdin : Stdin.Stdin -> Stdin.Stdin
 probe_stdin h = h
 
@@ -72,6 +75,7 @@ fn probe(ty: ExternType) -> &'static str {
         ExternType::Bytes => "probe_bytes",
         ExternType::Unit => "probe_unit",
         ExternType::FileIn => "probe_file",
+        ExternType::FileOut => "probe_file_out",
         ExternType::Stdin => "probe_stdin",
         ExternType::Stdout => "probe_stdout",
         ExternType::Stderr => "probe_stderr",
@@ -236,8 +240,8 @@ fn every_extern_function_row_has_the_reprs_of_its_std_signature() {
 }
 
 /// 表の値そのもの。借りる引数を持つ行は次の表の行だけで、組を返すのは `Std.MutArray` の2つの行と、`Std.FileIn` と
-/// `Std.Stdin` のそれぞれ5つの読みの行だけである。`Std.Stdout` と `Std.Stderr` の書き込みの行は、データを借りて
-/// ハンドルを返すので、組を返さない。
+/// `Std.Stdin` のそれぞれ5つの読みの行だけである。`Std.FileOut`、`Std.Stdout`、`Std.Stderr` の書き込みの行は、データを
+/// 借りてハンドルを返すので、組を返さない。
 #[test]
 fn only_the_listed_rows_borrow_or_return_a_pair() {
     for &e in Extern::ALL {
@@ -272,11 +276,14 @@ fn only_the_listed_rows_borrow_or_return_a_pair() {
             "Prelude.Eq Bytes.==" | "Prelude.Eq Bytes.!=" | "Prelude.Ord Bytes.compare" => {
                 (&[true, true], None)
             }
-            "Std.Stdout.write"
-            | "Std.Stdout.write_string"
+            "Std.FileOut.write"
+            | "Std.FileOut.write_bytes"
+            | "Std.FileOut.write_line"
+            | "Std.Stdout.write"
+            | "Std.Stdout.write_bytes"
             | "Std.Stdout.write_line"
             | "Std.Stderr.write"
-            | "Std.Stderr.write_string"
+            | "Std.Stderr.write_bytes"
             | "Std.Stderr.write_line" => (&[true, false], None),
             _ => {
                 assert!(!row.borrowed.contains(&true), "{}", row.name);
@@ -390,6 +397,9 @@ fn only_the_handle_and_mutable_array_rows_carry_a_lin() {
             "Std.FileIn.read_line_bytes_raw" => (&[Lin], Unr),
             "Std.FileIn.read_chunk" => (&[Unr, Lin], Unr),
             "Std.FileIn.close" => (&[Lin], Unr),
+            "Std.FileOut.create" | "Std.FileOut.append" => (&[Unr], Lin),
+            "Std.FileOut.flush" => (&[Lin], Lin),
+            "Std.FileOut.close_raw" => (&[Lin], Unr),
             "Std.Stdin.open" => (&[Unr], Lin),
             "Std.Stdin.read_all" => (&[Lin], Unr),
             "Std.Stdin.read_line_raw" => (&[Lin], Unr),
@@ -399,11 +409,14 @@ fn only_the_handle_and_mutable_array_rows_carry_a_lin() {
             "Std.Stdin.close" => (&[Lin], Unr),
             "Std.Stdout.open" | "Std.Stderr.open" => (&[Unr], Lin),
             "Std.Stdout.close" | "Std.Stderr.close" => (&[Lin], Unr),
-            "Std.Stdout.write"
-            | "Std.Stdout.write_string"
+            "Std.FileOut.write"
+            | "Std.FileOut.write_bytes"
+            | "Std.FileOut.write_line"
+            | "Std.Stdout.write"
+            | "Std.Stdout.write_bytes"
             | "Std.Stdout.write_line"
             | "Std.Stderr.write"
-            | "Std.Stderr.write_string"
+            | "Std.Stderr.write_bytes"
             | "Std.Stderr.write_line" => (&[Unr, Lin], Lin),
             "Std.Stdout.flush" => (&[Lin], Lin),
             "Std.Array.thaw" => (&[Unr], Lin),

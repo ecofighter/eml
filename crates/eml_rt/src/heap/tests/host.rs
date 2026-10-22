@@ -104,7 +104,7 @@ pub(super) struct MemoryHost {
     env: HashMap<String, OsString>,
     /// `None` なら標準入力を使えない
     stdin: Option<Arc<StdinSlot>>,
-    /// `write_file` と `open_write` の書き手が書いたファイル
+    /// `open_write` の書き手が書いたファイル
     written: Arc<Mutex<HashMap<String, Vec<u8>>>>,
     /// `open_write` の書き手が受けたバイト数。書けなかったバイトも数える
     received: Arc<AtomicUsize>,
@@ -260,16 +260,6 @@ impl Host for MemoryHost {
             received: self.received.clone(),
         }))
     }
-    fn write_file(&self, path: &str, text: &str) -> io::Result<()> {
-        if path.is_empty() {
-            return Err(io::Error::from(io::ErrorKind::PermissionDenied));
-        }
-        self.written
-            .lock()
-            .unwrap()
-            .insert(path.to_string(), text.as_bytes().to_vec());
-        Ok(())
-    }
     /// プロセスを起動せず、受けたものを覚える。`missing` は見つからないプログラムで、ほかは引数の数を終了コードにする
     fn run(&self, program: &str, args: &[&str]) -> io::Result<i32> {
         if program == "missing" {
@@ -342,12 +332,12 @@ impl Write for Shared {
 }
 
 mod std_host {
-    use std::io::{self, Read};
+    use std::io::{self, Read, Write};
     use std::panic::{AssertUnwindSafe, catch_unwind};
     use std::path::PathBuf;
 
     use super::Shared;
-    use crate::{Buffering, Control, Host, Limits, StdHost, Stream};
+    use crate::{Buffering, Control, Host, Limits, StdHost, Stream, WriteMode};
 
     fn std_host(mode: Buffering) -> (StdHost, Shared, Shared) {
         let (out, err) = (Shared::default(), Shared::default());
@@ -383,20 +373,31 @@ mod std_host {
         assert_eq!(line, Some(Some(b"x".to_vec())));
     }
 
+    /// `Truncate` は前の中身を消し、`Append` は残す。どちらも `file_root` の下のパスを開く。
     #[test]
-    fn a_file_is_written_under_the_root() {
+    fn a_file_is_opened_for_writing_under_the_root() {
         let dir = std::env::temp_dir().join(format!("eml_rt-write-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("out.txt"), "old").unwrap();
         let host = StdHost::new(
             Box::new(io::sink()),
             Box::new(io::sink()),
             dir.clone(),
             Buffering::Line,
         );
-        host.write_file("out.txt", "日本").unwrap();
+        let write = |mode, text: &str| {
+            let mut w = host.open_write("out.txt", mode).unwrap();
+            w.write_all(text.as_bytes()).unwrap();
+        };
+        write(WriteMode::Truncate, "日本");
         assert_eq!(
             std::fs::read_to_string(dir.join("out.txt")).unwrap(),
             "日本"
+        );
+        write(WriteMode::Append, "語");
+        assert_eq!(
+            std::fs::read_to_string(dir.join("out.txt")).unwrap(),
+            "日本語"
         );
         std::fs::remove_dir_all(&dir).unwrap();
     }

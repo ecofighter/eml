@@ -27,6 +27,7 @@ pub const STD: &[(&str, &str)] = &[
     ("Prelude.em", include_str!("../../../std/Prelude.em")),
     ("Fs.em", include_str!("../../../std/Fs.em")),
     ("FileIn.em", include_str!("../../../std/FileIn.em")),
+    ("FileOut.em", include_str!("../../../std/FileOut.em")),
     ("List.em", include_str!("../../../std/List.em")),
     ("String.em", include_str!("../../../std/String.em")),
     ("Env.em", include_str!("../../../std/Env.em")),

@@ -71,13 +71,13 @@ try_io action =
 
 | `Fault` | 起こす関数 | `kind` |
 |---|---|---|
-| `Io { reason, .. }` | `FileIn.open`、`FileIn.read_all`、`FileIn.read_line`、`Fs.read_text`、`FileIn.read_all_bytes`、`FileIn.read_line_bytes`、`FileIn.read_chunk`、`Fs.write_text`、`Proc.run` | `reason` が `NotFound` なら `NotFound`、`PermissionDenied` なら `PermissionDenied`、`NotAvailable` なら `NotAvailable`、`Other` なら `Other` |
+| `Io { reason, .. }` | `FileIn.open`、`FileIn.read_all`、`FileIn.read_line`、`Fs.read_text`、`FileIn.read_all_bytes`、`FileIn.read_line_bytes`、`FileIn.read_chunk`、`FileOut.create`、`FileOut.append`、`FileOut.write`、`FileOut.write_bytes`、`FileOut.write_line`、`FileOut.flush`、`FileOut.close`、`Fs.write_text`、`Proc.run` | `reason` が `NotFound` なら `NotFound`、`PermissionDenied` なら `PermissionDenied`、`NotAvailable` なら `NotAvailable`、`Other` なら `Other` |
 | `Stdin(reason)` | `Stdin.read_text` と、`Stdin` のハンドルの読み (`read_all`、`read_line`、`read_all_bytes`、`read_line_bytes`、`read_chunk`) | 同上 |
 | `NotUtf8(_)` | `FileIn.read_all`、`FileIn.read_line`、`Fs.read_text`、`Stdin.read_text`、`Stdin.read_all`、`Stdin.read_line`、`Env.args`、`Env.get` | `NotUtf8` |
 
 書き出しの失敗 (`Output`) を捕まえないのは、標準出力をまとめて書くためである ([オブジェクトモデル](object-model.md) の「Host」)。書けなかったことが分かるのは、後でバッファがあふれた `println` か、読みや起動の前の書き出しか、プログラムの終わりの書き出しになる。そのため、`try_io (fn () -> println s)` は書けなくても `Ok` を返しうるし、関係のない別の `try_io` が失敗を受け取りうる。どこで捕まるかが決まらないので、実行時エラーのままにする。
 
-`try_io` で捕まえなかった IO の失敗は、実行時エラーである。位置を付けて表示し、終了コード 1 で止まる。このときは後始末をしない。プロセスが終わるので、OS が開いたファイルを閉じる。
+`try_io` で捕まえなかった IO の失敗は、実行時エラーである。位置を付けて表示し、終了コード 1 で止まる。このとき eml の後始末 (handler の節と利用者のコード) は走らないが、ヒープを落とすときの破棄処理が `FileOut` の buffer を書き出す (下の「`FileOut`」)。プロセスが終わるので、OS が開いたファイルを閉じる。
 
 ## `try_panic`
 
@@ -377,11 +377,13 @@ pub while : (Unit -> <e> Bool) -> (Unit -> <e> Unit) -> <e> Unit
 
 ## ハンドル
 
-`Stdin.Stdin` と `FileIn.FileIn` は読むためのハンドルで、`Stdout.Stdout` と `Stderr.Stderr` は書くためのハンドルである。
+`Stdin.Stdin` と `FileIn.FileIn` は読むためのハンドルで、`Stdout.Stdout`、`Stderr.Stderr`、`FileOut.FileOut` は書くためのハンドルである。ハンドルの型ごとに1つのモジュールを置き、どのモジュールも、開く関数 (`open` か `create`)、`close`、次の規則の名前の読みか書きを持つ。読みと書きを型で分けるので、取り違えは型の誤り (E2001) になる。
 
-- ハンドルは線形な型 (`Lin`) で、ちょうど1回使う ([線形性](linearity.md))。`close h` は `drop h` と同じで、ハンドルを手放して閉じる
+関数の名前は、std 全体で次の規則に従う。文字列を読み書きする関数が短い名前を持ち、バイト列の版は `_bytes` を足す。読みは `read_all` と `read_all_bytes`、`read_line` と `read_line_bytes` で、書きは `write` と `write_bytes`、文字列だけの `write_line` である。バイト列にしかない読み (`read_chunk`) は、その名前のままである。スクリプトの大半は文字列を読み、文字列の読みが UTF-8 を確かめることが「`String` はいつも妥当な UTF-8」を支えるので、文字列の版を既定にする。
+
+- ハンドルは線形な型 (`Lin`) で、ちょうど1回使う ([線形性](linearity.md))。`Stdin`、`Stdout`、`Stderr`、`FileIn` の `close h` は `drop h` と同じで、ハンドルを手放して閉じる。`FileOut` の `close` は書き出してから閉じ、書き出せなければ誤りを返す (下の「`FileOut`」)
 - 読む関数はハンドルを借りて読み、結果を先に、同じハンドルを後に置いた組で返す。`Stdin` と `FileIn` は同じ名前と同じ形の読む関数を持つ (下の「`Stdin`」と「`FileIn`」)
-- 書く関数は書くデータを借り、ハンドルを受け取って同じハンドルを返す。`Stdout` と `Stderr` は同じ名前と同じ形の書く関数を持つ (下の「`Stdout` と `Stderr`」)
+- 書く関数は書くデータを借り、ハンドルを受け取って同じハンドルを返す。`Stdout`、`Stderr`、`FileOut` は同じ名前と同じ形の書く関数を持つ (下の「`Stdout` と `Stderr`」と「`FileOut`」)
 - 読めるハンドルの上の汎用のコードは、読む関数を引数で渡して書く。`count_lines Stdin.read_line h 0` も `count_lines FileIn.read_line f 0` も、直接書いたループと同じ費用で動く
 
   ```haskell
@@ -395,7 +397,7 @@ pub while : (Unit -> <e> Bool) -> (Unit -> <e> Unit) -> <e> Unit
 - 標準のストリームのハンドルは `Stdin.open ()`、`Stdout.open ()`、`Stderr.open ()` で開く。ストリームごとに、生きているハンドルは高々1つで、生きている間の2つ目の `open` は `Panic` (`the standard input is already open`、`the standard output is already open`、`the standard error is already open`) になる。閉じた後は、また開ける。ストリームの持ち主はいつも1人なので、読む順と書く順はプログラムの順である。持ち主を1人にするのは、`Lin` のハンドルに標準のストリームを持つ意味を与え、標準入力と `FileIn` が1つの読みの道を共有するためである
 - 標準入力のハンドルは、標準入力の読み手 (64 KiB の buffer) を持つ。開くときに Host から読み手を取り、閉じるときに buffer に残ったバイトごと Host に返す。そのため、次に開いたハンドルは続きから読み、`Stdin.read_text ()` のように開いて閉じる関数を続けて呼んでも、読んでいない入力は失われない
 - 標準入力を持たない Host (REPL) でも `open` は通り、読みが I/O の失敗 (`cannot read the standard input: not available`) になる。この Host でも、生きている標準入力のハンドルは高々1つで、2つ目の `open` は `Panic` になる
-- 書くためのハンドルは buffer を持たない。Host がストリームごとに1つ持つ buffer に書き、`println` と `eprintln` も同じ buffer に書く。そのため、`close`、巻き戻し、`exit` のどれでハンドルを手放しても、書いた出力は失われない (下の「`Stdout` と `Stderr`」)
+- 標準のストリームの書くハンドルは buffer を持たない。Host がストリームごとに1つ持つ buffer に書き、`println` と `eprintln` も同じ buffer に書く。そのため、`close`、巻き戻し、`exit` のどれでハンドルを手放しても、書いた出力は失われない (下の「`Stdout` と `Stderr`」)。`FileOut` は自分の buffer を持ち、手放すときに書き出す (下の「`FileOut`」)
 - ハンドルを持ったまま中断 (`try_io`、`try_panic`、`never` の操作) で巻き戻ると、巻き戻しがハンドルを手放して閉じる。読みの誤りでも、読みの extern はハンドルを手放さない。`try_io` の下では巻き戻しが手放し、実行時エラーなら実行がそこで止まる
 - 標準入力の読みは、読み手の buffer を補充する前ごとに標準出力を書き出す。行の途中の補充と、buffer が空の `read_chunk` も同じである。buffer から読むときは書き出さない。`read_all` と `read_all_bytes` は、最初の補充の前に1回書き出す。入力を pipe で先読みしたとき、buffer にある2つの行の間に書いたプロンプトは、次の補充かプログラムの終わりまで出ない (C と同じ。[オブジェクトモデル](object-model.md) の「読み手」)
 
@@ -404,12 +406,14 @@ pub while : (Unit -> <e> Bool) -> (Unit -> <e> Unit) -> <e> Unit
 | 操作 | 失敗 | 届け方 |
 |---|---|---|
 | `open` | 同じストリームのハンドルが生きている (`InUse`) | `Panic` (`try_panic`) |
-| `close` | なし | — |
+| `close` (`FileOut` のほか) | なし | — |
 | `Stdin` の読み | 読めない (`Stdin(reason)`)。標準入力がなければ理由は `not available` | `IO` (`try_io`) |
 | `FileIn` の読み | 読めない (`Io { op: Read, .. }`) | `IO` |
+| `FileOut.create`、`append` | 開けない (`Io { op: Open, .. }`) | `IO` |
+| `FileOut` の書き込み (`write`、`write_bytes`、`write_line`、`flush`、`close`) | 書けない (`Io { op: Write, .. }`)。ハンドルは閉じている (下の「`FileOut`」) | `IO` |
 | 文字列の読み | UTF-8 でない (`NotUtf8`)。バイト列の読みはこれで失敗しない | `IO` (`kind` は `NotUtf8`) |
 | どの読みも | 割り込み、確保量の上限 | 位置を付けた実行時エラー |
-| 書き込み (`write`、`write_string`、`write_line`、`flush`) | 書けない (`Output`) | 実行時エラー。`try_io` では捕まえない (上の「`try_io`」) |
+| 標準のストリームの書き込み (`write`、`write_bytes`、`write_line`、`flush`) | 書けない (`Output`) | 実行時エラー。`try_io` では捕まえない (上の「`try_io`」) |
 | どの操作も | 検査モードのヒープの誤り | 実行時エラー |
 
 ## `Stdin`
@@ -439,14 +443,14 @@ pub while : (Unit -> <e> Bool) -> (Unit -> <e> Unit) -> <e> Unit
 |---|---|
 | `Stdout.open` | `Unit -> <IO, Panic> Stdout` |
 | `Stdout.close` | `Stdout -> <IO> Unit` |
-| `Stdout.write` | `Bytes -> Stdout -> <IO> Stdout` |
-| `Stdout.write_string` | `String -> Stdout -> <IO> Stdout` |
+| `Stdout.write` | `String -> Stdout -> <IO> Stdout` |
+| `Stdout.write_bytes` | `Bytes -> Stdout -> <IO> Stdout` |
 | `Stdout.write_line` | `String -> Stdout -> <IO> Stdout` |
 | `Stdout.flush` | `Stdout -> <IO> Stdout` |
 
 `Stdout` は標準出力のハンドルの型で、`Stderr` は標準エラーのハンドルの型である (上の「ハンドル」)。`Stderr` は、`flush` のほかの5つを同じ名前と同じ形で持つ。2つは別の型なので、一方のハンドルを他方の関数に渡すと型の誤り (E2001) になる。
 
-- `write b h` はバイト列 `b` をそのまま書き、`write_string s h` は文字列 `s` をそのまま書き、`write_line s h` は `s` と `\n` を書く。`Stdout.write_line` は `println` と、`Stderr.write_line` は `eprintln` と同じ書き方である。どれもデータを借りて、受け取ったハンドルを返す
+- `write s h` は文字列 `s` をそのまま書き、`write_bytes b h` はバイト列 `b` をそのまま書き、`write_line s h` は `s` と `\n` を書く。`Stdout.write_line` は `println` と、`Stderr.write_line` は `eprintln` と同じ書き方である。どれもデータを借りて、受け取ったハンドルを返す
 - 1回の書き込みは、ストリームの lock の下で Host を1回呼ぶ。1回の書き込みはほかの書き込みと途中で混ざらないが、2回の書き込みの間には、ほかの書き込みが入りうる
 - 書き込みは、Host がストリームごとに持つ buffer に入る。標準出力は、端末なら `\n` を含む書き込みが書き出し、端末でなければ 64 KiB ずつまとめて書く。標準エラーは書くたびに書き出すので、`Stderr` は `flush` を持たない ([オブジェクトモデル](object-model.md) の「出力のバッファ」)
 - `Stdout.flush h` は、標準出力の buffer を書き出す。ほかに Host が buffer を書き出すのは、`main` の終わり、`exit`、実行時エラーを出す前、割り込みか上限で止めたとき、REPL の入力の区切り、`Proc.run` の前、標準入力の読み手の補充の前である
@@ -475,6 +479,33 @@ pub while : (Unit -> <e> Bool) -> (Unit -> <e> Unit) -> <e> Unit
 - `read_line_bytes file` は、今の位置から1行を読み、行の終わりを `Bytes.trim_line_end` で除いて返す。終わりなら `None` を返す。std の中だけの extern `read_line_bytes_raw : FileIn -> <IO> (Bytes, FileIn)` の上に書いてあり、`read_line_raw` と同じく、行の終わりを含む1行か、終わりなら空のバイト列を返す。読み手の buffer から行を直接ヒープのバイト列に写すので、1つの buffer に収まる行は1回だけ写す。64 KiB の補充をまたぐ行は、補充ごとにバイト列を伸ばし、伸ばすときに `Bytes.push` と同じく容量を倍にして作り直しうる (それまでの部分を写し直す)
 - `read_chunk buf file` は、読み手の buffer に残ったバイトを、空なら1回補充して読めたバイトを、`buf` の後ろに足して返す。終わりなら何も足さない。`buf` は消費し、`Bytes.push` と同じく、一意で容量が足りればその場で伸ばす。読みが失敗したときは `buf` を手放してから誤りを返す。1回で足すバイトは 64 KiB 以下である
 
+## `FileOut`
+
+| 関数 | 型 |
+|---|---|
+| `create` | `String -> <IO> FileOut` |
+| `append` | `String -> <IO> FileOut` |
+| `close` | `FileOut -> <IO> Unit` |
+| `write` | `String -> FileOut -> <IO> FileOut` |
+| `write_bytes` | `Bytes -> FileOut -> <IO> FileOut` |
+| `write_line` | `String -> FileOut -> <IO> FileOut` |
+| `flush` | `FileOut -> <IO> FileOut` |
+
+`FileOut` はファイルを書くハンドルの型である (上の「ハンドル」)。線形な型 (`Lin`) で、ちょうど1回使う。
+
+- `create path` は、ファイルを作るか切り詰めて開く。`append path` は、ファイルを作るか、末尾に足す形で開く。相対パスの扱いは `FileIn.open` と同じである ([エフェクトと handler](effects.md) の「組み込みの `IO`」)
+- 書く関数は、`Stdout` の同じ名前の関数と同じ意味である (上の「`Stdout` と `Stderr`」)。`write s f` は文字列 `s` を、`write_bytes b f` はバイト列 `b` をそのまま書き、`write_line s f` は `s` と `\n` を書く。どれもデータを借りて、受け取った `FileOut` を返す
+- `FileOut` は自分の書き込みの buffer (64 KiB) を持つ。ファイルに書き出すのは、buffer があふれたとき、`flush` を呼んだとき、`close` を呼んだときの3つだけである。`fsync` はしない。`main` の終わりや実行時エラーの前の書き出しは、標準出力の buffer だけを書き出し、`FileOut` の buffer に触れない
+- `close f` は、書き出してから閉じる。std の中だけの extern `close_raw : FileOut -> <IO> Unit` の上に、`close h = close_raw (flush h)` と書いてある。書き出せなければ `close_raw` に進まず、`flush` の誤りを返す
+- 閉じずに手放したときも、破棄処理が buffer を書き出し、誤りを捨てる。巻き戻し (`try_io`、`try_panic`、`never` の操作)、`exit`、捕まえなかった実行時エラーのどれで手放しても、書いた中身は書き出される。失うのは、2回目の Ctrl-C と abort のときだけである ([オブジェクトモデル](object-model.md) の「出力のバッファ」)
+
+`write`、`write_bytes`、`write_line`、`flush`、`close` が書けなかったときは、`Io { op: Write, .. }` (``cannot write `<path>`: <reason>``) を返す。標準出力と違って書き込みの順で誤りが決まるので、`try_io` で捕まえる。誤りを返したときの約束は次の4つである。
+
+1. ハンドルは閉じている
+2. ファイルには、そのハンドルに渡したバイトの先頭の部分が残る。どこまで書けたかは約束しない
+3. 書いていない残りの buffer は捨て、それ以上書かない。そのため、誤りを返した後にファイルが伸びない
+4. 誤りは、この呼び出しか、同じハンドルのそれより前の書き込みの失敗を表す
+
 ## `Fs`
 
 | 関数 | 型 |
@@ -482,10 +513,10 @@ pub while : (Unit -> <e> Bool) -> (Unit -> <e> Unit) -> <e> Unit
 | `read_text` | `String -> <IO> String` |
 | `write_text` | `String -> String -> <IO> Unit` |
 
-パスで1回に済む関数である。ハンドルを使う読みは `FileIn` にある。
+パスで1回に済む関数である。ハンドルを使う読みは `FileIn` に、書きは `FileOut` にある。`Fs` は extern を持たず、どの関数も `FileIn` と `FileOut` の上に eml で書いてある。
 
 - `read_text path` は、ファイル全体を文字列として読む。`FileIn.open`、`FileIn.read_all`、`FileIn.close` で書いた関数である
-- `write_text path text` は、ファイルを作るか切り詰めて、`text` を書く
+- `write_text path text` は、ファイルを作るか切り詰めて、`text` を書く。`write_text path text = FileOut.close (FileOut.write text (FileOut.create path))` である。開けないときと書けないときの誤りは、`FileOut` の関数の誤りである
 
 ## `Proc`
 
@@ -637,7 +668,8 @@ I/O の失敗の一部は `try_io` で捕まえられる (上の「`try_io`」)�
 | `String.decode` の妥当でない UTF-8 | ``invalid UTF-8 at byte 3`` (数は最初の妥当でないバイトの位置) |
 | 配列の添字の範囲の外 (`get`、`set`、`read`、`write`) | ``array index 3 is out of range for length 3`` |
 | 配列の負の長さ (`make`、`tabulate`) | ``array length -1 is negative`` |
-| `Fs.write_text` | ``cannot write `out.txt`: permission denied`` |
+| `FileOut.create`、`append` | ``cannot open `out.txt`: permission denied`` |
+| `FileOut.write`、`write_bytes`、`write_line`、`flush`、`close` | ``cannot write `out.txt`: I/O error`` |
 | `Proc.run` の起動 | ``cannot run `rsync`: not found`` |
 | 標準入力の2つ目のハンドル | ``the standard input is already open`` |
 | 標準出力の2つ目のハンドル | ``the standard output is already open`` |

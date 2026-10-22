@@ -98,9 +98,9 @@ pub enum Open {
 /// `Ctx::handle_write` が書くデータの種類と書き方。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Write {
-    /// バイト列をそのまま書く (`write`)。
+    /// バイト列をそのまま書く (`write_bytes`)。
     Bytes,
-    /// 文字列をそのまま書く (`write_string`)。
+    /// 文字列をそのまま書く (`write`)。
     Text,
     /// 文字列と `\n` を1行として書く (`write_line`。`println` と同じ)。
     Line,

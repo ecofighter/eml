@@ -3,7 +3,7 @@
 pub extern data Stdout
 pub extern open : Unit -> <IO, Panic> Stdout
 pub extern close : Stdout -> <IO> Unit
-pub extern write : Bytes -> Stdout -> <IO> Stdout
-pub extern write_string : String -> Stdout -> <IO> Stdout
+pub extern write : String -> Stdout -> <IO> Stdout
+pub extern write_bytes : Bytes -> Stdout -> <IO> Stdout
 pub extern write_line : String -> Stdout -> <IO> Stdout
 pub extern flush : Stdout -> <IO> Stdout

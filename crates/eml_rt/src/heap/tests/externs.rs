@@ -13,7 +13,7 @@ use super::string::text;
 use super::table::{self, Arg, Case, EDGES, Outcome, Scratch};
 use crate::externs::*;
 use crate::heap::ctx::positions::{find_byte, find_bytes};
-use crate::{Buffering, Control, HeapError, HostRef, Limits, Mode, StdHost, Stop, Word};
+use crate::{Buffering, Control, HeapError, HostRef, Limits, Mode, StdHost, Stop, Word, WriteMode};
 
 fn ordering(o: Order) -> i64 {
     match o {
@@ -1063,9 +1063,9 @@ fn println_writes_a_line_and_releases_its_text<M: Mode>() {
     let mut ctx = ctx_with::<M>(&memory);
     unsafe {
         let a = s(&mut ctx, "héllo");
-        ctx.write_string(crate::Stream::Out, a).unwrap();
+        ctx.println(crate::Stream::Out, a).unwrap();
         let e = s(&mut ctx, "");
-        ctx.write_string(crate::Stream::Out, e).unwrap();
+        ctx.println(crate::Stream::Out, e).unwrap();
     }
     ctx.flush().unwrap();
     assert_eq!(memory.out(), "héllo\n\n");
@@ -1080,7 +1080,7 @@ fn a_failed_write_still_releases_the_text<M: Mode>() {
     unsafe {
         let a = s(&mut ctx, "x");
         assert_eq!(
-            ctx.write_string(crate::Stream::Out, a),
+            ctx.println(crate::Stream::Out, a),
             Err(Fault::Output("disk full".into()))
         );
     }
@@ -1096,11 +1096,11 @@ fn println_refuses_a_non_string<M: Mode>() {
     unsafe {
         let d = ctx.heap_mut().alloc_data(0, 0, 1, false);
         assert_eq!(
-            ctx.write_string(crate::Stream::Out, d),
+            ctx.println(crate::Stream::Out, d),
             Err(Fault::Heap(HeapError::WrongKind))
         );
         assert_eq!(
-            ctx.write_string(crate::Stream::Out, Word::imm(0)),
+            ctx.println(crate::Stream::Out, Word::imm(0)),
             Err(Fault::Heap(HeapError::WrongKind))
         );
         assert_eq!(memory.out(), "");
@@ -2143,7 +2143,7 @@ unsafe fn call<M: Mode>(
             }
             "Prelude.println" => {
                 let a = one(ctx, args);
-                ctx.write_string(crate::Stream::Out, a)?;
+                ctx.println(crate::Stream::Out, a)?;
                 ctx.flush()?;
                 Outcome::Out(out.text())
             }
@@ -2165,6 +2165,50 @@ unsafe fn call<M: Mode>(
                 }
                 ctx.handle_close(f, Handle::FileIn)?;
                 Outcome::Str(read?)
+            }
+            "Std.FileOut.write"
+            | "Std.FileOut.write_line"
+            | "Std.FileOut.write_bytes"
+            | "Std.FileOut.append" => {
+                let (mode, write, times) = match name {
+                    "Std.FileOut.write" => (WriteMode::Truncate, Write::Text, 1),
+                    "Std.FileOut.write_line" => (WriteMode::Truncate, Write::Line, 1),
+                    "Std.FileOut.write_bytes" => (WriteMode::Truncate, Write::Bytes, 1),
+                    _ => (WriteMode::Append, Write::Text, 2),
+                };
+                let data = if write == Write::Bytes {
+                    args.lent_bytes(ctx, &inputs[1])
+                } else {
+                    args.lent_string(ctx, &inputs[1], root)
+                };
+                // 書き込みは書き出してから閉じ、読み戻した中身を結果にする。`append` は同じデータを2回足す
+                for _ in 0..times {
+                    let p = one(ctx, args);
+                    let f = ctx.fs_open(p, Open::Write(mode))?;
+                    let f = ctx.handle_write(f, Handle::FileOut, data, write)?;
+                    let f = ctx.handle_flush(f, Handle::FileOut)?;
+                    ctx.handle_close(f, Handle::FileOut)?;
+                }
+                let p = one(ctx, args);
+                let f = ctx.fs_open(p, Open::Read)?;
+                let form = if write == Write::Bytes {
+                    Form::Bytes
+                } else {
+                    Form::Text
+                };
+                let w = ctx.handle_read(f, Handle::FileIn, ReadAmount::All, form);
+                ctx.handle_close(f, Handle::FileIn)?;
+                if write == Write::Bytes {
+                    take_bytes(ctx, w?)
+                } else {
+                    take_text(ctx, w?)
+                }
+            }
+            "Std.FileOut.create" => {
+                let p = one(ctx, args);
+                let f = ctx.fs_open(p, Open::Write(WriteMode::Truncate))?;
+                ctx.handle_close(f, Handle::FileOut)?;
+                Outcome::Unit
             }
             "Std.String.byte_length" => {
                 let a = lent_one(ctx, args);

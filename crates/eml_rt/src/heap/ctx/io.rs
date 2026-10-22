@@ -114,7 +114,7 @@ impl<M: Mode> Ctx<M> {
     /// # Safety
     /// `heap_mut` の前提を守っている。`s` は即値か、このヒープか付けた塊の生きている物体を指し、呼ぶ側がその参照を1つ
     /// 持つ。速いモードでは、`s` は文字列である (検査モードは確かめ、違えば何も書かずに `WrongKind` を返す)。
-    pub unsafe fn write_string(&mut self, stream: Stream, s: Word) -> (r: Result<(), Fault>)
+    pub unsafe fn println(&mut self, stream: Stream, s: Word) -> (r: Result<(), Fault>)
         requires
             old(self).wf(),
             old(self).heap_spec().word_in(s),
@@ -1076,7 +1076,7 @@ impl<M: Mode> Ctx<M> {
         Ok(())
     }
 
-    /// `FileOut.write`、`write_bytes`、`write_line`、`Stdout.write`、`write_string`、`write_line` と、`Stderr` の同じ3つ。
+    /// `FileOut.write`、`write_bytes`、`write_line`、`Stdout.write`、`write_bytes`、`write_line` と、`Stderr` の同じ3つ。
     /// `data` を借りて `handle` のハンドル `h` に書き、`h` をそのまま返す。`write` がデータの種類と書き方を決め、`Line`
     /// は `println` と同じく `\n` を足して1行として書く。標準のストリームのハンドルは buffer を持たず Host の buffer に、
     /// `FileOut` は自分の buffer に書く (docs/spec/object-model.md の「出力のバッファ」)。書けなければ `h` を手放して、

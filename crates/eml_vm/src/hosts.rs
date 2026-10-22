@@ -79,9 +79,9 @@ impl Write for WrittenFile {
 }
 
 /// テストの Host。標準出力と標準エラーを、それぞれメモリに捕まえる。引数、標準入力、環境変数は与えたものだけで、本物の
-/// 環境は読まない。テストの結果を実行する場所によらないものにするためである。`Fs.write_text` と `FileOut` はディスクに
-/// 書かずに覚え、同じパスの `FileIn.open` はそれを読む。リポジトリの中にファイルを作らないためである。子のプロセスは本物を起動し、
-/// その標準出力と標準エラーも捕まえる (docs/implementation/testing.md の「UI テスト」)。
+/// 環境は読まない。テストの結果を実行する場所によらないものにするためである。`FileOut` はディスクに書かずに覚え、同じ
+/// パスの `FileIn.open` はそれを読む。リポジトリの中にファイルを作らないためである。子のプロセスは本物を起動し、その
+/// 標準出力と標準エラーも捕まえる (docs/implementation/testing.md の「UI テスト」)。
 pub struct CaptureHost {
     // 出力とファイルの読みは `eml run` と同じ `StdHost` に任せ、出力のまとめ方も同じにする
     inner: StdHost,
@@ -208,13 +208,6 @@ impl Host for CaptureHost {
             files: self.written.clone(),
             path: path.to_string(),
         }))
-    }
-
-    fn write_file(&self, path: &str, text: &str) -> io::Result<()> {
-        self.written
-            .lock()
-            .insert(path.to_string(), text.as_bytes().to_vec());
-        Ok(())
     }
 
     /// 子の環境は与えた表に本物の `PATH` を足したもので、標準入力は空である。子の標準出力と標準エラーは、それまでの

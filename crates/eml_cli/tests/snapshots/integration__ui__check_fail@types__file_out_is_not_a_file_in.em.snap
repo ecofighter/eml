@@ -1,0 +1,14 @@
+---
+source: crates/eml_cli/tests/ui.rs
+expression: rendered
+input_file: tests/ui/check-fail/types/file_out_is_not_a_file_in.em
+---
+[E2001] Error: mismatched types
+   ╭─[ check-fail/types/file_out_is_not_a_file_in.em:6:25 ]
+   │
+ 6 │ main () = FileIn.close (FileOut.create "out.txt")
+   │           ──────┬─────  ────────────┬───────────  
+   │                 ╰───────────────────────────────── argument 1 of `close`
+   │                                     │             
+   │                                     ╰───────────── expected `FileIn`, found `FileOut`
+───╯

@@ -4,7 +4,7 @@
 
 use eml_extern::{Extern, ExternEffect, Purity};
 use eml_rt::externs::{self, Fault};
-use eml_rt::{Ctx, Form, Handle, Mode, Open, ReadAmount, Stream, Token, Word, Write};
+use eml_rt::{Ctx, Form, Handle, Mode, Open, ReadAmount, Stream, Token, Word, Write, WriteMode};
 
 use crate::RunCounts;
 use crate::apply;
@@ -920,11 +920,16 @@ fn run_extern<M: Mode>(
         // スロットに残り、巻き戻しの表が手放す (docs/spec/lir.md の「extern の借用」)
         match ext {
             Extern::Println => {
-                ctx.write_string(Stream::Out, task.get(arg(0)))?;
+                ctx.println(Stream::Out, task.get(arg(0)))?;
                 task.set(dst, Word::UNIT);
             }
-            Extern::Open => {
-                let w = ctx.fs_open(task.get(arg(0)), Open::Read)?;
+            Extern::Open | Extern::FileOutCreate | Extern::FileOutAppend => {
+                let open = match ext {
+                    Extern::Open => Open::Read,
+                    Extern::FileOutCreate => Open::Write(WriteMode::Truncate),
+                    _ => Open::Write(WriteMode::Append),
+                };
+                let w = ctx.fs_open(task.get(arg(0)), open)?;
                 task.set(dst, w);
             }
             Extern::ReadAll
@@ -958,9 +963,14 @@ fn run_extern<M: Mode>(
                 let w = ctx.handle_read(task.get(arg(1)), handle, chunk, Form::Bytes)?;
                 task.set(dst, w);
             }
-            Extern::Close | Extern::StdinClose | Extern::StdoutClose | Extern::StderrClose => {
+            Extern::Close
+            | Extern::FileOutCloseRaw
+            | Extern::StdinClose
+            | Extern::StdoutClose
+            | Extern::StderrClose => {
                 let handle = match ext {
                     Extern::Close => Handle::FileIn,
+                    Extern::FileOutCloseRaw => Handle::FileOut,
                     Extern::StdinClose => Handle::Stdin,
                     Extern::StdoutClose => Handle::Stdout,
                     _ => Handle::Stderr,
@@ -977,25 +987,36 @@ fn run_extern<M: Mode>(
                 let w = ctx.handle_open(handle)?;
                 task.set(dst, w);
             }
-            Extern::StdoutWrite
-            | Extern::StdoutWriteString
+            Extern::FileOutWrite
+            | Extern::FileOutWriteBytes
+            | Extern::FileOutWriteLine
+            | Extern::StdoutWrite
+            | Extern::StdoutWriteBytes
             | Extern::StdoutWriteLine
             | Extern::StderrWrite
-            | Extern::StderrWriteString
+            | Extern::StderrWriteBytes
             | Extern::StderrWriteLine => {
                 let (handle, write) = match ext {
-                    Extern::StdoutWrite => (Handle::Stdout, Write::Bytes),
-                    Extern::StdoutWriteString => (Handle::Stdout, Write::Text),
+                    Extern::FileOutWrite => (Handle::FileOut, Write::Text),
+                    Extern::FileOutWriteBytes => (Handle::FileOut, Write::Bytes),
+                    Extern::FileOutWriteLine => (Handle::FileOut, Write::Line),
+                    Extern::StdoutWrite => (Handle::Stdout, Write::Text),
+                    Extern::StdoutWriteBytes => (Handle::Stdout, Write::Bytes),
                     Extern::StdoutWriteLine => (Handle::Stdout, Write::Line),
-                    Extern::StderrWrite => (Handle::Stderr, Write::Bytes),
-                    Extern::StderrWriteString => (Handle::Stderr, Write::Text),
+                    Extern::StderrWrite => (Handle::Stderr, Write::Text),
+                    Extern::StderrWriteBytes => (Handle::Stderr, Write::Bytes),
                     _ => (Handle::Stderr, Write::Line),
                 };
                 let w = ctx.handle_write(task.get(arg(1)), handle, task.get(arg(0)), write)?;
                 task.set(dst, w);
             }
-            Extern::StdoutFlush => {
-                let w = ctx.handle_flush(task.get(arg(0)), Handle::Stdout)?;
+            Extern::StdoutFlush | Extern::FileOutFlush => {
+                let handle = if ext == Extern::StdoutFlush {
+                    Handle::Stdout
+                } else {
+                    Handle::FileOut
+                };
+                let w = ctx.handle_flush(task.get(arg(0)), handle)?;
                 task.set(dst, w);
             }
             Extern::CharShow | Extern::CharDisplay => {
@@ -1033,7 +1054,7 @@ fn run_extern<M: Mode>(
                 task.set(dst, w);
             }
             Extern::Eprintln => {
-                ctx.write_string(Stream::Err, task.get(arg(0)))?;
+                ctx.println(Stream::Err, task.get(arg(0)))?;
                 task.set(dst, Word::UNIT);
             }
             Extern::StrCharAt => {
@@ -1133,10 +1154,6 @@ fn run_extern<M: Mode>(
             Extern::EnvLookup => {
                 let w = ctx.env_var(task.get(arg(0)))?;
                 task.set(dst, w);
-            }
-            Extern::WriteText => {
-                ctx.fs_write_text(task.get(arg(0)), task.get(arg(1)))?;
-                task.set(dst, Word::UNIT);
             }
             Extern::ProcStatus => {
                 let code = ctx.proc_status(task.get(arg(0)), task.get(arg(1)))?;

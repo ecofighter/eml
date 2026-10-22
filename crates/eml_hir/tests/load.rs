@@ -291,11 +291,22 @@ static FAKE_FS: LazyLock<String> = LazyLock::new(|| {
 });
 
 fn fake_std() -> Vec<(&'static str, &'static str)> {
-    let [file_in, string, bytes, list, char, byte, iter, yield_] = fs_imports();
+    let [
+        file_in,
+        file_out,
+        string,
+        bytes,
+        list,
+        char,
+        byte,
+        iter,
+        yield_,
+    ] = fs_imports();
     vec![
         ("Prelude.em", eml_hir::PRELUDE_SOURCE),
         ("Fs.em", FAKE_FS.as_str()),
         file_in,
+        file_out,
         string,
         bytes,
         list,
@@ -306,12 +317,13 @@ fn fake_std() -> Vec<(&'static str, &'static str)> {
     ]
 }
 
-/// 本物の `Fs` が読む標準ライブラリのモジュール。`Fs` は `String` と `FileIn` を import し、`FileIn` は `String` と `Bytes` を、
-/// `String` は `List`、`Char`、`Iter`、`Yield` を、`Char` は `Byte` を、`Iter` は `List` と `Yield` を import するので、
-/// 本物の `Fs` を使う偽の木にはこの8つも要る。
-fn fs_imports() -> [(&'static str, &'static str); 8] {
+/// 本物の `Fs` が読む標準ライブラリのモジュール。`Fs` は `FileIn` と `FileOut` を import し、`FileIn` と `FileOut` は
+/// `String` と `Bytes` を、`String` は `List`、`Char`、`Iter`、`Yield` を、`Char` は `Byte` を、`Iter` は `List` と `Yield`
+/// を import するので、本物の `Fs` を使う偽の木にはこの9つも要る。
+fn fs_imports() -> [(&'static str, &'static str); 9] {
     [
         std_module("FileIn.em"),
+        std_module("FileOut.em"),
         std_module("String.em"),
         std_module("Bytes.em"),
         std_module("List.em"),
@@ -434,12 +446,13 @@ f () = Fs.greet ()",
             "Util",
             "Std.Fs",
             "Std.List",
-            "Std.String",
             "Std.FileIn",
+            "Std.FileOut",
+            "Std.String",
+            "Std.Bytes",
             "Std.Char",
             "Std.Iter",
             "Std.Yield",
-            "Std.Bytes",
             "Std.Byte"
         ]
     );
@@ -451,12 +464,13 @@ f () = Fs.greet ()",
             "Util.em",
             "<std>/Fs.em",
             "<std>/List.em",
-            "<std>/String.em",
             "<std>/FileIn.em",
+            "<std>/FileOut.em",
+            "<std>/String.em",
+            "<std>/Bytes.em",
             "<std>/Char.em",
             "<std>/Iter.em",
             "<std>/Yield.em",
-            "<std>/Bytes.em",
             "<std>/Byte.em"
         ]
     );
@@ -466,6 +480,7 @@ f () = Fs.greet ()",
             ModuleOrigin::Std,
             ModuleOrigin::User,
             ModuleOrigin::User,
+            ModuleOrigin::Std,
             ModuleOrigin::Std,
             ModuleOrigin::Std,
             ModuleOrigin::Std,
@@ -565,13 +580,14 @@ fn an_import_prefers_the_user_module_of_the_same_name() {
             "Main",
             "Fs",
             "Std.Fs",
-            "Std.String",
             "Std.FileIn",
+            "Std.FileOut",
+            "Std.String",
+            "Std.Bytes",
             "Std.List",
             "Std.Char",
             "Std.Iter",
             "Std.Yield",
-            "Std.Bytes",
             "Std.Byte"
         ]
     );
@@ -640,13 +656,14 @@ fn a_qualifier_means_what_each_module_imports() {
             "Fs",
             "Std.Fs",
             "B",
-            "Std.String",
             "Std.FileIn",
+            "Std.FileOut",
+            "Std.String",
+            "Std.Bytes",
             "Std.List",
             "Std.Char",
             "Std.Iter",
             "Std.Yield",
-            "Std.Bytes",
             "Std.Byte"
         ]
     );
@@ -670,13 +687,14 @@ fn an_import_falls_back_to_the_std_module_when_the_file_is_missing() {
             "Prelude",
             "Main",
             "Std.Fs",
-            "Std.String",
             "Std.FileIn",
+            "Std.FileOut",
+            "Std.String",
+            "Std.Bytes",
             "Std.List",
             "Std.Char",
             "Std.Iter",
             "Std.Yield",
-            "Std.Bytes",
             "Std.Byte"
         ]
     );
@@ -776,13 +794,24 @@ const FS_HEAD_LINES: usize = 6;
 
 #[test]
 fn a_std_module_reaches_another_only_through_an_import() {
-    let [file_in, string, bytes, list, char, byte, iter, yield_] = fs_imports();
+    let [
+        file_in,
+        file_out,
+        string,
+        bytes,
+        list,
+        char,
+        byte,
+        iter,
+        yield_,
+    ] = fs_imports();
     let other = "pub x : Int\nx = 1\n";
     let without = [
         ("Prelude.em", eml_hir::PRELUDE_SOURCE),
         ("Fs.em", &fs_with("pub f : Unit -> Int\nf () = Other.x\n")),
         ("Other.em", other),
         file_in,
+        file_out,
         string,
         bytes,
         list,
@@ -805,6 +834,7 @@ fn a_std_module_reaches_another_only_through_an_import() {
         ),
         ("Other.em", other),
         file_in,
+        file_out,
         string,
         bytes,
         list,
@@ -823,14 +853,15 @@ fn a_std_module_reaches_another_only_through_an_import() {
             "Prelude",
             "Main",
             "Std.Fs",
-            "Std.String",
             "Std.FileIn",
+            "Std.FileOut",
             "Std.Other",
+            "Std.String",
+            "Std.Bytes",
             "Std.List",
             "Std.Char",
             "Std.Iter",
             "Std.Yield",
-            "Std.Bytes",
             "Std.Byte"
         ]
     );
@@ -840,7 +871,17 @@ fn a_std_module_reaches_another_only_through_an_import() {
 
 #[test]
 fn a_std_module_reaches_another_by_its_canonical_name_too() {
-    let [file_in, string, bytes, list, char, byte, iter, yield_] = fs_imports();
+    let [
+        file_in,
+        file_out,
+        string,
+        bytes,
+        list,
+        char,
+        byte,
+        iter,
+        yield_,
+    ] = fs_imports();
     let other = "pub x : Int\nx = 1\n";
     let std = [
         ("Prelude.em", eml_hir::PRELUDE_SOURCE),
@@ -850,6 +891,7 @@ fn a_std_module_reaches_another_by_its_canonical_name_too() {
         ),
         ("Other.em", other),
         file_in,
+        file_out,
         string,
         bytes,
         list,
@@ -867,7 +909,17 @@ fn a_std_module_reaches_another_by_its_canonical_name_too() {
 
 #[test]
 fn a_std_module_cannot_import_the_prelude() {
-    let [file_in, string, bytes, list, char, byte, iter, yield_] = fs_imports();
+    let [
+        file_in,
+        file_out,
+        string,
+        bytes,
+        list,
+        char,
+        byte,
+        iter,
+        yield_,
+    ] = fs_imports();
     // 標準ライブラリのモジュールも Prelude を暗黙に取り込むので、書いた `import Prelude` は誤りである
     let std = [
         ("Prelude.em", eml_hir::PRELUDE_SOURCE),
@@ -876,6 +928,7 @@ fn a_std_module_cannot_import_the_prelude() {
             &fs_with("import Prelude\nimport Std.Prelude as P\n"),
         ),
         file_in,
+        file_out,
         string,
         bytes,
         list,
@@ -913,13 +966,14 @@ fn a_std_directory_in_the_user_root_is_never_read() {
             "Prelude",
             "Main",
             "Std.Fs",
-            "Std.String",
             "Std.FileIn",
+            "Std.FileOut",
+            "Std.String",
+            "Std.Bytes",
             "Std.List",
             "Std.Char",
             "Std.Iter",
             "Std.Yield",
-            "Std.Bytes",
             "Std.Byte"
         ]
     );

@@ -31,7 +31,7 @@ fn eprintln_writes_to_the_standard_error<M: Mode>() {
     let mut ctx = ctx_with::<M>(&memory);
     unsafe {
         let a = s(&mut ctx, "oops");
-        ctx.write_string(Stream::Err, a).unwrap();
+        ctx.println(Stream::Err, a).unwrap();
     }
     assert_eq!(memory.err(), "oops\n");
     assert_eq!(memory.out(), "");
@@ -270,28 +270,6 @@ fn a_failed_stdin_read_leaves_the_reader_in_the_slot<M: Mode>() {
     let w = stdin_read(&mut ctx, true).unwrap();
     assert_eq!(text(ctx.heap(), w), "ok\n");
     unsafe { ctx.heap_mut().decref(w) }.unwrap();
-    assert_eq!(mortal(ctx.heap()), 0);
-}
-
-fn a_file_is_written_whole<M: Mode>() {
-    let memory = Arc::new(MemoryHost::default());
-    let mut ctx = ctx_with::<M>(&memory);
-    unsafe {
-        let p = s(&mut ctx, "out.txt");
-        let t = s(&mut ctx, "日本\n");
-        ctx.fs_write_text(p, t).unwrap();
-        let p = s(&mut ctx, "");
-        let t = s(&mut ctx, "x");
-        assert_eq!(
-            ctx.fs_write_text(p, t),
-            Err(Fault::Io {
-                op: IoOp::Write,
-                name: "".into(),
-                reason: IoReason::PermissionDenied
-            })
-        );
-    }
-    assert_eq!(memory.written("out.txt").as_deref(), Some("日本\n"));
     assert_eq!(mortal(ctx.heap()), 0);
 }
 
@@ -548,7 +526,6 @@ both_modes!(
     the_output_is_flushed_before_the_standard_input_is_read,
     a_line_read_refills_once_per_64_kib,
     a_failed_stdin_read_leaves_the_reader_in_the_slot,
-    a_file_is_written_whole,
     a_process_gets_its_arguments_split_at_nul,
     a_process_stops_on_an_interrupt,
     stream_handles_write_into_the_host_buffers,

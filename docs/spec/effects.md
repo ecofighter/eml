@@ -64,7 +64,7 @@ effect Fail where
 - extern の関数の呼び出しは、操作の呼び出しと違って `perform` 命令にならない ([Core IR](core-ir.md))。多重度は `once` として扱う。
 - handler の節の先頭に、`IO` を起こす extern の関数の名前を書いたらエラーにする (E1009)。節の先頭の名前は、まず操作として引き、見つからないときだけ extern の関数を引く。extern のエフェクト (`IO` か `Panic`) を起こす extern の関数が見つかれば E1009 で、それ以外 (純粋な extern の関数) は E1001 である。ユーザーが定義した同名の関数は、`Prelude` の extern の関数を隠さない ([モジュールと名前解決](modules.md) の「名前の解決」)。
 
-`IO` を起こす extern の関数のうち、線形なファイルを扱うものは次のとおりである。ほかの標準ライブラリの関数 (`eprintln`、`Env`、`Fs.write_text`、`Proc.run` など) と、標準のストリームの線形なハンドル (`Stdin`、`Stdout`、`Stderr`) の関数は [標準ライブラリ](stdlib.md) にある。`println` は、`Stdout` のハンドルと同じ Host の標準出力の buffer に書く ([標準ライブラリ](stdlib.md) の「`Stdout` と `Stderr`」)。
+`IO` を起こす extern の関数のうち、線形なファイルを扱うものは次のとおりである。ほかの標準ライブラリの関数 (`eprintln`、`Env`、`Fs.write_text`、`Proc.run` など) と、ほかの線形なハンドル (書くファイルの `FileOut`、標準のストリームの `Stdin`、`Stdout`、`Stderr`) の関数は [標準ライブラリ](stdlib.md) にある。`println` は、`Stdout` のハンドルと同じ Host の標準出力の buffer に書く ([標準ライブラリ](stdlib.md) の「`Stdout` と `Stderr`」)。
 
 | 名前 | 所属 | 型 |
 |---|---|---|
@@ -85,7 +85,7 @@ extern のエフェクトは、型検査では普通のエフェクトと次の�
 
 重なりを1つにまとめ、`mask` に入れなくてよいのは、`IO` の操作が `never` の `io_failed` だけで、捕まえるのが例外と同じく実行の時点で最も近い `try_io` だからである。どちらの `IO` に届いても、捕まえる `try_io` は同じになる。
 
-組み込みのリソースは、どのスレッドで後始末してもよいものに限る。現状の `FileIn` はこれを満たす ([マルチコア対応の設計](../future/multicore.md))。
+組み込みのリソースは、どのスレッドで後始末してもよいものに限る。現状の `FileIn` と `FileOut` はこれを満たす ([マルチコア対応の設計](../future/multicore.md))。
 
 ## 組み込みの `Panic`
 

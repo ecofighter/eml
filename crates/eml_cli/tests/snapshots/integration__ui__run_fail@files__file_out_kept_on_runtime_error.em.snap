@@ -1,0 +1,12 @@
+---
+source: crates/eml_cli/tests/ui.rs
+expression: "format!(\"--- stdout ---\\n{stdout}--- stderr ---\\n{diagnostics}{stderr}--- runtime error ---\\n{error}\\n{written}\")"
+input_file: tests/ui/run-fail/files/file_out_kept_on_runtime_error.em
+---
+--- stdout ---
+--- stderr ---
+--- runtime error ---
+panicked: stop
+  at run-fail/files/file_out_kept_on_runtime_error.em:7:3
+--- written: out.txt ---
+kept

@@ -194,13 +194,14 @@ fn imports_of_inputs_follow_the_inputs_in_the_order_they_are_found() {
             "A",
             "Std.Fs",
             "B",
-            "Std.String",
             "Std.FileIn",
+            "Std.FileOut",
+            "Std.String",
+            "Std.Bytes",
             "Std.List",
             "Std.Char",
             "Std.Iter",
             "Std.Yield",
-            "Std.Bytes",
             "Std.Byte"
         ]
     );
@@ -253,13 +254,14 @@ fn a_cached_fallback_to_the_standard_library_stays() {
             "Prelude",
             "<input 1>",
             "Std.Fs",
-            "Std.String",
             "Std.FileIn",
+            "Std.FileOut",
+            "Std.String",
+            "Std.Bytes",
             "Std.List",
             "Std.Char",
             "Std.Iter",
             "Std.Yield",
-            "Std.Bytes",
             "Std.Byte"
         ]
     );
