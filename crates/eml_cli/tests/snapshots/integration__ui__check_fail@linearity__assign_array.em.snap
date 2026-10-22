@@ -4,15 +4,15 @@ expression: rendered
 input_file: tests/ui/check-fail/linearity/assign_array.em
 ---
 [E3008] Error: the array variable `a` cannot be assigned with `<-`
-   ╭─[ check-fail/linearity/assign_array.em:5:3 ]
+   ╭─[ check-fail/linearity/assign_array.em:7:3 ]
    │
- 5 │   a <- MutArray.make 4 0
+ 7 │   a <- MutArray.make 4 0
    │   ───────────┬──────────  
    │              ╰──────────── this assigns to `a`
    │
-   ├─[ check-fail/linearity/assign_array.em:5:3 ]
+   ├─[ check-fail/linearity/assign_array.em:7:3 ]
    │
- 4 │   var a = MutArray.make 3 0
+ 6 │   var a = MutArray.make 3 0
    │   ────────────┬────────────  
    │               ╰────────────── `a` is declared here
    │ 

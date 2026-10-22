@@ -1,4 +1,6 @@
 -- `Float.to_fixed n x` は Python の `f"{x:.{n}f}"` と同じ文字列を返す。期待値は Python 3.14 で作った。
+import Float
+
 main : Unit -> <IO, Panic> Unit
 main () =
   println (Float.to_fixed 0 2.5)

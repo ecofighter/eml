@@ -1,5 +1,7 @@
 -- `File` を捕まえる自分を参照しないローカル関数は、ラムダと同じ規則に従う。2回呼ぶ (E3002)、呼ばない (E3003)、
 -- 片方の枝だけで呼ぶ (E3003)、`multi` の操作をまたいで持つ (E3006) はどれも誤りである。
+import Fs
+
 effect Choice where
   multi choose : Unit -> Bool
 

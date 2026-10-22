@@ -1,4 +1,6 @@
 -- 標準入力 (docs/spec/stdlib.md)。入力は stdin.stdin で与え、最後の行は行の終わりを持たない
+import Stdin
+
 main : Unit -> <IO, Panic> Unit
 main () =
   let h = show_lines 2 (Stdin.open ())

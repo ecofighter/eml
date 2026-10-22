@@ -1,6 +1,7 @@
 -- 各段が `File` を持ったまま、いちばん深い所で `fail` して外側の `Fail.to_result` へ中断する。どの段の `File` も
 -- 巻き戻しで1回ずつ閉じる。
 import Fail (Fail(..))
+import Fs
 
 deep : Int -> <Fail String, IO, Panic> Int
 deep n =

@@ -2,6 +2,8 @@
 -- 経路に `mask` の付いた呼び出しがあるので、handler への特殊化は断られ、EP の道 (evidence passing) に残る
 -- (docs/spec/core-ir.md の「handler への特殊化」)。`evidence_steps` が 0 より大きい。EP の道で操作の結果と
 -- 状態を運ぶ費用を見る。`allocations` は操作の回数によらない (docs/implementation/benchmarks.md の「呼び出しの規約の引き換え」)
+import Float
+
 effect Gauge where
   read : Int -> Float
 

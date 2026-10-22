@@ -7,4 +7,4 @@ input_file: tests/ui/run-fail/bytes/index.em
 --- stderr ---
 --- runtime error ---
 bytes index 5 is out of range for length 3
-  at run-fail/bytes/index.em:5:18
+  at run-fail/bytes/index.em:7:18

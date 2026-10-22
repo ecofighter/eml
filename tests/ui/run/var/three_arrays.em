@@ -1,4 +1,7 @@
 -- 配列の変数を3本使い、最後の式でそれぞれを `freeze` する
+import Array
+import MutArray
+
 build : Int -> <Panic> (Array Int, Array Int, Array Int)
 build n =
   var a = MutArray.make n 0

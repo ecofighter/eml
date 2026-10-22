@@ -4,27 +4,27 @@ expression: rendered
 input_file: tests/ui/check-fail/linearity/local_function_like_lambda.em
 ---
 [E3002] Error: `finish` must be used exactly once, but it is used more than once
-    ╭─[ check-fail/linearity/local_function_like_lambda.em:11:3 ]
+    ╭─[ check-fail/linearity/local_function_like_lambda.em:13:3 ]
     │
- 11 │   finish ()
+ 13 │   finish ()
     │   ───┬──  
     │      ╰──── used again here
     │
-    ├─[ check-fail/linearity/local_function_like_lambda.em:11:3 ]
+    ├─[ check-fail/linearity/local_function_like_lambda.em:13:3 ]
     │
- 10 │   finish ()
+ 12 │   finish ()
     │   ───┬──  
     │      ╰──── first used here
     │ 
     │ Note: linear values, such as files, the continuation of a `once` operation and closures that capture one, must be used exactly once
 ────╯
 [E3003] Error: `finish` must be used exactly once, but it is not used
-    ╭─[ check-fail/linearity/local_function_like_lambda.em:16:7 ]
+    ╭─[ check-fail/linearity/local_function_like_lambda.em:18:7 ]
     │
- 16 │   let finish () = Fs.close f
+ 18 │   let finish () = Fs.close f
     │       ───┬──  
     │          ╰──── `finish` is bound here
- 17 │   println "forgot"
+ 19 │   println "forgot"
     │                   │ 
     │                   ╰─ `finish` is not used before the end of this scope
     │ 
@@ -33,12 +33,12 @@ input_file: tests/ui/check-fail/linearity/local_function_like_lambda.em
     │ Note: linear values, such as files, the continuation of a `once` operation and closures that capture one, must be used exactly once
 ────╯
 [E3003] Error: `finish` must be used exactly once, but some paths do not use it
-    ╭─[ check-fail/linearity/local_function_like_lambda.em:22:7 ]
+    ╭─[ check-fail/linearity/local_function_like_lambda.em:24:7 ]
     │
- 22 │   let finish () = Fs.close f
+ 24 │   let finish () = Fs.close f
     │       ───┬──  
     │          ╰──── `finish` is bound here
- 23 │   if b then finish () else println "kept"
+ 25 │   if b then finish () else println "kept"
     │                            ───────┬──────  
     │                                   ╰──────── this branch does not use `finish`
     │ 
@@ -47,21 +47,21 @@ input_file: tests/ui/check-fail/linearity/local_function_like_lambda.em
     │ Note: linear values, such as files, the continuation of a `once` operation and closures that capture one, must be used exactly once
 ────╯
 [E3006] Error: `finish` must be used exactly once, but it is kept alive across a call that may resume more than once
-    ╭─[ check-fail/linearity/local_function_like_lambda.em:29:11 ]
+    ╭─[ check-fail/linearity/local_function_like_lambda.em:31:11 ]
     │
- 29 │   let b = choose ()
+ 31 │   let b = choose ()
     │           ────┬────  
     │               ╰────── this call may perform `choose`, a `multi` operation
     │
-    ├─[ check-fail/linearity/local_function_like_lambda.em:29:11 ]
+    ├─[ check-fail/linearity/local_function_like_lambda.em:31:11 ]
     │
- 28 │   let finish () = Fs.close f
+ 30 │   let finish () = Fs.close f
     │       ───┬──  
     │          ╰──── `finish` is bound here
     │
-    ├─[ check-fail/linearity/local_function_like_lambda.em:29:11 ]
+    ├─[ check-fail/linearity/local_function_like_lambda.em:31:11 ]
     │
-  4 │   multi choose : Unit -> Bool
+  6 │   multi choose : Unit -> Bool
     │         ───┬──  
     │            ╰──── `choose` is declared `multi` here
     │ 

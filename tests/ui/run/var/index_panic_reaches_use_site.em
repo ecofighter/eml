@@ -1,4 +1,6 @@
 -- 添字の範囲は使う所で確かめるので、範囲の中の `try_panic` が範囲外の添字を捕まえる
+import MutArray
+
 main : Unit -> <IO, Panic> Unit
 main () =
   var a = MutArray.make 3 1

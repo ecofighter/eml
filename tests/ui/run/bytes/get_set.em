@@ -1,5 +1,7 @@
 -- `get` は位置のバイトを返し、`set` は一意ならその場で、共有していれば写して書き換える。`make` は同じバイトで埋める。
 -- `Show Bytes` は要素を `u8` なしの数で並べる。
+import Bytes
+
 main : Unit -> <IO, Panic> Unit
 main () =
   let b = Bytes.make 3 7u8

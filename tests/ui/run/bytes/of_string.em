@@ -1,4 +1,6 @@
 -- `Bytes.of_string` は同じバイトのバイト列を作る。リテラルの `String` からも、組み立てた `String` からも作れる。
+import Bytes
+
 main : Unit -> <IO, Panic> Unit
 main () =
   let s = "héllo" ++ "!"

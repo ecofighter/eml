@@ -1,6 +1,7 @@
 # 前の入力の生産者を、後の入力で `Iter.fold` に渡して融合する。`Iter.fold` の `con` の値の形についての複製と、
 # `Iter.map` の閉包の複製の名前は、鍵と呼び出し先の書き換えた後のコードだけから決まるので、追記の「同じ名前なら
 # 同じコード」の確かめを通る
+> import Iter
 > import Yield (Yield(..))
 > nums : Int -> Unit -> <Yield Int, Panic> Unit
 . nums n () =

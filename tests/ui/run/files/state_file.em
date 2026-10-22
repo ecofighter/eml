@@ -1,4 +1,6 @@
 -- A handler keeps a file as its state, reads it in a clause, and closes it in the `return` clause.
+import Fs
+
 effect Load where
   load : Unit -> String
 

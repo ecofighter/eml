@@ -61,7 +61,7 @@ main () =
 
 #[test]
 fn a_mutarray_var_types_with_reads_writes_and_an_extraction() {
-    let text = "\
+    let text = "import Array\nimport MutArray\n\
 main : Unit -> <IO, Panic> Unit
 main () =
   var a = MutArray.make 3 0
@@ -72,7 +72,7 @@ main () =
 ";
     insta::assert_snapshot!(vars(text), @"
     main: var a : MutArray Int (Array)
-    main: index 5:11 Some(ArrayVar)
+    main: index 7:11 Some(ArrayVar)
     ");
 }
 
@@ -93,7 +93,7 @@ main () =
 
 #[test]
 fn an_index_needs_panic() {
-    let text = "\
+    let text = "import Array\n\
 f : Unit -> Int
 f () =
   var a = Array.from_list [1, 2]
@@ -101,14 +101,14 @@ f () =
 ";
     insta::assert_debug_snapshot!(check_short(text), @r#"
     [
-        "E2002 4:3 `a` performs `Panic`, which the signature of `f` does not allow",
+        "E2002 5:3 `a` performs `Panic`, which the signature of `f` does not allow",
     ]
     "#);
 }
 
 #[test]
 fn an_array_var_index_reads_the_array() {
-    let text = "\
+    let text = "import Array\n\
 f : Unit -> <Panic> Int
 f () =
   var a = Array.make 3 0
@@ -116,7 +116,7 @@ f () =
 ";
     insta::assert_snapshot!(vars(text), @"
     f: var a : Array Int (Unr)
-    f: index 4:3 Some(Array)
+    f: index 5:3 Some(Array)
     ");
 }
 
@@ -131,7 +131,7 @@ f xs = xs[0]
 
 #[test]
 fn a_lin_element_is_e3001() {
-    let text = "\
+    let text = "import Fs\nimport MutArray\n\
 main : Unit -> <IO, Panic> Unit
 main () =
   var a = MutArray.empty ()
@@ -140,14 +140,14 @@ main () =
 ";
     insta::assert_debug_snapshot!(check_short(text), @r#"
     [
-        "E3001 4:3 a linear value is used where an unrestricted value is expected",
+        "E3001 6:3 a linear value is used where an unrestricted value is expected",
     ]
     "#);
 }
 
 #[test]
 fn a_self_referencing_var_has_no_infinite_type() {
-    let text = "\
+    let text = "import MutArray\n\
 main : Unit -> <IO, Panic> Unit
 main () =
   var fs = MutArray.make 2 (fn () -> 0)
@@ -156,13 +156,13 @@ main () =
 ";
     insta::assert_snapshot!(vars(text), @"
     main: var fs : MutArray (Unit -> <var fs, Panic> Int) (Array)
-    main: index 4:22 Some(ArrayVar)
+    main: index 5:22 Some(ArrayVar)
     ");
 }
 
 #[test]
 fn a_var_of_a_signature_type_variable_constrains_the_scheme() {
-    let text = "\
+    let text = "import Fs\n\
 keep : a -> a
 keep x =
   var y = x
@@ -175,14 +175,14 @@ main () =
 ";
     insta::assert_debug_snapshot!(check_short(text), @r#"
     [
-        "E3001 8:11 a linear value is passed to `keep`, which may use it more than once or not at all",
+        "E3001 9:11 a linear value is passed to `keep`, which may use it more than once or not at all",
     ]
     "#);
 }
 
 #[test]
 fn a_linear_var_is_e3007() {
-    let text = "\
+    let text = "import Fs\n\
 main : Unit -> <IO> Unit
 main () =
   var f = Fs.open \"x\"
@@ -190,7 +190,7 @@ main () =
 ";
     insta::assert_debug_snapshot!(check_short(text), @r#"
     [
-        "E3007 3:3 the variable `f` has the linear type `File`",
+        "E3007 4:3 the variable `f` has the linear type `File`",
     ]
     "#);
 }
@@ -330,7 +330,7 @@ main () =
 
 #[test]
 fn taking_on_both_branches_is_accepted() {
-    let text = "\
+    let text = "import MutArray\n\
 f : Bool -> <Panic> Array Int
 f c =
   var a = MutArray.make 3 0
@@ -342,7 +342,7 @@ f c =
 
 #[test]
 fn a_diverging_branch_need_not_take() {
-    let text = "\
+    let text = "import MutArray\n\
 f : Bool -> <IO, Panic> Array Int
 f c =
   var a = MutArray.make 3 0
@@ -353,7 +353,7 @@ f c =
 
 #[test]
 fn a_last_expression_that_diverges_need_not_take() {
-    let text = "\
+    let text = "import MutArray\n\
 f : Unit -> <IO, Panic> Unit
 f () =
   var a = MutArray.make 3 0
@@ -365,7 +365,7 @@ f () =
 
 #[test]
 fn every_match_arm_takes() {
-    let text = "\
+    let text = "import Array\nimport MutArray\n\
 f : Int -> <Panic> Array Int
 f n =
   var a = MutArray.make 3 0
@@ -378,16 +378,16 @@ f n =
 
 #[test]
 fn a_branch_that_does_not_take_is_e3003() {
-    let text = "\
+    let text = "import MutArray\n\
 f : Bool -> <Panic> Unit
 f c =
   var a = MutArray.make 3 0
   if c then drop a else ()
 ";
     insta::assert_snapshot!(check_full(text), @"
-    E3003 3:3 the array variable `a` is not taken on some paths
-      3:3 `a` is declared here
-      4:25 this branch does not take `a`
+    E3003 4:3 the array variable `a` is not taken on some paths
+      4:3 `a` is declared here
+      5:25 this branch does not take `a`
       note: taking an array variable hands over its array, so every path of the last expression takes it exactly once
       help: end the block with an expression that takes `a`, such as `MutArray.freeze a` or `drop a`
     ");
@@ -395,16 +395,16 @@ f c =
 
 #[test]
 fn an_omitted_else_does_not_take() {
-    let text = "\
+    let text = "import MutArray\n\
 f : Bool -> <Panic> Unit
 f c =
   var a = MutArray.make 3 0
   if c then drop a
 ";
     insta::assert_snapshot!(check_full(text), @"
-    E3003 3:3 the array variable `a` is not taken on some paths
-      3:3 `a` is declared here
-      4:3 the omitted `else` does not take `a`
+    E3003 4:3 the array variable `a` is not taken on some paths
+      4:3 `a` is declared here
+      5:3 the omitted `else` does not take `a`
       note: taking an array variable hands over its array, so every path of the last expression takes it exactly once
       help: end the block with an expression that takes `a`, such as `MutArray.freeze a` or `drop a`
     ");
@@ -412,7 +412,7 @@ f c =
 
 #[test]
 fn a_take_in_a_handle_body_is_e3008() {
-    let text = "\
+    let text = "import MutArray\n\
 effect Ask where
   ask : Unit -> Int
 
@@ -424,14 +424,14 @@ f () =
 ";
     insta::assert_debug_snapshot!(check_short(text), @r#"
     [
-        "E3008 7:26 the array variable `a` cannot be taken inside a function",
+        "E3008 8:26 the array variable `a` cannot be taken inside a function",
     ]
     "#);
 }
 
 #[test]
 fn a_take_after_a_use_is_e3008() {
-    let text = "\
+    let text = "import MutArray\n\
 run : (Unit -> <e> a) -> <e> a
 run f = f ()
 
@@ -443,14 +443,14 @@ f () =
 ";
     insta::assert_debug_snapshot!(check_short(text), @r#"
     [
-        "E3008 8:19 the array variable `a` cannot be taken inside a function",
+        "E3008 9:19 the array variable `a` cannot be taken inside a function",
     ]
     "#);
 }
 
 #[test]
 fn a_type_error_suppresses_the_take_rules() {
-    let text = "\
+    let text = "import MutArray\n\
 f : Unit -> <Panic> Unit
 f () =
   var a = MutArray.make 3 0
@@ -459,7 +459,7 @@ f () =
 ";
     insta::assert_debug_snapshot!(check_short(text), @r#"
     [
-        "E2001 4:20 mismatched types",
+        "E2001 5:20 mismatched types",
     ]
     "#);
 }
@@ -478,7 +478,7 @@ f () =
 
 #[test]
 fn a_value_kept_across_a_var_scope_is_e3006() {
-    let text = "\
+    let text = "import Fs\n\
 effect Choose where
   multi choose : Unit -> Bool
 
@@ -493,10 +493,10 @@ g () =
   println (show r)
 ";
     insta::assert_snapshot!(check_full(text), @"
-    E3006 8:5 `f` must be used exactly once, but it is kept alive across a call that may resume more than once
-      8:5 the scope of this `var` may perform `choose`, a `multi` operation
-      6:7 `f` is bound here
-      2:9 `choose` is declared `multi` here
+    E3006 9:5 `f` must be used exactly once, but it is kept alive across a call that may resume more than once
+      9:5 the scope of this `var` may perform `choose`, a `multi` operation
+      7:7 `f` is bound here
+      3:9 `choose` is declared `multi` here
       note: a continuation of a `multi` operation can be resumed more than once, and each resumption would use the value again
       help: finish using `f` before the scope of this `var`
     ");
@@ -504,7 +504,7 @@ g () =
 
 #[test]
 fn nested_vars_share_the_last_expression() {
-    let text = "\
+    let text = "import MutArray\n\
 f : Unit -> <Panic> (Array Int, Array Int)
 f () =
   var a = MutArray.make 3 0
@@ -518,7 +518,7 @@ f () =
 
 #[test]
 fn taking_one_of_two_nested_vars_twice_is_e3002_and_e3003() {
-    let text = "\
+    let text = "import MutArray\n\
 f : Unit -> <Panic> (Array Int, Array Int)
 f () =
   var a = MutArray.make 3 0
@@ -526,21 +526,21 @@ f () =
   (MutArray.freeze a, MutArray.freeze a)
 ";
     insta::assert_snapshot!(check_full(text), @"
-    E3003 4:3 the array variable `b` is not taken on this path
-      4:3 `b` is declared here
-      5:3 this last expression does not take `b`
+    E3003 5:3 the array variable `b` is not taken on this path
+      5:3 `b` is declared here
+      6:3 this last expression does not take `b`
       note: taking an array variable hands over its array, so every path of the last expression takes it exactly once
       help: end the block with an expression that takes `b`, such as `MutArray.freeze b` or `drop b`
-    E3002 5:39 the array variable `a` is taken twice on this path
-      5:39 taken again here
-      5:20 first taken here
+    E3002 6:39 the array variable `a` is taken twice on this path
+      6:39 taken again here
+      6:20 first taken here
       note: taking an array variable hands over its array, so every path of the last expression takes it exactly once
     ");
 }
 
 #[test]
 fn a_closure_made_earlier_may_be_called_in_the_last_expression() {
-    let text = "\
+    let text = "import MutArray\n\
 f : Unit -> <Panic> (Int, Array Int)
 f () =
   var a = MutArray.make 3 0
@@ -553,7 +553,7 @@ f () =
 
 #[test]
 fn a_take_in_a_local_function_of_the_last_expression_is_e3008() {
-    let text = "\
+    let text = "import MutArray\n\
 f : Unit -> <Panic> Array Int
 f () =
   var a = MutArray.make 3 0
@@ -561,14 +561,14 @@ f () =
 ";
     insta::assert_debug_snapshot!(check_short(text), @r#"
     [
-        "E3008 4:30 the array variable `a` cannot be taken inside a function",
+        "E3008 5:30 the array variable `a` cannot be taken inside a function",
     ]
     "#);
 }
 
 #[test]
 fn a_take_in_a_section_of_the_last_expression_is_e3008() {
-    let text = "\
+    let text = "import Array\nimport MutArray\n\
 f : Unit -> <Panic> Int
 f () =
   var a = MutArray.make 3 0
@@ -576,7 +576,7 @@ f () =
 ";
     insta::assert_debug_snapshot!(check_short(text), @r#"
     [
-        "E3008 4:20 the array variable `a` cannot be taken inside a function",
+        "E3008 6:20 the array variable `a` cannot be taken inside a function",
     ]
     "#);
 }
@@ -585,7 +585,7 @@ f () =
 /// 変わらないので、取り出さない経路の E3003 も出る (docs/spec/linearity.md の「配列の変数」)。
 #[test]
 fn an_index_in_a_last_expression_without_a_take_is_e3008_and_e3003() {
-    let text = "\
+    let text = "import MutArray\n\
 f : Unit -> <Panic> Int
 f () =
   let bad =
@@ -594,14 +594,14 @@ f () =
   bad
 ";
     insta::assert_snapshot!(check_full(text), @"
-    E3003 4:5 the array variable `a` is not taken on this path
-      4:5 `a` is declared here
-      5:5 this last expression does not take `a`
+    E3003 5:5 the array variable `a` is not taken on this path
+      5:5 `a` is declared here
+      6:5 this last expression does not take `a`
       note: taking an array variable hands over its array, so every path of the last expression takes it exactly once
       help: end the block with an expression that takes `a`, such as `MutArray.freeze a` or `drop a`
-    E3008 5:5 the array variable `a` cannot be read or written in the last expression of its block
-      5:5 `a` is used here
-      4:5 `a` is declared here
+    E3008 6:5 the array variable `a` cannot be read or written in the last expression of its block
+      6:5 `a` is used here
+      5:5 `a` is declared here
       note: the last expression must take the array out of the variable, so it cannot also read or write it
       help: read or write `a` in a statement before the last expression
     ");

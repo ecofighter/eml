@@ -4,9 +4,9 @@ expression: rendered
 input_file: tests/ui/check-fail/linearity/operation_result_variable_duplicated.em
 ---
 [E3002] Error: `x` must be used exactly once, but it is used more than once
-    ╭─[ check-fail/linearity/operation_result_variable_duplicated.em:20:42 ]
+    ╭─[ check-fail/linearity/operation_result_variable_duplicated.em:22:42 ]
     │
- 20 │     | ctl mk () k -> k (Box (fn x -> (x, x)))
+ 22 │     | ctl mk () k -> k (Box (fn x -> (x, x)))
     │                                       ┬  ┬  
     │                                       ╰───── first used here
     │                                          │  

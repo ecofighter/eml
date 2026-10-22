@@ -1,4 +1,7 @@
 -- ループの条件が `Int` の変数と配列の変数を `&&` で読む (`short_circuit_condition.em` と同じ形で、状態の1つが配列)
+import Array
+import MutArray
+
 main : Unit -> <IO, Panic> Unit
 main () =
   var i = 0

@@ -1,5 +1,7 @@
 -- `(n, [])` の葉は `unr` の `n` だけを束縛するので、`(Int, List File)` の値を drop してから `n` を返す
 -- (docs/spec/core-ir.md の「決定木の葉の `drop`」)。
+import Fs
+
 close_all : List Fs.File -> <IO> Unit
 close_all [] = println "closed"
 close_all (f :: rest) =

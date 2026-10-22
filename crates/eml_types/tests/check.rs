@@ -708,7 +708,7 @@ fn a_local_function_recurses_under_its_own_handler() {
 
 #[test]
 fn a_local_function_value_is_opened() {
-    let text = "effect Ask where\n  ask : Unit -> Int\n\nmain : Unit -> <IO, Panic> Unit\nmain () =\n  let inc x = x + 1\n  let ys = handle List.map inc [ask ()] with | ctl ask () k -> k 1\n  println (show ys)";
+    let text = "import List\neffect Ask where\n  ask : Unit -> Int\n\nmain : Unit -> <IO, Panic> Unit\nmain () =\n  let inc x = x + 1\n  let ys = handle List.map inc [ask ()] with | ctl ask () k -> k 1\n  println (show ys)";
     assert_eq!(check_short(text), Vec::<String>::new());
 }
 

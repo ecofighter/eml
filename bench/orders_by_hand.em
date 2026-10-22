@@ -1,4 +1,6 @@
 -- `orders.em` のラムダを各ループに書き込んだ手書きの版。自動の特殊化が目指す下限になる。
+import Std.List
+
 data Order = | Order { id : Int, qty : Int, price : Int }
 
 make : Int -> <Panic> List Order

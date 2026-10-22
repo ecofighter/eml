@@ -1,4 +1,5 @@
 # 実行時エラーの回復は配列を写し直す。`Show` のない `Array Int` は `<extern>` と型を表示し、入れ子の位置でも同じに書く
+> import Array
 > let a = Array.make 3 0
 > Array.get a 5
 > Array.to_list a

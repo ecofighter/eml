@@ -1,5 +1,7 @@
 -- 箱を使い回して、フィールドをほかの位置へ動かす。動いたフィールドはどれも書き直す。走査する語の形と生の語の形の
 -- 両方で確かめる。
+import List
+
 data P a = | P a a
 
 data T = | T String String String

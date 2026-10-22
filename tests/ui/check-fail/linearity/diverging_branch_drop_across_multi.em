@@ -1,4 +1,6 @@
 -- E3006: the branch that ends in `exit` drops the file just before the call, so it holds the file across `choose`.
+import Fs
+
 effect Choose where
   multi choose : Unit -> Bool
 

@@ -1,4 +1,6 @@
 -- The body of a handle runs at most once, so it can capture a file.
+import Fs
+
 effect Ask where
   ask : Unit -> Int
 

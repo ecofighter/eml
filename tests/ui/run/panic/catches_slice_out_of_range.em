@@ -1,4 +1,6 @@
 -- `try_panic` が文字列の範囲外の切り出しと添字、文字の境目でない切り出しを捕まえる。
+import String
+
 main : Unit -> <IO> Unit
 main () =
   println (show (try_panic (fn () -> String.slice 1 9 "abc")))

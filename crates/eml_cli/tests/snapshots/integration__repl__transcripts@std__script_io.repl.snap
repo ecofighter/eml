@@ -3,14 +3,16 @@ source: crates/eml_cli/tests/repl.rs
 expression: checked.render()
 input_file: crates/eml_cli/tests/repl/std/script_io.repl
 ---
+> import Env
+> import Stdin
 > Env.args ()
 []
 > Stdin.read_text ()
 runtime error: cannot read the standard input: not available
   at <std>/Stdin.em:17:19
 > Stdin.open ()
-E2016 <input 3> 1:1 this input leaves a value of the linear type `Stdin`
-  <input 3> 1:1 a linear value
+E2016 <input 5> 1:1 this input leaves a value of the linear type `Stdin`
+  <input 5> 1:1 a linear value
   help: use up the value inside the input, as in `drop`
 > 1 + 1
 2

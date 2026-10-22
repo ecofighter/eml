@@ -1,4 +1,6 @@
 -- `File` を持つ `H` を入れ子のパターンで分解し、後の行がその `H` を `h` として束縛する。
+import Fs
+
 data H =
   | H Fs.File String
 

@@ -4,9 +4,9 @@ expression: rendered
 input_file: tests/ui/check-fail/linearity/lin_element.em
 ---
 [E3001] Error: a linear value is used where an unrestricted value is expected
-   ╭─[ check-fail/linearity/lin_element.em:5:3 ]
+   ╭─[ check-fail/linearity/lin_element.em:8:3 ]
    │
- 5 │   a[0] <- Fs.open "input.txt"
+ 8 │   a[0] <- Fs.open "input.txt"
    │   ─────────────┬─────────────  
    │                ╰─────────────── this expression
    │ 

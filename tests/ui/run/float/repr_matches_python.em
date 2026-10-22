@@ -1,5 +1,7 @@
 -- `show` は Python の `repr` と同じ形で書く。期待値は Python 3.14 の `repr` で作った
 -- (docs/spec/declarations.md の「Prelude のクラス」)。
+import Float
+
 main : Unit -> <IO, Panic> Unit
 main () =
   println (show 0.1)

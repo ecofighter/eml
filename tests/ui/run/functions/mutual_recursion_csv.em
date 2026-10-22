@@ -1,6 +1,9 @@
 -- CSV の欄と行を読む状態機械を、1つの `let … and …` の組で書く。欄の始め、引用符のない欄、引用符のある欄、
 -- 引用符のある欄の中の引用符、次の行の5つの状態を関数にし、組の関数はどれも入力の `s` と長さ `n` を捕まえる。
 -- 引用符のある欄はコンマと、2つ続けた引用符を含む (docs/spec/expressions.md の「ローカル関数」)。
+import List
+import String
+
 quote_byte : Int
 quote_byte = 34
 

@@ -219,7 +219,7 @@ fn names(text: &str, pass: Pass) -> Vec<String> {
 
 #[test]
 fn map_is_copied_for_a_known_lambda() {
-    let text = "main : Unit -> <IO, Panic> Unit\nmain () = println (show (List.map (fn x -> x * 2) [1, 2, 3]))";
+    let text = "import List\nmain : Unit -> <IO, Panic> Unit\nmain () = println (show (List.map (fn x -> x * 2) [1, 2, 3]))";
     let shown = core_text(text, Pass::Optimize);
     let go = function(&shown, "Std.List.map@[Int, Int]$let$go{0=main$lambda0}");
     assert!(!go.contains("apply"), "{go}");
@@ -246,7 +246,7 @@ fn map_is_copied_for_a_known_lambda() {
 #[test]
 fn each_yield_is_specialized() {
     let text = format!(
-        "\
+        "import List\n\
 import Yield (Yield(..))
 
 emit : List String -> Unit -> <Yield String> Unit
@@ -271,8 +271,7 @@ main () =
 
 #[test]
 fn a_wrapper_shaped_lambda_is_specialized() {
-    let text =
-        "main : Unit -> <IO> Unit\nmain () = println (show (List.map (fn x -> Some x) [1, 2, 3]))";
+    let text = "import List\nmain : Unit -> <IO> Unit\nmain () = println (show (List.map (fn x -> Some x) [1, 2, 3]))";
     let shown = core_text(text, Pass::Optimize);
     let go = shown
         .lines()
@@ -295,7 +294,7 @@ fn a_recursive_call_reuses_the_copy() {
 
 #[test]
 fn captures_become_parameters() {
-    let text = "main : Unit -> <IO, Panic> Unit\nmain () =\n  let k = 3\n  println (show (List.map (fn x -> x * k) [1, 2, 3]))";
+    let text = "import List\nmain : Unit -> <IO, Panic> Unit\nmain () =\n  let k = 3\n  println (show (List.map (fn x -> x * k) [1, 2, 3]))";
     let shown = core_text(text, Pass::Optimize);
     assert!(!shown.contains("closure"), "{shown}");
     insta::assert_snapshot!(format!(
@@ -340,7 +339,7 @@ fn captures_become_parameters() {
 #[test]
 fn a_closure_captured_by_a_closure_is_specialized() {
     let text = format!(
-        "{HIDE}\nmain : Unit -> <IO, Panic> Unit\nmain () =\n  let Box it = hide 0 (Iter.from_list [1, 2, 3])\n  let Box mapped = hide 0 (Iter.map (fn x -> x + 1) it)\n  println (show (Iter.to_list mapped))"
+        "import Iter\n{HIDE}\nmain : Unit -> <IO, Panic> Unit\nmain () =\n  let Box it = hide 0 (Iter.from_list [1, 2, 3])\n  let Box mapped = hide 0 (Iter.map (fn x -> x + 1) it)\n  println (show (Iter.to_list mapped))"
     );
     let shown = core_text(&text, Pass::Optimize);
     insta::assert_snapshot!(function(&shown, "Std.Iter.map@[Int, Int]$lambda0{0=main$lambda0}"), @r#"
@@ -366,7 +365,7 @@ fn a_closure_captured_by_a_closure_is_specialized() {
 /// `emit` の末尾でない呼び出しが、handler への特殊化を止め、handle の本体を残す。
 #[test]
 fn generate_reaches_the_handle_body() {
-    let text = "\
+    let text = "import Iter\n\
 import Yield (Yield(..))
 
 emit : Int -> <Yield Int> Unit
@@ -436,8 +435,8 @@ main () =
 /// 複製の名前とコードは鍵だけで決まり、ほかの関数の有無や作った順によらない (docs/spec/vm.md の「追記」)。
 #[test]
 fn a_copy_does_not_depend_on_the_rest_of_the_program() {
-    let a = "main : Unit -> <IO, Panic> Unit\nmain () =\n  println (show (List.map (fn x -> x + 1) [1, 2]))";
-    let b = "other : List Int -> <Panic> List Int\nother ys = List.map (fn y -> y * 2) ys\n\nmain : Unit -> <IO, Panic> Unit\nmain () =\n  println (show (List.map (fn x -> x + 1) [1, 2]))\n  println (show (other [3]))";
+    let a = "import List\nmain : Unit -> <IO, Panic> Unit\nmain () =\n  println (show (List.map (fn x -> x + 1) [1, 2]))";
+    let b = "import List\nother : List Int -> <Panic> List Int\nother ys = List.map (fn y -> y * 2) ys\n\nmain : Unit -> <IO, Panic> Unit\nmain () =\n  println (show (List.map (fn x -> x + 1) [1, 2]))\n  println (show (other [3]))";
     let name = "Std.List.map@[Int, Int]$let$go{0=main$lambda0}";
     assert_eq!(
         function(&core_text(a, Pass::Optimize), name),
@@ -572,7 +571,7 @@ main () =
     assert_eq!(copies, ["apply_to{0=add3/2}", "pick{0=add3/1}"], "{shown}");
 
     // 多相再帰の一様な instance は2つの閉包で同じなので、捕獲の数だけが鍵を分ける
-    let text = "\
+    let text = "import List\n\
 data Nested a =
   | Flat a
   | Nest (Nested (List a))
@@ -837,7 +836,7 @@ nums () =
 #[test]
 fn a_non_tail_yielding_frame_keeps_the_handle() {
     keeps_the_handle(&format!(
-        "{EMIT2}\nmain : Unit -> <IO, Panic> Unit\nmain () = println (show (Iter.to_list (Iter.generate nums)))\n"
+        "import Iter\n{EMIT2}\nmain : Unit -> <IO, Panic> Unit\nmain () = println (show (Iter.to_list (Iter.generate nums)))\n"
     ));
 }
 
@@ -1155,7 +1154,7 @@ main () =
 #[test]
 fn iter_generate_has_no_yield_left() {
     let text = format!(
-        "{NUMS}{HIDE}
+        "import Iter\n{NUMS}{HIDE}
 main : Unit -> <IO, Panic> Unit
 main () =
   let Box it = hide 0 (Iter.generate (nums 100000))
@@ -1188,7 +1187,7 @@ main () =
 #[test]
 fn a_continuation_captures_its_live_variables() {
     let text = format!(
-        "{NUMS}{HIDE}\nmain : Unit -> <IO, Panic> Unit\nmain () =\n  let Box it = hide 0 (Iter.generate (nums 3))\n  println (show (Iter.to_list it))\n"
+        "import Iter\n{NUMS}{HIDE}\nmain : Unit -> <IO, Panic> Unit\nmain () =\n  let Box it = hide 0 (Iter.generate (nums 3))\n  println (show (Iter.to_list it))\n"
     );
     let shown = core_text(&text, Pass::Optimize);
     let name = shown
@@ -1297,7 +1296,7 @@ fn continuations_across_join_blocks_stay_linear_in_size() {
 /// (docs/spec/core-ir.md の「インライン化」)。
 #[test]
 fn a_known_lambda_is_inlined_into_its_copy() {
-    let text = "main : Unit -> <IO, Panic> Unit\nmain () = println (show (List.map (fn x -> x * 2) [1, 2, 3]))";
+    let text = "import List\nmain : Unit -> <IO, Panic> Unit\nmain () = println (show (List.map (fn x -> x * 2) [1, 2, 3]))";
     let shown = core_text(text, Pass::Optimize);
     let go = function(&shown, "Std.List.map@[Int, Int]$let$go{0=main$lambda0}");
     assert!(!go.contains("main$lambda0("), "{go}");
@@ -1327,7 +1326,7 @@ fn calls(shown: &str, name: &str) -> bool {
 /// Prelude の合成子は、インライン化で展開される (docs/spec/core-ir.md の「インライン化」)。
 #[test]
 fn pipe_operators_are_inlined() {
-    let text = "\
+    let text = "import List\n\
 inc : Int -> <Panic> Int
 inc x = x + 1
 
@@ -1386,7 +1385,7 @@ main () =
 /// (docs/spec/vm.md の「追記」)。
 #[test]
 fn inlining_does_not_depend_on_the_rest_of_the_program() {
-    let a = "\
+    let a = "import List\n\
 inc : Int -> <Panic> Int
 inc x = x + 1
 
@@ -1394,7 +1393,7 @@ main : Unit -> <IO, Panic> Unit
 main () =
   println (show (List.map (fn x -> inc x) [1, 2]))
 ";
-    let b = "\
+    let b = "import List\n\
 inc : Int -> <Panic> Int
 inc x = x + 1
 
@@ -1483,7 +1482,7 @@ main () =
 /// (docs/spec/core-ir.md の「既知のコンストラクタ」)。
 #[test]
 fn a_con_returned_by_an_inlined_function_resolves() {
-    let text = "\
+    let text = "import Env\nimport List\n\
 pick : Bool -> Option Int
 pick b = if b then Some 1 else None
 
@@ -1520,7 +1519,7 @@ main () =
 /// いくつあっても決定木の中で開くので、`con` は展開した関数から受ける。
 #[test]
 fn a_con_with_two_uses_is_not_opened() {
-    let text = "\
+    let text = "import List\n\
 some : Int -> Option Int
 some x = Some x
 
@@ -1552,7 +1551,7 @@ main () =
 /// jump threading と同じ規則で解ける (docs/spec/core-ir.md の「既知のコンストラクタ」)。
 #[test]
 fn a_local_switch_resolves_when_another_case_drops_the_con() {
-    let text = "\
+    let text = "import Fs\n\
 maybe_file : Bool -> Fs.File -> <IO> Option Fs.File
 maybe_file c f =
   if c then Some f
@@ -1580,7 +1579,7 @@ main () = println (show (close_opt (maybe_file True (Fs.open \"in.txt\"))))
 /// `con` のフィールドの既知の閉包は、`con` を解いた後で既知の閉包になり、`apply` は直接の呼び出しになる。
 #[test]
 fn next_of_a_known_iter_calls_its_closure() {
-    let text = "\
+    let text = "import Iter\n\
 main : Unit -> <IO> Unit
 main () =
   match Iter.next (Iter.from_list [1, 2]) with
@@ -1599,7 +1598,7 @@ main () =
 /// `let (a, b) = if …` を自分で組を作らない形にするので、組は展開した関数から受ける。
 #[test]
 fn a_tuple_from_both_arms_of_an_if_is_threaded() {
-    let text = "\
+    let text = "import Env\nimport List\n\
 pair : Bool -> (Int, Int)
 pair c = if c then (1, 2) else (3, 4)
 
@@ -1699,7 +1698,7 @@ fn iter_pipeline_fuses_map_into_the_fold_and_generate_into_the_filter() {
 /// 1回閉じることを確かめる。
 #[test]
 fn a_fold_over_a_file_producer_is_fused() {
-    let text = "\
+    let text = "import Fs\nimport Iter\n\
 import Yield (Yield(..))
 
 numbers : Int -> Unit -> <Yield Int, IO, Panic> Unit
@@ -1796,7 +1795,7 @@ fn inlining_fusion_created_calls_stays_within_a_budget() {
 #[test]
 fn the_growth_budget_binds_per_function() {
     let text = format!(
-        "{NUMS}\n{}
+        "import Iter\n{NUMS}\n{}
 main : Unit -> <IO, Panic> Unit
 main () =
   println (show (spin 5))
@@ -1816,13 +1815,13 @@ main () =
 #[test]
 fn fusion_does_not_depend_on_the_rest_of_the_program() {
     let a = format!(
-        "{NUMS}
+        "import Iter\n{NUMS}
 main : Unit -> <IO, Panic> Unit
 main () = println (show (Iter.fold (fn acc x -> acc + x) 0 (Iter.generate (nums 10))))
 "
     );
     let b = format!(
-        "{NUMS}
+        "import Iter\n{NUMS}
 evens : Int -> Unit -> <Yield Int, Panic> Unit
 evens n () =
   let go i =
@@ -2197,7 +2196,7 @@ main () =
 /// 内側の `J` から順に、どちらの handle も消える。
 #[test]
 fn while_and_for_bodies_become_known_closures() {
-    let text = "\
+    let text = "import Array\nimport MutArray\n\
 effect Marks where
   take : Unit -> MutArray Bool
   length : Unit -> Int
@@ -2510,7 +2509,7 @@ fn a_continuation_called_only_by_its_clause_copy_is_typed() {
     };
     assert!(continuations(TWO_ASKS).iter().all(Option::is_none));
     let generated = format!(
-        "{NUMS}{HIDE}\nmain : Unit -> <IO, Panic> Unit\nmain () =\n  let Box it = hide 0 (Iter.generate (nums 3))\n  println (show (Iter.to_list it))\n"
+        "import Iter\n{NUMS}{HIDE}\nmain : Unit -> <IO, Panic> Unit\nmain () =\n  let Box it = hide 0 (Iter.generate (nums 3))\n  println (show (Iter.to_list it))\n"
     );
     assert!(continuations(&generated).iter().all(Option::is_some));
 }
@@ -2557,6 +2556,8 @@ fn a_clause_copy_drops_the_captures_instead_of_k() {
 
 /// `once` の操作の節で、`File` を生きている変数に持つ経路の関数。節は `k` を捨てる。
 const DROPPED_K: &str = "\
+import Fs
+
 effect Ask where
   ask : Unit -> Int
 
@@ -2736,7 +2737,7 @@ main () =
 /// optimize)。
 #[test]
 fn a_struct_var_state_stays_a_struct() {
-    let text = "\
+    let text = "import Float\n\
 data Vec3 =
   | Vec3 Float Float Float
 

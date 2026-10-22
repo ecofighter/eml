@@ -1,4 +1,7 @@
 -- `String.decode` の妥当でない UTF-8 は `Panic` なので、`try_panic` が位置つきの文言で捕まえる。
+import Bytes
+import String
+
 main : Unit -> <IO, Panic> Unit
 main () =
   let bad = Bytes.append (Bytes.of_string "abc") (Bytes.slice 0 1 (Bytes.of_string "é"))

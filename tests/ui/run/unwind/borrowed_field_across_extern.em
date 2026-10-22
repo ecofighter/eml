@@ -1,5 +1,7 @@
 -- `match` の後も生きている記録のフィールドを、`try_io` の下の IO の失敗をまたいで使う。巻き戻しは借りたフィールドを
 -- 手放さず、記録とフィールドを1回ずつ解放する。
+import Fs
+
 data Person =
   | Person { name : String, city : String }
 

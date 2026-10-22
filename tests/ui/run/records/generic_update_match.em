@@ -1,4 +1,6 @@
 -- An update of a record with a type parameter keeps the other fields, and a later pattern reads them at the instantiated type.
+import Fs
+
 data Box a =
   | Box { item : a, n : Int }
 

@@ -7,4 +7,4 @@ input_file: tests/ui/run-fail/bytes/decode.em
 --- stderr ---
 --- runtime error ---
 invalid UTF-8 at byte 3
-  at run-fail/bytes/decode.em:5:12
+  at run-fail/bytes/decode.em:8:12

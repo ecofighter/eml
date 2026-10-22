@@ -139,7 +139,8 @@ fn two_undecided_equalities_in_one_body_are_both_reported() {
 fn an_undecided_instance_suppresses_the_linearity_diagnostics() {
     // E2009 は線形性の検査より前に決まり、本体の誤りに数えるので、`f` を使わないことの E3003 を出さない
     // (docs/spec/diagnostics.md の「連鎖する診断の抑止」)
-    let text = "leak : Fs.File -> Bool\nleak f =\n  let same = fn x -> fn y -> x == y\n  True";
+    let text =
+        "import Fs\nleak : Fs.File -> Bool\nleak f =\n  let same = fn x -> fn y -> x == y\n  True";
     insta::assert_snapshot!(check_text(text), @"
     leak : File -> Bool
       f#0 : File
@@ -147,8 +148,8 @@ fn an_undecided_instance_suppresses_the_linearity_diagnostics() {
       y#2 : _
       same#3 : _ -> <_> _ -> <_> Bool
     ---
-    E2009 3:32 cannot decide which instance of `Eq` to use for `==`
-      3:32 the type here is never decided
+    E2009 4:32 cannot decide which instance of `Eq` to use for `==`
+      4:32 the type here is never decided
       help: add a type annotation
     ");
 }

@@ -1,4 +1,7 @@
 -- `Eq a` の関数を `String` で使う。辞書の `==` は借用の extern を指し、同じ文字列を比べ続けても参照の数が合う。
+import List
+import String
+
 same : Eq a => a -> a -> Bool
 same x y = x == y
 

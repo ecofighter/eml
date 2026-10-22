@@ -4,12 +4,12 @@ expression: rendered
 input_file: tests/ui/check-fail/linearity/not_diverging_constrained_result.em
 ---
 [E3003] Error: `f` must be used exactly once, but it is not used
-    ╭─[ check-fail/linearity/not_diverging_constrained_result.em:10:7 ]
+    ╭─[ check-fail/linearity/not_diverging_constrained_result.em:12:7 ]
     │
- 10 │   let f = Fs.open "input.txt"
+ 12 │   let f = Fs.open "input.txt"
     │       ┬  
     │       ╰── `f` is bound here
- 11 │   make ()
+ 13 │   make ()
     │          │ 
     │          ╰─ `f` is not used before the end of this scope
     │ 

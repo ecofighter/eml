@@ -1,4 +1,7 @@
 -- `var` で書いたエラトステネスのふるい。2000 より小さい素数の数を書く
+import Array
+import MutArray
+
 sieve : Int -> <Panic> Array Bool
 sieve n =
   var marks = MutArray.make n True

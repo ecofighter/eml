@@ -1,5 +1,6 @@
 -- 一方の枝の `match` だけが参照する `data` の値を、もう一方の枝の戻らない呼び出しの前で暗黙に手放す。
 import Fail (Fail(..))
+import Fs
 
 data Box = | Box Fs.File Int
 

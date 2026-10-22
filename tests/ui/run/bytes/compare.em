@@ -1,4 +1,6 @@
 -- `Eq Bytes` と `Ord Bytes`。順序はバイトの辞書式の順序で、先頭が共通なら短い方が先に来る。
+import Bytes
+
 main : Unit -> <IO, Panic> Unit
 main () =
   let a = Bytes.of_string "abc"

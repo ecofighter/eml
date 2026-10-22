@@ -1,5 +1,7 @@
 -- A file can be kept alive across a `once` operation of an effect that also has a `multi` operation, because only
 -- the `multi` operations copy the continuation.
+import Fs
+
 effect Mixed where
   single : Unit -> Int
   multi many : Unit -> Int

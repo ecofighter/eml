@@ -1,6 +1,8 @@
 -- `compare` で並べる挿入ソートは、`nan`、`-0.0`、`0.0`、`-inf`、`1.0` を含むリストを全順序
 -- (`-inf < -0.0 < 0.0 < 1.0 < nan`) に並べる。演算子の `<` は IEEE のとおりで NaN を順序に入れないので、`compare`
 -- を使う。
+import Float
+
 insert : Float -> List Float -> List Float
 insert x xs =
   match xs with

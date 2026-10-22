@@ -2,6 +2,8 @@
 -- token は巻き戻しで手放す。
 -- フィールドを7つにして、Stats を構造体にせず箱のままにする (docs/spec/core-ir.md の「構造体にする型」)。
 -- 残りの5つは使わない
+import List
+
 data Stats =
   | Stats { count : Int, total : Int, a : Int, b : Int, c : Int, d : Int, e : Int }
 

@@ -4,12 +4,12 @@ expression: rendered
 input_file: tests/ui/check-fail/linearity/list_of_files.em
 ---
 [E3003] Error: `files` must be used exactly once, but it is not used
-   ╭─[ check-fail/linearity/list_of_files.em:4:7 ]
+   ╭─[ check-fail/linearity/list_of_files.em:6:7 ]
    │
- 4 │   let files = [Fs.open "a.txt", Fs.open "b.txt"]
+ 6 │   let files = [Fs.open "a.txt", Fs.open "b.txt"]
    │       ──┬──  
    │         ╰──── `files` is bound here
- 5 │   println "opened"
+ 7 │   println "opened"
    │                   │ 
    │                   ╰─ `files` is not used before the end of this scope
    │ 

@@ -1,5 +1,7 @@
 -- handle が EP の道に残る配列の変数の範囲を、外側の `try_panic` への中断と `exit` が抜ける。範囲の中の
 -- `try_panic` が特殊化を止める。検査モードでも物体が残らない
+import MutArray
+
 discard : Array Int -> Int -> Int
 discard _ n = n
 

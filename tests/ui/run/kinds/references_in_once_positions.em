@@ -1,5 +1,7 @@
 -- トップレベルの関数、extern の関数、コンストラクタ、クラスのメソッドの参照は、読む式で矢印が広がるので、同じものを
 -- `once` の位置にも `->` の位置にも置ける (docs/spec/types.md の「値を読む式の矢印の線形性」)。
+import String
+
 data Once <e> a b =
   | Once (once a -> <e> b)
 

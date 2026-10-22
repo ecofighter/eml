@@ -4,9 +4,9 @@ expression: rendered
 input_file: tests/ui/check-fail/linearity/recursive_local_captures_file.em
 ---
 [E3001] Error: a recursive local function cannot capture a linear value
-    ╭─[ check-fail/linearity/recursive_local_captures_file.em:11:28 ]
+    ╭─[ check-fail/linearity/recursive_local_captures_file.em:13:28 ]
     │
- 11 │     if n == 0 then () else go (n - 1)
+ 13 │     if n == 0 then () else go (n - 1)
     │                            ─┬  
     │                             ╰── `go` refers to `go` here, so it may be called any number of times
     │ 
@@ -15,9 +15,9 @@ input_file: tests/ui/check-fail/linearity/recursive_local_captures_file.em
     │ Note 2: pass linear values to a recursive local function as arguments
 ────╯
 [E3001] Error: a recursive local function cannot capture a linear value
-    ╭─[ check-fail/linearity/recursive_local_captures_file.em:19:56 ]
+    ╭─[ check-fail/linearity/recursive_local_captures_file.em:21:56 ]
     │
- 19 │     if n == 0 then (if choose () then () else ()) else go (n - 1)
+ 21 │     if n == 0 then (if choose () then () else ()) else go (n - 1)
     │                                                        ─┬  
     │                                                         ╰── `go` refers to `go` here, so it may be called any number of times
     │ 

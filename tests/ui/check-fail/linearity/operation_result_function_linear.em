@@ -1,5 +1,7 @@
 -- E3001: the function in the result of `mk` is handed to the performer, which may call it any number of times. The
 -- clause must then give a function that may be called any number of times, but this lambda captures a file.
+import Fs
+
 effect Mk where
   mk : Unit -> (Unit -> <IO> Unit, Int)
 

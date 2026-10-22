@@ -3,6 +3,7 @@
 -- ループになり、`Iter.filter` を重ねた形は生産者の `once` の継続を捕まえたまま中断する。
 import Iter
 import Yield (Yield(..))
+import Fs
 
 numbers : Int -> Unit -> <Yield Int, IO, Panic> Unit
 numbers n () =

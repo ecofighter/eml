@@ -4,13 +4,13 @@ expression: rendered
 input_file: tests/ui/check-fail/linearity/not_taken.em
 ---
 [E3003] Error: the array variable `a` is not taken on this path
-   ╭─[ check-fail/linearity/not_taken.em:5:3 ]
+   ╭─[ check-fail/linearity/not_taken.em:7:3 ]
    │
- 5 │   var a = MutArray.make 3 0
+ 7 │   var a = MutArray.make 3 0
    │   ────────────┬────────────  
    │               ╰────────────── `a` is declared here
    │ 
- 7 │   ()
+ 9 │   ()
    │   ─┬  
    │    ╰── this last expression does not take `a`
    │ 

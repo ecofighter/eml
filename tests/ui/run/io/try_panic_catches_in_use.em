@@ -1,4 +1,7 @@
 -- The second `open` of a standard stream is a `Panic` that `try_panic` catches; the first handle stays usable
+import Stdin
+import Stdout
+
 main : Unit -> <IO, Panic> Unit
 main () =
   let out = Stdout.open ()

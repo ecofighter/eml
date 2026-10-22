@@ -1,5 +1,6 @@
 # row の型引数と `once` のフィールドを持つ `Iter` を定義し、`:type` が `once` の矢印を書くことを確かめる
 # (docs/spec/types.md の「1回だけ呼べる関数の型」)
+> import List
 > data Iter <e> a =
 .   | Done
 .   | More a (once Unit -> <e> Iter <e> a)

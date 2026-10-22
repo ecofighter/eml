@@ -62,7 +62,7 @@ fn a_carry_over_through_a_prelude_function_points_into_the_prelude() {
     let extra = format!(
         "{CHOICE}\npub keep : a -> (Unit -> <e> Unit) -> <e> a\nkeep x action =\n  action ()\n  x\n"
     );
-    let text = "chooser : Unit -> <Choice> Unit\nchooser () =\n  let b = choose ()\n  ()\n\nkept : Unit -> <Choice, IO> Unit\nkept () =\n  let f = Fs.open \"a.txt\"\n  let g = keep f chooser\n  Fs.close g";
+    let text = "import Fs\nchooser : Unit -> <Choice> Unit\nchooser () =\n  let b = choose ()\n  ()\n\nkept : Unit -> <Choice, IO> Unit\nkept () =\n  let f = Fs.open \"a.txt\"\n  let g = keep f chooser\n  Fs.close g";
     insta::assert_snapshot!(check_with_prelude(&extra, text), @r#"
     E3006 `keep` keeps a linear value alive across a call that may resume more than once
       test.em "keep" `keep` is used here
@@ -86,7 +86,7 @@ fn linear_misuses_in_a_std_module_point_into_that_module() {
 #[test]
 fn a_carry_over_through_a_composition_points_into_the_prelude() {
     // `>>` の本体は `g` を持ったまま `f` を呼ぶので、線形な `g` を `multi` の `f` と合成すると E3006 になる
-    let text = "chooser : Unit -> <Choice> Unit\nchooser () =\n  let b = choose ()\n  ()\n\ncomposed : Unit -> <Choice, IO> Unit\ncomposed () =\n  let h = Fs.open \"a.txt\"\n  let k = chooser >> (fn u -> Fs.close h)\n  k ()";
+    let text = "import Fs\nchooser : Unit -> <Choice> Unit\nchooser () =\n  let b = choose ()\n  ()\n\ncomposed : Unit -> <Choice, IO> Unit\ncomposed () =\n  let h = Fs.open \"a.txt\"\n  let k = chooser >> (fn u -> Fs.close h)\n  k ()";
     let shown = check_with_prelude(CHOICE, text);
     assert!(shown.starts_with("E3006 "), "{shown}");
     assert!(shown.contains("  test.em \">>\" "), "{shown}");
@@ -193,7 +193,7 @@ fn each_module_reads_its_own_syntax() {
 #[test]
 fn try_io_wraps_an_io_action() {
     let checked = eml_test_support::check(
-        "f : Unit -> <IO> Result IOError String\nf () = try_io (fn () -> Fs.read_text \"x\")",
+        "import Fs\nf : Unit -> <IO> Result IOError String\nf () = try_io (fn () -> Fs.read_text \"x\")",
     );
     assert_eq!(
         eml_test_support::short_text(checked.files(), &checked.diagnostics),

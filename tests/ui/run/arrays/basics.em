@@ -1,5 +1,9 @@
 -- `Std.Array` と `Std.MutArray` のすべての関数。`set` と `thaw` は共有された配列を写し、一意な配列はその場で
 -- 書き換える。範囲外の添字と負の長さは `Panic` なので、`try_panic` が捕まえる。
+import Array
+import List
+import MutArray
+
 noisy : Int -> <IO, Panic> String
 noisy i =
   println ("tabulate " ++ show i)

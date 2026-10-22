@@ -7,4 +7,4 @@ input_file: tests/ui/run-fail/float/truncate_out_of_range.em
 --- stderr ---
 --- runtime error ---
 float `1e+19` does not fit in `Int`
-  at run-fail/float/truncate_out_of_range.em:3:26
+  at run-fail/float/truncate_out_of_range.em:5:26

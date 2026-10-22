@@ -1,4 +1,6 @@
 -- `Bytes.append_slice from to src dst` は `dst` の後ろに `src` の `from` から `to` の手前までを足す。
+import Bytes
+
 main : Unit -> <IO, Panic> Unit
 main () =
   let src = Bytes.of_string "0123456789"

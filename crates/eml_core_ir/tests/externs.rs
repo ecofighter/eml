@@ -456,7 +456,7 @@ fn every_extern_type_row_has_the_repr_of_its_type() {
 #[test]
 fn the_tags_externs_build_name_the_constructors_of_their_layouts() {
     let program = eml_test_support::lir(
-        "main : Unit -> <IO> Unit\nmain () =\n  let f = Fs.open \"a.txt\"\n  let (text, f) = Fs.read_all f\n  Fs.close f\n  if text == \"\" then println \"empty\" else println text",
+        "import Fs\nmain : Unit -> <IO> Unit\nmain () =\n  let f = Fs.open \"a.txt\"\n  let (text, f) = Fs.read_all f\n  Fs.close f\n  if text == \"\" then println \"empty\" else println text",
     );
     let constructors = |name: &str| -> Vec<&str> {
         let layout = program

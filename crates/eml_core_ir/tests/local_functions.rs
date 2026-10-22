@@ -301,6 +301,9 @@ fn a_lifted_function_has_the_same_lir_as_a_top_level_helper() {
 /// LIR が残る。std の関数もデータを通して呼ぶ。直接呼ぶと、小さな関数は `main` に展開されて残らないためである
 /// (同じ文書の「インライン化」)。
 const STD_PROGRAM: &str = "\
+import List
+import String
+
 data Box a = | Box a
 
 hide : Int -> a -> <Panic> Box a

@@ -1,4 +1,6 @@
 -- E3006: a file left open before `exit` is dropped just before the call, so it is held across the earlier `multi` operation.
+import Fs
+
 effect Choose where
   multi choose : Unit -> Bool
 

@@ -1,5 +1,6 @@
 # 同じ関数の部分適用を、捕獲の数を変えて前の入力の総称な関数に渡す。複製の名前は捕獲の数を含むので、追記で同じ名前の別の
 # コードにならない
+> import List
 > data Nested a =
 .   | Flat a
 .   | Nest (Nested (List a))

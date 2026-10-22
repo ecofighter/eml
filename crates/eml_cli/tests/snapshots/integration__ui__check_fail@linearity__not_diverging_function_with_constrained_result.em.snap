@@ -1,16 +1,15 @@
 ---
 source: crates/eml_cli/tests/ui.rs
-assertion_line: 301
 expression: rendered
 input_file: tests/ui/check-fail/linearity/not_diverging_function_with_constrained_result.em
 ---
 [E3003] Error: `f` must be used exactly once, but it is not used
-    ╭─[ check-fail/linearity/not_diverging_function_with_constrained_result.em:13:7 ]
+    ╭─[ check-fail/linearity/not_diverging_function_with_constrained_result.em:15:7 ]
     │
- 13 │   let f = Fs.open "input.txt"
+ 15 │   let f = Fs.open "input.txt"
     │       ┬  
     │       ╰── `f` is bound here
- 14 │   mk ()
+ 16 │   mk ()
     │        │ 
     │        ╰─ `f` is not used before the end of this scope
     │ 

@@ -1,4 +1,6 @@
 -- String の関数 (docs/spec/stdlib.md)。位置は UTF-8 のバイトの位置である
+import String
+
 main : Unit -> <IO, Panic> Unit
 main () =
   println (show (String.byte_length "a日b"))

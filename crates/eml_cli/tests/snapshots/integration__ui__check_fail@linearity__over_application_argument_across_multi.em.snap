@@ -4,17 +4,17 @@ expression: rendered
 input_file: tests/ui/check-fail/linearity/over_application_argument_across_multi.em
 ---
 [E3006] Error: a linear value must be used exactly once, but it is kept alive across a call that may resume more than once
-    ╭─[ check-fail/linearity/over_application_argument_across_multi.em:15:11 ]
+    ╭─[ check-fail/linearity/over_application_argument_across_multi.em:17:11 ]
     │
- 15 │ body () = pick 1 (Fs.open "input.txt")
+ 17 │ body () = pick 1 (Fs.open "input.txt")
     │           ──────────────┬──┬──────────  
     │                         ╰─────────────── this call may perform `choose`, a `multi` operation
     │                            │            
     │                            ╰──────────── this value is kept alive across the call
     │
-    ├─[ check-fail/linearity/over_application_argument_across_multi.em:15:11 ]
+    ├─[ check-fail/linearity/over_application_argument_across_multi.em:17:11 ]
     │
-  4 │   multi choose : Unit -> Bool
+  6 │   multi choose : Unit -> Bool
     │         ───┬──  
     │            ╰──── `choose` is declared `multi` here
     │ 

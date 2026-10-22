@@ -28,6 +28,8 @@ fn a_polymorphic_hole_takes_the_constraint_from_the_signature() {
 #[test]
 fn a_linear_value_held_across_a_multi_hole_is_rejected() {
     let text = [
+        "import Fs",
+        "",
         "effect Choice where",
         "  multi choose : Unit -> Bool",
         "",
@@ -40,10 +42,10 @@ fn a_linear_value_held_across_a_multi_hole_is_rejected() {
     ]
     .join("\n");
     insta::assert_snapshot!(diagnostics(&text), @"
-    E3006 7:14 `file` must be used exactly once, but it is kept alive across a call that may resume more than once
-      7:14 this call may perform `choose`, a `multi` operation
-      6:7 `file` is bound here
-      2:9 `choose` is declared `multi` here
+    E3006 9:14 `file` must be used exactly once, but it is kept alive across a call that may resume more than once
+      9:14 this call may perform `choose`, a `multi` operation
+      8:7 `file` is bound here
+      4:9 `choose` is declared `multi` here
       note: a continuation of a `multi` operation can be resumed more than once, and each resumption would use the value again
       help: finish using `file` before this call
     ");

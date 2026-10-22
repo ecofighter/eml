@@ -1,4 +1,6 @@
 -- A function that calls its callback inside `try_io` also catches the callback's IO failures: `IO` is never masked.
+import Fs
+
 attempt : (Unit -> <e> a) -> <IO | e> Result IOError a
 attempt action = try_io (fn () -> action ())
 

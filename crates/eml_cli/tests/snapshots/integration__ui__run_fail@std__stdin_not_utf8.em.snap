@@ -7,4 +7,4 @@ input_file: tests/ui/run-fail/std/stdin_not_utf8.em
 --- stderr ---
 --- runtime error ---
 the standard input is not valid UTF-8
-  at run-fail/std/stdin_not_utf8.em:3:19
+  at run-fail/std/stdin_not_utf8.em:5:19

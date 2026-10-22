@@ -1,5 +1,7 @@
 -- std の `List.map` と `List.filter` を繰り返し通す。どちらも逆順に積んで最後に `List.reverse` するので、手放すセルの
 -- 箱を、作るセルが使い回す (docs/spec/lir.md の「reuse」)。
+import Std.List
+
 range : Int -> Int -> List Int -> <Panic> List Int
 range lo hi acc = if hi < lo then acc else range lo (hi - 1) (hi :: acc)
 

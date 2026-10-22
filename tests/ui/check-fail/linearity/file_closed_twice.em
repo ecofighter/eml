@@ -1,4 +1,6 @@
 -- E3002: a file is linear, so closing it twice is an error.
+import Fs
+
 main : Unit -> <IO> Unit
 main () =
   let f = Fs.open "input.txt"

@@ -4,25 +4,25 @@ expression: rendered
 input_file: tests/ui/check-fail/linearity/diverging_drop_across_multi.em
 ---
 [E3006] Error: `f` must be used exactly once, but it is kept alive across a call that may resume more than once
-   ╭─[ check-fail/linearity/diverging_drop_across_multi.em:8:11 ]
-   │
- 8 │   let b = choose ()
-   │           ────┬────  
-   │               ╰────── this call may perform `choose`, a `multi` operation
-   │
-   ├─[ check-fail/linearity/diverging_drop_across_multi.em:8:11 ]
-   │
- 7 │   let f = Fs.open "input.txt"
-   │       ┬  
-   │       ╰── `f` is bound here
-   │
-   ├─[ check-fail/linearity/diverging_drop_across_multi.em:8:11 ]
-   │
- 3 │   multi choose : Unit -> Bool
-   │         ───┬──  
-   │            ╰──── `choose` is declared `multi` here
-   │ 
-   │ Help: finish using `f` before this call
-   │ 
-   │ Note: a continuation of a `multi` operation can be resumed more than once, and each resumption would use the value again
-───╯
+    ╭─[ check-fail/linearity/diverging_drop_across_multi.em:10:11 ]
+    │
+ 10 │   let b = choose ()
+    │           ────┬────  
+    │               ╰────── this call may perform `choose`, a `multi` operation
+    │
+    ├─[ check-fail/linearity/diverging_drop_across_multi.em:10:11 ]
+    │
+  9 │   let f = Fs.open "input.txt"
+    │       ┬  
+    │       ╰── `f` is bound here
+    │
+    ├─[ check-fail/linearity/diverging_drop_across_multi.em:10:11 ]
+    │
+  5 │   multi choose : Unit -> Bool
+    │         ───┬──  
+    │            ╰──── `choose` is declared `multi` here
+    │ 
+    │ Help: finish using `f` before this call
+    │ 
+    │ Note: a continuation of a `multi` operation can be resumed more than once, and each resumption would use the value again
+────╯

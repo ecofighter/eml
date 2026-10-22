@@ -718,10 +718,10 @@ fn a_file_left_open_by_an_interrupt_is_closed_by_recovery() {
             HostRef::new(Arc::new(host)),
         );
         for input in [
-            "keep : Int -> Fs.File -> <Panic> Fs.File\nkeep n f = if n > 0 then keep (n - 1) f else f",
-            "read : Unit -> <IO> String\nread () =\n  let f = Fs.open \"a.txt\"\n  \
+            "import Fs\nkeep : Int -> Fs.File -> <Panic> Fs.File\nkeep n f = if n > 0 then keep (n - 1) f else f",
+            "import Fs\nread : Unit -> <IO> String\nread () =\n  let f = Fs.open \"a.txt\"\n  \
              let (text, f) = Fs.read_all f\n  Fs.close f\n  text",
-            "read_kept : Unit -> <IO, Panic> String\nread_kept () =\n  let f = keep 0 (Fs.open \"a.txt\")\n  \
+            "import Fs\nread_kept : Unit -> <IO, Panic> String\nread_kept () =\n  let f = keep 0 (Fs.open \"a.txt\")\n  \
              let (text, f) = Fs.read_all f\n  Fs.close f\n  text",
         ] {
             let evaluated = repl.eval(input);
@@ -1046,7 +1046,8 @@ fn type_of_neither_accepts_nor_numbers_its_question() {
 /// `:type` は問い合わせた型の row 変数を残す。
 #[test]
 fn type_of_keeps_the_row_variables_of_the_queried_type() {
-    let console = Console::new(&RunConfig::default());
+    let mut console = Console::new(&RunConfig::default());
+    assert_eq!(console.eval("import List").0, Outcome::Accepted);
     assert_eq!(
         console.repl.type_of("fn f -> f ()").ty.as_deref(),
         Some("(Unit -> <e> a) -> <e> a")
@@ -1094,7 +1095,8 @@ fn type_of_closes_the_row_of_a_self_call_under_its_own_handler() {
 /// 後で報告する誤り (線形性) だけの問い合わせでも、型を返さない。
 #[test]
 fn type_of_returns_no_type_when_any_error_is_found() {
-    let console = Console::new(&RunConfig::default());
+    let mut console = Console::new(&RunConfig::default());
+    assert_eq!(console.eval("import Fs").0, Outcome::Accepted);
     let typed = console.repl.type_of("let f = Fs.open \"x\" in (f, f)");
     assert!(has_errors(&typed.diagnostics), "{:?}", typed.diagnostics);
     assert_eq!(typed.ty, None);

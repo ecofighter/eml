@@ -4,12 +4,12 @@ expression: rendered
 input_file: tests/ui/check-fail/linearity/stdout_not_used.em
 ---
 [E3003] Error: `out` must be used exactly once, but it is not used
-   ╭─[ check-fail/linearity/stdout_not_used.em:4:7 ]
+   ╭─[ check-fail/linearity/stdout_not_used.em:6:7 ]
    │
- 4 │   let out = Stdout.open ()
+ 6 │   let out = Stdout.open ()
    │       ─┬─  
    │        ╰─── `out` is bound here
- 5 │   println "x"
+ 7 │   println "x"
    │              │ 
    │              ╰─ `out` is not used before the end of this scope
    │ 

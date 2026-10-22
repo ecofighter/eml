@@ -1,3 +1,5 @@
+import Byte
+
 main : Unit -> <IO, Panic> Unit
 main () =
   println (show (Byte.to_int 200u8))

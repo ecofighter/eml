@@ -4,21 +4,21 @@ expression: rendered
 input_file: tests/ui/check-fail/linearity/diverging_branch_drop_across_multi.em
 ---
 [E3006] Error: `f` must be used exactly once, but it is kept alive across a call that may resume more than once
-    ╭─[ check-fail/linearity/diverging_branch_drop_across_multi.em:10:13 ]
+    ╭─[ check-fail/linearity/diverging_branch_drop_across_multi.em:12:13 ]
     │
- 10 │     let b = choose ()
+ 12 │     let b = choose ()
     │             ────┬────  
     │                 ╰────── this call may perform `choose`, a `multi` operation
     │
-    ├─[ check-fail/linearity/diverging_branch_drop_across_multi.em:10:13 ]
+    ├─[ check-fail/linearity/diverging_branch_drop_across_multi.em:12:13 ]
     │
-  7 │   let f = Fs.open "input.txt"
+  9 │   let f = Fs.open "input.txt"
     │       ┬  
     │       ╰── `f` is bound here
     │
-    ├─[ check-fail/linearity/diverging_branch_drop_across_multi.em:10:13 ]
+    ├─[ check-fail/linearity/diverging_branch_drop_across_multi.em:12:13 ]
     │
-  3 │   multi choose : Unit -> Bool
+  5 │   multi choose : Unit -> Bool
     │         ───┬──  
     │            ╰──── `choose` is declared `multi` here
     │ 

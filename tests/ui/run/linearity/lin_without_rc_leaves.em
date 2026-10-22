@@ -1,6 +1,8 @@
 -- `Lin` と宣言した型で、RC の葉を持たない構造体。`Ticket` は `Int` と `Float` の葉だけを持つ。構造体の値は葉の並びで
 -- 渡り、一様な位置 (`Option` のフィールド) では箱に入る。`Lin` の箱は `decref` でなく `drop` で手放す
 -- (docs/spec/lir.md の「Perceus」)。
+import Float
+
 data Ticket : Lin =
   | Ticket Int Float
 

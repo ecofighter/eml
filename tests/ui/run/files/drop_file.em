@@ -1,4 +1,6 @@
 -- `drop` releases a file like `close` does.
+import Fs
+
 main : Unit -> <IO> Unit
 main () =
   let f = Fs.open "input.txt"

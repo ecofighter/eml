@@ -4,9 +4,9 @@ expression: rendered
 input_file: tests/ui/check-fail/linearity/lin_element_get.em
 ---
 [E3001] Error: a linear value is passed to `get`, which may use it more than once or not at all
-   ╭─[ check-fail/linearity/lin_element_get.em:3:16 ]
+   ╭─[ check-fail/linearity/lin_element_get.em:6:16 ]
    │
- 3 │ first_file a = Array.get a 0
+ 6 │ first_file a = Array.get a 0
    │                ────┬────  
    │                    ╰────── `get` is used here
    │ 

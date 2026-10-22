@@ -1,4 +1,6 @@
 -- ASCII の判定が、0 から 127 のうち期待する個数の文字で成り立つ。
+import Char
+
 count : (Char -> Bool) -> Int
 count p =
   let go n = if n > 127 then 0 else (if p (Char.of_int n) then 1 else 0) + go (n + 1)

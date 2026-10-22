@@ -4,12 +4,12 @@ expression: rendered
 input_file: tests/ui/check-fail/linearity/file_never_closed.em
 ---
 [E3003] Error: `f` must be used exactly once, but it is not used
-   ╭─[ check-fail/linearity/file_never_closed.em:4:7 ]
+   ╭─[ check-fail/linearity/file_never_closed.em:6:7 ]
    │
- 4 │   let f = Fs.open "input.txt"
+ 6 │   let f = Fs.open "input.txt"
    │       ┬  
    │       ╰── `f` is bound here
- 5 │   println "forgot"
+ 7 │   println "forgot"
    │                   │ 
    │                   ╰─ `f` is not used before the end of this scope
    │ 

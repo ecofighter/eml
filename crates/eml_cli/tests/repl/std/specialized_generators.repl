@@ -1,5 +1,6 @@
 # 前の入力の末尾再帰の生産者を、後の入力で `Iter.generate` と `Yield.fold` に渡す。handler の複製と継続の関数の名前は
 # handle と経路の関数だけから決まるので、追記の「同じ名前なら同じコード」の確かめを通る
+> import Iter
 > import Yield (Yield(..))
 > nums : Int -> Unit -> <Yield Int, Panic> Unit
 . nums n () =

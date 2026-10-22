@@ -1,4 +1,6 @@
 -- A file kept alive across a `once` operation is released with the continuation when the clause drops it.
+import Fs
+
 effect Ask where
   ask : Unit -> Int
 

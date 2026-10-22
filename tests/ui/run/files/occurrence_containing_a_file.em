@@ -1,5 +1,7 @@
 -- `(o, 0)` の葉は `h` を中に持つ `Some h` を受け取るので、`h` を drop しない
 -- (docs/spec/core-ir.md の「決定木の葉の `drop`」)。
+import Fs
+
 close_opt : Option Fs.File -> <IO> Unit
 close_opt o =
   match o with

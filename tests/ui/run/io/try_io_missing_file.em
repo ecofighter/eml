@@ -1,4 +1,7 @@
 -- `try_io` turns a failed `Fs.read_text` into `Err`, whose kind and message can be shown; a success is `Ok`.
+import Fs
+import String
+
 main : Unit -> <IO> Unit
 main () =
   match try_io (fn () -> Fs.read_text "missing.txt") with

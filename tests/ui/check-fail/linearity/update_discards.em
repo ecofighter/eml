@@ -1,4 +1,6 @@
 -- E3004: an update overwrites the old value of a field, so it cannot drop a linear field.
+import Fs
+
 data Job = | Job { name : String, log : Fs.File }
 
 main : Unit -> <IO> Unit

@@ -1,4 +1,6 @@
 # REPL のプログラムは引数を持たず、標準入力は REPL 自身が読むので使えない。標準入力の誤りの後もセッションは続く
+> import Env
+> import Stdin
 > Env.args ()
 > Stdin.read_text ()
 > Stdin.open ()

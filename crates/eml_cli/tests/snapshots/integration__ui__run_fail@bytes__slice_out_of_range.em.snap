@@ -7,4 +7,4 @@ input_file: tests/ui/run-fail/bytes/slice_out_of_range.em
 --- stderr ---
 --- runtime error ---
 bytes slice 2..9 is out of range for length 3
-  at run-fail/bytes/slice_out_of_range.em:5:32
+  at run-fail/bytes/slice_out_of_range.em:7:32

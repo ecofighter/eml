@@ -1,5 +1,7 @@
 -- 作り直す値に別の参照が残っていると、token は空になり、`con` は新しい箱を確保する。古い木と古いレコードは
 -- 変わらずに残る。
+import List
+
 data Tree =
   | Leaf
   | Node Tree Int Tree

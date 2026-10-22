@@ -1,5 +1,7 @@
 -- E3006: the performer of `mk` may put a `multi` operation into the row `e` of the callback `g`, so the clause must not
 -- keep a file across the call `g ()`.
+import Fs
+
 effect Mk where
   mk : Unit -> ((Unit -> <IO | e> Int) -> <IO | e> Int, Int)
 

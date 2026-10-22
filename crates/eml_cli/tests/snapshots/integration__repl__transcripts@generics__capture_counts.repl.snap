@@ -3,6 +3,7 @@ source: crates/eml_cli/tests/repl.rs
 expression: checked.render()
 input_file: crates/eml_cli/tests/repl/generics/capture_counts.repl
 ---
+> import List
 > data Nested a =
 .   | Flat a
 .   | Nest (Nested (List a))

@@ -7,4 +7,4 @@ input_file: tests/ui/run-fail/var/index_out_of_range.em
 --- stderr ---
 --- runtime error ---
 array index 5 is out of range for length 3
-  at run-fail/var/index_out_of_range.em:6:17
+  at run-fail/var/index_out_of_range.em:8:17

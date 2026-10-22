@@ -1,5 +1,6 @@
 -- 1つの経路に戻らない呼び出しが2つあるときは、評価の順で最初の `fail "a"` の前でだけ `File` を手放す。
 import Fail (Fail(..))
+import Fs
 
 g : Int -> Int -> <Panic> Int
 g a b = a + b

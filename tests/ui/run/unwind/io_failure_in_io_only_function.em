@@ -1,5 +1,7 @@
 -- `<IO>` だけの row の関数は yield しない。`File` を持った段の下で無いファイルを開くと、IO の失敗が `try_io` へ
 -- 中断し、巻き戻しが各段の `File` を1回ずつ閉じる。
+import Fs
+
 missing : Unit -> <IO> Int
 missing () =
   let f = Fs.open "input.txt"

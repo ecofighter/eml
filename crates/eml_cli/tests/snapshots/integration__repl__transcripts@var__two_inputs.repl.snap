@@ -3,6 +3,8 @@ source: crates/eml_cli/tests/repl.rs
 expression: checked.render()
 input_file: crates/eml_cli/tests/repl/var/two_inputs.repl
 ---
+> import Array
+> import MutArray
 > count_up : Int -> <Panic> Int
 . count_up n =
 .   var x = 0

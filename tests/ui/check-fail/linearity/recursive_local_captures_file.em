@@ -1,5 +1,7 @@
 -- E3001: 自分を呼ぶローカル関数は何度も呼ばれうるので、`File` を捕まえられない。2つ目の関数は `multi` の操作も行うが、
 -- `File` は操作の前に閉じるので E3006 は出ず、E3001 だけを報告する。
+import Fs
+
 effect Choice where
   multi choose : Unit -> Bool
 

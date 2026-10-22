@@ -1,4 +1,6 @@
 -- E3004: a projection discards the other fields, so it cannot leave a linear field behind.
+import Fs
+
 data Job = | Job { name : String, log : Fs.File }
 
 main : Unit -> <IO> Unit

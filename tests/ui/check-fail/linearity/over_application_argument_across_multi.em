@@ -1,5 +1,7 @@
 -- 引数はすべて評価してから矢印を適用する (docs/spec/expressions.md の「関数適用」)。`pick 1` が `multi` の操作を起こす
 -- 間、評価済みの `Fs.open` の値を持つので、持ち越し規則が E3006 にする。
+import Fs
+
 effect Choose where
   multi choose : Unit -> Bool
 

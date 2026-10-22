@@ -1,4 +1,7 @@
 -- `sieve_var.em` のふるいを、`MutArray` を末尾再帰のループに線形に受け渡して手で書いた版
+import Array
+import MutArray
+
 cross : Int -> Int -> Int -> MutArray Bool -> <Panic> MutArray Bool
 cross step n j marks =
   if j < n then cross step n (j + step) (MutArray.write marks j False)

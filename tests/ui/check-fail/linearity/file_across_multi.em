@@ -1,4 +1,6 @@
 -- E3006: a file kept alive across a `multi` operation would be closed again by each resumption.
+import Fs
+
 effect Choice where
   multi choose : Unit -> Bool
 

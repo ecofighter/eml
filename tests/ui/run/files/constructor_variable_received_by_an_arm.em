@@ -1,5 +1,7 @@
 -- `p` を束縛した後で検査し、`other` の枝が `p` そのものを受け取る。決定木は `p` を開かずに分解するので、`xs` と
 -- `ys` を2か所で使わない (docs/spec/core-ir.md の「translate が決める印」)。
+import Fs
+
 close_all : List Fs.File -> <IO> Unit
 close_all [] = println "closed"
 close_all (f :: rest) =

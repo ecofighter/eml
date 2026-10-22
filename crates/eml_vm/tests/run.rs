@@ -411,13 +411,13 @@ fn main() -> unit {{
 /// 配列を後で使う版と使わない版の `allocations` の差はちょうど 1 になる。
 #[test]
 fn thaw_copies_only_shared_arrays() {
-    let unique = "main : Unit -> <IO, Panic> Unit
+    let unique = "import Array\nimport MutArray\nmain : Unit -> <IO, Panic> Unit
 main () =
   let a = Array.make 3 0
   let n = Array.length (MutArray.freeze (Array.thaw a))
   println (show (n + 0))
 ";
-    let shared = "main : Unit -> <IO, Panic> Unit
+    let shared = "import Array\nimport MutArray\nmain : Unit -> <IO, Panic> Unit
 main () =
   let a = Array.make 3 0
   let n = Array.length (MutArray.freeze (Array.thaw a))

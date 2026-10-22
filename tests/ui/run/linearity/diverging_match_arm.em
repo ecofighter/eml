@@ -1,6 +1,7 @@
 -- `fail` で終わる腕と `File` を閉じる腕を持つ `match`、`exit` で終わる枝と `File` を閉じる枝を持つ `if`。戻らない側は
 -- 呼び出しの前に `File` を手放す。
 import Fail (Fail(..))
+import Fs
 
 pick : Int -> <Fail String, IO> Int
 pick n =

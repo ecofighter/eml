@@ -109,7 +109,7 @@ fn run_opens_an_absolute_path_as_is() {
     std::fs::write(&input, "from an absolute path").unwrap();
     let program = dir.join("absolute.em");
     let source = format!(
-        "main : Unit -> <IO> Unit\nmain () =\n  let f = Fs.open \"{}\"\n  let (text, f) = Fs.read_all f\n  Fs.close f\n  println text\n",
+        "import Fs\nmain : Unit -> <IO> Unit\nmain () =\n  let f = Fs.open \"{}\"\n  let (text, f) = Fs.read_all f\n  Fs.close f\n  println text\n",
         input.display()
     );
     std::fs::write(&program, source).unwrap();
@@ -228,6 +228,8 @@ main () = spin 0
 /// 名前付きパイプ `fifo` を開いて全部読む。書き手が何も書かずに開いたままなら、読みの中で待ち続ける。
 #[cfg(unix)]
 const READ_FIFO: &str = "\
+import Fs
+
 main : Unit -> <IO> Unit
 main () =
   let f = Fs.open \"fifo\"
@@ -377,6 +379,8 @@ fn repeated_interrupts_end_a_program_waiting_in_a_read_with_130() {
 
 /// 引数を1行に書く。
 const SHOW_ARGS: &str = "\
+import Env
+
 main : Unit -> <IO, Panic> Unit
 main () = println (show (Env.args ()))
 ";
@@ -439,7 +443,7 @@ fn a_misspelled_flag_is_a_usage_error() {
 #[test]
 fn a_script_reads_the_standard_input_and_writes_the_standard_error() {
     use std::io::Write;
-    let text = "\
+    let text = "import Stdin\n\
 main : Unit -> <IO, Panic> Unit
 main () =
   eprintln \"to stderr\"
@@ -477,13 +481,13 @@ main () =
 /// `Fs.write_text` は実際のディスクに書き、書けなければ `cannot write` の実行時エラーになる。
 #[test]
 fn a_script_writes_a_file_and_reports_a_failed_write() {
-    let write = "\
+    let write = "import Fs\n\
 main : Unit -> <IO> Unit
 main () =
   Fs.write_text \"out.txt\" \"日本\\n\"
   println (Fs.read_text \"out.txt\")
 ";
-    let fail = "\
+    let fail = "import Fs\n\
 main : Unit -> <IO> Unit
 main () = Fs.write_text \"missing-dir/x.txt\" \"x\"
 ";
@@ -534,7 +538,7 @@ fn a_script_with_a_shebang_runs_directly() {
 fn arguments_and_variables_that_are_not_utf8_are_runtime_errors() {
     use std::ffi::OsStr;
     use std::os::unix::ffi::OsStrExt;
-    let get = "\
+    let get = "import Env\n\
 main : Unit -> <IO> Unit
 main () = println (show (Env.get \"BAD\"))
 ";
@@ -576,7 +580,7 @@ fn an_interrupt_stops_a_program_waiting_for_a_child_with_130() {
     use std::os::unix::process::CommandExt;
     use std::time::{Duration, Instant};
 
-    let text = "\
+    let text = "import Proc\n\
 main : Unit -> <IO, Panic> Unit
 main () = println (show (Proc.run \"sh\" [\"-c\", \"echo started >&2; exec sleep 30\"]))
 ";
@@ -622,7 +626,7 @@ fn repeated_interrupts_end_a_program_waiting_for_the_standard_input_with_130() {
     use std::io::{BufRead, BufReader};
     use std::time::{Duration, Instant};
 
-    let text = "\
+    let text = "import Stdin\n\
 main : Unit -> <IO, Panic> Unit
 main () =
   eprintln \"ready\"

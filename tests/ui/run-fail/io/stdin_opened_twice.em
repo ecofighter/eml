@@ -1,3 +1,5 @@
+import Stdin
+
 main : Unit -> <IO, Panic> Unit
 main () =
   let h = Stdin.open ()

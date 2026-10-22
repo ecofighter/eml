@@ -510,7 +510,7 @@ mod interrupts {
         assert_eq!(unsafe { libc::mkfifo(path.as_ptr(), 0o600) }, 0);
         let mut repl = LiveRepl::start(&dir, &["--debug-heap"]);
         repl.send(
-            "slurp : Unit -> <IO> String\nslurp () =\n  let f = Fs.open \"fifo\"\n  \
+            "import Fs\nslurp : Unit -> <IO> String\nslurp () =\n  let f = Fs.open \"fifo\"\n  \
              let (text, f) = Fs.read_all f\n  Fs.close f\n  text\n\n\"defined\"",
         );
         repl.expect_out("\"defined\"");

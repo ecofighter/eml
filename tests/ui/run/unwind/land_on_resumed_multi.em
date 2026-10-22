@@ -1,5 +1,7 @@
 -- `multi` の節が `k 1 + k 2` と2回再開する。2回目の再開は操作が戻った後に `File` を開き、同じ handler の
 -- `never` の操作で中断する。着地の印の所で止まり、`File` は閉じる。
+import Fs
+
 effect Pick where
   multi pick : Unit -> Int
   never stop : Int -> a

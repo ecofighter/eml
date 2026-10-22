@@ -1,4 +1,7 @@
 -- 取り出した後に範囲の中で作った閉包を呼ぶと、その添字は空の配列に対して働き、範囲外の `Panic` になる
+import Array
+import MutArray
+
 probe : Unit -> <Panic> (Array Int, Result String Int)
 probe () =
   var a = MutArray.make 3 7

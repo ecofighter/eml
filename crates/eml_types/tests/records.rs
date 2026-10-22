@@ -19,10 +19,10 @@ fn a_field_mismatch_names_the_field() {
 
 #[test]
 fn an_omitted_linear_field_is_discarded() {
-    let text = "data Job = | Job { name : String, log : Fs.File }\n\nf : Job -> String\nf j = match j with\n  | Job { name } -> name";
+    let text = "import Fs\ndata Job = | Job { name : String, log : Fs.File }\n\nf : Job -> String\nf j = match j with\n  | Job { name } -> name";
     insta::assert_snapshot!(diagnostics(text), @"
-    E3004 5:5 the field `log` is discarded, but it holds a linear value
-      5:5 this pattern leaves out `log`
+    E3004 6:5 the field `log` is discarded, but it holds a linear value
+      6:5 this pattern leaves out `log`
       note: linear values, such as files, the continuation of a `once` operation and closures that capture one, must be used exactly once
       help: bind `log` in the pattern and pass it to `drop`
     ");
@@ -78,14 +78,14 @@ fn same_field_name_in_two_records() {
 
 #[test]
 fn projection_and_update_discard_linear_fields() {
-    let text = "data Job = | Job { name : String, log : Fs.File }\n\nf : Job -> String\nf j = j.name\n\ng : Job -> Fs.File -> Job\ng j f = { j | log = f }";
+    let text = "import Fs\ndata Job = | Job { name : String, log : Fs.File }\n\nf : Job -> String\nf j = j.name\n\ng : Job -> Fs.File -> Job\ng j f = { j | log = f }";
     insta::assert_snapshot!(diagnostics(text), @"
-    E3004 4:7 the field `log` is discarded, but it holds a linear value
-      4:7 this projection leaves the field `log` behind
+    E3004 5:7 the field `log` is discarded, but it holds a linear value
+      5:7 this projection leaves the field `log` behind
       note: linear values, such as files, the continuation of a `once` operation and closures that capture one, must be used exactly once
       help: take the value apart with a record pattern and pass `log` to `drop`
-    E3004 7:9 the old value of the field `log` is discarded, but it holds a linear value
-      7:9 this update overwrites `log`
+    E3004 8:9 the old value of the field `log` is discarded, but it holds a linear value
+      8:9 this update overwrites `log`
       note: linear values, such as files, the continuation of a `once` operation and closures that capture one, must be used exactly once
       help: take the old `log` out with a record pattern and pass it to `drop`
     ");
@@ -171,28 +171,28 @@ fn update_errors() {
 
 #[test]
 fn a_projection_in_a_section_discards_without_help() {
-    let text = "data Job = | Job { name : String, log : Fs.File }\n\napply : (Job -> String) -> Job -> String\napply f j = f j\n\nf : Job -> String\nf j = apply (.name) j";
+    let text = "import Fs\ndata Job = | Job { name : String, log : Fs.File }\n\napply : (Job -> String) -> Job -> String\napply f j = f j\n\nf : Job -> String\nf j = apply (.name) j";
     insta::assert_snapshot!(diagnostics(text), @"
-    E3004 7:13 the field `log` is discarded, but it holds a linear value
-      7:13 this projection leaves the field `log` behind
+    E3004 8:13 the field `log` is discarded, but it holds a linear value
+      8:13 this projection leaves the field `log` behind
       note: linear values, such as files, the continuation of a `once` operation and closures that capture one, must be used exactly once
     ");
 }
 
 #[test]
 fn a_projection_uses_its_base_once() {
-    let text = "data Job = | Job { name : String, log : Fs.File }\n\nf : Job -> (String, String)\nf j = (j.name, j.name)";
+    let text = "import Fs\ndata Job = | Job { name : String, log : Fs.File }\n\nf : Job -> (String, String)\nf j = (j.name, j.name)";
     insta::assert_snapshot!(diagnostics(text), @"
-    E3004 4:8 the field `log` is discarded, but it holds a linear value
-      4:8 this projection leaves the field `log` behind
+    E3004 5:8 the field `log` is discarded, but it holds a linear value
+      5:8 this projection leaves the field `log` behind
       note: linear values, such as files, the continuation of a `once` operation and closures that capture one, must be used exactly once
       help: take the value apart with a record pattern and pass `log` to `drop`
-    E3002 4:16 `j` must be used exactly once, but it is used more than once
-      4:16 used again here
-      4:8 first used here
+    E3002 5:16 `j` must be used exactly once, but it is used more than once
+      5:16 used again here
+      5:8 first used here
       note: linear values, such as files, the continuation of a `once` operation and closures that capture one, must be used exactly once
-    E3004 4:16 the field `log` is discarded, but it holds a linear value
-      4:16 this projection leaves the field `log` behind
+    E3004 5:16 the field `log` is discarded, but it holds a linear value
+      5:16 this projection leaves the field `log` behind
       note: linear values, such as files, the continuation of a `once` operation and closures that capture one, must be used exactly once
       help: take the value apart with a record pattern and pass `log` to `drop`
     ");
@@ -314,9 +314,9 @@ fn an_update_of_a_type_without_fields_is_reported_once() {
 
 #[test]
 fn a_pattern_field_without_its_pattern_binds_nothing() {
-    let text = "data Job = | Job { name : String, log : Fs.File }\n\nf : Job -> String\nf j = match j with\n  | Job { log = , name } -> name";
+    let text = "import Fs\ndata Job = | Job { name : String, log : Fs.File }\n\nf : Job -> String\nf j = match j with\n  | Job { log = , name } -> name";
     insta::assert_snapshot!(diagnostics(text), @"
-    E0011 5:17 expected a pattern
-      5:17 found `,`
+    E0011 6:17 expected a pattern
+      6:17 found `,`
     ");
 }

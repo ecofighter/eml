@@ -1,5 +1,6 @@
 -- リストの要素が失敗する経路は、開いた `File` を `fail` の前に手放す。戻る経路は `File` を閉じる。
 import Fail (Fail(..))
+import Fs
 
 build : Bool -> Unit -> <IO, Fail String> List Int
 build c () =

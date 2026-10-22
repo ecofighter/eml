@@ -1,5 +1,7 @@
 -- 多相再帰の一様な instance の中で、既知の閉包を呼ぶ。`tobj` の引数と閉包の関数の引数の Repr の違いは、box の挿入が
 -- 直す
+import List
+
 data Nested a =
   | Flat a
   | Nest (Nested (List a))

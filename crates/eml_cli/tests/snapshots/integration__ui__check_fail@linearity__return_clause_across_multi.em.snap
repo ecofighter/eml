@@ -4,19 +4,19 @@ expression: rendered
 input_file: tests/ui/check-fail/linearity/return_clause_across_multi.em
 ---
 [E3006] Error: `f` must be used exactly once, but it is kept alive across a call that may resume more than once
-    ╭─[ check-fail/linearity/return_clause_across_multi.em:12:3 ]
+    ╭─[ check-fail/linearity/return_clause_across_multi.em:14:3 ]
     │
- 12 │ ╭─▶   handle (if choose () then ask () else 0) with
+ 14 │ ╭─▶   handle (if choose () then ask () else 0) with
     ┆ ┆   
- 14 │ ├─▶     | return n -> Fs.close f
+ 16 │ ├─▶     | return n -> Fs.close f
     │ │       ────────────┬───────────   
     │ │                   ╰────────────── the `return` clause captures `f`
     │ │                                  
     │ ╰────────────────────────────────── this handle may perform `choose`, a `multi` operation
     │
-    ├─[ check-fail/linearity/return_clause_across_multi.em:12:3 ]
+    ├─[ check-fail/linearity/return_clause_across_multi.em:14:3 ]
     │
-  4 │   multi choose : Unit -> Bool
+  6 │   multi choose : Unit -> Bool
     │         ───┬──  
     │            ╰──── `choose` is declared `multi` here
     │ 

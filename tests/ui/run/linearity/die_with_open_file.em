@@ -1,4 +1,6 @@
 -- 自作の `die : String -> <IO> a` も戻らない呼び出しなので、開いたままの `File` を呼び出しの前に手放す。
+import Fs
+
 die : String -> <IO> a
 die message =
   eprintln message

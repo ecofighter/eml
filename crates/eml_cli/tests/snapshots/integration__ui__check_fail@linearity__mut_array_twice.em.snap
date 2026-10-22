@@ -4,15 +4,15 @@ expression: rendered
 input_file: tests/ui/check-fail/linearity/mut_array_twice.em
 ---
 [E3002] Error: `m` must be used exactly once, but it is used more than once
-   ╭─[ check-fail/linearity/mut_array_twice.em:6:27 ]
+   ╭─[ check-fail/linearity/mut_array_twice.em:9:27 ]
    │
- 6 │   let b = MutArray.freeze m
+ 9 │   let b = MutArray.freeze m
    │                           ┬  
    │                           ╰── used again here
    │
-   ├─[ check-fail/linearity/mut_array_twice.em:6:27 ]
+   ├─[ check-fail/linearity/mut_array_twice.em:9:27 ]
    │
- 5 │   let a = MutArray.freeze m
+ 8 │   let a = MutArray.freeze m
    │                           ┬  
    │                           ╰── first used here
    │ 

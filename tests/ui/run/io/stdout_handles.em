@@ -1,4 +1,8 @@
 -- `println` and `Stdout` handles write into one buffer, so the output keeps the program order
+import Bytes
+import Stderr
+import Stdout
+
 main : Unit -> <IO, Panic> Unit
 main () =
   let out = Stdout.open ()

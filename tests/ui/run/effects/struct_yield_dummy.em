@@ -2,6 +2,8 @@
 -- 遅い道は、構造体の結果の代わりにダミーを返す。呼ぶ側はダミーを受けても葉を使わずに中断を続け、再開した後で本当の
 -- 値を受ける (docs/spec/lir.md の「ダミーの値」)。`point` は
 -- 展開されないように再帰させる。
+import Float
+
 effect Ask where
   ask : Int -> Int
 

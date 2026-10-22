@@ -1,4 +1,6 @@
 -- `Float` の変数を、もう1本の変数と一緒に `for` のループで書き換える
+import Float
+
 main : Unit -> <IO, Panic> Unit
 main () =
   var sum = 0.0

@@ -1,4 +1,7 @@
 -- `MutArray` は `Lin` なので、2 度使えない。
+import Array
+import MutArray
+
 main : Unit -> <IO, Panic> Unit
 main () =
   let m = MutArray.make 2 0

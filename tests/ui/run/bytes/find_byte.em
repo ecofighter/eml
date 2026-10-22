@@ -1,5 +1,7 @@
 -- `Bytes.find_byte x b` は `x` が最初にある位置を返す。8 バイトより長い列では、語の境目の前後と末尾でも見つかる。
 -- `Bytes.find` は先頭のバイトが合う位置ごとに残りを比べるので、先頭だけが合う位置を飛ばす。
+import Bytes
+
 main : Unit -> <IO, Panic> Unit
 main () =
   let b = Bytes.of_string "the quick brown fox jumps over the lazy dog"

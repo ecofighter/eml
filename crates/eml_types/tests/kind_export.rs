@@ -31,7 +31,7 @@ fn a_lambda_that_captures_nothing_is_unr() {
 #[test]
 fn a_lambda_that_captures_a_file_is_lin() {
     // `g` の矢印は `File` の `h` を捕まえて下限 `Lin` を持つので、最小解が `Lin` になる
-    let text = "main : Unit -> <IO> Unit\nmain () =\n  let h = Fs.open \"a.txt\"\n  let g = fn () -> Fs.close h\n  g ()";
+    let text = "import Fs\nmain : Unit -> <IO> Unit\nmain () =\n  let h = Fs.open \"a.txt\"\n  let g = fn () -> Fs.close h\n  g ()";
     insta::assert_snapshot!(exported(text), @"
     main : Unit -> <IO> Unit
       h#0 : File
@@ -141,7 +141,7 @@ fn a_clause_in_main_keeps_its_operation_variable_kinds() {
 fn an_unresolved_variable_takes_the_least_value() {
     // tests/ui/run/files/file_in_return_clause_on_abort.em の形。使われない `return x` の `x` の型は推論で決まらず、
     // その `μ` は下限を持たないので、最小値の `Unr` の `Flexible` になり `_` と書く
-    let text = "effect Fail where\n  never fail : Unit -> a\n\nmain : Unit -> <IO> Unit\nmain () =\n  let f = Fs.open \"input.txt\"\n  handle fail () with\n    | ctl fail () -> println \"aborted\"\n    | return x -> Fs.close f";
+    let text = "import Fs\neffect Fail where\n  never fail : Unit -> a\n\nmain : Unit -> <IO> Unit\nmain () =\n  let f = Fs.open \"input.txt\"\n  handle fail () with\n    | ctl fail () -> println \"aborted\"\n    | return x -> Fs.close f";
     insta::assert_snapshot!(exported(text), @"
     fail : Unit -> <Fail> a
     main : Unit -> <IO> Unit
@@ -156,7 +156,7 @@ fn std_public_functions_keep_their_schemes() {
     // 型を直接読む。`display_linear` は矢印の線形性を書くが、`Flexible` と `OpVar` の Kind と宣言の Kind の制約は書かないので、
     // この表で確かめるのは矢印の線形性までである。
     let checked = check(
-        "main : Unit -> <IO, Panic> Unit\nmain () = List.each (fn x -> println (String.join \",\" [\"a\"])) (String.lines \"a\")",
+        "import List\nimport String\nmain : Unit -> <IO, Panic> Unit\nmain () = List.each (fn x -> println (String.join \",\" [\"a\"])) (String.lines \"a\")",
     );
     assert!(checked.diagnostics.is_empty());
     let public = [

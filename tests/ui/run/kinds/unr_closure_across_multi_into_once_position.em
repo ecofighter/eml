@@ -1,5 +1,7 @@
 -- `Unr` のクロージャは、`multi` の操作をまたいで持てる。呼んだ後で `once` の位置にも渡せ、再開のたびに
 -- 同じ結果になる (docs/spec/types.md の「値を読む式の矢印の線形性」)。
+import List
+
 effect Choice where
   multi choose : Unit -> Bool
 

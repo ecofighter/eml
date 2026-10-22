@@ -7,4 +7,4 @@ input_file: tests/ui/run-fail/byte/of_int_out_of_range.em
 --- stderr ---
 --- runtime error ---
 int `256` does not fit in `Byte`
-  at run-fail/byte/of_int_out_of_range.em:3:39
+  at run-fail/byte/of_int_out_of_range.em:5:39

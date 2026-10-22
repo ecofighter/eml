@@ -1,4 +1,5 @@
 # 診断のある入力は受け付けず、セッションは変わらない
+> import Fs
 > bad : Int -> <Panic> Int
 . bad x = x + "s"
 .

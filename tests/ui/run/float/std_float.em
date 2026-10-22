@@ -1,5 +1,7 @@
 -- `Std.Float` の関数。期待値は Python 3.14 の同じ計算と同じである。変換と `to_fixed` の誤りは `Panic` なので、
 -- `try_panic` が捕まえる。
+import Float
+
 main : Unit -> <IO, Panic> Unit
 main () =
   println (show (Float.of_int 3))

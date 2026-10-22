@@ -1,4 +1,6 @@
 -- With nested `try_io`, the inner one catches the failure and the outer one returns `Ok`.
+import Fs
+
 inner : Unit -> <IO> String
 inner () =
   match try_io (fn () -> Fs.read_text "missing.txt") with

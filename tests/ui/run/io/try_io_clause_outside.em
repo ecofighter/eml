@@ -1,5 +1,7 @@
 -- A clause runs outside its handle, so the `try_io` inside the handle body does not catch an IO failure in the
 -- clause; the `try_io` outside the handle does.
+import Fs
+
 effect Load where
   load : String -> String
 

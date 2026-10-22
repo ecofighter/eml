@@ -3,6 +3,8 @@
 -- (`2.5` は箱) にして `ApplyRest` のフレームに預ける。巻き戻しはフレームを外し、預けた語を参照として手放す。
 -- `call_at` は型変数の位置が一様 (`_`) で、`thunk` はデータに通し、optimize が `call_at` を既知の閉包に特殊化しない
 -- ようにする (docs/spec/lir.md の「関数の ABI」)。
+import Float
+
 check : Int -> <Panic> (Int -> Float -> <Panic> Int)
 check = fn a -> if a == 0 then panic "zero" else fn b c -> a + b + Float.truncate c
 

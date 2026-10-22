@@ -1,3 +1,4 @@
+> import Fs
 > println "a"
 > exit 3
 > let x : Int = exit 4

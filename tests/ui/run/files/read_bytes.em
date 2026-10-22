@@ -1,4 +1,8 @@
 -- `Bytes` reads accept any bytes; `read_chunk` appends to the given `Bytes`
+import Bytes
+import Fs
+import String
+
 main : Unit -> <IO, Panic> Unit
 main () =
   let (b, f) = Fs.read_all_bytes (Fs.open "not_utf8.txt")

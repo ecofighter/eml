@@ -1,5 +1,7 @@
 -- `fannkuch_var.em` の計算を、状態をすべて末尾再帰の局所関数に受け渡して手で書いた版。3本の `MutArray` を
 -- 線形に受け渡し、ループの間の移りも末尾呼び出しにするので、組を作らない
+import MutArray
+
 fannkuch : Int -> <IO, Panic> Unit
 fannkuch n =
   let fill_count max_flips checksum parity r perm1 perm count =

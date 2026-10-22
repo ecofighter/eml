@@ -1,4 +1,6 @@
 -- `push` で `empty` から伸ばす。左を一意に持つので、長さに比例する時間で済む。
+import Bytes
+
 fill : Int -> Bytes -> <Panic> Bytes
 fill n acc = if n == 0 then acc else fill (n - 1) (Bytes.push 65u8 acc)
 

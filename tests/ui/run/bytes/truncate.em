@@ -1,4 +1,6 @@
 -- `Bytes.truncate n b` は前の `n` バイトを返す。一意ならその場で長さだけを書き換え、共有していれば元は変わらない。
+import Bytes
+
 main : Unit -> <IO, Panic> Unit
 main () =
   let unique = Bytes.append (Bytes.of_string "hello") (Bytes.of_string " world")

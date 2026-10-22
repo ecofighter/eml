@@ -1,4 +1,7 @@
 -- 10 万バイトのバイト列を `push` で作り、`Bytes.get` で先頭から足し上げる。1バイトの読みごとの RC が `rc_increments` に出る。
+import Byte
+import Bytes
+
 grow : Int -> Bytes -> <Panic> Bytes
 grow n acc = if n == 0 then acc else grow (n - 1) (Bytes.push 65u8 acc)
 

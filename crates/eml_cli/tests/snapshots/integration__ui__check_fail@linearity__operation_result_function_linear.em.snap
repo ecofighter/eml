@@ -4,13 +4,13 @@ expression: rendered
 input_file: tests/ui/check-fail/linearity/operation_result_function_linear.em
 ---
 [E3001] Error: a linear value is used where the type of `mk` requires a value that may be used any number of times
-    ╭─[ check-fail/linearity/operation_result_function_linear.em:15:5 ]
+    ╭─[ check-fail/linearity/operation_result_function_linear.em:17:5 ]
     │
- 15 │     | ctl mk () k ->
+ 17 │     | ctl mk () k ->
     │     ──────┬──────  
     │           ╰──────── this clause handles `mk`
     │ 
- 17 │         k (fn () -> Fs.close h, 1)
+ 19 │         k (fn () -> Fs.close h, 1)
     │            ─────────┬─────────  
     │                     ╰─────────── this lambda captures a linear value
     │ 

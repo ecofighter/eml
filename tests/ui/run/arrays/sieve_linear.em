@@ -1,4 +1,7 @@
 -- `MutArray` を線形に受け渡して書いたエラトステネスのふるい。100 までの素数を書く。
+import Array
+import MutArray
+
 cross_out : Int -> Int -> Int -> MutArray Bool -> <Panic> MutArray Bool
 cross_out step n j marks =
   if j >= n then marks

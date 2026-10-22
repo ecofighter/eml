@@ -4,15 +4,15 @@ expression: rendered
 input_file: tests/ui/check-fail/linearity/file_across_operation_row_variable.em
 ---
 [E3006] Error: `h` must be used exactly once, but it is kept alive across a call that may resume more than once
-    ╭─[ check-fail/linearity/file_across_operation_row_variable.em:21:21 ]
+    ╭─[ check-fail/linearity/file_across_operation_row_variable.em:23:21 ]
     │
- 21 │             let x = g ()
+ 23 │             let x = g ()
     │                     ──┬─  
     │                       ╰─── this call may perform `multi` operations
     │
-    ├─[ check-fail/linearity/file_across_operation_row_variable.em:21:21 ]
+    ├─[ check-fail/linearity/file_across_operation_row_variable.em:23:21 ]
     │
- 20 │             let h = Fs.open "input.txt"
+ 22 │             let h = Fs.open "input.txt"
     │                 ┬  
     │                 ╰── `h` is bound here
     │ 

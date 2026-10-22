@@ -7,4 +7,4 @@ input_file: tests/ui/run-fail/bytes/make.em
 --- stderr ---
 --- runtime error ---
 bytes length -1 is negative
-  at run-fail/bytes/make.em:4:32
+  at run-fail/bytes/make.em:6:32

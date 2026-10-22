@@ -1,4 +1,6 @@
 -- A list of linear files is linear: it is taken apart with a list pattern and every file is closed.
+import Fs
+
 main : Unit -> <IO> Unit
 main () =
   let files = [Fs.open "input.txt", Fs.open "input.txt"]

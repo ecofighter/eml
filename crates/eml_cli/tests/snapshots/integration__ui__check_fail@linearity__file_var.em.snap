@@ -4,9 +4,9 @@ expression: rendered
 input_file: tests/ui/check-fail/linearity/file_var.em
 ---
 [E3007] Error: the variable `f` has the linear type `File`
-   ╭─[ check-fail/linearity/file_var.em:4:3 ]
+   ╭─[ check-fail/linearity/file_var.em:6:3 ]
    │
- 4 │   var f = Fs.open "input.txt"
+ 6 │   var f = Fs.open "input.txt"
    │   ─────────────┬─────────────  
    │                ╰─────────────── a `var` variable must be unrestricted or a `MutArray`
    │ 

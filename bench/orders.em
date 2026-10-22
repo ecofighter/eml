@@ -1,5 +1,7 @@
 -- 注文のレコードを、ラムダを渡した `List.filter` / `List.map` / `List.fold` で集計する。
 -- 既知の閉包への特殊化が、`orders_by_hand.em` に近づける対象である。
+import Std.List
+
 data Order = | Order { id : Int, qty : Int, price : Int }
 
 make : Int -> <Panic> List Order

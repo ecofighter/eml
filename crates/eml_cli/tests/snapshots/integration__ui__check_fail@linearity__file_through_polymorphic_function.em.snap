@@ -4,15 +4,15 @@ expression: rendered
 input_file: tests/ui/check-fail/linearity/file_through_polymorphic_function.em
 ---
 [E3006] Error: `keep` keeps a linear value alive across a call that may resume more than once
-    ╭─[ check-fail/linearity/file_through_polymorphic_function.em:19:11 ]
+    ╭─[ check-fail/linearity/file_through_polymorphic_function.em:21:11 ]
     │
- 19 │   let g = keep f chooser
+ 21 │   let g = keep f chooser
     │           ──┬─  
     │             ╰─── `keep` is used here
     │
-    ├─[ check-fail/linearity/file_through_polymorphic_function.em:19:11 ]
+    ├─[ check-fail/linearity/file_through_polymorphic_function.em:21:11 ]
     │
-  8 │   action ()
+ 10 │   action ()
     │   ────┬────  
     │       ╰────── `x` is kept alive across this call
     │ 

@@ -199,7 +199,7 @@ fn a_live_token_is_dropped_on_exit() {
 /// 2回である。
 #[test]
 fn std_list_map_reuses_its_cells() {
-    let text = "\
+    let text = "import List\n\
 range : Int -> Int -> <Panic> List Int
 range lo hi = if lo > hi then [] else lo :: range (lo + 1) hi
 

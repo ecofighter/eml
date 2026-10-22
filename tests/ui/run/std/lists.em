@@ -1,4 +1,6 @@
 -- List の関数 (docs/spec/stdlib.md)。効果のある関数は要素の順に呼ぶ
+import List
+
 logged : Int -> <IO, Panic> Int
 logged x =
   println "visit \{x}"

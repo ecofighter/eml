@@ -1,5 +1,7 @@
 -- E3006: an outer `multi` operation copies the inner handler with its `return` clause, so the clause would close the
 -- captured file once for each resumption.
+import Fs
+
 effect Choice where
   multi choose : Unit -> Bool
 

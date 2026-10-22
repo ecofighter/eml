@@ -3,6 +3,7 @@ source: crates/eml_cli/tests/repl.rs
 expression: checked.render()
 input_file: crates/eml_cli/tests/repl/declarations/kinds.repl
 ---
+> import List
 > data Iter <e> a =
 .   | Done
 .   | More a (once Unit -> <e> Iter <e> a)
@@ -32,8 +33,8 @@ fn it -> match it with | More _ next -> next | Done -> fn () -> Done : Iter <e> 
 > :type Token
 Token : Token
 > Token
-E2016 <input 5> 1:1 this input leaves a value of the linear type `Token`
-  <input 5> 1:1 a linear value
+E2016 <input 6> 1:1 this input leaves a value of the linear type `Token`
+  <input 6> 1:1 a linear value
   help: use up the value inside the input, as in `drop`
 --- close ---
 no leaks

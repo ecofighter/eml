@@ -3,6 +3,7 @@
 -- (docs/spec/core-ir.md の「handler の特殊化で意味が変わらない理由」)。
 import Yield (Yield(..))
 import Std.State (State(..))
+import Iter
 
 sums : Int -> Int -> <State Int, Yield Int, Panic> Unit
 sums i n =

@@ -2,6 +2,7 @@
 -- 継続ごと `File` を閉じる。閉じなければ checked mode の漏れの検査で落ちる
 import Iter
 import Yield (Yield(..))
+import Fs
 
 lines : String -> Unit -> <Yield String, IO, Panic> Unit
 lines path () =

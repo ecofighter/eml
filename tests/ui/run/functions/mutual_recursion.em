@@ -2,6 +2,9 @@
 -- エフェクトを起こす形、組の中で handler を張る形を純粋な文脈から呼ぶ形、3つの関数の組、1行の形、`and` のない
 -- `let` との混在、組の関数を `List.map` に渡す形、`File` を捕まえる再帰しない組
 -- (docs/spec/expressions.md の「ローカル関数」)。
+import Fs
+import List
+
 effect Ask where
   ask : Unit -> Int
 

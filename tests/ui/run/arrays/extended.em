@@ -1,5 +1,9 @@
 -- 配列の専用の命令 (`get` / `length` / `set` / `read` / `write`) を、ループ、共有された要素、入れ子の配列、
 -- 失敗の後の巻き戻しで使う。
+import Array
+import List
+import MutArray
+
 sum_to : Array Int -> Int -> Int -> <Panic> Int
 sum_to a i acc =
   if i == Array.length a then acc else sum_to a (i + 1) (acc + Array.get a i)

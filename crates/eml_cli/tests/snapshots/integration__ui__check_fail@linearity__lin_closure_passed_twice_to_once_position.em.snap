@@ -4,15 +4,15 @@ expression: rendered
 input_file: tests/ui/check-fail/linearity/lin_closure_passed_twice_to_once_position.em
 ---
 [E3002] Error: `g` must be used exactly once, but it is used more than once
-    ╭─[ check-fail/linearity/lin_closure_passed_twice_to_once_position.em:11:12 ]
+    ╭─[ check-fail/linearity/lin_closure_passed_twice_to_once_position.em:13:12 ]
     │
- 11 │   run_once g
+ 13 │   run_once g
     │            ┬  
     │            ╰── used again here
     │
-    ├─[ check-fail/linearity/lin_closure_passed_twice_to_once_position.em:11:12 ]
+    ├─[ check-fail/linearity/lin_closure_passed_twice_to_once_position.em:13:12 ]
     │
- 10 │   run_once g
+ 12 │   run_once g
     │            ┬  
     │            ╰── first used here
     │ 

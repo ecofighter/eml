@@ -1,4 +1,6 @@
 -- `Bytes.append a b` は `a` の後ろに `b` を足す。左を一意に持つ組み立てでも、共有した左でも結果は変わらない。
+import Bytes
+
 build : Int -> Bytes -> <Panic> Bytes
 build n acc = if n == 0 then acc else build (n - 1) (Bytes.append acc (Bytes.of_string "ab"))
 

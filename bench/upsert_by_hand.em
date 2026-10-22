@@ -2,6 +2,8 @@
 
 -- 釣り合いを取った二分探索木 (AA 木)。`Node` の最初の欄は節の高さの段である。パスに ID を含むログでは、キーが
 -- 昇順に増えるので、釣り合いを取らないと挿入が全体で2乗の時間になる
+import Std.List
+
 data Tree k v =
   | Leaf
   | Node Int (Tree k v) k v (Tree k v)

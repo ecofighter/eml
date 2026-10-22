@@ -1,4 +1,6 @@
 -- A `never` operation aborts through several frames that each hold a file; every file is released once.
+import Fs
+
 effect Fail where
   never fail : String -> a
 

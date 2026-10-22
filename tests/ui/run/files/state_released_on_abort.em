@@ -1,4 +1,6 @@
 -- A file held as the state of an inner handler is released when an outer `never` operation aborts the body.
+import Fs
+
 effect Fail where
   never fail : Unit -> a
 

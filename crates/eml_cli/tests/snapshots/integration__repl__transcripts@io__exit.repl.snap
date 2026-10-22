@@ -3,6 +3,7 @@ source: crates/eml_cli/tests/repl.rs
 expression: checked.render()
 input_file: crates/eml_cli/tests/repl/io/exit.repl
 ---
+> import Fs
 > println "a"
 a
 > exit 3
@@ -10,8 +11,8 @@ exited with code 3
 > let x : Int = exit 4
 exited with code 4
 > x
-E1001 <input 4> 1:1 cannot find value `x`
-  <input 4> 1:1 not found in this scope
+E1001 <input 5> 1:1 cannot find value `x`
+  <input 5> 1:1 not found in this scope
 > 1 + 1
 2
 > try_io (fn () -> Fs.read_text "missing.txt")

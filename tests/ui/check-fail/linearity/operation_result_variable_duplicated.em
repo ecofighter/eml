@@ -1,5 +1,7 @@
 -- E3002: `a` appears only in the result of `mk`, so the operation leaves it free and the performer may pick a linear
 -- type such as `Fs.File`. The clause must then treat a value of type `a` as linear, and the lambda copies it.
+import Fs
+
 data Box a =
   | Box (a -> (a, a))
 

@@ -1,4 +1,6 @@
 -- 子のプロセス (docs/spec/stdlib.md)。子の出力は、それまでの出力の後に並ぶ
+import Proc
+
 main : Unit -> <IO, Panic> Unit
 main () =
   println "before"

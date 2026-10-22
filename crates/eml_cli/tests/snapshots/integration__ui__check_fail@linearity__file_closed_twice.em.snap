@@ -4,15 +4,15 @@ expression: rendered
 input_file: tests/ui/check-fail/linearity/file_closed_twice.em
 ---
 [E3002] Error: `f` must be used exactly once, but it is used more than once
-   ╭─[ check-fail/linearity/file_closed_twice.em:6:12 ]
+   ╭─[ check-fail/linearity/file_closed_twice.em:8:12 ]
    │
- 6 │   Fs.close f
+ 8 │   Fs.close f
    │            ┬  
    │            ╰── used again here
    │
-   ├─[ check-fail/linearity/file_closed_twice.em:6:12 ]
+   ├─[ check-fail/linearity/file_closed_twice.em:8:12 ]
    │
- 5 │   Fs.close f
+ 7 │   Fs.close f
    │            ┬  
    │            ╰── first used here
    │ 

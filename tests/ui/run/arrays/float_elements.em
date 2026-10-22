@@ -1,4 +1,7 @@
 -- `Float` の要素は箱に入った一様な値として配列に入る。
+import Array
+import Float
+
 main : Unit -> <IO, Panic> Unit
 main () =
   let a = Array.tabulate 4 (fn i -> Float.of_int i * 0.5)

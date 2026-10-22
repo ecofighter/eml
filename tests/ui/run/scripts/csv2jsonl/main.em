@@ -3,6 +3,10 @@
 -- 組を `fail` に渡して中断し、全体を組み立ててから書くので、誤りがあれば何も書かない
 import Yield (Yield(..))
 import Fail (Fail(..))
+import Env
+import Fs
+import List
+import String
 
 -- 1つの行の欄と、その行が始まる入力の行の番号
 data Row =

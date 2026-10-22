@@ -1,4 +1,6 @@
 -- E3004, E3003 and E3006 for the state of a handler.
+import Fs
+
 effect Ask where
   ask : Unit -> Int
 

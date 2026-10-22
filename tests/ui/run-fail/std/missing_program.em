@@ -1,3 +1,5 @@
+import Proc
+
 main : Unit -> <IO, Panic> Unit
 main () =
   println "before"

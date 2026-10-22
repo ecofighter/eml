@@ -4,13 +4,13 @@ expression: rendered
 input_file: tests/ui/check-fail/linearity/not_taken_without_last.em
 ---
 [E3003] Error: the array variable `a` is not taken on this path
-   ╭─[ check-fail/linearity/not_taken_without_last.em:4:3 ]
+   ╭─[ check-fail/linearity/not_taken_without_last.em:6:3 ]
    │
- 4 │   var a = MutArray.make 3 0
+ 6 │   var a = MutArray.make 3 0
    │   ────────────┬────────────  
    │               ╰────────────── `a` is declared here
    │ 
- 6 │   let n = a[0]
+ 8 │   let n = a[0]
    │               │ 
    │               ╰─ the block ends with a statement, so it has no last expression
    │ 

@@ -1,5 +1,7 @@
 -- 状態が `File` の handler の、その場で動く `fn` 節が、`exit 6` を呼ぶ補助の関数を呼ぶ。巻き戻しは節の入口の
 -- フレームが取り出した `File` を閉じ、`Finish` まで届く。
+import Fs
+
 effect Probe where
   probe : Int -> Int
 

@@ -4,9 +4,9 @@ expression: rendered
 input_file: tests/ui/check-fail/types/deriving_linear_field.em
 ---
 [E2010] Error: `Handle` is linear, so it cannot have an instance of `Eq`
-   ╭─[ check-fail/types/deriving_linear_field.em:2:41 ]
+   ╭─[ check-fail/types/deriving_linear_field.em:4:41 ]
    │
- 2 │ data Handle = | Handle Fs.File deriving Eq
+ 4 │ data Handle = | Handle Fs.File deriving Eq
    │                                         ─┬  
    │                                          ╰── a linear type
    │ 

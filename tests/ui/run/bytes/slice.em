@@ -1,4 +1,6 @@
 -- `Bytes.slice from to b` は範囲を写した新しいバイト列を返す。元のバイト列は変わらない。
+import Bytes
+
 main : Unit -> <IO, Panic> Unit
 main () =
   let b = Bytes.of_string "hello world"

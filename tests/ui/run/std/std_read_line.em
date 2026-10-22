@@ -1,5 +1,9 @@
 -- `Fs.read_line` は行の終わり (`\n` か `\r\n`) を除いた1行を返し、終わりなら `None` を返す (docs/spec/stdlib.md)。
 -- 入力はテストの Host がメモリに持つファイルで、`Fs.write_text` で書いてから読む
+import Fs
+import List
+import String
+
 print_lines : Fs.File -> <IO, Panic> Unit
 print_lines file =
   match Fs.read_line file with

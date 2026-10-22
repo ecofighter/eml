@@ -1,4 +1,6 @@
 -- ブロックが `()` で終わり、どこでも `a` を取り出さないので E3003
+import MutArray
+
 main : Unit -> <IO, Panic> Unit
 main () =
   println "start"

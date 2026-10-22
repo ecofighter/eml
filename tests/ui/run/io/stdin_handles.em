@@ -1,4 +1,8 @@
 -- A `Stdin` handle and a later one read one buffer in program order; `Bytes` and `String` reads mix
+import Bytes
+import Stdin
+import String
+
 main : Unit -> <IO, Panic> Unit
 main () =
   let h = Stdin.open ()

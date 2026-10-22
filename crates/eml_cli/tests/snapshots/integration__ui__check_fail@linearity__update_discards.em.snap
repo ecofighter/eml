@@ -4,9 +4,9 @@ expression: rendered
 input_file: tests/ui/check-fail/linearity/update_discards.em
 ---
 [E3004] Error: the old value of the field `log` is discarded, but it holds a linear value
-   ╭─[ check-fail/linearity/update_discards.em:7:15 ]
+   ╭─[ check-fail/linearity/update_discards.em:9:15 ]
    │
- 7 │   let moved = { job | log = Fs.open "b.txt" }
+ 9 │   let moved = { job | log = Fs.open "b.txt" }
    │               ───────────────┬───────────────  
    │                              ╰───────────────── this update overwrites `log`
    │ 

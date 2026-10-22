@@ -7,4 +7,4 @@ input_file: tests/ui/run-fail/std/slice_out_of_range.em
 --- stderr ---
 --- runtime error ---
 string slice 1..9 is out of range for length 3
-  at run-fail/std/slice_out_of_range.em:2:20
+  at run-fail/std/slice_out_of_range.em:4:20

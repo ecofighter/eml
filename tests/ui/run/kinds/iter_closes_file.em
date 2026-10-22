@@ -1,5 +1,8 @@
 -- `File` を開いた生産者の `Iter` を途中で `drop` すると、`File` を捕まえた `return` の節のクロージャも継続と一緒に
 -- 解放され、`File` が閉じる。検査モードで漏れがないことで確かめる。最後まで引いたときは `return` の節が閉じる。
+import Fs
+import String
+
 data Iter <e> a =
   | Done
   | More a (once Unit -> <e> Iter <e> a)

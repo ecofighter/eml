@@ -1,4 +1,7 @@
 -- `String.from_utf8` は妥当な UTF-8 だけを `String` にし、そうでなければ `None` を返す。`String.valid_utf8` は借りて確かめる。
+import Bytes
+import String
+
 main : Unit -> <IO, Panic> Unit
 main () =
   let ok = Bytes.of_string "héllo"

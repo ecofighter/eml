@@ -1,4 +1,7 @@
 -- 配列の変数の要素は `Unr` でなければならない。`File` を書き込むと E3001
+import Fs
+import MutArray
+
 main : Unit -> <IO, Panic> Unit
 main () =
   var a = MutArray.empty ()

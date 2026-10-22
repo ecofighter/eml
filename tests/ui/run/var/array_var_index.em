@@ -1,4 +1,6 @@
 -- 型が `Array` の変数の添字は、変数を読んでから `Array.get` で読む
+import Array
+
 main : Unit -> <IO, Panic> Unit
 main () =
   var best = Array.make 3 0

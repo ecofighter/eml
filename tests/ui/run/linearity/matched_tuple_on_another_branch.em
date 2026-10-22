@@ -1,6 +1,7 @@
 -- 一方の枝の `match` か分解する `let` だけが参照するタプルを、もう一方の枝の戻らない呼び出しの前で暗黙に手放す。
 -- 暗黙の `drop` も参照に数えるので、決定木はタプルを開かずに分解し、`File` を二重に持たない。
 import Fail (Fail(..))
+import Fs
 
 by_match : Bool -> <Fail String, IO> Unit
 by_match c =

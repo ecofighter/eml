@@ -1,5 +1,7 @@
 -- `exit` passes through frames holding files, a `try_io` and a handler whose state is a file; everything they hold is
 -- released once, and neither `try_io` nor the `return` clause runs.
+import Fs
+
 effect Tick where
   tick : Unit -> Unit
 

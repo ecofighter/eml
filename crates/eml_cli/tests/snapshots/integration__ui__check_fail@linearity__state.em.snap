@@ -4,9 +4,9 @@ expression: rendered
 input_file: tests/ui/check-fail/linearity/state.em
 ---
 [E3004] Error: the state of this handler is discarded by the omitted `return` clause
-    ╭─[ check-fail/linearity/state.em:13:22 ]
+    ╭─[ check-fail/linearity/state.em:15:22 ]
     │
- 13 │   handle ask () from Fs.open "input.txt" with
+ 15 │   handle ask () from Fs.open "input.txt" with
     │                      ─────────┬─────────  
     │                               ╰─────────── this state has a linear type `File`
     │ 
@@ -15,9 +15,9 @@ input_file: tests/ui/check-fail/linearity/state.em
     │ Note: linear values, such as files, the continuation of a `once` operation and closures that capture one, must be used exactly once
 ────╯
 [E3003] Error: `f` must be used exactly once, but it is not used
-    ╭─[ check-fail/linearity/state.em:19:19 ]
+    ╭─[ check-fail/linearity/state.em:21:19 ]
     │
- 19 │     | ctl fail () f -> 0
+ 21 │     | ctl fail () f -> 0
     │                   ┬     │ 
     │                   ╰─────── `f` is bound here
     │                         │ 
@@ -28,23 +28,23 @@ input_file: tests/ui/check-fail/linearity/state.em
     │ Note: linear values, such as files, the continuation of a `once` operation and closures that capture one, must be used exactly once
 ────╯
 [E3006] Error: the state of this handler must be used exactly once, but it is kept alive across a call that may resume more than once
-    ╭─[ check-fail/linearity/state.em:26:3 ]
+    ╭─[ check-fail/linearity/state.em:28:3 ]
     │
- 26 │ ╭─▶   handle ask () from Fs.open "input.txt" with
+ 28 │ ╭─▶   handle ask () from Fs.open "input.txt" with
     ┆ ┆   
- 30 │ ├─▶         x
+ 32 │ ├─▶         x
     │ │               
     │ ╰─────────────── this handle may perform `choose`, a `multi` operation
     │
-    ├─[ check-fail/linearity/state.em:26:3 ]
+    ├─[ check-fail/linearity/state.em:28:3 ]
     │
- 26 │   handle ask () from Fs.open "input.txt" with
+ 28 │   handle ask () from Fs.open "input.txt" with
     │                      ─────────┬─────────  
     │                               ╰─────────── the state of this handler
     │
-    ├─[ check-fail/linearity/state.em:26:3 ]
+    ├─[ check-fail/linearity/state.em:28:3 ]
     │
-  9 │   multi choose : Unit -> Bool
+ 11 │   multi choose : Unit -> Bool
     │         ───┬──  
     │            ╰──── `choose` is declared `multi` here
     │ 

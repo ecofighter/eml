@@ -4,9 +4,9 @@ expression: rendered
 input_file: tests/ui/check-fail/linearity/taken_twice.em
 ---
 [E3002] Error: the array variable `a` is taken twice on this path
-   ╭─[ check-fail/linearity/taken_twice.em:6:39 ]
+   ╭─[ check-fail/linearity/taken_twice.em:9:39 ]
    │
- 6 │   (MutArray.freeze a, MutArray.freeze a)
+ 9 │   (MutArray.freeze a, MutArray.freeze a)
    │                    ┬                  ┬  
    │                    ╰───────────────────── first taken here
    │                                       │  

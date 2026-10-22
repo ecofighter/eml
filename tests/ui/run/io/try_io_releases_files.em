@@ -1,5 +1,8 @@
 -- An IO failure under `try_io` releases the file of every frame on the way, and the file of a pair from
 -- `Fs.read_all`, once each.
+import Fs
+import String
+
 deep : Int -> <IO, Panic> Int
 deep n =
   let f = Fs.open "input.txt"

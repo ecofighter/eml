@@ -1,4 +1,6 @@
 -- `Unr` の変数: 数え上げ、`if` の枝での代入、範囲の中で呼ぶラムダからの読み出し
+import List
+
 count_up : Int -> <Panic> Int
 count_up n =
   var total = 0

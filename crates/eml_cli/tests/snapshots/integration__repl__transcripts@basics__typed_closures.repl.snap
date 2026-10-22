@@ -3,6 +3,7 @@ source: crates/eml_cli/tests/repl.rs
 expression: checked.render()
 input_file: crates/eml_cli/tests/repl/basics/typed_closures.repl
 ---
+> import List
 > scale : Float -> Float -> <Panic> Float
 . scale k x = k * x
 .

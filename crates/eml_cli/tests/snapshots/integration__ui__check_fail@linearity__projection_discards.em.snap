@@ -4,9 +4,9 @@ expression: rendered
 input_file: tests/ui/check-fail/linearity/projection_discards.em
 ---
 [E3004] Error: the field `log` is discarded, but it holds a linear value
-   ╭─[ check-fail/linearity/projection_discards.em:7:11 ]
+   ╭─[ check-fail/linearity/projection_discards.em:9:11 ]
    │
- 7 │   println job.name
+ 9 │   println job.name
    │           ────┬───  
    │               ╰───── this projection leaves the field `log` behind
    │ 

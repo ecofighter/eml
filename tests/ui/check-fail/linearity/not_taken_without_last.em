@@ -1,4 +1,6 @@
 -- ブロックが `let` で終わり、最後の式がないので `a` を取り出せない。E3003
+import MutArray
+
 fill : Unit -> <Panic> Unit
 fill () =
   var a = MutArray.make 3 0

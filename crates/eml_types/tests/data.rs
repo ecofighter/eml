@@ -211,7 +211,7 @@ fn codes_of(text: &str) -> Vec<String> {
 
 #[test]
 fn array_kind_follows_its_element() {
-    let dup = |ty: &str| format!("f : {ty} -> ({ty}, {ty})\nf a = (a, a)");
+    let dup = |ty: &str| format!("import Fs\n\nf : {ty} -> ({ty}, {ty})\nf a = (a, a)");
     assert_eq!(codes_of(&dup("Array Fs.File")), ["E3002"]);
     assert_eq!(codes_of(&dup("Array Int")), Vec::<String>::new());
     assert_eq!(codes_of(&dup("MutArray Int")), ["E3002"]);

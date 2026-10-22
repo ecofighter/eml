@@ -1,5 +1,10 @@
 -- `var` で書いたエラトステネスのふるい。引数 (既定は 20000) より小さい素数の数を書く。
 -- `sieve_by_hand.em` は、同じ計算で `MutArray` を末尾再帰のループに線形に受け渡す版である
+import Array
+import Env
+import MutArray
+import String
+
 sieve : Int -> <Panic> Array Bool
 sieve n =
   var marks = MutArray.make n True

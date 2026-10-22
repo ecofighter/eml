@@ -1,4 +1,6 @@
 -- A destructuring `let` takes a linear field out of a record, so the file can be closed.
+import Fs
+
 data Job =
   | Job { name : String, log : Fs.File }
 

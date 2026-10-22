@@ -1,4 +1,7 @@
 -- 最後の式も変数の handler の中で動くので、`Unr` の変数は最後の式でも今の値を読む
+import Array
+import MutArray
+
 pair : Int -> <Panic> (Array Int, Int)
 pair n =
   var a = MutArray.make n 1

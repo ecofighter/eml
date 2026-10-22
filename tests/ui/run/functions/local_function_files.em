@@ -1,6 +1,8 @@
 -- `File` を捕まえるローカル関数を確かめる。自分を参照しない関数は 1 回だけ呼べる。呼ぶ場所は外側の本体、ラムダ、`use`、
 -- handle の本体である。再帰する関数は `File` を捕まえられないので、引数で受け渡す。
 -- (docs/spec/linearity.md の「基本の規則」)
+import Fs
+
 effect Ask where
   ask : Unit -> Int
 

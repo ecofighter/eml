@@ -1,6 +1,8 @@
 -- 実行時に選んだ `Float -> Float` の関数の値を、ループの中で10万回 `apply` する。
 -- `apply_int` の `Float` の版で、`Float` の引数と結果の箱が `apply` を通る費用を見る。関数の値の引数と結果は一様なので、呼ぶたびに
 -- 引数と結果の箱を1つずつ確保する (docs/implementation/benchmarks.md の「呼び出しの規約の引き換え」)
+import Env
+
 half : Float -> <Panic> Float
 half x = x * 0.5 + 1.0
 

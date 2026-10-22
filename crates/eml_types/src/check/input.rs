@@ -507,12 +507,12 @@ mod tests {
 
     #[test]
     fn an_input_cannot_leave_or_keep_a_linear_value() {
-        let (_, _, diagnostics) = session(&["Fs.open \"x\""]);
+        let (_, _, diagnostics) = session(&["import Fs", "Fs.open \"x\""]);
         assert_eq!(
             diagnostics,
             ["E2016 this input leaves a value of the linear type `File`"]
         );
-        let (_, _, diagnostics) = session(&["let f = Fs.open \"x\""]);
+        let (_, _, diagnostics) = session(&["import Fs", "let f = Fs.open \"x\""]);
         assert_eq!(
             diagnostics,
             ["E2016 `f` cannot keep a value of the linear type `File`"]
@@ -668,10 +668,10 @@ mod tests {
     #[test]
     fn a_query_lifts_the_rules_of_an_expression_input() {
         assert_eq!(typed(&[ASK], "ask ()"), "Int");
-        assert_eq!(typed(&[], "Fs.open \"x\""), "File");
+        assert_eq!(typed(&["import Fs"], "Fs.open \"x\""), "File");
         // Kind (矢印の線形性) は書かない
         assert_eq!(
-            typed(&[], "fn f -> fn (u : Unit) -> Fs.close f"),
+            typed(&["import Fs"], "fn f -> fn (u : Unit) -> Fs.close f"),
             "File -> Unit -> <IO> Unit"
         );
         assert_eq!(typed(&["let n = 1"], "n"), "Int");

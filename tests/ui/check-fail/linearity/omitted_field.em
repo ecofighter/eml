@@ -1,4 +1,6 @@
 -- E3004: a pattern that leaves out a linear field discards it.
+import Fs
+
 data Job = | Job { name : String, log : Fs.File }
 
 main : Unit -> <IO> Unit

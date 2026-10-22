@@ -7,4 +7,4 @@ input_file: tests/ui/run-fail/files/missing_file.em
 --- stderr ---
 --- runtime error ---
 cannot open `missing.txt`: not found
-  at run-fail/files/missing_file.em:4:11
+  at run-fail/files/missing_file.em:6:11

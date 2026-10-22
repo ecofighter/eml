@@ -1,5 +1,6 @@
 # 前の入力で宣言した型と関数を、後の入力で関数の値として使う。後の入力のコード生成も構造体の形とシグネチャを中身で
 # 引き直すので、同じ名前の関数は同じ形とシグネチャを指す
+> import List
 > data P = | P Float Float deriving (Show)
 > swap : P -> P
 . swap (P x y) = P y x

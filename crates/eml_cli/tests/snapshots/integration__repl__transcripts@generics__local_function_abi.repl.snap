@@ -3,6 +3,7 @@ source: crates/eml_cli/tests/repl.rs
 expression: checked.render()
 input_file: crates/eml_cli/tests/repl/generics/local_function_abi.repl
 ---
+> import List
 > d : Int -> <Panic> Int
 . d x =
 .   let g y = y + 1

@@ -1,5 +1,8 @@
 -- `Float.parse (show x)` は `x` を返す。Python と照らした値の一覧のどれもで成り立つ。NaN は `==` で比べられない
 -- ので `is_nan` で確かめる。
+import Float
+import List
+
 round_trips : Float -> Bool
 round_trips x =
   match Float.parse (show x) with

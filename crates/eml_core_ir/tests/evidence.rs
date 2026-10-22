@@ -965,7 +965,7 @@ fn closures_ep_builds_take_the_join_of_their_captures() {
     // 操作の引数の `File` を捕まえて `lin` になる
     // (docs/spec/core-ir.md の「EP が足す変数の印」)
     let text = format!(
-        "effect Ask where\n  ask : Unit -> Int\n\neffect Sink where\n  put : Fs.File -> Unit\n\nuse_it : Fs.File -> <Ask, IO> Unit\nuse_it f =\n  let n = ask ()\n  Fs.close f\n  println (show n)\n\ncount : Int -> <Ask, Panic> Int\ncount m =\n  let n = ask ()\n  n + m\n\n{HIDE}main : Unit -> <IO, Panic> Unit\nmain () =\n  let Box u = hide 0 use_it\n  let Box c = hide 0 count\n  handle u (Fs.open \"input.txt\") with\n    | ctl ask () k -> k 1\n  let r = handle c 1 with\n    | ctl ask () k -> k 2\n  println (show r)\n  let Box p = hide 0 put\n  handle p (Fs.open \"input.txt\") with\n    | ctl put f k ->\n      Fs.close f\n      let u = k ()\n      println \"resumed\"\n      u"
+        "import Fs\neffect Ask where\n  ask : Unit -> Int\n\neffect Sink where\n  put : Fs.File -> Unit\n\nuse_it : Fs.File -> <Ask, IO> Unit\nuse_it f =\n  let n = ask ()\n  Fs.close f\n  println (show n)\n\ncount : Int -> <Ask, Panic> Int\ncount m =\n  let n = ask ()\n  n + m\n\n{HIDE}main : Unit -> <IO, Panic> Unit\nmain () =\n  let Box u = hide 0 use_it\n  let Box c = hide 0 count\n  handle u (Fs.open \"input.txt\") with\n    | ctl ask () k -> k 1\n  let r = handle c 1 with\n    | ctl ask () k -> k 2\n  println (show r)\n  let Box p = hide 0 put\n  handle p (Fs.open \"input.txt\") with\n    | ctl put f k ->\n      Fs.close f\n      let u = k ()\n      println \"resumed\"\n      u"
     );
     let shown = core_text(&text, Pass::Evidence);
     let use_it = function(&shown, "use_it");
@@ -1128,7 +1128,7 @@ fn a_never_entry_does_not_yield() {
 fn an_extern_wrapper_does_not_yield() {
     // 包む関数は小さいので、特殊化した複製に展開されて消える。データを通して渡し、包む関数を値として残す
     let text = format!(
-        "{HIDE}main : Unit -> <IO, Panic> Unit\nmain () =\n  let Box close = hide 0 Fs.close\n  let Box open = hide 0 Fs.open\n  match try_io (fn () -> List.each close (List.map open [\"a.txt\"])) with\n    | Ok () -> println \"ok\"\n    | Err e -> println \"\\{{e}}\""
+        "import Fs\nimport List\n{HIDE}main : Unit -> <IO, Panic> Unit\nmain () =\n  let Box close = hide 0 Fs.close\n  let Box open = hide 0 Fs.open\n  match try_io (fn () -> List.each close (List.map open [\"a.txt\"])) with\n    | Ok () -> println \"ok\"\n    | Err e -> println \"\\{{e}}\""
     );
     let shown = core_text(&text, Pass::Evidence);
     let wrappers: Vec<&str> = shown

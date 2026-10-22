@@ -1,6 +1,9 @@
 -- The Computer Language Benchmarks Game の nbody を 1000 歩動かし、前後のエネルギーを小数点以下 9 桁で書く。
 -- 期待値は同じ計算の Python の版 (5 体、`advance 0.01`、n = 1000) の出力で、演算の順も Python の版と同じにした。
 -- `** (-1.5)` と `** 0.5` は、Python と同じく `pow` で求める。
+import Float
+import List
+
 data Body =
   | Body { x : Float, y : Float, z : Float, vx : Float, vy : Float, vz : Float, mass : Float }
 

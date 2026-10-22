@@ -1,6 +1,8 @@
 -- 協調的なスケジューラ。`once` の操作 `suspend` の継続を `Task` に入れてキューに積み、順に取り出して再開する。
 -- 最初の仕事はトップレベルの関数を `Task worker_a` のように `once` のフィールドへそのまま入れる。2つの仕事の
 -- 出力は交互に出る (docs/spec/types.md の「値を読む式の矢印の線形性」)。
+import List
+
 data Task <e> =
   | Task (once Unit -> <e> Unit)
 

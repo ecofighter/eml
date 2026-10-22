@@ -1,4 +1,6 @@
 -- A file kept alive across a `never` operation is released when the operation aborts the handled body.
+import Fs
+
 effect Fail where
   never fail : Unit -> a
 

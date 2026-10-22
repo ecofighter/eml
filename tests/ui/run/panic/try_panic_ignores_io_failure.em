@@ -1,4 +1,6 @@
 -- `try_panic` は IO の失敗を捕まえない。内側の `try_panic` を通り抜けて、外の `try_io` が捕まえる。
+import Fs
+
 inner : Unit -> <IO> String
 inner () =
   match try_panic (fn () -> Fs.close (Fs.open "missing.txt")) with

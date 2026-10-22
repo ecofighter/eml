@@ -7,4 +7,4 @@ input_file: tests/ui/run-fail/arrays/get_out_of_range.em
 --- stderr ---
 --- runtime error ---
 array index 3 is out of range for length 3
-  at run-fail/arrays/get_out_of_range.em:3:26
+  at run-fail/arrays/get_out_of_range.em:5:26

@@ -1,4 +1,6 @@
 -- 同じ変数を `src` と `dst` に渡すと、Perceus が参照を1つ足すので、`b` を倍にできる。
+import Bytes
+
 double : Int -> Bytes -> <Panic> Bytes
 double n b = if n == 0 then b else double (n - 1) (Bytes.append_slice 0 (Bytes.length b) b b)
 

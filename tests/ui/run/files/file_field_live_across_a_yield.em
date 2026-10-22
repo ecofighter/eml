@@ -1,6 +1,8 @@
 -- `data` から借りた `File` が yield をまたいで生きている。持ち主 `p` は分解の後に使われないので、Perceus は節の呼び出しの前に
 -- `p` を `release` で解き、`f` を `dup` せずに受け取る。続きのクロージャは `f` を捕まえるので `lin` になり、2 回目の handle では
 -- `drop k` が `f` を閉じる。
+import Fs
+
 effect Ask where
   ask : Unit -> Int
 

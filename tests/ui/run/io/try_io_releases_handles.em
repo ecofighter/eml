@@ -1,5 +1,9 @@
 -- An IO failure under `try_io` releases the handles on the way: the file whose read failed is closed by the
 -- unwinding, and the `Stdout` handle is released without losing what it wrote
+import Bytes
+import Fs
+import Stdout
+
 read_bad : Stdout.Stdout -> <IO, Panic> Stdout.Stdout
 read_bad out =
   let out = Stdout.write_line "before" out

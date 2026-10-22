@@ -1,4 +1,6 @@
 -- E3003: a function whose result variable has a class context may return a value, so its call does not end the path.
+import Fs
+
 class Default a where
   default : Unit -> a
 

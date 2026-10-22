@@ -3,6 +3,10 @@
 -- まわすたびに確保しない
 -- (docs/spec/core-ir.md の「構造体にする型」)。
 -- bench/numeric/mandelbrot.py は、同じ順で浮動小数の演算を行う Python の版である
+import Env
+import Float
+import String
+
 data Complex =
   | Complex Float Float
 

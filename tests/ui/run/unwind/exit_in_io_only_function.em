@@ -1,4 +1,6 @@
 -- `<IO>` だけの row の関数は yield しない。3段目で `exit 4` を呼んでも、巻き戻しが各段の `File` を1回ずつ閉じる。
+import Fs
+
 third : Unit -> <IO> Int
 third () =
   let f = Fs.open "input.txt"

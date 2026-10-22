@@ -33,14 +33,22 @@ fn a_carried_list_prefix_is_reported_at_the_first_element() {
         "effect Choice where",
         "  multi choose : Unit -> Bool",
         "",
-        "f : Unit -> <Choice, IO> List Fs.File",
-        "f () = [Fs.open \"a\", Fs.open \"b\", if choose () then Fs.open \"c\" else Fs.open \"d\"]",
+        "import Fs\nf : Unit -> <Choice, IO> List Fs.File",
+        "import Fs\nf () = [Fs.open \"a\", Fs.open \"b\", if choose () then Fs.open \"c\" else Fs.open \"d\"]",
     ]
     .join("\n");
     insta::assert_snapshot!(diagnostics(&text), @"
-    E3006 5:38 a linear value must be used exactly once, but it is kept alive across a call that may resume more than once
-      5:38 this call may perform `choose`, a `multi` operation
-      5:9 this value is kept alive across the call
+    E0011 4:1 imports must come before declarations
+      4:1 move this import above the first declaration
+    E0011 6:1 imports must come before declarations
+      6:1 move this import above the first declaration
+    E1019 7:1 the signature of `f` is not followed by its equations
+      7:1 this equation is not right after the signature of `f`
+      5:1 the signature is here
+      help: move the equations of `f` right after its signature
+    E3006 7:38 a linear value must be used exactly once, but it is kept alive across a call that may resume more than once
+      7:38 this call may perform `choose`, a `multi` operation
+      7:9 this value is kept alive across the call
       2:9 `choose` is declared `multi` here
       note: a continuation of a `multi` operation can be resumed more than once, and each resumption would use the value again
       help: finish using the value before this call

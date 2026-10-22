@@ -1,5 +1,7 @@
 # 2つの入力が、それぞれ `var x` を使う関数を定義する。片方は配列の変数である。合成のエフェクトは入力ごとに別の
 # 名前になるので、片方を定義し直しても、もう片方の `x` と混ざらない
+> import Array
+> import MutArray
 > count_up : Int -> <Panic> Int
 . count_up n =
 .   var x = 0

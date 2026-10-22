@@ -3,10 +3,11 @@ source: crates/eml_cli/tests/repl.rs
 expression: checked.render()
 input_file: crates/eml_cli/tests/repl/arrays/recover.repl
 ---
+> import Array
 > let a = Array.make 3 0
 > Array.get a 5
 runtime error: array index 5 is out of range for length 3
-  at <input 2>:1:1
+  at <input 3>:1:1
 > Array.to_list a
 [0, 0, 0]
 > a

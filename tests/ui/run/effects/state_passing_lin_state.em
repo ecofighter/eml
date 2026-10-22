@@ -1,6 +1,9 @@
 -- handler の状態が `Lin` の `MutArray` であるふるい。状態を渡す形の特殊化では、状態が `if` の合流と、末尾でない
 -- `cross` の呼び出しを通って受け渡される。検査モードで漏れも `LinDup` も起きない
 -- (docs/spec/core-ir.md の「handler への特殊化」)。
+import Array
+import MutArray
+
 effect Marks where
   mark : Int -> Unit
   marked : Int -> Bool

@@ -2,6 +2,7 @@
 -- 定義され、実行は届かない。`try_panic` と `Fail.to_result` が中断を受ける
 -- (docs/spec/lir.md の「開く」)。
 import Fail (Fail(..))
+import Float
 
 data Vec2 =
   | Vec2 Float Float

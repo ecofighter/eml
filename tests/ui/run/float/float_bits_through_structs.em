@@ -3,6 +3,8 @@
 -- `compare` は全順序で、`-0.0` を `0.0` より小さいとする。NaN のペイロードを見せる eml の関数はないので、確かめるのは
 -- `-0.0` と NaN の符号 (`compare` の結果) と、NaN であることだけである
 -- (docs/spec/lir.md の「関数の ABI」)。
+import Float
+
 data Vec2 =
   | Vec2 Float Float
 

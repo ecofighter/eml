@@ -1,4 +1,6 @@
 -- E3003: shadowing a file that was not consumed leaves it unconsumed.
+import Fs
+
 main : Unit -> <IO> Unit
 main () =
   let f = Fs.open "a.txt"

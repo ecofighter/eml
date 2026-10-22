@@ -4,21 +4,21 @@ expression: rendered
 input_file: tests/ui/check-fail/linearity/lin_closure_across_multi_into_once_position.em
 ---
 [E3006] Error: `g` must be used exactly once, but it is kept alive across a call that may resume more than once
-    ╭─[ check-fail/linearity/lin_closure_across_multi_into_once_position.em:13:11 ]
+    ╭─[ check-fail/linearity/lin_closure_across_multi_into_once_position.em:15:11 ]
     │
- 13 │   let c = choose ()
+ 15 │   let c = choose ()
     │           ────┬────  
     │               ╰────── this call may perform `choose`, a `multi` operation
     │
-    ├─[ check-fail/linearity/lin_closure_across_multi_into_once_position.em:13:11 ]
+    ├─[ check-fail/linearity/lin_closure_across_multi_into_once_position.em:15:11 ]
     │
- 12 │   let g = fn n -> Fs.close file
+ 14 │   let g = fn n -> Fs.close file
     │       ┬  
     │       ╰── `g` is bound here
     │
-    ├─[ check-fail/linearity/lin_closure_across_multi_into_once_position.em:13:11 ]
+    ├─[ check-fail/linearity/lin_closure_across_multi_into_once_position.em:15:11 ]
     │
-  4 │   multi choose : Unit -> Bool
+  6 │   multi choose : Unit -> Bool
     │         ───┬──  
     │            ╰──── `choose` is declared `multi` here
     │ 

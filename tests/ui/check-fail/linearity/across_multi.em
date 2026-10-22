@@ -1,4 +1,7 @@
 -- 配列の変数の範囲が `multi` の操作 `choose` をまたぐ。状態の配列は `Lin` なので、持ち越し規則が E3006 にする
+import Array
+import MutArray
+
 effect Choose where
   multi choose : Unit -> Bool
 

@@ -1,3 +1,5 @@
+import Char
+
 main : Unit -> <IO, Panic> Unit
 main () =
   println (show (Char.to_int 'A'))

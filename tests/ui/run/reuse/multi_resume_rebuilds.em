@@ -1,5 +1,7 @@
 -- 節を手放し、再開できる操作を呼び、節を作る関数の継続を2回再開する。token は yield の地点をまたがないので、2回の
 -- 再開はそれぞれ別の節を作る。
+import List
+
 effect Choice where
   multi choose : Unit -> Bool
 

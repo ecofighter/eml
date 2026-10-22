@@ -7,4 +7,4 @@ input_file: tests/ui/run-fail/chars/of_int_surrogate.em
 --- stderr ---
 --- runtime error ---
 int `55296` is not a Unicode scalar value
-  at run-fail/chars/of_int_surrogate.em:3:39
+  at run-fail/chars/of_int_surrogate.em:5:39

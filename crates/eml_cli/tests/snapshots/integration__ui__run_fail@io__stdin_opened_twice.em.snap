@@ -7,4 +7,4 @@ input_file: tests/ui/run-fail/io/stdin_opened_twice.em
 --- stderr ---
 --- runtime error ---
 the standard input is already open
-  at run-fail/io/stdin_opened_twice.em:4:11
+  at run-fail/io/stdin_opened_twice.em:6:11

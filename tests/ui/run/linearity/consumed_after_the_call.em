@@ -1,6 +1,7 @@
 -- 戻らない呼び出しの後ろの、実行が届かない所で消費する `File` は暗黙に手放さない。呼び出しをまたいで生きているので、
 -- 巻き戻しが解放する。
 import Fail (Fail(..))
+import Fs
 
 after : Unit -> <Fail String, IO> (Int, Unit)
 after () =

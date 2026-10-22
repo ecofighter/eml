@@ -5,6 +5,7 @@
 -- `File` はちょうど1回閉じ、閉じなければ checked mode の漏れの検査で落ちる
 import Iter
 import Yield (Yield(..))
+import Fs
 
 numbers : Int -> Unit -> <Yield Int, IO, Panic> Unit
 numbers n () =

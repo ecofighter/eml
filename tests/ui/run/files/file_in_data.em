@@ -1,4 +1,6 @@
 -- A `data` value with a file field is linear and is taken apart to reach the file.
+import Fs
+
 data Handle =
   | Handle String Fs.File
 

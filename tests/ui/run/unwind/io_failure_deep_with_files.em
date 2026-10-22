@@ -1,5 +1,7 @@
 -- 各段が `File` を持ったまま、いちばん深い所で無いファイルを開き、IO の失敗が `try_io` へ中断する。どの段の
 -- `File` も巻き戻しで1回ずつ閉じる。
+import Fs
+
 missing : Unit -> <IO> Int
 missing () =
   Fs.close (Fs.open "missing.txt")

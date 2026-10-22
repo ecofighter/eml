@@ -1,4 +1,6 @@
 -- 末尾再帰で書いたリストの関数は、長いリストでも呼び出しの深さの上限に当たらない (docs/spec/stdlib.md)
+import List
+
 count_down : Int -> List Int -> <Panic> List Int
 count_down n acc = if n == 0 then acc else count_down (n - 1) (n :: acc)
 

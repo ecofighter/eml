@@ -1,4 +1,6 @@
 -- E3006: the file is dropped after the arguments of `die` are evaluated, so it is held across the `choose` inside them.
+import Fs
+
 effect Choose where
   multi choose : Unit -> Bool
 

@@ -1,4 +1,6 @@
 -- E3003: a local function is monomorphic, so calling one that ends in `exit` does not end the path.
+import Fs
+
 main : Unit -> <IO> Unit
 main () =
   let f = Fs.open "input.txt"

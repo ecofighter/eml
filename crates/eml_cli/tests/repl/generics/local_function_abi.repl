@@ -1,5 +1,6 @@
 # 値としても使うローカル関数 `g` の ABI は、名前に入った型で決まる。`d` を展開する深さが入力ごとに違っても、`d$let$g` は同じ
 # コードになり、追記の「同じ名前なら同じコード」の確かめを通る (docs/spec/lir.md の「関数の ABI」)
+> import List
 > d : Int -> <Panic> Int
 . d x =
 .   let g y = y + 1

@@ -1,6 +1,8 @@
 -- 構造体の型を宣言したフィールド。コンストラクタが2つある `Shape` の `Ball` は構造体にならず、フィールドの `Vec3` は
 -- 配置では一様な位置 (`tobj`) で、箱に入れて持つ。構造体の `Body` のフィールドの `Vec3` は、構造体の入れ子の葉になる
 -- (docs/spec/core-ir.md の「translate の配置」)。
+import List
+
 data Vec3 =
   | Vec3 Float Float Float
 

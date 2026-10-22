@@ -1,4 +1,6 @@
 -- 10 万バイトの文字列を `byte_at` で先頭から足し上げる。1バイトの読みごとの RC が `rc_increments` に出る。
+import String
+
 grow : Int -> String -> <Panic> String
 grow n acc = if n == 0 then acc else grow (n - 1) (acc ++ "x")
 

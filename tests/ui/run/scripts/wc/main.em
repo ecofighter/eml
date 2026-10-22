@@ -1,5 +1,11 @@
 -- wc: 行、語、バイトの数を数える。`wc [-l] [-w] [-c] [FILE...]` で、ファイル名 `-` と、ファイルを
 -- 書かないときは標準入力を読む。数える部分はエフェクトを使わずに書く
+import Env
+import Fs
+import List
+import Stdin
+import String
+
 data Shown =
   | Shown { lines : Bool, words : Bool, bytes : Bool }
   deriving (Eq)

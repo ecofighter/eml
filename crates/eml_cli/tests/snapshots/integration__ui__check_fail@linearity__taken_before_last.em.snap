@@ -4,15 +4,15 @@ expression: rendered
 input_file: tests/ui/check-fail/linearity/taken_before_last.em
 ---
 [E3008] Error: the array variable `a` can be taken only in the last expression of its block
-   ╭─[ check-fail/linearity/taken_before_last.em:5:27 ]
+   ╭─[ check-fail/linearity/taken_before_last.em:8:27 ]
    │
- 5 │   let b = MutArray.freeze a
+ 8 │   let b = MutArray.freeze a
    │                           ┬  
    │                           ╰── `a` is taken here
    │
-   ├─[ check-fail/linearity/taken_before_last.em:5:27 ]
+   ├─[ check-fail/linearity/taken_before_last.em:8:27 ]
    │
- 4 │   var a = MutArray.make 3 0
+ 7 │   var a = MutArray.make 3 0
    │   ────────────┬────────────  
    │               ╰────────────── `a` is declared here
    │ 

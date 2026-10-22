@@ -392,7 +392,7 @@ fn the_result_of_exit_is_not_compared_with_positions() {
 /// `d` をどの深さの呼び出しから展開するプログラムでも、同じ LIR になる。
 #[test]
 fn a_local_function_used_as_a_value_has_one_abi_in_every_program() {
-    const D: &str = "d : Int -> <Panic> Int\nd x =\n  let g y = y + 1\n  let fs = [g]\n  g x + List.length fs\n\n";
+    const D: &str = "import List\nd : Int -> <Panic> Int\nd x =\n  let g y = y + 1\n  let fs = [g]\n  g x + List.length fs\n\n";
     let direct = format!("{D}main : Unit -> <IO, Panic> Unit\nmain () = println (display (d 5))");
     let mut chain = String::from(D);
     chain.push_str("x1 : Int -> <Panic> Int\nx1 n = d n\n\n");

@@ -1,4 +1,6 @@
 -- その場で動く `fn` 節が、自分の `try_io` で IO の失敗を捕まえ、代わりの値で再開する。
+import Fs
+
 effect Ask where
   ask : Unit -> Int
 

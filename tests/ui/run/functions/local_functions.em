@@ -1,6 +1,8 @@
 -- ローカル関数の基本の形を確かめる。accumulator のループ (100,000 要素でも深さの上限に当たらない)、外側の引数を捕まえる再帰、
 -- `let … in`、値としての受け渡し、部分適用と過剰適用、自分を値として渡す形、再定義、入れ子の関数、row の多相な外側の関数。
 -- (docs/spec/expressions.md の「ローカル関数」)
+import List
+
 effect Ask where
   ask : Unit -> Int
 

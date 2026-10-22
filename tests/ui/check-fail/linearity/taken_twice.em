@@ -1,4 +1,7 @@
 -- 最後の式のタプルの両方の要素で `a` を取り出すので E3002
+import Array
+import MutArray
+
 both : Unit -> <Panic> (Array Int, Array Int)
 both () =
   var a = MutArray.make 3 0

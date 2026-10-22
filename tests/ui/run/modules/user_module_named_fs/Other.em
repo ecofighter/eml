@@ -1,5 +1,7 @@
 -- import を書かないモジュールでは、ユーザーの `Fs` があっても、修飾子の `Fs` は標準ライブラリに届く。
 -- main.em がユーザーの `Fs` を import していても、この規則は変わらない。
+import Std.Fs
+
 pub read_input : Unit -> <IO> String
 read_input () =
   let (text, f) = Fs.read_all (Fs.open "../../files/input.txt")

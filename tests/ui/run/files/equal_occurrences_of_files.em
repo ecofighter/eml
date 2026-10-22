@@ -1,5 +1,7 @@
 -- 同じ形の `Some []` が2つあっても、`Option (List File)` の値は `lin` なので、それぞれ別の `con` で作る
 -- (docs/spec/core-ir.md の「translate が決める印」)。
+import Fs
+
 close_opt : Option (List Fs.File) -> <IO> Unit
 close_opt o =
   match o with

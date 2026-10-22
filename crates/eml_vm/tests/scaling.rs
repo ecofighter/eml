@@ -118,7 +118,7 @@ fn reading_bytes_of_a_string_does_not_dup_per_byte() {
     // 引数を消費する行に戻ると、バイトの数だけ増えて落ちる (docs/spec/lir.md の「extern の借用」)
     let program = |n: usize| {
         format!(
-            "grow : Int -> String -> <Panic> String\n\
+            "import String\ngrow : Int -> String -> <Panic> String\n\
              grow n acc = if n == 0 then acc else grow (n - 1) (acc ++ \"x\")\n\
              \n\
              sum_bytes : String -> Int -> Int -> Int -> <Panic> Int\n\
@@ -142,7 +142,7 @@ fn reading_bytes_of_a_string_does_not_dup_per_byte() {
 /// `empty` から一意な左辺に `push` で n バイト足し、長さを出力するプログラム。
 fn pushed_bytes(n: usize) -> String {
     format!(
-        "grow : Int -> Bytes -> <Panic> Bytes\n\
+        "import Bytes\ngrow : Int -> Bytes -> <Panic> Bytes\n\
          grow n acc = if n == 0 then acc else grow (n - 1) (Bytes.push 65u8 acc)\n\
          \n\
          main : Unit -> <IO, Panic> Unit\n\
@@ -169,7 +169,7 @@ fn reading_bytes_does_not_dup_per_byte() {
     // (docs/spec/lir.md の「extern の借用」)
     let program = |n: usize| {
         format!(
-            "grow : Int -> Bytes -> <Panic> Bytes\n\
+            "import Byte\nimport Bytes\ngrow : Int -> Bytes -> <Panic> Bytes\n\
              grow n acc = if n == 0 then acc else grow (n - 1) (Bytes.push 65u8 acc)\n\
              \n\
              sum_bytes : Bytes -> Int -> Int -> Int -> <Panic> Int\n\
@@ -189,7 +189,7 @@ fn reading_bytes_does_not_dup_per_byte() {
 /// `Bytes` を n 個作って `show` するプログラム。
 fn shown_bytes(n: usize) -> String {
     format!(
-        "grow : Int -> Bytes -> <Panic> Bytes\n\
+        "import Bytes\ngrow : Int -> Bytes -> <Panic> Bytes\n\
          grow n acc = if n == 0 then acc else grow (n - 1) (Bytes.push 7u8 acc)\n\
          \n\
          main : Unit -> <IO, Panic> Unit\n\
@@ -237,7 +237,7 @@ fn lines_text(n: usize) -> (String, usize) {
 /// 数を書かないのは、`Int.show` の写しを `string_bytes_copied` に混ぜないためである。
 fn bytes_line_loop(path: &str, trimmed: usize) -> String {
     format!(
-        "go : Fs.File -> Int -> <IO, Panic> (Int, Fs.File)\n\
+        "import Bytes\nimport Fs\ngo : Fs.File -> Int -> <IO, Panic> (Int, Fs.File)\n\
          go f n =\n\
          \x20 match Fs.read_line_bytes f with\n\
          \x20   | (None, f) -> (n, f)\n\
@@ -276,7 +276,7 @@ fn reading_and_trimming_bytes_lines_copies_the_input_once() {
 /// `Stdin.read_line_bytes` で標準入力の行を終わりまで読み、行の長さの和が `trimmed` なら `ok` を出すプログラム。
 fn stdin_bytes_line_loop(trimmed: usize) -> String {
     format!(
-        "go : Stdin.Stdin -> Int -> <IO, Panic> (Int, Stdin.Stdin)\n\
+        "import Bytes\nimport Stdin\ngo : Stdin.Stdin -> Int -> <IO, Panic> (Int, Stdin.Stdin)\n\
          go h n =\n\
          \x20 match Stdin.read_line_bytes h with\n\
          \x20   | (None, h) -> (n, h)\n\
@@ -311,7 +311,7 @@ fn a_stdout_write_loop_does_not_dup_the_handle() {
     // `rc_increments` は変わらない (docs/spec/lir.md の「extern の借用」)
     let increments = |n: usize| {
         let program = format!(
-            "go : Stdout.Stdout -> Int -> <IO, Panic> Stdout.Stdout\n\
+            "import Stdout\ngo : Stdout.Stdout -> Int -> <IO, Panic> Stdout.Stdout\n\
              go h n = if n == 0 then h else go (Stdout.write_line \"line\" h) (n - 1)\n\
              \n\
              main : Unit -> <IO, Panic> Unit\n\
@@ -335,7 +335,7 @@ fn decode_read(keep: bool) -> (String, u64) {
         format!("String.byte_length s == {n}")
     };
     let program = format!(
-        "main : Unit -> <IO, Panic> Unit\n\
+        "import Bytes\nimport Fs\nimport String\nmain : Unit -> <IO, Panic> Unit\n\
          main () =\n\
          \x20 let (b, f) = Fs.read_all_bytes (Fs.open \"{}\")\n\
          \x20 Fs.close f\n\
@@ -362,7 +362,7 @@ fn converting_a_unique_string_to_bytes_copies_nothing() {
     // 数えず、共有の文字列とリテラルは写して 6 バイトを数える (docs/spec/object-model.md の「仕事の回数」)
     let copied = |body: &str| {
         let program = format!(
-            "main : Unit -> <IO, Panic> Unit\n\
+            "import Bytes\nimport String\n\nmain : Unit -> <IO, Panic> Unit\n\
              main () =\n\
              \x20 let s = \"abc\" ++ \"def\"\n\
              {body}"
@@ -1545,7 +1545,7 @@ main () = println (show (count {n} (fn r -> r)))
 fn a_resume_loop_through_a_clause_copy_stays_flat() {
     let program = |n: u64| {
         format!(
-            "import Yield (Yield(..))
+            "import Iter\nimport Yield (Yield(..))
 {HIDE}
 nums : Int -> Unit -> <Yield Int, Panic> Unit
 nums n () =

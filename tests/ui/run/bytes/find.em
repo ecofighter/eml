@@ -1,4 +1,6 @@
 -- `Bytes.find needle b` は最初に見つかった位置を返す。空の列は 0 で見つかる。
+import Bytes
+
 main : Unit -> <IO, Panic> Unit
 main () =
   let b = Bytes.of_string "abcabc"

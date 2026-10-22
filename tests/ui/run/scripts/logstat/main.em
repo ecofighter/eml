@@ -2,6 +2,10 @@
 -- `時刻 メソッド パス ステータス 応答時間` を読む。行を流す生産者、行を解析する handler、集計する handler の3段を
 -- `use` で重ねる。`--whole` は、1行ずつでなく全体を読んでから行に分ける (2つの読み方の性能を比べるため)
 import Yield (Yield(..))
+import Env
+import List
+import Stdin
+import String
 
 -- 解析した1行。形の崩れた行は行番号だけを持つ
 data Parsed =

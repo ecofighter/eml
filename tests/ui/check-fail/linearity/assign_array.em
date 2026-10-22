@@ -1,4 +1,6 @@
 -- 配列の変数に `<-` で代入すると古い配列を捨てることになるので E3008
+import MutArray
+
 main : Unit -> <IO, Panic> Unit
 main () =
   var a = MutArray.make 3 0

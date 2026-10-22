@@ -2,6 +2,9 @@
 -- 通した `List.map` は特殊化されず、一様な版を通って、データに通した関数の値を呼ぶ。関数の値は引数と結果が一様なので、
 -- `map` は要素の組の箱をそのまま渡し、戻った箱をそのままリストに入れる。ラムダは箱から組を取り出して入れ替え、新しい
 -- 箱に入れて返す (docs/spec/lir.md の「関数の ABI」)。数は `crates/eml_vm/tests/bench.rs` の `trade_offs` が固定する。
+import Float
+import List
+
 data Box a = | Box a
 
 hide : Int -> a -> <Panic> Box a

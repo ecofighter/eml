@@ -1,5 +1,6 @@
 -- `return` の節が `fail` して外側の `Fail.to_result` へ中断する。途中のフレームが持つ `File` は閉じる。
 import Fail (Fail(..))
+import Fs
 
 effect Tick where
   tick : Unit -> Unit

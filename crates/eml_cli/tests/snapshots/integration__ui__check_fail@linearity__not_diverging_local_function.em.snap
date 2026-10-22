@@ -4,13 +4,13 @@ expression: rendered
 input_file: tests/ui/check-fail/linearity/not_diverging_local_function.em
 ---
 [E3003] Error: `f` must be used exactly once, but it is not used
-   ╭─[ check-fail/linearity/not_diverging_local_function.em:4:7 ]
+   ╭─[ check-fail/linearity/not_diverging_local_function.em:6:7 ]
    │
- 4 │   let f = Fs.open "input.txt"
+ 6 │   let f = Fs.open "input.txt"
    │       ┬  
    │       ╰── `f` is bound here
    │ 
- 6 │   stop 1
+ 8 │   stop 1
    │         │ 
    │         ╰─ `f` is not used before the end of this scope
    │ 
