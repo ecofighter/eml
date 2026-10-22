@@ -626,6 +626,7 @@ pub class Bits a where
 - 対象: 行 `read_chunk`、`read_all_bytes`、`read_line_bytes_raw`、`Bytes.trim_line_end`、`Fs.read_line_bytes`、`Heap::bytes_extend` (T10 の上で検証する)
 - docs/spec: stdlib.md の「`Fs`」、OM の「extern」の行、「仕事の回数」(行の読みは行の長さを、全部の読みは長さを数える)
 - テスト: `tests/ui/run/files/read_bytes.em` (付録 `tests.md`)。規模のテスト: `Fs.read_line_bytes` のループを 1000 と 2000 行で回し、`rc_increments` が等しい (ハンドルを `dup` しない)。行を読んで `Bytes.trim_line_end` で切り詰めるプログラムを2つの大きさで回し、`string_bytes_copied` が入力の大きさに等しい (D-7 の写しの要件)。`bench/rt.sh` の行 `read-line-bytes-64mib` (メモリの読み手、56 バイトの行)。Rust の `BufReader::read_until` に対する比をコミットのメッセージに書く (門にしない)
+- テストの変更 (承認済み。`Fs.read_line_bytes` を eml で書くため `std/Fs.em` が `import Bytes` する): 種類 2 として、本物の `std/Fs.em` を含む小さな std を作る eml_hir のテスト (`load.rs`、`def_map.rs`、`session.rs`。snapshot の `a_std_module_cannot_import_the_prelude` を含む) に `Bytes.em` を足し、読み込むモジュールの一覧、`targets` の番号、`FS_HEAD_LINES`、診断の `Fs.em` の行番号と snapshot が、その import の分だけ変わる。T-24 と T-25 で std のモジュールが `Bytes` を import するときも、同じ範囲で変わる
 - 完了の条件: 1章の検査と `cargo test -p eml_vm --test integration scaling::` が通る
 
 ### T-24: `Stdin` のハンドル
