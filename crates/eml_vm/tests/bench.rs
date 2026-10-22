@@ -161,7 +161,7 @@ fn char_loop() {
         allocations: 17,
         reuses: 0,
         peak_objects: 3,
-        peak_stack: 18,
+        peak_stack: 19,
     }
     ");
 }
@@ -1139,7 +1139,7 @@ fn unwind_points() {
     apply_int: 13
     byte_loop: 7
     bytes_loop: 7
-    char_loop: 7
+    char_loop: 8
     empty: 0
     ep_float: 15
     fannkuch_by_hand: 39

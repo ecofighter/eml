@@ -10,7 +10,7 @@ sum_chars s i n acc =
   if i == n then acc
   else
     let c = String.char_at i s
-    sum_chars s (i + Char.utf8_length c) n (acc + Char.to_int c)
+    sum_chars s (String.next i s) n (acc + Char.to_int c)
 
 main : Unit -> <IO, Panic> Unit
 main () =

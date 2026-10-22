@@ -2,7 +2,7 @@
 -- 書かないときは標準入力を読む。数える部分はエフェクトを使わずに書く
 import Env
 import FileIn
-import Byte
+import Char
 import List
 import Stdin
 import String
@@ -25,10 +25,8 @@ parse_args shown args =
       if String.starts_with "-" first && first != "-" then None else Some (shown, args)
     | Nil -> Some (shown, args)
 
--- 語の区切りは ASCII の空白 (`String.trim` と同じ6種) である
-is_space : Int -> Bool
-is_space b = b == 32 || (b >= 9 && b <= 13)
-
+-- 語の区切りは ASCII の空白 (`String.trim` と同じ6種) である。`bytes` は文字の数ではなくバイトの数なので
+-- `n` のままにする
 count : String -> <Panic> Counts
 count text =
   let n = String.byte_length text
@@ -36,10 +34,11 @@ count text =
     if i >= n then
       Counts { lines = lines, words = if in_word then words + 1 else words, bytes = n }
     else
-      let b = byte_at i text
-      if is_space b then
-        go (i + 1) (if b == 10 then lines + 1 else lines) (if in_word then words + 1 else words) False
-      else go (i + 1) lines words True
+      let c = String.char_at i text
+      let after = String.next i text
+      if Char.is_ascii_space c then
+        go after (if c == '\n' then lines + 1 else lines) (if in_word then words + 1 else words) False
+      else go after lines words True
   go 0 0 0 False
 
 add : Counts -> Counts -> <Panic> Counts
@@ -102,7 +101,3 @@ main () =
           let (total, failed) = count_files shown names
           if List.length names >= 2 then println (format shown total (Some "total")) else ()
           if failed then exit 1 else ()
-
--- 位置 `i` のバイトを `Int` で返す
-byte_at : Int -> String -> <Panic> Int
-byte_at i s = Byte.to_int (String.byte_at i s)
