@@ -84,10 +84,20 @@ pub(crate) fn int_value(text: &str) -> Option<i64> {
     i64::from_str_radix(body, radix).ok()
 }
 
+/// 文字のリテラルの引用符の間の本文。接尾辞 `u8` があれば、それも外す。
+pub(crate) fn char_body(literal: &str) -> &str {
+    let quoted = literal.strip_suffix("u8").unwrap_or(literal);
+    &quoted[1..quoted.len() - 1]
+}
+
 /// `BYTE` トークンの値。`Byte` の範囲 (0..=255) を超えるものは `None` で、字句解析が E0007 を報告している
-/// (docs/spec/lexical.md の「数値と文字」)。
+/// (docs/spec/lexical.md の「数値と文字」)。`'x'u8` は文字のコードポイントを値にする。
 pub(crate) fn byte_value(text: &str) -> Option<u8> {
     let integer = text.strip_suffix("u8")?;
+    if integer.starts_with('\'') {
+        let c = char_value(char_body(text)).ok()?;
+        return u8::try_from(u32::from(c)).ok();
+    }
     int_value(integer).and_then(|n| u8::try_from(n).ok())
 }
 

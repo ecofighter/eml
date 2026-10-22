@@ -5,7 +5,7 @@ use logos::Logos;
 
 use crate::SyntaxKind::{self, *};
 use crate::codes;
-use crate::literal::{self, CharLitError, byte_value, int_value};
+use crate::literal::{self, CharLitError, byte_value, char_body, int_value};
 use string::raw_string_hashes;
 
 mod string;
@@ -84,8 +84,8 @@ enum Raw {
     #[regex(r"[0-9][0-9_]*[eE][+-][0-9][0-9_]*")]
     Float,
     /// 閉じた形だけにする。誤ったリテラルも同じ行の次の `'` までを1つのトークンにして、診断を1件にするため
-    /// (docs/spec/lexical.md の「数値と文字」)。
-    #[regex(r"'(\\[^\n]|[^'\\\n])*'")]
+    /// (docs/spec/lexical.md の「数値と文字」)。接尾辞 `u8` は `Byte` のリテラルにする。
+    #[regex(r"'(\\[^\n]|[^'\\\n])*'(u8)?")]
     Char,
     #[regex(r"[!$%&*+\-./<=>?@^|~:]+")]
     Op,
@@ -367,7 +367,8 @@ impl Lexer<'_> {
 
     fn check_char(&mut self, slice: &str) {
         let start = self.pos;
-        let body = &slice[1..slice.len() - 1];
+        let body = char_body(slice);
+        let is_byte = slice.ends_with("u8");
         let (error, message, label) = match literal::char_value(body) {
             Ok(_) => return,
             Err(CharLitError::Empty) => (
@@ -389,11 +390,12 @@ impl Lexer<'_> {
                     ),
                 );
                 // 見えない文字を含む本文は、そのまま書いても escape しても、help の文字列が元の本文と見分けられない
-                let diagnostic = if body.contains(['"', '\\']) || body.chars().any(is_invisible) {
-                    diagnostic
-                } else {
-                    diagnostic.with_help(format!("write a string: `\"{body}\"`"))
-                };
+                let diagnostic =
+                    if is_byte || body.contains(['"', '\\']) || body.chars().any(is_invisible) {
+                        diagnostic
+                    } else {
+                        diagnostic.with_help(format!("write a string: `\"{body}\"`"))
+                    };
                 self.diagnostics.push(diagnostic);
                 return;
             }
@@ -480,6 +482,19 @@ impl Lexer<'_> {
                     return;
                 }
                 FLOAT
+            }
+            Ok(Raw::Char) if slice.ends_with("u8") => {
+                self.check_char(slice);
+                if byte_value(slice).is_none() && literal::char_value(char_body(slice)).is_ok() {
+                    self.error(
+                        codes::INVALID_NUMBER,
+                        format!("byte literal `{}` is too large", printable(slice)),
+                        self.pos,
+                        self.pos + len,
+                        "the largest `Byte` is 255",
+                    );
+                }
+                BYTE
             }
             Ok(Raw::Char) => {
                 self.check_char(slice);

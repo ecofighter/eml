@@ -40,6 +40,6 @@ find_byte x b =
 pub trim_line_end : Bytes -> <Panic> Bytes
 trim_line_end line =
   let n = length line
-  if n == 0 || get (n - 1) line != 10u8 then line
-  else if n >= 2 && get (n - 2) line == 13u8 then truncate (n - 2) line
+  if n == 0 || get (n - 1) line != '\n'u8 then line
+  else if n >= 2 && get (n - 2) line == '\r'u8 then truncate (n - 2) line
   else truncate (n - 1) line

@@ -164,6 +164,35 @@ fn byte_values() {
 }
 
 #[test]
+fn char_byte_values() {
+    assert_eq!(byte_value("'a'u8"), Some(97));
+    assert_eq!(byte_value(r"'\n'u8"), Some(10));
+    assert_eq!(byte_value("'\"'u8"), Some(34));
+    assert_eq!(byte_value(r"'\u{ff}'u8"), Some(255));
+}
+
+#[test]
+fn too_large_char_byte_literals_are_reported() {
+    assert_eq!(byte_value("'あ'u8"), None);
+    assert_eq!(
+        diagnostics("x = 'あ'u8"),
+        ["E0007 1:5 byte literal `'あ'u8` is too large"]
+    );
+    assert_eq!(
+        diagnostics(r"x = '\u{100}'u8"),
+        ["E0007 1:5 byte literal `'\\u{100}'u8` is too large"]
+    );
+}
+
+#[test]
+fn malformed_char_byte_literals_report_the_char_error_once() {
+    assert_eq!(
+        diagnostics("x = 'ab'u8"),
+        ["E0016 1:5 character literal `'ab'u8` has more than one character"]
+    );
+}
+
+#[test]
 fn too_large_byte_literals_are_reported() {
     assert_eq!(byte_value("256u8"), None);
     assert_eq!(

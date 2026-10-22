@@ -944,3 +944,11 @@ fn a_unicode_escape_does_not_run_past_a_command_literal() {
 fn byte_literals_have_their_own_kind() {
     assert_eq!(kinds("65u8 65 0xffu8"), ["BYTE", "INT", "BYTE"]);
 }
+
+#[test]
+fn char_with_u8_suffix_is_a_byte_literal() {
+    assert_eq!(
+        kinds(r#"'a'u8 '"'u8 '\n'u8 'a'"#),
+        ["BYTE", "BYTE", "BYTE", "CHAR"]
+    );
+}

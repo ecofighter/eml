@@ -1,0 +1,12 @@
+---
+source: crates/eml_cli/tests/ui.rs
+expression: rendered
+input_file: tests/ui/check-fail/lexer/byte_literal_char_too_large.em
+---
+[E0007] Error: byte literal `'あ'u8` is too large
+   ╭─[ check-fail/lexer/byte_literal_char_too_large.em:3:13 ]
+   │
+ 3 │ too_large = 'あ'u8
+   │             ───┬──  
+   │                ╰──── the largest `Byte` is 255
+───╯
