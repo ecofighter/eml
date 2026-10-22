@@ -418,6 +418,43 @@ pub data Map k v =
 - コンストラクタは公開される。抽象型がまだなく、コンストラクタを隠せないためである。API は上の関数の表だけである。利用者が `Empty` などで直接作った木に、関数が何を返すかは決めない。そのような木でも、`size` 以外の関数は実行時エラーを起こさない
 - `import Map (Map(..))` と書くと、`Empty` が利用者のコンストラクタと重なりうる。そのため、使い方は `Map.empty` と関数に限る
 
+## `Std.Set`
+
+要素の順に並べた集合である。`Std.Map` と同じ形の AVL 木で、節は値を持たない。`Std.List` を import して書いてある。
+
+```haskell
+pub data Set a =
+  | Empty
+  | LeftHigh (Set a) a (Set a)
+  | Even (Set a) a (Set a)
+  | RightHigh (Set a) a (Set a)
+```
+
+| 関数 | 型 | 計算量 |
+|---|---|---|
+| `empty` | `Set a` | |
+| `insert` | `Ord a => a -> Set a -> Set a` | O(log n) |
+| `delete` | `Ord a => a -> Set a -> Set a` | O(log n) |
+| `member` | `Ord a => a -> Set a -> Bool` | O(log n) |
+| `size` | `Set a -> <Panic> Int` | O(n) |
+| `fold` | `(b -> a -> <e> b) -> b -> Set a -> <e> b` | O(n)、昇順 |
+| `to_list` | `Set a -> List a` | O(n)、昇順 |
+| `from_list` | `Ord a => List a -> Set a` | O(n log n) |
+| `union` | `Ord a => Set a -> Set a -> Set a` | O(m log n) |
+| `intersection` | `Ord a => Set a -> Set a -> Set a` | O(m log n) |
+| `difference` | `Ord a => Set a -> Set a -> Set a` | O(m log n) |
+
+- 3つのコンストラクタ `LeftHigh`、`Even`、`RightHigh` は、`Map` と同じく左右の部分木の高さの差を表す。釣り合いの計算に算術がなく、`Panic` も起きない。釣り合いを直す関数が、受け取った節の箱を使い回せることも `Map` と同じである ([LIR](lir.md) の「reuse」)
+- `insert x s` は、`Ord` で `x` と等しい要素が `s` にあれば、前からあるものを残す。`delete x s` は、`x` と等しい要素がなければ同じ木を返す。`member` は、等しい要素があるかを返す
+- `fold f init s` は、昇順に `f acc x` を呼んで左からたたむ。`to_list` は、昇順のリストである
+- `from_list` は、前から順に `insert` する。等しい要素が複数あれば、先のものが残る
+- `union`、`intersection`、`difference` は、`Ord` で等しい要素のうち、左の引数のものを残す。`difference a b` は、`a` の要素のうち `b` にないものである
+- 3つの演算は、低いほうの木をたどって高いほうの木に入れる。計算量の m は低いほうの木の大きさ、n は高いほうの木の大きさである。木の高さは、印の高いほうの子をたどって O(log n) で求め、`1 <<< 高さ` として数えるので、`Panic` は起きない
+- `size` は木を O(n) で数える。数えるのに `+` を使い、`Int` の桁あふれが `Panic` になりうるので、型に `Panic` を持つ。`size` のほかの関数は、型に `Panic` を持たない。トップレベルの値 (row は `<>` に限る) と `Show` の instance の本体でも使える
+- 要素は `Unr` に限る。`Lin` の値は E3001 になる。釣り合いを直す関数の `_ -> t` の枝が、値を捨てるためである
+- コンストラクタは公開される。抽象型がまだなく、コンストラクタを隠せないためである。API は上の関数の表だけである。利用者が `Empty` などで直接作った木に、関数が何を返すかは決めない。そのような木でも、`size` 以外の関数は実行時エラーを起こさない
+- `import Set (Set(..))` と書くと、`Empty` が利用者のコンストラクタや `Map` のものと重なりうる。そのため、使い方は `Set.empty` と関数に限る
+
 ## `Env`
 
 | 関数 | 型 |
