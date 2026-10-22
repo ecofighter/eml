@@ -1,0 +1,460 @@
+diff --git a/crates/eml_cli/tests/api.rs b/crates/eml_cli/tests/api.rs
+index 0a1167d9..ec8cd23c 100644
+--- a/crates/eml_cli/tests/api.rs
++++ b/crates/eml_cli/tests/api.rs
+@@ -352,25 +352,6 @@ fn a_repl_is_send() {
+     assert_send::<Repl>();
+ }
+ 
+-#[test]
+-fn an_expression_prints_its_value() {
+-    let mut console = Console::new(&RunConfig::default());
+-    assert_eq!(
+-        console.eval("1 + 2"),
+-        (Outcome::Accepted, "3\n".to_string(), vec![])
+-    );
+-}
+-
+-#[test]
+-fn a_definition_is_kept_for_later_inputs() {
+-    let mut console = Console::new(&RunConfig::default());
+-    assert_eq!(
+-        console.eval("inc : Int -> <Panic> Int\ninc x = x + 1"),
+-        (Outcome::Accepted, String::new(), vec![])
+-    );
+-    assert_eq!(console.eval("inc 41").1, "42\n");
+-}
+-
+ #[test]
+ fn a_rejected_input_leaves_the_session_unchanged() {
+     let mut console = Console::new(&RunConfig::default());
+@@ -403,23 +384,6 @@ fn an_input_of_only_comments_does_nothing() {
+     assert_eq!(evaluated.files.path(primary.file), "<input 1>");
+ }
+ 
+-#[test]
+-fn a_runtime_error_does_not_end_the_session() {
+-    let mut console = Console::new(&RunConfig::default());
+-    let (outcome, _, _) = console.eval("1 / 0");
+-    assert!(matches!(outcome, Outcome::Failed(_)), "{outcome:?}");
+-    assert_eq!(console.eval("let x = 5").0, Outcome::Accepted);
+-    assert_eq!(console.eval("x * 2").1, "10\n");
+-}
+-
+-#[test]
+-fn a_failed_let_binds_nothing() {
+-    let mut console = Console::new(&RunConfig::default());
+-    let (outcome, _, _) = console.eval("let y = 1 / 0");
+-    assert!(matches!(outcome, Outcome::Failed(_)), "{outcome:?}");
+-    assert_eq!(console.eval("y").2, ["E1001"]);
+-}
+-
+ /// 止める理由のビットは `eval` の始めに下りる (docs/spec/object-model.md の「実行の制御」)。
+ #[test]
+ fn each_input_clears_the_stop_bits() {
+diff --git a/crates/eml_cli/tests/snapshots/integration__ui__check_fail@types__continuation_state_arity.em.snap b/crates/eml_cli/tests/snapshots/integration__ui__check_fail@types__continuation_state_arity.em.snap
+deleted file mode 100644
+index ccc5181b..00000000
+--- a/crates/eml_cli/tests/snapshots/integration__ui__check_fail@types__continuation_state_arity.em.snap
++++ /dev/null
+@@ -1,30 +0,0 @@
+----
+-source: crates/eml_cli/tests/ui.rs
+-expression: rendered
+-input_file: tests/ui/check-fail/types/continuation_state_arity.em
+----
+-[E2001] Error: mismatched types
+-   ╭─[ check-fail/types/continuation_state_arity.em:8:26 ]
+-   │
+- 8 │     | ctl ask () k st -> k st
+-   │                          ──┬─  
+-   │                            ╰─── expected `Int`, found `once Int -> Int`
+-   │ 
+-   │ Note: each clause of a handler must have the type of the whole `handle` expression
+-───╯
+-[E2001] Error: `k` takes 1 argument but 2 were given
+-    ╭─[ check-fail/types/continuation_state_arity.em:14:27 ]
+-    │
+- 14 │     | ctl ask () k -> k 1 2
+-    │                           ┬  
+-    │                           ╰── unexpected argument
+-────╯
+-[E2001] Error: mismatched types
+-    ╭─[ check-fail/types/continuation_state_arity.em:21:9 ]
+-    │
+- 21 │         again k
+-    │         ───┬───  
+-    │            ╰───── expected `Int`, found `once Int -> Int`
+-    │ 
+-    │ Note: each clause of a handler must have the type of the whole `handle` expression
+-────╯
+diff --git a/crates/eml_cli/tests/snapshots/integration__ui__check_fail@types__local_function_projection.em.snap b/crates/eml_cli/tests/snapshots/integration__ui__check_fail@types__local_function_projection.em.snap
+deleted file mode 100644
+index 75bde307..00000000
+--- a/crates/eml_cli/tests/snapshots/integration__ui__check_fail@types__local_function_projection.em.snap
++++ /dev/null
+@@ -1,14 +0,0 @@
+----
+-source: crates/eml_cli/tests/ui.rs
+-expression: rendered
+-input_file: tests/ui/check-fail/types/local_function_projection.em
+----
+-[E2013] Error: the type of this value must be known to access its field `name`
+-   ╭─[ check-fail/types/local_function_projection.em:6:19 ]
+-   │
+- 6 │   let name_of p = p.name
+-   │                   ┬  
+-   │                   ╰── the type of this value is not known here
+-   │ 
+-   │ Help: annotate the type of the parameter, as in `fn (p : T) -> …`
+-───╯
+diff --git a/crates/eml_core_ir/tests/lowering.rs b/crates/eml_core_ir/tests/lowering.rs
+index 9842c2bd..2dca551b 100644
+--- a/crates/eml_core_ir/tests/lowering.rs
++++ b/crates/eml_core_ir/tests/lowering.rs
+@@ -4,27 +4,43 @@
+ 
+ use eml_core_ir::{Pass, parse, pretty_with_positions, to_lir};
+ 
+-use crate::common::programs::ui_programs;
++use std::num::NonZeroUsize;
++use std::sync::atomic::{AtomicUsize, Ordering};
++use std::thread;
+ 
++use crate::common::programs::{UiProgram, ui_programs};
++
++/// プログラムどうしは独立なので、コアの数のスレッドで分けて流す。`Session` は `Send + Sync` である
++/// (docs/implementation/architecture.md の「CLI と lib API」)。
+ #[test]
+ fn every_program_lowers_to_the_same_text() {
+-    for program in ui_programs() {
+-        let core = eml_test_support::core_until_files(
+-            &program.entry,
+-            &program.module_refs(),
+-            Pass::Evidence,
+-        );
+-        let shown = pretty_with_positions(&core);
+-        let lir = to_lir(core);
+-        assert_eq!(
+-            eml_lir::pretty_with_positions(&lir),
+-            shown,
+-            "{}",
+-            program.name
+-        );
+-        if let Err(error) = eml_lir::verify_lowered(&lir) {
+-            panic!("{}: {error}", program.name);
++    let programs = ui_programs();
++    let next = AtomicUsize::new(0);
++    let workers = thread::available_parallelism().map_or(1, NonZeroUsize::get);
++    thread::scope(|scope| {
++        for _ in 0..workers {
++            scope.spawn(|| {
++                while let Some(program) = programs.get(next.fetch_add(1, Ordering::Relaxed)) {
++                    lowers_to_the_same_text(program);
++                }
++            });
+         }
++    });
++}
++
++fn lowers_to_the_same_text(program: &UiProgram) {
++    let core =
++        eml_test_support::core_until_files(&program.entry, &program.module_refs(), Pass::Evidence);
++    let shown = pretty_with_positions(&core);
++    let lir = to_lir(core);
++    assert_eq!(
++        eml_lir::pretty_with_positions(&lir),
++        shown,
++        "{}",
++        program.name
++    );
++    if let Err(error) = eml_lir::verify_lowered(&lir) {
++        panic!("{}: {error}", program.name);
+     }
+ }
+ 
+diff --git a/crates/eml_core_ir/tests/translate.rs b/crates/eml_core_ir/tests/translate.rs
+index 9ccfaa92..f96acfb6 100644
+--- a/crates/eml_core_ir/tests/translate.rs
++++ b/crates/eml_core_ir/tests/translate.rs
+@@ -1242,41 +1242,6 @@ fn nested_value_ifs_meet_in_their_own_merge_blocks() {
+     "#);
+ }
+ 
+-#[test]
+-fn handlers_are_lifted_to_closures() {
+-    let text = "effect Ask where\n  ask : String -> Int\n\nmain : Unit -> <IO, Panic> Unit\nmain () =\n  let prefix = \"n = \"\n  let n =\n    handle ask \"x\" with\n      | ctl ask key k -> k 1\n      | return x -> x + 1\n  println (prefix ++ show n)";
+-    insta::assert_snapshot!(core_text(text, Pass::Translate), @r#"
+-    effect Prelude.IO { never io_failed(enum, obj) -> never }
+-    effect Prelude.Panic { never panicked(obj) -> never }
+-    effect Ask { ask(obj) -> int }
+-    fn main(p.0: unit) -> unit {
+-      let s.1: obj = const "n = "
+-      let t.2: int = handle Ask((), &main$handle0) { ask: &main$handle0$ask } return &main$handle0$return
+-      let t.3: obj = extern "Prelude.Show Int.show"(t.2)
+-      let t.4: obj = extern Prelude.++(s.1, t.3)
+-      let t.5: unit = extern Prelude.println(t.4)
+-      return t.5
+-    }
+-    internal yields uniform from 0 fn main$handle0(p.0: unit) -> int {
+-      let s.1: obj = const "x"
+-      let t.2: int = perform Ask.ask(s.1)
+-      return t.2
+-    }
+-    internal uniform from 0 fn main$handle0$ask(key.0: obj, k.1: tobj lin, p.2: unit) -> int {
+-      let t.3: int = resume k.1(1, ())
+-      return t.3
+-    }
+-    internal uniform from 0 fn main$handle0$return(x.0: int, p.1: unit) -> int {
+-      let t.2: int = extern "Prelude.Num Int.+"(x.0, 1)
+-      return t.2
+-    }
+-    fn entry$main() -> unit {
+-      let t.0: unit = call main(())
+-      return t.0
+-    }
+-    "#);
+-}
+-
+ #[test]
+ fn operations_as_values_and_drop() {
+     let text = "effect Log where\n  log : String -> String -> Unit\n\nrun : Unit -> <Log> Unit\nrun () =\n  let info = log \"info\"\n  info \"a\"\n\ndiscard : String -> Unit\ndiscard s = drop s\n\nmain : Unit -> <IO> Unit\nmain () =\n  handle run () with\n    | ctl log _ _ k -> k ()\n  discard \"x\"";
+diff --git a/crates/eml_rt/src/trust.rs b/crates/eml_rt/src/trust.rs
+index 92a3cf5e..36418cce 100644
+--- a/crates/eml_rt/src/trust.rs
++++ b/crates/eml_rt/src/trust.rs
+@@ -262,8 +262,8 @@ fn blank_comments_and_strings(text: &str) -> Vec<char> {
+ }
+ 
+ fn starts_with_at(s: &[char], at: usize, word: &str) -> bool {
+-    let w: Vec<char> = word.chars().collect();
+-    s.len() >= at + w.len() && s[at..at + w.len()] == w[..]
++    let mut rest = s.get(at..).unwrap_or_default().iter();
++    word.chars().all(|c| rest.next() == Some(&c))
+ }
+ 
+ /// `word` の語が `at` から始まり、前が識別子の続きでないか。
+@@ -365,6 +365,9 @@ fn trusted_items(file: &str, text: &str) -> Vec<String> {
+     let mut found = Vec::new();
+     for i in 0..s.len() {
+         for pattern in PATTERNS {
++            if !pattern.starts_with(s[i]) {
++                continue;
++            }
+             let ident_start = pattern.chars().next().is_some_and(is_ident);
+             if !starts_with_at(&s, i, pattern) || (ident_start && i > 0 && is_ident(s[i - 1])) {
+                 continue;
+diff --git a/crates/eml_syntax/src/parser/tests.rs b/crates/eml_syntax/src/parser/tests.rs
+index 0ac447c5..3abab2fc 100644
+--- a/crates/eml_syntax/src/parser/tests.rs
++++ b/crates/eml_syntax/src/parser/tests.rs
+@@ -342,3 +342,33 @@ fn no_error_is_reported_at_an_error_token() {
+     });
+     assert!(diagnostics.is_empty());
+ }
++
++/// 本物の文法で読み、panic せずに終わって木が元のテキストに戻ることを確かめる。
++fn parse_losslessly(text: &str) {
++    let mut files = SourceFiles::new();
++    let file = files.add("test.em", text);
++    let (tokens, _) = lex(file, text);
++    let (input, _) = layout(file, text, &tokens);
++    let mut p = Parser::new(file, text, input);
++    crate::grammar::source_file(&mut p);
++    let (events, _) = p.finish();
++    let tree = SyntaxNode::new_root(build_tree(text, &tokens, events));
++    assert_eq!(tree.text().to_string(), text, "tree must be lossless");
++}
++
++/// 先読みが1トークンごとに1ステップを数えると上限を超える長さ。
++fn longer_than_the_step_limit() -> String {
++    "a ".repeat(STEP_LIMIT as usize + 1)
++}
++
++#[test]
++fn long_unclosed_paren_lookahead_does_not_hit_the_step_limit() {
++    // 先読み走査 (`apat_len`) は、閉じ括弧を探して EOF まで読む。
++    parse_losslessly(&("(".to_string() + &longer_than_the_step_limit()));
++}
++
++#[test]
++fn long_use_lookahead_does_not_hit_the_step_limit() {
++    // 先読み走査 (`has_left_arrow`) は、`<-` を探して EOF まで読む。
++    parse_losslessly(&("f =\n  use g (".to_string() + &longer_than_the_step_limit()));
++}
+diff --git a/crates/eml_syntax/tests/parser.rs b/crates/eml_syntax/tests/parser.rs
+index 481582a7..f84d3e9a 100644
+--- a/crates/eml_syntax/tests/parser.rs
++++ b/crates/eml_syntax/tests/parser.rs
+@@ -70,23 +70,6 @@ fn recovery_resumes_at_the_next_item() {
+     );
+ }
+ 
+-/// パースが panic せずに終わり、木が元のテキストに戻ることだけを確かめる。
+-fn assert_parses_losslessly(text: &str) {
+-    parse(text);
+-}
+-
+-#[test]
+-fn long_unclosed_paren_lookahead_does_not_hit_the_step_limit() {
+-    // 先読み走査 (`apat_len`) は、閉じ括弧を探して EOF まで読む。
+-    assert_parses_losslessly(&("(".to_string() + &"a ".repeat(600_000)));
+-}
+-
+-#[test]
+-fn long_use_lookahead_does_not_hit_the_step_limit() {
+-    // 先読み走査 (`has_left_arrow`) は、`<-` を探して EOF まで読む。
+-    assert_parses_losslessly(&("f =\n  use g (".to_string() + &"a ".repeat(600_000)));
+-}
+-
+ #[test]
+ fn recovered_empty_block_stays_on_its_line() {
+     let tree = debug_tree(&parse("f =\ng = 1").parse.syntax());
+diff --git a/crates/eml_types/tests/check.rs b/crates/eml_types/tests/check.rs
+index 5e7682b0..013fc61f 100644
+--- a/crates/eml_types/tests/check.rs
++++ b/crates/eml_types/tests/check.rs
+@@ -1,4 +1,4 @@
+-use crate::common::{check_short, check_text};
++use crate::common::{check_full, check_short, check_text};
+ use eml_hir::ValueItem;
+ 
+ #[test]
+@@ -715,13 +715,11 @@ fn a_local_function_value_is_opened() {
+ #[test]
+ fn an_undetermined_projection_in_a_local_function_is_e2013() {
+     let text = "data P = | P { name : String }\n\nmain : Unit -> <IO> Unit\nmain () =\n  let name_of p = p.name\n  println (name_of (P { name = \"a\" }))";
+-    assert_eq!(
+-        check_short(text),
+-        vec![
+-            "E2013 5:19 the type of this value must be known to access its field `name`"
+-                .to_string()
+-        ]
+-    );
++    insta::assert_snapshot!(check_full(text), @"
++    E2013 5:19 the type of this value must be known to access its field `name`
++      5:19 the type of this value is not known here
++      help: annotate the type of the parameter, as in `fn (p : T) -> …`
++    ");
+ }
+ 
+ #[test]
+diff --git a/crates/eml_types/tests/classes.rs b/crates/eml_types/tests/classes.rs
+index 1f7211d5..30eea5ab 100644
+--- a/crates/eml_types/tests/classes.rs
++++ b/crates/eml_types/tests/classes.rs
+@@ -1,6 +1,6 @@
+ //! 型クラスの制約の解決 (docs/spec/types.md の「制約」)。
+ 
+-use crate::common::{check_short, check_text};
++use crate::common::check_text;
+ use eml_test_support::{check, short};
+ 
+ const SAME: &str = "class Same a where\n  same : a -> a -> Bool\n  differ : a -> a -> Bool\n  differ x y = not (same x y)\n\n";
+@@ -389,15 +389,3 @@ fn deriving_ord_needs_eq() {
+     let text = "data Color =\n  | Red\n  | Green\n  deriving (Eq, Ord)";
+     assert_eq!(lines(text), Vec::<String>::new());
+ }
+-
+-#[test]
+-fn a_lin_declared_type_cannot_have_instances() {
+-    let text = "data Token : Lin =\n  | Token\n  deriving (Eq)\n\ndata Key : Lin =\n  | Key Int\n\ninstance Show Key where\n  show _ = \"key\"";
+-    assert_eq!(
+-        check_short(text)
+-            .iter()
+-            .map(|d| &d[..5])
+-            .collect::<Vec<_>>(),
+-        ["E2010", "E2010"]
+-    );
+-}
+diff --git a/crates/eml_types/tests/effects.rs b/crates/eml_types/tests/effects.rs
+index d3a2005e..373f8348 100644
+--- a/crates/eml_types/tests/effects.rs
++++ b/crates/eml_types/tests/effects.rs
+@@ -456,13 +456,11 @@ fn a_continuation_with_a_state_called_without_it_in_a_lambda_is_a_mismatch() {
+     // ラムダの中の `c 1` は `c` に引数を1つだけ渡す。状態のある `k` を渡すと、`again k` が部分適用の関数になり、
+     // 節の型と食い違う
+     let text = "effect Ask where\n  ask : Unit -> Int\n\nf : Unit -> Int\nf () =\n  handle ask () from 0 with\n    | ctl ask () k st ->\n        let again = fn c -> c 1\n        again k\n    | return x _ -> x";
+-    let checked = eml_test_support::check(text);
+-    let codes: Vec<String> = checked
+-        .diagnostics
+-        .iter()
+-        .map(|d| d.code.to_string())
+-        .collect();
+-    assert_eq!(codes, ["E2001"]);
++    insta::assert_snapshot!(check_full(text), @"
++    E2001 9:9 mismatched types
++      9:9 expected `Int`, found `once Int -> Int`
++      note: each clause of a handler must have the type of the whole `handle` expression
++    ");
+ }
+ 
+ #[test]
+diff --git a/crates/eml_types/tests/rows.rs b/crates/eml_types/tests/rows.rs
+index 98710f91..72554b3b 100644
+--- a/crates/eml_types/tests/rows.rs
++++ b/crates/eml_types/tests/rows.rs
+@@ -4,22 +4,6 @@ use eml_test_support::{check, short_text};
+ 
+ use crate::common::{check_full, check_short, check_text};
+ 
+-#[test]
+-fn effects_must_be_in_the_signature() {
+-    let text = "greet : String -> Unit\ngreet name = println name\n\nshout : String -> <IO> Unit\nshout name = println (name ++ \"!\")";
+-    insta::assert_snapshot!(check_text(text), @r"
+-    greet : String -> Unit
+-      name#0 : String
+-    shout : String -> <IO> Unit
+-      name#0 : String
+-    ---
+-    E2002 2:14 `println` performs `IO`, which the signature of `greet` does not allow
+-      2:14 this call performs `IO`
+-      1:9 the row of this signature does not include it
+-      help: add `IO` to the row of the signature of `greet`, as in `-> <IO> ...`
+-    ");
+-}
+-
+ #[test]
+ fn main_with_an_erroneous_row_is_not_reported_again() {
+     insta::assert_snapshot!(check_text("main : Unit -> <Console> Unit\nmain () = ()"), @r"
+diff --git a/tests/ui/check-fail/types/continuation_state_arity.em b/tests/ui/check-fail/types/continuation_state_arity.em
+deleted file mode 100644
+index e3c005d6..00000000
+--- a/tests/ui/check-fail/types/continuation_state_arity.em
++++ /dev/null
+@@ -1,22 +0,0 @@
+--- E2001: a continuation takes the next state after the value exactly when its handler has a state.
+-effect Ask where
+-  ask : Unit -> Int
+-
+-missing : Unit -> Int
+-missing () =
+-  handle ask () from 0 with
+-    | ctl ask () k st -> k st
+-    | return x st -> x
+-
+-extra : Unit -> Int
+-extra () =
+-  handle ask () with
+-    | ctl ask () k -> k 1 2
+-
+-through : Unit -> Int
+-through () =
+-  handle ask () from 0 with
+-    | ctl ask () k st ->
+-        let again = fn c -> c 1
+-        again k
+-    | return x _ -> x
+diff --git a/tests/ui/check-fail/types/local_function_projection.em b/tests/ui/check-fail/types/local_function_projection.em
+deleted file mode 100644
+index 0ebd70a3..00000000
+--- a/tests/ui/check-fail/types/local_function_projection.em
++++ /dev/null
+@@ -1,7 +0,0 @@
+--- E2013: ローカル関数は呼ぶ前に本体を検査するので、型の決まらない引数への射影は誤りになる。
+-data Person = | Person { name : String }
+-
+-main : Unit -> <IO> Unit
+-main () =
+-  let name_of p = p.name
+-  println (name_of (Person { name = "a" }))
