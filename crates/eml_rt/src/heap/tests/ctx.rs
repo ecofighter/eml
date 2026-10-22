@@ -3,7 +3,9 @@
 use std::sync::Arc;
 
 use super::host::{MemoryHost, host};
-use crate::{Control, Ctx, HeapError, Limits, MaskItem, Mode, Stop, Word};
+use crate::{
+    Control, Ctx, Fault, Form, Handle, HeapError, Limits, MaskItem, Mode, ReadAmount, Stop, Word,
+};
 
 pub(super) const UNIT: Word = Word::imm(0);
 
@@ -13,6 +15,19 @@ pub(super) fn ctx<M: Mode>() -> Ctx<M> {
 
 pub(super) fn ctx_with<M: Mode>(memory: &Arc<MemoryHost>) -> Ctx<M> {
     Ctx::new(Arc::new(Control::new(Limits::default())), host(memory))
+}
+
+/// 標準入力のハンドルを開き、文字列を1回読んで (`line` なら1行、でなければ残りすべて)、閉じる。
+pub(super) fn stdin_read<M: Mode>(ctx: &mut Ctx<M>, line: bool) -> Result<Word, Fault> {
+    let h = ctx.handle_open(Handle::Stdin)?;
+    let read = if line {
+        ReadAmount::Line
+    } else {
+        ReadAmount::All
+    };
+    let r = unsafe { ctx.handle_read(h, Handle::Stdin, read, Form::Text) };
+    unsafe { ctx.handle_close(h, Handle::Stdin) }.unwrap();
+    r
 }
 
 /// エフェクト 0、操作1つの evidence を作る。外側の evv は空である。

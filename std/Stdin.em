@@ -1,12 +1,29 @@
--- 標準入力を読む標準モジュール (docs/spec/stdlib.md)。どの関数も、読む前に標準出力を書き出す。
+-- 標準入力のハンドル (docs/spec/stdlib.md の「`Stdin`」)。
 import String
+import Bytes
 
-pub extern read_all : Unit -> <IO> String
--- 行の終わりを含む1行で、終わりなら空の文字列である
-extern read_line_raw : Unit -> <IO> String
+pub extern data Stdin
+pub extern open : Unit -> <IO, Panic> Stdin
+pub extern close : Stdin -> <IO> Unit
+pub extern read_chunk : Bytes -> Stdin -> <IO> (Bytes, Stdin)
+pub extern read_all_bytes : Stdin -> <IO> (Bytes, Stdin)
+pub extern read_all : Stdin -> <IO> (String, Stdin)
+-- 行の終わりを含む1行で、終わりなら空である
+extern read_line_bytes_raw : Stdin -> <IO> (Bytes, Stdin)
+extern read_line_raw : Stdin -> <IO> (String, Stdin)
 
--- 行の終わり (`\n` か `\r\n`) を除いた1行で、終わりなら `None` である
-pub read_line : Unit -> <IO, Panic> Option String
-read_line () =
-  let line = read_line_raw ()
-  if String.byte_length line == 0 then None else Some (String.trim_line_end line)
+pub read_text : Unit -> <IO, Panic> String
+read_text () =
+  let (text, h) = read_all (open ())
+  close h
+  text
+
+pub read_line : Stdin -> <IO, Panic> (Option String, Stdin)
+read_line h =
+  let (line, h) = read_line_raw h
+  if String.byte_length line == 0 then (None, h) else (Some (String.trim_line_end line), h)
+
+pub read_line_bytes : Stdin -> <IO, Panic> (Option Bytes, Stdin)
+read_line_bytes h =
+  let (line, h) = read_line_bytes_raw h
+  if Bytes.length line == 0 then (None, h) else (Some (Bytes.trim_line_end line), h)

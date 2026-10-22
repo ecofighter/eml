@@ -821,13 +821,14 @@ LIR を実行する [VM](vm.md) と後のネイティブのコードは、次の
 - バイト列の範囲が外のとき (`bytes slice <start>..<end> is out of range for length <len>`。`Bytes.slice`、`append_slice`、`truncate` で、`truncate n` の範囲は `0..n`)、バイト列の位置が外のとき (`bytes index <index> is out of range for length <len>`。`Bytes.get`、`set` の位置と、`Bytes.find_from` と `find_byte_from` の開始位置)、`Bytes.make` の長さが負のとき (`bytes length <len> is negative`) ([標準ライブラリ](stdlib.md) の「`Bytes`」)
 - `String.decode` に渡したバイト列が UTF-8 として妥当でないとき (`invalid UTF-8 at byte <at>`。`at` は最初の妥当でないバイトの位置) ([標準ライブラリ](stdlib.md) の「`String`」の「`Bytes` との変換」)
 - 配列の添字が範囲の外のとき (`array index <index> is out of range for length <len>`) と、`make` の長さが負のとき (`array length <len> is negative`)
+- 標準のストリームのハンドルが生きている間に、同じストリームをもう一度 `open` したとき (`the standard input is already open`、`the standard output is already open`、`the standard error is already open`) ([標準ライブラリ](stdlib.md) の「ハンドル」)
 - `println` と `eprintln` が書けないとき (``cannot write the output: <e>``)。`e` は書き込みの誤りの `io::Error` の文言である
 - 実行を止めたとき。割り込み (`interrupted`)、確保量の上限 (`the memory limit is exceeded`)、深さの上限 (`the call depth limit is exceeded`) である ([オブジェクトモデル](object-model.md) の「実行の制御」)
 - 検査モード (`eml run --debug-heap`) のヒープの誤り。解放済みの物体の使用 (`use of a freed object`)、`lin` ビットの立った物体の `dup` (`a Lin object is shared`)、終わりに残った物体 (リーク) などである ([オブジェクトモデル](object-model.md) の「報告する誤り」)。どれもコンパイラの誤りでしか起きない。速いモードはこれらを確かめない ([オブジェクトモデル](object-model.md) の「受け入れる制約」)
 - 内部の誤り (`internal error: …`)。verifier を通った IR では起きないはずの形を、VM の見張りが見つけたときである ([VM](vm.md) の「誤り、止めること、終わり」)
 - 利用者の `panic s` を捕まえる `try_panic` がないとき (`panicked: <s>`)
 
-`try_io` の中で起きた I/O の失敗の一部は、実行時エラーにせず `try_io` に届ける。オーバーフロー、ゼロ除算、`Float` の変換と `to_fixed` の誤り、`Char.of_int` の誤り、妥当でない UTF-8 のバイト列、範囲の外の位置は `Panic` で、`try_panic` の中で起きたら実行時エラーにせず `try_panic` に届ける ([VM](vm.md) の「`IO` と `Panic` への中断」)。上の一覧の文言は、捕まえる `try_io` か `try_panic` がないときの表示で、`try_panic` が返す `Err` の文言でもある。
+`try_io` の中で起きた I/O の失敗の一部は、実行時エラーにせず `try_io` に届ける。オーバーフロー、ゼロ除算、`Float` の変換と `to_fixed` の誤り、`Char.of_int` の誤り、妥当でない UTF-8 のバイト列、範囲の外の位置、標準のストリームの2つ目の `open` は `Panic` で、`try_panic` の中で起きたら実行時エラーにせず `try_panic` に届ける ([VM](vm.md) の「`IO` と `Panic` への中断」)。上の一覧の文言は、捕まえる `try_io` か `try_panic` がないときの表示で、`try_panic` が返す `Err` の文言でもある。
 
 extern の実装は、VM と後のネイティブのコードが使う `eml_rt` にある ([オブジェクトモデル](object-model.md) の「extern」)。誤りの文言は `eml_rt` のもので、上の一覧と1文字も違わない。
 

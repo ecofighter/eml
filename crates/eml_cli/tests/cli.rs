@@ -443,8 +443,11 @@ fn a_script_reads_the_standard_input_and_writes_the_standard_error() {
 main : Unit -> <IO, Panic> Unit
 main () =
   eprintln \"to stderr\"
-  println (show (Stdin.read_line ()))
-  println (Stdin.read_all ())
+  let (line, h) = Stdin.read_line (Stdin.open ())
+  println (show line)
+  let (rest, h) = Stdin.read_all h
+  Stdin.close h
+  println rest
 ";
     let dir = temp_project("cli-stdin", &[("main.em", text)]);
     let mut child = Command::new(env!("CARGO_BIN_EXE_eml"))
@@ -623,7 +626,9 @@ fn repeated_interrupts_end_a_program_waiting_for_the_standard_input_with_130() {
 main : Unit -> <IO, Panic> Unit
 main () =
   eprintln \"ready\"
-  println (show (Stdin.read_line ()))
+  let (line, h) = Stdin.read_line (Stdin.open ())
+  Stdin.close h
+  println (show line)
 ";
     let dir = temp_project("cli-sigint-stdin", &[("main.em", text)]);
     let deadline = Instant::now() + DEADLINE;

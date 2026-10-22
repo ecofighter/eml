@@ -48,10 +48,10 @@ format shown c name =
     | None -> fields
   String.join " " named
 
-read_input : String -> <IO> Result IOError String
+read_input : String -> <IO, Panic> Result IOError String
 read_input name =
   use try_io
-  if name == "-" then Stdin.read_all ()
+  if name == "-" then Stdin.read_text ()
   else
     let f = Fs.open name
     let (text, f) = Fs.read_all f

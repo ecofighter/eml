@@ -71,8 +71,8 @@ try_io action =
 | `Fault` | 起こす関数 | `kind` |
 |---|---|---|
 | `Io { reason, .. }` | `Fs.open`、`Fs.read_all`、`Fs.read_line`、`Fs.read_text`、`Fs.read_all_bytes`、`Fs.read_line_bytes`、`Fs.read_chunk`、`Fs.write_text`、`Proc.run` | `reason` が `NotFound` なら `NotFound`、`PermissionDenied` なら `PermissionDenied`、`NotAvailable` なら `NotAvailable`、`Other` なら `Other` |
-| `Stdin(reason)` | `Stdin.read_all`、`Stdin.read_line` | 同上 |
-| `NotUtf8(_)` | `Fs.read_all`、`Fs.read_line`、`Fs.read_text`、`Stdin.read_all`、`Stdin.read_line`、`Env.args`、`Env.get` | `NotUtf8` |
+| `Stdin(reason)` | `Stdin.read_text` と、`Stdin` のハンドルの読み (`read_all`、`read_line`、`read_all_bytes`、`read_line_bytes`、`read_chunk`) | 同上 |
+| `NotUtf8(_)` | `Fs.read_all`、`Fs.read_line`、`Fs.read_text`、`Stdin.read_text`、`Stdin.read_all`、`Stdin.read_line`、`Env.args`、`Env.get` | `NotUtf8` |
 
 書き出しの失敗 (`Output`) を捕まえないのは、標準出力をまとめて書くためである ([オブジェクトモデル](object-model.md) の「Host」)。書けなかったことが分かるのは、後でバッファがあふれた `println` か、読みや起動の前の書き出しか、プログラムの終わりの書き出しになる。そのため、`try_io (fn () -> println s)` は書けなくても `Ok` を返しうるし、関係のない別の `try_io` が失敗を受け取りうる。どこで捕まるかが決まらないので、実行時エラーのままにする。
 
@@ -106,6 +106,7 @@ try_panic action =
 |---|---|
 | `Arith(_)` | `+`、`-`、`*`、`/`、`%`、単項の `-`。`Float.truncate`、`Float.floor`、`Float.ceil`、`Float.round` (`Int` に収まらない値)、`Float.to_fixed` (桁数)、`Char.of_int` (スカラー値でない値)、`Byte.of_int` (0 から 255 の外の値) |
 | `Utf8(_)` | `String.decode` と、それを使う std の関数 |
+| `InUse(_)` | `Stdin.open` (標準入力のハンドルが生きている間の2つ目の `open`) と、それを使う `Stdin.read_text` (下の「ハンドル」) |
 | `Index(_)` | `String.byte_at`、`String.slice`、`String.find_from` と、それらを使う std の関数。`Array.get`、`Array.set`、`Array.make`、`MutArray.read`、`MutArray.write`、`MutArray.make` (添字の範囲と負の長さ) と、添字の式が使う `check_index`。`Env.arg` の範囲の外の位置も `Index` だが、`Env.arg` は std の中だけで使うので、利用者のプログラムでは起きない |
 
 ## `exit`
@@ -350,17 +351,60 @@ pub while : (Unit -> <e> Bool) -> (Unit -> <e> Unit) -> <e> Unit
 - `get name` は環境変数の値である。設定されていなければ `None`、空の値なら `Some ""` を返す。空の名前と、`=` か NUL を含む名前は、設定されていないとみなす
 - UTF-8 でない引数や値は、読んだときに実行時エラーにする
 
+## ハンドル
+
+`Stdin.Stdin` と `Fs.File` は、読むためのハンドルである。
+
+- ハンドルは線形な型 (`Lin`) で、ちょうど1回使う ([線形性](linearity.md))。`close h` は `drop h` と同じで、ハンドルを手放して閉じる
+- 読む関数はハンドルを借りて読み、結果を先に、同じハンドルを後に置いた組で返す。`Stdin` と `File` は同じ名前と同じ形の読む関数を持つ (下の「`Stdin`」と「`Fs`」)
+- 読めるハンドルの上の汎用のコードは、読む関数を引数で渡して書く。`count_lines Stdin.read_line h 0` も `count_lines Fs.read_line f 0` も、直接書いたループと同じ費用で動く
+
+  ```haskell
+  count_lines : (h -> <IO, Panic> (Option String, h)) -> h -> Int -> <IO, Panic> (Int, h)
+  count_lines read h n =
+    match read h with
+      | (None, h) -> (n, h)
+      | (Some _, h) -> count_lines read h (n + 1)
+  ```
+
+- 標準入力のハンドルは `Stdin.open ()` で開く。生きている標準入力のハンドルは高々1つで、生きている間の2つ目の `open` は `Panic` (`the standard input is already open`) になる。閉じた後は、また開ける。標準入力の持ち主はいつも1人なので、読む順はプログラムの順である
+- 標準入力のハンドルは、標準入力の読み手 (64 KiB の buffer) を持つ。開くときに Host から読み手を取り、閉じるときに buffer に残ったバイトごと Host に返す。そのため、次に開いたハンドルは続きから読み、`Stdin.read_text ()` のように開いて閉じる関数を続けて呼んでも、読んでいない入力は失われない
+- 標準入力を持たない Host (REPL) でも `open` は通り、読みが I/O の失敗 (`cannot read the standard input: not available`) になる。この Host の標準入力のハンドルは読み手を持たないので、2つ開いても `Panic` にならない
+- ハンドルを持ったまま中断 (`try_io`、`try_panic`、`never` の操作) で巻き戻ると、巻き戻しがハンドルを手放して閉じる。読みの誤りでも、読みの extern はハンドルを手放さない。`try_io` の下では巻き戻しが手放し、実行時エラーなら実行がそこで止まる
+- 標準入力の読みは、読み手の buffer を補充する前ごとに標準出力を書き出す。行の途中の補充と、buffer が空の `read_chunk` も同じである。buffer から読むときは書き出さない。`read_all` と `read_all_bytes` は、最初の補充の前に1回書き出す。入力を pipe で先読みしたとき、buffer にある2つの行の間に書いたプロンプトは、次の補充かプログラムの終わりまで出ない (C と同じ。[オブジェクトモデル](object-model.md) の「読み手」)
+
+失敗と届け方は次のとおりである。文言は [LIR](lir.md) の「実行時エラー」にある。
+
+| 操作 | 失敗 | 届け方 |
+|---|---|---|
+| `Stdin.open` | 標準入力のハンドルが生きている (`InUse`) | `Panic` (`try_panic`) |
+| `close` | なし | — |
+| `Stdin` の読み | 読めない (`Stdin(reason)`)。標準入力がなければ理由は `not available` | `IO` (`try_io`) |
+| `File` の読み | 読めない (`Io { op: Read, .. }`) | `IO` |
+| 文字列の読み | UTF-8 でない (`NotUtf8`)。バイト列の読みはこれで失敗しない | `IO` (`kind` は `NotUtf8`) |
+| どの読みも | 割り込み、確保量の上限 | 位置を付けた実行時エラー |
+| どの操作も | 検査モードのヒープの誤り | 実行時エラー |
+
 ## `Stdin`
 
 | 関数 | 型 |
 |---|---|
-| `read_all` | `Unit -> <IO> String` |
-| `read_line` | `Unit -> <IO, Panic> Option String` |
+| `open` | `Unit -> <IO, Panic> Stdin` |
+| `close` | `Stdin -> <IO> Unit` |
+| `read_text` | `Unit -> <IO, Panic> String` |
+| `read_all` | `Stdin -> <IO> (String, Stdin)` |
+| `read_line` | `Stdin -> <IO, Panic> (Option String, Stdin)` |
+| `read_all_bytes` | `Stdin -> <IO> (Bytes, Stdin)` |
+| `read_line_bytes` | `Stdin -> <IO, Panic> (Option Bytes, Stdin)` |
+| `read_chunk` | `Bytes -> Stdin -> <IO> (Bytes, Stdin)` |
 
-- `read_all ()` は、標準入力の残りをすべて読む
-- `read_line ()` は1行を読み、行の終わり (`\n` か `\r\n`) を `String.trim_line_end` で除いて返す。EOF なら `None` を返す。行の終わりのない最後の行も1行として返す
-- 読みは `Fs.read_all` と同じく、64 KiB ずつ読みながら割り込みと確保量の上限を見る。読み手は 64 KiB の buffer を持ち、buffer を補充する前ごとに標準出力を書き出す。buffer から読むときは書き出さないので、入力を pipe で先読みしたとき、buffer にある2つの行の間に書いたプロンプトは、次の補充かプログラムの終わりまで出ない (C と同じ。[オブジェクトモデル](object-model.md) の「読み手」)。UTF-8 でない入力は実行時エラーにする
-- REPL では、標準入力を REPL 自身が読むので、どちらも I/O の失敗 (`cannot read the standard input: not available`) にする
+`Stdin` は標準入力のハンドルの型である (上の「ハンドル」)。
+
+- `read_text ()` は、ハンドルを開いて標準入力の残りをすべて読み、閉じる。`open`、`read_all`、`close` で書いた関数である
+- 読む関数は、同じ名前の `Fs` の関数と同じ意味である (下の「`Fs`」)。`read_all` は残りをすべて読み、`read_line` は1行を読んで行の終わり (`\n` か `\r\n`) を `String.trim_line_end` で除き、終わりなら `None` を返す。行の終わりのない最後の行も1行として返す。`read_all_bytes`、`read_line_bytes`、`read_chunk` はバイト列の読みで、どのバイトも受ける
+- `read_line` と `read_line_bytes` は、std の中だけの extern `read_line_raw` と `read_line_bytes_raw` の上に書いてある。どちらも行の終わりを含む1行を返し、終わりなら空を返す (上の「extern の境界」の番兵)
+- 読みは `Fs` と同じく、64 KiB ずつ読みながら割り込みと確保量の上限を見る
+- REPL では、標準入力を REPL 自身が読むので、どの読みも I/O の失敗 (`cannot read the standard input: not available`) にする
 
 ## `Fs`
 
@@ -517,7 +561,7 @@ pub data Iter <e> a = | Iter (once Unit -> <e> Option (a, Iter <e> a))
 
 標準ライブラリの extern の誤りの文言は次のとおりである。I/O の失敗の理由は `not found`、`permission denied`、`not available`、`I/O error` のどれかである。位置は extern を呼んだ所で、標準ライブラリの関数の中の extern なら `<std>/…` の位置になる。
 
-I/O の失敗の一部は `try_io` で捕まえられる (上の「`try_io`」)。`byte_at` と `slice` の誤りと、`Bytes` の範囲の誤りと、`decode` の妥当でない UTF-8 と、`Std.Float` の変換と `to_fixed` の誤りと、配列の添字と長さの誤りは `Panic` で、`try_panic` で捕まえられる (上の「`try_panic`」)。捕まえなかった失敗は、この表の文言の実行時エラーになる。
+I/O の失敗の一部は `try_io` で捕まえられる (上の「`try_io`」)。`byte_at` と `slice` の誤りと、`Bytes` の範囲の誤りと、`decode` の妥当でない UTF-8 と、`Std.Float` の変換と `to_fixed` の誤りと、配列の添字と長さの誤りと、標準入力の2つ目のハンドルは `Panic` で、`try_panic` で捕まえられる (上の「`try_panic`」)。捕まえなかった失敗は、この表の文言の実行時エラーになる。
 
 | 失敗 | 文言 |
 |---|---|
@@ -536,6 +580,7 @@ I/O の失敗の一部は `try_io` で捕まえられる (上の「`try_io`」)�
 | 配列の負の長さ (`make`、`tabulate`) | ``array length -1 is negative`` |
 | `Fs.write_text` | ``cannot write `out.txt`: permission denied`` |
 | `Proc.run` の起動 | ``cannot run `rsync`: not found`` |
+| 標準入力の2つ目のハンドル | ``the standard input is already open`` |
 | 標準入力の読み | ``cannot read the standard input: not available`` |
 | UTF-8 でない標準入力 | ``the standard input is not valid UTF-8`` |
 | UTF-8 でない引数 | ``argument 2 is not valid UTF-8`` (`Env.args ()` のリストの 0 から数えた位置) |

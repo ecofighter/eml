@@ -1128,9 +1128,9 @@ fn unwind_points() {
     tree_map: 20
     upsert: 23
     upsert_by_hand: 23
-    scripts/wc: 44
-    scripts/grep: 59
-    scripts/logstat: 98
+    scripts/wc: 46
+    scripts/grep: 61
+    scripts/logstat: 102
     scripts/csv2jsonl: 109
     scripts/deploy: 109
     ");

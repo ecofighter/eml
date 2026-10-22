@@ -135,11 +135,12 @@ const TRUSTED: &[(&str, &str)] = &[
     ("host.rs: external_body fill", "T11"),
     ("host.rs: external_body consume", "T11"),
     ("host.rs: external_body read_text", "T11"),
+    ("host.rs: external_body StdinHandle", "T11"),
+    ("host.rs: external_body open_stdin", "T11"),
     ("host.rs: external_body host_arg_count", "T11"),
     ("host.rs: external_body host_arg", "T11"),
     ("host.rs: external_body host_env_has", "T11"),
     ("host.rs: external_body host_env_var", "T11"),
-    ("host.rs: external_body host_read_stdin", "T11"),
     ("host.rs: external_body host_write_file", "T11"),
     ("host.rs: external_body host_run", "T11"),
     ("externs.rs: external_body float_add", "T12"),
@@ -174,6 +175,7 @@ const TRUSTED: &[(&str, &str)] = &[
     ("heap/walk.rs: Drop for Heap", "T4"),
     ("frozen.rs: Drop for Frozen", "T4"),
     ("host.rs: Drop for HostRef", "T4"),
+    ("host.rs: Drop for StdinHandle", "T4"),
 ];
 
 /// `verus!` の外でも書いてよい `unsafe` の始まり。`Send` と `Sync` の宣言と、検証した関数を呼ぶだけの `Drop` である。

@@ -1084,7 +1084,12 @@ fn arithmetic(ext: Extern, dst: Slot, args: &[Slot]) -> Option<Op> {
         | Extern::EnvArg
         | Extern::EnvHas
         | Extern::EnvLookup
+        | Extern::StdinOpen
+        | Extern::StdinClose
+        | Extern::StdinReadChunk
+        | Extern::StdinReadAllBytes
         | Extern::StdinReadAll
+        | Extern::StdinReadLineBytes
         | Extern::StdinReadLine
         | Extern::WriteText
         | Extern::ProcStatus

@@ -1,0 +1,10 @@
+---
+source: crates/eml_cli/tests/ui.rs
+expression: "format!(\"--- stdout ---\\n{stdout}--- stderr ---\\n{diagnostics}{stderr}--- runtime error ---\\n{error}\\n{written}\")"
+input_file: tests/ui/run-fail/io/stdin_opened_twice.em
+---
+--- stdout ---
+--- stderr ---
+--- runtime error ---
+the standard input is already open
+  at run-fail/io/stdin_opened_twice.em:4:11

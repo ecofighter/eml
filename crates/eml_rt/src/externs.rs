@@ -80,6 +80,16 @@ pub enum IoReason {
 pub enum Handle {
     /// `Std.Fs.File`。
     File,
+    /// `Std.Stdin.Stdin`。
+    Stdin,
+}
+
+/// 標準のストリーム。ストリームごとに、生きているハンドルは高々1つである (docs/spec/stdlib.md の「ハンドル」)。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StdStream {
+    Stdin,
+    Stdout,
+    Stderr,
 }
 
 /// `Ctx::handle_read` がハンドルから読む量。
@@ -155,6 +165,8 @@ pub enum Fault {
     Index(Box<IndexFault>),
     /// 読む途中か子を待つ間に、止める語か確保量の上限に当たった。
     Stopped(Stop),
+    /// 標準のストリームのハンドルが、すでに開いている。
+    InUse(StdStream),
 }
 
 impl Fault {
@@ -170,16 +182,18 @@ impl Fault {
             | Fault::Output(_)
             | Fault::Utf8 { at: _ }
             | Fault::Index(_)
-            | Fault::Stopped(_) => None,
+            | Fault::Stopped(_)
+            | Fault::InUse(_) => None,
         }
     }
 
-    /// `try_panic` が捕まえる誤りか。値と入力で決まる誤り (算術、妥当でない UTF-8、範囲の外の位置) だけを `Panic` にする。ヒープの誤り、
+    /// `try_panic` が捕まえる誤りか。値と入力で決まる誤り (算術、妥当でない UTF-8、範囲の外の位置) と、開いている標準の
+    /// ストリームの2つ目の `open` だけを `Panic` にする。ヒープの誤り、
     /// 書き出しの誤り、止めたことは、どの呼び出しでも起きうるか起きた位置が決まらないので、型に出さない停止のままにする
     /// (docs/spec/stdlib.md の「`try_panic`」)。
     pub fn panics(&self) -> bool {
         match self {
-            Fault::Arith(_) | Fault::Utf8 { at: _ } | Fault::Index(_) => true,
+            Fault::Arith(_) | Fault::Utf8 { at: _ } | Fault::Index(_) | Fault::InUse(_) => true,
             Fault::Heap(_)
             | Fault::Output(_)
             | Fault::Io { op: _, name: _, reason: _ }
@@ -1261,6 +1275,15 @@ impl fmt::Display for Fault {
                 IndexFault::BytesLength { len } => write!(f, "bytes length {len} is negative"),
             },
             Fault::Stopped(s) => write!(f, "{s}"),
+            Fault::InUse(stream) => write!(
+                f,
+                "the standard {} is already open",
+                match stream {
+                    StdStream::Stdin => "input",
+                    StdStream::Stdout => "output",
+                    StdStream::Stderr => "error",
+                }
+            ),
         }
     }
 }

@@ -5,7 +5,7 @@ use std::ffi::OsString;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use super::ctx::ctx_with;
+use super::ctx::{ctx_with, stdin_read};
 use super::host::{MemoryFile, MemoryHost};
 use super::mortal;
 use super::string::text;
@@ -111,17 +111,17 @@ fn the_standard_input_is_read_by_lines_or_whole<M: Mode>() {
     }));
     let mut ctx = ctx_with::<M>(&memory);
     for expected in ["one\r\n", "two\n", "three", ""] {
-        let w = ctx.stdin_read(true).unwrap();
+        let w = stdin_read(&mut ctx, true).unwrap();
         assert_eq!(text(ctx.heap(), w), expected);
         unsafe { ctx.heap_mut().decref(w) }.unwrap();
     }
     let memory = Arc::new(MemoryHost::default().with_stdin(MemoryFile::text("a\nb\n")));
     let mut ctx2 = ctx_with::<M>(&memory);
-    let w = ctx2.stdin_read(true).unwrap();
+    let w = stdin_read(&mut ctx2, true).unwrap();
     assert_eq!(text(ctx2.heap(), w), "a\n");
     unsafe { ctx2.heap_mut().decref(w) }.unwrap();
     // 行の後の残りをすべて読む
-    let w = ctx2.stdin_read(false).unwrap();
+    let w = stdin_read(&mut ctx2, false).unwrap();
     assert_eq!(text(ctx2.heap(), w), "b\n");
     unsafe { ctx2.heap_mut().decref(w) }.unwrap();
     assert_eq!(mortal(ctx.heap()), 0);
@@ -134,10 +134,10 @@ fn a_long_line_is_read_across_chunks<M: Mode>() {
     let memory =
         Arc::new(MemoryHost::default().with_stdin(MemoryFile::text(&format!("{line}\nrest"))));
     let mut ctx = ctx_with::<M>(&memory);
-    let w = ctx.stdin_read(true).unwrap();
+    let w = stdin_read(&mut ctx, true).unwrap();
     assert_eq!(text(ctx.heap(), w), format!("{line}\n"));
     unsafe { ctx.heap_mut().decref(w) }.unwrap();
-    let w = ctx.stdin_read(true).unwrap();
+    let w = stdin_read(&mut ctx, true).unwrap();
     assert_eq!(text(ctx.heap(), w), "rest");
     unsafe { ctx.heap_mut().decref(w) }.unwrap();
     assert_eq!(mortal(ctx.heap()), 0);
@@ -146,7 +146,7 @@ fn a_long_line_is_read_across_chunks<M: Mode>() {
 fn the_standard_input_can_be_unavailable_or_not_utf8<M: Mode>() {
     let mut ctx = ctx_with::<M>(&Arc::new(MemoryHost::default()));
     assert_eq!(
-        ctx.stdin_read(false),
+        stdin_read(&mut ctx, false),
         Err(Fault::Stdin(IoReason::NotAvailable))
     );
     let memory = Arc::new(MemoryHost::default().with_stdin(MemoryFile {
@@ -155,7 +155,7 @@ fn the_standard_input_can_be_unavailable_or_not_utf8<M: Mode>() {
     }));
     let mut ctx = ctx_with::<M>(&memory);
     assert_eq!(
-        ctx.stdin_read(true),
+        stdin_read(&mut ctx, true),
         Err(Fault::NotUtf8(Box::new(Utf8Source::Stdin)))
     );
     let memory = Arc::new(MemoryHost::default().with_stdin(MemoryFile {
@@ -163,7 +163,10 @@ fn the_standard_input_can_be_unavailable_or_not_utf8<M: Mode>() {
         ..MemoryFile::text("x")
     }));
     let mut ctx = ctx_with::<M>(&memory);
-    assert_eq!(ctx.stdin_read(true), Err(Fault::Stdin(IoReason::Other)));
+    assert_eq!(
+        stdin_read(&mut ctx, true),
+        Err(Fault::Stdin(IoReason::Other))
+    );
 }
 
 /// 止める語が立った後の `Interrupted` で、行の読みも止まる。止める語の立っていない `Interrupted` は読み直す。
@@ -174,13 +177,16 @@ fn a_read_of_the_standard_input_stops_on_an_interrupt<M: Mode>() {
         ..MemoryFile::text("abc\n")
     }));
     let mut ctx = Ctx::<M>::new(control.clone(), super::host::host(&memory));
-    assert_eq!(ctx.stdin_read(true), Err(Fault::Stopped(Stop::Interrupted)));
+    assert_eq!(
+        stdin_read(&mut ctx, true),
+        Err(Fault::Stopped(Stop::Interrupted))
+    );
     let memory = Arc::new(MemoryHost::default().with_stdin(MemoryFile {
         interrupt_once: true,
         ..MemoryFile::text("abc\n")
     }));
     let mut ctx = ctx_with::<M>(&memory);
-    let w = ctx.stdin_read(true).unwrap();
+    let w = stdin_read(&mut ctx, true).unwrap();
     assert_eq!(text(ctx.heap(), w), "abc\n");
     unsafe { ctx.heap_mut().decref(w) }.unwrap();
 }
@@ -189,7 +195,7 @@ fn a_read_of_the_standard_input_stops_on_an_interrupt<M: Mode>() {
 fn the_output_is_flushed_before_the_standard_input_is_read<M: Mode>() {
     let memory = Arc::new(MemoryHost::default().with_stdin(MemoryFile::text("")));
     let mut ctx = ctx_with::<M>(&memory);
-    let w = ctx.stdin_read(false).unwrap();
+    let w = stdin_read(&mut ctx, false).unwrap();
     unsafe { ctx.heap_mut().decref(w) }.unwrap();
     assert_eq!(memory.flushes(), 1);
 }
@@ -207,7 +213,7 @@ fn a_line_read_refills_once_per_64_kib<M: Mode>() {
     let mut ctx = ctx_with::<M>(&memory);
     let mut lines = 0;
     loop {
-        let w = ctx.stdin_read(true).unwrap();
+        let w = stdin_read(&mut ctx, true).unwrap();
         let read = text(ctx.heap(), w).to_string();
         unsafe { ctx.heap_mut().decref(w) }.unwrap();
         if read.is_empty() {
@@ -228,8 +234,11 @@ fn a_failed_stdin_read_leaves_the_reader_in_the_slot<M: Mode>() {
         ..MemoryFile::text("a\n")
     }));
     let mut ctx = ctx_with::<M>(&memory);
-    assert_eq!(ctx.stdin_read(true), Err(Fault::Stdin(IoReason::Other)));
-    let w = ctx.stdin_read(true).unwrap();
+    assert_eq!(
+        stdin_read(&mut ctx, true),
+        Err(Fault::Stdin(IoReason::Other))
+    );
+    let w = stdin_read(&mut ctx, true).unwrap();
     assert_eq!(text(ctx.heap(), w), "a\n");
     unsafe { ctx.heap_mut().decref(w) }.unwrap();
 
@@ -237,9 +246,12 @@ fn a_failed_stdin_read_leaves_the_reader_in_the_slot<M: Mode>() {
     let memory = Arc::new(MemoryHost::default().with_stdin(MemoryFile::text("b\n")));
     let mut ctx = Ctx::<M>::new(control.clone(), super::host::host(&memory));
     control.interrupt();
-    assert_eq!(ctx.stdin_read(true), Err(Fault::Stopped(Stop::Interrupted)));
+    assert_eq!(
+        stdin_read(&mut ctx, true),
+        Err(Fault::Stopped(Stop::Interrupted))
+    );
     control.clear();
-    let w = ctx.stdin_read(true).unwrap();
+    let w = stdin_read(&mut ctx, true).unwrap();
     assert_eq!(text(ctx.heap(), w), "b\n");
     unsafe { ctx.heap_mut().decref(w) }.unwrap();
 
@@ -249,10 +261,10 @@ fn a_failed_stdin_read_leaves_the_reader_in_the_slot<M: Mode>() {
     }));
     let mut ctx = ctx_with::<M>(&memory);
     assert_eq!(
-        ctx.stdin_read(true),
+        stdin_read(&mut ctx, true),
         Err(Fault::NotUtf8(Box::new(Utf8Source::Stdin)))
     );
-    let w = ctx.stdin_read(true).unwrap();
+    let w = stdin_read(&mut ctx, true).unwrap();
     assert_eq!(text(ctx.heap(), w), "ok\n");
     unsafe { ctx.heap_mut().decref(w) }.unwrap();
     assert_eq!(mortal(ctx.heap()), 0);

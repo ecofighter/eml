@@ -1,4 +1,4 @@
-//! スクリプトの extern (docs/spec/object-model.md の「extern」)。引数、環境変数、標準入力、ファイルの書き込み、子の
+//! スクリプトの extern (docs/spec/object-model.md の「extern」)。引数、環境変数、ファイルの書き込み、子の
 //! プロセスを Host を通して扱う。何が読めて何が起きたかは約束せず (信頼の一覧の T11)、引数と結果の所有と RC の増減を
 //! 証明する。
 
@@ -7,8 +7,7 @@ use super::proof::*;
 use super::*;
 use crate::externs::{FALSE, Fault, TRUE};
 use crate::host::{
-    host_arg, host_arg_count, host_env_has, host_env_var, host_read_stdin, host_run,
-    host_write_file,
+    host_arg, host_arg_count, host_env_has, host_env_var, host_run, host_write_file,
 };
 
 verus! {
@@ -40,29 +39,6 @@ impl<M: Mode> Ctx<M> {
             }),
     {
         match host_arg(&self.host, i) {
-            Ok(text) => Ok(self.fresh_string(text.as_str())),
-            Err(e) => Err(e),
-        }
-    }
-
-    /// `Stdin.read_all` と `Stdin.read_line_raw`。標準出力を書き出してから標準入力を読み、読んだ文字列を作る。`line` なら
-    /// 次の `\n` まで (それを含めて) 読み、終わりなら空の文字列である。
-    pub fn stdin_read(&mut self, line: bool) -> (r: Result<Word, Fault>)
-        requires
-            old(self).wf(),
-        ensures
-            final(self).wf(),
-            final(self).evv_spec() == old(self).evv_spec(),
-            final(self).yield_spec() == old(self).yield_spec(),
-            r is Err ==> *final(self) == *old(self),
-            r matches Ok(w) ==> final(self).is_string(w),
-            r matches Ok(w) ==> (old(self).held_ok() ==> {
-                &&& final(self).held_ok()
-                &&& final(self).holds(w)
-                &&& final(self).evolved_by(*old(self), |x: usize| 0int, Set::empty())
-            }),
-    {
-        match host_read_stdin(&self.host, &self.control, line) {
             Ok(text) => Ok(self.fresh_string(text.as_str())),
             Err(e) => Err(e),
         }

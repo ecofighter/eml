@@ -927,7 +927,7 @@ fn a_borrowed_file_is_read_whole_and_closed<M: Mode>() {
         assert_eq!(super::raw::rc(f), 1);
         assert_eq!(read_borrowed(&mut ctx, f, ReadAmount::All).unwrap(), "");
         assert_eq!(drops.load(Ordering::Relaxed), 0);
-        ctx.fs_close(f).unwrap();
+        ctx.handle_close(f, Handle::File).unwrap();
         assert_eq!(drops.load(Ordering::Relaxed), 1);
     }
     assert_eq!(mortal(ctx.heap()), 0);
@@ -940,7 +940,7 @@ fn an_empty_borrowed_file_reads_as_an_empty_string<M: Mode>() {
     unsafe {
         let f = open(&mut ctx, "empty.txt");
         assert_eq!(read_borrowed(&mut ctx, f, ReadAmount::All).unwrap(), "");
-        ctx.fs_close(f).unwrap();
+        ctx.handle_close(f, Handle::File).unwrap();
     }
     assert_eq!(mortal(ctx.heap()), 0);
 }
@@ -961,7 +961,7 @@ fn a_long_unsized_borrowed_file_is_read_in_chunks<M: Mode>() {
     unsafe {
         let f = open(&mut ctx, "big.txt");
         assert_eq!(read_borrowed(&mut ctx, f, ReadAmount::All).unwrap(), body);
-        ctx.fs_close(f).unwrap();
+        ctx.handle_close(f, Handle::File).unwrap();
     }
     if M::CHECKED {
         assert_eq!(ctx.stats().string_bytes_copied, body.len() as u64);
@@ -983,7 +983,7 @@ fn an_interrupted_borrowed_read_is_retried<M: Mode>() {
     unsafe {
         let f = open(&mut ctx, "a.txt");
         assert_eq!(read_borrowed(&mut ctx, f, ReadAmount::All).unwrap(), "abc");
-        ctx.fs_close(f).unwrap();
+        ctx.handle_close(f, Handle::File).unwrap();
     }
     assert_eq!(mortal(ctx.heap()), 0);
 }
@@ -1024,7 +1024,7 @@ fn a_failed_borrowed_read_keeps_the_file<M: Mode>() {
         assert_eq!(super::raw::rc(f), 1);
         assert_eq!(mortal(ctx.heap()), objects);
         assert_eq!(drops.load(Ordering::Relaxed), 0);
-        ctx.fs_close(f).unwrap();
+        ctx.handle_close(f, Handle::File).unwrap();
         assert_eq!(drops.load(Ordering::Relaxed), 1);
         let f = open(&mut ctx, "bad.bin");
         assert_eq!(
@@ -1033,7 +1033,7 @@ fn a_failed_borrowed_read_keeps_the_file<M: Mode>() {
         );
         assert_eq!(super::raw::rc(f), 1);
         assert_eq!(drops.load(Ordering::Relaxed), 1);
-        ctx.fs_close(f).unwrap();
+        ctx.handle_close(f, Handle::File).unwrap();
         assert_eq!(drops.load(Ordering::Relaxed), 2);
     }
     assert_eq!(mortal(ctx.heap()), 0);
@@ -1056,7 +1056,7 @@ fn a_borrowed_read_stops_on_an_interrupt<M: Mode>() {
         assert_eq!(super::raw::rc(f), 1);
         control.clear();
         assert_eq!(read_borrowed(&mut ctx, f, ReadAmount::All).unwrap(), "abc");
-        ctx.fs_close(f).unwrap();
+        ctx.handle_close(f, Handle::File).unwrap();
     }
     assert_eq!(mortal(ctx.heap()), 0);
 }
@@ -1084,7 +1084,7 @@ fn an_interrupted_borrowed_read_stops_when_the_stop_word_is_set<M: Mode>() {
         );
         assert_eq!(super::raw::rc(f), 1);
         assert_eq!(drops.load(Ordering::Relaxed), 0);
-        ctx.fs_close(f).unwrap();
+        ctx.handle_close(f, Handle::File).unwrap();
     }
     assert_eq!(drops.load(Ordering::Relaxed), 1);
     assert_eq!(mortal(ctx.heap()), 0);
@@ -1136,7 +1136,7 @@ fn a_borrowed_read_past_the_memory_limit_stops<M: Mode>() {
                     );
                     assert_eq!(super::raw::rc(f), 1);
                 }
-                ctx.fs_close(f).unwrap();
+                ctx.handle_close(f, Handle::File).unwrap();
             }
         }
     }
@@ -1175,7 +1175,7 @@ fn a_borrowed_read_refuses_a_non_file_or_a_shared_file<M: Mode>() {
             }
             assert_eq!(mortal(ctx.heap()), objects);
             super::raw::set_rc(ctx.heap_mut(), f, 1);
-            ctx.fs_close(f).unwrap();
+            ctx.handle_close(f, Handle::File).unwrap();
         }
     }
     assert_eq!(mortal(ctx.heap()), 0);
@@ -1199,7 +1199,7 @@ fn a_borrowed_file_is_read_line_by_line<M: Mode>() {
             assert_eq!(read_borrowed(&mut ctx, f, ReadAmount::Line).unwrap(), "");
         }
         assert_eq!(super::raw::rc(f), 1);
-        ctx.fs_close(f).unwrap();
+        ctx.handle_close(f, Handle::File).unwrap();
     }
     assert_eq!(mortal(ctx.heap()), 0);
 }
@@ -1238,7 +1238,7 @@ fn a_failed_borrowed_line_read_keeps_the_file<M: Mode>() {
         );
         assert_eq!(super::raw::rc(f), 1);
         assert_eq!(drops.load(Ordering::Relaxed), 0);
-        ctx.fs_close(f).unwrap();
+        ctx.handle_close(f, Handle::File).unwrap();
         assert_eq!(drops.load(Ordering::Relaxed), 1);
         let f = open(&mut ctx, "bad.bin");
         assert_eq!(
@@ -1247,7 +1247,7 @@ fn a_failed_borrowed_line_read_keeps_the_file<M: Mode>() {
         );
         assert_eq!(super::raw::rc(f), 1);
         assert_eq!(drops.load(Ordering::Relaxed), 1);
-        ctx.fs_close(f).unwrap();
+        ctx.handle_close(f, Handle::File).unwrap();
         assert_eq!(drops.load(Ordering::Relaxed), 2);
     }
     assert_eq!(mortal(ctx.heap()), 0);
@@ -1294,7 +1294,7 @@ fn a_borrowed_file_is_read_whole_as_bytes<M: Mode>() {
             []
         );
         assert_eq!(super::raw::rc(f), 1);
-        ctx.fs_close(f).unwrap();
+        ctx.handle_close(f, Handle::File).unwrap();
     }
     assert_eq!(mortal(ctx.heap()), 0);
 }
@@ -1344,7 +1344,7 @@ fn a_borrowed_file_is_read_in_byte_lines<M: Mode>() {
             );
         }
         assert_eq!(super::raw::rc(f), 1);
-        ctx.fs_close(f).unwrap();
+        ctx.handle_close(f, Handle::File).unwrap();
     }
     assert_eq!(mortal(ctx.heap()), 0);
 }
@@ -1380,7 +1380,7 @@ fn a_failed_byte_line_read_releases_the_partial_line<M: Mode>() {
             })
         );
         assert_eq!(super::raw::rc(f), 1);
-        ctx.fs_close(f).unwrap();
+        ctx.handle_close(f, Handle::File).unwrap();
         assert_eq!(mortal(ctx.heap()), 0);
         // 補充の前の確かめで止まり、読み手のバイトは次の読みに残る
         let f = open(&mut ctx, "slow.txt");
@@ -1395,7 +1395,7 @@ fn a_failed_byte_line_read_releases_the_partial_line<M: Mode>() {
             read_bytes_borrowed(&mut ctx, f, ReadAmount::Line).unwrap(),
             b"abcdef\n"
         );
-        ctx.fs_close(f).unwrap();
+        ctx.handle_close(f, Handle::File).unwrap();
     }
     assert_eq!(mortal(ctx.heap()), 0);
 }
@@ -1441,7 +1441,7 @@ fn chunks_are_appended_to_the_given_bytes<M: Mode>() {
         assert_eq!(body(&ctx, y), b">abcdef");
         ctx.heap_mut().decref(y).unwrap();
         assert_eq!(super::raw::rc(f), 1);
-        ctx.fs_close(f).unwrap();
+        ctx.handle_close(f, Handle::File).unwrap();
     }
     assert_eq!(mortal(ctx.heap()), 0);
 }
@@ -1471,7 +1471,7 @@ fn a_failed_chunk_read_releases_the_bytes<M: Mode>() {
             })
         );
         assert_eq!(super::raw::rc(f), 1);
-        ctx.fs_close(f).unwrap();
+        ctx.handle_close(f, Handle::File).unwrap();
         assert_eq!(mortal(ctx.heap()), 0);
         if M::CHECKED {
             let f = open(&mut ctx, "a.txt");
@@ -1482,7 +1482,7 @@ fn a_failed_chunk_read_releases_the_bytes<M: Mode>() {
             );
             ctx.heap_mut().decref(not_bytes).unwrap();
             assert_eq!(read_borrowed(&mut ctx, f, ReadAmount::All).unwrap(), "ab");
-            ctx.fs_close(f).unwrap();
+            ctx.handle_close(f, Handle::File).unwrap();
         }
     }
     assert_eq!(mortal(ctx.heap()), 0);
@@ -1843,7 +1843,7 @@ unsafe fn call<M: Mode>(
                 if name.ends_with('2') && read.is_ok() {
                     read = read_borrowed(ctx, f, amount);
                 }
-                ctx.fs_close(f)?;
+                ctx.handle_close(f, Handle::File)?;
                 Outcome::Str(read?)
             }
             "Std.String.byte_length" => {

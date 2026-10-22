@@ -297,7 +297,8 @@ mod std_host {
         let line = host
             .stdin()
             .unwrap()
-            .with_reader(|r| r.fill_buf(&control, None).ok().map(<[u8]>::to_vec));
+            .take()
+            .map(|mut r| r.fill_buf(&control, None).ok().map(<[u8]>::to_vec));
         assert_eq!(line, Some(Some(b"x".to_vec())));
     }
 

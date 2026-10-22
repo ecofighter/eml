@@ -15,7 +15,7 @@ use std::sync::{Arc, Mutex, PoisonError};
 use vstd::prelude::*;
 
 use crate::control::{Control, Stop, stop_reason};
-use crate::externs::{Fault, Form, IndexFault, IoOp, IoReason, Utf8Source};
+use crate::externs::{Fault, Form, IndexFault, IoOp, IoReason, StdStream, Utf8Source};
 #[cfg(verus_only)]
 use vstd::utf8::valid_utf8;
 
@@ -95,10 +95,21 @@ pub struct StdinSlot {
     reader: Mutex<Option<Reader>>,
 }
 
+/// `Stdin.open` で開いた標準入力のハンドル。`Foreign` の物体の中身にする。開くときに Host の slot から読み手を取り、
+/// 落とすときに buffer に残ったバイトごと slot に返す (docs/spec/object-model.md の「読み手」)。`Drop` は lock を取る
+/// だけで、失敗せず I/O をしないので、どのスレッドで落としてもよい (docs/future/multicore.md)。
+#[verifier::external_body]
+pub(crate) struct StdinHandle {
+    /// 開いている間はいつも `Some` である。Host が標準入力を持たないときだけ `None` で、読みは `not available` で
+    /// 失敗する。
+    reader: Option<Reader>,
+    slot: Option<Arc<StdinSlot>>,
+}
+
 /// `src` の読み手の buffer に残ったバイトを返す。空なら1回補充してから返し、終わりなら空の slice を返す
 /// (`Reader::fill_buf`)。`host` があれば、補充の前にその Host の出力を書き出させる (標準入力の読み)。誤りは `src` の
-/// 名前を付けた `Fault` にする (`Source::fault`)。誤りの種類は `Source::fault` の実装で決まる。検証した `Ctx` の
-/// コードは、`foreign_unique` で借りたハンドルのままこれを呼ぶ。
+/// 名前を付けた `Fault` にする (`fault`)。検証した `Ctx` のコードは、`foreign_unique` で借りたハンドルのままこれを
+/// 呼ぶ。
 ///
 /// # Safety
 /// `src` は生きている `S` を指し、呼ぶ間ほかに参照がない。返す slice を読めるのは、次に `src` を使うか (`fill`、
@@ -113,11 +124,15 @@ pub(crate) unsafe fn fill<'a, S: Source>(
     ensures
         !(r matches Err(Fault::Heap(_))),
 {
+    let src = unsafe { &mut *src };
+    let Some(reader) = src.reader() else {
+        return Err(fault(src.name(), Failure::Io(IoReason::NotAvailable)));
+    };
     // `fill_buf` の slice の寿命は `src` の借用に縛られるが、ここで呼ぶ側の約束 (上の Safety) の寿命に付け替える
-    let r: *mut Reader = unsafe { (*src).reader() };
-    match unsafe { (*r).fill_buf(control, host) } {
+    let reader: *mut Reader = reader;
+    match unsafe { (*reader).fill_buf(control, host) } {
         Ok(bytes) => Ok(bytes),
-        Err(failure) => Err(unsafe { (*src).fault(failure) }),
+        Err(failure) => Err(fault(src.name(), failure)),
     }
 }
 
@@ -127,8 +142,9 @@ pub(crate) unsafe fn fill<'a, S: Source>(
 /// `src` は生きている `S` を指し、呼ぶ間ほかに参照がない。
 #[verifier::external_body]
 pub(crate) unsafe fn consume<S: Source>(src: *mut S, n: usize) {
-    let reader = unsafe { (*src).reader() };
-    reader.consume(n);
+    if let Some(reader) = unsafe { (*src).reader() } {
+        reader.consume(n);
+    }
 }
 
 /// Host に `path` を開かせる。誤りなら、写したパスと理由を返す。
@@ -144,8 +160,7 @@ pub(crate) fn host_open(host: &HostRef, path: &str) -> Result<File, (Box<str>, I
 
 /// `src` を終わりまで (`line` なら次の `\n` まで、それを含めて) 読み、バイト列を返す。`form` が `Text` なら UTF-8 で
 /// あることを確かめ、違えば誤りにする。`host` があれば、補充の前ごとにその Host の出力を書き出させる (`fill` と同じ)。
-/// 誤りは `src` の名前を付けた `Fault` にする (`Source::fault`)。`Fault::Heap` を返さないことは、`Source::fault` の
-/// 実装がそれを作らないことに依る。
+/// 誤りは `src` の名前を付けた `Fault` にする (`fault`)。
 ///
 /// # Safety
 /// `src` は生きている `S` を指し、読む間ほかに参照がない。呼ぶ側が `Heap::foreign_unique` で確かめる (T3)。
@@ -164,16 +179,32 @@ pub(crate) unsafe fn read_text<S: Source>(
     let src = unsafe { &mut *src };
     // 見込みはファイル全体の長さなので、1行の読みでは確保に使わない。読んだ後は残りの長さと合わないので捨てる
     let size = src.take_size().filter(|_| !line);
-    let read = if line {
-        read_line(src.reader(), control, host)
-    } else {
-        read_all(src.reader(), control, size, host)
+    let read = match src.reader() {
+        None => Err(Failure::Io(IoReason::NotAvailable)),
+        Some(reader) if line => read_line(reader, control, host),
+        Some(reader) => read_all(reader, control, size, host),
     };
-    let bytes = read.map_err(|f| src.fault(f))?;
+    let bytes = read.map_err(|f| fault(src.name(), f))?;
     if form == Form::Text && str::from_utf8(&bytes).is_err() {
-        return Err(src.fault(Failure::NotUtf8));
+        return Err(fault(src.name(), Failure::NotUtf8));
     }
     Ok(bytes)
+}
+
+/// `Stdin.open`。Host の slot から読み手を取り、標準入力のハンドルを作る。slot が空なら、ほかのハンドルが開いているので
+/// `InUse` を返す。Host が標準入力を持たなければ、読み手のないハンドルを作る (docs/spec/stdlib.md の「ハンドル」)。
+#[verifier::external_body]
+pub(crate) fn open_stdin(host: &HostRef) -> (r: Result<StdinHandle, Fault>)
+    ensures
+        r is Ok || r matches Err(Fault::InUse(StdStream::Stdin)),
+{
+    let Some(slot) = host.host.stdin() else {
+        return Ok(StdinHandle { reader: None, slot: None });
+    };
+    match slot.take() {
+        Some(reader) => Ok(StdinHandle { reader: Some(reader), slot: Some(slot) }),
+        None => Err(Fault::InUse(StdStream::Stdin)),
+    }
 }
 
 /// スクリプトに渡した引数の数。
@@ -212,40 +243,6 @@ pub(crate) fn host_env_var(host: &HostRef, name: &str) -> (r: Result<String, Fau
         Some(value) => value.into_string().map_err(
             |_| Fault::NotUtf8(Box::new(Utf8Source::EnvVar(name.into()))),
         ),
-    }
-}
-
-/// 標準入力の残りをすべて (`line` なら次の `\n` まで) 読む。読み手は Host の slot に置いたまま、slot のロックの下で
-/// 読むので、誤りでも panic でも buffer に残ったバイトごと slot に残る。補充の前ごとに標準出力を書き出し、読みは
-/// `read_text` と同じく止める語と確保量を見る。
-#[verifier::external_body]
-pub(crate) fn host_read_stdin(host: &HostRef, control: &Control, line: bool) -> (r: Result<
-    String,
-    Fault,
->)
-    ensures
-        !(r matches Err(Fault::Heap(_))),
-{
-    let not_available = || Fault::Stdin(IoReason::NotAvailable);
-    let slot = host.host.stdin().ok_or_else(not_available)?;
-    let read = slot.with_reader(
-        |reader|
-            {
-                if line {
-                    read_line(reader, control, Some(host))
-                } else {
-                    read_all(reader, control, None, Some(host))
-                }
-            },
-    ).ok_or_else(not_available)?;
-    match read {
-        Ok(bytes) => String::from_utf8(bytes).map_err(
-            |_| Fault::NotUtf8(Box::new(Utf8Source::Stdin)),
-        ),
-        Err(Failure::Io(reason)) => Err(Fault::Stdin(reason)),
-        Err(Failure::Stopped(stop)) => Err(Fault::Stopped(stop)),
-        Err(Failure::Output(message)) => Err(Fault::Output(message)),
-        Err(Failure::NotUtf8) => Err(Fault::NotUtf8(Box::new(Utf8Source::Stdin))),
     }
 }
 
@@ -494,47 +491,93 @@ impl StdinSlot {
         }
     }
 
-    /// slot のロックの下で、読み手を `f` に貸す。slot が空なら `None` である。読み手は slot に残るので、`f` が誤りを
-    /// 返しても panic しても、buffer に残ったバイトは次の読みに残る。中身は読み手だけなので、ロックが毒されても続けて
-    /// 使う。
-    pub(crate) fn with_reader<R>(&self, f: impl FnOnce(&mut Reader) -> R) -> Option<R> {
-        let mut reader = self.reader.lock().unwrap_or_else(PoisonError::into_inner);
-        reader.as_mut().map(f)
+    /// 読み手を取り出す。ハンドルが持っている間は空なので `None` を返す。
+    pub(crate) fn take(&self) -> Option<Reader> {
+        self.lock().take()
+    }
+
+    /// ハンドルが持っていた読み手を返す。
+    fn put(&self, reader: Reader) {
+        *self.lock() = Some(reader);
+    }
+
+    // 中身は読み手だけなので、ロックが毒されても続けて使う
+    fn lock(&self) -> std::sync::MutexGuard<'_, Option<Reader>> {
+        self.reader.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+}
+
+impl Drop for StdinHandle {
+    fn drop(&mut self) {
+        if let (Some(slot), Some(reader)) = (&self.slot, self.reader.take()) {
+            slot.put(reader);
+        }
     }
 }
 
 /// `fill` と `consume` が読む読み手のハンドル。`Foreign` の中身の型ごとに実装する。検証した `Ctx` のコードはハンドルの
-/// 中身を開けないので、読み手を取り出すことと、誤りに名前を付けることを、信頼の一覧の `fill` の中でこの trait に
-/// 任せる (docs/spec/object-model.md の「読み手」)。
+/// 中身を開けないので、読み手を取り出すことと、誤りに付ける名前を、信頼の一覧の `fill` の中でこの trait に任せる
+/// (docs/spec/object-model.md の「読み手」)。
 pub(crate) trait Source {
-    fn reader(&mut self) -> &mut Reader;
+    /// 読み手。`None` なら、このハンドルは読めず、読みは `not available` で失敗する。
+    fn reader(&mut self) -> Option<&mut Reader>;
     /// まだ使っていない長さの見込みを取り出す。全部の読みが確保に使い、見込みのないハンドルは `None` を返す。
     fn take_size(&mut self) -> Option<u64>;
-    /// 読みの誤りを、このハンドルの名前を付けた `Fault` にする。`Fault::Heap` は作らない (`read_text` の約束が
-    /// これに依る)。
-    fn fault(&self, failure: Failure) -> Fault;
+    /// 誤りの文言に使う名前。
+    fn name(&self) -> SourceName;
+}
+
+/// 読みの誤りに付ける、読んだハンドルの名前。
+pub(crate) enum SourceName {
+    /// `open` に渡されたままのパス。
+    File(Box<str>),
+    Stdin,
+}
+
+/// 読みの誤りを、読んだハンドルの名前を付けた `Fault` にする。`Fault::Heap` を作らないので、`fill` と `read_text` の
+/// 約束は `Source` の実装に依らない。
+fn fault(name: SourceName, failure: Failure) -> Fault {
+    match (failure, name) {
+        (Failure::Io(reason), SourceName::File(path)) => Fault::Io {
+            op: IoOp::Read,
+            name: path,
+            reason,
+        },
+        (Failure::Io(reason), SourceName::Stdin) => Fault::Stdin(reason),
+        (Failure::Stopped(stop), _) => Fault::Stopped(stop),
+        (Failure::Output(message), _) => Fault::Output(message),
+        (Failure::NotUtf8, SourceName::File(path)) => {
+            Fault::NotUtf8(Box::new(Utf8Source::File(path)))
+        }
+        (Failure::NotUtf8, SourceName::Stdin) => Fault::NotUtf8(Box::new(Utf8Source::Stdin)),
+    }
 }
 
 impl Source for File {
-    fn reader(&mut self) -> &mut Reader {
-        &mut self.reader
+    fn reader(&mut self) -> Option<&mut Reader> {
+        Some(&mut self.reader)
     }
 
     fn take_size(&mut self) -> Option<u64> {
         self.size.take()
     }
 
-    fn fault(&self, failure: Failure) -> Fault {
-        match failure {
-            Failure::Io(reason) => Fault::Io {
-                op: IoOp::Read,
-                name: self.path.clone(),
-                reason,
-            },
-            Failure::Stopped(stop) => Fault::Stopped(stop),
-            Failure::Output(message) => Fault::Output(message),
-            Failure::NotUtf8 => Fault::NotUtf8(Box::new(Utf8Source::File(self.path.clone()))),
-        }
+    fn name(&self) -> SourceName {
+        SourceName::File(self.path.clone())
+    }
+}
+
+impl Source for StdinHandle {
+    fn reader(&mut self) -> Option<&mut Reader> {
+        self.reader.as_mut()
+    }
+
+    fn take_size(&mut self) -> Option<u64> {
+        None
+    }
+
+    fn name(&self) -> SourceName {
+        SourceName::Stdin
     }
 }
 

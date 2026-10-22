@@ -20,13 +20,13 @@ parse_args opts args =
 -- 標準入力を、全体を読まずに1行ずつ流す。行番号は1から数える
 stdin_lines : Unit -> <Yield (Int, String), IO, Panic> Unit
 stdin_lines () =
-  let go n =
-    match Stdin.read_line () with
-      | Some line ->
+  let go n h =
+    match Stdin.read_line h with
+      | (Some line, h) ->
         yield (n, line)
-        go (n + 1)
-      | None -> ()
-  go 1
+        go (n + 1) h
+      | (None, h) -> Stdin.close h
+  go 1 (Stdin.open ())
 
 numbered_lines : List String -> <Yield (Int, String), Panic> Unit
 numbered_lines lines =

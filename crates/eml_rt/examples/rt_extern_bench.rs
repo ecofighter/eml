@@ -205,7 +205,7 @@ fn read_all(sized: bool) {
     // SAFETY: 不死の文字列を1つ確保するだけである。
     let path = unsafe { ctx.heap_mut() }.alloc_string_immortal("big.txt");
     for _ in 0..100 {
-        // SAFETY: path は生きた不死の物体である。handle_read は File を借りて文字列を返す。File は fs_close に、
+        // SAFETY: path は生きた不死の物体である。handle_read は File を借りて文字列を返す。File は handle_close に、
         // 文字列は decref に渡し、その後どちらも読まない。
         unsafe {
             ctx.heap_mut().acquire_immortal(path).unwrap();
@@ -215,7 +215,7 @@ fn read_all(sized: bool) {
                 .unwrap();
             black_box(text);
             ctx.heap_mut().decref(text).unwrap();
-            ctx.fs_close(file).unwrap();
+            ctx.handle_close(file, Handle::File).unwrap();
         }
     }
 }
@@ -390,7 +390,7 @@ fn read_all_bytes(std: bool) {
                 .unwrap();
             black_box(read);
             ctx.heap_mut().decref(read).unwrap();
-            ctx.fs_close(file).unwrap();
+            ctx.handle_close(file, Handle::File).unwrap();
         }
     }
 }
@@ -429,6 +429,6 @@ fn read_line_bytes(std: bool) {
                 break;
             }
         }
-        ctx.fs_close(file).unwrap();
+        ctx.handle_close(file, Handle::File).unwrap();
     }
 }

@@ -36,6 +36,9 @@ probe_unit u = u
 probe_file : Fs.File -> Fs.File
 probe_file f = f
 
+probe_stdin : Stdin.Stdin -> Stdin.Stdin
+probe_stdin h = h
+
 probe_array : Array Int -> Array Int
 probe_array a = a
 
@@ -63,6 +66,7 @@ fn probe(ty: ExternType) -> &'static str {
         ExternType::Bytes => "probe_bytes",
         ExternType::Unit => "probe_unit",
         ExternType::File => "probe_file",
+        ExternType::Stdin => "probe_stdin",
         ExternType::Array => "probe_array",
         ExternType::MutArray => "probe_mut_array",
     }
@@ -223,8 +227,8 @@ fn every_extern_function_row_has_the_reprs_of_its_std_signature() {
     }
 }
 
-/// 表の値そのもの。借りる引数を持つ行は次の表の行だけで、組を返すのは `Std.MutArray` の2つの行と `Std.Fs` の
-/// 5つの読みの行だけである。
+/// 表の値そのもの。借りる引数を持つ行は次の表の行だけで、組を返すのは `Std.MutArray` の2つの行と、`Std.Fs` と
+/// `Std.Stdin` のそれぞれ5つの読みの行だけである。
 #[test]
 fn only_the_array_readers_borrow() {
     for &e in Extern::ALL {
@@ -237,8 +241,12 @@ fn only_the_array_readers_borrow() {
             "Std.Fs.read_all"
             | "Std.Fs.read_line_raw"
             | "Std.Fs.read_all_bytes"
-            | "Std.Fs.read_line_bytes_raw" => (&[true], Some(0)),
-            "Std.Fs.read_chunk" => (&[false, true], Some(1)),
+            | "Std.Fs.read_line_bytes_raw"
+            | "Std.Stdin.read_all"
+            | "Std.Stdin.read_line_raw"
+            | "Std.Stdin.read_all_bytes"
+            | "Std.Stdin.read_line_bytes_raw" => (&[true], Some(0)),
+            "Std.Fs.read_chunk" | "Std.Stdin.read_chunk" => (&[false, true], Some(1)),
             "Std.String.byte_length" | "Prelude.Show String.show" => (&[true], None),
             "Std.String.byte_at" => (&[false, true], None),
             "Std.String.slice" => (&[false, false, true], None),
@@ -354,7 +362,7 @@ fn kind_of(lin: Lin) -> Linearity {
     }
 }
 
-/// 表の値そのもの。`Fs` の7つと `MutArray` を扱う7つ以外は、引数も結果も `Unr` である。
+/// 表の値そのもの。`Fs` の7つ、`Stdin` の7つと `MutArray` を扱う7つ以外は、引数も結果も `Unr` である。
 #[test]
 fn only_the_file_functions_carry_a_lin() {
     use Linearity::{Lin, Unr};
@@ -368,6 +376,13 @@ fn only_the_file_functions_carry_a_lin() {
             "Std.Fs.read_line_bytes_raw" => (&[Lin], Unr),
             "Std.Fs.read_chunk" => (&[Unr, Lin], Unr),
             "Std.Fs.close" => (&[Lin], Unr),
+            "Std.Stdin.open" => (&[Unr], Lin),
+            "Std.Stdin.read_all" => (&[Lin], Unr),
+            "Std.Stdin.read_line_raw" => (&[Lin], Unr),
+            "Std.Stdin.read_all_bytes" => (&[Lin], Unr),
+            "Std.Stdin.read_line_bytes_raw" => (&[Lin], Unr),
+            "Std.Stdin.read_chunk" => (&[Unr, Lin], Unr),
+            "Std.Stdin.close" => (&[Lin], Unr),
             "Std.Array.thaw" => (&[Unr], Lin),
             "Std.MutArray.make" => (&[Unr, Unr], Lin),
             "Std.MutArray.empty" => (&[Unr], Lin),

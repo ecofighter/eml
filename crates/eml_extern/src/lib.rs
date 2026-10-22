@@ -142,6 +142,7 @@ pub enum ExternType {
     Bytes,
     Unit,
     File,
+    Stdin,
     Array,
     MutArray,
 }
@@ -166,6 +167,7 @@ impl ExternType {
         ExternType::Bytes,
         ExternType::Unit,
         ExternType::File,
+        ExternType::Stdin,
         ExternType::Array,
         ExternType::MutArray,
     ];
@@ -190,6 +192,7 @@ impl ExternType {
             ExternType::Bytes => row("Prelude.Bytes", Linearity::Unr, Repr::Obj),
             ExternType::Unit => row("Prelude.Unit", Linearity::Unr, Repr::Unit),
             ExternType::File => row("Std.Fs.File", Linearity::Lin, Repr::Obj),
+            ExternType::Stdin => row("Std.Stdin.Stdin", Linearity::Lin, Repr::Obj),
             ExternType::Array => generic("Prelude.Array", Linearity::Unr),
             ExternType::MutArray => generic("Prelude.MutArray", Linearity::Lin),
         }
@@ -362,7 +365,12 @@ pub enum Extern {
     EnvArg,
     EnvHas,
     EnvLookup,
+    StdinOpen,
+    StdinClose,
+    StdinReadChunk,
+    StdinReadAllBytes,
     StdinReadAll,
+    StdinReadLineBytes,
     StdinReadLine,
     WriteText,
     ProcStatus,
@@ -551,7 +559,12 @@ impl Extern {
         Extern::EnvArg,
         Extern::EnvHas,
         Extern::EnvLookup,
+        Extern::StdinOpen,
+        Extern::StdinClose,
+        Extern::StdinReadChunk,
+        Extern::StdinReadAllBytes,
         Extern::StdinReadAll,
+        Extern::StdinReadLineBytes,
         Extern::StdinReadLine,
         Extern::WriteText,
         Extern::ProcStatus,
@@ -908,10 +921,92 @@ impl Extern {
             Extern::EnvArg => row("Std.Env.arg", &[Int], Obj, Purity::Effectful),
             Extern::EnvHas => row("Std.Env.has", &[Obj], Enum, Purity::Effectful),
             Extern::EnvLookup => row("Std.Env.lookup", &[Obj], Obj, Purity::Effectful),
-            Extern::StdinReadAll => row("Std.Stdin.read_all", &[Unit], Obj, Purity::Effectful),
-            Extern::StdinReadLine => {
-                row("Std.Stdin.read_line_raw", &[Unit], Obj, Purity::Effectful)
-            }
+            Extern::StdinOpen => kinded(
+                "Std.Stdin.open",
+                &[Unit],
+                &[Unr],
+                Obj,
+                Lin,
+                Purity::Effectful,
+            ),
+            Extern::StdinClose => kinded(
+                "Std.Stdin.close",
+                &[Obj],
+                &[Lin],
+                Unit,
+                Unr,
+                Purity::Effectful,
+            ),
+            Extern::StdinReadChunk => borrowing(
+                &[false, true],
+                FunctionRow {
+                    with_arg: Some(1),
+                    ..kinded(
+                        "Std.Stdin.read_chunk",
+                        &[Obj, Obj],
+                        &[Unr, Lin],
+                        Obj,
+                        Unr,
+                        Purity::Effectful,
+                    )
+                },
+            ),
+            Extern::StdinReadAllBytes => borrowing(
+                &[true],
+                FunctionRow {
+                    with_arg: Some(0),
+                    ..kinded(
+                        "Std.Stdin.read_all_bytes",
+                        &[Obj],
+                        &[Lin],
+                        Obj,
+                        Unr,
+                        Purity::Effectful,
+                    )
+                },
+            ),
+            Extern::StdinReadAll => borrowing(
+                &[true],
+                FunctionRow {
+                    with_arg: Some(0),
+                    ..kinded(
+                        "Std.Stdin.read_all",
+                        &[Obj],
+                        &[Lin],
+                        Obj,
+                        Unr,
+                        Purity::Effectful,
+                    )
+                },
+            ),
+            Extern::StdinReadLineBytes => borrowing(
+                &[true],
+                FunctionRow {
+                    with_arg: Some(0),
+                    ..kinded(
+                        "Std.Stdin.read_line_bytes_raw",
+                        &[Obj],
+                        &[Lin],
+                        Obj,
+                        Unr,
+                        Purity::Effectful,
+                    )
+                },
+            ),
+            Extern::StdinReadLine => borrowing(
+                &[true],
+                FunctionRow {
+                    with_arg: Some(0),
+                    ..kinded(
+                        "Std.Stdin.read_line_raw",
+                        &[Obj],
+                        &[Lin],
+                        Obj,
+                        Unr,
+                        Purity::Effectful,
+                    )
+                },
+            ),
             Extern::WriteText => row("Std.Fs.write_text", &[Obj, Obj], Unit, Purity::Effectful),
             Extern::ProcStatus => row("Std.Proc.status", &[Obj, Obj], Int, Purity::Effectful),
             // 戻らない extern。VM が実行の底まで中断する (docs/spec/vm.md の「extern の中断」)

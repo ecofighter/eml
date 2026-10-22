@@ -7,8 +7,11 @@ use super::proof::*;
 use super::strings::lemma_pushed_moved;
 use super::*;
 use crate::alloc::too_large;
-use crate::externs::{Fault, Form, Handle, IoOp, ReadAmount};
-use crate::host::{File, Stream, consume, fill, host_flush, host_open, host_write_line, read_text};
+use crate::externs::{Fault, Form, Handle, IoOp, ReadAmount, StdStream};
+use crate::host::{
+    File, Source, StdinHandle, Stream, consume, fill, host_flush, host_open, host_write_line,
+    open_stdin, read_text,
+};
 #[cfg(verus_only)]
 use vstd::string::StringSliceAdditionalSpecFns;
 
@@ -435,19 +438,75 @@ impl<M: Mode> Ctx<M> {
                 s0.lemma_held_arg(h);
             }
         }
-        let p = match handle {
+        match handle {
             Handle::File => match unsafe { self.heap.foreign_unique::<File>(h) } {
-                Ok(p) => p,
-                Err(e) => return Err(Fault::Heap(e)),
+                Ok(p) => unsafe { self.read_from(p, false, read, form) },
+                Err(e) => Err(Fault::Heap(e)),
             },
-        };
+            // 標準入力の補充の前には、プロンプトが読む前に出るよう標準出力を書き出す (docs/spec/object-model.md の
+            // 「出力のバッファ」)
+            Handle::Stdin => match unsafe { self.heap.foreign_unique::<StdinHandle>(h) } {
+                Ok(p) => unsafe { self.read_from(p, true, read, form) },
+                Err(e) => Err(Fault::Heap(e)),
+            },
+        }
+    }
+
+    /// `handle_read` の、借りたハンドルの中身 `p` からの読み。`flush` なら、補充の前ごとに Host の出力を書き出させる。
+    ///
+    /// # Safety
+    /// `p` は `foreign_unique` で借りたハンドルの中身を指し、読む間ほかに参照がない。塊の読みの `buf` は `handle_read`
+    /// と同じである。
+    unsafe fn read_from<S: Source>(
+        &mut self,
+        p: *mut S,
+        flush: bool,
+        read: ReadAmount,
+        form: Form,
+    ) -> (r: Result<Word, Fault>)
+        requires
+            old(self).wf(),
+            read matches ReadAmount::Chunk(buf) ==> old(self).heap_spec().word_in(buf) && (
+            !M::CHECKED ==> old(self).is_bytes(buf) && old(self).holds(buf)),
+        ensures
+            final(self).wf(),
+            final(self).evv_spec() == old(self).evv_spec(),
+            final(self).yield_spec() == old(self).yield_spec(),
+            !M::CHECKED ==> !(r matches Err(Fault::Heap(_))),
+            r is Err && (read == ReadAmount::All || read == ReadAmount::Line && form == Form::Text)
+                ==> *final(self) == *old(self),
+            r matches Ok(s) ==> if read is Chunk || form == Form::Bytes {
+                final(self).is_bytes(s)
+            } else {
+                final(self).is_string(s)
+            },
+            !(read is Chunk) && old(self).held_ok() && !(r matches Err(Fault::Heap(_))) ==> {
+                &&& final(self).held_ok()
+                &&& final(self).evolved_by(*old(self), |x: usize| 0int, Set::empty())
+                &&& r matches Ok(s) ==> final(self).holds(s)
+            },
+            read matches ReadAmount::Chunk(buf) ==> (old(self).held_ok() && old(self).is_bytes(buf)
+                && old(self).holds(buf) && !(r matches Err(Fault::Heap(_))) ==> {
+                &&& final(self).held_ok()
+                &&& r matches Ok(x) ==> final(self).holds(x) && final(self).evolved_by(
+                    *old(self),
+                    |y: usize| points(x, y) - points(buf, y),
+                    Set::empty().insert(buf.bits_spec()),
+                )
+                &&& r is Err ==> final(self).evolved_by(
+                    *old(self),
+                    |y: usize| -points(buf, y),
+                    Set::empty(),
+                )
+            }),
+    {
         match read {
-            ReadAmount::All => unsafe { self.read_whole(p, false, form) },
+            ReadAmount::All => unsafe { self.read_whole(p, flush, false, form) },
             ReadAmount::Line => match form {
-                Form::Text => unsafe { self.read_whole(p, true, Form::Text) },
-                Form::Bytes => unsafe { self.read_line_bytes(p) },
+                Form::Text => unsafe { self.read_whole(p, flush, true, Form::Text) },
+                Form::Bytes => unsafe { self.read_line_bytes(p, flush) },
             },
-            ReadAmount::Chunk(buf) => unsafe { self.read_chunk(p, buf) },
+            ReadAmount::Chunk(buf) => unsafe { self.read_chunk(p, flush, buf) },
         }
     }
 
@@ -455,11 +514,14 @@ impl<M: Mode> Ctx<M> {
     /// どの誤りもヒープを変えない。
     ///
     /// # Safety
-    /// `p` は `foreign_unique` で借りた `File` を指し、読む間ほかに参照がない。
-    unsafe fn read_whole(&mut self, p: *mut File, line: bool, form: Form) -> (r: Result<
-        Word,
-        Fault,
-    >)
+    /// `p` は `foreign_unique` で借りたハンドルの中身を指し、読む間ほかに参照がない。
+    unsafe fn read_whole<S: Source>(
+        &mut self,
+        p: *mut S,
+        flush: bool,
+        line: bool,
+        form: Form,
+    ) -> (r: Result<Word, Fault>)
         requires
             old(self).wf(),
         ensures
@@ -479,7 +541,7 @@ impl<M: Mode> Ctx<M> {
             }),
     {
         let ghost s0 = *self;
-        let bytes = (unsafe { read_text(p, &self.control, None, line, form) })?;
+        let bytes = (unsafe { read_text(p, &self.control, self.flushed_host(flush), line, form) })?;
         let s = match form {
             Form::Text => {
                 let text = unsafe { str::from_utf8_unchecked(bytes.as_slice()) };
@@ -507,8 +569,11 @@ impl<M: Mode> Ctx<M> {
     /// 渡すので、写しは1行に1回である。読みの誤りと止めたときは、途中まで読んだ行を手放す。
     ///
     /// # Safety
-    /// `p` は `foreign_unique` で借りた `File` を指し、読む間ほかに参照がない。
-    unsafe fn read_line_bytes(&mut self, p: *mut File) -> (r: Result<Word, Fault>)
+    /// `p` は `foreign_unique` で借りたハンドルの中身を指し、読む間ほかに参照がない。
+    unsafe fn read_line_bytes<S: Source>(&mut self, p: *mut S, flush: bool) -> (r: Result<
+        Word,
+        Fault,
+    >)
         requires
             old(self).wf(),
         ensures
@@ -546,7 +611,7 @@ impl<M: Mode> Ctx<M> {
                 have && c ==> line_held(self.heap, h0, acc),
             decreases usize::MAX - total,
         {
-            let buf = match unsafe { fill(p, &self.control, None) } {
+            let buf = match unsafe { fill(p, &self.control, self.flushed_host(flush)) } {
                 Ok(buf) => buf,
                 Err(fault) => {
                     if have {
@@ -692,9 +757,12 @@ impl<M: Mode> Ctx<M> {
     /// 手放す。検査モードの確かめは補充の前に済ませ、足した後で読み手のバイトを使ったことにする。
     ///
     /// # Safety
-    /// `p` は `foreign_unique` で借りた `File` を指し、読む間ほかに参照がない。`buf` は即値か、このヒープか付けた塊の
-    /// 生きている物体を指し、呼ぶ側がその参照を1つ持つ。速いモードでは、`buf` はバイト列である。
-    unsafe fn read_chunk(&mut self, p: *mut File, buf: Word) -> (r: Result<Word, Fault>)
+    /// `p` は `foreign_unique` で借りたハンドルの中身を指し、読む間ほかに参照がない。`buf` は即値か、このヒープか付けた
+    /// 塊の生きている物体を指し、呼ぶ側がその参照を1つ持つ。速いモードでは、`buf` はバイト列である。
+    unsafe fn read_chunk<S: Source>(&mut self, p: *mut S, flush: bool, buf: Word) -> (r: Result<
+        Word,
+        Fault,
+    >)
         requires
             old(self).wf(),
             old(self).heap_spec().word_in(buf),
@@ -755,7 +823,7 @@ impl<M: Mode> Ctx<M> {
         } else {
             0
         };
-        let part = match unsafe { fill(p, &self.control, None) } {
+        let part = match unsafe { fill(p, &self.control, self.flushed_host(flush)) } {
             Ok(part) => part,
             Err(fault) => {
                 self.heap.release_text(hb, Ghost(buf), Ghost(c));
@@ -800,16 +868,60 @@ impl<M: Mode> Ctx<M> {
         Ok(x)
     }
 
-    /// `Fs.close`。`file` の参照を手放す。最後の参照なので、破棄処理が File を閉じる。
-    ///
-    /// # Safety
-    /// `heap_mut` の前提を守っている。`file` は即値か、このヒープか付けた塊の生きている物体を指し、呼ぶ側がその参照を
-    /// 1つ持つ。`File` でなければ、どちらのモードでも `WrongKind` を返す。
-    pub unsafe fn fs_close(&mut self, file: Word) -> (r: Result<(), Fault>)
+    /// `Stdin.open`。`handle` の型のハンドルを開き、`lin` ビットを立てた `Foreign` の物体を返す。生きているハンドルが
+    /// すでにあれば、何も作らずに `InUse` を返す (docs/spec/stdlib.md の「ハンドル」)。`File` はパスを受ける `fs_open`
+    /// で開く。
+    pub fn handle_open(&mut self, handle: Handle) -> (r: Result<Word, Fault>)
         requires
             old(self).wf(),
-            old(self).heap_spec().word_in(file),
-            !M::CHECKED ==> old(self).holds(file),
+            handle != Handle::File,
+        ensures
+            final(self).wf(),
+            final(self).evv_spec() == old(self).evv_spec(),
+            final(self).yield_spec() == old(self).yield_spec(),
+            r is Ok || r matches Err(Fault::InUse(_)),
+            r is Err ==> *final(self) == *old(self),
+            r matches Ok(w) ==> final(self).heap_spec().kind_of(w) == Kind::Foreign
+                && final(self).heap_spec().lin_of(w),
+            r matches Ok(w) ==> (old(self).held_ok() ==> {
+                &&& final(self).held_ok()
+                &&& final(self).holds(w)
+                &&& final(self).evolved_by(*old(self), |x: usize| 0int, Set::empty())
+            }),
+    {
+        let ghost s0 = *self;
+        let stdin = match handle {
+            Handle::Stdin => open_stdin(&self.host)?,
+            // 前提により来ない
+            Handle::File => {
+                proof {
+                    assert(false);
+                }
+                return Err(Fault::InUse(StdStream::Stdin));
+            },
+        };
+        let w = self.heap.alloc_foreign(stdin, true);
+        proof {
+            if M::CHECKED {
+                self.lemma_words_kept(s0);
+            }
+            if s0.held_ok() {
+                self.lemma_made_ok(s0, w);
+            }
+        }
+        Ok(w)
+    }
+
+    /// `Fs.close` と `Stdin.close`。ハンドル `h` の参照を手放す。最後の参照なので、破棄処理がハンドルを閉じる。
+    ///
+    /// # Safety
+    /// `heap_mut` の前提を守っている。`h` は即値か、このヒープか付けた塊の生きている物体を指し、呼ぶ側がその参照を
+    /// 1つ持つ。`handle` の型のハンドルでなければ、どちらのモードでも `WrongKind` を返す。
+    pub unsafe fn handle_close(&mut self, h: Word, handle: Handle) -> (r: Result<(), Fault>)
+        requires
+            old(self).wf(),
+            old(self).heap_spec().word_in(h),
+            !M::CHECKED ==> old(self).holds(h),
         ensures
             final(self).wf(),
             final(self).evv_spec() == old(self).evv_spec(),
@@ -820,33 +932,43 @@ impl<M: Mode> Ctx<M> {
             ),
             !M::CHECKED && r is Err ==> r == Err::<(), Fault>(Fault::Heap(HeapError::WrongKind))
                 && *final(self) == *old(self),
-            old(self).held_ok() && old(self).holds(file) ==> (r matches Err(Fault::Heap(e))
+            old(self).held_ok() && old(self).holds(h) ==> (r matches Err(Fault::Heap(e))
                 ==> *final(self) == *old(self) || chain_err(Err::<(), HeapError>(e))),
-            old(self).held_ok() && old(self).holds(file) && r is Ok ==> {
+            old(self).held_ok() && old(self).holds(h) && r is Ok ==> {
                 &&& final(self).held_ok()
-                &&& final(self).evolved_by(*old(self), |x: usize| -points(file, x), Set::empty())
+                &&& final(self).evolved_by(*old(self), |x: usize| -points(h, x), Set::empty())
             },
     {
         let ghost s0 = *self;
-        let ghost c = s0.held_ok() && s0.holds(file);
-        if !file.is_ptr() {
+        let ghost c = s0.held_ok() && s0.holds(h);
+        if !h.is_ptr() {
             return Err(Fault::Heap(HeapError::WrongKind));
         }
         proof {
             if c {
-                s0.lemma_held_arg(file);
+                s0.lemma_held_arg(h);
             }
         }
-        if let Err(e) = unsafe { self.heap.foreign::<File>(file) } {
+        let kind = match handle {
+            Handle::File => match unsafe { self.heap.foreign::<File>(h) } {
+                Ok(_) => Ok(()),
+                Err(e) => Err(e),
+            },
+            Handle::Stdin => match unsafe { self.heap.foreign::<StdinHandle>(h) } {
+                Ok(_) => Ok(()),
+                Err(e) => Err(e),
+            },
+        };
+        if let Err(e) = kind {
             return Err(Fault::Heap(e));
         }
         if M::CHECKED {
-            let h = self.heap.header_of(file);
-            if let Err(e) = self.heap.checked_decref(h) {
+            let header = self.heap.header_of(h);
+            if let Err(e) = self.heap.checked_decref(header) {
                 return Err(Fault::Heap(e));
             }
         }
-        if let Err(e) = unsafe { self.heap.decref(file) } {
+        if let Err(e) = unsafe { self.heap.decref(h) } {
             proof {
                 self.lemma_words_kept(s0);
             }
@@ -857,10 +979,19 @@ impl<M: Mode> Ctx<M> {
                 self.lemma_words_kept(s0);
             }
             if c {
-                self.lemma_closed(s0, file);
+                self.lemma_closed(s0, h);
             }
         }
         Ok(())
+    }
+
+    /// 読み手の補充の前に書き出させる Host。`flush` でなければ `None` である。
+    fn flushed_host(&self, flush: bool) -> Option<&HostRef> {
+        if flush {
+            Some(&self.host)
+        } else {
+            None
+        }
     }
 
     /// 呼ぶ側が持つ引数 `w` は、読めて、`decref` できる。

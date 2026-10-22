@@ -5,7 +5,7 @@
 ## コマンドライン
 
 - `eml repl [--debug-heap] [file]` でセッションを始める。`--debug-heap` は `eml run` と同じく検査モードにする。`file` を渡すと、最初に `:load file` と同じことをする。ただし `file` を読めなければ、`eml run` と同じく使い方の誤り (``error: cannot read `file`: …``、終了コード 2) にする
-- REPL のプログラムは引数を持たないので、`Env.args ()` は `[]` を返す。標準入力は REPL 自身が入力の行を読むので、プログラムは読めず、`Stdin` の関数は I/O の失敗 (`cannot read the standard input: not available`) になる ([標準ライブラリ](stdlib.md) の「`Stdin`」)
+- REPL のプログラムは引数を持たないので、`Env.args ()` は `[]` を返す。標準入力は REPL 自身が入力の行を読むので、プログラムは読めない。`Stdin.open` は通るが、ハンドルの読みと `Stdin.read_text` は I/O の失敗 (`cannot read the standard input: not available`) になる ([標準ライブラリ](stdlib.md) の「ハンドル」)。ハンドルは線形なので、ほかの線形な値と同じく、入力の中で使い切る
 - import の根と Host の相対パスの基準は、`eml run` と同じくカレントディレクトリである。`:load` の後は、import の根はファイルのディレクトリである (「ファイルの読み込み」)
 - 上限は `eml_cli::repl_limits()` が決める。深さは `eml run` と同じ 2^27 語で、確保量は物理メモリの 40% である。回復は写す間に古いヒープと写しを同時に持ち、写しは根から届く物体だけなので古いヒープより大きくならない。合わせて、`eml run` の上限と同じ 80% を目安に収める。どちらの上限も、安全点で止めるまでの間に少し超えうる目安である。物理メモリを読めない OS では上限を置かない
 

@@ -83,11 +83,13 @@ take n xs = (split_at n xs).0
 
 stdin_lines : Unit -> <Yield String, IO, Panic> Unit
 stdin_lines () =
-  match Stdin.read_line () with
-    | Some line ->
-      yield line
-      stdin_lines ()
-    | None -> ()
+  let go h =
+    match Stdin.read_line h with
+      | (Some line, h) ->
+        yield line
+        go h
+      | (None, h) -> Stdin.close h
+  go (Stdin.open ())
 
 each_line : List String -> <Yield String> Unit
 each_line lines = List.each yield lines
@@ -181,7 +183,7 @@ main () =
         use try_io
         use aggregate
         use parsing
-        if whole then each_line (String.lines (Stdin.read_all ())) else stdin_lines ()
+        if whole then each_line (String.lines (Stdin.read_text ())) else stdin_lines ()
       match result with
         | Ok stats -> report top stats
         | Err e ->

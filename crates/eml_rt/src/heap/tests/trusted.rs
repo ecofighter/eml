@@ -870,14 +870,14 @@ fn borrowed_files_go_through_the_host<M: Mode>() {
                 expected
             );
         }
-        ctx.fs_close(f).unwrap();
+        ctx.handle_close(f, Handle::File).unwrap();
         assert_eq!(mortal(ctx.heap()), 0);
         for read in [ReadAmount::Line, ReadAmount::All] {
             for name in ["broken.txt", "bad.bin"] {
                 let f = open(&mut ctx, name);
                 assert!(read_borrowed(&mut ctx, f, read).is_err());
                 assert_eq!(raw::rc(f), 1);
-                ctx.fs_close(f).unwrap();
+                ctx.handle_close(f, Handle::File).unwrap();
                 assert_eq!(mortal(ctx.heap()), 0);
             }
             // 止める語が立った後の `Interrupted` で止まる (T11)
@@ -886,7 +886,7 @@ fn borrowed_files_go_through_the_host<M: Mode>() {
                 read_borrowed(&mut ctx, f, read),
                 Err(crate::Fault::Stopped(crate::Stop::Interrupted))
             );
-            ctx.fs_close(f).unwrap();
+            ctx.handle_close(f, Handle::File).unwrap();
             control.clear();
             let f = open(&mut ctx, "lines.txt");
             control.interrupt();
@@ -895,12 +895,12 @@ fn borrowed_files_go_through_the_host<M: Mode>() {
                 Err(crate::Fault::Stopped(crate::Stop::Interrupted))
             );
             control.clear();
-            ctx.fs_close(f).unwrap();
+            ctx.handle_close(f, Handle::File).unwrap();
             assert_eq!(mortal(ctx.heap()), 0);
         }
         let f = open(&mut ctx, "big.txt");
         assert_eq!(read_borrowed(&mut ctx, f, ReadAmount::All).unwrap(), body);
-        ctx.fs_close(f).unwrap();
+        ctx.handle_close(f, Handle::File).unwrap();
     }
     assert_eq!(mortal(ctx.heap()), 0);
 }
@@ -1034,7 +1034,7 @@ fn borrowed_bytes_go_through_the_host<M: Mode>() {
         assert_eq!(read(&mut ctx, f, ReadAmount::Line).unwrap(), b"ab\n");
         assert_eq!(read(&mut ctx, f, ReadAmount::Line).unwrap(), b"cd\n");
         assert_eq!(read(&mut ctx, f, ReadAmount::Line).unwrap(), b"");
-        ctx.fs_close(f).unwrap();
+        ctx.handle_close(f, Handle::File).unwrap();
         let f = open(&mut ctx, "slow.txt");
         assert_eq!(read(&mut ctx, f, ReadAmount::Line).unwrap(), b"abcdefg\n");
         let buf = ctx.heap_mut().alloc_bytes(b">");
@@ -1053,14 +1053,14 @@ fn borrowed_bytes_go_through_the_host<M: Mode>() {
         }
         ctx.heap_mut().decref(w).unwrap();
         ctx.heap_mut().decref(buf).unwrap();
-        ctx.fs_close(f).unwrap();
+        ctx.handle_close(f, Handle::File).unwrap();
         let f = open(&mut ctx, "broken.txt");
         assert!(read(&mut ctx, f, ReadAmount::Line).is_err());
         assert_eq!(raw::rc(f), 1);
-        ctx.fs_close(f).unwrap();
+        ctx.handle_close(f, Handle::File).unwrap();
         let f = open(&mut ctx, "lines.txt");
         assert_eq!(read(&mut ctx, f, ReadAmount::All).unwrap(), b"ab\ncd\n");
-        ctx.fs_close(f).unwrap();
+        ctx.handle_close(f, Handle::File).unwrap();
     }
     assert_eq!(mortal(ctx.heap()), 0);
 }
@@ -1103,7 +1103,7 @@ fn an_overlong_read_is_refused_by_a_whole_read() {
                 })
             );
             assert_eq!(raw::rc(f), 1);
-            ctx.fs_close(f).unwrap();
+            ctx.handle_close(f, Handle::File).unwrap();
         }
     }
     assert_eq!(mortal(ctx.heap()), 0);
@@ -1111,7 +1111,7 @@ fn an_overlong_read_is_refused_by_a_whole_read() {
 
 /// 標準入力の1行を読んで写し、手放す。
 fn stdin_line<M: Mode>(ctx: &mut Ctx<M>) -> String {
-    let w = ctx.stdin_read(true).unwrap();
+    let w = ctx_tests::stdin_read(ctx, true).unwrap();
     let line = text(ctx.heap(), w).to_string();
     unsafe { ctx.heap_mut().decref(w) }.unwrap();
     line
@@ -1152,6 +1152,96 @@ fn the_stdin_reader_survives_a_second_ctx<M: Mode>() {
     assert_eq!(mortal(second.heap()), 0);
 }
 
+/// 標準入力のハンドルは、開くときに Host の slot から読み手を取り、閉じるときに buffer に残ったバイトごと返す。開いて
+/// いる間の2つ目の `open` は `InUse` で、閉じた後は開ける。標準入力のない Host では読み手のないハンドルが開き、読みは
+/// `not available` になる。`Heap` を落とすときの破棄処理も読み手を返す。
+fn stdin_handles_take_and_return_the_reader<M: Mode>() {
+    let memory = Arc::new(MemoryHost::default().with_stdin(MemoryFile::text("a\nb\nc\n")));
+    let read = |ctx: &mut Ctx<M>, h: Word| unsafe {
+        let w = ctx.handle_read(h, Handle::Stdin, ReadAmount::Line, Form::Text)?;
+        let line = text(ctx.heap(), w).to_string();
+        ctx.heap_mut().decref(w).unwrap();
+        Ok::<_, crate::Fault>(line)
+    };
+    let mut ctx = ctx_tests::ctx_with::<M>(&memory);
+    unsafe {
+        let h = ctx.handle_open(Handle::Stdin).unwrap();
+        assert_eq!(
+            ctx.handle_open(Handle::Stdin),
+            Err(crate::Fault::InUse(crate::StdStream::Stdin))
+        );
+        assert_eq!(read(&mut ctx, h).unwrap(), "a\n");
+        ctx.handle_close(h, Handle::Stdin).unwrap();
+        let h = ctx.handle_open(Handle::Stdin).unwrap();
+        assert_eq!(read(&mut ctx, h).unwrap(), "b\n");
+        // 閉じずに `Heap` ごと落とす
+        assert_eq!(raw::rc(h), 1);
+    }
+    drop(ctx);
+    let mut ctx = ctx_tests::ctx_with::<M>(&memory);
+    unsafe {
+        let h = ctx.handle_open(Handle::Stdin).unwrap();
+        assert_eq!(read(&mut ctx, h).unwrap(), "c\n");
+        assert_eq!(read(&mut ctx, h).unwrap(), "");
+        ctx.handle_close(h, Handle::Stdin).unwrap();
+    }
+    assert_eq!(mortal(ctx.heap()), 0);
+    let mut ctx = ctx_tests::ctx_with::<M>(&Arc::new(MemoryHost::default()));
+    unsafe {
+        let h = ctx.handle_open(Handle::Stdin).unwrap();
+        assert_eq!(
+            read(&mut ctx, h),
+            Err(crate::Fault::Stdin(crate::IoReason::NotAvailable))
+        );
+        let buf = ctx.heap_mut().alloc_bytes(b"");
+        assert_eq!(
+            ctx.handle_read(h, Handle::Stdin, ReadAmount::Chunk(buf), Form::Bytes),
+            Err(crate::Fault::Stdin(crate::IoReason::NotAvailable))
+        );
+        ctx.handle_close(h, Handle::Stdin).unwrap();
+    }
+    assert_eq!(mortal(ctx.heap()), 0);
+}
+
+/// 標準入力のバイト列の読みは、補充の前ごとに書き出す。2回の補充をまたぐ行は2回書き出し、buffer に残ったバイトを
+/// 読む塊の読みは書き出さず、buffer が空の塊の読みは1回書き出す。
+fn stdin_bytes_flush_before_each_refill<M: Mode>() {
+    let memory = Arc::new(MemoryHost::default().with_stdin(MemoryFile {
+        chunk: 3,
+        ..MemoryFile::text("abcd\nefg")
+    }));
+    let mut ctx = ctx_tests::ctx_with::<M>(&memory);
+    unsafe {
+        let h = ctx.handle_open(Handle::Stdin).unwrap();
+        let w = ctx
+            .handle_read(h, Handle::Stdin, ReadAmount::Line, Form::Bytes)
+            .unwrap();
+        assert_eq!(&*ctx.heap().bytes(w).unwrap(), b"abcd\n");
+        assert_eq!(memory.flushes(), 2);
+        ctx.heap_mut().decref(w).unwrap();
+        // 2回目の補充で読んだ "e" は buffer に残っている
+        let buf = ctx.heap_mut().alloc_bytes(b"");
+        let w = ctx
+            .handle_read(h, Handle::Stdin, ReadAmount::Chunk(buf), Form::Bytes)
+            .unwrap();
+        assert_eq!(&*ctx.heap().bytes(w).unwrap(), b"e");
+        assert_eq!(memory.flushes(), 2);
+        let w = ctx
+            .handle_read(h, Handle::Stdin, ReadAmount::Chunk(w), Form::Bytes)
+            .unwrap();
+        assert_eq!(&*ctx.heap().bytes(w).unwrap(), b"efg");
+        assert_eq!(memory.flushes(), 3);
+        ctx.heap_mut().decref(w).unwrap();
+        let w = ctx
+            .handle_read(h, Handle::Stdin, ReadAmount::All, Form::Bytes)
+            .unwrap();
+        assert_eq!(&*ctx.heap().bytes(w).unwrap(), b"");
+        ctx.heap_mut().decref(w).unwrap();
+        ctx.handle_close(h, Handle::Stdin).unwrap();
+    }
+    assert_eq!(mortal(ctx.heap()), 0);
+}
+
 /// スクリプトの extern の橋 (引数、環境変数、標準入力、ファイルの書き込み、子のプロセス) を、メモリの Host で通す。
 /// Host から写した文字列がヒープの文字列になり、引数の文字列が手放されることを確かめる。
 fn script_externs_go_through_the_host<M: Mode>() {
@@ -1174,10 +1264,10 @@ fn script_externs_go_through_the_host<M: Mode>() {
         let w = ctx.env_var(k).unwrap();
         assert_eq!(text(ctx.heap(), w), "v");
         ctx.heap_mut().decref(w).unwrap();
-        let w = ctx.stdin_read(true).unwrap();
+        let w = ctx_tests::stdin_read(&mut ctx, true).unwrap();
         assert_eq!(text(ctx.heap(), w), "a\n");
         ctx.heap_mut().decref(w).unwrap();
-        let w = ctx.stdin_read(false).unwrap();
+        let w = ctx_tests::stdin_read(&mut ctx, false).unwrap();
         assert_eq!(text(ctx.heap(), w), "bc");
         ctx.heap_mut().decref(w).unwrap();
         let p = ctx.heap_mut().alloc_string("f");
@@ -1498,6 +1588,8 @@ both_modes!(
     two_buffered_lines_flush_once,
     a_line_across_two_refills_flushes_before_each,
     the_stdin_reader_survives_a_second_ctx,
+    stdin_handles_take_and_return_the_reader,
+    stdin_bytes_flush_before_each_refill,
     script_externs_go_through_the_host,
     find_byte_reads_the_body_of_an_object,
 );

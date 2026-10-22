@@ -5,12 +5,13 @@ input_file: crates/eml_cli/tests/repl/std/script_io.repl
 ---
 > Env.args ()
 []
-> Stdin.read_all ()
+> Stdin.read_text ()
 runtime error: cannot read the standard input: not available
-  at <input 2>:1:1
-> Stdin.read_line ()
-runtime error: cannot read the standard input: not available
-  at <std>/Stdin.em:11:14
+  at <std>/Stdin.em:17:19
+> Stdin.open ()
+E2016 <input 3> 1:1 this input leaves a value of the linear type `Stdin`
+  <input 3> 1:1 a linear value
+  help: use up the value inside the input, as in `drop`
 > 1 + 1
 2
 --- close ---

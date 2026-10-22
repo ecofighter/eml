@@ -1,2 +1,5 @@
-main : Unit -> <IO> Unit
-main () = println (Stdin.read_all ())
+main : Unit -> <IO, Panic> Unit
+main () =
+  let (text, h) = Stdin.read_all (Stdin.open ())
+  Stdin.close h
+  println text

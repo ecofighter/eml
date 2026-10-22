@@ -927,24 +927,49 @@ fn run_extern<M: Mode>(
                 let w = ctx.fs_open(task.get(arg(0)))?;
                 task.set(dst, w);
             }
-            Extern::ReadAll | Extern::ReadLine | Extern::ReadAllBytes | Extern::ReadLineBytes => {
-                let (read, form) = match ext {
-                    Extern::ReadAll => (ReadAmount::All, Form::Text),
-                    Extern::ReadLine => (ReadAmount::Line, Form::Text),
-                    Extern::ReadAllBytes => (ReadAmount::All, Form::Bytes),
-                    _ => (ReadAmount::Line, Form::Bytes),
+            Extern::ReadAll
+            | Extern::ReadLine
+            | Extern::ReadAllBytes
+            | Extern::ReadLineBytes
+            | Extern::StdinReadAll
+            | Extern::StdinReadLine
+            | Extern::StdinReadAllBytes
+            | Extern::StdinReadLineBytes => {
+                let (handle, read, form) = match ext {
+                    Extern::ReadAll => (Handle::File, ReadAmount::All, Form::Text),
+                    Extern::ReadLine => (Handle::File, ReadAmount::Line, Form::Text),
+                    Extern::ReadAllBytes => (Handle::File, ReadAmount::All, Form::Bytes),
+                    Extern::ReadLineBytes => (Handle::File, ReadAmount::Line, Form::Bytes),
+                    Extern::StdinReadAll => (Handle::Stdin, ReadAmount::All, Form::Text),
+                    Extern::StdinReadLine => (Handle::Stdin, ReadAmount::Line, Form::Text),
+                    Extern::StdinReadAllBytes => (Handle::Stdin, ReadAmount::All, Form::Bytes),
+                    _ => (Handle::Stdin, ReadAmount::Line, Form::Bytes),
                 };
-                let w = ctx.handle_read(task.get(arg(0)), Handle::File, read, form)?;
+                let w = ctx.handle_read(task.get(arg(0)), handle, read, form)?;
                 task.set(dst, w);
             }
-            Extern::ReadChunk => {
+            Extern::ReadChunk | Extern::StdinReadChunk => {
+                let handle = if ext == Extern::ReadChunk {
+                    Handle::File
+                } else {
+                    Handle::Stdin
+                };
                 let chunk = ReadAmount::Chunk(task.get(arg(0)));
-                let w = ctx.handle_read(task.get(arg(1)), Handle::File, chunk, Form::Bytes)?;
+                let w = ctx.handle_read(task.get(arg(1)), handle, chunk, Form::Bytes)?;
                 task.set(dst, w);
             }
-            Extern::Close => {
-                ctx.fs_close(task.get(arg(0)))?;
+            Extern::Close | Extern::StdinClose => {
+                let handle = if ext == Extern::Close {
+                    Handle::File
+                } else {
+                    Handle::Stdin
+                };
+                ctx.handle_close(task.get(arg(0)), handle)?;
                 task.set(dst, Word::UNIT);
+            }
+            Extern::StdinOpen => {
+                let w = ctx.handle_open(Handle::Stdin)?;
+                task.set(dst, w);
             }
             Extern::CharShow | Extern::CharDisplay => {
                 let c = task.raw(arg(0));
@@ -1075,10 +1100,6 @@ fn run_extern<M: Mode>(
             }
             Extern::EnvLookup => {
                 let w = ctx.env_var(task.get(arg(0)))?;
-                task.set(dst, w);
-            }
-            Extern::StdinReadAll | Extern::StdinReadLine => {
-                let w = ctx.stdin_read(matches!(ext, Extern::StdinReadLine))?;
                 task.set(dst, w);
             }
             Extern::WriteText => {

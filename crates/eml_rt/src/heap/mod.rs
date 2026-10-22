@@ -3726,7 +3726,7 @@ impl<M: Mode> Heap<M> {
         }
     }
 
-    /// 書き換えるために `Foreign` の値を借りる。`Ctx::handle_read` が、`File` の読み (`Fs.read_all` など) で読み手を
+    /// 書き換えるために `Foreign` の値を借りる。`Ctx::handle_read` が、ハンドルの読み (`Fs.read_all`、`Stdin.read_line` など) で読み手を
     /// 進めるために使う。検査モードは、読めなければ `UseAfterFree` を、rc が 1 でなければ (共有の負の rc も) `NotUnique` を、持ち主が
     /// 今の worker でなければ `WrongOwner` を返す。型の照らし合わせは `foreign` と同じく速いモードでも行う。
     ///
