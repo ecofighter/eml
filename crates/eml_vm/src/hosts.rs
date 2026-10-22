@@ -3,12 +3,12 @@
 
 use std::collections::BTreeMap;
 use std::ffi::OsString;
-use std::io::{self, BufRead, BufReader, Cursor, Write};
+use std::io::{self, Cursor, Write};
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
 use std::sync::{Arc, Mutex, PoisonError};
 
-use eml_rt::{Buffering, Host, HostRef, Opened, StdHost, StdinLock, Stream, exit_code, lock_stdin};
+use eml_rt::{Buffering, Host, HostRef, Opened, StdHost, StdinSlot, Stream, exit_code};
 
 /// 書いたバイト列を覚える書き込み先。テストが出力を読むために使う。
 #[derive(Clone, Default)]
@@ -68,7 +68,7 @@ pub struct CaptureHost {
     args: Vec<OsString>,
     env: Vec<(String, OsString)>,
     /// `None` なら標準入力を使えない (REPL)。
-    stdin: Option<Mutex<Box<dyn BufRead + Send>>>,
+    stdin: Option<Arc<StdinSlot>>,
 }
 
 impl CaptureHost {
@@ -100,8 +100,7 @@ impl CaptureHost {
     }
 
     pub fn with_stdin(mut self, bytes: Vec<u8>) -> CaptureHost {
-        let reader: Box<dyn BufRead + Send> = Box::new(BufReader::new(Cursor::new(bytes)));
-        self.stdin = Some(Mutex::new(reader));
+        self.stdin = Some(Arc::new(StdinSlot::new(Box::new(Cursor::new(bytes)))));
         self
     }
 
@@ -166,11 +165,8 @@ impl Host for CaptureHost {
             .map(|(_, value)| value.clone())
     }
 
-    fn stdin(&self) -> io::Result<StdinLock<'_>> {
-        match &self.stdin {
-            Some(stdin) => Ok(lock_stdin(stdin)),
-            None => Err(io::Error::from(io::ErrorKind::Unsupported)),
-        }
+    fn stdin(&self) -> Option<Arc<StdinSlot>> {
+        self.stdin.clone()
     }
 
     fn write_file(&self, path: &str, text: &str) -> io::Result<()> {
@@ -222,6 +218,6 @@ pub fn stdio_host(file_root: PathBuf) -> HostRef {
 pub fn script_host(file_root: PathBuf, args: Vec<OsString>) -> HostRef {
     let host = StdHost::stdio(file_root)
         .with_args(args)
-        .with_stdin(Box::new(BufReader::new(io::stdin())));
+        .with_stdin(Box::new(io::stdin()));
     HostRef::new(Arc::new(host))
 }

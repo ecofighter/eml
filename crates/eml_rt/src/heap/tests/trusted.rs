@@ -922,6 +922,49 @@ fn files_go_through_the_host<M: Mode>() {
     assert_eq!(mortal(ctx.heap()), 0);
 }
 
+/// 標準入力の1行を読んで写し、手放す。
+fn stdin_line<M: Mode>(ctx: &mut Ctx<M>) -> String {
+    let w = ctx.stdin_read(true).unwrap();
+    let line = text(ctx.heap(), w).to_string();
+    unsafe { ctx.heap_mut().decref(w) }.unwrap();
+    line
+}
+
+/// 1回の補充で buffer に入った2行は、補充の前の1回だけ書き出して読む。2行目は buffer から読み、書き出さない。
+fn two_buffered_lines_flush_once<M: Mode>() {
+    let memory = Arc::new(MemoryHost::default().with_stdin(MemoryFile::text("a\nb\n")));
+    let mut ctx = ctx_tests::ctx_with::<M>(&memory);
+    assert_eq!(stdin_line(&mut ctx), "a\n");
+    assert_eq!(stdin_line(&mut ctx), "b\n");
+    assert_eq!(memory.flushes(), 1);
+    assert_eq!(mortal(ctx.heap()), 0);
+}
+
+/// 2回の補充をまたぐ行は、補充の前ごとに書き出す。
+fn a_line_across_two_refills_flushes_before_each<M: Mode>() {
+    let memory = Arc::new(MemoryHost::default().with_stdin(MemoryFile {
+        chunk: 3,
+        ..MemoryFile::text("abcd\n")
+    }));
+    let mut ctx = ctx_tests::ctx_with::<M>(&memory);
+    assert_eq!(stdin_line(&mut ctx), "abcd\n");
+    assert_eq!(memory.flushes(), 2);
+    assert_eq!(mortal(ctx.heap()), 0);
+}
+
+/// 標準入力の読み手は Host の slot に戻るので、同じ Host の上の2つ目の `Ctx` は、1つ目が buffer に残した行から読む。
+fn the_stdin_reader_survives_a_second_ctx<M: Mode>() {
+    let memory = Arc::new(MemoryHost::default().with_stdin(MemoryFile::text("a\nb\n")));
+    let mut first = ctx_tests::ctx_with::<M>(&memory);
+    assert_eq!(stdin_line(&mut first), "a\n");
+    assert_eq!(mortal(first.heap()), 0);
+    drop(first);
+    let mut second = ctx_tests::ctx_with::<M>(&memory);
+    assert_eq!(stdin_line(&mut second), "b\n");
+    assert_eq!(stdin_line(&mut second), "");
+    assert_eq!(mortal(second.heap()), 0);
+}
+
 /// スクリプトの extern の橋 (引数、環境変数、標準入力、ファイルの書き込み、子のプロセス) を、メモリの Host で通す。
 /// Host から写した文字列がヒープの文字列になり、引数の文字列が手放されることを確かめる。
 fn script_externs_go_through_the_host<M: Mode>() {
@@ -1264,6 +1307,9 @@ both_modes!(
     two_threads_share_one_control,
     println_goes_through_the_host,
     files_go_through_the_host,
+    two_buffered_lines_flush_once,
+    a_line_across_two_refills_flushes_before_each,
+    the_stdin_reader_survives_a_second_ctx,
     script_externs_go_through_the_host,
     find_byte_reads_the_body_of_an_object,
 );

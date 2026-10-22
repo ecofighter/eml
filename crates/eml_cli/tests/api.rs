@@ -685,16 +685,6 @@ impl io::Read for CountedReader {
     }
 }
 
-impl io::BufRead for CountedReader {
-    fn fill_buf(&mut self) -> io::Result<&[u8]> {
-        self.inner.fill_buf()
-    }
-
-    fn consume(&mut self, n: usize) {
-        self.inner.consume(n)
-    }
-}
-
 impl Drop for CountedReader {
     fn drop(&mut self) {
         self.drops.fetch_add(1, Ordering::SeqCst);

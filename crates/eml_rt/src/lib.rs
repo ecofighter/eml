@@ -30,9 +30,7 @@ pub use error::HeapError;
 pub use externs::{ArithFault, Fault, IndexFault, IoOp, IoReason, Utf8Source};
 pub use frozen::Frozen;
 pub use heap::{Ctx, CtxStats, Heap, MaskItem, Stats, Token};
-pub use host::{
-    Buffering, Host, HostRef, Opened, StdHost, StdinLock, Stream, exit_code, lock_stdin,
-};
+pub use host::{Buffering, Host, HostRef, Opened, StdHost, StdinSlot, Stream, exit_code};
 pub use meta::{Kind, Meta};
 pub use mode::{Checked, Fast, Mode};
 pub use word::Word;

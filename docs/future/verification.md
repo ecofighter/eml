@@ -19,7 +19,7 @@
 | 速いモードの前提 | 前提を作る段 |
 |---|---|
 | RC のモデル (消費する操作では呼ぶ側が参照を1つ持つ、など) | Perceus。LIR の verifier が確かめるが、debug ビルドだけである |
-| `Fs.read_all` と `read_line_raw` の `File` は局所で rc が 1 である ([オブジェクトモデル](../spec/object-model.md) の「`File`」) | Kind の印 (Kind 推論、`kind_values`、translate) と V1 |
+| `Fs.read_all` と `read_line_raw` の `File` は局所で rc が 1 である ([オブジェクトモデル](../spec/object-model.md) の「読み手」) | Kind の印 (Kind 推論、`kind_values`、translate) と V1 |
 | `ev_lookup` の `evv` に、探すエフェクトの evidence がある | 型検査の row と `mask` ([エフェクトと handler](../spec/effects.md) の「健全性」) と EP |
 | 外側の `evv` が `evv_wf` を満たす、yield の状態の手順を守る | EP ([オブジェクトモデル](../spec/object-model.md) の「基本操作の契約」) |
 

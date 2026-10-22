@@ -6,11 +6,11 @@
 
 use std::ffi::OsString;
 use std::fs;
-use std::io::{self, BufRead, BufReader, BufWriter, IsTerminal, Read, Write};
+use std::io::{self, BufWriter, IsTerminal, Read, Write};
 use std::mem::ManuallyDrop;
 use std::path::PathBuf;
 use std::process::{Command, ExitStatus};
-use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
+use std::sync::{Arc, Mutex, PoisonError};
 
 use vstd::prelude::*;
 
@@ -58,20 +58,71 @@ pub(crate) fn host_flush(host: &HostRef) -> Result<(), Box<str>> {
 pub(crate) struct File {
     /// `open` に渡されたままのパス。誤りの文言に使う。
     path: Box<str>,
-    reader: Box<dyn BufRead + Send>,
+    reader: Reader,
     /// まだ使っていない長さの見込み。1回目の読みが取り出すので、その後の `read_all` は余分に確保しない。
     size: Option<u64>,
 }
 
-/// 読みの誤り。`Box<str>` は File のパスである。
-pub(crate) enum ReadError {
-    Io(Box<str>, IoReason),
-    NotUtf8(Box<str>),
+/// 1回に読むバイト数。読み手の buffer の大きさで、読む間に止める語と確保量を見る間隔になる。
+const READ_CHUNK: u64 = 64 * 1024;
+
+/// 読みが途中で終わった理由。`Output` は、補充の前に標準出力を書き出せなかったことである。
+pub(crate) enum Failure {
+    Io(IoReason),
     Stopped(Stop),
+    Output(Box<str>),
 }
 
-/// 1回に読むバイト数。読む間に止める語と確保量を見る間隔になる。
-const READ_CHUNK: u64 = 64 * 1024;
+/// buffer を持つ読み手 (docs/spec/object-model.md の「読み手」)。`fill` が最大 `READ_CHUNK` バイトを1回読み、
+/// `consume` が使った分を進める。
+#[verifier::external_body]
+pub(crate) struct Reader {
+    inner: Box<dyn Read + Send>,
+    /// 全部の読みだけをする読み手は buffer を使わないので、最初の補充で確保する
+    buf: Box<[u8]>,
+    pos: usize,
+    filled: usize,
+}
+
+/// Host が持つ標準入力の読み手の置き場 (docs/spec/object-model.md の「読み手」)。読む者が取り、buffer に残ったバイト
+/// ごと返すので、同じ Host の上の次の `Ctx` も、読んでいない入力から続けて読める。
+#[verifier::external_body]
+pub struct StdinSlot {
+    reader: Mutex<Option<Reader>>,
+}
+
+/// `src` の読み手の buffer に残ったバイトを返す。空なら1回補充してから返し、終わりなら空の slice を返す
+/// (`Reader::fill_buf`)。`host` があれば、補充の前にその Host の出力を書き出させる (標準入力の読み)。誤りは `src` の
+/// 名前を付けた `Fault` にする (`Source::fault`)。検証した `Ctx` のコードは、`foreign_unique` で借りたハンドルのまま
+/// これを呼ぶ。
+///
+/// # Safety
+/// `src` は生きている `S` を指し、呼ぶ間ほかに参照がない。返す slice を読めるのは、次にこの読み手に `fill` か
+/// `consume` を呼ぶか、`src` を落とすまでの間だけである。slice は読み手の buffer を指し、ヒープのページを指さないので、
+/// その間にヒープで確保しても解放してもよい。
+#[verifier::external_body]
+pub(crate) unsafe fn fill<'a, S: Source>(
+    src: *mut S,
+    control: &Control,
+    host: Option<&HostRef>,
+) -> Result<&'a [u8], Fault> {
+    // `fill_buf` の slice の寿命は `src` の借用に縛られるが、ここで呼ぶ側の約束 (上の Safety) の寿命に付け替える
+    let r: *mut Reader = unsafe { (*src).reader() };
+    match unsafe { (*r).fill_buf(control, host) } {
+        Ok(bytes) => Ok(bytes),
+        Err(failure) => Err(unsafe { (*src).fault(failure) }),
+    }
+}
+
+/// `fill` が返したバイトのうち、先頭の `n` バイトを使ったことにする (`Reader::consume`)。
+///
+/// # Safety
+/// `src` は生きている `S` を指し、呼ぶ間ほかに参照がない。
+#[verifier::external_body]
+pub(crate) unsafe fn consume<S: Source>(src: *mut S, n: usize) {
+    let reader = unsafe { (*src).reader() };
+    reader.consume(n);
+}
 
 /// Host に `path` を開かせる。誤りなら、写したパスと理由を返す。
 #[verifier::external_body]
@@ -79,29 +130,52 @@ pub(crate) fn host_open(host: &HostRef, path: &str) -> Result<File, (Box<str>, I
     // パスは1回だけ写し、開けても開けなくても、それを持たせる
     let path: Box<str> = path.into();
     match host.host.open(&path) {
-        Ok(Opened { reader, size }) => Ok(File { path, reader, size }),
+        Ok(Opened { reader, size }) => Ok(File { path, reader: Reader::new(reader), size }),
         Err(e) => Err((path, io_reason(&e))),
     }
 }
 
-/// `file` を終わりまで (`line` なら次の `\n` まで、それを含めて) 読み、UTF-8 の文字列にする。
+/// `file` を終わりまで (`line` なら次の `\n` まで、それを含めて) 読み、UTF-8 の文字列にする。誤りはパスを付けた
+/// `Fault` で返す。
 ///
 /// # Safety
 /// `file` は生きている `File` を指し、読む間ほかに参照がない。呼ぶ側が `Heap::foreign_unique` で確かめる (T3)。
 #[verifier::external_body]
-pub(crate) unsafe fn read_text(file: *mut File, control: &Control, line: bool) -> Result<
+pub(crate) unsafe fn read_text(file: *mut File, control: &Control, line: bool) -> (r: Result<
     String,
-    ReadError,
-> {
-    let file = unsafe { &mut *file };
+    Fault,
+>)
+    ensures
+        r matches Err(e) ==> (e matches Fault::Io { op: IoOp::Read, .. }) || (
+        e matches Fault::NotUtf8(_)) || (e matches Fault::Stopped(_)),
+{
     // 見込みはファイル全体の長さなので、1行の読みでは確保に使わない。読んだ後は残りの長さと合わないので捨てる
-    let size = file.size.take().filter(|_| !line);
-    let mut reader = StopOnInterrupt { reader: &mut *file.reader, control };
-    match reader.read_bytes(size, line) {
-        Ok(bytes) => String::from_utf8(bytes).map_err(|_| ReadError::NotUtf8(file.path.clone())),
-        Err(Failure::Io(reason)) => Err(ReadError::Io(file.path.clone(), reason)),
-        Err(Failure::Stopped(stop)) => Err(ReadError::Stopped(stop)),
-    }
+    let size = unsafe { (*file).size.take() }.filter(|_| !line);
+    let bytes = if line {
+        // `fill` の slice は `consume` の前までしか使わない
+        let mut bytes = Vec::new();
+        loop {
+            check(control, bytes.capacity()).map_err(|f| unsafe { (*file).fault(f) })?;
+            let buf = unsafe { fill(file, control, None) }?;
+            if buf.is_empty() {
+                break;
+            }
+            let (used, done) = line_part(buf);
+            bytes.extend_from_slice(&buf[..used]);
+            unsafe { consume(file, used) };
+            if done {
+                break;
+            }
+        }
+        bytes
+    } else {
+        read_all(unsafe { &mut (*file).reader }, control, size, None).map_err(
+            |f| unsafe { (*file).fault(f) },
+        )?
+    };
+    String::from_utf8(bytes).map_err(
+        |_| Fault::NotUtf8(Box::new(Utf8Source::File(unsafe { (*file).path.clone() }))),
+    )
 }
 
 /// スクリプトに渡した引数の数。
@@ -143,8 +217,9 @@ pub(crate) fn host_env_var(host: &HostRef, name: &str) -> (r: Result<String, Fau
     }
 }
 
-/// 標準出力を書き出してから、標準入力の残りをすべて (`line` なら次の `\n` まで) 読む。読みは `read_text` と同じく
-/// 止める語と確保量を見る。
+/// 標準入力の残りをすべて (`line` なら次の `\n` まで) 読む。読み手は Host の slot に置いたまま、slot のロックの下で
+/// 読むので、誤りでも panic でも buffer に残ったバイトごと slot に残る。補充の前ごとに標準出力を書き出し、読みは
+/// `read_text` と同じく止める語と確保量を見る。
 #[verifier::external_body]
 pub(crate) fn host_read_stdin(host: &HostRef, control: &Control, line: bool) -> (r: Result<
     String,
@@ -153,15 +228,25 @@ pub(crate) fn host_read_stdin(host: &HostRef, control: &Control, line: bool) -> 
     ensures
         !(r matches Err(Fault::Heap(_))),
 {
-    host.host.flush().map_err(|e| Fault::Output(e.to_string().into_boxed_str()))?;
-    let mut stdin = host.host.stdin().map_err(|e| Fault::Stdin(io_reason(&e)))?;
-    let mut reader = StopOnInterrupt { reader: &mut **stdin, control };
-    match reader.read_bytes(None, line) {
+    let not_available = || Fault::Stdin(IoReason::NotAvailable);
+    let slot = host.host.stdin().ok_or_else(not_available)?;
+    let read = slot.with_reader(
+        |reader|
+            {
+                if line {
+                    read_line(reader, control, Some(host))
+                } else {
+                    read_all(reader, control, None, Some(host))
+                }
+            },
+    ).ok_or_else(not_available)?;
+    match read {
         Ok(bytes) => String::from_utf8(bytes).map_err(
             |_| Fault::NotUtf8(Box::new(Utf8Source::Stdin)),
         ),
         Err(Failure::Io(reason)) => Err(Fault::Stdin(reason)),
         Err(Failure::Stopped(stop)) => Err(Fault::Stopped(stop)),
+        Err(Failure::Output(message)) => Err(Fault::Output(message)),
     }
 }
 
@@ -219,93 +304,104 @@ pub(crate) fn host_run(host: &HostRef, control: &Control, program: &str, args: &
 } // verus!
 
 /// 止める語が立った後の `Interrupted` を、`read_to_end` が読み直さない誤りに変える読み手 (docs/spec/object-model.md の
-/// 「`File`」)。SIGINT のハンドラは `SA_RESTART` を外して入れるので、待っている読みは `EINTR` で戻る。止める語が
+/// 「読み手」)。SIGINT のハンドラは `SA_RESTART` を外して入れるので、待っている読みは `EINTR` で戻る。止める語が
 /// 立っていなければ `Interrupted` のまま返し、`read_to_end` に読み直させる。`read_buf` は stable では実装できないので、
 /// `read_to_end` は空き領域を 0 で埋めてから読む。
 struct StopOnInterrupt<'a> {
-    reader: &'a mut (dyn BufRead + Send),
+    reader: &'a mut (dyn Read + Send),
     control: &'a Control,
 }
 
-/// 読みが途中で終わった理由。
-enum Failure {
-    Io(IoReason),
-    Stopped(Stop),
+/// 止める語が立っていれば止め、`Vec` の持つ領域の大きさ `held` をページの確保量に足して上限と比べる。`Vec` はヒープの
+/// 外にあり、そのままでは上限に数えられないためである。
+fn check(control: &Control, held: usize) -> Result<(), Failure> {
+    let bits = control.stop_bits();
+    if bits != 0 {
+        Err(Failure::Stopped(stop_reason(bits)))
+    } else if control.over_budget(held) {
+        Err(Failure::Stopped(Stop::MemoryLimit))
+    } else {
+        Ok(())
+    }
 }
 
-impl StopOnInterrupt<'_> {
-    /// 終わりまで (`line` なら `\n` まで、それを含めて) 読む。`READ_CHUNK` バイトごとに止める語と確保量を見る。`size` は
-    /// 読む前に分かる長さで、それが上限を超える見込みなら、確保を試す前に止める。
-    fn read_bytes(&mut self, size: Option<u64>, line: bool) -> Result<Vec<u8>, Failure> {
-        let control = self.control;
-        // `Vec` はヒープの外にあるので、持つ領域の大きさ `held` をページの確保量に足して上限と比べる
-        let check = |held: usize| {
-            let bits = control.stop_bits();
-            if bits != 0 {
-                Err(Failure::Stopped(stop_reason(bits)))
-            } else if control.over_budget(held) {
-                Err(Failure::Stopped(Stop::MemoryLimit))
-            } else {
-                Ok(())
-            }
-        };
-        // 止める語が立っていれば、読みの誤りより止めたことを報告する。`read` が返した止めたことの誤りもここに来る
-        let failed = |e: &io::Error| {
-            let bits = control.stop_bits();
-            if bits != 0 {
-                Failure::Stopped(stop_reason(bits))
-            } else {
-                Failure::Io(io_reason(e))
-            }
-        };
-        let mut bytes = Vec::new();
-        if let Some(size) = size {
-            // 確保できないほど大きい見込みも、上限があれば上限の誤りになる
-            let size = usize::try_from(size).unwrap_or(usize::MAX);
-            check(size)?;
-            // 確保に失敗したら I/O の誤りにする (`read_to_end` と同じ)
-            if bytes.try_reserve(size).is_err() {
-                return Err(Failure::Io(IoReason::Other));
-            }
+/// 次の `\n` まで (それを含めて) 読む。終わりなら空である。std の `read_until` は `Interrupted` を自分で読み直すので、
+/// 止める語を見られない。
+fn read_line(
+    reader: &mut Reader,
+    control: &Control,
+    host: Option<&HostRef>,
+) -> Result<Vec<u8>, Failure> {
+    let mut bytes = Vec::new();
+    loop {
+        check(control, bytes.capacity())?;
+        let buf = reader.fill_buf(control, host)?;
+        if buf.is_empty() {
+            return Ok(bytes);
         }
-        let chunk = READ_CHUNK as usize;
-        loop {
-            check(bytes.capacity())?;
-            if !line {
-                // `read_to_end` が、止める語の立っていない `Interrupted` の読み直し、短い読み、終わりを小さな読みで
-                // 確かめることを受け持つ
-                match (&mut *self).take(READ_CHUNK).read_to_end(&mut bytes) {
-                    Ok(0) => return Ok(bytes),
-                    Ok(_) => continue,
-                    Err(e) => return Err(failed(&e)),
-                }
-            }
-            // 行は `fill_buf` で読み手のバッファを見て、`\n` までを写す。std の `read_until` は `Interrupted` を自分で
-            // 読み直すので、止める語を見られない
-            let (used, done) = match self.reader.fill_buf() {
-                Ok([]) => return Ok(bytes),
-                Ok(buf) => {
-                    let buf = &buf[..buf.len().min(chunk)];
-                    match buf.iter().position(|&b| b == b'\n') {
-                        Some(i) => {
-                            bytes.extend_from_slice(&buf[..=i]);
-                            (i + 1, true)
-                        }
-                        None => {
-                            bytes.extend_from_slice(buf);
-                            (buf.len(), false)
-                        }
-                    }
-                }
-                Err(e) if e.kind() == io::ErrorKind::Interrupted && control.stop_bits() == 0 => {
-                    continue;
-                }
-                Err(e) => return Err(failed(&e)),
-            };
-            self.reader.consume(used);
-            if done {
-                return Ok(bytes);
-            }
+        let (used, done) = line_part(buf);
+        bytes.extend_from_slice(&buf[..used]);
+        reader.consume(used);
+        if done {
+            return Ok(bytes);
+        }
+    }
+}
+
+/// 1行の読みで `buf` から写すバイト数と、そこで行が終わるか。`\n` があればそれまで (それを含めて)、なければ全部である。
+fn line_part(buf: &[u8]) -> (usize, bool) {
+    match buf.iter().position(|&b| b == b'\n') {
+        Some(i) => (i + 1, true),
+        None => (buf.len(), false),
+    }
+}
+
+/// 終わりまで読む。buffer に残ったバイトを先に取り、後は中の読み手を `READ_CHUNK` バイトずつ読みながら、止める語と
+/// 確保量を見る。`size` は読む前に分かる長さで、それが上限を超える見込みなら、確保を試す前に止める。`host` があれば、
+/// 中の読み手を読む前に1回、その Host の出力を書き出させる。
+fn read_all(
+    reader: &mut Reader,
+    control: &Control,
+    size: Option<u64>,
+    host: Option<&HostRef>,
+) -> Result<Vec<u8>, Failure> {
+    let mut bytes = Vec::new();
+    if let Some(size) = size {
+        // 確保できないほど大きい見込みも、上限があれば上限の誤りになる
+        let size = usize::try_from(size).unwrap_or(usize::MAX);
+        check(control, size)?;
+        // 確保に失敗したら I/O の誤りにする (`read_to_end` と同じ)
+        if bytes.try_reserve(size).is_err() {
+            return Err(Failure::Io(IoReason::Other));
+        }
+    }
+    bytes.extend_from_slice(reader.take_buffered());
+    if let Some(host) = host {
+        host.host
+            .flush()
+            .map_err(|e| Failure::Output(e.to_string().into_boxed_str()))?;
+    }
+    // 止める語が立っていれば、読みの誤りより止めたことを報告する。`read` が返した止めたことの誤りもここに来る
+    let failed = |e: &io::Error| {
+        let bits = control.stop_bits();
+        if bits != 0 {
+            Failure::Stopped(stop_reason(bits))
+        } else {
+            Failure::Io(io_reason(e))
+        }
+    };
+    let mut inner = StopOnInterrupt {
+        reader: &mut *reader.inner,
+        control,
+    };
+    loop {
+        check(control, bytes.capacity())?;
+        // `read_to_end` が、止める語の立っていない `Interrupted` の読み直し、短い読み、終わりを小さな読みで確かめる
+        // ことを受け持つ
+        match (&mut inner).take(READ_CHUNK).read_to_end(&mut bytes) {
+            Ok(0) => return Ok(bytes),
+            Ok(_) => continue,
+            Err(e) => return Err(failed(&e)),
         }
     }
 }
@@ -317,6 +413,114 @@ impl Read for StopOnInterrupt<'_> {
                 Err(io::Error::other("stopped while reading"))
             }
             result => result,
+        }
+    }
+}
+
+impl Reader {
+    pub(crate) fn new(inner: Box<dyn Read + Send>) -> Reader {
+        Reader {
+            inner,
+            buf: Box::default(),
+            pos: 0,
+            filled: 0,
+        }
+    }
+
+    /// buffer に残ったバイトを返す。空なら、止める語と確保量を見てから1回だけ読んで補充する。`host` があれば、補充の前に
+    /// その Host の出力を書き出させる。終わりなら空の slice を返す。slice の寿命は `self` の借用に縛るので、次の
+    /// `fill_buf` か `consume` の後に古い slice を読むコードはコンパイルできない。
+    pub(crate) fn fill_buf(
+        &mut self,
+        control: &Control,
+        host: Option<&HostRef>,
+    ) -> Result<&[u8], Failure> {
+        if self.pos < self.filled {
+            return Ok(&self.buf[self.pos..self.filled]);
+        }
+        if self.buf.is_empty() {
+            self.buf = vec![0; READ_CHUNK as usize].into_boxed_slice();
+        }
+        if let Some(host) = host {
+            host.host
+                .flush()
+                .map_err(|e| Failure::Output(e.to_string().into_boxed_str()))?;
+        }
+        loop {
+            check(control, 0)?;
+            match self.inner.read(&mut self.buf) {
+                Ok(n) => {
+                    self.pos = 0;
+                    self.filled = n;
+                    return Ok(&self.buf[..n]);
+                }
+                // 止める語が立っていない `Interrupted` は読み直す。立っていれば、次の周回の確かめが止める
+                Err(e) if e.kind() == io::ErrorKind::Interrupted => continue,
+                Err(e) => {
+                    let bits = control.stop_bits();
+                    return Err(if bits != 0 {
+                        Failure::Stopped(stop_reason(bits))
+                    } else {
+                        Failure::Io(io_reason(&e))
+                    });
+                }
+            }
+        }
+    }
+
+    /// `fill_buf` が返したバイトのうち、先頭の `n` バイトを使ったことにする。
+    pub(crate) fn consume(&mut self, n: usize) {
+        self.pos = self.filled.min(self.pos.saturating_add(n));
+    }
+
+    /// buffer に残ったバイトをすべて取り出す。全部の読みが、中の読み手を読む前に使う。
+    fn take_buffered(&mut self) -> &[u8] {
+        let rest = &self.buf[self.pos..self.filled];
+        self.pos = self.filled;
+        rest
+    }
+}
+
+impl StdinSlot {
+    /// `reader` を標準入力の読み手として置く。
+    pub fn new(reader: Box<dyn Read + Send>) -> StdinSlot {
+        StdinSlot {
+            reader: Mutex::new(Some(Reader::new(reader))),
+        }
+    }
+
+    /// slot のロックの下で、読み手を `f` に貸す。slot が空なら `None` である。読み手は slot に残るので、`f` が誤りを
+    /// 返しても panic しても、buffer に残ったバイトは次の読みに残る。中身は読み手だけなので、ロックが毒されても続けて
+    /// 使う。
+    pub(crate) fn with_reader<R>(&self, f: impl FnOnce(&mut Reader) -> R) -> Option<R> {
+        let mut reader = self.reader.lock().unwrap_or_else(PoisonError::into_inner);
+        reader.as_mut().map(f)
+    }
+}
+
+/// `fill` と `consume` が読む読み手のハンドル。`Foreign` の中身の型ごとに実装する。検証した `Ctx` のコードはハンドルの
+/// 中身を開けないので、読み手を取り出すことと、誤りに名前を付けることを、信頼の一覧の `fill` の中でこの trait に
+/// 任せる (docs/spec/object-model.md の「読み手」)。
+pub(crate) trait Source {
+    fn reader(&mut self) -> &mut Reader;
+    /// 読みの誤りを、このハンドルの名前を付けた `Fault` にする。
+    fn fault(&self, failure: Failure) -> Fault;
+}
+
+impl Source for File {
+    fn reader(&mut self) -> &mut Reader {
+        &mut self.reader
+    }
+
+    fn fault(&self, failure: Failure) -> Fault {
+        match failure {
+            Failure::Io(reason) => Fault::Io {
+                op: IoOp::Read,
+                name: self.path.clone(),
+                reason,
+            },
+            Failure::Stopped(stop) => Fault::Stopped(stop),
+            Failure::Output(message) => Fault::Output(message),
         }
     }
 }
@@ -364,9 +568,9 @@ pub trait Host: Send + Sync {
     fn env_var(&self, _name: &str) -> Option<OsString> {
         None
     }
-    /// 標準入力の読み手を、読む間だけ貸す。
-    fn stdin(&self) -> io::Result<StdinLock<'_>> {
-        Err(io::Error::from(io::ErrorKind::Unsupported))
+    /// 標準入力の読み手の slot。`None` なら標準入力を使えない。
+    fn stdin(&self) -> Option<Arc<StdinSlot>> {
+        None
     }
     /// `path` のファイルを作るか切り詰めて、`text` を書く。
     fn write_file(&self, _path: &str, _text: &str) -> io::Result<()> {
@@ -378,9 +582,6 @@ pub trait Host: Send + Sync {
         Err(io::Error::from(io::ErrorKind::Unsupported))
     }
 }
-
-/// `Host::stdin` が貸す標準入力の読み手。
-pub type StdinLock<'a> = MutexGuard<'a, Box<dyn BufRead + Send>>;
 
 /// 子のプロセスの終了コード。シグナルで終わった子は、シェルと同じく 128 + シグナルの番号にする。
 pub fn exit_code(status: ExitStatus) -> i32 {
@@ -394,15 +595,10 @@ pub fn exit_code(status: ExitStatus) -> i32 {
     status.code().unwrap_or(1)
 }
 
-/// 標準入力の読み手を守るロックを取る。中身は読み手だけなので、毒されても続けて使ってよい。
-pub fn lock_stdin(stdin: &Mutex<Box<dyn BufRead + Send>>) -> StdinLock<'_> {
-    stdin.lock().unwrap_or_else(PoisonError::into_inner)
-}
-
 /// 開いたファイル。
 pub struct Opened {
-    // 行ごとに読む extern (`Fs.read_line_raw`) も、そのまま使えるよう `BufRead` で渡す
-    pub reader: Box<dyn BufRead + Send>,
+    // buffer は `eml_rt` の読み手が持つので、Host は buffer のない読み手を渡せばよい
+    pub reader: Box<dyn Read + Send>,
     /// 読む前に分かる長さ。ふつうのファイルなら、メタデータの長さである。
     pub size: Option<u64>,
 }
@@ -431,7 +627,7 @@ pub struct StdHost {
     file_root: PathBuf,
     args: Vec<OsString>,
     /// `None` なら標準入力を使えない (REPL)。
-    stdin: Option<Mutex<Box<dyn BufRead + Send>>>,
+    stdin: Option<Arc<StdinSlot>>,
 }
 
 impl StdHost {
@@ -473,8 +669,8 @@ impl StdHost {
     }
 
     /// 標準入力の読み手。渡さなければ、標準入力を使えない。
-    pub fn with_stdin(mut self, stdin: Box<dyn BufRead + Send>) -> StdHost {
-        self.stdin = Some(Mutex::new(stdin));
+    pub fn with_stdin(mut self, stdin: Box<dyn Read + Send>) -> StdHost {
+        self.stdin = Some(Arc::new(StdinSlot::new(stdin)));
         self
     }
 }
@@ -518,7 +714,7 @@ impl Host for StdHost {
             .filter(|m| m.is_file())
             .map(|m| m.len());
         Ok(Opened {
-            reader: Box::new(BufReader::new(file)),
+            reader: Box::new(file),
             size,
         })
     }
@@ -535,11 +731,8 @@ impl Host for StdHost {
         std::env::var_os(name)
     }
 
-    fn stdin(&self) -> io::Result<StdinLock<'_>> {
-        match &self.stdin {
-            Some(stdin) => Ok(lock_stdin(stdin)),
-            None => Err(io::Error::from(io::ErrorKind::Unsupported)),
-        }
+    fn stdin(&self) -> Option<Arc<StdinSlot>> {
+        self.stdin.clone()
     }
 
     fn write_file(&self, path: &str, text: &str) -> io::Result<()> {
@@ -558,8 +751,8 @@ impl Host for StdHost {
     }
 }
 
-/// I/O の誤りの理由 (`read_text`、`write_file`、`run`、`stdin()` の失敗を `Fault` の理由にする)。止める語が立った後の
-/// `Interrupted` は `StopOnInterrupt::read_bytes` が止めたことにし、立っていない `Interrupted` は `read_to_end` が読み直す。
+/// I/O の誤りの理由 (`read_text`、`write_file`、`run` の失敗を `Fault` の理由にする)。止める語が立った後の
+/// `Interrupted` は `fill` と `read_all` が止めたことにし、立っていない `Interrupted` は読み直す。
 /// 読み以外の `Interrupted` は止める語と関係なく、ここで `Other` になる。
 fn io_reason(e: &io::Error) -> IoReason {
     match e.kind() {

@@ -357,7 +357,7 @@ pub while : (Unit -> <e> Bool) -> (Unit -> <e> Unit) -> <e> Unit
 
 - `read_all ()` は、標準入力の残りをすべて読む
 - `read_line ()` は1行を読み、行の終わり (`\n` か `\r\n`) を `String.trim_line_end` で除いて返す。EOF なら `None` を返す。行の終わりのない最後の行も1行として返す
-- どちらも、読む前に標準出力を書き出す。読みは `Fs.read_all` と同じく、64 KiB ずつ読みながら割り込みと確保量の上限を見る。UTF-8 でない入力は実行時エラーにする
+- 読みは `Fs.read_all` と同じく、64 KiB ずつ読みながら割り込みと確保量の上限を見る。読み手は 64 KiB の buffer を持ち、buffer を補充する前ごとに標準出力を書き出す。buffer から読むときは書き出さないので、入力を pipe で先読みしたとき、buffer にある2つの行の間に書いたプロンプトは、次の補充かプログラムの終わりまで出ない (C と同じ。[オブジェクトモデル](object-model.md) の「読み手」)。UTF-8 でない入力は実行時エラーにする
 - REPL では、標準入力を REPL 自身が読むので、どちらも I/O の失敗 (`cannot read the standard input: not available`) にする
 
 ## `Fs`
@@ -373,7 +373,7 @@ pub while : (Unit -> <e> Bool) -> (Unit -> <e> Unit) -> <e> Unit
 - `read_text path` は、ファイル全体を文字列として読む。`open`、`read_all`、`close` で書いた関数である
 - `write_text path text` は、ファイルを作るか切り詰めて、`text` を書く
 - `read_line file` は、今の位置から1行を読み、行の終わり (`\n` か `\r\n`) を `String.trim_line_end` で除いて、同じ `File` と組にして返す。終わりなら `None` を返す。行の終わりのない最後の行も1行として返す。`Stdin.read_line` と同じである
-- `read_line` は、`File` を持ったまま1行ずつ読む生産者を書くための関数で、後のバイト列とハンドルの項目でハンドルの API に置き換わりうる ([ロードマップ](../future/roadmap.md) の「バイト列とハンドル」)。std の中だけの extern `read_line_raw : File -> <IO> (File, String)` の上に書いてある。`read_line_raw` は行の終わりを含む1行を返し、終わりなら空の文字列を返す (上の「extern の境界」の番兵)。読み方は `read_all` と同じく `File` の `BufRead` から読み、64 KiB を超える行も、割り込みと確保量の上限を見ながら読む ([オブジェクトモデル](object-model.md) の「`File`」)
+- `read_line` は、`File` を持ったまま1行ずつ読む生産者を書くための関数で、後のバイト列とハンドルの項目でハンドルの API に置き換わりうる ([ロードマップ](../future/roadmap.md) の「バイト列とハンドル」)。std の中だけの extern `read_line_raw : File -> <IO> (File, String)` の上に書いてある。`read_line_raw` は行の終わりを含む1行を返し、終わりなら空の文字列を返す (上の「extern の境界」の番兵)。読み方は `read_all` と同じく `File` の読み手から読み、64 KiB を超える行も、割り込みと確保量の上限を見ながら読む ([オブジェクトモデル](object-model.md) の「読み手」)
 - 読めないときと UTF-8 でない行の誤りは、文言も `try_io` での捕まえ方も `read_all` と同じである ([LIR](lir.md) の「実行時エラー」)。誤りのときは `read_all` と同じく、`File` をそこで閉じる
 
 ## `Proc`

@@ -4,8 +4,8 @@
 #[cfg(verus_only)]
 use super::proof::*;
 use super::*;
-use crate::externs::{Fault, IoOp, TUPLE, Utf8Source};
-use crate::host::{File, ReadError, Stream, host_flush, host_open, host_write_line, read_text};
+use crate::externs::{Fault, IoOp, TUPLE};
+use crate::host::{File, Stream, host_flush, host_open, host_write_line, read_text};
 #[cfg(verus_only)]
 use vstd::string::StringSliceAdditionalSpecFns;
 
@@ -357,19 +357,7 @@ impl<M: Mode> Ctx<M> {
                         self.lemma_closed(s0, file);
                     }
                 }
-                return Err(
-                    match e {
-                        ReadError::Io(path, reason) => Fault::Io {
-                            op: IoOp::Read,
-                            name: path,
-                            reason,
-                        },
-                        ReadError::NotUtf8(path) => Fault::NotUtf8(
-                            Box::new(Utf8Source::File(path)),
-                        ),
-                        ReadError::Stopped(stop) => Fault::Stopped(stop),
-                    },
-                );
+                return Err(e);
             },
         };
         let text = text.as_str();

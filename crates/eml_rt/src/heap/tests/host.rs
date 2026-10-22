@@ -2,11 +2,11 @@
 
 use std::collections::HashMap;
 use std::ffi::OsString;
-use std::io::{self, BufRead, BufReader, Read, Write};
+use std::io::{self, Read, Write};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
-use crate::{Host, HostRef, Opened, StdinLock, Stream, lock_stdin};
+use crate::{Host, HostRef, Opened, StdinSlot, Stream};
 
 /// メモリの上のファイル。読み手の振る舞い (1回に返すバイト数、途中の誤り、中断) を決められる。
 #[derive(Clone, Default)]
@@ -22,12 +22,16 @@ pub(super) struct MemoryFile {
     pub(super) fail_after: Option<usize>,
     /// 最初の読みで `Interrupted` を1回返す
     pub(super) interrupt_once: bool,
+    /// 最初の読みで誤りを1回返す
+    pub(super) fail_once: bool,
     /// 最初の読みでこの `Control` に割り込みを立て、`Interrupted` を返す。SIGINT のハンドラが止める語を立てた後に、
     /// 待っている読みが `EINTR` で戻ることを表す。その後にもう一度読むと読み手が panic するので、すぐ止めなければ
     /// テストが落ちる
     pub(super) interrupt_with: Option<Arc<crate::Control>>,
     /// 読み手が落ちた回数
     pub(super) drops: Option<Arc<AtomicUsize>>,
+    /// 読み手の `read` が呼ばれた回数
+    pub(super) reads: Option<Arc<AtomicUsize>>,
 }
 
 impl MemoryFile {
@@ -48,6 +52,9 @@ struct Reader {
 
 impl Read for Reader {
     fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+        if let Some(reads) = &self.file.reads {
+            reads.fetch_add(1, Ordering::Relaxed);
+        }
         if let Some(control) = &self.file.interrupt_with {
             assert!(!self.interrupted, "the read was retried after an interrupt");
             self.interrupted = true;
@@ -57,6 +64,10 @@ impl Read for Reader {
         if self.file.interrupt_once && !self.interrupted {
             self.interrupted = true;
             return Err(io::Error::from(io::ErrorKind::Interrupted));
+        }
+        if self.file.fail_once && !self.interrupted {
+            self.interrupted = true;
+            return Err(io::Error::other("the disk went away once"));
         }
         if self.file.fail_after.is_some_and(|n| self.at >= n) {
             return Err(io::Error::other("the disk went away"));
@@ -90,7 +101,7 @@ pub(super) struct MemoryHost {
     args: Vec<OsString>,
     env: HashMap<String, OsString>,
     /// `None` なら標準入力を使えない
-    stdin: Option<Mutex<Box<dyn BufRead + Send>>>,
+    stdin: Option<Arc<StdinSlot>>,
     /// `write_file` が書いたファイル
     written: Mutex<HashMap<String, String>>,
     /// `run` が受けたプログラムと引数
@@ -127,12 +138,12 @@ impl MemoryHost {
     }
     /// 標準入力をメモリのファイルから読ませる
     pub(super) fn with_stdin(mut self, file: MemoryFile) -> MemoryHost {
-        let reader: Box<dyn BufRead + Send> = Box::new(BufReader::new(Reader {
+        let reader = Box::new(Reader {
             file,
             at: 0,
             interrupted: false,
-        }));
-        self.stdin = Some(Mutex::new(reader));
+        });
+        self.stdin = Some(Arc::new(StdinSlot::new(reader)));
         self
     }
     pub(super) fn interrupting(mut self, control: Arc<crate::Control>) -> MemoryHost {
@@ -178,11 +189,11 @@ impl Host for MemoryHost {
         let size = file
             .claimed_size
             .or(file.sized.then_some(file.bytes.len() as u64));
-        let reader: Box<dyn BufRead + Send> = Box::new(BufReader::new(Reader {
+        let reader = Box::new(Reader {
             file,
             at: 0,
             interrupted: false,
-        }));
+        });
         Ok(Opened { reader, size })
     }
     fn args(&self) -> &[OsString] {
@@ -191,11 +202,8 @@ impl Host for MemoryHost {
     fn env_var(&self, name: &str) -> Option<OsString> {
         self.env.get(name).cloned()
     }
-    fn stdin(&self) -> io::Result<StdinLock<'_>> {
-        match &self.stdin {
-            Some(stdin) => Ok(lock_stdin(stdin)),
-            None => Err(io::Error::from(io::ErrorKind::Unsupported)),
-        }
+    fn stdin(&self) -> Option<Arc<StdinSlot>> {
+        self.stdin.clone()
     }
     fn write_file(&self, path: &str, text: &str) -> io::Result<()> {
         if path.is_empty() {
@@ -253,12 +261,12 @@ impl Write for Shared {
 }
 
 mod std_host {
-    use std::io::{self, BufRead, Read};
+    use std::io::{self, Read};
     use std::panic::{AssertUnwindSafe, catch_unwind};
     use std::path::PathBuf;
 
     use super::Shared;
-    use crate::{Buffering, Host, StdHost, Stream};
+    use crate::{Buffering, Control, Host, Limits, StdHost, Stream};
 
     fn std_host(mode: Buffering) -> (StdHost, Shared, Shared) {
         let (out, err) = (Shared::default(), Shared::default());
@@ -283,14 +291,14 @@ mod std_host {
     #[test]
     fn a_host_without_a_standard_input_refuses_to_read_it() {
         let (host, _, _) = std_host(Buffering::Line);
-        assert_eq!(
-            host.stdin().err().map(|e| e.kind()),
-            Some(io::ErrorKind::Unsupported)
-        );
+        assert!(host.stdin().is_none());
         let host = host.with_stdin(Box::new(io::Cursor::new(b"x".to_vec())));
-        let mut line = String::new();
-        host.stdin().unwrap().read_line(&mut line).unwrap();
-        assert_eq!(line, "x");
+        let control = Control::new(Limits::default());
+        let line = host
+            .stdin()
+            .unwrap()
+            .with_reader(|r| r.fill_buf(&control, None).ok().map(<[u8]>::to_vec));
+        assert_eq!(line, Some(Some(b"x".to_vec())));
     }
 
     #[test]

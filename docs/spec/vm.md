@@ -348,7 +348,7 @@ token は1語の値で、フレームのスロットに置く ([オブジェク�
 
 `eml run` と `eml repl` は、`Control` を作った直後に、`eml_cli` の bin の `sigint` モジュールで SIGINT のハンドラを入れる。`eml run` はファイルを読む前に入れるので、読み込みとコンパイルの間の Ctrl-C も、既定の動作 (シグナルで殺される) でなく、このハンドラが受ける。`eml check` には入れない。ハンドラは unix だけで入れ、ほかの OS では Ctrl-C は OS の既定の動作でプロセスを終わらせる。
 
-- `libc::sigaction` で入れ、`sa_flags` に `SA_RESTART` も `SA_NODEFER` も入れない。`SA_RESTART` を外すので、待っている読みは `EINTR` で戻り、`File` の読みと標準入力の読みが止める語を読んで止まる ([オブジェクトモデル](object-model.md) の「`File`」)。子のプロセスを待つ間の Ctrl-C は、同じプロセスグループの子にも届くので、子が終わって `Proc.run` が止まる。`SA_NODEFER` を入れないので、ハンドラが動く間は同じ SIGINT が塞がれ、ハンドラは入れ子にならない
+- `libc::sigaction` で入れ、`sa_flags` に `SA_RESTART` も `SA_NODEFER` も入れない。`SA_RESTART` を外すので、待っている読みは `EINTR` で戻り、`File` の読みと標準入力の読みが止める語を読んで止まる ([オブジェクトモデル](object-model.md) の「読み手」)。子のプロセスを待つ間の Ctrl-C は、同じプロセスグループの子にも届くので、子が終わって `Proc.run` が止まる。`SA_NODEFER` を入れないので、ハンドラが動く間は同じ SIGINT が塞がれ、ハンドラは入れ子にならない
 - ハンドラは static に置いた `Control` と動き方だけを読み、アトミックな読み書きと `libc::_exit` だけをする。static は `sigaction` の前に置く
 - 止める語の `INTERRUPT` が 0 なら、`control.interrupt()` を呼ぶ。VM は次の安全点で止まる。コンパイルの間に立ったビットは、実行の最初の安全点で読まれる
 - `eml run` では、すでに立っていれば (2回目の Ctrl-C)、`libc::_exit(130)` でその場で終わる。まだ書いていない出力は捨てる。安全点に来ない処理から抜けるための道だからである。`eml repl` は終わらず、`interrupt()` を呼ぶだけである ([REPL の端末](repl.md) の「割り込み」)

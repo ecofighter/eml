@@ -3,6 +3,7 @@
 
 use std::ffi::OsString;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use super::ctx::ctx_with;
 use super::host::{MemoryFile, MemoryHost};
@@ -193,6 +194,70 @@ fn the_output_is_flushed_before_the_standard_input_is_read<M: Mode>() {
     assert_eq!(memory.flushes(), 1);
 }
 
+/// 1行ずつの読みも、読み手は 64 KiB の buffer で補充する。1 MiB の16バイトの行は、16回の補充と終わりを確かめる
+/// 1回の読みで読み切る。
+fn a_line_read_refills_once_per_64_kib<M: Mode>() {
+    let reads = Arc::new(AtomicUsize::new(0));
+    let line = "0123456789abcde\n";
+    let count = 1024 * 1024 / line.len();
+    let memory = Arc::new(MemoryHost::default().with_stdin(MemoryFile {
+        reads: Some(reads.clone()),
+        ..MemoryFile::text(&line.repeat(count))
+    }));
+    let mut ctx = ctx_with::<M>(&memory);
+    let mut lines = 0;
+    loop {
+        let w = ctx.stdin_read(true).unwrap();
+        let read = text(ctx.heap(), w).to_string();
+        unsafe { ctx.heap_mut().decref(w) }.unwrap();
+        if read.is_empty() {
+            break;
+        }
+        assert_eq!(read, line);
+        lines += 1;
+    }
+    assert_eq!(lines, count);
+    assert!(reads.load(Ordering::Relaxed) <= 17, "{reads:?}");
+    assert_eq!(mortal(ctx.heap()), 0);
+}
+
+/// 読みの誤り、止めたこと、UTF-8 でない行の後も、読み手は slot に残り、次の読みは続きから読める。
+fn a_failed_stdin_read_leaves_the_reader_in_the_slot<M: Mode>() {
+    let memory = Arc::new(MemoryHost::default().with_stdin(MemoryFile {
+        fail_once: true,
+        ..MemoryFile::text("a\n")
+    }));
+    let mut ctx = ctx_with::<M>(&memory);
+    assert_eq!(ctx.stdin_read(true), Err(Fault::Stdin(IoReason::Other)));
+    let w = ctx.stdin_read(true).unwrap();
+    assert_eq!(text(ctx.heap(), w), "a\n");
+    unsafe { ctx.heap_mut().decref(w) }.unwrap();
+
+    let control = Arc::new(Control::new(Limits::default()));
+    let memory = Arc::new(MemoryHost::default().with_stdin(MemoryFile::text("b\n")));
+    let mut ctx = Ctx::<M>::new(control.clone(), super::host::host(&memory));
+    control.interrupt();
+    assert_eq!(ctx.stdin_read(true), Err(Fault::Stopped(Stop::Interrupted)));
+    control.clear();
+    let w = ctx.stdin_read(true).unwrap();
+    assert_eq!(text(ctx.heap(), w), "b\n");
+    unsafe { ctx.heap_mut().decref(w) }.unwrap();
+
+    let memory = Arc::new(MemoryHost::default().with_stdin(MemoryFile {
+        bytes: b"\xff\nok\n".to_vec(),
+        ..MemoryFile::default()
+    }));
+    let mut ctx = ctx_with::<M>(&memory);
+    assert_eq!(
+        ctx.stdin_read(true),
+        Err(Fault::NotUtf8(Box::new(Utf8Source::Stdin)))
+    );
+    let w = ctx.stdin_read(true).unwrap();
+    assert_eq!(text(ctx.heap(), w), "ok\n");
+    unsafe { ctx.heap_mut().decref(w) }.unwrap();
+    assert_eq!(mortal(ctx.heap()), 0);
+}
+
 fn a_file_is_written_whole<M: Mode>() {
     let memory = Arc::new(MemoryHost::default());
     let mut ctx = ctx_with::<M>(&memory);
@@ -295,6 +360,8 @@ both_modes!(
     the_standard_input_can_be_unavailable_or_not_utf8,
     a_read_of_the_standard_input_stops_on_an_interrupt,
     the_output_is_flushed_before_the_standard_input_is_read,
+    a_line_read_refills_once_per_64_kib,
+    a_failed_stdin_read_leaves_the_reader_in_the_slot,
     a_file_is_written_whole,
     a_process_gets_its_arguments_split_at_nul,
     a_process_stops_on_an_interrupt,
