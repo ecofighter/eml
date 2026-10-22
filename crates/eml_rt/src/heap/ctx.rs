@@ -27,6 +27,7 @@ use crate::word::lemma_unit_bits;
 use proof::*;
 
 mod arrays;
+pub(super) mod bytes;
 mod io;
 mod positions;
 // 証明の部品だけを置くので、検証のときだけ読む
@@ -57,9 +58,10 @@ pub struct CtxStats {
     /// (docs/spec/vm.md の「`RunStats`」)。
     pub yields: u64,
     pub yield_frames: u64,
-    /// extern がヒープの文字列に写したバイト数。検査モードだけで数える。`Int.show` は数字の列の長さを、`String.show`
-    /// は結果の長さを数える。`++` は、左が一意 (rc 1 の局所の物体) なら右の長さだけを数え、容量が足りずに作り直しても
-    /// 同じである。左が共有か不死なら両辺の長さを数える。VM の `RunStats::string_bytes_copied` はこの数である。
+    /// extern がヒープの文字列とバイト列に写したバイト数。検査モードだけで数える。`Int.show` は数字の列の長さを、
+    /// `String.show` は結果の長さを数える。`++` は、左が一意 (rc 1 の局所の物体) なら右の長さだけを数え、容量が足りずに
+    /// 作り直しても同じである。左が共有か不死なら両辺の長さを数える。バイト列の操作の数え方も同じ形である
+    /// (docs/spec/object-model.md の「仕事の回数」)。VM の `RunStats::string_bytes_copied` はこの数である。
     pub string_bytes_copied: u64,
 }
 

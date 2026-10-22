@@ -16,18 +16,36 @@ use super::*;
 use crate::heap::inv::body_wf;
 #[cfg(verus_only)]
 use crate::meta::{field_ptr, slot_offset};
-use crate::text::{bytes, bytes_ptr, text, text_ptr, write_bytes, write_text};
+use crate::text::{bytes, bytes_ptr, text, text_ptr, write_byte, write_bytes, write_text};
 
 verus! {
 
 /// 文字列かバイト列の後ろに写すバイト列。`Str` は呼ぶ側の `&str`、`Bytes` は呼ぶ側の `&[u8]`、`Text(h, len, from, to)`
-/// はこのヒープか付けた塊の文字列の物体 (ヘッダと長さ) のバイトの範囲 `[from, to)` である。`string_concat` の右辺は
+/// はこのヒープか付けた塊の文字列の物体 (ヘッダと長さ) のバイトの範囲 `[from, to)`、`Body(h, len, from, to)` は文字列
+/// かバイト列の物体の同じ範囲である。`Body` は UTF-8 の境目を求めないので、バイト列にだけ写す。`string_concat` の右辺は
 /// ヒープの権限から借りて読むので、`&mut self` を取る操作に `&str` として渡せない。そのため、右辺の権限は写す直前に
 /// `Core::write_tail` の中で借りる。
 enum Tail<'a> {
     Str(&'a str),
     Bytes(&'a [u8]),
     Text(*mut Header, usize, usize, usize),
+    Body(*mut Header, usize, usize, usize),
+}
+
+/// `a` は文字列かバイト列の種類 `b` に等しい。
+#[inline]
+pub(super) fn same_body_kind(a: Kind, b: Kind) -> (r: bool)
+    requires
+        b.has_body(),
+    ensures
+        r == (a == b),
+{
+    matches!((a, b), (Kind::String, Kind::String) | (Kind::Bytes, Kind::Bytes))
+}
+
+/// 種類 `kind` の物体に `t` を写せる。文字列には、UTF-8 を約束しない `Bytes` と `Body` を写さない。
+spec fn fits(kind: Kind, t: Tail) -> bool {
+    kind == Kind::String ==> !(t is Bytes) && !(t is Body)
 }
 
 /// 妥当な UTF-8 の `to` より前の部分でも、`to` より前の文字の境目 `from` は文字の境目である。
@@ -64,6 +82,10 @@ impl Core {
                 from as int,
                 to as int,
             ),
+            Tail::Body(r, _, from, to) => self.perm(r@.addr).text().subrange(
+                from as int,
+                to as int,
+            ),
         }
     }
 
@@ -79,15 +101,24 @@ impl Core {
                 &&& is_char_boundary(self.perm(r@.addr).text(), from as int)
                 &&& is_char_boundary(self.perm(r@.addr).text(), to as int)
             },
+            Tail::Body(r, n, from, to) => {
+                &&& self.body_ok(r, n)
+                &&& from <= to <= n
+            },
         }
     }
 
-    /// `r` はこのヒープか付けた塊の文字列のブロックで、長さ `n` はバイト列の長さに等しい。
-    spec fn text_ok(&self, r: *mut Header, n: usize) -> bool {
+    /// `r` はこのヒープか付けた塊の文字列かバイト列のブロックで、長さ `n` はバイト列の長さに等しい。
+    spec fn body_ok(&self, r: *mut Header, n: usize) -> bool {
         &&& self.has(r@.addr)
         &&& self.region_wf()
         &&& self.perm(r@.addr).holds_body(r, n as int)
         &&& n == self.perm(r@.addr).text().len()
+    }
+
+    /// `body_ok` で、バイト列は妥当な UTF-8 である。
+    spec fn text_ok(&self, r: *mut Header, n: usize) -> bool {
+        &&& self.body_ok(r, n)
         &&& valid_utf8(self.perm(r@.addr).text())
     }
 
@@ -118,11 +149,11 @@ impl Core {
         }
     }
 
-    /// `Bytes` のほかの `Tail` は妥当な UTF-8 である。
+    /// `Bytes` と `Body` のほかの `Tail` は妥当な UTF-8 である。
     proof fn lemma_tail_utf8(&self, t: Tail)
         requires
             self.tail_ok(t),
-            !(t is Bytes),
+            fits(Kind::String, t),
         ensures
             valid_utf8(self.tail_bytes(t)),
     {
@@ -132,6 +163,7 @@ impl Core {
             Tail::Text(r, _, from, to) => {
                 lemma_boundary_in_prefix(self.perm(r@.addr).text(), from as int, to as int)
             },
+            Tail::Body(_, _, _, _) => {},
         }
     }
 
@@ -150,6 +182,7 @@ impl Core {
             },
             Tail::Bytes(b) => b.len(),
             Tail::Text(_, _, from, to) => *to - *from,
+            Tail::Body(_, _, from, to) => *to - *from,
         }
     }
 
@@ -189,6 +222,11 @@ impl Core {
             Tail::Bytes(b) => write_bytes(h, cap, at, b, Tracked(perm)),
             Tail::Text(r, n, from, to) => {
                 write_text(h, cap, at, self.text_part(*r, *n, *from, *to), Tracked(perm))
+            },
+            Tail::Body(r, n, from, to) => {
+                let tracked p = self.tracked_perm(r@.addr);
+                let b = bytes(*r, *n, Tracked(p));
+                write_bytes(h, cap, at, vstd::slice::slice_subrange(b, *from, *to), Tracked(perm))
             },
         }
     }
@@ -255,7 +293,7 @@ impl Core {
             s0.full(),
             s0.dom().contains(h),
             s0.state(h) == BlockState::Live,
-            s0.kind(h) == Kind::String,
+            s0.kind(h).has_body(),
             self.text_changed(s0, h),
         ensures
             self.full(),
@@ -320,7 +358,7 @@ impl Core {
             s0.safe_wf(),
             s0.dom().contains(h),
             s0.state(h) == BlockState::Live,
-            s0.kind(h) == Kind::String,
+            s0.kind(h).has_body(),
             self.text_changed(s0, h),
         ensures
             self.safe_wf(),
@@ -349,12 +387,12 @@ impl Core {
 }
 
 impl<M: Mode> Heap<M> {
-    pub closed spec fn is_string(&self, w: Word) -> bool {
-        self.core.kind(w.bits_spec()) == Kind::String
+    pub open spec fn is_string(&self, w: Word) -> bool {
+        self.kind_of(w) == Kind::String
     }
 
-    pub closed spec fn is_bytes(&self, w: Word) -> bool {
-        self.core.kind(w.bits_spec()) == Kind::Bytes
+    pub open spec fn is_bytes(&self, w: Word) -> bool {
+        self.kind_of(w) == Kind::Bytes
     }
 
     /// 文字列かバイト列のバイト列。
@@ -370,6 +408,7 @@ impl<M: Mode> Heap<M> {
     /// 文字列の spec の中身。`Ctx` の文字列の extern の証明が、物体の権限と結び付けるのに使う。
     pub(super) proof fn lemma_text_spec(&self, w: Word)
         ensures
+            self.kind_of(w) == self.core.kind(w.bits_spec()),
             self.is_string(w) == (self.core.kind(w.bits_spec()) == Kind::String),
             self.is_bytes(w) == (self.core.kind(w.bits_spec()) == Kind::Bytes),
             self.text_of(w) == self.core.perm(w.bits_spec()).text(),
@@ -573,7 +612,7 @@ impl<M: Mode> Heap<M> {
 
     /// 容量が `room` バイト以上の種類 `kind` (`String` か `Bytes`) の物体を rc `rc` の生きている物体として作り、`head` と
     /// `tail` のバイト列を順に写す。rc 0 なら不死の物体で、検査モードの外に出ている参照の数は 0 から始まる
-    /// (`alloc_header` が書く)。文字列には `Tail::Bytes` を写さないので、中身は妥当な UTF-8 になる。
+    /// (`alloc_header` が書く)。文字列には `Tail::Bytes` と `Tail::Body` を写さないので、中身は妥当な UTF-8 になる。
     fn make_text(&mut self, room: usize, head: Tail, tail: Option<Tail>, rc: i32, kind: Kind) -> (w:
         Word)
         requires
@@ -582,7 +621,8 @@ impl<M: Mode> Heap<M> {
             !M::CHECKED ==> old(self).settleable(),
             rc == 0 || rc == 1,
             kind.has_body(),
-            kind == Kind::String ==> !(head is Bytes) && !(tail matches Some(Tail::Bytes(_))),
+            fits(kind, head),
+            tail matches Some(t) ==> fits(kind, t),
             old(self).core.tail_ok(head),
             old(self).core.opt_ok(tail),
             old(self).core.tail_bytes(head).len() + old(self).core.opt_bytes(tail).len() <= room,
@@ -781,21 +821,22 @@ impl<M: Mode> Heap<M> {
         Ok(bytes_ptr(h, len, Tracked(p)))
     }
 
-    /// `string_push` の前提がみな成り立ち、モデルが合っている。`decref` の前提に、left が生きている文字列であることを
-    /// 足す。
-    pub closed spec fn push_ok(&self, left: Word) -> bool {
+    /// `string_push` と `bytes_extend` の前提がみな成り立ち、モデルが合っている。`decref` の前提に、left が生きている
+    /// 種類 `kind` (`String` か `Bytes`) の物体であることを足す。
+    pub closed spec fn push_ok(&self, left: Word, kind: Kind) -> bool {
+        &&& kind.has_body()
         &&& self.settleable()
         &&& self.decref_ok(left)
         &&& self.readable(left)
-        &&& self.is_string(left)
+        &&& self.kind_of(left) == kind
     }
 
-    /// `string_concat` の前提がみな成り立ち、モデルが合っている。両辺が `decref` の前提を満たす文字列で、同じ物体なら
-    /// 呼ぶ側がその数えた参照を2つ持つ。
-    pub closed spec fn concat_ok(&self, left: Word, right: Word) -> bool {
-        &&& self.push_ok(left)
+    /// `string_concat` とバイト列の連結の前提がみな成り立ち、モデルが合っている。両辺が `decref` の前提を満たす種類
+    /// `kind` の物体で、同じ物体なら呼ぶ側がその数えた参照を2つ持つ。
+    pub closed spec fn concat_ok(&self, left: Word, right: Word, kind: Kind) -> bool {
+        &&& self.push_ok(left, kind)
         &&& self.readable(right)
-        &&& self.is_string(right)
+        &&& self.kind_of(right) == kind
         &&& self.decref_ok(right)
         &&& left.bits_spec() == right.bits_spec() && self.rc_value(left) != 0
             ==> self.core.settled_view().ext(left.bits_spec()) >= 2
@@ -891,21 +932,23 @@ impl<M: Mode> Heap<M> {
                 && self.kept_live(mid)
     }
 
-    /// 文字列を受けて手放す操作と、文字列を借りる操作の検査。状態を変える前に呼ぶ。速いモードでは何も確かめない。
-    pub(super) fn checked_string(&self, h: *mut Header) -> (r: Result<(), HeapError>)
+    /// 種類 `kind` の物体を受けて手放す操作と、借りる操作の検査。状態を変える前に呼ぶ。速いモードでは何も確かめない。
+    pub(super) fn checked_body(&self, h: *mut Header, kind: Kind) -> (r: Result<(), HeapError>)
         requires
             self.core.sound(),
             self.core.checked() == M::CHECKED,
             self.core.has(h@.addr),
             h == self.core.block(h@.addr),
+            kind.has_body(),
         ensures
             !M::CHECKED ==> r is Ok,
-            M::CHECKED ==> (r is Ok <==> self.core.kind(h@.addr) == Kind::String
-                && self.decref_passes(h@.addr)),
+            M::CHECKED ==> (r is Ok <==> self.core.kind(h@.addr) == kind && self.decref_passes(
+                h@.addr,
+            )),
             r is Err ==> chain_err(r) || r == Err::<(), HeapError>(HeapError::UseAfterFree) && !(
             self.core.state(h@.addr) == BlockState::Live || self.core.state(h@.addr)
                 == BlockState::Building) || r == Err::<(), HeapError>(HeapError::WrongKind)
-                && self.core.kind(h@.addr) != Kind::String,
+                && self.core.kind(h@.addr) != kind,
     {
         if M::CHECKED {
             proof {
@@ -913,26 +956,26 @@ impl<M: Mode> Heap<M> {
             }
         }
         self.checked_live(h)?;
-        if M::CHECKED && !matches!(self.core.meta_get(h).kind(), Kind::String) {
+        if M::CHECKED && !same_body_kind(self.core.meta_get(h).kind(), kind) {
             return Err(HeapError::WrongKind);
         }
         self.checked_decref(h)?;
         Ok(())
     }
 
-    /// 検査モードで、文字列 `a` と `b` を受けて手放す操作の検査が通った。両方が文字列で `decref` の検査を通り、同じ
-    /// 物体なら2回続けた `decref` の検査も通る。
-    pub(super) open spec fn strings_pass(&self, a: Word, b: Word) -> bool {
-        &&& self.core.kind(a.bits_spec()) == Kind::String
-        &&& self.core.kind(b.bits_spec()) == Kind::String
+    /// 検査モードで、種類 `kind` の物体 `a` と `b` を受けて手放す操作の検査が通った。両方がその種類で `decref` の検査
+    /// を通り、同じ物体なら2回続けた `decref` の検査も通る。
+    pub(super) open spec fn pair_passes(&self, a: Word, b: Word, kind: Kind) -> bool {
+        &&& self.core.kind(a.bits_spec()) == kind
+        &&& self.core.kind(b.bits_spec()) == kind
         &&& self.decref_passes(a.bits_spec())
         &&& self.decref_passes(b.bits_spec())
         &&& a.bits_spec() == b.bits_spec() ==> self.decref_twice_passes(a.bits_spec())
     }
 
-    /// 文字列 `a` と `b` を受けて手放す操作 (`string_concat` と、文字列を比べる extern) の検査。状態を変える前に
-    /// 呼ぶ。速いモードでは何も確かめない。
-    pub(super) fn checked_strings(&self, a: Word, b: Word) -> (r: Result<(), HeapError>)
+    /// 種類 `kind` の物体 `a` と `b` を受けて手放す操作 (`string_concat` など) の検査。状態を変える前に呼ぶ。速い
+    /// モードでは何も確かめない。
+    pub(super) fn checked_pair(&self, a: Word, b: Word, kind: Kind) -> (r: Result<(), HeapError>)
         requires
             self.wf(),
             self.core.model@.building is None,
@@ -940,12 +983,13 @@ impl<M: Mode> Heap<M> {
             b.is_ptr_spec(),
             self.word_in(a),
             self.word_in(b),
+            kind.has_body(),
         ensures
             !M::CHECKED ==> r is Ok,
-            self.concat_ok(a, b) ==> r is Ok || chain_err(r),
-            M::CHECKED && r is Ok ==> self.strings_pass(a, b),
+            self.concat_ok(a, b, kind) ==> r is Ok || chain_err(r),
+            M::CHECKED && r is Ok ==> self.pair_passes(a, b, kind),
     {
-        let ghost c = self.concat_ok(a, b);
+        let ghost c = self.concat_ok(a, b, kind);
         let ha = self.header_of(a);
         let hb = self.header_of(b);
         proof {
@@ -957,8 +1001,8 @@ impl<M: Mode> Heap<M> {
                 self.core.lemma_readable(b);
             }
         }
-        self.checked_string(ha)?;
-        self.checked_string(hb)?;
+        self.checked_body(ha, kind)?;
+        self.checked_body(hb, kind)?;
         let same = a.bits() == b.bits();
         proof {
             if c && same && self.core.dom().contains(ha@.addr) {
@@ -976,26 +1020,26 @@ impl<M: Mode> Heap<M> {
         Ok(())
     }
 
-    /// 文字列 `w` を読める。検査モードでは、呼ぶ側が検査 (`checked_string` か `checked_strings`) で生きている文字列の
-    /// 物体であることを確かめてある。速いモードでは、モデルで読める文字列である。
-    pub(super) open spec fn text_readable(&self, w: Word) -> bool {
+    /// 種類 `kind` の物体 `w` を読める。検査モードでは、呼ぶ側が検査 (`checked_body` か `checked_pair`) で生きている
+    /// その種類の物体であることを確かめてある。速いモードでは、モデルで読めるその種類の物体である。
+    pub(super) open spec fn readable_as(&self, w: Word, kind: Kind) -> bool {
         &&& w.is_ptr_spec()
         &&& self.word_in(w)
-        &&& M::CHECKED ==> self.core.kind(w.bits_spec()) == Kind::String && self.decref_passes(
-            w.bits_spec(),
-        )
-        &&& !M::CHECKED ==> self.settleable() && self.readable(w) && self.is_string(w)
-    }
-
-    /// バイト列 `w` を読める。`text_readable` のバイト列の版である。
-    pub(super) open spec fn bytes_readable(&self, w: Word) -> bool {
-        &&& w.is_ptr_spec()
-        &&& self.word_in(w)
-        &&& M::CHECKED ==> self.core.kind(w.bits_spec()) == Kind::Bytes && self.decref_passes(
+        &&& M::CHECKED ==> self.core.kind(w.bits_spec()) == kind && self.decref_passes(
             w.bits_spec(),
         )
         &&& !M::CHECKED ==> self.settleable() && self.readable(w) && self.core.kind(w.bits_spec())
-            == Kind::Bytes
+            == kind
+    }
+
+    /// 文字列 `w` を読める。
+    pub(super) open spec fn text_readable(&self, w: Word) -> bool {
+        self.readable_as(w, Kind::String)
+    }
+
+    /// バイト列 `w` を読める。
+    pub(super) open spec fn bytes_readable(&self, w: Word) -> bool {
+        self.readable_as(w, Kind::Bytes)
     }
 
     /// 文字列 `w` のバイト列を借りる。
@@ -1050,19 +1094,19 @@ impl<M: Mode> Heap<M> {
         bytes(h, len, Tracked(p))
     }
 
-    /// 文字列 `w` は、ほかに参照のない生きている文字列で、その場で書き足せる。
+    /// `w` は、ほかに参照のない生きている文字列かバイト列で、その場で書き換えられる。
     pub(super) open spec fn appendable(&self, w: Word) -> bool {
         let h = w.bits_spec();
         &&& w.is_ptr_spec()
         &&& self.core.word_ok(w)
         &&& self.core.dom().contains(h)
         &&& self.core.state(h) == BlockState::Live
-        &&& self.core.kind(h) == Kind::String
+        &&& self.core.kind(h).has_body()
         &&& self.core.rc_of(h) == 1
     }
 
-    /// `old` の書き足せる文字列 `w` の後ろに、その場で書き足した後の状態。`w` の長さの語とバイト列のほかは変わらず、
-    /// ほかの文字列は同じバイト列のまま読める。
+    /// `old` の書き換えられる物体 `w` を、その場で書き換えた後の状態。`w` の長さの語とバイト列のほかは変わらず、
+    /// ほかの文字列とバイト列は同じバイト列のまま読める。
     pub(super) open spec fn appended(&self, old: Heap<M>, w: Word) -> bool {
         &&& self.wf()
         &&& self.same_tokens(old)
@@ -1071,13 +1115,14 @@ impl<M: Mode> Heap<M> {
         &&& self.worker == old.worker
         &&& self.core.text_changed(old.core, w.bits_spec())
         &&& self.appendable(w)
-        &&& self.is_string(w)
+        &&& self.kind_of(w) == old.kind_of(w)
         &&& self.capacity(w) == old.capacity(w)
         &&& old.consistent() ==> self.consistent()
         &&& forall|x: Word| #[trigger] self.core.word_ok(x) == old.core.word_ok(x)
         &&& forall|x: Word|
-            x.bits_spec() != w.bits_spec() ==> (old.text_readable(x) ==> self.text_readable(x))
-                && #[trigger] self.text_of(x) == old.text_of(x)
+            x.bits_spec() != w.bits_spec() ==> (old.text_readable(x) ==> self.text_readable(x)) && (
+            old.bytes_readable(x) ==> self.bytes_readable(x)) && #[trigger] self.text_of(x)
+                == old.text_of(x)
     }
 
     /// 書き足せる文字列 `w` の後ろに `s` を写す。容量は足りている。`String.show` がエスケープと囲みの `"` を書く。
@@ -1139,15 +1184,75 @@ impl<M: Mode> Heap<M> {
         self.append_tail(w, Tail::Text(h, n, from, to));
     }
 
-    /// `append_str` と `append_part` の本体。
+    /// 書き換えられるバイト列 `w` の後ろに `b` を写す。容量は足りている。`Bytes.make` が中身を埋める。
+    pub(super) fn append_bytes(&mut self, w: Word, b: &[u8])
+        requires
+            old(self).wf(),
+            old(self).core.model@.building is None,
+            old(self).appendable(w),
+            old(self).is_bytes(w),
+            old(self).text_of(w).len() + b@.len() <= old(self).capacity(w),
+        ensures
+            final(self).appended(*old(self), w),
+            final(self).text_of(w) == old(self).text_of(w) + b@,
+    {
+        self.append_tail(w, Tail::Bytes(b));
+    }
+
+    /// 書き換えられるバイト列 `w` の後ろに、別のバイト列 `src` のバイトの範囲 `[from, to)` を写す。容量は足りている。
+    /// `Bytes.slice` が使う。
+    pub(super) fn append_body(&mut self, w: Word, src: Word, from: usize, to: usize)
+        requires
+            old(self).wf(),
+            old(self).core.model@.building is None,
+            old(self).appendable(w),
+            old(self).is_bytes(w),
+            old(self).bytes_readable(src),
+            src.bits_spec() != w.bits_spec(),
+            from <= to <= old(self).text_of(src).len(),
+            old(self).text_of(w).len() + (to - from) <= old(self).capacity(w),
+        ensures
+            final(self).appended(*old(self), w),
+            final(self).text_of(w) == old(self).text_of(w) + old(self).text_of(src).subrange(
+                from as int,
+                to as int,
+            ),
+    {
+        let h = self.header_of(src);
+        proof {
+            self.core.lemma_shape(h@.addr);
+            if M::CHECKED {
+                if self.core.dom().contains(h@.addr) {
+                    self.core.lemma_safe_at(h@.addr);
+                }
+            } else {
+                self.core.lemma_readable(src);
+                reveal(Core::building_wf);
+                self.core.lemma_live_block(h@.addr);
+            }
+        }
+        let n = self.core.slot_get(h, 0).bits();
+        proof {
+            let c = self.core.cap(h@.addr);
+            assert((n + 7) / 8 <= c - 1) by (nonlinear_arith)
+                requires
+                    n <= 8 * (c - 1),
+                    c >= 1,
+            ;
+        }
+        self.append_tail(w, Tail::Body(h, n, from, to));
+    }
+
+    /// `append_str`、`append_part`、`append_bytes`、`append_body` の本体。
     fn append_tail(&mut self, w: Word, t: Tail)
         requires
             old(self).wf(),
             old(self).core.model@.building is None,
             old(self).appendable(w),
             old(self).core.tail_ok(t),
-            !(t is Bytes),
+            fits(old(self).core.kind(w.bits_spec()), t),
             t matches Tail::Text(r, _, _, _) ==> r@.addr != w.bits_spec(),
+            t matches Tail::Body(r, _, _, _) ==> r@.addr != w.bits_spec(),
             old(self).text_of(w).len() + old(self).core.tail_bytes(t).len() <= old(self).capacity(
                 w,
             ),
@@ -1171,7 +1276,8 @@ impl<M: Mode> Heap<M> {
         self.write_in_place(h, len, cap, &t);
         proof {
             assert forall|x: Word| x.bits_spec() != w.bits_spec() implies (s0.text_readable(x)
-                ==> self.text_readable(x)) && #[trigger] self.text_of(x) == s0.text_of(x) by {
+                ==> self.text_readable(x)) && (s0.bytes_readable(x) ==> self.bytes_readable(x))
+                && #[trigger] self.text_of(x) == s0.text_of(x) by {
                 if s0.core.dom().contains(x.bits_spec()) {
                     assert(self.core.perms@[x.bits_spec()] == s0.core.perms@[x.bits_spec()]);
                 }
@@ -1179,27 +1285,33 @@ impl<M: Mode> Heap<M> {
         }
     }
 
-    /// 文字列を受けて手放す操作の前提を、`decref` の前提から言う。
-    pub(super) proof fn lemma_concat_ok(&self, a: Word, b: Word)
+    /// 種類 `kind` の物体を2つ受けて手放す操作の前提を、`decref` の前提から言う。
+    pub(super) proof fn lemma_concat_ok(&self, a: Word, b: Word, kind: Kind)
         requires
+            kind.has_body(),
             self.settleable(),
             self.readable(a),
             self.readable(b),
-            self.is_string(a),
-            self.is_string(b),
+            self.kind_of(a) == kind,
+            self.kind_of(b) == kind,
             self.decref_ok(a),
             self.decref_ok(b),
             a.bits_spec() == b.bits_spec() && self.rc_value(a) != 0
                 ==> self.core.settled_view().ext(a.bits_spec()) >= 2,
         ensures
-            self.concat_ok(a, b),
+            self.concat_ok(a, b, kind),
     {
     }
 
-    /// 文字列 `a`、`b` の順に参照を1つずつ手放す (同じ物体なら2つ手放す)。検査モードの検査は、呼ぶ側が状態を変える
-    /// 前に `checked_strings` で済ませてある。`a` を手放した後の状態を返す。
-    pub(super) fn release_strings(&mut self, a: Word, b: Word, Ghost(c): Ghost<bool>) -> (mid:
-        Ghost<Heap<M>>)
+    /// 種類 `kind` の物体 `a`、`b` の順に参照を1つずつ手放す (同じ物体なら2つ手放す)。検査モードの検査は、呼ぶ側が
+    /// 状態を変える前に `checked_pair` で済ませてある。`a` を手放した後の状態を返す。
+    pub(super) fn release_pair(
+        &mut self,
+        a: Word,
+        b: Word,
+        Ghost(kind): Ghost<Kind>,
+        Ghost(c): Ghost<bool>,
+    ) -> (mid: Ghost<Heap<M>>)
         requires
             old(self).wf(),
             old(self).core.model@.building is None,
@@ -1207,9 +1319,10 @@ impl<M: Mode> Heap<M> {
             b.is_ptr_spec(),
             old(self).word_in(a),
             old(self).word_in(b),
-            M::CHECKED ==> old(self).strings_pass(a, b),
+            kind.has_body(),
+            M::CHECKED ==> old(self).pair_passes(a, b, kind),
             !M::CHECKED ==> c,
-            c ==> old(self).consistent() && old(self).concat_ok(a, b),
+            c ==> old(self).consistent() && old(self).concat_ok(a, b, kind),
         ensures
             final(self).wf(),
             final(self).same_tokens(*old(self)),
@@ -1259,7 +1372,7 @@ impl<M: Mode> Heap<M> {
         Ghost(mid)
     }
 
-    /// 文字列 `h` の参照を1つ手放す。文字列は子を持たないので、最後の参照なら解放の連鎖を通さずに箱だけを空ける。
+    /// 文字列かバイト列 `h` の参照を1つ手放す。子を持たないので、最後の参照なら解放の連鎖を通さずに箱だけを空ける。
     /// 検査モードの検査は、呼ぶ側が状態を変える前に済ませてある。
     pub(super) fn release_text(
         &mut self,
@@ -1273,7 +1386,7 @@ impl<M: Mode> Heap<M> {
             w.is_ptr_spec() && w.bits_spec() == h@.addr,
             old(self).core.has(h@.addr),
             h == old(self).core.block(h@.addr),
-            old(self).core.kind(h@.addr) == Kind::String,
+            old(self).core.kind(h@.addr).has_body(),
             !M::CHECKED ==> c,
             M::CHECKED ==> old(self).decref_passes(h@.addr),
             c ==> old(self).consistent() && old(self).core.state(h@.addr) == BlockState::Live && (
@@ -1302,7 +1415,7 @@ impl<M: Mode> Heap<M> {
                 == old(self).core.pages,
             M::CHECKED && old(self).decref_twice_passes(h@.addr) ==> final(self).decref_passes(
                 h@.addr,
-            ) && final(self).core.kind(h@.addr) == Kind::String,
+            ) && final(self).core.kind(h@.addr) == old(self).core.kind(h@.addr),
             final(self).core.kept_live(old(self).core),
     {
         let ghost s0 = self.core;
@@ -1360,7 +1473,7 @@ impl<M: Mode> Heap<M> {
         }
     }
 
-    /// 一意な文字列 `h` の後ろに `t` を写す。容量は足りている。長さの語とバイト列のほかは変えない。
+    /// 一意な文字列かバイト列 `h` の後ろに `t` を写す。容量は足りている。長さの語とバイト列のほかは変えない。
     #[inline]
     fn write_in_place(&mut self, h: *mut Header, len: usize, cap: usize, t: &Tail)
         requires
@@ -1369,13 +1482,14 @@ impl<M: Mode> Heap<M> {
             old(self).core.dom().contains(h@.addr),
             h == old(self).core.block(h@.addr),
             old(self).core.state(h@.addr) == BlockState::Live,
-            old(self).core.kind(h@.addr) == Kind::String,
+            old(self).core.kind(h@.addr).has_body(),
             len == old(self).core.perm(h@.addr).text().len(),
             cap == old(self).core.cap(h@.addr),
             len + old(self).core.tail_bytes(*t).len() <= 8 * (cap - 1),
             old(self).core.tail_ok(*t),
-            !(*t is Bytes),
+            fits(old(self).core.kind(h@.addr), *t),
             t matches Tail::Text(r, _, _, _) ==> r@.addr != h@.addr,
+            t matches Tail::Body(r, _, _, _) ==> r@.addr != h@.addr,
         ensures
             final(self).wf(),
             final(self).same_tokens(*old(self)),
@@ -1406,8 +1520,10 @@ impl<M: Mode> Heap<M> {
             self.core.perms.borrow_mut().tracked_insert(h@.addr, perm);
             let a = h@.addr;
             let q = s0.core.perm(a);
-            s0.core.lemma_tail_utf8(*t);
-            valid_utf8_concat(q.text(), s0.core.tail_bytes(*t));
+            if s0.core.kind(a) == Kind::String {
+                s0.core.lemma_tail_utf8(*t);
+                valid_utf8_concat(q.text(), s0.core.tail_bytes(*t));
+            }
             assert(self.core.perms@.dom() =~= s0.core.perms@.dom());
             assert(self.core.perm(a).slots.dom() =~= q.slots.dom());
             assert(self.core.text_changed(s0.core, a));
@@ -1422,23 +1538,28 @@ impl<M: Mode> Heap<M> {
         }
     }
 
-    /// `string_push` と `string_concat` の本体。検査はみな済んでいる。left の参照を1つ受け取り、`t` を後ろに足した
-    /// 文字列の参照を返す。left が一意で容量が足りればその場で書き、足りなければ容量を倍にして作り直す。一意でなければ
+    /// `string_push`、`string_concat` とバイト列の伸ばす操作の本体。検査はみな済んでいる。種類 `kind` の left の参照を
+    /// 1つ受け取り、`t` を後ろに足した同じ種類の物体の参照を返す。left が一意で容量が足りればその場で書き、足りなければ容量を倍にして作り直す。一意でなければ
     /// 和の長さで写す。どちらの写しも left を手放す前に済ませる。速いモードでは、大きい物体のページを箱の解放がすぐに
     /// 返すためである。速いモードは rc 0 の物体のページの頭を読まないので、容量は一意な left でだけ読む
     /// (docs/spec/object-model.md の「バイト列と文字列」)。
     #[inline]
-    fn push_unchecked(&mut self, left: Word, t: Tail, Ghost(c): Ghost<bool>) -> (w: Word)
+    fn push_unchecked(&mut self, left: Word, t: Tail, kind: Kind, Ghost(c): Ghost<bool>) -> (w:
+        Word)
         requires
             old(self).wf(),
             old(self).core.model@.building is None,
             left.is_ptr_spec(),
             old(self).core.word_ok(left),
             old(self).core.state(left.bits_spec()) == BlockState::Live,
-            old(self).core.kind(left.bits_spec()) == Kind::String,
+            kind.has_body(),
+            old(self).core.kind(left.bits_spec()) == kind,
             old(self).core.tail_ok(t),
-            !(t is Bytes),
+            fits(kind, t),
             t matches Tail::Text(r, _, _, _) && r@.addr == left.bits_spec() ==> old(
+                self,
+            ).core.rc_of(left.bits_spec()) != 1,
+            t matches Tail::Body(r, _, _, _) && r@.addr == left.bits_spec() ==> old(
                 self,
             ).core.rc_of(left.bits_spec()) != 1,
             !M::CHECKED ==> c,
@@ -1455,7 +1576,7 @@ impl<M: Mode> Heap<M> {
             w.is_ptr_spec(),
             final(self).core.word_ok(w),
             final(self).core.dom().contains(w.bits_spec()),
-            final(self).is_string(w),
+            final(self).core.kind(w.bits_spec()) == kind,
             final(self).text_of(w) == old(self).text_of(left) + old(self).core.tail_bytes(t),
             w != left ==> !old(self).core.dom().contains(w.bits_spec()),
             w == left ==> old(self).core.rc_of(left.bits_spec()) == 1,
@@ -1474,7 +1595,7 @@ impl<M: Mode> Heap<M> {
                 &&& final(self).core.block(left.bits_spec()) == old(self).core.block(
                     left.bits_spec(),
                 )
-                &&& final(self).core.kind(left.bits_spec()) == Kind::String
+                &&& final(self).core.kind(left.bits_spec()) == kind
                 &&& final(self).decref_passes(left.bits_spec())
             },
     {
@@ -1543,9 +1664,17 @@ impl<M: Mode> Heap<M> {
                     len <= 8 * (cap - 1),
                     cap >= 1,
             ;
-            s0.core.lemma_whole(h, len);
+            if kind == Kind::String {
+                s0.core.lemma_whole(h, len);
+            }
         }
-        let w = self.make_text(want, Tail::Text(h, len, 0, len), Some(t), 1, Kind::String);
+        // 文字列の left は UTF-8 の約束のある `Text` で写す。`kind` は呼ぶ側の定数なので、展開されると分岐は消える
+        let head = if same_body_kind(kind, Kind::String) {
+            Tail::Text(h, len, 0, len)
+        } else {
+            Tail::Body(h, len, 0, len)
+        };
+        let w = self.make_text(want, head, Some(t), 1, kind);
         let ghost mid = *self;
         proof {
             // 塊の left は、新しい物体のブロックと重ならない
@@ -1599,7 +1728,7 @@ impl<M: Mode> Heap<M> {
             old(self).safe_settleable(),
             left.is_ptr_spec(),
             old(self).word_in(left),
-            !M::CHECKED ==> old(self).push_ok(left),
+            !M::CHECKED ==> old(self).push_ok(left, Kind::String),
         ensures
             final(self).wf(),
             final(self).same_tokens(*old(self)),
@@ -1608,12 +1737,12 @@ impl<M: Mode> Heap<M> {
             r matches Ok(w) ==> final(self).is_string(w) && final(self).text_of(w) == old(
                 self,
             ).text_of(left) + s.spec_bytes(),
-            old(self).push_ok(left) ==> r is Ok || chain_err(r),
-            r matches Ok(w) ==> (old(self).push_ok(left) ==> final(self).consistent()
+            old(self).push_ok(left, Kind::String) ==> r is Ok || chain_err(r),
+            r matches Ok(w) ==> (old(self).push_ok(left, Kind::String) ==> final(self).consistent()
                 && final(self).pushed(*old(self), left, w)),
             M::CHECKED ==> final(self).words_kept(*old(self)),
     {
-        let ghost c = self.push_ok(left);
+        let ghost c = self.push_ok(left, Kind::String);
         self.settle();
         let h = self.header_of(left);
         proof {
@@ -1623,9 +1752,9 @@ impl<M: Mode> Heap<M> {
                 self.core.lemma_readable(left);
             }
         }
-        self.checked_string(h)?;
+        self.checked_body(h, Kind::String)?;
         let ghost s1 = *self;
-        let w = self.push_unchecked(left, Tail::Str(s), Ghost(c));
+        let w = self.push_unchecked(left, Tail::Str(s), Kind::String, Ghost(c));
         proof {
             assert(old(self).core.settled_view() == s1.core);
         }
@@ -1646,7 +1775,7 @@ impl<M: Mode> Heap<M> {
             right.is_ptr_spec(),
             old(self).word_in(left),
             old(self).word_in(right),
-            !M::CHECKED ==> old(self).concat_ok(left, right),
+            !M::CHECKED ==> old(self).concat_ok(left, right, Kind::String),
         ensures
             final(self).wf(),
             final(self).same_tokens(*old(self)),
@@ -1656,15 +1785,53 @@ impl<M: Mode> Heap<M> {
             r matches Ok(w) ==> w.is_ptr_spec() && final(self).is_string(w) && final(self).text_of(
                 w,
             ) == old(self).text_of(left) + old(self).text_of(right),
-            old(self).concat_ok(left, right) ==> r is Ok || chain_err(r),
-            r matches Ok(w) ==> (old(self).concat_ok(left, right) ==> final(self).consistent()
+            old(self).concat_ok(left, right, Kind::String) ==> r is Ok || chain_err(r),
+            r matches Ok(w) ==> (old(self).concat_ok(left, right, Kind::String)
+                ==> final(self).consistent() && final(self).concatenated(
+                *old(self),
+                left,
+                right,
+                w,
+            )),
+            M::CHECKED ==> final(self).words_kept(*old(self)),
+    {
+        unsafe { self.concat(left, right, Kind::String) }
+    }
+
+    /// 種類 `kind` (`String` か `Bytes`) の2つの物体の連結。`string_concat` の本体で、`Bytes.append` も使う。
+    ///
+    /// # Safety
+    /// `string_concat` と同じで、両辺は種類 `kind` の物体を指す。
+    pub(super) unsafe fn concat(&mut self, left: Word, right: Word, kind: Kind) -> (r: Result<
+        Word,
+        HeapError,
+    >)
+        requires
+            old(self).wf(),
+            old(self).safe_settleable(),
+            left.is_ptr_spec(),
+            right.is_ptr_spec(),
+            old(self).word_in(left),
+            old(self).word_in(right),
+            kind.has_body(),
+            !M::CHECKED ==> old(self).concat_ok(left, right, kind),
+        ensures
+            final(self).wf(),
+            final(self).same_tokens(*old(self)),
+            r is Err ==> *final(self) == old(self).settled_heap(),
+            !M::CHECKED ==> r is Ok,
+            final(self).settled(),
+            r matches Ok(w) ==> w.is_ptr_spec() && final(self).kind_of(w) == kind
+                && final(self).text_of(w) == old(self).text_of(left) + old(self).text_of(right),
+            old(self).concat_ok(left, right, kind) ==> r is Ok || chain_err(r),
+            r matches Ok(w) ==> (old(self).concat_ok(left, right, kind) ==> final(self).consistent()
                 && final(self).concatenated(*old(self), left, right, w)),
             M::CHECKED ==> final(self).words_kept(*old(self)),
     {
-        let ghost c = self.concat_ok(left, right);
+        let ghost c = self.concat_ok(left, right, kind);
         self.settle();
         let hr = self.header_of(right);
-        self.checked_strings(left, right)?;
+        self.checked_pair(left, right, kind)?;
         proof {
             let a = left.bits_spec();
             reveal(Core::building_wf);
@@ -1695,10 +1862,20 @@ impl<M: Mode> Heap<M> {
                     len <= 8 * (cap - 1),
                     cap >= 1,
             ;
-            self.core.lemma_whole(hr, len);
+            if kind == Kind::String {
+                self.core.lemma_whole(hr, len);
+            } else {
+                let t = self.core.perm(hr@.addr).text();
+                assert(t.subrange(0, len as int) =~= t);
+            }
         }
+        let right_tail = if same_body_kind(kind, Kind::String) {
+            Tail::Text(hr, len, 0, len)
+        } else {
+            Tail::Body(hr, len, 0, len)
+        };
         let ghost s1 = *self;
-        let w = self.push_unchecked(left, Tail::Text(hr, len, 0, len), Ghost(c));
+        let w = self.push_unchecked(left, right_tail, kind, Ghost(c));
         let ghost mid = *self;
         proof {
             assert(old(self).core.settled_view() == s1.core);
@@ -1715,6 +1892,592 @@ impl<M: Mode> Heap<M> {
             assert(mid.core.perms@[b] == self.core.perms@[b]);
             if c {
                 assert(mid.pushed(*old(self), left, w));
+            }
+        }
+        Ok(w)
+    }
+
+    /// 一意なバイト列 `h` を、前の `n` バイトに切り詰める。長さの語だけを書き、バイト列の語は書かない。
+    #[inline]
+    fn truncate_in_place(&mut self, h: *mut Header, n: usize)
+        requires
+            old(self).wf(),
+            old(self).core.model@.building is None,
+            old(self).core.dom().contains(h@.addr),
+            h == old(self).core.block(h@.addr),
+            old(self).core.state(h@.addr) == BlockState::Live,
+            old(self).core.kind(h@.addr) == Kind::Bytes,
+            n <= old(self).core.perm(h@.addr).text().len(),
+        ensures
+            final(self).wf(),
+            final(self).same_tokens(*old(self)),
+            final(self).dummy == old(self).dummy,
+            final(self).region == old(self).region,
+            final(self).worker == old(self).worker,
+            final(self).core.text_changed(old(self).core, h@.addr),
+            final(self).core.perm(h@.addr).text() == old(self).core.perm(h@.addr).text().subrange(
+                0,
+                n as int,
+            ),
+            old(self).consistent() ==> final(self).consistent(),
+            forall|x: Word| #[trigger] final(self).core.word_ok(x) == old(self).core.word_ok(x),
+    {
+        let ghost s0 = *self;
+        proof {
+            s0.core.lemma_shape(h@.addr);
+        }
+        let tracked mut perm = self.core.perms.borrow_mut().tracked_remove(h@.addr);
+        proof {
+            perm.truncate_text(n as int);
+        }
+        let tracked mut slot = perm.slots.tracked_remove(0);
+        ptr_mut_write(slot_ptr(h, 0), Tracked(&mut slot), Word::from_bits(n));
+        proof {
+            perm.slots.tracked_insert(0, slot);
+            self.core.perms.borrow_mut().tracked_insert(h@.addr, perm);
+            let a = h@.addr;
+            let q = s0.core.perm(a);
+            assert(self.core.perms@.dom() =~= s0.core.perms@.dom());
+            assert(self.core.perm(a).slots.dom() =~= q.slots.dom());
+            assert(self.core.text_changed(s0.core, a));
+            if s0.consistent() {
+                self.core.lemma_text_set(s0.core, a);
+                assert(self.core.perms@[s0.dummy.bits_spec()]
+                    == s0.core.perms@[s0.dummy.bits_spec()]);
+            }
+            if M::CHECKED {
+                self.core.lemma_safe_text_set(s0.core, a);
+            }
+        }
+    }
+
+    /// 一意なバイト列 `h` の `i` バイト目を `b` に書き換える。長さの語とほかのバイトは変えない。
+    #[inline]
+    fn write_byte_in_place(&mut self, h: *mut Header, i: usize, b: u8)
+        requires
+            old(self).wf(),
+            old(self).core.model@.building is None,
+            old(self).core.dom().contains(h@.addr),
+            h == old(self).core.block(h@.addr),
+            old(self).core.state(h@.addr) == BlockState::Live,
+            old(self).core.kind(h@.addr) == Kind::Bytes,
+            i < old(self).core.perm(h@.addr).text().len(),
+        ensures
+            final(self).wf(),
+            final(self).same_tokens(*old(self)),
+            final(self).dummy == old(self).dummy,
+            final(self).region == old(self).region,
+            final(self).worker == old(self).worker,
+            final(self).core.text_changed(old(self).core, h@.addr),
+            final(self).core.perm(h@.addr).text() == old(self).core.perm(h@.addr).text().update(
+                i as int,
+                b,
+            ),
+            old(self).consistent() ==> final(self).consistent(),
+            forall|x: Word| #[trigger] final(self).core.word_ok(x) == old(self).core.word_ok(x),
+    {
+        let ghost s0 = *self;
+        proof {
+            s0.core.lemma_shape(h@.addr);
+        }
+        let cap = self.core.cap_get(h);
+        let tracked mut perm = self.core.perms.borrow_mut().tracked_remove(h@.addr);
+        proof {
+            assert((8 * (cap - 1) + 7) / 8 == cap - 1);
+        }
+        write_byte(h, cap, i, b, Tracked(&mut perm));
+        proof {
+            self.core.perms.borrow_mut().tracked_insert(h@.addr, perm);
+            let a = h@.addr;
+            let q = s0.core.perm(a);
+            assert(self.core.perms@.dom() =~= s0.core.perms@.dom());
+            assert(self.core.perm(a).slots.dom() =~= q.slots.dom());
+            assert(self.core.text_changed(s0.core, a));
+            if s0.consistent() {
+                self.core.lemma_text_set(s0.core, a);
+                assert(self.core.perms@[s0.dummy.bits_spec()]
+                    == s0.core.perms@[s0.dummy.bits_spec()]);
+            }
+            if M::CHECKED {
+                self.core.lemma_safe_text_set(s0.core, a);
+            }
+        }
+    }
+
+    /// バイト列 left の前の `keep` バイトを持つ、一意なバイト列を返す。left の参照を1つ受け取り、結果の参照を返す。
+    /// left が一意ならその場で長さの語だけを書き、そうでなければ `keep` バイトを写した新しい物体を作ってから left を
+    /// 手放す (docs/spec/object-model.md の「バイト列の操作」)。検査はみな済んでいる。
+    fn own_unchecked(&mut self, left: Word, keep: usize, Ghost(c): Ghost<bool>) -> (w: Word)
+        requires
+            old(self).wf(),
+            old(self).core.model@.building is None,
+            left.is_ptr_spec(),
+            old(self).core.word_ok(left),
+            old(self).core.state(left.bits_spec()) == BlockState::Live,
+            old(self).core.kind(left.bits_spec()) == Kind::Bytes,
+            keep <= old(self).text_of(left).len(),
+            !M::CHECKED ==> c,
+            M::CHECKED ==> old(self).decref_passes(left.bits_spec()),
+            c ==> old(self).consistent() && old(self).core.holds(left) && old(self).owned(left),
+        ensures
+            final(self).wf(),
+            final(self).same_tokens(*old(self)),
+            final(self).core.env == old(self).core.env,
+            final(self).core.model@.building is None,
+            final(self).dummy == old(self).dummy,
+            final(self).region == old(self).region,
+            final(self).worker == old(self).worker,
+            final(self).appendable(w),
+            final(self).core.kind(w.bits_spec()) == Kind::Bytes,
+            final(self).text_of(w) == old(self).text_of(left).subrange(0, keep as int),
+            w != left ==> !old(self).core.dom().contains(w.bits_spec()),
+            c ==> final(self).consistent() && final(self).pushed(*old(self), left, w),
+            M::CHECKED ==> forall|x: Word|
+                old(self).core.word_ok(x) ==> #[trigger] final(self).core.word_ok(x),
+    {
+        let ghost s0 = *self;
+        let h = self.header_of(left);
+        proof {
+            s0.core.lemma_shape(h@.addr);
+        }
+        let len = self.core.slot_get(h, 0).bits();
+        if self.core.rc_get(h) == 1 {
+            proof {
+                // 一意な物体 (rc 1) は、塊の物体でない
+                if !s0.core.dom().contains(h@.addr) {
+                    s0.core.lemma_region_at(h@.addr);
+                }
+            }
+            self.truncate_in_place(h, keep);
+            proof {
+                if c {
+                    reveal(Core::refs_wf);
+                    assert(s0.core.counted_wf(h@.addr));
+                    assert forall|b: usize|
+                        #![trigger self.core.settled_state(b), s0.core.settled_state(b)]
+                        self.core.has(b) && s0.core.has(b) && b != h@.addr implies self.core.perm(b)
+                        == s0.core.perm(b) by {
+                        if s0.core.dom().contains(b) {
+                            assert(self.core.perms@[b] == s0.core.perms@[b]);
+                        }
+                    }
+                }
+            }
+            return left;
+        }
+        proof {
+            let cap = s0.core.cap(h@.addr);
+            assert((len + 7) / 8 <= cap - 1) by (nonlinear_arith)
+                requires
+                    len <= 8 * (cap - 1),
+                    cap >= 1,
+            ;
+        }
+        let w = self.make_text(keep, Tail::Body(h, len, 0, keep), None, 1, Kind::Bytes);
+        let ghost mid = *self;
+        proof {
+            assert(s0.core.tail_bytes(Tail::Body(h, len, 0, keep)) + Seq::<u8>::empty()
+                =~= s0.text_of(left).subrange(0, keep as int));
+            // 塊の left は、新しい物体のブロックと重ならない
+            if !s0.core.dom().contains(h@.addr) {
+                s0.core.lemma_region_at(h@.addr);
+                assert(mid.core.region_has(h@.addr));
+                assert(!mid.core.pages.in_use().contains(h@.addr));
+            }
+        }
+        self.release_text(h, Ghost(left), Ghost(c));
+        proof {
+            let a = h@.addr;
+            let b = w.bits_spec();
+            assert(mid.core.perms@[b] == self.core.perms@[b]);
+            if c {
+                self.core.lemma_frame_evolved(mid.core, s0.core, a, -1);
+                // 両方で生きている物体は、作り直しの前 (`mid`) でも生きていて、`mid` から中身を変えない
+                assert forall|x: usize|
+                    #![trigger self.core.settled_state(x), s0.core.settled_state(x)]
+                    self.core.has(x) && self.core.settled_state(x) == BlockState::Live
+                        && s0.core.has(x) && s0.core.settled_state(x)
+                        == BlockState::Live implies self.core.kept_block(s0.core, x) by {
+                    assert(mid.core.has(x) && mid.core.settled_state(x) == BlockState::Live);
+                    assert(self.core.kept_block(mid.core, x));
+                    if s0.core.dom().contains(x) {
+                        assert(mid.core.perms@[x] == s0.core.perms@[x]);
+                    } else {
+                        s0.core.lemma_apart(x);
+                        s0.core.lemma_region_at(x);
+                        mid.core.lemma_apart(x);
+                    }
+                }
+            }
+        }
+        w
+    }
+
+    /// `pushed` の後に、結果の物体 `w` のその場の書き換えだけを続けても、`pushed` は保たれる。
+    proof fn lemma_pushed_text(&self, mid: Heap<M>, old: Heap<M>, left: Word, w: Word)
+        requires
+            mid.pushed(old, left, w),
+            mid.wf(),
+            self.core.text_changed(mid.core, w.bits_spec()),
+            self.dummy == mid.dummy,
+            self.region == mid.region,
+            self.worker == mid.worker,
+        ensures
+            self.pushed(old, left, w),
+    {
+        let v = old.core.settled_view();
+        let h = w.bits_spec();
+        assert(self.core.word_ok(w) == mid.core.word_ok(w));
+        assert(mid.core.kept_both(v, left.bits_spec()));
+        if w != left {
+            assert forall|b: usize|
+                #![trigger v.dom().contains(b)]
+                v.dom().contains(b) && v.settled_state(b) == BlockState::Live && (v.rc_of(b) == 0
+                    || v.ext(b) + (if b == left.bits_spec() {
+                    -1int
+                } else {
+                    0
+                }) >= 1) implies {
+                &&& self.core.dom().contains(b)
+                &&& self.core.state(b) == BlockState::Live
+                &&& self.core.perm(b).meta == v.perm(b).meta
+                &&& self.core.perm(b).slots == v.perm(b).slots
+                &&& self.core.perm(b).text == v.perm(b).text
+                &&& self.core.block(b) == v.block(b)
+                &&& self.core.cap(b) == v.cap(b)
+                &&& (v.rc_of(b) == 0) == (self.core.rc_of(b) == 0)
+                &&& v.rc_of(b) != 0 ==> self.core.ext(b) == v.ext(b) + if b == left.bits_spec() {
+                    -1int
+                } else {
+                    0
+                }
+                &&& self.core.model@.owner[b] == v.model@.owner[b]
+            } by {
+                assert(mid.core.dom().contains(b));
+                assert(b != h);
+                assert(self.core.perms@[b] == mid.core.perms@[b]);
+            }
+        }
+        assert forall|b: usize|
+            #![trigger self.core.settled_state(b), v.settled_state(b)]
+            self.core.has(b) && self.core.settled_state(b) == BlockState::Live && v.has(b)
+                && v.settled_state(b) == BlockState::Live implies {
+            &&& self.core.perm(b).meta == v.perm(b).meta
+            &&& (self.core.rc_of(b) > 0) == (v.rc_of(b) > 0)
+            &&& (self.core.rc_of(b) < 0) == (v.rc_of(b) < 0)
+            &&& self.core.rc_of(b) > 0 ==> self.core.model@.owner[b] == v.model@.owner[b]
+            &&& b != left.bits_spec() ==> self.core.perm(b).slots == v.perm(b).slots
+                && self.core.perm(b).text == v.perm(b).text
+        } by {
+            assert(mid.core.has(b) && mid.core.settled_state(b) == BlockState::Live);
+            assert(self.core.model == mid.core.model);
+            if mid.core.dom().contains(b) {
+                if b != h {
+                    assert(self.core.perms@[b] == mid.core.perms@[b]);
+                }
+            }
+            if b == h && w != left && !v.dom().contains(b) {
+                // 新しく作った `w` は `old` で生きていなかったので、この枝は起きない
+                mid.core.lemma_apart(b);
+            }
+        }
+    }
+
+    /// バイト列の後ろに `src` を足したバイト列を返す。`string_push` のバイト列の版で、約束も同じである。
+    ///
+    /// # Safety
+    /// `left` はこのヒープか付けた塊の生きているバイト列の物体を指し、呼ぶ側がその参照を1つ持つ。`src` は left 自身の
+    /// 中身を指さない (`string_push` と同じ理由)。
+    pub unsafe fn bytes_extend(&mut self, left: Word, src: &[u8]) -> (r: Result<Word, HeapError>)
+        requires
+            old(self).wf(),
+            old(self).safe_settleable(),
+            left.is_ptr_spec(),
+            old(self).word_in(left),
+            !M::CHECKED ==> old(self).push_ok(left, Kind::Bytes),
+        ensures
+            final(self).wf(),
+            final(self).same_tokens(*old(self)),
+            r is Err ==> *final(self) == old(self).settled_heap(),
+            !M::CHECKED ==> r is Ok,
+            r matches Ok(w) ==> w.is_ptr_spec() && final(self).is_bytes(w) && final(self).text_of(w)
+                == old(self).text_of(left) + src@,
+            old(self).push_ok(left, Kind::Bytes) ==> r is Ok || chain_err(r),
+            r matches Ok(w) ==> (old(self).push_ok(left, Kind::Bytes) ==> final(self).consistent()
+                && final(self).pushed(*old(self), left, w)),
+            final(self).settled(),
+            M::CHECKED ==> final(self).words_kept(*old(self)),
+    {
+        let ghost c = self.push_ok(left, Kind::Bytes);
+        self.settle();
+        let h = self.header_of(left);
+        proof {
+            self.lemma_checks_pass(left);
+            reveal(Core::building_wf);
+            if c {
+                self.core.lemma_readable(left);
+            }
+        }
+        self.checked_body(h, Kind::Bytes)?;
+        let ghost s1 = *self;
+        let w = self.push_unchecked(left, Tail::Bytes(src), Kind::Bytes, Ghost(c));
+        proof {
+            assert(old(self).core.settled_view() == s1.core);
+        }
+        Ok(w)
+    }
+
+    /// `Bytes.append_slice`。`dst` の後ろに、`src` のバイトの範囲 `[from, to)` を足したバイト列を返す。`dst` の参照を
+    /// 受け取り、`src` は借りる。`dst` が一意ならその場で足す。同じ物体を借りて消費するときは、呼ぶ側がその参照を2つ
+    /// 持つので一意でなく、写す道に進む。検査モードは、同じ物体で rc が 1 なら `NotUnique` を返す
+    /// (docs/spec/lir.md の「extern の借用」)。どの誤りも最初の確保より前に返す。
+    ///
+    /// # Safety
+    /// `dst` と `src` はこのヒープか付けた塊の生きているバイト列の物体を指し、呼ぶ側がそれぞれの参照を1つずつ持つ
+    /// (同じ物体なら2つ持つ)。
+    pub(super) unsafe fn bytes_append_part(
+        &mut self,
+        dst: Word,
+        src: Word,
+        from: usize,
+        to: usize,
+    ) -> (r: Result<Word, HeapError>)
+        requires
+            old(self).wf(),
+            old(self).safe_settleable(),
+            dst.is_ptr_spec(),
+            src.is_ptr_spec(),
+            old(self).word_in(dst),
+            old(self).word_in(src),
+            from <= to <= old(self).text_of(src).len(),
+            !M::CHECKED ==> old(self).concat_ok(dst, src, Kind::Bytes),
+        ensures
+            final(self).wf(),
+            final(self).same_tokens(*old(self)),
+            r is Err ==> *final(self) == old(self).settled_heap(),
+            !M::CHECKED ==> r is Ok,
+            r matches Ok(w) ==> w.is_ptr_spec() && final(self).is_bytes(w) && final(self).text_of(w)
+                == old(self).text_of(dst) + old(self).text_of(src).subrange(from as int, to as int),
+            old(self).concat_ok(dst, src, Kind::Bytes) ==> r is Ok || chain_err(r),
+            r matches Ok(w) ==> (old(self).concat_ok(dst, src, Kind::Bytes)
+                ==> final(self).consistent() && final(self).pushed(*old(self), dst, w)),
+            final(self).settled(),
+            M::CHECKED ==> final(self).words_kept(*old(self)),
+    {
+        let ghost c = self.concat_ok(dst, src, Kind::Bytes);
+        self.settle();
+        let hs = self.header_of(src);
+        self.checked_part(dst, src)?;
+        proof {
+            let a = dst.bits_spec();
+            reveal(Core::building_wf);
+            if c {
+                self.lemma_checks_pass(dst);
+                self.core.lemma_readable(dst);
+                self.lemma_checks_pass(src);
+                self.core.lemma_readable(src);
+                // 同じ物体を2つ持つなら rc は 1 でないので、その場で自分自身を写すことはない
+                if a == src.bits_spec() && self.core.dom().contains(a) {
+                    reveal(Core::refs_wf);
+                    self.core.lemma_at(a);
+                    assert(self.core.counted_wf(a));
+                }
+            }
+            if !self.core.dom().contains(a) {
+                self.core.lemma_region_at(a);
+            }
+            self.core.lemma_shape(hs@.addr);
+        }
+        let n = self.core.slot_get(hs, 0).bits();
+        proof {
+            let cap = self.core.cap(hs@.addr);
+            assert((n + 7) / 8 <= cap - 1) by (nonlinear_arith)
+                requires
+                    n <= 8 * (cap - 1),
+                    cap >= 1,
+            ;
+        }
+        let ghost s1 = *self;
+        let w = self.push_unchecked(dst, Tail::Body(hs, n, from, to), Kind::Bytes, Ghost(c));
+        proof {
+            assert(old(self).core.settled_view() == s1.core);
+        }
+        Ok(w)
+    }
+
+    /// `bytes_append_part` の検査。`checked_pair` に、同じ物体を借りて消費するなら一意でないことを足す
+    /// (docs/spec/lir.md の「extern の借用」)。状態を変える前に呼ぶ。速いモードでは何も確かめない。
+    pub(super) fn checked_part(&self, dst: Word, src: Word) -> (r: Result<(), HeapError>)
+        requires
+            self.wf(),
+            self.core.model@.building is None,
+            dst.is_ptr_spec(),
+            src.is_ptr_spec(),
+            self.word_in(dst),
+            self.word_in(src),
+        ensures
+            !M::CHECKED ==> r is Ok,
+            self.concat_ok(dst, src, Kind::Bytes) ==> r is Ok || chain_err(r),
+            M::CHECKED && r is Ok ==> self.pair_passes(dst, src, Kind::Bytes),
+            M::CHECKED && r is Ok && dst.bits_spec() == src.bits_spec() ==> self.core.rc_of(
+                dst.bits_spec(),
+            ) != 1,
+    {
+        let ghost c = self.concat_ok(dst, src, Kind::Bytes);
+        let hd = self.header_of(dst);
+        proof {
+            let a = dst.bits_spec();
+            self.lemma_checks_pass(dst);
+            reveal(Core::building_wf);
+            if c {
+                self.core.lemma_readable(dst);
+                // 同じ物体を2つ持つなら rc は 1 でない
+                if a == src.bits_spec() && self.core.dom().contains(a) {
+                    reveal(Core::refs_wf);
+                    self.core.lemma_at(a);
+                    assert(self.core.counted_wf(a));
+                }
+            }
+            if !self.core.dom().contains(a) {
+                self.core.lemma_region_at(a);
+            }
+        }
+        if M::CHECKED && dst.bits() == src.bits() {
+            self.checked_body(hd, Kind::Bytes)?;
+            if self.core.rc_get(hd) == 1 {
+                return Err(HeapError::NotUnique);
+            }
+        }
+        self.checked_pair(dst, src, Kind::Bytes)
+    }
+
+    /// 種類 `kind` の物体を1つ受けて手放す操作の前提を、`decref` の前提から言う。
+    pub(super) proof fn lemma_push_ok(&self, w: Word, kind: Kind)
+        requires
+            kind.has_body(),
+            self.settleable(),
+            self.readable(w),
+            self.kind_of(w) == kind,
+            self.decref_ok(w),
+        ensures
+            self.push_ok(w, kind),
+    {
+    }
+
+    /// `Bytes.truncate`。バイト列 left の前の `n` バイトを返す。left の参照を受け取り、結果の参照を返す。一意なら長さの
+    /// 語だけを書き、容量は保つ (docs/spec/object-model.md の「バイト列の操作」)。どの誤りも最初の確保より前に返す。
+    ///
+    /// # Safety
+    /// `bytes_extend` と同じ。
+    pub(super) unsafe fn bytes_truncate(&mut self, left: Word, n: usize) -> (r: Result<
+        Word,
+        HeapError,
+    >)
+        requires
+            old(self).wf(),
+            old(self).safe_settleable(),
+            left.is_ptr_spec(),
+            old(self).word_in(left),
+            n <= old(self).text_of(left).len(),
+            !M::CHECKED ==> old(self).push_ok(left, Kind::Bytes),
+        ensures
+            final(self).wf(),
+            final(self).same_tokens(*old(self)),
+            r is Err ==> *final(self) == old(self).settled_heap(),
+            !M::CHECKED ==> r is Ok,
+            r matches Ok(w) ==> w.is_ptr_spec() && final(self).is_bytes(w) && final(self).text_of(w)
+                == old(self).text_of(left).subrange(0, n as int),
+            old(self).push_ok(left, Kind::Bytes) ==> r is Ok || chain_err(r),
+            r matches Ok(w) ==> (old(self).push_ok(left, Kind::Bytes) ==> final(self).consistent()
+                && final(self).pushed(*old(self), left, w)),
+            final(self).settled(),
+            M::CHECKED ==> final(self).words_kept(*old(self)),
+    {
+        let ghost c = self.push_ok(left, Kind::Bytes);
+        self.settle();
+        let h = self.header_of(left);
+        proof {
+            self.lemma_checks_pass(left);
+            reveal(Core::building_wf);
+            if c {
+                self.core.lemma_readable(left);
+            }
+        }
+        self.checked_body(h, Kind::Bytes)?;
+        let ghost s1 = *self;
+        let w = self.own_unchecked(left, n, Ghost(c));
+        proof {
+            assert(old(self).core.settled_view() == s1.core);
+        }
+        Ok(w)
+    }
+
+    /// `Bytes.set`。バイト列 left の `i` バイト目を `b` にしたバイト列を返す。left の参照を受け取り、結果の参照を返す。
+    /// 一意ならその場で書き、そうでなければ写してから書く。どの誤りも最初の確保より前に返す。
+    ///
+    /// # Safety
+    /// `bytes_extend` と同じ。
+    pub(super) unsafe fn bytes_set(&mut self, left: Word, i: usize, b: u8) -> (r: Result<
+        Word,
+        HeapError,
+    >)
+        requires
+            old(self).wf(),
+            old(self).safe_settleable(),
+            left.is_ptr_spec(),
+            old(self).word_in(left),
+            i < old(self).text_of(left).len(),
+            !M::CHECKED ==> old(self).push_ok(left, Kind::Bytes),
+        ensures
+            final(self).wf(),
+            final(self).same_tokens(*old(self)),
+            r is Err ==> *final(self) == old(self).settled_heap(),
+            !M::CHECKED ==> r is Ok,
+            r matches Ok(w) ==> w.is_ptr_spec() && final(self).is_bytes(w) && final(self).text_of(w)
+                == old(self).text_of(left).update(i as int, b),
+            old(self).push_ok(left, Kind::Bytes) ==> r is Ok || chain_err(r),
+            r matches Ok(w) ==> (old(self).push_ok(left, Kind::Bytes) ==> final(self).consistent()
+                && final(self).pushed(*old(self), left, w)),
+            final(self).settled(),
+            M::CHECKED ==> final(self).words_kept(*old(self)),
+    {
+        let ghost c = self.push_ok(left, Kind::Bytes);
+        self.settle();
+        let h = self.header_of(left);
+        proof {
+            self.lemma_checks_pass(left);
+            reveal(Core::building_wf);
+            if c {
+                self.core.lemma_readable(left);
+            }
+        }
+        self.checked_body(h, Kind::Bytes)?;
+        let ghost s1 = *self;
+        proof {
+            self.core.lemma_shape(h@.addr);
+        }
+        let len = self.core.slot_get(h, 0).bits();
+        let w = self.own_unchecked(left, len, Ghost(c));
+        let ghost mid = *self;
+        let hw = self.header_of(w);
+        proof {
+            assert(s1.text_of(left).subrange(0, len as int) =~= s1.text_of(left));
+            assert(old(self).core.settled_view() == s1.core);
+            if c {
+                assert(mid.pushed(*old(self), left, w));
+            }
+        }
+        self.write_byte_in_place(hw, i, b);
+        proof {
+            if c {
+                self.lemma_pushed_text(mid, *old(self), left, w);
+            }
+            if M::CHECKED {
+                assert forall|x: Word| s1.core.word_ok(x) implies #[trigger] self.core.word_ok(
+                    x,
+                ) by {
+                    assert(mid.core.word_ok(x));
+                }
             }
         }
         Ok(w)

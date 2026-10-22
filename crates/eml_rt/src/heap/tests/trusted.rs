@@ -529,6 +529,113 @@ fn parts_of_a_string_are_copied<M: Mode>() {
     assert_eq!(mortal(ctx.heap()), 0);
 }
 
+/// `Bytes.valid_utf8` は `core::str::from_utf8` で確かめる (T5 の `utf8_valid`)。物体の中身の `&[u8]` を、
+/// 1語に収まる長さ、語の境目をまたぐ長さ、大きい物体のページの後ろまで続く長さで渡す。妥当でなければ、確かめが
+/// 止まった位置 (先頭、途中、末尾) を返す。
+fn utf8_is_checked_by_core<M: Mode>() {
+    let mut ctx = ctx_tests::ctx::<M>();
+    let long = "日".repeat(PAGE_BYTES / 3 + 1).into_bytes();
+    let mut broken_end = long.clone();
+    broken_end.push(0xff);
+    let mut broken_middle = long.clone();
+    let middle = PAGE_BYTES / 2 + 2;
+    broken_middle[middle] = b'a';
+    let cases = [
+        (b"".to_vec(), None),
+        ("a日".as_bytes().to_vec(), None),
+        (vec![b'a'; 9], None),
+        (vec![0xe6, 0x97], Some(0)),
+        (b"ab\xffcdefghij".to_vec(), Some(2)),
+        (long.clone(), None),
+        (broken_end, Some(long.len())),
+        // 3 バイトの文字の途中を ASCII に替えると、その文字の頭で止まる
+        (broken_middle, Some(middle - middle % 3)),
+    ];
+    for (b, at) in cases {
+        unsafe {
+            let w = ctx.heap_mut().alloc_bytes(&b);
+            let p = ctx.heap().bytes(w).unwrap();
+            assert_eq!(crate::heap::ctx::bytes::utf8_valid(&*p), at);
+            assert_eq!(ctx.bytes_valid_utf8(w), Ok(at.is_none() as i64));
+            ctx.heap_mut().decref(w).unwrap();
+        }
+    }
+    assert_eq!(mortal(ctx.heap()), 0);
+}
+
+/// バイト列を書き換える道 (T10 の `write_byte` と、同じ物体の範囲の写し)。`src` と `dst` が同じ物体の
+/// `append_part` は、写した先へ元から読む。
+fn bytes_are_written_through_the_core<M: Mode>() {
+    let mut ctx = ctx_tests::ctx::<M>();
+    unsafe {
+        let w = ctx.bytes_make(17, b'a' as i64).unwrap();
+        let w = ctx.bytes_set(8, b'b' as i64, w).unwrap();
+        let w = ctx.bytes_push(b'c' as i64, w).unwrap();
+        ctx.heap_mut().dup(w).unwrap();
+        let ww = ctx.bytes_append_part(7, 10, w, w).unwrap();
+        let ww = ctx.bytes_truncate(20, ww).unwrap();
+        let p = ctx.heap().bytes(ww).unwrap();
+        assert_eq!(&*p, b"aaaaaaaabaaaaaaaacab");
+        ctx.heap_mut().decref(ww).unwrap();
+        ctx.heap_mut().decref(w).unwrap();
+    }
+    assert_eq!(mortal(ctx.heap()), 0);
+}
+
+/// 別のバイト列の範囲をその場で足す `append_part` は、`src` の中身を借りたまま `dst` に `write_bytes` で写す。
+/// 写す元と写す先は別のブロックである。大きい物体の `src` からも写す。
+fn a_part_of_other_bytes_is_appended_in_place<M: Mode>() {
+    let mut ctx = ctx_tests::ctx::<M>();
+    let large: Vec<u8> = (0..PAGE_BYTES + 3).map(|i| i as u8).collect();
+    unsafe {
+        let dst = ctx.heap_mut().alloc_bytes_room(PAGE_BYTES + 32);
+        let dst = ctx.bytes_push(b'-' as i64, dst).unwrap();
+        let src = ctx.heap_mut().alloc_bytes(&large);
+        let w = ctx.bytes_append_part(5, 14, src, dst).unwrap();
+        assert_eq!(w, dst);
+        let w = ctx
+            .bytes_append_part(9, PAGE_BYTES as i64 + 3, src, w)
+            .unwrap();
+        assert_eq!(w, dst);
+        let mut expected = vec![b'-'];
+        expected.extend_from_slice(&large[5..14]);
+        expected.extend_from_slice(&large[9..]);
+        assert_eq!(&*ctx.heap().bytes(w).unwrap(), &expected[..]);
+        assert_eq!(&*ctx.heap().bytes(src).unwrap(), &large[..]);
+        ctx.heap_mut().decref(src).unwrap();
+        ctx.heap_mut().decref(w).unwrap();
+    }
+    assert_eq!(mortal(ctx.heap()), 0);
+}
+
+/// 共有されたバイト列の `truncate` と `set` は、新しいブロックに写してから書く (T10 の `write_bytes` で前の部分を
+/// 写し、`set` はその後 `write_byte` で書き換える)。元の中身は変わらない。
+fn shared_bytes_are_copied_before_writing<M: Mode>() {
+    let mut ctx = ctx_tests::ctx::<M>();
+    let large: Vec<u8> = (0..PAGE_BYTES + 3).map(|i| (i % 251) as u8).collect();
+    for b in [b"abcdefghijklmnopq".to_vec(), large] {
+        unsafe {
+            let a = ctx.heap_mut().alloc_bytes(&b);
+            ctx.heap_mut().dup(a).unwrap();
+            let t = ctx.bytes_truncate(9, a).unwrap();
+            assert_ne!(t, a);
+            assert_eq!(&*ctx.heap().bytes(t).unwrap(), &b[..9]);
+            ctx.heap_mut().dup(a).unwrap();
+            let last = b.len() as i64 - 1;
+            let s = ctx.bytes_set(last, 0xee, a).unwrap();
+            assert_ne!(s, a);
+            let mut expected = b.clone();
+            expected[last as usize] = 0xee;
+            assert_eq!(&*ctx.heap().bytes(s).unwrap(), &expected[..]);
+            assert_eq!(&*ctx.heap().bytes(a).unwrap(), &b[..]);
+            for w in [a, t, s] {
+                ctx.heap_mut().decref(w).unwrap();
+            }
+        }
+    }
+    assert_eq!(mortal(ctx.heap()), 0);
+}
+
 // 凍結した領域
 fn frozen_pages_are_returned<M: Mode>() {
     let (b, _, _) = super::frozen::builder::<M>();
@@ -1019,6 +1126,10 @@ both_modes!(
     single_bytes_are_overwritten,
     reading_then_appending,
     parts_of_a_string_are_copied,
+    utf8_is_checked_by_core,
+    bytes_are_written_through_the_core,
+    a_part_of_other_bytes_is_appended_in_place,
+    shared_bytes_are_copied_before_writing,
     frozen_pages_are_returned,
     two_threads_read_one_region,
     chains_drop_in_any_order,

@@ -134,10 +134,10 @@ impl<M: Mode> Ctx<M> {
             h1.lemma_text_spec(s);
             s0.heap.lemma_text_spec(s);
             if c {
-                s0.lemma_settled_string(h1, s);
+                s0.lemma_settled_body(h1, s, Kind::String);
             }
         }
-        if let Err(e) = self.heap.checked_string(hs) {
+        if let Err(e) = self.heap.checked_body(hs, Kind::String) {
             proof {
                 self.lemma_words_kept(s0);
             }
@@ -204,10 +204,10 @@ impl<M: Mode> Ctx<M> {
             h1.lemma_text_spec(s);
             s0.heap.lemma_text_spec(s);
             if c {
-                s0.lemma_settled_string(h1, s);
+                s0.lemma_settled_body(h1, s, Kind::String);
             }
         }
-        if let Err(e) = self.heap.checked_string(hs) {
+        if let Err(e) = self.heap.checked_body(hs, Kind::String) {
             proof {
                 self.lemma_words_kept(s0);
             }
@@ -294,10 +294,10 @@ impl<M: Mode> Ctx<M> {
             h1.lemma_text_spec(s);
             s0.heap.lemma_text_spec(s);
             if c {
-                s0.lemma_settled_string(h1, s);
+                s0.lemma_settled_body(h1, s, Kind::String);
             }
         }
-        if let Err(e) = self.heap.checked_string(hs) {
+        if let Err(e) = self.heap.checked_body(hs, Kind::String) {
             proof {
                 self.lemma_words_kept(s0);
             }
@@ -334,7 +334,7 @@ impl<M: Mode> Ctx<M> {
         let ghost h2 = self.heap;
         proof {
             h2.lemma_text_spec(w);
-            self.lemma_room_made(h1, s, w);
+            self.lemma_room_made(h1, s, w, Kind::String);
         }
         self.heap.append_part(w, s, from, to);
         let ghost h3 = self.heap;
@@ -343,7 +343,7 @@ impl<M: Mode> Ctx<M> {
             h3.lemma_text_spec(s);
             h3.lemma_text_spec(w);
             if c {
-                s0.lemma_text_shown(h1, h2, h3, s, w);
+                s0.lemma_text_shown(h1, h2, h3, s, w, Kind::String);
             }
         }
         if M::CHECKED {
@@ -361,7 +361,7 @@ impl<M: Mode> Ctx<M> {
                 self.lemma_words_kept(s0);
             }
             if c {
-                self.lemma_shown_lent(s0, h1, h2, h3, s, w);
+                self.lemma_shown_lent(s0, h1, h2, h3, s, w, Kind::String);
             }
         }
         Ok(w)
@@ -426,16 +426,16 @@ impl<M: Mode> Ctx<M> {
             s0.heap.lemma_text_spec(needle);
             s0.heap.lemma_text_spec(s);
             if c {
-                s0.lemma_settled_lent(h1, needle, s);
+                s0.lemma_settled_lent(h1, needle, s, Kind::String);
             }
         }
-        if let Err(e) = self.heap.checked_string(ha) {
+        if let Err(e) = self.heap.checked_body(ha, Kind::String) {
             proof {
                 self.lemma_words_kept(s0);
             }
             return Err(Fault::Heap(e));
         }
-        if let Err(e) = self.heap.checked_string(hb) {
+        if let Err(e) = self.heap.checked_body(hb, Kind::String) {
             proof {
                 self.lemma_words_kept(s0);
             }

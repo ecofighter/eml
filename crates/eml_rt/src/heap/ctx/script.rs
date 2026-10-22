@@ -145,10 +145,10 @@ impl<M: Mode> Ctx<M> {
             h1.lemma_text_spec(name);
             s0.heap.lemma_text_spec(name);
             if c {
-                s0.lemma_settled_string(h1, name);
+                s0.lemma_settled_body(h1, name, Kind::String);
             }
         }
-        if let Err(e) = self.heap.checked_string(hs) {
+        if let Err(e) = self.heap.checked_body(hs, Kind::String) {
             proof {
                 self.lemma_words_kept(s0);
             }
@@ -218,10 +218,10 @@ impl<M: Mode> Ctx<M> {
             h1.lemma_text_spec(name);
             s0.heap.lemma_text_spec(name);
             if c {
-                s0.lemma_settled_string(h1, name);
+                s0.lemma_settled_body(h1, name, Kind::String);
             }
         }
-        if let Err(e) = self.heap.checked_string(hs) {
+        if let Err(e) = self.heap.checked_body(hs, Kind::String) {
             proof {
                 self.lemma_words_kept(s0);
             }
@@ -241,7 +241,7 @@ impl<M: Mode> Ctx<M> {
                 }
                 proof {
                     h2.lemma_text_spec(w);
-                    self.lemma_room_made(h1, name, w);
+                    self.lemma_room_made(h1, name, w, Kind::String);
                     if c {
                         s0.lemma_path_kept(h1, h2, name, w);
                     }
@@ -319,10 +319,10 @@ impl<M: Mode> Ctx<M> {
             lemma_settled_twice(s0.heap);
             assert(h1.words_kept(s0.heap));
             if c {
-                s0.lemma_settled_strings(h1, path, text);
+                s0.lemma_settled_strings(h1, path, text, Kind::String);
             }
         }
-        if let Err(e) = self.heap.checked_strings(path, text) {
+        if let Err(e) = self.heap.checked_pair(path, text, Kind::String) {
             proof {
                 self.lemma_words_kept(s0);
             }
@@ -333,7 +333,7 @@ impl<M: Mode> Ctx<M> {
             self.heap.string_text(path),
             self.heap.string_text(text),
         );
-        let Ghost(mid) = self.heap.release_strings(path, text, Ghost(c));
+        let Ghost(mid) = self.heap.release_pair(path, text, Ghost(Kind::String), Ghost(c));
         proof {
             if M::CHECKED {
                 lemma_words_trans(self.heap, h1, s0.heap);
@@ -391,10 +391,10 @@ impl<M: Mode> Ctx<M> {
             lemma_settled_twice(s0.heap);
             assert(h1.words_kept(s0.heap));
             if c {
-                s0.lemma_settled_strings(h1, program, args);
+                s0.lemma_settled_strings(h1, program, args, Kind::String);
             }
         }
-        if let Err(e) = self.heap.checked_strings(program, args) {
+        if let Err(e) = self.heap.checked_pair(program, args, Kind::String) {
             proof {
                 self.lemma_words_kept(s0);
             }
@@ -406,7 +406,7 @@ impl<M: Mode> Ctx<M> {
             self.heap.string_text(program),
             self.heap.string_text(args),
         );
-        let Ghost(mid) = self.heap.release_strings(program, args, Ghost(c));
+        let Ghost(mid) = self.heap.release_pair(program, args, Ghost(Kind::String), Ghost(c));
         proof {
             if M::CHECKED {
                 lemma_words_trans(self.heap, h1, s0.heap);

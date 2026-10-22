@@ -543,7 +543,7 @@ fn write_escaped<M: Mode>(
 }
 
 /// その場の追記を続けても、変わるのはブロック `h` の語とバイト列だけである。
-proof fn lemma_text_trans(c2: Core, c1: Core, c0: Core, h: usize)
+pub(super) proof fn lemma_text_trans(c2: Core, c1: Core, c0: Core, h: usize)
     requires
         c1.text_changed(c0, h),
         c2.text_changed(c1, h),
@@ -554,7 +554,7 @@ proof fn lemma_text_trans(c2: Core, c1: Core, c0: Core, h: usize)
 
 /// `string_push` の変化 (`pushed`)。`w` が `left` ならその場で足したので外の参照の数は変わらず、そうでなければ `left`
 /// の参照を1つ手放して、前に生きていなかった `w` を作った。
-proof fn lemma_pushed_moved<M: Mode>(h1: Heap<M>, h0: Heap<M>, left: Word, w: Word)
+pub(super) proof fn lemma_pushed_moved<M: Mode>(h1: Heap<M>, h0: Heap<M>, left: Word, w: Word)
     requires
         h0.consistent(),
         h0.settleable(),
@@ -599,7 +599,7 @@ proof fn lemma_pushed_moved<M: Mode>(h1: Heap<M>, h0: Heap<M>, left: Word, w: Wo
 }
 
 /// 文字列のその場の追記の変化 (`text_changed`)。ブロック `h` の語とバイト列のほかは変わらない。
-proof fn lemma_text_moved<M: Mode>(h1: Heap<M>, h0: Heap<M>, h: usize)
+pub(super) proof fn lemma_text_moved<M: Mode>(h1: Heap<M>, h0: Heap<M>, h: usize)
     requires
         h0.core.model@.building is None,
         h1.core.text_changed(h0.core, h),
@@ -797,9 +797,19 @@ fn escape_char_into(c: u32, body: &mut [u8; 6]) -> (k: usize)
 }
 
 impl<M: Mode> Ctx<M> {
+    /// `w` は種類 `kind` の物体を指す。
+    pub open spec fn is_body(&self, w: Word, kind: Kind) -> bool {
+        w.is_ptr_spec() && self.heap_spec().kind_of(w) == kind
+    }
+
     /// `w` は文字列の物体を指す。
     pub open spec fn is_string(&self, w: Word) -> bool {
-        w.is_ptr_spec() && self.heap_spec().is_string(w)
+        self.is_body(w, Kind::String)
+    }
+
+    /// `w` はバイト列の物体を指す。
+    pub open spec fn is_bytes(&self, w: Word) -> bool {
+        self.is_body(w, Kind::Bytes)
     }
 
     /// 文字列 `w` のバイト列。
@@ -810,12 +820,22 @@ impl<M: Mode> Ctx<M> {
     /// 文字列 `a` と `b` を借りる extern の前提。呼ぶ側が両方の参照を持つ。同じ物体でも、借りるだけで手放さないので
     /// 参照は1つでよい。
     pub open spec fn lends_strings(&self, a: Word, b: Word) -> bool {
-        self.is_string(a) && self.is_string(b) && self.holds(a) && self.holds(b)
+        self.lends(a, b, Kind::String)
+    }
+
+    /// 種類 `kind` の物体 `a` と `b` を借りる extern の前提。`lends_strings` と同じ形である。
+    pub open spec fn lends(&self, a: Word, b: Word, kind: Kind) -> bool {
+        self.is_body(a, kind) && self.is_body(b, kind) && self.holds(a) && self.holds(b)
     }
 
     /// 文字列 `a` と `b` を受ける extern の前提。呼ぶ側が両方の参照を1つずつ持つ (同じ物体なら2つ持つ)。
     pub open spec fn holds_strings(&self, a: Word, b: Word) -> bool {
-        self.is_string(a) && self.is_string(b) && self.holds_args(seq![a, b])
+        self.holds_pair(a, b, Kind::String)
+    }
+
+    /// 種類 `kind` の物体 `a` と `b` の参照を、呼ぶ側が1つずつ持つ (同じ物体なら2つ持つ)。
+    pub open spec fn holds_pair(&self, a: Word, b: Word, kind: Kind) -> bool {
+        self.is_body(a, kind) && self.is_body(b, kind) && self.holds_args(seq![a, b])
     }
 
     /// `==`。両辺を借りる。呼ぶ側の参照の数は変わらない。
@@ -852,7 +872,7 @@ impl<M: Mode> Ctx<M> {
                 &&& final(self).evolved_by(*old(self), |x: usize| 0int, Set::empty())
             },
     {
-        self.compare(a, b, false)
+        self.compare(a, b, false, Kind::String)
     }
 
     /// `!=`。`string_eq` と同じ約束で、結果を逆にする。
@@ -887,7 +907,7 @@ impl<M: Mode> Ctx<M> {
                 &&& final(self).evolved_by(*old(self), |x: usize| 0int, Set::empty())
             },
     {
-        let eq = self.compare(a, b, false)?;
+        let eq = self.compare(a, b, false, Kind::String)?;
         Ok(TRUE - eq)
     }
 
@@ -917,18 +937,22 @@ impl<M: Mode> Ctx<M> {
                 &&& final(self).evolved_by(*old(self), |x: usize| 0int, Set::empty())
             },
     {
-        self.compare(a, b, true)
+        self.compare(a, b, true, Kind::String)
     }
 
-    /// 文字列 `a` と `b` を借りて比べる。`order` なら `lex` のタグを、そうでなければ等しいかの `Bool` のタグを
-    /// 返す。検査モードの検査は、状態を変える前に済ませる。
+    /// 種類 `kind` の物体 `a` と `b` を借りて比べる。`order` なら `lex` のタグを、そうでなければ等しいかの `Bool` の
+    /// タグを返す。検査モードの検査は、状態を変える前に済ませる。
     #[inline]
-    fn compare(&mut self, a: Word, b: Word, order: bool) -> (r: Result<i64, Fault>)
+    pub(super) fn compare(&mut self, a: Word, b: Word, order: bool, kind: Kind) -> (r: Result<
+        i64,
+        Fault,
+    >)
         requires
             old(self).wf(),
+            kind.has_body(),
             old(self).heap_spec().word_in(a),
             old(self).heap_spec().word_in(b),
-            !M::CHECKED ==> old(self).lends_strings(a, b),
+            !M::CHECKED ==> old(self).lends(a, b, kind),
         ensures
             final(self).wf(),
             final(self).evv_spec() == old(self).evv_spec(),
@@ -937,10 +961,10 @@ impl<M: Mode> Ctx<M> {
                 == old(self).heap_spec().settled_heap()),
             !M::CHECKED ==> r is Ok,
             r matches Ok(v) ==> (!order ==> v == TRUE || v == FALSE),
-            old(self).held_ok() && old(self).lends_strings(a, b) ==> r is Ok || (r matches Err(
+            old(self).held_ok() && old(self).lends(a, b, kind) ==> r is Ok || (r matches Err(
                 Fault::Heap(e),
             ) && chain_err(Err::<(), HeapError>(e))),
-            old(self).held_ok() && old(self).lends_strings(a, b) && r is Ok ==> {
+            old(self).held_ok() && old(self).lends(a, b, kind) && r is Ok ==> {
                 &&& r == Ok::<i64, Fault>(
                     if order {
                         lex(old(self).text_of(a), old(self).text_of(b))
@@ -955,7 +979,7 @@ impl<M: Mode> Ctx<M> {
             },
     {
         let ghost s0 = *self;
-        let ghost c = s0.held_ok() && s0.lends_strings(a, b);
+        let ghost c = s0.held_ok() && s0.lends(a, b, kind);
         if M::CHECKED && !(a.is_ptr() && b.is_ptr()) {
             return Err(Fault::Heap(HeapError::WrongKind));
         }
@@ -971,24 +995,24 @@ impl<M: Mode> Ctx<M> {
             s0.heap.lemma_text_spec(a);
             s0.heap.lemma_text_spec(b);
             if c {
-                s0.lemma_settled_lent(h1, a, b);
+                s0.lemma_settled_lent(h1, a, b, kind);
             }
         }
-        if let Err(e) = self.heap.checked_string(ha) {
+        if let Err(e) = self.heap.checked_body(ha, kind) {
             proof {
                 self.lemma_words_kept(s0);
             }
             return Err(Fault::Heap(e));
         }
-        if let Err(e) = self.heap.checked_string(hb) {
+        if let Err(e) = self.heap.checked_body(hb, kind) {
             proof {
                 self.lemma_words_kept(s0);
             }
             return Err(Fault::Heap(e));
         }
         let r = {
-            let x = self.heap.string_text(a).as_bytes();
-            let y = self.heap.string_text(b).as_bytes();
+            let x = self.heap.body_of(a);
+            let y = self.heap.body_of(b);
             if order {
                 match bytes_cmp(x, y) {
                     Ordering::Less => LT,
@@ -1064,36 +1088,76 @@ impl<M: Mode> Ctx<M> {
                 )
             }),
     {
+        unsafe { self.append_bodies(a, b, Kind::String) }
+    }
+
+    /// 種類 `kind` の2つの物体の連結。`string_append` と `bytes_append` の本体である。
+    ///
+    /// # Safety
+    /// `string_eq` と同じで、両辺は種類 `kind` の物体である。
+    pub(super) unsafe fn append_bodies(&mut self, a: Word, b: Word, kind: Kind) -> (r: Result<
+        Word,
+        Fault,
+    >)
+        requires
+            old(self).wf(),
+            kind.has_body(),
+            old(self).heap_spec().word_in(a),
+            old(self).heap_spec().word_in(b),
+            !M::CHECKED ==> old(self).holds_pair(a, b, kind),
+        ensures
+            final(self).wf(),
+            final(self).evv_spec() == old(self).evv_spec(),
+            final(self).yield_spec() == old(self).yield_spec(),
+            r is Err ==> (r matches Err(Fault::Heap(_)) && final(self).heap_spec().settled_heap()
+                == old(self).heap_spec().settled_heap()),
+            !M::CHECKED ==> r is Ok,
+            old(self).held_ok() && old(self).holds_pair(a, b, kind) ==> r is Ok || (r matches Err(
+                Fault::Heap(e),
+            ) && chain_err(Err::<(), HeapError>(e))),
+            r matches Ok(w) ==> final(self).is_body(w, kind) && final(self).text_of(w) == old(
+                self,
+            ).text_of(a) + old(self).text_of(b),
+            r matches Ok(w) ==> (old(self).held_ok() && old(self).holds_pair(a, b, kind) ==> {
+                &&& final(self).held_ok()
+                &&& final(self).holds(w)
+                &&& final(self).evolved_by(
+                    *old(self),
+                    |x: usize| points(w, x) - points(a, x) - points(b, x),
+                    Set::empty().insert(a.bits_spec()),
+                )
+            }),
+    {
         let ghost s0 = *self;
-        let ghost c = s0.held_ok() && s0.holds_strings(a, b);
+        let ghost c = s0.held_ok() && s0.holds_pair(a, b, kind);
         if M::CHECKED && !(a.is_ptr() && b.is_ptr()) {
             return Err(Fault::Heap(HeapError::WrongKind));
         }
-        // 写すバイトを数えるために、左が一意かと両辺の長さを先に読む。読む前に、検査モードの検査を済ませる
-
         let copied = if M::CHECKED {
+            // 写すバイトを数えるために、左が一意かと両辺の長さを先に読む。読む前に、検査モードの検査を済ませる
+            // (docs/spec/object-model.md の「仕事の回数」)
             self.heap.settle();
             proof {
                 lemma_settled_twice(s0.heap);
                 assert(self.heap.words_kept(s0.heap));
                 if c {
-                    s0.lemma_settled_strings(self.heap, a, b);
+                    s0.lemma_settled_strings(self.heap, a, b, kind);
                 }
             }
-            if let Err(e) = self.heap.checked_strings(a, b) {
+            if let Err(e) = self.heap.checked_pair(a, b, kind) {
                 proof {
                     self.lemma_words_kept(s0);
                 }
                 return Err(Fault::Heap(e));
             }
             let ha = self.heap.header_of(a);
-            let right = self.heap.string_text(b).len() as u64;
+            let right = self.heap.body_of(b).len() as u64;
             // 一意な左には、その場で足すか作り直すかによらず右の長さだけを数え、共有か不死の左には両辺を数える
             // (docs/spec/object-model.md の「仕事の回数」)
             if self.heap.core.rc_get(ha) == 1 {
                 right
             } else {
-                (self.heap.string_text(a).len() as u64).wrapping_add(right)
+                (self.heap.body_of(a).len() as u64).wrapping_add(right)
             }
         } else {
             0
@@ -1105,10 +1169,10 @@ impl<M: Mode> Ctx<M> {
             h1.lemma_text_spec(b);
             s0.heap.lemma_text_spec(b);
             if c && !M::CHECKED {
-                s0.lemma_strings_concat_ok(a, b);
+                s0.lemma_strings_concat_ok(a, b, kind);
             }
         }
-        let w = match unsafe { self.heap.string_concat(a, b) } {
+        let w = match unsafe { self.heap.concat(a, b, kind) } {
             Ok(w) => w,
             Err(e) => {
                 proof {
@@ -1127,7 +1191,7 @@ impl<M: Mode> Ctx<M> {
                 self.lemma_words_kept(s0);
             }
             if c {
-                self.lemma_appended(s0, h1, a, b, w);
+                self.lemma_appended(s0, h1, a, b, w, kind);
             }
         }
         Ok(w)
@@ -1439,10 +1503,10 @@ impl<M: Mode> Ctx<M> {
             h1.lemma_text_spec(s);
             s0.heap.lemma_text_spec(s);
             if c {
-                s0.lemma_settled_string(h1, s);
+                s0.lemma_settled_body(h1, s, Kind::String);
             }
         }
-        if let Err(e) = self.heap.checked_string(hs) {
+        if let Err(e) = self.heap.checked_body(hs, Kind::String) {
             proof {
                 self.lemma_words_kept(s0);
             }
@@ -1506,10 +1570,10 @@ impl<M: Mode> Ctx<M> {
             h1.lemma_text_spec(s);
             s0.heap.lemma_text_spec(s);
             if c {
-                s0.lemma_settled_string(h1, s);
+                s0.lemma_settled_body(h1, s, Kind::String);
             }
         }
-        if let Err(e) = self.heap.checked_string(hs) {
+        if let Err(e) = self.heap.checked_body(hs, Kind::String) {
             proof {
                 self.lemma_words_kept(s0);
             }
@@ -1551,7 +1615,7 @@ impl<M: Mode> Ctx<M> {
         let ghost h2 = self.heap;
         proof {
             h2.lemma_text_spec(w);
-            self.lemma_room_made(h1, s, w);
+            self.lemma_room_made(h1, s, w, Kind::String);
         }
         let quote = [b'"';1];
         let q = ascii_str(quote.as_slice());
@@ -1570,7 +1634,7 @@ impl<M: Mode> Ctx<M> {
             h3.lemma_text_spec(s);
             h3.lemma_text_spec(w);
             if c {
-                s0.lemma_text_shown(h1, h2, h3, s, w);
+                s0.lemma_text_shown(h1, h2, h3, s, w, Kind::String);
             }
         }
         if M::CHECKED {
@@ -1586,7 +1650,7 @@ impl<M: Mode> Ctx<M> {
                 self.lemma_words_kept(s0);
             }
             if c {
-                self.lemma_shown_lent(s0, h1, h2, h3, s, w);
+                self.lemma_shown_lent(s0, h1, h2, h3, s, w, Kind::String);
             }
         }
         Ok(w)
@@ -1618,7 +1682,8 @@ impl<M: Mode> Ctx<M> {
         self.lemma_evv_kept(s0, z, none);
     }
 
-    /// `String.slice` と `String.show` の、`s` を借りる道。確保と追記の後の `h3` から、何も手放していない。
+    /// `String.slice`、`String.show`、`Bytes.slice` の、種類 `kind` の `s` を借りる道。確保と追記の後の `h3` から、
+    /// 何も手放していない。
     pub(super) proof fn lemma_shown_lent(
         &self,
         s0: Ctx<M>,
@@ -1627,10 +1692,12 @@ impl<M: Mode> Ctx<M> {
         h3: Heap<M>,
         s: Word,
         w: Word,
+        kind: Kind,
     )
         requires
+            kind.has_body(),
             s0.held_ok(),
-            s0.is_string(s),
+            s0.is_body(s, kind),
             s0.holds(s),
             h1 == s0.heap.settled_heap(),
             h1.consistent(),
@@ -1654,7 +1721,7 @@ impl<M: Mode> Ctx<M> {
         let h0 = s0.heap;
         let z = |x: usize| 0int;
         let none = Set::<usize>::empty();
-        s0.lemma_text_shown(h1, h2, h3, s, w);
+        s0.lemma_text_shown(h1, h2, h3, s, w, kind);
         lemma_settle_moved(h1, h0);
         lemma_moved_chain(h3, h1, h0, z, z, z, none, none, none);
         assert forall|x: usize| #[trigger] self.need(seq![], x) > 0 implies s0.need(seq![], x) + z(
@@ -1669,11 +1736,11 @@ impl<M: Mode> Ctx<M> {
         self.lemma_fresh_holds(s0, w);
     }
 
-    /// 文字列を1つ受ける extern の前提から、`settle` の後のヒープ `h1` で、`s` を読めて手放せることを言う。
-    pub(super) proof fn lemma_settled_string(&self, h1: Heap<M>, s: Word)
+    /// 種類 `kind` の物体を1つ受ける extern の前提から、`settle` の後のヒープ `h1` で、`s` を読めて手放せることを言う。
+    pub(super) proof fn lemma_settled_body(&self, h1: Heap<M>, s: Word, kind: Kind)
         requires
             self.held_ok(),
-            self.is_string(s),
+            self.is_body(s, kind),
             self.holds(s),
             h1 == self.heap.settled_heap(),
             h1.consistent(),
@@ -1681,9 +1748,10 @@ impl<M: Mode> Ctx<M> {
             held_word(h1, s),
             live(h1, s.bits_spec()),
             h1.core.state(s.bits_spec()) == BlockState::Live,
-            h1.core.kind(s.bits_spec()) == Kind::String,
+            h1.core.kind(s.bits_spec()) == kind,
+            h1.text_of(s) == self.text_of(s),
             h1.core.rc_of(s.bits_spec()) != 0 ==> h1.core.ext(s.bits_spec()) >= 1,
-            !M::CHECKED ==> h1.text_readable(s),
+            !M::CHECKED ==> h1.readable_as(s, kind),
     {
         let ws = seq![s];
         lemma_settle_moved(h1, self.heap);
@@ -1694,16 +1762,16 @@ impl<M: Mode> Ctx<M> {
         self.heap.lemma_text_spec(s);
     }
 
-    /// 確保は、前に確かめた文字列 `s` に触れない。
-    pub(super) proof fn lemma_room_made(&self, h1: Heap<M>, s: Word, w: Word)
+    /// 確保は、前に確かめた種類 `kind` の物体 `s` に触れない。
+    pub(super) proof fn lemma_room_made(&self, h1: Heap<M>, s: Word, w: Word, kind: Kind)
         requires
             h1.wf(),
             h1.core.model@.building is None,
-            h1.text_readable(s),
+            h1.readable_as(s, kind),
             self.heap.grew(h1, w),
             self.heap.made(h1, w),
         ensures
-            self.heap.text_readable(s),
+            self.heap.readable_as(s, kind),
             self.heap.text_of(s) == h1.text_of(s),
             s.bits_spec() != w.bits_spec(),
             self.heap.core.has(s.bits_spec()),
@@ -1724,7 +1792,8 @@ impl<M: Mode> Ctx<M> {
         self.heap.lemma_text_spec(s);
     }
 
-    /// `String.slice` と `String.show` で、確保と追記の後の、モデルが合っている道。確保と追記は `s` に触れないので、`s` はまだ持たれている。
+    /// `String.slice`、`String.show`、`Bytes.slice` で、確保と追記の後の、モデルが合っている道。確保と追記は `s` に
+    /// 触れないので、`s` はまだ持たれている。
     pub(super) proof fn lemma_text_shown(
         &self,
         h1: Heap<M>,
@@ -1732,10 +1801,12 @@ impl<M: Mode> Ctx<M> {
         h3: Heap<M>,
         s: Word,
         w: Word,
+        kind: Kind,
     )
         requires
+            kind.has_body(),
             self.held_ok(),
-            self.is_string(s),
+            self.is_body(s, kind),
             self.holds(s),
             h1 == self.heap.settled_heap(),
             h1.consistent(),
@@ -1760,7 +1831,7 @@ impl<M: Mode> Ctx<M> {
         let z = |x: usize| 0int;
         let none = Set::<usize>::empty();
         let hw = w.bits_spec();
-        self.lemma_settled_string(h1, s);
+        self.lemma_settled_body(h1, s, kind);
         lemma_alloc_moved(h2, h1, w);
         lemma_text_moved(h3, h2, hw);
         lemma_moved_chain(h3, h2, h1, z, z, z, none, none.insert(hw), none);
@@ -1770,11 +1841,11 @@ impl<M: Mode> Ctx<M> {
         assert(h3.core.word_ok(w) == h2.core.word_ok(w));
     }
 
-    /// 文字列を2つ借りる extern の前提から、`settle` の後のヒープ `h1` で、2つを読めることを言う。
-    pub(super) proof fn lemma_settled_lent(&self, h1: Heap<M>, a: Word, b: Word)
+    /// 種類 `kind` の物体を2つ借りる extern の前提から、`settle` の後のヒープ `h1` で、2つを読めることを言う。
+    pub(super) proof fn lemma_settled_lent(&self, h1: Heap<M>, a: Word, b: Word, kind: Kind)
         requires
             self.held_ok(),
-            self.lends_strings(a, b),
+            self.lends(a, b, kind),
             h1 == self.heap.settled_heap(),
             h1.consistent(),
         ensures
@@ -1784,14 +1855,14 @@ impl<M: Mode> Ctx<M> {
             live(h1, b.bits_spec()),
             h1.core.state(a.bits_spec()) == BlockState::Live,
             h1.core.state(b.bits_spec()) == BlockState::Live,
-            h1.core.kind(a.bits_spec()) == Kind::String,
-            h1.core.kind(b.bits_spec()) == Kind::String,
+            h1.core.kind(a.bits_spec()) == kind,
+            h1.core.kind(b.bits_spec()) == kind,
             h1.text_of(a) == self.text_of(a),
             h1.text_of(b) == self.text_of(b),
-            !M::CHECKED ==> h1.text_readable(a) && h1.text_readable(b),
+            !M::CHECKED ==> h1.readable_as(a, kind) && h1.readable_as(b, kind),
     {
-        self.lemma_settled_string(h1, a);
-        self.lemma_settled_string(h1, b);
+        self.lemma_settled_body(h1, a, kind);
+        self.lemma_settled_body(h1, b, kind);
         let h0 = self.heap;
         let z = |x: usize| 0int;
         lemma_settle_moved(h1, h0);
@@ -1803,18 +1874,19 @@ impl<M: Mode> Ctx<M> {
         h1.lemma_text_spec(b);
     }
 
-    /// 文字列を受ける extern の前提から、`settle` の後のヒープ `h1` で、ヒープの文字列の操作の前提を言う。
-    pub(super) proof fn lemma_settled_strings(&self, h1: Heap<M>, a: Word, b: Word)
+    /// 種類 `kind` の物体を2つ受ける extern の前提から、`settle` の後のヒープ `h1` で、ヒープの操作の前提を言う。
+    pub(super) proof fn lemma_settled_strings(&self, h1: Heap<M>, a: Word, b: Word, kind: Kind)
         requires
+            kind.has_body(),
             self.held_ok(),
-            self.holds_strings(a, b),
+            self.holds_pair(a, b, kind),
             h1 == self.heap.settled_heap(),
             h1.consistent(),
         ensures
-            h1.concat_ok(a, b),
+            h1.concat_ok(a, b, kind),
             h1.text_of(a) == self.text_of(a),
             h1.text_of(b) == self.text_of(b),
-            !M::CHECKED ==> h1.text_readable(a) && h1.text_readable(b),
+            !M::CHECKED ==> h1.readable_as(a, kind) && h1.readable_as(b, kind),
     {
         let h0 = self.heap;
         let ws = seq![a, b];
@@ -1832,16 +1904,17 @@ impl<M: Mode> Ctx<M> {
         if a.bits_spec() == b.bits_spec() && h1.rc_value(a) != 0 {
             assert(live(h0, a.bits_spec()));
         }
-        h1.lemma_concat_ok(a, b);
+        h1.lemma_concat_ok(a, b, kind);
     }
 
-    /// 速いモードで、文字列を受ける extern の前提から `Heap::string_concat` の前提を言う。
-    proof fn lemma_strings_concat_ok(&self, a: Word, b: Word)
+    /// 速いモードで、種類 `kind` の物体を2つ受ける extern の前提から `Heap::concat` の前提を言う。
+    pub(super) proof fn lemma_strings_concat_ok(&self, a: Word, b: Word, kind: Kind)
         requires
+            kind.has_body(),
             self.held_ok(),
-            self.holds_strings(a, b),
+            self.holds_pair(a, b, kind),
         ensures
-            self.heap.concat_ok(a, b),
+            self.heap.concat_ok(a, b, kind),
     {
         let h0 = self.heap;
         let ws = seq![a, b];
@@ -1853,7 +1926,7 @@ impl<M: Mode> Ctx<M> {
         if a.bits_spec() == b.bits_spec() && h0.rc_value(a) != 0 {
             assert(live(h0, a.bits_spec()));
         }
-        h0.lemma_concat_ok(a, b);
+        h0.lemma_concat_ok(a, b, kind);
     }
 
     /// 新しい物体 `w` を作っただけの変化の後、呼ぶ側は `w` の参照を `Ctx` と別に1つ持つ。
@@ -1882,14 +1955,23 @@ impl<M: Mode> Ctx<M> {
         self.lemma_fresh_holds(s0, w);
     }
 
-    /// `string_append` の、モデルが合っている道。`h1` は `string_concat` の前の状態である。
-    proof fn lemma_appended(&self, s0: Ctx<M>, h1: Heap<M>, a: Word, b: Word, w: Word)
+    /// `string_append` と `bytes_append` の、モデルが合っている道。`h1` は `Heap::concat` の前の状態である。
+    pub(super) proof fn lemma_appended(
+        &self,
+        s0: Ctx<M>,
+        h1: Heap<M>,
+        a: Word,
+        b: Word,
+        w: Word,
+        kind: Kind,
+    )
         requires
+            kind.has_body(),
             s0.held_ok(),
-            s0.holds_strings(a, b),
+            s0.holds_pair(a, b, kind),
             h1 == s0.heap || h1 == s0.heap.settled_heap(),
             h1.consistent(),
-            h1.concat_ok(a, b),
+            h1.concat_ok(a, b, kind),
             self.heap.consistent(),
             self.heap.concatenated(h1, a, b, w),
             self.evv == s0.evv,
@@ -1948,6 +2030,179 @@ impl<M: Mode> Ctx<M> {
         }
         // `a` は文字列なので、`evv` の節点でも evidence でも入口の表でもない
         lemma_listed_kept(self.heap, h0, d, xa, self.evv, self.max_evv);
+    }
+
+    /// 種類 `kind` の物体を1つ受けて手放す extern の前提から、`settle` の後のヒープ `h1` で `push_ok` を言う。
+    pub(super) proof fn lemma_settled_push_ok(&self, h1: Heap<M>, w: Word, kind: Kind)
+        requires
+            kind.has_body(),
+            self.held_ok(),
+            self.is_body(w, kind),
+            self.holds_args(seq![w]),
+            h1 == self.heap.settled_heap(),
+            h1.consistent(),
+        ensures
+            h1.push_ok(w, kind),
+            h1.text_of(w) == self.text_of(w),
+    {
+        let h0 = self.heap;
+        let ws = seq![w];
+        let z = |x: usize| 0int;
+        lemma_settle_moved(h1, h0);
+        self.lemma_arg_counted(ws, 0);
+        lemma_points_in(ws, w.bits_spec());
+        lemma_arg_moved(h1, h0, z, Set::empty(), w);
+        h0.lemma_text_spec(w);
+        h1.lemma_text_spec(w);
+        h1.lemma_push_ok(w, kind);
+    }
+
+    /// 種類 `kind` の物体 `left` を受けて同じ種類の `w` を返す extern の、モデルが合っている道。呼ぶ側は `ws` の
+    /// 参照を持ち、その先頭が `left` で、ほかの語は借りただけである。`h1` は `settle` の後の状態である。
+    pub(super) proof fn lemma_pushed_ok(
+        &self,
+        s0: Ctx<M>,
+        h1: Heap<M>,
+        ws: Seq<Word>,
+        left: Word,
+        w: Word,
+        kind: Kind,
+    )
+        requires
+            kind.has_body(),
+            s0.held_ok(),
+            s0.holds_args(ws),
+            1 <= ws.len() <= 3,
+            ws[0] == left,
+            s0.is_body(left, kind),
+            h1 == s0.heap.settled_heap(),
+            h1.consistent(),
+            h1.settleable(),
+            self.heap.consistent(),
+            self.heap.pushed(h1, left, w),
+            self.evv == s0.evv,
+            self.yielding == s0.yielding,
+            self.max_evv == s0.max_evv,
+        ensures
+            self.held_ok(),
+            self.holds(w),
+            self.evolved_by(
+                s0,
+                |x: usize| points(w, x) - points(left, x),
+                Set::empty().insert(left.bits_spec()),
+            ),
+    {
+        let h0 = s0.heap;
+        let z = |x: usize| 0int;
+        let d = |x: usize| points(w, x) - points(left, x);
+        let none = Set::<usize>::empty();
+        let xa = none.insert(left.bits_spec());
+        self.heap.lemma_pushed(h1, left, w);
+        lemma_settle_moved(h1, h0);
+        lemma_pushed_moved(self.heap, h1, left, w);
+        lemma_moved_chain(self.heap, h1, h0, z, d, d, none, xa, xa);
+        h0.lemma_text_spec(left);
+        assert forall|x: usize| #[trigger] self.need(seq![], x) > 0 implies s0.need(ws, x) + d(x)
+            >= self.need(seq![], x) by {
+            lemma_points_in(seq![], x);
+            lemma_points_in(ws, x);
+            assert(live(h0, x) ==> w == left || points(w, x) == 0);
+        }
+        self.lemma_holds_moved(s0, ws, seq![], d, xa);
+        if w == left {
+            assert forall|x: usize| #[trigger] self.need(seq![w], x) > 0 implies s0.need(ws, x) + d(
+                x,
+            ) >= self.need(seq![w], x) by {
+                lemma_points_in(seq![w], x);
+                lemma_points_in(ws, x);
+            }
+            s0.lemma_arg_counted(ws, 0);
+            self.lemma_holds_moved(s0, ws, seq![w], d, xa);
+        } else {
+            lemma_view_live(self.heap, w.bits_spec());
+            assert(self.heap.core.settled_state(w.bits_spec()) == BlockState::Live);
+            self.lemma_fresh_holds(s0, w);
+        }
+        // `left` は文字列かバイト列なので、`evv` の節点でも evidence でも入口の表でもない
+        lemma_listed_kept(self.heap, h0, d, xa, self.evv, self.max_evv);
+    }
+
+    /// 物体 `left` を受けて手放すだけで終わる extern の誤りの道 (範囲の外の位置)。呼ぶ側は `ws` の参照を持ち、その
+    /// 先頭が `left` で、ほかの語は借りただけである。
+    pub(super) proof fn lemma_dropped_ok(&self, s0: Ctx<M>, h1: Heap<M>, ws: Seq<Word>, left: Word)
+        requires
+            s0.held_ok(),
+            s0.holds_args(ws),
+            1 <= ws.len() <= 3,
+            ws[0] == left,
+            h1 == s0.heap.settled_heap(),
+            h1.consistent(),
+            self.heap.consistent(),
+            self.heap.settled(),
+            self.heap.evolved(h1, left, -1),
+            self.heap.kept_live(h1),
+            self.evv == s0.evv,
+            self.yielding == s0.yielding,
+            self.max_evv == s0.max_evv,
+        ensures
+            self.held_ok(),
+            self.evolved_by(s0, |x: usize| -points(left, x), Set::empty()),
+    {
+        let h0 = s0.heap;
+        let z = |x: usize| 0int;
+        let d = |x: usize| -points(left, x);
+        let none = Set::<usize>::empty();
+        lemma_settle_moved(h1, h0);
+        lemma_decref_moved(self.heap, h1, left);
+        lemma_moved_chain(self.heap, h1, h0, z, d, d, none, none, none);
+        assert forall|x: usize| #[trigger] self.need(seq![], x) > 0 implies s0.need(ws, x) + d(x)
+            >= self.need(seq![], x) by {
+            lemma_points_in(seq![], x);
+            lemma_points_in(ws, x);
+        }
+        self.lemma_holds_moved(s0, ws, seq![], d, none);
+        self.lemma_evv_kept(s0, d, none);
+    }
+
+    /// 新しい物体 `w` を作り、その場で書き足しただけの変化の後、呼ぶ側は `w` の参照を `Ctx` と別に1つ持つ。
+    pub(super) proof fn lemma_made_filled(&self, s0: Ctx<M>, h2: Heap<M>, w: Word)
+        requires
+            s0.held_ok(),
+            h2.made(s0.heap, w),
+            h2.owned(w),
+            self.heap.core.text_changed(h2.core, w.bits_spec()),
+            self.heap.dummy == h2.dummy,
+            self.heap.region == h2.region,
+            self.heap.worker == h2.worker,
+            self.heap.consistent(),
+            self.heap.core.model@.building is None,
+            self.evv == s0.evv,
+            self.yielding == s0.yielding,
+            self.max_evv == s0.max_evv,
+        ensures
+            self.held_ok(),
+            self.holds(w),
+            self.evolved_by(s0, |x: usize| 0int, Set::empty()),
+    {
+        let h0 = s0.heap;
+        let h3 = self.heap;
+        let z = |x: usize| 0int;
+        let none = Set::<usize>::empty();
+        let hw = w.bits_spec();
+        lemma_alloc_moved(h2, h0, w);
+        lemma_text_moved(h3, h2, hw);
+        lemma_moved_chain(h3, h2, h0, z, z, z, none, none.insert(hw), none);
+        assert forall|x: usize| #[trigger] self.need(seq![], x) > 0 implies s0.need(seq![], x) + z(
+            x,
+        ) >= self.need(seq![], x) by {
+            lemma_points_in(seq![], x);
+        }
+        self.lemma_holds_moved(s0, seq![], seq![], z, none);
+        self.lemma_evv_kept(s0, z, none);
+        assert(live(h2, hw));
+        assert(h3.core.word_ok(w) == h2.core.word_ok(w));
+        lemma_view_live(self.heap, hw);
+        self.lemma_fresh_holds(s0, w);
     }
 
     /// `compare` の、モデルが合っている道。`settle` の後の `h1` から `a` と `b` を手放した。

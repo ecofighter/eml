@@ -24,6 +24,7 @@ const FILES: &[(&str, &str)] = &[
     ("heap/core.rs", include_str!("heap/core.rs")),
     ("heap/ctx.rs", include_str!("heap/ctx.rs")),
     ("heap/ctx/arrays.rs", include_str!("heap/ctx/arrays.rs")),
+    ("heap/ctx/bytes.rs", include_str!("heap/ctx/bytes.rs")),
     ("heap/ctx/io.rs", include_str!("heap/ctx/io.rs")),
     (
         "heap/ctx/positions.rs",
@@ -102,6 +103,7 @@ const TRUSTED: &[(&str, &str)] = &[
     ("frozen.rs: external_body same_chunk", "T5"),
     ("frozen.rs: external_body not_a_descendant", "T5"),
     ("heap/ctx/strings.rs: external_body bytes_cmp", "T5"),
+    ("heap/ctx/bytes.rs: external_body utf8_valid", "T5"),
     ("foreign.rs: verifier::external VTable", "T3"),
     ("foreign.rs: verifier::external Table", "T3"),
     ("foreign.rs: verifier::external drop_value", "T3"),

@@ -75,6 +75,13 @@ fn only_arith_and_index_faults_panic() {
         index(IndexFault::Arg { index: 5, count: 0 }),
         index(IndexFault::Array { index: 3, len: 3 }),
         index(IndexFault::Length { len: -1 }),
+        index(IndexFault::BytesIndex { index: 3, len: 3 }),
+        index(IndexFault::BytesSlice {
+            start: 0,
+            end: 3,
+            len: 1,
+        }),
+        index(IndexFault::BytesLength { len: -1 }),
     ];
     for fault in &panicking {
         assert!(fault.panics(), "{fault:?}");
@@ -217,10 +224,11 @@ fn bools_compare_by_tag() {
     }
 }
 
-/// 文言は docs/spec/lir.md の「実行時エラー」の一覧のとおりである。
+/// 文言は docs/spec/object-model.md の「誤り」の表のとおりである。`bytes` で始まる3つのほかは docs/spec/lir.md の
+/// 「実行時エラー」の一覧にもある。
 #[test]
 fn faults_print_their_listed_texts() {
-    let cases: [(Fault, &str); 26] = [
+    let cases: [(Fault, &str); 29] = [
         (ArithFault::DivisionByZero.into(), "division by zero"),
         (
             ArithFault::NotScalar(55296).into(),
@@ -334,6 +342,22 @@ fn faults_print_their_listed_texts() {
         (
             Fault::Index(Box::new(IndexFault::Length { len: -2 })),
             "array length -2 is negative",
+        ),
+        (
+            Fault::Index(Box::new(IndexFault::BytesIndex { index: 4, len: 4 })),
+            "bytes index 4 is out of range for length 4",
+        ),
+        (
+            Fault::Index(Box::new(IndexFault::BytesSlice {
+                start: 0,
+                end: 9,
+                len: 3,
+            })),
+            "bytes slice 0..9 is out of range for length 3",
+        ),
+        (
+            Fault::Index(Box::new(IndexFault::BytesLength { len: -2 })),
+            "bytes length -2 is negative",
         ),
         (
             HeapError::WrongKind.into(),

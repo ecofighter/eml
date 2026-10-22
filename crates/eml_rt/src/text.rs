@@ -3,7 +3,8 @@
 //! 一覧の T10 である。どれも `String` か `Bytes` のブロックの権限を受け、長さの語 (ペイロードの 0 語目) の後ろの容量の
 //! 中だけを読み書きする。メモリのバイト列は、いつも権限の ghost のバイト列 `text` に等しい。この約束は、権限が渡した
 //! ポインタの `String` か `Bytes` のブロックのものであるとき (`BlockPerm::holds_body`) に限る。ghost のバイト列を
-//! 変えるのは、ここの `write_bytes` と `write_byte` と、確保のたびに列を空にする `BlockPerm::clear_text` だけである。
+//! 変えるのは、ここの `write_bytes` と `write_byte`、確保のたびに列を空にする `BlockPerm::clear_text`、列を前の部分に
+//! 縮める `BlockPerm::truncate_text` だけである。
 //! `str` で読み書きする `write_text`、`text`、`text_ptr` は、vstd の `str::as_bytes` と `str::from_utf8_unchecked` の
 //! 約束を使って、この4つの上に検証して書く。
 
@@ -55,9 +56,6 @@ pub(crate) fn write_bytes(
 
 /// `h` のペイロードの `i` バイト目を `b` に書き換える。`i` は今の ghost のバイト列の中の位置で、長さは変わらない。
 /// 長さの語と、ほかの欄は書かない。
-// `String` の操作は1バイトを書き換えないので、検証したコードから呼ぶ所がない。信頼の一覧の T10 の1つとして置く
-// (docs/spec/object-model.md の「`unsafe` の核」)
-#[allow(dead_code)]
 #[verifier::external_body]
 #[inline]
 pub(crate) fn write_byte(

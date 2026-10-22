@@ -56,11 +56,11 @@ impl<M: Mode> Ctx<M> {
             h1.lemma_text_spec(s);
             s0.heap.lemma_text_spec(s);
             if c {
-                s0.lemma_settled_string(h1, s);
+                s0.lemma_settled_body(h1, s, Kind::String);
             }
         }
         // 確かめはどれも Host を呼ぶ前に済ませ、誤りなら何も書かない
-        if let Err(e) = self.heap.checked_string(hs) {
+        if let Err(e) = self.heap.checked_body(hs, Kind::String) {
             proof {
                 self.lemma_words_kept(s0);
             }
@@ -128,10 +128,10 @@ impl<M: Mode> Ctx<M> {
             h1.lemma_text_spec(s);
             s0.heap.lemma_text_spec(s);
             if c {
-                s0.lemma_settled_string(h1, s);
+                s0.lemma_settled_body(h1, s, Kind::String);
             }
         }
-        if let Err(e) = self.heap.checked_string(hs) {
+        if let Err(e) = self.heap.checked_body(hs, Kind::String) {
             proof {
                 self.lemma_words_kept(s0);
             }
@@ -228,11 +228,11 @@ impl<M: Mode> Ctx<M> {
             h1.lemma_text_spec(path);
             s0.heap.lemma_text_spec(path);
             if c {
-                s0.lemma_settled_string(h1, path);
+                s0.lemma_settled_body(h1, path, Kind::String);
             }
         }
         // 確かめはどれも Host を呼ぶ前に済ませ、誤りなら何も開かない
-        if let Err(e) = self.heap.checked_string(hp) {
+        if let Err(e) = self.heap.checked_body(hp, Kind::String) {
             proof {
                 self.lemma_words_kept(s0);
             }
@@ -245,7 +245,7 @@ impl<M: Mode> Ctx<M> {
                 let f = self.heap.alloc_foreign(file, true);
                 let ghost h2 = self.heap;
                 proof {
-                    self.lemma_room_made(h1, path, f);
+                    self.lemma_room_made(h1, path, f, Kind::String);
                     if c {
                         s0.lemma_path_kept(h1, h2, path, f);
                     }
@@ -539,7 +539,7 @@ impl<M: Mode> Ctx<M> {
             h2.core.state(s.bits_spec()) == BlockState::Live,
             h2.core.rc_of(s.bits_spec()) != 0 ==> h2.core.ext(s.bits_spec()) >= 1,
     {
-        self.lemma_settled_string(h1, s);
+        self.lemma_settled_body(h1, s, Kind::String);
         lemma_alloc_moved(h2, h1, w);
         lemma_arg_moved(h2, h1, |x: usize| 0int, Set::empty(), s);
         lemma_view_live(h2, s.bits_spec());
@@ -573,7 +573,7 @@ impl<M: Mode> Ctx<M> {
         let ds = |x: usize| -points(s, x);
         let none = Set::<usize>::empty();
         let ws = seq![s];
-        s0.lemma_settled_string(h1, s);
+        s0.lemma_settled_body(h1, s, Kind::String);
         lemma_settle_moved(h1, h0);
         lemma_alloc_moved(h2, h1, w);
         lemma_decref_moved(self.heap, h2, s);

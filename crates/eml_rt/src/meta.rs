@@ -541,13 +541,13 @@ pub(crate) tracked struct BlockPerm {
     pub(crate) tracked meta: PointsTo<u32>,
     pub(crate) tracked slots: Map<int, PointsTo<Word>>,
     pub(crate) tracked prefix: Option<PrefixPerm>,
-    /// `String` の物体のバイト列 (`text()`)。ほかの種類では意味を持たない。
+    /// `String` と `Bytes` の物体のバイト列 (`text()`)。ほかの種類では意味を持たない。
     pub(crate) ghost text: Text,
 }
 
-/// `String` の物体のバイト列。メモリのバイト列はこれに等しい (信頼の一覧の T10)。証明が好きな列を書けると T10 の約束が
-/// 崩れるので、欄を隠して、この module の外では作れないようにする。列を変えるのは `BlockPerm::clear_text` と
-/// `crate::text` の `write_bytes` と `write_byte` だけである。
+/// `String` と `Bytes` の物体のバイト列。メモリのバイト列はこれに等しい (信頼の一覧の T10)。証明が好きな列を書けると
+/// T10 の約束が崩れるので、欄を隠して、この module の外では作れないようにする。列を変えるのは
+/// `BlockPerm::clear_text`、`BlockPerm::truncate_text`、`crate::text` の `write_bytes` と `write_byte` だけである。
 #[cfg_attr(not(verus_keep_ghost), allow(dead_code))]
 pub(crate) ghost struct Text {
     bytes: Seq<u8>,
@@ -788,6 +788,21 @@ impl BlockPerm {
             final(self).prefix == old(self).prefix,
     {
         self.text = Text { bytes: Seq::empty() };
+    }
+
+    /// ghost のバイト列を前の `n` バイトに切り詰める。`Bytes.truncate` がその場で長さの語だけを書くときに使う。
+    /// メモリの前の `n` バイトは列のその部分に等しいままなので、T10 の約束は保たれる。
+    pub(crate) proof fn truncate_text(tracked &mut self, n: int)
+        requires
+            0 <= n <= old(self).text().len(),
+        ensures
+            final(self).text() == old(self).text().subrange(0, n),
+            final(self).rc == old(self).rc,
+            final(self).meta == old(self).meta,
+            final(self).slots == old(self).slots,
+            final(self).prefix == old(self).prefix,
+    {
+        self.text = Text { bytes: self.text.bytes.subrange(0, n) };
     }
 
     /// `String` か `Bytes` のブロック `h` の権限で、長さの語と、その後ろの `n` バイトを覆う語の権限を持つ。T10 の関数は、

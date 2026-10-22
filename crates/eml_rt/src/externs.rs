@@ -100,6 +100,12 @@ pub enum IndexFault {
     Array { index: i64, len: i64 },
     /// `make` に渡した負の長さ。
     Length { len: i64 },
+    /// バイト列の位置 (`Bytes.get`、`Bytes.set`)。
+    BytesIndex { index: i64, len: i64 },
+    /// バイト列の範囲 (`Bytes.slice`、`append_slice`、`truncate`) がバイト列の外にある。
+    BytesSlice { start: i64, end: i64, len: i64 },
+    /// `Bytes.make` に渡した負の長さ。
+    BytesLength { len: i64 },
 }
 
 /// extern の誤り。位置は VM が付けるので持たない。24 バイトに収めるため (`faults_stay_small`)、まれな誤りの中身は
@@ -1210,6 +1216,16 @@ impl fmt::Display for Fault {
                     write!(f, "array index {index} is out of range for length {len}")
                 }
                 IndexFault::Length { len } => write!(f, "array length {len} is negative"),
+                IndexFault::BytesIndex { index, len } => {
+                    write!(f, "bytes index {index} is out of range for length {len}")
+                }
+                IndexFault::BytesSlice { start, end, len } => {
+                    write!(
+                        f,
+                        "bytes slice {start}..{end} is out of range for length {len}"
+                    )
+                }
+                IndexFault::BytesLength { len } => write!(f, "bytes length {len} is negative"),
             },
             Fault::Stopped(s) => write!(f, "{s}"),
         }
