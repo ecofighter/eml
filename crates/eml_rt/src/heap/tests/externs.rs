@@ -2267,7 +2267,7 @@ fn the_externs_match_the_table<M: Mode>() {
     }
 }
 
-/// 表を書く。行を足すか入力を変えたときだけ、`cargo test -p eml_rt the_table_can_be_written -- --ignored` で流し、
+/// 表を書く。行を足すか入力を変えたときだけ、`cargo nextest run -p eml_rt --run-ignored ignored-only the_table_can_be_written` で流し、
 /// 差分の結果の欄を人が確かめる (docs/implementation/testing.md の「期待値の表」)。結果は検査モードで作る
 #[test]
 #[ignore = "writes expected.txt"]

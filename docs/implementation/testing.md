@@ -43,6 +43,14 @@
 
 1つの事実は、上の表で選んだ1か所だけで確かめる。UI テストは機能ごとの代表的な筋書きを確かめ、段階の端のケースを繰り返さない。例えば診断なら、端のケースは段階の crate のテストに置き、代表的な表示を `check-fail/` に1つ置く。
 
+次の組は同じことを確かめているように見えるが、確かめる事実が違うので両方を置く。
+
+- `check-fail/types/broken_signature_effects.em` は、E2001 の引数の数の文言を描画する唯一の UI テストである。`eml_types` の `check.rs` の同じプログラムは、回復の端のケースを確かめる
+- `eml_syntax` の `lexer.rs` の `resume_is_an_ordinary_name` は字句の段の事実で、`handlers.rs` の CST のテストとは段が違う
+- `ui.rs` と `repl.rs` の、ファイルの分け方の自己テストの組。UI のディレクトリには同じ拡張子のモジュールがあり、トランスクリプトは深い所の `.repl` を断るので、規則が違う
+- `eml_vm` の `structs.rs` の逆アセンブラのテストは、`dup s` と `(boxes, unboxes)` を確かめる。`miri.rs` の同じプログラムは、この事実を持たない
+- `eml_cli` の `api.rs` の `Outcome::Rejected` のテストは、トランスクリプトに出ない結果を固定する
+
 ### crate の中の置き方
 
 - 結合テストは、話題ごとに1ファイルにする。ファイル名は spec の節か言語の機能から付ける (`effects.rs`、`operators.rs`)。1つのファイルが複数の話題にまたがったら、話題で分ける
@@ -163,7 +171,7 @@ extern の結果を1つの期待値の表に固定し、`eml_rt` の回帰を防
 - Miri は、nightly と `miri` と `rust-src` を持つ別の devShell `nix develop .#miri` で流す。flake は nightly を fenix の `complete` (すべての部品がそろう最新の日の nightly) から取る ([アーキテクチャ](architecture.md) の toolchain の項)
 - `cargo miri test -p eml_rt trusted::` を、`MIRIFLAGS="-Zmiri-strict-provenance"` で1回、`MIRIFLAGS="-Zmiri-strict-provenance -Zmiri-tree-borrows"` でもう1回流す。この2回と下の `eml_vm` の2回を合わせた4つの実行は互いに独立で、同時に流してよい
 - テストの大きさは `cfg!(miri)` で変えない。ページの大きさも Miri で変えない
-- Miri の予算はコマンド全体の CPU 時間 (`/usr/bin/time -p` の `user`) で決める。ビルド済みの作業ツリーで測り、Miri のビルドの時間は数えない。`eml_rt` の `trusted::` は Stacked Borrows で 60 秒以内、Tree Borrows で 120 秒以内、`eml_vm` の `miri::` はどちらの規則でも 60 秒以内にする。1つのテストは両方のモードの合計で、Tree Borrows の下で `trusted` が 5 秒以内、`miri.rs` が 10 秒以内に収める。`miri.rs` の上限が緩いのは、LIR のテキストを Miri の下で読むためである
+- Miri の予算はコマンド全体の CPU 時間 (`/usr/bin/time -p` の `user`) で決める。ビルド済みの作業ツリーで測り、Miri のビルドの時間は数えない。`eml_rt` の `trusted::` は Stacked Borrows で 60 秒以内、Tree Borrows で 120 秒以内、`eml_vm` の `miri::` はどちらの規則でも 60 秒以内にする。1つのテストは、それを足したときにコマンドの `user` が増える分で測り、両方のモードの合計で、Tree Borrows の下で `trusted` が 5 秒以内、`miri.rs` が 10 秒以内に収める。そのテストだけを絞り込んで流した時間では測らない。絞り込んだ実行は、全体の実行で1回だけ払う費用を含み、小さいテストでも 14 秒ほどかかるためである。`miri.rs` の上限が緩いのは、LIR のテキストを Miri の下で読むためである。予算は測った時間の約3倍にしてある。2倍の退行では落ちず、数分かかるような大きさの誤りは落ちる。テストごとにプロセスを起こす `cargo miri nextest run` は使わない。1件あたり約 2.3 秒の起動の費用がかかり、CPU 時間が約10倍になるのに、壁時計はほとんど縮まないためである
 - 大きい物体の長さは `trusted.rs` の `LARGE_BODY` (`MAX_SMALL_WORDS * 8` バイト。両方のモードで大きい物体になる、語に揃った長さ) と、それに語に揃わない小さい残りを足した長さ (`LARGE_BODY + 3` など) にする。大きい物体のページは物体の大きさちょうどなので、この長さでページの末尾まで届く。64 KiB を超える長さは、確かめるコードに 64 KiB の単位がある所 (小さいページ、Host の `READ_CHUNK` と `BUFFER_BYTES`、`Control` のページの数え方) だけで使う。大きい入力の期待値はデータと一緒に書くか解析で出し、素朴な1要素ずつの比べを大きい本体に走らせない
 - ほかの crate は、次の `eml_vm` を除いて Miri で流さない
 - `eml_vm` は、検証していないコードから `eml_rt` の `unsafe fn` を呼ぶ。そのため、`crates/eml_vm/tests/miri.rs` (module `miri`) の小さい実行のテストを、`eml_rt` と同じ2つの設定で流す (`cargo miri test -p eml_vm --test integration miri::`)。直接の呼び出しと戻り、`con` と `switch` と `release`、部分適用 (即値の関数からとクロージャから) と余った引数、evidence を作って引く基本操作、ヒープの文字列の extern、文字列を返す入口の結果を写すこと (`run_shown`) を、両方のモードで通す。確かめるのは VM が核の操作の前提を守っていることで、信頼の一覧を確かめる `trusted` とは目的が違う。テストはメモリの Host (`capture_host`) だけを使い、実際のファイルを開かない。UI テストは Miri で流さない。`miri.rs` のテストは `cargo test` でも流れるので、同じプログラムと同じ確かめを `calls.rs` などに重ねて置かない

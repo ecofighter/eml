@@ -1,7 +1,7 @@
 //! 開発用の数え方。`bench/` と `tests/ui/run*` のすべてのプログラムを最後の LIR まで通し、文と終端の数、一様な版
 //! `$uniform` の数、そのうち写しの形の数を数える。呼び出しの規約を変えたときの、コードの大きさの変わり方を見るため
 //! である (docs/implementation/testing.md の「開発用の数え方」)。ふだんは流さず、
-//! `cargo test -p eml_core_ir --test integration census -- --ignored --nocapture` で流す。
+//! `cargo nextest run -p eml_core_ir --test integration --run-ignored ignored-only --no-capture census` で流す。
 
 use eml_lir::{Call, LirFn, Rhs, Stmt};
 

@@ -100,8 +100,8 @@ pub fn run_all(files: &[PathBuf], test: impl Fn(&Path) + Sync) {
                         && reported[worker] != index
                     {
                         reported[worker] = index;
-                        // libtest は出力のマクロと panic しか捕まえず、止まったテストの出力は出さないので、
-                        // 標準エラーに直接書く
+                        // libtest は止まったテストの出力を出さないので、標準エラーに直接書く。nextest の下では、
+                        // テストを止めたときの要約か `--no-capture` で見える
                         let _ = writeln!(
                             io::stderr(),
                             "still running after {}s: {}",
