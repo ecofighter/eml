@@ -66,11 +66,13 @@ pub(crate) struct File {
 /// 1回に読むバイト数。読み手の buffer の大きさで、読む間に止める語と確保量を見る間隔になる。
 const READ_CHUNK: u64 = 64 * 1024;
 
-/// 読みが途中で終わった理由。`Output` は、補充の前に標準出力を書き出せなかったことである。
+/// 読みが途中で終わった理由。`Output` は、補充の前に標準出力を書き出せなかったことである。`NotUtf8` は、読んだバイト列が
+/// UTF-8 でなかったことで、文字列にする `read_text` だけが作る。
 pub(crate) enum Failure {
     Io(IoReason),
     Stopped(Stop),
     Output(Box<str>),
+    NotUtf8,
 }
 
 /// buffer を持つ読み手 (docs/spec/object-model.md の「読み手」)。`fill` が最大 `READ_CHUNK` バイトを1回読み、
@@ -93,13 +95,15 @@ pub struct StdinSlot {
 
 /// `src` の読み手の buffer に残ったバイトを返す。空なら1回補充してから返し、終わりなら空の slice を返す
 /// (`Reader::fill_buf`)。`host` があれば、補充の前にその Host の出力を書き出させる (標準入力の読み)。誤りは `src` の
-/// 名前を付けた `Fault` にする (`Source::fault`)。検証した `Ctx` のコードは、`foreign_unique` で借りたハンドルのまま
-/// これを呼ぶ。
+/// 名前を付けた `Fault` にする (`Source::fault`)。誤りの種類は `Source::fault` の実装で決まる。検証した `Ctx` の
+/// コードは、`foreign_unique` で借りたハンドルのままこれを呼ぶ。
 ///
 /// # Safety
-/// `src` は生きている `S` を指し、呼ぶ間ほかに参照がない。返す slice を読めるのは、次にこの読み手に `fill` か
-/// `consume` を呼ぶか、`src` を落とすまでの間だけである。slice は読み手の buffer を指し、ヒープのページを指さないので、
-/// その間にヒープで確保しても解放してもよい。
+/// `src` は生きている `S` を指し、呼ぶ間ほかに参照がない。返す slice を読めるのは、次に `src` を使うか (`fill`、
+/// `consume`、そのほか `src` を受ける T11 の関数のどれでも)、`src` を落とすまでの間だけである。slice は読み手の
+/// buffer を指し、ヒープのページを指さないので、その間にヒープで確保しても解放してもよい。
+// 今は信頼の一覧のテストだけが呼ぶ。検証した `Ctx` のコードが読み手を直接読む入口として置く
+#[allow(dead_code)]
 #[verifier::external_body]
 pub(crate) unsafe fn fill<'a, S: Source>(
     src: *mut S,
@@ -118,6 +122,7 @@ pub(crate) unsafe fn fill<'a, S: Source>(
 ///
 /// # Safety
 /// `src` は生きている `S` を指し、呼ぶ間ほかに参照がない。
+#[allow(dead_code)]
 #[verifier::external_body]
 pub(crate) unsafe fn consume<S: Source>(src: *mut S, n: usize) {
     let reader = unsafe { (*src).reader() };
@@ -135,47 +140,32 @@ pub(crate) fn host_open(host: &HostRef, path: &str) -> Result<File, (Box<str>, I
     }
 }
 
-/// `file` を終わりまで (`line` なら次の `\n` まで、それを含めて) 読み、UTF-8 の文字列にする。誤りはパスを付けた
-/// `Fault` で返す。
+/// `src` を終わりまで (`line` なら次の `\n` まで、それを含めて) 読み、UTF-8 の文字列にする。`host` があれば、補充の
+/// 前ごとにその Host の出力を書き出させる (`fill` と同じ)。誤りは `src` の名前を付けた `Fault` にする
+/// (`Source::fault`)。`Fault::Heap` を返さないことは、`Source::fault` の実装がそれを作らないことに依る。
 ///
 /// # Safety
-/// `file` は生きている `File` を指し、読む間ほかに参照がない。呼ぶ側が `Heap::foreign_unique` で確かめる (T3)。
+/// `src` は生きている `S` を指し、読む間ほかに参照がない。呼ぶ側が `Heap::foreign_unique` で確かめる (T3)。
 #[verifier::external_body]
-pub(crate) unsafe fn read_text(file: *mut File, control: &Control, line: bool) -> (r: Result<
-    String,
-    Fault,
->)
+pub(crate) unsafe fn read_text<S: Source>(
+    src: *mut S,
+    control: &Control,
+    host: Option<&HostRef>,
+    line: bool,
+) -> (r: Result<String, Fault>)
     ensures
-        r matches Err(e) ==> (e matches Fault::Io { op: IoOp::Read, .. }) || (
-        e matches Fault::NotUtf8(_)) || (e matches Fault::Stopped(_)),
+        !(r matches Err(Fault::Heap(_))),
 {
+    let src = unsafe { &mut *src };
     // 見込みはファイル全体の長さなので、1行の読みでは確保に使わない。読んだ後は残りの長さと合わないので捨てる
-    let size = unsafe { (*file).size.take() }.filter(|_| !line);
-    let bytes = if line {
-        // `fill` の slice は `consume` の前までしか使わない
-        let mut bytes = Vec::new();
-        loop {
-            check(control, bytes.capacity()).map_err(|f| unsafe { (*file).fault(f) })?;
-            let buf = unsafe { fill(file, control, None) }?;
-            if buf.is_empty() {
-                break;
-            }
-            let (used, done) = line_part(buf);
-            bytes.extend_from_slice(&buf[..used]);
-            unsafe { consume(file, used) };
-            if done {
-                break;
-            }
-        }
-        bytes
+    let size = src.take_size().filter(|_| !line);
+    let read = if line {
+        read_line(src.reader(), control, host)
     } else {
-        read_all(unsafe { &mut (*file).reader }, control, size, None).map_err(
-            |f| unsafe { (*file).fault(f) },
-        )?
+        read_all(src.reader(), control, size, host)
     };
-    String::from_utf8(bytes).map_err(
-        |_| Fault::NotUtf8(Box::new(Utf8Source::File(unsafe { (*file).path.clone() }))),
-    )
+    let bytes = read.map_err(|f| src.fault(f))?;
+    String::from_utf8(bytes).map_err(|_| src.fault(Failure::NotUtf8))
 }
 
 /// スクリプトに渡した引数の数。
@@ -247,6 +237,7 @@ pub(crate) fn host_read_stdin(host: &HostRef, control: &Control, line: bool) -> 
         Err(Failure::Io(reason)) => Err(Fault::Stdin(reason)),
         Err(Failure::Stopped(stop)) => Err(Fault::Stopped(stop)),
         Err(Failure::Output(message)) => Err(Fault::Output(message)),
+        Err(Failure::NotUtf8) => Err(Fault::NotUtf8(Box::new(Utf8Source::Stdin))),
     }
 }
 
@@ -449,6 +440,9 @@ impl Reader {
         loop {
             check(control, 0)?;
             match self.inner.read(&mut self.buf) {
+                // 渡した buffer より大きい長さを返す読み手は `Read` の約束を破っている。`pos` と `filled` を書く前に
+                // 断るので、読み手は壊れずに次の読みへ残る
+                Ok(n) if n > self.buf.len() => return Err(Failure::Io(IoReason::Other)),
                 Ok(n) => {
                     self.pos = 0;
                     self.filled = n;
@@ -503,13 +497,20 @@ impl StdinSlot {
 /// 任せる (docs/spec/object-model.md の「読み手」)。
 pub(crate) trait Source {
     fn reader(&mut self) -> &mut Reader;
-    /// 読みの誤りを、このハンドルの名前を付けた `Fault` にする。
+    /// まだ使っていない長さの見込みを取り出す。全部の読みが確保に使い、見込みのないハンドルは `None` を返す。
+    fn take_size(&mut self) -> Option<u64>;
+    /// 読みの誤りを、このハンドルの名前を付けた `Fault` にする。`Fault::Heap` は作らない (`read_text` の約束が
+    /// これに依る)。
     fn fault(&self, failure: Failure) -> Fault;
 }
 
 impl Source for File {
     fn reader(&mut self) -> &mut Reader {
         &mut self.reader
+    }
+
+    fn take_size(&mut self) -> Option<u64> {
+        self.size.take()
     }
 
     fn fault(&self, failure: Failure) -> Fault {
@@ -521,6 +522,7 @@ impl Source for File {
             },
             Failure::Stopped(stop) => Fault::Stopped(stop),
             Failure::Output(message) => Fault::Output(message),
+            Failure::NotUtf8 => Fault::NotUtf8(Box::new(Utf8Source::File(self.path.clone()))),
         }
     }
 }

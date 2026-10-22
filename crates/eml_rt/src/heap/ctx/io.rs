@@ -4,7 +4,7 @@
 #[cfg(verus_only)]
 use super::proof::*;
 use super::*;
-use crate::externs::{Fault, IoOp, TUPLE};
+use crate::externs::{Fault, Form, Handle, IoOp, Read, TUPLE};
 use crate::host::{File, Stream, host_flush, host_open, host_write_line, read_text};
 #[cfg(verus_only)]
 use vstd::string::StringSliceAdditionalSpecFns;
@@ -297,9 +297,6 @@ impl<M: Mode> Ctx<M> {
             final(self).wf(),
             final(self).evv_spec() == old(self).evv_spec(),
             final(self).yield_spec() == old(self).yield_spec(),
-            r is Ok || (r matches Err(Fault::Io { op: IoOp::Read, .. })) || (r matches Err(
-                Fault::NotUtf8(_),
-            )) || (r matches Err(Fault::Stopped(_))) || (r matches Err(Fault::Heap(_))),
             (r matches Err(Fault::Heap(_))) ==> *final(self) == *old(self)
                 || final(self).heap_spec().kept_live(old(self).heap_spec()),
             !M::CHECKED && (r matches Err(Fault::Heap(_))) ==> r == Err::<Word, Fault>(
@@ -339,7 +336,7 @@ impl<M: Mode> Ctx<M> {
             Ok(p) => p,
             Err(e) => return Err(Fault::Heap(e)),
         };
-        let text = match unsafe { read_text(p, &self.control, line) } {
+        let text = match unsafe { read_text(p, &self.control, None, line) } {
             Ok(text) => text,
             Err(e) => {
                 // 手放すと破棄処理が File を閉じる
@@ -400,6 +397,81 @@ impl<M: Mode> Ctx<M> {
             }
         }
         Ok(t)
+    }
+
+    /// ハンドル `h` を借りて読む。`read` が読む量を、`form` が結果の形を決める。結果は新しい物体で、組は作らない。
+    /// 読みは `fs_read` と同じく 64 KiB ずつで、区切りごとに止める語と確保量を見る (docs/spec/object-model.md の
+    /// 「読み手」)。`h` の参照は呼ぶ側に残り、参照の数は成功でも誤りでも変わらない。読みの誤り、UTF-8 でない中身、
+    /// 止めたときもハンドルを手放さず、ヒープを変えない。
+    ///
+    /// # Safety
+    /// `heap_mut` の前提を守っている。`h` は即値か、このヒープか付けた塊の生きている物体を指し、呼ぶ側がその参照を
+    /// 1つ持つ。速いモードでは、`h` は局所で rc が 1 である (検査モードは確かめ、違えば `NotUnique` か `WrongOwner`
+    /// を返す)。`handle` の型のハンドルでなければ、どちらのモードでも `WrongKind` を返す。
+    pub unsafe fn handle_read(&mut self, h: Word, handle: Handle, read: Read, form: Form) -> (r:
+        Result<Word, Fault>)
+        requires
+            old(self).wf(),
+            old(self).heap_spec().word_in(h),
+            !M::CHECKED ==> old(self).holds(h) && old(self).heap_spec().rc_value(h) == 1,
+        ensures
+            final(self).wf(),
+            final(self).evv_spec() == old(self).evv_spec(),
+            final(self).yield_spec() == old(self).yield_spec(),
+            r is Err ==> *final(self) == *old(self),
+            !M::CHECKED && (r matches Err(Fault::Heap(_))) ==> r == Err::<Word, Fault>(
+                Fault::Heap(HeapError::WrongKind),
+            ),
+            r matches Ok(s) ==> final(self).is_string(s),
+            r matches Ok(s) ==> (old(self).held_ok() && old(self).holds(h) && old(
+                self,
+            ).heap_spec().rc_value(h) == 1 ==> {
+                &&& final(self).held_ok()
+                &&& final(self).holds(s)
+                &&& final(self).evolved_by(*old(self), |x: usize| 0int, Set::empty())
+            }),
+    {
+        let ghost s0 = *self;
+        let ghost c = s0.held_ok() && s0.holds(h) && s0.heap.rc_value(h) == 1;
+        if !h.is_ptr() {
+            return Err(Fault::Heap(HeapError::WrongKind));
+        }
+        proof {
+            if c {
+                s0.lemma_held_arg(h);
+            }
+        }
+        let line = match read {
+            Read::All => false,
+            Read::Line => true,
+        };
+        let text = match handle {
+            Handle::File => {
+                let p = match unsafe { self.heap.foreign_unique::<File>(h) } {
+                    Ok(p) => p,
+                    Err(e) => return Err(Fault::Heap(e)),
+                };
+                (unsafe { read_text(p, &self.control, None, line) })?
+            },
+        };
+        let text = text.as_str();
+        let s = match form {
+            Form::Text => self.heap.alloc_string(text),
+        };
+        if M::CHECKED {
+            self.stats.string_bytes_copied = self.stats.string_bytes_copied.wrapping_add(
+                text.len() as u64,
+            );
+        }
+        proof {
+            if M::CHECKED {
+                self.lemma_words_kept(s0);
+            }
+            if c {
+                self.lemma_read_lent(s0, s);
+            }
+        }
+        Ok(s)
     }
 
     /// `Fs.close`。`file` の参照を手放す。最後の参照なので、破棄処理が File を閉じる。
@@ -578,6 +650,35 @@ impl<M: Mode> Ctx<M> {
         lemma_arg_moved(self.heap, h2, ds, none, w);
         lemma_view_live(self.heap, w.bits_spec());
         self.lemma_fresh_holds(s0, w);
+    }
+
+    /// `handle_read` の、読めた道でモデルが合っている道。読んだ結果 `s` を作っただけで、借りたハンドルを含め、呼ぶ前から
+    /// 生きている物体の参照の数は変わらない。
+    proof fn lemma_read_lent(&self, s0: Ctx<M>, s: Word)
+        requires
+            s0.held_ok(),
+            self.heap.made(s0.heap, s),
+            self.heap.owned(s),
+            self.evv == s0.evv,
+            self.yielding == s0.yielding,
+            self.max_evv == s0.max_evv,
+        ensures
+            self.held_ok(),
+            self.holds(s),
+            self.evolved_by(s0, |x: usize| 0int, Set::empty()),
+    {
+        let z = |x: usize| 0int;
+        let none = Set::<usize>::empty();
+        lemma_alloc_moved(self.heap, s0.heap, s);
+        assert forall|x: usize| #[trigger] self.need(seq![], x) > 0 implies s0.need(seq![], x) + z(
+            x,
+        ) >= self.need(seq![], x) by {
+            lemma_points_in(seq![], x);
+        }
+        self.lemma_holds_moved(s0, seq![], seq![], z, none);
+        self.lemma_evv_kept(s0, z, none);
+        lemma_view_live(self.heap, s.bits_spec());
+        self.lemma_fresh_holds(s0, s);
     }
 
     /// `fs_read` で文字列 `s` と組 `t` を作った後の、モデルが合っている道。`self` は呼ぶ前の文脈で、組の 0 番に

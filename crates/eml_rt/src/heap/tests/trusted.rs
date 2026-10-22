@@ -1,6 +1,7 @@
 //! 信頼の一覧の「Miri で確かめること」(docs/implementation/testing.md の「Miri」)。Verus が確かめない部分と、そこへ
 //! 届く検証したコードを通す小さいテストで、Miri はこの module だけを流す。
 
+use std::io;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -13,7 +14,9 @@ use super::string::text;
 use super::table::Rng;
 use super::{CONS, Probe, cons, list, mortal, probe, raw};
 use crate::cell::{rc_decref_shared, rc_dup_shared};
+use crate::externs::{Form, Handle, Read};
 use crate::heap::ctx::positions::{find_byte, find_bytes};
+use crate::host::{Failure, File, Reader, consume, fill, host_open};
 use crate::{Checked, Control, Ctx, Fast, Heap, HeapError, Kind, Limits, Meta, Mode, Word};
 
 const PAGE_BYTES: usize = 0x1_0000;
@@ -922,6 +925,208 @@ fn files_go_through_the_host<M: Mode>() {
     assert_eq!(mortal(ctx.heap()), 0);
 }
 
+/// `handle_read` でハンドルを借りて読み、読んだ中身を写して手放す。
+unsafe fn read_borrowed<M: Mode>(
+    ctx: &mut Ctx<M>,
+    f: Word,
+    read: Read,
+) -> Result<String, crate::Fault> {
+    unsafe {
+        let w = ctx.handle_read(f, Handle::File, read, Form::Text)?;
+        let read = text(ctx.heap(), w);
+        ctx.heap_mut().decref(w).unwrap();
+        Ok(read)
+    }
+}
+
+/// `files_go_through_the_host` と同じ場合を、ハンドルを借りる `handle_read` で通す。誤りと止めたときも、ハンドルは
+/// 呼ぶ側に残り、`close` で閉じる。
+fn borrowed_files_go_through_the_host<M: Mode>() {
+    let memory = Arc::new(MemoryHost::default());
+    let control = Arc::new(Control::new(Limits::default()));
+    let body = "0123456789".repeat(7000);
+    memory.add(
+        "big.txt",
+        MemoryFile {
+            sized: false,
+            chunk: 4096,
+            ..MemoryFile::text(&body)
+        },
+    );
+    memory.add(
+        "broken.txt",
+        MemoryFile {
+            fail_after: Some(1),
+            ..MemoryFile::text("ab")
+        },
+    );
+    memory.add(
+        "bad.bin",
+        MemoryFile {
+            bytes: vec![0xc3],
+            sized: true,
+            ..MemoryFile::default()
+        },
+    );
+    memory.add(
+        "fifo",
+        MemoryFile {
+            interrupt_with: Some(control.clone()),
+            ..MemoryFile::text("abc")
+        },
+    );
+    let long_line = "x".repeat(70_000);
+    memory.add(
+        "lines.txt",
+        MemoryFile {
+            chunk: 4096,
+            ..MemoryFile::text(&format!("{long_line}\na\r\n\nlast"))
+        },
+    );
+    let mut ctx = Ctx::<M>::new(control.clone(), host(&memory));
+    let open = |ctx: &mut Ctx<M>, name: &str| unsafe {
+        let p = ctx.heap_mut().alloc_string(name);
+        ctx.fs_open(p).unwrap()
+    };
+    unsafe {
+        // 64 KiB の区切りをまたぐ行、`\r\n` を残した行、空の行、行の終わりのない最後の行、終わりの空の文字列
+        let f = open(&mut ctx, "lines.txt");
+        for expected in [
+            format!("{long_line}\n"),
+            "a\r\n".into(),
+            "\n".into(),
+            "last".into(),
+            String::new(),
+        ] {
+            assert_eq!(read_borrowed(&mut ctx, f, Read::Line).unwrap(), expected);
+        }
+        ctx.fs_close(f).unwrap();
+        assert_eq!(mortal(ctx.heap()), 0);
+        for read in [Read::Line, Read::All] {
+            for name in ["broken.txt", "bad.bin"] {
+                let f = open(&mut ctx, name);
+                assert!(read_borrowed(&mut ctx, f, read).is_err());
+                assert_eq!(raw::rc(f), 1);
+                ctx.fs_close(f).unwrap();
+                assert_eq!(mortal(ctx.heap()), 0);
+            }
+            // 止める語が立った後の `Interrupted` で止まる (T11)
+            let f = open(&mut ctx, "fifo");
+            assert_eq!(
+                read_borrowed(&mut ctx, f, read),
+                Err(crate::Fault::Stopped(crate::Stop::Interrupted))
+            );
+            ctx.fs_close(f).unwrap();
+            control.clear();
+            let f = open(&mut ctx, "lines.txt");
+            control.interrupt();
+            assert_eq!(
+                read_borrowed(&mut ctx, f, read),
+                Err(crate::Fault::Stopped(crate::Stop::Interrupted))
+            );
+            control.clear();
+            ctx.fs_close(f).unwrap();
+            assert_eq!(mortal(ctx.heap()), 0);
+        }
+        let f = open(&mut ctx, "big.txt");
+        assert_eq!(read_borrowed(&mut ctx, f, Read::All).unwrap(), body);
+        ctx.fs_close(f).unwrap();
+    }
+    assert_eq!(mortal(ctx.heap()), 0);
+}
+
+/// 信頼の一覧の総称の `fill` と `consume` を、`File` の生のポインタで直接通す。buffer に残ったバイト、短い読みの後の
+/// 補充、終わり、補充の前の書き出し、読みの誤りにパスを付けること、止める語を確かめる。
+#[test]
+fn fill_and_consume_read_a_file_through_a_pointer() {
+    let memory = Arc::new(MemoryHost::default());
+    memory.add(
+        "a.txt",
+        MemoryFile {
+            chunk: 3,
+            ..MemoryFile::text("abcde")
+        },
+    );
+    memory.add(
+        "broken.txt",
+        MemoryFile {
+            fail_after: Some(1),
+            ..MemoryFile::text("ab")
+        },
+    );
+    let control = Control::new(Limits::default());
+    let host = host(&memory);
+    let opened = |path: &str| match host_open(&host, path) {
+        Ok(file) => file,
+        Err(_) => panic!("{path} did not open"),
+    };
+    let mut file = opened("a.txt");
+    let p: *mut File = &mut file;
+    unsafe {
+        assert_eq!(fill(p, &control, None).unwrap(), b"abc");
+        consume(p, 2);
+        assert_eq!(fill(p, &control, None).unwrap(), b"c");
+        consume(p, 1);
+        assert_eq!(memory.flushes(), 0);
+        assert_eq!(fill(p, &control, Some(&host)).unwrap(), b"de");
+        assert_eq!(memory.flushes(), 1);
+        // buffer から読むときは書き出さない
+        assert_eq!(fill(p, &control, Some(&host)).unwrap(), b"de");
+        assert_eq!(memory.flushes(), 1);
+        consume(p, 2);
+        assert_eq!(fill(p, &control, None).unwrap(), b"");
+    }
+    let mut file = opened("broken.txt");
+    let p: *mut File = &mut file;
+    unsafe {
+        assert_eq!(fill(p, &control, None).unwrap(), b"ab");
+        consume(p, 2);
+        assert_eq!(
+            fill(p, &control, None),
+            Err(crate::Fault::Io {
+                op: crate::IoOp::Read,
+                name: "broken.txt".into(),
+                reason: crate::IoReason::Other
+            })
+        );
+    }
+    let mut file = opened("a.txt");
+    let p: *mut File = &mut file;
+    control.interrupt();
+    assert_eq!(
+        unsafe { fill(p, &control, None) },
+        Err(crate::Fault::Stopped(crate::Stop::Interrupted))
+    );
+}
+
+/// 渡した buffer より大きい長さを1回だけ返す読み手。`Read` の約束を破る安全なコードである。
+struct OverlongOnce {
+    lied: bool,
+}
+
+impl io::Read for OverlongOnce {
+    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+        if !self.lied {
+            self.lied = true;
+            return Ok(buf.len() + 1);
+        }
+        buf[0] = b'x';
+        Ok(1)
+    }
+}
+
+/// buffer より大きい長さを返す読み手は I/O の誤りにし、読み手を壊さない。次の読みは続けて読める。
+#[test]
+fn an_overlong_read_is_refused_and_the_reader_survives() {
+    let control = Control::new(Limits::default());
+    let mut reader = Reader::new(Box::new(OverlongOnce { lied: false }));
+    assert!(matches!(
+        reader.fill_buf(&control, None),
+        Err(Failure::Io(crate::IoReason::Other))
+    ));
+    assert!(matches!(reader.fill_buf(&control, None), Ok(b"x")));
+}
+
 /// 標準入力の1行を読んで写し、手放す。
 fn stdin_line<M: Mode>(ctx: &mut Ctx<M>) -> String {
     let w = ctx.stdin_read(true).unwrap();
@@ -1307,6 +1512,7 @@ both_modes!(
     two_threads_share_one_control,
     println_goes_through_the_host,
     files_go_through_the_host,
+    borrowed_files_go_through_the_host,
     two_buffered_lines_flush_once,
     a_line_across_two_refills_flushes_before_each,
     the_stdin_reader_survives_a_second_ctx,

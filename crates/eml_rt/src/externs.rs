@@ -74,6 +74,29 @@ pub enum IoReason {
     Other,
 }
 
+/// `Ctx::handle_read` が借りるハンドルの種類。`Foreign` の物体の中身の型を決める。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Handle {
+    /// `Std.Fs.File`。
+    File,
+}
+
+/// `Ctx::handle_read` がハンドルから読む量。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Read {
+    /// 終わりまで。
+    All,
+    /// 次の `\n` まで (それを含めて)。終わりなら空である。
+    Line,
+}
+
+/// `Ctx::handle_read` が読んだバイト列を返す形。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Form {
+    /// UTF-8 を確かめた文字列。
+    Text,
+}
+
 /// UTF-8 でなかった入力。
 #[derive(Debug, PartialEq, Eq)]
 pub enum Utf8Source {
