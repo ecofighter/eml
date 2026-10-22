@@ -1,0 +1,252 @@
+diff --git a/tests/ui/run/scripts/csv2jsonl/main.em b/tests/ui/run/scripts/csv2jsonl/main.em
+index 14fcf913..40456254 100644
+--- a/tests/ui/run/scripts/csv2jsonl/main.em
++++ b/tests/ui/run/scripts/csv2jsonl/main.em
+@@ -1,6 +1,7 @@
+ -- csv2jsonl: ヘッダ付きの CSV の選んだ列を JSON Lines に変換する。
+ -- `csv2jsonl --columns NAME,NAME... INPUT OUTPUT`。引用符の欄は `,`、改行、`""` を含められる。誤りは終了コードと文言の
+ -- 組を `fail` に渡して中断し、全体を組み立ててから書くので、誤りがあれば何も書かない
++import List
+ import Yield (Yield(..))
+ import Fail (Fail(..))
+ 
+@@ -105,26 +106,12 @@ escape b =
+ hex_digit : Int -> <Panic> String
+ hex_digit d = String.slice d (d + 1) "0123456789abcdef"
+ 
+-index_of : String -> List String -> <Panic> Option Int
+-index_of x xs =
+-  let go i rest =
+-    match rest with
+-      | Nil -> None
+-      | y :: more -> if x == y then Some i else go (i + 1) more
+-  go 0 xs
+-
+-nth : Int -> List a -> <Panic> Option a
+-nth i xs =
+-  match xs with
+-    | Nil -> None
+-    | x :: rest -> if i == 0 then Some x else nth (i - 1) rest
+-
+ -- 選んだ列の位置。ヘッダにない列名は終了コード 2 の誤りである
+ column_indexes : List String -> List String -> <Fail (Int, String), Panic> List Int
+ column_indexes header columns =
+   List.map
+     (fn name ->
+-      match index_of name header with
++      match List.index_of name header with
+         | Some i -> i
+         | None -> fail (2, "unknown column `\{name}`"))
+     columns
+@@ -132,20 +119,12 @@ column_indexes header columns =
+ json_line : List String -> List Int -> Row -> <Panic> String
+ json_line columns indexes row =
+   let pick name i =
+-    match nth i row.fields with
++    match List.nth i row.fields with
+       | Some value -> (json_string name ++ ":") ++ json_string value
+       | None -> ""
+-  let fields = List.map (fn (name, i) -> pick name i) (zip columns indexes)
++  let fields = List.map (fn (name, i) -> pick name i) (List.zip columns indexes)
+   ("{" ++ String.join "," fields) ++ "}\n"
+ 
+-zip : List a -> List b -> List (a, b)
+-zip xs ys =
+-  let go acc l r =
+-    match (l, r) with
+-      | (x :: ls, y :: rs) -> go ((x, y) :: acc) ls rs
+-      | _ -> List.reverse acc
+-  go Nil xs ys
+-
+ -- 最初の行をヘッダにし、残りの行を JSON Lines の文字列に変換する。状態は、ヘッダを読んだ後の列の位置と出力である
+ convert : List String -> (Unit -> <Yield Row, Fail (Int, String) | e> Unit) -> <Fail (Int, String), Panic | e> String
+ convert columns body =
+diff --git a/tests/ui/run/scripts/deploy/main.em b/tests/ui/run/scripts/deploy/main.em
+index eb76ca5b..2ad13d1a 100644
+--- a/tests/ui/run/scripts/deploy/main.em
++++ b/tests/ui/run/scripts/deploy/main.em
+@@ -1,6 +1,8 @@
+ -- deploy: 設定ファイルの段 (build、test、package、upload) を順に動かす。`deploy [--dry-run] CONFIG`。
+ -- 段の起動は `Run`、記録は `Log` のエフェクトにし、`--dry-run` では `Run` の handler だけを差し替える。段が失敗したら
+ -- そこで止め、報告を書いてから、その終了コードで終える
++import List
++
+ effect Run where
+   run : String -> Result IOError Int
+ 
+@@ -31,7 +33,8 @@ parse_line config number line =
+         let value = String.slice (i + 1) (String.byte_length line) line
+         if key == "name" then Ok { config | name = value }
+         else if key == "report" then Ok { config | report = Some value }
+-        else if List.length (List.filter (fn s -> s == key) stages) > 0 then
++        else if List.contains key stages then
++          -- 段を前に積むので、同じ段を2回書いたら後の行が勝つ (`List.lookup` は最初の組を返す)
+           Ok { config | steps = (key, value) :: config.steps }
+         else Err "line \{number}: unknown key `\{key}`"
+ 
+@@ -46,15 +49,6 @@ parse_config path text =
+           | Err message -> Err message
+   go (Config { name = path, report = None, steps = Nil }) 1 (String.lines text)
+ 
+--- 段 `name` のコマンド。同じ段を2回書いたら、後の行が勝つ
+-command_of : Config -> String -> Option String
+-command_of config name =
+-  let go steps =
+-    match steps with
+-      | Nil -> None
+-      | (key, value) :: rest -> if key == name then Some value else go rest
+-  go config.steps
+-
+ -- 段を1つ動かし、成功したら残りの段 `rest` に進む
+ step : String -> Option String -> (Unit -> <Run, Log | e> Outcome) -> <Run, Log | e> Outcome
+ step name command rest =
+@@ -75,10 +69,10 @@ step name command rest =
+ 
+ pipeline : Config -> <Run, Log> Outcome
+ pipeline config =
+-  use step "build" (command_of config "build")
+-  use step "test" (command_of config "test")
+-  use step "package" (command_of config "package")
+-  use step "upload" (command_of config "upload")
++  use step "build" (List.lookup "build" config.steps)
++  use step "test" (List.lookup "test" config.steps)
++  use step "package" (List.lookup "package" config.steps)
++  use step "upload" (List.lookup "upload" config.steps)
+   Done
+ 
+ real_run : (Unit -> <Run, IO | e> a) -> <IO, Panic | e> a
+diff --git a/tests/ui/run/scripts/logstat/main.em b/tests/ui/run/scripts/logstat/main.em
+index 245d0bb8..0e558a7e 100644
+--- a/tests/ui/run/scripts/logstat/main.em
++++ b/tests/ui/run/scripts/logstat/main.em
+@@ -1,6 +1,8 @@
+ -- logstat: アクセスログを集計する。`logstat [-n N] [--whole]` で、標準入力の各行
+ -- `時刻 メソッド パス ステータス 応答時間` を読む。行を流す生産者、行を解析する handler、集計する handler の3段を
+ -- `use` で重ねる。`--whole` は、1行ずつでなく全体を読んでから行に分ける (2つの読み方の性能を比べるため)
++import List
++import Map
+ import Yield (Yield(..))
+ 
+ -- 解析した1行。形の崩れた行は行番号だけを持つ
+@@ -11,76 +13,6 @@ data Parsed =
+ effect Record where
+   record : Parsed -> Unit
+ 
+--- 釣り合いを取った二分探索木 (AA 木)。`Node` の最初の欄は節の高さの段である。パスに ID を含むログでは、キーが
+--- 昇順に増えるので、釣り合いを取らないと挿入が全体で2乗の時間になる
+-data Tree k v =
+-  | Leaf
+-  | Node Int (Tree k v) k v (Tree k v)
+-
+--- 左の子が同じ段なら、右に回す
+-skew : Tree k v -> Tree k v
+-skew tree =
+-  match tree with
+-    | Node level (Node left_level a lk lv b) k v right ->
+-      if left_level == level then Node level a lk lv (Node level b k v right) else tree
+-    | _ -> tree
+-
+--- 右の孫が同じ段なら、右の子を1段上げる
+-split : Tree k v -> <Panic> Tree k v
+-split tree =
+-  match tree with
+-    | Node level a k v (Node right_level b rk rv (Node grand_level c gk gv d)) ->
+-      if grand_level == level then
+-        Node (right_level + 1) (Node level a k v b) rk rv (Node grand_level c gk gv d)
+-      else tree
+-    | _ -> tree
+-
+--- `k` の値を `f` で更新する。なければ `f None` を入れる
+-upsert : Ord k => k -> (Option v -> <Panic> v) -> Tree k v -> <Panic> Tree k v
+-upsert key f tree =
+-  match tree with
+-    | Leaf -> Node 1 Leaf key (f None) Leaf
+-    | Node level left k v right ->
+-      match compare key k with
+-        | LT -> split (skew (Node level (upsert key f left) k v right))
+-        | GT -> split (skew (Node level left k v (upsert key f right)))
+-        | EQ -> Node level left k (f (Some v)) right
+-
+--- キーの昇順の組の列
+-entries : Tree k v -> List (k, v)
+-entries tree =
+-  let go t acc =
+-    match t with
+-      | Leaf -> acc
+-      | Node _ left k v right -> go left ((k, v) :: go right acc)
+-  go tree Nil
+-
+--- 安定なマージソート。`before a b` は `a` を `b` より前に置くときに `True` である
+-sort_by : (a -> a -> Bool) -> List a -> <Panic> List a
+-sort_by before xs =
+-  let merge acc left right =
+-    match (left, right) with
+-      | (Nil, _) -> List.append (List.reverse acc) right
+-      | (_, Nil) -> List.append (List.reverse acc) left
+-      | (l :: ls, r :: rs) ->
+-        if before r l then merge (r :: acc) left rs else merge (l :: acc) ls right
+-  let n = List.length xs
+-  if n <= 1 then xs
+-  else
+-    let (left, right) = split_at (n / 2) xs
+-    merge Nil (sort_by before left) (sort_by before right)
+-
+-split_at : Int -> List a -> <Panic> (List a, List a)
+-split_at n xs =
+-  let go i acc rest =
+-    match rest with
+-      | x :: more -> if i > 0 then go (i - 1) (x :: acc) more else (List.reverse acc, rest)
+-      | Nil -> (List.reverse acc, Nil)
+-  go n Nil xs
+-
+-take : Int -> List a -> <Panic> List a
+-take n xs = (split_at n xs).0
+-
+ stdin_lines : Unit -> <Yield String, IO, Panic> Unit
+ stdin_lines () =
+   let go h =
+@@ -114,8 +46,8 @@ data Stats =
+   | Stats
+     { total : Int
+     , malformed : Int
+-    , statuses : Tree Int Int
+-    , paths : Tree String Int
++    , statuses : Map.Map Int Int
++    , paths : Map.Map String Int
+     , count : Int
+     , sum : Int
+     , max : Int
+@@ -135,8 +67,8 @@ add st parsed =
+       { st | total = st.total + 1, malformed = st.malformed + 1 }
+     | Entry { path = path, status = status, duration = d } ->
+       { st | total = st.total + 1
+-      , statuses = upsert status increment st.statuses
+-      , paths = upsert path increment st.paths
++      , statuses = Map.upsert status increment st.statuses
++      , paths = Map.upsert path increment st.paths
+       , count = st.count + 1
+       , sum = st.sum + d
+       , max = if st.count == 0 || d > st.max then d else st.max
+@@ -144,7 +76,7 @@ add st parsed =
+ 
+ aggregate : (Unit -> <Record, IO | e> Unit) -> <IO, Panic | e> Stats
+ aggregate body =
+-  let empty = Stats { total = 0, malformed = 0, statuses = Leaf, paths = Leaf, count = 0, sum = 0, max = 0 }
++  let empty = Stats { total = 0, malformed = 0, statuses = Map.empty, paths = Map.empty, count = 0, sum = 0, max = 0 }
+   handle body () from empty with
+     | fn record parsed st -> ((), add st parsed)
+     | return _ st -> st
+@@ -153,10 +85,10 @@ report : Int -> Stats -> <IO, Panic> Unit
+ report top st =
+   println "lines \{st.total}"
+   println "malformed \{st.malformed}"
+-  List.each (fn (status, n) -> println "status \{status} \{n}") (entries st.statuses)
++  List.each (fn (status, n) -> println "status \{status} \{n}") (Map.to_list st.statuses)
+   -- 木はパスの昇順に並ぶので、件数で安定に並べ替えれば、同じ件数のパスは昇順のまま残る
+-  let by_count = sort_by (fn (_, a) (_, b) -> a > b) (entries st.paths)
+-  List.each (fn (path, n) -> println "path \{path} \{n}") (take top by_count)
++  let by_count = List.sort_by (fn (_, a) (_, b) -> compare b a) (Map.to_list st.paths)
++  List.each (fn (path, n) -> println "path \{path} \{n}") (List.take top by_count)
+   let average = if st.count == 0 then 0 else st.sum / st.count
+   println "duration avg \{average} max \{st.max}"
+ 
