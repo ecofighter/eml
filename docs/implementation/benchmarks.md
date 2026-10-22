@@ -42,7 +42,7 @@
 | `char_loop.em` | `byte_loop.em` と同じ文字列を、`String.char_at` で1文字ずつ読んで足し上げる | 汎用の extern の命令で文字を読むループ (`byte_at` の専用の命令との差) |
 | `bytes_loop.em` | 10 万バイトのバイト列を `Bytes.push` で作り、`Bytes.get` で先頭から足し上げる | バイト列の `push` が容量を倍にして伸ばすこと (確保が log2 に比例する) と、1バイトずつ読むループの RC (`rc_increments` が0) |
 | `tree_by_hand.em` | `tree.em` の `fold (fn acc x -> acc + x)` を専用の `fold_sum` にした版 | `tree.em` の下限 |
-| `upsert.em` | `logstat` の AA 木の `upsert key increment` で 20000 個の文字列のキーを数え、`sort_by (fn (_, a) (_, b) -> a > b)` で並べる | 高階の更新関数と比較関数 |
+| `upsert.em` | AA 木の `upsert key increment` で 20000 個の文字列のキーを数え、`sort_by (fn (_, a) (_, b) -> a > b)` で並べる | 高階の更新関数と比較関数 |
 | `upsert_by_hand.em` | `increment` と比較を `upsert` と `sort_by` に書き込んだ版 | `upsert.em` の下限 |
 | `records.em` | 4つのフィールドのレコードを、`{ st \| … }` で10万回更新する | 構造体の値の更新 (確保も reuse もしない) |
 | `records_wide.em` | `records.em` を7つの `Int` のフィールドのレコードにした版 | 構造体にしない値の reuse |

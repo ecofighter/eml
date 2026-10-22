@@ -113,26 +113,12 @@ escape b =
 hex_digit : Int -> <Panic> String
 hex_digit d = String.slice d (d + 1) "0123456789abcdef"
 
-index_of : String -> List String -> <Panic> Option Int
-index_of x xs =
-  let go i rest =
-    match rest with
-      | Nil -> None
-      | y :: more -> if x == y then Some i else go (i + 1) more
-  go 0 xs
-
-nth : Int -> List a -> <Panic> Option a
-nth i xs =
-  match xs with
-    | Nil -> None
-    | x :: rest -> if i == 0 then Some x else nth (i - 1) rest
-
 -- 選んだ列の位置。ヘッダにない列名は終了コード 2 の誤りである
 column_indexes : List String -> List String -> <Fail (Int, String), Panic> List Int
 column_indexes header columns =
   List.map
     (fn name ->
-      match index_of name header with
+      match List.index_of name header with
         | Some i -> i
         | None -> fail (2, "unknown column `\{name}`"))
     columns
@@ -140,19 +126,11 @@ column_indexes header columns =
 json_line : List String -> List Int -> Row -> <Panic> String
 json_line columns indexes row =
   let pick name i =
-    match nth i row.fields with
+    match List.nth i row.fields with
       | Some value -> (json_string name ++ ":") ++ json_string value
       | None -> ""
-  let fields = List.map (fn (name, i) -> pick name i) (zip columns indexes)
+  let fields = List.map (fn (name, i) -> pick name i) (List.zip columns indexes)
   ("{" ++ String.join "," fields) ++ "}\n"
-
-zip : List a -> List b -> List (a, b)
-zip xs ys =
-  let go acc l r =
-    match (l, r) with
-      | (x :: ls, y :: rs) -> go ((x, y) :: acc) ls rs
-      | _ -> List.reverse acc
-  go Nil xs ys
 
 -- 最初の行をヘッダにし、残りの行を JSON Lines の文字列に変換する。状態は、ヘッダを読んだ後の列の位置と出力である
 convert : List String -> (Unit -> <Yield Row, Fail (Int, String) | e> Unit) -> <Fail (Int, String), Panic | e> String

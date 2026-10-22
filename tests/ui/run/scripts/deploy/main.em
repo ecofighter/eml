@@ -38,7 +38,8 @@ parse_line config number line =
         let value = String.slice (i + 1) (String.byte_length line) line
         if key == "name" then Ok { config | name = value }
         else if key == "report" then Ok { config | report = Some value }
-        else if List.length (List.filter (fn s -> s == key) stages) > 0 then
+        else if List.contains key stages then
+          -- 段を前に積むので、同じ段を2回書いたら後の行が勝つ (`List.lookup` は最初の組を返す)
           Ok { config | steps = (key, value) :: config.steps }
         else Err "line \{number}: unknown key `\{key}`"
 
@@ -52,15 +53,6 @@ parse_config path text =
           | Ok next -> go next (number + 1) rest
           | Err message -> Err message
   go (Config { name = path, report = None, steps = Nil }) 1 (String.lines text)
-
--- 段 `name` のコマンド。同じ段を2回書いたら、後の行が勝つ
-command_of : Config -> String -> Option String
-command_of config name =
-  let go steps =
-    match steps with
-      | Nil -> None
-      | (key, value) :: rest -> if key == name then Some value else go rest
-  go config.steps
 
 -- 段を1つ動かし、成功したら残りの段 `rest` に進む
 step : String -> Option String -> (Unit -> <Run, Log | e> Outcome) -> <Run, Log | e> Outcome
@@ -82,10 +74,10 @@ step name command rest =
 
 pipeline : Config -> <Run, Log> Outcome
 pipeline config =
-  use step "build" (command_of config "build")
-  use step "test" (command_of config "test")
-  use step "package" (command_of config "package")
-  use step "upload" (command_of config "upload")
+  use step "build" (List.lookup "build" config.steps)
+  use step "test" (List.lookup "test" config.steps)
+  use step "package" (List.lookup "package" config.steps)
+  use step "upload" (List.lookup "upload" config.steps)
   Done
 
 real_run : (Unit -> <Run, IO | e> a) -> <IO, Panic | e> a
