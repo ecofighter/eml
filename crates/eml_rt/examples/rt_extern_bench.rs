@@ -3,7 +3,7 @@
 //! ためである (docs/implementation/benchmarks.md の「`eml_rt` のインライン化」)。
 
 use std::hint::black_box;
-use std::io::{self, Cursor, Read};
+use std::io::{self, BufRead, Cursor, Read};
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -22,7 +22,7 @@ fn main() {
              show-string, show-string-dense, println-block, println-line, read-all, read-all-unsized, \
              find-byte-1mib, find-byte-1mib-position, find-bytes-1mib, find-bytes-1mib-windows, \
              find-byte, find-byte-swar, find-sub, find-sub-contains, slice-short, slice-short-box, \
-             read-all-bytes, read-all-bytes-std",
+             read-all-bytes, read-all-bytes-std, read-line-bytes-64mib, read-line-bytes-64mib-std",
     );
     match case.as_str() {
         "string-eq" => string_eq(false),
@@ -49,6 +49,8 @@ fn main() {
         "slice-short-box" => slice_short(true),
         "read-all-bytes" => read_all_bytes(false),
         "read-all-bytes-std" => read_all_bytes(true),
+        "read-line-bytes-64mib" => read_line_bytes(false),
+        "read-line-bytes-64mib-std" => read_line_bytes(true),
         _ => panic!("an unknown case {case}"),
     }
 }
@@ -362,8 +364,7 @@ fn slice_short(boxed: bool) {
     decref(&mut ctx, w);
 }
 
-/// 64 MiB のメモリの Host のファイルを全部読む。`Bytes` を返す読みの道はまだないので、eml の側は今ある
-/// `handle_read` の `Form::Text` (`String` を返し、UTF-8 を検査する) の道を測る。`std` なら `&[u8]` からの
+/// 64 MiB のメモリの Host のファイルを、`handle_read` の `Form::Bytes` で全部読む。`std` なら `&[u8]` からの
 /// `read_to_end` である。
 fn read_all_bytes(std: bool) {
     const ROUNDS: usize = 8;
@@ -384,12 +385,50 @@ fn read_all_bytes(std: bool) {
         unsafe {
             ctx.heap_mut().acquire_immortal(path).unwrap();
             let file = ctx.fs_open(path).unwrap();
-            let text = ctx
-                .handle_read(file, Handle::File, ReadAmount::All, Form::Text)
+            let read = ctx
+                .handle_read(file, Handle::File, ReadAmount::All, Form::Bytes)
                 .unwrap();
-            black_box(text);
-            ctx.heap_mut().decref(text).unwrap();
+            black_box(read);
+            ctx.heap_mut().decref(read).unwrap();
             ctx.fs_close(file).unwrap();
         }
+    }
+}
+
+/// 56 バイトの行を並べた 64 MiB のメモリの Host のファイルを、`handle_read` の `Form::Bytes` で1行ずつ読み、行を
+/// 手放す。`std` なら、64 KiB の `BufReader` の `read_until` で、行ごとに新しい `Vec` に読んで落とす (行ごとに確保
+/// するのは eml の側と同じである)。
+fn read_line_bytes(std: bool) {
+    let line = "abcdefghijklmnopqrstuvwxyz0123456789ABCDEFGHIJKLMNOPQRS\n";
+    let bytes: Arc<[u8]> = line.repeat(64 * MIB / line.len()).into_bytes().into();
+    if std {
+        let mut reader = io::BufReader::with_capacity(LONG, Cursor::new(bytes));
+        loop {
+            let mut out = Vec::new();
+            if reader.read_until(b'\n', &mut out).unwrap() == 0 {
+                break;
+            }
+            black_box(out);
+        }
+        return;
+    }
+    let mut ctx = ctx_with(OneFile { bytes, sized: true });
+    // SAFETY: 不死の文字列を1つ確保するだけである。
+    let path = unsafe { ctx.heap_mut() }.alloc_string_immortal("big.txt");
+    // SAFETY: read_all と同じ。行は decref に渡し、その後読まない。
+    unsafe {
+        ctx.heap_mut().acquire_immortal(path).unwrap();
+        let file = ctx.fs_open(path).unwrap();
+        loop {
+            let read = ctx
+                .handle_read(file, Handle::File, ReadAmount::Line, Form::Bytes)
+                .unwrap();
+            let len = ctx.heap().bytes(read).unwrap().len();
+            ctx.heap_mut().decref(black_box(read)).unwrap();
+            if len == 0 {
+                break;
+            }
+        }
+        ctx.fs_close(file).unwrap();
     }
 }

@@ -192,6 +192,7 @@ fn imports_of_inputs_follow_the_inputs_in_the_order_they_are_found() {
             "Std.Fs",
             "B",
             "Std.String",
+            "Std.Bytes",
             "Std.List"
         ]
     );
@@ -240,7 +241,14 @@ fn a_cached_fallback_to_the_standard_library_stays() {
     assert!(diagnostics.is_empty(), "{diagnostics:?}");
     assert_eq!(
         names(&loaded),
-        ["Prelude", "<input 1>", "Std.Fs", "Std.String", "Std.List"]
+        [
+            "Prelude",
+            "<input 1>",
+            "Std.Fs",
+            "Std.String",
+            "Std.Bytes",
+            "Std.List"
+        ]
     );
     assert_eq!(
         loaded.modules[1].targets,

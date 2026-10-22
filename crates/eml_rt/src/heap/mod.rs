@@ -425,6 +425,16 @@ impl<M: Mode> Heap<M> {
         &&& self.owned(w)
     }
 
+    /// `old` で生きていた `w` のほかの物体は、同じブロックのまま生きている。行を読むループが、伸ばすたびに呼ぶ前の
+    /// 物体を空けていないことをつなぐのに使う。`heap::ctx` の証明から開くので、ここに置く。
+    pub closed spec fn others_kept(&self, old: Heap<M>, w: Word) -> bool {
+        forall|b: usize|
+            #![trigger old.core.has(b)]
+            old.core.has(b) && old.core.settled_state(b) == BlockState::Live && b != w.bits_spec()
+                ==> self.core.has(b) && self.core.settled_state(b) == BlockState::Live
+                && self.core.block(b) == old.core.block(b)
+    }
+
     /// 構築中の物体を生きている物体にしただけのヒープ。`settle` は速いモードでは実行の時に何もせず、検査モードでも構築中の
     /// 物体の番地を消すだけなので、物体を受ける操作が状態を変える前に `Err` を返すと、ヒープはこれになる。
     pub closed spec fn settled_heap(&self) -> Heap<M> {
@@ -3716,8 +3726,8 @@ impl<M: Mode> Heap<M> {
         }
     }
 
-    /// 書き換えるために `Foreign` の値を借りる。`Fs.read_all` と `Fs.read_line_raw` が `File` の読み手を進めるために
-    /// 使う。検査モードは、読めなければ `UseAfterFree` を、rc が 1 でなければ (共有の負の rc も) `NotUnique` を、持ち主が
+    /// 書き換えるために `Foreign` の値を借りる。`Ctx::handle_read` が、`File` の読み (`Fs.read_all` など) で読み手を
+    /// 進めるために使う。検査モードは、読めなければ `UseAfterFree` を、rc が 1 でなければ (共有の負の rc も) `NotUnique` を、持ち主が
     /// 今の worker でなければ `WrongOwner` を返す。型の照らし合わせは `foreign` と同じく速いモードでも行う。
     ///
     /// # Safety

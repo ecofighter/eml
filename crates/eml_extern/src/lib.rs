@@ -236,6 +236,9 @@ pub enum Extern {
     Open,
     ReadAll,
     ReadLine,
+    ReadChunk,
+    ReadAllBytes,
+    ReadLineBytes,
     Close,
     IntShow,
     IntNeg,
@@ -422,6 +425,9 @@ impl Extern {
         Extern::Open,
         Extern::ReadAll,
         Extern::ReadLine,
+        Extern::ReadChunk,
+        Extern::ReadAllBytes,
+        Extern::ReadLineBytes,
         Extern::Close,
         Extern::IntShow,
         Extern::IntNeg,
@@ -628,6 +634,48 @@ impl Extern {
                     with_arg: Some(0),
                     ..kinded(
                         "Std.Fs.read_line_raw",
+                        &[Obj],
+                        &[Lin],
+                        Obj,
+                        Unr,
+                        Purity::Effectful,
+                    )
+                },
+            ),
+            Extern::ReadChunk => borrowing(
+                &[false, true],
+                FunctionRow {
+                    with_arg: Some(1),
+                    ..kinded(
+                        "Std.Fs.read_chunk",
+                        &[Obj, Obj],
+                        &[Unr, Lin],
+                        Obj,
+                        Unr,
+                        Purity::Effectful,
+                    )
+                },
+            ),
+            Extern::ReadAllBytes => borrowing(
+                &[true],
+                FunctionRow {
+                    with_arg: Some(0),
+                    ..kinded(
+                        "Std.Fs.read_all_bytes",
+                        &[Obj],
+                        &[Lin],
+                        Obj,
+                        Unr,
+                        Purity::Effectful,
+                    )
+                },
+            ),
+            Extern::ReadLineBytes => borrowing(
+                &[true],
+                FunctionRow {
+                    with_arg: Some(0),
+                    ..kinded(
+                        "Std.Fs.read_line_bytes_raw",
                         &[Obj],
                         &[Lin],
                         Obj,

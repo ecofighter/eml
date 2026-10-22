@@ -15,7 +15,9 @@ use std::sync::{Arc, Mutex, PoisonError};
 use vstd::prelude::*;
 
 use crate::control::{Control, Stop, stop_reason};
-use crate::externs::{Fault, IndexFault, IoOp, IoReason, Utf8Source};
+use crate::externs::{Fault, Form, IndexFault, IoOp, IoReason, Utf8Source};
+#[cfg(verus_only)]
+use vstd::utf8::valid_utf8;
 
 verus! {
 
@@ -102,14 +104,15 @@ pub struct StdinSlot {
 /// `src` は生きている `S` を指し、呼ぶ間ほかに参照がない。返す slice を読めるのは、次に `src` を使うか (`fill`、
 /// `consume`、そのほか `src` を受ける T11 の関数のどれでも)、`src` を落とすまでの間だけである。slice は読み手の
 /// buffer を指し、ヒープのページを指さないので、その間にヒープで確保しても解放してもよい。
-// 今は信頼の一覧のテストだけが呼ぶ。検証した `Ctx` のコードが読み手を直接読む入口として置く
-#[allow(dead_code)]
 #[verifier::external_body]
 pub(crate) unsafe fn fill<'a, S: Source>(
     src: *mut S,
     control: &Control,
     host: Option<&HostRef>,
-) -> Result<&'a [u8], Fault> {
+) -> (r: Result<&'a [u8], Fault>)
+    ensures
+        !(r matches Err(Fault::Heap(_))),
+{
     // `fill_buf` の slice の寿命は `src` の借用に縛られるが、ここで呼ぶ側の約束 (上の Safety) の寿命に付け替える
     let r: *mut Reader = unsafe { (*src).reader() };
     match unsafe { (*r).fill_buf(control, host) } {
@@ -122,7 +125,6 @@ pub(crate) unsafe fn fill<'a, S: Source>(
 ///
 /// # Safety
 /// `src` は生きている `S` を指し、呼ぶ間ほかに参照がない。
-#[allow(dead_code)]
 #[verifier::external_body]
 pub(crate) unsafe fn consume<S: Source>(src: *mut S, n: usize) {
     let reader = unsafe { (*src).reader() };
@@ -140,9 +142,10 @@ pub(crate) fn host_open(host: &HostRef, path: &str) -> Result<File, (Box<str>, I
     }
 }
 
-/// `src` を終わりまで (`line` なら次の `\n` まで、それを含めて) 読み、UTF-8 の文字列にする。`host` があれば、補充の
-/// 前ごとにその Host の出力を書き出させる (`fill` と同じ)。誤りは `src` の名前を付けた `Fault` にする
-/// (`Source::fault`)。`Fault::Heap` を返さないことは、`Source::fault` の実装がそれを作らないことに依る。
+/// `src` を終わりまで (`line` なら次の `\n` まで、それを含めて) 読み、バイト列を返す。`form` が `Text` なら UTF-8 で
+/// あることを確かめ、違えば誤りにする。`host` があれば、補充の前ごとにその Host の出力を書き出させる (`fill` と同じ)。
+/// 誤りは `src` の名前を付けた `Fault` にする (`Source::fault`)。`Fault::Heap` を返さないことは、`Source::fault` の
+/// 実装がそれを作らないことに依る。
 ///
 /// # Safety
 /// `src` は生きている `S` を指し、読む間ほかに参照がない。呼ぶ側が `Heap::foreign_unique` で確かめる (T3)。
@@ -152,9 +155,11 @@ pub(crate) unsafe fn read_text<S: Source>(
     control: &Control,
     host: Option<&HostRef>,
     line: bool,
-) -> (r: Result<String, Fault>)
+    form: Form,
+) -> (r: Result<Vec<u8>, Fault>)
     ensures
         !(r matches Err(Fault::Heap(_))),
+        form == Form::Text ==> (r matches Ok(v) ==> valid_utf8(v@)),
 {
     let src = unsafe { &mut *src };
     // 見込みはファイル全体の長さなので、1行の読みでは確保に使わない。読んだ後は残りの長さと合わないので捨てる
@@ -165,7 +170,10 @@ pub(crate) unsafe fn read_text<S: Source>(
         read_all(src.reader(), control, size, host)
     };
     let bytes = read.map_err(|f| src.fault(f))?;
-    String::from_utf8(bytes).map_err(|_| src.fault(Failure::NotUtf8))
+    if form == Form::Text && str::from_utf8(&bytes).is_err() {
+        return Err(src.fault(Failure::NotUtf8));
+    }
+    Ok(bytes)
 }
 
 /// スクリプトに渡した引数の数。
@@ -403,6 +411,9 @@ impl Read for StopOnInterrupt<'_> {
             Err(e) if e.kind() == io::ErrorKind::Interrupted && self.control.stop_bits() != 0 => {
                 Err(io::Error::other("stopped while reading"))
             }
+            // 渡した buffer より大きい長さを返す読み手は `Read` の約束を破っている。そのまま返すと `read_to_end` が
+            // panic するので、`Reader::fill_buf` と同じく読みの誤りにする
+            Ok(n) if n > buf.len() => Err(io::Error::other("read more than the buffer")),
             result => result,
         }
     }

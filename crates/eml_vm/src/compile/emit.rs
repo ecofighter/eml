@@ -1005,6 +1005,9 @@ fn arithmetic(ext: Extern, dst: Slot, args: &[Slot]) -> Option<Op> {
         | Extern::Open
         | Extern::ReadAll
         | Extern::ReadLine
+        | Extern::ReadChunk
+        | Extern::ReadAllBytes
+        | Extern::ReadLineBytes
         | Extern::Close
         | Extern::IntShow
         | Extern::IntNeg

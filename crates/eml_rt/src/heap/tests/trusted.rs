@@ -997,6 +997,118 @@ fn an_overlong_read_is_refused_and_the_reader_survives() {
     assert!(matches!(reader.fill_buf(&control, None), Ok(b"x")));
 }
 
+/// `handle_read` のバイト列の読みは、検証したコードから `fill` と `consume` を呼び、借りた読み手の buffer の slice を
+/// ヒープのバイト列にそのまま写す。1つの buffer の中の行、2回の補充をまたぐ行、行の途中の読みの誤り (途中まで読んだ
+/// 行を手放す)、塊の読み (その場で足すことと、共有のバイト列を写すこと)、全部の読みを通す。
+fn borrowed_bytes_go_through_the_host<M: Mode>() {
+    let memory = Arc::new(MemoryHost::default());
+    memory.add("lines.txt", MemoryFile::text("ab\ncd\n"));
+    memory.add(
+        "slow.txt",
+        MemoryFile {
+            chunk: 3,
+            ..MemoryFile::text("abcdefg\nhi")
+        },
+    );
+    memory.add(
+        "broken.txt",
+        MemoryFile {
+            chunk: 2,
+            fail_after: Some(3),
+            ..MemoryFile::text("abcdef")
+        },
+    );
+    let mut ctx = ctx_tests::ctx_with::<M>(&memory);
+    let open = |ctx: &mut Ctx<M>, name: &str| unsafe {
+        let p = ctx.heap_mut().alloc_string(name);
+        ctx.fs_open(p).unwrap()
+    };
+    let read = |ctx: &mut Ctx<M>, f: Word, amount: ReadAmount| unsafe {
+        let w = ctx.handle_read(f, Handle::File, amount, Form::Bytes)?;
+        let bytes = (*ctx.heap().bytes(w).unwrap()).to_vec();
+        ctx.heap_mut().decref(w).unwrap();
+        Ok::<_, crate::Fault>(bytes)
+    };
+    unsafe {
+        let f = open(&mut ctx, "lines.txt");
+        assert_eq!(read(&mut ctx, f, ReadAmount::Line).unwrap(), b"ab\n");
+        assert_eq!(read(&mut ctx, f, ReadAmount::Line).unwrap(), b"cd\n");
+        assert_eq!(read(&mut ctx, f, ReadAmount::Line).unwrap(), b"");
+        ctx.fs_close(f).unwrap();
+        let f = open(&mut ctx, "slow.txt");
+        assert_eq!(read(&mut ctx, f, ReadAmount::Line).unwrap(), b"abcdefg\n");
+        let buf = ctx.heap_mut().alloc_bytes(b">");
+        ctx.heap_mut().dup(buf).unwrap();
+        let mut w = ctx
+            .handle_read(f, Handle::File, ReadAmount::Chunk(buf), Form::Bytes)
+            .unwrap();
+        assert_ne!(w, buf);
+        // buffer に残った1バイトだけを足し、次の塊は補充して読む
+        assert_eq!(&*ctx.heap().bytes(w).unwrap(), b">h");
+        for _ in 0..2 {
+            w = ctx
+                .handle_read(f, Handle::File, ReadAmount::Chunk(w), Form::Bytes)
+                .unwrap();
+            assert_eq!(&*ctx.heap().bytes(w).unwrap(), b">hi");
+        }
+        ctx.heap_mut().decref(w).unwrap();
+        ctx.heap_mut().decref(buf).unwrap();
+        ctx.fs_close(f).unwrap();
+        let f = open(&mut ctx, "broken.txt");
+        assert!(read(&mut ctx, f, ReadAmount::Line).is_err());
+        assert_eq!(raw::rc(f), 1);
+        ctx.fs_close(f).unwrap();
+        let f = open(&mut ctx, "lines.txt");
+        assert_eq!(read(&mut ctx, f, ReadAmount::All).unwrap(), b"ab\ncd\n");
+        ctx.fs_close(f).unwrap();
+    }
+    assert_eq!(mortal(ctx.heap()), 0);
+}
+
+/// 開くファイルの読み手が、渡した buffer より大きい長さを1回返す Host。
+struct OverlongHost;
+
+impl crate::Host for OverlongHost {
+    fn write_line(&self, _: crate::Stream, _: &str) -> io::Result<()> {
+        Ok(())
+    }
+
+    fn flush(&self) -> io::Result<()> {
+        Ok(())
+    }
+
+    fn open(&self, _: &str) -> io::Result<crate::Opened> {
+        Ok(crate::Opened {
+            reader: Box::new(OverlongOnce { lied: false }),
+            size: None,
+        })
+    }
+}
+
+/// 全部の読み (文字列とバイト列) も、buffer より大きい長さを返す読み手を std の中で panic させずに I/O の誤りにする。
+#[test]
+fn an_overlong_read_is_refused_by_a_whole_read() {
+    let control = Arc::new(Control::new(Limits::default()));
+    let mut ctx = Ctx::<Fast>::new(control, crate::HostRef::new(Arc::new(OverlongHost)));
+    for form in [Form::Text, Form::Bytes] {
+        unsafe {
+            let p = ctx.heap_mut().alloc_string("x");
+            let f = ctx.fs_open(p).unwrap();
+            assert_eq!(
+                ctx.handle_read(f, Handle::File, ReadAmount::All, form),
+                Err(crate::Fault::Io {
+                    op: crate::IoOp::Read,
+                    name: "x".into(),
+                    reason: crate::IoReason::Other
+                })
+            );
+            assert_eq!(raw::rc(f), 1);
+            ctx.fs_close(f).unwrap();
+        }
+    }
+    assert_eq!(mortal(ctx.heap()), 0);
+}
+
 /// 標準入力の1行を読んで写し、手放す。
 fn stdin_line<M: Mode>(ctx: &mut Ctx<M>) -> String {
     let w = ctx.stdin_read(true).unwrap();
@@ -1382,6 +1494,7 @@ both_modes!(
     two_threads_share_one_control,
     println_goes_through_the_host,
     borrowed_files_go_through_the_host,
+    borrowed_bytes_go_through_the_host,
     two_buffered_lines_flush_once,
     a_line_across_two_refills_flushes_before_each,
     the_stdin_reader_survives_a_second_ctx,

@@ -1253,6 +1253,241 @@ fn a_failed_borrowed_line_read_keeps_the_file<M: Mode>() {
     assert_eq!(mortal(ctx.heap()), 0);
 }
 
+/// `handle_read` でハンドルを借りてバイト列の形で読み、読んだ中身を写して手放す。ハンドルの参照は呼ぶ側に残る。
+unsafe fn read_bytes_borrowed<M: Mode>(
+    ctx: &mut crate::Ctx<M>,
+    f: Word,
+    read: ReadAmount,
+) -> Result<Vec<u8>, Fault> {
+    unsafe {
+        let w = ctx.handle_read(f, Handle::File, read, Form::Bytes)?;
+        let read = (*ctx.heap().bytes(w).unwrap()).to_vec();
+        ctx.heap_mut().decref(w).unwrap();
+        Ok(read)
+    }
+}
+
+/// バイト列の全部の読みは UTF-8 を確かめず、読んだ長さを数える。2回目は終わりから読むので空である。
+fn a_borrowed_file_is_read_whole_as_bytes<M: Mode>() {
+    let memory = Arc::new(MemoryHost::default());
+    memory.add(
+        "bad.bin",
+        MemoryFile {
+            bytes: vec![0xff, 0xfe, 0],
+            sized: true,
+            ..MemoryFile::default()
+        },
+    );
+    let mut ctx = ctx_with::<M>(&memory);
+    unsafe {
+        let f = open(&mut ctx, "bad.bin");
+        let before = ctx.stats().string_bytes_copied;
+        assert_eq!(
+            read_bytes_borrowed(&mut ctx, f, ReadAmount::All).unwrap(),
+            [0xff, 0xfe, 0]
+        );
+        if M::CHECKED {
+            assert_eq!(ctx.stats().string_bytes_copied - before, 3);
+        }
+        assert_eq!(
+            read_bytes_borrowed(&mut ctx, f, ReadAmount::All).unwrap(),
+            []
+        );
+        assert_eq!(super::raw::rc(f), 1);
+        ctx.fs_close(f).unwrap();
+    }
+    assert_eq!(mortal(ctx.heap()), 0);
+}
+
+/// バイト列の行の読みは、64 KiB の補充をまたぐ行も1つのバイト列にし、行の長さだけを数える。UTF-8 でない行も読み、
+/// 終わりでは空のバイト列を返す。
+fn a_borrowed_file_is_read_in_byte_lines<M: Mode>() {
+    let memory = Arc::new(MemoryHost::default());
+    let long_line = vec![b'x'; 70_000];
+    let mut bytes = long_line.clone();
+    bytes.extend_from_slice(b"\n\xff\r\n\nlast");
+    memory.add(
+        "lines.bin",
+        MemoryFile {
+            bytes,
+            chunk: 4096,
+            ..MemoryFile::default()
+        },
+    );
+    let mut ctx = ctx_with::<M>(&memory);
+    let mut first = long_line;
+    first.push(b'\n');
+    unsafe {
+        let f = open(&mut ctx, "lines.bin");
+        for expected in [
+            first,
+            b"\xff\r\n".to_vec(),
+            b"\n".to_vec(),
+            b"last".to_vec(),
+        ] {
+            let before = ctx.stats().string_bytes_copied;
+            assert_eq!(
+                read_bytes_borrowed(&mut ctx, f, ReadAmount::Line).unwrap(),
+                expected
+            );
+            if M::CHECKED {
+                assert_eq!(
+                    ctx.stats().string_bytes_copied - before,
+                    expected.len() as u64
+                );
+            }
+        }
+        for _ in 0..2 {
+            assert_eq!(
+                read_bytes_borrowed(&mut ctx, f, ReadAmount::Line).unwrap(),
+                []
+            );
+        }
+        assert_eq!(super::raw::rc(f), 1);
+        ctx.fs_close(f).unwrap();
+    }
+    assert_eq!(mortal(ctx.heap()), 0);
+}
+
+/// バイト列の行の読みが途中で誤るか止まると、途中まで読んだ行を手放し、ハンドルは呼ぶ側に残る。
+fn a_failed_byte_line_read_releases_the_partial_line<M: Mode>() {
+    let memory = Arc::new(MemoryHost::default());
+    let control = Arc::new(Control::new(Limits::default()));
+    memory.add(
+        "broken.txt",
+        MemoryFile {
+            fail_after: Some(3),
+            chunk: 2,
+            ..MemoryFile::text("abcdef")
+        },
+    );
+    memory.add(
+        "slow.txt",
+        MemoryFile {
+            chunk: 2,
+            ..MemoryFile::text("abcdef\n")
+        },
+    );
+    let mut ctx = crate::Ctx::<M>::new(control.clone(), host(&memory));
+    unsafe {
+        let f = open(&mut ctx, "broken.txt");
+        assert_eq!(
+            read_bytes_borrowed(&mut ctx, f, ReadAmount::Line),
+            Err(Fault::Io {
+                op: IoOp::Read,
+                name: "broken.txt".into(),
+                reason: IoReason::Other
+            })
+        );
+        assert_eq!(super::raw::rc(f), 1);
+        ctx.fs_close(f).unwrap();
+        assert_eq!(mortal(ctx.heap()), 0);
+        // 補充の前の確かめで止まり、読み手のバイトは次の読みに残る
+        let f = open(&mut ctx, "slow.txt");
+        control.interrupt();
+        assert_eq!(
+            read_bytes_borrowed(&mut ctx, f, ReadAmount::Line),
+            Err(Fault::Stopped(Stop::Interrupted))
+        );
+        control.clear();
+        assert_eq!(super::raw::rc(f), 1);
+        assert_eq!(
+            read_bytes_borrowed(&mut ctx, f, ReadAmount::Line).unwrap(),
+            b"abcdef\n"
+        );
+        ctx.fs_close(f).unwrap();
+    }
+    assert_eq!(mortal(ctx.heap()), 0);
+}
+
+/// 塊の読みは、buffer に残ったバイトを、空なら1回の補充で読めたバイトを、受け取ったバイト列の後ろに足す。一意な
+/// バイト列には足した長さだけを、共有のバイト列には写した全体を数える。終わりなら何も足さない。
+fn chunks_are_appended_to_the_given_bytes<M: Mode>() {
+    let memory = Arc::new(MemoryHost::default());
+    memory.add(
+        "a.txt",
+        MemoryFile {
+            chunk: 4,
+            ..MemoryFile::text("abcdef")
+        },
+    );
+    let mut ctx = ctx_with::<M>(&memory);
+    let chunk = |ctx: &mut crate::Ctx<M>, f: Word, buf: Word| unsafe {
+        ctx.handle_read(f, Handle::File, ReadAmount::Chunk(buf), Form::Bytes)
+    };
+    let body = |ctx: &crate::Ctx<M>, w: Word| unsafe { (*ctx.heap().bytes(w).unwrap()).to_vec() };
+    unsafe {
+        let f = open(&mut ctx, "a.txt");
+        let buf = ctx.heap_mut().alloc_bytes_room(16);
+        let w = ctx.heap_mut().bytes_extend(buf, b">").unwrap();
+        let before = ctx.stats().string_bytes_copied;
+        let w = chunk(&mut ctx, f, w).unwrap();
+        assert_eq!(body(&ctx, w), b">abcd");
+        if M::CHECKED {
+            assert_eq!(ctx.stats().string_bytes_copied - before, 4);
+        }
+        // 共有のバイト列は写してから足す
+        ctx.heap_mut().dup(w).unwrap();
+        let before = ctx.stats().string_bytes_copied;
+        let x = chunk(&mut ctx, f, w).unwrap();
+        assert_ne!(x, w);
+        assert_eq!(body(&ctx, x), b">abcdef");
+        assert_eq!(body(&ctx, w), b">abcd");
+        if M::CHECKED {
+            assert_eq!(ctx.stats().string_bytes_copied - before, 7);
+        }
+        ctx.heap_mut().decref(w).unwrap();
+        let y = chunk(&mut ctx, f, x).unwrap();
+        assert_eq!(body(&ctx, y), b">abcdef");
+        ctx.heap_mut().decref(y).unwrap();
+        assert_eq!(super::raw::rc(f), 1);
+        ctx.fs_close(f).unwrap();
+    }
+    assert_eq!(mortal(ctx.heap()), 0);
+}
+
+/// 塊の読みが誤ると、受け取ったバイト列を手放し、ハンドルは呼ぶ側に残る。検査モードは、バイト列でない `buf` を
+/// 読み手のバイトを使う前に断る。
+fn a_failed_chunk_read_releases_the_bytes<M: Mode>() {
+    let memory = Arc::new(MemoryHost::default());
+    memory.add(
+        "broken.txt",
+        MemoryFile {
+            fail_after: Some(0),
+            ..MemoryFile::text("ab")
+        },
+    );
+    memory.add("a.txt", MemoryFile::text("ab"));
+    let mut ctx = ctx_with::<M>(&memory);
+    unsafe {
+        let f = open(&mut ctx, "broken.txt");
+        let buf = ctx.heap_mut().alloc_bytes(b"x");
+        assert_eq!(
+            ctx.handle_read(f, Handle::File, ReadAmount::Chunk(buf), Form::Bytes),
+            Err(Fault::Io {
+                op: IoOp::Read,
+                name: "broken.txt".into(),
+                reason: IoReason::Other
+            })
+        );
+        assert_eq!(super::raw::rc(f), 1);
+        ctx.fs_close(f).unwrap();
+        assert_eq!(mortal(ctx.heap()), 0);
+        if M::CHECKED {
+            let f = open(&mut ctx, "a.txt");
+            let not_bytes = s(&mut ctx, "x");
+            assert_eq!(
+                ctx.handle_read(f, Handle::File, ReadAmount::Chunk(not_bytes), Form::Bytes),
+                Err(Fault::Heap(HeapError::WrongKind))
+            );
+            ctx.heap_mut().decref(not_bytes).unwrap();
+            assert_eq!(read_borrowed(&mut ctx, f, ReadAmount::All).unwrap(), "ab");
+            ctx.fs_close(f).unwrap();
+        }
+    }
+    assert_eq!(mortal(ctx.heap()), 0);
+}
+
 /// 表の場合を `eml_rt` の extern で動かすときの引数。共有した文字列の残った参照と、作った不死の物体の数を持つ
 #[derive(Default)]
 struct Args {
@@ -1880,5 +2115,10 @@ both_modes!(
     a_borrowed_read_refuses_a_non_file_or_a_shared_file,
     a_borrowed_file_is_read_line_by_line,
     a_failed_borrowed_line_read_keeps_the_file,
+    a_borrowed_file_is_read_whole_as_bytes,
+    a_borrowed_file_is_read_in_byte_lines,
+    a_failed_byte_line_read_releases_the_partial_line,
+    chunks_are_appended_to_the_given_bytes,
+    a_failed_chunk_read_releases_the_bytes,
     the_externs_match_the_table,
 );

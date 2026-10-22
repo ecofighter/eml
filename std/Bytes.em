@@ -35,3 +35,11 @@ pub find_byte : Byte -> Bytes -> <Panic> Option Int
 find_byte x b =
   let i = find_byte_from x 0 b
   if i < 0 then None else Some i
+
+-- 最後の行の終わり (`\n` か `\r\n`) を1つ除く。なければそのまま返す。一意なら長さだけを書き換える (`truncate`)
+pub trim_line_end : Bytes -> <Panic> Bytes
+trim_line_end line =
+  let n = length line
+  if n == 0 || get (n - 1) line != 10u8 then line
+  else if n >= 2 && get (n - 2) line == 13u8 then truncate (n - 2) line
+  else truncate (n - 1) line

@@ -77,7 +77,7 @@ effect Fail where
 ファイルの操作は標準ライブラリのモジュール `Fs` にあり、`Fs.open` のように import なしで修飾付きで使える ([モジュールと名前解決](modules.md) の「標準ライブラリ」)。`println` は `Prelude` にある。
 
 - `open` の相対パスは、Host の基準ディレクトリ (`file_root`。[オブジェクトモデル](object-model.md) の `StdHost` の項) から解釈する。CLI の `run` はカレントディレクトリを基準にする。絶対パスはそのまま開く。`file_root` の既定 (空のパス) はカレントディレクトリを指す。
-- `read_all` は現在の位置から最後までを UTF-8 として読み、読んだ文字列を先に、同じ `File` を後に置いた組で返す。ファイルを読む関数はどれも、`File` を借りて読み、結果を先に置いて `File` と組にして返す (行は `File` を借り、組は translate が作る。[Core IR](core-ir.md) の「組を返す extern」)。読めなかったときも `File` は手放さない。1行ずつ読む `Fs.read_line` は、std の中だけの extern の上に eml で書いた関数で、[標準ライブラリ](stdlib.md) の「`Fs`」にある。
+- `read_all` は現在の位置から最後までを UTF-8 として読み、読んだ文字列を先に、同じ `File` を後に置いた組で返す。ファイルを読む関数はどれも、`File` を借りて読み、結果を先に置いて `File` と組にして返す (行は `File` を借り、組は translate が作る。[Core IR](core-ir.md) の「組を返す extern」)。読めなかったときも `File` は手放さない。1行ずつ読む `Fs.read_line` は、std の中だけの extern の上に eml で書いた関数で、[標準ライブラリ](stdlib.md) の「`Fs`」にある。バイト列の読み (`Fs.read_all_bytes`、`read_line_bytes`、`read_chunk`) も同じ形で、同じ節にある。
 - `close f` と `drop f` は、どちらも `File` の破棄処理 (オブジェクトの解放) を呼ぶ。
 - 開けない、読めない、UTF-8 でないときは、`try_io` が捕まえなければ実行時エラーにする ([LIR](lir.md) の「実行時エラー」、[標準ライブラリ](stdlib.md) の「`try_io`」)。
 

@@ -2242,10 +2242,13 @@ impl<M: Mode> Heap<M> {
             r is Err ==> *final(self) == old(self).settled_heap(),
             !M::CHECKED ==> r is Ok,
             r matches Ok(w) ==> w.is_ptr_spec() && final(self).is_bytes(w) && final(self).text_of(w)
-                == old(self).text_of(left) + src@,
+                == old(self).text_of(left) + src@ && final(self).word_in(w),
             old(self).push_ok(left, Kind::Bytes) ==> r is Ok || chain_err(r),
             r matches Ok(w) ==> (old(self).push_ok(left, Kind::Bytes) ==> final(self).consistent()
-                && final(self).pushed(*old(self), left, w)),
+                && final(self).pushed(*old(self), left, w) && final(self).others_kept(
+                *old(self),
+                left,
+            )),
             final(self).settled(),
             M::CHECKED ==> final(self).words_kept(*old(self)),
     {
@@ -2264,6 +2267,22 @@ impl<M: Mode> Heap<M> {
         let w = self.push_unchecked(left, Tail::Bytes(src), Kind::Bytes, Ghost(c));
         proof {
             assert(old(self).core.settled_view() == s1.core);
+            if c {
+                assert forall|b: usize|
+                    #![trigger old(self).core.has(b)]
+                    old(self).core.has(b) && old(self).core.settled_state(b) == BlockState::Live
+                        && b != left.bits_spec() implies self.core.has(b)
+                    && self.core.settled_state(b) == BlockState::Live && self.core.block(b) == old(
+                    self,
+                ).core.block(b) by {
+                    assert(s1.core.has(b));
+                    if s1.core.dom().contains(b) {
+                        assert(self.core.dom().contains(b));
+                    } else {
+                        s1.core.lemma_region_at(b);
+                    }
+                }
+            }
         }
         Ok(w)
     }

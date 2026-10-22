@@ -927,13 +927,19 @@ fn run_extern<M: Mode>(
                 let w = ctx.fs_open(task.get(arg(0)))?;
                 task.set(dst, w);
             }
-            Extern::ReadAll | Extern::ReadLine => {
-                let read = if ext == Extern::ReadLine {
-                    ReadAmount::Line
-                } else {
-                    ReadAmount::All
+            Extern::ReadAll | Extern::ReadLine | Extern::ReadAllBytes | Extern::ReadLineBytes => {
+                let (read, form) = match ext {
+                    Extern::ReadAll => (ReadAmount::All, Form::Text),
+                    Extern::ReadLine => (ReadAmount::Line, Form::Text),
+                    Extern::ReadAllBytes => (ReadAmount::All, Form::Bytes),
+                    _ => (ReadAmount::Line, Form::Bytes),
                 };
-                let w = ctx.handle_read(task.get(arg(0)), Handle::File, read, Form::Text)?;
+                let w = ctx.handle_read(task.get(arg(0)), Handle::File, read, form)?;
+                task.set(dst, w);
+            }
+            Extern::ReadChunk => {
+                let chunk = ReadAmount::Chunk(task.get(arg(0)));
+                let w = ctx.handle_read(task.get(arg(1)), Handle::File, chunk, Form::Bytes)?;
                 task.set(dst, w);
             }
             Extern::Close => {

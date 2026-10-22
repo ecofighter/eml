@@ -223,7 +223,8 @@ fn every_extern_function_row_has_the_reprs_of_its_std_signature() {
     }
 }
 
-/// 表の値そのもの。借りる引数を持つ行は次の表の行だけで、組を返すのは `Std.MutArray` の2つの行だけである。
+/// 表の値そのもの。借りる引数を持つ行は次の表の行だけで、組を返すのは `Std.MutArray` の2つの行と `Std.Fs` の
+/// 5つの読みの行だけである。
 #[test]
 fn only_the_array_readers_borrow() {
     for &e in Extern::ALL {
@@ -233,7 +234,11 @@ fn only_the_array_readers_borrow() {
             "Std.Array.get" => (&[true, false], None),
             "Std.MutArray.length" => (&[true], Some(0)),
             "Std.MutArray.read" => (&[true, false], Some(0)),
-            "Std.Fs.read_all" | "Std.Fs.read_line_raw" => (&[true], Some(0)),
+            "Std.Fs.read_all"
+            | "Std.Fs.read_line_raw"
+            | "Std.Fs.read_all_bytes"
+            | "Std.Fs.read_line_bytes_raw" => (&[true], Some(0)),
+            "Std.Fs.read_chunk" => (&[false, true], Some(1)),
             "Std.String.byte_length" | "Prelude.Show String.show" => (&[true], None),
             "Std.String.byte_at" => (&[false, true], None),
             "Std.String.slice" => (&[false, false, true], None),
@@ -349,7 +354,7 @@ fn kind_of(lin: Lin) -> Linearity {
     }
 }
 
-/// 表の値そのもの。`Fs` の4つと `MutArray` を扱う7つ以外は、引数も結果も `Unr` である。
+/// 表の値そのもの。`Fs` の7つと `MutArray` を扱う7つ以外は、引数も結果も `Unr` である。
 #[test]
 fn only_the_file_functions_carry_a_lin() {
     use Linearity::{Lin, Unr};
@@ -359,6 +364,9 @@ fn only_the_file_functions_carry_a_lin() {
             "Std.Fs.open" => (&[Unr], Lin),
             "Std.Fs.read_all" => (&[Lin], Unr),
             "Std.Fs.read_line_raw" => (&[Lin], Unr),
+            "Std.Fs.read_all_bytes" => (&[Lin], Unr),
+            "Std.Fs.read_line_bytes_raw" => (&[Lin], Unr),
+            "Std.Fs.read_chunk" => (&[Unr, Lin], Unr),
             "Std.Fs.close" => (&[Lin], Unr),
             "Std.Array.thaw" => (&[Unr], Lin),
             "Std.MutArray.make" => (&[Unr, Unr], Lin),

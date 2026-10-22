@@ -96,9 +96,9 @@ measure "$examples/rt_extern_bench" \
   println-block println-line read-all read-all-unsized \
   find-byte-1mib find-byte-1mib-position find-bytes-1mib find-bytes-1mib-windows \
   find-byte find-byte-swar find-sub find-sub-contains slice-short slice-short-box \
-  read-all-bytes read-all-bytes-std
+  read-all-bytes read-all-bytes-std read-line-bytes-64mib read-line-bytes-64mib-std
 echo
-echo "eml / 参照の比 (1 MiB の2組は目標が2倍、後ろの4組は予算の行。docs/implementation/benchmarks.md)"
+echo "eml / 参照の比 (1 MiB の2組は目標が2倍、続く4組は予算の行、最後の組は記録だけの行。docs/implementation/benchmarks.md)"
 echo
 ratios \
   find-byte-1mib find-byte-1mib-position \
@@ -106,4 +106,5 @@ ratios \
   find-byte find-byte-swar \
   find-sub find-sub-contains \
   slice-short slice-short-box \
-  read-all-bytes read-all-bytes-std
+  read-all-bytes read-all-bytes-std \
+  read-line-bytes-64mib read-line-bytes-64mib-std

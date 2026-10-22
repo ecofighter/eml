@@ -3,13 +3,97 @@
 
 #[cfg(verus_only)]
 use super::proof::*;
+#[cfg(verus_only)]
+use super::strings::lemma_pushed_moved;
 use super::*;
+use crate::alloc::too_large;
 use crate::externs::{Fault, Form, Handle, IoOp, ReadAmount};
-use crate::host::{File, Stream, host_flush, host_open, host_write_line, read_text};
+use crate::host::{File, Stream, consume, fill, host_flush, host_open, host_write_line, read_text};
 #[cfg(verus_only)]
 use vstd::string::StringSliceAdditionalSpecFns;
 
 verus! {
+
+/// 行の読みの途中のヒープ `h`。呼ぶ前のヒープ `h0` からは、新しい物体を作って手放しただけで、`h0` で生きていた物体は
+/// みな同じブロックのまま生きている。`w` はその間に作った、伸ばせるバイト列である。
+spec fn line_held<M: Mode>(h: Heap<M>, h0: Heap<M>, w: Word) -> bool {
+    &&& h.consistent()
+    &&& h.settleable()
+    &&& h.decref_ok(w)
+    &&& h.readable(w)
+    &&& h.kind_of(w) == Kind::Bytes
+    &&& moved(h, h0, |x: usize| 0int, Set::empty())
+    &&& no_free(h, h0)
+    &&& w.is_ptr_spec()
+    &&& !live(h0, w.bits_spec())
+    &&& h.core.settled_view().ext(w.bits_spec()) >= 1
+}
+
+/// `alloc_bytes` で行の最初の部分を作った後。
+proof fn lemma_line_made<M: Mode>(h1: Heap<M>, h0: Heap<M>, w: Word)
+    requires
+        h0.consistent(),
+        h0.settleable(),
+        h1.made(h0, w),
+        h1.owned(w),
+        h1.is_bytes(w),
+    ensures
+        line_held(h1, h0, w),
+{
+    lemma_alloc_moved(h1, h0, w);
+    lemma_view_live(h1, w.bits_spec());
+    h1.lemma_text_spec(w);
+}
+
+/// `bytes_extend` で行を伸ばした後。
+proof fn lemma_line_extended<M: Mode>(h2: Heap<M>, h1: Heap<M>, h0: Heap<M>, w: Word, w2: Word)
+    requires
+        line_held(h1, h0, w),
+        h2.consistent(),
+        h2.pushed(h1, w, w2),
+        h2.others_kept(h1, w),
+        h2.is_bytes(w2),
+    ensures
+        line_held(h2, h0, w2),
+{
+    let z = |x: usize| 0int;
+    let d2 = |x: usize| points(w2, x) - points(w, x);
+    lemma_pushed_moved(h2, h1, w, w2);
+    h2.lemma_pushed(h1, w, w2);
+    let v0 = h0.core.settled_view();
+    assert forall|b: usize| #[trigger] live(h0, b) implies live(h2, b) && h2.core.block(b)
+        == h0.core.block(b) by {
+        assert(live(h1, b));
+        assert(b != w.bits_spec());
+        assert(h1.core.has(b));
+    }
+    assert forall|b: usize|
+        #![trigger live(h2, b), live(h0, b)]
+        live(h0, b) && live(h2, b) implies same_head(h2, h0, b) && h2.core.perm(b).slots
+        == h0.core.perm(b).slots by {
+        assert(live(h1, b));
+        assert(b != w.bits_spec());
+    }
+    assert forall|b: usize|
+        #![trigger live(h0, b)]
+        live(h0, b) && (v0.rc_of(b) == 0 || v0.ext(b) + z(b) >= 1) implies {
+        &&& live(h2, b)
+        &&& h2.core.block(b) == h0.core.block(b)
+        &&& v0.rc_of(b) != 0 ==> h2.core.settled_view().ext(b) == v0.ext(b) + z(b)
+    } by {
+        assert(live(h1, b));
+        assert(b != w.bits_spec());
+        assert(same_head(h1, h0, b));
+        assert(d2(b) == 0) by {
+            if w2 != w {
+                assert(!live(h1, w2.bits_spec()));
+            }
+        }
+    }
+    h2.core.lemma_settled_view();
+    lemma_view_live(h2, w2.bits_spec());
+    h2.lemma_text_spec(w2);
+}
 
 impl<M: Mode> Ctx<M> {
     /// `println` と `eprintln`。文字列 `s` と `\n` を `stream` に書く。`s` の参照を受け取り、書けたかどうかによらず手放す。
@@ -280,14 +364,17 @@ impl<M: Mode> Ctx<M> {
     }
 
     /// ハンドル `h` を借りて読む。`read` が読む量を、`form` が結果の形を決める。結果は新しい物体で、組は作らない。
-    /// 読みは 64 KiB ずつで、区切りごとに止める語と確保量を見る (docs/spec/object-model.md の「読み手」)。`h` の
-    /// 参照は呼ぶ側に残り、参照の数は成功でも誤りでも変わらない。読みの誤り、UTF-8 でない中身、止めたときも
-    /// ハンドルを手放さず、ヒープを変えない。
+    /// 塊の読みだけは、受け取った `buf` の後ろに足して返し、`form` を見ない。読みは 64 KiB ずつで、区切りごとに止める
+    /// 語と確保量を見る (docs/spec/object-model.md の「読み手」)。`h` の参照は呼ぶ側に残り、参照の数は成功でも誤りでも
+    /// 変わらない。読みの誤り、UTF-8 でない中身、止めたときもハンドルを手放さない。そのとき、バイト列の行の読みは途中まで
+    /// 読んだ行を、塊の読みは `buf` を手放し、ほかの読みはヒープを変えない。
     ///
     /// # Safety
     /// `heap_mut` の前提を守っている。`h` は即値か、このヒープか付けた塊の生きている物体を指し、呼ぶ側がその参照を
     /// 1つ持つ。速いモードでは、`h` は局所で rc が 1 である (検査モードは確かめ、違えば `NotUnique` か `WrongOwner`
-    /// を返す)。`handle` の型のハンドルでなければ、どちらのモードでも `WrongKind` を返す。
+    /// を返す)。`handle` の型のハンドルでなければ、どちらのモードでも `WrongKind` を返す。塊の読みの `buf` も即値か
+    /// 生きている物体を指し、呼ぶ側がその参照を1つ持つ。速いモードでは、`buf` はバイト列である (検査モードは確かめ、
+    /// 違えば `WrongKind` を返す)。
     pub unsafe fn handle_read(
         &mut self,
         h: Word,
@@ -299,64 +386,418 @@ impl<M: Mode> Ctx<M> {
             old(self).wf(),
             old(self).heap_spec().word_in(h),
             !M::CHECKED ==> old(self).holds(h) && old(self).heap_spec().rc_value(h) == 1,
+            read matches ReadAmount::Chunk(buf) ==> old(self).heap_spec().word_in(buf) && (
+            !M::CHECKED ==> old(self).is_bytes(buf) && old(self).holds(buf)),
         ensures
             final(self).wf(),
             final(self).evv_spec() == old(self).evv_spec(),
             final(self).yield_spec() == old(self).yield_spec(),
-            r is Err ==> *final(self) == *old(self),
             !M::CHECKED && (r matches Err(Fault::Heap(_))) ==> r == Err::<Word, Fault>(
                 Fault::Heap(HeapError::WrongKind),
-            ),
-            r matches Ok(s) ==> final(self).is_string(s),
-            r matches Ok(s) ==> (old(self).held_ok() && old(self).holds(h) && old(
+            ) && *final(self) == *old(self),
+            r is Err && (read == ReadAmount::All || read == ReadAmount::Line && form == Form::Text)
+                ==> *final(self) == *old(self),
+            r matches Ok(s) ==> if read is Chunk || form == Form::Bytes {
+                final(self).is_bytes(s)
+            } else {
+                final(self).is_string(s)
+            },
+            !(read is Chunk) && old(self).held_ok() && old(self).holds(h) && old(
                 self,
-            ).heap_spec().rc_value(h) == 1 ==> {
+            ).heap_spec().rc_value(h) == 1 && !(r matches Err(Fault::Heap(_))) ==> {
+                &&& final(self).held_ok()
+                &&& final(self).evolved_by(*old(self), |x: usize| 0int, Set::empty())
+                &&& r matches Ok(s) ==> final(self).holds(s)
+            },
+            read matches ReadAmount::Chunk(buf) ==> (old(self).held_ok() && old(self).holds(h)
+                && old(self).heap_spec().rc_value(h) == 1 && old(self).is_bytes(buf) && old(
+                self,
+            ).holds(buf) && !(r matches Err(Fault::Heap(_))) ==> {
+                &&& final(self).held_ok()
+                &&& r matches Ok(x) ==> final(self).holds(x) && final(self).evolved_by(
+                    *old(self),
+                    |y: usize| points(x, y) - points(buf, y),
+                    Set::empty().insert(buf.bits_spec()),
+                )
+                &&& r is Err ==> final(self).evolved_by(
+                    *old(self),
+                    |y: usize| -points(buf, y),
+                    Set::empty(),
+                )
+            }),
+    {
+        let ghost s0 = *self;
+        if !h.is_ptr() {
+            return Err(Fault::Heap(HeapError::WrongKind));
+        }
+        proof {
+            if s0.held_ok() && s0.holds(h) && s0.heap.rc_value(h) == 1 {
+                s0.lemma_held_arg(h);
+            }
+        }
+        let p = match handle {
+            Handle::File => match unsafe { self.heap.foreign_unique::<File>(h) } {
+                Ok(p) => p,
+                Err(e) => return Err(Fault::Heap(e)),
+            },
+        };
+        match read {
+            ReadAmount::All => unsafe { self.read_whole(p, false, form) },
+            ReadAmount::Line => match form {
+                Form::Text => unsafe { self.read_whole(p, true, Form::Text) },
+                Form::Bytes => unsafe { self.read_line_bytes(p) },
+            },
+            ReadAmount::Chunk(buf) => unsafe { self.read_chunk(p, buf) },
+        }
+    }
+
+    /// `handle_read` の全部の読みと、文字列の行の読み。`read_text` で Rust の `Vec` に読み、ヒープの物体に1回写す。
+    /// どの誤りもヒープを変えない。
+    ///
+    /// # Safety
+    /// `p` は `foreign_unique` で借りた `File` を指し、読む間ほかに参照がない。
+    unsafe fn read_whole(&mut self, p: *mut File, line: bool, form: Form) -> (r: Result<
+        Word,
+        Fault,
+    >)
+        requires
+            old(self).wf(),
+        ensures
+            final(self).wf(),
+            final(self).evv_spec() == old(self).evv_spec(),
+            final(self).yield_spec() == old(self).yield_spec(),
+            r is Err ==> *final(self) == *old(self) && !(r matches Err(Fault::Heap(_))),
+            r matches Ok(s) ==> if form == Form::Bytes {
+                final(self).is_bytes(s)
+            } else {
+                final(self).is_string(s)
+            },
+            r matches Ok(s) ==> (old(self).held_ok() ==> {
                 &&& final(self).held_ok()
                 &&& final(self).holds(s)
                 &&& final(self).evolved_by(*old(self), |x: usize| 0int, Set::empty())
             }),
     {
         let ghost s0 = *self;
-        let ghost c = s0.held_ok() && s0.holds(h) && s0.heap.rc_value(h) == 1;
-        if !h.is_ptr() {
-            return Err(Fault::Heap(HeapError::WrongKind));
-        }
-        proof {
-            if c {
-                s0.lemma_held_arg(h);
-            }
-        }
-        let line = match read {
-            ReadAmount::All => false,
-            ReadAmount::Line => true,
-        };
-        let text = match handle {
-            Handle::File => {
-                let p = match unsafe { self.heap.foreign_unique::<File>(h) } {
-                    Ok(p) => p,
-                    Err(e) => return Err(Fault::Heap(e)),
-                };
-                (unsafe { read_text(p, &self.control, None, line) })?
-            },
-        };
-        let text = text.as_str();
+        let bytes = (unsafe { read_text(p, &self.control, None, line, form) })?;
         let s = match form {
-            Form::Text => self.heap.alloc_string(text),
+            Form::Text => {
+                let text = unsafe { str::from_utf8_unchecked(bytes.as_slice()) };
+                self.heap.alloc_string(text)
+            },
+            Form::Bytes => self.heap.alloc_bytes(bytes.as_slice()),
         };
         if M::CHECKED {
             self.stats.string_bytes_copied = self.stats.string_bytes_copied.wrapping_add(
-                text.len() as u64,
+                bytes.len() as u64,
             );
         }
         proof {
             if M::CHECKED {
                 self.lemma_words_kept(s0);
             }
-            if c {
+            if s0.held_ok() {
                 self.lemma_read_lent(s0, s);
             }
         }
         Ok(s)
+    }
+
+    /// `handle_read` のバイト列の行の読み。借りた読み手の buffer の slice を `alloc_bytes` と `bytes_extend` にそのまま
+    /// 渡すので、写しは1行に1回である。読みの誤りと止めたときは、途中まで読んだ行を手放す。
+    ///
+    /// # Safety
+    /// `p` は `foreign_unique` で借りた `File` を指し、読む間ほかに参照がない。
+    unsafe fn read_line_bytes(&mut self, p: *mut File) -> (r: Result<Word, Fault>)
+        requires
+            old(self).wf(),
+        ensures
+            final(self).wf(),
+            final(self).evv_spec() == old(self).evv_spec(),
+            final(self).yield_spec() == old(self).yield_spec(),
+            !M::CHECKED ==> !(r matches Err(Fault::Heap(_))),
+            r matches Ok(w) ==> final(self).is_bytes(w),
+            old(self).held_ok() && !(r matches Err(Fault::Heap(_))) ==> {
+                &&& final(self).held_ok()
+                &&& final(self).evolved_by(*old(self), |x: usize| 0int, Set::empty())
+                &&& r matches Ok(w) ==> final(self).holds(w)
+            },
+    {
+        let ghost s0 = *self;
+        let ghost h0 = self.heap;
+        let ghost c = s0.held_ok();
+        let mut acc = Word::UNIT;
+        let mut have = false;
+        let mut total: usize = 0;
+        loop
+            invariant
+                self.wf(),
+                s0.wf(),
+                s0 == *old(self),
+                h0 == s0.heap,
+                c == s0.held_ok(),
+                self.evv == s0.evv,
+                self.yielding == s0.yielding,
+                self.max_evv == s0.max_evv,
+                !M::CHECKED ==> c,
+                M::CHECKED ==> self.heap.words_kept(h0),
+                !have ==> self.heap == h0 && total == 0,
+                have ==> acc.is_ptr_spec() && self.heap.word_in(acc) && self.heap.is_bytes(acc),
+                have && c ==> line_held(self.heap, h0, acc),
+            decreases usize::MAX - total,
+        {
+            let buf = match unsafe { fill(p, &self.control, None) } {
+                Ok(buf) => buf,
+                Err(fault) => {
+                    if have {
+                        let ghost h1 = self.heap;
+                        if let Err(e) = unsafe { self.heap.decref(acc) } {
+                            proof {
+                                lemma_words_trans(self.heap, h1, h0);
+                                self.lemma_words_kept(s0);
+                            }
+                            return Err(Fault::Heap(e));
+                        }
+                        proof {
+                            if M::CHECKED {
+                                lemma_words_trans(self.heap, h1, h0);
+                                self.lemma_words_kept(s0);
+                            }
+                            if c {
+                                self.lemma_line_dropped(s0, h1, acc);
+                            }
+                        }
+                    } else {
+                        proof {
+                            if c {
+                                lemma_moved_refl(h0);
+                                self.lemma_line_ok(s0);
+                            }
+                        }
+                    }
+                    return Err(fault);
+                },
+            };
+            let len = buf.len();
+            if len == 0 {
+                if have {
+                    if M::CHECKED {
+                        self.stats.string_bytes_copied
+                            = self.stats.string_bytes_copied.wrapping_add(total as u64);
+                    }
+                    proof {
+                        if c {
+                            self.lemma_line_done(s0, acc);
+                        }
+                    }
+                    return Ok(acc);
+                }
+                let empty: &[u8] = &[];
+                let w = self.heap.alloc_bytes(empty);
+                proof {
+                    if M::CHECKED {
+                        self.lemma_words_kept(s0);
+                    }
+                    if c {
+                        lemma_line_made(self.heap, h0, w);
+                        self.lemma_line_done(s0, w);
+                    }
+                }
+                return Ok(w);
+            }
+            let mut i: usize = 0;
+            while i < len && buf[i] != b'\n'
+                invariant
+                    len == buf@.len(),
+                    i <= len,
+                decreases len - i,
+            {
+                i += 1;
+            }
+            let done = i < len;
+            let n = if done {
+                i + 1
+            } else {
+                i
+            };
+            let part = vstd::slice::slice_subrange(buf, 0, n);
+            let next = match total.checked_add(n) {
+                Some(t) => t,
+                None => too_large(),
+            };
+            let ghost h1 = self.heap;
+            if !have {
+                acc = self.heap.alloc_bytes(part);
+                have = true;
+                proof {
+                    if M::CHECKED {
+                        self.lemma_words_kept(s0);
+                    }
+                    if c {
+                        lemma_line_made(self.heap, h0, acc);
+                    }
+                }
+            } else {
+                proof {
+                    if c {
+                        self.heap.lemma_push_ok(acc, Kind::Bytes);
+                    }
+                }
+                let w = match unsafe { self.heap.bytes_extend(acc, part) } {
+                    Ok(w) => w,
+                    Err(e) => {
+                        proof {
+                            lemma_words_trans(self.heap, h1, h0);
+                            self.lemma_words_kept(s0);
+                        }
+                        return Err(Fault::Heap(e));
+                    },
+                };
+                proof {
+                    if M::CHECKED {
+                        lemma_words_trans(self.heap, h1, h0);
+                        self.lemma_words_kept(s0);
+                    }
+                    if c {
+                        lemma_line_extended(self.heap, h1, h0, acc, w);
+                    }
+                }
+                acc = w;
+            }
+            proof {
+                if c {
+                    self.lemma_line_ok(s0);
+                }
+            }
+            total = next;
+            unsafe { consume(p, n) };
+            if done {
+                if M::CHECKED {
+                    self.stats.string_bytes_copied = self.stats.string_bytes_copied.wrapping_add(
+                        total as u64,
+                    );
+                }
+                proof {
+                    if c {
+                        self.lemma_line_done(s0, acc);
+                    }
+                }
+                return Ok(acc);
+            }
+        }
+    }
+
+    /// `handle_read` の塊の読み。読み手の buffer に残ったバイトを、空なら1回補充して読めたバイトを、`buf` の後ろに足す
+    /// (`Bytes.push` と同じく、一意で空きがあればその場で足す)。`buf` の参照を受け取り、読みの誤りと止めたときは
+    /// 手放す。検査モードの確かめは補充の前に済ませ、足した後で読み手のバイトを使ったことにする。
+    ///
+    /// # Safety
+    /// `p` は `foreign_unique` で借りた `File` を指し、読む間ほかに参照がない。`buf` は即値か、このヒープか付けた塊の
+    /// 生きている物体を指し、呼ぶ側がその参照を1つ持つ。速いモードでは、`buf` はバイト列である。
+    unsafe fn read_chunk(&mut self, p: *mut File, buf: Word) -> (r: Result<Word, Fault>)
+        requires
+            old(self).wf(),
+            old(self).heap_spec().word_in(buf),
+            !M::CHECKED ==> old(self).is_bytes(buf) && old(self).holds(buf),
+        ensures
+            final(self).wf(),
+            final(self).evv_spec() == old(self).evv_spec(),
+            final(self).yield_spec() == old(self).yield_spec(),
+            !M::CHECKED ==> !(r matches Err(Fault::Heap(_))),
+            r matches Ok(x) ==> final(self).is_bytes(x),
+            old(self).held_ok() && old(self).is_bytes(buf) && old(self).holds(buf) && !(
+            r matches Err(Fault::Heap(_))) ==> {
+                &&& final(self).held_ok()
+                &&& r matches Ok(x) ==> final(self).holds(x) && final(self).evolved_by(
+                    *old(self),
+                    |y: usize| points(x, y) - points(buf, y),
+                    Set::empty().insert(buf.bits_spec()),
+                )
+                &&& r is Err ==> final(self).evolved_by(
+                    *old(self),
+                    |y: usize| -points(buf, y),
+                    Set::empty(),
+                )
+            },
+    {
+        let ghost s0 = *self;
+        let ghost c = s0.held_ok() && s0.is_bytes(buf) && s0.holds(buf);
+        if M::CHECKED && !buf.is_ptr() {
+            return Err(Fault::Heap(HeapError::WrongKind));
+        }
+        self.heap.settle();
+        let ghost h1 = self.heap;
+        let hb = self.heap.header_of(buf);
+        proof {
+            lemma_settled_twice(s0.heap);
+            assert(h1.words_kept(s0.heap));
+            h1.lemma_text_spec(buf);
+            s0.heap.lemma_text_spec(buf);
+            if c {
+                s0.lemma_settled_body(h1, buf, Kind::Bytes);
+                s0.lemma_settled_push_ok(h1, buf, Kind::Bytes);
+            }
+        }
+        // 検査モードの確かめは、Host を呼ぶ前に済ませる (docs/spec/object-model.md の「誤りのときの約束」)。写す
+        // バイトを数えるために、一意でない `buf` の長さもここで読む (docs/spec/object-model.md の「仕事の回数」)
+        let shared_len = if M::CHECKED {
+            if let Err(e) = self.heap.checked_body(hb, Kind::Bytes) {
+                proof {
+                    self.lemma_words_kept(s0);
+                }
+                return Err(Fault::Heap(e));
+            }
+            if self.heap.core.rc_get(hb) == 1 {
+                0
+            } else {
+                self.heap.body_of(buf).len() as u64
+            }
+        } else {
+            0
+        };
+        let part = match unsafe { fill(p, &self.control, None) } {
+            Ok(part) => part,
+            Err(fault) => {
+                self.heap.release_text(hb, Ghost(buf), Ghost(c));
+                proof {
+                    if M::CHECKED {
+                        lemma_words_trans(self.heap, h1, s0.heap);
+                        self.lemma_words_kept(s0);
+                    }
+                    if c {
+                        self.lemma_printed(s0, h1, buf);
+                    }
+                }
+                return Err(fault);
+            },
+        };
+        let n = part.len();
+        let x = match unsafe { self.heap.bytes_extend(buf, part) } {
+            Ok(x) => x,
+            Err(e) => {
+                proof {
+                    self.lemma_words_kept(s0);
+                }
+                return Err(Fault::Heap(e));
+            },
+        };
+        unsafe { consume(p, n) };
+        if M::CHECKED {
+            self.stats.string_bytes_copied = self.stats.string_bytes_copied.wrapping_add(
+                shared_len.wrapping_add(n as u64),
+            );
+        }
+        proof {
+            self.heap.lemma_text_spec(x);
+            if M::CHECKED {
+                lemma_words_trans(self.heap, h1, s0.heap);
+                self.lemma_words_kept(s0);
+            }
+            if c {
+                self.lemma_pushed_ok(s0, h1, seq![buf], buf, x, Kind::Bytes);
+            }
+        }
+        Ok(x)
     }
 
     /// `Fs.close`。`file` の参照を手放す。最後の参照なので、破棄処理が File を閉じる。
@@ -537,6 +978,76 @@ impl<M: Mode> Ctx<M> {
         self.lemma_fresh_holds(s0, w);
     }
 
+    /// 行の読みの途中で、呼ぶ前の文脈 `s0` から `moved` で変えただけなら、`Ctx` の語は持たれている。
+    proof fn lemma_line_ok(&self, s0: Ctx<M>)
+        requires
+            s0.held_ok(),
+            self.heap.consistent(),
+            self.heap.settleable(),
+            moved(self.heap, s0.heap, |x: usize| 0int, Set::empty()),
+            self.evv == s0.evv,
+            self.yielding == s0.yielding,
+            self.max_evv == s0.max_evv,
+        ensures
+            self.held_ok(),
+            self.evolved_by(s0, |x: usize| 0int, Set::empty()),
+    {
+        let z = |x: usize| 0int;
+        let none = Set::<usize>::empty();
+        assert forall|x: usize| #[trigger] self.need(seq![], x) > 0 implies s0.need(seq![], x) + z(
+            x,
+        ) >= self.need(seq![], x) by {
+            lemma_points_in(seq![], x);
+        }
+        self.lemma_holds_moved(s0, seq![], seq![], z, none);
+        self.lemma_evv_kept(s0, z, none);
+    }
+
+    /// 読み終えた行 `w` を返す道。呼ぶ側は `w` の参照を `Ctx` と別に1つ持つ。
+    proof fn lemma_line_done(&self, s0: Ctx<M>, w: Word)
+        requires
+            s0.held_ok(),
+            line_held(self.heap, s0.heap, w),
+            self.evv == s0.evv,
+            self.yielding == s0.yielding,
+            self.max_evv == s0.max_evv,
+        ensures
+            self.held_ok(),
+            self.holds(w),
+            self.evolved_by(s0, |x: usize| 0int, Set::empty()),
+    {
+        self.lemma_line_ok(s0);
+        lemma_view_live(self.heap, w.bits_spec());
+        self.lemma_fresh_holds(s0, w);
+    }
+
+    /// 読みの誤りで、途中まで読んだ行 `w` を手放した道。`h1` は手放す前のヒープである。
+    proof fn lemma_line_dropped(&self, s0: Ctx<M>, h1: Heap<M>, w: Word)
+        requires
+            s0.held_ok(),
+            line_held(h1, s0.heap, w),
+            self.heap.consistent(),
+            self.heap.settled(),
+            self.heap.evolved(h1, w, -1),
+            self.heap.kept_live(h1),
+            self.evv == s0.evv,
+            self.yielding == s0.yielding,
+            self.max_evv == s0.max_evv,
+        ensures
+            self.held_ok(),
+            self.evolved_by(s0, |x: usize| 0int, Set::empty()),
+    {
+        let z = |x: usize| 0int;
+        let dw = |x: usize| -points(w, x);
+        let none = Set::<usize>::empty();
+        lemma_decref_moved(self.heap, h1, w);
+        assert forall|b: usize| live(s0.heap, b) implies #[trigger] z(b) == z(b) + dw(b) by {
+            assert(b != w.bits_spec());
+        }
+        lemma_moved_chain(self.heap, h1, s0.heap, z, dw, z, none, none, none);
+        self.lemma_line_ok(s0);
+    }
+
     /// `handle_read` の、読めた道でモデルが合っている道。読んだ結果 `s` を作っただけで、借りたハンドルを含め、呼ぶ前から
     /// 生きている物体の参照の数は変わらない。
     proof fn lemma_read_lent(&self, s0: Ctx<M>, s: Word)
@@ -566,11 +1077,10 @@ impl<M: Mode> Ctx<M> {
         self.lemma_fresh_holds(s0, s);
     }
 
-    /// `println` の、モデルが合っている道。`settle` の後の `h1` から `s` を手放した。
+    /// `println` と、読みが失敗した塊の読みの、モデルが合っている道。`settle` の後の `h1` から `s` を手放した。
     pub(super) proof fn lemma_printed(&self, s0: Ctx<M>, h1: Heap<M>, s: Word)
         requires
             s0.held_ok(),
-            s0.is_string(s),
             s0.holds(s),
             h1 == s0.heap.settled_heap(),
             h1.consistent(),

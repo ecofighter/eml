@@ -6,6 +6,7 @@ use std::fmt;
 
 use crate::control::Stop;
 use crate::error::HeapError;
+use crate::word::Word;
 #[cfg(verus_only)]
 use vstd::arithmetic::div_mod::{rust_div, rust_rem};
 use vstd::prelude::*;
@@ -88,6 +89,9 @@ pub enum ReadAmount {
     All,
     /// 次の `\n` まで (それを含めて)。終わりなら空である。
     Line,
+    /// 読み手の buffer に残ったバイトか、空なら1回の補充で読めたバイトを、受け取ったバイト列 `buf` の後ろに足す。
+    /// 終わりなら何も足さない。結果はいつもバイト列で、`Form` は見ない。
+    Chunk(Word),
 }
 
 /// `Ctx::handle_read` が読んだバイト列を返す形。
@@ -95,6 +99,8 @@ pub enum ReadAmount {
 pub enum Form {
     /// UTF-8 を確かめた文字列。
     Text,
+    /// 確かめないバイト列。
+    Bytes,
 }
 
 /// UTF-8 でなかった入力。
