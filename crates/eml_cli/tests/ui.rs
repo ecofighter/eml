@@ -14,7 +14,7 @@ use eml_cli::{
 use eml_diagnostics::{has_errors, render};
 use eml_rt::Fault;
 
-use crate::common::glob_lock;
+use crate::common::{assert_filter_matches, for_each_file, run_all, temp_project};
 
 fn ui_root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -56,7 +56,7 @@ fn assert_single_file(session: &Session, suffix: &str) {
     );
 }
 
-/// glob に当たった `.em` の役割。
+/// 集めた `.em` の役割。
 #[derive(Debug, PartialEq)]
 enum Entry {
     /// テストの入口。スナップショットの名前の接尾辞を持つ。
@@ -67,8 +67,7 @@ enum Entry {
 
 /// 置き場所の規則を確かめて、`.em` の役割を決める。成功や失敗の確かめより先に呼び、置き場所の誤りを先に伝える。
 /// 接尾辞は最上位のディレクトリからの相対パス (`basics/hello.em`。ディレクトリのテストは `names/import_cycle`) にする。
-/// insta の既定はすべての一致に共通の接頭辞を除くので、分類が1つしかないディレクトリでは名前に分類が入らず、分類が
-/// 増えたときに名前が変わるため。
+/// 名前がテストの置き場所だけで決まり、ほかのテストを足しても変わらないため。
 fn classify(path: &Path, top: &str) -> Entry {
     let top_dir = ui_root().join(top);
     let relative = path.strip_prefix(&top_dir).unwrap();
@@ -102,8 +101,9 @@ fn classify(path: &Path, top: &str) -> Entry {
     }
 }
 
-fn snapshot_settings(suffix: &str) -> insta::Settings {
+fn snapshot_settings(path: &Path, suffix: &str) -> insta::Settings {
     let mut settings = insta::Settings::clone_current();
+    settings.set_input_file(path);
     settings.set_snapshot_suffix(suffix);
     settings
 }
@@ -188,9 +188,9 @@ fn execute_in(program: &eml_lir::Program, path: &Path, root: &Path, debug_heap: 
 }
 
 /// 検査モードの結果をスナップショットと比べた後で、速いモードでも流し、同じ出力と同じ結果になることを確かめる。
-/// 速いモードは前提を確かめないので、VM の誤りが未定義の動作になって glob のテスト全体を壊しうる。そのため検査モードの
-/// 後に流し、検査モードが VM の誤りを見つけたときは流さない (`fast_mode_reports`。docs/implementation/testing.md の
-/// 「2つのモードで流す」)。
+/// 速いモードは前提を確かめないので、VM の誤りが未定義の動作になって同じプロセスのほかのファイルのテストを
+/// 壊しうる。そのため検査モードの後に流し、検査モードが VM の誤りを見つけたときは流さない (`fast_mode_reports`。
+/// docs/implementation/testing.md の「2つのモードで流す」)。
 fn assert_fast_mode_agrees(
     suffix: &str,
     program: &eml_lir::Program,
@@ -237,8 +237,7 @@ fn fast_mode_reports(error: &RuntimeError) -> bool {
 
 #[test]
 fn run() {
-    let _glob = glob_lock();
-    insta::glob!("../../../tests/ui", "run/**/*.em", |path| {
+    for_each_file(&ui_root().join("run"), "em", |path| {
         let Entry::Test(suffix) = classify(path, "run") else {
             return;
         };
@@ -250,7 +249,7 @@ fn run() {
             Ok(Some(code)) => format!("--- exit: {code} ---\n"),
             _ => String::new(),
         };
-        snapshot_settings(&suffix).bind(|| {
+        snapshot_settings(path, &suffix).bind(|| {
             insta::assert_snapshot!(format!(
                 "--- stdout ---\n{stdout}--- stderr ---\n{diagnostics}{stderr}{written}{exit}"
             ));
@@ -261,8 +260,7 @@ fn run() {
 
 #[test]
 fn run_fail() {
-    let _glob = glob_lock();
-    insta::glob!("../../../tests/ui", "run-fail/**/*.em", |path| {
+    for_each_file(&ui_root().join("run-fail"), "em", |path| {
         let Entry::Test(suffix) = classify(path, "run-fail") else {
             return;
         };
@@ -272,7 +270,7 @@ fn run_fail() {
             panic!("expected a runtime error");
         };
         let (stdout, stderr, written) = (&ran.stdout, &ran.stderr, &ran.written);
-        snapshot_settings(&suffix).bind(|| {
+        snapshot_settings(path, &suffix).bind(|| {
             insta::assert_snapshot!(format!(
                 "--- stdout ---\n{stdout}--- stderr ---\n{diagnostics}{stderr}--- runtime error ---\n{error}\n{written}"
             ));
@@ -285,8 +283,7 @@ fn run_fail() {
 
 #[test]
 fn check_fail() {
-    let _glob = glob_lock();
-    insta::glob!("../../../tests/ui", "check-fail/**/*.em", |path| {
+    for_each_file(&ui_root().join("check-fail"), "em", |path| {
         let Entry::Test(suffix) = classify(path, "check-fail") else {
             return;
         };
@@ -297,7 +294,7 @@ fn check_fail() {
             has_errors(&diagnostics),
             "expected at least one error, got:\n{rendered}"
         );
-        snapshot_settings(&suffix).bind(|| {
+        snapshot_settings(path, &suffix).bind(|| {
             insta::assert_snapshot!(rendered);
         });
     });
@@ -355,4 +352,35 @@ fn a_single_file_test_that_imports_a_module_fails() {
     let source = eml_test_support::MemorySource(&[("Util.em", "")]);
     let session = Session::load("run/basics/imports.em", "import Util\n", &source);
     assert_single_file(&session, "basics/imports.em");
+}
+
+#[test]
+fn every_failing_file_is_reported() {
+    let dir = temp_project(
+        "for-each-file",
+        &[("pass.em", ""), ("fail_a.em", ""), ("fail_b.em", "")],
+    );
+    let files = [
+        dir.join("fail_a.em"),
+        dir.join("fail_b.em"),
+        dir.join("pass.em"),
+    ];
+    let result = std::panic::catch_unwind(|| {
+        run_all(&files, |path| {
+            assert!(!path.ends_with("fail_a.em") && !path.ends_with("fail_b.em"));
+        });
+    });
+    fs::remove_dir_all(&dir).unwrap();
+    let payload = result.expect_err("two files failed");
+    let message = payload.downcast_ref::<String>().unwrap();
+    assert!(message.contains("2 of 3 files failed"), "{message}");
+    assert!(message.contains("fail_a.em: "), "{message}");
+    assert!(message.contains("fail_b.em: "), "{message}");
+    assert!(!message.contains("pass.em"), "{message}");
+}
+
+#[test]
+#[should_panic(expected = "matches no UI test or transcript")]
+fn a_filter_that_matches_nothing_fails() {
+    assert_filter_matches("no-such-file");
 }

@@ -1,6 +1,6 @@
 //! REPL のトランスクリプトのテスト (docs/implementation/testing.md の「REPL のトランスクリプト」)。`tests/repl` の下の
-//! トランスクリプトを1つずつ `Repl` に流し、入力ごとの表示、診断、実行時エラーと、`close` の結果をスナップショットに
-//! する。入力の終わりの規則は、端末と同じ形で行ごとに確かめる。
+//! トランスクリプトをそれぞれ別の `Repl` に流し、入力ごとの表示、診断、実行時エラーと、`close` の結果を
+//! スナップショットにする。入力の終わりの規則は、端末と同じ形で行ごとに確かめる。
 
 use std::fmt::Write as _;
 use std::fs;
@@ -13,7 +13,7 @@ use eml_cli::{
     RuntimeError, default_limits, input_status,
 };
 
-use crate::common::glob_lock;
+use crate::common::for_each_file;
 
 fn repl_root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -344,8 +344,7 @@ fn run(inputs: &[Input], root: &Path, directory: bool, debug_heap: bool) -> Tran
 /// 流す」)。
 #[test]
 fn transcripts() {
-    let _glob = glob_lock();
-    insta::glob!("repl", "**/*.repl", |path| {
+    for_each_file(&repl_root(), "repl", |path| {
         let suffix = classify(path);
         let inputs = parse_transcript(&fs::read_to_string(path).unwrap());
         // コマンドの行は `input_status` でなく `eml_cli::lines` が読むので、入力の終わりの規則を当てない
@@ -356,6 +355,7 @@ fn transcripts() {
         let directory = path.file_name().is_some_and(|name| name == "main.repl");
         let checked = run(&inputs, root, directory, true);
         let mut settings = insta::Settings::clone_current();
+        settings.set_input_file(path);
         settings.set_snapshot_suffix(&suffix);
         settings.bind(|| insta::assert_snapshot!(checked.render()));
         if !checked.broken {

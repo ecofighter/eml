@@ -383,7 +383,7 @@ HIR への変換では、名前解決に加えて、名前の重複と未定義�
 | `text-size` | 1.1 | `TextRange` |
 | `ariadne` | 0.6 | 診断の表示 |
 | `clap` | 4.6 (`derive`) | CLI の引数 |
-| `insta` | 1.49 (`glob`) | スナップショットテスト |
+| `insta` | 1.49 | スナップショットテスト |
 | `la-arena` | 0.3 | HIR の ID とアリーナ、型検査の別テーブル (`ArenaMap`) |
 | `libc` | 0.2 | SIGINT のハンドラ (`sigaction`)、物理メモリの大きさ (`default_limits`) |
 | `rustyline` | 18.0 | `eml repl` の行の編集。既定の feature は使わず、先に打った入力を次の読みに渡す `buffer-redux` だけを入れる |

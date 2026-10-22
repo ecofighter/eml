@@ -21,7 +21,7 @@ eml_cli = { path = "crates/eml_cli", default-features = false }
 eml_test_support = { path = "crates/eml_test_support", default-features = false }
 ariadne = "0.6"
 clap = { version = "4.6", features = ["derive"] }
-insta = { version = "1.49", features = ["glob"] }
+insta = "1.49"
 la-arena = "0.3"
 libc = "0.2"
 logos = "0.16"
