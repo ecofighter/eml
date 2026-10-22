@@ -262,8 +262,8 @@ fn blank_comments_and_strings(text: &str) -> Vec<char> {
 }
 
 fn starts_with_at(s: &[char], at: usize, word: &str) -> bool {
-    let w: Vec<char> = word.chars().collect();
-    s.len() >= at + w.len() && s[at..at + w.len()] == w[..]
+    let mut rest = s.get(at..).unwrap_or_default().iter();
+    word.chars().all(|c| rest.next() == Some(&c))
 }
 
 /// `word` の語が `at` から始まり、前が識別子の続きでないか。
@@ -365,6 +365,9 @@ fn trusted_items(file: &str, text: &str) -> Vec<String> {
     let mut found = Vec::new();
     for i in 0..s.len() {
         for pattern in PATTERNS {
+            if !pattern.starts_with(s[i]) {
+                continue;
+            }
             let ident_start = pattern.chars().next().is_some_and(is_ident);
             if !starts_with_at(&s, i, pattern) || (ident_start && i > 0 && is_ident(s[i - 1])) {
                 continue;
