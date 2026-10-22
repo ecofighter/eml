@@ -1,11 +1,16 @@
 //! バイトの位置で読む文字列の核の extern (docs/spec/object-model.md の「extern」)。`String` の `byte_length`、
-//! `byte_at`、`slice`、`find_from` の結果を、文字列のバイト列に対して証明する。分割や検索などの便利な関数は、これらの上に
+//! `byte_at`、`char_at`、`slice`、`find_from` の結果を、文字列のバイト列に対して証明する。分割や検索などの便利な関数は、これらの上に
 //! 標準ライブラリが eml で書く (docs/spec/stdlib.md)。
 
 #[cfg(verus_only)]
 use vstd::string::StringSliceAdditionalSpecFns;
 #[cfg(verus_only)]
-use vstd::utf8::{is_char_boundary, valid_utf8};
+use vstd::utf8::{
+    decode_first_scalar, encode_utf8_valid_utf8, is_char_boundary,
+    is_char_boundary_iff_not_is_continuation_byte, is_continuation_byte, is_leading_byte_width_1,
+    is_leading_byte_width_2, is_leading_byte_width_3, valid_first_scalar, valid_utf8,
+    valid_utf8_split,
+};
 
 #[cfg(verus_only)]
 use super::proof::*;
@@ -172,6 +177,73 @@ pub(crate) fn find_bytes(text: &[u8], needle: &[u8], from: usize) -> (r: i64)
     -1
 }
 
+/// 正しい UTF-8 の先頭の1文字の値は、Unicode のスカラー値である。幅ごとの値の上限と、長すぎる符号化とサロゲートを
+/// 除く `valid_first_scalar` の条件から出る。
+proof fn lemma_first_scalar(t: Seq<u8>)
+    requires
+        valid_first_scalar(t),
+    ensures
+        crate::externs::is_scalar(decode_first_scalar(t) as int),
+{
+    let b0 = t[0];
+    if is_leading_byte_width_1(b0) {
+        assert((b0 & 0x7F) as u32 <= 0x7F) by (bit_vector);
+    } else if is_leading_byte_width_2(b0) {
+        let b1 = t[1];
+        assert(((b0 & 0x1F) as u32) << 6 | (b1 & 0x3F) as u32 <= 0x7FF) by (bit_vector);
+    } else if is_leading_byte_width_3(b0) {
+        let (b1, b2) = (t[1], t[2]);
+        assert(((b0 & 0x0F) as u32) << 12 | ((b1 & 0x3F) as u32) << 6 | (b2 & 0x3F) as u32
+            <= 0xFFFF) by (bit_vector);
+    }
+}
+
+/// 正しい UTF-8 の `b` の位置 `k` から1文字を読む。`k` のバイトは続きのバイトでないので、`k` は文字の境界である。
+/// 幅の分岐は `decode_first_codepoint` の `codepoint_width_1` から `codepoint_width_4` と同じ式で組む。
+#[inline]
+fn decode_at(b: &[u8], k: usize) -> (c: u32)
+    requires
+        valid_utf8(b@),
+        k < b@.len(),
+        !is_continuation_byte(b@[k as int]),
+    ensures
+        is_char_boundary(b@, k as int),
+        c == decode_first_scalar(b@.subrange(k as int, b@.len() as int)),
+        crate::externs::is_scalar(c as int),
+{
+    let ghost t = b@.subrange(k as int, b@.len() as int);
+    proof {
+        is_char_boundary_iff_not_is_continuation_byte(b@, k as int);
+        valid_utf8_split(b@, k as int);
+        assert(valid_first_scalar(t));
+        assert(t[0] == b@[k as int]);
+        lemma_first_scalar(t);
+    }
+    let b0 = b[k];
+    if b0 < 0x80 {
+        (b0 & 0x7F) as u32
+    } else if b0 < 0xE0 {
+        proof {
+            assert(t[1] == b@[k + 1]);
+        }
+        ((b0 & 0x1F) as u32) << 6 | (b[k + 1] & 0x3F) as u32
+    } else if b0 < 0xF0 {
+        proof {
+            assert(t[1] == b@[k + 1]);
+            assert(t[2] == b@[k + 2]);
+        }
+        ((b0 & 0x0F) as u32) << 12 | ((b[k + 1] & 0x3F) as u32) << 6 | (b[k + 2] & 0x3F) as u32
+    } else {
+        proof {
+            assert(t[1] == b@[k + 1]);
+            assert(t[2] == b@[k + 2]);
+            assert(t[3] == b@[k + 3]);
+        }
+        ((b0 & 0x07) as u32) << 18 | ((b[k + 1] & 0x3F) as u32) << 12 | ((b[k + 2] & 0x3F) as u32)
+            << 6 | (b[k + 3] & 0x3F) as u32
+    }
+}
+
 impl<M: Mode> Ctx<M> {
     /// `String.byte_length`。`s` を借りて、バイトの数を返す。呼ぶ側の参照の数は変わらない。
     ///
@@ -299,6 +371,101 @@ impl<M: Mode> Ctx<M> {
                 Ok(bytes[i as usize] as i64)
             } else {
                 Err(Fault::Index(Box::new(IndexFault::String { index: i, len: len as i64 })))
+            }
+        };
+        proof {
+            if M::CHECKED {
+                lemma_words_trans(self.heap, h1, s0.heap);
+                self.lemma_words_kept(s0);
+            }
+            if c {
+                self.lemma_lent(s0, h1);
+            }
+        }
+        r
+    }
+
+    /// `String.char_at`。`s` を借りて、バイトの位置 `i` から始まる1文字を返す。範囲の外なら `byte_at` と同じ
+    /// `Fault::Index` を、位置が文字の境界になければ `IndexFault::NotBoundary` を返す。呼ぶ側の参照の数は変わらない。
+    ///
+    /// # Safety
+    /// `copy_string` と同じ。
+    pub unsafe fn string_char_at(&mut self, i: i64, s: Word) -> (r: Result<i64, Fault>)
+        requires
+            old(self).wf(),
+            old(self).heap_spec().word_in(s),
+            !M::CHECKED ==> old(self).is_string(s) && old(self).holds(s),
+        ensures
+            final(self).wf(),
+            final(self).evv_spec() == old(self).evv_spec(),
+            final(self).yield_spec() == old(self).yield_spec(),
+            r is Ok || (r matches Err(Fault::Index(_))) || (r matches Err(Fault::Heap(_))),
+            (r matches Err(Fault::Heap(_))) ==> final(self).heap_spec().settled_heap() == old(
+                self,
+            ).heap_spec().settled_heap(),
+            !M::CHECKED ==> !(r matches Err(Fault::Heap(_))),
+            old(self).held_ok() && old(self).is_string(s) && old(self).holds(s) ==> !(r matches Err(
+                Fault::Heap(_),
+            )) || (r matches Err(Fault::Heap(e)) && chain_err(Err::<(), HeapError>(e))),
+            r matches Ok(c) ==> {
+                let text = old(self).text_of(s);
+                &&& 0 <= i < text.len()
+                &&& is_char_boundary(text, i as int)
+                &&& c == decode_first_scalar(text.subrange(i as int, text.len() as int)) as i64
+                &&& crate::externs::is_scalar(c as int)
+            },
+            old(self).held_ok() && old(self).is_string(s) && old(self).holds(s) && !(r matches Err(
+                Fault::Heap(_),
+            )) ==> {
+                let text = old(self).text_of(s);
+                &&& (0 <= i < text.len() && is_char_boundary(text, i as int)) ==> r is Ok
+                &&& !(0 <= i < text.len() && is_char_boundary(text, i as int)) ==> (r matches Err(
+                    Fault::Index(_),
+                ))
+                &&& final(self).held_ok()
+                &&& final(self).evolved_by(*old(self), |x: usize| 0int, Set::empty())
+            },
+    {
+        let ghost s0 = *self;
+        let ghost c = s0.held_ok() && s0.is_string(s) && s0.holds(s);
+        if M::CHECKED && !s.is_ptr() {
+            return Err(Fault::Heap(HeapError::WrongKind));
+        }
+        self.heap.settle();
+        let ghost h1 = self.heap;
+        let hs = self.heap.header_of(s);
+        proof {
+            lemma_settled_twice(s0.heap);
+            assert(h1.words_kept(s0.heap));
+            h1.lemma_text_spec(s);
+            s0.heap.lemma_text_spec(s);
+            if c {
+                s0.lemma_settled_body(h1, s, Kind::String);
+            }
+        }
+        if let Err(e) = self.heap.checked_body(hs, Kind::String) {
+            proof {
+                self.lemma_words_kept(s0);
+            }
+            return Err(Fault::Heap(e));
+        }
+        let r = {
+            let t = self.heap.string_text(s);
+            let bytes = t.as_bytes();
+            let len = bytes.len();
+            proof {
+                encode_utf8_valid_utf8(t@);
+            }
+            if !(0 <= i && (i as u64) < (len as u64)) {
+                Err(Fault::Index(Box::new(IndexFault::String { index: i, len: len as i64 })))
+            } else if bytes[i as usize] < 0x80 || bytes[i as usize] >= 0xC0 {
+                // ASCII の比較を先に置き、ネイティブの展開で続きのバイトの判定を冷たい側に回せるようにする
+                Ok(decode_at(bytes, i as usize) as i64)
+            } else {
+                proof {
+                    is_char_boundary_iff_not_is_continuation_byte(bytes@, i as int);
+                }
+                Err(Fault::Index(Box::new(IndexFault::NotBoundary { index: i })))
             }
         };
         proof {

@@ -139,12 +139,14 @@ pub enum Utf8Source {
 /// 範囲の外の位置。
 #[derive(Debug, PartialEq, Eq)]
 pub enum IndexFault {
-    /// 文字列のバイトの位置 (`byte_at`、`find_from`)。
+    /// 文字列のバイトの位置 (`byte_at`、`char_at`、`find_from`)。
     String { index: i64, len: i64 },
     /// `slice` の範囲が文字列の外にある。
     Slice { start: i64, end: i64, len: i64 },
     /// `slice` の範囲の端が文字の境界にない。
     Boundary { start: i64, end: i64 },
+    /// `char_at` の位置が文字の境界にない。
+    NotBoundary { index: i64 },
     /// `Env.arg` の位置。
     Arg { index: i64, count: i64 },
     /// 配列の添字 (`Array.get`、`Array.set`、`MutArray.read`、`MutArray.write`)。
@@ -1264,6 +1266,9 @@ impl fmt::Display for Fault {
                         f,
                         "string slice {start}..{end} is not on a character boundary"
                     )
+                }
+                IndexFault::NotBoundary { index } => {
+                    write!(f, "string index {index} is not on a character boundary")
                 }
                 IndexFault::Arg { index, count } => {
                     write!(

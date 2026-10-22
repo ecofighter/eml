@@ -905,6 +905,109 @@ fn a_slice_counts_the_bytes_it_copies<M: Mode>() {
     assert_eq!(mortal(ctx.heap()), 0);
 }
 
+/// `char_at` は1から4バイトの文字を読む。文字の途中の位置と範囲の外を断り、どちらでも引数は借りたままである。
+fn char_at_reads_a_char_at_a_byte_position<M: Mode>() {
+    let mut ctx = ctx::<M>();
+    unsafe {
+        let a = s(&mut ctx, "aé日😀");
+        for (i, c) in [(0, 'a'), (1, 'é'), (3, '日'), (6, '😀')] {
+            assert_eq!(ctx.string_char_at(i, a), Ok(c as i64), "{i}");
+        }
+        for i in [2, 4, 5, 7, 9] {
+            let fault = ctx.string_char_at(i, a).unwrap_err();
+            assert_eq!(
+                fault,
+                Fault::Index(Box::new(IndexFault::NotBoundary { index: i }))
+            );
+            assert!(fault.panics());
+        }
+        assert_eq!(
+            ctx.string_char_at(2, a).unwrap_err().to_string(),
+            "string index 2 is not on a character boundary"
+        );
+        for i in [10, -1, i64::MIN, i64::MAX] {
+            assert_eq!(
+                ctx.string_char_at(i, a),
+                Err(Fault::Index(Box::new(IndexFault::String {
+                    index: i,
+                    len: 10
+                }))),
+                "{i}"
+            );
+        }
+        assert_eq!(
+            ctx.string_char_at(10, a).unwrap_err().to_string(),
+            "string index 10 is out of range for length 10"
+        );
+        assert!(ctx.heap().is_unique(a).unwrap());
+        ctx.heap_mut().decref(a).unwrap();
+        let e = s(&mut ctx, "");
+        assert_eq!(
+            ctx.string_char_at(0, e),
+            Err(Fault::Index(Box::new(IndexFault::String {
+                index: 0,
+                len: 0
+            })))
+        );
+        ctx.heap_mut().decref(e).unwrap();
+    }
+    assert_eq!(mortal(ctx.heap()), 0);
+}
+
+/// `push` は一意な文字列をその場で伸ばし、共有の文字列は写してから足して元の中身を変えない。検査モードは、一意なら
+/// 足したバイトだけを、共有なら両方を写したバイトに数える。
+fn push_appends_the_utf8_of_a_char<M: Mode>() {
+    let mut ctx = ctx::<M>();
+    let mut last = 0;
+    let mut copied = |ctx: &crate::Ctx<M>| {
+        let now = ctx.stats().string_bytes_copied;
+        let d = now - last;
+        last = now;
+        d
+    };
+    unsafe {
+        let w = ctx.heap_mut().alloc_string_room(16);
+        let mut x = w;
+        for (c, k) in [('a', 1), ('é', 2), ('日', 3), ('😀', 4)] {
+            x = ctx.string_push_char(c as i64, x).unwrap();
+            assert_eq!(x, w);
+            assert_eq!(copied(&ctx), if M::CHECKED { k } else { 0 });
+        }
+        assert_eq!(text(ctx.heap(), x), "aé日😀");
+        ctx.heap_mut().decref(x).unwrap();
+        let a = s(&mut ctx, "ab");
+        ctx.heap_mut().dup(a).unwrap();
+        let b = ctx.string_push_char('日' as i64, a).unwrap();
+        assert_ne!(b, a);
+        assert_eq!(copied(&ctx), if M::CHECKED { 2 + 3 } else { 0 });
+        assert_eq!(text(ctx.heap(), b), "ab日");
+        assert_eq!(text(ctx.heap(), a), "ab");
+        assert!(ctx.heap().is_unique(a).unwrap());
+        ctx.heap_mut().decref(a).unwrap();
+        ctx.heap_mut().decref(b).unwrap();
+    }
+    assert_eq!(mortal(ctx.heap()), 0);
+}
+
+/// `char_at` と `push` も、文字列でない引数を検査モードで断り、ヒープを変えない。
+fn char_at_and_push_refuse_a_non_string<M: Mode>() {
+    if !M::CHECKED {
+        return;
+    }
+    let mut ctx = ctx::<M>();
+    unsafe {
+        let d = ctx.heap_mut().alloc_data(0, 0, 1, false);
+        let live = mortal(ctx.heap());
+        let wrong = Fault::Heap(HeapError::WrongKind);
+        assert_eq!(ctx.string_char_at(0, d).unwrap_err(), wrong);
+        assert_eq!(ctx.string_push_char('a' as i64, d).unwrap_err(), wrong);
+        assert_eq!(ctx.string_char_at(0, Word::imm(1)).unwrap_err(), wrong);
+        assert_eq!(mortal(ctx.heap()), live);
+        ctx.heap_mut().decref(d).unwrap();
+    }
+    assert_eq!(mortal(ctx.heap()), 0);
+}
+
 /// 文字列の核も、文字列でない引数を検査モードで断り、ヒープを変えない。
 fn the_string_core_refuses_a_non_string<M: Mode>() {
     if !M::CHECKED {
@@ -2313,6 +2416,9 @@ both_modes!(
     the_string_core_reads_by_byte_positions,
     a_slice_counts_the_bytes_it_copies,
     the_string_core_refuses_a_non_string,
+    char_at_reads_a_char_at_a_byte_position,
+    push_appends_the_utf8_of_a_char,
+    char_at_and_push_refuse_a_non_string,
     println_writes_a_line_and_releases_its_text,
     a_failed_write_still_releases_the_text,
     println_refuses_a_non_string,

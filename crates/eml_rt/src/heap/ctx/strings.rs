@@ -1415,6 +1415,109 @@ impl<M: Mode> Ctx<M> {
         w
     }
 
+    /// `String.push`。`s` の参照を受け取り、後ろに `c` の UTF-8 を足した文字列の参照を返す。`s` が一意で容量が
+    /// 足りれば、その場で足す (`Heap::string_push`)。
+    ///
+    /// # Safety
+    /// `copy_string` と同じ (`s` の参照は受け取る)。`c` は Unicode のスカラー値である (docs/spec/lir.md の「値の表現」)。
+    pub unsafe fn string_push_char(&mut self, c: i64, s: Word) -> (r: Result<Word, Fault>)
+        requires
+            old(self).wf(),
+            old(self).heap_spec().word_in(s),
+            crate::externs::is_scalar(c as int),
+            !M::CHECKED ==> old(self).is_string(s) && old(self).holds(s),
+        ensures
+            final(self).wf(),
+            final(self).evv_spec() == old(self).evv_spec(),
+            final(self).yield_spec() == old(self).yield_spec(),
+            r is Err ==> (r matches Err(Fault::Heap(_)) && final(self).heap_spec().settled_heap()
+                == old(self).heap_spec().settled_heap()),
+            !M::CHECKED ==> r is Ok,
+            old(self).held_ok() && old(self).is_string(s) && old(self).holds(s) ==> r is Ok || (
+            r matches Err(Fault::Heap(e)) && chain_err(Err::<(), HeapError>(e))),
+            r matches Ok(x) ==> final(self).is_string(x) && final(self).text_of(x) == old(
+                self,
+            ).text_of(s) + encode_scalar(c as u32),
+            r matches Ok(x) ==> (old(self).held_ok() && old(self).is_string(s) && old(self).holds(s)
+                ==> {
+                &&& final(self).held_ok()
+                &&& final(self).holds(x)
+                &&& final(self).evolved_by(
+                    *old(self),
+                    |y: usize| points(x, y) - points(s, y),
+                    Set::empty().insert(s.bits_spec()),
+                )
+            }),
+    {
+        let ghost s0 = *self;
+        let ghost ok = s0.held_ok() && s0.is_string(s) && s0.holds(s);
+        if M::CHECKED && !s.is_ptr() {
+            return Err(Fault::Heap(HeapError::WrongKind));
+        }
+        let u = c as u32;
+        let mut buf = [0u8;4];
+        let k = encode_char(u, &mut buf);
+        proof {
+            lemma_scalar_utf8(u);
+        }
+        let bytes = vstd::slice::slice_subrange(buf.as_slice(), 0, k);
+        let text = unsafe { str::from_utf8_unchecked(bytes) };
+        self.heap.settle();
+        let ghost h1 = self.heap;
+        proof {
+            lemma_settled_twice(s0.heap);
+            assert(h1.words_kept(s0.heap));
+            h1.lemma_text_spec(s);
+            s0.heap.lemma_text_spec(s);
+            if ok {
+                s0.lemma_settled_body(h1, s, Kind::String);
+                s0.lemma_settled_push_ok(h1, s, Kind::String);
+            }
+        }
+        let copied = if M::CHECKED {
+            // 写すバイトを数えるために、一意かと長さを先に読む。読む前に検査モードの検査を済ませる
+            // (docs/spec/object-model.md の「仕事の回数」)
+            let hs = self.heap.header_of(s);
+            if let Err(e) = self.heap.checked_body(hs, Kind::String) {
+                proof {
+                    self.lemma_words_kept(s0);
+                }
+                return Err(Fault::Heap(e));
+            }
+            if self.heap.core.rc_get(hs) == 1 {
+                k as u64
+            } else {
+                (self.heap.body_of(s).len() as u64).wrapping_add(k as u64)
+            }
+        } else {
+            0
+        };
+        let x = match unsafe { self.heap.string_push(s, text) } {
+            Ok(x) => x,
+            Err(e) => {
+                proof {
+                    self.lemma_words_kept(s0);
+                }
+                return Err(Fault::Heap(e));
+            },
+        };
+        if M::CHECKED {
+            self.stats.string_bytes_copied = self.stats.string_bytes_copied.wrapping_add(copied);
+        }
+        proof {
+            assert(text.spec_bytes() == encode_scalar(u));
+            self.heap.lemma_text_spec(x);
+            if M::CHECKED {
+                lemma_words_trans(self.heap, h1, s0.heap);
+                self.lemma_words_kept(s0);
+            }
+            if ok {
+                self.lemma_pushed_ok(s0, h1, seq![s], s, x, Kind::String);
+            }
+        }
+        Ok(x)
+    }
+
     /// `Show Float` の `show`。Python の `repr` と同じ形の文字列を作り、呼ぶ側がその参照を持つ。書式は T12 の
     /// `float_repr` が作る (docs/spec/object-model.md の「`unsafe` の核」)。
     pub fn float_show(&mut self, x: f64) -> (w: Word)

@@ -402,6 +402,8 @@ left が一意 (is_unique)
 - 検査モードの誤りは、語を受ける操作の共通の誤り (`UseAfterFree`、`WrongOwner`)、種類が `String` でないときの `WrongKind`、数が 0 の不死の物体の手放し (`ImmortalOverRelease`) である。どの誤りも最初の確保より前に返すので、`Err` のときヒープは変わらない。文字列は子を持たないので、left と right の `decref` の誤りをすべて先に確かめられる。left と right が同じ物体で rc が 1 のとき (参照を2つ持つという前提を破った呼び出し) も、2回の `decref` を続けて確かめるので、ここで断る。後の手放しは、先に確かめたので誤りにならない
 - モデルが合っていて前提がすべて成り立つときの結果は、`decref` と同じく、`Ok` か、モデルが照らさない誤り (下の「検査モードの約束」) である。モデルは不死の物体の外の参照の数を持たないので、不死の left の `ImmortalOverRelease` はモデルの前提の下でも返りうる
 - extern の比較、`++`、`println` は、文字列を借りて読むか、`string_concat` を使う。足した核の操作は、`String.show` が結果を1回で確保するための `alloc_string_room` だけである。`String.show` の区間の写しは、写す元の文字列を借りた `&str` を vstd の `str::split_at` で切って渡すので、T10 に関数を足さない (下の「extern」)
+- `String.push` (`Ctx::string_push_char`) は、`Char` の UTF-8 を4バイトの作業領域に書き、その `&str` を `string_push` に渡す。そのため、一意な文字列は容量が足りればその場で伸び、足りなければ上の動作のとおり作り直す。作業領域は left の中身を指さないので、`string_push` の前提を満たす。検査モードの写したバイトの数え方は `Bytes.push` と同じで、一意なら足したバイトだけ、共有なら left の長さも数える
+- `String.char_at` (`Ctx::string_char_at`) は、文字列を借りて位置の1文字を読むだけで、物体を書き換えない (下の「extern」)
 
 ### バイト列の操作
 
@@ -880,7 +882,7 @@ token の表の項目は、`into_token` と `release_reuse` が添字を使い�
 | `Stdin(IoReason)` | 標準入力の読みの誤り | ``cannot read the standard input: {reason}`` |
 | `NotUtf8(Box<Utf8Source>)` | 読んだ中身が UTF-8 でない。`Utf8Source` はファイル (パス)、標準入力、引数 (`Env.args ()` の位置)、環境変数 (名前) | ``` `{path}` is not valid UTF-8 ```、`the standard input is not valid UTF-8`、`argument {index} is not valid UTF-8`、``environment variable `{name}` is not valid UTF-8`` |
 | `Utf8 { at: i64 }` | `String.decode` に渡したバイト列が妥当な UTF-8 でない。`at` は最初の妥当でないバイトの位置で、T5 の `utf8_valid` が返す | ``invalid UTF-8 at byte {at}`` |
-| `Index(Box<IndexFault>)` | 範囲の外の位置。`IndexFault` は、文字列の位置 (`byte_at`、`find_from`)、`slice` の範囲、`slice` の境界、`Env.arg` の位置、配列の添字 (`get`、`set`、`read`、`write`)、`make` の負の長さ、バイト列の位置 (`Bytes.get`、`set`、`find_from` と `find_byte_from` の開始位置)、バイト列の範囲 (`Bytes.slice`、`append_slice`、`truncate`。`truncate n` の範囲は `0..n`)、`Bytes.make` の負の長さ | ``string index {index} is out of range for length {len}``、``string slice {start}..{end} is out of range for length {len}``、``string slice {start}..{end} is not on a character boundary``、``argument index {index} is out of range for {count} arguments``、``array index {index} is out of range for length {len}``、``array length {len} is negative``、``bytes index {index} is out of range for length {len}``、``bytes slice {start}..{end} is out of range for length {len}``、``bytes length {len} is negative`` |
+| `Index(Box<IndexFault>)` | 範囲の外の位置。`IndexFault` は、文字列の位置 (`byte_at`、`char_at`、`find_from`)、`slice` の範囲、`slice` の境界、`char_at` の境界、`Env.arg` の位置、配列の添字 (`get`、`set`、`read`、`write`)、`make` の負の長さ、バイト列の位置 (`Bytes.get`、`set`、`find_from` と `find_byte_from` の開始位置)、バイト列の範囲 (`Bytes.slice`、`append_slice`、`truncate`。`truncate n` の範囲は `0..n`)、`Bytes.make` の負の長さ | ``string index {index} is out of range for length {len}``、``string slice {start}..{end} is out of range for length {len}``、``string slice {start}..{end} is not on a character boundary``、``string index {index} is not on a character boundary``、``argument index {index} is out of range for {count} arguments``、``array index {index} is out of range for length {len}``、``array length {len} is negative``、``bytes index {index} is out of range for length {len}``、``bytes slice {start}..{end} is out of range for length {len}``、``bytes length {len} is negative`` |
 | `Stopped(Stop)` | `FileIn` の読みと標準入力の読みが読む途中で、`Proc.status` が子を起動する前か待つ間に、止める語か確保量の上限に当たった | `interrupted`、`the memory limit is exceeded`、`the call depth limit is exceeded` (`Stop` の表示) |
 | `InUse(StdStream)` | 標準のストリーム (`Stdin`、`Stdout`、`Stderr`) のハンドルが生きている間の、2つ目の `open` | `the standard input is already open`、`the standard output is already open`、`the standard error is already open` |
 
@@ -939,9 +941,14 @@ token の表の項目は、`into_token` と `release_reuse` が添字を使い�
   - 1回目の走査で結果の長さを数え (桁あふれは `checked_add` で確かめる)、`alloc_string_room` でその容量の空の文字列を1回だけ確保する。2回目の走査で、エスケープのない区間はまとめて写し、エスケープは短い ASCII の列を足す。どれも容量に収まるので、作り直しは起きない
   - 足すのは、`string_push` と同じ道の内部の関数 (`append_str` と `append_part`) である。公開の `string_push` は検査モードで確かめ直し、その場で足すことを約束しないので使わない
   - 区間を写すときは、写す元の文字列を `text` で借りた `&str` を、vstd の `str::split_at` で `[from, to)` に切って渡す。そのため T10 に関数を足さない。切る位置が文字の境目であることは、「正しい UTF-8 の列で、ASCII のバイトの直前と直後は文字の境目である」という補題で示す。結果が UTF-8 であることは `valid_utf8_concat` から出る
-- 文字列の核 (`String.byte_length`、`byte_at`、`slice`、`find_from`) は、位置を UTF-8 のバイトの位置で読む ([標準ライブラリ](stdlib.md) の「`String`」)
+- 文字列の核 (`String.byte_length`、`byte_at`、`char_at`、`slice`、`find_from`) は、位置を UTF-8 のバイトの位置で読む ([標準ライブラリ](stdlib.md) の「`String`」)
   - `byte_length` は ghost のバイト列の長さを、`byte_at` は範囲の中ならその位置のバイトを約束する
+  - `char_at` は、範囲の中で位置が vstd の `is_char_boundary` を満たすとき、結果が `decode_first_scalar(text[i..])` に等しいスカラー値であることを約束する。範囲の外は `byte_at` と同じ誤りを、境界でない位置は `IndexFault::NotBoundary` を返す
+    - 境界は、その位置のバイトが続きのバイト (0x80〜0xBF) でないことで確かめる。vstd の `is_char_boundary_iff_not_is_continuation_byte` が、これを `is_char_boundary` に結ぶ
+    - `text[i..]` が UTF-8 であることは `valid_utf8_split` から出す。そこから、先頭の1文字の幅だけバイトがあること、長すぎる符号化でないこと、サロゲートでないことが出る。スカラー値であることは、この3つと幅ごとの値の上限から示す
+    - 値は、幅ごとの分岐を vstd の `codepoint_width_1` から `codepoint_width_4` と同じ式で組む。ASCII の分岐を先に置く
   - `slice` は、範囲の中で両端が vstd の `is_char_boundary` を満たすとき、結果の ghost のバイト列が部分の列に等しいことを約束する。結果は `String.show` と同じ道 (`alloc_string_room` と `append_part`) で作る。部分が UTF-8 であることは、ASCII の補題と同じく `valid_utf8_split` から出す (`lemma_boundary_in_prefix`)。範囲と境界は確保の前に確かめる
+- `String.push` は、結果の ghost のバイト列が `text + encode_scalar(c)` に等しいことを約束する。`requires` はスカラー値であること。符号化は `Char.display` と同じ `encode_char` で、足すのは `string_push` である (上の「文字列の操作」)
   - `find_from` は、開始位置以降で探す文字列と一致する最小の位置か、なければ -1 であることを約束する (spec `found_from`)。照合は、探す文字列の先頭のバイトを T13 の `find_byte` (下の「`unsafe` の核」) で探し、見つけた位置ごとに残りのバイトを比べる。先頭のバイトがない位置では一致しないことを、`find_byte` の約束から証明する
 - 検査モードでは、引数が `String` の物体でなければ `Heap(WrongKind)` を返す。速いモードは、読めることと所有を前提にする
 
@@ -1077,6 +1084,7 @@ pub struct Opened {
 - `Bytes.make`、`Bytes.slice`: 結果の長さ
 - `Bytes.of_string`、`String.decode`: 一意な引数は種類だけを書き換えるので数えない。共有か不死の引数は、写したバイトの数を数える。`decode` が `Utf8` を返すときは数えない
 - `Bytes.append`、`Bytes.push`、`Bytes.append_slice`: `++` と同じく、一意な左には足した長さだけを数え、共有か不死の左には左の長さも足して数える。`push` の足す長さは 1 で、`append_slice` は範囲の長さである
+- `String.push`: `Bytes.push` と同じく数える。足す長さは、その `Char` の UTF-8 のバイト数である
 - `Bytes.set`、`Bytes.truncate`: 一意ならその場で書き換えるので数えない。共有か不死なら、写した結果の長さを数える
 
 ## `unsafe` の核

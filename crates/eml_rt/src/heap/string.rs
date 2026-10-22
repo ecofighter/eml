@@ -1775,12 +1775,13 @@ impl<M: Mode> Heap<M> {
             final(self).same_tokens(*old(self)),
             r is Err ==> *final(self) == old(self).settled_heap(),
             !M::CHECKED ==> r is Ok,
-            r matches Ok(w) ==> final(self).is_string(w) && final(self).text_of(w) == old(
-                self,
-            ).text_of(left) + s.spec_bytes(),
+            r matches Ok(w) ==> w.is_ptr_spec() && final(self).is_string(w) && final(self).text_of(
+                w,
+            ) == old(self).text_of(left) + s.spec_bytes() && final(self).word_in(w),
             old(self).push_ok(left, Kind::String) ==> r is Ok || chain_err(r),
             r matches Ok(w) ==> (old(self).push_ok(left, Kind::String) ==> final(self).consistent()
                 && final(self).pushed(*old(self), left, w)),
+            final(self).settled(),
             M::CHECKED ==> final(self).words_kept(*old(self)),
     {
         let ghost c = self.push_ok(left, Kind::String);
