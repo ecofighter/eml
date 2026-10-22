@@ -114,7 +114,7 @@ valgrind が arm64 の macOS で動かないので、callgrind は使わない�
 | `mask` | 4つの evidence の `evv` で、2つ目の evidence を飛ばす `evv_mask` (項目は n = 0、m = 1 の1つ) を呼び、結果を手放すことを、10,000,000 回繰り返す |
 | `poll` | 安全点の確かめ `Ctx::poll` を、100,000,000 回繰り返す |
 
-`bench/rt.sh` は続けて、extern の計測のプログラム `crates/eml_rt/examples/rt_extern_bench.rs` の次の16の計測を、同じ方法で測って2つ目の表に出す ([オブジェクトモデル](../spec/object-model.md) の「extern」)。`rt_bench` と別のプログラムにするのは、上の14の計測のコード生成単位の分け方を変えないためである (下の「`eml_rt` のインライン化」)。どの計測も速いモードの `Ctx` で動かす。引数を消費する extern に渡す文字列の参照は、ヒープの文字列なら毎回 `dup` で、不死の文字列 (`concat-copy` の右と `read-all` のパス) なら `acquire_immortal` で作る。借りる extern (`string-eq`、`compare`、`show-string`、`find-byte-1mib`、`find-bytes-1mib`) には、呼ぶ側が持つ参照をそのまま渡す。`-position` と `-windows` の行は、同じ探索を Rust の標準ライブラリで行う比べる基準で、`box-list` と同じく `eml_rt` を呼ばない。`show-int` は整数だけを渡すので、参照を作らない。
+`bench/rt.sh` は続けて、extern の計測のプログラム `crates/eml_rt/examples/rt_extern_bench.rs` の次の24の計測を、同じ方法で測って2つ目の表に出す ([オブジェクトモデル](../spec/object-model.md) の「extern」)。`rt_bench` と別のプログラムにするのは、上の14の計測のコード生成単位の分け方を変えないためである (下の「`eml_rt` のインライン化」)。どの計測も速いモードの `Ctx` で動かす。引数を消費する extern に渡す文字列の参照は、ヒープの文字列なら毎回 `dup` で、不死の文字列 (`concat-copy` の右と `read-all` のパス) なら `acquire_immortal` で作る。借りる extern (`string-eq`、`compare`、`show-string`、`find-byte-1mib`、`find-bytes-1mib`) には、呼ぶ側が持つ参照をそのまま渡す。`-position` と `-windows` の行は、同じ探索を Rust の標準ライブラリで行う比べる基準で、`box-list` と同じく `eml_rt` を呼ばない。`show-int` は整数だけを渡すので、参照を作らない。
 
 | 計測 | 中身 |
 |---|---|
@@ -134,6 +134,16 @@ valgrind が arm64 の macOS で動かないので、callgrind は使わない�
 | `find-byte-1mib-position` | 同じ探索を `<[u8]>::iter().position` で行う |
 | `find-bytes-1mib` | 同じ並びの末尾の 16 バイトを `Bytes.find_from` で探すことを、100 回繰り返す。探す列の先頭のバイトは行ごとに1回合い、そのたびに 15 バイト目まで比べて外れる |
 | `find-bytes-1mib-windows` | 同じ探索を `<[u8]>::windows().position` で行う |
+| `find-byte` | 52 バイトの行で次の `\n` を `Bytes.find_byte_from` で探すことを、10,000,000 回繰り返す |
+| `find-byte-swar` | 同じ探索を、Rust だけで書いた 8 バイトずつの SWAR のループで行う |
+| `find-sub` | 16 バイトの needle を 52 バイトの行で `Bytes.find_from` で探すことを、10,000,000 回繰り返す |
+| `find-sub-contains` | 同じ探索を `str::contains` で行う |
+| `slice-short` | 52 バイトの `Bytes` の先頭 50 バイトを `Bytes.slice` で切り出して手放すことを、10,000,000 回繰り返す |
+| `slice-short-box` | 同じことを `Box<[u8]>::from(&s[..50])` と drop で行う |
+| `read-all-bytes` | メモリの Host の 64 MiB のファイルを、開いて全部読んで閉じることを、8 回繰り返す。`Bytes` を返す読みの道はまだないので、今ある `fs_read` の道 (`String` を返し、UTF-8 を検査する) を測る |
+| `read-all-bytes-std` | 同じ 64 MiB を `&[u8]` から `read_to_end` で読むことを、8 回繰り返す |
+
+`find-byte-1mib` と `find-bytes-1mib` は 1 MiB を走査する行で、比の目標は約2倍である。`find-byte` から `read-all-bytes` までの4組は、行ごとの処理の予算の行で、`bench/rt.sh` が eml の行と参照の行の命令の数の比と実時間の比を、組ごとに表にして出す。予算は次のとおりである。`find-byte` が 1.5 以下、`find-sub` が 1.6 以下、`slice-short` が 1.0 以下、`read-all-bytes` が 1.3 以下である。`find-byte` の予算は `grep -n` と `logstat` の行ごとの探索から、`find-sub` の予算は `grep -n` の行ごとの検査と測った SWAR の差から、`slice-short` の予算は `grep -n`、`logstat`、`csv2jsonl` の行ごとの確保の見積もりから、`read-all-bytes` の予算は読みの見込みから決めた。
 
 ### スクリプトの計測
 
@@ -272,6 +282,13 @@ extern の計測 (`rt_extern_bench`)
 | `println-line` | 11198075670 | 0.61 |
 | `read-all` | 125459702 | 0.00 |
 | `read-all-unsized` | 136882530 | 0.00 |
+
+#### 予算を超えた行の既知の差
+
+予算の行の最初の測定である (M5、b42857a の木に T-18 の変更を足したもの。上の表は段を閉じるときに入れ替える)。命令の数の比は `find-byte` が 1.25 (予算 1.5)、`find-sub` が 1.33 (予算 1.6) で、予算の中にある。超えた行は次の2つである。
+
+- `slice-short` は命令の数の比が 1.15 で (実時間は 0.01 秒きざみで粗く、この大きさの比には使わない)、予算の 1.0 を超える。1回の切り出しと手放しが `Box<[u8]>::from` と drop より約40命令多く (3,007,017,852 対 2,610,662,919 命令を 10,000,000 回で割った差)、`Ctx` の呼び出しとヒープの確保の道の費用である。行ごとの確保は `grep -n` で 2.0、`logstat` で 25.0、`csv2jsonl` で 41.7 なので、確保がすべてこの切り出しなら差は行あたり約80、約1,000、約1,670 命令になる。上限の見積もりで、約2倍の目標に足りるかは測っていない。`Box` の確保と同じ費用まで縮めるには、確保の道のインライン化 (「`eml_rt` のインライン化」) が要る。
+- `read-all-bytes` は命令の数の比が 3.34 で、予算の 1.3 を大きく超える。測っているのは `Bytes` でなく `String` を返す `fs_read` の道で、UTF-8 の検査と、`Vec` からヒープへの写しを含み、参照の `read_to_end` はどちらも持たない。そのため、この比は `Bytes` の読みの予算の判定には使えない。`Bytes` を返す読みの道 (ハンドルの読み手) が入った後で測り直す。そのとき比が 1.3 を超えるなら (見込みは約1.7〜1.9倍)、`read_into` (ヒープへ直接読む) を入れる引き金になる。ヒープへ直接読んでも得は 6〜10% で、約2倍に縮めるには写しを1回にすることが要る。
 
 ### `bench/scripts.sh`
 

@@ -23,13 +23,16 @@ median() {
   printf '%s\n' "$@" | sort -n | sed -n "$(( (runs + 1) / 2 ))p"
 }
 
+# measure が出した行の中央値 ("計測 命令の数 実時間")。比の表が引く
+results=""
+
 # measure <プログラム> <計測>…: 計測ごとに1行の表を出す
 measure() {
   local bin="$1"
   shift
   echo "| 計測 | instructions retired | 実時間 (s) |"
   echo "|---|---:|---:|"
-  local case instructions seconds report count elapsed
+  local case instructions seconds report count elapsed ins_median sec_median
   for case in "$@"; do
     instructions=()
     seconds=()
@@ -50,7 +53,31 @@ measure() {
       instructions+=("$count")
       seconds+=("$elapsed")
     done
-    echo "| \`$case\` | $(median "${instructions[@]}") | $(median "${seconds[@]}") |"
+    ins_median="$(median "${instructions[@]}")"
+    sec_median="$(median "${seconds[@]}")"
+    results+="$case $ins_median $sec_median"$'\n'
+    echo "| \`$case\` | $ins_median | $sec_median |"
+  done
+}
+
+# ratios <eml の計測> <参照の計測>…: 組ごとに eml / 参照の比を表の1行に出す
+ratios() {
+  echo "| eml の計測 | 参照の計測 | 命令の数の比 | 実時間の比 |"
+  echo "|---|---|---:|---:|"
+  local eml ref
+  while [[ $# -gt 0 ]]; do
+    eml="$1"
+    ref="$2"
+    shift 2
+    awk -v eml="$eml" -v ref="$ref" '
+      $1 == eml { ei = $2; es = $3 }
+      $1 == ref { ri = $2; rs = $3 }
+      END {
+        if (ei == "" || ri == "") { print "bench/rt.sh: " eml " か " ref " の計測がない" > "/dev/stderr"; exit 1 }
+        # 実時間は 0.01 秒きざみなので、参照が 0 秒なら比を出さない
+        time = (rs + 0 > 0) ? sprintf("%.2f", es / rs) : "-"
+        printf "| `%s` | `%s` | %.2f | %s |\n", eml, ref, ei / ri, time
+      }' <<<"$results"
   done
 }
 
@@ -67,4 +94,16 @@ echo
 measure "$examples/rt_extern_bench" \
   string-eq string-eq-early compare concat-copy show-int show-int-long show-string show-string-dense \
   println-block println-line read-all read-all-unsized \
-  find-byte-1mib find-byte-1mib-position find-bytes-1mib find-bytes-1mib-windows
+  find-byte-1mib find-byte-1mib-position find-bytes-1mib find-bytes-1mib-windows \
+  find-byte find-byte-swar find-sub find-sub-contains slice-short slice-short-box \
+  read-all-bytes read-all-bytes-std
+echo
+echo "eml / 参照の比 (1 MiB の2組は目標が2倍、後ろの4組は予算の行。docs/implementation/benchmarks.md)"
+echo
+ratios \
+  find-byte-1mib find-byte-1mib-position \
+  find-bytes-1mib find-bytes-1mib-windows \
+  find-byte find-byte-swar \
+  find-sub find-sub-contains \
+  slice-short slice-short-box \
+  read-all-bytes read-all-bytes-std

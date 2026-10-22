@@ -3,7 +3,7 @@
 //! ためである (docs/implementation/benchmarks.md の「`eml_rt` のインライン化」)。
 
 use std::hint::black_box;
-use std::io::{self, Cursor};
+use std::io::{self, Cursor, Read};
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -18,7 +18,9 @@ fn main() {
     let case = std::env::args().nth(1).expect(
         "a case: string-eq, string-eq-early, compare, concat-copy, show-int, show-int-long, \
              show-string, show-string-dense, println-block, println-line, read-all, read-all-unsized, \
-             find-byte-1mib, find-byte-1mib-position, find-bytes-1mib, find-bytes-1mib-windows",
+             find-byte-1mib, find-byte-1mib-position, find-bytes-1mib, find-bytes-1mib-windows, \
+             find-byte, find-byte-swar, find-sub, find-sub-contains, slice-short, slice-short-box, \
+             read-all-bytes, read-all-bytes-std",
     );
     match case.as_str() {
         "string-eq" => string_eq(false),
@@ -37,6 +39,14 @@ fn main() {
         "find-byte-1mib-position" => find_byte(true),
         "find-bytes-1mib" => find_bytes(false),
         "find-bytes-1mib-windows" => find_bytes(true),
+        "find-byte" => find_newline(false),
+        "find-byte-swar" => find_newline(true),
+        "find-sub" => find_sub(false),
+        "find-sub-contains" => find_sub(true),
+        "slice-short" => slice_short(false),
+        "slice-short-box" => slice_short(true),
+        "read-all-bytes" => read_all_bytes(false),
+        "read-all-bytes-std" => read_all_bytes(true),
         _ => panic!("an unknown case {case}"),
     }
 }
@@ -268,4 +278,117 @@ fn find_bytes(std: bool) {
     }
     decref(&mut ctx, n);
     decref(&mut ctx, w);
+}
+
+/// 行ごとの探索の計測が使う 52 バイトの行。最後の1バイトが `\n` である。
+const LINE: &[u8; 52] = b"abcdefghijklmnopqrstuvwxyz0123456789ABCDEFGHIJKLMNO\n";
+const LINE_ROUNDS: usize = 10_000_000;
+
+/// `b` が最初に現れる位置を、8 バイトずつの語の演算 (SWAR) で探す。`find_byte` (docs/spec/object-model.md の T13)
+/// と同じ作りを Rust だけで書いた、比べる基準である。
+fn swar_position(hay: &[u8], b: u8) -> Option<usize> {
+    const LOW: u64 = 0x0101_0101_0101_0101;
+    const HIGH: u64 = 0x8080_8080_8080_8080;
+    let pattern = LOW * b as u64;
+    let (chunks, rest) = hay.as_chunks::<8>();
+    let mut at = 0;
+    for chunk in chunks {
+        let word = u64::from_le_bytes(*chunk) ^ pattern;
+        let zero = word.wrapping_sub(LOW) & !word & HIGH;
+        if zero != 0 {
+            return Some(at + (zero.trailing_zeros() / 8) as usize);
+        }
+        at += 8;
+    }
+    rest.iter().position(|&x| x == b).map(|i| at + i)
+}
+
+/// 52 バイトの行で次の `\n` を 1000 万回探す。`swar` なら Rust の SWAR のループで探す。
+fn find_newline(swar: bool) {
+    let mut ctx = ctx();
+    // SAFETY: バイト列を1つ確保するだけで、ほかの物体には触れない。
+    let w = unsafe { ctx.heap_mut() }.alloc_bytes(LINE);
+    let target = black_box(b'\n');
+    for _ in 0..LINE_ROUNDS {
+        let at = if swar {
+            black_box(swar_position(black_box(&LINE[..]), target)).map_or(-1, |i| i as i64)
+        } else {
+            // SAFETY: w は生きたバイト列で、呼ぶ側が参照を持つ。bytes_find_byte は借りるだけで手放さない。
+            unsafe { ctx.bytes_find_byte(target as i64, 0, black_box(w)) }.unwrap()
+        };
+        assert_eq!(black_box(at), 51);
+    }
+    decref(&mut ctx, w);
+}
+
+/// 16 バイトの needle を 52 バイトの行で 1000 万回探す。`contains` なら `str::contains` で探す。
+fn find_sub(contains: bool) {
+    let needle = &LINE[36..];
+    let mut ctx = ctx();
+    // SAFETY: バイト列を2つ確保するだけで、ほかの物体には触れない。
+    let w = unsafe { ctx.heap_mut() }.alloc_bytes(LINE);
+    let n = unsafe { ctx.heap_mut() }.alloc_bytes(needle);
+    let line_str = std::str::from_utf8(LINE).unwrap();
+    let needle_str = std::str::from_utf8(needle).unwrap();
+    for _ in 0..LINE_ROUNDS {
+        if contains {
+            assert!(black_box(line_str).contains(black_box(needle_str)));
+        } else {
+            // SAFETY: n と w は生きたバイト列で、呼ぶ側が参照を持つ。bytes_find_from は借りるだけで手放さない。
+            let at = unsafe { ctx.bytes_find_from(black_box(n), 0, black_box(w)) }.unwrap();
+            assert_eq!(black_box(at), 36);
+        }
+    }
+    decref(&mut ctx, n);
+    decref(&mut ctx, w);
+}
+
+/// 先頭の 50 バイトの切り出しと手放しを 1000 万回行う。`boxed` なら `Box<[u8]>::from(&s[..50])` と drop。
+fn slice_short(boxed: bool) {
+    let mut ctx = ctx();
+    // SAFETY: バイト列を1つ確保するだけで、ほかの物体には触れない。
+    let w = unsafe { ctx.heap_mut() }.alloc_bytes(LINE);
+    for _ in 0..LINE_ROUNDS {
+        if boxed {
+            let copy: Box<[u8]> = Box::from(&black_box(&LINE[..])[..50]);
+            drop(black_box(copy));
+        } else {
+            // SAFETY: w は生きたバイト列で、呼ぶ側が参照を持つ。bytes_slice は借りるだけで手放さない。
+            let part = unsafe { ctx.bytes_slice(0, 50, black_box(w)) }.unwrap();
+            decref(&mut ctx, black_box(part));
+        }
+    }
+    decref(&mut ctx, w);
+}
+
+/// 64 MiB のメモリの Host のファイルを全部読む。`Bytes` を返す読みの道はまだないので、eml の側は今ある
+/// `fs_read` (`String` を返し、UTF-8 を検査する) の道を測る。`std` なら `&[u8]` からの `read_to_end` である。
+fn read_all_bytes(std: bool) {
+    const ROUNDS: usize = 8;
+    let bytes: Arc<[u8]> = "abcdefg\n".repeat(64 * MIB / 8).into_bytes().into();
+    if std {
+        for _ in 0..ROUNDS {
+            let mut out = Vec::new();
+            black_box(&bytes[..]).read_to_end(&mut out).unwrap();
+            black_box(out);
+        }
+        return;
+    }
+    let mut ctx = ctx_with(OneFile { bytes, sized: true });
+    // SAFETY: 不死の文字列を1つ確保するだけである。
+    let path = unsafe { ctx.heap_mut() }.alloc_string_immortal("big.txt");
+    for _ in 0..ROUNDS {
+        // SAFETY: read_all と同じ。
+        unsafe {
+            ctx.heap_mut().acquire_immortal(path).unwrap();
+            let file = ctx.fs_open(path).unwrap();
+            let pair = ctx.fs_read(file, false).unwrap();
+            let file = ctx.heap().field(pair, 0).unwrap();
+            let text = ctx.heap().field(pair, 1).unwrap();
+            ctx.heap_mut().release(pair, TUPLE, &[true, true]).unwrap();
+            black_box(text);
+            ctx.heap_mut().decref(text).unwrap();
+            ctx.fs_close(file).unwrap();
+        }
+    }
 }
