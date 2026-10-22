@@ -20,9 +20,9 @@ eml run --debug-heap wc.em -l input.txt
 
 ## extern の境界
 
-標準ライブラリの extern は小さい核にとどめ、便利な関数は eml で書く。extern の境界では、スカラー (`Int`、`Float`、`Char`、`Byte`、`Bool`、`Unit`)、文字列、`Foreign` だけを受け渡し、`List` と `Option` は eml の側で組む。`eml_rt` がデータの配置を知らないで済むようにするためである ([Core IR](core-ir.md) の「translate の配置」)。結果が `Char` の extern の行はスカラー値を、結果が `Byte` の extern の行は 0..=255 を返す ([LIR](lir.md) の「値の表現」)。そのため、`pub` でない extern は番兵 (見つからない位置の -1、終わりの空の文字列など) を返すことがある。番兵は標準ライブラリの中に閉じ込め、利用者には `Option` で見せる。
+標準ライブラリの extern は小さい核にとどめ、便利な関数は eml で書く。extern の境界では、スカラー (`Int`、`Float`、`Char`、`Byte`、`Bool`、`Unit`)、文字列、バイト列、`Foreign` だけを受け渡し、`List` と `Option` は eml の側で組む。`eml_rt` がデータの配置を知らないで済むようにするためである ([Core IR](core-ir.md) の「translate の配置」)。結果が `Char` の extern の行はスカラー値を、結果が `Byte` の extern の行は 0..=255 を返す ([LIR](lir.md) の「値の表現」)。そのため、`pub` でない extern は番兵 (見つからない位置の -1、終わりの空の文字列など) を返すことがある。番兵は標準ライブラリの中に閉じ込め、利用者には `Option` で見せる。
 
-extern の行は、どの位置の引数も借用にできる ([LIR](lir.md) の「extern の借用」)。`String` を読む行 (`byte_length`、`byte_at`、`slice`、`find_from`、`String` の `==`、`!=`、`compare`、`show`、`Float` の `can_parse` と `parse_raw`) は文字列を借りる。借りた文字列は、行が失敗しても呼ぶ側が持ったままである。
+extern の行は、どの位置の引数も借用にできる ([LIR](lir.md) の「extern の借用」)。`String` を読む行 (`byte_length`、`byte_at`、`slice`、`find_from`、`String` の `==`、`!=`、`compare`、`show`、`Float` の `can_parse` と `parse_raw`) は文字列を借りる。`Bytes` を読む行 (`length`、`slice`、`find_from`、`append_slice` の `src`、`Bytes` の `==`、`!=`、`compare`) もバイト列を借りる。借りた値は、行が失敗しても呼ぶ側が持ったままである。
 
 文字列の位置は UTF-8 のバイトの位置 (`Int`) で表す。引数の順は、対象を最後に置く。`line |> String.split ","` と部分適用で使えるようにするためである。
 
@@ -243,6 +243,33 @@ pub while : (Unit -> <e> Bool) -> (Unit -> <e> Unit) -> <e> Unit
 - `wrap n` は `n` の下位8ビットを返す。2の補数で見るので、`wrap (-1)` は `255u8`、`wrap 256` は `0u8` で、`Panic` は起こさない
 - `Char` と `Byte` を直接変える関数はない。`Int` を経由する
 
+## `Bytes`
+
+| 名前 | 型 | 実装 |
+|---|---|---|
+| `empty` | `Unit -> Bytes` | extern |
+| `length` | `Bytes -> Int` | extern (バイト列を借りる) |
+| `append` | `Bytes -> Bytes -> Bytes` | extern |
+| `append_slice` | `Int -> Int -> Bytes -> Bytes -> <Panic> Bytes` | extern (`src` を借りる) |
+| `slice` | `Int -> Int -> Bytes -> <Panic> Bytes` | extern (バイト列を借りる) |
+| `truncate` | `Int -> Bytes -> <Panic> Bytes` | extern |
+| `of_string` | `String -> Bytes` | extern |
+| `find` | `Bytes -> Bytes -> <Panic> Option Int` | eml |
+
+型 `Bytes` は Prelude の extern の型で、関数は `Std.Bytes` に置く。`Std.Float` と同じく、モジュールで修飾して使う (`Bytes.length b`)。
+
+- `Bytes` は 0 から 255 のバイトの列である。`String` と同じ配置を持つ別の型で、UTF-8 の条件はなく、`String` との変換は中身を写す ([オブジェクトモデル](object-model.md) の「バイト列と文字列」)。リテラルはない。`Eq` と `Ord` を持ち、順序はバイトの辞書式の順序で、`String` と同じである
+- 位置と長さはバイトの数の `Int` である。引数の順は、対象を最後に置く
+- `empty ()` は長さ 0 のバイト列である
+- `length b` はバイトの数である
+- `append a b` は、`a` の後ろに `b` を足したバイト列である。`a` が一意で容量が足りれば、その場で伸ばす。そうでなければ、両辺を写した新しいバイト列を作る。`String` の `++` と同じである
+- `append_slice from to src dst` は、`dst` の後ろに、`src` の位置 `from` から `to` の手前までを足したバイト列である。`0 <= from <= to <= length src` でなければ `Panic` を起こす。`src` は借り、`dst` は消費する。`dst` が一意ならその場で伸ばす。同じ変数を `src` と `dst` に渡してもよく、そのときは参照が2つ要るので、`dst` を写す。`append_slice 0 (length b) b b` は `b` を倍にする ([LIR](lir.md) の「extern の借用」)
+- `slice from to b` は、位置 `from` から `to` の手前までを写した新しいバイト列である。`0 <= from <= to <= length b` でなければ `Panic` を起こす
+- `truncate n b` は、前の `n` バイトである。`0 <= n <= length b` でなければ `Panic` を起こす。`b` が一意ならその場で長さだけを書き換えて、容量を保つ。そうでなければ、前の部分を写す
+- `of_string s` は、`s` の中身を写したバイト列である。リテラルと共有した文字列も写す
+- `find needle b` は、`needle` が最初に現れる位置である。空の `needle` は `Some 0` である。照合は素朴な方法で、`needle` の長さと探す範囲の長さの積に比例する時間がかかる
+- 範囲の外の文言は、[LIR](lir.md) の「実行時エラー」にある
+
 ## `Std.Array`
 
 | 名前 | 型 | 実装 |
@@ -458,7 +485,7 @@ pub data Iter <e> a = | Iter (once Unit -> <e> Option (a, Iter <e> a))
 
 標準ライブラリの extern の誤りの文言は次のとおりである。I/O の失敗の理由は `not found`、`permission denied`、`not available`、`I/O error` のどれかである。位置は extern を呼んだ所で、標準ライブラリの関数の中の extern なら `<std>/…` の位置になる。
 
-I/O の失敗の一部は `try_io` で捕まえられる (上の「`try_io`」)。`byte_at` と `slice` の誤りと、`Std.Float` の変換と `to_fixed` の誤りと、配列の添字と長さの誤りは `Panic` で、`try_panic` で捕まえられる (上の「`try_panic`」)。捕まえなかった失敗は、この表の文言の実行時エラーになる。
+I/O の失敗の一部は `try_io` で捕まえられる (上の「`try_io`」)。`byte_at` と `slice` の誤りと、`Bytes` の範囲の誤りと、`Std.Float` の変換と `to_fixed` の誤りと、配列の添字と長さの誤りは `Panic` で、`try_panic` で捕まえられる (上の「`try_panic`」)。捕まえなかった失敗は、この表の文言の実行時エラーになる。
 
 | 失敗 | 文言 |
 |---|---|
@@ -469,6 +496,7 @@ I/O の失敗の一部は `try_io` で捕まえられる (上の「`try_io`」)�
 | `Float.to_fixed` の桁数 | `` `to_fixed` takes 0 to 100 digits, not 101 `` |
 | `Char.of_int` の引数 | ``int `55296` is not a Unicode scalar value`` |
 | `Byte.of_int` の引数 | ``int `256` does not fit in `Byte` `` |
+| `Bytes.slice`、`append_slice`、`truncate` の範囲の外 | ``bytes slice 2..9 is out of range for length 3`` |
 | 配列の添字の範囲の外 (`get`、`set`、`read`、`write`) | ``array index 3 is out of range for length 3`` |
 | 配列の負の長さ (`make`、`tabulate`) | ``array length -1 is negative`` |
 | `Fs.write_text` | ``cannot write `out.txt`: permission denied`` |
@@ -478,4 +506,4 @@ I/O の失敗の一部は `try_io` で捕まえられる (上の「`try_io`」)�
 | UTF-8 でない引数 | ``argument 2 is not valid UTF-8`` (`Env.args ()` のリストの 0 から数えた位置) |
 | UTF-8 でない環境変数 | ``environment variable `LANG` is not valid UTF-8`` |
 
-標準ライブラリの中だけで起きる誤り (`String.find_from` の開始位置、`Env.arg` の位置) の文言は、[LIR](lir.md) の「実行時エラー」にある。
+標準ライブラリの中だけで起きる誤り (`String.find_from` と `Bytes.find_from` の開始位置、`Env.arg` の位置) の文言は、[LIR](lir.md) の「実行時エラー」にある。

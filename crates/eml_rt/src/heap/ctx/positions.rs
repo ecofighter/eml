@@ -65,7 +65,7 @@ fn starts_at(text: &[u8], needle: &[u8], i: usize) -> (r: bool)
 }
 
 /// `from` 以上で `needle` が始まる最小の位置。素朴な照合で、なければ -1 を返す。
-fn find_bytes(text: &[u8], needle: &[u8], from: usize) -> (r: i64)
+pub(crate) fn find_bytes(text: &[u8], needle: &[u8], from: usize) -> (r: i64)
     requires
         from <= text@.len(),
         text@.len() <= i64::MAX,

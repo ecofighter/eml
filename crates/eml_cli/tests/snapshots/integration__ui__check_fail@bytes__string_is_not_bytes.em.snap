@@ -1,0 +1,14 @@
+---
+source: crates/eml_cli/tests/ui.rs
+expression: rendered
+input_file: tests/ui/check-fail/bytes/string_is_not_bytes.em
+---
+[E2001] Error: mismatched types
+   ╭─[ check-fail/bytes/string_is_not_bytes.em:6:14 ]
+   │
+ 6 │ total = size "abc"
+   │         ──┬─ ──┬──  
+   │           ╰───────── argument 1 of `size`
+   │                │    
+   │                ╰──── expected `Bytes`, found `String`
+───╯

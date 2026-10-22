@@ -15,6 +15,10 @@ pub enum Arg {
     Unique(String),
     /// `dup` して渡す共有した文字列。残った参照は結果を読んだ後で手放す
     Shared(String),
+    /// 一意なバイト列
+    Bytes(Vec<u8>),
+    /// `dup` して渡す共有したバイト列。残った参照は結果を読んだ後で手放す
+    SharedBytes(Vec<u8>),
     /// `file_root` からの相対パス
     Rel(String),
     /// 同じ名前を `file_root` につないだ絶対パス
@@ -39,6 +43,8 @@ pub enum Outcome {
     Bool(bool),
     Order(&'static str),
     Str(String),
+    /// バイト列の結果
+    Bytes(Vec<u8>),
     /// `println` が書いた出力
     Out(String),
     /// 位置を除いた誤りの文言
@@ -360,6 +366,19 @@ pub const STRING_BINARY: [&str; 4] = [
     "Prelude.++",
 ];
 
+/// バイト列の端の値。空、1バイト、互いに前置きになる組、UTF-8 でない並び、複数バイトの文字、繰り返し
+pub const BYTES: [&[u8]; 9] = [
+    &[],
+    &[0],
+    &[97],
+    &[97, 98],
+    &[98],
+    &[255, 0, 128],
+    &[230, 151, 165, 230, 156, 172],
+    &[97, 98, 97, 98],
+    &[0, 0],
+];
+
 const SEED: u64 = 0x9E37_79B9_7F4A_7C15;
 const RANDOM_INTS: usize = 50;
 const RANDOM_STRINGS: usize = 30;
@@ -457,6 +476,8 @@ fn parse_arg(text: &str) -> Result<Arg, String> {
         "s" => Arg::Const(quoted(value)?),
         "u" => Arg::Unique(quoted(value)?),
         "d" => Arg::Shared(quoted(value)?),
+        "y" => Arg::Bytes(parse_bytes(value)?),
+        "Y" => Arg::SharedBytes(parse_bytes(value)?),
         "f" => Arg::Rel(quoted(value)?),
         "a" => Arg::Abs(quoted(value)?),
         "A" | "D" | "M" => Arg::Array {
@@ -484,6 +505,7 @@ fn parse_outcome(text: &str) -> Result<Outcome, String> {
             _ => return Err(format!("an unknown ordering: {value}")),
         }),
         "s" => Outcome::Str(quoted(value)?),
+        "y" => Outcome::Bytes(parse_bytes(value)?),
         "out" => Outcome::Out(quoted(value)?),
         "err" => Outcome::Err(quoted(value)?),
         "A" | "M" => Outcome::Array {
@@ -517,6 +539,18 @@ fn parse_ints(text: &str) -> Result<Vec<i64>, String> {
         return Ok(Vec::new());
     }
     inner.split(',').map(parse_int).collect()
+}
+
+fn bytes_text(bytes: &[u8]) -> String {
+    ints_text(&bytes.iter().map(|&b| b as i64).collect::<Vec<_>>())
+}
+
+/// `[1,2,3]` の形のバイトの並び
+fn parse_bytes(text: &str) -> Result<Vec<u8>, String> {
+    parse_ints(text)?
+        .into_iter()
+        .map(|b| u8::try_from(b).map_err(|_| format!("not a byte: {b}")))
+        .collect()
 }
 
 fn ints_text(elements: &[i64]) -> String {
@@ -566,6 +600,8 @@ pub fn line(case: &Case) -> String {
         Arg::Const(s) => format!("s:{s:?}"),
         Arg::Unique(s) => format!("u:{s:?}"),
         Arg::Shared(s) => format!("d:{s:?}"),
+        Arg::Bytes(b) => format!("y:{}", bytes_text(b)),
+        Arg::SharedBytes(b) => format!("Y:{}", bytes_text(b)),
         Arg::Rel(s) => format!("f:{s:?}"),
         Arg::Abs(s) => format!("a:{s:?}"),
         Arg::Array {
@@ -588,6 +624,7 @@ pub fn line(case: &Case) -> String {
         Outcome::Bool(b) => format!("b:{}", bool_name(*b)),
         Outcome::Order(o) => format!("o:{o}"),
         Outcome::Str(s) => format!("s:{s:?}"),
+        Outcome::Bytes(b) => format!("y:{}", bytes_text(b)),
         Outcome::Out(s) => format!("out:{s:?}"),
         Outcome::Err(s) => format!("err:{s:?}"),
         Outcome::Hashed { len, hash } => format!("h:{len}:{hash:016x}"),
@@ -900,6 +937,103 @@ pub fn inputs() -> Vec<(String, Vec<Arg>)> {
             Arg::Shared("ab".into()),
         ],
     );
+    // バイト列。`String` の核と同じ位置と、`append_slice` の範囲を使う。一意なものと `dup` で共有したものを渡す
+    let by = |b: &[u8]| Arg::Bytes(b.to_vec());
+    for b in BYTES {
+        push("Std.Bytes.length", vec![by(b)]);
+    }
+    push("Std.Bytes.empty", vec![]);
+    for name in [
+        "Prelude.Eq Bytes.==",
+        "Prelude.Eq Bytes.!=",
+        "Prelude.Ord Bytes.compare",
+    ] {
+        for a in BYTES {
+            for b in BYTES {
+                push(name, vec![by(a), by(b)]);
+            }
+        }
+    }
+    push(
+        "Prelude.Eq Bytes.==",
+        vec![by(&[97, 98]), Arg::SharedBytes(vec![97, 98])],
+    );
+    for a in BYTES {
+        for b in BYTES {
+            push("Std.Bytes.append", vec![by(a), by(b)]);
+        }
+    }
+    // `append` の左が共有しているか、右が共有しているか
+    push(
+        "Std.Bytes.append",
+        vec![Arg::SharedBytes(vec![97, 98]), by(&[99])],
+    );
+    push(
+        "Std.Bytes.append",
+        vec![by(&[97, 98]), Arg::SharedBytes(vec![99])],
+    );
+    for b in BYTES {
+        let len = b.len() as i64;
+        for (start, end) in [
+            (0, 0),
+            (0, len),
+            (0, 1),
+            (1, 2),
+            (1, len),
+            (len, len),
+            (-1, 1),
+            (2, 1),
+            (0, len + 1),
+            (i64::MIN, i64::MAX),
+        ] {
+            push(
+                "Std.Bytes.slice",
+                vec![Arg::Int(start), Arg::Int(end), by(b)],
+            );
+            push(
+                "Std.Bytes.append_slice",
+                vec![Arg::Int(start), Arg::Int(end), by(b), by(&[120])],
+            );
+        }
+        for n in [-1, 0, 1, len - 1, len, len + 1, i64::MIN, i64::MAX] {
+            push("Std.Bytes.truncate", vec![Arg::Int(n), by(b)]);
+        }
+        for needle in BYTES {
+            for from in [-1, 0, 1, len, len + 1] {
+                push(
+                    "Std.Bytes.find_from",
+                    vec![by(needle), Arg::Int(from), by(b)],
+                );
+            }
+        }
+    }
+    // 共有したバイト列も、ほかの引数と同じく手放す。共有した `dst` と `truncate` の対象は写す
+    push(
+        "Std.Bytes.slice",
+        vec![Arg::Int(0), Arg::Int(1), Arg::SharedBytes(vec![97, 98])],
+    );
+    push(
+        "Std.Bytes.append_slice",
+        vec![
+            Arg::Int(0),
+            Arg::Int(2),
+            by(&[97, 98]),
+            Arg::SharedBytes(vec![120]),
+        ],
+    );
+    push(
+        "Std.Bytes.truncate",
+        vec![Arg::Int(1), Arg::SharedBytes(vec![97, 98])],
+    );
+    push(
+        "Std.Bytes.find_from",
+        vec![by(&[98]), Arg::Int(0), Arg::SharedBytes(vec![97, 98])],
+    );
+    for s in &strings {
+        push("Std.Bytes.of_string", vec![Arg::Unique(s.clone())]);
+    }
+    push("Std.Bytes.of_string", vec![Arg::Shared("ab".into())]);
+    push("Std.Bytes.of_string", vec![c("ab")]);
     let rel = |s: &str| vec![Arg::Rel(s.to_string())];
     for path in [
         "plain.txt",

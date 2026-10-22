@@ -971,6 +971,56 @@ fn run_extern<M: Mode>(
                     ctx.string_find_from(task.get(arg(0)), task.raw(arg(1)), task.get(arg(2)))?;
                 task.set_raw(dst, i);
             }
+            Extern::BytesEmpty => {
+                let w = ctx.bytes_empty()?;
+                task.set(dst, w);
+            }
+            Extern::BytesLength => {
+                let n = ctx.bytes_length(task.get(arg(0)))?;
+                task.set_raw(dst, n);
+            }
+            Extern::BytesAppend => {
+                let w = ctx.bytes_append(task.get(arg(0)), task.get(arg(1)))?;
+                task.set(dst, w);
+            }
+            Extern::BytesAppendSlice => {
+                let w = ctx.bytes_append_part(
+                    task.raw(arg(0)),
+                    task.raw(arg(1)),
+                    task.get(arg(2)),
+                    task.get(arg(3)),
+                )?;
+                task.set(dst, w);
+            }
+            Extern::BytesSlice => {
+                let w = ctx.bytes_slice(task.raw(arg(0)), task.raw(arg(1)), task.get(arg(2)))?;
+                task.set(dst, w);
+            }
+            Extern::BytesTruncate => {
+                let w = ctx.bytes_truncate(task.raw(arg(0)), task.get(arg(1)))?;
+                task.set(dst, w);
+            }
+            Extern::BytesOfString => {
+                let w = ctx.bytes_of_string(task.get(arg(0)))?;
+                task.set(dst, w);
+            }
+            Extern::BytesEq => {
+                let r = ctx.bytes_eq(task.get(arg(0)), task.get(arg(1)))?;
+                task.set_raw(dst, r);
+            }
+            Extern::BytesNe => {
+                let r = ctx.bytes_ne(task.get(arg(0)), task.get(arg(1)))?;
+                task.set_raw(dst, r);
+            }
+            Extern::BytesCompare => {
+                let r = ctx.bytes_compare(task.get(arg(0)), task.get(arg(1)))?;
+                task.set_raw(dst, r);
+            }
+            Extern::BytesFindFrom => {
+                let i =
+                    ctx.bytes_find_from(task.get(arg(0)), task.raw(arg(1)), task.get(arg(2)))?;
+                task.set_raw(dst, i);
+            }
             Extern::EnvArgCount => task.set_raw(dst, ctx.env_arg_count()),
             Extern::EnvArg => {
                 let w = ctx.env_arg(task.raw(arg(0)))?;

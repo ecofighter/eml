@@ -1319,6 +1319,29 @@ impl Args {
         }
     }
 
+    /// バイト列の引数の参照を1つ作る。共有したものは `dup` し、残った参照は結果を読んだ後で手放す
+    unsafe fn bytes<M: Mode>(&mut self, ctx: &mut crate::Ctx<M>, arg: &Arg) -> Word {
+        unsafe {
+            match arg {
+                Arg::Bytes(b) => ctx.heap_mut().alloc_bytes(b),
+                Arg::SharedBytes(b) => {
+                    let w = ctx.heap_mut().alloc_bytes(b);
+                    ctx.heap_mut().dup(w).unwrap();
+                    self.release.push(w);
+                    w
+                }
+                _ => panic!("not a bytes argument: {arg:?}"),
+            }
+        }
+    }
+
+    /// 借りて渡すバイト列の引数。呼んだ側の参照は結果を読んだ後で手放す
+    unsafe fn lent_bytes<M: Mode>(&mut self, ctx: &mut crate::Ctx<M>, arg: &Arg) -> Word {
+        let w = unsafe { self.bytes(ctx, arg) };
+        self.release.push(w);
+        w
+    }
+
     /// 配列の引数の参照を1つ作る。共有した配列は `dup` し、残った参照は結果を読んだ後で手放す
     unsafe fn array<M: Mode>(&mut self, ctx: &mut crate::Ctx<M>, arg: &Arg) -> Word {
         let Arg::Array {
@@ -1392,6 +1415,13 @@ fn tag_order(tag: i64) -> Outcome {
         GT => "GT",
         _ => panic!("not an Ordering tag: {tag}"),
     })
+}
+
+/// バイト列の結果を読み、手放す
+unsafe fn take_bytes<M: Mode>(ctx: &mut crate::Ctx<M>, w: Word) -> Outcome {
+    let read = unsafe { &*ctx.heap().bytes(w).unwrap() }.to_vec();
+    unsafe { ctx.heap_mut().decref(w) }.unwrap();
+    Outcome::Bytes(read)
 }
 
 /// 文字列の結果を読み、手放す
@@ -1615,6 +1645,61 @@ unsafe fn call<M: Mode>(
                 let n = args.lent_string(ctx, &inputs[0], root);
                 let a = args.lent_string(ctx, &inputs[2], root);
                 Outcome::Int(ctx.string_find_from(n, int(1), a)?)
+            }
+            "Std.Bytes.empty" => {
+                let w = ctx.bytes_empty()?;
+                take_bytes(ctx, w)
+            }
+            "Std.Bytes.length" => {
+                let a = args.lent_bytes(ctx, &inputs[0]);
+                Outcome::Int(ctx.bytes_length(a)?)
+            }
+            "Std.Bytes.append" => {
+                let a = args.bytes(ctx, &inputs[0]);
+                let b = args.bytes(ctx, &inputs[1]);
+                let w = ctx.bytes_append(a, b)?;
+                take_bytes(ctx, w)
+            }
+            "Std.Bytes.append_slice" => {
+                let src = args.lent_bytes(ctx, &inputs[2]);
+                let dst = args.bytes(ctx, &inputs[3]);
+                let w = ctx.bytes_append_part(int(0), int(1), src, dst)?;
+                take_bytes(ctx, w)
+            }
+            "Std.Bytes.slice" => {
+                let a = args.lent_bytes(ctx, &inputs[2]);
+                let w = ctx.bytes_slice(int(0), int(1), a)?;
+                take_bytes(ctx, w)
+            }
+            "Std.Bytes.truncate" => {
+                let a = args.bytes(ctx, &inputs[1]);
+                let w = ctx.bytes_truncate(int(0), a)?;
+                take_bytes(ctx, w)
+            }
+            "Std.Bytes.of_string" => {
+                let a = one(ctx, args);
+                let w = ctx.bytes_of_string(a)?;
+                take_bytes(ctx, w)
+            }
+            "Prelude.Eq Bytes.==" => {
+                let a = args.lent_bytes(ctx, &inputs[0]);
+                let b = args.lent_bytes(ctx, &inputs[1]);
+                tag_bool(ctx.bytes_eq(a, b)?)
+            }
+            "Prelude.Eq Bytes.!=" => {
+                let a = args.lent_bytes(ctx, &inputs[0]);
+                let b = args.lent_bytes(ctx, &inputs[1]);
+                tag_bool(ctx.bytes_ne(a, b)?)
+            }
+            "Prelude.Ord Bytes.compare" => {
+                let a = args.lent_bytes(ctx, &inputs[0]);
+                let b = args.lent_bytes(ctx, &inputs[1]);
+                tag_order(ctx.bytes_compare(a, b)?)
+            }
+            "Std.Bytes.find_from" => {
+                let n = args.lent_bytes(ctx, &inputs[0]);
+                let a = args.lent_bytes(ctx, &inputs[2]);
+                Outcome::Int(ctx.bytes_find_from(n, int(1), a)?)
             }
             "Std.Array.make" | "Std.MutArray.make" => {
                 let lin = name == "Std.MutArray.make";

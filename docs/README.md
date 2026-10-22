@@ -16,7 +16,7 @@ eml を実装するエージェントとプログラマのための文書群で�
 | [spec/records.md](spec/records.md) | 規範 | 直積型とレコード (タプルと Unit を含む) |
 | [spec/modules.md](spec/modules.md) | 規範 | モジュール、import、標準ライブラリ、名前の解決、名前空間、instance の一貫性、公開の範囲、REPL のセッション |
 | [spec/repl.md](spec/repl.md) | 規範 | REPL の端末: `eml repl` のコマンド、行のまとめ方、結果の表示、割り込み |
-| [spec/stdlib.md](spec/stdlib.md) | 規範 | 標準ライブラリ: スクリプトの起動、extern の境界、`List`、`String`、`Env`、`Stdin`、`Fs`、`Proc`、エフェクトのモジュール (`Yield`、`Fail`、`State`、`Iter`)、実行時エラー、`Prelude`、`try_io`、`try_panic`、`exit`、`for` と `while`、`Std.Float`、`Std.Char`、`Std.Byte`、`Std.Array`、`Std.MutArray` |
+| [spec/stdlib.md](spec/stdlib.md) | 規範 | 標準ライブラリ: スクリプトの起動、extern の境界、`List`、`String`、`Env`、`Stdin`、`Fs`、`Proc`、エフェクトのモジュール (`Yield`、`Fail`、`State`、`Iter`)、実行時エラー、`Prelude`、`try_io`、`try_panic`、`exit`、`for` と `while`、`Std.Float`、`Std.Char`、`Std.Byte`、`Bytes`、`Std.Array`、`Std.MutArray` |
 | [spec/types.md](spec/types.md) | 規範 | Kind、関数型、型推論、型クラスの制約、数の型、フィールドの解決、`var` の変数、REPL の入力 |
 | [spec/linearity.md](spec/linearity.md) | 規範 | 線形性と `drop`、線形性の検査パス、暗黙の後始末、レコードとタプル、配列の変数 |
 | [spec/effects.md](spec/effects.md) | 規範 | 操作の多重度、持ち越し規則、handler の意味、extern のエフェクトの `IO`、標準ライブラリの `File`、組み込みの `Panic`、`var` のエフェクト、健全性 |

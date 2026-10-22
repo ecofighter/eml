@@ -14565,6 +14565,1053 @@ Std.String.find_from	s:"日本語"	i:3	s:"\u{1}\u{1f}"	=> err:"string index 3 is
 Std.String.slice	i:0	i:1	u:"ab"	=> s:"a"
 Std.String.slice	i:0	i:1	d:"ab"	=> s:"a"
 Std.String.find_from	u:"b"	i:0	d:"ab"	=> i:1
+Std.Bytes.length	y:[]	=> i:0
+Std.Bytes.length	y:[0]	=> i:1
+Std.Bytes.length	y:[97]	=> i:1
+Std.Bytes.length	y:[97,98]	=> i:2
+Std.Bytes.length	y:[98]	=> i:1
+Std.Bytes.length	y:[255,0,128]	=> i:3
+Std.Bytes.length	y:[230,151,165,230,156,172]	=> i:6
+Std.Bytes.length	y:[97,98,97,98]	=> i:4
+Std.Bytes.length	y:[0,0]	=> i:2
+Std.Bytes.empty	=> y:[]
+Prelude.Eq Bytes.==	y:[]	y:[]	=> b:True
+Prelude.Eq Bytes.==	y:[]	y:[0]	=> b:False
+Prelude.Eq Bytes.==	y:[]	y:[97]	=> b:False
+Prelude.Eq Bytes.==	y:[]	y:[97,98]	=> b:False
+Prelude.Eq Bytes.==	y:[]	y:[98]	=> b:False
+Prelude.Eq Bytes.==	y:[]	y:[255,0,128]	=> b:False
+Prelude.Eq Bytes.==	y:[]	y:[230,151,165,230,156,172]	=> b:False
+Prelude.Eq Bytes.==	y:[]	y:[97,98,97,98]	=> b:False
+Prelude.Eq Bytes.==	y:[]	y:[0,0]	=> b:False
+Prelude.Eq Bytes.==	y:[0]	y:[]	=> b:False
+Prelude.Eq Bytes.==	y:[0]	y:[0]	=> b:True
+Prelude.Eq Bytes.==	y:[0]	y:[97]	=> b:False
+Prelude.Eq Bytes.==	y:[0]	y:[97,98]	=> b:False
+Prelude.Eq Bytes.==	y:[0]	y:[98]	=> b:False
+Prelude.Eq Bytes.==	y:[0]	y:[255,0,128]	=> b:False
+Prelude.Eq Bytes.==	y:[0]	y:[230,151,165,230,156,172]	=> b:False
+Prelude.Eq Bytes.==	y:[0]	y:[97,98,97,98]	=> b:False
+Prelude.Eq Bytes.==	y:[0]	y:[0,0]	=> b:False
+Prelude.Eq Bytes.==	y:[97]	y:[]	=> b:False
+Prelude.Eq Bytes.==	y:[97]	y:[0]	=> b:False
+Prelude.Eq Bytes.==	y:[97]	y:[97]	=> b:True
+Prelude.Eq Bytes.==	y:[97]	y:[97,98]	=> b:False
+Prelude.Eq Bytes.==	y:[97]	y:[98]	=> b:False
+Prelude.Eq Bytes.==	y:[97]	y:[255,0,128]	=> b:False
+Prelude.Eq Bytes.==	y:[97]	y:[230,151,165,230,156,172]	=> b:False
+Prelude.Eq Bytes.==	y:[97]	y:[97,98,97,98]	=> b:False
+Prelude.Eq Bytes.==	y:[97]	y:[0,0]	=> b:False
+Prelude.Eq Bytes.==	y:[97,98]	y:[]	=> b:False
+Prelude.Eq Bytes.==	y:[97,98]	y:[0]	=> b:False
+Prelude.Eq Bytes.==	y:[97,98]	y:[97]	=> b:False
+Prelude.Eq Bytes.==	y:[97,98]	y:[97,98]	=> b:True
+Prelude.Eq Bytes.==	y:[97,98]	y:[98]	=> b:False
+Prelude.Eq Bytes.==	y:[97,98]	y:[255,0,128]	=> b:False
+Prelude.Eq Bytes.==	y:[97,98]	y:[230,151,165,230,156,172]	=> b:False
+Prelude.Eq Bytes.==	y:[97,98]	y:[97,98,97,98]	=> b:False
+Prelude.Eq Bytes.==	y:[97,98]	y:[0,0]	=> b:False
+Prelude.Eq Bytes.==	y:[98]	y:[]	=> b:False
+Prelude.Eq Bytes.==	y:[98]	y:[0]	=> b:False
+Prelude.Eq Bytes.==	y:[98]	y:[97]	=> b:False
+Prelude.Eq Bytes.==	y:[98]	y:[97,98]	=> b:False
+Prelude.Eq Bytes.==	y:[98]	y:[98]	=> b:True
+Prelude.Eq Bytes.==	y:[98]	y:[255,0,128]	=> b:False
+Prelude.Eq Bytes.==	y:[98]	y:[230,151,165,230,156,172]	=> b:False
+Prelude.Eq Bytes.==	y:[98]	y:[97,98,97,98]	=> b:False
+Prelude.Eq Bytes.==	y:[98]	y:[0,0]	=> b:False
+Prelude.Eq Bytes.==	y:[255,0,128]	y:[]	=> b:False
+Prelude.Eq Bytes.==	y:[255,0,128]	y:[0]	=> b:False
+Prelude.Eq Bytes.==	y:[255,0,128]	y:[97]	=> b:False
+Prelude.Eq Bytes.==	y:[255,0,128]	y:[97,98]	=> b:False
+Prelude.Eq Bytes.==	y:[255,0,128]	y:[98]	=> b:False
+Prelude.Eq Bytes.==	y:[255,0,128]	y:[255,0,128]	=> b:True
+Prelude.Eq Bytes.==	y:[255,0,128]	y:[230,151,165,230,156,172]	=> b:False
+Prelude.Eq Bytes.==	y:[255,0,128]	y:[97,98,97,98]	=> b:False
+Prelude.Eq Bytes.==	y:[255,0,128]	y:[0,0]	=> b:False
+Prelude.Eq Bytes.==	y:[230,151,165,230,156,172]	y:[]	=> b:False
+Prelude.Eq Bytes.==	y:[230,151,165,230,156,172]	y:[0]	=> b:False
+Prelude.Eq Bytes.==	y:[230,151,165,230,156,172]	y:[97]	=> b:False
+Prelude.Eq Bytes.==	y:[230,151,165,230,156,172]	y:[97,98]	=> b:False
+Prelude.Eq Bytes.==	y:[230,151,165,230,156,172]	y:[98]	=> b:False
+Prelude.Eq Bytes.==	y:[230,151,165,230,156,172]	y:[255,0,128]	=> b:False
+Prelude.Eq Bytes.==	y:[230,151,165,230,156,172]	y:[230,151,165,230,156,172]	=> b:True
+Prelude.Eq Bytes.==	y:[230,151,165,230,156,172]	y:[97,98,97,98]	=> b:False
+Prelude.Eq Bytes.==	y:[230,151,165,230,156,172]	y:[0,0]	=> b:False
+Prelude.Eq Bytes.==	y:[97,98,97,98]	y:[]	=> b:False
+Prelude.Eq Bytes.==	y:[97,98,97,98]	y:[0]	=> b:False
+Prelude.Eq Bytes.==	y:[97,98,97,98]	y:[97]	=> b:False
+Prelude.Eq Bytes.==	y:[97,98,97,98]	y:[97,98]	=> b:False
+Prelude.Eq Bytes.==	y:[97,98,97,98]	y:[98]	=> b:False
+Prelude.Eq Bytes.==	y:[97,98,97,98]	y:[255,0,128]	=> b:False
+Prelude.Eq Bytes.==	y:[97,98,97,98]	y:[230,151,165,230,156,172]	=> b:False
+Prelude.Eq Bytes.==	y:[97,98,97,98]	y:[97,98,97,98]	=> b:True
+Prelude.Eq Bytes.==	y:[97,98,97,98]	y:[0,0]	=> b:False
+Prelude.Eq Bytes.==	y:[0,0]	y:[]	=> b:False
+Prelude.Eq Bytes.==	y:[0,0]	y:[0]	=> b:False
+Prelude.Eq Bytes.==	y:[0,0]	y:[97]	=> b:False
+Prelude.Eq Bytes.==	y:[0,0]	y:[97,98]	=> b:False
+Prelude.Eq Bytes.==	y:[0,0]	y:[98]	=> b:False
+Prelude.Eq Bytes.==	y:[0,0]	y:[255,0,128]	=> b:False
+Prelude.Eq Bytes.==	y:[0,0]	y:[230,151,165,230,156,172]	=> b:False
+Prelude.Eq Bytes.==	y:[0,0]	y:[97,98,97,98]	=> b:False
+Prelude.Eq Bytes.==	y:[0,0]	y:[0,0]	=> b:True
+Prelude.Eq Bytes.!=	y:[]	y:[]	=> b:False
+Prelude.Eq Bytes.!=	y:[]	y:[0]	=> b:True
+Prelude.Eq Bytes.!=	y:[]	y:[97]	=> b:True
+Prelude.Eq Bytes.!=	y:[]	y:[97,98]	=> b:True
+Prelude.Eq Bytes.!=	y:[]	y:[98]	=> b:True
+Prelude.Eq Bytes.!=	y:[]	y:[255,0,128]	=> b:True
+Prelude.Eq Bytes.!=	y:[]	y:[230,151,165,230,156,172]	=> b:True
+Prelude.Eq Bytes.!=	y:[]	y:[97,98,97,98]	=> b:True
+Prelude.Eq Bytes.!=	y:[]	y:[0,0]	=> b:True
+Prelude.Eq Bytes.!=	y:[0]	y:[]	=> b:True
+Prelude.Eq Bytes.!=	y:[0]	y:[0]	=> b:False
+Prelude.Eq Bytes.!=	y:[0]	y:[97]	=> b:True
+Prelude.Eq Bytes.!=	y:[0]	y:[97,98]	=> b:True
+Prelude.Eq Bytes.!=	y:[0]	y:[98]	=> b:True
+Prelude.Eq Bytes.!=	y:[0]	y:[255,0,128]	=> b:True
+Prelude.Eq Bytes.!=	y:[0]	y:[230,151,165,230,156,172]	=> b:True
+Prelude.Eq Bytes.!=	y:[0]	y:[97,98,97,98]	=> b:True
+Prelude.Eq Bytes.!=	y:[0]	y:[0,0]	=> b:True
+Prelude.Eq Bytes.!=	y:[97]	y:[]	=> b:True
+Prelude.Eq Bytes.!=	y:[97]	y:[0]	=> b:True
+Prelude.Eq Bytes.!=	y:[97]	y:[97]	=> b:False
+Prelude.Eq Bytes.!=	y:[97]	y:[97,98]	=> b:True
+Prelude.Eq Bytes.!=	y:[97]	y:[98]	=> b:True
+Prelude.Eq Bytes.!=	y:[97]	y:[255,0,128]	=> b:True
+Prelude.Eq Bytes.!=	y:[97]	y:[230,151,165,230,156,172]	=> b:True
+Prelude.Eq Bytes.!=	y:[97]	y:[97,98,97,98]	=> b:True
+Prelude.Eq Bytes.!=	y:[97]	y:[0,0]	=> b:True
+Prelude.Eq Bytes.!=	y:[97,98]	y:[]	=> b:True
+Prelude.Eq Bytes.!=	y:[97,98]	y:[0]	=> b:True
+Prelude.Eq Bytes.!=	y:[97,98]	y:[97]	=> b:True
+Prelude.Eq Bytes.!=	y:[97,98]	y:[97,98]	=> b:False
+Prelude.Eq Bytes.!=	y:[97,98]	y:[98]	=> b:True
+Prelude.Eq Bytes.!=	y:[97,98]	y:[255,0,128]	=> b:True
+Prelude.Eq Bytes.!=	y:[97,98]	y:[230,151,165,230,156,172]	=> b:True
+Prelude.Eq Bytes.!=	y:[97,98]	y:[97,98,97,98]	=> b:True
+Prelude.Eq Bytes.!=	y:[97,98]	y:[0,0]	=> b:True
+Prelude.Eq Bytes.!=	y:[98]	y:[]	=> b:True
+Prelude.Eq Bytes.!=	y:[98]	y:[0]	=> b:True
+Prelude.Eq Bytes.!=	y:[98]	y:[97]	=> b:True
+Prelude.Eq Bytes.!=	y:[98]	y:[97,98]	=> b:True
+Prelude.Eq Bytes.!=	y:[98]	y:[98]	=> b:False
+Prelude.Eq Bytes.!=	y:[98]	y:[255,0,128]	=> b:True
+Prelude.Eq Bytes.!=	y:[98]	y:[230,151,165,230,156,172]	=> b:True
+Prelude.Eq Bytes.!=	y:[98]	y:[97,98,97,98]	=> b:True
+Prelude.Eq Bytes.!=	y:[98]	y:[0,0]	=> b:True
+Prelude.Eq Bytes.!=	y:[255,0,128]	y:[]	=> b:True
+Prelude.Eq Bytes.!=	y:[255,0,128]	y:[0]	=> b:True
+Prelude.Eq Bytes.!=	y:[255,0,128]	y:[97]	=> b:True
+Prelude.Eq Bytes.!=	y:[255,0,128]	y:[97,98]	=> b:True
+Prelude.Eq Bytes.!=	y:[255,0,128]	y:[98]	=> b:True
+Prelude.Eq Bytes.!=	y:[255,0,128]	y:[255,0,128]	=> b:False
+Prelude.Eq Bytes.!=	y:[255,0,128]	y:[230,151,165,230,156,172]	=> b:True
+Prelude.Eq Bytes.!=	y:[255,0,128]	y:[97,98,97,98]	=> b:True
+Prelude.Eq Bytes.!=	y:[255,0,128]	y:[0,0]	=> b:True
+Prelude.Eq Bytes.!=	y:[230,151,165,230,156,172]	y:[]	=> b:True
+Prelude.Eq Bytes.!=	y:[230,151,165,230,156,172]	y:[0]	=> b:True
+Prelude.Eq Bytes.!=	y:[230,151,165,230,156,172]	y:[97]	=> b:True
+Prelude.Eq Bytes.!=	y:[230,151,165,230,156,172]	y:[97,98]	=> b:True
+Prelude.Eq Bytes.!=	y:[230,151,165,230,156,172]	y:[98]	=> b:True
+Prelude.Eq Bytes.!=	y:[230,151,165,230,156,172]	y:[255,0,128]	=> b:True
+Prelude.Eq Bytes.!=	y:[230,151,165,230,156,172]	y:[230,151,165,230,156,172]	=> b:False
+Prelude.Eq Bytes.!=	y:[230,151,165,230,156,172]	y:[97,98,97,98]	=> b:True
+Prelude.Eq Bytes.!=	y:[230,151,165,230,156,172]	y:[0,0]	=> b:True
+Prelude.Eq Bytes.!=	y:[97,98,97,98]	y:[]	=> b:True
+Prelude.Eq Bytes.!=	y:[97,98,97,98]	y:[0]	=> b:True
+Prelude.Eq Bytes.!=	y:[97,98,97,98]	y:[97]	=> b:True
+Prelude.Eq Bytes.!=	y:[97,98,97,98]	y:[97,98]	=> b:True
+Prelude.Eq Bytes.!=	y:[97,98,97,98]	y:[98]	=> b:True
+Prelude.Eq Bytes.!=	y:[97,98,97,98]	y:[255,0,128]	=> b:True
+Prelude.Eq Bytes.!=	y:[97,98,97,98]	y:[230,151,165,230,156,172]	=> b:True
+Prelude.Eq Bytes.!=	y:[97,98,97,98]	y:[97,98,97,98]	=> b:False
+Prelude.Eq Bytes.!=	y:[97,98,97,98]	y:[0,0]	=> b:True
+Prelude.Eq Bytes.!=	y:[0,0]	y:[]	=> b:True
+Prelude.Eq Bytes.!=	y:[0,0]	y:[0]	=> b:True
+Prelude.Eq Bytes.!=	y:[0,0]	y:[97]	=> b:True
+Prelude.Eq Bytes.!=	y:[0,0]	y:[97,98]	=> b:True
+Prelude.Eq Bytes.!=	y:[0,0]	y:[98]	=> b:True
+Prelude.Eq Bytes.!=	y:[0,0]	y:[255,0,128]	=> b:True
+Prelude.Eq Bytes.!=	y:[0,0]	y:[230,151,165,230,156,172]	=> b:True
+Prelude.Eq Bytes.!=	y:[0,0]	y:[97,98,97,98]	=> b:True
+Prelude.Eq Bytes.!=	y:[0,0]	y:[0,0]	=> b:False
+Prelude.Ord Bytes.compare	y:[]	y:[]	=> o:EQ
+Prelude.Ord Bytes.compare	y:[]	y:[0]	=> o:LT
+Prelude.Ord Bytes.compare	y:[]	y:[97]	=> o:LT
+Prelude.Ord Bytes.compare	y:[]	y:[97,98]	=> o:LT
+Prelude.Ord Bytes.compare	y:[]	y:[98]	=> o:LT
+Prelude.Ord Bytes.compare	y:[]	y:[255,0,128]	=> o:LT
+Prelude.Ord Bytes.compare	y:[]	y:[230,151,165,230,156,172]	=> o:LT
+Prelude.Ord Bytes.compare	y:[]	y:[97,98,97,98]	=> o:LT
+Prelude.Ord Bytes.compare	y:[]	y:[0,0]	=> o:LT
+Prelude.Ord Bytes.compare	y:[0]	y:[]	=> o:GT
+Prelude.Ord Bytes.compare	y:[0]	y:[0]	=> o:EQ
+Prelude.Ord Bytes.compare	y:[0]	y:[97]	=> o:LT
+Prelude.Ord Bytes.compare	y:[0]	y:[97,98]	=> o:LT
+Prelude.Ord Bytes.compare	y:[0]	y:[98]	=> o:LT
+Prelude.Ord Bytes.compare	y:[0]	y:[255,0,128]	=> o:LT
+Prelude.Ord Bytes.compare	y:[0]	y:[230,151,165,230,156,172]	=> o:LT
+Prelude.Ord Bytes.compare	y:[0]	y:[97,98,97,98]	=> o:LT
+Prelude.Ord Bytes.compare	y:[0]	y:[0,0]	=> o:LT
+Prelude.Ord Bytes.compare	y:[97]	y:[]	=> o:GT
+Prelude.Ord Bytes.compare	y:[97]	y:[0]	=> o:GT
+Prelude.Ord Bytes.compare	y:[97]	y:[97]	=> o:EQ
+Prelude.Ord Bytes.compare	y:[97]	y:[97,98]	=> o:LT
+Prelude.Ord Bytes.compare	y:[97]	y:[98]	=> o:LT
+Prelude.Ord Bytes.compare	y:[97]	y:[255,0,128]	=> o:LT
+Prelude.Ord Bytes.compare	y:[97]	y:[230,151,165,230,156,172]	=> o:LT
+Prelude.Ord Bytes.compare	y:[97]	y:[97,98,97,98]	=> o:LT
+Prelude.Ord Bytes.compare	y:[97]	y:[0,0]	=> o:GT
+Prelude.Ord Bytes.compare	y:[97,98]	y:[]	=> o:GT
+Prelude.Ord Bytes.compare	y:[97,98]	y:[0]	=> o:GT
+Prelude.Ord Bytes.compare	y:[97,98]	y:[97]	=> o:GT
+Prelude.Ord Bytes.compare	y:[97,98]	y:[97,98]	=> o:EQ
+Prelude.Ord Bytes.compare	y:[97,98]	y:[98]	=> o:LT
+Prelude.Ord Bytes.compare	y:[97,98]	y:[255,0,128]	=> o:LT
+Prelude.Ord Bytes.compare	y:[97,98]	y:[230,151,165,230,156,172]	=> o:LT
+Prelude.Ord Bytes.compare	y:[97,98]	y:[97,98,97,98]	=> o:LT
+Prelude.Ord Bytes.compare	y:[97,98]	y:[0,0]	=> o:GT
+Prelude.Ord Bytes.compare	y:[98]	y:[]	=> o:GT
+Prelude.Ord Bytes.compare	y:[98]	y:[0]	=> o:GT
+Prelude.Ord Bytes.compare	y:[98]	y:[97]	=> o:GT
+Prelude.Ord Bytes.compare	y:[98]	y:[97,98]	=> o:GT
+Prelude.Ord Bytes.compare	y:[98]	y:[98]	=> o:EQ
+Prelude.Ord Bytes.compare	y:[98]	y:[255,0,128]	=> o:LT
+Prelude.Ord Bytes.compare	y:[98]	y:[230,151,165,230,156,172]	=> o:LT
+Prelude.Ord Bytes.compare	y:[98]	y:[97,98,97,98]	=> o:GT
+Prelude.Ord Bytes.compare	y:[98]	y:[0,0]	=> o:GT
+Prelude.Ord Bytes.compare	y:[255,0,128]	y:[]	=> o:GT
+Prelude.Ord Bytes.compare	y:[255,0,128]	y:[0]	=> o:GT
+Prelude.Ord Bytes.compare	y:[255,0,128]	y:[97]	=> o:GT
+Prelude.Ord Bytes.compare	y:[255,0,128]	y:[97,98]	=> o:GT
+Prelude.Ord Bytes.compare	y:[255,0,128]	y:[98]	=> o:GT
+Prelude.Ord Bytes.compare	y:[255,0,128]	y:[255,0,128]	=> o:EQ
+Prelude.Ord Bytes.compare	y:[255,0,128]	y:[230,151,165,230,156,172]	=> o:GT
+Prelude.Ord Bytes.compare	y:[255,0,128]	y:[97,98,97,98]	=> o:GT
+Prelude.Ord Bytes.compare	y:[255,0,128]	y:[0,0]	=> o:GT
+Prelude.Ord Bytes.compare	y:[230,151,165,230,156,172]	y:[]	=> o:GT
+Prelude.Ord Bytes.compare	y:[230,151,165,230,156,172]	y:[0]	=> o:GT
+Prelude.Ord Bytes.compare	y:[230,151,165,230,156,172]	y:[97]	=> o:GT
+Prelude.Ord Bytes.compare	y:[230,151,165,230,156,172]	y:[97,98]	=> o:GT
+Prelude.Ord Bytes.compare	y:[230,151,165,230,156,172]	y:[98]	=> o:GT
+Prelude.Ord Bytes.compare	y:[230,151,165,230,156,172]	y:[255,0,128]	=> o:LT
+Prelude.Ord Bytes.compare	y:[230,151,165,230,156,172]	y:[230,151,165,230,156,172]	=> o:EQ
+Prelude.Ord Bytes.compare	y:[230,151,165,230,156,172]	y:[97,98,97,98]	=> o:GT
+Prelude.Ord Bytes.compare	y:[230,151,165,230,156,172]	y:[0,0]	=> o:GT
+Prelude.Ord Bytes.compare	y:[97,98,97,98]	y:[]	=> o:GT
+Prelude.Ord Bytes.compare	y:[97,98,97,98]	y:[0]	=> o:GT
+Prelude.Ord Bytes.compare	y:[97,98,97,98]	y:[97]	=> o:GT
+Prelude.Ord Bytes.compare	y:[97,98,97,98]	y:[97,98]	=> o:GT
+Prelude.Ord Bytes.compare	y:[97,98,97,98]	y:[98]	=> o:LT
+Prelude.Ord Bytes.compare	y:[97,98,97,98]	y:[255,0,128]	=> o:LT
+Prelude.Ord Bytes.compare	y:[97,98,97,98]	y:[230,151,165,230,156,172]	=> o:LT
+Prelude.Ord Bytes.compare	y:[97,98,97,98]	y:[97,98,97,98]	=> o:EQ
+Prelude.Ord Bytes.compare	y:[97,98,97,98]	y:[0,0]	=> o:GT
+Prelude.Ord Bytes.compare	y:[0,0]	y:[]	=> o:GT
+Prelude.Ord Bytes.compare	y:[0,0]	y:[0]	=> o:GT
+Prelude.Ord Bytes.compare	y:[0,0]	y:[97]	=> o:LT
+Prelude.Ord Bytes.compare	y:[0,0]	y:[97,98]	=> o:LT
+Prelude.Ord Bytes.compare	y:[0,0]	y:[98]	=> o:LT
+Prelude.Ord Bytes.compare	y:[0,0]	y:[255,0,128]	=> o:LT
+Prelude.Ord Bytes.compare	y:[0,0]	y:[230,151,165,230,156,172]	=> o:LT
+Prelude.Ord Bytes.compare	y:[0,0]	y:[97,98,97,98]	=> o:LT
+Prelude.Ord Bytes.compare	y:[0,0]	y:[0,0]	=> o:EQ
+Prelude.Eq Bytes.==	y:[97,98]	Y:[97,98]	=> b:True
+Std.Bytes.append	y:[]	y:[]	=> y:[]
+Std.Bytes.append	y:[]	y:[0]	=> y:[0]
+Std.Bytes.append	y:[]	y:[97]	=> y:[97]
+Std.Bytes.append	y:[]	y:[97,98]	=> y:[97,98]
+Std.Bytes.append	y:[]	y:[98]	=> y:[98]
+Std.Bytes.append	y:[]	y:[255,0,128]	=> y:[255,0,128]
+Std.Bytes.append	y:[]	y:[230,151,165,230,156,172]	=> y:[230,151,165,230,156,172]
+Std.Bytes.append	y:[]	y:[97,98,97,98]	=> y:[97,98,97,98]
+Std.Bytes.append	y:[]	y:[0,0]	=> y:[0,0]
+Std.Bytes.append	y:[0]	y:[]	=> y:[0]
+Std.Bytes.append	y:[0]	y:[0]	=> y:[0,0]
+Std.Bytes.append	y:[0]	y:[97]	=> y:[0,97]
+Std.Bytes.append	y:[0]	y:[97,98]	=> y:[0,97,98]
+Std.Bytes.append	y:[0]	y:[98]	=> y:[0,98]
+Std.Bytes.append	y:[0]	y:[255,0,128]	=> y:[0,255,0,128]
+Std.Bytes.append	y:[0]	y:[230,151,165,230,156,172]	=> y:[0,230,151,165,230,156,172]
+Std.Bytes.append	y:[0]	y:[97,98,97,98]	=> y:[0,97,98,97,98]
+Std.Bytes.append	y:[0]	y:[0,0]	=> y:[0,0,0]
+Std.Bytes.append	y:[97]	y:[]	=> y:[97]
+Std.Bytes.append	y:[97]	y:[0]	=> y:[97,0]
+Std.Bytes.append	y:[97]	y:[97]	=> y:[97,97]
+Std.Bytes.append	y:[97]	y:[97,98]	=> y:[97,97,98]
+Std.Bytes.append	y:[97]	y:[98]	=> y:[97,98]
+Std.Bytes.append	y:[97]	y:[255,0,128]	=> y:[97,255,0,128]
+Std.Bytes.append	y:[97]	y:[230,151,165,230,156,172]	=> y:[97,230,151,165,230,156,172]
+Std.Bytes.append	y:[97]	y:[97,98,97,98]	=> y:[97,97,98,97,98]
+Std.Bytes.append	y:[97]	y:[0,0]	=> y:[97,0,0]
+Std.Bytes.append	y:[97,98]	y:[]	=> y:[97,98]
+Std.Bytes.append	y:[97,98]	y:[0]	=> y:[97,98,0]
+Std.Bytes.append	y:[97,98]	y:[97]	=> y:[97,98,97]
+Std.Bytes.append	y:[97,98]	y:[97,98]	=> y:[97,98,97,98]
+Std.Bytes.append	y:[97,98]	y:[98]	=> y:[97,98,98]
+Std.Bytes.append	y:[97,98]	y:[255,0,128]	=> y:[97,98,255,0,128]
+Std.Bytes.append	y:[97,98]	y:[230,151,165,230,156,172]	=> y:[97,98,230,151,165,230,156,172]
+Std.Bytes.append	y:[97,98]	y:[97,98,97,98]	=> y:[97,98,97,98,97,98]
+Std.Bytes.append	y:[97,98]	y:[0,0]	=> y:[97,98,0,0]
+Std.Bytes.append	y:[98]	y:[]	=> y:[98]
+Std.Bytes.append	y:[98]	y:[0]	=> y:[98,0]
+Std.Bytes.append	y:[98]	y:[97]	=> y:[98,97]
+Std.Bytes.append	y:[98]	y:[97,98]	=> y:[98,97,98]
+Std.Bytes.append	y:[98]	y:[98]	=> y:[98,98]
+Std.Bytes.append	y:[98]	y:[255,0,128]	=> y:[98,255,0,128]
+Std.Bytes.append	y:[98]	y:[230,151,165,230,156,172]	=> y:[98,230,151,165,230,156,172]
+Std.Bytes.append	y:[98]	y:[97,98,97,98]	=> y:[98,97,98,97,98]
+Std.Bytes.append	y:[98]	y:[0,0]	=> y:[98,0,0]
+Std.Bytes.append	y:[255,0,128]	y:[]	=> y:[255,0,128]
+Std.Bytes.append	y:[255,0,128]	y:[0]	=> y:[255,0,128,0]
+Std.Bytes.append	y:[255,0,128]	y:[97]	=> y:[255,0,128,97]
+Std.Bytes.append	y:[255,0,128]	y:[97,98]	=> y:[255,0,128,97,98]
+Std.Bytes.append	y:[255,0,128]	y:[98]	=> y:[255,0,128,98]
+Std.Bytes.append	y:[255,0,128]	y:[255,0,128]	=> y:[255,0,128,255,0,128]
+Std.Bytes.append	y:[255,0,128]	y:[230,151,165,230,156,172]	=> y:[255,0,128,230,151,165,230,156,172]
+Std.Bytes.append	y:[255,0,128]	y:[97,98,97,98]	=> y:[255,0,128,97,98,97,98]
+Std.Bytes.append	y:[255,0,128]	y:[0,0]	=> y:[255,0,128,0,0]
+Std.Bytes.append	y:[230,151,165,230,156,172]	y:[]	=> y:[230,151,165,230,156,172]
+Std.Bytes.append	y:[230,151,165,230,156,172]	y:[0]	=> y:[230,151,165,230,156,172,0]
+Std.Bytes.append	y:[230,151,165,230,156,172]	y:[97]	=> y:[230,151,165,230,156,172,97]
+Std.Bytes.append	y:[230,151,165,230,156,172]	y:[97,98]	=> y:[230,151,165,230,156,172,97,98]
+Std.Bytes.append	y:[230,151,165,230,156,172]	y:[98]	=> y:[230,151,165,230,156,172,98]
+Std.Bytes.append	y:[230,151,165,230,156,172]	y:[255,0,128]	=> y:[230,151,165,230,156,172,255,0,128]
+Std.Bytes.append	y:[230,151,165,230,156,172]	y:[230,151,165,230,156,172]	=> y:[230,151,165,230,156,172,230,151,165,230,156,172]
+Std.Bytes.append	y:[230,151,165,230,156,172]	y:[97,98,97,98]	=> y:[230,151,165,230,156,172,97,98,97,98]
+Std.Bytes.append	y:[230,151,165,230,156,172]	y:[0,0]	=> y:[230,151,165,230,156,172,0,0]
+Std.Bytes.append	y:[97,98,97,98]	y:[]	=> y:[97,98,97,98]
+Std.Bytes.append	y:[97,98,97,98]	y:[0]	=> y:[97,98,97,98,0]
+Std.Bytes.append	y:[97,98,97,98]	y:[97]	=> y:[97,98,97,98,97]
+Std.Bytes.append	y:[97,98,97,98]	y:[97,98]	=> y:[97,98,97,98,97,98]
+Std.Bytes.append	y:[97,98,97,98]	y:[98]	=> y:[97,98,97,98,98]
+Std.Bytes.append	y:[97,98,97,98]	y:[255,0,128]	=> y:[97,98,97,98,255,0,128]
+Std.Bytes.append	y:[97,98,97,98]	y:[230,151,165,230,156,172]	=> y:[97,98,97,98,230,151,165,230,156,172]
+Std.Bytes.append	y:[97,98,97,98]	y:[97,98,97,98]	=> y:[97,98,97,98,97,98,97,98]
+Std.Bytes.append	y:[97,98,97,98]	y:[0,0]	=> y:[97,98,97,98,0,0]
+Std.Bytes.append	y:[0,0]	y:[]	=> y:[0,0]
+Std.Bytes.append	y:[0,0]	y:[0]	=> y:[0,0,0]
+Std.Bytes.append	y:[0,0]	y:[97]	=> y:[0,0,97]
+Std.Bytes.append	y:[0,0]	y:[97,98]	=> y:[0,0,97,98]
+Std.Bytes.append	y:[0,0]	y:[98]	=> y:[0,0,98]
+Std.Bytes.append	y:[0,0]	y:[255,0,128]	=> y:[0,0,255,0,128]
+Std.Bytes.append	y:[0,0]	y:[230,151,165,230,156,172]	=> y:[0,0,230,151,165,230,156,172]
+Std.Bytes.append	y:[0,0]	y:[97,98,97,98]	=> y:[0,0,97,98,97,98]
+Std.Bytes.append	y:[0,0]	y:[0,0]	=> y:[0,0,0,0]
+Std.Bytes.append	Y:[97,98]	y:[99]	=> y:[97,98,99]
+Std.Bytes.append	y:[97,98]	Y:[99]	=> y:[97,98,99]
+Std.Bytes.slice	i:0	i:0	y:[]	=> y:[]
+Std.Bytes.append_slice	i:0	i:0	y:[]	y:[120]	=> y:[120]
+Std.Bytes.slice	i:0	i:0	y:[]	=> y:[]
+Std.Bytes.append_slice	i:0	i:0	y:[]	y:[120]	=> y:[120]
+Std.Bytes.slice	i:0	i:1	y:[]	=> err:"bytes slice 0..1 is out of range for length 0"
+Std.Bytes.append_slice	i:0	i:1	y:[]	y:[120]	=> err:"bytes slice 0..1 is out of range for length 0"
+Std.Bytes.slice	i:1	i:2	y:[]	=> err:"bytes slice 1..2 is out of range for length 0"
+Std.Bytes.append_slice	i:1	i:2	y:[]	y:[120]	=> err:"bytes slice 1..2 is out of range for length 0"
+Std.Bytes.slice	i:1	i:0	y:[]	=> err:"bytes slice 1..0 is out of range for length 0"
+Std.Bytes.append_slice	i:1	i:0	y:[]	y:[120]	=> err:"bytes slice 1..0 is out of range for length 0"
+Std.Bytes.slice	i:0	i:0	y:[]	=> y:[]
+Std.Bytes.append_slice	i:0	i:0	y:[]	y:[120]	=> y:[120]
+Std.Bytes.slice	i:-1	i:1	y:[]	=> err:"bytes slice -1..1 is out of range for length 0"
+Std.Bytes.append_slice	i:-1	i:1	y:[]	y:[120]	=> err:"bytes slice -1..1 is out of range for length 0"
+Std.Bytes.slice	i:2	i:1	y:[]	=> err:"bytes slice 2..1 is out of range for length 0"
+Std.Bytes.append_slice	i:2	i:1	y:[]	y:[120]	=> err:"bytes slice 2..1 is out of range for length 0"
+Std.Bytes.slice	i:0	i:1	y:[]	=> err:"bytes slice 0..1 is out of range for length 0"
+Std.Bytes.append_slice	i:0	i:1	y:[]	y:[120]	=> err:"bytes slice 0..1 is out of range for length 0"
+Std.Bytes.slice	i:-9223372036854775808	i:9223372036854775807	y:[]	=> err:"bytes slice -9223372036854775808..9223372036854775807 is out of range for length 0"
+Std.Bytes.append_slice	i:-9223372036854775808	i:9223372036854775807	y:[]	y:[120]	=> err:"bytes slice -9223372036854775808..9223372036854775807 is out of range for length 0"
+Std.Bytes.truncate	i:-1	y:[]	=> err:"bytes slice 0..-1 is out of range for length 0"
+Std.Bytes.truncate	i:0	y:[]	=> y:[]
+Std.Bytes.truncate	i:1	y:[]	=> err:"bytes slice 0..1 is out of range for length 0"
+Std.Bytes.truncate	i:-1	y:[]	=> err:"bytes slice 0..-1 is out of range for length 0"
+Std.Bytes.truncate	i:0	y:[]	=> y:[]
+Std.Bytes.truncate	i:1	y:[]	=> err:"bytes slice 0..1 is out of range for length 0"
+Std.Bytes.truncate	i:-9223372036854775808	y:[]	=> err:"bytes slice 0..-9223372036854775808 is out of range for length 0"
+Std.Bytes.truncate	i:9223372036854775807	y:[]	=> err:"bytes slice 0..9223372036854775807 is out of range for length 0"
+Std.Bytes.find_from	y:[]	i:-1	y:[]	=> err:"bytes index -1 is out of range for length 0"
+Std.Bytes.find_from	y:[]	i:0	y:[]	=> i:0
+Std.Bytes.find_from	y:[]	i:1	y:[]	=> err:"bytes index 1 is out of range for length 0"
+Std.Bytes.find_from	y:[]	i:0	y:[]	=> i:0
+Std.Bytes.find_from	y:[]	i:1	y:[]	=> err:"bytes index 1 is out of range for length 0"
+Std.Bytes.find_from	y:[0]	i:-1	y:[]	=> err:"bytes index -1 is out of range for length 0"
+Std.Bytes.find_from	y:[0]	i:0	y:[]	=> i:-1
+Std.Bytes.find_from	y:[0]	i:1	y:[]	=> err:"bytes index 1 is out of range for length 0"
+Std.Bytes.find_from	y:[0]	i:0	y:[]	=> i:-1
+Std.Bytes.find_from	y:[0]	i:1	y:[]	=> err:"bytes index 1 is out of range for length 0"
+Std.Bytes.find_from	y:[97]	i:-1	y:[]	=> err:"bytes index -1 is out of range for length 0"
+Std.Bytes.find_from	y:[97]	i:0	y:[]	=> i:-1
+Std.Bytes.find_from	y:[97]	i:1	y:[]	=> err:"bytes index 1 is out of range for length 0"
+Std.Bytes.find_from	y:[97]	i:0	y:[]	=> i:-1
+Std.Bytes.find_from	y:[97]	i:1	y:[]	=> err:"bytes index 1 is out of range for length 0"
+Std.Bytes.find_from	y:[97,98]	i:-1	y:[]	=> err:"bytes index -1 is out of range for length 0"
+Std.Bytes.find_from	y:[97,98]	i:0	y:[]	=> i:-1
+Std.Bytes.find_from	y:[97,98]	i:1	y:[]	=> err:"bytes index 1 is out of range for length 0"
+Std.Bytes.find_from	y:[97,98]	i:0	y:[]	=> i:-1
+Std.Bytes.find_from	y:[97,98]	i:1	y:[]	=> err:"bytes index 1 is out of range for length 0"
+Std.Bytes.find_from	y:[98]	i:-1	y:[]	=> err:"bytes index -1 is out of range for length 0"
+Std.Bytes.find_from	y:[98]	i:0	y:[]	=> i:-1
+Std.Bytes.find_from	y:[98]	i:1	y:[]	=> err:"bytes index 1 is out of range for length 0"
+Std.Bytes.find_from	y:[98]	i:0	y:[]	=> i:-1
+Std.Bytes.find_from	y:[98]	i:1	y:[]	=> err:"bytes index 1 is out of range for length 0"
+Std.Bytes.find_from	y:[255,0,128]	i:-1	y:[]	=> err:"bytes index -1 is out of range for length 0"
+Std.Bytes.find_from	y:[255,0,128]	i:0	y:[]	=> i:-1
+Std.Bytes.find_from	y:[255,0,128]	i:1	y:[]	=> err:"bytes index 1 is out of range for length 0"
+Std.Bytes.find_from	y:[255,0,128]	i:0	y:[]	=> i:-1
+Std.Bytes.find_from	y:[255,0,128]	i:1	y:[]	=> err:"bytes index 1 is out of range for length 0"
+Std.Bytes.find_from	y:[230,151,165,230,156,172]	i:-1	y:[]	=> err:"bytes index -1 is out of range for length 0"
+Std.Bytes.find_from	y:[230,151,165,230,156,172]	i:0	y:[]	=> i:-1
+Std.Bytes.find_from	y:[230,151,165,230,156,172]	i:1	y:[]	=> err:"bytes index 1 is out of range for length 0"
+Std.Bytes.find_from	y:[230,151,165,230,156,172]	i:0	y:[]	=> i:-1
+Std.Bytes.find_from	y:[230,151,165,230,156,172]	i:1	y:[]	=> err:"bytes index 1 is out of range for length 0"
+Std.Bytes.find_from	y:[97,98,97,98]	i:-1	y:[]	=> err:"bytes index -1 is out of range for length 0"
+Std.Bytes.find_from	y:[97,98,97,98]	i:0	y:[]	=> i:-1
+Std.Bytes.find_from	y:[97,98,97,98]	i:1	y:[]	=> err:"bytes index 1 is out of range for length 0"
+Std.Bytes.find_from	y:[97,98,97,98]	i:0	y:[]	=> i:-1
+Std.Bytes.find_from	y:[97,98,97,98]	i:1	y:[]	=> err:"bytes index 1 is out of range for length 0"
+Std.Bytes.find_from	y:[0,0]	i:-1	y:[]	=> err:"bytes index -1 is out of range for length 0"
+Std.Bytes.find_from	y:[0,0]	i:0	y:[]	=> i:-1
+Std.Bytes.find_from	y:[0,0]	i:1	y:[]	=> err:"bytes index 1 is out of range for length 0"
+Std.Bytes.find_from	y:[0,0]	i:0	y:[]	=> i:-1
+Std.Bytes.find_from	y:[0,0]	i:1	y:[]	=> err:"bytes index 1 is out of range for length 0"
+Std.Bytes.slice	i:0	i:0	y:[0]	=> y:[]
+Std.Bytes.append_slice	i:0	i:0	y:[0]	y:[120]	=> y:[120]
+Std.Bytes.slice	i:0	i:1	y:[0]	=> y:[0]
+Std.Bytes.append_slice	i:0	i:1	y:[0]	y:[120]	=> y:[120,0]
+Std.Bytes.slice	i:0	i:1	y:[0]	=> y:[0]
+Std.Bytes.append_slice	i:0	i:1	y:[0]	y:[120]	=> y:[120,0]
+Std.Bytes.slice	i:1	i:2	y:[0]	=> err:"bytes slice 1..2 is out of range for length 1"
+Std.Bytes.append_slice	i:1	i:2	y:[0]	y:[120]	=> err:"bytes slice 1..2 is out of range for length 1"
+Std.Bytes.slice	i:1	i:1	y:[0]	=> y:[]
+Std.Bytes.append_slice	i:1	i:1	y:[0]	y:[120]	=> y:[120]
+Std.Bytes.slice	i:1	i:1	y:[0]	=> y:[]
+Std.Bytes.append_slice	i:1	i:1	y:[0]	y:[120]	=> y:[120]
+Std.Bytes.slice	i:-1	i:1	y:[0]	=> err:"bytes slice -1..1 is out of range for length 1"
+Std.Bytes.append_slice	i:-1	i:1	y:[0]	y:[120]	=> err:"bytes slice -1..1 is out of range for length 1"
+Std.Bytes.slice	i:2	i:1	y:[0]	=> err:"bytes slice 2..1 is out of range for length 1"
+Std.Bytes.append_slice	i:2	i:1	y:[0]	y:[120]	=> err:"bytes slice 2..1 is out of range for length 1"
+Std.Bytes.slice	i:0	i:2	y:[0]	=> err:"bytes slice 0..2 is out of range for length 1"
+Std.Bytes.append_slice	i:0	i:2	y:[0]	y:[120]	=> err:"bytes slice 0..2 is out of range for length 1"
+Std.Bytes.slice	i:-9223372036854775808	i:9223372036854775807	y:[0]	=> err:"bytes slice -9223372036854775808..9223372036854775807 is out of range for length 1"
+Std.Bytes.append_slice	i:-9223372036854775808	i:9223372036854775807	y:[0]	y:[120]	=> err:"bytes slice -9223372036854775808..9223372036854775807 is out of range for length 1"
+Std.Bytes.truncate	i:-1	y:[0]	=> err:"bytes slice 0..-1 is out of range for length 1"
+Std.Bytes.truncate	i:0	y:[0]	=> y:[]
+Std.Bytes.truncate	i:1	y:[0]	=> y:[0]
+Std.Bytes.truncate	i:0	y:[0]	=> y:[]
+Std.Bytes.truncate	i:1	y:[0]	=> y:[0]
+Std.Bytes.truncate	i:2	y:[0]	=> err:"bytes slice 0..2 is out of range for length 1"
+Std.Bytes.truncate	i:-9223372036854775808	y:[0]	=> err:"bytes slice 0..-9223372036854775808 is out of range for length 1"
+Std.Bytes.truncate	i:9223372036854775807	y:[0]	=> err:"bytes slice 0..9223372036854775807 is out of range for length 1"
+Std.Bytes.find_from	y:[]	i:-1	y:[0]	=> err:"bytes index -1 is out of range for length 1"
+Std.Bytes.find_from	y:[]	i:0	y:[0]	=> i:0
+Std.Bytes.find_from	y:[]	i:1	y:[0]	=> i:1
+Std.Bytes.find_from	y:[]	i:1	y:[0]	=> i:1
+Std.Bytes.find_from	y:[]	i:2	y:[0]	=> err:"bytes index 2 is out of range for length 1"
+Std.Bytes.find_from	y:[0]	i:-1	y:[0]	=> err:"bytes index -1 is out of range for length 1"
+Std.Bytes.find_from	y:[0]	i:0	y:[0]	=> i:0
+Std.Bytes.find_from	y:[0]	i:1	y:[0]	=> i:-1
+Std.Bytes.find_from	y:[0]	i:1	y:[0]	=> i:-1
+Std.Bytes.find_from	y:[0]	i:2	y:[0]	=> err:"bytes index 2 is out of range for length 1"
+Std.Bytes.find_from	y:[97]	i:-1	y:[0]	=> err:"bytes index -1 is out of range for length 1"
+Std.Bytes.find_from	y:[97]	i:0	y:[0]	=> i:-1
+Std.Bytes.find_from	y:[97]	i:1	y:[0]	=> i:-1
+Std.Bytes.find_from	y:[97]	i:1	y:[0]	=> i:-1
+Std.Bytes.find_from	y:[97]	i:2	y:[0]	=> err:"bytes index 2 is out of range for length 1"
+Std.Bytes.find_from	y:[97,98]	i:-1	y:[0]	=> err:"bytes index -1 is out of range for length 1"
+Std.Bytes.find_from	y:[97,98]	i:0	y:[0]	=> i:-1
+Std.Bytes.find_from	y:[97,98]	i:1	y:[0]	=> i:-1
+Std.Bytes.find_from	y:[97,98]	i:1	y:[0]	=> i:-1
+Std.Bytes.find_from	y:[97,98]	i:2	y:[0]	=> err:"bytes index 2 is out of range for length 1"
+Std.Bytes.find_from	y:[98]	i:-1	y:[0]	=> err:"bytes index -1 is out of range for length 1"
+Std.Bytes.find_from	y:[98]	i:0	y:[0]	=> i:-1
+Std.Bytes.find_from	y:[98]	i:1	y:[0]	=> i:-1
+Std.Bytes.find_from	y:[98]	i:1	y:[0]	=> i:-1
+Std.Bytes.find_from	y:[98]	i:2	y:[0]	=> err:"bytes index 2 is out of range for length 1"
+Std.Bytes.find_from	y:[255,0,128]	i:-1	y:[0]	=> err:"bytes index -1 is out of range for length 1"
+Std.Bytes.find_from	y:[255,0,128]	i:0	y:[0]	=> i:-1
+Std.Bytes.find_from	y:[255,0,128]	i:1	y:[0]	=> i:-1
+Std.Bytes.find_from	y:[255,0,128]	i:1	y:[0]	=> i:-1
+Std.Bytes.find_from	y:[255,0,128]	i:2	y:[0]	=> err:"bytes index 2 is out of range for length 1"
+Std.Bytes.find_from	y:[230,151,165,230,156,172]	i:-1	y:[0]	=> err:"bytes index -1 is out of range for length 1"
+Std.Bytes.find_from	y:[230,151,165,230,156,172]	i:0	y:[0]	=> i:-1
+Std.Bytes.find_from	y:[230,151,165,230,156,172]	i:1	y:[0]	=> i:-1
+Std.Bytes.find_from	y:[230,151,165,230,156,172]	i:1	y:[0]	=> i:-1
+Std.Bytes.find_from	y:[230,151,165,230,156,172]	i:2	y:[0]	=> err:"bytes index 2 is out of range for length 1"
+Std.Bytes.find_from	y:[97,98,97,98]	i:-1	y:[0]	=> err:"bytes index -1 is out of range for length 1"
+Std.Bytes.find_from	y:[97,98,97,98]	i:0	y:[0]	=> i:-1
+Std.Bytes.find_from	y:[97,98,97,98]	i:1	y:[0]	=> i:-1
+Std.Bytes.find_from	y:[97,98,97,98]	i:1	y:[0]	=> i:-1
+Std.Bytes.find_from	y:[97,98,97,98]	i:2	y:[0]	=> err:"bytes index 2 is out of range for length 1"
+Std.Bytes.find_from	y:[0,0]	i:-1	y:[0]	=> err:"bytes index -1 is out of range for length 1"
+Std.Bytes.find_from	y:[0,0]	i:0	y:[0]	=> i:-1
+Std.Bytes.find_from	y:[0,0]	i:1	y:[0]	=> i:-1
+Std.Bytes.find_from	y:[0,0]	i:1	y:[0]	=> i:-1
+Std.Bytes.find_from	y:[0,0]	i:2	y:[0]	=> err:"bytes index 2 is out of range for length 1"
+Std.Bytes.slice	i:0	i:0	y:[97]	=> y:[]
+Std.Bytes.append_slice	i:0	i:0	y:[97]	y:[120]	=> y:[120]
+Std.Bytes.slice	i:0	i:1	y:[97]	=> y:[97]
+Std.Bytes.append_slice	i:0	i:1	y:[97]	y:[120]	=> y:[120,97]
+Std.Bytes.slice	i:0	i:1	y:[97]	=> y:[97]
+Std.Bytes.append_slice	i:0	i:1	y:[97]	y:[120]	=> y:[120,97]
+Std.Bytes.slice	i:1	i:2	y:[97]	=> err:"bytes slice 1..2 is out of range for length 1"
+Std.Bytes.append_slice	i:1	i:2	y:[97]	y:[120]	=> err:"bytes slice 1..2 is out of range for length 1"
+Std.Bytes.slice	i:1	i:1	y:[97]	=> y:[]
+Std.Bytes.append_slice	i:1	i:1	y:[97]	y:[120]	=> y:[120]
+Std.Bytes.slice	i:1	i:1	y:[97]	=> y:[]
+Std.Bytes.append_slice	i:1	i:1	y:[97]	y:[120]	=> y:[120]
+Std.Bytes.slice	i:-1	i:1	y:[97]	=> err:"bytes slice -1..1 is out of range for length 1"
+Std.Bytes.append_slice	i:-1	i:1	y:[97]	y:[120]	=> err:"bytes slice -1..1 is out of range for length 1"
+Std.Bytes.slice	i:2	i:1	y:[97]	=> err:"bytes slice 2..1 is out of range for length 1"
+Std.Bytes.append_slice	i:2	i:1	y:[97]	y:[120]	=> err:"bytes slice 2..1 is out of range for length 1"
+Std.Bytes.slice	i:0	i:2	y:[97]	=> err:"bytes slice 0..2 is out of range for length 1"
+Std.Bytes.append_slice	i:0	i:2	y:[97]	y:[120]	=> err:"bytes slice 0..2 is out of range for length 1"
+Std.Bytes.slice	i:-9223372036854775808	i:9223372036854775807	y:[97]	=> err:"bytes slice -9223372036854775808..9223372036854775807 is out of range for length 1"
+Std.Bytes.append_slice	i:-9223372036854775808	i:9223372036854775807	y:[97]	y:[120]	=> err:"bytes slice -9223372036854775808..9223372036854775807 is out of range for length 1"
+Std.Bytes.truncate	i:-1	y:[97]	=> err:"bytes slice 0..-1 is out of range for length 1"
+Std.Bytes.truncate	i:0	y:[97]	=> y:[]
+Std.Bytes.truncate	i:1	y:[97]	=> y:[97]
+Std.Bytes.truncate	i:0	y:[97]	=> y:[]
+Std.Bytes.truncate	i:1	y:[97]	=> y:[97]
+Std.Bytes.truncate	i:2	y:[97]	=> err:"bytes slice 0..2 is out of range for length 1"
+Std.Bytes.truncate	i:-9223372036854775808	y:[97]	=> err:"bytes slice 0..-9223372036854775808 is out of range for length 1"
+Std.Bytes.truncate	i:9223372036854775807	y:[97]	=> err:"bytes slice 0..9223372036854775807 is out of range for length 1"
+Std.Bytes.find_from	y:[]	i:-1	y:[97]	=> err:"bytes index -1 is out of range for length 1"
+Std.Bytes.find_from	y:[]	i:0	y:[97]	=> i:0
+Std.Bytes.find_from	y:[]	i:1	y:[97]	=> i:1
+Std.Bytes.find_from	y:[]	i:1	y:[97]	=> i:1
+Std.Bytes.find_from	y:[]	i:2	y:[97]	=> err:"bytes index 2 is out of range for length 1"
+Std.Bytes.find_from	y:[0]	i:-1	y:[97]	=> err:"bytes index -1 is out of range for length 1"
+Std.Bytes.find_from	y:[0]	i:0	y:[97]	=> i:-1
+Std.Bytes.find_from	y:[0]	i:1	y:[97]	=> i:-1
+Std.Bytes.find_from	y:[0]	i:1	y:[97]	=> i:-1
+Std.Bytes.find_from	y:[0]	i:2	y:[97]	=> err:"bytes index 2 is out of range for length 1"
+Std.Bytes.find_from	y:[97]	i:-1	y:[97]	=> err:"bytes index -1 is out of range for length 1"
+Std.Bytes.find_from	y:[97]	i:0	y:[97]	=> i:0
+Std.Bytes.find_from	y:[97]	i:1	y:[97]	=> i:-1
+Std.Bytes.find_from	y:[97]	i:1	y:[97]	=> i:-1
+Std.Bytes.find_from	y:[97]	i:2	y:[97]	=> err:"bytes index 2 is out of range for length 1"
+Std.Bytes.find_from	y:[97,98]	i:-1	y:[97]	=> err:"bytes index -1 is out of range for length 1"
+Std.Bytes.find_from	y:[97,98]	i:0	y:[97]	=> i:-1
+Std.Bytes.find_from	y:[97,98]	i:1	y:[97]	=> i:-1
+Std.Bytes.find_from	y:[97,98]	i:1	y:[97]	=> i:-1
+Std.Bytes.find_from	y:[97,98]	i:2	y:[97]	=> err:"bytes index 2 is out of range for length 1"
+Std.Bytes.find_from	y:[98]	i:-1	y:[97]	=> err:"bytes index -1 is out of range for length 1"
+Std.Bytes.find_from	y:[98]	i:0	y:[97]	=> i:-1
+Std.Bytes.find_from	y:[98]	i:1	y:[97]	=> i:-1
+Std.Bytes.find_from	y:[98]	i:1	y:[97]	=> i:-1
+Std.Bytes.find_from	y:[98]	i:2	y:[97]	=> err:"bytes index 2 is out of range for length 1"
+Std.Bytes.find_from	y:[255,0,128]	i:-1	y:[97]	=> err:"bytes index -1 is out of range for length 1"
+Std.Bytes.find_from	y:[255,0,128]	i:0	y:[97]	=> i:-1
+Std.Bytes.find_from	y:[255,0,128]	i:1	y:[97]	=> i:-1
+Std.Bytes.find_from	y:[255,0,128]	i:1	y:[97]	=> i:-1
+Std.Bytes.find_from	y:[255,0,128]	i:2	y:[97]	=> err:"bytes index 2 is out of range for length 1"
+Std.Bytes.find_from	y:[230,151,165,230,156,172]	i:-1	y:[97]	=> err:"bytes index -1 is out of range for length 1"
+Std.Bytes.find_from	y:[230,151,165,230,156,172]	i:0	y:[97]	=> i:-1
+Std.Bytes.find_from	y:[230,151,165,230,156,172]	i:1	y:[97]	=> i:-1
+Std.Bytes.find_from	y:[230,151,165,230,156,172]	i:1	y:[97]	=> i:-1
+Std.Bytes.find_from	y:[230,151,165,230,156,172]	i:2	y:[97]	=> err:"bytes index 2 is out of range for length 1"
+Std.Bytes.find_from	y:[97,98,97,98]	i:-1	y:[97]	=> err:"bytes index -1 is out of range for length 1"
+Std.Bytes.find_from	y:[97,98,97,98]	i:0	y:[97]	=> i:-1
+Std.Bytes.find_from	y:[97,98,97,98]	i:1	y:[97]	=> i:-1
+Std.Bytes.find_from	y:[97,98,97,98]	i:1	y:[97]	=> i:-1
+Std.Bytes.find_from	y:[97,98,97,98]	i:2	y:[97]	=> err:"bytes index 2 is out of range for length 1"
+Std.Bytes.find_from	y:[0,0]	i:-1	y:[97]	=> err:"bytes index -1 is out of range for length 1"
+Std.Bytes.find_from	y:[0,0]	i:0	y:[97]	=> i:-1
+Std.Bytes.find_from	y:[0,0]	i:1	y:[97]	=> i:-1
+Std.Bytes.find_from	y:[0,0]	i:1	y:[97]	=> i:-1
+Std.Bytes.find_from	y:[0,0]	i:2	y:[97]	=> err:"bytes index 2 is out of range for length 1"
+Std.Bytes.slice	i:0	i:0	y:[97,98]	=> y:[]
+Std.Bytes.append_slice	i:0	i:0	y:[97,98]	y:[120]	=> y:[120]
+Std.Bytes.slice	i:0	i:2	y:[97,98]	=> y:[97,98]
+Std.Bytes.append_slice	i:0	i:2	y:[97,98]	y:[120]	=> y:[120,97,98]
+Std.Bytes.slice	i:0	i:1	y:[97,98]	=> y:[97]
+Std.Bytes.append_slice	i:0	i:1	y:[97,98]	y:[120]	=> y:[120,97]
+Std.Bytes.slice	i:1	i:2	y:[97,98]	=> y:[98]
+Std.Bytes.append_slice	i:1	i:2	y:[97,98]	y:[120]	=> y:[120,98]
+Std.Bytes.slice	i:1	i:2	y:[97,98]	=> y:[98]
+Std.Bytes.append_slice	i:1	i:2	y:[97,98]	y:[120]	=> y:[120,98]
+Std.Bytes.slice	i:2	i:2	y:[97,98]	=> y:[]
+Std.Bytes.append_slice	i:2	i:2	y:[97,98]	y:[120]	=> y:[120]
+Std.Bytes.slice	i:-1	i:1	y:[97,98]	=> err:"bytes slice -1..1 is out of range for length 2"
+Std.Bytes.append_slice	i:-1	i:1	y:[97,98]	y:[120]	=> err:"bytes slice -1..1 is out of range for length 2"
+Std.Bytes.slice	i:2	i:1	y:[97,98]	=> err:"bytes slice 2..1 is out of range for length 2"
+Std.Bytes.append_slice	i:2	i:1	y:[97,98]	y:[120]	=> err:"bytes slice 2..1 is out of range for length 2"
+Std.Bytes.slice	i:0	i:3	y:[97,98]	=> err:"bytes slice 0..3 is out of range for length 2"
+Std.Bytes.append_slice	i:0	i:3	y:[97,98]	y:[120]	=> err:"bytes slice 0..3 is out of range for length 2"
+Std.Bytes.slice	i:-9223372036854775808	i:9223372036854775807	y:[97,98]	=> err:"bytes slice -9223372036854775808..9223372036854775807 is out of range for length 2"
+Std.Bytes.append_slice	i:-9223372036854775808	i:9223372036854775807	y:[97,98]	y:[120]	=> err:"bytes slice -9223372036854775808..9223372036854775807 is out of range for length 2"
+Std.Bytes.truncate	i:-1	y:[97,98]	=> err:"bytes slice 0..-1 is out of range for length 2"
+Std.Bytes.truncate	i:0	y:[97,98]	=> y:[]
+Std.Bytes.truncate	i:1	y:[97,98]	=> y:[97]
+Std.Bytes.truncate	i:1	y:[97,98]	=> y:[97]
+Std.Bytes.truncate	i:2	y:[97,98]	=> y:[97,98]
+Std.Bytes.truncate	i:3	y:[97,98]	=> err:"bytes slice 0..3 is out of range for length 2"
+Std.Bytes.truncate	i:-9223372036854775808	y:[97,98]	=> err:"bytes slice 0..-9223372036854775808 is out of range for length 2"
+Std.Bytes.truncate	i:9223372036854775807	y:[97,98]	=> err:"bytes slice 0..9223372036854775807 is out of range for length 2"
+Std.Bytes.find_from	y:[]	i:-1	y:[97,98]	=> err:"bytes index -1 is out of range for length 2"
+Std.Bytes.find_from	y:[]	i:0	y:[97,98]	=> i:0
+Std.Bytes.find_from	y:[]	i:1	y:[97,98]	=> i:1
+Std.Bytes.find_from	y:[]	i:2	y:[97,98]	=> i:2
+Std.Bytes.find_from	y:[]	i:3	y:[97,98]	=> err:"bytes index 3 is out of range for length 2"
+Std.Bytes.find_from	y:[0]	i:-1	y:[97,98]	=> err:"bytes index -1 is out of range for length 2"
+Std.Bytes.find_from	y:[0]	i:0	y:[97,98]	=> i:-1
+Std.Bytes.find_from	y:[0]	i:1	y:[97,98]	=> i:-1
+Std.Bytes.find_from	y:[0]	i:2	y:[97,98]	=> i:-1
+Std.Bytes.find_from	y:[0]	i:3	y:[97,98]	=> err:"bytes index 3 is out of range for length 2"
+Std.Bytes.find_from	y:[97]	i:-1	y:[97,98]	=> err:"bytes index -1 is out of range for length 2"
+Std.Bytes.find_from	y:[97]	i:0	y:[97,98]	=> i:0
+Std.Bytes.find_from	y:[97]	i:1	y:[97,98]	=> i:-1
+Std.Bytes.find_from	y:[97]	i:2	y:[97,98]	=> i:-1
+Std.Bytes.find_from	y:[97]	i:3	y:[97,98]	=> err:"bytes index 3 is out of range for length 2"
+Std.Bytes.find_from	y:[97,98]	i:-1	y:[97,98]	=> err:"bytes index -1 is out of range for length 2"
+Std.Bytes.find_from	y:[97,98]	i:0	y:[97,98]	=> i:0
+Std.Bytes.find_from	y:[97,98]	i:1	y:[97,98]	=> i:-1
+Std.Bytes.find_from	y:[97,98]	i:2	y:[97,98]	=> i:-1
+Std.Bytes.find_from	y:[97,98]	i:3	y:[97,98]	=> err:"bytes index 3 is out of range for length 2"
+Std.Bytes.find_from	y:[98]	i:-1	y:[97,98]	=> err:"bytes index -1 is out of range for length 2"
+Std.Bytes.find_from	y:[98]	i:0	y:[97,98]	=> i:1
+Std.Bytes.find_from	y:[98]	i:1	y:[97,98]	=> i:1
+Std.Bytes.find_from	y:[98]	i:2	y:[97,98]	=> i:-1
+Std.Bytes.find_from	y:[98]	i:3	y:[97,98]	=> err:"bytes index 3 is out of range for length 2"
+Std.Bytes.find_from	y:[255,0,128]	i:-1	y:[97,98]	=> err:"bytes index -1 is out of range for length 2"
+Std.Bytes.find_from	y:[255,0,128]	i:0	y:[97,98]	=> i:-1
+Std.Bytes.find_from	y:[255,0,128]	i:1	y:[97,98]	=> i:-1
+Std.Bytes.find_from	y:[255,0,128]	i:2	y:[97,98]	=> i:-1
+Std.Bytes.find_from	y:[255,0,128]	i:3	y:[97,98]	=> err:"bytes index 3 is out of range for length 2"
+Std.Bytes.find_from	y:[230,151,165,230,156,172]	i:-1	y:[97,98]	=> err:"bytes index -1 is out of range for length 2"
+Std.Bytes.find_from	y:[230,151,165,230,156,172]	i:0	y:[97,98]	=> i:-1
+Std.Bytes.find_from	y:[230,151,165,230,156,172]	i:1	y:[97,98]	=> i:-1
+Std.Bytes.find_from	y:[230,151,165,230,156,172]	i:2	y:[97,98]	=> i:-1
+Std.Bytes.find_from	y:[230,151,165,230,156,172]	i:3	y:[97,98]	=> err:"bytes index 3 is out of range for length 2"
+Std.Bytes.find_from	y:[97,98,97,98]	i:-1	y:[97,98]	=> err:"bytes index -1 is out of range for length 2"
+Std.Bytes.find_from	y:[97,98,97,98]	i:0	y:[97,98]	=> i:-1
+Std.Bytes.find_from	y:[97,98,97,98]	i:1	y:[97,98]	=> i:-1
+Std.Bytes.find_from	y:[97,98,97,98]	i:2	y:[97,98]	=> i:-1
+Std.Bytes.find_from	y:[97,98,97,98]	i:3	y:[97,98]	=> err:"bytes index 3 is out of range for length 2"
+Std.Bytes.find_from	y:[0,0]	i:-1	y:[97,98]	=> err:"bytes index -1 is out of range for length 2"
+Std.Bytes.find_from	y:[0,0]	i:0	y:[97,98]	=> i:-1
+Std.Bytes.find_from	y:[0,0]	i:1	y:[97,98]	=> i:-1
+Std.Bytes.find_from	y:[0,0]	i:2	y:[97,98]	=> i:-1
+Std.Bytes.find_from	y:[0,0]	i:3	y:[97,98]	=> err:"bytes index 3 is out of range for length 2"
+Std.Bytes.slice	i:0	i:0	y:[98]	=> y:[]
+Std.Bytes.append_slice	i:0	i:0	y:[98]	y:[120]	=> y:[120]
+Std.Bytes.slice	i:0	i:1	y:[98]	=> y:[98]
+Std.Bytes.append_slice	i:0	i:1	y:[98]	y:[120]	=> y:[120,98]
+Std.Bytes.slice	i:0	i:1	y:[98]	=> y:[98]
+Std.Bytes.append_slice	i:0	i:1	y:[98]	y:[120]	=> y:[120,98]
+Std.Bytes.slice	i:1	i:2	y:[98]	=> err:"bytes slice 1..2 is out of range for length 1"
+Std.Bytes.append_slice	i:1	i:2	y:[98]	y:[120]	=> err:"bytes slice 1..2 is out of range for length 1"
+Std.Bytes.slice	i:1	i:1	y:[98]	=> y:[]
+Std.Bytes.append_slice	i:1	i:1	y:[98]	y:[120]	=> y:[120]
+Std.Bytes.slice	i:1	i:1	y:[98]	=> y:[]
+Std.Bytes.append_slice	i:1	i:1	y:[98]	y:[120]	=> y:[120]
+Std.Bytes.slice	i:-1	i:1	y:[98]	=> err:"bytes slice -1..1 is out of range for length 1"
+Std.Bytes.append_slice	i:-1	i:1	y:[98]	y:[120]	=> err:"bytes slice -1..1 is out of range for length 1"
+Std.Bytes.slice	i:2	i:1	y:[98]	=> err:"bytes slice 2..1 is out of range for length 1"
+Std.Bytes.append_slice	i:2	i:1	y:[98]	y:[120]	=> err:"bytes slice 2..1 is out of range for length 1"
+Std.Bytes.slice	i:0	i:2	y:[98]	=> err:"bytes slice 0..2 is out of range for length 1"
+Std.Bytes.append_slice	i:0	i:2	y:[98]	y:[120]	=> err:"bytes slice 0..2 is out of range for length 1"
+Std.Bytes.slice	i:-9223372036854775808	i:9223372036854775807	y:[98]	=> err:"bytes slice -9223372036854775808..9223372036854775807 is out of range for length 1"
+Std.Bytes.append_slice	i:-9223372036854775808	i:9223372036854775807	y:[98]	y:[120]	=> err:"bytes slice -9223372036854775808..9223372036854775807 is out of range for length 1"
+Std.Bytes.truncate	i:-1	y:[98]	=> err:"bytes slice 0..-1 is out of range for length 1"
+Std.Bytes.truncate	i:0	y:[98]	=> y:[]
+Std.Bytes.truncate	i:1	y:[98]	=> y:[98]
+Std.Bytes.truncate	i:0	y:[98]	=> y:[]
+Std.Bytes.truncate	i:1	y:[98]	=> y:[98]
+Std.Bytes.truncate	i:2	y:[98]	=> err:"bytes slice 0..2 is out of range for length 1"
+Std.Bytes.truncate	i:-9223372036854775808	y:[98]	=> err:"bytes slice 0..-9223372036854775808 is out of range for length 1"
+Std.Bytes.truncate	i:9223372036854775807	y:[98]	=> err:"bytes slice 0..9223372036854775807 is out of range for length 1"
+Std.Bytes.find_from	y:[]	i:-1	y:[98]	=> err:"bytes index -1 is out of range for length 1"
+Std.Bytes.find_from	y:[]	i:0	y:[98]	=> i:0
+Std.Bytes.find_from	y:[]	i:1	y:[98]	=> i:1
+Std.Bytes.find_from	y:[]	i:1	y:[98]	=> i:1
+Std.Bytes.find_from	y:[]	i:2	y:[98]	=> err:"bytes index 2 is out of range for length 1"
+Std.Bytes.find_from	y:[0]	i:-1	y:[98]	=> err:"bytes index -1 is out of range for length 1"
+Std.Bytes.find_from	y:[0]	i:0	y:[98]	=> i:-1
+Std.Bytes.find_from	y:[0]	i:1	y:[98]	=> i:-1
+Std.Bytes.find_from	y:[0]	i:1	y:[98]	=> i:-1
+Std.Bytes.find_from	y:[0]	i:2	y:[98]	=> err:"bytes index 2 is out of range for length 1"
+Std.Bytes.find_from	y:[97]	i:-1	y:[98]	=> err:"bytes index -1 is out of range for length 1"
+Std.Bytes.find_from	y:[97]	i:0	y:[98]	=> i:-1
+Std.Bytes.find_from	y:[97]	i:1	y:[98]	=> i:-1
+Std.Bytes.find_from	y:[97]	i:1	y:[98]	=> i:-1
+Std.Bytes.find_from	y:[97]	i:2	y:[98]	=> err:"bytes index 2 is out of range for length 1"
+Std.Bytes.find_from	y:[97,98]	i:-1	y:[98]	=> err:"bytes index -1 is out of range for length 1"
+Std.Bytes.find_from	y:[97,98]	i:0	y:[98]	=> i:-1
+Std.Bytes.find_from	y:[97,98]	i:1	y:[98]	=> i:-1
+Std.Bytes.find_from	y:[97,98]	i:1	y:[98]	=> i:-1
+Std.Bytes.find_from	y:[97,98]	i:2	y:[98]	=> err:"bytes index 2 is out of range for length 1"
+Std.Bytes.find_from	y:[98]	i:-1	y:[98]	=> err:"bytes index -1 is out of range for length 1"
+Std.Bytes.find_from	y:[98]	i:0	y:[98]	=> i:0
+Std.Bytes.find_from	y:[98]	i:1	y:[98]	=> i:-1
+Std.Bytes.find_from	y:[98]	i:1	y:[98]	=> i:-1
+Std.Bytes.find_from	y:[98]	i:2	y:[98]	=> err:"bytes index 2 is out of range for length 1"
+Std.Bytes.find_from	y:[255,0,128]	i:-1	y:[98]	=> err:"bytes index -1 is out of range for length 1"
+Std.Bytes.find_from	y:[255,0,128]	i:0	y:[98]	=> i:-1
+Std.Bytes.find_from	y:[255,0,128]	i:1	y:[98]	=> i:-1
+Std.Bytes.find_from	y:[255,0,128]	i:1	y:[98]	=> i:-1
+Std.Bytes.find_from	y:[255,0,128]	i:2	y:[98]	=> err:"bytes index 2 is out of range for length 1"
+Std.Bytes.find_from	y:[230,151,165,230,156,172]	i:-1	y:[98]	=> err:"bytes index -1 is out of range for length 1"
+Std.Bytes.find_from	y:[230,151,165,230,156,172]	i:0	y:[98]	=> i:-1
+Std.Bytes.find_from	y:[230,151,165,230,156,172]	i:1	y:[98]	=> i:-1
+Std.Bytes.find_from	y:[230,151,165,230,156,172]	i:1	y:[98]	=> i:-1
+Std.Bytes.find_from	y:[230,151,165,230,156,172]	i:2	y:[98]	=> err:"bytes index 2 is out of range for length 1"
+Std.Bytes.find_from	y:[97,98,97,98]	i:-1	y:[98]	=> err:"bytes index -1 is out of range for length 1"
+Std.Bytes.find_from	y:[97,98,97,98]	i:0	y:[98]	=> i:-1
+Std.Bytes.find_from	y:[97,98,97,98]	i:1	y:[98]	=> i:-1
+Std.Bytes.find_from	y:[97,98,97,98]	i:1	y:[98]	=> i:-1
+Std.Bytes.find_from	y:[97,98,97,98]	i:2	y:[98]	=> err:"bytes index 2 is out of range for length 1"
+Std.Bytes.find_from	y:[0,0]	i:-1	y:[98]	=> err:"bytes index -1 is out of range for length 1"
+Std.Bytes.find_from	y:[0,0]	i:0	y:[98]	=> i:-1
+Std.Bytes.find_from	y:[0,0]	i:1	y:[98]	=> i:-1
+Std.Bytes.find_from	y:[0,0]	i:1	y:[98]	=> i:-1
+Std.Bytes.find_from	y:[0,0]	i:2	y:[98]	=> err:"bytes index 2 is out of range for length 1"
+Std.Bytes.slice	i:0	i:0	y:[255,0,128]	=> y:[]
+Std.Bytes.append_slice	i:0	i:0	y:[255,0,128]	y:[120]	=> y:[120]
+Std.Bytes.slice	i:0	i:3	y:[255,0,128]	=> y:[255,0,128]
+Std.Bytes.append_slice	i:0	i:3	y:[255,0,128]	y:[120]	=> y:[120,255,0,128]
+Std.Bytes.slice	i:0	i:1	y:[255,0,128]	=> y:[255]
+Std.Bytes.append_slice	i:0	i:1	y:[255,0,128]	y:[120]	=> y:[120,255]
+Std.Bytes.slice	i:1	i:2	y:[255,0,128]	=> y:[0]
+Std.Bytes.append_slice	i:1	i:2	y:[255,0,128]	y:[120]	=> y:[120,0]
+Std.Bytes.slice	i:1	i:3	y:[255,0,128]	=> y:[0,128]
+Std.Bytes.append_slice	i:1	i:3	y:[255,0,128]	y:[120]	=> y:[120,0,128]
+Std.Bytes.slice	i:3	i:3	y:[255,0,128]	=> y:[]
+Std.Bytes.append_slice	i:3	i:3	y:[255,0,128]	y:[120]	=> y:[120]
+Std.Bytes.slice	i:-1	i:1	y:[255,0,128]	=> err:"bytes slice -1..1 is out of range for length 3"
+Std.Bytes.append_slice	i:-1	i:1	y:[255,0,128]	y:[120]	=> err:"bytes slice -1..1 is out of range for length 3"
+Std.Bytes.slice	i:2	i:1	y:[255,0,128]	=> err:"bytes slice 2..1 is out of range for length 3"
+Std.Bytes.append_slice	i:2	i:1	y:[255,0,128]	y:[120]	=> err:"bytes slice 2..1 is out of range for length 3"
+Std.Bytes.slice	i:0	i:4	y:[255,0,128]	=> err:"bytes slice 0..4 is out of range for length 3"
+Std.Bytes.append_slice	i:0	i:4	y:[255,0,128]	y:[120]	=> err:"bytes slice 0..4 is out of range for length 3"
+Std.Bytes.slice	i:-9223372036854775808	i:9223372036854775807	y:[255,0,128]	=> err:"bytes slice -9223372036854775808..9223372036854775807 is out of range for length 3"
+Std.Bytes.append_slice	i:-9223372036854775808	i:9223372036854775807	y:[255,0,128]	y:[120]	=> err:"bytes slice -9223372036854775808..9223372036854775807 is out of range for length 3"
+Std.Bytes.truncate	i:-1	y:[255,0,128]	=> err:"bytes slice 0..-1 is out of range for length 3"
+Std.Bytes.truncate	i:0	y:[255,0,128]	=> y:[]
+Std.Bytes.truncate	i:1	y:[255,0,128]	=> y:[255]
+Std.Bytes.truncate	i:2	y:[255,0,128]	=> y:[255,0]
+Std.Bytes.truncate	i:3	y:[255,0,128]	=> y:[255,0,128]
+Std.Bytes.truncate	i:4	y:[255,0,128]	=> err:"bytes slice 0..4 is out of range for length 3"
+Std.Bytes.truncate	i:-9223372036854775808	y:[255,0,128]	=> err:"bytes slice 0..-9223372036854775808 is out of range for length 3"
+Std.Bytes.truncate	i:9223372036854775807	y:[255,0,128]	=> err:"bytes slice 0..9223372036854775807 is out of range for length 3"
+Std.Bytes.find_from	y:[]	i:-1	y:[255,0,128]	=> err:"bytes index -1 is out of range for length 3"
+Std.Bytes.find_from	y:[]	i:0	y:[255,0,128]	=> i:0
+Std.Bytes.find_from	y:[]	i:1	y:[255,0,128]	=> i:1
+Std.Bytes.find_from	y:[]	i:3	y:[255,0,128]	=> i:3
+Std.Bytes.find_from	y:[]	i:4	y:[255,0,128]	=> err:"bytes index 4 is out of range for length 3"
+Std.Bytes.find_from	y:[0]	i:-1	y:[255,0,128]	=> err:"bytes index -1 is out of range for length 3"
+Std.Bytes.find_from	y:[0]	i:0	y:[255,0,128]	=> i:1
+Std.Bytes.find_from	y:[0]	i:1	y:[255,0,128]	=> i:1
+Std.Bytes.find_from	y:[0]	i:3	y:[255,0,128]	=> i:-1
+Std.Bytes.find_from	y:[0]	i:4	y:[255,0,128]	=> err:"bytes index 4 is out of range for length 3"
+Std.Bytes.find_from	y:[97]	i:-1	y:[255,0,128]	=> err:"bytes index -1 is out of range for length 3"
+Std.Bytes.find_from	y:[97]	i:0	y:[255,0,128]	=> i:-1
+Std.Bytes.find_from	y:[97]	i:1	y:[255,0,128]	=> i:-1
+Std.Bytes.find_from	y:[97]	i:3	y:[255,0,128]	=> i:-1
+Std.Bytes.find_from	y:[97]	i:4	y:[255,0,128]	=> err:"bytes index 4 is out of range for length 3"
+Std.Bytes.find_from	y:[97,98]	i:-1	y:[255,0,128]	=> err:"bytes index -1 is out of range for length 3"
+Std.Bytes.find_from	y:[97,98]	i:0	y:[255,0,128]	=> i:-1
+Std.Bytes.find_from	y:[97,98]	i:1	y:[255,0,128]	=> i:-1
+Std.Bytes.find_from	y:[97,98]	i:3	y:[255,0,128]	=> i:-1
+Std.Bytes.find_from	y:[97,98]	i:4	y:[255,0,128]	=> err:"bytes index 4 is out of range for length 3"
+Std.Bytes.find_from	y:[98]	i:-1	y:[255,0,128]	=> err:"bytes index -1 is out of range for length 3"
+Std.Bytes.find_from	y:[98]	i:0	y:[255,0,128]	=> i:-1
+Std.Bytes.find_from	y:[98]	i:1	y:[255,0,128]	=> i:-1
+Std.Bytes.find_from	y:[98]	i:3	y:[255,0,128]	=> i:-1
+Std.Bytes.find_from	y:[98]	i:4	y:[255,0,128]	=> err:"bytes index 4 is out of range for length 3"
+Std.Bytes.find_from	y:[255,0,128]	i:-1	y:[255,0,128]	=> err:"bytes index -1 is out of range for length 3"
+Std.Bytes.find_from	y:[255,0,128]	i:0	y:[255,0,128]	=> i:0
+Std.Bytes.find_from	y:[255,0,128]	i:1	y:[255,0,128]	=> i:-1
+Std.Bytes.find_from	y:[255,0,128]	i:3	y:[255,0,128]	=> i:-1
+Std.Bytes.find_from	y:[255,0,128]	i:4	y:[255,0,128]	=> err:"bytes index 4 is out of range for length 3"
+Std.Bytes.find_from	y:[230,151,165,230,156,172]	i:-1	y:[255,0,128]	=> err:"bytes index -1 is out of range for length 3"
+Std.Bytes.find_from	y:[230,151,165,230,156,172]	i:0	y:[255,0,128]	=> i:-1
+Std.Bytes.find_from	y:[230,151,165,230,156,172]	i:1	y:[255,0,128]	=> i:-1
+Std.Bytes.find_from	y:[230,151,165,230,156,172]	i:3	y:[255,0,128]	=> i:-1
+Std.Bytes.find_from	y:[230,151,165,230,156,172]	i:4	y:[255,0,128]	=> err:"bytes index 4 is out of range for length 3"
+Std.Bytes.find_from	y:[97,98,97,98]	i:-1	y:[255,0,128]	=> err:"bytes index -1 is out of range for length 3"
+Std.Bytes.find_from	y:[97,98,97,98]	i:0	y:[255,0,128]	=> i:-1
+Std.Bytes.find_from	y:[97,98,97,98]	i:1	y:[255,0,128]	=> i:-1
+Std.Bytes.find_from	y:[97,98,97,98]	i:3	y:[255,0,128]	=> i:-1
+Std.Bytes.find_from	y:[97,98,97,98]	i:4	y:[255,0,128]	=> err:"bytes index 4 is out of range for length 3"
+Std.Bytes.find_from	y:[0,0]	i:-1	y:[255,0,128]	=> err:"bytes index -1 is out of range for length 3"
+Std.Bytes.find_from	y:[0,0]	i:0	y:[255,0,128]	=> i:-1
+Std.Bytes.find_from	y:[0,0]	i:1	y:[255,0,128]	=> i:-1
+Std.Bytes.find_from	y:[0,0]	i:3	y:[255,0,128]	=> i:-1
+Std.Bytes.find_from	y:[0,0]	i:4	y:[255,0,128]	=> err:"bytes index 4 is out of range for length 3"
+Std.Bytes.slice	i:0	i:0	y:[230,151,165,230,156,172]	=> y:[]
+Std.Bytes.append_slice	i:0	i:0	y:[230,151,165,230,156,172]	y:[120]	=> y:[120]
+Std.Bytes.slice	i:0	i:6	y:[230,151,165,230,156,172]	=> y:[230,151,165,230,156,172]
+Std.Bytes.append_slice	i:0	i:6	y:[230,151,165,230,156,172]	y:[120]	=> y:[120,230,151,165,230,156,172]
+Std.Bytes.slice	i:0	i:1	y:[230,151,165,230,156,172]	=> y:[230]
+Std.Bytes.append_slice	i:0	i:1	y:[230,151,165,230,156,172]	y:[120]	=> y:[120,230]
+Std.Bytes.slice	i:1	i:2	y:[230,151,165,230,156,172]	=> y:[151]
+Std.Bytes.append_slice	i:1	i:2	y:[230,151,165,230,156,172]	y:[120]	=> y:[120,151]
+Std.Bytes.slice	i:1	i:6	y:[230,151,165,230,156,172]	=> y:[151,165,230,156,172]
+Std.Bytes.append_slice	i:1	i:6	y:[230,151,165,230,156,172]	y:[120]	=> y:[120,151,165,230,156,172]
+Std.Bytes.slice	i:6	i:6	y:[230,151,165,230,156,172]	=> y:[]
+Std.Bytes.append_slice	i:6	i:6	y:[230,151,165,230,156,172]	y:[120]	=> y:[120]
+Std.Bytes.slice	i:-1	i:1	y:[230,151,165,230,156,172]	=> err:"bytes slice -1..1 is out of range for length 6"
+Std.Bytes.append_slice	i:-1	i:1	y:[230,151,165,230,156,172]	y:[120]	=> err:"bytes slice -1..1 is out of range for length 6"
+Std.Bytes.slice	i:2	i:1	y:[230,151,165,230,156,172]	=> err:"bytes slice 2..1 is out of range for length 6"
+Std.Bytes.append_slice	i:2	i:1	y:[230,151,165,230,156,172]	y:[120]	=> err:"bytes slice 2..1 is out of range for length 6"
+Std.Bytes.slice	i:0	i:7	y:[230,151,165,230,156,172]	=> err:"bytes slice 0..7 is out of range for length 6"
+Std.Bytes.append_slice	i:0	i:7	y:[230,151,165,230,156,172]	y:[120]	=> err:"bytes slice 0..7 is out of range for length 6"
+Std.Bytes.slice	i:-9223372036854775808	i:9223372036854775807	y:[230,151,165,230,156,172]	=> err:"bytes slice -9223372036854775808..9223372036854775807 is out of range for length 6"
+Std.Bytes.append_slice	i:-9223372036854775808	i:9223372036854775807	y:[230,151,165,230,156,172]	y:[120]	=> err:"bytes slice -9223372036854775808..9223372036854775807 is out of range for length 6"
+Std.Bytes.truncate	i:-1	y:[230,151,165,230,156,172]	=> err:"bytes slice 0..-1 is out of range for length 6"
+Std.Bytes.truncate	i:0	y:[230,151,165,230,156,172]	=> y:[]
+Std.Bytes.truncate	i:1	y:[230,151,165,230,156,172]	=> y:[230]
+Std.Bytes.truncate	i:5	y:[230,151,165,230,156,172]	=> y:[230,151,165,230,156]
+Std.Bytes.truncate	i:6	y:[230,151,165,230,156,172]	=> y:[230,151,165,230,156,172]
+Std.Bytes.truncate	i:7	y:[230,151,165,230,156,172]	=> err:"bytes slice 0..7 is out of range for length 6"
+Std.Bytes.truncate	i:-9223372036854775808	y:[230,151,165,230,156,172]	=> err:"bytes slice 0..-9223372036854775808 is out of range for length 6"
+Std.Bytes.truncate	i:9223372036854775807	y:[230,151,165,230,156,172]	=> err:"bytes slice 0..9223372036854775807 is out of range for length 6"
+Std.Bytes.find_from	y:[]	i:-1	y:[230,151,165,230,156,172]	=> err:"bytes index -1 is out of range for length 6"
+Std.Bytes.find_from	y:[]	i:0	y:[230,151,165,230,156,172]	=> i:0
+Std.Bytes.find_from	y:[]	i:1	y:[230,151,165,230,156,172]	=> i:1
+Std.Bytes.find_from	y:[]	i:6	y:[230,151,165,230,156,172]	=> i:6
+Std.Bytes.find_from	y:[]	i:7	y:[230,151,165,230,156,172]	=> err:"bytes index 7 is out of range for length 6"
+Std.Bytes.find_from	y:[0]	i:-1	y:[230,151,165,230,156,172]	=> err:"bytes index -1 is out of range for length 6"
+Std.Bytes.find_from	y:[0]	i:0	y:[230,151,165,230,156,172]	=> i:-1
+Std.Bytes.find_from	y:[0]	i:1	y:[230,151,165,230,156,172]	=> i:-1
+Std.Bytes.find_from	y:[0]	i:6	y:[230,151,165,230,156,172]	=> i:-1
+Std.Bytes.find_from	y:[0]	i:7	y:[230,151,165,230,156,172]	=> err:"bytes index 7 is out of range for length 6"
+Std.Bytes.find_from	y:[97]	i:-1	y:[230,151,165,230,156,172]	=> err:"bytes index -1 is out of range for length 6"
+Std.Bytes.find_from	y:[97]	i:0	y:[230,151,165,230,156,172]	=> i:-1
+Std.Bytes.find_from	y:[97]	i:1	y:[230,151,165,230,156,172]	=> i:-1
+Std.Bytes.find_from	y:[97]	i:6	y:[230,151,165,230,156,172]	=> i:-1
+Std.Bytes.find_from	y:[97]	i:7	y:[230,151,165,230,156,172]	=> err:"bytes index 7 is out of range for length 6"
+Std.Bytes.find_from	y:[97,98]	i:-1	y:[230,151,165,230,156,172]	=> err:"bytes index -1 is out of range for length 6"
+Std.Bytes.find_from	y:[97,98]	i:0	y:[230,151,165,230,156,172]	=> i:-1
+Std.Bytes.find_from	y:[97,98]	i:1	y:[230,151,165,230,156,172]	=> i:-1
+Std.Bytes.find_from	y:[97,98]	i:6	y:[230,151,165,230,156,172]	=> i:-1
+Std.Bytes.find_from	y:[97,98]	i:7	y:[230,151,165,230,156,172]	=> err:"bytes index 7 is out of range for length 6"
+Std.Bytes.find_from	y:[98]	i:-1	y:[230,151,165,230,156,172]	=> err:"bytes index -1 is out of range for length 6"
+Std.Bytes.find_from	y:[98]	i:0	y:[230,151,165,230,156,172]	=> i:-1
+Std.Bytes.find_from	y:[98]	i:1	y:[230,151,165,230,156,172]	=> i:-1
+Std.Bytes.find_from	y:[98]	i:6	y:[230,151,165,230,156,172]	=> i:-1
+Std.Bytes.find_from	y:[98]	i:7	y:[230,151,165,230,156,172]	=> err:"bytes index 7 is out of range for length 6"
+Std.Bytes.find_from	y:[255,0,128]	i:-1	y:[230,151,165,230,156,172]	=> err:"bytes index -1 is out of range for length 6"
+Std.Bytes.find_from	y:[255,0,128]	i:0	y:[230,151,165,230,156,172]	=> i:-1
+Std.Bytes.find_from	y:[255,0,128]	i:1	y:[230,151,165,230,156,172]	=> i:-1
+Std.Bytes.find_from	y:[255,0,128]	i:6	y:[230,151,165,230,156,172]	=> i:-1
+Std.Bytes.find_from	y:[255,0,128]	i:7	y:[230,151,165,230,156,172]	=> err:"bytes index 7 is out of range for length 6"
+Std.Bytes.find_from	y:[230,151,165,230,156,172]	i:-1	y:[230,151,165,230,156,172]	=> err:"bytes index -1 is out of range for length 6"
+Std.Bytes.find_from	y:[230,151,165,230,156,172]	i:0	y:[230,151,165,230,156,172]	=> i:0
+Std.Bytes.find_from	y:[230,151,165,230,156,172]	i:1	y:[230,151,165,230,156,172]	=> i:-1
+Std.Bytes.find_from	y:[230,151,165,230,156,172]	i:6	y:[230,151,165,230,156,172]	=> i:-1
+Std.Bytes.find_from	y:[230,151,165,230,156,172]	i:7	y:[230,151,165,230,156,172]	=> err:"bytes index 7 is out of range for length 6"
+Std.Bytes.find_from	y:[97,98,97,98]	i:-1	y:[230,151,165,230,156,172]	=> err:"bytes index -1 is out of range for length 6"
+Std.Bytes.find_from	y:[97,98,97,98]	i:0	y:[230,151,165,230,156,172]	=> i:-1
+Std.Bytes.find_from	y:[97,98,97,98]	i:1	y:[230,151,165,230,156,172]	=> i:-1
+Std.Bytes.find_from	y:[97,98,97,98]	i:6	y:[230,151,165,230,156,172]	=> i:-1
+Std.Bytes.find_from	y:[97,98,97,98]	i:7	y:[230,151,165,230,156,172]	=> err:"bytes index 7 is out of range for length 6"
+Std.Bytes.find_from	y:[0,0]	i:-1	y:[230,151,165,230,156,172]	=> err:"bytes index -1 is out of range for length 6"
+Std.Bytes.find_from	y:[0,0]	i:0	y:[230,151,165,230,156,172]	=> i:-1
+Std.Bytes.find_from	y:[0,0]	i:1	y:[230,151,165,230,156,172]	=> i:-1
+Std.Bytes.find_from	y:[0,0]	i:6	y:[230,151,165,230,156,172]	=> i:-1
+Std.Bytes.find_from	y:[0,0]	i:7	y:[230,151,165,230,156,172]	=> err:"bytes index 7 is out of range for length 6"
+Std.Bytes.slice	i:0	i:0	y:[97,98,97,98]	=> y:[]
+Std.Bytes.append_slice	i:0	i:0	y:[97,98,97,98]	y:[120]	=> y:[120]
+Std.Bytes.slice	i:0	i:4	y:[97,98,97,98]	=> y:[97,98,97,98]
+Std.Bytes.append_slice	i:0	i:4	y:[97,98,97,98]	y:[120]	=> y:[120,97,98,97,98]
+Std.Bytes.slice	i:0	i:1	y:[97,98,97,98]	=> y:[97]
+Std.Bytes.append_slice	i:0	i:1	y:[97,98,97,98]	y:[120]	=> y:[120,97]
+Std.Bytes.slice	i:1	i:2	y:[97,98,97,98]	=> y:[98]
+Std.Bytes.append_slice	i:1	i:2	y:[97,98,97,98]	y:[120]	=> y:[120,98]
+Std.Bytes.slice	i:1	i:4	y:[97,98,97,98]	=> y:[98,97,98]
+Std.Bytes.append_slice	i:1	i:4	y:[97,98,97,98]	y:[120]	=> y:[120,98,97,98]
+Std.Bytes.slice	i:4	i:4	y:[97,98,97,98]	=> y:[]
+Std.Bytes.append_slice	i:4	i:4	y:[97,98,97,98]	y:[120]	=> y:[120]
+Std.Bytes.slice	i:-1	i:1	y:[97,98,97,98]	=> err:"bytes slice -1..1 is out of range for length 4"
+Std.Bytes.append_slice	i:-1	i:1	y:[97,98,97,98]	y:[120]	=> err:"bytes slice -1..1 is out of range for length 4"
+Std.Bytes.slice	i:2	i:1	y:[97,98,97,98]	=> err:"bytes slice 2..1 is out of range for length 4"
+Std.Bytes.append_slice	i:2	i:1	y:[97,98,97,98]	y:[120]	=> err:"bytes slice 2..1 is out of range for length 4"
+Std.Bytes.slice	i:0	i:5	y:[97,98,97,98]	=> err:"bytes slice 0..5 is out of range for length 4"
+Std.Bytes.append_slice	i:0	i:5	y:[97,98,97,98]	y:[120]	=> err:"bytes slice 0..5 is out of range for length 4"
+Std.Bytes.slice	i:-9223372036854775808	i:9223372036854775807	y:[97,98,97,98]	=> err:"bytes slice -9223372036854775808..9223372036854775807 is out of range for length 4"
+Std.Bytes.append_slice	i:-9223372036854775808	i:9223372036854775807	y:[97,98,97,98]	y:[120]	=> err:"bytes slice -9223372036854775808..9223372036854775807 is out of range for length 4"
+Std.Bytes.truncate	i:-1	y:[97,98,97,98]	=> err:"bytes slice 0..-1 is out of range for length 4"
+Std.Bytes.truncate	i:0	y:[97,98,97,98]	=> y:[]
+Std.Bytes.truncate	i:1	y:[97,98,97,98]	=> y:[97]
+Std.Bytes.truncate	i:3	y:[97,98,97,98]	=> y:[97,98,97]
+Std.Bytes.truncate	i:4	y:[97,98,97,98]	=> y:[97,98,97,98]
+Std.Bytes.truncate	i:5	y:[97,98,97,98]	=> err:"bytes slice 0..5 is out of range for length 4"
+Std.Bytes.truncate	i:-9223372036854775808	y:[97,98,97,98]	=> err:"bytes slice 0..-9223372036854775808 is out of range for length 4"
+Std.Bytes.truncate	i:9223372036854775807	y:[97,98,97,98]	=> err:"bytes slice 0..9223372036854775807 is out of range for length 4"
+Std.Bytes.find_from	y:[]	i:-1	y:[97,98,97,98]	=> err:"bytes index -1 is out of range for length 4"
+Std.Bytes.find_from	y:[]	i:0	y:[97,98,97,98]	=> i:0
+Std.Bytes.find_from	y:[]	i:1	y:[97,98,97,98]	=> i:1
+Std.Bytes.find_from	y:[]	i:4	y:[97,98,97,98]	=> i:4
+Std.Bytes.find_from	y:[]	i:5	y:[97,98,97,98]	=> err:"bytes index 5 is out of range for length 4"
+Std.Bytes.find_from	y:[0]	i:-1	y:[97,98,97,98]	=> err:"bytes index -1 is out of range for length 4"
+Std.Bytes.find_from	y:[0]	i:0	y:[97,98,97,98]	=> i:-1
+Std.Bytes.find_from	y:[0]	i:1	y:[97,98,97,98]	=> i:-1
+Std.Bytes.find_from	y:[0]	i:4	y:[97,98,97,98]	=> i:-1
+Std.Bytes.find_from	y:[0]	i:5	y:[97,98,97,98]	=> err:"bytes index 5 is out of range for length 4"
+Std.Bytes.find_from	y:[97]	i:-1	y:[97,98,97,98]	=> err:"bytes index -1 is out of range for length 4"
+Std.Bytes.find_from	y:[97]	i:0	y:[97,98,97,98]	=> i:0
+Std.Bytes.find_from	y:[97]	i:1	y:[97,98,97,98]	=> i:2
+Std.Bytes.find_from	y:[97]	i:4	y:[97,98,97,98]	=> i:-1
+Std.Bytes.find_from	y:[97]	i:5	y:[97,98,97,98]	=> err:"bytes index 5 is out of range for length 4"
+Std.Bytes.find_from	y:[97,98]	i:-1	y:[97,98,97,98]	=> err:"bytes index -1 is out of range for length 4"
+Std.Bytes.find_from	y:[97,98]	i:0	y:[97,98,97,98]	=> i:0
+Std.Bytes.find_from	y:[97,98]	i:1	y:[97,98,97,98]	=> i:2
+Std.Bytes.find_from	y:[97,98]	i:4	y:[97,98,97,98]	=> i:-1
+Std.Bytes.find_from	y:[97,98]	i:5	y:[97,98,97,98]	=> err:"bytes index 5 is out of range for length 4"
+Std.Bytes.find_from	y:[98]	i:-1	y:[97,98,97,98]	=> err:"bytes index -1 is out of range for length 4"
+Std.Bytes.find_from	y:[98]	i:0	y:[97,98,97,98]	=> i:1
+Std.Bytes.find_from	y:[98]	i:1	y:[97,98,97,98]	=> i:1
+Std.Bytes.find_from	y:[98]	i:4	y:[97,98,97,98]	=> i:-1
+Std.Bytes.find_from	y:[98]	i:5	y:[97,98,97,98]	=> err:"bytes index 5 is out of range for length 4"
+Std.Bytes.find_from	y:[255,0,128]	i:-1	y:[97,98,97,98]	=> err:"bytes index -1 is out of range for length 4"
+Std.Bytes.find_from	y:[255,0,128]	i:0	y:[97,98,97,98]	=> i:-1
+Std.Bytes.find_from	y:[255,0,128]	i:1	y:[97,98,97,98]	=> i:-1
+Std.Bytes.find_from	y:[255,0,128]	i:4	y:[97,98,97,98]	=> i:-1
+Std.Bytes.find_from	y:[255,0,128]	i:5	y:[97,98,97,98]	=> err:"bytes index 5 is out of range for length 4"
+Std.Bytes.find_from	y:[230,151,165,230,156,172]	i:-1	y:[97,98,97,98]	=> err:"bytes index -1 is out of range for length 4"
+Std.Bytes.find_from	y:[230,151,165,230,156,172]	i:0	y:[97,98,97,98]	=> i:-1
+Std.Bytes.find_from	y:[230,151,165,230,156,172]	i:1	y:[97,98,97,98]	=> i:-1
+Std.Bytes.find_from	y:[230,151,165,230,156,172]	i:4	y:[97,98,97,98]	=> i:-1
+Std.Bytes.find_from	y:[230,151,165,230,156,172]	i:5	y:[97,98,97,98]	=> err:"bytes index 5 is out of range for length 4"
+Std.Bytes.find_from	y:[97,98,97,98]	i:-1	y:[97,98,97,98]	=> err:"bytes index -1 is out of range for length 4"
+Std.Bytes.find_from	y:[97,98,97,98]	i:0	y:[97,98,97,98]	=> i:0
+Std.Bytes.find_from	y:[97,98,97,98]	i:1	y:[97,98,97,98]	=> i:-1
+Std.Bytes.find_from	y:[97,98,97,98]	i:4	y:[97,98,97,98]	=> i:-1
+Std.Bytes.find_from	y:[97,98,97,98]	i:5	y:[97,98,97,98]	=> err:"bytes index 5 is out of range for length 4"
+Std.Bytes.find_from	y:[0,0]	i:-1	y:[97,98,97,98]	=> err:"bytes index -1 is out of range for length 4"
+Std.Bytes.find_from	y:[0,0]	i:0	y:[97,98,97,98]	=> i:-1
+Std.Bytes.find_from	y:[0,0]	i:1	y:[97,98,97,98]	=> i:-1
+Std.Bytes.find_from	y:[0,0]	i:4	y:[97,98,97,98]	=> i:-1
+Std.Bytes.find_from	y:[0,0]	i:5	y:[97,98,97,98]	=> err:"bytes index 5 is out of range for length 4"
+Std.Bytes.slice	i:0	i:0	y:[0,0]	=> y:[]
+Std.Bytes.append_slice	i:0	i:0	y:[0,0]	y:[120]	=> y:[120]
+Std.Bytes.slice	i:0	i:2	y:[0,0]	=> y:[0,0]
+Std.Bytes.append_slice	i:0	i:2	y:[0,0]	y:[120]	=> y:[120,0,0]
+Std.Bytes.slice	i:0	i:1	y:[0,0]	=> y:[0]
+Std.Bytes.append_slice	i:0	i:1	y:[0,0]	y:[120]	=> y:[120,0]
+Std.Bytes.slice	i:1	i:2	y:[0,0]	=> y:[0]
+Std.Bytes.append_slice	i:1	i:2	y:[0,0]	y:[120]	=> y:[120,0]
+Std.Bytes.slice	i:1	i:2	y:[0,0]	=> y:[0]
+Std.Bytes.append_slice	i:1	i:2	y:[0,0]	y:[120]	=> y:[120,0]
+Std.Bytes.slice	i:2	i:2	y:[0,0]	=> y:[]
+Std.Bytes.append_slice	i:2	i:2	y:[0,0]	y:[120]	=> y:[120]
+Std.Bytes.slice	i:-1	i:1	y:[0,0]	=> err:"bytes slice -1..1 is out of range for length 2"
+Std.Bytes.append_slice	i:-1	i:1	y:[0,0]	y:[120]	=> err:"bytes slice -1..1 is out of range for length 2"
+Std.Bytes.slice	i:2	i:1	y:[0,0]	=> err:"bytes slice 2..1 is out of range for length 2"
+Std.Bytes.append_slice	i:2	i:1	y:[0,0]	y:[120]	=> err:"bytes slice 2..1 is out of range for length 2"
+Std.Bytes.slice	i:0	i:3	y:[0,0]	=> err:"bytes slice 0..3 is out of range for length 2"
+Std.Bytes.append_slice	i:0	i:3	y:[0,0]	y:[120]	=> err:"bytes slice 0..3 is out of range for length 2"
+Std.Bytes.slice	i:-9223372036854775808	i:9223372036854775807	y:[0,0]	=> err:"bytes slice -9223372036854775808..9223372036854775807 is out of range for length 2"
+Std.Bytes.append_slice	i:-9223372036854775808	i:9223372036854775807	y:[0,0]	y:[120]	=> err:"bytes slice -9223372036854775808..9223372036854775807 is out of range for length 2"
+Std.Bytes.truncate	i:-1	y:[0,0]	=> err:"bytes slice 0..-1 is out of range for length 2"
+Std.Bytes.truncate	i:0	y:[0,0]	=> y:[]
+Std.Bytes.truncate	i:1	y:[0,0]	=> y:[0]
+Std.Bytes.truncate	i:1	y:[0,0]	=> y:[0]
+Std.Bytes.truncate	i:2	y:[0,0]	=> y:[0,0]
+Std.Bytes.truncate	i:3	y:[0,0]	=> err:"bytes slice 0..3 is out of range for length 2"
+Std.Bytes.truncate	i:-9223372036854775808	y:[0,0]	=> err:"bytes slice 0..-9223372036854775808 is out of range for length 2"
+Std.Bytes.truncate	i:9223372036854775807	y:[0,0]	=> err:"bytes slice 0..9223372036854775807 is out of range for length 2"
+Std.Bytes.find_from	y:[]	i:-1	y:[0,0]	=> err:"bytes index -1 is out of range for length 2"
+Std.Bytes.find_from	y:[]	i:0	y:[0,0]	=> i:0
+Std.Bytes.find_from	y:[]	i:1	y:[0,0]	=> i:1
+Std.Bytes.find_from	y:[]	i:2	y:[0,0]	=> i:2
+Std.Bytes.find_from	y:[]	i:3	y:[0,0]	=> err:"bytes index 3 is out of range for length 2"
+Std.Bytes.find_from	y:[0]	i:-1	y:[0,0]	=> err:"bytes index -1 is out of range for length 2"
+Std.Bytes.find_from	y:[0]	i:0	y:[0,0]	=> i:0
+Std.Bytes.find_from	y:[0]	i:1	y:[0,0]	=> i:1
+Std.Bytes.find_from	y:[0]	i:2	y:[0,0]	=> i:-1
+Std.Bytes.find_from	y:[0]	i:3	y:[0,0]	=> err:"bytes index 3 is out of range for length 2"
+Std.Bytes.find_from	y:[97]	i:-1	y:[0,0]	=> err:"bytes index -1 is out of range for length 2"
+Std.Bytes.find_from	y:[97]	i:0	y:[0,0]	=> i:-1
+Std.Bytes.find_from	y:[97]	i:1	y:[0,0]	=> i:-1
+Std.Bytes.find_from	y:[97]	i:2	y:[0,0]	=> i:-1
+Std.Bytes.find_from	y:[97]	i:3	y:[0,0]	=> err:"bytes index 3 is out of range for length 2"
+Std.Bytes.find_from	y:[97,98]	i:-1	y:[0,0]	=> err:"bytes index -1 is out of range for length 2"
+Std.Bytes.find_from	y:[97,98]	i:0	y:[0,0]	=> i:-1
+Std.Bytes.find_from	y:[97,98]	i:1	y:[0,0]	=> i:-1
+Std.Bytes.find_from	y:[97,98]	i:2	y:[0,0]	=> i:-1
+Std.Bytes.find_from	y:[97,98]	i:3	y:[0,0]	=> err:"bytes index 3 is out of range for length 2"
+Std.Bytes.find_from	y:[98]	i:-1	y:[0,0]	=> err:"bytes index -1 is out of range for length 2"
+Std.Bytes.find_from	y:[98]	i:0	y:[0,0]	=> i:-1
+Std.Bytes.find_from	y:[98]	i:1	y:[0,0]	=> i:-1
+Std.Bytes.find_from	y:[98]	i:2	y:[0,0]	=> i:-1
+Std.Bytes.find_from	y:[98]	i:3	y:[0,0]	=> err:"bytes index 3 is out of range for length 2"
+Std.Bytes.find_from	y:[255,0,128]	i:-1	y:[0,0]	=> err:"bytes index -1 is out of range for length 2"
+Std.Bytes.find_from	y:[255,0,128]	i:0	y:[0,0]	=> i:-1
+Std.Bytes.find_from	y:[255,0,128]	i:1	y:[0,0]	=> i:-1
+Std.Bytes.find_from	y:[255,0,128]	i:2	y:[0,0]	=> i:-1
+Std.Bytes.find_from	y:[255,0,128]	i:3	y:[0,0]	=> err:"bytes index 3 is out of range for length 2"
+Std.Bytes.find_from	y:[230,151,165,230,156,172]	i:-1	y:[0,0]	=> err:"bytes index -1 is out of range for length 2"
+Std.Bytes.find_from	y:[230,151,165,230,156,172]	i:0	y:[0,0]	=> i:-1
+Std.Bytes.find_from	y:[230,151,165,230,156,172]	i:1	y:[0,0]	=> i:-1
+Std.Bytes.find_from	y:[230,151,165,230,156,172]	i:2	y:[0,0]	=> i:-1
+Std.Bytes.find_from	y:[230,151,165,230,156,172]	i:3	y:[0,0]	=> err:"bytes index 3 is out of range for length 2"
+Std.Bytes.find_from	y:[97,98,97,98]	i:-1	y:[0,0]	=> err:"bytes index -1 is out of range for length 2"
+Std.Bytes.find_from	y:[97,98,97,98]	i:0	y:[0,0]	=> i:-1
+Std.Bytes.find_from	y:[97,98,97,98]	i:1	y:[0,0]	=> i:-1
+Std.Bytes.find_from	y:[97,98,97,98]	i:2	y:[0,0]	=> i:-1
+Std.Bytes.find_from	y:[97,98,97,98]	i:3	y:[0,0]	=> err:"bytes index 3 is out of range for length 2"
+Std.Bytes.find_from	y:[0,0]	i:-1	y:[0,0]	=> err:"bytes index -1 is out of range for length 2"
+Std.Bytes.find_from	y:[0,0]	i:0	y:[0,0]	=> i:0
+Std.Bytes.find_from	y:[0,0]	i:1	y:[0,0]	=> i:-1
+Std.Bytes.find_from	y:[0,0]	i:2	y:[0,0]	=> i:-1
+Std.Bytes.find_from	y:[0,0]	i:3	y:[0,0]	=> err:"bytes index 3 is out of range for length 2"
+Std.Bytes.slice	i:0	i:1	Y:[97,98]	=> y:[97]
+Std.Bytes.append_slice	i:0	i:2	y:[97,98]	Y:[120]	=> y:[120,97,98]
+Std.Bytes.truncate	i:1	Y:[97,98]	=> y:[97]
+Std.Bytes.find_from	y:[98]	i:0	Y:[97,98]	=> i:1
+Std.Bytes.of_string	u:""	=> y:[]
+Std.Bytes.of_string	u:"a"	=> y:[97]
+Std.Bytes.of_string	u:"ab"	=> y:[97,98]
+Std.Bytes.of_string	u:"b"	=> y:[98]
+Std.Bytes.of_string	u:"é"	=> y:[195,169]
+Std.Bytes.of_string	u:"日本"	=> y:[230,151,165,230,156,172]
+Std.Bytes.of_string	u:"😀"	=> y:[240,159,152,128]
+Std.Bytes.of_string	u:"a\0"	=> y:[97,0]
+Std.Bytes.of_string	u:"\u{7f}"	=> y:[127]
+Std.Bytes.of_string	u:"\u{80}"	=> y:[194,128]
+Std.Bytes.of_string	u:"\u{85}"	=> y:[194,133]
+Std.Bytes.of_string	u:"\u{9f}"	=> y:[194,159]
+Std.Bytes.of_string	u:"\u{2028}"	=> y:[226,128,168]
+Std.Bytes.of_string	u:"\"q\""	=> y:[34,113,34]
+Std.Bytes.of_string	u:"back\\slash"	=> y:[98,97,99,107,92,115,108,97,115,104]
+Std.Bytes.of_string	u:"tab\tnl\n"	=> y:[116,97,98,9,110,108,10]
+Std.Bytes.of_string	u:"\u{1}\u{1f}"	=> y:[1,31]
+Std.Bytes.of_string	u:"aab\u{2028}b😀日本"	=> y:[97,97,98,226,128,168,98,240,159,152,128,230,151,165,230,156,172]
+Std.Bytes.of_string	u:"back\\slash\u{1}\u{1f}a\0"	=> y:[98,97,99,107,92,115,108,97,115,104,1,31,97,0]
+Std.Bytes.of_string	u:"\u{9f}bé\u{85}"	=> y:[194,159,98,195,169,194,133]
+Std.Bytes.of_string	u:"b"	=> y:[98]
+Std.Bytes.of_string	u:"\u{2028}a\0\u{9f}\u{7f}tab\tnl\nback\\slashé\u{80}"	=> y:[226,128,168,97,0,194,159,127,116,97,98,9,110,108,10,98,97,99,107,92,115,108,97,115,104,195,169,194,128]
+Std.Bytes.of_string	u:"😀😀日本\"q\"😀a\0\u{85}"	=> y:[240,159,152,128,240,159,152,128,230,151,165,230,156,172,34,113,34,240,159,152,128,97,0,194,133]
+Std.Bytes.of_string	u:"日本back\\slasha😀back\\slashatab\tnl\n"	=> y:[230,151,165,230,156,172,98,97,99,107,92,115,108,97,115,104,97,240,159,152,128,98,97,99,107,92,115,108,97,115,104,97,116,97,98,9,110,108,10]
+Std.Bytes.of_string	u:"日本a\0😀\"q\""	=> y:[230,151,165,230,156,172,97,0,240,159,152,128,34,113,34]
+Std.Bytes.of_string	u:"日本\u{9f}\u{85}\u{2028}\u{9f}"	=> y:[230,151,165,230,156,172,194,159,194,133,226,128,168,194,159]
+Std.Bytes.of_string	u:"\u{80}back\\slash\u{2028}ba\u{80}\u{2028}"	=> y:[194,128,98,97,99,107,92,115,108,97,115,104,226,128,168,98,97,194,128,226,128,168]
+Std.Bytes.of_string	u:"back\\slash\u{7f}a\u{1}\u{1f}a\u{85}"	=> y:[98,97,99,107,92,115,108,97,115,104,127,97,1,31,97,194,133]
+Std.Bytes.of_string	u:"tab\tnl\n😀abback\\slashab"	=> y:[116,97,98,9,110,108,10,240,159,152,128,97,98,98,97,99,107,92,115,108,97,115,104,97,98]
+Std.Bytes.of_string	u:"back\\slash\u{85}\u{2028}ab"	=> y:[98,97,99,107,92,115,108,97,115,104,194,133,226,128,168,97,98]
+Std.Bytes.of_string	u:"\"q\"aaé\u{1}\u{1f}é\u{1}\u{1f}"	=> y:[34,113,34,97,97,195,169,1,31,195,169,1,31]
+Std.Bytes.of_string	u:"😀é\u{9f}\u{9f}\"q\""	=> y:[240,159,152,128,195,169,194,159,194,159,34,113,34]
+Std.Bytes.of_string	u:"a\0\u{1}\u{1f}a\u{7f}\u{9f}\u{85}a😀"	=> y:[97,0,1,31,97,127,194,159,194,133,97,240,159,152,128]
+Std.Bytes.of_string	u:"\u{7f}b\u{80}é\u{1}\u{1f}日本"	=> y:[127,98,194,128,195,169,1,31,230,151,165,230,156,172]
+Std.Bytes.of_string	u:"back\\slash日本\u{2028}a"	=> y:[98,97,99,107,92,115,108,97,115,104,230,151,165,230,156,172,226,128,168,97]
+Std.Bytes.of_string	u:"a\0\u{80}😀\u{85}日本\u{2028}"	=> y:[97,0,194,128,240,159,152,128,194,133,230,151,165,230,156,172,226,128,168]
+Std.Bytes.of_string	u:"aa\0"	=> y:[97,97,0]
+Std.Bytes.of_string	u:"\u{1}\u{1f}\u{2028}baa\u{1}\u{1f}😀"	=> y:[1,31,226,128,168,98,97,97,1,31,240,159,152,128]
+Std.Bytes.of_string	u:"a\"q\"a日本bab"	=> y:[97,34,113,34,97,230,151,165,230,156,172,98,97,98]
+Std.Bytes.of_string	u:"aback\\slash\u{85}tab\tnl\na\0\u{1}\u{1f}日本tab\tnl\n"	=> y:[97,98,97,99,107,92,115,108,97,115,104,194,133,116,97,98,9,110,108,10,97,0,1,31,230,151,165,230,156,172,116,97,98,9,110,108,10]
+Std.Bytes.of_string	u:"b\u{85}\u{9f}\u{80}back\\slashtab\tnl\n\u{7f}\u{9f}"	=> y:[98,194,133,194,159,194,128,98,97,99,107,92,115,108,97,115,104,116,97,98,9,110,108,10,127,194,159]
+Std.Bytes.of_string	u:"a日本😀日本é\u{9f}\u{80}"	=> y:[97,230,151,165,230,156,172,240,159,152,128,230,151,165,230,156,172,195,169,194,159,194,128]
+Std.Bytes.of_string	u:"\"q\"a\u{85}ba"	=> y:[34,113,34,97,194,133,98,97]
+Std.Bytes.of_string	u:"éback\\slash\u{2028}\u{85}\u{2028}"	=> y:[195,169,98,97,99,107,92,115,108,97,115,104,226,128,168,194,133,226,128,168]
+Std.Bytes.of_string	u:"\"q\"a\0\"q\""	=> y:[34,113,34,97,0,34,113,34]
+Std.Bytes.of_string	u:"日本日本"	=> y:[230,151,165,230,156,172,230,151,165,230,156,172]
+Std.Bytes.of_string	u:"\u{2028}é\u{1}\u{1f}\u{2028}😀\u{7f}\u{7f}\u{1}\u{1f}"	=> y:[226,128,168,195,169,1,31,226,128,168,240,159,152,128,127,127,1,31]
+Std.Bytes.of_string	d:"ab"	=> y:[97,98]
+Std.Bytes.of_string	s:"ab"	=> y:[97,98]
 Std.Fs.read_all	f:"plain.txt"	=> s:"line 1\nline 2\n"
 Std.Fs.read_all	f:"empty.txt"	=> s:""
 Std.Fs.read_all	f:"bad.bin"	=> err:"`bad.bin` is not valid UTF-8"

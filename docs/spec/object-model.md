@@ -806,7 +806,7 @@ token の表の項目は、`into_token` と `release_reuse` が添字を使い�
 
 ## extern
 
-`eml_extern` の表の関数の行のうち `exit` と `panic` を除く123個を、`eml_rt` に語の ABI で1回だけ書く。VM と、ネイティブのコードが同じ関数を呼ぶ。ヒープを使わない算術と比較は module `externs` の関数で、文字列と I/O の extern は `Ctx` のメソッドである。純粋な extern は、結果をバイト列や整数の spec に対して Verus で証明する。`exit` と `panic` は VM が実行する。`exit` は終了コードを覚えて、`Ctx::exit_abort` で中断を始める。`panic` は文言を `panicked` の節の入口に渡す ([VM](vm.md) の「extern の中断」)。
+`eml_extern` の表の関数の行のうち `exit` と `panic` を除く134個を、`eml_rt` に語の ABI で1回だけ書く。VM と、ネイティブのコードが同じ関数を呼ぶ。ヒープを使わない算術と比較は module `externs` の関数で、文字列と I/O の extern は `Ctx` のメソッドである。純粋な extern は、結果をバイト列や整数の spec に対して Verus で証明する。`exit` と `panic` は VM が実行する。`exit` は終了コードを覚えて、`Ctx::exit_abort` で中断を始める。`panic` は文言を `panicked` の節の入口に渡す ([VM](vm.md) の「extern の中断」)。
 
 行の番号 (`eml_extern::Extern`) から関数を引く表は `eml_rt` に置かない。VM が行の番号の `match` で各関数を呼ぶ。`match` は飛び先の表になるので、関数ポインタの表と同じ速さである。
 
@@ -826,6 +826,7 @@ token の表の項目は、`into_token` と `release_reuse` が添字を使い�
 | `Std.Char.to_int`、`of_int` | なし (語を変えないので、VM は `Move` に写す)、`char_of_int` |
 | `Prelude.check_index` | `check_index` (`0 <= index < len` なら `Ok(())`、そうでなければ `Std.MutArray.read` と同じ `IndexFault::Array`) |
 | `Prelude.Eq String.==`、`!=`、`Prelude.Ord String.compare` | `Ctx::string_eq`、`string_ne`、`string_compare` |
+| `Prelude.Eq Bytes.==`、`!=`、`Prelude.Ord Bytes.compare` | `Ctx::bytes_eq`、`bytes_ne`、`bytes_compare` |
 | `Prelude.++` | `Ctx::string_append` |
 | `Prelude.Show Int.show`、`Prelude.Show String.show` | `Ctx::int_show`、`string_show` |
 | `Prelude.Num Byte.+`、`-`、`*`、`negate` | `byte_add`、`byte_sub`、`byte_mul`、`byte_negate` (数学的な結果が 0..=255 なら `Ok`、外なら `IntegerOverflow`。どの `i64` の入力にも定義する) |
@@ -840,12 +841,13 @@ token の表の項目は、`into_token` と `release_reuse` が添字を使い�
 | `Std.Fs.read_all`、`read_line_raw` | `Ctx::fs_read` (`line` が偽と真) |
 | `Std.Fs.write_text` | `Ctx::fs_write_text` |
 | `Std.String.byte_length`、`byte_at`、`slice`、`find_from` | `Ctx::string_byte_length`、`string_byte_at`、`string_slice`、`string_find_from` |
+| `Std.Bytes.empty`、`length`、`append`、`append_slice`、`slice`、`truncate`、`of_string`、`find_from` | `Ctx::bytes_empty`、`bytes_length`、`bytes_append`、`bytes_append_part`、`bytes_slice`、`bytes_truncate`、`bytes_of_string`、`bytes_find_from` (上の「バイト列の操作」と「変換」) |
 | `Std.Env.arg_count`、`arg`、`has`、`lookup` | `Ctx::env_arg_count`、`env_arg`、`env_has`、`env_var` |
 | `Std.Stdin.read_all`、`read_line_raw` | `Ctx::stdin_read` (`line` が偽と真) |
 | `Std.Proc.status` | `Ctx::proc_status` |
 | `Std.Array.make`、`length`、`get`、`set`、`thaw`、`Std.MutArray.make`、`empty`、`length`、`read`、`write`、`freeze` | `Ctx::array_make`、`array_empty`、`array_length`、`array_get`、`array_set`、`array_freeze`、`array_thaw` (上の「配列」) |
 
-`unit` の引数を持つ行 (`Std.Env.arg_count`、`Std.Stdin.read_all`、`read_line_raw`、`Std.Float.infinity_value`、`nan_value`、`Std.MutArray.empty`) は、VM が引数を読まずに呼ぶ。
+`unit` の引数を持つ行 (`Std.Env.arg_count`、`Std.Stdin.read_all`、`read_line_raw`、`Std.Float.infinity_value`、`nan_value`、`Std.MutArray.empty`、`Std.Bytes.empty`) は、VM が引数を読まずに呼ぶ。
 
 ### 語の ABI
 
@@ -869,7 +871,7 @@ token の表の項目は、`into_token` と `release_reuse` が添字を使い�
 | `Stdin(IoReason)` | 標準入力の読みの誤り | ``cannot read the standard input: {reason}`` |
 | `NotUtf8(Box<Utf8Source>)` | 読んだ中身が UTF-8 でない。`Utf8Source` はファイル (パス)、標準入力、引数 (`Env.args ()` の位置)、環境変数 (名前) | ``` `{path}` is not valid UTF-8 ```、`the standard input is not valid UTF-8`、`argument {index} is not valid UTF-8`、``environment variable `{name}` is not valid UTF-8`` |
 | `Utf8 { at: i64 }` | `String.decode` に渡したバイト列が妥当な UTF-8 でない。`at` は最初の妥当でないバイトの位置で、T5 の `utf8_valid` が返す | ``invalid UTF-8 at byte {at}`` |
-| `Index(Box<IndexFault>)` | 範囲の外の位置。`IndexFault` は、文字列の位置 (`byte_at`、`find_from`)、`slice` の範囲、`slice` の境界、`Env.arg` の位置、配列の添字 (`get`、`set`、`read`、`write`)、`make` の負の長さ、バイト列の位置 (`Bytes.get`、`set`)、バイト列の範囲 (`Bytes.slice`、`append_slice`、`truncate`。`truncate n` の範囲は `0..n`)、`Bytes.make` の負の長さ | ``string index {index} is out of range for length {len}``、``string slice {start}..{end} is out of range for length {len}``、``string slice {start}..{end} is not on a character boundary``、``argument index {index} is out of range for {count} arguments``、``array index {index} is out of range for length {len}``、``array length {len} is negative``、``bytes index {index} is out of range for length {len}``、``bytes slice {start}..{end} is out of range for length {len}``、``bytes length {len} is negative`` |
+| `Index(Box<IndexFault>)` | 範囲の外の位置。`IndexFault` は、文字列の位置 (`byte_at`、`find_from`)、`slice` の範囲、`slice` の境界、`Env.arg` の位置、配列の添字 (`get`、`set`、`read`、`write`)、`make` の負の長さ、バイト列の位置 (`Bytes.get`、`set`、`find_from` の開始位置)、バイト列の範囲 (`Bytes.slice`、`append_slice`、`truncate`。`truncate n` の範囲は `0..n`)、`Bytes.make` の負の長さ | ``string index {index} is out of range for length {len}``、``string slice {start}..{end} is out of range for length {len}``、``string slice {start}..{end} is not on a character boundary``、``argument index {index} is out of range for {count} arguments``、``array index {index} is out of range for length {len}``、``array length {len} is negative``、``bytes index {index} is out of range for length {len}``、``bytes slice {start}..{end} is out of range for length {len}``、``bytes length {len} is negative`` |
 | `Stopped(Stop)` | `File` の読み (`Fs.read_all` と `read_line_raw`) と標準入力の読みが読む途中で、`Proc.status` が子を起動する前か待つ間に、止める語か確保量の上限に当たった | `interrupted`、`the memory limit is exceeded`、`the call depth limit is exceeded` (`Stop` の表示) |
 
 `Fault::io_error_kind` は、`try_io` が捕まえる誤り (`Io`、`Stdin`、`NotUtf8`) に `IOErrorKind` のタグ (`IO_NOT_FOUND` 0 から `IO_OTHER` 4) を返し、ほかには `None` を返す ([標準ライブラリ](stdlib.md) の「`try_io`」)。
@@ -931,6 +933,13 @@ token の表の項目は、`into_token` と `release_reuse` が添字を使い�
   - `slice` は、範囲の中で両端が vstd の `is_char_boundary` を満たすとき、結果の ghost のバイト列が部分の列に等しいことを約束する。結果は `String.show` と同じ道 (`alloc_string_room` と `append_part`) で作る。部分が UTF-8 であることは、ASCII の補題と同じく `valid_utf8_split` から出す (`lemma_boundary_in_prefix`)。範囲と境界は確保の前に確かめる
   - `find_from` は、開始位置以降で探す文字列と一致する最小の位置か、なければ -1 であることを約束する (spec `found_from`)。照合は素朴な二重の繰り返しである
 - 検査モードでは、引数が `String` の物体でなければ `Heap(WrongKind)` を返す。速いモードは、読めることと所有を前提にする
+
+バイト列の extern (`Bytes.empty`、`length`、`append`、`append_slice`、`slice`、`truncate`、`of_string`、`find_from` と `Bytes` の `==`、`!=`、`compare`) も、結果を ghost のバイト列の spec で約束する。物体の本体は文字列と同じで、種類が `Bytes` であることだけが違う。
+
+- `append`、`append_slice`、`slice`、`truncate` の結果は、`text_of` が `a + b`、`dst + src[from..to]`、`s[start..end]`、`w[0..n]` に等しい。範囲の誤りは確保の前に返す
+- `find_from` は文字列の `find_from` と同じ spec `found_from` を約束する。開始位置が `0 <= from <= len` でなければ `IndexFault::BytesIndex` を返す。照合は素朴な二重の繰り返しである
+- `empty` は `Bytes.make` と同じ道で作る長さ 0 のバイト列で、確保量の上限を確かめる
+- 検査モードでは、引数が `Bytes` の物体でなければ `Heap(WrongKind)` を返す。`String` の物体も断る
 
 I/O の extern (`println`、`eprintln`、`Fs.open`、`Fs.read_all`、`Fs.read_line_raw`、`Fs.close`、`Fs.write_text`、`Env` と `Stdin` と `Proc.status` の extern) は、メモリの安全と、RC のモデルでの増減を証明する。引数を消費すること、結果を持つこと、組のフィールド、`File` の種類と `lin` ビット、誤りのときに作りかけの物体を手放すことを含む。OS とのやりとりの中身 (何が書かれ、何が読めたか) は約束せず、T11 (下の「`unsafe` の核」) と期待値の表 ([テスト戦略](../implementation/testing.md) の「期待値の表」) に任せる。`Fs.read_all` と `read_line_raw` の結果の文字列は `alloc_string` で作るので、ghost のバイト列と UTF-8 であることは今ある約束から出る。
 

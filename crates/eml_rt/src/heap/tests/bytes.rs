@@ -657,6 +657,44 @@ fn conversions_are_counted<M: Mode>() {
     assert_eq!(mortal(ctx.heap()), 1);
 }
 
+/// `Bytes.empty` は長さ 0 の物体を作り、`Bytes.find_from` は素朴な探索で最初の位置を返す。検査モードは文字列を断る。
+fn empty_bytes_and_a_search<M: Mode>() {
+    let mut ctx = ctx::<M>();
+    unsafe {
+        let e = ctx.bytes_empty().unwrap();
+        assert_eq!(ctx.heap().meta(e).unwrap().kind(), Kind::Bytes);
+        assert_eq!(body(ctx.heap(), e), b"");
+        let hay = ctx.heap_mut().alloc_bytes(b"abcabc");
+        let needle = ctx.heap_mut().alloc_bytes(b"ca");
+        assert_eq!(ctx.bytes_find_from(needle, 0, hay), Ok(2));
+        assert_eq!(ctx.bytes_find_from(needle, 3, hay), Ok(-1));
+        assert_eq!(ctx.bytes_find_from(e, 6, hay), Ok(6));
+        assert_eq!(
+            ctx.bytes_find_from(needle, 7, hay),
+            Err(Fault::Index(Box::new(IndexFault::BytesIndex {
+                index: 7,
+                len: 6
+            })))
+        );
+        if M::CHECKED {
+            let s = ctx.heap_mut().alloc_string("abc");
+            assert_eq!(
+                ctx.bytes_find_from(needle, 0, s),
+                Err(Fault::Heap(HeapError::WrongKind))
+            );
+            assert_eq!(
+                ctx.bytes_find_from(s, 0, hay),
+                Err(Fault::Heap(HeapError::WrongKind))
+            );
+            ctx.heap_mut().decref(s).unwrap();
+        }
+        for w in [e, hay, needle] {
+            ctx.heap_mut().decref(w).unwrap();
+        }
+    }
+    assert_eq!(mortal(ctx.heap()), 0);
+}
+
 both_modes!(
     bytes_hold_their_body,
     a_room_bytes_object_starts_empty,
@@ -676,6 +714,7 @@ both_modes!(
     parts_of_bytes_are_appended,
     appending_a_part_of_itself_needs_two_references,
     bytes_externs_refuse_a_string,
+    empty_bytes_and_a_search,
     bytes_copies_are_counted,
     strings_become_bytes,
     bytes_decode_to_strings,

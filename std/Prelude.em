@@ -354,3 +354,13 @@ pub extern data MutArray a
 -- `var` の配列の変数の添字 `index` が長さ `len` の範囲の中か確かめ、外なら `MutArray.read` と同じ文言の `Panic` を
 -- 起こす。translate だけが呼ぶ (docs/spec/core-ir.md の「`var` の変換」)
 extern check_index : Int -> Int -> <Panic> Unit
+
+-- バイト列。順序はバイトの辞書式の順序で、`String` と同じである (docs/spec/stdlib.md の「`Bytes`」)
+pub extern data Bytes
+
+instance Eq Bytes where
+  extern (==)
+  extern (!=)
+
+instance Ord Bytes where
+  extern compare

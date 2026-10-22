@@ -1059,6 +1059,17 @@ fn arithmetic(ext: Extern, dst: Slot, args: &[Slot]) -> Option<Op> {
         | Extern::Eprintln
         | Extern::StrSlice
         | Extern::StrFindFrom
+        | Extern::BytesEmpty
+        | Extern::BytesLength
+        | Extern::BytesAppend
+        | Extern::BytesAppendSlice
+        | Extern::BytesSlice
+        | Extern::BytesTruncate
+        | Extern::BytesOfString
+        | Extern::BytesEq
+        | Extern::BytesNe
+        | Extern::BytesCompare
+        | Extern::BytesFindFrom
         | Extern::EnvArgCount
         | Extern::EnvArg
         | Extern::EnvHas

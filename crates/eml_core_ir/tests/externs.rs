@@ -24,6 +24,9 @@ probe_byte b = b
 probe_string : String -> String
 probe_string s = s
 
+probe_bytes : Bytes -> Bytes
+probe_bytes b = b
+
 probe_float : Float -> Float
 probe_float x = x
 
@@ -57,6 +60,7 @@ fn probe(ty: ExternType) -> &'static str {
         ExternType::Char => "probe_char",
         ExternType::Byte => "probe_byte",
         ExternType::String => "probe_string",
+        ExternType::Bytes => "probe_bytes",
         ExternType::Unit => "probe_unit",
         ExternType::File => "probe_file",
         ExternType::Array => "probe_array",
@@ -237,6 +241,13 @@ fn only_the_array_readers_borrow() {
                 (&[true, true], None)
             }
             "Std.Float.can_parse" | "Std.Float.parse_raw" => (&[true], None),
+            "Std.Bytes.length" => (&[true], None),
+            "Std.Bytes.slice" => (&[false, false, true], None),
+            "Std.Bytes.append_slice" => (&[false, false, true, false], None),
+            "Std.Bytes.find_from" => (&[true, false, true], None),
+            "Prelude.Eq Bytes.==" | "Prelude.Eq Bytes.!=" | "Prelude.Ord Bytes.compare" => {
+                (&[true, true], None)
+            }
             _ => {
                 assert!(!row.borrowed.contains(&true), "{}", row.name);
                 assert_eq!(row.with_arg, None, "{}", row.name);

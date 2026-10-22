@@ -1,0 +1,16 @@
+---
+source: crates/eml_cli/tests/ui.rs
+expression: "format!(\"--- stdout ---\\n{stdout}--- stderr ---\\n{diagnostics}{stderr}{written}{exit}\")"
+input_file: tests/ui/run/bytes/slice.em
+---
+--- stdout ---
+True
+True
+0
+True
+11
+Err "bytes slice 2..12 is out of range for length 11"
+Err "bytes slice -1..2 is out of range for length 11"
+Err "bytes slice 4..3 is out of range for length 11"
+11
+--- stderr ---

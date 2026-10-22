@@ -4,6 +4,9 @@
 #[cfg(verus_only)]
 use vstd::utf8::valid_utf8;
 
+use super::positions::find_bytes;
+#[cfg(verus_only)]
+use super::positions::found_from;
 #[cfg(verus_only)]
 use super::proof::*;
 #[cfg(verus_only)]
@@ -470,6 +473,125 @@ impl<M: Mode> Ctx<M> {
         Ok(w)
     }
 
+    /// `Bytes.empty`。長さ 0 の新しいバイト列を返す。確保量の上限は `bytes_make` と同じ道で確かめる。
+    pub fn bytes_empty(&mut self) -> (r: Result<Word, Fault>)
+        requires
+            old(self).wf(),
+        ensures
+            final(self).wf(),
+            final(self).evv_spec() == old(self).evv_spec(),
+            final(self).yield_spec() == old(self).yield_spec(),
+            r is Ok || r == Err::<Word, Fault>(Fault::Stopped(Stop::MemoryLimit)),
+            r is Err ==> *final(self) == *old(self),
+            r matches Ok(w) ==> final(self).is_bytes(w) && final(self).text_of(w).len() == 0,
+            r matches Ok(w) ==> (old(self).held_ok() ==> {
+                &&& final(self).held_ok()
+                &&& final(self).holds(w)
+                &&& final(self).evolved_by(*old(self), |x: usize| 0int, Set::empty())
+            }),
+    {
+        unsafe { self.bytes_make(0, 0) }
+    }
+
+    /// `Bytes.find_from`。`needle` と `s` を借りて、`from` 以上で `needle` が始まる最小の位置を返し、なければ -1 を返す。
+    /// `from` が `0 <= from <= len` でなければ `Fault::Index` を返す。
+    ///
+    /// # Safety
+    /// `bytes_eq` と同じ (`a` が `needle`、`b` が `s`)。
+    pub unsafe fn bytes_find_from(&mut self, needle: Word, from: i64, s: Word) -> (r: Result<
+        i64,
+        Fault,
+    >)
+        requires
+            old(self).wf(),
+            old(self).heap_spec().word_in(needle),
+            old(self).heap_spec().word_in(s),
+            !M::CHECKED ==> old(self).lends(needle, s, Kind::Bytes),
+        ensures
+            final(self).wf(),
+            final(self).evv_spec() == old(self).evv_spec(),
+            final(self).yield_spec() == old(self).yield_spec(),
+            r is Ok || (r matches Err(Fault::Index(_))) || (r matches Err(Fault::Heap(_))),
+            (r matches Err(Fault::Heap(_))) ==> final(self).heap_spec().settled_heap() == old(
+                self,
+            ).heap_spec().settled_heap(),
+            !M::CHECKED ==> !(r matches Err(Fault::Heap(_))),
+            old(self).held_ok() && old(self).lends(needle, s, Kind::Bytes) ==> !(r matches Err(
+                Fault::Heap(_),
+            )) || (r matches Err(Fault::Heap(e)) && chain_err(Err::<(), HeapError>(e))),
+            old(self).held_ok() && old(self).lends(needle, s, Kind::Bytes) && !(r matches Err(
+                Fault::Heap(_),
+            )) ==> {
+                let text = old(self).text_of(s);
+                &&& 0 <= from <= text.len() ==> (r matches Ok(v) && found_from(
+                    text,
+                    old(self).text_of(needle),
+                    from as int,
+                    v,
+                ))
+                &&& !(0 <= from <= text.len()) ==> (r matches Err(Fault::Index(_)))
+                &&& final(self).held_ok()
+                &&& final(self).evolved_by(*old(self), |x: usize| 0int, Set::empty())
+            },
+    {
+        let ghost s0 = *self;
+        let ghost c = s0.held_ok() && s0.lends(needle, s, Kind::Bytes);
+        if M::CHECKED && !(needle.is_ptr() && s.is_ptr()) {
+            return Err(Fault::Heap(HeapError::WrongKind));
+        }
+        self.heap.settle();
+        let ghost h1 = self.heap;
+        let ha = self.heap.header_of(needle);
+        let hb = self.heap.header_of(s);
+        proof {
+            lemma_settled_twice(s0.heap);
+            assert(h1.words_kept(s0.heap));
+            h1.lemma_text_spec(needle);
+            h1.lemma_text_spec(s);
+            s0.heap.lemma_text_spec(needle);
+            s0.heap.lemma_text_spec(s);
+            if c {
+                s0.lemma_settled_lent(h1, needle, s, Kind::Bytes);
+            }
+        }
+        if let Err(e) = self.heap.checked_body(ha, Kind::Bytes) {
+            proof {
+                self.lemma_words_kept(s0);
+            }
+            return Err(Fault::Heap(e));
+        }
+        if let Err(e) = self.heap.checked_body(hb, Kind::Bytes) {
+            proof {
+                self.lemma_words_kept(s0);
+            }
+            return Err(Fault::Heap(e));
+        }
+        let r = {
+            let n = self.heap.body_of(needle);
+            let t = self.heap.body_of(s);
+            let len = t.len();
+            if 0 <= from && (from as u64) <= (len as u64) {
+                // ヒープのバイト列は `isize::MAX` より短いので、ここには来ない
+                if (len as u64) > (i64::MAX as u64) {
+                    crate::alloc::too_large();
+                }
+                Ok(find_bytes(t, n, from as usize))
+            } else {
+                Err(Fault::Index(Box::new(IndexFault::BytesIndex { index: from, len: len as i64 })))
+            }
+        };
+        proof {
+            if M::CHECKED {
+                lemma_words_trans(self.heap, h1, s0.heap);
+                self.lemma_words_kept(s0);
+            }
+            if c {
+                self.lemma_lent(s0, h1);
+            }
+        }
+        r
+    }
+
     /// `Bytes.of_string`。`s` の参照を受け取り、中身を写した新しいバイト列を返す。`s` の参照は写した後に手放す。写す
     /// バイトは `string_bytes_copied` に数える。
     ///
@@ -713,6 +835,7 @@ impl<M: Mode> Ctx<M> {
                 Fault::Stopped(Stop::MemoryLimit),
             ),
             n < 0 ==> (r matches Err(Fault::Index(_))),
+            n >= 0 ==> !(r matches Err(Fault::Index(_))),
             r is Err ==> *final(self) == *old(self),
             r matches Ok(w) ==> final(self).is_bytes(w) && final(self).text_of(w) == repeated(
                 n as nat,
