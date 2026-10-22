@@ -112,8 +112,8 @@
 
 - 決定: `String` (種類 3) と `Bytes` (種類 5) は、同じ形と同じ ghost のバイト列を持つ別の種類である。`Bytes` のどの行も種類 5 を、`String` のどの行も種類 3 を求める (検査モードは `WrongKind`、速いモードは前提)。この段の変換は写す
   - `of_string : String -> Bytes` (消費する): `alloc_bytes` で中身を写し、文字列を `decref` する。リテラルと共有の文字列も写すので、std ではループの外に出す
-  - `decode : Bytes -> <Panic> String` (消費する。`Std.String` の中だけ): T5 の `utf8_valid` で確かめ、妥当なら `alloc_string` で写して `decref` する。妥当でなければ引数を手放し、`Fault::Utf8 { at }` から `Panic` (`invalid UTF-8 at byte <at>`) にする
-  - `valid_utf8 : Bytes -> Bool` (借りる)。`Std.String.from_utf8 : Bytes -> Option String` は eml で `if valid_utf8 b then Some (decode b) else None` と書く (2回確かめる。1回で済むのは `decode` で、`String` を返す読みの行は行の中で1回だけ確かめる)
+  - `decode : Bytes -> <Panic> String` (消費する。`Std.String` に置く。T-14 と T-28 の試しが利用者のコードから呼ぶので `pub` にした (実行中に決めた)): T5 の `utf8_valid` で確かめ、妥当なら `alloc_string` で写して `decref` する。妥当でなければ引数を手放し、`Fault::Utf8 { at }` から `Panic` (`invalid UTF-8 at byte <at>`) にする
+  - `valid_utf8 : Bytes -> Bool` (借りる)。`Std.String.from_utf8 : Bytes -> <Panic> Option String` は eml で `if valid_utf8 b then Some (decode b) else None` と書く (2回確かめる。1回で済むのは `decode` で、`String` を返す読みの行は行の中で1回だけ確かめる)。`decode` を呼ぶので型に `<Panic>` が付くが、`valid_utf8` の後でしか呼ばないので起きない (実行中に決めた)
   - `Bytes` は `Unr` で、lin ビットも token も持たず、ペイロードは不透明で、回復では写し (容量の余りは写さない)、`freeze` が受け付ける
 - 理由: 実行時の部分型 (`Bytes` の行が種類 3 も受けること) は、条件付きのヒープの不変条件と、すべての行の2つの種類の確かめを要する。それで O(1) になるのは共有の文字列の `of_string` だけで、その用途は `String.byte_at` がすでに満たしている。写す変換は、確保と `write_bytes` だけの最も簡単な証明で済む。その場で種類を書き換えると、ghost の形と UTF-8 の条件を選ぶビットが変わり、種類を量化したすべての補題を作り直すことになる (lin ビットは不変条件が読まないので、`set_lin` は先例にならない)
 - 退けた案: 実行時の部分型、`info` の UTF-8 の印 (種類の `match` と回復の表に2つ目の次元が増える)、`Bytes` の上の検証した view としての `String` (文字列ごとに確保が倍になり、FFI の1つのブロックの形を崩す)、`with_arg` の組を返す消費の行 (組は借りた引数にしかない)
