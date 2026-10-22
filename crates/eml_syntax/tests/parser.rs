@@ -70,23 +70,6 @@ fn recovery_resumes_at_the_next_item() {
     );
 }
 
-/// パースが panic せずに終わり、木が元のテキストに戻ることだけを確かめる。
-fn assert_parses_losslessly(text: &str) {
-    parse(text);
-}
-
-#[test]
-fn long_unclosed_paren_lookahead_does_not_hit_the_step_limit() {
-    // 先読み走査 (`apat_len`) は、閉じ括弧を探して EOF まで読む。
-    assert_parses_losslessly(&("(".to_string() + &"a ".repeat(600_000)));
-}
-
-#[test]
-fn long_use_lookahead_does_not_hit_the_step_limit() {
-    // 先読み走査 (`has_left_arrow`) は、`<-` を探して EOF まで読む。
-    assert_parses_losslessly(&("f =\n  use g (".to_string() + &"a ".repeat(600_000)));
-}
-
 #[test]
 fn recovered_empty_block_stays_on_its_line() {
     let tree = debug_tree(&parse("f =\ng = 1").parse.syntax());

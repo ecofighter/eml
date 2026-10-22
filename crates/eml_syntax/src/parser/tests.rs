@@ -342,3 +342,33 @@ fn no_error_is_reported_at_an_error_token() {
     });
     assert!(diagnostics.is_empty());
 }
+
+/// 本物の文法で読み、panic せずに終わって木が元のテキストに戻ることを確かめる。
+fn parse_losslessly(text: &str) {
+    let mut files = SourceFiles::new();
+    let file = files.add("test.em", text);
+    let (tokens, _) = lex(file, text);
+    let (input, _) = layout(file, text, &tokens);
+    let mut p = Parser::new(file, text, input);
+    crate::grammar::source_file(&mut p);
+    let (events, _) = p.finish();
+    let tree = SyntaxNode::new_root(build_tree(text, &tokens, events));
+    assert_eq!(tree.text().to_string(), text, "tree must be lossless");
+}
+
+/// 先読みが1トークンごとに1ステップを数えると上限を超える長さ。
+fn longer_than_the_step_limit() -> String {
+    "a ".repeat(STEP_LIMIT as usize + 1)
+}
+
+#[test]
+fn long_unclosed_paren_lookahead_does_not_hit_the_step_limit() {
+    // 先読み走査 (`apat_len`) は、閉じ括弧を探して EOF まで読む。
+    parse_losslessly(&("(".to_string() + &longer_than_the_step_limit()));
+}
+
+#[test]
+fn long_use_lookahead_does_not_hit_the_step_limit() {
+    // 先読み走査 (`has_left_arrow`) は、`<-` を探して EOF まで読む。
+    parse_losslessly(&("f =\n  use g (".to_string() + &longer_than_the_step_limit()));
+}
