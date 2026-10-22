@@ -1,0 +1,13 @@
+---
+source: crates/eml_cli/tests/ui.rs
+expression: "format!(\"--- stdout ---\\n{stdout}--- stderr ---\\n{diagnostics}{stderr}{written}{exit}\")"
+input_file: tests/ui/run/std/long_list_functions.em
+---
+--- stdout ---
+99999
+(50000, 50000)
+(Some 100000, Some 99999, False)
+100000
+Some 100000
+[100000, 99999, 99998]
+--- stderr ---

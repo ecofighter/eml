@@ -1,5 +1,5 @@
 -- リストの関数 (docs/spec/stdlib.md)。どれも末尾再帰で書き、逆順に積んでから `reverse` する。長いリストでも VM の
--- 深さの上限に当たらないようにするためである。関数を受ける関数は、要素の順に関数を呼ぶ。
+-- 深さの上限に当たらないようにするためである。関数を受ける関数は、要素の順に関数を呼ぶ。ただし `sort_by` は比較の関数を呼ぶ順と回数を決めない。
 
 pub reverse : List a -> List a
 reverse xs = reverse_onto Nil xs
@@ -108,3 +108,36 @@ contains x (y :: rest) = if x == y then True else contains x rest
 pub lookup : Eq k => k -> List (k, v) -> Option v
 lookup key Nil = None
 lookup key ((k, v) :: rest) = if k == key then Some v else lookup key rest
+
+pub sort : Ord a => List a -> List a
+sort xs = sort_by compare xs
+
+-- 安定な下からのマージソート。1要素の列から始め、隣り合う列を2つずつ合わせる。比較を呼ぶ順と回数は決めない
+pub sort_by : (a -> a -> <e> Ordering) -> List a -> <e> List a
+sort_by cmp xs =
+  let singletons acc ys =
+    match ys with
+      | Nil -> acc
+      | y :: rest -> singletons ((y :: Nil) :: acc) rest
+  -- 右が真に小さいときだけ右を先に取るので、等しい要素は左の列のものが先に残る
+  let merge acc l r =
+    match l with
+      | Nil -> reverse_onto r acc
+      | x :: ls ->
+        match r with
+          | Nil -> reverse_onto l acc
+          | y :: rs ->
+            match cmp x y with
+              | GT -> merge (y :: acc) l rs
+              | _ -> merge (x :: acc) ls r
+  let pass acc runs =
+    match runs with
+      | a :: b :: rest -> pass (merge Nil a b :: acc) rest
+      | [a] -> reverse (a :: acc)
+      | Nil -> reverse acc
+  let all runs =
+    match runs with
+      | Nil -> Nil
+      | [run] -> run
+      | _ -> all (pass Nil runs)
+  all (reverse (singletons Nil xs))

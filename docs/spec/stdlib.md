@@ -153,6 +153,8 @@ pub while : (Unit -> <e> Bool) -> (Unit -> <e> Unit) -> <e> Unit
 | `index_of` | `Eq a => a -> List a -> <Panic> Option Int` |
 | `contains` | `Eq a => a -> List a -> Bool` |
 | `lookup` | `Eq k => k -> List (k, v) -> Option v` |
+| `sort` | `Ord a => List a -> List a` |
+| `sort_by` | `(a -> a -> <e> Ordering) -> List a -> <e> List a` |
 
 - `map`、`filter`、`filter_map`、`each` は、要素の順に関数を呼ぶ。`fold f init xs` は左からたたむ (`f (f init x1) x2`)
 - `append xs ys` は `xs` の後ろに `ys` を続ける
@@ -161,6 +163,8 @@ pub while : (Unit -> <e> Bool) -> (Unit -> <e> Unit) -> <e> Unit
 - `nth i xs` は 0 から数えた位置 `i` の要素を返す。`i` が負か長さ以上なら `None` である
 - `zip` は短いほうの長さで止める
 - `index_of x xs` は `x` に等しい最初の要素の位置を返し、なければ `None` である。`contains x xs` は等しい要素があるかを返す。`lookup key ps` は最初にキーが等しい組の値を返す。探すものを先に置くのは、`String.contains` と `Map.lookup` にそろえるためである
+- `sort` は `sort_by compare` である。`sort_by cmp xs` は安定な並べ替えで、`cmp x y` が `GT` のときだけ `y` を `x` より先に置くので、等しい要素は元の順に残る。下からのマージソートで、どのループも末尾再帰であり、長さを数えないので `Panic` を起こさない
+- `sort_by` が比較の関数を呼ぶ順と回数は決めない。エフェクトのある比較の関数も渡せるが、そのエフェクトの起きる順は決まらない。`Array` には並べ替えを置かない
 - `drop` は置かない。線形の値を捨てる `drop` と名前が重なるためである
 - どの関数も末尾再帰で書き、逆順に積んで最後に `reverse` する。長いリストでも VM の深さの上限に当たらないようにするためである
 
