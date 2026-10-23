@@ -700,7 +700,7 @@ token の表の項目は、`into_token` と `release_reuse` が添字を使い�
 
 ## 実行文脈 `Ctx`
 
-実行文脈 `Ctx<M>` は、ヒープと、[LIR](lir.md) の「実行の文脈」の `evv` と yield の状態を持ち、同じ文書の「基本操作」の表のうち `dummy` を除く21個をメソッドにする (`dummy` は上の「ダミーの値」の `Heap::dummy`)。VM は `&mut Ctx` だけを持ち回す。ヒープと実行の状態を別の構造体にしないのは、持ち回すものが2つになり、基本操作の契約が2つの値をまたぐためである。
+実行文脈 `Ctx<M>` は、ヒープと、[LIR](lir.md) の「実行の文脈」の `evv` と yield の状態を持ち、同じ文書の「基本操作」の表のうち `dummy` を除く21個をメソッドにする (`dummy` は上の「ダミーの値」の `Heap::dummy`)。このほかに、タスクの切り替えのための `evv_swap` を持つ (下の「タスクの切り替え」)。VM は `&mut Ctx` だけを持ち回す。ヒープと実行の状態を別の構造体にしないのは、持ち回すものが2つになり、基本操作の契約が2つの値をまたぐためである。
 
 ### 欄
 
@@ -769,7 +769,10 @@ token の表の項目は、`into_token` と `release_reuse` が添字を使い�
 
 [LIR](lir.md) の「実行の文脈」は、1つの worker で `par` と `Async` のタスクを切り替えるとき ([マルチコア対応の設計](../future/multicore.md) の「1つの worker での実行」)、実行の文脈をタスクごとに持つか、切り替えで退避するかを求める。次のように決める。
 
-- タスクは、yield の状態がなしの安全点でだけ切り替える。そのため、退避するのは `evv` だけで、`evv_get` と `evv_set` で足りる。切り替えのための基本操作は足さない
+- タスクは、yield の状態がなしの安全点でだけ切り替える。そのため、退避するのは `evv` だけである
+- 切り替えは `evv_swap(l)` で行う。次のタスクの `evv` の l を入れ、前のタスクの `evv` を返す。l の参照は `Ctx` へ移り、元の `evv` の参照は呼ぶ側へ移るので、RC に触れない。`evv_swap` は [LIR](lir.md) の「基本操作」の表にない、VM のための `Ctx` の操作である
+- `evv_get` と `evv_set` で切り替えないのは、切り替えごとに `dup` と `decref` が1回ずつ増え、仕事の回数 (VM の `RunStats`) がスケジュールに依存するためである
+- `evv_swap` は失敗しない。確かめることがないためで、`evv_set` も l の形を確かめない。どちらのモードでも、l が `evv_wf(l)` を満たし、呼ぶ側が l の参照を `Ctx` の参照と別に持つことを前提にする
 - 1つの worker で動かす `par` の子は、`evv` を空 (`()`) にして始める。子の row は `<never e>` なので、evidence がタスクをまたがない。上の「evidence の3つの物体」が、状態の欄をその場で書き換える条件として挙げたことでもある
 
 ### 実行の制御
@@ -810,6 +813,7 @@ token の表の項目は、`into_token` と `release_reuse` が添字を使い�
 |---|---|---|
 | `evv_get()` | | `evv` を `dup` して返す |
 | `evv_set(l)` | `evv_wf(l)` | `evv` を l にし、元の `evv` を手放す |
+| `evv_swap(l)` | `evv_wf(l)` (検査モードでも) | `evv` を l にし、元の `evv` を返す。RC に触れない (上の「タスクの切り替え」) |
 | `evv_push(l, e)` | `evv_wf(l)`、l の長さが `max_evv` より小さい、`ev_shape(e)` | e と同じ tag の新しい節点を返す。結果の `evv_seq` は、(tag, e) の後に `evv_seq(l)` を続けた列である |
 | `evv_mask(items, w)` | `evv_wf(w)`、どの項目についても合う組が n + m 個以上ある (`mask_spec(items, evv_seq(w))` の長さに、各エフェクトの先の項目の m を足すと、`evv_seq(w)` の長さになる) | 結果の `evv_seq` は `mask_spec(items, evv_seq(w))` である。除いた最後の節点までに残す節点を写し、その後ろは元のリストを共有する |
 | `ev_new(effect, n_ops, state, outer)` | `evv_wf(outer)`、effect が 65535 より小さい | 欄が `n_ops` 個でどれも `()` の入口の表と、それを指す tag が effect + 1 の evidence を作る |

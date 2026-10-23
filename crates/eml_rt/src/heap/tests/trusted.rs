@@ -390,6 +390,9 @@ fn every_primitive_once<M: Mode>() {
         let masked = ctx.evv_mask(&[ctx_tests::item(0, 0, 1)], list).unwrap();
         assert_ne!(masked, list);
         assert_eq!(ctx.heap().field(masked, 0), Ok(e1));
+        // 切り替えの1往復
+        let current = ctx.evv_swap(masked);
+        assert_eq!(ctx.evv_swap(current), masked);
         for w in [masked, list] {
             ctx.heap_mut().decref(w).unwrap();
         }

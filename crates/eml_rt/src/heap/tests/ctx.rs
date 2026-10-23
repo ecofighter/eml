@@ -200,6 +200,37 @@ fn evv_get_and_set_swap_the_list<M: Mode>() {
     assert!(ctx.check_finished());
 }
 
+/// `evv_swap` は参照を `Ctx` と呼ぶ側で入れ替えるだけで、どちらの物体の rc も変えず、RC の仕事を数えない。
+fn evv_swap_exchanges_lists_without_rc_work<M: Mode>() {
+    let mut ctx = ctx::<M>();
+    let e0 = push(&mut ctx, 0, 1);
+    unsafe {
+        let a = ctx.evv_swap(UNIT);
+        assert!(ctx.check_finished());
+        let e1 = push(&mut ctx, 1, 1);
+        let b = ctx.evv_swap(a);
+        assert_eq!(ctx.heap().field(a, 0), Ok(e0));
+        assert_eq!(ctx.heap().field(b, 0), Ok(e1));
+        let rcs = (super::raw::rc(a), super::raw::rc(b));
+        assert_eq!(rcs, (1, 1));
+        let stats = ctx.heap().stats();
+        // 切り替えて戻すと、Ctx は元の a を、呼ぶ側は b を持つ
+        assert_eq!(ctx.evv_swap(b), a);
+        assert_eq!(ctx.evv_swap(a), b);
+        let after = ctx.heap().stats();
+        assert_eq!(after.rc_increments, stats.rc_increments);
+        assert_eq!(after.rc_decrements, stats.rc_decrements);
+        assert_eq!((super::raw::rc(a), super::raw::rc(b)), rcs);
+        ctx.heap_mut().decref(b).unwrap();
+        for e in [e0, e1] {
+            ctx.heap_mut().decref(e).unwrap();
+        }
+    }
+    clear(&mut ctx);
+    assert!(ctx.check_finished());
+    assert_eq!(super::mortal(ctx.heap()), 0);
+}
+
 fn dropping_a_ctx_mid_yield<M: Mode>() {
     let mut ctx = ctx::<M>();
     let ev = ctx_evidence(&mut ctx);
@@ -744,6 +775,7 @@ both_modes!(
     yield_abort_leaves_no_continuation,
     misused_yields_are_reported_in_checked_mode,
     evv_get_and_set_swap_the_list,
+    evv_swap_exchanges_lists_without_rc_work,
     dropping_a_ctx_mid_yield,
     lookup_finds_the_innermost_evidence,
     find_returns_the_innermost_evidence_or_none,

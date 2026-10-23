@@ -1535,6 +1535,57 @@ impl<M: Mode> Ctx<M> {
         r
     }
 
+    /// `evv` を `l` に替え、元の `evv` を返す。`l` の参照は `Ctx` へ移り、元の `evv` の参照は呼ぶ側へ移るので、
+    /// RC には触れない。タスクの切り替えが `RunStats` をスケジュールに依存させないための操作である
+    /// (docs/spec/object-model.md の「タスクの切り替え」)。
+    ///
+    /// # Safety
+    /// `heap_mut` の前提を守っている。`l` は即値か、このヒープか付けた塊の生きている物体を指す `evv` のリストで、
+    /// 呼ぶ側がその参照を1つ持つ。どちらのモードでも確かめない。
+    #[verifier::spinoff_prover]
+    pub unsafe fn evv_swap(&mut self, l: Word) -> (r: Word)
+        requires
+            old(self).wf(),
+            old(self).heap_spec().word_in(l),
+            old(self).evv_wf(l),
+            old(self).holds(l),
+        ensures
+            final(self).wf(),
+            r == old(self).evv_spec(),
+            final(self).evv_spec() == l,
+            final(self).yield_spec() == old(self).yield_spec(),
+            final(self).heap_spec() == old(self).heap_spec(),
+            final(self).holds(r),
+            old(self).held_ok() ==> final(self).held_ok() && final(self).evv_wf(r),
+    {
+        let r = self.evv;
+        self.evv = l;
+        proof {
+            let s0 = *old(self);
+            let ws0 = seq![l];
+            let ws1 = seq![r];
+            assert(held_word(s0.heap, ws0[0]));
+            assert forall|b: usize| #[trigger] self.need(ws1, b) == s0.need(ws0, b) by {
+                lemma_points_in(ws0, b);
+                lemma_points_in(ws1, b);
+            }
+            assert forall|b: usize| #[trigger] self.need(seq![], b) <= s0.need(ws0, b) by {
+                lemma_points_in(ws0, b);
+                lemma_points_in(seq![], b);
+            }
+            assert(self.holds_args(ws1)) by {
+                assert forall|i: int| 0 <= i < ws1.len() implies held_word(
+                    self.heap,
+                    #[trigger] ws1[i],
+                ) by {}
+            }
+            if s0.held_ok() || !M::CHECKED {
+                assert(self.holds_args(seq![]));
+            }
+        }
+        r
+    }
+
     /// エフェクト `effect` の evidence を作る。入口の表は欄が `n_ops` 個で、どれも `()` である。tag はエフェクトの
     /// 番号 + 1 にする (docs/spec/object-model.md の「evidence の3つの物体」)。`state` と `outer` は消費する。
     ///
