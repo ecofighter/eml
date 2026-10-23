@@ -23,7 +23,7 @@ The documentation lives under `docs/`; start from `docs/README.md`. `docs/spec/`
 
 ## Commands
 
-The dev environment is a Nix flake (`direnv` with `use flake`) on nixos-unstable. Every Rust toolchain comes from fenix: stable is pinned to the version Verus requires (1.98.1) and serves the devShell, `nix build` and Verus; the `.#miri` shell has a nightly with miri and rust-src. The devShell provides clippy, rustfmt, rust-analyzer, cargo-insta, cargo-nextest, and `verus` / `cargo-verus` and `verusfmt`. Both shells set `CARGO_HOME` to `${XDG_CACHE_HOME:-$HOME/.cache}/eml-cargo-home` so rustup's `~/.cargo/bin` proxies do not shadow fenix's `cargo-clippy` / `cargo-miri`.
+The dev environment is a Nix flake (`direnv` with `use flake`) on nixos-unstable. Every Rust toolchain comes from fenix: stable is pinned in `rust-toolchain.toml` to the version Verus requires (1.98.1); the flake reads its channel and rustup reads the same file outside nix, and it serves the devShell, `nix build` and Verus; the `.#miri` shell has a nightly with miri and rust-src. The devShell provides clippy, rustfmt, rust-analyzer, cargo-insta, cargo-nextest, and `verus` / `cargo-verus` and `verusfmt`. Both shells set `CARGO_HOME` to `${XDG_CACHE_HOME:-$HOME/.cache}/eml-cargo-home` so rustup's `~/.cargo/bin` proxies do not shadow fenix's `cargo-clippy` / `cargo-miri`.
 
 ```sh
 cargo build                          # all crates

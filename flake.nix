@@ -6,7 +6,7 @@
       url = "github:nix-community/fenix";
       inputs.nixpkgs.follows = "nixpkgs";
     };
-    # Verus の release の zip。版を上げるときは、2つの URL と下の `stable` の版 (Verus の rust-toolchain.toml) を揃えて変える
+    # Verus の release の zip。版を上げるときは、2つの URL、`rust-toolchain.toml` の `channel`、下の `stable` の `sha256` を一緒に変える
     # (docs/implementation/testing.md の「Verus」)
     verus-aarch64-darwin = {
       url = "https://github.com/verus-lang/verus/releases/download/release%2F0.2026.10.04.426d8b0/verus-0.2026.10.04.426d8b0-arm64-macos.zip";
@@ -38,10 +38,10 @@
         { pkgs, system, ... }:
         let
           fenix = inputs.fenix.packages.${system};
-          # Rust の部品は stable も nightly も fenix から取る。stable は Verus が求める版に揃え、ふだんの devShell、
-          # nix build、Verus が同じ toolchain を使う (docs/implementation/testing.md の「Verus」)
+          # Rust の部品は stable も nightly も fenix から取る。stable は版を `rust-toolchain.toml` から取り、
+          # devShell、`nix build`、Verus と、nix の外の rustup が同じ版を使う (docs/implementation/testing.md の「Verus」)
           stable = fenix.toolchainOf {
-            channel = "1.98.1";
+            channel = (pkgs.lib.importTOML ./rust-toolchain.toml).toolchain.channel;
             sha256 = "sha256-p8h3Sl/YRByZfZTAKXdsvF6xEenXKrXSVvpphmZENH4=";
           };
           devToolchain = stable.withComponents [
