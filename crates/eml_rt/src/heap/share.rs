@@ -2,7 +2,6 @@
 
 use std::marker::PhantomData;
 use std::mem;
-use vstd::hash_set::HashSetWithView;
 use vstd::prelude::*;
 
 use super::Heap;
@@ -43,7 +42,7 @@ pub(crate) enum ShareError {
 // 仕様
 /// 印付けと移し替えのたどりが展開するのは局所の物体だけである。不死の物体と共有の物体では、`lin` ビットによらず止まる
 pub open spec fn expands<N>(g: GView<N>, n: N) -> bool {
-    g.rc[n] > 0
+    g.rc[n] > 0 && g.live[n]
 }
 
 pub open spec fn local<N>(g: GView<N>) -> spec_fn(N) -> bool {
@@ -77,14 +76,15 @@ pub open spec fn sound<N>(g: GView<N>, root: N) -> bool {
     &&& forall|n: N|
         g.nodes.contains(n) && #[trigger] g.lin[n] && g.rc[n] > 0 ==> g.rc[n]
             == 1
-        // rc 1 の物体は、根かただ1つの辺から1回だけ届く。rc は参照の数なので、正しいヒープでは成り立つ
+        // rc 1 の物体は、根か、生きている物体のただ1つの辺から1回だけ届く。rc は参照の数なので、正しいヒープでは成り立つ。
+        // 生きていない物体 (検査モードの token の箱や空ける途中の物体) の語は、もう手渡した参照を指しうるので数えない
     &&& forall|p: N, k: int|
-        g.nodes.contains(p) && 0 <= k < g.children[p].len() && g.rc[#[trigger] g.children[p][k]]
-            == 1 ==> g.children[p][k] != root
+        g.nodes.contains(p) && g.live[p] && 0 <= k < g.children[p].len()
+            && g.rc[#[trigger] g.children[p][k]] == 1 ==> g.children[p][k] != root
     &&& forall|p1: N, k1: int, p2: N, k2: int|
-        g.nodes.contains(p1) && 0 <= k1 < g.children[p1].len() && g.nodes.contains(p2) && 0 <= k2
-            < g.children[p2].len() && g.rc[#[trigger] g.children[p1][k1]] == 1 && g.children[p1][k1]
-            == #[trigger] g.children[p2][k2] ==> p1 == p2 && k1
+        g.nodes.contains(p1) && g.live[p1] && 0 <= k1 < g.children[p1].len() && g.nodes.contains(p2)
+            && g.live[p2] && 0 <= k2 < g.children[p2].len() && g.rc[#[trigger] g.children[p1][k1]]
+            == 1 && g.children[p1][k1] == #[trigger] g.children[p2][k2] ==> p1 == p2 && k1
             == k2
         // 印付けは共有の物体で止まるので、その先に印の付かない局所の物体が残らないようにする前提である
     &&& forall|p: N, k: int|
@@ -517,6 +517,7 @@ proof fn lemma_moves_child<N>(g: GView<N>, root: N, p: N, k: int)
     requires
         moves(g, root, p),
         g.nodes.contains(p),
+        g.live[p],
         0 <= k < g.children[p].len(),
         g.rc[g.children[p][k]] == 1,
     ensures
@@ -578,6 +579,7 @@ proof fn lemma_moves_parent<N>(g: GView<N>, root: N, p: N, k: int)
     requires
         sound(g, root),
         g.nodes.contains(p),
+        g.live[p],
         0 <= k < g.children[p].len(),
         moves(g, root, g.children[p][k]),
         !g.lin[g.children[p][k]],
@@ -601,12 +603,14 @@ proof fn lemma_moves_parent<N>(g: GView<N>, root: N, p: N, k: int)
     lemma_moves_prefix(g, root, path, i);
 }
 
-/// rc 1 の物体を指す辺はただ1つである。
+/// rc 1 の物体を指す、生きている物体の辺はただ1つである。
 proof fn lemma_one_parent<N>(g: GView<N>, root: N, p1: N, k1: int, p2: N, k2: int)
     requires
         sound(g, root),
         g.nodes.contains(p1),
         g.nodes.contains(p2),
+        g.live[p1],
+        g.live[p2],
         0 <= k1 < g.children[p1].len(),
         0 <= k2 < g.children[p2].len(),
         g.children[p1][k1] == g.children[p2][k2],
@@ -649,6 +653,7 @@ proof fn lemma_aside_child<N>(g: GView<N>, root: N, x: N, k: int)
     requires
         sound(g, root),
         g.nodes.contains(x),
+        g.live[x],
         0 <= k < g.children[x].len(),
         g.rc[x] < 0 || !reached(g, local(g), root, x),
     ensures
@@ -1234,7 +1239,9 @@ proof fn lemma_expand_count<N>(
     requires
         sound(g0, root),
         g0.nodes.contains(x),
+        g0.live[x],
         w.done().subset_of(g0.nodes),
+        forall|p: N| #[trigger] w.done().contains(p) ==> g0.live[p],
         !w.done().contains(x),
         w2.done() == w.done().insert(x),
         forall|m: N| #[trigger]
@@ -2275,10 +2282,19 @@ impl<M: Mode> Heap<M> {
         mem::swap(&mut moves, &mut self.move_stack);
         let mut own = Vec::new();
         mem::swap(&mut own, &mut self.own_stack);
-        // 訪問済みの集まりは検査モードだけが使う。速いモードでは空のまま預けて戻す
-        let mut seen = HashSetWithView::new();
-        mem::swap(&mut seen, &mut self.seen);
-        seen.clear();
+        // 訪問済みの集まりは検査モードだけが使う。速いモードでは作らず、触れない
+        let mut seen = None;
+        if M::CHECKED {
+            mem::swap(&mut seen, &mut self.seen);
+            seen =
+            match seen {
+                Some(mut set) => {
+                    set.clear();
+                    Some(set)
+                },
+                None => None,
+            };
+        }
         let mut owned = Vec::new();
         if M::CHECKED {
             mem::swap(&mut owned, &mut self.owned);
@@ -2329,7 +2345,9 @@ impl<M: Mode> Heap<M> {
         mem::swap(&mut mark, &mut self.mark_stack);
         mem::swap(&mut moves, &mut self.move_stack);
         mem::swap(&mut own, &mut self.own_stack);
-        mem::swap(&mut objects.seen, &mut self.seen);
+        if M::CHECKED {
+            mem::swap(&mut objects.seen, &mut self.seen);
+        }
         if M::CHECKED {
             mem::swap(&mut objects.owned, &mut self.owned);
         }

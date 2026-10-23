@@ -3,6 +3,7 @@
 //! ブロックの権限を預かる。
 
 use std::marker::PhantomData;
+use std::mem;
 use vstd::hash_set::HashSetWithView;
 use vstd::prelude::*;
 use vstd::raw_ptr::ptr_ref;
@@ -527,8 +528,8 @@ pub(crate) struct Objects<M> {
     /// 検査モードの ID ごとの数 (`Heap` の `owned`)。rc の符号か、rc が正の物体の持ち主が変わると数え直す。
     /// 速いモードでは空のまま触れない。
     pub(crate) owned: Vec<u64>,
-    /// 検査モードで訪れた節点の番地 (`Heap` の `seen`)。速いモードでは空のまま触れない。
-    pub(crate) seen: HashSetWithView<usize>,
+    /// 検査モードで訪れた節点の番地 (`Heap` の `seen`)。速いモードでは `None` のまま触れない。
+    pub(crate) seen: Option<HashSetWithView<usize>>,
     /// たどりの間ヒープから預かる、付けた塊の権限の写し。塊の節点はここから読む。
     pub(crate) env: Tracked<Env>,
     /// 物体の持ち主。速いモードでも ghost の値として持ち、たどりの後でモデルに戻す。
@@ -539,6 +540,14 @@ pub(crate) struct Objects<M> {
 }
 
 impl<M> Objects<M> {
+    /// 訪れた番地。集まりをまだ作っていなければ空である。
+    pub(crate) open spec fn seen_addrs(&self) -> Set<usize> {
+        match self.seen {
+            Some(set) => set@,
+            None => Set::empty(),
+        }
+    }
+
     /// 節点を決めるヒープ。たどりの前のヒープに、預かった塊の権限を戻したものである。
     pub(crate) open spec fn view(&self) -> Core {
         Core { env: self.env, ..self.base@ }
@@ -809,7 +818,7 @@ impl<M: Mode> Graph for Objects<M> {
     }
 
     open spec fn seen(&self) -> Set<*mut Header> {
-        self.gv().nodes.filter(|n: *mut Header| self.seen@.contains(n@.addr))
+        self.gv().nodes.filter(|n: *mut Header| self.seen_addrs().contains(n@.addr))
     }
 
     fn see(&mut self, h: *mut Header) -> (fresh: bool) {
@@ -818,7 +827,15 @@ impl<M: Mode> Graph for Objects<M> {
             reveal(graph_of);
             lemma_node(self.view(), self.perms@, M::CHECKED, h);
         }
-        let fresh = self.seen.insert(h.addr());
+        // 集まりは初めて使うときに作る。速いモードはここを通らないので、`share` のたびに作る費用を払わない
+        let mut taken = None;
+        mem::swap(&mut taken, &mut self.seen);
+        let mut set = match taken {
+            Some(set) => set,
+            None => HashSetWithView::new(),
+        };
+        let fresh = set.insert(h.addr());
+        self.seen = Some(set);
         proof {
             // 番地の同じ節点は同じヘッダなので、番地を足すと節点がちょうど1つ足される
             assert forall|n: *mut Header| #[trigger]

@@ -175,8 +175,8 @@ pub struct Heap<M: Mode> {
     mark_stack: Vec<*mut Header>,
     move_stack: Vec<*mut Header>,
     own_stack: Vec<*mut Header>,
-    /// 検査モードの `share` が訪れた物体の番地。使い回す。
-    seen: HashSetWithView<usize>,
+    /// 検査モードの `share` が訪れた物体の番地。最初の `share` で作り、その後は使い回す。
+    seen: Option<HashSetWithView<usize>>,
     /// 検査モードの token の表。項目は箱と、`into_token` のときの世代の番号である。
     tokens: Vec<Option<(*mut Header, u32)>>,
     dummy: Word,
@@ -677,7 +677,7 @@ impl<M: Mode> Heap<M> {
             mark_stack: Vec::new(),
             move_stack: Vec::new(),
             own_stack: Vec::new(),
-            seen: HashSetWithView::new(),
+            seen: None,
             tokens: Vec::new(),
             dummy: Word::EMPTY,
             quarantined: 0,
