@@ -7,10 +7,9 @@
 ## 構文の設計からの申し送り
 
 - handler でリソースを持つ API を中心にする: `with_log`、`with_output`、`with_temp_dir`、`with_cwd`、`with_env` など。`use` で並べて使う形を想定する ([式](../spec/expressions.md) の「`use`」と「パラメータ付き handler」)
-- `Cmd` 型: コマンドリテラルの結果。`run : Cmd -> <IO> Int`、`read : Cmd -> <IO> String`、`spawn : Cmd -> <IO> Child`、パイプ (`.|` などの演算子)、リダイレクト、環境変数、作業ディレクトリの設定を用意する ([字句](../spec/lexical.md) の「コマンドリテラル」)
 - 標準入出力のハンドル: `Stdin`、`Stdout`、`Stderr` の規則は [標準ライブラリ](../spec/stdlib.md) の「ハンドル」にある。extern はハンドルに対する読み書きの操作にとどめ、「行を流す」などのストリーム処理は標準ライブラリにエフェクトとして書く ([標準ライブラリ](../spec/stdlib.md) の「エフェクトのモジュール」)
 - `Task a` を `Lin` にする: `Async.start` が返すタスクを、必ず `await` するか `drop` (キャンセル) させる。構造化された並行処理にする
-- 標準ライブラリ (`FileIn`、`FileOut`、`Fs` の読み書き、`List` と並べ替え、`String`、`Char`、`Bytes`、`Map`、`Set`、`Env`、`Stdin`、`Stdout`、`Stderr`、`Proc.run`、`eprintln`) と extern の境界の方針は、[標準ライブラリ](../spec/stdlib.md) にある。extern は小さい核にとどめ、どのスクリプトも使う少数の関数だけを eml で書いている。`replace` と、`Option` と `Result` の補助関数は、決めていない
+- 標準ライブラリ (`FileIn`、`FileOut`、`Fs` の読み書き、`List` と並べ替え、`String`、`Char`、`Bytes`、`Map`、`Set`、`Env`、`Stdin`、`Stdout`、`Stderr`、`Proc`、`eprintln`) と extern の境界の方針は、[標準ライブラリ](../spec/stdlib.md) にある。extern は小さい核にとどめ、どのスクリプトも使う少数の関数だけを eml で書いている。`replace` と、`Option` と `Result` の補助関数は、決めていない
 - `Prelude` の範囲: 今は `Bool`、`Ordering`、`List`、`Option`、`Result`、`println`、`eprintln`、`not`、`|>` などの標準の演算子と fixity ([宣言](../spec/declarations.md) の標準の演算子の表)、型クラス `Eq`、`Ord`、`Show`、`Num`、`Div`、`Bits` ([宣言](../spec/declarations.md) の「Prelude のクラス」) を持つ。
 - モジュールの候補: `Json`、`Csv`、`Toml`、`Regex`、`Http`、`Async`
 - 補間の穴は、Prelude の `Show` の `display` で文字列にする ([式](../spec/expressions.md) の「補間」)。標準ライブラリの型を穴に書けるようにするには、`Show` の instance を置く。人が読む形が `show` の形と違う型は、`display` を上書きする

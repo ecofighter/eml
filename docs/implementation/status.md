@@ -27,6 +27,7 @@
 - 標準ライブラリのツリー: リポジトリの `std/` (`Prelude.em`、`FileIn.em`、`FileOut.em`、`Fs.em`、`List.em`、`String.em`、`Env.em`、`Stdin.em`、`Stdout.em`、`Stderr.em`、`Proc.em`、`Float.em`、`Char.em`、`Byte.em`、`Bytes.em`、`Array.em`、`MutArray.em`、`Yield.em`、`Fail.em`、`State.em`、`Iter.em`、`Map.em`、`Set.em`) をバイナリに埋め込む。Prelude はいつも読み込み、ほかのモジュールは import したものだけを読み込む。`import FileIn` か `import Std.FileIn` を書いたモジュールで、`FileIn.open` のように修飾付きで使う。予約した根は `Std` である ([モジュールと名前解決](../spec/modules.md) の「標準ライブラリ」)
 - std のエフェクトと `Iter`: エフェクトのモジュール `Yield` (`for_each`、`fold`、`collect`)、`Fail` (`to_result`、`to_option`)、`State` (`run`、`eval`、`exec`) と、`once` の継続で作る引いて使うジェネレータ `Iter` とその変換。`FileIn` から1行ずつ読む `FileIn.read_line` ([標準ライブラリ](../spec/stdlib.md) の「エフェクトのモジュール」と「`FileIn`」)。`tests/ui/run/scripts/` の `grep`、`logstat`、`csv2jsonl` は std のエフェクトを使い、`csv2jsonl` の CSV の読み取りは `let … and …` の組で書く
 - 標準入出力とファイルのハンドル: 線形な型 `Stdin`、`Stdout`、`Stderr`、`FileIn.FileIn`、`FileOut.FileOut`。読むハンドルは文字列とバイト列を、全部、1行ずつ、塊ごとに読み、書くハンドルは文字列とバイト列と行を書く。`FileOut` は自分の buffer を持ち、閉じずに手放しても書き出す。標準のストリームごとに、生きているハンドルは高々1つである ([標準ライブラリ](../spec/stdlib.md) の「ハンドル」)
+- 子のプロセス: `Std.Proc` が、`Cmd` をシェルを介さずに起動する。起動の形は、標準入出力を受け継ぐ `run`、標準出力を取る `output` と `capture`、pipe でやりとりする線形な `Child` を返す `spawn` の3つである。作業ディレクトリ、環境変数、引数の追加、標準エラーの向き (`2>&1`、`2>/dev/null`) を `Cmd` に設定できる ([標準ライブラリ](../spec/stdlib.md) の「`Proc`」)
 - `Float` (IEEE 754 の倍精度) のリテラル、算術、比較と、Python の `repr` の形の表示。変換と数学の関数は `Std.Float` にある ([宣言](../spec/declarations.md) の「Prelude のクラス」、[標準ライブラリ](../spec/stdlib.md) の「`Std.Float`」)
 - 配列: 変えられない `Array a` (`Std.Array`) と、線形な `MutArray a` (`Std.MutArray`) ([標準ライブラリ](../spec/stdlib.md) の「`Std.Array`」と「`Std.MutArray`」)
 - 連想配列と集合: キーの順の `Map k v` (`Std.Map`) と `Set a` (`Std.Set`)。どちらも釣り合いを取った木で、キーと要素は `Unr` に限る ([標準ライブラリ](../spec/stdlib.md) の「`Std.Map`」と「`Std.Set`」)
@@ -42,6 +43,7 @@
 - まだ実装していない構文: 型の別名 `type` ([ロードマップ](../future/roadmap.md) の「言語機能と構文」)。字句と文法の置き場所を用意してあり、使うと E0004 (未対応) を出して回復する。どの段階が E0004 を出すかは [診断](../spec/diagnostics.md) の「未対応の構文と E0004」にある
 - row の型引数を持つ型の instance と `deriving`。書くと E0004 を出す
 - Unicode の表が要る文字の操作 (ASCII でない大文字と小文字の変換、文字の分類)、置換付きの UTF-8 のデコード、`Lin` の要素の配列の API ([ロードマップ](../future/roadmap.md) の「言語機能と構文」)
+- コマンドの組み合わせ: パイプ (`.|`)、ファイルへのリダイレクト、文字列からの標準入力、標準エラーを別の文字列に取ること、環境変数の削除、`Child` の標準エラーの pipe ([ロードマップ](../future/roadmap.md) の「言語機能と構文」)
 - ユーザーが書く extern (FFI)
 - 可変参照 `Ref`、再エクスポート (`pub import`)、抽象型、修飾した演算子の構文、`data` のフィールドの矢印の線形性の多相、`: Unr` の宣言、row の型引数の省略、`Lin` の型を受けるクラス、or パターン、ガード、as パターン、借用パラメータ、関数をまたぐ reuse、LSP、フォーマッタ、ネイティブ化 ([ロードマップ](../future/roadmap.md) の「その後の項目」)
 
@@ -121,3 +123,9 @@
 - 演算子のメソッドの等式で、被演算子に括弧のないコンストラクタのパターンを書くと (`Box x == Box y = …`)、等式として読まれない。演算子の等式の先読み (`grammar/items.rs` の `at_operator_equation`) が、演算子の前に単純なパターン (`patterns::apat_len`) を1つしか認めないため。パーサは「expected a method equation」(E0011) を出す。そのメソッドに既定のメソッドがなければ、等式がないことの E1036 も続く。`(Box x) == (Box y) = …` と括弧に入れて書く。手で書く instance ではこの形がよく現れる
 - 導出した instance のフィールドの E2006 は、instance ごとに最初のフィールドの1つだけを報告する。ほかのフィールドの誤りは、最初の誤りを直した後に出る
 - instance のメソッドの関数と生成した関数の名前は、クラスと型を診断と同じ表示で書く。そのため、別のモジュールが同じ名前の型を足すと、Core IR の関数の名前が変わることがある
+
+### 子のプロセス
+
+- `Child` は、1度に1本の pipe しか読み書きしない。読みながら書く子に pipe の buffer より多く書いてから読むと、両方が止まる。処理系はこの状態を検出せず、Ctrl-C で終える。守る順は [標準ライブラリ](../spec/stdlib.md) の「`Child`」にある
+- 手放した `Child` の破棄処理が kill するのは直接の子だけである。`sh -c` が起動した孫は残りうる
+- `Cmd` のコンストラクタとフィールドは公開されている。抽象型がないので、`Cmd { … }` の作る式とパターンを書かない決まりで守る ([標準ライブラリ](../spec/stdlib.md) の「`Cmd`」)

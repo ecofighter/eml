@@ -648,6 +648,7 @@ pub data Set a =
 `Cmd` は Prelude のレコードの型で、プログラム、引数のリスト、作業ディレクトリ、環境変数の上書き、標準エラーの向きを持つ ([式](expressions.md) の「コマンドリテラル」)。
 
 - `Cmd` の値は、コマンドリテラルとこのモジュールの設定の関数で組む。プログラムを変数で与えるときは `` `\{prog} \{..args}` `` と書く
+- `Cmd` は `Eq` と `Show` の instance を持つ。`show` は全部のフィールドを `Cmd { program = "git", args = ["log"], … }` の形で表示し、`display` は人が読む1行で、プログラムと引数を空白でつなぐ。`display` は引用を戻さないので、コマンドリテラルには戻せない
 - フィールドの名前と数は処理系の都合で変わりうる。そのため、利用者のコードは `Cmd { … }` の作る式とパターンを書かない。読むだけの射影 (`cmd.program`、`cmd.args`) は書いてよい。`StderrMode` のコンストラクタも、設定の関数が書くので、利用者は書かない
   - 見直す条件: 抽象型が入ったとき、`Cmd` と `StderrMode` のコンストラクタを隠す
 - 設定の関数は対象の `Cmd` を最後に受ける。`` `make` |> Proc.cwd "build" |> Proc.merge_stderr |> Proc.capture `` のように `|>` でつなぐためである。`with_` の名前は、handler を呼ぶ関数の慣習 ([例](examples.md) の `with_env`) に取っておく

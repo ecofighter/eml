@@ -12,7 +12,7 @@ eml を実装するエージェントとプログラマのための文書群で�
 | [spec/layout.md](spec/layout.md) | 規範 | レイアウト規則 (仮想トークン `OPEN` / `SEP` / `CLOSE`) |
 | [spec/grammar.md](spec/grammar.md) | 規範 | 文法と文法上の補足 |
 | [spec/declarations.md](spec/declarations.md) | 規範 | シグネチャと等式、`data` と `type`、`effect`、`extern`、fixity と標準の演算子表、クラスと instance と `deriving`、Prelude のクラス、`pub` |
-| [spec/expressions.md](spec/expressions.md) | 規範 | 式と脱糖 (`let`、ラムダ、`if`、`match`、演算子の列、セクション、`use`、handler の構文)、ローカル関数、リスト、レコード、補間、`var`、並行処理、型の明示 |
+| [spec/expressions.md](spec/expressions.md) | 規範 | 式と脱糖 (`let`、ラムダ、`if`、`match`、演算子の列、セクション、`use`、handler の構文)、ローカル関数、リスト、レコード、補間、コマンドリテラル、`var`、並行処理、型の明示 |
 | [spec/records.md](spec/records.md) | 規範 | 直積型とレコード (タプルと Unit を含む) |
 | [spec/modules.md](spec/modules.md) | 規範 | モジュール、import、標準ライブラリ、名前の解決、名前空間、instance の一貫性、公開の範囲、REPL のセッション |
 | [spec/repl.md](spec/repl.md) | 規範 | REPL の端末: `eml repl` のコマンド、行のまとめ方、結果の表示、割り込み |
@@ -34,7 +34,7 @@ eml を実装するエージェントとプログラマのための文書群で�
 | [implementation/benchmarks.md](implementation/benchmarks.md) | 手引き | 基準のプログラム、回数のテスト、測り方、今の数値、所見 |
 | [implementation/diagnostics.md](implementation/diagnostics.md) | 手引き | 番号ごとの診断が指す場所、help と fix の文言と付ける条件、型エラー・線形性・網羅性の診断の表示 |
 | **future/** | 将来の設計 | まだ実装しない方針 |
-| [future/roadmap.md](future/roadmap.md) | 将来の設計 | 段の進め方と閉じる手順、今後の言語の項目と処理系の項目 |
+| [future/roadmap.md](future/roadmap.md) | 将来の設計 | 段の進め方と閉じる手順、今後の項目 |
 | [future/multicore.md](future/multicore.md) | 将来の設計 | マルチコア対応の設計 (共有の印方式の RC、`par`、並行処理、継続の移動) |
 | [future/stdlib.md](future/stdlib.md) | 将来の設計 | 標準ライブラリ spec への申し送り |
 | [future/verification.md](future/verification.md) | 将来の設計 | Verus で検証する範囲 (Kind 推論の解く部分を証明する方針、型検査と evidence passing を扱わない理由) |
