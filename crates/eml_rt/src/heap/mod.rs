@@ -11,6 +11,7 @@ pub(crate) mod check;
 mod core;
 mod ctx;
 mod field;
+mod graph;
 mod handover;
 pub(crate) mod inv;
 mod model;
@@ -49,6 +50,7 @@ use crate::rc::{self, DecrefStep, DupStep};
 #[cfg(verus_only)]
 use crate::rc::{Obj, decref_next};
 use crate::word::Word;
+use vstd::hash_set::HashSetWithView;
 use vstd::prelude::*;
 use vstd::raw_ptr::ptr_mut_write;
 #[cfg(verus_keep_ghost)]
@@ -169,10 +171,12 @@ pub struct Heap<M: Mode> {
     building: usize,
     /// 解放の連鎖の作業リスト。使い回して、解放のたびに確保しない。
     work: Vec<Word>,
-    /// `share` のたどりのスタック。使い回す。
-    share_stack: Vec<*mut Header>,
-    /// 検査モードの `share` が訪れた `lin` の物体。
-    visited_lin: Vec<*mut Header>,
+    /// `share` のたどりの印付け、移し替え、所有者だけのスタック。使い回す。
+    mark_stack: Vec<*mut Header>,
+    move_stack: Vec<*mut Header>,
+    own_stack: Vec<*mut Header>,
+    /// 検査モードの `share` が訪れた物体の番地。使い回す。
+    seen: HashSetWithView<usize>,
     /// 検査モードの token の表。項目は箱と、`into_token` のときの世代の番号である。
     tokens: Vec<Option<(*mut Header, u32)>>,
     dummy: Word,
@@ -670,8 +674,10 @@ impl<M: Mode> Heap<M> {
             owned: Vec::new(),
             building: 0,
             work: Vec::new(),
-            share_stack: Vec::new(),
-            visited_lin: Vec::new(),
+            mark_stack: Vec::new(),
+            move_stack: Vec::new(),
+            own_stack: Vec::new(),
+            seen: HashSetWithView::new(),
             tokens: Vec::new(),
             dummy: Word::EMPTY,
             quarantined: 0,

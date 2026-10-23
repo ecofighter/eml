@@ -108,6 +108,34 @@ fn is_last_reads_twice_only_at_minus_one<M: Mode>() {
     }
 }
 
+/// `share` の3つのスタックと訪問済みの集まりを通す。`lin` の物体と rc 1 の子は所有を移し、rc 2 の子には印を付け、
+/// 送り直しでは検査モードの所有者だけのたどりが共有の親の下へ進む
+fn share_moves_and_passes_owners<M: Mode>() {
+    let mut heap = Heap::<M>::new();
+    let unique = list(&mut heap, 1);
+    let kept = list(&mut heap, 1);
+    let lin = heap.alloc_data(0, 2, 0, true);
+    let pair = heap.alloc_data(0, 1, 0, false);
+    unsafe {
+        heap.dup(kept).unwrap();
+        heap.set_field(lin, 0, unique).unwrap();
+        heap.set_field(lin, 1, kept).unwrap();
+        heap.set_field(pair, 0, lin).unwrap();
+        let rcs = || (raw::rc(pair), raw::rc(lin), raw::rc(unique), raw::rc(kept));
+        heap.share(pair, 1).unwrap();
+        assert_eq!(rcs(), (-1, 1, 1, -2));
+        heap.share(pair, 2).unwrap();
+        assert_eq!(rcs(), (-1, 1, 1, -2));
+        if M::CHECKED {
+            assert_eq!((raw::prefix_first(lin), raw::prefix_first(unique)), (2, 2));
+        }
+        heap.decref(kept).unwrap();
+        heap.set_worker(2);
+        heap.decref(pair).unwrap();
+    }
+    assert_eq!(mortal(&heap), 0);
+}
+
 #[test]
 fn check_mode_prefixes_change() {
     let mut heap = Heap::<Checked>::new();
@@ -1681,6 +1709,7 @@ both_modes!(
     dropping_a_heap_returns_every_page,
     local_and_shared_counts_move,
     is_last_reads_twice_only_at_minus_one,
+    share_moves_and_passes_owners,
     a_foreign_value_of_another_type_is_wrong_kind,
     foreign_values_with_drop_are_finalized_once,
     a_zero_sized_foreign_value,

@@ -37,6 +37,7 @@ const FILES: &[(&str, &str)] = &[
     ("heap/ctx/script.rs", include_str!("heap/ctx/script.rs")),
     ("heap/ctx/strings.rs", include_str!("heap/ctx/strings.rs")),
     ("heap/field.rs", include_str!("heap/field.rs")),
+    ("heap/graph.rs", include_str!("heap/graph.rs")),
     ("heap/handover.rs", include_str!("heap/handover.rs")),
     ("heap/model.rs", include_str!("heap/model.rs")),
     ("heap/inv.rs", include_str!("heap/inv.rs")),

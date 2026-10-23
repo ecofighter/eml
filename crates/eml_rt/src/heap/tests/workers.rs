@@ -97,7 +97,7 @@ fn a_token_round_trip_moves_the_count_to_the_rebuilding_worker() {
     assert_owned(&heap, &[(0, 0), (2, 0)]);
 }
 
-/// 印を付けた物体は数から外れ、`lin` の物体は受け手の数に移る。
+/// 印を付けた物体は数から外れ、所有を移す物体は受け手の数に移る。
 #[test]
 fn share_takes_marked_objects_out_and_moves_lin_objects() {
     let mut heap = H::new();
@@ -107,7 +107,7 @@ fn share_takes_marked_objects_out_and_moves_lin_objects() {
         heap.set_field(lin, 0, child).unwrap();
         assert_owned(&heap, &[(0, 3)]);
         heap.share(lin, 7).unwrap();
-        assert_owned(&heap, &[(0, 0), (7, 1)]);
+        assert_owned(&heap, &[(0, 0), (7, 3)]);
         heap.set_worker(7);
         heap.decref(lin).unwrap();
     }

@@ -35,7 +35,7 @@
 - `io-driver`: 本物の I/O の driver とブロックする呼び出しのプールを入れる。まず `compio-driver` を単独で使えるかを試作で確かめ、使うかどうかを段の計画で決める。`IoDriver` の口を決め、`eml_io` に本物の driver とテストの driver を作る。読めるようになってから読みの buffer を取る規則もこの段で入れる。前提: `async-time`。設計: [非同期の設計](async.md) の「I/O の driver」
 - `async-net`: macOS と Linux で `Std.Net` の TCP、`Std.Signal`、名前の解決を動かす。前提: `io-driver`、`async-chan`。設計: [非同期の設計](async.md) の「ネットワークとシグナル」
 - `net-windows`: 同じネットのテストの組を、Windows の IOCP の上で流す。前提: `async-net`。設計: [非同期の設計](async.md) の「テストと決定性」
-- `worker-threads`: worker のスレッド、worker ごとのヒープ、スレッドをまたぐ知らせを入れる。別のスレッドからの解放と取り込み、ほかの worker のヒープの共有の物体 (rc < 0) を受け付けること、N 個のヒープの回復、worker 0 のほかのスレッドで SIGINT を塞ぐことを作る。`par` の子はこの段ではまだ親の worker で動く。前提: `par-core`。設計: [マルチコア対応の設計](multicore.md) の「スレッドと worker」、同じ文書の「別のスレッドからの解放」
+- `worker-threads`: worker のスレッド、worker ごとのヒープ、スレッドをまたぐ知らせを入れる。別のスレッドからの解放と取り込み、ほかの worker のヒープの共有の物体 (rc < 0) を受け付けること、N 個のヒープの回復、worker 0 のほかのスレッドで SIGINT を塞ぐことを作る。共有にした `poly` の入れ物を送り直すとき、その `lin` の部分の下にある rc > 1 の局所の物体の扱いを決める ([オブジェクトモデル](../spec/object-model.md) の「`share`」の制限)。`par` の子はこの段ではまだ親の worker で動く。前提: `par-core`。設計: [マルチコア対応の設計](multicore.md) の「スレッドと worker」、同じ文書の「別のスレッドからの解放」
 - `async-threads`: worker をまたいで `Async` のタスクを動かす。スレッドをまたぐ受け箱、タスクを置く worker の選び方、受け付けの転送、worker をまたぐ `Chan`、`compute` を入れ、worker の数に応じて速くなることを測る。前提: `worker-threads`、`async-net`。設計: [マルチコア対応の設計](multicore.md) の「スケジューラ」、[非同期の設計](async.md) の「`compute`」
 - `async-rescue`: 詰まった worker のタスクを、空いた worker が救済する。前提: `async-threads`。設計: [マルチコア対応の設計](multicore.md) の「救済」
 - `task-limits`: タスクごとに深さ、スタック、メモリの上限を設け、超えたタスクだけを IO の失敗 `ResourceLimit` で止める。メモリの硬い上限は今と同じく run 全体を止める。安全点と末尾でない呼び出しの位置が、巻き戻しの地点になる。前提: `async-threads`。設計: [非同期の設計](async.md) の「タスクごとの上限」
