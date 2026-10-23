@@ -40,6 +40,11 @@ pub open spec fn negs<N>(g: GView<N>) -> spec_fn(N) -> bool {
     |n: N| g.rc[n] == -1
 }
 
+/// どちらかのスタックのたどりが展開しうる物体。rc -1 の物体と局所の物体である
+pub open spec fn tpasses<N>(g: GView<N>) -> spec_fn(N) -> bool {
+    |n: N| g.rc[n] == -1 || g.rc[n] > 0
+}
+
 /// 裏返す物体。根から rc -1 の物体だけを通る道で届く rc -1 の物体である
 pub open spec fn flips<N>(g: GView<N>, root: N, n: N) -> bool {
     reached(g, negs(g), root, n) && g.rc[n] == -1
@@ -134,7 +139,13 @@ pub open spec fn walk_inv<N>(
             root,
             fs[i],
         )
-    &&& forall|i: int| 0 <= i < os.len() ==> g0.nodes.contains(#[trigger] os[i])
+    &&& forall|i: int|
+        0 <= i < os.len() ==> g0.nodes.contains(#[trigger] os[i]) && reached(
+            g0,
+            tpasses(g0),
+            root,
+            os[i],
+        )
     &&& forall|n: N| #[trigger] flipped.contains(n) ==> flips(g0, root, n)
     &&& closed_under(g0, root, flipped, fs)
     &&& check ==> seen == passed
@@ -252,7 +263,9 @@ pub(crate) fn transfer_walk<G: Graph>(
         ),
         !check ==> r is Ok,
         r == Err::<(), TransferError>(TransferError::Dead) ==> exists|n: G::Node| #[trigger]
-            old(graph).gv().nodes.contains(n) && !old(graph).gv().live[n],
+            reached(old(graph).gv(), tpasses(old(graph).gv()), root, n) && old(
+                graph,
+            ).gv().nodes.contains(n) && !old(graph).gv().live[n],
         r matches Err(TransferError::WrongOwner(o)) ==> o != worker && o != from,
         r is Ok ==> forall|n: G::Node|
             old(graph).gv().nodes.contains(n) ==> #[trigger] flip_post(
@@ -351,7 +364,7 @@ pub(crate) fn transfer_walk<G: Graph>(
                 assert(os1[os1.len() - 1] == node);
                 assert forall|i: int| 0 <= i < own@.len() implies g0.nodes.contains(
                     #[trigger] own@[i],
-                ) by {
+                ) && reached(g0, tpasses(g0), root, own@[i]) by {
                     assert(own@[i] == os1[i]);
                 }
             } else {
@@ -365,11 +378,16 @@ pub(crate) fn transfer_walk<G: Graph>(
             }
             assert(g0.nodes.contains(node));
             assert(node_inv(g0, g1, worker, from, check, known, flipped, node));
+            if !on_own {
+                lemma_negs_tpasses(g0, root, node);
+            }
+            assert(reached(g0, tpasses(g0), root, node));
         }
         if !graph.live(node) {
             proof {
                 lemma_returned(g0, graph.gv(), worker, from, check, known, flipped);
-                assert(g0.nodes.contains(node) && !g0.live[node]);
+                assert(reached(g0, tpasses(g0), root, node) && g0.nodes.contains(node)
+                    && !g0.live[node]);
             }
             return Err(TransferError::Dead);
         }
@@ -470,11 +488,12 @@ pub(crate) fn transfer_walk<G: Graph>(
                         }
                         assert forall|i: int| 0 <= i < own@.len() implies g0.nodes.contains(
                             #[trigger] own@[i],
-                        ) by {
+                        ) && reached(g0, tpasses(g0), root, own@[i]) by {
                             if i < os2.len() {
                                 assert(own@[i] == os2[i]);
                             } else {
                                 assert(own@[i] == g0.children[node][i - os2.len()]);
+                                lemma_reach_child(g0, tpasses(g0), root, node, i - os2.len());
                             }
                         }
                         passed = passed.insert(node);
@@ -501,11 +520,12 @@ pub(crate) fn transfer_walk<G: Graph>(
                 proof {
                     assert forall|i: int| 0 <= i < own@.len() implies g0.nodes.contains(
                         #[trigger] own@[i],
-                    ) by {
+                    ) && reached(g0, tpasses(g0), root, own@[i]) by {
                         if i < os2.len() {
                             assert(own@[i] == os2[i]);
                         } else {
                             assert(own@[i] == g0.children[node][i - os2.len()]);
+                            lemma_reach_child(g0, tpasses(g0), root, node, i - os2.len());
                         }
                     }
                     passed = passed.insert(node);
@@ -544,6 +564,17 @@ pub(crate) fn transfer_walk<G: Graph>(
         lemma_returned(g0, g, worker, from, check, known, flipped);
     }
     Ok(())
+}
+
+/// rc -1 の物体だけを通る道で届く物体には、どちらかのスタックのたどりが届く。
+proof fn lemma_negs_tpasses<N>(g: GView<N>, root: N, n: N)
+    requires
+        reached(g, negs(g), root, n),
+    ensures
+        reached(g, tpasses(g), root, n),
+{
+    assert forall|m: N| #[trigger] negs(g)(m) implies tpasses(g)(m) by {}
+    super::graph::lemma_reached_weaken(g, negs(g), tpasses(g), root, n);
 }
 
 proof fn lemma_reached_root_negs<N>(g: GView<N>, root: N)
@@ -689,6 +720,13 @@ impl<M: Mode> Heap<M> {
         &&& self.consistent()
         &&& self.settleable()
         &&& self.readable(w)
+    }
+
+    /// `w` から、`transfer_back` のたどりが生きていない物体に届く。
+    pub closed spec fn transfer_reaches_dead(&self, w: Word) -> bool {
+        let g = self.share_graph();
+        exists|n: *mut Header| #[trigger]
+            reached(g, tpasses(g), self.share_root(w), n) && g.nodes.contains(n) && !g.live[n]
     }
 
     /// `transfer_back` の後の状態。変えたのは、生きている rc -1 の物体を今の worker の局所の物体にしたことと、生きて
@@ -875,6 +913,12 @@ impl<M: Mode> Heap<M> {
             w.is_ptr_spec() && !(M::CHECKED && from == old(self).worker_spec())
                 ==> final(self).returned(*old(self), w, from),
             w.is_ptr_spec() && r is Ok ==> final(self).returned_all(*old(self), w),
+            r == Err::<(), HeapError>(HeapError::UseAfterFree) ==> w.is_ptr_spec() && old(
+                self,
+            ).transfer_reaches_dead(w),
+            M::CHECKED && old(self).transfer_ok(w) && !(w.is_ptr_spec() && old(
+                self,
+            ).transfer_reaches_dead(w)) ==> r is Ok || r matches Err(HeapError::WrongOwner { .. }),
     {
         let ghost pre_ok = self.transfer_ok(w);
         let worker = self.worker;

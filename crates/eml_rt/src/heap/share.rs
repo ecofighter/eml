@@ -2267,10 +2267,13 @@ impl<M: Mode> Heap<M> {
             ),
     {
         let ghost pre_ok = self.share_all_ok(w);
-        self.admit_worker(receiver);
         if !w.is_ptr() {
             return Ok(());
         }
+        // 受け手に移す物体の数を数えられるように、受け手の ID を数の表に入れる (docs/spec/object-model.md の
+        // 「論理的な worker ID」)
+
+        self.admit_worker(receiver);
         self.settle();
         let ghost mid = *self;
         let h = self.header_of(w);

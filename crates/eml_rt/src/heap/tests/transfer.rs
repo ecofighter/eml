@@ -147,6 +147,48 @@ fn a_poly_pair_with_a_file_comes_back_to_the_parent<M: Mode>() {
     assert_eq!(mortal(&heap), 0);
 }
 
+/// 子が受け取った共有の組をそのまま返す形。組とその下の rc -1 の物体を裏返し、組の中の子の持ち物の `lin` の物体は、
+/// 検査モードでは裏返しのスタックの上で所有者を親に戻す。
+fn a_shared_poly_pair_returned_as_is_flips_and_its_file_comes_back<M: Mode>() {
+    let mut heap = Heap::<M>::new();
+    let child = heap.fork_worker();
+    let (value, drops) = probe();
+    let file = heap.alloc_foreign(value, true);
+    let a = list(&mut heap, 1);
+    let pair = heap.alloc_data(0, 2, 0, false);
+    unsafe {
+        heap.set_field(pair, 0, a).unwrap();
+        heap.set_field(pair, 1, file).unwrap();
+        heap.share(pair, child).unwrap();
+        heap.transfer_back(pair, child).unwrap();
+        assert_eq!((raw::rc(pair), raw::rc(a), raw::rc(file)), (1, 1, 1));
+        if M::CHECKED {
+            assert_eq!(raw::prefix_first(file), 0);
+        }
+        assert_eq!(heap.retire_worker(child), Ok(()));
+        heap.decref(pair).unwrap();
+    }
+    assert_eq!(drops.load(Ordering::Relaxed), 1);
+    assert_eq!(mortal(&heap), 0);
+}
+
+/// `lin` ビットの立った rc -1 の物体も裏返す。
+fn a_shared_lin_object_is_flipped<M: Mode>() {
+    let mut heap = Heap::<M>::new();
+    let child = heap.fork_worker();
+    let lin = heap.alloc_data(0, 1, 0, true);
+    unsafe {
+        heap.set_field(lin, 0, Word::UNIT).unwrap();
+        // `share` は `lin` の物体に印を付けないので、数を通さずに rc -1 にする
+        raw::set_rc(&mut heap, lin, -1);
+        heap.transfer_back(lin, child).unwrap();
+        assert_eq!(raw::rc(lin), 1);
+        assert!(heap.is_unique(lin).unwrap());
+        heap.decref(lin).unwrap();
+    }
+    assert_eq!(mortal(&heap), 0);
+}
+
 fn a_deep_shared_list_comes_back_without_recursion<M: Mode>() {
     let mut heap = Heap::<M>::new();
     let child = heap.fork_worker();
@@ -200,6 +242,8 @@ both_modes!(
     a_list_of_the_child_comes_back_to_the_parent,
     a_shared_object_under_a_cell_of_the_child_stays_shared,
     a_poly_pair_with_a_file_comes_back_to_the_parent,
+    a_shared_poly_pair_returned_as_is_flips_and_its_file_comes_back,
+    a_shared_lin_object_is_flipped,
     a_deep_shared_list_comes_back_without_recursion,
     a_deep_list_of_the_child_comes_back_without_recursion,
     skipping_transfer_back_leaks_the_list_of_the_child,
