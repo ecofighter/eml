@@ -278,6 +278,7 @@ Core IR のテキストは `eml_core_ir::pretty` が書き、`eml_core_ir::parse
 - テストは1つのファイル (`<最上位>/<分類>/<名前>.em`) か、1つのディレクトリ (`<最上位>/<分類>/<名前>/main.em`) である。ディレクトリのテストでは `main.em` が入口で、そのディレクトリが根になる。ディレクトリの中のほかの `.em` は `main.em` から import するモジュールで、単独のテストにしない。1つのファイルのテストはユーザーのモジュールを import しない。根が分類のディレクトリなので、import すると隣のテストのファイルをモジュールとして読んでしまう。ハーネスは、ユーザーのモジュールが入口だけであることを `Session::user_module_names` で確かめ、依存先のユーザーのモジュールを読み込んだ1つのファイルのテストを失敗にする。標準ライブラリのモジュールはユーザーのモジュールに数えないので、1つのファイルのテストでも `FileIn.open` や `import Fs` を使ってよい
 - 実行のテストの入力は、テストの隣の付属のファイルで与える。入口 `<名前>.em` (ディレクトリのテストでは `main.em`) の拡張子を替えた `<名前>.args` (1行に1つの引数)、`<名前>.stdin` (そのままのバイト列)、`<名前>.env` (`KEY=VALUE` の行) である。どれも省け、省くと引数なし、空の標準入力、空の環境になる。`.args` では、改行を含む引数と最後の空の引数は書けないので、要れば CLI のテストで確かめる
 - 書くために開いたファイル (`FileOut` と、その上に書いた `Fs.write_text`。Host の `open_write`) に書いた中身は、ディスクに書かずにテストの Host が覚え、スナップショットの末尾に `--- written: <パス> ---` と中身を足す (下の「2つのモードで流す」)。中身が UTF-8 でなければ、見出しを `--- written: <パス> (not UTF-8) ---` にし、中身を `escape_ascii` の形で書いて改行を足す。リポジトリの中にファイルを作らないためである。Host は実行ごとにメモリの表を持つので、同じディレクトリで同じ名前のファイルに書くテストどうしも並べて流せる。書いたファイルがなければ何も足さない
+- Windows に無い動きを確かめるテストは、入口のファイルの最初の行に印を書いて Windows で流さない (下の「OS ごとのテスト」)
 - 成功すべきか失敗すべきかは最上位のディレクトリで決める。そのため、スナップショットの承認を誤っても、成功と失敗の入れ替わりは検出できる
 - スナップショットの中のパスは `tests/ui` からの相対パスにして、実行する環境に依存しないようにする。依存先のファイルのパスも同じく `tests/ui` からの相対パスになる (`check-fail/names/import_cycle/B.em`)
 
@@ -325,7 +326,7 @@ Core IR のテキストは `eml_core_ir::pretty` が書き、`eml_core_ir::parse
 - その後で、新しい `Control` を持つ別の `RunConfig` で、速いモードでも実行する。標準出力と、標準エラーと、書いたファイルと、終わり方 (成功か、誤りの文言) が検査モードと同じことを確かめる。速いモードを後に流すのは、速いモードは前提を確かめないので、VM の誤りがあると未定義の動作になり、1つのテストの失敗が同じプロセスで流すほかのファイルのテストまで壊しうるためである
 - `run-fail` のテストは、検査モードの誤りが `fast_mode_reports` を満たすときだけ、速いモードで流す。満たさないのは、リーク、VM の内部の誤り (`VmFault::Internal`)、extern のヒープの誤り (`VmFault::Extern(Fault::Heap(_))`) である。どれも検査モードだけが見つけるので、VM 自身の誤りを意味し、速いモードで流すとメモリを壊すことがある。それ以外の誤り (算術、出力、入出力、UTF-8) は両方のモードが同じ文言で報告する
 - 実行ごとに新しい `RunConfig` を作るのは、止める理由のビットが `Control::clear` でしか下りないためである。使い回すと、前の実行で立ったビットで次の実行がすぐ止まる ([VM](../spec/vm.md) の「上限と割り込み」)
-- 標準出力と標準エラーは、テストの Host の `CaptureHost` ([VM](../spec/vm.md) の「置き場所」) で別々に捕まえる。出力とファイルの読みは、メモリの書き込み先と `Buffering::Block` を持つ `StdHost` に任せるので、出力のまとめ方は `eml run` と同じである。`file_root` はそのテストのディレクトリで、`run-fail/files` のテストはこれに頼る。引数、標準入力、環境変数は付属のファイルのものだけで、本物の環境は読まない。子のプロセス (`Proc` の起動) は本物を起動するので、`sh`、`sort`、`cat` のある環境で流す
+- 標準出力と標準エラーは、テストの Host の `CaptureHost` ([VM](../spec/vm.md) の「置き場所」) で別々に捕まえる。出力とファイルの読みは、メモリの書き込み先と `Buffering::Block` を持つ `StdHost` に任せるので、出力のまとめ方は `eml run` と同じである。`file_root` はそのテストのディレクトリで、`run-fail/files` のテストはこれに頼る。引数、標準入力、環境変数は付属のファイルのものだけで、本物の環境は読まない。子のプロセス (`Proc` の起動) は本物を起動するので、`sh`、`sort`、`cat` のある環境で流す。Windows では流さず、テストの1行目の印で外す (下の「OS ごとのテスト」)
 
 ## REPL のトランスクリプト
 
@@ -374,6 +375,39 @@ Ctrl-C の受け口は、bin の `interrupt` モジュールの単体テスト�
 行のまとめ方 (`eml_cli::lines`) は、端末に依存しない状態機械なので、`crates/eml_cli/tests/lines.rs` が行の並びを渡して確かめる。
 
 結果の整形 (`eml_cli::pretty`) も端末に依存しない純粋な関数なので、`crates/eml_cli/tests/pretty.rs` が文字列と幅を渡して確かめる。整形の規則の各項目、10,000 文字で切ること、5,000 段の入れ子の括弧を再帰なしで整えることを確かめる。
+
+## OS ごとのテスト
+
+テストは macOS、Linux、Windows の3つで流す。Windows で対応する target は `x86_64-pc-windows-msvc` だけで、`x86_64-pc-windows-gnu` (MinGW) は対応せず、流さない。テストは移植できるのが既定である。Windows での違いが処理系の側にあるなら、ソースを直すかテストを移す。
+
+### Windows で流さないテスト
+
+印を付けて Windows で流さないのは、確かめる動きが Windows に無いときだけである。POSIX のツールを子のプロセスにすること、unix の signal、shebang での実行、fifo、unix の権限のビットがそれに当たる。機械に入っている道具の有無や、機械の設定で飛ばすことはしない。テストの合否が機械によってはならないためである。Linux に印はなく、Linux では印のあるテストも流れる。
+
+- Rust のテストは、`#[test]` の関数か、そうしたテストだけを持つ `mod` に `#[cfg(unix)]` を付ける。本体が `libc::kill`、`mkfifo`、`PermissionsExt`、`CommandExt::process_group` を使い、Windows でコンパイルできないので、`cfg_attr(windows, ignore)` は使えない
+- UI テストとトランスクリプトは、入口のファイルの、shebang (`#!…`) でない最初の行に印を書く。`.em` は `-- windows: skip (<理由>)`、`.repl` は `# windows: skip (<理由>)` である。理由は空にしない。印は入口のファイル (1つのファイルか `main.em`、`main.repl`) にだけ書く
+- `crates/eml_cli/tests/common/mod.rs` の `windows_skip` が印を読み、`for_each_file` が `EML_UI_FILTER` の後で使う。Windows では印のあるファイルを流さない。どの OS でも、`<leader> windows:` で始まって形の合わない行 (理由がない、`()`、`windows:skip` など) は panic する。綴りを誤った印が黙って流れ続けるのを防ぐためである
+
+一覧は印そのものなので、docs には写さない。数えるには次の2つを使う。
+
+```sh
+git grep -n '^-- windows: skip (' -- tests/ui; git grep -n '^# windows: skip (' -- crates/eml_cli/tests/repl
+git grep -n -A1 -e 'cfg(unix)\]' -e 'cfg(all(test, unix))\]' -- 'crates/*/tests/*.rs' 'crates/*/src/**/tests/*.rs' crates/eml_vm/src/hosts.rs
+```
+
+### 印を付けずに直すもの
+
+次の3つで OS によって合否が変わるテストには印を付けず、どの OS でも通るように直す。
+
+- libm の最後のビットに依る期待値: 正確な場合か、IEEE で正確な演算 (`sqrt`、四則) に書き直す。許容の幅は入れない
+- スタックのあふれ: あふれたのが `eml.exe` なら、main.rs でコマンドの本体を 8 MiB (macOS と Linux のメインスレッドと同じ大きさ) のスタックのスレッドで動かす。そうでなければ再帰を直す
+- OS が作る誤りの文言: fixture を替え、文言が Rust か eml から来るようにする
+
+### OS で振る舞いが決まっているテスト
+
+- `.gitattributes` は `* -text` で、改行を変換しない。`text=auto` は CRLF を含む fixture も正規化するので、`core.autocrlf` によらず checkout の中身を同じに保つために変換を止めている
+- `crates/eml_rt` の期待値の表で、`locked.txt` の行は、root のときと Windows で飛ばす。Windows では `locked()` が false のままである
+- `a_miscased_entry_path_is_still_the_entry` は、大文字と小文字を区別しないファイルシステム (macOS、Windows) でだけ規則を確かめ、Linux では早く戻る。OS ごとに決まっていて合否は機械によらないので、印は付けない
 
 ## 性能のテスト
 

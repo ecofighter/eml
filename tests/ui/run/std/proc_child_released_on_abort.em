@@ -1,3 +1,4 @@
+-- windows: skip (子のプロセスに POSIX のツールを使う)
 -- `Child` を持ったまま `try_io` で巻き戻ると、破棄処理が pipe を閉じ、子を kill して待つ (docs/spec/stdlib.md の
 -- 「`Proc`」)。kill しなければ `sleep` を30秒待つ。検査モードでは、手放していなければ漏れの検査で落ちる
 import Proc

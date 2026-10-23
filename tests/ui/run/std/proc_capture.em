@@ -1,3 +1,4 @@
+-- windows: skip (子のプロセスに POSIX のツールを使う)
 -- 出力を取る起動 (docs/spec/stdlib.md の「`Proc`」)。`output` は終了コードを値で返し、0 でなくても失敗しない。
 -- `capture` は 0 で終わった子の標準出力を返す。標準入力は空なので、`cat` はすぐに終わる
 import Proc
