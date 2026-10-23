@@ -454,7 +454,8 @@ fn float_operations_match_rust() {
         -f64::NAN,
     ];
     let same = |got: f64, want: f64| {
-        let want = if want.is_nan() { f64::NAN } else { want };
+        // 分岐で NaN をそろえると LLVM が消すことがあるので、`canonical_nan` を通す (その doc を参照)
+        let want = canonical_nan(want);
         assert_eq!(got.to_bits(), want.to_bits(), "{got:?} != {want:?}")
     };
     for a in values {
@@ -496,7 +497,8 @@ fn float_conversions_and_formats_match_rust() {
         -f64::NAN,
     ];
     let same = |got: f64, want: f64| {
-        let want = if want.is_nan() { f64::NAN } else { want };
+        // 分岐で NaN をそろえると LLVM が消すことがあるので、`canonical_nan` を通す (その doc を参照)
+        let want = canonical_nan(want);
         assert_eq!(got.to_bits(), want.to_bits(), "{got:?} != {want:?}")
     };
     let int = |t: f64, x: f64| {

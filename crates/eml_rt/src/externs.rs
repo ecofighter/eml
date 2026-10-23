@@ -929,14 +929,19 @@ pub fn float_negate(a: f64) -> f64 {
 }
 
 /// NaN を正の quiet NaN (`f64::NAN`) にそろえ、ほかの値はそのまま返す。
+/// `is_nan` の分岐で書くと、LLVM は NaN を作る演算 (x86_64 の `sqrt` など) の後の分岐を、どの NaN を返してもよいとして
+/// 消し、符号の立った NaN が残る。ビット列の整数で比べれば消されない
 #[verifier::external_body]
 #[inline]
 pub fn canonical_nan(x: f64) -> f64 {
-    if x.is_nan() {
-        f64::NAN
+    let bits = x.to_bits();
+    let is_nan = bits & !(1 << 63) > f64::INFINITY.to_bits();
+    let canonical = if is_nan {
+        f64::NAN.to_bits()
     } else {
-        x
-    }
+        bits
+    };
+    f64::from_bits(canonical)
 }
 
 /// 全順序 (`f64::total_cmp`)。`-0.0` は `0.0` より小さく、正の NaN はどの値より大きい。演算が作る NaN はどれも正の
