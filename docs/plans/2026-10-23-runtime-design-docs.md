@@ -351,7 +351,10 @@ a1〜a4 の呼び名の残りは、`grep -cE "$P" <ファイル>` で次の数�
   - `grep -c '^### 移し戻し$' docs/future/multicore.md` → `1`
   - `grep -cF 'FnEntry' docs/future/multicore.md` → `0`
   - `grep -cF '](multicore.md) の「スケジューラ」' docs/future/async.md` → 1以上
-  - `native.md` が先に使った用語を `multicore.md` が定義している: `grep -cF` で `'監視のスレッド'`、`'host のスレッド'`、`'止める語'`、`'専用の worker'`、`'終わりの欄'`、`'救済'` を `docs/future/multicore.md` で数える → どれも1以上
+  - `native.md` が先に使った用語を `multicore.md` が定義している: `grep -cF` で `'監視のスレッド'`、`'host のスレッド'`、`'止める語'`、`'専用の worker'`、`'終わりの欄'`、`'救済'`、`'メインの worker'`、`'受け箱'`、`'登録表'`、`'待ちの理由'` を `docs/future/multicore.md` で数える → どれも1以上
+  - 「スレッドと worker」が、プロセスのメインスレッドを専用の worker にしたものの名前を「メインの worker」と定め、いつメインの worker になるか (`Main.run` で、GUI を開くときか、始めからか) と、そのとき host のスレッドの仕事 (仕事の終わりを待つこと、止める手順) をどのスレッドがするかを書く。`ffi.md` と `native.md` の同じ語は、そこへのリンクにする
+  - `ffi.md` の 5 行の `multicore.md` 全体へのリンクを「スレッドと worker」へ向け直す。`ffi.md` の「`Lin` の物体の所有者の移し替え」へのリンクは、返すときの移し替えが「移し戻し」に移るなら、そこへ向け直す
+  - `grep -cF '](multicore.md) の「スレッドと worker」' docs/future/ffi.md` → 1以上
   - a1〜a4 の呼び名の残りが上の表の T-4 の行の数
   - V1〜V5 が上の値。V6 → `docs/future/multicore.md` と、リンクを足した文書
 - 落とし穴: D-21 の残す見出しの字を変えない。今の「`par` の a1 と協調的マルチタスク」は、「1つの worker での実行」に置き換える
