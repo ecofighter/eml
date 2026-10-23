@@ -454,6 +454,76 @@ fn a_misspelled_flag_is_a_usage_error() {
     assert_eq!(eml(&["--version"]).status.code(), Some(0));
 }
 
+/// `--sched` は `run` と `repl` のフラグで、値を次の引数か `=` の後に取る。ファイルは値でない最初の引数で、ファイルより
+/// 後ろの `--sched` はスクリプトに渡す (docs/spec/stdlib.md の「起動」)。2 で終わる引数は使い方の誤りである。
+#[test]
+fn sched_flag_is_accepted_and_rejected() {
+    let dir = temp_project("cli-sched", &[("main.em", SHOW_ARGS)]);
+    let cases: [(&[&str], i32, &str); 19] = [
+        (&["run", "--sched", "sequential", "main.em"], 0, "[]\n"),
+        (
+            &["run", "--sched", "seeded:7", "main.em", "a"],
+            0,
+            "[\"a\"]\n",
+        ),
+        (&["run", "--sched=seeded:7", "main.em"], 0, "[]\n"),
+        (
+            &["run", "--debug-heap", "--sched", "seeded:7", "main.em"],
+            0,
+            "[]\n",
+        ),
+        (
+            &["run", "--sched", "seeded:7", "--debug-heap", "main.em"],
+            0,
+            "[]\n",
+        ),
+        (
+            &["run", "main.em", "--sched", "bogus"],
+            0,
+            "[\"--sched\", \"bogus\"]\n",
+        ),
+        (
+            &["main.em", "--sched", "seeded:7"],
+            0,
+            "[\"--sched\", \"seeded:7\"]\n",
+        ),
+        (&["run", "main.em", "--sched"], 0, "[\"--sched\"]\n"),
+        (
+            &[
+                "run", "--sched", "seeded:1", "--sched", "seeded:2", "main.em",
+            ],
+            2,
+            "",
+        ),
+        (&["run", "--sched"], 2, ""),
+        (&["--sched", "seeded:7", "main.em"], 2, ""),
+        (&["run", "--sched", "bogus", "main.em"], 2, ""),
+        (&["run", "--sched", "seeded:", "main.em"], 2, ""),
+        (&["run", "--sched", "seeded:-1", "main.em"], 2, ""),
+        (&["run", "--sched", "rescue-always", "main.em"], 2, ""),
+        (&["check", "--sched", "sequential", "main.em"], 2, ""),
+        (&["repl", "--sched", "bogus"], 2, ""),
+        (&["run", "--sched=bogus", "main.em"], 2, ""),
+        (&["run", "--sched", "seeded:7"], 2, ""),
+    ];
+    // 1本のテストで多くのプロセスを起動するので、並べて起動して1秒に収める
+    let outputs: Vec<Output> = std::thread::scope(|scope| {
+        let handles: Vec<_> = cases
+            .iter()
+            .map(|(args, _, _)| scope.spawn(|| eml_in(&dir, args)))
+            .collect();
+        handles
+            .into_iter()
+            .map(|handle| handle.join().unwrap())
+            .collect()
+    });
+    std::fs::remove_dir_all(&dir).unwrap();
+    for ((args, code, stdout), output) in cases.iter().zip(&outputs) {
+        assert_eq!(output.status.code(), Some(*code), "{args:?}: {output:?}");
+        assert_eq!(String::from_utf8_lossy(&output.stdout), *stdout, "{args:?}");
+    }
+}
+
 #[test]
 fn a_script_reads_the_standard_input_and_writes_the_standard_error() {
     use std::io::Write;

@@ -434,6 +434,12 @@ C/Rust との比
 - 数値: 基準 9ed9a349 からの実行の分の増減。`#[inline(never)]` では `tree` -4.93% (試作は -9.03%)。全部を `#[inline]` にすると reuse しない `iter_pipeline` +1.49%、`iter_pipeline_by_hand` +1.59%。採った形は `tree` -11.12%、`std_list` -14.28%、reuse しないプログラムは最大 +0.33% (`fib`)。M4、e5f86d8 の前の未コミットの木。コミットからは再現できない
 - 根拠にしている所: [VM](../spec/vm.md) の「置き場所」の reuse の命令の項
 
+### モードと方針を束ねた型
+
+- 主張: VM の繰り返しを方針ごとに写すとき、`step` から呼ぶ補助の関数をモードだけで総称にすると、補助の関数の呼び手が写しの数だけでき、`vm::run` に展開されなくなる。モードと方針を束ねた1つの型で総称にすると、写しごとに呼び手が1つに戻り、逐次の命令の数は写しのない繰り返しと同じになる
+- 数値: 同じ機種で測った c8ec310f の `bench/run.sh` を基準にした、逐次の実行の分の増減。モードだけで総称にした形は `records_wide` +9.81%、`std_list` +6.84%、`tree` +5.84%、`list` +5.55%、`fib` と `loop` は ±0.6% 以内で、`-C remark=inline` では `con`、`release`、`unpack`、`con_reuse`、`release_reuse`、`switch_int`、`switch_string`、`apply_rest`、`make_closure`、`extern_call`、`finish` が `vm::run` に展開されなくなった。seed の方針の写しを逐次の写しに置き換えると、基準と同じ数に戻った。束ねた型の形では、増えたプログラムはどれも 0.43% 以内である (最大は `state`)。M5、c8ec310f の上の未コミットの木。束ねた型の形は、この所見を入れたコミットのコードである
+- 根拠にしている所: [VM](../spec/vm.md) の「置き場所」の VM の繰り返しの写しの項
+
 ### `INLINE_LIMIT` と `GROWTH_FACTOR`
 
 - 主張: `INLINE_LIMIT` の 40 は、測った値 (10、20、40、80) のうち、どのプログラムも下げ止まる最小の値である。書き換えで生まれた呼び出しの展開の予算 `GROWTH_FACTOR` は8倍で、`bench/` と `tests/ui/run`、`tests/ui/run-fail` のどの関数も予算に届かない。予算がないと、本体が自分を k 回呼ぶ `Fix` のラムダで関数が回ごとに k 倍に育つ

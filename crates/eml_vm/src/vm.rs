@@ -1,10 +1,14 @@
-//! 命令を実行するループ (docs/spec/vm.md)。状態は `Ctx` と `Task` だけに置き、安全点をまたいで外に持たない。呼び出しの
-//! スタックを Rust の再帰でなく `Task` のデータに持つので、後の協調的なタスクの切り替えでタスクごとに取り替えられる
+//! 命令を実行するループ (docs/spec/vm.md)。状態は `Ctx`、`Task`、`Scheduler` だけに置き、安全点をまたいで外に
+//! 持たない。呼び出しのスタックを Rust の再帰でなく `Task` のデータに持つので、安全点でタスクごとに取り替えられる
 //! (docs/future/multicore.md の「VM の並列化の備え」の制約5)。
+
+use std::marker::PhantomData;
 
 use eml_extern::{Extern, ExternEffect, Purity};
 use eml_rt::externs::{self, Fault};
-use eml_rt::{Ctx, Form, Handle, Mode, Open, ReadAmount, Stream, Token, Word, Write, WriteMode};
+use eml_rt::{
+    Ctx, Form, Handle, Mode, Open, ReadAmount, Stop, Stream, Token, Word, Write, WriteMode,
+};
 
 use crate::RunCounts;
 use crate::apply;
@@ -12,6 +16,23 @@ use crate::code::CodeBase;
 use crate::data;
 use crate::error::VmFault;
 use crate::op::{APPLY_REST, FINISH, Op, Pc, Slot};
+use crate::sched::{Policy, Scheduler};
+
+/// VM の繰り返しの1つの写しを決める型。モード `M` と方針 `P` を束ねる。`step` から呼ぶ補助の関数をこの型で総称に
+/// するので、補助の関数の実体は写しごとにできて呼び手が1つになり、inline の判断が写しごとに決まる
+/// (docs/spec/vm.md の「置き場所」)。
+pub(crate) trait Exec {
+    type M: Mode;
+    type P: Policy;
+}
+
+/// モード `M` と方針 `P` の `Exec`。
+pub(crate) struct ExecWith<M, P>(PhantomData<(M, P)>);
+
+impl<M: Mode, P: Policy> Exec for ExecWith<M, P> {
+    type M = M;
+    type P = P;
+}
 
 /// 1つのタスクの実行の状態。
 pub struct Task {
@@ -131,7 +152,7 @@ impl Task {
     }
 
     /// scratch の引数を今の base のスロット 0.. に書き、`f` の先頭へ進む。見出しはそのまま使う。
-    pub(crate) fn enter_in_place<M: Mode>(&mut self, code: &CodeBase<M>, f: u32) {
+    pub(crate) fn enter_in_place<R: Exec>(&mut self, code: &CodeBase<R::M>, f: u32) {
         let entry = &code.functions[f as usize];
         self.reserve(self.base + usize::from(entry.frame_size));
         self.store_scratch();
@@ -180,20 +201,35 @@ fn read_header(w: Word) -> (Pc, Slot, usize) {
     ((bits >> 32) as Pc, (bits >> 16) as Slot, bits & 0xFFFF)
 }
 
-pub(crate) fn run<M: Mode>(
-    code: &CodeBase<M>,
-    ctx: &mut Ctx<M>,
+/// 安全点 (docs/spec/vm.md の「タスクとスケジュール」)。止める理由と深さを確かめた後で、方針が求め、yield の途中で
+/// なければ横取りを試みる。yield の途中の状態は `Ctx` が1つだけ持つので、そこでは切り替えない。
+#[inline(always)]
+fn safepoint<R: Exec>(
+    ctx: &mut Ctx<R::M>,
     task: &mut Task,
+    sched: &mut Scheduler<R::P>,
+) -> Result<(), Stop> {
+    ctx.poll(task.depth())?;
+    if sched.policy.tick() && ctx.yielding() == 0 {
+        sched.preempt();
+    }
+    Ok(())
+}
+
+pub(crate) fn run<R: Exec>(
+    code: &CodeBase<R::M>,
+    ctx: &mut Ctx<R::M>,
+    task: &mut Task,
+    sched: &mut Scheduler<R::P>,
     counts: &mut RunCounts,
 ) -> Result<(), Failure> {
     loop {
         let pc = task.pc;
-        match step(code, ctx, task, counts, pc) {
+        match step::<R>(code, ctx, task, sched, counts, pc) {
             Ok(true) => {}
             Ok(false) => return Ok(()),
-            Err(fault) => {
-                step_failed(code, ctx, task, pc, fault).map_err(|fault| Failure { fault, pc })?
-            }
+            Err(fault) => step_failed::<R>(code, ctx, task, pc, fault)
+                .map_err(|fault| Failure { fault, pc })?,
         }
     }
 }
@@ -203,10 +239,11 @@ pub(crate) fn run<M: Mode>(
 /// 結果のスロットは引数のスロットと同じ色でありうるので (docs/spec/vm.md の「スロットの割り当て」)、どの腕も引数を
 /// 読み終えてから結果を書く。
 #[inline(always)]
-fn step<M: Mode>(
-    code: &CodeBase<M>,
-    ctx: &mut Ctx<M>,
+fn step<R: Exec>(
+    code: &CodeBase<R::M>,
+    ctx: &mut Ctx<R::M>,
     task: &mut Task,
+    sched: &mut Scheduler<R::P>,
     counts: &mut RunCounts,
     pc: Pc,
 ) -> Result<bool, VmFault> {
@@ -222,53 +259,53 @@ fn step<M: Mode>(
             let value = task.get(src);
             task.last_ret = pc;
             task.return_value(value);
-            ctx.poll(task.depth())?;
+            safepoint::<R>(ctx, task, sched)?;
         }
         Op::Call { dst, at } => {
-            call(code, task, dst, at);
-            ctx.poll(task.depth())?;
+            call::<R>(code, task, dst, at);
+            safepoint::<R>(ctx, task, sched)?;
         }
         Op::TailCall { at } => {
             let o = ops(at);
             task.load_scratch(slots(&o[2..2 + o[1] as usize]));
-            task.enter_in_place(code, o[0]);
-            ctx.poll(task.depth())?;
+            task.enter_in_place::<R>(code, o[0]);
+            safepoint::<R>(ctx, task, sched)?;
         }
-        Op::CallN { at } => call_many(code, ctx, task, at)?,
-        Op::RetN { at } => return_many(code, ctx, task, pc, at)?,
+        Op::CallN { at } => call_many::<R>(code, ctx, task, sched, at)?,
+        Op::RetN { at } => return_many::<R>(code, ctx, task, sched, pc, at)?,
         Op::Finish => {
-            finish(code, ctx, task)?;
+            finish::<R>(code, ctx, task)?;
             return Ok(false);
         }
         Op::ApplyRest => {
-            apply::apply_rest(code, ctx, task)?;
-            ctx.poll(task.depth())?;
+            apply::apply_rest::<R>(code, ctx, task)?;
+            safepoint::<R>(ctx, task, sched)?;
         }
         Op::Closure { dst, at } => {
             let o = ops(at);
             let (f, lin, n) = (o[0], o[1] != 0, o[2] as usize);
             task.load_scratch(slots(&o[3..3 + n]));
-            let w = apply::make_closure(code, ctx, f, lin, &task.scratch)?;
+            let w = apply::make_closure::<R>(code, ctx, f, lin, &task.scratch)?;
             task.scratch.clear();
             task.set(dst, w);
         }
         Op::Apply { dst, at } => {
             let target = apply::Target::Frame { ret: task.pc, dst };
-            apply_call(code, ctx, task, at, target)?;
+            apply_call::<R>(code, ctx, task, sched, at, target)?;
         }
         Op::Clause { dst, at } => {
             let target = apply::Target::Frame { ret: task.pc, dst };
-            clause_call(code, ctx, task, at, target)?;
+            clause_call::<R>(code, ctx, task, sched, at, target)?;
         }
-        Op::TailApply { at } => apply_call(code, ctx, task, at, apply::Target::Tail)?,
-        Op::TailClause { at } => clause_call(code, ctx, task, at, apply::Target::Tail)?,
+        Op::TailApply { at } => apply_call::<R>(code, ctx, task, sched, at, apply::Target::Tail)?,
+        Op::TailClause { at } => clause_call::<R>(code, ctx, task, sched, at, apply::Target::Tail)?,
         Op::TailSelf { at } => {
             let o = ops(at);
             task.load_scratch(slots(&o[2..2 + o[1] as usize]));
             task.store_scratch();
             task.pc = o[0];
             // バイトコードに後ろ向きの辺ができるので、ここも安全点にする (docs/spec/vm.md の「呼び出しと戻り」)
-            ctx.poll(task.depth())?;
+            safepoint::<R>(ctx, task, sched)?;
         }
         // 誤りは `run` が `Panic` に届ける (`step_failed`)
         Op::IntAdd { dst, a, b } => task.set_raw(dst, externs::int_add(task.raw(a), task.raw(b))?),
@@ -323,13 +360,13 @@ fn step<M: Mode>(
         Op::BoolEq { dst, a, b } => task.set_raw(dst, externs::bool_eq(task.raw(a), task.raw(b))),
         Op::BoolNe { dst, a, b } => task.set_raw(dst, externs::bool_ne(task.raw(a), task.raw(b))),
         Op::SwitchEnum { src, at } => {
-            data::switch_tag(code, ctx, task, task.get(src), task.raw(src), at)?
+            data::switch_tag::<R>(code, ctx, task, task.get(src), task.raw(src), at)?
         }
         Op::SwitchObj { src, at } => {
             let w = task.get(src);
             // scrutinee の Repr は `obj` なので、語はポインタである (docs/spec/vm.md の「switch」)
             let tag = unsafe { ctx.heap().meta(w) }?.tag();
-            data::switch_tag(code, ctx, task, w, tag.into(), at)?
+            data::switch_tag::<R>(code, ctx, task, w, tag.into(), at)?
         }
         Op::SwitchTObj { src, at } => {
             let w = task.get(src);
@@ -339,56 +376,58 @@ fn step<M: Mode>(
                 // `is_imm()` の枝を先に取ったので、ここでは語はポインタである (docs/spec/vm.md の「switch」)
                 unsafe { ctx.heap().meta(w) }?.tag().into()
             };
-            data::switch_tag(code, ctx, task, w, tag, at)?
+            data::switch_tag::<R>(code, ctx, task, w, tag, at)?
         }
-        Op::SwitchInt { src, at } => data::switch_int(code, task, task.raw(src), at)?,
-        Op::SwitchString { src, at } => data::switch_string(code, ctx, task, task.get(src), at)?,
-        Op::Unpack { src, at } => data::unpack(code, ctx, task, src, at)?,
+        Op::SwitchInt { src, at } => data::switch_int::<R>(code, task, task.raw(src), at)?,
+        Op::SwitchString { src, at } => {
+            data::switch_string::<R>(code, ctx, task, task.get(src), at)?
+        }
+        Op::Unpack { src, at } => data::unpack::<R>(code, ctx, task, src, at)?,
         // RC の命令は Repr が `obj` か `tobj` の変数にだけ出す。VM はその参照を持つか借りている
         Op::Dup { src } => unsafe { ctx.heap_mut().dup(task.get(src)) }?,
         Op::Decref { src } => unsafe { ctx.heap_mut().decref(task.get(src)) }?,
-        Op::Release { src, at } => data::release(code, ctx, task, src, at)?,
-        Op::UnboxStruct { src, at } => data::unbox_struct(code, ctx, task, src, at)?,
-        Op::ReleaseUnboxed { src, at } => data::release_unboxed(code, ctx, task, src, at)?,
-        Op::Con { dst, at } => data::con(code, ctx, task, dst, at)?,
-        Op::ReleaseReuse { src, at } => data::release_reuse(code, ctx, task, src, at)?,
-        Op::ConReuse { dst, at } => data::con_reuse(code, ctx, task, counts, dst, at)?,
+        Op::Release { src, at } => data::release::<R>(code, ctx, task, src, at)?,
+        Op::UnboxStruct { src, at } => data::unbox_struct::<R>(code, ctx, task, src, at)?,
+        Op::ReleaseUnboxed { src, at } => data::release_unboxed::<R>(code, ctx, task, src, at)?,
+        Op::Con { dst, at } => data::con::<R>(code, ctx, task, dst, at)?,
+        Op::ReleaseReuse { src, at } => data::release_reuse::<R>(code, ctx, task, src, at)?,
+        Op::ConReuse { dst, at } => data::con_reuse::<R>(code, ctx, task, counts, dst, at)?,
         // token は verifier を通った IR の、このヒープのまだ使っていない token である
         Op::DropToken { tok } => {
             unsafe { ctx.heap_mut().drop_token(Token::from_word(task.get(tok))) }?
         }
         Op::BoxInt { dst, src } => {
-            if M::CHECKED {
+            if R::M::CHECKED {
                 counts.boxes += 1;
             }
             let w = unsafe { ctx.heap_mut() }.alloc_int(task.raw(src));
             task.set(dst, w);
         }
         Op::BoxEnum { dst, src } => {
-            if M::CHECKED {
+            if R::M::CHECKED {
                 counts.boxes += 1;
             }
             task.set(dst, Word::imm(task.raw(src)));
         }
         Op::BoxFloat { dst, src } => {
-            if M::CHECKED {
+            if R::M::CHECKED {
                 counts.boxes += 1;
             }
             let w = unsafe { ctx.heap_mut() }.alloc_float(task.raw(src) as u64);
             task.set(dst, w);
         }
         Op::BoxConst { dst, index } => {
-            if M::CHECKED {
+            if R::M::CHECKED {
                 counts.boxes += 1;
             }
             task.set(dst, code.constants[index as usize]);
         }
         Op::Unbox { dst, src } => {
-            let n = data::unbox(ctx, task.get(src), counts)?;
+            let n = data::unbox::<R>(ctx, task.get(src), counts)?;
             task.set_raw(dst, n);
         }
         Op::UnboxFloat { dst, src } => {
-            let bits = data::unbox_float(ctx, task.get(src), counts)?;
+            let bits = data::unbox_float::<R>(ctx, task.get(src), counts)?;
             task.set_raw(dst, bits as i64);
         }
         // 配列の行は借りる引数を手放さない。誤りは `step_failed` が `Panic` に届ける
@@ -427,7 +466,7 @@ fn step<M: Mode>(
             let w = unsafe { ctx.array_set(a, i, x) }?;
             task.set(dst, w);
         }
-        Op::Extern { dst, at } => extern_call(code, ctx, task, counts, dst, at)?,
+        Op::Extern { dst, at } => extern_call::<R>(code, ctx, task, counts, dst, at)?,
         // 基本操作 (docs/spec/lir.md の「基本操作」) は `Ctx` の同じ名前のメソッドを呼ぶ。引数の語は、LIR の所有の規則に
         // より VM が持つ参照か借りた語で、基本操作の契約 (docs/spec/object-model.md の「基本操作の契約」) のとおりに
         // 渡す。借用の引数は `Ctx` が手放さない。VM は基本操作の合間に `Ctx` の持つ語に触れない
@@ -506,7 +545,7 @@ fn step<M: Mode>(
         Op::YieldAbort { ev, clause } => {
             let ev = task.get(ev);
             unsafe { ctx.yield_abort(ev, task.get(clause)) }?;
-            unwind(code, ctx, task, counts, ev)?;
+            unwind::<R>(code, ctx, task, counts, ev)?;
         }
         Op::YieldContTake { dst } => {
             let w = ctx.yield_cont_take()?;
@@ -546,41 +585,43 @@ fn slots(list: &[u32]) -> impl Iterator<Item = Slot> {
 /// スロットがオペランドのスロットと同じ色でもよい (docs/spec/vm.md の「スロットの割り当て」)。`step` に展開するのは
 /// `bench/apply_int.em` の命令の数がそのほうが少なかったためである。
 #[inline(always)]
-fn apply_call<M: Mode>(
-    code: &CodeBase<M>,
-    ctx: &mut Ctx<M>,
+fn apply_call<R: Exec>(
+    code: &CodeBase<R::M>,
+    ctx: &mut Ctx<R::M>,
     task: &mut Task,
+    sched: &mut Scheduler<R::P>,
     at: u32,
     target: apply::Target,
 ) -> Result<(), VmFault> {
     let o = &code.operands[at as usize..];
     task.load_scratch(slots(&o[2..2 + o[1] as usize]));
     let callee = task.get(o[0] as Slot);
-    apply::apply(code, ctx, task, callee, target)?;
-    ctx.poll(task.depth())?;
+    apply::apply::<R>(code, ctx, task, callee, target)?;
+    safepoint::<R>(ctx, task, sched)?;
     Ok(())
 }
 
 /// `clause` の命令。オペランドは [呼ばれる値, n, 引数…] である。
-fn clause_call<M: Mode>(
-    code: &CodeBase<M>,
-    ctx: &mut Ctx<M>,
+fn clause_call<R: Exec>(
+    code: &CodeBase<R::M>,
+    ctx: &mut Ctx<R::M>,
     task: &mut Task,
+    sched: &mut Scheduler<R::P>,
     at: u32,
     target: apply::Target,
 ) -> Result<(), VmFault> {
     let o = &code.operands[at as usize..];
     task.load_scratch(slots(&o[2..2 + o[1] as usize]));
     let callee = task.get(o[0] as Slot);
-    apply::apply_clause(code, ctx, task, callee, target)?;
-    ctx.poll(task.depth())?;
+    apply::apply_clause::<R>(code, ctx, task, callee, target)?;
+    safepoint::<R>(ctx, task, sched)?;
     Ok(())
 }
 
 /// 呼ぶ側の上に呼ばれる側のフレームを作り、引数を写して先頭へ進む。呼ぶ側のスロットはスタックに残る。`CallN` からも
 /// 呼ぶので、`Call` の速い道に展開し続けるように `inline(always)` にする。
 #[inline(always)]
-fn call<M: Mode>(code: &CodeBase<M>, task: &mut Task, dst: Slot, at: u32) {
+fn call<R: Exec>(code: &CodeBase<R::M>, task: &mut Task, dst: Slot, at: u32) {
     let ops = &code.operands[at as usize..];
     let n = ops[1] as usize;
     let entry = &code.functions[ops[0] as usize];
@@ -597,29 +638,31 @@ fn call<M: Mode>(code: &CodeBase<M>, task: &mut Task, dst: Slot, at: u32) {
 
 /// 複数の値を受ける直接の呼び出し。結果のスロットは呼ばれる側の `RetN` が読むので、見出しの結果のスロットは使わない。
 #[inline(never)]
-fn call_many<M: Mode>(
-    code: &CodeBase<M>,
-    ctx: &mut Ctx<M>,
+fn call_many<R: Exec>(
+    code: &CodeBase<R::M>,
+    ctx: &mut Ctx<R::M>,
     task: &mut Task,
+    sched: &mut Scheduler<R::P>,
     at: u32,
 ) -> Result<(), VmFault> {
-    call(code, task, 0, at);
-    ctx.poll(task.depth())?;
+    call::<R>(code, task, 0, at);
+    safepoint::<R>(ctx, task, sched)?;
     Ok(())
 }
 
 /// `RetN` の命令。`pc` はその位置で、`Ret` と同じく最後に戻った関数として覚え、戻りを安全点にする。
 #[inline(never)]
-fn return_many<M: Mode>(
-    code: &CodeBase<M>,
-    ctx: &mut Ctx<M>,
+fn return_many<R: Exec>(
+    code: &CodeBase<R::M>,
+    ctx: &mut Ctx<R::M>,
     task: &mut Task,
+    sched: &mut Scheduler<R::P>,
     pc: Pc,
     at: u32,
 ) -> Result<(), VmFault> {
-    ret_many::<M>(code, task, at)?;
+    ret_many::<R>(code, task, at)?;
     task.last_ret = pc;
-    ctx.poll(task.depth())?;
+    safepoint::<R>(ctx, task, sched)?;
     Ok(())
 }
 
@@ -628,11 +671,11 @@ fn return_many<M: Mode>(
 /// (docs/spec/vm.md の「呼び出しと戻り」)。値は呼ばれる側のフレームから
 /// 呼び出し元のフレームへ写すので、読む所と書く所は重ならない。
 #[inline]
-fn ret_many<M: Mode>(code: &CodeBase<M>, task: &mut Task, at: u32) -> Result<(), VmFault> {
+fn ret_many<R: Exec>(code: &CodeBase<R::M>, task: &mut Task, at: u32) -> Result<(), VmFault> {
     let o = &code.operands[at as usize..];
     let n = o[0] as usize;
     let (ret, _, size) = read_header(task.stack[task.base - 2]);
-    let dsts = receivers::<M>(code, ret, n)?;
+    let dsts = receivers::<R>(code, ret, n)?;
     let caller = task.stack[task.base - 1].bits();
     for (&src, &dst) in o[1..1 + n].iter().zip(dsts) {
         task.stack[caller + dst as usize] = task.stack[task.base + src as usize];
@@ -646,7 +689,7 @@ fn ret_many<M: Mode>(code: &CodeBase<M>, task: &mut Task, at: u32) -> Result<(),
 /// 戻り先 `ret` の直前の、複数の値を受ける命令の結果のスロット。`Finish` と `ApplyRest` の位置へは値が1つしか
 /// 戻らないので、ほかの命令の後への戻りは内部の誤りである。検査モードは値の数も比べる。
 #[inline]
-fn receivers<M: Mode>(code: &CodeBase<M>, ret: Pc, n: usize) -> Result<&[u32], VmFault> {
+fn receivers<R: Exec>(code: &CodeBase<R::M>, ret: Pc, n: usize) -> Result<&[u32], VmFault> {
     let o = |at: u32| &code.operands[at as usize..];
     let dsts = match ret.checked_sub(1).map(|pc| code.code[pc as usize]) {
         Some(Op::CallN { at }) => {
@@ -656,7 +699,7 @@ fn receivers<M: Mode>(code: &CodeBase<M>, ret: Pc, n: usize) -> Result<&[u32], V
         }
         _ => return Err(not_received()),
     };
-    if M::CHECKED && dsts.len() != n {
+    if R::M::CHECKED && dsts.len() != n {
         return Err(not_received());
     }
     Ok(dsts)
@@ -674,9 +717,9 @@ fn not_received() -> VmFault {
 /// 状態を手放し、表のスロットを手放して外す。
 /// 巻き戻しの間は物体を作らず、`target` は着地するフレームが所有し続けるので、解放した物体の番地が `target` と
 /// 取り違えられることはない。安全点を置かないのは、仕事が外すフレームの数で終わるためである。
-fn unwind<M: Mode>(
-    code: &CodeBase<M>,
-    ctx: &mut Ctx<M>,
+fn unwind<R: Exec>(
+    code: &CodeBase<R::M>,
+    ctx: &mut Ctx<R::M>,
     task: &mut Task,
     counts: &mut RunCounts,
     target: Word,
@@ -734,14 +777,14 @@ fn unwind<M: Mode>(
         task.frame_size = size;
         task.pc = ret;
         dst = Some(slot);
-        if M::CHECKED {
+        if R::M::CHECKED {
             counts.unwound_frames += 1;
         }
     }
 }
 
 /// 入口の関数の結果か、`exit` の中断を手放す (docs/spec/vm.md の「誤り、止めること、終わり」)。
-fn finish<M: Mode>(code: &CodeBase<M>, ctx: &mut Ctx<M>, task: &Task) -> Result<(), VmFault> {
+fn finish<R: Exec>(code: &CodeBase<R::M>, ctx: &mut Ctx<R::M>, task: &Task) -> Result<(), VmFault> {
     if task.exit.is_some() {
         // 途中のフレームは巻き戻しで片付けてある。入口の結果はダミーなので手放さない。中断の途中の `evv` には
         // 意味がないので、空に戻す (docs/spec/vm.md の「extern の中断」)
@@ -768,9 +811,9 @@ const PANICKED: usize = 0;
 /// 列を変えないためである (docs/spec/vm.md の「`IO` と `Panic` への中断」)。
 #[cold]
 #[inline(never)]
-fn step_failed<M: Mode>(
-    code: &CodeBase<M>,
-    ctx: &mut Ctx<M>,
+fn step_failed<R: Exec>(
+    code: &CodeBase<R::M>,
+    ctx: &mut Ctx<R::M>,
     task: &mut Task,
     pc: Pc,
     fault: VmFault,
@@ -793,24 +836,24 @@ fn step_failed<M: Mode>(
         _ => return Err(fault),
     };
     match fault {
-        VmFault::Extern(fault) => failed(code, ctx, task, dst, fault, purity),
+        VmFault::Extern(fault) => failed::<R>(code, ctx, task, dst, fault, purity),
         other => Err(other),
     }
 }
 
 /// 算術と比較以外の extern。
-fn extern_call<M: Mode>(
-    code: &CodeBase<M>,
-    ctx: &mut Ctx<M>,
+fn extern_call<R: Exec>(
+    code: &CodeBase<R::M>,
+    ctx: &mut Ctx<R::M>,
     task: &mut Task,
     counts: &mut RunCounts,
     dst: Slot,
     at: u32,
 ) -> Result<(), VmFault> {
-    match run_extern(code, ctx, task, counts, dst, at) {
+    match run_extern::<R>(code, ctx, task, counts, dst, at) {
         Err(VmFault::Extern(fault)) => {
             let ext = Extern::ALL[code.operands[at as usize] as usize];
-            failed(code, ctx, task, dst, fault, ext.row().purity)
+            failed::<R>(code, ctx, task, dst, fault, ext.row().purity)
         }
         other => other,
     }
@@ -821,9 +864,9 @@ fn extern_call<M: Mode>(
 /// `Panic` である)。`try_io` の捕まえる誤りは、`Effectful` の行のものだけを届ける。捕まえる handler がなければ、
 /// 実行時エラーにする。失敗した extern は引数をすでに消費している。docs/spec/vm.md の「`IO` と `Panic` への中断」を
 /// 見る。
-fn failed<M: Mode>(
-    code: &CodeBase<M>,
-    ctx: &mut Ctx<M>,
+fn failed<R: Exec>(
+    code: &CodeBase<R::M>,
+    ctx: &mut Ctx<R::M>,
     task: &mut Task,
     dst: Slot,
     fault: Fault,
@@ -831,14 +874,14 @@ fn failed<M: Mode>(
 ) -> Result<(), VmFault> {
     // `Pure` の行の extern は巻き戻しの地点を持たないので、誤りを返しても中断にしない (docs/spec/vm.md の「extern の中断」)
     let caught = if fault.panics() && purity != Purity::Pure {
-        abort_to(code, ctx, task, dst, ExternEffect::Panic, PANICKED, |ctx| {
+        abort_to::<R, _>(code, ctx, task, dst, ExternEffect::Panic, PANICKED, |ctx| {
             [ctx.fresh_string(&fault.to_string())]
         })?
     } else if let Some(kind) = fault
         .io_error_kind()
         .filter(|_| purity == Purity::Effectful)
     {
-        abort_to(code, ctx, task, dst, ExternEffect::Io, IO_FAILED, |ctx| {
+        abort_to::<R, _>(code, ctx, task, dst, ExternEffect::Io, IO_FAILED, |ctx| {
             [
                 Word::from_bits(kind as usize),
                 ctx.fresh_string(&fault.to_string()),
@@ -858,14 +901,14 @@ fn failed<M: Mode>(
 /// がなければ何もせずに `false` を返し、`args` も作らない。入口は `never` の節の入口なので、`yield_abort` で巻き戻しを
 /// 始めて戻らない。中断を起こした命令のフレームは入口の呼び出し元になり、その命令の地点の表の行で片付く。入口が戻らない
 /// ので、安全点も置かない (docs/spec/vm.md の「`IO` と `Panic` への中断」)。
-fn abort_to<M: Mode, const N: usize>(
-    code: &CodeBase<M>,
-    ctx: &mut Ctx<M>,
+fn abort_to<R: Exec, const N: usize>(
+    code: &CodeBase<R::M>,
+    ctx: &mut Ctx<R::M>,
     task: &mut Task,
     dst: Slot,
     effect: ExternEffect,
     op: usize,
-    args: impl FnOnce(&mut Ctx<M>) -> [Word; N],
+    args: impl FnOnce(&mut Ctx<R::M>) -> [Word; N],
 ) -> Result<bool, VmFault> {
     let Some(&number) = code.index.effects.get(effect.row().name) else {
         return Ok(false);
@@ -880,14 +923,14 @@ fn abort_to<M: Mode, const N: usize>(
     task.scratch.push(ev);
     task.scratch.extend(args);
     let ret = task.pc;
-    apply::apply_clause(code, ctx, task, clause, apply::Target::Frame { ret, dst })?;
+    apply::apply_clause::<R>(code, ctx, task, clause, apply::Target::Frame { ret, dst })?;
     Ok(true)
 }
 
 /// 行の番号の `match` で `Ctx` のメソッドを呼ぶ (docs/spec/object-model.md の「extern」)。
-fn run_extern<M: Mode>(
-    code: &CodeBase<M>,
-    ctx: &mut Ctx<M>,
+fn run_extern<R: Exec>(
+    code: &CodeBase<R::M>,
+    ctx: &mut Ctx<R::M>,
     task: &mut Task,
     counts: &mut RunCounts,
     dst: Slot,
@@ -899,7 +942,7 @@ fn run_extern<M: Mode>(
     let ext = Extern::ALL[ops[0] as usize];
     if ext == Extern::Panic {
         let message = task.get(arg(0));
-        if abort_to(code, ctx, task, dst, ExternEffect::Panic, PANICKED, |_| {
+        if abort_to::<R, _>(code, ctx, task, dst, ExternEffect::Panic, PANICKED, |_| {
             [message]
         })? {
             return Ok(());
@@ -913,7 +956,7 @@ fn run_extern<M: Mode>(
         unsafe { ctx.exit_abort() }?;
         // 宛先は不死のダミーなので、どの着地の印とも合わずに `Finish` まで巻き戻す
         let dummy = ctx.heap().dummy();
-        return unwind(code, ctx, task, counts, dummy);
+        return unwind::<R>(code, ctx, task, counts, dummy);
     }
     unsafe {
         // 借りる引数 (`FunctionRow::borrowed`) の行は、引数を手放さない。失敗しても、借りた値は呼んだ側の

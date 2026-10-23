@@ -19,7 +19,7 @@ pub use eml_syntax::{InputStatus, input_status};
 #[cfg(feature = "run")]
 pub use eml_vm::{
     Capture, CaptureHost, Control, Finished, HostRef, Limits, RunConfig, RunStats, RuntimeError,
-    SourceLocation, Stop, VmFault, Written, capture_host, script_host, stdio_host,
+    Sched, SourceLocation, Stop, VmFault, Written, capture_host, script_host, stdio_host,
 };
 pub use fs_provider::FsProvider;
 #[cfg(feature = "run")]

@@ -8,7 +8,7 @@ use crate::code::{CodeBase, FnEntry};
 use crate::data::count_word;
 use crate::error::VmFault;
 use crate::op::{APPLY_REST, Pc, Slot};
-use crate::vm::Task;
+use crate::vm::{Exec, Task};
 
 const NOT_A_FUNCTION: VmFault = VmFault::Internal("applying a value that is not a function");
 
@@ -29,27 +29,27 @@ struct Closure {
 
 /// `callee` を `task.scratch` の引数に適用する。捕まえた値の数と渡す引数の数の和が関数の引数の数と等しければ、
 /// そのまま入る (速い道)。
-pub(crate) fn apply<M: Mode>(
-    code: &CodeBase<M>,
-    ctx: &mut Ctx<M>,
+pub(crate) fn apply<R: Exec>(
+    code: &CodeBase<R::M>,
+    ctx: &mut Ctx<R::M>,
     task: &mut Task,
     callee: Word,
     target: Target,
 ) -> Result<(), VmFault> {
-    let (f, k, closure) = decode(ctx, callee)?;
-    let entry = lookup(code, f, k, closure)?;
+    let (f, k, closure) = decode::<R>(ctx, callee)?;
+    let entry = lookup::<R>(code, f, k, closure)?;
     if k + task.scratch.len() == usize::from(entry.arity) {
-        return enter(code, ctx, task, f, k, closure, target);
+        return enter::<R>(code, ctx, task, f, k, closure, target);
     }
-    apply_other(code, ctx, task, (f, k, closure), target)
+    apply_other::<R>(code, ctx, task, (f, k, closure), target)
 }
 
 /// 引数の数が合わない適用。足りなければクロージャを作り、余れば `ApplyRest` のフレームに預ける。部分適用は
 /// ふつうのプログラムにも現れるので、`#[cold]` にはしない。
 #[inline(never)]
-fn apply_other<M: Mode>(
-    code: &CodeBase<M>,
-    ctx: &mut Ctx<M>,
+fn apply_other<R: Exec>(
+    code: &CodeBase<R::M>,
+    ctx: &mut Ctx<R::M>,
     task: &mut Task,
     (f, k, closure): (usize, usize, Option<Closure>),
     target: Target,
@@ -68,12 +68,12 @@ fn apply_other<M: Mode>(
     if let Some(closure) = closure {
         task.scratch
             .splice(0..0, std::iter::repeat_n(Word::UNIT, k));
-        take_captures(ctx, closure, &entry.params[..k], &mut task.scratch[..k])?;
+        take_captures::<R>(ctx, closure, &entry.params[..k], &mut task.scratch[..k])?;
     }
     if n < missing {
-        let closure = make_closure(code, ctx, f as u32, lin, &task.scratch)?;
+        let closure = make_closure::<R>(code, ctx, f as u32, lin, &task.scratch)?;
         task.scratch.clear();
-        deliver(code, task, target, closure);
+        deliver::<R>(code, task, target, closure);
         return Ok(());
     }
     let rest = n - missing;
@@ -96,40 +96,43 @@ fn apply_other<M: Mode>(
     }
     let size = usize::from(entry.frame_size);
     task.push_frame(APPLY_REST, 0, size);
-    task.enter_in_place(code, f as u32);
+    task.enter_in_place::<R>(code, f as u32);
     Ok(())
 }
 
 /// `clause` で入口のクロージャ `callee` を呼ぶ。引数は操作の ABI の Repr で、入口の関数の引数と同じ Repr なので比べない。
 /// 引数の数はいつも入口の関数の引数の数と等しい。部分適用で生の `int` をクロージャに入れることもない。
-pub(crate) fn apply_clause<M: Mode>(
-    code: &CodeBase<M>,
-    ctx: &mut Ctx<M>,
+pub(crate) fn apply_clause<R: Exec>(
+    code: &CodeBase<R::M>,
+    ctx: &mut Ctx<R::M>,
     task: &mut Task,
     callee: Word,
     target: Target,
 ) -> Result<(), VmFault> {
-    let (f, k, closure) = decode(ctx, callee)?;
-    let entry = lookup(code, f, k, closure)?;
+    let (f, k, closure) = decode::<R>(ctx, callee)?;
+    let entry = lookup::<R>(code, f, k, closure)?;
     if k + task.scratch.len() != usize::from(entry.arity) {
         return Err(VmFault::Internal(
             "a clause gets a different number of arguments than its function takes",
         ));
     }
-    enter(code, ctx, task, f, k, closure, target)
+    enter::<R>(code, ctx, task, f, k, closure, target)
 }
 
 /// 呼ばれる値から、関数の番号、捕まえた値の数、クロージャの物体を読む。捕まえた値の数は `&f` の即値の上の 32 ビットに
 /// 詰めてあるので、1回の読み込みで関数と数が分かる (docs/spec/vm.md の「データとクロージャ」)。
 #[inline(always)]
-fn decode<M: Mode>(ctx: &Ctx<M>, callee: Word) -> Result<(usize, usize, Option<Closure>), VmFault> {
+fn decode<R: Exec>(
+    ctx: &Ctx<R::M>,
+    callee: Word,
+) -> Result<(usize, usize, Option<Closure>), VmFault> {
     let split = |imm: i64| {
         let bits = imm as u64;
         ((bits & 0xFFFF_FFFF) as usize, (bits >> 32) as usize)
     };
     if callee.is_imm() {
         let (f, k) = split(callee.imm_value());
-        if M::CHECKED && k != 0 {
+        if R::M::CHECKED && k != 0 {
             return Err(NOT_A_FUNCTION);
         }
         return Ok((f, 0, None));
@@ -139,11 +142,11 @@ fn decode<M: Mode>(ctx: &Ctx<M>, callee: Word) -> Result<(usize, usize, Option<C
     unsafe {
         let scanned = heap.scanned_len(callee)?;
         // 走査する語のない物体の0番目を読むと、断る誤りが範囲外の誤りになる
-        if M::CHECKED && scanned == 0 {
+        if R::M::CHECKED && scanned == 0 {
             return Err(NOT_A_FUNCTION);
         }
         let function = heap.scanned(callee, 0)?;
-        if M::CHECKED && !function.is_imm() {
+        if R::M::CHECKED && !function.is_imm() {
             return Err(NOT_A_FUNCTION);
         }
         let (f, k) = split(function.imm_value());
@@ -154,14 +157,14 @@ fn decode<M: Mode>(ctx: &Ctx<M>, callee: Word) -> Result<(usize, usize, Option<C
 /// 関数の番号の `FnEntry`。検査モードでは、`&f` の即値に詰めた捕まえた値の数が、クロージャの物体の走査する語の数と
 /// 合うことも確かめる。
 #[inline(always)]
-fn lookup<M: Mode>(
-    code: &CodeBase<M>,
+fn lookup<R: Exec>(
+    code: &CodeBase<R::M>,
     f: usize,
     k: usize,
     closure: Option<Closure>,
 ) -> Result<&FnEntry, VmFault> {
     let entry = code.functions.get(f).ok_or(NOT_A_FUNCTION)?;
-    if M::CHECKED
+    if R::M::CHECKED
         && let Some(closure) = closure
     {
         let refs = entry
@@ -180,9 +183,9 @@ fn lookup<M: Mode>(
 
 /// 捕まえた値と scratch の引数で `f` に入る。捕まえた値は一時の列を通さず、クロージャから新しいフレームへ直に写す。
 #[inline(always)]
-fn enter<M: Mode>(
-    code: &CodeBase<M>,
-    ctx: &mut Ctx<M>,
+fn enter<R: Exec>(
+    code: &CodeBase<R::M>,
+    ctx: &mut Ctx<R::M>,
     task: &mut Task,
     f: usize,
     k: usize,
@@ -200,7 +203,7 @@ fn enter<M: Mode>(
         }
     };
     if let Some(closure) = closure {
-        take_captures(
+        take_captures::<R>(
             ctx,
             closure,
             &entry.params[..k],
@@ -218,8 +221,8 @@ fn enter<M: Mode>(
 /// クロージャの捕まえた値を、関数の引数の順に `dst` に写し、VM の持つクロージャの参照を手放す。参照の捕獲は `&f` の後の
 /// 走査する語に、ほかの捕獲は生の語に、それぞれ引数の順に並ぶ (docs/spec/object-model.md の「クロージャ」)。
 #[inline]
-fn take_captures<M: Mode>(
-    ctx: &mut Ctx<M>,
+fn take_captures<R: Exec>(
+    ctx: &mut Ctx<R::M>,
     closure: Closure,
     params: &[Repr],
     dst: &mut [Word],
@@ -254,7 +257,7 @@ fn take_captures<M: Mode>(
     Ok(())
 }
 
-fn deliver<M: Mode>(code: &CodeBase<M>, task: &mut Task, target: Target, value: Word) {
+fn deliver<R: Exec>(code: &CodeBase<R::M>, task: &mut Task, target: Target, value: Word) {
     match target {
         Target::Frame { ret, dst } => {
             task.set(dst, value);
@@ -275,9 +278,9 @@ fn deliver<M: Mode>(code: &CodeBase<M>, task: &mut Task, target: Target, value: 
 /// `f` と先頭の引数 `args` からクロージャを作る。走査する語に `&f` と参照の語を、生の語にほかの語を、`f` の引数の順に
 /// 並べる。`&f` の即値には引数の数を詰める (docs/spec/object-model.md の「クロージャ」)。
 #[inline]
-pub(crate) fn make_closure<M: Mode>(
-    code: &CodeBase<M>,
-    ctx: &mut Ctx<M>,
+pub(crate) fn make_closure<R: Exec>(
+    code: &CodeBase<R::M>,
+    ctx: &mut Ctx<R::M>,
     f: u32,
     lin: bool,
     args: &[Word],
@@ -313,15 +316,15 @@ pub(crate) fn make_closure<M: Mode>(
 
 /// `ApplyRest` のフレームから、結果に残りの引数を適用する。このフレームの見出しを引き継ぐ末尾の適用である。
 #[inline]
-pub(crate) fn apply_rest<M: Mode>(
-    code: &CodeBase<M>,
-    ctx: &mut Ctx<M>,
+pub(crate) fn apply_rest<R: Exec>(
+    code: &CodeBase<R::M>,
+    ctx: &mut Ctx<R::M>,
     task: &mut Task,
 ) -> Result<(), VmFault> {
     let callee = task.get(0);
     let n = task.get(1).bits();
     task.load_scratch((2..2 + n).map(|i| i as Slot));
-    apply(code, ctx, task, callee, Target::Tail)
+    apply::<R>(code, ctx, task, callee, Target::Tail)
 }
 
 /// `ApplyRest` のフレームの、まだ渡していない残りの引数のスロット。引数は一様な語なので、巻き戻しはどれも手放す。

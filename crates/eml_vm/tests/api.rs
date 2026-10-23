@@ -1,11 +1,12 @@
 //! 公開の API の性質。後の並列 VM のための型の性質 (docs/future/multicore.md の「VM の並列化の備え」の制約1と2) と、
-//! 実行の設定 `RunConfig` と、実行時エラーの `interrupted` である。
+//! 実行の設定 `RunConfig` と、スケジュールの方針 `Sched` と、実行時エラーの `interrupted` である。
 
 use std::sync::Arc;
 
 use eml_rt::{Checked, Fast, Fault};
 use eml_vm::{
-    AnyMachine, CodeBase, Control, Limits, Machine, RunConfig, RuntimeError, Stop, Task, VmFault,
+    AnyMachine, CodeBase, Control, Limits, Machine, RunConfig, RuntimeError, Sched, Scheduler,
+    Seeded, Sequential, Stop, Task, VmFault,
 };
 
 use crate::common::parse;
@@ -14,11 +15,24 @@ fn sync<T: Sync>() {}
 
 fn send<T: Send>() {}
 
+fn copy<T: Copy>() {}
+
 #[test]
 fn a_code_base_is_shared_and_a_task_moves() {
     sync::<CodeBase<Fast>>();
     sync::<CodeBase<Checked>>();
     send::<Task>();
+}
+
+/// スケジューラは後で worker のスレッドへ移り、方針の値はスレッドをまたいで読む (docs/spec/vm.md の
+/// 「タスクとスケジュール」)。
+#[test]
+fn a_scheduler_moves_and_a_sched_is_shared() {
+    send::<Scheduler<Sequential>>();
+    send::<Scheduler<Seeded>>();
+    send::<Sched>();
+    sync::<Sched>();
+    copy::<Sched>();
 }
 
 /// REPL のセッションは `Machine` を持ち、`Session` と同じく `Send` にする (docs/spec/vm.md の「追記」)。
@@ -48,6 +62,50 @@ fn with_debug_heap_sets_the_flag() {
             .with_debug_heap(false)
             .debug_heap
     );
+}
+
+#[test]
+fn the_default_sched_is_sequential() {
+    assert_eq!(RunConfig::default().sched, Sched::Sequential);
+    assert_eq!(Sched::default(), Sched::Sequential);
+    let config = RunConfig::default().with_sched(Sched::Seeded(3));
+    assert_eq!(config.sched, Sched::Seeded(3));
+    assert_eq!(
+        config.with_sched(Sched::Sequential).sched,
+        Sched::Sequential
+    );
+}
+
+/// CLI の `--sched` が読む綴り (docs/spec/stdlib.md の「起動」)。seed は `u64` の10進数である。
+#[test]
+fn a_sched_parses_and_rejects() {
+    assert_eq!("sequential".parse(), Ok(Sched::Sequential));
+    assert_eq!("seeded:0".parse(), Ok(Sched::Seeded(0)));
+    assert_eq!("seeded:2026".parse(), Ok(Sched::Seeded(2026)));
+    assert_eq!(
+        "seeded:18446744073709551615".parse(),
+        Ok(Sched::Seeded(u64::MAX))
+    );
+    for text in [
+        "",
+        "bogus",
+        "Sequential",
+        " sequential",
+        "seeded",
+        "seeded:",
+        "seeded:-1",
+        "seeded:+7",
+        "seeded:18446744073709551616",
+        "seeded:7x",
+        "seeded: 7",
+        "rescue-always",
+    ] {
+        let error = text.parse::<Sched>().unwrap_err();
+        assert_eq!(
+            error,
+            format!("expected `sequential` or `seeded:<n>`, found `{text}`")
+        );
+    }
 }
 
 #[test]
@@ -92,6 +150,21 @@ b2:
   return ()
 }
 ";
+
+/// タスクが1つだけなら、seed の方針の予算が尽きても切り替える先がなく、横取りは起きない。仕事の回数も逐次と同じである。
+#[test]
+fn a_seeded_run_of_one_task_does_not_preempt() {
+    let run = |sched| {
+        let config = RunConfig::default().with_debug_heap(true).with_sched(sched);
+        let (host, _) = eml_vm::capture_host(Default::default());
+        eml_vm::execute(&parse(COUNT), &config, host).unwrap()
+    };
+    let sequential = run(Sched::Sequential);
+    assert_eq!(sequential.preemptions, 0);
+    for seed in [1, 2026] {
+        assert_eq!(run(Sched::Seeded(seed)), sequential);
+    }
+}
 
 /// 実行の前に割り込まれた `Control` では、最初の安全点で止まる。
 #[test]
