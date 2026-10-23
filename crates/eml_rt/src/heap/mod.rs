@@ -153,6 +153,7 @@ pub struct Heap<M: Mode> {
     // なったためである (docs/implementation/benchmarks.md の「`eml_rt` のインライン化」)
     region: ManuallyDrop<Option<Arc<Frozen<M>>>>,
     worker: u32,
+    // この3つの欄は検査モードだけで使う。速いモードでも欄の大きさは持つが、表は空のまま触れない
     /// 検査モードで、`fork_worker` がまだ出していない最小の ID。0 は基の ID なので 1 から始める。
     next_worker: u32,
     /// 検査モードで、退いて使い回せる ID。最後に退いたものが末尾にある。
@@ -234,6 +235,34 @@ pub(crate) fn move_owned(owned: &mut Vec<u64>, from: u32, to: u32) {
         count_owned(owned, from, false);
         count_owned(owned, to, true);
     }
+}
+
+/// `ids` の中の `id` の位置。
+fn find_id(ids: &[u32], id: u32) -> (r: Option<usize>)
+    ensures
+        r matches Some(i) ==> i < ids@.len(),
+{
+    let mut i: usize = 0;
+    while i < ids.len()
+        invariant
+            i <= ids@.len(),
+        decreases ids@.len() - i,
+    {
+        if ids[i] == id {
+            return Some(i);
+        }
+        i += 1;
+    }
+    None
+}
+
+// 出していない ID や退いた ID をまた退かせると、`free_ids` に同じ ID が2つ入り、2つの子が同じ ID で動いて、子の間の
+// 所有者の検査が効かなくなる。呼ぶ側 (VM) の誤りなので、新しい誤りの種類を足さずに止める (信頼の一覧の T5)。
+// 状態を変える前に呼ぶ (T7)
+#[verifier::external_body]
+#[cold]
+fn bad_retire(id: u32) -> ! {
+    panic!("retire_worker({id}) on an ID that is the base ID, not handed out, or already retired")
 }
 
 // ID の数が `u32` の上限に届くのは、退かせずに 2^32 - 1 回 fork したときだけで、正しいプログラムでは起きないので、
@@ -814,13 +843,18 @@ impl<M: Mode> Heap<M> {
             final(self).same_objects(*old(self)),
             M::CHECKED ==> final(self).words_kept(*old(self)),
     {
-        if M::CHECKED && worker >= self.next_worker {
-            // テストが選んだ ID を `fork_worker` が出さないようにする
-            self.next_worker = if worker == u32::MAX {
-                u32::MAX
-            } else {
-                worker + 1
-            };
+        if M::CHECKED {
+            // テストが選んだ ID を `fork_worker` が出さないように、まだ出していない ID と退いた ID の両方から外す
+            if worker >= self.next_worker {
+                self.next_worker = if worker == u32::MAX {
+                    u32::MAX
+                } else {
+                    worker + 1
+                };
+            }
+            if let Some(i) = find_id(self.free_ids.as_slice(), worker) {
+                self.free_ids.remove(i);
+            }
         }
         self.worker = worker;
         proof {
@@ -865,6 +899,8 @@ impl<M: Mode> Heap<M> {
     /// `par` の子の ID を退かせる。join で右の子の値をすべて移し戻した後に呼ぶ。検査モードでは、その ID の rc が正の
     /// 物体が残っていれば移し戻しの漏れとして `TransferLeak` を返し、ID を使い回さない。残っていなければ ID を
     /// 使い回せるようにする。速いモードでは何もしない。
+    ///
+    /// `id` は `fork_worker` が出した ID で、0 でなく、まだ退いていない。検査モードはこれを確かめ、破れば panic する。
     pub fn retire_worker(&mut self, id: u32) -> (r: Result<(), HeapError>)
         requires
             old(self).wf(),
@@ -885,6 +921,9 @@ impl<M: Mode> Heap<M> {
         }
         if !M::CHECKED {
             return Ok(());
+        }
+        if id == 0 || id >= self.next_worker || find_id(self.free_ids.as_slice(), id).is_some() {
+            bad_retire(id);
         }
         let i = id as usize;
         let live = if i < self.owned.len() {

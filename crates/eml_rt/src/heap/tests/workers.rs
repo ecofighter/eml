@@ -234,3 +234,34 @@ fn fork_skips_ids_that_set_worker_used() {
     heap.set_worker(2);
     assert_eq!(heap.fork_worker(), 7);
 }
+
+#[test]
+fn set_worker_takes_its_id_out_of_the_retired_ids() {
+    let mut heap = H::new();
+    let child = heap.fork_worker();
+    heap.retire_worker(child).unwrap();
+    heap.set_worker(child);
+    heap.set_worker(0);
+    assert_eq!(heap.fork_worker(), child + 1);
+}
+
+#[test]
+#[should_panic(expected = "retire_worker(0)")]
+fn retiring_the_base_id_panics() {
+    let _ = H::new().retire_worker(0);
+}
+
+#[test]
+#[should_panic(expected = "retire_worker(1)")]
+fn retiring_an_id_not_handed_out_panics() {
+    let _ = H::new().retire_worker(1);
+}
+
+#[test]
+#[should_panic(expected = "already retired")]
+fn retiring_an_id_twice_panics() {
+    let mut heap = H::new();
+    let child = heap.fork_worker();
+    heap.retire_worker(child).unwrap();
+    let _ = heap.retire_worker(child);
+}
