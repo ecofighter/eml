@@ -415,7 +415,7 @@ main () =
 ### 後で足すもの
 
 - UDP、`SO_REUSEPORT` で複数のタスクが accept する形
-- 非同期の名前の解決。今は `getaddrinfo` をプールで動かす。`resolve` も同じ形で持つ
+- 非同期の名前の解決。既定では `getaddrinfo` をプールで動かす。`resolve` も同じ形で持つ
 - TLS: Rust のプラグイン (`eml_tls`、rustls の上) にする。形は GUI のプラグインと同じである ([FFI と拡張の設計](ffi.md) の「拡張」)
 - HTTP: `Net` と `Chan` の上のライブラリにする
 
@@ -458,4 +458,5 @@ pub compute : (Unit -> <never e> a) -> <IO, Async | e> a
 - タスクの中の入れ子の `Async.run`: 既定は許し、呼んだタスクを待たせる
 - タスクを置く worker を選ぶ API (`spawn_here` など): 既定は作らない。スレッドに縛られた仕事は `Main.run` で書く ([FFI と拡張の設計](ffi.md) の「GUI」)
 - channel のキュー: 既定は mutex で、ロックフリーには後でランタイムの中だけで替える
-- `Time` のモジュール、UDP、`SO_REUSEPORT`、TLS のプラグイン、`Http`、非同期の名前の解決: 上の「ネットワークとシグナル」の「後で足すもの」にある
+- `Time` のモジュール: 上の「時間」にある
+- UDP、`SO_REUSEPORT`、TLS のプラグイン、`Http`、非同期の名前の解決: 上の「ネットワークとシグナル」の「後で足すもの」にある
