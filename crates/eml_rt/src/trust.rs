@@ -149,7 +149,6 @@ const TRUSTED: &[(&str, &str)] = &[
     ("host.rs: external_body host_arg", "T11"),
     ("host.rs: external_body host_env_has", "T11"),
     ("host.rs: external_body host_env_var", "T11"),
-    ("host.rs: external_body host_run", "T11"),
     ("host.rs: external_body Child", "T11"),
     ("host.rs: external_body host_spawn", "T11"),
     ("host.rs: external_body child_write", "T11"),

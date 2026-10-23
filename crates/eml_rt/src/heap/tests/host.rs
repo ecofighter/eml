@@ -110,11 +110,9 @@ pub(super) struct MemoryHost {
     written: Arc<Mutex<HashMap<String, Vec<u8>>>>,
     /// `open_write` の書き手が受けたバイト数。書けなかったバイトも数える
     received: Arc<AtomicUsize>,
-    /// `run` が受けたプログラムと引数
-    runs: Mutex<Vec<(String, Vec<String>)>>,
     /// `flush` を呼ばれた回数
     flushes: AtomicUsize,
-    /// `run` の中でこの `Control` に割り込みを立てる。子を待つ間に届いた SIGINT を表す。`spawn` の子の `wait` も同じ
+    /// `spawn` の子の `wait` の中でこの `Control` に割り込みを立てる。子を待つ間に届いた SIGINT を表す
     interrupt_run: Option<Arc<crate::Control>>,
     /// `spawn` の子が標準出力に書くバイト列
     child_output: Vec<u8>,
@@ -199,9 +197,6 @@ impl MemoryHost {
     }
     pub(super) fn received(&self) -> usize {
         self.received.load(Ordering::Relaxed)
-    }
-    pub(super) fn runs(&self) -> Vec<(String, Vec<String>)> {
-        self.runs.lock().unwrap().clone()
     }
     pub(super) fn flushes(&self) -> usize {
         self.flushes.load(Ordering::Relaxed)
@@ -306,19 +301,6 @@ impl Host for MemoryHost {
             fail: self.fail_write,
             received: self.received.clone(),
         }))
-    }
-    /// プロセスを起動せず、受けたものを覚える。`missing` は見つからないプログラムで、ほかは引数の数を終了コードにする
-    fn run(&self, program: &str, args: &[&str]) -> io::Result<i32> {
-        if program == "missing" {
-            return Err(io::Error::from(io::ErrorKind::NotFound));
-        }
-        let args: Vec<String> = args.iter().map(|a| a.to_string()).collect();
-        let code = args.len() as i32;
-        self.runs.lock().unwrap().push((program.to_string(), args));
-        if let Some(control) = &self.interrupt_run {
-            control.interrupt();
-        }
-        Ok(code)
     }
     /// プロセスを起動せず、受けた設定を覚える。`missing` は見つからないプログラムである。pipe の標準入力は
     /// `child_input` に写し (`fail_write` があれば書くたびにその文言で失敗する)、pipe の標準出力は `child_output` を
@@ -537,21 +519,6 @@ mod std_host {
         std::fs::remove_dir_all(&dir).unwrap();
     }
 
-    /// 子の終了コードはそのまま返し、シグナルで終わった子は 128 + 番号にする。起動の前に標準出力を書き出す。
-    #[cfg(unix)]
-    #[test]
-    fn a_child_reports_its_exit_code() {
-        let (host, out, _) = std_host(Buffering::Block);
-        host.write_line(Stream::Out, "before").unwrap();
-        assert_eq!(host.run("sh", &["-c", "exit 3"]).unwrap(), 3);
-        assert_eq!(out.text(), "before\n");
-        assert_eq!(host.run("sh", &["-c", "kill -TERM $$"]).unwrap(), 128 + 15);
-        assert_eq!(
-            host.run("eml-no-such-program", &[]).err().map(|e| e.kind()),
-            Some(io::ErrorKind::NotFound)
-        );
-    }
-
     /// pipe の子に書き、`2>&1` の1本の pipe から標準出力と標準エラーを順に読む。起動の前に標準出力を書き出す。
     /// kill した子はシグナルの番号の終了コードを返す。
     #[cfg(unix)]
@@ -592,6 +559,14 @@ mod std_host {
         assert!(child.stdin.is_none() && child.stdout.is_none());
         child.process.kill().unwrap();
         assert_eq!(child.process.wait().unwrap(), 128 + 9);
+        let missing = Spawn {
+            program: "eml-no-such-program",
+            ..sleeper
+        };
+        assert_eq!(
+            host.spawn(&missing).err().map(|e| e.kind()),
+            Some(io::ErrorKind::NotFound)
+        );
     }
 
     /// 作業ディレクトリは `file_root` につなぎ、`/` を含む相対のプログラムはそこに対して解決する。環境変数は上書き

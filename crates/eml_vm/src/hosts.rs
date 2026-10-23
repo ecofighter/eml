@@ -214,30 +214,9 @@ impl Host for CaptureHost {
         }))
     }
 
-    /// 子の環境は与えた表に本物の `PATH` を足したもので、標準入力は空である。子の標準出力と標準エラーは、それまでの
-    /// 出力を書き出した後で、捕まえたそれぞれの出力に足す。
-    fn run(&self, program: &str, args: &[&str]) -> io::Result<i32> {
-        self.inner.flush()?;
-        let mut command = Command::new(program);
-        command
-            .args(args)
-            .env_clear()
-            .envs(self.env.iter().map(|(key, value)| (key, value)))
-            .stdin(Stdio::null());
-        if let Some(path) = std::env::var_os("PATH") {
-            command.env("PATH", path);
-        }
-        if !self.file_root.as_os_str().is_empty() {
-            command.current_dir(&self.file_root);
-        }
-        let output = command.output()?;
-        self.out.clone().write_all(&output.stdout)?;
-        self.err.clone().write_all(&output.stderr)?;
-        Ok(exit_code(output.status))
-    }
-
-    /// 環境と標準入力は `run` と同じである。受け継ぐ標準出力と標準エラーは pipe にしてスレッドで最後まで読み、子を
-    /// 待った後で、捕まえたそれぞれの出力に `out`、`err` の順に足す。捕まえた出力の順を `run` と同じにするためである。
+    /// 子の環境は与えた表に本物の `PATH` を足したもので、`Stdio::Inherit` の標準入力は空である。受け継ぐ標準出力と
+    /// 標準エラーは pipe にしてスレッドで最後まで読み、子を待った後で、捕まえたそれぞれの出力に `out`、`err` の順に
+    /// 足す。捕まえた出力の順を固定するためである。
     /// スレッドで読むのは、子が pipe の buffer より多く書いても、eml の側の読み書きと詰まらないためである。
     fn spawn(&self, spawn: &Spawn<'_>) -> io::Result<Spawned> {
         self.inner.flush()?;

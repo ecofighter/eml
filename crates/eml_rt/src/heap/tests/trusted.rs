@@ -1464,7 +1464,7 @@ fn a_failed_file_out_write_discards_the_rest<M: Mode>() {
     assert_eq!(memory.received(), "abc".len() + "abc\n".len());
 }
 
-/// スクリプトの extern の橋 (引数、環境変数、標準入力、子のプロセス) を、メモリの Host で通す。
+/// スクリプトの extern の橋 (引数、環境変数、標準入力) を、メモリの Host で通す。
 /// Host から写した文字列がヒープの文字列になり、引数の文字列が手放されることを確かめる。
 fn script_externs_go_through_the_host<M: Mode>() {
     let memory = Arc::new(
@@ -1492,9 +1492,6 @@ fn script_externs_go_through_the_host<M: Mode>() {
         let w = ctx_tests::stdin_read(&mut ctx, false).unwrap();
         assert_eq!(text(ctx.heap(), w), "bc");
         ctx.heap_mut().decref(w).unwrap();
-        let p = ctx.heap_mut().alloc_string("prog");
-        let a = ctx.heap_mut().alloc_string("2\0a\0b\0");
-        assert_eq!(ctx.proc_status(p, a), Ok(2));
     }
     assert_eq!(mortal(ctx.heap()), 0);
 }

@@ -398,46 +398,6 @@ pub(crate) fn host_env_var(host: &HostRef, name: &str) -> (r: Result<String, Fau
     }
 }
 
-/// Host に子のプロセスを起動させ、終了コードを返す。`args` は、引数の数と各引数を、それぞれ NUL で終えて並べた列
-/// である。OS の引数は NUL を含めないので、NUL を含む引数があれば数が合わなくなり、起動の誤りにする。止める語が
-/// 起動の前に立っていれば起動せず、子を待つ間に立てば子が終わった後で、止めたことにする
-/// (docs/spec/object-model.md の「実行の制御」)。
-#[verifier::external_body]
-pub(crate) fn host_run(host: &HostRef, control: &Control, program: &str, args: &str) -> (r: Result<
-    i64,
-    Fault,
->)
-    ensures
-        !(r matches Err(Fault::Heap(_))),
-{
-    let stopped = ||
-        {
-            let bits = control.stop_bits();
-            if bits != 0 {
-                Err(Fault::Stopped(stop_reason(bits)))
-            } else {
-                Ok(())
-            }
-        };
-    stopped()?;
-    host.host.flush().map_err(|e| Fault::Output(e.to_string().into_boxed_str()))?;
-    let run = ||
-        {
-            let mut fields = args.split_terminator('\0');
-            let count = fields.next().and_then(|n| n.parse::<usize>().ok());
-            let args: Vec<&str> = fields.collect();
-            if count != Some(args.len()) {
-                return Err(io::Error::from(io::ErrorKind::InvalidInput));
-            }
-            host.host.run(program, &args)
-        };
-    let code = run().map_err(
-        |e| Fault::Io { op: IoOp::Run, name: program.into(), reason: io_reason(&e) },
-    )?;
-    stopped()?;
-    Ok(code as i64)
-}
-
 /// `Proc.spawn` で起動した子。`Foreign` の物体の中身にする。子のプロセスと、その標準入力への書き口と、標準出力の
 /// 読み手を持つ。破棄処理は pipe を閉じてから子を kill して待つ (docs/spec/object-model.md の「子のプロセス」)。
 #[verifier::external_body]
@@ -1042,11 +1002,6 @@ pub trait Host: Send + Sync {
     fn open_write(&self, _path: &str, _mode: WriteMode) -> io::Result<Box<dyn Write + Send>> {
         Err(io::Error::from(io::ErrorKind::Unsupported))
     }
-    /// `PATH` から `program` を探して子のプロセスを起動し、終わるのを待って終了コードを返す (`exit_code`)。子と eml の
-    /// 出力が順に並ぶよう、起動の前に標準出力を書き出す。
-    fn run(&self, _program: &str, _args: &[&str]) -> io::Result<i32> {
-        Err(io::Error::from(io::ErrorKind::Unsupported))
-    }
     /// 子のプロセスを起動し、pipe にした標準入力の書き口と標準出力の読み手を返す。子と eml の出力が順に並ぶよう、起動の
     /// 前に標準出力を書き出す。
     fn spawn(&self, _spawn: &Spawn<'_>) -> io::Result<Spawned> {
@@ -1394,17 +1349,6 @@ impl Host for StdHost {
         Ok(Box::new(options.open(self.file_root.join(path))?))
     }
 
-    fn run(&self, program: &str, args: &[&str]) -> io::Result<i32> {
-        lock(&self.out).flush()?;
-        let mut command = Command::new(program);
-        command.args(args);
-        // 空の根はプロセスの今のディレクトリである。`current_dir("")` は開けない
-        if !self.file_root.as_os_str().is_empty() {
-            command.current_dir(&self.file_root);
-        }
-        Ok(exit_code(command.status()?))
-    }
-
     fn spawn(&self, spawn: &Spawn<'_>) -> io::Result<Spawned> {
         lock(&self.out).flush()?;
         let dir = spawn.dir(&self.file_root);
@@ -1466,7 +1410,7 @@ impl Host for StdHost {
     }
 }
 
-/// I/O の誤りの理由 (`read_text`、`open_write`、`FileOut` の書き込み、`run` の失敗を `Fault` の理由に
+/// I/O の誤りの理由 (`read_text`、`open_write`、`FileOut` の書き込み、`spawn` の失敗を `Fault` の理由に
 /// する)。止める語が立った後の `Interrupted` は `fill` と `read_all` が止めたことにし、立っていない `Interrupted` は
 /// 読み直す。読み以外の `Interrupted` は止める語と関係なく、ここで `Other` になる。
 fn io_reason(e: &io::Error) -> IoReason {

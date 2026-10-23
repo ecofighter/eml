@@ -274,76 +274,6 @@ fn a_failed_stdin_read_leaves_the_reader_in_the_slot<M: Mode>() {
     assert_eq!(mortal(ctx.heap()), 0);
 }
 
-/// 引数は、数と各引数を NUL で終えた列で受け、空の引数も1つと数える。数が合わない列 (NUL を含む引数) は起動の誤りに
-/// する。
-fn a_process_gets_its_arguments_split_at_nul<M: Mode>() {
-    let memory = Arc::new(MemoryHost::default());
-    let mut ctx = ctx_with::<M>(&memory);
-    unsafe {
-        for (args, code) in [("0\0", 0), ("3\0-a\0\0x y\0", 3)] {
-            let p = s(&mut ctx, "rsync");
-            let a = s(&mut ctx, args);
-            assert_eq!(ctx.proc_status(p, a), Ok(code));
-        }
-        let p = s(&mut ctx, "rsync");
-        let a = s(&mut ctx, "1\0a\0b\0");
-        assert_eq!(
-            ctx.proc_status(p, a),
-            Err(Fault::Io {
-                op: IoOp::Run,
-                name: "rsync".into(),
-                reason: IoReason::Other
-            })
-        );
-        let p = s(&mut ctx, "missing");
-        let a = s(&mut ctx, "0\0");
-        assert_eq!(
-            ctx.proc_status(p, a),
-            Err(Fault::Io {
-                op: IoOp::Run,
-                name: "missing".into(),
-                reason: IoReason::NotFound
-            })
-        );
-    }
-    assert_eq!(
-        memory.runs(),
-        [
-            ("rsync".to_string(), vec![]),
-            (
-                "rsync".to_string(),
-                vec!["-a".to_string(), String::new(), "x y".to_string()]
-            ),
-        ]
-    );
-    assert_eq!(mortal(ctx.heap()), 0);
-}
-
-/// 止める語が起動の前に立っていれば起動せず、子を待つ間に立てば子が終わった後で、止めたことにする。
-fn a_process_stops_on_an_interrupt<M: Mode>() {
-    let control = Arc::new(Control::new(Limits::default()));
-    let memory = Arc::new(MemoryHost::default().interrupting(control.clone()));
-    let mut ctx = Ctx::<M>::new(control.clone(), super::host::host(&memory));
-    unsafe {
-        // メモリの Host の `run` は、子が動く間に届いた割り込みとして止める語を立てる
-        let p = s(&mut ctx, "sleep");
-        let a = s(&mut ctx, "1\u{0}1\u{0}");
-        assert_eq!(
-            ctx.proc_status(p, a),
-            Err(Fault::Stopped(Stop::Interrupted))
-        );
-        assert_eq!(memory.runs().len(), 1);
-        let p = s(&mut ctx, "sleep");
-        let a = s(&mut ctx, "1\u{0}1\u{0}");
-        assert_eq!(
-            ctx.proc_status(p, a),
-            Err(Fault::Stopped(Stop::Interrupted))
-        );
-    }
-    assert_eq!(memory.runs().len(), 1);
-    assert_eq!(mortal(ctx.heap()), 0);
-}
-
 /// 子の起動は、列を要素に分けて Host に渡す。空の要素も1つと数え、環境はキーと値の組にし、空の作業ディレクトリは
 /// 設定しない。読めない列、NUL を含む要素、組にならない環境、範囲の外の向きは、何も起動せずに起動の誤りにする。
 /// どの道でも4つの文字列を手放す。
@@ -689,8 +619,6 @@ both_modes!(
     the_output_is_flushed_before_the_standard_input_is_read,
     a_line_read_refills_once_per_64_kib,
     a_failed_stdin_read_leaves_the_reader_in_the_slot,
-    a_process_gets_its_arguments_split_at_nul,
-    a_process_stops_on_an_interrupt,
     a_child_gets_its_lists_split,
     a_child_stops_on_an_interrupt,
     a_child_handle_reads_writes_and_refuses,

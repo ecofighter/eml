@@ -5,7 +5,7 @@
 use super::proof::*;
 use super::*;
 use crate::externs::{FALSE, Fault, TRUE};
-use crate::host::{host_arg, host_arg_count, host_env_has, host_env_var, host_run};
+use crate::host::{host_arg, host_arg_count, host_env_has, host_env_var};
 
 verus! {
 
@@ -247,79 +247,6 @@ impl<M: Mode> Ctx<M> {
                 Err(e)
             },
         }
-    }
-
-    /// `Proc.status`。プログラム `program` を引数の列 `args` (引数の数と各引数を、それぞれ NUL で終えて並べたもの) で
-    /// 起動し、終了コードを返す。読み終えたら `program`、`args` の順に手放す。子を待つ間に止める語が立てば、子が終わった
-    /// 後で `Stopped` を返す。
-    ///
-    /// # Safety
-    /// `string_eq` と同じ (`a` が `program`、`b` が `args`)。
-    pub unsafe fn proc_status(&mut self, program: Word, args: Word) -> (r: Result<i64, Fault>)
-        requires
-            old(self).wf(),
-            old(self).heap_spec().word_in(program),
-            old(self).heap_spec().word_in(args),
-            !M::CHECKED ==> old(self).holds_strings(program, args),
-        ensures
-            final(self).wf(),
-            final(self).evv_spec() == old(self).evv_spec(),
-            final(self).yield_spec() == old(self).yield_spec(),
-            (r matches Err(Fault::Heap(_))) ==> final(self).heap_spec().settled_heap() == old(
-                self,
-            ).heap_spec().settled_heap(),
-            !M::CHECKED ==> !(r matches Err(Fault::Heap(_))),
-            old(self).held_ok() && old(self).holds_strings(program, args) ==> !(r matches Err(
-                Fault::Heap(_),
-            )) || (r matches Err(Fault::Heap(e)) && chain_err(Err::<(), HeapError>(e))),
-            old(self).held_ok() && old(self).holds_strings(program, args) && !(r matches Err(
-                Fault::Heap(_),
-            )) ==> {
-                &&& final(self).held_ok()
-                &&& final(self).evolved_by(
-                    *old(self),
-                    |x: usize| -points(program, x) - points(args, x),
-                    Set::empty(),
-                )
-            },
-    {
-        let ghost s0 = *self;
-        let ghost c = s0.held_ok() && s0.holds_strings(program, args);
-        if M::CHECKED && !(program.is_ptr() && args.is_ptr()) {
-            return Err(Fault::Heap(HeapError::WrongKind));
-        }
-        self.heap.settle();
-        let ghost h1 = self.heap;
-        proof {
-            lemma_settled_twice(s0.heap);
-            assert(h1.words_kept(s0.heap));
-            if c {
-                s0.lemma_settled_strings(h1, program, args, Kind::String);
-            }
-        }
-        if let Err(e) = self.heap.checked_pair(program, args, Kind::String) {
-            proof {
-                self.lemma_words_kept(s0);
-            }
-            return Err(Fault::Heap(e));
-        }
-        let r = host_run(
-            &self.host,
-            &self.control,
-            self.heap.string_text(program),
-            self.heap.string_text(args),
-        );
-        let Ghost(mid) = self.heap.release_pair(program, args, Ghost(Kind::String), Ghost(c));
-        proof {
-            if M::CHECKED {
-                lemma_words_trans(self.heap, h1, s0.heap);
-                self.lemma_words_kept(s0);
-            }
-            if c {
-                self.lemma_released(s0, h1, mid, program, args);
-            }
-        }
-        r
     }
 }
 

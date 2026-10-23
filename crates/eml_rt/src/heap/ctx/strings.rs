@@ -2368,56 +2368,6 @@ impl<M: Mode> Ctx<M> {
         lemma_view_live(self.heap, hw);
         self.lemma_fresh_holds(s0, w);
     }
-
-    /// `compare` の、モデルが合っている道。`settle` の後の `h1` から `a` と `b` を手放した。
-    pub(super) proof fn lemma_released(
-        &self,
-        s0: Ctx<M>,
-        h1: Heap<M>,
-        mid: Heap<M>,
-        a: Word,
-        b: Word,
-    )
-        requires
-            s0.held_ok(),
-            s0.holds_strings(a, b),
-            h1 == s0.heap.settled_heap(),
-            h1.consistent(),
-            mid.consistent(),
-            mid.core.model@.building is None,
-            mid.evolved(h1, a, -1),
-            mid.kept_live(h1),
-            self.heap.consistent(),
-            self.heap.core.model@.building is None,
-            self.heap.evolved(mid, b, -1),
-            self.heap.kept_live(mid),
-            self.evv == s0.evv,
-            self.yielding == s0.yielding,
-            self.max_evv == s0.max_evv,
-        ensures
-            self.held_ok(),
-            self.evolved_by(s0, |x: usize| -points(a, x) - points(b, x), Set::empty()),
-    {
-        let h0 = s0.heap;
-        let z = |x: usize| 0int;
-        let da = |x: usize| -points(a, x);
-        let db = |x: usize| -points(b, x);
-        let d = |x: usize| -points(a, x) - points(b, x);
-        let none = Set::<usize>::empty();
-        let ws = seq![a, b];
-        lemma_settle_moved(h1, h0);
-        lemma_decref_moved(mid, h1, a);
-        lemma_decref_moved(self.heap, mid, b);
-        lemma_moved_chain(self.heap, mid, h1, da, db, d, none, none, none);
-        lemma_moved_chain(self.heap, h1, h0, z, d, d, none, none, none);
-        assert forall|x: usize| #[trigger] self.need(seq![], x) > 0 implies s0.need(ws, x) + d(x)
-            >= self.need(seq![], x) by {
-            lemma_points_in(seq![], x);
-            lemma_points_in(ws, x);
-        }
-        self.lemma_holds_moved(s0, ws, seq![], d, none);
-        self.lemma_evv_kept(s0, d, none);
-    }
 }
 
 } // verus!
