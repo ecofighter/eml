@@ -715,7 +715,9 @@ impl<M: Mode> Heap<M> {
                 Ok(())
             },
             Kind::String => {
-                if M::CHECKED && self.core.prefix_first_get(h) != self.worker {
+                // 読む前に持ち主を確かめるのは局所の物体だけである。共有の物体の前置きの持ち主は意味を持たない
+                // (docs/spec/object-model.md の「論理的な worker ID」)
+                if M::CHECKED && rc > 0 && self.core.prefix_first_get(h) != self.worker {
                     return Err(HeapError::Unrecoverable);
                 }
                 proof {
@@ -740,7 +742,9 @@ impl<M: Mode> Heap<M> {
                 Ok(())
             },
             Kind::Bytes => {
-                if M::CHECKED && self.core.prefix_first_get(h) != self.worker {
+                // 読む前に持ち主を確かめるのは局所の物体だけである。共有の物体の前置きの持ち主は意味を持たない
+                // (docs/spec/object-model.md の「論理的な worker ID」)
+                if M::CHECKED && rc > 0 && self.core.prefix_first_get(h) != self.worker {
                     return Err(HeapError::Unrecoverable);
                 }
                 proof {

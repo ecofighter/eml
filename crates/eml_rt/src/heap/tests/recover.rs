@@ -230,6 +230,55 @@ fn recovery_copies_shared_objects_as_local<M: Mode>() {
     assert_eq!(mortal(ctx.heap()), 0);
 }
 
+/// 別の worker が確保して共有にした文字列とバイト列を根に持つ ctx を回復し、写しを確かめて返す。共有の物体の前置きの
+/// 持ち主は意味を持たないので、今の worker と違っても写す。写しは今の worker の局所の物体である。
+fn recover_shared_text_of_another_worker<M: Mode>() -> Ctx<M> {
+    let mut ctx = ctx::<M>();
+    unsafe {
+        let heap = ctx.heap_mut();
+        let child = heap.fork_worker();
+        heap.set_worker(child);
+        let s = heap.alloc_string("shared text");
+        let b = heap.alloc_bytes(&[1, 2, 3, 255]);
+        heap.share(s, 0).unwrap();
+        heap.share(b, 0).unwrap();
+        heap.set_worker(0);
+        let holder = cons(heap, s, b);
+        ctx.root_set(0, holder).unwrap();
+        ctx.recover().unwrap();
+    }
+    let holder = root(&mut ctx, 0);
+    unsafe {
+        let heap = ctx.heap();
+        let s = heap.field(holder, 0).unwrap();
+        let b = heap.field(holder, 1).unwrap();
+        assert_eq!(&*heap.string(s).unwrap(), "shared text");
+        assert_eq!(&*heap.bytes(b).unwrap(), &[1, 2, 3, 255]);
+        for w in [s, b] {
+            assert_eq!(rc(w), 1);
+            assert_eq!(heap.is_unique(w), Ok(true));
+            if M::CHECKED {
+                assert_eq!(super::raw::prefix_first(w), heap.worker());
+            }
+        }
+    }
+    ctx
+}
+
+fn recovery_copies_shared_strings_and_bytes_of_another_worker<M: Mode>() {
+    let mut ctx = recover_shared_text_of_another_worker::<M>();
+    let holder = root(&mut ctx, 0);
+    unsafe { ctx.heap_mut().decref(holder) }.unwrap();
+    assert_eq!(mortal(ctx.heap()), 0);
+}
+
+#[test]
+fn checked_recovery_counts_shared_strings_of_another_worker_as_its_own() {
+    let ctx = recover_shared_text_of_another_worker::<Checked>();
+    assert_eq!(ctx.heap().owned_by(0), 3);
+    assert_eq!(ctx.heap().check_invariants(), Ok(()));
+}
+
 /// 共有の印がある `lin` の物体は、rc が負でも写せない。
 fn recovery_still_refuses_a_lin_object_at_a_negative_rc<M: Mode>() {
     let mut ctx = ctx::<M>();
@@ -317,6 +366,7 @@ both_modes!(
     recovery_copies_floats,
     recovery_refuses_what_it_cannot_copy,
     recovery_copies_shared_objects_as_local,
+    recovery_copies_shared_strings_and_bytes_of_another_worker,
     recovery_still_refuses_a_lin_object_at_a_negative_rc,
     recovery_needs_no_memory_in_proportion_to_the_old_heap,
 );
