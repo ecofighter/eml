@@ -918,6 +918,11 @@ impl EffectRow {
     pub fn tail(&self) -> Option<SyntaxToken> {
         support::token(&self.syntax, SyntaxKind::LIDENT)
     }
+
+    /// row 変数の前に書いた `never`。
+    pub fn bound(&self) -> Option<SyntaxToken> {
+        support::token(&self.syntax, SyntaxKind::NEVER_KW)
+    }
 }
 
 impl Effect {

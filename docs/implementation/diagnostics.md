@@ -35,6 +35,7 @@ E0xxx は `eml_syntax::codes` (E0004 だけは `eml_diagnostics`)、E1xxx は `e
 | E1054 | `NEGATIVE_BYTE_LITERAL` | 見出しは「a `Byte` literal cannot be negative」で、`-` を含むリテラル全体を指してラベルを「`Byte` holds 0 to 255」にする。式は欠けた式、パターンは欠けたパターンとして下ろす |
 | E1055 | `SPREAD_NOT_AN_ARGUMENT` | 見出しは「a `\{..}` hole must be a whole argument after the program」で、穴 `\{..xs}` の全体を指す。ラベルは、プログラムの位置なら「the first word is the program」、穴1つと引用でできた引数 (`'\{..xs}'`、`''\{..xs}`) なら「a quoted hole is not spread」、ほかの位置なら「not a whole argument on its own」にする。穴ごとに1件出し、リテラルは欠けた式として下ろす |
 | E1056 | `COMMAND_WITHOUT_PROGRAM` | 見出しは「a command literal needs a program」で、リテラル全体を指してラベルを「no program to run」にする。リテラルは欠けた式として下ろす |
+| E1057 | `ROW_BOUND_NOT_DECLARED` | 見出しは「`never` cannot bound `e` here」(`e` は変数の名前) で、`never` のキーワードを指す。副ラベルは付けない。ラベルと help は場面で変える。本体の型の明示では、ラベルを「the signature does not bound `e` with `never`」、help を「write `never e` in the signature, or remove `never` here」にする。`data` のフィールドでは、ラベルを「a row parameter of `data` has no bound」、help を「remove `never`」にする。操作のシグネチャでは、ラベルを「the row variables of an operation cannot be bounded」、help を「remove `never`」にする。上限は捨てて、row 変数は上限のないまま扱う |
 | E1022 | `FIXITY_WITHOUT_DEFINITION` | このモジュールで定義していない演算子への fixity の宣言。標準ライブラリの演算子の fixity を変えようとした場合を含む。REPL では、この入力で定義していない演算子への宣言で、文言も「この入力」と言う。宣言の演算子を指す |
 | E1023 | `INVALID_SECTION` | 優先順位の合わないセクション (`(* a + b)` や `(+ a + b)`)。セクション全体を指し、被演算子を括弧で囲むよう help で伝える |
 | E1024 | `USE_AT_END_OF_BLOCK` | ブロックの最後の文が `use` である (包む残りがない)。`use` の文を指す |

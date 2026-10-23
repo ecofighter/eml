@@ -453,3 +453,72 @@ fn rows_can_be_type_arguments() {
         assert!(shape(text).contains("ROW_ARG"), "{text}");
     }
 }
+
+#[test]
+fn a_row_variable_can_be_bounded_by_never() {
+    insta::assert_snapshot!(shape("h : Unit -> <never e> Unit"), @r#"
+    SOURCE_FILE
+      SIGNATURE
+        NAME
+          LIDENT "h"
+        COLON ":"
+        FN_TYPE
+          PATH_TYPE
+            PATH
+              NAME_REF
+                UIDENT "Unit"
+          THIN_ARROW "->"
+          EFFECT_ROW
+            L_ANGLE "<"
+            NEVER_KW "never"
+            LIDENT "e"
+            R_ANGLE ">"
+          PATH_TYPE
+            PATH
+              NAME_REF
+                UIDENT "Unit"
+    "#);
+}
+
+#[test]
+fn bounded_row_variables_in_every_row_position() {
+    for text in [
+        "x : Iter <never e> a",
+        "f : a -> <Panic | never e> b",
+        "f : a -> <IO, Panic | never e> b",
+        "f : (Unit -> <never e> a) -> <e> a",
+    ] {
+        assert_eq!(diagnostics(text), Vec::<String>::new(), "{text}");
+    }
+}
+
+#[test]
+fn only_never_can_bound_a_row_variable() {
+    for text in ["f : Unit -> <once e> Unit", "f : Unit -> <multi e> Unit"] {
+        assert_eq!(
+            diagnostics(text),
+            ["E0011 1:14 only `never` can bound a row variable"],
+            "{text}"
+        );
+    }
+}
+
+#[test]
+fn never_must_be_followed_by_a_row_variable() {
+    assert_eq!(
+        diagnostics("f : Unit -> <never Panic | e> Unit"),
+        ["E0011 1:20 expected a row variable"]
+    );
+    assert_eq!(
+        diagnostics("f : Unit -> <never> Unit"),
+        ["E0011 1:19 expected a row variable"]
+    );
+}
+
+#[test]
+fn a_row_parameter_cannot_be_bounded() {
+    assert_eq!(
+        diagnostics("data T <never e> =\n  | T (Unit -> <e> Int)"),
+        ["E0011 1:9 a row parameter of `data` cannot have a bound"]
+    );
+}

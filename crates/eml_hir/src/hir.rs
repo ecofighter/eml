@@ -381,6 +381,8 @@ pub struct TypeVarDecl {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RowVarDecl {
     pub name: String,
+    /// そのシグネチャでこの変数に最初に書いた `never` (docs/spec/types.md の「row 変数の多重度の上限」)。
+    pub never: Option<TextRange>,
 }
 
 #[derive(Debug, Clone)]

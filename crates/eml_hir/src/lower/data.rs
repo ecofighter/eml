@@ -28,7 +28,7 @@ impl ItemLowering<'_> {
                         generics.type_vars.alloc(TypeVarDecl { name });
                     }
                     ParamSort::Row => {
-                        generics.row_vars.alloc(RowVarDecl { name });
+                        generics.row_vars.alloc(RowVarDecl { name, never: None });
                     }
                 }
             }

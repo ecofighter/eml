@@ -143,14 +143,19 @@ fn effect_row(p: &mut Parser) {
     let m = p.start();
     eat_angle(p, '<', L_ANGLE);
     if !at_angle(p, '>') {
+        let bounded = row_bound(p);
         if p.at(LIDENT) {
             p.bump(LIDENT);
         } else {
+            if bounded {
+                expected(p, "a row variable");
+            }
             effect(p);
             while p.eat(COMMA) {
                 effect(p);
             }
             if p.eat(PIPE) {
+                row_bound(p);
                 expect(p, LIDENT);
             }
         }
@@ -161,10 +166,36 @@ fn effect_row(p: &mut Parser) {
     m.complete(p, EFFECT_ROW);
 }
 
+/// row 変数の前の多重度の上限を読む。書けるのは `never` だけで、ほかの多重度は読み飛ばして回復する
+/// (docs/spec/grammar.md の「文法上の補足」)。
+fn row_bound(p: &mut Parser) -> bool {
+    match p.current() {
+        NEVER_KW => p.bump_any(),
+        ONCE_KW | MULTI_KW => {
+            p.error(
+                codes::SYNTAX_ERROR,
+                "only `never` can bound a row variable",
+                format!("found {}", describe(p)),
+            );
+            p.bump_any();
+        }
+        _ => return false,
+    }
+    true
+}
+
 /// `data` の row の型引数 `<e>`。row 変数は名前1つだけで、効果や `|` は書けない。
 pub(super) fn row_param(p: &mut Parser) {
     let m = p.start();
     eat_angle(p, '<', L_ANGLE);
+    if p.at_ts(TokenSet::new(&[NEVER_KW, ONCE_KW, MULTI_KW])) {
+        p.error(
+            codes::SYNTAX_ERROR,
+            "a row parameter of `data` cannot have a bound",
+            format!("found {}", describe(p)),
+        );
+        p.bump_any();
+    }
     let mut well_formed = p.at(LIDENT);
     if well_formed {
         name(p);
