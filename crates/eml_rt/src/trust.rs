@@ -101,6 +101,7 @@ const TRUSTED: &[(&str, &str)] = &[
     ("alloc.rs: external_body too_many_words", "T5"),
     ("alloc.rs: external_body bad_page_layout", "T5"),
     ("heap/check.rs: external_body too_many_acquires", "T5"),
+    ("heap/mod.rs: external_body too_many_workers", "T5"),
     ("frozen.rs: external_body same_chunk", "T5"),
     ("frozen.rs: external_body not_a_descendant", "T5"),
     ("heap/ctx/strings.rs: external_body bytes_cmp", "T5"),

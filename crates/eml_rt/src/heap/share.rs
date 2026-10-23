@@ -15,7 +15,7 @@ use super::inv::{
 };
 #[cfg(verus_only)]
 use super::model::{BlockState, Model, Pos};
-use super::{Core, Env, Heap};
+use super::{Core, Env, Heap, count_owned, move_owned};
 use crate::cell::{rc_load, rc_store, u32_load, u32_store};
 use crate::error::HeapError;
 use crate::meta::{
@@ -1565,11 +1565,14 @@ pub(crate) proof fn lemma_same_frame_graph(
     assert(g1.children =~= g0.children);
 }
 
-/// ヒープの物体のグラフ。`share` のたどりの間、ヒープのブロックの権限を預かる。節点は生きている物体のヘッダである。
-// 欄はどれも ghost と権限で、実行の時には大きさを持たない
+/// ヒープの物体のグラフ。`share` のたどりの間、ヒープのブロックの権限と、検査モードの ID ごとの数を預かる。節点は
+/// 生きている物体のヘッダである。
+// 数のほかの欄はどれも ghost と権限で、実行の時には大きさを持たない
 #[cfg_attr(not(verus_keep_ghost), allow(dead_code))]
 pub(crate) struct Objects<M> {
     pub(crate) perms: Tracked<Map<usize, BlockPerm>>,
+    /// 検査モードの ID ごとの数 (`Heap` の `owned`)。rc の符号か、rc が正の物体の持ち主が変わると数え直す。
+    pub(crate) owned: Vec<u64>,
     /// たどりの間ヒープから預かる、付けた塊の権限の写し。塊の節点はここから読む。
     pub(crate) env: Tracked<Env>,
     /// 物体の持ち主。速いモードでも ghost の値として持ち、たどりの後でモデルに戻す。
@@ -1687,6 +1690,17 @@ impl<M: Mode> Graph for Objects<M> {
                 self.view().lemma_region_rc(h@.addr);
             }
         }
+        if M::CHECKED {
+            let tracked p = self.perms.borrow().tracked_borrow(h@.addr);
+            let before = rc_load(rc_ptr(h), Tracked(&p.rc));
+            let tracked q = p.prefix.tracked_borrow();
+            let owner = u32_load(prefix_first_ptr(h), Tracked(&q.first));
+            if before > 0 && rc <= 0 {
+                count_owned(&mut self.owned, owner, false);
+            } else if before <= 0 && rc > 0 {
+                count_owned(&mut self.owned, owner, true);
+            }
+        }
         let tracked mut p = self.perms.borrow_mut().tracked_remove(h@.addr);
         rc_store(rc_ptr(h), Tracked(&mut p.rc), rc);
         proof {
@@ -1741,6 +1755,12 @@ impl<M: Mode> Graph for Objects<M> {
             }
         }
         if M::CHECKED {
+            let tracked p = self.perms.borrow().tracked_borrow(h@.addr);
+            if rc_load(rc_ptr(h), Tracked(&p.rc)) > 0 {
+                let tracked q = p.prefix.tracked_borrow();
+                let before = u32_load(prefix_first_ptr(h), Tracked(&q.first));
+                move_owned(&mut self.owned, before, owner);
+            }
             let tracked mut p = self.perms.borrow_mut().tracked_remove(h@.addr);
             let tracked mut q = p.prefix.tracked_unwrap();
             u32_store(prefix_first_ptr(h), Tracked(&mut q.first), owner);
@@ -2401,6 +2421,8 @@ impl<M: Mode> Heap<M> {
         mem::swap(&mut stack, &mut self.share_stack);
         let mut visited = Vec::new();
         mem::swap(&mut visited, &mut self.visited_lin);
+        let mut owned = Vec::new();
+        mem::swap(&mut owned, &mut self.owned);
         let tracked mut perms = Map::<usize, BlockPerm>::tracked_empty();
         let tracked mut env = Env::new(M::CHECKED);
         proof {
@@ -2409,6 +2431,7 @@ impl<M: Mode> Heap<M> {
         }
         let mut objects = Objects::<M> {
             perms: Tracked(perms),
+            owned,
             env: Tracked(env),
             owner: Ghost(s0.model@.owner),
             base: Ghost(s0),
@@ -2435,6 +2458,7 @@ impl<M: Mode> Heap<M> {
         }
         mem::swap(&mut stack, &mut self.share_stack);
         mem::swap(&mut visited, &mut self.visited_lin);
+        mem::swap(&mut objects.owned, &mut self.owned);
         match result {
             Ok(()) => Ok(()),
             Err(ShareError::Dead) => Err(HeapError::UseAfterFree),

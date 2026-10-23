@@ -321,6 +321,33 @@ both_modes!(
     recovery_needs_no_memory_in_proportion_to_the_old_heap,
 );
 
+/// 写した先のヒープは空の数の表で始まり、写しを確保の道で数える。共有の物体の写しも局所の物体として数える。
+#[test]
+fn checked_recovery_counts_its_copies() {
+    let mut ctx = ctx::<Checked>();
+    unsafe {
+        let heap = ctx.heap_mut();
+        let x = cons(heap, Word::imm(7), Word::imm(8));
+        heap.share(x, 1).unwrap();
+        heap.dup(x).unwrap();
+        let both = cons(heap, x, x);
+        let y = list(heap, 2);
+        heap.share(y, 1).unwrap();
+        let holder = cons(heap, both, y);
+        let _garbage = list(heap, 10);
+        ctx.root_set(0, holder).unwrap();
+        assert_eq!(ctx.heap().owned_by(0), 12);
+        ctx.recover().unwrap();
+    }
+    // holder、both、x の写し、y の2つのセル
+    assert_eq!(ctx.heap().owned_by(0), 5);
+    assert_eq!(ctx.heap().check_invariants(), Ok(()));
+    let holder = root(&mut ctx, 0);
+    unsafe { ctx.heap_mut().decref(holder) }.unwrap();
+    assert_eq!(ctx.heap().owned_by(0), 0);
+    assert_eq!(ctx.heap().check_invariants(), Ok(()));
+}
+
 /// 検査モードでは、空けた物体と token の箱に届く根も断る。速いモードでは、根が生きていない物体を指すこと自体が
 /// 前提に反する。
 #[test]

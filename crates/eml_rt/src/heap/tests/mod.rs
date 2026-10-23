@@ -36,6 +36,7 @@ mod share;
 mod string;
 mod table;
 mod trusted;
+mod workers;
 
 /// 解放の連鎖と `share` が再帰しないことを確かめる長さ。
 pub(super) const LONG: usize = 100_000;
