@@ -610,7 +610,7 @@ T-6 で、各項目を「後に回した理由: …。」と「見直す条件: 
 ### T-5: `Host::run` の削除
 
 - 目的: 使われなくなった `run` の系統を消す。依存の鎖のため、T-4 の後でなければ通らない。
-- 対象: `crates/eml_rt/src/host.rs`、`heap/ctx/script.rs`、`trust.rs`、`heap/tests/host.rs`、`crates/eml_vm/src/hosts.rs`、`expected.txt`、docs/spec/object-model.md
+- 対象: `crates/eml_rt/src/host.rs`、`heap/ctx/script.rs`、`trust.rs`、`heap/tests/host.rs`、`heap/tests/script.rs`、`heap/tests/trusted.rs`、`crates/eml_vm/src/hosts.rs`、docs/spec/object-model.md
 - 作業
   - 次のものを消す。
     - `Host::run`、`StdHost::run`
@@ -619,7 +619,7 @@ T-6 で、各項目を「後に回した理由: …。」と「見直す条件: 
     - `CaptureHost::run`
     - `heap/tests/host.rs` の `run` の impl (248 行のあたり)
     - `trust.rs` の `host_run` の行
-    - `expected.txt` の `proc_status` の行
+    - `proc_status` を呼ぶテスト (`heap/tests/script.rs` と `heap/tests/trusted.rs`)。`expected.txt` には `Proc` の行がないので、変えない
     - object-model.md の `run` の記述
   - `eml_rt` の門を、もう1度通す。
 - 実装者に任せること: なし
@@ -628,7 +628,7 @@ T-6 で、各項目を「後に回した理由: …。」と「見直す条件: 
   - `cargo nextest run` → すべて通る
   - `cargo verus verify -p eml_rt`、`verusfmt` の確かめ、Miri の2つの設定 (T-3 のコマンド) → 通る
   - `git grep -n 'Proc.run "\|Host::run\|host_run\|proc_status\|ProcStatus' -- tests std docs crates ':!docs/plans' ':!docs/reports'` → 何も出さない
-- テストの変更の種類: 種類2 は `expected.txt` の行の削除。ほかは出力の変わらない削除 (種類3)。
+- テストの変更の種類: 種類1 は、`proc_status` を呼ぶテストの削除 (`heap/tests/script.rs` と `heap/tests/trusted.rs` の、消す関数だけを確かめるテスト。消すテストの名前はコミットのメッセージに書く)。ほかは出力の変わらない削除 (種類3)。
 
 ### T-6: 段を閉じる
 
