@@ -405,6 +405,17 @@ fn an_extern_effect_is_performed_at_most_once() {
 }
 
 #[test]
+fn panic_is_never() {
+    // `Panic` の操作は `never` だけで、起こすと呼び出し元へ戻らない (docs/spec/types.md の「Kind」)
+    let context = test_context();
+    let table = Table::new(&context);
+    assert_eq!(
+        table.effect_multiplicity(table.context.externs.panic),
+        Multiplicity::Never
+    );
+}
+
+#[test]
 fn a_repeated_io_label_resolves_to_one() {
     let context = test_context();
     let mut table = Table::new(&context);

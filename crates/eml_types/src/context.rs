@@ -1,6 +1,7 @@
 //! プログラム全体で1回だけ求める、型検査の前提。関数ごとの推論の表はこれを借りるだけにして、表を作る費用を関数の
 //! 大きさに比例させる (docs/implementation/architecture.md の「`eml_types` の内部」)。
 
+use eml_extern::EffectMultiplicity;
 use std::collections::HashSet;
 
 use eml_hir::{
@@ -40,10 +41,16 @@ impl Context {
         let effect_multiplicities = program
             .effects()
             .map(|(id, effect)| {
-                // `IO` の操作は `never` の `io_failed` だけなので、操作から求めると `Never` になってしまう。extern の関数は
-                // その場で1回だけ戻るので `Once` である (docs/spec/types.md の「Kind」)
+                // `IO` の操作は `never` の `io_failed` だけなので、操作から求めると `Never` になってしまう。
+                // extern のエフェクトの多重度は表の行が決める (docs/spec/types.md の「Kind」)
                 let multiplicity = match effect.kind {
-                    EffectKind::Extern(_) => Multiplicity::Once,
+                    EffectKind::Extern(extern_effect) => {
+                        match extern_effect.map(|e| e.row().multiplicity) {
+                            Some(EffectMultiplicity::Never) => Multiplicity::Never,
+                            // `None` は知らない extern で、HIR がすでに誤りを出している
+                            Some(EffectMultiplicity::Once) | None => Multiplicity::Once,
+                        }
+                    }
                     // `var` のエフェクトは操作を持たないが、変数の操作はどれもすぐに再開する。`Never` にすると、
                     // yield しないラベルとして扱われてしまう (docs/spec/expressions.md の「`var`」)
                     EffectKind::Var { .. } => Multiplicity::Once,
