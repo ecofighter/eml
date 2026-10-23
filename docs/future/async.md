@@ -20,7 +20,7 @@ std の `Async` (タスク、スコープ、取り消し、時間) と、I/O の
 | 2 | 入口 | `Async.run : (Unit -> <IO, Panic, Async> a) -> <IO, Panic> a` が根のスコープで、`main` では `use Async.run` と書く。VM では呼んだ側を待たせる組み込みの上に作る |
 | 3 | スコープ | nursery の形にする。子が失敗したら、その時点でスコープのほかのタスクをすべて取り消す。`Task a` は `Lin` で、捨てると取り消しになる |
 | 4 | 分離 | 接続ごとの分離は、タスクの中で `Async.try_all` を使って行う。失敗は `Failure` の `IOFailed` か `Panicked` で受ける |
-| 5 | 取り消し | 取り消しは `Wake.Cancelled` で届け、std の包みが IO の失敗 `Cancelled` として投げる。タスクは自分のフレームとスコープの後始末を通って巻き戻る。継続を捨てる強い取り消しは `exit`、致命的な誤り、run の終わり、回復のときだけにする。柔らかい確かめの名前は `check_cancelled` と `cancel_requested` である |
+| 5 | 取り消し | 取り消しは `Wake.Cancelled` で届け、std の包みが IO の失敗 `Prelude.Cancelled` として投げる。タスクは自分のフレームとスコープの後始末を通って巻き戻る。継続を捨てる強い取り消しは `exit`、致命的な誤り、run の終わり、回復のときだけにする。柔らかい確かめの名前は `check_cancelled` と `cancel_requested` である |
 | 6 | `exit` | `exit` は自分のタスクだけを巻き戻し、`Control` の終わりの欄に終了コードを書いて終わりのビットを立てる。ほかのタスクは巻き戻さず、ヒープを落とすときに `Lin` の資源を後始末する |
 | 7 | タスクごとの上限 | タスクの中で深さ、スタック、メモリの柔らかい上限を超えると、そのタスクの IO の失敗 `ResourceLimit` になる。メモリの硬い上限は今と同じく run 全体を止める |
 | 8 | 失敗の種類 | `IOErrorKind` に `Cancelled`、`TimedOut`、`ConnectionReset`、`AddrInUse`、`ResourceLimit` を足す |
@@ -79,7 +79,7 @@ pub yield_now    : Unit -> <IO, Async> Unit
 ```
 
 - タスクの row は `<IO, Panic, Async>` に閉じる。`main` の row に `Async` を足したものである。閉じた row から `Panic` を除くと、タスクは `Int` の足し算も書けない。利用者のエフェクトはタスクのクロージャの中で handle し終える。`Heap h` は閉じた row で除かれる。親の `var` を捕まえたクロージャは型の誤りで ([型と Kind](../spec/types.md) の「範囲の外へ出る閉包」)、タスクの本体の中の `var` は使える
-- ランタイムはタスクごとにタスクのセルを持つ。タスクのセルは状態 (実行待ち、待ち、終わり)、結果 (値、失敗、取り消しのどれか)、取り消しのビット、属するスコープ、今の持ち主の worker を持つ。スコープごとのスコープのセルは属するタスク、入れ子のスコープ、生きているタスクの数、取り消しの旗 (スコープの失敗か `cancel_scope` で立つ)、最初の失敗、閉じたかどうかを持つ
+- ランタイムはタスクごとにタスクのセルを持つ。タスクのセルは状態 (動いている、待ち、実行待ち、取り消し中、終わり)、結果 (値、失敗、取り消しのどれか)、取り消しのビット、属するスコープ、今の持ち主の worker を持つ。スコープごとのスコープのセルは属するタスク、入れ子のスコープ、生きているタスクの数、取り消しの旗 (スコープの失敗か `cancel_scope` で立つ)、最初の失敗、閉じたかどうかを持つ
 - `spawn` と `start` は動的にいちばん内側のスコープに子を加える。`spawn_in` と `start_in` は名前を付けた開いているスコープに加える。`Scope` は開いたスコープの `Unr` のハンドルである。閉じたスコープに `spawn_in` か `start_in` をすると `Panic` になる。閉じたスコープへの `cancel_scope` は何もせず、`drain_within` はすぐに戻る
 - `scope f` は今のスコープの子のスコープのセルを開き、それを今のスコープにして、今のタスクの中で `f s` を動かす。その後、生きているタスクの数が 0 になるまで待つ。本体を動かすタスクはそのスコープの中にいる間だけスコープの取り消しを受ける (下の「取り消し」)。タスクは自分のスコープより長く生きない。`run` は根のスコープである
 - `Task a` は `a` によらず `Lin` である。`await` はハンドルを消費し、タスクの失敗を投げ直す。`cancel` と `drop` は取り消しの要求をタスクのセルの持ち主の worker へ送り、ハンドルを放す。取り消したタスクは `Cancelled` で終わるが、スコープの失敗にはならない。終わったタスクのハンドルなら、残っている結果を記述子で落とす。`Task a` はほかの `Lin` の値と同じく `Chan` で送れる
@@ -125,6 +125,7 @@ pub try_all : (Unit -> <IO, Panic | e> a) -> <IO | e> Result Failure a   -- try_
 - `await` は IO の失敗を `fail_io kind message` で、`Panic` を `panic message` で投げ直す。`try_panic` はメッセージだけを見るので ([標準ライブラリ](../spec/stdlib.md) の「`try_panic`」)、これで元の失敗と区別できない
 - `fail_io` は Prelude の新しい表の行 `fail_io : IOErrorKind -> String -> <IO> a` で、std の中で使う (引数は `Repr::Enum`、戻らない)。VM では新しい `Fault::Raised { kind, message }` にし、今の `Fault::Io` と同じく `io_failed` の節の入口へ回す ([VM](../spec/vm.md) の「`IO` と `Panic` への中断」)。種類は `IoReason` から写さず、そのまま渡す。`Proc.exited` もこの行を使う形にする
 - `IOErrorKind` に `Cancelled`、`TimedOut`、`ConnectionReset`、`AddrInUse`、`ResourceLimit` を足す。EPIPE は `ConnectionReset` にする。どれにも当たらない誤りは今と同じく `Other` である
+- `IOErrorKind` の `Cancelled` は `Wake` の `Cancelled` と名前が重なる。修飾しない名前は自分のモジュールと import を Prelude より先に引くので ([モジュールと名前解決](../spec/modules.md) の「名前の解決」)、`Std.Async` の中と `Wake(..)` を import したモジュールでは、種類のほうを `Prelude.Cancelled` と書く
 - Prelude に `pub data Either a b = | Left a | Right b` を足す。Kind は `a` と `b` から普通の規則で決まり、`Either FileIn Int` は `Lin` である
 
 ```haskell
@@ -163,7 +164,7 @@ probe_all hosts =
 
 - 取り消しは2つの所から来る。1つはタスクのセルの取り消しのビットで、ハンドルの `cancel` か `drop` と、属するスコープの取り消しが立てる。ビットは一度立てたら下ろさない。もう1つはスコープの取り消しの旗で、スコープの失敗と `cancel_scope` が立てる。`scope` の本体を動かすタスクはそのスコープの中にいる間だけ、取り消しの地点でこの旗を読む (タスクの今のスコープを通した atomic の読み1つ)。`scope` が戻るか失敗を投げ直した後は、外のタスクは取り消されたままにならない
 - 届け方: ランタイムは取り消したタスクの継続 `k` に `Wake.Cancelled` (I/O の待ちでは預かった token との組) を渡して、タスクを再開する。I/O の待ちでは、完了が届いてから再開する (下の「待ちを外す」)。届く所は2つで、どちらもセルの持ち主の worker の上である。待ちのタスクなら、持ち主の worker が取り消しを処理するときに下の手順で待ちを外し、`Cancelled` を付けて実行待ちに積む。取り消しの地点に来たタスクなら、待ちに入る前にビットと今いるスコープの旗を読み、どちらかが立っていれば待たずに `Cancelled` で戻す。再開は普通の起こしと同じ入口を通り、止めるビットもランタイムによる巻き戻しも使わない
-- std の包みは `Cancelled` を受けると、`fail_io` で種類 `Cancelled` (メッセージ `task was cancelled`) の IO の失敗を投げる。失敗はタスクのフレームを巻き戻して `Lin` の値を放し、途中のタスク自身の `try_io` と `try_all` の本体と、スコープの終わりの手順を走らせて、タスクの底まで届く。底はタスクのセルにだけ `Cancelled` を記録し、待つ側とスコープを起こす。スコープの旗も最初の失敗も変えないので、子を1つ取り消してもスコープは失敗しない
+- std の包みは `Cancelled` を受けると、`fail_io` で種類 `Prelude.Cancelled` (メッセージ `task was cancelled`) の IO の失敗を投げる。失敗はタスクのフレームを巻き戻して `Lin` の値を放し、途中のタスク自身の `try_io` と `try_all` の本体と、スコープの終わりの手順を走らせて、タスクの底まで届く。底はタスクのセルにだけ `Cancelled` を記録し、待つ側とスコープを起こす。スコープの旗も最初の失敗も変えないので、子を1つ取り消してもスコープは失敗しない
 - 取り消しは続く。一度届いた後は、`shield` の中を除いて、そのタスクのどの取り消しの地点でも投げ直す。スコープの旗から来た取り消しは、そのスコープの中にいる間だけ続く
 - 待たない後始末 (数を減らす、`Chan.close`、`try_send`、`eprintln`、ハンドルを閉じる) は、`try_all` の handler の中でそのまま走る。待つ必要のある後始末 (満ちた channel で登録の actor に知らせる、別れの書き込み) は `Async.shield` で包む。`shield` の中の取り消しの地点は取り消しのビットも旗も見ない。`shield` は利用者が終わりを約束する範囲で、スコープはそれを待つ
 - `finally` も、利用者が定義する破棄処理も置かない。破棄処理は eml のコードを動かさない ([線形性](../spec/linearity.md) の「破棄処理」)。`Lin` の規則と `try_all` と `shield` で、サーバの後始末 (接続の数を減らす、channel を閉じる、登録の更新) は書ける
@@ -289,7 +290,7 @@ read_chunk buf s =
     | Woke -> (buf, s)
     | Cancelled ->
       drop s                                    -- ハンドルの破棄処理が閉じる
-      fail_io Cancelled "task was cancelled"    -- 戻らない呼び出し
+      fail_io Prelude.Cancelled "task was cancelled"   -- 戻らない呼び出し
 ```
 
 ### 所有ごと渡す buffer
@@ -329,7 +330,7 @@ read_chunk buf s =
 - プールは入力の中身を読み、移した `Mut*Array` の中身を書き、スカラー、ハンドル、移した語、Rust のデータを返す。eml の物体は、取り出しが持ち主の worker の上で作る
 - 完了は持ち主の worker の受け箱の mutex を通して届く。これがプールの書き込みと持ち主の読みの順を決める
 - DNS の名前の解決 (`getaddrinfo`) も、`connect` の中で同じ3段のプールの仕事にする
-- 戻りの `Mut*Array` と `Lin` の物体は、取り出しが移し替えで受ける ([マルチコア対応の設計](multicore.md) の「移し戻し」)
+- 戻りの `Mut*Array` と `Lin` の物体は、取り出しが移し戻しで受ける ([マルチコア対応の設計](multicore.md) の「移し戻し」)
 - 場合ごとの扱いは次のとおりである
 
 | 場合 | 語を持つもの | 扱い |
@@ -456,7 +457,7 @@ pub compute : (Unit -> <never e> a) -> <IO, Async | e> a
 - broadcast と watch の channel: 既定は作らない
 - `Counter` のほかの `Atomic`: 既定は作らない
 - タスクの中の入れ子の `Async.run`: 既定は許し、呼んだタスクを待たせる
-- タスクを置く worker を選ぶ API (`spawn_here` など): 既定は作らない。スレッドに縛られた仕事は `Main.run` で書く ([FFI と拡張の設計](ffi.md) の「GUI」)
+- タスクを置く worker を選ぶ API (`spawn_here` など): 既定は作らない。スレッドに縛られた仕事は `Gui.run_on_main` で書く ([FFI と拡張の設計](ffi.md) の「GUI」)
 - channel のキュー: 既定は mutex で、ロックフリーには後でランタイムの中だけで替える
 - `Time` のモジュール: 上の「時間」にある
 - UDP、`SO_REUSEPORT`、TLS のプラグイン、`Http`、非同期の名前の解決: 上の「ネットワークとシグナル」の「後で足すもの」にある

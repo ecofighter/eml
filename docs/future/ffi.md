@@ -39,7 +39,7 @@ link on windows "mkl_rt"
 pub extern "C" pure symbol "cblas_dgemm" dgemm
   : Int as int -> Int as int -> Int as int -> Int as int -> Int as int -> Int as int
     -> Float -> FloatArray -> Int as int -> FloatArray -> Int as int
-    -> Float -> MutFloatArray -> Int as int -> (Unit, MutFloatArray)
+    -> Float -> MutFloatArray -> Int as int -> <Panic> (Unit, MutFloatArray)
 
 pub extern "C" data Solver drop "solver_free"
 
@@ -84,7 +84,7 @@ matmul n a b =
   - 仕事の記録が渡した語を数えた参照で持つ。`Unr` の引数には印を付けない。`Mut*Array` の引数は記録へ移す。記録は run の登録表に載り、仕事が終わるまで run が生かしておく。プールの側は記録を通してだけ語に届く
   - プールは入力の中身を読み、移した `Mut*Array` の中身を書き、スカラー、ハンドル、移した語、Rust のデータを返す。eml の物体は、取り出しが持ち主の worker の上で作る
   - 完了は持ち主の worker の受け箱の mutex を通して届く。これが、プールの書き込みと持ち主の読みの順を決める
-  - 戻りの `Mut*Array` と `Lin` の物体は、取り出しが移し替えで受ける ([マルチコア対応の設計](multicore.md) の「移し戻し」)
+  - 戻りの `Mut*Array` と `Lin` の物体は、取り出しが移し戻しで受ける ([マルチコア対応の設計](multicore.md) の「移し戻し」)
 - 場合ごとの扱いは [非同期の設計](async.md) の「I/O の driver」の表にある
 - std の今の同期の行 (`FileIn`、`Stdin`、`Proc` など) には `blocking` を付けない。非同期のファイルとパイプは I/O の driver で作る ([非同期の設計](async.md) の「ファイルとパイプ」)
 - BLAS のスレッドのプールには仕組みを足さず、助言だけを書く。eml は環境変数を設定しない。環境変数はライブラリを読み込む前に要り、`eml run` はプロセスの環境を持たないためである。複数の eml の worker を使うプログラムは、始めに同じ FFI で `openblas_set_num_threads(1)` か `mkl_set_num_threads(1)` を呼ぶ。Accelerate は GCD を使い、設定の口がないので触らない
@@ -123,7 +123,6 @@ matmul n a b =
 ```haskell
 import Async
 import Gui
-import Main
 
 counter : Gui.Window -> Int -> <IO, Panic, Async> Unit
 counter w n =
@@ -138,11 +137,11 @@ counter w n =
 main : Unit -> <IO, Panic> Unit
 main () =
   use Async.run
-  Main.run (fn () -> counter (Gui.open "counter" 400 300) 0)
+  Gui.run_on_main (fn () -> counter (Gui.open "counter" 400 300) 0)
 ```
 
 - 最初のプラグインは `crates/eml_gui` で、egui-winit と egui-wgpu を手でつなぐ (eframe は使わない。下の「却下した案」)
-- GUI はプロセスのメインスレッドで動く。メインの worker ([マルチコア対応の設計](multicore.md) の「スレッドと worker」) の上で、`Main.run : (Unit -> <IO, Panic, Async> a) -> <IO, Panic, Async> a` が関数を動かす。winit、egui、wgpu の `Send` でない状態は `SendCell<Option<GuiState>>` (`unsafe impl Send`) に入れ、どの操作も今の worker がメインの worker であることを確かめてから触れる。ハンドルの持ち主の worker を確かめるのと同じ形である
+- GUI はプロセスのメインスレッドで動く。メインの worker ([マルチコア対応の設計](multicore.md) の「スレッドと worker」) の上で、`Gui.run_on_main : (Unit -> <IO, Panic, Async> a) -> <IO, Panic, Async> a` が関数を動かす。winit、egui、wgpu の `Send` でない状態は `SendCell<Option<GuiState>>` (`unsafe impl Send`) に入れ、どの操作も今の worker がメインの worker であることを確かめてから触れる。ハンドルの持ち主の worker を確かめるのと同じ形である
 - プロセスに置くイベントループは1つである。`Gui.open` が、メインの worker の待ちをプラグインのものに替える。worker のループに動けるタスクがなくなると、待ちが winit の `run_app` の形でイベントループを回す。toolkit のコールバック (`about_to_wait`、利用者のイベント、Windows と macOS のウィンドウの大きさを変える間のループ) は、動けるタスクがなくなるまで動かして戻る関数を呼ぶ。そのため、モーダルなループの間も eml が動き続ける。起こすのは `EventLoopProxy::send_event` である。割り込みは、監視のスレッドが止めるビットを写して起こすことで、イベントループで待つ worker にも届く
 - イベントは引く形で受ける。`Gui.next_event : Window -> <IO, Async> (Event, Window)` はイベントが来るまでタスクを待たせる
 - UI の状態とクロージャは境目を越えない。プラグインはフレームごとに egui の `Ui` の積み重ねを持ち、eml は `Lin` の `Ui` のハンドルで操作する。`Gui.begin_frame : Window -> <IO> Ui` で始め、部品は `Gui.button : Ui -> String -> <IO> (Bool, Ui)` のようにハンドルを返す。入れ物は `Gui.begin_horizontal : Ui -> <IO> Ui` と `Gui.end_horizontal : Ui -> <IO> Ui` で開いて閉じ、入れ子の対応はプラグインが実行時に確かめる。対応しなければ実行時エラーである。`Gui.end_frame : Ui -> <IO> Window` が描いてウィンドウを返す。再描画は `Gui.request_redraw` で求める
@@ -166,6 +165,7 @@ main () =
 - C の構造体と可変長の引数: 既定は扱わない。ライブラリが要るときに考える
 - NUL で終わる文字列: 既定は渡さない。`const char*` を受ける C の関数を利用者の `extern "C"` で直接呼びたい用途が出たときに考える
 - 結果の C の整数の幅: LAPACKE の関数は結果を `lapack_int` (LP64 では `int`) で返すので、結果にも幅を書く形が要る。既定は引数と同じく結果の型の後に `as <C の型>` を書く形である
+- C の型に入らない `Int as <C の型>` の引数: 既定は実行時エラー (`Panic`) にする。呼ぶ前に引数の範囲を確かめ、C の行そのものは今と同じく失敗を返さない (上の「効果と中断の分類」)。そのため、`int64_t` のほかの幅を書いた引数を持つ行は row に `Panic` を持つ (上の「`extern "C"` の宣言」の `dgemm`)。代わりの案は、範囲を確かめずに切り詰め、宣言を信頼する形である
 - C のレベルの受け箱: 自分のスレッドを持つ C のライブラリから eml へ知らせる口である。既定は作らず、そういう連携は Rust のプラグインだけで行う
 - 32 ビットの要素とバイトの要素の生の配列: 既定は作らない。`float` の buffer を渡す C の API が要るときに考える
 - egui のクロージャのない入れ物: プラグインが `Ui` を自分で積み重ねる形は、egui の公開の API (`Ui::new` と `new_child`) に頼る。これが使えないときは、プラグインの中ではクロージャの形を保ち、eml の入れ物の API を `Gui.horizontal : Ui -> (Ui -> <IO> Ui) -> <IO> Ui` にして、プラグインがメインの worker の上で eml を呼び戻す。このときプラグインは呼び戻しの間にデストラクタを持たない
