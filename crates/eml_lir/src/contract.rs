@@ -74,6 +74,8 @@ fn tail_call(
         return;
     }
     let results = match call {
+        // join に親のフレームが要る (docs/spec/lir.md の「末尾の位置の呼び出し」)
+        Call::Par { .. } => return,
         Call::Direct(target, _) => Some(callee_rets[target.0 as usize].clone()),
         Call::Apply { .. } => Some(vec![(Repr::TObj, Mark::Poly)]),
         Call::Clause {

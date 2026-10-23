@@ -257,7 +257,7 @@ impl Parser<'_> {
             Some(word) => word,
             _ => return Err(self.reader.error_here("expected a right-hand side")),
         };
-        if matches!(keyword, "call" | "yields" | "apply" | "clause") {
+        if matches!(keyword, "call" | "yields" | "apply" | "clause" | "par") {
             return Ok(Rhs::Call(self.call(state)?));
         }
         self.reader.bump();
@@ -326,6 +326,21 @@ impl Parser<'_> {
                     op,
                     callee,
                     args,
+                })
+            }
+            "par" => {
+                let pair = self.reader.ctor()?;
+                self.reader.expect_punct('(')?;
+                let left = self.reader.atom(state)?;
+                self.reader.expect_punct(',')?;
+                let right = self.reader.atom(state)?;
+                self.reader.expect_punct(')')?;
+                let at = self.reader.position()?;
+                Ok(Call::Par {
+                    left,
+                    right,
+                    pair,
+                    at,
                 })
             }
             _ => Err(error(line, format!("expected a call, found `{word}`"))),

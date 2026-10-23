@@ -404,6 +404,14 @@ pub enum Call {
         callee: Atom,
         args: Vec<Atom>,
     },
+    /// `par` の fork と join。`left` と `right` の関数値に `()` を適用する子を作り、両方の値を `pair` の構築子で組にして
+    /// 返す。`mask` を持てる呼び出しで、末尾の位置の呼び出しにはならない (docs/spec/core-ir.md の「Core IR の命令」)。
+    Par {
+        left: Atom,
+        right: Atom,
+        pair: Ctor,
+        at: Option<Loc>,
+    },
 }
 
 impl Call {
@@ -457,6 +465,15 @@ impl Call {
                 f(*arg);
                 f(*state);
             }
+            Call::Par {
+                left,
+                right,
+                pair: _,
+                at: _,
+            } => {
+                f(*left);
+                f(*right);
+            }
         }
     }
 
@@ -500,6 +517,15 @@ impl Call {
                 f(k);
                 f(arg);
                 f(state);
+            }
+            Call::Par {
+                left,
+                right,
+                pair: _,
+                at: _,
+            } => {
+                f(left);
+                f(right);
             }
         }
     }

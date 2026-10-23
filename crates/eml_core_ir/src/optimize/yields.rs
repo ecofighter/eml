@@ -134,7 +134,7 @@ fn yields_locally(function: &CoreFn) -> bool {
                 Call::Perform { resumable, .. } => *resumable,
                 Call::Apply { yields, .. } => *yields,
                 Call::Resume { .. } | Call::Handle { .. } => true,
-                Call::Direct(..) | Call::Clause { .. } => false,
+                Call::Direct(..) | Call::Clause { .. } | Call::Par { .. } => false,
             },
             _ => false,
         })

@@ -310,9 +310,9 @@ impl<'a, M: Mode> Emitter<'a, '_, M> {
                 let at = match call {
                     Call::Direct(f, args) => self.call_operands(*f, args),
                     // `apply` の結果はいつも一様な1語である (docs/spec/lir.md の「関数の ABI」)
-                    Call::Apply { .. } | Call::Clause { .. } => {
+                    Call::Apply { .. } | Call::Clause { .. } | Call::Par { .. } => {
                         unreachable!(
-                            "an apply and an operation return one value (docs/spec/lir.md)"
+                            "an apply, an operation and a par return one value (docs/spec/lir.md)"
                         )
                     }
                 };
@@ -598,6 +598,8 @@ impl<'a, M: Mode> Emitter<'a, '_, M> {
                 let at = self.apply_operands(call);
                 self.out.push(Op::Apply { dst, at });
             }
+            // translate も EP もまだ `par` と `child_abort` を作らないので、VM に届かない
+            Rhs::Call(Call::Par { .. }) => unreachable!("the VM does not run a par yet"),
             Rhs::Prim(prim, args) => {
                 let row = prim.row();
                 let slots: Vec<Slot> = args
@@ -698,6 +700,7 @@ impl<'a, M: Mode> Emitter<'a, '_, M> {
                 let at = self.out.operands([*root, u32::from(a[0])]);
                 Op::RootSet { dst, at }
             }
+            Prim::ChildAbort => unreachable!("the VM does not run a par yet"),
         }
     }
 

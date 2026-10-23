@@ -112,16 +112,17 @@ fn rhs_abort(rhs: &Rhs) -> Abort {
     match rhs {
         Rhs::Call(call) => call_abort(call),
         Rhs::Extern { ext, .. } if ext.row().purity != Purity::Pure => Abort::Always,
-        Rhs::Prim(Prim::YieldAbort, _) => Abort::Always,
+        Rhs::Prim(Prim::YieldAbort | Prim::ChildAbort, _) => Abort::Always,
         _ => Abort::Never,
     }
 }
 
 /// `apply` と `clause` は、呼ぶ相手によらず中断しうる。すぐに再開する節は操作を起こしたフレームの上でその場で動く
-/// ので、row が `<State>` のような閉包の呼び出しにも、節の本体の `panic` や IO の失敗が通るためである。
+/// ので、row が `<State>` のような閉包の呼び出しにも、節の本体の `panic` や IO の失敗が通るためである。`par` は、子の
+/// 中断を親で起こし直すので中断しうる。
 fn call_abort(call: &Call) -> Abort {
     match call {
         Call::Direct(callee, _) => Abort::If(*callee),
-        Call::Apply { .. } | Call::Clause { .. } => Abort::Always,
+        Call::Apply { .. } | Call::Clause { .. } | Call::Par { .. } => Abort::Always,
     }
 }

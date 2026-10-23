@@ -3568,3 +3568,120 @@ fn f(w.0: obj) -> obj {{
         Err("`w.0` is released as unboxed, but it is not unboxed as a struct in `f`".to_string())
     );
 }
+
+// `par` と `child_abort`
+
+/// `a` と `b` を子にする `par` の結果を返す `f`。`call` は `par` の文で、`after` はその後の文である。
+fn par(params: &str, call: &str, after: &str) -> String {
+    format!("{PAIR}{BOX}fn f({params}) -> obj {{\n  {call}\n{after}}}\n")
+}
+
+#[test]
+fn a_par_binds_its_pair_as_obj() {
+    let text = par(
+        "a.0: tobj, b.1: tobj",
+        "let t.2: obj = par (,) #0(a.0, b.1)",
+        "  return t.2\n",
+    );
+    assert_eq!(check_lowered(&text), Ok(()));
+    assert_eq!(check_scopes(&text), Ok(()));
+    assert_eq!(check(&text), Ok(()));
+}
+
+#[test]
+fn a_par_is_never_a_tail_call() {
+    let text = par("a.0: tobj, b.1: tobj", "tail par (,) #0(a.0, b.1)", "");
+    assert_eq!(
+        rejected_at_both_levels(&text),
+        "a par is a tail call, but the join needs the parent's frame in `f`"
+    );
+    assert_eq!(
+        check_lowered(&text),
+        Err("a tail par is formed before contract in `f`".to_string())
+    );
+}
+
+#[test]
+fn the_pair_of_a_par_has_two_tobj_fields() {
+    let text = par(
+        "a.0: tobj, b.1: tobj",
+        "let t.2: obj = par Box #0(a.0, b.1)",
+        "  return t.2\n",
+    );
+    let message = "the pair of a par is `Box` #0, which does not have two tobj fields in `f`";
+    assert_eq!(rejected_at_both_levels(&text), message);
+    assert_eq!(check_lowered(&text), Err(message.to_string()));
+}
+
+#[test]
+fn the_children_of_a_par_are_uniform() {
+    let text = par(
+        "n.0: int, b.1: tobj",
+        "let t.2: obj = par (,) #0(n.0, b.1)",
+        "  return t.2\n",
+    );
+    assert_eq!(
+        rejected_at_both_levels(&text),
+        "argument 0 of a par is `n.0` (int), but a par takes tobj in `f`"
+    );
+    // 入口の段は境界を比べない
+    assert_eq!(check_lowered(&text), Ok(()));
+    let result = format!(
+        "{PAIR}fn f(a.0: tobj, b.1: tobj) -> int {{\n  let t.2: int = par (,) #0(a.0, b.1)\n  return t.2\n}}\n"
+    );
+    assert_eq!(
+        rejected_at_both_levels(&result),
+        "`t.2` (int) is bound to a par, which returns obj in `f`"
+    );
+}
+
+/// `par` の子は `apply` の呼ぶ値と同じく `poly` の受け手で、`lin` の閉包も渡せる。`par` は子を消費するので、
+/// 後でまた使う `lin` の閉包は、複製すれば V1 が、複製しなければ所有の検査が断る。結果の印は `poly` なので、`lin`
+/// の変数にも束ねられる (docs/spec/lir.md の「Kind の印の検査」)。
+#[test]
+fn a_lin_child_of_a_par_is_consumed_once() {
+    let once = format!(
+        "{PAIR}fn f(c.0: tobj lin, b.1: tobj) -> obj lin {{\n  let t.2: obj lin = par (,) #0(c.0, b.1)\n  return t.2\n}}\n"
+    );
+    assert_eq!(check(&once), Ok(()));
+    let again = |dup: &str| {
+        format!(
+            "{PAIR}fn f(c.0: tobj lin, b.1: tobj) -> tobj lin {{\n{dup}  let t.2: obj = par (,) #0(c.0, b.1)\n  decref t.2\n  return c.0\n}}\n"
+        )
+    };
+    assert_eq!(
+        check(&again("  dup c.0\n")),
+        Err("`c.0` (lin) is duplicated, but only unr can be in `f`".to_string())
+    );
+    assert_eq!(
+        check(&again("")),
+        Err("`c.0` is used after it was moved in `f`".to_string())
+    );
+}
+
+/// 起こし直す関数と詰めた引数を親に渡し、evidence は借りる。
+const CHILD_ABORT: &str = "fn g(e.0: obj, k.1: tobj, t.2: tobj poly) -> obj poly {\n  let u.3: unit = prim child_abort(e.0, k.1, t.2)\n  decref e.0\n  let d.4: obj poly = prim dummy()\n  return d.4\n}\n";
+
+#[test]
+fn child_abort_borrows_the_evidence() {
+    assert_eq!(check(CHILD_ABORT), Ok(()));
+}
+
+#[test]
+fn child_abort_takes_an_obj_evidence_a_function_and_a_value() {
+    let arity = CHILD_ABORT.replace("(e.0, k.1, t.2)", "(e.0, k.1)");
+    assert_eq!(
+        check(&arity),
+        Err("`prim child_abort` takes 3 arguments but is given 2 in `g`".to_string())
+    );
+    let evidence = CHILD_ABORT
+        .replace("e.0: obj", "e.0: int")
+        .replace("  decref e.0\n", "");
+    assert_eq!(
+        check(&evidence),
+        Err(
+            "argument 0 of `prim child_abort` is `e.0` (int), but the primitive takes obj in `g`"
+                .to_string()
+        )
+    );
+}

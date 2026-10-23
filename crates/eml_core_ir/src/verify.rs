@@ -529,7 +529,10 @@ impl<'a> Checker<'a> {
                 Call::Handle { .. } => Some("a handler"),
                 Call::Perform { .. } => Some("a perform"),
                 Call::Resume { .. } => Some("a resume"),
-                Call::Direct(_, _) | Call::Apply { .. } | Call::Clause { .. } => None,
+                Call::Direct(_, _)
+                | Call::Apply { .. }
+                | Call::Clause { .. }
+                | Call::Par { .. } => None,
             };
             if let Some(remains) = remains {
                 return Err(format!("{remains} remains after the evidence pass"));
@@ -630,6 +633,7 @@ impl<'a> Checker<'a> {
                     ));
                 }
             }
+            Call::Par { pair, .. } => self.cx.check_par_pair(*pair)?,
             Call::Apply { .. }
             | Call::Resume {
                 k: _,
@@ -697,9 +701,11 @@ impl<'a> Checker<'a> {
             Call::Clause { effect, op, .. } => {
                 operation(&self.program.effects, *effect, *op).ret == OpRet::Never
             }
-            Call::Direct(_, _) | Call::Apply { .. } | Call::Handle { .. } | Call::Resume { .. } => {
-                false
-            }
+            Call::Direct(_, _)
+            | Call::Apply { .. }
+            | Call::Handle { .. }
+            | Call::Resume { .. }
+            | Call::Par { .. } => false,
         }
     }
 
@@ -731,6 +737,7 @@ impl<'a> Checker<'a> {
             } => return Err("a mask on perform".to_string()),
             Call::Direct(_, _)
             | Call::Apply { .. }
+            | Call::Par { .. }
             | Call::Resume {
                 k: _,
                 arg: _,

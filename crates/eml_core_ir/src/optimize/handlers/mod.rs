@@ -672,7 +672,10 @@ fn path(
                     Call::Direct(target, _) if aborts && translated[target.0 as usize] => {
                         return None;
                     }
-                    Call::Direct(..) | Call::Apply { .. } | Call::Perform { .. } => {}
+                    Call::Direct(..)
+                    | Call::Apply { .. }
+                    | Call::Perform { .. }
+                    | Call::Par { .. } => {}
                 }
             }
         }

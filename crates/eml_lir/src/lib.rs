@@ -493,6 +493,14 @@ pub enum Call {
         callee: Atom,
         args: Vec<Atom>,
     },
+    /// `par` の fork と join。`left` と `right` の関数値に `()` を適用する子を作り、両方の値を `pair` の構築子で組にして
+    /// 返す。結果は `obj` で、末尾の呼び出しにはならない (docs/spec/lir.md の「LIR の命令」)。
+    Par {
+        left: Atom,
+        right: Atom,
+        pair: Ctor,
+        at: Option<Loc>,
+    },
 }
 
 impl Call {
@@ -508,6 +516,15 @@ impl Call {
     pub fn for_each_atom(&self, mut f: impl FnMut(Atom)) {
         match self {
             Call::Direct(_, args) => args.iter().for_each(|&atom| f(atom)),
+            Call::Par {
+                left,
+                right,
+                pair: _,
+                at: _,
+            } => {
+                f(*left);
+                f(*right);
+            }
             Call::Apply {
                 callee,
                 args,
@@ -529,6 +546,15 @@ impl Call {
     pub fn for_each_atom_mut(&mut self, mut f: impl FnMut(&mut Atom)) {
         match self {
             Call::Direct(_, args) => args.iter_mut().for_each(f),
+            Call::Par {
+                left,
+                right,
+                pair: _,
+                at: _,
+            } => {
+                f(left);
+                f(right);
+            }
             Call::Apply {
                 callee,
                 args,

@@ -296,6 +296,7 @@ fn runs_in_place(program: &Program, clause: &CoreFn, operation: &OperationInfo) 
                                 yields,
                                 prompt: _,
                             } => *yields,
+                            Call::Par { .. } => false,
                         }
                 }
                 _ => continue,

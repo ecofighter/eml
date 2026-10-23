@@ -64,6 +64,7 @@ pub(crate) fn make(program: &mut Program) {
                     tail_position_call(block).map(|(_, call)| match call {
                         Call::Direct(target, _) => Tail::Direct(*target),
                         Call::Apply { .. } | Call::Clause { .. } => Tail::Indirect,
+                        Call::Par { .. } => unreachable!("a par is never in tail position"),
                     })
                 })
                 .collect()

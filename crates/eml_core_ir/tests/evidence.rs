@@ -1388,3 +1388,97 @@ main () =
         "{shown}"
     );
 }
+
+/// `mask` のある `par` は、ほかの呼び出しと同じく `evv` から項目が飛ばす evidence を除いてから呼び、戻ったら元の
+/// `evv` に戻す。`par` は yield の地点でないが、`yields` の関数では `mask` が地点にする
+/// (docs/spec/core-ir.md の「`mask` の包み」)。
+#[test]
+fn a_masked_par_is_wrapped_like_any_masked_call() {
+    let text = "\
+layout (,) { (,)(tobj, tobj) }
+effect Ask { ask(unit) -> int }
+yields fn f(a.0: tobj, b.1: tobj) -> obj {
+  let t.2: obj = mask [Ask] par (,) #0(a.0, b.1)
+  return t.2
+}
+fn g(a.0: tobj, b.1: tobj) -> obj {
+  let t.2: obj = mask [Ask] par (,) #0(a.0, b.1)
+  return t.2
+}
+";
+    let shown = evidence_text(text);
+    insta::assert_snapshot!(function(&shown, "f"), @"
+    yields fn f(a.0: tobj, b.1: tobj) -> obj {
+      let w.3: tobj = prim evv_get()
+      let w.4: tobj = prim evv_mask[Ask](w.3)
+      let u.5: unit = prim evv_set(w.4)
+      let t.2: obj = par (,) #0(a.0, b.1)
+      let y.7: int = prim yielding()
+      switch y.7 { 0 -> b2, _ -> b1 }
+    b1:
+      let k.8: tobj poly = prim yield_cont_take()
+      let k.9: tobj poly = closure \"mask$[Ask]\"(k.8)
+      let k.10: tobj poly = closure compose$(k.9, &f$k0)
+      let u.11: unit = prim yield_cont_set(k.10)
+      let d.12: obj poly = prim dummy()
+      return d.12
+    b2:
+      let u.6: unit = prim evv_set(w.3)
+      return t.2
+    }
+    ");
+    insta::assert_snapshot!(function(&shown, "g"), @"
+    fn g(a.0: tobj, b.1: tobj) -> obj {
+      let w.3: tobj = prim evv_get()
+      let w.4: tobj = prim evv_mask[Ask](w.3)
+      let u.5: unit = prim evv_set(w.4)
+      let t.2: obj = par (,) #0(a.0, b.1)
+      let u.6: unit = prim evv_set(w.3)
+      return t.2
+    }
+    ");
+}
+
+/// 子は `never` の操作しか起こさず、親は継続を作らずに起こし直すので、`mask` のない `par` は yield の地点にならない。
+/// 末尾の位置の呼び出しにもならない (docs/spec/core-ir.md の「Core IR の命令」)。
+#[test]
+fn an_unmasked_par_is_not_a_yield_point() {
+    let text = "layout (,) { (,)(tobj, tobj) }\nyields fn f(a.0: tobj, b.1: tobj) -> obj {\n  let t.2: obj = par (,) #0(a.0, b.1)\n  return t.2\n}\n";
+    assert_eq!(evidence_text(text), text);
+}
+
+/// その場で動く節の本体の `par` は、ほかの呼び出しと同じく under の形にする。子が起こし直す操作は handle の外の
+/// handler に届く (docs/spec/core-ir.md の「`perform` と節の3つの形」)。
+#[test]
+fn a_par_in_an_immediate_clause_runs_it_under_the_handler() {
+    let text = "\
+layout (,) { (,)(tobj, tobj) }
+effect Ask { ask(unit) -> obj }
+fn main(b.0: tobj, l.1: tobj, r.2: tobj) -> obj {
+  let c.3: tobj = closure h$ask(l.1, r.2)
+  let t.4: obj = handle Ask((), b.0) { ask: c.3 } return &h$return
+  return t.4
+}
+internal uniform from 2 fn h$ask(l.0: tobj, r.1: tobj, p.2: unit, k.3: tobj lin, p.4: unit) -> obj {
+  let t.5: obj = par (,) #0(l.0, r.1)
+  let t.6: obj = resume k.3(t.5, ())
+  return t.6
+}
+internal uniform from 0 fn h$return($r.0: obj, p.1: unit) -> obj {
+  return $r.0
+}
+";
+    let shown = evidence_text(text);
+    insta::assert_snapshot!(function(&shown, "h$ask$entry"), @"
+    internal clause Ask.ask fn h$ask$entry(l.0: tobj, r.1: tobj, e.7: obj, p.2: unit) -> obj {
+      let w.8: tobj = prim evv_get()
+      let o.9: tobj = prim ev_evv(e.7)
+      let u.12: unit = prim evv_set(o.9)
+      let p.4: unit = prim ev_take_state(e.7)
+      let t.5: obj = par (,) #0(l.0, r.1)
+      let u.10: unit = prim ev_set_state(e.7, ())
+      let u.11: unit = prim evv_set(w.8)
+      return t.5
+    }
+    ");
+}

@@ -21,7 +21,7 @@
 | 種類 | 命令 |
 |---|---|
 | 文 | `let x = 右辺`、`unpack v L #t(f1, .., fn)` |
-| 右辺 | 呼び出し (`call`、`apply`、`clause`、`perform`、`resume`、`handle`)、`closure`、`con`、`const`、`extern`、`prim`、`drop` |
+| 右辺 | 呼び出し (`call`、`apply`、`clause`、`par`、`perform`、`resume`、`handle`)、`closure`、`con`、`const`、`extern`、`prim`、`drop` |
 | 終端 | `return a`、`jump bN(a1, .., an)`、`switch a L { #0 -> bN, #1(y1, .., yn) -> bN, _ -> bN }`、`switch a { 1 -> bN, _ -> bN }` |
 | 手放す | `drop x` (参照を1つ手放す) |
 | エフェクト (translate の出力だけ) | `perform op args`、`handle E(init, body) { 節 } return r`、`resume k(v, s)` (内部の命令)、`drop k`、呼び出しの `mask` |
@@ -29,6 +29,7 @@
 
 - `perform`、`handle`、`resume`、呼び出しの `mask` は translate だけが出し、evidence passing (EP) が基本操作と節の呼び出しに置き換える (下の「evidence passing」)。`clause` と、REPL の根の2つ (`root_get`、`root_set`) と `var` の節の空の配列 (`empty_mut_array`) を除く `prim` は EP だけが出す
 - LIR との違いは、RC の命令 (`dup`、`decref`、`release`)、`box` と `unbox`、末尾呼び出し `tail` を持たないことと、エフェクトの命令と `mask` を持つことである。RC の命令などは LIR のパスだけが入れる
+- `par` (`Call::Par`) は LIR と同じ命令で、テキストの形も同じである ([LIR](lir.md) の「LIR の命令」)。`call`、`apply`、`resume` と同じく `mask` を持てる (`mask [State] par (,) #0(f.1, g.2)`)。EP は `mask` のある `par` をほかの呼び出しと同じく包み、`mask` のない `par` はそのまま残す。子が起こせるのは `never` の操作だけで、親はそれを継続を作らずに起こし直すので、`par` は yield の地点にならない。最適化も、`par` を handler に触れない文として扱う (下の「handler への特殊化」)。その場で動く節の本体に `par` があれば、ほかの呼び出しと同じく under の形にする (下の「`perform` と節の3つの形」)
 - 関数は、名前、内部の関数かどうかの印 (`internal`。[LIR](lir.md) の「関数の ABI」)、一様な位置の始まり (`split`。[LIR](lir.md) の「関数の ABI」)、yield しうるかの印 (`yields`。下の「`yields` の印」)、入口の関数の印 (`clause`。[LIR](lir.md) の「入口の関数の印」)、変数の表、`ret` と `ret_mark`、ブロックの列を持つ。プログラムは、関数、入口、文字列の表、配置の表、構造体の形の表、エフェクトの表、ファイルの表を持つ。どちらも LIR と同じ欄で、LIR への変換がそのまま写す (下の「Core IR から LIR への変換」)
 - ブロックの列の意味 (アトム、`con`、`jump`、`switch`、`unpack`、フィールドの束縛、消費と読む) は、LIR と同じである ([LIR](lir.md) の「ブロックの列」)。RC の命令、`box`、`unbox`、`tail` の項目は Core IR に当たらない。エフェクトの命令の引数は、ほかの呼び出しの引数と同じく消費である
 - Core IR は、[LIR](lir.md) の「構造の規則」のうち印のない部分に従う。R1〜R5、R6 の支配の半分、R7 と R8 のうち境界の検査でない部分である。下の「verifier」の引き継ぐ検査も受ける。境界の検査に従わないのは、translate と EP の出力が、box の挿入より前には境界に合わないためである
@@ -267,7 +268,7 @@ Perceus は、`unr` でない変数に `decref` を置く所がある。V1 と�
 - 持ち上げた関数の番号 (`$lambdaN`、`$handleN`、`$externN` の N) は、外側の関数の本体の中で、HIR の式の ID の順に振る。変換の順に依らないようにするためである。ローカル関数の定義のラムダは `$lambdaN` の番号を使わない。
 - 変換は、`main` を `()` で呼ぶ入口の関数を作る。等式に引数のない `main` は関数値を返すので、入口の関数が返った値に `()` を適用する。
 - `handle`、`perform`、`resume` は、translate の出力では呼び出しの一種である。表面の構文に `resume` はなく、`resume` は変換が作る Core IR の内部の命令 (`Call::Resume`) である。EP がどれも基本操作と普通の呼び出しに置き換える (下の「evidence passing」)。
-- 呼び出し (`Rhs::Call` の `Call::Direct`、`Call::Apply`、`Call::Resume`) は `mask` を持つ ([エフェクトと handler](effects.md) の「handler の意味」)。`mask` は、呼び出しの間に飛ばす handler を表す項目の並びである。項目 (`eml_lir::MaskItem`) は、エフェクトの番号と、残す数 n と、飛ばす数 m を持つ。m は 1 以上である。項目はエフェクトの番号の真に昇順に並ぶので、同じエフェクトの項目は2つない。空なら `mask` なしである。extern のエフェクトは入れない。`Call::Handle` と `Call::Perform` は `mask` を持たない。LIR の呼び出しは `mask` を持たない。`handle` の本体の中の呼び出しは、持ち上げた本体の関数の中の呼び出しとして `mask` を持つ。
+- 呼び出し (`Rhs::Call` の `Call::Direct`、`Call::Apply`、`Call::Resume`、`Call::Par`) は `mask` を持つ ([エフェクトと handler](effects.md) の「handler の意味」)。`mask` は、呼び出しの間に飛ばす handler を表す項目の並びである。項目 (`eml_lir::MaskItem`) は、エフェクトの番号と、残す数 n と、飛ばす数 m を持つ。m は 1 以上である。項目はエフェクトの番号の真に昇順に並ぶので、同じエフェクトの項目は2つない。空なら `mask` なしである。extern のエフェクトは入れない。`Call::Handle` と `Call::Perform` は `mask` を持たない。LIR の呼び出しは `mask` を持たない。`handle` の本体の中の呼び出しは、持ち上げた本体の関数の中の呼び出しとして `mask` を持つ。
 - 変換は、型検査が呼び出しの矢印ごとに記録した `mask` の項目 ([型と Kind](types.md) の「推論」) を、エフェクトの番号に写して昇順に並べ、Core IR の呼び出しに付ける。型検査の項目は、エフェクトが rest に初めて現れた順に並ぶ。
   - 引数がそろう既知の関数の呼び出し (`Call::Direct`) は、最後の矢印の `mask` を使う。前の矢印は部分適用で、エフェクトを起こさないためである。同じ理由で、引数が足りずにクロージャを作るときは `mask` を付けない。extern、操作、コンストラクタの呼び出しには、型検査が `mask` を記録しない。
   - 余った引数を `Call::Apply` で渡すときは、矢印ごとの `mask` が変わる境目で `apply` を分ける。`mask` は1つの Core IR の呼び出し全体に効くので、違う `mask` の矢印を1つの `apply` にまとめると、片方の矢印に余計な `mask` が効くためである。yield しうる矢印の後でも分ける (下の「`apply` の印と分け方」)。
@@ -1028,6 +1029,7 @@ b_fast:
   - EP の段 (`verify_evidence`) は EP の後にかける。変換の段の検査から EP が作るものの拒否を除き、基本操作と `clause` の検査 ([LIR](lir.md) の「verifier」) を足す。`handle`、`perform`、`resume` と、呼び出しの `mask` を拒む (``a perform remains after the evidence pass``。`a handler`、`a resume`、`a mask` も同じ形)
 - 着地の印 ([LIR](lir.md) の「着地の印」) も EP が作るものなので、変換の段は拒む (`a prompt marker appears before the evidence pass`)。EP の段は、`apply` のほかの検査の後に、印の変数 v が見えること、印の付いた `apply` が末尾の位置 ([LIR](lir.md) の「末尾の位置の呼び出し」) にないこと、v の Repr が `obj` であること、v が呼び出しの直後で生きていることを、この順に確かめる (``an apply with the prompt marker `ev.2` is in a tail position, which leaves no frame to land on``、`` `ev.2` is the prompt marker of an apply, but it is tobj, not obj ``、`` `ev.2` is the prompt marker of an apply, but it is not used after the call ``)。生きているかは、生存解析の入口の集合を関数ごとに1回だけ求め、ブロックの終端と後ろの文から逆にたどって決める。印の変数は呼び出しの使いではないので、生存解析は印を使いに数えない
 - 印の検査は、Core IR の2つの段で、`jump` と `return` の V2 と、作る所の検査を行う。それ以外の受け渡しは、境界に合うようになってから LIR の範囲の段で比べる。`perform`、`handle`、`resume` の受け渡しは比べず、EP がそれらを `clause` と基本操作に置き換えた後の段で比べる。`never` の操作の `perform` (変換の段) と `clause` (EP の段) の結果を束縛する変数は、使いに制御が届かないので、V2 と作る所の検査の対象にしない。V1 は `dup` と `decref` が Core IR にないので走らない ([LIR](lir.md) の「Kind の印の検査」)
+- `par` は2つの段のどちらでも受ける。`mask` を持てるのは変換の段だけである。組の構築子の検査は LIR と同じ部品で、同じ文言である ([LIR](lir.md) の「verifier」)。子の Repr と印は、境界に合うようになってから LIR の範囲の段で比べる
 - RC の命令、`box`、`unbox`、`tail` は Core IR の型にないので、verifier は確かめない。境界の検査もしない。translate と EP の出力は、box の挿入より前には境界に合わないためである
 - 構造体の `con`、`unpack`、タグの `switch` の規則 ([LIR](lir.md) の「構造の規則」) は、2つの段で確かめる
 - R7 と R8 の文言、`jump` と `return` の文言、引数のない `con` の文言、2つの IR に共通する引き継ぐ検査、検査の順、支配木の求め方は、LIR の verifier と同じである ([LIR](lir.md) の「verifier」)。文言と支配木の求め方などの部品は、2つの verifier が `eml_lir::check` で共有する。検査の順は共有する部品ではなく、2つの verifier で同じに保つ約束である

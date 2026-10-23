@@ -39,6 +39,8 @@ pub enum Prim {
     RootSet(u32),
     /// 不死の空の `MutArray`。`var` の配列の変数を取り出した後の状態である (docs/spec/lir.md の「基本操作」)。
     EmptyMutArray,
+    /// `par` の子を中断し、親で起こし直す関数と詰めた引数を渡す。戻らない (docs/spec/lir.md の「基本操作」)。
+    ChildAbort,
 }
 
 /// 基本操作の引数と結果の Repr。引数と結果は、直接の呼び出しと同じく互換の位置である。
@@ -110,6 +112,7 @@ kinds! {
     Prim::RootGet(_) => "root_get", Prim::RootGet(0);
     Prim::RootSet(_) => "root_set", Prim::RootSet(0);
     Prim::EmptyMutArray => "empty_mut_array", Prim::EmptyMutArray;
+    Prim::ChildAbort => "child_abort", Prim::ChildAbort;
 }
 
 impl Prim {
@@ -144,7 +147,8 @@ impl Prim {
             | Prim::YieldContSet
             | Prim::YieldFinish
             | Prim::Dummy
-            | Prim::EmptyMutArray => Immediates::None,
+            | Prim::EmptyMutArray
+            | Prim::ChildAbort => Immediates::None,
         }
     }
 
@@ -191,6 +195,14 @@ impl Prim {
             Prim::RootSet(_) => (&[TObj], &[false], Unit, &[Unr], Unr),
             // 結果は `MutArray` の値なので `lin` である
             Prim::EmptyMutArray => (&[], NONE, Obj, NO_MARKS, Lin),
+            // evidence は節の入口が持ち続けるので借りる。起こし直す関数と詰めた引数は親に渡る
+            Prim::ChildAbort => (
+                &[Obj, TObj, TObj],
+                &[true, false, false],
+                Unit,
+                &[Unr, Unr, Poly],
+                Unr,
+            ),
         };
         PrimRow {
             params,
@@ -246,7 +258,7 @@ mod tests {
     #[test]
     fn the_marks_of_the_primitives_follow_the_spec_table() {
         use Mark::{Lin, Poly, Unr};
-        let table: [(&str, &[Mark], Mark); 23] = [
+        let table: [(&str, &[Mark], Mark); 24] = [
             ("evv_get", &[], Unr),
             ("evv_set", &[Unr], Unr),
             ("evv_push", &[Unr, Unr], Unr),
@@ -270,6 +282,7 @@ mod tests {
             ("root_get", &[], Unr),
             ("root_set", &[Unr], Unr),
             ("empty_mut_array", &[], Lin),
+            ("child_abort", &[Unr, Unr, Poly], Unr),
         ];
         assert_eq!(table.len(), KINDS.len());
         for (name, params, ret) in table {

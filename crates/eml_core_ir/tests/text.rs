@@ -639,3 +639,44 @@ internal yields uniform from 1 fn f$k0(a.0: int, x.1: tobj) -> tobj {
     let splits: Vec<Option<u32>> = program.functions.iter().map(|f| f.split).collect();
     assert_eq!(splits, [None, Some(0), Some(1), Some(0), Some(1), Some(1)]);
 }
+
+#[test]
+fn a_masked_par_round_trips() {
+    let text = "\
+layout (,) { (,)(tobj, tobj) }
+effect Main.State { get(unit) -> tobj }
+fn f(a.0: tobj, b.1: tobj) -> obj {
+  let t.2: obj = mask [Main.State] par (,) #0(a.0, b.1) @\"main.em\":4:7
+  return t.2
+}
+";
+    let program = parse(text).unwrap_or_else(|error| panic!("{error}"));
+    assert_eq!(eml_core_ir::pretty_with_positions(&program), text);
+    round_trip(&text.replace(" @\"main.em\":4:7", ""));
+    assert_eq!(
+        program.functions[0].blocks[0].stmts[0],
+        Stmt::Let {
+            var: VarId(2),
+            rhs: Rhs::Call {
+                call: Call::Par {
+                    left: v(0),
+                    right: v(1),
+                    pair: eml_lir::Ctor {
+                        layout: eml_lir::LayoutId(0),
+                        tag: 0,
+                    },
+                    at: Some(eml_lir::Loc {
+                        file: 0,
+                        line: 4,
+                        column: 7,
+                    }),
+                },
+                mask: vec![MaskItem {
+                    effect: 0,
+                    keep: 0,
+                    skip: 1,
+                }],
+            },
+        }
+    );
+}

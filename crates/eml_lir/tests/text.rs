@@ -1880,3 +1880,45 @@ fn f(w.0: tobj, x.1: float) -> (obj lin, float) {
         assert_eq!(parse_error(text).message, message);
     }
 }
+
+#[test]
+fn par_and_child_abort_round_trip() {
+    let text = "layout (,) { (,)(tobj, tobj) }\nfn f(a.0: tobj, b.1: tobj) -> obj {\n  let t.2: obj = par (,) #0(a.0, b.1) @\"main.em\":3:5\n  return t.2\n}\nfn g(e.0: obj, k.1: tobj, t.2: tobj) -> obj {\n  let u.3: unit = prim child_abort(e.0, k.1, t.2)\n  let d.4: obj = prim dummy()\n  return d.4\n}\n";
+    let program = parse(text).unwrap_or_else(|error| panic!("{error}"));
+    assert_eq!(pretty_with_positions(&program), text);
+    round_trip(&text.replace(" @\"main.em\":3:5", ""));
+    assert_eq!(
+        program.functions[0].blocks[0].stmts[0],
+        Stmt::Let {
+            var: VarId(2),
+            rhs: Rhs::Call(Call::Par {
+                left: v(0),
+                right: v(1),
+                pair: Ctor {
+                    layout: LayoutId(0),
+                    tag: 0,
+                },
+                at: Some(Loc {
+                    file: 0,
+                    line: 3,
+                    column: 5,
+                }),
+            }),
+        }
+    );
+    assert_eq!(
+        program.functions[1].blocks[0].stmts[0],
+        Stmt::Let {
+            var: VarId(3),
+            rhs: Rhs::Prim(Prim::ChildAbort, vec![v(0), v(1), v(2)]),
+        }
+    );
+}
+
+#[test]
+fn a_par_has_two_children() {
+    let error = parse_error(
+        "layout (,) { (,)(tobj, tobj) }\nfn f(a.0: tobj) -> obj {\n  let t.1: obj = par (,) #0(a.0)\n  return t.1\n}\n",
+    );
+    assert_eq!(error.to_string(), "line 3: expected `,`, found `)`");
+}

@@ -1661,6 +1661,17 @@ impl<'a> Checker<'a> {
             // `apply` の結果は一様な `tobj` である。関数の値は型変数の位置なので、結果の印はいつも `poly` で、どの受け手
             // とも合う (docs/spec/lir.md の「関数の ABI」)
             Call::Apply { .. } => Some(vec![(Repr::TObj, Mark::Poly)]),
+            // 組は VM が子の一様な結果を2つの `tobj` のフィールドに入れて作るので、結果は `obj` である。子の値の型は
+            // 型変数の位置なので、印は `apply` と同じく `poly` である (docs/spec/lir.md の「LIR の命令」)
+            Call::Par { pair, .. } => {
+                if matches!(receiver, Receiver::Tail) {
+                    return Err(
+                        "a par is a tail call, but the join needs the parent's frame".to_string(),
+                    );
+                }
+                self.cx.check_par_pair(*pair)?;
+                Some(vec![(Repr::Obj, Mark::Poly)])
+            }
         };
         if self.cx.boundaries {
             self.check_operands(call)?;
@@ -1773,6 +1784,18 @@ impl<'a> Checker<'a> {
                     uniform(&|| format!("argument {index}"), arg)?;
                 }
             }
+            // 子は `()` を適用する関数の値なので、`apply` の呼ぶ値と同じく `tobj` と比べ、印は比べない
+            // (docs/spec/lir.md の「Kind の印の検査」)
+            Call::Par {
+                left,
+                right,
+                pair: _,
+                at: _,
+            } => {
+                let uniform = operands("a par");
+                uniform(&|| "argument 0".to_string(), *left)?;
+                uniform(&|| "argument 1".to_string(), *right)?;
+            }
             // 節の呼び出しは操作の ABI で呼ぶので、先頭の evidence は `obj`、残りは操作の表の Repr と比べる
             Call::Clause {
                 effect,
@@ -1835,7 +1858,7 @@ impl<'a> Checker<'a> {
             Call::Clause { effect, op, .. } => {
                 operation(&self.program.effects, *effect, *op).ret == OpRet::Never
             }
-            Call::Direct(_, _) | Call::Apply { .. } => false,
+            Call::Direct(_, _) | Call::Apply { .. } | Call::Par { .. } => false,
         }
     }
 
@@ -1948,6 +1971,7 @@ impl<'a> Checker<'a> {
                 };
             }
             Call::Apply { .. } => ("an", "apply".to_string()),
+            Call::Par { .. } => ("a", "par".to_string()),
             Call::Clause {
                 effect,
                 op,
@@ -1996,6 +2020,7 @@ fn tail_text(call: &Call) -> &'static str {
         Call::Direct(_, _) => "a tail call",
         Call::Apply { .. } => "a tail apply",
         Call::Clause { .. } => "a tail clause",
+        Call::Par { .. } => "a tail par",
     }
 }
 
