@@ -2,7 +2,7 @@
 
 位置づけ: 将来の設計。
 
-利用者のモジュールから C のライブラリを呼ぶ仕組み (FFI) と、C の API を持たないライブラリを Rust のプラグインで組み込む仕組み (拡張) をまとめる。どちらも実装していない。どちらもネイティブのバックエンドなしに VM の上で動く。ネイティブのコードが C の関数とプラグインの行を呼ぶ所は [ネイティブ化の設計](native.md) の「extern の入口」にある。worker とスレッドの仕組みは [マルチコア対応の設計](multicore.md) にある。
+利用者のモジュールから C のライブラリを呼ぶ仕組み (FFI) と、C の API を持たないライブラリを Rust のプラグインで組み込む仕組み (拡張) をまとめる。どちらも実装していない。どちらもネイティブのバックエンドなしに VM の上で動く。ネイティブのコードが C の関数とプラグインの行を呼ぶ所は [ネイティブ化の設計](native.md) の「extern の入口」にある。worker とスレッドの仕組みは [マルチコア対応の設計](multicore.md) の「スレッドと worker」にある。
 
 ## 目的と範囲
 
@@ -27,7 +27,7 @@
 | 9 | 長く走る呼び出し | `blocking` は型に `<IO, Async>` を要し、ブロックする呼び出しのプールへの受け付けと待ちと取り出しに下ろす |
 | 10 | VM からの呼び出し | VM は、`eml_native` の FFI のモジュールが作る橋渡しの関数を `Op::Ffi` で呼ぶ。libffi は使わない |
 | 11 | 拡張 | GUI は Rust のプラグインの crate (`eml_gui`。まず egui) にする。プラグインの行は普通の extern の表の行で、実装だけが `Plugin` の trait に回る |
-| 12 | GUI のスレッド | イベントループは、プロセスのメインスレッドを専用の worker にしたものの待ちに載せる。GUI のタスクとその子は、そのスレッドから動かない |
+| 12 | GUI のスレッド | イベントループは、メインの worker (プロセスのメインスレッドを専用の worker にしたもの。[マルチコア対応の設計](multicore.md) の「スレッドと worker」) の待ちに載せる。GUI のタスクとその子は、そのスレッドから動かない |
 
 ## `extern "C"` の宣言
 
@@ -84,7 +84,7 @@ matmul n a b =
   - 仕事の記録が渡した語を数えた参照で持つ。`Unr` の引数には印を付けない。`Mut*Array` の引数は記録へ移す。記録は run の登録表に載り、仕事が終わるまで run が生かしておく。プールの側は記録を通してだけ語に届く
   - プールは入力の中身を読み、移した `Mut*Array` の中身を書き、スカラー、ハンドル、移した語、Rust のデータを返す。eml の物体は、取り出しが持ち主の worker の上で作る
   - 完了は持ち主の worker の受け箱の mutex を通して届く。これが、プールの書き込みと持ち主の読みの順を決める
-  - 戻りの `Mut*Array` と `Lin` の物体は、取り出しが移し替えで受ける ([マルチコア対応の設計](multicore.md) の「`Lin` の物体の所有者の移し替え」)
+  - 戻りの `Mut*Array` と `Lin` の物体は、取り出しが移し替えで受ける ([マルチコア対応の設計](multicore.md) の「移し戻し」)
 - 場合ごとの扱いは [非同期の設計](async.md) の「I/O の driver」の表にある
 - std の今の同期の行 (`FileIn`、`Stdin`、`Proc` など) には `blocking` を付けない。非同期のファイルとパイプは I/O の driver で作る ([非同期の設計](async.md) の「ファイルとパイプ」)
 - BLAS のスレッドのプールには仕組みを足さず、助言だけを書く。eml は環境変数を設定しない。環境変数はライブラリを読み込む前に要り、`eml run` はプロセスの環境を持たないためである。複数の eml の worker を使うプログラムは、始めに同じ FFI で `openblas_set_num_threads(1)` か `mkl_set_num_threads(1)` を呼ぶ。Accelerate は GCD を使い、設定の口がないので触らない
@@ -142,11 +142,11 @@ main () =
 ```
 
 - 最初のプラグインは `crates/eml_gui` で、egui-winit と egui-wgpu を手でつなぐ (eframe は使わない。下の「却下した案」)
-- GUI はプロセスのメインスレッドで動く。プロセスのメインスレッドを専用の worker にしたもの (以下、メインの worker) の上で、`Main.run : (Unit -> <IO, Panic, Async> a) -> <IO, Panic, Async> a` が関数を動かす。winit、egui、wgpu の `Send` でない状態は `SendCell<Option<GuiState>>` (`unsafe impl Send`) に入れ、どの操作も今の worker がメインの worker であることを確かめてから触れる。ハンドルの持ち主の worker を確かめるのと同じ形である
+- GUI はプロセスのメインスレッドで動く。メインの worker ([マルチコア対応の設計](multicore.md) の「スレッドと worker」) の上で、`Main.run : (Unit -> <IO, Panic, Async> a) -> <IO, Panic, Async> a` が関数を動かす。winit、egui、wgpu の `Send` でない状態は `SendCell<Option<GuiState>>` (`unsafe impl Send`) に入れ、どの操作も今の worker がメインの worker であることを確かめてから触れる。ハンドルの持ち主の worker を確かめるのと同じ形である
 - プロセスに置くイベントループは1つである。`Gui.open` が、メインの worker の待ちをプラグインのものに替える。worker のループに動けるタスクがなくなると、待ちが winit の `run_app` の形でイベントループを回す。toolkit のコールバック (`about_to_wait`、利用者のイベント、Windows と macOS のウィンドウの大きさを変える間のループ) は、動けるタスクがなくなるまで動かして戻る関数を呼ぶ。そのため、モーダルなループの間も eml が動き続ける。起こすのは `EventLoopProxy::send_event` である。割り込みは、監視のスレッドが止めるビットを写して起こすことで、イベントループで待つ worker にも届く
 - イベントは引く形で受ける。`Gui.next_event : Window -> <IO, Async> (Event, Window)` はイベントが来るまでタスクを待たせる
 - UI の状態とクロージャは境目を越えない。プラグインはフレームごとに egui の `Ui` の積み重ねを持ち、eml は `Lin` の `Ui` のハンドルで操作する。`Gui.begin_frame : Window -> <IO> Ui` で始め、部品は `Gui.button : Ui -> String -> <IO> (Bool, Ui)` のようにハンドルを返す。入れ物は `Gui.begin_horizontal : Ui -> <IO> Ui` と `Gui.end_horizontal : Ui -> <IO> Ui` で開いて閉じ、入れ子の対応はプラグインが実行時に確かめる。対応しなければ実行時エラーである。`Gui.end_frame : Ui -> <IO> Window` が描いてウィンドウを返す。再描画は `Gui.request_redraw` で求める
-- GUI のタスクとその子はメインの worker から動かない。メインの worker のタスクは救済せず、新しいタスクを置く先にもしない。重い仕事は `compute` か、固定していないタスクへの channel でメインの worker の外へ出す。別のタスクの結果は `Gui.proxy` で得た口から `Gui.post` で GUI のタスクへ送る
+- GUI のタスクとその子はメインの worker から動かない。メインの worker のタスクは救済せず、新しいタスクを置く先にもしない ([マルチコア対応の設計](multicore.md) の「スケジューラ」)。重い仕事は `compute` か、固定していないタスクへの channel でメインの worker の外へ出す。別のタスクの結果は `Gui.proxy` で得た口から `Gui.post` で GUI のタスクへ送る
 - CI では、ウィンドウを開かない形のプラグインのテスト (フレームの組み立て、入れ子の誤り、`post`) を流す。CI は GPU を持たないので、画面の確かめは OS ごとに手で行う。ネイティブのコードでも同じテストを流す
 - Slint は egui の後に2つ目のプラグインにできる
 
