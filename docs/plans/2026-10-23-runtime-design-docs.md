@@ -414,7 +414,11 @@ a1〜a4 の呼び名の残りは、`grep -cE "$P" <ファイル>` で次の数�
 - 目的: 文書の地図と概要を、新しい4つの設計に合わせる
 - 変えるファイル: `CLAUDE.md`、`docs/README.md`、`docs/future/stdlib.md`、`docs/overview.md`、`docs/implementation/architecture.md`、`docs/implementation/benchmarks.md`、`docs/implementation/status.md`
 - 作業: `05-integration.md` の 1.3 の「docs/overview.md」「docs/README.md」「docs/future/stdlib.md」「CLAUDE.md」に従う。`overview.md` の 31 行と 33 行 (`Panic` と `Never`) は触らない (段 `never-rows` が閉じるときに直す)。あわせて、中身が `native.md` と「段の列」へ移ったための古い参照を直す
-  - `benchmarks.md` の 183、330、461、485、491 行の「ロードマップのネイティブ化の項目」の完了の条件と目標を、`native.md` の「目的と範囲」への引用にする。331 行の `read_into` の「処理系」はそのまま
+  - `benchmarks.md` の 183、330、461、485、491 行の「ロードマップのネイティブ化の項目」の完了の条件と目標を、`native.md` の「目的と範囲」への引用にする。331 行の `read_into` は「処理系」への引用のまま、「、ネイティブ化の項目の」を除く (`read_into` は「処理系」の独立した項目になった)。510 行の「スカラーの要素を生で持つ配列」の項目への引用は、「段の列」の `raw-arrays` への引用にする
+  - 「ロードマップのネイティブ化の項目」のような、ロードマップの「ネイティブ化」を指す言い回しは、`benchmarks.md` だけでなく `docs/` 全体で探して直す (`grep -rn 'ネイティブ化の項目' docs`)
+  - `status.md` の 46 行のパイプ、文字列の標準入力、`Child` の標準エラーの引用は、`async-files` の段へ移ったので「段の列」に引く
+  - `README.md` の `roadmap.md` の行 (37 行) の説明に「段の列」を入れる
+  - `overview.md` で「段の列」を引く行は1つにする (完了の条件が数える)
   - `architecture.md` の 10 行の「ネイティブのバックエンドは未定である」を、Cranelift で JIT と AOT を出すことと `native.md` へのリンクに直す
   - `status.md` の 48 行で、借用パラメータとネイティブ化を「その後の項目」でなく「段の列」に引く
   - `overview.md` の a1 と a2 の行 (104 行) を置き換える worker の行は、`multicore.md` の「スレッドと worker」の定義に合わせ、そこへリンクする。`README.md` の `multicore.md` の行 (38 行) の説明は、書き直した `multicore.md` の節 (スレッドと worker、スケジューラ、止める手順など) を挙げる
@@ -444,6 +448,8 @@ a1〜a4 の呼び名の残りは、`grep -cE "$P" <ファイル>` で次の数�
   - `vm.md` の 400 行 → 「未決の論点と将来の拡張」 (`par` の子の取り消しは、そこの項目である)
   - `vm.md` の 402 行 → 「Rust の側が持つ語」
   - `expressions.md` の 358 行の `run_scheduler` → `Async.run`
+  - `lir.md` の 290 行と `vm.md` の 391 行のロードマップの「マルチコア対応」への引用 → `multicore.md` の「1つの worker での実行」
+  - `lir.md` の 449 行と 592 行の借用パラメータの引用 (見出しのない `roadmap.md`) → 「段の列」
   - 今の単一スレッドの動作を書いた文 (`vm.md` の 355 行のシグナルの受け方など) は規則なので変えない
   - 題は `Align spec prose with the runtime design`
 - 実装者に任せること: 文の書き方
