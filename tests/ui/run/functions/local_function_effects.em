@@ -1,5 +1,5 @@
 -- ローカル関数と代数的効果の組み合わせを確かめる。純粋な関数を handle の中と外から呼ぶ形、自分が handler を張る再帰、
--- `multi` の handler の中で純粋な関数を呼んでも `File` を持てること、節の中で `k` を捕まえる関数。
+-- `multi` の handler の中で純粋な関数を呼んでも `FileIn` を持てること、節の中で `k` を捕まえる関数。
 -- (docs/spec/core-ir.md の「ローカル関数の持ち上げ」)
 import FileIn
 

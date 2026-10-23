@@ -1,5 +1,5 @@
 -- `mask` 付きの呼び出しの中で `fail` すると、内側の `Fail.to_result` を飛ばして外側の `Fail.to_result` へ中断する。
--- 途中のフレームが持つ `File` は閉じる。
+-- 途中のフレームが持つ `FileIn` は閉じる。
 import Fail (Fail(..))
 import FileIn
 

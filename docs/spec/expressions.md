@@ -12,7 +12,7 @@ copy src dst =
   let f = FileIn.open src
   let (text, f) = FileIn.read_all f
   FileIn.close f
-  write_text dst text
+  Fs.write_text dst text
 ```
 
 - ブロックは文を並べたものである。最後の文が式ならその値がブロックの値で、そうでなければ `()` になる
@@ -301,12 +301,12 @@ handler の意味、`k` の線形性、extern のエフェクト `IO` を起こ�
 ```haskell
 with_log : String -> (Unit -> <Log, IO | e> a) -> <IO | e> a
 with_log path action =
-  handle action () from FileIn.open path with
+  handle action () from FileOut.create path with
     | ctl log lv msg k f ->
-        let f = write f "[\{show_level lv}] \{msg}"
+        let f = FileOut.write "[\{show_level lv}] \{msg}" f
         k () f
     | return x f ->
-        FileIn.close f
+        FileOut.close f
         x
 ```
 

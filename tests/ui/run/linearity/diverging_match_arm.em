@@ -1,5 +1,5 @@
--- `fail` で終わる腕と `File` を閉じる腕を持つ `match`、`exit` で終わる枝と `File` を閉じる枝を持つ `if`。戻らない側は
--- 呼び出しの前に `File` を手放す。
+-- `fail` で終わる腕と `FileIn` を閉じる腕を持つ `match`、`exit` で終わる枝と `FileIn` を閉じる枝を持つ `if`。戻らない側は
+-- 呼び出しの前に `FileIn` を手放す。
 import Fail (Fail(..))
 import FileIn
 

@@ -2749,11 +2749,11 @@ fn passes_until_checks_its_input() {
 
 // 印: V1、V2、作る所の検査 (docs/spec/lir.md の「Kind の印の検査」)
 
-/// `File` を受けて閉じる関数と、`File` を返す関数。
+/// `FileIn` を受けて閉じる関数と、`FileIn` を返す関数。
 const TAKES_LIN: &str = "fn g(h.0: obj lin) -> unit {\n  let u.1: unit = extern Std.FileIn.close(h.0)\n  return u.1\n}\n";
 const GIVES_LIN: &str = "fn h(s.0: obj) -> obj lin {\n  let f.1: obj lin = extern Std.FileIn.open(s.0)\n  return f.1\n}\n";
 
-/// `File` を受けて返す操作と、`unr` の値を受けて返す操作。
+/// `FileIn` を受けて返す操作と、`unr` の値を受けて返す操作。
 const LIN_OPS: &str = "effect L { take(tobj lin) -> tobj lin, ask(unit) -> tobj }\n";
 
 #[test]
@@ -2917,7 +2917,7 @@ fn k(a.0: obj) -> tobj lin {{
 {TAKES_LIN}{UNIFORM}"
     );
     assert_eq!(check_scopes(&text), Ok(()));
-    // 定数は `lin` の受け手に渡せる。`Option (List File)` の `None` を `lin` の引数に渡す形である
+    // 定数は `lin` の受け手に渡せる。`Option (List FileIn)` の `None` を `lin` の引数に渡す形である
     let constants = format!(
         "{OPTION}fn f() -> tobj lin {{\n  jump b1(#0, 1, ())\nb1(a.0: tobj lin, b.1: int lin, c.2: unit lin):\n  return a.0\n}}\n"
     );

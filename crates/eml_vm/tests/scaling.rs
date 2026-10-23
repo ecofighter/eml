@@ -275,7 +275,7 @@ fn bytes_line_loop(path: &str, trimmed: usize) -> String {
 
 #[test]
 fn a_bytes_line_loop_does_not_dup_the_file() {
-    // 読みは `File` を借りて結果を先に返すので、行ごとにハンドルを `dup` しない。行の数を2倍にしても
+    // 読みは `FileIn` を借りて結果を先に返すので、行ごとにハンドルを `dup` しない。行の数を2倍にしても
     // `rc_increments` は変わらない (docs/spec/lir.md の「extern の借用」)
     let increments = |n: usize| {
         let (path, trimmed, _) = lines_file("bytes-line-loop", n);
@@ -314,7 +314,7 @@ fn stdin_bytes_line_loop(trimmed: usize) -> String {
 
 #[test]
 fn a_stdin_line_loop_does_not_dup_the_handle() {
-    // `Stdin` の読みも `File` と同じく、ハンドルを借りて結果を先に返す。行の数を2倍にしても `rc_increments` は
+    // `Stdin` の読みも `FileIn` と同じく、ハンドルを借りて結果を先に返す。行の数を2倍にしても `rc_increments` は
     // 変わらない (docs/spec/lir.md の「extern の借用」)
     let increments = |n: usize| {
         let (text, trimmed) = lines_text(n);

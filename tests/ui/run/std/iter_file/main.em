@@ -1,5 +1,5 @@
 -- `FileIn.read_line` で読む生産者を `Iter.generate` で包む (docs/spec/stdlib.md)。`Iter.take` が途中でやめると、残りの
--- 継続ごと `File` を閉じる。閉じなければ checked mode の漏れの検査で落ちる
+-- 継続ごと `FileIn` を閉じる。閉じなければ checked mode の漏れの検査で落ちる
 import Iter
 import Yield (Yield(..))
 import FileIn

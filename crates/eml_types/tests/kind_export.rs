@@ -30,7 +30,7 @@ fn a_lambda_that_captures_nothing_is_unr() {
 
 #[test]
 fn a_lambda_that_captures_a_file_is_lin() {
-    // `g` の矢印は `File` の `h` を捕まえて下限 `Lin` を持つので、最小解が `Lin` になる
+    // `g` の矢印は `FileIn` の `h` を捕まえて下限 `Lin` を持つので、最小解が `Lin` になる
     let text = "import FileIn\nmain : Unit -> <IO> Unit\nmain () =\n  let h = FileIn.open \"a.txt\"\n  let g = fn () -> FileIn.close h\n  g ()";
     insta::assert_snapshot!(exported(text), @"
     main : Unit -> <IO> Unit

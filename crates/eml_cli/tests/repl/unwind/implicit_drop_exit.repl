@@ -1,4 +1,4 @@
-# 入力が `File` を開いたまま `exit 1` を呼ぶ。`exit` の前の `drop` が `File` を閉じ、次の入力も動き、閉じるときに漏れがない
+# 入力が `FileIn` を開いたまま `exit 1` を呼ぶ。`exit` の前の `drop` が `FileIn` を閉じ、次の入力も動き、閉じるときに漏れがない
 > import FileIn
 > let f = FileIn.open "implicit_drop_exit.repl" in exit 1
 > 1 + 1

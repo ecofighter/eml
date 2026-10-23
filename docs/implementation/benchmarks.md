@@ -64,6 +64,8 @@
 
 `list.em` と `tree.em` はデータ型を自分で定義する。2つの多相な関数 (`map`、`foldl`、`size`、`fold`) では、型変数の位置の `Int` が `box` と `unbox` を通る。
 
+`bench/` のプログラムは std の `List` を `import Std.List` と書く。`bench/run.sh` と `bench/scripts.sh` は `bench/` を根にして読むので、`import List` は大文字小文字だけが違う `bench/list.em` を見つけて E1026 になり、標準ライブラリに進まない ([モジュールと名前解決](../spec/modules.md) の「標準ライブラリ」)。回数のテストは入口のファイルだけをメモリの上の木 (`MemorySource`) から読むので、`import List` と書いても通り、この誤りに気づかない。
+
 ## 回数のテスト
 
 `crates/eml_vm/tests/bench.rs` は、プログラムごとに1つのテストで、VM の検査モードで走らせ、出力を確かめ、`RunStats` の全項目 ([VM](../spec/vm.md) の「`RunStats`」) をインラインスナップショットで固定する。`every_program_in_bench_has_a_test` は、`bench/` のファイルの一覧とテストのプログラムの一覧が一致することを確かめる。回数は機械の速さに左右されないので、ふだんの実行で流す。
@@ -463,6 +465,18 @@ C/Rust との比
 - 主張: `String.char_at` には専用の VM の命令を置かず、汎用の `Op::Extern` で動かす。専用の命令 `StrCharAt` を足しても、文字を読むループの命令の数は 10% も減らない。一方、区切りがすべて ASCII の走査を `char_at` で書くと、専用の命令を持つ `byte_at` で書くより遅いので、`wc` はバイトで走査する
 - 数値: `bench/char_loop.em` は、汎用の `Op::Extern` で 207,838,220 命令、`StrCharAt` を足すと 200,857,118 命令で、実行の分で 4.4% の減りだった。文字列を伸ばすだけの版 (131,419,002 命令) を引いた読みのループの分では、約 9.1% の減りである (M5、4364489a の木と、それに `StrCharAt` を足した未コミットの木)。`bench/scripts.sh` の `wc` の行 (9000 KiB) は、`char_at` と `String.next` で読む形で eml 0.40 秒、`byte_at` で読む形で 0.28 秒だった (M5、64e6248 と be27bf7)
 - 根拠にしている所: [VM](../spec/vm.md) の「基本操作と extern」の `byte_at` と `byte_length` の項、[標準ライブラリ](../spec/stdlib.md) の「`String`」の走査の方針、`tests/ui/run/scripts/wc/main.em` の `is_space`、[ロードマップ](../future/roadmap.md) の「処理系」の、`Char`、`Byte`、`Bits`、`String` の行に VM の命令を足す項目
+
+### `String` を import するプログラムの前段の分
+
+- 主張: `Std.String` を import するプログラムは、`String` が import する `List`、`Char`、`Iter`、`Yield` も読んでコンパイルする。この前段の命令は `empty` に入らないので、そのまま「実行の分」に加わる。大きさの引数を読む5つのプログラムも、`String.to_int` を通してこの分を持つ。std のコンパイルの結果を使い回せるようになったら (ロードマップの「処理系」のインクリメンタル化)、実行の分の引き方を見直す
+- 数値: 34c7489 の表から be27bf7 の表で、`String` を import するプログラムの実行の分は約3500万〜3900万命令増えた。`byte_loop` +31%、`sieve_var` +39%、`nbody` +24%、`push_fold` +24%、`fold_state` +22%、`fannkuch_var` +15% である。`RunStats` は変わっていないので、増えたのは前段の分である。`List` だけを import するプログラムは、`List.em` が大きくなった分の約1100万命令増えた (M5)
+- 根拠にしている所: 上の「基準のプログラム」の大きさの引数の段落、[ロードマップ](../future/roadmap.md) の「処理系」のインクリメンタル化の項目
+
+### `Map` と `Set` の釣り合いの形
+
+- 主張: `Std.Map` と `Std.Set` は、左右の高さの差をコンストラクタで表す AVL 木にする。高さか大きさを `match` か `if` の値として読む釣り合いの関数は合流のブロックを作り、token は合流へ流れない ([LIR](../spec/lir.md) の「token の流れ」) ので、節の箱を使い回せない。成分を受ける `bal l k v r` の形も、使い回しが 0 である。赤黒木は確保が約2倍で、更新が 25〜45% 遅い。`Set` を `Map a Unit` にしないのは、確保の数が同じで、節が1語小さく、API に `Unit` が出ないためである
+- 数値: release、5回の中央値。文字列のキー 2000 種に30万回の `upsert` で、採った形 0.21 秒、赤黒木 0.26 秒、高さの欄を持つ AVL 0.49 秒、OCaml の AVL 0.37 秒、Adams の木 0.36 秒、AA 木 0.32 秒。昇順の Int のキー30万では 0.37 秒、0.53 秒、0.69 秒、0.64 秒、0.62 秒、0.55 秒。5万個に100万回の `lookup` はどれも 0.43〜0.45 秒。昇順の2万個を入れる確保は、検査モードで採った形 40012、赤黒木 99955、高さの欄を持つ AVL 327230、OCaml の AVL 347213、Adams の木 416480。2319493b に試作を足した木で測った。リポジトリにない試作で、コミットからは再現できない
+- 根拠にしている所: [標準ライブラリ](../spec/stdlib.md) の「`Std.Map`」と「`Std.Set`」の釣り合いを直す関数の項、`bench/std_map.em`
 
 ### VM と Rust の版の比の主な原因
 

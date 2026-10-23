@@ -717,7 +717,7 @@ fn unwind<M: Mode>(
                     unsafe { ctx.heap_mut().decref(state) }?;
                 }
                 // 表のスロットは、LIR の所有の規則によりこのフレームが持つ参照である。`Lin` の物体も手放してよく、
-                // `File` はここで閉じる
+                // 線形なハンドル (`FileIn`、`FileOut` など) はここで閉じる
                 for &(slot, count) in &entry.slots {
                     for _ in 0..count {
                         unsafe { ctx.heap_mut().decref(task.get(slot)) }?;

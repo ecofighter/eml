@@ -429,8 +429,8 @@ fn third() -> unit {
     machine.close().unwrap_or_else(|error| panic!("{error}"));
 }
 
-/// 根の値は `Unr` なので、検証を通ったプログラムの根は `File` に届かない。検証を通らない手書きの LIR で `File` を根に
-/// 置き、続けられる誤りで止めると、回復は `File` を写せずに失敗する。その誤りは元の誤りと回復できない理由を持ち、
+/// 根の値は `Unr` なので、検証を通ったプログラムの根は `FileIn` に届かない。検証を通らない手書きの LIR で `FileIn` を根に
+/// 置き、続けられる誤りで止めると、回復は `FileIn` を写せずに失敗する。その誤りは元の誤りと回復できない理由を持ち、
 /// セッションを使えなくする (docs/spec/vm.md の「追記」)。
 #[test]
 fn a_failed_recovery_breaks_the_session() {

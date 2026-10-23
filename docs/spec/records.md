@@ -69,19 +69,19 @@ main () =
 
 ```haskell
 data Job =
-  | Job { name : String, log : FileIn.FileIn }
+  | Job { name : String, log : FileOut.FileOut }
 
-log_of : Job -> FileIn.FileIn
+log_of : Job -> FileOut.FileOut
 log_of j = j.log                  -- OK: 残りの name : String は Unr
 
 name_of : Job -> String
-name_of j = j.name                -- エラー: 残りの log : FileIn.FileIn が Lin
+name_of j = j.name                -- エラー: 残りの log : FileOut.FileOut が Lin
                                   -- help: 分解のパターンで取り出し、log を drop に渡す
 
 close_job : Job -> <IO> String
 close_job j =
   let Job { name, log } = j       -- OK
-  FileIn.close log
+  FileOut.close log
   name
 
 let n = (FileIn.read_all f).0         -- エラー: 残りの .1 (FileIn.FileIn) が Lin
@@ -94,7 +94,7 @@ let (text, f) = FileIn.read_all f     -- OK
 
   ```haskell
   data Log =
-    | Log { file : FileIn.FileIn, lines : Int }
+    | Log { file : FileOut.FileOut, lines : Int }
 
   bump : Log -> Log
   bump l =

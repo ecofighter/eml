@@ -83,7 +83,7 @@ pub(super) fn mark(types: &TypeStore, ty: TypeId, hir: &HirProgram) -> Mark {
     scalar_or(types, ty, hir, || types.linearity(ty))
 }
 
-/// 宣言の型を代入せずに読む所 (操作の表) の印。`Rigid` と `Var` に依存する型は `poly` になる。保守的なので、`(a, File)` も `lin` でなく `poly` になる。
+/// 宣言の型を代入せずに読む所 (操作の表) の印。`Rigid` と `Var` に依存する型は `poly` になる。保守的なので、`(a, FileIn)` も `lin` でなく `poly` になる。
 pub(super) fn declared_mark(types: &TypeStore, ty: TypeId, hir: &HirProgram) -> Mark {
     scalar_or(types, ty, hir, || types.linearity_or_poly(ty))
 }

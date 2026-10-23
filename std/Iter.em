@@ -8,7 +8,7 @@ pub data Iter <e> a = | Iter (once Unit -> <e> Option (a, Iter <e> a))
 pub next : Iter <e> a -> <e> Option (a, Iter <e> a)
 next (Iter pull) = pull ()
 
--- 継続 `k` をそのまま次の `Iter` にする。生産者が持つ `File` は、継続を捨てるときに閉じる
+-- 継続 `k` をそのまま次の `Iter` にする。生産者が持つ `FileIn` は、継続を捨てるときに閉じる
 pub generate : (Unit -> <Yield a | e> Unit) -> Iter <e> a
 generate producer =
   Iter (fn () ->
@@ -56,7 +56,7 @@ filter_map f it =
           | Some y -> Some (y, filter_map f rest)
           | None -> next (filter_map f rest))
 
--- n 個を渡した後の `next` で残りを捨てる。`File` が閉じるのはそのときになる
+-- n 個を渡した後の `next` で残りを捨てる。`FileIn` が閉じるのはそのときになる
 pub take : Int -> Iter <e> a -> Iter <Panic | e> a
 take n it =
   Iter (fn () ->

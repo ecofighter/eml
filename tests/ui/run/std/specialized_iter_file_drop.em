@@ -1,5 +1,5 @@
--- `File` を持つ生産者を、特殊化した `Iter.generate` で引いて途中で捨てる。継続の閉包が `File` を捕獲するので、
--- `Iter.take` が残りを捨てると `File` も閉じる。閉じなければ checked mode の漏れの検査で落ちる
+-- `FileIn` を持つ生産者を、特殊化した `Iter.generate` で引いて途中で捨てる。継続の閉包が `FileIn` を捕獲するので、
+-- `Iter.take` が残りを捨てると `FileIn` も閉じる。閉じなければ checked mode の漏れの検査で落ちる
 import Iter
 import Yield (Yield(..))
 import FileIn

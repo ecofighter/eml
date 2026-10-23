@@ -1,4 +1,4 @@
--- `Option (List File)` の `Some []` を検査する葉は、`File` を何も束縛しないので、調べた値を drop する。`Some []` は
+-- `Option (List FileIn)` の `Some []` を検査する葉は、`FileIn` を何も束縛しないので、調べた値を drop する。`Some []` は
 -- `lin` の値なので、`lin` の受け手に渡せる (docs/spec/core-ir.md の「決定木の葉の `drop`」)。
 import FileIn
 

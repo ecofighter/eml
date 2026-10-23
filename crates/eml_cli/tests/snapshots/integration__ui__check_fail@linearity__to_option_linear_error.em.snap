@@ -3,10 +3,12 @@ source: crates/eml_cli/tests/ui.rs
 expression: rendered
 input_file: tests/ui/check-fail/linearity/to_option_linear_error.em
 ---
-[E1002] Error: cannot find type or effect `File` in module `Std.FileIn`
-   ╭─[ check-fail/linearity/to_option_linear_error.em:2:16 ]
+[E3001] Error: a linear value is passed to `to_option`, which may use it more than once or not at all
+   ╭─[ check-fail/linearity/to_option_linear_error.em:9:11 ]
    │
- 2 │ import FileIn (File)
-   │                ──┬─  
-   │                  ╰─── not found in this module
+ 9 │   let r = Fail.to_option (fail_with_file "x")
+   │           ───────┬──────  
+   │                  ╰──────── `to_option` is used here
+   │ 
+   │ Note: linear values, such as files, the continuation of a `once` operation and closures that capture one, must be used exactly once
 ───╯

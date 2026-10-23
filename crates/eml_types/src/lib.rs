@@ -160,7 +160,7 @@ impl TypedProgram {
         values
     }
 
-    /// 関数の一様な位置 `position` の型変数の Kind。一様な位置の鍵は `Int` の呼び出し元にも `File` の呼び出し元にも
+    /// 関数の一様な位置 `position` の型変数の Kind。一様な位置の鍵は `Int` の呼び出し元にも `FileIn` の呼び出し元にも
     /// 使われるので、スキームで `Unr` に固定されていなければ `Poly` にする
     /// (docs/spec/types.md の「`Flexible` と `OpVar` の Kind」)。
     pub fn uniform_kind(&self, function: FunctionId, position: usize) -> Lin {

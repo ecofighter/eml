@@ -12,7 +12,7 @@
 - `Task a` を `Lin` にする: `Async.start` が返すタスクを、必ず `await` するか `drop` (キャンセル) させる。構造化された並行処理にする
 - 標準ライブラリ (`FileIn`、`FileOut`、`Fs` の読み書き、`List` と並べ替え、`String`、`Char`、`Bytes`、`Map`、`Set`、`Env`、`Stdin`、`Stdout`、`Stderr`、`Proc.run`、`eprintln`) と extern の境界の方針は、[標準ライブラリ](../spec/stdlib.md) にある。extern は小さい核にとどめ、どのスクリプトも使う少数の関数だけを eml で書いている。`replace` と、`Option` と `Result` の補助関数は、決めていない
 - `Prelude` の範囲: 今は `Bool`、`Ordering`、`List`、`Option`、`Result`、`println`、`eprintln`、`not`、`|>` などの標準の演算子と fixity ([宣言](../spec/declarations.md) の標準の演算子の表)、型クラス `Eq`、`Ord`、`Show`、`Num`、`Div`、`Bits` ([宣言](../spec/declarations.md) の「Prelude のクラス」) を持つ。
-- モジュールの候補: `Path`、`Json`、`Csv`、`Toml`、`Regex`、`Http`、`Async`
+- モジュールの候補: `Json`、`Csv`、`Toml`、`Regex`、`Http`、`Async`
 - 補間の穴は、Prelude の `Show` の `display` で文字列にする ([式](../spec/expressions.md) の「補間」)。標準ライブラリの型を穴に書けるようにするには、`Show` の instance を置く。人が読む形が `show` の形と違う型は、`display` を上書きする
 - `Bytes` と UTF-8: `String` は常に妥当な UTF-8 である。`String` の extern は、検証付きのデコード (`decode`)、エンコード (`push`)、バイト長 (`byte_length`)、バイト位置から `Char` を読む操作 (`char_at`)、境界を検査する切り出し (`slice`) の核と、バイトを借りて読む `byte_at`、std の中だけの `find_from` である。文字の反復、分割、検索は eml で書いた ([標準ライブラリ](../spec/stdlib.md) の「`String`」)
 - エフェクトとジェネレータ: エフェクトのモジュール `Std.Yield`、`Std.Fail`、`Std.State` とその handler、`once` の継続で作る引いて使うジェネレータ `Std.Iter` とその上の変換、`FileIn.read_line` がある ([標準ライブラリ](../spec/stdlib.md) の「エフェクトのモジュール」)。多回の再開ができるジェネレータ (`multi` の `yield`) と、push の形の変換 (`Yield` を受けて `Yield` を出す handler) は入れない。実用のプログラムで要る例が出たら足す。多回の再開ができるジェネレータは、今の `Yield` の意味を変えずに、別のエフェクトとして足せる

@@ -2,7 +2,7 @@
 
 位置づけ: 説明。
 
-本番の構文で書いたプログラム例を集める。標準ライブラリの API は [標準ライブラリ](stdlib.md) が定める。今の実装で動く例は `tests/ui/run/scripts/` の5本 (`wc`、`grep`、`logstat`、`csv2jsonl`、`deploy`) にある。ここの例には、今の std にない関数 (`Fs.read_lines`、`Proc.spawn` など) や、実装していない構文 (コマンドリテラル) を使うものがあり、構文を示すためのものである。
+本番の構文で書いたプログラム例を集める。標準ライブラリの API は [標準ライブラリ](stdlib.md) が定める。今の実装で動く例は `tests/ui/run/scripts/` の5本 (`wc`、`grep`、`logstat`、`csv2jsonl`、`deploy`) にある。ここの例には、今の std にない関数とモジュール (`Fs.read_lines`、`Option`、`Proc.spawn` など) や、実装していない構文 (コマンドリテラル) を使うものがあり、構文を示すためのものである。
 
 ## ログの集計 (全体)
 
@@ -11,6 +11,10 @@ import、リストのパターン、補間、複数行の文字列、名前付�
 ```haskell
 #!/usr/bin/env eml
 -- | ログを集計して、レポートを書く
+import Env
+import Fs
+import List (filter, filter_map, length, map)
+import String
 import Report.Format (render, Style(..))
 
 data Level =
@@ -70,6 +74,10 @@ main () =
 補間を含む。
 
 ```haskell
+import FileIn
+import List (each, filter)
+import String (lines)
+
 grep : String -> String -> <IO, Panic> Unit
 grep pat path =
   let f = FileIn.open path
@@ -110,6 +118,9 @@ counter () =
 `Fail` と `try` は、上のログの集計の例と同じものを使う。
 
 ```haskell
+import Env
+import Option
+
 effect Ask where
   ask : String -> String
 

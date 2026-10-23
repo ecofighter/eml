@@ -646,7 +646,7 @@ fn an_interrupted_input_fails_and_the_session_continues() {
     }
 }
 
-/// 手放されると数を足す読み手。`File` が閉じたことを数で確かめる。
+/// 手放されると数を足す読み手。`FileIn` が閉じたことを数で確かめる。
 struct CountedReader {
     inner: io::Cursor<Vec<u8>>,
     drops: Arc<AtomicUsize>,
@@ -695,9 +695,9 @@ impl Host for InterruptingOpen {
     }
 }
 
-/// 割り込みで止まった入力が開いた `File` は、`eval` から戻った時点で閉じていて、検査モードの `close` もリークを
-/// 報告しない。`FileIn.read_all` の中で止まったとき (`Extern` の誤り) も、`File` を渡す呼び出しの安全点で止まったときも、
-/// `File` は失敗した実行のスタックに残り、回復が古いヒープを捨てるときに破棄処理が閉じる。`read_all` は `File` を
+/// 割り込みで止まった入力が開いた `FileIn` は、`eval` から戻った時点で閉じていて、検査モードの `close` もリークを
+/// 報告しない。`FileIn.read_all` の中で止まったとき (`Extern` の誤り) も、`FileIn` を渡す呼び出しの安全点で止まったときも、
+/// `FileIn` は失敗した実行のスタックに残り、回復が古いヒープを捨てるときに破棄処理が閉じる。`read_all` は `FileIn` を
 /// 借りるので、誤りでも手放さない (docs/spec/object-model.md の「セッションの根」)。
 #[test]
 fn a_file_left_open_by_an_interrupt_is_closed_by_recovery() {

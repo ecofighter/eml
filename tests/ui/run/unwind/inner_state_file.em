@@ -1,4 +1,4 @@
--- 内側の handler の状態が `File` のまま、本体が外側の `Fail.to_result` へ中断する。巻き戻しが内側の handler を外すときに状態を取り出して手放し、`File` を閉じる。
+-- 内側の handler の状態が `FileIn` のまま、本体が外側の `Fail.to_result` へ中断する。巻き戻しが内側の handler を外すときに状態を取り出して手放し、`FileIn` を閉じる。
 import Fail (Fail(..))
 import FileIn
 

@@ -1,5 +1,5 @@
 //! データ型の Kind (docs/spec/types.md の「Kind」)。データ型の Kind はフィールドの Kind の join なので、`Option a` の
-//! Kind は `a` の Kind になる。フィールドに定数の `Lin` の型 (`File` など) があれば、型引数によらず `Lin` になる。
+//! Kind は `a` の Kind になる。フィールドに定数の `Lin` の型 (`FileIn` など) があれば、型引数によらず `Lin` になる。
 //! 型引数ごとの変位 (値の中で現れる位置の向き) もここで求める。どれも宣言だけで決まるので、検査の前に1回だけ求める。
 
 use eml_extern::Linearity;
@@ -14,7 +14,7 @@ use la_arena::Arena;
 pub(crate) struct DataKind {
     /// 型引数の位置ごとに、Kind に効くかどうか。組み込みの型は型引数を持たないので空である。
     pub params: Vec<bool>,
-    /// 定数の `Lin` の型を、関数型の外のフィールドに含む。extern の型は表の行の Kind が決める (`File` が `Lin`)。
+    /// 定数の `Lin` の型を、関数型の外のフィールドに含む。extern の型は表の行の Kind が決める (`FileIn` が `Lin`)。
     pub lin: bool,
     /// 型引数の位置ごとの変位。操作の結果の型の矢印が、節から見てどちら向きの位置にあるかを決めるのに使う
     /// (docs/spec/effects.md の「handler の意味」)。

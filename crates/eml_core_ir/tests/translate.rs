@@ -2766,7 +2766,7 @@ fn a_parameter_and_a_result_of_file_type_are_lin() {
 
 #[test]
 fn a_handle_body_and_clause_closures_take_the_join_of_their_captures() {
-    // 本体と節のクロージャには HIR の型がないので、捕まえた値の印の結びにする。本体は File を、節は Int を捕まえる
+    // 本体と節のクロージャには HIR の型がないので、捕まえた値の印の結びにする。本体は FileIn を、節は Int を捕まえる
     let text = "import FileIn\neffect Ask where\n  ask : Unit -> Int\n\nuse_file : FileIn.FileIn -> <Ask, IO> Int\nuse_file f =\n  FileIn.close f\n  ask ()\n\nmain : Unit -> <IO, Panic> Unit\nmain () =\n  let f = FileIn.open \"a.txt\"\n  let n = 40 + 1\n  let m =\n    handle use_file f with\n      | ctl ask () k -> k n\n  println (show (m + 1))";
     let ir = core_text(text, Pass::Translate);
     insta::assert_snapshot!(function(&ir, "main"), @r#"
@@ -2806,8 +2806,8 @@ fn a_constructor_built_from_a_scrutinee_expression_takes_its_type_mark() {
 
 #[test]
 fn the_fields_a_projection_leaves_behind_take_their_types_marks() {
-    // 射影が残すフィールドは `Unr` でなければ E3004 なので、`lin` になるのは取り出す File のフィールドである。
-    // 更新が残すフィールドは、File のフィールドも含めて型の印を持つ
+    // 射影が残すフィールドは `Unr` でなければ E3004 なので、`lin` になるのは取り出す FileIn のフィールドである。
+    // 更新が残すフィールドは、FileIn のフィールドも含めて型の印を持つ
     let text = "import FileIn\ndata R = | R { n : Int, f : FileIn.FileIn }\n\ntake : R -> FileIn.FileIn\ntake r = r.f\n\nbump : R -> R\nbump r = { r | n = 5 }\n\nmain : Unit -> <IO> Unit\nmain () = FileIn.close (take (bump (R { n = 1, f = FileIn.open \"a.txt\" })))";
     let ir = core_text(text, Pass::Translate);
     insta::assert_snapshot!(function(&ir, "take"), @"
@@ -3295,7 +3295,7 @@ fn a_group_member_as_a_value_carries_the_shared_captures() {
 
 #[test]
 fn a_group_without_recursion_keeps_each_members_captures() {
-    // 再帰しない組では、`File` を捕まえた `finish` だけがそれを受け取る。共有すると `next` の呼び出しが `f` を複製する
+    // 再帰しない組では、`FileIn` を捕まえた `finish` だけがそれを受け取る。共有すると `next` の呼び出しが `f` を複製する
     let text = "import FileIn\nmain : Unit -> <IO, Panic> Unit\nmain () =\n  let f = FileIn.open \"input.txt\"\n  let finish () = FileIn.close f\n  and next n = n + 1\n  println (show (next 1))\n  finish ()";
     let shown = core_text(text, Pass::Translate);
     let signatures: Vec<&str> = shown
@@ -3410,7 +3410,7 @@ fn taking_only_unr_fields_out_of_a_lin_struct_drops_nothing() {
 
 #[test]
 fn a_non_returning_call_drops_the_open_file_first() {
-    // 戻らない呼び出しで終わる経路で消費しない `File` は、引数を評価した後、呼び出しの直前に手放す。`unr` の `s` は
+    // 戻らない呼び出しで終わる経路で消費しない `FileIn` は、引数を評価した後、呼び出しの直前に手放す。`unr` の `s` は
     // 手放さない (docs/spec/core-ir.md の「戻らない呼び出しの前の `drop`」)。所有の段の検査まで通す
     let text = "import FileIn\nmain : Unit -> <IO, Panic> Unit\nmain () =\n  let f = FileIn.open \"a\"\n  let s = \"b\"\n  exit (1 + 1)";
     let ir = core_text(text, Pass::Translate);

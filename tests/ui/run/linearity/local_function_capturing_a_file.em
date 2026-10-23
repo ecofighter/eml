@@ -1,4 +1,4 @@
--- `File` を捕まえたローカル関数を呼ばずに `fail` する枝では、持ち上げたローカル関数の捕まえる `File` を手放す。
+-- `FileIn` を捕まえたローカル関数を呼ばずに `fail` する枝では、持ち上げたローカル関数の捕まえる `FileIn` を手放す。
 import Fail (Fail(..))
 import FileIn
 

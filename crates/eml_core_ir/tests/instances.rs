@@ -525,7 +525,7 @@ fn lowering_shared_type_arguments_is_linear() {
 
 #[test]
 fn instances_that_differ_only_in_linearity_have_different_names() {
-    // `k` は `File` を捕まえるので矢印が `Lin` になる。`inc` の宣言の一番外の矢印は `Unr` で、参照の row は開いて
+    // `k` は `FileIn` を捕まえるので矢印が `Lin` になる。`inc` の宣言の一番外の矢印は `Unr` で、参照の row は開いて
     // いるので、`main` の中で呼ぶと `<IO>` になる。2つの型引数は線形性だけが違い、名前は矢印の線形性を `once` で書くので、
     // 番号付きの名前に落ちない (docs/spec/core-ir.md の「変換の規則」)
     let text = "import FileIn\nid : a -> a\nid x = x\n\ninc : Int -> <Panic> Int\ninc x = x + 1\n\nmain : Unit -> <IO, Panic> Unit\nmain () =\n  let h = FileIn.open \"a.txt\"\n  let k = fn n ->\n    FileIn.close h\n    n\n  let one = id k\n  let a = one 1\n  let i = id inc\n  println (show (i a))";
@@ -560,7 +560,7 @@ fn a_type_variable_above_a_poly_arrow_makes_the_recursive_call_poly() {
 #[test]
 fn a_closure_with_a_file_passed_as_a_type_variable_lowers() {
     // 上の `f` の例を LIR まで下ろす。debug ビルドでは、translate の参照、操作、捕獲の検査がこの途中で走るので、
-    // 検査がこのプログラムを拒まないことも確かめる。`k` は `File` を捕まえうるので `unr` にならない
+    // 検査がこのプログラムを拒まないことも確かめる。`k` は `FileIn` を捕まえうるので `unr` にならない
     // (docs/spec/core-ir.md の「食い違いがないことの検査」)
     let text = F_EXAMPLE;
     let program = eml_test_support::lir(text);

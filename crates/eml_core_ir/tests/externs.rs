@@ -487,7 +487,7 @@ fn the_tags_externs_build_name_the_constructors_of_their_layouts() {
         (bool[FALSE as usize], bool[TRUE as usize]),
         ("False", "True")
     );
-    // `FileIn.read_all` の結果と `File` の組は、要素が2つの組の配置の唯一のコンストラクタである
+    // `FileIn.read_all` の結果と `FileIn` の組は、要素が2つの組の配置の唯一のコンストラクタである
     assert_eq!(constructors("(,)"), ["(,)"]);
     assert_eq!(TUPLE, 0);
 }

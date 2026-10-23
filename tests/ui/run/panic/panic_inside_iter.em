@@ -1,5 +1,5 @@
 -- `Iter.generate` を `Iter.fold` で引き、畳み込みの関数の中でゼロ除算が起きる。外の `try_panic` が捕まえ、
--- 生産者の継続と `File` は巻き戻しで手放す。検査モードの漏れの検査も通る。`Iter.fold` だけの形は融合で継続を作らない
+-- 生産者の継続と `FileIn` は巻き戻しで手放す。検査モードの漏れの検査も通る。`Iter.fold` だけの形は融合で継続を作らない
 -- ループになり、`Iter.filter` を重ねた形は生産者の `once` の継続を捕まえたまま中断する。
 import Iter
 import Yield (Yield(..))

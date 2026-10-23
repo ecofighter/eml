@@ -960,9 +960,9 @@ fn binding(line: &str) -> &str {
 
 #[test]
 fn closures_ep_builds_take_the_join_of_their_captures() {
-    // yield をまたいで `File` が生きている `use_it` の続きのクロージャは `lin` で、それを足した κ も `lin` である。
+    // yield をまたいで `FileIn` が生きている `use_it` の続きのクロージャは `lin` で、それを足した κ も `lin` である。
     // `count` の続きは `Int` しか捕まえないので `unr` になる。すぐに再開しない節の入口が作る節のクロージャも、
-    // 操作の引数の `File` を捕まえて `lin` になる
+    // 操作の引数の `FileIn` を捕まえて `lin` になる
     // (docs/spec/core-ir.md の「EP が足す変数の印」)
     let text = format!(
         "import FileIn\neffect Ask where\n  ask : Unit -> Int\n\neffect Sink where\n  put : FileIn.FileIn -> Unit\n\nuse_it : FileIn.FileIn -> <Ask, IO> Unit\nuse_it f =\n  let n = ask ()\n  FileIn.close f\n  println (show n)\n\ncount : Int -> <Ask, Panic> Int\ncount m =\n  let n = ask ()\n  n + m\n\n{HIDE}main : Unit -> <IO, Panic> Unit\nmain () =\n  let Box u = hide 0 use_it\n  let Box c = hide 0 count\n  handle u (FileIn.open \"input.txt\") with\n    | ctl ask () k -> k 1\n  let r = handle c 1 with\n    | ctl ask () k -> k 2\n  println (show r)\n  let Box p = hide 0 put\n  handle p (FileIn.open \"input.txt\") with\n    | ctl put f k ->\n      FileIn.close f\n      let u = k ()\n      println \"resumed\"\n      u"
@@ -995,7 +995,7 @@ fn closures_ep_builds_take_the_join_of_their_captures() {
 fn evidence_and_evv_are_unr_and_state_is_poly() {
     // EP が基本操作の結果を束縛する変数は、基本操作の表の結果の印を持つ。evidence、`evv`、入口のクロージャは `unr`、
     // 状態、κ、節の本体、ダミーは `poly` である。ただし in-place の入口が取り出す状態は、translate が節の状態の引数に
-    // 付けた印のままである。handle の本体の結果は `File` でありうるので `poly` である
+    // 付けた印のままである。handle の本体の結果は `FileIn` でありうるので `poly` である
     // (docs/spec/core-ir.md の「EP が足す変数の印」)
     let text = "effect State s where\n  get : Unit -> s\n  put : s -> Unit\n\neffect Ask where\n  ask : Unit -> Int\n\nrun : (Unit -> <e> String) -> <State Int | e> String\nrun cb =\n  let n = get ()\n  let s = cb ()\n  s ++ show n\n\ncb : Unit -> <State String> String\ncb () = get () ++ \"!\"\n\nmain : Unit -> <IO, Panic> Unit\nmain () =\n  let r = handle (handle run cb with\n                    | ctl get () k -> k 42\n                    | ctl put _ k -> k ()) with\n            | ctl get () k -> k \"str\"\n            | ctl put _ k -> k ()\n  println r\n  let Box b = hide 0 (fn () -> ask () + 1)\n  let a = handle b () with\n    | ctl ask () k ->\n      let v = k 10\n      v * 2\n  println (show a)";
     let text = format!("{HIDE}{text}");

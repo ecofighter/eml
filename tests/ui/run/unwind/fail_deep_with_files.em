@@ -1,4 +1,4 @@
--- 各段が `File` を持ったまま、いちばん深い所で `fail` して外側の `Fail.to_result` へ中断する。どの段の `File` も
+-- 各段が `FileIn` を持ったまま、いちばん深い所で `fail` して外側の `Fail.to_result` へ中断する。どの段の `FileIn` も
 -- 巻き戻しで1回ずつ閉じる。
 import Fail (Fail(..))
 import FileIn

@@ -1,4 +1,4 @@
--- `(n, [])` の葉は `unr` の `n` だけを束縛するので、`(Int, List File)` の値を drop してから `n` を返す
+-- `(n, [])` の葉は `unr` の `n` だけを束縛するので、`(Int, List FileIn)` の値を drop してから `n` を返す
 -- (docs/spec/core-ir.md の「決定木の葉の `drop`」)。
 import FileIn
 

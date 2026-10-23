@@ -56,10 +56,12 @@ import の循環は E1027 にする。型検査は item と SCC の単位で動�
 - 修飾子が `Prelude` になる import は E1030 にする。`import Prelude`、最後のセグメントが `Prelude` のパス (`import Util.Prelude`)、別名の `as Prelude` である。暗黙の修飾子 `Prelude` が、ほかのモジュールと合流しないようにするためである。`import Main` と、入口のファイルを指す import も E1030 にする
 - Haskell の `import Prelude hiding (...)` にあたる構文はなく、Prelude の取り込み方を変える手段を設けない
 - Prelude は標準ライブラリのモジュールの1つで、置き場所は `std/Prelude.em` である (次の「標準ライブラリ」)
-- Prelude に置くものは次の3つに限る。ほかの標準ライブラリのモジュールは import しないと使えないので、どのプログラムでも要るものだけを Prelude に置く
+- Prelude に置くものは次の5つに限る。ほかの標準ライブラリのモジュールは import しないと使えないので、どのプログラムでも要るものだけを Prelude に置く
   1. 構文が名前を引かずに指す item (lang item) と、それが要る型、クラス、instance
   2. リテラルを持つ型の宣言と、その `Eq`、`Ord`、`Show` の instance
-  3. どのプログラムでも要る入出力と制御 (Prelude の `pub` の関数)
+  3. 標準の演算子とその fixity ([宣言](declarations.md) の「fixity」)、そのクラス (`Num`、`Div`、`Bits`) と、リテラルを持つ型へのその instance
+  4. どのプログラムでも要る入出力と制御 (Prelude の `pub` の関数) と、その型に出る型 (`Result`、`IOError` とその欄の `IOErrorKind`)
+  5. 標準ライブラリのいくつものモジュールがシグネチャで共有する型 (`Option`、`Bytes`、`Array`、`MutArray`) と、その instance。型を `Std.Bytes` のような自分のモジュールに置くと、その型を返すほかのモジュールの関数 (`Stdin.read_all_bytes`) を呼ぶだけのモジュールも、型の名前を書くたびにそのモジュールを import することになるためである
 - 型 `T` を扱う関数の集まりは `Std.T` に置く。lang item の脱糖が呼ぶ補助の関数は `pub` にしない。lang item は `pub` によらずに引くので、`pub` でない Prelude の item は利用者から見えないまま脱糖に使える
 
 ## 標準ライブラリ

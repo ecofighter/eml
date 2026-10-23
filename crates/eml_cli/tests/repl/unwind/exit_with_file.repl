@@ -1,4 +1,4 @@
-# 補助の関数が `File` を開いたまま深い所で `exit 2` を呼ぶ。巻き戻しが `File` を閉じ、次の入力も動き、閉じるときに漏れがない
+# 補助の関数が `FileIn` を開いたまま深い所で `exit 2` を呼ぶ。巻き戻しが `FileIn` を閉じ、次の入力も動き、閉じるときに漏れがない
 > import FileIn
 > helper : Int -> <IO, Panic> Int
 . helper n =

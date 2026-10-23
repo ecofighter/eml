@@ -1,8 +1,8 @@
--- `File` を持つ生産者を `Iter.generate` で包み、`Iter.fold` で引く。`Iter.fold` だけの形と `Iter.map` を重ねた形は、
--- 融合で `File` を引数に回すループになる (`crates/eml_core_ir/tests/optimize.rs` の
+-- `FileIn` を持つ生産者を `Iter.generate` で包み、`Iter.fold` で引く。`Iter.fold` だけの形と `Iter.map` を重ねた形は、
+-- 融合で `FileIn` を引数に回すループになる (`crates/eml_core_ir/tests/optimize.rs` の
 -- `a_fold_over_a_file_producer_is_fused`)。`Iter.filter` と `Iter.take` を重ねた形は、一部だけが融合する。生産者は
--- 最後まで引くと `File` を閉じる。`Iter.take` が途中でやめると、残りの継続ごと `File` を捨てて閉じる。どの形でも
--- `File` はちょうど1回閉じ、閉じなければ checked mode の漏れの検査で落ちる
+-- 最後まで引くと `FileIn` を閉じる。`Iter.take` が途中でやめると、残りの継続ごと `FileIn` を捨てて閉じる。どの形でも
+-- `FileIn` はちょうど1回閉じ、閉じなければ checked mode の漏れの検査で落ちる
 import Iter
 import Yield (Yield(..))
 import FileIn

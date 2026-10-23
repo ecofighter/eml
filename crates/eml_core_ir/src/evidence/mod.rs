@@ -154,7 +154,7 @@ fn named(name: &str, repr: Repr, mark: Mark) -> VarInfo {
     }
 }
 
-/// EP が作るクロージャの印。捕まえた値の印の結びで、定数は `unr` である。`File` を捕まえた続きが `lin` になるので、
+/// EP が作るクロージャの印。捕まえた値の印の結びで、定数は `unr` である。`FileIn` を捕まえた続きが `lin` になるので、
 /// 決め打ちの `poly` より正確である (docs/spec/core-ir.md の「EP が足す変数の印」)。
 fn captured_mark(mark: impl Fn(VarId) -> Mark, captures: &[Atom]) -> Mark {
     captures

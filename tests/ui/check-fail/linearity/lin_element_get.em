@@ -1,4 +1,4 @@
--- 要素の型変数は `Unr` に固定されるので、`Lin` の `File` の配列に `Array.get` は使えない。
+-- 要素の型変数は `Unr` に固定されるので、`Lin` の `FileIn` の配列に `Array.get` は使えない。
 import Array
 import FileIn
 

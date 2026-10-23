@@ -1,4 +1,4 @@
--- `File` を開いたまま `exit 1` を呼ぶ。`exit` の前の `drop` が `File` を閉じるので、検査モードで漏れがない。
+-- `FileIn` を開いたまま `exit 1` を呼ぶ。`exit` の前の `drop` が `FileIn` を閉じるので、検査モードで漏れがない。
 import FileIn
 
 main : Unit -> <IO> Unit

@@ -1,4 +1,4 @@
--- `var` の変数は `Unr` か `MutArray` でなければならない。`File` は E3007
+-- `var` の変数は `Unr` か `MutArray` でなければならない。`FileIn` は E3007
 import FileIn
 
 main : Unit -> <IO> Unit

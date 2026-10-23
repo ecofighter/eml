@@ -1,5 +1,5 @@
 -- 引数が2つの適用 `g 0 1` に、引数を1つずつ取る関数の値を渡す。適用は余った引数を `ApplyRest` の枠に預け、2つ目の
--- 呼び出しが外側の `Fail.to_result` へ中断する。呼び出し元のフレームが持つ `File` は閉じる。
+-- 呼び出しが外側の `Fail.to_result` へ中断する。呼び出し元のフレームが持つ `FileIn` は閉じる。
 import Fail (Fail(..))
 import FileIn
 

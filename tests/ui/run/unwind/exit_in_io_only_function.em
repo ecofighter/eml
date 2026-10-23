@@ -1,4 +1,4 @@
--- `<IO>` だけの row の関数は yield しない。3段目で `exit 4` を呼んでも、巻き戻しが各段の `File` を1回ずつ閉じる。
+-- `<IO>` だけの row の関数は yield しない。3段目で `exit 4` を呼んでも、巻き戻しが各段の `FileIn` を1回ずつ閉じる。
 import FileIn
 
 third : Unit -> <IO> Int

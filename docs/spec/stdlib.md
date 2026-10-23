@@ -195,7 +195,7 @@ pub while : (Unit -> <e> Bool) -> (Unit -> <e> Unit) -> <e> Unit
 | `trim_line_end` | `String -> <Panic> String` | eml |
 | `to_int` | `String -> <Panic> Option Int` | eml |
 
-- 位置はどれも UTF-8 のバイトの位置の `Int` で、位置専用の型はない。文字の境界でない位置は、`char_at` と `slice` が `Panic` で断る
+- 位置はどれも UTF-8 のバイトの位置の `Int` で、位置専用の型はない。文字の境界でない位置は、`char_at` と `slice` が `Panic` で断る。位置専用の不透明な型で防げるのは `Int` との取り違えだけで、std とスクリプトは位置を `Int` の算術で組んでいる。位置の取り違えの誤りが実際のプログラムで繰り返し出たときと、共有の部分文字列 (view) を入れるときに、位置専用の型を考え直す
 - 文字の単位は Unicode のスカラー値 (`Char`) である。書記素クラスタと Unicode の正規化は扱わない
 - `byte_length s` は UTF-8 のバイトの数である
 - `byte_at i s` は位置 `i` のバイト (0〜255) を `Byte` で返す。`0 <= i < byte_length s` でなければ `Panic` を起こす
@@ -238,7 +238,7 @@ pub while : (Unit -> <e> Bool) -> (Unit -> <e> Unit) -> <e> Unit
 | `to_fixed` | `Int -> Float -> <Panic> String` | extern |
 | `parse` | `String -> Option Float` | eml |
 
-`String` と同じく、モジュールで修飾して使う (`Float.sqrt x`)。Prelude の名前を増やさないため、Prelude には入れない。
+`Float` の型は Prelude にあり、関数は `Std.Float` にある。関数は `import Float` を書いたモジュールで、`Float.sqrt x` のように修飾して使う ([モジュールと名前解決](modules.md) の「Prelude」と「標準ライブラリ」)。
 
 - `of_int i` は、`i` に最も近い `Float` である。ちょうど中間なら、仮数の最後のビットが偶数の側を選ぶ
 - `truncate` は 0 の側へ切り捨てる。`floor` は床、`ceil` は天井である。`round` は最も近い整数で、ちょうど中間なら偶数の側を選ぶ (Python の `round` と同じで、`round 2.5` は `2`)
@@ -469,7 +469,7 @@ pub data Set a =
 
 ## ハンドル
 
-`Stdin.Stdin` と `FileIn.FileIn` は読むためのハンドルで、`Stdout.Stdout`、`Stderr.Stderr`、`FileOut.FileOut` は書くためのハンドルである。ハンドルの型ごとに1つのモジュールを置き、どのモジュールも、開く関数 (`open` か `create`)、`close`、次の規則の名前の読みか書きを持つ。読みと書きを型で分けるので、取り違えは型の誤り (E2001) になる。
+`Stdin.Stdin` と `FileIn.FileIn` は読むためのハンドルで、`Stdout.Stdout`、`Stderr.Stderr`、`FileOut.FileOut` は書くためのハンドルである。ハンドルの型ごとに1つのモジュールを置き、どのモジュールも、開く関数 (`open`、`FileOut` では `create` と `append`)、`close`、次の規則の名前の読みか書きを持つ。読みと書きを型で分けるので、取り違えは型の誤り (E2001) になる。
 
 関数の名前は、std 全体で次の規則に従う。文字列を読み書きする関数が短い名前を持ち、バイト列の版は `_bytes` を足す。読みは `read_all` と `read_all_bytes`、`read_line` と `read_line_bytes` で、書きは `write` と `write_bytes`、文字列だけの `write_line` である。バイト列にしかない読み (`read_chunk`) は、その名前のままである。スクリプトの大半は文字列を読み、文字列の読みが UTF-8 を確かめることが「`String` はいつも妥当な UTF-8」を支えるので、文字列の版を既定にする。
 
@@ -605,7 +605,7 @@ pub data Set a =
 | `read_text` | `String -> <IO> String` |
 | `write_text` | `String -> String -> <IO> Unit` |
 
-パスで1回に済む関数である。ハンドルを使う読みは `FileIn` に、書きは `FileOut` にある。`Fs` は extern を持たず、どの関数も `FileIn` と `FileOut` の上に eml で書いてある。
+パスで1回に済む関数である。ハンドルを使う読みは `FileIn` に、書きは `FileOut` にある。`Fs` は extern を持たず、どの関数も `FileIn` と `FileOut` の上に eml で書いてある。パスの操作も、足すときは `Fs` に置く。
 
 - `read_text path` は、ファイル全体を文字列として読む。`FileIn.open`、`FileIn.read_all`、`FileIn.close` で書いた関数である
 - `write_text path text` は、ファイルを作るか切り詰めて、`text` を書く。`write_text path text = FileOut.close (FileOut.write text (FileOut.create path))` である。開けないときと書けないときの誤りは、`FileOut` の関数の誤りである

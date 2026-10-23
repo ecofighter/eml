@@ -456,7 +456,7 @@ impl<'a> Context<'a> {
     }
 
     /// `con` と `closure` が束縛する変数の印は、引数の印の結び以上である (作る所の検査)。V1 は `dup` と `decref` の
-    /// 対象の印しか見ないので、`File` を持つ値に誤って `unr` を付けると、その値の `dup` を見逃す。定数は `unr` として
+    /// 対象の印しか見ないので、`FileIn` を持つ値に誤って `unr` を付けると、その値の `dup` を見逃す。定数は `unr` として
     /// 結び、`never` の束縛は `mark_passes` と同じく数えない
     /// (docs/spec/lir.md の「Kind の印の検査」)。
     pub fn check_built(

@@ -1693,8 +1693,8 @@ fn iter_pipeline_fuses_map_into_the_fold_and_generate_into_the_filter() {
     assert!(filter.contains("con Prelude.Option"), "{filter}");
 }
 
-/// `File` を持つ生産者も融合する。`Iter.fold` だけの形と `Iter.map` を重ねた形のループは、`File` を引数に回し、
-/// `Iter` を作らず `apply` もしない。`tests/ui/run/std/fused_iter_file_take.em` は、このループで `File` がちょうど
+/// `FileIn` を持つ生産者も融合する。`Iter.fold` だけの形と `Iter.map` を重ねた形のループは、`FileIn` を引数に回し、
+/// `Iter` を作らず `apply` もしない。`tests/ui/run/std/fused_iter_file_take.em` は、このループで `FileIn` がちょうど
 /// 1回閉じることを確かめる。
 #[test]
 fn a_fold_over_a_file_producer_is_fused() {
@@ -2537,7 +2537,7 @@ main () =
   println (show r)
 ";
 
-/// `k` を捨てる節の複製は、閉包を作り直して捨てるのでなく、`unr` でない捕獲だけを捨てる。ここでは捕獲の `File` を
+/// `k` を捨てる節の複製は、閉包を作り直して捨てるのでなく、`unr` でない捕獲だけを捨てる。ここでは捕獲の `FileIn` を
 /// 捨て、複製と継続の関数は小さいので呼ぶ側に展開される (docs/spec/core-ir.md の「節の写しの、継続についての複製」)。
 #[test]
 fn a_clause_copy_drops_the_captures_instead_of_k() {
@@ -2554,7 +2554,7 @@ fn a_clause_copy_drops_the_captures_instead_of_k() {
     "#);
 }
 
-/// `once` の操作の節で、`File` を生きている変数に持つ経路の関数。節は `k` を捨てる。
+/// `once` の操作の節で、`FileIn` を生きている変数に持つ経路の関数。節は `k` を捨てる。
 const DROPPED_K: &str = "\
 import FileIn
 

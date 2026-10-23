@@ -1,6 +1,6 @@
 //! EP が作る補助の関数の中身 (docs/spec/core-ir.md の「EP が作る補助の関数」)。どれも `yields` の印を立て、
 //! `internal` にしない。多くの定義から直接呼ばれるためである。evidence を受ける引数は `obj`、ほかの引数と `ret` は
-//! `tobj` で、どれも一様である。印は evidence の引数が `unr`、ほかの引数と `ret` が `poly` である。κ や状態は `File` を
+//! `tobj` で、どれも一様である。印は evidence の引数が `unr`、ほかの引数と `ret` が `poly` である。κ や状態は `FileIn` を
 //! 持ちうるためである (docs/spec/core-ir.md の「EP が足す変数の印」)。中の
 //! `apply` はどれも印を立てる。補助の関数は作るときに最終の形にするので、yield の確認と遅い道もここで置き、後で分けない。
 
@@ -42,7 +42,7 @@ pub(super) fn compose(compose: FnIdx) -> CoreFn {
 /// `prompt$(ev, ret, x)`。`evv` を `ev` の外側に戻し、`yield_status(ev)` で4つに分ける
 /// (docs/spec/core-ir.md の「handle と `prompt$`」)。状態 1、2、3 の道では `x` はダミーで使われないので、道の先頭で
 /// drop する。`x` は `poly` なので、Perceus の `decref` には任せない。ダミーの drop は何もしない。中断の道では `ret` も
-/// 使われないので drop する。捕まえた `File` を閉じる本当の後始末はこれだけである
+/// 使われないので drop する。捕まえたハンドルを閉じる本当の後始末はこれだけである
 /// (docs/spec/core-ir.md の「EP の明示の `drop`」)。
 pub(super) fn prompt(resume: FnIdx, rewind: FnIdx) -> CoreFn {
     let mut b = FnBuilder::new();

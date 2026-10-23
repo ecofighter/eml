@@ -1,4 +1,4 @@
--- 各段が `File` を持ったまま、いちばん深い所で `exit 3` を呼ぶ。巻き戻しは `Finish` まで届き、どの段の `File` も
+-- 各段が `FileIn` を持ったまま、いちばん深い所で `exit 3` を呼ぶ。巻き戻しは `Finish` まで届き、どの段の `FileIn` も
 -- 1回ずつ閉じる。
 import FileIn
 

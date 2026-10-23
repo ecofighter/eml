@@ -77,7 +77,7 @@ pub enum RuntimeError {
 }
 
 impl RuntimeError {
-    /// 割り込みで止まったか。安全点で止めたときと、`File` の読みの中で止めたときの両方で真になる。CLI が終了コードを
+    /// 割り込みで止まったか。安全点で止めたときと、ハンドルの読みの中で止めたときの両方で真になる。CLI が終了コードを
     /// 決めるために使う。
     pub fn interrupted(&self) -> bool {
         matches!(

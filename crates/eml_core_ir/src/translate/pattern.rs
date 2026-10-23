@@ -26,7 +26,7 @@ use crate::builder::Label;
 /// 決まり、フィールドの変数の Repr はパターンの型から決まる (docs/implementation/architecture.md の
 /// 「translate の組み立て」)。`Con` の `mark` は値を作るときの印で、検査した式の型か、開いた変数から決まる
 /// (docs/spec/core-ir.md の「translate が決める印」)。引数の印の結びにすると、
-/// `Option (List File)` の `Some []` が `unr` になるためである。
+/// `Option (List FileIn)` の `Some []` が `unr` になるためである。
 #[derive(Clone)]
 pub(super) enum Occ {
     Atom(Atom),

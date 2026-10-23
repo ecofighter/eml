@@ -645,7 +645,7 @@ impl Out<'_> {
         annotations
             .not_yield_points
             .insert((block, self.stmts.len()));
-        // 本体の結果は `File` でありうる
+        // 本体の結果は `FileIn` でありうる
         let value = self.bind(
             "x",
             Repr::TObj,

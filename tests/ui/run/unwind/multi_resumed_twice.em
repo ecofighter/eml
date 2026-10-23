@@ -1,4 +1,4 @@
--- `multi` の操作の `k` を2回再開し、2回目に再開した区間が `File` を持ったまま外側の `Fail.to_result` へ中断する。
+-- `multi` の操作の `k` を2回再開し、2回目に再開した区間が `FileIn` を持ったまま外側の `Fail.to_result` へ中断する。
 -- 再開した区間のフレームも普通のフレームとして巻き戻す。
 import Fail (Fail(..))
 import FileIn

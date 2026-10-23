@@ -1,4 +1,4 @@
--- 配列の変数の要素は `Unr` でなければならない。`File` を書き込むと E3001
+-- 配列の変数の要素は `Unr` でなければならない。`FileIn` を書き込むと E3001
 import FileIn
 import MutArray
 

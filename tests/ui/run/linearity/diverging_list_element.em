@@ -1,4 +1,4 @@
--- リストの要素が失敗する経路は、開いた `File` を `fail` の前に手放す。戻る経路は `File` を閉じる。
+-- リストの要素が失敗する経路は、開いた `FileIn` を `fail` の前に手放す。戻る経路は `FileIn` を閉じる。
 import Fail (Fail(..))
 import FileIn
 

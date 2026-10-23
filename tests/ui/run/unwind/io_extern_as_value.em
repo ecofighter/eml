@@ -1,5 +1,5 @@
 -- 値として渡した `FileIn.open` の `$externN` は yield しない。2つ目のファイルが無いと、IO の失敗が `try_io` へ
--- 巻き戻し、途中まで作ったリストの `File` を閉じる。
+-- 巻き戻し、途中まで作ったリストの `FileIn` を閉じる。
 import FileIn
 import List
 
