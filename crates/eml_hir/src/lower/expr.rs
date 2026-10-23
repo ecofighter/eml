@@ -1,7 +1,7 @@
 use std::collections::HashSet;
 
 use eml_diagnostics::{Diagnostic, FileId, Label, TextRange};
-use eml_extern::FloatBits;
+use eml_extern::{ExternType, FloatBits};
 use eml_syntax::{SyntaxKind, SyntaxToken, ast};
 use la_arena::{Arena, ArenaMap, Idx, RawIdx};
 
@@ -320,11 +320,7 @@ impl<'a> BodyLowering<'a> {
                 self.alloc(kind, range)
             }
             ast::Expr::StringLit(string) => self.lower_string(&string, range),
-            // 穴の中の式は lower しない。誤りを E0004 の1件にするため
-            // (docs/implementation/architecture.md の「`eml_hir` の内部」)
-            ast::Expr::CommandLit(_) => {
-                self.unsupported(range, "command literals are not supported yet")
-            }
+            ast::Expr::CommandLit(command) => self.lower_command(&command, range),
             ast::Expr::UnitExpr(_) => self.alloc(ExprKind::Literal(Literal::Unit), range),
             ast::Expr::PathExpr(path) => self.lower_path(&path, range),
             ast::Expr::ParenExpr(paren) => self.lower_expr(paren.expr(), range),
@@ -1194,45 +1190,183 @@ impl<'a> BodyLowering<'a> {
         let Some(parts) = string.parts() else {
             return self.alloc(ExprKind::Missing, range);
         };
-        let mut holes = string.holes().peekable();
-        if holes.peek().is_none() {
-            // 穴のない文字列の部分は、本文をまとめた1つの `Text` か、空である
-            let text = match parts.into_iter().next() {
-                Some(ast::StringPart::Text(text)) => text,
-                _ => String::new(),
-            };
+        let mut holes = string.holes();
+        let pieces = parts
+            .into_iter()
+            .map(|part| match part {
+                ast::StringPart::Text(text) => Piece::Text(text),
+                ast::StringPart::Hole(expr) => {
+                    let hole = holes.next().expect("every hole part has an interp");
+                    Piece::Hole(expr, hole.range())
+                }
+            })
+            .collect();
+        self.lower_pieces(pieces, range, Self::display_hole)
+    }
+
+    /// 文字列の穴。名前を引かずに Prelude の `display` を指す。ユーザーの `display` で補間の意味を変えないため
+    fn display_hole(&mut self, expr: Option<ast::Expr>, hole_range: TextRange) -> ExprId {
+        let callee = self.alloc(
+            ExprKind::Path(Res::Item(ValueItem::Method(self.lang.display))),
+            hole_range,
+        );
+        let arg = self.lower_expr(expr, hole_range);
+        self.alloc(
+            ExprKind::Call {
+                callee,
+                args: vec![arg],
+            },
+            hole_range,
+        )
+    }
+
+    /// 本文と穴の並びを、穴がなければ文字列のリテラルに、あれば補間にする。穴の包み方は `wrap` が決める。
+    fn lower_pieces(
+        &mut self,
+        pieces: Vec<Piece>,
+        range: TextRange,
+        wrap: fn(&mut Self, Option<ast::Expr>, TextRange) -> ExprId,
+    ) -> ExprId {
+        if !pieces.iter().any(|piece| matches!(piece, Piece::Hole(..))) {
+            let text = pieces
+                .into_iter()
+                .filter_map(|piece| match piece {
+                    Piece::Text(text) => Some(text),
+                    Piece::Hole(..) => None,
+                })
+                .collect();
             return self.alloc(ExprKind::Literal(Literal::String(text)), range);
         }
         let mut segments = Vec::new();
-        for part in parts {
-            match part {
-                ast::StringPart::Text(text) => segments.push(Segment::Text(text)),
-                ast::StringPart::Hole(expr) => {
-                    let hole_range = holes.next().expect("every hole part has an interp").range();
-                    // 名前を引かずに Prelude の `display` を指す。ユーザーの `display` で補間の意味を変えないため
-                    let callee = self.alloc(
-                        ExprKind::Path(Res::Item(ValueItem::Method(self.lang.display))),
-                        hole_range,
-                    );
-                    let arg = self.lower_expr(expr, hole_range);
-                    let call = self.alloc(
-                        ExprKind::Call {
-                            callee,
-                            args: vec![arg],
-                        },
-                        hole_range,
-                    );
-                    segments.push(Segment::Hole(call));
-                }
-            }
+        for piece in pieces {
+            segments.push(match piece {
+                Piece::Text(text) => Segment::Text(text),
+                Piece::Hole(expr, hole_range) => Segment::Hole(wrap(self, expr, hole_range)),
+            });
         }
         self.alloc(ExprKind::Interpolation(segments), range)
     }
 
-    pub(super) fn unsupported(&mut self, range: TextRange, message: &str) -> ExprId {
-        self.diagnostics
-            .push(Diagnostic::not_yet_supported(self.file, range, message));
-        self.alloc(ExprKind::Missing, range)
+    /// コマンドリテラルを、Prelude の `cmd_new` に引数のリストを渡す呼び出しにする
+    /// (docs/spec/expressions.md の「コマンドリテラル」)。
+    fn lower_command(&mut self, command: &ast::CommandLit, range: TextRange) -> ExprId {
+        // `words` が `None` なら lexer が報告済み。文字列と同じく、穴も lower しない
+        let Some(words) = command.words() else {
+            return self.alloc(ExprKind::Missing, range);
+        };
+        // E1055 と E1056 のリテラルは、穴の中の誤りを重ねて報告しないよう、穴も lower しない
+        if !self.check_command(&words, range) {
+            return self.alloc(ExprKind::Missing, range);
+        }
+        let mut words = words.into_iter();
+        let program = words.next().expect("checked to have a program");
+        let program = self.lower_command_word(program);
+        // 引数を書いた順に lower してから、リストを後ろから組む
+        let args: Vec<_> = words
+            .map(|word| match spread_hole(&word) {
+                Some(hole) => {
+                    let list = self.lower_expr(hole.expr(), hole.range());
+                    (CommandArg::Spread(list), hole.range())
+                }
+                None => {
+                    let word_range = word.range;
+                    (CommandArg::Word(self.lower_command_word(word)), word_range)
+                }
+            })
+            .collect();
+        let mut list = self.alloc(
+            ExprKind::Path(Res::Item(ValueItem::Constructor(self.lang.nil))),
+            range,
+        );
+        for (arg, arg_range) in args.into_iter().rev() {
+            let (callee, head) = match arg {
+                CommandArg::Word(word) => (ValueItem::Constructor(self.lang.cons), word),
+                CommandArg::Spread(spread) => (ValueItem::Function(self.lang.cmd_spread), spread),
+            };
+            let callee = self.alloc(ExprKind::Path(Res::Item(callee)), arg_range);
+            list = self.alloc(
+                ExprKind::Call {
+                    callee,
+                    args: vec![head, list],
+                },
+                arg_range,
+            );
+        }
+        let callee = self.alloc(
+            ExprKind::Path(Res::Item(ValueItem::Function(self.lang.cmd_new))),
+            range,
+        );
+        self.alloc(
+            ExprKind::Call {
+                callee,
+                args: vec![program, list],
+            },
+            range,
+        )
+    }
+
+    /// spread の穴の位置 (E1055) と、プログラムがあること (E1056) を確かめる。誤りがなければ真を返す
+    /// (docs/spec/expressions.md の「コマンドリテラル」)。
+    fn check_command(&mut self, words: &[ast::CommandWord], range: TextRange) -> bool {
+        if words.is_empty() {
+            self.diagnostics.push(Diagnostic::error(
+                codes::COMMAND_WITHOUT_PROGRAM,
+                "a command literal needs a program",
+                Label::new(self.file, range, "no program to run"),
+            ));
+            return false;
+        }
+        let mut ok = true;
+        for (index, word) in words.iter().enumerate() {
+            let label = if index == 0 {
+                "the first word is the program"
+            } else if spread_hole(word).is_some() {
+                continue;
+            } else {
+                "not a whole argument on its own"
+            };
+            for part in &word.parts {
+                if let ast::CommandPart::Hole(hole) = part
+                    && hole.spread()
+                {
+                    self.diagnostics.push(Diagnostic::error(
+                        codes::SPREAD_NOT_AN_ARGUMENT,
+                        "a `\\{..}` hole must be a whole argument after the program",
+                        Label::new(self.file, hole.range(), label),
+                    ));
+                    ok = false;
+                }
+            }
+        }
+        ok
+    }
+
+    /// コマンドリテラルの1つの引数。文字列と同じ形にし、各穴を `String` の型の明示で包む。
+    fn lower_command_word(&mut self, word: ast::CommandWord) -> ExprId {
+        let pieces = word
+            .parts
+            .into_iter()
+            .map(|part| match part {
+                ast::CommandPart::Text(text) => Piece::Text(text),
+                ast::CommandPart::Hole(hole) => Piece::Hole(hole.expr(), hole.range()),
+            })
+            .collect();
+        self.lower_pieces(pieces, word.range, Self::string_hole)
+    }
+
+    /// コマンドリテラルの穴。`display` を呼ばず、`String` だけを受ける (docs/spec/expressions.md の「コマンドリテラル」)。
+    fn string_hole(&mut self, expr: Option<ast::Expr>, hole_range: TextRange) -> ExprId {
+        let expr = self.lower_expr(expr, hole_range);
+        let string = self
+            .items
+            .externs()
+            .ty(ExternType::String)
+            .expect("the Prelude declares `String`");
+        let ty = self.types.alloc(TypeRef {
+            kind: TypeRefKind::Con(string, Vec::new(), Vec::new()),
+            range: hole_range,
+        });
+        self.alloc(ExprKind::Annot { expr, ty }, hole_range)
     }
 
     /// 浮動小数のリテラルのパターン (E1052)。`==` で比べるよう案内する。`0.0` と `-0.0`、NaN のように、`==` と
@@ -1265,5 +1399,25 @@ fn arguments(n: usize) -> String {
         "1 argument".to_string()
     } else {
         format!("{n} arguments")
+    }
+}
+
+/// 文字列とコマンドリテラルの引数の部分。穴は式と `\{…}` 全体の範囲を持つ。
+enum Piece {
+    Text(String),
+    Hole(Option<ast::Expr>, TextRange),
+}
+
+/// コマンドリテラルの、プログラムの後の引数。
+enum CommandArg {
+    Word(ExprId),
+    Spread(ExprId),
+}
+
+/// 引用のない、spread の穴1つだけの引数なら、その穴。プログラムの位置かは呼び出し側が見る。
+fn spread_hole(word: &ast::CommandWord) -> Option<&ast::Interp> {
+    match word.parts.as_slice() {
+        [ast::CommandPart::Hole(hole)] if hole.spread() && !word.quoted => Some(hole),
+        _ => None,
     }
 }

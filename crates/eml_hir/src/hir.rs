@@ -210,6 +210,10 @@ pub struct LangItems {
     /// 前置の `-` の脱糖が呼ぶ `Num` のメソッド。ユーザーが同じ名前を定義しても、脱糖は Prelude のものを呼ぶ
     /// (docs/spec/expressions.md の「演算子の列と単項マイナス」)。
     pub negate: MethodId,
+    /// コマンドリテラルの脱糖が呼ぶ、`pub` でない Prelude の関数。`cmd_new` が `Cmd` を組み、`cmd_spread` が
+    /// `\{..xs}` の要素を残りの引数の前に並べる (docs/spec/expressions.md の「コマンドリテラル」)。
+    pub cmd_new: FunctionId,
+    pub cmd_spread: FunctionId,
 }
 
 /// extern の表の行から、標準ライブラリの宣言を引く索引。使い手のある行 (extern の型、`IO`、`Panic`) だけを

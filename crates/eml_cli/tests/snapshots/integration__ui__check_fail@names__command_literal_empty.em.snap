@@ -1,0 +1,12 @@
+---
+source: crates/eml_cli/tests/ui.rs
+expression: rendered
+input_file: tests/ui/check-fail/names/command_literal_empty.em
+---
+[E1056] Error: a command literal needs a program
+   ╭─[ check-fail/names/command_literal_empty.em:3:9 ]
+   │
+ 3 │ empty = `   `
+   │         ──┬──  
+   │           ╰──── no program to run
+───╯

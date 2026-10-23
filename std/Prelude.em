@@ -234,6 +234,36 @@ show_rest : Show a => String -> List a -> String
 show_rest acc Nil = acc ++ "]"
 show_rest acc (x :: rest) = show_rest (acc ++ ", " ++ show x) rest
 
+-- 標準エラーの向き。`Proc.merge_stderr`、`discard_stderr` が設定し、利用者がコンストラクタを書く必要はない
+pub data StderrMode =
+  | InheritStderr
+  | MergeStderr
+  | DiscardStderr
+  deriving (Eq, Show)
+
+-- コマンドリテラルの値。コマンドリテラルと `Std.Proc` の関数で組む (docs/spec/expressions.md の「コマンドリテラル」)
+pub data Cmd =
+  | Cmd { program : String, args : List String, cwd : Option String, env : List (String, String), stderr : StderrMode }
+  deriving (Eq)
+
+-- `show` は導出した形、`display` は人が読む1行 (引数を空白でつなぐ。構文には戻せない)
+instance Show Cmd where
+  show c = "Cmd { program = \{show c.program}, args = \{show c.args}, cwd = \{show c.cwd}, env = \{show c.env}, stderr = \{show c.stderr} }"
+  display c = join_words c.program c.args
+
+-- 左辺を一意な文字列として伸ばすので、長さに比例する時間で済む
+join_words : String -> List String -> String
+join_words acc Nil = acc
+join_words acc (x :: rest) = join_words (acc ++ " " ++ x) rest
+
+-- コマンドリテラルの脱糖が名前を引かずに呼ぶ (docs/spec/expressions.md の「コマンドリテラル」)
+cmd_new : String -> List String -> Cmd
+cmd_new program args = Cmd { program = program, args = args, cwd = None, env = Nil, stderr = InheritStderr }
+
+cmd_spread : List String -> List String -> List String
+cmd_spread Nil rest = rest
+cmd_spread (x :: xs) rest = x :: cmd_spread xs rest
+
 pub extern (++) : String -> String -> String
 pub (>>) : (a -> <e> b) -> (b -> <e> c) -> a -> <e> c
 f >> g = fn x -> g (f x)

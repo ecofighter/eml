@@ -408,8 +408,9 @@ impl BodyCheck<'_, '_> {
                 let ty = self.projection(id, *base, field);
                 self.table.widen_outer_lin(ty)
             }
-            // 各穴は `display e` の呼び出しで、`String` を返す。穴の式の型には、`display` の参照が `Show` の制約を付ける
-            // (docs/spec/expressions.md の「補間」)
+            // 文字列の穴は `display e` の呼び出しで、穴の式の型には `display` の参照が `Show` の制約を付ける
+            // (docs/spec/expressions.md の「補間」)。コマンドリテラルの穴は `(e : String)` の型の明示である
+            // (docs/spec/expressions.md の「コマンドリテラル」)。どちらも `String` を返す
             ExprKind::Interpolation(segments) => {
                 for hole in segments.iter().filter_map(Segment::hole) {
                     let string = self.table.string;

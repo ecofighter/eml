@@ -1,6 +1,6 @@
 //! 文字列の補間 (docs/spec/expressions.md の「補間」)。
 
-use crate::common::{diagnostics, lower_text};
+use crate::common::lower_text;
 
 #[test]
 fn holes_call_the_prelude_display() {
@@ -31,9 +31,10 @@ fn a_string_without_holes_is_a_literal() {
 }
 
 #[test]
-fn a_command_literal_is_not_supported_yet() {
-    assert_eq!(
-        diagnostics("f : Unit -> Int\nf () = `ls \\{x}`"),
-        ["E0004 2:8 command literals are not supported yet"]
-    );
+fn a_command_literal_calls_the_prelude_cmd_new() {
+    let text = "f : String -> List String -> Cmd\nf x xs = `ls -l\\{x} \\{..xs} ''`";
+    insta::assert_snapshot!(lower_text(text), @r#"
+    f : String -> List String -> Cmd
+    f x#0 xs#1 = (@Prelude.cmd_new "ls" (Prelude.:: "-l\{(x#0 : String)}" (@Prelude.cmd_spread xs#1 (Prelude.:: "" Prelude.Nil))))
+    "#);
 }

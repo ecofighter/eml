@@ -1,0 +1,26 @@
+---
+source: crates/eml_cli/tests/ui.rs
+expression: rendered
+input_file: tests/ui/check-fail/names/command_spread_in_word.em
+---
+[E1055] Error: a `\{..}` hole must be a whole argument after the program
+   ╭─[ check-fail/names/command_spread_in_word.em:3:20 ]
+   │
+ 3 │ f xs = `cp --files=\{..xs} \{..xs}\{..xs} dest`
+   │                    ───┬───  
+   │                       ╰───── not a whole argument on its own
+───╯
+[E1055] Error: a `\{..}` hole must be a whole argument after the program
+   ╭─[ check-fail/names/command_spread_in_word.em:3:28 ]
+   │
+ 3 │ f xs = `cp --files=\{..xs} \{..xs}\{..xs} dest`
+   │                            ───┬───  
+   │                               ╰───── not a whole argument on its own
+───╯
+[E1055] Error: a `\{..}` hole must be a whole argument after the program
+   ╭─[ check-fail/names/command_spread_in_word.em:3:35 ]
+   │
+ 3 │ f xs = `cp --files=\{..xs} \{..xs}\{..xs} dest`
+   │                                   ───┬───  
+   │                                      ╰───── not a whole argument on its own
+───╯

@@ -91,21 +91,19 @@ fn signatures_and_equations_are_paired_by_name() {
 }
 
 #[test]
-fn constructs_of_later_stages_are_not_yet_supported() {
+fn a_let_binds_a_command_literal_and_an_annotated_operator() {
     let text = "f : Int -> Int\nf x =\n  let first = `ls`\n  let plus : Int -> Int -> <Panic> Int = (+)\n  let y = x in y";
-    insta::assert_snapshot!(lower_text(text), @"
+    insta::assert_snapshot!(lower_text(text), @r#"
     f : Int -> Int
     f x#0 = {
-      let first#1 = <missing>
+      let first#1 = (@Prelude.cmd_new "ls" Prelude.Nil)
       let plus#4 : Int -> Int -> <Panic> Int = (fn $a#2 $b#3 -> (@Prelude.+ $a#2 $b#3))
       {
         let y#5 = x#0
         y#5
       }
     }
-    ---
-    E0004 3:15 command literals are not supported yet
-    ");
+    "#);
 }
 
 #[test]
@@ -353,11 +351,11 @@ fn type_declarations_are_not_supported_yet() {
 }
 
 #[test]
-fn later_stage_literals_are_not_supported_yet() {
-    assert_eq!(
-        diagnostics("x : Int\nx = (`ls`)"),
-        ["E0004 2:6 command literals are not supported yet"]
-    );
+fn a_parenthesized_command_literal_lowers_to_cmd_new() {
+    insta::assert_snapshot!(lower_text("x : Cmd\nx = (`ls`)"), @r#"
+    x : Cmd
+    x = (@Prelude.cmd_new "ls" Prelude.Nil)
+    "#);
 }
 
 #[test]

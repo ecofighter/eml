@@ -33,6 +33,8 @@ E0xxx は `eml_syntax::codes` (E0004 だけは `eml_diagnostics`)、E1xxx は `e
 | E1052 | `FLOAT_PATTERN` | 見出しは「floating-point literals cannot be patterns; compare with `==` instead」で、負号を含むリテラルのパターン全体を指してラベルを「a floating-point literal」にする。パターンは欠けたパターンとして下ろす |
 | E1053 | `ASSIGN_TARGET` | 見出しは「only a `var` variable or an index of one can be assigned」で、左辺を指してラベルを「not a `var` variable」にする。左辺は下ろさない。左辺の名前の誤りを重ねて報告しないためである。右辺は下ろし、代入は欠けた式にする |
 | E1054 | `NEGATIVE_BYTE_LITERAL` | 見出しは「a `Byte` literal cannot be negative」で、`-` を含むリテラル全体を指してラベルを「`Byte` holds 0 to 255」にする。式は欠けた式、パターンは欠けたパターンとして下ろす |
+| E1055 | `SPREAD_NOT_AN_ARGUMENT` | 見出しは「a `\{..}` hole must be a whole argument after the program」で、穴 `\{..xs}` の全体を指す。ラベルは、プログラムの位置なら「the first word is the program」、ほかの位置なら「not a whole argument on its own」にする。穴ごとに1件出し、リテラルは欠けた式として下ろす |
+| E1056 | `COMMAND_WITHOUT_PROGRAM` | 見出しは「a command literal needs a program」で、リテラル全体を指してラベルを「no program to run」にする。リテラルは欠けた式として下ろす |
 | E1022 | `FIXITY_WITHOUT_DEFINITION` | このモジュールで定義していない演算子への fixity の宣言。標準ライブラリの演算子の fixity を変えようとした場合を含む。REPL では、この入力で定義していない演算子への宣言で、文言も「この入力」と言う。宣言の演算子を指す |
 | E1023 | `INVALID_SECTION` | 優先順位の合わないセクション (`(* a + b)` や `(+ a + b)`)。セクション全体を指し、被演算子を括弧で囲むよう help で伝える |
 | E1024 | `USE_AT_END_OF_BLOCK` | ブロックの最後の文が `use` である (包む残りがない)。`use` の文を指す |

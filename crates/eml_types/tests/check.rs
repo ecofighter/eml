@@ -522,20 +522,16 @@ fn operation_types_are_exported() {
 }
 
 #[test]
-fn later_stage_constructs_add_no_type_errors() {
-    // E0004 の跡 (`<missing>` の値) を型検査に通しても、誤りを重ねて出さない。
+fn a_command_literal_has_the_type_cmd() {
     let text = "counter : Unit -> Int\ncounter () = 0\n\nf : Int -> <Panic> Int\nf n =\n  let first = `ls`\n  let plus : Int -> Int -> <Panic> Int = (+)\n  0";
     insta::assert_snapshot!(check_text(text), @"
     counter : Unit -> Int
     f : Int -> <Panic> Int
       n#0 : Int
-      first#1 : {error}
+      first#1 : Cmd
       $a#2 : Int
       $b#3 : Int
       plus#4 : Int -> Int -> <Panic> Int
-    ---
-    E0004 6:15 command literals are not supported yet
-      6:15 this is implemented in a later stage
     ");
 }
 
@@ -662,10 +658,9 @@ fn a_too_deep_pattern_reports_only_the_nesting_limit() {
 }
 
 #[test]
-fn an_unsupported_literal_keeps_the_other_diagnostics_of_its_expression() {
-    // E0004 の atom は読み飛ばしではないので、同じ式の名前の誤りも報告する
-    let text = "f : Int -> Int\nf x = if nosuch then 1 else g `ls`";
-    assert_eq!(codes(text), ["E1001", "E1001", "E0004"]);
+fn a_command_literal_keeps_the_other_diagnostics_of_its_expression() {
+    let text = "f : Int -> Int\nf x = if nosuch then 1 else g `ls \\{other}`";
+    assert_eq!(codes(text), ["E1001", "E1001", "E1001"]);
 }
 
 #[test]

@@ -1,0 +1,13 @@
+---
+source: crates/eml_cli/tests/ui.rs
+expression: "format!(\"--- stdout ---\\n{stdout}--- stderr ---\\n{diagnostics}{stderr}{written}{exit}\")"
+input_file: tests/ui/run/basics/command_literal.em
+---
+--- stdout ---
+Cmd { program = "git", args = ["log", "-n", "3", "--out=out dir", "", "x yz", "a b", "c", "end"], cwd = None, env = [], stderr = InheritStderr }
+git log -n 3 --out=out dir  x yz a b c end
+["log", "-n", "3", "--out=out dir", "", "x yz", "a b", "c", "end"]
+True
+False
+Cmd { program = "echo", args = ["a b", "c"], cwd = None, env = [], stderr = InheritStderr }
+--- stderr ---

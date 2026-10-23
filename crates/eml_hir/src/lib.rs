@@ -112,4 +112,6 @@ pub mod codes {
     pub const FLOAT_PATTERN: ErrorCode = ErrorCode(1052);
     pub const ASSIGN_TARGET: ErrorCode = ErrorCode(1053);
     pub const NEGATIVE_BYTE_LITERAL: ErrorCode = ErrorCode(1054);
+    pub const SPREAD_NOT_AN_ARGUMENT: ErrorCode = ErrorCode(1055);
+    pub const COMMAND_WITHOUT_PROGRAM: ErrorCode = ErrorCode(1056);
 }

@@ -72,7 +72,7 @@ data Shape =
 - `extern data` に書けるのは型変数の型引数だけで、row の型引数も Kind の宣言も書けない。extern の型の Kind は処理系の表が決める
 - `type` は型の別名の構文として予約する。型の別名は実装しておらず、`type` の宣言は HIR が E0004 にする ([ロードマップ](../future/roadmap.md) の「言語機能と構文」)
 - `extern` でない `data` に `=` がないものは、値を作れない型になるので E1025 とする。どのモジュールでも同じである
-- `Int`、`String`、`Unit` は `Prelude` の、`FileIn` は標準ライブラリのモジュール `FileIn` の `extern data` で、`Bool` は `Prelude` の `data Bool = | False | True` である (下の「`extern`」)。`List`、`Option`、`Result` も `Prelude` の `data` である (下の「Prelude のクラス」)
+- `Int`、`String`、`Unit` は `Prelude` の、`FileIn` は標準ライブラリのモジュール `FileIn` の `extern data` で、`Bool` は `Prelude` の `data Bool = | False | True` である (下の「`extern`」)。`List`、`Option`、`Result` も `Prelude` の `data` である (下の「Prelude のクラス」)。コマンドリテラルの値の `Cmd` と、その欄の型 `StderrMode` も `Prelude` の `data` である ([式](expressions.md) の「コマンドリテラル」)
 
 ## `effect`
 

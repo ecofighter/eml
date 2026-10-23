@@ -1,0 +1,19 @@
+---
+source: crates/eml_cli/tests/ui.rs
+expression: rendered
+input_file: tests/ui/check-fail/names/command_literal_unknown_name.em
+---
+[E1001] Error: cannot find value `undefined_name`
+   ╭─[ check-fail/names/command_literal_unknown_name.em:3:17 ]
+   │
+ 3 │ f () = `ls -l \{undefined_name} \{..other_undefined}`
+   │                 ───────┬──────  
+   │                        ╰──────── not found in this scope
+───╯
+[E1001] Error: cannot find value `other_undefined`
+   ╭─[ check-fail/names/command_literal_unknown_name.em:3:37 ]
+   │
+ 3 │ f () = `ls -l \{undefined_name} \{..other_undefined}`
+   │                                     ───────┬───────  
+   │                                            ╰───────── not found in this scope
+───╯

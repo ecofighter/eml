@@ -53,7 +53,7 @@ struct Fix {
 | E0001 | `UNEXPECTED_CHARACTER` | eml のソースとして認識できない文字 |
 | E0002 | `UNTERMINATED_STRING` | 閉じていない文字列リテラル (複数行の文字列、raw 文字列、コマンドリテラルを含む) と、閉じていない補間の穴 ([字句](lexical.md) の「改行での回復」) |
 | E0003 | `EXPECTED_ITEM` | トップレベルで項目の始まりでないトークン |
-| E0004 | `NOT_YET_SUPPORTED` | 実装していない構文 (コマンドリテラル、型の別名 `type`、Kind の宣言 `: Unr`、row の型引数を持つ型の instance と `deriving`) |
+| E0004 | `NOT_YET_SUPPORTED` | 実装していない構文 (型の別名 `type`、Kind の宣言 `: Unr`、row の型引数を持つ型の instance と `deriving`) |
 | E0005 | `UNTERMINATED_BLOCK_COMMENT` | 閉じていないブロックコメント |
 | E0006 | `TAB_INDENTATION` | インデントにタブを使った |
 | E0007 | `INVALID_NUMBER` | 不正な数値リテラル。`Int` や `Byte` の範囲を超える整数も含む ([字句](lexical.md) の「数値と文字」) |
@@ -121,6 +121,8 @@ struct Fix {
 | E1052 | `FLOAT_PATTERN` | パターンに浮動小数のリテラル (`1.5`、`-2.5`) を書いた。比べるときは `==` を使う ([網羅性](exhaustiveness.md)) |
 | E1053 | `ASSIGN_TARGET` | `<-` の左辺が `var` の名前でも、`var` の名前の添字でもない ([式](expressions.md) の「`var`」) |
 | E1054 | `NEGATIVE_BYTE_LITERAL` | `Byte` のリテラルの直前に `-` がある。式でもパターンでも同じ ([式](expressions.md) の「演算子の列と単項マイナス」) |
+| E1055 | `SPREAD_NOT_AN_ARGUMENT` | コマンドリテラルの `\{..}` の穴が、プログラムの後の引数の全体でない ([式](expressions.md) の「コマンドリテラル」) |
+| E1056 | `COMMAND_WITHOUT_PROGRAM` | コマンドリテラルに引数が1つもなく、プログラムがない ([式](expressions.md) の「コマンドリテラル」) |
 | E2001 | `TYPE_MISMATCH` | 型の不一致。呼び出しの row のエフェクトの型引数が今の row と一致しない場合を含む |
 | E2002 | `EFFECT_NOT_IN_ROW` | シグネチャの row に含まれないエフェクトを起こした。ラムダの本体の場合を含む |
 | E2003 | `MISSING_MAIN` | 入口のモジュールに `main` がない。import した `main` は数えない。`eml run` のときだけ出す |
@@ -158,11 +160,10 @@ E2006 が `==` の位置に出る場合も、演算子でなくクラスの言�
 
 ## 未対応の構文と E0004
 
-E0004 (`NOT_YET_SUPPORTED`) は、実装していない構文に使う。字句として予約したコマンドリテラル、型の別名の `type` の宣言、Kind の宣言の `: Unr`、row の型引数を持つ型の instance と `deriving` である。どの段階が出しても「実装していない」という同じ意味なので、番号を分けない。HIR 以降の段階は、対応していない構文を、診断を出さずに無視することはしない。見つけた段階で E0004 を出して回復する。
+E0004 (`NOT_YET_SUPPORTED`) は、実装していない構文に使う。型の別名の `type` の宣言、Kind の宣言の `: Unr`、row の型引数を持つ型の instance と `deriving` である。どの段階が出しても「実装していない」という同じ意味なので、番号を分けない。HIR 以降の段階は、対応していない構文を、診断を出さずに無視することはしない。見つけた段階で E0004 を出して回復する。
 
 - パーサは、これらの構文を CST まで組み、E0004 を出さない。意味を与える最初の段階が、未対応を判定する
-- E0004 を出すのは HIR だけである。`type` の宣言、コマンドリテラル、`: Unr`、row の型引数を持つ型の instance と `deriving` に出す
-- コマンドリテラルは、lexer が文字列と同じ形のトークンに分け ([字句](lexical.md) の「コマンドリテラル」)、HIR がリテラル全体に E0004 を1件出す。穴の中の式は lower しない
+- E0004 を出すのは HIR だけである。`type` の宣言、`: Unr`、row の型引数を持つ型の instance と `deriving` に出す
 - 型の位置の `[` と `{`、コンストラクタのない `{ … }` は、未対応の構文でなく、構文の誤り (E0011) である。リストの型は `List a` と書き、レコードは `data` で宣言する ([文法](grammar.md) の「文法上の補足」)
 
 ## 他の言語の書き方へのヒント

@@ -985,6 +985,8 @@ fn lang_items(prelude: &ModuleScope) -> LangItems {
         display: method("display"),
         show_method: method("show"),
         negate: method("negate"),
+        cmd_new: function("cmd_new"),
+        cmd_spread: function("cmd_spread"),
     }
 }
 
@@ -1198,6 +1200,10 @@ impl<'a> Resolver<'a> {
     /// HIR の診断が型、エフェクト、コンストラクタを書くときの表示名。
     pub fn names(&self) -> &'a DisplayNames {
         &self.def_map.names
+    }
+
+    pub fn externs(&self) -> &'a ExternIndex {
+        &self.def_map.externs
     }
 
     fn own(&self) -> &'a ModuleScope {

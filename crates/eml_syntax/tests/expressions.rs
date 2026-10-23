@@ -314,8 +314,6 @@ fn top_level_pattern_bindings_are_errors() {
 
 #[test]
 fn later_stage_literals_are_parsed() {
-    // 浮動小数、文字、コマンドリテラルの E0004 は HIR が出す
-    // (docs/spec/diagnostics.md の「未対応の構文と E0004」)
     assert_eq!(
         diagnostics("x = (1.5, 'c', [1], `ls`)"),
         Vec::<String>::new()

@@ -3,13 +3,6 @@ source: crates/eml_cli/tests/ui.rs
 expression: rendered
 input_file: tests/ui/check-fail/syntax/command_quote_unterminated.em
 ---
-[E0004] Error: command literals are not supported yet
-   ╭─[ check-fail/syntax/command_quote_unterminated.em:2:19 ]
-   │
- 2 │ before_backtick = `git log 'a b`
-   │                   ───────┬──────  
-   │                          ╰──────── this is implemented in a later stage
-───╯
 [E0017] Error: unterminated `'` in a command literal
    ╭─[ check-fail/syntax/command_quote_unterminated.em:2:28 ]
    │
@@ -23,13 +16,6 @@ input_file: tests/ui/check-fail/syntax/command_quote_unterminated.em
  5 │ at_end_of_line = `git log 'a b
    │                  ──────┬──────  
    │                        ╰──────── missing closing backtick
-───╯
-[E0004] Error: command literals are not supported yet
-   ╭─[ check-fail/syntax/command_quote_unterminated.em:5:18 ]
-   │
- 5 │ at_end_of_line = `git log 'a b
-   │                  ──────┬──────  
-   │                        ╰──────── this is implemented in a later stage
 ───╯
 [E0017] Error: unterminated `'` in a command literal
    ╭─[ check-fail/syntax/command_quote_unterminated.em:5:27 ]

@@ -14,6 +14,7 @@
 - 名前付きのレコード: `data` のコンストラクタの名前付きのフィールド、作る式 `Person { name = "a", age = 3 }` と省略形、射影 `p.name`、更新 `{ p | age = 31 }`、分解のパターン、フィールドのセクション `(.name)` と `(.0)`、導出した `Show` の `Person { … }` の表示 ([直積型とレコード](../spec/records.md))。呼び出しの引数のラムダは、ほかの引数の後に型を検査する ([型と Kind](../spec/types.md) の「引数のラムダを後で検査する」)
 - Prelude の `List`、`Option`、`Result` と、その `Eq`、`Ord`、`Show` の instance ([宣言](../spec/declarations.md) の「Prelude のクラス」)。リストのリテラル `[…]` とパターン、コンストラクタ `::` (`infixr 5`。Prelude だけが宣言できる、E1044) ([式](../spec/expressions.md) の「リスト」)。リストの関数は `Std.List` にある (`map`、`filter`、`fold`、`length`、`take`、`zip`、`lookup`、安定な並べ替えの `sort` と `sort_by` など。[標準ライブラリ](../spec/stdlib.md) の「`List`」)
 - 文字列: エスケープ、補間 `\{式}`、複数行の文字列 `"""`、raw 文字列 `r"…"` / `r#"…"#` ([字句](../spec/lexical.md) の「文字列」)。補間の穴は、Prelude の `Show` のメソッド `display` で文字列にする ([式](../spec/expressions.md) の「補間」)。文字列の関数は標準ライブラリの `String` にある。位置は UTF-8 のバイトの位置で、文字は `char_at`、`fold`、`chars` で読み、`push` で足す ([標準ライブラリ](../spec/stdlib.md))
+- コマンドリテラル: 空白で区切った引数、引用 `'…'`、穴 `\{e}` (`e : String`)、spread の穴 `\{..xs}`。値は Prelude の `Cmd` で、HIR が Prelude の関数の呼び出しに脱糖する ([式](../spec/expressions.md) の「コマンドリテラル」)
 - トップレベルの関数 (シグネチャが必須)、複数の等式による定義、ローカルの `let` と `let ... in`、ローカルの再帰関数 (`let go acc xs = …`。引数を1つ以上持つ関数の形の `let` は自分自身を参照でき、単相で、lambda lifting する。`let … and …` で書いた組の関数は互いに呼び合える。[式](../spec/expressions.md) の「ローカル関数」)、`if` (then 節が `Unit` なら `else` を省略できる)、再帰、ラムダとクロージャ、部分適用、型の明示 `(e : T)`
 - シグネチャの型変数と row 変数による多相
 - 1回だけ呼べる関数の型 `once a -> b` (`Lin` の矢印。`data` のフィールドにも書ける)、`data` の row の型引数 (`data Iter <e> a`、使う所は `Iter <IO> Int`)、`data` の Kind の宣言 `data T : Lin`、トップレベルの関数と extern の関数とコンストラクタとクラスのメソッドと REPL の `let` の値を `once` の位置に置くこと (参照ごとに一番外側の矢印が新しい Kind 変数になる) ([型と Kind](../spec/types.md)、[宣言](../spec/declarations.md))
@@ -38,7 +39,7 @@
 
 ### まだないもの
 
-- まだ実装していない構文: 型の別名 `type` ([ロードマップ](../future/roadmap.md) の「言語機能と構文」)、コマンドリテラル ([ロードマップ](../future/roadmap.md) の「コマンドリテラル」)。字句と文法の置き場所を用意してあり、使うと E0004 (未対応) を出して回復する。どの段階が E0004 を出すかは [診断](../spec/diagnostics.md) の「未対応の構文と E0004」にある
+- まだ実装していない構文: 型の別名 `type` ([ロードマップ](../future/roadmap.md) の「言語機能と構文」)。字句と文法の置き場所を用意してあり、使うと E0004 (未対応) を出して回復する。どの段階が E0004 を出すかは [診断](../spec/diagnostics.md) の「未対応の構文と E0004」にある
 - row の型引数を持つ型の instance と `deriving`。書くと E0004 を出す
 - Unicode の表が要る文字の操作 (ASCII でない大文字と小文字の変換、文字の分類)、置換付きの UTF-8 のデコード、`Lin` の要素の配列の API ([ロードマップ](../future/roadmap.md) の「言語機能と構文」)
 - ユーザーが書く extern (FFI)
