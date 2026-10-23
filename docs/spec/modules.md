@@ -7,7 +7,7 @@
 ## モジュール
 
 - 1ファイル = 1モジュールとする。`module` ヘッダは書かない
-- 根は入口のファイル (`eml check` と `eml run` に渡したファイル) のディレクトリである。`eml run app/main.em` の根は `app/` になる
+- 根は入口のファイル (`eml check` と `eml run` に渡したファイル) のディレクトリである。`eml run app/main.em` の根は `app/` になる。Windows では入口のパスの `\` を `/` として扱う
 - モジュール名は根からのパスで決まり、大文字小文字まで完全に一致させる。`import Report.Csv` は `<根>/Report/Csv.em` を読む
 - 入口のモジュールの名前は、ファイル名によらず `Main` である。入口のモジュールは、どの名前でも import できない
 - `Prelude`、`Main`、`Std` は予約したモジュール名である。根に `Prelude.em`、`Main.em`、`Std.em` があっても import できない

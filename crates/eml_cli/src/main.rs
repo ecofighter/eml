@@ -123,17 +123,27 @@ fn split_script_args(mut argv: Vec<OsString>) -> (Vec<OsString>, Vec<OsString>) 
 fn load(path: &Path) -> Option<Session> {
     match fs::read_to_string(path) {
         Ok(text) => {
-            let path = exact_spelling(path);
-            let path = path.as_path();
+            let shown = entry_name(path);
             // 根は入口のファイルのディレクトリである
-            let root = path.parent().unwrap_or(Path::new(""));
+            let root = Path::new(&shown).parent().unwrap_or(Path::new(""));
             let source = FsProvider::new(root);
-            Some(Session::load(&path.display().to_string(), &text, &source))
+            Some(Session::load(&shown, &text, &source))
         }
         Err(error) => {
             eprintln!("error: cannot read `{}`: {error}", path.display());
             None
         }
+    }
+}
+
+/// 入口の表示のパス。モジュールの名前は `/` で区切るので、Windows では `\` を `/` に替える
+/// (docs/spec/modules.md の「モジュール」)。
+fn entry_name(path: &Path) -> String {
+    let shown = exact_spelling(path).display().to_string();
+    if cfg!(windows) {
+        shown.replace('\\', "/")
+    } else {
+        shown
     }
 }
 

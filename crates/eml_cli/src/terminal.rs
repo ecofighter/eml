@@ -34,7 +34,7 @@ pub fn run(debug_heap: bool, file: Option<PathBuf>) -> ExitCode {
     let file = match file {
         None => None,
         Some(path) => {
-            let shown = crate::exact_spelling(&path).display().to_string();
+            let shown = crate::entry_name(&path);
             match fs::read_to_string(&shown) {
                 Ok(text) => Some((shown, text)),
                 Err(error) => {
@@ -159,7 +159,7 @@ impl Terminal {
 
     /// 読めなければ、セッションも覚えたファイルも変えない (docs/spec/repl.md の「ファイルの読み込み」)。
     fn load(&mut self, path: &str) -> Flow {
-        let shown = crate::exact_spelling(Path::new(path)).display().to_string();
+        let shown = crate::entry_name(Path::new(path));
         match fs::read_to_string(&shown) {
             Ok(text) => self.load_text(&shown, &text),
             Err(error) => {
