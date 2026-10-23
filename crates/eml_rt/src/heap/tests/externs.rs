@@ -664,6 +664,20 @@ fn child_faults_are_shown_and_caught() {
     assert!(!exited.panics() && !unread.panics() && !not_utf8.panics());
 }
 
+/// 子を待つことの誤りは、起動の誤りと別の文言で、`try_io` が捕まえる。
+#[test]
+fn a_failed_wait_is_shown_as_waiting() {
+    use crate::externs::{Fault, IO_OTHER, IoOp, IoReason};
+    let unwaited = Fault::Io {
+        op: IoOp::Wait,
+        name: "sort".into(),
+        reason: IoReason::Other,
+    };
+    assert_eq!(unwaited.to_string(), "cannot wait for `sort`: I/O error");
+    assert_eq!(unwaited.io_error_kind(), Some(IO_OTHER));
+    assert!(!unwaited.panics());
+}
+
 /// 算術の誤りは2つのレジスタで返り、`Fault` は 24 バイトに収まる。
 #[test]
 fn faults_stay_small() {

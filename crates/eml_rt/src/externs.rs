@@ -63,6 +63,8 @@ pub enum IoOp {
     Run,
     /// 子の標準出力の読み。`name` はプログラムの名前である。
     ReadOutput,
+    /// 子を待つこと。`name` はプログラムの名前である。
+    Wait,
 }
 
 /// I/O の誤りの理由。文字列でなく値で分けるのは、`try_io` が eml の `IOError` の値に変えるためである。
@@ -155,6 +157,8 @@ pub enum Utf8Source {
 /// 0 でない終了コードで終わった子 (`Proc.capture`)。
 #[derive(Debug, PartialEq, Eq)]
 pub struct Exited {
+    /// ほかの名前と違って `Box<str>` にしないのは、これを作る `proc_exited` が検証したコードで、Verus が
+    /// `String::into_boxed_str` を扱わないためである。
     pub program: String,
     pub code: i64,
 }
@@ -1266,6 +1270,7 @@ impl fmt::Display for Fault {
                     IoOp::Write => "write to",
                     IoOp::Run => "run",
                     IoOp::ReadOutput => "read the output of",
+                    IoOp::Wait => "wait for",
                 };
                 write!(f, "cannot {verb} `{name}`: {reason}")
             }

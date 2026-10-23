@@ -35,6 +35,9 @@ pub(super) enum Origin {
     },
     Return,
     Annotation(TextRange),
+    /// コマンドリテラルの穴。lowering が組んだ型の明示なので、型の明示とは呼ばない
+    /// (docs/spec/expressions.md の「コマンドリテラル」)。
+    CommandHole,
     IfCondition,
     IfBranches(TextRange),
     IfWithoutElse,
@@ -562,6 +565,12 @@ impl BodyCheck<'_, '_> {
                 *annotation,
                 "expected because of this annotation",
             )),
+            Origin::CommandHole => {
+                let string = names.ty(self.program.extern_type(ExternType::String));
+                diagnostic.with_note(format!(
+                    "a hole in a command literal must have type `{string}`; write `\\{{show e}}`, or `\\{{..xs}}` to spread a `List {string}`"
+                ))
+            }
             Origin::IfCondition => {
                 diagnostic.with_note(format!("the condition of `if` must have type `{bool}`"))
             }

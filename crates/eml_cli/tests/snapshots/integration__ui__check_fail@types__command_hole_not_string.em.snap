@@ -7,17 +7,17 @@ input_file: tests/ui/check-fail/types/command_hole_not_string.em
    ╭─[ check-fail/types/command_hole_not_string.em:3:16 ]
    │
  3 │ f xs = `echo \{1} \{xs}`
-   │              ──┬─  
-   │                ╰─── expected `String`, found `Int`
-   │                │   
-   │                ╰─── expected because of this annotation
+   │                ┬  
+   │                ╰── expected `String`, found `Int`
+   │ 
+   │ Note: a hole in a command literal must have type `String`; write `\{show e}`, or `\{..xs}` to spread a `List String`
 ───╯
 [E2001] Error: mismatched types
    ╭─[ check-fail/types/command_hole_not_string.em:3:21 ]
    │
  3 │ f xs = `echo \{1} \{xs}`
-   │                   ──┬┬─  
-   │                     ╰──── expected because of this annotation
-   │                      │   
-   │                      ╰─── expected `String`, found `List String`
+   │                     ─┬  
+   │                      ╰── expected `String`, found `List String`
+   │ 
+   │ Note: a hole in a command literal must have type `String`; write `\{show e}`, or `\{..xs}` to spread a `List String`
 ───╯

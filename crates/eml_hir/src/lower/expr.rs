@@ -33,6 +33,7 @@ pub(super) struct BodyLowering<'a> {
     pub(super) continuations: ArenaMap<LocalId, usize>,
     pub(super) omitted_fields: ArenaMap<PatId, (ConstructorId, u32)>,
     use_lambdas: HashSet<ExprId>,
+    command_holes: HashSet<ExprId>,
     local_functions: ArenaMap<LocalId, ExprId>,
     defining: ArenaMap<ExprId, LocalId>,
     groups: Vec<Vec<LocalId>>,
@@ -97,6 +98,7 @@ impl<'a> BodyLowering<'a> {
             continuations: ArenaMap::default(),
             omitted_fields: ArenaMap::default(),
             use_lambdas: HashSet::new(),
+            command_holes: HashSet::new(),
             local_functions: ArenaMap::default(),
             defining: ArenaMap::default(),
             groups: Vec::new(),
@@ -160,6 +162,7 @@ impl<'a> BodyLowering<'a> {
             continuations: self.continuations,
             omitted_fields: self.omitted_fields,
             use_lambdas: self.use_lambdas,
+            command_holes: self.command_holes,
             local_functions: self.local_functions,
             defining: self.defining,
             local_groups: Vec::new(),
@@ -1322,6 +1325,9 @@ impl<'a> BodyLowering<'a> {
                 "the first word is the program"
             } else if spread_hole(word).is_some() {
                 continue;
+            } else if word.quoted && word.parts.len() == 1 {
+                // 穴1つだけの引数が spread にならない理由は引用だけなので、ラベルでそれを伝える
+                "a quoted hole is not spread"
             } else {
                 "not a whole argument on its own"
             };
@@ -1366,7 +1372,9 @@ impl<'a> BodyLowering<'a> {
             kind: TypeRefKind::Con(string, Vec::new(), Vec::new()),
             range: hole_range,
         });
-        self.alloc(ExprKind::Annot { expr, ty }, hole_range)
+        let annot = self.alloc(ExprKind::Annot { expr, ty }, hole_range);
+        self.command_holes.insert(annot);
+        annot
     }
 
     /// 浮動小数のリテラルのパターン (E1052)。`==` で比べるよう案内する。`0.0` と `-0.0`、NaN のように、`==` と

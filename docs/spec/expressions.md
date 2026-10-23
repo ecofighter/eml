@@ -220,7 +220,7 @@ backup dest files = `rsync -a --delete \{..files} \{dest}`
   - 引数のリストは、後ろから `Nil` と `::` で組む。spread の穴は、`cmd_spread xs rest` の呼び出しにする。`cmd_spread` は、`xs` の要素を `rest` の前に並べる
   - 全体は `cmd_new program args` の呼び出しで、範囲はリテラル全体である。`cmd_new` は、設定を既定の値にした `Cmd` を作る
   - `Nil`、`::`、`cmd_new`、`cmd_spread` は、名前を引かずに Prelude のものを指す。`cmd_new` と `cmd_spread` は `pub` でないので、利用者のコードからは呼べない。自分の `cmd_new` や `Nil` を定義したモジュールでも、リテラルの意味は変わらない
-  - `\{e}` の式が `String` でなければ、型の明示の E2001 になる。`\{..xs}` の式が `List String` でなければ、`cmd_spread` の引数の E2001 になる
+  - `\{e}` の式が `String` でなければ、型の明示の検査で E2001 になる。利用者は型の明示を書いていないので、診断は型の明示を指さず、`\{show e}` と `\{..xs}` を案内する note を付ける ([診断の出し方](../implementation/diagnostics.md) の E2001)。`\{..xs}` の式が `List String` でなければ、`cmd_spread` の引数の E2001 になる
 
 ## 演算子の列と単項マイナス
 

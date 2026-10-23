@@ -440,6 +440,9 @@ pub struct Body {
     /// 後に回すと、`use` のブロックの型の誤りが、書いていないラムダの中の誤りとして報告されるため
     /// (docs/spec/types.md の「引数のラムダを後で検査する」)。
     pub use_lambdas: HashSet<ExprId>,
+    /// コマンドリテラルの穴を包んだ型の明示。型検査は、この `Annot` の E2001 を、書いていない型の明示としてではなく
+    /// 穴の誤りとして報告する (docs/implementation/diagnostics.md の E2001)。
+    pub command_holes: HashSet<ExprId>,
     /// 関数の形の `let` が定義するローカル関数の、名前の局所変数からラムダへの対応。呼び出しの引数の数を、名前だけから
     /// 引くために使う (docs/spec/expressions.md の「ローカル関数」)。
     pub local_functions: ArenaMap<LocalId, ExprId>,

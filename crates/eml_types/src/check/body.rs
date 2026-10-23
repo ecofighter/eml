@@ -380,8 +380,12 @@ impl BodyCheck<'_, '_> {
             }
             ExprKind::Annot { expr: inner, ty } => {
                 let annotated = lower_type(self.table, &self.body.types, self.rigids, *ty);
-                let range = self.body.types[*ty].range;
-                self.check_expr(*inner, annotated, Origin::Annotation(range));
+                let origin = if self.body.command_holes.contains(&id) {
+                    Origin::CommandHole
+                } else {
+                    Origin::Annotation(self.body.types[*ty].range)
+                };
+                self.check_expr(*inner, annotated, origin);
                 annotated
             }
             ExprKind::Handle {

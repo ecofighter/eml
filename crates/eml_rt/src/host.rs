@@ -541,7 +541,7 @@ pub(crate) unsafe fn child_close_stdin(c: *mut Child) {
 }
 
 /// 子の標準入力を閉じ、子を取り出して待ち、終了コードを返す。待つ間に止める語が立てば、子が終わった後で、止めたことに
-/// する (docs/spec/object-model.md の「実行の制御」)。
+/// する (docs/spec/object-model.md の「実行の制御」)。待てなければ `Io { op: Wait, .. }` を返す。
 ///
 /// # Safety
 /// `child_write` と同じである。
@@ -562,7 +562,7 @@ pub(crate) unsafe fn child_wait(c: *mut Child, control: &Control) -> (r: Result<
     }
     match waited {
         Ok(code) => Ok(code as i64),
-        Err(e) => Err(Fault::Io { op: IoOp::Run, name: c.program.clone(), reason: io_reason(&e) }),
+        Err(e) => Err(Fault::Io { op: IoOp::Wait, name: c.program.clone(), reason: io_reason(&e) }),
     }
 }
 

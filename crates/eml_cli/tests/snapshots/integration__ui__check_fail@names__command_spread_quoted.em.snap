@@ -8,12 +8,12 @@ input_file: tests/ui/check-fail/names/command_spread_quoted.em
    │
  3 │ f xs = `ls '\{..xs}' ''\{..xs}`
    │             ───┬───  
-   │                ╰───── not a whole argument on its own
+   │                ╰───── a quoted hole is not spread
 ───╯
 [E1055] Error: a `\{..}` hole must be a whole argument after the program
    ╭─[ check-fail/names/command_spread_quoted.em:3:24 ]
    │
  3 │ f xs = `ls '\{..xs}' ''\{..xs}`
    │                        ───┬───  
-   │                           ╰───── not a whole argument on its own
+   │                           ╰───── a quoted hole is not spread
 ───╯

@@ -505,6 +505,7 @@ pub data Set a =
 | `FileOut.create`、`append` | 開けない (`Io { op: Open, .. }`) | `IO` |
 | `FileOut` の書き込み (`write`、`write_bytes`、`write_line`、`flush`、`close`) | 書けない (`Io { op: Write, .. }`)。ハンドルは閉じている (下の「`FileOut`」) | `IO` |
 | `Child` の読み | 読めない (`Io { op: ReadOutput, .. }`) | `IO` |
+| `Proc.wait` | 待てない (`Io { op: Wait, .. }`) | `IO` |
 | `Child` の書き込み (`write`、`write_bytes`、`write_line`) | 書けない (`Io { op: Write, .. }`)。ハンドルを手放し、破棄処理が子を kill する (下の「`Proc`」) | `IO` |
 | 文字列の読み | UTF-8 でない (`NotUtf8`)。バイト列の読みはこれで失敗しない | `IO` (`kind` は `NotUtf8`) |
 | どの読みも | 割り込み、確保量の上限 | 位置を付けた実行時エラー |
@@ -650,7 +651,8 @@ pub data Set a =
 - `Cmd` の値は、コマンドリテラルとこのモジュールの設定の関数で組む。プログラムを変数で与えるときは `` `\{prog} \{..args}` `` と書く
 - `Cmd` は `Eq` と `Show` の instance を持つ。`show` は全部のフィールドを `Cmd { program = "git", args = ["log"], … }` の形で表示し、`display` は人が読む1行で、プログラムと引数を空白でつなぐ。`display` は引用を戻さないので、コマンドリテラルには戻せない
 - フィールドの名前と数は処理系の都合で変わりうる。そのため、利用者のコードは `Cmd { … }` の作る式とパターンを書かない。読むだけの射影 (`cmd.program`、`cmd.args`) は書いてよい。`StderrMode` のコンストラクタも、設定の関数が書くので、利用者は書かない
-  - 見直す条件: 抽象型が入ったとき、`Cmd` と `StderrMode` のコンストラクタを隠す
+  - 見直す条件: 抽象型が入ったとき、`Cmd` と `StderrMode` のコンストラクタを隠す。そのときも `Cmd` は Prelude のレコードのまま型を抽象にし、`extern data` にはしない
+- `Cmd` を `extern data` にしないのは、`Unr` の `Foreign` は REPL の回復で写せず ([オブジェクトモデル](object-model.md) の「種類」)、`` let c = `ls` `` の後の回復がどれも失敗するためである。`Lin` の `Foreign` にすると、同じ `Cmd` を2回起動できない
 - 設定の関数は対象の `Cmd` を最後に受ける。`` `make` |> Proc.cwd "build" |> Proc.merge_stderr |> Proc.capture `` のように `|>` でつなぐためである。`with_` の名前は、handler を呼ぶ関数の慣習 ([例](examples.md) の `with_env`) に取っておく
 - `cwd dir c` は作業ディレクトリを `dir` にする。相対パスは `FileIn.open` と同じく Host の `file_root` から解釈する。2回設定したら、後の設定が前の設定を置き換える。ないディレクトリは、起動の誤りの理由 `not found` (``cannot run `make`: not found``) になり、プログラムがないときと区別しない
 - `env name value c` は、子の環境変数 `name` を `value` に上書きする。子はほかの環境変数を eml のプロセスから受け継ぐ。同じ名前を2回設定したら、後の組が勝つ。空の名前と `=` を含む名前は OS に渡せないので、起動の誤り (`I/O error`) にする
@@ -673,7 +675,8 @@ pub data Set a =
 
 1. 起動の誤り (``cannot run `git`: not found``)
 2. 標準出力の読みの誤り (``cannot read the output of `git`: I/O error``、``the output of `git` is not valid UTF-8``)
-3. 終了コード (``command `git` exited with code 128``)
+3. 子を待つ誤り (``cannot wait for `git`: I/O error``)
+4. 終了コード (``command `git` exited with code 128``)
 
 この順は本体 `let (out, child) = read_all (spawn_with … c); let code = wait child; if code == 0 then out else exited c.program code` の順そのものである。そのため、UTF-8 でない出力を出して 0 でなく終わった子は、`NotUtf8` で失敗する。読みの失敗で巻き戻るときは、`Child` の破棄処理が子を kill する (下の「`Child`」)。
 
@@ -720,6 +723,7 @@ eml は1度に1本の pipe しか読み書きしない。pipe の buffer は OS 
 | `capture`、`capture_bytes` | 終了コードが 0 でない (`Exited`。``command `sh` exited with code 3``) | `IO` (`kind` は `Other`) |
 | `Child` の読み、`output`、`capture` | 読めない (`Io { op: ReadOutput, name: program, .. }`。``cannot read the output of `sort`: I/O error``)。文字列の読みは UTF-8 でない (``the output of `sort` is not valid UTF-8``) | `IO` (UTF-8 の誤りの `kind` は `NotUtf8`) |
 | `Child` の書き込み | 書けない (子が先に終わったときの EPIPE、`close_stdin` の後など)。`FileOut` と同じ `Io { op: Write, name: program, .. }` (``cannot write to `sort`: I/O error``) で、ハンドルを手放す | `IO` |
+| `wait`、`run`、`output`、`output_bytes`、`capture`、`capture_bytes` | 子を待てない (`Io { op: Wait, name: program, .. }`。``cannot wait for `sort`: I/O error``)。起動の誤りと違い、子は起動している | `IO` |
 | `wait`、読み、書き込み | 割り込み。子が終わった後に `Stopped` になる | 位置を付けた実行時エラー |
 
 - `Child` の書き込みの失敗を、`Stdout` と違って `try_io` で捕まえるのは、`Child` が自分の pipe に直に書き、共有の buffer を持たないためである (`FileOut` と同じ理由)
@@ -870,6 +874,7 @@ I/O の失敗の一部は `try_io` で捕まえられる (上の「`try_io`」)�
 | `Child` の読み | ``cannot read the output of `sort`: I/O error`` |
 | UTF-8 でない子の出力 | ``the output of `sort` is not valid UTF-8`` |
 | `Child` の書き込み | ``cannot write to `sort`: I/O error`` |
+| `Proc.wait` と、子を待つ起動の関数 (`run`、`output`、`capture` など) | ``cannot wait for `sort`: I/O error`` |
 | 標準入力の2つ目のハンドル | ``the standard input is already open`` |
 | 標準出力の2つ目のハンドル | ``the standard output is already open`` |
 | 標準エラーの2つ目のハンドル | ``the standard error is already open`` |
