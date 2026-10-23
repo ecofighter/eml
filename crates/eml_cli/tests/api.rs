@@ -287,17 +287,15 @@ fn execute_counts_its_work() {
     assert!(stats.string_bytes_copied > 0);
 }
 
-/// 深さの上限は 2^27 語である。確保量の上限は物理メモリの 80% で、物理メモリを読める macOS と Linux では有限である。
+/// 深さの上限は 2^27 語である。確保量の上限は物理メモリの 80% で、物理メモリを読める macOS、Linux、Windows では有限である。
 /// 既定の上限まで実際に再帰するテストは 1 GiB を使うので置かない。
 #[test]
 fn default_limits_bound_the_depth_and_the_memory() {
     let limits = eml_cli::default_limits();
     assert_eq!(limits.max_depth, 1 << 27);
     assert_eq!(limits.max_evv, usize::MAX);
-    if cfg!(any(target_os = "macos", target_os = "linux")) {
-        assert!(limits.max_bytes > 0);
-        assert!(limits.max_bytes < usize::MAX);
-    }
+    assert!(limits.max_bytes > 0);
+    assert!(limits.max_bytes < usize::MAX);
 }
 
 /// REPL の確保量の上限は `eml run` の半分 (物理メモリの 40%) である。回復が古いヒープと写しを同時に持っても、
@@ -308,10 +306,8 @@ fn repl_limits_leave_room_for_recovery() {
     let repl = eml_cli::repl_limits();
     assert_eq!(repl.max_depth, run.max_depth);
     assert_eq!(repl.max_evv, usize::MAX);
-    if cfg!(any(target_os = "macos", target_os = "linux")) {
-        assert!(repl.max_bytes > 0);
-        assert_eq!(repl.max_bytes * 2, run.max_bytes);
-    }
+    assert!(repl.max_bytes > 0);
+    assert_eq!(repl.max_bytes * 2, run.max_bytes);
 }
 
 /// 入力ごとの表示を読むための、`Repl` と出力の組。

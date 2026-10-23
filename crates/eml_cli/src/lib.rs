@@ -293,7 +293,22 @@ fn physical_memory() -> Option<usize> {
         .filter(|&bytes| bytes > 0)
 }
 
-#[cfg(all(feature = "run", not(unix)))]
+#[cfg(all(feature = "run", windows))]
+fn physical_memory() -> Option<usize> {
+    use windows_sys::Win32::System::SystemInformation::{GlobalMemoryStatusEx, MEMORYSTATUSEX};
+    // MEMORYSTATUSEX は全部が整数なので、零で埋めてよい。呼ぶ前に dwLength を入れる決まりで、失敗すれば 0 を返す
+    let mut status: MEMORYSTATUSEX = unsafe { std::mem::zeroed() };
+    status.dwLength = std::mem::size_of::<MEMORYSTATUSEX>() as u32;
+    let ok = unsafe { GlobalMemoryStatusEx(&mut status) };
+    if ok == 0 {
+        return None;
+    }
+    usize::try_from(status.ullTotalPhys)
+        .ok()
+        .filter(|&bytes| bytes > 0)
+}
+
+#[cfg(all(feature = "run", not(any(unix, windows))))]
 fn physical_memory() -> Option<usize> {
     None
 }

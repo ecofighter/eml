@@ -39,7 +39,7 @@ rustyline = { workspace = true, optional = true }
 libc = { workspace = true, optional = true }
 
 [target.'cfg(windows)'.dependencies]
-windows-sys = { workspace = true, optional = true }
+windows-sys = { workspace = true, optional = true, features = ["Win32_System_SystemInformation"] }
 
 [dev-dependencies]
 eml_rt.workspace = true

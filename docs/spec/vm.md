@@ -338,7 +338,7 @@ token は1語の値で、フレームのスロットに置く ([オブジェク�
 | `max_bytes` | 物理メモリの 80% | GHC がスタックの上限 (`-K`) の既定を物理メモリの 80% にしているのに倣う。ヒープの上限としての前例ではなく、「機械を使い切る前に、分かる誤りで止める」という考え方を借りる。物理メモリを読めない OS では上限なし (`usize::MAX`) にする |
 | `max_evv` | 上限なし | `evv` はヒープの物体なので、確保量の上限で抑えられる |
 
-- 物理メモリは `sysconf(_SC_PHYS_PAGES) * sysconf(_SC_PAGESIZE)` で読む。macOS と Linux のどちらもこの2つを持つ。`eml_cli` の `src/` の `unsafe` は、この関数と、bin の `interrupt` モジュールと、`terminal.rs` の `stdout_width` の中だけに置く
+- 物理メモリは、unix では `sysconf(_SC_PHYS_PAGES) * sysconf(_SC_PAGESIZE)` で読む。macOS と Linux のどちらもこの2つを持つ。Windows では `GlobalMemoryStatusEx` の `ullTotalPhys` で読む。`eml_cli` の `src/` の `unsafe` は、この関数と、bin の `interrupt` モジュールと、`terminal.rs` の `stdout_width` の中だけに置く
 - Linux のコンテナでは、物理メモリは cgroup の上限を反映しない。上限が cgroup より大きくなり、分かる誤りの前に OOM で殺されうる。cgroup を読むのは要るときに足す
 - VM のスタックはヒープの外にあるので `max_bytes` に数えず、`max_depth` で抑える (「スロットとスタック」)
 - 検査モードは解放したブロックを使い回さないので、`--debug-heap` の長い実行は、速いモードより先に `max_bytes` に当たりうる。暴走を止める安全網という上限の役 ([オブジェクトモデル](object-model.md) の「確保と解放」) は変わらないので、受け入れる
