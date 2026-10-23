@@ -1,0 +1,59 @@
+# S1 addendum: answers to S2's requirements (03-async.md §5)
+
+Scope: cancellation model and the seven runtime requirements. Each item: verdict, runtime mechanism, check against the mailbox / rescue / transfer / invariant rules of S1 r3. Changes to r3 are collected at the end.
+
+## Cancellation requirements
+
+**R-S1-C1 — resume with `Wake.Cancelled`, never drop `k` as primary cancellation.** Accept.
+- Mechanism: the task cell gets a `cancel: AtomicBool` (sticky). Two delivery points, both on the cell's owner worker: (1) *parked*: when the owner processes `Msg::Cancel` or a sibling-failure fan-out and finds the task `Parked`, it disarms (C2) and then pushes `Cont { cell, k, value: Cancelled }` to its run queue; (2) *arriving at a checkpoint*: `rt_wait(reason, k)` reads the cancel bit first and, if set, pushes `Cont { k, Cancelled }` instead of storing the wait (no park, same worker). `Cancelled` is an immediate (enum tag), so the resume is the ordinary `resume_task(k, v)` entry in the VM and in native code; no new entry, no stop bit, no unwinding by the runtime. `shield` is S2's wrapper (ignores the bit); the runtime only reads the bit in `rt_wait`.
+- Check: the word pushed is an immediate, so invariant 9 holds trivially; the push happens under the owner's mailbox lock (invariant 8).
+
+**R-S1-C2 — disarm before resuming with `Cancelled`.** Accept, with one rule added for the race with a wake already posted.
+- Mechanism: `Waiting { cell, k, reason }` with `reason ∈ { Cell(target cell), Io(OpId, binding worker), Chan(waiter entry), Timer(id), Pool(job) }`; task state gains `Cancelling`. Disarm by reason, performed by **whichever worker is `cell.owner` when it processes the cancel bit**:
+  - `Cell`: remove the awaiter entry under the target cell's lock.
+  - `Timer`: remove the entry from the owner's timer wheel (owner-local).
+  - `Chan`: CAS the waiter entry to `Removed` under the channel's lock (S2 owns the channel object; the entry carries the cell `Arc`). If a sender already dequeued the entry and posted `Msg::Wake { Woke }`, the CAS loses: the task is resumed with `Woke` and the item delivered; the sticky bit raises at its next checkpoint. Rule: **disarm either succeeds (resume `Cancelled`) or loses to a wake already in flight (resume `Woke`); never both, never neither.** The same rule applies to `Cell` awaits (completion posted before the disarm wins).
+  - `Io`: state → `Cancelling`; the owner asks the binding worker's driver to cancel (locally, or `Msg::Submit { Cancel(op), cell }` to the binding worker, R-S1-1); on `Msg::Completion` (status cancelled or data) the owner stores the completion for `take_*` and resumes with `Cancelled`. A `Cancelling` task is never resumed before its completion.
+  - `Pool`: a pool job cannot be interrupted; same as `Io` (resume with `Cancelled` after the job's completion message; the result is kept for `take_*` and dropped by the unwind).
+  - `await_io_until`: the timer entry carries the `OpId`; at the deadline the owner cancels the op and, on its completion, resumes with `Woke` (S2's status `TimedOut` comes from the completion).
+- Check against rescue: a rescuer takes the victim's mailbox lock, moves `cell.owner` to itself, and with it the **obligation to process the cancel bit and to disarm**; the victim cannot be mid-disarm because disarming happens only under its own mailbox lock, which the rescuer holds. Completions and cancel acknowledgements are posted to `cell.owner` read under the destination's lock with re-check (r3 C-4), so they follow the move. `Cancelling` tasks are rescuable like any parked task (the completion follows); nothing is lost. Check against transfer: the completion payload is an owned word in the driver's pending table (invariant 9) and crosses to the task by the normal transfer walk when the binding worker differs.
+
+**R-S1-C3 — a failure in a scope cancels every task of the scope (and nested scopes) immediately; `cancel_scope` likewise; `rt_scope_failed` is one atomic load.** Accept.
+- Mechanism: a scope cell holds `members: Mutex<Vec<Arc<Cell>>>` (tasks) and `children: Mutex<Vec<Arc<ScopeCell>>>` (nested scopes), `failed: AtomicBool`, `failure: Mutex<Option<Failure>>` (first writer wins). The failing task's bottom (`start_task`'s record step) CASes `failed`, stores the failure if first, then fans out: for each member set `cancel` and post `Msg::Cancel` to `cell.owner` (destination lock, owner re-check); recurse into `children`. `rt_scope_failed` reads `failed` (Relaxed) through the task's scope `Arc`. Membership changes (`spawn_in` after the fan-out) see `failed` under the members lock and are cancelled at creation.
+- Check: the fan-out crosses workers only through mailboxes (invariant 8); no words cross (cells are `Arc`s, not heap words); cost O(members) per failure; a stuck owner's `Msg::Cancel` sits in its mailbox until it is processed or the task is rescued (the rescuer processes the bit). Immediate-at-the-moment-of-failure holds up to mailbox latency on the destination worker.
+
+**R-S1-C4 — hard drop of `k` only at `exit`, fatal error, run end; the `Lin` op token's drop glue orphans a driver op.** Accept.
+- Mechanism: at those three points the run stops under the REQ-S1-4 protocol (stop bit, all workers cut to their entry, host joins), and the worker heaps are dropped: `k` words in mailboxes, wait sets and driver tables are released by the heaps' drop (Foreign finalizers run), so files and sockets close. The op token's drop glue marks the driver entry orphaned; the driver frees the buffer at completion or at driver teardown (after `CancelIoEx`/`ASYNC_CANCEL` and a bounded completion drain). REPL recovery (all parked) uses the same drain before copying (S2 A6).
+
+## Other requirements
+
+**R-S1-1 — forward `submit` on a handle bound to another worker's driver through that worker's mailbox; completion to `cell.owner`.** Accept.
+- `Msg::Submit { op, cell }` added; the binding worker's loop submits in its mailbox batch; the completion goes to `cell.owner` (re-check under the destination lock). Rescue does **not** process `Submit` messages (they need the binding thread's driver), so a submit forwarded to a stuck worker waits until it returns; stated as a latency, not a correctness issue. A driver that declares its submit thread-safe (IOCP; io_uring with a locked SQ) may skip the hop; S2/eml_io decide per backend.
+
+**R-S1-4 — `ctx.budget` reset at dispatch.** Accept. A plain `usize` in `Ctx`, written once per dispatch by the worker loop (not per poll); fast-path externs decrement it; it does not touch the stop word, so VM `PREEMPT` and the op budget stay independent (VM slices bound CPU-bound bytecode; the op budget bounds fast-path storms in both VM and native).
+
+**R-S1-5 — `exit` in any task ends the run with its code; other workers stop at their next safe point; driver torn down before `_exit`.** Accept with change in mechanism: no propagation through frames.
+- Mechanism: `exit n` unwinds the *current* task's stack to its bottom as today (its own unwind tables run), the bottom records `(Exit, n)` in `Control`'s first-writer-wins end slot (shared with REQ-S1-4's error slot) and sets the stop bit; the monitor mirrors and unparks; every worker cuts to its entry at its next poll; the host thread joins the workers, tears down drivers (cancel + bounded drain), drops heaps (finalizers flush and close), flushes `Host`, and exits with `n`. Parked `run_scheduler` waiters and other tasks are not unwound; their `Lin` resources are finalized by the heap drop, which is what their unwind would have done minus user `try_*` bodies. This matches today's `exit` for the exiting task and gives the same observable end state; S2's "propagates through the parked `run_scheduler` to `main`'s bottom" is replaced by the stop protocol (`main`'s frames are never resumed). In the REPL, `exit` ends the evaluation and recovery runs as for any stop.
+
+**R-S1-6 — "`Lin` buffers" = uniquely owned words.** Accept the clarification: the driver's pending table holds the word as an owned counted reference (invariant 9); `submit` copies when rc ≠ 1 (shared or multiply referenced), so the kernel only ever writes into a block with exactly one reference, held by the table.
+
+**R-S1-7 — `SIGTERM`, and Ctrl-C with a registered `Signal.wait` waiter, delivered as completions; second Ctrl-C keeps `_exit(130)`.** Accept with change: routing is done by the monitor, not by the signal handler or `signalfd`.
+- Mechanism: the signal handler stays async-signal-safe and touches only `Control` (sets `INTERRUPT`; new `TERMINATE` bit for `SIGTERM`; Windows console handler thread sets the same bits; second Ctrl-C with `INTERRUPT` already set → `_exit(130)` as today). The monitor, on seeing a bit: if a `Signal.wait` waiter for that signal is registered (run-level atomic count per signal), it clears that bit (`Control` gains per-bit clear) and posts `Msg::Completion` to the waiter's `cell.owner`; otherwise it mirrors the bit into the per-worker words as the fatal stop (today's behaviour). `signalfd`/`EVFILT_SIGNAL` are not used: they require blocking the signal on every thread, which conflicts with the existing handler and the EINTR path of blocking reads. The window between the handler setting `INTERRUPT` and the monitor clearing it is at most one tick; a second Ctrl-C inside it exits, which is the documented double-Ctrl-C meaning.
+
+**R-S3-1 / R-S3-2 / R-eml_io (restated by S2).** Consistent with r3: `rt_offload` = pool job + `Msg::Completion` to `cell.owner` (pool threads never run eml); plugin ops complete through the same message; every driver wait returns on `Unpark` and on the monitor's fatal unpark.
+
+## Checks requested by the coordinator
+
+- *Disarm racing with rescue*: disarm runs only under the owner's mailbox lock, which the rescuer holds while moving `owner`; the obligation moves with ownership; completions follow `cell.owner` by the destination-lock re-check. No double resume (the task's state is `Parked`/`Cancelling`/`Ready` under one lock at a time).
+- *Scope-wide immediate cancel across workers*: fan-out by messages to each member's current owner; no heap words cross; nested scopes recursed under their own locks; late joiners cancelled at creation.
+- *`Wake.Cancelled` resume path*: VM: `Cont { k, Cancelled }` → fresh `Task` with entry `resume_task(k, Cancelled)`, identical to a normal wake. Native: the same entry through the native entry stub; no stop bit, no longjmp, no `PREEMPT` interaction. The raised IO failure then unwinds inside the task with its own unwind tables (VM) or by-return aborts (native), ending at `start_task`'s record step.
+
+## Changes to S1 r3 that follow
+
+1. Dispatch contract: replace the cancellation paragraph (hard drop) with R-S1-C1/C2 above; `Waiting` gains `reason`; task state gains `Cancelling`; the cell gains `cancel: AtomicBool`; `rt_wait` checks the bit before parking.
+2. Scope cells: `members`, `children`, `failed`, `failure` as in R-S1-C3; `rt_scope_failed` primitive.
+3. `Msg` gains `Submit { op | Cancel(op), cell }` (R-S1-1); rescue skips `Submit`.
+4. `Ctx` gains `budget: usize`, reset at dispatch (R-S1-4).
+5. `Control` gains a first-writer-wins end slot `{ Exit(code) | Fatal(error) }` (shared with REQ-S1-4), a `TERMINATE` bit, and per-bit clear; the monitor routes signal bits to `Signal.wait` waiters when registered (R-S1-5, R-S1-7).
+6. Hard drop of `k` is confined to stop/exit/run end/recovery (R-S1-C4); the S2-facing change list item 4 is superseded by this addendum; §6 item "soft cancellation" is resolved by S2's model (`check_cancelled`, `cancel_requested`, `shield`).
+7. Invariant 9 extended explicitly to driver pending tables and completion payloads; invariant 8 extended with "disarm and cancel processing happen only under the owner's mailbox lock".
