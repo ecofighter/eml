@@ -10,7 +10,7 @@ pub(crate) enum Linearity {
     Lin,
 }
 
-/// row に含まれてよい操作の上限。`Never` はマルチコア対応のために最初から持つ (docs/spec/types.md)。
+/// row に含まれてよい操作の上限。`Never` は `never` の操作だけを含む row で、row 変数の上限 `<never e>` が使う (docs/spec/types.md の「Kind」)。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub(crate) enum Multiplicity {
     Never,
@@ -33,6 +33,8 @@ pub(crate) enum KindConstraint {
     Linearity { lower: KindTerm, upper: KindTerm },
     /// 持ち越しの制約。`value` が `Lin` なら `row` は `Once` 以下である (docs/spec/types.md の「推論」)。
     Carry { value: KindTerm, row: RowTerm },
+    /// row 変数の多重度の上限 (docs/spec/types.md の「row 変数の多重度の上限」)。`row` は rigid な row 変数の名前。
+    RowUpper { row: String, upper: Multiplicity },
 }
 
 /// 持ち越しの制約の row の側。
@@ -83,6 +85,7 @@ impl KindConstraint {
             KindConstraint::Carry { value, row } => {
                 format!("carry({}, {row})", value.show(types, names))
             }
+            KindConstraint::RowUpper { row, upper } => format!("<{row}> <= {upper:?}"),
         }
     }
 }

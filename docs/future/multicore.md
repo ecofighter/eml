@@ -346,7 +346,7 @@ row の Kind: Row<s>,  s ∈ { Never ≤ Once ≤ Multi }
 - `par` の子の row を `e : Row<Never>` に制限する。`IO`、`Heap h`、`once` / `multi` の操作は除外される
 - `Panic` は `Never` のラベルに分け直す。`Panic` の操作は `never panicked` だけで、`Panic` を起こす extern は中断して再開しない。`Once` の根拠の「extern の関数がその場で1回だけ戻る」は extern の呼び出しのことで、呼び出しは `perform` でない。そのため、子は `Int` の足し算や `Array.get` を書ける。`IO` は `Once` のままにする。`Never ≤ Once` なので、`σ ≤ Once` の持ち越しの制約はどれも満たされたままである
 - 制約は書ける形にする。シグネチャの row 変数に多重度の上限を付けた `<never e>` で、`once a -> …` と同じ並びである。`Par.map` に関数を渡す補助の関数のシグネチャに要るためで、シグネチャを書かなければ推論で付く。合わない row の関数を渡すと、呼び出しの位置で新しい型の誤りになる
-- 今の実装は内部の Kind の束を3要素で用意する (`Never` を最初から入れておく)。規範は [型と Kind](../spec/types.md) にある
+- `Panic` の多重度と `<never e>` の規則は [型と Kind](../spec/types.md) にある
 
 ### 子タスクに `never` の操作だけを許す理由
 

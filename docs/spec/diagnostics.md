@@ -141,6 +141,7 @@ struct Fix {
 | E2017 | `BINDING_AMBIGUOUS` | REPL の `let` の束縛の型に、決まらない型変数が残った |
 | E2018 | `INPUT_CHANGES_UNIFORM` | REPL の入力が、前の入力の関数か instance の一様な位置を変える。`eml_cli` の `Repl` が `eml_types::input_changes_uniform` で作る |
 | E2019 | `VAR_ESCAPES` | `var` の変数を使う関数が範囲の外へ出うる。ノードの値の型、ノードの場所の row、範囲の外の束縛の型のどれかに、変数のエフェクトが現れる ([型と Kind](types.md) の「範囲の外へ出る閉包」) |
+| E2020 | `ROW_BOUND_EXCEEDED` | 呼び出しが多重度の上限を持つ row 変数に、上限を超える row を入れた。上限はシグネチャに書いたものと、推論で付いたものの両方を含む ([型と Kind](types.md) の「row 変数の多重度の上限」) |
 | E3001 | `LINEAR_VALUE_MISUSED` | 線形な値の誤った使い方のうち、E3002〜E3005 に当たらないもの (関数への受け渡し、型の単一化、ラムダや節の捕獲、再帰するローカル関数の組の関数の捕獲、操作の型が節に求める制約) |
 | E3002 | `LINEAR_VALUE_USED_TWICE` | 線形な値を、ある経路で2回以上使った。配列の変数を、ある経路で2回以上取り出した場合を含む |
 | E3003 | `LINEAR_VALUE_NOT_CONSUMED` | 線形な値を、ある経路で使わなかった。配列の変数を、ある経路で取り出さなかった場合を含む |

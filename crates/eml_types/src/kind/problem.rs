@@ -3,7 +3,7 @@
 
 use eml_hir::ValueItem;
 
-use super::{Bound, Carry, KindVar, Provenance};
+use super::{Bound, BoundSource, Carry, KindVar, Provenance};
 use crate::ty::{Linearity, Multiplicity};
 
 /// 1つの束の上の制約 `下限 ≤ 上限` の集まり。変数は 0 から `vars` 未満の番号を持つ。
@@ -75,4 +75,7 @@ pub(crate) struct KindScheme {
     pub lin: Vec<(Bound<Linearity>, Bound<Linearity>)>,
     pub mult: Vec<(Bound<Multiplicity>, Bound<Multiplicity>)>,
     pub carries: Vec<Carry>,
+    /// `mult` に残した定数の上限 `(Var(k), Const(_))` ごとの出どころ。変数の順に並ぶ。参照に複写した上限が破れたとき、
+    /// E2020 がこの出どころを指す。
+    pub bound_sources: Vec<(KindVar, BoundSource)>,
 }

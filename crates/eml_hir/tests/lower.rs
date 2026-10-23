@@ -1031,6 +1031,16 @@ fn a_bound_belongs_to_the_row_variable() {
 }
 
 #[test]
+fn a_misplaced_never_bounds_no_row_variable() {
+    insta::assert_snapshot!(lower_text("f : (Unit -> <never Panic | e> Int) -> <Panic | e> Int\nf g = g ()"), @"
+    f : (Unit -> <Panic | e> Int) -> <Panic | e> Int
+    f g#0 = (g#0 ())
+    ---
+    E0011 1:21 expected a row variable
+    ");
+}
+
+#[test]
 fn an_annotation_may_repeat_a_declared_bound() {
     let text = "helper2 : (Unit -> <never e> Int) -> <e> Int\nhelper2 f =\n  let g : Unit -> <never e> Int = f\n  g ()";
     assert_eq!(diagnostics(text), Vec::<String>::new());

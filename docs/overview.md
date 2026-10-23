@@ -28,7 +28,7 @@ eml の目的、言語の性格、確定した設計判断の一覧、文書全�
 |---|---|---|
 | 線形性 | Kind で区別する。`Type<m>`、`m ∈ {Unr ≤ Lin}`。Affine は持たず、値を捨てるときは組み込みキーワード `drop` を明示する | [型と Kind](spec/types.md)、[線形性](spec/linearity.md) |
 | Kind の将来 | 内部では最初から Kind 変数と部分 Kind 関係を扱う。表面の構文では当面書かせず、将来ユーザーが Kind を書けるようにする | [型と Kind](spec/types.md) |
-| エフェクト | Row 多相 (Koka 方式、scoped labels)。row 変数にも Kind `Row<s>`、`s ∈ {Never ≤ Once ≤ Multi}` を持たせる。`Never` はマルチコア対応のための要素 | [型と Kind](spec/types.md)、[エフェクトと handler](spec/effects.md) |
+| エフェクト | Row 多相 (Koka 方式、scoped labels)。row 変数にも Kind `Row<s>`、`s ∈ {Never ≤ Once ≤ Multi}` を持たせる。`Never` は `never` の操作だけの row の Kind で、シグネチャに `<never e>` と書ける | [型と Kind](spec/types.md)、[エフェクトと handler](spec/effects.md) |
 | 継続の多重度 | 操作ごとに `never` / `once` / `multi` を宣言する。デフォルトは `once` | [エフェクトと handler](spec/effects.md) |
 | 継続 | 継続 `k` は普通の関数で、`k v` で再開する。状態のある handler では `k v st` と書く。`once` の `k` は `Lin` の矢印を持ち、`ctl` の節は、戻らない呼び出し (`fail`、`exit` など) で終わる経路を除き、`k` を呼ぶか `drop k` を必ず書く。`fn` の節は `k` を書かず、本体の値で再開する。`multi` の `k` は `Unr` の矢印を持つ | [エフェクトと handler](spec/effects.md) |
 | handler の意味 | deep handler。再開した継続の中でも同じ handler が有効なまま | [エフェクトと handler](spec/effects.md) |

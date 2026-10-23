@@ -132,7 +132,7 @@ fn write_kinds(out: &mut String, types: &mut TypeStore, names: &DisplayNames, de
     }
 }
 
-/// スキームに残った制約のうち、定数を片側に持つものを表示用にする。変数どうしの制約は出さない。テストで確かめたいのは
+/// スキームに残った制約のうち、定数を片側に持つものを表示用にする。多重度の制約からは、名前のある row 変数の定数の上限だけを出す。変数どうしの制約は出さない。テストで確かめたいのは
 /// `Unr` の上限が付いたかどうかで、変数どうしの制約は部分適用のたびに増えて読みにくくなるため。
 fn kind_constraints(
     types: &mut TypeStore,
@@ -164,6 +164,16 @@ fn kind_constraints(
             })
         })
         .collect();
+    for &(lower, upper) in &scheme.mult {
+        if let (Bound::Var(var), Bound::Const(upper)) = (lower, upper)
+            && let Some(row) = rows.get(&var)
+        {
+            constraints.push(KindConstraint::RowUpper {
+                row: row.clone(),
+                upper,
+            });
+        }
+    }
     for carry in &scheme.carries {
         let (Some(value), Some(row)) = (term(carry.lin), row_term(carry.mult)) else {
             continue;
