@@ -10,6 +10,7 @@
 - 既存のテストは合意済みの仕様である。テストが失敗したら実装を直す。テストを変えるときは、下の「テストの変更の運用」に従う
 - スナップショットは `insta` を使う。多くはインラインのスナップショット (`@"..."`) にする
 - スナップショットの更新は `cargo insta review` で行う
+- テストは macOS、Linux、Windows の CI でも流す。CI が流すものは「CI」にある
 
 ## テストの変更の運用
 
@@ -55,7 +56,7 @@
 
 - 結合テストは、話題ごとに1ファイルにする。ファイル名は spec の節か言語の機能から付ける (`effects.rs`、`operators.rs`)。1つのファイルが複数の話題にまたがったら、話題で分ける
 - 結合テストは、crate ごとに1つのバイナリ (`integration`) にまとめる。`Cargo.toml` に `autotests = false` と `[[test]]` を書き、`tests/main.rs` で各ファイルを `mod` で宣言する。テストのバイナリが増えると、リンクと、macOS が新しい実行ファイルを最初に起動するときの検査に時間がかかるためである。`tests/main.rs` で宣言しないファイルはコンパイルされず、テストが流れない
-- lib には `doctest = false` を付ける。doc コメントは説明だけで、実行する例を書かない。単体テストのない lib (`eml_extern`、`eml_hir`、`eml_cli`、`eml_test_support`) と `eml_cli` の bin には `test = false` も付け、空のテストのバイナリを作らない。単体テストを足すときは `test = false` を外す
+- lib には `doctest = false` を付ける。doc コメントは説明だけで、実行する例を書かない。単体テストのない lib (`eml_extern`、`eml_hir`、`eml_cli`、`eml_test_support`) には `test = false` も付け、空のテストのバイナリを作らない。単体テストを足すときは `test = false` を外す
 - crate の結合テストが使う表示の関数は `tests/common/mod.rs` に置き、`tests/main.rs` で1回だけ宣言して、各ファイルから `crate::common` で使う。複数の crate で使う部品は `eml_test_support` に置く
 - IR の結合テストは、確かめるパスごとのファイルに置く。LIR のパスと verifier のテストのうち、手で書いた LIR を入力にするものは `crates/eml_lir/tests` (`boxing.rs`、`flatten.rs`、`contract.rs`、`perceus.rs`、`verify.rs`、`text.rs` など) に置き、`boxing`、`flatten`、`contract`、`perceus` を直接呼ぶ。`eml_lir` の dev-dependency にフロントエンドを入れないためである。そのパスだけをかける補助は、各ファイルの `boxing_text`、`contract_text`、`perceus_text` である。`boxing_text` は入力を入口の段 (`verify_lowered`) で、`contract_text` は入力と出力を範囲の段 (`verify_scopes`) で、`perceus_text` は入力を範囲の段、出力を所有の段 (`verify`) で確かめる。生存解析のテストは `perceus.rs` に置く。ソースからパイプラインを通すテストは、パイプラインをつなぐ `eml_core_ir` の `crates/eml_core_ir/tests` (`translate.rs`、`evidence.rs`、`boxing.rs`、`contract.rs`、`perceus.rs`、`verify.rs`、`text.rs`) に置く。translate のテストはほとんどが `Pass::Translate` の直後の Core IR を、box の挿入のテストはほとんどが `eml_lir::Pass::Boxing` の直後の LIR を見る。`tests/common/mod.rs` の `core_text` は `core_until` で Core IR の段で止め、`lir_text` は `lir_until` で LIR の段で止める。どちらも表示を `parse` で読み戻し、止めたパスに合う段の verifier にかける。`Pass::Translate` は変換の段 (`verify_translated`)、`Pass::Evidence` は EP の段 (`verify_evidence`)、`eml_lir::Pass::Boxing` は範囲の段 (`verify_scopes`)、`Flatten` は開いた後の段 (`verify_flattened`)、`Contract` も開いた後の段、`Perceus` と `Reuse` は所有の段 (`verify`) である。パスごとに見るのは、後のパスの書き換えや RC の命令を、確かめたいことと一緒に期待値に入れないためである。Core IR の verifier の段と、Core IR だけの命令 (`handle`、`perform`、`resume`、`mask`) のテストは `eml_core_ir` に、LIR の段と LIR だけの命令 (`tail`、`box`、`unbox`、RC の命令) のテストは `eml_lir` に置く。2つの IR に共通する文法だけのテキスト形式のテストは `eml_lir` に置く。EP の後の Core IR の表示と、それを `to_lir` で写した LIR の表示が同じ文字列であることは、UI テストのすべてのプログラムで `lowering.rs` が確かめる (UI テストのプログラムを集めるのは `tests/common/programs.rs`)。extern の表との結び付けは `externs.rs` で確かめる。単相化の instance の数と名前は `instances.rs` で確かめる。一様な位置そのものは型検査が計算するので、位置の集合と E2012 は `eml_types` の `uniform.rs` で確かめる。メソッドの解決の行き先と生成した関数の Core IR は、`translate.rs` で確かめる。instance ごとに Repr が決まることと、持ち上げた関数の名前が instance の名前を根にすることは、`translate.rs` (`instances_of_one_function_get_their_own_reprs`、`lifted_functions_are_named_after_their_instance`) で確かめる。包む関数 (`$op$`、`$con$`、`$externN`、`$cont$`、`$cont$state`) が型ごとの instance であることは、`instances.rs` と `translate.rs` (`wrappers_take_the_reprs_and_marks_of_their_instance`) で確かめる
 - 単体テストは、ファイルの末尾の `#[cfg(test)] mod tests` に置く。テストが300行を超え、ファイルの半分ほどを占めるようになったら、`eml_types/src/table/tests.rs` のように隣の `tests.rs` に分ける
@@ -115,7 +116,7 @@
 
 `cargo verus verify -p eml_rt` は、0 errors のほかに7つの警告を出す。読み手の信頼の関数 (`host.rs` の `fill`、`consume`、`read_text`) と、それを呼ぶ `heap/ctx/io.rs` の4つの関数が、`verus!` の外の trait `Source` を型の境界に使うためである。Verus はこれを今の版では警告にし、後の版で誤りにすると告げている。誤りになったら、`Source` を `#[verifier::external_trait_specification]` で宣言して直す。
 
-Verus (0.2026.10.04.426d8b0) は、ふだんの devShell が `verus` と `cargo-verus` を入れる。flake は、release の zip を系ごとの input (`verus-aarch64-darwin`、`verus-x86_64-linux`) にし、`nix/verus.nix` が要る部品 (`libvstd.rlib` と `vstd.vir` を含む) だけを展開する。Verus の起動の部分は rustup で toolchain を探すが、devShell の `verus` は rustup を使わない (`VERUS_USE_RUSTUP=0`)。代わりに、Verus が求める版の fenix の `rustc` の `lib` を、rust_verify が読むライブラリの道 (macOS は `DYLD_FALLBACK_LIBRARY_PATH`、Linux は autoPatchelf と `LD_LIBRARY_PATH`) に足す。rust_verify は公式の版の librustc_driver に繋がるので、source から組む nixpkgs の rustc では動かないためである。Verus の版を上げるときは、2つの input の URL、`flake.nix` の `stable` の版 (Verus の `rust-toolchain.toml`)、`eml_rt` の vstd の版 (cargo-verus の toolchain の表が指す版) を揃えて変え、`cargo verus verify --check-toolchain` で確かめる。
+Verus (0.2026.10.04.426d8b0) は、ふだんの devShell が `verus` と `cargo-verus` を入れる。flake は、release の zip を系ごとの input (`verus-aarch64-darwin`、`verus-x86_64-linux`) にし、`nix/verus.nix` が要る部品 (`libvstd.rlib` と `vstd.vir` を含む) だけを展開する。Verus の起動の部分は rustup で toolchain を探すが、devShell の `verus` は rustup を使わない (`VERUS_USE_RUSTUP=0`)。代わりに、Verus が求める版の fenix の `rustc` の `lib` を、rust_verify が読むライブラリの道 (macOS は `DYLD_FALLBACK_LIBRARY_PATH`、Linux は autoPatchelf と `LD_LIBRARY_PATH`) に足す。rust_verify は公式の版の librustc_driver に繋がるので、source から組む nixpkgs の rustc では動かないためである。Verus の版を上げるときは、2つの input の URL、`rust-toolchain.toml` の `channel` と `flake.nix` の `stable` の `sha256`、`eml_rt` の vstd の版 (cargo-verus の toolchain の表が指す版) を揃えて変え、`cargo verus verify --check-toolchain` で確かめる。`sha256` が古いままだと、評価が hash の食い違いで止まる。
 
 rustfmt は `verus!` の中を整えないので、`eml_rt` の `verus!` の中は `verusfmt --verus-only` で整え、外は `cargo fmt` で整える。verusfmt は `verus!` の外を edition 2021 の書式で整え、edition 2024 の `cargo fmt` と import の並びが食い違うためである。verusfmt (0.7.4) も release の archive を flake の input にし、`nix/verusfmt.nix` が devShell に入れる。clippy は `verus!` の展開の後のコードも見るので、Verus の書き方から出る警告は、`lib.rs` の頭で理由を書いて `allow` する。
 
@@ -153,7 +154,7 @@ extern の結果を1つの期待値の表に固定し、`eml_rt` の回帰を防
   - 文字列: 空、ASCII、複数バイトの文字 (é、日本、絵文字)、制御文字、`"`、`\`、0x7F、U+0080、U+0085、U+009F、U+2028、NUL、互いに前置きになる組と、種を固定した疑似乱数の列
   - `++` の左: 一意なもの、`dup` で共有したもの、不死の定数
   - `String.char_at` と `push`: `char_at` には、文字列のすべての位置と、その外側の 1 つと、`Int` の両端を渡す。`push` は、1〜4バイトの文字を不死の定数に足し、UTF-8 の長さの境目の文字を一意な文字列に足す。共有した文字列にも足す
-  - ファイル: 一時ディレクトリに作り、`file_root` からの相対パスで開く。ふつうのファイル、空のファイル、UTF-8 でないもの、ないもの、読めないもの (Unix の 000。root なら飛ばす)、ディレクトリ、NUL を含むパス、64 KiB の区切りをまたぐもの (1 MiB)、`\r\n` で終わる行と行の終わりのない最後の行を持つもの、絶対パス、2回目の `FileIn.read_all` と `read_line_raw`
+  - ファイル: 一時ディレクトリに作り、`file_root` からの相対パスで開く。ふつうのファイル、空のファイル、UTF-8 でないもの、ないもの、読めないもの (Unix の 000。Windows と root では飛ばす。Windows には 000 の権限がなく、root は 000 のファイルも読めるためである)、ディレクトリ、NUL を含むパス、64 KiB の区切りをまたぐもの (1 MiB)、`\r\n` で終わる行と行の終わりのない最後の行を持つもの、絶対パス、2回目の `FileIn.read_all` と `read_line_raw`
   - バイト列: 空、1バイト、互いに前置きになる組、UTF-8 でない並び、複数バイトの文字、繰り返しの並び。`length`、`append` (左と右が一意なものと、`dup` で共有したもの)、`slice`、`append_slice` (範囲の端と、その外側の 1 つずつ。`dst` が一意なものと共有したもの)、`truncate`、`find_from`、`find_byte_from` (バイト 0、97、255 と、開始位置の端とその外側の 1 つずつ。共有したバイト列も渡す)、`==`、`!=`、`compare`、`of_string` (一意な文字列、共有した文字列、不死の定数)、`make` (長さ -1、0、1、3 とバイト 0、255)、`get` と `set` (両端とその外側と `Int` の両端の位置)、`push` (バイト 0、255。`set` と `push` は共有したバイト列も渡す)、`Show Bytes` が読む `Prelude.bytes_length` と `bytes_get`。引数と結果は、バイトの整数の並びで `y:[1,2]` (一意)、`Y:[1,2]` (共有した引数) と書く
   - 配列: 長さ -1、0、1、3 の `make`、要素の数 0、1、3 の `length`、両端とその外側と `Int` の両端の添字の `get` と `read`、両端とその外側の添字の `set` と `write`、共有された配列の `get` と `set` と `thaw`、空と空でない配列の `thaw` と `freeze`。配列の引数と結果は、要素の整数の並びで `A:[1,2]` (`Array`)、`D:[1,2]` (共有した `Array`)、`M:[1,2]` (`MutArray`) と書く
 - テスト `the_externs_match_the_table` (`heap/tests/externs.rs`) は、両方のモードで表のどの場合も同じ結果になり、引数の定数のほかに物体が残らないことを確かめる。表の入力が `table.rs` の入力と違えば落ちるので、古い表は残らない
@@ -278,6 +279,7 @@ Core IR のテキストは `eml_core_ir::pretty` が書き、`eml_core_ir::parse
 - テストは1つのファイル (`<最上位>/<分類>/<名前>.em`) か、1つのディレクトリ (`<最上位>/<分類>/<名前>/main.em`) である。ディレクトリのテストでは `main.em` が入口で、そのディレクトリが根になる。ディレクトリの中のほかの `.em` は `main.em` から import するモジュールで、単独のテストにしない。1つのファイルのテストはユーザーのモジュールを import しない。根が分類のディレクトリなので、import すると隣のテストのファイルをモジュールとして読んでしまう。ハーネスは、ユーザーのモジュールが入口だけであることを `Session::user_module_names` で確かめ、依存先のユーザーのモジュールを読み込んだ1つのファイルのテストを失敗にする。標準ライブラリのモジュールはユーザーのモジュールに数えないので、1つのファイルのテストでも `FileIn.open` や `import Fs` を使ってよい
 - 実行のテストの入力は、テストの隣の付属のファイルで与える。入口 `<名前>.em` (ディレクトリのテストでは `main.em`) の拡張子を替えた `<名前>.args` (1行に1つの引数)、`<名前>.stdin` (そのままのバイト列)、`<名前>.env` (`KEY=VALUE` の行) である。どれも省け、省くと引数なし、空の標準入力、空の環境になる。`.args` では、改行を含む引数と最後の空の引数は書けないので、要れば CLI のテストで確かめる
 - 書くために開いたファイル (`FileOut` と、その上に書いた `Fs.write_text`。Host の `open_write`) に書いた中身は、ディスクに書かずにテストの Host が覚え、スナップショットの末尾に `--- written: <パス> ---` と中身を足す (下の「2つのモードで流す」)。中身が UTF-8 でなければ、見出しを `--- written: <パス> (not UTF-8) ---` にし、中身を `escape_ascii` の形で書いて改行を足す。リポジトリの中にファイルを作らないためである。Host は実行ごとにメモリの表を持つので、同じディレクトリで同じ名前のファイルに書くテストどうしも並べて流せる。書いたファイルがなければ何も足さない
+- Windows に無い動きを確かめるテストは、入口のファイルの最初の行に印を書いて Windows で流さない (下の「OS ごとのテスト」)
 - 成功すべきか失敗すべきかは最上位のディレクトリで決める。そのため、スナップショットの承認を誤っても、成功と失敗の入れ替わりは検出できる
 - スナップショットの中のパスは `tests/ui` からの相対パスにして、実行する環境に依存しないようにする。依存先のファイルのパスも同じく `tests/ui` からの相対パスになる (`check-fail/names/import_cycle/B.em`)
 
@@ -325,7 +327,7 @@ Core IR のテキストは `eml_core_ir::pretty` が書き、`eml_core_ir::parse
 - その後で、新しい `Control` を持つ別の `RunConfig` で、速いモードでも実行する。標準出力と、標準エラーと、書いたファイルと、終わり方 (成功か、誤りの文言) が検査モードと同じことを確かめる。速いモードを後に流すのは、速いモードは前提を確かめないので、VM の誤りがあると未定義の動作になり、1つのテストの失敗が同じプロセスで流すほかのファイルのテストまで壊しうるためである
 - `run-fail` のテストは、検査モードの誤りが `fast_mode_reports` を満たすときだけ、速いモードで流す。満たさないのは、リーク、VM の内部の誤り (`VmFault::Internal`)、extern のヒープの誤り (`VmFault::Extern(Fault::Heap(_))`) である。どれも検査モードだけが見つけるので、VM 自身の誤りを意味し、速いモードで流すとメモリを壊すことがある。それ以外の誤り (算術、出力、入出力、UTF-8) は両方のモードが同じ文言で報告する
 - 実行ごとに新しい `RunConfig` を作るのは、止める理由のビットが `Control::clear` でしか下りないためである。使い回すと、前の実行で立ったビットで次の実行がすぐ止まる ([VM](../spec/vm.md) の「上限と割り込み」)
-- 標準出力と標準エラーは、テストの Host の `CaptureHost` ([VM](../spec/vm.md) の「置き場所」) で別々に捕まえる。出力とファイルの読みは、メモリの書き込み先と `Buffering::Block` を持つ `StdHost` に任せるので、出力のまとめ方は `eml run` と同じである。`file_root` はそのテストのディレクトリで、`run-fail/files` のテストはこれに頼る。引数、標準入力、環境変数は付属のファイルのものだけで、本物の環境は読まない。子のプロセス (`Proc` の起動) は本物を起動するので、`sh`、`sort`、`cat` のある環境で流す
+- 標準出力と標準エラーは、テストの Host の `CaptureHost` ([VM](../spec/vm.md) の「置き場所」) で別々に捕まえる。出力とファイルの読みは、メモリの書き込み先と `Buffering::Block` を持つ `StdHost` に任せるので、出力のまとめ方は `eml run` と同じである。`file_root` はそのテストのディレクトリで、`run-fail/files` のテストはこれに頼る。引数、標準入力、環境変数は付属のファイルのものだけで、本物の環境は読まない。子のプロセス (`Proc` の起動) は本物を起動する。`sh`、`sort`、`cat` を起動するテストは、それらのある環境で流し、Windows では印を付けて流さない (下の「OS ごとのテスト」)
 
 ## REPL のトランスクリプト
 
@@ -342,7 +344,7 @@ Core IR のテキストは `eml_core_ir::pretty` が書き、`eml_core_ir::parse
 
 ## 文書の引用の検査
 
-`crates/eml_cli/tests/citations.rs` は、コメントと文書の引用を3つ確かめる。走査するのは `crates`、`docs`、`tests`、`std`、`bench` と、根の `CLAUDE.md` と `README.md` である。標準ライブラリの `.em` のコメントと、`bench/` の `.em`、`.py`、`.sh` のコメントも、`docs/…` の見出しを引ける。
+`crates/eml_cli/tests/citations.rs` は、コメントと文書の引用を3つ確かめる。走査するのは `crates`、`docs`、`tests`、`std`、`bench`、`nix` と、根の `CLAUDE.md`、`README.md`、`flake.nix`、`rust-toolchain.toml`、`.config/nextest.toml`、`.github/workflows/ci.yml` である。標準ライブラリの `.em` のコメントと、`bench/` の `.em`、`.py`、`.sh` のコメント、設定のファイルのコメントも、`docs/…` の見出しを引ける。
 
 - `docs/…/ファイル.md の「見出し」` の形の引用と、Markdown のリンクの直後に `の「見出し」` を続けた引用は、行き先のファイルにその見出しがある。照合では空白を無視するので、引用を折り返してもよい
 - 文書の Markdown のリンクの行き先がある。コード片とコードブロックの中は見ない。IR のテキストの `prim ev_clause[State.get](e.2)` のように、リンクと同じ `](` を含むためである。閉じないコードブロックと、行の中で閉じないコード片は誤りにする。どちらも後ろのリンクを知らないうちに見落とすためで、文書ではコード片を行をまたがずに書く
@@ -354,7 +356,7 @@ Core IR のテキストは `eml_core_ir::pretty` が書き、`eml_core_ir::parse
 
 `crates/eml_cli/tests/cli.rs` は `eml` バイナリを起動し、終了コードが [コンパイラの構成](architecture.md) の「CLI と lib API」の定めに合うことを確認する。`run` のテストのうち、速いモード (`--debug-heap` なし) で走るのは、成功と実行時エラーの2本である。
 
-`eml FILE ARGS...` の起動 ([標準ライブラリ](../spec/stdlib.md) の「起動」) は、引数がすべて渡ること (`-` で始まるものと、ファイルの後ろの `--debug-heap` を含む)、サブコマンドの名前をファイルとして読まないこと、綴りを誤ったフラグが使い方の誤りであること、パイプで渡した標準入力と標準エラーへの書き込み、shebang で直接動かすこと (`cfg(unix)`)、UTF-8 でない引数と環境変数の実行時エラー (`cfg(unix)`) で確かめる。
+`eml FILE ARGS...` の起動 ([標準ライブラリ](../spec/stdlib.md) の「起動」) は、引数がすべて渡ること (`-` で始まるものと、ファイルの後ろの `--debug-heap` を含む)、サブコマンドの名前をファイルとして読まないこと、綴りを誤ったフラグが使い方の誤りであること、パイプで渡した標準入力と標準エラーへの書き込み、shebang で直接動かすこと (`cfg(unix)`)、UTF-8 でない引数と環境変数の実行時エラー (unix と Windows) で確かめる。
 
 `eml run` の SIGINT のテストは `cfg(unix)` で4本ある。どれも `libc::kill` で SIGINT を送り、10 秒の締め切りを持ち、過ぎたら子を殺して失敗にする。テストが止まらずに CI を待たせないためである。
 
@@ -362,6 +364,8 @@ Core IR のテキストは `eml_core_ir::pretty` が書き、`eml_core_ir::parse
 - `mkfifo` で作った名前付きのパイプを `FileIn.read_all` で読むプログラムに、100 ms ごとに SIGINT を送り続け、終了コード 130 で終わることを確かめる。読みは1回目の SIGINT で `EINTR` で戻って止まる。読みに入る直前に届いた SIGINT は読みを止めないので、2回目の SIGINT でハンドラが終わらせることもある。どちらも 130 である。送り続けるのは、続けて届いた2つの SIGINT が1つにまとまることがあるためである
 - 書き手を開いたままの標準入力を `Stdin.read_line` で読むプログラムに、同じく 100 ms ごとに SIGINT を送り続け、終了コード 130 で終わることを確かめる。プログラムが標準エラーに書いた行を読んでから送る。ハンドラを入れる前の SIGINT は、既定の動作でプロセスを終わらせるためである
 - `Proc.run` で `sh -c 'echo started >&2; exec sleep 30'` を待つプログラムを自分のプロセスグループで起動し、子が標準エラーに書いた行を読んでから、グループ全体に SIGINT を1回送る。端末の Ctrl-C と同じく子にも届くので、子が終わり、終了コード 130 と、標準エラーの `interrupted` を確かめる。子が動いてから送るのは、起動と同時に届いた SIGINT は子に届かないことがあるためである
+
+Ctrl-C の受け口は、bin の `interrupt` モジュールの単体テストが確かめる。テストは static を使わず、受け口が static から読む値を自分で作って渡す。`mod.rs` の `respond` のテストはどの OS でも流れ、1回目が `INTERRUPT` を立てること、`eml run` の2回目は終わり、REPL の2回目は終わらないこと、`clear` の後は1回目に戻ることを確かめる。Windows では `windows.rs` のテストが handler の本体の関数を直接呼ぶ。`CTRL_C_EVENT` には TRUE を返して `INTERRUPT` を立て、`eml run` の2回目では終わる関数に 130 を渡すことと、ほかの事象と static を置く前の Ctrl-C には FALSE を返し、ビットを変えず終わらないことを確かめる。Windows で本当の Ctrl-C を送るテストは置かない。
 
 `default_limits()` のテストは `crates/eml_cli/tests/api.rs` にある。`max_depth` が 2^27 であることと、`max_bytes` の既定の値を確かめる。既定の上限まで実際に再帰するテストは、1 GiB を使うので置かない。
 
@@ -372,6 +376,41 @@ Core IR のテキストは `eml_core_ir::pretty` が書き、`eml_core_ir::parse
 行のまとめ方 (`eml_cli::lines`) は、端末に依存しない状態機械なので、`crates/eml_cli/tests/lines.rs` が行の並びを渡して確かめる。
 
 結果の整形 (`eml_cli::pretty`) も端末に依存しない純粋な関数なので、`crates/eml_cli/tests/pretty.rs` が文字列と幅を渡して確かめる。整形の規則の各項目、10,000 文字で切ること、5,000 段の入れ子の括弧を再帰なしで整えることを確かめる。
+
+## OS ごとのテスト
+
+テストは macOS、Linux、Windows の3つで流す。Windows で対応する target は `x86_64-pc-windows-msvc` だけで、`x86_64-pc-windows-gnu` (MinGW) は対応せず、流さない。テストは移植できるのが既定である。Windows での違いが処理系の側にあるなら、ソースを直すかテストを移す。
+
+開発機の OS で組まれないコード (`cfg(windows)` や `cfg(unix)` の部分) は、`nix develop .#cross` の clippy で型を検査する。この devShell の toolchain は、ふだんと同じ版に `x86_64-pc-windows-msvc` と `x86_64-unknown-linux-gnu` の `rust-std` を足したものである。link はできないので、流すのは clippy だけで、テストは CI の各 OS のジョブで流す。build の置き場所は `target/cross` で、ふだんの `target/` と分ける。
+
+### Windows で流さないテスト
+
+印を付けて Windows で流さないのは、確かめる動きが Windows に無いときだけである。POSIX のツールを子のプロセスにすること、unix の signal、shebang での実行、fifo、unix の権限のビットがそれに当たる。機械に入っている道具の有無や、機械の設定で飛ばすことはしない。テストの合否が機械によってはならないためである。Linux に印はなく、Linux では印のあるテストも流れる。
+
+- Rust のテストは、`#[test]` の関数か、そうしたテストだけを持つ `mod` に `#[cfg(unix)]` を付ける。`src/` の中のテストの `mod` には `#[cfg(all(test, unix))]` を付ける。本体が `libc::kill`、`mkfifo`、`PermissionsExt`、`CommandExt::process_group` を使い、Windows でコンパイルできないので、`cfg_attr(windows, ignore)` は使えない
+- UI テストとトランスクリプトは、入口のファイルの、shebang (`#!…`) でない最初の行に印を書く。`.em` は `-- windows: skip (<理由>)`、`.repl` は `# windows: skip (<理由>)` である。理由は空にしない。印は入口のファイル (1つのファイルか `main.em`、`main.repl`) にだけ書く
+- `crates/eml_cli/tests/common/mod.rs` の `windows_skip` が印を読み、`for_each_file` が `EML_UI_FILTER` の後で使う。Windows では印のあるファイルを流さない。どの OS でも、`<leader> windows:` で始まって形の合わない行 (理由がない、`()`、`windows:skip` など) は panic する。綴りを誤った印が黙って流れ続けるのを防ぐためである
+
+一覧は印そのものなので、docs には写さない。数えるには次の2つを使う。
+
+```sh
+git grep -n '^-- windows: skip (' -- tests/ui; git grep -n '^# windows: skip (' -- crates/eml_cli/tests/repl
+git grep -n -A1 -e 'cfg(unix)\]' -e 'cfg(all(test, unix))\]' -- 'crates/*/tests/*.rs' 'crates/*/src/**/tests/*.rs' crates/eml_vm/src/hosts.rs
+```
+
+### 印を付けずに直すもの
+
+次の3つで OS によって合否が変わるテストには印を付けず、どの OS でも通るように直す。
+
+- libm の最後のビットに依る期待値: 正確な場合か、IEEE で正確な演算 (`sqrt`、四則) に書き直す。許容の幅は入れない
+- スタックのあふれ: あふれたのが `eml.exe` なら、main.rs でコマンドの本体を 8 MiB (macOS と Linux のメインスレッドと同じ大きさ) のスタックのスレッドで動かす。そうでなければ再帰を直す
+- OS が作る誤りの文言: fixture を替え、文言が Rust か eml から来るようにする
+
+### OS で振る舞いが決まっているテスト
+
+- `.gitattributes` は `* -text` で、改行を変換しない。`text=auto` は CRLF を含む fixture も正規化するので、`core.autocrlf` によらず checkout の中身を同じに保つために変換を止めている
+- `crates/eml_rt` の期待値の表で OS によって飛ばす行は、上の「期待値の表」の入力に書いてある
+- `a_miscased_entry_path_is_still_the_entry` は、大文字と小文字を区別しないファイルシステムでだけ規則を確かめる。区別するファイルシステムでは入口が読めず、終了コード 2 で早く戻る。macOS と Windows の既定のファイルシステムは区別せず、Linux のものは区別する。どちらでも落ちないので、印は付けない
 
 ## 性能のテスト
 
@@ -417,7 +456,20 @@ Prelude のリストには4つのテストがある。長さ 1000 と 2000 の�
 
 ## feature の組み合わせの確認
 
-ワークスペースの `cargo clippy --all-targets` は、各 crate を既定の feature でしか検査しない。`eml_cli` と `eml_test_support` の feature や、feature で切り替えるコードを変えたときは、既定でない組み合わせの lib も検査する。テストと bin は `run` を前提にするので、`--all-targets` は付けない。上流の crate のテストが下流の crate を組み立てないことは、`cargo tree -p eml_hir -e normal,dev` と `cargo tree -p eml_types -e normal,dev` に下流の段階の crate が出ないことで確かめる。
+ワークスペースの `cargo clippy --all-targets` は、各 crate を既定の feature でしか検査しない。`eml_cli` と `eml_test_support` の feature や、feature で切り替えるコードを変えたときは、既定でない組み合わせの lib も検査する。組み合わせは、`eml_cli` の feature なし、`types`、`core` と、`eml_test_support` の feature なし、`hir`、`types`、`core` の7つで、どれも `cargo clippy -p <crate> --no-default-features [--features <feature>] -- -D warnings` で流す。テストと bin は `run` を前提にするので、`--all-targets` は付けない。上流の crate のテストが下流の crate を組み立てないことは、`cargo tree -p eml_hir -e normal,dev` と `cargo tree -p eml_types -e normal,dev` に下流の段階の crate が出ないことで確かめる。
+
+## CI
+
+`.github/workflows/ci.yml` は、main への push、pull request、手動の起動で、次の4つのジョブを流す。
+
+- `test`: macOS (macos-15)、Linux (ubuntu-24.04)、Windows (windows-2025) のそれぞれで、`cargo nextest run`、`cargo clippy --all-targets -- -D warnings`、既定でない feature の clippy (「feature の組み合わせの確認」の7つ) を流す。toolchain は rustup が `rust-toolchain.toml` から入れ、`rustc -V` の版が `channel` と同じことを確かめる。Windows の target は `x86_64-pc-windows-msvc` だけで、ジョブは host がそれであることを確かめる。cargo-nextest は、ワークフローに書いた版を入れる
+- `fmt`: Linux で `cargo fmt --check` を流す
+- `verus`: Linux で、ふだんの devShell を通して `cargo verus verify -p eml_rt` と verusfmt の検査を流す
+- `miri`: Linux で、Miri の devShell を通して `trusted::` と `miri::` を続けて流す。借用の規則ごとにジョブを1つ立てる
+
+CI が見るのは合否だけである。テストの時間の条件 (「性能のテスト」) と Miri の CPU 時間の予算は開発機で確かめ、runner の速さに合わせて緩めない。runner は開発機より遅いが、nextest がテストを止める 60 秒は、1秒の条件より十分に長い。nextest の CI 用の profile は作らず、落ちたテストは流し直さない。合否が速さや順序で変わるテストは、流し直しで隠さずに直す。`#[ignore]` を付けたテストと `bench/` の計測は、CI で流さない。
+
+アクションは commit の SHA で固定し、版の名前をコメントに書く。runner の image は名前で固定し、上げるのは手で行う。nix のストアはキャッシュしない。install-nix-action には `GITHUB_TOKEN` を渡し、`github:` の input の取得が率の制限に当たらないようにする。token は nix.conf に入ってジョブの中で動くものから読めるが、権限は `contents: read` だけで、ジョブとともに切れるので受け入れる。cargo の依存のビルドをキャッシュするのは `test` ジョブだけで、保存するのは main の実行だけである。ワークフローを変えたら、`nix shell nixpkgs#shellcheck -c nix run nixpkgs#actionlint -- .github/workflows/ci.yml` で検査する。
 
 ## よく使うコマンド
 
@@ -432,7 +484,9 @@ cargo nextest run -p eml_cli --test integration -E 'test(ui::)'          # UI �
 EML_UI_FILTER=basics/hello.em cargo nextest run -p eml_cli --test integration -E 'test(ui::)'   # 1つの UI テストだけ流す
 cargo insta review                                   # スナップショットの承認
 cargo insta test --test-runner nextest --accept      # テストを流し、スナップショットを受け入れる
-cargo clippy --all-targets && cargo fmt
+cargo clippy --all-targets -- -D warnings && cargo fmt
+nix shell nixpkgs#shellcheck -c nix run nixpkgs#actionlint -- .github/workflows/ci.yml   # CI のワークフローの検査
+nix develop .#cross -c cargo clippy --target x86_64-pc-windows-msvc --workspace --all-targets -- -D warnings   # Windows の target の clippy (Linux は x86_64-unknown-linux-gnu。OS ごとのテスト)
 cargo nextest run --release -p eml_types --test integration --run-ignored ignored-only scaling::   # 型検査の時間の伸び (性能のテスト)
 cargo nextest run --release -p eml_hir --test integration --run-ignored ignored-only scaling::     # 名前の表を作る時間の伸び (性能のテスト)
 cargo nextest run --release -p eml_core_ir --test integration --run-ignored ignored-only instances::lowering   # 単相化の lower の時間の伸び (性能のテスト)

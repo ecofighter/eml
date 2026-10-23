@@ -15,11 +15,21 @@ fn repo_root() -> PathBuf {
 /// 引用を探すファイル。`docs/plans` は作業中の計画で、まだない節を引くので除く。
 /// `bench/` は `.em` のほか、計測のスクリプト (`.py`、`.sh`) のコメントも引ける。
 fn sources(root: &Path) -> Vec<PathBuf> {
-    let mut files = vec![root.join("CLAUDE.md"), root.join("README.md")];
+    let mut files = [
+        "CLAUDE.md",
+        "README.md",
+        "flake.nix",
+        "rust-toolchain.toml",
+        ".config/nextest.toml",
+        ".github/workflows/ci.yml",
+    ]
+    .map(|file| root.join(file))
+    .to_vec();
     let mut dirs = vec![
         root.join("bench"),
         root.join("crates"),
         root.join("docs"),
+        root.join("nix"),
         root.join("std"),
         root.join("tests"),
     ];
@@ -33,7 +43,7 @@ fn sources(root: &Path) -> Vec<PathBuf> {
                 dirs.push(path);
             } else if matches!(
                 path.extension().and_then(|ext| ext.to_str()),
-                Some("rs" | "em" | "md" | "py" | "sh")
+                Some("rs" | "em" | "md" | "py" | "sh" | "nix")
             ) {
                 files.push(path);
             }

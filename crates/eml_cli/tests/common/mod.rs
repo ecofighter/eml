@@ -34,6 +34,7 @@ fn shown(path: &Path) -> String {
         .unwrap_or(path)
         .display()
         .to_string()
+        .replace('\\', "/")
 }
 
 /// フィルタの打ち間違いで、どのテストも0個のファイルを流して通ってしまわないようにする。環境変数はプロセスで1つ
@@ -71,7 +72,39 @@ pub fn for_each_file(root: &Path, extension: &str, test: impl Fn(&Path) + Sync) 
         assert_filter_matches(&filter);
         files.retain(|path| shown(path).contains(&filter));
     }
+    let leader = if extension == "repl" { "#" } else { "--" };
+    files.retain(|path| {
+        let text = fs::read_to_string(path).unwrap();
+        // shebang は1行目にしか書けないので、その後ろの行に印を置く
+        let first = text
+            .lines()
+            .find(|line| !line.starts_with("#!"))
+            .unwrap_or("");
+        let skip = windows_skip(first, leader)
+            .unwrap_or_else(|message| panic!("{}: {message}", shown(path)));
+        !(cfg!(windows) && skip)
+    });
     run_all(&files, test);
+}
+
+/// shebang を除いた1行目が `<leader> windows: skip (<理由>)` なら Windows で流さない (docs/implementation/testing.md の「OS ごとのテスト」)。
+/// 綴りを誤った印が黙ってテストを流し続けないよう、`<leader> windows:` で始まる行は正しい形でなければ誤りにする。
+pub fn windows_skip(first_line: &str, leader: &str) -> Result<bool, String> {
+    let Some(rest) = first_line
+        .strip_prefix(leader)
+        .and_then(|rest| rest.strip_prefix(" windows:"))
+    else {
+        return Ok(false);
+    };
+    match rest
+        .strip_prefix(" skip (")
+        .and_then(|reason| reason.strip_suffix(')'))
+    {
+        Some(reason) if !reason.trim().is_empty() => Ok(true),
+        _ => Err(format!(
+            "the Windows mark is `{leader} windows: skip (<reason>)`, not `{first_line}`"
+        )),
+    }
 }
 
 /// 失敗したファイルをすべて挙げるため、ファイルごとの panic を捕まえて最後まで流し、終わりに1回だけ panic する。

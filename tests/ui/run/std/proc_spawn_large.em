@@ -1,3 +1,4 @@
+-- windows: skip (子のプロセスに POSIX のツールを使う)
 -- 入力を読み終えてから出力を書く子には、pipe の buffer (ふつう 64 KiB) より多く書いてよい (docs/spec/stdlib.md の
 -- 「`Proc`」)。`sort` に 256 KiB を書き、`close_stdin` してから読む
 import Proc

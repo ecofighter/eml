@@ -6,5 +6,5 @@ input_file: tests/ui/run-fail/files/read_directory.em
 --- stdout ---
 --- stderr ---
 --- runtime error ---
-cannot read `.`: I/O error
-  at run-fail/files/read_directory.em:7:19
+cannot open `.`: I/O error
+  at run-fail/files/read_directory.em:6:11

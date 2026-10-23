@@ -718,11 +718,9 @@ mod std_host {
         std::fs::remove_dir_all(root).unwrap();
     }
 
-    /// ディレクトリも開ける (読むときに誤りになる)。長さの見込みは返さない。ディレクトリを開けるのは
-    /// Unix の振る舞いである。
-    #[cfg(unix)]
+    /// ディレクトリは読むためにも書くためにも開かず、どの OS でも `IsADirectory` になる。
     #[test]
-    fn a_directory_opens_without_a_size() {
+    fn a_directory_does_not_open() {
         let root = fixture("dir");
         let host = StdHost::new(
             Box::new(io::sink()),
@@ -730,7 +728,16 @@ mod std_host {
             root.clone(),
             Buffering::Line,
         );
-        assert_eq!(host.open(".").unwrap().size, None);
+        assert_eq!(
+            host.open(".").err().map(|e| e.kind()),
+            Some(io::ErrorKind::IsADirectory)
+        );
+        assert_eq!(
+            host.open_write(".", WriteMode::Truncate)
+                .err()
+                .map(|e| e.kind()),
+            Some(io::ErrorKind::IsADirectory)
+        );
         std::fs::remove_dir_all(root).unwrap();
     }
 }

@@ -1,3 +1,4 @@
+-- windows: skip (子のプロセスに POSIX のツールを使う)
 -- 標準エラーの向き (docs/spec/stdlib.md の「`Proc`」)。既定は受け継ぎ、`merge_stderr` は標準出力と同じ先に、
 -- `discard_stderr` はどこにも出さない
 import Proc

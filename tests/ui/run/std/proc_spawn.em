@@ -1,3 +1,4 @@
+-- windows: skip (子のプロセスに POSIX のツールを使う)
 -- pipe でやりとりする子 (docs/spec/stdlib.md の「`Proc`」)。eml は1度に1本の pipe しか読み書きせず、pipe の buffer は
 -- OS が持つ (ふつう 64 KiB)。詰まらないように、次の規則で読み書きする
 -- - 入力を読み終えてから出力を書く子 (`sort`、`wc`) には、書き終えて `close_stdin` してから読む。入力の量に上限はない

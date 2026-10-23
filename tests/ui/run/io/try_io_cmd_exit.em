@@ -1,3 +1,4 @@
+-- windows: skip (子のプロセスに POSIX のツールを使う)
 -- `Proc.capture` の 0 でない終了は、`kind` が `Other` の IO の失敗で、`try_io` が捕まえる (docs/spec/stdlib.md の
 -- 「`try_io`」)
 import Proc

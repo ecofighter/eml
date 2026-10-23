@@ -1,3 +1,4 @@
+-- windows: skip (子のプロセスに POSIX のツールを使う)
 -- `Proc.env` は環境変数を1つ上書きし、同じ名前を2回設定したら後の値が勝つ。空の名前と `=` を含む名前は起動の誤りで
 -- ある (docs/spec/stdlib.md の「`Proc`」)
 import Proc

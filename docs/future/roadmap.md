@@ -27,17 +27,16 @@
 
 次に進める段を、進める順に並べる。各段の設計はここに書いた中身と「設計」の文書の節を出発点にし、範囲と完了の条件をその段の設計で決める。「前提」は先に閉じておく段である。
 
-- `platform-ci`: 今のテストを macOS、Linux、Windows の CI で通す。ワークフローは3つの OS で `cargo nextest run` と `cargo clippy --all-targets -- -D warnings` を流し、Verus と Miri は Linux で nix を通して流す。Windows でのビルドを通し、`rust-toolchain.toml` で toolchain を 1.98.1 に固定する。Windows で流さないテストは1つずつ挙げて印を付ける。Windows の Ctrl-C はコンソールの handler で受け、その関数を直接呼んで `Control` のビットを確かめる。前提: なし。設計: [テスト戦略](../implementation/testing.md) の「方針」、[マルチコア対応の設計](multicore.md) の「止める手順」 (Windows のコンソールの handler)
 - `never-rows`: `Panic` を `Never` のラベルに分け直し、シグネチャに `<never e>` (`e : Row<Never>`) を書けるようにする。`IO` は `Once` のままにする。前提: なし。設計: [マルチコア対応の設計](multicore.md) の「row の Kind」
 - `par-core`: 1つの worker の上で `par` と `both` を動かす。fork と join の印付け、移し戻し、いちばん左の子の中断を親で起こし直す規則、逐次と seed で決まるスケジュールを入れる。`run` と `run-fail` の UI テストが逐次と2つの seed で同じ出力になることを確かめる。前提: `never-rows`。設計: [マルチコア対応の設計](multicore.md) の「`par` の意味」、同じ文書の「1つの worker での実行」
 - `async-tasks`: 1つの worker の上で `Std.Async` のタスクを動かす。受け箱、タスクのセル、`Async.run` の待ち、入口の `start_task` と `resume_task`、安全点での横取り、止める語、監視のスレッド、run の登録表、終わりの欄を入れる。std には `Task`、`await`、`try_all`、`fail_io`、`Either`、`yield_now`、暗黙のスコープ、`IOErrorKind` の新しい種類を入れる。この段のスコープは失敗を記録するだけで、兄弟のタスクは最後まで動く。タスクごとの ID と、`RunStats` のタスクの欄 (共有にした物体の数を含む) も足す。前提: `par-core`。設計: [非同期の設計](async.md) の「スコープとタスク」、[マルチコア対応の設計](multicore.md) の「スケジューラ」
 - `async-cancel`: 取り消しと名前付きのスコープを入れる。取り消しのビット、`Wake.Cancelled`、セルと実行待ちのタスクの待ちを外すこと、失敗した子から兄弟への取り消し、`spawn_in`、`start_in`、`cancel_scope`、`shield`、`check_cancelled` と `cancel_requested`、操作の予算である。前提: `async-tasks`。設計: [非同期の設計](async.md) の「取り消し」
 - `async-time`: 仮想の時計の上でタイマーを動かす。`await_time`、時間の輪、`sleep_ms`、`timeout`、`race`、`drain_within`、テストの driver の時計、期限付きの待ち、`IoDriver` の下書きを入れる。前提: `async-cancel`。設計: [非同期の設計](async.md) の「時間」
 - `async-chan`: worker が1つの上で `Std.Chan` と `Atomic.Counter` を入れる。受け手の決まらない `Lin` の値は途中の持ち主を使って移し替える。前提: `async-cancel`。設計: [非同期の設計](async.md) の「チャネルと共有の状態」、[マルチコア対応の設計](multicore.md) の「`Lin` の物体の所有者の移し替え」
-- `io-driver`: 本物の I/O の driver とブロックする呼び出しのプールを入れる。まず `compio-driver` を単独で使えるかを試作で確かめ、使うかどうかを段の計画で決める。`IoDriver` の口を決め、`eml_io` に本物の driver とテストの driver を作る。読めるようになってから読みの buffer を取る規則もこの段で入れる。前提: `async-time`、`platform-ci`。設計: [非同期の設計](async.md) の「I/O の driver」
+- `io-driver`: 本物の I/O の driver とブロックする呼び出しのプールを入れる。まず `compio-driver` を単独で使えるかを試作で確かめ、使うかどうかを段の計画で決める。`IoDriver` の口を決め、`eml_io` に本物の driver とテストの driver を作る。読めるようになってから読みの buffer を取る規則もこの段で入れる。前提: `async-time`。設計: [非同期の設計](async.md) の「I/O の driver」
 - `async-net`: macOS と Linux で `Std.Net` の TCP、`Std.Signal`、名前の解決を動かす。前提: `io-driver`、`async-chan`。設計: [非同期の設計](async.md) の「ネットワークとシグナル」
 - `net-windows`: 同じネットのテストの組を、Windows の IOCP の上で流す。前提: `async-net`。設計: [非同期の設計](async.md) の「テストと決定性」
-- `worker-threads`: worker のスレッド、worker ごとのヒープ、スレッドをまたぐ知らせを入れる。別のスレッドからの解放と取り込み、ほかの worker のヒープの共有の物体 (rc < 0) を受け付けること、N 個のヒープの回復、worker 0 のほかのスレッドで SIGINT を塞ぐことを作る。`par` の子はこの段ではまだ親の worker で動く。前提: `par-core`、`platform-ci`。設計: [マルチコア対応の設計](multicore.md) の「スレッドと worker」、同じ文書の「別のスレッドからの解放」
+- `worker-threads`: worker のスレッド、worker ごとのヒープ、スレッドをまたぐ知らせを入れる。別のスレッドからの解放と取り込み、ほかの worker のヒープの共有の物体 (rc < 0) を受け付けること、N 個のヒープの回復、worker 0 のほかのスレッドで SIGINT を塞ぐことを作る。`par` の子はこの段ではまだ親の worker で動く。前提: `par-core`。設計: [マルチコア対応の設計](multicore.md) の「スレッドと worker」、同じ文書の「別のスレッドからの解放」
 - `async-threads`: worker をまたいで `Async` のタスクを動かす。スレッドをまたぐ受け箱、タスクを置く worker の選び方、受け付けの転送、worker をまたぐ `Chan`、`compute` を入れ、worker の数に応じて速くなることを測る。前提: `worker-threads`、`async-net`。設計: [マルチコア対応の設計](multicore.md) の「スケジューラ」、[非同期の設計](async.md) の「`compute`」
 - `async-rescue`: 詰まった worker のタスクを、空いた worker が救済する。前提: `async-threads`。設計: [マルチコア対応の設計](multicore.md) の「救済」
 - `task-limits`: タスクごとに深さ、スタック、メモリの上限を設け、超えたタスクだけを IO の失敗 `ResourceLimit` で止める。メモリの硬い上限は今と同じく run 全体を止める。安全点と末尾でない呼び出しの位置が、巻き戻しの地点になる。前提: `async-threads`。設計: [非同期の設計](async.md) の「タスクごとの上限」
@@ -62,7 +61,7 @@
 - `jit-core`: `eml_native` に、一階の部分 (スカラー、データ、呼び出し、末尾呼び出し、クロージャと `apply`、RC) を CLIF にするコード生成を作り、`eml run --native` で動かす。AAPCS64 と x86_64 の SysV の `eml_enter` と `eml_fatal`、安全点、ネイティブのコードが読む `Ctx` の欄の配置、利用者の C の行をネイティブのコードから呼ぶことを入れる。扱わない形は E0004 で断り、UI テストの印 `// native: skip` を導入する。前提: `borrowed-params`、`ffi-c`。設計: [ネイティブ化の設計](native.md) の「確定した設計判断」、同じ文書の「呼び出し規約と入口」
 - `jit-externs`: すべての extern とプラグインの行を、ネイティブのコードから呼ぶ。包みと VM の腕を表から作り、extern の失敗を `Ctx.fault` で返す。前提: `jit-core`。設計: [ネイティブ化の設計](native.md) の「extern の入口」
 - `jit-effects`: 言語の全体をネイティブで動かす。yield、戻り値で伝える中断、handler、`Exec` と `IoDriver` の上の `Async` の入口、ネイティブの `Async.run` の入れ子、親ごとに1つの worker の上の `par`、致命的な誤りの手順、安全点での上限の中断を入れる。この段で、E0004 で断る形がなくなる。前提: `jit-externs`、`task-limits`、`async-rescue`、`async-files`、`gui-plugin`。設計: [ネイティブ化の設計](native.md) の「中断と実行時エラー」
-- `native-aot`: 3つの OS で `eml build` を動かす。`cranelift-object` で object を書き、システムのリンカでつなぐ。Win64 の入口の stub もこの段で作る。前提: `jit-effects`、`platform-ci`。設計: [ネイティブ化の設計](native.md) の「AOT と配布」
+- `native-aot`: 3つの OS で `eml build` を動かす。`cranelift-object` で object を書き、システムのリンカでつなぐ。Win64 の入口の stub もこの段で作る。前提: `jit-effects`。設計: [ネイティブ化の設計](native.md) の「AOT と配布」
 - `native-inline`: `String` と `Bytes` のバイトの読みと、配列の要素の読み書きを、ネイティブのコードで展開する。目標は、4本のスクリプトが Rust の版の2倍以内、スクリプトと数値の bench が Python の1.5倍以内であることである。前提: `native-aot`、`raw-arrays`。設計: [ネイティブ化の設計](native.md) の「展開と最適化の前提」
 - `par-steal`: VM の `par` の子を別の worker で動かす。worker ごとの deque、盗み、スレッドをまたぐ join の待ちを入れる。前提: `worker-threads`。設計: [マルチコア対応の設計](multicore.md) の「`par` の子」
 - `std-par`: `std/Par` のデータ並列の集まりの関数と、添字の範囲のプリミティブを入れる。前提: `par-steal`、`raw-arrays`。設計: [マルチコア対応の設計](multicore.md) の「データ並列での使い勝手」
@@ -235,6 +234,9 @@
 - n 列の `match`: 今は決定木の列に、最初の行でコンストラクタ、タプル、リテラルのどれかのパターンを持ついちばん左の列を選ぶ ([Core IR](../spec/core-ir.md))。行列によっては部分木が大きくなりうる。今の選び方でも決定木は正しいので、部分木の大きさが問題になる例が出てから列の選び方を見直す
 - doc comment: trivia の付け方を決める。doc comment を解釈するドキュメント生成と LSP の hover ([字句](../spec/lexical.md)) がまだないので、それを作るときに、使う側に合わせて決める。前提: LSP
 - JIT (投機的): バイトコードから機械語を安く作る copy-and-patch や、トレース JIT。VM が安定し、起動時間が支配的になってから検討する。トレース JIT はバイトコードにスタックのスタックを持たせる別の道で、evidence passing とは前提が合わない。前提: `native-aot`
+- Windows の子のプロセスのテストと `inherited_stdout`: `eml` 自身を子にする、Windows でも流せる `Proc` のテストを足し、Host の `inherited_stdout` を Windows に移す。今は子のプロセスを起こす UI テストを Windows で流さず、`run (merge_stderr c)` は起動の誤りになる ([テスト戦略](../implementation/testing.md) の「Windows で流さないテスト」、[標準ライブラリ](../spec/stdlib.md) の「`Proc`」)
+  - 後に回した理由: Windows で `inherited_stdout` の道を通すテストがなかった。
+  - 見直す条件: `io-driver` の段を進めるとき。
 
 ### REPL
 
@@ -287,6 +289,12 @@
 - 分けられる擬似乱数の生成器: `par` の子ごとに、互いに独立した乱数の列を作る
   - 後に回した理由: std に乱数のモジュールがまだない。
   - 見直す条件: `par` でモンテカルロ法の計算を書くとき。
+- Windows のコンソールの標準入力を std を通さずに読む読み手: `ReadConsoleW` を直接呼び、Ctrl-C で戻った読みを `Interrupted` で返す。今は std がその場で読み直すので、`Stdin` の読みは Ctrl-C で止まらない ([マルチコア対応の設計](multicore.md) の「未決の論点と将来の拡張」)
+  - 後に回した理由: UTF-16 の変換、Ctrl-Z の扱い、Windows だけのテストが要る。
+  - 見直す条件: `Stdin` の読みを待つ間の1回目の Ctrl-C が見えないことが問題になったとき。
+- Ctrl-C の受け口で、ビットの確かめと立てを不可分にすること: Windows の handler は `INTERRUPT` が立っているかを確かめてから立てる。そのため、同時に動いた2回の handler がどちらも1回目として扱うことがある ([VM](../spec/vm.md) の「上限と割り込み」)
+  - 後に回した理由: `Control` が前のビットを返す必要があり、`eml_rt` の変更になる。
+  - 見直す条件: `TERMINATE` がビットごとの操作を `Control` に足すとき。
 
 ### 非同期
 

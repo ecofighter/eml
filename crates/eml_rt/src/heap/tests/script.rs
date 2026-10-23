@@ -27,6 +27,13 @@ fn not_utf8() -> OsString {
     OsString::from_vec(vec![b'a', 0xff])
 }
 
+/// UTF-8 でないバイト列の `OsString`。孤立した surrogate は UTF-16 として正しくない。
+#[cfg(windows)]
+fn not_utf8() -> OsString {
+    use std::os::windows::ffi::OsStringExt;
+    OsString::from_wide(&[0x61, 0xD800])
+}
+
 fn eprintln_writes_to_the_standard_error<M: Mode>() {
     let memory = Arc::new(MemoryHost::default());
     let mut ctx = ctx_with::<M>(&memory);
@@ -61,25 +68,21 @@ fn arguments_are_read_by_index<M: Mode>() {
 }
 
 fn an_argument_that_is_not_utf8_is_a_fault<M: Mode>() {
-    #[cfg(unix)]
-    {
-        let memory = Arc::new(MemoryHost::default().with_args(vec!["a".into(), not_utf8()]));
-        let mut ctx = ctx_with::<M>(&memory);
-        assert_eq!(
-            ctx.env_arg(1),
-            Err(Fault::NotUtf8(Box::new(Utf8Source::Arg(1))))
-        );
-        assert_eq!(mortal(ctx.heap()), 0);
-    }
+    let memory = Arc::new(MemoryHost::default().with_args(vec!["a".into(), not_utf8()]));
+    let mut ctx = ctx_with::<M>(&memory);
+    assert_eq!(
+        ctx.env_arg(1),
+        Err(Fault::NotUtf8(Box::new(Utf8Source::Arg(1))))
+    );
+    assert_eq!(mortal(ctx.heap()), 0);
 }
 
 fn environment_variables_are_read_by_name<M: Mode>() {
-    let mut env = vec![
+    let env = vec![
         ("HOST", OsString::from("example.org")),
         ("EMPTY", OsString::new()),
+        ("BAD", not_utf8()),
     ];
-    #[cfg(unix)]
-    env.push(("BAD", not_utf8()));
     let memory = Arc::new(MemoryHost::default().with_env(env));
     let mut ctx = ctx_with::<M>(&memory);
     unsafe {
@@ -93,16 +96,13 @@ fn environment_variables_are_read_by_name<M: Mode>() {
             assert_eq!(text(ctx.heap(), w), value, "{name}");
             ctx.heap_mut().decref(w).unwrap();
         }
-        #[cfg(unix)]
-        {
-            let n = s(&mut ctx, "BAD");
-            assert_eq!(ctx.env_has(n), Ok(TRUE));
-            let n = s(&mut ctx, "BAD");
-            assert_eq!(
-                ctx.env_var(n),
-                Err(Fault::NotUtf8(Box::new(Utf8Source::EnvVar("BAD".into()))))
-            );
-        }
+        let n = s(&mut ctx, "BAD");
+        assert_eq!(ctx.env_has(n), Ok(TRUE));
+        let n = s(&mut ctx, "BAD");
+        assert_eq!(
+            ctx.env_var(n),
+            Err(Fault::NotUtf8(Box::new(Utf8Source::EnvVar("BAD".into()))))
+        );
     }
     assert_eq!(mortal(ctx.heap()), 0);
 }

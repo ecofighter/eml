@@ -281,7 +281,8 @@ fn a_dup_of_a_file_is_a_runtime_error() {
     // verifier は `lin` の変数の `dup` を V1 で静的に拒む。印を誤った IR でも、検査モードのヒープが実行時に止める
     // ことを、verifier を通さずに確かめる。速いモードはこれを見つけない (docs/spec/object-model.md の「`lin` ビット」と
     // 「受け入れる制約」)
-    let path = concat!(env!("CARGO_MANIFEST_DIR"), "/Cargo.toml");
+    // 文字列のリテラルに埋めるので、Windows の `\` は `/` にする
+    let path = concat!(env!("CARGO_MANIFEST_DIR"), "/Cargo.toml").replace('\\', "/");
     let text = format!(
         "\
 fn main() -> unit {{

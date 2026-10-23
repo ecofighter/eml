@@ -1,0 +1,5 @@
+# Verus が求める版に固定する。flake も channel をここから読む (docs/implementation/testing.md の「Verus」)
+[toolchain]
+channel = "1.98.1"
+components = ["clippy", "rustfmt"]
+profile = "minimal"

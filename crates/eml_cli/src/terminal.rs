@@ -27,15 +27,14 @@ A command may be shortened to any prefix of its name (`:q`, `:l`, `:r`, `:t`).";
 
 pub fn run(debug_heap: bool, file: Option<PathBuf>) -> ExitCode {
     let control = Arc::new(Control::new(repl_limits()));
-    #[cfg(unix)]
-    crate::sigint::install(Arc::clone(&control), crate::sigint::Mode::Repl);
+    crate::interrupt::install(Arc::clone(&control), crate::interrupt::Mode::Repl);
     let config = RunConfig::default()
         .with_debug_heap(debug_heap)
         .with_control(Arc::clone(&control));
     let file = match file {
         None => None,
         Some(path) => {
-            let shown = crate::exact_spelling(&path).display().to_string();
+            let shown = crate::entry_name(&path);
             match fs::read_to_string(&shown) {
                 Ok(text) => Some((shown, text)),
                 Err(error) => {
@@ -160,7 +159,7 @@ impl Terminal {
 
     /// 読めなければ、セッションも覚えたファイルも変えない (docs/spec/repl.md の「ファイルの読み込み」)。
     fn load(&mut self, path: &str) -> Flow {
-        let shown = crate::exact_spelling(Path::new(path)).display().to_string();
+        let shown = crate::entry_name(Path::new(path));
         match fs::read_to_string(&shown) {
             Ok(text) => self.load_text(&shown, &text),
             Err(error) => {

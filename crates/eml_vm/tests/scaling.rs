@@ -239,7 +239,9 @@ fn lines_file(name: &str, n: usize) -> (String, usize, usize) {
     let (text, trimmed) = lines_text(n);
     let path = std::path::Path::new(env!("CARGO_TARGET_TMPDIR")).join(format!("{name}-{n}.txt"));
     std::fs::write(&path, &text).unwrap();
-    (path.to_str().unwrap().to_string(), trimmed, text.len())
+    // 文字列のリテラルに埋めるので、Windows の `\` は `/` にする。Windows も `/` を区切りとして読む
+    let path = path.to_str().unwrap().replace('\\', "/");
+    (path, trimmed, text.len())
 }
 
 /// n 行のテキストと、`\r\n` を除いた行の長さの和。行の長さは揃えない。
@@ -363,7 +365,7 @@ fn decode_read(keep: bool) -> (String, u64) {
          \x20 FileIn.close f\n\
          \x20 let s = String.decode b\n\
          \x20 if {check} then println \"ok\" else println \"mismatch\"\n",
-        path.to_str().unwrap()
+        path.to_str().unwrap().replace('\\', "/")
     );
     (program, n as u64)
 }

@@ -14,7 +14,7 @@ use eml_cli::{
 use eml_diagnostics::{has_errors, render};
 use eml_rt::Fault;
 
-use crate::common::{assert_filter_matches, for_each_file, run_all, temp_project};
+use crate::common::{assert_filter_matches, for_each_file, run_all, temp_project, windows_skip};
 
 fn ui_root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -390,4 +390,18 @@ fn every_failing_file_is_reported() {
 #[should_panic(expected = "matches no UI test or transcript")]
 fn a_filter_that_matches_nothing_fails() {
     assert_filter_matches("no-such-file");
+}
+
+#[test]
+fn the_windows_mark_is_the_first_line() {
+    assert_eq!(
+        windows_skip("-- windows: skip (sh を起動する)", "--"),
+        Ok(true)
+    );
+    assert_eq!(windows_skip("# windows: skip (x)", "#"), Ok(true));
+    assert_eq!(windows_skip("-- 説明", "--"), Ok(false));
+    assert_eq!(windows_skip("# windows: skip (x)", "--"), Ok(false));
+    assert!(windows_skip("-- windows: skip", "--").is_err());
+    assert!(windows_skip("-- windows: skip ()", "--").is_err());
+    assert!(windows_skip("-- windows:skip (x)", "--").is_err());
 }

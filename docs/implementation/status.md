@@ -130,3 +130,9 @@
 - `Child` は、1度に1本の pipe しか読み書きしない。読みながら書く子に pipe の buffer より多く書いてから読むと、両方が止まる。処理系はこの状態を検出せず、Ctrl-C で終える。守る順は [標準ライブラリ](../spec/stdlib.md) の「`Child`」にある
 - 手放した `Child` の破棄処理が kill するのは直接の子だけである。`sh -c` が起動した孫は残りうる
 - `Cmd` のコンストラクタとフィールドは公開されている。抽象型がないので、`Cmd { … }` の作る式とパターンを書かない決まりで守る ([標準ライブラリ](../spec/stdlib.md) の「`Cmd`」)
+
+### Windows
+
+- 待っている読み (標準入力、`FileIn`、`Child`) は Ctrl-C で止まらない。コンソールの標準入力の読みは Ctrl-C で戻るが、std がその場で読み直す。pipe とファイルの読みは Ctrl-C で戻らない。止める語を見るのは、データが来るか相手が閉じて読みが戻った後である。待っている読みからは `eml run` の2回目の Ctrl-C で抜けられる ([VM](../spec/vm.md) の「上限と割り込み」)。std を通さない読み手は入れていない ([ロードマップ](../future/roadmap.md) の「マルチコア対応」)
+- `run (merge_stderr c)` は使えず、起動の誤り (``cannot run `x`: not available``) になる ([標準ライブラリ](../spec/stdlib.md) の「`Proc`」)。Windows でこの道を通すテストがないので、移植していない ([ロードマップ](../future/roadmap.md) の「処理系」)
+- 子のプロセスを起こす UI テストは Windows で流さない。POSIX の道具 (`sh`、`cat` など) を子にするためである。Windows で `eml` 自身を子にする、移植できる `Proc` のテストはない ([テスト戦略](testing.md) の「Windows で流さないテスト」)
