@@ -34,8 +34,11 @@ eml を実装するエージェントとプログラマのための文書群で�
 | [implementation/benchmarks.md](implementation/benchmarks.md) | 手引き | 基準のプログラム、回数のテスト、測り方、今の数値、所見 |
 | [implementation/diagnostics.md](implementation/diagnostics.md) | 手引き | 番号ごとの診断が指す場所、help と fix の文言と付ける条件、型エラー・線形性・網羅性の診断の表示 |
 | **future/** | 将来の設計 | まだ実装しない方針 |
-| [future/roadmap.md](future/roadmap.md) | 将来の設計 | 段の進め方と閉じる手順、今後の項目 |
-| [future/multicore.md](future/multicore.md) | 将来の設計 | マルチコア対応の設計 (共有の印方式の RC、`par`、並行処理、継続の移動) |
+| [future/roadmap.md](future/roadmap.md) | 将来の設計 | 段の進め方と閉じる手順、段の列、その後の項目 |
+| [future/async.md](future/async.md) | 将来の設計 | 非同期の設計 (`Async` のタスクとスコープ、取り消し、時間、チャネル、I/O の driver、ネットワークとシグナル) |
+| [future/native.md](future/native.md) | 将来の設計 | ネイティブ化の設計 (Cranelift のコード生成、呼び出し規約、中断と実行時エラー、安全点、生の要素の配列、AOT と配布) |
+| [future/ffi.md](future/ffi.md) | 将来の設計 | FFI と拡張の設計 (`extern "C"` の宣言、型の対応、長く走る呼び出し、拡張、GUI) |
+| [future/multicore.md](future/multicore.md) | 将来の設計 | マルチコア対応の設計 (スレッドと worker、スケジューラ、共有の印方式の RC、`par`、継続の移動、止める手順) |
 | [future/stdlib.md](future/stdlib.md) | 将来の設計 | 標準ライブラリ spec への申し送り |
 | [future/verification.md](future/verification.md) | 将来の設計 | Verus で検証する範囲 (Kind 推論の解く部分を証明する方針、型検査と evidence passing を扱わない理由) |
 | **plans/** | 作業中 | 段の設計と計画。段の最初のコミットで入れ、段を閉じるときに消す。コードと文書から引かない |
@@ -66,7 +69,7 @@ eml を実装するエージェントとプログラマのための文書群で�
 - 制限の置き場所は、診断で検査するか意味を定めた制限なら `spec/`、まだ作っていないことと遅いことなら `implementation/status.md` である。未対応の構文は、どの段階が E0004 を出すかを `spec/` に書き、`status.md` の「まだないもの」は機能を1行で挙げて `future/roadmap.md` の項目を引く。`status.md` は `spec/` の制限を1行で挙げてリンクする。
 - 計測の数値は `implementation/benchmarks.md` だけが持つ。ほかの文書は定性的に書き、根拠が要る所で `benchmarks.md` の「所見」を引く。
 - `implementation/status.md` と `implementation/architecture.md` と `benchmarks.md` の表は、段の途中では直さず、段を閉じるときに直す ([ロードマップ](future/roadmap.md) の「進め方」)。
-- `future/` の内容はまだ実装しない。実装に進むときは、決まった部分を `spec/` に移す。今後の項目の一覧は [future/roadmap.md](future/roadmap.md) を正とする。マルチコアと標準ライブラリの詳細は、それぞれ [future/multicore.md](future/multicore.md) と [future/stdlib.md](future/stdlib.md) にある。
+- `future/` の内容はまだ実装しない。実装に進むときは、決まった部分を `spec/` に移す。今後の項目の一覧は [future/roadmap.md](future/roadmap.md) を正とする。非同期、ネイティブ化、FFI、マルチコア、標準ライブラリの詳細は、`future/` のそれぞれの設計文書にある。
 - 段の設計と計画は `docs/plans/` に置き、段の最初のコミットで入れ、段を閉じるときに消す。コードと `docs/` から `plans/` と `reports/` の見出しを引かない。
 - 見出しは題名 (規則、概念、計測の題) にし、段の名前と日付を付けない。コードと文書が引くのは題名の見出しで、見出しを引く文はその見出しがあるコミットに入れ、見出しを消すか改名するときは同じコミットで引く側を直す ([テスト戦略](implementation/testing.md) の「文書の引用の検査」)。
 - 構文で迷ったときは Haskell の慣習に寄せる。

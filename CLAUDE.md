@@ -5,7 +5,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## Overview
 
 eml is an experimental functional language exploring "linear types × algebraic effects" (Rust, Cargo workspace, edition 2024). Source files use the `.em` extension.
-The documentation lives under `docs/`; start from `docs/README.md`. `docs/spec/` is normative (what to implement), `docs/implementation/` covers architecture, testing, diagnostic presentation and the current status, and `docs/future/` holds future designs (multicore, roadmap, stdlib notes).
+The documentation lives under `docs/`; start from `docs/README.md`. `docs/spec/` is normative (what to implement), `docs/implementation/` covers architecture, testing, diagnostic presentation and the current status, and `docs/future/` holds future designs (native code, FFI, async, multicore, roadmap, stdlib notes).
 
 ## Rules
 

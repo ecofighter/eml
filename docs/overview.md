@@ -17,7 +17,7 @@ eml の目的、言語の性格、確定した設計判断の一覧、文書全�
 - 副作用は `IO` エフェクトとして管理する。
 - 線形型と代数的エフェクトを持つ。
 - 構文は Haskell 流を基本にし、F# からいくつかの書き方を借りる。構文で迷ったときは Haskell の慣習に寄せる。
-- 将来はネイティブコンパイルする。コード生成のバックエンド (Cranelift か LLVM か) は、ネイティブ化の段階で決める。
+- 将来はネイティブコンパイルする。Cranelift で JIT と AOT のコードを出し、VM は参照の実装と検査モードの実行系として残す ([ネイティブ化の設計](future/native.md))。
 - rowan (Red-Green Tree) の上に、リッチな診断と LSP を整える。
 
 ## 確定した設計判断
@@ -81,7 +81,7 @@ eml の目的、言語の性格、確定した設計判断の一覧、文書全�
 
 ### コンパイラと実行系
 
-処理系はバッチ型のパイプラインで、各段階を純粋な関数にし、後でクエリ化 (salsa など) できるようにしてある。実行系は、型付き Core IR (前向きの辺だけを持つ基本ブロックの列で、エフェクトを明示する) を EP の後に LIR (RC と box を明示し、エフェクトの命令を持たない) に写し、LIR をレジスタ型のバイトコードの VM で実行する。メモリは Perceus 方式の参照カウントで管理し、`Lin` の値を2回消費することはない。VM はシングルスレッドで出し、後から並列にできる形で作ってある。並列化は、VM とネイティブのランタイムの両方に入れる。詳細は [コンパイラの構成](implementation/architecture.md)、[Core IR](spec/core-ir.md)、[LIR](spec/lir.md)、[VM](spec/vm.md)、[オブジェクトモデル](spec/object-model.md)、[マルチコア対応の設計](future/multicore.md) にある。
+処理系はバッチ型のパイプラインで、各段階を純粋な関数にし、後でクエリ化 (salsa など) できるようにしてある。実行系は、型付き Core IR (前向きの辺だけを持つ基本ブロックの列で、エフェクトを明示する) を EP の後に LIR (RC と box を明示し、エフェクトの命令を持たない) に写し、LIR をレジスタ型のバイトコードの VM で実行する。メモリは Perceus 方式の参照カウントで管理し、`Lin` の値を2回消費することはない。VM はシングルスレッドで出し、後から並列にできる形で作ってある。並列化は、VM とネイティブのランタイムの両方に入れ、複数の worker が OS のスレッドの上でタスクを動かす。詳細は [コンパイラの構成](implementation/architecture.md)、[Core IR](spec/core-ir.md)、[LIR](spec/lir.md)、[VM](spec/vm.md)、[オブジェクトモデル](spec/object-model.md)、[マルチコア対応の設計](future/multicore.md) にある。
 
 ## 用語
 
@@ -98,7 +98,7 @@ eml の目的、言語の性格、確定した設計判断の一覧、文書全�
 | deep handler | 再開した継続の中でも同じ handler が有効なままの handler |
 | パラメータ付き handler | `handle e from init with` の形で、状態を節の最後の引数として受け渡す handler。状態は handler の実行ごとの evidence に置き、脱糖しない |
 | レイアウト段 | lexer と parser の間で、仮想トークン `OPEN` / `SEP` / `CLOSE` (コードでは `LAYOUT_OPEN` / `LAYOUT_SEP` / `LAYOUT_CLOSE`) を挿入する段 |
-| Perceus | 参照カウントの `dup` / `decref` / `release` を静的に挿入する方式。reuse analysis も持つ ([LIR](spec/lir.md) の「reuse」)。借用の最適化はない ([ロードマップ](future/roadmap.md) の「処理系」) |
+| Perceus | 参照カウントの `dup` / `decref` / `release` を静的に挿入する方式。reuse analysis も持つ ([LIR](spec/lir.md) の「reuse」)。借用の最適化はない ([ロードマップ](future/roadmap.md) の「段の列」) |
 | Core IR | 型付き HIR から変換する、前向きの辺だけを持つ基本ブロックの列の IR。すべての中間値に名前を付け、エフェクトの命令を明示する。RC と box は持たない |
 | LIR | EP の後の Core IR から写す、基本ブロックの列の IR。エフェクトの命令を持たず、box、RC の命令、末尾呼び出しを明示する。VM と後のネイティブ化の入力である |
-| a1 / a2-wait / a2-cancel | 並列 API `par` を段階的に広げる計画の各段階。[マルチコア対応の設計](future/multicore.md) にある |
+| worker | タスクを動かす OS のスレッド1つ。自分の `Ctx` とヒープを持ち、スケジューラの下で仕事を取る。[マルチコア対応の設計](future/multicore.md) の「スレッドと worker」にある |
