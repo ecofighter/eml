@@ -4,6 +4,6 @@ import Proc
 main : Unit -> <IO, Panic> Unit
 main () =
   println "before"
-  let code = Proc.run "sh" ["-c", "echo \"child $1\"; exit 3", "sh", "arg with space"]
+  let code = Proc.run `sh -c 'echo "child $1"; exit 3' sh 'arg with space'`
   println "exit \{code}"
-  println "exit \{Proc.run "sh" ["-c", "exit 0"]}"
+  println "exit \{Proc.run `sh -c 'exit 0'`}"

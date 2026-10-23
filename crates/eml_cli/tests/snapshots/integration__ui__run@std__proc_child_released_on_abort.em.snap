@@ -1,0 +1,9 @@
+---
+source: crates/eml_cli/tests/ui.rs
+expression: "format!(\"--- stdout ---\\n{stdout}--- stderr ---\\n{diagnostics}{stderr}{written}{exit}\")"
+input_file: tests/ui/run/std/proc_child_released_on_abort.em
+---
+--- stdout ---
+NotFound: cannot open `missing.txt`: not found
+"after\n"
+--- stderr ---

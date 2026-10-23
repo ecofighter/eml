@@ -5,6 +5,6 @@ main : Unit -> <IO, Panic> Unit
 main () =
   println "before"
   eprintln "error before"
-  let code = Proc.run "sh" ["-c", "echo out; echo err >&2"]
+  let code = Proc.run `sh -c 'echo out; echo err >&2'`
   println "exit \{code}"
   eprintln "error after"

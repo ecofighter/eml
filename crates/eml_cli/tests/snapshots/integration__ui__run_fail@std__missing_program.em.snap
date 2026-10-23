@@ -8,4 +8,4 @@ before
 --- stderr ---
 --- runtime error ---
 cannot run `eml-no-such-program`: not found
-  at <std>/Proc.em:11:20
+  at <std>/Proc.em:73:3

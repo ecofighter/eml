@@ -1,0 +1,19 @@
+---
+source: crates/eml_cli/tests/ui.rs
+expression: rendered
+input_file: tests/ui/check-fail/linearity/child_never_waited.em
+---
+[E3003] Error: `c` must be used exactly once, but it is not used
+   ╭─[ check-fail/linearity/child_never_waited.em:6:7 ]
+   │
+ 6 │   let c = Proc.spawn `cat`
+   │       ┬  
+   │       ╰── `c` is bound here
+ 7 │   println "never waited"
+   │                         │ 
+   │                         ╰─ `c` is not used before the end of this scope
+   │ 
+   │ Help: pass `c` to `drop`
+   │ 
+   │ Note: linear values, such as files, the continuation of a `once` operation and closures that capture one, must be used exactly once
+───╯

@@ -2,7 +2,7 @@
 
 位置づけ: 説明。
 
-本番の構文で書いたプログラム例を集める。標準ライブラリの API は [標準ライブラリ](stdlib.md) が定める。今の実装で動く例は `tests/ui/run/scripts/` の5本 (`wc`、`grep`、`logstat`、`csv2jsonl`、`deploy`) にある。ここの例には、今の std にない関数とモジュール (`Fs.read_lines`、`Option`、`Proc.spawn` など) を使うものがあり、構文を示すためのものである。
+本番の構文で書いたプログラム例を集める。標準ライブラリの API は [標準ライブラリ](stdlib.md) が定める。今の実装で動く例は `tests/ui/run/scripts/` の5本 (`wc`、`grep`、`logstat`、`csv2jsonl`、`deploy`) にある。ここの例には、今の std にない関数とモジュール (`Fs.read_lines`、`Option` など) を使うものがあり、構文を示すためのものである。
 
 ## ログの集計 (全体)
 
@@ -120,6 +120,7 @@ counter () =
 ```haskell
 import Env
 import Option
+import Proc
 
 effect Ask where
   ask : String -> String
@@ -134,7 +135,7 @@ deploy files =
   let host = ask "HOST"
   if host == "" then fail "HOST is not set"
   let dest = "\{host}:/srv/app"
-  let code = run `rsync -a --delete \{..files} \{dest}`
+  let code = Proc.run `rsync -a --delete \{..files} \{dest}`
   if code != 0 then fail "rsync failed"
 
 main : Unit -> <IO> Unit
@@ -145,23 +146,22 @@ main () =
     | None -> exit 1
 ```
 
-## 子プロセスとパイプ (線形なハンドルの束)
+## 子プロセスとパイプ (`Child`)
 
-名前付きのレコードとコマンドリテラルを含む。
+線形なハンドルとコマンドリテラルを含む。`sort` は入力を読み終えてから書くので、書き終えて `close_stdin` してから読む ([標準ライブラリ](stdlib.md) の「`Proc`」の pipe の規則)。
 
 ```haskell
-data Child =
-  | Child { proc : Process, stdin : Stdin, stdout : Stdout }
+import Proc
 
-sort_lines : List String -> <IO> String
+write_lines : List String -> Proc.Child -> <IO> Proc.Child
+write_lines Nil child = child
+write_lines (x :: rest) child = write_lines rest (Proc.write_line x child)
+
+sort_lines : List String -> <IO> (String, Int)
 sort_lines xs =
-  let Child { proc, stdin, stdout } = Proc.spawn `sort`
-  let stdin = Proc.write stdin (String.join "\n" xs)
-  Proc.close_stdin stdin
-  let (stdout, out) = Proc.read_all stdout
-  Proc.close_stdout stdout
-  Proc.wait proc
-  out
+  let child = write_lines xs (Proc.spawn `sort`)
+  let (out, child) = Proc.read_all (Proc.close_stdin child)
+  (out, Proc.wait child)
 ```
 
 ## データ変換 (名前付きのレコード)

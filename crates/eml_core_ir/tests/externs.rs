@@ -48,6 +48,9 @@ probe_stdout h = h
 probe_stderr : Stderr.Stderr -> Stderr.Stderr
 probe_stderr h = h
 
+probe_child : Proc.Child -> Proc.Child
+probe_child c = c
+
 probe_array : Array Int -> Array Int
 probe_array a = a
 
@@ -79,6 +82,7 @@ fn probe(ty: ExternType) -> &'static str {
         ExternType::Stdin => "probe_stdin",
         ExternType::Stdout => "probe_stdout",
         ExternType::Stderr => "probe_stderr",
+        ExternType::Child => "probe_child",
         ExternType::Array => "probe_array",
         ExternType::MutArray => "probe_mut_array",
     }
@@ -239,9 +243,9 @@ fn every_extern_function_row_has_the_reprs_of_its_std_signature() {
     }
 }
 
-/// 表の値そのもの。借りる引数を持つ行は次の表の行だけで、組を返すのは `Std.MutArray` の2つの行と、`Std.FileIn` と
-/// `Std.Stdin` のそれぞれ5つの読みの行だけである。`Std.FileOut`、`Std.Stdout`、`Std.Stderr` の書き込みの行は、データを
-/// 借りてハンドルを返すので、組を返さない。
+/// 表の値そのもの。借りる引数を持つ行は次の表の行だけで、組を返すのは `Std.MutArray` の2つの行と、`Std.FileIn`、
+/// `Std.Stdin`、`Std.Proc` のそれぞれ5つの読みの行だけである。`Std.FileOut`、`Std.Stdout`、`Std.Stderr`、`Std.Proc` の
+/// 書き込みの行は、データを借りてハンドルを返すので、組を返さない。
 #[test]
 fn only_the_listed_rows_borrow_or_return_a_pair() {
     for &e in Extern::ALL {
@@ -258,8 +262,14 @@ fn only_the_listed_rows_borrow_or_return_a_pair() {
             | "Std.Stdin.read_all"
             | "Std.Stdin.read_line_raw"
             | "Std.Stdin.read_all_bytes"
-            | "Std.Stdin.read_line_bytes_raw" => (&[true], Some(0)),
-            "Std.FileIn.read_chunk" | "Std.Stdin.read_chunk" => (&[false, true], Some(1)),
+            | "Std.Stdin.read_line_bytes_raw"
+            | "Std.Proc.read_all"
+            | "Std.Proc.read_line_raw"
+            | "Std.Proc.read_all_bytes"
+            | "Std.Proc.read_line_bytes_raw" => (&[true], Some(0)),
+            "Std.FileIn.read_chunk" | "Std.Stdin.read_chunk" | "Std.Proc.read_chunk" => {
+                (&[false, true], Some(1))
+            }
             "Std.String.byte_length" | "Prelude.Show String.show" => (&[true], None),
             "Std.String.byte_at" | "Std.String.char_at" => (&[false, true], None),
             "Std.String.slice" => (&[false, false, true], None),
@@ -284,7 +294,10 @@ fn only_the_listed_rows_borrow_or_return_a_pair() {
             | "Std.Stdout.write_line"
             | "Std.Stderr.write"
             | "Std.Stderr.write_bytes"
-            | "Std.Stderr.write_line" => (&[true, false], None),
+            | "Std.Stderr.write_line"
+            | "Std.Proc.write"
+            | "Std.Proc.write_bytes"
+            | "Std.Proc.write_line" => (&[true, false], None),
             _ => {
                 assert!(!row.borrowed.contains(&true), "{}", row.name);
                 assert_eq!(row.with_arg, None, "{}", row.name);
@@ -382,8 +395,8 @@ fn kind_of(lin: Lin) -> Linearity {
     }
 }
 
-/// 表の値そのもの。`FileIn` の7つ、`Stdin` の7つ、`Stdout` の6つ、`Stderr` の5つと `MutArray` を扱う7つ以外は、引数も
-/// 結果も `Unr` である。
+/// 表の値そのもの。`FileIn` の7つ、`Stdin` の7つ、`Stdout` の6つ、`Stderr` の5つ、`Child` の11と `MutArray` を扱う7つ
+/// 以外は、引数も結果も `Unr` である。
 #[test]
 fn only_the_handle_and_mutable_array_rows_carry_a_lin() {
     use Linearity::{Lin, Unr};
@@ -417,7 +430,18 @@ fn only_the_handle_and_mutable_array_rows_carry_a_lin() {
             | "Std.Stdout.write_line"
             | "Std.Stderr.write"
             | "Std.Stderr.write_bytes"
-            | "Std.Stderr.write_line" => (&[Unr, Lin], Lin),
+            | "Std.Stderr.write_line"
+            | "Std.Proc.write"
+            | "Std.Proc.write_bytes"
+            | "Std.Proc.write_line" => (&[Unr, Lin], Lin),
+            "Std.Proc.spawn_raw" => (&[Unr; 7], Lin),
+            "Std.Proc.wait" => (&[Lin], Unr),
+            "Std.Proc.close_stdin" => (&[Lin], Lin),
+            "Std.Proc.read_all"
+            | "Std.Proc.read_line_raw"
+            | "Std.Proc.read_all_bytes"
+            | "Std.Proc.read_line_bytes_raw" => (&[Lin], Unr),
+            "Std.Proc.read_chunk" => (&[Unr, Lin], Unr),
             "Std.Stdout.flush" => (&[Lin], Lin),
             "Std.Array.thaw" => (&[Unr], Lin),
             "Std.MutArray.make" => (&[Unr, Unr], Lin),

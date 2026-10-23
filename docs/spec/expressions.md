@@ -203,7 +203,7 @@ backup : String -> List String -> Cmd
 backup dest files = `rsync -a --delete \{..files} \{dest}`
 ```
 
-字句と、本文を引数に分ける規則は [字句](lexical.md) の「コマンドリテラル」にある。
+字句と、本文を引数に分ける規則は [字句](lexical.md) の「コマンドリテラル」にある。`Cmd` を組む設定の関数と起動する関数は、[標準ライブラリ](stdlib.md) の「`Proc`」にある。
 
 - コマンドリテラルは、Prelude の `Cmd` の値である。`Cmd` は、プログラム `program`、引数のリスト `args`、起動の設定 (`cwd`、`env`、`stderr`) を持つレコードである。リテラルは、設定を既定の値 (`None`、`Nil`、`InheritStderr`) にする
 - 最初の引数がプログラムで、残りが `args` になる。引数が1つもないリテラル (`` `   ` ``) は E1056 (`a command literal needs a program`) で、範囲はリテラル全体である

@@ -1,0 +1,11 @@
+---
+source: crates/eml_cli/tests/ui.rs
+expression: "format!(\"--- stdout ---\\n{stdout}--- stderr ---\\n{diagnostics}{stderr}--- runtime error ---\\n{error}\\n{written}\")"
+input_file: tests/ui/run-fail/std/proc_capture_nonzero.em
+---
+--- stdout ---
+before
+--- stderr ---
+--- runtime error ---
+command `sh` exited with code 3
+  at <std>/Proc.em:58:30

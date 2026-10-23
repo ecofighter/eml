@@ -1113,7 +1113,18 @@ fn arithmetic(ext: Extern, dst: Slot, args: &[Slot]) -> Option<Op> {
         | Extern::FileOutWriteLine
         | Extern::FileOutFlush
         | Extern::FileOutCloseRaw
-        | Extern::ProcStatus
+        | Extern::ProcSpawn
+        | Extern::ProcWait
+        | Extern::ProcExited
+        | Extern::ProcCloseStdin
+        | Extern::ProcWrite
+        | Extern::ProcWriteBytes
+        | Extern::ProcWriteLine
+        | Extern::ProcReadChunk
+        | Extern::ProcReadAllBytes
+        | Extern::ProcReadAll
+        | Extern::ProcReadLineBytes
+        | Extern::ProcReadLine
         | Extern::Exit
         | Extern::Panic
         | Extern::ArrayMake

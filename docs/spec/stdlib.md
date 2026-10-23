@@ -71,9 +71,10 @@ try_io action =
 
 | `Fault` | 起こす関数 | `kind` |
 |---|---|---|
-| `Io { reason, .. }` | `FileIn.open`、`FileIn.read_all`、`FileIn.read_line`、`Fs.read_text`、`FileIn.read_all_bytes`、`FileIn.read_line_bytes`、`FileIn.read_chunk`、`FileOut.create`、`FileOut.append`、`FileOut.write`、`FileOut.write_bytes`、`FileOut.write_line`、`FileOut.flush`、`FileOut.close`、`Fs.write_text`、`Proc.run` | `reason` が `NotFound` なら `NotFound`、`PermissionDenied` なら `PermissionDenied`、`NotAvailable` なら `NotAvailable`、`Other` なら `Other` |
+| `Io { reason, .. }` | `FileIn.open`、`FileIn.read_all`、`FileIn.read_line`、`Fs.read_text`、`FileIn.read_all_bytes`、`FileIn.read_line_bytes`、`FileIn.read_chunk`、`FileOut.create`、`FileOut.append`、`FileOut.write`、`FileOut.write_bytes`、`FileOut.write_line`、`FileOut.flush`、`FileOut.close`、`Fs.write_text`、`Proc` の起動 (`run`、`output`、`output_bytes`、`capture`、`capture_bytes`、`spawn`)、`Child` の読みと書き込み (`output` と `capture` の中の読みを含む) | `reason` が `NotFound` なら `NotFound`、`PermissionDenied` なら `PermissionDenied`、`NotAvailable` なら `NotAvailable`、`Other` なら `Other` |
 | `Stdin(reason)` | `Stdin.read_text` と、`Stdin` のハンドルの読み (`read_all`、`read_line`、`read_all_bytes`、`read_line_bytes`、`read_chunk`) | 同上 |
-| `NotUtf8(_)` | `FileIn.read_all`、`FileIn.read_line`、`Fs.read_text`、`Stdin.read_text`、`Stdin.read_all`、`Stdin.read_line`、`Env.args`、`Env.get` | `NotUtf8` |
+| `NotUtf8(_)` | `FileIn.read_all`、`FileIn.read_line`、`Fs.read_text`、`Stdin.read_text`、`Stdin.read_all`、`Stdin.read_line`、`Proc.output`、`Proc.capture`、`Proc.read_all`、`Proc.read_line`、`Env.args`、`Env.get` | `NotUtf8` |
+| `Exited` | `Proc.capture`、`Proc.capture_bytes` | `Other` |
 
 書き出しの失敗 (`Output`) を捕まえないのは、標準出力をまとめて書くためである ([オブジェクトモデル](object-model.md) の「Host」)。書けなかったことが分かるのは、後でバッファがあふれた `println` か、読みや起動の前の書き出しか、プログラムの終わりの書き出しになる。そのため、`try_io (fn () -> println s)` は書けなくても `Ok` を返しうるし、関係のない別の `try_io` が失敗を受け取りうる。どこで捕まるかが決まらないので、実行時エラーのままにする。
 
@@ -469,13 +470,13 @@ pub data Set a =
 
 ## ハンドル
 
-`Stdin.Stdin` と `FileIn.FileIn` は読むためのハンドルで、`Stdout.Stdout`、`Stderr.Stderr`、`FileOut.FileOut` は書くためのハンドルである。ハンドルの型ごとに1つのモジュールを置き、どのモジュールも、開く関数 (`open`、`FileOut` では `create` と `append`)、`close`、次の規則の名前の読みか書きを持つ。読みと書きを型で分けるので、取り違えは型の誤り (E2001) になる。
+`Stdin.Stdin` と `FileIn.FileIn` は読むためのハンドルで、`Stdout.Stdout`、`Stderr.Stderr`、`FileOut.FileOut` は書くためのハンドルである。ハンドルの型ごとに1つのモジュールを置き、どのモジュールも、開く関数 (`open`、`FileOut` では `create` と `append`)、`close`、次の規則の名前の読みか書きを持つ。読みと書きを型で分けるので、取り違えは型の誤り (E2001) になる。`Proc.Child` は子のプロセスとやりとりするハンドルで、子の標準入力への書きと標準出力の読みの両方を持つ。`Proc.spawn` で作り、`close` の代わりに `Proc.wait` で使い終える (下の「`Proc`」の「`Child`」)。`Child` もほかのハンドルとは別の型なので、`FileIn` の関数に渡すと型の誤りになる。
 
 関数の名前は、std 全体で次の規則に従う。文字列を読み書きする関数が短い名前を持ち、バイト列の版は `_bytes` を足す。読みは `read_all` と `read_all_bytes`、`read_line` と `read_line_bytes` で、書きは `write` と `write_bytes`、文字列だけの `write_line` である。バイト列にしかない読み (`read_chunk`) は、その名前のままである。スクリプトの大半は文字列を読み、文字列の読みが UTF-8 を確かめることが「`String` はいつも妥当な UTF-8」を支えるので、文字列の版を既定にする。
 
 - ハンドルは線形な型 (`Lin`) で、ちょうど1回使う ([線形性](linearity.md))。`Stdin`、`Stdout`、`Stderr`、`FileIn` の `close h` は `drop h` と同じで、ハンドルを手放して閉じる。`FileOut` の `close` は書き出してから閉じ、書き出せなければ誤りを返す (下の「`FileOut`」)
-- 読む関数はハンドルを借りて読み、結果を先に、同じハンドルを後に置いた組で返す。`Stdin` と `FileIn` は同じ名前と同じ形の読む関数を持つ (下の「`Stdin`」と「`FileIn`」)
-- 書く関数は書くデータを借り、ハンドルを受け取って同じハンドルを返す。`Stdout`、`Stderr`、`FileOut` は同じ名前と同じ形の書く関数を持つ (下の「`Stdout` と `Stderr`」と「`FileOut`」)
+- 読む関数はハンドルを借りて読み、結果を先に、同じハンドルを後に置いた組で返す。`Stdin`、`FileIn`、`Child` は同じ名前と同じ形の読む関数を持つ (下の「`Stdin`」、「`FileIn`」、「`Proc`」)
+- 書く関数は書くデータを借り、ハンドルを受け取って同じハンドルを返す。`Stdout`、`Stderr`、`FileOut`、`Child` は同じ名前と同じ形の書く関数を持つ (下の「`Stdout` と `Stderr`」、「`FileOut`」、「`Proc`」)
 - 読めるハンドルの上の汎用のコードは、読む関数を引数で渡して書く。`count_lines Stdin.read_line h 0` も `count_lines FileIn.read_line f 0` も、直接書いたループと同じ費用で動く
 
   ```haskell
@@ -503,8 +504,11 @@ pub data Set a =
 | `FileIn` の読み | 読めない (`Io { op: Read, .. }`) | `IO` |
 | `FileOut.create`、`append` | 開けない (`Io { op: Open, .. }`) | `IO` |
 | `FileOut` の書き込み (`write`、`write_bytes`、`write_line`、`flush`、`close`) | 書けない (`Io { op: Write, .. }`)。ハンドルは閉じている (下の「`FileOut`」) | `IO` |
+| `Child` の読み | 読めない (`Io { op: ReadOutput, .. }`) | `IO` |
+| `Child` の書き込み (`write`、`write_bytes`、`write_line`) | 書けない (`Io { op: Write, .. }`)。ハンドルを手放し、破棄処理が子を kill する (下の「`Proc`」) | `IO` |
 | 文字列の読み | UTF-8 でない (`NotUtf8`)。バイト列の読みはこれで失敗しない | `IO` (`kind` は `NotUtf8`) |
 | どの読みも | 割り込み、確保量の上限 | 位置を付けた実行時エラー |
+| `Child` の書き込み、`Proc.wait` | 割り込み | 位置を付けた実行時エラー |
 | 標準のストリームの書き込み (`write`、`write_bytes`、`write_line`、`flush`) | 書けない (`Output`) | 実行時エラー。`try_io` では捕まえない (上の「`try_io`」) |
 | どの操作も | 検査モードのヒープの誤り | 実行時エラー |
 
@@ -545,7 +549,7 @@ pub data Set a =
 - `write s h` は文字列 `s` をそのまま書き、`write_bytes b h` はバイト列 `b` をそのまま書き、`write_line s h` は `s` と `\n` を書く。`Stdout.write_line` は `println` と、`Stderr.write_line` は `eprintln` と同じ書き方である。どれもデータを借りて、受け取ったハンドルを返す
 - 1回の書き込みは、ストリームの lock の下で Host を1回呼ぶ。1回の書き込みはほかの書き込みと途中で混ざらないが、2回の書き込みの間には、ほかの書き込みが入りうる
 - 書き込みは、Host がストリームごとに持つ buffer に入る。標準出力は、端末なら `\n` を含む書き込みが書き出し、端末でなければ 64 KiB ずつまとめて書く。標準エラーは書くたびに書き出すので、`Stderr` は `flush` を持たない ([オブジェクトモデル](object-model.md) の「出力のバッファ」)
-- `Stdout.flush h` は、標準出力の buffer を書き出す。ほかに Host が buffer を書き出すのは、`main` の終わり、`exit`、実行時エラーを出す前、割り込みか上限で止めたとき、REPL の入力の区切り、`Proc.run` の前、標準入力の読み手の補充の前である
+- `Stdout.flush h` は、標準出力の buffer を書き出す。ほかに Host が buffer を書き出すのは、`main` の終わり、`exit`、実行時エラーを出す前、割り込みか上限で止めたとき、REPL の入力の区切り、子を起動する前、標準入力の読み手の補充の前である
 - 1回の書き込みは、extern の呼び出しと Host の呼び出しの費用を持つ。1バイトずつ出すときは、`Bytes.push` で `Bytes` を組んでから1回書く
 - 書けないとき (`Output`) は、`println` と同じく実行時エラーで、`try_io` では捕まえない。書き込みの extern は、そのときハンドルを手放す
 
@@ -614,13 +618,111 @@ pub data Set a =
 
 | 関数 | 型 |
 |---|---|
-| `run` | `String -> List String -> <IO, Panic> Int` |
+| `run` | `Cmd -> <IO> Int` |
+| `output` | `Cmd -> <IO> (String, Int)` |
+| `output_bytes` | `Cmd -> <IO> (Bytes, Int)` |
+| `capture` | `Cmd -> <IO> String` |
+| `capture_bytes` | `Cmd -> <IO> Bytes` |
+| `spawn` | `Cmd -> <IO> Child` |
+| `cwd` | `String -> Cmd -> Cmd` |
+| `env` | `String -> String -> Cmd -> Cmd` |
+| `arg` | `String -> Cmd -> Cmd` |
+| `args` | `List String -> Cmd -> Cmd` |
+| `merge_stderr` | `Cmd -> Cmd` |
+| `discard_stderr` | `Cmd -> Cmd` |
+| `write` | `String -> Child -> <IO> Child` |
+| `write_bytes` | `Bytes -> Child -> <IO> Child` |
+| `write_line` | `String -> Child -> <IO> Child` |
+| `close_stdin` | `Child -> <IO> Child` |
+| `read_all` | `Child -> <IO> (String, Child)` |
+| `read_line` | `Child -> <IO, Panic> (Option String, Child)` |
+| `read_all_bytes` | `Child -> <IO> (Bytes, Child)` |
+| `read_line_bytes` | `Child -> <IO, Panic> (Option Bytes, Child)` |
+| `read_chunk` | `Bytes -> Child -> <IO> (Bytes, Child)` |
+| `wait` | `Child -> <IO> Int` |
 
-- `run program args` は、`PATH` から `program` を探して子のプロセスを起動し、終わるのを待って終了コードを返す。子はシェルを介さず、標準入出力と環境を受け継ぐ。シグナルで終わった子の終了コードは、シェルと同じく 128 + シグナルの番号にする
+子のプロセスを起動する。子はシェルを介さず、`Cmd` のプログラムと引数のリストをそのまま OS に渡す。起動の形は3つある。標準入出力を受け継ぐ `run`、標準出力を取る `output` と `capture`、pipe でやりとりする `spawn` である。どの形でも、引数と設定は同じ `Cmd` で組む。
+
+### `Cmd`
+
+`Cmd` は Prelude のレコードの型で、プログラム、引数のリスト、作業ディレクトリ、環境変数の上書き、標準エラーの向きを持つ ([式](expressions.md) の「コマンドリテラル」)。
+
+- `Cmd` の値は、コマンドリテラルとこのモジュールの設定の関数で組む。プログラムを変数で与えるときは `` `\{prog} \{..args}` `` と書く
+- フィールドの名前と数は処理系の都合で変わりうる。そのため、利用者のコードは `Cmd { … }` の作る式とパターンを書かない。読むだけの射影 (`cmd.program`、`cmd.args`) は書いてよい。`StderrMode` のコンストラクタも、設定の関数が書くので、利用者は書かない
+  - 見直す条件: 抽象型が入ったとき、`Cmd` と `StderrMode` のコンストラクタを隠す
+- 設定の関数は対象の `Cmd` を最後に受ける。`` `make` |> Proc.cwd "build" |> Proc.merge_stderr |> Proc.capture `` のように `|>` でつなぐためである。`with_` の名前は、handler を呼ぶ関数の慣習 ([例](examples.md) の `with_env`) に取っておく
+- `cwd dir c` は作業ディレクトリを `dir` にする。相対パスは `FileIn.open` と同じく Host の `file_root` から解釈する。2回設定したら、後の設定が前の設定を置き換える。ないディレクトリは、起動の誤りの理由 `not found` (``cannot run `make`: not found``) になり、プログラムがないときと区別しない
+- `env name value c` は、子の環境変数 `name` を `value` に上書きする。子はほかの環境変数を eml のプロセスから受け継ぐ。同じ名前を2回設定したら、後の組が勝つ。空の名前と `=` を含む名前は OS に渡せないので、起動の誤り (`I/O error`) にする
+- `arg a c` と `args xs c` は、引数を後ろに足す
+- `merge_stderr c` は、子の標準エラーを標準出力と同じ先に向ける (`2>&1`)。`discard_stderr c` は捨てる (`2>/dev/null`)。どちらも書かなければ、標準エラーは受け継ぐ
+
+### 起動
+
+- `run c` は、標準入出力を受け継いで子を起動し、終わるのを待って終了コードを返す
+- `output c` は、子の標準出力を文字列に読み、終了コードと組で返す。子の標準入力は空 (`/dev/null`) である。`output_bytes` はバイト列の版で、UTF-8 を確かめない
+- `capture c` は `output` と同じく標準出力を読み、終了コードが 0 なら読んだ文字列を返す。0 でなければ IO の失敗 (`kind` は `Other`、``command `git` exited with code 128``) で、読んだ出力は捨てる。`capture_bytes` はバイト列の版である。失敗するコマンドは、バグでなく IO の条件として `try_io` で扱う
+- `spawn c` は、標準入力と標準出力を pipe にして子を起動し、`Child` を返す (下の「`Child`」)
+- 標準エラーの向きはどの形でも `Cmd` の設定に従う。`merge_stderr` の標準エラーは、`output` と `capture` では文字列に入り、`run` では標準出力に出て、`spawn` では `read_*` で読める
+- 終了コードは子の終了コードで、シグナルで終わった子は、シェルと同じく 128 + シグナルの番号にする
 - 起動の前に標準出力を書き出す。子と eml の出力が順に並ぶようにするためである。eml が標準入力から先読みしてバッファに持っているバイトは、子には届かない
-- NUL を含む引数は OS に渡せないので、起動の誤り (`I/O error`) にする
-- Ctrl-C は同じプロセスグループの子にも届く。子が終わった後、割り込みが来ていれば、`run` はその場で止まる (終了コード 130)
-- 起動に使う extern は、引数の数と各引数を、それぞれ NUL で終えて並べた1つの文字列を受ける。OS の引数は NUL を含めないので、NUL を含む引数があれば数が合わなくなり、起動の誤りとして見つかる
+- プログラムが `/` を含まなければ、`PATH` から探す。`/` を含む相対パス (`./run.sh`) は、子の作業ディレクトリ (`cwd` の設定か、なければ `file_root`) に対して解決し、Host が絶対パスにしてから起動する。Rust の `Command` は、作業ディレクトリと相対のプログラムを組み合わせたときの意味を決めていないためである
+- Ctrl-C は同じプロセスグループの子にも届く。子が終わった後、割り込みが来ていれば、子を待っていた `wait` (`run`、`output`、`capture` の中の `wait` を含む) はその場で止まる (終了コード 130)
+
+`capture` の誤りは、次の順に出る。
+
+1. 起動の誤り (``cannot run `git`: not found``)
+2. 標準出力の読みの誤り (``cannot read the output of `git`: I/O error``、``the output of `git` is not valid UTF-8``)
+3. 終了コード (``command `git` exited with code 128``)
+
+この順は本体 `let (out, child) = read_all (spawn_with … c); let code = wait child; if code == 0 then out else exited c.program code` の順そのものである。そのため、UTF-8 でない出力を出して 0 でなく終わった子は、`NotUtf8` で失敗する。読みの失敗で巻き戻るときは、`Child` の破棄処理が子を kill する (下の「`Child`」)。
+
+std の中だけの extern は次の4つである。
+
+- `spawn_raw : String -> String -> String -> String -> Int -> Int -> Int -> <IO> Child` は、どの起動の形も呼ぶ。引数は次の7つである
+  1. プログラム
+  2. 引数の列
+  3. 環境の列
+  4. 作業ディレクトリ (空なら設定しない)
+  5. 標準入力の向き (0 は受け継ぐ、1 は空、2 は pipe)
+  6. 標準出力の向き (標準入力と同じ)
+  7. 標準エラーの向き (0 は受け継ぐ、1 は標準出力に合わせる、2 は捨てる)
+- 列は各要素を「バイト長の十進、NUL、本文」の順に並べた1つの文字列である。環境の列は名前と値を交互に置く。組み立ては `++` と `String.byte_length` だけで書くので、`Panic` を起こさない。NUL を含む要素は OS に渡せないので、起動の誤り (`I/O error`) にする。向きの値が範囲の外のときも同じである
+- `exited : String -> Int -> <IO> a` は、いつも ``command `<program>` exited with code <code>`` の IO の失敗で終わり、戻らない。eml のコードは `io_failed` を呼べないので、`capture` が失敗を起こす窓口がこの extern である
+- `read_line_raw` と `read_line_bytes_raw` は、`Stdin` の同じ名前の extern と同じく、行の終わりを含む1行か、終わりなら空を返す
+
+### `Child`
+
+`Child` は、子のプロセスと、その標準入力への書き口と、標準出力の読み手を持つハンドルである (上の「ハンドル」)。線形な型 (`Lin`) で、ちょうど1回使う。
+
+- `write`、`write_bytes`、`write_line` は、`FileOut` の同じ名前の関数と同じ形で、子の標準入力に書く。`Child` は buffer を持たず、書くたびに pipe に書き出す
+- `close_stdin h` は子の標準入力を閉じ、子に EOF を届ける。閉じた後の書き込みは `not available` で失敗する
+- 読む関数は `Stdin` の同じ名前の関数と同じ名前と形と意味で、子の標準出力を読む。`read_line` と `read_line_bytes` は `read_line_raw` と `read_line_bytes_raw` の上に eml で書いてある。`Stdin` と違って、補充の前に標準出力を書き出さない
+- `wait h` は、標準入力を閉じてから子が終わるのを待ち、終了コードを返す。ハンドルを消費する。子を終わりまで待って終了コードを受け取る道は `wait` だけで、閉じる関数はない
+- `drop h` で手放すか、巻き戻し (`try_io`、`try_panic`、`never` の操作)、捕まえなかった実行時エラー、書き込みの誤りのどれで `Child` を手放しても、破棄処理が次の順に片づける。子の終了コードは失われる。`Heap` を落とすときも同じである。`Task a` を手放すとキャンセルにする方針 ([標準ライブラリの将来](../future/stdlib.md)) と同じ考えである
+  1. pipe を閉じる
+  2. 直接の子を kill する
+  3. 子を待つ
+- そのため、直接の子は `try_io` で抜けた後に残らず、zombie にもならない。kill するのは直接の子だけなので、`sh -c` が起動した孫は残りうる
+
+eml は1度に1本の pipe しか読み書きしない。pipe の buffer は OS が持ち、ふつう 64 KiB である。詰まらないように、次の規則で読み書きする。
+
+- 入力を読み終えてから出力を書く子 (`sort`、`wc`) には、書き終えて `close_stdin` してから読む。この順なら、入力の量に上限はない
+- 読みながら書く子 (`cat`、`tr`、`grep`) に buffer より多く書いてから読むと、子は出力を書けず、eml は入力を書けず、両方が止まる。そういう子には buffer より少なく書くか、入力を分けて書くたびに読む
+- `wait` の前に標準出力を読み切る。読まずに `wait` すると、buffer より多く出力する子で止まる
+- 止まったときは Ctrl-C で終われる。書き込みと読みは `EINTR` で戻り、止める語を見るためである。処理系は止まったことを検出しない
+
+### 失敗
+
+| 操作 | 失敗 | 届け方 |
+|---|---|---|
+| `run`、`output`、`output_bytes`、`capture`、`capture_bytes`、`spawn` | 起動できない (`Io { op: Run, name: program, .. }`。``cannot run `rsync`: not found``)。ない作業ディレクトリも `not found` である。NUL を含む引数と、空か `=` を含む環境変数の名前は `I/O error` | `IO` (`try_io`) |
+| `capture`、`capture_bytes` | 終了コードが 0 でない (`Exited`。``command `sh` exited with code 3``) | `IO` (`kind` は `Other`) |
+| `Child` の読み、`output`、`capture` | 読めない (`Io { op: ReadOutput, name: program, .. }`。``cannot read the output of `sort`: I/O error``)。文字列の読みは UTF-8 でない (``the output of `sort` is not valid UTF-8``) | `IO` (UTF-8 の誤りの `kind` は `NotUtf8`) |
+| `Child` の書き込み | 書けない (子が先に終わったときの EPIPE、`close_stdin` の後など)。`FileOut` と同じ `Io { op: Write, name: program, .. }` (``cannot write to `sort`: I/O error``) で、ハンドルを手放す | `IO` |
+| `wait`、読み、書き込み | 割り込み。子が終わった後に `Stopped` になる | 位置を付けた実行時エラー |
+
+- `Child` の書き込みの失敗を、`Stdout` と違って `try_io` で捕まえるのは、`Child` が自分の pipe に直に書き、共有の buffer を持たないためである (`FileOut` と同じ理由)
+- 書き込みが失敗すると、ハンドルを手放すので、破棄処理が子を kill する。子の終了コードは失われる
 
 ## エフェクトのモジュール
 
@@ -762,7 +864,11 @@ I/O の失敗の一部は `try_io` で捕まえられる (上の「`try_io`」)�
 | 配列の負の長さ (`make`、`tabulate`) | ``array length -1 is negative`` |
 | `FileOut.create`、`append` | ``cannot open `out.txt`: permission denied`` |
 | `FileOut.write`、`write_bytes`、`write_line`、`flush`、`close` | ``cannot write to `out.txt`: I/O error`` |
-| `Proc.run` の起動 | ``cannot run `rsync`: not found`` |
+| `Proc` の起動 (`run`、`output`、`output_bytes`、`capture`、`capture_bytes`、`spawn`) | ``cannot run `rsync`: not found`` |
+| `Proc.capture`、`capture_bytes` の 0 でない終了 | ``command `sh` exited with code 3`` |
+| `Child` の読み | ``cannot read the output of `sort`: I/O error`` |
+| UTF-8 でない子の出力 | ``the output of `sort` is not valid UTF-8`` |
+| `Child` の書き込み | ``cannot write to `sort`: I/O error`` |
 | 標準入力の2つ目のハンドル | ``the standard input is already open`` |
 | 標準出力の2つ目のハンドル | ``the standard output is already open`` |
 | 標準エラーの2つ目のハンドル | ``the standard error is already open`` |

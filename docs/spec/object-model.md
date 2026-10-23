@@ -857,7 +857,9 @@ token の表の項目は、`into_token` と `release_reuse` が添字を使い�
 | `Std.Stdout.open`、`close`、`Std.Stderr.open`、`close` | `Ctx::handle_open`、`handle_close` (`Handle::Stdout`、`Handle::Stderr`。下の「出力のバッファ」) |
 | `Std.Stdout.write`、`write_bytes`、`write_line`、`Std.Stderr.write`、`write_bytes`、`write_line` | `Ctx::handle_write` (`Handle::Stdout` か `Handle::Stderr`。`Write::Text`、`Bytes`、`Line`。下の「出力のバッファ」) |
 | `Std.Stdout.flush` | `Ctx::handle_flush` (`Handle::Stdout`) |
-| `Std.Proc.status` | `Ctx::proc_status` |
+| `Std.Proc.spawn_raw`、`wait`、`close_stdin`、`exited` | `Ctx::proc_spawn`、`proc_wait`、`proc_close_stdin`、`proc_exited` (下の「子のプロセス」) |
+| `Std.Proc.read_all`、`read_line_raw`、`read_all_bytes`、`read_line_bytes_raw`、`read_chunk` | `Ctx::handle_read` (`Handle::Child`。`FileIn` の同じ名前の読みと同じ `ReadAmount` と `Form`) |
+| `Std.Proc.write`、`write_bytes`、`write_line` | `Ctx::handle_write` (`Handle::Child`。`Write::Text`、`Bytes`、`Line`) |
 | `Std.Array.make`、`length`、`get`、`set`、`thaw`、`Std.MutArray.make`、`empty`、`length`、`read`、`write`、`freeze` | `Ctx::array_make`、`array_empty`、`array_length`、`array_get`、`array_set`、`array_freeze`、`array_thaw` (上の「配列」) |
 
 `unit` の引数を持つ行 (`Std.Env.arg_count`、`Std.Stdin.open`、`Std.Stdout.open`、`Std.Stderr.open`、`Std.Float.infinity_value`、`nan_value`、`Std.MutArray.empty`、`Std.Bytes.empty`) は、VM が引数を読まずに呼ぶ。
@@ -885,7 +887,7 @@ token の表の項目は、`into_token` と `release_reuse` が添字を使い�
 | `NotUtf8(Box<Utf8Source>)` | 読んだ中身が UTF-8 でない。`Utf8Source` はファイル (パス)、標準入力、引数 (`Env.args ()` の位置)、環境変数 (名前)、子の標準出力 (プログラムの名前) | ``` `{path}` is not valid UTF-8 ```、`the standard input is not valid UTF-8`、`argument {index} is not valid UTF-8`、``environment variable `{name}` is not valid UTF-8``、``the output of `{program}` is not valid UTF-8`` |
 | `Utf8 { at: i64 }` | `String.decode` に渡したバイト列が妥当な UTF-8 でない。`at` は最初の妥当でないバイトの位置で、T5 の `utf8_valid` が返す | ``invalid UTF-8 at byte {at}`` |
 | `Index(Box<IndexFault>)` | 範囲の外の位置。`IndexFault` は、文字列の位置 (`byte_at`、`char_at`、`find_from`)、`slice` の範囲、`slice` の境界、`char_at` の境界、`Env.arg` の位置、配列の添字 (`get`、`set`、`read`、`write`)、`make` の負の長さ、バイト列の位置 (`Bytes.get`、`set`、`find_from` と `find_byte_from` の開始位置)、バイト列の範囲 (`Bytes.slice`、`append_slice`、`truncate`。`truncate n` の範囲は `0..n`)、`Bytes.make` の負の長さ | ``string index {index} is out of range for length {len}``、``string slice {start}..{end} is out of range for length {len}``、``string slice {start}..{end} is not on a character boundary``、``string index {index} is not on a character boundary``、``argument index {index} is out of range for {count} arguments``、``array index {index} is out of range for length {len}``、``array length {len} is negative``、``bytes index {index} is out of range for length {len}``、``bytes slice {start}..{end} is out of range for length {len}``、``bytes length {len} is negative`` |
-| `Stopped(Stop)` | `FileIn`、標準入力、`Child` の読みが読む途中で、`Child` への書き込みが書く途中で、`Proc.status` と `Ctx::proc_spawn` が子を起動する前に、`Proc.status` と `Ctx::proc_wait` が子を待つ間に、止める語か確保量の上限に当たった | `interrupted`、`the memory limit is exceeded`、`the call depth limit is exceeded` (`Stop` の表示) |
+| `Stopped(Stop)` | `FileIn`、標準入力、`Child` の読みが読む途中で、`Child` への書き込みが書く途中で、`Ctx::proc_status` と `Ctx::proc_spawn` が子を起動する前に、`Ctx::proc_status` と `Ctx::proc_wait` が子を待つ間に、止める語か確保量の上限に当たった | `interrupted`、`the memory limit is exceeded`、`the call depth limit is exceeded` (`Stop` の表示) |
 | `InUse(StdStream)` | 標準のストリーム (`Stdin`、`Stdout`、`Stderr`) のハンドルが生きている間の、2つ目の `open` | `the standard input is already open`、`the standard output is already open`、`the standard error is already open` |
 | `Exited(Box<Exited>)` | 子が 0 でない終了コードで終わった。`Exited { program, code }` はプログラムの名前と終了コードを持つ。`Ctx::proc_exited` だけが作る | ``command `{program}` exited with code {code}`` |
 
@@ -971,7 +973,7 @@ token の表の項目は、`into_token` と `release_reuse` が添字を使い�
 - `String.decode` は、妥当なバイト列には同じバイトの `String` を返し、妥当でなければ `Fault::Utf8` を返す。どちらのときも `b` の参照を手放す。検査モードでは、引数が `Bytes` の物体でなければ `Heap(WrongKind)` を返す
 - 検査モードでは、引数が `Bytes` の物体でなければ `Heap(WrongKind)` を返す。`String` の物体も断る
 
-I/O の extern (`println`、`eprintln`、`FileIn.open` と `FileOut` を開くこと、標準のストリームの `open`、ハンドルの読みと書き込み、`Stdout.flush` と `FileOut.flush`、`close`、`Env` と `Proc.status` の extern、子のプロセスの extern) は、メモリの安全と、RC のモデルでの増減を証明する。引数を消費すること (借りるハンドルと、書き込みの借りるデータは参照の数を変えないこと。書き込みと `flush` は受け取ったハンドルをそのまま返すこと)、結果を持つこと、ハンドルの種類と `lin` ビット、誤りのときに作りかけの物体を手放すことを含む。OS とのやりとりの中身 (何が書かれ、何が読めたか) は約束せず、T11 (下の「`unsafe` の核」) と期待値の表 ([テスト戦略](../implementation/testing.md) の「期待値の表」) に任せる。ハンドルの読みの結果は `alloc_string`、`alloc_bytes`、`bytes_extend` で作るので、ghost のバイト列と、文字列なら UTF-8 であることは、今ある約束と `read_text` の約束から出る。
+I/O の extern (`println`、`eprintln`、`FileIn.open` と `FileOut` を開くこと、標準のストリームの `open`、ハンドルの読みと書き込み、`Stdout.flush` と `FileOut.flush`、`close`、`Env` の extern、`Ctx::proc_status`、子のプロセスの extern) は、メモリの安全と、RC のモデルでの増減を証明する。引数を消費すること (借りるハンドルと、書き込みの借りるデータは参照の数を変えないこと。書き込みと `flush` は受け取ったハンドルをそのまま返すこと)、結果を持つこと、ハンドルの種類と `lin` ビット、誤りのときに作りかけの物体を手放すことを含む。OS とのやりとりの中身 (何が書かれ、何が読めたか) は約束せず、T11 (下の「`unsafe` の核」) と期待値の表 ([テスト戦略](../implementation/testing.md) の「期待値の表」) に任せる。ハンドルの読みの結果は `alloc_string`、`alloc_bytes`、`bytes_extend` で作るので、ghost のバイト列と、文字列なら UTF-8 であることは、今ある約束と `read_text` の約束から出る。
 
 ### Host
 
@@ -1111,15 +1113,15 @@ pub struct Spawned {
 - ヒープに直接読む形、mmap で読む形、`Vec` をそのままヒープの文字列にする形は採らない。計測と理由は [計測の基準](../implementation/benchmarks.md) の「`FileIn.read_all` の読み方」にある
 - 標準入力の読み (`Std.Stdin.read_all`、`read_line_raw`、`read_all_bytes`、`read_line_bytes_raw`、`read_chunk`) は、ハンドルの読み手を `FileIn` と同じ `handle_read` の道で読み、同じく区切りごとに止める語と確保量を見る。長さの見込みは持たない。1行の読みは、std の `read_until` を使わず `fill_buf` と `consume` で `\n` まで写す。`read_until` は `Interrupted` を自分で読み直すので、止める語を見られないためである。補充の前ごとに標準出力を書き出す (行の途中の補充と、buffer が空の塊の読みも含む)。全部の読みは、buffer の残りを移した後、`inner` を読む前に1回書き出す
 - `Child` の読みは `FileIn` の読みと同じ `handle_read` の道で、子の標準出力の pipe を読む。長さの見込みは持たず、補充の前に標準出力を書き出さない
-- `Proc.status` は、子を起動する前と、子が終わった後に止める語を見る。待つ間の Ctrl-C は同じプロセスグループの子にも届くので、子が終わって待ちから戻る。起動と同時に届いた Ctrl-C は子に届かないことがあり、そのときは子が終わってから止まる。`proc_spawn` は起動する前に、`proc_wait` は子が終わった後に、同じく止める語を見る
-- 読む途中か待つ間に止める語を見るのは、`FileIn` の読み (`FileIn.read_all`、`read_line_raw`、`read_all_bytes`、`read_line_bytes_raw`、`read_chunk`)、標準入力の読み、`Child` の読みと書き込み、`Proc.status`、`proc_spawn`、`proc_wait` だけである。ほかの extern は短い時間で終わるので、安全点を通らない
+- `Ctx::proc_status` は、子を起動する前と、子が終わった後に止める語を見る。待つ間の Ctrl-C は同じプロセスグループの子にも届くので、子が終わって待ちから戻る。起動と同時に届いた Ctrl-C は子に届かないことがあり、そのときは子が終わってから止まる。`proc_spawn` は起動する前に、`proc_wait` は子が終わった後に、同じく止める語を見る
+- 読む途中か待つ間に止める語を見るのは、`FileIn` の読み (`FileIn.read_all`、`read_line_raw`、`read_all_bytes`、`read_line_bytes_raw`、`read_chunk`)、標準入力の読み、`Child` の読みと書き込み、`Ctx::proc_status`、`proc_spawn`、`proc_wait` だけである。ほかの extern は短い時間で終わるので、安全点を通らない
 
 ### 子のプロセス
 
 - `Child` の物体は、`Foreign` の中身を `Child { program: Box<str>, process: Option<Box<dyn Process>>, stdin: Option<Box<dyn Write + Send>>, stdout: Option<Reader> }` にしたもので、作るときに `lin` ビットを立てる。子のプロセスと、その標準入力への書き口と、標準出力の読み手を持つ。Verus には `external_body` の不透明な型として見せる。`program` は起動したプログラムの名前で、誤りの文言に使う
 - `Ctx::proc_spawn(program, args, env, cwd, stdin, stdout, stderr)` は、4つの文字列 (プログラム、引数の列、環境の列、作業ディレクトリ) と3つの向きの値を受け、信頼の関数 `host_spawn` で Host の `spawn` を呼んで `Child` を作る
   - 列は、各要素を「バイト長の十進、NUL、本文」の順に並べたものである。環境の列はキーと値を交互に置く。作業ディレクトリが空なら設定しない。向きの値は、標準入力と標準出力が 0 (受け継ぐ)、1 (空)、2 (pipe)、標準エラーが 0 (受け継ぐ)、1 (標準出力に合わせる)、2 (捨てる) である
-  - `host_spawn` が列と向きの値を読む。読めない列、NUL を含む要素、組にならない環境の列、範囲の外の向きは、Host を呼ばずに `Io { op: Run, reason: Other }` (`I/O error`) にする。OS の引数と環境変数は NUL を含めないためである。`host_spawn` は、`Proc.status` と同じく、起動の前に止める語と Host の `flush` を見る
+  - `host_spawn` が列と向きの値を読む。読めない列、NUL を含む要素、組にならない環境の列、空か `=` を含む環境変数の名前、範囲の外の向きは、Host を呼ばずに `Io { op: Run, reason: Other }` (`I/O error`) にする。OS の引数と環境変数は NUL を含めず、環境変数の名前は `=` で値と区切るためである。`host_spawn` は、`Ctx::proc_status` と同じく、起動の前に止める語と Host の `flush` を見る
   - 確かめは、Host を呼ぶ前に4つの文字列を1つずつ行う。種類が文字列であることと、`decref` の前提である。起動できたら、`fs_open` と同じく `Child` の物体を作ってから、4つの文字列を手放す。起動できなければ、文字列を手放して `Io { op: Run, name: program, .. }` を返す
   - 文字列は1つずつ手放し、検査モードは手放すたびに `decref` の前提を確かめ直す。同じ物体を2つの引数に渡すことは許すが、呼ぶ側の持つ参照の数より多く渡すと、そこで `Heap(_)` になる。そのときは、作った `Child` も手放してから返す。4つの引数の重なりを前もって確かめないのは、確かめと証明が重なりの組み合わせの数だけ増えるためである
 - 子の標準入力への書き込みは `Ctx::handle_write(h, Handle::Child, data, write)` で、信頼の関数 `child_write(c, bytes, line, control)` が書き口に書き、続けて `flush` する。`FileOut` と違って buffer を持たない。書き口がない (`close_stdin` の後) ときは `Io { op: Write, reason: NotAvailable }` である。書けなければ書き口を閉じて `Io { op: Write, name: program, .. }` を返し、`handle_write` がハンドルを手放す (上の「誤りのときの約束」)

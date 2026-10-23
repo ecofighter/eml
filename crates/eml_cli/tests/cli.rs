@@ -610,7 +610,7 @@ fn an_interrupt_stops_a_program_waiting_for_a_child_with_130() {
 
     let text = "import Proc\n\
 main : Unit -> <IO, Panic> Unit
-main () = println (show (Proc.run \"sh\" [\"-c\", \"echo started >&2; exec sleep 30\"]))
+main () = println (show (Proc.run `sh -c 'echo started >&2; exec sleep 30'`))
 ";
     let dir = temp_project("cli-sigint-child", &[("main.em", text)]);
     let deadline = Instant::now() + DEADLINE;

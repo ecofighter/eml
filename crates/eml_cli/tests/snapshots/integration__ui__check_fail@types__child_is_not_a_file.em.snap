@@ -1,0 +1,14 @@
+---
+source: crates/eml_cli/tests/ui.rs
+expression: rendered
+input_file: tests/ui/check-fail/types/child_is_not_a_file.em
+---
+[E2001] Error: mismatched types
+   ╭─[ check-fail/types/child_is_not_a_file.em:7:36 ]
+   │
+ 7 │   let (text, c) = FileIn.read_all (Proc.spawn `cat`)
+   │                   ───────┬───────  ────────┬───────  
+   │                          ╰─────────────────────────── argument 1 of `read_all`
+   │                                            │         
+   │                                            ╰───────── expected `FileIn`, found `Child`
+───╯

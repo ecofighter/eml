@@ -1,0 +1,11 @@
+---
+source: crates/eml_cli/tests/ui.rs
+expression: "format!(\"--- stdout ---\\n{stdout}--- stderr ---\\n{diagnostics}{stderr}{written}{exit}\")"
+input_file: tests/ui/run/std/proc_spawn_large.em
+---
+--- stdout ---
+bytes 262144
+lines 16384
+first Some "100001-padding!"
+sort 0
+--- stderr ---

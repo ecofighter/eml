@@ -83,7 +83,7 @@ pipeline config =
 real_run : (Unit -> <Run, IO | e> a) -> <IO, Panic | e> a
 real_run body =
   handle body () with
-    | ctl run cmd k -> k (try_io (fn () -> Proc.run "sh" ["-c", cmd]))
+    | ctl run cmd k -> k (try_io (fn () -> Proc.run `sh -c \{cmd}`))
 
 dry_run : (Unit -> <Run, IO | e> a) -> <IO, Panic | e> a
 dry_run body =

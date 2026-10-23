@@ -292,7 +292,7 @@ Core IR のテキストは `eml_core_ir::pretty` が書き、`eml_core_ir::parse
   - `data/`: `data`、コンストラクタ、`match`、パターン
   - `files/`: `FileIn.FileIn` と `FileIn.open` / `FileIn.read_all` / `FileIn.close`、`FileOut` の書き込みと書き出し、中断のときの `FileIn` と `FileOut` の解放、ファイルの実行時エラー
   - `modules/`: import、修飾した名前、`pub`、Prelude と標準ライブラリの修飾。ディレクトリのテストを置く
-  - `std/`: 標準ライブラリの関数 ([標準ライブラリ](../spec/stdlib.md))。`List`、`String`、`Env`、`Stdin`、`Fs.read_text` と `write_text`、`FileIn.read_line`、`Proc.run`、`eprintln`、`Yield`、`Fail`、`State`、`Iter`、文字列の核の実行時エラー。std のモジュールと同じ名前のテスト (`yield.em` など) は `std_` を頭に付ける。入口のファイルが `yield.em` だと、`import Yield` がユーザーの根で大文字小文字だけが違うファイルを見つけて E1026 になり、標準ライブラリに進まないためである ([モジュールと名前解決](../spec/modules.md) の「標準ライブラリ」)
+  - `std/`: 標準ライブラリの関数 ([標準ライブラリ](../spec/stdlib.md))。`List`、`String`、`Env`、`Stdin`、`Fs.read_text` と `write_text`、`FileIn.read_line`、`Proc`、`eprintln`、`Yield`、`Fail`、`State`、`Iter`、文字列の核の実行時エラー。std のモジュールと同じ名前のテスト (`yield.em` など) は `std_` を頭に付ける。入口のファイルが `yield.em` だと、`import Yield` がユーザーの根で大文字小文字だけが違うファイルを見つけて E1026 になり、標準ライブラリに進まないためである ([モジュールと名前解決](../spec/modules.md) の「標準ライブラリ」)
   - `arrays/`: 配列の組み立て、読み書き、範囲外の添字、共有した配列の書き込み
   - `chars/`: `Char` のリテラル、パターン、比較、表示と、`Std.Char` の変換と ASCII の判定
   - `byte/`: `Byte` のリテラル、パターン、比較、表示
@@ -325,7 +325,7 @@ Core IR のテキストは `eml_core_ir::pretty` が書き、`eml_core_ir::parse
 - その後で、新しい `Control` を持つ別の `RunConfig` で、速いモードでも実行する。標準出力と、標準エラーと、書いたファイルと、終わり方 (成功か、誤りの文言) が検査モードと同じことを確かめる。速いモードを後に流すのは、速いモードは前提を確かめないので、VM の誤りがあると未定義の動作になり、1つのテストの失敗が同じプロセスで流すほかのファイルのテストまで壊しうるためである
 - `run-fail` のテストは、検査モードの誤りが `fast_mode_reports` を満たすときだけ、速いモードで流す。満たさないのは、リーク、VM の内部の誤り (`VmFault::Internal`)、extern のヒープの誤り (`VmFault::Extern(Fault::Heap(_))`) である。どれも検査モードだけが見つけるので、VM 自身の誤りを意味し、速いモードで流すとメモリを壊すことがある。それ以外の誤り (算術、出力、入出力、UTF-8) は両方のモードが同じ文言で報告する
 - 実行ごとに新しい `RunConfig` を作るのは、止める理由のビットが `Control::clear` でしか下りないためである。使い回すと、前の実行で立ったビットで次の実行がすぐ止まる ([VM](../spec/vm.md) の「上限と割り込み」)
-- 標準出力と標準エラーは、テストの Host の `CaptureHost` ([VM](../spec/vm.md) の「置き場所」) で別々に捕まえる。出力とファイルの読みは、メモリの書き込み先と `Buffering::Block` を持つ `StdHost` に任せるので、出力のまとめ方は `eml run` と同じである。`file_root` はそのテストのディレクトリで、`run-fail/files` のテストはこれに頼る。引数、標準入力、環境変数は付属のファイルのものだけで、本物の環境は読まない。子のプロセス (`Proc.run`) は本物を起動するので、`sh` のある環境で流す
+- 標準出力と標準エラーは、テストの Host の `CaptureHost` ([VM](../spec/vm.md) の「置き場所」) で別々に捕まえる。出力とファイルの読みは、メモリの書き込み先と `Buffering::Block` を持つ `StdHost` に任せるので、出力のまとめ方は `eml run` と同じである。`file_root` はそのテストのディレクトリで、`run-fail/files` のテストはこれに頼る。引数、標準入力、環境変数は付属のファイルのものだけで、本物の環境は読まない。子のプロセス (`Proc` の起動) は本物を起動するので、`sh`、`sort`、`cat` のある環境で流す
 
 ## REPL のトランスクリプト
 

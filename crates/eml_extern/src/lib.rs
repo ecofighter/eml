@@ -146,6 +146,7 @@ pub enum ExternType {
     Stdin,
     Stdout,
     Stderr,
+    Child,
     Array,
     MutArray,
 }
@@ -174,6 +175,7 @@ impl ExternType {
         ExternType::Stdin,
         ExternType::Stdout,
         ExternType::Stderr,
+        ExternType::Child,
         ExternType::Array,
         ExternType::MutArray,
     ];
@@ -202,6 +204,7 @@ impl ExternType {
             ExternType::Stdin => row("Std.Stdin.Stdin", Linearity::Lin, Repr::Obj),
             ExternType::Stdout => row("Std.Stdout.Stdout", Linearity::Lin, Repr::Obj),
             ExternType::Stderr => row("Std.Stderr.Stderr", Linearity::Lin, Repr::Obj),
+            ExternType::Child => row("Std.Proc.Child", Linearity::Lin, Repr::Obj),
             ExternType::Array => generic("Prelude.Array", Linearity::Unr),
             ExternType::MutArray => generic("Prelude.MutArray", Linearity::Lin),
         }
@@ -401,7 +404,18 @@ pub enum Extern {
     FileOutWriteLine,
     FileOutFlush,
     FileOutCloseRaw,
-    ProcStatus,
+    ProcSpawn,
+    ProcWait,
+    ProcExited,
+    ProcCloseStdin,
+    ProcWrite,
+    ProcWriteBytes,
+    ProcWriteLine,
+    ProcReadChunk,
+    ProcReadAllBytes,
+    ProcReadAll,
+    ProcReadLineBytes,
+    ProcReadLine,
     Exit,
     Panic,
     ArrayMake,
@@ -614,7 +628,18 @@ impl Extern {
         Extern::FileOutWriteLine,
         Extern::FileOutFlush,
         Extern::FileOutCloseRaw,
-        Extern::ProcStatus,
+        Extern::ProcSpawn,
+        Extern::ProcWait,
+        Extern::ProcExited,
+        Extern::ProcCloseStdin,
+        Extern::ProcWrite,
+        Extern::ProcWriteBytes,
+        Extern::ProcWriteLine,
+        Extern::ProcReadChunk,
+        Extern::ProcReadAllBytes,
+        Extern::ProcReadAll,
+        Extern::ProcReadLineBytes,
+        Extern::ProcReadLine,
         Extern::Exit,
         Extern::Panic,
         Extern::ArrayMake,
@@ -1159,7 +1184,111 @@ impl Extern {
                 Unr,
                 Purity::Effectful,
             ),
-            Extern::ProcStatus => row("Std.Proc.status", &[Obj, Obj], Int, Purity::Effectful),
+            // 引数は、プログラム、引数の列、環境の列、作業ディレクトリ、標準入力、標準出力、標準エラーの向きである
+            // (docs/spec/stdlib.md の「`Proc`」)
+            Extern::ProcSpawn => kinded(
+                "Std.Proc.spawn_raw",
+                &[Obj, Obj, Obj, Obj, Int, Int, Int],
+                &[Unr; 7],
+                Obj,
+                Lin,
+                Purity::Effectful,
+            ),
+            Extern::ProcWait => {
+                kinded("Std.Proc.wait", &[Obj], &[Lin], Int, Unr, Purity::Effectful)
+            }
+            // いつも `IO` の失敗で終わる。`exit` と同じく戻らない行である
+            Extern::ProcExited => FunctionRow {
+                name: "Std.Proc.exited",
+                params: &[Repr::Obj, Repr::Int],
+                ret: OpRet::Never,
+                param_kinds: &[Linearity::Unr, Linearity::Unr],
+                ret_kind: Linearity::Unr,
+                purity: Purity::Effectful,
+                borrowed: &[false, false],
+                with_arg: None,
+            },
+            Extern::ProcCloseStdin => kinded(
+                "Std.Proc.close_stdin",
+                &[Obj],
+                &[Lin],
+                Obj,
+                Lin,
+                Purity::Effectful,
+            ),
+            Extern::ProcWrite => writing("Std.Proc.write"),
+            Extern::ProcWriteBytes => writing("Std.Proc.write_bytes"),
+            Extern::ProcWriteLine => writing("Std.Proc.write_line"),
+            Extern::ProcReadChunk => borrowing(
+                &[false, true],
+                FunctionRow {
+                    with_arg: Some(1),
+                    ..kinded(
+                        "Std.Proc.read_chunk",
+                        &[Obj, Obj],
+                        &[Unr, Lin],
+                        Obj,
+                        Unr,
+                        Purity::Effectful,
+                    )
+                },
+            ),
+            Extern::ProcReadAllBytes => borrowing(
+                &[true],
+                FunctionRow {
+                    with_arg: Some(0),
+                    ..kinded(
+                        "Std.Proc.read_all_bytes",
+                        &[Obj],
+                        &[Lin],
+                        Obj,
+                        Unr,
+                        Purity::Effectful,
+                    )
+                },
+            ),
+            Extern::ProcReadAll => borrowing(
+                &[true],
+                FunctionRow {
+                    with_arg: Some(0),
+                    ..kinded(
+                        "Std.Proc.read_all",
+                        &[Obj],
+                        &[Lin],
+                        Obj,
+                        Unr,
+                        Purity::Effectful,
+                    )
+                },
+            ),
+            Extern::ProcReadLineBytes => borrowing(
+                &[true],
+                FunctionRow {
+                    with_arg: Some(0),
+                    ..kinded(
+                        "Std.Proc.read_line_bytes_raw",
+                        &[Obj],
+                        &[Lin],
+                        Obj,
+                        Unr,
+                        Purity::Effectful,
+                    )
+                },
+            ),
+            Extern::ProcReadLine => borrowing(
+                &[true],
+                FunctionRow {
+                    with_arg: Some(0),
+                    ..kinded(
+                        "Std.Proc.read_line_raw",
+                        &[Obj],
+                        &[Lin],
+                        Obj,
+                        Unr,
+                        Purity::Effectful,
+                    )
+                },
+            ),
             // 戻らない extern。VM が実行の底まで中断する (docs/spec/vm.md の「extern の中断」)
             Extern::Exit => FunctionRow {
                 name: "Prelude.exit",

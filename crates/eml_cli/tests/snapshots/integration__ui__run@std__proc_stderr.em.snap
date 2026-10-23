@@ -1,0 +1,16 @@
+---
+source: crates/eml_cli/tests/ui.rs
+expression: "format!(\"--- stdout ---\\n{stdout}--- stderr ---\\n{diagnostics}{stderr}{written}{exit}\")"
+input_file: tests/ui/run/std/proc_stderr.em
+---
+--- stdout ---
+inherit "out\n"
+merge_stderr "out\nerr\n"
+discard_stderr "out\n"
+out
+err
+run 0
+out
+run 0
+--- stderr ---
+err

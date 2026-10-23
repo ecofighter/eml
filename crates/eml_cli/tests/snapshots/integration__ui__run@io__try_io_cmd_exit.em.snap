@@ -1,0 +1,9 @@
+---
+source: crates/eml_cli/tests/ui.rs
+expression: "format!(\"--- stdout ---\\n{stdout}--- stderr ---\\n{diagnostics}{stderr}{written}{exit}\")"
+input_file: tests/ui/run/io/try_io_cmd_exit.em
+---
+--- stdout ---
+Other: command `sh` exited with code 3
+Other: command `sh` exited with code 143
+--- stderr ---

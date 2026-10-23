@@ -1,0 +1,12 @@
+---
+source: crates/eml_cli/tests/ui.rs
+expression: "format!(\"--- stdout ---\\n{stdout}--- stderr ---\\n{diagnostics}{stderr}{written}{exit}\")"
+input_file: tests/ui/run/std/proc_env.em
+---
+--- stdout ---
+"[foo] []\n"
+"[z] [b c]\n"
+"[] []\n"
+Other: cannot run `sh`: I/O error
+Other: cannot run `sh`: I/O error
+--- stderr ---

@@ -454,8 +454,8 @@ pub(crate) struct Child {
 /// Host に子のプロセスを起動させる。`args` と `env` は、各要素を「バイト長の十進、NUL、本文」の順に並べた列で、
 /// `env` はキーと値を交互に置く。`cwd` が空なら作業ディレクトリを設定しない。向きの値は、`stdin` と `stdout` が 0
 /// (受け継ぐ)、1 (空)、2 (pipe)、`stderr` が 0 (受け継ぐ)、1 (標準出力に合わせる)、2 (捨てる) である。読めない列、
-/// NUL を含む要素、範囲の外の向きは、起動の誤り (`InvalidInput`) にする。止める語が起動の前に立っていれば起動しない
-/// (docs/spec/object-model.md の「実行の制御」)。
+/// NUL を含む要素、空か `=` を含む環境変数の名前、範囲の外の向きは、起動の誤り (`InvalidInput`) にする。止める語が
+/// 起動の前に立っていれば起動しない (docs/spec/object-model.md の「実行の制御」)。
 #[verifier::external_body]
 #[expect(clippy::too_many_arguments, reason = "the seven arguments of `spawn_raw`")]
 pub(crate) fn host_spawn(
@@ -493,6 +493,10 @@ pub(crate) fn host_spawn(
                 return Err(invalid());
             }
             let env: Vec<(&str, &str)> = pairs.chunks(2).map(|p| (p[0], p[1])).collect();
+            // `=` を含む名前は OS が名前と値の区切りを取り違え、空の名前は設定できない
+            if env.iter().any(|(name, _)| name.is_empty() || name.contains('=')) {
+                return Err(invalid());
+            }
             let spawn = Spawn {
                 program,
                 args: &args,

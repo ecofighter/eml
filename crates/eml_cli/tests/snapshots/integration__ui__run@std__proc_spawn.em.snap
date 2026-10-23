@@ -1,0 +1,22 @@
+---
+source: crates/eml_cli/tests/ui.rs
+expression: "format!(\"--- stdout ---\\n{stdout}--- stderr ---\\n{diagnostics}{stderr}{written}{exit}\")"
+input_file: tests/ui/run/std/proc_spawn.em
+---
+--- stdout ---
+line 1
+line 10
+line 2
+line 3
+line 4
+line 5
+line 6
+line 7
+line 8
+line 9
+sort 0
+Bytes [97, 32, 98]
+cat 0
+Some Bytes [103, 111, 116, 32, 104, 101, 108, 108, 111] "oops\n"
+sh 0
+--- stderr ---

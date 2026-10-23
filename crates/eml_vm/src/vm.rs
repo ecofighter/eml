@@ -939,7 +939,11 @@ fn run_extern<M: Mode>(
             | Extern::StdinReadAll
             | Extern::StdinReadLine
             | Extern::StdinReadAllBytes
-            | Extern::StdinReadLineBytes => {
+            | Extern::StdinReadLineBytes
+            | Extern::ProcReadAll
+            | Extern::ProcReadLine
+            | Extern::ProcReadAllBytes
+            | Extern::ProcReadLineBytes => {
                 let (handle, read, form) = match ext {
                     Extern::ReadAll => (Handle::FileIn, ReadAmount::All, Form::Text),
                     Extern::ReadLine => (Handle::FileIn, ReadAmount::Line, Form::Text),
@@ -948,16 +952,20 @@ fn run_extern<M: Mode>(
                     Extern::StdinReadAll => (Handle::Stdin, ReadAmount::All, Form::Text),
                     Extern::StdinReadLine => (Handle::Stdin, ReadAmount::Line, Form::Text),
                     Extern::StdinReadAllBytes => (Handle::Stdin, ReadAmount::All, Form::Bytes),
-                    _ => (Handle::Stdin, ReadAmount::Line, Form::Bytes),
+                    Extern::StdinReadLineBytes => (Handle::Stdin, ReadAmount::Line, Form::Bytes),
+                    Extern::ProcReadAll => (Handle::Child, ReadAmount::All, Form::Text),
+                    Extern::ProcReadLine => (Handle::Child, ReadAmount::Line, Form::Text),
+                    Extern::ProcReadAllBytes => (Handle::Child, ReadAmount::All, Form::Bytes),
+                    _ => (Handle::Child, ReadAmount::Line, Form::Bytes),
                 };
                 let w = ctx.handle_read(task.get(arg(0)), handle, read, form)?;
                 task.set(dst, w);
             }
-            Extern::ReadChunk | Extern::StdinReadChunk => {
-                let handle = if ext == Extern::ReadChunk {
-                    Handle::FileIn
-                } else {
-                    Handle::Stdin
+            Extern::ReadChunk | Extern::StdinReadChunk | Extern::ProcReadChunk => {
+                let handle = match ext {
+                    Extern::ReadChunk => Handle::FileIn,
+                    Extern::StdinReadChunk => Handle::Stdin,
+                    _ => Handle::Child,
                 };
                 let chunk = ReadAmount::Chunk(task.get(arg(0)));
                 let w = ctx.handle_read(task.get(arg(1)), handle, chunk, Form::Bytes)?;
@@ -995,7 +1003,10 @@ fn run_extern<M: Mode>(
             | Extern::StdoutWriteLine
             | Extern::StderrWrite
             | Extern::StderrWriteBytes
-            | Extern::StderrWriteLine => {
+            | Extern::StderrWriteLine
+            | Extern::ProcWrite
+            | Extern::ProcWriteBytes
+            | Extern::ProcWriteLine => {
                 let (handle, write) = match ext {
                     Extern::FileOutWrite => (Handle::FileOut, Write::Text),
                     Extern::FileOutWriteBytes => (Handle::FileOut, Write::Bytes),
@@ -1005,7 +1016,10 @@ fn run_extern<M: Mode>(
                     Extern::StdoutWriteLine => (Handle::Stdout, Write::Line),
                     Extern::StderrWrite => (Handle::Stderr, Write::Text),
                     Extern::StderrWriteBytes => (Handle::Stderr, Write::Bytes),
-                    _ => (Handle::Stderr, Write::Line),
+                    Extern::StderrWriteLine => (Handle::Stderr, Write::Line),
+                    Extern::ProcWrite => (Handle::Child, Write::Text),
+                    Extern::ProcWriteBytes => (Handle::Child, Write::Bytes),
+                    _ => (Handle::Child, Write::Line),
                 };
                 let w = ctx.handle_write(task.get(arg(1)), handle, task.get(arg(0)), write)?;
                 task.set(dst, w);
@@ -1155,9 +1169,29 @@ fn run_extern<M: Mode>(
                 let w = ctx.env_var(task.get(arg(0)))?;
                 task.set(dst, w);
             }
-            Extern::ProcStatus => {
-                let code = ctx.proc_status(task.get(arg(0)), task.get(arg(1)))?;
+            Extern::ProcSpawn => {
+                let w = ctx.proc_spawn(
+                    task.get(arg(0)),
+                    task.get(arg(1)),
+                    task.get(arg(2)),
+                    task.get(arg(3)),
+                    task.raw(arg(4)),
+                    task.raw(arg(5)),
+                    task.raw(arg(6)),
+                )?;
+                task.set(dst, w);
+            }
+            Extern::ProcWait => {
+                let code = ctx.proc_wait(task.get(arg(0)))?;
                 task.set_raw(dst, code);
+            }
+            Extern::ProcCloseStdin => {
+                let w = ctx.proc_close_stdin(task.get(arg(0)))?;
+                task.set(dst, w);
+            }
+            // いつも誤りを返すので、宛先には書かない
+            Extern::ProcExited => {
+                ctx.proc_exited(task.get(arg(0)), task.raw(arg(1)))?;
             }
             Extern::FloatCompare => task.set_raw(
                 dst,

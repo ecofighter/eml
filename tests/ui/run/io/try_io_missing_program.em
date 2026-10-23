@@ -1,9 +1,9 @@
--- `Proc.run` returns an `Int`; when it fails, its result slot holds the dummy object until the yield check sends the
--- abort on, and `try_io` catches it.
+-- When `Proc.run` cannot start the child, `spawn_raw` fails with `NotFound` and the abort lands in `try_io`, which
+-- returns the error. The failing extern's result slot is never read.
 import Proc
 
 main : Unit -> <IO, Panic> Unit
 main () =
-  match try_io (fn () -> Proc.run "eml-no-such-program" []) with
+  match try_io (fn () -> Proc.run `eml-no-such-program`) with
     | Ok code -> println "exit \{code}"
     | Err e -> println "\{show e.kind}: \{e}"
