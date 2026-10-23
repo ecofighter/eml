@@ -164,15 +164,10 @@ fn recovery_empties_the_evv_and_the_yield_state<M: Mode>() {
 
 /// 写せない物体に根が届けば、回復は `Unrecoverable` を返し、根とヒープの物体を変えない。
 fn recovery_refuses_what_it_cannot_copy<M: Mode>() {
-    let cases: [fn(&mut Heap<M>) -> Word; 4] = [
+    let cases: [fn(&mut Heap<M>) -> Word; 3] = [
         |heap| heap.alloc_foreign(5u64, false),
         |heap| heap.alloc_data(0, 0, 1, true),
         |heap| unsafe { heap.alloc_immortal(1, Meta::new(0, 0, Kind::Data, false)) },
-        |heap| {
-            let x = cons(heap, Word::imm(0), Word::imm(0));
-            unsafe { heap.share(x, 1) }.unwrap();
-            x
-        },
     ];
     for make in cases {
         let mut ctx = ctx::<M>();
@@ -188,6 +183,68 @@ fn recovery_refuses_what_it_cannot_copy<M: Mode>() {
         assert_eq!(mortal(ctx.heap()), before);
         assert_eq!(root(&mut ctx, 0), w);
     }
+}
+
+/// 共有の物体 (rc が負) も、回復は局所の物体として写す。すべてのタスクを捨てるので、写しを持つのは根と写した親だけで
+/// あり、2つ目からの使い手は `dup` する (docs/spec/object-model.md の「回復」)。
+fn recovery_copies_shared_objects_as_local<M: Mode>() {
+    let mut ctx = ctx::<M>();
+    unsafe {
+        let heap = ctx.heap_mut();
+        let x = cons(heap, Word::imm(7), Word::imm(8));
+        heap.share(x, 1).unwrap();
+        heap.dup(x).unwrap();
+        assert_eq!(rc(x), -2);
+        let both = cons(heap, x, x);
+        let y = list(heap, 2);
+        heap.share(y, 1).unwrap();
+        let holder = cons(heap, both, y);
+        ctx.root_set(0, holder).unwrap();
+        ctx.recover().unwrap();
+    }
+    // holder、both、x の写し、y の2つのセルだけが残る
+    assert_eq!(mortal(ctx.heap()), 5);
+    let holder = root(&mut ctx, 0);
+    unsafe {
+        let heap = ctx.heap_mut();
+        let both = heap.field(holder, 0).unwrap();
+        let y = heap.field(holder, 1).unwrap();
+        let x = heap.field(both, 0).unwrap();
+        assert_eq!(heap.field(both, 1), Ok(x));
+        assert_eq!(rc(x), 2);
+        assert_eq!(heap.is_unique(x), Ok(false));
+        assert_eq!(heap.field(x, 0), Ok(Word::imm(7)));
+        assert_eq!(heap.field(x, 1), Ok(Word::imm(8)));
+        let tail = heap.field(y, 1).unwrap();
+        for (cell, head) in [(y, 1), (tail, 0)] {
+            assert!(rc(cell) > 0);
+            assert_eq!(heap.is_unique(cell), Ok(true));
+            assert_eq!(heap.field(cell, 0), Ok(Word::imm(head)));
+        }
+        assert_eq!(heap.field(tail, 1), Ok(Word::imm(0)));
+        for w in [holder, both] {
+            assert_eq!(heap.is_unique(w), Ok(true));
+        }
+    }
+    unsafe { ctx.heap_mut().decref(holder) }.unwrap();
+    assert_eq!(mortal(ctx.heap()), 0);
+}
+
+/// 共有の印がある `lin` の物体は、rc が負でも写せない。
+fn recovery_still_refuses_a_lin_object_at_a_negative_rc<M: Mode>() {
+    let mut ctx = ctx::<M>();
+    let w = unsafe {
+        let heap = ctx.heap_mut();
+        let w = heap.alloc_data(0, 0, 1, true);
+        super::raw::set_rc(heap, w, -1);
+        let holder = cons(heap, w, Word::imm(0));
+        ctx.root_set(0, holder).unwrap();
+        holder
+    };
+    let before = mortal(ctx.heap());
+    assert_eq!(unsafe { ctx.recover() }, Err(HeapError::Unrecoverable));
+    assert_eq!(mortal(ctx.heap()), before);
+    assert_eq!(root(&mut ctx, 0), w);
 }
 
 /// 回復が一時に使うメモリは、根から届く物体の数で決まり、古いヒープの大きさによらない。回復は確保量の上限で止まった
@@ -259,6 +316,8 @@ both_modes!(
     recovery_empties_the_evv_and_the_yield_state,
     recovery_copies_floats,
     recovery_refuses_what_it_cannot_copy,
+    recovery_copies_shared_objects_as_local,
+    recovery_still_refuses_a_lin_object_at_a_negative_rc,
     recovery_needs_no_memory_in_proportion_to_the_old_heap,
 );
 

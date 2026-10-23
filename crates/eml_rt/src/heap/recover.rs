@@ -641,9 +641,6 @@ impl<M: Mode> Heap<M> {
             }
             return Err(HeapError::Unrecoverable);
         }
-        if rc < 0 {
-            return Err(HeapError::Unrecoverable);
-        }
         let m = self.core.meta_get(h);
         if m.lin() {
             return Err(HeapError::Unrecoverable);
