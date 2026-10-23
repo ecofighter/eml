@@ -31,9 +31,10 @@ cargo nextest run                    # all tests (`cargo test` runs the same tes
 cargo nextest run -p eml_syntax --test integration parser::empty_file   # a single test
 cargo nextest run -p eml_cli --test integration -E 'test(ui::)'   # UI tests
 cargo insta review                   # accept snapshots
-cargo clippy --all-targets && cargo fmt
+cargo clippy --all-targets -- -D warnings && cargo fmt
 cargo clippy -p eml_cli --no-default-features --features types -- -D warnings   # non-default features (none, types, core; eml_test_support also hir)
 cargo run -p eml_cli -- check <file.em>    # or: run [--debug-heap] <file.em> [args...] (the VM; --debug-heap is checked mode; `eml <file.em> [args...]` is the same), repl [--debug-heap] [file.em] (the terminal REPL)
+nix shell nixpkgs#shellcheck -c nix run nixpkgs#actionlint -- .github/workflows/ci.yml   # lint the CI workflow
 nix build                            # build the eml binary (eml_cli)
 nix develop .#miri -c env MIRIFLAGS="-Zmiri-strict-provenance" cargo miri test -p eml_rt trusted::   # Miri, trusted tests only; run once more with -Zmiri-tree-borrows added
 nix develop .#miri -c env MIRIFLAGS="-Zmiri-strict-provenance" cargo miri test -p eml_vm --test integration miri::   # Miri on the VM's small runs (same two settings)
@@ -111,6 +112,7 @@ The rules are in docs/implementation/testing.md; the facts below are the ones ev
 - `eml_test_support` (dev-only) wraps `eml_cli::Session` for integration tests. Use it only from `tests/`, never from `#[cfg(test)]` in `src/`: the crate under test would be linked twice. Stages are features (`hir` < `types` < `core` < `run`); each crate enables only up to its own stage, so its tests still build while downstream crates are broken mid-refactor.
 - Core IR and LIR tests are written as IR text read by `eml_core_ir::parse` / `eml_lir::parse`; hand-written LIR tests live in `crates/eml_lir/tests` (docs/implementation/testing.md の「LIR のテキストの形」).
 - The `bench/` programs have their `RunStats` pinned by inline snapshots in `crates/eml_vm/tests/bench.rs`, so a change in work counts is an expected-value change. When a stage that touched `eml_vm`, `eml_rt`, `eml_lir`, `eml_core_ir`, `std/` or `bench/` closes, replace the three tables in docs/implementation/benchmarks.md の「今の数値」 with fresh `bench/run.sh`, `bench/rt.sh` and `bench/scripts.sh` output measured on a clean tree; the stage-by-stage history is the file's git log.
+- CI (`.github/workflows/ci.yml`) runs the tests, clippy and the feature-combo clippy on macOS, Linux and Windows, `cargo fmt --check` on Linux, and Verus, verusfmt and Miri on Linux through nix; it checks pass/fail only, never timing, and never retries (docs/implementation/testing.md の「CI」).
 - A change to `eml_rt` has a gate of its own: see `crates/eml_rt/CLAUDE.md`.
 
 ## Syntax

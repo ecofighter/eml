@@ -10,6 +10,7 @@
 - 既存のテストは合意済みの仕様である。テストが失敗したら実装を直す。テストを変えるときは、下の「テストの変更の運用」に従う
 - スナップショットは `insta` を使う。多くはインラインのスナップショット (`@"..."`) にする
 - スナップショットの更新は `cargo insta review` で行う
+- テストは macOS、Linux、Windows の CI でも流す。CI が流すものは「CI」にある
 
 ## テストの変更の運用
 
@@ -453,7 +454,20 @@ Prelude のリストには4つのテストがある。長さ 1000 と 2000 の�
 
 ## feature の組み合わせの確認
 
-ワークスペースの `cargo clippy --all-targets` は、各 crate を既定の feature でしか検査しない。`eml_cli` と `eml_test_support` の feature や、feature で切り替えるコードを変えたときは、既定でない組み合わせの lib も検査する。テストと bin は `run` を前提にするので、`--all-targets` は付けない。上流の crate のテストが下流の crate を組み立てないことは、`cargo tree -p eml_hir -e normal,dev` と `cargo tree -p eml_types -e normal,dev` に下流の段階の crate が出ないことで確かめる。
+ワークスペースの `cargo clippy --all-targets` は、各 crate を既定の feature でしか検査しない。`eml_cli` と `eml_test_support` の feature や、feature で切り替えるコードを変えたときは、既定でない組み合わせの lib も検査する。組み合わせは、`eml_cli` の feature なし、`types`、`core` と、`eml_test_support` の feature なし、`hir`、`types`、`core` の7つで、どれも `cargo clippy -p <crate> --no-default-features [--features <feature>] -- -D warnings` で流す。テストと bin は `run` を前提にするので、`--all-targets` は付けない。上流の crate のテストが下流の crate を組み立てないことは、`cargo tree -p eml_hir -e normal,dev` と `cargo tree -p eml_types -e normal,dev` に下流の段階の crate が出ないことで確かめる。
+
+## CI
+
+`.github/workflows/ci.yml` は、main への push、pull request、手動の起動で、次の4つのジョブを流す。
+
+- `test`: macOS (macos-15)、Linux (ubuntu-24.04)、Windows (windows-2025) のそれぞれで、`cargo nextest run`、`cargo clippy --all-targets -- -D warnings`、既定でない feature の clippy (「feature の組み合わせの確認」の7つ) を流す。toolchain は rustup が `rust-toolchain.toml` から入れ、`rustc -V` の版が `channel` と同じことを確かめる。Windows の target は `x86_64-pc-windows-msvc` だけで、ジョブは host がそれであることを確かめる。cargo-nextest は、ワークフローに書いた版を入れる
+- `fmt`: Linux で `cargo fmt --check` を流す
+- `verus`: Linux で、ふだんの devShell を通して `cargo verus verify -p eml_rt` と verusfmt の検査を流す
+- `miri`: Linux で、Miri の devShell を通して `trusted::` と `miri::` を続けて流す。借用の規則ごとにジョブを1つ立てる
+
+CI が見るのは合否だけである。テストの時間の条件 (「性能のテスト」) と Miri の CPU 時間の予算は開発機で確かめ、runner の速さに合わせて緩めない。runner は開発機より遅いが、nextest がテストを止める 60 秒は、1秒の条件より十分に長い。落ちたテストは流し直さない。合否が速さや順序で変わるテストは、流し直しで隠さずに直す。`#[ignore]` を付けたテストと `bench/` の計測は、CI で流さない。
+
+アクションは commit の SHA で固定し、版の名前をコメントに書く。nix のストアはキャッシュしない。cargo の依存のビルドをキャッシュするのは `test` ジョブだけで、保存するのは main の実行だけである。ワークフローを変えたら、`nix shell nixpkgs#shellcheck -c nix run nixpkgs#actionlint -- .github/workflows/ci.yml` で検査する。
 
 ## よく使うコマンド
 
@@ -468,7 +482,8 @@ cargo nextest run -p eml_cli --test integration -E 'test(ui::)'          # UI �
 EML_UI_FILTER=basics/hello.em cargo nextest run -p eml_cli --test integration -E 'test(ui::)'   # 1つの UI テストだけ流す
 cargo insta review                                   # スナップショットの承認
 cargo insta test --test-runner nextest --accept      # テストを流し、スナップショットを受け入れる
-cargo clippy --all-targets && cargo fmt
+cargo clippy --all-targets -- -D warnings && cargo fmt
+nix shell nixpkgs#shellcheck -c nix run nixpkgs#actionlint -- .github/workflows/ci.yml   # CI のワークフローの検査
 cargo nextest run --release -p eml_types --test integration --run-ignored ignored-only scaling::   # 型検査の時間の伸び (性能のテスト)
 cargo nextest run --release -p eml_hir --test integration --run-ignored ignored-only scaling::     # 名前の表を作る時間の伸び (性能のテスト)
 cargo nextest run --release -p eml_core_ir --test integration --run-ignored ignored-only instances::lowering   # 単相化の lower の時間の伸び (性能のテスト)
