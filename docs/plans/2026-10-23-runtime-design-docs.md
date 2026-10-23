@@ -385,6 +385,7 @@ a1〜a4 の呼び名の残りは、`grep -cE "$P" <ファイル>` で次の数�
   - 借用パラメータの入れ子の箇条は「段の列」の `borrowed-params` へ移るので、`docs/future/native.md` の「処理系」の Perceus の最適化の項目への2つの引用 (「目的と範囲」と「展開と最適化の前提」) を、`roadmap.md` の「段の列」への引用に直す
   - `f$ret` の項目を「ネイティブ化」の小見出しへ移すとき、前の文脈 (却下した呼び出し規約の案) が `native.md` へ移ったので、`native.md` の「呼び出し規約と入口」へのリンクを添える
   - 「非同期」の小見出しの項目は、`async.md` の「未決の論点と将来の拡張」の後に回す項目ごとに、後に回した理由と見直す条件を書き、`async.md` の既定と食い違わないようにする。「FFI と拡張」も `ffi.md` の同じ節と同じようにする
+  - 「マルチコア対応」の今の箇条のうち、左の子を先にする実行時エラーの規則と、失敗したときに種を表示する箇条は `multicore.md` に移った。消してよい。締めの段落 (後に回した項目を並べた段落) は、`05-integration.md` の 1.5 のマルチコアの一覧から書き直す。`multicore.md` の「未決の論点と将来の拡張」にあって 1.5 にない項目 (読むだけの共有、局所的な可変変数、`IO` と大域の状態など) は、`multicore.md` に既定と見直す条件があればそれに合わせて項目にし、なければ項目にしない。private な deque を後に回した理由は `multicore.md` の却下の理由と同じにする
   - この節の行の番号は基準のコミット (4a0fbdf6) のものである。前の作業で動いたので、中身で探す
   - 題は `Lay out the stage sequence`
 - 実装者に任せること: 各段の「中身」の文の書き方
@@ -416,6 +417,7 @@ a1〜a4 の呼び名の残りは、`grep -cE "$P" <ファイル>` で次の数�
   - `benchmarks.md` の 183、330、461、485、491 行の「ロードマップのネイティブ化の項目」の完了の条件と目標を、`native.md` の「目的と範囲」への引用にする。331 行の `read_into` の「処理系」はそのまま
   - `architecture.md` の 10 行の「ネイティブのバックエンドは未定である」を、Cranelift で JIT と AOT を出すことと `native.md` へのリンクに直す
   - `status.md` の 48 行で、借用パラメータとネイティブ化を「その後の項目」でなく「段の列」に引く
+  - `overview.md` の a1 と a2 の行 (104 行) を置き換える worker の行は、`multicore.md` の「スレッドと worker」の定義に合わせ、そこへリンクする。`README.md` の `multicore.md` の行 (38 行) の説明は、書き直した `multicore.md` の節 (スレッドと worker、スケジューラ、止める手順など) を挙げる
   - 題は `Point the maps at the new designs`
 - 実装者に任せること: 文の書き方
 - 条件: いつも
@@ -434,8 +436,16 @@ a1〜a4 の呼び名の残りは、`grep -cE "$P" <ファイル>` で次の数�
 ### T-7: spec の言い回しを設計に合わせる
 
 - 目的: spec の中の古い呼び名 (`run_scheduler`、a1、a2-cancel) と、移した中身への引用を直す。規則は変えない
-- 変えるファイル: `docs/spec/core-ir.md` (9 行と 13 行の「ネイティブのバックエンドは未定」「Cranelift か LLVM」を Cranelift と `native.md` への引用に、232 行の借用パラメータの引用を「段の列」に)、`docs/spec/expressions.md` (「並行処理」を `Async.run` と `Net` の例に)、`docs/spec/lir.md` (60 行の借用パラメータの引用を「段の列」に、290 行)、`docs/spec/object-model.md` (358 行、732〜735 行)、`docs/spec/vm.md` (391 行、400 行、402 行)
-- 作業: 題は `Align spec prose with the runtime design`
+- 変えるファイル: `docs/spec/core-ir.md` (9 行と 13 行の「ネイティブのバックエンドは未定」「Cranelift か LLVM」を Cranelift と `native.md` への引用に、232 行の借用パラメータの引用を「段の列」に)、`docs/spec/expressions.md` (「並行処理」を `Async.run` と `Net` の例に)、`docs/spec/lir.md` (60 行の借用パラメータの引用を「段の列」に、290 行)、`docs/spec/object-model.md` (194 行、358 行、732〜735 行)、`docs/spec/vm.md` (391 行、400 行、402 行)
+- 作業: 引用先は、書き直した `multicore.md` の次の見出しにする (行は基準のコミットのもの)
+  - `object-model.md` の 194 行: 「別のスレッドからの解放」は「確定した設計判断」の 7 で決まったので、「決めていない」の文を、決まったことへの引用に直す
+  - `object-model.md` の 358 行 → 「別のスレッドからの解放」
+  - `object-model.md` の 732〜735 行 → 「1つの worker での実行」。行の型は `<>` でなく `<never e>` にする
+  - `vm.md` の 400 行 → 「未決の論点と将来の拡張」 (`par` の子の取り消しは、そこの項目である)
+  - `vm.md` の 402 行 → 「Rust の側が持つ語」
+  - `expressions.md` の 358 行の `run_scheduler` → `Async.run`
+  - 今の単一スレッドの動作を書いた文 (`vm.md` の 355 行のシグナルの受け方など) は規則なので変えない
+  - 題は `Align spec prose with the runtime design`
 - 実装者に任せること: 文の書き方
 - 条件: いつも
 - 完了の条件:
