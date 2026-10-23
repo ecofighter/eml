@@ -344,7 +344,7 @@ Core IR のテキストは `eml_core_ir::pretty` が書き、`eml_core_ir::parse
 
 ## 文書の引用の検査
 
-`crates/eml_cli/tests/citations.rs` は、コメントと文書の引用を3つ確かめる。走査するのは `crates`、`docs`、`tests`、`std`、`bench` と、根の `CLAUDE.md` と `README.md` である。標準ライブラリの `.em` のコメントと、`bench/` の `.em`、`.py`、`.sh` のコメントも、`docs/…` の見出しを引ける。
+`crates/eml_cli/tests/citations.rs` は、コメントと文書の引用を3つ確かめる。走査するのは `crates`、`docs`、`tests`、`std`、`bench`、`nix` と、根の `CLAUDE.md`、`README.md`、`flake.nix`、`rust-toolchain.toml`、`.config/nextest.toml`、`.github/workflows/ci.yml` である。標準ライブラリの `.em` のコメントと、`bench/` の `.em`、`.py`、`.sh` のコメント、設定のファイルのコメントも、`docs/…` の見出しを引ける。
 
 - `docs/…/ファイル.md の「見出し」` の形の引用と、Markdown のリンクの直後に `の「見出し」` を続けた引用は、行き先のファイルにその見出しがある。照合では空白を無視するので、引用を折り返してもよい
 - 文書の Markdown のリンクの行き先がある。コード片とコードブロックの中は見ない。IR のテキストの `prim ev_clause[State.get](e.2)` のように、リンクと同じ `](` を含むためである。閉じないコードブロックと、行の中で閉じないコード片は誤りにする。どちらも後ろのリンクを知らないうちに見落とすためで、文書ではコード片を行をまたがずに書く
