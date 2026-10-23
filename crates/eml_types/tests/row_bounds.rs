@@ -226,3 +226,36 @@ fn an_inferred_bound_broken_inside_its_group() {
       note: a row variable written `never e` admits only `Panic` and effects whose operations are all `never`; `IO` and the effects of `var` are not among them
     ");
 }
+
+#[test]
+fn a_bound_drops_the_carry_it_entails() {
+    let text = format!(
+        "import FileIn\n\n{}",
+        with_head(
+            "effect Choice where\n  multi choose : Unit -> Bool\n\nhold : (Unit -> <never e> Unit) -> <IO | e> Unit\nhold action =\n  let f = FileIn.open \"input.txt\"\n  action ()\n  FileIn.close f\n\npick : Unit -> <Choice> Unit\npick () = if choose () then () else ()\n\nmain : Unit -> <IO> Unit\nmain () =\n  handle hold pick with\n    | ctl choose () k -> k True",
+        )
+    );
+    assert_eq!(
+        check_short(&text),
+        [
+            "E2020 25:10 the row passed to `hold` may perform `Choice`, but `hold` allows only `never` operations"
+        ]
+    );
+    assert_eq!(kinds(&text, "hold"), NEVER);
+}
+
+#[test]
+fn a_bound_drops_the_carry_inside_its_group() {
+    let text = format!(
+        "import FileIn\n\n{}",
+        with_head(
+            "effect Choice where\n  multi choose : Unit -> Bool\n\nhold : Bool -> (Unit -> <never e> Unit) -> <IO | e> Unit\nhold b action =\n  let f = FileIn.open \"input.txt\"\n  action ()\n  FileIn.close f\n  if b then again () else ()\n\nagain : Unit -> <IO> Unit\nagain () =\n  handle hold False pick with\n    | ctl choose () k -> k True\n\npick : Unit -> <Choice> Unit\npick () = if choose () then () else ()",
+        )
+    );
+    assert_eq!(
+        check_short(&text),
+        [
+            "E2020 23:10 the row passed to `hold` may perform `Choice`, but `hold` allows only `never` operations"
+        ]
+    );
+}

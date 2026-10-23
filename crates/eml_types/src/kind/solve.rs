@@ -41,7 +41,22 @@ pub(crate) fn solve_scc(
     let merged = merge(members, schemes);
     let (lin, lin_violated, lin_causes) = solve_with_causes(&merged.lin);
     let (mult, mult_violated, mult_causes) = solve_with_causes(&merged.mult);
-    let carry_violated = violated_carries(&merged.carries, &lin, &mult);
+    let lin_graph = Graph::new(
+        &merged.lin,
+        merged.own.iter().map(|own| own.lin.clone()).collect(),
+    );
+    let mult_graph = Graph::new(
+        &merged.mult,
+        merged.own.iter().map(|own| own.mult.clone()).collect(),
+    );
+    let broken = broken_bounds(&merged.mult, &mult_violated, &mult_graph);
+    let carry_violated: Vec<usize> = violated_carries(&merged.carries, &lin, &mult)
+        .into_iter()
+        .filter(|&index| match merged.carries[index].mult {
+            Bound::Var(v) => !broken[mult_graph.component[v.index()]],
+            Bound::Const(_) => true,
+        })
+        .collect();
     let lin_reported = lin_violated.iter().filter_map(|&index| {
         let origin = reportable(&merged.lin.origins[index])?;
         Some(with_cause(origin, &merged.lin, index, &lin_causes))
@@ -64,14 +79,6 @@ pub(crate) fn solve_scc(
                 .filter_map(|&index| reportable(&merged.carries[index].origin)),
         )
         .collect();
-    let lin_graph = Graph::new(
-        &merged.lin,
-        merged.own.iter().map(|own| own.lin.clone()).collect(),
-    );
-    let mult_graph = Graph::new(
-        &merged.mult,
-        merged.own.iter().map(|own| own.mult.clone()).collect(),
-    );
     let sources = SourceIndex::new(&merged.mult);
     let schemes = (0..merged.own.len())
         .map(|member| {
@@ -94,6 +101,28 @@ pub(crate) fn solve_scc(
             offsets: merged.lin_offsets,
         },
     }
+}
+
+/// 成分ごとの、上向きの辺をたどって、報告する違反になった `Once` 以下の上限に届くか。届く成分の変数を row の側に
+/// 持つ持ち越しの制約は、破れても報告しない。上限を超えた row はすでに E2020 になっていて、上限の違反を直せば
+/// 持ち越しの制約も満たされる。上限から導ける持ち越しの制約をスキームに残さないのと同じく、1つの呼び出しを E2020 と
+/// E3006 の両方にしないためである (docs/spec/types.md の「推論」)。届く先を報告する違反に限るのは、報告しない由来の
+/// 上限 (シグネチャに書いたものなど) だけを根拠にして、持ち越しの誤りまで消さないためである。
+fn broken_bounds(
+    bounds: &Bounds<Multiplicity>,
+    violated: &[usize],
+    graph: &Graph<Multiplicity>,
+) -> Vec<bool> {
+    let mut seed = vec![false; graph.upper.len()];
+    for &index in violated {
+        if let (Bound::Var(v), Bound::Const(c)) = bounds.constraints[index]
+            && c <= Multiplicity::Once
+            && reportable(&bounds.origins[index]).is_some()
+        {
+            seed[graph.component[v.index()]] = true;
+        }
+    }
+    upward_closure(&graph.upward, seed, |a, b| a || b)
 }
 
 /// 違反した制約のうち報告するものの由来。由来を付け忘れた制約の違反は処理系の誤りである。debug ビルドでは止め、release
@@ -611,6 +640,9 @@ pub(super) struct Graph<T> {
     /// 成分の変数に付いた定数の上限の最小と、定数の下限の最大。
     upper: Vec<Option<T>>,
     lower: Vec<Option<T>>,
+    /// 成分ごとの、上向きの辺をすべてたどって届く成分 (自分を含む) の定数の上限の最小。`reach` と違い、残す成分でも
+    /// 止まらない。持ち越しの制約が上限から導けるかを、クラスのメソッドの含意 (`entail.rs`) と同じ規則で決めるのに使う。
+    closed_upper: Vec<Option<T>>,
     /// SCC の宣言ごとの自分の変数 (`Shape` の番号の順)。
     own: Vec<Vec<KindVar>>,
     /// 上向き (下限から上限へ) と下向きの辺。
@@ -743,10 +775,15 @@ impl<T: Level> Graph<T> {
         // 下向きの隣は番号が大きい
         let upward = Edges::new(upward, &upper, &owners, false);
         let downward = Edges::new(downward, &lower, &owners, true);
+        let closed_upper = upward_closure(&upward, upper.clone(), |a, b| match (a, b) {
+            (Some(a), Some(b)) => Some(a.min(b)),
+            (a, b) => a.or(b),
+        });
         Graph {
             component,
             upper,
             lower,
+            closed_upper,
             own,
             upward,
             downward,
@@ -809,6 +846,18 @@ impl<T: Level> Graph<T> {
         }
         (found, constant)
     }
+}
+
+/// 成分ごとに、上向きの辺をすべてたどって届く成分 (自分を含む) の `seed` を `join` でまとめる。
+fn upward_closure<U: Copy>(upward: &Edges, seed: Vec<U>, join: impl Fn(U, U) -> U) -> Vec<U> {
+    let mut out = seed;
+    // 上向きの隣は番号が小さいので、番号の順に見れば隣の値は決まっている
+    for component in 0..out.len() {
+        for &next in &upward.all[component] {
+            out[component] = join(out[component], out[next]);
+        }
+    }
+    out
 }
 
 /// Tarjan の方法で強連結成分の番号を振る。変数が多くても Rust のスタックを使わないよう、明示的なスタックでたどる
@@ -943,10 +992,21 @@ fn carry_residual(
 ) -> Vec<Carry> {
     let lin_kept = kept_components(lin_graph, member);
     let mult_kept = kept_components(mult_graph, member);
+    // 持ち越しの制約が求めるのは row の側が `Once` 以下であることなので、上限が `Once` 以下の自分の変数を row の側に
+    // 持つ組は、スキームに残る上限から導ける。残すと、上限を超える row を入れた1つの呼び出しが E2020 と E3006 の
+    // 両方になる (docs/spec/types.md の「推論」)
+    let entailed: HashSet<usize> = mult_kept
+        .iter()
+        .filter(|&(&component, _)| {
+            mult_graph.closed_upper[component].is_some_and(|upper| upper <= Multiplicity::Once)
+        })
+        .flat_map(|(_, shapes)| shapes.iter().copied())
+        .collect();
     let mut best: HashMap<(Bound<Linearity>, Bound<Multiplicity>), &Provenance> = HashMap::new();
     for carry in carries {
         let lins = lowers(lin_graph, &lin_kept, carry.lin, Linearity::Lin);
-        let mults = lowers(mult_graph, &mult_kept, carry.mult, Multiplicity::Multi);
+        let mut mults = lowers(mult_graph, &mult_kept, carry.mult, Multiplicity::Multi);
+        mults.retain(|mult| !matches!(mult, Bound::Var(v) if entailed.contains(&v.index())));
         for &lin in &lins {
             for &mult in &mults {
                 // 両側が定数の組はその本体の中の違反で、解いたときに報告済みである
