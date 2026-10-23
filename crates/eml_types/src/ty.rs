@@ -10,7 +10,8 @@ pub(crate) enum Linearity {
     Lin,
 }
 
-/// row に含まれてよい操作の上限。`Never` は `never` の操作だけを含む row で、row 変数の上限 `<never e>` が使う (docs/spec/types.md の「Kind」)。
+/// row に含まれてよい操作の上限。`Never` は `never` の操作だけを含む row で、row 変数の上限 `<never e>` が使う
+/// (docs/spec/types.md の「Kind」)。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub(crate) enum Multiplicity {
     Never,

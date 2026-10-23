@@ -89,6 +89,26 @@ fn a_multi_operation_exceeds_a_never_bound() {
     ");
 }
 
+/// 操作の引数の row は節の中で `Multi` 以上なので、来た所はエフェクトでなく多重度で示す。`helper` の結果の row の
+/// その row 変数は `main` の row に含まれないので、E2002 も出る (docs/implementation/diagnostics.md の E2020)。
+#[test]
+fn an_operation_argument_row_exceeds_a_never_bound() {
+    let text = with_head(
+        "effect Ask where\n  ask : (Unit -> <e> Int) -> Int\n\ngo : Unit -> <Ask> Int\ngo () = ask (fn () -> 1)\n\nmain : Unit -> <IO> Unit\nmain () =\n  let r = handle go () with\n    | fn ask g -> helper g\n  println (show r)",
+    );
+    insta::assert_snapshot!(check_full(&text), @"
+    E2002 18:19 `helper` performs `e`, which the signature of `main` does not allow
+      18:19 this call performs `e`
+      15:8 the row of this signature does not include it
+      help: add `e` to the row of the signature of `main`, as in `-> <e> ...`
+    E2020 18:19 the row passed to `helper` may perform `multi` operations, but `helper` allows only `never` operations
+      18:19 `helper` is used here
+      18:5 `multi` operations may be performed here
+      1:20 `helper` bounds this row variable by `never`
+      note: a row variable written `never e` admits only `Panic` and effects whose operations are all `never`; `IO` and the effects of `var` are not among them
+    ");
+}
+
 #[test]
 fn unwritten_occurrences_carry_the_bound() {
     let text = with_head(
@@ -209,6 +229,27 @@ fn a_recursive_group_names_the_call_in_the_group() {
       16:26 `w2` is used here
       16:29 `IO` is performed here
       10:20 the row is passed to `helper` here
+      note: a row variable written `never e` admits only `Panic` and effects whose operations are all `never`; `IO` and the effects of `var` are not among them
+    ");
+}
+
+/// 輪の中で `noisy` を渡す `f2 noisy b` には E2020 が出ず、輪の中の `helper` の呼び出しのそれぞれに出て、`noisy` は
+/// 来た所の secondary にだけ現れる (docs/spec/types.md の「推論」)。
+#[test]
+fn a_ring_reports_its_calls_to_the_bounded_function() {
+    let text = with_head(
+        "f0 : (Unit -> <e> Int) -> Bool -> <IO | e> Int\nf0 g b = if b then helper g else f1 g b\n\nf1 : (Unit -> <e> Int) -> Bool -> <IO | e> Int\nf1 g b = if b then f2 noisy b else f2 g b\n\nf2 : (Unit -> <e> Int) -> Bool -> <IO | e> Int\nf2 g b = if b then helper g else f0 g b",
+    );
+    insta::assert_snapshot!(check_full(&text), @"
+    E2020 10:20 the row passed to `helper` may perform `IO`, but `helper` allows only `never` operations
+      10:20 `helper` is used here
+      13:23 `IO` is performed here
+      1:20 `helper` bounds this row variable by `never`
+      note: a row variable written `never e` admits only `Panic` and effects whose operations are all `never`; `IO` and the effects of `var` are not among them
+    E2020 16:20 the row passed to `helper` may perform `IO`, but `helper` allows only `never` operations
+      16:20 `helper` is used here
+      13:23 `IO` is performed here
+      1:20 `helper` bounds this row variable by `never`
       note: a row variable written `never e` admits only `Panic` and effects whose operations are all `never`; `IO` and the effects of `var` are not among them
     ");
 }

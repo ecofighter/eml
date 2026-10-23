@@ -1,9 +1,9 @@
 //! プログラム全体で1回だけ求める、型検査の前提。関数ごとの推論の表はこれを借りるだけにして、表を作る費用を関数の
 //! 大きさに比例させる (docs/implementation/architecture.md の「`eml_types` の内部」)。
 
-use eml_extern::EffectMultiplicity;
 use std::collections::HashSet;
 
+use eml_extern::EffectMultiplicity;
 use eml_hir::{
     EffectDef, EffectId, EffectKind, ExternIndex, ItemMap, LangItems, OpMultiplicity, Operation,
     Program, TypeDef,
@@ -19,8 +19,8 @@ pub(crate) struct Context {
     extern_effects: HashSet<EffectId>,
     /// 型構成子ごとの、Kind の決まり方 (`crate::data`)。
     pub data_kinds: ItemMap<TypeDef, DataKind>,
-    /// エフェクトがその row に入れる操作の上限。操作の多重度の最大で、extern のエフェクトは `Once` である
-    /// (docs/spec/types.md の「Kind」)。
+    /// エフェクトがその row に入れる操作の上限。操作の多重度の最大で、extern のエフェクトは表の行が決める (`IO` は
+    /// `Once`、`Panic` は `Never`。docs/spec/types.md の「Kind」)。
     pub effect_multiplicities: ItemMap<EffectDef, Multiplicity>,
     pub operation_multiplicities: ItemMap<Operation, Multiplicity>,
 }

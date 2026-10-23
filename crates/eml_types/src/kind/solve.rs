@@ -1,7 +1,7 @@
 //! 段2: SCC ごとに Kind の問題をまとめて解き、違反を集め、各宣言のスキームに残す制約を求める
 //! (docs/spec/types.md の「推論」)。推論の表は使わず、番号の上の束だけを扱う。
 
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::{HashMap, HashSet};
 
 use eml_hir::ValueItem;
 
@@ -79,11 +79,12 @@ pub(crate) fn solve_scc(
                 .filter_map(|&index| reportable(&merged.carries[index].origin)),
         )
         .collect();
-    let sources = SourceIndex::new(&merged.mult);
+    let sources = SourceIndex::new(&merged.mult, &mult_graph);
     let schemes = (0..merged.own.len())
         .map(|member| {
             let mult = residual(&mult_graph, member);
-            let bound_sources = bound_sources(&mult, &merged.own[member].mult, &sources);
+            let bound_sources =
+                bound_sources(&mult, &merged.own[member].mult, &sources, &mult_graph);
             KindScheme {
                 lin: residual(&lin_graph, member),
                 mult,
@@ -220,27 +221,24 @@ fn bound_origin(origin: &Provenance, source: BoundSource) -> Provenance {
     }
 }
 
-/// 残した上限の出どころを探すための、SCC の多重度の制約の索引。番号はまとめた後のものである。
+/// 推論した上限の出どころを引くための、SCC の多重度の制約の索引。番号はまとめた後のものである。
 struct SourceIndex {
     /// 変数ごとの、シグネチャに書いた上限 (`Provenance::Bound`) の位置。
     written: HashMap<usize, Span>,
-    /// 変数どうしの制約の、下の変数から上の変数への辺。
-    upward: Vec<Vec<usize>>,
-    /// 変数ごとの、参照に複写した上限 (由来が `RowBound`)。上限、参照の位置、参照した宣言の名前の組である。
-    copied: Vec<Vec<(Multiplicity, Span, String)>>,
+    /// 参照に複写した上限 (由来が `RowBound`) の、参照の位置と参照した宣言の名前の組。位置と名前の小さい順に並べる。
+    candidates: Vec<(Span, String)>,
+    /// 上限の値ごとの、成分から上向きにたどって届く成分 (自分を含む) にある候補の最小の番号。
+    first: Vec<(Multiplicity, Vec<Option<usize>>)>,
 }
 
 impl SourceIndex {
-    fn new(bounds: &Bounds<Multiplicity>) -> Self {
-        let mut index = SourceIndex {
-            written: HashMap::new(),
-            upward: vec![Vec::new(); bounds.vars],
-            copied: vec![Vec::new(); bounds.vars],
-        };
+    fn new(bounds: &Bounds<Multiplicity>, graph: &Graph<Multiplicity>) -> Self {
+        let mut written = HashMap::new();
+        let mut copied = Vec::new();
         for (&constraint, origin) in bounds.constraints.iter().zip(&bounds.origins) {
             match (constraint, origin) {
                 ((Bound::Var(var), Bound::Const(_)), Provenance::Bound(span)) => {
-                    index.written.entry(var.index()).or_insert(*span);
+                    written.entry(var.index()).or_insert(*span);
                 }
                 (
                     (Bound::Var(var), Bound::Const(upper)),
@@ -248,14 +246,69 @@ impl SourceIndex {
                         span,
                         reason: KindReason::RowBound { name, .. },
                     }),
-                ) => index.copied[var.index()].push((upper, *span, name.clone())),
-                ((Bound::Var(lower), Bound::Var(upper)), _) => {
-                    index.upward[lower.index()].push(upper.index());
-                }
+                ) => copied.push((var.index(), upper, *span, name.clone())),
                 _ => {}
             }
         }
-        index
+        // 候補が複数あれば位置と名前のいちばん小さいものを選び、結果を制約の並びに依らないようにする。並べた順の
+        // 番号の最小がその候補になる
+        copied.sort_by(|(_, _, a, a_name), (_, _, b, b_name)| {
+            (a.file, a.range.start(), a.range.end(), a_name).cmp(&(
+                b.file,
+                b.range.start(),
+                b.range.end(),
+                b_name,
+            ))
+        });
+        let mut first: Vec<(Multiplicity, Vec<Option<usize>>)> = Vec::new();
+        for (rank, &(var, upper, _, _)) in copied.iter().enumerate() {
+            let at = match first.iter().position(|(level, _)| *level == upper) {
+                Some(at) => at,
+                None => {
+                    first.push((upper, vec![None; graph.upper.len()]));
+                    first.len() - 1
+                }
+            };
+            first[at].1[graph.component[var]].get_or_insert(rank);
+        }
+        // メンバーごとにたどると、`equate` の両向きの辺で SCC 全体に届くので、時間がメンバーの数の2乗になる。成分の
+        // DAG の上で一度に求めれば SCC の大きさに比例する (docs/implementation/architecture.md の「`eml_types` の内部」)
+        for (_, seed) in &mut first {
+            *seed = upward_closure(&graph.upward, std::mem::take(seed), |a, b| match (a, b) {
+                (Some(a), Some(b)) => Some(a.min(b)),
+                (a, b) => a.or(b),
+            });
+        }
+        SourceIndex {
+            written,
+            candidates: copied
+                .into_iter()
+                .map(|(_, _, span, name)| (span, name))
+                .collect(),
+            first,
+        }
+    }
+
+    /// 推論した上限 `σ_var ≤ upper` の出どころ。`var` から上向きにたどって届く変数に、参照から複写した同じ上限が
+    /// あれば、そのうち位置のいちばん前の参照を返す。たどるのは1段だけで、呼び出し先の中の出どころは追わない
+    /// (docs/implementation/diagnostics.md の E2020)。ほかの変数の `Provenance::Bound` は見ない。ほかのメンバーの
+    /// 書いた上限は `equate` を通してだけ届き、そこで複写した `RowBound` が候補になるからである。
+    fn through(&self, graph: &Graph<Multiplicity>, var: usize, upper: Multiplicity) -> BoundSource {
+        let found = self
+            .first
+            .iter()
+            .find(|(level, _)| *level == upper)
+            .and_then(|(_, first)| first[graph.component[var]]);
+        match found {
+            Some(rank) => {
+                let (span, name) = &self.candidates[rank];
+                BoundSource::Through {
+                    name: name.clone(),
+                    span: *span,
+                }
+            }
+            None => BoundSource::Unknown,
+        }
     }
 }
 
@@ -264,6 +317,7 @@ fn bound_sources(
     residual: &[(Bound<Multiplicity>, Bound<Multiplicity>)],
     own: &[KindVar],
     sources: &SourceIndex,
+    graph: &Graph<Multiplicity>,
 ) -> Vec<(KindVar, BoundSource)> {
     residual
         .iter()
@@ -272,56 +326,13 @@ fn bound_sources(
                 let var = own[k.index()].index();
                 let source = match sources.written.get(&var) {
                     Some(&span) => BoundSource::Written(span),
-                    None => through_source(sources, var, upper),
+                    None => sources.through(graph, var, upper),
                 };
                 Some((k, source))
             }
             _ => None,
         })
         .collect()
-}
-
-/// 推論した上限 `σ_var ≤ upper` の出どころ。`var` から上向きに幅優先でたどり、届いた変数に参照から複写した同じ
-/// 上限があれば、その参照をいちばん近い呼び出し先として返す。たどるのは1段だけで、呼び出し先の中の出どころは追わない
-/// (docs/implementation/diagnostics.md の E2020)。ほかの変数の `Provenance::Bound` は見ない。ほかのメンバーの
-/// 書いた上限は `equate` を通してだけ届き、そこで複写した `RowBound` が候補になるからである。`equate` は両向きの辺を
-/// 作るので、訪ねた変数を覚えて輪で止める。
-fn through_source(sources: &SourceIndex, var: usize, upper: Multiplicity) -> BoundSource {
-    let mut visited = HashSet::from([var]);
-    let mut queue = VecDeque::from([var]);
-    // 候補が複数あれば、位置と名前のいちばん小さいものにして、結果を制約の並びに依らないようにする
-    let key = |span: &Span, name: &str| {
-        (
-            span.file,
-            span.range.start(),
-            span.range.end(),
-            name.to_string(),
-        )
-    };
-    let mut best: Option<(Span, &str)> = None;
-    while let Some(current) = queue.pop_front() {
-        for (bound, span, name) in &sources.copied[current] {
-            if *bound == upper
-                && best.is_none_or(|(best_span, best_name)| {
-                    key(span, name) < key(&best_span, best_name)
-                })
-            {
-                best = Some((*span, name));
-            }
-        }
-        for &next in &sources.upward[current] {
-            if visited.insert(next) {
-                queue.push_back(next);
-            }
-        }
-    }
-    match best {
-        Some((span, name)) => BoundSource::Through {
-            name: name.to_string(),
-            span,
-        },
-        None => BoundSource::Unknown,
-    }
 }
 
 /// 由来を付け忘れた違反を、release ビルドで報告するときの由来。
@@ -648,6 +659,70 @@ pub(super) struct Graph<T> {
     /// 上向き (下限から上限へ) と下向きの辺。
     upward: Edges,
     pub downward: Edges,
+    /// `reach` が上向きと下向きにたどるときの近道。
+    upward_shortcut: Shortcut<T>,
+    downward_shortcut: Shortcut<T>,
+}
+
+/// 1つの向きで、どの宣言の変数を含む成分にも届かない隣をまとめて扱うための情報。
+///
+/// その向きにたどった先 (成分自身を含む) に宣言の変数を含む成分がない成分を「閉じた成分」と呼ぶ。閉じた成分からは
+/// 残す成分に届かないので、`reach` がそこから見つけるのは、届く成分の定数をまとめた値だけである。`never` の上限を
+/// 持つ関数を SCC の各メンバーが呼ぶと、メンバーの row の成分から、上限を持つ参照の成分へメンバーの数だけ辺が出る。
+/// その辺を宣言ごとにたどると2乗の時間になるので、閉じた隣の値は先にまとめておく。
+struct Shortcut<T> {
+    /// 成分ごとの、何もない成分でも閉じた成分でもない隣。
+    open: Vec<Vec<usize>>,
+    /// 成分ごとの、閉じた隣から届く成分の定数をまとめた値。上向きなら上限の最小、下向きなら下限の最大である。
+    beyond: Vec<Option<T>>,
+}
+
+impl<T: Level> Shortcut<T> {
+    /// `pick` は2つの定数をまとめる。返す組の2つ目は成分ごとの、その向きにたどって届く成分 (自分を含む) の定数を
+    /// まとめた値である。
+    fn new(
+        edges: &Edges,
+        bounds: &[Option<T>],
+        owners: &[usize],
+        descending: bool,
+        pick: impl Fn(T, T) -> T,
+    ) -> (Shortcut<T>, Vec<Option<T>>) {
+        let count = edges.all.len();
+        let join = |a: Option<T>, b: Option<T>| match (a, b) {
+            (Some(a), Some(b)) => Some(pick(a, b)),
+            (a, b) => a.or(b),
+        };
+        // 隣の成分を先に決めるため、隣の番号の側から順に見る (`Edges::new` と同じ順)
+        let order: Vec<usize> = if descending {
+            (0..count).rev().collect()
+        } else {
+            (0..count).collect()
+        };
+        let mut closed = vec![false; count];
+        let mut reached = bounds.to_vec();
+        for component in order {
+            closed[component] =
+                owners[component] == 0 && edges.all[component].iter().all(|&next| closed[next]);
+            for &next in &edges.all[component] {
+                reached[component] = join(reached[component], reached[next]);
+            }
+        }
+        let open = edges
+            .active
+            .iter()
+            .map(|list| list.iter().copied().filter(|&next| !closed[next]).collect())
+            .collect();
+        let beyond = edges
+            .active
+            .iter()
+            .map(|list| {
+                list.iter()
+                    .filter(|&&next| closed[next])
+                    .fold(None, |acc, &next| join(acc, reached[next]))
+            })
+            .collect();
+        (Shortcut { open, beyond }, reached)
+    }
 }
 
 /// 1つの向きの辺と、たどるときに入る意味のない隣を見分けるための情報。
@@ -775,10 +850,10 @@ impl<T: Level> Graph<T> {
         // 下向きの隣は番号が大きい
         let upward = Edges::new(upward, &upper, &owners, false);
         let downward = Edges::new(downward, &lower, &owners, true);
-        let closed_upper = upward_closure(&upward, upper.clone(), |a, b| match (a, b) {
-            (Some(a), Some(b)) => Some(a.min(b)),
-            (a, b) => a.or(b),
-        });
+        let (upward_shortcut, closed_upper) =
+            Shortcut::new(&upward, &upper, &owners, false, |a, b| a.min(b));
+        let (downward_shortcut, _) =
+            Shortcut::new(&downward, &lower, &owners, true, |a, b| a.max(b));
         Graph {
             component,
             upper,
@@ -787,6 +862,8 @@ impl<T: Level> Graph<T> {
             own,
             upward,
             downward,
+            upward_shortcut,
+            downward_shortcut,
         }
     }
 
@@ -799,10 +876,10 @@ impl<T: Level> Graph<T> {
         kept: &HashMap<usize, Vec<usize>>,
         up: bool,
     ) -> (Vec<usize>, Option<T>) {
-        let (edges, bounds) = if up {
-            (&self.upward, &self.upper)
+        let (edges, bounds, shortcut) = if up {
+            (&self.upward, &self.upper, &self.upward_shortcut)
         } else {
-            (&self.downward, &self.lower)
+            (&self.downward, &self.lower, &self.downward_shortcut)
         };
         let pick = |a: T, b: T| if up { a.min(b) } else { a.max(b) };
         // 何もない成分のうち残す成分は、入らずに止まる成分として見つける。ほかの何もない成分は、入っても定数も
@@ -830,7 +907,10 @@ impl<T: Level> Graph<T> {
                     }
                 }
             }
-            for &next in &edges.active[component] {
+            if let Some(c) = shortcut.beyond[component] {
+                constant = Some(constant.map_or(c, |old| pick(old, c)));
+            }
+            for &next in &shortcut.open[component] {
                 if !seen.insert(next) {
                     continue;
                 }

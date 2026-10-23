@@ -1208,6 +1208,8 @@ fn row_bound_exceeded(
         Some(Exceeding::Multiplicity(multiplicity)) => {
             format!("`{}` operations", multiplicity_word(multiplicity))
         }
+        // 今の検査器では来ない形である。多重度の下限の制約はどれも本体の中の位置を由来に持つ。それでも、来た所を
+        // 指せない場合 (別のファイルの由来など) の見出しを、`with_bound_cause` が足さなかったときのために持つ
         None => "operations other than `never` ones".to_string(),
     };
     let mut diagnostic = Diagnostic::error(
