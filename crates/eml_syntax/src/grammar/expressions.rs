@@ -553,7 +553,8 @@ fn atom(p: &mut Parser) -> Option<CompletedMarker> {
     Some(m.complete(p, kind))
 }
 
-/// `string ::= STRING_START (STRING_TEXT | ESCAPE | interp)* STRING_END` と `command`。閉じていない文字列は lexer が
+/// `string ::= STRING_START (STRING_TEXT | ESCAPE | interp)* STRING_END` と
+/// `command ::= CMD_START (CMD_TEXT | CMD_QUOTE | ESCAPE | interp)* CMD_END`。閉じていない文字列は lexer が
 /// 報告済みなので、`STRING_END` がなくても黙って終える。パターンの文字列 (`in_pattern`) も同じ形に組み、穴ごとに
 /// 誤りを出す (docs/spec/grammar.md の「文法上の補足」)。
 pub(super) fn string_lit(p: &mut Parser, in_pattern: bool) -> SyntaxKind {
@@ -565,7 +566,12 @@ pub(super) fn string_lit(p: &mut Parser, in_pattern: bool) -> SyntaxKind {
     p.bump_any();
     loop {
         match p.current() {
-            kind if kind == text || kind == ESCAPE => p.bump_any(),
+            kind if kind == text
+                || kind == ESCAPE
+                || (node == COMMAND_LIT && kind == CMD_QUOTE) =>
+            {
+                p.bump_any();
+            }
             INTERP_START => {
                 if in_pattern {
                     p.error(

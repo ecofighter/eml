@@ -1,7 +1,7 @@
 //! 文字列、補間、コマンドリテラルの CST と値 (docs/spec/lexical.md の「文字列」)。
 
 use crate::common::{diagnostics, shape};
-use eml_syntax::ast::{Expr, StringLit, StringPart};
+use eml_syntax::ast::{CommandLit, CommandPart, Expr, StringLit, StringPart};
 use rowan::ast::AstNode;
 
 /// `x = <literal>` の右辺の文字列の部分。穴は、その式のテキストで表す。
@@ -222,4 +222,157 @@ fn an_unexpected_string_is_named_as_a_string() {
         diagnostics("data T = | A \"x\""),
         ["E0011 1:14 unexpected string"]
     );
+}
+
+/// `x = <literal>` の右辺のコマンドリテラルの引数。範囲は切り出したテキストで表す。
+fn words(literal: &str) -> Option<Vec<String>> {
+    let text = format!("x = {literal}");
+    let parsed = eml_test_support::parse(&text);
+    let command = parsed
+        .parse
+        .syntax()
+        .descendants()
+        .find_map(CommandLit::cast)
+        .expect("a command literal");
+    command.words().map(|words| {
+        words
+            .into_iter()
+            .map(|word| {
+                let parts: Vec<String> = word
+                    .parts
+                    .iter()
+                    .map(|part| match part {
+                        CommandPart::Text(text) => format!("{text:?}"),
+                        CommandPart::Hole(hole) => {
+                            let expr = hole.expr().expect("an expression");
+                            let spread = if hole.spread() { ".." } else { "" };
+                            format!("{spread}{}", expr.syntax().text())
+                        }
+                    })
+                    .collect();
+                let mut shown = vec![parts.join(" + ")];
+                if word.quoted {
+                    shown.push("(quoted)".to_string());
+                }
+                shown.retain(|piece| !piece.is_empty());
+                format!("{} @ {}", shown.join(" "), &text[word.range])
+            })
+            .collect()
+    })
+}
+
+fn owned(words: &[&str]) -> Option<Vec<String>> {
+    Some(words.iter().map(|word| word.to_string()).collect())
+}
+
+#[test]
+fn a_command_is_split_at_spaces_and_tabs_outside_quotes() {
+    assert_eq!(words("`ls`"), owned(&[r#""ls" @ ls"#]));
+    assert_eq!(
+        words("`git  log\t-n   3`"),
+        owned(&[
+            r#""git" @ git"#,
+            r#""log" @ log"#,
+            r#""-n" @ -n"#,
+            r#""3" @ 3"#
+        ])
+    );
+    assert_eq!(words("``"), owned(&[]));
+    assert_eq!(words("` \t `"), owned(&[]));
+}
+
+#[test]
+fn escapes_and_holes_do_not_separate_arguments() {
+    assert_eq!(words(r"`a\tb`"), owned(&[r#""a\tb" @ a\tb"#]));
+    assert_eq!(words(r"`a\`b`"), owned(&[r#""a`b" @ a\`b"#]));
+    assert_eq!(
+        words(r"`--out=\{dir}`"),
+        owned(&[r#""--out=" + dir @ --out=\{dir}"#])
+    );
+    assert_eq!(words(r"`\{x} \{y}`"), owned(&[r"x @ \{x}", r"y @ \{y}"]));
+}
+
+#[test]
+fn adjacent_text_escapes_and_quotes_merge_into_one_text() {
+    assert_eq!(
+        words("`a'b c'd`"),
+        owned(&[r#""ab cd" (quoted) @ a'b c'd"#])
+    );
+    assert_eq!(
+        words(r"`'a'\n'b'`"),
+        owned(&[r#""a\nb" (quoted) @ 'a'\n'b'"#])
+    );
+    assert_eq!(words(r"`'a\'b'`"), owned(&[r#""a'b" (quoted) @ 'a\'b'"#]));
+}
+
+#[test]
+fn an_empty_quote_is_an_empty_quoted_argument() {
+    assert_eq!(words("`''`"), owned(&["(quoted) @ ''"]));
+    assert_eq!(
+        words("`a '' b`"),
+        owned(&[r#""a" @ a"#, "(quoted) @ ''", r#""b" @ b"#])
+    );
+}
+
+#[test]
+fn a_space_in_a_quote_does_not_separate() {
+    assert_eq!(
+        words("`'a  b' 'c\td'`"),
+        owned(&[r#""a  b" (quoted) @ 'a  b'"#, "\"c\\td\" (quoted) @ 'c\td'"])
+    );
+}
+
+#[test]
+fn spread_holes_in_the_three_positions() {
+    assert_eq!(
+        words(r"`rm \{..xs}`"),
+        owned(&[r#""rm" @ rm"#, r"..xs @ \{..xs}"])
+    );
+    assert_eq!(words(r"`a\{..xs}`"), owned(&[r#""a" + ..xs @ a\{..xs}"#]));
+    assert_eq!(words(r"`\{..xs}\{y}`"), owned(&[r"..xs + y @ \{..xs}\{y}"]));
+    assert_eq!(
+        words(r"`'\{..xs}'`"),
+        owned(&[r"..xs (quoted) @ '\{..xs}'"])
+    );
+}
+
+#[test]
+fn words_are_none_when_the_lexer_reported_an_error() {
+    assert_eq!(words("`ls"), None);
+    assert_eq!(words("`ls 'a b`"), None);
+    assert_eq!(words("`ls 'a b"), None);
+    assert_eq!(words(r"`a\qb`"), None);
+    assert_eq!(words(r"`a\"), None);
+}
+
+#[test]
+fn holes_lists_every_hole_in_order() {
+    let parsed = eml_test_support::parse(r"x = `a \{..xs} 'b\{y}'`");
+    let command = parsed
+        .parse
+        .syntax()
+        .descendants()
+        .find_map(CommandLit::cast)
+        .expect("a command literal");
+    let spreads: Vec<_> = command.holes().map(|hole| hole.spread()).collect();
+    assert_eq!(spreads, [true, false]);
+}
+
+#[test]
+fn a_command_literal_with_a_quote_has_a_quote_token() {
+    insta::assert_snapshot!(shape("x = `a 'b'`"), @r#"
+    SOURCE_FILE
+      EQUATION
+        NAME
+          LIDENT "x"
+        EQ "="
+        COMMAND_LIT
+          CMD_START "`"
+          CMD_TEXT "a "
+          CMD_QUOTE "'"
+          CMD_TEXT "b"
+          CMD_QUOTE "'"
+          CMD_END "`"
+    "#);
+    assert_eq!(diagnostics("x = `a 'b'`"), Vec::<String>::new());
 }

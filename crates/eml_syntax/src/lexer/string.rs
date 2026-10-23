@@ -98,15 +98,29 @@ impl Lexer<'_> {
         self.body(CMD_TEXT, '`', CMD_END);
     }
 
-    /// 本文は、閉じの文字、`\`、改行の手前で止める。`\r` は、後ろが `\n` のときだけ改行である。改行に着いたら、
-    /// 閉じていない層を閉じる。
+    /// 開きの `'` 1文字を指す。リテラルが閉じていないことは別に E0002 で報告するので、引用の誤りを先に出す
+    /// (docs/spec/lexical.md の「コマンドリテラル」)。
+    pub(super) fn unterminated_quote(&mut self, quote: usize) {
+        self.error(
+            codes::UNTERMINATED_QUOTE,
+            "unterminated `'` in a command literal",
+            quote,
+            quote + 1,
+            "missing closing '",
+        );
+    }
+
+    /// 本文は、閉じの文字、`\`、改行の手前で止める。コマンドリテラルでは `'` の手前でも止める。
+    /// `\r` は、後ろが `\n` のときだけ改行である。改行に着いたら、閉じていない層を閉じる。
     fn body(&mut self, text_kind: SyntaxKind, close: char, end_kind: SyntaxKind) {
         let text = self.text;
         let rest = &text[self.pos..];
+        let in_command = matches!(self.modes.last(), Some(Mode::Command { .. }));
         let end = rest
             .char_indices()
             .find(|&(i, c)| {
                 c == close
+                    || (in_command && c == '\'')
                     || matches!(c, '\\' | '\n')
                     || (c == '\r' && rest[i + 1..].starts_with('\n'))
             })
@@ -117,11 +131,26 @@ impl Lexer<'_> {
         }
         match rest.chars().next() {
             Some(c) if c == close => {
+                if let Some(Mode::Command {
+                    quote: Some(quote), ..
+                }) = self.modes.last().copied()
+                {
+                    self.unterminated_quote(quote);
+                }
                 self.push(end_kind, self.pos + 1);
                 self.modes.pop();
             }
+            Some('\'') => self.toggle_quote(),
             Some('\\') => self.escape_or_hole(),
             _ => self.close_layers(false, false),
+        }
+    }
+
+    fn toggle_quote(&mut self) {
+        let at = self.pos;
+        self.push(CMD_QUOTE, at + 1);
+        if let Some(Mode::Command { quote, .. }) = self.modes.last_mut() {
+            *quote = quote.is_none().then_some(at);
         }
     }
 

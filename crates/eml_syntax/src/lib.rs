@@ -23,6 +23,7 @@ pub mod codes {
 
     pub const UNEXPECTED_CHARACTER: ErrorCode = ErrorCode(1);
     pub const UNTERMINATED_STRING: ErrorCode = ErrorCode(2);
+    pub const UNTERMINATED_QUOTE: ErrorCode = ErrorCode(17);
     pub const EXPECTED_ITEM: ErrorCode = ErrorCode(3);
     // E0004 (未対応) はどの段階が出しても同じ意味なので、eml_diagnostics::NOT_YET_SUPPORTED に置く (docs/spec/diagnostics.md の「データ構造」)
     pub const UNTERMINATED_BLOCK_COMMENT: ErrorCode = ErrorCode(5);

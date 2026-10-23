@@ -108,7 +108,7 @@ row         ::= '<' '>' | '<' LIDENT '>' | '<' effect (',' effect)* ('|' LIDENT)
 effect      ::= qcon type_atom*
 
 string      ::= STRING_START (STRING_TEXT | ESCAPE | '\{' expr INTERP_END)* STRING_END
-command     ::= CMD_START (CMD_TEXT | ESCAPE | '\{' '..'? expr INTERP_END)* CMD_END
+command     ::= CMD_START (CMD_TEXT | CMD_QUOTE | ESCAPE | '\{' '..'? expr INTERP_END)* CMD_END
 ```
 
 ## 文法上の補足

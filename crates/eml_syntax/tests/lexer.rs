@@ -952,3 +952,123 @@ fn char_with_u8_suffix_is_a_byte_literal() {
         ["BYTE", "BYTE", "BYTE", "CHAR"]
     );
 }
+
+/// 出した順のままの診断。引用の誤りがリテラルの誤りより先に出ることを確かめる。
+fn emitted(text: &str) -> Vec<String> {
+    let (_, file) = source(text);
+    let (_, diagnostics) = lex(file, text);
+    diagnostics
+        .iter()
+        .map(|d| format!("{}@{:?} {}", d.code, d.primary.range, d.message))
+        .collect()
+}
+
+#[test]
+fn a_quote_in_a_command_literal_is_a_width_one_token() {
+    assert_eq!(
+        kinds("`a 'b c' d`"),
+        [
+            "CMD_START",
+            "CMD_TEXT",
+            "CMD_QUOTE",
+            "CMD_TEXT",
+            "CMD_QUOTE",
+            "CMD_TEXT",
+            "CMD_END"
+        ]
+    );
+    assert_eq!(
+        kinds("`''`"),
+        ["CMD_START", "CMD_QUOTE", "CMD_QUOTE", "CMD_END"]
+    );
+    assert_eq!(diags("`a 'b c' d`"), Vec::<String>::new());
+}
+
+#[test]
+fn escapes_and_holes_are_read_inside_a_quote() {
+    assert_eq!(
+        kinds("`'a\\'\\{x} \\`'`"),
+        [
+            "CMD_START",
+            "CMD_QUOTE",
+            "CMD_TEXT",
+            "ESCAPE",
+            "INTERP_START",
+            "LIDENT",
+            "INTERP_END",
+            "CMD_TEXT",
+            "ESCAPE",
+            "CMD_QUOTE",
+            "CMD_END"
+        ]
+    );
+}
+
+#[test]
+fn a_quote_in_a_hole_is_a_char_literal_and_does_not_open_a_quote() {
+    assert_eq!(
+        kinds("`a \\{f 'x'} b`"),
+        [
+            "CMD_START",
+            "CMD_TEXT",
+            "INTERP_START",
+            "LIDENT",
+            "CHAR",
+            "INTERP_END",
+            "CMD_TEXT",
+            "CMD_END"
+        ]
+    );
+    assert_eq!(diags("`a \\{f 'x'} b`"), Vec::<String>::new());
+}
+
+#[test]
+fn a_quote_outside_a_command_literal_is_text() {
+    assert_eq!(
+        kinds("\"a'b\""),
+        ["STRING_START", "STRING_TEXT", "STRING_END"]
+    );
+}
+
+#[test]
+fn an_unterminated_quote_before_the_closing_backtick_is_e0017() {
+    let text = "`a 'b c`";
+    assert_eq!(
+        kinds(text),
+        ["CMD_START", "CMD_TEXT", "CMD_QUOTE", "CMD_TEXT", "CMD_END"]
+    );
+    assert_eq!(
+        diags(text),
+        ["E0017@3..4 unterminated `'` in a command literal"]
+    );
+}
+
+#[test]
+fn an_unterminated_quote_at_the_end_of_a_line_is_e0017_then_e0002() {
+    for text in ["`a 'b c", "`a 'b c\nx = 1"] {
+        assert_eq!(
+            emitted(text),
+            [
+                "E0017@3..4 unterminated `'` in a command literal",
+                "E0002@0..7 unterminated command literal"
+            ],
+            "{text:?}"
+        );
+    }
+}
+
+#[test]
+fn a_quote_is_closed_by_the_next_quote() {
+    assert_eq!(diags("`'a''b'`"), Vec::<String>::new());
+}
+
+#[test]
+fn a_backslash_at_the_end_of_a_line_in_a_quote_keeps_its_one_escape() {
+    assert_eq!(
+        emitted("`'a\\\nb"),
+        [
+            "E0017@1..2 unterminated `'` in a command literal",
+            "E0002@0..4 unterminated command literal"
+        ]
+    );
+}

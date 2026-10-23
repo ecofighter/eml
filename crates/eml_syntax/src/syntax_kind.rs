@@ -29,6 +29,8 @@ pub enum SyntaxKind {
     STRING_END,
     CMD_START,
     CMD_TEXT,
+    /// 引用の開きと閉じの `'`。どちらも幅1で、開閉は数えて決める。
+    CMD_QUOTE,
     CMD_END,
     LIDENT,
     UIDENT,

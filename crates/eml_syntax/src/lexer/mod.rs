@@ -113,10 +113,7 @@ enum Raw {
 enum Mode {
     /// `braces` は穴の中で開いている `{` の数で、穴を閉じる `}` を見分けるために数える。底では `}` がモードを変えない
     /// ので数えず、いつも 0 である。`hole` は穴の `\{` の位置で、閉じていない穴の診断に使う。
-    Code {
-        braces: u32,
-        hole: Option<usize>,
-    },
+    Code { braces: u32, hole: Option<usize> },
     /// `reported` は、閉じていないことを報告済みか。穴の中の `"""` は開いた時点で E0014 を出すので、行の終わりで
     /// 閉じるときに E0002 を重ねない (docs/spec/lexical.md の「改行での回復」)。
     String {
@@ -124,9 +121,9 @@ enum Mode {
         multiline: bool,
         reported: bool,
     },
-    Command {
-        start: usize,
-    },
+    /// `quote` は開いている `'` の位置で、閉じていない引用の診断に使う
+    /// (docs/spec/lexical.md の「コマンドリテラル」)。
+    Command { start: usize, quote: Option<usize> },
 }
 
 struct Lexer<'a> {
@@ -193,7 +190,7 @@ impl Lexer<'_> {
         } else if rest.starts_with('`') {
             let start = self.pos;
             self.push(CMD_START, start + 1);
-            self.modes.push(Mode::Command { start });
+            self.modes.push(Mode::Command { start, quote: None });
         } else if in_hole && rest.starts_with([' ', '\t', '\r']) {
             // `Raw::Whitespace` は改行も飲み込むので、穴の中では改行の手前までを空白にする。`\r` は、後ろが `\n` の
             // ときだけ改行の一部である
@@ -278,8 +275,11 @@ impl Lexer<'_> {
                     }
                     reported = true;
                 }
-                Mode::Command { start } => {
+                Mode::Command { start, quote } => {
                     if !reported {
+                        if let Some(quote) = quote {
+                            self.unterminated_quote(quote);
+                        }
                         self.unclosed_literal(
                             "unterminated command literal",
                             start,

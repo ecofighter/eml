@@ -556,6 +556,132 @@ impl Interp {
     pub fn expr(&self) -> Option<Expr> {
         support::child(&self.syntax)
     }
+
+    /// コマンドリテラルの `\{..xs}`。文字列の穴では、パーサが `..` を読まない。
+    pub fn spread(&self) -> bool {
+        support::token(&self.syntax, SyntaxKind::DOT2).is_some()
+    }
+}
+
+/// コマンドリテラルの引数の部分。`Text` は、エスケープと引用を解いた後の文字列である。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CommandPart {
+    Text(String),
+    Hole(Interp),
+}
+
+/// コマンドリテラルの引数1つ。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CommandWord {
+    /// 先頭の文字から末尾の文字まで。区切りの空白を含まない。
+    pub range: TextRange,
+    pub parts: Vec<CommandPart>,
+    /// 引数の中に `CMD_QUOTE` があったか。`''` は部分が空で `quoted` が真の引数になる。
+    pub quoted: bool,
+}
+
+impl CommandLit {
+    /// 閉じていないリテラル、不正なエスケープ、閉じていない引用を含むリテラルは `None` を返す。どれも lexer が
+    /// 報告済みである。区切りは引用の外の `CMD_TEXT` の空白とタブだけで、隣り合う本文、エスケープ、引用の中の本文は
+    /// 1つの `Text` にまとめ、空の `Text` は返さない (docs/spec/lexical.md の「コマンドリテラル」)。
+    pub fn words(&self) -> Option<Vec<CommandWord>> {
+        support::token(&self.syntax, SyntaxKind::CMD_END)?;
+        let mut words = Vec::new();
+        let mut builder = WordBuilder::default();
+        let mut in_quote = false;
+        for element in self.syntax.children_with_tokens() {
+            match element {
+                NodeOrToken::Token(token) => match token.kind() {
+                    SyntaxKind::CMD_TEXT => {
+                        let start = token.text_range().start();
+                        for (offset, c) in token.text().char_indices() {
+                            let at = start + TextSize::new(offset as u32);
+                            let end = at + TextSize::of(c);
+                            if !in_quote && matches!(c, ' ' | '\t') {
+                                words.extend(builder.finish());
+                            } else {
+                                builder.push_char(c, at, end);
+                            }
+                        }
+                    }
+                    SyntaxKind::ESCAPE => {
+                        let c = match token.text() {
+                            "\\`" => '`',
+                            escape => crate::literal::escape_value(escape)?,
+                        };
+                        let range = token.text_range();
+                        builder.push_char(c, range.start(), range.end());
+                    }
+                    SyntaxKind::CMD_QUOTE => {
+                        in_quote = !in_quote;
+                        builder.mark_quote(token.text_range());
+                    }
+                    _ => {}
+                },
+                NodeOrToken::Node(node) => {
+                    if let Some(interp) = Interp::cast(node) {
+                        builder.push_hole(interp);
+                    }
+                }
+            }
+        }
+        if in_quote {
+            return None;
+        }
+        words.extend(builder.finish());
+        Some(words)
+    }
+
+    pub fn holes(&self) -> AstChildren<Interp> {
+        support::children(&self.syntax)
+    }
+}
+
+/// `CommandLit::words` が、区切りに着くまでの引数を組み立てる。
+#[derive(Default)]
+struct WordBuilder {
+    range: Option<TextRange>,
+    parts: Vec<CommandPart>,
+    text: String,
+    quoted: bool,
+}
+
+impl WordBuilder {
+    fn extend(&mut self, range: TextRange) {
+        self.range = Some(self.range.map_or(range, |seen| seen.cover(range)));
+    }
+
+    fn push_char(&mut self, c: char, start: TextSize, end: TextSize) {
+        self.extend(TextRange::new(start, end));
+        self.text.push(c);
+    }
+
+    fn mark_quote(&mut self, range: TextRange) {
+        self.extend(range);
+        self.quoted = true;
+    }
+
+    fn push_hole(&mut self, interp: Interp) {
+        self.extend(interp.range());
+        if !self.text.is_empty() {
+            self.parts
+                .push(CommandPart::Text(std::mem::take(&mut self.text)));
+        }
+        self.parts.push(CommandPart::Hole(interp));
+    }
+
+    fn finish(&mut self) -> Option<CommandWord> {
+        let range = self.range.take()?;
+        if !self.text.is_empty() {
+            self.parts
+                .push(CommandPart::Text(std::mem::take(&mut self.text)));
+        }
+        Some(CommandWord {
+            range,
+            parts: std::mem::take(&mut self.parts),
+            quoted: std::mem::take(&mut self.quoted),
+        })
+    }
 }
 
 impl PathExpr {
