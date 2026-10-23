@@ -2,11 +2,13 @@
 
 use std::collections::HashMap;
 use std::ffi::OsString;
-use std::io::{self, Read, Write};
+use std::io::{self, Cursor, Read, Write};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
-use crate::{Host, HostRef, Opened, StdinSlot, Stream, WriteMode};
+use crate::{
+    Host, HostRef, Opened, Process, Spawn, Spawned, StderrMode, StdinSlot, Stdio, Stream, WriteMode,
+};
 
 /// メモリの上のファイル。読み手の振る舞い (1回に返すバイト数、途中の誤り、中断) を決められる。
 #[derive(Clone, Default)]
@@ -112,8 +114,29 @@ pub(super) struct MemoryHost {
     runs: Mutex<Vec<(String, Vec<String>)>>,
     /// `flush` を呼ばれた回数
     flushes: AtomicUsize,
-    /// `run` の中でこの `Control` に割り込みを立てる。子を待つ間に届いた SIGINT を表す
+    /// `run` の中でこの `Control` に割り込みを立てる。子を待つ間に届いた SIGINT を表す。`spawn` の子の `wait` も同じ
     interrupt_run: Option<Arc<crate::Control>>,
+    /// `spawn` の子が標準出力に書くバイト列
+    child_output: Vec<u8>,
+    /// `spawn` が受けた起動
+    spawns: Mutex<Vec<Started>>,
+    /// `spawn` の子の標準入力に書かれたバイト列。書けなかったバイトは入らない
+    child_input: Arc<Mutex<Vec<u8>>>,
+    /// `spawn` の子の標準入力への最初の書き込みが、1回 `Interrupted` を返すか
+    child_interrupts_once: bool,
+    /// `spawn` の子の `wait` と `kill` が呼ばれた回数
+    waits: Arc<AtomicUsize>,
+    kills: Arc<AtomicUsize>,
+}
+
+/// `MemoryHost::spawn` が受けた起動の設定。
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(super) struct Started {
+    pub(super) program: String,
+    pub(super) args: Vec<String>,
+    pub(super) env: Vec<(String, String)>,
+    pub(super) cwd: Option<String>,
+    pub(super) stdio: (Stdio, Stdio, StderrMode),
 }
 
 impl MemoryHost {
@@ -182,6 +205,30 @@ impl MemoryHost {
     }
     pub(super) fn flushes(&self) -> usize {
         self.flushes.load(Ordering::Relaxed)
+    }
+    /// `spawn` の子が標準出力に書くバイト列
+    pub(super) fn with_child_output(mut self, bytes: &[u8]) -> MemoryHost {
+        self.child_output = bytes.to_vec();
+        self
+    }
+    /// `spawn` の子の標準入力への最初の書き込みは、1回 `Interrupted` を返す。`interrupting` もあれば、その前に止める語を
+    /// 立てる。待っている書き込みが SIGINT の後に `EINTR` で戻ることを表す
+    pub(super) fn with_child_interrupted_once(mut self) -> MemoryHost {
+        self.child_interrupts_once = true;
+        self
+    }
+    pub(super) fn spawns(&self) -> Vec<Started> {
+        self.spawns.lock().unwrap().clone()
+    }
+    pub(super) fn child_input(&self) -> Vec<u8> {
+        self.child_input.lock().unwrap().clone()
+    }
+    /// `spawn` の子の `wait` と `kill` が呼ばれた回数
+    pub(super) fn waits_and_kills(&self) -> (usize, usize) {
+        (
+            self.waits.load(Ordering::Relaxed),
+            self.kills.load(Ordering::Relaxed),
+        )
     }
 }
 
@@ -272,6 +319,94 @@ impl Host for MemoryHost {
             control.interrupt();
         }
         Ok(code)
+    }
+    /// プロセスを起動せず、受けた設定を覚える。`missing` は見つからないプログラムである。pipe の標準入力は
+    /// `child_input` に写し (`fail_write` があれば書くたびにその文言で失敗する)、pipe の標準出力は `child_output` を
+    /// 読ませる。子の `wait` は引数の数を終了コードにする
+    fn spawn(&self, spawn: &Spawn<'_>) -> io::Result<Spawned> {
+        if spawn.program == "missing" {
+            return Err(io::Error::from(io::ErrorKind::NotFound));
+        }
+        self.spawns.lock().unwrap().push(Started {
+            program: spawn.program.to_string(),
+            args: spawn.args.iter().map(|a| a.to_string()).collect(),
+            env: spawn
+                .env
+                .iter()
+                .map(|(k, v)| (k.to_string(), v.to_string()))
+                .collect(),
+            cwd: spawn.cwd.map(str::to_string),
+            stdio: (spawn.stdin, spawn.stdout, spawn.stderr),
+        });
+        let stdin = (spawn.stdin == Stdio::Pipe).then(|| {
+            Box::new(ChildInput {
+                bytes: self.child_input.clone(),
+                fail: self.fail_write,
+                interrupt_once: self.child_interrupts_once,
+                interrupt: self.interrupt_run.clone(),
+            }) as Box<dyn Write + Send>
+        });
+        let stdout = (spawn.stdout == Stdio::Pipe)
+            .then(|| Box::new(Cursor::new(self.child_output.clone())) as Box<dyn Read + Send>);
+        Ok(Spawned {
+            stdin,
+            stdout,
+            process: Box::new(MemoryProcess {
+                code: spawn.args.len() as i32,
+                waits: self.waits.clone(),
+                kills: self.kills.clone(),
+                interrupt: self.interrupt_run.clone(),
+            }),
+        })
+    }
+}
+
+/// `MemoryHost::spawn` の子の標準入力。
+struct ChildInput {
+    bytes: Arc<Mutex<Vec<u8>>>,
+    fail: Option<&'static str>,
+    interrupt_once: bool,
+    interrupt: Option<Arc<crate::Control>>,
+}
+
+impl Write for ChildInput {
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        if std::mem::take(&mut self.interrupt_once) {
+            if let Some(control) = &self.interrupt {
+                control.interrupt();
+            }
+            return Err(io::Error::from(io::ErrorKind::Interrupted));
+        }
+        if let Some(message) = self.fail {
+            return Err(io::Error::other(message));
+        }
+        self.bytes.lock().unwrap().extend_from_slice(buf);
+        Ok(buf.len())
+    }
+    fn flush(&mut self) -> io::Result<()> {
+        Ok(())
+    }
+}
+
+/// `MemoryHost::spawn` の子。呼ばれた `wait` と `kill` を数える。
+struct MemoryProcess {
+    code: i32,
+    waits: Arc<AtomicUsize>,
+    kills: Arc<AtomicUsize>,
+    interrupt: Option<Arc<crate::Control>>,
+}
+
+impl Process for MemoryProcess {
+    fn wait(&mut self) -> io::Result<i32> {
+        self.waits.fetch_add(1, Ordering::Relaxed);
+        if let Some(control) = &self.interrupt {
+            control.interrupt();
+        }
+        Ok(self.code)
+    }
+    fn kill(&mut self) -> io::Result<()> {
+        self.kills.fetch_add(1, Ordering::Relaxed);
+        Ok(())
     }
 }
 
@@ -415,6 +550,90 @@ mod std_host {
             host.run("eml-no-such-program", &[]).err().map(|e| e.kind()),
             Some(io::ErrorKind::NotFound)
         );
+    }
+
+    /// pipe の子に書き、`2>&1` の1本の pipe から標準出力と標準エラーを順に読む。起動の前に標準出力を書き出す。
+    /// kill した子はシグナルの番号の終了コードを返す。
+    #[cfg(unix)]
+    #[test]
+    fn a_spawned_child_talks_through_pipes() {
+        use crate::{Spawn, StderrMode, Stdio};
+        let (host, out, _) = std_host(Buffering::Block);
+        host.write_line(Stream::Out, "before").unwrap();
+        let spawn = Spawn {
+            program: "sh",
+            args: &["-c", "cat; echo err >&2; exit 3"],
+            env: &[],
+            cwd: None,
+            stdin: Stdio::Pipe,
+            stdout: Stdio::Pipe,
+            stderr: StderrMode::ToStdout,
+        };
+        let mut child = host.spawn(&spawn).unwrap();
+        assert_eq!(out.text(), "before\n");
+        child.stdin.take().unwrap().write_all(b"in\n").unwrap();
+        let mut read = String::new();
+        child
+            .stdout
+            .take()
+            .unwrap()
+            .read_to_string(&mut read)
+            .unwrap();
+        assert_eq!(read, "in\nerr\n");
+        assert_eq!(child.process.wait().unwrap(), 3);
+        let sleeper = Spawn {
+            args: &["-c", "sleep 10"],
+            stdin: Stdio::Null,
+            stdout: Stdio::Null,
+            stderr: StderrMode::Null,
+            ..spawn
+        };
+        let mut child = host.spawn(&sleeper).unwrap();
+        assert!(child.stdin.is_none() && child.stdout.is_none());
+        child.process.kill().unwrap();
+        assert_eq!(child.process.wait().unwrap(), 128 + 9);
+    }
+
+    /// 作業ディレクトリは `file_root` につなぎ、`/` を含む相対のプログラムはそこに対して解決する。環境変数は上書き
+    /// する。
+    #[cfg(unix)]
+    #[test]
+    fn a_spawned_child_runs_in_its_directory() {
+        use std::os::unix::fs::PermissionsExt;
+
+        use crate::{Spawn, StderrMode, Stdio};
+        let dir = std::env::temp_dir().join(format!("eml_rt-spawn-{}", std::process::id()));
+        std::fs::create_dir_all(dir.join("sub")).unwrap();
+        let script = dir.join("sub").join("run.sh");
+        std::fs::write(&script, "#!/bin/sh\necho \"$FOO $(cat hello.txt)\"\n").unwrap();
+        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+        std::fs::write(dir.join("sub").join("hello.txt"), "hi").unwrap();
+        let host = StdHost::new(
+            Box::new(io::sink()),
+            Box::new(io::sink()),
+            dir.clone(),
+            Buffering::Line,
+        );
+        let spawn = Spawn {
+            program: "./run.sh",
+            args: &[],
+            env: &[("FOO", "a"), ("FOO", "b")],
+            cwd: Some("sub"),
+            stdin: Stdio::Null,
+            stdout: Stdio::Pipe,
+            stderr: StderrMode::Inherit,
+        };
+        let mut child = host.spawn(&spawn).unwrap();
+        let mut read = String::new();
+        child
+            .stdout
+            .take()
+            .unwrap()
+            .read_to_string(&mut read)
+            .unwrap();
+        assert_eq!(read, "b hi\n");
+        assert_eq!(child.process.wait().unwrap(), 0);
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]

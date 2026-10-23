@@ -6,13 +6,14 @@ use std::ffi::OsString;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use super::ctx::{ctx_with, stdin_read};
-use super::host::{MemoryFile, MemoryHost};
+use super::ctx::{ctx_with, fields, spawn, stdin_read};
+use super::host::{MemoryFile, MemoryHost, Started};
 use super::mortal;
 use super::string::text;
 use crate::externs::{FALSE, IndexFault, IoOp, IoReason, TRUE, Utf8Source};
 use crate::{
-    Control, Ctx, Fault, Handle, HeapError, Limits, Mode, StdStream, Stop, Stream, Word, Write,
+    Control, Ctx, Fault, Form, Handle, HeapError, Limits, Mode, ReadAmount, StdStream, StderrMode,
+    Stdio, Stop, Stream, Word, Write,
 };
 
 fn s<M: Mode>(ctx: &mut Ctx<M>, x: &str) -> Word {
@@ -343,6 +344,168 @@ fn a_process_stops_on_an_interrupt<M: Mode>() {
     assert_eq!(mortal(ctx.heap()), 0);
 }
 
+/// 子の起動は、列を要素に分けて Host に渡す。空の要素も1つと数え、環境はキーと値の組にし、空の作業ディレクトリは
+/// 設定しない。読めない列、NUL を含む要素、組にならない環境、範囲の外の向きは、何も起動せずに起動の誤りにする。
+/// どの道でも4つの文字列を手放す。
+fn a_child_gets_its_lists_split<M: Mode>() {
+    let memory = Arc::new(MemoryHost::default());
+    let mut ctx = ctx_with::<M>(&memory);
+    let run_fault = |program: &str, reason| {
+        Err(Fault::Io {
+            op: IoOp::Run,
+            name: program.into(),
+            reason,
+        })
+    };
+    unsafe {
+        let c = spawn(
+            &mut ctx,
+            "rsync",
+            &["-a", "", "x y"],
+            &["K", "v", "K", "w"],
+            "sub",
+            (0, 1, 1),
+        )
+        .unwrap();
+        assert_eq!(ctx.proc_wait(c), Ok(3));
+        let c = spawn(&mut ctx, "rsync", &[], &[], "", (1, 2, 2)).unwrap();
+        assert_eq!(ctx.proc_wait(c), Ok(0));
+        let bad = [
+            (fields(&["a\0b"]), String::new(), (0, 0, 0)),
+            ("5\0ab".to_string(), String::new(), (0, 0, 0)),
+            ("x\0".to_string(), String::new(), (0, 0, 0)),
+            (String::new(), fields(&["K"]), (0, 0, 0)),
+            (String::new(), String::new(), (3, 0, 0)),
+            (String::new(), String::new(), (0, -1, 0)),
+            (String::new(), String::new(), (0, 0, 3)),
+        ];
+        for (args, env, (i, o, e)) in bad {
+            let p = s(&mut ctx, "rsync");
+            let a = s(&mut ctx, &args);
+            let v = s(&mut ctx, &env);
+            let d = s(&mut ctx, "");
+            assert_eq!(
+                ctx.proc_spawn(p, a, v, d, i, o, e),
+                run_fault("rsync", IoReason::Other)
+            );
+        }
+        assert_eq!(
+            spawn(&mut ctx, "missing", &[], &[], "", (0, 0, 0)),
+            run_fault("missing", IoReason::NotFound)
+        );
+        // 同じ物体を2つの引数に渡しても、渡した数だけ手放す
+        let p = s(&mut ctx, "rsync");
+        let empty = s(&mut ctx, "");
+        ctx.heap_mut().dup(empty).unwrap();
+        ctx.heap_mut().dup(empty).unwrap();
+        let c = ctx.proc_spawn(p, empty, empty, empty, 0, 0, 0).unwrap();
+        assert_eq!(ctx.proc_wait(c), Ok(0));
+    }
+    let started = |args: &[&str], env: &[(&str, &str)], cwd, stdio| Started {
+        program: "rsync".to_string(),
+        args: args.iter().map(|a| a.to_string()).collect(),
+        env: env
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect(),
+        cwd,
+        stdio,
+    };
+    assert_eq!(
+        memory.spawns(),
+        [
+            started(
+                &["-a", "", "x y"],
+                &[("K", "v"), ("K", "w")],
+                Some("sub".to_string()),
+                (Stdio::Inherit, Stdio::Null, StderrMode::ToStdout)
+            ),
+            started(&[], &[], None, (Stdio::Null, Stdio::Pipe, StderrMode::Null)),
+            started(
+                &[],
+                &[],
+                None,
+                (Stdio::Inherit, Stdio::Inherit, StderrMode::Inherit)
+            ),
+        ]
+    );
+    assert_eq!(mortal(ctx.heap()), 0);
+}
+
+/// 止める語が起動の前に立っていれば起動しない。子を待つ間に立てば、子が終わった後で止めたことにし、ハンドルを手放す。
+fn a_child_stops_on_an_interrupt<M: Mode>() {
+    let control = Arc::new(Control::new(Limits::default()));
+    let memory = Arc::new(MemoryHost::default().interrupting(control.clone()));
+    let mut ctx = Ctx::<M>::new(control.clone(), super::host::host(&memory));
+    unsafe {
+        // メモリの Host の子の `wait` は、子が動く間に届いた割り込みとして止める語を立てる
+        let c = spawn(&mut ctx, "sleep", &["1"], &[], "", (0, 0, 0)).unwrap();
+        assert_eq!(ctx.proc_wait(c), Err(Fault::Stopped(Stop::Interrupted)));
+        assert_eq!(
+            spawn(&mut ctx, "sleep", &["1"], &[], "", (0, 0, 0)),
+            Err(Fault::Stopped(Stop::Interrupted))
+        );
+    }
+    assert_eq!(memory.spawns().len(), 1);
+    assert_eq!(memory.waits_and_kills(), (1, 0));
+    assert_eq!(mortal(ctx.heap()), 0);
+}
+
+/// `Child` の読みは標準出力の pipe を読み、UTF-8 でない出力はプログラムの名前を付けた `NotUtf8` にする。閉じた標準
+/// 入力と、pipe にしなかった標準入力と標準出力は `not available` である。`Child` は `close` できず (`WrongKind`)、
+/// ほかのハンドルは `wait` できない。
+fn a_child_handle_reads_writes_and_refuses<M: Mode>() {
+    let memory = Arc::new(MemoryHost::default().with_child_output(b"ok\n\xff"));
+    memory.add("in.txt", MemoryFile::text("x"));
+    let mut ctx = ctx_with::<M>(&memory);
+    let unavailable = |op| {
+        Err(Fault::Io {
+            op,
+            name: "sort".into(),
+            reason: IoReason::NotAvailable,
+        })
+    };
+    unsafe {
+        let t = s(&mut ctx, "a");
+        let c = spawn(&mut ctx, "sort", &[], &[], "", (2, 2, 0)).unwrap();
+        let w = ctx
+            .handle_read(c, Handle::Child, ReadAmount::Line, Form::Text)
+            .unwrap();
+        assert_eq!(text(ctx.heap(), w), "ok\n");
+        ctx.heap_mut().decref(w).unwrap();
+        assert_eq!(
+            ctx.handle_read(c, Handle::Child, ReadAmount::All, Form::Text),
+            Err(Fault::NotUtf8(Box::new(Utf8Source::Child("sort".into()))))
+        );
+        assert_eq!(
+            ctx.handle_close(c, Handle::Child),
+            Err(Fault::Heap(HeapError::WrongKind))
+        );
+        assert_eq!(ctx.proc_close_stdin(c), Ok(c));
+        assert_eq!(
+            ctx.handle_write(c, Handle::Child, t, Write::Text),
+            unavailable(IoOp::Write)
+        );
+        let c = spawn(&mut ctx, "sort", &[], &[], "", (0, 0, 0)).unwrap();
+        assert_eq!(
+            ctx.handle_read(c, Handle::Child, ReadAmount::All, Form::Bytes),
+            unavailable(IoOp::ReadOutput)
+        );
+        let p = s(&mut ctx, "in.txt");
+        let f = ctx.fs_open(p, crate::Open::Read).unwrap();
+        assert_eq!(ctx.proc_wait(f), Err(Fault::Heap(HeapError::WrongKind)));
+        assert_eq!(
+            ctx.proc_close_stdin(f),
+            Err(Fault::Heap(HeapError::WrongKind))
+        );
+        ctx.handle_close(f, Handle::FileIn).unwrap();
+        assert_eq!(ctx.proc_wait(c), Ok(0));
+        ctx.heap_mut().decref(t).unwrap();
+    }
+    assert_eq!(memory.waits_and_kills(), (2, 1));
+    assert_eq!(mortal(ctx.heap()), 0);
+}
+
 /// 書き込みのハンドルは、データを借りて Host のストリームに書き、受け取ったハンドルを返す。`Bytes` と `Text` はその
 /// まま書き、`Line` は `\n` を足す。データの参照の数は変わらない。
 fn stream_handles_write_into_the_host_buffers<M: Mode>() {
@@ -528,6 +691,9 @@ both_modes!(
     a_failed_stdin_read_leaves_the_reader_in_the_slot,
     a_process_gets_its_arguments_split_at_nul,
     a_process_stops_on_an_interrupt,
+    a_child_gets_its_lists_split,
+    a_child_stops_on_an_interrupt,
+    a_child_handle_reads_writes_and_refuses,
     stream_handles_write_into_the_host_buffers,
     a_second_open_of_a_stream_is_in_use,
     a_failed_write_releases_the_handle,

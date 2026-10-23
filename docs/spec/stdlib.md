@@ -591,7 +591,7 @@ pub data Set a =
 - `close f` は、書き出してから閉じる。std の中だけの extern `close_raw : FileOut -> <IO> Unit` の上に、`close h = close_raw (flush h)` と書いてある。書き出せなければ `close_raw` に進まず、`flush` の誤りを返す
 - 閉じずに手放したときも、破棄処理が buffer を書き出し、誤りを捨てる。巻き戻し (`try_io`、`try_panic`、`never` の操作)、`exit`、捕まえなかった実行時エラーのどれで手放しても、書いた中身は書き出される。失うのは、2回目の Ctrl-C と abort のときだけである ([オブジェクトモデル](object-model.md) の「出力のバッファ」)
 
-`write`、`write_bytes`、`write_line`、`flush`、`close` が書けなかったときは、`Io { op: Write, .. }` (``cannot write `<path>`: <reason>``) を返す。標準出力と違って書き込みの順で誤りが決まるので、`try_io` で捕まえる。誤りを返したときの約束は次の4つである。
+`write`、`write_bytes`、`write_line`、`flush`、`close` が書けなかったときは、`Io { op: Write, .. }` (``cannot write to `<path>`: <reason>``) を返す。標準出力と違って書き込みの順で誤りが決まるので、`try_io` で捕まえる。誤りを返したときの約束は次の4つである。
 
 1. ハンドルは閉じている
 2. ファイルには、そのハンドルに渡したバイトの先頭の部分が残る。どこまで書けたかは約束しない
@@ -761,7 +761,7 @@ I/O の失敗の一部は `try_io` で捕まえられる (上の「`try_io`」)�
 | 配列の添字の範囲の外 (`get`、`set`、`read`、`write`) | ``array index 3 is out of range for length 3`` |
 | 配列の負の長さ (`make`、`tabulate`) | ``array length -1 is negative`` |
 | `FileOut.create`、`append` | ``cannot open `out.txt`: permission denied`` |
-| `FileOut.write`、`write_bytes`、`write_line`、`flush`、`close` | ``cannot write `out.txt`: I/O error`` |
+| `FileOut.write`、`write_bytes`、`write_line`、`flush`、`close` | ``cannot write to `out.txt`: I/O error`` |
 | `Proc.run` の起動 | ``cannot run `rsync`: not found`` |
 | 標準入力の2つ目のハンドル | ``the standard input is already open`` |
 | 標準出力の2つ目のハンドル | ``the standard output is already open`` |

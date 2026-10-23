@@ -30,6 +30,7 @@ mod arrays;
 pub(super) mod bytes;
 mod io;
 pub(super) mod positions;
+mod proc;
 // 証明の部品だけを置くので、検証のときだけ読む
 #[cfg(verus_only)]
 mod proof;

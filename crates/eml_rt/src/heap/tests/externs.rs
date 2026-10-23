@@ -302,7 +302,7 @@ fn faults_print_their_listed_texts() {
                 name: "out.txt".into(),
                 reason: IoReason::PermissionDenied,
             },
-            "cannot write `out.txt`: permission denied",
+            "cannot write to `out.txt`: permission denied",
         ),
         (
             Fault::Io {
@@ -626,6 +626,42 @@ fn find_byte_under_find_bytes_matches_windows() {
             "{needle:?} in {text:?} from {from}"
         );
     }
+}
+
+/// 子のプロセスの誤りの文言と、`try_io` と `try_panic` の扱い。0 でない終了コードは `try_io` が `Other` で捕まえる。
+#[test]
+fn child_faults_are_shown_and_caught() {
+    use crate::externs::{Exited, Fault, IO_NOT_UTF8, IO_OTHER, IoOp, IoReason, Utf8Source};
+    let exited = Fault::Exited(Box::new(Exited {
+        program: "sh".into(),
+        code: 3,
+    }));
+    let unread = Fault::Io {
+        op: IoOp::ReadOutput,
+        name: "sort".into(),
+        reason: IoReason::Other,
+    };
+    let not_utf8 = Fault::NotUtf8(Box::new(Utf8Source::Child("sort".into())));
+    let unwritten = Fault::Io {
+        op: IoOp::Write,
+        name: "sort".into(),
+        reason: IoReason::Other,
+    };
+    assert_eq!(unwritten.to_string(), "cannot write to `sort`: I/O error");
+    assert_eq!(unwritten.io_error_kind(), Some(IO_OTHER));
+    assert_eq!(exited.to_string(), "command `sh` exited with code 3");
+    assert_eq!(
+        unread.to_string(),
+        "cannot read the output of `sort`: I/O error"
+    );
+    assert_eq!(
+        not_utf8.to_string(),
+        "the output of `sort` is not valid UTF-8"
+    );
+    assert_eq!(exited.io_error_kind(), Some(IO_OTHER));
+    assert_eq!(unread.io_error_kind(), Some(IO_OTHER));
+    assert_eq!(not_utf8.io_error_kind(), Some(IO_NOT_UTF8));
+    assert!(!exited.panics() && !unread.panics() && !not_utf8.panics());
 }
 
 /// 算術の誤りは2つのレジスタで返り、`Fault` は 24 バイトに収まる。

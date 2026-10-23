@@ -28,13 +28,14 @@ mod word;
 pub use control::{Control, Limits, Stop};
 pub use error::HeapError;
 pub use externs::{
-    ArithFault, Fault, Form, Handle, IndexFault, IoOp, IoReason, Open, ReadAmount, StdStream,
-    Utf8Source, Write,
+    ArithFault, Exited, Fault, Form, Handle, IndexFault, IoOp, IoReason, Open, ReadAmount,
+    StdStream, Utf8Source, Write,
 };
 pub use frozen::Frozen;
 pub use heap::{Ctx, CtxStats, Heap, MaskItem, Stats, Token};
 pub use host::{
-    Buffering, Host, HostRef, Opened, StdHost, StdinSlot, Stream, WriteMode, exit_code,
+    Buffering, Host, HostRef, Opened, Process, Spawn, Spawned, StdHost, StderrMode, StdinSlot,
+    Stdio, Stream, WriteMode, exit_code,
 };
 pub use meta::{Kind, Meta};
 pub use mode::{Checked, Fast, Mode};

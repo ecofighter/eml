@@ -14,7 +14,7 @@ use super::string::text;
 use super::{CONS, Probe, cons, list, mortal, probe, raw};
 use crate::alloc::MAX_SMALL_WORDS;
 use crate::cell::{rc_decref_shared, rc_dup_shared};
-use crate::externs::{Fault, Form, Handle, IoOp, IoReason, Open, ReadAmount, Write};
+use crate::externs::{Exited, Fault, Form, Handle, IoOp, IoReason, Open, ReadAmount, Write};
 use crate::heap::ctx::positions::find_byte;
 use crate::host::{BUFFER_BYTES, Failure, FileIn, Reader, WriteMode, consume, fill, host_open};
 use crate::{Checked, Control, Ctx, Fast, Heap, HeapError, Kind, Limits, Meta, Mode, Word};
@@ -1499,6 +1499,130 @@ fn script_externs_go_through_the_host<M: Mode>() {
     assert_eq!(mortal(ctx.heap()), 0);
 }
 
+/// 子の起動、標準入力への書き込み、`close_stdin`、標準出力の全部の読み、`wait` の流れを、メモリの Host で通す。どの
+/// 引数の文字列も手放され、待った子の破棄処理は kill しない。
+fn a_child_goes_through_the_host<M: Mode>() {
+    let memory = Arc::new(MemoryHost::default().with_child_output("b\na\n日本".as_bytes()));
+    let mut ctx = ctx_tests::ctx_with::<M>(&memory);
+    unsafe {
+        let t = ctx.heap_mut().alloc_string("a\n");
+        let b = ctx.heap_mut().alloc_bytes(b"\xff");
+        let c = ctx_tests::spawn(&mut ctx, "sort", &["-r"], &["K", "v"], "sub", (2, 2, 0)).unwrap();
+        let c = ctx.handle_write(c, Handle::Child, t, Write::Text).unwrap();
+        let c = ctx.handle_write(c, Handle::Child, t, Write::Line).unwrap();
+        let c = ctx.handle_write(c, Handle::Child, b, Write::Bytes).unwrap();
+        let c = ctx.proc_close_stdin(c).unwrap();
+        let w = ctx
+            .handle_read(c, Handle::Child, ReadAmount::All, Form::Text)
+            .unwrap();
+        assert_eq!(text(ctx.heap(), w), "b\na\n日本");
+        assert_eq!((raw::rc(c), raw::rc(t), raw::rc(b)), (1, 1, 1));
+        assert_eq!(ctx.proc_wait(c), Ok(1));
+        for x in [w, t, b] {
+            ctx.heap_mut().decref(x).unwrap();
+        }
+    }
+    assert_eq!(memory.child_input(), b"a\na\n\n\xff");
+    assert_eq!(memory.waits_and_kills(), (1, 0));
+    assert_eq!(mortal(ctx.heap()), 0);
+}
+
+/// 待たずに `Heap` を落とすと、`Child` の破棄処理が子を kill して1回だけ待つ。
+fn a_dropped_child_is_killed_and_waited<M: Mode>() {
+    let memory = Arc::new(MemoryHost::default());
+    let mut ctx = ctx_tests::ctx_with::<M>(&memory);
+    ctx_tests::spawn(&mut ctx, "sort", &[], &[], "", (2, 2, 0)).unwrap();
+    assert_eq!(memory.waits_and_kills(), (0, 0));
+    drop(ctx);
+    assert_eq!(memory.waits_and_kills(), (1, 1));
+}
+
+/// 待った子の `Child` を手放しても、kill せず、もう待たない。
+fn a_waited_child_is_not_killed<M: Mode>() {
+    let memory = Arc::new(MemoryHost::default());
+    let mut ctx = ctx_tests::ctx_with::<M>(&memory);
+    let c = ctx_tests::spawn(&mut ctx, "sort", &[], &[], "", (2, 2, 0)).unwrap();
+    assert_eq!(unsafe { ctx.proc_wait(c) }, Ok(0));
+    assert_eq!(mortal(ctx.heap()), 0);
+    drop(ctx);
+    assert_eq!(memory.waits_and_kills(), (1, 0));
+}
+
+/// 子の標準入力に書けなければ、プログラムの名前を付けた `Io { op: Write, .. }` を返してハンドルを手放す。手放した
+/// `Child` の破棄処理が子を kill して待つ。借りたデータは手放さない。
+fn a_failed_child_write_releases_the_handle<M: Mode>() {
+    let memory = Arc::new(MemoryHost::failing("broken pipe"));
+    let mut ctx = ctx_tests::ctx_with::<M>(&memory);
+    unsafe {
+        let t = ctx.heap_mut().alloc_string("abc");
+        let c = ctx_tests::spawn(&mut ctx, "sort", &[], &[], "", (2, 2, 0)).unwrap();
+        assert_eq!(
+            ctx.handle_write(c, Handle::Child, t, Write::Line),
+            Err(Fault::Io {
+                op: IoOp::Write,
+                name: "sort".into(),
+                reason: IoReason::Other,
+            })
+        );
+        assert_eq!(mortal(ctx.heap()), 1);
+        assert_eq!(memory.waits_and_kills(), (1, 1));
+        ctx.heap_mut().decref(t).unwrap();
+    }
+    assert!(memory.child_input().is_empty());
+    assert_eq!(mortal(ctx.heap()), 0);
+}
+
+/// 子の標準入力への書き込みが `Interrupted` で戻ったとき、止める語が立っていなければ書き直し、立っていれば `Stopped`
+/// を返してハンドルを手放す。
+fn an_interrupted_child_write_stops_only_when_asked<M: Mode>() {
+    let memory = Arc::new(MemoryHost::default().with_child_interrupted_once());
+    let mut ctx = ctx_tests::ctx_with::<M>(&memory);
+    unsafe {
+        let t = ctx.heap_mut().alloc_string("abc");
+        let c = ctx_tests::spawn(&mut ctx, "sort", &[], &[], "", (2, 2, 0)).unwrap();
+        let c = ctx.handle_write(c, Handle::Child, t, Write::Line).unwrap();
+        assert_eq!(ctx.proc_wait(c), Ok(0));
+        ctx.heap_mut().decref(t).unwrap();
+    }
+    assert_eq!(memory.child_input(), b"abc\n");
+    let control = Arc::new(Control::new(Limits::default()));
+    let memory = Arc::new(
+        MemoryHost::default()
+            .interrupting(control.clone())
+            .with_child_interrupted_once(),
+    );
+    let mut ctx = Ctx::<M>::new(control, host(&memory));
+    unsafe {
+        let t = ctx.heap_mut().alloc_string("abc");
+        let c = ctx_tests::spawn(&mut ctx, "sort", &[], &[], "", (2, 2, 0)).unwrap();
+        assert_eq!(
+            ctx.handle_write(c, Handle::Child, t, Write::Line),
+            Err(Fault::Stopped(crate::Stop::Interrupted))
+        );
+        assert_eq!(mortal(ctx.heap()), 1);
+        ctx.heap_mut().decref(t).unwrap();
+    }
+    assert!(memory.child_input().is_empty());
+    assert_eq!(memory.waits_and_kills(), (1, 1));
+    assert_eq!(mortal(ctx.heap()), 0);
+}
+
+/// `proc_exited` はいつも `Exited` で失敗し、プログラムの名前の文字列を手放す。
+fn proc_exited_releases_its_string<M: Mode>() {
+    let mut ctx = ctx_tests::ctx::<M>();
+    unsafe {
+        let p = ctx.heap_mut().alloc_string("sh");
+        assert_eq!(
+            ctx.proc_exited(p, 3),
+            Err(Fault::Exited(Box::new(Exited {
+                program: "sh".into(),
+                code: 3,
+            })))
+        );
+    }
+    assert_eq!(mortal(ctx.heap()), 0);
+}
+
 // T13
 
 /// `find_byte` は物体の中身を借りた `&[u8]` を読む。1語に収まる長さ、語の境目の前後、大きい物体のページの末尾で
@@ -1598,5 +1722,11 @@ both_modes!(
     a_dropped_file_out_writes_its_buffer,
     a_failed_file_out_write_discards_the_rest,
     script_externs_go_through_the_host,
+    a_child_goes_through_the_host,
+    a_dropped_child_is_killed_and_waited,
+    a_waited_child_is_not_killed,
+    a_failed_child_write_releases_the_handle,
+    an_interrupted_child_write_stops_only_when_asked,
+    proc_exited_releases_its_string,
     find_byte_reads_the_body_of_an_object,
 );

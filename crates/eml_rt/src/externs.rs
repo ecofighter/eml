@@ -61,6 +61,8 @@ pub enum IoOp {
     Write,
     /// 子のプロセスの起動。
     Run,
+    /// 子の標準出力の読み。`name` はプログラムの名前である。
+    ReadOutput,
 }
 
 /// I/O の誤りの理由。文字列でなく値で分けるのは、`try_io` が eml の `IOError` の値に変えるためである。
@@ -86,6 +88,8 @@ pub enum Handle {
     Stdout,
     /// `Std.Stderr.Stderr`。
     Stderr,
+    /// `Std.Proc.Child`。
+    Child,
 }
 
 /// `Ctx::fs_open` がファイルを開く向き。読むなら `FileIn`、書くなら `FileOut` の物体を作る。
@@ -144,6 +148,15 @@ pub enum Utf8Source {
     /// `Env.args ()` のリストの 0 から数えた位置。
     Arg(i64),
     EnvVar(Box<str>),
+    /// 子の標準出力。プログラムの名前を持つ。
+    Child(Box<str>),
+}
+
+/// 0 でない終了コードで終わった子 (`Proc.capture`)。
+#[derive(Debug, PartialEq, Eq)]
+pub struct Exited {
+    pub program: String,
+    pub code: i64,
 }
 
 /// 範囲の外の位置。
@@ -191,6 +204,8 @@ pub enum Fault {
     Stopped(Stop),
     /// 標準のストリームのハンドルが、すでに開いている。
     InUse(StdStream),
+    /// 子が 0 でない終了コードで終わった。`try_io` が捕まえ、`kind` は `Other` である。
+    Exited(Box<Exited>),
 }
 
 impl Fault {
@@ -201,6 +216,7 @@ impl Fault {
             Fault::Io { op: _, name: _, reason } => Some(reason_kind(*reason)),
             Fault::Stdin(reason) => Some(reason_kind(*reason)),
             Fault::NotUtf8(_) => Some(IO_NOT_UTF8),
+            Fault::Exited(_) => Some(IO_OTHER),
             Fault::Heap(_)
             | Fault::Arith(_)
             | Fault::Output(_)
@@ -223,7 +239,8 @@ impl Fault {
             | Fault::Io { op: _, name: _, reason: _ }
             | Fault::Stdin(_)
             | Fault::NotUtf8(_)
-            | Fault::Stopped(_) => false,
+            | Fault::Stopped(_)
+            | Fault::Exited(_) => false,
         }
     }
 }
@@ -1246,8 +1263,9 @@ impl fmt::Display for Fault {
                 let verb = match op {
                     IoOp::Open => "open",
                     IoOp::Read => "read",
-                    IoOp::Write => "write",
+                    IoOp::Write => "write to",
                     IoOp::Run => "run",
+                    IoOp::ReadOutput => "read the output of",
                 };
                 write!(f, "cannot {verb} `{name}`: {reason}")
             }
@@ -1258,6 +1276,9 @@ impl fmt::Display for Fault {
                 Utf8Source::Arg(index) => write!(f, "argument {index} is not valid UTF-8"),
                 Utf8Source::EnvVar(name) => {
                     write!(f, "environment variable `{name}` is not valid UTF-8")
+                }
+                Utf8Source::Child(program) => {
+                    write!(f, "the output of `{program}` is not valid UTF-8")
                 }
             },
             Fault::Utf8 { at } => write!(f, "invalid UTF-8 at byte {at}"),
@@ -1302,6 +1323,7 @@ impl fmt::Display for Fault {
                 IndexFault::BytesLength { len } => write!(f, "bytes length {len} is negative"),
             },
             Fault::Stopped(s) => write!(f, "{s}"),
+            Fault::Exited(e) => write!(f, "command `{}` exited with code {}", e.program, e.code),
             Fault::InUse(stream) => write!(
                 f,
                 "the standard {} is already open",

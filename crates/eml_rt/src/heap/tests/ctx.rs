@@ -17,6 +17,30 @@ pub(super) fn ctx_with<M: Mode>(memory: &Arc<MemoryHost>) -> Ctx<M> {
     Ctx::new(Arc::new(Control::new(Limits::default())), host(memory))
 }
 
+/// `Proc.spawn_raw` の列。各要素を「バイト長の十進、NUL、本文」の順に並べる。
+pub(super) fn fields(xs: &[&str]) -> String {
+    xs.iter().map(|x| format!("{}\0{x}", x.len())).collect()
+}
+
+/// `program` を、`args` の引数と `env` の環境と作業ディレクトリ `cwd` と `modes` の向き (標準入力、標準出力、
+/// 標準エラー) で `proc_spawn` に起動させる。
+pub(super) fn spawn<M: Mode>(
+    ctx: &mut Ctx<M>,
+    program: &str,
+    args: &[&str],
+    env: &[&str],
+    cwd: &str,
+    modes: (i64, i64, i64),
+) -> Result<Word, Fault> {
+    unsafe {
+        let p = ctx.heap_mut().alloc_string(program);
+        let a = ctx.heap_mut().alloc_string(&fields(args));
+        let e = ctx.heap_mut().alloc_string(&fields(env));
+        let c = ctx.heap_mut().alloc_string(cwd);
+        ctx.proc_spawn(p, a, e, c, modes.0, modes.1, modes.2)
+    }
+}
+
 /// 標準入力のハンドルを開き、文字列を1回読んで (`line` なら1行、でなければ残りすべて)、閉じる。
 pub(super) fn stdin_read<M: Mode>(ctx: &mut Ctx<M>, line: bool) -> Result<Word, Fault> {
     let h = ctx.handle_open(Handle::Stdin)?;

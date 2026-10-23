@@ -10,9 +10,9 @@ use super::*;
 use crate::alloc::too_large;
 use crate::externs::{Fault, Form, Handle, IoOp, Open, ReadAmount, StdStream, Write};
 use crate::host::{
-    FileIn, FileOut, OutputHandle, Source, StderrHandle, StdinHandle, StdoutHandle, Stream,
-    consume, file_out_flush, file_out_write, fill, host_flush, host_open, host_open_write,
-    host_write, host_write_line, open_stdin, open_stream, read_text,
+    Child, FileIn, FileOut, OutputHandle, Source, StderrHandle, StdinHandle, StdoutHandle, Stream,
+    child_write, consume, file_out_flush, file_out_write, fill, host_flush, host_open,
+    host_open_write, host_write, host_write_line, open_stdin, open_stream, read_text,
 };
 #[cfg(verus_only)]
 use vstd::string::StringSliceAdditionalSpecFns;
@@ -20,10 +20,11 @@ use vstd::string::StringSliceAdditionalSpecFns;
 verus! {
 
 /// `handle_write` が型を確かめたハンドルの書き込み先。標準のストリームは Host の buffer に、`FileOut` は自分の buffer
-/// に書く。
+/// に、`Child` は子の標準入力の pipe に直に書く。
 enum Sink {
     Stream(Stream),
     File(*mut FileOut),
+    Child(*mut Child),
 }
 
 /// 行の読みの途中のヒープ `h`。呼ぶ前のヒープ `h0` からは、新しい物体を作って手放しただけで、`h0` で生きていた物体は
@@ -472,6 +473,10 @@ impl<M: Mode> Ctx<M> {
                 Ok(p) => unsafe { self.read_from(p, true, read, form) },
                 Err(e) => Err(Fault::Heap(e)),
             },
+            Handle::Child => match unsafe { self.heap.foreign_unique::<Child>(h) } {
+                Ok(p) => unsafe { self.read_from(p, false, read, form) },
+                Err(e) => Err(Fault::Heap(e)),
+            },
             // 書き込みのハンドルは読めない
             Handle::Stdout | Handle::Stderr | Handle::FileOut => Err(
                 Fault::Heap(HeapError::WrongKind),
@@ -892,6 +897,7 @@ impl<M: Mode> Ctx<M> {
             old(self).wf(),
             handle != Handle::FileIn,
             handle != Handle::FileOut,
+            handle != Handle::Child,
         ensures
             final(self).wf(),
             final(self).evv_spec() == old(self).evv_spec(),
@@ -937,7 +943,7 @@ impl<M: Mode> Ctx<M> {
                 }
             },
             // 前提により来ない
-            Handle::FileIn | Handle::FileOut => {
+            Handle::FileIn | Handle::FileOut | Handle::Child => {
                 proof {
                     assert(false);
                 }
@@ -1013,6 +1019,8 @@ impl<M: Mode> Ctx<M> {
                 Ok(_) => Ok(()),
                 Err(e) => Err(e),
             },
+            // `Child` を使い終える道は `wait` だけである (`proc_wait`)
+            Handle::Child => Err(HeapError::WrongKind),
         };
         if let Err(e) = kind {
             return Err(Fault::Heap(e));
@@ -1020,11 +1028,12 @@ impl<M: Mode> Ctx<M> {
         unsafe { self.release_handle(h) }
     }
 
-    /// 型を確かめたハンドル `h` の参照を手放す。`handle_close` と、書けなかった `handle_write` と `handle_flush` が使う。
+    /// 型を確かめた物体 `h` の参照を手放す。`handle_close` と、書けなかった `handle_write` と `handle_flush` と、
+    /// `Proc` の extern (`proc_spawn` が読んだ文字列、`proc_wait` のハンドル) が使う。
     ///
     /// # Safety
     /// `handle_close` と同じである。
-    unsafe fn release_handle(&mut self, h: Word) -> (r: Result<(), Fault>)
+    pub(super) unsafe fn release_handle(&mut self, h: Word) -> (r: Result<(), Fault>)
         requires
             old(self).wf(),
             old(self).heap_spec().word_in(h),
@@ -1039,11 +1048,13 @@ impl<M: Mode> Ctx<M> {
                 old(self).heap_spec(),
             ),
             !M::CHECKED ==> r is Ok,
+            M::CHECKED ==> final(self).heap_spec().words_kept(old(self).heap_spec()),
             old(self).held_ok() && old(self).holds(h) ==> (r matches Err(Fault::Heap(e))
                 ==> *final(self) == *old(self) || chain_err(Err::<(), HeapError>(e))),
             old(self).held_ok() && old(self).holds(h) && r is Ok ==> {
                 &&& final(self).held_ok()
                 &&& final(self).evolved_by(*old(self), |x: usize| -points(h, x), Set::empty())
+                &&& no_alloc(final(self).heap_spec(), old(self).heap_spec())
             },
     {
         let ghost s0 = *self;
@@ -1071,22 +1082,26 @@ impl<M: Mode> Ctx<M> {
             }
             if c {
                 self.lemma_closed(s0, h);
+                lemma_decref_moved(self.heap, s0.heap, h);
             }
         }
         Ok(())
     }
 
-    /// `FileOut.write`、`write_bytes`、`write_line`、`Stdout.write`、`write_bytes`、`write_line` と、`Stderr` の同じ3つ。
+    /// `FileOut.write`、`write_bytes`、`write_line`、`Stdout.write`、`write_bytes`、`write_line` と、`Stderr` と `Child`
+    /// の同じ3つ。
     /// `data` を借りて `handle` のハンドル `h` に書き、`h` をそのまま返す。`write` がデータの種類と書き方を決め、`Line`
     /// は `println` と同じく `\n` を足して1行として書く。標準のストリームのハンドルは buffer を持たず Host の buffer に、
-    /// `FileOut` は自分の buffer に書く (docs/spec/object-model.md の「出力のバッファ」)。書けなければ `h` を手放して、
-    /// 標準のストリームなら `Output`、`FileOut` なら `Io { op: Write, .. }` を返す。`data` の参照の数は変わらない。
+    /// `FileOut` は自分の buffer に、`Child` は子の標準入力の pipe に書く (docs/spec/object-model.md の「出力のバッファ」
+    /// と「子のプロセス」)。書けなければ `h` を手放して、標準のストリームなら `Output`、`FileOut` と `Child` なら
+    /// `Io { op: Write, .. }` を返す。`Child` は、止める語が立っていれば `Stopped` を返す。`data` の参照の数は
+    /// 変わらない。
     ///
     /// # Safety
     /// `heap_mut` の前提を守っている。`h` と `data` は即値か、このヒープか付けた塊の生きている物体を指し、呼ぶ側が
     /// それぞれの参照を1つ持つ。`handle` が `FileIn` か `Stdin` か、`h` が `handle` の型のハンドルでなければ、どちらの
     /// モードでも `WrongKind` を返す。速いモードでは、`data` は `write` の種類 (`Bytes` ならバイト列、ほかは文字列)
-    /// で、`FileOut` の `h` は局所で rc が 1 である (検査モードは確かめ、違えば何も書かずに `WrongKind`、`NotUnique`、
+    /// で、`FileOut` と `Child` の `h` は局所で rc が 1 である (検査モードは確かめ、違えば何も書かずに `WrongKind`、`NotUnique`、
     /// `WrongOwner` を返す)。
     pub unsafe fn handle_write(&mut self, h: Word, handle: Handle, data: Word, write: Write) -> (r:
         Result<Word, Fault>)
@@ -1102,14 +1117,16 @@ impl<M: Mode> Ctx<M> {
                     Kind::String
                 },
             ) && old(self).holds(data) && old(self).holds(h),
-            !M::CHECKED && handle == Handle::FileOut ==> old(self).heap_spec().rc_value(h) == 1,
+            !M::CHECKED && (handle == Handle::FileOut || handle == Handle::Child) ==> old(
+                self,
+            ).heap_spec().rc_value(h) == 1,
         ensures
             final(self).wf(),
             final(self).evv_spec() == old(self).evv_spec(),
             final(self).yield_spec() == old(self).yield_spec(),
             r is Ok || (r matches Err(Fault::Output(_))) || (r matches Err(
                 Fault::Io { op: IoOp::Write, .. },
-            )) || (r matches Err(Fault::Heap(_))),
+            )) || (r matches Err(Fault::Stopped(_))) || (r matches Err(Fault::Heap(_))),
             r matches Ok(x) ==> x == h,
             !M::CHECKED && (r matches Err(Fault::Heap(_))) ==> r == Err::<Word, Fault>(
                 Fault::Heap(HeapError::WrongKind),
@@ -1161,6 +1178,10 @@ impl<M: Mode> Ctx<M> {
                 Ok(p) => Ok(Sink::File(p)),
                 Err(e) => Err(e),
             },
+            Handle::Child => match unsafe { self.heap.foreign_unique::<Child>(h) } {
+                Ok(p) => Ok(Sink::Child(p)),
+                Err(e) => Err(e),
+            },
             // 読むためのハンドルには書けない
             Handle::FileIn | Handle::Stdin => Err(HeapError::WrongKind),
         };
@@ -1205,6 +1226,10 @@ impl<M: Mode> Ctx<M> {
                 }
             },
             Sink::File(p) => unsafe { file_out_write(p, self.heap.body_of(data), line) },
+            Sink::Child(p) => {
+                let control = &self.control;
+                unsafe { child_write(p, self.heap.body_of(data), line, control) }
+            },
         };
         proof {
             if M::CHECKED {
@@ -1300,7 +1325,7 @@ impl<M: Mode> Ctx<M> {
                     return Err(Fault::Heap(e));
                 },
             },
-            Handle::FileIn | Handle::Stdin | Handle::Stderr => {
+            Handle::FileIn | Handle::Stdin | Handle::Stderr | Handle::Child => {
                 return Err(Fault::Heap(HeapError::WrongKind));
             },
         };
@@ -1324,7 +1349,7 @@ impl<M: Mode> Ctx<M> {
     }
 
     /// 呼ぶ側が持つ引数 `w` は、読めて、`decref` できる。
-    proof fn lemma_held_arg(&self, w: Word)
+    pub(super) proof fn lemma_held_arg(&self, w: Word)
         requires
             self.held_ok(),
             self.holds(w),

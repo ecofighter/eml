@@ -1156,7 +1156,7 @@ impl<M: Mode> Ctx<M> {
     }
 }
 
-/// `ws` が3語までのとき、物体を指す語の数を語ごとに足す。
+/// `ws` が4語までのとき、物体を指す語の数を語ごとに足す。
 pub(super) proof fn lemma_points_in(ws: Seq<Word>, b: usize)
     ensures
         ws.len() == 0 ==> points_in(ws, b) == 0,
@@ -1166,16 +1166,24 @@ pub(super) proof fn lemma_points_in(ws: Seq<Word>, b: usize)
             ws[2],
             b,
         ),
+        ws.len() == 4 ==> points_in(ws, b) == points(ws[0], b) + points(ws[1], b) + points(ws[2], b)
+            + points(ws[3], b),
 {
-    reveal_with_fuel(points_in, 4);
+    reveal_with_fuel(points_in, 5);
     if ws.len() >= 1 {
         let a = ws.drop_last();
         if ws.len() >= 2 {
             assert(a[0] == ws[0]);
             let c = a.drop_last();
-            if ws.len() == 3 {
+            if ws.len() >= 3 {
                 assert(a[1] == ws[1]);
                 assert(c[0] == ws[0]);
+                let e = c.drop_last();
+                if ws.len() == 4 {
+                    assert(a[2] == ws[2]);
+                    assert(c[1] == ws[1]);
+                    assert(e[0] == ws[0]);
+                }
             }
         }
     }

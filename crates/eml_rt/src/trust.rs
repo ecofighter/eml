@@ -30,6 +30,7 @@ const FILES: &[(&str, &str)] = &[
         "heap/ctx/positions.rs",
         include_str!("heap/ctx/positions.rs"),
     ),
+    ("heap/ctx/proc.rs", include_str!("heap/ctx/proc.rs")),
     ("heap/ctx/proof.rs", include_str!("heap/ctx/proof.rs")),
     ("heap/ctx/recover.rs", include_str!("heap/ctx/recover.rs")),
     ("heap/ctx/roots.rs", include_str!("heap/ctx/roots.rs")),
@@ -149,6 +150,11 @@ const TRUSTED: &[(&str, &str)] = &[
     ("host.rs: external_body host_env_has", "T11"),
     ("host.rs: external_body host_env_var", "T11"),
     ("host.rs: external_body host_run", "T11"),
+    ("host.rs: external_body Child", "T11"),
+    ("host.rs: external_body host_spawn", "T11"),
+    ("host.rs: external_body child_write", "T11"),
+    ("host.rs: external_body child_close_stdin", "T11"),
+    ("host.rs: external_body child_wait", "T11"),
     ("externs.rs: external_body float_add", "T12"),
     ("externs.rs: external_body float_sub", "T12"),
     ("externs.rs: external_body float_mul", "T12"),
@@ -184,6 +190,7 @@ const TRUSTED: &[(&str, &str)] = &[
     ("host.rs: Drop for StdinHandle", "T4"),
     ("host.rs: Drop for StdoutHandle", "T4"),
     ("host.rs: Drop for StderrHandle", "T4"),
+    ("host.rs: Drop for Child", "T4"),
 ];
 
 /// `verus!` の外でも書いてよい `unsafe` の始まり。`Send` と `Sync` の宣言と、検証した関数を呼ぶだけの `Drop` である。

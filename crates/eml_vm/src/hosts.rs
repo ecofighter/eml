@@ -3,12 +3,16 @@
 
 use std::collections::BTreeMap;
 use std::ffi::OsString;
-use std::io::{self, Cursor, Write};
+use std::io::{self, Cursor, PipeReader, Read, Write};
 use std::path::PathBuf;
-use std::process::{Command, Stdio};
+use std::process::{self, Command, Stdio};
 use std::sync::{Arc, Mutex, PoisonError};
+use std::thread::{self, JoinHandle};
 
-use eml_rt::{Buffering, Host, HostRef, Opened, StdHost, StdinSlot, Stream, WriteMode, exit_code};
+use eml_rt::{
+    Buffering, Host, HostRef, Opened, Process, Spawn, Spawned, StdHost, StderrMode, StdinSlot,
+    Stream, WriteMode, exit_code,
+};
 
 /// 書いたバイト列を覚える書き込み先。テストが出力を読むために使う。
 #[derive(Clone, Default)]
@@ -231,6 +235,120 @@ impl Host for CaptureHost {
         self.err.clone().write_all(&output.stderr)?;
         Ok(exit_code(output.status))
     }
+
+    /// 環境と標準入力は `run` と同じである。受け継ぐ標準出力と標準エラーは pipe にしてスレッドで最後まで読み、子を
+    /// 待った後で、捕まえたそれぞれの出力に `out`、`err` の順に足す。捕まえた出力の順を `run` と同じにするためである。
+    /// スレッドで読むのは、子が pipe の buffer より多く書いても、eml の側の読み書きと詰まらないためである。
+    fn spawn(&self, spawn: &Spawn<'_>) -> io::Result<Spawned> {
+        self.inner.flush()?;
+        let dir = spawn.dir(&self.file_root);
+        let mut command = Command::new(spawn.program_path(&dir)?);
+        command
+            .args(spawn.args)
+            .env_clear()
+            .envs(self.env.iter().map(|(key, value)| (key, value)));
+        if let Some(path) = std::env::var_os("PATH") {
+            command.env("PATH", path);
+        }
+        command.envs(spawn.env.iter().copied());
+        if !dir.as_os_str().is_empty() {
+            command.current_dir(&dir);
+        }
+        command.stdin(match spawn.stdin {
+            eml_rt::Stdio::Pipe => Stdio::piped(),
+            eml_rt::Stdio::Inherit | eml_rt::Stdio::Null => Stdio::null(),
+        });
+        let mut stdout = None;
+        let mut out = None;
+        match spawn.stdout {
+            eml_rt::Stdio::Null => {
+                command.stdout(Stdio::null());
+                if spawn.stderr == StderrMode::ToStdout {
+                    command.stderr(Stdio::null());
+                }
+            }
+            pipe => {
+                let (reader, writer) = io::pipe()?;
+                if spawn.stderr == StderrMode::ToStdout {
+                    command.stderr(writer.try_clone()?);
+                }
+                command.stdout(writer);
+                if pipe == eml_rt::Stdio::Pipe {
+                    stdout = Some(Box::new(reader) as Box<dyn Read + Send>);
+                } else {
+                    out = Some(reader);
+                }
+            }
+        }
+        let mut err = None;
+        match spawn.stderr {
+            StderrMode::Inherit => {
+                let (reader, writer) = io::pipe()?;
+                command.stderr(writer);
+                err = Some(reader);
+            }
+            StderrMode::Null => {
+                command.stderr(Stdio::null());
+            }
+            StderrMode::ToStdout => {}
+        }
+        let mut child = command.spawn()?;
+        // `command` が持つ pipe の書き口を閉じる。残すと、子が終わっても読むスレッドに終わりが届かない
+        drop(command);
+        let stdin = child
+            .stdin
+            .take()
+            .map(|w| Box::new(w) as Box<dyn Write + Send>);
+        Ok(Spawned {
+            stdin,
+            stdout,
+            process: Box::new(CapturedChild {
+                child,
+                out: out.map(drain),
+                err: err.map(drain),
+                out_capture: self.out.clone(),
+                err_capture: self.err.clone(),
+            }),
+        })
+    }
+}
+
+/// `pipe` を終わりまで読むスレッド。読みの誤りは、それまでに読んだ分で終える。
+fn drain(mut pipe: PipeReader) -> JoinHandle<Vec<u8>> {
+    thread::spawn(move || {
+        let mut bytes = Vec::new();
+        let _ = pipe.read_to_end(&mut bytes);
+        bytes
+    })
+}
+
+/// `CaptureHost::spawn` の子。待ったときに、読むスレッドが読んだ出力を捕まえた出力に足す。
+struct CapturedChild {
+    child: process::Child,
+    out: Option<JoinHandle<Vec<u8>>>,
+    err: Option<JoinHandle<Vec<u8>>>,
+    out_capture: Capture,
+    err_capture: Capture,
+}
+
+impl Process for CapturedChild {
+    fn wait(&mut self) -> io::Result<i32> {
+        let status = self.child.wait()?;
+        for (thread, capture) in [
+            (self.out.take(), &self.out_capture),
+            (self.err.take(), &self.err_capture),
+        ] {
+            if let Some(thread) = thread {
+                let bytes = thread.join().unwrap_or_default();
+                capture.clone().write_all(&bytes)?;
+            }
+        }
+        Ok(exit_code(status))
+    }
+
+    fn kill(&mut self) -> io::Result<()> {
+        self.child.kill()
+    }
 }
 
 /// 標準出力をメモリに捕まえる Host。`CaptureHost::new` の既定 (引数なし、空の標準入力、空の環境) で作る。
@@ -251,4 +369,70 @@ pub fn script_host(file_root: PathBuf, args: Vec<OsString>) -> HostRef {
         .with_args(args)
         .with_stdin(Box::new(io::stdin()));
     HostRef::new(Arc::new(host))
+}
+
+#[cfg(all(test, unix))]
+mod tests {
+    use std::io::Read;
+    use std::path::PathBuf;
+
+    use eml_rt::{Host, Spawn, StderrMode, Stdio};
+
+    use super::CaptureHost;
+
+    fn spawn<'a>(script: &'a [&'a str], stdout: Stdio, stderr: StderrMode) -> Spawn<'a> {
+        Spawn {
+            program: "sh",
+            args: script,
+            env: &[],
+            cwd: None,
+            stdin: Stdio::Null,
+            stdout,
+            stderr,
+        }
+    }
+
+    /// 受け継ぐ標準出力と標準エラーは、子を待った後で、捕まえた出力に `out`、`err` の順に足す。pipe の buffer より
+    /// 多く書く子も、待つ前に詰まらない。
+    #[test]
+    fn a_child_is_captured_after_it_ends() {
+        let host = CaptureHost::new(PathBuf::new());
+        let script = [
+            "-c",
+            "head -c 100000 /dev/zero | tr '\\0' x; echo; echo err >&2",
+        ];
+        let mut child = host
+            .spawn(&spawn(&script, Stdio::Inherit, StderrMode::Inherit))
+            .unwrap();
+        assert!(child.stdout.is_none());
+        assert_eq!(child.process.wait().unwrap(), 0);
+        assert_eq!(host.output().contents().len(), 100_001);
+        assert_eq!(host.errors().contents(), "err\n");
+    }
+
+    /// `2>&1` は、捕まえる標準出力にも、eml に渡す pipe にも合流する。
+    #[test]
+    fn a_merged_error_joins_the_standard_output() {
+        let host = CaptureHost::new(PathBuf::new());
+        let script = ["-c", "echo out; echo err >&2"];
+        let mut child = host
+            .spawn(&spawn(&script, Stdio::Inherit, StderrMode::ToStdout))
+            .unwrap();
+        assert_eq!(child.process.wait().unwrap(), 0);
+        assert_eq!(host.output().contents(), "out\nerr\n");
+        let mut child = host
+            .spawn(&spawn(&script, Stdio::Pipe, StderrMode::ToStdout))
+            .unwrap();
+        let mut read = String::new();
+        child
+            .stdout
+            .take()
+            .unwrap()
+            .read_to_string(&mut read)
+            .unwrap();
+        assert_eq!(child.process.wait().unwrap(), 0);
+        assert_eq!(read, "out\nerr\n");
+        assert_eq!(host.output().contents(), "out\nerr\n");
+        assert_eq!(host.errors().contents(), "");
+    }
 }
