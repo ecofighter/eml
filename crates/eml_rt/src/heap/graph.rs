@@ -1,4 +1,4 @@
-//! 物体のグラフ (docs/spec/object-model.md の「`share`」)。たどりは物体への読み書きを `Graph` の裏に置いて書き、
+//! 物体のグラフ (docs/spec/object-model.md の「`share`」と「`transfer_back`」)。たどりは物体への読み書きを `Graph` の裏に置いて書き、
 //! Verus がたどりを trait のメソッドの約束の上で証明する。ヒープの上の `Graph` は `Objects` で、たどりの間ヒープの
 //! ブロックの権限を預かる。
 
@@ -102,10 +102,12 @@ pub(crate) trait Graph: Sized {
             r == self.gv().rc[node],
     ;
 
+    /// 局所でない物体を局所にはしない。それは所有者も書く `flip` の仕事である
     fn set_rc(&mut self, node: Self::Node, rc: i32)
         requires
             old(self).gv().nodes.contains(node),
             old(self).gv().rc[node] != 0,
+            rc > 0 ==> old(self).gv().rc[node] > 0,
         ensures
             final(self).gv() == old(self).gv().with_rc(node, rc),
             final(self).kept(*old(self)),
@@ -127,6 +129,44 @@ pub(crate) trait Graph: Sized {
             final(self).gv() == old(self).gv().with_owner(node, owner),
             final(self).kept(*old(self)),
             final(self).seen() == old(self).seen(),
+    ;
+
+    /// 共有の物体を rc 1 の局所の物体にし、所有者を `owner` にする。rc と所有者を1つの操作で書くので、検査モードの
+    /// 前置きの所有者は、局所の物体のどれでも持ち主に等しいままである
+    fn flip(&mut self, node: Self::Node, owner: u32)
+        requires
+            old(self).gv().nodes.contains(node),
+            old(self).gv().rc[node] < 0,
+        ensures
+            final(self).gv() == old(self).gv().with_rc(node, 1).with_owner(node, owner),
+            final(self).kept(*old(self)),
+            final(self).seen() == old(self).seen(),
+    ;
+
+    /// 検査モードか。所有者を読めるのは検査モードだけである。
+    spec fn checked(&self) -> bool;
+
+    /// 読める所有者が `gv` の所有者に等しい。
+    spec fn owners_known(&self) -> bool;
+
+    /// `kept` は、検査モードかと、読める所有者が等しいことを保つ。
+    proof fn lemma_kept_known(&self, old: Self)
+        requires
+            self.kept(old),
+        ensures
+            self.checked() == old.checked(),
+            old.owners_known() ==> self.owners_known(),
+    ;
+
+    /// 検査モードで、生きている局所の節点の所有者を読む。
+    fn owner(&self, node: Self::Node) -> (r: u32)
+        requires
+            self.checked(),
+            self.gv().nodes.contains(node),
+            self.gv().live[node],
+            self.gv().rc[node] > 0,
+        ensures
+            self.owners_known() ==> r == self.gv().owner[node],
     ;
 
     /// 子のうち物体を指すものを `out` に積む。
@@ -289,7 +329,7 @@ pub(crate) open spec fn node_perm(base: Core, perms: Map<usize, BlockPerm>, a: u
     }
 }
 
-/// `share` の節点にするブロック。生きている物体で、権限は物体の形をしている。たどりはこの形を変えない。付けた塊の
+/// たどりの節点にするブロック。生きている物体で、権限は物体の形をしている。たどりはこの形を変えない。付けた塊の
 /// 物体も節点で、rc 0 なのでたどりはそこで止まる。
 pub(crate) open spec fn node_ok(
     base: Core,
@@ -415,7 +455,7 @@ pub(crate) proof fn lemma_ptr_of(w: Word, h: *mut Header)
     vstd::raw_ptr::ptrs_mut_eq_sized(ptr_of(w));
 }
 
-/// 検査モードの前置きの所有者は、たどりの前に rc が正だった節点で、持ち主に等しい。
+/// 検査モードの前置きの所有者は、たどりの前か今 rc が正の節点で、持ち主に等しい。
 pub(crate) open spec fn owners_ok(
     base: Core,
     perms: Map<usize, BlockPerm>,
@@ -423,8 +463,9 @@ pub(crate) open spec fn owners_ok(
     checked: bool,
 ) -> bool {
     forall|a: usize| #[trigger]
-        node_ok(base, perms, checked, a) && base.state(a) == BlockState::Live && base.rc_of(a) > 0
-            && perms[a].prefix is Some ==> p_owner(perms[a]) == owner[a]
+        node_ok(base, perms, checked, a) && base.state(a) == BlockState::Live && (base.rc_of(a) > 0
+            || (!base.in_region(a) && perms[a].rc.value() > 0)) && perms[a].prefix is Some
+            ==> p_owner(perms[a]) == owner[a]
 }
 
 /// 2つの権限の写像で、たどりが変えない部分 (rc の値と、節点の前置きの所有者の値を除くすべて) が同じである。
@@ -518,7 +559,7 @@ pub(crate) proof fn lemma_same_frame_graph(
     assert(g1.children =~= g0.children);
 }
 
-/// ヒープの物体のグラフ。`share` のたどりの間、ヒープのブロックの権限と、検査モードの ID ごとの数と訪問済みの
+/// ヒープの物体のグラフ。`share` と `transfer_back` のたどりの間、ヒープのブロックの権限と、検査モードの ID ごとの数と訪問済みの
 /// 集まりを預かる。節点は生きている物体のヘッダである。
 // 数と訪問済みの欄は速いモードでも大きさを持つが、空のまま触れない。ほかの欄はどれも ghost と権限で、実行の時には
 // 大きさを持たない
@@ -690,10 +731,15 @@ impl<M: Mode> Graph for Objects<M> {
             if owners_ok(self.view(), old_self.perms@, old_self.owner@, M::CHECKED) {
                 assert forall|a: usize| #[trigger]
                     node_ok(self.view(), self.perms@, M::CHECKED, a) && self.view().state(a)
-                        == BlockState::Live && self.view().rc_of(a) > 0
+                        == BlockState::Live && (self.view().rc_of(a) > 0 || (!self.view().in_region(
+                        a,
+                    ) && self.perms@[a].rc.value() > 0))
                         && self.perms@[a].prefix is Some implies p_owner(self.perms@[a])
                     == self.owner@[a] by {
                     assert(node_ok(self.view(), old_self.perms@, M::CHECKED, a));
+                    if a == h@.addr {
+                        assert(old_self.gv().rc[h] == old_self.perms@[a].rc.value());
+                    }
                 }
             }
         }
@@ -757,13 +803,99 @@ impl<M: Mode> Graph for Objects<M> {
             if owners_ok(self.view(), old_self.perms@, old_self.owner@, M::CHECKED) {
                 assert forall|a: usize| #[trigger]
                     node_ok(self.view(), self.perms@, M::CHECKED, a) && self.view().state(a)
-                        == BlockState::Live && self.view().rc_of(a) > 0
+                        == BlockState::Live && (self.view().rc_of(a) > 0 || (!self.view().in_region(
+                        a,
+                    ) && self.perms@[a].rc.value() > 0))
                         && self.perms@[a].prefix is Some implies p_owner(self.perms@[a])
                     == self.owner@[a] by {
                     assert(node_ok(self.view(), old_self.perms@, M::CHECKED, a));
                 }
             }
         }
+    }
+
+    fn flip(&mut self, h: *mut Header, owner: u32) {
+        let ghost old_self = *self;
+        proof {
+            reveal(graph_of);
+            lemma_node(self.view(), self.perms@, M::CHECKED, h);
+            // rc が 0 でない節点は、塊の物体でない
+            if self.view().in_region(h@.addr) {
+                self.view().lemma_region_rc(h@.addr);
+            }
+        }
+        let tracked mut p = self.perms.borrow_mut().tracked_remove(h@.addr);
+        rc_store(rc_ptr(h), Tracked(&mut p.rc), 1);
+        if M::CHECKED {
+            // rc が負の物体は数に入っていないので、前置きの古い所有者は読まずに、新しい所有者の数だけを増やす
+            count_owned(&mut self.owned, owner, true);
+            let tracked mut q = p.prefix.tracked_unwrap();
+            u32_store(prefix_first_ptr(h), Tracked(&mut q.first), owner);
+            proof {
+                p.prefix = Some(q);
+            }
+        }
+        proof {
+            reveal(graph_of);
+            self.perms.borrow_mut().tracked_insert(h@.addr, p);
+            assert(self.perms@.dom() =~= old_self.perms@.dom());
+            self.owner = Ghost(self.owner@.insert(h@.addr, owner));
+            lemma_same_frame_graph(
+                self.view(),
+                self.perms@,
+                old_self.perms@,
+                self.owner@,
+                old_self.owner@,
+                M::CHECKED,
+            );
+            let ns = nodes_of(self.view(), old_self.perms@, M::CHECKED);
+            let want = old_self.gv().with_rc(h, 1).with_owner(h, owner);
+            assert forall|n: *mut Header| #[trigger] ns.contains(n) implies self.gv().owner[n]
+                == want.owner[n] && self.gv().rc[n] == want.rc[n] by {
+                lemma_node(self.view(), old_self.perms@, M::CHECKED, n);
+            }
+            assert(self.gv().owner =~= want.owner);
+            assert(self.gv().rc =~= want.rc);
+            if owners_ok(self.view(), old_self.perms@, old_self.owner@, M::CHECKED) {
+                assert forall|a: usize| #[trigger]
+                    node_ok(self.view(), self.perms@, M::CHECKED, a) && self.view().state(a)
+                        == BlockState::Live && (self.view().rc_of(a) > 0 || (!self.view().in_region(
+                        a,
+                    ) && self.perms@[a].rc.value() > 0))
+                        && self.perms@[a].prefix is Some implies p_owner(self.perms@[a])
+                    == self.owner@[a] by {
+                    assert(node_ok(self.view(), old_self.perms@, M::CHECKED, a));
+                }
+            }
+        }
+    }
+
+    open spec fn checked(&self) -> bool {
+        M::CHECKED
+    }
+
+    open spec fn owners_known(&self) -> bool {
+        owners_ok(self.view(), self.perms@, self.owner@, M::CHECKED)
+    }
+
+    proof fn lemma_kept_known(&self, old: Self) {
+    }
+
+    fn owner(&self, h: *mut Header) -> (r: u32) {
+        proof {
+            reveal(graph_of);
+            lemma_node(self.view(), self.perms@, M::CHECKED, h);
+            // rc が 0 でない節点は、塊の物体でない
+            if self.view().in_region(h@.addr) {
+                self.view().lemma_region_rc(h@.addr);
+            }
+            // 生きている節点は、前置きの状態が生存で、構築中でないので生きている物体である
+
+            assert(self.view().state(h@.addr) == BlockState::Live);
+        }
+        let tracked p = self.tracked_node(h@.addr, M::CHECKED);
+        let tracked q = p.prefix.tracked_borrow();
+        u32_load(prefix_first_ptr(h), Tracked(&q.first))
     }
 
     fn push_children(&self, h: *mut Header, out: &mut Vec<*mut Header>) {
@@ -827,7 +959,7 @@ impl<M: Mode> Graph for Objects<M> {
             reveal(graph_of);
             lemma_node(self.view(), self.perms@, M::CHECKED, h);
         }
-        // 集まりは初めて使うときに作る。速いモードはここを通らないので、`share` のたびに作る費用を払わない
+        // 集まりは初めて使うときに作る。速いモードはここを通らないので、たどりのたびに作る費用を払わない
         let mut taken = None;
         mem::swap(&mut taken, &mut self.seen);
         let mut set = match taken {

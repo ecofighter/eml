@@ -35,6 +35,7 @@ mod script;
 mod share;
 mod string;
 mod table;
+mod transfer;
 mod trusted;
 mod workers;
 

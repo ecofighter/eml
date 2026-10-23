@@ -259,6 +259,27 @@ RC の遷移は、rc の値だけを受け取って次の状態を返す純粋�
 - たどりのコードは、物体への読み書き (生存、rc、`lin` ビット、所有者、子) を `Graph` trait の裏に置いて書く。Verus が、たどりのコードを trait のメソッドの約束の上で、任意のグラフについて証明するためである ([テスト戦略](../implementation/testing.md) の「Verus」)。ヒープの上の実装も証明し、たどりの結果をヒープの抽象のモデルの遷移と結ぶ
 - VM はシングルスレッドだが、`par` の fork と join は worker の数によらず印を付けるので ([マルチコア対応の設計](../future/multicore.md) の「`par` の印付け」)、この経路を通る。物理的なスレッドが1つの間、`receiver` は論理的な worker ID (下の「論理的な worker ID」) である。`par` はまだ実装していないので、今 `share` を呼ぶのは単体テストだけである
 
+## `transfer_back`
+
+- `transfer_back(w, from)` は、join で右の子の値 w を、今の worker の局所の値に戻す。`from` は右の子の ID で、右の子の値を受け取った後、`retire_worker(from)` の前に呼ぶ (下の「論理的な worker ID」)
+- たどりは2つのスタックを持つ。裏返しのスタックと、検査モードだけの所有者だけのスタックである。根は裏返しのスタックから始める
+- 裏返しのスタックから取り出した rc -1 の物体は、rc を 1 にし、所有者を今の worker にして、子を裏返しのスタックに積む。ほかの物体 (rc -2 以下の共有の物体、不死の物体、局所の物体) では止まる。つまり、根から rc -1 の物体だけを通って届く rc -1 の物体を裏返す。裏返した物体は rc 1 になるので、もう一度着いても止まる。`lin` ビットの立った rc -1 の物体も裏返す
+  - 裏返してよい理由: rc -1 の物体を指す参照は1つだけである。fork で子に渡した親の値を子がそのまま返したとき、その参照は戻す値の中にある。そのため、裏返した物体に別の worker から届く道は残らず、裏返した物体は reuse もその場の書き換えもできる。rc -2 以下の物体は、ほかの所からも参照されうるので共有のまま残す
+- 検査モードでは、裏返しのスタックで止まる局所の物体と、所有者だけのスタックから取り出した物体を、次のように扱う
+  - rc が正の物体は、所有者で見分ける。所有者が今の worker なら止まる。`from` なら、訪問済みの集まりに入れ、所有者を今の worker に書き換え、子を所有者だけのスタックに積む。ほかの ID なら `WrongOwner` を返す
+  - `lin` でない rc -1 の物体は、訪問済みの集まりに入れて、子を所有者だけのスタックに積む
+  - 訪問済みの物体にもう一度着いたときと、ほかの物体では止まる
+  - 理由: 子が確保した物体と、`share` で子へ所有を移した物体は、子の持ち物である。戻さなければ、親が使うと `WrongOwner` になり、`retire_worker` が `TransferLeak` を返す。子の持ち物は、fork で共有にした親の物体の下にもある (共有にした `(a, FileIn)` の組の中の `FileIn`)。所有者だけのスタックは、そこまで進んで持ち主を戻す
+  - 所有者が今の worker の物体は、親の物体である。子が親の物体を書き換えずに値の中に入れて返しただけなら、そのまま止まる。fork で印を付け忘れた物体は、子がそれを使ったときに `WrongOwner` で見つかり、ここでは見つからない。第三の ID の物体は、黙って書き換えずに `WrongOwner` にする
+  - 訪問済みの集まりは `share` と同じものを使い、たどりの初めに空にする。所有を書き換える物体は、書き換えた後の所有者を見て止まるので、訪問済みの集まりはたどりが止まることの証明のために入れる
+  - このスタックは rc を書かず、裏返しのスタックに積まない。そのため、2つのモードの rc の変化と reuse の判断は同じである。速いモードでは持ち主がないので、このたどりは要らない
+  - 検査モードは、どちらのスタックでも、届いた物体が生きていなければ `UseAfterFree` を返す
+- `from` が今の worker ID なのは呼ぶ側の誤りである。検査モードは、何も変えずに `WrongOwner` を返す。速いモードは `from` を使わない
+- 費用: 速いモードは、裏返す物体とその直接の子の数に比例する。検査モードは、これに加えて、戻す値から届く子の持ち物と、その下の rc -1 の物体を1回ずつ訪れる。rc -1 の大きな構造を包んだ値を戻すと、検査モードでだけ、その大きさに比例する
+- 検査モードの ID ごとの数は、裏返した物体を今の ID の数に入れ、所有者を書き換えた物体の数を `from` から今の ID へ移す (下の「論理的な worker ID」)
+- たどりのコードは、`share` と同じく `Graph` trait の上に書き、Verus が証明する。rc の変化 (裏返す物体は rc 1、ほかの物体は変わらない) は2つのモードで同じで、所有者が変わるのは、裏返した物体と、検査モードで所有者を書き換えた物体だけである。裏返しは rc と所有者を1つの `Graph` の操作で書くので、局所の物体の前置きの所有者は、たどりの間も持ち主に等しい
+- `par` はまだ実装していないので、今 `transfer_back` を呼ぶのは単体テストだけである
+
 ## `lin` ビット
 
 - `info` の `lin` ビットは、検査モードに限らず常に持つ。`par` の fork で、印付けの代わりに所有者を移すのに使うためである ([マルチコア対応の設計](../future/multicore.md) の「`Lin` の物体の所有者の移し替え」)
@@ -303,6 +324,7 @@ VM の `con` と `closure` は、束縛する変数の印が `lin` なら、`all
 | `into_token` | | 呼ぶ側が唯一の参照を持ち、子の参照はもう処理してある | token にできる種類である (`NotTokenable`)。rc が 1 である (`NotUnique`) |
 | `con_at` / `reuse_in_place` / `drop_token` | | token の箱の「残した」語 (`con_at` と `reuse_in_place` で書き直さない語) の参照を呼ぶ側が持つ | token はまだ使っていない (`StaleToken`)。`con_at` の箱は `payload_words` の物体のこのモードでの級にある (`WrongClass`。同じ物理的な語の数の物体から作った token なら、どちらのモードでも満たす)。`reuse_in_place` の `meta` の tag、scan、種類は箱と同じで (`WrongMeta`)、箱が `lin` ビットを持つなら `meta` も持つ (`LinBitKept`) |
 | `share` | | | 届く物体はどれも生きている (`UseAfterFree`)。所有を移す物体 (局所の `lin` の物体と、その下の rc 1 の物体) には1回だけ届き (`LinReachedTwice`)、共有の側の `lin` の物体には届かない (`LinShared`) |
+| `transfer_back` | 裏返す物体 (根から rc -1 の物体だけを通って届く rc -1 の物体) を指す参照は、戻す値の中にしかない | | `from` は今の worker でない (`WrongOwner`)。届く物体はどれも生きている (`UseAfterFree`)。届いた局所の物体の持ち主は、今の worker か `from` である (`WrongOwner`) |
 | `string` | 返す位置を読むのは、物体が生きていて、`string_push` か `string_concat` でその物体を書き換えていない間だけである | | 物体は `String` である (`WrongKind`) |
 | `bytes` | 返す位置を読むのは、物体が生きていて、その物体を書き換えていない間だけである | | 物体は `Bytes` である (`WrongKind`) |
 | `string_push` | `s` は left 自身の中身を指さない (下の「バイト列と文字列」) | 呼ぶ側が left の参照を1つ持つ | left は `String` である (`WrongKind`)。left は `decref` の検査する前提を満たす |
@@ -339,6 +361,7 @@ VM の `con` と `closure` は、束縛する変数の印が `lin` なら、`all
 | `release(w, tag, keep)` | LIR の `release`。`is_last` が真なら、残さない子を手放して箱を空け、残す子は箱の参照を受け継ぐ。そうでなければ、残す子を `dup` してから w を手放す |
 | `release_reuse(w, tag, keep)` | w が一意なら、残さない子を手放して箱を token にする。そうでなければ `release` と同じにして、空の token を返す |
 | `share(w, receiver)` | 上の「`share`」 |
+| `transfer_back(w, from)` | 上の「`transfer_back`」 |
 | `alloc_string(s)` / `alloc_string_room(room)` / `alloc_string_immortal(s)` / `string(w)` / `string_push(left, s)` / `string_concat(left, right)` | 下の「バイト列と文字列」 |
 | `alloc_bytes(b)` / `alloc_bytes_room(room)` / `alloc_bytes_immortal(b)` / `bytes(w)` | 下の「バイト列と文字列」 |
 
@@ -619,7 +642,7 @@ token (`Token`) はどちらのモードでも1語である。VM のレジスタ
 - `lin` ビットの立った物体への `dup` (`LinDup`)。`lin` の物体の rc は 1 なので、rc が 1 を超える誤りは、この `dup` で見つかる
 - `lin` ビットの立った共有の物体の `release` と `decref` (`LinShared`)。`share` は `lin` の物体に印を付けないので、これは印付けの誤りである。`share` のたどりが、すでに共有の `lin` の物体に届いたときも同じ誤りにする
 - `share` のたどりで、所有を移す物体に2回届くこと (`LinReachedTwice`)
-- 所有者の不一致 (`WrongOwner`)。正の rc の物体への `dup`、`decref`、`set_field`、`set_raw`、`is_unique`、`is_last`、`free_block`、`into_token`、`release`、`release_reuse`、`foreign_unique`、`string_push`、`string_concat` が、今の worker ID と違う所有者の物体に対して行われたとき
+- 所有者の不一致 (`WrongOwner`)。正の rc の物体への `dup`、`decref`、`set_field`、`set_raw`、`is_unique`、`is_last`、`free_block`、`into_token`、`release`、`release_reuse`、`foreign_unique`、`string_push`、`string_concat` が、今の worker ID と違う所有者の物体に対して行われたとき。`transfer_back` が、今の worker でも `from` でもない所有者の局所の物体に届いたときと、`from` が今の worker のときも同じ誤りにする
 - ほかのスレッドが読みうる物体への書き込み (`NotWritable`)。`set_field` と `set_raw` は、rc が 0 以下 (不死か共有) で構築中でない物体を断る。凍結した塊の物体と、書き終えたヒープ自身の不死の物体もこれに当たる。前置きの状態は構築中と生存を分けないので、検査モードのヒープは構築中の物体の番地を持ち、それと比べて見分ける
 - token の誤り。token にできない種類の `into_token` (`NotTokenable`)、一意でない物体の `into_token` (`NotUnique`。rc が 1 でない物体の `foreign_unique` と `set_lin` も同じ誤りにする)、空けた表の項目の使用、箱の状態が token でないこと、世代の番号の不一致 (`StaleToken`。token を受ける操作が断る。同じ token の2回の使用と ABA の形)、級の合わない `con_at` (`WrongClass`)、`reuse_in_place` の `meta` の tag と scan と種類が箱と違うこと (`WrongMeta`)、`reuse_in_place` で箱が `lin` ビットを持ち新しい `meta` が持たないこと (`LinBitKept`)
 - `free_block` を、破棄処理を持つ種類の物体に使うこと (`FinalizerSkipped`) と、最後の参照でない物体に使うこと (`NotLast`)
@@ -654,9 +677,9 @@ token (`Token`) はどちらのモードでも1語である。VM のレジスタ
 不変条件も2つに分かれる。`safe_wf` は権限の持ち方とブロックの状態の不変条件で、モデルの数と辺には触れない。`full` は、抽象のモデルとの対応を含む不変条件である。`full` が成り立つことを、モデルが合っていると言う。性質は次のとおりである。
 
 - 検査モードの操作は、安全の前提の下で `safe_wf` を保つ
-- モデルが合っていて、モデルの前提と検査する前提がすべて成り立つなら、操作は `Ok` を返し、結果は速いモードと同じモデルの遷移になる。ただし、モデルは不死の物体の外の参照の数、共有の物体の `lin` ビット、物体の持ち主、確保器の級、箱の `meta` を照らす規則を持たない。そのため、解放の連鎖が手放す子についての `ImmortalOverRelease`、`LinShared`、`WrongOwner`、`con_at` の `WrongClass`、`reuse_in_place` の `WrongMeta` と `LinBitKept` は、モデルが合っていても返りうる
+- モデルが合っていて、モデルの前提と検査する前提がすべて成り立つなら、操作は `Ok` を返し、結果は速いモードと同じモデルの遷移になる。ただし、モデルは不死の物体の外の参照の数、共有の物体の `lin` ビット、物体の持ち主、確保器の級、箱の `meta` を照らす規則を持たない。そのため、解放の連鎖が手放す子についての `ImmortalOverRelease`、`LinShared`、`WrongOwner`、`transfer_back` の `WrongOwner`、`con_at` の `WrongClass`、`reuse_in_place` の `WrongMeta` と `LinBitKept` は、モデルが合っていても返りうる
 - `Err` を返すのは、その誤りに対応する違反が操作の前にあったときだけである
-- 状態を変える前に `Err` を返す操作では、ヒープは変わらない。状態を変えた後で `Err` を返しうるのは、解放の連鎖 (`decref`、`release`、`release_reuse` の子の処理)、`release` の最後でない枝の `dup` の列、`share`、`con_at` (token の項目を取り出した後の `WrongClass`) と、`Ctx` の基本操作の `evv_set`、`ev_set_state`、`yield_finish` (元の `evv`、元の状態、宛先を手放す解放の連鎖で起きた誤り) と、extern の `handle_close` (ハンドルを手放す解放の連鎖で起きた誤り。下の「extern」) である。その後はモデルが合わなくてよく、ヒープを使わない。ただし `Heap` と `Ctx` を落とすことは安全である
+- 状態を変える前に `Err` を返す操作では、ヒープは変わらない。状態を変えた後で `Err` を返しうるのは、解放の連鎖 (`decref`、`release`、`release_reuse` の子の処理)、`release` の最後でない枝の `dup` の列、`share`、`transfer_back` (`from` を照らす `WrongOwner` は状態を変える前に返す)、`con_at` (token の項目を取り出した後の `WrongClass`) と、`Ctx` の基本操作の `evv_set`、`ev_set_state`、`yield_finish` (元の `evv`、元の状態、宛先を手放す解放の連鎖で起きた誤り) と、extern の `handle_close` (ハンドルを手放す解放の連鎖で起きた誤り。下の「extern」) である。その後はモデルが合わなくてよく、ヒープを使わない。ただし `Heap` と `Ctx` を落とすことは安全である
 
 同じ物体を2回空けないように、最後の参照と決めた時点で、その物体の前置きを「空ける途中」にする。`release_ref`、`release` の最後の参照の枝、`release_reuse` の子の処理の前がこれに当たる。呼ぶ側が `dup` せずに同じ語を2つのフィールドに書いた親を空けると、同じ子に2回届く。2回目に届いたときは、生きていないので `UseAfterFree` を返す。`Err` で解放の連鎖が途中で止まると、積んだまま空けていない物体が「空ける途中」で残る。`Heap` を落とすときは、その中の `Foreign` の破棄処理を1回だけ呼ぶ。生存の列挙、不変条件の検査、リークは、「空ける途中」の物体を生きている物体と同じに扱う。
 
@@ -669,8 +692,8 @@ token の表の項目は、`into_token` と `release_reuse` が添字を使い�
 - `Heap` は今の論理的な worker ID を持つ。確保した物体の所有者を今の ID にする
 - 物理的な worker が1つでも所有者の検査を働かせるために、ID を切り替える操作 (`set_worker`) を持つ。所有者 ID の使い方は [マルチコア対応の設計](../future/multicore.md) の「論理的な worker ID」にある
 - ID を切り替えるのは単体テストだけなので、UI テストでは所有者の検査が効かない
-- `par` の子の ID は `fork_worker` で出し、join で右の子の値をすべて移し戻した後に `retire_worker` で退かせる。0 は基の ID で、子には出さない。検査モードの `fork_worker` は、最後に退いた ID があればそれを使い回し、なければまだ出していない最小の ID を出す。検査モードの `set_worker` は、渡した ID を、まだ出していない ID からも退いた ID からも外す。そのため、テストが選んだ ID と子の ID は重ならない。ID が `u32` の上限に届くときは panic する (T5)。`retire_worker` に渡す ID は `fork_worker` が出した ID で、0 でなく、まだ退いていないものである。2回退かせると、使い回しで2つの子が同じ ID で動き、子の間の所有者の検査が効かなくなる。検査モードはこの前提を確かめ、破れば panic する (T5)。速いモードでは ID は何の働きもしないので、`fork_worker` は 0 を返して何もせず、`retire_worker` はいつも `Ok` を返す
-- 検査モードのヒープは、ID ごとに rc が正の生きている物体 (構築中、空ける途中、token の箱を含む) の数を持つ (`owned_by`)。数は持ち主の書き換えと rc の符号の変化に合わせて変える。確保は今の ID の数を増やし、rc が正のまま空けた箱は持ち主の数を減らす。`share` は、印を付けた物体を持ち主の数から外し、所有を移す物体の数を受け手へ移す。`con_at` と `reuse_in_place` は、token の箱の数を今の ID へ移す。数は証明に入れず、`check_invariants` が生存の列挙で数え直して確かめる (下の「報告する誤り」の `OwnedMiscount`)。数の誤りは診断の誤りで、メモリの安全には関わらないので、モデルを広げるより実行時の数え直しで足りるためである
+- `par` の子の ID は `fork_worker` で出し、join で右の子の値をすべて移し戻した後に `retire_worker` で退かせる。0 は基の ID で、子には出さない。検査モードの `fork_worker` は、最後に退いた ID があればそれを使い回し、なければまだ出していない最小の ID を出す。検査モードの `set_worker` と `share` は、渡した ID (`share` では受け手) を、まだ出していない ID からも退いた ID からも外す。そのため、テストが選んだ ID と子の ID は重ならない。ID が `u32` の上限に届くときは panic する (T5)。`retire_worker` に渡す ID は `fork_worker` が出した ID で、0 でなく、まだ退いていないものである。2回退かせると、使い回しで2つの子が同じ ID で動き、子の間の所有者の検査が効かなくなる。検査モードはこの前提を確かめ、破れば panic する (T5)。速いモードでは ID は何の働きもしないので、`fork_worker` は 0 を返して何もせず、`retire_worker` はいつも `Ok` を返す
+- 検査モードのヒープは、ID ごとに rc が正の生きている物体 (構築中、空ける途中、token の箱を含む) の数を持つ (`owned_by`)。数は持ち主の書き換えと rc の符号の変化に合わせて変える。確保は今の ID の数を増やし、rc が正のまま空けた箱は持ち主の数を減らす。`share` は、印を付けた物体を持ち主の数から外し、所有を移す物体の数を受け手へ移す。`transfer_back` は、裏返した物体を今の ID の数に入れ、所有者を書き換えた物体の数を `from` から今の ID へ移す。`con_at` と `reuse_in_place` は、token の箱の数を今の ID へ移す。数の表を伸ばすのは、ID を受け取る `set_worker`、`fork_worker`、`share` の受け手だけである。表の外の ID の物体は数えず、数え直しがその ID の `OwnedMiscount` を返す。壊れた前置きの所有者を読んでも、大きな表を確保しないためである。数は証明に入れず、`check_invariants` が生存の列挙で数え直して確かめる (下の「報告する誤り」の `OwnedMiscount`)。数の誤りは診断の誤りで、メモリの安全には関わらないので、モデルを広げるより実行時の数え直しで足りるためである
 - `retire_worker` は、その ID の数が 0 でなければ `TransferLeak` を返し、ID を使い回さない。0 なら ID を使い回せるようにする。持ち主が退いた ID の物体は残っていないので、使い回しても所有者の検査は取り違えない。共有の物体の前置きの持ち主は読まないので、古い ID が残っていてもよい。使い回すので、表の大きさは同時に生きている ID の数で決まる
 - 数と ID の表はヒープごとに持つ。worker のスレッドを入れるときに、run の表へ移す ([マルチコア対応の設計](../future/multicore.md) の「論理的な worker ID」)
 - ID は実行文脈 `Ctx` でなく `Heap` に置く。確保のたびに物体の所有者を書くのは `Heap` だからである。`Ctx` は自分のヒープを通して ID を使う (下の「実行文脈 `Ctx`」)
@@ -1175,9 +1198,9 @@ pub struct Spawned {
 
 ## `unsafe` の核
 
-- `unsafe` は小さい核に閉じる。核は、確保器、ヘッダとフィールドの読み書き、バイト列の読み書き、`dup`、`decref`、解放の連鎖、token の操作である。それ以外 (`share` のたどり、`release` の組み立て、生存の列挙) は核の操作を呼んで書く
+- `unsafe` は小さい核に閉じる。核は、確保器、ヘッダとフィールドの読み書き、バイト列の読み書き、`dup`、`decref`、解放の連鎖、token の操作である。それ以外 (`share` と `transfer_back` のたどり、`release` の組み立て、生存の列挙) は核の操作を呼んで書く
 - 核では SeqCst と `fence` を使わない
-- `eml_rt` のコードは、核を含めて Verus の `verus!` の中に書き、`cargo verus verify -p eml_rt` が crate 全体を検証する ([テスト戦略](../implementation/testing.md) の「Verus」)。生のポインタの読み書きは、どれも Verus の権限 (`PointsTo`) の上で行う。証明するのは、公開の操作の前提 (上の「核の操作」の表) の下でのメモリの安全、ヒープの形の不変条件、RC と抽象のモデルの対応、`share` と `release` と reuse の遷移、上の「検査モードの約束」の性質である
+- `eml_rt` のコードは、核を含めて Verus の `verus!` の中に書き、`cargo verus verify -p eml_rt` が crate 全体を検証する ([テスト戦略](../implementation/testing.md) の「Verus」)。生のポインタの読み書きは、どれも Verus の権限 (`PointsTo`) の上で行う。証明するのは、公開の操作の前提 (上の「核の操作」の表) の下でのメモリの安全、ヒープの形の不変条件、RC と抽象のモデルの対応、`share` と `transfer_back` と `release` と reuse の遷移、上の「検査モードの約束」の性質である
 - 確保と atomic の操作は、std の関数を薄い関数で包み、その関数の約束を信頼する (下の表の T1 と T2)。vstd の確保は失敗すると `process::abort` を呼び、vstd の atomic は SeqCst だけを扱うので、使わない。包みは std の関数を1回呼ぶだけで、型を差し替える層ではない
 
 Verus で確かめない部分は、次の信頼の一覧にまとめる。`external_body`、`assume_specification` などの信頼の項目は、どれもこの表のどれかに属する。`eml_rt` の `trust.rs` のテストが、テストでないコードの項目を探し、表の番号を付けた一覧と同じであることを確かめる。`verus!` の外に置くのは、`fmt` と `Default` の実装、T4 の `Drop`、`unsafe impl Send` と `Sync`、`Sync` でないことの型の assert と配置を確かめるコンパイル時の assert、`leaks` の `BTreeMap` を組む安全な関数と、ID ごとの数を数え直す `check_invariants` と `owned_by`、前置きの構造体 `Prefix` の宣言、panic の文言の `const`、`Foreign` の表の `const` (T3)、`Control` の止める語と確保量を読み書きする安全な関数と `Ctx::poll` (上の「実行の制御」)、Host の trait (既定のメソッドを含む) と `Opened`、子のプロセスの Host の型 `Stdio`、`StderrMode`、`Spawn` (作業ディレクトリを決める `dir` と、プログラムのパスを決める `program_path` を含む)、`Process`、`Spawned`、`StdHost` の子 `OsProcess` と、向きを写す `os_stdio`、受け継いだ標準出力の fd を写す `inherited_stdout`、`host_spawn` の列を要素に分ける `fields`、`StdinSlot` の `new` と、読み手を取り出す `take` と返す `put`、`StdinHandle`、`StdoutHandle`、`StderrHandle`、`Child` の `Drop` (T4)、`OpenFlags` の `new` と、印を選ぶ `flag`、立てる `raise`、下ろす `lower`、`Reader` の `new`、`fill_buf`、`consume` と buffer の残りを取り出す `take_buffered`、trait `Source` と `FileIn` と `StdinHandle` と `Child` の実装、読みの誤りに名前を付ける `fault`、書き込みの誤りで `FileOut` の buffer を捨てる `write_fault`、`exit_code`、`Buffering`、`StdHost`、`HostRef::new` と `HostRef` の `Drop` (T4)、`Fault`、`ArithFault`、`IoReason`、`Stop` の `Display`、`io::Error` を `IoReason` に写す関数 `io_reason` (上の「extern」)、開けなかったパスがディレクトリかを見る `directory_error`、止める語が立った後の `Interrupted` を変える読み手 `StopOnInterrupt` と、読みの部品 `check`、`line_part`、`read_line`、`read_all` (上の「読み手」)、テストだけである。

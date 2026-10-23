@@ -49,6 +49,7 @@ const FILES: &[(&str, &str)] = &[
     ("heap/reuse.rs", include_str!("heap/reuse.rs")),
     ("heap/safe.rs", include_str!("heap/safe.rs")),
     ("heap/share.rs", include_str!("heap/share.rs")),
+    ("heap/transfer.rs", include_str!("heap/transfer.rs")),
     ("heap/walk.rs", include_str!("heap/walk.rs")),
 ];
 

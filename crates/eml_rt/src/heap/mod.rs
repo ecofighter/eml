@@ -23,6 +23,7 @@ mod safe;
 pub(crate) mod share;
 mod states;
 mod string;
+mod transfer;
 mod walk;
 
 #[cfg(test)]
@@ -171,11 +172,12 @@ pub struct Heap<M: Mode> {
     building: usize,
     /// 解放の連鎖の作業リスト。使い回して、解放のたびに確保しない。
     work: Vec<Word>,
-    /// `share` のたどりの印付け、移し替え、所有者だけのスタック。使い回す。
+    /// `share` のたどりの印付け、移し替え、所有者だけのスタック。使い回す。`transfer_back` は、印付けのスタックを
+    /// 裏返しのスタックに、所有者だけのスタックをそのまま使う。
     mark_stack: Vec<*mut Header>,
     move_stack: Vec<*mut Header>,
     own_stack: Vec<*mut Header>,
-    /// 検査モードの `share` が訪れた物体の番地。最初の `share` で作り、その後は使い回す。
+    /// 検査モードの `share` と `transfer_back` が訪れた物体の番地。最初に使うときに作り、その後は使い回す。
     seen: Option<HashSetWithView<usize>>,
     /// 検査モードの token の表。項目は箱と、`into_token` のときの世代の番号である。
     tokens: Vec<Option<(*mut Header, u32)>>,
@@ -211,9 +213,27 @@ fn object_words(payload_words: usize) -> (r: usize)
     }
 }
 
-/// 検査モードの ID ごとの数 (`Heap` の `owned`) の `id` 番目を1つ増やすか減らす。表は `id` まで伸ばす。
-// 数は証明の対象にしないので (`Heap` の `owned` の注釈)、桁あふれで panic する道を作らないように wrapping で数える
+/// 検査モードの ID ごとの数 (`Heap` の `owned`) の `id` 番目を1つ増やすか減らす。表の外の ID は数えない。
+// 数は証明の対象にしないので (`Heap` の `owned` の注釈)、桁あふれで panic する道を作らないように wrapping で数える。
+// 表を伸ばすのは ID を受け取る所 (`admit_owned`) だけにする。壊れた前置きの所有者を読んでも大きな表を確保せず、
+// 数え直しがその物体を表の外の ID の `OwnedMiscount` として報告する
 pub(crate) fn count_owned(owned: &mut Vec<u64>, id: u32, up: bool) {
+    let i = id as usize;
+    if i < owned.len() {
+        let n = owned[i];
+        owned.set(
+            i,
+            if up {
+                n.wrapping_add(1)
+            } else {
+                n.wrapping_sub(1)
+            },
+        );
+    }
+}
+
+/// 検査モードの ID ごとの数の表を、`id` まで伸ばす。
+fn admit_owned(owned: &mut Vec<u64>, id: u32) {
     let i = id as usize;
     while owned.len() <= i
         invariant
@@ -222,15 +242,6 @@ pub(crate) fn count_owned(owned: &mut Vec<u64>, id: u32, up: bool) {
     {
         owned.push(0);
     }
-    let n = owned[i];
-    owned.set(
-        i,
-        if up {
-            n.wrapping_add(1)
-        } else {
-            n.wrapping_sub(1)
-        },
-    );
 }
 
 /// 検査モードの ID ごとの数を、`from` から `to` へ1つ移す。rc が正の物体の持ち主を書き換えたときに呼ぶ。
@@ -665,13 +676,17 @@ impl<M: Mode> Heap<M> {
             r.worker_spec() == 0,
             r.unused(),
     {
+        let mut owned = Vec::new();
+        if M::CHECKED {
+            admit_owned(&mut owned, 0);
+        }
         let mut heap = Heap {
             core: Self::empty_core(control),
             region: ManuallyDrop::new(None),
             worker: 0,
             next_worker: 1,
             free_ids: Vec::new(),
-            owned: Vec::new(),
+            owned,
             building: 0,
             work: Vec::new(),
             mark_stack: Vec::new(),
@@ -849,22 +864,36 @@ impl<M: Mode> Heap<M> {
             final(self).same_objects(*old(self)),
             M::CHECKED ==> final(self).words_kept(*old(self)),
     {
-        if M::CHECKED {
-            // テストが選んだ ID を `fork_worker` が出さないように、まだ出していない ID と退いた ID の両方から外す
-            if worker >= self.next_worker {
-                self.next_worker = if worker == u32::MAX {
-                    u32::MAX
-                } else {
-                    worker + 1
-                };
-            }
-            if let Some(i) = find_id(self.free_ids.as_slice(), worker) {
-                self.free_ids.remove(i);
-            }
-        }
+        self.admit_worker(worker);
         self.worker = worker;
         proof {
             self.core.lemma_recounted_refl();
+        }
+    }
+
+    /// 検査モードで、`id` を使っている ID にする。`set_worker` と `share` の受け手が呼ぶ。
+    fn admit_worker(&mut self, id: u32)
+        ensures
+            *final(self) == (Heap {
+                next_worker: final(self).next_worker,
+                free_ids: final(self).free_ids,
+                owned: final(self).owned,
+                ..*old(self)
+            }),
+    {
+        if M::CHECKED {
+            // テストが選んだ ID を `fork_worker` が出さないように、まだ出していない ID と退いた ID の両方から外す
+            if id >= self.next_worker {
+                self.next_worker = if id == u32::MAX {
+                    u32::MAX
+                } else {
+                    id + 1
+                };
+            }
+            if let Some(i) = find_id(self.free_ids.as_slice(), id) {
+                self.free_ids.remove(i);
+            }
+            admit_owned(&mut self.owned, id);
         }
     }
 
@@ -899,6 +928,7 @@ impl<M: Mode> Heap<M> {
         }
         let id = self.next_worker;
         self.next_worker = id + 1;
+        admit_owned(&mut self.owned, id);
         id
     }
 

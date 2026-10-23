@@ -1999,8 +1999,9 @@ pub(crate) proof fn lemma_shared_wf(s0: Core, c1: Core, receiver: u32)
 }
 
 impl<M: Mode> Heap<M> {
-    /// たどりの始まり。預けた権限のグラフは、`share` の前のヒープのグラフで、たどりの前提を満たす。
-    proof fn lemma_share_start(
+    /// たどりの始まり。預けた権限のグラフは、操作の前のヒープのグラフで、形の前提を満たす。`share` と `transfer_back`
+    /// が使う。
+    pub(super) proof fn lemma_share_start(
         &self,
         old: Heap<M>,
         mid: Heap<M>,
@@ -2012,9 +2013,7 @@ impl<M: Mode> Heap<M> {
             old.wf(),
             w.is_ptr_spec(),
             old.word_in(w),
-            !M::CHECKED ==> old.consistent() && old.settleable() && old.readable(w) && old.share_ok(
-                w,
-            ),
+            !M::CHECKED ==> old.consistent() && old.settleable() && old.readable(w),
             mid.core == old.core.settled_view(),
             mid.wf(),
             mid.core.model@.building is None,
@@ -2026,7 +2025,6 @@ impl<M: Mode> Heap<M> {
             o0.owner@ == mid.core.model@.owner,
         ensures
             shaped(o0.gv(), h),
-            !M::CHECKED ==> well_formed(o0.gv(), h),
             old.share_graph() == o0.gv(),
             old.share_root(w) == h,
             mid.core.has(h@.addr),
@@ -2184,8 +2182,8 @@ impl<M: Mode> Heap<M> {
         &&& M::CHECKED && w.is_ptr_spec() ==> !self.reaches_shared_lin_from(w)
     }
 
-    /// `share` のたどりが見る物体のグラフ。
-    closed spec fn share_graph(&self) -> GView<*mut Header> {
+    /// `share` と `transfer_back` のたどりが見る物体のグラフ。
+    pub(super) open spec fn share_graph(&self) -> GView<*mut Header> {
         let v = self.core.settled_view();
         graph_of(v, v.perms@, v.model@.owner, v.checked())
     }
@@ -2196,7 +2194,7 @@ impl<M: Mode> Heap<M> {
     }
 
     /// `w` の物体の根。
-    closed spec fn share_root(&self, w: Word) -> *mut Header {
+    pub(super) open spec fn share_root(&self, w: Word) -> *mut Header {
         self.core.block(w.bits_spec())
     }
 
@@ -2269,6 +2267,7 @@ impl<M: Mode> Heap<M> {
             ),
     {
         let ghost pre_ok = self.share_all_ok(w);
+        self.admit_worker(receiver);
         if !w.is_ptr() {
             return Ok(());
         }
@@ -2318,6 +2317,9 @@ impl<M: Mode> Heap<M> {
         proof {
             self.lemma_share_start(*old(self), mid, o0, h, w);
             assert(objects.seen() =~= Set::<*mut Header>::empty());
+            if !M::CHECKED {
+                assert(old(self).share_ok(w));
+            }
         }
         let result = share_walk(
             &mut objects,

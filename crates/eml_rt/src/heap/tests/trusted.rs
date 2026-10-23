@@ -136,6 +136,36 @@ fn share_moves_and_passes_owners<M: Mode>() {
     assert_eq!(mortal(&heap), 0);
 }
 
+/// `transfer_back` の2つのスタックと訪問済みの集まりを通す。共有のリストを裏返し、子が確保したセルの所有者を書き換え、
+/// その下の共有の組を検査モードの所有者だけのたどりで通る
+fn transfer_back_flips_and_rewrites<M: Mode>() {
+    let mut heap = Heap::<M>::new();
+    let child = heap.fork_worker();
+    let shared = list(&mut heap, 2);
+    let pair = cons(&mut heap, Word::UNIT, Word::UNIT);
+    unsafe {
+        heap.share(shared, child).unwrap();
+        heap.share(pair, child).unwrap();
+        heap.set_worker(child);
+        let inner = list(&mut heap, 1);
+        let top = cons(&mut heap, inner, pair);
+        heap.set_worker(0);
+        heap.transfer_back(shared, child).unwrap();
+        heap.transfer_back(top, child).unwrap();
+        assert_eq!(
+            (raw::rc(shared), raw::rc(top), raw::rc(inner), raw::rc(pair)),
+            (1, 1, 1, -1)
+        );
+        if M::CHECKED {
+            assert_eq!((raw::prefix_first(top), raw::prefix_first(inner)), (0, 0));
+        }
+        assert_eq!(heap.retire_worker(child), Ok(()));
+        heap.decref(shared).unwrap();
+        heap.decref(top).unwrap();
+    }
+    assert_eq!(mortal(&heap), 0);
+}
+
 #[test]
 fn check_mode_prefixes_change() {
     let mut heap = Heap::<Checked>::new();
@@ -1710,6 +1740,7 @@ both_modes!(
     local_and_shared_counts_move,
     is_last_reads_twice_only_at_minus_one,
     share_moves_and_passes_owners,
+    transfer_back_flips_and_rewrites,
     a_foreign_value_of_another_type_is_wrong_kind,
     foreign_values_with_drop_are_finalized_once,
     a_zero_sized_foreign_value,
