@@ -287,9 +287,9 @@
   | secondary (`Through`、T-4) | the row is passed to `{inner}` here |
   | note | a row variable written `never e` admits only `Panic` and effects whose operations are all `never`; `IO` and the effects of `var` are not among them |
 
-  - 1つの呼び出しに1件だけ出す。今の `origins.dedup()` がまとめる
+  - 1つの呼び出しに1件だけ出す。上限を持つ row 変数が2つ以上破れても、同じ参照の範囲と呼び出し先の名前を持つ `RowBound` は、報告の順で最初のものだけを残す (`report_violations`)。`origins.dedup()` だけでは、変数ごとに出どころと原因が違うのでまとまらない
   - `Unknown` には出どころの secondary を付けない
-- E2011 (`check_method_kinds`) は、`Unentailed` の項目がすべて `Multiplicity` のとき、次の note と help を出す。メッセージは変えない
+- E2011 (`check_method_kinds`) は、`Unentailed` の項目がすべて `Multiplicity` のとき、今の note (線形性の説明) の代わりに次の note を出し、help を足す。メッセージは変えない。ほかの場合の note は今のままである
   - note: the signature of a method allows any effects for its row variables, and this definition passes a row where only `never` operations are allowed
   - help: write `never` before the row variable in the signature of `{name}` in the class
 
