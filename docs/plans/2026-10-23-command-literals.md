@@ -246,7 +246,7 @@
   | `run`、`output*`、`capture*`、`spawn` | 起動できない (`Io { op: Run, name: program }`。``cannot run `rsync`: not found``。NUL を含む引数は `I/O error`) | `IO` (`try_io`) |
   | `capture`、`capture_bytes` | 終了コードが 0 でない (`Exited`。``command `sh` exited with code 3``。シグナルなら 128 + 番号) | `IO` (`kind` は `Other`) |
   | `Child` の読み | 読めない (`Io { op: ReadOutput, name: program }`。``cannot read the output of `sort`: I/O error``)、UTF-8 でない (``the output of `sort` is not valid UTF-8``) | `IO` |
-  | `Child` の書き込み | 書けない (子が先に終わって EPIPE など)。`Io { op: WriteInput, name: program }` (``cannot write to `sort`: I/O error``) で、`FileOut` と同じくハンドルを手放す | `IO` |
+  | `Child` の書き込み | 書けない (子が先に終わって EPIPE など)。`FileOut` と同じ `Io { op: Write, name: program }` (``cannot write to `sort`: I/O error``) で、ハンドルを手放す | `IO` |
   | `wait`、読み、書き込み | 割り込み。子が終わった後に `Stopped` | 位置を付けた実行時エラー |
 
   - `Child` の書き込みの失敗を、`Stdout` と違って `try_io` で捕まえるのは、`Child` が自分の pipe に直に書き、共有の buffer を持たないためである (`FileOut` と同じ理由)。
@@ -353,7 +353,7 @@
     - `proc_exited(program, code) -> Result<Word, Fault>`: 文字列を手放し、いつも `Err(Fault::Exited)` を返す。
     - 読みは `handle_read(h, Handle::Child, ..)` である。書きは `handle_write` に `Handle::Child` の枝を足す。`FileOut` の枝と同じ形で、`foreign_unique::<Child>` を使う。
     - 約束は既存の行と同じである: RC の増減、`Fault::Heap` を返さないこと、誤りのときに作りかけの物体を手放すこと。
-  - `Fault::Exited { program: Box<str>, code: i64 }` を足す。`io_error_kind` は `IO_OTHER` を返す。`IoOp::Write` の文言 (``cannot write `<name>` ``) は変えない。`Child` の書き込みは新しい `IoOp::WriteInput` (``cannot write to `<program>` ``)、読みは新しい `IoOp::ReadOutput` (``cannot read the output of `<program>` ``) にする。`Fault` の大きさを保つため、`Exited` は箱に入れる (`Fault::Exited(Box<Exited>)`)。
+  - `Fault::Exited { program: Box<str>, code: i64 }` を足す。`io_error_kind` は `IO_OTHER` を返す。`IoOp::Write` の文言を ``cannot write to `<name>` `` に変える (`FileOut` も同じ文言になる)。`Child` では `program` を名前にする。読みは新しい `IoOp::ReadOutput` (``cannot read the output of `<program>` ``) にする。`Fault` の大きさを保つため、`Exited` は箱に入れる (`Fault::Exited(Box<Exited>)`)。
   - 信頼の一覧 (`trust.rs`) に5行を足す (すべて T11): `host.rs: external_body Child`、`host_spawn`、`child_write`、`child_close_stdin`、`child_wait`。`host_run` の行は T-5 で消す。
   - `Process` の trait と、`Spawn`、`Spawned`、`Stdio`、`StderrMode` は、`verus!` の外の glue である。object-model.md の「`unsafe` の核」の一覧に足す。
 - 書き出しの地点の文 (stdlib.md の「`Stdout` と `Stderr`」の「`Proc.run` の前」と、object-model.md の「出力のバッファ」) は、「子を起動する前」にする。
@@ -544,7 +544,7 @@ T-6 で、各項目を「後に回した理由: …。」と「見直す条件: 
   - `verusfmt --verus-only --check $(git ls-files 'crates/eml_rt/src/*.rs')` → 何も出さない
   - `nix develop .#miri -c env MIRIFLAGS="-Zmiri-strict-provenance" cargo miri test -p eml_rt trusted::` と、`-Zmiri-tree-borrows` を足した同じコマンド → 通る。`/usr/bin/time -p` の `user` がそれぞれ 60 s と 120 s に収まる。このコミットの前後で測り、差をコミットのメッセージに書く
   - `git diff --stat HEAD~1 -- std crates/eml_extern` → 空
-- テストの変更の種類: 新しいテストだけ。種類1はなく、種類2は `expected.txt` の行の追加だけである。
+- テストの変更の種類: 種類1はない。種類2は、`expected.txt` の行の追加と、`IoOp::Write` の文言を ``cannot write to `<name>` `` に変えることによる期待値の書き換え (`crates/eml_rt/src/heap/tests/externs.rs` の `FileOut` の書き込みの文言と、同じ文言を固定するほかのテスト) である。
 
 ### T-4: extern の行、VM、`std/Proc.em`
 
@@ -711,4 +711,4 @@ T-1 → T-2 → T-3 → T-4 → T-5 → T-6
 - `kill` するのは直接の子だけで、`sh -c` の孫は残りうることを書いた (D-5)。
 - コンストラクタを公開したままにし、利用者が `Cmd { … }` を書かない規則と、見直す条件を置いた (D-3)。
 - 標準エラーの向き (`merge_stderr`、`discard_stderr`) をこの段に入れ、ほかの向きは後に回した (D-4、D-11)。
-- 実行の途中で決めたこと (2026-10-23): `Child` の書き込みの誤りは `IoOp::WriteInput` で ``cannot write to `sort`: …`` とし、`FileOut` の文言は変えない。`IoReason` に broken pipe の理由はないので、理由は `I/O error` になる。`child_write` は止める語を見る (D-4、D-5 の `Stopped` の行を満たすため)。
+- 実行の途中で決めたこと (2026-10-23): `IoOp::Write` の文言を ``cannot write to `<name>`: …`` に変え、`FileOut` と `Child` の両方をこの文言にする。`IoReason` に broken pipe の理由はないので、理由は `I/O error` になる。`child_write` は止める語を見る (D-4、D-5 の `Stopped` の行を満たすため)。
