@@ -193,6 +193,7 @@ dependencies = [
  "insta",
  "libc",
  "rustyline",
+ "windows-sys",
 ]
 
 [[package]]

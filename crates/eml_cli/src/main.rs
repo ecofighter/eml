@@ -8,7 +8,6 @@ use clap::{Parser, Subcommand};
 use eml_cli::{Control, FsProvider, RunConfig, Session, default_limits, script_host};
 use eml_diagnostics::{has_errors, render};
 
-#[cfg(unix)]
 mod interrupt;
 mod terminal;
 
@@ -66,7 +65,6 @@ fn main() -> ExitCode {
             // 読み込みとコンパイルの間の Ctrl-C も、シグナルで殺されずにこのハンドラが受ける。そこで立てたビットは、
             // 実行の最初の安全点で読まれる
             let control = Arc::new(Control::new(default_limits()));
-            #[cfg(unix)]
             interrupt::install(Arc::clone(&control), interrupt::Mode::Run);
             let Some(session) = load(&file) else {
                 return ExitCode::from(2);

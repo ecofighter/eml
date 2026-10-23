@@ -21,7 +21,7 @@ VM は、LIR をレジスタ型のバイトコードに変換し、`eml_rt` の 
 - 実行の関数は `eml_vm::execute(program: &eml_lir::Program, config: &RunConfig, host: HostRef) -> Result<Finished, RuntimeError>` の1つである。`execute` は、新しい `Machine` にプログラムを読み込み、入口を実行して閉じる (「追記」)。`RunConfig` は、検査モードかどうか (`debug_heap`) と、実行を止める情報 (`control: Arc<Control>`) を持つ。`file_root` は Host が持つので、`RunConfig` は持たない
 - `RunConfig` は `#[non_exhaustive]` にする。欄を足しても呼び出し側を壊さないためである。`RunConfig::default()` は、速いモードと、上限のない新しい `Control` (`Control::new(Limits::default())`) である。`Control` は `Default` を持たないので、`Default` は手で書く。`with_debug_heap(bool)` と `with_control(Arc<Control>)` で組み立てる
 - 1つの `Control` は1回の実行に使う。止める理由のビットは `Control::clear` でしか下りないので、使い回すと、前の実行で立ったビットで次の実行がすぐ止まるためである。REPL (`eml_cli::Repl`) は1つの `Control` をセッション全体で使い、入力の始めに `clear` を呼ぶ。`RunConfig` を `clone` すると `Control` を共有するので、UI テストの仕組みと `eml_test_support` は実行ごとに新しい `RunConfig` を作る
-- `RunConfig` に `Control` を持たせるのは、CLI が SIGINT のハンドラに同じ `Control` を渡すためである。上限は `Control` が持つので、`RunConfig` に上限の欄は作らない ([オブジェクトモデル](object-model.md) の「実行の制御」)
+- `RunConfig` に `Control` を持たせるのは、CLI が Ctrl-C の受け口に同じ `Control` を渡すためである。上限は `Control` が持つので、`RunConfig` に上限の欄は作らない ([オブジェクトモデル](object-model.md) の「実行の制御」)
 - `eml_vm` は、`eml_rt` の `Control`、`Limits`、`Stop` を再公開する。`eml_cli` の lib と bin は `eml_rt` に直接は依存せず (テストは依存する)、これらの名前を `eml_vm` から受け取る
 - `eml_cli` は、`run` の feature で `eml_vm` に依存する。`RunConfig`、`RunStats`、`RuntimeError`、`VmFault`、`SourceLocation`、`Control`、`Limits`、`Stop`、`Finished`、`HostRef`、`Capture`、`CaptureHost`、`Written`、`capture_host`、`stdio_host`、`script_host` を `eml_vm` から再公開し、`execute` を同じ名前で公開する
 - `eml run` は速いモードで動き、`--debug-heap` を付けると検査モードになる。UI テストは、いつも検査モードで流してから速いモードでも流す ([テスト戦略](../implementation/testing.md) の「2つのモードで流す」)。Host は `script_host(PathBuf::new(), args)` で、スクリプトの引数と標準入力を持ち、相対パスはカレントディレクトリを基準にする。REPL の Host は `stdio_host(PathBuf::new())` で、引数と標準入力を持たない ([標準ライブラリ](stdlib.md) の「`Stdin`」)
@@ -346,13 +346,16 @@ token は1語の値で、フレームのスロットに置く ([オブジェク�
 - `eml repl` の上限は `eml_cli::repl_limits()` が作る。確保量だけが違い、物理メモリの 40% である ([REPL の端末](repl.md) の「コマンドライン」)
 - 深さか確保量の上限で止まったときは ``the call depth limit is exceeded in `f` `` か ``the memory limit is exceeded in `f` `` と表示し、終了コードは 1 である
 
-`eml run` と `eml repl` は、`Control` を作った直後に、`eml_cli` の bin の `interrupt` モジュールで SIGINT のハンドラを入れる。`eml run` はファイルを読む前に入れるので、読み込みとコンパイルの間の Ctrl-C も、既定の動作 (シグナルで殺される) でなく、このハンドラが受ける。`eml check` には入れない。ハンドラは unix だけで入れ、ほかの OS では Ctrl-C は OS の既定の動作でプロセスを終わらせる。
+`eml run` と `eml repl` は、`Control` を作った直後に、`eml_cli` の bin の `interrupt` モジュールで Ctrl-C の受け口を入れる。受け口は、unix では SIGINT のハンドラ、Windows ではコンソールの handler (`SetConsoleCtrlHandler`) である。`eml run` はファイルを読む前に入れるので、読み込みとコンパイルの間の Ctrl-C も、OS の既定の動作 (プロセスを終わらせる) でなく、この受け口が受ける。`eml check` には入れない。
 
-- `libc::sigaction` で入れ、`sa_flags` に `SA_RESTART` も `SA_NODEFER` も入れない。`SA_RESTART` を外すので、待っている読みと書き込みは `EINTR` で戻り、`FileIn` の読み、標準入力の読み、`Child` の読みと書き込みが止める語を読んで止まる ([オブジェクトモデル](object-model.md) の「読み手」)。子のプロセスを待つ間の Ctrl-C は、同じプロセスグループの子にも届くので、子が終わって `Proc.wait` が止まる。`SA_NODEFER` を入れないので、ハンドラが動く間は同じ SIGINT が塞がれ、ハンドラは入れ子にならない
-- ハンドラは static に置いた `Control` と動き方だけを読み、アトミックな読み書きと `libc::_exit` だけをする。static は `sigaction` の前に置く
+- unix では `libc::sigaction` で入れ、`sa_flags` に `SA_RESTART` も `SA_NODEFER` も入れない。`SA_RESTART` を外すので、待っている読みと書き込みは `EINTR` で戻り、`FileIn` の読み、標準入力の読み、`Child` の読みと書き込みが止める語を読んで止まる ([オブジェクトモデル](object-model.md) の「読み手」)。子のプロセスを待つ間の Ctrl-C は、同じプロセスグループの子にも届くので、子が終わって `Proc.wait` が止まる。`SA_NODEFER` を入れないので、ハンドラが動く間は同じ SIGINT が塞がれ、ハンドラは入れ子にならない
+- Windows の handler は、OS が作るスレッドで、プログラムのスレッドと並んで動く。受けるのは `CTRL_C_EVENT` だけで、TRUE を返す。`CTRL_BREAK_EVENT`、`CTRL_CLOSE_EVENT`、`CTRL_LOGOFF_EVENT`、`CTRL_SHUTDOWN_EVENT` には FALSE を返し、OS の既定の handler がプロセスを終わらせる。このとき、まだ書いていない出力は捨てる。Ctrl-Break は、REPL が抜けられない処理から抜ける道である ([REPL の端末](repl.md) の「残る制限」)
+- Windows では続けて押した2回の Ctrl-C の handler が同時に動くと、どちらも1回目として扱うことがある。そのとき `eml run` は次の Ctrl-C で終わる。unix のハンドラは入れ子にならないので、この重なりはない
+- Windows では待っている読みは Ctrl-C で止まらない。コンソールの標準入力の読みは Ctrl-C で戻るが、std がその場で読み直す。pipe とファイルの読みと書き込みは Ctrl-C で戻らない。標準入力、`FileIn`、`Child` の読みは、データが来るか相手が閉じて読みが戻った後で止める語を見る。`eml run` は、待っている読みからも2回目の Ctrl-C で抜けられる。子のプロセスを待つ間の Ctrl-C は同じコンソールにつながる子にも届くので、子が終わって `Proc.wait` が止まる
+- 受け口は static に置いた `Control` と動き方だけを読み、アトミックな読み書きと、その場で終わる関数 (unix は `libc::_exit`、Windows は `TerminateProcess`) だけを呼ぶ。static は受け口を入れる前に置く
 - 止める語の `INTERRUPT` が 0 なら、`control.interrupt()` を呼ぶ。VM は次の安全点で止まる。コンパイルの間に立ったビットは、実行の最初の安全点で読まれる
-- `eml run` では、すでに立っていれば (2回目の Ctrl-C)、`libc::_exit(130)` でその場で終わる。まだ書いていない出力は捨てる。安全点に来ない処理から抜けるための道だからである。`eml repl` は終わらず、`interrupt()` を呼ぶだけである ([REPL の端末](repl.md) の「割り込み」)
-- プロセスはほかのスレッドを持たないので、SIGINT は読んでいるスレッドに届く。並列 VM で worker のスレッドを持つときは、worker 0 のほかのすべてのスレッドで SIGINT を塞ぎ、host のスレッドは止める手順が始まったときに塞ぎを解く ([マルチコア対応の設計](../future/multicore.md) の「VM の並列化の備え」)
+- `eml run` では、すでに立っていれば (2回目の Ctrl-C)、終了コード 130 でその場で終わる。まだ書いていない出力は捨てる。安全点に来ない処理から抜けるための道だからである。`eml repl` は終わらず、`interrupt()` を呼ぶだけである ([REPL の端末](repl.md) の「割り込み」)
+- unix では、プロセスはほかのスレッドを持たないので、SIGINT は読んでいるスレッドに届く。並列 VM で worker のスレッドを持つときは、worker 0 のほかのすべてのスレッドで SIGINT を塞ぎ、host のスレッドは止める手順が始まったときに塞ぎを解く ([マルチコア対応の設計](../future/multicore.md) の「VM の並列化の備え」)
 
 割り込みで止まったとき (`RuntimeError::interrupted`) は、1回目でも終了コードを 130 にする。130 は、シェルが SIGINT で終わった子に報告する値と同じである。ほかの実行時エラーは 1 である。
 

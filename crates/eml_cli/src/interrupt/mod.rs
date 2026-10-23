@@ -1,5 +1,5 @@
-//! Ctrl-C の受け口 (docs/spec/vm.md の「上限と割り込み」)。unix では SIGINT のハンドラが受け、static に置いた
-//! `Installed` の `respond` で何をするかを決める。
+//! Ctrl-C の受け口 (docs/spec/vm.md の「上限と割り込み」)。unix では SIGINT のハンドラ、Windows ではコンソールの
+//! handler が受け、どちらも static に置いた `Installed` の `respond` で何をするかを決める。
 
 use std::sync::{Arc, OnceLock};
 
@@ -9,6 +9,10 @@ use eml_cli::Control;
 mod unix;
 #[cfg(unix)]
 use unix::register;
+#[cfg(windows)]
+mod windows;
+#[cfg(windows)]
+use windows::register;
 
 /// 受け口が読む `Control` と動き方。受け口の中ではロックを取れないので static に置く。`OnceLock::get` は初期化の後は
 /// アトミックな読みだけである。受け口は読んだ値を引数で受ける関数に渡すので、テストは static を使わない。
@@ -24,7 +28,8 @@ struct Installed {
 pub enum Mode {
     /// 2回目の Ctrl-C でその場で終わる。安全点に来ない処理から抜ける道である。
     Run,
-    /// Ctrl-C で終わらない。抜けられない処理からは Ctrl-\ で抜ける (docs/spec/repl.md の「残る制限」)。
+    /// Ctrl-C で終わらない。抜けられない処理からは、unix では Ctrl-\、Windows では Ctrl-Break で抜ける
+    /// (docs/spec/repl.md の「残る制限」)。
     Repl,
 }
 

@@ -363,7 +363,7 @@ Core IR のテキストは `eml_core_ir::pretty` が書き、`eml_core_ir::parse
 - 書き手を開いたままの標準入力を `Stdin.read_line` で読むプログラムに、同じく 100 ms ごとに SIGINT を送り続け、終了コード 130 で終わることを確かめる。プログラムが標準エラーに書いた行を読んでから送る。ハンドラを入れる前の SIGINT は、既定の動作でプロセスを終わらせるためである
 - `Proc.run` で `sh -c 'echo started >&2; exec sleep 30'` を待つプログラムを自分のプロセスグループで起動し、子が標準エラーに書いた行を読んでから、グループ全体に SIGINT を1回送る。端末の Ctrl-C と同じく子にも届くので、子が終わり、終了コード 130 と、標準エラーの `interrupted` を確かめる。子が動いてから送るのは、起動と同時に届いた SIGINT は子に届かないことがあるためである
 
-Ctrl-C の受け口は、bin の `interrupt` モジュールの単体テストが確かめる。テストは static を使わず、受け口が static から読む値を自分で作って渡す。`mod.rs` の `respond` のテストは、1回目が `INTERRUPT` を立てること、`eml run` の2回目は終わり、REPL の2回目は終わらないこと、`clear` の後は1回目に戻ることを確かめる。
+Ctrl-C の受け口は、bin の `interrupt` モジュールの単体テストが確かめる。テストは static を使わず、受け口が static から読む値を自分で作って渡す。`mod.rs` の `respond` のテストはどの OS でも流れ、1回目が `INTERRUPT` を立てること、`eml run` の2回目は終わり、REPL の2回目は終わらないこと、`clear` の後は1回目に戻ることを確かめる。Windows では `windows.rs` のテストが handler の本体の関数を直接呼ぶ。`CTRL_C_EVENT` には TRUE を返して `INTERRUPT` を立て、`eml run` の2回目では終わる関数に 130 を渡すことと、ほかの事象と static を置く前の Ctrl-C には FALSE を返し、ビットを変えず終わらないことを確かめる。Windows で本当の Ctrl-C を送るテストは置かない。
 
 `default_limits()` のテストは `crates/eml_cli/tests/api.rs` にある。`max_depth` が 2^27 であることと、`max_bytes` の既定の値を確かめる。既定の上限まで実際に再帰するテストは、1 GiB を使うので置かない。
 
