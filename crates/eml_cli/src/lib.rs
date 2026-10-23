@@ -277,7 +277,7 @@ pub fn repl_limits() -> Limits {
 }
 
 /// `eml_rt` は vstd だけに依存したままにするため、OS に問い合わせるのはここである。`src/` の `unsafe` の呼び出しは、
-/// この関数と、bin の `sigint.rs` と `terminal.rs` の `stdout_width` の中だけに置く。
+/// この関数と、bin の `interrupt` モジュールと `terminal.rs` の `stdout_width` の中だけに置く。
 #[cfg(all(feature = "run", unix))]
 fn physical_memory() -> Option<usize> {
     // sysconf は名前のほかに前提を持たず、読めなければ -1 を返す

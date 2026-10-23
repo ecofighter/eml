@@ -28,7 +28,7 @@ A command may be shortened to any prefix of its name (`:q`, `:l`, `:r`, `:t`).";
 pub fn run(debug_heap: bool, file: Option<PathBuf>) -> ExitCode {
     let control = Arc::new(Control::new(repl_limits()));
     #[cfg(unix)]
-    crate::sigint::install(Arc::clone(&control), crate::sigint::Mode::Repl);
+    crate::interrupt::install(Arc::clone(&control), crate::interrupt::Mode::Repl);
     let config = RunConfig::default()
         .with_debug_heap(debug_heap)
         .with_control(Arc::clone(&control));

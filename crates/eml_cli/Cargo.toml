@@ -14,7 +14,6 @@ doctest = false
 [[bin]]
 name = "eml"
 path = "src/main.rs"
-test = false
 required-features = ["run"]
 
 # `eml_test_support` はこの crate でパイプラインを組むので、段階ごとに feature を分ける。各 crate のテストは自分より

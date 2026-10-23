@@ -9,7 +9,7 @@ use eml_cli::{Control, FsProvider, RunConfig, Session, default_limits, script_ho
 use eml_diagnostics::{has_errors, render};
 
 #[cfg(unix)]
-mod sigint;
+mod interrupt;
 mod terminal;
 
 #[derive(Parser)]
@@ -67,7 +67,7 @@ fn main() -> ExitCode {
             // 実行の最初の安全点で読まれる
             let control = Arc::new(Control::new(default_limits()));
             #[cfg(unix)]
-            sigint::install(Arc::clone(&control), sigint::Mode::Run);
+            interrupt::install(Arc::clone(&control), interrupt::Mode::Run);
             let Some(session) = load(&file) else {
                 return ExitCode::from(2);
             };
