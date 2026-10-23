@@ -1,4 +1,4 @@
--- Reading a directory stops the program with a runtime error. Opening it succeeds on Unix; reading it fails.
+-- Reading a directory stops the program with a runtime error: a directory does not open, on every OS.
 import FileIn
 
 main : Unit -> <IO> Unit

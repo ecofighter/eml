@@ -1310,13 +1310,15 @@ impl Host for StdHost {
 
     fn open(&self, path: &str) -> io::Result<Opened> {
         // `path` が絶対パスなら、`join` の結果はそのパスになる
-        let file = fs::File::open(self.file_root.join(path))?;
-        // ディレクトリも開けるが、長さの見込みはふつうのファイルにだけ使う
-        let size = file
-            .metadata()
-            .ok()
-            .filter(|m| m.is_file())
-            .map(|m| m.len());
+        let path = self.file_root.join(path);
+        let file = fs::File::open(&path).map_err(|e| directory_error(&path, e))?;
+        let metadata = file.metadata().ok();
+        // Unix はディレクトリも開けるので、開いた handle の metadata で断る (docs/spec/stdlib.md の「`FileIn`」)
+        if metadata.as_ref().is_some_and(fs::Metadata::is_dir) {
+            return Err(io::Error::from(io::ErrorKind::IsADirectory));
+        }
+        // 長さの見込みはふつうのファイルにだけ使う
+        let size = metadata.filter(|m| m.is_file()).map(|m| m.len());
         Ok(Opened {
             reader: Box::new(file),
             size,
@@ -1346,7 +1348,10 @@ impl Host for StdHost {
             WriteMode::Truncate => options.truncate(true),
             WriteMode::Append => options.append(true),
         };
-        Ok(Box::new(options.open(self.file_root.join(path))?))
+        let path = self.file_root.join(path);
+        Ok(Box::new(
+            options.open(&path).map_err(|e| directory_error(&path, e))?,
+        ))
     }
 
     fn spawn(&self, spawn: &Spawn<'_>) -> io::Result<Spawned> {
@@ -1407,6 +1412,17 @@ impl Host for StdHost {
             stdout,
             process: Box::new(OsProcess(child)),
         })
+    }
+}
+
+/// 開けなかったパスがディレクトリなら、誤りを `IsADirectory` にする。Windows はディレクトリを開くと
+/// `PermissionDenied` を返すので、Unix の `EISDIR` と同じ誤りにそろえる。問い合わせは開けなかったときだけで、
+/// 開けた `open` には費用を足さない。
+fn directory_error(path: &Path, error: io::Error) -> io::Error {
+    if fs::metadata(path).is_ok_and(|m| m.is_dir()) {
+        io::Error::from(io::ErrorKind::IsADirectory)
+    } else {
+        error
     }
 }
 

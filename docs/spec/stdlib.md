@@ -568,6 +568,7 @@ pub data Set a =
 
 `FileIn` はファイルを読むハンドルの型である (上の「ハンドル」)。`open`、`read_all`、`close` と `FileIn` の型は [エフェクトと handler](effects.md) の「組み込みの `IO`」にある。
 
+- `open` はディレクトリを開かない。どの OS でも、権限で開けないディレクトリも含めて ``cannot open `<path>`: I/O error`` になる
 - `read_line file` は、今の位置から1行を読み、行の終わり (`\n` か `\r\n`) を `String.trim_line_end` で除いて、結果を先に、同じ `FileIn` を後に置いた組で返す。終わりなら `None` を返す。行の終わりのない最後の行も1行として返す。`Stdin.read_line` と同じである
 - `read_line` は、std の中だけの extern `read_line_raw : FileIn -> <IO> (String, FileIn)` の上に書いてある。`read_line_raw` は行の終わりを含む1行を返し、終わりなら空の文字列を返す (上の「extern の境界」の番兵)。読み方は `read_all` と同じく `FileIn` の読み手から読み、64 KiB を超える行も、割り込みと確保量の上限を見ながら読む ([オブジェクトモデル](object-model.md) の「読み手」)
 - 読めないときと UTF-8 でない行の誤りは、文言も `try_io` での捕まえ方も `read_all` と同じである ([LIR](lir.md) の「実行時エラー」)。誤りのときも `read_all` と同じく、extern は `FileIn` を手放さない。`try_io` の下では巻き戻しが手放して閉じ、実行時エラーなら実行がそこで止まる
@@ -590,7 +591,7 @@ pub data Set a =
 
 `FileOut` はファイルを書くハンドルの型である (上の「ハンドル」)。線形な型 (`Lin`) で、ちょうど1回使う。
 
-- `create path` は、ファイルを作るか切り詰めて開く。`append path` は、ファイルを作るか、末尾に足す形で開く。相対パスの扱いは `FileIn.open` と同じである ([エフェクトと handler](effects.md) の「組み込みの `IO`」)
+- `create path` は、ファイルを作るか切り詰めて開く。`append path` は、ファイルを作るか、末尾に足す形で開く。相対パスの扱いは `FileIn.open` と同じである ([エフェクトと handler](effects.md) の「組み込みの `IO`」)。ディレクトリは開かず、どの OS でも ``cannot open `<path>`: I/O error`` になる
 - 書く関数は、`Stdout` の同じ名前の関数と同じ意味である (上の「`Stdout` と `Stderr`」)。`write s f` は文字列 `s` を、`write_bytes b f` はバイト列 `b` をそのまま書き、`write_line s f` は `s` と `\n` を書く。どれもデータを借りて、受け取った `FileOut` を返す
 - `FileOut` は自分の書き込みの buffer (64 KiB) を持つ。ファイルに書き出すのは、buffer があふれたとき、`flush` を呼んだとき、`close` を呼んだときの3つだけである。`fsync` はしない。`main` の終わりや実行時エラーの前の書き出しは、標準出力の buffer だけを書き出し、`FileOut` の buffer に触れない
 - `close f` は、書き出してから閉じる。std の中だけの extern `close_raw : FileOut -> <IO> Unit` の上に、`close h = close_raw (flush h)` と書いてある。書き出せなければ `close_raw` に進まず、`flush` の誤りを返す

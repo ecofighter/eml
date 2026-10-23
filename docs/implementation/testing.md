@@ -153,7 +153,7 @@ extern の結果を1つの期待値の表に固定し、`eml_rt` の回帰を防
   - 文字列: 空、ASCII、複数バイトの文字 (é、日本、絵文字)、制御文字、`"`、`\`、0x7F、U+0080、U+0085、U+009F、U+2028、NUL、互いに前置きになる組と、種を固定した疑似乱数の列
   - `++` の左: 一意なもの、`dup` で共有したもの、不死の定数
   - `String.char_at` と `push`: `char_at` には、文字列のすべての位置と、その外側の 1 つと、`Int` の両端を渡す。`push` は、1〜4バイトの文字を不死の定数に足し、UTF-8 の長さの境目の文字を一意な文字列に足す。共有した文字列にも足す
-  - ファイル: 一時ディレクトリに作り、`file_root` からの相対パスで開く。ふつうのファイル、空のファイル、UTF-8 でないもの、ないもの、読めないもの (Unix の 000。root なら飛ばす)、ディレクトリ、NUL を含むパス、64 KiB の区切りをまたぐもの (1 MiB)、`\r\n` で終わる行と行の終わりのない最後の行を持つもの、絶対パス、2回目の `FileIn.read_all` と `read_line_raw`
+  - ファイル: 一時ディレクトリに作り、`file_root` からの相対パスで開く。ふつうのファイル、空のファイル、UTF-8 でないもの、ないもの、読めないもの (Unix の 000。Windows と root では飛ばす。Windows には 000 の権限がなく、root は 000 のファイルも読めるためである)、ディレクトリ、NUL を含むパス、64 KiB の区切りをまたぐもの (1 MiB)、`\r\n` で終わる行と行の終わりのない最後の行を持つもの、絶対パス、2回目の `FileIn.read_all` と `read_line_raw`
   - バイト列: 空、1バイト、互いに前置きになる組、UTF-8 でない並び、複数バイトの文字、繰り返しの並び。`length`、`append` (左と右が一意なものと、`dup` で共有したもの)、`slice`、`append_slice` (範囲の端と、その外側の 1 つずつ。`dst` が一意なものと共有したもの)、`truncate`、`find_from`、`find_byte_from` (バイト 0、97、255 と、開始位置の端とその外側の 1 つずつ。共有したバイト列も渡す)、`==`、`!=`、`compare`、`of_string` (一意な文字列、共有した文字列、不死の定数)、`make` (長さ -1、0、1、3 とバイト 0、255)、`get` と `set` (両端とその外側と `Int` の両端の位置)、`push` (バイト 0、255。`set` と `push` は共有したバイト列も渡す)、`Show Bytes` が読む `Prelude.bytes_length` と `bytes_get`。引数と結果は、バイトの整数の並びで `y:[1,2]` (一意)、`Y:[1,2]` (共有した引数) と書く
   - 配列: 長さ -1、0、1、3 の `make`、要素の数 0、1、3 の `length`、両端とその外側と `Int` の両端の添字の `get` と `read`、両端とその外側の添字の `set` と `write`、共有された配列の `get` と `set` と `thaw`、空と空でない配列の `thaw` と `freeze`。配列の引数と結果は、要素の整数の並びで `A:[1,2]` (`Array`)、`D:[1,2]` (共有した `Array`)、`M:[1,2]` (`MutArray`) と書く
 - テスト `the_externs_match_the_table` (`heap/tests/externs.rs`) は、両方のモードで表のどの場合も同じ結果になり、引数の定数のほかに物体が残らないことを確かめる。表の入力が `table.rs` の入力と違えば落ちるので、古い表は残らない
@@ -406,7 +406,7 @@ git grep -n -A1 -e 'cfg(unix)\]' -e 'cfg(all(test, unix))\]' -- 'crates/*/tests/
 ### OS で振る舞いが決まっているテスト
 
 - `.gitattributes` は `* -text` で、改行を変換しない。`text=auto` は CRLF を含む fixture も正規化するので、`core.autocrlf` によらず checkout の中身を同じに保つために変換を止めている
-- `crates/eml_rt` の期待値の表で、`locked.txt` の行は、root のときと Windows で飛ばす。Windows では `locked()` が false のままである
+- `crates/eml_rt` の期待値の表で OS によって飛ばす行は、上の「期待値の表」の入力に書いてある
 - `a_miscased_entry_path_is_still_the_entry` は、大文字と小文字を区別しないファイルシステム (macOS、Windows) でだけ規則を確かめ、Linux では早く戻る。OS ごとに決まっていて合否は機械によらないので、印は付けない
 
 ## 性能のテスト
