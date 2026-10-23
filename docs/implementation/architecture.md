@@ -61,10 +61,10 @@ eml/
 
 - `version`、`edition = "2024"`、依存する crate のバージョンは、workspace のルートの `Cargo.toml` でまとめて管理する
 - `flake.nix` は、workspace のルートの `Cargo.lock` を使って `eml_cli` だけを組み立て、`eml` バイナリを作る
-- nixpkgs は nixos-unstable を追う。Rust の toolchain は、stable も nightly も flake が fenix から取る。stable の版は `rust-toolchain.toml` に書く。flake がその `channel` を読み、nix の外では rustup が同じファイルを読む。devShell の cargo は rustup を通らないので、shell の中ではファイルは効かない。ふだんの devShell、`nix build`、Verus が同じ版を使う。nightly は Miri の devShell (`nix develop .#miri`) だけが使う ([テスト戦略](testing.md) の「Miri」)
+- nixpkgs は nixos-unstable を追う。Rust の toolchain は、stable も nightly も flake が fenix から取る。stable の版は `rust-toolchain.toml` に書く。flake がその `channel` を読み、nix の外では rustup が同じファイルを読む。devShell の cargo は rustup を通らないので、shell の中ではファイルは効かない。ふだんの devShell、`nix build`、Verus と、ほかの target を検査する devShell (`nix develop .#cross`) が同じ版を使う。nightly は Miri の devShell (`nix develop .#miri`) だけが使う ([テスト戦略](testing.md) の「Miri」)
 - Verus と verusfmt は、release の archive を flake の input にし、`nix/verus.nix` と `nix/verusfmt.nix` が展開してふだんの devShell に入れる ([テスト戦略](testing.md) の「Verus」)
 - `eml_rt` は vstd に依存するので、`Cargo.lock` に vstd とその依存が入る。`eml_cli` は `eml_vm` を通して `eml_rt` に依存するので、vstd は `eml` バイナリにも入る。`eml_rt` の `verus!` の中は verusfmt で、外は `cargo fmt` で整える
-- 2つの devShell の shellHook は、`CARGO_HOME` を `${XDG_CACHE_HOME:-$HOME/.cache}/eml-cargo-home` にする。cargo は外部のサブコマンドを PATH より先に `$CARGO_HOME/bin` から探すので、rustup が入っていると `~/.cargo/bin` の `cargo-clippy` や `cargo-miri` (rustup のプロキシ) が fenix のものより先に当たるためである。そのため、devShell は crate の取得の置き場所を別に持ち、最初の1回は crate を取り直す
+- どの devShell の shellHook も、`CARGO_HOME` を `${XDG_CACHE_HOME:-$HOME/.cache}/eml-cargo-home` にする。cargo は外部のサブコマンドを PATH より先に `$CARGO_HOME/bin` から探すので、rustup が入っていると `~/.cargo/bin` の `cargo-clippy` や `cargo-miri` (rustup のプロキシ) が fenix のものより先に当たるためである。そのため、devShell は crate の取得の置き場所を別に持ち、最初の1回は crate を取り直す
 
 ## crate の依存関係
 
@@ -87,7 +87,7 @@ eml_extern       extern の表 (型、エフェクト、関数)。依存を持�
 - `eml_lir` は `eml_extern` だけに依存する葉の crate である。`eml_core_ir` (LIR への変換とパスの順番のため)、`eml_vm`、`eml_cli` が依存する。`eml_vm` が読む IR は `eml_lir` だけなので、フロントエンドなしにビルドできる。2つの IR が共有する型 (`Atom`、`VarInfo`、`Layout`、`Prim`、`EffectInfo` など) と定数、テキスト形式と verifier の共通の部品も `eml_lir` に置き、`eml_core_ir` は再公開しない。使う側は `eml_lir` から読む。`Repr` も `eml_lir` が再公開するものを使う
 - `eml_diagnostics` は、診断を出す crate のすべてから使う。`eml_core_ir`、`eml_lir`、`eml_vm`、`eml_rt` が診断を出さず、`eml_extern` は何にも依存しない。`eml_core_ir` だけは、extern の呼び出しの位置を行と列にするために `SourceFiles` を使うので依存する。残りの4つは依存しない
 - `eml_extern` は表だけを持つ。`eml_hir`、`eml_types`、`eml_core_ir`、`eml_lir`、`eml_vm` が引く。`eml_extern` を一番下に置くのは、どの段階も実装を表の行で引くようにして、名前の文字列で実装を探す処理をなくすためである
-- `eml_cli` は `eml_diagnostics` と `eml_hir` に常に依存し、下流の段階を feature で足す。`types` は `eml_types`、`core` は `eml_core_ir` と `eml_lir`、`run` は `eml_vm` と、端末の行の編集の `rustyline` と、unix では SIGINT のハンドラと物理メモリを読む `libc` を、Windows ではコンソールの handler を入れる `windows-sys` を足す。`eml_lir` はフロントエンドに依存しないので、段階の feature は増やさない。既定は `run` で、バイナリ `eml` は `run` がなければ作らない (`required-features`)。ワークスペースの `eml_cli` の依存は既定の feature を外してあり、依存する側が段階を選ぶ
+- `eml_cli` は `eml_diagnostics` と `eml_hir` に常に依存し、下流の段階を feature で足す。`types` は `eml_types`、`core` は `eml_core_ir` と `eml_lir`、`run` は `eml_vm` と、端末の行の編集の `rustyline` と、unix では SIGINT のハンドラと物理メモリを読む `libc` を、Windows ではコンソールの handler を入れて物理メモリを読む `windows-sys` を足す。`eml_lir` はフロントエンドに依存しないので、段階の feature は増やさない。既定は `run` で、バイナリ `eml` は `run` がなければ作らない (`required-features`)。ワークスペースの `eml_cli` の依存は既定の feature を外してあり、依存する側が段階を選ぶ
 - `eml_test_support` は開発専用の crate で、パイプラインに入らない。各 crate の結合テストが dev-dependency として使う。パイプラインは `eml_cli::Session` で組み、段階を feature (`hir` < `types` < `core` < `run`) で選ぶ。各 feature は、`eml_cli` の同じ段階までの feature を有効にする。各 crate は自分の段階までを有効にする。破壊的な変更の途中で下流の crate がまだ組み立たなくても、変更している段階のテストを流せるようにするため ([テスト戦略](testing.md))
 
 ## 各段階の規律
@@ -355,7 +355,7 @@ HIR への変換では、名前解決に加えて、名前の重複と未定義�
 - `eml FILE ARGS...` は `eml run FILE ARGS...` と同じである。`run` のファイルより後ろの引数は、`-` で始まるものも含めて clap に読ませず、`split_script_args` で切り離してスクリプトに渡す ([標準ライブラリ](../spec/stdlib.md) の「起動」)。引数は `Env.args` で読め、`eml_vm` の `script_host` (`eml_cli` が再公開する) が標準入力と一緒に Host に持たせる
 - `eml check <file>` は、診断を stderr に表示する。`eml run <file>` は、診断 (警告を含む) を先に stderr に表示し、エラーがなければ実行する。警告がプログラムの出力の後に出ないようにするため
 - `eml run` は VM の速いモードで実行し、`eml run --debug-heap` は検査モードで実行する。検査モードは、RC のリーク、解放済みの物体の使用、`lin` の物体の `dup` などを見つける ([オブジェクトモデル](../spec/object-model.md) の「報告する誤り」)
-- `eml run` は、ファイルを読む前に SIGINT のハンドラを入れ、`default_limits()` の上限で実行する ([VM](../spec/vm.md) の「上限と割り込み」)
+- `eml run` は、ファイルを読む前に Ctrl-C の受け口を入れ、`default_limits()` の上限で実行する ([VM](../spec/vm.md) の「上限と割り込み」)
 - 終了コードは、0 = 成功、1 = 診断のエラーあり、または実行時エラー、2 = 使い方の誤り (引数の誤り、入口のファイルが読めない)、130 = 割り込みで止まった、とする。2 は、clap が引数の誤りで返す値に合わせた。130 は、シェルが SIGINT で終わった子に報告する値と同じである。import したモジュールが見つからないことは診断 (E1026) なので 1 である
 - `eml repl [--debug-heap] [file]` は、`file` を渡すと `:load` と同じく最初の入力として読み、`repl_limits()` の上限で `eml_cli::Repl` を使う。端末の繰り返しは bin の `terminal.rs` で、行を入力にまとめるのは lib の `eml_cli::lines` である。規則は [REPL の端末](../spec/repl.md) にある。終了コードは、0 = `:quit` か EOF で終わった、1 = 検査モードのリーク、続けられない誤り、行を読めない誤り、2 = 使い方の誤り、である。入力の誤りと実行時エラーは終了コードを変えない
 - Ctrl-C の受け口は bin の `interrupt` モジュールが入れる。unix では `interrupt/unix.rs` が `libc::sigaction` で、Windows では `interrupt/windows.rs` が `SetConsoleCtrlHandler` で入れる。`src/` の `unsafe` は、`interrupt` モジュールと、`physical_memory` と、端末の列の数を読む bin の `terminal.rs` の `stdout_width` の中だけに置く
@@ -387,5 +387,5 @@ HIR への変換では、名前解決に加えて、名前の重複と未定義�
 | `insta` | 1.49 | スナップショットテスト |
 | `la-arena` | 0.3 | HIR の ID とアリーナ、型検査の別テーブル (`ArenaMap`) |
 | `libc` | 0.2 | SIGINT のハンドラ (`sigaction`)、物理メモリの大きさ (`default_limits`) |
-| `windows-sys` | 0.61 | Windows のコンソールの handler (`SetConsoleCtrlHandler`、`TerminateProcess`) |
+| `windows-sys` | 0.61 | Windows のコンソールの handler (`SetConsoleCtrlHandler`、`TerminateProcess`)、物理メモリの大きさ (`GlobalMemoryStatusEx`) |
 | `rustyline` | 18.0 | `eml repl` の行の編集。既定の feature は使わず、先に打った入力を次の読みに渡す `buffer-redux` だけを入れる |

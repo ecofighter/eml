@@ -23,7 +23,7 @@ The documentation lives under `docs/`; start from `docs/README.md`. `docs/spec/`
 
 ## Commands
 
-The dev environment is a Nix flake (`direnv` with `use flake`) on nixos-unstable. Every Rust toolchain comes from fenix: stable is pinned in `rust-toolchain.toml` to the version Verus requires (1.98.1); the flake reads its channel and rustup reads the same file outside nix, and it serves the devShell, `nix build` and Verus; the `.#miri` shell has a nightly with miri and rust-src. The devShell provides clippy, rustfmt, rust-analyzer, cargo-insta, cargo-nextest, and `verus` / `cargo-verus` and `verusfmt`. Both shells set `CARGO_HOME` to `${XDG_CACHE_HOME:-$HOME/.cache}/eml-cargo-home` so rustup's `~/.cargo/bin` proxies do not shadow fenix's `cargo-clippy` / `cargo-miri`.
+The dev environment is a Nix flake (`direnv` with `use flake`) on nixos-unstable. Every Rust toolchain comes from fenix: stable is pinned in `rust-toolchain.toml` to the version Verus requires (1.98.1); the flake reads its channel and rustup reads the same file outside nix, and it serves the devShell, `nix build` and Verus; the `.#miri` shell has a nightly with miri and rust-src, and the `.#cross` shell adds the Windows msvc and Linux `rust-std` to the stable toolchain for cross-target clippy (docs/implementation/testing.md の「OS ごとのテスト」). The devShell provides clippy, rustfmt, rust-analyzer, cargo-insta, cargo-nextest, and `verus` / `cargo-verus` and `verusfmt`. Every shell sets `CARGO_HOME` to `${XDG_CACHE_HOME:-$HOME/.cache}/eml-cargo-home` so rustup's `~/.cargo/bin` proxies do not shadow fenix's `cargo-clippy` / `cargo-miri`.
 
 ```sh
 cargo build                          # all crates
@@ -35,6 +35,7 @@ cargo clippy --all-targets -- -D warnings && cargo fmt
 cargo clippy -p eml_cli --no-default-features --features types -- -D warnings   # non-default features (none, types, core; eml_test_support also hir)
 cargo run -p eml_cli -- check <file.em>    # or: run [--debug-heap] <file.em> [args...] (the VM; --debug-heap is checked mode; `eml <file.em> [args...]` is the same), repl [--debug-heap] [file.em] (the terminal REPL)
 nix shell nixpkgs#shellcheck -c nix run nixpkgs#actionlint -- .github/workflows/ci.yml   # lint the CI workflow
+nix develop .#cross -c cargo clippy --target x86_64-pc-windows-msvc --workspace --all-targets -- -D warnings   # type-check the Windows-only code (Linux: x86_64-unknown-linux-gnu)
 nix build                            # build the eml binary (eml_cli)
 nix develop .#miri -c env MIRIFLAGS="-Zmiri-strict-provenance" cargo miri test -p eml_rt trusted::   # Miri, trusted tests only; run once more with -Zmiri-tree-borrows added
 nix develop .#miri -c env MIRIFLAGS="-Zmiri-strict-provenance" cargo miri test -p eml_vm --test integration miri::   # Miri on the VM's small runs (same two settings)

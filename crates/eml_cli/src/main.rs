@@ -62,7 +62,7 @@ fn main() -> ExitCode {
         }
         Command::Repl { debug_heap, file } => terminal::run(debug_heap, file),
         Command::Run { debug_heap, file } => {
-            // 読み込みとコンパイルの間の Ctrl-C も、シグナルで殺されずにこのハンドラが受ける。そこで立てたビットは、
+            // 読み込みとコンパイルの間の Ctrl-C も、OS の既定の動作でプロセスが終わらずに、この受け口が受ける。そこで立てたビットは、
             // 実行の最初の安全点で読まれる
             let control = Arc::new(Control::new(default_limits()));
             interrupt::install(Arc::clone(&control), interrupt::Mode::Run);
@@ -84,8 +84,12 @@ fn main() -> ExitCode {
                 Ok(finished) => ExitCode::from(finished.exit.map_or(0, |code| (code & 255) as u8)),
                 Err(error) => {
                     eprintln!("runtime error: {error}");
-                    // 130 は、シェルが SIGINT で終わった子に報告する値である
-                    ExitCode::from(if error.interrupted() { 130 } else { 1 })
+                    let code = if error.interrupted() {
+                        interrupt::EXIT_CODE
+                    } else {
+                        1
+                    };
+                    ExitCode::from(code)
                 }
             }
         }

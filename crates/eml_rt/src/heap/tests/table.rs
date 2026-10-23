@@ -1236,7 +1236,7 @@ impl Drop for Scratch {
     }
 }
 
-/// ファイルを用意する。`locked.txt` を作れなかった (root で動いている) ら false を返す
+/// ファイルを用意する。読めない `locked.txt` を用意できなかったら false を返す。root で動いているときと、unix でない OS のときがそうである
 pub fn fixtures(root: &Path) -> bool {
     std::fs::write(root.join("plain.txt"), "line 1\nline 2\n").unwrap();
     std::fs::write(root.join("crlf.txt"), "a\r\nb").unwrap();

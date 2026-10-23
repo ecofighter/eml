@@ -8,7 +8,7 @@ use windows_sys::Win32::System::Console::{CTRL_C_EVENT, SetConsoleCtrlHandler};
 use windows_sys::Win32::System::Threading::{GetCurrentProcess, TerminateProcess};
 use windows_sys::core::BOOL;
 
-use super::{INSTALLED, Installed, REPEAT_EXIT_CODE, Response};
+use super::{EXIT_CODE, INSTALLED, Installed, Response};
 
 pub(super) fn register() -> io::Result<()> {
     // 関数を足すだけで、ほかの前提を持たない
@@ -34,7 +34,7 @@ fn console_event(installed: Option<&Installed>, event: u32, exit: impl FnOnce(u3
         return FALSE;
     };
     if installed.respond() == Response::Exit {
-        exit(REPEAT_EXIT_CODE.into());
+        exit(EXIT_CODE.into());
     }
     TRUE
 }

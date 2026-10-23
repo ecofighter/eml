@@ -34,6 +34,7 @@ fn shown(path: &Path) -> String {
         .unwrap_or(path)
         .display()
         .to_string()
+        .replace('\\', "/")
 }
 
 /// フィルタの打ち間違いで、どのテストも0個のファイルを流して通ってしまわないようにする。環境変数はプロセスで1つ

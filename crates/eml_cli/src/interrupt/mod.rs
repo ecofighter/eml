@@ -33,8 +33,9 @@ pub enum Mode {
     Repl,
 }
 
-/// 2回目の Ctrl-C で終わるときの終了コード。1回目で止まったときと同じ値にする (docs/spec/vm.md の「上限と割り込み」)。
-const REPEAT_EXIT_CODE: u8 = 130;
+/// 割り込みで終わるときの終了コード。1回目で止まったときも、2回目の Ctrl-C で終わるときもこの値にする
+/// (docs/spec/vm.md の「上限と割り込み」)。130 は、シェルが SIGINT で終わった子に報告する値である。
+pub const EXIT_CODE: u8 = 130;
 
 #[derive(Debug, PartialEq)]
 enum Response {

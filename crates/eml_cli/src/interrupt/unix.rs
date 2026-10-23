@@ -3,7 +3,7 @@
 
 use std::io;
 
-use super::{INSTALLED, REPEAT_EXIT_CODE, Response};
+use super::{EXIT_CODE, INSTALLED, Response};
 
 pub(super) fn register() -> io::Result<()> {
     // `SA_RESTART` を入れないので、ハンドラの後で待っている読みが `EINTR` で戻る。`SA_NODEFER` を入れないので、
@@ -28,6 +28,6 @@ pub(super) fn register() -> io::Result<()> {
 extern "C" fn on_sigint(_: libc::c_int) {
     if let Some(Response::Exit) = INSTALLED.get().map(|installed| installed.respond()) {
         // まだ書いていない出力は捨てる (docs/spec/vm.md の「上限と割り込み」)
-        unsafe { libc::_exit(REPEAT_EXIT_CODE.into()) }
+        unsafe { libc::_exit(EXIT_CODE.into()) }
     }
 }

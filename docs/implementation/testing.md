@@ -327,7 +327,7 @@ Core IR のテキストは `eml_core_ir::pretty` が書き、`eml_core_ir::parse
 - その後で、新しい `Control` を持つ別の `RunConfig` で、速いモードでも実行する。標準出力と、標準エラーと、書いたファイルと、終わり方 (成功か、誤りの文言) が検査モードと同じことを確かめる。速いモードを後に流すのは、速いモードは前提を確かめないので、VM の誤りがあると未定義の動作になり、1つのテストの失敗が同じプロセスで流すほかのファイルのテストまで壊しうるためである
 - `run-fail` のテストは、検査モードの誤りが `fast_mode_reports` を満たすときだけ、速いモードで流す。満たさないのは、リーク、VM の内部の誤り (`VmFault::Internal`)、extern のヒープの誤り (`VmFault::Extern(Fault::Heap(_))`) である。どれも検査モードだけが見つけるので、VM 自身の誤りを意味し、速いモードで流すとメモリを壊すことがある。それ以外の誤り (算術、出力、入出力、UTF-8) は両方のモードが同じ文言で報告する
 - 実行ごとに新しい `RunConfig` を作るのは、止める理由のビットが `Control::clear` でしか下りないためである。使い回すと、前の実行で立ったビットで次の実行がすぐ止まる ([VM](../spec/vm.md) の「上限と割り込み」)
-- 標準出力と標準エラーは、テストの Host の `CaptureHost` ([VM](../spec/vm.md) の「置き場所」) で別々に捕まえる。出力とファイルの読みは、メモリの書き込み先と `Buffering::Block` を持つ `StdHost` に任せるので、出力のまとめ方は `eml run` と同じである。`file_root` はそのテストのディレクトリで、`run-fail/files` のテストはこれに頼る。引数、標準入力、環境変数は付属のファイルのものだけで、本物の環境は読まない。子のプロセス (`Proc` の起動) は本物を起動するので、`sh`、`sort`、`cat` のある環境で流す。Windows では流さず、テストの1行目の印で外す (下の「OS ごとのテスト」)
+- 標準出力と標準エラーは、テストの Host の `CaptureHost` ([VM](../spec/vm.md) の「置き場所」) で別々に捕まえる。出力とファイルの読みは、メモリの書き込み先と `Buffering::Block` を持つ `StdHost` に任せるので、出力のまとめ方は `eml run` と同じである。`file_root` はそのテストのディレクトリで、`run-fail/files` のテストはこれに頼る。引数、標準入力、環境変数は付属のファイルのものだけで、本物の環境は読まない。子のプロセス (`Proc` の起動) は本物を起動する。`sh`、`sort`、`cat` を起動するテストは、それらのある環境で流し、Windows では印を付けて流さない (下の「OS ごとのテスト」)
 
 ## REPL のトランスクリプト
 
@@ -381,11 +381,13 @@ Ctrl-C の受け口は、bin の `interrupt` モジュールの単体テスト�
 
 テストは macOS、Linux、Windows の3つで流す。Windows で対応する target は `x86_64-pc-windows-msvc` だけで、`x86_64-pc-windows-gnu` (MinGW) は対応せず、流さない。テストは移植できるのが既定である。Windows での違いが処理系の側にあるなら、ソースを直すかテストを移す。
 
+開発機の OS で組まれないコード (`cfg(windows)` や `cfg(unix)` の部分) は、`nix develop .#cross` の clippy で型を検査する。この devShell の toolchain は、ふだんと同じ版に `x86_64-pc-windows-msvc` と `x86_64-unknown-linux-gnu` の `rust-std` を足したものである。link はできないので、流すのは clippy だけで、テストは CI の各 OS のジョブで流す。build の置き場所は `target/cross` で、ふだんの `target/` と分ける。
+
 ### Windows で流さないテスト
 
 印を付けて Windows で流さないのは、確かめる動きが Windows に無いときだけである。POSIX のツールを子のプロセスにすること、unix の signal、shebang での実行、fifo、unix の権限のビットがそれに当たる。機械に入っている道具の有無や、機械の設定で飛ばすことはしない。テストの合否が機械によってはならないためである。Linux に印はなく、Linux では印のあるテストも流れる。
 
-- Rust のテストは、`#[test]` の関数か、そうしたテストだけを持つ `mod` に `#[cfg(unix)]` を付ける。本体が `libc::kill`、`mkfifo`、`PermissionsExt`、`CommandExt::process_group` を使い、Windows でコンパイルできないので、`cfg_attr(windows, ignore)` は使えない
+- Rust のテストは、`#[test]` の関数か、そうしたテストだけを持つ `mod` に `#[cfg(unix)]` を付ける。`src/` の中のテストの `mod` には `#[cfg(all(test, unix))]` を付ける。本体が `libc::kill`、`mkfifo`、`PermissionsExt`、`CommandExt::process_group` を使い、Windows でコンパイルできないので、`cfg_attr(windows, ignore)` は使えない
 - UI テストとトランスクリプトは、入口のファイルの、shebang (`#!…`) でない最初の行に印を書く。`.em` は `-- windows: skip (<理由>)`、`.repl` は `# windows: skip (<理由>)` である。理由は空にしない。印は入口のファイル (1つのファイルか `main.em`、`main.repl`) にだけ書く
 - `crates/eml_cli/tests/common/mod.rs` の `windows_skip` が印を読み、`for_each_file` が `EML_UI_FILTER` の後で使う。Windows では印のあるファイルを流さない。どの OS でも、`<leader> windows:` で始まって形の合わない行 (理由がない、`()`、`windows:skip` など) は panic する。綴りを誤った印が黙って流れ続けるのを防ぐためである
 
@@ -408,7 +410,7 @@ git grep -n -A1 -e 'cfg(unix)\]' -e 'cfg(all(test, unix))\]' -- 'crates/*/tests/
 
 - `.gitattributes` は `* -text` で、改行を変換しない。`text=auto` は CRLF を含む fixture も正規化するので、`core.autocrlf` によらず checkout の中身を同じに保つために変換を止めている
 - `crates/eml_rt` の期待値の表で OS によって飛ばす行は、上の「期待値の表」の入力に書いてある
-- `a_miscased_entry_path_is_still_the_entry` は、大文字と小文字を区別しないファイルシステム (macOS、Windows) でだけ規則を確かめ、Linux では早く戻る。OS ごとに決まっていて合否は機械によらないので、印は付けない
+- `a_miscased_entry_path_is_still_the_entry` は、大文字と小文字を区別しないファイルシステムでだけ規則を確かめる。区別するファイルシステムでは入口が読めず、終了コード 2 で早く戻る。macOS と Windows の既定のファイルシステムは区別せず、Linux のものは区別する。どちらでも落ちないので、印は付けない
 
 ## 性能のテスト
 
@@ -465,9 +467,9 @@ Prelude のリストには4つのテストがある。長さ 1000 と 2000 の�
 - `verus`: Linux で、ふだんの devShell を通して `cargo verus verify -p eml_rt` と verusfmt の検査を流す
 - `miri`: Linux で、Miri の devShell を通して `trusted::` と `miri::` を続けて流す。借用の規則ごとにジョブを1つ立てる
 
-CI が見るのは合否だけである。テストの時間の条件 (「性能のテスト」) と Miri の CPU 時間の予算は開発機で確かめ、runner の速さに合わせて緩めない。runner は開発機より遅いが、nextest がテストを止める 60 秒は、1秒の条件より十分に長い。落ちたテストは流し直さない。合否が速さや順序で変わるテストは、流し直しで隠さずに直す。`#[ignore]` を付けたテストと `bench/` の計測は、CI で流さない。
+CI が見るのは合否だけである。テストの時間の条件 (「性能のテスト」) と Miri の CPU 時間の予算は開発機で確かめ、runner の速さに合わせて緩めない。runner は開発機より遅いが、nextest がテストを止める 60 秒は、1秒の条件より十分に長い。nextest の CI 用の profile は作らず、落ちたテストは流し直さない。合否が速さや順序で変わるテストは、流し直しで隠さずに直す。`#[ignore]` を付けたテストと `bench/` の計測は、CI で流さない。
 
-アクションは commit の SHA で固定し、版の名前をコメントに書く。nix のストアはキャッシュしない。cargo の依存のビルドをキャッシュするのは `test` ジョブだけで、保存するのは main の実行だけである。ワークフローを変えたら、`nix shell nixpkgs#shellcheck -c nix run nixpkgs#actionlint -- .github/workflows/ci.yml` で検査する。
+アクションは commit の SHA で固定し、版の名前をコメントに書く。runner の image は名前で固定し、上げるのは手で行う。nix のストアはキャッシュしない。install-nix-action には `GITHUB_TOKEN` を渡し、`github:` の input の取得が率の制限に当たらないようにする。token は nix.conf に入ってジョブの中で動くものから読めるが、権限は `contents: read` だけで、ジョブとともに切れるので受け入れる。cargo の依存のビルドをキャッシュするのは `test` ジョブだけで、保存するのは main の実行だけである。ワークフローを変えたら、`nix shell nixpkgs#shellcheck -c nix run nixpkgs#actionlint -- .github/workflows/ci.yml` で検査する。
 
 ## よく使うコマンド
 
@@ -484,6 +486,7 @@ cargo insta review                                   # スナップショット�
 cargo insta test --test-runner nextest --accept      # テストを流し、スナップショットを受け入れる
 cargo clippy --all-targets -- -D warnings && cargo fmt
 nix shell nixpkgs#shellcheck -c nix run nixpkgs#actionlint -- .github/workflows/ci.yml   # CI のワークフローの検査
+nix develop .#cross -c cargo clippy --target x86_64-pc-windows-msvc --workspace --all-targets -- -D warnings   # Windows の target の clippy (Linux は x86_64-unknown-linux-gnu。OS ごとのテスト)
 cargo nextest run --release -p eml_types --test integration --run-ignored ignored-only scaling::   # 型検査の時間の伸び (性能のテスト)
 cargo nextest run --release -p eml_hir --test integration --run-ignored ignored-only scaling::     # 名前の表を作る時間の伸び (性能のテスト)
 cargo nextest run --release -p eml_core_ir --test integration --run-ignored ignored-only instances::lowering   # 単相化の lower の時間の伸び (性能のテスト)
