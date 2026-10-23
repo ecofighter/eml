@@ -330,6 +330,30 @@ fn a_default_or_a_carried_value_can_need_more_than_the_class() {
     );
 }
 
+const HELPER: &str = "helper : (Unit -> <never e> Int) -> <e> Int\nhelper f = f ()\n\n";
+
+#[test]
+fn a_method_can_rely_on_a_bound_in_the_class_signature() {
+    let text = format!(
+        "{HELPER}class Runs a where\n  run : a -> (Unit -> <never e> Int) -> <Panic | e> Int\n\ninstance Runs Int where\n  run n f = helper f + n"
+    );
+    assert_eq!(lines(&text), Vec::<String>::new());
+}
+
+#[test]
+fn a_method_that_needs_a_bound_the_class_lacks() {
+    let text = format!(
+        "{HELPER}class Runs a where\n  run : a -> (Unit -> <e> Int) -> <Panic | e> Int\n\ninstance Runs Int where\n  run n f = helper f + n"
+    );
+    let checked = check(&text);
+    insta::assert_snapshot!(eml_test_support::full(checked.files(), &checked.diagnostics), @"
+    E2011 8:3 `run` in the instance for `Int` needs more than the signature of `run` allows
+      8:3 this definition
+      note: the signature of a method allows any effects for its row variables, and this definition passes a row where only `never` operations are allowed
+      help: write `never` before the row variable in the signature of `run` in the class
+    ");
+}
+
 #[test]
 fn a_callback_parameter_of_a_method_is_unrestricted() {
     // メソッドのシグネチャに書いた関数型の矢印は `Unr` に固定するので、instance がコールバックを2回呼んでも E2011 にならない

@@ -8,11 +8,12 @@ use eml_hir::{
 
 use crate::codes;
 use crate::kind::{
-    CallKind, CarriedInner, CarriedValue, DiscardSite, InnerLabel, KindOrigin, KindReason,
-    OperationSide, Span, UntakenPath, UnusedPath, VarMisuse,
+    BoundCause, BoundSource, CallKind, CarriedInner, CarriedValue, DiscardSite, Exceeding,
+    InnerLabel, KindOrigin, KindReason, OperationSide, Span, UntakenPath, UnusedPath, VarMisuse,
 };
 use crate::store::TypeStore;
 use crate::table::{Exporter, Label as RowLabel, Row, Ty, UnifyError};
+use crate::ty::Multiplicity;
 use eml_extern::ExternType;
 
 use super::body::BodyCheck;
@@ -748,6 +749,14 @@ pub(super) fn linear_misuse(
         KindReason::CarriedThrough { name, inner } => {
             carried_through(origin.span, name, inner.as_ref())
         }
+        KindReason::RowBound {
+            name,
+            source,
+            cause,
+        } => row_bound_exceeded(program, origin.span, name, source, cause.as_ref()),
+        KindReason::Performs(_) => {
+            unreachable!("a lower bound by an effect is never violated")
+        }
         KindReason::UsedMoreThanOnce {
             name,
             first,
@@ -1182,6 +1191,74 @@ fn carried_through(span: Span, name: &str, inner: Option<&CarriedInner>) -> Diag
             diagnostic.with_secondary(Label::new(inner.span.file, inner.span.range, label));
     }
     diagnostic.with_note(CARRY_NOTE)
+}
+
+const ROW_BOUND_NOTE: &str = "a row variable written `never e` admits only `Panic` and effects whose operations are all `never`; `IO` and the effects of `var` are not among them";
+
+/// E2020。参照が渡した row が、参照した宣言の row 変数の上限を超えた (docs/implementation/diagnostics.md の E2020)。
+fn row_bound_exceeded(
+    program: &Program,
+    span: Span,
+    name: &str,
+    source: &BoundSource,
+    cause: Option<&BoundCause>,
+) -> Diagnostic {
+    let performed = match cause.map(|cause| cause.what) {
+        Some(Exceeding::Effect(effect)) => format!("`{}`", program.names.effect(effect)),
+        Some(Exceeding::Multiplicity(multiplicity)) => {
+            format!("`{}` operations", multiplicity_word(multiplicity))
+        }
+        // 今の検査器では来ない形である。多重度の下限の制約はどれも本体の中の位置を由来に持つ。それでも、来た所を
+        // 指せない場合 (別のファイルの由来など) の見出しを、`with_bound_cause` が足さなかったときのために持つ
+        None => "operations other than `never` ones".to_string(),
+    };
+    let mut diagnostic = Diagnostic::error(
+        codes::ROW_BOUND_EXCEEDED,
+        format!(
+            "the row passed to `{name}` may perform {performed}, but `{name}` allows only `never` operations"
+        ),
+        Label::new(span.file, span.range, format!("`{name}` is used here")),
+    );
+    if let Some(cause) = cause {
+        let label = match cause.what {
+            Exceeding::Effect(effect) => {
+                format!("`{}` is performed here", program.names.effect(effect))
+            }
+            Exceeding::Multiplicity(multiplicity) => format!(
+                "`{}` operations may be performed here",
+                multiplicity_word(multiplicity)
+            ),
+        };
+        diagnostic =
+            diagnostic.with_secondary(Label::new(cause.span.file, cause.span.range, label));
+    }
+    match source {
+        BoundSource::Written(written) => {
+            diagnostic = diagnostic.with_secondary(Label::new(
+                written.file,
+                written.range,
+                format!("`{name}` bounds this row variable by `never`"),
+            ));
+        }
+        BoundSource::Through { name: inner, span } => {
+            diagnostic = diagnostic.with_secondary(Label::new(
+                span.file,
+                span.range,
+                format!("the row is passed to `{inner}` here"),
+            ));
+        }
+        BoundSource::Unknown => {}
+    }
+    diagnostic.with_note(ROW_BOUND_NOTE)
+}
+
+/// 多重度の、操作の宣言に書く語。
+fn multiplicity_word(multiplicity: Multiplicity) -> &'static str {
+    match multiplicity {
+        Multiplicity::Never => "never",
+        Multiplicity::Once => "once",
+        Multiplicity::Multi => "multi",
+    }
 }
 
 /// 本体の引数の数 `params` より後ろの矢印のうち、row が `missing` をすべて許す最初の矢印の番号 (0 から数える)。

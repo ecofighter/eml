@@ -82,6 +82,8 @@ try_io action =
 
 ## `try_panic`
 
+`Panic` の多重度は `Never` で、[型と Kind](types.md) の「Kind」に決まりがある。
+
 ```haskell
 pub extern effect Panic where
   never panicked : String -> a

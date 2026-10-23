@@ -4,7 +4,7 @@
 //! 本体の型を書き出すときの変数の値は `summary` にある。
 
 use eml_diagnostics::{FileId, TextRange, TextSize};
-use eml_hir::{DisplayNames, OperationId, VarId};
+use eml_hir::{DisplayNames, EffectId, OperationId, VarId};
 
 use crate::store::{TypeId, TypeStore};
 use crate::table::Row;
@@ -61,7 +61,10 @@ pub(crate) struct Span {
 
 /// Kind の制約の由来。制約が破れたときに E3001〜E3005 が指す場所と理由である
 /// (docs/implementation/diagnostics.md の「線形性の診断」)。
-/// `reason` の中の位置は、どれも由来を作った本体の中にあり、`span` と同じファイルである。ただし `CarriedThrough` の `inner` は自分の `Span` を持ち、呼ばれた関数のファイルを指しうる。
+/// `reason` の中の位置は、どれも由来を作った本体の中にあり、`span` と同じファイルである。ただし、自分の `Span` を持つ
+/// 次の位置は例外である。`CarriedThrough` の `inner` は、呼ばれた関数のファイルを指しうる。`RowBound` の `source` は、
+/// 参照した宣言のシグネチャか本体、または同じ SCC の別のメンバーの本体を指し、別のファイルでもありうる。`RowBound` の
+/// `cause` は `span` と同じファイルだが、同じ SCC の別のメンバーの本体を指しうる。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct KindOrigin {
     pub span: Span,
@@ -86,6 +89,9 @@ pub(crate) enum Provenance {
     Given,
     /// 本体の検査の表の既定値で、由来を付け忘れた制約である。値は検査している関数の名前の位置。
     Unattributed(Span),
+    /// シグネチャに書いた row 変数の上限。値はその `never` の位置である。破れるのは同じ SCC の参照を通したときだけで、
+    /// その参照に複写した制約が報告する (docs/spec/types.md の「row 変数の多重度の上限」)。
+    Bound(Span),
 }
 
 impl Provenance {
@@ -95,7 +101,8 @@ impl Provenance {
             Provenance::Suppressed
             | Provenance::Declaration
             | Provenance::Given
-            | Provenance::Unattributed(_) => None,
+            | Provenance::Unattributed(_)
+            | Provenance::Bound(_) => None,
         }
     }
 }
@@ -199,6 +206,83 @@ pub(crate) enum KindReason {
         decl: TextRange,
         misuse: VarMisuse,
     },
+    /// 参照した宣言 `name` の row 変数の上限 (E2020)。由来の範囲は参照の位置である。`source` は上限の出どころで、
+    /// `cause` は上限を超えた row がどこから来たかを表す。`cause` は段2が解いた後に入れる
+    /// (docs/implementation/diagnostics.md の E2020)。
+    RowBound {
+        name: String,
+        source: BoundSource,
+        cause: Option<BoundCause>,
+    },
+    /// row 変数に入れたラベルのエフェクト。由来の範囲はその row を入れた式である。下限の制約にだけ付くので破れず、
+    /// E2020 の原因として読まれる。
+    Performs(EffectId),
+}
+
+/// 宣言のスキームに残した row 変数の上限の出どころ。E2020 の secondary が指す。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum BoundSource {
+    /// シグネチャに書いた `never`。
+    Written(Span),
+    /// 推論した上限で、`name` に row を渡した参照から来た。その参照は、上限を残した宣言 (参照された側) の本体か、同じ
+    /// SCC の別のメンバーの本体にある。報告する参照を含む本体にはない。
+    Through { name: String, span: Span },
+    /// 出どころを決めなかった。
+    Unknown,
+}
+
+/// 上限を超えた row が来た所。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct BoundCause {
+    pub span: Span,
+    pub what: Exceeding,
+}
+
+/// 上限を超えたもの。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Exceeding {
+    /// そこで起こすラベルのエフェクト。
+    Effect(EffectId),
+    /// エフェクトの分からない row の多重度。
+    Multiplicity(Multiplicity),
+}
+
+impl BoundSource {
+    fn order_key(&self) -> Vec<KeyPart> {
+        match self {
+            BoundSource::Written(written) => [
+                vec![number(0), KeyPart::File(written.file)],
+                span(written.range),
+            ]
+            .concat(),
+            BoundSource::Through { name, span: at } => [
+                vec![number(1), KeyPart::File(at.file)],
+                span(at.range),
+                vec![text(name)],
+            ]
+            .concat(),
+            BoundSource::Unknown => vec![number(2)],
+        }
+    }
+}
+
+impl BoundCause {
+    fn order_key(&self) -> Vec<KeyPart> {
+        let what = match self.what {
+            Exceeding::Effect(effect) => vec![
+                number(0),
+                number(effect.module.into_raw().into_u32()),
+                number(effect.local.into_raw().into_u32()),
+            ],
+            Exceeding::Multiplicity(m) => vec![number(1), number(m as u32)],
+        };
+        [
+            vec![KeyPart::File(self.span.file)],
+            span(self.span.range),
+            what,
+        ]
+        .concat()
+    }
 }
 
 /// 配列の変数を取り出さなかった経路。E3003 の secondary が指す。
@@ -345,6 +429,24 @@ impl KindReason {
             KindReason::ArrayVarMisused { name, decl, misuse } => (
                 16,
                 [vec![text(name)], span(*decl), vec![number(*misuse as u32)]].concat(),
+            ),
+            KindReason::RowBound {
+                name,
+                source,
+                cause,
+            } => {
+                let cause = match cause {
+                    None => vec![number(0)],
+                    Some(cause) => [vec![number(1)], cause.order_key()].concat(),
+                };
+                (17, [vec![text(name)], source.order_key(), cause].concat())
+            }
+            KindReason::Performs(effect) => (
+                18,
+                vec![
+                    number(effect.module.into_raw().into_u32()),
+                    number(effect.local.into_raw().into_u32()),
+                ],
             ),
             KindReason::OperationType { name, side, lambda } => {
                 let lambda = match lambda {
@@ -623,6 +725,21 @@ mod tests {
         let mut files = eml_diagnostics::SourceFiles::new();
         let a = files.add("a.em", "");
         let b = files.add("b.em", "");
+        let at = |file, start| Span {
+            file,
+            range: range(start, start + 1),
+        };
+        let effect = |index: u32| {
+            EffectId::new(
+                ModuleId::from_raw(RawIdx::from(0)),
+                Idx::from_raw(RawIdx::from(index)),
+            )
+        };
+        let row_bound = |name: &str, source, cause| KindReason::RowBound {
+            name: name.to_string(),
+            source,
+            cause,
+        };
         let inner = |file, start, label| CarriedInner {
             span: Span {
                 file,
@@ -757,6 +874,44 @@ mod tests {
                 decl: range(1, 2),
                 misuse: VarMisuse::Assigned,
             },
+            row_bound("helper", BoundSource::Unknown, None),
+            row_bound("other", BoundSource::Unknown, None),
+            row_bound("helper", BoundSource::Written(at(a, 1)), None),
+            row_bound("helper", BoundSource::Written(at(b, 1)), None),
+            row_bound(
+                "helper",
+                BoundSource::Through {
+                    name: "wrap".to_string(),
+                    span: at(a, 1),
+                },
+                None,
+            ),
+            row_bound(
+                "helper",
+                BoundSource::Unknown,
+                Some(BoundCause {
+                    span: at(a, 3),
+                    what: Exceeding::Effect(effect(0)),
+                }),
+            ),
+            row_bound(
+                "helper",
+                BoundSource::Unknown,
+                Some(BoundCause {
+                    span: at(a, 3),
+                    what: Exceeding::Effect(effect(1)),
+                }),
+            ),
+            row_bound(
+                "helper",
+                BoundSource::Unknown,
+                Some(BoundCause {
+                    span: at(a, 3),
+                    what: Exceeding::Multiplicity(Multiplicity::Multi),
+                }),
+            ),
+            KindReason::Performs(effect(0)),
+            KindReason::Performs(effect(1)),
         ]
     }
 }

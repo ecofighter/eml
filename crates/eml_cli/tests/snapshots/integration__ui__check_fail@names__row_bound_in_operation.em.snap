@@ -1,0 +1,14 @@
+---
+source: crates/eml_cli/tests/ui.rs
+expression: rendered
+input_file: tests/ui/check-fail/names/row_bound_in_operation.em
+---
+[E1057] Error: `never` cannot bound `e` here
+   ╭─[ check-fail/names/row_bound_in_operation.em:3:19 ]
+   │
+ 3 │   run : (Unit -> <never e> Int) -> Int
+   │                   ──┬──  
+   │                     ╰──── the row variables of an operation cannot be bounded
+   │ 
+   │ Help: remove `never`
+───╯

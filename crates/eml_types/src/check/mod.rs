@@ -1,6 +1,6 @@
 use std::collections::{HashMap, HashSet};
 
-use eml_diagnostics::{Diagnostic, Label, SourceFiles};
+use eml_diagnostics::{Diagnostic, FileId, Label, SourceFiles};
 use eml_hir::{
     Binding, ClassId, Constructor, ExprId, Function, FunctionId, FunctionKind, Generics,
     InstanceId, InstanceOrigin, ItemMap, LocalId, Method, Operation, Program, RowRef, Signature,
@@ -9,7 +9,7 @@ use eml_hir::{
 use la_arena::Arena;
 
 use crate::context::Context;
-use crate::kind::entail::unentailed;
+use crate::kind::entail::{Unentailed, unentailed};
 use crate::kind::eval::scheme_facts;
 use crate::kind::problem::{Instance, KindProblem, KindScheme, OwnVars};
 use crate::kind::solve::{Solution, solve_scc};
@@ -332,8 +332,11 @@ fn check_derived_fields(
     for &constructor in constructors {
         let fields = program[constructor].fields.len();
         let mut table = Table::new(context);
-        let own = constructor_shape(context, def, &program[constructor])
-            .instantiate_rigid(&mut table, &def.generics);
+        let own = constructor_shape(context, def, &program[constructor]).instantiate_rigid(
+            &mut table,
+            &def.generics,
+            program.file(instance.head.module),
+        );
         let givens: Vec<(ClassId, RigidVar)> = instance
             .context
             .iter()
@@ -478,7 +481,7 @@ pub(crate) fn check_body<'c>(
         return None;
     };
     let mut table = Table::new(context);
-    let own = shape.instantiate_rigid(&mut table, &signature.generics);
+    let own = shape.instantiate_rigid(&mut table, &signature.generics, signature_file(program, id));
     // 部分適用のクロージャは、それまでの引数を捕まえる (docs/spec/types.md の「関数型」)
     table.closure_kinds(own.ty, body.params.len(), &[]);
     let previous = table.set_kind_origin(Provenance::Given);
@@ -684,6 +687,19 @@ fn unrestricted_vars(
     vars
 }
 
+/// 関数のシグネチャの generics を書いたファイル。instance のメソッドと既定のメソッドの generics はクラスのメソッドから
+/// 写したものなので、`never` の位置はクラスのファイルにある。`MethodId` のモジュールはクラスのモジュールである。
+fn signature_file(program: &Program, id: FunctionId) -> FileId {
+    match program[id].kind {
+        FunctionKind::InstanceMethod(_, method) | FunctionKind::DefaultMethod(method) => {
+            program.file(method.module)
+        }
+        FunctionKind::Defined | FunctionKind::Extern(_) | FunctionKind::Input(_) => {
+            program.file(id.module)
+        }
+    }
+}
+
 /// 本体のない宣言の Kind のスキーム。宣言から出る制約だけを持つ問題を、1つの宣言だけの SCC として解く。
 fn declaration_schemes(
     program: &Program,
@@ -702,15 +718,17 @@ fn declaration_schemes(
             continue;
         };
         let arity = signature.arity();
-        let problem = declaration_problem(context, shape, &signature.generics, |table, own| {
-            table.closure_kinds(own.ty, arity, &[]);
-            // 引数に現れる型変数は `Unr` である。本体がないので、extern が引数をどう使うかを Kind に推論できない。
-            // 結果だけに現れる型変数 (`exit`、`MutArray.empty`) は縛らない
-            // (docs/spec/declarations.md の「`extern`」)
-            for var in param_type_vars(signature, arity) {
-                table.kind_at_most(own.rigids.ty(var), Bound::Const(Linearity::Unr));
-            }
-        });
+        let file = signature_file(program, id);
+        let problem =
+            declaration_problem(context, shape, &signature.generics, file, |table, own| {
+                table.closure_kinds(own.ty, arity, &[]);
+                // 引数に現れる型変数は `Unr` である。本体がないので、extern が引数をどう使うかを Kind に推論できない。
+                // 結果だけに現れる型変数 (`exit`、`MutArray.empty`) は縛らない
+                // (docs/spec/declarations.md の「`extern`」)
+                for var in param_type_vars(signature, arity) {
+                    table.kind_at_most(own.rigids.ty(var), Bound::Const(Linearity::Unr));
+                }
+            });
         problems.push((ValueItem::Function(id), problem));
     }
     // メソッドも本体を持たないので、extern の関数と同じく宣言だけから作る
@@ -719,7 +737,8 @@ fn declaration_schemes(
         let shape = &signatures.methods[id];
         let generics = &method.signature.generics;
         let arity = method.signature.arity();
-        let problem = declaration_problem(context, shape, generics, |table, own| {
+        let file = program.file(id.module);
+        let problem = declaration_problem(context, shape, generics, file, |table, own| {
             table.closure_kinds(own.ty, arity, &[]);
             // クラスの型変数 (番号 0) とメソッド自身の制約の型変数は、制約 `C a` があるので `Unr` である
             let class_var = generics.type_vars.iter().map(|(var, _)| var).take(1);
@@ -733,7 +752,8 @@ fn declaration_schemes(
     for (id, operation) in program.operations() {
         let shape = &signatures.operations[id];
         let generics = &operation.signature.generics;
-        let problem = declaration_problem(context, shape, generics, |table, own| {
+        let file = program.file(id.module);
+        let problem = declaration_problem(context, shape, generics, file, |table, own| {
             table.closure_kinds(own.ty, operation.arity, &[]);
             // エフェクトの型引数は handle ごとに具体的な型で節を検査するので、`Unr` に固定しない
             let effect_kinds: Vec<KindVar> = own
@@ -762,7 +782,8 @@ fn declaration_schemes(
     for (id, constructor) in program.constructors() {
         let shape = &signatures.constructors[id];
         let generics = &program[constructor.ty].generics;
-        let problem = declaration_problem(context, shape, generics, |table, own| {
+        let file = program.file(id.module);
+        let problem = declaration_problem(context, shape, generics, file, |table, own| {
             table.closure_kinds(own.ty, constructor.fields.len(), &[]);
         });
         problems.push((ValueItem::Constructor(id), problem));
@@ -796,15 +817,17 @@ fn param_type_vars(signature: &Signature, arity: usize) -> Vec<TypeVarId> {
     vars
 }
 
-/// 宣言の形を使い捨ての表に置き、宣言から出る制約だけを足した Kind の問題。
+/// 宣言の形を使い捨ての表に置き、宣言から出る制約だけを足した Kind の問題。`file` は `generics` を書いたファイルで、
+/// シグネチャに書いた row 変数の上限の位置に使う。
 fn declaration_problem(
     context: &Context,
     shape: &Shape,
     generics: &Generics,
+    file: FileId,
     constrain: impl FnOnce(&mut Table<'_>, &Own),
 ) -> KindProblem {
     let mut table = Table::new(context);
-    let own = shape.instantiate_rigid(&mut table, generics);
+    let own = shape.instantiate_rigid(&mut table, generics, file);
     constrain(&mut table, &own);
     let own_vars = OwnVars {
         lin: own.lin,
@@ -849,16 +872,19 @@ fn check_method_kinds(
         };
         let arity = program[method].signature.arity();
         let unrestricted = unrestricted_vars(program, function, signature);
-        let problem = declaration_problem(context, shape, &signature.generics, |table, own| {
-            table.closure_kinds(own.ty, arity, &[]);
-            for &var in &unrestricted {
-                table.kind_at_most(own.rigids.ty(var), Bound::Const(Linearity::Unr));
-            }
-        });
+        let file = signature_file(program, id);
+        let problem =
+            declaration_problem(context, shape, &signature.generics, file, |table, own| {
+                table.closure_kinds(own.ty, arity, &[]);
+                for &var in &unrestricted {
+                    table.kind_at_most(own.rigids.ty(var), Bound::Const(Linearity::Unr));
+                }
+            });
         let solution = solve_scc(&[(decl, &problem)], schemes);
         debug_assert!(solution.violated.is_empty());
         let class_side = solution.schemes.into_iter().next().unwrap_or_default();
-        if unentailed(&class_side, scheme).is_empty() {
+        let missing = unentailed(&class_side, scheme);
+        if missing.is_empty() {
             continue;
         }
         let name = &program[method].name;
@@ -871,20 +897,34 @@ fn check_method_kinds(
                 format!("the default `{name}` needs more than the signature of `{name}` allows")
             }
         };
-        diagnostics.push(
-            Diagnostic::error(
-                codes::METHOD_KIND_MISMATCH,
-                message,
-                Label::new(
-                    program.file(id.module),
-                    function.name_range,
-                    "this definition",
-                ),
-            )
-            .with_note(
-                "the signature of a method leaves its own type variables free to be linear, and this definition copies, drops or keeps a value of such a type",
+        let diagnostic = Diagnostic::error(
+            codes::METHOD_KIND_MISMATCH,
+            message,
+            Label::new(
+                program.file(id.module),
+                function.name_range,
+                "this definition",
             ),
         );
+        // 導けないのが多重度だけなら、定義が row 変数に上限を求めている。上限はクラスのシグネチャに書けば前提にできる
+        // (docs/spec/types.md の「instance と既定のメソッドの検査」)
+        let diagnostic = if missing
+            .iter()
+            .all(|missing| matches!(missing, Unentailed::Multiplicity(..)))
+        {
+            diagnostic
+                .with_note(
+                    "the signature of a method allows any effects for its row variables, and this definition passes a row where only `never` operations are allowed",
+                )
+                .with_help(format!(
+                    "write `never` before the row variable in the signature of `{name}` in the class"
+                ))
+        } else {
+            diagnostic.with_note(
+                "the signature of a method leaves its own type variables free to be linear, and this definition copies, drops or keeps a value of such a type",
+            )
+        };
+        diagnostics.push(diagnostic);
     }
     diagnostics
 }
@@ -907,8 +947,16 @@ fn report_violations(
     });
     origins.dedup();
     let mut carried = HashSet::new();
+    let mut bounded = HashSet::new();
     let mut out = Vec::new();
     for origin in origins {
+        // 1つの呼び出しが上限を持つ row 変数を2つ以上破っても、E2020 は1件だけにする。並びの最初の由来の原因と出どころを
+        // 示す (docs/implementation/diagnostics.md の E2020)
+        if let KindReason::RowBound { name, .. } = &origin.reason
+            && !bounded.insert((origin.span.file, origin.span.range, name.clone()))
+        {
+            continue;
+        }
         // 値の範囲は由来と同じファイルにある。別のファイルの値は、範囲が同じでも別の値である
         if let KindReason::CarriedAcross { value, .. } = &origin.reason
             && !carried.insert((origin.span.file, value.key()))

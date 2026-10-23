@@ -1021,3 +1021,60 @@ fn local_groups_record_recursion() {
         vec!["f,h plain", "g plain"]
     );
 }
+
+#[test]
+fn a_bound_belongs_to_the_row_variable() {
+    insta::assert_snapshot!(lower_text("f : (Unit -> <e> Int) -> <never e> Int\nf g = g ()"), @"
+    f : (Unit -> <never e> Int) -> <never e> Int
+    f g#0 = (g#0 ())
+    ");
+}
+
+#[test]
+fn a_misplaced_never_bounds_no_row_variable() {
+    insta::assert_snapshot!(lower_text("f : (Unit -> <never Panic | e> Int) -> <Panic | e> Int\nf g = g ()"), @"
+    f : (Unit -> <Panic | e> Int) -> <Panic | e> Int
+    f g#0 = (g#0 ())
+    ---
+    E0011 1:21 expected a row variable
+    ");
+}
+
+#[test]
+fn an_annotation_may_repeat_a_declared_bound() {
+    let text = "helper2 : (Unit -> <never e> Int) -> <e> Int\nhelper2 f =\n  let g : Unit -> <never e> Int = f\n  g ()";
+    assert_eq!(diagnostics(text), Vec::<String>::new());
+}
+
+#[test]
+fn a_bound_must_be_declared_in_the_signature() {
+    let text = "helper3 : (Unit -> <e> Int) -> <e> Int\nhelper3 f =\n  let g : Unit -> <never e> Int = f\n  g ()";
+    assert_eq!(
+        diagnostics(text),
+        ["E1057 3:20 `never` cannot bound `e` here"]
+    );
+}
+
+#[test]
+fn a_data_field_cannot_bound_a_row_variable() {
+    assert_eq!(
+        diagnostics("data T <e> =\n  | T (Unit -> <never e> Int)"),
+        ["E1057 2:17 `never` cannot bound `e` here"]
+    );
+}
+
+#[test]
+fn an_operation_cannot_bound_a_row_variable() {
+    assert_eq!(
+        diagnostics("effect E where\n  op : (Unit -> <never e> Int) -> Int"),
+        ["E1057 2:18 `never` cannot bound `e` here"]
+    );
+}
+
+#[test]
+fn a_bounded_row_parameter_stays_a_parameter() {
+    assert_eq!(
+        diagnostics("data T <never e> =\n  | T (Unit -> <e> Int)"),
+        ["E0011 1:9 a row parameter of `data` cannot have a bound"]
+    );
+}

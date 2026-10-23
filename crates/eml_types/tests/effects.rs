@@ -383,7 +383,7 @@ fn the_return_clause_of_a_multi_handler_cannot_capture_a_linear_value() {
 
 /// `IO` は2回以上は再開しないエフェクトなので、`multi` の操作の節の中でも、`IO` を起こす呼び出しをまたいで線形の値を
 /// 持ち越せる (docs/spec/types.md の「Kind」)。このテストは `Once` と `Never` を見分けない。多重度が `Once` であることは
-/// `table` の単体テスト `an_extern_effect_is_performed_at_most_once` が確かめる。
+/// `table` の単体テスト `io_is_once` が確かめる。
 #[test]
 fn a_linear_value_may_be_kept_across_an_io_call_in_a_multi_clause() {
     let text = "import FileIn\neffect Choice where\n  multi choose : Unit -> Bool\n\nsay : String -> <IO> Unit\nsay s = println s\n\nboth : Unit -> <IO, Panic> Int\nboth () =\n  handle (if choose () then 1 else 2) with\n    | ctl choose () k ->\n        let file = FileIn.open \"a\"\n        say \"x\"\n        FileIn.close file\n        k True + k False";

@@ -6,7 +6,10 @@ use std::collections::{HashMap, HashSet};
 use eml_hir::ValueItem;
 
 use super::problem::{Bounds, KindProblem, KindScheme, OwnVars};
-use super::{Bound, CarriedInner, Carry, KindOrigin, KindReason, KindVar, Level, Provenance, Span};
+use super::{
+    Bound, BoundCause, BoundSource, CarriedInner, Carry, Exceeding, KindOrigin, KindReason,
+    KindVar, Level, Provenance, Span,
+};
 use crate::ty::{Linearity, Multiplicity};
 
 /// 1つの SCC を解いた結果。`schemes` は `members` と同じ順に並ぶ。
@@ -37,24 +40,7 @@ pub(crate) fn solve_scc(
 ) -> Solution {
     let merged = merge(members, schemes);
     let (lin, lin_violated, lin_causes) = solve_with_causes(&merged.lin);
-    let (mult, mult_violated) = solve(&merged.mult);
-    let carry_violated = violated_carries(&merged.carries, &lin, &mult);
-    let lin_reported = lin_violated.iter().filter_map(|&index| {
-        let origin = reportable(&merged.lin.origins[index])?;
-        Some(with_cause(origin, &merged.lin, index, &lin_causes))
-    });
-    let violated = lin_reported
-        .chain(
-            mult_violated
-                .iter()
-                .filter_map(|&index| reportable(&merged.mult.origins[index])),
-        )
-        .chain(
-            carry_violated
-                .iter()
-                .filter_map(|&index| reportable(&merged.carries[index].origin)),
-        )
-        .collect();
+    let (mult, mult_violated, mult_causes) = solve_with_causes(&merged.mult);
     let lin_graph = Graph::new(
         &merged.lin,
         merged.own.iter().map(|own| own.lin.clone()).collect(),
@@ -63,11 +49,48 @@ pub(crate) fn solve_scc(
         &merged.mult,
         merged.own.iter().map(|own| own.mult.clone()).collect(),
     );
+    let broken = broken_bounds(&merged.mult, &mult_violated, &mult_graph);
+    let carry_violated: Vec<usize> = violated_carries(&merged.carries, &lin, &mult)
+        .into_iter()
+        .filter(|&index| match merged.carries[index].mult {
+            Bound::Var(v) => !broken[mult_graph.component[v.index()]],
+            Bound::Const(_) => true,
+        })
+        .collect();
+    let lin_reported = lin_violated.iter().filter_map(|&index| {
+        let origin = reportable(&merged.lin.origins[index])?;
+        Some(with_cause(origin, &merged.lin, index, &lin_causes))
+    });
+    let mult_reported = mult_violated.iter().filter_map(|&index| {
+        let origin = reportable(&merged.mult.origins[index])?;
+        Some(with_bound_cause(
+            origin,
+            &merged.mult,
+            index,
+            &mult_causes,
+            &mult,
+        ))
+    });
+    let violated = lin_reported
+        .chain(mult_reported)
+        .chain(
+            carry_violated
+                .iter()
+                .filter_map(|&index| reportable(&merged.carries[index].origin)),
+        )
+        .collect();
+    let sources = SourceIndex::new(&merged.mult, &mult_graph);
     let schemes = (0..merged.own.len())
-        .map(|member| KindScheme {
-            lin: residual(&lin_graph, member),
-            mult: residual(&mult_graph, member),
-            carries: carry_residual(&merged.carries, &lin_graph, &mult_graph, member),
+        .map(|member| {
+            let mult = residual(&mult_graph, member);
+            let bound_sources =
+                bound_sources(&mult, &merged.own[member].mult, &sources, &mult_graph);
+            KindScheme {
+                lin: residual(&lin_graph, member),
+                mult,
+                carries: carry_residual(&merged.carries, &lin_graph, &mult_graph, member),
+                bound_sources,
+            }
         })
         .collect();
     Solution {
@@ -81,12 +104,34 @@ pub(crate) fn solve_scc(
     }
 }
 
+/// 成分ごとの、上向きの辺をたどって、報告する違反になった `Once` 以下の上限に届くか。届く成分の変数を row の側に
+/// 持つ持ち越しの制約は、破れても報告しない。上限を超えた row はすでに E2020 になっていて、上限の違反を直せば
+/// 持ち越しの制約も満たされる。上限から導ける持ち越しの制約をスキームに残さないのと同じく、1つの呼び出しを E2020 と
+/// E3006 の両方にしないためである (docs/spec/types.md の「推論」)。届く先を報告する違反に限るのは、報告しない由来の
+/// 上限 (シグネチャに書いたものなど) だけを根拠にして、持ち越しの誤りまで消さないためである。
+fn broken_bounds(
+    bounds: &Bounds<Multiplicity>,
+    violated: &[usize],
+    graph: &Graph<Multiplicity>,
+) -> Vec<bool> {
+    let mut seed = vec![false; graph.upper.len()];
+    for &index in violated {
+        if let (Bound::Var(v), Bound::Const(c)) = bounds.constraints[index]
+            && c <= Multiplicity::Once
+            && reportable(&bounds.origins[index]).is_some()
+        {
+            seed[graph.component[v.index()]] = true;
+        }
+    }
+    upward_closure(&graph.upward, seed, |a, b| a || b)
+}
+
 /// 違反した制約のうち報告するものの由来。由来を付け忘れた制約の違反は処理系の誤りである。debug ビルドでは止め、release
 /// ビルドでは、違反のあるプログラムを通さないよう関数を指す E3001 にする。
 fn reportable(provenance: &Provenance) -> Option<KindOrigin> {
     match provenance {
         Provenance::At(origin) => Some(origin.clone()),
-        Provenance::Suppressed | Provenance::Given => None,
+        Provenance::Suppressed | Provenance::Given | Provenance::Bound(_) => None,
         Provenance::Declaration => {
             unreachable!("a constraint from a declaration alone is never violated")
         }
@@ -123,6 +168,173 @@ fn with_cause<T: Level>(
     origin
 }
 
+/// row 変数の上限の違反に、上限を超えた row がどこから来たかを足す。破れた制約の下側の変数の値を決めた下限の制約の
+/// 由来を読む。その由来が別のファイルを指すとき (呼んだ関数の中など) は、この本体の中の位置として示せないので足さない
+/// (docs/implementation/diagnostics.md の E2020)。
+fn with_bound_cause(
+    mut origin: KindOrigin,
+    bounds: &Bounds<Multiplicity>,
+    violated: usize,
+    causes: &[Option<usize>],
+    values: &[Multiplicity],
+) -> KindOrigin {
+    let KindReason::RowBound { cause, .. } = &mut origin.reason else {
+        return origin;
+    };
+    let (Bound::Var(lower), _) = bounds.constraints[violated] else {
+        return origin;
+    };
+    let Some(Provenance::At(found)) = causes[lower.index()].map(|index| &bounds.origins[index])
+    else {
+        return origin;
+    };
+    if found.span.file != origin.span.file {
+        return origin;
+    }
+    let what = match found.reason {
+        KindReason::Performs(effect) => Exceeding::Effect(effect),
+        _ => Exceeding::Multiplicity(values[lower.index()]),
+    };
+    *cause = Some(BoundCause {
+        span: found.span,
+        what,
+    });
+    origin
+}
+
+/// 参照に複写する上限の由来。参照の由来 (`Passed`) を、上限の出どころを持つ `RowBound` にする。ほかの由来はそのまま
+/// 使う。
+fn bound_origin(origin: &Provenance, source: BoundSource) -> Provenance {
+    match origin {
+        Provenance::At(KindOrigin {
+            span,
+            reason: KindReason::Passed(name),
+        }) => Provenance::At(KindOrigin {
+            span: *span,
+            reason: KindReason::RowBound {
+                name: name.clone(),
+                source,
+                cause: None,
+            },
+        }),
+        other => other.clone(),
+    }
+}
+
+/// 推論した上限の出どころを引くための、SCC の多重度の制約の索引。番号はまとめた後のものである。
+struct SourceIndex {
+    /// 変数ごとの、シグネチャに書いた上限 (`Provenance::Bound`) の位置。
+    written: HashMap<usize, Span>,
+    /// 参照に複写した上限 (由来が `RowBound`) の、参照の位置と参照した宣言の名前の組。位置と名前の小さい順に並べる。
+    candidates: Vec<(Span, String)>,
+    /// 上限の値ごとの、成分から上向きにたどって届く成分 (自分を含む) にある候補の最小の番号。
+    first: Vec<(Multiplicity, Vec<Option<usize>>)>,
+}
+
+impl SourceIndex {
+    fn new(bounds: &Bounds<Multiplicity>, graph: &Graph<Multiplicity>) -> Self {
+        let mut written = HashMap::new();
+        let mut copied = Vec::new();
+        for (&constraint, origin) in bounds.constraints.iter().zip(&bounds.origins) {
+            match (constraint, origin) {
+                ((Bound::Var(var), Bound::Const(_)), Provenance::Bound(span)) => {
+                    written.entry(var.index()).or_insert(*span);
+                }
+                (
+                    (Bound::Var(var), Bound::Const(upper)),
+                    Provenance::At(KindOrigin {
+                        span,
+                        reason: KindReason::RowBound { name, .. },
+                    }),
+                ) => copied.push((var.index(), upper, *span, name.clone())),
+                _ => {}
+            }
+        }
+        // 候補が複数あれば位置と名前のいちばん小さいものを選び、結果を制約の並びに依らないようにする。並べた順の
+        // 番号の最小がその候補になる
+        copied.sort_by(|(_, _, a, a_name), (_, _, b, b_name)| {
+            (a.file, a.range.start(), a.range.end(), a_name).cmp(&(
+                b.file,
+                b.range.start(),
+                b.range.end(),
+                b_name,
+            ))
+        });
+        let mut first: Vec<(Multiplicity, Vec<Option<usize>>)> = Vec::new();
+        for (rank, &(var, upper, _, _)) in copied.iter().enumerate() {
+            let at = match first.iter().position(|(level, _)| *level == upper) {
+                Some(at) => at,
+                None => {
+                    first.push((upper, vec![None; graph.upper.len()]));
+                    first.len() - 1
+                }
+            };
+            first[at].1[graph.component[var]].get_or_insert(rank);
+        }
+        // メンバーごとにたどると、`equate` の両向きの辺で SCC 全体に届くので、時間がメンバーの数の2乗になる。成分の
+        // DAG の上で一度に求めれば SCC の大きさに比例する (docs/implementation/architecture.md の「`eml_types` の内部」)
+        for (_, seed) in &mut first {
+            *seed = upward_closure(&graph.upward, std::mem::take(seed), |a, b| match (a, b) {
+                (Some(a), Some(b)) => Some(a.min(b)),
+                (a, b) => a.or(b),
+            });
+        }
+        SourceIndex {
+            written,
+            candidates: copied
+                .into_iter()
+                .map(|(_, _, span, name)| (span, name))
+                .collect(),
+            first,
+        }
+    }
+
+    /// 推論した上限 `σ_var ≤ upper` の出どころ。`var` から上向きにたどって届く変数に、参照から複写した同じ上限が
+    /// あれば、そのうち位置のいちばん前の参照を返す。たどるのは1段だけで、呼び出し先の中の出どころは追わない
+    /// (docs/implementation/diagnostics.md の E2020)。ほかの変数の `Provenance::Bound` は見ない。ほかのメンバーの
+    /// 書いた上限は `equate` を通してだけ届き、そこで複写した `RowBound` が候補になるからである。
+    fn through(&self, graph: &Graph<Multiplicity>, var: usize, upper: Multiplicity) -> BoundSource {
+        let found = self
+            .first
+            .iter()
+            .find(|(level, _)| *level == upper)
+            .and_then(|(_, first)| first[graph.component[var]]);
+        match found {
+            Some(rank) => {
+                let (span, name) = &self.candidates[rank];
+                BoundSource::Through {
+                    name: name.clone(),
+                    span: *span,
+                }
+            }
+            None => BoundSource::Unknown,
+        }
+    }
+}
+
+/// 残した多重度の制約のうち定数の上限ごとの出どころ。`own` は宣言の自分の変数 (まとめた後の番号) である。
+fn bound_sources(
+    residual: &[(Bound<Multiplicity>, Bound<Multiplicity>)],
+    own: &[KindVar],
+    sources: &SourceIndex,
+    graph: &Graph<Multiplicity>,
+) -> Vec<(KindVar, BoundSource)> {
+    residual
+        .iter()
+        .filter_map(|&constraint| match constraint {
+            (Bound::Var(k), Bound::Const(upper)) => {
+                let var = own[k.index()].index();
+                let source = match sources.written.get(&var) {
+                    Some(&span) => BoundSource::Written(span),
+                    None => sources.through(graph, var, upper),
+                };
+                Some((k, source))
+            }
+            _ => None,
+        })
+        .collect()
+}
+
 /// 由来を付け忘れた違反を、release ビルドで報告するときの由来。
 fn unattributed_origin(span: Span) -> KindOrigin {
     KindOrigin {
@@ -132,6 +344,12 @@ fn unattributed_origin(span: Span) -> KindOrigin {
 }
 
 /// SCC の問題を1つの番号の空間に並べ、Kind の具体化の記録を展開したもの。
+///
+/// `never` を書いたシグネチャの宣言を指す参照はどれも、参照を由来とする `σ_参照 ≤ Never` を1つ持つ。SCC の外の参照は
+/// 残した制約の複写 (`copy_scheme`) で持ち、SCC の中の参照 (自分自身、相互再帰、ローカル関数の中からの参照を含む)
+/// は `equate` の複写で持つ。`Provenance::Bound` の制約そのものは報告しない。SCC の中では参照の変数と宣言の変数が
+/// 等しいので、参照が上限を破れば宣言の制約も破れるが、それを報告すると参照の位置を指せないためである
+/// (docs/implementation/architecture.md の「`eml_types` の内部」)。
 struct Merged {
     lin: Bounds<Linearity>,
     mult: Bounds<Multiplicity>,
@@ -140,6 +358,8 @@ struct Merged {
     own: Vec<OwnVars>,
     /// 各宣言の線形性の変数の番号のずれ。
     lin_offsets: Vec<usize>,
+    /// 各宣言のシグネチャに書いた上限。`Shape` の多重度の変数の番号、上限、`never` の位置の組である。
+    own_bounds: Vec<Vec<(usize, Multiplicity, Span)>>,
 }
 
 fn merge(
@@ -178,6 +398,10 @@ fn merge(
         carries: Vec::new(),
         own,
         lin_offsets: offsets.iter().map(|&(l, _)| l).collect(),
+        own_bounds: members
+            .iter()
+            .map(|(_, problem)| own_bounds(problem))
+            .collect(),
     };
     for ((_, problem), &(l, m)) in members.iter().zip(&offsets) {
         merged.copy_own(problem, (l, m));
@@ -185,7 +409,7 @@ fn merge(
             let lin: Vec<KindVar> = instance.lin.iter().map(|&v| shift_var(v, l)).collect();
             let mult: Vec<KindVar> = instance.mult.iter().map(|&v| shift_var(v, m)).collect();
             match position.get(&instance.decl) {
-                Some(&callee) => merged.equate(&lin, &mult, callee),
+                Some(&callee) => merged.equate(&lin, &mult, callee, &instance.origin),
                 None => {
                     let scheme = schemes
                         .get(&instance.decl)
@@ -220,8 +444,10 @@ impl Merged {
     }
 
     /// 同じ SCC の宣言の参照は、多相化する前の Kind 変数を共有するのと同じ解にする (docs/spec/types.md の「推論」)。
-    /// 変数どうしの制約は違反にならないので、宣言の由来にする。
-    fn equate(&mut self, lin: &[KindVar], mult: &[KindVar], callee: usize) {
+    /// 変数どうしの制約は違反にならないので、宣言の由来にする。呼ばれる宣言のシグネチャに書いた上限は、参照の由来で
+    /// 参照の変数に写す。上限を破る参照をその位置で報告するためである。写すのは書いた上限だけである。推論した上限は
+    /// どこかのメンバーの本体にある SCC の外の参照から来ていて、その複写がすでに参照の由来を持つ。
+    fn equate(&mut self, lin: &[KindVar], mult: &[KindVar], callee: usize, origin: &Provenance) {
         debug_assert_eq!(lin.len(), self.own[callee].lin.len());
         debug_assert_eq!(mult.len(), self.own[callee].mult.len());
         for (&v, &w) in lin.iter().zip(&self.own[callee].lin) {
@@ -235,6 +461,13 @@ impl Merged {
                 .require(Bound::Var(v), Bound::Var(w), Provenance::Declaration);
             self.mult
                 .require(Bound::Var(w), Bound::Var(v), Provenance::Declaration);
+        }
+        for &(k, upper, span) in &self.own_bounds[callee] {
+            self.mult.require(
+                Bound::Var(mult[k]),
+                Bound::Const(upper),
+                bound_origin(origin, BoundSource::Written(span)),
+            );
         }
     }
 
@@ -261,8 +494,31 @@ impl Merged {
                 .require(rename_lin(lower), rename_lin(upper), origin.clone());
         }
         for &(lower, upper) in &scheme.mult {
+            let origin = match (lower, upper) {
+                (Bound::Var(v), Bound::Const(_)) => {
+                    let source = scheme
+                        .bound_sources
+                        .iter()
+                        .find(|(var, _)| *var == v)
+                        .map_or(BoundSource::Unknown, |(_, source)| source.clone());
+                    // 残した上限はどれも、書いた上限か本体の中の参照の複写から来るので、出どころが見つかるはずである
+                    debug_assert!(
+                        !(source == BoundSource::Unknown
+                            && matches!(
+                                origin,
+                                Provenance::At(KindOrigin {
+                                    reason: KindReason::Passed(_),
+                                    ..
+                                })
+                            )),
+                        "a bound copied to a reference has no source"
+                    );
+                    bound_origin(origin, source)
+                }
+                _ => origin.clone(),
+            };
             self.mult
-                .require(rename_mult(lower), rename_mult(upper), origin.clone());
+                .require(rename_mult(lower), rename_mult(upper), origin);
         }
         for carry in &scheme.carries {
             let origin = match origin {
@@ -287,6 +543,23 @@ impl Merged {
     }
 }
 
+/// 宣言のシグネチャに書いた上限。`Shape` の多重度の変数の番号、上限、`never` の位置の組である。
+fn own_bounds(problem: &KindProblem) -> Vec<(usize, Multiplicity, Span)> {
+    problem
+        .mult
+        .constraints
+        .iter()
+        .zip(&problem.mult.origins)
+        .filter_map(|(&constraint, origin)| match (constraint, origin) {
+            ((Bound::Var(var), Bound::Const(upper)), Provenance::Bound(span)) => {
+                let k = problem.own.mult.iter().position(|&own| own == var)?;
+                Some((k, upper, *span))
+            }
+            _ => None,
+        })
+        .collect()
+}
+
 fn shift_var(var: KindVar, offset: usize) -> KindVar {
     KindVar::from_index(var.index() + offset)
 }
@@ -300,6 +573,7 @@ fn shift<T>(bound: Bound<T>, offset: usize) -> Bound<T> {
 
 /// 最小解と、満たせなかった制約 (定数の上限を超えたもの) の番号。上がった変数をワークリストに入れ、上向きの辺に沿って
 /// 伝える。束の高さが小さいので、各変数が上がる回数は高々その高さで、時間は制約の数に比例する。
+#[cfg(test)]
 pub(crate) fn solve<T: Level>(bounds: &Bounds<T>) -> (Vec<T>, Vec<usize>) {
     let (values, violated, _) = solve_with_causes(bounds);
     (values, violated)
@@ -377,11 +651,78 @@ pub(super) struct Graph<T> {
     /// 成分の変数に付いた定数の上限の最小と、定数の下限の最大。
     upper: Vec<Option<T>>,
     lower: Vec<Option<T>>,
+    /// 成分ごとの、上向きの辺をすべてたどって届く成分 (自分を含む) の定数の上限の最小。`reach` と違い、残す成分でも
+    /// 止まらない。持ち越しの制約が上限から導けるかを、クラスのメソッドの含意 (`entail.rs`) と同じ規則で決めるのに使う。
+    closed_upper: Vec<Option<T>>,
     /// SCC の宣言ごとの自分の変数 (`Shape` の番号の順)。
     own: Vec<Vec<KindVar>>,
     /// 上向き (下限から上限へ) と下向きの辺。
     upward: Edges,
     pub downward: Edges,
+    /// `reach` が上向きと下向きにたどるときの近道。
+    upward_shortcut: Shortcut<T>,
+    downward_shortcut: Shortcut<T>,
+}
+
+/// 1つの向きで、どの宣言の変数を含む成分にも届かない隣をまとめて扱うための情報。
+///
+/// その向きにたどった先 (成分自身を含む) に宣言の変数を含む成分がない成分を「閉じた成分」と呼ぶ。閉じた成分からは
+/// 残す成分に届かないので、`reach` がそこから見つけるのは、届く成分の定数をまとめた値だけである。`never` の上限を
+/// 持つ関数を SCC の各メンバーが呼ぶと、メンバーの row の成分から、上限を持つ参照の成分へメンバーの数だけ辺が出る。
+/// その辺を宣言ごとにたどると2乗の時間になるので、閉じた隣の値は先にまとめておく。
+struct Shortcut<T> {
+    /// 成分ごとの、何もない成分でも閉じた成分でもない隣。
+    open: Vec<Vec<usize>>,
+    /// 成分ごとの、閉じた隣から届く成分の定数をまとめた値。上向きなら上限の最小、下向きなら下限の最大である。
+    beyond: Vec<Option<T>>,
+}
+
+impl<T: Level> Shortcut<T> {
+    /// `pick` は2つの定数をまとめる。返す組の2つ目は成分ごとの、その向きにたどって届く成分 (自分を含む) の定数を
+    /// まとめた値である。
+    fn new(
+        edges: &Edges,
+        bounds: &[Option<T>],
+        owners: &[usize],
+        descending: bool,
+        pick: impl Fn(T, T) -> T,
+    ) -> (Shortcut<T>, Vec<Option<T>>) {
+        let count = edges.all.len();
+        let join = |a: Option<T>, b: Option<T>| match (a, b) {
+            (Some(a), Some(b)) => Some(pick(a, b)),
+            (a, b) => a.or(b),
+        };
+        // 隣の成分を先に決めるため、隣の番号の側から順に見る (`Edges::new` と同じ順)
+        let order: Vec<usize> = if descending {
+            (0..count).rev().collect()
+        } else {
+            (0..count).collect()
+        };
+        let mut closed = vec![false; count];
+        let mut reached = bounds.to_vec();
+        for component in order {
+            closed[component] =
+                owners[component] == 0 && edges.all[component].iter().all(|&next| closed[next]);
+            for &next in &edges.all[component] {
+                reached[component] = join(reached[component], reached[next]);
+            }
+        }
+        let open = edges
+            .active
+            .iter()
+            .map(|list| list.iter().copied().filter(|&next| !closed[next]).collect())
+            .collect();
+        let beyond = edges
+            .active
+            .iter()
+            .map(|list| {
+                list.iter()
+                    .filter(|&&next| closed[next])
+                    .fold(None, |acc, &next| join(acc, reached[next]))
+            })
+            .collect();
+        (Shortcut { open, beyond }, reached)
+    }
 }
 
 /// 1つの向きの辺と、たどるときに入る意味のない隣を見分けるための情報。
@@ -509,13 +850,20 @@ impl<T: Level> Graph<T> {
         // 下向きの隣は番号が大きい
         let upward = Edges::new(upward, &upper, &owners, false);
         let downward = Edges::new(downward, &lower, &owners, true);
+        let (upward_shortcut, closed_upper) =
+            Shortcut::new(&upward, &upper, &owners, false, |a, b| a.min(b));
+        let (downward_shortcut, _) =
+            Shortcut::new(&downward, &lower, &owners, true, |a, b| a.max(b));
         Graph {
             component,
             upper,
             lower,
+            closed_upper,
             own,
             upward,
             downward,
+            upward_shortcut,
+            downward_shortcut,
         }
     }
 
@@ -528,10 +876,10 @@ impl<T: Level> Graph<T> {
         kept: &HashMap<usize, Vec<usize>>,
         up: bool,
     ) -> (Vec<usize>, Option<T>) {
-        let (edges, bounds) = if up {
-            (&self.upward, &self.upper)
+        let (edges, bounds, shortcut) = if up {
+            (&self.upward, &self.upper, &self.upward_shortcut)
         } else {
-            (&self.downward, &self.lower)
+            (&self.downward, &self.lower, &self.downward_shortcut)
         };
         let pick = |a: T, b: T| if up { a.min(b) } else { a.max(b) };
         // 何もない成分のうち残す成分は、入らずに止まる成分として見つける。ほかの何もない成分は、入っても定数も
@@ -559,7 +907,10 @@ impl<T: Level> Graph<T> {
                     }
                 }
             }
-            for &next in &edges.active[component] {
+            if let Some(c) = shortcut.beyond[component] {
+                constant = Some(constant.map_or(c, |old| pick(old, c)));
+            }
+            for &next in &shortcut.open[component] {
                 if !seen.insert(next) {
                     continue;
                 }
@@ -575,6 +926,18 @@ impl<T: Level> Graph<T> {
         }
         (found, constant)
     }
+}
+
+/// 成分ごとに、上向きの辺をすべてたどって届く成分 (自分を含む) の `seed` を `join` でまとめる。
+fn upward_closure<U: Copy>(upward: &Edges, seed: Vec<U>, join: impl Fn(U, U) -> U) -> Vec<U> {
+    let mut out = seed;
+    // 上向きの隣は番号が小さいので、番号の順に見れば隣の値は決まっている
+    for component in 0..out.len() {
+        for &next in &upward.all[component] {
+            out[component] = join(out[component], out[next]);
+        }
+    }
+    out
 }
 
 /// Tarjan の方法で強連結成分の番号を振る。変数が多くても Rust のスタックを使わないよう、明示的なスタックでたどる
@@ -709,10 +1072,21 @@ fn carry_residual(
 ) -> Vec<Carry> {
     let lin_kept = kept_components(lin_graph, member);
     let mult_kept = kept_components(mult_graph, member);
+    // 持ち越しの制約が求めるのは row の側が `Once` 以下であることなので、上限が `Once` 以下の自分の変数を row の側に
+    // 持つ組は、スキームに残る上限から導ける。残すと、上限を超える row を入れた1つの呼び出しが E2020 と E3006 の
+    // 両方になる (docs/spec/types.md の「推論」)
+    let entailed: HashSet<usize> = mult_kept
+        .iter()
+        .filter(|&(&component, _)| {
+            mult_graph.closed_upper[component].is_some_and(|upper| upper <= Multiplicity::Once)
+        })
+        .flat_map(|(_, shapes)| shapes.iter().copied())
+        .collect();
     let mut best: HashMap<(Bound<Linearity>, Bound<Multiplicity>), &Provenance> = HashMap::new();
     for carry in carries {
         let lins = lowers(lin_graph, &lin_kept, carry.lin, Linearity::Lin);
-        let mults = lowers(mult_graph, &mult_kept, carry.mult, Multiplicity::Multi);
+        let mut mults = lowers(mult_graph, &mult_kept, carry.mult, Multiplicity::Multi);
+        mults.retain(|mult| !matches!(mult, Bound::Var(v) if entailed.contains(&v.index())));
         for &lin in &lins {
             for &mult in &mults {
                 // 両側が定数の組はその本体の中の違反で、解いたときに報告済みである
@@ -1162,6 +1536,7 @@ mod tests {
                 mult: Bound::Const(Multiplicity::Multi),
                 origin: Provenance::At(inner),
             }],
+            bound_sources: Vec::new(),
         };
         let mut f = KindProblem::default();
         let a = f.lin.fresh();
@@ -1202,6 +1577,7 @@ mod tests {
                         },
                     }),
                 }],
+                bound_sources: Vec::new(),
             }
         );
     }

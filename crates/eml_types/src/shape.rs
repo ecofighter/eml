@@ -4,6 +4,7 @@
 
 use std::collections::HashMap;
 
+use eml_diagnostics::FileId;
 use eml_extern::ExternType;
 use eml_hir::{
     Constructor, EffectId, EffectRef, Generics, Operation, RowRef, RowVarId, Signature, TypeDef,
@@ -13,11 +14,11 @@ use la_arena::{Arena, ArenaMap};
 
 use crate::context::Context;
 use crate::data::Variance;
-use crate::kind::KindVar;
 use crate::kind::eval::SchemeFacts;
+use crate::kind::{KindVar, Provenance, Span};
 use crate::store::{EffectLabel, Lin, RowTail, RowType, TypeId, TypeKind, TypeStore};
 use crate::table::{ArrowLin, Label, RigidVar, Row, RowVar, Table, Tail, Ty, TyShape};
-use crate::ty::Linearity;
+use crate::ty::{Linearity, Multiplicity};
 
 /// 関数ごとの、シグネチャの型変数と row 変数。本体の注釈も同じ変数を指す (docs/spec/types.md の「推論」)。
 pub(crate) struct Rigids {
@@ -747,7 +748,16 @@ impl Shape {
 
     /// 自分の本体のための rigid な具体化。rigid な変数を表の rigid 変数にし、Kind 変数を新しい変数にする。本体の注釈が
     /// 同じ変数を指せるよう、`generics` の ID から表への対応 (`Rigids`) も返す。
-    pub fn instantiate_rigid(&self, table: &mut Table<'_>, generics: &Generics) -> Own {
+    ///
+    /// シグネチャに書いた row 変数の上限は、ここで宣言の Kind の制約 `σ ≤ Never` にする。`file` は `never` を書いた
+    /// ファイルである。参照ごとの具体化 (`instantiate`) では足さない。スキームに残った上限を段2が複写するので、足すと
+    /// 同じ上限が2つになる (docs/spec/types.md の「推論」)。
+    pub fn instantiate_rigid(
+        &self,
+        table: &mut Table<'_>,
+        generics: &Generics,
+        file: FileId,
+    ) -> Own {
         debug_assert_eq!(generics.type_vars.len(), self.rigids.len());
         debug_assert_eq!(generics.row_vars.len(), self.rows.len());
         let lin: Vec<KindVar> = (0..self.lin_vars).map(|_| table.fresh_lin_var()).collect();
@@ -767,7 +777,14 @@ impl Shape {
             tys.push(ty);
         }
         let mut rows = Vec::new();
-        for ((id, _), (name, sigma)) in generics.row_vars.iter().zip(&self.rows) {
+        for ((id, decl), (name, sigma)) in generics.row_vars.iter().zip(&self.rows) {
+            if let Some(range) = decl.never {
+                table.mult_at_most(
+                    mult[sigma.index()],
+                    Multiplicity::Never,
+                    Provenance::Bound(Span { file, range }),
+                );
+            }
             let var = table.fresh_rigid_row_with(name, mult[sigma.index()]);
             rigids.rows.insert(id, var);
             rows.push(Tail::Var(var));
@@ -1189,7 +1206,8 @@ mod tests {
         let signature = signature(&program);
         let shape = signature_shape(&context, signature, Arrows::OutermostUnr);
         let mut table = Table::new(&context);
-        let own = shape.instantiate_rigid(&mut table, &signature.generics);
+        let own =
+            shape.instantiate_rigid(&mut table, &signature.generics, program.file(program.entry));
         assert_eq!(table.kind_vars(own.ty), (own.lin.clone(), own.mult.clone()));
         assert_eq!(table.show(own.ty, &program), "(a -> <e> a) -> a -> <e> a");
     }
@@ -1203,7 +1221,8 @@ mod tests {
         let signature = signature(&program);
         let shape = signature_shape(&context, signature, Arrows::OutermostUnr);
         let mut table = Table::new(&context);
-        let own = shape.instantiate_rigid(&mut table, &signature.generics);
+        let own =
+            shape.instantiate_rigid(&mut table, &signature.generics, program.file(program.entry));
         assert_eq!(table.kind_vars(own.ty), (own.lin.clone(), own.mult.clone()));
         assert_eq!(
             table.show(own.ty, &program),

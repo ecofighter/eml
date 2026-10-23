@@ -210,6 +210,7 @@ mod tests {
             lin: vec![(var(0), UNR)],
             mult: vec![(var(0), ONCE)],
             carries: vec![carry(var(2), var(1))],
+            bound_sources: Vec::new(),
         };
         let scheme = KindScheme {
             carries: vec![

@@ -104,7 +104,8 @@ btype       ::= qcon targ* | type_atom
 targ        ::= type_atom | row                           -- row は row の型引数
 type_atom   ::= qcon | LIDENT
               | '(' type ')' | '(' type (',' type)+ ')'
-row         ::= '<' '>' | '<' LIDENT '>' | '<' effect (',' effect)* ('|' LIDENT)? '>'
+row         ::= '<' '>' | '<' row_var '>' | '<' effect (',' effect)* ('|' row_var)? '>'
+row_var     ::= 'never'? LIDENT
 effect      ::= qcon type_atom*
 
 string      ::= STRING_START (STRING_TEXT | ESCAPE | '\{' expr INTERP_END)* STRING_END
@@ -134,6 +135,7 @@ command     ::= CMD_START (CMD_TEXT | CMD_QUOTE | ESCAPE | '\{' '..'? expr INTER
 - 型の位置での `<` は row の開始だけを意味する。レイアウト段は、`->` の直後の `<` を row の始まりとして括弧に数える ([レイアウト規則](layout.md) の規則 4)
 - `once` は、後ろに続く関数型の一番外側の矢印に付く。`once a -> b -> c` の `once` は `a -> b -> c` の最初の矢印に付き、返す `b -> c` には付かない。`a -> once b -> c` の `once` は、右の関数型 `once b -> c` に付く。引数の位置の関数型は括弧で包む (`(once a -> b) -> c`)。`once` の後ろに `->` が続かなければ E0011 にする ([型と Kind](types.md) の「1回だけ呼べる関数の型」)
 - `data` の型引数の `<e>` は row の型引数で、`<` と `>` の間に書けるのは row 変数の名前1つだけである (それ以外は E0011)。型の中の型引数の位置に書く `<…>` は row である ([型と Kind](types.md) の「row の型引数」)。`:` 以降の `UIDENT` は Kind の宣言で、名前の検査は HIR が行う ([型と Kind](types.md) の「`Lin` の宣言」)。`extern data` の後ろに `:` を書いたら E0011 にする
+- row 変数の前には、多重度の上限 `never` を書ける (`<never e>`、`<Panic | never e>`)。上限は row 変数に付くもので、row 全体には付かない。`never` の後ろが row 変数でない形 (`<never Panic | e>`、`<never>`) と、`never` 以外の多重度 (`<once e>`、`<multi e>`) は E0011 にし、row の残りは読んで回復する。`data` の型引数の `<e>` には上限を書けない (E0011)。上限の意味と書ける場所は [型と Kind](types.md) の「row 変数の多重度の上限」で定める
 - リストの型の構文は `List a` だけで、`[a]` の形はない。型の位置の `[` は E0011 にする
 - 式の `qcon '{'` は、`{` の後が `}`、`,`、`=` か、`LIDENT` の後に `=`、`,`、`}` が続くときだけ、作る式として1つの `atom` に読む。そのほかの `{` は、引数としての更新の始まりである。更新の元の値は `,` や `=` で始まらないので、`C { , }` や `C { = 1 }` は作る式として読み、フィールドの並びの誤りにする。そのため `Some { p | age = 1 }` は、`Some` に更新を渡す式として読める。作る式は適用より強く結びつくので、`Some Person { … }` は `Some (Person { … })` と読む (Haskell と同じ)
 - 更新の元の値は `op_expr` として読む。`if`、`match`、`handle`、`fn`、`let ... in` の形は、演算の項と同じく括弧が要る (E0012)。`match` の枝の `|` と、更新の `|` を取り違えないためである。`{ p | }` のようにフィールドがなければ、フィールドを期待する E0011 にする

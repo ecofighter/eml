@@ -3,6 +3,7 @@
 
 use std::collections::HashSet;
 
+use eml_extern::EffectMultiplicity;
 use eml_hir::{
     EffectDef, EffectId, EffectKind, ExternIndex, ItemMap, LangItems, OpMultiplicity, Operation,
     Program, TypeDef,
@@ -18,8 +19,8 @@ pub(crate) struct Context {
     extern_effects: HashSet<EffectId>,
     /// 型構成子ごとの、Kind の決まり方 (`crate::data`)。
     pub data_kinds: ItemMap<TypeDef, DataKind>,
-    /// エフェクトがその row に入れる操作の上限。操作の多重度の最大で、extern のエフェクトは `Once` である
-    /// (docs/spec/types.md の「Kind」)。
+    /// エフェクトがその row に入れる操作の上限。操作の多重度の最大で、extern のエフェクトは表の行が決める (`IO` は
+    /// `Once`、`Panic` は `Never`。docs/spec/types.md の「Kind」)。
     pub effect_multiplicities: ItemMap<EffectDef, Multiplicity>,
     pub operation_multiplicities: ItemMap<Operation, Multiplicity>,
 }
@@ -40,10 +41,16 @@ impl Context {
         let effect_multiplicities = program
             .effects()
             .map(|(id, effect)| {
-                // `IO` の操作は `never` の `io_failed` だけなので、操作から求めると `Never` になってしまう。extern の関数は
-                // その場で1回だけ戻るので `Once` である (docs/spec/types.md の「Kind」)
+                // `IO` の操作は `never` の `io_failed` だけなので、操作から求めると `Never` になってしまう。
+                // extern のエフェクトの多重度は表の行が決める (docs/spec/types.md の「Kind」)
                 let multiplicity = match effect.kind {
-                    EffectKind::Extern(_) => Multiplicity::Once,
+                    EffectKind::Extern(extern_effect) => {
+                        match extern_effect.map(|e| e.row().multiplicity) {
+                            Some(EffectMultiplicity::Never) => Multiplicity::Never,
+                            // `None` は知らない extern で、HIR がすでに誤りを出している
+                            Some(EffectMultiplicity::Once) | None => Multiplicity::Once,
+                        }
+                    }
                     // `var` のエフェクトは操作を持たないが、変数の操作はどれもすぐに再開する。`Never` にすると、
                     // yield しないラベルとして扱われてしまう (docs/spec/expressions.md の「`var`」)
                     EffectKind::Var { .. } => Multiplicity::Once,

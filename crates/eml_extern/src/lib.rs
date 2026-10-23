@@ -217,15 +217,24 @@ impl ExternType {
 
 /// extern のエフェクト。`IO` は `Effectful` の extern の関数が起こし、`Panic` は `Panics` の行と `Std.Env.arg` が起こす。
 /// どちらも隠れた `never` の操作 (`io_failed`、`panicked`) を Prelude の宣言が持ち、Prelude の `try_io`、`try_panic`
-/// だけが handle する。表の行は名前だけを持つ (docs/spec/effects.md の「組み込みの `IO`」「組み込みの `Panic`」)。
+/// だけが handle する。表の行は名前と多重度を持つ (docs/spec/effects.md の「組み込みの `IO`」「組み込みの `Panic`」)。
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum ExternEffect {
     Io,
     Panic,
 }
 
+/// extern のエフェクトの多重度。`Never` は起こすと呼び出し元へ戻らず、外の世界に何も残さないエフェクト、`Once` は
+/// その場で1回だけ戻るか、外の世界への書き込みが順序を持つエフェクトである (docs/spec/types.md の「Kind」)。
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum EffectMultiplicity {
+    Never,
+    Once,
+}
+
 pub struct EffectRow {
     pub name: &'static str,
+    pub multiplicity: EffectMultiplicity,
 }
 
 impl ExternEffect {
@@ -233,9 +242,13 @@ impl ExternEffect {
 
     pub fn row(self) -> EffectRow {
         match self {
-            ExternEffect::Io => EffectRow { name: "Prelude.IO" },
+            ExternEffect::Io => EffectRow {
+                name: "Prelude.IO",
+                multiplicity: EffectMultiplicity::Once,
+            },
             ExternEffect::Panic => EffectRow {
                 name: "Prelude.Panic",
+                multiplicity: EffectMultiplicity::Never,
             },
         }
     }

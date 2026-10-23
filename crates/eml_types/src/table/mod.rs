@@ -285,6 +285,12 @@ impl<'c> Table<'c> {
             .require(lower, upper, self.kind_origin.clone());
     }
 
+    /// 多重度の変数の定数の上限。由来は今の由来でなく、呼ぶ側が渡す。
+    pub fn mult_at_most(&mut self, var: KindVar, upper: Multiplicity, origin: Provenance) {
+        self.multiplicity
+            .require(Bound::Var(var), Bound::Const(upper), origin);
+    }
+
     pub fn data_kinds(&self) -> &'c ItemMap<TypeDef, DataKind> {
         &self.context.data_kinds
     }

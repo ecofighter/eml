@@ -394,13 +394,24 @@ fn an_error_row_keeps_its_own_labels() {
 }
 
 #[test]
-fn an_extern_effect_is_performed_at_most_once() {
+fn io_is_once() {
     // 操作の多重度の最大を取ると、extern のエフェクトは `Never` になってしまう (docs/spec/types.md の「Kind」)
     let context = test_context();
     let table = Table::new(&context);
     assert_eq!(
         table.effect_multiplicity(table.context.externs.io),
         Multiplicity::Once
+    );
+}
+
+#[test]
+fn panic_is_never() {
+    // `Panic` の操作は `never` だけで、起こすと呼び出し元へ戻らない (docs/spec/types.md の「Kind」)
+    let context = test_context();
+    let table = Table::new(&context);
+    assert_eq!(
+        table.effect_multiplicity(table.context.externs.panic),
+        Multiplicity::Never
     );
 }
 
