@@ -15,7 +15,9 @@ use super::proof::*;
 use super::strings::{lemma_text_trans, lex};
 use super::*;
 use crate::alloc::over_budget;
-use crate::externs::{FALSE, Fault, IndexFault, TRUE};
+#[cfg(verus_only)]
+use crate::externs::FALSE;
+use crate::externs::{Fault, IndexFault, TRUE};
 
 verus! {
 
@@ -180,81 +182,6 @@ impl<M: Mode> Ctx<M> {
             }
         }
         r
-    }
-
-    /// `s` を借りて、中身が妥当な UTF-8 かの `Bool` のタグを返す。確かめは T5 の `utf8_valid` がする。呼ぶ側の参照の
-    /// 数は変わらない。
-    ///
-    /// # Safety
-    /// `bytes_length` と同じ。
-    pub unsafe fn bytes_valid_utf8(&mut self, s: Word) -> (r: Result<i64, Fault>)
-        requires
-            old(self).wf(),
-            old(self).heap_spec().word_in(s),
-            !M::CHECKED ==> old(self).is_bytes(s) && old(self).holds(s),
-        ensures
-            final(self).wf(),
-            final(self).evv_spec() == old(self).evv_spec(),
-            final(self).yield_spec() == old(self).yield_spec(),
-            r is Ok || (r matches Err(Fault::Heap(_))),
-            (r matches Err(Fault::Heap(_))) ==> final(self).heap_spec().settled_heap() == old(
-                self,
-            ).heap_spec().settled_heap(),
-            !M::CHECKED ==> r is Ok,
-            old(self).held_ok() && old(self).is_bytes(s) && old(self).holds(s) ==> r is Ok || (
-            r matches Err(Fault::Heap(e)) && chain_err(Err::<(), HeapError>(e))),
-            old(self).held_ok() && old(self).is_bytes(s) && old(self).holds(s) && r is Ok ==> {
-                &&& r == Ok::<i64, Fault>(
-                    if valid_utf8(old(self).text_of(s)) {
-                        TRUE
-                    } else {
-                        FALSE
-                    },
-                )
-                &&& final(self).held_ok()
-                &&& final(self).evolved_by(*old(self), |x: usize| 0int, Set::empty())
-            },
-    {
-        let ghost s0 = *self;
-        let ghost c = s0.held_ok() && s0.is_bytes(s) && s0.holds(s);
-        if M::CHECKED && !s.is_ptr() {
-            return Err(Fault::Heap(HeapError::WrongKind));
-        }
-        self.heap.settle();
-        let ghost h1 = self.heap;
-        let hs = self.heap.header_of(s);
-        proof {
-            lemma_settled_twice(s0.heap);
-            assert(h1.words_kept(s0.heap));
-            h1.lemma_text_spec(s);
-            s0.heap.lemma_text_spec(s);
-            if c {
-                s0.lemma_settled_body(h1, s, Kind::Bytes);
-            }
-        }
-        if let Err(e) = self.heap.checked_body(hs, Kind::Bytes) {
-            proof {
-                self.lemma_words_kept(s0);
-            }
-            return Err(Fault::Heap(e));
-        }
-        let valid = utf8_valid(self.heap.body_of(s)).is_none();
-        proof {
-            if M::CHECKED {
-                lemma_words_trans(self.heap, h1, s0.heap);
-                self.lemma_words_kept(s0);
-            }
-            if c {
-                self.lemma_lent(s0, h1);
-            }
-        }
-        Ok(
-            if valid {
-                TRUE
-            } else {
-                FALSE
-            },
-        )
     }
 
     /// `Eq Bytes` の `==`。両辺を借りる。呼ぶ側の参照の数は変わらない。

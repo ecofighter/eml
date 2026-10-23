@@ -196,6 +196,7 @@ pub while : (Unit -> <e> Bool) -> (Unit -> <e> Unit) -> <e> Unit
 | `to_int` | `String -> <Panic> Option Int` | eml |
 
 - 位置はどれも UTF-8 のバイトの位置の `Int` で、位置専用の型はない。文字の境界でない位置は、`char_at` と `slice` が `Panic` で断る
+- 文字の単位は Unicode のスカラー値 (`Char`) である。書記素クラスタと Unicode の正規化は扱わない
 - `byte_length s` は UTF-8 のバイトの数である
 - `byte_at i s` は位置 `i` のバイト (0〜255) を `Byte` で返す。`0 <= i < byte_length s` でなければ `Panic` を起こす
 - `char_at i s` は、位置 `i` から始まる文字である。`0 <= i < byte_length s` でないときと、`i` が文字の境界でないときは `Panic` を起こす。次の文字の位置は `next` で求める

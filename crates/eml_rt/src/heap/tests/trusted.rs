@@ -552,7 +552,7 @@ fn parts_of_a_string_are_copied<M: Mode>() {
     assert_eq!(mortal(ctx.heap()), 0);
 }
 
-/// `Ctx::bytes_valid_utf8` は `core::str::from_utf8` で確かめる (T5 の `utf8_valid`)。物体の中身の `&[u8]` を、
+/// T5 の `utf8_valid` は `core::str::from_utf8` で確かめる。`String.decode` が渡すのと同じく物体の中身の `&[u8]` を、
 /// 1語に収まる長さ、語の境目をまたぐ長さ、大きい物体のページの後ろまで続く長さで渡す。妥当でなければ、確かめが
 /// 止まった位置 (先頭、途中、末尾) を返す。
 fn utf8_is_checked_by_core<M: Mode>() {
@@ -582,7 +582,6 @@ fn utf8_is_checked_by_core<M: Mode>() {
             let w = ctx.heap_mut().alloc_bytes(&b);
             let p = ctx.heap().bytes(w).unwrap();
             assert_eq!(crate::heap::ctx::bytes::utf8_valid(&*p), at);
-            assert_eq!(ctx.bytes_valid_utf8(w), Ok(at.is_none() as i64));
             ctx.heap_mut().decref(w).unwrap();
         }
     }

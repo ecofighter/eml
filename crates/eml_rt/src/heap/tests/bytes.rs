@@ -199,24 +199,6 @@ fn bytes_are_read_by_position<M: Mode>() {
     assert_eq!(mortal(ctx.heap()), 0);
 }
 
-fn utf8_is_validated<M: Mode>() {
-    let mut ctx = ctx::<M>();
-    for (b, valid) in [
-        (&b""[..], TRUE),
-        ("日本語".as_bytes(), TRUE),
-        (&[0xe6, 0x97][..], FALSE),
-        (&[0xff][..], FALSE),
-        (&[0xed, 0xa0, 0x80][..], FALSE),
-    ] {
-        unsafe {
-            let w = ctx.heap_mut().alloc_bytes(b);
-            assert_eq!(ctx.bytes_valid_utf8(w), Ok(valid), "{b:?}");
-            ctx.heap_mut().decref(w).unwrap();
-        }
-    }
-    assert_eq!(mortal(ctx.heap()), 0);
-}
-
 /// 比べるのはバイトの辞書順で、短いほうが長いほうの前の部分なら短いほうが小さい。
 fn bytes_are_compared_in_byte_order<M: Mode>() {
     let mut ctx = ctx::<M>();
@@ -423,7 +405,6 @@ fn bytes_externs_refuse_a_string<M: Mode>() {
         let b = ctx.heap_mut().alloc_bytes(b"abc");
         assert_eq!(ctx.bytes_length(s), wrong());
         assert_eq!(ctx.bytes_get(0, s), wrong());
-        assert_eq!(ctx.bytes_valid_utf8(s), wrong());
         assert_eq!(ctx.bytes_eq(b, s), wrong());
         assert_eq!(ctx.bytes_ne(s, b), wrong());
         assert_eq!(ctx.bytes_compare(b, s), wrong());
@@ -740,7 +721,6 @@ both_modes!(
     immortal_bytes_are_frozen,
     recovery_copies_bytes,
     bytes_are_read_by_position,
-    utf8_is_validated,
     bytes_are_compared_in_byte_order,
     bytes_are_made_of_one_byte,
     unique_bytes_are_changed_in_place,
