@@ -1,0 +1,631 @@
+diff --git a/.gitattributes b/.gitattributes
+new file mode 100644
+index 00000000..4c1be7f2
+--- /dev/null
++++ b/.gitattributes
+@@ -0,0 +1,2 @@
++# 改行を変換しない。CRLF を含むテストの入力をそのまま保つ
++* -text
+diff --git a/Cargo.lock b/Cargo.lock
+index e09c75eb..7d9f0e92 100644
+--- a/Cargo.lock
++++ b/Cargo.lock
+@@ -193,6 +193,7 @@ dependencies = [
+  "insta",
+  "libc",
+  "rustyline",
++ "windows-sys",
+ ]
+ 
+ [[package]]
+diff --git a/Cargo.toml b/Cargo.toml
+index 60b5972e..694e0b29 100644
+--- a/Cargo.toml
++++ b/Cargo.toml
+@@ -24,6 +24,7 @@ clap = { version = "4.6", features = ["derive"] }
+ insta = "1.49"
+ la-arena = "0.3"
+ libc = "0.2"
++windows-sys = "0.61.2"
+ logos = "0.16"
+ rustyline = { version = "18.0.1", default-features = false, features = ["buffer-redux"] }
+ rowan = "0.16"
+diff --git a/crates/eml_cli/Cargo.toml b/crates/eml_cli/Cargo.toml
+index c3d59426..d8fdde1f 100644
+--- a/crates/eml_cli/Cargo.toml
++++ b/crates/eml_cli/Cargo.toml
+@@ -23,7 +23,7 @@ required-features = ["run"]
+ default = ["run"]
+ types = ["dep:eml_types"]
+ core = ["types", "dep:eml_core_ir", "dep:eml_lir"]
+-run = ["core", "dep:eml_vm", "dep:libc", "dep:rustyline"]
++run = ["core", "dep:eml_vm", "dep:libc", "dep:rustyline", "dep:windows-sys"]
+ 
+ [dependencies]
+ clap.workspace = true
+@@ -37,6 +37,9 @@ eml_vm = { workspace = true, optional = true }
+ libc = { workspace = true, optional = true }
+ rustyline = { workspace = true, optional = true }
+ 
++[target.'cfg(windows)'.dependencies]
++windows-sys = { workspace = true, optional = true, features = ["Win32_System_SystemInformation"] }
++
+ [dev-dependencies]
+ eml_rt.workspace = true
+ eml_test_support = { workspace = true, features = ["hir"] }
+diff --git a/crates/eml_cli/src/lib.rs b/crates/eml_cli/src/lib.rs
+index 01ae68d1..58b3a4f4 100644
+--- a/crates/eml_cli/src/lib.rs
++++ b/crates/eml_cli/src/lib.rs
+@@ -293,7 +293,17 @@ fn physical_memory() -> Option<usize> {
+         .filter(|&bytes| bytes > 0)
+ }
+ 
+-#[cfg(all(feature = "run", not(unix)))]
++#[cfg(all(feature = "run", windows))]
+ fn physical_memory() -> Option<usize> {
+-    None
++    use windows_sys::Win32::System::SystemInformation::{GlobalMemoryStatusEx, MEMORYSTATUSEX};
++    let mut status = MEMORYSTATUSEX {
++        dwLength: size_of::<MEMORYSTATUSEX>() as u32,
++        ..unsafe { std::mem::zeroed() }
++    };
++    if unsafe { GlobalMemoryStatusEx(&mut status) } == 0 {
++        return None;
++    }
++    usize::try_from(status.ullTotalPhys)
++        .ok()
++        .filter(|&bytes| bytes > 0)
+ }
+diff --git a/crates/eml_cli/src/main.rs b/crates/eml_cli/src/main.rs
+index 1f90897a..89c16af6 100644
+--- a/crates/eml_cli/src/main.rs
++++ b/crates/eml_cli/src/main.rs
+@@ -125,12 +125,11 @@ fn split_script_args(mut argv: Vec<OsString>) -> (Vec<OsString>, Vec<OsString>)
+ fn load(path: &Path) -> Option<Session> {
+     match fs::read_to_string(path) {
+         Ok(text) => {
+-            let path = exact_spelling(path);
+-            let path = path.as_path();
++            let shown = entry_name(path);
+             // 根は入口のファイルのディレクトリである
+-            let root = path.parent().unwrap_or(Path::new(""));
++            let root = Path::new(&shown).parent().unwrap_or(Path::new(""));
+             let source = FsProvider::new(root);
+-            Some(Session::load(&path.display().to_string(), &text, &source))
++            Some(Session::load(&shown, &text, &source))
+         }
+         Err(error) => {
+             eprintln!("error: cannot read `{}`: {error}", path.display());
+@@ -143,6 +142,17 @@ fn load(path: &Path) -> Option<Session> {
+ /// `t/server.em` で `t/Server.em` を開ける。渡された綴りのままでは、依存先の `import Server` が入口を指すと分からず、
+ /// 入口を別のモジュールとしてもう1回読んでしまう (docs/spec/modules.md の「モジュール」)。一覧を読めないか一致する
+ /// 名前がなければ、渡されたパスをそのまま使う。
++/// 入口の表示の名前。読み込みの段はパスを `/` で区切るので (docs/spec/modules.md の「モジュール」)、Windows の `\\` を
++/// `/` にする。Unix では `\\` はファイル名の文字なので変えない。
++fn entry_name(path: &Path) -> String {
++    let shown = exact_spelling(path).display().to_string();
++    if cfg!(windows) {
++        shown.replace('\\', "/")
++    } else {
++        shown
++    }
++}
++
+ fn exact_spelling(path: &Path) -> PathBuf {
+     let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
+         return path.to_path_buf();
+diff --git a/crates/eml_cli/src/terminal.rs b/crates/eml_cli/src/terminal.rs
+index 0c60f8ea..5322ccef 100644
+--- a/crates/eml_cli/src/terminal.rs
++++ b/crates/eml_cli/src/terminal.rs
+@@ -35,7 +35,7 @@ pub fn run(debug_heap: bool, file: Option<PathBuf>) -> ExitCode {
+     let file = match file {
+         None => None,
+         Some(path) => {
+-            let shown = crate::exact_spelling(&path).display().to_string();
++            let shown = crate::entry_name(&path);
+             match fs::read_to_string(&shown) {
+                 Ok(text) => Some((shown, text)),
+                 Err(error) => {
+@@ -160,7 +160,7 @@ impl Terminal {
+ 
+     /// 読めなければ、セッションも覚えたファイルも変えない (docs/spec/repl.md の「ファイルの読み込み」)。
+     fn load(&mut self, path: &str) -> Flow {
+-        let shown = crate::exact_spelling(Path::new(path)).display().to_string();
++        let shown = crate::entry_name(Path::new(path));
+         match fs::read_to_string(&shown) {
+             Ok(text) => self.load_text(&shown, &text),
+             Err(error) => {
+diff --git a/crates/eml_cli/tests/api.rs b/crates/eml_cli/tests/api.rs
+index fd9c3dfe..5291c6bf 100644
+--- a/crates/eml_cli/tests/api.rs
++++ b/crates/eml_cli/tests/api.rs
+@@ -294,10 +294,8 @@ fn default_limits_bound_the_depth_and_the_memory() {
+     let limits = eml_cli::default_limits();
+     assert_eq!(limits.max_depth, 1 << 27);
+     assert_eq!(limits.max_evv, usize::MAX);
+-    if cfg!(any(target_os = "macos", target_os = "linux")) {
+-        assert!(limits.max_bytes > 0);
+-        assert!(limits.max_bytes < usize::MAX);
+-    }
++    assert!(limits.max_bytes > 0);
++    assert!(limits.max_bytes < usize::MAX);
+ }
+ 
+ /// REPL の確保量の上限は `eml run` の半分 (物理メモリの 40%) である。回復が古いヒープと写しを同時に持っても、
+@@ -308,10 +306,8 @@ fn repl_limits_leave_room_for_recovery() {
+     let repl = eml_cli::repl_limits();
+     assert_eq!(repl.max_depth, run.max_depth);
+     assert_eq!(repl.max_evv, usize::MAX);
+-    if cfg!(any(target_os = "macos", target_os = "linux")) {
+-        assert!(repl.max_bytes > 0);
+-        assert_eq!(repl.max_bytes * 2, run.max_bytes);
+-    }
++    assert!(repl.max_bytes > 0);
++    assert_eq!(repl.max_bytes * 2, run.max_bytes);
+ }
+ 
+ /// 入力ごとの表示を読むための、`Repl` と出力の組。
+diff --git a/crates/eml_cli/tests/cli.rs b/crates/eml_cli/tests/cli.rs
+index 6e15260f..4a822a7d 100644
+--- a/crates/eml_cli/tests/cli.rs
++++ b/crates/eml_cli/tests/cli.rs
+@@ -110,7 +110,8 @@ fn run_opens_an_absolute_path_as_is() {
+     let program = dir.join("absolute.em");
+     let source = format!(
+         "import FileIn\nmain : Unit -> <IO> Unit\nmain () =\n  let f = FileIn.open \"{}\"\n  let (text, f) = FileIn.read_all f\n  FileIn.close f\n  println text\n",
+-        input.display()
++        // Windows のパスの `\\` は文字列リテラルの escape なので、二重にする
++        input.display().to_string().replace('\\', "\\\\")
+     );
+     std::fs::write(&program, source).unwrap();
+     let output = eml(&["run", "--debug-heap", program.to_str().unwrap()]);
+@@ -560,18 +561,29 @@ fn a_script_with_a_shebang_runs_directly() {
+     assert_eq!(String::from_utf8_lossy(&output.stdout), "[\"1\", \"-2\"]\n");
+ }
+ 
+-/// UTF-8 でない引数と環境変数の値は、読んだときに実行時エラーにする。
+ #[cfg(unix)]
++fn not_utf8() -> std::ffi::OsString {
++    use std::os::unix::ffi::OsStringExt;
++    std::ffi::OsString::from_vec(b"a\xff".to_vec())
++}
++
++#[cfg(windows)]
++fn not_utf8() -> std::ffi::OsString {
++    use std::os::windows::ffi::OsStringExt;
++    std::ffi::OsString::from_wide(&[u16::from(b'a'), 0xD800])
++}
++
++/// UTF-8 でない引数と環境変数の値は、読んだときに実行時エラーにする。
+ #[test]
+ fn arguments_and_variables_that_are_not_utf8_are_runtime_errors() {
+     use std::ffi::OsStr;
+-    use std::os::unix::ffi::OsStrExt;
+     let get = "import Env\n\
+ main : Unit -> <IO> Unit
+ main () = println (show (Env.get \"BAD\"))
+ ";
+     let dir = temp_project("cli-not-utf8", &[("args.em", SHOW_ARGS), ("get.em", get)]);
+-    let bad = OsStr::from_bytes(b"a\xff");
++    let bad = not_utf8();
++    let bad = bad.as_os_str();
+     let eml = || {
+         let mut command = Command::new(env!("CARGO_BIN_EXE_eml"));
+         command.current_dir(&dir);
+diff --git a/crates/eml_cli/tests/common/mod.rs b/crates/eml_cli/tests/common/mod.rs
+index c2200888..84408870 100644
+--- a/crates/eml_cli/tests/common/mod.rs
++++ b/crates/eml_cli/tests/common/mod.rs
+@@ -71,9 +71,41 @@ pub fn for_each_file(root: &Path, extension: &str, test: impl Fn(&Path) + Sync)
+         assert_filter_matches(&filter);
+         files.retain(|path| shown(path).contains(&filter));
+     }
++    let leader = if extension == "repl" { "#" } else { "--" };
++    files.retain(|path| {
++        let text = fs::read_to_string(path).unwrap();
++        // shebang は1行目にしか書けないので、その後ろの行に印を置く
++        let first = text
++            .lines()
++            .find(|line| !line.starts_with("#!"))
++            .unwrap_or("");
++        let skip = windows_skip(first, leader)
++            .unwrap_or_else(|message| panic!("{}: {message}", shown(path)));
++        !(cfg!(windows) && skip)
++    });
+     run_all(&files, test);
+ }
+ 
++/// shebang を除いた1行目が `<leader> windows: skip (<理由>)` なら Windows で流さない (docs/implementation/testing.md の「OS ごとのテスト」)。
++/// 綴りを誤った印が黙ってテストを流し続けないよう、`<leader> windows:` で始まる行は正しい形でなければ誤りにする。
++pub fn windows_skip(first_line: &str, leader: &str) -> Result<bool, String> {
++    let Some(rest) = first_line
++        .strip_prefix(leader)
++        .and_then(|rest| rest.strip_prefix(" windows:"))
++    else {
++        return Ok(false);
++    };
++    match rest
++        .strip_prefix(" skip (")
++        .and_then(|reason| reason.strip_suffix(')'))
++    {
++        Some(reason) if !reason.trim().is_empty() => Ok(true),
++        _ => Err(format!(
++            "the Windows mark is `{leader} windows: skip (<reason>)`, not `{first_line}`"
++        )),
++    }
++}
++
+ /// 失敗したファイルをすべて挙げるため、ファイルごとの panic を捕まえて最後まで流し、終わりに1回だけ panic する。
+ pub fn run_all(files: &[PathBuf], test: impl Fn(&Path) + Sync) {
+     // `RUST_TEST_THREADS=1` で、1つずつ流した時間を測ったり失敗を読んだりできるようにする
+diff --git a/crates/eml_cli/tests/repl/commands/load/main.repl b/crates/eml_cli/tests/repl/commands/load/main.repl
+index 67c5fde0..489556ac 100644
+--- a/crates/eml_cli/tests/repl/commands/load/main.repl
++++ b/crates/eml_cli/tests/repl/commands/load/main.repl
+@@ -13,7 +13,7 @@
+ > :reload
+ > j
+ > area (Square 3)
+-> :load missing.em
++> :load not_utf8.txt
+ > area (Square 3)
+ > :load
+ > area (Square 3)
+diff --git a/crates/eml_cli/tests/repl/commands/load/not_utf8.txt b/crates/eml_cli/tests/repl/commands/load/not_utf8.txt
+new file mode 100644
+index 00000000..93fbb4d0
+--- /dev/null
++++ b/crates/eml_cli/tests/repl/commands/load/not_utf8.txt
+@@ -0,0 +1 @@
++a�
+diff --git a/crates/eml_cli/tests/snapshots/integration__repl__transcripts@commands__load.snap b/crates/eml_cli/tests/snapshots/integration__repl__transcripts@commands__load.snap
+index 3ff7896e..918b7cca 100644
+--- a/crates/eml_cli/tests/snapshots/integration__repl__transcripts@commands__load.snap
++++ b/crates/eml_cli/tests/snapshots/integration__repl__transcripts@commands__load.snap
+@@ -33,8 +33,8 @@ E1001 <input 2> 1:1 cannot find value `j`
+   <input 2> 1:1 not found in this scope
+ > area (Square 3)
+ 9
+-> :load missing.em
+-error: cannot read `missing.em`: No such file or directory (os error 2)
++> :load not_utf8.txt
++error: cannot read `not_utf8.txt`: stream did not contain valid UTF-8
+ > area (Square 3)
+ 9
+ > :load
+diff --git a/crates/eml_cli/tests/snapshots/integration__ui__run_fail@files__read_directory.em.snap b/crates/eml_cli/tests/snapshots/integration__ui__run_fail@files__read_directory.em.snap
+index 3ecbcd0a..cb3d64a5 100644
+--- a/crates/eml_cli/tests/snapshots/integration__ui__run_fail@files__read_directory.em.snap
++++ b/crates/eml_cli/tests/snapshots/integration__ui__run_fail@files__read_directory.em.snap
+@@ -6,5 +6,5 @@ input_file: tests/ui/run-fail/files/read_directory.em
+ --- stdout ---
+ --- stderr ---
+ --- runtime error ---
+-cannot read `.`: I/O error
+-  at run-fail/files/read_directory.em:7:19
++cannot open `.`: I/O error
++  at run-fail/files/read_directory.em:6:11
+diff --git a/crates/eml_cli/tests/ui.rs b/crates/eml_cli/tests/ui.rs
+index 48fe6b96..368f63cb 100644
+--- a/crates/eml_cli/tests/ui.rs
++++ b/crates/eml_cli/tests/ui.rs
+@@ -14,7 +14,7 @@ use eml_cli::{
+ use eml_diagnostics::{has_errors, render};
+ use eml_rt::Fault;
+ 
+-use crate::common::{assert_filter_matches, for_each_file, run_all, temp_project};
++use crate::common::{assert_filter_matches, for_each_file, run_all, temp_project, windows_skip};
+ 
+ fn ui_root() -> PathBuf {
+     Path::new(env!("CARGO_MANIFEST_DIR"))
+@@ -391,3 +391,17 @@ fn every_failing_file_is_reported() {
+ fn a_filter_that_matches_nothing_fails() {
+     assert_filter_matches("no-such-file");
+ }
++
++#[test]
++fn the_windows_mark_is_the_first_line() {
++    assert_eq!(
++        windows_skip("-- windows: skip (sh を起動する)", "--"),
++        Ok(true)
++    );
++    assert_eq!(windows_skip("# windows: skip (x)", "#"), Ok(true));
++    assert_eq!(windows_skip("-- 説明", "--"), Ok(false));
++    assert_eq!(windows_skip("# windows: skip (x)", "--"), Ok(false));
++    assert!(windows_skip("-- windows: skip", "--").is_err());
++    assert!(windows_skip("-- windows: skip ()", "--").is_err());
++    assert!(windows_skip("-- windows:skip (x)", "--").is_err());
++}
+diff --git a/crates/eml_rt/src/heap/tests/expected.txt b/crates/eml_rt/src/heap/tests/expected.txt
+index 79e75f7c..84aecdb4 100644
+--- a/crates/eml_rt/src/heap/tests/expected.txt
++++ b/crates/eml_rt/src/heap/tests/expected.txt
+@@ -16156,7 +16156,7 @@ Std.FileIn.read_all	f:"plain.txt"	=> s:"line 1\nline 2\n"
+ Std.FileIn.read_all	f:"empty.txt"	=> s:""
+ Std.FileIn.read_all	f:"bad.bin"	=> err:"`bad.bin` is not valid UTF-8"
+ Std.FileIn.read_all	f:"big.txt"	=> h:1048576:471f01fb7ada2325
+-Std.FileIn.read_all	f:"dir"	=> err:"cannot read `dir`: I/O error"
++Std.FileIn.read_all	f:"dir"	=> err:"cannot open `dir`: I/O error"
+ Std.FileIn.read_all	f:"locked.txt"	=> err:"cannot open `locked.txt`: permission denied"
+ Std.FileIn.read_all	f:"missing.txt"	=> err:"cannot open `missing.txt`: not found"
+ Std.FileIn.read_all	f:"a\0b"	=> err:"cannot open `a\0b`: I/O error"
+@@ -16167,7 +16167,7 @@ Std.FileIn.read_line_raw	f:"crlf.txt"	=> s:"a\r\n"
+ Std.FileIn.read_line_raw	f:"empty.txt"	=> s:""
+ Std.FileIn.read_line_raw	f:"bad.bin"	=> err:"`bad.bin` is not valid UTF-8"
+ Std.FileIn.read_line_raw	f:"big.txt"	=> s:"abcdefg\n"
+-Std.FileIn.read_line_raw	f:"dir"	=> err:"cannot read `dir`: I/O error"
++Std.FileIn.read_line_raw	f:"dir"	=> err:"cannot open `dir`: I/O error"
+ Std.FileIn.read_line_raw	f:"missing.txt"	=> err:"cannot open `missing.txt`: not found"
+ Std.FileIn.read_line_raw2	f:"plain.txt"	=> s:"line 2\n"
+ Std.FileIn.read_line_raw2	f:"crlf.txt"	=> s:"b"
+diff --git a/crates/eml_rt/src/heap/tests/host.rs b/crates/eml_rt/src/heap/tests/host.rs
+index c179fcaf..233f9351 100644
+--- a/crates/eml_rt/src/heap/tests/host.rs
++++ b/crates/eml_rt/src/heap/tests/host.rs
+@@ -718,11 +718,9 @@ mod std_host {
+         std::fs::remove_dir_all(root).unwrap();
+     }
+ 
+-    /// ディレクトリも開ける (読むときに誤りになる)。長さの見込みは返さない。ディレクトリを開けるのは
+-    /// Unix の振る舞いである。
+-    #[cfg(unix)]
++    /// ディレクトリは読むためにも書くためにも開かず、どの OS でも `IsADirectory` である。
+     #[test]
+-    fn a_directory_opens_without_a_size() {
++    fn a_directory_does_not_open() {
+         let root = fixture("dir");
+         let host = StdHost::new(
+             Box::new(io::sink()),
+@@ -730,7 +728,16 @@ mod std_host {
+             root.clone(),
+             Buffering::Line,
+         );
+-        assert_eq!(host.open(".").unwrap().size, None);
++        assert_eq!(
++            host.open(".").err().map(|e| e.kind()),
++            Some(io::ErrorKind::IsADirectory)
++        );
++        assert_eq!(
++            host.open_write(".", crate::WriteMode::Truncate)
++                .err()
++                .map(|e| e.kind()),
++            Some(io::ErrorKind::IsADirectory)
++        );
+         std::fs::remove_dir_all(root).unwrap();
+     }
+ }
+diff --git a/crates/eml_rt/src/heap/tests/script.rs b/crates/eml_rt/src/heap/tests/script.rs
+index 20585087..3c0b0e38 100644
+--- a/crates/eml_rt/src/heap/tests/script.rs
++++ b/crates/eml_rt/src/heap/tests/script.rs
+@@ -27,6 +27,13 @@ fn not_utf8() -> OsString {
+     OsString::from_vec(vec![b'a', 0xff])
+ }
+ 
++/// Windows の `OsString` は UTF-16 なので、対にならないサロゲートで UTF-8 にできない値を作る。
++#[cfg(windows)]
++fn not_utf8() -> OsString {
++    use std::os::windows::ffi::OsStringExt;
++    OsString::from_wide(&[u16::from(b'a'), 0xD800])
++}
++
+ fn eprintln_writes_to_the_standard_error<M: Mode>() {
+     let memory = Arc::new(MemoryHost::default());
+     let mut ctx = ctx_with::<M>(&memory);
+@@ -61,7 +68,6 @@ fn arguments_are_read_by_index<M: Mode>() {
+ }
+ 
+ fn an_argument_that_is_not_utf8_is_a_fault<M: Mode>() {
+-    #[cfg(unix)]
+     {
+         let memory = Arc::new(MemoryHost::default().with_args(vec!["a".into(), not_utf8()]));
+         let mut ctx = ctx_with::<M>(&memory);
+@@ -78,7 +84,6 @@ fn environment_variables_are_read_by_name<M: Mode>() {
+         ("HOST", OsString::from("example.org")),
+         ("EMPTY", OsString::new()),
+     ];
+-    #[cfg(unix)]
+     env.push(("BAD", not_utf8()));
+     let memory = Arc::new(MemoryHost::default().with_env(env));
+     let mut ctx = ctx_with::<M>(&memory);
+@@ -93,7 +98,6 @@ fn environment_variables_are_read_by_name<M: Mode>() {
+             assert_eq!(text(ctx.heap(), w), value, "{name}");
+             ctx.heap_mut().decref(w).unwrap();
+         }
+-        #[cfg(unix)]
+         {
+             let n = s(&mut ctx, "BAD");
+             assert_eq!(ctx.env_has(n), Ok(TRUE));
+diff --git a/crates/eml_rt/src/host.rs b/crates/eml_rt/src/host.rs
+index 786d222a..1b000787 100644
+--- a/crates/eml_rt/src/host.rs
++++ b/crates/eml_rt/src/host.rs
+@@ -1310,13 +1310,14 @@ impl Host for StdHost {
+ 
+     fn open(&self, path: &str) -> io::Result<Opened> {
+         // `path` が絶対パスなら、`join` の結果はそのパスになる
+-        let file = fs::File::open(self.file_root.join(path))?;
+-        // ディレクトリも開けるが、長さの見込みはふつうのファイルにだけ使う
+-        let size = file
+-            .metadata()
+-            .ok()
+-            .filter(|m| m.is_file())
+-            .map(|m| m.len());
++        let path = self.file_root.join(path);
++        let file = fs::File::open(&path).map_err(|e| directory_error(&path, e))?;
++        let metadata = file.metadata().ok();
++        if metadata.as_ref().is_some_and(fs::Metadata::is_dir) {
++            return Err(io::Error::from(io::ErrorKind::IsADirectory));
++        }
++        // 長さの見込みはふつうのファイルにだけ使う
++        let size = metadata.filter(|m| m.is_file()).map(|m| m.len());
+         Ok(Opened {
+             reader: Box::new(file),
+             size,
+@@ -1346,7 +1347,10 @@ impl Host for StdHost {
+             WriteMode::Truncate => options.truncate(true),
+             WriteMode::Append => options.append(true),
+         };
+-        Ok(Box::new(options.open(self.file_root.join(path))?))
++        let path = self.file_root.join(path);
++        Ok(Box::new(
++            options.open(&path).map_err(|e| directory_error(&path, e))?,
++        ))
+     }
+ 
+     fn spawn(&self, spawn: &Spawn<'_>) -> io::Result<Spawned> {
+@@ -1410,6 +1414,16 @@ impl Host for StdHost {
+     }
+ }
+ 
++/// 開けなかったパスがディレクトリなら `IsADirectory` にする。Windows はディレクトリを開くと `PermissionDenied` を
++/// 返すので、Unix の `EISDIR` と同じ誤りにそろえる。成功した `open` には問い合わせを足さない。
++fn directory_error(path: &Path, error: io::Error) -> io::Error {
++    if fs::metadata(path).is_ok_and(|m| m.is_dir()) {
++        io::Error::from(io::ErrorKind::IsADirectory)
++    } else {
++        error
++    }
++}
++
+ /// I/O の誤りの理由 (`read_text`、`open_write`、`FileOut` の書き込み、`spawn` の失敗を `Fault` の理由に
+ /// する)。止める語が立った後の `Interrupted` は `fill` と `read_all` が止めたことにし、立っていない `Interrupted` は
+ /// 読み直す。読み以外の `Interrupted` は止める語と関係なく、ここで `Other` になる。
+diff --git a/tests/ui/run-fail/files/read_directory.em b/tests/ui/run-fail/files/read_directory.em
+index 88f166ed..2eb6093f 100644
+--- a/tests/ui/run-fail/files/read_directory.em
++++ b/tests/ui/run-fail/files/read_directory.em
+@@ -1,4 +1,4 @@
+--- Reading a directory stops the program with a runtime error. Opening it succeeds on Unix; reading it fails.
++-- Reading a directory stops the program with a runtime error: a directory does not open, on every OS.
+ import FileIn
+ 
+ main : Unit -> <IO> Unit
+diff --git a/tests/ui/run-fail/std/proc_capture_nonzero.em b/tests/ui/run-fail/std/proc_capture_nonzero.em
+index f53ca867..6eadd779 100644
+--- a/tests/ui/run-fail/std/proc_capture_nonzero.em
++++ b/tests/ui/run-fail/std/proc_capture_nonzero.em
+@@ -1,3 +1,4 @@
++-- windows: skip (子のプロセスに POSIX のツールを使う)
+ -- `try_io` で捕まえない `Proc.capture` の 0 でない終了は、実行時エラーになる (docs/spec/stdlib.md の「実行時エラー」)
+ import Proc
+ 
+diff --git a/tests/ui/run-fail/std/proc_capture_not_utf8.em b/tests/ui/run-fail/std/proc_capture_not_utf8.em
+index 5dff95da..9cdedb23 100644
+--- a/tests/ui/run-fail/std/proc_capture_not_utf8.em
++++ b/tests/ui/run-fail/std/proc_capture_not_utf8.em
+@@ -1,3 +1,4 @@
++-- windows: skip (子のプロセスに POSIX のツールを使う)
+ -- `Proc.capture` の誤りは、起動、読み、終了コードの順に出る (docs/spec/stdlib.md の「`Proc`」)。UTF-8 でない出力を
+ -- 出して 0 でなく終わった子は、読みの誤りで止まる
+ import Proc
+diff --git a/tests/ui/run/io/try_io_cmd_exit.em b/tests/ui/run/io/try_io_cmd_exit.em
+index c0d1e51f..5f3e8a0d 100644
+--- a/tests/ui/run/io/try_io_cmd_exit.em
++++ b/tests/ui/run/io/try_io_cmd_exit.em
+@@ -1,3 +1,4 @@
++-- windows: skip (子のプロセスに POSIX のツールを使う)
+ -- `Proc.capture` の 0 でない終了は、`kind` が `Other` の IO の失敗で、`try_io` が捕まえる (docs/spec/stdlib.md の
+ -- 「`try_io`」)
+ import Proc
+diff --git a/tests/ui/run/scripts/deploy/main.em b/tests/ui/run/scripts/deploy/main.em
+index 5ae67072..82a4d5f1 100644
+--- a/tests/ui/run/scripts/deploy/main.em
++++ b/tests/ui/run/scripts/deploy/main.em
+@@ -1,3 +1,4 @@
++-- windows: skip (子のプロセスに POSIX のツールを使う)
+ -- deploy: 設定ファイルの段 (build、test、package、upload) を順に動かす。`deploy [--dry-run] CONFIG`。
+ -- 段の起動は `Run`、記録は `Log` のエフェクトにし、`--dry-run` では `Run` の handler だけを差し替える。段が失敗したら
+ -- そこで止め、報告を書いてから、その終了コードで終える
+diff --git a/tests/ui/run/std/child_stderr.em b/tests/ui/run/std/child_stderr.em
+index 15b8e538..8e4f84b5 100644
+--- a/tests/ui/run/std/child_stderr.em
++++ b/tests/ui/run/std/child_stderr.em
+@@ -1,3 +1,4 @@
++-- windows: skip (子のプロセスに POSIX のツールを使う)
+ -- 子のプロセスとプログラムが標準エラーに書いた行は、標準出力とは別に捕まえる
+ import Proc
+ 
+diff --git a/tests/ui/run/std/proc_args.em b/tests/ui/run/std/proc_args.em
+index 9eb52c44..80627c9d 100644
+--- a/tests/ui/run/std/proc_args.em
++++ b/tests/ui/run/std/proc_args.em
+@@ -1,3 +1,4 @@
++-- windows: skip (子のプロセスに POSIX のツールを使う)
+ -- コマンドリテラルの引数の分け方を、子が受け取った引数で確かめる (docs/spec/expressions.md の「コマンドリテラル」)。
+ -- 引用の中の空白は区切らず、穴は引数の一部になり、`\{..xs}` は要素ごとに別の引数になる
+ import Proc
+diff --git a/tests/ui/run/std/proc_capture.em b/tests/ui/run/std/proc_capture.em
+index b9aa5d1a..d4c9baa8 100644
+--- a/tests/ui/run/std/proc_capture.em
++++ b/tests/ui/run/std/proc_capture.em
+@@ -1,3 +1,4 @@
++-- windows: skip (子のプロセスに POSIX のツールを使う)
+ -- 出力を取る起動 (docs/spec/stdlib.md の「`Proc`」)。`output` は終了コードを値で返し、0 でなくても失敗しない。
+ -- `capture` は 0 で終わった子の標準出力を返す。標準入力は空なので、`cat` はすぐに終わる
+ import Proc
+diff --git a/tests/ui/run/std/proc_child_released_on_abort.em b/tests/ui/run/std/proc_child_released_on_abort.em
+index 389438c7..3dd1c943 100644
+--- a/tests/ui/run/std/proc_child_released_on_abort.em
++++ b/tests/ui/run/std/proc_child_released_on_abort.em
+@@ -1,3 +1,4 @@
++-- windows: skip (子のプロセスに POSIX のツールを使う)
+ -- `Child` を持ったまま `try_io` で巻き戻ると、破棄処理が pipe を閉じ、子を kill して待つ (docs/spec/stdlib.md の
+ -- 「`Proc`」)。kill しなければ `sleep` を30秒待つ。検査モードでは、手放していなければ漏れの検査で落ちる
+ import Proc
+diff --git a/tests/ui/run/std/proc_cwd/main.em b/tests/ui/run/std/proc_cwd/main.em
+index f4d3665f..b5da36ab 100644
+--- a/tests/ui/run/std/proc_cwd/main.em
++++ b/tests/ui/run/std/proc_cwd/main.em
+@@ -1,3 +1,4 @@
++-- windows: skip (子のプロセスに POSIX のツールを使う)
+ -- `Proc.cwd` の相対パスは `FileIn.open` と同じ基準で、`/` を含む相対のプログラムは子の作業ディレクトリに対して
+ -- 解決する (docs/spec/stdlib.md の「`Proc`」)
+ import Proc
+diff --git a/tests/ui/run/std/proc_env.em b/tests/ui/run/std/proc_env.em
+index 54e7c8f9..b9fceb44 100644
+--- a/tests/ui/run/std/proc_env.em
++++ b/tests/ui/run/std/proc_env.em
+@@ -1,3 +1,4 @@
++-- windows: skip (子のプロセスに POSIX のツールを使う)
+ -- `Proc.env` は環境変数を1つ上書きし、同じ名前を2回設定したら後の値が勝つ。空の名前と `=` を含む名前は起動の誤りで
+ -- ある (docs/spec/stdlib.md の「`Proc`」)
+ import Proc
+diff --git a/tests/ui/run/std/proc_spawn.em b/tests/ui/run/std/proc_spawn.em
+index 1889f69a..e6fc8b11 100644
+--- a/tests/ui/run/std/proc_spawn.em
++++ b/tests/ui/run/std/proc_spawn.em
+@@ -1,3 +1,4 @@
++-- windows: skip (子のプロセスに POSIX のツールを使う)
+ -- pipe でやりとりする子 (docs/spec/stdlib.md の「`Proc`」)。eml は1度に1本の pipe しか読み書きせず、pipe の buffer は
+ -- OS が持つ (ふつう 64 KiB)。詰まらないように、次の規則で読み書きする
+ -- - 入力を読み終えてから出力を書く子 (`sort`、`wc`) には、書き終えて `close_stdin` してから読む。入力の量に上限はない
+diff --git a/tests/ui/run/std/proc_spawn_large.em b/tests/ui/run/std/proc_spawn_large.em
+index 11bc652b..146534f4 100644
+--- a/tests/ui/run/std/proc_spawn_large.em
++++ b/tests/ui/run/std/proc_spawn_large.em
+@@ -1,3 +1,4 @@
++-- windows: skip (子のプロセスに POSIX のツールを使う)
+ -- 入力を読み終えてから出力を書く子には、pipe の buffer (ふつう 64 KiB) より多く書いてよい (docs/spec/stdlib.md の
+ -- 「`Proc`」)。`sort` に 256 KiB を書き、`close_stdin` してから読む
+ import Proc
+diff --git a/tests/ui/run/std/proc_stderr.em b/tests/ui/run/std/proc_stderr.em
+index e6e2cb98..ec6da5c6 100644
+--- a/tests/ui/run/std/proc_stderr.em
++++ b/tests/ui/run/std/proc_stderr.em
+@@ -1,3 +1,4 @@
++-- windows: skip (子のプロセスに POSIX のツールを使う)
+ -- 標準エラーの向き (docs/spec/stdlib.md の「`Proc`」)。既定は受け継ぎ、`merge_stderr` は標準出力と同じ先に、
+ -- `discard_stderr` はどこにも出さない
+ import Proc
+diff --git a/tests/ui/run/std/processes.em b/tests/ui/run/std/processes.em
+index 273e07c6..2e356adf 100644
+--- a/tests/ui/run/std/processes.em
++++ b/tests/ui/run/std/processes.em
+@@ -1,3 +1,4 @@
++-- windows: skip (子のプロセスに POSIX のツールを使う)
+ -- 子のプロセス (docs/spec/stdlib.md)。子の出力は、それまでの出力の後に並ぶ
+ import Proc
+ 

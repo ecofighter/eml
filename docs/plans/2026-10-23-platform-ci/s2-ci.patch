@@ -1,0 +1,234 @@
+diff --git a/.github/workflows/ci.yml b/.github/workflows/ci.yml
+new file mode 100644
+index 00000000..94fbc9f5
+--- /dev/null
++++ b/.github/workflows/ci.yml
+@@ -0,0 +1,132 @@
++# 流すものと理由は docs/implementation/testing.md の「CI」にある
++name: CI
++
++on:
++  push:
++    branches: [main]
++  pull_request:
++  workflow_dispatch:
++
++permissions:
++  contents: read
++
++# 同じ組で待つ実行は新しい実行に置き換わるので、main ではコミットごとに組を分け、どのコミットにも結果を残す
++concurrency:
++  group: ${{ github.workflow }}-${{ github.ref == 'refs/heads/main' && github.sha || github.ref }}
++  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
++
++env:
++  CARGO_TERM_COLOR: always
++  CARGO_INCREMENTAL: 0
++
++defaults:
++  run:
++    shell: bash
++
++jobs:
++  test:
++    name: test (${{ matrix.os }})
++    strategy:
++      fail-fast: false
++      matrix:
++        os: [ubuntu-24.04, macos-15, windows-2025]
++    runs-on: ${{ matrix.os }}
++    timeout-minutes: 60
++    steps:
++      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
++        with:
++          persist-credentials: false
++      # rustup は rust-toolchain.toml の版を入れる。runner の stable のままでないことを版の比べで確かめる
++      - name: Install the pinned toolchain
++        run: |
++          rustup toolchain install
++          rustc -V
++          test "$(rustc -V | cut -d' ' -f2)" = "$(sed -n 's/^channel = "\(.*\)"$/\1/p' rust-toolchain.toml)"
++      # Windows の target は msvc だけである
++      - name: Check the Windows host
++        if: runner.os == 'Windows'
++        run: |
++          test "$(rustc -vV | sed -n 's/^host: //p')" = x86_64-pc-windows-msvc
++      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
++        with:
++          save-if: ${{ github.ref == 'refs/heads/main' }}
++      - uses: taiki-e/install-action@f7e5d7c961414b23f5b25b2da9294395d08513ad # v2.87.26
++        with:
++          tool: cargo-nextest@0.9.146
++          fallback: none
++      - name: cargo nextest run
++        id: test
++        run: cargo nextest run --failure-output immediate-final
++      # テストが落ちても lint の結果は見たいので、前の手順が済んでいれば流す
++      - name: cargo clippy --all-targets
++        if: ${{ !cancelled() && steps.test.outcome != 'skipped' }}
++        run: cargo clippy --all-targets -- -D warnings
++      - name: cargo clippy of the non-default features
++        if: ${{ !cancelled() && steps.test.outcome != 'skipped' }}
++        run: |
++          cargo clippy -p eml_cli --no-default-features -- -D warnings
++          cargo clippy -p eml_cli --no-default-features --features types -- -D warnings
++          cargo clippy -p eml_cli --no-default-features --features core -- -D warnings
++          cargo clippy -p eml_test_support --no-default-features -- -D warnings
++          cargo clippy -p eml_test_support --no-default-features --features hir -- -D warnings
++          cargo clippy -p eml_test_support --no-default-features --features types -- -D warnings
++          cargo clippy -p eml_test_support --no-default-features --features core -- -D warnings
++
++  fmt:
++    runs-on: ubuntu-24.04
++    timeout-minutes: 10
++    steps:
++      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
++        with:
++          persist-credentials: false
++      - run: rustup toolchain install
++      - run: cargo fmt --check
++
++  verus:
++    runs-on: ubuntu-24.04
++    timeout-minutes: 30
++    steps:
++      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
++        with:
++          persist-credentials: false
++      - uses: cachix/install-nix-action@13d8dd58da0234aa297dedd986986ccb8e7f3e24 # v31.11.1
++        with:
++          github_access_token: ${{ secrets.GITHUB_TOKEN }}
++      - name: cargo verus verify -p eml_rt
++        id: verify
++        run: nix develop -c cargo verus verify -p eml_rt
++      - name: verusfmt --check
++        if: ${{ !cancelled() && steps.verify.outcome != 'skipped' }}
++        run: |
++          mapfile -t files < <(git ls-files 'crates/eml_rt/src/*.rs')
++          nix develop -c verusfmt --verus-only --check "${files[@]}"
++
++  miri:
++    name: miri (${{ matrix.borrows }} borrows)
++    strategy:
++      fail-fast: false
++      matrix:
++        include:
++          - borrows: stacked
++            miriflags: -Zmiri-strict-provenance
++          - borrows: tree
++            miriflags: -Zmiri-strict-provenance -Zmiri-tree-borrows
++    runs-on: ubuntu-24.04
++    timeout-minutes: 45
++    env:
++      MIRIFLAGS: ${{ matrix.miriflags }}
++    steps:
++      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
++        with:
++          persist-credentials: false
++      - uses: cachix/install-nix-action@13d8dd58da0234aa297dedd986986ccb8e7f3e24 # v31.11.1
++        with:
++          github_access_token: ${{ secrets.GITHUB_TOKEN }}
++      - name: "cargo miri test -p eml_rt trusted::"
++        id: rt
++        run: |
++          nix develop .#miri -c cargo miri test -p eml_rt trusted::
++      - name: "cargo miri test -p eml_vm --test integration miri::"
++        if: ${{ !cancelled() && steps.rt.outcome != 'skipped' }}
++        run: |
++          nix develop .#miri -c cargo miri test -p eml_vm --test integration miri::
+diff --git a/Cargo.toml b/Cargo.toml
+index 8a3b846b..2df0631b 100644
+--- a/Cargo.toml
++++ b/Cargo.toml
+@@ -24,7 +24,6 @@ clap = { version = "4.6", features = ["derive"] }
+ insta = "1.49"
+ la-arena = "0.3"
+ libc = "0.2"
+-windows-sys = "0.61.2"
+ logos = "0.16"
+ rustyline = { version = "18.0.1", default-features = false, features = ["buffer-redux"] }
+ rowan = "0.16"
+diff --git a/crates/eml_cli/tests/citations.rs b/crates/eml_cli/tests/citations.rs
+index 9b7b3bbf..27a36263 100644
+--- a/crates/eml_cli/tests/citations.rs
++++ b/crates/eml_cli/tests/citations.rs
+@@ -15,11 +15,21 @@ fn repo_root() -> PathBuf {
+ /// 引用を探すファイル。`docs/plans` は作業中の計画で、まだない節を引くので除く。
+ /// `bench/` は `.em` のほか、計測のスクリプト (`.py`、`.sh`) のコメントも引ける。
+ fn sources(root: &Path) -> Vec<PathBuf> {
+-    let mut files = vec![root.join("CLAUDE.md"), root.join("README.md")];
++    let mut files = [
++        "CLAUDE.md",
++        "README.md",
++        "flake.nix",
++        "rust-toolchain.toml",
++        ".config/nextest.toml",
++        ".github/workflows/ci.yml",
++    ]
++    .map(|file| root.join(file))
++    .to_vec();
+     let mut dirs = vec![
+         root.join("bench"),
+         root.join("crates"),
+         root.join("docs"),
++        root.join("nix"),
+         root.join("std"),
+         root.join("tests"),
+     ];
+@@ -33,7 +43,7 @@ fn sources(root: &Path) -> Vec<PathBuf> {
+                 dirs.push(path);
+             } else if matches!(
+                 path.extension().and_then(|ext| ext.to_str()),
+-                Some("rs" | "em" | "md" | "py" | "sh")
++                Some("rs" | "em" | "md" | "py" | "sh" | "nix")
+             ) {
+                 files.push(path);
+             }
+diff --git a/docs/implementation/testing.md b/docs/implementation/testing.md
+index dee6da92..ea166555 100644
+--- a/docs/implementation/testing.md
++++ b/docs/implementation/testing.md
+@@ -421,6 +421,19 @@ Prelude のリストには4つのテストがある。長さ 1000 と 2000 の
+ 
+ ワークスペースの `cargo clippy --all-targets` は、各 crate を既定の feature でしか検査しない。`eml_cli` と `eml_test_support` の feature や、feature で切り替えるコードを変えたときは、既定でない組み合わせの lib も検査する。テストと bin は `run` を前提にするので、`--all-targets` は付けない。上流の crate のテストが下流の crate を組み立てないことは、`cargo tree -p eml_hir -e normal,dev` と `cargo tree -p eml_types -e normal,dev` に下流の段階の crate が出ないことで確かめる。
+ 
++## CI
++
++`.github/workflows/ci.yml` は、main への push と pull request と手動の起動で、次の4つのジョブを流す。
++
++- `test`: macOS (macos-15)、Linux (ubuntu-24.04)、Windows (windows-2025) のそれぞれで、`cargo nextest run`、`cargo clippy --all-targets -- -D warnings`、既定でない feature の clippy (「feature の組み合わせの確認」の7つ) を流す。toolchain は rustup が `rust-toolchain.toml` から入れ、`rustc -V` の版が `channel` と同じことを確かめる。cargo-nextest はワークフローに書いた版を入れる
++- `fmt`: Linux で `cargo fmt --check` を流す
++- `verus`: Linux で、ふだんの devShell を通して `cargo verus verify -p eml_rt` と verusfmt の検査を流す
++- `miri`: Linux で、Miri の devShell を通して、借用の規則ごとに1つのジョブを立て、`trusted::` と `miri::` を続けて流す
++
++CI が見るのは合否だけである。テストの時間の条件 (「性能のテスト」) と Miri の CPU 時間の予算は開発機で確かめ、runner の速さに合わせて緩めない。runner は開発機より遅いが、nextest がテストを止める 60 秒は1秒の条件より十分に長い。落ちたテストは流し直さない。合否が速さや順序で変わるテストは、流し直しで隠さずに直す。`#[ignore]` を付けたテストと `bench/` の計測は CI で流さない。
++
++アクションは commit の SHA で固定し、版の名前をコメントに書く。nix のストアはキャッシュしない。cargo の依存のビルドは `test` ジョブだけがキャッシュし、main の実行だけが保存する。ワークフローを変えたら `nix run nixpkgs#actionlint -- .github/workflows/ci.yml` で検査する。
++
+ ## よく使うコマンド
+ 
+ dev プロファイル (`cargo nextest run` と `cargo test` もこれを使う) は opt-level 1 で、debug assertions は有効である。`--release` は `bench/*.sh` と、`#[ignore]` を付けた時間のテストだけで使う。デバッガで局所変数が最適化で消えるときは、`CARGO_PROFILE_DEV_OPT_LEVEL=0 cargo test ...` で一度だけ opt-level 0 のビルドを作る。
+diff --git a/flake.nix b/flake.nix
+index 29953a35..adc3f7a1 100644
+--- a/flake.nix
++++ b/flake.nix
+@@ -41,7 +41,7 @@
+           # Rust の部品は stable も nightly も fenix から取る。stable は Verus が求める版に揃え、ふだんの devShell、
+           # nix build、Verus が同じ toolchain を使う (docs/implementation/testing.md の「Verus」)
+           stable = fenix.toolchainOf {
+-            channel = "1.98.1";
++            channel = (pkgs.lib.importTOML ./rust-toolchain.toml).toolchain.channel;
+             sha256 = "sha256-p8h3Sl/YRByZfZTAKXdsvF6xEenXKrXSVvpphmZENH4=";
+           };
+           devToolchain = stable.withComponents [
+diff --git a/rust-toolchain.toml b/rust-toolchain.toml
+new file mode 100644
+index 00000000..911030d3
+--- /dev/null
++++ b/rust-toolchain.toml
+@@ -0,0 +1,5 @@
++# Verus が求める版に固定する。flake も channel をここから読む (docs/implementation/testing.md の「Verus」)
++[toolchain]
++channel = "1.98.1"
++components = ["clippy", "rustfmt"]
++profile = "minimal"
