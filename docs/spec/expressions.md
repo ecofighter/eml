@@ -355,17 +355,24 @@ with_log path action =
 
 ## 並行処理
 
-並行処理のための構文は追加しない。`par` / `spawn` / `run_scheduler` ([マルチコア対応の設計](../future/multicore.md)) は、ラムダと `use` で書ける。非同期の処理は、row に `Async` を持つ普通の関数として直接の形で書け、`async` / `await` も関数の色分けも要らない。
+並行処理のための構文は追加しない。`par` / `Async.start` / `Async.run` ([マルチコア対応の設計](../future/multicore.md)、[非同期の設計](../future/async.md)) は、ラムダと `use` で書ける。非同期の処理は、row に `Async` を持つ普通の関数として直接の形で書け、`async` / `await` も関数の色分けも要らない。
 
 ```haskell
-fetch_all : List String -> <IO> List Int
-fetch_all urls =
-  use run_scheduler
-  let tasks = map (fn url -> Async.start (fn () -> Http.status url)) urls
-  map Async.await tasks
+greeting_size : String -> <IO, Panic, Async> Int
+greeting_size host =
+  let conn = Net.connect host 7
+  let (chunk, conn) = Net.read_chunk (Bytes.empty ()) conn
+  Net.close conn
+  Bytes.length chunk
+
+greeting_sizes : List String -> <IO, Panic> List Int
+greeting_sizes hosts =
+  use Async.run
+  let tasks = List.map (fn host -> Async.start (fn () -> greeting_size host)) hosts
+  List.map Async.await tasks
 ```
 
-並行処理は実装していない ([マルチコア対応の設計](../future/multicore.md))。
+並行処理は実装していない ([マルチコア対応の設計](../future/multicore.md)、[非同期の設計](../future/async.md))。例の `Net` と `Async` の API は、[非同期の設計](../future/async.md) の「スコープとタスク」と「ネットワークとシグナル」にある。
 
 ## 型の明示
 
