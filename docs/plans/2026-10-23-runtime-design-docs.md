@@ -351,6 +351,7 @@ a1〜a4 の呼び名の残りは、`grep -cE "$P" <ファイル>` で次の数�
   - `grep -c '^### 移し戻し$' docs/future/multicore.md` → `1`
   - `grep -cF 'FnEntry' docs/future/multicore.md` → `0`
   - `grep -cF '](multicore.md) の「スケジューラ」' docs/future/async.md` → 1以上
+  - `native.md` が先に使った用語を `multicore.md` が定義している: `grep -cF` で `'監視のスレッド'`、`'host のスレッド'`、`'止める語'`、`'専用の worker'`、`'終わりの欄'`、`'救済'` を `docs/future/multicore.md` で数える → どれも1以上
   - a1〜a4 の呼び名の残りが上の表の T-4 の行の数
   - V1〜V5 が上の値。V6 → `docs/future/multicore.md` と、リンクを足した文書
 - 落とし穴: D-21 の残す見出しの字を変えない。今の「`par` の a1 と協調的マルチタスク」は、「1つの worker での実行」に置き換える
@@ -370,6 +371,8 @@ a1〜a4 の呼び名の残りは、`grep -cE "$P" <ファイル>` で次の数�
   - 「その後の項目」の小見出しは次のようにする
     - 「マルチコア対応」は、後に回す項目だけにする
     - 「非同期」「ネイティブ化」「FFI と拡張」の小見出しを新しく足す。引数を型どおりに受ける版 `f$ret` は 189 行から「ネイティブ化」へ移す
+  - 借用パラメータの入れ子の箇条は「段の列」の `borrowed-params` へ移るので、`docs/future/native.md` の「処理系」の Perceus の最適化の項目への2つの引用 (「目的と範囲」と「展開と最適化の前提」) を、`roadmap.md` の「段の列」への引用に直す
+  - `f$ret` の項目を「ネイティブ化」の小見出しへ移すとき、前の文脈 (却下した呼び出し規約の案) が `native.md` へ移ったので、`native.md` の「呼び出し規約と入口」へのリンクを添える
   - 題は `Lay out the stage sequence`
 - 実装者に任せること: 各段の「中身」の文の書き方
 - 条件: いつも
@@ -387,15 +390,20 @@ a1〜a4 の呼び名の残りは、`grep -cE "$P" <ファイル>` で次の数�
     ```
   - ``grep -c 'Async` が入ったとき' docs/future/roadmap.md`` → `0`
   - ``grep -cF '`Async` を作るとき' docs/future/roadmap.md`` → `0`
+  - `grep -c '借用パラメータ.*roadmap.md) の「処理系」' docs/future/native.md` → `0`
   - a1〜a4 の呼び名の残りが上の表の T-5 の行の数
-  - V1〜V5 が上の値。V6 → `docs/future/roadmap.md`
+  - V1〜V5 が上の値。V6 → `docs/future/native.md`、`docs/future/roadmap.md`
 - 落とし穴: `read_into` は「処理系」に残す (`docs/implementation/benchmarks.md:331` が「処理系」を引いている)
 
 ### T-6: 地図を新しい設計に向ける
 
 - 目的: 文書の地図と概要を、新しい4つの設計に合わせる
-- 変えるファイル: `CLAUDE.md`、`docs/README.md`、`docs/future/stdlib.md`、`docs/overview.md`
-- 作業: `05-integration.md` の 1.3 の「docs/overview.md」「docs/README.md」「docs/future/stdlib.md」「CLAUDE.md」に従う。`overview.md` の 31 行と 33 行 (`Panic` と `Never`) は触らない (段 `never-rows` が閉じるときに直す)。題は `Point the maps at the new designs`
+- 変えるファイル: `CLAUDE.md`、`docs/README.md`、`docs/future/stdlib.md`、`docs/overview.md`、`docs/implementation/architecture.md`、`docs/implementation/benchmarks.md`、`docs/implementation/status.md`
+- 作業: `05-integration.md` の 1.3 の「docs/overview.md」「docs/README.md」「docs/future/stdlib.md」「CLAUDE.md」に従う。`overview.md` の 31 行と 33 行 (`Panic` と `Never`) は触らない (段 `never-rows` が閉じるときに直す)。あわせて、中身が `native.md` と「段の列」へ移ったための古い参照を直す
+  - `benchmarks.md` の 183、330、461、485、491 行の「ロードマップのネイティブ化の項目」の完了の条件と目標を、`native.md` の「目的と範囲」への引用にする。331 行の `read_into` の「処理系」はそのまま
+  - `architecture.md` の 10 行の「ネイティブのバックエンドは未定である」を、Cranelift で JIT と AOT を出すことと `native.md` へのリンクに直す
+  - `status.md` の 48 行で、借用パラメータとネイティブ化を「その後の項目」でなく「段の列」に引く
+  - 題は `Point the maps at the new designs`
 - 実装者に任せること: 文の書き方
 - 条件: いつも
 - 完了の条件:
@@ -403,21 +411,27 @@ a1〜a4 の呼び名の残りは、`grep -cE "$P" <ファイル>` で次の数�
   - `grep -cE '\]\(future/(async|native|ffi)\.md\)' docs/README.md` → `3`
   - `grep -cF 'roadmap.md) の「段の列」' docs/overview.md` → `1`
   - `git show HEAD -- CLAUDE.md | grep -cE '^[-+][^-+]'` → `2`
+  - `grep -cE 'ロードマップ\]\(\.\./future/roadmap\.md\) のネイティブ化の項目|ロードマップの「ネイティブ化」' docs/implementation/benchmarks.md` → `0`
+  - `grep -cF '](../future/native.md)' docs/implementation/benchmarks.md` → 1以上
+  - `grep -cF 'ネイティブのバックエンドは未定' docs/implementation/architecture.md` → `0`
+  - `grep -cF 'roadmap.md) の「段の列」' docs/implementation/status.md` → 1以上
   - a1〜a4 の呼び名の残りが上の表の T-6 の行の数
-  - V1〜V5 が上の値。V6 → `CLAUDE.md`、`docs/README.md`、`docs/future/stdlib.md`、`docs/overview.md`
+  - V1〜V5 が上の値。V6 → `CLAUDE.md`、`docs/README.md`、`docs/future/stdlib.md`、`docs/implementation/architecture.md`、`docs/implementation/benchmarks.md`、`docs/implementation/status.md`、`docs/overview.md`
 
 ### T-7: spec の言い回しを設計に合わせる
 
 - 目的: spec の中の古い呼び名 (`run_scheduler`、a1、a2-cancel) と、移した中身への引用を直す。規則は変えない
-- 変えるファイル: `docs/spec/expressions.md` (「並行処理」を `Async.run` と `Net` の例に)、`docs/spec/lir.md` (290 行)、`docs/spec/object-model.md` (358 行、732〜735 行)、`docs/spec/vm.md` (391 行、400 行、402 行)
+- 変えるファイル: `docs/spec/core-ir.md` (9 行と 13 行の「ネイティブのバックエンドは未定」「Cranelift か LLVM」を Cranelift と `native.md` への引用に、232 行の借用パラメータの引用を「段の列」に)、`docs/spec/expressions.md` (「並行処理」を `Async.run` と `Net` の例に)、`docs/spec/lir.md` (60 行の借用パラメータの引用を「段の列」に、290 行)、`docs/spec/object-model.md` (358 行、732〜735 行)、`docs/spec/vm.md` (391 行、400 行、402 行)
 - 作業: 題は `Align spec prose with the runtime design`
 - 実装者に任せること: 文の書き方
 - 条件: いつも
 - 完了の条件:
   - `grep -cF 'run_scheduler' docs/spec/expressions.md` → `0`
   - `grep -rcF 'roadmap.md) の「マルチコア対応」' docs/spec | awk -F: '{s+=$2} END{print s}'` → `0`
+  - `grep -cE 'ネイティブのバックエンドは未定|Cranelift か LLVM' docs/spec/core-ir.md` → `0`
+  - `grep -c '借用パラメータ.*roadmap.md) の「処理系」' docs/spec/core-ir.md docs/spec/lir.md` → 2行とも `:0`
   - a1〜a4 の呼び名の残りがすべて `0`
-  - V1〜V5 が上の値。V6 → `docs/spec/expressions.md`、`docs/spec/lir.md`、`docs/spec/object-model.md`、`docs/spec/vm.md`
+  - V1〜V5 が上の値。V6 → `docs/spec/core-ir.md`、`docs/spec/expressions.md`、`docs/spec/lir.md`、`docs/spec/object-model.md`、`docs/spec/vm.md`
 
 ### T-8: 段を閉じる
 
