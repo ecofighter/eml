@@ -3,6 +3,20 @@ use std::process::{Command, Output};
 
 use crate::common::temp_project;
 
+/// UTF-8 でないバイト列の `OsString`。
+#[cfg(unix)]
+fn not_utf8() -> std::ffi::OsString {
+    use std::os::unix::ffi::OsStringExt;
+    std::ffi::OsString::from_vec(vec![b'a', 0xff])
+}
+
+/// UTF-8 でないバイト列の `OsString`。孤立した surrogate は UTF-16 として正しくない。
+#[cfg(windows)]
+fn not_utf8() -> std::ffi::OsString {
+    use std::os::windows::ffi::OsStringExt;
+    std::ffi::OsString::from_wide(&[0x61, 0xD800])
+}
+
 fn eml(args: &[&str]) -> Output {
     eml_in(
         Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/../../tests/ui")),
@@ -110,7 +124,7 @@ fn run_opens_an_absolute_path_as_is() {
     let program = dir.join("absolute.em");
     let source = format!(
         "import FileIn\nmain : Unit -> <IO> Unit\nmain () =\n  let f = FileIn.open \"{}\"\n  let (text, f) = FileIn.read_all f\n  FileIn.close f\n  println text\n",
-        input.display()
+        input.display().to_string().replace('\\', "\\\\")
     );
     std::fs::write(&program, source).unwrap();
     let output = eml(&["run", "--debug-heap", program.to_str().unwrap()]);
@@ -561,17 +575,16 @@ fn a_script_with_a_shebang_runs_directly() {
 }
 
 /// UTF-8 でない引数と環境変数の値は、読んだときに実行時エラーにする。
-#[cfg(unix)]
 #[test]
 fn arguments_and_variables_that_are_not_utf8_are_runtime_errors() {
     use std::ffi::OsStr;
-    use std::os::unix::ffi::OsStrExt;
     let get = "import Env\n\
 main : Unit -> <IO> Unit
 main () = println (show (Env.get \"BAD\"))
 ";
     let dir = temp_project("cli-not-utf8", &[("args.em", SHOW_ARGS), ("get.em", get)]);
-    let bad = OsStr::from_bytes(b"a\xff");
+    let bad = not_utf8();
+    let bad = bad.as_os_str();
     let eml = || {
         let mut command = Command::new(env!("CARGO_BIN_EXE_eml"));
         command.current_dir(&dir);
