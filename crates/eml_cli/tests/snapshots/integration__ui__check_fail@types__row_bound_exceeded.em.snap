@@ -1,0 +1,22 @@
+---
+source: crates/eml_cli/tests/ui.rs
+expression: rendered
+input_file: tests/ui/check-fail/types/row_bound_exceeded.em
+---
+[E2020] Error: the row passed to `helper` may perform `IO`, but `helper` allows only `never` operations
+    ╭─[ check-fail/types/row_bound_exceeded.em:11:26 ]
+    │
+ 11 │ main () = println (show (helper noisy))
+    │                          ───┬── ──┬──  
+    │                             ╰────────── `helper` is used here
+    │                                   │    
+    │                                   ╰──── `IO` is performed here
+    │
+    ├─[ check-fail/types/row_bound_exceeded.em:11:26 ]
+    │
+  2 │ helper : (Unit -> <never e> Int) -> <e> Int
+    │                    ──┬──  
+    │                      ╰──── `helper` bounds this row variable by `never`
+    │ 
+    │ Note: a row variable written `never e` admits only `Panic` and effects whose operations are all `never`; `IO` and the effects of `var` are not among them
+────╯

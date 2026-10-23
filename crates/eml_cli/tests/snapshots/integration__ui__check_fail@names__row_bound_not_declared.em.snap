@@ -1,0 +1,23 @@
+---
+source: crates/eml_cli/tests/ui.rs
+expression: rendered
+input_file: tests/ui/check-fail/names/row_bound_not_declared.em
+---
+[E1057] Error: `never` cannot bound `e` here
+   ╭─[ check-fail/names/row_bound_not_declared.em:3:19 ]
+   │
+ 3 │   | Box (Unit -> <never e> Int)
+   │                   ──┬──  
+   │                     ╰──── a row parameter of `data` has no bound
+   │ 
+   │ Help: remove `never`
+───╯
+[E1057] Error: `never` cannot bound `e` here
+   ╭─[ check-fail/names/row_bound_not_declared.em:6:25 ]
+   │
+ 6 │ plain f = (f : Unit -> <never e> Int) ()
+   │                         ──┬──  
+   │                           ╰──── the signature does not bound `e` with `never`
+   │ 
+   │ Help: write `never e` in the signature, or remove `never` here
+───╯

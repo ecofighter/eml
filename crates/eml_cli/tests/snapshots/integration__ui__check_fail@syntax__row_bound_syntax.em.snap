@@ -1,0 +1,19 @@
+---
+source: crates/eml_cli/tests/ui.rs
+expression: rendered
+input_file: tests/ui/check-fail/syntax/row_bound_syntax.em
+---
+[E0011] Error: only `never` can bound a row variable
+   ╭─[ check-fail/syntax/row_bound_syntax.em:2:24 ]
+   │
+ 2 │ once_bound : (Unit -> <once e> Int) -> <e> Int
+   │                        ──┬─  
+   │                          ╰─── found `once`
+───╯
+[E0011] Error: expected a row variable
+   ╭─[ check-fail/syntax/row_bound_syntax.em:5:31 ]
+   │
+ 5 │ bound_label : (Unit -> <never Panic | e> Int) -> <Panic | e> Int
+   │                               ──┬──  
+   │                                 ╰──── found `Panic`
+───╯
