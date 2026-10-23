@@ -170,3 +170,59 @@ fn one_call_reports_once_for_two_bounds() {
       note: a row variable written `never e` admits only `Panic` and effects whose operations are all `never`; `IO` and the effects of `var` are not among them
     ");
 }
+
+#[test]
+fn an_inferred_bound_names_the_inner_call() {
+    let text = with_head(
+        "wrap : (Unit -> <e> Int) -> <e> Int\nwrap f = helper f\n\nmain : Unit -> <IO> Unit\nmain () = println (show (wrap noisy))",
+    );
+    insta::assert_snapshot!(check_full(&text), @"
+    E2020 13:26 the row passed to `wrap` may perform `IO`, but `wrap` allows only `never` operations
+      13:26 `wrap` is used here
+      13:31 `IO` is performed here
+      10:10 the row is passed to `helper` here
+      note: a row variable written `never e` admits only `Panic` and effects whose operations are all `never`; `IO` and the effects of `var` are not among them
+    ");
+}
+
+#[test]
+fn a_chain_names_only_the_nearest_call() {
+    let text = with_head(
+        "b : (Unit -> <e> Int) -> <e> Int\nb f = helper f\n\na : (Unit -> <e> Int) -> <e> Int\na f = b f\n\nmain : Unit -> <IO> Unit\nmain () = println (show (a noisy))",
+    );
+    insta::assert_snapshot!(check_full(&text), @"
+    E2020 16:26 the row passed to `a` may perform `IO`, but `a` allows only `never` operations
+      16:26 `a` is used here
+      16:28 `IO` is performed here
+      13:7 the row is passed to `b` here
+      note: a row variable written `never e` admits only `Panic` and effects whose operations are all `never`; `IO` and the effects of `var` are not among them
+    ");
+}
+
+#[test]
+fn a_recursive_group_names_the_call_in_the_group() {
+    let text = with_head(
+        "w1 : (Unit -> <e> Int) -> Bool -> <e> Int\nw1 f b = if b then helper f else w2 f True\n\nw2 : (Unit -> <e> Int) -> Bool -> <e> Int\nw2 f b = w1 f b\n\nmain : Unit -> <IO> Unit\nmain () = println (show (w2 noisy True))",
+    );
+    insta::assert_snapshot!(check_full(&text), @"
+    E2020 16:26 the row passed to `w2` may perform `IO`, but `w2` allows only `never` operations
+      16:26 `w2` is used here
+      16:29 `IO` is performed here
+      10:20 the row is passed to `helper` here
+      note: a row variable written `never e` admits only `Panic` and effects whose operations are all `never`; `IO` and the effects of `var` are not among them
+    ");
+}
+
+#[test]
+fn an_inferred_bound_broken_inside_its_group() {
+    let text = with_head(
+        "w1 : (Unit -> <e> Int) -> Bool -> <IO | e> Int\nw1 f b = if b then w2 b else helper f\n\nw2 : Bool -> <IO> Int\nw2 b = w1 noisy b",
+    );
+    insta::assert_snapshot!(check_full(&text), @"
+    E2020 10:30 the row passed to `helper` may perform `IO`, but `helper` allows only `never` operations
+      10:30 `helper` is used here
+      13:11 `IO` is performed here
+      1:20 `helper` bounds this row variable by `never`
+      note: a row variable written `never e` admits only `Panic` and effects whose operations are all `never`; `IO` and the effects of `var` are not among them
+    ");
+}

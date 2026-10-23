@@ -1,7 +1,7 @@
 //! 段2: SCC ごとに Kind の問題をまとめて解き、違反を集め、各宣言のスキームに残す制約を求める
 //! (docs/spec/types.md の「推論」)。推論の表は使わず、番号の上の束だけを扱う。
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, VecDeque};
 
 use eml_hir::ValueItem;
 
@@ -72,11 +72,11 @@ pub(crate) fn solve_scc(
         &merged.mult,
         merged.own.iter().map(|own| own.mult.clone()).collect(),
     );
-    let written = written_bounds(&merged.mult);
+    let sources = SourceIndex::new(&merged.mult);
     let schemes = (0..merged.own.len())
         .map(|member| {
             let mult = residual(&mult_graph, member);
-            let bound_sources = bound_sources(&mult, &merged.own[member].mult, &written);
+            let bound_sources = bound_sources(&mult, &merged.own[member].mult, &sources);
             KindScheme {
                 lin: residual(&lin_graph, member),
                 mult,
@@ -191,37 +191,108 @@ fn bound_origin(origin: &Provenance, source: BoundSource) -> Provenance {
     }
 }
 
-/// 変数ごとの、シグネチャに書いた上限 (`Provenance::Bound`) の位置。
-fn written_bounds(bounds: &Bounds<Multiplicity>) -> HashMap<usize, Span> {
-    let mut written = HashMap::new();
-    for (&constraint, origin) in bounds.constraints.iter().zip(&bounds.origins) {
-        if let ((Bound::Var(var), Bound::Const(_)), Provenance::Bound(span)) = (constraint, origin)
-        {
-            written.entry(var.index()).or_insert(*span);
+/// 残した上限の出どころを探すための、SCC の多重度の制約の索引。番号はまとめた後のものである。
+struct SourceIndex {
+    /// 変数ごとの、シグネチャに書いた上限 (`Provenance::Bound`) の位置。
+    written: HashMap<usize, Span>,
+    /// 変数どうしの制約の、下の変数から上の変数への辺。
+    upward: Vec<Vec<usize>>,
+    /// 変数ごとの、参照に複写した上限 (由来が `RowBound`)。上限、参照の位置、参照した宣言の名前の組である。
+    copied: Vec<Vec<(Multiplicity, Span, String)>>,
+}
+
+impl SourceIndex {
+    fn new(bounds: &Bounds<Multiplicity>) -> Self {
+        let mut index = SourceIndex {
+            written: HashMap::new(),
+            upward: vec![Vec::new(); bounds.vars],
+            copied: vec![Vec::new(); bounds.vars],
+        };
+        for (&constraint, origin) in bounds.constraints.iter().zip(&bounds.origins) {
+            match (constraint, origin) {
+                ((Bound::Var(var), Bound::Const(_)), Provenance::Bound(span)) => {
+                    index.written.entry(var.index()).or_insert(*span);
+                }
+                (
+                    (Bound::Var(var), Bound::Const(upper)),
+                    Provenance::At(KindOrigin {
+                        span,
+                        reason: KindReason::RowBound { name, .. },
+                    }),
+                ) => index.copied[var.index()].push((upper, *span, name.clone())),
+                ((Bound::Var(lower), Bound::Var(upper)), _) => {
+                    index.upward[lower.index()].push(upper.index());
+                }
+                _ => {}
+            }
         }
+        index
     }
-    written
 }
 
 /// 残した多重度の制約のうち定数の上限ごとの出どころ。`own` は宣言の自分の変数 (まとめた後の番号) である。
 fn bound_sources(
     residual: &[(Bound<Multiplicity>, Bound<Multiplicity>)],
     own: &[KindVar],
-    written: &HashMap<usize, Span>,
+    sources: &SourceIndex,
 ) -> Vec<(KindVar, BoundSource)> {
     residual
         .iter()
         .filter_map(|&constraint| match constraint {
-            (Bound::Var(k), Bound::Const(_)) => {
-                let source = match written.get(&own[k.index()].index()) {
+            (Bound::Var(k), Bound::Const(upper)) => {
+                let var = own[k.index()].index();
+                let source = match sources.written.get(&var) {
                     Some(&span) => BoundSource::Written(span),
-                    None => BoundSource::Unknown,
+                    None => through_source(sources, var, upper),
                 };
                 Some((k, source))
             }
             _ => None,
         })
         .collect()
+}
+
+/// 推論した上限 `σ_var ≤ upper` の出どころ。`var` から上向きに幅優先でたどり、届いた変数に参照から複写した同じ
+/// 上限があれば、その参照をいちばん近い呼び出し先として返す。たどるのは1段だけで、呼び出し先の中の出どころは追わない
+/// (docs/implementation/diagnostics.md の E2020)。ほかの変数の `Provenance::Bound` は見ない。ほかのメンバーの
+/// 書いた上限は `equate` を通してだけ届き、そこで複写した `RowBound` が候補になるからである。`equate` は両向きの辺を
+/// 作るので、訪ねた変数を覚えて輪で止める。
+fn through_source(sources: &SourceIndex, var: usize, upper: Multiplicity) -> BoundSource {
+    let mut visited = HashSet::from([var]);
+    let mut queue = VecDeque::from([var]);
+    // 候補が複数あれば、位置と名前のいちばん小さいものにして、結果を制約の並びに依らないようにする
+    let key = |span: &Span, name: &str| {
+        (
+            span.file,
+            span.range.start(),
+            span.range.end(),
+            name.to_string(),
+        )
+    };
+    let mut best: Option<(Span, &str)> = None;
+    while let Some(current) = queue.pop_front() {
+        for (bound, span, name) in &sources.copied[current] {
+            if *bound == upper
+                && best.is_none_or(|(best_span, best_name)| {
+                    key(span, name) < key(&best_span, best_name)
+                })
+            {
+                best = Some((*span, name));
+            }
+        }
+        for &next in &sources.upward[current] {
+            if visited.insert(next) {
+                queue.push_back(next);
+            }
+        }
+    }
+    match best {
+        Some((span, name)) => BoundSource::Through {
+            name: name.to_string(),
+            span,
+        },
+        None => BoundSource::Unknown,
+    }
 }
 
 /// 由来を付け忘れた違反を、release ビルドで報告するときの由来。
@@ -390,6 +461,18 @@ impl Merged {
                         .iter()
                         .find(|(var, _)| *var == v)
                         .map_or(BoundSource::Unknown, |(_, source)| source.clone());
+                    // 残した上限はどれも、書いた上限か本体の中の参照の複写から来るので、出どころが見つかるはずである
+                    debug_assert!(
+                        !(source == BoundSource::Unknown
+                            && matches!(
+                                origin,
+                                Provenance::At(KindOrigin {
+                                    reason: KindReason::Passed(_),
+                                    ..
+                                })
+                            )),
+                        "a bound copied to a reference has no source"
+                    );
                     bound_origin(origin, source)
                 }
                 _ => origin.clone(),

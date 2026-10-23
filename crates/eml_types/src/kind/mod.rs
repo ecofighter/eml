@@ -61,7 +61,10 @@ pub(crate) struct Span {
 
 /// Kind の制約の由来。制約が破れたときに E3001〜E3005 が指す場所と理由である
 /// (docs/implementation/diagnostics.md の「線形性の診断」)。
-/// `reason` の中の位置は、どれも由来を作った本体の中にあり、`span` と同じファイルである。ただし `CarriedThrough` の `inner` は自分の `Span` を持ち、呼ばれた関数のファイルを指しうる。
+/// `reason` の中の位置は、どれも由来を作った本体の中にあり、`span` と同じファイルである。ただし、自分の `Span` を持つ
+/// 次の位置は例外である。`CarriedThrough` の `inner` は、呼ばれた関数のファイルを指しうる。`RowBound` の `source` は、
+/// 参照した宣言のシグネチャか本体、または同じ SCC の別のメンバーの本体を指し、別のファイルでもありうる。`RowBound` の
+/// `cause` は `span` と同じファイルだが、同じ SCC の別のメンバーの本体を指しうる。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct KindOrigin {
     pub span: Span,
@@ -221,9 +224,8 @@ pub(crate) enum KindReason {
 pub(crate) enum BoundSource {
     /// シグネチャに書いた `never`。
     Written(Span),
-    /// 推論した上限で、本体の中で `name` に row を渡した位置から来た。
-    // 推論した上限の出どころを探す処理はまだないので、作る所がない
-    #[cfg_attr(not(test), expect(dead_code))]
+    /// 推論した上限で、`name` に row を渡した参照から来た。その参照は、上限を残した宣言 (参照された側) の本体か、同じ
+    /// SCC の別のメンバーの本体にある。報告する参照を含む本体にはない。
     Through { name: String, span: Span },
     /// 出どころを決めなかった。
     Unknown,

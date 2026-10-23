@@ -1238,7 +1238,14 @@ fn row_bound_exceeded(
                 format!("`{name}` bounds this row variable by `never`"),
             ));
         }
-        BoundSource::Through { .. } | BoundSource::Unknown => {}
+        BoundSource::Through { name: inner, span } => {
+            diagnostic = diagnostic.with_secondary(Label::new(
+                span.file,
+                span.range,
+                format!("the row is passed to `{inner}` here"),
+            ));
+        }
+        BoundSource::Unknown => {}
     }
     diagnostic.with_note(ROW_BOUND_NOTE)
 }
