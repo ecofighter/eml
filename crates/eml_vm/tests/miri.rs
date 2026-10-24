@@ -374,26 +374,62 @@ fn third(p.0: {t}) -> obj {{
     );
 }
 
-/// `par` のタスクの切り替え。`Task` と join の節点は切り替えをまたいでヒープの語を持ち、VM は検証していないコードから
-/// `share`、`transfer_back`、`Ctx::switch_task` を呼ぶ。2つの子は確保した値を返す。横取りと join の両方で切り替わる
-/// よう、seed の方針で流す。Miri の時間を抑えるため、`par.rs` の前置きは使わず、要る fork の関数だけを書く。子の
+/// `par` の fork と join とタスクの切り替え。VM は検証していないコードから `share`、`transfer_back`、
+/// `Ctx::switch_task` を呼び、`Task` と join の節点は切り替えをまたいでヒープの語を持つ。右の閉包は親も持つ組を
+/// 捕まえるので、fork はそれに共有の印を付ける。右の子は新しい組を確保して返し、join がそれを親の局所に戻す。`Fail`
+/// の evidence の下で fork するので、子の `evv` には鏡の fork evidence を作って印を付ける。横取りと join の両方で
+/// 切り替わるよう、seed の方針で流す。Miri の時間を抑えるため、`par.rs` の前置きは使わず、要る関数だけを書く。子の
 /// 中断は `par.rs` が確かめる。
 #[test]
 fn par_switches_between_tasks() {
     let text = "\
 layout (,) { (,)(tobj, tobj) }
 effect Prelude.Panic { never panicked(obj) -> never }
+effect Fail { never fail(int) -> never }
 fn main() -> unit {
-  let t.0: obj = par (,) #0(&spin_one, &spin_two)
-  let (a.1: tobj, b.2: tobj) = unbox t.0 (,)
-  let m.3: int = unbox a.1
-  let n.4: int = unbox b.2
+  let w.0: tobj = prim evv_get()
+  dup w.0
+  let ev.1: obj = prim ev_new[Fail]((), w.0)
+  dup ev.1
+  let w.2: tobj = prim evv_push(w.0, ev.1)
+  let u.3: unit = prim evv_set(w.2)
+  let a.4: obj = con (,) #0(#5, #6)
+  dup a.4
+  let g.5: tobj = closure swap(a.4)
+  let t.6: obj = par (,) #0(&spin_one, g.5)
+  let w.7: tobj = prim ev_evv(ev.1)
+  let u.8: unit = prim evv_set(w.7)
+  decref ev.1
+  let (x.9: tobj, p.10: tobj) = unbox t.6 (,)
+  dup x.9
+  dup p.10
+  decref t.6
+  let (c.11: tobj, d.12: tobj) = unbox p.10 (,)
+  dup c.11
+  dup d.12
+  decref p.10
+  let (e.13: tobj, f.14: tobj) = unbox a.4 (,)
+  dup e.13
+  decref a.4
+  let u.15: unit = call show(x.9)
+  let u.16: unit = call show(c.11)
+  let u.17: unit = call show(d.12)
+  tail call show(e.13)
+}
+fn swap(a.0: obj, p.1: unit) -> tobj {
+  let (x.2: tobj, y.3: tobj) = unbox a.0 (,)
+  dup x.2
+  dup y.3
+  decref a.0
+  let t.4: obj = con (,) #0(y.3, x.2)
+  return t.4
+}
+fn show(t.0: tobj) -> unit {
+  let n.1: int = unbox t.0
   decref t.0
-  let s.5: obj = extern \"Prelude.Show Int.show\"(m.3)
-  let u.6: unit = extern Prelude.println(s.5)
-  let s.7: obj = extern \"Prelude.Show Int.show\"(n.4)
-  let u.8: unit = extern Prelude.println(s.7)
-  return u.8
+  let s.2: obj = extern \"Prelude.Show Int.show\"(n.1)
+  let u.3: unit = extern Prelude.println(s.2)
+  return u.3
 }
 clause Prelude.Panic.panicked fn fork$Prelude.Panic.panicked(ev.0: obj, a.1: obj) -> obj poly {
   let u.2: unit = prim child_abort(ev.0, &reperform$Prelude.Panic.panicked, a.1)
@@ -404,6 +440,20 @@ clause Prelude.Panic.panicked fn fork$Prelude.Panic.panicked(ev.0: obj, a.1: obj
 fn reperform$Prelude.Panic.panicked(t.0: obj poly) -> tobj poly {
   let r.1: tobj poly = extern Prelude.panic(t.0)
   return r.1
+}
+clause Fail.fail fn fork$Fail.fail(ev.0: obj, a.1: int) -> obj poly {
+  let a.4: tobj = box a.1
+  let u.2: unit = prim child_abort(ev.0, &reperform$Fail.fail, a.4)
+  decref ev.0
+  let d.3: obj poly = prim dummy()
+  return d.3
+}
+fn reperform$Fail.fail(t.0: tobj) -> tobj poly {
+  let ev.1: obj = prim ev_lookup[Fail]()
+  let c.2: tobj = prim ev_clause[Fail.fail](ev.1)
+  let t.4: int = unbox t.0
+  decref t.0
+  tail clause Fail.fail c.2(ev.1, t.4)
 }
 fn spin(n.0: int) -> unit {
   switch n.0 { 0 -> b1, _ -> b2 }
@@ -419,13 +469,8 @@ fn spin_one(p.0: unit) -> tobj {
   let n.2: tobj = box 1
   return n.2
 }
-fn spin_two(p.0: unit) -> tobj {
-  let u.1: unit = call spin(8)
-  let n.2: tobj = box 2
-  return n.2
-}
 ";
     let program = eml_lir::parse(text).unwrap_or_else(|error| panic!("{error}"));
     eml_lir::verify(&program).unwrap_or_else(|error| panic!("{error}"));
-    assert_eq!(run_program(&program, Sched::Seeded(1)), "1\n2\n");
+    assert_eq!(run_program(&program, Sched::Seeded(1)), "1\n6\n5\n5\n");
 }

@@ -740,6 +740,38 @@ fn writer(a.0: obj lin, p.1: unit) -> tobj lin {
     assert_eq!(out, "5\n9\n");
 }
 
+/// 右の閉包が捕まえた `lin` でない組は親も持つので (rc 2)、fork はそれに共有の印を付けて、所有を移さない。右の子は
+/// 組を読んで新しい組を返し、親は join の後で同じ組を読んで手放す。印付けを外すと、検査モードは子の読み込みを
+/// `WrongOwner` で断る。共有にした組の rc を親と子が別々に減らしても、漏れも誤りもない。
+#[test]
+fn a_captured_value_the_parent_keeps_is_marked_and_shared() {
+    let (out, result) = run_par(
+        "\
+fn main() -> unit {
+  let a.0: obj = con (,) #0(#5, #6)
+  dup a.0
+  let g.1: tobj = closure swap(a.0)
+  let t.2: obj = par (,) #0(&one, g.1)
+  let (x.3: tobj, p.4: tobj) = unbox t.2 (,)
+  dup p.4
+  decref t.2
+  let u.5: unit = call show_pair(p.4)
+  tail call show_pair(a.0)
+}
+fn swap(a.0: obj, p.1: unit) -> tobj {
+  let (x.2: tobj, y.3: tobj) = unbox a.0 (,)
+  dup x.2
+  dup y.3
+  decref a.0
+  let t.4: obj = con (,) #0(y.3, x.2)
+  return t.4
+}
+",
+    );
+    assert!(result.is_ok(), "{result:?}");
+    assert_eq!(out, "6\n5\n5\n6\n");
+}
+
 /// 右の子が返した `lin` の値は、移し戻しで親の局所の物体になるので、親が手放せる。
 #[test]
 fn a_lin_result_moves_back_to_the_parent() {

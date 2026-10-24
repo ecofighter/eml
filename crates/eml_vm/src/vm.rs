@@ -1051,7 +1051,8 @@ fn child_done<R: Exec>(
     let rest = unsafe { ctx.switch_task(parent_evv, task.worker, task.depth_offset) };
     unsafe { ctx.heap_mut().decref(rest) }?;
     if right_done {
-        complete_join::<R>(code, ctx, task, sched, j)
+        complete_join::<R>(code, ctx, task, sched, j)?;
+        safepoint::<R>(code, ctx, task, sched)
     } else {
         switch_away::<R>(code, ctx, task, sched, Some(TaskState::Waiting(j)))
     }
@@ -1067,7 +1068,8 @@ fn wake_parent<P: Policy>(sched: &mut Scheduler<P>, j: JoinId) {
     }
 }
 
-/// 方針が選ぶ次のタスクに切り替える。`keep` が `None` なら、今のタスクは終わったので捨てる。
+/// 方針が選ぶ次のタスクに切り替える。`keep` が `None` なら、今のタスクは終わったので捨てる。次のタスクが join を
+/// 完了したら、`par` の後の安全点に進む。
 fn switch_away<R: Exec>(
     code: &CodeBase<R::M>,
     ctx: &mut Ctx<R::M>,
@@ -1079,12 +1081,17 @@ fn switch_away<R: Exec>(
         .policy
         .pick(&mut sched.ready)
         .ok_or(VmFault::Internal("no task is ready to run"))?;
-    resume::<R>(code, ctx, task, sched, next, keep)
+    if resume::<R>(code, ctx, task, sched, next, keep)? {
+        safepoint::<R>(code, ctx, task, sched)?;
+    }
+    Ok(())
 }
 
 /// タスク `next` に切り替える。`evv` と worker は `Ctx::switch_task` の1回で替え、RC に触れない
 /// (docs/spec/object-model.md の「タスクの切り替え」)。まだ始まっていない右の子は、その ID に替えた後で閉包を呼ぶ。
-/// 閉包を手放すと、子の ID の物体を解放しうるためである。待っていた親は join を完了する。
+/// 閉包を手放すと、子の ID の物体を解放しうるためである。待っていた親は join を完了し、そのときは `true` を返す。
+/// `par` の後の安全点は呼ぶ側が行う。ここで安全点に進むと、横取りが `preempt` と `resume` を Rust の再帰で重ねる
+/// ためである (docs/spec/vm.md の「並列化への備え」)。
 fn resume<R: Exec>(
     code: &CodeBase<R::M>,
     ctx: &mut Ctx<R::M>,
@@ -1092,7 +1099,7 @@ fn resume<R: Exec>(
     sched: &mut Scheduler<R::P>,
     next: TaskId,
     keep: Option<TaskState>,
-) -> Result<(), VmFault> {
+) -> Result<bool, VmFault> {
     let mut incoming = sched.tasks[next].take().ok_or(VmFault::Internal(
         "a task to resume is not in the scheduler",
     ))?;
@@ -1117,14 +1124,29 @@ fn resume<R: Exec>(
                 ret: CHILD_DONE,
                 dst: 0,
             };
-            apply::apply::<R>(code, ctx, task, g, target)
+            match apply::apply::<R>(code, ctx, task, g, target) {
+                Ok(()) => Ok(false),
+                // 始めたばかりの子はまだ命令を実行していないので、誤りには fork した `par` の命令の位置を付ける。
+                // 横取りされたタスクの位置を付けると、文言がスケジュールで変わる
+                Err(fault) if sched.failed.is_none() => {
+                    let at = sched.join(task.boundaries[0]).ret - 1;
+                    sched.failed = Some(code.error(Failure { fault, pc: at }, task));
+                    Err(CHILD_FAILED)
+                }
+                Err(fault) => Err(fault),
+            }
         }
-        TaskState::Waiting(j) => complete_join::<R>(code, ctx, task, sched, j),
-        TaskState::Ready | TaskState::Running => Ok(()),
+        TaskState::Waiting(j) => {
+            complete_join::<R>(code, ctx, task, sched, j)?;
+            Ok(true)
+        }
+        TaskState::Ready | TaskState::Running => Ok(false),
     }
 }
 
-/// 方針が安全点で横取りを求めた。走れるタスクがなければ、切り替えずに予算を詰め直す。
+/// 方針が安全点で横取りを求めた。走れるタスクがなければ、切り替えずに予算を詰め直す。切り替えた先が join を
+/// 完了したら、`par` の後の安全点をここで繰り返す。Rust の再帰を使わないためである
+/// (docs/spec/vm.md の「並列化への備え」)。
 #[cold]
 #[inline(never)]
 fn preempt<R: Exec>(
@@ -1133,19 +1155,27 @@ fn preempt<R: Exec>(
     task: &mut Task,
     sched: &mut Scheduler<R::P>,
 ) -> Result<(), VmFault> {
-    let next = sched.policy.pick(&mut sched.ready);
-    sched.policy.reload();
-    let Some(next) = next else {
-        return Ok(());
-    };
-    let current = sched.current;
-    sched.policy.wake(&mut sched.ready, current);
-    sched.count_preemption();
-    resume::<R>(code, ctx, task, sched, next, Some(TaskState::Ready))
+    loop {
+        let next = sched.policy.pick(&mut sched.ready);
+        sched.policy.reload();
+        let Some(next) = next else {
+            return Ok(());
+        };
+        let current = sched.current;
+        sched.policy.wake(&mut sched.ready, current);
+        sched.count_preemption();
+        if !resume::<R>(code, ctx, task, sched, next, Some(TaskState::Ready))? {
+            return Ok(());
+        }
+        ctx.poll(task.stack_depth())?;
+        if !(sched.policy.tick() && ctx.yielding() == 0) {
+            return Ok(());
+        }
+    }
 }
 
 /// 両方の子が終わった join を、親の文脈と ID で完了する。誤りには `par` の命令の位置を付けるので、どのスケジュールで
-/// 親が join に着いても同じ文言になる。
+/// 親が join に着いても同じ文言になる。`par` の後の安全点は呼ぶ側が行う。
 fn complete_join<R: Exec>(
     code: &CodeBase<R::M>,
     ctx: &mut Ctx<R::M>,
@@ -1207,7 +1237,7 @@ fn join_outcomes<R: Exec>(
                 heap.set_field(pair, 1, r)?;
             }
             task.set(join.dst, pair);
-            return safepoint::<R>(code, ctx, task, sched);
+            return Ok(());
         }
         (Outcome::Error(_), _) | (_, Outcome::Error(_)) => {
             return Err(VmFault::Internal(
@@ -1255,8 +1285,7 @@ fn join_outcomes<R: Exec>(
         ret: join.ret,
         dst: join.dst,
     };
-    apply::apply::<R>(code, ctx, task, reperform, target)?;
-    safepoint::<R>(code, ctx, task, sched)
+    apply::apply::<R>(code, ctx, task, reperform, target)
 }
 
 /// `prim child_abort(ev, f, t)`。fork evidence `ev` からエフェクトと深さを読み、子の境目まで巻き戻す。`ev` は借りる。
@@ -1353,21 +1382,23 @@ fn stops_the_run(error: &RuntimeError) -> bool {
     )
 }
 
-/// 親が誤りで止まった join の右の子を、その子孫ごと表と列から外す。持つ語は触れずに捨てる。
+/// 親が誤りで止まった join の右の子を、その子孫ごと表と列から外す。持つ語は触れずに捨てる。子孫は作業の列でたどり、
+/// Rust の再帰を使わない (docs/spec/vm.md の「並列化への備え」)。
 fn cancel<P: Policy>(sched: &mut Scheduler<P>, j: JoinId) {
-    let join = sched.take_join(j);
-    if join.right_outcome.is_some() {
-        return;
-    }
-    let right = join.right;
-    sched.ready.retain(|&id| id != right);
-    if let Some(task) = sched.tasks[right].take() {
-        sched.free_task(right);
-        for &inner in &task.boundaries[1..] {
-            cancel(sched, inner);
+    let mut pending = vec![j];
+    while let Some(j) = pending.pop() {
+        let join = sched.take_join(j);
+        if join.right_outcome.is_some() {
+            continue;
         }
-        if let TaskState::Waiting(waited) = task.state {
-            cancel(sched, waited);
+        let right = join.right;
+        sched.ready.retain(|&id| id != right);
+        if let Some(task) = sched.tasks[right].take() {
+            sched.free_task(right);
+            pending.extend_from_slice(&task.boundaries[1..]);
+            if let TaskState::Waiting(waited) = task.state {
+                pending.push(waited);
+            }
         }
     }
 }
