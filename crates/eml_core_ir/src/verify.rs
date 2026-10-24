@@ -679,10 +679,7 @@ impl<'a> Checker<'a> {
         let function = self.function;
         let live_in = self.live_in.get_or_init(|| liveness::live_in(function));
         let block = &function.blocks[self.at.block as usize];
-        let mut live = liveness::live_after_term(function, &block.term, live_in);
-        block
-            .term
-            .for_each_atom(|atom| liveness::insert_var(&mut live, atom));
+        let mut live = liveness::live_before_term(function, block, live_in);
         let first = (self.at.index + 1) as usize;
         for stmt in block.stmts[first..].iter().rev() {
             liveness::step_back(stmt, &mut live);

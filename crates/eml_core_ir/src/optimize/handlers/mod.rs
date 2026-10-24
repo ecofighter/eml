@@ -21,9 +21,9 @@ use std::collections::{BTreeSet, HashMap};
 
 use super::blocks;
 use super::known::{Callee, Wrapper, known_closures, wrapper};
+use super::recompute_yields;
 use super::specialize::limited;
-use super::{kept_marks, recompute_yields};
-use crate::liveness::{insert_var, live_after_term, step_back};
+use crate::liveness::{join_live, live_before_term, step_back};
 use crate::tail::tail_position_call;
 use crate::{Call, CoreFn, Program, Rhs, Stmt, Term};
 use eml_lir::{Atom, BlockId, FnIdx, Mark, OperationInfo, Repr, VarId, VarInfo, push_var};
@@ -240,8 +240,7 @@ pub(crate) fn handlers(program: &mut Program, translated: &mut Vec<bool>) -> Vec
             .collect();
         translated.extend(inherited);
         debug_assert_eq!(translated.len(), program.functions.len());
-        let keep = kept_marks(program);
-        recompute_yields(program, &keep);
+        recompute_yields(program);
     }
     table.families
 }
@@ -1229,29 +1228,12 @@ struct Rewrite {
 impl Rewrite {
     /// ブロックの終端の前で生きている変数。
     fn live_out(&self, block: BlockId) -> BTreeSet<VarId> {
-        let term = &self.code.block(block).term;
-        let mut live = live_after_term(&self.code, term, &self.live_in);
-        term.for_each_atom(|atom| insert_var(&mut live, atom));
-        live
+        live_before_term(&self.code, self.code.block(block), &self.live_in)
     }
 
     fn join_live(&self, join: BlockId) -> impl Iterator<Item = VarId> + '_ {
         join_live(&self.code, &self.live_in, join, self.state)
     }
-}
-
-/// 合流のブロック J の入口で生きている変数から、J の引数と状態を除いたもの。番号の昇順に並ぶ。
-fn join_live<'a>(
-    code: &'a CoreFn,
-    live_in: &'a [Vec<VarId>],
-    join: BlockId,
-    state: Option<VarId>,
-) -> impl Iterator<Item = VarId> + 'a {
-    let params = &code.block(join).params;
-    live_in[join.0 as usize]
-        .iter()
-        .copied()
-        .filter(move |var| !params.contains(var) && Some(*var) != state)
 }
 
 /// `perform` の地点で複製を終える。ブロックの `perform` から後ろを捨て、`released` を `drop` し、`closure` を作って

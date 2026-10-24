@@ -22,7 +22,7 @@ mod known_con;
 use std::collections::{HashMap, HashSet};
 
 use crate::tail::pure;
-use crate::{Call, CoreFn, Program, Rhs, Stmt};
+use crate::{CoreFn, FnRef, Program, Rhs, Stmt};
 use eml_lir::{Atom, FnIdx, Layout, Structs, VarId};
 
 use super::blocks;
@@ -400,39 +400,11 @@ fn graph(functions: &[CoreFn]) -> Graph {
 /// 関数のコードが参照する関数。`values` なら `closure` の関数と関数の値 `&f` も含める。
 fn references(function: &CoreFn, values: bool) -> Vec<usize> {
     let mut targets = Vec::new();
-    for block in &function.blocks {
-        for stmt in &block.stmts {
-            match stmt {
-                Stmt::Let {
-                    var: _,
-                    rhs:
-                        Rhs::Call {
-                            call: Call::Direct(target, _),
-                            mask: _,
-                        },
-                } => targets.push(target.0 as usize),
-                Stmt::Let {
-                    var: _,
-                    rhs: Rhs::MakeClosure(target, _),
-                } if values => targets.push(target.0 as usize),
-                _ => {}
-            }
-            if values {
-                stmt.for_each_atom(|atom| {
-                    if let Atom::Fn(target) = atom {
-                        targets.push(target.0 as usize);
-                    }
-                });
-            }
+    function.for_each_fn_ref(|target, kind| {
+        if values || kind == FnRef::Direct {
+            targets.push(target.0 as usize);
         }
-        if values {
-            block.term.for_each_atom(|atom| {
-                if let Atom::Fn(target) = atom {
-                    targets.push(target.0 as usize);
-                }
-            });
-        }
-    }
+    });
     targets.sort_unstable();
     targets.dedup();
     targets

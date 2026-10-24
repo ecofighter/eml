@@ -7,7 +7,7 @@ use std::collections::{BTreeSet, HashMap, HashSet};
 use std::mem;
 use std::ops::Range;
 
-use crate::liveness::{insert_var, live_after_term, live_in, step_back};
+use crate::liveness::{join_live, live_before_term, live_in, step_back};
 use crate::tail::tail_position_call;
 use crate::{Block, Call, CoreFn, Program, Rhs, Stmt, Term};
 use eml_lir::{Atom, BlockId, FnIdx, Mark, MaskItem, Prim, Repr, VarId, VarInfo, operation};
@@ -46,12 +46,14 @@ pub(crate) fn split(
     annotations: &Annotations,
     helpers: &mut Helpers,
 ) {
-    let source = program.function(function).clone();
-    let live_in = live_in(&source);
-    let points = yield_points(program, &source, &live_in, annotations);
+    // yield の地点のない関数は多いので、地点を見つけてから写す
+    let original = program.function(function);
+    let live_in = live_in(original);
+    let points = yield_points(program, original, &live_in, annotations);
     if points.is_empty() {
         return;
     }
+    let source = original.clone();
     let continuations = (0..points.len())
         .map(|n| reserve(program, &format!("{}$k{n}", source.name)))
         .collect();
@@ -182,8 +184,7 @@ fn yield_points(
 /// 1つのブロックの地点ごとに、続きの始めで生きている変数を決める。ブロックを後ろから1回だけたどる。地点ごとに
 /// ブロックの末尾からたどると、yield する呼び出しが並ぶブロックでは文の数の2乗の手間になるためである。
 fn fill_live(function: &CoreFn, block: &Block, live_in: &[Vec<VarId>], points: &mut [Point]) {
-    let mut live = live_after_term(function, &block.term, live_in);
-    block.term.for_each_atom(|atom| insert_var(&mut live, atom));
+    let mut live = live_before_term(function, block, live_in);
     let mut end = block.stmts.len();
     for point in points.iter_mut().rev() {
         for stmt in block.stmts[point.resume..end].iter().rev() {
@@ -271,12 +272,7 @@ impl<'a> Splitter<'a> {
 
     /// 合流のブロック J の入口で生きている変数から、J の引数を除いたもの。番号の順に並ぶ。
     fn join_live(&self, join: BlockId) -> Vec<VarId> {
-        let params = &self.source.block(join).params;
-        self.live_in[join.0 as usize]
-            .iter()
-            .copied()
-            .filter(|var| !params.contains(var))
-            .collect()
+        join_live(self.source, &self.live_in, join, None).collect()
     }
 
     fn join(&mut self, program: &mut Program, block: BlockId) -> FnIdx {
