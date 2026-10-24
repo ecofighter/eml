@@ -1,8 +1,6 @@
 //! スロットの割り当て (docs/spec/vm.md の「スロットの割り当て」)。文の単位の生存から干渉グラフを作り、入口の引数を
 //! スロット 0.. に固定してから、残りの変数を番号の順に、隣と違ういちばん小さい色で塗る。
 
-use std::collections::BTreeSet;
-
 use eml_lir::liveness::{live_after_term, live_in, step_back};
 use eml_lir::{Atom, LirFn, Stmt, Term, VarId};
 
@@ -23,13 +21,22 @@ pub(crate) fn allocate(function: &LirFn) -> Result<Slots, CompileError> {
         color[param.0 as usize] = Some(index);
     }
     let mut colors = function.params().len();
+    // 色ごとに、最後にその色を隣が使っていた変数の番号 + 1。変数ごとに集合を作らずに、隣の色を印で引く
+    let mut taken_by: Vec<usize> = Vec::new();
     for var in 0..function.vars.len() {
         if color[var].is_some() {
             continue;
         }
-        let taken: BTreeSet<usize> = graph[var].iter().filter_map(|&n| color[n]).collect();
+        for &n in &graph[var] {
+            if let Some(c) = color[n as usize] {
+                if taken_by.len() <= c {
+                    taken_by.resize(c + 1, 0);
+                }
+                taken_by[c] = var + 1;
+            }
+        }
         let free = (0..)
-            .find(|c| !taken.contains(c))
+            .find(|&c| taken_by.get(c) != Some(&(var + 1)))
             .expect("a free color exists");
         color[var] = Some(free);
         colors = colors.max(free + 1);
@@ -47,13 +54,13 @@ pub(crate) fn allocate(function: &LirFn) -> Result<Slots, CompileError> {
     })
 }
 
-/// 変数ごとの隣。
-fn interference(function: &LirFn) -> Vec<BTreeSet<usize>> {
-    let mut graph = vec![BTreeSet::new(); function.vars.len()];
+/// 変数ごとの隣。辺は文ごとに何度も足すので、並びに足してから最後に重複を除く。
+fn interference(function: &LirFn) -> Vec<Vec<u32>> {
+    let mut graph = vec![Vec::new(); function.vars.len()];
     let mut edge = |a: VarId, b: VarId| {
         if a != b {
-            graph[a.0 as usize].insert(b.0 as usize);
-            graph[b.0 as usize].insert(a.0 as usize);
+            graph[a.0 as usize].push(b.0);
+            graph[b.0 as usize].push(a.0);
         }
     };
     let live_in = live_in(function);
@@ -112,6 +119,10 @@ fn interference(function: &LirFn) -> Vec<BTreeSet<usize>> {
             }
             step_back(stmt, &mut live);
         }
+    }
+    for neighbors in &mut graph {
+        neighbors.sort_unstable();
+        neighbors.dedup();
     }
     graph
 }
