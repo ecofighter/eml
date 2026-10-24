@@ -388,7 +388,7 @@ HIR への変換では、名前解決に加えて、名前の重複と未定義�
 | `clap` | 4.6 (`derive`) | CLI の引数 |
 | `insta` | 1.49 | スナップショットテスト |
 | `la-arena` | 0.3 | HIR の ID とアリーナ、型検査の別テーブル (`ArenaMap`) |
-| `rustc-hash` | 2.1 | コンパイラの段階 (`eml_hir`、`eml_types`、`eml_core_ir`、`eml_lir`、`eml_vm`) のハッシュ表 (`FxHashMap`、`FxHashSet`)。鍵は処理系の中の ID、型、名前で、入力は利用者自身のプログラムなので、衝突を狙った入力への耐性より速さを選ぶ。表の順に出力が依存しないので、std の表から替えても出力は変わらない |
+| `rustc-hash` | 2.1 | コンパイラの段階 (`eml_hir`、`eml_types`、`eml_core_ir`、`eml_lir`、`eml_vm`) のハッシュ表 (`FxHashMap`、`FxHashSet`)。鍵は処理系の中の ID、型、名前で、入力は利用者自身のプログラムなので、衝突を狙った入力への耐性より速さを選ぶ。表の順に出力が依存しないので、std の表から替えても出力は変わらない。aHash、foldhash、rapidhash と比べると、x86_64 と aarch64 のどちらでも命令の数が最も少なく、CPU 時間を縮める候補もなかった ([計測の基準](benchmarks.md) の「コンパイラの段階のハッシュ関数」) |
 | `libc` | 0.2 | SIGINT のハンドラ (`sigaction`)、物理メモリの大きさ (`default_limits`) |
 | `windows-sys` | 0.61 | Windows のコンソールの handler (`SetConsoleCtrlHandler`、`TerminateProcess`)、物理メモリの大きさ (`GlobalMemoryStatusEx`) |
 | `rustyline` | 18.0 | `eml repl` の行の編集。既定の feature は使わず、先に打った入力を次の読みに渡す `buffer-redux` だけを入れる |
