@@ -12,7 +12,7 @@ use super::types::{
 };
 use super::{BodyOwner, ItemLowering, NameKind, PendingBody, path_name, unresolved};
 use crate::codes;
-use crate::def_map::{DefMap, Resolved};
+use crate::def_map::{DefMap, Resolved, item_id};
 use crate::hir::{
     ClassDef, ClassId, Constraint, Function, FunctionKind, Generics, ItemId, Method, Signature,
     TypeVarDecl, TypeVarId,
@@ -198,7 +198,7 @@ impl ItemLowering<'_> {
         pending: &mut Vec<PendingBody>,
     ) {
         for (k, item) in classes.iter().enumerate() {
-            let id = self.def_map.class_id(self.module, k);
+            let id = item_id(self.module, k);
             let node = item.ptr.to_node(self.root);
             let (var, _) = &item.var;
             let mut class_generics = Generics::default();
@@ -224,7 +224,7 @@ impl ItemLowering<'_> {
                 methods: Vec::new(),
             });
             debug_assert_eq!(ItemId::new(self.module, local), id);
-            for (j, method) in item.methods.iter().enumerate() {
+            for method in &item.methods {
                 let signature_item = method
                     .signature
                     .as_ref()
@@ -306,7 +306,6 @@ impl ItemLowering<'_> {
                         default: None,
                     }),
                 );
-                debug_assert_eq!(method_id, self.def_map.method_id(self.module, k, j));
                 if let Some((signature, equations)) = default {
                     let function = ItemId::new(
                         self.module,

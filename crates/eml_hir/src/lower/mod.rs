@@ -19,7 +19,9 @@ use eml_syntax::{AstPtr, SyntaxNode, SyntaxToken, ast};
 use la_arena::{Arena, ArenaMap, Idx, RawIdx};
 
 use crate::codes;
-use crate::def_map::{DefMap, NameRef, Resolved, Resolver, module_id, not_in_module, private_name};
+use crate::def_map::{
+    DefMap, NameRef, Resolved, Resolver, item_id, module_id, not_in_module, private_name,
+};
 use crate::hir::*;
 use crate::item_tree::{FunctionItem, InputItemKind, ItemTree};
 use crate::load::{LoadedModule, STD_ROOT};
@@ -323,7 +325,7 @@ impl<'a> ItemLowering<'a> {
                     kind,
                 }),
             );
-            debug_assert_eq!(id, self.def_map.function_id(self.module, k));
+            debug_assert_eq!(id, item_id(self.module, k));
         }
     }
 
@@ -385,13 +387,11 @@ fn lower_bodies(
         )
         .lower_equations(&equations)
     };
-    let functions = tree.functions.iter().enumerate().map(|(k, function)| {
-        (
-            def_map.function_id(module, k),
-            function.equations.as_slice(),
-            None,
-        )
-    });
+    let functions = tree
+        .functions
+        .iter()
+        .enumerate()
+        .map(|(k, function)| (item_id(module, k), function.equations.as_slice(), None));
     let pending_functions = pending.iter().filter_map(|body| match body.owner {
         BodyOwner::Function {
             id,
