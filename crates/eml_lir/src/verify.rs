@@ -23,7 +23,9 @@
 //! 検査)、`dup` と `decref` の対象が `unr` であることは所有の段で確かめる (V1)。段の分け方は
 //! docs/spec/lir.md の「Kind の印の検査」による。
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::BTreeMap;
+
+use rustc_hash::FxHashMap;
 
 use crate::check::{
     self, BlockShape, Context, Dominators, FnSummary, Site, Tables, TermShape, boxed_scalars,
@@ -373,7 +375,7 @@ type Owned = BTreeMap<VarId, u32>;
 /// 変数は1回だけ定義され、データは変わらないので、事実は道の上で消えない。合流するブロックでは、入るすべての道で
 /// 分かっているものだけが残る。reuse のパスと同じ求め方である (crates/eml_lir/src/reuse.rs)。フィールドのない
 /// 構築子は箱でなく即値で、手放すことがないので数えない。
-type Known = HashMap<VarId, Ctor>;
+type Known = FxHashMap<VarId, Ctor>;
 
 struct Checker<'a> {
     program: &'a Program,
@@ -385,10 +387,10 @@ struct Checker<'a> {
     live_in: std::cell::OnceCell<Vec<Vec<VarId>>>,
     /// まだ着いていないブロックの入口の所有。`switch` の行き先は1本の辺から、合流するブロックは最初の `jump` から
     /// 作る。
-    pending: HashMap<u32, Owned>,
+    pending: FxHashMap<u32, Owned>,
     /// 今の道の `Known` と、まだ着いていないブロックの入口の `Known`。`pending` と同じ辺で写す。
     known: Known,
-    pending_known: HashMap<u32, Known>,
+    pending_known: FxHashMap<u32, Known>,
     /// フィールドの持ち主と出どころ。持ち主は、分解した値が束縛の時点で所有を持っていればその値、なければその値の
     /// 持ち主である。変数は1回だけ定義されるので (R5)、経路ごとではなく関数に1つの表にする
     /// (docs/spec/lir.md の「verifier」)。
@@ -426,9 +428,9 @@ impl<'a> Checker<'a> {
             // 境界の検査は、box の挿入の後の段 (範囲の段と所有の段) だけで行う
             cx: Context::new(tables, &function.vars, level >= Level::Scopes, dominators),
             live_in: std::cell::OnceCell::new(),
-            pending: HashMap::new(),
-            known: Known::new(),
-            pending_known: HashMap::new(),
+            pending: FxHashMap::default(),
+            known: Known::default(),
+            pending_known: FxHashMap::default(),
             owners: vec![None; function.vars.len()],
             origins: vec![None; function.vars.len()],
             token_sources: vec![None; function.vars.len()],

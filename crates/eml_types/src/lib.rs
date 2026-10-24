@@ -17,14 +17,13 @@ mod ty;
 mod uniform;
 mod usage;
 
-use std::collections::HashMap;
-
 use eml_diagnostics::{Diagnostic, FileId, Label, SourceFiles, TextRange, TextSize};
 use eml_hir::{
     ConstructorId, EffectId, ExprId, Function, FunctionId, ItemMap, LocalId, PatId, Program,
     ValueItem, VarId,
 };
 use la_arena::ArenaMap;
+use rustc_hash::FxHashMap;
 
 use crate::kind::eval;
 use crate::kind::problem::KindScheme;
@@ -83,7 +82,7 @@ pub struct TypedProgram {
     /// 宣言と本体の型がすべて指す、プログラムに1つの型の表。
     pub types: TypeStore,
     /// シグネチャのある関数、クラスのメソッド、操作、コンストラクタの型。
-    pub decls: HashMap<ValueItem, DeclType>,
+    pub decls: FxHashMap<ValueItem, DeclType>,
     /// シグネチャと等式の両方がある関数だけを含む。
     pub bodies: ItemMap<Function, BodyTypes>,
     /// 単相化で一様にする型変数の位置。
@@ -242,7 +241,7 @@ pub struct BodyTypes {
     pub instantiations: ArenaMap<ExprId, Instantiation>,
     /// 呼び出しの矢印ごとの `mask` (docs/spec/types.md の「推論」)。キーは呼び出しの式と矢印の番号である。項目は
     /// エフェクトが rest に初めて現れた順に並ぶ。Core IR が、エフェクトの番号の順に並べ直して呼び出しに付ける。
-    pub masks: HashMap<(ExprId, usize), Vec<MaskItem>>,
+    pub masks: FxHashMap<(ExprId, usize), Vec<MaskItem>>,
     /// 射影 (`ExprKind::Field`) が指すフィールド。型検査が射影の時点の型から引いた結果である
     /// (docs/spec/types.md の「フィールドの解決」)。
     pub fields: ArenaMap<ExprId, FieldTarget>,
@@ -260,11 +259,11 @@ pub struct BodyTypes {
     /// ラムダの本体が動く row (ラムダで最後にたどった矢印の row) の分類。キーはラムダの式である。
     pub lambda_yields: ArenaMap<ExprId, RowYield>,
     /// 呼び出しの矢印の row の分類。キーは `masks` と同じく、呼び出しの式と矢印の番号である。
-    pub arrow_yields: HashMap<(ExprId, usize), RowYield>,
+    pub arrow_yields: FxHashMap<(ExprId, usize), RowYield>,
     /// 戻らない呼び出しの前で暗黙に手放す変数。キーは記録の対象の戻らない呼び出しの式、値はその経路のどこでも消費
     /// しない局所変数で、番号の順に並ぶ。型や HIR の誤りがある本体では記録しない
     /// (docs/spec/linearity.md の「線形性の検査パス」)。
-    pub implicit_drops: HashMap<ExprId, Vec<LocalId>>,
+    pub implicit_drops: FxHashMap<ExprId, Vec<LocalId>>,
     /// `var` の変数の型と分類。型は宣言の本体の中の型で、instance の型引数で写す前のものである
     /// (docs/spec/types.md の「`var` の変数」)。
     pub vars: ArenaMap<VarId, VarType>,

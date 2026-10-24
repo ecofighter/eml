@@ -1,5 +1,3 @@
-use std::collections::{HashMap, HashSet};
-
 use eml_diagnostics::{Diagnostic, FileId, Label, SourceFiles};
 use eml_hir::{
     Binding, ClassId, Constructor, ExprId, Function, FunctionId, FunctionKind, Generics,
@@ -7,6 +5,7 @@ use eml_hir::{
     TypeDefKind, TypeRef, TypeRefId, TypeRefKind, TypeVarId, ValueItem,
 };
 use la_arena::Arena;
+use rustc_hash::{FxHashMap, FxHashSet};
 
 use crate::context::Context;
 use crate::kind::entail::{Unentailed, unentailed};
@@ -108,7 +107,7 @@ pub(crate) struct PendingBody<'c> {
     /// `:type` の問い合わせの型の文字列。
     query: Option<String>,
     /// 戻らない呼び出しの前で暗黙に手放す変数 (`BodyTypes::implicit_drops`)。
-    implicit_drops: HashMap<ExprId, Vec<LocalId>>,
+    implicit_drops: FxHashMap<ExprId, Vec<LocalId>>,
 }
 
 impl PendingBody<'_> {
@@ -147,8 +146,8 @@ pub(crate) fn check_module(
     // 呼ばれる側の SCC から順に、検査、Kind の解決、型の書き出しをする。書き出す型に Kind の解を入れるため、
     // 表は SCC の解が出るまで持つ。診断の順は表示する側が決める (docs/spec/diagnostics.md の「診断の順」)
     let mut bodies = ItemMap::default();
-    let mut joins = HashMap::new();
-    let mut unreliable = HashSet::new();
+    let mut joins = FxHashMap::default();
+    let mut unreliable = FxHashSet::default();
     let mut violated = Vec::new();
     let mut inputs = ItemMap::default();
     let mut query = None;
@@ -749,7 +748,7 @@ fn declaration_schemes(
     program: &Program,
     context: &Context,
     signatures: &Signatures,
-) -> HashMap<ValueItem, KindScheme> {
+) -> FxHashMap<ValueItem, KindScheme> {
     let mut problems: Vec<(ValueItem, KindProblem)> = Vec::new();
     // extern の関数は本体を持たないので、部分適用のクロージャの Kind だけを宣言から出す
     // (docs/spec/types.md の「関数型」)
@@ -832,7 +831,7 @@ fn declaration_schemes(
         });
         problems.push((ValueItem::Constructor(id), problem));
     }
-    let mut schemes = HashMap::new();
+    let mut schemes = FxHashMap::default();
     for (decl, problem) in &problems {
         let solution = solve_scc(&[(*decl, problem)], &schemes);
         // 宣言の問題の制約はすべて宣言の由来 (`Provenance::Declaration`) で、それだけでは破れないので、報告する違反はない
@@ -889,8 +888,8 @@ fn check_method_kinds(
     context: &Context,
     signatures: &Signatures,
     bodies: &ItemMap<Function, BodyTypes>,
-    unreliable: &HashSet<FunctionId>,
-    schemes: &HashMap<ValueItem, KindScheme>,
+    unreliable: &FxHashSet<FunctionId>,
+    schemes: &FxHashMap<ValueItem, KindScheme>,
 ) -> Vec<Diagnostic> {
     let mut diagnostics = Vec::new();
     for (id, function) in program.functions() {
@@ -986,8 +985,8 @@ fn report_violations(
         )
     });
     origins.dedup();
-    let mut carried = HashSet::new();
-    let mut bounded = HashSet::new();
+    let mut carried = FxHashSet::default();
+    let mut bounded = FxHashSet::default();
     let mut out = Vec::new();
     for origin in origins {
         // 1つの呼び出しが上限を持つ row 変数を2つ以上破っても、E2020 は1件だけにする。並びの最初の由来の原因と出どころを
@@ -1015,8 +1014,8 @@ fn report_violations(
 #[allow(clippy::too_many_arguments)]
 fn typed_program(
     signatures: Signatures,
-    mut schemes: HashMap<ValueItem, KindScheme>,
-    mut joins: HashMap<FunctionId, Vec<Vec<u32>>>,
+    mut schemes: FxHashMap<ValueItem, KindScheme>,
+    mut joins: FxHashMap<FunctionId, Vec<Vec<u32>>>,
     bodies: ItemMap<Function, BodyTypes>,
     inputs: ItemMap<Function, InputType>,
     query: Option<String>,

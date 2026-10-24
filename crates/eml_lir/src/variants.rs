@@ -3,7 +3,7 @@
 //! 直接の呼び出しも版へ向ける。版の形は `f` のコードと、`f` から末尾でたどる関数のコードだけで決まる
 //! (docs/spec/lir.md の「関数の ABI」)。
 
-use std::collections::HashMap;
+use rustc_hash::FxHashMap;
 
 use crate::boxing::{conform, tail_position_call, uniform_repr};
 use crate::{Atom, Block, Call, FnIdx, LirFn, Program, Repr, Rhs, Stmt, Term, VarId};
@@ -67,8 +67,8 @@ pub(crate) fn make(program: &mut Program) {
     let mut maker = Maker {
         abis: program.functions.iter().map(Abi::of).collect(),
         tails,
-        copies: HashMap::new(),
-        variants: HashMap::new(),
+        copies: FxHashMap::default(),
+        variants: FxHashMap::default(),
         thin: vec![false; originals],
     };
     // 作った版も後ろに足されるので、関数の数が増えなくなるまで順に見る
@@ -87,9 +87,9 @@ struct Maker {
     /// 元の関数ごとの、ブロックの末尾の位置の呼び出し。
     tails: Vec<Vec<Tail>>,
     /// 元の関数ごとの `needs_copy` の答え。
-    copies: HashMap<FnIdx, bool>,
+    copies: FxHashMap<FnIdx, bool>,
     /// 元の関数から、その版。
-    variants: HashMap<FnIdx, FnIdx>,
+    variants: FxHashMap<FnIdx, FnIdx>,
     /// 関数ごとの、薄い形の版か。薄い形の `call f` は結果を `box` するために残すので、末尾の振り替えをしない。
     thin: Vec<bool>,
 }

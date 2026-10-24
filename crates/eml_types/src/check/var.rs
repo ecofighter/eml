@@ -4,7 +4,7 @@
 
 use eml_diagnostics::{Diagnostic, FileId, Label as DiagnosticLabel, TextRange};
 use eml_extern::ExternType;
-use std::collections::HashSet;
+use rustc_hash::FxHashSet;
 
 use eml_hir::{
     Body, EffectId, EffectKind, ExprId, ExprKind, FunctionId, IndexBase, Program, VarId,
@@ -277,7 +277,7 @@ fn outside_scope(
 }
 
 /// 取っておいた E2002 を出すか。足りなかった変数のどれかに E2019 が出なかったときに出す。
-fn releases(withheld: &[VarId], escaped: &HashSet<VarId>) -> bool {
+fn releases(withheld: &[VarId], escaped: &FxHashSet<VarId>) -> bool {
     withheld.iter().any(|var| !escaped.contains(var))
 }
 
@@ -317,7 +317,7 @@ pub(super) fn classify(
             table.set_kind_origin(previous);
         }
     }
-    let mut escaped = HashSet::new();
+    let mut escaped = FxHashSet::default();
     for (var, _) in body.vars.iter() {
         let Some(scope) = typing.vars.get(var).copied() else {
             continue;
@@ -436,11 +436,10 @@ fn escape(
 
 #[cfg(test)]
 mod tests {
-    use std::collections::HashSet;
-
     use eml_diagnostics::TextRange;
     use eml_hir::{EffectKind, FunctionId, ItemId, ModuleId, VarId};
     use la_arena::{Idx, RawIdx};
+    use rustc_hash::FxHashSet;
 
     use super::{outside_scope, releases};
 
@@ -493,10 +492,10 @@ mod tests {
 
     #[test]
     fn a_withheld_e2002_is_released_unless_every_var_got_e2019() {
-        let escaped: HashSet<VarId> = [var(0)].into_iter().collect();
+        let escaped: FxHashSet<VarId> = [var(0)].into_iter().collect();
         assert!(!releases(&[var(0)], &escaped));
         assert!(releases(&[var(1)], &escaped));
         assert!(releases(&[var(0), var(1)], &escaped));
-        assert!(releases(&[var(0)], &HashSet::new()));
+        assert!(releases(&[var(0)], &FxHashSet::default()));
     }
 }

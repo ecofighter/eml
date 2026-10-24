@@ -3,9 +3,11 @@
 //! 地点の後の続きを継続の関数 `f$kN` のクロージャにして κ に足す。`f$kN` の本体は地点の直後からの区間の写しで、
 //! 次の地点では `f$kq` を呼び、合流のブロック J への `jump` では合流のブロックの関数 `f$jJ` を呼んで止まる。
 
-use std::collections::{BTreeSet, HashMap, HashSet};
+use std::collections::BTreeSet;
 use std::mem;
 use std::ops::Range;
+
+use rustc_hash::{FxHashMap, FxHashSet};
 
 use crate::liveness::{join_live, live_before_term, live_in, step_back};
 use crate::tail::tail_position_call;
@@ -18,12 +20,12 @@ use super::{Helpers, captured_mark, direct, dummy, reserve, yield_switch};
 #[derive(Default)]
 pub(crate) struct Annotations {
     /// handle の本体の `apply`。yield したかは `prompt$` が見る。
-    pub(crate) not_yield_points: HashSet<(BlockId, usize)>,
+    pub(crate) not_yield_points: FxHashSet<(BlockId, usize)>,
     /// 直後に `evv_set(w0)` が続く `mask` の呼び出しと、その `mask` の項目。遅い道は κ を `mask$` で包み、続きは
     /// `evv_set(w0)` の後から始まる (docs/spec/core-ir.md の「`mask` の包み」)。
-    pub(crate) masked: HashMap<(BlockId, usize), Vec<MaskItem>>,
+    pub(crate) masked: FxHashMap<(BlockId, usize), Vec<MaskItem>>,
     /// `mask` の呼び出し。呼ぶ相手が `yields` でなくても地点にする。
-    pub(crate) forced: HashSet<(BlockId, usize)>,
+    pub(crate) forced: FxHashSet<(BlockId, usize)>,
 }
 
 /// yield の地点 `let x = <呼び出し>`。
@@ -70,7 +72,7 @@ pub(crate) fn split(
         points,
         by_block,
         continuations,
-        joins: HashMap::new(),
+        joins: FxHashMap::default(),
         pending: Vec::new(),
     };
 
@@ -223,7 +225,7 @@ struct Splitter<'a> {
     /// 地点ごとの `f$kN`。
     continuations: Vec<FnIdx>,
     /// 区間から届いた合流のブロックの `f$jJ`。
-    joins: HashMap<BlockId, FnIdx>,
+    joins: FxHashMap<BlockId, FnIdx>,
     /// 番号を取ったが、中身をまだ作っていない `f$jJ` の合流のブロック。
     pending: Vec<BlockId>,
 }
@@ -317,7 +319,7 @@ impl<'a> Splitter<'a> {
         params: Vec<VarId>,
         mode: Mode,
     ) -> Out<'a> {
-        let mut starts = HashMap::new();
+        let mut starts = FxHashMap::default();
         let mut next = 0;
         for segment in segments {
             starts.insert(segment.block, BlockId(next));
@@ -411,7 +413,7 @@ impl<'a> Splitter<'a> {
 struct Out<'a> {
     mode: Mode,
     /// 写す元のブロックごとの、最初の部分の新しい番号。
-    starts: HashMap<BlockId, BlockId>,
+    starts: FxHashMap<BlockId, BlockId>,
     /// 元の関数の変数の表。関数ごとに写さず、番号の前の部分として読む。
     source: &'a [VarInfo],
     /// 新しく足した変数。番号は `source` の後ろに続く。

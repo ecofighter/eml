@@ -1,11 +1,11 @@
 //! LIR (docs/spec/lir.md)。EP の後の Core IR から写す、エフェクトの命令を持たない層で、box、RC、末尾呼び出しを
 //! 明示する。VM とネイティブの共通の入力になる。
 
-use std::collections::HashMap;
 use std::fmt;
 
 use eml_extern::{Extern, Linearity};
 pub use eml_extern::{FloatBits, OpRet, Repr, StructId};
+use rustc_hash::FxHashMap;
 
 mod boxing;
 pub mod check;
@@ -665,7 +665,7 @@ pub struct StructShape {
 #[derive(Clone, Default)]
 pub struct Structs {
     shapes: Vec<StructShape>,
-    ids: HashMap<StructShape, StructId>,
+    ids: FxHashMap<StructShape, StructId>,
     /// 形ごとの葉 (`leaves`)。入れ子の形は外の形より先に登録するので、登録するときに求めておける。開くパスと
     /// translate が変数ごとに引くので、引くたびに並びを作らないためである。
     leaves: Vec<Vec<(Repr, Mark)>>,
@@ -773,7 +773,7 @@ impl PartialEq for Structs {
 
 impl Eq for Structs {}
 
-/// 番号から形を引く表は形の並びから決まるので、形の並びだけを書く。`HashMap` を書かないので、表示の順も決まる。
+/// 番号から形を引く表は形の並びから決まるので、形の並びだけを書く。`FxHashMap` を書かないので、表示の順も決まる。
 impl fmt::Debug for Structs {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_list().entries(&self.shapes).finish()

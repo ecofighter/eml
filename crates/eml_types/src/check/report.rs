@@ -1,5 +1,3 @@
-use std::collections::HashSet;
-
 use eml_diagnostics::{
     Diagnostic, FileId, Label, SourceFiles, TextEdit, TextRange, TextSize, count,
 };
@@ -7,6 +5,7 @@ use eml_hir::{
     Body, ConstructorId, EffectId, ExprId, ExprKind, FunctionKind, OperationId, PatId, Program,
     Res, RowRef, Signature, TypeRefKind,
 };
+use rustc_hash::FxHashSet;
 
 use crate::codes;
 use crate::kind::{
@@ -217,7 +216,7 @@ impl BodyCheck<'_, '_> {
             // 同じエフェクトのラベルが足りないことは、名前を1回書けば伝わる。有限の解のない呼び出しの輪では、固定点が
             // 上限まで足したラベルが並ぶので、名前を重ねると読みにくい (docs/spec/types.md の「呼び出しの包含を解く」)
             Err(UnifyError::MissingEffects(mut effects)) => {
-                let mut seen = HashSet::new();
+                let mut seen = FxHashSet::default();
                 effects.retain(|effect| seen.insert(*effect));
                 // 範囲の外で `var` のラベルが足りないのは、変数を使う関数が範囲の外へ出たためである。その誤りは同じ
                 // 本体がその変数の E2019 として報告するので、この E2002 は取っておき、E2019 が出なかったときにだけ出す

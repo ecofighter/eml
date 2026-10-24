@@ -42,9 +42,9 @@ eml/
     eml_hir/
     eml_types/
     eml_core_ir/
-    eml_lir/            # LIR とそのパス。eml_extern だけに依存する
+    eml_lir/            # LIR とそのパス。workspace の crate では eml_extern だけに依存する
     eml_rt/             # VM とネイティブで共有するランタイムの核。vstd だけに依存し、Verus で検証する
-    eml_vm/             # LIR のレジスタ型のバイトコード VM。eml_lir、eml_rt、eml_extern だけに依存する
+    eml_vm/             # LIR のレジスタ型のバイトコード VM。workspace の crate では eml_lir、eml_rt、eml_extern だけに依存する
     eml_cli/            # lib + バイナリ (バイナリ名 `eml`)
     eml_test_support/   # 開発専用。結合テストのパイプラインと診断の文字列
   std/                  # 標準ライブラリ (Prelude.em、Fs.em、List.em など)。eml_hir がバイナリに埋め込む
@@ -84,7 +84,7 @@ eml_extern       extern の表 (型、エフェクト、関数)。依存を持�
 ```
 
 - 段階の連なりに `eml_rt` は入らず、`eml_vm` だけが依存する。`eml_rt` は workspace のほかの crate に依存しない
-- `eml_lir` は `eml_extern` だけに依存する葉の crate である。`eml_core_ir` (LIR への変換とパスの順番のため)、`eml_vm`、`eml_cli` が依存する。`eml_vm` が読む IR は `eml_lir` だけなので、フロントエンドなしにビルドできる。2つの IR が共有する型 (`Atom`、`VarInfo`、`Layout`、`Prim`、`EffectInfo` など) と定数、テキスト形式と verifier の共通の部品も `eml_lir` に置き、`eml_core_ir` は再公開しない。使う側は `eml_lir` から読む。`Repr` も `eml_lir` が再公開するものを使う
+- `eml_lir` は、workspace の crate では `eml_extern` だけに依存する葉の crate である。`eml_core_ir` (LIR への変換とパスの順番のため)、`eml_vm`、`eml_cli` が依存する。`eml_vm` が読む IR は `eml_lir` だけなので、フロントエンドなしにビルドできる。2つの IR が共有する型 (`Atom`、`VarInfo`、`Layout`、`Prim`、`EffectInfo` など) と定数、テキスト形式と verifier の共通の部品も `eml_lir` に置き、`eml_core_ir` は再公開しない。使う側は `eml_lir` から読む。`Repr` も `eml_lir` が再公開するものを使う
 - `eml_diagnostics` は、診断を出す crate のすべてから使う。`eml_core_ir`、`eml_lir`、`eml_vm`、`eml_rt` が診断を出さず、`eml_extern` は何にも依存しない。`eml_core_ir` だけは、extern の呼び出しの位置を行と列にするために `SourceFiles` を使うので依存する。残りの4つは依存しない
 - `eml_extern` は表だけを持つ。`eml_hir`、`eml_types`、`eml_core_ir`、`eml_lir`、`eml_vm` が引く。`eml_extern` を一番下に置くのは、どの段階も実装を表の行で引くようにして、名前の文字列で実装を探す処理をなくすためである。表 (`Extern`、`ExternType`、`ExternEffect`) は `table!` が1つの並びから変種、`ALL`、静的な行を作り、`row` は行への参照を返す。VM のコード生成は `self as usize` を行の番号に使い、VM は `ALL` で引き戻すので、並びが1つなら2つの順は食い違わない
 - `eml_cli` は `eml_diagnostics` と `eml_hir` に常に依存し、下流の段階を feature で足す。`types` は `eml_types`、`core` は `eml_core_ir` と `eml_lir`、`run` は `eml_vm` と、端末の行の編集の `rustyline` と、unix では SIGINT のハンドラと物理メモリを読む `libc` を、Windows ではコンソールの handler を入れて物理メモリを読む `windows-sys` を足す。`eml_lir` はフロントエンドに依存しないので、段階の feature は増やさない。既定は `run` で、バイナリ `eml` は `run` がなければ作らない (`required-features`)。ワークスペースの `eml_cli` の依存は既定の feature を外してあり、依存する側が段階を選ぶ
@@ -388,6 +388,7 @@ HIR への変換では、名前解決に加えて、名前の重複と未定義�
 | `clap` | 4.6 (`derive`) | CLI の引数 |
 | `insta` | 1.49 | スナップショットテスト |
 | `la-arena` | 0.3 | HIR の ID とアリーナ、型検査の別テーブル (`ArenaMap`) |
+| `rustc-hash` | 2.1 | コンパイラの段階 (`eml_hir`、`eml_types`、`eml_core_ir`、`eml_lir`、`eml_vm`) のハッシュ表 (`FxHashMap`、`FxHashSet`)。鍵は処理系の中の ID、型、名前で、入力は利用者自身のプログラムなので、衝突を狙った入力への耐性より速さを選ぶ。表の順に出力が依存しないので、std の表から替えても出力は変わらない |
 | `libc` | 0.2 | SIGINT のハンドラ (`sigaction`)、物理メモリの大きさ (`default_limits`) |
 | `windows-sys` | 0.61 | Windows のコンソールの handler (`SetConsoleCtrlHandler`、`TerminateProcess`)、物理メモリの大きさ (`GlobalMemoryStatusEx`) |
 | `rustyline` | 18.0 | `eml repl` の行の編集。既定の feature は使わず、先に打った入力を次の読みに渡す `buffer-redux` だけを入れる |

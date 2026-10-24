@@ -2,13 +2,14 @@
 //! (docs/spec/core-ir.md の「一様な位置と制約付きの多相再帰」)。
 //! 型検査の後に、書き出した本体の表から計算する。translate は結果を読むだけである。
 
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::BTreeMap;
 
 use eml_diagnostics::{Diagnostic, FileId, Label, TextRange, TextSize};
 use eml_hir::{
     ClassId, Function, FunctionId, FunctionKind, InstanceId, InstanceOrigin, ItemMap, MethodId,
     MethodImpl, ModuleId, Program, Signature, TypeDefKind, TypeVarId, ValueItem,
 };
+use rustc_hash::{FxHashMap, FxHashSet};
 
 use crate::check::instance_head;
 use crate::resolve::{Resolution, resolve};
@@ -18,8 +19,8 @@ use crate::{BodyTypes, DeclType, codes};
 /// 多相再帰で大きくなる型変数の位置 (docs/spec/core-ir.md の「一様な位置と制約付きの多相再帰」)。
 #[derive(Debug, Default)]
 pub struct Uniform {
-    functions: HashSet<(FunctionId, usize)>,
-    instances: HashSet<(InstanceNode, usize)>,
+    functions: FxHashSet<(FunctionId, usize)>,
+    instances: FxHashSet<(InstanceNode, usize)>,
 }
 
 impl Uniform {
@@ -64,7 +65,7 @@ enum Node {
 pub(crate) fn uniform(
     program: &Program,
     types: &TypeStore,
-    decls: &HashMap<ValueItem, DeclType>,
+    decls: &FxHashMap<ValueItem, DeclType>,
     bodies: &ItemMap<Function, BodyTypes>,
 ) -> (Uniform, Vec<Diagnostic>) {
     let mut graph = Graph::new(program);
@@ -84,7 +85,7 @@ pub(crate) fn uniform(
         graph.body_edges(types, f, &names, body);
     }
     let component = strongly_connected(&graph.edges);
-    let mut growing = HashSet::new();
+    let mut growing = FxHashSet::default();
     for (from, out) in graph.edges.iter().enumerate() {
         for &(to, grow) in out {
             if grow && component[from] == component[to] {
@@ -128,7 +129,7 @@ pub(crate) fn uniform(
         found.sort_by_key(Constrained::order);
     }
     components.sort_by_key(|found| found[0].order());
-    let mut reported = HashSet::new();
+    let mut reported = FxHashSet::default();
     let mut diagnostics = Vec::new();
     for found in components {
         let mut found = found
@@ -148,7 +149,7 @@ pub(crate) fn uniform(
 struct Graph<'a> {
     program: &'a Program,
     nodes: Vec<Node>,
-    node_of: HashMap<Node, usize>,
+    node_of: FxHashMap<Node, usize>,
     /// 節点ごとの (行き先, 大きくなる辺か)。
     edges: Vec<Vec<(usize, bool)>>,
     /// 辺の 5. の、既定のメソッドへの辺の出どころ。(instance の節点, instance, 既定のメソッドの関数)。
@@ -198,7 +199,7 @@ impl<'a> Graph<'a> {
     /// 辺の 5.: instance の節点から、instance のメソッドの関数へ大きくならない辺を、省いたメソッドの既定のメソッドの
     /// クラスの型変数へ大きくなる辺を引く。導出した instance は、生成する関数が使わない既定のメソッドへ同じ辺を引き、
     /// 生成する関数が求めるフィールドの型の制約を、節点を本体とみなして 4. の規則で解く。
-    fn instance_edges(&mut self, types: &TypeStore, decls: &HashMap<ValueItem, DeclType>) {
+    fn instance_edges(&mut self, types: &TypeStore, decls: &FxHashMap<ValueItem, DeclType>) {
         let program = self.program;
         for (id, instance) in program.instances() {
             let node = InstanceNode::Declared(id);
@@ -253,7 +254,7 @@ impl<'a> Graph<'a> {
     fn field_edges(
         &mut self,
         types: &TypeStore,
-        decls: &HashMap<ValueItem, DeclType>,
+        decls: &FxHashMap<ValueItem, DeclType>,
         id: InstanceId,
     ) {
         let program = self.program;
@@ -282,7 +283,7 @@ impl<'a> Graph<'a> {
             owner: Owner::Instance(InstanceNode::Declared(id)),
             names: &names,
             types,
-            occurrences: HashMap::new(),
+            occurrences: FxHashMap::default(),
         };
         self.resolve_wanted(&mut flow, wanted);
     }
@@ -310,7 +311,7 @@ impl<'a> Graph<'a> {
     /// メソッド自身の型変数へ大きくならない辺を引く。
     fn method_edges(&mut self) {
         let program = self.program;
-        let mut instances: HashMap<ClassId, Vec<InstanceId>> = HashMap::new();
+        let mut instances: FxHashMap<ClassId, Vec<InstanceId>> = FxHashMap::default();
         for (id, instance) in program.instances() {
             instances.entry(instance.class).or_default().push(id);
         }
@@ -346,7 +347,7 @@ impl<'a> Graph<'a> {
             owner: Owner::Function(f),
             names,
             types,
-            occurrences: HashMap::new(),
+            occurrences: FxHashMap::default(),
         };
         let mut wanted = Wanted::default();
         for (_, instantiation) in body.instantiations.iter() {
@@ -588,14 +589,14 @@ struct Flow<'a> {
     owner: Owner,
     names: &'a [String],
     types: &'a TypeStore,
-    occurrences: HashMap<TypeId, Vec<bool>>,
+    occurrences: FxHashMap<TypeId, Vec<bool>>,
 }
 
 /// 辺の 4. の作業の列。同じクラスと型の組は1回だけ解く。
 #[derive(Default)]
 struct Wanted {
     work: Vec<(ClassId, TypeId)>,
-    seen: HashSet<(ClassId, TypeId)>,
+    seen: FxHashSet<(ClassId, TypeId)>,
 }
 
 impl Wanted {
@@ -707,7 +708,7 @@ fn vars_in(
     types: &TypeStore,
     ty: TypeId,
     names: &[String],
-    memo: &mut HashMap<TypeId, Vec<bool>>,
+    memo: &mut FxHashMap<TypeId, Vec<bool>>,
 ) -> Vec<bool> {
     if !types.contains_type_vars(ty) {
         return vec![false; names.len()];

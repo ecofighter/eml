@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use rustc_hash::FxHashSet;
 
 use super::unify::Unified;
 use super::*;
@@ -68,7 +68,7 @@ impl Table<'_> {
     pub fn closable_tail(
         &self,
         row: &Row,
-        keep: &HashSet<RowVar>,
+        keep: &FxHashSet<RowVar>,
         keep_rows: &[Row],
     ) -> Option<RowVar> {
         let Tail::Var(var) = self.resolve_row(row).tail else {
@@ -152,7 +152,7 @@ impl Table<'_> {
 
     /// Leijen の scoped labels の書き換えで単一化する (docs/spec/types.md)。
     pub fn unify_row(&mut self, a: &Row, b: &Row) -> Result<(), UnifyError> {
-        self.unify_row_in(a, b, &mut Unified::new())
+        self.unify_row_in(a, b, &mut Unified::default())
     }
 
     /// ラベルの型引数も型の中の部分なので、関数型を単一化している途中なら、その記録 `done` を使う。

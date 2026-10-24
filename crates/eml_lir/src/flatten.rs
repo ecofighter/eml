@@ -10,13 +10,12 @@
 //! パスはブロックと文のループだけで、IR の大きさに比例して再帰しない。再帰は入れ子の構造体の形の深さ (6 語の上限で
 //! 抑えられる) だけである。
 
-use std::collections::{HashMap, HashSet};
-
 use crate::{
     Atom, BlockId, Call, Case, CasePattern, Ctor, EffectInfo, FloatBits, Layout, LirFn, Mark,
     OpRet, Prim, Program, Repr, Rhs, Stmt, StructId, Structs, Term, VarId, VarInfo, operation,
     push_var,
 };
+use rustc_hash::{FxHashMap, FxHashSet};
 
 pub fn flatten(program: &mut Program) {
     // 呼び出しと `closure` の引数を開くには、呼ばれる関数の開く前の引数の Repr が要る。関数を1つずつ書き換えるので、
@@ -53,15 +52,15 @@ struct Flattener<'a> {
     /// 開く前の `ret`。
     ret: Repr,
     /// 構造体の変数の葉。`unit` の位置も `()` として持ち、形の葉 (`Structs::leaves`) と同じ並びにする。
-    leaves: HashMap<VarId, Vec<Atom>>,
+    leaves: FxHashMap<VarId, Vec<Atom>>,
     /// 消した変数の置き換え先。構造体の `unpack` のフィールドと構造体の `drop` の結果と、戻らない呼び出しの構造体の
     /// 束縛 (1語の位置の使いを受ける `obj` の変数) である。
-    subst: HashMap<VarId, Atom>,
+    subst: FxHashMap<VarId, Atom>,
     /// 箱の `tobj` のフィールドから `unbox` で取り出した葉から、そのフィールドの変数。葉を箱に戻すときは `box` せずに
     /// フィールドの語を渡す。
-    from_field: HashMap<VarId, VarId>,
+    from_field: FxHashMap<VarId, VarId>,
     /// 入れ子の構造体の箱を受けた `tobj` のフィールドの変数。それを開く構造体の `unbox` は、葉がどれも使われなければ消す。
-    nested_boxes: HashSet<VarId>,
+    nested_boxes: FxHashSet<VarId>,
     /// 定数で分けることになった `switch` をジャンプにしたか。
     folded: bool,
 }
@@ -82,10 +81,10 @@ impl<'a> Flattener<'a> {
             effects,
             signatures,
             ret,
-            leaves: HashMap::new(),
-            subst: HashMap::new(),
-            from_field: HashMap::new(),
-            nested_boxes: HashSet::new(),
+            leaves: FxHashMap::default(),
+            subst: FxHashMap::default(),
+            from_field: FxHashMap::default(),
+            nested_boxes: FxHashSet::default(),
             folded: false,
         }
     }

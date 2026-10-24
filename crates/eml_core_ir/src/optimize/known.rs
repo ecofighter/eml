@@ -1,11 +1,10 @@
 //! 既知の閉包への `apply` の書き換えと、translate の包む関数の命令への戻し
 //! (docs/spec/core-ir.md の「既知の閉包」)。
 
-use std::collections::{HashMap, HashSet};
-
 use super::specialize::{ClosureShape, Key, Specializer};
 use crate::{Call, CoreFn, Rhs, Stmt, Term};
 use eml_lir::{Atom, Ctor, FnIdx, Mark, MaskItem, Repr, VarId, VarInfo, push_var};
+use rustc_hash::{FxHashMap, FxHashSet};
 
 /// 呼ぶ相手と、すでに渡した先頭の引数が分かっている関数の値。
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -16,7 +15,7 @@ pub(crate) struct KnownClosure {
 
 /// 同じ関数の中で `closure` が束縛した変数。関数の値 `&f` は変数を通さずに使う所に現れるので、使う所で
 /// `KnownClosure { function: f, captures: vec![] }` とみなす (`resolve`)。
-pub(crate) fn known_closures(function: &CoreFn) -> HashMap<VarId, KnownClosure> {
+pub(crate) fn known_closures(function: &CoreFn) -> FxHashMap<VarId, KnownClosure> {
     function
         .blocks
         .iter()
@@ -153,22 +152,22 @@ enum Use {
 /// (docs/spec/core-ir.md の「鍵と名前」)。
 pub(crate) fn rewrite(
     function: &mut CoreFn,
-    opened: HashMap<VarId, KnownClosure>,
+    opened: FxHashMap<VarId, KnownClosure>,
     owner: Option<String>,
     cx: &mut Specializer,
 ) {
     let owned = match owner {
         Some(_) => handled_closures(function),
-        None => HashSet::new(),
+        None => FxHashSet::default(),
     };
     let mut rewriter = Rewriter {
         uses: uses(function),
         virtuals: opened.keys().copied().collect(),
         known: opened,
-        substitution: HashMap::new(),
+        substitution: FxHashMap::default(),
         owned,
         owner,
-        rewritten: HashSet::new(),
+        rewritten: FxHashSet::default(),
         vars: std::mem::take(&mut function.vars),
         cx,
     };
@@ -196,8 +195,8 @@ pub(crate) fn rewrite(
 }
 
 /// handle の節と `return` の節に使う、`closure` が束縛した変数。
-fn handled_closures(function: &CoreFn) -> HashSet<VarId> {
-    let mut owned = HashSet::new();
+fn handled_closures(function: &CoreFn) -> FxHashSet<VarId> {
+    let mut owned = FxHashSet::default();
     for stmt in function.blocks.iter().flat_map(|block| &block.stmts) {
         if let Stmt::Let {
             var: _,
@@ -218,17 +217,17 @@ fn handled_closures(function: &CoreFn) -> HashSet<VarId> {
 }
 
 struct Rewriter<'a> {
-    uses: HashMap<VarId, Vec<Use>>,
+    uses: FxHashMap<VarId, Vec<Use>>,
     /// 定義する文を持たない既知の閉包。値として要る所では、その場で `closure` を作り直す。
-    virtuals: HashSet<VarId>,
-    known: HashMap<VarId, KnownClosure>,
+    virtuals: FxHashSet<VarId>,
+    known: FxHashMap<VarId, KnownClosure>,
     /// 捕獲がなくなった閉包の変数を、複製の関数の値 `&f` に置き換える。定義は使う所を支配し、ブロックは番号の順に
     /// 見るので、使う所より先に入る。
-    substitution: HashMap<VarId, Atom>,
-    owned: HashSet<VarId>,
+    substitution: FxHashMap<VarId, Atom>,
+    owned: FxHashSet<VarId>,
     owner: Option<String>,
     /// 書き換えで使う所が減った閉包。最後に、使う所が残らなかったものの `closure` を消す。
-    rewritten: HashSet<VarId>,
+    rewritten: FxHashSet<VarId>,
     vars: Vec<VarInfo>,
     cx: &'a mut Specializer,
 }
@@ -465,7 +464,7 @@ impl Rewriter<'_> {
 /// 書き換えた閉包のうち、使う所が残らなかったものの `closure` を消す。残すと、`unr` でない閉包の捕獲を閉包と直接の
 /// 呼び出しの2か所で消費する IR になる (docs/spec/core-ir.md の「既知の閉包」)。定義は使う所を
 /// 支配し、辺は前へ向かうので、後ろから1回たどれば、消した `closure` だけが捕獲していた、書き換えた閉包も消える。
-fn drop_unused_closures(function: &mut CoreFn, rewritten: &HashSet<VarId>) {
+fn drop_unused_closures(function: &mut CoreFn, rewritten: &FxHashSet<VarId>) {
     if rewritten.is_empty() {
         return;
     }
@@ -507,8 +506,8 @@ fn drop_unused_closures(function: &mut CoreFn, rewritten: &HashSet<VarId>) {
 }
 
 /// 変数ごとの使う所。
-fn uses(function: &CoreFn) -> HashMap<VarId, Vec<Use>> {
-    let mut uses: HashMap<VarId, Vec<Use>> = HashMap::new();
+fn uses(function: &CoreFn) -> FxHashMap<VarId, Vec<Use>> {
+    let mut uses: FxHashMap<VarId, Vec<Use>> = FxHashMap::default();
     let mut add = |atom: Atom, use_: Use| {
         if let Atom::Var(var) = atom {
             uses.entry(var).or_default().push(use_);
@@ -669,7 +668,7 @@ fn is_perform(wrapper: Option<Wrapper>) -> bool {
 /// `let var = rhs` を置き換える文。書き換えないなら `None`。
 pub(crate) fn replace(
     vars: &mut Vec<VarInfo>,
-    known: &HashMap<VarId, KnownClosure>,
+    known: &FxHashMap<VarId, KnownClosure>,
     callees: &[Callee],
     var: VarId,
     rhs: &Rhs,

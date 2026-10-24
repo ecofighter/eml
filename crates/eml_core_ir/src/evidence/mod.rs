@@ -9,12 +9,11 @@ mod split;
 #[cfg(test)]
 mod tests;
 
-use std::collections::HashMap;
-
 use crate::{Call, CoreFn, Program, Rhs, Term};
 use eml_lir::{
     Atom, BlockId, Case, CasePattern, FloatBits, FnIdx, Mark, MaskItem, Prim, Repr, VarId, VarInfo,
 };
+use rustc_hash::FxHashMap;
 
 use split::split;
 
@@ -45,7 +44,7 @@ pub(crate) struct Helpers {
     prompt: Option<FnIdx>,
     resume: Option<FnIdx>,
     rewind: Option<FnIdx>,
-    masks: HashMap<Vec<MaskItem>, FnIdx>,
+    masks: FxHashMap<Vec<MaskItem>, FnIdx>,
 }
 
 impl Helpers {

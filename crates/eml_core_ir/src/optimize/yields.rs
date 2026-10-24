@@ -1,10 +1,9 @@
 //! 書き換えた後の `yields` の印の付け直し (docs/spec/core-ir.md の「`yields` の印」と
 //! docs/spec/core-ir.md の「`yields` の付け直し」)。
 
-use std::collections::{HashMap, HashSet};
-
 use crate::{Call, CoreFn, FnRef, Program, Rhs, Stmt};
 use eml_lir::{Atom, FnIdx};
+use rustc_hash::{FxHashMap, FxHashSet};
 
 use super::known::{known_closures, wrapper};
 
@@ -12,9 +11,9 @@ use super::known::{known_closures, wrapper};
 /// (docs/spec/core-ir.md の「`yields` の印」)。包む関数の形の関数は、値として使われる間だけ印を保つ。値はどの文脈
 /// からも呼ばれ、ABI は名前で決まるためである。handle を特殊化した後の `return` の節のように、直接呼ばれるだけに
 /// なった関数は、ほかの関数と同じく固定点で印を決める。
-fn kept_marks(program: &Program) -> HashSet<FnIdx> {
+fn kept_marks(program: &Program) -> FxHashSet<FnIdx> {
     let values = value_references(program);
-    let mut keep = HashSet::new();
+    let mut keep = FxHashSet::default();
     for (index, function) in program.functions.iter().enumerate() {
         let idx = FnIdx(index as u32);
         if wrapper(function).is_some() && values.contains(&idx) {
@@ -52,8 +51,8 @@ fn kept_marks(program: &Program) -> HashSet<FnIdx> {
 }
 
 /// 値として使われる関数。`closure f(..)` と `&f` の関数で、直接の呼び出しの呼ぶ相手は含めない。
-fn value_references(program: &Program) -> HashSet<FnIdx> {
-    let mut values = HashSet::new();
+fn value_references(program: &Program) -> FxHashSet<FnIdx> {
+    let mut values = FxHashSet::default();
     for function in &program.functions {
         function.for_each_fn_ref(|target, kind| {
             if kind == FnRef::Value {
@@ -72,7 +71,7 @@ pub(crate) fn recompute_yields(program: &mut Program) {
     let keep = kept_marks(program);
     let count = program.functions.len();
     let mut yields = vec![false; count];
-    let mut callers: HashMap<FnIdx, Vec<FnIdx>> = HashMap::new();
+    let mut callers: FxHashMap<FnIdx, Vec<FnIdx>> = FxHashMap::default();
     let mut pending = Vec::new();
     for (index, function) in program.functions.iter().enumerate() {
         let idx = FnIdx(index as u32);

@@ -1,7 +1,5 @@
 //! 変換の途中で関数を足していく表と、extern の関数、操作、コンストラクタ、継続を包む関数、入口の関数、エフェクトの表。
 
-use std::collections::{HashMap, HashSet};
-
 use eml_extern::{Extern, ExternType};
 use eml_hir::{
     ConstructorId, EffectDef, EffectId, EffectKind, FunctionId, Items, ModuleId, ModuleOrigin,
@@ -9,6 +7,7 @@ use eml_hir::{
     ValueItem,
 };
 use eml_types::{TypeId, TypeKind, TypeStore, TypedProgram, VarClass, VarType};
+use rustc_hash::{FxHashMap, FxHashSet};
 
 use crate::{Call, CoreFn, Rhs, Stmt, Term};
 use eml_lir::{
@@ -25,7 +24,7 @@ use super::types::{Composite, StructTypes, boxed_repr, declared_mark, mark, spli
 #[derive(Default)]
 pub(super) struct Interner {
     pub(super) values: Vec<String>,
-    ids: HashMap<String, u32>,
+    ids: FxHashMap<String, u32>,
 }
 
 impl Interner {
@@ -82,17 +81,17 @@ pub(super) struct ProgramBuilder {
     pub(super) files: Interner,
     /// IR が名指す data の型とタプルの配置 (`Program.layouts`)。最初に使った順に番号を振る。
     pub(super) layouts: Vec<Layout>,
-    layout_ids: HashMap<LayoutKey, LayoutId>,
+    layout_ids: FxHashMap<LayoutKey, LayoutId>,
     /// コンストラクタのスキームの型。data の型の配置のフィールドの Repr を決める。
-    constructor_types: HashMap<ConstructorId, TypeId>,
+    constructor_types: FxHashMap<ConstructorId, TypeId>,
     /// 型ごとの包む関数 (`$op$`、`$con$`、`$cont$`、`$cont$state`) を名前で引く表。名前は型引数を含むので、同じ名前なら
     /// 同じコードである。
-    wrappers: HashMap<String, FnIdx>,
+    wrappers: FxHashMap<String, FnIdx>,
     struct_types: StructTypes,
     /// IR が名指す構造体の形 (`Program.structs`)。
     pub(super) structs: Structs,
     /// 型ごとに決めた Repr。構造体の判定は型をたどるので、同じ型を何度も読む変換のために覚えておく。
-    reprs: HashMap<TypeId, Repr>,
+    reprs: FxHashMap<TypeId, Repr>,
 }
 
 impl ProgramBuilder {
@@ -103,7 +102,7 @@ impl ProgramBuilder {
             strings: Interner::default(),
             files: Interner::default(),
             layouts: Vec::new(),
-            layout_ids: HashMap::new(),
+            layout_ids: FxHashMap::default(),
             constructor_types: typed
                 .decls
                 .iter()
@@ -112,10 +111,10 @@ impl ProgramBuilder {
                     _ => None,
                 })
                 .collect(),
-            wrappers: HashMap::new(),
+            wrappers: FxHashMap::default(),
             struct_types,
             structs: Structs::default(),
-            reprs: HashMap::new(),
+            reprs: FxHashMap::default(),
         }
     }
 
@@ -679,7 +678,7 @@ pub(super) enum ShowTarget {
 /// `Option (a, Iter e a)` を通して自分を含む
 /// (docs/spec/core-ir.md の「構造体にする型」)。構造体にしうるのはコンストラクタが
 /// 1つの宣言だけなので、それらからだけたどる。プログラムに1回だけ求める。
-pub(super) fn recursive_types(hir: &HirProgram) -> HashSet<TypeDefId> {
+pub(super) fn recursive_types(hir: &HirProgram) -> FxHashSet<TypeDefId> {
     let mentions = |id: TypeDefId| {
         hir[id]
             .types
@@ -691,10 +690,10 @@ pub(super) fn recursive_types(hir: &HirProgram) -> HashSet<TypeDefId> {
             .collect::<Vec<_>>()
     };
     let single = |id: TypeDefId| matches!(&hir[id].kind, TypeDefKind::Data { constructors } if constructors.len() == 1);
-    let mut edges: HashMap<TypeDefId, Vec<TypeDefId>> = HashMap::new();
-    let mut recursive = HashSet::new();
+    let mut edges: FxHashMap<TypeDefId, Vec<TypeDefId>> = FxHashMap::default();
+    let mut recursive = FxHashSet::default();
     for (start, _) in hir.types().filter(|&(id, _)| single(id)) {
-        let mut seen = HashSet::new();
+        let mut seen = FxHashSet::default();
         let mut work = vec![start];
         while let Some(id) = work.pop() {
             for &next in edges.entry(id).or_insert_with(|| mentions(id)).iter() {

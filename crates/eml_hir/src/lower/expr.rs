@@ -1,9 +1,8 @@
-use std::collections::HashSet;
-
 use eml_diagnostics::{Diagnostic, FileId, Label, TextRange, count, was};
 use eml_extern::{ExternType, FloatBits};
 use eml_syntax::{SyntaxKind, SyntaxToken, ast};
 use la_arena::{Arena, ArenaMap, Idx, RawIdx};
+use rustc_hash::FxHashSet;
 
 use super::ops::non_associative;
 use super::types::{TypeLowering, Vars};
@@ -33,8 +32,8 @@ pub(super) struct BodyLowering<'a> {
     locals: Arena<Local>,
     pub(super) continuations: ArenaMap<LocalId, usize>,
     pub(super) omitted_fields: ArenaMap<PatId, (ConstructorId, u32)>,
-    use_lambdas: HashSet<ExprId>,
-    command_holes: HashSet<ExprId>,
+    use_lambdas: FxHashSet<ExprId>,
+    command_holes: FxHashSet<ExprId>,
     local_functions: ArenaMap<LocalId, ExprId>,
     defining: ArenaMap<ExprId, LocalId>,
     groups: Vec<Vec<LocalId>>,
@@ -98,8 +97,8 @@ impl<'a> BodyLowering<'a> {
             locals: Arena::new(),
             continuations: ArenaMap::default(),
             omitted_fields: ArenaMap::default(),
-            use_lambdas: HashSet::new(),
-            command_holes: HashSet::new(),
+            use_lambdas: FxHashSet::default(),
+            command_holes: FxHashSet::default(),
             local_functions: ArenaMap::default(),
             defining: ArenaMap::default(),
             groups: Vec::new(),

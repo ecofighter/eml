@@ -2,13 +2,14 @@
 //! `Unr` の制約が `Lin` と矛盾したときに見つかる。由来に使った位置と使わなかった経路を入れ、報告がそこを指す
 //! (docs/implementation/diagnostics.md の「線形性の診断」)。持ち越し規則は別のパス (`carry`) で検査する。
 
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::BTreeMap;
 
 use eml_diagnostics::{FileId, TextRange, TextSize};
 use eml_hir::{
     Body, ClauseSource, Closure, ConstructorId, ExprId, ExprKind, IndexBase, LocalFunction,
     LocalGroup, LocalId, PatId, PatKind, Program, Res, Segment, Stmt, VarId,
 };
+use rustc_hash::{FxHashMap, FxHashSet};
 
 use crate::check::BodyTyping;
 use crate::diverge::diverging_call;
@@ -24,10 +25,10 @@ use crate::{FieldTarget, VarClass};
 /// 制御フローの経路ごとの変数の使い方。
 #[derive(Debug, Default)]
 struct Uses {
-    locals: HashMap<LocalId, Use>,
+    locals: FxHashMap<LocalId, Use>,
     /// 配列の変数の取り出し。取り出しは、範囲の中にある線形な局所変数の消費と同じく経路ごとに数える
     /// (docs/spec/linearity.md の「配列の変数」)。
-    takes: HashMap<VarId, Use>,
+    takes: FxHashMap<VarId, Use>,
     /// すべての経路が戻らない呼び出しで終わるときの、経路ごとに評価の順で最初の呼び出し。戻る経路があれば空である。
     /// 後ろの呼び出しには実行が届かないので、手放すのは最初の呼び出しの前だけにする
     /// (docs/spec/linearity.md の「戻らない経路の検査」)。
@@ -116,8 +117,8 @@ pub(crate) fn constrain(
     table: &mut Table,
     types: &mut TypeStore,
     reliable: bool,
-) -> HashMap<ExprId, Vec<LocalId>> {
-    let mut by_name: HashMap<&str, Vec<LocalId>> = HashMap::new();
+) -> FxHashMap<ExprId, Vec<LocalId>> {
+    let mut by_name: FxHashMap<&str, Vec<LocalId>> = FxHashMap::default();
     for (local, data) in body.locals.iter() {
         by_name.entry(data.name.as_str()).or_default().push(local);
     }
@@ -125,7 +126,7 @@ pub(crate) fn constrain(
     for locals in by_name.values_mut() {
         locals.sort_by_key(|&local| body.locals[local].range.start());
     }
-    let mut lasts: HashMap<ExprId, Vec<VarId>> = HashMap::new();
+    let mut lasts: FxHashMap<ExprId, Vec<VarId>> = FxHashMap::default();
     for (_, expr) in body.exprs.iter() {
         if let ExprKind::Var {
             var,
@@ -146,13 +147,13 @@ pub(crate) fn constrain(
         types,
         reliable,
         by_name,
-        scopes: HashMap::new(),
-        omitted_states: HashSet::new(),
-        implicit_drops: HashMap::new(),
+        scopes: FxHashMap::default(),
+        omitted_states: FxHashSet::default(),
+        implicit_drops: FxHashMap::default(),
         lasts,
-        inside: HashMap::new(),
+        inside: FxHashMap::default(),
         depth: 0,
-        misused: HashSet::new(),
+        misused: FxHashSet::default(),
     };
     let uses = usage.expr(body.root);
     for &param in &body.params {
@@ -160,7 +161,7 @@ pub(crate) fn constrain(
     }
     // 再帰する組の関数は `Unr` で、組の本体の中の参照は捕まえた値でもない。持ち上げた関数の中に手放す値はないので
     // 記録から除く
-    let recursive: HashSet<LocalId> = body
+    let recursive: FxHashSet<LocalId> = body
         .local_groups
         .iter()
         .filter(|group| group.recursive)
@@ -190,22 +191,22 @@ struct Usage<'a, 'c> {
     /// 合成した `return` の節が捨てる状態の型を、診断に書くため。
     types: &'a mut TypeStore,
     /// 名前ごとの局所変数を、束縛の位置の順に並べたもの。消費漏れの fix と診断が、同じ名前の後の束縛を探すのに使う。
-    by_name: HashMap<&'a str, Vec<LocalId>>,
+    by_name: FxHashMap<&'a str, Vec<LocalId>>,
     /// 変数が見える範囲の式。同じ名前の後の束縛が、ある位置で前の変数を隠すかを決めるのに使う。変数を数え終える前に
     /// 記録するので、その変数のスコープの中の束縛は、数えるときにはすべてそろっている。
-    scopes: HashMap<LocalId, ExprId>,
+    scopes: FxHashMap<LocalId, ExprId>,
     /// HIR が合成した `return` の節で、状態を受ける `_` のパターン。捨てたのは書き手の `_` ではないので、報告を変える。
-    omitted_states: HashSet<PatId>,
+    omitted_states: FxHashSet<PatId>,
     /// 戻らない呼び出しの前で暗黙に手放す変数 (`BodyTypes::implicit_drops`)。数えられる本体でだけ記録する。
-    implicit_drops: HashMap<ExprId, Vec<LocalId>>,
+    implicit_drops: FxHashMap<ExprId, Vec<LocalId>>,
     /// 配列の変数のブロックの最後の式から、その変数への対応。同じブロックの変数は同じ式を指す。
-    lasts: HashMap<ExprId, Vec<VarId>>,
+    lasts: FxHashMap<ExprId, Vec<VarId>>,
     /// 今たどっている最後の式の変数と、その最後の式に入ったときの `depth`。
-    inside: HashMap<VarId, u32>,
+    inside: FxHashMap<VarId, u32>,
     /// 入れ子になった関数 (ラムダ、局所関数、handle の本体と節) の深さ。取り出しは最後の式と同じ深さでだけ許す。
     depth: u32,
     /// 取り出しを数えない使い方の E3008 を出した変数。取り出しの回数の誤りを重ねて出さない。
-    misused: HashSet<VarId>,
+    misused: FxHashSet<VarId>,
 }
 
 impl<'a> Usage<'a, '_> {
@@ -446,7 +447,7 @@ impl<'a> Usage<'a, '_> {
                 }
                 match self.inside.get(var) {
                     Some(&depth) if depth == self.depth => Uses {
-                        takes: HashMap::from([(*var, Use::once(at))]),
+                        takes: FxHashMap::from_iter([(*var, Use::once(at))]),
                         ..Uses::default()
                     },
                     Some(_) => self.misuse(*var, at, VarMisuse::TakenInFunction),

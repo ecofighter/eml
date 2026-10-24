@@ -1,10 +1,10 @@
 //! 実行するコードの表 `CodeBase` と関数表 `FnEntry` (docs/spec/vm.md の「`CodeBase` と `FnEntry`」)。
 
-use std::collections::HashMap;
 use std::sync::Arc;
 
 use eml_lir::{FloatBits, Loc, Repr};
 use eml_rt::{Control, Frozen, HeapError, MaskItem, Mode, Word};
+use rustc_hash::FxHashMap;
 
 use crate::error::{RuntimeError, SourceLocation};
 use crate::op::{BUILTINS, Op, Pc, Slot};
@@ -151,18 +151,18 @@ impl Tables {
 /// 名前と中身から `CodeBase` の番号を引く表 (docs/spec/vm.md の「追記」)。
 #[derive(Default)]
 pub(crate) struct Index {
-    pub(crate) functions: HashMap<String, u32>,
+    pub(crate) functions: FxHashMap<String, u32>,
     /// エフェクトの名前から実行時の番号。番号は読み込んだ順に振る。
-    pub(crate) effects: HashMap<String, u16>,
-    pub(crate) files: HashMap<String, u32>,
+    pub(crate) effects: FxHashMap<String, u16>,
+    pub(crate) files: FxHashMap<String, u32>,
     /// 文字列の中身から定数の番号。
-    pub(crate) strings: HashMap<String, u32>,
+    pub(crate) strings: FxHashMap<String, u32>,
     /// 生の整数の値から定数の番号。
-    pub(crate) raws: HashMap<i64, u32>,
+    pub(crate) raws: FxHashMap<i64, u32>,
     /// `tobj` の `Int` の値から定数の番号。
-    pub(crate) boxed: HashMap<i64, u32>,
+    pub(crate) boxed: FxHashMap<i64, u32>,
     /// `tobj` の `Float` のビット列から定数の番号。
-    pub(crate) boxed_floats: HashMap<FloatBits, u32>,
+    pub(crate) boxed_floats: FxHashMap<FloatBits, u32>,
     /// 不死の空の `MutArray` の定数の番号。最初に使うときに作る。
     pub(crate) empty_mut_array: Option<u32>,
 }

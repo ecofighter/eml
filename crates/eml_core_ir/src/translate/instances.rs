@@ -2,7 +2,7 @@
 //! row のビット) の組と生成する関数をすべて集め、番号の順を決める。変換はこの表を読むだけで、変換の途中で instance
 //! を足さない。
 
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::VecDeque;
 
 use eml_extern::Extern;
 use eml_hir::{
@@ -14,6 +14,7 @@ use eml_types::{
     TypeKind, TypeNames, TypeStore, TypedProgram, Update,
 };
 use la_arena::ArenaMap;
+use rustc_hash::{FxHashMap, FxHashSet};
 
 use super::display::{MAX_DEPTH, MAX_DISPLAYS};
 use super::names::{NameTable, args_hash};
@@ -225,10 +226,10 @@ struct Collector<'a> {
     typed: &'a TypedProgram,
     store: TypeStore,
     found: Vec<Found>,
-    keys: HashMap<(FunctionId, Vec<TypeId>, Vec<bool>), usize>,
-    generated_keys: HashMap<Generated, usize>,
+    keys: FxHashMap<(FunctionId, Vec<TypeId>, Vec<bool>), usize>,
+    generated_keys: FxHashMap<Generated, usize>,
     /// 表示関数を作った型から、`found` の位置。型の表は hash-consing なので、同じ型は同じ `TypeId` である。
-    display_keys: HashMap<TypeId, usize>,
+    display_keys: FxHashMap<TypeId, usize>,
     queue: VecDeque<usize>,
 }
 
@@ -812,9 +813,9 @@ pub(super) fn collect(hir: &HirProgram, typed: &TypedProgram, entry: FunctionId)
         typed,
         store: typed.types.clone(),
         found: Vec::new(),
-        keys: HashMap::new(),
-        generated_keys: HashMap::new(),
-        display_keys: HashMap::new(),
+        keys: FxHashMap::default(),
+        generated_keys: FxHashMap::default(),
+        display_keys: FxHashMap::default(),
         queue: VecDeque::new(),
     };
     // 入口は呼び出し側が選ぶので、型変数を持つ関数なら、どの型でも動く一様な instance にする
@@ -1035,7 +1036,7 @@ fn order(
     display: Option<FoundPart>,
     store: TypeStore,
 ) -> Instances {
-    let position: HashMap<FunctionId, usize> = hir
+    let position: FxHashMap<FunctionId, usize> = hir
         .functions()
         .enumerate()
         .map(|(position, (id, _))| (id, position))
@@ -1132,7 +1133,7 @@ fn order(
     // 名前は関数を照らす鍵なので、重なれば別の関数が同じコードとして扱われる (docs/spec/core-ir.md の「変換の規則」)
     debug_assert!(
         {
-            let mut seen = HashSet::new();
+            let mut seen = FxHashSet::default();
             list.iter()
                 .all(|instance| seen.insert(instance.name.as_str()))
         },

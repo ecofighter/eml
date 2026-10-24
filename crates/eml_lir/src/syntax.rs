@@ -5,10 +5,10 @@
 //! IR ごとに書く (docs/implementation/testing.md の「Core IR のテキストの形」)。
 
 use std::borrow::Cow;
-use std::collections::HashMap;
 use std::fmt::Write as _;
 
 use eml_extern::Extern;
+use rustc_hash::FxHashMap;
 
 use crate::{
     Atom, BlockId, Case, CasePattern, Ctor, EffectInfo, FloatBits, FnIdx, Immediates, Layout,
@@ -375,16 +375,16 @@ pub struct Reader<'t> {
     tokens: &'t [Token],
     pos: usize,
     layouts: Vec<Layout>,
-    layout_ids: HashMap<String, LayoutId>,
+    layout_ids: FxHashMap<String, LayoutId>,
     /// 読んだ構造体の形。同じ中身の形は読んだ所によらず1つの番号になる。
     structs: Structs,
     effects: Vec<EffectInfo>,
-    effect_ids: HashMap<String, u32>,
-    functions: HashMap<String, FnIdx>,
+    effect_ids: FxHashMap<String, u32>,
+    functions: FxHashMap<String, FnIdx>,
     strings: Vec<String>,
-    string_ids: HashMap<String, u32>,
+    string_ids: FxHashMap<String, u32>,
     files: Vec<String>,
-    file_ids: HashMap<String, u32>,
+    file_ids: FxHashMap<String, u32>,
 }
 
 impl<'t> Reader<'t> {
@@ -393,15 +393,15 @@ impl<'t> Reader<'t> {
             tokens,
             pos: 0,
             layouts: Vec::new(),
-            layout_ids: HashMap::new(),
+            layout_ids: FxHashMap::default(),
             structs: Structs::default(),
             effects: Vec::new(),
-            effect_ids: HashMap::new(),
-            functions: HashMap::new(),
+            effect_ids: FxHashMap::default(),
+            functions: FxHashMap::default(),
             strings: Vec::new(),
-            string_ids: HashMap::new(),
+            string_ids: FxHashMap::default(),
             files: Vec::new(),
-            file_ids: HashMap::new(),
+            file_ids: FxHashMap::default(),
         }
     }
 

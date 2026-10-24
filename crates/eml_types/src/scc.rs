@@ -1,14 +1,13 @@
 //! トップレベルの関数の呼び出しグラフの強連結成分 (docs/spec/types.md の「推論」)。Kind の制約は呼び出しを通じて
 //! 伝わるので、呼ばれる側の SCC から順に検査する。
 
-use std::collections::{HashMap, HashSet};
-
 use eml_hir::{ExprKind, FunctionId, Program, Res, ValueItem};
+use rustc_hash::{FxHashMap, FxHashSet};
 
 /// SCC を、呼ばれる側が先になる順に返す。
 pub(crate) fn components(program: &Program) -> Vec<Vec<FunctionId>> {
     let ids: Vec<FunctionId> = program.functions().map(|(id, _)| id).collect();
-    let position: HashMap<FunctionId, usize> =
+    let position: FxHashMap<FunctionId, usize> =
         ids.iter().enumerate().map(|(i, &id)| (id, i)).collect();
     let edges: Vec<Vec<usize>> = ids
         .iter()
@@ -32,7 +31,7 @@ fn callees(program: &Program, id: FunctionId) -> Vec<FunctionId> {
         return Vec::new();
     };
     let mut out = Vec::new();
-    let mut seen = HashSet::new();
+    let mut seen = FxHashSet::default();
     for (_, expr) in body.exprs.iter() {
         // `let` の束縛の型は、束縛を作った入力の関数を書き出して決まるので、その入力の関数を先に検査する
         // (docs/spec/types.md の「REPL の入力」)

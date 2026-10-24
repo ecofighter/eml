@@ -470,7 +470,7 @@ main () =
     let program = eml_test_support::core_until(&text, Pass::Optimize);
     let mut clauses = Vec::new();
     for function in &program.functions {
-        let closures: std::collections::HashMap<_, _> = function
+        let closures: rustc_hash::FxHashMap<_, _> = function
             .blocks
             .iter()
             .flat_map(|block| &block.stmts)
@@ -508,7 +508,7 @@ main () =
         }
     }
     assert_eq!(clauses.len(), 4, "{}", pretty(&program));
-    let distinct: std::collections::HashSet<_> = clauses.iter().collect();
+    let distinct: rustc_hash::FxHashSet<_> = clauses.iter().collect();
     assert_eq!(distinct.len(), 4, "{}", pretty(&program));
     eml_test_support::core_until(&text, Pass::Evidence);
 }

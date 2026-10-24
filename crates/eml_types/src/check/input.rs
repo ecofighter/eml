@@ -3,10 +3,9 @@
 //! 単相に推論する。入力の関数はほかの関数から参照されないので、1つだけの SCC として、ほかの関数と同じ道で Kind を解いて
 //! 書き出す。
 
-use std::collections::HashMap;
-
 use eml_diagnostics::{Diagnostic, Label, SourceFiles};
 use eml_hir::{FunctionId, Generics, InputKind, Program, ValueItem};
+use rustc_hash::FxHashMap;
 
 use crate::context::Context;
 use crate::kind::problem::{KindScheme, OwnVars};
@@ -160,7 +159,7 @@ pub(super) fn finish_input(
     body_types: &BodyTypes,
     types: &mut TypeStore,
     signatures: &mut Signatures,
-    schemes: &mut HashMap<ValueItem, KindScheme>,
+    schemes: &mut FxHashMap<ValueItem, KindScheme>,
     diagnostics: &mut Vec<Diagnostic>,
 ) -> Option<InputType> {
     let body = program.body(id).expect("an input has a body");

@@ -1,9 +1,8 @@
 //! 型から決まる値の表現 (Repr) と Kind の印。
 
-use std::collections::{HashMap, HashSet};
-
 use eml_hir::{Program as HirProgram, TypeDefId, TypeDefKind};
 use eml_types::{Lin, TypeId, TypeKind, TypeStore, TypedProgram};
+use rustc_hash::{FxHashMap, FxHashSet};
 
 use eml_lir::{LayoutId, Mark, Repr, StructShape, Structs, data_repr};
 
@@ -136,13 +135,13 @@ pub(super) enum Composite {
 /// 変換は型の表を読むだけなので、`data` の型のフィールドの型と、構造体にする型の葉の語の数は、変換の前に求めておく。
 pub(super) struct StructTypes {
     /// 再帰の組に入る型の宣言 (`program.rs` の `recursive_types`)。
-    recursive: HashSet<TypeDefId>,
+    recursive: FxHashSet<TypeDefId>,
     /// 構造体にしうる `data` の型ごとの、具体化したフィールドの型。
-    fields: HashMap<TypeId, Vec<TypeId>>,
+    fields: FxHashMap<TypeId, Vec<TypeId>>,
     /// 構造体にする型ごとの、開いた後の葉の語の数。
-    words: HashMap<TypeId, usize>,
+    words: FxHashMap<TypeId, usize>,
     /// 入れ子のどこかに `_` の葉を持つので、構造体にしない型。
-    uniform: HashSet<TypeId>,
+    uniform: FxHashSet<TypeId>,
 }
 
 impl StructTypes {
@@ -154,9 +153,9 @@ impl StructTypes {
         hir: &HirProgram,
         typed: &TypedProgram,
         store: &mut TypeStore,
-        recursive: HashSet<TypeDefId>,
+        recursive: FxHashSet<TypeDefId>,
     ) -> StructTypes {
-        let mut fields = HashMap::new();
+        let mut fields = FxHashMap::default();
         let mut seen = 0;
         loop {
             let fresh: Vec<TypeId> = store.ids().skip(seen).collect();
@@ -181,10 +180,10 @@ impl StructTypes {
         let mut types = StructTypes {
             recursive,
             fields,
-            words: HashMap::new(),
-            uniform: HashSet::new(),
+            words: FxHashMap::default(),
+            uniform: FxHashSet::default(),
         };
-        let mut memo = HashMap::new();
+        let mut memo = FxHashMap::default();
         for ty in store.ids() {
             match types.count(hir, store, ty, &mut memo) {
                 Leaves::Struct(words) => {
@@ -205,7 +204,7 @@ impl StructTypes {
         hir: &HirProgram,
         types: &TypeStore,
         ty: TypeId,
-        memo: &mut HashMap<TypeId, Leaves>,
+        memo: &mut FxHashMap<TypeId, Leaves>,
     ) -> Leaves {
         if let Some(&leaves) = memo.get(&ty) {
             return leaves;
@@ -338,7 +337,7 @@ fn leaf_words(
     }
 }
 
-fn composite_data(hir: &HirProgram, recursive: &HashSet<TypeDefId>, id: TypeDefId) -> bool {
+fn composite_data(hir: &HirProgram, recursive: &FxHashSet<TypeDefId>, id: TypeDefId) -> bool {
     matches!(
         &hir[id].kind,
         TypeDefKind::Data { constructors }

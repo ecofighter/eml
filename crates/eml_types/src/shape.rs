@@ -2,8 +2,6 @@
 //! 指さず、変数をすべてスキームの中の番号で持つ。シグネチャが必須なので、宣言の型の形はシグネチャだけで決まり、
 //! 本体の検査は呼び出し先の形だけを見ればよい。
 
-use std::collections::HashMap;
-
 use eml_diagnostics::FileId;
 use eml_extern::ExternType;
 use eml_hir::{
@@ -11,6 +9,7 @@ use eml_hir::{
     TypeDefId, TypeRef, TypeRefId, TypeRefKind, TypeVarId,
 };
 use la_arena::{Arena, ArenaMap};
+use rustc_hash::FxHashMap;
 
 use crate::context::Context;
 use crate::data::Variance;
@@ -591,8 +590,8 @@ fn close(table: &Table<'_>, ty: Ty, rigids: &Rigids) -> Shape {
             .enumerate()
             .map(|(index, row)| (row, index))
             .collect(),
-        lin: HashMap::new(),
-        mult: HashMap::new(),
+        lin: FxHashMap::default(),
+        mult: FxHashMap::default(),
     };
     let ty = closer.ty(ty);
     let rigid_list = rigids
@@ -623,11 +622,11 @@ fn close(table: &Table<'_>, ty: Ty, rigids: &Rigids) -> Shape {
 struct Closer<'t, 'c> {
     table: &'t Table<'c>,
     /// 表の rigid 変数と rigid な row 変数から、`Shape` の番号への対応。
-    rigid_index: HashMap<RigidVar, usize>,
-    row_index: HashMap<RowVar, usize>,
+    rigid_index: FxHashMap<RigidVar, usize>,
+    row_index: FxHashMap<RowVar, usize>,
     /// 表の Kind 変数から `Shape` の番号への対応。
-    lin: HashMap<KindVar, KindVar>,
-    mult: HashMap<KindVar, KindVar>,
+    lin: FxHashMap<KindVar, KindVar>,
+    mult: FxHashMap<KindVar, KindVar>,
 }
 
 impl Closer<'_, '_> {
@@ -954,8 +953,8 @@ impl Shape {
     /// 線形性の Kind 変数の表示名。rigid な型変数の `μ` はその型変数、矢印の `m` はその矢印の型で呼ぶ。外側から順に見て、
     /// 最初に現れた部分を使う。スキームに残った制約を表示するのに使う。
     /// 表示用の型は診断の表示と同じく線形性を書かないので、矢印を `Poly` で作る。
-    pub fn kind_names(&self, types: &mut TypeStore) -> HashMap<KindVar, TypeId> {
-        let mut names = HashMap::new();
+    pub fn kind_names(&self, types: &mut TypeStore) -> FxHashMap<KindVar, TypeId> {
+        let mut names = FxHashMap::default();
         self.collect_names(&self.ty, types, &mut names);
         names
     }
@@ -964,7 +963,7 @@ impl Shape {
         &self,
         ty: &ShapeTy,
         types: &mut TypeStore,
-        names: &mut HashMap<KindVar, TypeId>,
+        names: &mut FxHashMap<KindVar, TypeId>,
     ) {
         match ty {
             ShapeTy::Rigid(index) => {
@@ -1006,7 +1005,7 @@ impl Shape {
     }
 
     /// 多重度の Kind 変数の表示名。rigid な row 変数の `σ` はその名前で呼ぶ。
-    pub fn row_names(&self) -> HashMap<KindVar, String> {
+    pub fn row_names(&self) -> FxHashMap<KindVar, String> {
         self.rows
             .iter()
             .map(|(name, sigma)| (*sigma, name.clone()))

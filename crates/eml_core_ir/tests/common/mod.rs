@@ -139,7 +139,7 @@ fn input(checked: &eml_test_support::Checked) -> eml_core_ir::Input<'_> {
 /// IO の extern も yield の地点なので、文の `if` が作る `switch` だけを数えるときに使う
 /// (docs/spec/core-ir.md の「IO の extern」)。
 pub fn if_switches(function: &eml_lir::LirFn) -> usize {
-    let checks: std::collections::HashSet<eml_lir::VarId> = function
+    let checks: rustc_hash::FxHashSet<eml_lir::VarId> = function
         .blocks
         .iter()
         .flat_map(|block| &block.stmts)

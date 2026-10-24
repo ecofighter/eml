@@ -2,11 +2,10 @@
 //! `ItemTree` から、item の ID、名前の表、定義に付く fixity、lang item、extern の索引を作る。名前を解決しなくても
 //! 決まるものだけを読むので、item の変換より先に作れる。
 
-use std::collections::{HashMap, HashSet};
-
 use eml_diagnostics::{Diagnostic, ErrorCode, FileId, Label, TextRange, TextSize};
 use eml_extern::{ExternEffect, ExternType};
 use la_arena::{Idx, RawIdx};
+use rustc_hash::{FxHashMap, FxHashSet};
 
 use crate::codes;
 use crate::hir::{ExternIndex, LangItems, ParamSort};
@@ -80,8 +79,8 @@ struct Qualifier {
 struct Imports {
     /// import の順に並べる。合流した修飾子のモジュールを、診断で決まった順に示すため。
     qualifiers: Vec<Qualifier>,
-    values: HashMap<String, Vec<Source<ValueItem>>>,
-    types: HashMap<String, Vec<Source<TypeItem>>>,
+    values: FxHashMap<String, Vec<Source<ValueItem>>>,
+    types: FxHashMap<String, Vec<Source<TypeItem>>>,
     /// 部品の分からない `T(..)` か `E(..)` が並びにある。壊れた import の部品と、並びで報告した型の部品は名前が
     /// 分からないので、見つからない値の名前をどれも「不明」として扱う
     /// (docs/implementation/architecture.md の「名前解決の回復」)。
@@ -90,8 +89,8 @@ struct Imports {
 
 /// 値と型の名前空間を同じ手順で引くための口。
 trait Namespace: Copy {
-    fn definitions(scope: &ModuleScope) -> &HashMap<String, Vec<Definition<Self>>>;
-    fn imported(imports: &Imports) -> &HashMap<String, Vec<Source<Self>>>;
+    fn definitions(scope: &ModuleScope) -> &FxHashMap<String, Vec<Definition<Self>>>;
+    fn imported(imports: &Imports) -> &FxHashMap<String, Vec<Source<Self>>>;
     /// どこにも見つからない名前を、診断を出さずに誤りにするか。
     fn unknown(imports: &Imports) -> bool;
     /// REPL の `let` の束縛か。束縛は、束縛した入力のモジュールからは引かない。右辺の同じ名前は前の版を指すため
@@ -102,11 +101,11 @@ trait Namespace: Copy {
 }
 
 impl Namespace for ValueItem {
-    fn definitions(scope: &ModuleScope) -> &HashMap<String, Vec<Definition<ValueItem>>> {
+    fn definitions(scope: &ModuleScope) -> &FxHashMap<String, Vec<Definition<ValueItem>>> {
         &scope.values
     }
 
-    fn imported(imports: &Imports) -> &HashMap<String, Vec<Source<ValueItem>>> {
+    fn imported(imports: &Imports) -> &FxHashMap<String, Vec<Source<ValueItem>>> {
         &imports.values
     }
 
@@ -120,11 +119,11 @@ impl Namespace for ValueItem {
 }
 
 impl Namespace for TypeItem {
-    fn definitions(scope: &ModuleScope) -> &HashMap<String, Vec<Definition<TypeItem>>> {
+    fn definitions(scope: &ModuleScope) -> &FxHashMap<String, Vec<Definition<TypeItem>>> {
         &scope.types
     }
 
-    fn imported(imports: &Imports) -> &HashMap<String, Vec<Source<TypeItem>>> {
+    fn imported(imports: &Imports) -> &FxHashMap<String, Vec<Source<TypeItem>>> {
         &imports.types
     }
 
@@ -140,24 +139,24 @@ struct ModuleScope {
     /// E1029 の secondary が定義を指すのに使う。
     file: FileId,
     /// 名前ごとの定義。ソースの位置の順で、使える定義の最初が名前の定義である (規則1)。
-    values: HashMap<String, Vec<Definition<ValueItem>>>,
-    types: HashMap<String, Vec<Definition<TypeItem>>>,
+    values: FxHashMap<String, Vec<Definition<ValueItem>>>,
+    types: FxHashMap<String, Vec<Definition<TypeItem>>>,
     /// 型引数の種類の並び (E1015、E1048)。重複した型引数は除いてある。
-    type_params: HashMap<TypeDefId, Vec<ParamSort>>,
+    type_params: FxHashMap<TypeDefId, Vec<ParamSort>>,
     /// `type_params` の各型引数を宣言に書いた位置。E1048 の secondary が指す。
-    type_param_ranges: HashMap<TypeDefId, Vec<TextRange>>,
-    effect_params: HashMap<EffectId, usize>,
+    type_param_ranges: FxHashMap<TypeDefId, Vec<TextRange>>,
+    effect_params: FxHashMap<EffectId, usize>,
     /// 定義に付いた fixity、宣言が `pub` か、宣言の演算子の位置。
-    fixities: HashMap<ValueItem, (Fixity, bool, TextRange)>,
+    fixities: FxHashMap<ValueItem, (Fixity, bool, TextRange)>,
     /// `extern` のシグネチャを持つ関数。handler の節の先頭を extern の関数から引き直すのに使う (E1009)。
-    extern_functions: HashSet<FunctionId>,
+    extern_functions: FxHashSet<FunctionId>,
     /// REPL の `let` の束縛か式の入力を実行する関数 `input$N`。`ItemTree` の関数の後ろに置く。
     input_function: Option<FunctionId>,
     /// REPL の `let` の束縛。
     binding: Option<BindingId>,
     /// `T(..)`、`E(..)`、`C(..)` が取り込む部品。型にはコンストラクタ、エフェクトには操作、クラスにはメソッドを、
     /// 宣言の順に並べる。
-    parts: HashMap<TypeItem, Vec<(String, ValueItem)>>,
+    parts: FxHashMap<TypeItem, Vec<(String, ValueItem)>>,
     imports: Imports,
     /// E1031 の fix が import を挿入する位置 (`first_item_start`)。import を書けない入力では `None` である。
     import_at: Option<TextSize>,
@@ -171,9 +170,9 @@ pub struct DefMap {
     entry: ModuleId,
     /// 読み込んだ標準ライブラリのモジュールの、短い名前 (`Fs`) からの表。Prelude は除く。ユーザーのモジュールが
     /// 標準ライブラリのモジュールを隠したことを示す help が引く。
-    loaded_std: HashMap<String, ModuleId>,
+    loaded_std: FxHashMap<String, ModuleId>,
     /// 埋め込んだ標準ライブラリのモジュールの短い名前すべて (`Loaded::std_names`)。
-    std_names: HashSet<String>,
+    std_names: FxHashSet<String>,
     lang: LangItems,
     externs: ExternIndex,
     names: DisplayNames,
@@ -339,16 +338,16 @@ impl ModuleScope {
             name: loaded.name.clone(),
             origin: loaded.origin,
             file: tree.file,
-            values: HashMap::new(),
-            types: HashMap::new(),
-            type_params: HashMap::new(),
-            type_param_ranges: HashMap::new(),
-            effect_params: HashMap::new(),
-            fixities: HashMap::new(),
-            extern_functions: HashSet::new(),
+            values: FxHashMap::default(),
+            types: FxHashMap::default(),
+            type_params: FxHashMap::default(),
+            type_param_ranges: FxHashMap::default(),
+            effect_params: FxHashMap::default(),
+            fixities: FxHashMap::default(),
+            extern_functions: FxHashSet::default(),
             input_function,
             binding,
-            parts: HashMap::new(),
+            parts: FxHashMap::default(),
             imports: Imports::default(),
             import_at: first_item_start(&loaded.parse),
         };
@@ -398,7 +397,7 @@ impl ModuleScope {
             names.sort_by_key(|definition| definition.range.start());
         }
         // 重複した宣言 (名前の2つ目以降の定義) の部品は使えない (規則2)
-        let duplicates: HashSet<TypeItem> = self
+        let duplicates: FxHashSet<TypeItem> = self
             .types
             .values()
             .flat_map(|names| names.iter().skip(1).map(|definition| definition.item))
@@ -780,7 +779,7 @@ impl Imports {
 }
 
 fn push_source<T>(
-    table: &mut HashMap<String, Vec<Source<T>>>,
+    table: &mut FxHashMap<String, Vec<Source<T>>>,
     name: &str,
     item: Option<T>,
     import: TextRange,
@@ -819,7 +818,7 @@ fn index(module: ModuleId) -> usize {
 }
 
 fn push<T>(
-    table: &mut HashMap<String, Vec<Definition<T>>>,
+    table: &mut FxHashMap<String, Vec<Definition<T>>>,
     name: &str,
     item: T,
     range: TextRange,
@@ -945,7 +944,7 @@ fn extern_index(scopes: &[ModuleScope]) -> ExternIndex {
     fn find<T: Copy, I>(
         scopes: &[ModuleScope],
         canonical: &str,
-        table: impl Fn(&ModuleScope) -> &HashMap<String, Vec<Definition<T>>>,
+        table: impl Fn(&ModuleScope) -> &FxHashMap<String, Vec<Definition<T>>>,
         item: impl Fn(T) -> Option<I>,
     ) -> Option<I> {
         scopes

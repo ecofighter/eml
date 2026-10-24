@@ -19,11 +19,10 @@ mod copies;
 mod inline;
 mod known_con;
 
-use std::collections::{HashMap, HashSet};
-
 use crate::tail::pure;
 use crate::{CoreFn, FnRef, Program, Rhs, Stmt};
 use eml_lir::{Atom, FnIdx, Layout, Structs, VarId};
+use rustc_hash::{FxHashMap, FxHashSet};
 
 use super::blocks;
 use super::known::Callee;
@@ -85,7 +84,7 @@ pub(super) struct Fuser<'a> {
     con_params: Vec<copies::ConParams>,
     /// 鍵の入れ子の深さ。元の関数は 0 である。
     depths: Vec<usize>,
-    copies: HashMap<Key, FnIdx>,
+    copies: FxHashMap<Key, FnIdx>,
     /// 書き換えている関数。外側から順に並ぶ。
     stack: Vec<usize>,
     /// いま書き換えている元の関数の SCC。
@@ -113,7 +112,7 @@ pub(crate) fn fuse(program: &mut Program) {
         inlinable: vec![false; count],
         con_params: vec![copies::ConParams::default(); count],
         depths: vec![0; count],
-        copies: HashMap::new(),
+        copies: FxHashMap::default(),
         stack: Vec::new(),
         current: 0,
     };
@@ -205,7 +204,7 @@ impl Fuser<'_> {
             changed |= !redirected.is_empty();
             produced.extend(redirected);
             if !produced.is_empty() && rounds < MAX_INLINE_ROUNDS {
-                let produced: HashSet<VarId> = produced.into_iter().collect();
+                let produced: FxHashSet<VarId> = produced.into_iter().collect();
                 let chosen = |var: VarId, target: FnIdx| {
                     produced.contains(&var) && self.inlinable_from_here(target.0 as usize)
                 };

@@ -1,15 +1,16 @@
 //! 型検査が後の段階に渡す型の表。型は部分を共有するので、木ではなく同じ形を1つにまとめた表に置き、`TypeId` で指す
 //! (docs/implementation/architecture.md の「`eml_types` の内部」)。
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::fmt;
-use std::hash::{BuildHasher, BuildHasherDefault, Hasher, RandomState};
+use std::hash::{BuildHasher, BuildHasherDefault, Hasher};
 use std::sync::Arc;
 
 use eml_extern::ExternType;
 use eml_hir::{
     DisplayNames, EffectId, ItemMap, Program, SortedArg, TypeDef, TypeDefId, in_declaration_order,
 };
+use rustc_hash::{FxBuildHasher, FxHashMap, FxHashSet};
 
 use crate::data::DataKind;
 
@@ -186,10 +187,10 @@ impl TypeKind {
 /// 各節点を1回だけ書き換える (docs/implementation/architecture.md の「`eml_types` の内部」)。
 #[derive(Debug)]
 pub struct Substitution {
-    vars: HashMap<String, TypeId>,
+    vars: FxHashMap<String, TypeId>,
     /// 宣言の Kind 変数の値。`None` は `partial` で、`Var` をそのまま残す。
     kinds: Option<Vec<Lin>>,
-    done: HashMap<TypeId, TypeId>,
+    done: FxHashMap<TypeId, TypeId>,
 }
 
 impl Substitution {
@@ -199,7 +200,7 @@ impl Substitution {
         Substitution {
             vars: vars.into_iter().collect(),
             kinds: Some(kinds),
-            done: HashMap::new(),
+            done: FxHashMap::default(),
         }
     }
 
@@ -209,7 +210,7 @@ impl Substitution {
         Substitution {
             vars: vars.into_iter().collect(),
             kinds: None,
-            done: HashMap::new(),
+            done: FxHashMap::default(),
         }
     }
 
@@ -238,7 +239,6 @@ pub struct TypeStore {
     /// 形のハッシュから、そのハッシュを持つ型の鎖の先頭。鎖は `Info::next` がつなぐ。形を `kinds` だけに持ち、
     /// 登録のたびに形を1回だけハッシュするため。
     buckets: HashMap<u64, TypeId, BuildHasherDefault<HashHasher>>,
-    hasher: RandomState,
     unit: TypeId,
     int: TypeId,
     string: TypeId,
@@ -289,7 +289,6 @@ impl TypeStore {
             info: Vec::new(),
             data_kinds,
             buckets: HashMap::default(),
-            hasher: RandomState::new(),
             unit: TypeId(0),
             int: TypeId(0),
             string: TypeId(0),
@@ -317,7 +316,7 @@ impl TypeStore {
 
     /// `kind` の型の ID。同じ形の型がすでにあればその ID を返す。型を作るのは型検査と `substitute` だけである。
     pub(crate) fn intern(&mut self, kind: TypeKind) -> TypeId {
-        let hash = self.hasher.hash_one(&kind);
+        let hash = FxBuildHasher.hash_one(&kind);
         let first = self.buckets.get(&hash).copied();
         let mut at = first;
         while let Some(id) = at {
@@ -492,7 +491,7 @@ impl TypeStore {
     }
 
     fn pairs_lin_compatible(&self, mut stack: Vec<(TypeId, TypeId)>) -> bool {
-        let mut seen = HashSet::new();
+        let mut seen = FxHashSet::default();
         while let Some((a, b)) = stack.pop() {
             if !seen.insert((a, b)) {
                 continue;

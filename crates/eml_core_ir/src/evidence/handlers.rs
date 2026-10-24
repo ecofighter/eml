@@ -3,8 +3,9 @@
 //! 「`perform` と節の3つの形」「`mask` の包み」)。入口を先にすべて決めてから、関数ごとに命令を置き換える。handle の場所は
 //! 入口の関数を `ev_set_clause` に入れるので、どの節がどの形になるかを先に知る必要があるためである。
 
-use std::collections::{HashMap, HashSet};
 use std::mem;
+
+use rustc_hash::{FxHashMap, FxHashSet};
 
 use crate::builder::FnBuilder;
 use crate::tail::tail_position_call;
@@ -24,7 +25,7 @@ pub(super) fn entries(
     program: &mut Program,
     count: usize,
     helpers: &mut Helpers,
-) -> HashMap<FnIdx, FnIdx> {
+) -> FxHashMap<FnIdx, FnIdx> {
     let mut clauses = Vec::new();
     for function in &program.functions[..count] {
         for stmt in function.blocks.iter().flat_map(|block| &block.stmts) {
@@ -35,7 +36,7 @@ pub(super) fn entries(
             }
         }
     }
-    let mut entries = HashMap::new();
+    let mut entries = FxHashMap::default();
     for (clause, effect, op) in clauses {
         // 同じ g を2回書き換えると、入口の引数と状態の取り出しが重なる。translate は節ごとに別の g を作る
         debug_assert!(
@@ -61,7 +62,7 @@ pub(super) fn entries(
 pub(super) fn lower(
     program: &mut Program,
     index: FnIdx,
-    entries: &HashMap<FnIdx, FnIdx>,
+    entries: &FxHashMap<FnIdx, FnIdx>,
     helpers: &mut Helpers,
 ) -> Annotations {
     let mut annotations = Annotations::default();
@@ -82,7 +83,7 @@ pub(super) fn lower(
     let mut function = source.clone();
     let prompt = handles.then(|| helpers.prompt(program));
     // 節の値のクロージャは handle のためだけに作られるので、作る関数を入口に替える
-    let clause_closures: HashSet<VarId> = function
+    let clause_closures: FxHashSet<VarId> = function
         .blocks
         .iter()
         .flat_map(|block| &block.stmts)

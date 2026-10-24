@@ -1,11 +1,10 @@
 //! クラス、メソッド、文脈の変換 (docs/spec/declarations.md の「クラスと instance」)。
 //! クラスは型の名前空間に、メソッドは値の名前空間に置く。
 
-use std::collections::HashSet;
-
 use eml_diagnostics::{Diagnostic, FileId, Label, TextRange};
 use eml_syntax::{SyntaxToken, ast};
 use la_arena::Arena;
+use rustc_hash::FxHashSet;
 
 use super::types::{
     TypeLowering, Vars, has_error, mentions, private_in_public, reject_once_declaration,
@@ -377,8 +376,8 @@ pub(super) fn check_superclass_cycles(
         })
         .collect();
     let names = def_map.display_names();
-    let mut visited: HashSet<ClassId> = HashSet::new();
-    let mut open: HashSet<ClassId> = HashSet::new();
+    let mut visited: FxHashSet<ClassId> = FxHashSet::default();
+    let mut open: FxHashSet<ClassId> = FxHashSet::default();
     let mut cut = Vec::new();
     for &start in &classes {
         if !visited.insert(start) {

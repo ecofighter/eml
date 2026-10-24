@@ -7,8 +7,6 @@
 //! 作り直した値がそのまま残る。複製は作ったときに同じ規則で1回だけ書き換えるので、コードは鍵だけで決まる
 //! (docs/spec/vm.md の「追記」)。
 
-use std::collections::{HashMap, HashSet};
-
 use super::known_con::{known_cons, uses};
 use super::{Fuser, Status};
 use crate::optimize::known::{Callee, KnownClosure, known_closures};
@@ -17,6 +15,7 @@ use crate::optimize::specialize::{
 };
 use crate::{Call, CoreFn, Rhs, Stmt, Term};
 use eml_lir::{Atom, CasePattern, Ctor, FnIdx, Mark, Repr, VarId, VarInfo, push_var};
+use rustc_hash::{FxHashMap, FxHashSet};
 
 /// 鍵の位置ごとの形と、その位置の値の代わりに複製へ渡す実引数。
 type Plan = Vec<(usize, ArgShape, Vec<Atom>)>;
@@ -29,7 +28,7 @@ pub(super) struct ConParams {
     passed: Vec<bool>,
     /// `switch` か `unpack` で開いた引数の、閉包として使うフィールド (引数の位置、タグ、フィールドの添字)。閉包として
     /// 使うとは、`apply` するか、直接の呼び出しに渡すか、`closure` で捕まえることである。
-    fields: HashSet<(usize, u32, usize)>,
+    fields: FxHashSet<(usize, u32, usize)>,
 }
 
 impl ConParams {
@@ -56,7 +55,7 @@ pub(super) fn con_params(function: &CoreFn, own: FnIdx, callees: &[Callee]) -> C
     let position = |var: VarId| params.iter().position(|&param| param == var);
     let mut passed = vec![false; params.len()];
     // 開いたフィールドの変数から、(引数の位置、タグ、フィールドの添字) へ
-    let mut opened: HashMap<VarId, (usize, u32, usize)> = HashMap::new();
+    let mut opened: FxHashMap<VarId, (usize, u32, usize)> = FxHashMap::default();
     for block in &function.blocks {
         for stmt in &block.stmts {
             if let Stmt::Unpack {
@@ -87,7 +86,7 @@ pub(super) fn con_params(function: &CoreFn, own: FnIdx, callees: &[Callee]) -> C
             }
         }
     }
-    let mut fields = HashSet::new();
+    let mut fields = FxHashSet::default();
     for stmt in function.blocks.iter().flat_map(|block| &block.stmts) {
         match stmt {
             Stmt::Let {
@@ -151,7 +150,7 @@ pub(super) fn redirect(function: &mut CoreFn, cx: &mut Fuser) -> Vec<VarId> {
     let uses = uses(function);
     let sites = sites(function, &cons);
     // `con` の変数ごとの形。開かない `con` は `None` で、最初に使う所で決める
-    let mut shapes: HashMap<VarId, Option<(ArgShape, Vec<Atom>)>> = HashMap::new();
+    let mut shapes: FxHashMap<VarId, Option<(ArgShape, Vec<Atom>)>> = FxHashMap::default();
     let mut produced = Vec::new();
     for block in 0..function.blocks.len() {
         for index in 0..function.blocks[block].stmts.len() {
@@ -238,9 +237,9 @@ pub(super) fn redirect(function: &mut CoreFn, cx: &mut Fuser) -> Vec<VarId> {
 /// 既知の `con` の変数ごとの、直接の呼び出しか `closure` の引数として使う所 (呼び出し先と引数の位置)。
 fn sites(
     function: &CoreFn,
-    cons: &HashMap<VarId, (Ctor, Vec<Atom>)>,
-) -> HashMap<VarId, Vec<(FnIdx, usize)>> {
-    let mut sites: HashMap<VarId, Vec<(FnIdx, usize)>> =
+    cons: &FxHashMap<VarId, (Ctor, Vec<Atom>)>,
+) -> FxHashMap<VarId, Vec<(FnIdx, usize)>> {
+    let mut sites: FxHashMap<VarId, Vec<(FnIdx, usize)>> =
         cons.keys().map(|&var| (var, Vec::new())).collect();
     for stmt in function.blocks.iter().flat_map(|block| &block.stmts) {
         let Stmt::Let {
@@ -313,7 +312,7 @@ impl Fuser<'_> {
         ctor: Ctor,
         fields: &[Atom],
         reprs: &[Repr],
-        closures: &HashMap<VarId, KnownClosure>,
+        closures: &FxHashMap<VarId, KnownClosure>,
         uses: &[usize],
     ) -> Option<(ArgShape, Vec<Atom>)> {
         let mut shapes = Vec::with_capacity(fields.len());

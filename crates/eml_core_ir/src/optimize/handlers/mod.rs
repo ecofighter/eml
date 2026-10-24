@@ -17,7 +17,9 @@ mod passing;
 mod piece;
 mod touch;
 
-use std::collections::{BTreeSet, HashMap};
+use std::collections::BTreeSet;
+
+use rustc_hash::FxHashMap;
 
 use super::blocks;
 use super::known::{Callee, Wrapper, known_closures, wrapper};
@@ -250,14 +252,14 @@ pub(crate) fn handlers(program: &mut Program, translated: &mut Vec<bool>) -> Vec
 #[derive(Default)]
 struct Table {
     /// 経路の関数と `return` の節の関数ごとの複製 `f{H}`。
-    copies: HashMap<(FnIdx, FnIdx), FnIdx>,
+    copies: FxHashMap<(FnIdx, FnIdx), FnIdx>,
     /// 節の関数ごとの、`k` を閉包で受ける写し `<g>{k}`。
-    clause_copies: HashMap<FnIdx, FnIdx>,
+    clause_copies: FxHashMap<FnIdx, FnIdx>,
     /// この回に作った関数ごとの、もとの関数。番号を取った順に並ぶ。`f{H}`、`$hN`、`$hjJ` は f から、`<g>{k}` は g
     /// から作る。
     sources: Vec<FnIdx>,
     /// 状態を渡す形の複製ごとの、返す値の並び。後の回の複製の並びは、元の複製の並びから決まる。
-    returns: HashMap<FnIdx, Returned>,
+    returns: FxHashMap<FnIdx, Returned>,
     /// 末尾の経路の形の複製ごとの一族。複製 `f{H}` と、それを作るときに作った継続の関数 `f{H}$hN`、合流のブロックの
     /// 関数 `f{H}$hjJ`、節の写しの複製 `<g>{k}{…}` である。どれも `f{H}` の名前で決まるので、一族も名前で決まる。
     /// `k` として渡す継続の関数の値の参照は、この一族の中にしか生まれない (`direct::type_direct_only`)。
@@ -268,7 +270,7 @@ struct Table {
 fn round(program: &mut Program, translated: &[bool], table: &mut Table) -> bool {
     let count = program.functions.len();
     // エフェクトごとの、H に触れる関数。その回の初めのコードで決める
-    let mut touch: HashMap<u32, Vec<bool>> = HashMap::new();
+    let mut touch: FxHashMap<u32, Vec<bool>> = FxHashMap::default();
     let handlers: Vec<Handler> = (0..count)
         .flat_map(|owner| sites(program, FnIdx(owner as u32)))
         .filter_map(|site| eligible(program, translated, site, &mut touch))
@@ -469,7 +471,7 @@ fn eligible(
     program: &Program,
     translated: &[bool],
     site: Site,
-    touch: &mut HashMap<u32, Vec<bool>>,
+    touch: &mut FxHashMap<u32, Vec<bool>>,
 ) -> Option<Handler> {
     let owner = program.function(site.owner);
     let Stmt::Let {
@@ -494,7 +496,7 @@ fn eligible(
         return None;
     }
     let known = known_closures(owner);
-    let mut uses: HashMap<VarId, usize> = HashMap::new();
+    let mut uses: FxHashMap<VarId, usize> = FxHashMap::default();
     for block in &owner.blocks {
         let mut count = |atom: Atom| {
             if let Atom::Var(var) = atom {
@@ -754,7 +756,7 @@ struct Copies<'a> {
     created: Vec<Option<CoreFn>>,
     pending: Vec<(FnIdx, FnIdx, Shape)>,
     /// エフェクトごとの、H に触れる関数 (`touch::touching`)。状態を渡す形の handler のエフェクトの分がある。
-    touching: &'a HashMap<u32, Vec<bool>>,
+    touching: &'a FxHashMap<u32, Vec<bool>>,
     /// 状態を渡す形の複製が使うタプルの配置 (`passing::tuple_layout`)。
     tuples: &'a Tuples,
     /// 作っている末尾の経路の形の複製の一族。
@@ -967,7 +969,7 @@ impl Copies<'_> {
             captures,
             all_captures,
             state,
-            join_functions: HashMap::new(),
+            join_functions: FxHashMap::default(),
             pending: Vec::new(),
         };
         let mut next = performs.len();
@@ -1220,7 +1222,7 @@ struct Rewrite {
     /// ブロックごとの入口の生存集合。後ろのブロックから、書き換えた後のコードで求める。
     live_in: Vec<Vec<VarId>>,
     /// 番号を取った合流のブロックの関数 `f{H}$hjJ`。
-    join_functions: HashMap<BlockId, FnIdx>,
+    join_functions: FxHashMap<BlockId, FnIdx>,
     /// 番号を取ったが、中身をまだ作っていない合流のブロック。
     pending: Vec<BlockId>,
 }

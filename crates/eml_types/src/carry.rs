@@ -3,13 +3,14 @@
 //! 評価の順に沿った生存の計算を別に持つ。呼び出しの評価の順は `eml_hir::call_steps` に従う。Core IR の変換も同じ手順を
 //! 読む (docs/spec/expressions.md の「関数適用」)。
 
-use std::collections::{BTreeSet, HashMap};
+use std::collections::BTreeSet;
 
 use eml_diagnostics::FileId;
 use eml_hir::{
     Body, EvalStep, ExprId, ExprKind, IndexBase, LocalId, OpMultiplicity, OperationId, PatId,
     Program, Res, Segment, Stmt,
 };
+use rustc_hash::FxHashMap;
 
 use crate::VarClass;
 use crate::check::{BodyTyping, CallRows};
@@ -36,7 +37,7 @@ pub(crate) fn constrain(
     typing: &BodyTyping,
     table: &mut Table<'_>,
     reliable: bool,
-    implicit_drops: &HashMap<ExprId, Vec<LocalId>>,
+    implicit_drops: &FxHashMap<ExprId, Vec<LocalId>>,
 ) {
     let mut carrying = Carrying {
         program,
@@ -58,7 +59,7 @@ struct Carrying<'a, 'c> {
     table: &'a mut Table<'c>,
     reliable: bool,
     /// 戻らない呼び出しの前で暗黙に手放す変数 (`BodyTypes::implicit_drops`)。
-    implicit_drops: &'a HashMap<ExprId, Vec<LocalId>>,
+    implicit_drops: &'a FxHashMap<ExprId, Vec<LocalId>>,
 }
 
 impl Carrying<'_, '_> {

@@ -1,5 +1,3 @@
-use std::collections::{HashMap, HashSet};
-
 use eml_diagnostics::{Diagnostic, FileId, Label, SourceFiles, TextRange};
 use eml_hir::{
     Body, Closure, ConstructorId, ExprId, ExprKind, Function, FunctionId, Literal, LocalFunction,
@@ -7,6 +5,7 @@ use eml_hir::{
     TypeRefKind, ValueItem, VarId,
 };
 use la_arena::ArenaMap;
+use rustc_hash::{FxHashMap, FxHashSet};
 
 use crate::MaskItem;
 use crate::kind::problem::Instance;
@@ -48,12 +47,12 @@ pub(crate) struct BodyTyping {
     /// ラムダの本体が動く row。キーはラムダの式である。
     pub lambdas: ArenaMap<ExprId, Row>,
     /// 呼び出しの矢印の row。キーは `masks` と同じく、呼び出しの式と矢印の番号である。
-    pub arrows: HashMap<(ExprId, usize), Row>,
+    pub arrows: FxHashMap<(ExprId, usize), Row>,
     /// 呼び出しの row。持ち越しのパスが読む。
     pub calls: ArenaMap<ExprId, CallRows>,
     /// 呼び出しの矢印ごとの `mask`。キーは呼び出しの式と矢印の番号である。空の `mask` は入れない
     /// (docs/spec/types.md の「推論」)。
-    pub masks: HashMap<(ExprId, usize), Vec<MaskItem>>,
+    pub masks: FxHashMap<(ExprId, usize), Vec<MaskItem>>,
     /// 射影が指すフィールド。
     pub fields: ArenaMap<ExprId, FieldTarget>,
     /// 更新が作り直すコンストラクタとフィールド。
@@ -98,11 +97,11 @@ pub(super) struct BodyCheck<'a, 'c> {
     pub(super) inclusions: Vec<Inclusion>,
     /// row の包含で誤りを報告した呼び出し。1回の呼び出しの E2002 は、どの矢印で起きても、呼び出しの位置で確かめても
     /// 本体の後で解いても1つだけ報告する。
-    pub(super) failed_calls: HashSet<ExprId>,
+    pub(super) failed_calls: FxHashSet<ExprId>,
     /// `fn` の節の本体に期待する型と由来。キーは書いた本体の式である。HIR が本体を `let` の右辺に下ろすので、その
     /// `let` で本体を期待する型に照らす。隠れた `k` の引数の誤りとして報告しないため (docs/spec/expressions.md の
     /// 「handler」)。
-    pub(super) fn_clause_bodies: HashMap<ExprId, (Ty, Origin)>,
+    pub(super) fn_clause_bodies: FxHashMap<ExprId, (Ty, Origin)>,
 }
 
 impl<'a, 'c> BodyCheck<'a, 'c> {
@@ -143,8 +142,8 @@ impl<'a, 'c> BodyCheck<'a, 'c> {
             typing: BodyTyping::default(),
             instances: Vec::new(),
             inclusions: Vec::new(),
-            failed_calls: HashSet::new(),
-            fn_clause_bodies: HashMap::new(),
+            failed_calls: FxHashSet::default(),
+            fn_clause_bodies: FxHashMap::default(),
         }
     }
 }

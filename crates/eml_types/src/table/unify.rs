@@ -1,16 +1,17 @@
+use rustc_hash::FxHashSet;
+
 use super::*;
-use std::collections::HashSet;
 
 /// 1回の単一化の中で、単一化を終えた複合の型 (型構成子、タプル、関数型) の代表の組。表は部分を共有するので、
 /// 覚えないと同じ組を何度もたどり、型の深さの指数の時間がかかる。もう一度たどっても同じ Kind の制約を同じ由来で
 /// 出すだけなので、飛ばしても結果は変わらない。表は occurs の検査で輪を持たないので、単一化の途中の組をもう一度
 /// 訪れることはない。
-pub(super) type Unified = HashSet<(Ty, Ty)>;
+pub(super) type Unified = FxHashSet<(Ty, Ty)>;
 
 impl Table<'_> {
     pub fn unify(&mut self, a: Ty, b: Ty) -> Result<(), UnifyError> {
-        // `HashSet::new` は領域を確保しない。記録の領域は、複合の型の組を初めて覚えるときに作られる
-        self.unify_in(a, b, &mut Unified::new())
+        // `FxHashSet::new` は領域を確保しない。記録の領域は、複合の型の組を初めて覚えるときに作られる
+        self.unify_in(a, b, &mut Unified::default())
     }
 
     pub(super) fn unify_in(&mut self, a: Ty, b: Ty, done: &mut Unified) -> Result<(), UnifyError> {

@@ -1,12 +1,11 @@
 //! instance の変換 (docs/spec/declarations.md の「`instance`」と「宣言の検査」)。
 //! instance は名前を持たず、(クラス, 頭の型) の索引で引く。
 
-use std::collections::HashMap;
-
 use eml_diagnostics::{Diagnostic, FileId, Label, TextRange};
 use eml_extern::{Extern, ExternType};
 use eml_syntax::ast;
 use la_arena::{Arena, Idx, RawIdx};
+use rustc_hash::FxHashMap;
 
 use super::class::ContextScope;
 use super::types::{arity_error, class_as_type, visit_type_vars};
@@ -49,7 +48,7 @@ impl ItemLowering<'_> {
         &mut self,
         tree: &ItemTree,
         modules: &mut Arena<Module>,
-        index: &mut HashMap<(ClassId, TypeDefId), InstanceId>,
+        index: &mut FxHashMap<(ClassId, TypeDefId), InstanceId>,
         pending: &mut Vec<PendingBody>,
     ) {
         for item in &tree.instances {
@@ -71,7 +70,7 @@ impl ItemLowering<'_> {
         &mut self,
         item: &InstanceItem,
         modules: &mut Arena<Module>,
-        index: &mut HashMap<(ClassId, TypeDefId), InstanceId>,
+        index: &mut FxHashMap<(ClassId, TypeDefId), InstanceId>,
         pending: &mut Vec<PendingBody>,
     ) -> bool {
         let node = item.ptr.to_node(self.root);
@@ -239,7 +238,7 @@ impl ItemLowering<'_> {
         &mut self,
         tree: &ItemTree,
         modules: &mut Arena<Module>,
-        index: &mut HashMap<(ClassId, TypeDefId), InstanceId>,
+        index: &mut FxHashMap<(ClassId, TypeDefId), InstanceId>,
     ) {
         let lang = self.def_map.lang();
         for (k, item) in tree.data.iter().enumerate() {
@@ -322,7 +321,7 @@ impl ItemLowering<'_> {
     fn duplicate(
         &mut self,
         modules: &Arena<Module>,
-        index: &HashMap<(ClassId, TypeDefId), InstanceId>,
+        index: &FxHashMap<(ClassId, TypeDefId), InstanceId>,
         class: ClassId,
         ty: TypeDefId,
         range: TextRange,

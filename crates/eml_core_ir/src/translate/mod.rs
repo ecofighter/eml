@@ -12,7 +12,7 @@ mod pattern;
 mod program;
 mod types;
 
-use std::collections::{BTreeSet, HashMap, HashSet};
+use std::collections::BTreeSet;
 
 use eml_diagnostics::{FileId, SourceFiles};
 use eml_extern::Extern;
@@ -24,6 +24,7 @@ use eml_types::{
     BodyTypes, InputDisplay, Lin, RowYield, TypeId, TypeKind, TypeStore, TypedProgram,
 };
 use la_arena::ArenaMap;
+use rustc_hash::{FxHashMap, FxHashSet};
 
 use crate::{CoreFn, Program, Rhs, Term};
 use eml_lir::{Atom, FALSE, FnIdx, Loc, Mark, Repr, TRUE, VarId, VarInfo};
@@ -56,7 +57,7 @@ enum ContinuationForm {
 /// 決定木が開き、`drop` が残す `con` とフィールドを二重に持つためである (docs/spec/core-ir.md の「translate が決める印」と「戻らない呼び出しの前の `drop`」)。
 fn references(
     body: &Body,
-    implicit_drops: &HashMap<ExprId, Vec<LocalId>>,
+    implicit_drops: &FxHashMap<ExprId, Vec<LocalId>>,
 ) -> ArenaMap<LocalId, u32> {
     let mut counts = ArenaMap::default();
     for (_, expr) in body.exprs.iter() {
@@ -146,7 +147,7 @@ fn numbering(hir: &HirProgram, body: &Body, targets: &ArenaMap<ExprId, Target>) 
         _ => None,
     };
     // 引数をそろえて呼ぶ extern の参照は `Rhs::Extern` になり、包む関数を作らない
-    let saturated: HashSet<ExprId> = body
+    let saturated: FxHashSet<ExprId> = body
         .exprs
         .iter()
         .filter_map(|(_, expr)| match &expr.kind {
@@ -171,7 +172,7 @@ fn numbering(hir: &HirProgram, body: &Body, targets: &ArenaMap<ExprId, Target>) 
         }
     }
     // 同じ名前の2つ目から `#2`、`#3` を付ける。`LocalId` の順は HIR の順である
-    let mut seen: HashMap<&str, u32> = HashMap::new();
+    let mut seen: FxHashMap<&str, u32> = FxHashMap::default();
     let local_functions = body
         .local_functions
         .iter()
@@ -645,16 +646,16 @@ struct FnLowering<'a> {
     locals: ArenaMap<LocalId, Atom>,
     contexts: Vec<Ctx>,
     /// この関数で `con` で作った変数の中身。決定木が頭のコンストラクタを知るのに使う。
-    cons: HashMap<VarId, Known>,
+    cons: FxHashMap<VarId, Known>,
     /// 決定木が分解した値のフィールドの変数から、分解した値への表。決定木の葉の drop が、枝の束縛した変数をどの値から
     /// 取り出したかをたどるのに使う (docs/spec/core-ir.md の「決定木の葉の `drop`」)。
-    parents: HashMap<VarId, VarId>,
+    parents: FxHashMap<VarId, VarId>,
     /// 決定木が今の道で `unpack` した構造体の変数と、そのフィールドの変数。葉の `drop` が構造体をフィールドごとに
     /// 扱うのに使う (`pattern.rs` の `drop_matched_away`)。
-    unpacked: HashMap<VarId, Vec<VarId>>,
+    unpacked: FxHashMap<VarId, Vec<VarId>>,
     /// 参照が1つでない局所変数に束縛した `con` の変数。決定木はこれを開かない
     /// (docs/spec/core-ir.md の「translate が決める印」)。
-    shared: HashSet<VarId>,
+    shared: FxHashSet<VarId>,
     /// 作っている関数が yield しうるか (docs/spec/core-ir.md の
     /// 「`yields` の印」)。この関数の中の handle の節も同じ印にする。
     yields: bool,
@@ -669,10 +670,10 @@ impl<'a> FnLowering<'a> {
             builder: FnBuilder::new(),
             locals: ArenaMap::default(),
             contexts: Vec::new(),
-            cons: HashMap::new(),
-            parents: HashMap::new(),
-            unpacked: HashMap::new(),
-            shared: HashSet::new(),
+            cons: FxHashMap::default(),
+            parents: FxHashMap::default(),
+            unpacked: FxHashMap::default(),
+            shared: FxHashSet::default(),
         }
     }
 

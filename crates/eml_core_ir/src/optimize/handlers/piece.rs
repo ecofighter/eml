@@ -4,7 +4,9 @@
 //! 定数になった `switch` を合う行き先へのジャンプにする (`blocks::constant_target`)。`k` を値として使う節は、`k` に継続の関数の閉包を受ける写し
 //! `<g>{k}` にし (`clause_with_k`)、それを `perform` の地点の継続について複製する (`clause_with_continuation`)。展開で辺の入らなくなったブロックは、最後に落とす (`blocks::prune`)。
 
-use std::collections::{BTreeSet, HashMap, HashSet};
+use std::collections::BTreeSet;
+
+use rustc_hash::{FxHashMap, FxHashSet};
 
 use crate::tail::tail_position_call;
 use crate::{Block, Call, CoreFn, Rhs, Stmt, Term};
@@ -63,7 +65,7 @@ pub(crate) fn region(
             follow(&function.block(target).term, &mut pending);
         }
     }
-    let renumber: HashMap<BlockId, BlockId> = seen
+    let renumber: FxHashMap<BlockId, BlockId> = seen
         .iter()
         .enumerate()
         .map(|(position, &index)| (index, BlockId(position as u32 + 1)))
@@ -277,7 +279,7 @@ pub(crate) fn clause_with_k(
     copy.split = None;
     let k = copy.params()[copy.params().len() - 2];
     copy.vars[k.0 as usize].repr = Repr::TObj;
-    let mut wrapped = HashSet::new();
+    let mut wrapped = FxHashSet::default();
     for block in &mut copy.blocks {
         block.stmts.retain(|stmt| match stmt {
             Stmt::Let {
@@ -389,7 +391,7 @@ pub(crate) fn clause_with_continuation(
         Atom::Var(var)
     };
     // 捕獲がどれも `unr` の `drop k` は文ごと消え、その結果の `()` の変数は `()` に置き換える
-    let mut dropped = HashSet::new();
+    let mut dropped = FxHashSet::default();
     for block in 0..copy.blocks.len() {
         let stmts = std::mem::take(&mut copy.blocks[block].stmts);
         let mut out = Vec::with_capacity(stmts.len());

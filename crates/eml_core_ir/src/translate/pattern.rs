@@ -3,13 +3,13 @@
 //! 選ぶ。scrutinee は値をそのまま調べる文脈 (`Ctx::Match`) で変換する。出口の値が、値を調べずに1つの枝に行き着けば、
 //! その枝のラベルへ直接向かう (case-of-case)。行き着かない出口だけを集め、そこで決定木を出す。
 
-use std::collections::HashSet;
 use std::mem;
 
 use eml_hir::{
     Body, ConstructorId, ExprId, ExprKind, Literal, LocalId, MatchArm, PatId, PatKind,
     Program as HirProgram, Res, TypeDefKind, ValueItem,
 };
+use rustc_hash::FxHashSet;
 
 use crate::{Rhs, Stmt, Term};
 use eml_lir::{
@@ -90,7 +90,7 @@ enum Attempt<'a> {
     /// どの `con` の変数も開いてよい。
     Static,
     /// 値を調べる決定木。`received` は、ある枝が受け取るので開かない `con` の変数である。
-    Full { received: &'a HashSet<VarId> },
+    Full { received: &'a FxHashSet<VarId> },
 }
 
 /// 決定木 (docs/spec/core-ir.md)。葉の `bound` は、パターンの変数とそれが受ける出現である。
@@ -826,7 +826,7 @@ impl FnLowering<'_> {
     /// 変数を受け取る枝が入らないことがあるためである (`match (p, n) with | (x, 0) -> take x | ((a, []), _) -> ..`)。
     /// 受け取られた変数は開かれないので、その下は調べない。パターンがもう届かない位置で、受け取られていない値の下も
     /// 調べない。どちらも長い `con` の連なりをたどらないためである。
-    fn received(&self, root: &Occ, ctx: CtxId) -> HashSet<VarId> {
+    fn received(&self, root: &Occ, ctx: CtxId) -> FxHashSet<VarId> {
         let Ctx::Match(context) = &self.contexts[ctx.0] else {
             unreachable!("the context matches data");
         };
@@ -834,7 +834,7 @@ impl FnLowering<'_> {
         let hir = self.ctx.hir;
         let pats: Vec<Option<PatId>> = context.pats.iter().map(|&pat| Some(pat)).collect();
         let aliased = context.passes_alias.iter().any(|&passes| passes);
-        let mut received = HashSet::new();
+        let mut received = FxHashSet::default();
         let mut work = vec![(root.clone(), pats, aliased)];
         while let Some((occ, pats, above)) = work.pop() {
             let here = above
@@ -893,8 +893,8 @@ impl FnLowering<'_> {
     /// 変数の並びになり、`release` で解く物体がないので、パターンが調べ尽くしたフィールド (`[]` の葉など) も明示の
     /// `drop` で手放す (docs/spec/lir.md の「構造体の形」)。
     fn drop_matched_away(&mut self, root: &Occ, bound: &[(LocalId, Occ)], attempt: Attempt) {
-        let mut whole = HashSet::new();
-        let mut kept = HashSet::new();
+        let mut whole = FxHashSet::default();
+        let mut kept = FxHashSet::default();
         let mut work: Vec<Occ> = bound.iter().map(|(_, occ)| occ.clone()).collect();
         while let Some(occ) = work.pop() {
             match occ {

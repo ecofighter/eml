@@ -1,7 +1,7 @@
 //! 型、エフェクト、コンストラクタ、クラスの表示名。表示はモジュールの文脈によらないので、HIR の診断、型検査の診断、`dump`、
 //! `pretty` が、プログラム全体で1つの表を引く。
 
-use std::collections::{HashMap, HashSet};
+use rustc_hash::{FxHashMap, FxHashSet};
 
 use crate::program::{ClassId, ConstructorId, EffectId, TypeDefId};
 
@@ -14,10 +14,10 @@ use crate::program::{ClassId, ConstructorId, EffectId, TypeDefId};
 /// (docs/spec/modules.md の「REPL のセッション」)。
 #[derive(Debug, Clone)]
 pub struct DisplayNames {
-    types: HashMap<TypeDefId, String>,
-    effects: HashMap<EffectId, String>,
-    constructors: HashMap<ConstructorId, String>,
-    classes: HashMap<ClassId, String>,
+    types: FxHashMap<TypeDefId, String>,
+    effects: FxHashMap<EffectId, String>,
+    constructors: FxHashMap<ConstructorId, String>,
+    classes: FxHashMap<ClassId, String>,
     /// 要素のないタプルの表示。Prelude の `Unit` の表示名である。
     unit: String,
 }
@@ -60,7 +60,7 @@ impl DisplayNames {
                 .iter()
                 .map(|&(_, definer, name)| (definer, name)),
         );
-        let types: HashMap<TypeDefId, String> = types
+        let types: FxHashMap<TypeDefId, String> = types
             .iter()
             .map(|&(id, definer, name)| (id, type_definers.shown(definer, name)))
             .collect();
@@ -113,15 +113,15 @@ impl DisplayNames {
 /// 1つの名前空間の、名前ごとの定義元。
 struct Definers<'a> {
     /// 名前を定義するモジュール。セッションは `None` の1つと数える。同じモジュールの中の重複 (E1003) も1つと数える。
-    modules: HashMap<&'a str, HashSet<Option<&'a str>>>,
+    modules: FxHashMap<&'a str, FxHashSet<Option<&'a str>>>,
     /// 名前を定義するセッションの入力の、最も新しい番号。
-    latest: HashMap<&'a str, u32>,
+    latest: FxHashMap<&'a str, u32>,
 }
 
 impl<'a> Definers<'a> {
     fn new(items: impl Iterator<Item = (Definer<'a>, &'a str)>) -> Definers<'a> {
-        let mut modules: HashMap<&str, HashSet<Option<&str>>> = HashMap::new();
-        let mut latest: HashMap<&str, u32> = HashMap::new();
+        let mut modules: FxHashMap<&str, FxHashSet<Option<&str>>> = FxHashMap::default();
+        let mut latest: FxHashMap<&str, u32> = FxHashMap::default();
         for (definer, name) in items {
             match definer {
                 Definer::Module(module) => {

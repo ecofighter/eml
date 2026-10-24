@@ -1,5 +1,6 @@
+use rustc_hash::FxHashSet;
+
 use super::*;
-use std::collections::HashSet;
 
 impl Table<'_> {
     /// 型の Kind の上界の候補。タプルとデータ型の Kind は要素とフィールドの join なので、要素とフィールドごとの境界を並べる
@@ -160,7 +161,7 @@ impl Table<'_> {
     pub fn unsolved(&self, roots: impl IntoIterator<Item = Ty>) -> (Vec<Ty>, Vec<RowVar>) {
         let mut vars = Vec::new();
         let mut rows = Vec::new();
-        let mut seen_rows = HashSet::new();
+        let mut seen_rows = FxHashSet::default();
         let mut work: Vec<Ty> = roots.into_iter().collect();
         let _walk = self.start_walk();
         while let Some(ty) = work.pop() {
@@ -255,7 +256,7 @@ impl Table<'_> {
 #[derive(Default)]
 struct Bounded {
     list: Vec<Bound<Linearity>>,
-    seen: HashSet<Bound<Linearity>>,
+    seen: FxHashSet<Bound<Linearity>>,
 }
 
 impl Bounded {

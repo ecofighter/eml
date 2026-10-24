@@ -11,12 +11,11 @@ mod types;
 
 pub use types::visit_type_vars;
 
-use std::collections::HashMap;
-
 use eml_diagnostics::{Diagnostic, ErrorCode, FileId, Label, TextEdit, TextRange};
 use eml_extern::Extern;
 use eml_syntax::{AstPtr, SyntaxNode, SyntaxToken, ast};
 use la_arena::{Arena, ArenaMap, Idx, RawIdx};
+use rustc_hash::FxHashMap;
 
 use crate::codes;
 use crate::def_map::{
@@ -81,7 +80,7 @@ pub fn lower(def_map: &DefMap, modules: &[LoadedModule]) -> (Program, Vec<Diagno
     }
     class::check_superclass_cycles(def_map, &mut arena, &mut diagnostics);
     // クラスは別のモジュールにありうるので、すべてのモジュールの item を置いてから instance を変換する
-    let mut instance_index = HashMap::new();
+    let mut instance_index = FxHashMap::default();
     for (index, loaded) in modules.iter().enumerate() {
         let module = module_id(index);
         let mut lowering = ItemLowering::new(

@@ -6,10 +6,9 @@
 //! ここで取り出して持つ。型やパターンの変換のように resolver の要るものだけを `AstPtr` で指し、`lower` がモジュールの
 //! 構文木の根から解決する。ノードを持たないので、`ItemTree` はスレッドをまたげる。
 
-use std::collections::HashMap;
-
 use eml_diagnostics::{Diagnostic, FileId, Label, TextRange, TextSize};
 use eml_syntax::{AstPtr, Parse, SyntaxKind, SyntaxToken, ast};
+use rustc_hash::FxHashMap;
 
 use crate::codes;
 use crate::hir::ParamSort;
@@ -255,7 +254,7 @@ struct Definition {
 #[derive(Default)]
 struct Definitions {
     list: Vec<Definition>,
-    by_name: HashMap<String, usize>,
+    by_name: FxHashMap<String, usize>,
 }
 
 impl Definitions {

@@ -1,9 +1,8 @@
 //! 段2: SCC ごとに Kind の問題をまとめて解き、違反を集め、各宣言のスキームに残す制約を求める
 //! (docs/spec/types.md の「推論」)。推論の表は使わず、番号の上の束だけを扱う。
 
-use std::collections::{HashMap, HashSet};
-
 use eml_hir::ValueItem;
+use rustc_hash::{FxHashMap, FxHashSet};
 
 use super::problem::{Bounds, KindProblem, KindScheme, OwnVars};
 use super::{
@@ -36,7 +35,7 @@ pub(crate) struct LinSolution {
 /// `members` は1つの SCC の宣言とその問題、`schemes` は前の SCC と本体のない宣言のスキームである。
 pub(crate) fn solve_scc(
     members: &[(ValueItem, &KindProblem)],
-    schemes: &HashMap<ValueItem, KindScheme>,
+    schemes: &FxHashMap<ValueItem, KindScheme>,
 ) -> Solution {
     let merged = merge(members, schemes);
     let (lin, lin_violated, lin_causes) = solve_with_causes(&merged.lin);
@@ -221,7 +220,7 @@ fn bound_origin(origin: &Provenance, source: BoundSource) -> Provenance {
 /// 推論した上限の出どころを引くための、SCC の多重度の制約の索引。番号はまとめた後のものである。
 struct SourceIndex {
     /// 変数ごとの、シグネチャに書いた上限 (`Provenance::Bound`) の位置。
-    written: HashMap<usize, Span>,
+    written: FxHashMap<usize, Span>,
     /// 参照に複写した上限 (由来が `RowBound`) の、参照の位置と参照した宣言の名前の組。位置と名前の小さい順に並べる。
     candidates: Vec<(Span, String)>,
     /// 上限の値ごとの、成分から上向きにたどって届く成分 (自分を含む) にある候補の最小の番号。
@@ -230,7 +229,7 @@ struct SourceIndex {
 
 impl SourceIndex {
     fn new(bounds: &Bounds<Multiplicity>, graph: &Graph<Multiplicity>) -> Self {
-        let mut written = HashMap::new();
+        let mut written = FxHashMap::default();
         let mut copied = Vec::new();
         for (&constraint, origin) in bounds.constraints.iter().zip(&bounds.origins) {
             match (constraint, origin) {
@@ -359,7 +358,7 @@ struct Merged {
 
 fn merge(
     members: &[(ValueItem, &KindProblem)],
-    schemes: &HashMap<ValueItem, KindScheme>,
+    schemes: &FxHashMap<ValueItem, KindScheme>,
 ) -> Merged {
     let mut offsets = Vec::new();
     let (mut lin_vars, mut mult_vars) = (0, 0);
@@ -368,7 +367,7 @@ fn merge(
         lin_vars += problem.lin.vars;
         mult_vars += problem.mult.vars;
     }
-    let position: HashMap<ValueItem, usize> = members
+    let position: FxHashMap<ValueItem, usize> = members
         .iter()
         .enumerate()
         .map(|(index, (decl, _))| (*decl, index))
@@ -866,7 +865,7 @@ impl<T: Level> Graph<T> {
     fn reach(
         &self,
         start: usize,
-        kept: &HashMap<usize, Vec<usize>>,
+        kept: &FxHashMap<usize, Vec<usize>>,
         up: bool,
     ) -> (Vec<usize>, Option<T>) {
         let (edges, bounds, shortcut) = if up {
@@ -881,7 +880,7 @@ impl<T: Level> Graph<T> {
         kept_inert.sort_unstable();
         let mut found = Vec::new();
         let mut constant = bounds[start];
-        let mut seen = HashSet::from([start]);
+        let mut seen = FxHashSet::from_iter([start]);
         let mut work = vec![start];
         while let Some(component) = work.pop() {
             // 何もない隣と何もない残す成分の少ないほうから探す。多くの宣言の残す成分に辺が出る成分でも、宣言ごとに
@@ -934,8 +933,8 @@ fn upward_closure<U: Copy>(upward: &Edges, seed: Vec<U>, join: impl Fn(U, U) -> 
 }
 
 /// 宣言 `member` の自分の変数を含む成分と、その中の自分の変数の `Shape` の番号 (小さい順)。
-pub(super) fn kept_components<T>(graph: &Graph<T>, member: usize) -> HashMap<usize, Vec<usize>> {
-    let mut kept: HashMap<usize, Vec<usize>> = HashMap::new();
+pub(super) fn kept_components<T>(graph: &Graph<T>, member: usize) -> FxHashMap<usize, Vec<usize>> {
+    let mut kept: FxHashMap<usize, Vec<usize>> = FxHashMap::default();
     for (index, var) in graph.own[member].iter().enumerate() {
         kept.entry(graph.component[var.index()])
             .or_default()
@@ -1011,14 +1010,15 @@ fn carry_residual(
     // 持ち越しの制約が求めるのは row の側が `Once` 以下であることなので、上限が `Once` 以下の自分の変数を row の側に
     // 持つ組は、スキームに残る上限から導ける。残すと、上限を超える row を入れた1つの呼び出しが E2020 と E3006 の
     // 両方になる (docs/spec/types.md の「推論」)
-    let entailed: HashSet<usize> = mult_kept
+    let entailed: FxHashSet<usize> = mult_kept
         .iter()
         .filter(|&(&component, _)| {
             mult_graph.closed_upper[component].is_some_and(|upper| upper <= Multiplicity::Once)
         })
         .flat_map(|(_, shapes)| shapes.iter().copied())
         .collect();
-    let mut best: HashMap<(Bound<Linearity>, Bound<Multiplicity>), &Provenance> = HashMap::new();
+    let mut best: FxHashMap<(Bound<Linearity>, Bound<Multiplicity>), &Provenance> =
+        FxHashMap::default();
     for carry in carries {
         let lins = lowers(lin_graph, &lin_kept, carry.lin, Linearity::Lin);
         let mut mults = lowers(mult_graph, &mult_kept, carry.mult, Multiplicity::Multi);
@@ -1056,7 +1056,7 @@ fn carry_residual(
 /// 定数は持ち越しの制約を破らないので残さない。
 fn lowers<T: Level>(
     graph: &Graph<T>,
-    kept: &HashMap<usize, Vec<usize>>,
+    kept: &FxHashMap<usize, Vec<usize>>,
     bound: Bound<T>,
     top: T,
 ) -> Vec<Bound<T>> {
@@ -1313,7 +1313,7 @@ mod tests {
             )],
             ..KindScheme::default()
         };
-        let schemes = HashMap::from([(function(1), scheme)]);
+        let schemes = FxHashMap::from_iter([(function(1), scheme)]);
         let merged = merge(&[(function(0), &problem)], &schemes);
         let values = solve(&merged.lin).0;
         assert_eq!(values[copy.index()], Linearity::Lin);
@@ -1438,7 +1438,10 @@ mod tests {
             Provenance::Declaration,
         );
         g.own.lin = vec![b];
-        let solution = solve_scc(&[(function(0), &f), (function(1), &g)], &HashMap::new());
+        let solution = solve_scc(
+            &[(function(0), &f), (function(1), &g)],
+            &FxHashMap::default(),
+        );
         let unr = vec![(
             Bound::Var(KindVar::from_index(0)),
             Bound::Const(Linearity::Unr),
@@ -1489,7 +1492,7 @@ mod tests {
                 reason: KindReason::Passed("keep".to_string()),
             }),
         });
-        let schemes = HashMap::from([(function(9), keep)]);
+        let schemes = FxHashMap::from_iter([(function(9), keep)]);
         let solution = solve_scc(&[(function(0), &f)], &schemes);
         assert_eq!(
             solution.schemes[0],
@@ -1532,7 +1535,7 @@ mod tests {
             Bound::Const(Linearity::Unr),
             Provenance::Suppressed,
         );
-        let solution = solve_scc(&[(function(0), &problem)], &HashMap::new());
+        let solution = solve_scc(&[(function(0), &problem)], &FxHashMap::default());
         assert!(solution.violated.is_empty());
     }
 
@@ -1553,7 +1556,7 @@ mod tests {
             Bound::Const(Linearity::Unr),
             Provenance::Unattributed(span),
         );
-        solve_scc(&[(function(0), &problem)], &HashMap::new());
+        solve_scc(&[(function(0), &problem)], &FxHashMap::default());
     }
 
     #[test]

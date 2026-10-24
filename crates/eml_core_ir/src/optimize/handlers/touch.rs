@@ -1,9 +1,8 @@
 //! 状態を渡す形の経路に入れる関数を決める、H に触れるかの判断 (docs/spec/core-ir.md の「handler への特殊化」)。
 
-use std::collections::HashMap;
-
 use crate::{Call, CoreFn, FnRef, Program, Rhs, Stmt};
 use eml_lir::FnIdx;
+use rustc_hash::FxHashMap;
 
 /// 関数ごとの、`effect` の handler H に触れるか。番号は `FnIdx` である。H に触れるとは、その関数か、直接の呼び出しで
 /// たどれる関数が、H 宛ての `perform`、`mask` の付いた呼び出し、`handle`、`resume`、`clause`、`yields` の `apply` の
@@ -12,7 +11,7 @@ use eml_lir::FnIdx;
 /// (`recompute_yields` と同じ)。
 pub(super) fn touching(program: &Program, effect: u32) -> Vec<bool> {
     let mut touches = vec![false; program.functions.len()];
-    let mut callers: HashMap<FnIdx, Vec<FnIdx>> = HashMap::new();
+    let mut callers: FxHashMap<FnIdx, Vec<FnIdx>> = FxHashMap::default();
     let mut pending = Vec::new();
     for (index, function) in program.functions.iter().enumerate() {
         let idx = FnIdx(index as u32);

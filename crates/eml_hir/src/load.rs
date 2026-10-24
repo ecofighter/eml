@@ -2,10 +2,9 @@
 //! import を宣言の順に幅優先でたどって、モジュールの列を作る。ファイルの読み方は `ModuleSource` で受け取り、この段は IO を
 //! 持たない。同じ読み方を渡せば同じ結果を返すので、診断の並びも安定する。
 
-use std::collections::HashMap;
-
 use eml_diagnostics::{Diagnostic, FileId, Label, SourceFiles};
 use eml_syntax::Parse;
+use rustc_hash::FxHashMap;
 
 use crate::codes;
 use crate::def_map::module_id;
@@ -103,7 +102,7 @@ pub enum InputForm<'a> {
 /// (docs/spec/modules.md の「REPL のセッション」)。
 #[derive(Debug, Clone, Default)]
 pub struct ImportCache {
-    entries: HashMap<ModulePath, Cached>,
+    entries: FxHashMap<ModulePath, Cached>,
 }
 
 #[derive(Debug, Clone)]
@@ -225,7 +224,7 @@ struct Loader<'a> {
     /// 読んだモジュール。標準ライブラリとユーザーの根に同じパスのモジュールがありうるので、出どころと組にする。
     /// ユーザーの根にファイルがなく標準ライブラリにフォールバックしたときも、`(User, path)` の鍵に標準ライブラリの
     /// モジュールを入れる。同じパスでユーザーの根を何度も探さないためである (docs/spec/modules.md の「標準ライブラリ」)。
-    by_path: HashMap<(ModuleOrigin, ModulePath), ModuleId>,
+    by_path: FxHashMap<(ModuleOrigin, ModulePath), ModuleId>,
     diagnostics: Vec<Diagnostic>,
     /// セッションの前の入力までに読んだ import。ファイルの読み込みでは空である。
     cache: &'a ImportCache,
@@ -262,7 +261,7 @@ impl<'a> Loader<'a> {
             source,
             files: SourceFiles::new(),
             modules: Vec::new(),
-            by_path: HashMap::new(),
+            by_path: FxHashMap::default(),
             diagnostics: Vec::new(),
             cache,
             read: ImportCache::default(),

@@ -4,8 +4,6 @@
 //! 呼び出しにし、次の状態を結果の値の並び (`Returned`) で受ける。H に触れない関数の呼び出しはそのまま残す。継続の
 //! 関数と合流のブロックの関数は作らない。
 
-use std::collections::{HashMap, HashSet};
-
 use super::super::blocks;
 use super::{Copies, KnownFn, Shape, Table, piece, targeted};
 use crate::tail::tail_position_call;
@@ -16,6 +14,7 @@ use eml_lir::{
     Atom, BlockId, Ctor, FnIdx, Layout, LayoutCtor, LayoutId, Mark, Repr, Structs, TUPLE, VarId,
     VarInfo,
 };
+use rustc_hash::{FxHashMap, FxHashSet};
 
 /// 複製 `f{H}` が返す値の並び。複製の元の名前と handler で決まるので、名前が同じ複製はいつも同じ形の結果を返す
 /// (docs/spec/core-ir.md の「handler の複製」)。元が基の関数なら、並びは f の結果 (Repr が `unit` でなければ) で、元が
@@ -74,19 +73,19 @@ pub(super) fn returned(
 /// 状態を渡す形の複製が開くか返すタプル。回の初めに、複製が借りる前の `program` に配置と形を足しておく。
 pub(super) struct Tuples {
     /// 大きさごとの配置。
-    layouts: HashMap<usize, LayoutId>,
+    layouts: FxHashMap<usize, LayoutId>,
     /// 値の並びごとのタプルの Repr。値の Repr と印から作る形の構造体で、6 語を超える並びは `obj` である
     /// (docs/spec/core-ir.md の「handler の複製」)。並びは複製の元の名前と
     /// handler で決まるので、名前が同じ複製はいつも同じ形を返す。
-    reprs: HashMap<Vec<(Repr, Mark)>, Repr>,
+    reprs: FxHashMap<Vec<(Repr, Mark)>, Repr>,
 }
 
 impl Tuples {
     /// 値の並び `lists` のうち2つ以上の値を持つものの、配置と Repr を決める。
     pub(super) fn new(program: &mut Program, lists: Vec<Vec<(Repr, Mark)>>) -> Tuples {
         let mut tuples = Tuples {
-            layouts: HashMap::new(),
-            reprs: HashMap::new(),
+            layouts: FxHashMap::default(),
+            reprs: FxHashMap::default(),
         };
         for values in lists {
             if values.len() < 2 || tuples.reprs.contains_key(&values) {
@@ -389,7 +388,7 @@ pub(super) fn build(copies: &mut Copies, index: FnIdx, function: FnIdx, shape: &
     }
 
     // 並びが空の複製の結果の値は `()` なので、受けた変数の使いを `()` にする。使う所は定義より後ろにある
-    let mut units: HashSet<VarId> = HashSet::new();
+    let mut units: FxHashSet<VarId> = FxHashSet::default();
     let mut entered: Vec<Option<VarId>> = vec![None; source.blocks.len()];
     let mut blocks: Vec<Block> = Vec::with_capacity(next as usize);
     let mut extra: Vec<Block> = Vec::new();
@@ -551,7 +550,7 @@ pub(super) fn build(copies: &mut Copies, index: FnIdx, function: FnIdx, shape: &
     copies.place(index, code);
 }
 
-fn unit(units: &HashSet<VarId>, atom: &mut Atom) {
+fn unit(units: &FxHashSet<VarId>, atom: &mut Atom) {
     if let Atom::Var(var) = atom
         && units.contains(var)
     {

@@ -3,10 +3,10 @@
 //! 検査を、2つの IR が共有する型の上で書く。IR ごとに違うもの (ブロックの終端、関数の型) は、呼ぶ側が形を写して
 //! 渡す。命令の列をたどる部分と所有の検査は、IR ごとの verifier が持つ。
 
-use std::collections::{HashMap, HashSet};
 use std::mem::discriminant;
 
 use eml_extern::{Extern, FunctionRow};
+use rustc_hash::{FxHashMap, FxHashSet};
 
 use crate::syntax::{REPRS, effect_text, layout_text, operation_text, prim_text, repr_text};
 use crate::{
@@ -403,10 +403,10 @@ pub struct Context<'a> {
     never: Vec<bool>,
     /// `closure` で束縛した変数の関数と、捕獲した値の数。`ev_set_clause` の入口の関数と、Core IR の `handle` の節の
     /// 引数の数を確かめるのに使う。
-    closures: HashMap<VarId, (FnIdx, usize)>,
+    closures: FxHashMap<VarId, (FnIdx, usize)>,
     /// `ev_new[E]` で束縛した変数の、エフェクトの番号。`ev_set_clause` の入口がその evidence のエフェクトの操作で
     /// あることを確かめるのに使う。
-    evidences: HashMap<VarId, u32>,
+    evidences: FxHashMap<VarId, u32>,
     dominators: Dominators,
     /// 変数ごとの定義の位置 (R5)。
     defs: Vec<Option<Site>>,
@@ -426,8 +426,8 @@ impl<'a> Context<'a> {
             vars,
             boundaries,
             never: vec![false; vars.len()],
-            closures: HashMap::new(),
-            evidences: HashMap::new(),
+            closures: FxHashMap::default(),
+            evidences: FxHashMap::default(),
             dominators,
             defs: vec![None; vars.len()],
             at: Site::entry(0),
@@ -532,7 +532,7 @@ impl<'a> Context<'a> {
         closures: impl Iterator<Item = (VarId, FnIdx)>,
         uses: impl FnOnce(&mut dyn FnMut(Atom)),
     ) -> Result<(), String> {
-        let closures: HashMap<VarId, FnIdx> = closures
+        let closures: FxHashMap<VarId, FnIdx> = closures
             .filter(|&(_, target)| self.clause_of(target).is_some())
             .collect();
         let mut result = Ok(());
@@ -986,14 +986,14 @@ impl<'a> Context<'a> {
     /// 1つの `switch` の case の種類がそろい、同じ case が2回なく、リテラルの case はフィールドを持たず、文字列の case
     /// は定数の表にあること。
     pub fn switch_cases(&self, cases: &[Case]) -> Result<(), String> {
-        let kinds: HashSet<_> = cases
+        let kinds: FxHashSet<_> = cases
             .iter()
             .map(|case| discriminant(&case.pattern))
             .collect();
         if kinds.len() > 1 {
             return Err("a switch mixes kinds of cases".to_string());
         }
-        let mut seen = HashSet::new();
+        let mut seen = FxHashSet::default();
         for case in cases {
             let literal = !matches!(case.pattern, CasePattern::Tag(_));
             if literal && !case.fields.is_empty() {
