@@ -2,6 +2,7 @@
 //! 大きさに比例させる (docs/implementation/architecture.md の「`eml_types` の内部」)。
 
 use std::collections::HashSet;
+use std::sync::Arc;
 
 use eml_extern::EffectMultiplicity;
 use eml_hir::{
@@ -17,8 +18,9 @@ pub(crate) struct Context {
     pub externs: ExternIndex,
     /// extern のエフェクト。ユーザーのモジュールの extern (E1033) も含め、誤りを重ねない。
     extern_effects: HashSet<EffectId>,
-    /// 型構成子ごとの、Kind の決まり方 (`crate::data`)。
-    pub data_kinds: ItemMap<TypeDef, DataKind>,
+    /// 型構成子ごとの、Kind の決まり方 (`crate::data`)。不動点で求めるので、型の表 (`TypeStore`) と共有して1回だけ
+    /// 求める。
+    pub data_kinds: Arc<ItemMap<TypeDef, DataKind>>,
     /// エフェクトがその row に入れる操作の上限。操作の多重度の最大で、extern のエフェクトは表の行が決める (`IO` は
     /// `Once`、`Panic` は `Never`。docs/spec/types.md の「Kind」)。
     pub effect_multiplicities: ItemMap<EffectDef, Multiplicity>,
@@ -68,7 +70,7 @@ impl Context {
             lang,
             externs: program.externs.clone(),
             extern_effects,
-            data_kinds: data_kinds(program),
+            data_kinds: Arc::new(data_kinds(program)),
             effect_multiplicities,
             operation_multiplicities,
         }

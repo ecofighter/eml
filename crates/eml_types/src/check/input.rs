@@ -282,7 +282,7 @@ mod tests {
     #[test]
     fn show_is_satisfied_only_when_every_part_has_an_instance() {
         let program = crate::test_program("data Plain = | Plain");
-        let mut types = TypeStore::new(&program);
+        let mut types = TypeStore::for_program(&program);
         let int = types.intern(TypeKind::Con {
             id: program.extern_type(ExternType::Int),
             args: Vec::new(),
@@ -326,7 +326,7 @@ mod tests {
     #[test]
     fn a_closed_shape_exports_back_to_the_same_type() {
         let program = crate::test_program("");
-        let mut types = TypeStore::new(&program);
+        let mut types = TypeStore::for_program(&program);
         let string = types.intern(TypeKind::Con {
             id: program.extern_type(ExternType::String),
             args: Vec::new(),

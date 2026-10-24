@@ -129,7 +129,7 @@ pub(crate) fn check_module(
     let context = Context::new(program);
     // 宣言と本体の型を1つの表に登録する。表は追記だけするので、本体を独立に検査する順は結果の意味を変えない
     // (docs/implementation/architecture.md の「`eml_types` の内部」)
-    let mut types = TypeStore::new(program);
+    let mut types = TypeStore::new(program, context.data_kinds.clone());
     check_instances(program, &context, &mut types, &mut diagnostics);
     let mut signatures = signatures(program, &context);
     let mut schemes = declaration_schemes(program, &context, &signatures);
@@ -1179,7 +1179,7 @@ mod tests {
                 call: CallKind::Call,
             },
         };
-        let types = crate::TypeStore::new(&program);
+        let types = crate::TypeStore::for_program(&program);
         let reported = report_violations(
             &program,
             &files,

@@ -1183,7 +1183,7 @@ mod tests {
     }
 
     fn exported(shape: &Shape, program: &Program) -> String {
-        let mut types = TypeStore::new(program);
+        let mut types = TypeStore::for_program(program);
         let ty = shape.export(&mut types, None);
         types.display(ty, &program.names).to_string()
     }

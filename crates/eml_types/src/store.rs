@@ -10,7 +10,7 @@ use eml_hir::{
     DisplayNames, EffectId, ItemMap, Program, SortedArg, TypeDef, TypeDefId, in_declaration_order,
 };
 
-use crate::data::{DataKind, data_kinds};
+use crate::data::DataKind;
 
 /// 書き出した型の矢印の線形性と、決まらなかった型変数の Kind
 /// (docs/spec/types.md の「書き出す型の形」)。
@@ -250,8 +250,9 @@ pub struct TypeStore {
 }
 
 impl TypeStore {
-    /// 決まった型を先に登録した表。決まった型のない表を作れないよう、空の表は作らせない。
-    pub fn new(program: &Program) -> TypeStore {
+    /// 決まった型を先に登録した表。決まった型のない表を作れないよう、空の表は作らせない。`data_kinds` は型検査の
+    /// 前提 (`Context`) と共有する。
+    pub(crate) fn new(program: &Program, data_kinds: Arc<ItemMap<TypeDef, DataKind>>) -> TypeStore {
         let mut store = TypeStore {
             kinds: Vec::new(),
             errors: Vec::new(),
@@ -259,7 +260,7 @@ impl TypeStore {
             kind_vars: Vec::new(),
             relative: Vec::new(),
             linearity: Vec::new(),
-            data_kinds: Arc::new(data_kinds(program)),
+            data_kinds,
             ids: HashMap::new(),
             unit: TypeId(0),
             int: TypeId(0),
@@ -278,6 +279,12 @@ impl TypeStore {
         store.bool = store.intern(con(program.lang.bool));
         store.error = store.intern(TypeKind::Error);
         store
+    }
+
+    /// 前提を作らずに型の表だけを使う単体テストのための表。
+    #[cfg(test)]
+    pub(crate) fn for_program(program: &Program) -> TypeStore {
+        TypeStore::new(program, Arc::new(crate::data::data_kinds(program)))
     }
 
     /// `kind` の型の ID。同じ形の型がすでにあればその ID を返す。型を作るのは型検査と `substitute` だけである。
@@ -976,7 +983,7 @@ mod tests {
     #[test]
     fn function_types_are_displayed_like_the_surface_syntax() {
         let program = program();
-        let mut types = TypeStore::new(&program);
+        let mut types = TypeStore::for_program(&program);
         let (int, bool, unit) = (types.int(), types.bool(), types.unit());
         let pure = types.intern(TypeKind::Fn {
             param: int,
@@ -1007,7 +1014,7 @@ mod tests {
     fn effect_labels_are_displayed_with_their_type_arguments() {
         let program = program();
         let state = effect(&program, "State");
-        let mut types = TypeStore::new(&program);
+        let mut types = TypeStore::for_program(&program);
         let (int, unit) = (types.int(), types.unit());
         let function = types.intern(TypeKind::Fn {
             param: int,
@@ -1041,7 +1048,7 @@ mod tests {
     #[test]
     fn the_same_type_is_interned_once() {
         let program = program();
-        let mut types = TypeStore::new(&program);
+        let mut types = TypeStore::for_program(&program);
         let int = types.int();
         let pair = |types: &mut TypeStore| types.intern(TypeKind::Tuple(vec![int, int]));
         assert_eq!(pair(&mut types), pair(&mut types));
@@ -1051,7 +1058,7 @@ mod tests {
     #[test]
     fn errors_are_found_through_children_and_row_tails() {
         let program = program();
-        let mut types = TypeStore::new(&program);
+        let mut types = TypeStore::for_program(&program);
         let (int, error) = (types.int(), types.error());
         let returning = |types: &mut TypeStore, ret| {
             types.intern(TypeKind::Fn {
@@ -1107,7 +1114,7 @@ mod tests {
     fn substitution_replaces_signature_variables_inside_every_child() {
         let program = program();
         let state = effect(&program, "State");
-        let mut types = TypeStore::new(&program);
+        let mut types = TypeStore::for_program(&program);
         let (int, string) = (types.int(), types.string());
         let a = rigid(&mut types, "a");
         let b = rigid(&mut types, "b");
@@ -1139,7 +1146,7 @@ mod tests {
     #[test]
     fn operation_variables_become_flexible_and_unknown_names_stay() {
         let program = program();
-        let mut types = TypeStore::new(&program);
+        let mut types = TypeStore::for_program(&program);
         let int = types.int();
         let op = types.intern(TypeKind::OpVar("a".to_string(), Lin::Poly));
         let c = rigid(&mut types, "c");
@@ -1154,7 +1161,7 @@ mod tests {
     #[test]
     fn types_without_variables_are_returned_as_they_are() {
         let program = program();
-        let mut types = TypeStore::new(&program);
+        let mut types = TypeStore::for_program(&program);
         let int = types.int();
         let ty = function(&mut types, int, int);
         let a = rigid(&mut types, "a");
@@ -1168,7 +1175,7 @@ mod tests {
     fn a_shared_type_is_substituted_once_per_node() {
         // `t(i) = t(i-1) -> t(i-1)` は木として 2^i の大きさだが、表には i 個の節点しかない。指数の時間なら終わらない
         let program = program();
-        let mut types = TypeStore::new(&program);
+        let mut types = TypeStore::for_program(&program);
         let mut ty = rigid(&mut types, "a");
         for _ in 0..200 {
             ty = function(&mut types, ty, ty);
@@ -1182,7 +1189,7 @@ mod tests {
     #[test]
     fn a_bounded_display_stops_at_the_limit() {
         let program = program();
-        let mut types = TypeStore::new(&program);
+        let mut types = TypeStore::for_program(&program);
         let int = types.int();
         let short = function(&mut types, int, int);
         assert_eq!(
@@ -1219,7 +1226,7 @@ mod tests {
     #[test]
     fn the_name_display_marks_arrows_and_kinds() {
         let program = program();
-        let mut types = TypeStore::new(&program);
+        let mut types = TypeStore::for_program(&program);
         let int = types.int();
         let names = &program.names;
         let show = |types: &TypeStore, ty| types.display_name_bounded(ty, names, 64).unwrap();
@@ -1250,7 +1257,7 @@ mod tests {
     #[test]
     fn linearity_joins_the_effective_arguments_and_fields() {
         let program = crate::test_program("import Std.FileIn\n\ndata Phantom a = Phantom Int");
-        let mut types = TypeStore::new(&program);
+        let mut types = TypeStore::for_program(&program);
         let file = con(&mut types, program.extern_type(ExternType::FileIn), vec![]);
         let (int, unit) = (types.int(), types.unit());
         let list = program.lang.list;
@@ -1291,7 +1298,7 @@ mod tests {
     #[test]
     fn linearity_or_poly_reads_a_relative_type_without_stopping() {
         let program = crate::test_program("import Std.FileIn");
-        let mut types = TypeStore::new(&program);
+        let mut types = TypeStore::for_program(&program);
         let file = con(&mut types, program.extern_type(ExternType::FileIn), vec![]);
         let (int, unit) = (types.int(), types.unit());
         let a = rigid(&mut types, "a");
@@ -1318,7 +1325,7 @@ mod tests {
     #[should_panic(expected = "declaration-relative")]
     fn reading_the_linearity_of_a_declaration_relative_type_panics() {
         let program = crate::test_program("");
-        let mut types = TypeStore::new(&program);
+        let mut types = TypeStore::for_program(&program);
         let a = rigid(&mut types, "a");
         types.linearity(a);
     }
@@ -1326,7 +1333,7 @@ mod tests {
     #[test]
     fn a_type_that_depends_on_a_rigid_or_a_kind_variable_is_relative() {
         let program = crate::test_program("");
-        let mut types = TypeStore::new(&program);
+        let mut types = TypeStore::for_program(&program);
         let int = types.int();
         let a = rigid(&mut types, "a");
         let list_a = con(&mut types, program.lang.list, vec![a]);
@@ -1354,7 +1361,7 @@ mod tests {
     #[test]
     fn substitution_evaluates_kind_variables() {
         let program = crate::test_program("");
-        let mut types = TypeStore::new(&program);
+        let mut types = TypeStore::for_program(&program);
         let int = types.int();
         let var_fn = arrow(&mut types, Lin::Var(0), int, int);
         let var_flexible = types.flexible(Lin::Var(1));
@@ -1373,7 +1380,7 @@ mod tests {
     #[test]
     fn lin_compatible_rejects_only_unr_against_lin() {
         let program = crate::test_program("import Std.FileIn");
-        let mut types = TypeStore::new(&program);
+        let mut types = TypeStore::for_program(&program);
         let file = con(&mut types, program.extern_type(ExternType::FileIn), vec![]);
         let int = types.int();
         let a = rigid(&mut types, "a");

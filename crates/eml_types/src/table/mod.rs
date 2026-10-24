@@ -8,6 +8,7 @@ use crate::ty::{Linearity, Multiplicity};
 use eml_extern::ExternType;
 use eml_hir::{EffectId, ItemMap, LangItems, OperationId, TypeDef, TypeDefId};
 use std::cell::RefCell;
+use std::sync::Arc;
 
 mod export;
 mod kinds;
@@ -291,7 +292,7 @@ impl<'c> Table<'c> {
             .require(Bound::Var(var), Bound::Const(upper), origin);
     }
 
-    pub fn data_kinds(&self) -> &'c ItemMap<TypeDef, DataKind> {
+    pub fn data_kinds(&self) -> &'c Arc<ItemMap<TypeDef, DataKind>> {
         &self.context.data_kinds
     }
 

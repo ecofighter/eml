@@ -661,7 +661,7 @@ mod tests {
     #[test]
     fn reasons_have_a_fixed_order() {
         let program = crate::test_program("import Std.FileIn");
-        let mut types = TypeStore::new(&program);
+        let mut types = TypeStore::for_program(&program);
         let reasons = distinct_reasons(&program, &mut types);
         let key = |reason: &KindReason| reason.order_key(&types, &program.names);
         let used = KindReason::UsedMoreThanOnce {
