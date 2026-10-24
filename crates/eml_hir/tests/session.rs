@@ -3,10 +3,10 @@
 use eml_diagnostics::sort_diagnostics;
 use eml_hir::{
     Assoc, ConstructorId, DefMap, Fixity, FunctionKind, ImportCache, ImportTarget, InputForm,
-    InputKind, Loaded, ModuleId, ModuleOrigin, ModulePath, NameRef, Program, Resolved,
-    SessionInput, TypeDefId,
+    InputKind, Loaded, MemorySource, ModuleId, ModuleOrigin, ModulePath, NameRef, Program,
+    Resolved, SessionInput, TypeDefId,
 };
-use eml_test_support::{MemorySource, full_with_paths, located};
+use eml_test_support::{full_with_paths, located};
 use la_arena::{Idx, RawIdx};
 
 /// 入力は (入力の番号, テキスト)。
@@ -30,8 +30,7 @@ fn load(
     let (loaded, mut diagnostics, read) = eml_hir::load_session(
         eml_hir::STD,
         &inputs(texts),
-        "",
-        "",
+        None,
         &MemorySource(modules),
         cache,
     );
@@ -89,8 +88,7 @@ fn lower(texts: &[(u32, &str)], modules: &[(&str, &str)]) -> Lowered {
     let (loaded, mut diagnostics, _) = eml_hir::load_session(
         eml_hir::STD,
         &inputs(texts),
-        "",
-        "",
+        None,
         &MemorySource(modules),
         &ImportCache::default(),
     );
@@ -634,15 +632,13 @@ fn a_file_has_no_input_function() {
 /// 読み方を選んだ入力でセッションを読み、def_map と lower を流す。診断は `パス 行:列 番号 メッセージ` の行にする。
 fn lower_forms(
     inputs: &[SessionInput],
-    root: &str,
-    entry_file: &str,
+    file: Option<&str>,
     modules: &[(&str, &str)],
 ) -> (Loaded, Program, Vec<String>) {
     let (loaded, mut diagnostics, _) = eml_hir::load_session(
         eml_hir::STD,
         inputs,
-        root,
-        entry_file,
+        file,
         &MemorySource(modules),
         &ImportCache::default(),
     );
@@ -684,7 +680,7 @@ fn a_file_input_is_read_as_a_file_under_its_path() {
             form: InputForm::Typed,
         },
     ];
-    let (loaded, program, diagnostics) = lower_forms(&inputs, "app/", "main.em", &[]);
+    let (loaded, program, diagnostics) = lower_forms(&inputs, Some("app/main.em"), &[]);
     assert_eq!(diagnostics, Vec::<String>::new());
     let module = module_named(&loaded, "<input 1>");
     assert_eq!(loaded.files.path(program.file(module)), "app/main.em");
@@ -702,7 +698,7 @@ fn a_file_input_does_not_take_an_expression() {
         text: "1 + 2",
         form: InputForm::File { path: "main.em" },
     }];
-    let (_, program, diagnostics) = lower_forms(&inputs, "", "main.em", &[]);
+    let (_, program, diagnostics) = lower_forms(&inputs, Some("main.em"), &[]);
     assert!(
         diagnostics.contains(&"main.em 1:6 E0011 expected `=`".to_string()),
         "{diagnostics:?}"
@@ -720,7 +716,7 @@ fn the_loaded_file_cannot_be_imported() {
         text: file,
         form: InputForm::File { path: "Main2.em" },
     }];
-    let (_, _, diagnostics) = lower_forms(&inputs, "", "Main2.em", &[("Util.em", util)]);
+    let (_, _, diagnostics) = lower_forms(&inputs, Some("Main2.em"), &[("Util.em", util)]);
     assert!(
         diagnostics.iter().any(|d| d.contains("E1030")),
         "{diagnostics:?}"
@@ -731,7 +727,7 @@ fn the_loaded_file_cannot_be_imported() {
         text: "import Main2",
         form: InputForm::Typed,
     }];
-    let (_, _, diagnostics) = lower_forms(&inputs, "", "Main2.em", &[("Main2.em", file)]);
+    let (_, _, diagnostics) = lower_forms(&inputs, Some("Main2.em"), &[("Main2.em", file)]);
     assert!(
         diagnostics.iter().any(|d| d.contains("E1030")),
         "{diagnostics:?}"
@@ -752,7 +748,7 @@ fn a_query_becomes_a_query_input_function() {
             form: InputForm::Query,
         },
     ];
-    let (_, program, diagnostics) = lower_forms(&inputs, "", "", &[]);
+    let (_, program, diagnostics) = lower_forms(&inputs, None, &[]);
     assert_eq!(diagnostics, Vec::<String>::new());
     let input = program.input().expect("the query has an input function");
     assert_eq!(program[input].kind, FunctionKind::Input(InputKind::Query));

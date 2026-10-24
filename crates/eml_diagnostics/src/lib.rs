@@ -22,7 +22,21 @@ impl fmt::Display for ErrorCode {
 pub const NOT_YET_SUPPORTED: ErrorCode = ErrorCode(4);
 
 /// E0004 のラベル。どの段階でも同じ文言にする。
-pub const NOT_YET_SUPPORTED_LABEL: &str = "this is implemented in a later stage";
+const NOT_YET_SUPPORTED_LABEL: &str = "this is implemented in a later stage";
+
+/// `1 argument`、`2 arguments` のように、数と名詞を数に合わせて書く。どの段階の文言も同じ言い方にするため、ここに置く。
+pub fn count(n: usize, word: &str) -> String {
+    if n == 1 {
+        format!("1 {word}")
+    } else {
+        format!("{n} {word}s")
+    }
+}
+
+/// `count` に続ける be 動詞。`1 argument was`、`2 arguments were` のように使う。
+pub fn was(n: usize) -> &'static str {
+    if n == 1 { "was" } else { "were" }
+}
 
 /// 補足の情報は独立した診断にせず、`notes` と `help` に入れる (docs/spec/diagnostics.md)。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -75,7 +89,7 @@ pub struct Diagnostic {
 }
 
 impl Diagnostic {
-    pub fn new(
+    fn new(
         code: ErrorCode,
         severity: Severity,
         message: impl Into<String>,
@@ -95,6 +109,10 @@ impl Diagnostic {
 
     pub fn error(code: ErrorCode, message: impl Into<String>, primary: Label) -> Self {
         Self::new(code, Severity::Error, message, primary)
+    }
+
+    pub fn warning(code: ErrorCode, message: impl Into<String>, primary: Label) -> Self {
+        Self::new(code, Severity::Warning, message, primary)
     }
 
     pub fn not_yet_supported(file: FileId, range: TextRange, message: impl Into<String>) -> Self {
@@ -194,16 +212,17 @@ mod tests {
     }
 
     #[test]
+    fn counts_are_pluralized() {
+        assert_eq!(count(1, "arrow"), "1 arrow");
+        assert_eq!(count(2, "arrow"), "2 arrows");
+    }
+
+    #[test]
     fn has_errors_ignores_warnings() {
         let mut files = SourceFiles::new();
         let file = files.add("a.em", "x");
         let label = Label::new(file, TextRange::new(0.into(), 1.into()), "");
-        let warning = Diagnostic::new(
-            ErrorCode(4001),
-            Severity::Warning,
-            "unreachable",
-            label.clone(),
-        );
+        let warning = Diagnostic::warning(ErrorCode(4001), "unreachable", label.clone());
         assert!(!has_errors(std::slice::from_ref(&warning)));
         let error = Diagnostic::error(ErrorCode(1), "bad", label);
         assert!(has_errors(&[warning, error]));

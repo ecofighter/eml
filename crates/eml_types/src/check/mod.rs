@@ -1139,15 +1139,8 @@ fn row_has_error(types: &Arena<TypeRef>, row: &RowRef) -> bool {
 mod tests {
     use eml_diagnostics::TextRange;
 
-    use super::report::count;
     use super::report_violations;
     use crate::kind::{CallKind, CarriedValue, KindOrigin, KindReason, Span};
-
-    #[test]
-    fn counts_are_pluralized() {
-        assert_eq!(count(1, "arrow"), "1 arrow");
-        assert_eq!(count(2, "arrow"), "2 arrows");
-    }
 
     #[test]
     fn carried_values_in_different_files_are_reported_separately() {

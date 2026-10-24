@@ -79,21 +79,6 @@ pub type Checked = WithSession<eml_cli::Checked>;
 /// UI テスト以外のテストで登録する、入口のファイルの表示のパス。
 pub const ENTRY_PATH: &str = "test.em";
 
-/// メモリ上の (根からの相対パス, 本文)。複数のファイルのテストでも、CLI と同じ読み込みの段を通すため。
-pub struct MemorySource<'a>(pub &'a [(&'a str, &'a str)]);
-
-#[cfg(feature = "hir")]
-impl eml_hir::ModuleSource for MemorySource<'_> {
-    fn read(&self, path: &eml_hir::ModulePath) -> Result<String, eml_hir::ReadError> {
-        let wanted = path.file_path();
-        self.0
-            .iter()
-            .find(|(file, _)| *file == wanted)
-            .map(|(_, text)| text.to_string())
-            .ok_or(eml_hir::ReadError::NotFound)
-    }
-}
-
 /// パイプラインに通すソースの集まり。入口の本文だけ (`&str` から作る)、依存先のモジュールを足したもの (`with_modules`)、
 /// 標準ライブラリを差し替えたもの (`with_std`) の3つがある。段階の関数はどれもこれを受け取るので、ソースの組み方と
 /// 止める段階を別々に選べる。
@@ -144,7 +129,7 @@ pub fn with_std<'a>(std: &'a [(&'a str, &'a str)], entry: &'a str) -> Sources<'a
 #[cfg(feature = "hir")]
 impl Sources<'_> {
     pub fn session(self) -> Session {
-        let source = MemorySource(self.modules);
+        let source = eml_hir::MemorySource(self.modules);
         match self.std {
             Some(std) => Session::load_with_std(std, ENTRY_PATH, self.entry, &source),
             None => Session::load(ENTRY_PATH, self.entry, &source),
@@ -237,9 +222,8 @@ pub fn check<'a>(sources: impl Into<Sources<'a>>) -> Checked {
 pub fn check_inputs(inputs: &[eml_hir::SessionInput]) -> Checked {
     let (session, _) = Session::load_session(
         inputs,
-        "",
-        "",
-        &MemorySource(&[]),
+        None,
+        &eml_hir::MemorySource(&[]),
         &eml_hir::ImportCache::default(),
     );
     checked_session(session)

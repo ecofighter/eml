@@ -12,7 +12,7 @@ use super::class::ContextScope;
 use super::types::{arity_error, class_as_type, visit_type_vars};
 use super::{BodyOwner, ItemLowering, NameKind, PendingBody, not_found, path_name, unresolved};
 use crate::codes;
-use crate::def_map::Resolved;
+use crate::def_map::{Resolved, item_id};
 use crate::hir::{
     ClassId, Constraint, EffectRef, Function, FunctionKind, Generics, InstanceDef, InstanceId,
     InstanceOrigin, ItemId, MethodId, MethodImpl, ParamSort, RowRef, Signature, TypeDefId,
@@ -243,7 +243,7 @@ impl ItemLowering<'_> {
     ) {
         let lang = self.def_map.lang();
         for (k, item) in tree.data.iter().enumerate() {
-            let ty = self.def_map.type_id(self.module, k);
+            let ty = item_id(self.module, k);
             for (ptr, range) in &item.deriving {
                 let Some(class) = self.resolve_class(Some(ptr.to_node(self.root))) else {
                     continue;

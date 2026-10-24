@@ -1,6 +1,6 @@
 //! 演算子の列を fixity の表で木に組み直す (docs/spec/expressions.md の「演算子の列と単項マイナス」)。
 
-use eml_diagnostics::{Diagnostic, Label, TextRange, TextSize};
+use eml_diagnostics::{Diagnostic, FileId, Label, TextRange, TextSize};
 use eml_extern::FloatBits;
 use eml_syntax::ast::{self, OpSeqElement};
 
@@ -9,16 +9,14 @@ use super::{NameKind, NameUse, ambiguous, unresolved};
 use crate::codes;
 use crate::def_map::{NameRef, Resolved};
 use crate::hir::{ExprId, ExprKind, Literal, Res, ValueItem};
-use crate::item_tree::{Assoc, Fixity};
+use crate::item_tree::Fixity;
 
-#[derive(Clone)]
 enum Piece {
     Operand(ExprId, bool),
     Operator(Operator),
 }
 
 /// 列の中の演算子。名前は組み直す前に1回だけ引き、組み直しの fixity と `binary` の呼ぶ先が同じ結果を使う。
-#[derive(Clone)]
 struct Operator {
     text: String,
     range: TextRange,
@@ -34,9 +32,27 @@ struct Cursor {
 }
 
 impl Cursor {
-    fn peek(&self) -> Option<Piece> {
-        self.pieces.get(self.pos).cloned()
+    /// `at` の部品が演算子なら、その演算子。
+    fn operator(&self, at: usize) -> Option<&Operator> {
+        match self.pieces.get(at) {
+            Some(Piece::Operator(operator)) => Some(operator),
+            Some(Piece::Operand(..)) | None => None,
+        }
     }
+}
+
+/// 同じ優先順位で結合しない2つの演算子の E1006。式とパターンの組み直しが同じ文言にする。
+pub(super) fn non_associative(
+    file: FileId,
+    previous: &str,
+    text: &str,
+    range: TextRange,
+) -> Diagnostic {
+    Diagnostic::error(
+        codes::NON_ASSOCIATIVE_OPERATORS,
+        format!("`{previous}` and `{text}` cannot be combined without parentheses"),
+        Label::new(file, range, "use parentheses to group the operators"),
+    )
 }
 
 /// 単項の `-` は Haskell と同じく、優先順位 6 の `negate` として組み直す。
@@ -92,59 +108,55 @@ impl BodyLowering<'_> {
         self.climb(&mut cursor, 0, None)
     }
 
+    /// `previous` は直前に組んだ演算子、または囲む演算子の部品の位置である。同じ優先順位で結合しない並びを見つけるために
+    /// 使う。
     fn climb(
         &mut self,
         cursor: &mut Cursor,
         min_precedence: u8,
-        mut previous: Option<(String, u8, Assoc)>,
+        mut previous: Option<usize>,
     ) -> ExprId {
         let mut lhs = self.operand(cursor, min_precedence);
-        while let Some(Piece::Operator(Operator {
-            text,
-            range,
-            resolved,
-            fixity,
-        })) = cursor.peek()
-        {
-            // fixity は名前が解決した先の定義に付く (docs/spec/declarations.md の「fixity」)
-            let Fixity { precedence, assoc } = fixity;
-            if precedence < min_precedence {
+        // fixity は名前が解決した先の定義に付く (docs/spec/declarations.md の「fixity」)
+        while let Some(fixity) = cursor.operator(cursor.pos).map(|operator| operator.fixity) {
+            if fixity.precedence < min_precedence {
                 break;
             }
+            let at = cursor.pos;
             cursor.pos += 1;
-            // `previous` は直前に組んだ演算子、または囲む演算子。同じ優先順位で結合しない並びを見つけるために使う
-            let conflict = previous
-                .as_ref()
-                .is_some_and(|(_, p, a)| *p == precedence && (*a != assoc || assoc == Assoc::None));
-            let next_min = if assoc == Assoc::Right {
-                precedence
-            } else {
-                precedence + 1
-            };
-            let rhs = self.climb(cursor, next_min, Some((text.clone(), precedence, assoc)));
-            if conflict {
-                let (previous_text, _, _) = previous.as_ref().unwrap();
-                self.diagnostics.push(Diagnostic::error(
-                    codes::NON_ASSOCIATIVE_OPERATORS,
-                    format!(
-                        "`{previous_text}` and `{text}` cannot be combined without parentheses"
-                    ),
-                    Label::new(self.file, range, "use parentheses to group the operators"),
-                ));
-                // 組み方が決まらないので、型の誤りを連鎖させないように式全体を Missing にする
-                let whole = self.exprs[lhs].range.cover(self.exprs[rhs].range);
-                lhs = self.alloc(ExprKind::Missing, whole);
-            } else {
-                lhs = self.binary(&text, range, resolved, lhs, rhs);
+            let rhs = self.climb(cursor, fixity.right_min(), Some(at));
+            let operator = cursor.operator(at).expect("`at` is an operator");
+            match previous.and_then(|previous| cursor.operator(previous)) {
+                Some(before) if before.fixity.conflicts_with(fixity) => {
+                    self.diagnostics.push(non_associative(
+                        self.file,
+                        &before.text,
+                        &operator.text,
+                        operator.range,
+                    ));
+                    // 組み方が決まらないので、型の誤りを連鎖させないように式全体を Missing にする
+                    let whole = self.exprs[lhs].range.cover(self.exprs[rhs].range);
+                    lhs = self.alloc(ExprKind::Missing, whole);
+                }
+                _ => {
+                    lhs = self.binary(
+                        &operator.text,
+                        operator.range,
+                        operator.resolved.clone(),
+                        lhs,
+                        rhs,
+                    );
+                }
             }
-            previous = Some((text, precedence, assoc));
+            previous = Some(at);
         }
         lhs
     }
 
     fn operand(&mut self, cursor: &mut Cursor, min_precedence: u8) -> ExprId {
-        match cursor.peek() {
-            Some(Piece::Operator(Operator { text, range, .. })) if text == "-" => {
+        match cursor.pieces.get(cursor.pos) {
+            Some(Piece::Operator(operator)) if operator.text == "-" => {
+                let range = operator.range;
                 cursor.pos += 1;
                 if min_precedence > NEGATE_PRECEDENCE {
                     self.diagnostics.push(Diagnostic::error(
@@ -195,7 +207,7 @@ impl BodyLowering<'_> {
                     whole,
                 )
             }
-            Some(Piece::Operand(expr, _)) => {
+            Some(&Piece::Operand(expr, _)) => {
                 cursor.pos += 1;
                 expr
             }

@@ -362,7 +362,7 @@ pub(crate) fn test_program(text: &str) -> eml_hir::Program {
 /// `test_program` と、そのソース。診断を作るテストが使う。
 #[cfg(test)]
 pub(crate) fn test_program_with_files(text: &str) -> (eml_hir::Program, SourceFiles) {
-    let (loaded, _) = eml_hir::load("test.em", text, &NoModules);
+    let (loaded, _) = eml_hir::load("test.em", text, &eml_hir::MemorySource(&[]));
     let (def_map, _) = eml_hir::def_map(&loaded);
     let program = eml_hir::lower(&def_map, &loaded.modules).0;
     (program, loaded.files)
@@ -383,9 +383,8 @@ pub(crate) fn test_session(inputs: &[&str]) -> (eml_hir::Program, SourceFiles) {
     let (loaded, _, _) = eml_hir::load_session(
         eml_hir::STD,
         &inputs,
-        "",
-        "",
-        &NoModules,
+        None,
+        &eml_hir::MemorySource(&[]),
         &eml_hir::ImportCache::default(),
     );
     let (def_map, _) = eml_hir::def_map(&loaded);
@@ -414,23 +413,11 @@ pub(crate) fn test_query(inputs: &[&str], query: &str) -> (eml_hir::Program, Sou
     let (loaded, _, _) = eml_hir::load_session(
         eml_hir::STD,
         &session,
-        "",
-        "",
-        &NoModules,
+        None,
+        &eml_hir::MemorySource(&[]),
         &eml_hir::ImportCache::default(),
     );
     let (def_map, _) = eml_hir::def_map(&loaded);
     let program = eml_hir::lower(&def_map, &loaded.modules).0;
     (program, loaded.files)
-}
-
-/// 単体テストの入口は import を書かないので、依存先を読む手段は要らない。
-#[cfg(test)]
-struct NoModules;
-
-#[cfg(test)]
-impl eml_hir::ModuleSource for NoModules {
-    fn read(&self, _: &eml_hir::ModulePath) -> Result<String, eml_hir::ReadError> {
-        Err(eml_hir::ReadError::NotFound)
-    }
 }

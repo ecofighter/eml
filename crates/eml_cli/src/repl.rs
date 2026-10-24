@@ -22,7 +22,6 @@ const MIN_WIDTH: usize = 20;
 pub struct Repl {
     control: Arc<Control>,
     source: Box<dyn ModuleSource + Send>,
-    root: String,
     /// `:load` のファイルの表示のパス。ファイルを受け付けたかによらず持つ。
     file: Option<String>,
     machine: AnyMachine,
@@ -117,16 +116,10 @@ pub struct Closed {
 }
 
 impl Repl {
-    pub fn new(
-        config: &RunConfig,
-        source: Box<dyn ModuleSource + Send>,
-        root: &str,
-        host: HostRef,
-    ) -> Repl {
+    pub fn new(config: &RunConfig, source: Box<dyn ModuleSource + Send>, host: HostRef) -> Repl {
         Repl {
             control: Arc::clone(&config.control),
             source,
-            root: root.to_string(),
             file: None,
             machine: AnyMachine::new(config, host),
             accepted: Vec::new(),
@@ -150,8 +143,7 @@ impl Repl {
         source: Box<dyn ModuleSource + Send>,
         host: HostRef,
     ) -> (Repl, Evaluated) {
-        let root = &path[..path.rfind('/').map_or(0, |at| at + 1)];
-        let mut repl = Repl::new(config, source, root, host);
+        let mut repl = Repl::new(config, source, host);
         repl.file = Some(path.to_string());
         let evaluated = repl.evaluate(text, Form::File);
         (repl, evaluated)
@@ -179,13 +171,8 @@ impl Repl {
             text,
             form: InputForm::Query,
         });
-        let (session, _) = Session::load_session(
-            &inputs,
-            &self.root,
-            self.entry_file(),
-            &*self.source,
-            &self.cache,
-        );
+        let (session, _) =
+            Session::load_session(&inputs, self.file.as_deref(), &*self.source, &self.cache);
         let checked = session.check();
         let diagnostics = self.reported(checked.diagnostics, session.files());
         // 線形性、網羅性、E2012 は型の文字列を作った後で報告するので、診断で決める
@@ -205,7 +192,8 @@ impl Repl {
         // 前の入力で立った止める理由のビットを下ろす。確保量の上限で止まると `MEMORY` のビットが残り、後の入力が
         // すべて止まるため (docs/spec/object-model.md の「実行の制御」)
         self.control.clear();
-        if only_trivia(text) {
+        // 入力の番号を進めずに何もしないので、読み込みの前に調べる
+        if eml_syntax::only_trivia(text) {
             return Evaluated::without_files(Outcome::Empty);
         }
         if self.broken {
@@ -226,13 +214,8 @@ impl Repl {
                 },
             },
         });
-        let (session, read) = Session::load_session(
-            &inputs,
-            &self.root,
-            self.entry_file(),
-            &*self.source,
-            &self.cache,
-        );
+        let (session, read) =
+            Session::load_session(&inputs, self.file.as_deref(), &*self.source, &self.cache);
         let checked = session.check();
         let mut diagnostics = self.reported(checked.diagnostics, session.files());
         let mut uniform = BTreeMap::new();
@@ -332,13 +315,6 @@ impl Repl {
             .collect()
     }
 
-    /// `:load` のファイルの名前。入口のファイルとして `load_session` に渡す。
-    fn entry_file(&self) -> &str {
-        self.file
-            .as_deref()
-            .map_or("", |path| &path[path.rfind('/').map_or(0, |at| at + 1)..])
-    }
-
     /// 誤りはどのファイルのものも返す。警告は、前の入力を受け付けたときに一度返したので、この入力で初めて読んだファイルの
     /// ものだけを返す。
     fn reported(&self, diagnostics: Vec<Diagnostic>, files: &SourceFiles) -> Vec<Diagnostic> {
@@ -429,13 +405,6 @@ fn broken_session() -> RuntimeError {
         function: "<repl>".to_string(),
         at: None,
     }
-}
-
-/// 空白とコメントだけの入力か。入力の番号を進めずに何もしないので、読み込みの前に調べる。
-fn only_trivia(text: &str) -> bool {
-    let file = SourceFiles::new().add("<input>", text);
-    let (tokens, _) = eml_syntax::lex(file, text);
-    tokens.iter().all(|token| token.kind.is_trivia())
 }
 
 /// 入力をまたいで同じ item を指す鍵。HIR の番号は `eval` ごとに振り直すので、モジュールの名前とモジュールの中の番号で

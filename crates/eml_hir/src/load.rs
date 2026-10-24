@@ -31,6 +31,21 @@ pub trait ModuleSource {
     fn read(&self, path: &ModulePath) -> Result<String, ReadError>;
 }
 
+/// メモリの上の (根からの相対パス, 本文) の並び。テストと、ほかのファイルを読まない入力が、ファイルシステムの代わりに
+/// 渡す。CLI と同じ読み込みの段を通すためである。
+pub struct MemorySource<'a>(pub &'a [(&'a str, &'a str)]);
+
+impl ModuleSource for MemorySource<'_> {
+    fn read(&self, path: &ModulePath) -> Result<String, ReadError> {
+        let wanted = path.file_path();
+        self.0
+            .iter()
+            .find(|(file, _)| *file == wanted)
+            .map(|(_, text)| text.to_string())
+            .ok_or(ReadError::NotFound)
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ImportTarget {
     Module(ModuleId),
@@ -132,10 +147,7 @@ pub fn load_with_std(
     entry_text: &str,
     source: &dyn ModuleSource,
 ) -> (Loaded, Vec<Diagnostic>) {
-    let (root, entry_file) = match entry_path.rfind('/') {
-        Some(slash) => entry_path.split_at(slash + 1),
-        None => ("", entry_path),
-    };
+    let (root, entry_file) = split_path(entry_path);
     let cache = ImportCache::default();
     let mut loader = Loader::new(std, root, entry_file, source, &cache);
     let prelude = loader.add_prelude();
@@ -145,19 +157,18 @@ pub fn load_with_std(
 }
 
 /// REPL のセッションを読む。受け付けた入力と今の入力 (最後) をセッションのモジュールにし、今の入力を入口にする
-/// (docs/spec/modules.md の「REPL のセッション」)。`root` は import の表示の
-/// パスの前に付けるディレクトリ (`/` で終わるか空) である。`entry_file` は `:load` のファイル名 (最後の `/` の後ろ) で、
-/// なければ空である。ユーザーの import は、`cache` にあればその先と本文を使い、なければ `source` から読む。返す
-/// `ImportCache` は、この呼び出しで新しく読んだものだけを持つ。
+/// (docs/spec/modules.md の「REPL のセッション」)。`file` は `:load` のファイルの表示のパスで、import の根はその最後の
+/// `/` までである。ファイルがなければ根は空である。ユーザーの import は、`cache` にあればその先と本文を使い、なければ
+/// `source` から読む。返す `ImportCache` は、この呼び出しで新しく読んだものだけを持つ。
 pub fn load_session(
     std: &[(&str, &str)],
     inputs: &[SessionInput<'_>],
-    root: &str,
-    entry_file: &str,
+    file: Option<&str>,
     source: &dyn ModuleSource,
     cache: &ImportCache,
 ) -> (Loaded, Vec<Diagnostic>, ImportCache) {
     // 入口のファイルは `:load` のファイルで、なければ空である。依存先と後の入力がそれを import すると E1030 になる
+    let (root, entry_file) = file.map_or(("", ""), split_path);
     let mut loader = Loader::new(std, root, entry_file, source, cache);
     let prelude = loader.add_prelude();
     debug_assert!(
@@ -181,6 +192,11 @@ pub fn load_session(
     loader.finish(prelude, entry)
 }
 
+/// 表示のパスを、import の根 (最後の `/` まで。なければ空) とファイル名に分ける。
+fn split_path(path: &str) -> (&str, &str) {
+    path.split_at(path.rfind('/').map_or(0, |slash| slash + 1))
+}
+
 /// 標準ライブラリのファイル名 (`Fs.em`) を、`std/` からのモジュールのパスにする。
 fn std_path(file: &str) -> ModulePath {
     let stem = file
@@ -197,6 +213,8 @@ fn std_shown(file: &str) -> String {
 struct Loader<'a> {
     /// 埋め込んだ標準ライブラリ。モジュールは要るときに読む。
     std: &'a [(&'a str, &'a str)],
+    /// `std` の各ファイルの、`std/` からのモジュールのパス。import のたびにファイル名から作り直さないため、先に作る。
+    std_paths: Vec<ModulePath>,
     /// 入口の表示のパスのディレクトリ (`/` で終わるか空)。根は入口のファイルのディレクトリである
     /// (docs/spec/modules.md の「モジュール」)。
     root: &'a str,
@@ -238,6 +256,7 @@ impl<'a> Loader<'a> {
     ) -> Loader<'a> {
         Loader {
             std,
+            std_paths: std.iter().map(|&(file, _)| std_path(file)).collect(),
             root,
             entry_file,
             source,
@@ -265,10 +284,8 @@ impl<'a> Loader<'a> {
         if let Some(&id) = self.by_path.get(&(ModuleOrigin::Std, path.clone())) {
             return Some(id);
         }
-        let &(file, text) = self
-            .std
-            .iter()
-            .find(|&&(file, _)| std_path(file) == *path)?;
+        let index = self.std_paths.iter().position(|std| std == path)?;
+        let (file, text) = self.std[index];
         let id = module_id(self.modules.len());
         let name = format!("{STD_ROOT}.{}", path.dotted());
         self.add_std(file, &name, std_shown(file), text);
@@ -286,8 +303,9 @@ impl<'a> Loader<'a> {
         let std_names = self
             .std
             .iter()
-            .filter(|&&(file, _)| file != PRELUDE_FILE)
-            .map(|&(file, _)| std_path(file).dotted())
+            .zip(&self.std_paths)
+            .filter(|&(&(file, _), _)| file != PRELUDE_FILE)
+            .map(|(_, path)| path.dotted())
             .collect();
         let Loader {
             files,

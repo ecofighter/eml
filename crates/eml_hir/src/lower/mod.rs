@@ -19,7 +19,9 @@ use eml_syntax::{AstPtr, SyntaxNode, SyntaxToken, ast};
 use la_arena::{Arena, ArenaMap, Idx, RawIdx};
 
 use crate::codes;
-use crate::def_map::{DefMap, NameRef, Resolved, Resolver, module_id, not_in_module, private_name};
+use crate::def_map::{
+    DefMap, NameRef, Resolved, Resolver, item_id, module_id, not_in_module, private_name,
+};
 use crate::hir::*;
 use crate::item_tree::{FunctionItem, InputItemKind, ItemTree};
 use crate::load::{LoadedModule, STD_ROOT};
@@ -82,27 +84,20 @@ pub fn lower(def_map: &DefMap, modules: &[LoadedModule]) -> (Program, Vec<Diagno
     let mut instance_index = HashMap::new();
     for (index, loaded) in modules.iter().enumerate() {
         let module = module_id(index);
-        ItemLowering::new(
+        let mut lowering = ItemLowering::new(
             def_map,
             module,
             &loaded.tree,
             &roots[index],
             &mut diagnostics,
-        )
-        .lower_instances(
+        );
+        lowering.lower_instances(
             &loaded.tree,
             &mut arena,
             &mut instance_index,
             &mut pending[index],
         );
-        ItemLowering::new(
-            def_map,
-            module,
-            &loaded.tree,
-            &roots[index],
-            &mut diagnostics,
-        )
-        .derive_instances(&loaded.tree, &mut arena, &mut instance_index);
+        lowering.derive_instances(&loaded.tree, &mut arena, &mut instance_index);
     }
     let lang = def_map.lang();
     for (index, loaded) in modules.iter().enumerate() {
@@ -323,7 +318,7 @@ impl<'a> ItemLowering<'a> {
                     kind,
                 }),
             );
-            debug_assert_eq!(id, self.def_map.function_id(self.module, k));
+            debug_assert_eq!(id, item_id(self.module, k));
         }
     }
 
@@ -385,13 +380,11 @@ fn lower_bodies(
         )
         .lower_equations(&equations)
     };
-    let functions = tree.functions.iter().enumerate().map(|(k, function)| {
-        (
-            def_map.function_id(module, k),
-            function.equations.as_slice(),
-            None,
-        )
-    });
+    let functions = tree
+        .functions
+        .iter()
+        .enumerate()
+        .map(|(k, function)| (item_id(module, k), function.equations.as_slice(), None));
     let pending_functions = pending.iter().filter_map(|body| match body.owner {
         BodyOwner::Function {
             id,
