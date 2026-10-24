@@ -102,6 +102,15 @@ impl Tables {
         at
     }
 
+    /// [頭…, スロットの数, スロット…] のオペランドを足し、その先頭の添字を返す。
+    pub(crate) fn slot_list(&mut self, head: impl IntoIterator<Item = u32>, slots: &[Slot]) -> u32 {
+        let at = self.operands(head);
+        self.operands.push(slots.len() as u32);
+        self.operands
+            .extend(slots.iter().map(|&slot| u32::from(slot)));
+        at
+    }
+
     /// 書いた長さ。一致の確かめで書いた写しを消すために覚える。
     pub(crate) fn lengths(&self) -> [usize; 5] {
         [
