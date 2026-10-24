@@ -198,7 +198,6 @@ impl Runner<'_> {
         Repl::new(
             &self.config,
             Box::new(FsProvider::new(self.root)),
-            "",
             self.host.clone(),
         )
     }
@@ -302,7 +301,7 @@ fn run(inputs: &[Input], root: &Path, directory: bool, debug_heap: bool) -> Tran
     let config = RunConfig::default()
         .with_debug_heap(debug_heap)
         .with_control(Arc::new(Control::new(default_limits())));
-    let repl = Repl::new(&config, Box::new(FsProvider::new(root)), "", host.clone());
+    let repl = Repl::new(&config, Box::new(FsProvider::new(root)), host.clone());
     let mut runner = Runner {
         config,
         host,

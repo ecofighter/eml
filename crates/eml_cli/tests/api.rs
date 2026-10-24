@@ -325,7 +325,7 @@ impl Console {
     fn with_source(config: &RunConfig, source: Box<dyn ModuleSource + Send>) -> Console {
         let (host, out) = capture_host(Default::default());
         Console {
-            repl: Repl::new(config, source, "", host),
+            repl: Repl::new(config, source, host),
             out,
             read: 0,
         }
@@ -361,7 +361,7 @@ fn a_rejected_input_leaves_the_session_unchanged() {
 #[test]
 fn diagnostics_point_into_the_files_of_their_evaluation() {
     let (host, _) = capture_host(Default::default());
-    let mut repl = Repl::new(&RunConfig::default(), Box::new(MemorySource(&[])), "", host);
+    let mut repl = Repl::new(&RunConfig::default(), Box::new(MemorySource(&[])), host);
     assert_eq!(repl.eval("1 + 1").outcome, Outcome::Accepted);
     let evaluated = repl.eval("nope");
     let primary = &evaluated.diagnostics[0].primary;
@@ -371,7 +371,7 @@ fn diagnostics_point_into_the_files_of_their_evaluation() {
 #[test]
 fn an_input_of_only_comments_does_nothing() {
     let (host, _) = capture_host(Default::default());
-    let mut repl = Repl::new(&RunConfig::default(), Box::new(MemorySource(&[])), "", host);
+    let mut repl = Repl::new(&RunConfig::default(), Box::new(MemorySource(&[])), host);
     assert_eq!(repl.eval("").outcome, Outcome::Empty);
     assert_eq!(repl.eval("-- a note").outcome, Outcome::Empty);
     // 空の入力は番号を進めないので、次の入力が1番になる
@@ -620,7 +620,6 @@ fn an_interrupted_input_fails_and_the_session_continues() {
         let mut repl = Repl::new(
             &config,
             Box::new(MemorySource(&[])),
-            "",
             HostRef::new(host.clone()),
         );
         for input in [
@@ -710,7 +709,6 @@ fn a_file_left_open_by_an_interrupt_is_closed_by_recovery() {
         let mut repl = Repl::new(
             &config,
             Box::new(MemorySource(&[])),
-            "",
             HostRef::new(Arc::new(host)),
         );
         for input in [
@@ -1195,7 +1193,6 @@ fn a_result_that_cannot_be_written_fails_at_the_input() {
     let mut repl = Repl::new(
         &RunConfig::default(),
         Box::new(MemorySource(&[])),
-        "",
         HostRef::new(Arc::new(Unwritable)),
     );
     assert_eq!(repl.eval("let k = 2").outcome, Outcome::Accepted);

@@ -87,13 +87,12 @@ impl Session {
     /// 返す `ImportCache` は、この読み込みで新しく読んだモジュールで、`Repl` が入力を受け付けたときにだけ足す。
     pub fn load_session(
         inputs: &[eml_hir::SessionInput],
-        root: &str,
-        entry_file: &str,
+        file: Option<&str>,
         source: &dyn ModuleSource,
         cache: &eml_hir::ImportCache,
     ) -> (Session, eml_hir::ImportCache) {
         let (loaded, diagnostics, read) =
-            eml_hir::load_session(eml_hir::STD, inputs, root, entry_file, source, cache);
+            eml_hir::load_session(eml_hir::STD, inputs, file, source, cache);
         (Session::new((loaded, diagnostics)), read)
     }
 

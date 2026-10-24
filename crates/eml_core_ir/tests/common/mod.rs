@@ -126,8 +126,7 @@ fn session(
     let (loaded, mut diagnostics, _) = eml_hir::load_session(
         eml_hir::STD,
         &inputs,
-        "",
-        "",
+        None,
         &eml_hir::MemorySource(&[]),
         &eml_hir::ImportCache::default(),
     );

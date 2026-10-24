@@ -383,8 +383,7 @@ pub(crate) fn test_session(inputs: &[&str]) -> (eml_hir::Program, SourceFiles) {
     let (loaded, _, _) = eml_hir::load_session(
         eml_hir::STD,
         &inputs,
-        "",
-        "",
+        None,
         &eml_hir::MemorySource(&[]),
         &eml_hir::ImportCache::default(),
     );
@@ -414,8 +413,7 @@ pub(crate) fn test_query(inputs: &[&str], query: &str) -> (eml_hir::Program, Sou
     let (loaded, _, _) = eml_hir::load_session(
         eml_hir::STD,
         &session,
-        "",
-        "",
+        None,
         &eml_hir::MemorySource(&[]),
         &eml_hir::ImportCache::default(),
     );
