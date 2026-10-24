@@ -1045,7 +1045,7 @@ impl<'a> Usage<'a, '_> {
         constrain: impl FnOnce(&mut Table),
     ) {
         let origin = if self.reliable {
-            Provenance::At(KindOrigin {
+            Provenance::at(KindOrigin {
                 span: Span {
                     file: self.file,
                     range,

@@ -290,7 +290,7 @@ impl Table<'_> {
         let origin = self.kind_origin();
         for label in &row.labels {
             let labelled = match &origin {
-                Provenance::At(at) => Provenance::At(KindOrigin {
+                Provenance::At(at) => Provenance::at(KindOrigin {
                     span: at.span,
                     reason: KindReason::Performs(label.effect),
                 }),

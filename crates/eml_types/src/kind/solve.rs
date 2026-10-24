@@ -130,7 +130,7 @@ fn broken_bounds(
 /// ビルドでは、違反のあるプログラムを通さないよう関数を指す E3001 にする。
 fn reportable(provenance: &Provenance) -> Option<KindOrigin> {
     match provenance {
-        Provenance::At(origin) => Some(origin.clone()),
+        Provenance::At(origin) => Some(KindOrigin::clone(origin)),
         Provenance::Suppressed | Provenance::Given | Provenance::Bound(_) => None,
         Provenance::Declaration => {
             unreachable!("a constraint from a declaration alone is never violated")
@@ -157,13 +157,11 @@ fn with_cause<T: Level>(
         return origin;
     };
     if let Some(cause) = causes[lower.index()]
-        && let Provenance::At(KindOrigin {
-            span,
-            reason: KindReason::CapturedByLambda,
-        }) = &bounds.origins[cause]
-        && span.file == origin.span.file
+        && let Provenance::At(found) = &bounds.origins[cause]
+        && found.reason == KindReason::CapturedByLambda
+        && found.span.file == origin.span.file
     {
-        *lambda = Some(span.range);
+        *lambda = Some(found.span.range);
     }
     origin
 }
@@ -206,17 +204,16 @@ fn with_bound_cause(
 /// 使う。
 fn bound_origin(origin: &Provenance, source: BoundSource) -> Provenance {
     match origin {
-        Provenance::At(KindOrigin {
-            span,
-            reason: KindReason::Passed(name),
-        }) => Provenance::At(KindOrigin {
-            span: *span,
-            reason: KindReason::RowBound {
-                name: name.clone(),
-                source,
-                cause: None,
-            },
-        }),
+        Provenance::At(at) if let KindReason::Passed(name) = &at.reason => {
+            Provenance::at(KindOrigin {
+                span: at.span,
+                reason: KindReason::RowBound {
+                    name: name.clone(),
+                    source,
+                    cause: None,
+                },
+            })
+        }
         other => other.clone(),
     }
 }
@@ -240,13 +237,11 @@ impl SourceIndex {
                 ((Bound::Var(var), Bound::Const(_)), Provenance::Bound(span)) => {
                     written.entry(var.index()).or_insert(*span);
                 }
-                (
-                    (Bound::Var(var), Bound::Const(upper)),
-                    Provenance::At(KindOrigin {
-                        span,
-                        reason: KindReason::RowBound { name, .. },
-                    }),
-                ) => copied.push((var.index(), upper, *span, name.clone())),
+                ((Bound::Var(var), Bound::Const(upper)), Provenance::At(at))
+                    if let KindReason::RowBound { name, .. } = &at.reason =>
+                {
+                    copied.push((var.index(), upper, at.span, name.clone()))
+                }
                 _ => {}
             }
         }
@@ -506,10 +501,7 @@ impl Merged {
                         !(source == BoundSource::Unknown
                             && matches!(
                                 origin,
-                                Provenance::At(KindOrigin {
-                                    reason: KindReason::Passed(_),
-                                    ..
-                                })
+                                Provenance::At(at) if matches!(at.reason, KindReason::Passed(_))
                             )),
                         "a bound copied to a reference has no source"
                     );
@@ -522,16 +514,15 @@ impl Merged {
         }
         for carry in &scheme.carries {
             let origin = match origin {
-                Provenance::At(KindOrigin {
-                    span,
-                    reason: KindReason::Passed(name),
-                }) => Provenance::At(KindOrigin {
-                    span: *span,
-                    reason: KindReason::CarriedThrough {
-                        name: name.clone(),
-                        inner: carry.origin.origin().map(CarriedInner::of),
-                    },
-                }),
+                Provenance::At(at) if let KindReason::Passed(name) = &at.reason => {
+                    Provenance::at(KindOrigin {
+                        span: at.span,
+                        reason: KindReason::CarriedThrough {
+                            name: name.clone(),
+                            inner: carry.origin.origin().map(CarriedInner::of),
+                        },
+                    })
+                }
                 other => other.clone(),
             };
             self.carries.push(Carry {
@@ -1477,7 +1468,7 @@ mod tests {
             carries: vec![Carry {
                 lin: Bound::Var(KindVar::from_index(0)),
                 mult: Bound::Const(Multiplicity::Multi),
-                origin: Provenance::At(inner),
+                origin: Provenance::at(inner),
             }],
             bound_sources: Vec::new(),
         };
@@ -1491,7 +1482,7 @@ mod tests {
             decl: function(9),
             lin: vec![passed],
             mult: vec![],
-            origin: Provenance::At(KindOrigin {
+            origin: Provenance::at(KindOrigin {
                 span: at(5, 9),
                 reason: KindReason::Passed("keep".to_string()),
             }),
@@ -1509,7 +1500,7 @@ mod tests {
                 carries: vec![Carry {
                     lin: Bound::Var(KindVar::from_index(0)),
                     mult: Bound::Const(Multiplicity::Multi),
-                    origin: Provenance::At(KindOrigin {
+                    origin: Provenance::at(KindOrigin {
                         span: at(5, 9),
                         reason: KindReason::CarriedThrough {
                             name: "keep".to_string(),
@@ -1581,7 +1572,7 @@ mod tests {
         let mut multiplicity = lattice::<Multiplicity>();
         let e = multiplicity.fresh();
         let origin = |start, end| {
-            Provenance::At(KindOrigin {
+            Provenance::at(KindOrigin {
                 span: at(start, end),
                 reason: KindReason::Unified,
             })

@@ -680,7 +680,7 @@ impl BodyCheck<'_, '_> {
         };
         let previous = self
             .table
-            .set_kind_origin(Provenance::At(KindOrigin { span, reason }));
+            .set_kind_origin(Provenance::at(KindOrigin { span, reason }));
         let result = check(self);
         self.table.set_kind_origin(previous);
         result

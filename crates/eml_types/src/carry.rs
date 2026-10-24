@@ -408,7 +408,7 @@ impl Carrying<'_, '_> {
             return;
         }
         let origin = if self.reliable {
-            Provenance::At(KindOrigin {
+            Provenance::at(KindOrigin {
                 span: Span {
                     file: self.file,
                     range: self.body.exprs[at].range,
