@@ -565,10 +565,17 @@ impl CarriedValue {
 }
 
 /// 値がまたぐもの。持ち越しのパスが多重度の成分を作るのに使う。操作の直接の呼び出しでは、その操作の多重度だけを見る。
-#[derive(Debug, Clone)]
-pub(crate) enum Across {
-    Row(Row),
+#[derive(Debug, Clone, Copy)]
+pub(crate) enum Across<'a> {
+    Row(&'a Row),
     Operation(OperationId),
+}
+
+/// 値がまたぐものの多重度の成分と、報告が指す `multi` の操作。持ち越しのパスが、またぐ式ごとに1回だけ求める。
+/// 成分が空なら制約を出さない。
+pub(crate) struct Crossing {
+    pub mults: Vec<Bound<Multiplicity>>,
+    pub multi: Option<OperationId>,
 }
 
 /// 値がまたぐ式の種類。E3006 の primary の言い方を決める。
