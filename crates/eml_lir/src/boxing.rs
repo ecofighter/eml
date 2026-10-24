@@ -20,7 +20,7 @@ use crate::variants;
 use crate::verify::block_shapes;
 use crate::{
     Atom, Block, BlockId, Call, CasePattern, EffectInfo, Layout, LirFn, Mark, OpRet, OperationInfo,
-    Program, Repr, Rhs, Stmt, Structs, Term, VarId, VarInfo, operation,
+    Program, Repr, Rhs, Stmt, Structs, Term, VarId, VarInfo, operation, push_var,
 };
 
 pub fn boxing(program: &mut Program) {
@@ -351,8 +351,7 @@ impl Converter<'_> {
 
     /// 足す変数の印は `converted_mark` が決める。
     fn fresh(&mut self, name: String, repr: Repr, mark: Mark) -> VarId {
-        self.function.vars.push(VarInfo { name, repr, mark });
-        VarId(self.function.vars.len() as u32 - 1)
+        push_var(&mut self.function.vars, VarInfo { name, repr, mark })
     }
 
     fn name(&self, var: VarId) -> String {

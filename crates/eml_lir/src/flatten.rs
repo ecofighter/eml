@@ -15,6 +15,7 @@ use std::collections::{HashMap, HashSet};
 use crate::{
     Atom, BlockId, Call, Case, CasePattern, Ctor, EffectInfo, FloatBits, Layout, LirFn, Mark,
     OpRet, Prim, Program, Repr, Rhs, Stmt, StructId, Structs, Term, VarId, VarInfo, operation,
+    push_var,
 };
 
 pub fn flatten(program: &mut Program) {
@@ -152,8 +153,7 @@ impl<'a> Flattener<'a> {
     }
 
     fn fresh(&mut self, name: String, repr: Repr, mark: Mark) -> VarId {
-        self.function.vars.push(VarInfo { name, repr, mark });
-        VarId(self.function.vars.len() as u32 - 1)
+        push_var(&mut self.function.vars, VarInfo { name, repr, mark })
     }
 
     fn name(&self, var: VarId) -> String {
