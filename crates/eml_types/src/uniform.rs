@@ -766,59 +766,19 @@ fn vars_in(
     found
 }
 
-/// 強連結成分の番号。Tarjan の方法を作業の列で行い、グラフの深さに比例して Rust のスタックを使わない。
+/// 強連結成分の番号。
 fn strongly_connected(edges: &[Vec<(usize, bool)>]) -> Vec<usize> {
-    const UNSEEN: usize = usize::MAX;
-    let mut index = vec![UNSEEN; edges.len()];
-    let mut low = vec![0; edges.len()];
-    let mut on_stack = vec![false; edges.len()];
-    let mut stack = Vec::new();
-    let mut component = vec![UNSEEN; edges.len()];
-    let (mut next_index, mut next_component) = (0, 0);
-    for root in 0..edges.len() {
-        if index[root] != UNSEEN {
-            continue;
-        }
-        // (節点, 次に見る辺の位置)
-        let mut work = vec![(root, 0)];
-        index[root] = next_index;
-        low[root] = next_index;
-        next_index += 1;
-        stack.push(root);
-        on_stack[root] = true;
-        while let Some(&(node, edge)) = work.last() {
-            if let Some(&(to, _)) = edges[node].get(edge) {
-                work.last_mut().expect("read above").1 += 1;
-                if index[to] == UNSEEN {
-                    index[to] = next_index;
-                    low[to] = next_index;
-                    next_index += 1;
-                    stack.push(to);
-                    on_stack[to] = true;
-                    work.push((to, 0));
-                } else if on_stack[to] {
-                    low[node] = low[node].min(index[to]);
-                }
-                continue;
+    let mut component = vec![usize::MAX; edges.len()];
+    let mut next = 0;
+    crate::scc::tarjan(
+        edges.len(),
+        |node, edge| edges[node].get(edge).map(|&(to, _)| to),
+        |members| {
+            for &member in members {
+                component[member] = next;
             }
-            work.pop();
-            if let Some(&(parent, _)) = work.last() {
-                low[parent] = low[parent].min(low[node]);
-            }
-            if low[node] == index[node] {
-                loop {
-                    let member = stack
-                        .pop()
-                        .expect("the root of a component is on the stack");
-                    on_stack[member] = false;
-                    component[member] = next_component;
-                    if member == node {
-                        break;
-                    }
-                }
-                next_component += 1;
-            }
-        }
-    }
+            next += 1;
+        },
+    );
     component
 }

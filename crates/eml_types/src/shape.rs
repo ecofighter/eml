@@ -15,6 +15,7 @@ use la_arena::{Arena, ArenaMap};
 use crate::context::Context;
 use crate::data::Variance;
 use crate::kind::eval::SchemeFacts;
+use crate::kind::problem::OwnVars;
 use crate::kind::{KindVar, Provenance, Span};
 use crate::store::{EffectLabel, Lin, RowTail, RowType, TypeId, TypeKind, TypeStore};
 use crate::table::{ArrowLin, Label, RigidVar, Row, RowVar, Table, Tail, Ty, TyShape};
@@ -464,8 +465,7 @@ pub(crate) struct Instantiated {
 pub(crate) struct Own {
     pub ty: Ty,
     pub rigids: Rigids,
-    pub lin: Vec<KindVar>,
-    pub mult: Vec<KindVar>,
+    pub vars: OwnVars,
 }
 
 /// 段0: 関数、メソッド、組み込みのシグネチャの形。使い捨ての表に下ろしてから閉じる。下ろす処理を本体の注釈と共有する
@@ -793,8 +793,7 @@ impl Shape {
         Own {
             ty,
             rigids,
-            lin,
-            mult,
+            vars: OwnVars { lin, mult },
         }
     }
 
@@ -1208,7 +1207,10 @@ mod tests {
         let mut table = Table::new(&context);
         let own =
             shape.instantiate_rigid(&mut table, &signature.generics, program.file(program.entry));
-        assert_eq!(table.kind_vars(own.ty), (own.lin.clone(), own.mult.clone()));
+        assert_eq!(
+            table.kind_vars(own.ty),
+            (own.vars.lin.clone(), own.vars.mult.clone())
+        );
         assert_eq!(table.show(own.ty, &program), "(a -> <e> a) -> a -> <e> a");
     }
 
@@ -1223,7 +1225,10 @@ mod tests {
         let mut table = Table::new(&context);
         let own =
             shape.instantiate_rigid(&mut table, &signature.generics, program.file(program.entry));
-        assert_eq!(table.kind_vars(own.ty), (own.lin.clone(), own.mult.clone()));
+        assert_eq!(
+            table.kind_vars(own.ty),
+            (own.vars.lin.clone(), own.vars.mult.clone())
+        );
         assert_eq!(
             table.show(own.ty, &program),
             "(b -> <f> b) -> Iter <e> (a -> a) -> <f> Int"

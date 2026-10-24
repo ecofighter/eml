@@ -940,60 +940,20 @@ fn upward_closure<U: Copy>(upward: &Edges, seed: Vec<U>, join: impl Fn(U, U) -> 
     out
 }
 
-/// Tarjan の方法で強連結成分の番号を振る。変数が多くても Rust のスタックを使わないよう、明示的なスタックでたどる
-/// (`scc.rs` と同じ形)。
+/// 強連結成分の番号と成分の数。
 fn components(edges: &[Vec<usize>]) -> (Vec<usize>, usize) {
-    let unvisited = usize::MAX;
-    let n = edges.len();
-    let mut index = vec![unvisited; n];
-    let mut low = vec![0; n];
-    let mut on_stack = vec![false; n];
-    let mut component = vec![unvisited; n];
-    let mut stack = Vec::new();
-    let mut next = 0;
+    let mut component = vec![usize::MAX; edges.len()];
     let mut count = 0;
-    for root in 0..n {
-        if index[root] != unvisited {
-            continue;
-        }
-        let mut work = vec![(root, 0)];
-        index[root] = next;
-        low[root] = next;
-        next += 1;
-        stack.push(root);
-        on_stack[root] = true;
-        while let Some(&(v, edge)) = work.last() {
-            if let Some(&w) = edges[v].get(edge) {
-                work.last_mut().unwrap().1 += 1;
-                if index[w] == unvisited {
-                    index[w] = next;
-                    low[w] = next;
-                    next += 1;
-                    stack.push(w);
-                    on_stack[w] = true;
-                    work.push((w, 0));
-                } else if on_stack[w] {
-                    low[v] = low[v].min(index[w]);
-                }
-                continue;
+    crate::scc::tarjan(
+        edges.len(),
+        |v, edge| edges[v].get(edge).copied(),
+        |members| {
+            for &w in members {
+                component[w] = count;
             }
-            work.pop();
-            if let Some(&(parent, _)) = work.last() {
-                low[parent] = low[parent].min(low[v]);
-            }
-            if low[v] == index[v] {
-                loop {
-                    let w = stack.pop().unwrap();
-                    on_stack[w] = false;
-                    component[w] = count;
-                    if w == v {
-                        break;
-                    }
-                }
-                count += 1;
-            }
-        }
-    }
+            count += 1;
+        },
+    );
     (component, count)
 }
 

@@ -105,6 +105,50 @@ pub(super) struct BodyCheck<'a, 'c> {
     pub(super) fn_clause_bodies: HashMap<ExprId, (Ty, Origin)>,
 }
 
+impl<'a, 'c> BodyCheck<'a, 'c> {
+    /// 関数 `id` の本体の検査を始める。ここから後の制約は、由来を付け忘れたら `Unattributed` になり、違反すれば
+    /// 段2が見つける。
+    #[allow(clippy::too_many_arguments)]
+    pub(super) fn new(
+        program: &'a Program,
+        files: &'a SourceFiles,
+        id: FunctionId,
+        rigids: &'a Rigids,
+        signatures: &'a Signatures,
+        table: &'a mut Table<'c>,
+        types: &'a mut TypeStore,
+        diagnostics: &'a mut Vec<Diagnostic>,
+        ambient_source: AmbientSource,
+    ) -> Self {
+        let function = &program[id];
+        let file = program.file(id.module);
+        table.set_kind_origin(Provenance::Unattributed(Span {
+            file,
+            range: function.name_range,
+        }));
+        BodyCheck {
+            program,
+            files,
+            file,
+            function,
+            function_id: id,
+            body: program.body(id).expect("a checked function has a body"),
+            rigids,
+            signatures,
+            table,
+            types,
+            diagnostics,
+            ambient: Row::pure(),
+            ambient_source,
+            typing: BodyTyping::default(),
+            instances: Vec::new(),
+            inclusions: Vec::new(),
+            failed_calls: HashSet::new(),
+            fn_clause_bodies: HashMap::new(),
+        }
+    }
+}
+
 /// 式に期待する型。check と infer で `if` とブロックの処理を共有するため。
 pub(super) enum Expectation {
     Has(Ty, Origin),

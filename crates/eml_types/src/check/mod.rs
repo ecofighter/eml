@@ -11,10 +11,10 @@ use la_arena::Arena;
 use crate::context::Context;
 use crate::kind::entail::{Unentailed, unentailed};
 use crate::kind::eval::scheme_facts;
-use crate::kind::problem::{Instance, KindProblem, KindScheme, OwnVars};
+use crate::kind::problem::{Instance, KindProblem, KindScheme};
 use crate::kind::solve::{Solution, solve_scc};
 use crate::kind::summary::BodyKinds;
-use crate::kind::{Bound, KindOrigin, KindReason, KindVar, Provenance, Span};
+use crate::kind::{Bound, KindOrigin, KindReason, KindVar, Provenance};
 use crate::shape::{Arrows, Own, Shape, constructor_shape, operation_shape, signature_shape};
 use crate::store::{EffectLabel, Lin, TypeKind, TypeStore};
 use crate::table::{Exporter, RigidVar, Row, Table, TyShape};
@@ -80,12 +80,10 @@ pub(crate) struct PendingBody<'c> {
 impl PendingBody<'_> {
     /// Kind の制約を取り出す。表の形は書き出しで使うので残す。
     pub fn take_problem(&mut self) -> KindProblem {
-        let own = OwnVars {
-            lin: self.own.lin.clone(),
-            mult: self.own.mult.clone(),
-        };
-        self.table
-            .take_problem(std::mem::take(&mut self.instances), own)
+        self.table.take_problem(
+            std::mem::take(&mut self.instances),
+            std::mem::take(&mut self.own.vars),
+        )
     }
 }
 
@@ -489,38 +487,57 @@ pub(crate) fn check_body<'c>(
         table.kind_at_most(own.rigids.ty(var), Bound::Const(Linearity::Unr));
     }
     table.set_kind_origin(previous);
-    let file = program.file(id.module);
-    // ここから後の制約は、由来を付け忘れたら Unattributed になり、違反すれば段2が見つける
-    table.set_kind_origin(Provenance::Unattributed(Span {
-        file,
-        range: function.name_range,
-    }));
     let mut diagnostics = Vec::new();
-    let mut checker = BodyCheck {
+    let mut checker = BodyCheck::new(
         program,
         files,
-        file,
-        function,
-        function_id: id,
-        body,
-        rigids: &own.rigids,
+        id,
+        &own.rigids,
         signatures,
-        table: &mut table,
-        types: &mut *types,
-        diagnostics: &mut diagnostics,
-        ambient: Row::pure(),
-        ambient_source: AmbientSource::Signature,
-        typing: BodyTyping::default(),
-        instances: Vec::new(),
-        inclusions: Vec::new(),
-        failed_calls: HashSet::new(),
-        fn_clause_bodies: HashMap::new(),
-    };
+        &mut table,
+        types,
+        &mut diagnostics,
+        AmbientSource::Signature,
+    );
     checker.check_function(own.ty);
     checker.solve_inclusions(&[]);
     checker.solve_constraints(Defaulting::None);
-    let mut typing = checker.typing;
-    let instances = checker.instances;
+    let (typing, instances) = (checker.typing, checker.instances);
+    // 頭が線形な instance (E2010) のメソッドは、頭の値を `Unr` とみなして書いた本体なので、線形性の診断を重ねない
+    // (docs/spec/types.md の「`Unr` のクラス」)
+    let linear_head = matches!(function.kind, FunctionKind::InstanceMethod(instance, _)
+        if context.data_kinds[program[instance].head].lin);
+    Some(finish_body(
+        program,
+        id,
+        table,
+        types,
+        typing,
+        own,
+        instances,
+        None,
+        diagnostics,
+        linear_head,
+    ))
+}
+
+/// 段1の本体の検査の後半。`var` の変数を分類し、使用回数と持ち越しの制約を足して、段2を待つ本体にする。
+/// `check_body` と `check_input` が共有する。
+#[allow(clippy::too_many_arguments)]
+fn finish_body<'c>(
+    program: &Program,
+    id: FunctionId,
+    mut table: Table<'c>,
+    types: &mut TypeStore,
+    mut typing: BodyTyping,
+    own: Own,
+    instances: Vec<Instance>,
+    query: Option<String>,
+    mut diagnostics: Vec<Diagnostic>,
+    linear_head: bool,
+) -> (PendingBody<'c>, Vec<Diagnostic>) {
+    let file = program.file(id.module);
+    let body = program.body(id).expect("a checked function has a body");
     var::classify(
         program,
         file,
@@ -530,10 +547,6 @@ pub(crate) fn check_body<'c>(
         &mut typing,
         &mut diagnostics,
     );
-    // 頭が線形な instance (E2010) のメソッドは、頭の値を `Unr` とみなして書いた本体なので、線形性の診断を重ねない
-    // (docs/spec/types.md の「`Unr` のクラス」)
-    let linear_head = matches!(function.kind, FunctionKind::InstanceMethod(instance, _)
-        if context.data_kinds[program[instance].head].lin);
     let reliable = usage::reliable(body, diagnostics.is_empty()) && !linear_head;
     let implicit_drops =
         usage::constrain(program, file, body, &typing, &mut table, types, reliable);
@@ -546,18 +559,18 @@ pub(crate) fn check_body<'c>(
         reliable,
         &implicit_drops,
     );
-    Some((
+    (
         PendingBody {
             table,
             typing,
             own,
             instances,
             reliable,
-            query: None,
+            query,
             implicit_drops,
         },
         diagnostics,
-    ))
+    )
 }
 
 /// 段1の本体の型を、SCC の解から求めた Kind 変数の値 `kinds` を使って `TypeStore` に書き出し、本体の `joins` も返す。
@@ -829,11 +842,7 @@ fn declaration_problem(
     let mut table = Table::new(context);
     let own = shape.instantiate_rigid(&mut table, generics, file);
     constrain(&mut table, &own);
-    let own_vars = OwnVars {
-        lin: own.lin,
-        mult: own.mult,
-    };
-    table.into_problem(Vec::new(), own_vars)
+    table.into_problem(Vec::new(), own.vars)
 }
 
 /// instance のメソッドと既定のメソッドの Kind のスキームが、クラスの側のスキームから導けることを確かめる (E2011。

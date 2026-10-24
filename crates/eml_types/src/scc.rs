@@ -1,12 +1,11 @@
 //! トップレベルの関数の呼び出しグラフの強連結成分 (docs/spec/types.md の「推論」)。Kind の制約は呼び出しを通じて
 //! 伝わるので、呼ばれる側の SCC から順に検査する。
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use eml_hir::{ExprKind, FunctionId, Program, Res, ValueItem};
 
-/// SCC を、呼ばれる側が先になる順に返す。Tarjan の方法で、関数の数が多くても Rust のスタックを使わないように、
-/// 明示的なスタックでたどる。
+/// SCC を、呼ばれる側が先になる順に返す。
 pub(crate) fn components(program: &Program) -> Vec<Vec<FunctionId>> {
     let ids: Vec<FunctionId> = program.functions().map(|(id, _)| id).collect();
     let position: HashMap<FunctionId, usize> =
@@ -20,17 +19,36 @@ pub(crate) fn components(program: &Program) -> Vec<Vec<FunctionId>> {
                 .collect()
         })
         .collect();
-    let unvisited = usize::MAX;
-    let mut index = vec![unvisited; ids.len()];
-    let mut low = vec![0; ids.len()];
-    let mut on_stack = vec![false; ids.len()];
-    let mut stack = Vec::new();
-    let mut next = 0;
     let mut out = Vec::new();
-    for root in 0..ids.len() {
+    tarjan(
+        ids.len(),
+        |v, edge| edges[v].get(edge).copied(),
+        |members| out.push(members.iter().rev().map(|&w| ids[w]).collect()),
+    );
+    out
+}
+
+/// Tarjan の方法で強連結成分を求め、見つけた順 (行き先の成分が先) に `component` へ渡す。節点が多くても Rust の
+/// スタックを使わないよう、明示的なスタックでたどる。`succ(v, i)` は `v` の `i` 番目の辺の行き先で、なければ
+/// `None` である。成分の節点はスタックから外した順に並ぶ。この順は SCC の検査の順と Kind 変数の番号を決めるので、
+/// 呼ぶ側は並べ替えずに使う。
+pub(crate) fn tarjan(
+    n: usize,
+    succ: impl Fn(usize, usize) -> Option<usize>,
+    mut component: impl FnMut(&[usize]),
+) {
+    let unvisited = usize::MAX;
+    let mut index = vec![unvisited; n];
+    let mut low = vec![0; n];
+    let mut on_stack = vec![false; n];
+    let mut stack = Vec::new();
+    let mut members = Vec::new();
+    let mut next = 0;
+    for root in 0..n {
         if index[root] != unvisited {
             continue;
         }
+        // (節点, 次に見る辺の位置)
         let mut work = vec![(root, 0)];
         index[root] = next;
         low[root] = next;
@@ -38,8 +56,8 @@ pub(crate) fn components(program: &Program) -> Vec<Vec<FunctionId>> {
         stack.push(root);
         on_stack[root] = true;
         while let Some(&(v, edge)) = work.last() {
-            if let Some(&w) = edges[v].get(edge) {
-                work.last_mut().unwrap().1 += 1;
+            if let Some(w) = succ(v, edge) {
+                work.last_mut().expect("read above").1 += 1;
                 if index[w] == unvisited {
                     index[w] = next;
                     low[w] = next;
@@ -57,21 +75,21 @@ pub(crate) fn components(program: &Program) -> Vec<Vec<FunctionId>> {
                 low[parent] = low[parent].min(low[v]);
             }
             if low[v] == index[v] {
-                let mut component = Vec::new();
+                members.clear();
                 loop {
-                    let w = stack.pop().unwrap();
+                    let w = stack
+                        .pop()
+                        .expect("the root of a component is on the stack");
                     on_stack[w] = false;
-                    component.push(ids[w]);
+                    members.push(w);
                     if w == v {
                         break;
                     }
                 }
-                component.reverse();
-                out.push(component);
+                component(&members);
             }
         }
     }
-    out
 }
 
 /// 本体で参照するトップレベルの関数。呼び出しと値としての参照の両方を数える。`let` の束縛の参照は、束縛を作った入力の
@@ -81,6 +99,7 @@ fn callees(program: &Program, id: FunctionId) -> Vec<FunctionId> {
         return Vec::new();
     };
     let mut out = Vec::new();
+    let mut seen = HashSet::new();
     for (_, expr) in body.exprs.iter() {
         // `let` の束縛の型は、束縛を作った入力の関数を書き出して決まるので、その入力の関数を先に検査する
         // (docs/spec/types.md の「REPL の入力」)
@@ -89,7 +108,8 @@ fn callees(program: &Program, id: FunctionId) -> Vec<FunctionId> {
             ExprKind::Path(Res::Item(ValueItem::Binding(binding))) => program[binding].input,
             _ => continue,
         };
-        if !out.contains(&callee) {
+        // 並びの順が深さ優先の順を決めるので、集合は重複を除くだけに使う
+        if seen.insert(callee) {
             out.push(callee);
         }
     }
