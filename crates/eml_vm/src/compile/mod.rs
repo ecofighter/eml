@@ -74,11 +74,14 @@ impl<M: Mode> CodeBase<M> {
         let links = Links { strings, ..links };
         let known = functions.len();
         // verifier の拒む関数は表を持たず、その関数のフレームを通る中断は内部の誤りになる。VM 自身の見張りを
-        // 確かめるテストが、verifier を通さない IR を読み込むためである
-        let points: Vec<Vec<UnwindPoint>> = eml_lir::unwind::points_all(program)
-            .into_iter()
-            .map(Result::unwrap_or_default)
-            .collect();
+        // 確かめるテストが、verifier を通さない IR を読み込むためである。表を作るのは変換する関数だけで、debug
+        // ビルドではすでにある関数も変換し直して比べる
+        let points: Vec<Vec<UnwindPoint>> = eml_lir::unwind::points(program, |FnIdx(i)| {
+            cfg!(debug_assertions) || links.functions[i as usize] as usize >= known
+        })
+        .into_iter()
+        .map(|points| points.and_then(Result::ok).unwrap_or_default())
+        .collect();
         let mut result = Ok(());
         for (i, function) in program.functions.iter().enumerate() {
             if links.functions[i] as usize >= known {

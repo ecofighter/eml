@@ -340,7 +340,7 @@ HIR への変換では、名前解決に加えて、名前の重複と未定義�
 - `prim dummy()` は、ヒープごとに1つ確保する不死の物体 (値 0 の `BigInt`) を指す語である。`dup`、`decref`、`drop` は何もせず、`unbox` は 0 を読む ([オブジェクトモデル](../spec/object-model.md) の「ダミーの値」)
 - 正しく終わった実行では、`Ctx::check_finished` で `evv` が空で yield の状態がなしであることを確かめてから、検査モードのリークを数える。残った evidence がリークに見えないように、この検査はモードによらず行う
 - `drop k` は、継続のクロージャを解放する。物体は捕まえた値だけを所有するので、子をたどる解放が、捕まっていた値を1回ずつ解放する。捕まっていた `FileIn` は `Foreign` の物体で、この解放で読み出し口が捨てられて閉じる ([オブジェクトモデル](../spec/object-model.md) の「読み手」)
-- 中断 (`never` の操作、`try_io` が捕まえる IO の失敗、`exit`) は継続を組み立てず、VM がタスクのスタックを巻き戻す。外すフレームの値と生きている token は、コード生成が LIR の所有の走査 (`eml_lir::unwind::points_all`) から作った巻き戻しの表で手放し、着地の印 (`apply … prompt ev`) の evidence が宛先と同じフレームで止まる ([VM](../spec/vm.md) の「巻き戻し」)
+- 中断 (`never` の操作、`try_io` が捕まえる IO の失敗、`exit`) は継続を組み立てず、VM がタスクのスタックを巻き戻す。外すフレームの値と生きている token は、コード生成が LIR の所有の走査 (`eml_lir::unwind::points`) から作った巻き戻しの表で手放し、着地の印 (`apply … prompt ev`) の evidence が宛先と同じフレームで止まる ([VM](../spec/vm.md) の「巻き戻し」)
 - `extern` 命令は、フレームを積まずにその場で実行して値を返す。extern は eml のコードを呼び返さないので、継続を組み立てる必要がないためである。ただし、IO の extern が `try_io` の捕まえる種類の誤りで失敗すると、VM が最も近い `IO` の evidence (`Ctx::ev_find`) の `io_failed` の節の入口を呼んで、失敗を届ける。入口は中断を始め、巻き戻しが `try_io` の handle のフレームまでスタックを戻す
 - `exit` は、`Ctx::exit_abort` で宛先を不死のダミーの物体にした中断を始め、`Finish` まで巻き戻す。途中のフレームが持っていた値は、巻き戻しの表で後始末される ([VM](../spec/vm.md) の「extern の中断」)
 

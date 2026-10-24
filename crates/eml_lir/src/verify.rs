@@ -73,16 +73,23 @@ enum Level {
     Ownership,
 }
 
-/// Perceus の後の関数を所有の段で確かめながら、巻き戻しの地点ごとの所有を書き留める (`unwind::points_all`)。
-/// 表と「中断しうる」の不動点は、プログラムに1回だけ求める。
-pub(crate) fn unwind_points(program: &Program) -> Vec<Result<Vec<UnwindPoint>, VerifyError>> {
+/// Perceus の後の関数を所有の段で確かめながら、巻き戻しの地点ごとの所有を書き留める (`unwind::points`)。
+/// 表と「中断しうる」の不動点は、プログラムに1回だけ求める。`wanted` でない関数はたどらずに `None` にする。
+pub(crate) fn unwind_points(
+    program: &Program,
+    wanted: impl Fn(FnIdx) -> bool,
+) -> Vec<Option<Result<Vec<UnwindPoint>, VerifyError>>> {
     let aborts = unwind::may_abort(program);
     with_tables(program, |tables| {
         program
             .functions
             .iter()
-            .map(|function| {
-                shape(&block_shapes(function))
+            .enumerate()
+            .map(|(index, function)| {
+                if !wanted(FnIdx(index as u32)) {
+                    return None;
+                }
+                let points = shape(&block_shapes(function))
                     .and_then(|dominators| {
                         let mut checker =
                             Checker::new(program, tables, function, Level::Ownership, dominators);
@@ -96,7 +103,8 @@ pub(crate) fn unwind_points(program: &Program) -> Vec<Result<Vec<UnwindPoint>, V
                     .map_err(|message| VerifyError {
                         function: function.name.clone(),
                         message,
-                    })
+                    });
+                Some(points)
             })
             .collect()
     })
