@@ -206,16 +206,16 @@ fn switch_task_exchanges_lists_and_workers_without_rc_work<M: Mode>() {
     const CHILD: u32 = 3;
     let mut ctx = ctx::<M>();
     let e0 = push(&mut ctx, 0, 1);
-    let start = ctx.heap().stats();
+    let start = (ctx.heap().stats(), ctx.stats());
     unsafe {
         // 親から、空の evv で始める子へ
         let a = ctx.switch_task(UNIT, CHILD);
         assert_eq!(ctx.heap().worker(), CHILD);
         assert!(ctx.check_finished());
-        assert_eq!(ctx.heap().stats(), start);
+        assert_eq!((ctx.heap().stats(), ctx.stats()), start);
         // 子が自分の handler を設けると、子の worker の局所の節点ができる
         let e1 = push(&mut ctx, 1, 1);
-        let before = ctx.heap().stats();
+        let before = (ctx.heap().stats(), ctx.stats());
         let b = ctx.switch_task(a, 0);
         assert_eq!(ctx.heap().worker(), 0);
         assert_eq!(ctx.heap().field(a, 0), Ok(e0));
@@ -231,7 +231,7 @@ fn switch_task_exchanges_lists_and_workers_without_rc_work<M: Mode>() {
         assert_eq!(ctx.heap().worker(), CHILD);
         assert_eq!(ctx.switch_task(a, 0), b);
         assert_eq!(ctx.heap().worker(), 0);
-        assert_eq!(ctx.heap().stats(), before);
+        assert_eq!((ctx.heap().stats(), ctx.stats()), before);
         assert_eq!((super::raw::rc(a), super::raw::rc(b)), rcs);
         // 子の物体は子の worker で、親の物体は親の worker で手放す
         assert_eq!(ctx.switch_task(b, CHILD), a);

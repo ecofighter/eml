@@ -884,6 +884,14 @@ impl<M: Mode> Ctx<M> {
         Ctx { heap: Heap { worker, ..self.heap }, evv: l, ..*self }
     }
 
+    /// 仕事の回数 (`CtxStats`)、セッションの根、上限が `old` と同じである。
+    pub closed spec fn same_rest(&self, old: Ctx<M>) -> bool {
+        &&& self.stats == old.stats
+        &&& self.roots == old.roots
+        &&& self.max_depth == old.max_depth
+        &&& self.max_evv == old.max_evv
+    }
+
     /// 今の `evv` で、エフェクト `effect` の最初の evidence。tag はエフェクトの番号 + 1 なので、65535 は見つからない。
     pub closed spec fn lookup(&self, effect: u16) -> Option<Word> {
         find(self.evv_seq(self.evv), effect_tag(effect))
@@ -1040,9 +1048,9 @@ impl<M: Mode> Ctx<M> {
 
     /// # Safety
     /// ヒープを入れ替えない。`Ctx` が持つ語 (`evv` と yield の状態) を手放したり書き換えたりせず、それらの語からたどれる
-    /// 物体 (`evv` の節点、evidence、入口の表) も書き換えない。`set_worker` を呼ばず (worker は `switch_task` で替える)、
-    /// それらの物体を `share` しない。基本操作が頼る、物体の持ち主と rc の符号が変わるためである。`Ctx` のメソッドを次に呼ぶ前に、作っている物体を
-    /// 書き終える。
+    /// 物体 (`evv` の節点、evidence、入口の表) も書き換えない。`set_worker` を呼ばず (worker は `switch_task` で
+    /// 替える)、それらの物体を `share` しない。基本操作が頼る、物体の持ち主と rc の符号が変わるためである。`Ctx` の
+    /// メソッドを次に呼ぶ前に、作っている物体を書き終える。
     pub unsafe fn heap_mut(&mut self) -> &mut Heap<M> {
         &mut self.heap
     }
@@ -1549,7 +1557,8 @@ impl<M: Mode> Ctx<M> {
     /// # Safety
     /// `heap_mut` の前提を守っている。`l` は即値か、このヒープか付けた塊の生きている物体を指し、呼ぶ側がその参照を
     /// 1つ持つ。速いモードでは、切り替えた後の文脈 (`switched(l, worker)`) で `held_ok` が成り立つ。どちらのモードでも
-    /// 確かめない。
+    /// 確かめない。前の文脈で `held_ok` が成り立っていれば、返す語は前の worker の下で `evv` のリストで、呼ぶ側が
+    /// その参照を1つ持つ。
     #[verifier::spinoff_prover]
     pub unsafe fn switch_task(&mut self, l: Word, worker: u32) -> (r: Word)
         requires
@@ -1563,8 +1572,13 @@ impl<M: Mode> Ctx<M> {
             final(self).yield_spec() == old(self).yield_spec(),
             final(self).heap_spec().worker_spec() == worker,
             final(self).heap_spec().same_contents(old(self).heap_spec()),
+            final(self).same_rest(*old(self)),
             old(self).switched(l, worker).held_ok() ==> final(self).held_ok(),
-            old(self).held_ok() ==> old(self).evv_wf(r),
+            old(self).held_ok() ==> old(self).evv_wf(r) && forall|u: Word|
+                u.bits_spec() == 1 ==> #[trigger] old(self).switched(
+                    u,
+                    old(self).heap_spec().worker_spec(),
+                ).holds(r),
     {
         let r = self.evv;
         self.evv = l;
@@ -1584,6 +1598,26 @@ impl<M: Mode> Ctx<M> {
                 ) + d(b) >= self.need(seq![], b) by {}
                 self.lemma_holds_moved(s, seq![], seq![], d, Set::empty());
                 lemma_listed_kept(self.heap, s.heap, d, Set::empty(), l, s.max_evv);
+            }
+            if s0.held_ok() {
+                // 前の文脈で `evv` を空にすれば、`Ctx` が持っていた参照はそのまま呼ぶ側のものになる
+                lemma_unit_bits();
+                assert forall|u: Word| u.bits_spec() == 1 implies #[trigger] s0.switched(
+                    u,
+                    s0.heap.worker,
+                ).holds(r) by {
+                    let c = s0.switched(u, s0.heap.worker);
+                    assert(c.heap == s0.heap);
+                    let ws = seq![r];
+                    assert forall|b: usize| #[trigger] c.need(ws, b) == s0.need(seq![], b) by {
+                        lemma_points_in(ws, b);
+                        lemma_points_in(seq![], b);
+                    }
+                    assert forall|i: int| 0 <= i < ws.len() implies held_word(
+                        c.heap,
+                        #[trigger] ws[i],
+                    ) by {}
+                }
             }
         }
         r
