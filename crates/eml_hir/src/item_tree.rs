@@ -221,6 +221,22 @@ impl Fixity {
         precedence: 9,
         assoc: Assoc::Left,
     };
+
+    /// `self` の演算子 (直前に組んだ演算子か、囲む演算子) の後に `next` が並べられないか。同じ優先順位で結合の向きが
+    /// 違うか、結合しない演算子のときに真である (E1006)。
+    pub(crate) fn conflicts_with(self, next: Fixity) -> bool {
+        self.precedence == next.precedence
+            && (self.assoc != next.assoc || next.assoc == Assoc::None)
+    }
+
+    /// 優先順位の上昇法で、この演算子の右の被演算子が受ける最小の優先順位。
+    pub(crate) fn right_min(self) -> u8 {
+        if self.assoc == Assoc::Right {
+            self.precedence
+        } else {
+            self.precedence + 1
+        }
+    }
 }
 
 /// 関数を組み立てる途中の形。シグネチャと等式の item の番号は、並び方の検査だけに使う。
