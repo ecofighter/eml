@@ -803,7 +803,7 @@ impl<T: Level> Graph<T> {
                 edges[a.index()].push(b.index());
             }
         }
-        let (component, count) = components(&edges);
+        let (component, count) = super::graph::component_ids(&edges);
         let mut upward = vec![Vec::new(); count];
         let mut downward = vec![Vec::new(); count];
         for (a, targets) in edges.iter().enumerate() {
@@ -938,23 +938,6 @@ fn upward_closure<U: Copy>(upward: &Edges, seed: Vec<U>, join: impl Fn(U, U) -> 
         }
     }
     out
-}
-
-/// 強連結成分の番号と成分の数。
-fn components(edges: &[Vec<usize>]) -> (Vec<usize>, usize) {
-    let mut component = vec![usize::MAX; edges.len()];
-    let mut count = 0;
-    crate::scc::tarjan(
-        edges.len(),
-        |v, edge| edges[v].get(edge).copied(),
-        |members| {
-            for &w in members {
-                component[w] = count;
-            }
-            count += 1;
-        },
-    );
-    (component, count)
 }
 
 /// 宣言 `member` の自分の変数を含む成分と、その中の自分の変数の `Shape` の番号 (小さい順)。

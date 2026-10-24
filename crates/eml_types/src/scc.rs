@@ -19,77 +19,10 @@ pub(crate) fn components(program: &Program) -> Vec<Vec<FunctionId>> {
                 .collect()
         })
         .collect();
-    let mut out = Vec::new();
-    tarjan(
-        ids.len(),
-        |v, edge| edges[v].get(edge).copied(),
-        |members| out.push(members.iter().rev().map(|&w| ids[w]).collect()),
-    );
-    out
-}
-
-/// Tarjan の方法で強連結成分を求め、見つけた順 (行き先の成分が先) に `component` へ渡す。節点が多くても Rust の
-/// スタックを使わないよう、明示的なスタックでたどる。`succ(v, i)` は `v` の `i` 番目の辺の行き先で、なければ
-/// `None` である。成分の節点はスタックから外した順に並ぶ。この順は SCC の検査の順と Kind 変数の番号を決めるので、
-/// 呼ぶ側は並べ替えずに使う。
-pub(crate) fn tarjan(
-    n: usize,
-    succ: impl Fn(usize, usize) -> Option<usize>,
-    mut component: impl FnMut(&[usize]),
-) {
-    let unvisited = usize::MAX;
-    let mut index = vec![unvisited; n];
-    let mut low = vec![0; n];
-    let mut on_stack = vec![false; n];
-    let mut stack = Vec::new();
-    let mut members = Vec::new();
-    let mut next = 0;
-    for root in 0..n {
-        if index[root] != unvisited {
-            continue;
-        }
-        // (節点, 次に見る辺の位置)
-        let mut work = vec![(root, 0)];
-        index[root] = next;
-        low[root] = next;
-        next += 1;
-        stack.push(root);
-        on_stack[root] = true;
-        while let Some(&(v, edge)) = work.last() {
-            if let Some(w) = succ(v, edge) {
-                work.last_mut().expect("read above").1 += 1;
-                if index[w] == unvisited {
-                    index[w] = next;
-                    low[w] = next;
-                    next += 1;
-                    stack.push(w);
-                    on_stack[w] = true;
-                    work.push((w, 0));
-                } else if on_stack[w] {
-                    low[v] = low[v].min(index[w]);
-                }
-                continue;
-            }
-            work.pop();
-            if let Some(&(parent, _)) = work.last() {
-                low[parent] = low[parent].min(low[v]);
-            }
-            if low[v] == index[v] {
-                members.clear();
-                loop {
-                    let w = stack
-                        .pop()
-                        .expect("the root of a component is on the stack");
-                    on_stack[w] = false;
-                    members.push(w);
-                    if w == v {
-                        break;
-                    }
-                }
-                component(&members);
-            }
-        }
-    }
+    crate::kind::graph::components(&edges)
+        .into_iter()
+        .map(|members| members.into_iter().rev().map(|w| ids[w]).collect())
+        .collect()
 }
 
 /// 本体で参照するトップレベルの関数。呼び出しと値としての参照の両方を数える。`let` の束縛の参照は、束縛を作った入力の

@@ -768,17 +768,9 @@ fn vars_in(
 
 /// 強連結成分の番号。
 fn strongly_connected(edges: &[Vec<(usize, bool)>]) -> Vec<usize> {
-    let mut component = vec![usize::MAX; edges.len()];
-    let mut next = 0;
-    crate::scc::tarjan(
-        edges.len(),
-        |node, edge| edges[node].get(edge).map(|&(to, _)| to),
-        |members| {
-            for &member in members {
-                component[member] = next;
-            }
-            next += 1;
-        },
-    );
-    component
+    let targets: Vec<Vec<usize>> = edges
+        .iter()
+        .map(|out| out.iter().map(|&(to, _)| to).collect())
+        .collect();
+    crate::kind::graph::component_ids(&targets).0
 }

@@ -60,6 +60,40 @@ impl Signatures {
             ValueItem::Binding(id) => self.bindings.get(id),
         }
     }
+
+    /// 宣言ごとの形。宣言の種類の順 (関数、操作、コンストラクタ、メソッド、束縛) に並ぶ。
+    fn into_decls(self) -> impl Iterator<Item = (ValueItem, Shape)> {
+        let Signatures {
+            functions,
+            operations,
+            constructors,
+            methods,
+            bindings,
+        } = self;
+        (functions
+            .into_entries()
+            .map(|(id, s)| (ValueItem::Function(id), s)))
+        .chain(
+            operations
+                .into_entries()
+                .map(|(id, s)| (ValueItem::Operation(id), s)),
+        )
+        .chain(
+            constructors
+                .into_entries()
+                .map(|(id, s)| (ValueItem::Constructor(id), s)),
+        )
+        .chain(
+            methods
+                .into_entries()
+                .map(|(id, s)| (ValueItem::Method(id), s)),
+        )
+        .chain(
+            bindings
+                .into_entries()
+                .map(|(id, s)| (ValueItem::Binding(id), s)),
+        )
+    }
 }
 
 /// 段1を終えた本体。Kind を解いた後に型を書き出すので、推論用の表を SCC の解が出るまで持つ
@@ -114,7 +148,6 @@ pub(crate) fn check_module(
     // 表は SCC の解が出るまで持つ。診断の順は表示する側が決める (docs/spec/diagnostics.md の「診断の順」)
     let mut bodies = ItemMap::default();
     let mut joins = HashMap::new();
-    let mut checked = HashSet::new();
     let mut unreliable = HashSet::new();
     let mut violated = Vec::new();
     let mut inputs = ItemMap::default();
@@ -136,7 +169,6 @@ pub(crate) fn check_module(
             };
             if let Some((body, found)) = result {
                 diagnostics.extend(found);
-                checked.insert(id);
                 if !body.reliable {
                     unreliable.insert(id);
                 }
@@ -195,13 +227,12 @@ pub(crate) fn check_module(
         program,
         &context,
         &signatures,
-        &checked,
+        &bodies,
         &unreliable,
         &schemes,
     ));
     diagnostics.extend(report_violations(program, files, &types, violated));
-    let mut typed = typed_program(&signatures, schemes, joins, bodies, inputs, types);
-    typed.query = query;
+    let mut typed = typed_program(signatures, schemes, joins, bodies, inputs, query, types);
     let (uniform, found) = uniform::uniform(program, &typed.types, &typed.decls, &typed.bodies);
     typed.uniform = uniform;
     diagnostics.extend(found);
@@ -857,7 +888,7 @@ fn check_method_kinds(
     program: &Program,
     context: &Context,
     signatures: &Signatures,
-    checked: &HashSet<FunctionId>,
+    bodies: &ItemMap<Function, BodyTypes>,
     unreliable: &HashSet<FunctionId>,
     schemes: &HashMap<ValueItem, KindScheme>,
 ) -> Vec<Diagnostic> {
@@ -868,7 +899,7 @@ fn check_method_kinds(
             FunctionKind::DefaultMethod(method) => (None, method),
             FunctionKind::Defined | FunctionKind::Extern(_) | FunctionKind::Input(_) => continue,
         };
-        if unreliable.contains(&id) || !checked.contains(&id) {
+        if unreliable.contains(&id) || bodies.get(id).is_none() {
             continue;
         }
         let decl = ValueItem::Function(id);
@@ -981,43 +1012,18 @@ fn report_violations(
 /// 関数、メソッド、操作、コンストラクタは `declaration_schemes` が、本体に問題のない関数は `check_module` が
 /// (制約がなければ空のスキームを)、解いた SCC の関数は SCC の解が入れるためである。`joins` は本体を書き出した関数の
 /// ものである。
+#[allow(clippy::too_many_arguments)]
 fn typed_program(
-    signatures: &Signatures,
+    signatures: Signatures,
     mut schemes: HashMap<ValueItem, KindScheme>,
     mut joins: HashMap<FunctionId, Vec<Vec<u32>>>,
     bodies: ItemMap<Function, BodyTypes>,
     inputs: ItemMap<Function, InputType>,
+    query: Option<String>,
     mut types: TypeStore,
 ) -> TypedProgram {
-    let shapes = signatures
-        .functions
-        .iter()
-        .map(|(id, shape)| (ValueItem::Function(id), shape))
-        .chain(
-            signatures
-                .operations
-                .iter()
-                .map(|(id, shape)| (ValueItem::Operation(id), shape)),
-        )
-        .chain(
-            signatures
-                .constructors
-                .iter()
-                .map(|(id, shape)| (ValueItem::Constructor(id), shape)),
-        )
-        .chain(
-            signatures
-                .methods
-                .iter()
-                .map(|(id, shape)| (ValueItem::Method(id), shape)),
-        )
-        .chain(
-            signatures
-                .bindings
-                .iter()
-                .map(|(id, shape)| (ValueItem::Binding(id), shape)),
-        );
-    let decls = shapes
+    let decls = signatures
+        .into_decls()
         .map(|(decl, shape)| {
             let kinds = schemes
                 .remove(&decl)
@@ -1032,7 +1038,7 @@ fn typed_program(
             let facts = scheme_facts(&kinds, shape.lin_vars);
             let declared = DeclType {
                 ty: shape.export(&mut types, Some(&facts)),
-                shape: shape.clone(),
+                shape,
                 kinds,
                 facts,
                 joins,
@@ -1046,7 +1052,7 @@ fn typed_program(
         bodies,
         uniform: Uniform::default(),
         inputs,
-        query: None,
+        query,
     }
 }
 

@@ -12,6 +12,7 @@ use crate::ty::{Linearity, Multiplicity};
 
 pub(crate) mod entail;
 pub(crate) mod eval;
+pub(crate) mod graph;
 pub(crate) mod problem;
 pub(crate) mod solve;
 pub(crate) mod summary;
