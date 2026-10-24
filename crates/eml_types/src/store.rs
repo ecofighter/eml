@@ -29,7 +29,7 @@ pub enum Lin {
 impl Lin {
     /// 結び。`Lin` > `Poly` > `Unr` の順で、`Var` は評価した後の値だけを結ぶので受けない。宣言の順と結びの順が違うので、
     /// `Ord` は持たせない。
-    pub fn join(self, other: Lin) -> Lin {
+    pub(crate) fn join(self, other: Lin) -> Lin {
         match (self, other) {
             (Lin::Var(_), _) | (_, Lin::Var(_)) => {
                 unreachable!("an unevaluated Kind variable is joined")
@@ -418,7 +418,7 @@ impl TypeStore {
 
     /// 型が `Error` か、row の末尾の `Error` を含むか。報告済みの誤りの跡から診断を連鎖させないために引く
     /// (docs/spec/types.md の「エラーの扱い」)。
-    pub fn contains_error(&self, id: TypeId) -> bool {
+    pub(crate) fn contains_error(&self, id: TypeId) -> bool {
         self.info[id.index()].error
     }
 
@@ -651,7 +651,8 @@ impl TypeStore {
 
     /// 表示が `limit` 文字以下ならその文字列、超えたら `None`。表示は型を木としてたどるので、部分を共有する型では
     /// 長さが表の大きさの指数になる。上限を超えた時点で書くのをやめ、費用を `limit` に比例させる。
-    pub fn display_bounded(
+    #[cfg(test)]
+    pub(crate) fn display_bounded(
         &self,
         id: TypeId,
         names: &DisplayNames,
@@ -727,7 +728,7 @@ impl TypeStore {
         }
     }
 
-    pub fn unit(&self) -> TypeId {
+    pub(crate) fn unit(&self) -> TypeId {
         self.unit
     }
 
@@ -747,7 +748,7 @@ impl TypeStore {
         self.intern(TypeKind::Flexible(kind))
     }
 
-    pub fn error(&self) -> TypeId {
+    pub(crate) fn error(&self) -> TypeId {
         self.error
     }
 }
