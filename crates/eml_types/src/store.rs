@@ -3,6 +3,7 @@
 
 use std::collections::{HashMap, HashSet};
 use std::fmt;
+use std::hash::{BuildHasher, BuildHasherDefault, Hasher, RandomState};
 use std::sync::Arc;
 
 use eml_extern::ExternType;
@@ -231,22 +232,52 @@ impl Substitution {
 #[derive(Debug, Clone)]
 pub struct TypeStore {
     kinds: Vec<TypeKind>,
-    /// 型が `Error` を含むか。登録するときに子から求めるので、引くたびに型をたどらずに済む。
-    errors: Vec<bool>,
-    /// 型が型変数 (`Rigid` か `OpVar`) を含むか。代入が、型変数を含まない型をたどらずに返すために使う。
-    vars: Vec<bool>,
-    /// 型が宣言の Kind 変数 (`Fn` の `Var` か `Flexible(Var(_))`) を含むか。
-    kind_vars: Vec<bool>,
-    /// 型の値が `Rigid` か `Var` に依存するか。依存する型は宣言に対して相対的で、意味のある線形性を持たない。
-    relative: Vec<bool>,
-    linearity: Vec<Lin>,
+    /// 型ごとの、登録するときに子から求めた印。引くたびに型をたどらずに済む。
+    info: Vec<Info>,
     data_kinds: Arc<ItemMap<TypeDef, DataKind>>,
-    ids: HashMap<TypeKind, TypeId>,
+    /// 形のハッシュから、そのハッシュを持つ型の鎖の先頭。鎖は `Info::next` がつなぐ。形を `kinds` だけに持ち、
+    /// 登録のたびに形を1回だけハッシュするため。
+    buckets: HashMap<u64, TypeId, BuildHasherDefault<HashHasher>>,
+    hasher: RandomState,
     unit: TypeId,
     int: TypeId,
     string: TypeId,
     bool: TypeId,
     error: TypeId,
+}
+
+/// 型ごとの印 (`TypeStore::info`)。
+#[derive(Debug, Clone)]
+struct Info {
+    /// 型が `Error` を含むか。
+    error: bool,
+    /// 型が型変数 (`Rigid` か `OpVar`) を含むか。代入が、型変数を含まない型をたどらずに返すために使う。
+    vars: bool,
+    /// 型が宣言の Kind 変数 (`Fn` の `Var` か `Flexible(Var(_))`) を含むか。
+    kind_vars: bool,
+    /// 型の値が `Rigid` か `Var` に依存するか。依存する型は宣言に対して相対的で、意味のある線形性を持たない。
+    relative: bool,
+    linearity: Lin,
+    /// 同じハッシュを持つ、前に登録した型。
+    next: Option<TypeId>,
+}
+
+/// すでにハッシュした値をそのまま使うハッシュ。`TypeStore::buckets` の鍵は形のハッシュなので、もう一度混ぜない。
+#[derive(Debug, Clone, Default)]
+struct HashHasher(u64);
+
+impl Hasher for HashHasher {
+    fn finish(&self) -> u64 {
+        self.0
+    }
+
+    fn write(&mut self, _: &[u8]) {
+        unreachable!("only u64 hashes are keys")
+    }
+
+    fn write_u64(&mut self, value: u64) {
+        self.0 = value;
+    }
 }
 
 impl TypeStore {
@@ -255,13 +286,10 @@ impl TypeStore {
     pub(crate) fn new(program: &Program, data_kinds: Arc<ItemMap<TypeDef, DataKind>>) -> TypeStore {
         let mut store = TypeStore {
             kinds: Vec::new(),
-            errors: Vec::new(),
-            vars: Vec::new(),
-            kind_vars: Vec::new(),
-            relative: Vec::new(),
-            linearity: Vec::new(),
+            info: Vec::new(),
             data_kinds,
-            ids: HashMap::new(),
+            buckets: HashMap::default(),
+            hasher: RandomState::new(),
             unit: TypeId(0),
             int: TypeId(0),
             string: TypeId(0),
@@ -289,8 +317,14 @@ impl TypeStore {
 
     /// `kind` の型の ID。同じ形の型がすでにあればその ID を返す。型を作るのは型検査と `substitute` だけである。
     pub(crate) fn intern(&mut self, kind: TypeKind) -> TypeId {
-        if let Some(&id) = self.ids.get(&kind) {
-            return id;
+        let hash = self.hasher.hash_one(&kind);
+        let first = self.buckets.get(&hash).copied();
+        let mut at = first;
+        while let Some(id) = at {
+            if self.kinds[id.index()] == kind {
+                return id;
+            }
+            at = self.info[id.index()].next;
         }
         let mut error = match &kind {
             TypeKind::Error
@@ -310,19 +344,23 @@ impl TypeStore {
             } | TypeKind::Flexible(Lin::Var(_))
         );
         kind.for_each_child(|child| {
-            error |= self.errors[child.index()];
-            var |= self.vars[child.index()];
-            kind_vars |= self.kind_vars[child.index()];
+            let info = &self.info[child.index()];
+            error |= info.error;
+            var |= info.vars;
+            kind_vars |= info.kind_vars;
         });
         let (linearity, relative) = self.linearity_of(&kind);
         let id = TypeId(self.kinds.len() as u32);
-        self.kinds.push(kind.clone());
-        self.errors.push(error);
-        self.vars.push(var);
-        self.kind_vars.push(kind_vars);
-        self.relative.push(relative);
-        self.linearity.push(linearity);
-        self.ids.insert(kind, id);
+        self.kinds.push(kind);
+        self.info.push(Info {
+            error,
+            vars: var,
+            kind_vars,
+            relative,
+            linearity,
+            next: first,
+        });
+        self.buckets.insert(hash, id);
         id
     }
 
@@ -334,10 +372,11 @@ impl TypeStore {
             let mut value = Lin::Unr;
             let mut relative = false;
             for child in children {
-                if self.relative[child.index()] {
+                let info = &self.info[child.index()];
+                if info.relative {
                     relative = true;
                 } else {
-                    value = value.join(self.linearity[child.index()]);
+                    value = value.join(info.linearity);
                 }
             }
             if relative {
@@ -380,33 +419,33 @@ impl TypeStore {
     /// 型が `Error` か、row の末尾の `Error` を含むか。報告済みの誤りの跡から診断を連鎖させないために引く
     /// (docs/spec/types.md の「エラーの扱い」)。
     pub fn contains_error(&self, id: TypeId) -> bool {
-        self.errors[id.index()]
+        self.info[id.index()].error
     }
 
     /// 型と子に `Rigid` か `OpVar` があるかを返す。行の末尾 (`RowTail::Rigid`) は型でないので数えない。`substitute` も行の末尾を変えない。
     pub fn contains_type_vars(&self, id: TypeId) -> bool {
-        self.vars[id.index()]
+        self.info[id.index()].vars
     }
 
     /// 型の値の線形性 (docs/spec/types.md の「型の線形性」)。宣言に対して相対的な
     /// 型 (`Rigid` か `Var` に値が依存する型) は意味のある値を持たないので、debug ビルドでは止める。
     pub fn linearity(&self, ty: TypeId) -> Lin {
         debug_assert!(
-            !self.relative[ty.index()],
+            !self.info[ty.index()].relative,
             "the linearity of a declaration-relative type is read"
         );
-        self.linearity[ty.index()]
+        self.info[ty.index()].linearity
     }
 
     /// `linearity` と同じ値を、宣言に対して相対的な型でも止まらずに読む。相対的な型は `Poly` として入っているので、
     /// 宣言の型をそのまま読む操作の表が使う (docs/spec/core-ir.md の「表の印の列」)。
     pub fn linearity_or_poly(&self, ty: TypeId) -> Lin {
-        self.linearity[ty.index()]
+        self.info[ty.index()].linearity
     }
 
     /// 型の値の線形性が宣言に対して相対的か (`Rigid` か `Var` に依存するか)。`linearity` を読めない型を分けるのに使う。
     pub fn is_relative(&self, ty: TypeId) -> bool {
-        self.relative[ty.index()]
+        self.info[ty.index()].relative
     }
 
     /// 登録したすべての型の ID。登録した順に並ぶので、後で足した型だけを読むときは先頭を飛ばせばよい。
@@ -416,7 +455,7 @@ impl TypeStore {
 
     /// 型に宣言の Kind 変数 (`Var`) が残っているか。
     pub fn contains_kind_vars(&self, ty: TypeId) -> bool {
-        self.kind_vars[ty.index()]
+        self.info[ty.index()].kind_vars
     }
 
     /// 2つの型の対応する線形性が、一方が `Unr`、他方が `Lin` になっていないか。`Poly` はどちらとも食い違わない。片方が
@@ -461,13 +500,13 @@ impl TypeStore {
             let pairs = match (self.kind(a), self.kind(b)) {
                 (TypeKind::Rigid(_), _) | (_, TypeKind::Rigid(_)) => continue,
                 (TypeKind::Flexible(k) | TypeKind::OpVar(_, k), _) => {
-                    if !meets(*k, self.linearity[b.index()]) {
+                    if !meets(*k, self.info[b.index()].linearity) {
                         return false;
                     }
                     continue;
                 }
                 (_, TypeKind::Flexible(k) | TypeKind::OpVar(_, k)) => {
-                    if !meets(self.linearity[a.index()], *k) {
+                    if !meets(self.info[a.index()].linearity, *k) {
                         return false;
                     }
                     continue;
@@ -527,7 +566,7 @@ impl TypeStore {
     /// `ty` の `Rigid` を `subst` の型に置き換え、`OpVar` を `Flexible` に置き換えた型。`subst` にない名前の `Rigid`
     /// は残す。row の末尾は変えない。単相化が instance の型を作るのに使う (docs/spec/core-ir.md の「変換の規則」)。
     pub fn substitute(&mut self, ty: TypeId, subst: &mut Substitution) -> TypeId {
-        if !self.vars[ty.index()] && !self.kind_vars[ty.index()] {
+        if !self.info[ty.index()].vars && !self.info[ty.index()].kind_vars {
             return ty;
         }
         if let Some(&done) = subst.done.get(&ty) {
@@ -1351,7 +1390,7 @@ mod tests {
             (int, false),
         ];
         for (ty, expected) in table {
-            assert_eq!(types.relative[ty.index()], expected, "{ty:?}");
+            assert_eq!(types.is_relative(ty), expected, "{ty:?}");
         }
         assert!(types.contains_kind_vars(var_fn));
         assert!(types.contains_kind_vars(var_flexible));
