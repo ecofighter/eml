@@ -328,7 +328,7 @@ impl Definitions {
 /// 最初の item (import を含む) の始まり。E1031 の fix が足りない import を挿入する位置である。shebang と先頭の注釈は
 /// item でないので、その後ろになる。item がなければ本文の終わりを返す。`let` の束縛、式、問い合わせの REPL の入力は
 /// import を書けないので `None` である (docs/spec/modules.md の「名前の解決」)。
-pub fn first_item_start(parse: &Parse) -> Option<TextSize> {
+pub(crate) fn first_item_start(parse: &Parse) -> Option<TextSize> {
     let first = parse.items()?.next();
     Some(first.map_or(parse.syntax().text_range().end(), |item| {
         item.range().start()

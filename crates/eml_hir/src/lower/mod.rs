@@ -84,27 +84,20 @@ pub fn lower(def_map: &DefMap, modules: &[LoadedModule]) -> (Program, Vec<Diagno
     let mut instance_index = HashMap::new();
     for (index, loaded) in modules.iter().enumerate() {
         let module = module_id(index);
-        ItemLowering::new(
+        let mut lowering = ItemLowering::new(
             def_map,
             module,
             &loaded.tree,
             &roots[index],
             &mut diagnostics,
-        )
-        .lower_instances(
+        );
+        lowering.lower_instances(
             &loaded.tree,
             &mut arena,
             &mut instance_index,
             &mut pending[index],
         );
-        ItemLowering::new(
-            def_map,
-            module,
-            &loaded.tree,
-            &roots[index],
-            &mut diagnostics,
-        )
-        .derive_instances(&loaded.tree, &mut arena, &mut instance_index);
+        lowering.derive_instances(&loaded.tree, &mut arena, &mut instance_index);
     }
     let lang = def_map.lang();
     for (index, loaded) in modules.iter().enumerate() {

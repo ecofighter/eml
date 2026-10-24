@@ -197,6 +197,8 @@ fn std_shown(file: &str) -> String {
 struct Loader<'a> {
     /// 埋め込んだ標準ライブラリ。モジュールは要るときに読む。
     std: &'a [(&'a str, &'a str)],
+    /// `std` の各ファイルの、`std/` からのモジュールのパス。import のたびにファイル名から作り直さないため、先に作る。
+    std_paths: Vec<ModulePath>,
     /// 入口の表示のパスのディレクトリ (`/` で終わるか空)。根は入口のファイルのディレクトリである
     /// (docs/spec/modules.md の「モジュール」)。
     root: &'a str,
@@ -238,6 +240,7 @@ impl<'a> Loader<'a> {
     ) -> Loader<'a> {
         Loader {
             std,
+            std_paths: std.iter().map(|&(file, _)| std_path(file)).collect(),
             root,
             entry_file,
             source,
@@ -265,10 +268,8 @@ impl<'a> Loader<'a> {
         if let Some(&id) = self.by_path.get(&(ModuleOrigin::Std, path.clone())) {
             return Some(id);
         }
-        let &(file, text) = self
-            .std
-            .iter()
-            .find(|&&(file, _)| std_path(file) == *path)?;
+        let index = self.std_paths.iter().position(|std| std == path)?;
+        let (file, text) = self.std[index];
         let id = module_id(self.modules.len());
         let name = format!("{STD_ROOT}.{}", path.dotted());
         self.add_std(file, &name, std_shown(file), text);
@@ -286,8 +287,9 @@ impl<'a> Loader<'a> {
         let std_names = self
             .std
             .iter()
-            .filter(|&&(file, _)| file != PRELUDE_FILE)
-            .map(|&(file, _)| std_path(file).dotted())
+            .zip(&self.std_paths)
+            .filter(|&(&(file, _), _)| file != PRELUDE_FILE)
+            .map(|(_, path)| path.dotted())
             .collect();
         let Loader {
             files,
