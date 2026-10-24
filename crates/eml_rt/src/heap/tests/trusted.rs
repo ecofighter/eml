@@ -391,8 +391,8 @@ fn every_primitive_once<M: Mode>() {
         assert_ne!(masked, list);
         assert_eq!(ctx.heap().field(masked, 0), Ok(e1));
         // 切り替えの1往復
-        let current = ctx.switch_task(masked, 0);
-        assert_eq!(ctx.switch_task(current, 0), masked);
+        let current = ctx.switch_task(masked, 0, 0);
+        assert_eq!(ctx.switch_task(current, 0, 0), masked);
         for w in [masked, list] {
             ctx.heap_mut().decref(w).unwrap();
         }

@@ -103,6 +103,26 @@ fn poll_reports_each_stop<M: Mode>() {
     assert_eq!(ctx.poll(0), Ok(()));
 }
 
+/// `switch_task` は次のタスクの深さの起点を上限から引く。`poll` は起点を含まない深さを受け、起点と合わせて
+/// `max_depth` を超えたら止める。起点が上限を超えるタスクは、最初の安全点で止まる。
+fn switch_task_rebases_the_depth_limit<M: Mode>() {
+    let control = Arc::new(Control::new(Limits {
+        max_depth: 100,
+        ..Limits::default()
+    }));
+    let mut ctx = Ctx::<M>::new(control, host(&Arc::default()));
+    unsafe {
+        assert_eq!(ctx.switch_task(UNIT, 0, 30), UNIT);
+        assert_eq!(ctx.poll(70), Ok(()));
+        assert_eq!(ctx.poll(71), Err(Stop::DepthLimit));
+        assert_eq!(ctx.switch_task(UNIT, 0, 101), UNIT);
+        assert_eq!(ctx.poll(1), Err(Stop::DepthLimit));
+        assert_eq!(ctx.switch_task(UNIT, 0, 0), UNIT);
+    }
+    assert_eq!(ctx.poll(100), Ok(()));
+    assert_eq!(ctx.poll(101), Err(Stop::DepthLimit));
+}
+
 /// yield して、継続を2回組み立て直し、終える。最初の κ は関数の値 (`Word::imm(1)`) で、関数 0 の値は `()` と同じ語に
 /// なるので使わない。
 fn yields_and_continuation_frames_are_counted<M: Mode>() {
@@ -209,14 +229,14 @@ fn switch_task_exchanges_lists_and_workers_without_rc_work<M: Mode>() {
     let start = (ctx.heap().stats(), ctx.stats());
     unsafe {
         // 親から、空の evv で始める子へ
-        let a = ctx.switch_task(UNIT, CHILD);
+        let a = ctx.switch_task(UNIT, CHILD, 0);
         assert_eq!(ctx.heap().worker(), CHILD);
         assert!(ctx.check_finished());
         assert_eq!((ctx.heap().stats(), ctx.stats()), start);
         // 子が自分の handler を設けると、子の worker の局所の節点ができる
         let e1 = push(&mut ctx, 1, 1);
         let before = (ctx.heap().stats(), ctx.stats());
-        let b = ctx.switch_task(a, 0);
+        let b = ctx.switch_task(a, 0, 0);
         assert_eq!(ctx.heap().worker(), 0);
         assert_eq!(ctx.heap().field(a, 0), Ok(e0));
         assert_eq!(ctx.heap().field(b, 0), Ok(e1));
@@ -227,17 +247,17 @@ fn switch_task_exchanges_lists_and_workers_without_rc_work<M: Mode>() {
         let rcs = (super::raw::rc(a), super::raw::rc(b));
         assert_eq!(rcs, (1, 1));
         // 子へ戻して、また親へ戻す
-        assert_eq!(ctx.switch_task(b, CHILD), a);
+        assert_eq!(ctx.switch_task(b, CHILD, 0), a);
         assert_eq!(ctx.heap().worker(), CHILD);
-        assert_eq!(ctx.switch_task(a, 0), b);
+        assert_eq!(ctx.switch_task(a, 0, 0), b);
         assert_eq!(ctx.heap().worker(), 0);
         assert_eq!((ctx.heap().stats(), ctx.stats()), before);
         assert_eq!((super::raw::rc(a), super::raw::rc(b)), rcs);
         // 子の物体は子の worker で、親の物体は親の worker で手放す
-        assert_eq!(ctx.switch_task(b, CHILD), a);
+        assert_eq!(ctx.switch_task(b, CHILD, 0), a);
         clear(&mut ctx);
         ctx.heap_mut().decref(e1).unwrap();
-        assert_eq!(ctx.switch_task(a, 0), UNIT);
+        assert_eq!(ctx.switch_task(a, 0, 0), UNIT);
         ctx.heap_mut().decref(e0).unwrap();
     }
     clear(&mut ctx);
@@ -784,6 +804,7 @@ fn the_state_of_a_shared_evidence_is_not_writable<M: Mode>() {
 both_modes!(
     a_new_ctx_is_finished,
     poll_reports_each_stop,
+    switch_task_rebases_the_depth_limit,
     yields_and_continuation_frames_are_counted,
     yield_status_tells_targets_apart,
     yield_abort_leaves_no_continuation,

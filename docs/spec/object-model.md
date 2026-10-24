@@ -770,8 +770,10 @@ token の表の項目は、`into_token` と `release_reuse` が添字を使い�
 [LIR](lir.md) の「実行の文脈」は、1つの worker で `par` と `Async` のタスクを切り替えるとき ([マルチコア対応の設計](../future/multicore.md) の「1つの worker での実行」)、実行の文脈をタスクごとに持つか、切り替えで退避するかを求める。次のように決める。
 
 - タスクは、yield の状態がなしの安全点でだけ切り替える。そのため、退避するのは `evv` だけである
-- 切り替えは `switch_task(l, worker)` で行う。次のタスクの `evv` の l を入れ、ヒープの worker を次のタスクの ID `worker` にし、前のタスクの `evv` を返す。worker の替え方は `set_worker` と同じで、検査モードでは渡した ID を使っている ID にする (上の「論理的な worker ID」)。l の参照は `Ctx` へ移り、元の `evv` の参照は呼ぶ側へ移るので、RC に触れない。`switch_task` は [LIR](lir.md) の「基本操作」の表にない、VM のための `Ctx` の操作である
+- 切り替えは `switch_task(l, worker, depth_offset)` で行う。次のタスクの `evv` の l を入れ、ヒープの worker を次のタスクの ID `worker` にし、今のタスクの深さの上限を決め直し、前のタスクの `evv` を返す。変える欄はこの3つだけである。worker の替え方は `set_worker` と同じで、検査モードでは渡した ID を使っている ID にする (上の「論理的な worker ID」)。l の参照は `Ctx` へ移り、元の `evv` の参照は呼ぶ側へ移るので、RC に触れない。`switch_task` は [LIR](lir.md) の「基本操作」の表にない、VM のための `Ctx` の操作である
 - `evv` と worker を1つの操作で替えるのは、`Ctx` の前提が `evv` の物体の持ち主を今の worker と比べるためである。次のタスクの `evv` は次のタスクの ID の下で正しく、前のタスクの `evv` は前のタスクの ID の下で正しい。2つを別の操作で替えると、その間はどちらかの `evv` の持ち主が今の worker と合わない。そのため、VM は `heap_mut()` で `set_worker` を呼ばない
+- 今のタスクの深さの上限は、`max_depth` から次のタスクの深さの起点 `depth_offset` を引いた値である。起点が `max_depth` を超えれば 0 にする。起点は、そのタスクのスタックの底より下に数える深さで、`par` の右の子では fork のときの親の深さである ([VM](vm.md) の「スロットとスタック」)。`Ctx::new` は上限を `max_depth` にし、起点 0 のタスクを表す。`switch_task` のほかに上限を変える操作はない
+- 起点を上限から引いて `Ctx` に持つのは、安全点の速い道で起点を足さないためである。VM が安全点ごとにタスクの起点を足すと、基準のプログラムの命令の数が最大で約 1.2 % 増える。切り替えは安全点よりずっと少ないので、引く費用は切り替えの側で払う
 - `evv_get` と `evv_set` で切り替えないのは、切り替えごとに `dup` と `decref` が1回ずつ増え、仕事の回数 (VM の `RunStats`) がスケジュールに依存するためである
 - `switch_task` は失敗せず、どちらのモードでも何も確かめない。`evv_set` も l の形を確かめない。速いモードの前提は、切り替えた後の文脈 (`evv` が l で、worker が `worker`) で `held_ok()` が成り立つことである。検査モードでも、この前提が成り立てば、切り替えた後の文脈は `held_ok()` を満たす。切り替える前の文脈で `held_ok()` が成り立っていれば、返す語は前のタスクの ID の下で `evv_wf` を満たし、`evv` を空にした前の文脈で呼ぶ側がその参照を1つ持つ。VM はそれを前のタスクに退避し、そのタスクに戻るときに渡す
 
@@ -785,8 +787,8 @@ token の表の項目は、`into_token` と `release_reuse` が添字を使い�
 | 確保量 | セッションのヒープが OS から取ったページのバイト数を持つ `AtomicUsize` |
 | 上限 (`Limits`) | `max_bytes` (確保量)、`max_depth` (深さ)、`max_evv` (`evv` の長さ)。`Control::new(limits)` で作るときに決め、変えない。既定の値は、どれも `usize::MAX` である |
 
-- 安全点の確かめは `Ctx::poll(depth) -> Result<(), Stop>` である。速い道は、`depth` が `max_depth` を超えるかと、止める語が 0 でないかの2つの比較で、どちらも偽なら `Ok` を返す。真なら `#[cold]` の関数が、速い道で読んだビットから `Stop` を決める。優先の順は `Interrupted`、`MemoryLimit`、`DepthLimit` である。ビットを読み直さないのは、その間にほかのスレッドが `clear` すると、深さの上限を超えていないのに `DepthLimit` を返すためである。VM は呼び出し、戻り、自己末尾呼び出しのジャンプで `poll` を呼ぶ ([VM](vm.md) の「呼び出しと戻り」)
-- 深さは、VM のタスクが持つスタックの語の数で数える。フレームの数で数えないのは、スタックの大きさを抑えるのが目的だからである
+- 安全点の確かめは `Ctx::poll(depth) -> Result<(), Stop>` である。速い道は、`depth` が今のタスクの深さの上限 (`max_depth` からタスクの深さの起点を引いた値。上の「タスクの切り替え」) を超えるかと、止める語が 0 でないかの2つの比較で、どちらも偽なら `Ok` を返す。真なら `#[cold]` の関数が、速い道で読んだビットから `Stop` を決める。優先の順は `Interrupted`、`MemoryLimit`、`DepthLimit` である。ビットを読み直さないのは、その間にほかのスレッドが `clear` すると、深さの上限を超えていないのに `DepthLimit` を返すためである。VM は呼び出し、戻り、自己末尾呼び出しのジャンプで `poll` を呼ぶ ([VM](vm.md) の「呼び出しと戻り」)
+- 深さは、VM のタスクが持つスタックの語の数で数える。`poll` に渡す深さはタスクの深さの起点を含まず、起点は上限の側で引いてある。フレームの数で数えないのは、スタックの大きさを抑えるのが目的だからである
 - 確保量は、確保器がページを取るときと返すときに数え (上の「確保と解放」)、上限を超えたら `MEMORY` を立てる。worker ごとのヒープの数を足し合わせた、セッション全体の量になる。凍結した塊のページも、塊が生きている間は数に入る。ページを `Frozen` に移しても数はそのまま残り、塊を落とすときに減る
 - 確保器に `Control` を渡すため、ヒープの確保器が `Arc<Control>` を持つ。`Heap::with_control(control)` は共有の `Control` でヒープを作り、`Heap::new()` は上限のない新しい `Control` で作る。`Heap::control()` がそれを返す。`Ctx::new(control, host)` は `with_control` でヒープを作る
 - `Control::interrupt()` は `INTERRUPT` を立て、`Control::clear()` はすべてのビットを下ろす。確保量が上限を下回ってもビットは下りないので、下ろすのは `clear` だけである。REPL (`eml_cli::Repl`) は、入力の始めに `clear` を呼ぶ。確保量の上限で止まった後も、`MEMORY` のビットで次の入力が止まらないようにするためである。`clear` は確保量を減らさない。確保量を戻すのは、続けられる誤りの後の回復である。回復は古いヒープのページをすべて `Control` に戻すので、上限で止まった後の入力も、新しいヒープの分から数える (上の「回復」)。回復は写す間に古いヒープと写しを同時に持つので、写すことで上限を超えることがある。そのとき立つ `MEMORY` のビットは、次の入力の始めの `clear` が下ろす
@@ -813,7 +815,7 @@ token の表の項目は、`into_token` と `release_reuse` が添字を使い�
 |---|---|---|
 | `evv_get()` | | `evv` を `dup` して返す |
 | `evv_set(l)` | `evv_wf(l)` | `evv` を l にし、元の `evv` を手放す |
-| `switch_task(l, worker)` | 切り替えた後の文脈 (`evv` が l、worker が `worker`) で `held_ok()` | `evv` を l に、worker を `worker` にし、元の `evv` を返す。RC に触れない (上の「タスクの切り替え」) |
+| `switch_task(l, worker, depth_offset)` | 切り替えた後の文脈 (`evv` が l、worker が `worker`) で `held_ok()` | `evv` を l に、worker を `worker` に、今のタスクの深さの上限を `max_depth` から `depth_offset` を引いた値にし、元の `evv` を返す。RC に触れない (上の「タスクの切り替え」) |
 | `evv_push(l, e)` | `evv_wf(l)`、l の長さが `max_evv` より小さい、`ev_shape(e)` | e と同じ tag の新しい節点を返す。結果の `evv_seq` は、(tag, e) の後に `evv_seq(l)` を続けた列である |
 | `evv_mask(items, w)` | `evv_wf(w)`、どの項目についても合う組が n + m 個以上ある (`mask_spec(items, evv_seq(w))` の長さに、各エフェクトの先の項目の m を足すと、`evv_seq(w)` の長さになる) | 結果の `evv_seq` は `mask_spec(items, evv_seq(w))` である。除いた最後の節点までに残す節点を写し、その後ろは元のリストを共有する |
 | `ev_new(effect, n_ops, state, outer)` | `evv_wf(outer)`、effect が 65535 より小さい | 欄が `n_ops` 個でどれも `()` の入口の表と、それを指す tag が effect + 1 の evidence を作る |

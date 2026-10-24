@@ -820,6 +820,10 @@ pub struct Ctx<M: Mode> {
     /// 安全点の確かめがヒープの中をたどらずに読めるよう、ヒープとは別に持つ。
     control: Arc<Control>,
     max_depth: usize,
+    /// 今のタスクの深さの上限。`max_depth` から、タスクの深さの起点を引いた値である。`par` の右の子の深さは
+    /// fork のときの親の深さから数えるが、引いた上限を持てば、安全点で起点を足さずに済む
+    /// (docs/spec/object-model.md の「タスクの切り替え」)。
+    depth_limit: usize,
     /// `evv` の長さの上限。リストをたどるループは、これを超えたら止まる。
     max_evv: usize,
     stats: CtxStats,
@@ -884,11 +888,25 @@ impl<M: Mode> Ctx<M> {
         Ctx { heap: Heap { worker, ..self.heap }, evv: l, ..*self }
     }
 
-    /// 仕事の回数 (`CtxStats`)、セッションの根、上限が `old` と同じである。
+    /// 深さの起点が `depth_offset` のタスクに切り替えた後の文脈。今のタスクの深さの上限を、`max_depth` から
+    /// `depth_offset` を引いた値にする。起点が `max_depth` を超えれば 0 にする。
+    pub closed spec fn rebased(&self, depth_offset: usize) -> Ctx<M> {
+        Ctx {
+            depth_limit: if depth_offset <= self.max_depth {
+                (self.max_depth - depth_offset) as usize
+            } else {
+                0
+            },
+            ..*self
+        }
+    }
+
+    /// 仕事の回数 (`CtxStats`)、セッションの根、上限、今のタスクの深さの上限が `old` と同じである。
     pub closed spec fn same_rest(&self, old: Ctx<M>) -> bool {
         &&& self.stats == old.stats
         &&& self.roots == old.roots
         &&& self.max_depth == old.max_depth
+        &&& self.depth_limit == old.depth_limit
         &&& self.max_evv == old.max_evv
     }
 
@@ -1019,6 +1037,7 @@ impl<M: Mode> Ctx<M> {
             roots: Vec::new(),
             control,
             max_depth: limits.max_depth,
+            depth_limit: limits.max_depth,
             max_evv: limits.max_evv,
             stats: CtxStats {
                 evidence_steps: 0,
@@ -1550,7 +1569,8 @@ impl<M: Mode> Ctx<M> {
     }
 
     /// タスクを切り替える。`evv` を次のタスクの `l` に替え、ヒープの worker を `worker` にし (`Heap::set_worker`)、
-    /// 前のタスクの `evv` を返す。`l` の参照は `Ctx` へ移り、元の `evv` の参照は呼ぶ側へ移るので、RC に触れない。
+    /// 今のタスクの深さの上限を次のタスクの深さの起点 `depth_offset` から決め直し (`rebased`)、前のタスクの `evv` を
+    /// 返す。変える欄はこの3つだけである。`l` の参照は `Ctx` へ移り、元の `evv` の参照は呼ぶ側へ移るので、RC に触れない。
     /// タスクの切り替えが `RunStats` をスケジュールに依存させないための操作である
     /// (docs/spec/object-model.md の「タスクの切り替え」)。
     ///
@@ -1560,7 +1580,7 @@ impl<M: Mode> Ctx<M> {
     /// 確かめない。前の文脈で `held_ok` が成り立っていれば、返す語は前の worker の下で `evv` のリストで、呼ぶ側が
     /// その参照を1つ持つ。
     #[verifier::spinoff_prover]
-    pub unsafe fn switch_task(&mut self, l: Word, worker: u32) -> (r: Word)
+    pub unsafe fn switch_task(&mut self, l: Word, worker: u32, depth_offset: usize) -> (r: Word)
         requires
             old(self).wf(),
             old(self).heap_spec().word_in(l),
@@ -1572,7 +1592,7 @@ impl<M: Mode> Ctx<M> {
             final(self).yield_spec() == old(self).yield_spec(),
             final(self).heap_spec().worker_spec() == worker,
             final(self).heap_spec().same_contents(old(self).heap_spec()),
-            final(self).same_rest(*old(self)),
+            final(self).same_rest(old(self).rebased(depth_offset)),
             old(self).switched(l, worker).held_ok() ==> final(self).held_ok(),
             old(self).held_ok() ==> old(self).evv_wf(r) && forall|u: Word|
                 u.bits_spec() == 1 ==> #[trigger] old(self).switched(
@@ -1583,6 +1603,7 @@ impl<M: Mode> Ctx<M> {
         let r = self.evv;
         self.evv = l;
         self.heap.set_worker(worker);
+        self.depth_limit = self.max_depth.saturating_sub(depth_offset);
         proof {
             let s0 = *old(self);
             let s = s0.switched(l, worker);
@@ -3381,11 +3402,12 @@ impl<M: Mode> Ctx<M> {
 // 安全点の確かめは何も約束しないので、`verus!` の外に書く (docs/spec/object-model.md の「実行の制御」)。止める語は
 // 「止めよ」のビットだけを伝えるので、Relaxed で読む
 impl<M: Mode> Ctx<M> {
-    /// 安全点の確かめ。`depth` は VM のタスクのスタックの語の数である。
+    /// 安全点の確かめ。`depth` は VM のタスクのスタックの語の数で、タスクの深さの起点を含まない。起点は
+    /// `switch_task` が上限から引いてある。
     #[inline]
     pub fn poll(&self, depth: usize) -> Result<(), Stop> {
         let bits = self.control.stop_bits();
-        if depth > self.max_depth || bits != 0 {
+        if depth > self.depth_limit || bits != 0 {
             return Err(stop_reason(bits));
         }
         Ok(())
