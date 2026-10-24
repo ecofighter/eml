@@ -130,7 +130,7 @@ fn broken_bounds(
 /// ビルドでは、違反のあるプログラムを通さないよう関数を指す E3001 にする。
 fn reportable(provenance: &Provenance) -> Option<KindOrigin> {
     match provenance {
-        Provenance::At(origin) => Some(origin.clone()),
+        Provenance::At(origin) => Some(KindOrigin::clone(origin)),
         Provenance::Suppressed | Provenance::Given | Provenance::Bound(_) => None,
         Provenance::Declaration => {
             unreachable!("a constraint from a declaration alone is never violated")
@@ -157,13 +157,11 @@ fn with_cause<T: Level>(
         return origin;
     };
     if let Some(cause) = causes[lower.index()]
-        && let Provenance::At(KindOrigin {
-            span,
-            reason: KindReason::CapturedByLambda,
-        }) = &bounds.origins[cause]
-        && span.file == origin.span.file
+        && let Provenance::At(found) = &bounds.origins[cause]
+        && found.reason == KindReason::CapturedByLambda
+        && found.span.file == origin.span.file
     {
-        *lambda = Some(span.range);
+        *lambda = Some(found.span.range);
     }
     origin
 }
@@ -206,17 +204,16 @@ fn with_bound_cause(
 /// 使う。
 fn bound_origin(origin: &Provenance, source: BoundSource) -> Provenance {
     match origin {
-        Provenance::At(KindOrigin {
-            span,
-            reason: KindReason::Passed(name),
-        }) => Provenance::At(KindOrigin {
-            span: *span,
-            reason: KindReason::RowBound {
-                name: name.clone(),
-                source,
-                cause: None,
-            },
-        }),
+        Provenance::At(at) if let KindReason::Passed(name) = &at.reason => {
+            Provenance::at(KindOrigin {
+                span: at.span,
+                reason: KindReason::RowBound {
+                    name: name.clone(),
+                    source,
+                    cause: None,
+                },
+            })
+        }
         other => other.clone(),
     }
 }
@@ -240,13 +237,11 @@ impl SourceIndex {
                 ((Bound::Var(var), Bound::Const(_)), Provenance::Bound(span)) => {
                     written.entry(var.index()).or_insert(*span);
                 }
-                (
-                    (Bound::Var(var), Bound::Const(upper)),
-                    Provenance::At(KindOrigin {
-                        span,
-                        reason: KindReason::RowBound { name, .. },
-                    }),
-                ) => copied.push((var.index(), upper, *span, name.clone())),
+                ((Bound::Var(var), Bound::Const(upper)), Provenance::At(at))
+                    if let KindReason::RowBound { name, .. } = &at.reason =>
+                {
+                    copied.push((var.index(), upper, at.span, name.clone()))
+                }
                 _ => {}
             }
         }
@@ -496,20 +491,19 @@ impl Merged {
         for &(lower, upper) in &scheme.mult {
             let origin = match (lower, upper) {
                 (Bound::Var(v), Bound::Const(_)) => {
-                    let source = scheme
-                        .bound_sources
-                        .iter()
-                        .find(|(var, _)| *var == v)
+                    // `bound_sources` は残した制約の正規形と同じく変数の順に並ぶので、二分探索で引く
+                    let sources = &scheme.bound_sources;
+                    let at = sources.partition_point(|(var, _)| var.index() < v.index());
+                    let source = sources
+                        .get(at)
+                        .filter(|(var, _)| *var == v)
                         .map_or(BoundSource::Unknown, |(_, source)| source.clone());
                     // 残した上限はどれも、書いた上限か本体の中の参照の複写から来るので、出どころが見つかるはずである
                     debug_assert!(
                         !(source == BoundSource::Unknown
                             && matches!(
                                 origin,
-                                Provenance::At(KindOrigin {
-                                    reason: KindReason::Passed(_),
-                                    ..
-                                })
+                                Provenance::At(at) if matches!(at.reason, KindReason::Passed(_))
                             )),
                         "a bound copied to a reference has no source"
                     );
@@ -522,16 +516,15 @@ impl Merged {
         }
         for carry in &scheme.carries {
             let origin = match origin {
-                Provenance::At(KindOrigin {
-                    span,
-                    reason: KindReason::Passed(name),
-                }) => Provenance::At(KindOrigin {
-                    span: *span,
-                    reason: KindReason::CarriedThrough {
-                        name: name.clone(),
-                        inner: carry.origin.origin().map(CarriedInner::of),
-                    },
-                }),
+                Provenance::At(at) if let KindReason::Passed(name) = &at.reason => {
+                    Provenance::at(KindOrigin {
+                        span: at.span,
+                        reason: KindReason::CarriedThrough {
+                            name: name.clone(),
+                            inner: carry.origin.origin().map(CarriedInner::of),
+                        },
+                    })
+                }
                 other => other.clone(),
             };
             self.carries.push(Carry {
@@ -803,7 +796,7 @@ impl<T: Level> Graph<T> {
                 edges[a.index()].push(b.index());
             }
         }
-        let (component, count) = components(&edges);
+        let (component, count) = super::graph::component_ids(&edges);
         let mut upward = vec![Vec::new(); count];
         let mut downward = vec![Vec::new(); count];
         for (a, targets) in edges.iter().enumerate() {
@@ -938,63 +931,6 @@ fn upward_closure<U: Copy>(upward: &Edges, seed: Vec<U>, join: impl Fn(U, U) -> 
         }
     }
     out
-}
-
-/// Tarjan の方法で強連結成分の番号を振る。変数が多くても Rust のスタックを使わないよう、明示的なスタックでたどる
-/// (`scc.rs` と同じ形)。
-fn components(edges: &[Vec<usize>]) -> (Vec<usize>, usize) {
-    let unvisited = usize::MAX;
-    let n = edges.len();
-    let mut index = vec![unvisited; n];
-    let mut low = vec![0; n];
-    let mut on_stack = vec![false; n];
-    let mut component = vec![unvisited; n];
-    let mut stack = Vec::new();
-    let mut next = 0;
-    let mut count = 0;
-    for root in 0..n {
-        if index[root] != unvisited {
-            continue;
-        }
-        let mut work = vec![(root, 0)];
-        index[root] = next;
-        low[root] = next;
-        next += 1;
-        stack.push(root);
-        on_stack[root] = true;
-        while let Some(&(v, edge)) = work.last() {
-            if let Some(&w) = edges[v].get(edge) {
-                work.last_mut().unwrap().1 += 1;
-                if index[w] == unvisited {
-                    index[w] = next;
-                    low[w] = next;
-                    next += 1;
-                    stack.push(w);
-                    on_stack[w] = true;
-                    work.push((w, 0));
-                } else if on_stack[w] {
-                    low[v] = low[v].min(index[w]);
-                }
-                continue;
-            }
-            work.pop();
-            if let Some(&(parent, _)) = work.last() {
-                low[parent] = low[parent].min(low[v]);
-            }
-            if low[v] == index[v] {
-                loop {
-                    let w = stack.pop().unwrap();
-                    on_stack[w] = false;
-                    component[w] = count;
-                    if w == v {
-                        break;
-                    }
-                }
-                count += 1;
-            }
-        }
-    }
-    (component, count)
 }
 
 /// 宣言 `member` の自分の変数を含む成分と、その中の自分の変数の `Shape` の番号 (小さい順)。
@@ -1534,7 +1470,7 @@ mod tests {
             carries: vec![Carry {
                 lin: Bound::Var(KindVar::from_index(0)),
                 mult: Bound::Const(Multiplicity::Multi),
-                origin: Provenance::At(inner),
+                origin: Provenance::at(inner),
             }],
             bound_sources: Vec::new(),
         };
@@ -1548,7 +1484,7 @@ mod tests {
             decl: function(9),
             lin: vec![passed],
             mult: vec![],
-            origin: Provenance::At(KindOrigin {
+            origin: Provenance::at(KindOrigin {
                 span: at(5, 9),
                 reason: KindReason::Passed("keep".to_string()),
             }),
@@ -1566,7 +1502,7 @@ mod tests {
                 carries: vec![Carry {
                     lin: Bound::Var(KindVar::from_index(0)),
                     mult: Bound::Const(Multiplicity::Multi),
-                    origin: Provenance::At(KindOrigin {
+                    origin: Provenance::at(KindOrigin {
                         span: at(5, 9),
                         reason: KindReason::CarriedThrough {
                             name: "keep".to_string(),
@@ -1638,7 +1574,7 @@ mod tests {
         let mut multiplicity = lattice::<Multiplicity>();
         let e = multiplicity.fresh();
         let origin = |start, end| {
-            Provenance::At(KindOrigin {
+            Provenance::at(KindOrigin {
                 span: at(start, end),
                 reason: KindReason::Unified,
             })

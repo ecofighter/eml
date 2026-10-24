@@ -3,19 +3,18 @@
 //! 単相に推論する。入力の関数はほかの関数から参照されないので、1つだけの SCC として、ほかの関数と同じ道で Kind を解いて
 //! 書き出す。
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 
 use eml_diagnostics::{Diagnostic, Label, SourceFiles};
 use eml_hir::{FunctionId, Generics, InputKind, Program, ValueItem};
 
 use crate::context::Context;
-use crate::kind::problem::KindScheme;
-use crate::kind::{Provenance, Span};
+use crate::kind::problem::{KindScheme, OwnVars};
 use crate::shape::{Own, Rigids, closed_shape};
 use crate::store::{EffectLabel, Lin, TypeId, TypeKind, TypeStore};
 use crate::table::{ArrowLin, Label as RowLabel, Row, Table, Tail, Ty};
 use crate::ty::Linearity;
-use crate::{BodyTypes, InputDisplay, InputType, carry, codes, satisfies, usage};
+use crate::{BodyTypes, InputDisplay, InputType, codes, satisfies};
 
 use super::body::{BodyCheck, BodyTyping};
 use super::constraints::Defaulting;
@@ -32,8 +31,6 @@ pub(super) fn check_input<'c>(
     kind: InputKind,
     types: &mut TypeStore,
 ) -> (PendingBody<'c>, Vec<Diagnostic>) {
-    let function = &program[id];
-    let body = program.body(id).expect("an input has a body");
     let mut table = Table::new(context);
     let result = table.fresh_var();
     let ambient = match kind {
@@ -60,32 +57,18 @@ pub(super) fn check_input<'c>(
         result,
     );
     let rigids = Rigids::new(&mut table, &Generics::default());
-    let file = program.file(id.module);
-    table.set_kind_origin(Provenance::Unattributed(Span {
-        file,
-        range: function.name_range,
-    }));
     let mut diagnostics = Vec::new();
-    let mut checker = BodyCheck {
+    let mut checker = BodyCheck::new(
         program,
         files,
-        file,
-        function,
-        function_id: id,
-        body,
-        rigids: &rigids,
+        id,
+        &rigids,
         signatures,
-        table: &mut table,
-        types: &mut *types,
-        diagnostics: &mut diagnostics,
-        ambient: Row::pure(),
-        ambient_source: AmbientSource::Input,
-        typing: BodyTyping::default(),
-        instances: Vec::new(),
-        inclusions: Vec::new(),
-        failed_calls: HashSet::new(),
-        fn_clause_bodies: HashMap::new(),
-    };
+        &mut table,
+        types,
+        &mut diagnostics,
+        AmbientSource::Input,
+    );
     checker.check_function(own);
     // 包含は、決まらない型を `Error` にする `undecided_binding` より前に解く。問い合わせの型に現れる row 変数は閉じない。
     // 閉じると `:type fn f -> f ()` の row が消え、型の一般さを失うためである (docs/spec/types.md の「REPL の入力」)
@@ -111,8 +94,7 @@ pub(super) fn check_input<'c>(
         let context = checker.split_residuals(residuals, &shown);
         query::render(program, checker.table, result, &context)
     });
-    let mut typing = checker.typing;
-    let instances = checker.instances;
+    let (typing, instances) = (checker.typing, checker.instances);
     default_unsolved(&mut table, &typing, result, kind == InputKind::Expr);
     // 問い合わせの row (ρ) が `default_unsolved` の後も開いていれば、ここで閉じる。`closed_shape` に開いた row を
     // 渡さないため
@@ -121,43 +103,22 @@ pub(super) fn check_input<'c>(
             .close_row(var)
             .expect("an unsolved row variable closes to `<>`");
     }
-    super::var::classify(
+    let own = Own {
+        ty: own,
+        rigids,
+        vars: OwnVars::default(),
+    };
+    super::finish_body(
         program,
-        file,
-        body,
-        &mut table,
+        id,
+        table,
         types,
-        &mut typing,
-        &mut diagnostics,
-    );
-    let reliable = usage::reliable(body, diagnostics.is_empty());
-    let implicit_drops =
-        usage::constrain(program, file, body, &typing, &mut table, types, reliable);
-    carry::constrain(
-        program,
-        file,
-        body,
-        &typing,
-        &mut table,
-        reliable,
-        &implicit_drops,
-    );
-    (
-        PendingBody {
-            table,
-            typing,
-            own: Own {
-                ty: own,
-                rigids,
-                lin: Vec::new(),
-                mult: Vec::new(),
-            },
-            instances,
-            reliable,
-            query,
-            implicit_drops,
-        },
+        typing,
+        own,
+        instances,
+        query,
         diagnostics,
+        false,
     )
 }
 
@@ -321,7 +282,7 @@ mod tests {
     #[test]
     fn show_is_satisfied_only_when_every_part_has_an_instance() {
         let program = crate::test_program("data Plain = | Plain");
-        let mut types = TypeStore::new(&program);
+        let mut types = TypeStore::for_program(&program);
         let int = types.intern(TypeKind::Con {
             id: program.extern_type(ExternType::Int),
             args: Vec::new(),
@@ -365,7 +326,7 @@ mod tests {
     #[test]
     fn a_closed_shape_exports_back_to_the_same_type() {
         let program = crate::test_program("");
-        let mut types = TypeStore::new(&program);
+        let mut types = TypeStore::for_program(&program);
         let string = types.intern(TypeKind::Con {
             id: program.extern_type(ExternType::String),
             args: Vec::new(),

@@ -312,7 +312,7 @@ pub(super) fn classify(
                 file,
                 range: data.range,
             };
-            let previous = table.set_kind_origin(Provenance::At(KindOrigin { span, reason }));
+            let previous = table.set_kind_origin(Provenance::at(KindOrigin { span, reason }));
             table.kind_at_most(scope.ty, Bound::Const(Linearity::Unr));
             table.set_kind_origin(previous);
         }

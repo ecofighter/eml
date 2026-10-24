@@ -11,10 +11,10 @@ use la_arena::Arena;
 use crate::context::Context;
 use crate::kind::entail::{Unentailed, unentailed};
 use crate::kind::eval::scheme_facts;
-use crate::kind::problem::{Instance, KindProblem, KindScheme, OwnVars};
+use crate::kind::problem::{Instance, KindProblem, KindScheme};
 use crate::kind::solve::{Solution, solve_scc};
 use crate::kind::summary::BodyKinds;
-use crate::kind::{Bound, KindOrigin, KindReason, KindVar, Provenance, Span};
+use crate::kind::{Bound, KindOrigin, KindReason, KindVar, Provenance};
 use crate::shape::{Arrows, Own, Shape, constructor_shape, operation_shape, signature_shape};
 use crate::store::{EffectLabel, Lin, TypeKind, TypeStore};
 use crate::table::{Exporter, RigidVar, Row, Table, TyShape};
@@ -60,6 +60,40 @@ impl Signatures {
             ValueItem::Binding(id) => self.bindings.get(id),
         }
     }
+
+    /// 宣言ごとの形。宣言の種類の順 (関数、操作、コンストラクタ、メソッド、束縛) に並ぶ。
+    fn into_decls(self) -> impl Iterator<Item = (ValueItem, Shape)> {
+        let Signatures {
+            functions,
+            operations,
+            constructors,
+            methods,
+            bindings,
+        } = self;
+        (functions
+            .into_entries()
+            .map(|(id, s)| (ValueItem::Function(id), s)))
+        .chain(
+            operations
+                .into_entries()
+                .map(|(id, s)| (ValueItem::Operation(id), s)),
+        )
+        .chain(
+            constructors
+                .into_entries()
+                .map(|(id, s)| (ValueItem::Constructor(id), s)),
+        )
+        .chain(
+            methods
+                .into_entries()
+                .map(|(id, s)| (ValueItem::Method(id), s)),
+        )
+        .chain(
+            bindings
+                .into_entries()
+                .map(|(id, s)| (ValueItem::Binding(id), s)),
+        )
+    }
 }
 
 /// 段1を終えた本体。Kind を解いた後に型を書き出すので、推論用の表を SCC の解が出るまで持つ
@@ -80,12 +114,10 @@ pub(crate) struct PendingBody<'c> {
 impl PendingBody<'_> {
     /// Kind の制約を取り出す。表の形は書き出しで使うので残す。
     pub fn take_problem(&mut self) -> KindProblem {
-        let own = OwnVars {
-            lin: self.own.lin.clone(),
-            mult: self.own.mult.clone(),
-        };
-        self.table
-            .take_problem(std::mem::take(&mut self.instances), own)
+        self.table.take_problem(
+            std::mem::take(&mut self.instances),
+            std::mem::take(&mut self.own.vars),
+        )
     }
 }
 
@@ -97,7 +129,7 @@ pub(crate) fn check_module(
     let context = Context::new(program);
     // 宣言と本体の型を1つの表に登録する。表は追記だけするので、本体を独立に検査する順は結果の意味を変えない
     // (docs/implementation/architecture.md の「`eml_types` の内部」)
-    let mut types = TypeStore::new(program);
+    let mut types = TypeStore::new(program, context.data_kinds.clone());
     check_instances(program, &context, &mut types, &mut diagnostics);
     let mut signatures = signatures(program, &context);
     let mut schemes = declaration_schemes(program, &context, &signatures);
@@ -116,7 +148,6 @@ pub(crate) fn check_module(
     // 表は SCC の解が出るまで持つ。診断の順は表示する側が決める (docs/spec/diagnostics.md の「診断の順」)
     let mut bodies = ItemMap::default();
     let mut joins = HashMap::new();
-    let mut checked = HashSet::new();
     let mut unreliable = HashSet::new();
     let mut violated = Vec::new();
     let mut inputs = ItemMap::default();
@@ -138,7 +169,6 @@ pub(crate) fn check_module(
             };
             if let Some((body, found)) = result {
                 diagnostics.extend(found);
-                checked.insert(id);
                 if !body.reliable {
                     unreliable.insert(id);
                 }
@@ -197,13 +227,12 @@ pub(crate) fn check_module(
         program,
         &context,
         &signatures,
-        &checked,
+        &bodies,
         &unreliable,
         &schemes,
     ));
     diagnostics.extend(report_violations(program, files, &types, violated));
-    let mut typed = typed_program(&signatures, schemes, joins, bodies, inputs, types);
-    typed.query = query;
+    let mut typed = typed_program(signatures, schemes, joins, bodies, inputs, query, types);
     let (uniform, found) = uniform::uniform(program, &typed.types, &typed.decls, &typed.bodies);
     typed.uniform = uniform;
     diagnostics.extend(found);
@@ -489,38 +518,57 @@ pub(crate) fn check_body<'c>(
         table.kind_at_most(own.rigids.ty(var), Bound::Const(Linearity::Unr));
     }
     table.set_kind_origin(previous);
-    let file = program.file(id.module);
-    // ここから後の制約は、由来を付け忘れたら Unattributed になり、違反すれば段2が見つける
-    table.set_kind_origin(Provenance::Unattributed(Span {
-        file,
-        range: function.name_range,
-    }));
     let mut diagnostics = Vec::new();
-    let mut checker = BodyCheck {
+    let mut checker = BodyCheck::new(
         program,
         files,
-        file,
-        function,
-        function_id: id,
-        body,
-        rigids: &own.rigids,
+        id,
+        &own.rigids,
         signatures,
-        table: &mut table,
-        types: &mut *types,
-        diagnostics: &mut diagnostics,
-        ambient: Row::pure(),
-        ambient_source: AmbientSource::Signature,
-        typing: BodyTyping::default(),
-        instances: Vec::new(),
-        inclusions: Vec::new(),
-        failed_calls: HashSet::new(),
-        fn_clause_bodies: HashMap::new(),
-    };
+        &mut table,
+        types,
+        &mut diagnostics,
+        AmbientSource::Signature,
+    );
     checker.check_function(own.ty);
     checker.solve_inclusions(&[]);
     checker.solve_constraints(Defaulting::None);
-    let mut typing = checker.typing;
-    let instances = checker.instances;
+    let (typing, instances) = (checker.typing, checker.instances);
+    // 頭が線形な instance (E2010) のメソッドは、頭の値を `Unr` とみなして書いた本体なので、線形性の診断を重ねない
+    // (docs/spec/types.md の「`Unr` のクラス」)
+    let linear_head = matches!(function.kind, FunctionKind::InstanceMethod(instance, _)
+        if context.data_kinds[program[instance].head].lin);
+    Some(finish_body(
+        program,
+        id,
+        table,
+        types,
+        typing,
+        own,
+        instances,
+        None,
+        diagnostics,
+        linear_head,
+    ))
+}
+
+/// 段1の本体の検査の後半。`var` の変数を分類し、使用回数と持ち越しの制約を足して、段2を待つ本体にする。
+/// `check_body` と `check_input` が共有する。
+#[allow(clippy::too_many_arguments)]
+fn finish_body<'c>(
+    program: &Program,
+    id: FunctionId,
+    mut table: Table<'c>,
+    types: &mut TypeStore,
+    mut typing: BodyTyping,
+    own: Own,
+    instances: Vec<Instance>,
+    query: Option<String>,
+    mut diagnostics: Vec<Diagnostic>,
+    linear_head: bool,
+) -> (PendingBody<'c>, Vec<Diagnostic>) {
+    let file = program.file(id.module);
+    let body = program.body(id).expect("a checked function has a body");
     var::classify(
         program,
         file,
@@ -530,10 +578,6 @@ pub(crate) fn check_body<'c>(
         &mut typing,
         &mut diagnostics,
     );
-    // 頭が線形な instance (E2010) のメソッドは、頭の値を `Unr` とみなして書いた本体なので、線形性の診断を重ねない
-    // (docs/spec/types.md の「`Unr` のクラス」)
-    let linear_head = matches!(function.kind, FunctionKind::InstanceMethod(instance, _)
-        if context.data_kinds[program[instance].head].lin);
     let reliable = usage::reliable(body, diagnostics.is_empty()) && !linear_head;
     let implicit_drops =
         usage::constrain(program, file, body, &typing, &mut table, types, reliable);
@@ -546,18 +590,18 @@ pub(crate) fn check_body<'c>(
         reliable,
         &implicit_drops,
     );
-    Some((
+    (
         PendingBody {
             table,
             typing,
             own,
             instances,
             reliable,
-            query: None,
+            query,
             implicit_drops,
         },
         diagnostics,
-    ))
+    )
 }
 
 /// 段1の本体の型を、SCC の解から求めた Kind 変数の値 `kinds` を使って `TypeStore` に書き出し、本体の `joins` も返す。
@@ -829,11 +873,7 @@ fn declaration_problem(
     let mut table = Table::new(context);
     let own = shape.instantiate_rigid(&mut table, generics, file);
     constrain(&mut table, &own);
-    let own_vars = OwnVars {
-        lin: own.lin,
-        mult: own.mult,
-    };
-    table.into_problem(Vec::new(), own_vars)
+    table.into_problem(Vec::new(), own.vars)
 }
 
 /// instance のメソッドと既定のメソッドの Kind のスキームが、クラスの側のスキームから導けることを確かめる (E2011。
@@ -848,7 +888,7 @@ fn check_method_kinds(
     program: &Program,
     context: &Context,
     signatures: &Signatures,
-    checked: &HashSet<FunctionId>,
+    bodies: &ItemMap<Function, BodyTypes>,
     unreliable: &HashSet<FunctionId>,
     schemes: &HashMap<ValueItem, KindScheme>,
 ) -> Vec<Diagnostic> {
@@ -859,7 +899,7 @@ fn check_method_kinds(
             FunctionKind::DefaultMethod(method) => (None, method),
             FunctionKind::Defined | FunctionKind::Extern(_) | FunctionKind::Input(_) => continue,
         };
-        if unreliable.contains(&id) || !checked.contains(&id) {
+        if unreliable.contains(&id) || bodies.get(id).is_none() {
             continue;
         }
         let decl = ValueItem::Function(id);
@@ -972,43 +1012,18 @@ fn report_violations(
 /// 関数、メソッド、操作、コンストラクタは `declaration_schemes` が、本体に問題のない関数は `check_module` が
 /// (制約がなければ空のスキームを)、解いた SCC の関数は SCC の解が入れるためである。`joins` は本体を書き出した関数の
 /// ものである。
+#[allow(clippy::too_many_arguments)]
 fn typed_program(
-    signatures: &Signatures,
+    signatures: Signatures,
     mut schemes: HashMap<ValueItem, KindScheme>,
     mut joins: HashMap<FunctionId, Vec<Vec<u32>>>,
     bodies: ItemMap<Function, BodyTypes>,
     inputs: ItemMap<Function, InputType>,
+    query: Option<String>,
     mut types: TypeStore,
 ) -> TypedProgram {
-    let shapes = signatures
-        .functions
-        .iter()
-        .map(|(id, shape)| (ValueItem::Function(id), shape))
-        .chain(
-            signatures
-                .operations
-                .iter()
-                .map(|(id, shape)| (ValueItem::Operation(id), shape)),
-        )
-        .chain(
-            signatures
-                .constructors
-                .iter()
-                .map(|(id, shape)| (ValueItem::Constructor(id), shape)),
-        )
-        .chain(
-            signatures
-                .methods
-                .iter()
-                .map(|(id, shape)| (ValueItem::Method(id), shape)),
-        )
-        .chain(
-            signatures
-                .bindings
-                .iter()
-                .map(|(id, shape)| (ValueItem::Binding(id), shape)),
-        );
-    let decls = shapes
+    let decls = signatures
+        .into_decls()
         .map(|(decl, shape)| {
             let kinds = schemes
                 .remove(&decl)
@@ -1023,7 +1038,7 @@ fn typed_program(
             let facts = scheme_facts(&kinds, shape.lin_vars);
             let declared = DeclType {
                 ty: shape.export(&mut types, Some(&facts)),
-                shape: shape.clone(),
+                shape,
                 kinds,
                 facts,
                 joins,
@@ -1037,7 +1052,7 @@ fn typed_program(
         bodies,
         uniform: Uniform::default(),
         inputs,
-        query: None,
+        query,
     }
 }
 
@@ -1157,7 +1172,7 @@ mod tests {
                 call: CallKind::Call,
             },
         };
-        let types = crate::TypeStore::new(&program);
+        let types = crate::TypeStore::for_program(&program);
         let reported = report_violations(
             &program,
             &files,

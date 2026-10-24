@@ -10,8 +10,8 @@ use eml_hir::{
     MethodImpl, ModuleOrigin, Program as HirProgram, TypeDefId, TypeDefKind, ValueItem,
 };
 use eml_types::{
-    BodyTypes, InputDisplay, InstanceNode, Instantiation, Lin, Resolution, RowYield, Substitution,
-    TypeId, TypeKind, TypeNames, TypeStore, TypedProgram, Update,
+    BodyTypes, InputDisplay, InstanceNode, Instantiation, Lin, Resolution, RowYield, TypeId,
+    TypeKind, TypeNames, TypeStore, TypedProgram, Update,
 };
 use la_arena::ArenaMap;
 
@@ -388,20 +388,12 @@ impl Collector<'_> {
             .bodies
             .get(function)
             .expect("every reached body is type-checked");
-        let names = type_vars(hir, function);
-        debug_assert_eq!(
-            names.len(),
-            found.args.len(),
-            "an instance key must supply one type argument per type variable of the signature"
-        );
         debug_assert_eq!(
             row_vars(hir, function).len(),
             bits.len(),
             "an instance key must supply one row bit per row variable of the signature"
         );
-        let kinds = typed.kind_values(ValueItem::Function(function), &found.args, &self.store);
-        let mut subst =
-            Substitution::new(names.iter().cloned().zip(found.args.iter().copied()), kinds);
+        let mut subst = typed.substitution(ValueItem::Function(function), &found.args, &self.store);
         let decl = typed.decls[&ValueItem::Function(function)].ty;
         let signature = self.store.substitute(decl, &mut subst);
         let mut targets = ArenaMap::default();
@@ -754,15 +746,7 @@ impl Collector<'_> {
                 let ValueItem::Operation(op) = instantiation.decl else {
                     continue;
                 };
-                let names = hir[op]
-                    .signature
-                    .generics
-                    .type_vars
-                    .iter()
-                    .map(|(_, var)| var.name.clone());
-                let kinds = typed.kind_values(instantiation.decl, &instantiation.args, store);
-                let mut subst =
-                    Substitution::new(names.zip(instantiation.args.iter().copied()), kinds);
+                let mut subst = typed.substitution(instantiation.decl, &instantiation.args, store);
                 let declared = store.substitute(typed.decls[&instantiation.decl].ty, &mut subst);
                 assert!(
                     store.lin_compatible_inner(types.exprs[expr], declared),
@@ -1192,22 +1176,15 @@ pub(super) fn constructor_fields(
     let TypeDefKind::Data { constructors } = &hir[ty].kind else {
         unreachable!("only data types have constructors")
     };
-    let names: Vec<String> = hir[ty]
-        .generics
-        .type_vars
-        .values()
-        .map(|var| var.name.clone())
-        .collect();
-    let vars = || names.iter().cloned().zip(args.iter().copied());
     let relative = args.iter().any(|&arg| store.is_relative(arg));
     constructors
         .iter()
         .map(|&constructor| {
             let item = ValueItem::Constructor(constructor);
             let mut subst = if relative {
-                Substitution::partial(vars())
+                typed.partial_substitution(item, args)
             } else {
-                Substitution::new(vars(), typed.kind_values(item, args, store))
+                typed.substitution(item, args, store)
             };
             let declared = typed.decls[&item].ty;
             let ty = store.substitute(declared, &mut subst);

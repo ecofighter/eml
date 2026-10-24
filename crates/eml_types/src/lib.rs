@@ -161,6 +161,36 @@ impl TypedProgram {
         values
     }
 
+    /// 宣言 `decl` を型引数 `args` (`Instantiation::args` の順) で具体化する代入 (docs/spec/core-ir.md の「変換の規則」)。
+    /// 型変数の名前は宣言の形から取るので、名前と型引数の順は食い違わない。`args` は閉じた型でなければならない
+    /// (`kind_values`)。
+    pub fn substitution(
+        &self,
+        decl: ValueItem,
+        args: &[TypeId],
+        store: &TypeStore,
+    ) -> Substitution {
+        Substitution::new(
+            self.rigid_names(decl, args),
+            self.kind_values(decl, args, store),
+        )
+    }
+
+    /// Kind 変数を残す `substitution`。型引数が宣言に対して相対的で、Kind の値を求められないときに使う。
+    pub fn partial_substitution(&self, decl: ValueItem, args: &[TypeId]) -> Substitution {
+        Substitution::partial(self.rigid_names(decl, args))
+    }
+
+    fn rigid_names(&self, decl: ValueItem, args: &[TypeId]) -> Vec<(String, TypeId)> {
+        let rigids = &self.decls[&decl].shape.rigids;
+        debug_assert_eq!(args.len(), rigids.len(), "type arguments of {decl:?}");
+        rigids
+            .iter()
+            .map(|(name, _)| name.clone())
+            .zip(args.iter().copied())
+            .collect()
+    }
+
     /// 関数の一様な位置 `position` の型変数の Kind。一様な位置の鍵は `Int` の呼び出し元にも `FileIn` の呼び出し元にも
     /// 使われるので、スキームで `Unr` に固定されていなければ `Poly` にする
     /// (docs/spec/types.md の「`Flexible` と `OpVar` の Kind」)。

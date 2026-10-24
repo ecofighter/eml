@@ -18,16 +18,20 @@ impl Table<'_> {
         if a == b || done.contains(&(a, b)) {
             return Ok(());
         }
+        // 子を持たない形は借りたまま決める。複合の型だけを、子を単一化する間に表を変えられるよう複写する
+        match (&self.shapes[a.0 as usize], &self.shapes[b.0 as usize]) {
+            // 変数を先に束縛する。`Error` と単一化した変数も `Error` に束縛し、後の制約で診断を出させない
+            (&TyShape::Var(var), _) => return self.bind_var(var, b),
+            (_, &TyShape::Var(var)) => return self.bind_var(var, a),
+            // `Error` が関わる制約からは診断を出さない (docs/spec/types.md の「エラーの扱い」)
+            (TyShape::Error, _) | (_, TyShape::Error) => return Ok(()),
+            (TyShape::Rigid(x), TyShape::Rigid(y)) if x == y => return Ok(()),
+            _ => {}
+        }
         match (
             self.shapes[a.0 as usize].clone(),
             self.shapes[b.0 as usize].clone(),
         ) {
-            // 変数を先に束縛する。`Error` と単一化した変数も `Error` に束縛し、後の制約で診断を出させない
-            (TyShape::Var(var), _) => self.bind_var(var, b),
-            (_, TyShape::Var(var)) => self.bind_var(var, a),
-            // `Error` が関わる制約からは診断を出さない (docs/spec/types.md の「エラーの扱い」)
-            (TyShape::Error, _) | (_, TyShape::Error) => Ok(()),
-            (TyShape::Rigid(x), TyShape::Rigid(y)) if x == y => Ok(()),
             (TyShape::Con(x, xs, x_rows), TyShape::Con(y, ys, y_rows))
                 if x == y && xs.len() == ys.len() && x_rows.len() == y_rows.len() =>
             {
@@ -102,9 +106,7 @@ impl Table<'_> {
         shape.any_child(|child| match child {
             Child::Ty(child) => self.occurs_in(var, child),
             Child::Row(row) => self
-                .resolve_row(row)
-                .labels
-                .iter()
+                .resolved_labels(row)
                 .any(|label| label.args.iter().any(|&arg| self.occurs_in(var, arg))),
         })
     }

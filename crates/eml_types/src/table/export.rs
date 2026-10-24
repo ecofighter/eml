@@ -192,7 +192,7 @@ impl<'t, 'c, 's, 'k> Exporter<'t, 'c, 's, 'k> {
 impl Table<'_> {
     /// 単体テストが確かめる型の表示。テストごとに使い捨ての型の表に書き出す。
     pub fn show(&self, ty: Ty, program: &eml_hir::Program) -> String {
-        let mut types = TypeStore::new(program);
+        let mut types = TypeStore::for_program(program);
         let id = Exporter::diagnostic(self, &mut types).export(ty);
         types.display(id, &program.names).to_string()
     }

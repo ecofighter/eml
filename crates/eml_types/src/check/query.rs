@@ -137,7 +137,7 @@ pub(super) fn render(
     for (index, row) in found.rows.iter().filter(|row| row.named()).enumerate() {
         names.rows.insert(row.var, row_var_name(index));
     }
-    let mut types = TypeStore::new(program);
+    let mut types = TypeStore::new(program, table.data_kinds().clone());
     let id = Exporter::named(table, &mut types, &names).export(ty);
     let shown = types.display(id, &program.names).to_string();
     let constraints = context_text(program, table, &found.types, &names, context);

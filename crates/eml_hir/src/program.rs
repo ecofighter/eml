@@ -192,6 +192,18 @@ impl<T, V> ItemMap<T, V> {
     pub fn values(&self) -> impl Iterator<Item = &V> {
         self.iter().map(|(_, value)| value)
     }
+
+    /// `iter` と同じ順に、値を取り出してたどる。
+    pub fn into_entries(self) -> impl Iterator<Item = (ItemId<T>, V)> {
+        self.modules
+            .into_iter()
+            .enumerate()
+            .flat_map(|(module, map)| {
+                let module = ModuleId::from_raw(RawIdx::from(module as u32));
+                map.into_iter()
+                    .map(move |(local, value)| (ItemId::new(module, local), value))
+            })
+    }
 }
 
 fn module_index(module: ModuleId) -> usize {

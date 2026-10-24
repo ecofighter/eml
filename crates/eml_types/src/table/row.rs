@@ -8,23 +8,26 @@ use crate::kind::{KindOrigin, KindReason};
 impl Table<'_> {
     /// 束縛済みの row 変数を展開し、ラベルを1つの並びにまとめる。
     pub fn resolve_row(&self, row: &Row) -> Row {
-        let mut labels = row.labels.clone();
-        let mut tail = row.tail;
-        while let Tail::Var(var) = tail {
-            match &self.row_vars[var.0 as usize].binding {
-                Some(bound) => {
-                    labels.extend(bound.labels.iter().cloned());
-                    tail = bound.tail;
-                }
-                None => break,
-            }
+        Row {
+            labels: self.resolved_labels(row).cloned().collect(),
+            tail: self.resolved_tail(row),
         }
-        // `IO` の失敗は実行の時点で最も近い `try_io` に届くので、row の中に `IO` が何回あっても、どちらの `IO` に届いても
-        // 同じである (docs/spec/effects.md の「健全性」)。extern のエフェクトはエフェクトごとに2つ目以降を落とし、単一化、
-        // 包含、表示のすべてで1つとして扱う。extern のエフェクトは型引数を持たないので、落としても型引数は食い違わない
-        // (docs/spec/types.md の「推論」)
+    }
+
+    /// `resolve_row` のラベルを、並びを作らずに順にたどる。ラベルを読むだけの処理が使う。
+    ///
+    /// `IO` の失敗は実行の時点で最も近い `try_io` に届くので、row の中に `IO` が何回あっても、どちらの `IO` に届いても
+    /// 同じである (docs/spec/effects.md の「健全性」)。extern のエフェクトはエフェクトごとに2つ目以降を落とし、単一化、
+    /// 包含、表示のすべてで1つとして扱う。extern のエフェクトは型引数を持たないので、落としても型引数は食い違わない
+    /// (docs/spec/types.md の「推論」)
+    pub fn resolved_labels<'r>(&'r self, row: &'r Row) -> impl Iterator<Item = &'r Label> + 'r {
         let mut seen: Vec<EffectId> = Vec::new();
-        labels.retain(|label| {
+        std::iter::successors(Some(row), |row| match row.tail {
+            Tail::Var(var) => self.row_vars[var.0 as usize].binding.as_ref(),
+            Tail::Closed | Tail::Error => None,
+        })
+        .flat_map(|row| row.labels.iter())
+        .filter(move |label| {
             if !self.context.is_extern_effect(label.effect) {
                 return true;
             }
@@ -33,8 +36,19 @@ impl Table<'_> {
             }
             seen.push(label.effect);
             true
-        });
-        Row { labels, tail }
+        })
+    }
+
+    /// 束縛済みの row 変数を展開した末尾。
+    pub fn resolved_tail(&self, row: &Row) -> Tail {
+        let mut tail = row.tail;
+        while let Tail::Var(var) = tail {
+            match &self.row_vars[var.0 as usize].binding {
+                Some(bound) => tail = bound.tail,
+                None => break,
+            }
+        }
+        tail
     }
 
     /// 束縛されていない rigid でない row 変数を、閉じた空の row `<>` に束縛する。REPL の入力で、決まらずに残った
@@ -290,7 +304,7 @@ impl Table<'_> {
         let origin = self.kind_origin();
         for label in &row.labels {
             let labelled = match &origin {
-                Provenance::At(at) => Provenance::At(KindOrigin {
+                Provenance::At(at) => Provenance::at(KindOrigin {
                     span: at.span,
                     reason: KindReason::Performs(label.effect),
                 }),

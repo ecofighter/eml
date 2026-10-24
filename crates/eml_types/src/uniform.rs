@@ -716,109 +716,26 @@ fn vars_in(
         return found.clone();
     }
     let mut found = vec![false; names.len()];
-    let mut merge = |child: Vec<bool>| {
-        for (slot, child) in found.iter_mut().zip(child) {
+    let kind = types.kind(ty);
+    if let TypeKind::Rigid(name) = kind
+        && let Some(position) = names.iter().position(|n| n == name)
+    {
+        found[position] = true;
+    }
+    kind.for_each_child(|child| {
+        for (slot, child) in found.iter_mut().zip(vars_in(types, child, names, memo)) {
             *slot |= child;
         }
-    };
-    match types.kind(ty) {
-        TypeKind::Rigid(name) => {
-            if let Some(position) = names.iter().position(|n| n == name) {
-                merge({
-                    let mut one = vec![false; names.len()];
-                    one[position] = true;
-                    one
-                });
-            }
-        }
-        TypeKind::Con { id: _, args, rows } => {
-            for &arg in args {
-                merge(vars_in(types, arg, names, memo));
-            }
-            for label in rows.iter().flat_map(|row| &row.effects) {
-                for &arg in &label.args {
-                    merge(vars_in(types, arg, names, memo));
-                }
-            }
-        }
-        TypeKind::Tuple(elements) => {
-            for &element in elements {
-                merge(vars_in(types, element, names, memo));
-            }
-        }
-        TypeKind::Fn {
-            param,
-            effects,
-            ret,
-            ..
-        } => {
-            merge(vars_in(types, *param, names, memo));
-            for label in effects {
-                for &arg in &label.args {
-                    merge(vars_in(types, arg, names, memo));
-                }
-            }
-            merge(vars_in(types, *ret, names, memo));
-        }
-        TypeKind::OpVar(_, _) | TypeKind::Flexible(_) | TypeKind::Error => {}
-    }
+    });
     memo.insert(ty, found.clone());
     found
 }
 
-/// 強連結成分の番号。Tarjan の方法を作業の列で行い、グラフの深さに比例して Rust のスタックを使わない。
+/// 強連結成分の番号。
 fn strongly_connected(edges: &[Vec<(usize, bool)>]) -> Vec<usize> {
-    const UNSEEN: usize = usize::MAX;
-    let mut index = vec![UNSEEN; edges.len()];
-    let mut low = vec![0; edges.len()];
-    let mut on_stack = vec![false; edges.len()];
-    let mut stack = Vec::new();
-    let mut component = vec![UNSEEN; edges.len()];
-    let (mut next_index, mut next_component) = (0, 0);
-    for root in 0..edges.len() {
-        if index[root] != UNSEEN {
-            continue;
-        }
-        // (節点, 次に見る辺の位置)
-        let mut work = vec![(root, 0)];
-        index[root] = next_index;
-        low[root] = next_index;
-        next_index += 1;
-        stack.push(root);
-        on_stack[root] = true;
-        while let Some(&(node, edge)) = work.last() {
-            if let Some(&(to, _)) = edges[node].get(edge) {
-                work.last_mut().expect("read above").1 += 1;
-                if index[to] == UNSEEN {
-                    index[to] = next_index;
-                    low[to] = next_index;
-                    next_index += 1;
-                    stack.push(to);
-                    on_stack[to] = true;
-                    work.push((to, 0));
-                } else if on_stack[to] {
-                    low[node] = low[node].min(index[to]);
-                }
-                continue;
-            }
-            work.pop();
-            if let Some(&(parent, _)) = work.last() {
-                low[parent] = low[parent].min(low[node]);
-            }
-            if low[node] == index[node] {
-                loop {
-                    let member = stack
-                        .pop()
-                        .expect("the root of a component is on the stack");
-                    on_stack[member] = false;
-                    component[member] = next_component;
-                    if member == node {
-                        break;
-                    }
-                }
-                next_component += 1;
-            }
-        }
-    }
-    component
+    let targets: Vec<Vec<usize>> = edges
+        .iter()
+        .map(|out| out.iter().map(|&(to, _)| to).collect())
+        .collect();
+    crate::kind::graph::component_ids(&targets).0
 }
