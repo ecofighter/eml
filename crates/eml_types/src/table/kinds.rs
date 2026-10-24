@@ -91,13 +91,11 @@ impl Table<'_> {
 
     /// row の多重度の成分。ラベルごとのエフェクトの多重度と、末尾の row 変数の σ である。
     pub fn row_multiplicities(&self, row: &Row) -> Vec<Bound<Multiplicity>> {
-        let row = self.resolve_row(row);
-        let mut mults: Vec<Bound<Multiplicity>> = row
-            .labels
-            .iter()
+        let mut mults: Vec<Bound<Multiplicity>> = self
+            .resolved_labels(row)
             .map(|label| Bound::Const(self.effect_multiplicity(label.effect)))
             .collect();
-        if let Tail::Var(var) = row.tail {
+        if let Tail::Var(var) = self.resolved_tail(row) {
             mults.push(Bound::Var(self.row_multiplicity_var(var)));
         }
         mults

@@ -491,10 +491,12 @@ impl Merged {
         for &(lower, upper) in &scheme.mult {
             let origin = match (lower, upper) {
                 (Bound::Var(v), Bound::Const(_)) => {
-                    let source = scheme
-                        .bound_sources
-                        .iter()
-                        .find(|(var, _)| *var == v)
+                    // `bound_sources` は残した制約の正規形と同じく変数の順に並ぶので、二分探索で引く
+                    let sources = &scheme.bound_sources;
+                    let at = sources.partition_point(|(var, _)| var.index() < v.index());
+                    let source = sources
+                        .get(at)
+                        .filter(|(var, _)| *var == v)
                         .map_or(BoundSource::Unknown, |(_, source)| source.clone());
                     // 残した上限はどれも、書いた上限か本体の中の参照の複写から来るので、出どころが見つかるはずである
                     debug_assert!(

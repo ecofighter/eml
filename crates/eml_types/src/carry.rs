@@ -434,7 +434,7 @@ impl Carrying<'_, '_> {
         let program = self.program;
         match across {
             Across::Operation(op) => Some(op),
-            Across::Row(row) => self.table.resolve_row(row).labels.iter().find_map(|label| {
+            Across::Row(row) => self.table.resolved_labels(row).find_map(|label| {
                 program[label.effect]
                     .operations
                     .iter()
