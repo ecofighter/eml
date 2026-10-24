@@ -1662,3 +1662,56 @@ fn a_fork_entry_owns_its_evidence_and_child_abort_borrows_it() {
         .collect();
     assert_eq!(owned, [(0, 2, vec![(eml_lir::VarId(0), 1)])]);
 }
+
+/// 引数が1つで一様でない操作 (`Unit -> a` と `Int -> a`)。`fork$` は引数をそのまま `child_abort` に渡し、`int` は
+/// box の挿入が箱に入れる。`reperform$` は一様な形で受け、`int` は操作に渡す前に箱から出す。箱は開いた後に
+/// `decref` するので、`int` を受ける引数の印は `unr` である (docs/spec/core-ir.md の「`par` の子の中断」)。
+#[test]
+fn a_single_non_uniform_argument_is_boxed_in_the_fork_and_unboxed_in_the_reperform() {
+    let text = "\
+layout (,) { (,)(tobj, tobj) }
+effect Stop { never stop(unit) -> never }
+effect Code { never code(int) -> never }
+fn main(a.0: tobj, b.1: tobj) -> obj {
+  let t.2: obj = par (,) #0(a.0, b.1)
+  return t.2
+}
+";
+    let mut lir = eml_core_ir::to_lir(evidence_program(text));
+    eml_lir::passes_until(&mut lir, eml_lir::Pass::Reuse);
+    eml_lir::verify(&lir).unwrap_or_else(|error| panic!("{error}"));
+    let shown = eml_lir::pretty(&lir);
+    insta::assert_snapshot!(function(&shown, "fork$Stop.stop"), @"
+    clause Stop.stop fn fork$Stop.stop(ev.0: obj, a.1: unit) -> obj poly {
+      let u.2: unit = prim child_abort(ev.0, &reperform$Stop.stop, a.1)
+      decref ev.0
+      let d.3: obj poly = prim dummy()
+      return d.3
+    }
+    ");
+    insta::assert_snapshot!(function(&shown, "reperform$Stop.stop"), @"
+    fn reperform$Stop.stop(t.0: unit poly) -> tobj poly {
+      let ev.1: obj = prim ev_lookup[Stop]()
+      let c.2: tobj = prim ev_clause[Stop.stop](ev.1)
+      tail clause Stop.stop c.2(ev.1, t.0)
+    }
+    ");
+    insta::assert_snapshot!(function(&shown, "fork$Code.code"), @"
+    clause Code.code fn fork$Code.code(ev.0: obj, a.1: int) -> obj poly {
+      let a.4: tobj = box a.1
+      let u.2: unit = prim child_abort(ev.0, &reperform$Code.code, a.4)
+      decref ev.0
+      let d.3: obj poly = prim dummy()
+      return d.3
+    }
+    ");
+    insta::assert_snapshot!(function(&shown, "reperform$Code.code"), @"
+    fn reperform$Code.code(t.0: tobj) -> tobj poly {
+      let ev.1: obj = prim ev_lookup[Code]()
+      let c.2: tobj = prim ev_clause[Code.code](ev.1)
+      let t.4: int = unbox t.0
+      decref t.0
+      tail clause Code.code c.2(ev.1, t.4)
+    }
+    ");
+}

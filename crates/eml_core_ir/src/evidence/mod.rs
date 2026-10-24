@@ -1,7 +1,7 @@
 //! EP (evidence passing) のパス (docs/spec/core-ir.md の「evidence passing」)。
 //! 型は読まず、関数の `yields` と `clause` の印、`apply` の印、操作の表、Core IR の形と生存解析だけを読む。補助の
 //! 関数は `helpers.rs`、handle、`perform`、`resume`、`mask` の変換は `handlers.rs`、yield の地点での分け方は
-//! `split.rs` にある。
+//! `split.rs` にある。最後に、`par` を走らせうるプログラムに `forks.rs` が fork の関数を足す。
 
 mod forks;
 mod handlers;

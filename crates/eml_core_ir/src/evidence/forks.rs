@@ -1,7 +1,7 @@
 //! `par` の子の中断に使う関数 `fork$E.op` と `reperform$E.op` (docs/spec/core-ir.md の「`par` の子の中断」)。
-//! プログラムが `par` を走らせうるときだけ、fork の関数を持つエフェクトの操作ごとに1組作る。どちらもプログラムの
-//! どこからも参照されず、VM が名前で引く。中身は操作の表の行とタプルの配置の名前だけで決まるので、名前が同じなら
-//! コードも同じである。
+//! プログラムが `par` を走らせうるときだけ、fork の関数を持つエフェクトの操作ごとに1組作る。`fork$` はプログラムの
+//! どこからも参照されず、VM が名前で引く。`reperform$` は `fork$` の `child_abort` のオペランドとして値で参照される。
+//! 中身は操作の表の行とタプルの配置の名前だけで決まるので、名前が同じならコードも同じである。
 
 use crate::builder::FnBuilder;
 use crate::{Call, Program, Rhs, Stmt, Term};
@@ -107,7 +107,7 @@ fn fork(program: &mut Program, effect: u32, op: u32, reperform: FnIdx) -> crate:
 fn reperform_fn(program: &mut Program, effect: u32, op: u32) -> crate::CoreFn {
     let operation = eml_lir::operation(&program.effects, effect, op).clone();
     let mut b = FnBuilder::new();
-    let packed = b.param(named("t", packed_repr(&operation), Mark::Poly));
+    let packed = b.param(named("t", packed_repr(&operation), packed_mark(&operation)));
     let args: Vec<Atom> = match operation.params.len() {
         0 => Vec::new(),
         1 => vec![Atom::Var(packed)],
@@ -175,6 +175,15 @@ fn packed_repr(operation: &OperationInfo) -> Repr {
         [repr @ (Repr::Obj | Repr::TObj | Repr::Unit)] => repr,
         [_] => Repr::TObj,
         _ => Repr::Obj,
+    }
+}
+
+/// `reperform$` の引数の印。箱に入ったスカラーは、開いた後に Perceus が箱を `decref` し、V1 は `unr` の値だけを
+/// `decref` させるので、スカラーの印 (`unr`) にする。ほかは `poly` である。
+fn packed_mark(operation: &OperationInfo) -> Mark {
+    match operation.params[..] {
+        [repr] if repr.needs_box() => operation.param_marks[0],
+        _ => Mark::Poly,
     }
 }
 
