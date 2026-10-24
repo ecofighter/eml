@@ -8,7 +8,7 @@ use std::collections::HashMap;
 use super::known::{self, Callee, KnownClosure};
 use crate::fnv::Fnv;
 use crate::{Call, CoreFn, Program, Rhs, Stmt};
-use eml_lir::{Atom, Ctor, FnIdx, Layout, Mark, Repr, VarId, VarInfo};
+use eml_lir::{Atom, Ctor, FnIdx, Layout, Mark, Repr, VarId, VarInfo, push_var};
 
 /// 鍵の入れ子の深さの上限。特殊化で生まれた閉包をまた鍵にする連鎖 (CPS 風に閉包が育つ形) を、ここで打ち切る。
 pub(crate) const MAX_KEY_DEPTH: usize = 4;
@@ -207,7 +207,7 @@ impl Specializer {
                         repr,
                         mark,
                     };
-                    let var = known::fresh(&mut function.vars, info);
+                    let var = push_var(&mut function.vars, info);
                     params.push(var);
                     Atom::Var(var)
                 })

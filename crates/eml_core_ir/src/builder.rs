@@ -4,8 +4,10 @@
 
 use std::mem;
 
-use crate::{Block, CoreFn, Stmt, Term};
-use eml_lir::{Atom, BlockId, Mark, Repr, VarId, VarInfo};
+use crate::{Block, CoreFn, Rhs, Stmt, Term};
+use eml_lir::{
+    Atom, BlockId, Case, CasePattern, FALSE, LayoutId, Mark, Repr, TRUE, VarId, VarInfo, push_var,
+};
 
 /// 値の渡し先になる、まだブロックになっていない位置。そこへ向かう開いたままのブロックを集め、ラベルを持つ式を
 /// 変換し終えたら `resolve` で扱いを決める。
@@ -50,8 +52,14 @@ impl FnBuilder {
     }
 
     pub(crate) fn var(&mut self, info: VarInfo) -> VarId {
-        self.vars.push(info);
-        VarId(self.vars.len() as u32 - 1)
+        push_var(&mut self.vars, info)
+    }
+
+    /// `rhs` の結果を新しい変数に束縛する。
+    pub(crate) fn bind(&mut self, info: VarInfo, rhs: Rhs) -> VarId {
+        let var = self.var(info);
+        self.emit(Stmt::Let { var, rhs });
+        var
     }
 
     pub(crate) fn mark(&self, var: VarId) -> Mark {
@@ -72,6 +80,30 @@ impl FnBuilder {
     pub(crate) fn emit(&mut self, stmt: Stmt) {
         let block = self.current.expect("statements go into an open block");
         self.blocks[block.0 as usize].stmts.push(stmt);
+    }
+
+    /// 真偽値 `value` で分かれる `switch` で、今のブロックを閉じる。`layout` は `Bool` の配置である。
+    /// (`False` の行き先, `True` の行き先) の順に新しいブロックを作って返す。
+    pub(crate) fn branch_bool(&mut self, value: Atom, layout: LayoutId) -> (BlockId, BlockId) {
+        let (on_false, on_true) = (self.new_block(), self.new_block());
+        self.terminate(Term::Switch {
+            scrutinee: value,
+            layout: Some(layout),
+            cases: vec![
+                Case {
+                    pattern: CasePattern::Tag(FALSE),
+                    fields: Vec::new(),
+                    target: on_false,
+                },
+                Case {
+                    pattern: CasePattern::Tag(TRUE),
+                    fields: Vec::new(),
+                    target: on_true,
+                },
+            ],
+            default: None,
+        });
+        (on_false, on_true)
     }
 
     /// 今のブロックを終端で閉じる。
@@ -267,15 +299,6 @@ impl FnBuilder {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use eml_lir::{Case, CasePattern};
-
-    fn info(name: &str, repr: Repr, mark: Mark) -> VarInfo {
-        VarInfo {
-            name: name.to_string(),
-            repr,
-            mark,
-        }
-    }
 
     /// `return` だけのブロックへの `jump` を `return` にするのは、実引数が定数か、印が行き先の引数と同じときだけで
     /// ある。この関数の `ret_mark` は `poly` なので、`lin` の `h` を直接返しても互換だが、`h` は転送しない。転送後の
@@ -284,10 +307,10 @@ mod tests {
     #[test]
     fn a_jump_is_forwarded_only_when_its_argument_has_the_mark_of_the_parameter() {
         let mut builder = FnBuilder::new();
-        let n = builder.param(info("n", Repr::Int, Mark::Unr));
-        let same = builder.param(info("s", Repr::TObj, Mark::Poly));
-        let other = builder.param(info("h", Repr::TObj, Mark::Lin));
-        let label = builder.new_label(vec![info("p", Repr::TObj, Mark::Poly)]);
+        let n = builder.param(VarInfo::new("n", Repr::Int, Mark::Unr));
+        let same = builder.param(VarInfo::new("s", Repr::TObj, Mark::Poly));
+        let other = builder.param(VarInfo::new("h", Repr::TObj, Mark::Lin));
+        let label = builder.new_label(vec![VarInfo::new("p", Repr::TObj, Mark::Poly)]);
         let (zero, one, rest) = (
             builder.new_block(),
             builder.new_block(),

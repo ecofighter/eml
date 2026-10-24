@@ -11,11 +11,9 @@
 
 use std::collections::{HashMap, HashSet};
 
-use crate::optimize::known::{
-    Callee, KnownClosure, apply_rewritable, fresh, known_closures, replace,
-};
+use crate::optimize::known::{Callee, KnownClosure, apply_rewritable, known_closures, replace};
 use crate::{Block, Call, CoreFn, Rhs, Stmt, Term};
-use eml_lir::{Atom, BlockId, Case, CasePattern, Ctor, Mark, Structs, VarId};
+use eml_lir::{Atom, BlockId, Case, CasePattern, Ctor, Mark, Structs, VarId, push_var};
 
 /// `con` が束縛した変数と、そのコンストラクタと引数。
 pub(super) fn known_cons(function: &CoreFn) -> HashMap<VarId, (Ctor, Vec<Atom>)> {
@@ -691,7 +689,7 @@ fn used_only_in(uses: &[usize], block: &Block, vars: &[VarId]) -> bool {
 /// `var` と同じ名前、Repr、印の新しい変数で、分けた C か M の `jump` で1回だけ使うもの。
 fn jump_arg(function: &mut CoreFn, uses: &mut Vec<usize>, var: VarId) -> VarId {
     let info = function.vars[var.0 as usize].clone();
-    let copy = fresh(&mut function.vars, info);
+    let copy = push_var(&mut function.vars, info);
     debug_assert_eq!(uses.len(), copy.0 as usize);
     uses.push(1);
     copy

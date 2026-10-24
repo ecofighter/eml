@@ -4,7 +4,7 @@
 
 use std::fmt::Write;
 
-use crate::syntax::{FnHeader, Writer, function_name, operation_text, prim_text};
+use crate::syntax::{FnHeader, Writer, operation_text};
 use crate::{Block, BlockId, Call, LirFn, Program, Rhs, Stmt, Term};
 
 /// 位置を出さない表示。translate のテストの多くは位置を見ないので、既定では出さない。
@@ -150,14 +150,7 @@ impl<'p> Printer<'p> {
                 layout,
                 cases,
                 default,
-            } => {
-                let layout = layout.map_or_else(String::new, |id| format!(" {}", w.layout(id)));
-                format!(
-                    "switch {}{layout} {}",
-                    w.atom(vars, scrutinee),
-                    w.cases(vars, cases, *default)
-                )
-            }
+            } => w.switch(vars, scrutinee, *layout, cases, *default),
         };
         writeln!(out, "  {text}").unwrap();
     }
@@ -167,15 +160,8 @@ impl<'p> Printer<'p> {
         let vars = &function.vars[..];
         match rhs {
             Rhs::Call(call) => self.call(function, call),
-            Rhs::MakeClosure(target, args) => {
-                format!("closure {}({})", w.callee(*target), w.atoms(vars, args))
-            }
-            Rhs::Extern { ext, args, at } => format!(
-                "extern {}({}){}",
-                function_name(ext.row().name),
-                w.atoms(vars, args),
-                w.position(*at)
-            ),
+            Rhs::MakeClosure(target, args) => w.closure(vars, *target, args),
+            Rhs::Extern { ext, args, at } => w.extern_call(vars, *ext, args, *at),
             Rhs::ConstString(index) => format!("const {}", w.string(*index)),
             Rhs::Con {
                 ctor,
@@ -207,11 +193,7 @@ impl<'p> Printer<'p> {
             Rhs::Drop(a) => format!("drop {}", w.atom(vars, a)),
             Rhs::Box(a) => format!("box {}", w.atom(vars, a)),
             Rhs::Unbox(a) => format!("unbox {}", w.atom(vars, a)),
-            Rhs::Prim(prim, args) => format!(
-                "prim {}({})",
-                prim_text(&self.program.effects, prim),
-                w.atoms(vars, args)
-            ),
+            Rhs::Prim(prim, args) => w.prim_call(vars, prim, args),
         }
     }
 

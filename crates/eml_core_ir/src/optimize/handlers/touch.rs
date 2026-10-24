@@ -2,8 +2,7 @@
 
 use std::collections::HashMap;
 
-use super::super::yields::direct_callees;
-use crate::{Call, CoreFn, Program, Rhs, Stmt};
+use crate::{Call, CoreFn, FnRef, Program, Rhs, Stmt};
 use eml_lir::FnIdx;
 
 /// 関数ごとの、`effect` の handler H に触れるか。番号は `FnIdx` である。H に触れるとは、その関数か、直接の呼び出しで
@@ -17,9 +16,11 @@ pub(super) fn touching(program: &Program, effect: u32) -> Vec<bool> {
     let mut pending = Vec::new();
     for (index, function) in program.functions.iter().enumerate() {
         let idx = FnIdx(index as u32);
-        for callee in direct_callees(function) {
-            callers.entry(callee).or_default().push(idx);
-        }
+        function.for_each_fn_ref(|callee, kind| {
+            if kind == FnRef::Direct {
+                callers.entry(callee).or_default().push(idx);
+            }
+        });
         if touches_locally(function, effect) {
             touches[index] = true;
             pending.push(idx);

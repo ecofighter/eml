@@ -8,6 +8,8 @@ use std::borrow::Cow;
 use std::collections::HashMap;
 use std::fmt::Write as _;
 
+use eml_extern::Extern;
+
 use crate::{
     Atom, BlockId, Case, CasePattern, Ctor, EffectInfo, FloatBits, FnIdx, Immediates, Layout,
     LayoutCtor, LayoutId, Loc, Mark, MaskItem, OpRet, OperationInfo, ParseError, Prim, Repr,
@@ -708,6 +710,66 @@ impl<'t> Reader<'t> {
             args,
             prompt,
         })
+    }
+
+    /// `unpack` の後の、値、コンストラクタ、フィールド。
+    pub fn unpack(&mut self, state: &mut FnState) -> Result<(VarId, Ctor, Vec<VarId>), ParseError> {
+        let value = self.var(state)?;
+        let ctor = self.ctor()?;
+        let fields = self.list('(', ')', |p| p.binder(state))?;
+        Ok((value, ctor, fields))
+    }
+
+    /// `jump` の後の、行き先と実引数。
+    pub fn jump(&mut self, state: &mut FnState) -> Result<(BlockId, Vec<Atom>), ParseError> {
+        let target = self.target(state)?;
+        let args = self.list('(', ')', |p| p.atom(state))?;
+        Ok((target, args))
+    }
+
+    /// `switch` の後の、scrutinee、配置、case、`default`。リテラルの `switch` は配置を書かない。
+    #[expect(clippy::type_complexity, reason = "the parts of one switch")]
+    pub fn switch(
+        &mut self,
+        state: &mut FnState,
+    ) -> Result<(Atom, Option<LayoutId>, Vec<Case>, Option<BlockId>), ParseError> {
+        let scrutinee = self.atom(state)?;
+        let layout = if self.at_punct('{') {
+            None
+        } else {
+            Some(self.layout_ref()?)
+        };
+        let (cases, default) = self.cases(state)?;
+        Ok((scrutinee, layout, cases, default))
+    }
+
+    /// `closure` の後の、関数と捕まえる値。
+    pub fn closure(&mut self, state: &mut FnState) -> Result<(FnIdx, Vec<Atom>), ParseError> {
+        let target = self.function_name()?;
+        let args = self.list('(', ')', |p| p.atom(state))?;
+        Ok((target, args))
+    }
+
+    /// `extern` の後の、extern、引数、位置。引数はいくつでも読む。誤りを含む IR も読み戻して verifier に報告させるため、
+    /// 引数の数は verifier が表の値と比べる。
+    pub fn extern_call(
+        &mut self,
+        state: &mut FnState,
+    ) -> Result<(Extern, Vec<Atom>, Option<Loc>), ParseError> {
+        let line = self.line();
+        let name = self.name()?;
+        let ext = Extern::from_name(&name)
+            .ok_or_else(|| error(line, format!("unknown extern `{name}`")))?;
+        let args = self.list('(', ')', |p| p.atom(state))?;
+        let at = self.position()?;
+        Ok((ext, args, at))
+    }
+
+    /// `prim` の後の、基本操作と引数。引数の数は extern と同じく verifier が確かめる。
+    pub fn prim_call(&mut self, state: &mut FnState) -> Result<(Prim, Vec<Atom>), ParseError> {
+        let prim = self.prim()?;
+        let args = self.list('(', ')', |p| p.atom(state))?;
+        Ok((prim, args))
     }
 
     /// 関数を閉じる `}`。
@@ -1625,6 +1687,57 @@ impl<'p> Writer<'p> {
     /// 呼ぶ関数の名前。
     pub fn callee(&self, target: FnIdx) -> Cow<'p, str> {
         function_name(self.functions[target.0 as usize])
+    }
+
+    /// `closure f(args)`。
+    pub fn closure(&self, vars: &[VarInfo], target: FnIdx, args: &[Atom]) -> String {
+        format!(
+            "closure {}({})",
+            self.callee(target),
+            self.atoms(vars, args)
+        )
+    }
+
+    /// `extern name(args)` と、位置を書くときは `@"path":line:column`。
+    pub fn extern_call(
+        &self,
+        vars: &[VarInfo],
+        ext: Extern,
+        args: &[Atom],
+        at: Option<Loc>,
+    ) -> String {
+        format!(
+            "extern {}({}){}",
+            function_name(ext.row().name),
+            self.atoms(vars, args),
+            self.position(at)
+        )
+    }
+
+    /// `prim op(args)`。
+    pub fn prim_call(&self, vars: &[VarInfo], prim: &Prim, args: &[Atom]) -> String {
+        format!(
+            "prim {}({})",
+            prim_text(self.effects, prim),
+            self.atoms(vars, args)
+        )
+    }
+
+    /// `switch v [L] { … }`。
+    pub fn switch(
+        &self,
+        vars: &[VarInfo],
+        scrutinee: &Atom,
+        layout: Option<LayoutId>,
+        cases: &[Case],
+        default: Option<BlockId>,
+    ) -> String {
+        let layout = layout.map_or_else(String::new, |id| format!(" {}", self.layout(id)));
+        format!(
+            "switch {}{layout} {}",
+            self.atom(vars, scrutinee),
+            self.cases(vars, cases, default)
+        )
     }
 
     /// `[yields] apply callee(args) [prompt v]`。

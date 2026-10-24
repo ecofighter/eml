@@ -5,7 +5,7 @@ use std::collections::{HashMap, HashSet};
 
 use super::specialize::{ClosureShape, Key, Specializer};
 use crate::{Call, CoreFn, Rhs, Stmt, Term};
-use eml_lir::{Atom, Ctor, FnIdx, Mark, MaskItem, Repr, VarId, VarInfo};
+use eml_lir::{Atom, Ctor, FnIdx, Mark, MaskItem, Repr, VarId, VarInfo, push_var};
 
 /// 呼ぶ相手と、すでに渡した先頭の引数が分かっている関数の値。
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -145,11 +145,6 @@ enum Use {
         position: usize,
     },
     Other,
-}
-
-pub(crate) fn fresh(vars: &mut Vec<VarInfo>, info: VarInfo) -> VarId {
-    vars.push(info);
-    VarId(vars.len() as u32 - 1)
 }
 
 /// `function` の中の既知の閉包を書き換える。既知の閉包への `apply` を直接の呼び出しにし、包む関数への呼び出しを命令に
@@ -451,7 +446,7 @@ impl Rewriter<'_> {
         // 開いた引数の印は、もとの引数の印を超えない (`Specializer::copy`)。作り直した閉包はもとの引数の印を持てば、
         // 組み立ての検査を通る
         let info = self.vars[var.0 as usize].clone();
-        let rebuilt = fresh(&mut self.vars, info);
+        let rebuilt = push_var(&mut self.vars, info);
         out.push(Stmt::Let {
             var: rebuilt,
             rhs: Rhs::MakeClosure(closure.function, closure.captures),
@@ -722,7 +717,7 @@ pub(crate) fn replace(
             }
             // 余った引数は、translate の既知の呼び出しと同じく、結果の関数の値に `apply` する。`mask` が空のときだけ
             // ここに来るので、分けても `mask` の掛かる範囲は変わらない
-            let result = fresh(
+            let result = push_var(
                 vars,
                 VarInfo {
                     name: "t".to_string(),
@@ -734,15 +729,12 @@ pub(crate) fn replace(
                 Stmt::Let { var: result, rhs },
                 Stmt::Let {
                     var,
-                    rhs: Rhs::Call {
-                        call: Call::Apply {
-                            callee: Atom::Var(result),
-                            args: rest,
-                            yields: *yields,
-                            prompt: *prompt,
-                        },
-                        mask: Vec::new(),
-                    },
+                    rhs: Rhs::call(Call::Apply {
+                        callee: Atom::Var(result),
+                        args: rest,
+                        yields: *yields,
+                        prompt: *prompt,
+                    }),
                 },
             ])
         }
@@ -767,14 +759,13 @@ fn instruction(callee: &Callee, args: Vec<Atom>, mask: &[MaskItem]) -> Option<Rh
             effect,
             op,
             resumable,
-        } => mask.is_empty().then(|| Rhs::Call {
-            call: Call::Perform {
+        } => mask.is_empty().then(|| {
+            Rhs::call(Call::Perform {
                 effect,
                 op,
                 resumable,
                 args,
-            },
-            mask: Vec::new(),
+            })
         }),
         // `con` はエフェクトを起こさないので `mask` は要らない
         Wrapper::Con(ctor) => Some(Rhs::Con { ctor, args }),

@@ -15,10 +15,9 @@ use eml_lir::{Atom, Ctor, FnIdx, Mark, MaskItem, Prim, Repr, TUPLE, VarId, VarIn
 use super::instances::wrapper_name;
 use super::pattern::Known;
 use super::program::{
-    ProgramBuilder, VarOp, bind, effect_index, perform_call, plain_call, var_perform_call,
-    wrapper_base,
+    ProgramBuilder, VarOp, effect_index, perform_call, var_perform_call, wrapper_base,
 };
-use super::types::{mark, named, split_arrows};
+use super::types::{mark, split_arrows};
 use super::{ContinuationForm, Exit, FnLowering, Param};
 
 /// extern の関数なら、その表の行。誤りのないプログラムの extern は、どれも標準ライブラリの宣言で行を持つ。
@@ -101,7 +100,7 @@ impl FnLowering<'_> {
     /// `rhs` の値を、Repr が `repr` で印が `mark` の新しい変数に束縛する文を今のブロックに足す。`con` で作った変数は
     /// 中身を覚え、後の決定木がその頭で case を選べるようにする (docs/spec/core-ir.md)。
     pub(super) fn bind(&mut self, name: &str, repr: Repr, mark: Mark, rhs: Rhs) -> Atom {
-        let var = self.builder.var(named(name, repr, mark));
+        let var = self.builder.var(VarInfo::new(name, repr, mark));
         if let Rhs::Con { ctor, args } = &rhs {
             let known = Known {
                 tag: ctor.tag,
@@ -151,7 +150,7 @@ impl FnLowering<'_> {
                     .iter()
                     .find(|&&(field, _)| field as usize == index)
                     .map_or(repr, |&(_, repr)| repr);
-                self.builder.var(named("f", repr, marks[index]))
+                self.builder.var(VarInfo::new("f", repr, marks[index]))
             })
             .collect();
         self.builder.emit(Stmt::Unpack {
@@ -427,7 +426,7 @@ impl FnLowering<'_> {
                     .program
                     .extern_call(&mut self.builder, hir, store, row, args, at, ty);
             }
-            Callee::Operation { op, .. } => ("t", plain_call(perform_call(self.ctx.hir, op, args))),
+            Callee::Operation { op, .. } => ("t", Rhs::call(perform_call(self.ctx.hir, op, args))),
             // 状態ありの最初の矢印は row が空の部分適用なので、関数と同じく最後の矢印の `mask` を使う
             Callee::Continuation { k, arity: _ } => {
                 let mask = self.mask(id, args.len() - 1);
@@ -747,7 +746,7 @@ impl FnLowering<'_> {
                     clauses: closures,
                     ret,
                 };
-                self.bind_typed("t", ty, plain_call(call))
+                self.bind_typed("t", ty, Rhs::call(call))
             }
             ExprKind::Tuple(elements) => {
                 // 要素を左から評価し、コンストラクタが1つの `data` と同じ値にする (docs/spec/core-ir.md)
@@ -954,7 +953,7 @@ impl FnLowering<'_> {
         let target = self.ctx.target(id);
         if self.program.arity(target) == 0 {
             let ty = self.ty(id);
-            self.bind_typed(name, ty, plain_call(Call::Direct(target, Vec::new())))
+            self.bind_typed(name, ty, Rhs::call(Call::Direct(target, Vec::new())))
         } else {
             Atom::Fn(target)
         }
@@ -1041,7 +1040,7 @@ impl FnLowering<'_> {
             clauses,
             ret,
         };
-        self.bind("t", result.0, result.1, plain_call(call))
+        self.bind("t", result.0, result.1, Rhs::call(call))
     }
 
     /// HIR に元のない内部の関数を作り、その値を返す。`body` は引数から本体の文を足し、返す値を返す。節は handle を
@@ -1058,7 +1057,7 @@ impl FnLowering<'_> {
         let mut builder = FnBuilder::new();
         let args: Vec<Atom> = params
             .iter()
-            .map(|&(name, (repr, mark))| Atom::Var(builder.param(named(name, repr, mark))))
+            .map(|&(name, (repr, mark))| Atom::Var(builder.param(VarInfo::new(name, repr, mark))))
             .collect();
         let value = body(&mut builder, &mut *self.program, &args);
         builder.terminate(Term::Return(value));
@@ -1096,11 +1095,10 @@ impl FnLowering<'_> {
                 VarOp::Get => (st, st),
                 VarOp::Set => (Atom::Unit, args[0]),
                 VarOp::Take => {
-                    let empty = bind(
-                        builder,
-                        named("h", state.0, state.1),
+                    let empty = Atom::Var(builder.bind(
+                        VarInfo::new("h", state.0, state.1),
                         Rhs::Prim(Prim::EmptyMutArray, Vec::new()),
-                    );
+                    ));
                     (st, empty)
                 }
                 VarOp::Length | VarOp::Read => {
@@ -1117,15 +1115,15 @@ impl FnLowering<'_> {
                         ext,
                         lent,
                         None,
-                        named("t", value.0, value.1),
-                        named("d", pair_repr, state.1),
+                        VarInfo::new("t", value.0, value.1),
+                        VarInfo::new("d", pair_repr, state.1),
                     );
                     let Atom::Var(pair) = pair else {
                         unreachable!("a lending call binds its pair")
                     };
                     let fields = vec![
-                        builder.var(named("f", value.0, value.1)),
-                        builder.var(named("st", state.0, state.1)),
+                        builder.var(VarInfo::new("f", value.0, value.1)),
+                        builder.var(VarInfo::new("st", state.0, state.1)),
                     ];
                     builder.emit(Stmt::Unpack {
                         value: pair,
@@ -1135,15 +1133,14 @@ impl FnLowering<'_> {
                     (Atom::Var(fields[0]), Atom::Var(fields[1]))
                 }
                 VarOp::Write => {
-                    let written = bind(
-                        builder,
-                        named("st", state.0, state.1),
+                    let written = Atom::Var(builder.bind(
+                        VarInfo::new("st", state.0, state.1),
                         Rhs::Extern {
                             ext: Extern::MutArrayWrite,
                             args: vec![st, args[0], args[1]],
                             at: None,
                         },
-                    );
+                    ));
                     (Atom::Unit, written)
                 }
             };
@@ -1152,7 +1149,7 @@ impl FnLowering<'_> {
                 arg: value,
                 state: next,
             };
-            bind(builder, named("t", result.0, result.1), plain_call(call))
+            Atom::Var(builder.bind(VarInfo::new("t", result.0, result.1), Rhs::call(call)))
         })
     }
 
@@ -1168,11 +1165,7 @@ impl FnLowering<'_> {
         let params = [("x", value), ("st", state)];
         self.synthesized(name, &params, result, |builder, _, args| {
             if class == VarClass::Array {
-                bind(
-                    builder,
-                    named("u", Repr::Unit, Mark::Unr),
-                    Rhs::Drop(args[1]),
-                );
+                builder.bind(VarInfo::new("u", Repr::Unit, Mark::Unr), Rhs::Drop(args[1]));
             }
             args[0]
         })
@@ -1194,7 +1187,7 @@ impl FnLowering<'_> {
         );
         let effect = self.ctx.body.vars[var].effect;
         let call = var_perform_call(self.ctx.hir, effect, op, args);
-        self.bind("t", result.0, result.1, plain_call(call))
+        self.bind("t", result.0, result.1, Rhs::call(call))
     }
 
     /// 配列の変数の添字 `index` を、長さを読んで `check_index` で確かめる。範囲の外の `Panic` は使う所 `site` から

@@ -17,7 +17,7 @@ use eml_lir::{
 };
 use eml_types::TypeId;
 
-use super::types::{mark, named};
+use super::types::mark;
 use super::{Ctx, CtxId, Exit, FnLowering};
 use crate::builder::Label;
 
@@ -298,7 +298,7 @@ impl FnLowering<'_> {
             _ => {
                 let name = alias.map_or("c", |alias| self.ctx.body.locals[alias].name.as_str());
                 let (repr, mark) = merged.unwrap_or_else(|ty| self.typed(ty));
-                let merge = self.builder.new_label(vec![named(name, repr, mark)]);
+                let merge = self.builder.new_label(vec![VarInfo::new(name, repr, mark)]);
                 for (block, occ) in unknown {
                     self.builder.reopen(block);
                     let value = self.materialize(occ);
@@ -794,9 +794,11 @@ impl FnLowering<'_> {
                     .unwrap_or("x");
                 let ty = self.pat_type(pat);
                 let repr = self.type_repr(ty);
-                let field =
-                    self.builder
-                        .var(named(name, repr, mark(self.ctx.store, ty, self.ctx.hir)));
+                let field = self.builder.var(VarInfo::new(
+                    name,
+                    repr,
+                    mark(self.ctx.store, ty, self.ctx.hir),
+                ));
                 self.parents.insert(field, parent);
                 field
             })
