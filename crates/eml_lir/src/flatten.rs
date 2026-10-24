@@ -114,7 +114,8 @@ impl<'a> Flattener<'a> {
             self.function.rets = self
                 .structs
                 .leaves(id)
-                .into_iter()
+                .iter()
+                .copied()
                 .filter(|&(repr, _)| repr != Repr::Unit)
                 .map(|(repr, mark)| (repr, mark.meet(ret_mark)))
                 .collect();
@@ -164,7 +165,8 @@ impl<'a> Flattener<'a> {
         let VarInfo { name, mark, .. } = self.function.vars[var.0 as usize].clone();
         self.structs
             .leaves(id)
-            .into_iter()
+            .iter()
+            .copied()
             .enumerate()
             .map(|(index, (repr, leaf_mark))| match repr {
                 Repr::Unit => Atom::Unit,
@@ -396,7 +398,8 @@ impl<'a> Flattener<'a> {
         let leaves = self
             .structs
             .leaves(id)
-            .into_iter()
+            .iter()
+            .copied()
             .enumerate()
             .map(|(index, (repr, leaf_mark))| match repr {
                 Repr::Unit => Atom::Unit,

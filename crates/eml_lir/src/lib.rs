@@ -666,6 +666,9 @@ pub struct StructShape {
 pub struct Structs {
     shapes: Vec<StructShape>,
     ids: HashMap<StructShape, StructId>,
+    /// 形ごとの葉 (`leaves`)。入れ子の形は外の形より先に登録するので、登録するときに求めておける。開くパスと
+    /// translate が変数ごとに引くので、引くたびに並びを作らないためである。
+    leaves: Vec<Vec<(Repr, Mark)>>,
 }
 
 impl Structs {
@@ -674,6 +677,18 @@ impl Structs {
             return id;
         }
         let id = StructId(self.shapes.len() as u32);
+        let mut leaves = Vec::new();
+        for &(repr, mark) in &shape.fields {
+            match repr {
+                Repr::Struct(inner) => leaves.extend(
+                    self.leaves(inner)
+                        .iter()
+                        .map(|&(leaf, inner_mark)| (leaf, inner_mark.meet(mark))),
+                ),
+                _ => leaves.push((repr, mark)),
+            }
+        }
+        self.leaves.push(leaves);
         self.shapes.push(shape.clone());
         self.ids.insert(shape, id);
         id
@@ -691,21 +706,8 @@ impl Structs {
     /// 形の葉を深さ優先にフィールドの順で並べる。`unit` の葉も位置を保つために含める。入れ子の構造体の葉の印は、
     /// 葉の印とフィールドの印の小さいほうにする。構造体の変数を開くときの葉の印の規則を、入れ子のフィールドにも
     /// 当てたものである (docs/spec/lir.md の「構造体の形」)。
-    /// 再帰は形の深さだけである。
-    pub fn leaves(&self, id: StructId) -> Vec<(Repr, Mark)> {
-        let mut leaves = Vec::new();
-        self.push_leaves(id, Mark::Lin, &mut leaves);
-        leaves
-    }
-
-    fn push_leaves(&self, id: StructId, bound: Mark, leaves: &mut Vec<(Repr, Mark)>) {
-        for &(repr, mark) in &self.shape(id).fields {
-            let mark = mark.meet(bound);
-            match repr {
-                Repr::Struct(inner) => self.push_leaves(inner, mark, leaves),
-                _ => leaves.push((repr, mark)),
-            }
-        }
+    pub fn leaves(&self, id: StructId) -> &[(Repr, Mark)] {
+        &self.leaves[id.0 as usize]
     }
 
     /// 開いた後の葉の語の数。`unit` の葉は語を持たないので数えない。
