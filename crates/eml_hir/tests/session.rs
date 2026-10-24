@@ -3,10 +3,10 @@
 use eml_diagnostics::sort_diagnostics;
 use eml_hir::{
     Assoc, ConstructorId, DefMap, Fixity, FunctionKind, ImportCache, ImportTarget, InputForm,
-    InputKind, Loaded, ModuleId, ModuleOrigin, ModulePath, NameRef, Program, Resolved,
-    SessionInput, TypeDefId,
+    InputKind, Loaded, MemorySource, ModuleId, ModuleOrigin, ModulePath, NameRef, Program,
+    Resolved, SessionInput, TypeDefId,
 };
-use eml_test_support::{MemorySource, full_with_paths, located};
+use eml_test_support::{full_with_paths, located};
 use la_arena::{Idx, RawIdx};
 
 /// 入力は (入力の番号, テキスト)。

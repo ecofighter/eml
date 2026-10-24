@@ -31,6 +31,21 @@ pub trait ModuleSource {
     fn read(&self, path: &ModulePath) -> Result<String, ReadError>;
 }
 
+/// メモリの上の (根からの相対パス, 本文) の並び。テストと、ほかのファイルを読まない入力が、ファイルシステムの代わりに
+/// 渡す。CLI と同じ読み込みの段を通すためである。
+pub struct MemorySource<'a>(pub &'a [(&'a str, &'a str)]);
+
+impl ModuleSource for MemorySource<'_> {
+    fn read(&self, path: &ModulePath) -> Result<String, ReadError> {
+        let wanted = path.file_path();
+        self.0
+            .iter()
+            .find(|(file, _)| *file == wanted)
+            .map(|(_, text)| text.to_string())
+            .ok_or(ReadError::NotFound)
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ImportTarget {
     Module(ModuleId),

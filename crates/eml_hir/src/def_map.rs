@@ -179,15 +179,15 @@ pub struct DefMap {
     names: DisplayNames,
 }
 
-/// モジュール 0 を Prelude として読む。入口は、セッションでは最後のセッションのモジュール (今の入力)、ファイルでは 1 である
-/// (`Loaded::modules`)。値と型の名前空間の重複 (E1003)、fixity の重複 (E1021)、このモジュールにない演算子の fixity
-/// (E1022)、import の並びの名前 (E1001、E1002、E1029)、import の循環 (E1027) を出す。
+/// モジュール 0 を Prelude として読む。入口は `Loaded::entry` のファイルのモジュールである。値と型の名前空間の重複
+/// (E1003)、fixity の重複 (E1021)、このモジュールにない演算子の fixity (E1022)、import の並びの名前 (E1001、E1002、
+/// E1029)、import の循環 (E1027) を出す。
 pub fn def_map(loaded: &Loaded) -> (DefMap, Vec<Diagnostic>) {
     let modules = &loaded.modules;
     let entry = modules
         .iter()
-        .rposition(|module| module.origin.session().is_some())
-        .unwrap_or(1);
+        .position(|module| module.tree.file == loaded.entry)
+        .expect("the entry file is a loaded module");
     let mut diagnostics = Vec::new();
     let mut scopes: Vec<ModuleScope> = modules
         .iter()

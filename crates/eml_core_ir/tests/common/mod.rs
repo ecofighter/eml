@@ -128,7 +128,7 @@ fn session(
         &inputs,
         "",
         "",
-        &NoModules,
+        &eml_hir::MemorySource(&[]),
         &eml_hir::ImportCache::default(),
     );
     let (def_map, found) = eml_hir::def_map(&loaded);
@@ -147,13 +147,6 @@ fn session(
 }
 
 /// セッションのテストは import を書かない。
-struct NoModules;
-
-impl eml_hir::ModuleSource for NoModules {
-    fn read(&self, _: &eml_hir::ModulePath) -> Result<String, eml_hir::ReadError> {
-        Err(eml_hir::ReadError::NotFound)
-    }
-}
 
 /// 関数の `switch` のうち、EP が yield の地点の後に置く確認 (`prim yielding()` の結果での `switch`) を除いた数。
 /// IO の extern も yield の地点なので、文の `if` が作る `switch` だけを数えるときに使う

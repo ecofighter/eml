@@ -65,21 +65,6 @@ impl Checked {
 /// UI テスト以外のテストで登録する、入口のファイルの表示のパス。
 pub const ENTRY_PATH: &str = "test.em";
 
-/// メモリ上の (根からの相対パス, 本文)。複数のファイルのテストでも、CLI と同じ読み込みの段を通すため。
-pub struct MemorySource<'a>(pub &'a [(&'a str, &'a str)]);
-
-#[cfg(feature = "hir")]
-impl eml_hir::ModuleSource for MemorySource<'_> {
-    fn read(&self, path: &eml_hir::ModulePath) -> Result<String, eml_hir::ReadError> {
-        let wanted = path.file_path();
-        self.0
-            .iter()
-            .find(|(file, _)| *file == wanted)
-            .map(|(_, text)| text.to_string())
-            .ok_or(eml_hir::ReadError::NotFound)
-    }
-}
-
 pub fn source(text: &str) -> (SourceFiles, FileId) {
     let mut files = SourceFiles::new();
     let file = files.add(ENTRY_PATH, text);
@@ -108,7 +93,7 @@ pub fn parse(text: &str) -> Parsed {
 /// `modules` は根からの相対パス (`"Report/Csv.em"`) と本文の組である。
 #[cfg(feature = "hir")]
 fn load(entry: &str, modules: &[(&str, &str)]) -> Session {
-    Session::load(ENTRY_PATH, entry, &MemorySource(modules))
+    Session::load(ENTRY_PATH, entry, &eml_hir::MemorySource(modules))
 }
 
 /// 標準ライブラリを `(ファイル名, 本文)` の並びに差し替える。標準ライブラリの中の item の扱いを確かめるテストのため。
@@ -116,7 +101,7 @@ fn load(entry: &str, modules: &[(&str, &str)]) -> Session {
 /// 足りないと panic する。
 #[cfg(feature = "hir")]
 fn load_with_std(std: &[(&str, &str)], entry: &str) -> Session {
-    Session::load_with_std(std, ENTRY_PATH, entry, &MemorySource(&[]))
+    Session::load_with_std(std, ENTRY_PATH, entry, &eml_hir::MemorySource(&[]))
 }
 
 #[cfg(feature = "hir")]

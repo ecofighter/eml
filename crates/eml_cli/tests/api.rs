@@ -3,12 +3,12 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
 
 use eml_cli::{
-    Capture, Control, FsProvider, HostRef, Limits, ModulePath, ModuleSource, Outcome, ReadError,
-    Repl, RunConfig, RuntimeError, Session, SourceLocation, Stop, VmFault, capture_host, execute,
+    Capture, Control, FsProvider, HostRef, Limits, MemorySource, ModulePath, ModuleSource, Outcome,
+    ReadError, Repl, RunConfig, RuntimeError, Session, SourceLocation, Stop, VmFault, capture_host,
+    execute,
 };
 use eml_diagnostics::{Diagnostic, has_errors};
 use eml_rt::{Fault, Host, Opened, Stream};
-use eml_test_support::MemorySource;
 
 use crate::common::temp_project;
 

@@ -14,7 +14,7 @@ mod repl;
 use eml_diagnostics::has_errors;
 use eml_diagnostics::{Diagnostic, FileId, SourceFiles, sort_diagnostics};
 
-pub use eml_hir::{ModulePath, ModuleSource, ReadError};
+pub use eml_hir::{MemorySource, ModulePath, ModuleSource, ReadError};
 pub use eml_syntax::{InputStatus, input_status};
 #[cfg(feature = "run")]
 pub use eml_vm::{

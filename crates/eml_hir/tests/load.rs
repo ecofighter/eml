@@ -7,10 +7,10 @@ use std::sync::LazyLock;
 
 use eml_diagnostics::sort_diagnostics;
 use eml_hir::{
-    DefMap, ImportTarget, Loaded, ModuleId, ModuleOrigin, ModulePath, ModuleSource, NameRef,
-    Program, ReadError, Resolved, ValueItem,
+    DefMap, ImportTarget, Loaded, MemorySource, ModuleId, ModuleOrigin, ModulePath, ModuleSource,
+    NameRef, Program, ReadError, Resolved, ValueItem,
 };
-use eml_test_support::{ENTRY_PATH, MemorySource, full, std_module};
+use eml_test_support::{ENTRY_PATH, full, std_module};
 
 /// 読み込みの段を流し、診断を `パス 行:列 番号 メッセージ` の行にする。依存先のファイルを指す診断を読み分けるため。
 fn load_at(entry_path: &str, entry: &str, modules: &[(&str, &str)]) -> (Loaded, Vec<String>) {
