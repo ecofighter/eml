@@ -85,6 +85,34 @@ macro_rules! ast_enum {
     };
 }
 
+/// 子をそのまま返すアクセサ。`name: Type` は最初の子の節点、`name: [Type]` は子の節点の並び、`name: (KIND)` は
+/// 最初のその種類のトークンを返す。形の決まったアクセサを1行ずつの表に書き、手で書くのは解釈の要るものに限る。
+macro_rules! accessors {
+    ($($node:ident { $($(#[$meta:meta])* $name:ident: $kind:tt,)* })*) => {$(
+        impl $node {
+            $(accessors!(@one $(#[$meta])* $name $kind);)*
+        }
+    )*};
+    (@one $(#[$meta:meta])* $name:ident [$ty:ident]) => {
+        $(#[$meta])*
+        pub fn $name(&self) -> AstChildren<$ty> {
+            support::children(&self.syntax)
+        }
+    };
+    (@one $(#[$meta:meta])* $name:ident ($kind:ident)) => {
+        $(#[$meta])*
+        pub fn $name(&self) -> Option<SyntaxToken> {
+            support::token(&self.syntax, SyntaxKind::$kind)
+        }
+    };
+    (@one $(#[$meta:meta])* $name:ident $ty:ident) => {
+        $(#[$meta])*
+        pub fn $name(&self) -> Option<$ty> {
+            support::child(&self.syntax)
+        }
+    };
+}
+
 ast_node! {
     SourceFile => SOURCE_FILE,
     ReplItems => REPL_ITEMS,
@@ -222,6 +250,375 @@ ast_enum! {
     Clause { OpClause, ReturnClause }
 }
 
+accessors! {
+    Path {
+        segments: [NameRef],
+    }
+
+    LambdaExpr {
+        params: [Pat],
+        body: Expr,
+    }
+
+    AnnotPat {
+        pat: Pat,
+        ty: Type,
+    }
+
+    VarType {
+        name: (LIDENT),
+    }
+
+    SourceFile {
+        items: [Item],
+    }
+
+    ReplItems {
+        items: [Item],
+    }
+
+    ReplLet {
+        stmt: LetStmt,
+    }
+
+    ReplExpr {
+        expr: Expr,
+    }
+
+    ReplQuery {
+        expr: Expr,
+    }
+
+    Signature {
+        extern_keyword: (EXTERN_KW),
+        name: Name,
+        context: Context,
+        ty: Type,
+    }
+
+    Equation {
+        /// 関数の名前。演算子の定義では演算子である。
+        name: Name,
+        /// 演算子の定義では、左辺と右辺のパターンが入る。
+        params: [Pat],
+        body: Expr,
+    }
+
+    Block {
+        stmts: [Stmt],
+    }
+
+    StringLit {
+        holes: [Interp],
+    }
+
+    Interp {
+        expr: Expr,
+    }
+
+    CommandLit {
+        holes: [Interp],
+    }
+
+    PathExpr {
+        path: Path,
+    }
+
+    ParamList {
+        pats: [Pat],
+    }
+
+    AndBinding {
+        pat: Pat,
+        params: ParamList,
+        body: Expr,
+    }
+
+    LetStmt {
+        and_bindings: [AndBinding],
+        pat: Pat,
+        /// 関数の形 (`let go x = …`) の引数。パターンの束縛なら `None`。
+        params: ParamList,
+        ty: Type,
+        body: Expr,
+    }
+
+    UseStmt {
+        /// `use p <- e` の `p`。`<-` がなければ `None`。
+        pat: Pat,
+        expr: Expr,
+    }
+
+    VarStmt {
+        name: Name,
+        ty: Type,
+    }
+
+    LetExpr {
+        and_bindings: [AndBinding],
+        pat: Pat,
+        /// 関数の形 (`let go x = …`) の引数。パターンの束縛なら `None`。
+        params: ParamList,
+        ty: Type,
+    }
+
+    ExprStmt {
+        expr: Expr,
+    }
+
+    ParenExpr {
+        expr: Expr,
+    }
+
+    AnnotExpr {
+        expr: Expr,
+        ty: Type,
+    }
+
+    BindPat {
+        name: Name,
+    }
+
+    ParenPat {
+        pat: Pat,
+    }
+
+    PathType {
+        path: Path,
+    }
+
+    ParenType {
+        ty: Type,
+    }
+
+    FnType {
+        row: EffectRow,
+    }
+
+    EffectRow {
+        effects: [Effect],
+        /// `<IO | e>` と `<e>` の row 変数。
+        tail: (LIDENT),
+    }
+
+    Effect {
+        path: Path,
+        /// row に書いたエフェクトの型引数。
+        args: [Type],
+    }
+
+    RowArg {
+        row: EffectRow,
+    }
+
+    RowParam {
+        name: Name,
+    }
+
+    KindAnnot {
+        name_ref: NameRef,
+    }
+
+    EffectItem {
+        extern_keyword: (EXTERN_KW),
+        operations: [OpDecl],
+    }
+
+    OpDecl {
+        context: Context,
+        name: Name,
+        ty: Type,
+    }
+
+    HandleExpr {
+        from_keyword: (FROM_KW),
+        clauses: [Clause],
+    }
+
+    OpClause {
+        /// 節の先頭の操作の名前。修飾できる (docs/spec/grammar.md の `clause`)。
+        path: Path,
+        /// 操作の引数、`k`、(パラメータ付き handler なら) 状態のパターン。
+        params: [Pat],
+    }
+
+    ReturnClause {
+        params: [Pat],
+    }
+
+    DropExpr {
+        args: [Expr],
+    }
+
+    DataItem {
+        /// `deriving` の句。2つ目からはパーサが E0011 にするが、クラスはすべての句から読む。
+        deriving_clauses: [Deriving],
+        extern_keyword: (EXTERN_KW),
+        kind: KindAnnot,
+        alts: [Alt],
+    }
+
+    Alt {
+        record_fields: RecordFields,
+    }
+
+    RecordFields {
+        fields: [FieldDecl],
+    }
+
+    FieldDecl {
+        name: Name,
+        ty: Type,
+    }
+
+    RecordExpr {
+        path: Path,
+        fields: [Field],
+    }
+
+    UpdateExpr {
+        base: Expr,
+        fields: [Field],
+    }
+
+    FieldExpr {
+        /// `e.f` の `e`。
+        base: Expr,
+    }
+
+    Field {
+        name: NameRef,
+        /// 省略形 `{ name }` では `None`。
+        expr: Expr,
+    }
+
+    RecordPat {
+        path: Path,
+        fields: [FieldPat],
+    }
+
+    FieldPat {
+        name: NameRef,
+        /// 省略形 `{ name }` では `None`。
+        pat: Pat,
+    }
+
+    MatchExpr {
+        arms: [MatchArm],
+    }
+
+    MatchArm {
+        pat: Pat,
+    }
+
+    ConPat {
+        path: Path,
+        args: [Pat],
+    }
+
+    InfixConPat {
+        operator: (CONOP),
+    }
+
+    AppType {
+        /// 適用する型の名前。
+        path: Path,
+    }
+
+    TupleExpr {
+        /// 要素の式。文法が2つ以上にする (docs/spec/grammar.md の `atom`)。
+        elements: [Expr],
+    }
+
+    TuplePat {
+        elements: [Pat],
+    }
+
+    ListExpr {
+        elements: [Expr],
+    }
+
+    ListPat {
+        elements: [Pat],
+        r_brack: (R_BRACK),
+    }
+
+    TupleType {
+        elements: [Type],
+    }
+
+    LiteralPat {
+        string: StringLit,
+    }
+
+    FixityItem {
+        /// 宣言した演算子。`-` と `:` で始まる演算子も含む。
+        operators: [Name],
+    }
+
+    TypeItem {
+        type_keyword: (TYPE_KW),
+    }
+
+    ImportItem {
+        path: Path,
+        /// `as X` の `X`。
+        alias: Name,
+        list: ImportList,
+    }
+
+    ImportList {
+        names: [ImportName],
+    }
+
+    ImportName {
+        /// `parse`、`Style`。`(+)` の形では `None`。
+        name: NameRef,
+    }
+
+    LeftSection {
+        /// `(e op)` の `e`。
+        operand: Expr,
+    }
+
+    RightSection {
+        /// `(op e)` の `e`。
+        operand: Expr,
+    }
+
+    ClassItem {
+        keyword: (CLASS_KW),
+        context: Context,
+        members: [ClassMember],
+    }
+
+    InstanceItem {
+        keyword: (INSTANCE_KW),
+        context: Context,
+        /// クラスの名前。頭の型の中の `PATH` は型の節点の子なので、直接の子の `PATH` だけを見る。
+        class: Path,
+        head: Type,
+        members: [InstanceMember],
+    }
+
+    Context {
+        constraints: [Constraint],
+    }
+
+    Constraint {
+        ty: Type,
+    }
+
+    Deriving {
+        keyword: (DERIVING_KW),
+        classes: [Path],
+    }
+
+    ExternMethod {
+        name: Name,
+    }
+}
+
 impl Name {
     /// 名前のトークン。`(+)` の形では括弧を除いた演算子のトークンである。
     pub fn token(&self) -> SyntaxToken {
@@ -259,116 +656,18 @@ impl NameRef {
 }
 
 impl Path {
-    pub fn segments(&self) -> AstChildren<NameRef> {
-        support::children(&self.syntax)
-    }
-
     /// 最後のセグメント。修飾のない名前ならその名前である。
     pub fn name(&self) -> Option<NameRef> {
         self.segments().last()
     }
 }
 
-impl LambdaExpr {
-    pub fn params(&self) -> AstChildren<Pat> {
-        support::children(&self.syntax)
-    }
-
-    pub fn body(&self) -> Option<Expr> {
-        support::child(&self.syntax)
-    }
-}
-
-impl AnnotPat {
-    pub fn pat(&self) -> Option<Pat> {
-        support::child(&self.syntax)
-    }
-
-    pub fn ty(&self) -> Option<Type> {
-        support::child(&self.syntax)
-    }
-}
-
-impl VarType {
-    pub fn name(&self) -> Option<SyntaxToken> {
-        support::token(&self.syntax, SyntaxKind::LIDENT)
-    }
-}
-
-impl SourceFile {
-    pub fn items(&self) -> AstChildren<Item> {
-        support::children(&self.syntax)
-    }
-}
-
-impl ReplItems {
-    pub fn items(&self) -> AstChildren<Item> {
-        support::children(&self.syntax)
-    }
-}
-
-impl ReplLet {
-    pub fn stmt(&self) -> Option<LetStmt> {
-        support::child(&self.syntax)
-    }
-}
-
-impl ReplExpr {
-    pub fn expr(&self) -> Option<Expr> {
-        support::child(&self.syntax)
-    }
-}
-
-impl ReplQuery {
-    pub fn expr(&self) -> Option<Expr> {
-        support::child(&self.syntax)
-    }
-}
-
-impl Signature {
-    pub fn extern_keyword(&self) -> Option<SyntaxToken> {
-        support::token(&self.syntax, SyntaxKind::EXTERN_KW)
-    }
-
-    pub fn name(&self) -> Option<Name> {
-        support::child(&self.syntax)
-    }
-
-    pub fn context(&self) -> Option<Context> {
-        support::child(&self.syntax)
-    }
-
-    pub fn ty(&self) -> Option<Type> {
-        support::child(&self.syntax)
-    }
-}
-
 impl Equation {
-    /// 関数の名前。演算子の定義では演算子である。
-    pub fn name(&self) -> Option<Name> {
-        support::child(&self.syntax)
-    }
-
-    /// 演算子の定義では、左辺と右辺のパターンが入る。
-    pub fn params(&self) -> AstChildren<Pat> {
-        support::children(&self.syntax)
-    }
-
-    pub fn body(&self) -> Option<Expr> {
-        support::child(&self.syntax)
-    }
-
     /// 入れ子の上限 (E0013) で一部を読み飛ばしたときに真を返す。
     pub fn is_too_deep(&self) -> bool {
         self.syntax
             .descendants()
             .any(|node| node.kind() == SyntaxKind::TOO_DEEP)
-    }
-}
-
-impl Block {
-    pub fn stmts(&self) -> AstChildren<Stmt> {
-        support::children(&self.syntax)
     }
 }
 
@@ -546,17 +845,9 @@ impl StringLit {
         }
         Some(parts)
     }
-
-    pub fn holes(&self) -> AstChildren<Interp> {
-        support::children(&self.syntax)
-    }
 }
 
 impl Interp {
-    pub fn expr(&self) -> Option<Expr> {
-        support::child(&self.syntax)
-    }
-
     /// コマンドリテラルの `\{..xs}`。文字列の穴では、パーサが `..` を読まない。
     pub fn spread(&self) -> bool {
         support::token(&self.syntax, SyntaxKind::DOT2).is_some()
@@ -631,10 +922,6 @@ impl CommandLit {
         words.extend(builder.finish());
         Some(words)
     }
-
-    pub fn holes(&self) -> AstChildren<Interp> {
-        support::children(&self.syntax)
-    }
 }
 
 /// `CommandLit::words` が、区切りに着くまでの引数を組み立てる。
@@ -684,75 +971,7 @@ impl WordBuilder {
     }
 }
 
-impl PathExpr {
-    pub fn path(&self) -> Option<Path> {
-        support::child(&self.syntax)
-    }
-}
-
-impl ParamList {
-    pub fn pats(&self) -> AstChildren<Pat> {
-        support::children(&self.syntax)
-    }
-}
-
-impl AndBinding {
-    pub fn pat(&self) -> Option<Pat> {
-        support::child(&self.syntax)
-    }
-
-    pub fn params(&self) -> Option<ParamList> {
-        support::child(&self.syntax)
-    }
-
-    pub fn body(&self) -> Option<Expr> {
-        support::child(&self.syntax)
-    }
-}
-
-impl LetStmt {
-    pub fn and_bindings(&self) -> AstChildren<AndBinding> {
-        support::children(&self.syntax)
-    }
-
-    pub fn pat(&self) -> Option<Pat> {
-        support::child(&self.syntax)
-    }
-
-    /// 関数の形 (`let go x = …`) の引数。パターンの束縛なら `None`。
-    pub fn params(&self) -> Option<ParamList> {
-        support::child(&self.syntax)
-    }
-
-    pub fn ty(&self) -> Option<Type> {
-        support::child(&self.syntax)
-    }
-
-    pub fn body(&self) -> Option<Expr> {
-        support::child(&self.syntax)
-    }
-}
-
-impl UseStmt {
-    /// `use p <- e` の `p`。`<-` がなければ `None`。
-    pub fn pat(&self) -> Option<Pat> {
-        support::child(&self.syntax)
-    }
-
-    pub fn expr(&self) -> Option<Expr> {
-        support::child(&self.syntax)
-    }
-}
-
 impl VarStmt {
-    pub fn name(&self) -> Option<Name> {
-        support::child(&self.syntax)
-    }
-
-    pub fn ty(&self) -> Option<Type> {
-        support::child(&self.syntax)
-    }
-
     /// `=` の後の初期値。
     pub fn init(&self) -> Option<Expr> {
         child_between(&self.syntax, Some(SyntaxKind::EQ), None)
@@ -760,23 +979,6 @@ impl VarStmt {
 }
 
 impl LetExpr {
-    pub fn and_bindings(&self) -> AstChildren<AndBinding> {
-        support::children(&self.syntax)
-    }
-
-    pub fn pat(&self) -> Option<Pat> {
-        support::child(&self.syntax)
-    }
-
-    /// 関数の形 (`let go x = …`) の引数。パターンの束縛なら `None`。
-    pub fn params(&self) -> Option<ParamList> {
-        support::child(&self.syntax)
-    }
-
-    pub fn ty(&self) -> Option<Type> {
-        support::child(&self.syntax)
-    }
-
     /// `in` の前の式。
     pub fn init(&self) -> Option<Expr> {
         self.split_at_in().0
@@ -808,12 +1010,6 @@ impl LetExpr {
             }
         }
         (before, after)
-    }
-}
-
-impl ExprStmt {
-    pub fn expr(&self) -> Option<Expr> {
-        support::child(&self.syntax)
     }
 }
 
@@ -851,46 +1047,6 @@ impl AppExpr {
     }
 }
 
-impl ParenExpr {
-    pub fn expr(&self) -> Option<Expr> {
-        support::child(&self.syntax)
-    }
-}
-
-impl AnnotExpr {
-    pub fn expr(&self) -> Option<Expr> {
-        support::child(&self.syntax)
-    }
-
-    pub fn ty(&self) -> Option<Type> {
-        support::child(&self.syntax)
-    }
-}
-
-impl BindPat {
-    pub fn name(&self) -> Option<Name> {
-        support::child(&self.syntax)
-    }
-}
-
-impl ParenPat {
-    pub fn pat(&self) -> Option<Pat> {
-        support::child(&self.syntax)
-    }
-}
-
-impl PathType {
-    pub fn path(&self) -> Option<Path> {
-        support::child(&self.syntax)
-    }
-}
-
-impl ParenType {
-    pub fn ty(&self) -> Option<Type> {
-        support::child(&self.syntax)
-    }
-}
-
 impl FnType {
     pub fn is_once(&self) -> bool {
         support::token(&self.syntax, SyntaxKind::ONCE_KW).is_some()
@@ -900,25 +1056,12 @@ impl FnType {
         child_between(&self.syntax, None, Some(SyntaxKind::THIN_ARROW))
     }
 
-    pub fn row(&self) -> Option<EffectRow> {
-        support::child(&self.syntax)
-    }
-
     pub fn ret(&self) -> Option<Type> {
         child_between(&self.syntax, Some(SyntaxKind::THIN_ARROW), None)
     }
 }
 
 impl EffectRow {
-    pub fn effects(&self) -> AstChildren<Effect> {
-        support::children(&self.syntax)
-    }
-
-    /// `<IO | e>` と `<e>` の row 変数。
-    pub fn tail(&self) -> Option<SyntaxToken> {
-        support::token(&self.syntax, SyntaxKind::LIDENT)
-    }
-
     /// row 変数の前に書いた `never`。`<never Panic | e>` のように row 変数の直前にない `never` は、誤りとして読んだもので
     /// どの変数の上限でもないので返さない (docs/spec/grammar.md の「文法上の補足」)。
     pub fn bound(&self) -> Option<SyntaxToken> {
@@ -931,40 +1074,11 @@ impl EffectRow {
     }
 }
 
-impl Effect {
-    pub fn path(&self) -> Option<Path> {
-        support::child(&self.syntax)
-    }
-
-    /// row に書いたエフェクトの型引数。
-    pub fn args(&self) -> AstChildren<Type> {
-        support::children(&self.syntax)
-    }
-}
-
 /// 型の適用の引数。row は `<…>` で書く。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TypeArg {
     Type(Type),
     Row(RowArg),
-}
-
-impl RowArg {
-    pub fn row(&self) -> Option<EffectRow> {
-        support::child(&self.syntax)
-    }
-}
-
-impl RowParam {
-    pub fn name(&self) -> Option<Name> {
-        support::child(&self.syntax)
-    }
-}
-
-impl KindAnnot {
-    pub fn name_ref(&self) -> Option<NameRef> {
-        support::child(&self.syntax)
-    }
 }
 
 /// `data` の型引数。row は `<e>` で書く。
@@ -975,10 +1089,6 @@ pub enum TypeParam {
 }
 
 impl EffectItem {
-    pub fn extern_keyword(&self) -> Option<SyntaxToken> {
-        support::token(&self.syntax, SyntaxKind::EXTERN_KW)
-    }
-
     pub fn name(&self) -> Option<Name> {
         support::children::<Name>(&self.syntax)
             .find(|name| name.token().kind() == SyntaxKind::UIDENT)
@@ -988,17 +1098,9 @@ impl EffectItem {
     pub fn params(&self) -> impl Iterator<Item = Name> {
         lowercase_names(&self.syntax)
     }
-
-    pub fn operations(&self) -> AstChildren<OpDecl> {
-        support::children(&self.syntax)
-    }
 }
 
 impl OpDecl {
-    pub fn context(&self) -> Option<Context> {
-        support::child(&self.syntax)
-    }
-
     /// `never` / `once` / `multi`。省略したら `None` で、`once` として扱う (docs/spec/declarations.md)。
     pub fn multiplicity(&self) -> Option<SyntaxToken> {
         self.syntax
@@ -1010,14 +1112,6 @@ impl OpDecl {
                     SyntaxKind::NEVER_KW | SyntaxKind::ONCE_KW | SyntaxKind::MULTI_KW
                 )
             })
-    }
-
-    pub fn name(&self) -> Option<Name> {
-        support::child(&self.syntax)
-    }
-
-    pub fn ty(&self) -> Option<Type> {
-        support::child(&self.syntax)
     }
 }
 
@@ -1032,10 +1126,6 @@ impl HandleExpr {
         child_between(&self.syntax, Some(SyntaxKind::HANDLE_KW), Some(before))
     }
 
-    pub fn from_keyword(&self) -> Option<SyntaxToken> {
-        support::token(&self.syntax, SyntaxKind::FROM_KW)
-    }
-
     /// `from` の後、`with` の前の式。`from` がなければ `None`。
     pub fn init(&self) -> Option<Expr> {
         self.from_keyword()?;
@@ -1045,26 +1135,12 @@ impl HandleExpr {
             Some(SyntaxKind::WITH_KW),
         )
     }
-
-    pub fn clauses(&self) -> AstChildren<Clause> {
-        support::children(&self.syntax)
-    }
 }
 
 impl OpClause {
     /// `|` の直後の `fn` か `ctl`。
     pub fn keyword(&self) -> Option<SyntaxToken> {
         clause_keyword(&self.syntax)
-    }
-
-    /// 節の先頭の操作の名前。修飾できる (docs/spec/grammar.md の `clause`)。
-    pub fn path(&self) -> Option<Path> {
-        support::child(&self.syntax)
-    }
-
-    /// 操作の引数、`k`、(パラメータ付き handler なら) 状態のパターン。
-    pub fn params(&self) -> AstChildren<Pat> {
-        support::children(&self.syntax)
     }
 
     pub fn body(&self) -> Option<Expr> {
@@ -1085,31 +1161,12 @@ impl ReturnClause {
         clause_keyword(&self.syntax)
     }
 
-    pub fn params(&self) -> AstChildren<Pat> {
-        support::children(&self.syntax)
-    }
-
     pub fn body(&self) -> Option<Expr> {
         child_between(&self.syntax, Some(SyntaxKind::THIN_ARROW), None)
     }
 }
 
-impl DropExpr {
-    pub fn args(&self) -> AstChildren<Expr> {
-        support::children(&self.syntax)
-    }
-}
-
 impl DataItem {
-    /// `deriving` の句。2つ目からはパーサが E0011 にするが、クラスはすべての句から読む。
-    pub fn deriving_clauses(&self) -> AstChildren<Deriving> {
-        support::children(&self.syntax)
-    }
-
-    pub fn extern_keyword(&self) -> Option<SyntaxToken> {
-        support::token(&self.syntax, SyntaxKind::EXTERN_KW)
-    }
-
     /// `=` とコンストラクタの並びを書いたか。
     /// `=` か選択肢があるか。`=` を書き忘れた選択肢はパーサが報告済みなので、コンストラクタのない `data` には数えない。
     pub fn has_constructors(&self) -> bool {
@@ -1132,14 +1189,6 @@ impl DataItem {
                         .map(TypeParam::Type)
                 })
         })
-    }
-
-    pub fn kind(&self) -> Option<KindAnnot> {
-        support::child(&self.syntax)
-    }
-
-    pub fn alts(&self) -> AstChildren<Alt> {
-        support::children(&self.syntax)
     }
 }
 
@@ -1166,37 +1215,9 @@ impl Alt {
             .flat_map(|record| record.fields().filter_map(|field| field.ty()));
         support::children::<Type>(&self.syntax).chain(record)
     }
-
-    pub fn record_fields(&self) -> Option<RecordFields> {
-        support::child(&self.syntax)
-    }
-}
-
-impl RecordFields {
-    pub fn fields(&self) -> AstChildren<FieldDecl> {
-        support::children(&self.syntax)
-    }
-}
-
-impl FieldDecl {
-    pub fn name(&self) -> Option<Name> {
-        support::child(&self.syntax)
-    }
-
-    pub fn ty(&self) -> Option<Type> {
-        support::child(&self.syntax)
-    }
 }
 
 impl RecordExpr {
-    pub fn path(&self) -> Option<Path> {
-        support::child(&self.syntax)
-    }
-
-    pub fn fields(&self) -> AstChildren<Field> {
-        support::children(&self.syntax)
-    }
-
     /// フィールドの並びに、パーサが読み飛ばした部分 (`ERROR`) があるか。
     pub fn has_skipped_fields(&self) -> bool {
         self.syntax
@@ -1205,22 +1226,7 @@ impl RecordExpr {
     }
 }
 
-impl UpdateExpr {
-    pub fn base(&self) -> Option<Expr> {
-        support::child(&self.syntax)
-    }
-
-    pub fn fields(&self) -> AstChildren<Field> {
-        support::children(&self.syntax)
-    }
-}
-
 impl FieldExpr {
-    /// `e.f` の `e`。
-    pub fn base(&self) -> Option<Expr> {
-        support::child(&self.syntax)
-    }
-
     /// `.` の後の名前 (`LIDENT`) か番号 (`INT`)。
     pub fn field(&self) -> Option<SyntaxToken> {
         field_token(&self.syntax)
@@ -1257,41 +1263,13 @@ impl FieldSection {
 }
 
 impl Field {
-    pub fn name(&self) -> Option<NameRef> {
-        support::child(&self.syntax)
-    }
-
-    /// 省略形 `{ name }` では `None`。
-    pub fn expr(&self) -> Option<Expr> {
-        support::child(&self.syntax)
-    }
-
     /// `=` を書いたか。`{ name = }` のように値が欠けても、省略形とは区別する。
     pub fn has_eq(&self) -> bool {
         support::token(&self.syntax, SyntaxKind::EQ).is_some()
     }
 }
 
-impl RecordPat {
-    pub fn path(&self) -> Option<Path> {
-        support::child(&self.syntax)
-    }
-
-    pub fn fields(&self) -> AstChildren<FieldPat> {
-        support::children(&self.syntax)
-    }
-}
-
 impl FieldPat {
-    pub fn name(&self) -> Option<NameRef> {
-        support::child(&self.syntax)
-    }
-
-    /// 省略形 `{ name }` では `None`。
-    pub fn pat(&self) -> Option<Pat> {
-        support::child(&self.syntax)
-    }
-
     /// `=` を書いたか。`{ name = }` のようにパターンが欠けても、省略形とは区別する。
     pub fn has_eq(&self) -> bool {
         support::token(&self.syntax, SyntaxKind::EQ).is_some()
@@ -1306,29 +1284,11 @@ impl MatchExpr {
             Some(SyntaxKind::WITH_KW),
         )
     }
-
-    pub fn arms(&self) -> AstChildren<MatchArm> {
-        support::children(&self.syntax)
-    }
 }
 
 impl MatchArm {
-    pub fn pat(&self) -> Option<Pat> {
-        support::child(&self.syntax)
-    }
-
     pub fn body(&self) -> Option<Expr> {
         child_between(&self.syntax, Some(SyntaxKind::THIN_ARROW), None)
-    }
-}
-
-impl ConPat {
-    pub fn path(&self) -> Option<Path> {
-        support::child(&self.syntax)
-    }
-
-    pub fn args(&self) -> AstChildren<Pat> {
-        support::children(&self.syntax)
     }
 }
 
@@ -1337,62 +1297,18 @@ impl InfixConPat {
         child_between(&self.syntax, None, Some(SyntaxKind::CONOP))
     }
 
-    pub fn operator(&self) -> Option<SyntaxToken> {
-        support::token(&self.syntax, SyntaxKind::CONOP)
-    }
-
     pub fn rhs(&self) -> Option<Pat> {
         child_between(&self.syntax, Some(SyntaxKind::CONOP), None)
     }
 }
 
 impl AppType {
-    /// 適用する型の名前。
-    pub fn path(&self) -> Option<Path> {
-        support::child(&self.syntax)
-    }
-
     pub fn args(&self) -> impl Iterator<Item = TypeArg> {
         self.syntax.children().filter_map(|node| {
             RowArg::cast(node.clone())
                 .map(TypeArg::Row)
                 .or_else(|| Type::cast(node).map(TypeArg::Type))
         })
-    }
-}
-
-impl TupleExpr {
-    /// 要素の式。文法が2つ以上にする (docs/spec/grammar.md の `atom`)。
-    pub fn elements(&self) -> AstChildren<Expr> {
-        support::children(&self.syntax)
-    }
-}
-
-impl TuplePat {
-    pub fn elements(&self) -> AstChildren<Pat> {
-        support::children(&self.syntax)
-    }
-}
-
-impl ListExpr {
-    pub fn elements(&self) -> AstChildren<Expr> {
-        support::children(&self.syntax)
-    }
-}
-
-impl ListPat {
-    pub fn elements(&self) -> AstChildren<Pat> {
-        support::children(&self.syntax)
-    }
-
-    pub fn r_brack(&self) -> Option<SyntaxToken> {
-        support::token(&self.syntax, SyntaxKind::R_BRACK)
-    }
-}
-
-impl TupleType {
-    pub fn elements(&self) -> AstChildren<Type> {
-        support::children(&self.syntax)
     }
 }
 
@@ -1413,10 +1329,6 @@ impl LiteralPat {
                         | SyntaxKind::RAW_STRING
                 )
             })
-    }
-
-    pub fn string(&self) -> Option<StringLit> {
-        support::child(&self.syntax)
     }
 
     /// 数のリテラルの前に `-` があるか。`Byte` の負のリテラル (E1054) を HIR が見つけるのに使う。
@@ -1521,11 +1433,6 @@ impl FixityItem {
             .filter_map(NodeOrToken::into_token)
             .find(|token| token.kind() == SyntaxKind::INT)
     }
-
-    /// 宣言した演算子。`-` と `:` で始まる演算子も含む。
-    pub fn operators(&self) -> AstChildren<Name> {
-        support::children(&self.syntax)
-    }
 }
 
 fn is_operator(kind: SyntaxKind) -> bool {
@@ -1545,30 +1452,7 @@ impl Item {
     }
 }
 
-impl TypeItem {
-    pub fn type_keyword(&self) -> Option<SyntaxToken> {
-        support::token(&self.syntax, SyntaxKind::TYPE_KW)
-    }
-}
-
 impl ImportItem {
-    pub fn import_keyword(&self) -> Option<SyntaxToken> {
-        support::token(&self.syntax, SyntaxKind::IMPORT_KW)
-    }
-
-    pub fn path(&self) -> Option<Path> {
-        support::child(&self.syntax)
-    }
-
-    /// `as X` の `X`。
-    pub fn alias(&self) -> Option<Name> {
-        support::child(&self.syntax)
-    }
-
-    pub fn list(&self) -> Option<ImportList> {
-        support::child(&self.syntax)
-    }
-
     /// パスの後ろ (別名と並びを含む) に構文の誤りがあるか。読めたところまでで import を解釈すると、書いたつもりと
     /// 違う取り込み方を黙って選ぶことになる
     /// (docs/implementation/architecture.md の「名前解決の回復」)。並びの `(:+)` は名前だけを
@@ -1587,18 +1471,7 @@ impl ImportItem {
     }
 }
 
-impl ImportList {
-    pub fn names(&self) -> AstChildren<ImportName> {
-        support::children(&self.syntax)
-    }
-}
-
 impl ImportName {
-    /// `parse`、`Style`。`(+)` の形では `None`。
-    pub fn name(&self) -> Option<NameRef> {
-        support::child(&self.syntax)
-    }
-
     /// `(+)` の演算子。
     pub fn operator(&self) -> Option<SyntaxToken> {
         operator_token(&self.syntax)
@@ -1617,22 +1490,12 @@ impl OpRef {
 }
 
 impl LeftSection {
-    /// `(e op)` の `e`。
-    pub fn operand(&self) -> Option<Expr> {
-        support::child(&self.syntax)
-    }
-
     pub fn operator(&self) -> Option<SyntaxToken> {
         operator_token(&self.syntax)
     }
 }
 
 impl RightSection {
-    /// `(op e)` の `e`。
-    pub fn operand(&self) -> Option<Expr> {
-        support::child(&self.syntax)
-    }
-
     pub fn operator(&self) -> Option<SyntaxToken> {
         operator_token(&self.syntax)
     }
@@ -1644,14 +1507,6 @@ fn keyword_range(node: &SyntaxNode) -> TextRange {
 }
 
 impl ClassItem {
-    pub fn keyword(&self) -> Option<SyntaxToken> {
-        support::token(&self.syntax, SyntaxKind::CLASS_KW)
-    }
-
-    pub fn context(&self) -> Option<Context> {
-        support::child(&self.syntax)
-    }
-
     /// クラスの名前。`NAME` の1つ目である。
     pub fn name(&self) -> Option<Name> {
         support::children::<Name>(&self.syntax).next()
@@ -1660,60 +1515,5 @@ impl ClassItem {
     /// クラスの型変数。`NAME` の2つ目である。
     pub fn var(&self) -> Option<Name> {
         support::children::<Name>(&self.syntax).nth(1)
-    }
-
-    pub fn members(&self) -> AstChildren<ClassMember> {
-        support::children(&self.syntax)
-    }
-}
-
-impl InstanceItem {
-    pub fn keyword(&self) -> Option<SyntaxToken> {
-        support::token(&self.syntax, SyntaxKind::INSTANCE_KW)
-    }
-
-    pub fn context(&self) -> Option<Context> {
-        support::child(&self.syntax)
-    }
-
-    /// クラスの名前。頭の型の中の `PATH` は型の節点の子なので、直接の子の `PATH` だけを見る。
-    pub fn class(&self) -> Option<Path> {
-        support::child(&self.syntax)
-    }
-
-    pub fn head(&self) -> Option<Type> {
-        support::child(&self.syntax)
-    }
-
-    pub fn members(&self) -> AstChildren<InstanceMember> {
-        support::children(&self.syntax)
-    }
-}
-
-impl Context {
-    pub fn constraints(&self) -> AstChildren<Constraint> {
-        support::children(&self.syntax)
-    }
-}
-
-impl Constraint {
-    pub fn ty(&self) -> Option<Type> {
-        support::child(&self.syntax)
-    }
-}
-
-impl Deriving {
-    pub fn keyword(&self) -> Option<SyntaxToken> {
-        support::token(&self.syntax, SyntaxKind::DERIVING_KW)
-    }
-
-    pub fn classes(&self) -> AstChildren<Path> {
-        support::children(&self.syntax)
-    }
-}
-
-impl ExternMethod {
-    pub fn name(&self) -> Option<Name> {
-        support::child(&self.syntax)
     }
 }
