@@ -17,7 +17,6 @@ mod op;
 mod vm;
 
 pub use code::{CodeBase, CompileError, FnEntry};
-pub use compile::compile;
 pub use disasm::disassemble;
 pub use eml_rt::{Control, HostRef, Limits, Stop};
 pub use error::{RuntimeError, SourceLocation, VmFault};

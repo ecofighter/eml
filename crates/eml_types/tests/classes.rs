@@ -147,6 +147,7 @@ fn a_derived_instance_cannot_take_the_superclass_context() {
 /// 診断ごとの番号と help。
 fn codes_and_helps(text: &str) -> Vec<(String, Vec<String>)> {
     check(text)
+        .into_stage()
         .diagnostics
         .into_iter()
         .map(|diagnostic| (diagnostic.code.to_string(), diagnostic.help))
@@ -202,6 +203,7 @@ fn a_method_with_parameters_is_told_to_change_the_class() {
     // instance のメソッドと既定のメソッドの型はクラスが決めるので、row を足す先はクラスのシグネチャである
     let helps = |text: &str| -> Vec<String> {
         check(text)
+            .into_stage()
             .diagnostics
             .into_iter()
             .flat_map(|diagnostic| diagnostic.help)

@@ -3,10 +3,17 @@ use std::sync::Arc;
 use eml_lir::Program;
 use eml_rt::{Control, Fast, Limits};
 use eml_test_support::execute;
-use eml_vm::{RunStats, RuntimeError, compile, disassemble};
+use eml_vm::{CodeBase, CompileError, RunStats, RuntimeError, disassemble};
 
 pub fn parse(text: &str) -> Program {
     eml_lir::parse(text).unwrap_or_else(|error| panic!("{error}"))
+}
+
+/// プログラム全体を、上限のない `Control` を持つ速いモードの新しい `CodeBase` に変換する。逆アセンブラのテストのため。
+pub fn compile(program: &Program) -> Result<CodeBase<Fast>, CompileError> {
+    let mut code = CodeBase::new(Arc::new(Control::new(Limits::default())));
+    code.load(program)?;
+    Ok(code)
 }
 
 fn verified(text: &str) -> Program {
@@ -80,7 +87,6 @@ pub fn disasm_unverified(text: &str) -> String {
 }
 
 fn disasm_unverified_program(program: &Program) -> String {
-    let control = Arc::new(Control::new(Limits::default()));
-    let code = compile::<Fast>(program, control).unwrap_or_else(|error| panic!("{error:?}"));
+    let code = compile(program).unwrap_or_else(|error| panic!("{error:?}"));
     disassemble(&code)
 }

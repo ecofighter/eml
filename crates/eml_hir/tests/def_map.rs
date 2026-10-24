@@ -3,7 +3,7 @@
 use eml_extern::ExternType;
 use eml_hir::NameRef::{self, Plain};
 use eml_hir::{Assoc, DefMap, Fixity, Resolved, Silence, TypeItem, ValueItem};
-use eml_test_support::{def_map, def_map_files};
+use eml_test_support::{def_map, with_modules};
 
 use crate::common::module_report;
 
@@ -191,7 +191,10 @@ fn plain_names_resolve_own_then_imported_then_prelude() {
         "A.em",
         "pub x : Int\nx = 1\n\npub show : Int -> String\nshow n = \"a\"\n\npub y : Int\ny = 2",
     )];
-    let (map, diagnostics) = def_map_files("import A (x, show, y)\n\ny : Int\ny = 3", &modules);
+    let (map, diagnostics) = def_map(with_modules(
+        "import A (x, show, y)\n\ny : Int\ny = 3",
+        &modules,
+    ));
     assert!(diagnostics.is_empty(), "{diagnostics:?}");
     let resolver = map.resolver(map.entry());
     assert_eq!(found_in(&map, resolver.value(Plain("x"))), Some("A"));
@@ -207,10 +210,10 @@ fn plain_names_resolve_own_then_imported_then_prelude() {
 #[test]
 fn qualified_names_look_only_in_the_qualifier_modules() {
     let modules = [("A.em", "pub x : Int\nx = 1")];
-    let (map, _) = def_map_files(
+    let (map, _) = def_map(with_modules(
         "import A\nimport A as B\n\nnot : Bool -> Bool\nnot b = b",
         &modules,
-    );
+    ));
     let resolver = map.resolver(map.entry());
     assert_eq!(
         found_in(&map, resolver.value(qualified("A", "x"))),
@@ -255,7 +258,7 @@ fn merged_qualifiers_and_imported_names_count_distinct_definitions() {
         ("B.em", "pub y : Int\ny = 2\n\npub z : Int\nz = 2"),
     ];
     let entry = "import A as Q\nimport B as Q\nimport A (x, z)\nimport B (z)\nimport A as R (x)\n\nf : Int\nf = 1";
-    let (map, diagnostics) = def_map_files(entry, &modules);
+    let (map, diagnostics) = def_map(with_modules(entry, &modules));
     assert!(diagnostics.is_empty(), "{diagnostics:?}");
     let resolver = map.resolver(map.entry());
     assert_eq!(
@@ -289,10 +292,10 @@ fn kind_filtered_positions_count_only_their_kind() {
             "pub effect E where\n  get : Unit -> Int\n\npub data T = | Mk Int",
         ),
     ];
-    let (map, diagnostics) = def_map_files(
+    let (map, diagnostics) = def_map(with_modules(
         "import A (get)\nimport B (E(..), T(..))\n\nf : Int\nf = 1",
         &modules,
-    );
+    ));
     assert!(diagnostics.is_empty(), "{diagnostics:?}");
     let resolver = map.resolver(map.entry());
     assert!(matches!(
@@ -324,7 +327,7 @@ fn an_uppercase_name_without_dots_imports_only_the_type() {
         "B.em",
         "pub data T = | Mk Int\n\npub effect E where\n  get : Unit -> Int",
     )];
-    let (map, _) = def_map_files("import B (T, E)\n\nf : Int\nf = 1", &modules);
+    let (map, _) = def_map(with_modules("import B (T, E)\n\nf : Int\nf = 1", &modules));
     let resolver = map.resolver(map.entry());
     assert!(matches!(resolver.type_item(Plain("T")), Resolved::Found(_)));
     assert_eq!(resolver.constructor(Plain("Mk")), Resolved::NotFound);
@@ -337,10 +340,10 @@ fn import_lists_report_missing_and_private_names_once() {
         "A.em",
         "pub x : Int\nx = 1\n\nsecret : Int\nsecret = 2\n\ndata Hidden = | H\n\npub data Shown = | S",
     )];
-    let (map, diagnostics) = def_map_files(
+    let (map, diagnostics) = def_map(with_modules(
         "import A (x, nope, secret, Nope, Hidden(..), Shown, S)\n\nf : Int\nf = 1",
         &modules,
-    );
+    ));
     assert_eq!(
         diagnostics,
         [
@@ -385,10 +388,10 @@ fn import_lists_report_missing_and_private_names_once() {
 #[test]
 fn broken_imports_answer_unknown_without_diagnostics() {
     let modules = [("A.em", "pub x : Int\nx = 1")];
-    let (map, _) = def_map_files(
+    let (map, _) = def_map(with_modules(
         "import Missing (show)\nimport Missing as M\nimport A as M\n\nf : Int\nf = 1",
         &modules,
-    );
+    ));
     let resolver = map.resolver(map.entry());
     // 壊れた import の並びの名前も、Prelude の名前を隠す
     assert_eq!(
@@ -428,7 +431,7 @@ fn imported_operators_carry_public_fixities() {
         ("B.em", "pub (<%>) : Int -> Int -> Int\na <%> b = a"),
     ];
     let entry = "import A ((<+>), (<^>), (<%>))\nimport B ((<%>))\nimport Missing ((<*>))\n\nf : Int\nf = 1";
-    let (map, _) = def_map_files(entry, &modules);
+    let (map, _) = def_map(with_modules(entry, &modules));
     let resolver = map.resolver(map.entry());
     assert_eq!(
         resolver.fixity(Plain("<+>")),
@@ -448,10 +451,10 @@ fn imported_operators_carry_public_fixities() {
 fn an_import_qualified_as_prelude_does_not_merge_with_the_implicit_qualifier() {
     // 修飾子が `Prelude` になる import は E1030 で、暗黙の修飾子 `Prelude` と合流させない (docs/spec/modules.md の「Prelude」)
     let modules = [("A.em", "pub x : Int\nx = 1")];
-    let (map, _) = def_map_files(
+    let (map, _) = def_map(with_modules(
         "import Prelude\nimport Util.Prelude\nimport A as Prelude\n\nnot : Bool -> Bool\nnot b = b",
         &modules,
-    );
+    ));
     let resolver = map.resolver(map.entry());
     assert_eq!(
         found_in(&map, resolver.value(qualified("Prelude", "not"))),
@@ -514,7 +517,10 @@ fn shown_names(lowered: &eml_test_support::Lowered) -> Vec<String> {
 fn names_defined_by_two_modules_are_qualified() {
     let entry = "import Report\n\ndata Bool = | Yes\n\ndata Cont = | C\n\neffect Log where\n  log : String -> Unit\n\neffect Row where\n  row : Unit -> Unit";
     let report = "pub data Row = | Row Int\n\npub effect Log where\n  note : String -> Unit\n\npub data Answer = | Yes | No";
-    let lowered = eml_test_support::lower_files(entry, &[("Report.em", report)]);
+    let lowered = eml_test_support::lower(eml_test_support::with_modules(
+        entry,
+        &[("Report.em", report)],
+    ));
     assert_eq!(
         eml_test_support::short(lowered.files(), &lowered.diagnostics),
         Vec::<String>::new()
@@ -592,10 +598,10 @@ fn a_std_name_defined_by_a_user_module_is_qualified_by_the_canonical_name() {
         eml_test_support::std_module("Yield.em"),
     ];
     // 標準ライブラリの `Fs` は、使うときだけ読み込む
-    let lowered = eml_test_support::lower_with_std(
+    let lowered = eml_test_support::lower(eml_test_support::with_std(
         &std,
         "import Std.Fs\n\ndata Tag = | B\n\ndata Secret = | S",
-    );
+    ));
     assert_eq!(
         eml_test_support::short(lowered.files(), &lowered.diagnostics),
         Vec::<String>::new()

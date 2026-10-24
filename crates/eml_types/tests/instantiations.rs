@@ -2,7 +2,7 @@
 //! 型引数の順を確かめる。
 
 use eml_hir::{ExprKind, Res, ValueItem};
-use eml_test_support::{Checked, check, check_files, short_text};
+use eml_test_support::{Checked, check, short_text, with_modules};
 use eml_types::{Lin, TypeKind};
 
 /// モジュール `module` の関数 `name` の本体の記録を、式の位置の順に1行ずつ `<行:列> <宣言の名前> [<型引数>]` の形で
@@ -174,7 +174,7 @@ fn an_item_without_type_variables_has_no_type_arguments() {
 fn references_in_another_module_are_recorded_in_its_body() {
     let m = "pub data Box a = | Box a\n\npub wrap : a -> Box a\nwrap x = Box x";
     let entry = "import M\n\nwrapped : Unit -> M.Box Int\nwrapped () = M.wrap 1";
-    let checked = check_files(entry, &[("M.em", m)]);
+    let checked = check(with_modules(entry, &[("M.em", m)]));
     insta::assert_snapshot!(table(&checked, "M", "wrap"), @"4:10 Box [a]");
     insta::assert_snapshot!(table(&checked, "Main", "wrapped"), @"4:14 wrap [Int]");
 }

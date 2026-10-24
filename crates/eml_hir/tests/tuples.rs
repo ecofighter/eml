@@ -70,7 +70,7 @@ fn body<'m>(program: &'m Program, name: &str) -> &'m Body {
 #[test]
 fn walkers_see_through_tuples() {
     let text = "f : Int -> Int -> (Int, Int)\nf a b =\n  let ((x, _), y) = ((a, a), b)\n  (fn u -> (x, u)) y";
-    let module = eml_test_support::lower_clean(text).program;
+    let module = eml_test_support::lower_clean(text).into_stage().program;
     let body = body(&module, "f");
     let names = |locals: Vec<LocalId>| -> Vec<String> {
         locals

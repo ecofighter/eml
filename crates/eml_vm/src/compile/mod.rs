@@ -73,16 +73,6 @@ pub(crate) struct Links {
     pub(crate) files: Vec<u32>,
 }
 
-/// プログラム全体を新しい `CodeBase` に変換する。逆アセンブラのテストが使う。
-pub fn compile<M: Mode>(
-    program: &Program,
-    control: Arc<Control>,
-) -> Result<CodeBase<M>, CompileError> {
-    let mut code = CodeBase::new(control);
-    code.load(program)?;
-    Ok(code)
-}
-
 impl<M: Mode> CodeBase<M> {
     /// 組み込みの命令だけを持つ空の表。
     pub fn new(control: Arc<Control>) -> CodeBase<M> {

@@ -4,7 +4,7 @@
 
 use std::fmt::Write;
 
-use eml_test_support::{execute, lir, run, run_stats, run_stats_with_stdin};
+use eml_test_support::{capture, execute, lir, run, run_stats, run_stats_on};
 use eml_vm::RunStats;
 
 /// 正常に終わった実行の回数。生成したソースが意図どおりに走ったことを、出力でも確かめる。
@@ -320,7 +320,10 @@ fn a_stdin_line_loop_does_not_dup_the_handle() {
     // 変わらない (docs/spec/lir.md の「extern の借用」)
     let increments = |n: usize| {
         let (text, trimmed) = lines_text(n);
-        let (out, result) = run_stats_with_stdin(&stdin_bytes_line_loop(trimmed), text.as_bytes());
+        let (out, result) = run_stats_on(
+            &stdin_bytes_line_loop(trimmed),
+            capture().with_stdin(text.as_bytes().to_vec()),
+        );
         assert_eq!(out, "ok\n");
         result
             .unwrap_or_else(|error| panic!("{error}"))
@@ -691,9 +694,7 @@ hide n x = if n <= 0 then Box x else hide (n - 1) x
 
 /// ソースから作ったコードの逆アセンブル。末尾呼び出しがどの関数へ向くかを確かめるため。
 fn disassembly(text: &str) -> String {
-    let control = std::sync::Arc::new(eml_vm::Control::new(eml_vm::Limits::default()));
-    let code = eml_vm::compile::<eml_rt::Fast>(&lir(text), control)
-        .unwrap_or_else(|error| panic!("{error:?}"));
+    let code = crate::common::compile(&lir(text)).unwrap_or_else(|error| panic!("{error:?}"));
     eml_vm::disassemble(&code)
 }
 
@@ -1434,8 +1435,7 @@ b2:
         result.unwrap_or_else(|error| panic!("{error}"))
     };
     let (short, long) = (stats(PEAK_SHORT), stats(PEAK_LONG));
-    let control = std::sync::Arc::new(eml_vm::Control::new(eml_vm::Limits::default()));
-    let code = eml_vm::compile::<eml_rt::Fast>(&program(1), control).unwrap();
+    let code = crate::common::compile(&program(1)).unwrap();
     let frame = |name: &str| {
         let function = code.functions().iter().find(|f| f.name == name).unwrap();
         u64::from(function.frame_size)

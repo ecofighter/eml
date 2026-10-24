@@ -1,13 +1,13 @@
 use eml_diagnostics::{Diagnostic, ErrorCode, Label, TextRange};
 #[cfg(feature = "hir")]
 use eml_test_support::lower_clean;
+#[cfg(feature = "run")]
+use eml_test_support::run;
 #[cfg(feature = "types")]
-use eml_test_support::{check, check_files, lower, lower_files, parse};
+use eml_test_support::{check, lower, parse, with_modules};
 #[cfg(feature = "core")]
 use eml_test_support::{core_until, lir, lir_until};
 use eml_test_support::{full, parse_clean, short, short_text, source, with_diagnostics};
-#[cfg(feature = "run")]
-use eml_test_support::{run, run_files};
 
 fn range(start: u32, end: u32) -> TextRange {
     TextRange::new(start.into(), end.into())
@@ -59,13 +59,22 @@ fn the_files_variants_read_modules_from_memory() {
     };
     // 依存先の字句の誤りも、読み込みの段の診断として結果に入る
     let broken = [("Util.em", "€")];
-    assert_eq!(codes(&lower_files(entry, &broken).diagnostics), ["E0001"]);
-    assert_eq!(codes(&check_files(entry, &broken).diagnostics), ["E0001"]);
+    assert_eq!(
+        codes(&lower(with_modules(entry, &broken)).diagnostics),
+        ["E0001"]
+    );
+    assert_eq!(
+        codes(&check(with_modules(entry, &broken)).diagnostics),
+        ["E0001"]
+    );
     #[cfg(feature = "run")]
     let clean = [("Util.em", "pub x : Int\nx = 1")];
     #[cfg(feature = "run")]
-    assert_eq!(run_files(entry, &clean), ("hi\n".to_string(), Ok(())));
-    let missing = lower_files("import Util", &[]);
+    assert_eq!(
+        run(with_modules(entry, &clean)),
+        ("hi\n".to_string(), Ok(()))
+    );
+    let missing = lower(with_modules("import Util", &[]));
     assert_eq!(
         short(missing.files(), &missing.diagnostics),
         ["E1026 1:8 cannot find module `Util`"]
@@ -73,12 +82,12 @@ fn the_files_variants_read_modules_from_memory() {
     // 入口以外のモジュールの `main` は、実行を始める関数でも E2004 の対象でもない (docs/spec/types.md)
     let library_main = [("Util.em", "pub main : Int\nmain = 1")];
     assert_eq!(
-        codes(&check_files(entry, &library_main).diagnostics),
+        codes(&check(with_modules(entry, &library_main)).diagnostics),
         Vec::<String>::new()
     );
     #[cfg(feature = "run")]
     assert_eq!(
-        run_files(entry, &library_main),
+        run(with_modules(entry, &library_main)),
         ("hi\n".to_string(), Ok(()))
     );
 }
