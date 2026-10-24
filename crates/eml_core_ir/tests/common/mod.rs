@@ -145,8 +145,6 @@ fn session(
     (program, typed, loaded.files)
 }
 
-/// セッションのテストは import を書かない。
-
 /// 関数の `switch` のうち、EP が yield の地点の後に置く確認 (`prim yielding()` の結果での `switch`) を除いた数。
 /// IO の extern も yield の地点なので、文の `if` が作る `switch` だけを数えるときに使う
 /// (docs/spec/core-ir.md の「IO の extern」)。
